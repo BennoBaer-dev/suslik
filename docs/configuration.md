@@ -105,6 +105,11 @@ labels. Write-back (correcting Frigate's `sub_label`, syncing faces) is opt-in v
 
 Honest list of what suslik does not do yet:
 
+- **suslik's own web UI has no authentication.** Anyone who can reach port 8199 can view your
+  reference faces and change settings. Run it on a trusted LAN only — do **not** expose port 8199
+  to the internet. If you need remote access, put it behind a reverse proxy that adds
+  authentication, or reach it over a VPN.
+
 - **No Frigate authentication support.** suslik talks to Frigate's internal, *unauthenticated*
   API on **port 5000** — it has no support for the JWT/login on the authenticated port 8971. If
   your Frigate is locked down, keep port 5000 reachable to suslik (same host / Docker network, or
