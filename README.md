@@ -30,23 +30,22 @@ declines rather than mislabels.
 - **Runs locally** — no cloud required. Hardware-accelerated on Intel (iGPU/NPU via OpenVINO) or
   NVIDIA (CUDA), with a CPU fallback that runs anywhere.
 - **Alerts & integration** — Pushover, Telegram (via Home Assistant), and MQTT.
+- **Notifications tab** — configure the Pushover / Telegram / MQTT channels in the UI (secrets kept
+  in the data volume, shown masked) and send a test message per channel.
+- **Config backup/restore** — download all settings as a single JSON file and restore them from it.
 - **Web UI** with a guided setup wizard, scenario view, reference/unknown management, and a
   startup self-check you can read from `docker logs`.
 - **Optional write-back** to Frigate (`sub_label` correction) — off by default (read-only).
 
 ## Quick start
 
-**Recommended: the Intel (`-gpu`) or NVIDIA (`-cuda`) image.** Both accelerate the face analysis on
-the GPU/NPU and fall back to CPU automatically when no accelerator is present — so one of these two
-is the right choice for almost everyone. A plain `-cpu` image also exists, but face analysis is
-compute-heavy on the CPU: it is noticeably slower and more power-hungry, so pick it only if you
-deliberately want a lean image without the GPU driver layers.
+Run the variant that matches your hardware (CPU shown here; see the guide for Intel/NVIDIA):
 
 ```yaml
 # compose.yml
 services:
   suslik:
-    image: ghcr.io/bennobaer-dev/suslik:latest-gpu   # Intel iGPU/NPU · use :latest-cuda for NVIDIA · :latest-cpu only as a fallback
+    image: ghcr.io/bennobaer-dev/suslik:latest-cpu   # -gpu = Intel · -cuda = NVIDIA · latest-<variant> = newest of that variant
     restart: unless-stopped
     ports:
       - "8199:8199"
@@ -60,6 +59,11 @@ services:
 docker compose up -d
 docker compose logs -f          # watch the startup self-check
 ```
+
+> Using the **Intel** (`latest-gpu`) or **NVIDIA** (`latest-cuda`) variant? Those additionally
+> need device passthrough (`devices:`/`group_add:` for Intel, `--gpus` for NVIDIA) — without it
+> they silently fall back to CPU. See [installation](docs/installation.md) for the full compose
+> blocks. suslik runs happily **next to Frigate on the same machine** as a second container.
 
 Then open `http://<host>:8199/` and follow the setup wizard (connect Frigate → pick
 cameras/zones → choose backend).
@@ -78,9 +82,11 @@ cameras/zones → choose backend).
 
 ## Status
 
-suslik runs daily on the author's own setup. It is being packaged for others; the NVIDIA/CUDA
-variant has been validated on real hardware. Expect rough edges and please open an issue if
-something doesn't fit your setup.
+suslik runs daily on the author's own setup. It is being packaged for others: all three variants
+— **CPU**, **Intel** and **NVIDIA/CUDA** — are published on GHCR and have been validated on real
+hardware (the CUDA image is large, since it bundles the multi-GB CUDA runtime, so it takes longer
+to pull; building from source stays supported via `tools/build.sh`). Expect rough edges and please
+open an issue if something doesn't fit your setup.
 
 ## License
 

@@ -19,11 +19,18 @@ Once suslik is running and the wizard is done, everything happens through the we
 - **Enroll** — enrollment suggestions. suslik proposes reference faces to add for known people
   after each walk; **"Apply all recommended"** accepts all suggested faces at once. Applying stays
   a manual click (a safeguard against poisoning the library with bad crops).
-- **Quality / Review** — library-quality reports and review galleries.
+- **Quality** — reference-library quality reports (finding no-face, mislabeled, or confusable
+  references so you can clean the master up).
+- **Review** — the work list of unconfirmed events (route `/offen`): events that have a usable
+  face but aren't ground-truth confirmed yet, so you can label them one by one.
 - **Cameras** — the cameras from Frigate, with the zone condition as a checkbox per camera.
+- **Notifications** — configure the alert channels (Pushover, Telegram, MQTT) and pick which
+  judgment categories raise an alert. Each channel has a **Test** button that sends a real message
+  now; stored secrets are shown masked.
 - **Settings** — configuration and a clean restart; also **Re-run setup**.
-- **System** — the status "traffic light", the reference-sync status, a QC report, and a link to
-  this documentation.
+- **System** — the status "traffic light", the reference-sync status, a QC report, the
+  **configuration backup/restore** card, the **Frigate write-back** control (green = read-only and
+  safe, orange = writing to Frigate), and a link to this documentation.
 
 ## Enrollment (teaching suslik a person)
 

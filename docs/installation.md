@@ -23,7 +23,11 @@ for real performance.
 
 - **Docker** with the Compose plugin (`docker compose`).
 - A reachable **Frigate** instance (suslik triggers on Frigate person events and pulls recorded
-  clips). You configure the Frigate URL later in the setup wizard — nothing is hardcoded.
+  clips). You configure the Frigate URL later in the setup wizard — nothing is hardcoded. The
+  simplest setup is to run suslik **right alongside Frigate on the same host** — a second Docker
+  container (or the same compose stack) — then it reaches Frigate's internal **port 5000** out of
+  the box. suslik uses that unauthenticated port 5000; it has **no support for Frigate's
+  authenticated port 8971** (JWT/login) yet.
 - **For the Intel variant:** an Intel iGPU exposed at `/dev/dri` (and, if present, an NPU at
   `/dev/accel/accel0`) on the host.
 - **For the NVIDIA variant:** an NVIDIA driver (**R525 or newer**) on the host plus the
@@ -38,16 +42,26 @@ for real performance.
 
 You can either **pull a published image** or **build it yourself**.
 
-### Option 1 — pull from GHCR (recommended)
+### Option 1 — pull from GHCR (CPU, Intel, NVIDIA)
 
-Published images live on the GitHub Container Registry. Check the repository's **Packages** page
-for the available tags, then pull the variant/version you want:
+> ⚠️ **Mind the variant names:** `-gpu` means **Intel** (OpenVINO iGPU/dGPU), `-cuda` means
+> **NVIDIA**, `-cpu` is the CPU-only fallback. NVIDIA users want **`-cuda`** — don't pull `-gpu`
+> expecting NVIDIA.
+
+All three variants are published on the GitHub Container Registry. Use the
+`latest-<variant>` tag to always pull the newest build of that variant (or pin a specific
+`<version>-<variant>` tag from the repository's **Packages** page):
 
 ```bash
-docker pull ghcr.io/bennobaer-dev/suslik:<version>-cpu
-docker pull ghcr.io/bennobaer-dev/suslik:<version>-gpu     # Intel
-docker pull ghcr.io/bennobaer-dev/suslik:<version>-cuda    # NVIDIA
+docker pull ghcr.io/bennobaer-dev/suslik:latest-cpu
+docker pull ghcr.io/bennobaer-dev/suslik:latest-gpu     # Intel (OpenVINO)
+docker pull ghcr.io/bennobaer-dev/suslik:latest-cuda    # NVIDIA
 ```
+
+> The **NVIDIA/CUDA** image is now on GHCR too (`latest-cuda`), so you can pull it like the
+> others. Note it is a **large image** — it bundles the multi-GB CUDA runtime — so the pull takes
+> noticeably longer than the CPU/Intel ones. If you'd rather not pull that much, building from
+> source is an equivalent alternative (see Option 2).
 
 ### Option 2 — build from source
 
@@ -61,8 +75,8 @@ tools/build.sh cuda    # -> suslik:<version>-cuda  (NVIDIA)
 ```
 
 `tools/build.sh` reads the version from the `VERSION` file and tags the image
-`suslik:<version>-<variant>`. In the examples below, replace `suslik:<version>-<variant>` with
-either your locally built tag or the `ghcr.io/bennobaer-dev/suslik:...` tag.
+`suslik:<version>-<variant>`. The examples below use the published `latest-<variant>` tags from
+GHCR — if you built locally, use your `suslik:<version>-<variant>` tag instead.
 
 ## Common settings (all variants)
 
@@ -88,14 +102,14 @@ docker run -d --name suslik \
   -p 8199:8199 \
   -e TZ=Europe/Berlin \
   -v /path/to/suslik-data:/data \
-  suslik:<version>-cpu
+  ghcr.io/bennobaer-dev/suslik:latest-cpu
 ```
 
 **docker compose** (`compose.yml`):
 ```yaml
 services:
   suslik:
-    image: suslik:<version>-cpu       # or ghcr.io/bennobaer-dev/suslik:<version>-cpu
+    image: ghcr.io/bennobaer-dev/suslik:latest-cpu   # or your locally built suslik:<version>-cpu
     container_name: suslik
     restart: unless-stopped
     ports:
@@ -128,7 +142,7 @@ docker run -d --name suslik \
   --device /dev/accel/accel0:/dev/accel/accel0 \
   --group-add "$(getent group render | cut -d: -f3)" \
   --group-add "$(getent group video  | cut -d: -f3)" \
-  suslik:<version>-gpu
+  ghcr.io/bennobaer-dev/suslik:latest-gpu
 ```
 > No NPU? Drop the `/dev/accel/accel0` line — the iGPU alone works.
 
@@ -136,7 +150,7 @@ docker run -d --name suslik \
 ```yaml
 services:
   suslik:
-    image: suslik:<version>-gpu       # or ghcr.io/bennobaer-dev/suslik:<version>-gpu
+    image: ghcr.io/bennobaer-dev/suslik:latest-gpu   # Intel — or your locally built suslik:<version>-gpu
     container_name: suslik
     restart: unless-stopped
     ports:
@@ -147,8 +161,11 @@ services:
       - "/dev/dri:/dev/dri"                       # iGPU
       - "/dev/accel/accel0:/dev/accel/accel0"     # NPU (omit if you don't have one)
     group_add:
-      - "render"                                  # or the numeric host GID of the render group
-      - "video"
+      # NUMERIC host GIDs of the render/video groups. Group NAMES ("render") do NOT work here —
+      # Docker resolves group_add against the CONTAINER's /etc/group, which has no render group,
+      # and the container fails to start. Find your host's GIDs with:  getent group render video
+      - "992"                                     # your host's 'render' GID (varies per system!)
+      - "44"                                      # your host's 'video' GID
     volumes:
       - ./suslik-data:/data
 ```
@@ -171,14 +188,14 @@ docker run -d --name suslik \
   -p 8199:8199 \
   -e TZ=Europe/Berlin \
   -v /path/to/suslik-data:/data \
-  suslik:<version>-cuda
+  ghcr.io/bennobaer-dev/suslik:latest-cuda
 ```
 
 **docker compose** (`compose.yml`):
 ```yaml
 services:
   suslik:
-    image: suslik:<version>-cuda      # or ghcr.io/bennobaer-dev/suslik:<version>-cuda
+    image: ghcr.io/bennobaer-dev/suslik:latest-cuda      # or build locally
     container_name: suslik
     restart: unless-stopped
     ports:
