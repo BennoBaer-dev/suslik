@@ -36,13 +36,17 @@ declines rather than mislabels.
 
 ## Quick start
 
-Run the variant that matches your hardware (CPU shown here; see the guide for Intel/NVIDIA):
+**Recommended: the Intel (`-gpu`) or NVIDIA (`-cuda`) image.** Both accelerate the face analysis on
+the GPU/NPU and fall back to CPU automatically when no accelerator is present — so one of these two
+is the right choice for almost everyone. A plain `-cpu` image also exists, but face analysis is
+compute-heavy on the CPU: it is noticeably slower and more power-hungry, so pick it only if you
+deliberately want a lean image without the GPU driver layers.
 
 ```yaml
 # compose.yml
 services:
   suslik:
-    image: ghcr.io/bennobaer-dev/suslik:<version>-cpu
+    image: ghcr.io/bennobaer-dev/suslik:latest-gpu   # Intel iGPU/NPU · use :latest-cuda for NVIDIA · :latest-cpu only as a fallback
     restart: unless-stopped
     ports:
       - "8199:8199"
