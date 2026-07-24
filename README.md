@@ -85,8 +85,12 @@ cameras/zones → choose backend).
 suslik runs daily on the author's own setup. It is being packaged for others: all three variants
 — **CPU**, **Intel** and **NVIDIA/CUDA** — are published on GHCR and have been validated on real
 hardware (the CUDA image is large, since it bundles the multi-GB CUDA runtime, so it takes longer
-to pull; building from source stays supported via `tools/build.sh`). Expect rough edges and please
-open an issue if something doesn't fit your setup.
+to pull). Expect rough edges and please open an issue if something doesn't fit your setup.
+
+**Source code:** the application source is **not published here yet — it will follow.** Until
+then the images are prebuilt-only, which honestly means you can't audit the code, only its
+behavior: everything runs locally, nothing is downloaded at runtime, and internet access is only
+needed for the optional push-notification channels.
 
 ## License
 
