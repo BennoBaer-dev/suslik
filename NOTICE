@@ -1,0 +1,78 @@
+suslik — third-party components
+===============================
+
+The suslik source code is licensed under the MIT License (see LICENSE).
+
+The published container images additionally contain pre-trained models that are
+**not** covered by that license. They belong to their respective authors and are
+redistributed here for convenience. The terms below govern those files; where they
+are stricter than the MIT License, the stricter terms apply.
+
+If you intend to use suslik commercially, read this file first: the MIT License
+covers the code we wrote, not the bundled models.
+
+
+InsightFace "buffalo_l" model pack
+----------------------------------
+Files:    /root/.insightface/models/buffalo_l/*.onnx
+          (det_10g, 2d106det, 1k3d68, genderage, w600k_r50)
+Used for: face detection and landmark alignment. suslik's default recognition
+          model is AdaFace (see below); the buffalo recognition head is only
+          loaded when `modell: buffalo` is configured.
+Project:  https://github.com/deepinsight/insightface
+Authors:  Jia Guo, Jiankang Deng and the InsightFace contributors
+
+The InsightFace *code* is MIT-licensed. The pre-trained *models* are not. The
+project states, verbatim (model_zoo/README.md, retrieved 2026-07-25):
+
+    "ALL models are available for non-commercial research purposes only."
+
+and in its root README:
+
+    "The training data containing the annotation (and the models trained with
+     these data) are available for non-commercial research purposes only."
+
+For commercial licensing of the buffalo_l pack, InsightFace names this contact:
+recognition-oss-pack@insightface.ai
+
+If you require a permissive detection model, InsightFace's terms are the reason
+to replace this component rather than to ignore them.
+
+
+AdaFace IR-101 (WebFace12M)
+---------------------------
+File:     /app/models/adaface_ir101_webface12m.onnx
+Used for: face recognition (the embedding that suslik compares against your
+          enrolled references). This is suslik's default.
+Project:  https://github.com/mk-minchul/AdaFace
+License:  MIT
+Copyright (c) 2022 Minchul Kim
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+    THE SOFTWARE.
+
+The weights were exported to ONNX from the authors' published checkpoint; the
+network is unmodified. Note that the underlying training set (WebFace12M) carries
+its own terms, which suslik has not independently verified.
+
+
+Runtime dependencies
+--------------------
+The images also contain ONNX Runtime, OpenVINO, OpenCV, NumPy, ffmpeg and the
+Debian base system, each under its own license. Their license texts ship inside
+the image with the respective packages.
