@@ -54,16 +54,26 @@ working. The UI follows your operating system's light/dark preference; the **The
 suslik learns from your own camera footage — you don't upload photos. The flow is
 person-centric:
 
-1. Let the person appear on camera normally. After each walk, suslik generates enrollment
-   suggestions (**Enroll** tab) for people it already knows, and clusters faces it doesn't
-   recognize into the **Unknown** tab.
-2. To add a **new** person, promote an unknown cluster to a name, then let suslik gather more
-   reference faces of them from subsequent appearances.
+1. Let the person appear on camera normally. After each walk, suslik collects the best faces
+   (up to three per event), generates enrollment suggestions (**Enroll** tab) for people it
+   already knows, and clusters faces it doesn't recognize into the **Unknown** tab.
+2. To add a **new** person, the shortest path is the **Today page**: an *Unknown* card shows a
+   sample face and is clickable — the panel that opens lets you pick exactly the faces you want
+   (walkthrough faces first) and assign them to a new or existing name. Alternatively, promote a
+   whole unknown cluster to a name on the **Unknown** tab.
 3. Review the suggested faces and apply the good ones. Only clear, unambiguous faces make good
    references — suslik's suggestions are filtered, but the final accept is yours.
 
+On the **Unknown** tab, *"same person?"* rows show faces of both identities so you can answer
+**Merge** or **Different** at a glance; *Different* is remembered permanently. Clusters that turn
+out to be static objects (a wheel arch, a light pattern the face detector keeps firing on) are
+quarantined automatically into their own collapsed bucket. A person can also be **deleted
+entirely** (name + references) from their detail page; the data moves to a recoverable trash
+folder.
+
 A recurring background job keeps the unknown pool tidy and re-checks it against your current
-references.
+references. On an **event page**, images are grouped per person, and groups whose best match is
+below the "unknown" threshold sit under a visible divider — *weak matches, the name is a guess*.
 
 ## How a judgment is reached
 
