@@ -242,4 +242,47 @@ which accelerator was found and whether it really engaged, connects to Frigate, 
 each usable backend on synthetic input. Then open `http://<host>:8199/` and follow the setup
 wizard.
 
+## Updating
+
+**suslik never updates itself.** There is no auto-updater and no phone-home. A running container
+keeps the image it started with — even if you use a `latest-*` tag — until you pull a newer image
+and recreate the container. Nothing changes behind your back, but nothing arrives on its own either.
+
+To update:
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+Your data is not in the image. Everything suslik learns — reference faces, the unknown pool,
+settings, event history — lives in the `/data` volume from your compose file and survives the
+update untouched. Read the release notes before a major jump, then check the footer of any page in
+the web UI: it shows the version that is actually running.
+
+A `latest-*` tag only moves once a release has been deployed and verified on real test hardware
+(Intel, NVIDIA, and plain CPU), so pulling it does not put you on something untested.
+
+### Staying on a fixed version
+
+`latest-<variant>` always points at the newest release of that variant. If you would rather decide
+when to move, pin the version explicitly:
+
+```yaml
+    image: ghcr.io/bennobaer-dev/suslik:0.1.0.22-cpu
+```
+
+To move, change the tag and run `docker compose up -d`. Recent versions stay pullable, but a
+release can be withdrawn if a serious problem is found in it — so a pin is a decision to postpone
+an update, not a way to stay on one version forever. Every release is listed under
+[Releases](https://github.com/BennoBaer-dev/suslik/releases); the tags currently available are on
+the [package page](https://github.com/users/BennoBaer-dev/packages/container/package/suslik).
+
+### Before you update
+
+Back up the `/data` volume. In the web UI, **System → Configuration backup → Download
+configuration** additionally saves your settings (thresholds, cameras, notification channels
+including their stored secrets) as a single JSON file, and restores them from the same page —
+settings only, not the learned people. Those are covered by the daily archive suslik writes into
+`<data>/backups/`.
+
 Next: [configuration.md](configuration.md) · [usage.md](usage.md)
