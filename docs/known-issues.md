@@ -1,0 +1,55 @@
+# Known issues & limitations
+
+An honest list of what we know is rough, wrong or missing right now. If you hit
+something that is not on this list, please open an issue — that is exactly the kind
+of feedback this project needs.
+
+_Last updated: 2026-07-25 (0.1.0.28)._
+
+## Known bugs
+
+- **Writing references back to Frigate is not portable yet.** The "export" direction
+  of the reference sync still uses a path that only works on the author's development
+  setup; on a normal installation it will fail. It is being moved to the official
+  Frigate HTTP API. The **import** direction (pulling faces from Frigate) works.
+- **Two GPU instances on one Intel iGPU can crash on startup** (exit 139): if a
+  second suslik instance runs its startup benchmark while another is mid-analysis,
+  the OpenCL runtime can abort the process. Workaround: run one GPU instance per
+  host, or use the CPU image for additional instances.
+- **A failed accelerator can fall back to CPU too quietly.** If the compute backend
+  dies mid-run, analysis may continue on CPU without making the failure loud. Hard
+  failure handling is planned.
+- **Single false detections still enter the unknown pool.** The static-object
+  quarantine catches *clusters* of non-faces (wheel arches, light patterns) reliably,
+  but an individual misdetection can sit in the pool as a one-image identity until
+  enough similar ones accumulate.
+
+## Limitations (by design, for now)
+
+- **Detection resolution is fixed at 1280×1280.** Making it configurable is on the
+  list (higher = better for far-away faces, slower).
+- **Scenarios (one walkthrough across several cameras) are displayed but not yet
+  used for decisions.** Cross-camera grouping into zones — and judging a person by
+  the best face across the whole walkthrough — is the next big construction site.
+- **Merge suggestions are capped at 20**, ordered by similarity, so the page stays
+  usable. Answering them (Merge / Different) makes room for the next ones.
+- **Configuration backup does not cover everything yet**; treat it as a convenience,
+  not a full disaster-recovery story. The `/data` volume is the source of truth —
+  back that up.
+- **No update notifications.** suslik never phones home, so it also cannot tell you
+  a newer image exists. Check the GitHub releases page or GHCR tags.
+- **Coral / EdgeTPU sticks are not supported.** The face models run via
+  onnxruntime/OpenVINO (CPU, Intel GPU, Intel NPU) or CUDA; a Coral stick would
+  accelerate Frigate's object detection, but not suslik's face pipeline.
+- **Source code is not published yet** — the images are prebuilt-only for now (see
+  the Status section of the README). Publication is planned; until then you can only
+  audit behavior, not code: everything runs locally and nothing is downloaded at
+  runtime.
+
+## Next up (rough order)
+
+1. Zones / scenario-driven decisions (group cameras, judge the whole walkthrough).
+2. Frigate write-back via the official HTTP API.
+3. Harder failure handling for the compute backend.
+4. Configurable detection resolution.
+5. A second recognition path for faces the primary model cannot place.

@@ -83,13 +83,16 @@ fixed version instead: [installation.md](docs/installation.md#updating).
   separate hardware images.
 - **[Hardware acceleration](docs/hardware-acceleration.md)** — backend selection, benchmarks, and
   the Intel/NVIDIA specifics.
+- **[Known issues & limitations](docs/known-issues.md)** — an honest list of current bugs,
+  limitations and what comes next; **[Changelog](CHANGELOG.md)** — what changed per release.
 
 ## Status
 
 suslik runs daily on the author's own setup. It is being packaged for others: all three variants
 — **CPU**, **Intel** and **NVIDIA/CUDA** — are published on GHCR and have been validated on real
 hardware (the CUDA image is large, since it bundles the multi-GB CUDA runtime, so it takes longer
-to pull). Expect rough edges and please open an issue if something doesn't fit your setup.
+to pull). Expect rough edges and please open an issue if something doesn't fit your setup —
+[known issues & limitations](docs/known-issues.md) lists what we already know.
 
 **Source code:** the application source is **not published here yet — it will follow.** Until
 then the images are prebuilt-only, which honestly means you can't audit the code, only its
