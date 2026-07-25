@@ -68,6 +68,10 @@ docker compose logs -f          # watch the startup self-check
 Then open `http://<host>:8199/` and follow the setup wizard (connect Frigate → pick
 cameras/zones → choose backend).
 
+**Updating** — suslik never updates itself. Run `docker compose pull && docker compose up -d` when
+you want a newer version; your data lives in the volume and is untouched. Details, and how to pin a
+fixed version instead: [installation.md](docs/installation.md#updating).
+
 ## Documentation
 
 - **[Installation](docs/installation.md)** — the three image variants (CPU / Intel / NVIDIA),
