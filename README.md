@@ -98,4 +98,9 @@ needed for the optional push-notification channels.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+The suslik **code** is MIT — see [LICENSE](LICENSE).
+
+The container images additionally ship third-party **models** that carry their own,
+partly stricter terms (the InsightFace `buffalo_l` pack is released by its authors for
+non-commercial research use only; AdaFace is MIT, © 2022 Minchul Kim). Details and the
+verbatim terms are in [NOTICE](NOTICE) — read it before any commercial use.

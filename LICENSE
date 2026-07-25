@@ -19,3 +19,21 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+
+------------------------------------------------------------------------------
+Scope — third-party models are not covered
+------------------------------------------------------------------------------
+
+The license above covers the suslik source code.
+
+It does not cover the pre-trained models that ship inside the published
+container images. Those belong to their respective authors and carry their own
+terms, which are in places stricter than this license — in particular, the
+InsightFace "buffalo_l" model pack is released by its authors for
+non-commercial research purposes only. Nothing above grants you rights to
+those files that their authors have not granted.
+
+See the NOTICE file for the components, their authors and their terms. If you
+plan to use suslik commercially, read NOTICE before you rely on the permission
+to "sell" granted above: it applies to our code, not to the bundled models.

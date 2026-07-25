@@ -5,32 +5,49 @@ Once suslik is running and the wizard is done, everything happens through the we
 
 ## The web UI
 
+The UI is organized into **four sections** (top bar) with a second row of tabs underneath:
+**Activity**, **People**, **Settings** and **System**. All routes are stable — bookmarks keep
+working. The UI follows your operating system's light/dark preference; the **Theme** button
+(top right) overrides it permanently. On *Today* you can page back through past days.
+
+**Activity**
+
 - **Today** — the scenario view. Each entry is one *walk* (a person moving across your property),
-  grouped from the individual events across cameras and time. You see who was recognized, or
-  "unknown", per scenario. A scenario still in progress is shown live and finalizes once the walk
-  ends. Click a person chip (or "unknown") to open the event detail page with all face crops, the
-  judgment, and the clip.
+  grouped from the individual events across cameras and time. Recognized people lead the page;
+  passes where nobody was recognized appear as "Unknown N" cards once the unknown pool has
+  grouped them (with how often that identity was seen before). A scenario still in progress is
+  shown live and finalizes once the walk ends.
 - **Events** — the flat event list with filters and paging, category badges, ground-truth
   buttons, and video links. Useful for drilling into a single event.
-- **Faces** — your reference library (the "master"): the people suslik knows and their reference
-  images.
+- **To label** — the work list of unconfirmed events (route `/offen`, 50 per page): events that
+  have a usable face but aren't ground-truth confirmed yet, so you can label them one by one.
+
+**People**
+
+- **Known** — your reference library (the "master"): the people suslik knows and their reference
+  images. Also where you can upload photos to bootstrap a person.
 - **Unknown** — persistent unknown identities: recurring faces that aren't in your library yet,
   grouped over time so you can promote one to a known person.
-- **Enroll** — enrollment suggestions. suslik proposes reference faces to add for known people
-  after each walk; **"Apply all recommended"** accepts all suggested faces at once. Applying stays
-  a manual click (a safeguard against poisoning the library with bad crops).
+- **Suggestions** — enrollment suggestions. suslik proposes reference faces to add for known
+  people after each walk; **"Apply all recommended"** accepts all suggested faces at once.
+  Applying stays a manual click (a safeguard against poisoning the library with bad crops).
 - **Quality** — reference-library quality reports (finding no-face, mislabeled, or confusable
   references so you can clean the master up).
-- **Review** — the work list of unconfirmed events (route `/offen`): events that have a usable
-  face but aren't ground-truth confirmed yet, so you can label them one by one.
+
+**Settings**
+
 - **Cameras** — the cameras from Frigate, with the zone condition as a checkbox per camera.
 - **Notifications** — configure the alert channels (Pushover, Telegram, MQTT) and pick which
-  judgment categories raise an alert. Each channel has a **Test** button that sends a real message
-  now; stored secrets are shown masked.
-- **Settings** — configuration and a clean restart; also **Re-run setup**.
+  judgment categories raise an alert. For Telegram you can choose the attachment: a short
+  **video** clip (falls back to an image and says so) or **image only** (no transcoding —
+  lighter on weak hardware). Each channel has a **Test** button; stored secrets are shown masked.
+- **Advanced** — the remaining configuration values and a clean restart.
+
+**System**
+
 - **System** — the status "traffic light", the reference-sync status, a QC report, the
-  **configuration backup/restore** card, the **Frigate write-back** control (green = read-only and
-  safe, orange = writing to Frigate), and a link to this documentation.
+  **configuration backup/restore** card, the **Frigate write-back** control (read-only is the
+  safe default), **Re-run setup wizard**, and a link to this documentation.
 
 ## Enrollment (teaching suslik a person)
 

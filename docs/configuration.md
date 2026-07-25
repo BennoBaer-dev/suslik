@@ -6,7 +6,7 @@ Most configuration happens through the **setup wizard** in the web UI and is sto
 ## Setup wizard
 
 On first start (empty `/data`), opening `http://<host>:8199/` redirects to the wizard. You can
-re-run it any time from **Settings → Re-run setup**.
+re-run it any time from **System → Re-run setup wizard**.
 
 Already migrating from another instance? The wizard also offers **"Already have a
 configuration?"** at the top — upload a previous config backup (see *Configuration backup &
