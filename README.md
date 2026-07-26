@@ -99,6 +99,30 @@ then the images are prebuilt-only, which honestly means you can't audit the code
 behavior: everything runs locally, nothing is downloaded at runtime, and internet access is only
 needed for the optional push-notification channels.
 
+## What's being worked on right now
+
+*(updated 2026-07-26 — this section changes with every release)*
+
+- **Update notice in the app** *(coming with the next release)*: the start page will quietly
+  show when a newer version is available on GitHub (checked about once a day, can be
+  switched off — no other data leaves your system).
+- **First-run backfill**: choose how far back suslik should fetch and analyze your existing
+  Frigate events on first start, so it learns from your history instead of starting empty —
+  the most-requested tester feature so far.
+- **Performance — less CPU, more GPU/NPU**: measurements show most of the per-event CPU cost
+  is avoidable (model startup, decode). Work in progress: cutting CPU load per event by
+  roughly an order of magnitude, with NPU support on Intel Core Ultra doing the inference
+  almost CPU-free. Systems with only a CPU benefit too.
+- **Being investigated — Google Coral TPU**: we are checking whether the Coral can help.
+  Honestly, we are skeptical for now (the Coral wants small quantized models, face
+  recognition models are large) — but if it brings a real benefit, it goes in.
+- **Further out — recognizing people beyond the face**: once a person has been positively
+  identified by face, keep a few appearance snapshots and use a local vision model to
+  recognize them even when no usable face is visible. Local-first, baked into the images
+  like everything else.
+
+Thanks to everyone testing and reporting back — the feedback is directly shaping this list.
+
 ## License
 
 The suslik **code** is MIT — see [LICENSE](LICENSE).
