@@ -2,7 +2,31 @@
 
 All notable, user-visible changes to suslik. Versions 0.1.0.25–0.1.0.27 were internal
 iterations on the author's production box and were never pushed to GHCR; their changes
-ship together with **0.1.0.28**.
+ship together with **0.1.0.28**. Likewise 0.1.0.29–0.1.0.32 ship together with **0.1.0.33**.
+
+## 0.1.0.33 — 2026-07-26
+
+### Added
+- **Update notice**: suslik now checks GitHub once a day (anonymous request to the
+  public releases API, nothing else leaves your system) and shows a quiet hint in the
+  header plus a clear note on the start page when a newer image is available. Can be
+  switched off with the new `update_check` setting (Settings → Advanced).
+
+### Fixed
+- **Hardware video transcode was silently falling back to CPU in ALL published images**
+  (reported by an early tester — thank you!): the VAAPI device path was hard-coded and
+  the Intel image lacked the media drivers. The encoder is now probed with a real test
+  encode at startup (NVENC → VAAPI per render node → CPU), the chosen encoder shows up
+  in the startup self-check (`video h264_vaapi(...)`), 10-bit sources are converted
+  explicitly, and a runtime fallback to CPU is logged instead of happening silently.
+  Telegram clips and browser copies are now several times faster on Intel and NVIDIA.
+- **An unreachable MQTT broker at startup crashed the service in a restart loop**
+  (the trigger client connected synchronously). It now connects asynchronously with
+  automatic retry, and the internal watchdog monitors the trigger connection too.
+
+### Changed
+- **The service log is now fully English.** Category values, data files and MQTT
+  topics/payloads are unchanged — existing automations keep working.
 
 ## 0.1.0.28 — 2026-07-25
 

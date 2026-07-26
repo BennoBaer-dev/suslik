@@ -4,7 +4,7 @@ An honest list of what we know is rough, wrong or missing right now. If you hit
 something that is not on this list, please open an issue — that is exactly the kind
 of feedback this project needs.
 
-_Last updated: 2026-07-25 (0.1.0.28)._
+_Last updated: 2026-07-26 (0.1.0.33)._
 
 ## Known bugs
 
