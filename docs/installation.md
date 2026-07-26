@@ -213,7 +213,9 @@ services:
           devices:
             - driver: nvidia
               count: all                          # or device_ids: ["0"] for a specific GPU
-              capabilities: [gpu]
+              capabilities: [gpu, video]          # `video` enables NVENC clip transcoding
+                                                  # (the image also sets NVIDIA_DRIVER_CAPABILITIES
+                                                  # accordingly, so plain `--gpus all` works too)
     volumes:
       - ./suslik-data:/data
 ```
@@ -268,7 +270,7 @@ A `latest-*` tag only moves once a release has been deployed and verified on rea
 when to move, pin the version explicitly:
 
 ```yaml
-    image: ghcr.io/bennobaer-dev/suslik:0.1.0.28-cpu
+    image: ghcr.io/bennobaer-dev/suslik:0.1.0.33-cpu
 ```
 
 To move, change the tag and run `docker compose up -d`. Recent versions stay pullable, but a

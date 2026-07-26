@@ -1,3 +1,7 @@
+<!--
+  STAGING FILE — this becomes the ROOT README.md of the public repository (BennoBaer-dev/suslik).
+  Keep it public-safe: no internal IPs, hostnames, paths, real names, or secrets.
+-->
 # suslik
 
 A small companion service for [Frigate](https://frigate.video/) that treats a person's walk
@@ -103,8 +107,8 @@ needed for the optional push-notification channels.
 
 *(updated 2026-07-26 — this section changes with every release)*
 
-- **Update notice in the app** *(coming with the next release)*: the start page will quietly
-  show when a newer version is available on GitHub (checked about once a day, can be
+- **Update notice in the app** *(shipped in 0.1.0.33)*: the start page now quietly shows
+  when a newer version is available on GitHub (checked about once a day, can be
   switched off — no other data leaves your system).
 - **First-run backfill**: choose how far back suslik should fetch and analyze your existing
   Frigate events on first start, so it learns from your history instead of starting empty —
@@ -113,9 +117,12 @@ needed for the optional push-notification channels.
   is avoidable (model startup, decode). Work in progress: cutting CPU load per event by
   roughly an order of magnitude, with NPU support on Intel Core Ultra doing the inference
   almost CPU-free. Systems with only a CPU benefit too.
-- **Being investigated — Google Coral TPU**: we are checking whether the Coral can help.
-  Honestly, we are skeptical for now (the Coral wants small quantized models, face
-  recognition models are large) — but if it brings a real benefit, it goes in.
+- **Checked — Google Coral TPU**: we looked into it properly, and the honest verdict is:
+  not a fit. Face-recognition models are 40–260 MB of float weights, the Coral wants
+  small fully-quantized models with ~7 MB of on-chip cache, Google has archived the
+  entire Coral toolchain, and on CPU-only boxes the stick is usually already busy doing
+  Frigate's object detection. We may still test a lightweight model with our
+  every-frame method on real Coral hardware — if that surprises us, it goes in.
 - **Further out — recognizing people beyond the face**: once a person has been positively
   identified by face, keep a few appearance snapshots and use a local vision model to
   recognize them even when no usable face is visible. Local-first, baked into the images
