@@ -16,7 +16,7 @@ This matrix is about **suslik's own face pipeline**. Frigate's object-detection 
 | **CPU x86-64** | ✅ universal fallback (~25 s/event measured on a Ryzen 9 4900H) | ✅ libx264 | verified (it's our own reference box) |
 | **AMD GPU / ROCm** | ❌ analysis falls back to CPU | ❌ CPU encode (mesa/VAAPI probing is a planned investigation) | our own CPU reference box is an AMD APU — the Radeon iGPU is simply unused |
 | **ARM / Apple Silicon** | ❌ images are x86-64 only for now | — | untested |
-| **Coral / EdgeTPU** | ❌ investigated & closed (model ~9× larger than the Coral cache; ecosystem archived) | — | see [known-issues.md](known-issues.md) |
+| **Coral / EdgeTPU** | ❌ tested & closed (a Coral-sized model fits the chip but loses real residents — the separation the method needs does not survive the shrink) | — | see [known-issues.md](known-issues.md) |
 | **Hailo-8** | possible future investigation | — | not started |
 
 **AMD owners:** we would genuinely like to support AMD GPUs — what's missing is not the

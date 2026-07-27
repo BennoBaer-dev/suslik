@@ -60,6 +60,16 @@ These are the settings most people touch (all set via the wizard/UI; names shown
   after 15 min of quiet and restarts lazily; if its memory ever exceeds
   `worker_rss_max_mb` (default 4096 MB) it is restarted cleanly. `worker: false` restores
   the old process-per-event behavior.
+- **`fd_front_min` / `fd_sharp_min` / `fd_det_max`** — the false-detection filter. The face
+  detector sometimes fires on things that are clearly not faces (a wheel hub, foliage, fabric);
+  a detection is discarded from *counting, display and the unknown pool* when all three match:
+  frontality ≥ `fd_front_min` (0.85), sharpness ≥ `fd_sharp_min` (1500) and detector score
+  < `fd_det_max` (0.70) — the "static object" signature, calibrated on 407 hand-labeled
+  detections (86% of false detections caught at a 1.2% cost of real faces, none of them
+  load-bearing). Recognition itself is deliberately **not** filtered — judgments never change,
+  and the Today page shows a footnote with what was filtered so nothing disappears silently.
+- **`det_thresh`** — the face detector's own threshold (upstream default 0.5), made visible and
+  configurable. Raising it is *not* recommended: 0.60 already costs ~16% of real faces.
 - **Frigate connection** — the Frigate base URL. Can be pre-filled via the `FRIGATE_URL`
   environment variable for convenience, but the wizard value in the store wins.
 - **Zone filter** — per camera, an optional list of required zones. Events that never entered one

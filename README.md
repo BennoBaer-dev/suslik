@@ -1,3 +1,7 @@
+<!--
+  STAGING FILE — this becomes the ROOT README.md of the public repository (BennoBaer-dev/suslik).
+  Keep it public-safe: no internal IPs, hostnames, paths, real names, or secrets.
+-->
 # suslik
 
 A small companion service for [Frigate](https://frigate.video/) that treats a person's walk
@@ -21,6 +25,15 @@ layer**:
 
 The result is honest recognition: on good footage suslik and Frigate agree; on bad footage suslik
 declines rather than mislabels.
+
+## What it looks like
+
+The Today page answers "who was on the property, when, and where did they go" — one card per
+person, one block per pass, unknowns kept visible instead of buried:
+
+![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png)
+
+*(Screenshot from a live install; names and faces anonymized.)*
 
 ## Features
 
@@ -107,7 +120,7 @@ needed for the optional push-notification channels.
 
 ## What's being worked on right now
 
-*(updated 2026-07-27 — this section changes with every release)*
+*(updated 2026-07-28 — this section changes with every release)*
 
 - **Performance wave** *(shipped in 0.1.0.47)*: a persistent analysis worker keeps the
   models warm, recognition can run on the Intel NPU (picked automatically by a one-time
@@ -118,20 +131,23 @@ needed for the optional push-notification channels.
 - **First-run backfill & guided learning mode**: choose how many past events suslik
   should analyze on first start (with a test-event time estimate), then learn people
   from frontal-anchor clusters — the most-requested tester feature so far.
-- **Today view drill-down**: click a person and see their walkthroughs of the day
-  (scenario view), instead of landing on a single event.
+- **Today redesign, part 1** *(shipped in 0.1.0.54)*: click a person and see their passes
+  of the day — camera route, best shot, and how the face developed across the pass —
+  plus a calibrated false-detection filter that keeps wheel hubs and foliage out of the
+  unknown-visitor pool (recognition itself untouched). Part 2 (a pass detail page,
+  per-pass unknown numbering, small UI polish) is next.
 - **Automatic false-trigger class**: passes where Frigate saw a "person" but the whole
   clip contains no usable face will get their own quiet class instead of counting as
   unknown visitors.
-- **Smaller images**: yes, we know the images are big — models, drivers and runtimes are
+- **Smaller images**: yes, I know the images are big — models, drivers and runtimes are
   baked in on purpose so nothing is ever downloaded at runtime. Docker only pulls changed
   layers on updates, but shrinking the images properly is planned for a later pass.
-- **Checked — Google Coral TPU**: we looked into it properly, and the honest verdict is:
-  not a fit. Face-recognition models are 40–260 MB of float weights, the Coral wants
-  small fully-quantized models with ~7 MB of on-chip cache, Google has archived the
-  entire Coral toolchain, and on CPU-only boxes the stick is usually already busy doing
-  Frigate's object detection. We may still test a lightweight model with our
-  every-frame method on real Coral hardware — if that surprises us, it goes in.
+- **Checked — Google Coral TPU**: I actually ran the test instead of guessing. A
+  Coral-sized recognition model (~3 MB INT8) does fit the chip and even keeps strangers
+  out — but it loses real residents: the separation band the every-frame method needs
+  collapses to ~0.02 (the full model keeps ~0.18). No threshold fixes that, so the
+  verdict is a measured no. Details in
+  [known-issues.md](docs/known-issues.md).
 - **Further out — recognizing people beyond the face**: once a person has been positively
   identified by face, keep a few appearance snapshots and use a local vision model to
   recognize them even when no usable face is visible. Local-first, baked into the images

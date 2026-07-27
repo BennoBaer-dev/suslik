@@ -44,12 +44,19 @@ _Last updated: 2026-07-26 (0.1.0.33)._
 - **Configuration backup does not cover everything yet**; treat it as a convenience,
   not a full disaster-recovery story. The `/data` volume is the source of truth —
   back that up.
-- **Coral / EdgeTPU sticks are not supported — investigated and closed (07/2026).**
-  The recognition model is ~9× larger than the Coral's on-chip cache (USB streaming
-  would eat the gain), the detector at our input size is slower than the Intel NPU,
-  and the ecosystem is archived upstream. If a small-accelerator path comes, it will
-  more likely be a Hailo-8 investigation. A Coral still helps Frigate's own object
-  detection — just not suslik's face pipeline.
+- **Coral / EdgeTPU sticks are not supported — actually tested and closed (07/2026).**
+  This was measured, not assumed: a Coral-sized recognition model (MobileFaceNet-class,
+  ~3 MB INT8 — it *does* fit the EdgeTPU cache) was run through suslik's full
+  frame-by-frame method against the fixed-point clips. The stranger gate held (0 false
+  windows on all 8 stranger events), but a real resident fell below recognition — the
+  separation band between "hard genuine hit" and "stranger" collapsed to ~0.02
+  (the full model keeps ~0.18). No threshold fixes that; the small model simply does
+  not carry the method. The detector also does not fit the chip, so the stick could
+  only ever accelerate the smallest part of the pipeline. Credit where due: the
+  community keeps the Coral ecosystem alive and installable on current Python — the
+  blocker is the physics of the shrunken model, not the tooling. If a
+  small-accelerator path comes, it will more likely be a Hailo-8 investigation.
+  A Coral still helps Frigate's own object detection — just not suslik's face pipeline.
 - **Source code is not published yet** — the images are prebuilt-only for now (see
   the Status section of the README). Publication is planned; until then you can only
   audit behavior, not code: everything runs locally and nothing is downloaded at
