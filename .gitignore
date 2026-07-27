@@ -33,3 +33,6 @@ __pycache__/
 *.pyc
 .DS_Store
 ._*
+
+# Bewusste Ausnahme: anonymisierter README-Screenshot (Pseudonyme, geblurte Gesichter)
+!docs/img/today.png
