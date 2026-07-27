@@ -2,7 +2,58 @@
 
 All notable, user-visible changes to suslik. Versions 0.1.0.25–0.1.0.27 were internal
 iterations on the author's production box and were never pushed to GHCR; their changes
-ship together with **0.1.0.28**. Likewise 0.1.0.29–0.1.0.32 ship together with **0.1.0.33**.
+ship together with **0.1.0.28**. Likewise 0.1.0.29–0.1.0.32 ship together with **0.1.0.33**,
+and the performance-wave steps 0.1.0.34–0.1.0.44 ship together with **0.1.0.47**.
+
+## 0.1.0.47 — 2026-07-27
+
+The performance wave: analysis cost per event dropped from roughly a CPU minute to
+~8–13 CPU-seconds warm on the author's Intel box — with judgments proven unchanged
+(fixed-point acceptance exact on CPU, Intel GPU/NPU and CUDA).
+
+### Added
+- **Persistent analysis worker**: models load once and stay warm between events instead
+  of being rebuilt per analysis. The worker exits by itself after 15 min of quiet (that
+  is the only way ONNX Runtime returns its memory) and restarts lazily; a memory
+  threshold (`worker_rss_max_mb`, default 4096) triggers a clean restart if it ever
+  balloons. Can be disabled with `worker: false`.
+- **Automatic accelerator placement** (`backend: auto`, new default in the Intel image):
+  a one-time startup benchmark decides where recognition runs — Intel NPU
+  (`openvino:MIXED`: detector on GPU, recognition on NPU), GPU, or CPU — and the choice
+  sticks in `state/placement.json` until hardware, runtime or version change. On the
+  author's Core Ultra the NPU runs recognition at ~0.3 ms CPU per inference vs ~24 ms
+  on the iGPU path. Explicit values (`openvino:GPU`, `cuda`, `cpu` …) behave as before.
+- **Real hardware probes in the self-check**: "found & usable — device bound in real
+  probe" replaces the earlier "engagement unconfirmed" question marks; `/health` now
+  reports the resolved backend and placement.
+- **Silent-decode guard**: decoded frames are counted against the container's packet
+  count. Truncated/glitchy clips are flagged (UI badge, capped verdicts, below 50 %
+  readable the event is treated as failed) instead of silently judging from the
+  readable beginning — previously a corrupted clip could lose 39 % of its frames
+  without a trace.
+- **Lazy browser copies**: the web-view video is transcoded on first click (spinner)
+  instead of eagerly for every event (~1.3 CPU-hours/day saved on the author's box).
+- **Full-hardware NVENC pipeline** on NVIDIA (decode + scale + encode on the GPU,
+  probed with the exact pipeline at startup; issue #4: 15.3 → 1.1 CPU-s per clip),
+  and per-encoder quality calibration (`q_hw` for NVENC, `q_vaapi` for VAAPI) for
+  smaller files at equal visual quality.
+- **Aspect-ratio detector sizing**: the detector input follows the clip's aspect ratio
+  (multiple-of-32 grid) instead of a fixed square — bit-identical detections measured,
+  about a quarter less GPU time on 16:9 material.
+
+### Fixed
+- **Double model build on startup** (one rebuild per process) — about a quarter of the
+  former cold-start CPU; a provider guard now also verifies after every rebuild that
+  sessions really sit on the requested device, heals once, and reports if not.
+- **Worker memory retention**: idle unload kept ONNX-Runtime arenas alive and grew RSS
+  per cycle; replaced by idle process exit, which really frees the memory.
+
+### Changed
+- **Analysis decode intentionally stays on CPU.** A measured trial of GPU video decode
+  (VAAPI) shifted recognition scores by up to 0.021 (tolerance 0.005) and flipped
+  window judgments on fixed-point clips — so hardware decode is banned from the
+  judgment path. The media engine still does all display transcodes, where no judgment
+  is made. Quality over speed, with numbers.
 
 ## 0.1.0.33 — 2026-07-26
 

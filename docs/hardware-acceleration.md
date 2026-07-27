@@ -10,30 +10,57 @@ Set it in the setup wizard, or via `VERIFY_BACKEND` (or `backend:` in the stored
 
 | Value | Runs on | Image variant |
 |---|---|---|
+| `auto` *(default in `-gpu` since 0.1.0.44)* | picks NPU/GPU/CPU once, sticks | `-gpu` |
 | `cpu` | CPU only | any (always available) |
 | `openvino:GPU` | Intel iGPU | `-gpu` |
 | `openvino:NPU` | Intel NPU | `-gpu` |
-| `openvino:MIXED` | Intel iGPU + NPU | `-gpu` |
+| `openvino:MIXED` | Intel iGPU (detector) + NPU (recognition) | `-gpu` |
 | `cuda` / `cuda:0` | NVIDIA GPU | `-cuda` |
+
+**`auto` placement**: at first start a short real benchmark builds sessions on the NPU and
+GPU, measures them, and picks `openvino:MIXED` (recognition on the NPU — on a Core Ultra
+that cuts recognition CPU cost from ~24 ms to well under 1 ms per inference), `openvino:GPU`,
+or `cpu`. The decision is stored in `state/placement.json` and reused until hardware,
+runtime or version change; systems without an NPU simply end up on GPU, identical to the
+previous default. Per-model fallback chain NPU → GPU → CPU with a loud `PLACEMENT-FALLBACK`
+log marker if a device stops binding.
 
 The service validates the backend against the providers actually available and, if the requested
 accelerator can't bind, falls back to CPU **with a loud warning** (never silently). The startup
-self-check reports `… — device engaged` on success or `running on CPU` otherwise, and benchmarks
-each usable backend on synthetic input so you can see it's really working.
+self-check reports real bind probes per device (`found & usable — device bound in real probe`),
+`… — device engaged` for the chosen backend, the resolved placement, and benchmarks each usable
+backend on synthetic input so you can see it's really working. `/health` reports
+`backend` and `placement` too.
 
-## Rough performance (illustrative)
+**Why analysis decode stays on CPU (measured).** GPU *video decode* was tried and rejected
+on purpose: on fixed-point clips, VAAPI-decoded frames shifted recognition scores by up to
+0.021 (tolerance 0.005) and flipped time-window judgments. A verify layer whose verdict
+depends on the decode hardware would be worthless, so clip decode for **judgments** stays on
+CPU (with a frame-count guard against silent truncation) — while all **display** transcodes
+(browser copies, Telegram clips) do run on the media engine, where no judgment is made.
 
-Single-inference latency on the author's hardware — treat as ballpark, not a promise:
+## Measured performance (author's machines, 2026-07-27)
 
-| Backend | ~ ms / inference |
-|---|---|
-| CPU (a modern laptop CPU) | ~800 |
-| Intel iGPU (OpenVINO) | ~26 |
-| Intel NPU (OpenVINO) | ~18 |
-| NVIDIA RTX 2060 (CUDA) | ~13–15 |
+The same defined workload — 11 real events (3 fixed points + 8 stranger events), full
+analysis wall-clock in a fresh container, second run with warm compile caches — on three
+physically different boxes running 0.1.0.44. Different machines, so treat it as a trend,
+not a lab benchmark; judgments were identical (green acceptance) on all three:
 
-Any accelerator is roughly an order of magnitude faster than CPU. The CPU fallback is fine for
-trying suslik out or for low camera counts, but a GPU/NPU is recommended for real use.
+| System | cold | warm | ≈ per event (warm) |
+|---|---|---|---|
+| Intel Core Ultra 9 285H, iGPU + NPU (`auto` → MIXED) | 115 s | 69 s | **~6 s** |
+| NVIDIA RTX 2060 mobile (CUDA) | 43 s | 38 s | **~3.5 s** |
+| CPU only (AMD Ryzen 9 4900H) | 276 s | 281 s | **~25 s** |
+
+Display transcode (720p browser/Telegram copy of one clip): NVENC full-HW **1.0 s** warm
+(the very first call after long GPU idle pays a one-time ~5 s wake-up from the P8 power
+state — real deployments where Frigate shares the GPU never see it), Intel VAAPI 2.1 s,
+CPU libx264 1.5 s.
+
+**Recommendation:** run suslik on *any* GPU or NPU — integrated is first-class here
+(see [supported-hardware.md](supported-hardware.md)). The CPU fallback works everywhere
+and is fine for trying it out, but budget roughly half a CPU-minute per event; an iGPU/NPU
+turns that into seconds at near-zero CPU cost.
 
 ## Intel (iGPU / NPU via OpenVINO)
 
