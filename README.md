@@ -1,7 +1,3 @@
-<!--
-  STAGING FILE — this becomes the ROOT README.md of the public repository (BennoBaer-dev/suslik).
-  Keep it public-safe: no internal IPs, hostnames, paths, real names, or secrets.
--->
 # suslik
 
 A small companion service for [Frigate](https://frigate.video/) that treats a person's walk
@@ -78,6 +74,9 @@ fixed version instead: [installation.md](docs/installation.md#updating).
 
 ## Documentation
 
+- **[Changelog](CHANGELOG.md)** — what changed per release. Worth a look right now:
+  **0.1.0.47 is the performance wave** — from roughly a CPU-minute per event to seconds,
+  with NPU support, automatic accelerator placement and judgments proven unchanged.
 - **[Installation](docs/installation.md)** — the three image variants (CPU / Intel / NVIDIA),
   pull from GHCR or build yourself, `docker run` and `docker compose`.
 - **[Configuration](docs/configuration.md)** — the setup wizard, config keys, environment
@@ -85,10 +84,13 @@ fixed version instead: [installation.md](docs/installation.md#updating).
 - **[Usage](docs/usage.md)** — a tour of the web UI, enrollment, and the scenario view.
 - **[Architecture](docs/architecture.md)** — how the verify layer works and why there are
   separate hardware images.
+- **[Supported hardware](docs/supported-hardware.md)** — the full matrix (integrated GPUs are
+  first-class; NVIDIA, CPU-only, and what is explicitly not supported) with a measured
+  performance comparison across Intel iGPU+NPU, CUDA and CPU.
 - **[Hardware acceleration](docs/hardware-acceleration.md)** — backend selection, benchmarks, and
   the Intel/NVIDIA specifics.
 - **[Known issues & limitations](docs/known-issues.md)** — an honest list of current bugs,
-  limitations and what comes next; **[Changelog](CHANGELOG.md)** — what changed per release.
+  limitations and what comes next.
 
 ## Status
 
@@ -105,18 +107,25 @@ needed for the optional push-notification channels.
 
 ## What's being worked on right now
 
-*(updated 2026-07-26 — this section changes with every release)*
+*(updated 2026-07-27 — this section changes with every release)*
 
-- **Update notice in the app** *(shipped in 0.1.0.33)*: the start page now quietly shows
-  when a newer version is available on GitHub (checked about once a day, can be
-  switched off — no other data leaves your system).
-- **First-run backfill**: choose how far back suslik should fetch and analyze your existing
-  Frigate events on first start, so it learns from your history instead of starting empty —
-  the most-requested tester feature so far.
-- **Performance — less CPU, more GPU/NPU**: measurements show most of the per-event CPU cost
-  is avoidable (model startup, decode). Work in progress: cutting CPU load per event by
-  roughly an order of magnitude, with NPU support on Intel Core Ultra doing the inference
-  almost CPU-free. Systems with only a CPU benefit too.
+- **Performance wave** *(shipped in 0.1.0.47)*: a persistent analysis worker keeps the
+  models warm, recognition can run on the Intel NPU (picked automatically by a one-time
+  startup benchmark), the detector follows the clip's aspect ratio, browser copies are
+  transcoded lazily, and NVIDIA gets a full-hardware NVENC pipeline. Net effect on the
+  author's box: from roughly a CPU-minute per event to ~8–13 CPU-seconds warm — with
+  fixed-point acceptance proving judgments unchanged on CPU, Intel GPU/NPU and CUDA.
+- **First-run backfill & guided learning mode**: choose how many past events suslik
+  should analyze on first start (with a test-event time estimate), then learn people
+  from frontal-anchor clusters — the most-requested tester feature so far.
+- **Today view drill-down**: click a person and see their walkthroughs of the day
+  (scenario view), instead of landing on a single event.
+- **Automatic false-trigger class**: passes where Frigate saw a "person" but the whole
+  clip contains no usable face will get their own quiet class instead of counting as
+  unknown visitors.
+- **Smaller images**: yes, we know the images are big — models, drivers and runtimes are
+  baked in on purpose so nothing is ever downloaded at runtime. Docker only pulls changed
+  layers on updates, but shrinking the images properly is planned for a later pass.
 - **Checked — Google Coral TPU**: we looked into it properly, and the honest verdict is:
   not a fit. Face-recognition models are 40–260 MB of float weights, the Coral wants
   small fully-quantized models with ~7 MB of on-chip cache, Google has archived the

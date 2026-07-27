@@ -49,8 +49,17 @@ Because config and data live in the volume, they survive image updates. Back up 
 
 These are the settings most people touch (all set via the wizard/UI; names shown for reference):
 
-- **`backend`** — `openvino:GPU` \| `openvino:NPU` \| `openvino:MIXED` (Intel), `cuda` \| `cuda:0`
-  (NVIDIA), or `cpu` (universal fallback). Equivalent environment variable: `VERIFY_BACKEND`.
+- **`backend`** — `auto` (default in the Intel image since 0.1.0.44: a one-time startup
+  benchmark decides where recognition runs — Intel NPU (`openvino:MIXED`), GPU or CPU — and
+  the choice sticks in `state/placement.json` until hardware, runtime or version change),
+  or explicit: `openvino:GPU` \| `openvino:NPU` \| `openvino:MIXED` (Intel), `cuda` \| `cuda:0`
+  (NVIDIA), `cpu` (universal fallback). Explicit values are never overridden.
+  Equivalent environment variable: `VERIFY_BACKEND`.
+- **`worker`** / **`worker_rss_max_mb`** — the persistent analysis worker (default on) keeps
+  the models warm between events (the big per-event CPU win of 0.1.0.44). It exits by itself
+  after 15 min of quiet and restarts lazily; if its memory ever exceeds
+  `worker_rss_max_mb` (default 4096 MB) it is restarted cleanly. `worker: false` restores
+  the old process-per-event behavior.
 - **Frigate connection** — the Frigate base URL. Can be pre-filled via the `FRIGATE_URL`
   environment variable for convenience, but the wizard value in the store wins.
 - **Zone filter** — per camera, an optional list of required zones. Events that never entered one
