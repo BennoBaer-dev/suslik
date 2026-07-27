@@ -4,6 +4,50 @@ All notable, user-visible changes to suslik. Versions 0.1.0.25–0.1.0.27 were i
 iterations on the author's production box and were never pushed to GHCR; their changes
 ship together with **0.1.0.28**. Likewise 0.1.0.29–0.1.0.32 ship together with **0.1.0.33**,
 and the performance-wave steps 0.1.0.34–0.1.0.44 ship together with **0.1.0.47**.
+The Today-redesign steps 0.1.0.48–0.1.0.53 ship together with **0.1.0.54**.
+
+## 0.1.0.54 — 2026-07-28
+
+The Today redesign plus a calibrated false-detection filter: the first page now answers
+"who was on the property, when, and where did they go" — and stops counting wheel hubs
+and foliage as faces.
+
+### Added
+- **Person day view (`/auftritte`)**: clicking a person on the Today page now opens their
+  passes for the day — one block per pass with the time span, the camera route (cameras
+  with an actual confirmation in bold), the best face shot, and a thumbnail strip showing
+  how the face developed across the pass (only events that actually have a face crop;
+  unconfirmed near-hits are dimmed, the rest is summarized as "+N events without a
+  face"). Single events stay reachable as evidence but are no longer the entry point.
+- **False-detection filter**: the face detector occasionally fires on static objects
+  (a wheel hub, hedges, fabric). A signature calibrated on 407 hand-labeled detections
+  (high frontality + edge-rich + moderate detector score) now removes those from
+  counting, display and the unknown-visitor pool — **recognition itself is deliberately
+  untouched**, and the Today page shows a footnote with what was filtered so nothing
+  disappears silently. Thresholds are configurable (`fd_front_min`, `fd_sharp_min`,
+  `fd_det_max`); the detector's own threshold is now visible as `det_thresh`.
+- **Confirmed-stranger visibility**: a pass you labeled as "Stranger" no longer vanishes
+  from the Today page — it stays visible as unknown with a quiet "confirmed stranger"
+  badge, and "?" (unclear) labels keep the pass on the board too.
+- **Clickable day stats**: "Unidentified" and "Passes" jump to their sections,
+  "Events analysed" opens the full event list of that day.
+- **Per-detection metrics** are now persisted per event (time, size, sharpness,
+  frontality, detector score, filter flag) — future threshold changes can be simulated
+  on existing data instead of re-analyzing clips.
+
+### Changed
+- **Machine-independent pass grouping**: scenario grouping now uses Frigate's real event
+  end time instead of the analysis wall clock — the same day groups identically on fast
+  and slow hardware (measured before: 42 of 103 passes could flip at 5× analysis time).
+- The unknown-visitor card wording "not grouped yet" is now **"no visitor profile yet"**
+  (it describes the visitor pool, not the cameras — thanks for the report in issue #5).
+- "N unknown" phrasing replaced by honest event counts ("N events with an unmatched
+  face") wherever it could read as a number of people.
+
+### Fixed
+- Scenario grouping logic extracted into its own module with a byte-identical rendering
+  proof; the day view, person view and tests now share one implementation.
+- `/offen` displays the filtered face count (the number you act on), matching its filter.
 
 ## 0.1.0.47 — 2026-07-27
 
