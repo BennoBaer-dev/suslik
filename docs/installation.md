@@ -1,6 +1,6 @@
 # Installation
 
-suslik ships as a Docker image in **three hardware variants** that share the exact same
+suslik ships as a Docker image in **four hardware variants** that share the exact same
 application code — only the baked-in inference runtime differs. Pick the one that matches your
 hardware:
 
@@ -55,6 +55,8 @@ All three variants are published on the GitHub Container Registry. Use the
 ```bash
 docker pull ghcr.io/bennobaer-dev/suslik:latest-cpu
 docker pull ghcr.io/bennobaer-dev/suslik:latest-gpu     # Intel (OpenVINO)
+# Older Intel iGPU (UHD 6xx, 6th–10th gen Core)? Use the gpu-legacy variant instead —
+# testing phase: pull the version tag from the Packages page (no latest-gpu-legacy yet).
 docker pull ghcr.io/bennobaer-dev/suslik:latest-cuda    # NVIDIA
 ```
 
