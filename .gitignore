@@ -34,5 +34,5 @@ __pycache__/
 .DS_Store
 ._*
 
-# Bewusste Ausnahme: anonymisierter README-Screenshot (Pseudonyme, geblurte Gesichter)
+# Deliberate exception: the one vetted README screenshot (pseudonymized, faces blurred)
 !docs/img/today.png
