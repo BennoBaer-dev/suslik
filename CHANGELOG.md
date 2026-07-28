@@ -4,7 +4,42 @@ All notable, user-visible changes to suslik. Versions 0.1.0.25–0.1.0.27 were i
 iterations on the author's production box and were never pushed to GHCR; their changes
 ship together with **0.1.0.28**. Likewise 0.1.0.29–0.1.0.32 ship together with **0.1.0.33**,
 and the performance-wave steps 0.1.0.34–0.1.0.44 ship together with **0.1.0.47**.
-The Today-redesign steps 0.1.0.48–0.1.0.53 ship together with **0.1.0.54**.
+The Today-redesign steps 0.1.0.48–0.1.0.53 ship together with **0.1.0.54**, and the
+local steps 0.1.0.55–0.1.0.62 ship together with **0.1.0.63**.
+
+## 0.1.0.63 — 2026-07-28
+
+Pass drill-down pages, a fourth image variant for older Intel iGPUs, and better
+self-diagnosis when the image doesn't match the hardware.
+
+### Added
+- **`gpu-legacy` image variant (testing)**: Intel moved Gen8/Gen9/Gen11 graphics
+  (UHD 6xx, 6th–10th gen Core) out of its current compute runtime, so the regular
+  `gpu` image cannot bind those iGPUs — they silently ran on CPU. The new
+  `gpu-legacy` variant ships Intel's legacy1 runtime (24.35 branch) instead.
+  Marked *testing* until confirmed on real Gen9 hardware (issue #6); there is no
+  `latest-gpu-legacy` tag yet, pull the version tag.
+- **Pass detail pages**: a pass (one walk across the property) now has its own
+  page — time span, camera route, best face per event — and event pages carry a
+  strip to walk through the whole pass. Unknown visitors get stable U-numbers
+  used consistently across the UI.
+- **Variant hint**: if the startup probe finds hardware that a *different* image
+  variant would support (an Intel iGPU on the cpu image, an older iGPU that needs
+  gpu-legacy, an NVIDIA GPU without the cuda image), the UI banner and the
+  startup log now say which variant to use. No hint when everything matches.
+- **`/health` reports the running version** — please include its output when
+  filing an issue; log excerpts often miss the startup banner.
+
+### Improved
+- The reference-drift guard (release tooling) was hardened: a newly enrolled
+  person no longer crashes the check, and a missing baseline now turns the check
+  red instead of silently green.
+
+### Internal
+- Groundwork for a "no person found (likely false trigger)" class ships disabled:
+  a backtest against real recordings found no such events on the author's
+  property (every candidate was a real person passing on the sidewalk), so no
+  thresholds are set and nothing is suppressed.
 
 ## 0.1.0.54 — 2026-07-28
 
