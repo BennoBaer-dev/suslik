@@ -31,7 +31,7 @@ declines rather than mislabels.
 The Today page answers "who was on the property, when, and where did they go" — one card per
 person, one block per pass, unknowns kept visible instead of buried:
 
-![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.0.66)
+![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.0.67)
 
 *(Screenshot from a live install of v0.1.0.54; names and faces anonymized.)*
 
@@ -94,7 +94,7 @@ fixed version instead: [installation.md](docs/installation.md#updating).
   when a different image variant would suit your machine better. (0.1.0.47 was the
   performance wave — from roughly a CPU-minute per event to seconds.)
 - **[Installation](docs/installation.md)** — the four image variants (CPU / Intel / Intel legacy / NVIDIA),
-  pull from GHCR or build yourself, `docker run` and `docker compose`.
+  pull from GHCR (source publication is planned to follow), `docker run` and `docker compose`.
 - **[Configuration](docs/configuration.md)** — the setup wizard, config keys, environment
   variables, and the `/data` layout.
 - **[Usage](docs/usage.md)** — a tour of the web UI, enrollment, and the scenario view.

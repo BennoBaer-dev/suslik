@@ -67,22 +67,10 @@ docker pull ghcr.io/bennobaer-dev/suslik:latest-cuda    # NVIDIA
 
 ### Option 2 — build from source
 
-> **Note:** the application source is not published in this repository yet (it will follow).
-> Until then, **Option 1 (GHCR pull) is the way to install** — this section documents the build
-> workflow that ships together with the source once it lands.
-
-Clone the repository and build the variant you need. The build bakes the models into the image
-(no runtime downloads):
-
-```bash
-tools/build.sh cpu     # -> suslik:<version>-cpu
-tools/build.sh gpu     # -> suslik:<version>-gpu   (Intel)
-tools/build.sh cuda    # -> suslik:<version>-cuda  (NVIDIA)
-```
-
-`tools/build.sh` reads the version from the `VERSION` file and tags the image
-`suslik:<version>-<variant>`. The examples below use the published `latest-<variant>` tags from
-GHCR — if you built locally, use your `suslik:<version>-<variant>` tag instead.
+> **Not available yet:** the application source is not published in this repository so far —
+> it is planned to follow once the current development wave is complete. Until then,
+> **Option 1 (GHCR pull) is the way to install.** The build instructions will appear here
+> together with the source.
 
 ## Common settings (all variants)
 
