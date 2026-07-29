@@ -182,6 +182,38 @@ it says `running on CPU` instead, the host driver/runtime versions don't match �
 
 ---
 
+
+## Older Intel iGPUs (UHD 6xx, 6th–10th gen Core): the `gpu-legacy` variant
+
+Intel's current compute runtime only covers Gen12 and later — on a 6th–10th gen iGPU the
+regular `-gpu` image falls back to CPU (loudly, and with a banner pointing here). The
+`gpu-legacy` variant ships Intel's legacy1 runtime instead and is confirmed working on a
+UHD 630. The compose file is the same as for the regular Intel variant, with two
+differences: the image tag, and no NPU line (these platforms have no NPU).
+
+```yaml
+services:
+  suslik:
+    image: ghcr.io/bennobaer-dev/suslik:0.1.0.63-gpu-legacy   # version tag — no latest-gpu-legacy during the testing phase
+    container_name: suslik
+    restart: unless-stopped
+    ports:
+      - "8199:8199"
+    environment:
+      - TZ=Europe/Berlin
+    devices:
+      - "/dev/dri:/dev/dri"                       # iGPU (no /dev/accel line: these platforms have no NPU)
+    group_add:
+      - "992"                                     # your host's 'render' GID (varies — getent group render video)
+      - "44"                                      # your host's 'video' GID
+    volumes:
+      - /path/to/suslik-data:/data
+```
+
+Once the variant graduates from testing, a `latest-gpu-legacy` tag will exist and the
+version pin can go; check the [Packages page](https://github.com/BennoBaer-dev/suslik/pkgs/container/suslik)
+for the newest `-gpu-legacy` version tag until then.
+
 ## NVIDIA variant (CUDA)
 
 Requires the NVIDIA Container Toolkit (see Prerequisites). GPU access is granted via the standard
