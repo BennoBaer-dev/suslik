@@ -94,7 +94,7 @@ fixed version instead: [installation.md](docs/installation.md#updating).
   when a different image variant would suit your machine better. (0.1.0.47 was the
   performance wave — from roughly a CPU-minute per event to seconds.)
 - **[Installation](docs/installation.md)** — the four image variants (CPU / Intel / Intel legacy / NVIDIA),
-  pull from GHCR (source publication is planned to follow), `docker run` and `docker compose`.
+  pull from GHCR (the source will be published with the first beta), `docker run` and `docker compose`.
 - **[Configuration](docs/configuration.md)** — the setup wizard, config keys, environment
   variables, and the `/data` layout.
 - **[Usage](docs/usage.md)** — a tour of the web UI, enrollment, and the scenario view.

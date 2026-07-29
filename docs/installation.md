@@ -68,7 +68,7 @@ docker pull ghcr.io/bennobaer-dev/suslik:latest-cuda    # NVIDIA
 ### Option 2 — build from source
 
 > **Not available yet:** the application source is not published in this repository so far —
-> it is planned to follow once the current development wave is complete. Until then,
+> it will be published with the **first beta release**. Until then,
 > **Option 1 (GHCR pull) is the way to install.** The build instructions will appear here
 > together with the source.
 
