@@ -8,6 +8,7 @@ hardware:
 |---|---|---|---|
 | **CPU** | `-cpu` | none (CPU only) | no GPU, or just trying it out (universal fallback) |
 | **Intel** | `-gpu` | Intel iGPU / NPU via OpenVINO | you have an Intel integrated GPU (and optionally NPU) |
+| **Intel legacy** | `-gpu-legacy` | Intel Gen8/9/11 iGPU (UHD 6xx) via OpenVINO legacy runtime | you have a 6th–10th gen Intel iGPU — the regular `-gpu` image cannot bind it |
 | **NVIDIA** | `-cuda` | NVIDIA GPU via CUDA | you have an NVIDIA GPU |
 
 > Why separate images instead of one universal image? The Intel (`onnxruntime-openvino`) and
