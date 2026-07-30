@@ -1,0 +1,19 @@
+# ALLE Versionen gepinnt (A15, 25.07.): aus den ausgelieferten 0.1.0.23-Images gelesen
+# (pip list --format=freeze; alle drei Varianten identisch). Ungepinnt bekam jeder Bau,
+# was pip gerade liefert — genau das haette die backend-eigenen Soll-Staende der Abnahme
+# entwertet (onnxruntime-Fall vom 25.07.). Heben = bewusste Entscheidung + neue Abnahme.
+# suslik Container-Deps (Stufe 1, CPU). Gegenueber der Repo-requirements.txt ergaenzt:
+#   PyYAML + paho-mqtt (vom Code gebraucht, fehlten) — Fund aus dem 1. Docker-Test.
+# onnxruntime = plain (CPU) fuer Stufe 1; Stufe 2 (iGPU) -> onnxruntime-openvino.
+# GEPINNT (25.07.): als einzige Variante war onnxruntime hier ohne Version — das cpu-Image bekam
+# bei jedem Bau, was pip gerade liefert (gemessen 1.27.0, waehrend gpu auf 1.24.1 pinnt). Das
+# unterlaeuft den backend-eigenen Soll-Stand der Abnahme: verschiedene onnxruntime-Versionen
+# rechnen minimal andere Scores, ein eingefrorener Stand waere nach dem naechsten Rebuild
+# grundlos rot. Gepinnt auf die Version, die im ausgelieferten 0.1.0.22/0.1.0.23-cpu steckt.
+insightface==1.0.1
+onnxruntime==1.27.0
+opencv-python==5.0.0.93
+scikit-learn==1.9.0
+numpy==2.5.1
+PyYAML==6.0.3
+paho-mqtt==2.1.0

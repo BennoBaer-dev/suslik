@@ -44,7 +44,7 @@ footage suslik declines instead of mislabeling.
 
 ## Image-variant architecture (one code, several hardware images)
 
-suslik ships **one codebase** in **three hardware images** — the same application code is baked
+suslik ships **one codebase** in **five hardware images** — the same application code is baked
 into each; only the inference runtime and drivers differ:
 
 | Variant | Runtime | Accelerator |
@@ -52,6 +52,8 @@ into each; only the inference runtime and drivers differ:
 | `-cpu` | `onnxruntime` | none |
 | `-gpu` | `onnxruntime-openvino` + Intel drivers | Intel iGPU / NPU |
 | `-cuda` | `onnxruntime-gpu` + CUDA runtime | NVIDIA GPU |
+| `-gpu-legacy` | `onnxruntime-openvino` + Intel legacy runtime | older Intel iGPUs (Gen 8-11, testing) |
+| `-rocm` | `onnxruntime` + MIGraphX EP | AMD GPUs (testing phase) |
 
 The backend is chosen **at runtime** (via `VERIFY_BACKEND` / the setup wizard). The code is
 backend-agnostic; the same `.py` files run in every image.

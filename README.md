@@ -1,12 +1,16 @@
-<!--
-  STAGING FILE — this becomes the ROOT README.md of the public repository (BennoBaer-dev/suslik).
-  Keep it public-safe: no internal IPs, hostnames, paths, real names, or secrets.
--->
 # suslik
 
 A small companion service for [Frigate](https://frigate.video/) that treats a person's walk
 across your property as **one scenario across multiple cameras** — and gives Frigate's face
 recognition an independent second opinion.
+
+> **Alpha — published work in progress (0.1.0.92-alpha).** This is a development snapshot,
+> released so you can try it while it is being built. The two construction sites right now are
+> the **learning module** and **camera areas**. The learning part already works well: point a
+> learning run at as many past person events as you like and it harvests faces and groups them
+> into clusters of **recurring people** — you then name a whole cluster once (the postman after
+> three weeks of visits) instead of labeling single images. Expect rough edges around it, and
+> expect interfaces and data formats to still change between versions.
 
 ## Why this exists
 
@@ -49,6 +53,17 @@ person, one block per pass, unknowns kept visible instead of buried:
 - **Web UI** with a guided setup wizard, scenario view, reference/unknown management, and a
   startup self-check you can read from `docker logs`.
 - **Optional write-back** to Frigate (`sub_label` correction) — off by default (read-only).
+
+## What suslik is not: a real-time trigger
+
+suslik works on the finished clip, after the event ends — it waits for more evidence and then
+tries to be right. That is a design decision, and it has a measurable cost: from a person
+appearing to suslik's verdict is typically **25 seconds at the very best, usually noticeably
+more** (event duration + clip availability + analysis; measured across 414 real events by a
+user, median around a minute). Don't build arrival automations on it — a light that should
+turn on as someone walks up, or a spoken greeting, needs Frigate's own real-time events as
+the trigger. suslik's job is the part Frigate can't do: deliver the reliable answer afterwards
+and correct the record.
 
 ## Quick start
 
@@ -94,7 +109,7 @@ fixed version instead: [installation.md](docs/installation.md#updating).
   when a different image variant would suit your machine better. (0.1.0.47 was the
   performance wave — from roughly a CPU-minute per event to seconds.)
 - **[Installation](docs/installation.md)** — the four image variants (CPU / Intel / Intel legacy / NVIDIA),
-  pull from GHCR (the source will be published with the first beta), `docker run` and `docker compose`.
+  pull from GHCR or build from the source in this repository, `docker run` and `docker compose`.
 - **[Configuration](docs/configuration.md)** — the setup wizard, config keys, environment
   variables, and the `/data` layout.
 - **[Usage](docs/usage.md)** — a tour of the web UI, enrollment, and the scenario view.
@@ -110,31 +125,54 @@ fixed version instead: [installation.md](docs/installation.md#updating).
 
 ## Status
 
-suslik runs daily on the author's own setup. It is being packaged for others: the **CPU**,
-**Intel** and **NVIDIA/CUDA** variants are published on GHCR and have been validated on real
-hardware (the CUDA image is large, since it bundles the multi-GB CUDA runtime, so it takes longer
-to pull); the new **gpu-legacy** variant for older Intel iGPUs is in testing with a community
-tester and has no `latest` tag yet. Expect rough edges and please open an issue if something doesn't fit your setup —
+**This is an alpha and a published work in progress.** suslik runs daily on the author's own
+setup, and the current focus is on two things at once: the **learning module** (harvesting faces
+from your existing recordings and clustering recurring people) and **camera areas** (grouping
+cameras into parts of the property as views, with per-area alerting to follow). The learning
+side already holds up well — a learning run over any number of past events reliably surfaces
+the people who keep coming back, ready to be named in one step. Everything around it is moving:
+treat version jumps as normal, and please open an issue if something doesn't fit your setup —
 [known issues & limitations](docs/known-issues.md) lists what we already know.
 
-**Source code:** the application source is **not published here yet — it will follow.** Until
-then the images are prebuilt-only, which honestly means you can't audit the code, only its
-behavior: everything runs locally, nothing is downloaded at runtime, and internet access is only
-needed for the optional push-notification channels.
+The **CPU**, **Intel** and **NVIDIA/CUDA** image variants are published on GHCR and validated on
+real hardware (the CUDA image is large, since it bundles the multi-GB CUDA runtime, so it takes
+longer to pull); the **gpu-legacy** variant for older Intel iGPUs is in testing with a community
+tester and has no `latest` tag yet.
+
+**Source code:** published in this repository as of **0.1.0.92-alpha** (MIT). The images remain
+self-contained: everything runs locally, nothing is downloaded at runtime, and internet access is
+only needed for the optional push-notification channels.
 
 ## What's being worked on right now
 
-*(updated 2026-07-28 — this section changes with every release)*
+*(updated 2026-07-30 — this section changes with every release)*
 
+- **Learning module** *(active construction, usable today)*: a guided learning run harvests
+  faces from as many past person events as you choose (a wizard estimates the duration on
+  your hardware first), grades them through quality gates, and clusters them into recurring
+  people across days and cameras — the postman who shows up four times in three weeks ends
+  up as **one** cluster you name once. Naming and reference-picking polish is what's being
+  built right now.
+- **Camera areas** *(stage 1 shipped in 0.1.0.92-alpha)*: group cameras into parts of your
+  property (driveway, backyard, …). One camera belongs to one area, everything else stays in
+  Default; areas act as views on Today/Appearances/Events, and alerts name the area. Passes
+  are still always grouped and judged across the whole property — an area never re-judges a
+  pass. Per-area alert behavior is stage 2.
+- **Performance — honestly not done yet**: recognition inference itself is fast on a GPU
+  (measured ~13 ms per inference on CUDA), but the full per-event analysis still takes
+  longer than I want — the wall time sits in the CPU side around the detector, not in the
+  GPU. I'm not satisfied with it and will keep digging.
+- **Exploring a live path (go2rtc)**: instead of waiting for the recorded clip, check the
+  live stream frame by frame until a face is recognized *really well* — with the explicit
+  goal of firing a Home Assistant action the moment a **known** face is confirmed (open the
+  door light, disarm a scene, whatever you wire up). Early exploration, not built yet; the
+  clip-based judgment stays the reference.
 - **Performance wave** *(shipped in 0.1.0.47)*: a persistent analysis worker keeps the
   models warm, recognition can run on the Intel NPU (picked automatically by a one-time
   startup benchmark), the detector follows the clip's aspect ratio, browser copies are
   transcoded lazily, and NVIDIA gets a full-hardware NVENC pipeline. Net effect on the
   author's box: from roughly a CPU-minute per event to ~8–13 CPU-seconds warm — with
   fixed-point acceptance proving judgments unchanged on CPU, Intel GPU/NPU and CUDA.
-- **First-run backfill & guided learning mode**: choose how many past events suslik
-  should analyze on first start (with a test-event time estimate), then learn people
-  from frontal-anchor clusters — the most-requested tester feature so far.
 - **Today redesign, part 1** *(shipped in 0.1.0.54)*: click a person and see their passes
   of the day — camera route, best shot, and how the face developed across the pass —
   plus a calibrated false-detection filter that keeps wheel hubs and foliage out of the

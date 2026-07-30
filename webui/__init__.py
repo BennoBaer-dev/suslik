@@ -1,0 +1,132 @@
+"""verifyd Web-UI-Geruest (Plan v1.0 AP3): gemeinsames Layout, Navigation, Zustaende.
+Kein Framework, keine CDNs — Server rendert Strings, Statik liegt in diesem Ordner."""
+import html
+import os
+
+# Zwei Ebenen statt elf gleichrangiger Reiter (User-Entscheid 25.07.). Grundlage ist die
+# bewertete Navigations-Untersuchung: von drei Entwuerfen gewann dieser
+# (7/5/8) und zerschneidet als einziger keine der 21 gemessenen Arbeitssitzungen.
+# WICHTIG: alle Adressen bleiben unveraendert — Lesezeichen und Deep-Links brechen nicht, es
+# aendert sich nur, wie sie gruppiert angezeigt werden.
+#   Activity = was passiert ist (Zeitachse) · People = Identitaeten und ihre Referenzbilder
+#   Settings = wie sich das System verhalten soll · System = wie es dem Dienst geht
+# "Review" verschwindet als Wort: es meinte an drei Stellen Verschiedenes. Der Unterreiter heisst
+# "To label", wie die Ueberschrift der Seite ohnehin schon lautet.
+# "Settings" heisst als Unterreiter "Advanced": von den Werten dort ist die Haelfte keine
+# Detection-Einstellung (szenario_gap_min, clip_retention_d, frigate_sync, debug …).
+NAV = [
+    ("Activity", [("/heute", "Today"), ("/ereignisse", "Events"), ("/offen", "To label")]),
+    ("People",   [("/gesichter", "Known"), ("/unbekannte", "Unknown"),
+                  ("/lernen", "Suggestions"), ("/qualitaet", "Quality")]),
+    # Areas als EIGENER Hauptbereich zwischen People und Learn (Design-Entscheid):
+    # dort liegen Sicht-Einstieg UND Konfiguration (anlegen/loeschen/zuweisen).
+    ("Areas",    [("/areas", "Areas")]),
+    # .83: Learn als EIGENER Hauptbereich — Kernfunktion, nicht
+    # laenger ein Anhaengsel der People-Seite.
+    ("Learn",    [("/lernlauf", "Learning run"), ("/lernlauf/anker", "Anchors")]),
+    ("Settings", [("/kameras", "Cameras"), ("/benachrichtigungen", "Notifications"),
+                  ("/konfiguration", "Advanced")]),
+    ("System",   [("/system", "System")]),
+]
+# Blattseiten ohne eigenen Reiter ihrem Abschnitt zuordnen, damit oben trotzdem der richtige
+# Bereich leuchtet (heute leuchtet auf /setup gar nichts).
+BLATT = {"/setup": "/kameras", "/aehnliche": "/gesichter", "/event": "/heute", "/auftritte": "/heute"}
+
+# Die beiden Galerie-Links ("Review gallery", "Strangers gallery") sind am 25.07. entfernt worden:
+# erzeugt wurden die Seiten von prototypes/backtest.py, das in keinem Image liegt. Fuer JEDE
+# Neuinstallation standen damit auf JEDER Seite zwei Links, die dauerhaft eine nackte
+# 404-Textzeile lieferten. Ein Link, der bei niemandem ausser dem Entwickler funktioniert,
+# gehoert nicht in die Fusszeile.
+# #53 Update-Hinweis: verifyd.update_check() setzt das nach jedem taeglichen Check
+# ({"tag": "v0.1.0.x", "url": ...} oder None). Prozess-Zustand, Quelle state/update_check.json —
+# das Layout bleibt zustandslos und muss nichts nachladen.
+UPDATE_INFO = None
+
+FUSS = ('<a href="/log">Service log</a> · '
+        '<a href="https://github.com/BennoBaer-dev/suslik" target="_blank" rel="noopener noreferrer">Docs</a> · '
+        '<a href="/health">health</a>')
+
+
+def layout(titel, aktiv, inhalt, banner=None, refresh=None):
+    """Seiten-Huelle: Nav + optionaler Warn-Banner + Inhalt + Fusszeile.
+    refresh=N laedt die Seite alle N Sekunden neu (offener Tab bleibt aktuell)."""
+    # Aktiven Abschnitt aus dem Pfad ableiten — die Seiten uebergeben weiterhin ihren eigenen
+    # Pfad, keine Seite muss etwas ueber die Gruppierung wissen.
+    a = BLATT.get(aktiv, aktiv)
+    abschnitt = next((t for t, kinder in NAV if any(p == a for p, _ in kinder)), NAV[0][0])
+    nav = "".join(
+        f'<a href="{kinder[0][0]}"{" class=aktiv" if t == abschnitt else ""}>{t}</a>'
+        for t, kinder in NAV)
+    kinder = next((k for t, k in NAV if t == abschnitt), [])
+    # Zweite Ebene nur zeigen, wenn es dort mehr als eine Seite gibt (System hat nur sich selbst).
+    # Unterreiter nur markieren, wenn die Seite WIRKLICH die des Reiters ist (Plan-QS M7):
+    # BLATT bildet /setup auf /kameras ab, damit oben "Settings" leuchtet — aber der
+    # Unterreiter "Cameras" leuchtete dadurch MIT, obwohl man gar nicht auf /kameras ist.
+    # Der Abschnitt kommt aus dem gemappten Pfad (a), der Unterreiter aus dem echten (aktiv).
+    unter = ("" if len(kinder) < 2 else
+             '<div class="subnav"><div class="inner">' + "".join(
+                 f'<a href="{p}"{" class=aktiv" if p == aktiv else ""}>{html.escape(n)}</a>'
+                 for p, n in kinder) + "</div></div>")
+    ver = os.environ.get("SUSLIK_VERSION", "")   # feste Image-Version (leer im rohen dev-Lauf)
+    # Update-Marke (#53): fest im Kopf, aber leise — ein kleiner Link neben der Version,
+    # kein Banner, kein Blinken (User-Vorgabe "fest auf der Startseite, nicht zu aufdringlich").
+    upd = ""
+    if UPDATE_INFO and UPDATE_INFO.get("tag"):
+        upd = (f' <a class="upd" href="{html.escape(UPDATE_INFO.get("url") or "")}" target="_blank" '
+               f'rel="noopener noreferrer" title="A newer suslik version is available on GitHub">'
+               f'update {html.escape(UPDATE_INFO["tag"])}</a>')
+    b = f'<div class="banner">{html.escape(banner)}</div>' if banner else ""
+    r = f'<meta http-equiv="refresh" content="{int(refresh)}">' if refresh else ""
+    mark = ('<svg viewBox="0 0 32 32" fill="none" aria-hidden="true">'
+            '<rect x="2.5" y="2.5" width="27" height="27" rx="8" stroke="var(--accent)" stroke-width="2.2"/>'
+            '<circle cx="16" cy="13.5" r="4" stroke="var(--accent)" stroke-width="2.2"/>'
+            '<path d="M9 24c1.6-3.4 4-5 7-5s5.4 1.6 7 5" stroke="var(--accent)" stroke-width="2.2" stroke-linecap="round"/></svg>')
+    # Der Umschalter trug bisher nur das Zeichen ◐ mit einem Tooltip — der User hat ihn nicht
+    # gefunden ("sollten wir nicht darauf hinweisen, dass es beide gibt"). Ein Bedienelement,
+    # das der Betreiber uebersieht, existiert praktisch nicht. Jetzt mit sichtbarer Beschriftung,
+    # die den ZIELzustand nennt (nicht den aktuellen — sonst raet man, was der Klick tut).
+    rechts = ('<span class="rechts"><span class="live"><span class="d"></span>Live</span>'
+              '<button class="toggle" id="theme-toggle" '
+              'title="Switch between light and dark" aria-label="Switch colour theme">'
+              '<span class="tg-ico" aria-hidden="true">◐</span>'
+              '<span class="tg-txt">Theme</span></button></span>')
+    # Themenwahl (25.07.): OHNE eigene Wahl folgt die Oberflaeche dem Betriebssystem. Vorher war
+    # Dunkel fest voreingestellt — User: "es ist ja alles sehr dunkel und faende ich nicht so
+    # willkommen". Wer den Umschalter benutzt, ueberstimmt das System dauerhaft; das OS ueberschreibt
+    # eine ausdrueckliche Wahl NIE. Inline und vor dem Stylesheet, damit nichts kurz aufblitzt.
+    themejs = ('<script>try{var t=localStorage.getItem("vd-theme");'
+               'if(!t&&window.matchMedia&&matchMedia("(prefers-color-scheme: light)").matches)t="light";'
+               'if(t)document.documentElement.setAttribute("data-theme",t);}catch(e){}</script>')
+    return ("<!doctype html><meta charset=utf-8>" + r +
+            '<meta name="viewport" content="width=device-width, initial-scale=1">'
+            f"<title>{html.escape(titel)} — suslik{(' ' + ver) if ver else ''}</title>"
+            '<link rel="stylesheet" href="/static/style.css">' + themejs +
+            '<script src="/static/app.js" defer></script>'
+            # Beide Leisten in EINEN klebenden Block (Fund der Nachpruefung 25.07.): einzeln
+            # klebend brauchte die zweite Ebene einen Festwert fuer die Hoehe der ersten, und der
+            # wurde falsch, sobald die erste umbrach — s. .kopf in style.css.
+            f'<div class="kopf"><nav><div class="inner"><span class="marke">{mark}suslik'
+            f'{f" <small>{html.escape(ver)}</small>" if ver else ""}{upd}</span>{nav}{rechts}</div></nav>'
+            f"{unter}</div>"
+            f"<main>{b}{inhalt}</main>"
+            f"<footer>{FUSS}</footer>")
+
+
+def leer(text, hinweis=""):
+    """Definierter Leerzustand (AP3-Abnahmekriterium)."""
+    h = f"<br><small>{html.escape(hinweis)}</small>" if hinweis else ""
+    return f'<div class="leer"><b>{html.escape(text)}</b>{h}</div>'
+
+
+def update_block():
+    """#53: sachlicher, DEUTLICHER Hinweis-Block fuer die Startseite (User 26.07.: 'exklusiv
+    dargestellt … sachlich hingewiesen, aber schon deutlich' — kein Blinken, kein Erschlagen).
+    Ergaenzt die leise Kopf-Marke; leer, wenn kein Update bekannt ist."""
+    if not (UPDATE_INFO and UPDATE_INFO.get("tag")):
+        return ""
+    tag = html.escape(UPDATE_INFO["tag"])
+    url = html.escape(UPDATE_INFO.get("url") or "")
+    return (f'<div class="updblock"><span class="updb-t">Update available</span>'
+            f'<span class="updb-x">A newer suslik image (<b>{tag}</b>) is on GitHub — '
+            f'<a href="{url}" target="_blank" rel="noopener noreferrer">release notes</a>. '
+            f'Pull the new image and restart to update; your data and settings are kept.</span></div>')

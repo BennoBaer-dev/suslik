@@ -15,7 +15,7 @@ This matrix is about **suslik's own face pipeline**. Frigate's object-detection 
 | **Intel iGPU Gen8/9/11** (UHD 6xx, 6th–10th gen Core) | 🧪 `-gpu-legacy` image (testing): Intel serves these generations only via its legacy1 runtime, which this variant ships — the regular `-gpu` image cannot bind them | ✅ VAAPI | awaiting tester confirmation on a UHD 630 (issue #6) |
 | **NVIDIA GPU** (CUDA ≥ Maxwell, driver ≥ R525) | ✅ (`-cuda` image) | ✅ NVENC full-HW | verified: RTX 2060 mobile (author), RTX 3060 (tester) |
 | **CPU x86-64** | ✅ universal fallback (~25 s/event measured on a Ryzen 9 4900H) | ✅ libx264 | verified (it's our own reference box) |
-| **AMD GPU / ROCm** | ❌ analysis falls back to CPU | ❌ CPU encode (mesa/VAAPI probing is a planned investigation) | our own CPU reference box is an AMD APU — the Radeon iGPU is simply unused |
+| **AMD GPU / ROCm** | 🧪 experimental `-rocm` image (MIGraphX EP) in testing — falls back to CPU where ROCm doesn't bind | ❌ CPU encode (mesa/VAAPI probing is a planned investigation) | testers wanted — open an issue with your GPU model |
 | **ARM / Apple Silicon** | ❌ images are x86-64 only for now | — | untested |
 | **Coral / EdgeTPU** | ❌ tested & closed (a Coral-sized model fits the chip but loses real residents — the separation the method needs does not survive the shrink) | — | see [known-issues.md](known-issues.md) |
 | **Hailo-8** | possible future investigation | — | not started |

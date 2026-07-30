@@ -1,0 +1,17 @@
+# ALLE Versionen gepinnt (A15, 25.07.): aus den ausgelieferten 0.1.0.23-Images gelesen
+# (pip list --format=freeze; alle drei Varianten identisch). Ungepinnt bekam jeder Bau,
+# was pip gerade liefert — genau das haette die backend-eigenen Soll-Staende der Abnahme
+# entwertet (onnxruntime-Fall vom 25.07.). Heben = bewusste Entscheidung + neue Abnahme.
+# suslik Container-Deps (Variante CUDA, Nvidia-GPU via onnxruntime-gpu).
+# onnxruntime-gpu GEPINNT auf 1.26.0 = letzter gegen CUDA 12.8 gebauter Default-Build.
+#   AB 1.27 baut PyPI gegen CUDA 13 -> Host-Treiber R580 Pflicht (sperrt aeltere Treiber/GPUs aus). Nicht hochziehen.
+# insightface zieht plain 'onnxruntime' rein, das die -gpu-Variante VERDECKT (beide belegen
+#   site-packages/onnxruntime/, "last wins", der CUDA-EP verschwindet still) -> das Dockerfile erzwingt
+#   danach, dass onnxruntime-gpu gewinnt (uninstall beider + reinstall --no-deps).
+insightface==1.0.1
+onnxruntime-gpu==1.26.0
+opencv-python==5.0.0.93
+scikit-learn==1.9.0
+numpy==2.5.1
+PyYAML==6.0.3
+paho-mqtt==2.1.0

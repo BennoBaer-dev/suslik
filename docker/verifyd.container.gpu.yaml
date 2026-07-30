@@ -1,0 +1,13 @@
+# suslik — shipped default configuration (Intel iGPU/NPU (OpenVINO) variant). Baked into the image as
+# /app/verifyd.yaml; the setup wizard writes your real settings to /data/config/
+# config.json, which overlays these defaults. Nothing here sends or writes anywhere.
+data_dir: /data
+modell: adaface
+backend: auto                   # auto (P4): one-time benchmark picks recognition on NPU (openvino:MIXED) / GPU / CPU, sticky in state/placement.json; explicit openvino:GPU/NPU/MIXED stays as-is
+trigger: poll
+mqtt_publish: false
+telegram_modus: aus
+sub_label_schreiben: false
+frigate_sync: false
+anwesenheit_push: false
+alert_kategorien: []
