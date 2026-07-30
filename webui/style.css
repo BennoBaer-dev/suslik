@@ -1,0 +1,591 @@
+/* verifyd Web-UI — Design-System (20.07.: professionelles Layout, token-basiert, Dunkel-Default
+   + Hell-Toggle). Bestehende Klassen (.card/.pcard/table/.gtb/.zaehler …) bleiben erhalten,
+   nur konsistent auf die Tokens umgestellt, damit alle Reiter mitziehen ohne zu brechen. */
+
+:root {
+  color-scheme: dark;
+
+  /* --- Flaechen (Ebenen von hinten nach vorne) --- */
+  --bg:            #0e1117;  /* Seitengrund. UNVERAENDERT. */
+  --surface:       #161b23;  /* Karte/Panel/Nav. UNVERAENDERT. */
+  --surface-2:     #1b212c;  /* Zeilen-Hover, Chip-, Feld-Fuellung. UNVERAENDERT. */
+  --surface-3:     #232b38;  /* NEU: gedrueckt/aktiv. Ersetzt hartkodiertes #333
+                                aus verifyd.py (Z.397/3276/3296/3771/3858/4254).
+                                Regel: --faint hat hier 4.70 -> gerade noch AA,
+                                alles Kleinere gehoert nicht auf diese Flaeche. */
+
+  /* --- Rahmen --- */
+  --border:        #2a313d;  /* Dekorativer Trenner (Tabellenzeile, Panel-Kante).
+                                1.32 gegen --surface. Bewusst schwach: ein Trenner
+                                ist kein Bedienelement, 1.4.11 greift nicht. */
+  --border-strong: #646e7d;  /* NEU: Kante von BEDIENBAREM (Input, Select, Button).
+                                3.35 gegen --surface, 3.66 gegen --bg -> 1.4.11 ok.
+                                Heute fehlt das: Felder tragen --border und sind
+                                damit formal nicht wahrnehmbar abgegrenzt. */
+
+  /* --- Schrift (Ink) --- */
+  --text:          #e7ebf2;  /* 14.45 auf --surface. UNVERAENDERT. */
+  --dim:           #9aa4b3;  /*  6.86 auf --surface. UNVERAENDERT. */
+  --faint:         #8b95a3;  /* GEAENDERT von #69727f. Alt: 3.55 auf --surface =
+                                AA VERFEHLT, und --faint traegt genau die kleinen
+                                Labels (.kpi .lab 0.68rem, .camn 0.74rem, .pnote).
+                                Neu: 5.70 auf --surface, 4.70 auf --surface-3. */
+
+  /* --- Semantik: fuenf Rollen, mehr nicht --- */
+  --accent:        #4a9eeb;  /* NEUTRAL/INTERAKTIV: Links, Fokus, aktiver Reiter,
+                                rein informative Befunde. 6.07 auf --surface. */
+  --ok:            #3fb950;  /* BESTAETIGT/ERKANNT: Person sicher zugeordnet.
+                                6.80 auf --surface. UNVERAENDERT. */
+  --on-ink:        #08210f;  /* Schrift AUF einer --ok-Flaeche (gefuellter Aktiv-Knopf). Muss je
+                                Thema wechseln, weil die Flaeche wechselt: hier ist --ok hell
+                                (#3fb950), also dunkle Tinte -> 6.70. Weiss lag bei 2.54 und ist
+                                damit auf 106 Knoepfen der Anlern-Seiten durchgefallen (25.07.). */
+  --warn:          #d6a029;  /* UNBEKANNT/VERDACHT: unklar, bitte pruefen — kein
+                                Fehler. 7.34 auf --surface. UNVERAENDERT. */
+  --crit:          #ff6b60;  /* FEHLER/ALARM: Fremder, Widerspruch, Dienstfehler.
+                                GEAENDERT von #f0574d, weil #f0574d auf der
+                                getoenten Badge-Flaeche nur 4.27 erreichte.
+                                Neu: 6.19 auf --surface, 4.59 auf --crit-bg. */
+  /* GEDAEMPFT = --dim (lesbarer Nebentext) bzw. --faint (Label/Metazeile).
+     Keine sechste Farbe dafuer. */
+
+  /* --- Getoente Flaechen fuer Badge/Banner ---
+     GEAENDERT von rgba() auf Vollton-Hex. Grund: rgba komponiert gegen das,
+     was zufaellig dahinter liegt. Ein .badge im .sz-body (dort ist der Grund
+     --bg, style.css:189) ergibt heute einen anderen Kontrast als derselbe
+     .badge auf --surface. Vollton macht den gemessenen Wert verbindlich. */
+  --accent-bg:     #1f3347;  /* --accent darauf: 4.55 (AA) */
+  --ok-bg:         #1d372b;  /* --ok     darauf: 5.06 (AA) */
+  --warn-bg:       #393324;  /* --warn   darauf: 5.33 (AA) */
+  --crit-bg:       #452b2f;  /* --crit   darauf: 4.59 (AA) */
+
+  /* --- Avatar-Palette (Initialen, weisse Schrift) ---
+     ERSETZT die Palette in verifyd.py:3076. Von den sechs alten Toenen erreichte
+     nur einer AA mit #fff (#c98a2b lag bei 2.94 = klar durchgefallen). Diese
+     sechs liegen alle >= 5.24 und sind im Farbton klar auseinander. */
+  --av-1: #2c62ad;  /* blau     6.07 */
+  --av-2: #a33163;  /* magenta  6.61 */
+  --av-3: #6f45b0;  /* violett  6.66 */
+  --av-4: #1f7a5f;  /* gruen    5.24 */
+  --av-5: #8a5f16;  /* amber    5.63 */
+  --av-6: #4c5a6b;  /* schiefer 7.04 */
+
+  /* --- Erhebung ---
+     GEAENDERT: heute liegt --shadow auf JEDER Karte (.kpi/.panel/.sz/.uk/.card).
+     Bei einer dichten Liste ergibt das eine wattierte, weiche Optik — genau das
+     Gegenteil der gewuenschten Werkzeug-Anmutung. Neu: Flaechen sind flach und
+     werden per Rahmen getrennt; Schatten nur fuer echtes Schweben. */
+  --shadow-flat:    none;
+  --shadow-overlay: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.36);
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg:            #f4f6f8;  /* UNVERAENDERT */
+  --surface:       #ffffff;  /* UNVERAENDERT */
+  --surface-2:     #eceff3;  /* UNVERAENDERT */
+  --surface-3:     #e2e6ec;  /* NEU, Gegenstueck zum dunklen --surface-3 */
+
+  --border:        #dde2e8;  /* UNVERAENDERT, dekorativ */
+  --border-strong: #848e9c;  /* NEU: 3.32 gegen --surface, 3.06 gegen --bg */
+
+  --text:          #1a1f27;  /* 16.55 auf --surface. UNVERAENDERT. */
+  --dim:           #58616e;  /*  6.27 auf --surface. UNVERAENDERT. */
+  --faint:         #5c6470;  /* GEAENDERT von #8a93a1 (2.86 auf --bg = FAIL).
+                                Neu: 5.98 / 5.52 / 5.18 / 4.77 ueber alle vier Flaechen. */
+
+  --accent:        #1a63b8;  /* GEAENDERT von #2f7dd1 (3.90 = FAIL). Neu: 5.96 auf --surface. */
+  --ok:            #15703d;  /* GEAENDERT von #1f9d55 (3.22 = FAIL). Neu: 6.15. */
+  --on-ink:        #ffffff;  /* Gegenstueck zum dunklen Thema: hier ist --ok DUNKEL, also
+                                weisse Tinte darauf -> 6.14. */
+  --warn:          #8a5a12;  /* GEAENDERT von #b7791f (3.36 = FAIL). Neu: 5.91. */
+  --crit:          #b52a2a;  /* GEAENDERT von #c53030 (5.47, bestand schon).
+                                Leicht nachgezogen fuer gleiche Staerke: 6.31. */
+
+  --accent-bg:     #e4ecf6;  /* --accent darauf: 5.01 */
+  --ok-bg:         #e3eee8;  /* --ok     darauf: 5.17 */
+  --warn-bg:       #efe8de;  /* --warn   darauf: 4.86 */
+  --crit-bg:       #f8eaea;  /* --crit   darauf: 5.39 */
+
+  /* Avatar-Palette bewusst NICHT ueberschrieben: die sechs Toene tragen weisse
+     Schrift und sind in beiden Modi identisch lesbar. Eine Person soll ausserdem
+     modusunabhaengig dieselbe Farbe haben — das ist ein Wiedererkennungsmerkmal. */
+
+  --shadow-flat:    none;
+  --shadow-overlay: 0 1px 2px rgba(20,28,40,.10), 0 8px 24px rgba(20,28,40,.10);
+}
+
+/* Kompatibilitaet: vier Namen sind im neuen Satz umbenannt. Statt 21 Fundstellen
+   anzufassen (und dabei etwas zu uebersehen) hier einmal abgebildet.
+   --shadow wird bewusst zu none: Schatten lagen bisher auf JEDER Karte, bei einer
+   dichten Liste ergibt das eine wattierte Optik statt einer Werkzeug-Anmutung. */
+:root {
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: var(--font-sans);
+  --mono: var(--font-mono);
+  --shadow: var(--shadow-flat);
+  --accent-weak: var(--accent-bg);
+}
+
+
+* { box-sizing: border-box; }
+body { font: 14px/1.45 var(--sans); background: var(--bg); color: var(--text);
+       margin: 0; padding: 0 0 48px; -webkit-font-smoothing: antialiased; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+main { max-width: 1120px; margin: 0 auto; padding: 16px 16px 0; }
+h2 { font-size: 20px; font-weight: 700; letter-spacing: -.02em; margin: 4px 0 16px; }
+h3 { font-size: 15px; font-weight: 600; margin: 24px 0 8px; }
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+
+/* ---- Navigation ---- */
+/* Kopf = Hauptleiste + zweite Ebene als EIN klebender Block (Fund 25.07.). Vorher klebte jede
+   Leiste einzeln, die zweite mit `top: 41px` — einem Festwert fuer die gemessene Hoehe der ersten.
+   Sobald `nav .inner` umbricht (unter 556 px wird die Leiste 75,8 px hoch), rutschte die zweite
+   Ebene um bis zu 34,8 px UNTER die erste und verschwand zu 95 %. Weil sie zugleich das kleinere
+   z-index trug, fing die Hauptleiste die Klicks: ein Tipp auf „Today" landete auf `/system`. Als
+   gemeinsamer Block gibt es keinen Festwert mehr, der falsch werden kann. */
+.kopf { position: sticky; top: 0; z-index: 5; }
+nav { background: var(--surface); border-bottom: 1px solid var(--border); }
+nav .inner { max-width: 1120px; margin: 0 auto; padding: 8px 16px;
+             display: flex; flex-wrap: wrap; gap: 2px 4px; align-items: center; }
+/* Zweite Navigationsebene (25.07.): sitzt unter der Hauptleiste, klebt mit ihr oben fest und
+   ist optisch klar untergeordnet — kleinere Schrift, ruhigerer Grund, aktive Seite per
+   Unterstrich statt Fuellung. Der aktive Bereich oben bleibt der Anker. */
+.subnav { background: var(--bg); border-bottom: 1px solid var(--border); }
+.subnav .inner { max-width: 1120px; margin: 0 auto; padding: 0 16px;
+                 display: flex; flex-wrap: wrap; gap: 16px; align-items: center; }
+.subnav a { padding: 8px 0; color: var(--dim); font-size: 13px; font-weight: 500;
+            border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.subnav a:hover { color: var(--text); text-decoration: none; }
+.subnav a.aktiv { color: var(--text); border-bottom-color: var(--accent); }
+
+nav .marke { display: inline-flex; align-items: center; gap: 8px;
+             font-weight: 700; color: var(--text); margin-right: 8px; letter-spacing: -.01em; }
+nav .marke svg { width: 24px; height: 24px; }
+nav a { padding: 4px 12px; border-radius: 6px; color: var(--dim); font-weight: 500; }
+nav a:hover { background: var(--surface-2); color: var(--text); text-decoration: none; }
+nav a.aktiv { background: var(--accent-weak); color: var(--accent); font-weight: 600; }
+nav .rechts { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; }
+nav .live { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dim);
+            padding: 4px 8px; border: 1px solid var(--border); border-radius: 999px; }
+nav .live .d { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px var(--ok-bg); }
+.toggle { background: var(--surface-2); border: 1px solid var(--border); color: var(--dim);
+          /* min-width statt width (Fund 25.07.): die 34 px stammen aus der Zeit, als der Knopf nur
+             das Zeichen ◐ trug. Mit der Beschriftung „Theme" stand der Text 25 px AUSSERHALB des
+             Knopfes und erzeugte auf allen 13 Seiten einen waagerechten Scrollbalken. */
+          min-width: 34px; height: 30px; padding: 0 8px;
+          border-radius: 6px; cursor: pointer; font-size: 15px; line-height: 1; }
+.toggle:hover { color: var(--text); border-color: var(--border-strong); }
+.toggle { display: inline-flex; align-items: center; gap: 6px; }
+.tg-txt { font-size: 12px; }
+@media (max-width: 620px) { .tg-txt { display: none; } }   /* eng: nur das Zeichen */
+
+/* ---- Banner ---- */
+.banner { background: var(--crit-bg); border: 1px solid color-mix(in srgb, var(--crit) 45%, transparent);
+          color: var(--crit); border-radius: 10px; padding: 8px 12px; margin: 0 0 16px; font-weight: 500; }
+
+/* ---- KPI-Reihe ---- */
+/* Tagesnavigation (25.07.): ersetzt die feste Ueberschrift "Today". Datum in der Mitte, Pfeile
+   aussen; vorwaerts ist am heutigen Tag ein <span> statt <a> — ein Link in die Zukunft waere ein
+   Versprechen, das die Seite nicht halten kann. */
+.tagnav { display: flex; align-items: center; gap: 8px; margin: 0 0 16px;
+          flex-wrap: wrap; }   /* Plan-QS M2: 'back to today' lief bei 360px 16px ueber */
+.tagnav-mitte { min-width: 190px; text-align: center; }
+.tagnav-t { font-size: 17px; font-weight: 600; line-height: 1.2; }
+.tagnav-u { font-size: 12px; color: var(--faint); min-height: 1em; }
+.tagnav .gtb { font-size: 15px; line-height: 1; padding: 4px 12px; }
+.tagnav [aria-disabled="true"] { opacity: .35; cursor: default; }
+/* Today-Umbau 25.07.: erkannte Personen dominieren, alles andere wird leise.
+   Zweispaltig — links wer/was passiert ist, rechts die Zahlen, die man selten braucht. */
+.tagraster { display: grid; grid-template-columns: minmax(0,1fr) 260px; gap: 16px; align-items: start; }
+@media (max-width: 900px) { .tagraster { grid-template-columns: minmax(0,1fr); } }
+
+.pband { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; margin: 0 0 24px; }
+.pk { display: flex; gap: 12px; align-items: center; text-decoration: none; color: inherit;
+      background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--ok);
+      border-radius: 10px; padding: 12px 12px; }
+.pk:hover { border-color: var(--accent); text-decoration: none; }
+.pk-live { border-left-color: var(--accent); }
+/* Unbekannt-Karten (Fund 25.07.): verifyd.py:3497-3498 gibt beide Klassen aus, die CSS kannte
+   KEINE davon. Folgen: `.pk-av` setzt `color:#fff` und bekam seine Flaeche sonst aus der
+   Avatar-Palette der bekannten Person — die fehlt hier, also stand das „?" weiss auf weissem
+   Grund (1,00:1, im Hellmodus voellig unsichtbar). Und `.pk` erbte den gruenen linken Balken,
+   der „erkannt" bedeutet, auf Karten, die genau das NICHT sind. Unbekannt ist neutral, nicht
+   gruen und nicht rot: es ist eine offene Frage, kein Vorfall. */
+.pk-unbek { border-left-color: var(--border-strong); }
+.pk-av { width: 54px; height: 54px; border-radius: 6px; display: grid; place-items: center;
+         font-weight: 600; font-size: 17px; color: #fff; flex: none; overflow: hidden; }
+/* MUSS nach .pk-av stehen: gleiche Spezifitaet, also gewinnt die spaetere Regel — sonst holt
+   sich das „?" das color:#fff von oben zurueck. */
+.pk-av-unbek { background: var(--surface-3, var(--surface-2)); color: var(--dim); }
+.pk-av img { width: 100%; height: 100%; object-fit: cover; }
+.pk-txt { min-width: 0; }
+.pk-name { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pk-meta { font-size: 13px; color: var(--dim); margin-top: 2px; }
+.pk-kam { font-size: 12px; color: var(--faint); margin-top: 2px; }
+
+/* Nicht zugeordnete Gesichter INNERHALB eines erkannten Durchgangs: Fussnote, keine Warnung —
+   das sind dieselben Leute, nur schlecht getroffen. Nur ein Durchgang ganz ohne Bestaetigung
+   bekommt die Warn-Plakette. */
+.fussnote { font-size: 12px; color: var(--faint); text-decoration: none; border-bottom: 1px dotted var(--border); }
+.fussnote:hover { color: var(--dim); text-decoration: none; }
+
+.tagseite { display: flex; flex-direction: column; gap: 12px; }
+.ts-block { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; }
+.ts-lab { font-size: 12px; color: var(--faint); }
+.ts-val { font-size: 28px; font-weight: 600; line-height: 1.1; }
+.ts-meta { font-size: 12px; color: var(--dim); margin-top: 4px; }
+.ts-zeile { display: flex; justify-content: space-between; font-size: 14px; padding: 2px 0; }
+.ts-zeile span:first-child { color: var(--dim); }
+
+.kpis { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; margin: 0 0 24px; }
+.kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+       padding: 12px 16px; box-shadow: var(--shadow); position: relative; overflow: hidden; }
+.kpi::after { content:""; position:absolute; left: 0; top: 0; bottom: 0; width:3px; background: var(--accent); opacity:.85; }
+.kpi.calm::after { background: var(--ok); } .kpi.attn::after { background: var(--warn); }
+.kpi .lab { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--faint); font-weight: 600; }
+.kpi .val { font-size: 28px; font-weight: 700; margin-top: 4px; letter-spacing: -.02em;
+            font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.kpi .val small { font-size: 14px; color: var(--faint); font-weight: 500; font-family: var(--sans); }
+.kpi .meta { font-size: 12px; color: var(--dim); margin-top: 2px; }
+.kpi.attn .val { color: var(--warn); }
+.kpi a { color: inherit; }
+
+/* ---- Zwei-Spalten (Heute) ---- */
+.cols { display: grid; grid-template-columns: 1.9fr 1fr; gap: 16px; align-items: start; }
+.side { display: flex; flex-direction: column; gap: 16px; }
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); }
+.phead { display: flex; align-items: center; justify-content: space-between; gap: 16px;
+         padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.phead h2, .phead h3 { font-size: 15px; font-weight: 600; margin: 0; }
+.phead .cnt { font-size: 12px; color: var(--faint); }
+.pnote { font-size: 12px; color: var(--faint); padding: 8px 16px 16px; border-top: 1px solid var(--border); }
+
+/* ---- Event-Verlauf ---- */
+.feed { padding: 8px; }
+.event { display: grid; grid-template-columns: 4px auto 1fr auto; align-items: center; gap: 16px; padding: 12px 12px; }
+.event + .event { border-top: 1px solid var(--border); }
+.event:hover { background: var(--surface-2); border-radius: 10px; }
+.stripe { align-self: stretch; min-height: 38px; border-radius: 3px; background: var(--ok); }
+.stripe.warn { background: var(--warn); } .stripe.crit { background: var(--crit); }
+.av { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center;
+      font-weight: 600; font-size: 15px; color: #fff; flex: none; overflow: hidden; }
+.av img { width: 100%; height: 100%; object-fit: cover; }
+.av.q { background: var(--warn-bg); color: var(--warn); font-size: 17px;
+        border: 1px dashed color-mix(in srgb, var(--warn) 50%, transparent); }
+.ev-main { min-width: 0; }
+.ev-name { font-weight: 600; font-size: 15px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ev-meta { color: var(--dim); font-size: 13px; margin-top: 2px; display: flex; gap: 8px; flex-wrap: wrap; }
+.ev-meta .num { color: var(--faint); }
+.pill { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+        padding: 2px 8px; border-radius: 999px; }
+.pill.ok { background: var(--ok-bg); color: var(--ok); }
+.pill.warn { background: var(--warn-bg); color: var(--warn); }
+
+/* ---- Seiten-Panels (Heute gesehen / Kameras) ---- */
+.seen { padding: 8px; }
+.seen-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; padding: 8px 8px; border-radius: 10px; }
+.seen-row:hover { background: var(--surface-2); }
+.seen-name { font-weight: 500; font-size: 14px; }
+.seen-sub { font-size: 12px; color: var(--faint); }
+.seen-right { text-align: right; font-size: 13px; color: var(--dim); }
+.avs { width: 30px; height: 30px; font-size: 12px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-weight: 600; overflow: hidden; }
+.avs img { width: 100%; height: 100%; object-fit: cover; }
+.cams { padding: 4px 8px 8px; }
+.cam { display: flex; align-items: center; gap: 8px; padding: 8px 8px; font-size: 14px; }
+.cam .d { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+.cam .num { margin-left: auto; color: var(--faint); font-size: 12px; }
+
+/* ---- Buttons / Badges (bestehend + neu) ---- */
+.btn { font-family: var(--sans); font-size: 13px; font-weight: 600; padding: 8px 12px;
+       border-radius: 6px; border: 1px solid transparent; background: var(--accent); color: #fff; cursor: pointer; white-space: nowrap; }
+.btn:hover { filter: brightness(1.07); }
+.btn.ghost { background: transparent; color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
+.btn.ghost:hover { background: var(--accent-weak); }
+.k { padding: 2px 8px; border-radius: 999px; color: #fff; font-size: 12px; white-space: nowrap; }
+.gtb { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+       /* margin 2px statt 0 (Plan-QS M1): der Rasterlauf hatte die Trenner wegrasiert — auf den
+          Label-Leisten kleben die Knoepfe dann aneinander, und ein Fehlklick schreibt SOFORT und
+          ohne Widerruf. 2px ist der alte Abstand; /event setzt zusaetzlich sein eigenes gap. */
+       padding: 2px 8px; margin: 0 2px 2px 0; cursor: pointer; font-size: 12px; }
+.gtb:hover { border-color: var(--accent); }
+.gtb.on { background: var(--ok); border-color: var(--ok); color: var(--on-ink); }
+/* .sel = "dieser Zustand ist aktiv", OHNE Wertung — bewusst farbneutral (25.07.). `.on` malt den
+   aktiven Zustand gruen; bei einem Schalter, dessen eine Stellung RISKANT ist, kollidiert das:
+   auf der Write-back-Karte stand bei aktivem Schreiben ein gruener Knopf neben einem orangen
+   Warnrahmen. Gruen bedeutete dort "eingeschaltet", ueberall sonst "sicher". Farbe traegt jetzt
+   nur noch das Risiko (Rahmen + Current-Zeile), die Auswahl traegt Form und ein Haken — damit
+   bleibt sie auch fuer Farbenblinde und im Ausdruck lesbar. */
+.gtb.sel { background: var(--surface-3, var(--surface-2)); border-color: var(--accent);
+           box-shadow: inset 0 0 0 1px var(--accent); font-weight: 600; }
+/* Formularelemente ZENTRAL (25.07.): vorher war nur `select` erfasst; Eingabefelder trugen an
+   sieben Stellen in verifyd.py ein fest verdrahtetes `background:#333;color:#eee`. Im Hellmodus
+   blieben dadurch gemessene 658 Bedienelemente dunkel — auf /offen allein 564. Der Umschalter
+   sass prominent in der Nav und funktionierte nur zur Haelfte. Ueber Tokens zieht jetzt beides
+   mit. `font: inherit` bewusst dabei: Browser setzen sonst ihre eigene Formularschrift. */
+input, select, textarea {
+  background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 2px 4px; font: inherit; font-size: 12px;
+}
+/* Gegenstueck zu app.js gt(): das gerade gewaehlte Select. Farbe traegt der Rand, nicht die
+   Flaeche — so bleibt der Text in beiden Modi lesbar (die alte Inline-Fuellung '#2a6' setzte die
+   Textfarbe nicht mit und ergab im Hellmodus 1,31:1). */
+select.gewaehlt { border-color: var(--ok); box-shadow: inset 0 0 0 1px var(--ok); font-weight: 600; }
+input[type=checkbox], input[type=radio], input[type=file], input[type=range] {
+  background: none; border: 0; padding: 0; font-size: inherit;   /* native Darstellung behalten */
+}
+input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+input::placeholder, textarea::placeholder { color: var(--faint); }
+
+/* ---- Bestehende Bausteine (andere Reiter) auf Tokens ---- */
+.card { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--faint);
+        border-radius: 10px; padding: 8px 12px; margin: 8px 0; box-shadow: var(--shadow); }
+/* (removed: per-person gallery accent classes) */
+.pcard { display: inline-block; vertical-align: top; width: 200px; margin: 4px 8px 4px 0; text-align: center; }
+.pcard img { width: 100%; max-height: 210px; object-fit: cover; border-radius: 6px; }
+.pcard .name { font-weight: 600; margin-top: 4px; } .pcard .wann { color: var(--dim); font-size: 12px; }
+table { border-collapse: collapse; width: 100%; }
+td, th { padding: 8px 8px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+th { color: var(--dim); font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; }
+td img { height: 52px; border-radius: 6px; }
+.frage { background: var(--warn-bg); border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+         border-radius: 6px; padding: 8px 12px; margin: 8px 0; font-size: 15px; }
+.crops { margin: 8px 0; } .crops img { height: 100px; border-radius: 6px; margin-right: 8px; vertical-align: middle; }
+.leer { border: 1px dashed var(--border); border-radius: 10px; padding: 24px; text-align: center; color: var(--dim); margin: 16px 0; }
+.leer b { color: var(--text); }
+.zeile { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.zaehler { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 8px 16px; }
+.zaehler b { font-size: 20px; display: block; font-family: var(--mono); }
+
+footer { max-width: 1120px; margin: 28px auto 0; padding: 12px 16px; color: var(--faint);
+         font-size: 12px; border-top: 1px solid var(--border); }
+footer a { color: var(--dim); }
+
+/* ---- Responsiv ---- */
+@media (max-width: 900px) {
+  .cols { grid-template-columns: 1fr; }
+  .kpis { grid-template-columns: repeat(2,1fr); }
+}
+@media (max-width: 560px) {
+  .tabelle-wrap { overflow-x: auto; }
+  .pcard { width: 46%; }
+  nav .inner { gap: 2px 4px; font-size: 13px; }
+  nav a { padding: 4px 8px; }
+}
+
+/* ---- Szenario-Heute (20.07.) ---- */
+.dim { color: var(--dim); }
+.listhead { display: flex; align-items: baseline; justify-content: space-between; margin: 0 4px 8px; }
+.listhead h3 { margin: 0; font-size: 15px; font-weight: 600; }
+.listhead .cnt { color: var(--faint); font-size: 13px; }
+.szlist { display: flex; flex-direction: column; gap: 4px; }
+.sz { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+      box-shadow: var(--shadow); overflow: hidden; position: relative; }
+.sz > summary { list-style: none; cursor: pointer; display: flex; align-items: center;
+                gap: 12px; padding: 8px 16px; min-height: 40px; }
+.sz > summary::-webkit-details-marker { display: none; }
+.sz::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--faint); }
+.sz.k-erkannt::before { background: var(--ok); }
+.sz.k-gemischt::before { background: var(--accent); }
+.sz.k-unbekannt::before { background: var(--warn); }
+.sz-zeit { min-width: 96px; flex-shrink: 0; }
+.sz-zeit .t { font-weight: 600; font-size: 15px; letter-spacing: -.01em; }
+.sz-zeit .d { color: var(--faint); font-size: 12px; margin-top: 0; }
+.sz-mitte { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex: 1; min-width: 0; }
+.sz-rechts { display: flex; align-items: center; gap: 12px; flex-shrink: 0; color: var(--dim); font-size: 13px; }
+.chev { width: 16px; height: 16px; color: var(--faint); transition: transform .18s ease; flex-shrink: 0; }
+.sz[open] .chev { transform: rotate(90deg); }
+.sz-body { border-top: 1px solid var(--border); background: var(--bg); }
+.camrow { display: flex; align-items: center; gap: 12px; padding: 4px 16px; min-height: 32px;
+          border-bottom: 1px solid var(--border); }
+.camrow:last-child { border-bottom: none; }
+.camname { display: flex; align-items: center; gap: 8px; min-width: 140px; font-weight: 600; font-size: 14px; }
+.camname .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
+.camn { color: var(--faint); font-size: 12px; min-width: 62px; }
+.camdetail { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; flex: 1; }
+.campx { margin-left: auto; color: var(--dim); font-size: 12px; white-space: nowrap; }
+.pchip { display: inline-flex; align-items: center; gap: 4px; background: var(--surface-2);
+         border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px 2px 2px;
+         font-size: 13px; font-weight: 500; }
+.pchip .avs { width: 20px; height: 20px; font-size: 11px; }
+.pchip .sc { font-family: var(--mono); color: var(--dim); font-size: 12px; }
+.badge { display: inline-flex; align-items: center; gap: 4px; border-radius: 999px;
+         padding: 2px 8px; font-size: 12px; font-weight: 600; }
+.badge.warn { background: var(--warn-bg); color: var(--warn); }
+.badge.ok { background: var(--ok-bg); color: var(--ok); }
+.badge.q { width: 20px; height: 20px; justify-content: center; padding: 0; border-radius: 50%;
+           background: var(--warn-bg); color: var(--warn); }
+.badge.live { background: var(--accent-weak); color: var(--accent); }
+.badge.live .ldot { width: 7px; height: 7px; border-radius: 50%; background: currentColor;
+                    animation: livedot 1.4s ease-in-out infinite; }
+@keyframes livedot { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.65); } }
+.sz.sz-live::before { background: var(--accent); animation: livebar 1.6s ease-in-out infinite; }
+@keyframes livebar { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+@media (max-width: 620px) {
+  .sz > summary { flex-wrap: wrap; gap: 8px; }
+  .sz-rechts { width: 100%; justify-content: space-between; }
+  .camrow { flex-wrap: wrap; }
+  .campx { margin-left: 0; }
+}
+
+/* ---- Unbekannte-Reiter (20.07.) ---- */
+.sub { color: var(--dim); font-size: 14px; margin: 0 0 16px; max-width: 72ch; }
+.ukliste { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.uk { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+      box-shadow: var(--shadow); overflow: hidden; display: flex; flex-direction: column; }
+.uk-kopf { display: flex; gap: 12px; padding: 12px 16px 8px; }
+.uk-face { width: 60px; height: 60px; border-radius: 10px; object-fit: cover; flex-shrink: 0;
+           background: var(--surface-2); }
+.uk-titel { font-weight: 700; font-size: 15px; letter-spacing: -.01em; }
+.uk-meta { color: var(--dim); font-size: 13px; margin-top: 2px; }
+.uk-meta .num { color: var(--text); }
+.uk .chips { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 8px; }
+.uk .chip { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--surface-2);
+            border: 1px solid var(--border); color: var(--dim); }
+.streifen { display: flex; gap: 2px; padding: 0 16px 8px; flex-wrap: wrap; }
+.streifen img { width: 40px; height: 48px; border-radius: 6px; object-fit: cover; background: var(--surface-2); }
+.uk-akt { display: flex; gap: 8px; flex-wrap: wrap; padding: 8px 16px 12px; align-items: center;
+          border-top: 1px solid var(--border); margin-top: auto; }
+.uk-akt input, .uk-akt select { font: inherit; font-size: 13px; padding: 4px 8px;
+          border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+.uk-akt input { flex: 1; min-width: 120px; }
+.merge { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 8px 16px;
+         border: 1px dashed color-mix(in srgb, var(--warn) 55%, transparent);
+         background: var(--warn-bg); border-radius: 10px; margin-bottom: 12px; }
+.merge > span { flex: 1; min-width: 180px; font-size: 14px; }
+details.mehr { margin-top: 16px; }
+details.mehr > summary { cursor: pointer; color: var(--dim); font-weight: 600; padding: 8px 0; }
+
+/* ---- Cameras sheet (Phase 2b) ---- */
+.kamhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.kamhead .sw { margin-left: auto; font-weight: 600; font-size: 14px; display: inline-flex;
+               align-items: center; gap: 4px; cursor: pointer; white-space: nowrap; }
+.zbar { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-top: 8px;
+        padding-top: 8px; border-top: 1px solid var(--border); font-size: 14px; }
+.zbox { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+
+/* ---- Event detail (Today → click, User 22.07.) ---- */
+a.pchip, a.badge { text-decoration: none; cursor: pointer; }
+a.pchip { color: var(--text); }
+a.pchip:hover, a.badge.warn:hover { filter: brightness(1.15); }
+.evhead { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin: 4px 0 8px; }
+.evhead .back { font-size: 14px; color: var(--dim); }
+.evmeta { display: flex; flex-direction: column; gap: 8px; }
+.evbadges { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.evrow { display: flex; gap: 8px; align-items: baseline; }
+.evrow .lab, .evgt .lab { min-width: 66px; color: var(--dim); font-size: 13px; }
+.evactions { display: flex; gap: 8px; flex-wrap: wrap; }
+.evgt { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-top: 8px;
+        border-top: 1px solid var(--border); }
+.btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 12px; border-radius: 6px;
+       background: var(--surface-2); border: 1px solid var(--border); color: var(--text); font-size: 13px; }
+.btn:hover { border-color: var(--accent); }
+.evgal { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-top: 8px; }
+.evimg { display: block; border-radius: 10px; overflow: hidden; border: 1px solid var(--border); background: var(--surface-2); }
+.evimg img { width: 100%; height: 170px; object-fit: cover; display: block; }
+
+/* ---- Setup wizard (User 22.07.) ---- */
+.setup-step { margin: 16px 0; }
+.setup-step .sh { display: flex; align-items: center; gap: 8px; font-size: 17px; margin-bottom: 4px; }
+.setup-step .sn { display: inline-grid; place-items: center; width: 1.5rem; height: 1.5rem; border-radius: 50%;
+                  background: var(--accent-weak); color: var(--accent); font-weight: 700; font-size: 14px; }
+.setup-step.dim { opacity: .55; }
+.frow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+.frow input { background: var(--surface-2); color: var(--text); border: 1px solid var(--border);
+              border-radius: 6px; padding: 8px 8px; }
+.ok-box { background: var(--ok-bg); color: var(--ok); border-radius: 6px; padding: 8px 12px; margin-top: 8px; }
+.err-box { background: var(--warn-bg); color: var(--warn); border-radius: 6px; padding: 8px 12px; margin-top: 8px; }
+.bks { display: flex; flex-direction: column; gap: 8px; }
+.bk { display: flex; align-items: center; gap: 8px; background: var(--surface-2); border: 1px solid var(--border);
+      border-radius: 6px; padding: 8px 12px; cursor: pointer; }
+.bk:hover { border-color: var(--accent); }
+
+/* Zuweisungs-Klappe an der Unknown-Karte (25.07. abends, User-Entscheid).
+   Die Thumbs sind ANWAEHLBAR (Checkbox versteckt, Auswahl = Akzentrahmen) — der Nutzer
+   klickt bewusst die echten Gesichter an; Muell aus dem Greedy-Clustering bleibt liegen. */
+.pkwrap { display: flex; flex-direction: column; gap: 4px; }
+.pkwrap .pk { flex: 1; }
+.ukassign { align-self: flex-start; }
+.ukpanel { background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+           padding: 8px; }
+.ukthumbs { display: flex; flex-wrap: wrap; gap: 6px; }
+.ukw { cursor: pointer; border: 2px solid transparent; border-radius: 6px; line-height: 0; }
+.ukw input { position: absolute; opacity: 0; pointer-events: none; }
+.ukw img { height: 64px; border-radius: 4px; display: block; }
+.ukw:has(input:checked) { border-color: var(--accent); }
+.ukw:hover { border-color: var(--border-strong); }
+/* uid-Karte ist selbst der Zuweisungs-Klick (User-Feedback 25.07., Screenshot-Test) */
+.pk-klick { cursor: pointer; }
+.pk-klick:hover { border-color: var(--accent); }
+/* Event-Galerie pro Person (User-Befund 25.07.: flaches Raster = Durcheinander) */
+.evgrp { margin: 14px 0 6px; font-size: 14px; }
+.evgrp .cnt { color: var(--dim); font-weight: 400; margin-left: 6px; }
+/* Merge-Vorschlag zeigt BEIDE Gesichtsgruppen (25.07.: ohne Bilder unentscheidbar) */
+.merge { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.merge-seite { display: inline-flex; align-items: center; gap: 6px; }
+.merge-thumbs img { height: 44px; border-radius: 4px; margin-right: 3px; vertical-align: middle; }
+.merge-vs { color: var(--dim); font-size: 16px; }
+/* Event-Galerie: sichtbare Grenze sicher/unsicher (User 25.07.) */
+.evgrenze { margin: 18px 0 6px; padding: 6px 10px; border-top: 2px dashed var(--warn, #c90);
+  color: var(--dim); font-size: 13px; }
+/* #53 Update-Hinweis-Block (Startseite): deutlich, sachlich, ruhig — Card mit Akzentkante */
+.updblock { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap;
+  margin: 0 0 14px; padding: 10px 14px; background: var(--surface);
+  border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  border-radius: 8px; font-size: 14px; }
+.updblock .updb-t { color: var(--accent); font-weight: 700; white-space: nowrap; }
+/* #53 Update-Hinweis: leise Marke neben der Version im Kopf — Akzentfarbe, klein, kein Blinken */
+.marke .upd { font-size: 11px; font-weight: 600; color: var(--accent); text-decoration: none;
+  border: 1px solid var(--accent); border-radius: 9px; padding: 1px 7px; margin-left: 6px;
+  opacity: .85; white-space: nowrap; }
+.marke .upd:hover { opacity: 1; text-decoration: none; }
+
+/* W3 Lazy-Video: Spinner auf der Warteseite (/video), waehrend die Browser-Kopie entsteht */
+.spin { width: 36px; height: 36px; margin: 0 auto 14px; border-radius: 50%;
+  border: 4px solid var(--border); border-top-color: var(--accent);
+  animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* --- Paket B (.50): Personen-Tagessicht /auftritte --------------------------------- */
+.pass-card{margin-bottom:16px;padding:14px}
+.pass-kopf{font-size:14px;margin-bottom:10px}
+.pass-body{display:flex;gap:14px;align-items:flex-start}
+.pass-bild{flex:0 0 150px}
+.pass-bild img{width:150px;height:auto;border-radius:8px;display:block}
+.pass-bild-leer{width:150px;height:100px;border-radius:8px;background:var(--surface-2);
+  display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--dim,#888)}
+.pass-info{min-width:0;display:flex;flex-direction:column;gap:6px;font-size:13px}
+.pass-folge{font-weight:600}
+.pass-links{margin-top:4px}
+.pass-thumbs{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.pass-thumb{display:flex;flex-direction:column;align-items:center;gap:2px;font-size:11px;
+  color:inherit;text-decoration:none;min-width:56px}
+.pass-thumb img{width:56px;height:56px;object-fit:cover;border-radius:6px}
+.pass-thumb span{width:56px;height:56px;border-radius:6px;background:var(--surface-2);
+  display:flex;align-items:center;justify-content:center;font-size:10px;text-align:center;
+  color:var(--dim);line-height:1.3}
+.passleiste{display:flex;align-items:center;gap:10px;padding:10px 14px;font-size:13px;
+  flex-wrap:wrap;margin-bottom:10px}
+.pass-thumb-schwach{opacity:.5}
+.pass-thumb-schwach:hover{opacity:.9}
+.pass-thumbs-rest{align-self:center;font-size:11px;color:var(--dim);padding:0 6px}
+/* --- Areas Stufe 1 v2 (30.07.): Chip-Leiste (reine Links) + Dropdown-Verwaltung ----- */
+.arbar{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.arbar .gtb{font-size:13px;padding:4px 10px}
+.ar-liste{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0}
+.ar-pill{display:inline-flex;align-items:center;gap:6px;padding:4px 8px;
+  border:1px solid var(--border);border-radius:8px;background:var(--surface-2)}
+.ar-pill .gtb{font-size:12px;padding:1px 7px;line-height:1.3}
+.ar-zeile{align-items:center}
+.ar-zeile .ar-wahl{margin-left:auto}
+#ar-neu{background:var(--surface-2);color:var(--text);border:1px solid var(--border);
+  border-radius:6px;padding:5px 8px}
+/* --- .54: F2-Badge + klickbare Kennzahlen ------------------------------------------ */
+.badge-gtfremd{color:var(--warn);font-weight:600}
+.ts-link{color:inherit;text-decoration:none;border-bottom:1px dotted var(--dim)}
+#recognized,#passes,#unidentified{scroll-margin-top:96px}  /* Sprungziele unter der klebenden Leiste freihalten (Review .54) */
+.ts-link:hover{border-bottom-color:var(--accent)}

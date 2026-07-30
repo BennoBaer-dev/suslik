@@ -68,10 +68,14 @@ docker pull ghcr.io/bennobaer-dev/suslik:latest-cuda    # NVIDIA
 
 ### Option 2 — build from source
 
-> **Not available yet:** the application source is not published in this repository so far —
-> it will be published with the **first beta release**. Until then,
-> **Option 1 (GHCR pull) is the way to install.** The build instructions will appear here
-> together with the source.
+The application source is published in this repository as of **0.1.0.92-alpha** — you can
+read, audit and patch everything the images run. One honest limitation for now: the bundled
+ONNX **model files are not in the git tree** (~600 MB, and they carry their own third-party
+terms — see [NOTICE](../NOTICE)), so a fresh `docker build` will stop at the model `COPY`
+step until you drop the model packs into `models/` and `docker/buffalo_l/` yourself. A
+checksummed fetch script is planned. Until then, **Option 1 (GHCR pull) is the way to run
+suslik**; the build files (`docker/Dockerfile*`) document exactly how the published images
+are made.
 
 ## Common settings (all variants)
 

@@ -1,0 +1,14 @@
+# suslik — shipped default configuration (CPU variant). Baked into the image as
+# /app/verifyd.yaml; the setup wizard writes your real settings to /data/config/
+# config.json, which overlays these defaults. Nothing here sends or writes anywhere.
+# frigate_url is intentionally unset — the setup wizard asks for it on first start.
+data_dir: /data                 # gemountetes leeres Volume
+modell: adaface                 # Produktions-Recognition-Modell (ONNX ist eingebacken)
+backend: cpu                    # Stufe 1: CPU (Stufe 2: openvino:GPU mit /dev/dri)
+trigger: poll                   # nur lesende GETs an Frigate (kein MQTT-Broker noetig)
+mqtt_publish: false             # KEINE verifyd/*-Topics -> keine HA/Telegram-Kette
+telegram_modus: aus             # kein Direktversand
+sub_label_schreiben: false      # nicht in Frigate zurueckschreiben
+frigate_sync: false             # mirror references back to Frigate (opt-in)
+anwesenheit_push: false         # keine Pushover-Anwesenheitsmeldung
+alert_kategorien: []            # keine Alerts (kein pushover-Block noetig)

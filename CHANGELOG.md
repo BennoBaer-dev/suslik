@@ -5,7 +5,50 @@ iterations on the author's production box and were never pushed to GHCR; their c
 ship together with **0.1.0.28**. Likewise 0.1.0.29–0.1.0.32 ship together with **0.1.0.33**,
 and the performance-wave steps 0.1.0.34–0.1.0.44 ship together with **0.1.0.47**.
 The Today-redesign steps 0.1.0.48–0.1.0.53 ship together with **0.1.0.54**, and the
-local steps 0.1.0.55–0.1.0.62 ship together with **0.1.0.63**.
+local steps 0.1.0.55–0.1.0.62 ship together with **0.1.0.63**. The learning-module and
+areas construction steps 0.1.0.64–0.1.0.91 ship together with **0.1.0.92-alpha**.
+
+## 0.1.0.92-alpha — 2026-07-31
+
+First release with the **application source published** in this repository, and the
+first one labeled what it is: an **alpha work in progress** (see the README status).
+
+### Added
+- **Learning module (guided runs, usable today)**: a wizard plans a learning run over
+  as many past person events as you choose — it estimates the duration on *your*
+  hardware first (a one-time self-benchmark), harvests faces from the recorded clips
+  through calibrated quality gates (candidate → crop-worthy → anchor-ready), and
+  groups the anchor-ready faces into clusters of **recurring people** across days and
+  cameras. Runs survive restarts and resume; progress is visible per phase, per event,
+  with live counters. An Anchors page shows every cluster with its face crops — each
+  crop clicks through to the clip it came from. Naming a cluster (one step instead of
+  labeling single images) is the part still under construction.
+- **Camera areas, stage 1**: group cameras into parts of your property (driveway,
+  backyard, …). One camera belongs to at most one area; everything unassigned stays in
+  **Default**, and deleting an area returns its cameras there. Areas act as *views* on
+  Today, Appearances and Events — passes are always grouped and judged across the whole
+  property, an area only picks the passes that touched it — and alerts name the area of
+  the camera (as text; per-area alert behavior is stage 2). Saving needs no restart.
+- **Analysis rate per learning run**: choose the sampling frames-per-second per run,
+  with a measured yield/time trade-off explained right in the wizard.
+- **Sound in clip transcodes**: browser and Telegram copies now keep the audio track.
+- **Clip cache size cap** (`clip_cache_max_gb`, default 50 GB) next to the age-based
+  eviction, and the cache size is visible on `/health` — from a field report where the
+  cache had quietly grown to ~74 GB.
+- **CPU thread cap** (`cpu_threads`) for inference and transcode sessions.
+
+### Changed
+- Recognition-judgment invariance is now proven per release across CPU, Intel
+  iGPU/NPU and CUDA with fixed-point acceptance runs; NVENC full-hardware transcode
+  quality was recalibrated against field footage.
+- Many UI honesty passes: per-phase progress with checkmarks, a "working" pulse with
+  an honest stall warning, visible per-camera video buttons, and clearer wording
+  ("passes" instead of "scenarios").
+
+### Known limitations of this alpha
+- Naming/adoption of learned clusters is under construction; areas have no per-area
+  alert scoping yet; building from source needs model files that are not in the git
+  tree (see installation.md). Interfaces and data formats may still change.
 
 ## 0.1.0.63 — 2026-07-28
 

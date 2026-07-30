@@ -1,0 +1,67 @@
+# verifyd — configuration example. Copy to verifyd.yaml and adjust.
+# No secrets here: ${VAR} is expanded from the environment (the systemd unit loads .env as
+# EnvironmentFile; in Docker the values come from the container environment). The Docker path
+# configures everything through the setup wizard instead (stored in <data_dir>/config/config.json).
+
+frigate_url: ${FRIGATE_URL}
+
+# Trigger: "mqtt" (event push from the broker) or "poll" (Frigate API, fallback without credentials)
+trigger: mqtt
+poll_interval: 20        # seconds between API polls (poll mode only)
+lookback_h: 2            # how far back to look for unprocessed events (poll mode only)
+clip_delay: 15           # seconds to wait after event end (let the recording finalize)
+
+mqtt:                    # credentials live in .env
+  host: mqtt.example.lan  # your MQTT broker (IP or hostname; often the same host as Frigate)
+  port: 1883
+  user: ${FRIGATE_MQTT_USER}
+  password: ${FRIGATE_MQTT_PASSWORD}
+
+# Zone filter: events that entered none of the listed zones are skipped — UNLESS Frigate assigned
+# a sub_label (those are always verified). Cameras without an entry: all their events are analyzed.
+required_zones:
+  FrontCam: [driveway, yard]
+  SideCam:  [driveway, yard]
+  DoorCam:  [yard]
+
+# Analysis (calibrated values, see docs)
+modell: adaface          # recognition model: buffalo (insightface w600k_r50, RGB) | adaface
+                         # (AdaFace IR101@WebFace12M, in models/). Detection+alignment stay SCRFD/norm_crop.
+                         # Switch back to buffalo -> the service rebuilds the refcache.
+ov_device: GPU           # GPU | NPU | MIXED | CPU
+fps_sample: 3
+win_thresh: 0.38         # per-frame threshold inside the 3 s window (calibrated)
+win_min: 2               # min frames >= win_thresh in the best 3 s window to count as "recognized"
+unscharf_max: 350        # sharpness cutoff for the quality tab's suitability list (Laplacian variance)
+min_kante: 70            # minimum face size (px, native resolution) for a usable reference
+
+# Write-back + MQTT
+sub_label_schreiben: true   # write the confirmed person back to Frigate (echo-free via
+                            # <data_dir>/state/sublabel_writes.jsonl)
+frigate_sync: true          # mirror references to Frigate automatically (master -> Frigate on every add);
+                            # for running Frigate-Face and verifyd in parallel. Manual sync via the
+                            # buttons on the System page.
+mqtt_publish: true          # verifyd/erkennung per analysis + verifyd/heartbeat (60 s, retained)
+szene_karenz_s: 90          # scene-oriented alerts: an unknown alert fires only after this grace period
+                            # and only if nobody was confirmed on any camera within the window
+
+# Alerts
+alert_cooldown: 300      # seconds of global cooldown
+alert_kategorien: [widerspruch]   # only push a real disagreement; frigate-only stays log/stats
+anwesenheit_push: true            # one presence push per appearance of recognized people
+anwesenheit_cooldown: 1800        # sliding 30 min per person
+pushover:
+  token: ${PUSHOVER_TOKEN}
+  user: ${PUSHOVER_USER}
+telegram:                # direct send from verifyd; secrets in .env
+  bot_token: ${TELEGRAM_BOT_TOKEN}
+  chat_id: ${TELEGRAM_CHAT_ID}
+telegram_modus: direkt   # aus | ha | direkt | beide
+telegram_cooldown: 600   # throttle for unknown-person Telegram messages (seconds)
+
+# Web + data
+web_port: 8199
+data_dir: ./verify_data
+clip_retention_d: 7      # delete cached record clips after N days (crops/logs stay)
+szenario_gap_min: 5      # Today page: events less than N min apart form ONE scenario (one pass over the property)
+besucher_sim: 0.50       # "ignore": above this cosine similarity an unknown event counts as an ignored visitor

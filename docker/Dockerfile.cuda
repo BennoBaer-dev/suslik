@@ -1,0 +1,66 @@
+# suslik Varianten-Image CUDA: Nvidia-GPU via onnxruntime-gpu. Pendant zu Dockerfile.gpu (Intel/OpenVINO).
+# WARUM ein eigenes Image und kein Universal-Image (verifiziert 2026-07-23, Primaerquellen onnxruntime.ai/GitHub):
+#   onnxruntime-gpu (CUDA) und onnxruntime-openvino (Intel) koennen NICHT koexistieren — beide belegen
+#   site-packages/onnxruntime/ und ueberschreiben sich ("last wins"), der andere EP verschwindet still. Es gibt
+#   kein offizielles Wheel mit CUDA UND OpenVINO. -> Universalitaet liegt im CODE (VERIFY_BACKEND/_ort_session),
+#   nicht in EINEM Image; je Beschleuniger ein Tag, exakt wie Frigate (stable vs stable-tensorrt vs stable-rocm).
+#
+# CUDA 12.8 (Basis-Patch 12.8.1) fuer breite Abdeckung (verifiziert): laeuft via minor-version-compatibility auf
+# JEDEM Host-Treiber ab R525 und deckt Karten von Maxwell (CC 5.0) bis Blackwell/RTX-50 ab. CUDA 13 wuerde
+# Treiber R580 erzwingen und Maxwell/Pascal/Volta ausschliessen.
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
+
+# GeForce-Falle (an echter HW belegt 2026-07-23, RTX 2060 / Treiber 550): das Image bringt einen
+# cuda-compat-Forward-Compatibility-Layer mit. Ist der Host-Treiber aelter als die Image-CUDA, greift der
+# Container dazu — Forward-Compat laeuft aber NUR auf Datacenter-GPUs, auf Consumer-GeForce => "CUDA failure 804",
+# stiller CPU-Fallback. Entfernen -> libcuda.so.1 loest auf den Host-Treiber auf, minor-version-compatibility
+# traegt (GeForce UND Datacenter, Host-Treiber >= R525).
+RUN rm -rf /usr/local/cuda*/compat && ldconfig
+
+# NVENC braucht die Treiber-Capability `video`, sonst mountet das nvidia-container-toolkit
+# libnvidia-encode.so.1 NICHT in den Container und ffmpeg h264_nvenc scheitert zur Laufzeit
+# (NVIDIA-Doku: video = "required for using the Video Codec SDK"; Default ist nur utility,compute).
+# Als ENV im Image gesetzt, damit ein simples `docker run --gpus all` beim Nutzer reicht —
+# Review-Fund 26.07.: ohne `video` waere der komplette NVENC-Transcode-Pfad im cuda-Image tot.
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
+
+# Basis-Runtime + Python. Das cudnn-runtime-Image hat KEIN Python/pip -> per apt nachziehen.
+# build-essential/python3-dev fuer den insightface-Build (C-Extensions), falls kein passendes Wheel gezogen wird.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 python3-venv python3-dev python3-pip build-essential \
+        ffmpeg libgl1 libglib2.0-0 sshpass ca-certificates wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# venv statt --break-system-packages (Ubuntu 24.04 ist PEP668-managed) — sauber isoliert, sys.executable zeigt
+# hierher (Analyse-Subprozesse laufen im selben Interpreter).
+ENV VIRTUAL_ENV=/opt/venv
+RUN python3 -m venv "$VIRTUAL_ENV"
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+
+# --- Python-Deps: onnxruntime-gpu MUSS ueber das plain onnxruntime gewinnen, das insightface reinzieht
+#     (sonst kein CUDA-EP) -> nach dem requirements-Install hart erzwingen. Siehe requirements.cuda.txt. ---
+WORKDIR /app
+COPY docker/requirements.cuda.txt /app/requirements.txt
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r /app/requirements.txt \
+    && pip uninstall -y onnxruntime onnxruntime-gpu \
+    && pip install --no-cache-dir --no-deps onnxruntime-gpu==1.26.0
+
+# --- Modelle backen + Code + Container-Config (wie die anderen Varianten) ---
+COPY NOTICE LICENSE /app/
+COPY models/ /app/models/
+COPY docker/buffalo_l/ /root/.insightface/models/buffalo_l/
+COPY verifyd.py analyze.py anlernen.py face_audit.py abnahme.py auftritte.py szenarien.py decode.py worker.py no_person.py sync_refs.py /app/
+COPY webui/ /app/webui/
+COPY core/ /app/core/
+COPY routes/ /app/routes/
+COPY VERSION /app/VERSION
+COPY docker/verifyd.container.cuda.yaml /app/verifyd.yaml
+
+# Feste Versionsnummer ins Image (tools/build.sh reicht sie aus der VERSION-Datei als --build-arg rein).
+ARG VERSION=dev
+ENV SUSLIK_VERSION=$VERSION SUSLIK_VARIANT=cuda
+LABEL org.opencontainers.image.title="suslik" org.opencontainers.image.version="$VERSION" org.opencontainers.image.source="https://github.com/BennoBaer-dev/suslik"
+
+EXPOSE 8199
+CMD ["python", "verifyd.py", "--config", "verifyd.yaml"]

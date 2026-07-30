@@ -1,38 +1,9 @@
-# ===== NEVER PUBLISH =====
-# Secrets & connection
-.env
-*.env
-
-# Data: references, recordings, logs, crops, models
-verify_data/
-samples/
-backups/
-models/
-enroll/
-*.webp
-*.jpg
-*.jpeg
-*.png
-*.mp4
-*.npz
-*.tar.gz
-
-# Personal / internal notes (real names, internal IPs, planning)
-community/
-startprompt.md
-plan-v*.md
-roadmap.md
-
-# Config carrying internal values until it is parameterized
-verifyd.yaml
-
-# ===== Python / OS =====
-venv/
-.venv/
 __pycache__/
 *.pyc
-.DS_Store
-._*
-
-# Deliberate exception: the one vetted README screenshot (pseudonymized, faces blurred)
-!docs/img/today.png
+venv/
+.env
+models/
+docker/buffalo_l/
+verify_data/
+samples/
+*.tar.gz

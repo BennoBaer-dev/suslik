@@ -1,0 +1,18 @@
+# ALLE Versionen gepinnt (A15, 25.07.): aus den ausgelieferten 0.1.0.23-Images gelesen
+# (pip list --format=freeze; alle drei Varianten identisch). Ungepinnt bekam jeder Bau,
+# was pip gerade liefert — genau das haette die backend-eigenen Soll-Staende der Abnahme
+# entwertet (onnxruntime-Fall vom 25.07.). Heben = bewusste Entscheidung + neue Abnahme.
+# suslik Container-Deps (Stufe 2, OpenVINO iGPU/NPU).
+# onnxruntime-openvino gepinnt auf die LIVE-Version (Reproduzierbarkeit: Container = Live).
+# WICHTIG (im Build 22.07. verifiziert): standalone 'openvino' NICHT hier reinnehmen — pip zog
+#   2026.2.1, neuer als onnxruntime-openvino 1.24.1 erwartet (bundelt seine eigene OV-Runtime).
+#   Der hardware_probe faellt sauber auf den EP-/Geraetedatei-Check zurueck, wenn 'openvino' fehlt.
+# Ausserdem zieht insightface plain 'onnxruntime' rein, das die openvino-Variante VERDECKT (kein
+#   OV-EP) — das Dockerfile erzwingt danach, dass onnxruntime-openvino gewinnt (uninstall + reinstall).
+insightface==1.0.1
+onnxruntime-openvino==1.24.1
+opencv-python==5.0.0.93
+scikit-learn==1.9.0
+numpy==2.5.1
+PyYAML==6.0.3
+paho-mqtt==2.1.0

@@ -1,0 +1,77 @@
+# suslik rocm (N2, TESTPHASE): AMD-GPUs via onnxruntime-MIGraphX. Faktenbasis
+# Recherche-Stand (Primaerquellen, 2026-07): ROCm-EP ist seit ORT 1.23
+# ENTFERNT — MIGraphX ist AMDs vorgesehener Weg; Wheel = PyPI onnxruntime-migraphx
+# 1.27.1 (einziges cp313-faehige, ELF-geprueft: braucht libmigraphx_c.so.3 +
+# libamdhip64.so.7 unter /opt/rocm-7.2.4). AMD liefert KEINE Debian-Pakete ->
+# Ubuntu-noble-Builder-Stage + selektives Lib-Kopieren (Frigates -rocm-Muster).
+# HSA_OVERRIDE_GFX_VERSION wird NICHT eingebacken (Quellen widerspruechlich; Config/
+# Env-Knopf des Nutzers). Erst-Tester: Radeon 780M/gfx1103 — offiziell erst ab einer
+# noch unveroeffentlichten ROCm-Version, MIGraphX-JIT ist die Hoffnung; genau das
+# klaert der Test. Geraete kommen per compose (/dev/kfd + /dev/dri).
+FROM ubuntu:24.04 AS rocm-builder
+ARG ROCM=7.2.4
+RUN apt-get update && apt-get install -y --no-install-recommends wget ca-certificates \
+    && wget -q https://repo.radeon.com/amdgpu-install/7.2.4/ubuntu/noble/amdgpu-install_7.2.4.70204-1_all.deb \
+    && apt-get install -y ./amdgpu-install_7.2.4.70204-1_all.deb \
+    && apt-get update && apt-get install -y --no-install-recommends \
+       hip-runtime-amd migraphx miopen-hip rocblas rocminfo \
+    && rm -rf /var/lib/apt/lists/*
+# Selektiv buendeln (Frigate-Muster): Kern-Libs + NUR gfx10/11/12-Kernel-Dateien
+RUN mkdir -p /opt/rocm-dist/opt/rocm-$ROCM/lib/migraphx/lib \
+             /opt/rocm-dist/opt/rocm-$ROCM/lib/rocblas/library \
+             /opt/rocm-dist/opt/rocm-$ROCM/share/miopen/db \
+             /opt/rocm-dist/opt/rocm-$ROCM/bin /opt/rocm-dist/etc/ld.so.conf.d \
+    && cd /opt/rocm-$ROCM/lib \
+    && cp -dpr libMIOpen*.so* libamd*.so* libhip*.so* libhsa*.so* libmigraphx*.so* \
+               librocm*.so* librocblas*.so* librocroller*.so* /opt/rocm-dist/opt/rocm-$ROCM/lib/ 2>/dev/null; \
+    cd /opt/rocm-$ROCM/lib && cp -dpr migraphx/lib/* /opt/rocm-dist/opt/rocm-$ROCM/lib/migraphx/lib/ \
+    && (cp -dpr rocblas/library/*gfx10* rocblas/library/*gfx11* rocblas/library/*gfx12* \
+        /opt/rocm-dist/opt/rocm-$ROCM/lib/rocblas/library/ 2>/dev/null || true) \
+    && (cp -dpr /opt/rocm-$ROCM/share/miopen/db/*gfx10* /opt/rocm-$ROCM/share/miopen/db/*gfx11* \
+        /opt/rocm-$ROCM/share/miopen/db/*gfx12* /opt/rocm-dist/opt/rocm-$ROCM/share/miopen/db/ 2>/dev/null || true) \
+    && cp -dpr /opt/rocm-$ROCM/bin/rocminfo /opt/rocm-dist/opt/rocm-$ROCM/bin/ \
+    && ln -s rocm-$ROCM /opt/rocm-dist/opt/rocm \
+    && echo /opt/rocm/lib > /opt/rocm-dist/etc/ld.so.conf.d/rocm.conf
+
+FROM python:3.13-slim-trixie
+# Basis wie cpu-Image + AMD-Media (mesa) + libnuma (ROCm-Laufzeitbedarf laut Frigate)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ffmpeg libgl1 libglib2.0-0 sshpass ca-certificates wget \
+        mesa-va-drivers libnuma1 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=rocm-builder /opt/rocm-dist/ /
+RUN ldconfig
+
+WORKDIR /app
+COPY docker/requirements.gpu.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt \
+    && pip uninstall -y onnxruntime onnxruntime-openvino \
+    && pip install --no-cache-dir --no-deps onnxruntime-migraphx==1.27.1
+
+# MIGraphX-Workarounds wie Frigates AUSGELIEFERTES 0.17.2-rocm (die vier Schalter);
+# Compile-Caches ins Volume (Warmup-Lehre P4: Kompilate muessen Neustarts ueberleben).
+ENV MIGRAPHX_DISABLE_MIOPEN_FUSION=1 \
+    MIGRAPHX_DISABLE_SCHEDULE_PASS=1 \
+    MIGRAPHX_DISABLE_REDUCE_FUSION=1 \
+    MIGRAPHX_ENABLE_HIPRTC_WORKAROUNDS=1 \
+    MIOPEN_CUSTOM_CACHE_DIR=/data/clips/migraphx_cache \
+    MIOPEN_USER_DB_PATH=/data/clips/migraphx_cache \
+    AMD_COMGR_CACHE=1 \
+    AMD_COMGR_CACHE_DIR=/data/clips/migraphx_cache
+
+COPY NOTICE LICENSE /app/
+COPY models/ /app/models/
+COPY docker/buffalo_l/ /root/.insightface/models/buffalo_l/
+COPY verifyd.py analyze.py anlernen.py face_audit.py abnahme.py auftritte.py szenarien.py decode.py worker.py no_person.py sync_refs.py /app/
+COPY webui/ /app/webui/
+COPY core/ /app/core/
+COPY routes/ /app/routes/
+COPY VERSION /app/VERSION
+COPY docker/verifyd.container.rocm.yaml /app/verifyd.yaml
+
+ARG VERSION=dev
+ENV SUSLIK_VERSION=$VERSION SUSLIK_VARIANT=rocm
+LABEL org.opencontainers.image.title="suslik" org.opencontainers.image.version="$VERSION" org.opencontainers.image.source="https://github.com/BennoBaer-dev/suslik"
+
+EXPOSE 8199
+CMD ["python", "verifyd.py", "--config", "verifyd.yaml"]

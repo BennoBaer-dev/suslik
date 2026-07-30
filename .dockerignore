@@ -1,0 +1,19 @@
+# Build-Kontext schlank + sicher halten. NICHT ins Image: grosse/regenerierbare Daten,
+venv
+verify_data
+samples
+backups
+diag
+__pycache__
+**/__pycache__
+*.tar.gz
+.git
+.env
+.tmp
+report.html
+report.json
+review.html
+fremde.html
+._*
+.DS_Store
+DEADJOE

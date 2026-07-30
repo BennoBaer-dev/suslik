@@ -80,7 +80,7 @@ These are the settings most people touch (all set via the wizard/UI; names shown
   uploading face sync). **Default `true` = read-only** (suslik never changes anything in Frigate).
   Set to `false` only if you deliberately want write-back.
 - **Alerts** — which judgment categories trigger an alert, and the global cooldown. Delivery
-  channels are Pushover, Telegram (via Home Assistant automations on MQTT), and MQTT topics. The
+  channels are Pushover, Telegram (direct, or via Home Assistant: the `ha` mode calls the HA script `frigate_telegram_video` — create a script of that name in your HA instance, a configurable name is planned), and MQTT topics. The
   channels and their secrets are configured in the dedicated **Notifications** tab, which has a
   **Test** button per channel (see [usage.md](usage.md)).
 - **Recognition threshold** — the time-window criterion (how many consistent frames within the
