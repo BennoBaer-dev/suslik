@@ -1,0 +1,36 @@
+name: "🐛 Bug report / test feedback"
+description: "Report a problem or share your startup log — logs are the most helpful thing you can send."
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: input
+    id: image
+    attributes:
+      label: suslik image / version
+      placeholder: "e.g. ghcr.io/bennobaer-dev/suslik:latest-gpu (0.1.0.20)"
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: Hardware
+      placeholder: "e.g. Intel N100 iGPU / Intel Arc A380 / NVIDIA RTX 3060 / CPU only"
+    validations:
+      required: true
+  - type: input
+    id: frigate
+    attributes:
+      label: Frigate version
+      placeholder: "e.g. 0.16.1"
+  - type: textarea
+    id: log
+    attributes:
+      label: Startup log
+      description: "Paste the output of `docker logs <container>` — at least the numbered startup self-check."
+      render: shell
