@@ -38,7 +38,7 @@ function konfigSpeichern() {
 }
 
 /* Notifications sheet: collect channel fields (ids "n-*") + checked categories, save, restart;
-   per-channel live "Test" sends a real message with the current form values (blank secret = stored). */
+   per-channel live "Test" sends a real message with the current form values (a blank secret field keeps the stored value). */
 function _notifFelder() {
   var d = {}, felder = document.querySelectorAll('[id^="n-"]');
   for (var i = 0; i < felder.length; i++) d[felder[i].id.slice(2)] = felder[i].value;
