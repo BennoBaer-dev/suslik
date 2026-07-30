@@ -49,11 +49,19 @@ You can either **pull a published image** or **build it yourself**.
 > **NVIDIA**, `-cpu` is the CPU-only fallback. NVIDIA users want **`-cuda`** — don't pull `-gpu`
 > expecting NVIDIA.
 
-All three variants are published on the GitHub Container Registry. Use the
-`latest-<variant>` tag to always pull the newest build of that variant (or pin a specific
-`<version>-<variant>` tag from the repository's **Packages** page):
+All variants are published on the GitHub Container Registry.
+
+> **Alpha note:** `latest-*` deliberately stays on **0.1.0.63**, the last broadly validated
+> build. The current **alpha** (learning module, camera areas — see the README status) is
+> published only under its explicit version tag, so nobody lands in it by accident:
 
 ```bash
+# the current alpha (work in progress, recommended for testers):
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.92-alpha-gpu    # Intel (OpenVINO)
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.92-alpha-cuda   # NVIDIA
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.92-alpha-cpu    # CPU-only
+
+# the last broadly validated build:
 docker pull ghcr.io/bennobaer-dev/suslik:latest-cpu
 docker pull ghcr.io/bennobaer-dev/suslik:latest-gpu     # Intel (OpenVINO)
 # Older Intel iGPU (UHD 6xx, 6th–10th gen Core)? Use the gpu-legacy variant instead —

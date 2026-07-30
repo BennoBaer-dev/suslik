@@ -11,6 +11,10 @@ recognition an independent second opinion.
 > into clusters of **recurring people** — you then name a whole cluster once (the postman after
 > three weeks of visits) instead of labeling single images. Expect rough edges around it, and
 > expect interfaces and data formats to still change between versions.
+>
+> The `latest-*` image tags deliberately stay on **0.1.0.63**, the last broadly validated
+> build — nobody lands in the alpha by accident. To run what this README describes, pull the
+> version tag explicitly, e.g. `ghcr.io/bennobaer-dev/suslik:0.1.0.92-alpha-gpu`.
 
 ## Why this exists
 
@@ -35,7 +39,7 @@ declines rather than mislabels.
 The Today page answers "who was on the property, when, and where did they go" — one card per
 person, one block per pass, unknowns kept visible instead of buried:
 
-![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.0.67)
+![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.0.92-alpha)
 
 *(Screenshot from a live install of v0.1.0.54; names and faces anonymized.)*
 
