@@ -320,6 +320,30 @@ def render_pass(cfg, log_pfad, personen_bekannt, eid):
         pzeilen.append('<div class="evrow"><span class="lab">Label</span>'
                        '<span class="badge-gtfremd">confirmed stranger</span></div>')
 
+    # Task #9 (Tokn59 Issue #9, 31.07.): Fehler-Events erklaeren sich auf der Pass-Seite
+    # selbst. Der Grund stand seit jeher NUR im analyze.log des Events (verifyd:-Zeilen,
+    # z.B. "analyze failed in worker: ..." / "analyze timeout ..."); hier die LETZTE
+    # solche Zeile je Fehler-Event zeigen statt eines nackten "error" ohne Detail.
+    for e in evs:
+        r = by_h.get(e.get("eid") or "")
+        if not r or r.get("kategorie") != "fehler":
+            continue
+        grund = ""
+        lp = os.path.join(cfg["data_dir"], "events",
+                          str(e.get("eid") or "").replace("/", "_"), "analyze.log")
+        try:
+            with open(lp, encoding="utf-8", errors="replace") as f:
+                for l in f:
+                    if l.startswith("verifyd"):
+                        grund = l.split(":", 1)[-1].strip() if ":" in l else l.strip()
+        except OSError:
+            pass
+        pzeilen.append(
+            f'<div class="evrow"><span class="lab">Error</span>'
+            f'<span>{html.escape(e["cam"])} {_hhmm(e["t"])}: '
+            f'{html.escape(grund or "no analyze.log kept for this event — see the service log")}'
+            f'</span></div>')
+
     # Kamerafolge (fett = irgendeine Bestaetigung auf der Kamera)
     conf_kams = {e["cam"] for e in evs if e.get("conf")}
     folge, gesehen = [], set()

@@ -6,7 +6,30 @@ ship together with **0.1.0.28**. Likewise 0.1.0.29–0.1.0.32 ship together with
 and the performance-wave steps 0.1.0.34–0.1.0.44 ship together with **0.1.0.47**.
 The Today-redesign steps 0.1.0.48–0.1.0.53 ship together with **0.1.0.54**, and the
 local steps 0.1.0.55–0.1.0.62 ship together with **0.1.0.63**. The learning-module and
-areas construction steps 0.1.0.64–0.1.0.91 ship together with **0.1.0.92-alpha**.
+areas construction steps 0.1.0.64–0.1.0.91 ship together with **0.1.0.92-alpha**, and the
+QA/diagnostics steps 0.1.0.93–0.1.0.95 ship together with **0.1.0.96-alpha**.
+
+## 0.1.0.96-alpha — 2026-08-01
+
+Reliability and honest-diagnostics wave (includes the internal steps .93–.95).
+
+- **AMD/ROCm (`-rocm`, testing) is now actually usable:** the startup self-check can
+  probe MIGraphX, the log shows `/dev/kfd` status, real binding and a ROCm version
+  line, and the setup wizard offers and saves the AMD backend (the previous alpha's
+  `-rocm` image could not be configured at all).
+- **CUDA:** hosts without an NVIDIA card get a clear "no /dev/nvidia* device" note
+  instead of a misleading "runtime mismatch?" warning.
+- **Failure-series watchdog:** three consecutive failed analyses trigger an immediate
+  alert — on Pushover *and* Telegram, whichever is configured.
+- **`/health` tells the truth:** `ok` is derived from the startup self-check
+  (`startup_fails` field); a machine-readable `state/startup.json` accompanies the
+  human-readable log.
+- **Error events explain themselves** on the pass page (reason from the per-event
+  analyze log instead of a bare "error" badge), and the Frigate-unreachable banner
+  is now English and names the failing endpoint.
+- **Setup, updates and restore are contract-tested before every release:** old data
+  layouts migrate cleanly, the wizard round-trips for every image variant, config
+  backup/restore is verified end-to-end.
 
 ## 0.1.0.92-alpha — 2026-07-31
 

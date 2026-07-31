@@ -16,6 +16,8 @@ sich den Cache mit classify.py).
 Aufruf:
   analyze.py <eid> [<eid> ...] [--dir samples/TestN] [--persons NAME1 NAME2]
              [--labels CAM1 CAM2 CAM3] [--fps-sample 2.0]
+
+Backend-Wahl via face_audit.resolve_backend/core.registry (alle kinds: cpu, openvino, cuda, migraphx).
 """
 import os, sys, json, socket, urllib.request, argparse, tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
