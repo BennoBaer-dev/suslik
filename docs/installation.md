@@ -1,6 +1,6 @@
 # Installation
 
-suslik ships as a Docker image in **four hardware variants** that share the exact same
+suslik ships as a Docker image in **five hardware variants** that share the exact same
 application code — only the baked-in inference runtime differs. Pick the one that matches your
 hardware:
 
@@ -10,6 +10,7 @@ hardware:
 | **Intel** | `-gpu` | Intel iGPU / NPU via OpenVINO | you have an Intel integrated GPU (and optionally NPU) |
 | **Intel legacy** | `-gpu-legacy` | Intel Gen8/9/11 iGPU (UHD 6xx) via OpenVINO legacy runtime | you have a 6th–10th gen Intel iGPU — the regular `-gpu` image cannot bind it |
 | **NVIDIA** | `-cuda` | NVIDIA GPU via CUDA | you have an NVIDIA GPU |
+| **AMD** | `-rocm` | AMD GPU via ROCm / MIGraphX (testing) | you have an AMD GPU — pass `/dev/kfd` + `/dev/dri` into the container |
 
 > Why separate images instead of one universal image? The Intel (`onnxruntime-openvino`) and
 > NVIDIA (`onnxruntime-gpu`) runtimes cannot coexist in one Python environment — they overwrite

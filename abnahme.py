@@ -55,6 +55,8 @@ def backend_kennung(emb):
         prov.update(r.get_providers())
     if "CUDAExecutionProvider" in prov:
         return "cuda"
+    if "MIGraphXExecutionProvider" in prov:
+        return "migraphx"
     if "OpenVINOExecutionProvider" in prov:
         _, dev = getattr(emb, "_backend", ("", ""))
         return f"openvino-{dev or 'GPU'}"

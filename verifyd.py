@@ -165,7 +165,11 @@ def _placement_hw_key():
         ov = _ort.__version__
     except Exception:
         ov = "?"
-    devs = sorted(_glob.glob("/dev/dri/renderD*")) + sorted(_glob.glob("/dev/accel/accel*"))
+    # /dev/kfd + /dev/nvidia*: ohne sie aendert ein AMD-/Nvidia-GPU-Wechsel den Key nicht und
+    # ein altes Placement bliebe kleben (Inventur-Fund 31.07.). Key-Aenderung invalidiert
+    # gespeicherte Placements einmalig — gewollt, naechster Boot misst neu.
+    devs = sorted(_glob.glob("/dev/dri/renderD*")) + sorted(_glob.glob("/dev/accel/accel*")) \
+         + sorted(_glob.glob("/dev/kfd")) + sorted(_glob.glob("/dev/nvidia[0-9]*"))
     return f"{cpu}|{','.join(devs)}|ort{ov}|{os.environ.get('SUSLIK_VERSION', '')}"
 
 
@@ -3219,7 +3223,7 @@ class Service:
                     self.frigate_fehlerserie = 0          # darf keine echte Fehlerserie loeschen
             except Exception as e:
                 if not nachhol:
-                    self.frigate_fehler = (time.time(), str(e))
+                    self.frigate_fehler = (time.time(), f"event fetch: {e}")
                     self.frigate_fehlerserie = getattr(self, "frigate_fehlerserie", 0) + 1
                 self.log(f"{eid}: Frigate fetch failed: {e} (no processed entry, sweep will catch up)")
                 return None
@@ -3305,6 +3309,39 @@ class Service:
                     # dass der fremd_verdacht-Zweig unten nicht mehr betreten wird.
                     if self._no_person_pruefen(eid, ev, res, obj_score):
                         kategorie = "no_person"
+            # SD4 Fehlerserien-Waechter (qs.md §offen, qs_ebenen.md Paket 1): der 22.07.-Ausfall
+            # blieb 9 h unbemerkt, weil Startup//health gruen blieben. Drei gescheiterte Analysen
+            # IN FOLGE sind ein Struktursignal (Backend/Decode tot), kein Einzelfall-Rauschen ->
+            # SOFORT melden (nicht erst im 10-min-Watchdog-Takt), je 6 h hoechstens einmal.
+            # Widerleger-MUSS 31.07.: NUR der Live-Pfad zaehlt UND setzt zurueck — Nachhol-Laeufe
+            # sind per Vertrag stumm ("retries are silent") und ein geglueckter Retry darf eine
+            # echte Live-Serie nicht loeschen. Serien-Fenster 1 h: drei Einzelfehler ueber Tage
+            # sind KEINE Serie (Anlagen mit wenig Verkehr). >=3 statt ==3: eine ANHALTENDE
+            # Stoerung meldet nach Cooldown erneut statt genau einmal im Prozess-Leben.
+            if not nachhol:
+                if kategorie == "fehler":
+                    jetzt_ts = time.time()
+                    if jetzt_ts - getattr(self, "_fehlerserie_start", 0) > 3600:
+                        self._fehlerserie = 0                  # alte Serie verjaehrt
+                    if getattr(self, "_fehlerserie", 0) == 0:
+                        self._fehlerserie_start = jetzt_ts
+                    self._fehlerserie = getattr(self, "_fehlerserie", 0) + 1
+                    if self._fehlerserie >= 3 and \
+                            jetzt_ts - getattr(self, "_fehlerserie_gemeldet", 0) > 6 * 3600:
+                        self._fehlerserie_gemeldet = jetzt_ts
+                        self.log("STOERUNG (analyse-serie): 3 Analysen in Folge fehlgeschlagen — "
+                                 "Erkennung moeglicherweise tot (Backend/Decode pruefen)")
+                        if not self.dry_alert:
+                            def _sd4_push():
+                                try:      # eigener Thread: 20-s-HTTP darf den Analyse-Lock nicht halten
+                                    push(self.cfg, "suslik-Stoerung",
+                                         "3 Analysen in Folge fehlgeschlagen — die Erkennung ist "
+                                         "moeglicherweise tot (Dienst-Log / System-Seite pruefen).", None)
+                                except Exception as e:
+                                    self.log(f"fault push failed: {e}")
+                            threading.Thread(target=_sd4_push, daemon=True).start()
+                else:
+                    self._fehlerserie = 0
             entry = {
                 # Schema 3 (W1): +frames_gelesen/+frames_soll/+frames_fehlen — Leser greifen
                 # ueber .get() zu, Schema-2-Bestandszeilen bleiben unveraendert lesbar.
@@ -3740,7 +3777,7 @@ class Service:
             # EINZIGE Frigate-Pfad. Ohne das blieben UI-Banner, System-Ampel und Stoerungswaechter
             # gruen, waehrend Frigate tot ist und Events aus dem lookback-Fenster laufen.
             self.log(f"sweep error: {e}")
-            self.frigate_fehler = (time.time(), str(e))
+            self.frigate_fehler = (time.time(), f"event poll: {e}")
             self.frigate_fehlerserie = getattr(self, "frigate_fehlerserie", 0) + 1
 
     # ------------------------------------------------ Nachhol-Lauf (Vorfall 22./23.07.)
@@ -4076,8 +4113,12 @@ def make_handler(svc):
             f = getattr(svc, "frigate_fehler", None)
             if f and time.time() - f[0] < 600:
                 t = datetime.datetime.fromtimestamp(f[0]).strftime("%H:%M:%S")
-                return (f"Frigate nicht erreichbar (letzter Fehler {t}): {f[1][:90]} — "
-                        "die Anzeige läuft aus lokalen Daten weiter.")
+                # Tokn59-Fund Issue #8 (31.07.): der Banner war als letzte UI-Stelle noch
+                # deutsch UND nannte den gescheiterten Endpunkt nicht — "test ok" (config)
+                # und Banner-Rot (event poll) koennen GLEICHZEITIG wahr sein; das Label
+                # kommt seither von der Setz-Stelle mit (event fetch/poll/list).
+                return (f"Frigate unreachable (last error {t}): {f[1][:110]} — "
+                        "the UI keeps serving local data.")
             # Task #13: Varianten-Hinweis (einmal je Start berechnet; Frigate-Fehler geht vor)
             return getattr(svc, "varianten_hinweis", None)
 
@@ -4549,7 +4590,7 @@ def make_handler(svc):
                         url = _res
                         updates["frigate_url"] = url
                     backend = (d.get("backend") or "").strip()
-                    ALLOWED_BK = {"openvino:GPU", "openvino:NPU", "openvino:MIXED", "cuda", "cpu"}
+                    ALLOWED_BK = {"openvino:GPU", "openvino:NPU", "openvino:MIXED", "cuda", "migraphx", "cpu"}
                     if backend:
                         if backend not in ALLOWED_BK:
                             return self._send(400, json.dumps({"ok": False, "msg": f"unknown backend '{backend}'"}), "application/json")
@@ -4768,7 +4809,9 @@ def make_handler(svc):
                 avail = _ort.get_available_providers()
                 hat_ov = "OpenVINOExecutionProvider" in avail
                 hat_cuda = "CUDAExecutionProvider" in avail
-                cur_bk = cfg.get("backend") or ("openvino:GPU" if hat_ov else ("cuda" if hat_cuda else "cpu"))
+                hat_mig = "MIGraphXExecutionProvider" in avail
+                cur_bk = cfg.get("backend") or ("openvino:GPU" if hat_ov else (
+                    "cuda" if hat_cuda else ("migraphx" if hat_mig else "cpu")))
                 bk_opts = []
                 if hat_ov:
                     bk_opts += [("openvino:GPU", "Intel GPU (OpenVINO) — recommended"),
@@ -4776,6 +4819,8 @@ def make_handler(svc):
                                 ("openvino:MIXED", "Intel GPU + NPU (MIXED)")]
                 if hat_cuda:
                     bk_opts += [("cuda", "Nvidia GPU (CUDA)")]
+                if hat_mig:
+                    bk_opts += [("migraphx", "AMD GPU (ROCm / MIGraphX)")]
                 bk_opts += [("cpu", "CPU — works everywhere (universal fallback)")]
                 bk_html = "".join(
                     f'<label class="bk"><input type="radio" name="setup-backend" value="{html.escape(bid, quote=True)}"'
@@ -5548,7 +5593,7 @@ def make_handler(svc):
                         prog = _wu.lauf_prognose(werte, clips)
                     except (urllib.error.URLError, OSError, TimeoutError) as e:
                         # ECHTER Frigate-/Netz-Ausfall -> Banner + Seite bleibt nutzbar
-                        svc.frigate_fehler = (time.time(), str(e))
+                        svc.frigate_fehler = (time.time(), f"event list: {e}")
                         auswahl, alle_modus = None, False
                     except Exception as e:
                         # Widerleger F5.5: interne Fehler NICHT als Frigate-Ausfall
@@ -6641,6 +6686,14 @@ def hardware_probe(placement_mess=None):
         res = neu
     if "CUDAExecutionProvider" in eps:
         res.append(("ok", "hw CUDA", "CUDAExecutionProvider available"))
+    if "MIGraphXExecutionProvider" in eps:
+        # AMD/ROCm (rocm-Fall 31.07.): /dev/kfd ist die Schluessel-Voraussetzung und war bisher
+        # NIRGENDS im Startlog sichtbar — Fern-Diagnose am Tester-Log war damit unmoeglich.
+        if _glob.glob("/dev/kfd"):
+            res.append(("ok", "hw AMD", "MIGraphXExecutionProvider available, /dev/kfd present"))
+        else:
+            res.append(("warn", "hw AMD", "MIGraphXExecutionProvider available but no /dev/kfd — "
+                                          "pass /dev/kfd + /dev/dri into the container; using CPU"))
     return res
 
 
@@ -6703,6 +6756,38 @@ def cuda_versions():
     return ", ".join(out)
 
 
+def rocm_versions():
+    """ROCm-Seite fuers Startlog (analog driver_versions/cuda_versions): das rocm-Image traegt
+    ROCm als selektives Datei-Buendel OHNE dpkg-Eintraege (am Image gemessen 31.07.) — darum
+    dateibasiert: /opt/rocm-Symlink traegt die Version im Zielnamen, HIP-Runtime im
+    libamdhip64-Suffix, MIGraphX-Libs unter lib/migraphx. Leer, wenn kein MIGraphX-EP da."""
+    try:
+        import onnxruntime as _ort
+        if "MIGraphXExecutionProvider" not in _ort.get_available_providers():
+            return ""
+    except Exception:
+        return ""
+    import glob as _glob
+    out = []
+    try:
+        ziel = os.path.basename(os.path.realpath("/opt/rocm"))     # rocm-7.2.4
+        if ziel.startswith("rocm-"):
+            out.append(f"ROCm {ziel[5:]}")
+    except Exception:
+        pass
+    hip = _glob.glob("/opt/rocm*/lib/libamdhip64.so.*.*")
+    if hip:
+        out.append("HIP " + os.path.basename(sorted(hip)[-1]).split("libamdhip64.so.")[-1])
+    if _glob.glob("/opt/rocm*/lib/migraphx/lib/libmigraphx.so*"):
+        out.append("MIGraphX libs present")
+    try:
+        import onnxruntime as _ort
+        out.append(f"onnxruntime-migraphx {_ort.__version__}")
+    except Exception:
+        pass
+    return ", ".join(out)
+
+
 # Referenzwerte, auf UNSEREM System GEMESSEN (2026-07-22) — Vergleichsbasis fuer andere Hardware, damit
 # das Ergebnis fuer alle einordbar ist (User-Wunsch: "Referenzwerte mit angeben"). Gemessen, nicht geraten.
 BENCHMARK_REFERENCE = ("Intel Core Ultra 9 285H", "2026-07-22", {"CPU": 840, "iGPU": 26, "NPU": 18})
@@ -6733,6 +6818,8 @@ def hardware_benchmark(max_iters=30, budget_s=3.0, cache_dir=None):
                   ("NPU  (OpenVINO)", "openvino", "NPU", "OpenVINOExecutionProvider")]
     if "CUDAExecutionProvider" in avail:
         cands.append(("CUDA (Nvidia)", "cuda", "0", "CUDAExecutionProvider"))
+    if "MIGraphXExecutionProvider" in avail:
+        cands.append(("MIGraphX (AMD)", "migraphx", "0", "MIGraphXExecutionProvider"))
     # laufendes System auslesen (Kontext: welche CPU misst hier ueberhaupt?)
     cpu = "?"
     try:
@@ -6858,6 +6945,9 @@ def startup_selfcheck(svc):
     cv = cuda_versions()
     if cv:
         erg("info", f"CUDA: {cv}")
+    rv = rocm_versions()
+    if rv:
+        erg("info", f"ROCm: {rv}")
     # 3) Backend — ECHTES Device-Binding testen, nicht nur EP-Praesenz (sonst "ok" obwohl real CPU laeuft:
     #    die OpenVINO-EP kann DA sein, das Device 'GPU' aber "not available" -> onnxruntime faellt still
     #    auf CPU zurueck, erkennbar daran, dass der EP aus session.get_providers() rausfaellt).
@@ -6866,6 +6956,7 @@ def startup_selfcheck(svc):
         kind, dev = resolve_backend(None)
         avail = _ort.get_available_providers()
         want = {"openvino": "OpenVINOExecutionProvider", "cuda": "CUDAExecutionProvider",
+                "migraphx": "MIGraphXExecutionProvider",
                 "cpu": "CPUExecutionProvider"}.get(kind)
         spec = f"{kind}{':' + dev if dev else ''}"
         if kind == "cpu":
@@ -6911,9 +7002,14 @@ def startup_selfcheck(svc):
                         # die Plattform HAT das Geraet dann schlicht nicht (Issue-#6-Klasse).
                         import glob as _sglob
                         from face_audit import geraete_knoten_muster as _gkm
-                        _kn = _gkm(dev)
+                        # migraphx/cuda: dev ist eine Geraetenummer ('0'), der Pflicht-Knoten ist
+                        # /dev/kfd bzw. /dev/nvidia* — sonst liefe die Knoten-Vorpruefung ins Leere
+                        # und meldete "mismatch?" obwohl die Plattform das Geraet schlicht nicht hat
+                        # (Gen9-Klasse; rocm-Fall 31.07., cuda-Fall Widerleger 31.07.)
+                        _kdev = {"migraphx": "KFD", "cuda": "NVIDIA"}.get(kind, dev)
+                        _kn = _gkm(_kdev)
                         if _kn and not _sglob.glob(_kn):
-                            erg("warn", f"requested {spec} but this host has no {dev} device "
+                            erg("warn", f"requested {spec} but this host has no {_kdev} device "
                                         f"({_kn}) — running on CPU")
                         else:
                             erg("warn", f"requested {spec} but device not available — running on CPU "

@@ -112,7 +112,7 @@ fixed version instead: [installation.md](docs/installation.md#updating).
   older Intel iGPUs (UHD 6xx, 6th–10th gen Core), and a hardware hint that tells you
   when a different image variant would suit your machine better. (0.1.0.47 was the
   performance wave — from roughly a CPU-minute per event to seconds.)
-- **[Installation](docs/installation.md)** — the four image variants (CPU / Intel / Intel legacy / NVIDIA),
+- **[Installation](docs/installation.md)** — the five image variants (CPU / Intel / Intel legacy / NVIDIA / AMD-testing),
   pull from GHCR or build from the source in this repository, `docker run` and `docker compose`.
 - **[Configuration](docs/configuration.md)** — the setup wizard, config keys, environment
   variables, and the `/data` layout.

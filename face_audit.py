@@ -132,7 +132,7 @@ def geraete_knoten_muster(dev):
     Verhalten bleibt wie vor Task #15 (verifyd loest AUTO vorher auf)."""
     basis = str(dev).split(".")[0] if dev is not None else dev
     return {"NPU": "/dev/accel/accel*", "GPU": "/dev/dri/renderD*",
-            "KFD": "/dev/kfd"}.get(basis)
+            "KFD": "/dev/kfd", "NVIDIA": "/dev/nvidia*"}.get(basis)
 
 
 def _ort_session(kind, dev, model_file, cache=None):
@@ -169,6 +169,14 @@ def _ort_session(kind, dev, model_file, cache=None):
                               f"CPU (GPU/NPU runtime vs. host driver version mismatch?)\n")
         return s
     if kind == "cuda" and "CUDAExecutionProvider" in avail:
+        # Task-#15-Muster, cuda nachgezogen (Widerleger 31.07.): ohne /dev/nvidia* ist der
+        # Session-Versuch chancenlos und produzierte nur ORT-[E]-Spam + die irrefuehrende
+        # "mismatch?"-Warnung — dabei HAT der Host schlicht keine NVIDIA-Karte (Gen9-Klasse).
+        if not _glob.glob(geraete_knoten_muster("NVIDIA") or "/dev/nvidia*"):
+            _sys.stderr.write("[face_audit] note: no NVIDIA device node (/dev/nvidia*) "
+                              "on this host -> CPU\n")
+            return ort.InferenceSession(model_file, providers=["CPUExecutionProvider"],
+                                        sess_options=_ort_thread_opts())
         try:                                      # 'cuda:GPU' o.ae. -> int() wirft; dokumentiert ist ein
             _did = int(dev or 0)                  # lauter CPU-Fallback, kein Absturz des Dienstes
         except (TypeError, ValueError):
@@ -241,6 +249,7 @@ class Embedder:
 
     Backend pluggbar ueber VERIFY_BACKEND (oder device=), Abwaertskompat OV_DEVICE. Werte:
       cuda[:N] -> Nvidia (nur wo onnxruntime-gpu installiert ist, z.B. im CUDA-Docker-Image)
+      migraphx[:N] / rocm -> AMD via MIGraphX-EP (nur im rocm-Docker-Image; braucht /dev/kfd)
       NPU   -> alle Modelle auf der Intel-NPU (schnellstes End-to-End, ~90x ggue CPU)
       GPU   -> alle Modelle auf der Intel-iGPU
       MIXED -> Detektor+Landmarks auf GPU, ArcFace auf NPU
@@ -374,7 +383,8 @@ class Embedder:
         if kind == "cpu":
             return True
         soll = {"openvino": "OpenVINOExecutionProvider",
-                "cuda": "CUDAExecutionProvider"}.get(kind)
+                "cuda": "CUDAExecutionProvider",
+                "migraphx": "MIGraphXExecutionProvider"}.get(kind)
         if not soll:
             return True
 

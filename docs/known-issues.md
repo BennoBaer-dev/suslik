@@ -20,9 +20,11 @@ _Last updated: 2026-07-30 (0.1.0.92-alpha)._
   persistent worker process, which bundles the GPU contexts; the collision window was
   verified gone in dedicated context tests. Running *multiple suslik instances* against
   one iGPU is still not recommended.
-- **AMD GPUs are CPU-only for now.** Analysis needs OpenVINO (Intel) or CUDA (NVIDIA);
-  on AMD the universal CPU image works, and video transcode falls back to CPU encode
-  (AMD VAAPI/mesa support is a planned investigation — willing testers welcome, see [supported-hardware.md](supported-hardware.md)).
+- **AMD GPU support is experimental.** There is a dedicated `-rocm` image (analysis via
+  ROCm/MIGraphX — pass `/dev/kfd` and `/dev/dri` into the container); it is in the testing
+  phase and has not been confirmed on real AMD hardware yet, so it may fall back to CPU.
+  The universal CPU image always works on AMD. Willing testers welcome, see
+  [supported-hardware.md](supported-hardware.md).
 - **A failed accelerator can fall back to CPU too quietly.** If the compute backend
   dies mid-run, analysis may continue on CPU without making the failure loud. Hard
   failure handling is planned.
