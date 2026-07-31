@@ -4,7 +4,7 @@ A small companion service for [Frigate](https://frigate.video/) that treats a pe
 across your property as **one scenario across multiple cameras** — and gives Frigate's face
 recognition an independent second opinion.
 
-> **Alpha — published work in progress (0.1.0.93-alpha).** This is a development snapshot,
+> **Alpha — published work in progress (0.1.0.96-alpha).** This is a development snapshot,
 > released so you can try it while it is being built. The two construction sites right now are
 > the **learning module** and **camera areas**. The learning part already works well: point a
 > learning run at as many past person events as you like and it harvests faces and groups them
@@ -14,7 +14,7 @@ recognition an independent second opinion.
 >
 > The `latest-*` image tags deliberately stay on **0.1.0.63**, the last broadly validated
 > build — nobody lands in the alpha by accident. To run what this README describes, pull the
-> version tag explicitly, e.g. `ghcr.io/bennobaer-dev/suslik:0.1.0.93-alpha-gpu`.
+> version tag explicitly, e.g. `ghcr.io/bennobaer-dev/suslik:0.1.0.96-alpha-gpu`.
 
 ## Why this exists
 
@@ -39,7 +39,7 @@ declines rather than mislabels.
 The Today page answers "who was on the property, when, and where did they go" — one card per
 person, one block per pass, unknowns kept visible instead of buried:
 
-![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.0.93-alpha)
+![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.0.96-alpha)
 
 *(Screenshot from a live install of v0.1.0.54; names and faces anonymized.)*
 
@@ -143,7 +143,7 @@ real hardware (the CUDA image is large, since it bundles the multi-GB CUDA runti
 longer to pull); the **gpu-legacy** variant for older Intel iGPUs is in testing with a community
 tester and has no `latest` tag yet.
 
-**Source code:** published in this repository as of **0.1.0.93-alpha** (MIT). The images remain
+**Source code:** published in this repository as of **0.1.0.96-alpha** (MIT). The images remain
 self-contained: everything runs locally, nothing is downloaded at runtime, and internet access is
 only needed for the optional push-notification channels.
 
@@ -157,7 +157,7 @@ only needed for the optional push-notification channels.
   people across days and cameras — the postman who shows up four times in three weeks ends
   up as **one** cluster you name once. Naming and reference-picking polish is what's being
   built right now.
-- **Camera areas** *(stage 1 shipped in 0.1.0.93-alpha)*: group cameras into parts of your
+- **Camera areas** *(stage 1 shipped in 0.1.0.96-alpha)*: group cameras into parts of your
   property (driveway, backyard, …). One camera belongs to one area, everything else stays in
   Default; areas act as views on Today/Appearances/Events, and alerts name the area. Passes
   are still always grouped and judged across the whole property — an area never re-judges a

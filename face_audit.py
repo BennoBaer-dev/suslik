@@ -66,28 +66,28 @@ def resolve_backend(spec=None):
     Ein blosses BEKANNTES OV-Device (GPU/NPU/MIXED/AUTO, alte OV_DEVICE-Welt) -> OpenVINO. Ein
     unbekannter Token (Tippfehler wie 'cudaa') wird NICHT still zu einem OV-Device gedeutet, sondern
     als unbekanntes Backend zurueckgegeben -> _ort_session warnt laut und faellt auf CPU zurueck."""
-    OV_DEVS = ("GPU", "NPU", "MIXED", "AUTO")
+    # P3.1: Mengen aus core.registry (EINE Quelle statt Literal-Streuung); die SEMANTIK
+    # ist wortgleich uebernommen und per Charakterisierungs-Vektoren im Gate eingefroren
+    # (unbekannte Token bleiben LAUT-Fallthrough, OV_DEVS-Abwaertsweg bleibt).
+    from core.registry import kind_von, OV_DEVS, default_device
     s = (spec or os.environ.get("VERIFY_BACKEND") or os.environ.get("OV_DEVICE") or "").strip()
     if not s:
         return ("cpu", None)
     if ":" in s:
         kind, dev = s.split(":", 1)
-        kind = kind.strip().lower()
-    elif s.lower() in ("cpu", "openvino", "ov", "cuda", "migraphx", "rocm"):
-        kind, dev = s.lower(), ""
-    elif s.upper() in OV_DEVS:
-        kind, dev = "openvino", s.upper()             # bekanntes OV-Device (Abwaertskompat OV_DEVICE)
+        kind, bekannt = kind_von(kind)
+    elif s.upper() in OV_DEVS and kind_von(s)[1] is False:
+        kind, dev, bekannt = "openvino", s.upper(), True   # bekanntes OV-Device (Abwaertskompat OV_DEVICE)
     else:
-        return (s.lower(), "")                         # unbekannter Token (Typo) -> _ort_session: Warnung + CPU
-    if kind in ("ov", "openvino"):
-        return ("openvino", (dev or "GPU").upper())
-    if kind == "cuda":
-        return ("cuda", dev or "0")
-    if kind in ("migraphx", "rocm"):                  # AMD (N2): rocm ist Alias
-        return ("migraphx", dev or "0")
+        kind, bekannt = kind_von(s)
+        dev = ""
+    if not bekannt:
+        return (kind, "")                              # unbekannter Token (Typo) -> _ort_session: Warnung + CPU
+    if kind == "openvino":
+        return ("openvino", (dev or default_device("openvino")).upper())
     if kind == "cpu":
         return ("cpu", None)
-    return (kind, "")                                 # unbekannter kind (Typo) -> _ort_session: Warnung + CPU
+    return (kind, dev or default_device(kind))        # cuda/migraphx: Geraetenummer, Default aus Registry
 
 
 _ORT_THREADS = None
@@ -130,9 +130,10 @@ def geraete_knoten_muster(dev):
     MIXED erreicht _ort_session nie als dev (Aufrufer verteilen auf GPU+NPU); AUTO
     kann bei DIREKTEM CLI-Lauf ankommen — das Mapping liefert dann None und das
     Verhalten bleibt wie vor Task #15 (verifyd loest AUTO vorher auf)."""
-    basis = str(dev).split(".")[0] if dev is not None else dev
-    return {"NPU": "/dev/accel/accel*", "GPU": "/dev/dri/renderD*",
-            "KFD": "/dev/kfd", "NVIDIA": "/dev/nvidia*"}.get(basis)
+    # P3.1: Zuordnung lebt in core.registry (KNOTEN_BASIS) — Signatur und
+    # Basislookup-Verhalten (GPU.1 -> GPU, unbekannt -> None) unveraendert.
+    from core.registry import knoten_von
+    return knoten_von(dev)
 
 
 def _ort_session(kind, dev, model_file, cache=None):
@@ -250,7 +251,8 @@ class Embedder:
     Backend pluggbar ueber VERIFY_BACKEND (oder device=), Abwaertskompat OV_DEVICE. Werte:
       cuda[:N] -> Nvidia (nur wo onnxruntime-gpu installiert ist, z.B. im CUDA-Docker-Image)
       migraphx[:N] / rocm -> AMD via MIGraphX-EP (nur im rocm-Docker-Image; braucht /dev/kfd)
-      NPU   -> alle Modelle auf der Intel-NPU (schnellstes End-to-End, ~90x ggue CPU)
+      NPU   -> alle Modelle auf der Intel-NPU (schnellstes End-to-End, ~90x ggue CPU;
+               Intel-Images: gpu und gpu-legacy)
       GPU   -> alle Modelle auf der Intel-iGPU
       MIXED -> Detektor+Landmarks auf GPU, ArcFace auf NPU
       leer/CPU -> unveraendert, nativer CPU-Provider (Default).
@@ -382,9 +384,8 @@ class Embedder:
         kind, _dev = self._backend
         if kind == "cpu":
             return True
-        soll = {"openvino": "OpenVINOExecutionProvider",
-                "cuda": "CUDAExecutionProvider",
-                "migraphx": "MIGraphXExecutionProvider"}.get(kind)
+        from core.registry import ep_von                  # P3.1: EP-Namen aus der Registry
+        soll = ep_von(kind) if kind != "cpu" else None
         if not soll:
             return True
 

@@ -39,7 +39,7 @@ BACKEND_KEY = "§backend"   # im Soll mitgeschrieben; '§' ist per Namens-Regex 
 
 
 def backend_kennung(emb):
-    """Kennung des TATSAECHLICH gebundenen Backends, z.B. 'cpu', 'openvino-GPU', 'cuda'.
+    """Kennung des TATSAECHLICH gebundenen Backends: 'cpu', 'openvino-<dev>', 'cuda', 'migraphx'.
 
     Bewusst aus den realen Providern der Sessions abgeleitet und nicht aus dem Wunsch
     (VERIFY_BACKEND): onnxruntime faellt bei Treiber-/Versions-Mismatch STILL auf CPU zurueck.
@@ -53,14 +53,18 @@ def backend_kennung(emb):
     r = getattr(emb, "_rec", None)
     if r is not None and hasattr(r, "get_providers"):
         prov.update(r.get_providers())
-    if "CUDAExecutionProvider" in prov:
-        return "cuda"
-    if "MIGraphXExecutionProvider" in prov:
-        return "migraphx"
-    if "OpenVINOExecutionProvider" in prov:
-        _, dev = getattr(emb, "_backend", ("", ""))
-        return f"openvino-{dev or 'GPU'}"
-    return "cpu"
+    # P3.1 (SOLL 15): Pruef-REIHENFOLGE und Datei-Format kommen aus der Registry —
+    # beides ist Semantik (soll.<kennung>.json-Dateinamen!), nie frei iterieren.
+    from core.registry import KENNUNG_PRIORITAET, KENNUNG_FORMAT, ep_von, default_device
+    for kind in KENNUNG_PRIORITAET:
+        if kind == "cpu":
+            return KENNUNG_FORMAT["cpu"]
+        if ep_von(kind) in prov:
+            if kind == "openvino":
+                _, dev = getattr(emb, "_backend", ("", ""))
+                return KENNUNG_FORMAT["openvino"].format(dev=dev or default_device("openvino"))
+            return KENNUNG_FORMAT[kind]
+    return KENNUNG_FORMAT["cpu"]
 
 
 def soll_pfad(kennung):

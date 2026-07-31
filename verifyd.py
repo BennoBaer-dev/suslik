@@ -764,6 +764,25 @@ def push(cfg, title, message, attachment=None):
         return json.load(r).get("status") == 1
 
 
+
+def stoerung_melden(cfg, text):
+    """P3.5 (Widerleger-Fund: SD4/Watchdog meldeten NUR Pushover — eine Telegram-only-
+    Installation erfuhr von Ausfaellen nichts): Stoerungs-Meldungen gehen ueber BEIDE
+    Push-Kanaele, je nachdem was konfiguriert ist. MQTT bleibt bewusst aussen vor
+    (Integrations-Bus, und bei MQTT-Stoerungen waere er selbst der kranke Kanal)."""
+    fehler = []
+    try:
+        push(cfg, "suslik-Stoerung", text, None)
+    except Exception as e:
+        fehler.append(f"pushover: {e}")
+    tg = (cfg.get("telegram") or {})
+    if tg.get("bot_token") and tg.get("chat_id"):
+        try:
+            telegram_video(cfg, None, f"suslik-Stoerung: {text}")
+        except Exception as e:
+            fehler.append(f"telegram: {e}")
+    return fehler
+
 def telegram_video(cfg, video_path, caption, crop=None):
     """Direktversand an die Telegram-Bot-API (Weg B): Video, sonst Foto, sonst reiner Text.
     Multipart wie push(); Secrets aus cfg['telegram'] (per ${VAR} aus der .env expandiert)."""
@@ -1988,10 +2007,8 @@ class Service:
             gemeldet[grund] = time.time()
             self.log(f"STOERUNG ({grund}): {text}")
             if not self.dry_alert:
-                try:
-                    push(self.cfg, "suslik-Stoerung", text, None)
-                except Exception as e:
-                    self.log(f"fault push failed: {e}")
+                for _f in stoerung_melden(self.cfg, text):
+                    self.log(f"fault notify failed: {_f}")
 
         def lauf():
             while True:
@@ -3333,12 +3350,12 @@ class Service:
                                  "Erkennung moeglicherweise tot (Backend/Decode pruefen)")
                         if not self.dry_alert:
                             def _sd4_push():
-                                try:      # eigener Thread: 20-s-HTTP darf den Analyse-Lock nicht halten
-                                    push(self.cfg, "suslik-Stoerung",
-                                         "3 Analysen in Folge fehlgeschlagen — die Erkennung ist "
-                                         "moeglicherweise tot (Dienst-Log / System-Seite pruefen).", None)
-                                except Exception as e:
-                                    self.log(f"fault push failed: {e}")
+                                # eigener Thread: 20-s-HTTP darf den Analyse-Lock nicht halten
+                                for _f in stoerung_melden(
+                                        self.cfg, "3 Analysen in Folge fehlgeschlagen — die "
+                                        "Erkennung ist moeglicherweise tot (Dienst-Log / "
+                                        "System-Seite pruefen)."):
+                                    self.log(f"fault notify failed: {_f}")
                             threading.Thread(target=_sd4_push, daemon=True).start()
                 else:
                     self._fehlerserie = 0
@@ -4590,7 +4607,8 @@ def make_handler(svc):
                         url = _res
                         updates["frigate_url"] = url
                     backend = (d.get("backend") or "").strip()
-                    ALLOWED_BK = {"openvino:GPU", "openvino:NPU", "openvino:MIXED", "cuda", "migraphx", "cpu"}
+                    from core.registry import alle_wizard_werte
+                    ALLOWED_BK = alle_wizard_werte()   # P3.1: statische Whitelist aus der Registry
                     if backend:
                         if backend not in ALLOWED_BK:
                             return self._send(400, json.dumps({"ok": False, "msg": f"unknown backend '{backend}'"}), "application/json")
@@ -4807,21 +4825,13 @@ def make_handler(svc):
                           '<p class="sub">Connect to Frigate first — your cameras appear here.</p></div>')
                 # --- Schritt 3: Backend/GPU ---
                 avail = _ort.get_available_providers()
-                hat_ov = "OpenVINOExecutionProvider" in avail
-                hat_cuda = "CUDAExecutionProvider" in avail
-                hat_mig = "MIGraphXExecutionProvider" in avail
-                cur_bk = cfg.get("backend") or ("openvino:GPU" if hat_ov else (
-                    "cuda" if hat_cuda else ("migraphx" if hat_mig else "cpu")))
-                bk_opts = []
-                if hat_ov:
-                    bk_opts += [("openvino:GPU", "Intel GPU (OpenVINO) — recommended"),
-                                ("openvino:NPU", "Intel NPU (OpenVINO)"),
-                                ("openvino:MIXED", "Intel GPU + NPU (MIXED)")]
-                if hat_cuda:
-                    bk_opts += [("cuda", "Nvidia GPU (CUDA)")]
-                if hat_mig:
-                    bk_opts += [("migraphx", "AMD GPU (ROCm / MIGraphX)")]
-                bk_opts += [("cpu", "CPU — works everywhere (universal fallback)")]
+                # P3.1: Optionen + Labels aus der Registry (wizard_optionen liefert die
+                # Werte in der bisherigen Reihenfolge, cpu zuletzt als Universal-Fallback).
+                from core.registry import wizard_optionen, WIZARD_LABELS
+                _werte = wizard_optionen(avail)
+                cur_bk = cfg.get("backend") or next(
+                    (w for w in _werte if w != "cpu"), "cpu")
+                bk_opts = [(w, WIZARD_LABELS[w]) for w in _werte]
                 bk_html = "".join(
                     f'<label class="bk"><input type="radio" name="setup-backend" value="{html.escape(bid, quote=True)}"'
                     f'{" checked" if bid == cur_bk else ""}> {html.escape(lbl)}</label>' for bid, lbl in bk_opts)
@@ -6118,7 +6128,10 @@ def make_handler(svc):
                 # version zuerst (Task #12, User 28.07.): eingesandte Log-AUSSCHNITTE tragen
                 # die Startup-Banner-Zeile oft nicht, und "latest-gpu" im Issue-Formular ist
                 # mehrdeutig — /health ist die eine Zeile, die Support-Faelle eindeutig macht.
-                h = {"ok": True, "version": os.environ.get("SUSLIK_VERSION", "dev"),
+                _sf = getattr(svc, "startup_fails", 0)   # SD1: B8-Fang — Selbstcheck-FAIL
+                h = {"ok": _sf == 0,                     # und health-ok nie wieder gleichzeitig
+                     "startup_fails": _sf,
+                     "version": os.environ.get("SUSLIK_VERSION", "dev"),
                      "processed": len(svc.processed),
                      "backend": cfg.get("backend") or "",
                      # N8b: Cache-Groesse SICHTBAR (Feldbericht: 74-GB-Steady-State erst am
@@ -6646,9 +6659,10 @@ def hardware_probe(placement_mess=None):
         return ("?", "found; OpenVINO EP present, engagement unconfirmed here") if ov_ep \
             else ("warn", "found; no OpenVINO runtime")
 
+    from core.registry import knoten_von              # P3.1: Knoten-Muster aus der Registry
     res = []
-    m, d = stat(bool(_glob.glob("/dev/dri/renderD*")), "GPU"); res.append((m, "hw iGPU", d))
-    m, d = stat(bool(_glob.glob("/dev/accel/accel*")), "NPU"); res.append((m, "hw NPU", d))
+    m, d = stat(bool(_glob.glob(knoten_von("GPU"))), "GPU"); res.append((m, "hw iGPU", d))
+    m, d = stat(bool(_glob.glob(knoten_von("NPU"))), "NPU"); res.append((m, "hw NPU", d))
     # P4-Nachzieher (0.1.0.44, User 27.07.): das "?"-Urteil aufloesen. Das openvino-Paket
     # fehlt im Image BEWUSST (zweite OV-Runtime neben onnxruntime-openvino = Konfliktrisiko),
     # available_devices ist also nicht abfragbar. Stattdessen ECHTE Bind-Fakten: (a) die
@@ -6689,7 +6703,7 @@ def hardware_probe(placement_mess=None):
     if "MIGraphXExecutionProvider" in eps:
         # AMD/ROCm (rocm-Fall 31.07.): /dev/kfd ist die Schluessel-Voraussetzung und war bisher
         # NIRGENDS im Startlog sichtbar — Fern-Diagnose am Tester-Log war damit unmoeglich.
-        if _glob.glob("/dev/kfd"):
+        if _glob.glob(knoten_von("KFD")):
             res.append(("ok", "hw AMD", "MIGraphXExecutionProvider available, /dev/kfd present"))
         else:
             res.append(("warn", "hw AMD", "MIGraphXExecutionProvider available but no /dev/kfd — "
@@ -6811,15 +6825,16 @@ def hardware_benchmark(max_iters=30, budget_s=3.0, cache_dir=None):
     if not onnx:
         return [("--", "benchmark", "no onnx model available to probe")]
     avail = ort.get_available_providers()
-    # Kandidaten: (Label, kind, device, erwarteter EP). GPU/NPU nur, wenn die OpenVINO-EP ueberhaupt da ist.
-    cands = [("CPU (baseline)", "cpu", None, "CPUExecutionProvider")]
-    if "OpenVINOExecutionProvider" in avail:
-        cands += [("iGPU (OpenVINO)", "openvino", "GPU", "OpenVINOExecutionProvider"),
-                  ("NPU  (OpenVINO)", "openvino", "NPU", "OpenVINOExecutionProvider")]
-    if "CUDAExecutionProvider" in avail:
-        cands.append(("CUDA (Nvidia)", "cuda", "0", "CUDAExecutionProvider"))
-    if "MIGraphXExecutionProvider" in avail:
-        cands.append(("MIGraphX (AMD)", "migraphx", "0", "MIGraphXExecutionProvider"))
+    # Kandidaten: (Label, kind, device, erwarteter EP) — P3.1 aus der Registry generiert
+    # (ein neues Backend/Geraet erscheint hier automatisch; Reihenfolge = Registry-Ordnung,
+    # identisch zur bisherigen Literal-Liste, MIXED traegt bewusst kein Benchmark-Label).
+    from core.registry import BACKENDS, geraete_von
+    cands = [("CPU (baseline)", "cpu", None, BACKENDS["cpu"]["ep"])]
+    for _kind in ("openvino", "cuda", "migraphx"):
+        if BACKENDS[_kind]["ep"] in avail:
+            for _d in geraete_von(_kind):
+                if _d.get("benchmark_label"):
+                    cands.append((_d["benchmark_label"], _kind, _d["name"], BACKENDS[_kind]["ep"]))
     # laufendes System auslesen (Kontext: welche CPU misst hier ueberhaupt?)
     cpu = "?"
     try:
@@ -6897,9 +6912,17 @@ def startup_selfcheck(svc):
     N = 7
 
     def schritt(i, name, tut):                        # ein nummerierter Schritt: WAS wird getan
+        _schritt_ctx.update(nr=i, name=name)
         L(f"[{i}/{N}] {name:<10} {tut} …")
 
+    # SD1 minimal (P3.4/Anti-Selbstzweck-Schnitt): jede erg()-Zeile wird ZUSAETZLICH als
+    # Record gesammelt und am Ende nach state/startup.json geschrieben (core/selfcheck) —
+    # das Menschen-Log bleibt byte-identisch; /health leitet 'ok' aus den Records ab (B8).
+    _records, _schritt_ctx = [], {"nr": 0, "name": "?"}
+
     def erg(mark, detail):                            # das Ergebnis darunter: WAS wurde gefunden
+        _records.append({"schritt": _schritt_ctx["nr"], "name": _schritt_ctx["name"],
+                         "mark": str(mark).strip(), "detail": str(detail)})
         L(f"         [{mark:^5}] {detail}")
 
     L(f"========== suslik {suslik_version()} startup ==========")
@@ -6955,9 +6978,8 @@ def startup_selfcheck(svc):
     try:
         kind, dev = resolve_backend(None)
         avail = _ort.get_available_providers()
-        want = {"openvino": "OpenVINOExecutionProvider", "cuda": "CUDAExecutionProvider",
-                "migraphx": "MIGraphXExecutionProvider",
-                "cpu": "CPUExecutionProvider"}.get(kind)
+        from core.registry import ep_von              # P3.1: EP-Soll aus der Registry —
+        want = ep_von(kind)                           # ein neues kind kann hier nie mehr fehlen
         spec = f"{kind}{':' + dev if dev else ''}"
         if kind == "cpu":
             erg("ok", f"{spec} — providers: {', '.join(avail)}")
@@ -7005,9 +7027,12 @@ def startup_selfcheck(svc):
                         # migraphx/cuda: dev ist eine Geraetenummer ('0'), der Pflicht-Knoten ist
                         # /dev/kfd bzw. /dev/nvidia* — sonst liefe die Knoten-Vorpruefung ins Leere
                         # und meldete "mismatch?" obwohl die Plattform das Geraet schlicht nicht hat
-                        # (Gen9-Klasse; rocm-Fall 31.07., cuda-Fall Widerleger 31.07.)
-                        _kdev = {"migraphx": "KFD", "cuda": "NVIDIA"}.get(kind, dev)
-                        _kn = _gkm(_kdev)
+                        # (Gen9-Klasse). P3.1: Familie+Muster aus der Registry.
+                        from core.registry import knoten_familie
+                        if kind in ("migraphx", "cuda"):
+                            _kdev, _kn = knoten_familie(kind)
+                        else:
+                            _kdev, _kn = dev, _gkm(dev)
                         if _kn and not _sglob.glob(_kn):
                             erg("warn", f"requested {spec} but this host has no {_kdev} device "
                                         f"({_kn}) — running on CPU")
@@ -7112,6 +7137,13 @@ def startup_selfcheck(svc):
         erg("warn", f"benchmark skipped: {str(e)[:80]}")
     erg("info", f"web UI on http://0.0.0.0:{cfg.get('web_port')}/  "
                 f"({'first run -> setup wizard' if not cfg.get('frigate_url') else 'ready'})")
+    try:
+        from core import selfcheck as _sc
+        _, svc.startup_fails = _sc.schreiben(cfg["data_dir"],
+                                             os.environ.get("SUSLIK_VERSION", "dev"), _records)
+    except Exception as e:                            # Diagnose darf den Start nie reissen
+        svc.startup_fails = 0
+        L(f"selfcheck records not written: {e}")
     L("========== ready ==========")
 
 
