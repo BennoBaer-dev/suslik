@@ -38,8 +38,8 @@ def wizard(personen_zahl, auswahl, bilanz, prognose, quelle, schwellen,
             if personen_zahl else "A — cold start, no faces yet")
     teile = ["<h2>Learn people — guided run</h2>",
              '<p class="sub">Plans a learning run over your own recordings. '
-             "Preparation and the face harvest run for real; grouping, naming and "
-             "adoption ship in the next updates and will light up here.</p>",
+             "Preparation, harvest, grouping and naming run for real; "
+             "adoption into recognition ships in the next updates.</p>",
              f'<div class="card"><b>Starting point</b><div>{html.escape(lage)}</div>'
              '<div class="dim">Clean-up switch for auto-collected unknowns: '
              "arrives with the naming stage.</div></div>"]
@@ -148,6 +148,9 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0):
                     'can take minutes; if this keeps growing, check /log</div>')
     f = zustand.get("fortschritt") or {}
     st = str(f.get("status", ""))
+    # Alt-Laeufe tragen den vor-E4a-Statustext im State — nur die ANZEIGE mappt
+    # ihn auf den neuen Stand, die Datei bleibt unangetastet.
+    st = st.replace("naming ships with the next update", "open a cluster to name it")
     # .88 / V3: Zaehler JE PHASE gruppiert unter ihrer Phasen-Zeile — jede
     # Phase zaehlt ihre eigenen Zahlen hoch und bekommt beim Abschluss den gruenen
     # Haken; die alte Misch-Kette ("anchors" hinter 13 Ernte-Zaehlern) entfaellt.
@@ -163,9 +166,16 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0):
         keys = [k for k in _PHASEN_KEYS.get(p, ()) if k in f]
         det = " · ".join(f"{k}: {f[k]}" for k in keys)
         det_html = f'<div class="phdet dim">{html.escape(det)}</div>' if det else ""
+        # E4a (Zug 2b): die Benennung ist LIVE — sobald die Anker stehen, ist
+        # 'Naming' der aktive, VERLINKTE Schritt statt eines toten Punkts.
+        name_link = ""
+        if p == "benennung" and anker_fertig:
+            mark = "&#9654;"
+            name_link = (' <a href="/lernlauf/anker">open the clusters and '
+                         'name them</a>')
         zeilen.append(f'<div class="phz">{mark} {html.escape(PHASEN_TEXT[p])}'
                       + (' <span class="dim">(current)</span>' if aktiv else "")
-                      + det_html + "</div>")
+                      + name_link + det_html + "</div>")
     zugeordnet = {k for ks in _PHASEN_KEYS.values() for k in ks} | {"status"}
     rest = " · ".join(f"{k}: {f[k]}" for k in f if k not in zugeordnet)
     rest_html = f'<div class="dim">{html.escape(rest)}</div>' if rest else ""
@@ -180,11 +190,13 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0):
     if anker_fertig and anker_zahl:
         erfolg = (f'<div class="card"><b><span class="phok">&#10003;</span> Grouping done</b> '
                   f'— {anker_zahl} face cluster{"s" if anker_zahl != 1 else ""} ready: '
-                  f'<a class="gtb on" href="/lernlauf/anker">View the anchor clusters</a></div>')
+                  f'<a class="gtb on" href="/lernlauf/anker">View the anchor clusters</a> '
+                  f'<span class="dim">open a cluster to name it</span></div>')
     return (stil + "<h2>Learning run</h2>" + erfolg +
             f'<div class="card"><b>Phases</b>{"".join(zeilen)}'
-            '<div class="dim">Preparation, Harvest and Grouping run for real in this '
-            "build — Naming and the later phases activate with the coming updates.</div></div>"
+            '<div class="dim">Preparation, Harvest, Grouping and Naming run for real in '
+            "this build — side views, full-body stock and adoption into the master "
+            "activate with the coming updates.</div></div>"
             f'<div class="card"><b>Progress</b>'
             f'<div>{html.escape(st) if st else "—"}</div>{puls}{rest_html}'
             f'<div class="dim">anchors so far: {anker_zahl}{anker_link}{kaputt_html} · created '

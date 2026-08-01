@@ -4,17 +4,19 @@ A small companion service for [Frigate](https://frigate.video/) that treats a pe
 across your property as **one scenario across multiple cameras** — and gives Frigate's face
 recognition an independent second opinion.
 
-> **Alpha — published work in progress (0.1.0.96-alpha).** This is a development snapshot,
+> **Alpha — published work in progress (0.1.0.102-alpha).** This is a development snapshot,
 > released so you can try it while it is being built. The two construction sites right now are
 > the **learning module** and **camera areas**. The learning part already works well: point a
-> learning run at as many past person events as you like and it harvests faces and groups them
-> into clusters of **recurring people** — you then name a whole cluster once (the postman after
-> three weeks of visits) instead of labeling single images. Expect rough edges around it, and
+> learning run at as many past person events as you like and it harvests faces, groups them
+> into clusters of **recurring people**, and lets you review and name a whole cluster once
+> (the postman after three weeks of visits) instead of labeling single images. Adoption of
+> named clusters into recognition ships next. Expect rough edges around it, and
 > expect interfaces and data formats to still change between versions.
 >
-> The `latest-*` image tags deliberately stay on **0.1.0.63**, the last broadly validated
-> build — nobody lands in the alpha by accident. To run what this README describes, pull the
-> version tag explicitly, e.g. `ghcr.io/bennobaer-dev/suslik:0.1.0.96-alpha-gpu`.
+> The `latest-*` image tags follow the newest published version (currently
+> **0.1.0.102-alpha**), so `docker compose pull` gets you what this README describes.
+> If you'd rather pin a fixed version, use the version tag explicitly, e.g.
+> `ghcr.io/bennobaer-dev/suslik:0.1.0.102-alpha-gpu`.
 
 ## Why this exists
 
@@ -39,7 +41,7 @@ declines rather than mislabels.
 The Today page answers "who was on the property, when, and where did they go" — one card per
 person, one block per pass, unknowns kept visible instead of buried:
 
-![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.0.96-alpha)
+![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.0.102-alpha)
 
 *(Screenshot from a live install of v0.1.0.54; names and faces anonymized.)*
 
@@ -143,21 +145,22 @@ real hardware (the CUDA image is large, since it bundles the multi-GB CUDA runti
 longer to pull); the **gpu-legacy** variant for older Intel iGPUs is in testing with a community
 tester and has no `latest` tag yet.
 
-**Source code:** published in this repository as of **0.1.0.96-alpha** (MIT). The images remain
+**Source code:** published in this repository as of **0.1.0.102-alpha** (MIT). The images remain
 self-contained: everything runs locally, nothing is downloaded at runtime, and internet access is
 only needed for the optional push-notification channels.
 
 ## What's being worked on right now
 
-*(updated 2026-07-30 — this section changes with every release)*
+*(updated 2026-08-01 — this section changes with every release)*
 
 - **Learning module** *(active construction, usable today)*: a guided learning run harvests
   faces from as many past person events as you choose (a wizard estimates the duration on
   your hardware first), grades them through quality gates, and clusters them into recurring
   people across days and cameras — the postman who shows up four times in three weeks ends
-  up as **one** cluster you name once. Naming and reference-picking polish is what's being
-  built right now.
-- **Camera areas** *(stage 1 shipped in 0.1.0.96-alpha)*: group cameras into parts of your
+  up as **one** cluster you name once. Naming is in (per-perspective recommendations,
+  duplicate guards, collision checks); adoption into recognition is what's being built
+  right now.
+- **Camera areas** *(stage 1 shipped in 0.1.0.102-alpha)*: group cameras into parts of your
   property (driveway, backyard, …). One camera belongs to one area, everything else stays in
   Default; areas act as views on Today/Appearances/Events, and alerts name the area. Passes
   are still always grouped and judged across the whole property — an area never re-judges a

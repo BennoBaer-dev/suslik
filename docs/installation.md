@@ -52,15 +52,17 @@ You can either **pull a published image** or **build it yourself**.
 
 All variants are published on the GitHub Container Registry.
 
-> **Alpha note:** `latest-*` deliberately stays on **0.1.0.63**, the last broadly validated
-> build. The current **alpha** (learning module, camera areas — see the README status) is
-> published only under its explicit version tag, so nobody lands in it by accident:
+> **Alpha note:** `latest-*` follows the newest published version (currently
+> **0.1.0.102-alpha** — learning module, camera areas; see the README status), so a
+> plain `docker compose pull` tracks the alpha. If you'd rather stay on a fixed,
+> validated build, pin its version tag (the last broadly validated one is
+> **0.1.0.63**):
 
 ```bash
 # the current alpha (work in progress, recommended for testers):
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.92-alpha-gpu    # Intel (OpenVINO)
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.92-alpha-cuda   # NVIDIA
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.92-alpha-cpu    # CPU-only
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.102-alpha-gpu    # Intel (OpenVINO)
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.102-alpha-cuda   # NVIDIA
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.102-alpha-cpu    # CPU-only
 
 # the last broadly validated build:
 docker pull ghcr.io/bennobaer-dev/suslik:latest-cpu
@@ -77,7 +79,7 @@ docker pull ghcr.io/bennobaer-dev/suslik:latest-cuda    # NVIDIA
 
 ### Option 2 — build from source
 
-The application source is published in this repository as of **0.1.0.92-alpha** — you can
+The application source is published in this repository as of **0.1.0.102-alpha** — you can
 read, audit and patch everything the images run. One honest limitation for now: the bundled
 ONNX **model files are not in the git tree** (~600 MB, and they carry their own third-party
 terms — see [NOTICE](../NOTICE)), so a fresh `docker build` will stop at the model `COPY`

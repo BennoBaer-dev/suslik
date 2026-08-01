@@ -118,6 +118,41 @@ def leer(text, hinweis=""):
     return f'<div class="leer"><b>{html.escape(text)}</b>{h}</div>'
 
 
+def whatsnew_block():
+    """Task #16 (User-Vorgabe 01.08.): What's-new-Box auf der Startseite — die letzten
+    Release-Highlights aus der EINEN Quelle core/highlights.py. Eingeklappt die
+    ersten 3, auf Klick alle (Deckel 10), wegklickbar je Version. Der Merker
+    liegt im localStorage wie die Theme-Wahl (kein Server-Zustand); die Box
+    startet hidden und zeigt sich erst, wenn der Merker NICHT passt — wer sie
+    weggeklickt hat, sieht sie bis zur naechsten Version nie aufblitzen."""
+    from core.highlights import HIGHLIGHTS   # import-frei, kein Zyklus
+    eintraege = [(v, t) for v, its in HIGHLIGHTS for t in its][:10]
+    if not eintraege:
+        return ""
+    neueste = html.escape(HIGHLIGHTS[0][0], quote=True)
+    li, letzte_v = [], None
+    for i, (v, txt) in enumerate(eintraege):
+        chip = f'<span class="wn-v">{html.escape(v)}</span>' if v != letzte_v else ""
+        letzte_v = v
+        li.append(f'<li{" class=wn-mehr" if i >= 3 else ""}>{chip}{html.escape(txt)}</li>')
+    mehr = len(eintraege) - 3
+    toggle = (f'<button class="wn-toggle" data-n="{mehr}">Show all ({len(eintraege)})</button>'
+              if mehr > 0 else "")
+    return (
+        f'<div class="wnblock" id="wnblock" hidden><div class="wn-kopf">'
+        f'<span class="wn-t">What&#8217;s new</span>'
+        f'<button class="wn-x" title="Hide until the next version" aria-label="Dismiss">&times;</button></div>'
+        f'<ul class="wn-liste">{"".join(li)}</ul>{toggle}</div>'
+        '<script>(function(){var b=document.getElementById("wnblock");if(!b)return;'
+        f'var v="{neueste}";'
+        'try{if(localStorage.getItem("vd-wn-seen")===v){b.remove();return;}}catch(e){}'
+        'b.hidden=false;var t=b.querySelector(".wn-toggle");'
+        'if(t)t.onclick=function(){var o=b.classList.toggle("wn-open");'
+        't.textContent=o?"Show fewer":"Show all ("+(3+parseInt(t.dataset.n,10))+")";};'
+        'b.querySelector(".wn-x").onclick=function(){'
+        'try{localStorage.setItem("vd-wn-seen",v)}catch(e){}b.remove();};})();</script>')
+
+
 def update_block():
     """#53: sachlicher, DEUTLICHER Hinweis-Block fuer die Startseite (User 26.07.: 'exklusiv
     dargestellt … sachlich hingewiesen, aber schon deutlich' — kein Blinken, kein Erschlagen).

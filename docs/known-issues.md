@@ -4,7 +4,7 @@ An honest list of what we know is rough, wrong or missing right now. If you hit
 something that is not on this list, please open an issue — that is exactly the kind
 of feedback this project needs.
 
-_Last updated: 2026-07-30 (0.1.0.92-alpha)._
+_Last updated: 2026-07-30 (0.1.0.102-alpha)._
 
 ## Known bugs
 
@@ -60,7 +60,7 @@ _Last updated: 2026-07-30 (0.1.0.92-alpha)._
   small-accelerator path comes, it will more likely be a Hailo-8 investigation.
   A Coral still helps Frigate's own object detection — just not suslik's face pipeline.
 - **Building from source needs the model files** — the source is published as of
-  0.1.0.92-alpha, but the bundled ONNX models (~600 MB, third-party terms — see NOTICE)
+  0.1.0.102-alpha, but the bundled ONNX models (~600 MB, third-party terms — see NOTICE)
   are not in the git tree. A checksummed fetch script is planned; until then the
   prebuilt images are the way to *run* suslik, and the source is there to read,
   audit and patch.
