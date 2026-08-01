@@ -9,7 +9,8 @@ redistributed here for convenience. The terms below govern those files; where th
 are stricter than the MIT License, the stricter terms apply.
 
 If you intend to use suslik commercially, read this file first: the MIT License
-covers the code we wrote, not the bundled models.
+covers the code we wrote, not the bundled models. That includes the MIT
+permission to "sell": it applies to the code, not to the models.
 
 
 InsightFace "buffalo_l" model pack
