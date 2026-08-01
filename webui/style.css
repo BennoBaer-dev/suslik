@@ -589,3 +589,24 @@ a.pchip:hover, a.badge.warn:hover { filter: brightness(1.15); }
 .ts-link{color:inherit;text-decoration:none;border-bottom:1px dotted var(--dim)}
 #recognized,#passes,#unidentified{scroll-margin-top:96px}  /* Sprungziele unter der klebenden Leiste freihalten (Review .54) */
 .ts-link:hover{border-bottom-color:var(--accent)}
+/* Task #16 What's-new-Box (Startseite): gleiche Card-Familie wie .updblock —
+   Surface-Card mit Akzentkante, ruhig, kein Blinken. Eingeklappt 3 Eintraege
+   (.wn-mehr versteckt), .wn-open zeigt alle; Versions-Chips wie .marke .upd. */
+.wnblock { margin: 0 0 14px; padding: 10px 14px; background: var(--surface);
+  border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  border-radius: 8px; font-size: 14px; }
+.wnblock .wn-kopf { display: flex; align-items: baseline; gap: 10px; }
+.wnblock .wn-t { color: var(--accent); font-weight: 700; }
+.wnblock .wn-x { margin-left: auto; background: none; border: 0; color: var(--dim);
+  font-size: 17px; cursor: pointer; padding: 0 2px; line-height: 1; }
+.wnblock .wn-x:hover { color: var(--accent); }
+.wnblock .wn-liste { margin: 6px 0 0; padding-left: 18px; }
+.wnblock .wn-liste li { margin: 3px 0; }
+.wnblock .wn-liste li.wn-mehr { display: none; }
+.wnblock.wn-open .wn-liste li.wn-mehr { display: list-item; }
+.wnblock .wn-v { display: inline-block; font-size: 11px; font-weight: 600;
+  color: var(--accent); border: 1px solid var(--accent); border-radius: 9px;
+  padding: 0 7px; margin-right: 7px; opacity: .85; }
+.wnblock .wn-toggle { margin-top: 6px; background: none; border: 0;
+  color: var(--accent); cursor: pointer; padding: 0; font-size: 13px; }
+.wnblock .wn-toggle:hover { text-decoration: underline; }

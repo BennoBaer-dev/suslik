@@ -5,9 +5,13 @@ Zwei Persistenzen, beide unter <data_dir>/state/:
                  Resume-Punkt) — atomar geschrieben (tmp+fsync+rename, das
                  placement.json-/Store-Muster), damit ein Absturz nie einen halben
                  Zustand hinterlaesst.
-  anker.jsonl    Anker-Datensaetze (Konzept §5, VOLLSTAENDIGES Schema) — append-only
-                 JSONL; jeder Datensatz wird VOR dem Schreiben validiert (ein
-                 Schema-Drift faellt sofort, nicht erst beim Leser).
+  anker.jsonl    Anker-Datensaetze (Konzept §5, VOLLSTAENDIGES Schema) — JSONL;
+                 jeder Datensatz wird VOR dem Schreiben validiert (ein
+                 Schema-Drift faellt sofort, nicht erst beim Leser). Seit E4a
+                 gibt es GENAU EINEN Update-Weg fuer Einzel-Saetze
+                 (anker_aktualisieren, in place + atomar + store_lock) — die
+                 Benennung ist der erste Read-Modify-Write-Schreiber dieses
+                 Stores (Widerleger-MUSS 01.08.).
 
 Kontrakt wie auftritte.py: reine Funktionen, Pfade/Daten als Parameter, kein
 Dienst-Import. KEINE anlagenspezifischen Konstanten (Allgemeinheits-Wache §2.4b) —
@@ -30,10 +34,29 @@ _ANKER_PFLICHT = {
     "durchgaenge": list, "qualitaet": dict, "quell_videos": list,
     "pose_abdeckung": dict, "mehrdeutig": list, "ganzkoerper": list,
     "groesse_bytes": int, "lauf": dict,
+    # E4a-Datengrundlage (Widerleger-MUSS 01.08.): der Cluster-Zentroid wird
+    # persistiert statt verworfen — Personen-Ebenen-Dedup und U-Zuordnung
+    # rechnen rein lesend. Alt-Zeilen ohne das Feld bleiben lesbar (Pruefung
+    # laeuft nur am Schreibweg); das UI weist dort "duplicate check
+    # unavailable" aus, nie stumm "0 Duplikate".
+    "zentroid": list,
 }
 _MITGLIED_PFLICHT = ("event", "datei", "t", "kamera", "front", "sharp", "det",
-                     "kante", "pose")
+                     "kante", "pose",
+                     # E4a: physischer Dedup-Schluessel (kamera+bbox, cross-event
+                     # wie stuetz_phys) + Embedding fuer Fast-Duplikat/Vorschau —
+                     # die Ernte-Kandidaten tragen alle drei Felder bereits.
+                     "bbox", "ts", "emb")
 ANKER_STATUS = ("unbenannt", "benannt", "uebernommen")
+
+# E4a Namens-Ebene (Widerleger-MUSS): EINZIGE Namensquelle des Projekts —
+# anlernen/verifyd ziehen bei ihrer naechsten Anfassung hierher nach, kein
+# fuenftes Streu-Regex. Normalform: trimmen + Mehrfach-Leerzeichen buendeln.
+PERSON_RE = r"^[\w \-]{2,40}$"
+
+
+def person_norm(s):
+    return " ".join(str(s or "").split())
 
 
 def _pfad(data_dir, name):
@@ -96,6 +119,15 @@ def anker_pruefen(a):
         fehler.append(f"status {a.get('status')!r} nicht in {ANKER_STATUS}")
     if a.get("status") == "unbenannt" and a.get("person") is not None:
         fehler.append("status unbenannt aber person gesetzt")
+    # E4a (Widerleger-MUSS): die Wache greift in BEIDE Richtungen — benannt/
+    # uebernommen verlangt einen gueltigen Namen in Normalform, nicht nur
+    # unbenannt verbietet einen.
+    if a.get("status") in ("benannt", "uebernommen"):
+        import re as _re
+        p = a.get("person")
+        if not (isinstance(p, str) and person_norm(p)
+                and _re.match(PERSON_RE, person_norm(p))):
+            fehler.append("status benannt aber person leer/ungueltig")
     for i, m in enumerate(a.get("mitglieder") or []):
         for k in _MITGLIED_PFLICHT:
             if k not in m:
@@ -105,6 +137,78 @@ def anker_pruefen(a):
                 and all(isinstance(x, (int, float)) for x in pose)):
             fehler.append(f"mitglied[{i}]: pose muss [pitch, yaw, roll] aus Zahlen sein")
     return fehler
+
+
+def benannte_zaehlen(data_dir, lauf_id):
+    """Zeilen DIESES Laufs mit Nutzer-Benennung (status != unbenannt) — Grundlage
+    des Resume-/Abbruch-Schutzes (E4a). Unlesbare Zeilen zaehlen nicht (sie
+    tragen beweisbar keine Benennung, die verloren gehen koennte)."""
+    p = _pfad(data_dir, "anker.jsonl")
+    n = 0
+    if os.path.exists(p):
+        with open(p, encoding="utf-8") as f:
+            for zeile in f:
+                try:
+                    d = json.loads(zeile)
+                except Exception:
+                    continue
+                if ((d.get("lauf") or {}).get("lauf_id") == lauf_id
+                        and d.get("status") not in (None, "unbenannt")):
+                    n += 1
+    return n
+
+
+def anker_aktualisieren(data_dir, anker_id, **felder):
+    """E4a-Schreibweg (Widerleger-MUSS): GENAU EIN Satz in state/anker.jsonl in
+    place ersetzen — nie anhaengen (anker_id bleibt eindeutig), atomar
+    (mkstemp+os.replace) und UNTER store_lock; unlesbare Zeilen werden roh
+    weitergefuehrt (dieselbe .83-Regel wie anker_lauf_schreiben). Der geaenderte
+    Satz wird VOR dem Schreiben validiert (anker_pruefen; person laeuft durch
+    person_norm). KeyError, wenn die anker_id nicht existiert.
+    -> der aktualisierte Satz (dict)."""
+    p = _pfad(data_dir, "anker.jsonl")
+    if "person" in felder and felder["person"] is not None:
+        felder["person"] = person_norm(felder["person"])
+    with store_lock(data_dir):
+        if not os.path.exists(p):
+            raise KeyError(f"anker.jsonl fehlt — {anker_id} nicht aktualisierbar")
+        zeilen, neu, gefunden = [], None, False
+        with open(p, encoding="utf-8") as f:
+            for zeile in f:
+                z = zeile.rstrip("\n")
+                if not z.strip():
+                    continue
+                try:
+                    d = json.loads(z)
+                except Exception:
+                    zeilen.append(z)               # unlesbar => roh erhalten
+                    continue
+                if d.get("anker_id") == anker_id:
+                    gefunden = True
+                    d.update(felder)
+                    fehler = anker_pruefen(d)
+                    if fehler:
+                        raise ValueError(f"{anker_id}: " + "; ".join(fehler))
+                    neu = d
+                    zeilen.append(json.dumps(d, ensure_ascii=False, allow_nan=False))
+                else:
+                    zeilen.append(z)
+        if not gefunden:
+            raise KeyError(f"anker_id {anker_id} nicht in anker.jsonl")
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(p), prefix=".anker.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write("\n".join(zeilen) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, p)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+    return neu
 
 
 def store_lock(data_dir):

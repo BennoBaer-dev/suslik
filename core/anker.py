@@ -268,10 +268,18 @@ def anker_datensaetze(cluster, margen, lauf_id, schwellen, version):
     id_von_idx = {i: f"{lauf_id}-A{nr}" for nr, i in enumerate(reihen, start=1)}
     for nr, i in enumerate(reihen, start=1):
         c, m = cluster[i], margen[i]
+        # E4a-Datengrundlage (Widerleger-MUSS 01.08.): bbox/ts/emb wandern MIT in
+        # den Datensatz (die Kandidaten-Zeilen tragen sie laengst) — physischer
+        # Dedup-Schluessel, Zeitbezug und Fast-Duplikat-Pruefung rechnen damit
+        # rein lesend am Store, ohne Rueckgriff auf den trash-gefaehrdeten
+        # Kandidaten-Ordner. modell fuettert den Bedingungs-Tag der Benennung.
         mitglieder = [{"event": mm["eid"], "datei": mm["datei"], "t": mm["t"],
                        "kamera": mm["kamera"], "front": mm["front"], "sharp": mm["sharp"],
-                       "det": mm["det"], "kante": mm["kante"], "pose": mm["pose"]}
+                       "det": mm["det"], "kante": mm["kante"], "pose": mm["pose"],
+                       "bbox": mm.get("bbox") or [], "ts": mm.get("ts", 0),
+                       "emb": mm.get("emb") or [], "modell": mm.get("modell", "")}
                       for v in c for mm in v["mitglieder"]]
+        z_ank = zentroid([v["emb"] for v in c])
         dgs = sorted({round(float(v["durchgang_start"]), 1) for v in c})
         tage = sorted({time.strftime("%Y-%m-%d", time.localtime(t)) for t in dgs})
         yaws = [y for v in c for y in v["yaw_spanne"]]
@@ -291,6 +299,9 @@ def anker_datensaetze(cluster, margen, lauf_id, schwellen, version):
                           "marge": m["marge"], "bester_fremd": m["bester_fremd"],
                           "eimer": m["status"], "eimer_grund": m["grund"]},
             "quell_videos": sorted({mm["event"] for mm in mitglieder}),
+            # Persistiert statt verworfen (E4a): Personen-Dedup + U-Zuordnung
+            # lesen den Cluster-Zentroid direkt aus dem Store.
+            "zentroid": [round(float(x), 5) for x in z_ank] if z_ank is not None else [],
             "pose_abdeckung": {"yaw": [min(yaws), max(yaws)],
                                "pitch": [min(pitches), max(pitches)]},
             "mehrdeutig": ([m["grund"]] if m["status"] not in ("ok",) else [])
@@ -304,10 +315,14 @@ def anker_datensaetze(cluster, margen, lauf_id, schwellen, version):
 
 # ------------------------------------------------------------------ B6: komplette Phase
 def anker_lauf_schreiben(data_dir, saetze, lauf_id):
-    """state/anker.jsonl atomar NEU schreiben: Zeilen ANDERER Laeufe bleiben, Zeilen
-    DIESES Laufs werden ersetzt — eine wiederholte Anker-Phase (Boot-Resume nach
-    Crash) erzeugt nie Duplikate. Jeder neue Satz wird vorher validiert
+    """state/anker.jsonl atomar NEU schreiben: Zeilen ANDERER Laeufe bleiben, von
+    DIESEM Lauf werden nur UNBENANNTE Zeilen ersetzt (Benannte-Anker-Schutz E4a:
+    Nutzer-Benennungen ueberleben Wiederholung und Abbruch, Rueckgabe zaehlt sie)
+    — eine wiederholte Anker-Phase (Boot-Resume nach Crash) erzeugt nie Duplikate.
+    Laeuft KOMPLETT unter lernlauf.store_lock; Aufrufer duerfen das Lock NICHT
+    bereits halten. Jeder neue Satz wird vorher validiert
     (lernlauf.anker_pruefen; ungueltig => ValueError, NICHTS wird geschrieben).
+    -> (uebernommene_fremd_und_benannte, kaputt, benannt_behalten).
     .83 (Widerleger A1): UNLESBARE Zeilen werden ROH weitergefuehrt statt vernichtet
     (vorher warf das Neuschreiben sie weg und die Anzeige 'counted' log); Temp-Datei
     per mkstemp (fester .tmp-Name konnte bei zwei Schreibern ein Ergebnis verlieren);
@@ -320,38 +335,50 @@ def anker_lauf_schreiben(data_dir, saetze, lauf_id):
             raise ValueError(f"{s.get('anker_id')}: " + "; ".join(fehler))
     p = os.path.join(data_dir, "state", "anker.jsonl")
     os.makedirs(os.path.dirname(p), exist_ok=True)
-    bleib, kaputt = [], 0                    # Roh-Zeilen fremder Laeufe + unlesbare (roh!)
-    if os.path.exists(p):
-        with open(p, encoding="utf-8") as f:
-            for zeile in f:
-                z = zeile.rstrip("\n")
-                if not z.strip():
-                    continue
-                try:
-                    lid = (json.loads(z).get("lauf") or {}).get("lauf_id")
-                except Exception:
-                    kaputt += 1
-                    bleib.append(z)          # unlesbar => IMMER erhalten
-                    continue
-                if lid != lauf_id:
-                    bleib.append(z)
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(p), prefix=".anker.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            for z in bleib:
-                f.write(z + "\n")
-            for a in saetze:
-                f.write(json.dumps(a, ensure_ascii=False, allow_nan=False) + "\n")
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, p)
-    except Exception:
+    # E4a (Widerleger-MUSS): das RMW laeuft UNTER store_lock — hier IN der
+    # Funktion, damit JEDER Aufrufer abgedeckt ist (verifyd-Abbruch lag ausserhalb
+    # des .87-Lock-Blocks). Kein Aufrufer haelt das Lock bereits (flock auf
+    # zweitem fd wuerde sonst blockieren) — der Kontrakt steht am Funktionskopf.
+    with _ll.store_lock(data_dir):
+        bleib, kaputt, benannt_behalten = [], 0, 0
+        if os.path.exists(p):
+            with open(p, encoding="utf-8") as f:
+                for zeile in f:
+                    z = zeile.rstrip("\n")
+                    if not z.strip():
+                        continue
+                    try:
+                        d = json.loads(z)
+                        lid = (d.get("lauf") or {}).get("lauf_id")
+                    except Exception:
+                        kaputt += 1
+                        bleib.append(z)          # unlesbar => IMMER erhalten
+                        continue
+                    if lid != lauf_id:
+                        bleib.append(z)
+                    elif d.get("status") not in (None, "unbenannt"):
+                        # Benannte-Anker-Schutz (E4a): das Neuschreiben eines
+                        # Laufs ersetzt NUR unbenannte Zeilen — Nutzer-Benennungen
+                        # ueberleben Abbruch und Boot-Resume. GEZAEHLT, nie still.
+                        benannt_behalten += 1
+                        bleib.append(z)
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(p), prefix=".anker.", suffix=".tmp")
         try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-    return len(bleib), kaputt
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                for z in bleib:
+                    f.write(z + "\n")
+                for a in saetze:
+                    f.write(json.dumps(a, ensure_ascii=False, allow_nan=False) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, p)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+    return len(bleib), kaputt, benannt_behalten
 
 
 def anker_phase_fahren(data_dir, lauf_dir, lauf_id, events_liste, schwellen, clusterer,
@@ -413,7 +440,9 @@ def anker_phase_fahren(data_dir, lauf_dir, lauf_id, events_liste, schwellen, clu
     if fortschreiben(fortschritt={"status": "writing anchors"}) is None:
         log(f"anchor stage aborted before writing (run {lauf_id}) — nothing persisted")
         return None
-    fremde, kaputt = anker_lauf_schreiben(data_dir, saetze, lauf_id)
+    fremde, kaputt, benannt_behalten = anker_lauf_schreiben(data_dir, saetze, lauf_id)
+    if benannt_behalten:
+        log(f"anchor stage: {benannt_behalten} named anchors kept (never rewritten)")
     dauer = round(time.time() - t0, 1)
     st_zahl = {}
     for m in margen:
@@ -440,7 +469,7 @@ def anker_phase_fahren(data_dir, lauf_dir, lauf_id, events_liste, schwellen, clu
         log(f"anchor stage finished (run {lauf_id}): 0 clusters ({grund})")
     else:
         fortschreiben(fortschritt=dict(
-            basis, status="anchors ready — naming ships with the next update",
+            basis, status="anchors ready — open a cluster to name it",
             anchors=len(saetze), ok=st_zahl.get("ok", 0),
             hart=st_zahl.get("hart", 0), thin=st_zahl.get("zu_duenn", 0),
             unconfirmed=st_zahl.get("unbestaetigt", 0),

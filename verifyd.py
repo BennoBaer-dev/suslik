@@ -258,6 +258,8 @@ def load_config(path):
                          ("anker_sim1", 0.25), ("anker_sim2", 0.35),
                          ("anker_marge_warn", 0.15), ("anker_hart", 0.35),
                          ("anker_k_min", 5), ("anker_deckel", 250), ("anker_deckel_hart", 300),
+                         ("benennung_k_je_bin", 4), ("benennung_yaw_grenze", 15.0),
+                         ("benennung_dup_sim", 0.75), ("benennung_vorschlag_schwelle", 0.45),
                          ("required_zones", {}), ("areas", {}), ("alert_kategorien", ["widerspruch"]),
                          ("sub_label_schreiben", True), ("mqtt_publish", True), ("frigate_read_only", True),
                          ("szene_karenz_s", 90),
@@ -2078,10 +2080,15 @@ class Service:
                 st = str(f.get("status", ""))
                 if st.startswith("anchors ready") or st.startswith("anchors: none"):
                     self.log("learning run found complete (anchors ready) — "
-                             "naming ships with a coming update")
+                             "open the anchor clusters to name them")
                     return
-                # unterbrochen oder failed: die Phase ist idempotent (anker_lauf_schreiben
-                # ersetzt die Zeilen dieses Laufs) — einfach neu fahren.
+                # unterbrochen oder failed: die Phase ist nur so lange wiederholbar,
+                # wie der Lauf KEINE benannten Zeilen traegt (E4a-Schutz; das
+                # Neuschreiben behielte sie zwar, aber ein Re-Run waehrend der
+                # Benennung bleibt bewusst aus — Widerleger-MUSS 01.08.).
+                if _ll.benannte_zaehlen(self.cfg["data_dir"], zustand["lauf_id"]):
+                    self.log("naming in progress — anchor stage not re-run")
+                    return
                 self.log("learning run resumes after restart (anchor stage)")
                 self.lernlauf_anker_starten()
                 return
@@ -2134,6 +2141,10 @@ class Service:
         "anker_k_min": (int, 2, 50, "minimum faces per anchor cluster (margin uncalibratable below 5)"),
         "anker_deckel": (int, 10, 2000, "stage-2 clustering cap per round (measured 250 for this hw class)"),
         "anker_deckel_hart": (int, 10, 4000, "hard stage-2 bound; runs never start above it (memory guard)"),
+        "benennung_k_je_bin": (int, 1, 50, "naming: recommended images kept per perspective bin (starting value, calibrate in the first naming run)"),
+        "benennung_yaw_grenze": (float, 5, 40, "naming: yaw beyond this counts as looking left/right (sub-bin INSIDE the harvest gate window; starting value)"),
+        "benennung_dup_sim": (float, 0.5, 0.99, "naming: embedding similarity at/above this = near-identical, one kept (same notion as pool sim_neu)"),
+        "benennung_vorschlag_schwelle": (float, 0.2, 0.95, "naming: 'looks like X' suggestion threshold vs named-anchor centroids (conservative start; suggestion only, never forces)"),
         "fps_sample": (float, 1, 30, "analysis sampling rate (calibrated 3)"),
         "szene_karenz_s": (int, 30, 900, "scene grace: unknown alert only if nobody was confirmed in the window"),
         "telegram_modus": (list, ["aus", "ha", "direkt", "beide"], None, "Telegram sending: aus (off) / ha (HA script) / direkt (direct) / beide (both)"),
@@ -3065,7 +3076,14 @@ class Service:
         self._enroll_append({**d, "status": "aufgenommen", "als": ziel_person,
                              "ts_entschieden": round(time.time(), 1)})
         self.log(f"ENROLLMENT: {d['datei']} -> master/{ziel_person}/ (export + drift watchdog running)")
+        self.referenz_nacharbeit()
+        return True, f"aufgenommen als {ziel_person}"
 
+    def referenz_nacharbeit(self):
+        """Gemeinsame Nacharbeit nach JEDER Referenz-Aenderung — Pool-Enrollment UND
+        E4b-Uebernahme (E4b haette den Block sonst dupliziert): optionaler
+        Frigate-Export mit read-only-Riegel + Drift-Waechter; Ergebnis landet in
+        enroll_warnung (System-Seite) und im Log. Ein Daemon-Thread je Aufruf."""
         def nacharbeit():
             env = dict(os.environ, OV_DEVICE=self.cfg["ov_device"])
             # Derselbe Riegel wie an den anderen beiden sync-Stellen (Fund der Vor-Release-
@@ -3099,7 +3117,6 @@ class Service:
                 self.enroll_warnung = (time.time(), _txt[-400:])
                 self.log("DRIFT WATCHDOG RED after enrollment — check the reference! (System page)")
         threading.Thread(target=nacharbeit, daemon=True).start()
-        return True, f"aufgenommen als {ziel_person}"
 
     def upload_referenz(self, person, daten):
         """Eigenes Foto in den Master (AP4): Gate-Pruefung mit Lazy-Embedder;
@@ -4679,6 +4696,101 @@ def make_handler(svc):
                         "application/json")
                 except Exception as e:
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
+            if pfad == "/lernlauf/benennen":                   # E4a Zug 2b: Cluster benennen
+                # Duenner Mantel (I1): Namens-/Kollisions-Logik im Modul, Schreibweg
+                # AUSSCHLIESSLICH core/lernlauf.anker_aktualisieren (Lock+atomar+Wache).
+                try:
+                    n = int(self.headers.get("Content-Length", 0))
+                    d = json.loads(self.rfile.read(min(n, 262144)))
+                    from core import lernlauf as _ll, benennung as _bn
+                    aid = str(d.get("anker_id") or "")
+                    name = _ll.person_norm(d.get("person"))
+                    if not (name and re.match(_ll.PERSON_RE, name)):
+                        return self._send(400, json.dumps(
+                            {"ok": False, "msg": "invalid person name (2-40 letters, digits, space, -)"}), "application/json")
+                    saetze, _k = _ll.anker_lesen(cfg["data_dir"])
+                    satz = next((s for s in saetze if s.get("anker_id") == aid), None)
+                    if satz is None:
+                        return self._send(404, json.dumps({"ok": False, "msg": "unknown anchor"}), "application/json")
+                    quelle = _bn.personen_quelle(
+                        master_persons(cfg),
+                        [a for a in saetze if a.get("anker_id") != aid], _ll.person_norm)
+                    koll = _bn.namens_kollision(name, quelle, _ll.person_norm)
+                    if koll and koll != name and not d.get("bestaetigt"):
+                        # Namens-Ebene (Bauplan 4c): Rueckfrage statt stillem Zweit-Eintrag.
+                        return self._send(200, json.dumps({"ok": False, "kollision": koll}), "application/json")
+                    gew = {str(x) for x in (d.get("gewaehlt") or [])}
+                    mit = [dict(m, gewaehlt=(str(m.get("datei", "")).rsplit("/", 1)[-1] in gew))
+                           for m in (satz.get("mitglieder") or [])]
+                    tag = {"modell": (mit[0].get("modell", "") if mit else ""),
+                           "k_je_bin": cfg["benennung_k_je_bin"],
+                           "yaw_grenze": cfg["benennung_yaw_grenze"],
+                           "dup_sim": cfg["benennung_dup_sim"]}
+                    _ll.anker_aktualisieren(
+                        cfg["data_dir"], aid, person=name, status="benannt", mitglieder=mit,
+                        auswahl={"ts": round(time.time(), 1), "n": len(gew), "bedingungs_tag": tag})
+                    svc.log(f"anchor {aid} named '{name}' ({len(gew)} of {len(mit)} images "
+                            "selected) — adoption ships with E4b")
+                    return self._send(200, json.dumps(
+                        {"ok": True, "msg": f"named '{name}' — {len(gew)} images selected, adoption pending"},
+                        ensure_ascii=False), "application/json")
+                except Exception as e:
+                    return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
+            if pfad == "/lernlauf/uebernehmen":                # E4b: Uebernahme in den Master
+                # Duenner Mantel: Plan/Dedup/Tag-Pruefung/Alles-oder-nichts im Modul
+                # (core/uebernahme), Nacharbeit = derselbe Weg wie Pool-Enrollment.
+                try:
+                    n = int(self.headers.get("Content-Length", 0))
+                    d = json.loads(self.rfile.read(min(n, 65536)))
+                    from core import lernlauf as _ll, uebernahme as _ue
+                    aid = str(d.get("anker_id") or "")
+                    saetze, _k = _ll.anker_lesen(cfg["data_dir"])
+                    satz = next((s for s in saetze if s.get("anker_id") == aid), None)
+                    if satz is None or satz.get("status") != "benannt":
+                        return self._send(400, json.dumps(
+                            {"ok": False, "msg": "anchor is not named (or unknown)"}), "application/json")
+                    person = satz.get("person")
+                    werte = {"k_je_bin": cfg["benennung_k_je_bin"],
+                             "yaw_grenze": cfg["benennung_yaw_grenze"],
+                             "dup_sim": cfg["benennung_dup_sim"]}
+                    ab = _ue.bedingungs_tag_pruefen(satz, werte)
+                    if ab and not d.get("bestaetigt"):
+                        return self._send(200, json.dumps({"ok": False, "tag_abweichung": ab}), "application/json")
+                    plan = _ue.plan_bauen(satz, cfg["benennung_dup_sim"],
+                                          _ue.adoptierte_embs(cfg["data_dir"], person))
+                    if not plan["aufnehmen"]:
+                        return self._send(400, json.dumps(
+                            {"ok": False, "msg": "nothing to adopt — selection empty or all near-identical to existing learned references"}), "application/json")
+                    lid = (satz.get("lauf") or {}).get("lauf_id", "")
+                    namen = _ue.uebernehmen(cfg["data_dir"], lid, aid, person, plan)
+                    with open(os.path.join(cfg["data_dir"], "faces", "refs_meta.jsonl"), "a") as f:
+                        for nm in namen:
+                            f.write(json.dumps({"ts": round(time.time(), 1), "person": person,
+                                                "datei": nm, "herkunft": "lernlauf",
+                                                "anker": aid, "aktiv": True}, ensure_ascii=False) + "\n")
+                        f.flush()
+                    _ue.protokoll_anhaengen(cfg["data_dir"], {
+                        "ts": round(time.time(), 1), "anker_id": aid, "person": person,
+                        "dateien": [{"quelle": m.get("datei"), "ziel": nm, "emb": m.get("emb") or None}
+                                    for nm, m in zip(namen, plan["aufnehmen"])],
+                        "uebersprungen": plan["uebersprungen"],
+                        "manuelle_refs_ungeprueft": True,      # Upload-Refs tragen keine Embs (Protokoll-Ehrlichkeit)
+                        "bedingungs_tag": (satz.get("auswahl") or {}).get("bedingungs_tag"),
+                        "tag_abweichung": ab})
+                    _ll.anker_aktualisieren(cfg["data_dir"], aid, status="uebernommen")
+                    try:
+                        os.remove(os.path.join(cfg["data_dir"], "clips", "refcache.npz"))
+                    except FileNotFoundError:
+                        pass                      # naechster Analyse-Lauf baut mit neuem Master
+                    svc.log(f"ADOPTION: anchor {aid} -> master/{person}/ ({len(namen)} refs, "
+                            f"{len(plan['uebersprungen'])} skipped) — export + drift watchdog running")
+                    svc.referenz_nacharbeit()
+                    return self._send(200, json.dumps({"ok": True,
+                        "msg": f"adopted {len(namen)} reference{'s' if len(namen) != 1 else ''} for '{person}'"
+                               + (f", {len(plan['uebersprungen'])} skipped as near-identical" if plan["uebersprungen"] else "")
+                               + " — drift watchdog running (System page)"}, ensure_ascii=False), "application/json")
+                except Exception as e:
+                    return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad == "/areas_speichern":                     # Areas Stufe 1: Schrieb OHNE Neustart
                 try:
                     n = int(self.headers.get("Content-Length", 0))
@@ -5290,7 +5402,7 @@ def make_handler(svc):
                     + '</div>'
                     + _r_areas.chips(_areas_h, _ar_aktiv, "/heute",
                                      {} if ist_heute else {"tag": tag_dt.strftime("%Y-%m-%d")})
-                    + webui.update_block())
+                    + webui.update_block() + webui.whatsnew_block())
                 # --- Personen-Band (ersetzt die vier gleichrangigen Kennzahlkacheln) ---
                 # User 25.07.: "Wichtig ist, WER erkannt wurde." Vier gleich grosse Kacheln, von
                 # denen eine "People recognized: 3" sagt, sind redundant, sobald drei Personen
@@ -5524,9 +5636,18 @@ def make_handler(svc):
                 if aid:
                     satz = next((s for s in saetze if s.get("anker_id") == aid), None)
                     if satz:
+                        # E4a Zug 2b: die Detail-Seite IST der Benennungs-Fluss —
+                        # Kontext (Empfehlung/Personen/Vorschlag) rechnet das Modul.
+                        from core import benennung as _bn
+                        bkt = _bn.benennungs_kontext(
+                            satz, saetze, master_persons(cfg),
+                            {k: cfg["benennung_" + k] for k in
+                             ("k_je_bin", "yaw_grenze", "dup_sim", "vorschlag_schwelle")},
+                            _ll.person_norm)
                         return self._send(200, webui.layout(
                             "Anchor", "/lernlauf/anker",
-                            _r_ank.anker_detail_seite(satz, kaputt), self._banner()))
+                            _r_ank.anker_detail_seite(satz, kaputt, benennung=bkt),
+                            self._banner()))
                 return self._send(200, webui.layout(
                     "Anchors", "/lernlauf/anker", _r_ank.anker_seite(saetze, kaputt),
                     self._banner()))
@@ -5552,9 +5673,12 @@ def make_handler(svc):
                 # den Wizard, OHNE den fertigen Lauf zu trashen (vorher war Abort der
                 # einzige Weg zum naechsten Lauf).
                 _qd0 = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-                if zustand and _qd0.get("neu") and str((zustand.get("fortschritt") or {})
-                                                       .get("status", "")).startswith(
-                                                           ("anchors ready", "anchors: none")):
+                # .99-Fix (User-Fund): auch ?events=... ist Wizard-Absicht — die
+                # Scope-Knoepfe/das go-Formular tragen kein neu=1, und der fertige
+                # Lauf verschluckte sonst Schritt 2 (fps-Karte unerreichbar).
+                if zustand and (_qd0.get("neu") or _qd0.get("events")) and str(
+                        (zustand.get("fortschritt") or {}).get("status", "")).startswith(
+                            ("anchors ready", "anchors: none")):
                     zustand = None
                 if zustand:
                     saetze, kaputt = _ll.anker_lesen(cfg["data_dir"])

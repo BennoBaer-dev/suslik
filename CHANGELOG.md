@@ -9,6 +9,31 @@ local steps 0.1.0.55–0.1.0.62 ship together with **0.1.0.63**. The learning-mo
 areas construction steps 0.1.0.64–0.1.0.91 ship together with **0.1.0.92-alpha**, and the
 QA/diagnostics steps 0.1.0.93–0.1.0.95 ship together with **0.1.0.96-alpha**.
 
+## 0.1.0.102-alpha — 2026-08-01
+
+- **Adoption (learning module complete):** a named cluster can now be adopted into
+  recognition with one click. The write is all-or-nothing, near-duplicates of already
+  learned references are skipped and counted, changed settings since naming are
+  surfaced for confirmation, every adoption lands in a protocol, and the drift
+  watchdog checks the reference library right afterwards (System page shows red).
+
+## 0.1.0.101-alpha — 2026-08-01
+
+- **Cluster naming (learning module, stage E4a):** open an anchor cluster and name it.
+  The page recommends the best faces per perspective (near-duplicates and same-detection
+  copies are set aside with the reason shown on each image), lets you select images by
+  clicking, warns when a name matches an existing person, and keeps every decision safe
+  across restarts. Adoption into recognition ships with the next stage; naming alone
+  changes nothing in detection yet. The learning-run page links the naming step
+  directly once grouping is done (0.1.0.98-.100 were internal steps); every cluster card carries a clear naming button.
+
+## 0.1.0.97-alpha — 2026-08-01
+
+- **What's-new box on the Today page:** the latest releases' highlights at a glance —
+  collapsed to three entries, expandable to the last ten, dismissible per version
+  (it returns when the next version arrives). No server state; the dismissal lives
+  in your browser like the theme choice.
+
 ## 0.1.0.96-alpha — 2026-08-01
 
 Reliability and honest-diagnostics wave (includes the internal steps .93–.95).
