@@ -4,21 +4,16 @@ A small companion service for [Frigate](https://frigate.video/) that treats a pe
 across your property as **one scenario across multiple cameras** — and gives Frigate's face
 recognition an independent second opinion.
 
-> **Alpha — published work in progress (0.1.0.108-alpha).** This is a development snapshot,
-> released so you can try it while it is being built. The learning module is now complete
-> end to end: point a learning run at as many past person events as you like, it harvests
-> faces, groups them into clusters of **recurring people**, and lets you review and name a
-> whole cluster once (the postman after three weeks of visits) instead of labeling single
-> images. Named clusters can then be adopted into recognition directly from that page.
-> Camera areas are the other construction site. Expect rough edges, and expect interfaces
-> and data formats to still change between versions.
->
-> The `latest-*` image tags follow the newest published version (currently
-> **0.1.0.108-alpha**), so `docker compose pull` gets you what this README describes.
-> If you'd rather pin a fixed version, use the version tag explicitly, e.g.
-> `ghcr.io/bennobaer-dev/suslik:0.1.0.108-alpha-gpu`.
-> The **Latest** release on the GitHub releases page is the newest version too, so the
-> in-app update hint and the `latest-*` image tags all point at the same thing.
+> **Alpha (0.1.0.109).** Interfaces and data formats can still change between versions.
+
+The learning module works end to end: a learning run walks through the person events
+Frigate already recorded, harvests the usable faces, groups them into recurring people,
+and lets you name a whole cluster at once instead of labeling single images. Named
+clusters go straight into recognition. Camera areas are the part still being built.
+
+The `latest-*` image tags follow the newest release, so `docker compose pull` gets you
+what this README describes. To pin a version instead, use its tag explicitly:
+`ghcr.io/bennobaer-dev/suslik:0.1.0.109-gpu`.
 
 ## Why this exists
 
@@ -43,7 +38,7 @@ declines rather than mislabels.
 The Today page answers "who was on the property, when, and where did they go" — one card per
 person, one block per pass, unknowns kept visible instead of buried:
 
-![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.0.108-alpha)
+![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.0.109)
 
 *(Screenshot from a live install of v0.1.0.54; names and faces anonymized.)*
 

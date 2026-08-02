@@ -8,6 +8,14 @@ _Last updated: 2026-07-30 (0.1.0.102-alpha)._
 
 ## Known bugs
 
+- **Installations older than 0.1.0.92 never see an update hint for alpha releases.**
+  Their version comparison cannot parse a tag like `v0.1.0.108-alpha` (the suffix
+  handling was only added on 2026-07-30), so the check silently decides "nothing
+  newer". Measured on a real 0.1.0.63 container: it fetches the release fine and
+  stores `v0.1.0.108-alpha`, then compares it as *not* newer. Nothing is broken on
+  your side — but if you are on such a version, you have to check for updates
+  yourself. Every version from 0.1.0.92 on gets the hint correctly.
+
 - **Deleting in Frigate is intentionally out of scope.** suslik never deletes anything
   in Frigate — removals stay local (a tombstone prevents re-import on the next sync).
   Since 0.1.0.45 it does not even try (the old non-portable SSH attempt is gone).
