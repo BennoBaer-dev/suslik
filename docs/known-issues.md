@@ -11,10 +11,11 @@ _Last updated: 2026-07-30 (0.1.0.102-alpha)._
 - **Deleting in Frigate is intentionally out of scope.** suslik never deletes anything
   in Frigate — removals stay local (a tombstone prevents re-import on the next sync).
   Since 0.1.0.45 it does not even try (the old non-portable SSH attempt is gone).
-- **Writing references back to Frigate is not portable yet.** The "export" direction
-  of the reference sync still uses a path that only works on the author's development
-  setup; on a normal installation it will fail. It is being moved to the official
-  Frigate HTTP API. The **import** direction (pulling faces from Frigate) works.
+- ~~**Writing references back to Frigate is not portable yet.**~~ **Fixed in
+  0.1.0.107-alpha.** The export direction used to copy files over SSH, which only
+  worked where suslik happens to have root SSH access to the Frigate host. It now
+  uploads through the official Frigate HTTP API (`POST /api/faces/{name}`), like
+  every other Frigate call. Both directions work on a normal installation.
 - **Two GPU instances on one Intel iGPU could crash on startup** (exit 139) —
   **fixed as of 0.1.0.44**: all compute jobs of one instance now run through a single
   persistent worker process, which bundles the GPU contexts; the collision window was

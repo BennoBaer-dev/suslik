@@ -9,6 +9,41 @@ local steps 0.1.0.55–0.1.0.62 ship together with **0.1.0.63**. The learning-mo
 areas construction steps 0.1.0.64–0.1.0.91 ship together with **0.1.0.92-alpha**, and the
 QA/diagnostics steps 0.1.0.93–0.1.0.95 ship together with **0.1.0.96-alpha**.
 
+## 0.1.0.108-alpha — 2026-08-03
+
+Ships together with the 0.1.0.107 fixes below (0.1.0.107 was never promoted to `latest`).
+
+- **Fixed: the new API export was still gated on `ssh`/`scp` being present.** Those
+  are deliberately not in the images, so the automatic reference export to Frigate
+  would have stayed disabled even after the switch to the HTTP API. It now only
+  needs a configured Frigate URL, and a failing export is reported in the log
+  instead of passing silently.
+- **Removed `sshpass` from all images.** With the export on the HTTP API, no SSH
+  tool is left in the containers at all.
+
+## 0.1.0.107-alpha — 2026-08-03
+
+- **Fixed: exporting reference images to Frigate no longer uses SSH.** The export
+  path copied files over SSH, which only ever worked on setups where suslik has
+  root SSH access to the Frigate host. It now uploads through the documented
+  Frigate HTTP API (`POST /api/faces/{name}`), like every other Frigate call.
+  This also removes a command-injection hole: a person name containing shell
+  characters was interpolated into a remote shell command, and an ordinary name
+  like `O'Brien` broke the whole export.
+- **Fixed: person names with dots, apostrophes or parentheses were half-broken.**
+  A face imported from Frigate as e.g. `Anna.B` showed up on the Known people
+  page, but its thumbnails 404'd and deleting them failed. Name validation now
+  comes from one shared definition used by both the import and every consumer.
+- **Fixed: deleting a person under-reported how many images were moved to trash**
+  (`.webp` files, which is what Frigate delivers, were not counted).
+- **Fixed: two persons whose names differ only by space vs underscore shared one
+  suggestions file**, silently mixing their candidates.
+- **Fixed: deleting a multi-face crop from the Known people library failed with
+  "ungueltiger Pfad".** Same root cause family as the broken crop images in
+  0.1.0.103: filenames with `~` (multi-face crops) were rejected, this time by
+  the delete path. The filename pattern now lives in one central place used by
+  every route that validates image paths, so this class cannot scatter again.
+
 ## 0.1.0.106-alpha — 2026-08-02
 
 - **New: import/resync faces from Frigate on the Known people page.** The Frigate
