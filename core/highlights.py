@@ -8,6 +8,12 @@ der VERSION entspricht. Import-frei wie core/registry.py.
 
 Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas."""
 
+# STAND = bis zu welcher VERSION der Box-Inhalt MIT dem User abgestimmt ist (das Gate
+# prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
+# .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
+# die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
+STAND = "0.1.0.106-alpha"
+
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
     ("0.1.0.103-alpha", (

@@ -42,6 +42,13 @@ def render(personen, data_dir):
               "<span id='up-status' style='color:var(--dim)'></span><br>"
               "<small>New person: type the name into the free-text field. Gate: buffalo_l must find a "
               "face (otherwise an override prompt appears).</small></div>")
+    frigate_import = (
+        "<div class='card'><b>Import / resync from Frigate</b><br>"
+        "<button class='gtb' onclick='gesImport(this)'>Sync faces from Frigate</button> "
+        "<span id='ges-import-status' style='color:var(--dim)'></span><br>"
+        "<small>Fetches reference images Frigate has that this library doesn't yet — incremental, "
+        "safe to run any time (nothing local is deleted). Same import as in the setup wizard, "
+        "now reachable without re-running it (e.g. after restoring a configuration).</small></div>")
     return ("<h2>Known people</h2>"
             '<p><a class="gtb on" href="/lernlauf">Learn people</a> '
             '<span class="dim">guided learning run over your own recordings '
@@ -49,4 +56,4 @@ def render(personen, data_dir):
             "<p>All learned persons and their reference images. You can remove individual images, "
             "assign more from the unknown faces via the button per person, "
             "or upload a photo below, also for an entirely new person.</p>"
-            + upload + "".join(gal))
+            + upload + frigate_import + "".join(gal))
