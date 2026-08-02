@@ -194,9 +194,9 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0):
                   f'<span class="dim">open a cluster to name it</span></div>')
     return (stil + "<h2>Learning run</h2>" + erfolg +
             f'<div class="card"><b>Phases</b>{"".join(zeilen)}'
-            '<div class="dim">Preparation, Harvest, Grouping and Naming run for real in '
-            "this build — side views, full-body stock and adoption into the master "
-            "activate with the coming updates.</div></div>"
+            '<div class="dim">Preparation, Harvest, Grouping, Naming and adoption into '
+            "the master run for real in this build — side views and the full-body "
+            "stock activate with the coming updates.</div></div>"
             f'<div class="card"><b>Progress</b>'
             f'<div>{html.escape(st) if st else "—"}</div>{puls}{rest_html}'
             f'<div class="dim">anchors so far: {anker_zahl}{anker_link}{kaputt_html} · created '

@@ -9,6 +9,17 @@ local steps 0.1.0.55–0.1.0.62 ship together with **0.1.0.63**. The learning-mo
 areas construction steps 0.1.0.64–0.1.0.91 ship together with **0.1.0.92-alpha**, and the
 QA/diagnostics steps 0.1.0.93–0.1.0.95 ship together with **0.1.0.96-alpha**.
 
+## 0.1.0.109 — 2026-08-03
+
+- **Version numbers no longer carry an `-alpha` suffix.** Installations older than
+  0.1.0.92 could not parse a tag like `v0.1.0.108-alpha` and therefore never saw an
+  update hint, no matter which release was marked as latest — measured on a real
+  0.1.0.63 container. Dropping the suffix fixes that for every old installation at
+  once. This is still an alpha-stage project; the version number just says so through
+  its leading `0.1.`, and the README says it in words.
+- **Fixed: the learning run page claimed that adoption into recognition "activates
+  with the coming updates".** It has been working since 0.1.0.102.
+
 ## 0.1.0.108-alpha — 2026-08-03
 
 Ships together with the 0.1.0.107 fixes below (0.1.0.107 was never promoted to `latest`).
