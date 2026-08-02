@@ -10,7 +10,7 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
-    ("0.1.0.102-alpha", (
+    ("0.1.0.103-alpha", (
         "Learning module: run guided learning over your past events — harvest faces, group recurring people, name them and adopt them into recognition.",
         "Camera areas: group cameras into parts of your property and use them as views on Today, Appearances and Events.",
     )),
