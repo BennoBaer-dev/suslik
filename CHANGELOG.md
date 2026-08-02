@@ -9,6 +9,13 @@ local steps 0.1.0.55–0.1.0.62 ship together with **0.1.0.63**. The learning-mo
 areas construction steps 0.1.0.64–0.1.0.91 ship together with **0.1.0.92-alpha**, and the
 QA/diagnostics steps 0.1.0.93–0.1.0.95 ship together with **0.1.0.96-alpha**.
 
+## 0.1.0.103-alpha — 2026-08-02
+
+- **Fixed: crop images with `~` in the filename showed as broken (404).** Events with
+  several faces name their crops `<event>~2.jpg`, `~3.jpg` and so on; the image routes
+  for the unknown-pool crops and for reference photos did not accept the tilde.
+  Reported by a community tester with an exact trace (#11) — thanks.
+
 ## 0.1.0.102-alpha — 2026-08-01
 
 - **Adoption (learning module complete):** a named cluster can now be adopted into

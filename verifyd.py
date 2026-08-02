@@ -5764,7 +5764,10 @@ def make_handler(svc):
                 inhalt = _r_lernen.render(offen, master_persons(cfg), cfg["data_dir"])
                 return self._send(200, webui.layout("Enroll", "/lernen", inhalt, warnung or self._banner()))
             if path.startswith("/refs/"):              # Master-Referenzbilder (read-only, Containment)
-                m = re.match(r"^/refs/([\w \-]+)/([\w .\-]+\.(?:jpg|jpeg|png|webp))$", path, re.I)
+                # ~ auch hier (Issue-#11-Klasse): uebernommene Lern-Referenzen behalten
+                # den Crop-Namen (lern_<anker>_<eid>~N.jpg) — ohne ~ waeren sie auf der
+                # Personen-Seite unsichtbar, derselbe 404 wie bei /anlern/crops/.
+                m = re.match(r"^/refs/([\w \-]+)/([\w .\-~]+\.(?:jpg|jpeg|png|webp))$", path, re.I)
                 if m:
                     base = os.path.realpath(os.path.join(cfg["data_dir"], "faces"))
                     p = os.path.realpath(os.path.join(base, m.group(1), m.group(2)))
@@ -5960,7 +5963,10 @@ def make_handler(svc):
                 return self._send(200, webui.layout("Matching faces", "/gesichter", inhalt,
                                                     self._banner(), refresh=refresh))
             if path.startswith("/anlern/crops/"):        # Anlern-Crops (read-only, Containment)
-                m = re.match(r"^/anlern/crops/([\w.\-]+\.jpg)$", path)
+                # ~ gehoert in die Klasse (Issue #11, fvdpol): Mehr-Gesichter-Crops
+                # heissen <eid>~N.jpg und liefen ins 404 — /lernlauf/crop/ konnte
+                # die Tilde laengst. realpath-Containment bleibt die Wache.
+                m = re.match(r"^/anlern/crops/([\w.\-~]+\.jpg)$", path)
                 if m:
                     base = os.path.realpath(os.path.join(cfg["data_dir"], "learn", "crops"))
                     p = os.path.realpath(os.path.join(base, m.group(1)))
