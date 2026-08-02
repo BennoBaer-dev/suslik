@@ -7,14 +7,14 @@ Tombstones). Frigate-Ablage = /opt/frigate/media/clips/faces/<Person>/.
   sync_refs.py status              # Diff beider Seiten + offene Entscheidungen
   sync_refs.py import [--dry-run]  # NEUE Frigate-Bilder -> Master (mit Gesichts-Gate;
                                    #   Tombstones werden NIE re-importiert)
-  sync_refs.py export [--dry-run]  # aktive Master-Bilder, die Frigate fehlen -> SSH-Kopie
-                                   #   (Altweg ueber Datei-Kopie; Umstellung auf die
-                                   #   Frigate-HTTP-API ist geplant, s. docs/known-issues.md)
+  sync_refs.py export [--dry-run]  # aktive Master-Bilder, die Frigate fehlen -> POST
+                                   #   /api/faces/{name} (HTTP-API; der SSH/scp-Altweg ist
+                                   #   seit 0.1.0.107 abgeloest — Invariante + Shell-Injektion)
 
 Konfliktregel (Plan §AP1): in Frigate GELOESCHTE, im Master aktive Bilder werden NICHT
 still re-exportiert — status meldet sie als offene Entscheidung (User loescht im Master
 oder exportiert bewusst per --auch-extern-geloeschte)."""
-import os, re, sys, json, time, subprocess, urllib.request
+import os, re, sys, json, time, urllib.parse, urllib.request, uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -23,8 +23,8 @@ DATA = os.environ.get("VERIFY_DATA_DIR") or os.path.join(HERE, "verify_data")   
 MASTER = os.path.join(DATA, "faces")
 META = os.path.join(MASTER, "refs_meta.jsonl")
 FRIGATE = os.environ.get("FRIGATE_URL", "")
-LXC = {k: os.environ.get(k) for k in ("FRIGATE_LXC_HOST", "FRIGATE_LXC_USER", "FRIGATE_LXC_PASS")}
-FACES_PFAD = "/opt/frigate/media/clips/faces"
+# SSH-Reste (LXC-Credentials, Remote-Faces-Pfad) mit 0.1.0.107 entfallen — der Export
+# laeuft ueber die HTTP-API, s. api_upload(). Nichts hier braucht mehr Host-Zugang.
 PROGRESS = os.path.join(DATA, "state", "sync_progress.json")   # Fortschritt fuer die UI (X von Y)
 
 
@@ -44,7 +44,13 @@ ERLAUBTE_ENDUNGEN = (".jpg", ".jpeg", ".png", ".webp")
 # Permissiv und UNICODE-bewusst: echte Namen wie "Müller" oder "Anna-Lena" muessen durch,
 # sonst faellt ein legitimer Import STILL aus (Fehlerklasse C). Verboten sind nur die Zeichen,
 # die Pfade aufbrechen. Die eigentliche Sicherheit macht das realpath-Containment darunter.
-_NAME_OK = re.compile(r"^[^/\\\x00]{1,60}$", re.UNICODE)
+# Bis 03.08. stand hier nur "alles ausser / \\ NUL" — permissiver als JEDE Konsumenten-
+# Pruefung. Folge (Sweep-Befund): ein Frigate-Gesicht "Anna.B"/"Tim+Bo" wurde importiert,
+# war auf der Known-Seite sichtbar, aber unbedienbar (Thumbnails 404, Loeschen
+# "ungueltiger Pfad"). Jetzt gilt derselbe Vertrag wie fuer die Verbraucher; was nicht
+# passt, wird LAUT uebersprungen (Zeile im Import-Log) statt still unbrauchbar angelegt.
+from core.registry import PERSON_RE as _PERSON_RE
+_NAME_OK = re.compile(rf"^{_PERSON_RE}$", re.UNICODE)
 
 
 def sicheres_ziel(person, datei):
@@ -190,6 +196,37 @@ def cmd_import(dry):
     print(msg)
 
 
+def api_upload(person, datei, quelle):
+    """Referenzbild ueber die Frigate-HTTP-API hochladen: POST /api/faces/{name}, Feld `file`
+    (Endpunkte aus dem Frigate-Quellcode verifiziert).
+
+    Loest den SSH/scp-Altweg ab (CLAUDE.md-Invariante 'Frigate NUR ueber die HTTP-API':
+    fremde Nutzer haben keinen Root-SSH auf ihr Frigate, der Weg lief hier nur zufaellig).
+    Zugleich Sicherheits-Fix (Sweep 03.08., Schwere hoch): der alte Weg interpolierte den
+    PERSONEN-Namen in eine Remote-Shell-Zeile (`mkdir -p '<pfad>/<person>'`). _NAME_OK
+    erlaubt bewusst alles ausser / \\ NUL — also auch Apostroph und $(...). Ein per
+    /api/faces gelieferter Name wie "Anna';id;#" fuehrte damit Kommandos auf dem
+    Frigate-Host aus (end-to-end nachgestellt), und schon ein legitimes "O'Brien" liess
+    den ganzen Export mit Syntaxfehler abbrechen. Ueber die API ist der Name ein
+    URL-Segment (quote) und ein Formularfeld — keine Shell im Spiel.
+    """
+    if not FRIGATE:
+        raise RuntimeError("FRIGATE_URL fehlt — Export ueber die API nicht moeglich")
+    grenze = uuid.uuid4().hex
+    inhalt = open(quelle, "rb").read()
+    typ = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+           "webp": "image/webp"}.get(datei.rsplit(".", 1)[-1].lower(), "application/octet-stream")
+    body = (f"--{grenze}\r\nContent-Disposition: form-data; name=\"file\"; "
+            f"filename=\"{os.path.basename(datei)}\"\r\nContent-Type: {typ}\r\n\r\n").encode() \
+        + inhalt + f"\r\n--{grenze}--\r\n".encode()
+    req = urllib.request.Request(
+        f"{FRIGATE.rstrip('/')}/api/faces/{urllib.parse.quote(person, safe='')}",
+        data=body, headers={"Content-Type": f"multipart/form-data; boundary={grenze}"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        if r.status not in (200, 201):
+            raise RuntimeError(f"Frigate-API antwortete HTTP {r.status}")
+
+
 def cmd_export(dry, auch_extern=False):
     nf, nm, eg = diff()
     kandidaten = nm + (eg if auch_extern else [])
@@ -201,18 +238,11 @@ def cmd_export(dry, auch_extern=False):
     for i, (p, datei) in enumerate(kandidaten):
         _progress(phase="export", total=total, done=i, current=p)
         quelle = os.path.join(MASTER, p, datei)
-        ziel = f"{FACES_PFAD}/{p}/{datei}"
+        ziel = f"api:/api/faces/{p}"     # Protokoll-Vermerk: WOHIN exportiert wurde
         if dry:
             print(f"  [dry] exportiere {p}/{datei}")
             continue
-        _sshenv = dict(os.environ, SSHPASS=LXC["FRIGATE_LXC_PASS"])   # Passwort via Env, nicht argv (kein ps-Leak)
-        subprocess.run(["sshpass", "-e", "ssh",
-                        f"{LXC['FRIGATE_LXC_USER']}@{LXC['FRIGATE_LXC_HOST']}",
-                        f"mkdir -p '{FACES_PFAD}/{p}'"], check=True, capture_output=True, timeout=30,
-                       env=_sshenv)
-        subprocess.run(["sshpass", "-e", "scp", quelle,
-                        f"{LXC['FRIGATE_LXC_USER']}@{LXC['FRIGATE_LXC_HOST']}:{ziel}"],
-                       check=True, capture_output=True, timeout=60, env=_sshenv)
+        api_upload(p, datei, quelle)
         meta_append(person=p, datei=datei, herkunft="export", aktiv=True, ziel=ziel)
         print(f"  exportiert: {p}/{datei}")
     _progress(phase="done", total=len(kandidaten), done=len(kandidaten), ok=len(kandidaten), gate=0)

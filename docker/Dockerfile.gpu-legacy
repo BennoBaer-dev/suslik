@@ -18,7 +18,7 @@ FROM python:3.13-slim-trixie
 #     iHD (Gen8+) + i965 (Gen7.5 und aelter) — Transcode-Stack, auf Gen9 unveraendert nutzbar
 #     (Beleg Issue #6: Encode-Probe bestand dort trotz Compute-Runtime-Problem). ---
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ffmpeg libgl1 libglib2.0-0 sshpass ca-certificates wget \
+        ffmpeg libgl1 libglib2.0-0 ca-certificates wget \
         ocl-icd-libopencl1 intel-media-va-driver i965-va-driver \
     && rm -rf /var/lib/apt/lists/*
 

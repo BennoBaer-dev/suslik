@@ -498,7 +498,8 @@ def benenne(gesicht_ids, person, beste_n=5):
     """Die besten Gesichter eines Clusters als Referenzen fuer <person> in den Master legen.
     Legt refs/<person>/ an (neue Person moeglich), schreibt refs_meta, verwirft den refcache."""
     import re, shutil
-    if not re.match(r"^[\w \-]{2,40}$", person or ""):
+    from core.registry import PERSON_RE
+    if not re.fullmatch(PERSON_RE, person or ""):
         return False, "ungueltiger Personenname"
     G = {g["id"]: g for g in lade_gesichter()}
     gewaehlt = [G[i] for i in gesicht_ids if i in G]
@@ -1030,7 +1031,8 @@ def entferne_referenz(person, datei):
     zeigte sonst tote Bild-Links, bis der Hintergrund-Neulauf fertig ist), refcache verworfen.
     Nur innerhalb refs/ (Containment)."""
     import re
-    if not re.match(r"^[\w \-]{1,40}$", person or "") or not re.match(r"^[\w .\-]+$", datei or ""):
+    from core.registry import DATEI_RE, PERSON_RE   # Vertrag (Issue #12 + Sweep 03.08.)
+    if not re.fullmatch(PERSON_RE, person or "") or not re.fullmatch(DATEI_RE, datei or ""):
         return False, "ungueltiger Pfad"
     base = os.path.realpath(MASTER)
     ziel = os.path.realpath(os.path.join(base, person, datei))
@@ -1256,7 +1258,8 @@ def vorschlag_aufnehmen(person, eid, datei):
     """Einen Bestands-Vorschlag als Referenz uebernehmen: Event-Crop -> Master (Containment),
     refs_meta, refcache-Invalidierung; Vorschlags-JSON um den Eintrag bereinigen."""
     import re, shutil
-    if not re.match(r"^[\w \-]{2,40}$", person or "") or not re.match(r"^[\w .\-]+\.jpg$", datei or "", re.I):
+    from core.registry import DATEI_RE, PERSON_RE   # Vertrag statt Streu-Literal (Sweep 03.08.)
+    if not re.fullmatch(PERSON_RE, person or "") or not re.fullmatch(rf"{DATEI_RE}\.jpg", datei or "", re.I):
         return False, "ungueltige Angaben"
     ed = str(eid).replace("/", "_")
     basis = os.path.realpath(os.path.join(DATA, "events"))

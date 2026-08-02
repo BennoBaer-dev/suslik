@@ -16,7 +16,7 @@ FROM python:3.13-slim-trixie
 #     kann — Ziel dieses Images ist breite Hardware-Abdeckung; Frigate liefert aus demselben Grund
 #     beide Treiber aus. video_encoder() probt zur Laufzeit, welcher greift. ---
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ffmpeg libgl1 libglib2.0-0 sshpass ca-certificates wget \
+        ffmpeg libgl1 libglib2.0-0 ca-certificates wget \
         ocl-icd-libopencl1 libze1 intel-media-va-driver i965-va-driver \
     && rm -rf /var/lib/apt/lists/*
 

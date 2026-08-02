@@ -295,3 +295,27 @@ def export_ergaenzen(store, cfg):
         if key not in d and wert not in (None, "", {}) and wert != default:
             d[key] = wert
     return d
+
+
+# --- Dateinamen-Vertrag (Vorgriff auf konzept_struktur v3 §2; Issues #11 + #12) ---------
+# Multi-Gesichts-Crops heissen <event>~N.jpg — die Tilde gehoert zum Alphabet. Diese
+# Muster sind die EINZIGE Quelle fuer Pfad-Pruefungen von Event-IDs und Bild-Dateinamen;
+# verstreute Regex-Literale haben zweimal dieselbe Fehlklasse erzeugt (Anzeige .103,
+# Loeschen .107). Wer prueft, importiert von hier.
+EID_RE = r"[\w.\-]+"            # Event-IDs (ts-id), OHNE Tilde
+DATEI_RE = r"[\w .\-~]+"        # Bild-/Crop-Dateinamen, MIT Tilde + Leerzeichen
+
+# Personen-Namen (Ordnername unter faces/ und Formularwert). Bis 03.08. lagen FUENF
+# leicht verschiedene Literale verstreut (Laengenlimits 1-40/2-40, eines mit "!"-Suffix,
+# eines ganz ohne Limit) — dieselbe Streuklasse wie die Tilde, nur eine Ebene hoeher:
+# ein per Frigate-Import angelegter Name wie "Anna.B" ist sichtbar, aber unbedienbar
+# (Thumbnails 404, Loeschen "ungueltiger Pfad"). Wer prueft, nimmt PERSON_RE.
+PERSON_RE = r"[\w .\-'()]{1,60}"    # inkl. Apostroph/Klammern: echte Namen (O'Neill,
+#                                       "Anna (Nachbarin)") kommen aus dem Frigate-Import.
+#                                       Sicher, weil UI escaped (_js/html.escape), URLs quoten
+#                                       und der Export seit .107 ohne Shell laeuft (api_upload).
+
+# Referenz-/Crop-Bildendungen. Sieben Stellen zaehlen sie auf; EINE vergass .webp
+# (POST /person_loeschen meldete "0 reference images", waehrend 25 .webp im Papierkorb
+# lagen — Frigate liefert .webp). Aufzaehlung = Vertrag, nie Streu-Literal.
+BILD_ENDUNGEN = (".jpg", ".jpeg", ".png", ".webp")

@@ -6,9 +6,8 @@ FROM python:3.13-slim
 # --- System-Deps ---
 #   ffmpeg           : Video-Decode/Transcode (Browser-Kopien der Clips)
 #   libgl1/libglib   : von opencv gebraucht
-#   sshpass          : nur fuer frigate_sync (im Test AUS) — der Vollstaendigkeit halber
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ffmpeg libgl1 libglib2.0-0 sshpass \
+        ffmpeg libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

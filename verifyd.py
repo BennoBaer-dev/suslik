@@ -23,6 +23,7 @@ import yaml
 
 from core.pfade import WURZEL as HERE, VERIFYD_PFAD   # M0-Anker (Falle 0): eine Pfad-Quelle
 from core import areas as _areas_mod                  # Areas Stufe 1 (Sicht + Meldetext, 30.07.)
+from core import registry as _reg                     # Dateinamen-Vertrag (Issues #11/#12)
 # Oeffentliche Projekt-Doku (GitHub). Lokale Arbeitsnotizen des Autors enthalten interne
 # IPs + Zugaenge und duerfen NICHT ueber das UI ausgeliefert werden -> System-Seite + /doc zeigen aufs Repo.
 DOCS_URL = "https://github.com/BennoBaer-dev/suslik"
@@ -1802,20 +1803,20 @@ class Service:
     # eine in Frigate liegende Kopie bleibt bewusst unangetastet.
 
     def frigate_sync_export(self):
-        """Falls frigate_sync an: aktive Master-Bilder, die Frigate fehlen, per SSH nach Frigate
-        spiegeln (separater Prozess). Fuer Parallelbetrieb Frigate-Face + verifyd."""
+        """Falls frigate_sync an: aktive Master-Bilder, die Frigate fehlen, ueber die
+        Frigate-HTTP-API hochladen (separater Prozess, sync_refs.py export).
+        Fuer Parallelbetrieb Frigate-Face + verifyd."""
         if not self.cfg.get("frigate_sync") or frigate_read_only(self.cfg):
             return
-        # ssh/scp fehlen in allen drei ausgelieferten Images (nur sshpass ist da) — dort kann
-        # dieser Weg NIE funktionieren und scheiterte bisher kommentarlos (Vor-Release-Pruefung
-        # 25.07., rc=3 real in sync_export_err.log). Einmal je Start ehrlich melden.
-        import shutil as _sh
-        if not (_sh.which("ssh") and _sh.which("scp")):
-            if not getattr(self, "_sync_ssh_gemeldet", False):
-                self._sync_ssh_gemeldet = True
-                self.log("frigate_sync: ssh/scp missing in this build — export to Frigate "
-                         "not possible (API export coming; #2)")
-            return                                # read-only sperrt auch den Auto-Export nach Frigate
+        # Seit 0.1.0.108 laeuft der Export ueber die Frigate-HTTP-API (sync_refs.api_upload).
+        # Die alte ssh/scp-Vorbedingung MUSSTE hier weg: ssh/scp liegen bewusst nicht im
+        # Image, die Wache haette den API-Export also dauerhaft gesperrt (Selbstfund beim
+        # Doku-Durchgang .107 — die Umstellung waere fuer Nutzer wirkungslos geblieben).
+        if not (self.cfg.get("frigate_url") or "").strip():
+            if not getattr(self, "_sync_url_gemeldet", False):
+                self._sync_url_gemeldet = True
+                self.log("frigate_sync: no Frigate URL configured — export skipped")
+            return
         def job():
             env = dict(os.environ, OV_DEVICE=self.cfg["ov_device"])
             r = subprocess.run([sys.executable,
@@ -3054,7 +3055,7 @@ class Service:
             self._enroll_append({**d, "status": "abgelehnt", "ts_entschieden": round(time.time(), 1)})
             return True, "abgelehnt"
         ziel_person = person or d.get("person")
-        if not ziel_person or not re.match(r"^[\w \-]{2,40}$", ziel_person):
+        if not ziel_person or not re.fullmatch(_reg.PERSON_RE, ziel_person):
             return False, "ungueltiger Personenname"
         quelle = os.path.join(self.cfg["data_dir"], "events", d["eid"].replace("/", "_"), d["datei"])
         if not os.path.isfile(quelle):
@@ -3090,19 +3091,14 @@ class Service:
             # Pruefung 25.07.): dieser Pfad war der EINZIGE, der frigate_read_only NICHT prueft —
             # ein Betreiber, der auf read-only stellt, waere nach einem Enrollment trotzdem
             # beschrieben worden, still und mit check=False. Zusaetzlich vorab pruefen, ob
-            # ssh/scp ueberhaupt existieren: in ALLEN drei ausgelieferten Images fehlen beide
-            # (nur sshpass ist installiert), der Export konnte dort also NIE funktionieren und
-            # scheiterte kommentarlos. Ehrlich melden statt still verpuffen; der API-Umbau
-            # (#2/#3) macht das nach dem Release ueberfluessig.
             if self.cfg.get("frigate_sync") and not frigate_read_only(self.cfg):
-                import shutil as _sh
-                if not (_sh.which("ssh") and _sh.which("scp")):
-                    self.log("frigate_sync: ssh/scp missing in this build — reference export "
-                             "to Frigate not possible (API export coming; #2)")
-                else:
-                    subprocess.run([sys.executable,
+                # API-Export (0.1.0.108): keine ssh/scp-Vorbedingung mehr, nur eine URL.
+                r = subprocess.run([sys.executable,
                                     os.path.join(HERE, "sync_refs.py"), "export"],
                                    capture_output=True, timeout=300, check=False, env=env)
+                if r.returncode != 0:            # Fehler NIE still verschlucken (Klasse C)
+                    self.log(f"frigate_sync: reference export failed (rc={r.returncode}): "
+                             f"{(r.stderr or b'').decode(errors='replace').strip()[:160]}")
             r = subprocess.run([sys.executable,
                                 os.path.join(HERE, "abnahme.py"), "--nach-enrollment"],
                                capture_output=True, timeout=900, check=False, env=env)
@@ -4262,8 +4258,8 @@ def make_handler(svc):
                     papierkorb = os.path.join(cfg["data_dir"], "trash")
                     os.makedirs(papierkorb, exist_ok=True)
                     ziel = os.path.join(papierkorb, f"person_{p}_{int(time.time())}")
-                    n_bilder = len([f for f in os.listdir(quelle)
-                                    if f.lower().endswith((".jpg", ".jpeg", ".png"))])
+                    n_bilder = len([f for f in os.listdir(quelle)      # .webp NICHT vergessen: Frigate liefert webp
+                                    if f.lower().endswith(_reg.BILD_ENDUNGEN)])
                     os.rename(quelle, ziel)
                     try:
                         os.remove(os.path.join(cfg["data_dir"], "clips", "refcache.npz"))
@@ -4827,7 +4823,7 @@ def make_handler(svc):
                 try:
                     qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
                     person = urllib.parse.unquote(qs.get("person", [""])[0]).strip()
-                    if not re.match(r"^[\w \-]{2,40}!?$", person):
+                    if not re.fullmatch(rf"{_reg.PERSON_RE}!?", person):
                         return self._send(400, json.dumps({"ok": False, "msg": "Person fehlt/ungueltig"}),
                                           "application/json")
                     n = int(self.headers.get("Content-Length", 0))
@@ -5653,7 +5649,7 @@ def make_handler(svc):
                     self._banner()))
             if path.startswith("/lernlauf/crop/"):
                 # Lauf-Crops (Containment wie /refs/: realpath-Wache gegen Traversal).
-                m = re.match(r"^/lernlauf/crop/(L[\w]+)/([\w.\-~]+\.jpg)$", path)
+                m = re.match(rf"^/lernlauf/crop/(L[\w]+)/({_reg.DATEI_RE}\.jpg)$", path)
                 if m:
                     base = os.path.realpath(os.path.join(
                         cfg["data_dir"], "state", "lernlauf", m.group(1), "crops"))
@@ -5767,7 +5763,7 @@ def make_handler(svc):
                 # ~ auch hier (Issue-#11-Klasse): uebernommene Lern-Referenzen behalten
                 # den Crop-Namen (lern_<anker>_<eid>~N.jpg) — ohne ~ waeren sie auf der
                 # Personen-Seite unsichtbar, derselbe 404 wie bei /anlern/crops/.
-                m = re.match(r"^/refs/([\w \-]+)/([\w .\-~]+\.(?:jpg|jpeg|png|webp))$", path, re.I)
+                m = re.match(rf"^/refs/({_reg.PERSON_RE})/({_reg.DATEI_RE}\.(?:jpg|jpeg|png|webp))$", path, re.I)
                 if m:
                     base = os.path.realpath(os.path.join(cfg["data_dir"], "faces"))
                     p = os.path.realpath(os.path.join(base, m.group(1), m.group(2)))
@@ -5966,7 +5962,7 @@ def make_handler(svc):
                 # ~ gehoert in die Klasse (Issue #11, fvdpol): Mehr-Gesichter-Crops
                 # heissen <eid>~N.jpg und liefen ins 404 — /lernlauf/crop/ konnte
                 # die Tilde laengst. realpath-Containment bleibt die Wache.
-                m = re.match(r"^/anlern/crops/([\w.\-~]+\.jpg)$", path)
+                m = re.match(rf"^/anlern/crops/({_reg.DATEI_RE}\.jpg)$", path)
                 if m:
                     base = os.path.realpath(os.path.join(cfg["data_dir"], "learn", "crops"))
                     p = os.path.realpath(os.path.join(base, m.group(1)))
@@ -6110,8 +6106,7 @@ def make_handler(svc):
                 # Store + wirksame Verbindungs-Werte (Vertrag core.registry.EXPORT_VERBINDUNG):
                 # ENV-/yaml-konfigurierte Installationen haben frigate_url/mqtt NICHT im Store,
                 # das Backup waere dort unvollstaendig (User-Fund 02.08., NB-Restore ohne Frigate).
-                from core import registry as _reg
-                d = _reg.export_ergaenzen(_lade_config_store(cfg), cfg)
+                d = _reg.export_ergaenzen(_lade_config_store(cfg), cfg)   # Modul-Import oben (kein lokaler Schatten!)
                 data = (json.dumps(d, ensure_ascii=False, indent=1) + "\n").encode()
                 fn = f"suslik-config-{datetime.datetime.now():%Y%m%d}.json"
                 self.send_response(200)
@@ -6506,7 +6501,7 @@ def make_handler(svc):
                     f'<div class="evgt"><span class="lab">Who was it?</span>{gtb}</div></div>'
                     f'<h3>Images</h3>{galerie}')
                 return self._send(200, webui.layout("Event", "/heute", inhalt, self._banner()))
-            m = re.match(r"^/events/([\w.\-]+)/([\w.\- ]+\.(?:jpg|log|jsonl))$", path)
+            m = re.match(rf"^/events/({_reg.EID_RE})/({_reg.DATEI_RE}\.(?:jpg|log|jsonl))$", path)
             if m:                                          # Crops/Logs ausliefern (Pfad strikt validiert)
                 base = os.path.realpath(os.path.join(cfg["data_dir"], "events"))
                 p = os.path.realpath(os.path.join(base, m.group(1), m.group(2)))

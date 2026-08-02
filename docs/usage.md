@@ -51,8 +51,9 @@ working. The UI follows your operating system's light/dark preference; the **The
 
 ## Enrollment (teaching suslik a person)
 
-suslik learns from your own camera footage — you don't upload photos. The flow is
-person-centric:
+suslik learns from your own camera footage — you don't upload photos. This section covers
+the day-to-day path; to work through your event history in one guided go, see
+[Learning people](learning.md). The flow is person-centric:
 
 1. Let the person appear on camera normally. After each walk, suslik collects the best faces
    (up to three per event), generates enrollment suggestions (**Enroll** tab) for people it
