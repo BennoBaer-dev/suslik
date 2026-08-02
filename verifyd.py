@@ -5562,8 +5562,8 @@ def make_handler(svc):
                 elif not pkarten and not master_persons(cfg):
                     band = webui.leer("Connected — but no reference faces yet, so nobody can "
                                       "be recognized.",
-                                      "Import faces from Frigate (setup wizard) or upload photos "
-                                      "on the Known page. suslik then keeps learning from the "
+                                      "Import faces from Frigate or upload photos — both on the "
+                                      "Known page. suslik then keeps learning from the "
                                       "cameras on its own.")
                 elif pkarten:
                     band = f'<div class="pband">{"".join(pkarten)}</div>'
@@ -6107,8 +6107,12 @@ def make_handler(svc):
                           'on the <a href="/kameras">Cameras</a> page.</p>')
                 return self._send(200, webui.layout("Settings", "/konfiguration", inhalt, self._banner()))
             if path == "/config_sichern":              # Config-Store als Download (UI 'Download configuration')
-                p = _config_store_pfad(cfg)
-                data = open(p, "rb").read() if os.path.exists(p) else b"{}\n"
+                # Store + wirksame Verbindungs-Werte (Vertrag core.registry.EXPORT_VERBINDUNG):
+                # ENV-/yaml-konfigurierte Installationen haben frigate_url/mqtt NICHT im Store,
+                # das Backup waere dort unvollstaendig (User-Fund 02.08., NB-Restore ohne Frigate).
+                from core import registry as _reg
+                d = _reg.export_ergaenzen(_lade_config_store(cfg), cfg)
+                data = (json.dumps(d, ensure_ascii=False, indent=1) + "\n").encode()
                 fn = f"suslik-config-{datetime.datetime.now():%Y%m%d}.json"
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")

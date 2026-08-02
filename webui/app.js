@@ -318,6 +318,36 @@ function wizImport(btn) {
     });
 }
 
+/* Known page: import faces from Frigate outside the wizard (Task #22 — after a config
+   restore the wizard is skipped and the import was unreachable). Same route as wizImport;
+   empty url => server falls back to the configured frigate_url. */
+function gesImport(btn) {
+  var st = document.getElementById('ges-import-status');
+  btn.disabled = true; btn.textContent = 'starting …';
+  fetch('/sync_import', {method: 'POST', body: JSON.stringify({})})
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d.ok) { if (st) st.textContent = d.msg || 'error'; btn.disabled = false; btn.textContent = 'Import faces from Frigate'; return; }
+      var poll = setInterval(function () {
+        fetch('/sync_status').then(function (r) { return r.json(); }).then(function (s) {
+          if (!st) return;
+          if (s.phase === 'import') {
+            var pct = s.total ? Math.round(100 * s.done / s.total) : 0;
+            st.textContent = 'downloading ' + s.done + '/' + s.total + ' (' + (s.current || '') + ') ' + pct + '%';
+          } else if (s.phase === 'done') {
+            clearInterval(poll);
+            st.textContent = '✓ imported ' + (s.ok || 0) + ' — computing features, page reloads …';
+            setTimeout(function () { location.reload(); }, 2500);
+          } else if (s.phase === 'error') {
+            clearInterval(poll);
+            st.textContent = 'import failed: ' + (s.msg || 'see service log');
+            btn.disabled = false; btn.textContent = 'Import faces from Frigate';
+          }
+        }).catch(function () {});
+      }, 1000);
+    });
+}
+
 /* Check (19.07.): remove a single reference image / recompute reference QC */
 function refEntfernen(person, datei, btn) {
   if (!confirm('Remove reference image of ' + person + '?')) return;

@@ -9,6 +9,24 @@ local steps 0.1.0.55–0.1.0.62 ship together with **0.1.0.63**. The learning-mo
 areas construction steps 0.1.0.64–0.1.0.91 ship together with **0.1.0.92-alpha**, and the
 QA/diagnostics steps 0.1.0.93–0.1.0.95 ship together with **0.1.0.96-alpha**.
 
+## 0.1.0.106-alpha — 2026-08-02
+
+- **New: import/resync faces from Frigate on the Known people page.** The Frigate
+  face import used to live only inside the setup wizard — after restoring a
+  configuration the wizard is skipped, leaving no way to trigger it. The Known
+  people page now has a "Sync faces from Frigate" button; the import is
+  incremental (only images missing locally are fetched, nothing is deleted).
+
+## 0.1.0.105-alpha — 2026-08-02
+
+- **Fixed: the configuration download was incomplete on environment-configured
+  installs.** "Download configuration" only exported settings changed through the UI;
+  if the Frigate URL or MQTT broker came from environment variables or the compose
+  file, a restore on another machine came up without a Frigate connection. The
+  download now includes the effective connection settings (Frigate URL, trigger
+  mode, MQTT); values set through the UI always win. (0.1.0.104 was a local
+  intermediate and ships together with this release.)
+
 ## 0.1.0.103-alpha — 2026-08-02
 
 - **Fixed: crop images with `~` in the filename showed as broken (404).** Events with

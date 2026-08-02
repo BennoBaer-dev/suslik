@@ -276,3 +276,22 @@ def unbelegte_werte():
             if beleg == "unbelegt":
                 aus.append((f"VARIANTEN.{v}.{feld}", feld))
     return aus
+
+
+# --- Config-Export-Vertrag (User-Fund 02.08.: NB-Restore ohne Frigate) --------------
+# Der Config-Download (/config_sichern) exportierte NUR den UI-Store. Auf ENV-/yaml-
+# konfigurierten Installationen (Prod!) stehen die Verbindungs-Werte aber nie im Store —
+# das Backup war fuer sie unvollstaendig, ein Restore anderswo liess Frigate/MQTT leer.
+# VERTRAG: Schluessel + Nicht-Export-Defaults hier zentral; Export ergaenzt den Store um
+# die WIRKSAMEN Werte, wenn sie fehlen und vom Default abweichen. Store-Werte gewinnen.
+EXPORT_VERBINDUNG = {"frigate_url": "", "trigger": "poll", "mqtt": {}}
+
+
+def export_ergaenzen(store, cfg):
+    """Export-Inhalt des Config-Downloads: Store + wirksame Verbindungs-Werte (reine Logik)."""
+    d = dict(store)
+    for key, default in EXPORT_VERBINDUNG.items():
+        wert = cfg.get(key)
+        if key not in d and wert not in (None, "", {}) and wert != default:
+            d[key] = wert
+    return d
