@@ -4,8 +4,6 @@ A small companion service for [Frigate](https://frigate.video/) that treats a pe
 across your property as **one scenario across multiple cameras** — and gives Frigate's face
 recognition an independent second opinion.
 
-> **Alpha (0.1.0.109).** Interfaces and data formats can still change between versions.
-
 The learning module works end to end: a learning run walks through the person events
 Frigate already recorded, harvests the usable faces, groups them into recurring people,
 and lets you name a whole cluster at once instead of labeling single images. Named
