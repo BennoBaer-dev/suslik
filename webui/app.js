@@ -682,3 +682,44 @@ function areaEntfernen(btn) {
   if (!confirm('Remove area "' + n + '"? Its cameras return to Default — nothing else changes.')) return;
   areasSpeichern(btn, _areasSammeln().filter(function (q) { return q[0] !== n; }));
 }
+
+// PE1 B4 (stufe2.md): Person-Learn-Lauf starten (Wizard /personlauf).
+async function personlaufStart(n, btn) {
+  var sel = document.getElementById('pl-person');
+  var person = sel ? sel.value : '';
+  btn.disabled = true;
+  var st = document.getElementById('pl-status');
+  try {
+    var r = await fetch('/personlauf_start', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ events: n, person: person })
+    });
+    var d = await r.json();
+    if (r.ok && d.ok) { location.href = '/personlauf'; return; }
+    if (st) st.textContent = 'error: ' + (d.msg || r.status);
+  } catch (e) {
+    if (st) st.textContent = 'error: ' + e;
+  }
+  btn.disabled = false;
+}
+
+// PE1: laufenden Person-Learn-Lauf abbrechen (Geerntetes bleibt).
+async function personlaufAbbruch(btn) {
+  if (!confirm('Abort this person-learn run? Harvested images are kept.')) return;
+  btn.disabled = true;
+  try {
+    var r = await fetch('/personlauf_abbruch', { method: 'POST' });
+    if (r.ok) { location.reload(); return; }
+  } catch (e) { /* Reload zeigt den echten Zustand */ }
+  btn.disabled = false;
+}
+
+// PE2b: kompletten Lauf verwerfen (schlechtes Ergebnis), Wizard wird frei.
+async function personlaufVerwerfen(lid) {
+  if (!confirm('Discard run ' + lid + ' completely? All its images are deleted; a new run can re-harvest any time.')) return;
+  var r = await fetch('/personlauf/loeschen', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ lauf_id: lid })
+  });
+  if (r.ok) location.reload();
+}

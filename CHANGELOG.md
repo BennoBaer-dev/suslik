@@ -6,8 +6,53 @@ ship together with **0.1.0.28**. Likewise 0.1.0.29–0.1.0.32 ship together with
 and the performance-wave steps 0.1.0.34–0.1.0.44 ship together with **0.1.0.47**.
 The Today-redesign steps 0.1.0.48–0.1.0.53 ship together with **0.1.0.54**, and the
 local steps 0.1.0.55–0.1.0.62 ship together with **0.1.0.63**. The learning-module and
-areas construction steps 0.1.0.64–0.1.0.91 ship together with **0.1.0.92-alpha**, and the
-QA/diagnostics steps 0.1.0.93–0.1.0.95 ship together with **0.1.0.96-alpha**.
+areas construction steps 0.1.0.64–0.1.0.91 ship together with **0.1.0.92-alpha**, the
+QA/diagnostics steps 0.1.0.93–0.1.0.95 ship together with **0.1.0.96-alpha**, and the
+person-recognition construction step 0.1.0.112 ships together with **0.1.0.113**.
+
+## 0.1.0.113 — 2026-08-04
+
+- **Person recognition (preview) — a second recognition path that works without
+  a visible face.** It learns residents by their whole appearance (build, hair,
+  posture) from your own recordings: a guided learning run under *Learn → Person
+  learn* harvests full-body images (tied to a person only when a face-confirmed
+  walk-through proves it), you review every picture, and a small local model
+  (DINOv2 embeddings + classifier) retrains in seconds. Manage the material under
+  *Person → Body images*, arm/disarm the live path under *Person → Model status* —
+  it stays off until at least one person is learned **and** reviewed. When armed,
+  it judges live events independently of face recognition (own threshold, fire
+  rule and cool-down), alerts via Pushover (best body crop of the walk-through as
+  image), Telegram (event clip as video, same settings as face alerts) and MQTT
+  (`verifyd/person_erkennung`), and every alert is clearly marked as *person
+  recognition, not face*. The decision threshold is not yet calibrated against a
+  large stranger set — treat it as a preview. Full guide:
+  [docs/person-recognition.md](docs/person-recognition.md). Harvesting currently
+  runs on the CPU (roughly 15–30 s per event); GPU/NPU support for this path is
+  planned.
+- **Telegram video height is configurable** (`telegram_hoehe`: 720 or 480) and
+  applies to face and person alerts alike.
+- **Saving a video from the player now yields a proper `.mp4` file** (issue #15:
+  the browser picked a wrong extension from the event id in the URL).
+- **NOTICE now covers the new model files** (DINOv2 ViT-S/14, Apache-2.0, with
+  conversion notice; RTMPose, Apache-2.0, with provenance) including the full
+  Apache-2.0 license text in the images.
+
+## 0.1.0.111 — 2026-08-03
+
+- **Frigate API errors now carry detail.** When Frigate answers with an HTTP
+  error, the log used to show only `HTTP Error 500: Internal Server Error` —
+  useless for remote diagnosis (issue #14: 67 identical lines, no path, no
+  cause). The error now includes which request failed and what Frigate wrote
+  into the response body, while existing retry classification (404/400) keeps
+  working unchanged.
+
+## 0.1.0.110 — 2026-08-03
+
+- **Loud warning when `/data` is not a mounted volume.** A tester lost people,
+  events and settings by running the container without a `volumes:` entry: the
+  data lived inside the container and vanished when `docker compose up` replaced
+  it for an update (issue #13). The startup self-check now prints a warning and
+  the UI shows a persistent banner until a real volume or bind mount is in place.
 
 ## 0.1.0.109 — 2026-08-03
 

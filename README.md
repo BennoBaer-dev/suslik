@@ -11,7 +11,7 @@ clusters go straight into recognition. Camera areas are the part still being bui
 
 The `latest-*` image tags follow the newest release, so `docker compose pull` gets you
 what this README describes. To pin a version instead, use its tag explicitly:
-`ghcr.io/bennobaer-dev/suslik:0.1.0.109-gpu`.
+`ghcr.io/bennobaer-dev/suslik:0.1.0.113-gpu`.
 
 ## Why this exists
 
@@ -36,7 +36,7 @@ declines rather than mislabels.
 The Today page answers "who was on the property, when, and where did they go" — one card per
 person, one block per pass, unknowns kept visible instead of buried:
 
-![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.0.109)
+![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.0.113)
 
 *(Screenshot from a live install of v0.1.0.54; names and faces anonymized.)*
 
@@ -54,6 +54,11 @@ person, one block per pass, unknowns kept visible instead of buried:
 - **Web UI** with a guided setup wizard, scenario view, reference/unknown management, and a
   startup self-check you can read from `docker logs`.
 - **Optional write-back** to Frigate (`sub_label` correction) — off by default (read-only).
+- **Person recognition (preview)** — a second, independent path that learns residents by their
+  whole appearance (build, hair, posture) and recognizes them **without a visible face**. You
+  harvest images from your own recordings, approve every picture by hand, and arm it yourself;
+  alerts are clearly marked as person recognition. See **[Person recognition](docs/person-recognition.md)**
+  for the step-by-step guide.
 
 ## What suslik is not: a real-time trigger
 
@@ -116,6 +121,8 @@ fixed version instead: [installation.md](docs/installation.md#updating).
 - **[Usage](docs/usage.md)** — a tour of the web UI, enrollment, and the scenario view.
 - **[Learning people](docs/learning.md)** — the guided learning run over your own
   recordings: harvest, grouping into recurring people, naming a cluster once, adoption.
+- **[Person recognition (preview)](docs/person-recognition.md)** — recognizing residents
+  without a visible face: learn, review, arm, and what the alerts look like.
 - **[Architecture](docs/architecture.md)** — how the verify layer works and why there are
   separate hardware images.
 - **[Supported hardware](docs/supported-hardware.md)** — the full matrix (integrated GPUs are

@@ -266,7 +266,7 @@ def load_config(path):
                          ("szene_karenz_s", 90),
                          ("anwesenheit_push", True), ("anwesenheit_cooldown", 1800),
                          ("telegram", {}), ("telegram_modus", "aus"), ("telegram_inhalt", "video"),
-                         ("telegram_cooldown", 600),
+                         ("telegram_hoehe", 720), ("telegram_cooldown", 600),
                          ("frigate_sync", False), ("unscharf_max", 350), ("min_kante", 70),
                          ("modell", "buffalo"),
                          # #42 Teil B: Fehldetektions-Signatur (kalibriert 24./25.07., s.
@@ -371,18 +371,47 @@ def frigate_read_only(cfg):
     return FRIGATE_READONLY_FORCED or bool(cfg.get("frigate_read_only", True))
 
 
+class FrigateHttpFehler(urllib.error.HTTPError):
+    """HTTPError MIT Antwort-Auszug und Pfad. Anlass Issue #14 (Tokn59): das Log
+    zeigte 67x nur 'HTTP Error 500: Internal Server Error' — Frigate schreibt die
+    eigentliche Fehlermeldung aber oft in den Antwort-Body, und ohne den Pfad
+    weiss man nicht mal, WELCHE Abfrage scheitert. Bewusst SUBKLASSE von
+    HTTPError: bestehende except-Pfade und .code-Auswertungen (Retry-Klassen
+    404/400, Port-Diagnose) greifen unveraendert."""
+
+    def __init__(self, e, pfad):
+        detail = ""
+        try:
+            detail = e.read(300).decode("utf-8", "replace").strip()
+        except Exception:
+            pass
+        super().__init__(e.url, e.code, e.msg, e.hdrs, None)
+        self.detail = detail
+        self.pfad = pfad
+
+    def __str__(self):
+        d = f" — Frigate sagt: {self.detail[:200]}" if self.detail else ""
+        return f"HTTP {self.code} {self.msg} bei {self.pfad}{d}"
+
+
 def api_post(cfg, path, payload):
     if frigate_read_only(cfg):                    # Sperre greift, solange read-only an ist (Default sicher)
         raise RuntimeError(f"Frigate read-only mode active — POST {path} blocked")
     req = urllib.request.Request(cfg["frigate_url"] + path, data=json.dumps(payload).encode(),
                                  headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=15) as r:
-        return json.load(r)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        raise FrigateHttpFehler(e, path) from None
 
 
 def api(cfg, path):
-    with urllib.request.urlopen(cfg["frigate_url"] + path, timeout=20) as r:
-        return json.load(r)
+    try:
+        with urllib.request.urlopen(cfg["frigate_url"] + path, timeout=20) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        raise FrigateHttpFehler(e, path) from None
 
 
 _frigate_cams_cache = {"ts": 0.0, "data": None, "err": None, "url": None}
@@ -1455,7 +1484,13 @@ class Service:
         Encoder aus video_encoder() (NVENC/VAAPI geprobt, sonst CPU), Fallback bleibt CPU;
         Quelle ist der bereits geladene Original-Clip im Cache."""
         base = os.path.join(self.cfg["data_dir"], "clips", eid.replace("/", "_"))
-        src, dst = base + ".mp4", base + "_tg.mp4"
+        # Aufloesung waehlbar 720/480 (User 04.08.), gilt fuer Face UND
+        # Person (gemeinsamer Weg); Cache-Name traegt die Hoehe, sonst
+        # wuerde nach einem Umstellen die alte Datei ausgeliefert.
+        hoehe = int(self.cfg.get("telegram_hoehe", 720))
+        if hoehe not in (720, 480):
+            hoehe = 720
+        src, dst = base + ".mp4", base + f"_tg{hoehe}.mp4"
         if os.path.exists(dst):
             return dst
         if not os.path.exists(src):
@@ -1474,8 +1509,8 @@ class Service:
         # N8a (RTX 2060 an 2 eigenen Clips + Feld-Sweep aus Issue #4): am FULL-HW-Pfad ist cq 34
         # nicht mehr size-matched (scale_cuda-Shift, s. transcode_kommandos-Docstring); Paritaets-
         # cq content-abhaengig 34-37 -> 36 als konservativer Mittelweg NUR fuer nvenc-voll.
-        hw, cpu = transcode_kommandos(src, part, 720, 34, 28, dauer_s=60, q_vaapi=28,
-                                      q_hw_voll=36)
+        hw, cpu = transcode_kommandos(src, part, hoehe, 34, 28, dauer_s=60,
+                                      q_vaapi=28, q_hw_voll=36)
         try:
             r = self._transcode_lauf(hw, 300) if hw else None
             if r is None or r.returncode != 0 or not os.path.exists(part):
@@ -2150,6 +2185,7 @@ class Service:
         "szene_karenz_s": (int, 30, 900, "scene grace: unknown alert only if nobody was confirmed in the window"),
         "telegram_modus": (list, ["aus", "ha", "direkt", "beide"], None, "Telegram sending: aus (off) / ha (HA script) / direkt (direct) / beide (both)"),
         "telegram_inhalt": (list, ["video", "bild"], None, "Telegram attachment: video (short clip, image if unavailable) / bild (image only, no transcoding)"),
+        "telegram_hoehe": (list, [720, 480], None, "Telegram video height: 720 (default) / 480 (smaller files, faster on weak hardware) — applies to face AND person alerts"),
         "telegram_cooldown": (int, 30, 3600, "throttle for the unknown Telegram (sec.)"),
         "frigate_sync": (bool, None, None, "mirror references to Frigate automatically (parallel operation)"),
         "unscharf_max": (int, 100, 2000, "sharpness threshold for the blur list (higher = more images flagged)"),
@@ -3410,6 +3446,10 @@ class Service:
             entry["sublabel"] = self._maybe_sublabel(entry, nachhol=nachhol)
             if not nachhol:
                 self.publish_erkennung(entry)     # kein Live-Echo fuer alte Ereignisse
+                # PE4 (stufe2.md): Koerper-Strang — eigener, losgeloester
+                # Urteilsweg, nur wenn der User ihn scharf geschaltet hat;
+                # laeuft im Daemon-Thread, blockiert den Gesichts-Pfad nie.
+                self._person_live(entry.get("eid"))
             if entry["kategorie"] == "fremd_verdacht":
                 # Auch OHNE nachhol-Flag kann ein Event alt sein (verspaetetes MQTT, Poll nach
                 # kurzer Netzstoerung). Die Karenz haette dann karenz Sekunden spaeter einen
@@ -3737,6 +3777,65 @@ class Service:
                          f"{n} oldest clips deleted, now {gesamt / 1024**3:.1f} GB")
         except Exception as e:
             self.log(f"cache cleanup error: {e}")
+
+    def _person_live(self, eid):
+        """PE4: Koerper-Urteil im Hintergrund (core/personlive) — Meldung
+        traegt die Kennzeichnung 'person recognition, not face'
+        (User-Anforderung 04.08.). Kommt nur zum Zug, wenn der User den
+        Strang auf /person/modell scharf geschaltet hat."""
+        if not eid:
+            return
+        try:
+            from core import personmodell as pm
+            st = pm.status_lesen(self.cfg["data_dir"])
+        except Exception:
+            return
+        if not (st and st.get("scharf")):
+            return
+        import threading
+
+        def lauf():
+            try:
+                from core import personlive as plv
+                u = plv.urteilen(self.cfg["data_dir"],
+                                 os.environ.get("FRIGATE_URL", ""), eid)
+                if u:
+                    # MQTT fuer HA-Automationen (User 04.08.): JEDER Treffer
+                    # ueber der Schwelle auf ein eigenes Topic — das Feld
+                    # feuer sagt, ob die Feuer-Regel erfuellt war.
+                    self._mqtt_pub("verifyd/person_erkennung", json.dumps({
+                        "eid": eid, "person": u["person"],
+                        "score": u["score"], "stuetzen": u["stuetzen"],
+                        "feuer": bool(u.get("feuer")),
+                        "quelle": "person_recognition",
+                        "ts": round(time.time(), 1)}, ensure_ascii=False))
+                if u and u.get("feuer"):
+                    text = (f"{u['person']} recognized by body "
+                            f"(person recognition, not face) — score "
+                            f"{u['score']}, {u['stuetzen']} supporting "
+                            "events")
+                    push(self.cfg, "suslik person recognition", text,
+                         attachment=u.get("bild"))
+                    # Telegram EXAKT wie die Gesichtsseite (User 04.08.:
+                    # allgemeine Einstellungen gelten fuer BEIDE Straenge):
+                    # _telegram_clip transkodiert mit der Guete-Einstellung,
+                    # telegram_inhalt bild/video und telegram_modus greifen.
+                    if self.cfg.get("telegram_modus", "aus") in ("direkt",
+                                                                 "beide"):
+                        will_video = self.cfg.get("telegram_inhalt",
+                                                  "video") != "bild"
+                        vid = self._telegram_clip(eid) if will_video else None
+                        cap = text + ("\n(video unavailable — sending image)"
+                                      if will_video and not vid else "")
+                        telegram_video(self.cfg, vid, cap,
+                                       crop=u.get("bild"))
+                    print(f"[personlive] MELDUNG {u}", flush=True)
+                elif u:
+                    print(f"[personlive] Treffer ohne Feuer {u}", flush=True)
+            except Exception as e:
+                print(f"[personlive] Fehler: {e}", flush=True)
+        threading.Thread(target=lauf, daemon=True,
+                         name="personlive").start()
 
     def _maybe_alert(self, entry, event_dir):
         # matcht v2-Kategorie ODER v1-Vergleichskategorie (Parallelphase: "widerspruch" lebt in v1)
@@ -4149,11 +4248,19 @@ def make_handler(svc):
                 # kommt seither von der Setz-Stelle mit (event fetch/poll/list).
                 return (f"Frigate unreachable (last error {t}): {f[1][:110]} — "
                         "the UI keeps serving local data.")
+            # Issue #13: Daten-ohne-Mount geht vor Varianten-Hinweis — Datenverlust-
+            # Risiko schlaegt Performance-Tipp (beide einmal je Start berechnet).
+            d = getattr(svc, "daten_hinweis", None)
+            if d:
+                return d
             # Task #13: Varianten-Hinweis (einmal je Start berechnet; Frigate-Fehler geht vor)
             return getattr(svc, "varianten_hinweis", None)
 
-        def _send_file_ranged(self, p, ctype):
-            """Datei mit HTTP-Range ausliefern (Browser-Video braucht das zum Spulen)."""
+        def _send_file_ranged(self, p, ctype, dl_name=None):
+            """Datei mit HTTP-Range ausliefern (Browser-Video braucht das zum Spulen).
+            dl_name: Download-Dateiname fuer 'Video speichern' — ohne ihn nimmt der Browser
+            den URL-Namen, und da Event-IDs einen Punkt tragen, haelt er den Rest hinter dem
+            Punkt fuer die Endung (Issue #15: Export ohne .mp4)."""
             size = os.path.getsize(p)
             rng = self.headers.get("Range")
             m = re.match(r"bytes=(\d*)-(\d*)$", rng or "")
@@ -4173,6 +4280,8 @@ def make_handler(svc):
                     return
             self.send_response(206 if partial else 200)
             self.send_header("Content-Type", ctype)
+            if dl_name:
+                self.send_header("Content-Disposition", f'inline; filename="{dl_name}"')
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Content-Length", str(end - start + 1))
             if partial:
@@ -4454,6 +4563,227 @@ def make_handler(svc):
                                       "application/json")
                 except Exception as e:
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
+            if pfad == "/personlauf/urteil":
+                # PE2: Klick-Urteil (letzte Zeile je Datei gilt), fsync-los
+                # bewusst — flush reicht, Muster Klick-Server.
+                from core import personernte as _pe
+                try:
+                    _n1 = int(self.headers.get("Content-Length", 0))
+                    _d1 = json.loads(self.rfile.read(min(_n1, 4096)) or b"{}")
+                    _lid = str(_d1.get("lauf_id") or "")
+                    _dat = str(_d1.get("datei") or "")
+                    _urt = _d1.get("urteil")
+                except (ValueError, TypeError):
+                    _lid = _dat = ""
+                    _urt = None
+                if (_urt not in ("ok", "falsch") or not _lid or not _dat
+                        or "/" in _lid or "/" in _dat or ".." in _lid
+                        or ".." in _dat):
+                    return self._send(400, json.dumps({"ok": False}),
+                                      "application/json")
+                _up = os.path.join(_pe.lauf_dir(cfg["data_dir"], _lid),
+                                   "urteile.jsonl")
+                if not os.path.isdir(os.path.dirname(_up)):
+                    return self._send(404, json.dumps({"ok": False}),
+                                      "application/json")
+                with open(_up, "a") as _f:
+                    _f.write(json.dumps({"datei": _dat, "urteil": _urt})
+                             + "\n")
+                    _f.flush()
+                return self._send(200, json.dumps({"ok": True}),
+                                  "application/json")
+            if pfad == "/person/schalter":
+                # PE4 Aktivierungs-Gate: Arm/Disarm nur mit Modell.
+                from core import personmodell as _pm
+                try:
+                    _n5 = int(self.headers.get("Content-Length", 0))
+                    _d5 = json.loads(self.rfile.read(min(_n5, 1024)) or b"{}")
+                    _an = bool(_d5.get("scharf"))
+                except (ValueError, TypeError):
+                    return self._send(400, json.dumps({"ok": False}),
+                                      "application/json")
+                _ok5, _erg5 = _pm.scharf_setzen(cfg["data_dir"], _an)
+                if not _ok5:
+                    return self._send(409, json.dumps(
+                        {"ok": False, "msg": str(_erg5)}),
+                        "application/json")
+                return self._send(200, json.dumps({"ok": True,
+                                                   "scharf": _an}),
+                                  "application/json")
+            if pfad == "/personlauf/loeschen":
+                # PE2b: Einzelbild- oder Lauf-Loeschung (Crop weg, Manifest-
+                # Grabstein bleibt; neuer Lauf kann jederzeit neu ernten).
+                from core import personernte as _pe
+                try:
+                    _n2 = int(self.headers.get("Content-Length", 0))
+                    _d2 = json.loads(self.rfile.read(min(_n2, 4096)) or b"{}")
+                    _lid = str(_d2.get("lauf_id") or "")
+                    _dat = _d2.get("datei")
+                except (ValueError, TypeError):
+                    _lid, _dat = "", None
+                if (not _lid or "/" in _lid or ".." in _lid
+                        or (_dat is not None
+                            and ("/" in str(_dat) or ".." in str(_dat)))):
+                    return self._send(400, json.dumps({"ok": False}),
+                                      "application/json")
+                _n3 = _pe.loeschen(cfg["data_dir"], _lid,
+                                   str(_dat) if _dat else None)
+                # Ganzer-Lauf-Verwurf des Laufs, der gerade auf Review
+                # wartet (User 04.08.: schlechtes Ergebnis muss komplett
+                # verwerfbar sein) -> Wizard wieder freigeben.
+                if _dat is None:
+                    from core import personlauf as _pl
+                    _zv = _pl.zustand_lesen(cfg["data_dir"])
+                    if _zv and str(_zv.get("lauf_id")) == _lid \
+                            and _zv.get("phase") == "abnahme":
+                        _zv.update(phase="fertig", abgenommen=0,
+                                   verworfen=_n3)
+                        _pl.zustand_schreiben(cfg["data_dir"], _zv)
+                # PE3: Loeschung wirkt sofort -> Re-Training (Sekunden)
+                import threading as _th
+
+                def _pm_train2():
+                    try:
+                        from core import personmodell as _pm
+                        _pm.trainieren(cfg["data_dir"])
+                    except Exception as e:
+                        print(f"[personmodell] Training fehlgeschlagen: {e}",
+                              flush=True)
+                _th.Thread(target=_pm_train2, daemon=True,
+                           name="personmodell").start()
+                return self._send(200, json.dumps({"ok": True,
+                                                   "geloescht": _n3}),
+                                  "application/json")
+            if pfad == "/personlauf/abnahme_fertig":
+                # PE2-Abschluss (User: "wo bestaetige ich das?"): Urteile in
+                # den Bestand stempeln, Lauf -> fertig, Formular wieder frei.
+                from core import personlauf as _pl
+                from core import personernte as _pe
+                _zf = _pl.zustand_lesen(cfg["data_dir"])
+                if not _zf or _zf.get("phase") != "abnahme":
+                    return self._send(409, json.dumps(
+                        {"ok": False, "msg": "no run awaiting review"}),
+                        "application/json")
+                _lid = str(_zf.get("lauf_id") or "")
+                _falsch = set()
+                _up = os.path.join(_pe.lauf_dir(cfg["data_dir"], _lid),
+                                   "urteile.jsonl")
+                if os.path.exists(_up):
+                    for l in open(_up):
+                        if l.strip():
+                            _u = json.loads(l)
+                            (_falsch.add if _u["urteil"] == "falsch"
+                             else _falsch.discard)(_u["datei"])
+                _nok, _nfalsch = _pe.abnahme_anwenden(cfg["data_dir"], _lid,
+                                                      _falsch)
+                _zf.update(phase="fertig", abgenommen=_nok,
+                           verworfen=_nfalsch)
+                _pl.zustand_schreiben(cfg["data_dir"], _zf)
+                # PE3: nach jedem Review-Abschluss automatisch trainieren
+                import threading as _th
+
+                def _pm_train():
+                    try:
+                        from core import personmodell as _pm
+                        _pm.trainieren(cfg["data_dir"])
+                    except Exception as e:
+                        print(f"[personmodell] Training fehlgeschlagen: {e}",
+                              flush=True)
+                _th.Thread(target=_pm_train, daemon=True,
+                           name="personmodell").start()
+                return self._send(200, json.dumps(
+                    {"ok": True, "abgenommen": _nok, "verworfen": _nfalsch}),
+                    "application/json")
+            if pfad == "/personlauf_abbruch":
+                # PE1 (User-Wunsch 04.08.): laufenden Person-Learn-Lauf
+                # stoppen — Geerntetes bleibt, fahren() liest die Phase
+                # vor jedem Event.
+                from core import personlauf as _pl
+                _za = _pl.zustand_lesen(cfg["data_dir"])
+                if not _za or _za.get("phase") not in ("vorbereitung",
+                                                       "ernte"):
+                    return self._send(409, json.dumps(
+                        {"ok": False, "msg": "no active run"}),
+                        "application/json")
+                _za["phase"] = "abbruch"
+                _pl.zustand_schreiben(cfg["data_dir"], _za)
+                return self._send(200, json.dumps({"ok": True}),
+                                  "application/json")
+            if pfad == "/personlauf_start":
+                # PE1 B4 (stufe2.md): Person-Learn-Lauf starten — Bindung
+                # EINMAL beim Anlegen (core/personlauf), Ernte inline im
+                # Hintergrund-Thread; EIN Lauf zur Zeit (Zustands-Phase).
+                # Worker-Job-Umbau folgt mit dem Einback-Port (PE1 B5).
+                from core import personlauf as _pl
+                try:
+                    _n0 = int(self.headers.get("Content-Length", 0))
+                    _d = json.loads(self.rfile.read(min(_n0, 4096)) or b"{}")
+                    _ev = int(_d.get("events") or 0)
+                    _person = str(_d.get("person") or "").strip()
+                except (ValueError, TypeError):
+                    _ev, _person = 0, ""
+                if _ev <= 0 or _ev > svc.LERNLAUF_EVENTS_MAX:
+                    return self._send(400, json.dumps(
+                        {"ok": False,
+                         "msg": f"events must be 1..{svc.LERNLAUF_EVENTS_MAX}"}),
+                        "application/json")
+                _z0 = _pl.zustand_lesen(cfg["data_dir"])
+                # aktiv = Phase sagt aktiv UND der Thread lebt wirklich —
+                # nach einem Dienst-Neustart ist die Disk-Phase sonst eine
+                # Geisterbremse (Neustart-Resume laeuft ueber die eids).
+                _lebt = bool(getattr(svc, "_personlauf_thread", None)
+                             and svc._personlauf_thread.is_alive())
+                if _z0 and _z0.get("phase") in ("vorbereitung", "ernte") \
+                        and _lebt:
+                    return self._send(409, json.dumps(
+                        {"ok": False,
+                         "msg": "a person-learn run is already active"}),
+                        "application/json")
+                import threading as _th
+                # Sofort-Feedback (User-Fund 04.08.: Bindung dauert 1-2 min,
+                # die Seite zeigte solange den ALTEN Zustand): Vorbereitungs-
+                # Phase schreiben, BEVOR der Thread startet.
+                _pl.zustand_schreiben(cfg["data_dir"], {
+                    "schema": 1, "phase": "vorbereitung", "person": _person,
+                    "wunsch_n": _ev, "ts": time.time()})
+
+                # Echtes Resume (Ehrlichkeits-Fix 04.08.): gleicher Auftrag
+                # nach Unterbrechung setzt DENSELBEN Lauf fort (eids-Skip
+                # greift nur innerhalb eines Laufs), sonst neuer Lauf.
+                _wieder = bool(_z0 and not _lebt and _z0.get("events_liste")
+                               and _z0.get("phase") in ("vorbereitung",
+                                                        "ernte")
+                               and _z0.get("person") == _person
+                               and _z0.get("wunsch_n") == _ev)
+
+                def _pl_lauf():
+                    try:
+                        if _wieder:
+                            _z = dict(_z0, phase="ernte")
+                            _pl.zustand_schreiben(cfg["data_dir"], _z)
+                        else:
+                            _z = _pl.anlegen(cfg["data_dir"], _ev, _person)
+
+                        def _fs(k, von, okz, bilder):
+                            _z["fortschritt"] = {"events": k, "von": von,
+                                                 "bilder": bilder,
+                                                 "ts": time.time()}
+                            _pl.zustand_schreiben(cfg["data_dir"], _z)
+                        _pl.fahren(cfg["data_dir"], _z, _fs)
+                    except Exception as e:
+                        try:
+                            _z2 = _pl.zustand_lesen(cfg["data_dir"]) \
+                                or {"schema": 1}
+                            _z2["phase"] = "fehler"
+                            _z2["fehler"] = f"{type(e).__name__}: {str(e)[:180]}"
+                            _pl.zustand_schreiben(cfg["data_dir"], _z2)
+                        except Exception:
+                            pass
+                svc._personlauf_thread = _th.Thread(
+                    target=_pl_lauf, daemon=True, name="personlauf")
+                svc._personlauf_thread.start()
+                return self._send(200, json.dumps({"ok": True}),
+                                  "application/json")
             if pfad == "/lernlauf_start":
                 # E2: Lauf anlegen — atomar via core.lernlauf, UNTER dem Starter-Lock
                 # (zwei gleichzeitige POSTs waren ein check-then-act-Rennen, F2.2).
@@ -5657,6 +5987,106 @@ def make_handler(svc):
                     if p.startswith(base + os.sep) and os.path.isfile(p):
                         return self._send(200, open(p, "rb").read(), "image/jpeg")
                 return self._send(404, "not found", "text/plain")
+            if path.startswith("/personlauf/bild/"):
+                # PE2: Crop-Auslieferung mit Containment (Muster /lernlauf/crop)
+                _rel = urllib.parse.unquote(path[len("/personlauf/bild/"):])
+                _lid, _, _datei = _rel.partition("/")
+                _wurz = os.path.normpath(os.path.join(cfg["data_dir"],
+                                                      "personlern"))
+                _voll = os.path.normpath(os.path.join(_wurz, _lid, "crops",
+                                                      _datei))
+                if _voll.startswith(_wurz + os.sep) and os.path.isfile(_voll):
+                    return self._send(200, open(_voll, "rb").read(),
+                                      "image/jpeg")
+                return self._send(404, b"gone")
+            if path == "/person/modell":
+                import webui
+                # PE3-Status als eigener Reiter im Person-Bereich (User).
+                from core import personmodell as _pm
+                from routes import personwizard as _r_pw
+                inhalt = _r_pw.modell_seite(_pm.status_lesen(cfg["data_dir"]))
+                return self._send(200, webui.layout(
+                    "Person", "/person/modell", inhalt, self._banner()))
+            if path in ("/person", "/personlauf/bestand"):
+                import webui
+                # PE2b (User 04.08.: Anchors-Pendant fuer Personen), seit
+                # abends EIGENER Hauptbereich "Person" neben People (People
+                # = Gesichter, Person = Koerper-Bilder). Alte Learn-URL
+                # bleibt als Alias.
+                from core import personernte as _pe
+                from core import personmodell as _pm
+                from routes import personwizard as _r_pw
+                inhalt = _r_pw.bestand_seite(
+                    _pe.laeufe_lesen(cfg["data_dir"]),
+                    modell=_pm.status_lesen(cfg["data_dir"]))
+                return self._send(200, webui.layout(
+                    "Person", "/person", inhalt, self._banner()))
+            if path == "/personlauf/abnahme":
+                import webui
+                # PE2 (User 04.08.: "haette ich jetzt nicht die Bilder
+                # pruefen sollen?"): Klick-Abnahme des letzten Laufs.
+                from core import personlauf as _pl
+                from core import personernte as _pe
+                from routes import personwizard as _r_pw
+                _z = _pl.zustand_lesen(cfg["data_dir"]) or {}
+                _lid = str(_z.get("lauf_id") or "")
+                _zeilen, _markiert = [], set()
+                if _lid:
+                    _mp = _pe.manifest_pfad(cfg["data_dir"], _lid)
+                    if os.path.exists(_mp):
+                        _zeilen = [json.loads(l) for l in open(_mp)
+                                   if l.strip()]
+                    _up = os.path.join(_pe.lauf_dir(cfg["data_dir"], _lid),
+                                       "urteile.jsonl")
+                    if os.path.exists(_up):
+                        for l in open(_up):
+                            if l.strip():
+                                _u = json.loads(l)
+                                (_markiert.add if _u["urteil"] == "falsch"
+                                 else _markiert.discard)(_u["datei"])
+                inhalt = _r_pw.abnahme_seite(_z, _zeilen, _markiert)
+                return self._send(200, webui.layout("Learn", "/personlauf",
+                                                    inhalt, self._banner()))
+            if path == "/personlauf":
+                import webui
+                # PE1 Baustein 2 (stufe2.md): Person-Learn-Wizard, Anzeige-
+                # Teil — Lauf/Worker-Job folgt als Baustein 3. Personen-
+                # Quelle = Master-Ordner unter <data_dir>/faces (wie :508).
+                from routes import personwizard as _r_pw
+                _qd = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                try:
+                    _pn = int((_qd.get("events", [""])[0] or "0") or 0)
+                except ValueError:
+                    _pn = 0
+                _pn = max(0, _pn)
+                _pp = (_qd.get("person", [""])[0] or "").strip()
+                _fd = os.path.join(cfg["data_dir"], "faces")
+                try:
+                    _pers = sorted(d for d in os.listdir(_fd)
+                                   if os.path.isdir(os.path.join(_fd, d)))
+                except OSError:
+                    _pers = []
+                if _pp and _pp not in _pers:
+                    _pp = ""
+                from core import personlauf as _pl
+                _z = _pl.zustand_lesen(cfg["data_dir"])
+                # Dienst-Neustart: Disk-Phase 'aktiv' ohne lebenden Thread =
+                # unterbrochen — Formular freigeben, Neustart resumed per eids
+                if _z and _z.get("phase") in ("vorbereitung", "ernte"):
+                    _lebt = bool(getattr(svc, "_personlauf_thread", None)
+                                 and svc._personlauf_thread.is_alive())
+                    if not _lebt:
+                        _z = dict(_z, phase="unterbrochen")
+                from core import personmodell as _pm
+                inhalt = _r_pw.wizard(_pers, _pn or None, _pp,
+                                      bilanz={"n": _pn} if _pn else None,
+                                      lauf=_z,
+                                      modell=_pm.status_lesen(cfg["data_dir"]))
+                _tickt = bool(_z and _z.get("phase") in ("vorbereitung",
+                                                         "ernte"))
+                return self._send(200, webui.layout("Learn", "/personlauf",
+                                                    inhalt, self._banner(),
+                                                    refresh=3 if _tickt else None))
             if path == "/lernlauf":
                 import webui
                 # E1 (S6): Anlern-Wizard + Lauf-Seite (Shadow — plant, lernt nichts).
@@ -6320,7 +6750,7 @@ def make_handler(svc):
                 base = os.path.realpath(os.path.join(cfg["data_dir"], "clips"))
                 p = os.path.realpath(os.path.join(base, m.group(1) + ".mp4"))
                 if p.startswith(base + os.sep) and os.path.isfile(p):
-                    return self._send_file_ranged(p, "video/mp4")
+                    return self._send_file_ranged(p, "video/mp4", dl_name=m.group(1) + ".mp4")
                 return self._send(404, "Clip no longer in cache — retention "
                                   f"{cfg['clip_retention_d']} days", "text/plain; charset=utf-8")
             if path in ("/review", "/fremde"):
@@ -7029,6 +7459,31 @@ def varianten_hinweis(variante, probe):
     return None
 
 
+def daten_mount_hinweis(data_dir):
+    """Issue #13 (Tokn59, 03.08.): sein Compose hatte keinen volumes:-Eintrag, /data
+    lag im Container — das Update ersetzte den Container und alle Daten waren weg.
+    Warnt laut (Startlog UND UI-Banner, User-Vorgabe), wenn der Datenpfad im
+    Container liegt, aber KEIN eigener Mount ist (weder Volume noch Bind) — dann
+    stirbt er mit dem Container. Nur im Container pruefen (venv-Lauf hat
+    naturgemaess keinen Mount); keine Diagnose moeglich = kein falscher Alarm."""
+    if not (os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")):
+        return None
+    ziel = os.path.realpath(data_dir or "")
+    if not ziel or ziel == "/":
+        return None
+    try:
+        with open("/proc/self/mountinfo") as f:
+            punkte = {z.split(" ")[4] for z in f if len(z.split(" ")) > 4}
+    except Exception:
+        return None
+    if any(p != "/" and (ziel == p or ziel.startswith(p + "/")) for p in punkte):
+        return None
+    return (f"Your data is stored INSIDE the container: {ziel} is not a mounted "
+            "volume, so people, events and settings are lost when the container is "
+            "recreated (e.g. on update). Add a volumes entry like "
+            "\"./suslik-data:/data\" to your compose file, then move your data in.")
+
+
 def startup_selfcheck(svc):
     """Lesbarer, nummerierter Startup-Ablauf nach stdout (docker logs -f) + Log-Puffer (/log): je
     Schritt [i/N] WAS getan wird (config/hardware/backend/model/frigate/references) + darunter WAS
@@ -7066,6 +7521,11 @@ def startup_selfcheck(svc):
         erg("ok", f"data_dir={dd} (writable), model={aktuelles_modell()}")
     except Exception as e:
         erg("FAIL", f"data_dir={dd} NOT writable: {e}")
+    # Issue #13: /data ohne Mount = Datenverlust beim naechsten Recreate — laut
+    # sagen, im Log UND als stehender UI-Banner (gleiche Quelle, ein Text).
+    svc.daten_hinweis = daten_mount_hinweis(dd)
+    if svc.daten_hinweis:
+        erg("warn", svc.daten_hinweis)
     # 2) Hardware (gruene Haken: gefunden + nutzbar / Treiber fehlt)
     schritt(2, "hardware", "probing accelerators — found + usable?")
     probe = hardware_probe(((getattr(svc, "cfg", None) or {}).get("placement_info") or {}).get("mess"))
