@@ -3,6 +3,24 @@ Kein Framework, keine CDNs — Server rendert Strings, Statik liegt in diesem Or
 import html
 import os
 
+# Cache-Stempel fuer Statik (User-Fund 04.08.: Browser hielt nach einem
+# Hotfix-Deploy DERSELBEN Version das alte app.js fest — Knoepfe ohne
+# Funktion). Datei-Stand statt Versionsnummer: aendert sich mit jedem Build.
+
+
+def _statik_stempel():
+    st = []
+    for n in ("app.js", "style.css"):
+        p = os.path.join(os.path.dirname(__file__), n)
+        try:
+            st.append(str(int(os.path.getmtime(p))))
+        except OSError:
+            st.append("0")
+    return "-".join(st)
+
+
+_STATIK_STEMPEL = _statik_stempel()
+
 # Zwei Ebenen statt elf gleichrangiger Reiter (User-Entscheid 25.07.). Grundlage ist die
 # bewertete Navigations-Untersuchung: von drei Entwuerfen gewann dieser
 # (7/5/8) und zerschneidet als einziger keine der 21 gemessenen Arbeitssitzungen.
@@ -18,12 +36,19 @@ NAV = [
     ("Activity", [("/heute", "Today"), ("/ereignisse", "Events"), ("/offen", "To label")]),
     ("People",   [("/gesichter", "Known"), ("/unbekannte", "Unknown"),
                   ("/lernen", "Suggestions"), ("/qualitaet", "Quality")]),
+    # Person als EIGENER Hauptbereich neben People (User 04.08. abend):
+    # People zeigt die GESICHTER, Person die KOERPER-Bilder je Person.
+    ("Person",   [("/person", "Body images"),
+                  ("/person/modell", "Model status")]),
     # Areas als EIGENER Hauptbereich zwischen People und Learn (Design-Entscheid):
     # dort liegen Sicht-Einstieg UND Konfiguration (anlegen/loeschen/zuweisen).
     ("Areas",    [("/areas", "Areas")]),
     # .83: Learn als EIGENER Hauptbereich — Kernfunktion, nicht
     # laenger ein Anhaengsel der People-Seite.
-    ("Learn",    [("/lernlauf", "Learning run"), ("/lernlauf/anker", "Anchors")]),
+    # PE1 (stufe2.md): Learn geteilt in Face learn (bisheriger Lernlauf)
+    # und Person learn (Koerper-Strang) — User-Entscheid 04.08.
+    ("Learn",    [("/lernlauf", "Face learn"), ("/lernlauf/anker", "Anchors"),
+                  ("/personlauf", "Person learn")]),
     ("Settings", [("/kameras", "Cameras"), ("/benachrichtigungen", "Notifications"),
                   ("/konfiguration", "Advanced")]),
     ("System",   [("/system", "System")]),
@@ -100,8 +125,9 @@ def layout(titel, aktiv, inhalt, banner=None, refresh=None):
     return ("<!doctype html><meta charset=utf-8>" + r +
             '<meta name="viewport" content="width=device-width, initial-scale=1">'
             f"<title>{html.escape(titel)} — suslik{(' ' + ver) if ver else ''}</title>"
-            '<link rel="stylesheet" href="/static/style.css">' + themejs +
-            '<script src="/static/app.js" defer></script>'
+            f'<link rel="stylesheet" href="/static/style.css?v={_STATIK_STEMPEL}">'
+            + themejs +
+            f'<script src="/static/app.js?v={_STATIK_STEMPEL}" defer></script>'
             # Beide Leisten in EINEN klebenden Block (Fund der Nachpruefung 25.07.): einzeln
             # klebend brauchte die zweite Ebene einen Festwert fuer die Hoehe der ersten, und der
             # wurde falsch, sobald die erste umbrach — s. .kopf in style.css.

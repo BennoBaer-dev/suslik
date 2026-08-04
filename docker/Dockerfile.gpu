@@ -63,6 +63,12 @@ COPY verifyd.py analyze.py anlernen.py face_audit.py abnahme.py auftritte.py sze
 COPY webui/ /app/webui/
 COPY core/ /app/core/
 COPY routes/ /app/routes/
+# PE1 Person-Learn (stufe2.md B5): bereinigte Prototyp-Kette + Modelle;
+# Pfad-Bruecken: verify_data->/data (Deckung), prototyp/daten->Werkstatt im Volume.
+COPY docker/personlern_stage/ /app/prototyp/
+COPY docker/personlern_stage_modelle/ /app/prototyp/modelle/rtmpose/
+COPY modelle/dinov2_vits14_126x252.onnx /app/modelle/
+ENV SUSLIK_DATA_DIR=/data SUSLIK_WERKSTATT=/data/personlern/werkstatt
 COPY VERSION /app/VERSION
 COPY docker/verifyd.container.gpu.yaml /app/verifyd.yaml
 
