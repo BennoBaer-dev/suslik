@@ -95,6 +95,7 @@ Set these on the container (compose `environment:` / `env_file:`, or `docker run
 | `TZ` | container timezone (e.g. `Europe/Berlin`). **Set this** — otherwise timestamps are UTC. |
 | `VERIFY_BACKEND` | force the backend (overrides `backend` in the store if you prefer env config) |
 | `FRIGATE_URL` | pre-fill the Frigate URL in the wizard (optional) |
+| `SUSLIK_HWDEC` | hardware video decode for analysis frames: `auto` (default — uses the Intel iGPU via VAAPI or an NVIDIA GPU via NVDEC when the image ships a validated driver and the device is passed through; 8-bit 4:2:0 material only), `vaapi` / `nvdec` (force one source), `aus` (always software). Decoded pixels are bit-identical either way; if the hardware path fails, the software decoder takes over and the event is flagged. |
 | Secrets | credentials for Pushover / Telegram / MQTT are provided via environment variables (e.g. an `env_file`), never baked into the image. |
 
 The service sets `VERIFY_BACKEND` process-wide, and all sub-processes inherit it — so one setting

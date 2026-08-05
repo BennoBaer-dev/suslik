@@ -25,7 +25,8 @@ def _gt_offen(gtmap, eid):
     return eid not in gtmap
 
 
-def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kameras=None):
+def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kameras=None,
+                        koerper_map=None, koerper_ab=2):
     """rows-Sicht eines Tages -> Szenarien-Liste (neueste zuerst). by_h = last-wins je eid;
     gtmap = Label-Map eid->letztes Label (F2, .54): Personen-Label = beurteilt/raus,
     'Fremd'/'unklar' (Speicherwerte!) = bleibt sichtbar unbekannt. Ein SET wird akzeptiert
@@ -136,6 +137,36 @@ def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kamera
                 cl["unbek_eid"] = cl["unbek_eid"] or x.get("eid")
             else:
                 noface += 1
+        if not pers and koerper_map:
+            # ZUSCHREIBUNG via Koerper-Strang (User 05.08., Fusion Schritt 1):
+            # kein Gesicht im ganzen Durchgang, aber der Personen-Strang kennt
+            # die Person ueber mehrere Events (>= koerper_ab Stuetzen, Pendant
+            # zur Feuer-Regel) -> der Pass GEHOERT ihr: Karte zaehlt ihn, kein
+            # "no known person", kein Unknown-Besucher-Kandidat. quelle=
+            # "koerper" haelt die Urteilsquelle fuer die Anzeige unterscheidbar;
+            # Gesichts-Urteile je Event bleiben unangetastet.
+            khits = {}
+            for x in evs_g:
+                t3 = koerper_map.get(x.get("eid"))
+                if t3 and t3.get("person"):
+                    khits.setdefault(t3["person"], []).append((x, t3))
+            for p, hits in khits.items():
+                if len(hits) < koerper_ab:
+                    continue
+                _xt = lambda x: x.get("start") or x.get("ts") or 0
+                beste_x, beste_t = max(hits, key=lambda ht: ht[1].get("score") or 0)
+                pers[p] = {"count": len(hits),
+                           "best": beste_t.get("score") or 0,
+                           "eid": beste_x.get("eid"),
+                           "erst_t": min(_xt(x) for x, _ in hits),
+                           "letzt_t": max(_xt(x) for x, _ in hits),
+                           "letzt_cam": str(max(hits, key=lambda ht: _xt(ht[0]))[0]
+                                            .get("camera", "?")),
+                           "quelle": "koerper"}
+            if pers:
+                # Zugeschriebene Passe verlassen den Unbekannt-Topf der SEITE
+                # (der persistente Pool/Reconcile bleibt Gesichts-Sache).
+                unbek_eids, unbek_eid = [], None
         kat = ("gemischt" if pers and unbek else "erkannt" if pers
                else "unbekannt" if unbek else "motion")
         letzte_akt = max((x.get("start") or x.get("ts") or 0) for x in evs_g)  # Erkennungszeit, NICHT Verarbeitungs-ts: sonst faelscht ein Verarbeitungs-Lag (Neustart-Sweep/Last) beendete Durchgaenge zu "in progress"

@@ -55,6 +55,56 @@ def _fenster_schreiben(data_dir, f):
     os.replace(tmp, p)
 
 
+def _treffer_log(data_dir):
+    return os.path.join(data_dir, "personlern", "live_treffer.jsonl")
+
+
+def treffer_buchen(data_dir, eintrag):
+    """Treffer dauerhaft buchen (append, geflusht) — Today weist damit aus,
+    WOHER eine Erkennung kam (face/person/beides). Trim: waechst die Datei
+    ueber ~1 MB, fliegen Zeilen aelter 30 Tage raus."""
+    p = _treffer_log(data_dir)
+    try:
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "a") as f:
+            f.write(json.dumps(eintrag, ensure_ascii=False) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        if os.path.getsize(p) > 1_000_000:
+            grenze = time.time() - 30 * 86400
+            zeilen = []
+            for z in open(p):
+                try:
+                    if (json.loads(z).get("ts") or 0) >= grenze:
+                        zeilen.append(z)
+                except ValueError:
+                    pass
+            tmp = p + ".tmp"
+            with open(tmp, "w") as f:
+                f.writelines(zeilen)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, p)
+    except OSError:
+        pass                       # Buchung ist Zusatznutzen, nie Urteils-Blocker
+
+
+def treffer_karte(data_dir):
+    """eid -> letzter Treffer {person, score, feuer} fuer die Today-Anzeige."""
+    karte = {}
+    try:
+        for z in open(_treffer_log(data_dir)):
+            try:
+                d = json.loads(z)
+                if d.get("eid"):
+                    karte[d["eid"]] = d
+            except ValueError:
+                pass
+    except OSError:
+        pass
+    return karte
+
+
 def _svm(data_dir):
     import pickle
     from core.personmodell import modell_dir
@@ -136,11 +186,16 @@ def urteilen(data_dir, frigate_url, eid, schwelle=None):
         px = crop.size[0] * crop.size[1]
     except OSError:
         bild, px = None, 0
+    # Feuer-Regel-Werte aus dem Modell-Status (UI: Model status), sonst
+    # die Standardwerte hier — konfigurierbar seit .114 (User-Wunsch 04.08.)
+    fenster_s = int(status.get("fenster_s") or FENSTER_S)
+    feuer_ab = int(status.get("feuer_ab") or FEUER_AB)
+    karenz_s = int(status.get("karenz_s") or KARENZ_S)
     jetzt = time.time()
     f = _fenster_lesen(data_dir)
-    raus = [t2 for t2 in f["treffer"] if jetzt - t2["ts"] > FENSTER_S]
+    raus = [t2 for t2 in f["treffer"] if jetzt - t2["ts"] > fenster_s]
     f["treffer"] = [t2 for t2 in f["treffer"]
-                    if jetzt - t2["ts"] <= FENSTER_S]
+                    if jetzt - t2["ts"] <= fenster_s]
     for t2 in raus:                     # Crop-Dateien ausgelaufener Treffer
         if t2.get("bild"):
             try:
@@ -151,9 +206,9 @@ def urteilen(data_dir, frigate_url, eid, schwelle=None):
                          "score": round(score, 3), "bild": bild, "px": px})
     n = sum(1 for t2 in f["treffer"] if t2["person"] == person)
     karenz_bis = float(f["karenz"].get(person) or 0)
-    feuer = n >= FEUER_AB and jetzt >= karenz_bis
+    feuer = n >= feuer_ab and jetzt >= karenz_bis
     if feuer:
-        f["karenz"][person] = jetzt + KARENZ_S
+        f["karenz"][person] = jetzt + karenz_s
         beste = max((t2 for t2 in f["treffer"]
                      if t2["person"] == person and t2.get("bild")
                      and os.path.isfile(t2["bild"])),
@@ -161,5 +216,8 @@ def urteilen(data_dir, frigate_url, eid, schwelle=None):
         if beste:
             bild = beste["bild"]
     _fenster_schreiben(data_dir, f)
+    treffer_buchen(data_dir, {"ts": round(jetzt, 1), "eid": eid,
+                              "person": person, "score": round(score, 3),
+                              "feuer": feuer})
     return {"person": person, "score": round(score, 3), "stuetzen": n,
             "feuer": feuer, "bild": bild}

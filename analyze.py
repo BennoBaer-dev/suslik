@@ -293,7 +293,15 @@ for k, eid in enumerate(a.eids):
     # tail -25 das ENDE des Outputs, die Ergebnis-/max-Zeilen muessen dort bleiben (R4).
     if frames.unvollstaendig:
         print(f"WARN: clip incomplete — read {frames.gelesen} of {frames.soll} frames "
-              f"({frames.verlust_pct:.0f}% lost); judging the readable part (flagged)")
+              f"({frames.verlust_pct:.0f}% lost"
+              + (f", {frames.decoder_fehler} decoder errors" if getattr(frames, "decoder_fehler", 0) else "")
+              + "); judging the readable part (flagged)")
+    if getattr(frames, "hwdec_fallback", False):
+        # Panel-Auflage: der HW-Rueckfall war als 'laut' versprochen, hatte
+        # aber keinen Konsumenten — jetzt Logzeile + Telemetrie-Feld.
+        print("WARN: hardware decode incomplete/unavailable — software path "
+              "covered the clip" if not frames.hwdec else
+              "WARN: hardware decode aborted mid-clip — judged the readable part")
     fd_n = sum(1 for f in faces if f.get("fd"))
     print(f"\n=== {label}  ({eid}) — {sampled} Frames, {len(faces)} Gesichter ==="
           + (f"  [{fd_n} als Fehldetektion gefiltert (Zaehlung/Pool, nicht Urteil)]" if fd_n else ""))
@@ -367,6 +375,11 @@ for k, eid in enumerate(a.eids):
                               # <50 % lesbar als 'fehler' (E1-Entscheid).
                               "frames_gelesen": frames.gelesen, "frames_soll": frames.soll,
                               **({"frames_fehlen": True} if frames.unvollstaendig else {}),
+                              **({"hwdec": True} if getattr(frames, "hwdec", False) else {}),
+                              **({"hwdec_fallback": True}
+                                 if getattr(frames, "hwdec_fallback", False) else {}),
+                              **({"decoder_fehler": frames.decoder_fehler}
+                                 if getattr(frames, "decoder_fehler", 0) else {}),
                               "persons": summary.get(label, {})}, default=float, ensure_ascii=False) + "\n")
         _rf.flush()
     # Enrollment-Kandidaten persistieren (AP4): enger Crop (wird ggf. Referenz) +

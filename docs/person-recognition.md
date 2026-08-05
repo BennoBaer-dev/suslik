@@ -11,9 +11,12 @@ Everything runs locally. Images are turned into a numerical fingerprint
 pictures decides which resident a fingerprint belongs to — with a decision
 threshold that strangers stay below.
 
-**Preview status:** the path works end to end, but the decision threshold
-is not yet calibrated against a large stranger set. Treat alerts as a
-preview, keep an eye on them, and disarm any time.
+**Preview status:** the path works end to end. Since 0.1.0.118 the
+decision threshold is measured on your own approved material after every
+training (cross-validation between your learned people) — but real
+strangers are not part of that material yet, so keep an eye on alerts
+and disarm any time. You can override the threshold and the fire rule
+under **Person → Model status**.
 
 ## How to use it, step by step
 

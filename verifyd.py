@@ -2451,6 +2451,56 @@ class Service:
             msg += f" ({len(verworfen)} rejected: {', '.join(verworfen[:8])})"
         return True, msg + " — service is restarting, reload in ~1 min"
 
+    def voll_wiederherstellen(self, tmp_pfad):
+        """PE6 Full-Restore aus dem /backup_voll-Archiv. Ablauf: Mitglieder gegen
+        Whitelist validieren -> in .restore-tmp entpacken (tarfile filter='data'
+        gegen Pfad-Ausbrueche) -> bestehende Teile als .pre-restore-<ts> zur Seite
+        drehen (je Teil bleibt genau EIN Vorstand liegen) -> neue Teile einsetzen ->
+        Config-Export ueber den validierten Restore-Weg anwenden -> Neustart."""
+        import shutil as _sh
+        import tarfile
+        data = self.cfg["data_dir"]
+        ERLAUBT = ("config-export.json", "config", "faces", "learn", "personlern", "state")
+        ziel = os.path.join(data, f".restore-tmp-{os.getpid()}")
+        try:
+            with tarfile.open(tmp_pfad, "r:gz") as tar:
+                for n in tar.getnames():
+                    if (n.split("/", 1)[0] not in ERLAUBT or n.startswith("/")
+                            or ".." in n.split("/")):
+                        return False, f"archive rejected: unexpected member '{n[:80]}'"
+                os.makedirs(ziel, exist_ok=True)
+                tar.extractall(ziel, filter="data")
+        except (tarfile.TarError, OSError) as e:
+            _sh.rmtree(ziel, ignore_errors=True)
+            return False, f"archive unreadable: {e}"
+        stempel = f"{datetime.datetime.now():%Y%m%d_%H%M%S}"
+        teile = [t for t in ERLAUBT[1:] if os.path.isdir(os.path.join(ziel, t))]
+        if not teile and not os.path.isfile(os.path.join(ziel, "config-export.json")):
+            _sh.rmtree(ziel, ignore_errors=True)
+            return False, "archive contains none of the expected parts"
+        for t in teile:
+            alt = os.path.join(data, t)
+            for rest in [d for d in os.listdir(data)
+                         if d.startswith(f"{t}.pre-restore-")]:
+                _sh.rmtree(os.path.join(data, rest), ignore_errors=True)
+            if os.path.exists(alt):
+                os.rename(alt, f"{alt}.pre-restore-{stempel}")
+            os.rename(os.path.join(ziel, t), alt)
+        msg = f"restored: {', '.join(teile) or '(no data dirs)'}"
+        ce = os.path.join(ziel, "config-export.json")
+        if os.path.isfile(ce):
+            with open(ce, "rb") as f:
+                ok_cfg, msg_cfg = self.config_wiederherstellen(f.read())
+            msg += f" · config: {msg_cfg}"           # config-Weg macht den Neustart
+            if not ok_cfg:
+                self.neustart("Full-Restore (config-Teil abgelehnt)")
+        else:
+            self.neustart("Full-Restore")
+        _sh.rmtree(ziel, ignore_errors=True)
+        self.log(f"FULL RESTORE via UI: {msg} (previous state kept as "
+                 f"*.pre-restore-{stempel})")
+        return True, msg + " — service is restarting, reload in ~1 min"
+
     def neustart(self, grund=""):
         """Selbst-Neustart nach Config-Aenderung (Setup-Wizard / Konfig / Kamera-Blatt).
         Re-exec des EIGENEN Prozesses statt os._exit(0): supervisor-UNABHAENGIG, laeuft also auch
@@ -4592,6 +4642,20 @@ def make_handler(svc):
                     _f.flush()
                 return self._send(200, json.dumps({"ok": True}),
                                   "application/json")
+            if pfad == "/person/einstellungen":
+                # .114: Schwelle + Feuer-Regel aus der Model-status-Seite —
+                # Validierung (Grenzen) liegt in personmodell.einstellungen_setzen.
+                from core import personmodell as _pm
+                try:
+                    _n6 = int(self.headers.get("Content-Length", 0))
+                    _d6 = json.loads(self.rfile.read(min(_n6, 4096)) or b"{}")
+                except (ValueError, TypeError):
+                    return self._send(400, json.dumps({"ok": False, "msg": "bad json"}),
+                                      "application/json")
+                _ok6, _erg6 = _pm.einstellungen_setzen(cfg["data_dir"], _d6)
+                return self._send(200 if _ok6 else 400, json.dumps(
+                    {"ok": _ok6, "msg": _erg6 if isinstance(_erg6, str) else "saved"},
+                    ensure_ascii=False), "application/json")
             if pfad == "/person/schalter":
                 # PE4 Aktivierungs-Gate: Arm/Disarm nur mit Modell.
                 from core import personmodell as _pm
@@ -4925,6 +4989,38 @@ def make_handler(svc):
                     ok, msg = svc.config_wiederherstellen(raw)
                     return self._send(200 if ok else 400,
                                       json.dumps({"ok": ok, "msg": msg}, ensure_ascii=False), "application/json")
+                except Exception as e:
+                    return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
+            if pfad == "/backup_voll_wiederherstellen":   # PE6 Full-Restore (Body = rohes tar.gz)
+                try:
+                    import tempfile
+                    n = int(self.headers.get("Content-Length", 0))
+                    if n <= 0 or n > 8 * 1024 ** 3:
+                        return self._send(400, json.dumps(
+                            {"ok": False, "msg": "missing or oversized upload"}), "application/json")
+                    with tempfile.NamedTemporaryFile(prefix=".restore-up-", suffix=".tar.gz",
+                                                     dir=svc.cfg["data_dir"], delete=False) as f:
+                        tmp, rest = f.name, n
+                        while rest > 0:                    # stueckweise: 100+-MB-Archive
+                            buf = self.rfile.read(min(rest, 512 * 1024))
+                            if not buf:
+                                break
+                            f.write(buf)
+                            rest -= len(buf)
+                    if rest > 0:
+                        os.unlink(tmp)
+                        return self._send(400, json.dumps(
+                            {"ok": False, "msg": "upload truncated"}), "application/json")
+                    try:
+                        ok, msg = svc.voll_wiederherstellen(tmp)
+                    finally:
+                        try:
+                            os.unlink(tmp)
+                        except OSError:
+                            pass
+                    return self._send(200 if ok else 400,
+                                      json.dumps({"ok": ok, "msg": msg}, ensure_ascii=False),
+                                      "application/json")
                 except Exception as e:
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad in ("/test_pushover", "/test_telegram", "/test_mqtt"):   # Test-Versand je Kanal
@@ -5463,8 +5559,18 @@ def make_handler(svc):
                 import szenarien as _szen
                 _uk_gesehen = False   # .54: Anker id="unidentified" an die ERSTE Unknown-Karte (Kennzahl-Link)
                 gap = int(cfg.get("szenario_gap_min", 5)) * 60   # auch unten (Besuchs-Buendelung) genutzt
+                try:                  # Koerper-Treffer je Event (Zuschreibung + Ausweis)
+                    from core import personlive as _plv
+                    _kmap = _plv.treffer_karte(cfg["data_dir"])
+                    from core import personmodell as _pmz
+                    _kab = int((_pmz.status_lesen(cfg["data_dir"]) or {})
+                               .get("feuer_ab") or _plv.FEUER_AB)
+                except Exception:
+                    _kmap, _kab = {}, 2
                 szenarien = _szen.szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap_h,
-                                                      nur_kameras=_nk)
+                                                      nur_kameras=_nk,
+                                                      koerper_map=_kmap,
+                                                      koerper_ab=_kab)
                 interessant = [s for s in szenarien if s["kat"] != "motion"]
                 motion_n = len(szenarien) - len(interessant)
 
@@ -5631,6 +5737,27 @@ def make_handler(svc):
                                       else f'<span class="fussnote">+{s["unbek"]} not matched</span>')
                         elif s["pers"]:
                             mitte += '<span class="badge ok">all recognized</span>'
+                        # Erkennungs-QUELLE ausweisen (User 04.08./05.08.): face /
+                        # person / beides — Zuschreibung passiert in szenarien
+                        # (quelle="koerper"), hier nur noch die Kennzeichnung.
+                        _kp = sorted({t["person"] for e in s["evs"]
+                                      if (t := _kmap.get(e["eid"]))})
+                        _nur_k = s["pers"] and all(
+                            d.get("quelle") == "koerper" for d in s["pers"].values())
+                        if _nur_k:
+                            mitte += ('<span class="fussnote">via person recognition, '
+                                      'no face</span>')
+                        elif s["pers"] and _kp:
+                            mitte += '<span class="fussnote">via face + person</span>'
+                        elif s["pers"]:
+                            mitte += '<span class="fussnote">via face</span>'
+                        elif _kp:
+                            # Koerper-Treffer unter der Stuetzen-Regel (keine
+                            # Zuschreibung): als Hinweis zeigen, ehrlich duenn.
+                            mitte += ("".join(f'<span class="badge q">{html.escape(p)}</span>'
+                                              for p in _kp)
+                                      + '<span class="fussnote">person recognition hint '
+                                        '(below support rule)</span>')
                     crows = []
                     for cam, cl in s["kams"].items():
                         chips = "".join(_chip(p, cl["eid"].get(p), k) for p, k in cl["erk"].items())
@@ -6002,9 +6129,18 @@ def make_handler(svc):
             if path == "/person/modell":
                 import webui
                 # PE3-Status als eigener Reiter im Person-Bereich (User).
+                from core import personlive as _plv
                 from core import personmodell as _pm
                 from routes import personwizard as _r_pw
-                inhalt = _r_pw.modell_seite(_pm.status_lesen(cfg["data_dir"]))
+                # Standard-Werte der Feuer-Regel kommen aus personlive (eine
+                # Quelle, kein Streu-Literal); Grenzen aus personmodell.
+                regeln = {"fenster_s": _plv.FENSTER_S,
+                          "feuer_ab": _plv.FEUER_AB,
+                          "karenz_s": _plv.KARENZ_S,
+                          "schwelle_std": _plv.SCHWELLE_STD,
+                          "grenzen": _pm.REGEL_GRENZEN}
+                inhalt = _r_pw.modell_seite(_pm.status_lesen(cfg["data_dir"]),
+                                            regeln)
                 return self._send(200, webui.layout(
                     "Person", "/person/modell", inhalt, self._banner()))
             if path in ("/person", "/personlauf/bestand"):
@@ -6547,6 +6683,46 @@ def make_handler(svc):
                 self.end_headers()
                 self.wfile.write(data)
                 return
+            if path == "/backup_voll":         # PE6: Full-Backup als EIN Archiv (Umzugs-faehig)
+                # Inhalt: Config-Export (inkl. wirksamer Verbindungs-Werte) + alles
+                # Gelernte/Handarbeit: config/, faces/, learn/, personlern/ (ohne
+                # werkstatt-Scratch), state/. BEWUSST NICHT drin: clips/ (Cache) und
+                # events/ (abgeleitete Analyse-Historie) — der Karten-Text sagt das.
+                import io as _io
+                import shutil as _sh
+                import tarfile
+                import tempfile
+                d = _reg.export_ergaenzen(_lade_config_store(cfg), cfg)
+                fn = f"suslik-full-backup-{datetime.datetime.now():%Y%m%d_%H%M}.tar.gz"
+                tmpf = tempfile.NamedTemporaryFile(prefix=".backup-voll-", suffix=".tar.gz",
+                                                   dir=cfg["data_dir"], delete=False)
+                try:
+                    with tarfile.open(fileobj=tmpf, mode="w:gz") as tar:
+                        blob = (json.dumps(d, ensure_ascii=False, indent=1) + "\n").encode()
+                        ti = tarfile.TarInfo("config-export.json")
+                        ti.size, ti.mtime = len(blob), int(time.time())
+                        tar.addfile(ti, _io.BytesIO(blob))
+                        for teil in ("config", "faces", "learn", "personlern", "state"):
+                            p = os.path.join(cfg["data_dir"], teil)
+                            if os.path.isdir(p):
+                                tar.add(p, arcname=teil, filter=lambda t:
+                                        None if "/werkstatt" in t.name else t)
+                    groesse = tmpf.tell()
+                    tmpf.seek(0)
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/gzip")
+                    self.send_header("Content-Disposition", f'attachment; filename="{fn}"')
+                    self.send_header("Content-Length", str(groesse))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    _sh.copyfileobj(tmpf, self.wfile, 512 * 1024)
+                finally:
+                    tmpf.close()
+                    try:
+                        os.unlink(tmpf.name)
+                    except OSError:
+                        pass
+                return
             if path == "/system":
                 import webui
                 import shutil
@@ -6647,15 +6823,29 @@ def make_handler(svc):
                     '<p class="dim">Download the settings stored in /data/config as one JSON file, or restore '
                     'them from such a file. Honest scope: today that is the CAMERA SHEET (incl. its '
                     'stored values); thresholds/channels set only in verifyd.yaml or via environment '
-                    'are NOT in this file. Learned people/references are covered by the daily data '
-                    'backup.</p>'
+                    'are NOT in this file. Learned people/references: use the full backup below.</p>'
                     '<a class="gtb on" href="/config_sichern">Download configuration</a> '
                     '<label class="gtb" style="cursor:pointer">Restore from file…'
                     '<input type="file" accept="application/json,.json" style="display:none" '
                     'onchange="configRestore(this)"></label> '
                     '<span id="restore-status" class="dim"></span>'
                     '<p class="dim">Restore overwrites the current settings (the previous ones are kept '
-                    'as a .bak) and restarts the service.</p></div>')
+                    'as a .bak) and restarts the service.</p></div>'
+                    '<div class="card"><b>Full backup</b>'
+                    '<p class="dim">One portable archive with everything you taught this '
+                    'installation: settings, the face reference library, learning-run '
+                    'results, the whole person-recognition material (images, your review '
+                    'verdicts, trained models) and the event record. Made for moving to '
+                    'another machine. Honest scope: the video clip cache and per-event '
+                    'analysis artifacts are NOT included — they are rebuilt over time.</p>'
+                    '<a class="gtb on" href="/backup_voll">Download full backup</a> '
+                    '<label class="gtb" style="cursor:pointer">Restore full backup…'
+                    '<input type="file" accept=".tar.gz,application/gzip" style="display:none" '
+                    'onchange="vollRestore(this)"></label> '
+                    '<span id="vollrestore-status" class="dim"></span>'
+                    '<p class="dim">Restore replaces those parts (each previous one is kept '
+                    'once as *.pre-restore-*) and restarts the service. Uploading a few '
+                    'hundred MB can take a while — leave the page open.</p></div>')
                 ro = frigate_read_only(cfg); fsync = bool(cfg.get("frigate_sync"))
                 _rc = "var(--ok)" if ro else "var(--warn)"   # read-only = gruen/sicher, schreibend = Achtung; Tokens statt Hex (B12: 2,45/2,94 im Hellmodus)
                 write_html = (
@@ -7455,6 +7645,18 @@ def varianten_hinweis(variante, probe):
         return ("Your Intel GPU was found but did not bind with the legacy runtime — a newer "
                 "iGPU (Intel 11th gen or later) needs the regular gpu image.")
     if variante in ("gpu", "gpu-legacy") and not igpu_da and nvidia_da:
+        return "Found an NVIDIA GPU — the cuda image would use it for recognition."
+    # Umkehr-Faelle (User-Fund 05.08.): cuda/rocm-Image auf fremder Hardware
+    # lief bisher ohne jeden Hinweis still auf CPU.
+    render_da = os.path.exists("/dev/dri/renderD128")
+    if variante == "cuda" and not nvidia_da:
+        if render_da:
+            return ("No NVIDIA GPU found, but a /dev/dri render device is present. "
+                    "If that is an Intel iGPU, the gpu image would use it — this "
+                    "cuda image runs recognition on the CPU here.")
+        return ("No NVIDIA GPU found — this cuda image runs recognition on the "
+                "CPU here; the cpu image does the same with a much smaller download.")
+    if variante == "rocm" and nvidia_da:
         return "Found an NVIDIA GPU — the cuda image would use it for recognition."
     return None
 
