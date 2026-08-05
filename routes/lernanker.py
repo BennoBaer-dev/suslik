@@ -103,6 +103,14 @@ def anker_detail_seite(s, kaputt=0, benennung=None):
                 + '<div class="dim"><a href="/lernlauf/anker">back to all clusters</a> · '
                   'reference upkeep lives on the Quality page</div>'
                 + f'<div class="anker-reihe">{thumbs}</div></div>')
+    if s.get("status") == "verworfen":
+        # Dismiss mit Gedaechtnis: Crops sind geloescht, die Zeile traegt nur
+        # noch das Erbschafts-Gedaechtnis — Direktaufruf ehrlich beantworten.
+        return (stil + kopf
+                + '<div class="pill">dismissed — images removed; the cluster is '
+                  'remembered so re-harvests of the same events stay quiet</div>'
+                + '<div class="dim"><a href="/lernlauf/anker">back to all clusters</a></div>'
+                + '</div>')
     hinweis = ""
     if schon:
         hinweis = (f'<div class="pill">named <b>{html.escape(str(s.get("person")))}</b>'
@@ -113,8 +121,10 @@ def anker_detail_seite(s, kaputt=0, benennung=None):
                     'are still filtered</div>')
     v = benennung.get("vorschlag")
     if v:
+        _bek = ("already in your system" if {"referenz", "master"}
+                & set(v.get("quellen") or []) else "named on another cluster")
         hinweis += (f'<div class="pill">looks like <b>{html.escape(v["name"])}</b> '
-                    f'(similarity {v["sim"]}) — suggestion only</div>')
+                    f'(similarity {v["sim"]}) — {_bek}; suggestion only</div>')
     # gewaehlt-Vorbelegung: persistierte Auswahl (Reload) schlaegt die Empfehlung.
     hat_persist = any("gewaehlt" in m for m in mitglieder)
     sektionen = []
@@ -194,14 +204,66 @@ def anker_detail_seite(s, kaputt=0, benennung=None):
             + "".join(sektionen) + leiste + '</div>' + js)
 
 
-def anker_seite(saetze, kaputt):
+def anker_seite(saetze, kaputt, vorschlaege=None, dubletten=None):
     """Anker-Datensaetze (anker_lesen-Reihenfolge) -> Seiten-HTML. saetze duerfen aus
-    mehreren Laeufen stammen (Bild-URLs tragen die lauf_id je Satz)."""
+    mehreren Laeufen stammen (Bild-URLs tragen die lauf_id je Satz).
+    vorschlaege: anker_id -> Personen-Name (looks-like-Badge auf der Karte —
+    dieselbe Empfehlung, die die Detail-Seite rechnet; User 05.08.).
+    dubletten: anker_id -> anker_id des NEUEREN gleichen Clusters (Lauf-
+    uebergreifende Wiederernte unbenannter Leute; alter wird gedimmt)."""
+    vorschlaege = vorschlaege or {}
+    dubletten = dubletten or {}
+    # Lauf-Loeschen (User 05.08., 2. Fassung 'ganz loeschen, kein Papierkorb'):
+    # die Ernte aendert sich in der Entwicklung, ein neuer Lauf ersetzt den
+    # alten mitsamt Daten — ein Knopf je Lauf loescht ALLE seine Cluster
+    # (auch benannte und verworfene) und den Lauf-Ordner endgueltig. Bereits
+    # uebernommene Referenzen bleiben (Kopien in faces/); der Dialog sagt das.
+    # Zaehlung auf ALLEN Zeilen VOR dem Verworfen-Anzeigefilter (Review .125:
+    # sonst luegt die Dialog-Zahl und ein Nur-Verworfene-Lauf haette keinen Knopf).
+    laeufe = {}
+    for s in saetze:
+        lid = str((s.get("lauf") or {}).get("lauf_id") or "")
+        if lid:
+            laeufe[lid] = laeufe.get(lid, 0) + 1
+    lauf_zeile = ""
+    if laeufe:
+        knoepfe = "".join(
+            f'<button class="gtb" onclick="laufLoeschen(\'{html.escape(lid)}\',this)" '
+            f'data-frage="Delete run {html.escape(lid)} and all its data? This '
+            f'permanently removes its {n} cluster(s) — including named and '
+            'dismissed ones — and all harvested images. References already '
+            'adopted into recognition stay. This cannot be undone.">'
+            f'{html.escape(lid)} ({n})</button> '
+            for lid, n in sorted(laeufe.items()))
+        # Sammel-Knopf (User 05.08.): alle ALTEN Laeufe mit EINEM OK weg, der
+        # neueste bleibt immer stehen (einen laufenden ueberspringt der Kern).
+        alle_knopf = ""
+        if len(laeufe) > 1:
+            neuester = sorted(laeufe)[-1]
+            alt_n = sum(n for lid, n in laeufe.items() if lid != neuester)
+            alle_knopf = (
+                f'<button class="gtb" onclick="alteLaeufeLoeschen(this)" '
+                f'data-frage="Delete ALL {len(laeufe) - 1} old run(s) with their '
+                f'{alt_n} cluster(s) and all harvested images? Only the newest '
+                f'run {html.escape(neuester)} is kept. References already '
+                'adopted into recognition stay. This cannot be undone.">'
+                f'Delete all old runs (keep {html.escape(neuester)})</button>')
+        lauf_zeile = ('<div class="card">Delete a run — permanently removes all '
+                      'its clusters and harvested images (references you already '
+                      f'adopted stay): {knoepfe}{alle_knopf}</div>')
+    # Dismiss mit Gedaechtnis (User 05.08.): verworfene Cluster verschwinden aus
+    # der Liste, ihre Zeilen bleiben als Erbschafts-Gedaechtnis — GEZAEHLT
+    # ausgewiesen, nie still (Leitprinzip 3).
+    verworfen_n = sum(1 for s in saetze if s.get("status") == "verworfen")
+    saetze = [s for s in saetze if s.get("status") != "verworfen"]
+    verworfen_hinweis = (
+        f'<div class="dim">{verworfen_n} dismissed cluster(s) remembered — '
+        're-harvests of the same events stay quiet</div>' if verworfen_n else "")
     if not saetze:
-        return ("<h2>Anchor clusters</h2>"
-                '<div class="card">No anchors yet — a learning run builds them '
-                '(Preparation → Harvest → Grouping). '
-                '<a href="/lernlauf">Open the learning run page</a>.</div>')
+        return ("<h2>Anchor clusters</h2>" + verworfen_hinweis + lauf_zeile
+                + '<div class="card">No anchors yet — a learning run builds them '
+                  '(Preparation → Harvest → Grouping). '
+                  '<a href="/lernlauf">Open the learning run page</a>.</div>')
     ok_n = sum(1 for s in saetze if (s.get("qualitaet") or {}).get("eimer") == "ok")
     ges = sum((s.get("qualitaet") or {}).get("stuetz", 0) for s in saetze)
     kopf_warn = (f'<div class="card"><b>{kaputt} unreadable anchor lines counted</b> '
@@ -212,7 +274,8 @@ def anker_seite(saetze, kaputt):
         q = s.get("qualitaet") or {}
         lauf_id = (s.get("lauf") or {}).get("lauf_id", "")
         eimer = q.get("eimer", "ok")
-        dim = eimer != "ok"
+        dup_von = dubletten.get(s.get("anker_id"))
+        dim = eimer != "ok" or bool(dup_von)
         mitglieder = s.get("mitglieder") or []
         beste = sorted(mitglieder, key=lambda m: (-(m.get("det") or 0), str(m.get("datei"))))
         thumbs = [_thumb(m, lauf_id, dim) for m in beste[:CROPS_JE_CLUSTER]]
@@ -226,6 +289,22 @@ def anker_seite(saetze, kaputt):
         kams = sorted({m.get("kamera", "?") for m in mitglieder})
         status_html = (_badge("clean") if not dim else
                        _badge(f'{eimer}: {q.get("eimer_grund", "")}', dim=True))
+        if dup_von:
+            status_html += _badge(f"same cluster as {dup_von} \u2014 "
+                                  "harvested again by a newer run; name it there",
+                                  dim=True)
+        _vs = vorschlaege.get(s.get("anker_id"))
+        if _vs and s.get("status") not in ("benannt", "uebernommen"):
+            # "kennen wir schon"-Semantik (User 05.08.): Referenz-/Master-Treffer
+            # heisst, die Person IST im System — der Lauf liefert nur neues
+            # Material fuer sie. Treffer aus bloss benannten Ankern sagen das
+            # ehrlich schwaecher.
+            _bek = ("already in your system" if {"referenz", "master"}
+                    & set(_vs.get("quellen") or []) else "named on another cluster")
+            status_html += ('<span class="pill" style="border-color:var(--ok)">'
+                            f'looks like <b>{html.escape(str(_vs.get("name")))}</b> '
+                            f'({_vs.get("sim")}) — {_bek}; naming the cluster '
+                            'adds these faces to their references</span>')
         # E4a (User-Vorgabe 01.08.): der Klick-Weg zum Benennen muss auf der Karte SICHTBAR
         # sein — ein Knopf je Cluster, unter den Gesichtern. Benannte tragen den
         # Namen als Badge und der Knopf wechselt auf "Review naming".
@@ -237,8 +316,15 @@ def anker_seite(saetze, kaputt):
         knopf_txt = ("Review naming" if st_a == "benannt" else
                      ("View cluster" if st_a == "uebernommen" else
                       f'Name these {q.get("stuetz", 0)} faces'))
+        # Dismiss mit Gedaechtnis (User 05.08.): nur unbenannte Cluster —
+        # Zeile+Zentroid bleiben, Wiederernten derselben Events erben still.
+        verwerf = ('' if st_a in ("benannt", "uebernommen") else
+                   f'<button class="gtb" onclick="ankerVerwerfen(\'{aid}\',this)" '
+                   'data-frage="Dismiss this cluster? Its images are removed; '
+                   'the cluster is remembered so re-harvests of the same events '
+                   'stay quiet.">Dismiss</button>')
         knopf = (f'<div style="margin-top:6px"><a class="gtb on" href="/lernlauf/anker?a={aid}">'
-                 f"{knopf_txt}</a></div>")
+                 f"{knopf_txt}</a> {verwerf}</div>")
         karten.append(
             f'<div class="card"><b>{html.escape(str(s.get("anker_id")))}</b> {status_html} '
             + benannt_pill
@@ -257,4 +343,5 @@ def anker_seite(saetze, kaputt):
             f'{ok_n} clean, {len(saetze) - ok_n} for review (dimmed, with the reason on the '
             'badge). Open a cluster to review and name it; adoption into recognition ships with E4b. '
             '<a href="/lernlauf">Back to the learning run</a>.</div>'
+            + verworfen_hinweis + lauf_zeile
             + kopf_warn + "".join(karten))

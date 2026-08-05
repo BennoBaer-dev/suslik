@@ -68,9 +68,17 @@ def ernte_event(data_dir, lauf_id, job, wache, extraktor, crops_je_event=2):
     ldir = lauf_dir(data_dir, lauf_id)
     os.makedirs(os.path.join(ldir, "crops"), exist_ok=True)
     genommen, siebe = 0, []
+    gesehen = set()      # Dubletten-Wache (User-Fund 05.08.): zwei Spur-
+    # Punkte koennen auf DENSELBEN Clip-Frame fallen — ohne Pruefung wurde
+    # exakt dasselbe Bild als ~0 und ~1 doppelt gespeichert (11 byte-
+    # identische Paare im Bestand gemessen) und zaehlte doppelt im Training.
     for j, (score, fi, crop, hh) in enumerate(top):
         if genommen >= crops_je_event:
             break
+        kennung = (int(fi), crop.shape)
+        if kennung in gesehen:
+            siebe.append("dublette")
+            continue
         if hh < _re.MIN_HOEHE_PX:
             siebe.append("zu_klein")
             continue
@@ -81,6 +89,7 @@ def ernte_event(data_dir, lauf_id, job, wache, extraktor, crops_je_event=2):
         crop2, anteil, zbox = person_zuschnitt(crop, det["punkte"],
                                                det["scores"])
         blick, blick_mess = blick_bestimmen(det, crop.shape[0])
+        gesehen.add(kennung)
         datei = f"{eid}~{j}.jpg".replace("/", "_")
         pfad = os.path.join(ldir, "crops", datei)
         cv2.imwrite(pfad, crop2, [cv2.IMWRITE_JPEG_QUALITY, 92])

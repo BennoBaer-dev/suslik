@@ -77,6 +77,53 @@ function lernlaufStart(n, btn) {
     .catch(function () { btn.disabled = false; });
 }
 
+function ankerVerwerfen(aid, btn) {
+  /* Dismiss mit Gedaechtnis: Zeile+Zentroid bleiben (Wiederernten erben
+     still), Crops werden geloescht — Bestaetigung via data-frage. */
+  var frage = btn.getAttribute('data-frage');
+  if (frage && !confirm(frage)) return;
+  btn.disabled = true;
+  fetch('/lernlauf/verwerfen', {method: 'POST',
+                                body: JSON.stringify({anker_id: aid})})
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (d.ok) location.reload();
+      else { alert(d.msg || 'error'); btn.disabled = false; }
+    })
+    .catch(function () { btn.disabled = false; });
+}
+
+function laufLoeschen(lid, btn) {
+  /* Lauf KOMPLETT loeschen (kein Papierkorb): alle Cluster des Laufs + Ordner
+     endgueltig weg; bereits uebernommene Referenzen bleiben (Kopien in faces/). */
+  var frage = btn.getAttribute('data-frage');
+  if (frage && !confirm(frage)) return;
+  btn.disabled = true;
+  fetch('/lernlauf/lauf_loeschen', {method: 'POST',
+                                    body: JSON.stringify({lauf_id: lid})})
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (d.ok) location.reload();
+      else { alert(d.msg || 'error'); btn.disabled = false; }
+    })
+    .catch(function () { btn.disabled = false; });
+}
+
+function alteLaeufeLoeschen(btn) {
+  /* Sammel-Loeschung: ALLE alten Laeufe mit EINEM OK, der neueste bleibt.
+     Auswahl rechnet der Server (nie eine Client-Liste loeschen). */
+  var frage = btn.getAttribute('data-frage');
+  if (frage && !confirm(frage)) return;
+  btn.disabled = true;
+  fetch('/lernlauf/alte_loeschen', {method: 'POST', body: '{}'})
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (d.ok) location.reload();
+      else { alert(d.msg || 'error'); btn.disabled = false; }
+    })
+    .catch(function () { btn.disabled = false; });
+}
+
 function lernlaufAbbruch(btn) {
   if (!confirm('Abort this learning run?')) return;
   btn.disabled = true;

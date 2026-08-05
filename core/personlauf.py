@@ -26,6 +26,11 @@ def _proto():
     os.makedirs(os.path.realpath(d), exist_ok=True)
     sys.path.insert(0, os.path.join(WURZEL, "prototyp"))
     import ernte_lauf as el
+    # ENV-Bruecke (#18): szenario_ernte friert FRIGATE beim Import ein — hier
+    # bei jedem Eintritt auf den aktuellen ENV-Stand heben (der Dienst
+    # exportiert die im UI gespeicherte URL beim Config-Laden nach os.environ).
+    el.se.FRIGATE = (os.environ.get("FRIGATE_URL", "")
+                     or el.se.FRIGATE).rstrip("/")
     return el
 
 
@@ -68,9 +73,9 @@ def anlegen(data_dir, n_events, person="", tage=19):
             if "ausfall" not in z and z.get("status") in (
                     "abgenommen", "verworfen", "offen"):
                 belegt.add(z["eid"])
-    eids = sorted((e for e in je_eid
-                   if ev_index[e]["start"] >= ab and e not in belegt
-                   and (not person or je_eid[e][0] == person)),
+    im_fenster = [e for e in je_eid if ev_index[e]["start"] >= ab
+                  and (not person or je_eid[e][0] == person)]
+    eids = sorted((e for e in im_fenster if e not in belegt),
                   key=lambda e: -ev_index[e]["start"])[:n_events]
     liste = []
     for eid in eids:
@@ -83,10 +88,45 @@ def anlegen(data_dir, n_events, person="", tage=19):
                       "zones": (api.get(eid) or {}).get("zones"),
                       "lichtphase": phase, "sonnenhoehe": hoehe})
     lauf_id = "P" + time.strftime("%Y%m%d_%H%M%S")
+    # Diagnose fuer die 0-Events-Erklaer-Karte (User-Fund 05.08., zwei
+    # reale Referenz-Personen: Lauf endete stumm, Nutzer sah kein WARUM):
+    # bindbar im Fenster vs. durch Bestands-Skip belegt; bei 0 bindbaren
+    # zusaetzlich der letzte bestaetigte Auftritt aus der Akte (oder nie).
+    diagnose = {"fenster_tage": tage, "gebunden_fenster": len(im_fenster),
+                "durch_bestand": len(im_fenster) - len(
+                    [e for e in im_fenster if e not in belegt])}
+    if person and not im_fenster:
+        # Ehrlichkeits-Nachschau (User-Einwand 05.08., zwei reale Faelle:
+        # 'die waren doch da'): (a) Akten-Beginn ausweisen — aeltere
+        # Besuche KENNT die Akte nicht; (b) 'gesehen, aber unter der
+        # Bestaetigungs-Schwelle' zaehlen — da gewesen ist nicht bestaetigt.
+        zuletzt, akte_seit, schwach = 0, 0, 0
+        try:
+            with open(os.path.join(data_dir, "state", "deckung.jsonl")) as f:
+                for zeile in f:
+                    try:
+                        d = json.loads(zeile)
+                    except ValueError:
+                        continue
+                    t0 = d.get("start") or d.get("ts") or 0
+                    if t0:
+                        akte_seit = min(akte_seit or t0, t0)
+                    if person in (d.get("bestaetigt") or []):
+                        zuletzt = max(zuletzt, t0)
+                    else:
+                        o = (d.get("ours") or {}).get(person) or {}
+                        if (o.get("max") or 0) >= 0.3:
+                            schwach += 1
+        except OSError:
+            pass
+        diagnose["zuletzt_bestaetigt"] = zuletzt or None
+        diagnose["akte_seit"] = akte_seit or None
+        diagnose["gesehen_schwach"] = schwach
     z = {"schema": 1, "lauf_id": lauf_id, "person": person,
          "wunsch_n": n_events, "phase": "ernte",
          "events": len(liste), "events_liste": liste,
          "bilanz": {k: int(v) for k, v in bilanz.items()},
+         "diagnose": diagnose,
          "ts": time.time()}
     zustand_schreiben(data_dir, z)
     return z

@@ -4,23 +4,34 @@ Once suslik is running and the wizard is done, everything happens through the we
 `http://<host>:8199/` and, in the background, automatically as Frigate produces person events.
 
 ## The web UI
-
-The UI is organized into **four sections** (top bar) with a second row of tabs underneath:
-**Activity**, **People**, **Settings** and **System**. All routes are stable — bookmarks keep
-working. The UI follows your operating system's light/dark preference; the **Theme** button
-(top right) overrides it permanently. On *Today* you can page back through past days.
+The UI has **seven sections** (top bar): **Activity** (Today / Events / To label),
+**People** (your reference library), **Person** (the body-recognition path:
+learned material and model status), **Areas** (camera groups), **Learn**
+(face learning runs, anchors, person learning), **Settings** and **System**.
 
 **Activity**
 
 - **Today** — the scenario view. Each entry is one *walk* (a person moving across your property),
   grouped from the individual events across cameras and time. Recognized people lead the page;
   passes where nobody was recognized appear as "Unknown N" cards once the unknown pool has
+  seen them — except passes whose whole clip contains no serious face: those get a quiet
+  "no usable face in this pass" note instead of a warning and never become unknown-visitor
+  cards. Clicking a person card opens their **Appearances** day view (route `/auftritte`):
+  every pass of that person with camera route and best shots; body-attributed passes are
+  counted there too.
   grouped them (with how often that identity was seen before). A scenario still in progress is
   shown live and finalizes once the walk ends.
 - **Events** — the flat event list with filters and paging, category badges, ground-truth
   buttons, and video links. Useful for drilling into a single event.
 - **To label** — the work list of unconfirmed events (route `/offen`, 50 per page): events that
   have a usable face but aren't ground-truth confirmed yet, so you can label them one by one.
+  Besides the person buttons and *Stranger*/*?* there is a **No person** button for false
+  triggers (a video with nobody in it): one click closes the case and it stops counting as
+  unknown. The same button row appears wherever labeling is offered, including the event
+  detail page. Weak faces with no confirmed recognition nearby are collapsed by default
+  ("N weak-face events hidden") — they are almost always false triggers; a link shows them.
+  Passes whose whole clip contains no serious face get a quiet "no usable face in this pass"
+  note on Today instead of a warning badge and an unknown-visitor card.
 
 **People**
 
@@ -46,8 +57,11 @@ working. The UI follows your operating system's light/dark preference; the **The
 **System**
 
 - **System** — the status "traffic light", the reference-sync status, a QC report, the
-  **configuration backup/restore** card, the **Frigate write-back** control (read-only is the
-  safe default), **Re-run setup wizard**, and a link to this documentation.
+  **configuration backup/restore** card, the **full backup** card (one portable archive with
+  everything you taught the installation — settings, face references, learning results, the
+  whole person-recognition material and models — plus a restore that replaces those parts
+  and keeps one `.pre-restore` copy of each), the **Frigate write-back** control (read-only
+  is the safe default), **Re-run setup wizard**, and a link to this documentation.
 
 ## Enrollment (teaching suslik a person)
 

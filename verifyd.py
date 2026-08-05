@@ -313,6 +313,14 @@ def load_config(path):
         if k in STORE_INFRA_TABU:
             continue
         cfg[k] = v
+    # ENV-Bruecke Frigate-URL (#18 carlsmith360): personlern-Kette und sync_refs
+    # lesen die Frigate-Adresse aus der ENV — normale Installationen setzen sie
+    # aber NUR im UI (Store, eben eingemischt). Ohne Export sahen diese Pfade
+    # nie eine URL ('unknown url type: /api/...'); bei uns maskierte die
+    # compose-.env den Fall (K2-Klasse). Gleiches Vererbungs-Muster wie
+    # VERIFY_DATA_DIR oben; Wizard-Save -> svc.neustart -> laeuft hier erneut durch.
+    if (cfg.get("frigate_url") or "").strip():
+        os.environ["FRIGATE_URL"] = cfg["frigate_url"]
     # Recognition-Modell prozessweit setzen: jeder Subprozess-env ist dict(os.environ, ...) und
     # erbt VERIFY_MODELL damit automatisch (analyze/backtest/anlernen/abnahme -> gleiches Modell,
     # kein refcache-Mix). Umschaltbar ueber modell: in verifyd.yaml/Store (buffalo | adaface).
@@ -5158,6 +5166,94 @@ def make_handler(svc):
                         ensure_ascii=False), "application/json")
                 except Exception as e:
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
+            if pfad == "/lernlauf/verwerfen":                  # Dismiss mit Gedaechtnis (User 05.08.)
+                # Duenner Mantel: Status+Crop-Loeschung in core/lernlauf.anker_verwerfen;
+                # Zeile+Zentroid bleiben, damit Wiederernten still erben (core/anker).
+                try:
+                    n = int(self.headers.get("Content-Length", 0))
+                    d = json.loads(self.rfile.read(min(n, 65536)))
+                    from core import lernlauf as _ll
+                    aid = str(d.get("anker_id") or "")
+                    saetze, _k = _ll.anker_lesen(cfg["data_dir"])
+                    satz = next((s for s in saetze if s.get("anker_id") == aid), None)
+                    if satz is None or satz.get("status") != "unbenannt":
+                        return self._send(400, json.dumps(
+                            {"ok": False, "msg": "only unnamed clusters can be dismissed"}),
+                            "application/json")
+                    _s2, ncrops = _ll.anker_verwerfen(cfg["data_dir"], aid)
+                    return self._send(200, json.dumps(
+                        {"ok": True, "msg": f"dismissed — {ncrops} images removed, "
+                                            "re-harvests of these events stay quiet"},
+                        ensure_ascii=False), "application/json")
+                except Exception as e:
+                    return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
+            if pfad == "/lernlauf/lauf_loeschen":              # Lauf KOMPLETT loeschen (User 05.08., 2. Fassung)
+                # Duenner Mantel: Loesch-Regel + Schreibweg in
+                # core/lernlauf.lauf_loeschen (ALLE Zeilen des Laufs + Ordner hart
+                # weg, kein trash; uebernommene Referenzen sind Kopien in faces/).
+                try:
+                    n = int(self.headers.get("Content-Length", 0))
+                    d = json.loads(self.rfile.read(min(n, 65536)))
+                    from core import lernlauf as _ll
+                    lid = str(d.get("lauf_id") or "")
+                    if not re.match(r"^L[\w]+$", lid):
+                        return self._send(400, json.dumps(
+                            {"ok": False, "msg": "invalid run id"}), "application/json")
+                    lauf, _f = _ll.lauf_lesen(cfg["data_dir"])
+                    # Review-MUSS .125: 'fertig' wird vom Lernlauf nie geschrieben —
+                    # abgeschlossen entscheidet die zentrale Quelle lauf_abgeschlossen
+                    # (Anker-Phase durch), sonst blockte der Knopf den neuesten Lauf immer.
+                    if lauf and str(lauf.get("lauf_id") or "") == lid \
+                            and not _ll.lauf_abgeschlossen(lauf):
+                        return self._send(400, json.dumps(
+                            {"ok": False, "msg": "this run is still active — abort it first"}),
+                            "application/json")
+                    z = _ll.lauf_loeschen(cfg["data_dir"], lid)
+                    if not z["entfernt"] and not z["dateien"] and z["ordner"]:
+                        return self._send(200, json.dumps(
+                            {"ok": True, "msg": f"nothing found for run {lid} — already deleted?"},
+                            ensure_ascii=False), "application/json")
+                    detail = ", ".join(t for t in (
+                        f"{z['benannt']} named/adopted" if z["benannt"] else "",
+                        f"{z['verworfen']} dismissed" if z["verworfen"] else "") if t)
+                    # Ehrliche Bilanz (Review .125): nie eine Loeschung behaupten,
+                    # die nicht stattfand — rest/ordner kommen nachgezaehlt aus dem Kern.
+                    warn = ("" if z["ordner"] else
+                            "; WARNING: run folder could not be fully removed"
+                            + (f" — {z['rest']} file(s) remain on disk" if z["rest"] else ""))
+                    svc.log(f"RUN DELETED: {lid} — {z['entfernt']} cluster(s)"
+                            + (f" ({detail})" if detail else "")
+                            + f", {z['dateien']} file(s){warn}")
+                    return self._send(200, json.dumps(
+                        {"ok": True, "msg": f"run {lid} deleted: {z['entfernt']} cluster(s)"
+                                            + (f" ({detail})" if detail else "")
+                                            + f" and {z['dateien']} file(s) permanently removed"
+                                            + warn},
+                        ensure_ascii=False), "application/json")
+                except Exception as e:
+                    return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
+            if pfad == "/lernlauf/alte_loeschen":              # Sammel-Loeschung (User 05.08.: EIN OK)
+                # Duenner Mantel: Auswahl (alle ausser dem neuesten, aktiver Lauf
+                # wird uebersprungen) + Loeschung in core/lernlauf.alte_laeufe_loeschen.
+                try:
+                    from core import lernlauf as _ll
+                    z, weg, behalten = _ll.alte_laeufe_loeschen(cfg["data_dir"])
+                    if not weg:
+                        return self._send(200, json.dumps(
+                            {"ok": True, "msg": "nothing to delete — only one run in the store"},
+                            ensure_ascii=False), "application/json")
+                    warn = ("" if z["ordner"] else
+                            "; WARNING: not every run folder could be fully removed"
+                            + (f" — {z['rest']} file(s) remain on disk" if z["rest"] else ""))
+                    svc.log(f"OLD RUNS DELETED: {', '.join(weg)} — {z['entfernt']} cluster(s), "
+                            f"{z['dateien']} file(s); kept {behalten}{warn}")
+                    return self._send(200, json.dumps(
+                        {"ok": True, "msg": f"{z['laeufe']} old run(s) deleted: {z['entfernt']} "
+                                            f"cluster(s) and {z['dateien']} file(s) permanently "
+                                            f"removed; kept newest run {behalten}" + warn},
+                        ensure_ascii=False), "application/json")
+                except Exception as e:
+                    return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad == "/lernlauf/uebernehmen":                # E4b: Uebernahme in den Master
                 # Duenner Mantel: Plan/Dedup/Tag-Pruefung/Alles-oder-nichts im Modul
                 # (core/uebernahme), Nacharbeit = derselbe Weg wie Pool-Enrollment.
@@ -5181,8 +5277,41 @@ def make_handler(svc):
                     plan = _ue.plan_bauen(satz, cfg["benennung_dup_sim"],
                                           _ue.adoptierte_embs(cfg["data_dir"], person))
                     if not plan["aufnehmen"]:
-                        return self._send(400, json.dumps(
-                            {"ok": False, "msg": "nothing to adopt — selection empty or all near-identical to existing learned references"}), "application/json")
+                        if not plan["uebersprungen"]:
+                            return self._send(400, json.dumps(
+                                {"ok": False, "msg": "nothing selected — tick at least one image to adopt"}), "application/json")
+                        # #17 (Tokn59): ALLE gewaehlten Bilder sind Beinahe-Duplikate schon
+                        # uebernommener Referenzen — das Dedup-Urteil ist richtig, aber kein
+                        # Fehler: Cluster ehrlich als uebernommen abschliessen (0 neue Dateien,
+                        # das Protokoll weist die Entscheidung aus) statt 'error' zu zeigen.
+                        # Phantom-Wache (Review-MUSS .127): abschliessen NUR, wenn die Person
+                        # wirklich noch Referenzbilder auf der Platte hat — adoptierte_embs
+                        # filtert Geloeschtes zwar schon, aber dieser Zustand darf nie still
+                        # als Erfolg enden (sonst Person mit 0 Referenzen 'fertig' markiert).
+                        _rd = os.path.join(cfg["data_dir"], "faces", person)
+                        if not (os.path.isdir(_rd) and any(
+                                f.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))
+                                for f in os.listdir(_rd))):
+                            return self._send(400, json.dumps(
+                                {"ok": False, "msg": "dedup matched only references that no "
+                                                     "longer exist on disk — please retry the "
+                                                     "adoption; if this persists, report it"}),
+                                "application/json")
+                        _ue.protokoll_anhaengen(cfg["data_dir"], {
+                            "ts": round(time.time(), 1), "anker_id": aid, "person": person,
+                            "dateien": [], "uebersprungen": plan["uebersprungen"],
+                            "manuelle_refs_ungeprueft": True,
+                            "bedingungs_tag": (satz.get("auswahl") or {}).get("bedingungs_tag"),
+                            "tag_abweichung": ab})
+                        _ll.anker_aktualisieren(cfg["data_dir"], aid, status="uebernommen")
+                        svc.log(f"ADOPTION: anchor {aid} -> master/{person}/ (0 new refs — already "
+                                f"covered, {len(plan['uebersprungen'])} near-identical)")
+                        return self._send(200, json.dumps(
+                            {"ok": True, "msg": f"already covered — all {len(plan['uebersprungen'])} "
+                                                f"selected image(s) are near-identical to {person}'s "
+                                                "existing references; cluster marked as adopted, "
+                                                "nothing copied"},
+                            ensure_ascii=False), "application/json")
                     lid = (satz.get("lauf") or {}).get("lauf_id", "")
                     namen = _ue.uebernehmen(cfg["data_dir"], lid, aid, person, plan)
                     with open(os.path.join(cfg["data_dir"], "faces", "refs_meta.jsonl"), "a") as f:
@@ -5637,8 +5766,8 @@ def make_handler(svc):
                         # Die Seite schrieb "since 09:20" und behauptete damit Wissen, das zu diesem
                         # Zeitpunkt niemand hatte.
                         e = pers_tag.setdefault(p, {"durchgaenge": 0, "erst": d["erst_t"],
-                                                    "letzt": 0, "eid": d["eid"], "erst_live": 0,
-                                                    "best": d["best"], "kam": None, "laeuft": False})
+                                                    "letzt": 0, "eid": None, "erst_live": 0,
+                                                    "best": -1.0, "kam": None, "laeuft": False})
                         e["durchgaenge"] += 1
                         e["erst"] = min(e["erst"], d["erst_t"])
                         # Fuer "since …" bei einem LAUFENDEN Durchgang zaehlt dessen eigene erste
@@ -5653,7 +5782,13 @@ def make_handler(svc):
                         # auf einer ganz anderen Kamera liegen).
                         if d["letzt_t"] >= e["letzt"]:
                             e["letzt"], e["kam"] = d["letzt_t"], d["letzt_cam"]
-                        if d["best"] >= e["best"]:
+                        # Karten-Foto NUR aus Gesichts-Quellen (User-Fund 05.08.:
+                        # ein koerper-zugeschriebener Pass traegt SVM-Scores ~0.9x,
+                        # gewann den best-Vergleich gegen Gesichts-cos ~0.6x — sein
+                        # eid hat aber kein Gesichts-Crop, Karte fiel auf den
+                        # Buchstaben zurueck). koerper zaehlt Passe/letzt/kam mit,
+                        # nur die Foto-Wahl ueberspringt ihn.
+                        if d.get("quelle") != "koerper" and d["best"] >= e["best"]:
                             e["best"], e["eid"] = d["best"], d["eid"]
                         e["laeuft"] = e["laeuft"] or bool(s.get("laeuft"))
 
@@ -5662,7 +5797,9 @@ def make_handler(svc):
                 # das sind dieselben Leute, nur schlecht getroffen. Sie gehoeren als Fussnote an
                 # den Durchgang. Nur Durchgaenge OHNE jede Bestaetigung sind echte Unbekannte.
                 # Das ist exakt die Regel, die die Szenen-Karenz im Alarmpfad schon anwendet.
-                unbek_echt = [s for s in interessant if not s["pers"] and s["unbek"]]
+                unbek_echt = [s for s in interessant
+                              if not s["pers"] and s["unbek"]
+                              and s.get("unbek_stark", 1) > 0]   # Issue #16: stille Klasse
                 unbek_nebenbei = sum(s["unbek"] for s in interessant if s["pers"] and s["unbek"])
 
                 # Die vier gleichrangigen Kennzahlkacheln sind am 25.07. entfallen: "People
@@ -5672,8 +5809,19 @@ def make_handler(svc):
                 # Ersetzt durch das Personen-Band + die ruhige Randspalte weiter unten.
 
                 # --- Personen-Chip (echter Crop, Fallback Initiale) ---
-                def _chip(name, eid, count=1, best=0.0):
+                def _chip(name, eid, count=1, best=0.0, koerper=False):
                     u = _crop_url(eid, name)
+                    if not u and koerper and eid:
+                        # koerper-zugeschriebener Pass: statt Buchstabe das
+                        # BESTE Koerper-Bild des Durchgangs zeigen (User
+                        # 05.08.) — der Crop liegt tagesbestaendig unter
+                        # personlern/treffer/ (personlive schreibt ihn).
+                        ed = str(eid).replace("/", "_")
+                        if os.path.isfile(os.path.join(
+                                cfg["data_dir"], "personlern", "treffer",
+                                ed + ".jpg")):
+                            u = ("/person/treffer/"
+                                 + urllib.parse.quote(ed) + ".jpg")
                     av = (f'<span class="avs"><img src="{u}" alt=""></span>' if u
                           else f'<span class="avs" style="background:{_av_farbe(name)}">'
                                f'{html.escape(name[:1].upper())}</span>')
@@ -5707,7 +5855,8 @@ def make_handler(svc):
                         _pl = "s" if s["n"] != 1 else ""
                         dauer = (f'{s["n"]} event{_pl}' if kurz
                                  else f'{int((s["ende"] - s["start"]) / 60)} min · {s["n"]} event{_pl}')
-                    mitte = "".join(_chip(p, d["eid"], d["count"], d["best"])
+                    mitte = "".join(_chip(p, d["eid"], d["count"], d["best"],
+                                          koerper=d.get("quelle") == "koerper")
                                     for p, d in sorted(s["pers"].items(), key=lambda x: -x[1]["count"]))
                     if live:
                         # Durchgang laeuft noch (letztes Event < Karenz her): nur Fakten (erkannte
@@ -5715,9 +5864,17 @@ def make_handler(svc):
                         mitte = ('<span class="badge live"><span class="ldot"></span>in progress</span>'
                                  + (mitte or '<span class="dim">identifying…</span>'))
                     else:
-                        if not s["pers"]:
+                        if not s["pers"] and s["unbek"] and not s.get("unbek_stark"):
+                            # Issue #16 Automatik: kein einziges ernstzunehmendes
+                            # Gesicht im ganzen Durchgang -> stille Klasse statt
+                            # Warn-Plakette und Unknown-Karte. Events bleiben
+                            # unter Events/To-label erreichbar.
+                            mitte = ('<span class="dim">no usable face in this '
+                                     f'pass ({s["unbek"]} event'
+                                     f'{"s" if s["unbek"] != 1 else ""})</span>')
+                        elif not s["pers"]:
                             mitte = '<span class="badge q">?</span><span class="dim">no known person</span>'
-                        if s["unbek"] and not s["pers"]:
+                        if s["unbek"] and not s["pers"] and s.get("unbek_stark"):
                             # Kein einziger Bestaetigter im ganzen Durchgang — DAS ist der Fall,
                             # der Aufmerksamkeit verdient, und nur der.
                             # "N unknown" las sich wie N unbekannte PERSONEN, gezaehlt werden aber
@@ -6096,13 +6253,60 @@ def make_handler(svc):
                             satz, saetze, master_persons(cfg),
                             {k: cfg["benennung_" + k] for k in
                              ("k_je_bin", "yaw_grenze", "dup_sim", "vorschlag_schwelle")},
-                            _ll.person_norm)
+                            _ll.person_norm,
+                            referenz=_bn.referenz_zentroide(
+                                os.path.join(cfg["data_dir"], "clips",
+                                             "refcache.npz"), cfg["modell"]))
                         return self._send(200, webui.layout(
                             "Anchor", "/lernlauf/anker",
                             _r_ank.anker_detail_seite(satz, kaputt, benennung=bkt),
                             self._banner()))
+                # Uebersichts-Zusatz (User 05.08.): looks-like-Vorschlag je
+                # Cluster (gleiche Rechnung wie die Detail-Seite, nur ohne das
+                # teure empfehlen()) + Lauf-uebergreifende Dubletten-Erkennung
+                # (Wiederernte derselben unbenannten Leute: Event-Ueberlapp).
+                from core import benennung as _bn2
+                vorschlaege, dubletten = {}, {}
+                try:
+                    _q = _bn2.personen_quelle(
+                        master_persons(cfg), saetze, _ll.person_norm,
+                        referenz=_bn2.referenz_zentroide(
+                            os.path.join(cfg["data_dir"], "clips",
+                                         "refcache.npz"), cfg["modell"]))
+                    for s in saetze:
+                        if s.get("status") in ("benannt", "uebernommen", "verworfen"):
+                            continue
+                        v, _n = _bn2.person_vorschlag(
+                            s.get("zentroid"), _q,
+                            cfg["benennung_vorschlag_schwelle"])
+                        if v:
+                            vorschlaege[s["anker_id"]] = v
+                    offene = [s for s in saetze
+                              if s.get("status") not in ("benannt", "uebernommen",
+                                                         "verworfen")]
+                    ev = {s["anker_id"]: {str(m.get("event"))
+                                          for m in (s.get("mitglieder") or [])
+                                          if m.get("event")} for s in offene}
+                    offene.sort(key=lambda s: str((s.get("lauf") or {})
+                                                  .get("lauf_id", "")))
+                    for i, alt_s in enumerate(offene):
+                        for neu_s in offene[i + 1:]:
+                            a, b = ev[alt_s["anker_id"]], ev[neu_s["anker_id"]]
+                            # Event-Ueberlapp ALLEIN verkoppelt zwei Personen,
+                            # die zusammen durchs Bild liefen — der Zentroid-
+                            # Kosinus trennt (am Echtbestand 05.08. kalibriert:
+                            # echte Wiederernten 0.945-1.0, Fremd-Paar faellt).
+                            c = _bn2._cos(alt_s.get("zentroid"),
+                                          neu_s.get("zentroid"))
+                            if a and b and len(a & b) >= 0.8 * min(len(a), len(b)) \
+                                    and c is not None and c >= 0.9:
+                                dubletten[alt_s["anker_id"]] = neu_s["anker_id"]
+                                break
+                except Exception:
+                    pass                       # Zusatz-Nutzen, nie Seiten-Blocker
                 return self._send(200, webui.layout(
-                    "Anchors", "/lernlauf/anker", _r_ank.anker_seite(saetze, kaputt),
+                    "Anchors", "/lernlauf/anker",
+                    _r_ank.anker_seite(saetze, kaputt, vorschlaege, dubletten),
                     self._banner()))
             if path.startswith("/lernlauf/crop/"):
                 # Lauf-Crops (Containment wie /refs/: realpath-Wache gegen Traversal).
@@ -6125,6 +6329,14 @@ def make_handler(svc):
                 if _voll.startswith(_wurz + os.sep) and os.path.isfile(_voll):
                     return self._send(200, open(_voll, "rb").read(),
                                       "image/jpeg")
+                return self._send(404, b"gone")
+            m = re.match(r"^/person/treffer/([\w.\-]+)\.jpg$", path)
+            if m:                # Koerper-Treffer-Crop (Chip-Bild, .120)
+                base = os.path.realpath(os.path.join(cfg["data_dir"],
+                                                     "personlern", "treffer"))
+                p = os.path.realpath(os.path.join(base, m.group(1) + ".jpg"))
+                if p.startswith(base + os.sep) and os.path.isfile(p):
+                    return self._send(200, open(p, "rb").read(), "image/jpeg")
                 return self._send(404, b"gone")
             if path == "/person/modell":
                 import webui
@@ -7118,7 +7330,7 @@ def make_handler(svc):
                     f'<div class="evrow"><span class="lab">Frigate</span><span>{html.escape(ftxt)}</span></div>'
                     f'<div class="evrow"><span class="lab">suslik</span><span>{html.escape(ours)}</span></div>'
                     f'<div class="evactions">{vid}{logl}</div>'
-                    f'<div class="evgt"><span class="lab">Who was it?</span>{gtb}</div></div>'
+                    f'<div class="evgt"><span class="lab">{"Correct if wrong" if best else "Who was it?"}</span>{gtb}</div></div>'
                     f'<h3>Images</h3>{galerie}')
                 return self._send(200, webui.layout("Event", "/heute", inhalt, self._banner()))
             m = re.match(rf"^/events/({_reg.EID_RE})/({_reg.DATEI_RE}\.(?:jpg|log|jsonl))$", path)
@@ -7173,6 +7385,19 @@ def make_handler(svc):
                     return f"{wer} ({cam})"
                 for r in kand:
                     r["_kontext"] = _fenster_kontext(r.get("start") or r.get("ts", 0))
+                # Issue #16: schwache Gesichter OHNE bestaetigten Kontext sind
+                # fast immer Fehlausloeser — standardmaessig einklappen statt
+                # den Nutzer zum Labeln zu bitten (?schwach=1 zeigt sie).
+                zeige_schwach = (qs.get("schwach", ["0"])[0] == "1")
+                schwach_n = 0
+                if not zeige_schwach:
+                    schwach = [r for r in kand
+                               if r.get("kategorie") == "unbekannt_schwach"
+                               and not r.get("_kontext")]
+                    schwach_n = len(schwach)
+                    if schwach_n:
+                        sch_ids = {id(r) for r in schwach}
+                        kand = [r for r in kand if id(r) not in sch_ids]
                 kand.sort(key=lambda r: (r["_kontext"] is not None,
                                          -(r.get("start") or r.get("ts", 0))))
                 # BLAETTERN (25.07.): vorher wurden ALLE Kandidaten gerendert — gemessen 564
@@ -7228,11 +7453,21 @@ def make_handler(svc):
                     [f"Page {o_seite}/{o_max} ({offen_gesamt} open)"] +
                     ([_ol(o_seite + 1, "older →")] if o_seite < o_max else []))
                     if offen_gesamt > 50 else "")
+                sch_hinweis = ""
+                if schwach_n:
+                    sch_hinweis = (f'<p class="pnote">{schwach_n} weak-face event'
+                                   f'{"s" if schwach_n != 1 else ""} hidden — '
+                                   "likely no usable face (nothing confirmed "
+                                   'nearby either). <a href="/offen?schwach=1">'
+                                   "show them</a></p>")
+                elif zeige_schwach:
+                    sch_hinweis = ('<p class="pnote">showing weak-face events too — '
+                                   '<a href="/offen">back to the worthwhile ones</a></p>')
                 inhalt = (f"<h2>Open cases to label ({offen_gesamt})</h2>"
                           "<p>Filled automatically: all events with faces that nobody confirmed "
                           "and that you haven't labeled yet. Ones with nobody recognized nearby "
                           "come first — those are the ones worth looking at. After labeling, the "
-                          "card fades and disappears on the next load.</p>"
+                          "card fades and disappears on the next load.</p>" + sch_hinweis
                           + (f'<p class="pnote">{o_blaettern}</p>' if o_blaettern else "")
                           + ("".join(cards) if cards else
                              webui.leer("Nothing open — everything labeled.",
@@ -7334,7 +7569,7 @@ def make_handler(svc):
             body = ["<h2>Events</h2>", filterleiste, f"<p>{blaettern}</p>",
                     '<div class="tabelle-wrap"><table><tr><th>Time</th><th>Camera</th>'
                     "<th>Frigate</th><th>suslik</th>",
-                    "<th>Category</th><th>Crop</th><th>Who was it? (GT)</th></tr>"]
+                    "<th>Category</th><th>Crop</th><th>Confirm or correct (GT)</th></tr>"]
             for r in rows:   # defensiv: alte/fremde Zeilen ohne heutige Pflichtfelder nicht crashen lassen
                 t = datetime.datetime.fromtimestamp(r.get("start") or r.get("ts", 0)).strftime("%d.%m %H:%M:%S")
                 f = r.get("frigate") or {}

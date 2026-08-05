@@ -90,17 +90,62 @@ def empfehlen(mitglieder, k_je_bin, yaw_grenze, dup_sim):
     return bewertet, flags
 
 
-def personen_quelle(master_personen, anker_zeilen, norm):
+def referenz_zentroide(refcache_pfad, modell):
+    """Zentroide der Master-Personen aus dem Referenz-Cache (refcache.npz,
+    Layout analyze.load_refs: Personenname -> Nx512 L2-normierte Embeddings,
+    Meta-Block '§meta' mit '§modell'). Gleiche Renormierungs-Regel wie
+    anker.zentroid — damit vergleicht person_vorschlag im selben Raum.
+    Modell-Gate: nur wenn der Cache mit dem aktiven Recognition-Modell
+    gerechnet wurde (nach Modellwechsel wird er ohnehin neu gebaut).
+    Fehler -> {} (der Vorschlags-Layer darf die Seite nie brechen)."""
+    import json as _json
+    try:
+        z = np.load(refcache_pfad, allow_pickle=True)
+        mk = "§meta" if "§meta" in z.files else "meta"
+        meta = _json.loads(str(z[mk]))
+        if str(meta.get("§modell", "")).lower() != str(modell or "").lower():
+            return {}
+        zents = {}
+        for p in z.files:
+            if p == mk:
+                continue
+            m = np.asarray(z[p], dtype=np.float32)
+            if m.ndim != 2 or not len(m) or not np.all(np.isfinite(m)):
+                continue
+            c = m.mean(axis=0)
+            n = float(np.linalg.norm(c))
+            if n < 1e-9:
+                continue
+            zents[p] = [round(float(x), 5) for x in (c / n)]
+        return zents
+    except Exception:
+        return {}
+
+
+def personen_quelle(master_personen, anker_zeilen, norm, referenz=None):
     """VEREINIGUNG aus Master-Ordnern und benannten, nicht uebernommenen Ankern
     (laufuebergreifend, nach normalisiertem Namen zusammengefasst) — Bauplan-MUSS
     'Dedup sieht benannte-nicht-uebernommene Personen'. norm = lernlauf.person_norm
-    (injiziert, EINE Namensquelle). -> {casefold_name: {name, zentroide, quellen}}"""
+    (injiziert, EINE Namensquelle). referenz = {name: zentroid} aus
+    referenz_zentroide() — gibt den Master-Personen Vergleichs-Zentroide,
+    damit person_vorschlag auch auf Referenz-Personen zeigen kann (vorher
+    standen Master nur als Namen ohne Zentroid drin und der Vorschlag konnte
+    nur anker-benannte Personen treffen; User-Fund 05.08.: 100er-Lauf voller
+    Bewohner-Cluster ohne einen einzigen Vorschlag).
+    -> {casefold_name: {name, zentroide, quellen}}"""
     quelle = {}
     for p in master_personen:
         n = norm(p)
         if n:
             quelle.setdefault(n.casefold(), {"name": n, "zentroide": [], "quellen": set()})
             quelle[n.casefold()]["quellen"].add("master")
+    for name, zent in (referenz or {}).items():
+        n = norm(name)
+        if not n or n.casefold() not in quelle:
+            continue                    # Referenzen nur fuer echte Master-Personen
+        e = quelle[n.casefold()]
+        e["quellen"].add("referenz")
+        e["zentroide"].append(zent)
     for a in anker_zeilen:
         if a.get("status") == "benannt" and a.get("person"):
             n = norm(a["person"])
@@ -127,11 +172,12 @@ def person_vorschlag(anker_zentroid, quelle, schwelle):
                 continue
             pruefbar = True
             if s > best_sim:
-                best, best_sim = e["name"], s
+                best, best_sim = e, s
     if not pruefbar:
         return None, "unpruefbar (no comparable centroids)"
     if best_sim >= float(schwelle):
-        return {"name": best, "sim": round(best_sim, 3)}, None
+        return {"name": best["name"], "sim": round(best_sim, 3),
+                "quellen": sorted(best["quellen"])}, None
     return None, None
 
 
@@ -143,18 +189,22 @@ def namens_kollision(name, quelle, norm):
     return e["name"] if e else None
 
 
-def benennungs_kontext(satz, alle_saetze, master_personen, werte, norm):
+def benennungs_kontext(satz, alle_saetze, master_personen, werte, norm,
+                       referenz=None):
     """Glue fuer die Benennungs-Seite (EIN Aufruf je Detail-GET, rein lesend):
     Empfehlung + Personen-Vereinigung (ohne den eigenen Anker) + Vorschlag.
     werte = {k_je_bin, yaw_grenze, dup_sim, vorschlag_schwelle} aus der
-    Config-Whitelist (nichts hardcoden). Vorschlag rechnet in Zug 2b gegen die
-    Zentroide BENANNTER Anker; Master-Personen deckt die Namens-Ebene ab, ihre
-    Embedding-Zentroide kommen mit E4b (dort werden Referenzen ohnehin geladen)."""
+    Config-Whitelist (nichts hardcoden). Vorschlag rechnet gegen die Zentroide
+    BENANNTER Anker UND (seit dem Referenz-Ausbau, User-Fund 05.08.) gegen die
+    referenz-Zentroide der Master-Personen (referenz_zentroide(), Aufrufer
+    laedt) — damit zeigt 'looks like' auch auf Personen, die nur ueber
+    Referenzen im System sind."""
     bewertet, flags = empfehlen(satz.get("mitglieder") or [], werte["k_je_bin"],
                                 werte["yaw_grenze"], werte["dup_sim"])
     quelle = personen_quelle(
         master_personen,
-        [a for a in alle_saetze if a.get("anker_id") != satz.get("anker_id")], norm)
+        [a for a in alle_saetze if a.get("anker_id") != satz.get("anker_id")],
+        norm, referenz=referenz)
     vorschlag, _note = person_vorschlag(satz.get("zentroid"), quelle,
                                         werte["vorschlag_schwelle"])
     return {"bewertet": bewertet, "flags": flags,

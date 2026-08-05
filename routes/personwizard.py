@@ -106,6 +106,44 @@ def wizard(personen, auswahl_n, person_wahl, bilanz=None, lauf=None,
             "Discard this run</button> <span class=\"dim\">bad result? "
             "throw it all away</span></span></div></div>")
         return "".join(teile)
+    elif phase == "fertig" and not lauf.get("events") \
+            and not lauf.get("abgenommen") and not lauf.get("verworfen"):
+        # 0-Events-Erklaer-Karte (User-Fund 05.08., zwei reale Personen:
+        # der Lauf endete stumm und sah wie ein Abbruch aus — der Nutzer
+        # muss das WARUM sehen). Zaehler kommen aus personlauf.anlegen().
+        dg = lauf.get("diagnose") or {}
+        wer = html.escape(lauf.get("person") or "the selected people")
+        tage = dg.get("fenster_tage", 19)
+        if dg.get("gebunden_fenster", 0) == 0:
+            zl = dg.get("zuletzt_bestaetigt")
+            if zl:
+                zeile = ("last face-confirmed appearance: "
+                         + datetime.datetime.fromtimestamp(zl).strftime("%d %b %Y"))
+            else:
+                schwach = dg.get("gesehen_schwach") or 0
+                seit = dg.get("akte_seit")
+                seit_txt = (datetime.datetime.fromtimestamp(seit).strftime("%d %b %Y")
+                            if seit else "?")
+                zeile = ("the event record (which starts " + seit_txt + " — "
+                         "earlier visits are not in it) has "
+                         + (("them appearing " + str(schwach) + " time"
+                             + ("s" if schwach != 1 else "") + " BELOW the "
+                             "confirmation threshold — present, but face "
+                             "recognition never confirmed them") if schwach else
+                            "no confirmed appearance for them"))
+            grund = ("No face-confirmed walk-throughs for <b>" + wer + "</b> in "
+                     "the last " + str(tage) + " days. The harvest can only tie "
+                     "images to a person through a confirmed pass; " + zeile + ".")
+        else:
+            grund = ("All " + str(dg.get("gebunden_fenster")) + " bindable events "
+                     "for <b>" + wer + "</b> are already part of your learning "
+                     "material — there was nothing new to harvest. New "
+                     "walk-throughs become harvestable automatically.")
+        teile.append(
+            '<div class="card"><b>Run finished without images — here is why</b>'
+            "<div>" + grund + "</div>"
+            '<div class="dim">Nothing was changed; you can start another '
+            "run below any time.</div></div>")
     elif phase == "fertig":
         teile.append(
             '<div class="card"><b>Review finished — material adopted</b>'

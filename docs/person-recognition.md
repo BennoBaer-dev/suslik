@@ -24,7 +24,14 @@ under **Person → Model status**.
    people — people come from your face collection) and how many events to
    scan. Start small (50). The run harvests full-body images from your
    recordings; an image is tied to a person only when a face-confirmed
-   walk-through proves it.
+   walk-through proves it. Identical frames are never stored twice (the
+   harvest has a duplicate guard; material harvested before 0.1.0.119 can
+   still contain such pairs). A run can legitimately finish with **zero
+   images** — the wizard then explains why: either that person had no
+   face-confirmed walk-throughs in the window (the card shows when the
+   event record starts and whether they were seen *below* the
+   confirmation threshold), or everything bindable is already in your
+   learning material.
    *Note on speed: harvesting currently runs on the CPU — expect roughly
    15–30 s per event. GPU/NPU support for this path is planned.*
 2. **Review every image.** After the run, click **Review the images now**
@@ -56,6 +63,18 @@ walk-through, never on a single image.
 - **MQTT**: every hit above the threshold is published on
   `verifyd/person_erkennung` as JSON (`person`, `score`, `stuetzen`,
   `feuer`, `quelle`) — handy for Home Assistant automations.
+
+## How it shows up on Today
+
+Since 0.1.0.118 the two paths cooperate on **Today** (and on the
+Appearances day view): a pass with no usable face is **attributed** to the
+person the body path recognized — it needs at least as many supporting
+events as your fire rule requires, the person's card counts the pass, and
+it no longer appears as an unknown visitor. The pass row is clearly marked
+*via person recognition, no face*; passes recognized by face show *via
+face* or *via face + person*. Face judgments always take precedence. The
+pass chip and the person card show the best body crop of that walk-through
+(the judged crops are kept under `personlern/treffer/` for 30 days).
 
 Every alert from this path is marked as coming from **person recognition,
 not face recognition**, so the two paths never get mixed up. Because both

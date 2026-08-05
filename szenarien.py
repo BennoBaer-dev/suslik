@@ -13,6 +13,8 @@ import time
 # "Stranger"/"?" — Review-Fund .54: die Anzeige-Texte standen faelschlich im Code und
 # matchten nie; an den Echtdaten verifiziert: 10x 'Fremd', 7x 'unklar' im Bestand).
 GT_OFFEN_LABELS = ("Fremd", "unklar")
+GT_KEIN_MENSCH = "kein_mensch"   # Issue #16: manuelles 'keine Person'-Urteil —
+# schliesst das Event (nicht in GT_OFFEN_LABELS), Anzeige-Text lebt in gt_leiste
 
 
 def _gt_offen(gtmap, eid):
@@ -64,6 +66,10 @@ def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kamera
     szenarien = []
     for g in grp:
         pers, unbek, noface = {}, 0, 0
+        unbek_stark = 0        # Issue #16 Automatik: unerkannte Events MIT
+        # ernstzunehmendem Gesicht (fremd_verdacht bzw. User-Fremd-Label);
+        # ein Pass, dessen Unbekannte alle nur schwach sind, bekommt die
+        # stille Klasse statt Warn-Plakette/Unknown-Karte.
         gt_fremd = False
         unbek_eid = None
         unbek_eids = []          # ALLE unerkannten Events des Durchgangs, s.u.
@@ -122,6 +128,9 @@ def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kamera
                 # entscheidet; ein User-'Fremd'-Label haelt das Event auch dann sichtbar,
                 # wenn der fd-Filter alle Detektionen frisst (User-Urteil schlaegt Filter).
                 unbek += 1; cl["unbek"] += 1
+                if x.get("kategorie") == "fremd_verdacht" or (
+                        isinstance(gtmap, dict) and gtmap.get(x["eid"]) == "Fremd"):
+                    unbek_stark += 1
                 if isinstance(gtmap, dict) and gtmap.get(x["eid"]) == "Fremd":
                     gt_fremd = True          # F2/A2: vom User bestaetigter Fremder (Badge)
                 # ALLE unerkannten Events sammeln, nicht nur das erste (Fund 25.07.).
@@ -171,7 +180,8 @@ def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kamera
                else "unbekannt" if unbek else "motion")
         letzte_akt = max((x.get("start") or x.get("ts") or 0) for x in evs_g)  # Erkennungszeit, NICHT Verarbeitungs-ts: sonst faelscht ein Verarbeitungs-Lag (Neustart-Sweep/Last) beendete Durchgaenge zu "in progress"
         szenarien.append({"start": g["start"], "ende": g["ende"], "n": len(evs_g),
-                          "pers": pers, "unbek": unbek, "kat": kat, "kams": kams,
+                          "pers": pers, "unbek": unbek, "unbek_stark": unbek_stark,
+                          "kat": kat, "kams": kams,
                           "unbek_eid": unbek_eid, "unbek_eids": unbek_eids,
                           "evs": ev_liste, "gt_fremd": gt_fremd,
                           "laeuft": (now - letzte_akt) < karenz})

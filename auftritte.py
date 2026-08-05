@@ -23,6 +23,21 @@ from core import areas as _areas_mod        # Areas Stufe 1: Sicht-Aufloesung (3
 from routes import areas as _r_areas        # Chip-Leiste (reine Links)
 
 
+
+def _koerper(cfg):
+    """Koerper-Treffer-Karte + Stuetzen-Regel fuer die Zuschreibung —
+    dieselbe Quelle wie /heute (Fusion Schritt 1; .119: auch hier, damit
+    Personen-Tagessicht und Today dieselben Passe zaehlen)."""
+    try:
+        from core import personlive as _plv
+        from core import personmodell as _pm
+        kmap = _plv.treffer_karte(cfg["data_dir"])
+        kab = int((_pm.status_lesen(cfg["data_dir"]) or {})
+                  .get("feuer_ab") or _plv.FEUER_AB)
+        return kmap, kab
+    except Exception:
+        return {}, 2
+
 def _hhmm(t):
     return datetime.datetime.fromtimestamp(t).strftime("%H:%M")
 
@@ -155,7 +170,9 @@ def render(cfg, log_pfad, personen_bekannt, params):
         areas_cfg, params.get("area", [""])[0],
         {str(r.get("camera", "?")) for r in by_h.values()})
     aq = f'&amp;area={urllib.parse.quote(ar_aktiv)}' if nur is not None else ''
-    szen = _szen.szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, nur_kameras=nur)
+    _km, _ka = _koerper(cfg)
+    szen = _szen.szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, nur_kameras=nur,
+                                 koerper_map=_km, koerper_ab=_ka)
     paesse = [s for s in szen if person in s["pers"]]
     paesse.sort(key=lambda s: s["start"])                     # Pass 1 = fruehester
 
@@ -270,7 +287,9 @@ def render_pass(cfg, log_pfad, personen_bekannt, eid):
     for r in rows:
         if r.get("eid"):
             by_h[r["eid"]] = r
-    szen = _szen.szenarien_des_tages(by_h, heute0, tag_ende, cfg, _lade_gtmap(cfg))
+    _km, _ka = _koerper(cfg)
+    szen = _szen.szenarien_des_tages(by_h, heute0, tag_ende, cfg, _lade_gtmap(cfg),
+                                 koerper_map=_km, koerper_ab=_ka)
     szen.sort(key=lambda s: s["start"])
     idx = next((i for i, s in enumerate(szen)
                 if any(e.get("eid") == eid for e in s.get("evs") or [])), None)
