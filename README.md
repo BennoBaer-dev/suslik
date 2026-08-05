@@ -11,7 +11,7 @@ clusters go straight into recognition. Camera areas are the part still being bui
 
 The `latest-*` image tags follow the newest release, so `docker compose pull` gets you
 what this README describes. To pin a version instead, use its tag explicitly:
-`ghcr.io/bennobaer-dev/suslik:0.1.0.113-gpu`.
+`ghcr.io/bennobaer-dev/suslik:0.1.0.118-gpu`.
 
 ## Why this exists
 
@@ -36,7 +36,7 @@ declines rather than mislabels.
 The Today page answers "who was on the property, when, and where did they go" — one card per
 person, one block per pass, unknowns kept visible instead of buried:
 
-![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.0.113)
+![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.0.118)
 
 *(Screenshot from a live install of v0.1.0.54; names and faces anonymized.)*
 
@@ -110,10 +110,9 @@ fixed version instead: [installation.md](docs/installation.md#updating).
 ## Documentation
 
 - **[Changelog](CHANGELOG.md)** — what changed per release. Worth a look right now:
-  **0.1.0.63** adds pass drill-down pages, a `gpu-legacy` image variant (testing) for
-  older Intel iGPUs (UHD 6xx, 6th–10th gen Core), and a hardware hint that tells you
-  when a different image variant would suit your machine better. (0.1.0.47 was the
-  performance wave — from roughly a CPU-minute per event to seconds.)
+  **0.1.0.118** moves video decoding to the GPU (Intel and NVIDIA) and roughly halves
+  learning-run times, and **0.1.0.113** added person recognition (preview) — the
+  second recognition path that works without a visible face.
 - **[Installation](docs/installation.md)** — the five image variants (CPU / Intel / Intel legacy / NVIDIA / AMD-testing),
   pull from GHCR or build from the source in this repository, `docker run` and `docker compose`.
 - **[Configuration](docs/configuration.md)** — the setup wizard, config keys, environment

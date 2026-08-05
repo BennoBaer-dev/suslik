@@ -8,7 +8,46 @@ The Today-redesign steps 0.1.0.48–0.1.0.53 ship together with **0.1.0.54**, an
 local steps 0.1.0.55–0.1.0.62 ship together with **0.1.0.63**. The learning-module and
 areas construction steps 0.1.0.64–0.1.0.91 ship together with **0.1.0.92-alpha**, the
 QA/diagnostics steps 0.1.0.93–0.1.0.95 ship together with **0.1.0.96-alpha**, and the
-person-recognition construction step 0.1.0.112 ships together with **0.1.0.113**.
+person-recognition construction step 0.1.0.112 ships together with **0.1.0.113**, and the
+performance/fusion steps 0.1.0.114–0.1.0.117 ship together with **0.1.0.118**.
+
+## 0.1.0.118 — 2026-08-05
+
+- **Recognition got a lot faster.** All judgment frames now come through one pinned
+  pixel path: the color conversion is identical on every machine, video decoding can
+  run on the GPU (Intel via VAAPI, NVIDIA via NVDEC — with hard gates: 8-bit 4:2:0
+  material only, validated drivers only, and a loud software fallback), and only the
+  sampled frames leave the decoder instead of every frame. Measured on the author's
+  machine: a face learning run dropped from 6.6 to 2.9 seconds per event; the frame
+  supply for a 4K HEVC event fell from 5.2 to 1.5 seconds. New environment switch
+  `SUSLIK_HWDEC` (`auto`/`vaapi`/`nvdec`/`aus`), default `auto`. **Honest note:**
+  because the color conversion is now pinned identically everywhere, a judgment that
+  sat exactly on a decision threshold can flip once after this update; after that,
+  everything is consistent again. Nothing to migrate on your side.
+- **Face and person recognition now work together on Today.** A pass with no usable
+  face is attributed to the person the body path recognized (it takes at least as
+  many supporting events as your fire rule requires), clearly marked *via person
+  recognition, no face*. Recognized cards count these passes and they no longer show
+  up as unknown visitors. Face judgments always take precedence, and passes show
+  where their recognition came from (face / person / both).
+- **Full backup and restore.** The System page can download one portable archive with
+  everything you taught your installation — settings (including connection values),
+  the face reference library, learning-run results, the whole person-recognition
+  material with your review verdicts, and the trained models. Restore replaces those
+  parts (keeping one `.pre-restore` copy of each) and restarts the service. The video
+  clip cache and per-event analysis artifacts are deliberately not included.
+- **Measured decision threshold + configurable fire rule for person recognition.**
+  After every training the threshold is measured by cross-validation on your own
+  approved material (honest limit: it calibrates *between* your learned people —
+  strangers are not in the material yet). The fire rule (window, supporting events,
+  cool-down) is editable under *Person → Model status*; a manually set threshold
+  wins until you clear the field.
+- **Smaller improvements.** Person alerts attach the best body crop of the
+  walk-through instead of the crop of the firing moment; the person-learn wizard
+  keeps your person selection when clicking an event-count preset; the discard/delete
+  buttons on the review and body-images pages work again; the hardware hint now also
+  covers a cuda image without an NVIDIA GPU and a rocm image with one; event analysis
+  starts a bit faster (one metadata probe per clip instead of three).
 
 ## 0.1.0.113 — 2026-08-04
 

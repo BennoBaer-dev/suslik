@@ -134,6 +134,21 @@ function configRestore(input) {
   input.value = '';
 }
 
+/* PE6 Full-Restore: Archiv als roher Body (kein multipart — der Server liest
+   stueckweise nach Content-Length), Datei kann einige 100 MB gross sein. */
+function vollRestore(input) {
+  var f = input.files && input.files[0];
+  if (!f) return;
+  if (!confirm('Restore the FULL backup "' + f.name + '"? This replaces settings, references and all learned material, then restarts the service.')) { input.value = ''; return; }
+  var st = document.getElementById('vollrestore-status');
+  st.textContent = 'uploading + restoring … (large files take a while)';
+  fetch('/backup_voll_wiederherstellen', {method: 'POST', body: f})
+    .then(function (r) { return r.json(); })
+    .then(function (d) { st.textContent = d.msg; if (d.ok) _neustartDann('/system', st); })
+    .catch(function () { _neustartDann('/system', st); });
+  input.value = '';
+}
+
 /* Enrollment (AP4): decide on a suggestion / add a stranger as a person / upload */
 function enroll(id, aktion, person, el) {
   fetch('/enroll', {method: 'POST',

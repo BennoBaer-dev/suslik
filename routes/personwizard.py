@@ -87,6 +87,12 @@ def wizard(personen, auswahl_n, person_wahl, bilanz=None, lauf=None,
     if phase == "abnahme":
         # Gefuehrter Fluss (User 04.08.): solange das Review aussteht,
         # KEIN neuer Start — Formular bleibt ausgeblendet.
+        # json.dumps liefert "..." — im doppelt gequoteten onclick-Attribut
+        # zerriss das den Aufruf (Knopf tot, User-Fund 04.08.): den ganzen
+        # Aufruf als Attributwert escapen (&quot;), der Browser dekodiert
+        # Attribute, bevor das JS laeuft.
+        _lid = json.dumps(str(lauf.get("lauf_id") or ""))
+        _dc = html.escape(f"personlaufVerwerfen({_lid})", quote=True)
         teile.append(
             '<div class="card"><b>Last run finished — your review is next</b>'
             f'<div>{lauf.get("geerntet", 0)} images harvested for '
@@ -96,8 +102,7 @@ def wizard(personen, auswahl_n, person_wahl, bilanz=None, lauf=None,
             'href="/personlauf/abnahme">Review the images now</a> '
             '<span class="dim">finish the review to unlock the next '
             "run</span> "
-            '<span style="float:right"><button class="gtb" onclick='
-            f'"personlaufVerwerfen({json.dumps(str(lauf.get("lauf_id") or ""))})">'
+            f'<span style="float:right"><button class="gtb" onclick="{_dc}">'
             "Discard this run</button> <span class=\"dim\">bad result? "
             "throw it all away</span></span></div></div>")
         return "".join(teile)
@@ -128,13 +133,19 @@ def wizard(personen, auswahl_n, person_wahl, bilanz=None, lauf=None,
                  "focused batches — or all at once. People come from your "
                  "face collection; learning one at a time keeps the review "
                  "short.</div></div>")
+    # Presets/Formular lesen die Person beim KLICK live aus dem Dropdown —
+    # der server-seitige Wert ist veraltet, sobald der User umwaehlt, und
+    # warf die Auswahl sonst auf "alle" zurueck (User-Fund 04.08.).
     knoepfe = "".join(
         f'<a class="gtb{" on" if auswahl_n == n else ""}" '
-        f'href="/personlauf?events={n}&person='
-        f'{html.escape(person_wahl or "", quote=True)}">last {n}</a> '
+        f'href="/personlauf?events={n}" onclick="this.href+='
+        "'&person='+encodeURIComponent("
+        "document.getElementById('pl-person').value)\">"
+        f'last {n}</a> '
         for n in (50, 100, 200))
     eigen = ('<form action="/personlauf" method="get" '
-             'style="display:inline;margin-left:10px">'
+             'style="display:inline;margin-left:10px" onsubmit="'
+             "this.person.value=document.getElementById('pl-person').value\">"
              f'<input name="events" type="number" min="1" max="{int(max_events)}"'
              f' size="6" value="{auswahl_n or ""}" placeholder="own N"> '
              f'<input type="hidden" name="person" value="'
@@ -327,7 +338,8 @@ def bestand_seite(laeufe, modell=None):
                 f'<span class="dim">{len(zs)} images · '
                 f'{html.escape(", ".join(tage))}</span> '
                 f'<button class="gtb" style="float:right" '
-                f'onclick="pmLauf({json.dumps(lid)})">Delete this run'
+                # gleiche Quoting-Falle wie beim Discard-Knopf (User-Fund 04.08.)
+                f'onclick="{html.escape(f"pmLauf({json.dumps(lid)})", quote=True)}">Delete this run'
                 "</button>"
                 f'<div class="pm-r" style="margin-top:8px">'
                 f'{"".join(kacheln)}</div></div>')
@@ -363,9 +375,11 @@ async function pmLauf(lid) {{
 </script>"""
 
 
-def modell_seite(status):
+def modell_seite(status, regeln=None):
     """PE3-Status als eigene Seite im Person-Bereich (User 04.08.:
-    'Model status neben Person')."""
+    'Model status neben Person'). regeln = Standardwerte + Grenzen der
+    Feuer-Regel (vom Handler aus core geliefert, kein Streu-Literal)."""
+    regeln = regeln or {}
     teile = ["<h2>Person model — status</h2>",
              '<p class="sub">The body-recognition model, trained from your '
              "approved images. It retrains automatically after every "
@@ -411,6 +425,63 @@ def modell_seite(status):
         '<div class="dim">Manage the images under '
         '<a href="/person">Body images</a> — deletions retrain the model '
         "automatically.</div></div>")
+    # .114: Schwelle (geeicht/eigen) + Feuer-Regel einstellbar
+    gr = regeln.get("grenzen", {})
+    eff_schwelle = status.get("schwelle") or regeln.get("schwelle_std", "?")
+    quelle = status.get("schwelle_quelle") or "standard"
+    quelle_txt = {"eichung": "measured on your material",
+                  "user": "set by you",
+                  "standard": "built-in default"}.get(quelle, quelle)
+    ei = status.get("eichung")
+    ei_txt = ""
+    if ei:
+        ei_txt = (f'<div class="dim">Measured by {ei.get("folds", "?")}-fold '
+                  f'cross-validation over {ei.get("n", "?")} held-out images: '
+                  "strongest confidence for a WRONG person "
+                  f'{ei.get("fremd_max", "?")} &rarr; threshold '
+                  f'{ei.get("schwelle", "?")}; '
+                  f'{round(100 * (ei.get("getragen_anteil") or 0))}% of the '
+                  "genuine images pass. Honest limit: this calibrates "
+                  "BETWEEN your learned people — real strangers are not in "
+                  "the material yet.</div>")
+
+    def _feld(fid, label, wert, einheit=""):
+        lo, hi = gr.get(fid, ("", ""))
+        return (f'<tr><td class="dim">{label}</td>'
+                f'<td><input id="pe-{fid}" type="number" size="6" '
+                f'value="{wert}" min="{lo}" max="{hi}" '
+                f'{"step=0.01" if fid == "schwelle" else ""}> {einheit} '
+                f'<span class="dim">({lo}–{hi})</span></td></tr>')
+
+    teile.append(
+        '<div class="card"><b>Judgment settings</b>'
+        f'<div>Decision threshold: <b>{eff_schwelle}</b> '
+        f'<span class="dim">({quelle_txt})</span></div>' + ei_txt
+        + f'<table style="{st}">'
+        + _feld("schwelle", "Threshold",
+                status.get("schwelle") if quelle == "user" else "")
+        + _feld("fenster_s", "Fire window",
+                status.get("fenster_s") or regeln.get("fenster_s", ""), "s")
+        + _feld("feuer_ab", "Supporting events to fire",
+                status.get("feuer_ab") or regeln.get("feuer_ab", ""))
+        + _feld("karenz_s", "Cool-down after an alert",
+                status.get("karenz_s") or regeln.get("karenz_s", ""), "s")
+        + "</table>"
+        '<div class="dim">Leave the threshold empty to follow the measured '
+        "value automatically (it re-measures with every training). The fire "
+        "rule: alert only after this many supporting events inside the "
+        "window, then stay quiet for the cool-down.</div>"
+        '<div style="margin-top:8px"><button class="gtb on" '
+        'onclick="personRegeln(this)">Save settings</button> '
+        '<span id="pe-status" class="dim"></span></div></div>'
+        "<script>async function personRegeln(btn){btn.disabled=true;"
+        "const d={};for(const k of['schwelle','fenster_s','feuer_ab',"
+        "'karenz_s']){d[k]=document.getElementById('pe-'+k).value;}"
+        "const r=await fetch('/person/einstellungen',{method:'POST',"
+        "headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});"
+        "const j=await r.json();document.getElementById('pe-status')"
+        ".textContent=j.msg||'';if(j.ok){location.reload();}"
+        "btn.disabled=false;}</script>")
     # PE4-Schalter (Aktivierungs-Gate): Arm/Disarm direkt hier
     teile.append(
         '<div class="card"><b>Live switch</b>'
