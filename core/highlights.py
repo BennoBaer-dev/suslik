@@ -12,10 +12,21 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.0.118"
+STAND = "0.1.0.129"
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    ("0.1.0.129", (
+        "Clean up your learning area: runs can now be deleted completely "
+        "— per run or all old ones with a single click. Dismissed "
+        "clusters are remembered, so re-harvests of the same events stay "
+        "quiet.",
+        "\"Looks like\" suggestions now also recognize people already in "
+        "your system — resident clusters no longer show up unlabeled.",
+        "Events without any person in them can be marked as false triggers "
+        "— they get their own silent class and stop cluttering the "
+        "label flow.",
+    )),
     ("0.1.0.118", (
         "Recognition got a lot faster: video decoding now runs on the GPU "
         "(Intel via VAAPI, NVIDIA via NVDEC) and only the frames that matter "

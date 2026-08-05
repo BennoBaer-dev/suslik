@@ -57,13 +57,21 @@ def protokoll_anhaengen(data_dir, eintrag):
 
 
 def adoptierte_embs(data_dir, person):
-    """Embeddings frueher uebernommener Lern-Referenzen dieser Person (Protokoll)."""
+    """Embeddings frueher uebernommener Lern-Referenzen dieser Person — NUR von
+    Dateien, die noch auf der Platte liegen (.127 Review-MUSS 'Phantom-Dedup':
+    das Protokoll wird beim Loeschen von Referenzen/Personen nie nachgezogen;
+    ohne Existenz-Pruefung dedupte die Uebernahme gegen Geloeschtes, und der
+    already-covered-Abschluss machte die Person still unanlernbar). Zeilen ohne
+    ziel-Feld zaehlen nicht (unverifizierbar — schlimmstenfalls wird ein
+    Beinahe-Duplikat erneut kopiert, nie umgekehrt eine Uebernahme verhindert)."""
     zeilen, _k = protokoll_lesen(data_dir)
+    ordner = os.path.join(data_dir, "faces", person)
     aus = []
     for z in zeilen:
         if z.get("person") == person:
             for d in z.get("dateien") or []:
-                if d.get("emb"):
+                if (d.get("emb") and d.get("ziel")
+                        and os.path.isfile(os.path.join(ordner, str(d["ziel"])))):
                     aus.append(d["emb"])
     return aus
 

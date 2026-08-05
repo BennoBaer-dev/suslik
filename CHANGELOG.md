@@ -9,7 +9,50 @@ local steps 0.1.0.55–0.1.0.62 ship together with **0.1.0.63**. The learning-mo
 areas construction steps 0.1.0.64–0.1.0.91 ship together with **0.1.0.92-alpha**, the
 QA/diagnostics steps 0.1.0.93–0.1.0.95 ship together with **0.1.0.96-alpha**, and the
 person-recognition construction step 0.1.0.112 ships together with **0.1.0.113**, and the
-performance/fusion steps 0.1.0.114–0.1.0.117 ship together with **0.1.0.118**.
+performance/fusion steps 0.1.0.114–0.1.0.117 ship together with **0.1.0.118**, and the
+learning-area/run-management steps 0.1.0.119–0.1.0.128 ship together with **0.1.0.129**.
+
+## 0.1.0.129 — 2026-08-05
+
+- **Learning runs can be deleted completely.** One button per run on the anchor page
+  removes all its clusters (named and dismissed ones included) and every harvested
+  image — permanently, no trash folder. "Delete all old runs" clears everything except
+  the newest run with a single confirmation. References you already adopted into
+  recognition always stay (they are copies in your reference library), and a run that
+  is still working can never be deleted.
+- **Dismiss with memory.** Dismissing a cluster removes its images but remembers the
+  cluster — re-harvests of the same events inherit the dismissal silently instead of
+  asking about the same stranger again.
+- **"Looks like" also recognizes people already in your system.** Anchor clusters of
+  residents now get a suggestion badge ("already in your system" / "named on another
+  cluster") instead of showing up unlabeled; the cluster overview shows the badges too,
+  and re-harvested duplicates of unnamed clusters are marked and point to the newer run.
+- **False-trigger class for empty events.** Events without any person can be marked as
+  such in the label flow ("No person in this event"); they get their own silent class,
+  stop showing up as open questions and are counted honestly on the QC report.
+- **Adopting an already-covered cluster is no longer an error.** If every selected
+  image is near-identical to references a person already has, the cluster is closed as
+  adopted ("already covered — nothing copied") instead of failing with an error
+  (issue #17). A guard makes sure this can never silently close a person whose
+  reference images were deleted meanwhile.
+- **Person learn and the Frigate sync now read the Frigate address from your saved
+  settings** (issue #18). Both paths used to read it only from the process environment,
+  which UI-configured installations never set — harvesting runs failed with
+  *unknown url type* and the sync card showed the same error. Nothing to configure:
+  the address you entered in the setup wizard now reaches every part of the program.
+- **Writing references back to Frigate works with current Frigate 0.18.** Frigate
+  changed its face-library API (upload is now `create` + `register`, uploads are
+  renamed and processed asynchronously); suslik uses the new endpoints, keeps an
+  export protocol so nothing is ever uploaded twice, never deletes anything in
+  Frigate, and reports honestly when Frigate refuses uploads because its own face
+  recognition is disabled.
+- **Smaller improvements.** Today cards and recognition chips show a real photo for
+  body-recognized passes (kept per day); appearances show how a pass was recognized;
+  a person-learn run that finds no confirmed passes for the chosen person now explains
+  why (with the person's last-seen date) instead of finishing silently; a duplicate
+  guard in the harvest prevents storing the same frame twice; the GT correction bar
+  on recognized events reads "Correct if wrong" instead of asking "Who was it?"
+  (issue #17); video exports download with the correct `.mp4` name (issue #15).
 
 ## 0.1.0.118 — 2026-08-05
 

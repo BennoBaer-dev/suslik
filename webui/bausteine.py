@@ -13,9 +13,11 @@ def gt_leiste(eid, schnell, andere, cur=""):
     knoepfe = [(p, p) for p in schnell]
     if len(schnell) >= 2:
         knoepfe.append(("+".join(schnell[:2]), "+".join(p[:1] for p in schnell[:2])))
-    from szenarien import GT_OFFEN_LABELS   # EINE Quelle fuer die Speicherwerte (Review .54:
-    knoepfe += [(GT_OFFEN_LABELS[0], "Stranger"),   # Anzeige-Text und Speicherwert waren
-                (GT_OFFEN_LABELS[1], "?")]          # verwechselt worden — Kopplung statt Kopie)
+    from szenarien import GT_KEIN_MENSCH, GT_OFFEN_LABELS   # EINE Quelle fuer die
+    knoepfe += [(GT_OFFEN_LABELS[0], "Stranger"),   # Speicherwerte (Review .54: Anzeige-
+                (GT_OFFEN_LABELS[1], "?"),          # Text und Speicherwert waren
+                (GT_KEIN_MENSCH, "No person")]      # verwechselt; Issue #16: Fehlausloeser
+                                                    # per Klick beurteilen und schliessen
     b = "".join(f'<button class="gtb{" on" if cur == lb else ""}" '
                 f"onclick=\"gt('{eid}','{html.escape(lb, quote=True)}',this)\">{html.escape(txt)}</button>"
                 for lb, txt in knoepfe)

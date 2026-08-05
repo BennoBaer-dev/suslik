@@ -35,7 +35,10 @@ sensible. Widen it afterwards.
 recurring person, gathered across cameras and days. This is the step that turns "hundreds
 of face crops" into "seven people who keep showing up".
 
-**4. Naming.** Your step, and the only one that needs you. Open an anchor cluster: suslik
+**4. Naming.** Your step, and the only one that needs you. The anchor overview helps you
+triage: unnamed clusters carry a **"looks like: X"** badge when their face matches someone
+you already named, and clusters that a newer run re-harvested identically are dimmed with a
+*"same cluster as …"* note so you only name the newest one. Open an anchor cluster: suslik
 sorts its faces by perspective (facing the camera, looking left, looking right) and marks
 the ones it recommends as references. Two buttons — **Select all recommended** and
 **Deselect all** — do the bulk work; you can still add or remove single images. Then give
@@ -71,7 +74,7 @@ values; if a run does not feel right, this is where you tune it, one value at a 
 | `benennung_k_je_bin` | how many recommended images are kept per perspective |
 | `benennung_yaw_grenze` | beyond this angle a face counts as looking left or right |
 | `benennung_dup_sim` | similarity at or above which two crops count as near-identical |
-| `benennung_vorschlag_schwelle` | when suslik offers "looks like *X*" during naming |
+| `benennung_vorschlag_schwelle` | threshold for the "looks like X" suggestion — used during naming AND for the badge on the anchor overview |
 | `anker_k_min` | minimum number of faces before a cluster becomes an anchor |
 
 If a run produced anchors that mix two people, or split one person into three clusters,

@@ -11,7 +11,7 @@ clusters go straight into recognition. Camera areas are the part still being bui
 
 The `latest-*` image tags follow the newest release, so `docker compose pull` gets you
 what this README describes. To pin a version instead, use its tag explicitly:
-`ghcr.io/bennobaer-dev/suslik:0.1.0.118-gpu`.
+`ghcr.io/bennobaer-dev/suslik:0.1.0.129-gpu`.
 
 ## Why this exists
 
@@ -36,7 +36,7 @@ declines rather than mislabels.
 The Today page answers "who was on the property, when, and where did they go" — one card per
 person, one block per pass, unknowns kept visible instead of buried:
 
-![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.0.118)
+![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.0.129)
 
 *(Screenshot from a live install of v0.1.0.54; names and faces anonymized.)*
 
@@ -110,9 +110,11 @@ fixed version instead: [installation.md](docs/installation.md#updating).
 ## Documentation
 
 - **[Changelog](CHANGELOG.md)** — what changed per release. Worth a look right now:
-  **0.1.0.118** moves video decoding to the GPU (Intel and NVIDIA) and roughly halves
-  learning-run times, and **0.1.0.113** added person recognition (preview) — the
-  second recognition path that works without a visible face.
+  **0.1.0.129** lets you manage learning runs (delete completely, dismiss with
+  memory, "looks like" for residents, a false-trigger class), **0.1.0.118** moved
+  video decoding to the GPU (Intel and NVIDIA) and roughly halved learning-run
+  times, and **0.1.0.113** added person recognition (preview) — the second
+  recognition path that works without a visible face.
 - **[Installation](docs/installation.md)** — the five image variants (CPU / Intel / Intel legacy / NVIDIA / AMD-testing),
   pull from GHCR or build from the source in this repository, `docker run` and `docker compose`.
 - **[Configuration](docs/configuration.md)** — the setup wizard, config keys, environment
@@ -154,56 +156,47 @@ only needed for the optional push-notification channels.
 
 ## What's being worked on right now
 
-*(updated 2026-08-01 — this section changes with every release)*
+*(updated 2026-08-05 — this section changes with every release)*
 
-- **Learning module** *(active construction, usable today)*: a guided learning run harvests
-  faces from as many past person events as you choose (a wizard estimates the duration on
-  your hardware first), grades them through quality gates, and clusters them into recurring
-  people across days and cameras — the postman who shows up four times in three weeks ends
-  up as **one** cluster you name once. Naming is in (per-perspective recommendations,
-  duplicate guards, collision checks); adoption into recognition is what's being built
-  right now.
+- **Person recognition (preview)** *(shipped in 0.1.0.113, extended since)*: the second
+  recognition path that works without a visible face. As of 0.1.0.118 it cooperates with
+  the face path on Today (passes with no usable face are attributed to the person the body
+  path recognized, clearly marked), its decision threshold is measured from your own
+  reviewed material after every training, and the fire rule is configurable. Next: getting
+  real stranger material into that calibration, and moving the harvest inference to the
+  GPU/NPU.
+- **Performance**: a big chunk landed in 0.1.0.118 — one pinned pixel path everywhere,
+  video decoding on the GPU (Intel via VAAPI, NVIDIA via NVDEC) with hard gates and a loud
+  software fallback, and only the sampled frames leave the decoder. On my machine a
+  learning run went from 6.6 to 2.9 seconds per event. Still open: the person-harvest
+  inference (pose gate + embedding) is CPU-bound and next in line.
+- **False-trigger handling** *(built, ships with the next release)*: passes where the whole
+  clip contains no serious face get their own quiet class instead of counting as unknown
+  visitors, the labeling list collapses weak faces with nothing confirmed nearby, and a
+  **No person** button closes a false trigger with one click (issue #16).
+- **Anchor triage** *(built, ships with the next release)*: unnamed clusters show a
+  "looks like: X" suggestion right on the overview, and clusters that a newer run
+  re-harvested identically are dimmed so you only name the newest one.
+- **Learning module** *(works end to end)*: harvest, quality gates, clustering into
+  recurring people, naming with per-perspective recommendations, and adoption into
+  recognition (working since 0.1.0.102).
 - **Camera areas** *(stage 1 shipped in 0.1.0.103-alpha)*: group cameras into parts of your
-  property (driveway, backyard, …). One camera belongs to one area, everything else stays in
-  Default; areas act as views on Today/Appearances/Events, and alerts name the area. Passes
-  are still always grouped and judged across the whole property — an area never re-judges a
-  pass. Per-area alert behavior is stage 2.
-- **Performance — honestly not done yet**: recognition inference itself is fast on a GPU
-  (measured ~13 ms per inference on CUDA), but the full per-event analysis still takes
-  longer than I want — the wall time sits in the CPU side around the detector, not in the
-  GPU. I'm not satisfied with it and will keep digging.
-- **Exploring a live path (go2rtc)**: instead of waiting for the recorded clip, check the
-  live stream frame by frame until a face is recognized *really well* — with the explicit
-  goal of firing a Home Assistant action the moment a **known** face is confirmed (open the
-  door light, disarm a scene, whatever you wire up). Early exploration, not built yet; the
-  clip-based judgment stays the reference.
-- **Performance wave** *(shipped in 0.1.0.47)*: a persistent analysis worker keeps the
-  models warm, recognition can run on the Intel NPU (picked automatically by a one-time
-  startup benchmark), the detector follows the clip's aspect ratio, browser copies are
-  transcoded lazily, and NVIDIA gets a full-hardware NVENC pipeline. Net effect on the
-  author's box: from roughly a CPU-minute per event to ~8–13 CPU-seconds warm — with
-  fixed-point acceptance proving judgments unchanged on CPU, Intel GPU/NPU and CUDA.
-- **Today redesign, part 1** *(shipped in 0.1.0.54)*: click a person and see their passes
-  of the day — camera route, best shot, and how the face developed across the pass —
-  plus a calibrated false-detection filter that keeps wheel hubs and foliage out of the
-  unknown-visitor pool (recognition itself untouched). Part 2 (a pass detail page,
-  per-pass unknown numbering, small UI polish) is next.
-- **Automatic false-trigger class**: passes where Frigate saw a "person" but the whole
-  clip contains no usable face will get their own quiet class instead of counting as
-  unknown visitors.
+  property; areas act as views on Today/Appearances/Events, and alerts name the area.
+  Passes are always judged across the whole property. Per-area alert behavior is stage 2.
+- **Exploring a live path (go2rtc)**: unchanged goal — fire a Home Assistant action the
+  moment a known face is confirmed. Sharpened by tester feedback: the version worth
+  building starts the analysis early on the partial recording when nothing has matched
+  yet, instead of a full live rewrite.
+- **Planned — "recurring, not a resident"**: a third review option next to naming and
+  discarding, so the courier who comes three times a week doesn't silently disable your
+  stranger alerts (tester feedback).
 - **Smaller images**: yes, I know the images are big — models, drivers and runtimes are
-  baked in on purpose so nothing is ever downloaded at runtime. Docker only pulls changed
-  layers on updates, but shrinking the images properly is planned for a later pass.
-- **Checked — Google Coral TPU**: I actually ran the test instead of guessing. A
-  Coral-sized recognition model (~3 MB INT8) does fit the chip and even keeps strangers
-  out — but it loses real residents: the separation band the every-frame method needs
-  collapses to ~0.02 (the full model keeps ~0.18). No threshold fixes that, so the
-  verdict is a measured no. Details in
-  [known-issues.md](docs/known-issues.md).
-- **Further out — recognizing people beyond the face**: once a person has been positively
-  identified by face, keep a few appearance snapshots and use a local vision model to
-  recognize them even when no usable face is visible. Local-first, baked into the images
-  like everything else.
+  baked in on purpose so nothing is ever downloaded at runtime. Shrinking them properly is
+  planned for a later pass.
+- **Checked — Google Coral TPU**: I ran the test instead of guessing. A Coral-sized
+  recognition model does fit the chip and even keeps strangers out — but it loses real
+  residents (the separation band collapses to ~0.02). No threshold fixes that, so the
+  verdict is a measured no. Details in [known-issues.md](docs/known-issues.md).
 
 Thanks to everyone testing and reporting back — the feedback is directly shaping this list.
 

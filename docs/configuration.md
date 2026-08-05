@@ -40,10 +40,15 @@ Everything persistent is under the `/data` volume you mounted:
 | `faces/` | your reference face library (the "master") |
 | `learn/` | enrollment data and the persistent unknown pool |
 | `state/` | judgments, ground-truth labels, write-back log |
+| `personlern/` | the person-recognition path: harvest runs with crops and your review verdicts, the trained model (`modell/`), judged live crops (`treffer/`, 30-day trim) and the fire-window state |
 | `clips/`, `events/` | cached recorded clips (auto-pruned) and per-event crops/logs |
 | `backups/` | daily rotating tar backups of the reference library + ground-truth files (14 kept) |
 
-Because config and data live in the volume, they survive image updates. Back up `/data`.
+Because config and data live in the volume, they survive image updates. Back up `/data` —
+or use the **Full backup** card on the System page: it downloads one portable archive with
+`config`, `faces`, `learn`, `personlern` and `state` (deliberately without the clip cache
+and per-event artifacts), and the matching restore replaces those parts, keeps one
+`.pre-restore` copy of each and restarts the service. Made for moving to another machine.
 
 ## Key settings
 

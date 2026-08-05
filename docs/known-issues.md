@@ -4,26 +4,27 @@ An honest list of what we know is rough, wrong or missing right now. If you hit
 something that is not on this list, please open an issue — that is exactly the kind
 of feedback this project needs.
 
-_Last updated: 2026-07-30 (0.1.0.102-alpha)._
+_Last updated: 2026-08-05 (0.1.0.118)._
 
 ## Known bugs
 
-- **Installations older than 0.1.0.92 never see an update hint for alpha releases.**
-  Their version comparison cannot parse a tag like `v0.1.0.108-alpha` (the suffix
-  handling was only added on 2026-07-30), so the check silently decides "nothing
-  newer". Measured on a real 0.1.0.63 container: it fetches the release fine and
-  stores `v0.1.0.108-alpha`, then compares it as *not* newer. Nothing is broken on
-  your side — but if you are on such a version, you have to check for updates
-  yourself. Every version from 0.1.0.92 on gets the hint correctly.
+- ~~**Installations older than 0.1.0.92 never see an update hint for alpha
+  releases.**~~ **Resolved by policy since 0.1.0.109:** releases carry no
+  version suffix anymore, and every old installation can parse the plain tags
+  (measured on a real 0.1.0.63 container against `v0.1.0.109`). Kept here for
+  the record.
 
 - **Deleting in Frigate is intentionally out of scope.** suslik never deletes anything
   in Frigate — removals stay local (a tombstone prevents re-import on the next sync).
   Since 0.1.0.45 it does not even try (the old non-portable SSH attempt is gone).
 - ~~**Writing references back to Frigate is not portable yet.**~~ **Fixed in
-  0.1.0.107-alpha.** The export direction used to copy files over SSH, which only
-  worked where suslik happens to have root SSH access to the Frigate host. It now
-  uploads through the official Frigate HTTP API (`POST /api/faces/{name}`), like
-  every other Frigate call. Both directions work on a normal installation.
+  0.1.0.107-alpha, endpoints corrected in 0.1.0.128.** The export direction used to
+  copy files over SSH, which only worked where suslik happens to have root SSH
+  access to the Frigate host. It now uploads through the official Frigate HTTP API
+  (`POST /api/faces/{name}/create` + `/register`), like every other Frigate call.
+  Note: Frigate only accepts face uploads while its own face recognition is
+  enabled (`face_recognition.enabled: true`); otherwise it answers
+  "Face recognition is not enabled." and suslik reports exactly that.
 - **Two GPU instances on one Intel iGPU could crash on startup** (exit 139) —
   **fixed as of 0.1.0.44**: all compute jobs of one instance now run through a single
   persistent worker process, which bundles the GPU contexts; the collision window was
@@ -47,14 +48,19 @@ _Last updated: 2026-07-30 (0.1.0.102-alpha)._
 - **Detection resolution follows the clip's aspect ratio since 0.1.0.44** (long edge
   1280, multiple-of-32 grid — bit-identical detections, about a quarter less GPU work
   on 16:9). Making the base size configurable is still on the list.
-- **Scenarios (one walkthrough across several cameras) are displayed but not yet
-  used for decisions.** Cross-camera grouping into zones — and judging a person by
-  the best face across the whole walkthrough — is the next big construction site.
+- **Person recognition (preview): the decision threshold is calibrated between
+  your learned people only.** Real strangers are not part of that calibration yet
+  (they would need their own harvested material); keep an eye on body-path alerts
+  and disarm any time. Scenario-driven decisions themselves are live: the scene
+  window gates stranger alerts, passes with no serious face get a quiet class,
+  and body recognition attributes face-less passes.
 - **Merge suggestions are capped at 20**, ordered by similarity, so the page stays
   usable. Answering them (Merge / Different) makes room for the next ones.
-- **Configuration backup does not cover everything yet**; treat it as a convenience,
-  not a full disaster-recovery story. The `/data` volume is the source of truth —
-  back that up.
+- **Backup comes in two sizes.** The configuration backup covers the settings; the
+  **full backup** (System page, since 0.1.0.118) covers everything you taught the
+  installation — settings, face references, learning results, person-recognition
+  material and models. It deliberately excludes the clip cache and per-event
+  artifacts (they rebuild over time). The `/data` volume remains the source of truth.
 - **Coral / EdgeTPU sticks are not supported — actually tested and closed (07/2026).**
   This was measured, not assumed: a Coral-sized recognition model (MobileFaceNet-class,
   ~3 MB INT8 — it *does* fit the EdgeTPU cache) was run through suslik's full
@@ -68,16 +74,17 @@ _Last updated: 2026-07-30 (0.1.0.102-alpha)._
   blocker is the physics of the shrunken model, not the tooling. If a
   small-accelerator path comes, it will more likely be a Hailo-8 investigation.
   A Coral still helps Frigate's own object detection — just not suslik's face pipeline.
-- **Building from source needs the model files** — the source is published as of
-  0.1.0.102-alpha, but the bundled ONNX models (~600 MB, third-party terms — see NOTICE)
+- **Building from source needs the model files** — the source is published (since 0.1.0.92), but the bundled ONNX models (~600 MB, third-party terms — see NOTICE)
   are not in the git tree. A checksummed fetch script is planned; until then the
   prebuilt images are the way to *run* suslik, and the source is there to read,
   audit and patch.
 
 ## Next up (rough order)
 
-1. Zones / scenario-driven decisions (group cameras, judge the whole walkthrough).
-2. Frigate write-back via the official HTTP API.
-3. Harder failure handling for the compute backend.
-4. Configurable detection resolution.
-5. A second recognition path for faces the primary model cannot place.
+1. Per-area alert behavior (camera areas stage 2).
+2. Stranger material for the person-path calibration, and moving its harvest
+   inference (pose gate + embedding) to the GPU/NPU.
+3. A "recurring, not a resident" review option, so naming the courier does not
+   silently disable stranger alerts.
+4. Harder failure handling for the compute backend.
+5. Configurable detection resolution.

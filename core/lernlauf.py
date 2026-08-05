@@ -20,6 +20,7 @@ Schwellen/Benchmarks kommen vom Aufrufer aus Config/Messung.
 import json
 import time
 import os
+import shutil
 import tempfile
 
 SCHEMA_VERSION = 1
@@ -47,7 +48,7 @@ _MITGLIED_PFLICHT = ("event", "datei", "t", "kamera", "front", "sharp", "det",
                      # wie stuetz_phys) + Embedding fuer Fast-Duplikat/Vorschau —
                      # die Ernte-Kandidaten tragen alle drei Felder bereits.
                      "bbox", "ts", "emb")
-ANKER_STATUS = ("unbenannt", "benannt", "uebernommen")
+ANKER_STATUS = ("unbenannt", "benannt", "uebernommen", "verworfen")
 
 # E4a Namens-Ebene (Widerleger-MUSS): EINZIGE Namensquelle des Projekts —
 # anlernen/verifyd ziehen bei ihrer naechsten Anfassung hierher nach, kein
@@ -61,6 +62,22 @@ def person_norm(s):
 
 def _pfad(data_dir, name):
     return os.path.join(data_dir, "state", name)
+
+
+def lauf_abgeschlossen(lauf):
+    """Abschluss-Kriterium des Face-Lernlaufs — ZENTRALE QUELLE (.125, Review-
+    MUSS): 'fertig' steht zwar in PHASEN, wird vom Lernlauf aber nie geschrieben;
+    abgeschlossen heisst real: Anker-Phase durch (Status 'anchors ready …' oder
+    'anchors: none …'). Zweit-Nutzer desselben Kriteriums (verifyd-Neustart-Gate
+    ~4883, lernwizard-Phasenleiste :158) ziehen bei ihrer naechsten Anfassung
+    hierher nach — nie lokal nachbauen (QS-Ebenen-Regel: kein Streu-Literal)."""
+    if not lauf:
+        return False
+    if lauf.get("phase") == "fertig":
+        return True
+    st = str((lauf.get("fortschritt") or {}).get("status", ""))
+    return (lauf.get("phase") == "anker"
+            and st.startswith(("anchors ready", "anchors: none")))
 
 
 def lauf_lesen(data_dir):
@@ -117,8 +134,8 @@ def anker_pruefen(a):
             fehler.append(f"feld {k}: {type(a[k]).__name__} statt {typ.__name__}")
     if a.get("status") not in ANKER_STATUS:
         fehler.append(f"status {a.get('status')!r} nicht in {ANKER_STATUS}")
-    if a.get("status") == "unbenannt" and a.get("person") is not None:
-        fehler.append("status unbenannt aber person gesetzt")
+    if a.get("status") in ("unbenannt", "verworfen") and a.get("person") is not None:
+        fehler.append(f"status {a['status']} aber person gesetzt")
     # E4a (Widerleger-MUSS): die Wache greift in BEIDE Richtungen — benannt/
     # uebernommen verlangt einen gueltigen Namen in Normalform, nicht nur
     # unbenannt verbietet einen.
@@ -209,6 +226,159 @@ def anker_aktualisieren(data_dir, anker_id, **felder):
                 pass
             raise
     return neu
+
+
+def anker_crops_loeschen(data_dir, satz):
+    """Crop-JPGs eines Ankers von der Platte nehmen (fremde Gesichter muessen
+    nicht liegen bleiben — Dismiss-Entscheid User 05.08.). NUR die Bilddateien;
+    die Anker-Zeile mit Zentroid/Mitglieds-Metadaten bleibt als Gedaechtnis
+    fuer die Wiederernte-Erbschaft. Best-effort (fehlende Datei ist ok),
+    -> Anzahl geloeschter Dateien."""
+    lauf_id = str((satz.get("lauf") or {}).get("lauf_id") or "")
+    if not lauf_id:
+        return 0
+    basis = os.path.realpath(os.path.join(
+        data_dir, "state", "lernlauf", lauf_id, "crops"))
+    n = 0
+    for m in satz.get("mitglieder") or []:
+        fn = os.path.basename(str(m.get("datei") or ""))
+        if not fn:
+            continue
+        p = os.path.realpath(os.path.join(basis, fn))
+        if p.startswith(basis + os.sep) and os.path.isfile(p):
+            try:
+                os.remove(p)
+                n += 1
+            except OSError:
+                pass
+    return n
+
+
+def anker_verwerfen(data_dir, anker_id):
+    """Dismiss mit Gedaechtnis (User-Entscheid 05.08., nicht-loeschen-Prinzip):
+    Status -> verworfen (Zeile+Zentroid BLEIBEN, damit Wiederernten derselben
+    Events still erben statt erneut zu fragen), Crop-Bilder werden geloescht.
+    -> (satz, geloeschte_crops)."""
+    satz = anker_aktualisieren(data_dir, anker_id,
+                               status="verworfen", person=None)
+    return satz, anker_crops_loeschen(data_dir, satz)
+
+
+def lauf_loeschen(data_dir, lauf_id):
+    """EINEN Lauf KOMPLETT loeschen (User-Entscheid 05.08., zweite Fassung:
+    'ganz loeschen, kein Papierkorb' — Entwicklungs-Realitaet: die Ernte aendert
+    sich, ein neuer Lauf ersetzt den alten mitsamt Daten). Entfernt ALLE
+    Anker-Zeilen dieses Laufs (unbenannt, verworfen, benannt, uebernommen) aus
+    dem Store und den ganzen Lauf-Ordner (crops, kandidaten, Logs) HART von der
+    Platte — kein trash/. Bewusste Folgen, die der Knopf-Dialog dem User sagt:
+      - bereits UEBERNOMMENE Referenzen bleiben (uebernehmen() KOPIERT nach
+        faces/<person>/ — der Lauf-Ordner ist nicht ihr Speicherort),
+      - benannt-aber-noch-nicht-uebernommenes Material ist danach WEG,
+      - das Dismiss-Gedaechtnis DIESES Laufs ist WEG (Erbschafts-Zeilen in
+        neueren Laeufen bleiben, sie gehoeren dem neueren Lauf).
+    Unlesbare Zeilen werden ROH weitergefuehrt (keinem Lauf zuordenbar — nie
+    stiller Verlust im Store). Zeigt lernlauf.json auf diesen Lauf und der ist
+    abgeschlossen (lauf_abgeschlossen — NICHT das nie geschriebene 'fertig'),
+    wird sie mit entfernt (Wizard wieder frei; laufende Laeufe blockt der
+    Aufrufer). store_lock + atomar (mkstemp+replace), idempotent. Die Ordner-
+    Loeschung wird NACHGEZAEHLT (Review .125: nie eine Loeschung behaupten, die
+    nicht stattfand) -> dateien = wirklich entfernt, rest = liegen geblieben,
+    ordner = Ordner ist weg.
+    -> {entfernt, benannt, verworfen, kaputt, dateien, rest, ordner}."""
+    p = _pfad(data_dir, "anker.jsonl")
+    zaehl = {"entfernt": 0, "benannt": 0, "verworfen": 0, "kaputt": 0,
+             "dateien": 0, "rest": 0, "ordner": True}
+    with store_lock(data_dir):
+        if os.path.exists(p):
+            bleib = []
+            with open(p, encoding="utf-8") as f:
+                for zeile in f:
+                    z = zeile.rstrip("\n")
+                    if not z.strip():
+                        continue
+                    try:
+                        d = json.loads(z)
+                    except Exception:
+                        zaehl["kaputt"] += 1
+                        bleib.append(z)            # unlesbar => IMMER erhalten
+                        continue
+                    if str((d.get("lauf") or {}).get("lauf_id") or "") != str(lauf_id):
+                        bleib.append(z)
+                        continue
+                    zaehl["entfernt"] += 1
+                    st = d.get("status")
+                    if st in ("benannt", "uebernommen"):
+                        zaehl["benannt"] += 1
+                    elif st == "verworfen":
+                        zaehl["verworfen"] += 1
+            if zaehl["entfernt"]:
+                fd, tmp = tempfile.mkstemp(dir=os.path.dirname(p),
+                                           prefix=".anker.", suffix=".tmp")
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
+                        f.write(("\n".join(bleib) + "\n") if bleib else "")
+                        f.flush()
+                        os.fsync(f.fileno())
+                    os.replace(tmp, p)
+                except Exception:
+                    try:
+                        os.unlink(tmp)
+                    except OSError:
+                        pass
+                    raise
+        # lernlauf.json mit entfernen, wenn sie auf DIESEN abgeschlossenen Lauf
+        # zeigt — sonst zeigte der Wizard einen Lauf, dessen Daten weg sind.
+        lauf, _f = lauf_lesen(data_dir)
+        if (lauf and str(lauf.get("lauf_id") or "") == str(lauf_id)
+                and lauf_abgeschlossen(lauf)):
+            try:
+                os.remove(_pfad(data_dir, "lernlauf.json"))
+            except OSError:
+                pass
+    # Lauf-Ordner HART loeschen (nach dem Store-Schreiben; Containment: lauf_id
+    # ist vom Aufrufer regex-geprueft, zusaetzlich realpath-Wache gegen Ausbruch).
+    # Ehrliche Bilanz per NACHZAEHLUNG statt Vorher-Zaehlung.
+    basis = os.path.realpath(os.path.join(data_dir, "state", "lernlauf"))
+    ordner = os.path.realpath(os.path.join(basis, str(lauf_id)))
+    if ordner.startswith(basis + os.sep) and os.path.isdir(ordner):
+        vorher = sum(len(dateien) for _w, _d, dateien in os.walk(ordner))
+        shutil.rmtree(ordner, ignore_errors=True)
+        zaehl["rest"] = (sum(len(dateien) for _w, _d, dateien in os.walk(ordner))
+                         if os.path.isdir(ordner) else 0)
+        zaehl["dateien"] = vorher - zaehl["rest"]
+        zaehl["ordner"] = not os.path.isdir(ordner)
+    return zaehl
+
+
+def alte_laeufe_loeschen(data_dir):
+    """ALLE Laeufe ausser dem NEUESTEN komplett loeschen (User 05.08.: ein
+    Sammel-Knopf mit EINEM OK statt Knopf je Lauf; der neueste Lauf bleibt
+    IMMER stehen). Neuester = groesste lauf_id im Store (L<JJJJMMTT_HHMMSS>
+    sortiert lexikalisch = chronologisch). Ein AKTIVER, nicht abgeschlossener
+    Lauf wird uebersprungen, nie geloescht (auch wenn er nicht der neueste im
+    Store ist — z.B. frisch gestartet, noch ohne Anker-Zeilen).
+    -> (gesamt_bilanz wie lauf_loeschen + 'laeufe', geloeschte_ids, behalten_id)."""
+    saetze, _k = anker_lesen(data_dir)
+    ids = sorted({str((s.get("lauf") or {}).get("lauf_id") or "") for s in saetze} - {""})
+    gesamt = {"entfernt": 0, "benannt": 0, "verworfen": 0, "kaputt": 0,
+              "dateien": 0, "rest": 0, "ordner": True, "laeufe": 0}
+    if len(ids) < 2:
+        return gesamt, [], (ids[-1] if ids else None)
+    lauf, _f = lauf_lesen(data_dir)
+    aktiv = (str(lauf.get("lauf_id") or "")
+             if lauf and not lauf_abgeschlossen(lauf) else None)
+    weg = []
+    for lid in ids[:-1]:
+        if lid == aktiv:
+            continue                               # laufenden Lauf NIE anfassen
+        z = lauf_loeschen(data_dir, lid)
+        for k in ("entfernt", "benannt", "verworfen", "dateien", "rest"):
+            gesamt[k] += z[k]
+        gesamt["kaputt"] = z["kaputt"]             # Stand nach letztem Lauf, keine Summe
+        gesamt["ordner"] = gesamt["ordner"] and z["ordner"]
+        gesamt["laeufe"] += 1
+        weg.append(lid)
+    return gesamt, weg, ids[-1]
 
 
 def store_lock(data_dir):

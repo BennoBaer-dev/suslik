@@ -1,18 +1,24 @@
 """core/personlive — PE4: Live-Urteil des Koerper-Strangs (stufe2.md).
 
 Bewusst LEICHT: kein Clip-Decode im Live-Weg — je Event EIN Urteil aus
-Frigates snapshot-clean + data.box (dieselbe Quelle wie die Prototyp-Kette).
+Frigates snapshot-clean + data.box. EHRLICHER TRAIN/SERVE-UNTERSCHIED
+(Doku-QS 05.08.): das TRAININGS-Material kommt aus dekodierten Clip-
+Frames (Ernte-Kette), das Live-Urteil aus dem Snapshot-WebP — die
+Festlegung 'eigene Bilder aus dem Clip' fuer den Live-Weg ist als
+Umbau notiert (Einklinken in die Frames der Gesichts-Analyse).
 Kette: Personen-Crop -> DINOv2-ONNX (Session gecacht) -> SVM-proba.
 
 FEUER-REGEL (User-Anforderung): gemeldet wird erst, wenn im Fenster
-(FENSTER_S) mindestens FEUER_AB Events derselben Person ueber der Schwelle
-lagen; danach Karenz je Person (KARENZ_S). Zustand liegt geflusht in
-<data_dir>/personlern/live_fenster.json — uebersteht Neustarts.
+mindestens feuer_ab Events derselben Person ueber der Schwelle lagen;
+danach Karenz je Person. Fenster/Stuetzen/Karenz kommen seit .114 aus
+dem Modell-Status (Model-status-Seite), die Konstanten hier sind nur
+die Standardwerte. Zustand geflusht in personlern/live_fenster.json.
 
-EHRLICHE GRENZE: die Schwelle ist noch NICHT an Fremd-Material geeicht
-(Standard konservativ 0.85, konfigurierbar ueber status.json/schwelle).
-Der Strang laeuft nur, wenn der User ihn auf /person/modell scharf
-geschaltet hat (Aktivierungs-Gate)."""
+SCHWELLE: seit .114 nach jedem Training per Kreuzvalidierung GEMESSEN —
+zwischen den GELERNTEN Personen; echte Fremde sind noch nicht im
+Material (offener Punkt). Vorrang user > eichung > standard;
+SCHWELLE_STD=0.85 ist nur der letzte Fallback. Der Strang laeuft nur,
+wenn der User ihn auf /person/modell scharf geschaltet hat."""
 import io
 import json
 import os
@@ -85,6 +91,22 @@ def treffer_buchen(data_dir, eintrag):
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(tmp, p)
+            # verwaiste Treffer-Crops mit dem Buch-Trim raeumen
+            bleiben = set()
+            for z in zeilen:
+                try:
+                    e = json.loads(z).get("eid")
+                    if e:
+                        bleiben.add(str(e).replace("/", "_") + ".jpg")
+                except ValueError:
+                    pass
+            tdir = os.path.join(data_dir, "personlern", "treffer")
+            try:
+                for fn in os.listdir(tdir):
+                    if fn.endswith(".jpg") and fn not in bleiben:
+                        os.remove(os.path.join(tdir, fn))
+            except OSError:
+                pass
     except OSError:
         pass                       # Buchung ist Zusatznutzen, nie Urteils-Blocker
 
@@ -178,7 +200,11 @@ def urteilen(data_dir, frigate_url, eid, schwelle=None):
     # Fensters (groesster Crop), nicht das zufaellige Bild des Feuer-Moments
     # (User-Fund 04.08.: Meldung trug einen 60x140-Fernkamera-Crop, waehrend
     # derselbe Durchgang 312x791 hatte — Szenario-Prinzip gilt auch hier).
-    bild_dir = os.path.join(data_dir, "personlern", "live_fenster")
+    # Tagesbestaendig statt Fenster-fluechtig (User 05.08.: der Today-Chip
+    # eines koerper-zugeschriebenen Passes soll das BESTE Koerper-Bild des
+    # Durchgangs zeigen — also leben die Crops jetzt neben dem Treffer-Buch
+    # und werden mit dessen 30-Tage-Trim geraeumt, nicht mit dem Fenster).
+    bild_dir = os.path.join(data_dir, "personlern", "treffer")
     os.makedirs(bild_dir, exist_ok=True)
     bild = os.path.join(bild_dir, str(eid).replace("/", "_") + ".jpg")
     try:
@@ -196,12 +222,6 @@ def urteilen(data_dir, frigate_url, eid, schwelle=None):
     raus = [t2 for t2 in f["treffer"] if jetzt - t2["ts"] > fenster_s]
     f["treffer"] = [t2 for t2 in f["treffer"]
                     if jetzt - t2["ts"] <= fenster_s]
-    for t2 in raus:                     # Crop-Dateien ausgelaufener Treffer
-        if t2.get("bild"):
-            try:
-                os.remove(t2["bild"])
-            except OSError:
-                pass
     f["treffer"].append({"ts": jetzt, "person": person, "eid": eid,
                          "score": round(score, 3), "bild": bild, "px": px})
     n = sum(1 for t2 in f["treffer"] if t2["person"] == person)
@@ -218,6 +238,6 @@ def urteilen(data_dir, frigate_url, eid, schwelle=None):
     _fenster_schreiben(data_dir, f)
     treffer_buchen(data_dir, {"ts": round(jetzt, 1), "eid": eid,
                               "person": person, "score": round(score, 3),
-                              "feuer": feuer})
+                              "feuer": feuer, "bild": bool(bild)})
     return {"person": person, "score": round(score, 3), "stuetzen": n,
             "feuer": feuer, "bild": bild}

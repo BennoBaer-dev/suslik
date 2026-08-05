@@ -22,9 +22,17 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.environ.get("VERIFY_DATA_DIR") or os.path.join(HERE, "verify_data")   # Container: /data
 MASTER = os.path.join(DATA, "faces")
 META = os.path.join(MASTER, "refs_meta.jsonl")
-FRIGATE = os.environ.get("FRIGATE_URL", "")
 # SSH-Reste (LXC-Credentials, Remote-Faces-Pfad) mit 0.1.0.107 entfallen — der Export
 # laeuft ueber die HTTP-API, s. api_upload(). Nichts hier braucht mehr Host-Zugang.
+
+
+def _frigate():
+    """Frigate-Basis-URL zur AUFRUF-Zeit aus der ENV (#18 carlsmith360): der
+    Dienst exportiert die im UI gespeicherte URL erst beim Config-Laden nach
+    os.environ — ein beim Import eingefrorener Leer-Wert machte jede
+    Sync-Funktion dauerhaft blind ('unknown url type: /api/faces'). Fuer den
+    CLI-Weg (source .env) aendert sich nichts."""
+    return os.environ.get("FRIGATE_URL", "")
 PROGRESS = os.path.join(DATA, "state", "sync_progress.json")   # Fortschritt fuer die UI (X von Y)
 
 
@@ -113,25 +121,39 @@ def master_stand():
 
 
 def frigate_stand():
-    with urllib.request.urlopen(f"{FRIGATE}/api/faces", timeout=20) as r:
+    with urllib.request.urlopen(f"{_frigate()}/api/faces", timeout=20) as r:
         d = json.load(r)
     return {k: sorted(v) for k, v in d.items() if k != "train"}
 
 
 def diff():
+    """-> (nur_frigate, nur_master, extern_geloescht). EXPORT-DEDUP LAEUFT UEBERS
+    PROTOKOLL, nicht ueber Frigate-Dateinamen (Live-Befund 05.08. am echten
+    0.18.0: /register benennt JEDES Bild in <Name>_<timestamp>.webp um und
+    verarbeitet asynchron — ein Namens-Abgleich saehe Exportiertes ewig als
+    'fehlend' und wuerde es bei jedem Lauf erneut hochpumpen; mit dem alten
+    SSH-Weg blieben die Namen erhalten, daher trug der Abgleich frueher).
+    Ein Master-Bild mit aktivem export-Protokolleintrag ist deshalb NIE wieder
+    Export-Kandidat. Bekannte Grenze (Design-Entscheid offen): die von Frigate
+    umbenannten Exporte erscheinen in nur_frigate als Import-Kandidaten —
+    cmd_import ist manuell, nichts laeuft von allein."""
     m, f = master_stand(), frigate_stand()
-    _, tomb = lade_meta()
+    aktiv, tomb = lade_meta()
     nur_frigate, nur_master, extern_geloescht = [], [], []
     for p in sorted(set(m) | set(f)):
         ms, fs = set(m.get(p, [])), set(f.get(p, []))
         for datei in sorted(fs - ms):
-            (nur_frigate if (p, datei) not in tomb else []).append((p, datei))
+            if (p, datei) not in tomb:
+                nur_frigate.append((p, datei))
         for datei in sorted(ms - fs):
-            # Master-Bild fehlt in Frigate: entweder nie exportiert (Herkunft enrollment/
-            # upload) oder EXTERN GELOESCHT (Herkunft frigate-import)
-            aktiv, _ = lade_meta()
+            # Master-Bild fehlt in Frigate: nie exportiert (enrollment/upload) ->
+            # Kandidat · schon exportiert -> Frigate fuehrt es unter eigenem
+            # Namen, NIE erneut senden · Herkunft frigate-import -> dort geloescht.
             herkunft = (aktiv.get((p, datei)) or {}).get("herkunft", "?")
-            (extern_geloescht if herkunft.startswith("frigate-import") else nur_master).append((p, datei))
+            if herkunft.startswith("frigate-import"):
+                extern_geloescht.append((p, datei))
+            elif herkunft != "export":
+                nur_master.append((p, datei))
     return nur_frigate, nur_master, extern_geloescht
 
 
@@ -146,6 +168,16 @@ def cmd_status():
     print(f"EXTERN GELOESCHT (in Frigate weg, im Master aktiv) — Entscheidung offen: {len(eg)}")
     for p, d in eg[:10]:
         print(f"  ! {p}/{d}  (Master loeschen ODER bewusst re-exportieren)")
+    # Ehrliche Zusatzzeile (nie stilles Verschwinden): schon Exportiertes fuehrt
+    # Frigate 0.18 unter EIGENEM Namen (<Name>_<ts>.webp) — es fehlt im
+    # Namens-Abgleich, ist aber KEIN Kandidat und KEIN Verlust.
+    aktiv, _t = lade_meta()
+    m, f = master_stand(), frigate_stand()
+    n_exp = sum(1 for (p, d), e in aktiv.items()
+                if e.get("herkunft") == "export"
+                and d in set(m.get(p, [])) and d not in set(f.get(p, [])))
+    if n_exp:
+        print(f"Bereits exportiert, von Frigate unter eigenem Namen gefuehrt: {n_exp}")
     if not (nf or nm or eg):
         print("=> synchron.")
 
@@ -174,7 +206,7 @@ def cmd_import(dry):
             continue
         os.makedirs(os.path.dirname(ziel), exist_ok=True)
         try:
-            with urllib.request.urlopen(f"{FRIGATE}/clips/faces/{urllib.parse.quote(p)}/{urllib.parse.quote(datei)}",
+            with urllib.request.urlopen(f"{_frigate()}/clips/faces/{urllib.parse.quote(p)}/{urllib.parse.quote(datei)}",
                                         timeout=20) as r:
                 data = r.read()
             with open(ziel, "wb") as f:
@@ -196,22 +228,55 @@ def cmd_import(dry):
     print(msg)
 
 
-def api_upload(person, datei, quelle):
-    """Referenzbild ueber die Frigate-HTTP-API hochladen: POST /api/faces/{name}, Feld `file`
-    (Endpunkte aus dem Frigate-Quellcode verifiziert).
+def api_upload(person, datei, quelle, person_existiert=None):
+    """Referenzbild ueber die Frigate-HTTP-API hochladen (Frigate 0.18.0, Endpunkte
+    aus der OpenAPI der LAUFENDEN Instanz verifiziert, 05.08. — der fruehere
+    POST /api/faces/{name} existiert dort NICHT, 404):
+      1. unbekannter Name -> POST /api/faces/{name}/create (legt den Namen an),
+      2. Bild             -> POST /api/faces/{name}/register (multipart, Feld `file`).
+    person_existiert: vom Aufrufer gereichter Ist-Stand (spart je Datei einen
+    /api/faces-Abruf); None = selbst nachschauen.
 
-    Loest den SSH/scp-Altweg ab (CLAUDE.md-Invariante 'Frigate NUR ueber die HTTP-API':
-    fremde Nutzer haben keinen Root-SSH auf ihr Frigate, der Weg lief hier nur zufaellig).
-    Zugleich Sicherheits-Fix (Sweep 03.08., Schwere hoch): der alte Weg interpolierte den
-    PERSONEN-Namen in eine Remote-Shell-Zeile (`mkdir -p '<pfad>/<person>'`). _NAME_OK
-    erlaubt bewusst alles ausser / \\ NUL — also auch Apostroph und $(...). Ein per
-    /api/faces gelieferter Name wie "Anna';id;#" fuehrte damit Kommandos auf dem
-    Frigate-Host aus (end-to-end nachgestellt), und schon ein legitimes "O'Brien" liess
-    den ganzen Export mit Syntaxfehler abbrechen. Ueber die API ist der Name ein
-    URL-Segment (quote) und ein Formularfeld — keine Shell im Spiel.
-    """
-    if not FRIGATE:
+    WICHTIG: Frigate verweigert JEDE Faces-Mutation mit 400 'Face recognition is
+    not enabled.', solange die hauseigene Gesichtserkennung aus ist — das wird
+    hier als klarer Fehlertext gemeldet, nie als nackter HTTP-Fehler.
+
+    Loest den SSH/scp-Altweg ab (CLAUDE.md-Invariante 'Frigate NUR ueber die
+    HTTP-API'; Sicherheits-Fix Sweep 03.08.: der alte Weg interpolierte den
+    Personen-Namen in eine Remote-Shell-Zeile — ueber die API ist der Name ein
+    URL-Segment (quote) und ein Formularfeld, keine Shell im Spiel)."""
+    if not _frigate():
         raise RuntimeError("FRIGATE_URL fehlt — Export ueber die API nicht moeglich")
+    basis = _frigate().rstrip("/")
+    pq = urllib.parse.quote(person, safe="")
+
+    def _lesen(r):
+        if r.status not in (200, 201):
+            raise RuntimeError(f"Frigate-API antwortete HTTP {r.status}")
+        return r.read()
+
+    def _mutation(req):
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return _lesen(r)
+        except urllib.error.HTTPError as e:
+            detail = ""
+            try:
+                detail = json.loads(e.read()).get("message", "")
+            except Exception:
+                pass
+            if "not enabled" in detail.lower():
+                raise RuntimeError(
+                    "Frigate refuses face changes: its own face recognition is "
+                    "disabled (face_recognition.enabled: false). Enable it in "
+                    "Frigate to use the sync, or leave the sync off.") from e
+            raise RuntimeError(f"Frigate-API HTTP {e.code}: {detail or e.reason}") from e
+
+    if person_existiert is None:
+        person_existiert = person in frigate_stand()
+    if not person_existiert:
+        _mutation(urllib.request.Request(f"{basis}/api/faces/{pq}/create",
+                                         data=b"", method="POST"))
     grenze = uuid.uuid4().hex
     inhalt = open(quelle, "rb").read()
     typ = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
@@ -219,12 +284,9 @@ def api_upload(person, datei, quelle):
     body = (f"--{grenze}\r\nContent-Disposition: form-data; name=\"file\"; "
             f"filename=\"{os.path.basename(datei)}\"\r\nContent-Type: {typ}\r\n\r\n").encode() \
         + inhalt + f"\r\n--{grenze}--\r\n".encode()
-    req = urllib.request.Request(
-        f"{FRIGATE.rstrip('/')}/api/faces/{urllib.parse.quote(person, safe='')}",
-        data=body, headers={"Content-Type": f"multipart/form-data; boundary={grenze}"})
-    with urllib.request.urlopen(req, timeout=60) as r:
-        if r.status not in (200, 201):
-            raise RuntimeError(f"Frigate-API antwortete HTTP {r.status}")
+    _mutation(urllib.request.Request(
+        f"{basis}/api/faces/{pq}/register",
+        data=body, headers={"Content-Type": f"multipart/form-data; boundary={grenze}"}))
 
 
 def cmd_export(dry, auch_extern=False):
@@ -235,6 +297,7 @@ def cmd_export(dry, auch_extern=False):
         print("nichts zu exportieren." + (f" ({len(eg)} extern geloeschte nur mit --auch-extern-geloeschte)" if eg else ""))
         return
     total = len(kandidaten)
+    vorhanden = set(frigate_stand())     # einmal geholt: wer braucht /create?
     for i, (p, datei) in enumerate(kandidaten):
         _progress(phase="export", total=total, done=i, current=p)
         quelle = os.path.join(MASTER, p, datei)
@@ -242,7 +305,8 @@ def cmd_export(dry, auch_extern=False):
         if dry:
             print(f"  [dry] exportiere {p}/{datei}")
             continue
-        api_upload(p, datei, quelle)
+        api_upload(p, datei, quelle, person_existiert=p in vorhanden)
+        vorhanden.add(p)
         meta_append(person=p, datei=datei, herkunft="export", aktiv=True, ziel=ziel)
         print(f"  exportiert: {p}/{datei}")
     _progress(phase="done", total=len(kandidaten), done=len(kandidaten), ok=len(kandidaten), gate=0)
