@@ -11,7 +11,7 @@ clusters go straight into recognition. Camera areas are the part still being bui
 
 The `latest-*` image tags follow the newest release, so `docker compose pull` gets you
 what this README describes. To pin a version instead, use its tag explicitly:
-`ghcr.io/bennobaer-dev/suslik:0.1.0.129-gpu`.
+`ghcr.io/bennobaer-dev/suslik:0.1.0.138-gpu`.
 
 ## Why this exists
 
@@ -53,7 +53,18 @@ person, one block per pass, unknowns kept visible instead of buried:
 - **Config backup/restore** — download all settings as a single JSON file and restore them from it.
 - **Web UI** with a guided setup wizard, scenario view, reference/unknown management, and a
   startup self-check you can read from `docker logs`.
-- **Optional write-back** to Frigate (`sub_label` correction) — off by default (read-only).
+- **Optional write-back** to Frigate — `sub_label` correction *and* uploading reference faces
+  from the Frigate sync page. Off by default (read-only); in read-only mode the import direction
+  (Frigate → suslik) still works, only the transfer out is blocked.
+- **Frigate sync (own page)** — a class-by-class reconciliation of your reference library with
+  Frigate's: what is on both sides, what is ready to transfer, what only Frigate has (import),
+  what you deleted in Frigate (your decision, offer it again or respect the deletion; nothing is
+  re-sent on its own), what was sent earlier through Frigate's API (Frigate renames those, so
+  suslik says honestly that it cannot verify them), and what Frigate rejected. You tick the
+  images that go out, a pre-check flags the ones Frigate will likely refuse, and after the
+  transfer every picture shows Frigate's real answer. A one-click diagnosis bundles the suslik
+  report with Frigate's own log. Needs write-back enabled and Frigate's own face recognition
+  switched on.
 - **Person recognition (preview)** — a second, independent path that learns residents by their
   whole appearance (build, hair, posture) and recognizes them **without a visible face**. You
   harvest images from your own recordings, approve every picture by hand, and arm it yourself;
@@ -110,11 +121,12 @@ fixed version instead: [installation.md](docs/installation.md#updating).
 ## Documentation
 
 - **[Changelog](CHANGELOG.md)** — what changed per release. Worth a look right now:
-  **0.1.0.129** lets you manage learning runs (delete completely, dismiss with
-  memory, "looks like" for residents, a false-trigger class), **0.1.0.118** moved
-  video decoding to the GPU (Intel and NVIDIA) and roughly halved learning-run
-  times, and **0.1.0.113** added person recognition (preview) — the second
-  recognition path that works without a visible face.
+  **0.1.0.138** added the Frigate sync page (both reference libraries reconciled class
+  by class, selective transfer with a pre-check, an honest per-image result and a
+  one-click diagnosis bundle), **0.1.0.129** lets you manage learning runs (delete
+  completely, dismiss with memory, "looks like" for residents, a false-trigger class),
+  and **0.1.0.118** moved video decoding to the GPU (Intel and NVIDIA) and roughly
+  halved learning-run times.
 - **[Installation](docs/installation.md)** — the five image variants (CPU / Intel / Intel legacy / NVIDIA / AMD-testing),
   pull from GHCR or build from the source in this repository, `docker run` and `docker compose`.
 - **[Configuration](docs/configuration.md)** — the setup wizard, config keys, environment
@@ -150,14 +162,19 @@ real hardware (the CUDA image is large, since it bundles the multi-GB CUDA runti
 longer to pull); the **gpu-legacy** variant for older Intel iGPUs is in testing with a community
 tester and has no `latest` tag yet.
 
-**Source code:** published in this repository as of **0.1.0.103-alpha** (MIT). The images remain
+**Source code:** published in this repository as of **0.1.0.92-alpha** (MIT). The images remain
 self-contained: everything runs locally, nothing is downloaded at runtime, and internet access is
 only needed for the optional push-notification channels.
 
 ## What's being worked on right now
 
-*(updated 2026-08-05 — this section changes with every release)*
+*(updated 2026-08-06 — this section changes with every release)*
 
+- **Frigate sync** *(shipped in 0.1.0.138)*: your reference library and Frigate's are
+  reconciled class by class on their own page — ready to transfer, only in Frigate,
+  deleted in Frigate, sent earlier, rejected. Transfers are selective and pre-checked,
+  and every image reports Frigate's real answer. Open: Frigate renames what it accepts,
+  so images sent through the API cannot be verified afterwards.
 - **Person recognition (preview)** *(shipped in 0.1.0.113, extended since)*: the second
   recognition path that works without a visible face. As of 0.1.0.118 it cooperates with
   the face path on Today (passes with no usable face are attributed to the person the body
@@ -170,11 +187,11 @@ only needed for the optional push-notification channels.
   software fallback, and only the sampled frames leave the decoder. On my machine a
   learning run went from 6.6 to 2.9 seconds per event. Still open: the person-harvest
   inference (pose gate + embedding) is CPU-bound and next in line.
-- **False-trigger handling** *(built, ships with the next release)*: passes where the whole
+- **False-trigger handling** *(shipped in 0.1.0.129)*: passes where the whole
   clip contains no serious face get their own quiet class instead of counting as unknown
   visitors, the labeling list collapses weak faces with nothing confirmed nearby, and a
   **No person** button closes a false trigger with one click (issue #16).
-- **Anchor triage** *(built, ships with the next release)*: unnamed clusters show a
+- **Anchor triage** *(shipped in 0.1.0.129)*: unnamed clusters show a
   "looks like: X" suggestion right on the overview, and clusters that a newer run
   re-harvested identically are dimmed so you only name the newest one.
 - **Learning module** *(works end to end)*: harvest, quality gates, clustering into

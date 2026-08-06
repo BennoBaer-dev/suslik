@@ -29,7 +29,12 @@ for real performance.
   simplest setup is to run suslik **right alongside Frigate on the same host** — a second Docker
   container (or the same compose stack) — then it reaches Frigate's internal **port 5000** out of
   the box. suslik uses that unauthenticated port 5000; it has **no support for Frigate's
-  authenticated port 8971** (JWT/login) yet.
+  authenticated port 8971** (JWT/login) yet. Reading from Frigate is all suslik needs to
+  work. Only if you want to write reference faces *back* into Frigate (the optional
+  **Frigate sync** page) two more things must be true: write-back has to be enabled in
+  suslik (read-only is the default), and Frigate's own face recognition has to be turned
+  on (`face_recognition.enabled: true`), otherwise Frigate refuses every upload with
+  HTTP 400.
 - **For the Intel variant:** an Intel iGPU exposed at `/dev/dri` (and, if present, an NPU at
   `/dev/accel/accel0`) on the host.
 - **For the NVIDIA variant:** an NVIDIA driver (**R525 or newer**) on the host plus the
@@ -53,23 +58,24 @@ You can either **pull a published image** or **build it yourself**.
 All variants are published on the GitHub Container Registry.
 
 > **Alpha note:** `latest-*` follows the newest published version (currently
-> **0.1.0.129** — learning module, camera areas, person recognition; see the README status), so a
-> plain `docker compose pull` tracks the alpha. If you'd rather stay on a fixed,
-> validated build, pin its version tag (the last broadly validated one is
-> **0.1.0.63**):
+> **0.1.0.138** — learning module, camera areas, person recognition, Frigate sync; see the
+> README status), so a plain `docker compose pull` tracks the alpha. Every `latest-*` tag only
+> moves after that release ran on real test hardware. If you would rather decide yourself when
+> to move, pin the version tag explicitly (see *Staying on a fixed version* below):
 
 ```bash
-# the current alpha (work in progress, recommended for testers):
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.129-gpu    # Intel (OpenVINO)
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.129-cuda   # NVIDIA
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.129-cpu    # CPU-only
-
-# the last broadly validated build:
-docker pull ghcr.io/bennobaer-dev/suslik:latest-cpu
+# the newest release — this is what latest-* points at:
 docker pull ghcr.io/bennobaer-dev/suslik:latest-gpu     # Intel (OpenVINO)
-# Older Intel iGPU (UHD 6xx, 6th–10th gen Core)? Use the gpu-legacy variant instead —
-# testing phase: pull the version tag from the Packages page (no latest-gpu-legacy yet).
 docker pull ghcr.io/bennobaer-dev/suslik:latest-cuda    # NVIDIA
+docker pull ghcr.io/bennobaer-dev/suslik:latest-cpu     # CPU-only
+
+# the same release, pinned so it never moves under you:
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.138-gpu
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.138-cuda
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.138-cpu
+# Older Intel iGPU (UHD 6xx, 6th–10th gen Core)? Use the gpu-legacy variant —
+# testing phase: version tag only, there is no latest-gpu-legacy yet.
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.138-gpu-legacy
 ```
 
 > The **NVIDIA/CUDA** image is now on GHCR too (`latest-cuda`), so you can pull it like the
@@ -79,7 +85,7 @@ docker pull ghcr.io/bennobaer-dev/suslik:latest-cuda    # NVIDIA
 
 ### Option 2 — build from source
 
-The application source is published in this repository as of **0.1.0.129** — you can
+The application source is published in this repository as of **0.1.0.92-alpha** — you can
 read, audit and patch everything the images run. One honest limitation for now: the bundled
 ONNX **model files are not in the git tree** (~600 MB, and they carry their own third-party
 terms — see [NOTICE](../NOTICE)), so a fresh `docker build` will stop at the model `COPY`
@@ -198,7 +204,7 @@ differences: the image tag, and no NPU line (these platforms have no NPU).
 ```yaml
 services:
   suslik:
-    image: ghcr.io/bennobaer-dev/suslik:0.1.0.63-gpu-legacy   # version tag — no latest-gpu-legacy during the testing phase
+    image: ghcr.io/bennobaer-dev/suslik:0.1.0.138-gpu-legacy   # version tag — there is no latest-gpu-legacy during the testing phase
     container_name: suslik
     restart: unless-stopped
     ports:
@@ -308,7 +314,7 @@ A `latest-*` tag only moves once a release has been deployed and verified on rea
 when to move, pin the version explicitly:
 
 ```yaml
-    image: ghcr.io/bennobaer-dev/suslik:0.1.0.33-cpu
+    image: ghcr.io/bennobaer-dev/suslik:0.1.0.138-cpu
 ```
 
 To move, change the tag and run `docker compose up -d`. Recent versions stay pullable, but a

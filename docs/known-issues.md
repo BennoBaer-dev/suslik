@@ -4,7 +4,7 @@ An honest list of what we know is rough, wrong or missing right now. If you hit
 something that is not on this list, please open an issue — that is exactly the kind
 of feedback this project needs.
 
-_Last updated: 2026-08-05 (0.1.0.118)._
+_Last updated: 2026-08-06 (0.1.0.138)._
 
 ## Known bugs
 
@@ -17,6 +17,12 @@ _Last updated: 2026-08-05 (0.1.0.118)._
 - **Deleting in Frigate is intentionally out of scope.** suslik never deletes anything
   in Frigate — removals stay local (a tombstone prevents re-import on the next sync).
   Since 0.1.0.45 it does not even try (the old non-portable SSH attempt is gone).
+  Since 0.1.0.137 the opposite direction has an explicit place instead of being silent:
+  a reference you deleted **in Frigate** is never re-sent on its own. It shows up on the
+  **Frigate sync** page as your decision, *offer again* or *respect the deletion*, and
+  nothing goes out until you choose. "Respect the deletion" keeps the picture in your own
+  library and only stops it from going to Frigate, including in the automatic sync; it
+  deletes nothing on either side.
 - ~~**Writing references back to Frigate is not portable yet.**~~ **Fixed in
   0.1.0.107-alpha, endpoints corrected in 0.1.0.128.** The export direction used to
   copy files over SSH, which only worked where suslik happens to have root SSH
@@ -61,6 +67,28 @@ _Last updated: 2026-08-05 (0.1.0.118)._
   installation — settings, face references, learning results, person-recognition
   material and models. It deliberately excludes the clip cache and per-event
   artifacts (they rebuild over time). The `/data` volume remains the source of truth.
+- **Frigate only accepts reference uploads while its own face recognition is on.**
+  With `face_recognition.enabled: false` in your Frigate config, Frigate answers every
+  upload with HTTP 400 ("Face recognition is not enabled."). suslik shows that verbatim,
+  and the **Frigate sync** page reads the live state from Frigate as it loads ("Frigate
+  face recognition: on/off"). Importing *from* Frigate works either way; only the
+  direction out is blocked.
+- **A picture Frigate refuses does not stop the sync.** Every image is judged on its own.
+  A `400` from Frigate's `register` is Frigate's verdict about *that picture* (usually:
+  no face found in it) and is remembered, so the automatic sync stops re-offering it —
+  you can still send it by hand. Frigate's generic `500 could not process request` can
+  just as well be Frigate's own state, so suslik retries that one after a day. Transport
+  errors are never blamed on the image, and if three identical errors follow each other
+  suslik flags a possible wall and throws those markers away, so a Frigate outage cannot
+  lock your queue out for good. What the pre-check says beforehand is only suslik's own
+  detector guessing; Frigate's answer is the truth.
+- **Frigate renames what it accepts, so sent references cannot be verified afterwards.**
+  Frigate stores every accepted upload under its own name and processes it asynchronously.
+  suslik keeps an export protocol, so it knows *that* a picture went out, but it can no
+  longer point at Frigate's copy; the sync page says so instead of pretending. The same
+  images therefore also appear in the import section as "only in Frigate", where they are
+  indistinguishable from faces you added in Frigate yourself, and importing them would
+  create a duplicate in your library. Import from that section deliberately, not in bulk.
 - **Coral / EdgeTPU sticks are not supported — actually tested and closed (07/2026).**
   This was measured, not assumed: a Coral-sized recognition model (MobileFaceNet-class,
   ~3 MB INT8 — it *does* fit the EdgeTPU cache) was run through suslik's full
