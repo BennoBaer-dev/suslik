@@ -12,6 +12,41 @@ person-recognition construction step 0.1.0.112 ships together with **0.1.0.113**
 performance/fusion steps 0.1.0.114–0.1.0.117 ship together with **0.1.0.118**, and the
 learning-area/run-management steps 0.1.0.119–0.1.0.128 ship together with **0.1.0.129**.
 
+## 0.1.0.138 — 2026-08-06
+
+The sync construction steps 0.1.0.130–0.1.0.137 ship together with **0.1.0.138**.
+
+- **New "Frigate sync" page (own menu item).** A full reconciliation of your reference
+  library with Frigate: what is on both sides, what is ready to transfer, what you
+  deleted in Frigate (each an explicit decision — offer it again or respect the
+  deletion, nothing is re-sent on its own), what was sent earlier through Frigate's
+  API (Frigate renames those, so suslik says honestly that it cannot verify them),
+  and what lives only in Frigate (import section, with a warning about your own
+  renamed uploads). The balance line adds up across all classes.
+- **Selective transfer.** Every candidate is shown as a picture, individually
+  tickable, with select-all/deselect-all; a confirmation step summarizes what goes
+  out, and after the transfer each image shows its real result — uploaded, or the
+  exact reason Frigate refused it. Deselected images are remembered and skipped by
+  the automatic sync too.
+- **Pre-check like Frigate's.** Before sending, suslik runs each candidate through
+  a face detector the way Frigate will on arrival; likely rejections start unticked
+  (you can still send them — Frigate's verdict is the truth). The check runs in the
+  background and caches per image.
+- **Export survives bad images and explains itself.** One rejected image no longer
+  stops the run: errors are classified per image vs. fatal, three identical errors
+  in a row raise a "wall" suspicion without aborting, and a one-click diagnosis
+  bundles the suslik report with Frigate's own log (fetched over the API), ready to
+  paste into an issue. A live status line shows whether Frigate's face recognition
+  is on, read from Frigate as the page loads.
+- **Rejection memory with judgment.** What Frigate genuinely rejected per image
+  (400 from register) is remembered so the automatic sync stops re-running the same
+  refusals; ambiguous errors (Frigate's generic 500) expire after a day and are
+  retried, transport errors and person-level errors are never blamed on an image,
+  and a detected wall discards its markers — a Frigate outage can no longer lock
+  the whole queue out permanently.
+- **One sync at a time.** Concurrent sync attempts are refused cleanly (409), and
+  the automatic exports skip a round instead of racing a running transfer.
+
 ## 0.1.0.129 — 2026-08-05
 
 - **Learning runs can be deleted completely.** One button per run on the anchor page

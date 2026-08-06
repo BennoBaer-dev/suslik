@@ -242,6 +242,18 @@ def placement_aufloesen(cfg):
     return wahl, {**info, "quelle": "benchmarked"}
 
 
+def fehler_kern(text, n=220):
+    """Kern eines Subprozess-Fehler-Outputs fuer Log/UI: die LETZTE nicht-leere
+    Zeile (bei Tracebacks steht DORT die eigentliche Fehlermeldung — die ersten
+    N Zeichen zeigten nur den Rahmen; Realfall Issue #18: carlsmith360 bekam
+    'Traceback ... File "/u' und die Ursache war abgeschnitten). text darf
+    bytes sein (subprocess ohne text=True)."""
+    if isinstance(text, bytes):
+        text = text.decode(errors="replace")
+    zeilen = [z.strip() for z in (text or "").strip().splitlines() if z.strip()]
+    return (zeilen[-1] if zeilen else "")[:n]
+
+
 def load_config(path):
     raw = open(path).read()
     raw = re.sub(r"\$\{(\w+)\}", lambda m: os.environ.get(m.group(1), ""), raw)
@@ -1861,14 +1873,26 @@ class Service:
                 self.log("frigate_sync: no Frigate URL configured — export skipped")
             return
         def job():
-            env = dict(os.environ, OV_DEVICE=self.cfg["ov_device"])
-            r = subprocess.run([sys.executable,
-                                os.path.join(HERE, "sync_refs.py"), "export"],
-                               capture_output=True, text=True, timeout=600, check=False, env=env)
+            # .134 Lauf-Riegel: laeuft ein manueller Sync, kapert der Auto-Export
+            # sonst dessen Status-/Ergebnis-Dateien — dann lieber diese Runde
+            # auslassen (der naechste Anlass exportiert nach).
+            if getattr(self, "_sync_job_aktiv", False):
+                self.log("frigate_sync: a manual sync is running — auto export skipped")
+                return
+            self._sync_job_aktiv = True
+            try:
+                env = dict(os.environ, OV_DEVICE=self.cfg["ov_device"])
+                # --force: der Dienst hat frigate_read_only oben selbst geprueft; der
+                # CLI-Riegel in cmd_export (.132) gilt fuer Hand-Laeufe ohne Dienst-Kontext.
+                r = subprocess.run([sys.executable,
+                                    os.path.join(HERE, "sync_refs.py"), "export", "--force"],
+                                   capture_output=True, text=True, timeout=600, check=False, env=env)
+            finally:
+                self._sync_job_aktiv = False
             if r.returncode == 0:
                 self.log("frigate_sync: master -> Frigate exported")
             else:                                  # Fehler NICHT verschlucken (frueher: immer 'exportiert')
-                err = (r.stderr or r.stdout or "").strip().replace("\n", " ")[:200]
+                err = fehler_kern(r.stderr or r.stdout)
                 self.log(f"!! frigate_sync: auto export FAILED (rc={r.returncode}): {err}")
         threading.Thread(target=job, daemon=True).start()
 
@@ -3186,13 +3210,22 @@ class Service:
             # ein Betreiber, der auf read-only stellt, waere nach einem Enrollment trotzdem
             # beschrieben worden, still und mit check=False. Zusaetzlich vorab pruefen, ob
             if self.cfg.get("frigate_sync") and not frigate_read_only(self.cfg):
-                # API-Export (0.1.0.108): keine ssh/scp-Vorbedingung mehr, nur eine URL.
-                r = subprocess.run([sys.executable,
-                                    os.path.join(HERE, "sync_refs.py"), "export"],
-                                   capture_output=True, timeout=300, check=False, env=env)
-                if r.returncode != 0:            # Fehler NIE still verschlucken (Klasse C)
-                    self.log(f"frigate_sync: reference export failed (rc={r.returncode}): "
-                             f"{(r.stderr or b'').decode(errors='replace').strip()[:160]}")
+                if getattr(self, "_sync_job_aktiv", False):
+                    # .134 Lauf-Riegel: manueller Sync laeuft — Runde auslassen.
+                    self.log("frigate_sync: a manual sync is running — post-enrollment export skipped")
+                else:
+                    self._sync_job_aktiv = True
+                    try:
+                        # API-Export (0.1.0.108): keine ssh/scp-Vorbedingung mehr, nur eine URL.
+                        # --force: read-only wurde eben mit voller Config geprueft (.132).
+                        r = subprocess.run([sys.executable,
+                                            os.path.join(HERE, "sync_refs.py"), "export", "--force"],
+                                           capture_output=True, timeout=300, check=False, env=env)
+                        if r.returncode != 0:    # Fehler NIE still verschlucken (Klasse C)
+                            self.log(f"frigate_sync: reference export failed (rc={r.returncode}): "
+                                     f"{fehler_kern(r.stderr)}")
+                    finally:
+                        self._sync_job_aktiv = False
             r = subprocess.run([sys.executable,
                                 os.path.join(HERE, "abnahme.py"), "--nach-enrollment"],
                                capture_output=True, timeout=900, check=False, env=env)
@@ -4497,17 +4530,93 @@ def make_handler(svc):
                                       ensure_ascii=False), "application/json")
                 except Exception as e:
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
-            if pfad in ("/sync_export", "/sync_import"):       # Referenz-Sync Master <-> Frigate manuell
-                modus = "export" if pfad == "/sync_export" else "import"
+            if pfad in ("/sync_abwahl", "/sync_wieder_anbieten"):   # .133/.137: Merker der Sync-Seite
+                # Bewusst abgewaehlte Referenzbilder bleiben im Master, gehen aber
+                # nie nach Frigate — auch der AUTO-Export ueberspringt sie (Filter
+                # in sync_refs.cmd_export). Eigener Merker, NICHT die refs_meta-
+                # Tombstones: die bedeuten "Bild geloescht" und sperren den Import.
+                import sync_refs as _sr
+                try:
+                    _n = int(self.headers.get("Content-Length", 0))
+                    _d = json.loads(self.rfile.read(min(_n, 1000000)) or "{}")
+                except Exception:
+                    _d = {}
+
+                # .134 Hinweis-Fix: Namen gegen die Registry-Muster pruefen (Gate
+                # PYDATEI-Regel) — der Merker nimmt sonst beliebige Fremdeingabe an.
+                from core.registry import PERSON_RE as _pre, DATEI_RE as _dre
+                _p_ok = re.compile(rf"^{_pre}$", re.UNICODE)
+                _d_ok = re.compile(rf"^{_dre}$", re.UNICODE)
+
+                def _paare(feld):
+                    return [(str(x[0]), str(x[1])) for x in (_d.get(feld) or [])
+                            if isinstance(x, (list, tuple)) and len(x) >= 2
+                            and _p_ok.match(str(x[0])) and _d_ok.match(str(x[1]))]
+                if pfad == "/sync_wieder_anbieten":
+                    # .137 "offer again": ein in Frigate geloeschtes bzw. frueher
+                    # exportiertes Bild wird wieder normaler Kandidat. Das
+                    # Protokoll wird nur ANGEHAENGT (aktiv=false), nie umgeschrieben.
+                    try:
+                        n_wa = _sr.wieder_anbieten(_paare("bilder"))
+                    except Exception as e:
+                        return self._send(400, json.dumps({"ok": False, "msg": str(e)},
+                                                          ensure_ascii=False), "application/json")
+                    if n_wa:
+                        svc.log(f"sync selection: {n_wa} image(s) offered again")
+                    return self._send(200, json.dumps(
+                        {"ok": True, "msg": f"{n_wa} back on the candidate list"},
+                        ensure_ascii=False), "application/json")
+                try:
+                    n_ab = _sr.abwahl_setzen(_paare("abwahl"), True)
+                    n_zu = _sr.abwahl_setzen(_paare("zurueck"), False)
+                except Exception as e:
+                    return self._send(400, json.dumps({"ok": False, "msg": str(e)},
+                                                      ensure_ascii=False), "application/json")
+                if n_ab or n_zu:
+                    svc.log(f"sync selection: {n_ab} deselected, {n_zu} restored")
+                return self._send(200, json.dumps(
+                    {"ok": True, "msg": f"{n_ab} deselected, {n_zu} restored"},
+                    ensure_ascii=False), "application/json")
+            if pfad in ("/sync_export", "/sync_import", "/sync_auswahl_start"):
+                # Referenz-Sync Master <-> Frigate manuell. /sync_auswahl_start ist
+                # derselbe Export mit einer AUSWAHL (.133, Review-&-sync-Seite):
+                # bewusst KEINE zweite Job-Schleife — Status-Reset, Fortschritt,
+                # eigener_status und Fehlerauswertung duerfen nie auseinanderlaufen.
+                modus = "import" if pfad == "/sync_import" else "export"
+                # .134 Review-SOLL (Lauf-Riegel): ein Sync zur Zeit — sonst kapert
+                # ein Auto-Export waehrend des selektiven Transfers Fortschritt,
+                # eigener_status und Ergebnisanzeige (gemeinsame Status-Dateien).
+                if getattr(svc, "_sync_job_aktiv", False):
+                    return self._send(409, json.dumps({"ok": False,
+                        "msg": "a sync is already running — wait for it to finish"},
+                        ensure_ascii=False), "application/json")
                 if modus == "export" and frigate_read_only(svc.cfg):   # read-only: kein Schreiben nach Frigate (Import bleibt)
                     return self._send(403, json.dumps({"ok": False,
                         "msg": "read-only mode: writing references to Frigate is disabled (see the System page switch)"},
                         ensure_ascii=False), "application/json")
                 try:
                     _n = int(self.headers.get("Content-Length", 0))
-                    _body = json.loads(self.rfile.read(min(_n, 4096)) or "{}")
+                    # Die Auswahl kann hunderte Namen tragen — dafuer ein groesserer
+                    # Deckel, fuer die beiden Alt-Routen bleibt es bei 4 KB.
+                    _body = json.loads(self.rfile.read(
+                        min(_n, 1000000 if pfad == "/sync_auswahl_start" else 4096)) or "{}")
                 except Exception:
                     _body = {}
+                auswahl_pfad = ""
+                if pfad == "/sync_auswahl_start":
+                    _paare = [[str(x[0]), str(x[1])] for x in (_body.get("auswahl") or [])
+                              if isinstance(x, (list, tuple)) and len(x) >= 2]
+                    if not _paare:
+                        return self._send(400, json.dumps(
+                            {"ok": False, "msg": "nothing selected — tick at least one image"},
+                            ensure_ascii=False), "application/json")
+                    # Uebergabe als DATEI, nie als argv (hunderte Namen sprengen jede
+                    # Kommandozeile); sync_refs filtert damit die ECHTE Kandidatenliste.
+                    auswahl_pfad = os.path.join(svc.cfg["data_dir"], "state",
+                                                "sync_auswahl_lauf.json")
+                    os.makedirs(os.path.dirname(auswahl_pfad), exist_ok=True)
+                    with open(auswahl_pfad, "w", encoding="utf-8") as _af:
+                        json.dump(_paare, _af, ensure_ascii=False)
                 furl = (_body.get("url") or svc.cfg.get("frigate_url") or "").strip()   # Wizard reicht die URL mit
                 if furl:                                   # Fremdeingabe -> nur http(s), sonst spricht urlopen auch file://
                     _ok, _res = pruefe_url(furl)
@@ -4521,11 +4630,25 @@ def make_handler(svc):
                         env["FRIGATE_URL"] = furl
                     prog = os.path.join(svc.cfg["data_dir"], "state", "sync_progress.json")
                     svc.log(f"reference sync {modus}: started")
+                    # .132 Review-MUSS: Status VOR dem Start zuruecksetzen — sonst
+                    # lesen die 1-s-Poller den ENDstatus des VORIGEN Laufs als
+                    # Ergebnis DIESES Laufs (phase error/done -> sofort Abbruch).
+                    start_ts = time.time()
+                    try:
+                        json.dump({"ts": round(start_ts, 1), "phase": "loading",
+                                   "modus": modus, "total": 0, "done": 0},
+                                  open(prog, "w"))
+                    except Exception:
+                        pass
                     errp = os.path.join(svc.cfg["data_dir"], "state", f"sync_{modus}_err.log")
                     ef = open(errp, "w+")                      # stderr NICHT verwerfen (frueher DEVNULL -> Fehler still)
-                    proc = subprocess.Popen([sys.executable,               # Container hat kein venv/
-                                             os.path.join(HERE, "sync_refs.py"), modus],
-                                            stdout=subprocess.DEVNULL, stderr=ef, env=env)
+                    args = [sys.executable,                    # Container hat kein venv/
+                            os.path.join(HERE, "sync_refs.py"), modus]
+                    if modus == "export":
+                        args.append("--force")                 # read-only oben mit voller Config geprueft (.132)
+                    if auswahl_pfad:                           # .133: nur die gewaehlten Kandidaten
+                        args.append(f"--auswahl={auswahl_pfad}")
+                    proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=ef, env=env)
                     while proc.poll() is None:                 # laeuft -> Fortschritt ins Log (docker logs / /log)
                         time.sleep(8)
                         try:
@@ -4536,15 +4659,34 @@ def make_handler(svc):
                         except Exception:
                             pass
                     try:
-                        ef.seek(0); err_txt = ef.read().strip().replace("\n", " ")[:200]; ef.close()
+                        ef.seek(0); err_txt = fehler_kern(ef.read()); ef.close()
                     except Exception:
                         err_txt = ""
                     if proc.returncode != 0:                   # Exit-Code JETZT geprueft (frueher NIE -> immer 'fertig')
                         svc.log(f"!! reference sync {modus} FAILED (rc={proc.returncode}): {err_txt}")
+                        # .132: cmd_export schreibt bei Fatal-Stopps selbst einen
+                        # REICHEREN error-Status (detail + hinweis aus einer Quelle)
+                        # — den NIE ueberschreiben. Review-MUSS: nur ein Status, der
+                        # NACH dem Start DIESES Laufs geschrieben wurde, zaehlt als
+                        # eigener (sonst verschluckte ein Alt-Fehler die echte Ursache).
+                        eigener_status = False
+                        try:
+                            with open(prog) as f:
+                                _ps = json.load(f)
+                            eigener_status = (_ps.get("phase") == "error"
+                                              and float(_ps.get("ts") or 0) >= start_ts
+                                              and bool(_ps.get("detail") or _ps.get("hinweis")))
+                        except Exception:
+                            pass
+                        from sync_refs import FR_AUS_MARKER as _frm, FR_AUS_HINWEIS as _frh
+                        hinweis = _frh if _frm in err_txt else ""
                         try:                                   # UI-Status auf error statt endlosem Poll auf 'done'
-                            json.dump({"phase": "error", "total": 0, "done": 0,
-                                       "msg": f"sync {modus} failed (rc={proc.returncode})", "detail": err_txt},
-                                      open(prog, "w"))
+                            if not eigener_status:
+                                json.dump({"ts": round(time.time(), 1), "phase": "error",
+                                           "modus": modus, "total": 0, "done": 0,
+                                           "msg": f"sync {modus} failed (rc={proc.returncode})",
+                                           "detail": err_txt, "hinweis": hinweis},
+                                          open(prog, "w"))
                         except Exception:
                             pass
                         return
@@ -4556,7 +4698,20 @@ def make_handler(svc):
                         svc.log("sync import finished -> recomputing embeddings on GPU (refcache) …")
                         svc.qs_neu_starten()
                     svc.log(f"reference sync {modus}: finished")
-                threading.Thread(target=job, daemon=True).start()
+                # .134 Lauf-Riegel: Flag VOR dem Start setzen (nicht im Thread —
+                # sonst schluepft ein zweiter POST durchs Fenster), im finally raeumen.
+                svc._sync_job_aktiv = True
+
+                def _job_mit_riegel():
+                    try:
+                        job()
+                    finally:
+                        svc._sync_job_aktiv = False
+                threading.Thread(target=_job_mit_riegel, daemon=True).start()
+                if auswahl_pfad:
+                    return self._send(200, json.dumps({"ok": True,
+                                      "msg": f"transfer running ({len(_paare)} selected)"},
+                                      ensure_ascii=False), "application/json")
                 ziel = "Master → Frigate" if modus == "export" else "Frigate → Master"
                 return self._send(200, json.dumps({"ok": True,
                                   "msg": f"Sync läuft ({ziel}), Seite in ~1 min neu laden"},
@@ -6993,27 +7148,40 @@ def make_handler(svc):
                              f"<pre style='white-space:pre-wrap'>{html.escape(w[1])}</pre></div>")
                 sync_html = ""
                 try:
-                    from sync_refs import diff as sync_diff
-                    nf, nm, eg = sync_diff()
-                    eg_farbe = "#c33" if eg else "#9a9"
-                    sync_html = (f'<div class="card"><b>Sync with Frigate</b> (reconcile / Abgleich, Master ↔ Frigate): '
-                                 f'{len(nf)} new in Frigate · {len(nm)} only in the Master · '
-                                 f'<b style="color:{eg_farbe}">{len(eg)} deleted externally</b>'
-                                 + ("".join(f"<br>! {html.escape(p)}/{html.escape(d)}" for p, d in eg[:5]))
+                    # .137: die System-Karte ist nur noch eine STATUSZEILE + Weg zur
+                    # Seite (eigener Nav-Punkt "Frigate sync"). Alles Bedienbare —
+                    # Auswahl, Transfer, Import, Entscheidungsfaelle — liegt dort,
+                    # damit es nicht zwei halbe Sync-Oberflaechen gibt.
+                    from sync_refs import abgleich as sync_abgleich
+                    # .138 Panel-Fix: die Zahlenzeile kommt aus DERSELBEN
+                    # Funktion wie auf der Sync-Seite (bilanz_zeile) — vorher
+                    # rechnete die Karte 'ready to transfer' selbst und ohne
+                    # die gemerkten Frigate-Ablehnungen: zwei Seiten, gleiche
+                    # Beschriftung, verschiedene Zahlen.
+                    from routes.syncauswahl import bilanz_zeile as sync_bilanz_zeile
+                    _ab = sync_abgleich()
+                    sync_html = ('<div class="card"><b>Sync with Frigate</b>'
+                                 + sync_bilanz_zeile(_ab, _ab.get("abgelehnt"),
+                                                     mit_personen=False)
                                  + '<div style="margin-top:8px">'
-                                 '<button class="gtb on" onclick="syncAktion(\'export\',this)">'
-                                 'Sync → Frigate (upload master)</button> '
-                                 '<button class="gtb" onclick="syncAktion(\'import\',this)">'
-                                 'Sync ← Frigate (import)</button></div>'
-                                 '<small>Keeps both libraries reconciled: push suslik\'s faces up, or pull '
-                                 'Frigate\'s down. For parallel operation you can compare both side by side.</small></div>')
+                                 '<a class="gtb on" href="/sync_auswahl">'
+                                 'Open Frigate sync</a></div>'
+                                 '<small>The sync page compares both libraries class by class, '
+                                 'pre-checks every candidate the way Frigate does, sends only what '
+                                 'you tick, and imports what only Frigate has. '
+                                 'If a sync reports a problem, <a href="/sync_diagnose" target="_blank">'
+                                 'open the diagnosis</a> — it bundles the suslik report and the Frigate '
+                                 'log, ready to copy into an issue.</small></div>')
                 except Exception as e:
                     # Roher Python-Fehler stand hier direkt in der Karte (Plan-QS P.6) — fuer
                     # den haeufigsten Fall (frisches System ohne Frigate/Referenzen) jetzt ein Satz.
                     sync_html = ('<div class="card"><b>Sync with Frigate</b><br>'
                                  '<span class="dim">not available yet — needs a reachable Frigate '
                                  'and at least one reference face</span>'
-                                 f'<br><small class="dim">({html.escape(str(e)[:60])})</small></div>')
+                                 f'<br><small class="dim">({html.escape(str(e)[:60])})</small>'
+                                 '<br><small><a href="/sync_diagnose" target="_blank">open the '
+                                 'diagnosis</a> — bundles the suslik report and the Frigate log.'
+                                 '</small></div>')
                 qs_html = ""
                 qp = os.path.join(cfg["data_dir"], "state", "qs_bericht.json")
                 if os.path.exists(qp):
@@ -7104,6 +7272,168 @@ def make_handler(svc):
                     h["placement"] = {"backend": pi.get("backend"), "quelle": pi.get("quelle"),
                                       "ts": pi.get("ts")}
                 return self._send(200, json.dumps(h), "application/json")
+            if path == "/sync_diagnose":                   # .132: Diagnose-Paket BEIDE Seiten (carlsmith-Lehre)
+                # Ein Klick fuer Tester und uns: suslik-Bericht + Sync-Status +
+                # Sync-Logzeilen des Dienstes + Frigate-Log-Tail per API
+                # (GET /api/logs/frigate, an der laufenden 0.18-OpenAPI verifiziert).
+                teile = [f"suslik {os.environ.get('SUSLIK_VERSION', 'dev')} — sync diagnosis "
+                         f"({datetime.datetime.now():%Y-%m-%d %H:%M:%S})",
+                         "NOTE: this bundle contains your person names, camera names and "
+                         "local addresses — review before posting it publicly."]
+                furl = (cfg.get("frigate_url") or "").strip()
+                furl_anzeige = re.sub(r"//[^/@]*@", "//***@", furl)   # etwaige Zugangsdaten maskieren
+                teile.append(f"frigate: {furl_anzeige or '(not configured)'}")
+
+                def _alter(pfad):
+                    try:
+                        s = int(time.time() - os.path.getmtime(pfad))
+                        return f"written {s // 3600}h {s % 3600 // 60}m {s % 60}s ago"
+                    except OSError:
+                        return "age unknown"
+                # Review-SOLL: jedes Teil traegt sein ALTER (ein Alt-Bericht darf sich
+                # nie wie das Ergebnis des aktuellen Laufs lesen) + die err-Logs mit
+                # dem VOLLEN Traceback des jeweils letzten Laufs.
+                for name, pfad, ganz in (
+                        ("last export report (sync_export_bericht.json)",
+                         os.path.join(cfg["data_dir"], "state", "sync_export_bericht.json"), True),
+                        ("current sync status (sync_progress.json)",
+                         os.path.join(cfg["data_dir"], "state", "sync_progress.json"), True),
+                        ("last export stderr (sync_export_err.log)",
+                         os.path.join(cfg["data_dir"], "state", "sync_export_err.log"), False),
+                        ("last import stderr (sync_import_err.log)",
+                         os.path.join(cfg["data_dir"], "state", "sync_import_err.log"), False)):
+                    teile.append(f"\n== {name} — {_alter(pfad)} ==")
+                    try:
+                        with open(pfad, encoding="utf-8", errors="replace") as f:
+                            inhalt = f.read().strip()
+                        if not ganz:
+                            inhalt = "\n".join(inhalt.splitlines()[-40:])
+                        teile.append(inhalt or "(empty)")
+                    except Exception as e:
+                        teile.append(f"(not available: {e})")
+                teile.append("\n== suslik service log (sync lines, latest last) ==")
+                zeilen = [z for z in list(svc.logbuf) if "sync" in z.lower()]
+                teile.append("\n".join(zeilen[-30:]) or "(none)")
+                teile.append("\n== frigate log tail (via GET /api/logs/frigate) ==")
+                if not furl:
+                    teile.append("(no Frigate URL configured)")
+                else:
+                    try:
+                        fbasis = furl.rstrip("/")
+                        with urllib.request.urlopen(f"{fbasis}/api/logs/frigate?start=0&end=1",
+                                                    timeout=6) as r:
+                            gesamt = int(json.load(r).get("totalLines") or 0)
+                        lstart = max(0, gesamt - 80)
+                        with urllib.request.urlopen(f"{fbasis}/api/logs/frigate?start={lstart}",
+                                                    timeout=6) as r:
+                            d = json.load(r)
+                        teile.append(f"(lines {lstart}..{gesamt} of {gesamt})")
+                        teile.append("\n".join(d.get("lines") or []) or "(empty)")
+                    except Exception as e:
+                        teile.append(f"(frigate log not reachable: {type(e).__name__}: {e})")
+                return self._send(200, "\n".join(teile), "text/plain; charset=utf-8")
+            if path == "/sync_auswahl":                    # .133 "Review & sync": selektiver Export
+                import webui
+                import sync_refs as _sr
+                from routes import syncauswahl as _r_sa
+                # .137: die Seite rechnet den VIER-KLASSEN-Abgleich (abgleich()),
+                # nicht mehr nur die Kandidaten von diff() — sonst bleiben in
+                # Frigate geloeschte und frueher exportierte Bilder unsichtbar
+                # (Operator-Befund 06.08.). kandidaten = uebertragbare + bewusst
+                # abgewaehlte, genau die Menge, die die Seite selbst aufteilt.
+                bilanz, kand, pruefbar, fehler = None, [], [], ""
+                try:
+                    bilanz = _sr.abgleich()
+                    kand = bilanz["kandidaten"] + bilanz["abgewaehlt"]
+                    # .138 Panel-Fix: 'offen' nur ueber Bilder rechnen, die
+                    # cmd_vorpruefung JE erreicht (diff() ueberspringt D1-/D2-
+                    # Herkuenfte). Ein per 'respect the deletion' abgewaehltes
+                    # D1-Bild blieb sonst ewig offen -> der Vorpruefungs-
+                    # Subprozess startete bei JEDEM Seitenaufruf neu (K3:
+                    # Erzeuger-/Verbrauchermenge liefen auseinander).
+                    _unpr = set(bilanz["abgewaehlt_unpruefbar"])
+                    pruefbar = [x for x in kand if x not in _unpr]
+                except Exception as e:
+                    fehler = f"{type(e).__name__}: {e}"
+                cache = _sr.vorpruefung_lesen()
+                # Nur Urteile zeigen, deren Bild sich seit der Messung NICHT geaendert
+                # hat — ein ausgetauschtes Referenzbild darf nie das alte Urteil erben.
+                offen = _sr.vorpruefung_offen(pruefbar, cache)
+                _offen_k = {_sr.schluessel(p, d) for p, d in offen}
+                urteile = {}
+                for _p, _d in kand:
+                    _s = _sr.schluessel(_p, _d)
+                    if _s not in _offen_k and _s in cache:
+                        urteile[_s] = cache[_s]
+                pstat = _sr.vorpruefung_status()
+                # Hintergrund-Lauf anstossen (Muster job(): Thread + Subprozess, der
+                # Detektor bleibt AUSSERHALB des Dienst-Prozesses). Ein Lauf zur Zeit.
+                _lebt = bool(getattr(svc, "_vorpruef_thread", None)
+                             and svc._vorpruef_thread.is_alive())
+                # .134 Review-SOLL: 'detektor: aus' ist ein ABSCHLUSS-Vermerk —
+                # nie neu starten (vorher: Endlos-Karussell aus Reload + neuem
+                # Subprozess, wenn der Detektor nicht ladbar war).
+                if offen and not _lebt and pstat.get("detektor") != "aus" \
+                        and not pstat.get("fehler"):
+                    def _vp_job():
+                        env = dict(os.environ, OV_DEVICE=svc.cfg["ov_device"])
+                        _fu = (svc.cfg.get("frigate_url") or "").strip()
+                        if _fu:
+                            env["FRIGATE_URL"] = _fu
+                        errp = os.path.join(svc.cfg["data_dir"], "state",
+                                            "sync_vorpruefung_err.log")
+                        r = subprocess.run(
+                            [sys.executable, os.path.join(HERE, "sync_refs.py"),
+                             "vorpruefung"], capture_output=True, timeout=3600,
+                            check=False, env=env)
+                        if r.returncode != 0:              # Fehler NIE still verschlucken
+                            try:
+                                with open(errp, "wb") as _ef:
+                                    _ef.write(r.stderr or b"")
+                            except OSError:
+                                pass
+                            svc.log("!! sync pre-check FAILED "
+                                    f"(rc={r.returncode}): {fehler_kern(r.stderr)}")
+                            # .134 Hinweis-Fix: Status darf nie auf laeuft=True
+                            # stehenbleiben (Seite hinge sonst ewig auf 'checking');
+                            # ein fehler-Feld stoppt auch den Neustart-Versuch.
+                            try:
+                                import sync_refs as _sr3
+                                _st = _sr3.vorpruefung_status()
+                                if _st.get("laeuft"):
+                                    _sr3._vp_status(
+                                        laeuft=False, gesamt=_st.get("gesamt", 0),
+                                        fertig=_st.get("fertig", 0),
+                                        fehler=fehler_kern(r.stderr)
+                                        or f"pre-check failed (rc={r.returncode})")
+                            except Exception:
+                                pass
+                    svc._vorpruef_thread = threading.Thread(target=_vp_job, daemon=True)
+                    svc._vorpruef_thread.start()
+                    pstat = {"laeuft": True, "gesamt": len(offen), "fertig": 0}
+                try:
+                    with open(os.path.join(cfg["data_dir"], "state",
+                                           "sync_export_bericht.json"), encoding="utf-8") as f:
+                        bericht = json.load(f)
+                except Exception:
+                    bericht = None
+                # .137 Live-Flag: Frigates eigene Erkennung JETZT lesen (5 s
+                # Deckel) — nie den gespeicherten Alt-Status als Live-Zustand
+                # ausgeben. Bei unerreichbarem Frigate steht ohnehin schon die
+                # Fehlerkarte, dann sparen wir uns den zweiten Anlauf.
+                fr = None if fehler else _sr.frigate_fr_status()
+                inhalt = _r_sa.render(kand, urteile, _sr.abwahl_lesen(), pstat,
+                                      bericht=bericht, fehler=fehler,
+                                      schreibsperre=frigate_read_only(cfg),
+                                      bilanz=bilanz,
+                                      ablehnungen=(bilanz or {}).get("abgelehnt") or {},
+                                      fr=fr)
+                return self._send(200, webui.layout("Frigate sync", "/sync_auswahl",
+                                                    inhalt, self._banner()))
+            if path == "/sync_vorpruefung_status":         # .133: Fortschritt der Vorpruefung
+                import sync_refs as _sr
+                return self._send(200, json.dumps(_sr.vorpruefung_status()),
+                                  "application/json")
             if path == "/sync_status":                     # Fortschritt des Referenz-Syncs fuer die UI (X von Y)
                 try:
                     with open(os.path.join(cfg["data_dir"], "state", "sync_progress.json")) as f:

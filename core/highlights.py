@@ -12,10 +12,24 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.0.129"
+STAND = "0.1.0.138"
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # .138 mit User abgestimmt 06.08. ("go" auf den Zwei-Punkte-Vorschlag).
+    ("0.1.0.138", (
+        "New \"Frigate sync\" page: a full reconciliation of your reference "
+        "library with Frigate — see what is on both sides and what is "
+        "missing where, pick exactly which images to send, and get a "
+        "per-image result, including Frigate's own reason when it refuses "
+        "one. Images you deleted in Frigate become explicit decisions "
+        "instead of silent re-uploads.",
+        "Sync problems now explain themselves: the export never stops on a "
+        "single bad image, a live status line shows whether Frigate's face "
+        "recognition is on, and a one-click diagnosis bundles the suslik "
+        "report together with Frigate's log — ready to attach to a bug "
+        "report.",
+    )),
     ("0.1.0.129", (
         "Clean up your learning area: runs can now be deleted completely "
         "— per run or all old ones with a single click. Dismissed "
