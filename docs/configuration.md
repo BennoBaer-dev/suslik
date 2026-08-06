@@ -23,10 +23,15 @@ restore* below) to restore all settings and skip the wizard entirely. Otherwise,
 3. **Backend** — pick the accelerator to use (only backends actually available in your image
    variant are offered). See [hardware-acceleration.md](hardware-acceleration.md).
 4. **Import references** — optionally import your existing Frigate face references into suslik's
-   master library (with live progress). The same sync function is also on the **System** page.
-5. **Write back to Frigate?** — decide whether suslik may correct Frigate's `sub_label` and sync
-   faces back (parallel operation) or stay read-only. Pre-filled with your current setting;
-   read-only is the safe default. See *Read-back vs. write-back safety* below.
+   master library (with live progress). You can run the same import later without re-running the
+   wizard: **People → Known → Import / resync from Frigate**, or the *only in Frigate* section
+   of the **Frigate sync** page. The System page only shows the sync balance and links there.
+5. **Write back to Frigate?** — decide whether suslik may correct Frigate's `sub_label` and send
+   face references back (parallel operation) or stay read-only. Pre-filled with your current
+   setting; read-only is the safe default. Saying yes is a precondition, not the transfer
+   itself: references go over on the **Frigate sync** page, where you pick the images (see
+   [usage.md](usage.md)); `frigate_sync` additionally mirrors new references automatically.
+   See *Read-back vs. write-back safety* below.
 
 The wizard writes its choices into the config store and restarts the service once.
 
@@ -84,6 +89,13 @@ These are the settings most people touch (all set via the wizard/UI; names shown
 - **`frigate_read_only`** — whether suslik may **write back** to Frigate (correcting `sub_label`,
   uploading face sync). **Default `true` = read-only** (suslik never changes anything in Frigate).
   Set to `false` only if you deliberately want write-back.
+- **`frigate_sync`** — automatic mirroring of your reference library to Frigate (parallel
+  operation), **off by default**. With `frigate_sync: true` *and* `frigate_read_only: false`,
+  suslik uploads new active reference images by itself after each enrollment and after a sync
+  run. It respects what you decided on the **Frigate sync** page: images you deselected are
+  skipped, and images Frigate genuinely rejected are not retried until you tick them again. A
+  round is skipped while a manual sync is running, since only one sync runs at a time. Selective,
+  manual transfers on the sync page work regardless of this setting.
 - **Alerts** — which judgment categories trigger an alert, and the global cooldown. Delivery
   channels are Pushover, Telegram (direct, or via Home Assistant: the `ha` mode calls the HA script `frigate_telegram_video` — create a script of that name in your HA instance, a configurable name is planned), and MQTT topics. The
   channels and their secrets are configured in the dedicated **Notifications** tab, which has a
@@ -125,6 +137,13 @@ By default suslik only **reads** from Frigate: it never modifies your Frigate co
 labels. Write-back (correcting Frigate's `sub_label`, syncing faces) is opt-in via
 `frigate_read_only: false`. Published/test setups stay read-only unless you change this — so
 "nothing can break on your Frigate side" holds by default.
+
+Two things are worth knowing before you switch it off. Frigate itself only accepts reference
+uploads while **its own** face recognition is enabled (`face_recognition.enabled: true` in your
+Frigate config); otherwise every upload comes back as HTTP 400 *"Face recognition is not
+enabled."* suslik reports exactly that and shows Frigate's current on/off state live on the
+**Frigate sync** page. And read-only never blocks reading: the class-by-class comparison, the
+pre-check and importing *from* Frigate all keep working, only the transfer button is disabled.
 
 ## Known limitations
 
