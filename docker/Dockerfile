@@ -32,7 +32,7 @@ COPY routes/ /app/routes/
 COPY docker/personlern_stage/ /app/prototyp/
 COPY docker/personlern_stage_modelle/ /app/prototyp/modelle/rtmpose/
 COPY modelle/dinov2_vits14_126x252.onnx /app/modelle/
-ENV SUSLIK_DATA_DIR=/data SUSLIK_WERKSTATT=/data/personlern/werkstatt
+ENV SUSLIK_DATA_DIR=/data SUSLIK_WERKSTATT=/data/personlern/werkstatt VERIFY_DATA_DIR=/data
 COPY VERSION /app/VERSION
 COPY docker/verifyd.container.yaml /app/verifyd.yaml
 

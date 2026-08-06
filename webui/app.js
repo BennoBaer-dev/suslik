@@ -341,11 +341,144 @@ function syncAktion(modus, btn) {
             setTimeout(function () { location.reload(); }, 2000);
           } else if (s.phase === 'error') {
             clearInterval(poll);
-            btn.textContent = 'sync failed: ' + (s.msg || 'see service log');
+            /* .131: Ursache/Hinweis zeigen, nicht nur 'rc=1' (carlsmith-Fall:
+               Frigate-Erkennung aus -> Schalt-Hinweis direkt am Knopf). */
+            btn.textContent = 'sync failed: ' + (s.hinweis || s.detail || s.msg || 'see service log');
           }
         }).catch(function () {});
       }, 1500);
     });
+}
+
+/* .133 "Review & sync" (/sync_auswahl): selective export — tick what goes to Frigate,
+   remember what should never go, then transfer and show Frigate's verdict per image.
+   Person/file never travel through a JS string: they sit in data-attributes. */
+function syncAuswahlZaehlen() {
+  var cbs = document.querySelectorAll('.sa-cb'), n = 0, i;
+  for (i = 0; i < cbs.length; i++) { if (cbs[i].checked) n++; }
+  var z = document.getElementById('sa-gewaehlt');
+  if (z) z.textContent = n;
+  var b = document.getElementById('sa-start');
+  if (b && !b.disabled) {
+    b.textContent = n ? 'Transfer ' + n + ' selected to Frigate' : 'Nothing selected';
+    /* .138: ein frueherer Fehlschlag hat den Knopf rot gefaerbt (scheitern());
+       wer die Auswahl aendert, bekommt wieder einen normalen Start-Knopf —
+       vorher stand ein Start-Text im Fehler-Rot (Panel-Hinweis: die Umkehrung
+       des gerade behobenen 'Fehler im gruenen Knopf'-Problems). */
+    b.className = 'gtb on';
+  }
+  return n;
+}
+function syncAuswahlAlle(an) {
+  var cbs = document.querySelectorAll('.sa-cb'), i;
+  for (i = 0; i < cbs.length; i++) { cbs[i].checked = !!an; }
+  syncAuswahlZaehlen();
+}
+/* weg=1: deselect and remember · weg=0: put it back on the candidate list */
+function syncAbwahl(btn, weg) {
+  var d = {}, paar = [[btn.dataset.person, btn.dataset.datei]];
+  d[weg ? 'abwahl' : 'zurueck'] = paar;
+  /* .137: der Ruecksetz-Text kommt aus data-label — derselbe Knopf heisst auf der
+     Entscheidungs-Kachel 'respect the deletion', nicht 'skip'. */
+  var zurueck = btn.dataset.label || (weg ? 'skip' : 'restore');
+  btn.disabled = true; btn.textContent = weg ? 'skipping …' : 'restoring …';
+  fetch('/sync_abwahl', {method: 'POST', body: JSON.stringify(d)})
+    .then(function (r) { return r.json(); })
+    .then(function (dd) {
+      /* .134: ok:false auswerten — eine fehlgeschlagene Abwahl sah vorher wie
+         eine erfolgreiche aus (Seite lud einfach neu). */
+      if (dd && dd.ok) { location.reload(); return; }
+      alert((dd && dd.msg) || 'error');
+      btn.disabled = false; btn.textContent = zurueck;
+    })
+    .catch(function () { btn.disabled = false; btn.textContent = zurueck; });
+}
+/* .137 'offer again': ein in Frigate geloeschtes oder frueher exportiertes Bild
+   wieder zum normalen Kandidaten machen (POST /sync_wieder_anbieten). */
+function syncWiederAnbieten(btn) {
+  var zurueck = btn.dataset.label || 'offer again';
+  btn.disabled = true; btn.textContent = 'putting it back …';
+  fetch('/sync_wieder_anbieten', {method: 'POST',
+        body: JSON.stringify({bilder: [[btn.dataset.person, btn.dataset.datei]]})})
+    .then(function (r) { return r.json(); })
+    .then(function (dd) {
+      if (dd && dd.ok) { location.reload(); return; }
+      alert((dd && dd.msg) || 'error');
+      btn.disabled = false; btn.textContent = zurueck;
+    })
+    .catch(function () { btn.disabled = false; btn.textContent = zurueck; });
+}
+function syncAuswahlStart(btn) {
+  var cbs = document.querySelectorAll('.sa-cb'), sel = [], i;
+  for (i = 0; i < cbs.length; i++) {
+    if (cbs[i].checked) sel.push([cbs[i].dataset.person, cbs[i].dataset.datei]);
+  }
+  var st = document.getElementById('sa-status');
+  if (!sel.length) { if (st) st.textContent = 'nothing selected'; return; }
+  if (!confirm('Send ' + sel.length + ' reference image(s) to Frigate?')) return;
+  /* .137: Fehlertexte gehoeren NICHT in den gruenen Startknopf (Operator-Fund
+     06.08.: ein gruener Knopf mit Fehlermeldung darin liest sich wie Erfolg).
+     Der Knopf wird neutral-rot beschriftet, der Text steht daneben — mit dem
+     Diagnose-Anker, Muster gesImport. */
+  function scheitern(txt) {
+    btn.className = 'gtb sa-crit'; btn.textContent = 'transfer failed';
+    btn.disabled = false;
+    if (!st) return;
+    st.className = 'sa-crit'; st.textContent = txt + ' ';
+    var dg = document.createElement('a');
+    dg.href = '/sync_diagnose'; dg.target = '_blank'; dg.textContent = 'diagnosis';
+    st.appendChild(dg);
+  }
+  btn.disabled = true; btn.textContent = 'starting …';
+  fetch('/sync_auswahl_start', {method: 'POST', body: JSON.stringify({auswahl: sel})})
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d.ok) { scheitern(d.msg || 'error'); return; }
+      var poll = setInterval(function () {
+        fetch('/sync_status').then(function (r) { return r.json(); }).then(function (s) {
+          if (s.phase === 'export') {
+            var pct = s.total ? Math.round(100 * s.done / s.total) : 0;
+            btn.textContent = s.done + '/' + s.total + ' (' + (s.current || '') + ') ' + pct + '%';
+          } else if (s.phase === 'done') {
+            clearInterval(poll);
+            btn.textContent = 'done: ' + (s.ok || 0) + ' uploaded, ' + (s.gate || 0)
+              + ' not accepted — reloading …';
+            setTimeout(function () { location.reload(); }, 1500);
+          } else if (s.phase === 'error') {
+            clearInterval(poll);
+            /* Ursache/Hinweis zeigen, nicht 'rc=1' (carlsmith-Fall .131) */
+            scheitern('transfer failed: ' + (s.hinweis || s.detail || s.msg || 'see service log'));
+          }
+        }).catch(function () {});
+      }, 1200);
+    });
+}
+/* Pre-check runs in the background (own subprocess): poll, then reload once */
+function syncVorpruefungPoll() {
+  var el = document.getElementById('sa-pruef');
+  if (!el) return;
+  var stillstand = 0, letzterStand = -1;
+  var poll = setInterval(function () {
+    fetch('/sync_vorpruefung_status').then(function (r) { return r.json(); }).then(function (s) {
+      if (s.laeuft) {
+        /* .134: haengt der Lauf (Prozess hart gestorben, Status bleibt auf
+           laeuft), nicht ewig 'checking' zeigen — nach ~6 min ohne Fortschritt
+           ehrlich aufgeben statt endlos zu pollen. */
+        if ((s.fertig || 0) === letzterStand) { stillstand++; } else { stillstand = 0; letzterStand = s.fertig || 0; }
+        if (stillstand > 240) {
+          clearInterval(poll);
+          el.textContent = 'pre-check appears stuck — reload the page to retry';
+          return;
+        }
+        el.textContent = 'checking images … ' + (s.fertig || 0) + '/' + (s.gesamt || 0);
+      } else {
+        clearInterval(poll);
+        if (s.fehler) { el.textContent = 'pre-check failed: ' + s.fehler; return; }
+        el.textContent = 'pre-check done — reloading …';
+        setTimeout(function () { location.reload(); }, 800);
+      }
+    }).catch(function () {});
+  }, 1500);
 }
 
 /* Setup wizard step 4: import faces from Frigate with live progress */
@@ -372,7 +505,10 @@ function wizImport(btn) {
                import/done aus — bei einem Fehler pollte sie endlos, der Text fror ein und der
                Knopf blieb tot (Plan-QS P.9). Die Zwillingsfunktion oben macht es laengst so. */
             clearInterval(poll);
-            st.textContent = 'import failed: ' + (s.msg || 'see service log');
+            st.textContent = 'import failed: ' + (s.hinweis || s.detail || s.msg || 'see service log') + ' ';
+            var dg1 = document.createElement('a');
+            dg1.href = '/sync_diagnose'; dg1.target = '_blank'; dg1.textContent = 'diagnosis';
+            st.appendChild(dg1);
             btn.disabled = false; btn.textContent = 'Import faces';
           }
         }).catch(function () {});
@@ -402,7 +538,10 @@ function gesImport(btn) {
             setTimeout(function () { location.reload(); }, 2500);
           } else if (s.phase === 'error') {
             clearInterval(poll);
-            st.textContent = 'import failed: ' + (s.msg || 'see service log');
+            st.textContent = 'import failed: ' + (s.hinweis || s.detail || s.msg || 'see service log') + ' ';
+            var dg2 = document.createElement('a');
+            dg2.href = '/sync_diagnose'; dg2.target = '_blank'; dg2.textContent = 'diagnosis';
+            st.appendChild(dg2);
             btn.disabled = false; btn.textContent = 'Import faces from Frigate';
           }
         }).catch(function () {});
@@ -785,3 +924,9 @@ async function personlaufVerwerfen(lid) {
   });
   if (r.ok) location.reload();
 }
+
+/* .133: die Review-&-sync-Seite braucht beim Laden zwei Dinge — den Zaehler auf den
+   echten Haken-Stand und, falls die Vorpruefung noch rechnet, den Fortschritts-Poll.
+   app.js laeuft mit defer, das DOM steht hier also schon. */
+if (document.querySelector('.sa-cb')) syncAuswahlZaehlen();
+if (document.getElementById('sa-pruef')) syncVorpruefungPoll();

@@ -49,6 +49,10 @@ NAV = [
     # und Person learn (Koerper-Strang) — User-Entscheid 04.08.
     ("Learn",    [("/lernlauf", "Face learn"), ("/lernlauf/anker", "Anchors"),
                   ("/personlauf", "Person learn")]),
+    # .137: der Frigate-Abgleich bekommt einen EIGENEN Hauptbereich (User 06.08.).
+    # Die Seite ist die einzige Sync-Strecke in beide Richtungen und war bisher nur
+    # ueber die System-Karte erreichbar — wer nach "Frigate" sucht, sucht oben.
+    ("Frigate sync", [("/sync_auswahl", "Frigate sync")]),
     ("Settings", [("/kameras", "Cameras"), ("/benachrichtigungen", "Notifications"),
                   ("/konfiguration", "Advanced")]),
     ("System",   [("/system", "System")]),

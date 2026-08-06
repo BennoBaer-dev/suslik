@@ -1097,7 +1097,12 @@ def aehnliche_unbekannte(person, max_n=12, min_sim=0.28):
     # pro (person,datei): aktiv-Status aus der LETZTEN Zeile, eid aus IRGENDEINER Zeile des
     # Keys — spaetere Zeilen ohne eid (z.B. der Export-Vermerk von sync_refs) duerfen die
     # benenne-Zuordnung nicht verdraengen (Review-Finding 19.07.); ein geloeschtes
-    # Referenzbild (Tombstone) gibt sein Gesicht wieder fuer Vorschlaege frei
+    # Referenzbild (Tombstone) gibt sein Gesicht wieder fuer Vorschlaege frei.
+    # AUSNAHME (.138 Panel-Befund): die offer-again-Zeile der Sync-Seite ist KEINE
+    # Loeschung — das Bild liegt weiter im Master und zaehlt als Referenz. Sie wird
+    # am Marker aus der EINEN Quelle uebersprungen, sonst taucht das angelernte
+    # Gesicht wieder als Unbekannt-Vorschlag auf (Weg zum exakten Duplikat).
+    from sync_refs import GRUND_WIEDER_ANBIETEN as _GRUND_WA
     status_aktiv, eids = {}, {}
     meta = os.path.join(MASTER, "refs_meta.jsonl")
     if os.path.exists(meta):
@@ -1107,6 +1112,8 @@ def aehnliche_unbekannte(person, max_n=12, min_sim=0.28):
             except Exception:
                 continue
             if not (d.get("person") and d.get("datei")):
+                continue
+            if not d.get("aktiv", True) and d.get("grund") == _GRUND_WA:
                 continue
             key = (d["person"], d["datei"])
             status_aktiv[key] = d.get("aktiv", True)

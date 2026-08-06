@@ -139,18 +139,33 @@ def wizard(personen, auswahl_n, person_wahl, bilanz=None, lauf=None,
                      "for <b>" + wer + "</b> are already part of your learning "
                      "material — there was nothing new to harvest. New "
                      "walk-throughs become harvestable automatically.")
+        # Verwaiste Labels ausweisen (Issue #18 Carl/Rose): Bestaetigungen
+        # geloeschter Personen werden bewusst NICHT geerntet — sagen, nie still.
+        vw = dg.get("verwaiste_labels") or {}
+        vw_zeile = ""
+        if vw:
+            vw_zeile = ('<div class="dim">Skipped on purpose: '
+                        + ", ".join(f"{html.escape(p)} ({n})" for p, n in vw.items())
+                        + " — these names were deleted from your people; their old "
+                          "confirmed events stay as history but are not harvested.</div>")
         teile.append(
             '<div class="card"><b>Run finished without images — here is why</b>'
-            "<div>" + grund + "</div>"
-            '<div class="dim">Nothing was changed; you can start another '
+            "<div>" + grund + "</div>" + vw_zeile
+            + '<div class="dim">Nothing was changed; you can start another '
             "run below any time.</div></div>")
     elif phase == "fertig":
+        vw = (lauf.get("diagnose") or {}).get("verwaiste_labels") or {}
+        vw_zeile = ("" if not vw else
+                    '<div class="dim">Skipped on purpose: '
+                    + ", ".join(f"{html.escape(p)} ({n})" for p, n in vw.items())
+                    + " — deleted people; their old confirmed events are not "
+                      "harvested.</div>")
         teile.append(
             '<div class="card"><b>Review finished — material adopted</b>'
             f'<div>{lauf.get("abgenommen", 0)} images approved as learning '
             f'material, {lauf.get("verworfen", 0)} rejected '
-            f'(run {html.escape(str(lauf.get("lauf_id", "")))}).</div>'
-            '<div class="dim">Training on the approved material ships with '
+            f'(run {html.escape(str(lauf.get("lauf_id", "")))}).</div>' + vw_zeile
+            + '<div class="dim">Training on the approved material ships with '
             "the next update — your review is stored and nothing needs to "
             "be repeated. You can start another run below any time.</div>"
             '<div style="margin-top:8px"><a class="gtb" '

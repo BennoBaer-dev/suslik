@@ -73,8 +73,32 @@ def anlegen(data_dir, n_events, person="", tage=19):
             if "ausfall" not in z and z.get("status") in (
                     "abgenommen", "verworfen", "offen"):
                 belegt.add(z["eid"])
-    im_fenster = [e for e in je_eid if ev_index[e]["start"] >= ab
-                  and (not person or je_eid[e][0] == person)]
+    # Verwaiste Labels (Issue #18, Carl/Rose-Fall): Bestaetigungen GELOESCHTER
+    # Personen bleiben als Historie in der Akte — die Alle-Ernte bietet sie
+    # aber NICHT mehr an. Personen-Universum = Referenz-Master (faces/), die-
+    # selbe Quelle wie die Wizard-Auswahl (master_persons). Uebersprungenes
+    # wird GEZAEHLT ausgewiesen (diagnose.verwaiste_labels), nie still. Eine
+    # EXPLIZIT gewaehlte Person filtert nicht (der Wizard bietet nur
+    # Existierende an; ein bewusster Direkt-Aufruf bleibt moeglich).
+    try:
+        _fd = os.path.join(data_dir, "faces")
+        vorhanden = {p for p in os.listdir(_fd)
+                     if os.path.isdir(os.path.join(_fd, p))}
+    except FileNotFoundError:
+        vorhanden = set()
+    verwaist = {}
+    im_fenster = []
+    for e in je_eid:
+        if ev_index[e]["start"] < ab:
+            continue
+        p = je_eid[e][0]
+        if person:
+            if p != person:
+                continue
+        elif p not in vorhanden:
+            verwaist[p] = verwaist.get(p, 0) + 1
+            continue
+        im_fenster.append(e)
     eids = sorted((e for e in im_fenster if e not in belegt),
                   key=lambda e: -ev_index[e]["start"])[:n_events]
     liste = []
@@ -95,6 +119,8 @@ def anlegen(data_dir, n_events, person="", tage=19):
     diagnose = {"fenster_tage": tage, "gebunden_fenster": len(im_fenster),
                 "durch_bestand": len(im_fenster) - len(
                     [e for e in im_fenster if e not in belegt])}
+    if verwaist:
+        diagnose["verwaiste_labels"] = dict(sorted(verwaist.items()))
     if person and not im_fenster:
         # Ehrlichkeits-Nachschau (User-Einwand 05.08., zwei reale Faelle:
         # 'die waren doch da'): (a) Akten-Beginn ausweisen — aeltere
