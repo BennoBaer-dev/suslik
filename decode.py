@@ -145,6 +145,8 @@ class FrameIter:
         self.hwdec_fallback = False
         self.rc = None                       # ffmpeg-Exitcode des letzten Laufs
         self.decoder_fehler = 0              # Fehlerzeilen aus ffmpeg-stderr
+        self._proc = None                    # laufende ffmpeg-Pipe (s. abbrechen)
+        self.abgebrochen = False
 
     def _kommando(self, hw):
         # SELECT VOR TRANSFER (User-Idee 04.08., gemessen -45..-59 %): die
@@ -181,6 +183,7 @@ class FrameIter:
         with tempfile.TemporaryFile() as err:
             p = subprocess.Popen(self._kommando(hw), stdout=subprocess.PIPE,
                                  stderr=err, bufsize=fsz * 2)
+            self._proc = p                    # Griff fuer abbrechen() (Z5)
             try:
                 k = 0
                 while True:
@@ -195,6 +198,7 @@ class FrameIter:
                     yield i, cv2.cvtColor(y, cv2.COLOR_YUV2BGR_I420)
                     k += 1
             finally:
+                self._proc = None
                 p.stdout.close()
                 self.rc = p.wait()
                 try:
@@ -235,6 +239,33 @@ class FrameIter:
                 return
         self.gelesen = 0
         yield from self._pipe(None)
+
+    def abbrechen(self):
+        """Die laufende ffmpeg-Pipe von AUSSEN beenden — Zeitwache Stufe (b)
+        des Frame-Verteilers (konzept_frames.md v2 §3.2 zeitwache_s). Zwischen
+        zwei Frames greift sonst keine Wache: haengt der Pipe-Read, haengt der
+        ganze Lauf bis zum Job-Deckel des Aufrufers.
+
+        KEIN killpg (bewusst, W1-Lehre): die Pipe laeuft absichtlich in der
+        Prozessgruppe des Aufrufers, damit verifyds killpg auf den Worker auch
+        ffmpeg-ENKEL mitnimmt (verifyd.py:659). Ein eigenes start_new_session
+        haette genau diesen Schutz zerschnitten und den 480-MB-ffmpeg-Zombie
+        zurueckgebracht. ffmpeg hat selbst keine Kinder — .kill() genuegt: der
+        blockierende read() bekommt EOF, die Schleife bricht ab und das
+        bestehende finally raeumt (rc lesen, stderr auswerten) unveraendert.
+
+        Threadsicher genug per Konstruktion: gelesen wird EIN Attribut, das
+        nur der Lese-Thread setzt und loescht; ist es None, war die Pipe schon
+        zu. Rueckgabe: True = Signal ging raus."""
+        self.abgebrochen = True
+        p = self._proc
+        if p is None:
+            return False
+        try:
+            p.kill()
+        except Exception:
+            return False
+        return True
 
     @property
     def _soll_samples(self):

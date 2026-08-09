@@ -54,12 +54,16 @@ _Last updated: 2026-08-06 (0.1.0.138)._
 - **Detection resolution follows the clip's aspect ratio since 0.1.0.44** (long edge
   1280, multiple-of-32 grid — bit-identical detections, about a quarter less GPU work
   on 16:9). Making the base size configurable is still on the list.
-- **Person recognition (preview): the decision threshold is calibrated between
-  your learned people only.** Real strangers are not part of that calibration yet
-  (they would need their own harvested material); keep an eye on body-path alerts
-  and disarm any time. Scenario-driven decisions themselves are live: the scene
-  window gates stranger alerts, passes with no serious face get a quiet class,
-  and body recognition attributes face-less passes.
+- **Person recognition (preview): the decision threshold is only as good as its
+  stranger material.** Since 0.1.0.139 the calibration uses real stranger images
+  from `personlern/fremd/` when at least five are present, and the model drops
+  bodies it reads as strangers; with an empty folder it falls back to calibrating
+  between your learned people only. Either way, keep an eye on body-path alerts
+  and disarm any time — Model status states which of the two applies. Collecting
+  that stranger material still has no UI; you fill the folder yourself.
+  Scenario-driven decisions themselves are live: the scene window gates stranger
+  alerts, passes with no serious face get a quiet class, and body recognition
+  attributes face-less passes.
 - **Merge suggestions are capped at 20**, ordered by similarity, so the page stays
   usable. Answering them (Merge / Different) makes room for the next ones.
 - **Backup comes in two sizes.** The configuration backup covers the settings; the

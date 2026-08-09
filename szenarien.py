@@ -27,6 +27,33 @@ def _gt_offen(gtmap, eid):
     return eid not in gtmap
 
 
+def pass_key(by_h, eid, cfg, gtmap=None, now=None):
+    """Der Szenario-Schluessel EINES Events: die Startzeit des DURCHGANGS, zu
+    dem es gehoert, in ganzen Sekunden ("%d") — dieselbe Schreibweise, die die
+    Lern-Kette schon fuehrt (core/personlauf.py: pass_key aus dem ersten Event
+    eines Durchgangs). None = das Event liegt in keiner Gruppe.
+
+    Gruppiert wird NICHT neu: die Antwort faellt aus szenarien_des_tages, der
+    EINEN Gruppierung dieses Projekts (gap, ende_ts-Praeferenz, Tagesgrenze).
+    Eine zweite Gap-Rechnung waere das Streu-Literal, das qs_ebenen.md
+    verbietet — und ein Durchgang, der auf zwei Seiten anders geschnitten
+    wird, ist genau der Szenario-Fehler, den CLAUDE.md als wiederkehrend
+    fuehrt. Aufrufer: verifyd._kontroll_speicher (Z8, Ablage je Pass)."""
+    import datetime
+    r = (by_h or {}).get(eid)
+    t0 = (r.get("start") or r.get("ts") or 0) if r else 0
+    if not t0:
+        return None
+    tag = datetime.datetime.fromtimestamp(t0).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    for s in szenarien_des_tages(by_h, tag.timestamp(),
+                                 (tag + datetime.timedelta(days=1)).timestamp(),
+                                 cfg, {} if gtmap is None else gtmap, now=now):
+        if any(e.get("eid") == eid for e in s.get("evs") or []):
+            return "%d" % round(s["start"])
+    return None
+
+
 def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kameras=None,
                         koerper_map=None, koerper_ab=2):
     """rows-Sicht eines Tages -> Szenarien-Liste (neueste zuerst). by_h = last-wins je eid;

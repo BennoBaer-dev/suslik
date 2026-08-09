@@ -81,17 +81,63 @@ def analysiere(emb, refs, vid):
     """Kompakte, deterministische Nachbildung der analyze-Pipeline (nur Scores).
     Seit W1 (0.1.0.35) ueber decode.FrameIter — dieselbe Frame-Quelle wie die Produktion,
     sonst prueft das Gate einen anderen Decode-Pfad als den, der live urteilt (Plan-QS R5).
+    Seit Z7 (konzept_frames.md v2 §4) ueber den VERTEILER (core.frames.lauf) — derselbe
+    Grund eine Stufe weiter: die Produktion bezieht ihre Frames seit Z4/Z5/Z6 vom
+    Verteiler. Bliebe die Abnahme am nackten FrameIter, pruefte sie wieder einen ANDEREN
+    Frame-Pfad als den urteilenden, und step-Wahl, Bedien-Reihenfolge, Pin und
+    Wache-Nachrechnung blieben ausgerechnet fuer den einzigen Neutralitaets-Beweis
+    unsichtbar. Deshalb ist abnahme.py von der Z7-Inventar-Stufe NICHT ausgenommen.
     Semantik (step, i/fps) bit-exakt unveraendert; die Soll-Staende gelten weiter."""
-    from decode import FrameIter
+    from core import frames as verteiler
     nn = lambda v: {p: float((M @ v).max()) if len(M) else -1.0 for p, M in refs.items()}
-    it = FrameIter(vid, FPS_SAMPLE)
-    emb.set_det_size(emb.ar_det_size(it.breite, it.hoehe))   # H4: wie die Produktion (R5)
     punkte = {p: [] for p in refs}
-    for i, frame in it:
+    clip = {"fps": None}       # aus LaufInfo — frueher direkt it.fps
+
+    def clip_start(info):
+        """EINMAL vor dem ersten Frame — Inhalt UND Reihenfolge unveraendert. Die
+        det_size bleibt hier beim Abnehmer: der Verteiler kennt keine Modell-Parameter
+        (§3.2) und darf die Reihenfolge des Urteilspfads nie erben."""
+        clip["fps"] = info.fps
+        emb.set_det_size(emb.ar_det_size(info.breite, info.hoehe))   # H4: wie die Produktion (R5)
+
+    def messen(i, frame):
+        """Abnehmer 'abnahme': frueher der Rumpf von `for i, frame in it`. Zeile fuer
+        Zeile derselbe Code — nur die Schleifenzeile ist weg, weil jetzt der Verteiler
+        faehrt, und it.fps heisst clip['fps']."""
         for fc in emb.app.get(frame):
             sc = nn(np.asarray(fc.normed_embedding, dtype=np.float32))
             for p, s in sc.items():
-                punkte[p].append((i / it.fps, s))
+                punkte[p].append((i / clip["fps"], s))
+
+    # Z7: EIN Lauf, EIN Abnehmer — alle sechs Vertragsfelder stehen HIER und keins im
+    # Verteiler (§3.2: ein weggelassenes Feld waere wieder eine Annahme IM Verteiler).
+    # Die zurueckgegebene Wache wird bewusst NICHT gelesen: die Abnahme urteilte noch nie
+    # ueber Vollstaendigkeit (nur ueber Scores/Fenster), und ein neues Urteil waere eine
+    # Verhaltensaenderung statt einer Vertrags-Haertung.
+    verteiler.lauf(vid, [verteiler.Abnehmer(
+        name="abnahme",
+        fps_sample=FPS_SAMPLE,     # derselbe Wert wie zuvor -> derselbe step
+        zeitbezug="clip",          # t = i/fps, kein Wanduhr-Anker
+        bedarf="stream",           # haelt nichts: es wandern nur Scores nach `punkte`
+        hart=True,                 # ein Ausfall MUSS den Lauf beenden und die Ausnahme
+                                   # unveraendert durchreichen (wie bis 0.1.0.153). Weich
+                                   # waere hier ein halb gerechneter Fixpunkt, den
+                                   # vergleiche() als ABWEICHUNG buchte — oder, schlimmer,
+                                   # ein Fremd-Event mit 0 Treffern, weil gar nichts
+                                   # gelesen wurde: gruen aus Nichts (qs.md, stiller
+                                   # Verlust). Vertretbar ist hart hier, weil abnahme.py
+                                   # ein Solo-Werkzeug ist — es gibt keinen zweiten
+                                   # Abnehmer im Lauf, den ein Abbruch mitrisse.
+        wache_politik="nachrechnen",
+        zeitwache_s=None,          # BEWUSST keins, wie im Urteilspfad (analyze/ernte):
+                                   # die Abnahme hatte nie einen eigenen Deckel, gedeckelt
+                                   # wird sie vom Aufrufer (Bediener/qs.sh/Runbook). Ein
+                                   # Budget hier waere eine Verhaltensaenderung, kein
+                                   # Umzug: weil abnahme der EINZIGE Abnehmer ist, schaltete
+                                   # es sofort auch die LAUF-Wache scharf (§3.2, Stufe b —
+                                   # sie laeuft nur, wenn JEDER Abnehmer ein Budget nennt),
+                                   # und die beendet die ffmpeg-Pipe mitten im Fixpunkt.
+        start=clip_start, frame=messen)])
     return {p: {"max": round(max((s for _, s in pts), default=-1.0), 3),
                 "win38": win3s(pts, 0.38), "win35": win3s(pts, 0.35)}
             for p, pts in punkte.items()}

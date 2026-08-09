@@ -19,7 +19,7 @@ Aufruf:
 
 Backend-Wahl via face_audit.resolve_backend/core.registry (alle kinds: cpu, openvino, cuda, migraphx).
 """
-import os, sys, json, socket, urllib.request, argparse, tempfile
+import os, sys, json, socket, time, urllib.request, argparse, tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from face_audit import Embedder, fetch_image, ist_fehldetektion
 import numpy as np, cv2
@@ -29,7 +29,8 @@ socket.setdefaulttimeout(120)   # urlretrieve kennt kein timeout=; ohne Default 
 FRIGATE = os.environ.get("FRIGATE_URL", "")
 SCRATCH = os.environ.get("SCRATCH_DIR") or os.path.join(tempfile.gettempdir(), "suslik-scratch")
 from core.pfade import WURZEL as HERE   # M0-Anker (Falle 0): eine Pfad-Quelle
-os.makedirs(SCRATCH, exist_ok=True)
+from core import frames as clipcache    # Z2: EINE Clip-Beschaffung fuer alle Wege
+os.makedirs(SCRATCH, exist_ok=True)     # SCRATCH bleibt der refcache-Ort (Z.100)
 
 ap = argparse.ArgumentParser()
 ap.add_argument("eids", nargs="+")
@@ -47,6 +48,19 @@ ap.add_argument("--fd-front-min", type=float, default=0.85)
 ap.add_argument("--fd-sharp-min", type=float, default=1500.0)
 ap.add_argument("--fd-det-max", type=float, default=0.70)
 ap.add_argument("--det-thresh", type=float, default=0.5)
+# Z5 (konzept_frames.md v2 §4): der KOERPER-Abnehmer faehrt im selben
+# Frame-Lauf mit — hier faellt der Doppel-Decode. Beide Werte sind
+# JOB-PARAMETER und keine Selbst-Auskunft: ob der Koerper-Strang scharf ist,
+# weiss der Dienst (personmodell-Status) und entscheidet es EINMAL vor dem
+# Job; wie viel Speicher der Worker noch hat, weiss ebenfalls nur er
+# (worker_rss_max_mb). Ohne --koerper laeuft alles exakt wie bis 0.1.0.151.
+ap.add_argument("--koerper", action="store_true",
+                help="Koerper-Bestbilder im selben Frame-Lauf mitziehen "
+                     "(nur wenn der Koerper-Strang scharf geschaltet ist)")
+ap.add_argument("--koerper-rss-max-mb", type=float, default=0.0,
+                help="RSS-Deckel dieses Prozesses in MB (worker_rss_max_mb). "
+                     "Der Koerper-Puffer darf nur in den Kopfraum darunter "
+                     "(0 = unbekannt -> es wird NICHT gepuffert; §5 'RAM')")
 a = ap.parse_args()
 
 emb = Embedder()
@@ -171,7 +185,9 @@ if os.path.exists(results_path):
 # abnahme (vorher drei driftende Kopien, Plan-QS R5) plus Vollstaendigkeits-WACHE gegen
 # den stillen Abbruch bei defekten Clips. Semantik (i, step, fps-Quelle) ist bit-exakt
 # unveraendert; der 18.07.-VAAPI-Verwurf ist dort im Modul-Docstring dokumentiert.
-from decode import FrameIter
+# Seit Z4 (konzept_frames v2) haengt analyze NICHT mehr direkt am FrameIter, sondern
+# ist Abnehmer am Verteiler (core.frames.lauf, s.u.) — der faehrt genau denselben
+# FrameIter mit demselben fps_sample, damit dieselbe Index-Menge.
 
 
 def ctx_crop(frame, x1, y1, x2, y2, faktor=3.0, max_kante=560, ziel_ar=4 / 3):
@@ -206,88 +222,237 @@ def ctx_crop(frame, x1, y1, x2, y2, faktor=3.0, max_kante=560, ziel_ar=4 / 3):
     return frame[b1:b2, a1:a2].copy()
 
 
+def koerper_abnehmer(eid):
+    """Der Koerper-Abnehmer fuer DIESES Event, oder None (dann bleibt es bei
+    der heutigen Kette im Dienst-Thread — Notnagel unveraendert).
+
+    Der Import haengt an core.personlauf._proto: derselbe Einstieg, den auch
+    der Dienst nimmt (sys.path auf prototyp/ + FRIGATE-ENV-Bruecke), damit im
+    Container die gestagte Kette greift und es keine zweite Pfad-Wahrheit gibt.
+    Rueckgabe (Koerper, Abnehmer, EVENT_ZEITWACHE_S)."""
+    from core.personlauf import _proto, EVENT_ZEITWACHE_S
+    from worker import _rss_mb          # EINE VmRSS-Quelle, keine zweite Formel
+    _proto()
+    import pfad_snapshots
+    # Kopfraum JETZT, nicht aus zweiter Hand: dieses Skript laeuft IM Worker
+    # (runpy), also ist sein eigener VmRSS der wahre Stand — ein vom Dienst
+    # mitgegebener Messwert waere immer der von VORHIN (und bei einem frisch
+    # gestarteten Worker gar keiner).
+    rss = _rss_mb()                    # -1 = /proc nicht lesbar
+    budget = (a.koerper_rss_max_mb - rss) if rss > 0 else 0.0
+    k = pfad_snapshots.Koerper(eid, ram_budget_mb=budget)
+    # Die zwei Frigate-Artefakte JETZT holen: ohne path_data/box gibt es
+    # keinen Koerper-Abnehmer, und dann soll der Verteiler auch nichts von
+    # ihm wissen (eine Absage in start() waere teurer und lauter als noetig).
+    k.vorbereiten()
+    return k, k.abnehmer(zeitwache_s=EVENT_ZEITWACHE_S), EVENT_ZEITWACHE_S
+
+
+def koerper_ablegen(k, wache, outdir, eid, rest_s):
+    """UEBERGABE an den Dienst: Top-K-Crops + koerper.json in event_dir.
+
+    Der Verteiler liefert die Frames, die INFERENZ bleibt verteilt (§3.2 'Wo
+    der Lauf wohnt'): DINOv2/SVM/PoseWache laufen weiter im Daemon-Thread des
+    Dienstes (core/personlive), er holt sich hier nur die Bilder ab, statt
+    denselben Clip ein zweites Mal zu dekodieren.
+
+    PNG, nicht JPEG: diese Pixel gehen in die Erkennung. Eine verlustbehaftete
+    Zwischenstufe waere eine stille Urteilsaenderung (Train/Serve-Bruch, den
+    .148 gerade geschlossen hat) — die JPEG-Ablage im Treffer-Buch passiert
+    erst NACH dem Urteil.
+
+    koerper.json ist der ABSCHLUSS-Marker und wird atomar zuletzt geschrieben:
+    der Dienst liest nie eine halb gelegte Uebergabe. 'ausfall' darin heisst
+    'die Kette lief hier NICHT zu Ende' -> der Dienst faehrt seinen eigenen
+    Weg wie bisher; 'top': [] heisst 'sie lief und fand nichts' -> genau wie
+    heute uebernimmt der Snapshot-Notnagel."""
+    import concurrent.futures as cf
+    for alt in os.listdir(outdir):               # Reste eines Vorlaufs (Nachhol)
+        if alt.startswith("koerper_") and alt.endswith(".png"):
+            os.unlink(os.path.join(outdir, alt))
+    ziel = os.path.join(outdir, "koerper.json")
+    if os.path.exists(ziel):
+        os.unlink(ziel)
+    top, info, ausfall = None, "", None
+    if wache is None or wache.abgeworfen:
+        ausfall = (wache.ausfall if wache is not None else "kein Lauf")
+    else:
+        pool = cf.ThreadPoolExecutor(max_workers=1)
+        try:                                     # Zeitwache wie im Dienst:
+            fut = pool.submit(k.auswerten)       # haengt die Auswertung, ist
+            top, info = fut.result(timeout=max(1.0, rest_s))   # sie ein Ausfall
+        except Exception as ex:                  # noqa: BLE001
+            ausfall = f"{type(ex).__name__}: {str(ex)[:120]}"
+        finally:
+            pool.shutdown(wait=False)
+    dateien = []
+    for n, (score, fi, crop, hoehe) in enumerate(top or []):
+        fn = f"koerper_{n}.png"
+        if cv2.imwrite(os.path.join(outdir, fn), crop):
+            dateien.append({"datei": fn, "score": float(score),
+                            "frame_i": int(fi), "hoehe": int(hoehe)})
+    daten = {"eid": eid, "info": info, "top": dateien,
+             "puffer_mb": round(k.puffer_mb, 1),
+             "samples": (wache.samples if wache is not None else 0),
+             **({"ausfall": ausfall} if ausfall else {})}
+    tmp = ziel + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(daten, f, ensure_ascii=False)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, ziel)
+    print(f"KOERPER: {len(dateien)} Crops, {daten['samples']} Samples, "
+          f"Puffer {daten['puffer_mb']:.0f} MB"
+          + (f", AUSFALL {ausfall}" if ausfall else f" — {info}"))
+
+
 summary = {}   # label -> {person -> best record}
 for k, eid in enumerate(a.eids):
     label = a.labels[k] if a.labels and k < len(a.labels) else os.path.basename(eid).split(".")[0]
     if label in done_labels:
         print(f"\n=== {label} — bereits in results.jsonl, übersprungen ==="); continue
     if os.path.exists(eid):                       # lokaler Video-Pfad (z.B. VOD-Clip)
-        vid = eid
+        vid, pin_eid = eid, None                  # nichts beschafft -> nichts zu loesen
     else:                                          # sonst als Frigate-Event-ID behandeln
-        vid = os.path.join(SCRATCH, eid.replace("/", "_") + ".mp4")
-        if not os.path.exists(vid):
-            # atomar via .part: ein bei Kill/Reboot abgerissener Download darf beim
-            # Retry nicht als gueltiges (halbes) Video durchgehen -> falsches Urteil
-            urllib.request.urlretrieve(f"{FRIGATE}/api/events/{eid}/clip.mp4", vid + ".part")
-            os.replace(vid + ".part", vid)
-    frames = FrameIter(vid, a.fps_sample)
-    fps = frames.fps
-    # H4: det_size je Clip aus dem Seitenverhaeltnis (nach P1 ist der Wechsel attributsbillig;
-    # /32-Regel und Begruendung in Embedder.ar_det_size).
-    emb.set_det_size(emb.ar_det_size(frames.breite, frames.hoehe))
-    # det_thresh NACH set_det_size (prepare resettet auf 0.5, Review .52); Referenzen
-    # oben liefen bewusst mit dem Default. Guard-Muster: erster Frame prueft den REAL
-    # gebundenen Wert — Marker wird von qs S5 gegriffen (Erfolg am Ground Truth).
-    emb.app.det_model.det_thresh = a.det_thresh
-    faces = []; sampled = 0
-    show, nnctx = {}, {}   # person -> (flaeche, ctx-crop) bzw. (score, ctx-crop): Anzeige-Bilder
-    # Enrollment-Kandidaten (Plan AP4): pro Person das beste GATE-konforme Gesicht
-    # (Kante>=100, front>=0.5, det>=0.7, sharp>=60, score>=0.45) und der beste
-    # Fremd-Kandidat (grosses gutes Gesicht, bester Match ueberhaupt < 0.35).
-    enroll = {}            # person -> (score, dict)
-    fremd_kand = None      # (det*flaeche-Guete, dict)
-    for i, frame in frames:
-        if sampled == 0 and abs(float(emb.app.det_model.det_thresh) - a.det_thresh) > 1e-9:
-            print(f"DET-THRESH-MISMATCH: gefordert={a.det_thresh} gebunden={float(emb.app.det_model.det_thresh)}")
-        sampled += 1
-        for fc in emb.app.get(frame):
-            front, yaw, pitch = frontality(fc)
-            if front is None: continue
-            x1, y1, x2, y2 = [max(0, int(t)) for t in fc.bbox]
-            crop = frame[y1:y2, x1:x2]
-            sc = nn(fc.normed_embedding)
-            p = max(sc, key=sc.get)
-            schaerfe0 = sharp(crop)
-            # #42 Teil B: Fehldetektions-Flag je Detektion (Zaehlung/Anzeige/Pool —
-            # NICHT das Urteil: sc/summary rechnen weiter ueber ALLE Detektionen).
-            fd = ist_fehldetektion(front, schaerfe0, float(fc.det_score),
-                                   a.fd_front_min, a.fd_sharp_min, a.fd_det_max)
-            faces.append({"t": i/fps, "bw": x2-x1, "bh": y2-y1, "front": front, "fd": fd,
-                          "yaw": yaw, "det": float(fc.det_score), "sharp": schaerfe0,
-                          "sex": getattr(fc, "sex", "?"), "age": int(getattr(fc, "age", -1)),
-                          "pose": [round(float(x),0) for x in getattr(fc,"pose",[])] or None,
-                          # .copy(): frame[y1:y2, x1:x2] ist ein numpy-VIEW und haelt den KOMPLETTEN
-                          # dekodierten Frame am Leben, solange er in faces liegt (bis Clip-Ende).
-                          # Bei 4 MP sind das ~11 MB pro Gesicht statt ~100 kB fuer den Crop —
-                          # lange Events mit dauerhaft sichtbarer Person liefen so in den OOM-Kill
-                          # (Analyse "fehler", Nachholversuche scheiterten identisch).
-                          "sc": sc, "p": p, "crop": crop.copy()})
-            # Anzeige-Tracking (nur solange der Frame vorliegt): pro Person das
-            # GROESSTE verlaesslich erkannte Gesicht (score >= win-thresh) mit
-            # Umfeld; Fallback fuer nie Bestaetigte: Umfeld des Match-besten.
-            area = (x2 - x1) * (y2 - y1)
-            for pp_, s_ in sc.items():
-                if s_ >= a.win_thresh and area > show.get(pp_, (0, None))[0]:
-                    show[pp_] = (area, ctx_crop(frame, x1, y1, x2, y2))
-                if s_ > nnctx.get(pp_, (-1.0, None))[0]:
-                    nnctx[pp_] = (s_, ctx_crop(frame, x1, y1, x2, y2))
-            kante = min(x2 - x1, y2 - y1)
-            schaerfe = schaerfe0
-            gate = (kante >= 100 and front >= 0.5 and float(fc.det_score) >= 0.7
-                    and schaerfe >= 60)
-            if gate:
-                kd = {"t": round(i / fps, 1), "bw": x2 - x1, "bh": y2 - y1,
-                      "front": round(front, 2), "det": round(float(fc.det_score), 2),
-                      "sharp": round(schaerfe, 0), "crop": crop.copy(),
-                      "emb": [round(float(x), 5) for x in fc.normed_embedding]}
-                bester = max(sc.values())
-                if sc[p] >= 0.45 and sc[p] == bester:      # Personen-Kandidat (p = bester Match)
-                    if sc[p] > enroll.get(p, (-1, None))[0]:
-                        enroll[p] = (sc[p], {**kd, "person": p, "score": round(sc[p], 3)})
-                elif bester < 0.35:                        # Fremd-Kandidat: gut sichtbar, niemand
-                    guete = float(fc.det_score) * area
-                    if fremd_kand is None or guete > fremd_kand[0]:
-                        fremd_kand = (guete, {**kd, "person": None, "score": round(bester, 3)})
+        # Z2 (konzept_frames v2): EIN Download je Event fuer ALLE Abnehmer.
+        # core.frames traegt Cache-Rangfolge, die .part-Atomik (ein bei
+        # Kill/Reboot abgerissener Download darf beim Retry nie als gueltiges,
+        # halbes Video durchgehen -> falsches Urteil) und setzt den Pin im
+        # selben Zug; Dateiname und Ablage bleiben <cache>/<eid>.mp4.
+        vid, pin_eid = clipcache.clip_holen(eid, frigate_url=FRIGATE), eid
+    try:
+        faces = []; sampled = 0
+        show, nnctx = {}, {}   # person -> (flaeche, ctx-crop) bzw. (score, ctx-crop): Anzeige-Bilder
+        # Enrollment-Kandidaten (Plan AP4): pro Person das beste GATE-konforme Gesicht
+        # (Kante>=100, front>=0.5, det>=0.7, sharp>=60, score>=0.45) und der beste
+        # Fremd-Kandidat (grosses gutes Gesicht, bester Match ueberhaupt < 0.35).
+        enroll = {}            # person -> (score, dict)
+        fremd_kand = None      # (det*flaeche-Guete, dict)
+
+        def clip_start(info):
+            """EINMAL vor dem ersten Frame — alles, was die Clip-Metadaten braucht.
+            Inhalt UND Reihenfolge unveraendert; sie bleiben bewusst HIER im
+            Abnehmer und wandern nie in den Verteiler (konzept_frames v2 §4/Z4)."""
+            global fps
+            fps = info.fps
+            # H4: det_size je Clip aus dem Seitenverhaeltnis (nach P1 ist der Wechsel attributsbillig;
+            # /32-Regel und Begruendung in Embedder.ar_det_size).
+            emb.set_det_size(emb.ar_det_size(info.breite, info.hoehe))
+            # det_thresh NACH set_det_size (prepare resettet auf 0.5, Review .52); Referenzen
+            # oben liefen bewusst mit dem Default. Guard-Muster: erster Frame prueft den REAL
+            # gebundenen Wert — Marker wird von qs S5 gegriffen (Erfolg am Ground Truth).
+            emb.app.det_model.det_thresh = a.det_thresh
+
+        def gesicht(i, frame):
+            """Abnehmer 'gesicht' (Z4): frueher der Rumpf von `for i, frame in frames`.
+            Zeile fuer Zeile derselbe Code — nur die Schleifenzeile ist weg, weil jetzt
+            der Verteiler faehrt. sampled/fremd_kand sind die einzigen Namen, die hier
+            NEU GEBUNDEN werden; alles andere wird an Ort und Stelle veraendert."""
+            global sampled, fremd_kand
+            if sampled == 0 and abs(float(emb.app.det_model.det_thresh) - a.det_thresh) > 1e-9:
+                print(f"DET-THRESH-MISMATCH: gefordert={a.det_thresh} gebunden={float(emb.app.det_model.det_thresh)}")
+            sampled += 1
+            for fc in emb.app.get(frame):
+                front, yaw, pitch = frontality(fc)
+                if front is None: continue
+                x1, y1, x2, y2 = [max(0, int(t)) for t in fc.bbox]
+                crop = frame[y1:y2, x1:x2]
+                sc = nn(fc.normed_embedding)
+                p = max(sc, key=sc.get)
+                schaerfe0 = sharp(crop)
+                # #42 Teil B: Fehldetektions-Flag je Detektion (Zaehlung/Anzeige/Pool —
+                # NICHT das Urteil: sc/summary rechnen weiter ueber ALLE Detektionen).
+                fd = ist_fehldetektion(front, schaerfe0, float(fc.det_score),
+                                       a.fd_front_min, a.fd_sharp_min, a.fd_det_max)
+                faces.append({"t": i/fps, "bw": x2-x1, "bh": y2-y1, "front": front, "fd": fd,
+                              "yaw": yaw, "det": float(fc.det_score), "sharp": schaerfe0,
+                              "sex": getattr(fc, "sex", "?"), "age": int(getattr(fc, "age", -1)),
+                              "pose": [round(float(x),0) for x in getattr(fc,"pose",[])] or None,
+                              # .copy(): frame[y1:y2, x1:x2] ist ein numpy-VIEW und haelt den KOMPLETTEN
+                              # dekodierten Frame am Leben, solange er in faces liegt (bis Clip-Ende).
+                              # Bei 4 MP sind das ~11 MB pro Gesicht statt ~100 kB fuer den Crop —
+                              # lange Events mit dauerhaft sichtbarer Person liefen so in den OOM-Kill
+                              # (Analyse "fehler", Nachholversuche scheiterten identisch).
+                              "sc": sc, "p": p, "crop": crop.copy()})
+                # Anzeige-Tracking (nur solange der Frame vorliegt): pro Person das
+                # GROESSTE verlaesslich erkannte Gesicht (score >= win-thresh) mit
+                # Umfeld; Fallback fuer nie Bestaetigte: Umfeld des Match-besten.
+                area = (x2 - x1) * (y2 - y1)
+                for pp_, s_ in sc.items():
+                    if s_ >= a.win_thresh and area > show.get(pp_, (0, None))[0]:
+                        show[pp_] = (area, ctx_crop(frame, x1, y1, x2, y2))
+                    if s_ > nnctx.get(pp_, (-1.0, None))[0]:
+                        nnctx[pp_] = (s_, ctx_crop(frame, x1, y1, x2, y2))
+                kante = min(x2 - x1, y2 - y1)
+                schaerfe = schaerfe0
+                gate = (kante >= 100 and front >= 0.5 and float(fc.det_score) >= 0.7
+                        and schaerfe >= 60)
+                if gate:
+                    kd = {"t": round(i / fps, 1), "bw": x2 - x1, "bh": y2 - y1,
+                          "front": round(front, 2), "det": round(float(fc.det_score), 2),
+                          "sharp": round(schaerfe, 0), "crop": crop.copy(),
+                          "emb": [round(float(x), 5) for x in fc.normed_embedding]}
+                    bester = max(sc.values())
+                    if sc[p] >= 0.45 and sc[p] == bester:      # Personen-Kandidat (p = bester Match)
+                        if sc[p] > enroll.get(p, (-1, None))[0]:
+                            enroll[p] = (sc[p], {**kd, "person": p, "score": round(sc[p], 3)})
+                    elif bester < 0.35:                        # Fremd-Kandidat: gut sichtbar, niemand
+                        guete = float(fc.det_score) * area
+                        if fremd_kand is None or guete > fremd_kand[0]:
+                            fremd_kand = (guete, {**kd, "person": None, "score": round(bester, 3)})
+
+        # Z5: der KOERPER-Abnehmer faehrt im selben Lauf mit — nur wenn der
+        # Dienst ihn scharf gemeldet hat UND es ein echtes Frigate-Event ist
+        # (ein lokaler Video-Pfad hat keine path_data). Jeder Fehlschlag hier
+        # ist ein Verzicht, nie ein Abbruch: dann bleibt es fuer dieses Event
+        # beim heutigen Weg (eigener Lauf im Dienst-Thread).
+        koerper = koerper_ab = None
+        koerper_wache_s = 0.0
+        if a.koerper and pin_eid:
+            t_koerper = time.monotonic()
+            try:
+                koerper, koerper_ab, koerper_wache_s = koerper_abnehmer(eid)
+            except Exception as ex:                       # noqa: BLE001
+                koerper = koerper_ab = None
+                print(f"KOERPER: kein Abnehmer ({type(ex).__name__}: "
+                      f"{str(ex)[:120]}) — der Dienst faehrt seinen eigenen Weg")
+        # Z4: EIN Lauf, die Vertragsfelder stehen beim Abnehmer, keins steckt
+        # im Verteiler — er soll nie fuer uns raten (§3.2).
+        # `frames` traegt danach dieselben Wache-Namen wie frueher der
+        # FrameIter (gelesen/soll/verlust_pct/unvollstaendig/decoder_fehler/
+        # hwdec/hwdec_fallback), die Auswertung unten bleibt Wort fuer Wort.
+        wachen = clipcache.lauf(vid, [clipcache.Abnehmer(
+            name="gesicht",
+            fps_sample=a.fps_sample,   # derselbe Wert wie zuvor -> derselbe step
+            zeitbezug="clip",          # t = i/fps, kein Wanduhr-Anker
+            bedarf="stream",           # haelt nur Crops (.copy()), nie den Frame
+            hart=True,                 # verifyd:3447-3452 haengt am Gesichtsurteil:
+                                       # faellt es aus, ist der Lauf zu Ende
+            wache_politik="nachrechnen",
+            zeitwache_s=None,          # BEWUSST keins: heute deckelt allein der
+                                       # Job-Timeout des Aufrufers (verifyd.py:548).
+                                       # Ein neuer Deckel hier waere eine
+                                       # Verhaltensaenderung, kein Umzug.
+            start=clip_start, frame=gesicht)]
+            + ([koerper_ab] if koerper_ab is not None else []))
+        frames = wachen["gesicht"]
+    finally:
+        # Nutzungsende des Clips. Keine Pin-Waise hinterlassen: ein
+        # liegenbleibender Pin haelt cleanup_cache ewig von dieser
+        # Datei ab (Size-Cap kaeme nie mehr an sie heran).
+        if pin_eid:
+            clipcache.frei(pin_eid)
+    if koerper is not None:
+        # Sofort nach dem Lauf: der Frame-Puffer ist das teuerste Stueck RAM
+        # im Prozess und wird in auswerten() losgelassen. Ein Fehler hier darf
+        # das Gesichtsurteil nie beruehren — es haengt an results.jsonl unten.
+        try:
+            koerper_ablegen(koerper, wachen.get(koerper.NAME), outdir, eid,
+                            koerper_wache_s - (time.monotonic() - t_koerper))
+        except Exception as ex:                           # noqa: BLE001
+            print(f"KOERPER: Uebergabe gescheitert ({type(ex).__name__}: "
+                  f"{str(ex)[:120]}) — der Dienst faehrt seinen eigenen Weg")
+        koerper = None
     # W1-Wache: unvollstaendig gelesene Clips LAUT machen (vorher: stiller Abbruch, Urteil
     # aus dem lesbaren Anfang). VOR dem Ergebnisblock ausgeben — qs S5 schneidet mit
     # tail -25 das ENDE des Outputs, die Ergebnis-/max-Zeilen muessen dort bleiben (R4).

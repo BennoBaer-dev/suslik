@@ -10,7 +10,77 @@ areas construction steps 0.1.0.64–0.1.0.91 ship together with **0.1.0.92-alpha
 QA/diagnostics steps 0.1.0.93–0.1.0.95 ship together with **0.1.0.96-alpha**, and the
 person-recognition construction step 0.1.0.112 ships together with **0.1.0.113**, and the
 performance/fusion steps 0.1.0.114–0.1.0.117 ship together with **0.1.0.118**, and the
+frame-distributor and vision steps 0.1.0.142–0.1.0.167 ship together with **0.1.0.168**, and the
 learning-area/run-management steps 0.1.0.119–0.1.0.128 ship together with **0.1.0.129**.
+
+## 0.1.0.168 — 2026-08-09
+
+Versions 0.1.0.142–0.1.0.167 were built and tested on the author's production box;
+their changes ship together with **0.1.0.168**. This is an early working version,
+published ahead of completion so testers can try the new recognition path.
+
+- **Vision detect: a third, independent recognition path.** Alongside face
+  recognition and the person model, a vision-language model can now judge a
+  walk-through. The whole pass is presented as one candidate grid against your
+  approved galleries — not single frames — which measurably beats picture-by-picture
+  comparison. It runs against a local llama.cpp server or any OpenAI-compatible
+  endpoint you configure; nothing is sent anywhere unless you set that up.
+- **Gallery wizard with automatic curation.** Reference proposals are scored on face
+  visibility, lighting and completeness, each cell carrying the reason it was picked
+  or dropped, so a usable gallery comes together without hand-sorting every crop.
+- **Recognition test for any past walk-through.** One page shows face, person and
+  vision side by side for the same pass, with a live narrative log of what each path
+  did and why — the fastest way to see where a judgement comes from.
+- **Model guidance from measurements, not guesses.** The vision settings show which
+  model class is needed, based on our own measured runs rather than vendor claims.
+- **One download and one decode per event.** Frames are now handed out by a single
+  distributor instead of every consumer fetching and decoding its own copy. Same
+  results, noticeably less work per event; frozen fixpoints prove the output is
+  unchanged.
+- **Diagnostics you can hand over.** An optional control store keeps the images a
+  judgement was based on, and `/health` reports frame fallbacks — both aimed at
+  making remote support possible without guesswork.
+
+## 0.1.0.140 — 2026-08-06
+
+- **Model status tells the truth about the stranger folder in every case.** The line
+  now distinguishes strangers that went into this model, strangers that are collected
+  but not part of it (a single learned person has no classifier to put them in), and
+  too few of them to calibrate the threshold against.
+
+## 0.1.0.141 — 2026-08-06
+
+- **The stranger folder can no longer stall training.** An unreadable file in
+  `personlern/fremd/` (broken copy, non-image) is skipped and counted instead of
+  silently stopping every future training run; if a run does fail, the model page
+  says so in red with the time, instead of presenting the previous model as current.
+- **Training and threshold always describe the same model.** With fewer than five
+  stranger images they now stay out of the model entirely (before, they were
+  trained from the first image while the threshold was measured without them —
+  the status promised far more coverage than the shipped model had).
+- **The calibrated threshold is steadier.** It is now the maximum over three fixed
+  cross-validation splits instead of one, so a single lucky split no longer moves
+  it. `.JPG`/`.jpeg`/`.png` spellings are accepted in the stranger folder.
+- **Honest status everywhere.** The armed/not-armed prefix on the model card
+  follows the real switch state; a manually set threshold is called "set by you"
+  (with the calibration named for comparison) instead of "calibrated"; and the
+  material pages now say what actually makes the model strong — images from many
+  different days, and confirmed strangers for the threshold — with a per-person
+  images/days/cameras line and an honest marker when a person's material covers
+  too few days.
+
+## 0.1.0.139 — 2026-08-06
+
+- **Body recognition learns what a stranger looks like.** Confirmed stranger images in
+  `personlern/fremd/` are trained as a class of their own, behind your people. If the
+  model reads a body as a stranger, that event is dropped before it can become a hit —
+  strangers never appear in alerts or on Today.
+- **The decision threshold is calibrated against real strangers.** As long as stranger
+  material is present, the threshold is the strongest confidence any real stranger
+  reached for one of your people in cross-validation, plus a margin, instead of a value
+  measured only between your learned people. Model status names both sides honestly:
+  how many of your own images still pass, and how many of them would reach that
+  threshold for the wrong person. Without stranger material nothing changes.
 
 ## 0.1.0.138 — 2026-08-06
 

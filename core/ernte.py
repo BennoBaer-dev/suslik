@@ -26,7 +26,7 @@ Altmuster), det/front DREI Nachkommastellen, kante eigenes Feld. Durchgangs-
 Zuordnung traegt E3 nach (eid/kamera/ts/t je Zeile machen die Datei selbsttragend).
 
 Kontrakt wie auftritte.py: reine Funktionen, Pfade/Schwellen als Parameter, kein
-Dienst-Import; schwere Imports (cv2/decode/face_audit) LAZY in ernte_event.
+Dienst-Import; schwere Imports (cv2/core.frames/face_audit) LAZY in ernte_event.
 """
 import glob
 import json
@@ -170,12 +170,22 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
     frames_soll/unvollstaendig immer dabei (Teil-Verlust ist KEIN stiller Erfolg).
 
     emb/ist_fd sind fuer Tests injizierbar; im Betrieb kommen sie aus face_audit
-    (Worker-Factory haelt den Embedder warm)."""
+    (Worker-Factory haelt den Embedder warm).
+
+    Z6 (konzept_frames.md v2 §4): die Frames kommen als ABNEHMER vom Verteiler
+    (core.frames.lauf) statt aus einem eigenen FrameIter — dieselbe Frame-Quelle
+    mit demselben fps_sample, also dieselbe Index-Menge und dieselben Bytes; der
+    Clip ist derselbe, den worker.py schon seit Z2 EINMAL beschafft. Geerntet
+    wird deshalb Zeile fuer Zeile wie bis 0.1.0.152 (§10-Leitplanke: der
+    Verteiler aendert nur, WOHER die Frames kommen, nie WIE gerechnet wird).
+    NICHT betroffen ist die KOERPER-Ernte (core/personlauf.fahren): sie laeuft in
+    einem anderen Prozess ueber eine andere Event-Liste und behaelt nur ihren
+    Clip-Bezug ueber core.frames — eine Zusammenfuehrung schliesst §1 aus."""
     fehlt = schwellen_pruefen(schwellen)
     if fehlt:
         raise ValueError("ernte-schwellen unvollstaendig: " + ", ".join(fehlt))
     import cv2                      # lazy: Modul bleibt fuer Dienst/QS billig
-    from decode import FrameIter    # CPU-Referenzpfad (Invariante: Analyse-Decode CPU)
+    from core import frames as verteiler   # Z6: Abnehmer statt eigenem FrameIter
     if emb is None:
         import face_audit
         emb = face_audit.Embedder()
@@ -184,22 +194,48 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
     os.makedirs(os.path.join(lauf_dir, "crops"), exist_ok=True)
     os.makedirs(os.path.join(lauf_dir, "kandidaten"), exist_ok=True)
     event_aufraeumen(lauf_dir, eid)     # Reste eines frueheren (Teil-)Laufs weg
-    frames = FrameIter(vid, fps_sample)
-    if hasattr(emb, "ar_det_size"):
-        emb.set_det_size(emb.ar_det_size(frames.breite, frames.hoehe))
-    # det_thresh NACH set_det_size neu binden (prepare resettet auf den Library-
-    # Default — exakt die analyze.py:226-Lehre; ohne das erntet der Lauf eine
-    # andere Detektionsmenge als der Urteilspfad).
-    if hasattr(emb, "app"):
-        emb.app.det_model.det_thresh = float(schwellen["det_thresh"])
     z = {"detektionen": 0, "fd": 0, "ohne_pose": 0, "kandidaten": 0, "m": 0, "s": 0,
          "unlesbar": False, "frames_gelesen": 0, "frames_soll": None,
          "unvollstaendig": False, "letzter_m": None}
     eid_safe = _eid_safe(eid)
     pfad = kandidaten_pfad(lauf_dir, eid)
     modell = getattr(emb, "modell", "?")
+    clip = {"fps": None}    # aus LaufInfo — frueher direkt frames.fps
+    ausfall = []            # s. _laut()
     with open(pfad, "w", encoding="utf-8") as out:
-        for i, frame in frames:
+
+        def _laut(f):
+            """Der Abnehmer ist WEICH deklariert (§3.2 hart=False: sein Ausfall
+            wirft nur ihn ab und laesst andere Abnehmer zu Ende laufen) — die
+            ERNTE bleibt davon unberuehrt laut: die Original-Ausnahme wird hier
+            festgehalten und nach dem Lauf unveraendert weitergeworfen. Ohne das
+            waere aus dem 'crop nicht schreibbar'-Abbruch ein still verschluckter
+            Teil-Lauf geworden, und verifyd buchte ok=true auf halbe Buecher
+            (genau die Fehlerklasse .75/L3, die event_aufraeumen aufraeumt)."""
+            def gekapselt(*a):
+                try:
+                    return f(*a)
+                except BaseException as ex:
+                    ausfall.append(ex)
+                    raise
+            return gekapselt
+
+        def clip_start(info):
+            """EINMAL vor dem ersten Frame — Inhalt UND Reihenfolge unveraendert
+            (sie bleiben im Abnehmer, der Verteiler kennt keine Modell-Parameter)."""
+            clip["fps"] = info.fps
+            if hasattr(emb, "ar_det_size"):
+                emb.set_det_size(emb.ar_det_size(info.breite, info.hoehe))
+            # det_thresh NACH set_det_size neu binden (prepare resettet auf den Library-
+            # Default — exakt die analyze.py:226-Lehre; ohne das erntet der Lauf eine
+            # andere Detektionsmenge als der Urteilspfad).
+            if hasattr(emb, "app"):
+                emb.app.det_model.det_thresh = float(schwellen["det_thresh"])
+
+        def ernten(i, frame):
+            """Abnehmer 'ernte' (Z6): frueher der Rumpf von `for i, frame in frames`.
+            Zeile fuer Zeile derselbe Code — nur die Schleifenzeile ist weg, weil
+            jetzt der Verteiler faehrt, und frames.fps heisst clip['fps']."""
             for fc in emb.app.get(frame):
                 z["detektionen"] += 1
                 pose_roh = getattr(fc, "pose", None)
@@ -223,7 +259,7 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
                     continue
                 m = gate_m(fd, det, kante, sharp, schwellen)
                 s_flag = gate_s(fd, det, kante, sharp, pose, schwellen)
-                t = i / frames.fps
+                t = i / clip["fps"]
                 datei = None
                 if m:                       # nur Bildwuerdiges kostet Platte (Konzept §P1)
                     kid = f"{eid_safe}~{i}~{z['kandidaten']}"
@@ -240,6 +276,27 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
                 z["kandidaten"] += 1
                 z["m"] += 1 if m else 0
                 z["s"] += 1 if s_flag else 0
+
+        # Z6: EIN Lauf, EIN Abnehmer — alle sechs Vertragsfelder stehen HIER und
+        # keins im Verteiler (§3.2). `frames` traegt danach dieselben Wache-Namen
+        # wie frueher der FrameIter (gelesen/soll/unvollstaendig), die Auswertung
+        # unten bleibt Wort fuer Wort.
+        frames = verteiler.lauf(vid, [verteiler.Abnehmer(
+            name="ernte",
+            fps_sample=fps_sample,     # derselbe Wert wie zuvor -> derselbe step
+            zeitbezug="clip",          # t = i/fps, kein Wanduhr-Anker
+            bedarf="stream",           # haelt nichts: der Crop geht sofort auf Platte
+            hart=False,                # §3.2: die Ernte darf keinen fremden Abnehmer
+                                       # mit sich reissen — laut bleibt sie via _laut()
+            wache_politik="nachrechnen",
+            zeitwache_s=None,          # BEWUSST keins: heute deckelt allein der
+                                       # Worker-Job-Timeout des Aufrufers
+                                       # (verifyd nachhol_analyse_timeout_s). Ein
+                                       # neuer Deckel hier waere eine
+                                       # Verhaltensaenderung, kein Umzug.
+            start=_laut(clip_start), frame=_laut(ernten))])["ernte"]
+        if ausfall:
+            raise ausfall[0]            # unveraendert: Typ und Text wie bisher
         out.flush()
         os.fsync(out.fileno())              # gleiche Durabilitaet wie fertig.jsonl
     z["frames_gelesen"] = frames.gelesen

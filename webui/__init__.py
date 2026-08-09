@@ -38,8 +38,19 @@ NAV = [
                   ("/lernen", "Suggestions"), ("/qualitaet", "Quality")]),
     # Person als EIGENER Hauptbereich neben People (User 04.08. abend):
     # People zeigt die GESICHTER, Person die KOERPER-Bilder je Person.
+    # Z8 (konzept_frames.md §7): "Judged images" = Kontroll-Speicher der
+    # beurteilten Bilder je Durchgang. Sichtbar auch im Schlank-Modus, weil die
+    # Seite dort erklaert, was der Schalter tut — ein Reiter, der je nach Config
+    # verschwindet, ist schwerer zu finden als einer, der sich erklaert.
     ("Person",   [("/person", "Body images"),
+                  ("/person/kontrolle", "Judged images"),
                   ("/person/modell", "Model status")]),
+    # Vision detect zwischen Person und Area (konzept_vision.md v2 §4): der
+    # dritte Erkennungspfad. V1 zeigt Verbindung + Test; Galerie-Wizard und
+    # Status folgen. Der Reiter steht auch AUS sichtbar da — eine Seite, die
+    # erklaert, was sie tut, ist leichter zu finden als eine, die je nach
+    # Config verschwindet (dieselbe Begruendung wie bei "Judged images").
+    ("Vision",   [("/vision", "Vision detect")]),
     # Areas als EIGENER Hauptbereich zwischen People und Learn (Design-Entscheid):
     # dort liegen Sicht-Einstieg UND Konfiguration (anlegen/loeschen/zuweisen).
     ("Areas",    [("/areas", "Areas")]),
@@ -55,6 +66,11 @@ NAV = [
     ("Frigate sync", [("/sync_auswahl", "Frigate sync")]),
     ("Settings", [("/kameras", "Cameras"), ("/benachrichtigungen", "Notifications"),
                   ("/konfiguration", "Advanced")]),
+    # Recognition test als EIGENER Einstieg neben System (konzept_vision.md v2 §4,
+    # User-Entscheid 08.08.): die Seite prueft einen Durchgang ueber ALLE DREI
+    # Wege (Gesicht/Koerper/Vision) und ist damit kein Vision-Detail. EINE Seite,
+    # zwei Einstiege — der Vision-Reiter verlinkt dieselbe Adresse.
+    ("Recognition test", [("/erkennungstest", "Recognition test")]),
     ("System",   [("/system", "System")]),
 ]
 # Blattseiten ohne eigenen Reiter ihrem Abschnitt zuordnen, damit oben trotzdem der richtige
@@ -155,7 +171,7 @@ def whatsnew_block():
     liegt im localStorage wie die Theme-Wahl (kein Server-Zustand); die Box
     startet hidden und zeigt sich erst, wenn der Merker NICHT passt — wer sie
     weggeklickt hat, sieht sie bis zur naechsten Version nie aufblitzen."""
-    from core.highlights import HIGHLIGHTS   # import-frei, kein Zyklus
+    from core.highlights import BETONT, HIGHLIGHTS   # import-frei, kein Zyklus
     eintraege = [(v, t) for v, its in HIGHLIGHTS for t in its][:10]
     if not eintraege:
         return ""
@@ -164,7 +180,16 @@ def whatsnew_block():
     for i, (v, txt) in enumerate(eintraege):
         chip = f'<span class="wn-v">{html.escape(v)}</span>' if v != letzte_v else ""
         letzte_v = v
-        li.append(f'<li{" class=wn-mehr" if i >= 3 else ""}>{chip}{html.escape(txt)}</li>')
+        # .168: ein markierter Eintrag wird fett und in Warnfarbe gesetzt (der
+        # Vorab-Hinweis eines Releases). Die Marke wird abgenommen, der Text
+        # bleibt escaped — hier kommt kein Markup aus der Quelle durch.
+        betont = txt.startswith(BETONT)
+        if betont:
+            txt = txt[len(BETONT):]
+        kl = " ".join(x for x in (("wn-mehr" if i >= 3 else ""),
+                                  ("wn-betont" if betont else "")) if x)
+        li.append(f'<li{f' class="{kl}"' if kl else ""}>{chip}'
+                  + html.escape(txt) + "</li>")
     mehr = len(eintraege) - 3
     toggle = (f'<button class="wn-toggle" data-n="{mehr}">Show all ({len(eintraege)})</button>'
               if mehr > 0 else "")

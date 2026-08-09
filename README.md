@@ -11,7 +11,7 @@ clusters go straight into recognition. Camera areas are the part still being bui
 
 The `latest-*` image tags follow the newest release, so `docker compose pull` gets you
 what this README describes. To pin a version instead, use its tag explicitly:
-`ghcr.io/bennobaer-dev/suslik:0.1.0.138-gpu`.
+`ghcr.io/bennobaer-dev/suslik:0.1.0.168-gpu`.
 
 ## Why this exists
 
@@ -36,7 +36,7 @@ declines rather than mislabels.
 The Today page answers "who was on the property, when, and where did they go" — one card per
 person, one block per pass, unknowns kept visible instead of buried:
 
-![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.0.138)
+![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.0.168)
 
 *(Screenshot from a live install of v0.1.0.54; names and faces anonymized.)*
 
@@ -65,6 +65,12 @@ person, one block per pass, unknowns kept visible instead of buried:
   transfer every picture shows Frigate's real answer. A one-click diagnosis bundles the suslik
   report with Frigate's own log. Needs write-back enabled and Frigate's own face recognition
   switched on.
+- **Vision detect (early working version)** — a third, independent recognition path: a
+  vision-language model judges a whole walk-through as one candidate grid against your
+  approved galleries. Runs against a local llama.cpp server or any OpenAI-compatible
+  endpoint you configure — without that, nothing leaves your machine. Includes a gallery
+  wizard that curates reference proposals itself, and a recognition test that shows face,
+  person and vision side by side for any past pass.
 - **Person recognition (preview)** — a second, independent path that learns residents by their
   whole appearance (build, hair, posture) and recognizes them **without a visible face**. You
   harvest images from your own recordings, approve every picture by hand, and arm it yourself;
@@ -121,7 +127,11 @@ fixed version instead: [installation.md](docs/installation.md#updating).
 ## Documentation
 
 - **[Changelog](CHANGELOG.md)** — what changed per release. Worth a look right now:
-  **0.1.0.138** added the Frigate sync page (both reference libraries reconciled class
+  **0.1.0.168** added vision detect as a third recognition path (a whole walk-through
+  judged as one candidate grid against your approved galleries, against a local
+  llama.cpp server or your own endpoint), a gallery wizard that curates reference
+  proposals itself, and a recognition test that shows face, person and vision side by
+  side for any past pass. **0.1.0.138** added the Frigate sync page (both reference libraries reconciled class
   by class, selective transfer with a pre-check, an honest per-image result and a
   one-click diagnosis bundle), **0.1.0.129** lets you manage learning runs (delete
   completely, dismiss with memory, "looks like" for residents, a false-trigger class),
@@ -168,7 +178,19 @@ only needed for the optional push-notification channels.
 
 ## What's being worked on right now
 
-*(updated 2026-08-06 — this section changes with every release)*
+*(updated 2026-08-09 — this section changes with every release)*
+
+- **Vision detect (early working version)** *(shipped in 0.1.0.168)*: a third
+  recognition path, independent of the other two. A vision-language model judges the
+  whole walk-through as one candidate grid against your approved galleries — measured
+  here as clearly better than comparing single pictures. It talks to a local
+  llama.cpp server or any OpenAI-compatible endpoint you configure; without that
+  configuration nothing leaves your machine. Galleries are built by a wizard that
+  scores proposals on face visibility, lighting and completeness and says per image
+  why it was picked or dropped. The recognition test page runs face, person and vision
+  over the same past pass so you can see where a judgement comes from. This is
+  published ahead of completion for testing: interfaces and defaults will still move,
+  and which model class is good enough is documented from our own measurements.
 
 - **Frigate sync** *(shipped in 0.1.0.138)*: your reference library and Frigate's are
   reconciled class by class on their own page — ready to transfer, only in Frigate,
@@ -179,9 +201,10 @@ only needed for the optional push-notification channels.
   recognition path that works without a visible face. As of 0.1.0.118 it cooperates with
   the face path on Today (passes with no usable face are attributed to the person the body
   path recognized, clearly marked), its decision threshold is measured from your own
-  reviewed material after every training, and the fire rule is configurable. Next: getting
-  real stranger material into that calibration, and moving the harvest inference to the
-  GPU/NPU.
+  reviewed material after every training, and the fire rule is configurable. Since
+  0.1.0.139 confirmed stranger images (`personlern/fremd/`) are trained as their own
+  class and the threshold is calibrated against them. Next: collecting that stranger
+  material from inside the UI, and moving the harvest inference to the GPU/NPU.
 - **Performance**: a big chunk landed in 0.1.0.118 — one pinned pixel path everywhere,
   video decoding on the GPU (Intel via VAAPI, NVIDIA via NVDEC) with hard gates and a loud
   software fallback, and only the sampled frames leave the decoder. On my machine a
