@@ -56,23 +56,105 @@ def zustand_lesen(data_dir):
     return json.load(open(p))
 
 
-def anlegen(data_dir, n_events, person="", tage=19):
-    """Lauf anlegen: binden, Liste schreiben. person=""=alle."""
+FENSTER_FALLBACK_TAGE = 19   # historischer Festwert bis .141 — greift nur
+                             # noch, wenn die Frigate-Config nicht lesbar ist
+                             # (diagnose.fenster_quelle = 'fallback')
+
+
+def _kamera_tage(knoten):
+    """Ernte-Grenze eines Config-Knotens (Kamera oder global) in Tagen.
+    Die Ernte braucht je Event Snapshot UND Clip (pfad_snapshots:
+    snapshot-clean.webp + Record-Clip) — massgeblich ist das MINIMUM aus
+    Snapshot-Retention (objects.person-Override VOR default; an der
+    laufenden 0.18 verifiziert 06.08.) und Record-Retention
+    (alerts/detections). None = nichts Verwertbares im Knoten."""
+    werte = []
+    sr = (knoten.get("snapshots") or {}).get("retain") or {}
+    sp = (sr.get("objects") or {}).get("person")
+    werte.append(sp if sp is not None else sr.get("default"))
+    rec = knoten.get("record") or {}
+    for art in ("alerts", "detections"):
+        werte.append(((rec.get(art) or {}).get("retain") or {}).get("days"))
+    werte = [w for w in werte
+             if isinstance(w, (int, float)) and not isinstance(w, bool)
+             and w > 0]
+    return max(1, int(min(werte))) if werte else None
+
+
+def _fenster_aus_config(c):
+    """(fenster_tage, je_kamera) aus einer /api/config-Antwort.
+    Frigate 0.18 liefert die Kamera-Knoten fertig aufgeloest (Globals
+    einkopiert) — je Kamera ihre eigene Grenze; das Gesamtfenster ist das
+    MAXIMUM (eine kurz vorhaltende Kamera beschneidet nur sich selbst,
+    nie die anderen). Ohne Kamera-Knoten: globale Werte."""
+    je_kamera = {}
+    for name, cam in (c.get("cameras") or {}).items():
+        t = _kamera_tage(cam or {})
+        if t:
+            je_kamera[name] = t
+    if je_kamera:
+        return max(je_kamera.values()), je_kamera
+    return _kamera_tage(c), {}
+
+
+def fenster_bestimmen(timeout=10):
+    """Ernte-Fenster = was Frigate noch VORHAELT (User-Entscheid 06.08.:
+    der Wunsch-N ist der einzige Regler; das Fenster ist ein Retention-
+    Waechter, kein zweiter — der Festwert 19 schnitt bei Retention 30
+    Material ab und erntete bei person-Snapshots 15 tote Tage).
+    Rueckgabe (tage, quelle, je_kamera); nicht lesbar -> Fallback."""
+    basis = (os.environ.get("FRIGATE_URL") or "").rstrip("/")
+    if basis:
+        try:
+            import urllib.request
+            with urllib.request.urlopen(basis + "/api/config",
+                                        timeout=timeout) as r:
+                tage, je_kamera = _fenster_aus_config(json.load(r))
+            if tage:
+                return tage, "frigate-config", je_kamera
+        except Exception:
+            pass
+    return FENSTER_FALLBACK_TAGE, "fallback", {}
+
+
+def anlegen(data_dir, n_events, person="", tage=None):
+    """Lauf anlegen: binden, Liste schreiben. person=""=alle.
+    person="FREMD" (.147, reservierter Name): statt der bestaetigten
+    Durchgaenge wird der FREMD-Topf der Einordnung geerntet (Quellen
+    fremd_verdacht / zonenlos_ohne_anker / strasse_pur — alles VERDACHT,
+    der User stempelt in der Abnahme). tage=None -> Fenster aus der
+    Frigate-Retention; expliziter Wert (CLI/Tests) gilt unveraendert."""
+    if tage is None:
+        tage, fenster_quelle, je_kamera = fenster_bestimmen()
+    else:
+        fenster_quelle, je_kamera = "aufruf", {}
     el = _proto()
     je_eid, fremd, ev_index, api, bilanz = el.arbeit_bestimmen(tage)
     standort = el.standort_lesen()
-    ab = time.time() - tage * 86400
+    jetzt = time.time()
+    ab = jetzt - tage * 86400
     # Bestands-Skip (User-Frage 04.08.: hinzugefuegt, nie ueberschrieben —
     # und keine Duplikate): Events, die in FRUEHEREN Laeufen schon Bilder
     # mit Urteil haben, werden uebersprungen; GELOESCHTE Events duerfen
     # bewusst wiederkommen (Re-Lauf nach Loeschung).
     from core import personernte as pe
+    fremd_lauf = person == "FREMD"
     belegt = set()
     for _lid, zeilen in pe.laeufe_lesen(data_dir):
         for z in zeilen:
             if "ausfall" not in z and z.get("status") in (
                     "abgenommen", "verworfen", "offen"):
                 belegt.add(z["eid"])
+    if fremd_lauf:
+        # Alt-Bestand des Pools ohne Lauf-Zeile (prototyp-Aera): die
+        # Pool-Dateinamen tragen die eid (<tag>_<eid>~N.<ext>) — solche
+        # Events nicht erneut anbieten.
+        try:
+            for f in os.listdir(os.path.join(data_dir, "personlern",
+                                             "fremd")):
+                belegt.add(f.split("_", 1)[-1].split("~")[0])
+        except FileNotFoundError:
+            pass
     # Verwaiste Labels (Issue #18, Carl/Rose-Fall): Bestaetigungen GELOESCHTER
     # Personen bleiben als Historie in der Akte — die Alle-Ernte bietet sie
     # aber NICHT mehr an. Personen-Universum = Referenz-Master (faces/), die-
@@ -88,25 +170,39 @@ def anlegen(data_dir, n_events, person="", tage=19):
         vorhanden = set()
     verwaist = {}
     im_fenster = []
-    for e in je_eid:
-        if ev_index[e]["start"] < ab:
+    topf = fremd if fremd_lauf else je_eid
+    for e in topf:
+        ev = ev_index[e]
+        if ev["start"] < ab:
             continue
-        p = je_eid[e][0]
-        if person:
-            if p != person:
+        # Kamera-eigene Grenze: wo die eigene Retention kuerzer ist als das
+        # Gesamtfenster, waeren aeltere Events garantierte Ausfaelle
+        # (Snapshot/Clip schon geraeumt) — nur DIESE Kamera schneidet sie.
+        grenze = je_kamera.get(ev["camera"])
+        if grenze and ev["start"] < jetzt - grenze * 86400:
+            continue
+        if not fremd_lauf:
+            p = je_eid[e][0]
+            if person:
+                if p != person:
+                    continue
+            elif p not in vorhanden:
+                verwaist[p] = verwaist.get(p, 0) + 1
                 continue
-        elif p not in vorhanden:
-            verwaist[p] = verwaist.get(p, 0) + 1
-            continue
         im_fenster.append(e)
     eids = sorted((e for e in im_fenster if e not in belegt),
                   key=lambda e: -ev_index[e]["start"])[:n_events]
     liste = []
     for eid in eids:
-        p, bindung, pk = je_eid[eid]
+        p, bindung, pk = topf[eid]
         ev = ev_index[eid]
         phase, hoehe = el.lichtphase(ev["start"], standort)
-        liste.append({"eid": eid, "person": p, "bindung": bindung,
+        liste.append({"eid": eid,
+                      # FREMD einheitlich (Gruppierung/Training); der
+                      # Durchgang bleibt ueber pass_key rekonstruierbar,
+                      # die Quelle steht in bindung.
+                      "person": "FREMD" if fremd_lauf else p,
+                      "bindung": bindung,
                       "pass_key": pk, "kamera": ev["camera"],
                       "start": ev["start"],
                       "zones": (api.get(eid) or {}).get("zones"),
@@ -116,12 +212,15 @@ def anlegen(data_dir, n_events, person="", tage=19):
     # reale Referenz-Personen: Lauf endete stumm, Nutzer sah kein WARUM):
     # bindbar im Fenster vs. durch Bestands-Skip belegt; bei 0 bindbaren
     # zusaetzlich der letzte bestaetigte Auftritt aus der Akte (oder nie).
-    diagnose = {"fenster_tage": tage, "gebunden_fenster": len(im_fenster),
+    diagnose = {"fenster_tage": tage, "fenster_quelle": fenster_quelle,
+                "gebunden_fenster": len(im_fenster),
                 "durch_bestand": len(im_fenster) - len(
                     [e for e in im_fenster if e not in belegt])}
+    if len(set(je_kamera.values())) > 1:
+        diagnose["fenster_je_kamera"] = dict(sorted(je_kamera.items()))
     if verwaist:
         diagnose["verwaiste_labels"] = dict(sorted(verwaist.items()))
-    if person and not im_fenster:
+    if person and not fremd_lauf and not im_fenster:
         # Ehrlichkeits-Nachschau (User-Einwand 05.08., zwei reale Faelle:
         # 'die waren doch da'): (a) Akten-Beginn ausweisen — aeltere
         # Besuche KENNT die Akte nicht; (b) 'gesehen, aber unter der

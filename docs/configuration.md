@@ -45,9 +45,17 @@ Everything persistent is under the `/data` volume you mounted:
 | `faces/` | your reference face library (the "master") |
 | `learn/` | enrollment data and the persistent unknown pool |
 | `state/` | judgments, ground-truth labels, write-back log |
-| `personlern/` | the person-recognition path: harvest runs with crops and your review verdicts, the trained model (`modell/`), judged live crops (`treffer/`, 30-day trim) and the fire-window state |
+| `personlern/` | the person-recognition path: harvest runs with crops and your review verdicts, confirmed stranger images (`fremd/`), the trained model (`modell/`), judged live crops (`treffer/`, 30-day trim) and the fire-window state |
 | `clips/`, `events/` | cached recorded clips (auto-pruned) and per-event crops/logs |
 | `backups/` | daily rotating tar backups of the reference library + ground-truth files (14 kept) |
+
+**`personlern/fremd/` — the stranger folder.** A flat folder of `.jpg` body crops of
+people who are *not* residents. Since 0.1.0.139 the model trains them as a class of its
+own, and the decision threshold is calibrated against them instead of only between your
+learned people (at least five images are needed; below that the old rule stays and Model
+status says so). The folder starts empty on a fresh install; drop confirmed stranger
+crops in, and the next training picks them up. Nothing else in suslik writes to it, and
+removing the folder simply restores the previous behaviour.
 
 Because config and data live in the volume, they survive image updates. Back up `/data` —
 or use the **Full backup** card on the System page: it downloads one portable archive with

@@ -146,6 +146,57 @@ def abnahme_anwenden(data_dir, lauf_id, falsch):
     return n_ok, n_falsch
 
 
+def fremd_uebernehmen(data_dir, lauf_id):
+    """.147 (User 07.08.: Fremde auch ueber Person learn sammeln): nach der
+    Abnahme eines FREMD-Laufs wandern die BESTAETIGTEN Crops als Kopien in
+    den Fremd-Pool <data_dir>/personlern/fremd/ — Namenskonvention wie der
+    Alt-Bestand (<tag>_<cropdatei>), Training liest den Pool beim naechsten
+    Lauf von selbst. Rueckgabe: Anzahl uebernommener Bilder."""
+    import shutil
+    mp = manifest_pfad(data_dir, lauf_id)
+    if not os.path.isfile(mp):
+        return 0
+    ziel = os.path.join(data_dir, "personlern", "fremd")
+    os.makedirs(ziel, exist_ok=True)
+    n = 0
+    for l in open(mp):
+        if not l.strip():
+            continue
+        z = json.loads(l)
+        if ("ausfall" in z or z.get("person") != "FREMD"
+                or z.get("status") != "abgenommen"):
+            continue
+        quelle = os.path.join(lauf_dir(data_dir, lauf_id), "crops",
+                              z["datei"])
+        nach = os.path.join(ziel, f'{z.get("tag", "0000-00-00")}_{z["datei"]}')
+        if os.path.isfile(quelle) and not os.path.exists(nach):
+            shutil.copy2(quelle, nach)
+            n += 1
+    return n
+
+
+def fremd_grabstein(data_dir, pool_datei):
+    """.147: Loeschung im Fremd-Pool auf den Ursprungs-Lauf zurueckschreiben
+    (analog Personen-Grabstein): die Pool-Datei heisst <tag>_<cropdatei> —
+    passende FREMD-Zeilen (status abgenommen) werden geloescht-gestempelt,
+    damit der Bestands-Skip das Event WIEDER anbieten darf. Alt-Bestand
+    ohne Lauf-Zeile: nichts zu stempeln (0). Rueckgabe: gestempelte Zeilen."""
+    crop_datei = pool_datei.split("_", 1)[-1]
+    n = 0
+    for lid, zeilen in laeufe_lesen(data_dir):
+        traf = False
+        for z in zeilen:
+            if ("ausfall" not in z and z.get("person") == "FREMD"
+                    and z.get("datei") == crop_datei
+                    and z.get("status") == "abgenommen"):
+                z["status"] = "geloescht"
+                traf = True
+                n += 1
+        if traf:
+            _manifest_umschreiben(data_dir, lid, zeilen)
+    return n
+
+
 def laeufe_lesen(data_dir):
     """Alle Person-Learn-Laeufe (fuer die Bestands-Seite, PE2b):
     Liste (lauf_id, zeilen) — neueste zuerst."""

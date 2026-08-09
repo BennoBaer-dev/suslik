@@ -603,6 +603,9 @@ a.pchip:hover, a.badge.warn:hover { filter: brightness(1.15); }
 .wnblock .wn-liste { margin: 6px 0 0; padding-left: 18px; }
 .wnblock .wn-liste li { margin: 3px 0; }
 .wnblock .wn-liste li.wn-mehr { display: none; }
+/* .168: der hervorgehobene Eintrag (Vorab-Hinweis eines Releases) — fett und in
+   der Warnfarbe des Themes, damit er in BEIDEN Themes lesbar bleibt. */
+.wnblock .wn-liste li.wn-betont { font-weight: 700; color: var(--crit, #c44); }
 .wnblock.wn-open .wn-liste li.wn-mehr { display: list-item; }
 .wnblock .wn-v { display: inline-block; font-size: 11px; font-weight: 600;
   color: var(--accent); border: 1px solid var(--accent); border-radius: 9px;

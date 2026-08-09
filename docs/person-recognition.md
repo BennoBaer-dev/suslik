@@ -13,10 +13,37 @@ threshold that strangers stay below.
 
 **Preview status:** the path works end to end. Since 0.1.0.118 the
 decision threshold is measured on your own approved material after every
-training (cross-validation between your learned people) — but real
-strangers are not part of that material yet, so keep an eye on alerts
-and disarm any time. You can override the threshold and the fire rule
-under **Person → Model status**.
+training, and since 0.1.0.139 it can be measured against real strangers
+(see below). Keep an eye on alerts and disarm any time. You can override
+the threshold and the fire rule under **Person → Model status**.
+
+## The threshold, and what it is measured against
+
+After every training the threshold is re-measured by cross-validation:
+the model is trained on part of the material and has to judge the rest,
+which it has never seen.
+
+Without stranger material that measurement can only compare your learned
+people against each other — the threshold ends up just above the
+strongest confidence a *wrong resident* ever got, and a real stranger is
+an untested case.
+
+Put confirmed stranger crops into `personlern/fremd/` (flat; `.jpg`,
+`.jpeg` or `.png` in any casing; at least five) and two things change.
+The strangers become a class of their own, so a body the model reads as
+a stranger is dropped before it can become a hit — no alert, nothing on
+Today. And the threshold becomes the strongest confidence any real
+stranger reached *for one of your people* across three fixed
+cross-validation splits, plus a small margin, so no stranger in the
+measurement would have passed it. Model status names the price too: how
+many of your own images still pass, and how many of them would reach
+that threshold for the wrong person. With fewer than five stranger
+images they stay out of the model entirely — training and threshold
+always describe the same model — and the status says why. An unreadable
+file in the folder (a broken copy, a non-image) is skipped and counted,
+never a reason for the training to stop; if a training run does fail,
+the model page says so in red instead of presenting the previous model
+as current.
 
 ## How to use it, step by step
 
@@ -44,7 +71,9 @@ under **Person → Model status**.
    person and per run. Delete single images or whole runs there — the
    model retrains after deletions, and a new run can always re-harvest.
 5. **Person → Model status** shows the trained model (images per person,
-   training time) and holds the **live switch**. Arming is only possible
+   training time, how many stranger negatives went in and what the
+   threshold was calibrated against) and holds the **live switch**.
+   Arming is only possible
    after at least one person has been learned *and* reviewed. Until then
    the path stays off and never sends anything.
 

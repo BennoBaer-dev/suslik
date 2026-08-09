@@ -12,10 +12,36 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.0.138"
+STAND = "0.1.0.168"
+
+# HERVORHEBUNG (0.1.0.168): ein Eintrag kann optisch herausstechen — genau EIN
+# Fall ist dafuer vorgesehen, der Vorab-Hinweis am Anfang eines Releases. Die
+# Markierung ist ein PRAEFIX am Text, kein neues Schema: die Eintraege bleiben
+# Strings, damit Gate, Beweis und jeder Leser unveraendert weiterlaufen. Der
+# Renderer nimmt das Praefix ab und setzt den Eintrag fett und in Warnfarbe;
+# wer die Liste roh liest, sieht die Marke und weiss, was gemeint ist.
+BETONT = "!! "
+# .139/.140 (Erkennungs-Review Baustein 1, Fremd-Klasse + Schwellen-Eichung)
+# bekommen BEWUSST keinen Box-Eintrag: interne Prod-Schritte, kein Release. Der
+# Box-Inhalt der naechsten Veroeffentlichung wird wie immer vorher mit dem User
+# abgestimmt — hier wird nur STAND nachgezogen, die Box bleibt unveraendert.
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # .168 — mit dem User abgestimmt (09.08.), Wortlaut EXAKT so. Der erste
+    # Eintrag ist der Vorab-Hinweis und traegt deshalb die Betonungs-Marke.
+    ("0.1.0.168", (
+        BETONT + "This is an early working version, published ahead of "
+        "completion for testing. Things will still change and rough edges are "
+        "expected.",
+        "Vision detect: a third, independent recognition path — each "
+        "walk-through is judged as one candidate grid against your approved "
+        "galleries (local llama.cpp or your own API endpoint).",
+        "Gallery wizard with automatic curation: proposals are scored on face "
+        "visibility, lighting and completeness, with a reason line per cell.",
+        "Recognition test: face, person and vision side by side for any past "
+        "walk-through, with a live narrative log.",
+    )),
     # .138 mit User abgestimmt 06.08. ("go" auf den Zwei-Punkte-Vorschlag).
     ("0.1.0.138", (
         "New \"Frigate sync\" page: a full reconciliation of your reference "

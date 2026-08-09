@@ -305,6 +305,55 @@ def load_config(path):
                          ("nachhol_start_s", 600),           # Anlauf nach Dienststart
                          # W2: persistenter Analyse-Worker (worker.py) — Modelle EINMAL laden
                          ("worker", True),                   # aus = alter Subprozess-je-Event-Weg
+                         # Z8 (konzept_frames.md §7): Kontroll-Speicher der beurteilten
+                         # Bilder. False = SCHLANK und damit der Produkt-Default fuer fremde
+                         # Installationen (Bilder nur fuer die Laufzeit des Durchgangs,
+                         # danach bleiben Siegerbild + Urteils-Protokoll). True = SAMMEL:
+                         # alle beurteilten Crops bleiben rollierend liegen und sind unter
+                         # /person/kontrolle anschaubar. Nie im Code entschieden, immer hier.
+                         ("diagnostic_collection", False),
+                         # Vision-Detect V1 (konzept_vision.md v2 §5). DREI Paare:
+                         # die beiden Zahlen stehen zusaetzlich in CONFIG_WHITELIST
+                         # (Default HIER + Eintrag DORT — sonst lehnt config_schreiben
+                         # jede UI-Aenderung mit 400 ab, Vorbild diagnostic_collection).
+                         # Der Block `vision` traegt Endpunkt/Key/Prompt und ist bewusst
+                         # NICHT in der Whitelist: dieselbe Bauart wie telegram/pushover/
+                         # mqtt (Strings + Secret + verschachtelt, eigener Schreibweg
+                         # vision_speichern) — und der Key darf nie ueber das generische
+                         # Config-Blatt gerendert werden, das jeden Whitelist-Wert
+                         # ausschreibt. Der Scharf-Schalter liegt IM Block, nicht in der
+                         # Whitelist, damit er nur durch das E4-Gate gehen kann.
+                         ("vision", {}),
+                         # 12000 statt 3000 (.164): die eigene Whitelist-Hilfe sagt seit
+                         # .157 woertlich, dass 3000 GEMESSEN zu klein war (die Antwort wurde
+                         # abgeschnitten und zaehlte als kein Votum) — der Default folgte dem
+                         # nicht. Real wieder passiert am 09.08. 09:23. Ein Default, der der
+                         # eigenen Messung widerspricht, ist ein Fehler, keine Vorsicht.
+                         ("vision_max_tokens", 12000),
+                         ("vision_timeout_s", 900),
+                         # V4 (§7): die Regeln des Urteilspfads. Jede als PAAR
+                         # (hier Default, dort Whitelist mit Erklaertext).
+                         ("vision_bilder_je_pass", 3),   # N beste Bilder je Durchgang
+                         ("vision_deadline_s", 1200),    # Gesamt-Deadline je Anfrage
+                         ("vision_anfragen_h", 60),      # Mengendeckel je Stunde
+                         ("vision_anfragen_tag", 300),   # und je Tag (= der E1-Tagesdeckel)
+                         ("vision_quote", 1.0),          # Sammel-Regel: Anteil der Voten
+                         # 1 statt 2 (.164, User-Entscheid 09.08.: "die erste, die passt;
+                         # maximal vielleicht zwei"): EIN tausch-konsistentes Paar-Urteil
+                         # traegt das Urteil. Wer mehr Bestaetigungen will, stellt sie ein —
+                         # verlangen muss der Default sie nicht.
+                         ("vision_min_voten", 1),        # ... und Mindestzahl abgegebener Voten
+                         # Zwei OPTIONALE Meldungen (User-Entscheide 08.08.), beide
+                         # Produkt-Default AUS. E6 bleibt unberuehrt: Vision hat kein
+                         # Stimmrecht ueber die bestehenden Alarme, kein Veto, kein
+                         # Entwarnen — das hier sind zusaetzliche Meldungen, keine.
+                         # .165: der Tausch-Doppellauf ist abschaltbar. Default AN —
+                         # die Positions-Schlagseite ist gemessen (§2.5) und der Tausch
+                         # ist das Einzige, was sie sichtbar macht. Wer ein Modell hat,
+                         # dem er nichts mehr nachweist, halbiert damit die Anfragen.
+                         ("vision_doppellauf", True),
+                         ("vision_meldung", False),      # Nachzuegler-Info nach dem Urteil
+                         ("vision_alarm_unbestaetigt", False),
                          ("worker_rss_max_mb", 4096),        # Neustart-Schwelle (VmRSS des Workers;
                          # warm real ~1,9 GB [adaface/GPU] — 2048 liess nur 10 % Luft und riss im
                          # Soak 27.07.; 4096 = User-Entscheid: faengt Ausufern, nicht Normalbetrieb)
@@ -541,7 +590,8 @@ def frigate_to_cos(score):
 
 
 # ------------------------------------------------------------------ Analyse (nutzt kalibriertes analyze.py)
-def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=None):
+def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=None,
+                koerper=False):
     # Live bleibt bei 1800 (bit-identisch); nur Nachhol-Laeufe bekommen einen harten
     # Deckel, damit ein pathologisches Alt-Event den Live-Pfad nicht minutenlang blockiert
     # (gemessen an 1316 echten Analysen: Median 20,7s / p90 34,2s / p99 115,9s).
@@ -551,6 +601,15 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
             "--win-thresh", str(cfg["win_thresh"]),
             "--fd-front-min", str(cfg["fd_front_min"]), "--fd-sharp-min", str(cfg["fd_sharp_min"]),
             "--fd-det-max", str(cfg["fd_det_max"]), "--det-thresh", str(cfg["det_thresh"])]
+    if koerper and worker is not None:
+        # Z5 (konzept_frames v2 §4): der Koerper-Abnehmer faehrt im selben
+        # Frame-Lauf mit — EIN Decode statt zwei. Scharf-Zustand kommt als
+        # JOB-PARAMETER (der Worker soll nie fuer sich entscheiden), das
+        # RAM-Budget als Deckel: analyze zieht davon seinen eigenen VmRSS ab
+        # und puffert nur, wenn es hineinpasst (§5 'RAM'). Nur im Worker-Weg,
+        # weil nur dort der Deckel gilt (worker_rss_max_mb, :695-698).
+        argv += ["--koerper", "--koerper-rss-max-mb",
+                 str(int(cfg.get("worker_rss_max_mb") or 4096))]
     logpfad = os.path.join(event_dir, "analyze.log")
     if worker is not None:
         # W2: Job in den persistenten Worker statt Prozess-Start je Event (~85 % der CPU
@@ -564,8 +623,12 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
             if not antwort.get("ok"):
                 lf.write(f"\nverifyd: analyze failed in worker: {antwort.get('fehler')}\n")
                 return None
-            # Telemetrie fuer den W2-Soak (CPU/Event, Peak-RSS) — greifbar per grep
-            lf.write(f"verifyd-worker: cpu_s={antwort.get('cpu_s')} rss_mb={antwort.get('rss_mb')}\n")
+            # Telemetrie fuer den W2-Soak (CPU/Event, Peak-RSS) — greifbar per grep.
+            # Z5: vmhwm_mb ist die SPITZE im Job (die rss_mb-Schwelle sieht nur den
+            # Stand danach), koerper_* der zusatz-Rueckweg des zweiten Abnehmers.
+            lf.write(f"verifyd-worker: cpu_s={antwort.get('cpu_s')} rss_mb={antwort.get('rss_mb')} "
+                     f"vmhwm_mb={antwort.get('vmhwm_mb')} koerper={antwort.get('koerper_crops')}"
+                     f"{'/' + str(antwort.get('koerper_ausfall')) if antwort.get('koerper_ausfall') else ''}\n")
     else:
         env = dict(os.environ, OV_DEVICE=cfg["ov_device"], FRIGATE_URL=cfg["frigate_url"],
                    SCRATCH_DIR=os.path.join(cfg["data_dir"], "clips"))
@@ -614,6 +677,10 @@ class WorkerProzess:
         self.p = None
         self.rx = None                      # Leseende der Antwort-Pipe
         self.lock = threading.Lock()        # EIN Job gleichzeitig (die Buendelung ist der Zweck)
+        # Z8 Mitnahme A: Verteiler-Rueckfaelle des Workers (getrennte Decodes statt
+        # einem, konzept_frames.md §3.2). Der Worker meldet SEINEN kumulativen Stand;
+        # ein Neustart setzt ihn zurueck, deshalb hier Summe + zuletzt gesehener Wert.
+        self.rueckfaelle = {"summe": 0, "letzt": 0}
 
     def _start(self):
         r, w = os.pipe()
@@ -692,6 +759,12 @@ class WorkerProzess:
                     self._stop(kill=True)
                     return None
                 antwort = json.loads(zeile)
+                if "frame_rueckfaelle" in antwort:
+                    n, letzt = int(antwort["frame_rueckfaelle"] or 0), self.rueckfaelle["letzt"]
+                    # n < letzt = der Worker ist zwischendurch neu gestartet (Zaehler
+                    # bei 0 begonnen); dann zaehlt n ganz, sonst nur der Zuwachs.
+                    self.rueckfaelle["summe"] += n if n < letzt else n - letzt
+                    self.rueckfaelle["letzt"] = n
                 grenze = int(self.cfg.get("worker_rss_max_mb") or 4096)
                 if int(antwort.get("rss_mb") or 0) > grenze:
                     self.log(f"worker rss {antwort.get('rss_mb')} MB > {grenze} MB — restarting worker")
@@ -796,11 +869,16 @@ from webui.bausteine import gt_leiste, bild_nn   # noqa: F401 (Re-Export)
 
 
 # ------------------------------------------------------------------ Pushover
-def push(cfg, title, message, attachment=None):
+def push(cfg, title, message, attachment=None, herkunft=None):
+    """`herkunft` (.163): woher die Meldung kommt — Werte und Praefixe in
+    core.registry.MELDE_HERKUNFT, Vorgabe live (keine Markierung). Alles, was
+    NICHT aus dem Live-Betrieb kommt, sagt es im Text; sonst liest sich eine
+    Test-Meldung am Handy wie ein Vorfall."""
     po = cfg.get("pushover") or {}                 # fehlender Block darf keinen KeyError werfen
     token, user = po.get("token"), po.get("user")  # (telegram_video() faengt das laengst ab)
     if not (token and user):
         return False
+    message = _reg.melde_text(message, herkunft)
     boundary = uuid.uuid4().hex
     parts = []
     for k, v in [("token", token), ("user", user), ("title", title), ("message", message)]:
@@ -835,13 +913,15 @@ def stoerung_melden(cfg, text):
             fehler.append(f"telegram: {e}")
     return fehler
 
-def telegram_video(cfg, video_path, caption, crop=None):
+def telegram_video(cfg, video_path, caption, crop=None, herkunft=None):
     """Direktversand an die Telegram-Bot-API (Weg B): Video, sonst Foto, sonst reiner Text.
-    Multipart wie push(); Secrets aus cfg['telegram'] (per ${VAR} aus der .env expandiert)."""
+    Multipart wie push(); Secrets aus cfg['telegram'] (per ${VAR} aus der .env expandiert).
+    `herkunft` (.163) wie bei push(): Nicht-Live-Meldungen tragen ihre Marke."""
     tg = cfg.get("telegram") or {}
     token, chat = tg.get("bot_token"), tg.get("chat_id")
     if not token or not chat:
         return False
+    caption = _reg.melde_text(caption, herkunft)
     if video_path and os.path.exists(video_path) and os.path.getsize(video_path) <= 49 * 1024 * 1024:
         method, field, fname, ctype = "sendVideo", "video", "clip.mp4", "video/mp4"
         payload = open(video_path, "rb").read()
@@ -1045,6 +1125,11 @@ class Service:
         self._nachlern_lock = threading.Lock()    # schuetzt _nachlern_timer
         self._nachlern_timer = {}                 # person -> Debounce-Timer: Bestands-Suche erst nach Durchgangs-Ende (User 21.07.)
         self._gpu_bg_lock = threading.Lock()      # serialisiert schwere GPU-Hintergrund-Subprozesse (Review 21.07.): hoechstens EINER gleichzeitig, Live-run_analyze bleibt frei
+        self._vision_lock = threading.Lock()      # V4: schuetzt Single-Flight + Debounce-Timer des Vision-Urteils
+        self._vision_flug = None                  # core.visionurteil.Einfachlauf (lazy): 1 laufend + 1 wartend, Rest verworfen+gezaehlt
+        self._vision_timer = {}                   # pass_key -> Debounce-Timer (Muster _nachlern_timer): Urteil erst nach Durchgangs-Ende
+        self._nachanalyse = {"laeuft": False, "pass_key": "", "gesamt": 0, "fertig": 0}  # .161: erneute Analyse EINES Durchgangs (Sammel-Modus an, Material fehlt)
+        self._vision_lebt = set()                 # .164: pass_keys mit WIRKLICH laufendem Vision-Thread (Waisen-Zweitsicherung)
         self.last_seen = self._load_last_seen()   # Person -> ts letzte Bestaetigung; aus dem Log
                                                   # rekonstruiert, sonst Push-Salve nach Neustart
         self.own_writes = self._load_own_writes() # eids mit VON UNS gesetztem sub_label (Echo-Freiheit)
@@ -1143,13 +1228,19 @@ class Service:
             self.log(f"{eid}: sub_label write failed: {e}")
             return None
 
-    def _mqtt_pub(self, topic, payload, retain=False):
+    def _mqtt_pub(self, topic, payload, retain=False, herkunft=None):
         """Publish MIT rc-Pruefung. Rueckgabe True = von paho angenommen.
 
         paho wirft bei getrenntem Broker KEINE Exception: publish() liefert rc=MQTT_ERR_NO_CONN und
         die Nachricht ist bei QoS 0 verworfen. Ohne diese Pruefung stand die Erfolgszeile
         ('SCENE recognized', 'SCENE unknown') im Log, waehrend die HA-Automation nie etwas bekam —
-        ein stiller Meldungsverlust, den niemand sehen konnte."""
+        ein stiller Meldungsverlust, den niemand sehen konnte.
+
+        `herkunft` (.163): dieselbe Herkunft wie bei push()/telegram_video(), hier aber
+        als EIGENES FELD im Payload statt als Text-Praefix — Home Assistant soll darauf
+        filtern koennen, ohne einen Meldetext zu zerlegen. Das Feld steht IMMER da
+        (auch `live`), damit eine Automation sich auf seine Anwesenheit verlassen kann."""
+        payload = self._mqtt_herkunft(payload, herkunft)
         if not self.pub:
             return False
         try:
@@ -1160,6 +1251,24 @@ class Service:
         except Exception as e:
             self.log(f"!! MQTT publish failed ({topic}): {e}")
         return False
+
+    @staticmethod
+    def _mqtt_herkunft(payload, herkunft=None):
+        """Das Herkunfts-Feld in einen JSON-Payload einsetzen (reine Textarbeit,
+        damit der Beweis sie ohne Broker pruefen kann). Ist der Payload kein
+        JSON-Objekt (Heartbeat sendet blanke Werte), bleibt er unangetastet —
+        ein Kennzeichen ist nie wichtiger als ein zustellbarer Payload."""
+        wert = herkunft or _reg.MELDE_HERKUNFT_STD
+        if wert not in _reg.MELDE_HERKUNFT:
+            wert = _reg.MELDE_HERKUNFT_STD
+        try:
+            d = json.loads(payload)
+        except (TypeError, ValueError):
+            return payload
+        if not isinstance(d, dict):
+            return payload
+        d["herkunft"] = wert
+        return json.dumps(d, ensure_ascii=False)
 
     def start_publisher(self):
         """AP2: eigener MQTT-Publish-Client (auch im poll-Modus) + 60s-Heartbeat (retained)."""
@@ -2231,6 +2340,28 @@ class Service:
         "nachhol_tage": (int, 1, 3, "how far back the retry looks for failed analyses (days)"),
         "worker": (bool, None, None, "persistent analysis worker: keeps the models loaded between events (large CPU saving); off = one process per event (pre-0.1.0.38 behavior)"),
         "worker_rss_max_mb": (int, 512, 16384, "memory threshold (MB): the worker is restarted cleanly once its RSS exceeds this"),
+        # Vision detect (konzept_vision.md v2 §5): die zwei reinen Zahlen des
+        # Adapters. Endpunkt/Key/Prompt liegen im `vision`-Block und werden NUR
+        # auf dem Vision-Reiter bearbeitet — ein Key in dieser Tabelle stuende
+        # als value="..." im HTML (Key-Austritt, §10 Stufe 1).
+        "vision_max_tokens": (int, 256, 32000, "vision detect: token budget for one answer — the default is 12000, which is the value that was measured to be enough. 3000 was measured to be too small: the answer was cut off in the middle and counted as no verdict, so a whole run was wasted. Lower it only if your endpoint charges per token and you have seen your model answer well below that"),
+        "vision_timeout_s": (int, 10, 3600, "vision detect: seconds to wait for one request — a local model on a CPU machine needs minutes, an external endpoint seconds"),
+        # V4 (§7): Auslöser, Reissleine, Deckel und Sammel-Regel des Urteilspfads.
+        # Der Startwert fuer N ist KEIN Messwert (die Testreihe steht aus) — er ist
+        # bewusst klein gewaehlt, weil jedes Bild ZWEI Anfragen kostet.
+        "vision_bilder_je_pass": (int, 1, 10, "vision detect: how many of a walk-through's best pictures go into the ONE candidate grid, as cells (starting value, not a measurement) — the whole walk is shown as a single grid, so the cost is TWO requests per compared PAIR of galleries, not per picture, because every question is asked again with the galleries swapped"),
+        "vision_deadline_s": (int, 30, 7200, "vision detect: overall deadline for one request in seconds — the timeout above is a socket timeout, which a slowly trickling answer walks straight past; when this one hits, the connection is closed and the verdict is 'no vision verdict (timeout)'"),
+        "vision_anfragen_h": (int, 2, 5000, "vision detect: request limit per hour (every attempt counts, including failed ones); when it is reached vision pauses itself and says so instead of running on quietly"),
+        "vision_anfragen_tag": (int, 2, 20000, "vision detect: request limit per day — this is the day cap: one walk-through costs 2 requests per compared pair of galleries, and on a paid endpoint every request is money"),
+        "vision_quote": (float, 0.5, 1.0, "vision detect: share of the CAST votes that must agree for a walk-through verdict (1.0 = unanimous); a comparison without a usable answer is an abstention, never a vote against"),
+        "vision_min_voten": (int, 1, 10, "vision detect: how many consistent comparisons must back a name before there is a verdict — the winner has to hold its place against that many other galleries. The default is 1: the first comparison that comes out clean carries the verdict. Raise it if you want the winner to defend its place against further galleries; every extra confirmation costs two more requests. It can never demand more comparisons than you have galleries for: with two approved galleries there is exactly one possible pair"),
+        # Zwei optionale Meldungen, beide AUS im Auslieferungszustand. Sie aendern
+        # NICHTS an den bestehenden Alarmen — Vision bekommt kein Stimmrecht, kein
+        # Veto und kann nichts entwarnen (E6).
+        "vision_doppellauf": (bool, None, None, "vision detect: ask each pair twice with the galleries swapped (on by default) — the swap is what catches position bias: A in the first run and B in the swapped run mean the same gallery, so a contradiction exposes a model that just prefers the first picture. Measured here: every wrong answer across all test series was an \"A\", never a \"B\". Switching it off halves the requests and gives that check up; a comparison then rests on a single answer"),
+        "vision_meldung": (bool, None, None, "vision detect: send a short note through your usual channels when a walk-through has been judged (off by default) — it arrives AFTER the pass, minutes late on a local model, and it is information only: it never raises or cancels an alarm"),
+        "vision_alarm_unbestaetigt": (bool, None, None, "vision detect: alert when vision CONTRADICTS the body recognition (off by default) — it fires only when the body path claimed a known person, the run really happened, the model answered, and vision still confirmed nobody (neither, or the two swapped rounds disagreed). It stays quiet on walk-throughs the body path already called unknown (there vision agrees, so there is nothing to report) and when there was simply too little material: recognising known people is the strong side of this path, so a non-confirmation is a real signal — turning strangers away is the weak side, so it never votes in that direction"),
+        "diagnostic_collection": (bool, None, None, "keep every JUDGED body image for inspection (Person -> Judged images): on = images of all passes stay for 30 days, roughly 20-40 MB a day; off (default) = they only live while the pass is running, then only the winning image and the verdict log remain"),
         "fd_front_min": (float, 0.5, 1.0, "false-detection rule: frontality at/above which a detection looks like a static object (calibrated 0.85)"),
         "fd_sharp_min": (int, 200, 5000, "false-detection rule: sharpness (Laplacian var.) at/above which a crop is edge-rich like vegetation/spokes (calibrated 1500)"),
         "fd_det_max": (float, 0.5, 0.9, "false-detection rule: only detections BELOW this detector score can be discarded (calibrated 0.70)"),
@@ -2375,14 +2506,18 @@ class Service:
                 tok, usr = keep(d.get("pushover_token"), a.get("token")), keep(d.get("pushover_user"), a.get("user"))
                 if not tok or not usr:
                     return False, "token/user missing"
-                ok = push({"pushover": {"token": tok, "user": usr}}, "suslik", "Test notification from suslik ✓")
+                ok = push({"pushover": {"token": tok, "user": usr}}, "suslik",
+                          "Test notification from suslik ✓",
+                          herkunft="manuell")
                 return (True, "Pushover: sent ✓") if ok else (False, "Pushover rejected it (check token/user)")
             if kanal == "telegram":
                 a = cfg.get("telegram") or {}
                 tok, chat = keep(d.get("telegram_bot_token"), a.get("bot_token")), keep(d.get("telegram_chat_id"), a.get("chat_id"))
                 if not tok or not chat:
                     return False, "bot_token/chat_id missing"
-                ok = telegram_video({"telegram": {"bot_token": tok, "chat_id": chat}}, None, "Test notification from suslik ✓")
+                ok = telegram_video({"telegram": {"bot_token": tok, "chat_id": chat}},
+                                    None, "Test notification from suslik ✓",
+                                    herkunft="manuell")
                 return (True, "Telegram: sent ✓") if ok else (False, "Telegram rejected it (check bot_token/chat_id)")
             if kanal == "mqtt":
                 a = cfg.get("mqtt") or {}
@@ -2400,7 +2535,12 @@ class Service:
                     c.username_pw_set(usr, pw)
                 c.connect(host, port, 10)
                 c.loop_start()
-                info = c.publish("verifyd/test", json.dumps({"test": True, "ts": round(time.time(), 1)}))
+                # .163: auch der Test-Publish traegt sein Herkunfts-Feld — er
+                # geht ueber einen eigenen Client, also wird das Kennzeichen
+                # hier ausdruecklich gesetzt (dieselbe EINE Quelle).
+                info = c.publish("verifyd/test", self._mqtt_herkunft(
+                    json.dumps({"test": True, "ts": round(time.time(), 1)}),
+                    "manuell"))
                 info.wait_for_publish(timeout=5)
                 c.loop_stop()
                 c.disconnect()
@@ -2408,6 +2548,704 @@ class Service:
         except Exception as e:
             return False, f"{kanal} error: {str(e)[:90]}"
         return False, "unknown channel"
+
+    # ------------------------------------------------- Vision detect (V1, §5)
+    # Duenne Maentel: Validierung, Test und Vorbedingungen liegen vollstaendig in
+    # core/vision.py (dort ohne laufenden Dienst pruefbar). Hier bleibt Store,
+    # Audit und der E4-Riegel. Der Vision-Pfad beruehrt den Urteilspfad NICHT.
+    def _vision_form(self, d, cloud_gate=True):
+        """Formularwerte ueber den gespeicherten Block legen (leeres Secret =
+        behalten, Muster notif_speichern) und pruefen -> (ok, block|msg)."""
+        from core import vision as _vis
+        return _vis.werte_pruefen(d or {}, self.cfg.get("vision") or {},
+                                  cloud_gate)
+
+    def vision_speichern(self, d):
+        """Vision-Block in den JSON-Store. Secrets im Audit maskiert; die
+        Cloud-Bestaetigung wird MIT Zeitstempel protokolliert (§9: ein Hinweis
+        neben einem Schalter dokumentiert keine Entscheidung). Kein Neustart:
+        den Block liest nur dieser Reiter, und die Live-Config wird hier
+        mitgezogen — die zwei Zahlen daneben laufen ueber /konfig und starten
+        wie gewohnt neu."""
+        from core import vision as _vis
+        ok, neu = self._vision_form(d)
+        if not ok:
+            return False, neu
+        # Ein NEU gewaehltes Modell muss aus der Entdeckung GENAU DIESER
+        # Verbindung stammen (§5: nie Modelle vorab, auch nicht ueber den
+        # Umweg des Speicherns). Ein schon gespeichertes Modell bleibt immer
+        # speicherbar — sonst sperrte ein Update ohne frische Entdeckung den
+        # Nutzer aus seiner eigenen Config aus.
+        _alt_m = str((self.cfg.get("vision") or {}).get("modell") or "")
+        if neu.get("modell") and neu["modell"] != _alt_m:
+            _p = self._vision_datei("vision_modelle.json")
+            if not (_vis.modelle_gueltig(_p, neu)
+                    and any(m.get("id") == neu["modell"]
+                            for m in _p.get("modelle") or [])):
+                return False, ("pick the model from the list this endpoint "
+                               "reported — check the connection first")
+        neu["aktiv"] = bool((self.cfg.get("vision") or {}).get("aktiv"))  # nur ueber das Gate
+        store = _lade_config_store(self.cfg)
+        store["vision"] = neu
+        _store_schreiben(_config_store_pfad(self.cfg), store)
+        self.cfg["vision"] = neu
+        audit = {k: neu.get(k) for k in ("preset", "betriebsart", "modell",
+                                         "think_aus", "cloud_ok", "cloud_ok_ts")}
+        audit["api_key"] = _mask_secret(neu.get("api_key"))
+        audit["endpunkt"] = _reg.endpunkt_anzeige(neu.get("endpunkt"))
+        audit["prompt_angepasst"] = bool(neu.get("prompt"))
+        with open(os.path.join(self.cfg["data_dir"], "config", "config_audit.jsonl"), "a") as f:
+            f.write(json.dumps({"ts": round(time.time(), 1), "vision": audit},
+                               ensure_ascii=False) + "\n")
+            f.flush()
+        self.log("VISION config changed via UI (key + endpoint masked)")
+        return True, "saved"
+
+    def vision_test(self, d):
+        """Der dreistufige Test-Knopf mit den AKTUELLEN Formularwerten (leeres
+        Key-Feld -> gespeicherter Wert), Ergebnis nach state/vision_test.json.
+        Nutzt ausschliesslich zur Laufzeit erzeugte Bilder — nie Bewohner-Bilder,
+        auch nicht auf Wunsch (§5).
+
+        Seit V4 kann EINE Stufe angefordert werden (`stufe`: 1|2|3). Der Browser
+        ruft sie nacheinander und fuellt das Testlog live — lokal dauert eine
+        Stufe Minuten, und ein Knopf, der solange schweigt, sieht aus wie ein
+        Haenger. Zusaetzlicher Server-Zustand entsteht dabei keiner: das
+        Protokoll ist dieselbe Datei wie vorher, sie waechst nur stufenweise."""
+        from core import vision as _vis
+        ok, block = self._vision_form(d)
+        if not ok:
+            return False, block
+        block["max_tokens"] = self.cfg.get("vision_max_tokens")
+        block["timeout_s"] = self.cfg.get("vision_timeout_s")
+        p = os.path.join(self.cfg["data_dir"], "state", "vision_test.json")
+        nr = int(d.get("stufe") or 0)
+        if nr:
+            prot = self._vision_datei("vision_test.json") if nr > 1 else {}
+            if not prot.get("stufen") or nr == 1:
+                prot = _vis.test_protokoll(block)
+            prot, weiter = _vis.test_stufe(block, nr, prot)
+        else:
+            prot, weiter = _vis.test_lauf(block), True
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        _store_schreiben(p, prot)          # atomar + fsync, gleicher Griff
+        stufe = next((s for s in prot["stufen"] if s["nr"] == nr), None)
+        self.log(f"VISION test{f' step {nr}' if nr else ''}: "
+                 f"{(stufe or prot)['ampel']}")
+        if nr:
+            return True, {"stufe": stufe, "weiter": bool(weiter),
+                          "ampel": prot["ampel"]}
+        return prot["ampel"] != "rot", f"test finished: {prot['ampel']}"
+
+    def vision_lage(self):
+        """(block, testprotokoll, vorbedingungen) fuer die Seite und das Gate.
+        Der Block wird beim Lesen auf die Kachel-Welt gezogen (V1 kannte
+        `preset`) — sonst verloere ein Update still die Verbindung."""
+        from core import vision as _vis
+        block = _vis.block_migrieren(self.cfg.get("vision") or {})
+        prot = self._vision_datei("vision_test.json")
+        return block, prot, _vis.vorbedingungen(self.cfg["data_dir"], block, prot)
+
+    def _vision_datei(self, name):
+        try:
+            with open(os.path.join(self.cfg["data_dir"], "state", name)) as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def _vision_modelle(self, block):
+        """Das gespeicherte Entdeckungs-Ergebnis — aber NUR, wenn es zu genau
+        dieser Verbindung gehoert (§5: nie Modelle vorab anzeigen). Nach einem
+        Kachel- oder Endpunkt-Wechsel ist es ungueltig und die Seite steht
+        wieder auf 'erst verbinden'. Ein fehlgeschlagener Versuch bleibt
+        dagegen sichtbar — die ehrliche Fehlermeldung ist der Sinn der Sache."""
+        from core import vision as _vis
+        prot = self._vision_datei("vision_modelle.json")
+        if prot.get("ok") and not _vis.modelle_gueltig(prot, block):
+            return {}
+        return prot
+
+    def vision_schluessel(self, d):
+        """Key-Sofortpruefung per Modell-Listen-Abruf (§5): kostenlos, kein
+        Bild. Ergebnis (ohne Geheimnisse) nach state/vision_modelle.json — die
+        Modellwahl der Seite liest genau diese Datei.
+
+        Bewusst OHNE Cloud-Gate geprueft (und deshalb auch ohne Speichern des
+        Blocks): hier verlaesst kein Bild das Haus, und die Bestaetigung nach
+        §9 ist eine Bild-Frage. Gespeichert wird die Verbindung erst ueber
+        `vision_speichern`, und dort gilt das Gate."""
+        from core import vision as _vis
+        ok, block = self._vision_form(d, cloud_gate=False)
+        if not ok:
+            return False, block
+        block["timeout_s"] = min(60, int(self.cfg.get("vision_timeout_s") or 60))
+        prot = _vis.schluessel_pruefen(block, block["timeout_s"])
+        p = os.path.join(self.cfg["data_dir"], "state", "vision_modelle.json")
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        _store_schreiben(p, prot)
+        self.log(f"VISION key check: {prot['ampel']} "
+                 f"({len(prot.get('modelle') or [])} models)")
+        # Die Liste faehrt MIT der Antwort zurueck (Live-Fund 08.08.): die Seite
+        # zeigt sie, ohne neu zu laden — sonst gingen die gerade eingetippten
+        # Felder verloren und die Liste passte danach nicht mehr zur
+        # gespeicherten Verbindung. Geheimnisse sind im Protokoll keine.
+        return bool(prot["ok"]), {k: prot[k] for k in
+                                  ("text", "modelle", "ts", "endpunkt",
+                                   "kachel", "ampel")}
+
+    # --------------------------------------------- Galerie-Wizard (V2, §6)
+    # Auch hier nur Maentel: Reihen-Vorschlag, Guete-Sieb, Kopien und
+    # Herkunft liegen vollstaendig in core/visiongalerie.py.
+    def _galerie_personen(self):
+        """Die massgebliche Personen-Menge: personlern/modell/status.json ->
+        personen (§3.2). NICHT der Gesichts-Bestand — der hat einen anderen
+        Nenner, und beide nebeneinander haben schon einmal verwirrt."""
+        try:
+            with open(os.path.join(self.cfg["data_dir"], "personlern", "modell",
+                                   "status.json")) as f:
+                return sorted((json.load(f).get("personen") or {}))
+        except Exception:
+            return []
+
+    def _galerie_person_ok(self, person):
+        """Der Personen-Name aus einer POST-Anfrage wird zu einem PFAD
+        (personlern/galerien/<person>/). Deshalb kommt er nicht ungeprueft
+        durch: erlaubt ist ausschliesslich ein Name aus dem Koerpermodell —
+        eine exakte Whitelist, kein Muster-Filter, den man umschreiben kann.
+        Muster-Pruefungen allein haben in diesem Projekt schon zweimal nicht
+        gereicht (Anzeige- und Loesch-Weg)."""
+        return bool(person) and person in self._galerie_personen()
+
+    def vision_galerie_lage(self, person="", groesse=None, neu=False):
+        from core import personernte as _pe
+        from core import visiongalerie as _vg
+        dd = self.cfg["data_dir"]
+        # Schaerfe einmalig nachziehen (§6.4): der Wizard liest nur, gerechnet
+        # wird genau hier und genau einmal je Bild.
+        _vg.schaerfe_nachziehen(dd, _pe.laeufe_lesen)
+        return _vg.wizard_lage(dd, _pe.laeufe_lesen, self._galerie_personen(),
+                               person, groesse, neu)
+
+    def vision_galerie_weg(self, person, schluessel, reihe, belegt=(),
+                           reihe_belegt=()):
+        """Eine Zelle ablehnen und den naechstbesten Kandidaten DERSELBEN
+        Ansicht liefern. Die Ablehnung landet in der EIGENEN Ablage der
+        Galerie — der Lernlauf-Status wird nie angefasst (§6.5).
+
+        `reihe_belegt` sind die Zellen, die in DIESER Reihe stehen bleiben; sie
+        fuellen die Vielfalts-Deckel des Kurators (.161), damit der Nachruecker
+        nicht den Tag oder das Ereignis doppelt, das der Nutzer gerade behalten
+        hat."""
+        from core import personernte as _pe
+        from core import visiongalerie as _vg
+        if not self._galerie_person_ok(person):
+            return False, "unknown person"
+        dd = self.cfg["data_dir"]
+        _vg.ablehnen(dd, person, schluessel, reihe)
+        abgelehnt = _vg.abgelehnt_lesen(dd, person)
+        k = _vg.kandidaten(dd, _pe.laeufe_lesen, person)
+        nach_s = {_vg.schluessel(e): e for e in k}
+        gewaehlt = [nach_s[s] for s in (reihe_belegt or ())
+                    if s in nach_s and s != schluessel]
+        neu = _vg.nachruecken(k, reihe, abgelehnt, belegt, gewaehlt)
+        return True, {"zelle": {kk: neu[kk] for kk in
+                                ("lauf_id", "datei", "blick", "hoehe", "tag",
+                                 "camera", "geliehen_aus", "note",
+                                 "begruendung")} if neu else None,
+                      "schluessel": (f'{neu["lauf_id"]}/{neu["datei"]}'
+                                     if neu else None),
+                      "abgelehnt": len(abgelehnt)}
+
+    def vision_galerie_vergessen(self, person):
+        """Das Ablehn-Gedaechtnis dieser Person leeren (Ruecknahme bleibt
+        moeglich, wie beim bestehenden Abnahme-Muster)."""
+        from core import visiongalerie as _vg
+        if not self._galerie_person_ok(person):
+            return False, "unknown person"
+        for s in list(_vg.abgelehnt_lesen(self.cfg["data_dir"], person)):
+            _vg.ablehnung_zuruecknehmen(self.cfg["data_dir"], person, s)
+        return True, "rejections forgotten"
+
+    def vision_galerie_abnahme(self, person, groesse, auswahl):
+        """Abnahme: Kopien + Herkunfts-Manifest (§6.6). `auswahl` ist die
+        Lesereihenfolge der Zellen als Schluessel (lauf_id/datei), None fuer
+        eine Luecke."""
+        from core import personernte as _pe
+        from core import visiongalerie as _vg
+        if not self._galerie_person_ok(person):
+            return False, "unknown person"
+        if int(groesse or 0) not in _vg.GROESSEN:
+            return False, "unsupported gallery size"
+        dd = self.cfg["data_dir"]
+        k = {_vg.schluessel(e): e for e in
+             _vg.kandidaten(dd, _pe.laeufe_lesen, person)}
+        zellen = []
+        for s in auswahl:
+            e = k.get(s) if s else None
+            if s and not e:
+                return False, f"image {s} is no longer available — reload the page"
+            zellen.append(e)
+        if not [z for z in zellen if z]:
+            return False, "nothing to approve"
+        m = _vg.abnehmen(dd, person, zellen, int(groesse), bestand=len(k))
+        self.log(f"VISION gallery approved: {person} {m['groesse']} cells "
+                 f"({m['luecken']} empty, {m['geliehen']} borrowed)")
+        return True, (f"approved — {m['groesse']} cells copied into the "
+                      "gallery folder")
+
+    def vision_schalter(self, an):
+        """E4-Gate: einschalten nur mit ALLEN Vorbedingungen (>=2 abgenommene
+        Galerien, gruener Test, Kandidaten-Quelle). Ausschalten geht immer."""
+        block, _prot, vor = self.vision_lage()
+        if an and not vor["erfuellt"]:
+            return False, "still missing: " + "; ".join(vor["fehlt"])
+        block["aktiv"] = bool(an)
+        store = _lade_config_store(self.cfg)
+        store["vision"] = block
+        _store_schreiben(_config_store_pfad(self.cfg), store)
+        self.cfg["vision"] = block
+        self.log(f"VISION detect switched {'on' if an else 'off'}")
+        return True, "on" if an else "off"
+
+    # ------------------------------------------- Vision-Urteilspfad (V4, §7)
+    # Auch hier nur Maentel: Kandidatenwahl, Kaskade, Sammel-Regel, Deckel,
+    # Zaehler und Protokoll liegen vollstaendig in core/visionurteil.py (dort
+    # ohne laufenden Dienst pruefbar). Hier bleibt: Debounce, Single-Flight mit
+    # Thread, Config-Werte und Log. DER ANALYSE-LOCK WIRD IN DIESEM GANZEN
+    # BLOCK NIE GENOMMEN — Vision haelt den Gesichts-Pfad nie auf (§7).
+    def _vision_regeln(self, lauf_regeln=None):
+        """Die Regeln EINES Laufs. Vorgabe ist die Config; `lauf_regeln`
+        ueberschreibt sie NUR fuer diesen einen Lauf (.164, User-Wunsch: "ich
+        kann den Testlauf nutzen, um mich an meine optimale Frameanzahl
+        ranzutesten" + "die Anzahl der Votes sollten wir einstellbar haben,
+        auch fuer den Test").
+
+        Der Weg ist ausdruecklich EINWEG: hier wird nichts gespeichert, und die
+        Automatik faehrt weiter mit den Config-Werten. Zulaessig sind nur die
+        beiden Felder, die der Test anbietet, und nur in den Grenzen ihrer
+        eigenen Whitelist-Eintraege — ein Formularwert wird nie ungeprueft zur
+        Regel."""
+        r = {"bilder_je_pass": self.cfg.get("vision_bilder_je_pass"),
+             "quote": self.cfg.get("vision_quote"),
+             "min_voten": self.cfg.get("vision_min_voten"),
+             "anfragen_h": self.cfg.get("vision_anfragen_h"),
+             "anfragen_tag": self.cfg.get("vision_anfragen_tag"),
+             # Der ECHTE Sammel-Schalter (.161): ohne ihn riet die
+             # Kein-Material-Meldung "turn on diagnostic collection", auch
+             # wenn er laengst an war (Live-Fund 08.08.).
+             "doppellauf": bool(self.cfg.get("vision_doppellauf", True)),
+             "sammeln": bool(self.cfg.get("diagnostic_collection"))}
+        wert = (lauf_regeln or {}).get("doppellauf")
+        if wert not in (None, ""):
+            # Ein Schalter, kein Zahlenwert: alles ausser den bekannten
+            # Falsch-Schreibweisen zaehlt als AN — und "an" ist die sichere
+            # Seite (der Tausch bleibt).
+            r["doppellauf"] = str(wert).lower() not in ("false", "0", "off",
+                                                        "no", "aus")
+        for feld, schluessel in (("bilder_je_pass", "vision_bilder_je_pass"),
+                                 ("min_voten", "vision_min_voten")):
+            wert = (lauf_regeln or {}).get(feld)
+            if wert in (None, ""):
+                continue
+            art, tief, hoch = self.CONFIG_WHITELIST[schluessel][:3]
+            try:
+                w = art(wert)
+            except (TypeError, ValueError):
+                continue
+            r[feld] = max(tief, min(hoch, w))
+        return r
+
+    def _vision_galerien(self):
+        """Nur ABGENOMMENE und unversehrte Galerien (§6.6): eine, die eine
+        Nachabnahme braucht, urteilt nicht mehr mit — statt still mit halben
+        Loechern weiterzulaufen."""
+        from core import visiongalerie as _vg
+        dd = self.cfg["data_dir"]
+        return {n: m for n, m in _vg.alle(dd).items()
+                if _vg.pruefen(dd, n).get("status") == "gut"}
+
+    def _vision_anstossen(self, eid, entry=None):
+        """Debounce am Durchgangs-ENDE (Muster _nachlern_anstossen): jedes neue
+        Event desselben Durchgangs setzt den szene_karenz_s-Timer zurueck, das
+        Urteil laeuft GENAU EINMAL, wenn der Durchgang wirklich vorbei ist.
+        Frueher zu urteilen hiesse, ueber einen halben Durchgang zu urteilen —
+        genau der Fehler, den das Szenario-Prinzip verbietet."""
+        if not eid or not (self.cfg.get("vision") or {}).get("aktiv"):
+            return
+        pk = (self._kontroll_speicher(eid, entry) or {}).get("pass_key")
+        if not pk:
+            return
+        with self._vision_lock:
+            alt = self._vision_timer.get(pk)
+            if alt:
+                alt.cancel()
+            t = threading.Timer(int(self.cfg.get("szene_karenz_s", 90)),
+                                self._vision_faellig)
+            t.args = (pk, t)                     # Token: nur DIESER Timer feuert
+            t.daemon = True
+            self._vision_timer[pk] = t
+            t.start()
+
+    def _vision_faellig(self, pass_key, mein_timer):
+        with self._vision_lock:
+            if self._vision_timer.get(pass_key) is not mein_timer:
+                return                           # ein neuerer Timer hat uebernommen
+            self._vision_timer.pop(pass_key, None)
+        self.vision_urteil_anstossen(pass_key)
+
+    def vision_waisen(self, pass_key=None):
+        """Verwaiste Lauf-Protokolle schliessen (.164, Live-Fund 09.08.).
+
+        Eine Waise ist ein Protokoll, das laut Anzeige noch laeuft, obwohl kein
+        Thread mehr dazu gehoert — der Dienst ist mitten im Lauf gestorben.
+        Ohne diesen Griff bleibt die Seite ewig auf "a run is going right now"
+        stehen und der Start-Knopf gesperrt (der User war real blockiert).
+
+        Der Lebend-Test kommt aus DIESEM Prozess (`_vision_lebt`): ein wirklich
+        laufender Lauf wird nie geschlossen. `pass_key=None` raeumt alles (beim
+        Dienst-Start, wo es per Definition keinen lebenden Lauf gibt).
+
+        Rueckgabe: Liste der geschlossenen pass_keys."""
+        from core import visionurteil as _vu
+        with self._vision_lock:
+            lebt = set(self._vision_lebt)
+        dd = self.cfg["data_dir"]
+        if pass_key:
+            if str(pass_key) in lebt:
+                return []
+            return [str(pass_key)] if _vu.waise_schliessen(dd, pass_key) else []
+        return _vu.waisen_schliessen(dd, lebt=lambda pk: pk in lebt)
+
+    def vision_waisen_start(self):
+        """Beim Dienst-Start EINMAL aufraeumen. Namensfreie Log-Zeile (§9): nur
+        die Zahl, keine Person, kein pass_key-Inhalt darueber hinaus."""
+        try:
+            geschlossen = self.vision_waisen()
+        except Exception as e:
+            self.log(f"VISION orphan check failed: {e}")
+            return 0
+        if geschlossen:
+            self.log(f"VISION: closed {len(geschlossen)} unfinished run(s) "
+                     "from before the restart — they were left without a "
+                     "result and would have blocked their walk-through")
+        return len(geschlossen)
+
+    def vision_urteil_anstossen(self, pass_key, manuell=False, lauf_regeln=None):
+        """Single-Flight mit gedeckelter Warteschlange (§7): 1 laufend +
+        1 wartend, alles weitere wird verworfen UND gezaehlt. Der gemessene
+        lokale Server laeuft mit --parallel 1; zwei gleichzeitige Laeufe wuerden
+        sich dort gegenseitig ausbremsen und den Deckel doppelt verbrauchen.
+
+        .164: VOR dem Single-Flight faellt ein etwaiger Waisen-Stand dieses
+        Durchgangs — sonst blockierte ein toter Lauf den Start fuer immer."""
+        self.vision_waisen(pass_key)
+        with self._vision_lock:
+            if self._vision_flug is None:
+                from core import visionurteil as _vu
+                self._vision_flug = _vu.Einfachlauf()
+            lage = self._vision_flug.annehmen(pass_key)
+        if lage == "verworfen":
+            self.log(f"VISION run for pass {pass_key} discarded "
+                     f"(one running, one queued)")
+            return False, "a vision run is already going for this pass"
+        if lage == "wartet":
+            return True, "queued behind the running vision run"
+        threading.Thread(target=self._vision_thread,
+                         args=(pass_key, manuell, lauf_regeln),
+                         daemon=True, name="vision").start()
+        return True, "vision run started"
+
+    def _vision_thread(self, pass_key, manuell, lauf_regeln=None):
+        # .164: der Thread traegt sich ein und wieder aus. Das ist die
+        # Zweitsicherung gegen verwaiste Protokolle: ein Lauf, zu dem KEIN
+        # lebender Thread gehoert, darf geschlossen werden, egal was im
+        # Protokoll steht.
+        with self._vision_lock:
+            self._vision_lebt.add(str(pass_key))
+        try:
+            self._vision_lauf(pass_key, manuell, lauf_regeln)
+        except Exception as e:
+            self.log(f"VISION run error ({pass_key}): {e}")
+        with self._vision_lock:
+            self._vision_lebt.discard(str(pass_key))
+            naechster = self._vision_flug.fertig()
+        if naechster:
+            # Der nachrueckende Lauf ist der automatische — er faehrt bewusst
+            # mit den Config-Regeln, nicht mit den Feld-Werten eines fremden
+            # Testlaufs.
+            threading.Thread(target=self._vision_thread,
+                             args=(naechster, False, None), daemon=True,
+                             name="vision").start()
+
+    def _vision_lauf(self, pass_key, manuell=False, lauf_regeln=None):
+        """EIN Vision-Gesamturteil fuer einen Durchgang, ueber den ECHTEN Pfad
+        (der Szenario-Test faehrt genau diesen, nie eine Kopie).
+
+        `lauf_regeln` (.164) sind die Felder des manuellen Testlaufs — sie
+        gelten NUR fuer diesen Lauf und werden nirgends gespeichert."""
+        from core import vision as _vis
+        from core import visionurteil as _vu
+        blk = _vis.block_migrieren(self.cfg.get("vision") or {})
+        blk["max_tokens"] = self.cfg.get("vision_max_tokens")
+        blk["timeout_s"] = self.cfg.get("vision_timeout_s")
+        tiefe = int(self.cfg.get("vision_deadline_s") or 1200)
+
+        def _fragen(teile):
+            try:
+                roh, meta = _vis.anfrage(blk, teile, deadline_s=tiefe)
+            except _vis.VisionFehler as ex:
+                return _vis.urteil_leer(
+                    grund="timeout" if ex.code == "deadline" else "fehler",
+                    backend=_vis.kachel(blk.get("kachel"))["label"],
+                    sichtbar=str(ex)[:200])
+            return _vis.antwort_auswerten(
+                roh, kachel_name=blk.get("kachel"), dauer_s=meta["dauer_s"],
+                quelle=meta["quelle"], custom_prompt=meta["prompt_angepasst"],
+                retry_ohne_zusatzfeld=meta["retry_ohne_zusatzfeld"])
+
+        # DIENST-LOG (V4b): Start UND Ende. Vorher stand im Service-Log gar
+        # nichts ueber Vision-Laeufe — beim Live-Debugging zeigte `docker logs`
+        # schlicht keine Zeile, obwohl minutenlang gearbeitet wurde.
+        # NIE ein Personenname hier: das Service-Log geht in Diagnosen und
+        # Support-Ausschnitte. Wer WER erkannt wurde, steht im Protokoll im
+        # Datenordner und in der Oberflaeche, nicht hier.
+        gal = self._vision_galerien()
+        self.log(f"VISION run start: pass={pass_key} "
+                 f"backend={_reg.endpunkt_anzeige(_vis.endpunkt_wirksam(blk)) or 'n/a'} "
+                 f"galleries={len(gal)} manual={bool(manuell)}")
+        z = _vu.pass_urteilen(self.cfg["data_dir"], pass_key, gal,
+                              self._vision_regeln(lauf_regeln), _fragen,
+                              manuell=manuell)
+        self.log(f"VISION run end: pass={pass_key} "
+                 f"{'verdict' if z.get('person') else 'no verdict'} "
+                 f"votes={z.get('voten')} requests={z.get('anfragen')} "
+                 f"{z.get('dauer_s')}s"
+                 + (f" — {z['grund']}" if z.get("grund") else ""))
+        try:
+            art = self._vision_melden(z)          # optional, beide Default AUS
+            if art:
+                self.log(f"VISION notice sent: pass={pass_key} kind={art}")
+        except Exception as e:
+            self.log(f"VISION notice failed: {e}")   # nie urteils-relevant
+        if z.get("stoerung"):
+            # Stiller Ausfall (§10 Stufe 3): DIE Fehlerklasse dieses Pfades.
+            # Watchdog-Konvention wie beim Fehlerserien-Waechter, damit es in
+            # derselben Log-Suche auftaucht.
+            self.log(f"STOERUNG (vision-serie): {z['ausfall_serie']} vision "
+                     f"runs in a row without a verdict — last reason: "
+                     f"{z.get('grund') or 'unknown'}")
+        return z
+
+    def _vision_unbestaetigt(self, z):
+        """Feuert der OPTIONALE Nicht-bestaetigt-Alarm fuer diesen Lauf?
+
+        Semantik, eng gefasst (User-Entscheid 08.08.): der Alarm meint genau
+        einen Fall — Vision WIDERSPRICHT der Koerper-Einstufung. Der Lauf ist
+        wirklich gelaufen, das Modell hat geantwortet, und trotzdem hat kein
+        Name gewonnen (konsistentes NEITHER oder Tausch-Widerspruch).
+
+        ABGRENZUNG SEIT V4c (User-Entscheid 08.08. spaetabend): Vision urteilt jetzt auch
+        ueber Durchgaenge, die die Koerper-Erkennung als UNBEKANNT gefuehrt hat
+        — dort ist ein Nicht-Bestaetigen aber ueberhaupt kein Widerspruch,
+        sondern UEBEREINSTIMMUNG, und der Alarm bleibt still (sonst feuerte er
+        bei jedem Postboten: Laerm statt Signal). Die Koerper-Einstufung wird
+        dafuer als Vergleichs-INPUT gelesen (die Zeilen liegen ohnehin da), NICHT
+        als Vorschaltung des Laufs — der Lauf selbst kennt sie nicht mehr.
+
+        Ausdruecklich NICHT: zu wenig Material, Deckel, Selbst-Pause, Timeout,
+        Fehler, abgelaufenes Bild. Das waere Laerm, kein Signal.
+
+        Messbasis fuer diese Asymmetrie: die Bekannten-Erkennung liegt in den
+        Messreihen bei ~100 %, eine Nicht-Bestaetigung ist also aussagekraeftig;
+        die Fremd-Abweisung ist schwach (Decke 44 %), deshalb bekommt Vision in
+        die andere Richtung weiterhin kein Stimmrecht."""
+        if z.get("person") or not z.get("runden"):
+            return False
+        if not self._vision_koerper_namen(z):
+            return False            # unbekannt eingestuft -> kein Widerspruch
+        gruende = [r.get("grund") for r in z["runden"] if r.get("kein_votum")]
+        return bool(gruende) and all(g in ("neither", "tausch_widerspruch")
+                                     for g in gruende)
+
+    def _vision_koerper_namen(self, z):
+        """Wen die KOERPER-Erkennung auf diesem Durchgang behauptet hat (Namen,
+        ohne FREMD). Vergleichs-Input, mehr nicht."""
+        return sorted({b.get("koerper_klasse") for b in (z.get("bilder") or [])
+                       if b.get("koerper_klasse")
+                       and b["koerper_klasse"] != "FREMD"})
+
+    def _vision_melden(self, z):
+        """Die zwei optionalen Meldungen — ueber die BESTEHENDEN Kanaele, ohne
+        eigenen Weg. Beide Schalter sind Produkt-Default AUS; ohne sie passiert
+        hier nichts. Personennamen stehen NUR im Meldungs-INHALT (das sind die
+        Nutzdaten), nie in der Service-Log-Zeile daneben."""
+        s = z.get("sammlung") or {}
+        art, titel, text = None, None, None
+        if self.cfg.get("vision_alarm_unbestaetigt") and self._vision_unbestaetigt(z):
+            art, titel = "unbestaetigt", "suslik vision"
+            wer = self._vision_koerper_namen(z)
+            text = ("vision could not confirm anyone on this pass"
+                    + (f" — the body ranking said {', '.join(wer)}" if wer else "")
+                    + f" ({len(z['bilder'])} picture(s) in the grid)")
+        elif self.cfg.get("vision_meldung") and (z.get("person") or z.get("bilder")):
+            art, titel = "info", "suslik vision"
+            text = (f"vision: {z['person']} — unanimous, {s.get('voten')} of "
+                    f"{s.get('bilder')} comparison(s)" if z.get("person") else
+                    f"vision: no verdict — {z.get('grund') or s.get('grund')}")
+        if not text:
+            return None
+        # .163: ein Lauf, den der Nutzer im Erkennungstest selbst angestossen
+        # hat, ist kein Vorfall — die Meldung sagt das jetzt (Praefix im Text,
+        # eigenes Feld im MQTT-Payload). Die Unterscheidung steht schon im
+        # Protokoll (`manuell`), sie wird hier nur durchgereicht.
+        _herk = "manuell" if z.get("manuell") else "live"
+        self._mqtt_pub("verifyd/vision_urteil", json.dumps(
+            {"pass_key": z.get("pass_key"), "art": art,
+             "person": z.get("person"), "voten": s.get("voten"),
+             "bilder": s.get("bilder"), "ts": round(time.time(), 1)},
+            ensure_ascii=False), herkunft=_herk)
+        push(self.cfg, titel, text, herkunft=_herk)
+        if self.cfg.get("telegram_modus", "aus") in ("direkt", "beide"):
+            telegram_video(self.cfg, None, text, herkunft=_herk)
+        return art
+
+    def vision_test_lage(self, pass_key=""):
+        """Alles fuer den Erkennungs-Test (Drei-Wege-Sicht §4) in EINEM Griff:
+        die juengsten Durchgaenge und, wenn einer gewaehlt ist, die drei Wege
+        nebeneinander. Gesicht und Koerper kommen aus den BUECHERN — hier wird
+        nichts nachgerechnet."""
+        import datetime
+        import szenarien as _sz
+        from core import personlive as _plv
+        from core import visionurteil as _vu
+        dd = self.cfg["data_dir"]
+        by_eid = {}
+        grenze = time.time() - 3 * 86400
+        try:
+            with open(self.log_path) as f:
+                for ln in f:
+                    try:
+                        r = json.loads(ln)
+                    except Exception:
+                        continue
+                    if r.get("eid") and (r.get("start") or r.get("ts") or 0) >= grenze:
+                        by_eid[r["eid"]] = r
+        except FileNotFoundError:
+            pass
+        # .164: bevor die Seite einen Lauf als "laufend" zeigt, faellt ein
+        # etwaiger Waisen-Stand dieses Durchgangs. Sonst haengt die Anzeige an
+        # einem Lauf, den es nicht mehr gibt.
+        if pass_key:
+            self.vision_waisen(pass_key)
+        kmap = _plv.treffer_karte(dd)
+        vmap = _vu.protokoll_karte(dd)      # nur URTEILE (Karte + Liste)
+        passe, treffer = [], None
+        for tag in range(3):
+            t0 = (datetime.datetime.now().replace(hour=0, minute=0, second=0,
+                                                  microsecond=0)
+                  - datetime.timedelta(days=tag))
+            for s in _sz.szenarien_des_tages(
+                    by_eid, t0.timestamp(),
+                    (t0 + datetime.timedelta(days=1)).timestamp(), self.cfg,
+                    {}, koerper_map=kmap):
+                pk = "%d" % round(s["start"])
+                passe.append({"pass_key": pk, "start": s["start"],
+                              "events": s["n"], "kameras": len(s["kams"]),
+                              "personen": sorted(s["pers"]),
+                              "vision": bool(vmap.get(pk))})
+                if pk == str(pass_key):
+                    treffer = s
+        sicht = None
+        if treffer is not None:
+            zeilen = next((p["zeilen"] for p in _plv.kontrolle_lesen(dd)
+                           if p["pass_key"] == str(pass_key)), [])
+            # V4b: der LAUF-Stand (Erzaehl-Schritte + Urteil), nicht nur das
+            # Urteil — die Spalte zeigt waehrend eines Laufs mit, was passiert.
+            sicht = _vu.dreiwege(treffer, zeilen, kmap, _vu.lauf_lesen(dd, pass_key),
+                                 bool((self.cfg.get("vision") or {}).get("modell")))
+        with self._vision_lock:
+            laeuft = bool(self._vision_flug and self._vision_flug.laeuft)
+        # ... oder das Protokoll sagt, dass ein Lauf ohne Urteil offen ist (nach
+        # einem Dienst-Neustart weiss der Prozess-Zustand nichts mehr davon).
+        laeuft = laeuft or bool((sicht or {}).get("vision", {}).get("laeuft"))
+        with self._vision_lock:
+            nach = dict(self._nachanalyse)
+        # .164: die Felder des manuellen Testlaufs brauchen ihre Grenzen —
+        # so viele Zellen, wie dieser Durchgang ueberhaupt brauchbare Bilder
+        # hat, und so viele Bestaetigungen, wie es Herausforderer gibt.
+        _mat = (_vu.kandidaten(dd, pass_key, 1,
+                               sammeln=bool(self.cfg.get("diagnostic_collection")))
+                ["gesamt"] if treffer is not None else 0)
+        _gal_n = len(self._vision_galerien())
+        return {"passe": passe[:24], "pass_key": str(pass_key or ""),
+                "sicht": sicht, "laeuft": laeuft,
+                "lauffeld": {
+                    "zellen": int(self.cfg.get("vision_bilder_je_pass") or 1),
+                    "zellen_max": max(1, int(_mat or 1)),
+                    "material": int(_mat or 0),
+                    "voten": int(self.cfg.get("vision_min_voten") or 1),
+                    "voten_max": max(1, _gal_n - 1),
+                    "galerien": _gal_n,
+                    "doppellauf": bool(self.cfg.get("vision_doppellauf", True))},
+                "laeufe": (_vu.laufliste(dd, pass_key)
+                           if treffer is not None else []),
+                # .161: die Events dieses Durchgangs (fuer die erneute Analyse)
+                # und ihr Laufzustand. Die eids kommen aus DERSELBEN
+                # Szenario-Gruppierung wie die Anzeige — nicht aus einer
+                # zweiten Rechnung (Szenario-Prinzip).
+                "eids": [e["eid"] for e in ((treffer or {}).get("evs") or [])
+                         if e.get("eid")],
+                "sammeln": bool(self.cfg.get("diagnostic_collection")),
+                "nachanalyse": nach}
+
+    def vision_nachanalyse(self, pass_key):
+        """.161: EINEN vergangenen Durchgang noch einmal analysieren, damit
+        seine beurteilten Bilder im Kontroll-Speicher entstehen.
+
+        Der Fall dahinter (Live-Fund 08.08.): der Sammel-Modus ist AN, aber der
+        gewaehlte Durchgang lief davor — dann fehlt Vision jedes Material, und
+        der alte Hinweis "turn on diagnostic collection" ging ins Leere.
+
+        Gefahren wird der BESTEHENDE Nachhol-Weg (`process(..., nachhol=1)`):
+        stumm, ohne Alarme, ohne Live-Echo, mit dem kurzen Nachhol-Timeout, und
+        Event fuer Event unter dem normalen Analyse-Lock — die Live-Erkennung
+        wird also nie verdraengt, sie kommt dazwischen. Kein zweiter Decode-
+        oder Analysepfad. Einziger Unterschied zum stillen Nachholen: der
+        Koerper-Strang laeuft mit, denn nur er legt die Bilder ab.
+
+        Ohne Sammel-Modus verweigert der Anstoss — die Bilder wuerden nach der
+        Karenz sofort wieder verschwinden."""
+        if not self.cfg.get("diagnostic_collection"):
+            return False, ("turn on diagnostic collection under Person first — "
+                           "without it the images are deleted again right after "
+                           "the pass")
+        eids = self.vision_test_lage(pass_key).get("eids") or []
+        if not eids:
+            return False, "no events found for this walk-through"
+        with self._vision_lock:
+            if self._nachanalyse.get("laeuft"):
+                return False, ("a re-analysis is already running — one at a "
+                               "time")
+            self._nachanalyse = {"laeuft": True, "pass_key": str(pass_key),
+                                 "gesamt": len(eids), "fertig": 0}
+        threading.Thread(target=self._nachanalyse_thread,
+                         args=(str(pass_key), list(eids)), daemon=True,
+                         name="nachanalyse").start()
+        return True, (f"re-analysing {len(eids)} event(s) — the judged images "
+                      "are collected along the way, this takes a few minutes")
+
+    def _nachanalyse_thread(self, pass_key, eids):
+        self.log(f"RE-ANALYSIS start: pass={pass_key} events={len(eids)}")
+        try:
+            for eid in eids:
+                self.process_safe(eid, nachhol=1, koerper=True)
+                with self._vision_lock:
+                    self._nachanalyse["fertig"] = \
+                        int(self._nachanalyse.get("fertig") or 0) + 1
+        finally:
+            with self._vision_lock:
+                self._nachanalyse["laeuft"] = False
+            self.log(f"RE-ANALYSIS end: pass={pass_key}")
 
     def config_wiederherstellen(self, raw):
         """Config-Store aus einer hochgeladenen JSON zurueckspielen (UI 'Restore configuration').
@@ -3363,10 +4201,12 @@ class Service:
         if self.cfg.get("debug"):
             self.log(f"[dbg] {msg}")
 
-    def process(self, eid, nachhol=0):
+    def process(self, eid, nachhol=0, koerper=False):
         """nachhol=N (N>=1): Wiederholung einer frueher mit 'fehler' geendeten Analyse.
         Ein Nachhol-Lauf ist STUMM (kein Alert/Push/Telegram/MQTT, s. _nachhol_runde) und
-        fasst die Live-Gesundheitssignale nicht an — er repariert nur die Akte."""
+        fasst die Live-Gesundheitssignale nicht an — er repariert nur die Akte.
+        koerper=True (nur .161-Nachanalyse): derselbe stumme Weg, aber der Koerper-Strang
+        laeuft mit, weil NUR er die beurteilten Bilder in den Kontroll-Speicher legt."""
         cfg = self.cfg
         with self.lock:                                   # ein Event nach dem anderen (GPU)
             if eid in self.processed and not nachhol:     # Nachhol darf den Guard passieren, OHNE
@@ -3424,7 +4264,12 @@ class Service:
             t0 = time.time()
             res = run_analyze(cfg, eid, camera, persons, event_dir,
                               timeout_s=(int(cfg["nachhol_analyse_timeout_s"]) if nachhol else None),
-                              worker=self._worker())
+                              worker=self._worker(),
+                              # Z5: EINMAL vor dem Job entschieden — waehrend
+                              # der Analyse ist der Scharf-Zustand nicht mehr
+                              # abfragbar (anderer Prozess). Nur Live-Laeufe:
+                              # nur sie rufen unten _person_live.
+                              koerper=(not nachhol and self._koerper_scharf()))
             # P1: Provider-Guard-Vorfaelle aus dem Subprozess ins DIENST-Log heben —
             # analyze.log liest sonst niemand, und ein degradierter Lauf bliebe unsichtbar
             # (Plan-QS Lens3-8). qs S4 warnt auf den Marker.
@@ -3540,7 +4385,25 @@ class Service:
                 # PE4 (stufe2.md): Koerper-Strang — eigener, losgeloester
                 # Urteilsweg, nur wenn der User ihn scharf geschaltet hat;
                 # laeuft im Daemon-Thread, blockiert den Gesichts-Pfad nie.
-                self._person_live(entry.get("eid"))
+                self._person_live(entry.get("eid"), entry)
+                # V4 (konzept_vision.md §7): dritter Weg, Auslöser auf
+                # PASS-Ebene und erst am Durchgangs-Ende (Debounce). Nur ein
+                # Timer-Start, keine Arbeit, kein Lock — die Analyse laeuft
+                # unveraendert weiter.
+                self._vision_anstossen(entry.get("eid"), entry)
+            elif koerper:
+                # .161: Nachanalyse AUF WUNSCH eines Durchgangs. Sie faehrt den
+                # bestehenden Nachhol-Weg (stumm, keine Alarme, kein Live-Echo,
+                # kurzer Timeout) — mit der EINEN Ausnahme, dass der
+                # Koerper-Strang laufen darf: nur er legt die beurteilten Bilder
+                # in den Kontroll-Speicher, und genau die fehlen dem Nutzer.
+                # Vision wird bewusst NICHT angestossen: der Nutzer entscheidet
+                # selbst, wann er den (kostenpflichtigen) Lauf startet.
+                # still=True (.163): NUR das Bild ablegen. Ohne diesen Schalter
+                # meldete die Nachanalyse eines Durchgangs von gestern per
+                # Telegram, als stuende die Person gerade vor der Tuer
+                # (Live-Bug 09.08. 08:19).
+                self._person_live(entry.get("eid"), entry, still=True)
             if entry["kategorie"] == "fremd_verdacht":
                 # Auch OHNE nachhol-Flag kann ein Event alt sein (verspaetetes MQTT, Poll nach
                 # kurzer Netzstoerung). Die Karenz haette dann karenz Sekunden spaeter einen
@@ -3714,10 +4577,10 @@ class Service:
             self.log(f"presence push failed: {e}")
             return False
 
-    def process_safe(self, eid, nachhol=0):
+    def process_safe(self, eid, nachhol=0, koerper=False):
         """process() fuer Timer-/Sweep-Threads: Exception darf nie einen Thread still toeten."""
         try:
-            self.process(eid, nachhol=nachhol)
+            self.process(eid, nachhol=nachhol, koerper=koerper)
         except Exception as e:
             self.log(f"{eid}: unexpected error in the processing thread: {e}")
 
@@ -3855,7 +4718,14 @@ class Service:
             if gesamt > cap:
                 rest.sort()                                   # aelteste zuerst
                 n = 0
+                from core import frames as _fr
                 for _, groesse, p in rest:
+                    # Z1 (konzept_frames v2): GEPINNTE Clips haelt gerade
+                    # ein Abnehmer (Refcount je Halter) — nie wegraeumen,
+                    # sonst reisst der Size-Cap dem zweiten Halter die
+                    # Datei unterm Urteil weg (Widerleger-MUSS 4).
+                    if _fr.gepinnt(p):
+                        continue
                     if gesamt <= cap:
                         break
                     try:
@@ -3869,19 +4739,65 @@ class Service:
         except Exception as e:
             self.log(f"cache cleanup error: {e}")
 
-    def _person_live(self, eid):
-        """PE4: Koerper-Urteil im Hintergrund (core/personlive) — Meldung
-        traegt die Kennzeichnung 'person recognition, not face'
-        (User-Anforderung 04.08.). Kommt nur zum Zug, wenn der User den
-        Strang auf /person/modell scharf geschaltet hat."""
-        if not eid:
-            return
+    def _koerper_scharf(self):
+        """Hat der User den Koerper-Strang scharf geschaltet? EINE Auskunft
+        fuer beide Fragesteller: den Job-Parameter --koerper VOR der Analyse
+        (Z5) und das Urteil danach (_person_live)."""
         try:
             from core import personmodell as pm
             st = pm.status_lesen(self.cfg["data_dir"])
         except Exception:
-            return
-        if not (st and st.get("scharf")):
+            return False
+        return bool(st and st.get("scharf"))
+
+    def _kontroll_speicher(self, eid, entry=None):
+        """Z8 (konzept_frames.md §7): der Auftrag an den Kontroll-Speicher fuer
+        DIESES Event — Betriebsmodus aus der Config (diagnostic_collection;
+        schlank ist der Produkt-Default) und der DURCHGANG, zu dem das Event
+        gehoert. Der pass_key kommt aus szenarien.pass_key, also aus derselben
+        Gruppierung wie /heute; die App leistet die Szenario-Bildung selbst,
+        damit niemand je Einzel-Event nachsehen muss (Szenario-Prinzip).
+        None = kein Durchgang bestimmbar -> lieber gar nichts ablegen als je
+        Einzel-Event, das waere genau der Fehler, den das Prinzip verbietet."""
+        try:
+            import szenarien as _sz
+            by_eid = {}
+            try:
+                with open(self.log_path) as f:
+                    for ln in f:
+                        try:
+                            r = json.loads(ln)
+                        except Exception:
+                            continue
+                        if r.get("eid"):
+                            by_eid[r["eid"]] = r      # last-wins je eid (wie /heute)
+            except FileNotFoundError:
+                pass
+            if entry and entry.get("eid"):
+                by_eid[entry["eid"]] = entry          # unsere Zeile wird erst NACH uns geschrieben
+            pk = _sz.pass_key(by_eid, eid, self.cfg)
+            if not pk:
+                return None
+            return {"sammeln": bool(self.cfg.get("diagnostic_collection")),
+                    "pass_key": pk,
+                    "karenz_s": int(self.cfg.get("szenario_gap_min", 5)) * 60}
+        except Exception as e:
+            self.debug(f"{eid}: control store not addressable ({e})")
+            return None
+
+    def _person_live(self, eid, entry=None, still=False):
+        """PE4: Koerper-Urteil im Hintergrund (core/personlive) — Meldung
+        traegt die Kennzeichnung 'person recognition, not face'
+        (User-Anforderung 04.08.). Kommt nur zum Zug, wenn der User den
+        Strang auf /person/modell scharf geschaltet hat.
+
+        `still=True` (Nachanalyse eines VERGANGENEN Durchgangs, .163): der Lauf
+        legt nur das beurteilte Bild ab und schweigt danach vollstaendig. Die
+        Sperre liegt ZWEIMAL: `plv.urteilen(still=True)` kann konstruktiv kein
+        Melde-Objekt zurueckgeben, und dieser Mantel betritt den Melde-Block
+        gar nicht erst. Zwei Ebenen, weil genau hier am 09.08. eine Funktion
+        mit zwei Wirkungen scharf geschaltet und nur an eine gedacht wurde."""
+        if not eid or not self._koerper_scharf():
             return
         import threading
 
@@ -3889,7 +4805,17 @@ class Service:
             try:
                 from core import personlive as plv
                 u = plv.urteilen(self.cfg["data_dir"],
-                                 os.environ.get("FRIGATE_URL", ""), eid)
+                                 os.environ.get("FRIGATE_URL", ""), eid,
+                                 kontrolle=self._kontroll_speicher(eid, entry),
+                                 still=still)
+                if still:
+                    # Zweite, unabhaengige Sperre. KEIN Personenname im
+                    # Dienst-Log (Log-Vertrag §9) — die Zeile sagt nur, dass
+                    # gearbeitet und geschwiegen wurde.
+                    print("[personlive] quiet re-analysis: judged image "
+                          "stored, nothing announced, live state untouched",
+                          flush=True)
+                    return
                 if u:
                     # MQTT fuer HA-Automationen (User 04.08.): JEDER Treffer
                     # ueber der Schwelle auf ein eigenes Topic — das Feld
@@ -4840,25 +5766,47 @@ def make_handler(svc):
             if pfad == "/personlauf/loeschen":
                 # PE2b: Einzelbild- oder Lauf-Loeschung (Crop weg, Manifest-
                 # Grabstein bleibt; neuer Lauf kann jederzeit neu ernten).
+                # .146 (User 07.08.: 'fremde muessen auch geloescht werden
+                # koennen'): {"fremd": <datei>} loescht aus personlern/fremd/
+                # — Containment + Endungs-Vertrag, danach dasselbe
+                # Re-Training wie bei Personen-Bildern (FREMD_MIN-Regel
+                # greift von selbst, faellt der Pool unter 5).
                 from core import personernte as _pe
                 try:
                     _n2 = int(self.headers.get("Content-Length", 0))
                     _d2 = json.loads(self.rfile.read(min(_n2, 4096)) or b"{}")
                     _lid = str(_d2.get("lauf_id") or "")
                     _dat = _d2.get("datei")
+                    _frd = _d2.get("fremd")
                 except (ValueError, TypeError):
-                    _lid, _dat = "", None
-                if (not _lid or "/" in _lid or ".." in _lid
+                    _lid, _dat, _frd = "", None, None
+                if _frd is not None:
+                    _frd = str(_frd)
+                    _wurz = os.path.normpath(os.path.join(
+                        cfg["data_dir"], "personlern", "fremd"))
+                    _voll = os.path.normpath(os.path.join(_wurz, _frd))
+                    if (not _voll.startswith(_wurz + os.sep)
+                            or not _frd.lower().endswith(_reg.BILD_ENDUNGEN)
+                            or not os.path.isfile(_voll)):
+                        return self._send(400, json.dumps({"ok": False}),
+                                          "application/json")
+                    os.remove(_voll)
+                    # .147: Grabstein im Ursprungs-Lauf, damit der
+                    # Bestands-Skip das Event WIEDER anbieten darf.
+                    _pe.fremd_grabstein(cfg["data_dir"], _frd)
+                    _n3 = 1
+                elif (not _lid or "/" in _lid or ".." in _lid
                         or (_dat is not None
                             and ("/" in str(_dat) or ".." in str(_dat)))):
                     return self._send(400, json.dumps({"ok": False}),
                                       "application/json")
-                _n3 = _pe.loeschen(cfg["data_dir"], _lid,
-                                   str(_dat) if _dat else None)
+                else:
+                    _n3 = _pe.loeschen(cfg["data_dir"], _lid,
+                                       str(_dat) if _dat else None)
                 # Ganzer-Lauf-Verwurf des Laufs, der gerade auf Review
                 # wartet (User 04.08.: schlechtes Ergebnis muss komplett
                 # verwerfbar sein) -> Wizard wieder freigeben.
-                if _dat is None:
+                if _frd is None and _dat is None:
                     from core import personlauf as _pl
                     _zv = _pl.zustand_lesen(cfg["data_dir"])
                     if _zv and str(_zv.get("lauf_id")) == _lid \
@@ -4874,8 +5822,17 @@ def make_handler(svc):
                         from core import personmodell as _pm
                         _pm.trainieren(cfg["data_dir"])
                     except Exception as e:
+                        # .141 Panel-MUSS: der Fehlschlag wird SICHTBAR
+                        # (Modell-Karte), nicht nur eine Container-Logzeile —
+                        # die Karte zeigte sonst den Alt-Stand als aktuell.
                         print(f"[personmodell] Training fehlgeschlagen: {e}",
                               flush=True)
+                        try:
+                            from core import personmodell as _pmf
+                            _pmf.fehler_vermerken(
+                                cfg["data_dir"], f"{type(e).__name__}: {e}")
+                        except Exception:
+                            pass
                 _th.Thread(target=_pm_train2, daemon=True,
                            name="personmodell").start()
                 return self._send(200, json.dumps({"ok": True,
@@ -4905,6 +5862,11 @@ def make_handler(svc):
                                                       _falsch)
                 _zf.update(phase="fertig", abgenommen=_nok,
                            verworfen=_nfalsch)
+                # .147: bestaetigte FREMD-Bilder wandern in den Pool —
+                # das folgende Training liest ihn von selbst.
+                if _zf.get("person") == "FREMD":
+                    _zf["fremd_uebernommen"] = _pe.fremd_uebernehmen(
+                        cfg["data_dir"], _lid)
                 _pl.zustand_schreiben(cfg["data_dir"], _zf)
                 # PE3: nach jedem Review-Abschluss automatisch trainieren
                 import threading as _th
@@ -4914,8 +5876,17 @@ def make_handler(svc):
                         from core import personmodell as _pm
                         _pm.trainieren(cfg["data_dir"])
                     except Exception as e:
+                        # .141 Panel-MUSS: der Fehlschlag wird SICHTBAR
+                        # (Modell-Karte), nicht nur eine Container-Logzeile —
+                        # die Karte zeigte sonst den Alt-Stand als aktuell.
                         print(f"[personmodell] Training fehlgeschlagen: {e}",
                               flush=True)
+                        try:
+                            from core import personmodell as _pmf
+                            _pmf.fehler_vermerken(
+                                cfg["data_dir"], f"{type(e).__name__}: {e}")
+                        except Exception:
+                            pass
                 _th.Thread(target=_pm_train, daemon=True,
                            name="personmodell").start()
                 return self._send(200, json.dumps(
@@ -5145,6 +6116,44 @@ def make_handler(svc):
                                       json.dumps({"ok": ok, "msg": msg}, ensure_ascii=False), "application/json")
                 except Exception as e:
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
+            if pfad.startswith("/vision/"):
+                try:                                           # Vision detect: duenne Maentel, Logik in core/
+                    n = int(self.headers.get("Content-Length", 0))
+                    d = json.loads(self.rfile.read(min(n, 262144)) or b"{}")
+                except Exception:
+                    return self._send(400, json.dumps({"ok": False, "msg": "bad json"}), "application/json")
+                if pfad == "/vision/schalter":                  # E4-Gate: 409 + Klartext, was fehlt
+                    ok, msg = svc.vision_schalter(bool(d.get("aktiv")))
+                    return self._send(200 if ok else 409,
+                                      json.dumps({"ok": ok, "msg": msg}, ensure_ascii=False), "application/json")
+                if pfad == "/vision/galerie/weg":               # Zelle ablehnen -> Nachruecker
+                    ok, msg = svc.vision_galerie_weg(d.get("person") or "", d.get("schluessel") or "",
+                                                     d.get("reihe") or "", d.get("belegt") or [],
+                                                     d.get("reihe_belegt") or [])
+                elif pfad == "/vision/galerie/abnahme":
+                    ok, msg = svc.vision_galerie_abnahme(d.get("person") or "", d.get("groesse") or 0,
+                                                         d.get("auswahl") or [])
+                elif pfad == "/vision/galerie/vergessen":       # Ablehn-Gedaechtnis zuruecknehmen
+                    ok, msg = svc.vision_galerie_vergessen(d.get("person") or "")
+                elif pfad == "/vision/nachanalyse":             # .161: Durchgang erneut analysieren (Material fehlt)
+                    ok, msg = svc.vision_nachanalyse(d.get("pass_key") or "")
+                elif pfad == "/vision/urteil":                  # V4: Vision-Lauf fuer EINEN Durchgang (Szenario-Test)
+                    # .164: die beiden Felder des Testlaufs fahren mit — sie
+                    # gelten NUR fuer diesen Lauf (kein Config-Schreibweg).
+                    ok, msg = svc.vision_urteil_anstossen(
+                        str(d.get("pass_key") or ""), manuell=True,
+                        lauf_regeln={"bilder_je_pass": d.get("zellen"),
+                                     "min_voten": d.get("voten"),
+                                     "doppellauf": d.get("doppellauf")})
+                elif pfad == "/vision/schluessel":              # Key-Sofortpruefung (Modell-Liste, kein Bild)
+                    ok, msg = svc.vision_schluessel(d)
+                elif pfad in ("/vision/test", "/vision/konfig"):
+                    ok, msg = (svc.vision_test(d) if pfad == "/vision/test"
+                               else svc.vision_speichern(d))
+                else:
+                    return self._send(404, json.dumps({"ok": False, "msg": "unknown"}), "application/json")
+                return self._send(200 if ok else 400,
+                                  json.dumps({"ok": ok, "msg": msg}, ensure_ascii=False), "application/json")
             if pfad == "/config_wiederherstellen":             # Config-Store aus Upload zurueckspielen (UI-Restore)
                 try:
                     n = int(self.headers.get("Content-Length", 0))
@@ -5851,6 +6860,13 @@ def make_handler(svc):
                                .get("feuer_ab") or _plv.FEUER_AB)
                 except Exception:
                     _kmap, _kab = {}, 2
+                try:                  # V4 (§7/E6): Vision-Urteil je Durchgang —
+                    from core import vision as _visx       # reine Zusatz-INFO auf
+                    from core import visionurteil as _vu   # der Karte, nie ein
+                    _vmap = _vu.protokoll_karte(cfg["data_dir"])  # Alarm-Ausloeser
+                    _vis_grund = _visx.grund_text          # und nie ein Veto
+                except Exception:
+                    _vmap, _vis_grund = {}, str
                 szenarien = _szen.szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap_h,
                                                       nur_kameras=_nk,
                                                       koerper_map=_kmap,
@@ -6070,6 +7086,35 @@ def make_handler(svc):
                                               for p in _kp)
                                       + '<span class="fussnote">person recognition hint '
                                         '(below support rule)</span>')
+                    # V4: die Vision-Zeile steht auf der KARTE (nicht in der
+                    # Live-Meldung — der Alarm geht synchron raus, Vision
+                    # braucht Sekunden bis Minuten). Sie nennt die beiden
+                    # TATSAECHLICH verglichenen Namen; ueber ungepruefte
+                    # Personen sagt sie nichts (§1/§4).
+                    _vpk = "%d" % round(s["start"])
+                    _vz = _vmap.get(_vpk)
+                    if _vz:
+                        # .166 (User 09.08. am Screenshot): auf der KARTE steht
+                        # nur das ERGEBNIS. Der Paar-Zusatz "(A vs B)" war ein
+                        # Ehrlichkeits-Detail aus V4 (E6: nie eine Aussage ueber
+                        # ungepruefte Personen suggerieren) — an dieser Stelle
+                        # las er sich aber wie ein Zweifel am Ergebnis
+                        # ("entweder ist es X oder eben jemand anderes oder
+                        # unbekannt"). Er ist nicht geloescht, er ist umgezogen:
+                        # die volle Methodik (Runden, offene Paare, Zeiten,
+                        # welche zwei Galerien verglichen wurden) steht im
+                        # Erzaehl-Log des Erkennungstests, und der Link daneben
+                        # fuehrt genau dorthin.
+                        mitte += ('<span class="fussnote">vision: '
+                                  + (html.escape(_vz["person"])
+                                     if _vz.get("person") else
+                                     "no verdict — " + html.escape(
+                                         _vis_grund(_vz.get("grund"))[:70]))
+                                  + ' <a href="/erkennungstest?pass='
+                                  + urllib.parse.quote(_vpk)
+                                  + '" title="how vision got there: rounds, '
+                                  'galleries compared, timings">details</a>'
+                                  "</span>")
                     crows = []
                     for cam, cl in s["kams"].items():
                         chips = "".join(_chip(p, cl["eid"].get(p), k) for p, k in cl["erk"].items())
@@ -6485,6 +7530,51 @@ def make_handler(svc):
                     return self._send(200, open(_voll, "rb").read(),
                                       "image/jpeg")
                 return self._send(404, b"gone")
+            if path.startswith("/personlauf/fremdbild/"):
+                # .145: Fremd-Pool-Ansicht — Auslieferung mit Containment
+                # (Muster /personlauf/bild), jpg/png nach Endung.
+                _datei = urllib.parse.unquote(
+                    path[len("/personlauf/fremdbild/"):])
+                _wurz = os.path.normpath(os.path.join(
+                    cfg["data_dir"], "personlern", "fremd"))
+                _voll = os.path.normpath(os.path.join(_wurz, _datei))
+                if _voll.startswith(_wurz + os.sep) and os.path.isfile(_voll):
+                    _e = os.path.splitext(_voll)[1].lower()
+                    _typ = {".png": "image/png",
+                            ".webp": "image/webp"}.get(_e, "image/jpeg")
+                    return self._send(200, open(_voll, "rb").read(), _typ)
+                return self._send(404, b"gone")
+            if path.startswith("/person/kontrolle/bild/"):
+                # Z8: Kontroll-Bild ausliefern. Containment wie /person/treffer
+                # (realpath-Wache), aber ein AUSBRUCHS-Versuch ist eine schlechte
+                # Anfrage (400) und kein fehlendes Bild (404) — die beiden Faelle
+                # zu vermischen hat schon einmal einen Fund verdeckt.
+                _b = os.path.realpath(os.path.join(cfg["data_dir"], "personlern",
+                                                   "kontrolle"))
+                _m = re.fullmatch(rf"/person/kontrolle/bild/({_reg.DATEI_RE})"
+                                  rf"/({_reg.DATEI_RE}\.jpg)",
+                                  urllib.parse.unquote(path))
+                if not _m:
+                    return self._send(400, b"bad path")
+                _p = os.path.realpath(os.path.join(_b, _m.group(1), _m.group(2)))
+                if not _p.startswith(_b + os.sep):
+                    return self._send(400, b"bad path")
+                if not os.path.isfile(_p):
+                    return self._send(404, b"gone")
+                return self._send(200, open(_p, "rb").read(), "image/jpeg")
+            if path == "/person/kontrolle":
+                import webui
+                # Z8 (konzept_frames.md §7): Kachel-Browser der BEURTEILTEN Bilder,
+                # je Durchgang gruppiert (Szenario-Prinzip), view-only. Was die Seite
+                # zeigt, entscheidet der Schalter diagnostic_collection — der Renderer
+                # bekommt ihn mit und erklaert den leeren Fall, statt ihn zu verschweigen.
+                from core import personlive as _plv
+                from routes import personwizard as _r_pw
+                inhalt = _r_pw.kontrolle_seite(
+                    _plv.kontrolle_lesen(cfg["data_dir"]),
+                    bool(cfg.get("diagnostic_collection")))
+                return self._send(200, webui.layout(
+                    "Person", "/person/kontrolle", inhalt, self._banner()))
             m = re.match(r"^/person/treffer/([\w.\-]+)\.jpg$", path)
             if m:                # Koerper-Treffer-Crop (Chip-Bild, .120)
                 base = os.path.realpath(os.path.join(cfg["data_dir"],
@@ -6515,13 +7605,27 @@ def make_handler(svc):
                 # PE2b (User 04.08.: Anchors-Pendant fuer Personen), seit
                 # abends EIGENER Hauptbereich "Person" neben People (People
                 # = Gesichter, Person = Koerper-Bilder). Alte Learn-URL
-                # bleibt als Alias.
+                # bleibt als Alias. .145 (User 07.08.): ?wer=<Gruppe> zeigt
+                # NUR deren Bilder (statt Bandwurm), Fremd-Pool als Eintrag.
                 from core import personernte as _pe
                 from core import personmodell as _pm
                 from routes import personwizard as _r_pw
+                _qd = urllib.parse.parse_qs(
+                    urllib.parse.urlparse(self.path).query)
+                _wer = (_qd.get("wer", [""])[0] or "").strip()
+                _fdir = os.path.join(cfg["data_dir"], "personlern", "fremd")
+                try:
+                    _fremd = sorted(
+                        (f for f in os.listdir(_fdir)
+                         if f.lower().endswith(_reg.BILD_ENDUNGEN)
+                         and os.path.isfile(os.path.join(_fdir, f))),
+                        reverse=True)
+                except OSError:
+                    _fremd = []
                 inhalt = _r_pw.bestand_seite(
                     _pe.laeufe_lesen(cfg["data_dir"]),
-                    modell=_pm.status_lesen(cfg["data_dir"]))
+                    modell=_pm.status_lesen(cfg["data_dir"]),
+                    wer=_wer, fremd=_fremd)
                 return self._send(200, webui.layout(
                     "Person", "/person", inhalt, self._banner()))
             if path == "/personlauf/abnahme":
@@ -6569,7 +7673,8 @@ def make_handler(svc):
                                    if os.path.isdir(os.path.join(_fd, d)))
                 except OSError:
                     _pers = []
-                if _pp and _pp not in _pers:
+                # .147: "FREMD" ist reservierte Wahl (Fremd-Sammel-Lauf)
+                if _pp and _pp != "FREMD" and _pp not in _pers:
                     _pp = ""
                 from core import personlauf as _pl
                 _z = _pl.zustand_lesen(cfg["data_dir"])
@@ -6989,6 +8094,86 @@ def make_handler(svc):
                 from routes import benachrichtigungen as _r_benach
                 inhalt = _r_benach.render(cfg, KAT_LABELS)
                 return self._send(200, webui.layout("Notifications", "/benachrichtigungen", inhalt, self._banner()))
+            if path == "/vision":                  # Vision detect (Reiter)
+                import webui
+                from core import vision as _vis
+                from routes import vision as _r_vision
+                _blk, _prot, _vor = svc.vision_lage()
+                # ?kachel= zeigt eine andere Anbieter-Kachel VOR dem Speichern
+                # (sonst muesste man eine externe Verbindung speichern, um
+                # ueberhaupt die Cloud-Bestaetigung zu Gesicht zu bekommen —
+                # das waere ein Ring). Nur Anzeige, nichts wird geschrieben.
+                _w = urllib.parse.parse_qs(
+                    urllib.parse.urlsplit(self.path).query).get("kachel")
+                if _w and _w[0] in _vis.KACHELN:
+                    _blk["kachel"] = _w[0]
+                    _blk["betriebsart"] = _vis.KACHELN[_w[0]]["betriebsart"]
+                _blk["max_tokens"] = cfg.get("vision_max_tokens")
+                _blk["timeout_s"] = cfg.get("vision_timeout_s")
+                # .165/.166: die Haken-Felder der Seite lesen aus DIESEM
+                # Block. Die bestehenden lagen nie darin — sie standen deshalb
+                # IMMER unangehakt da, egal was gespeichert war, und ein Save
+                # von dieser Seite haette sie still ausgeschaltet. Die Menge
+                # kommt aus dem Renderer selbst (EINE Quelle), damit ein
+                # vierter Haken nicht denselben Fehler mitbringt.
+                for _s in _r_vision.CFGV_HAKEN:
+                    _blk[_s] = bool(cfg.get(_s))
+                _blk["api_key_gesetzt"] = bool(_blk.get("api_key"))
+                _blk.pop("api_key", None)          # Key verlaesst den Renderer nie
+                _lage = svc.vision_galerie_lage()
+                inhalt = _r_vision.seite(
+                    _blk, _vis.KACHELN, _vis.KACHEL_REIHE, _vor, _prot,
+                    svc._vision_modelle(_blk),
+                    _vis.MASCHINEN_ANKER,
+                    _vis.prompt_default(bool(_blk.get("cloud_ok"))),
+                    _reg.endpunkt_anzeige(_vis.endpunkt_wirksam(_blk)),
+                    _lage["deckung"], _lage["galerien"],
+                    _reg.VISION_MESSWERTE_STAND, _lage["reihen_text"],
+                    _vis.pruef_wort(_vis.kachel(_blk.get("kachel"))),
+                    # .165: der Orientierungssatz zur Modellklasse — ERZEUGT
+                    # aus der Messwerte-Registry, nie im Renderer formuliert.
+                    _reg.vision_klassen_hinweis(_blk.get("kachel")))
+                return self._send(200, webui.layout("Vision detect", "/vision",
+                                                    inhalt, self._banner()))
+            if path == "/erkennungstest":          # Szenario-Test, DREI Wege (V4, §4)
+                import webui
+                from routes import visiontest as _r_vt
+                _q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                _l = svc.vision_test_lage((_q.get("pass") or [""])[0])
+                return self._send(200, webui.layout(
+                    "Recognition test", "/erkennungstest",
+                    _r_vt.seite(_l["passe"], _l["pass_key"], _l["sicht"],
+                                _l["laeuft"], nachanalyse=_l["nachanalyse"],
+                                lauffeld=_l["lauffeld"], laeufe=_l["laeufe"]),
+                    self._banner(),
+                    refresh=30 if (_l["laeuft"]
+                                   or _l["nachanalyse"].get("laeuft"))
+                    else None))
+            if path == "/vision/galerie":          # Galerie-Wizard (V2, §6)
+                import webui
+                from routes import visionwizard as _r_vw
+                _q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                _p = (_q.get("person") or [""])[0]
+                try:
+                    _g = int((_q.get("groesse") or ["0"])[0])
+                except ValueError:
+                    _g = 0
+                _l = svc.vision_galerie_lage(_p, _g or None,
+                                             bool((_q.get("neu") or [""])[0]))
+                return self._send(200, webui.layout(
+                    "Build a gallery", "/vision", _r_vw.seite(**_l),
+                    self._banner()))
+            if path.startswith("/vision/galerie/bild/"):
+                # Galerie-KOPIE ausliefern, Containment wie /personlauf/bild
+                _rel = urllib.parse.unquote(path[len("/vision/galerie/bild/"):])
+                _pers, _, _datei = _rel.partition("/")
+                _wurz = os.path.normpath(os.path.join(cfg["data_dir"],
+                                                      "personlern", "galerien"))
+                _voll = os.path.normpath(os.path.join(_wurz, _pers, _datei))
+                if _voll.startswith(_wurz + os.sep) and os.path.isfile(_voll):
+                    return self._send(200, open(_voll, "rb").read(),
+                                      "image/jpeg")
+                return self._send(404, b"gone")
             if path == "/konfiguration":
                 import webui
                 NOTIF_KEYS = {"alert_cooldown", "anwesenheit_cooldown", "anwesenheit_push",
@@ -7209,6 +8394,13 @@ def make_handler(svc):
                     '<input type="file" accept="application/json,.json" style="display:none" '
                     'onchange="configRestore(this)"></label> '
                     '<span id="restore-status" class="dim"></span>'
+                    # E8 (konzept_vision.md §9): der Vision-API-Key faehrt wie die anderen
+                    # Meldekanal-Secrets MIT, damit ein Umzug ihn nicht still verliert. Das
+                    # ist ein Preis, also steht er hier — nicht in einer Fussnote. Text aus
+                    # der zentralen Quelle, kein zweites Literal.
+                    f'<p class="dim"><b>Careful:</b> this file {_reg.VISION_EXPORT_HINWEIS} '
+                    '(notification channels and vision detect), so that a restore on another '
+                    'machine really works.</p>'
                     '<p class="dim">Restore overwrites the current settings (the previous ones are kept '
                     'as a .bak) and restarts the service.</p></div>'
                     '<div class="card"><b>Full backup</b>'
@@ -7223,6 +8415,7 @@ def make_handler(svc):
                     '<input type="file" accept=".tar.gz,application/gzip" style="display:none" '
                     'onchange="vollRestore(this)"></label> '
                     '<span id="vollrestore-status" class="dim"></span>'
+                    f'<p class="dim"><b>Careful:</b> this archive {_reg.VISION_EXPORT_HINWEIS}.</p>'
                     '<p class="dim">Restore replaces those parts (each previous one is kept '
                     'once as *.pre-restore-*) and restarts the service. Uploading a few '
                     'hundred MB can take a while — leave the page open.</p></div>')
@@ -7271,6 +8464,22 @@ def make_handler(svc):
                 if pi:                                     # P4: aufgeloestes Auto-Placement ausweisen
                     h["placement"] = {"backend": pi.get("backend"), "quelle": pi.get("quelle"),
                                       "ts": pi.get("ts")}
+                # Z8 Mitnahme A: Verteiler-Rueckfall sichtbar (konzept_frames.md §3.2 —
+                # "geloggt und in /health sichtbar"). Rueckfall = die Abnehmer eines Events
+                # wollten verschiedene steps, also lief der Decode GETRENNT statt einmal;
+                # ein Download bleibt, das Urteil auch. NUR ANZEIGE, nichts wird gesteuert.
+                # Zwei Toepfe, weil der Zaehler prozessweit ist: 'dienst' ist der des
+                # Dienstprozesses (heute faehrt hier kein Lauf, also normal 0), 'worker' die
+                # aufsummierten Meldungen des Analyse-Workers, wo die Laeufe wirklich wohnen.
+                _wk = getattr(svc._worker_obj, "rueckfaelle", None) or {}
+                from core import frames as _frames_health
+                _dn = int(_frames_health.RUECKFAELLE.get("n") or 0)
+                h["frame_rueckfaelle"] = {"n": _dn + int(_wk.get("summe") or 0),
+                                          "dienst": _dn,
+                                          "worker": int(_wk.get("summe") or 0)}
+                _zl = _frames_health.RUECKFAELLE.get("zuletzt")
+                if _zl and _zl.get("steps"):               # nur die steps, nie der Clip-Name
+                    h["frame_rueckfaelle"]["zuletzt_steps"] = _zl["steps"]
                 return self._send(200, json.dumps(h), "application/json")
             if path == "/sync_diagnose":                   # .132: Diagnose-Paket BEIDE Seiten (carlsmith-Lehre)
                 # Ein Klick fuer Tester und uns: suslik-Bericht + Sync-Status +
@@ -8561,6 +9770,8 @@ def main():
     svc.start_wartung()
     svc.start_stoerungswaechter()
     svc.start_nachhol()                   # gescheiterte Analysen spaeter stumm nachholen
+    svc.vision_waisen_start()             # .164: Laeufe schliessen, die der letzte
+    #                                       Neustart mitten drin erwischt hat
     if not cfg["frigate_url"]:                 # frisch (Docker-Erstboot): erst der Setup-Wizard,
         svc.log("frigate_url empty — setup wizard (UI) only; Frigate poll starts after the wizard restart")
         while True:                            # Web-Thread laeuft weiter (Wizard); wir pollen nicht ins Leere

@@ -74,15 +74,49 @@ def _factory(*a, **kw):
     return _emb
 
 
-def _rss_mb():
+def _proc_mb(feld):
+    """Ein Feld aus /proc/self/status in MB (-1 = nicht lesbar)."""
     try:
         with open("/proc/self/status") as f:
             for z in f:
-                if z.startswith("VmRSS:"):
+                if z.startswith(feld + ":"):
                     return int(z.split()[1]) // 1024
     except Exception:
         pass
     return -1
+
+
+def _rss_mb():
+    """Aktuell belegt (VmRSS) — daran haengt der Neustart-Deckel
+    worker_rss_max_mb (verifyd.py:695-698)."""
+    return _proc_mb("VmRSS")
+
+
+def _vmhwm_mb():
+    """SPITZE seit Prozessstart (VmHWM). Der Deckel oben greift erst NACH
+    einem Job und sieht nur den Stand DANACH — die Spitze INNERHALB des Jobs
+    kann er konstruktionsbedingt nie sehen (konzept_frames.md v2 §5 'RAM').
+    VmHWM ist der einzige Wert, der sie belegt: er faellt nie."""
+    return _proc_mb("VmHWM")
+
+
+def _koerper_zusatz(argv):
+    """Z5 zusatz-Rueckweg: was der Koerper-Abnehmer im Analyse-Lauf geliefert
+    hat, in die Job-Antwort heben (konzept_frames.md v2 §3.2 'Wo der Lauf
+    wohnt'). Der Dienst sieht damit im Log, ob der zweite Abnehmer wirklich
+    lieferte, ohne die Uebergabe selbst zu oeffnen. Fehlt sie, ist das kein
+    Fehler: dann faehrt der Dienst wie immer seinen eigenen Weg."""
+    try:
+        d = argv[argv.index("--dir") + 1]
+        with open(os.path.join(d, "koerper.json")) as f:
+            k = json.load(f)
+    except Exception:
+        return None
+    return {"koerper_crops": len(k.get("top") or []),
+            "koerper_puffer_mb": k.get("puffer_mb"),
+            "koerper_samples": k.get("samples"),
+            **({"koerper_ausfall": str(k.get("ausfall"))[:120]}
+               if k.get("ausfall") else {})}
 
 
 @contextlib.contextmanager
@@ -122,34 +156,30 @@ def _job_ausfuehren(job):
                 # analyze haelt Zustand auf Modulebene -> run_path gibt jedem Lauf ein
                 # frisches Modul-Umfeld; nur der Embedder ueberlebt (Factory oben).
                 runpy.run_path(os.path.join(HERE, "analyze.py"), run_name="__main__")
+                zusatz = _koerper_zusatz(job.get("argv") or [])
             elif typ == "sammle":
                 import anlernen
                 anlernen.sammle(float(job.get("tage", 0.1)),
                                 mit_migriere=bool(job.get("mit_migriere", False)))
             elif typ == "ernte":
-                # E2 Frontal-Ernte, EIN Event je Job (Leitprinzip 5). Clip-Beschaffung
-                # exakt das analyze-Muster (SCRATCH-Cache, atomar via .part).
-                from urllib.request import urlretrieve
+                # E2 Frontal-Ernte, EIN Event je Job (Leitprinzip 5). Z2
+                # (konzept_frames v2): Clip ueber core.frames statt eigener
+                # SCRATCH-Kopie — EINE Beschaffung je Event fuer alle Wege
+                # (Cache-Rangfolge, .part-Atomik samt Waisen-Raeumung, Pin im
+                # selben Zug). Der Fallback '/tmp' entfaellt damit ebenfalls:
+                # er lag ausserhalb <data_dir>/clips und wurde nie geraeumt.
                 from core import ernte as _ernte
+                from core import frames as clipcache
                 import face_audit
                 eid = job["eid"]
-                scratch = os.environ.get("SCRATCH_DIR", "/tmp")
-                vid = os.path.join(scratch, str(eid).replace("/", "_") + ".mp4")
-                if not os.path.exists(vid):
-                    frigate = os.environ["FRIGATE_URL"].rstrip("/")
-                    try:
-                        urlretrieve(f"{frigate}/api/events/{eid}/clip.mp4", vid + ".part")
-                        os.replace(vid + ".part", vid)
-                    except Exception:
-                        try:                       # keine .part-Waisen im Cache
-                            os.unlink(vid + ".part")
-                        except FileNotFoundError:
-                            pass
-                        raise
-                zusatz = _ernte.ernte_event(
-                    vid, eid, job.get("kamera"), float(job.get("ts") or 0),
-                    float(job.get("fps_sample") or 3), job["schwellen"],
-                    job["lauf_dir"], emb=face_audit.Embedder())
+                vid = clipcache.clip_holen(eid)
+                try:
+                    zusatz = _ernte.ernte_event(
+                        vid, eid, job.get("kamera"), float(job.get("ts") or 0),
+                        float(job.get("fps_sample") or 3), job["schwellen"],
+                        job["lauf_dir"], emb=face_audit.Embedder())
+                finally:
+                    clipcache.frei(eid)   # nie eine Pin-Waise (Size-Cap)
             else:
                 return {"ok": False, "fehler": f"unbekannter typ '{typ}'"}
         ok, fehler = True, None
@@ -161,7 +191,16 @@ def _job_ausfuehren(job):
     antwort = {"ok": ok,
                "cpu_s": round(t1.user - t0.user + t1.system - t0.system, 1),
                "wall_s": round(time.monotonic() - t0w, 1),   # additiv; Leser nutzen .get()
-               "rss_mb": _rss_mb()}
+               "rss_mb": _rss_mb(), "vmhwm_mb": _vmhwm_mb()}
+    # Z8 Mitnahme A (konzept_frames.md §3.2): der Verteiler-Rueckfall auf
+    # GETRENNTE Laeufe faellt HIER an, nicht im Dienst — dessen eigenes
+    # core.frames saehe fuer immer 0 und /health loege durch Auslassung.
+    # Kumulativ ueber die Lebenszeit dieses Worker-Prozesses; der Dienst
+    # bildet daraus seine Summe (WorkerProzess.job). Nur melden, wenn der
+    # Verteiler ueberhaupt geladen ist — kein Import um des Zaehlers willen.
+    if "core.frames" in sys.modules:
+        antwort["frame_rueckfaelle"] = int(
+            sys.modules["core.frames"].RUECKFAELLE.get("n") or 0)
     if zusatz:
         antwort.update(zusatz)
     if fehler:

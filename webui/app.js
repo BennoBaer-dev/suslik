@@ -930,3 +930,452 @@ async function personlaufVerwerfen(lid) {
    app.js laeuft mit defer, das DOM steht hier also schon. */
 if (document.querySelector('.sa-cb')) syncAuswahlZaehlen();
 if (document.getElementById('sa-pruef')) syncVorpruefungPoll();
+
+/* --- Vision detect (konzept_vision.md v2 §4, Zug V1) -------------------------
+   Drei Knoepfe, dieselben Muster wie die Notifications-Seite: Felder mit der
+   Vorsilbe "vis-" sind der Vision-Block (Secret leer lassen = behalten), Felder
+   mit "cfgv-" sind die zwei Whitelist-Zahlen und gehen ueber /konfig. Der
+   Test-Knopf kann Minuten dauern (lokale CPU-Inferenz) — deshalb ohne Timeout
+   im Browser und mit sichtbarem Laufzustand statt eines stillen Spinners. */
+function _visionFelder() {
+  var d = {}, felder = document.querySelectorAll('[id^="vis-"]');
+  for (var i = 0; i < felder.length; i++) {
+    var f = felder[i];
+    d[f.id.slice(4)] = (f.type === 'checkbox') ? (f.checked ? 'true' : 'false') : f.value;
+  }
+  return d;
+}
+
+/* --- Ungespeicherte Aenderungen (User-Fund 08.08. abend) --------------------
+   Woertlich: "Save wird leider vergessen, zu klein, zu unscheinbar." Real
+   passiert: mehrfach konfiguriert, getestet, nie gespeichert — die Erkennung
+   lief die ganze Zeit gegen die ALTE Verbindung, weil der Test die getippten
+   Werte benutzt und das Speichern die gespeicherten. Genau diese Verwechslung
+   spricht der Dialog unten an.
+   EIN Zustand, ZWEI Anzeigen (oben an der Ueberschrift, unten an der klebenden
+   Leiste) — hier wird beides aus derselben Stelle geschaltet. */
+var VIS_DIRTY = {block: false, zahlen: false};
+var VIS_NAV_OK = false;
+
+function _visionDirtyZeigen() {
+  var an = VIS_DIRTY.block || VIS_DIRTY.zahlen;
+  var bar = document.getElementById('vision-savebar');
+  var u = document.getElementById('vision-dirty');
+  var o = document.getElementById('vision-dirty-oben');
+  if (bar) bar.classList.toggle('dirty', an);
+  if (u) u.hidden = !an;
+  if (o) o.hidden = !an;
+}
+
+function _visionDirtySetzen(was) {
+  if (was) VIS_DIRTY[was] = true; else VIS_DIRTY = {block: false, zahlen: false};
+  _visionDirtyZeigen();
+}
+
+function _visionDirtyVerdrahten() {
+  if (!document.getElementById('vision-savebar')) return;
+  var f = document.querySelectorAll('[id^="vis-"], [id^="cfgv-"]');
+  for (var i = 0; i < f.length; i++) {
+    (function (el) {
+      var was = el.id.indexOf('cfgv-') === 0 ? 'zahlen' : 'block';
+      /* input deckt Tippen ab, change die Checkboxen und die Auswahlfelder.
+         Ein LEER gelassenes Key-Feld loest nichts aus — leer heisst weiterhin
+         "behalte den gespeicherten Wert", das ist keine Aenderung. */
+      el.addEventListener('input', function () { _visionDirtySetzen(was); });
+      el.addEventListener('change', function () { _visionDirtySetzen(was); });
+    })(f[i]);
+  }
+  window.addEventListener('beforeunload', function (e) {
+    if (!(VIS_DIRTY.block || VIS_DIRTY.zahlen) || VIS_NAV_OK) return;
+    e.preventDefault();
+    e.returnValue = '';
+    return '';
+  });
+}
+
+/* Drei-Wege-Frage. confirm() kann nur ja/nein, hier braucht es drei Wege —
+   also ein winziger eigener Dialog im bestehenden Farbsystem. */
+function _visionFrage(titel, text, wahlen) {
+  var h = document.createElement('div');
+  h.className = 'vs-modal';
+  var box = document.createElement('div');
+  box.className = 'vs-box';
+  var t = document.createElement('h4');
+  t.textContent = titel;
+  var p = document.createElement('p');
+  p.textContent = text;
+  var w = document.createElement('div');
+  w.className = 'vs-w';
+  box.appendChild(t); box.appendChild(p); box.appendChild(w);
+  h.appendChild(box);
+  wahlen.forEach(function (wahl, i) {
+    var b = document.createElement('button');
+    b.className = 'gtb' + (i === 0 ? ' on' : '');
+    b.textContent = wahl[0];
+    b.onclick = function () { h.remove(); wahl[1](); };
+    w.appendChild(b);
+  });
+  document.body.appendChild(h);
+}
+
+/* Der zweite Save (/konfig) loest den geplanten Dienst-Neustart aus. Reisst der
+   die Verbindung ab, BEVOR die Antwort ankommt, landete man frueher im .catch
+   und der User las "error" — obwohl alles gespeichert war (real passiert
+   08.08.: 19:01:58 gespeichert, 19:02:10 Neustart, Store korrekt, Anzeige
+   "error"). Deshalb: nach erfolgreichem /vision/konfig ist ein Abbruch der
+   WAHRSCHEINLICHE Neustart, nicht ein Fehler — wir steigen in dasselbe
+   Warte-und-neu-laden ein wie beim normalen Speichern. Nur wenn schon der
+   ERSTE Aufruf scheitert, ist wirklich nichts gespeichert. */
+function visionSpeichern(danach) {
+  var s = document.getElementById('vision-status');
+  s.textContent = 'saving …';
+  var zahlen = {}, zf = document.querySelectorAll('[id^="cfgv-"]');
+  /* Checkboxen (die zwei optionalen Meldungen) tragen ihren Zustand in
+     .checked, nicht in .value — .value waere immer "on". */
+  for (var i = 0; i < zf.length; i++) {
+    zahlen[zf[i].id.slice(5)] = (zf[i].type === 'checkbox')
+      ? (zf[i].checked ? 'true' : 'false') : zf[i].value;
+  }
+  /* REIHENFOLGE (Beweis v4b): erst /vision/konfig — die Verbindung selbst —,
+     danach erst alles Weitere. Der Zahlen-Save laeuft nur, wenn wirklich eine
+     Zahl angefasst wurde: er startet den Dienst neu, und ein Neustart macht
+     jeden angehaengten Test unmoeglich. */
+  var zahlenDirty = VIS_DIRTY.zahlen;
+  fetch('/vision/konfig', {method: 'POST', body: JSON.stringify(_visionFelder())})
+    .then(function (r) { return r.json(); })
+    .catch(function () { return {ok: false, msg: 'could not reach the service — nothing was saved'}; })
+    .then(function (r) {
+      if (!r.ok) { s.textContent = r.msg; return; }
+      VIS_DIRTY.block = false;
+      _visionDirtyZeigen();
+      if (!zahlenDirty) {
+        s.textContent = 'saved — recognition uses this connection from now on';
+        _visionDirtySetzen(null);
+        if (danach) danach();
+        return;
+      }
+      return fetch('/konfig', {method: 'POST', body: JSON.stringify(zahlen)})
+        .then(function (r2) { return r2.json(); })
+        .then(function (r2) {
+          s.textContent = r2.ok ? 'saved — the service restarts in a moment' : r2.msg;
+          if (r2.ok) { _visionDirtySetzen(null); VIS_NAV_OK = true; _neustartDann('/vision', s); }
+        })
+        .catch(function () {
+          s.textContent = 'saved — the service is restarting, this page reloads in a moment';
+          _visionDirtySetzen(null);
+          VIS_NAV_OK = true;
+          _neustartDann('/vision', s);
+        });
+    });
+}
+
+/* Der Test laeuft seit .158 STUFE FUER STUFE (User: "ich will sehen, welche
+   Stufe laeuft, und am Ende ein Testlog"). Der Browser ruft 1, dann 2, dann 3;
+   jede Antwort traegt das strukturierte Stufen-Ergebnis, das sofort in die
+   Log-Zeile geschrieben wird. Bricht eine Stufe rot ab, bleiben die folgenden
+   als "not run" stehen. Kein Polling, kein Server-Zustand. */
+function _visionStufeText(s) {
+  var w = [];
+  if (s.dauer_s != null) w.push(s.dauer_s + ' s');
+  if (s.treffer != null) w.push(s.treffer + '/2 right');
+  if (s.ist != null) w.push(s.ist + ' tokens vs ' + s.soll);
+  return (s.text || '') + (w.length ? ' · ' + w.join(' · ') : '');
+}
+
+function visionTest(btn) {
+  if (VIS_DIRTY.block || VIS_DIRTY.zahlen) {
+    /* Der Irrtum, den der User beschrieben hat: nach einem gruenen Test hielt
+       er die Sache fuer erledigt — dabei hatte er nie gespeichert. */
+    _visionFrage(
+      'You have not saved this connection',
+      'The test would use the values you just typed. Recognition keeps using ' +
+      'the SAVED connection until you press Save — a green test alone changes ' +
+      'nothing about the verdicts.',
+      [['Save first, then test', function () { visionSpeichern(function () { _visionTestLauf(btn); }); }],
+       ['Test without saving', function () { _visionTestLauf(btn); }],
+       ['Cancel', function () { btn.disabled = false; }]]);
+    return;
+  }
+  _visionTestLauf(btn);
+}
+
+function _visionTestLauf(btn) {
+  var st = document.getElementById('vision-test-status');
+  var namen = ['reachability and model', 'forced-choice shape grids', 'token count'];
+  btn.disabled = true;
+  var felder = _visionFelder();
+  function stufe(nr) {
+    st.textContent = 'step ' + nr + '/3 — ' + namen[nr - 1] +
+      ' … (a local model on CPU can take minutes)';
+    var z = document.getElementById('vs-log-' + nr);
+    if (z) z.textContent = 'running …';
+    felder.stufe = nr;
+    return fetch('/vision/test', {method: 'POST', body: JSON.stringify(felder)})
+      .then(function (r) { return r.json(); })
+      .then(function (r) {
+        var s = r.msg && r.msg.stufe;
+        if (!s) { st.textContent = (r.msg && r.msg.msg) || r.msg || 'the test could not be run'; btn.disabled = false; return; }
+        if (z) z.textContent = _visionStufeText(s);
+        if (!r.msg.weiter) {
+          st.textContent = 'stopped at step ' + nr + ' — see the log below';
+          location.reload();
+          return;
+        }
+        if (nr < 3) return stufe(nr + 1);
+        st.textContent = 'done — ' + r.msg.ampel.toUpperCase();
+        location.reload();
+      })
+      .catch(function () {
+        st.textContent = 'step ' + nr + ' could not be run';
+        btn.disabled = false;
+      });
+  }
+  stufe(1);
+}
+
+function visionSchalter(an) {
+  var st = document.getElementById('vision-schalter-status');
+  st.textContent = 'saving …';
+  fetch('/vision/schalter', {method: 'POST', body: JSON.stringify({aktiv: an})})
+    .then(function (r) { return r.json(); })
+    .then(function (r) { st.textContent = r.msg || ''; if (r.ok) location.reload(); })
+    .catch(function () {
+      /* Der Schalter selbst startet den Dienst nicht neu — aber ein
+         gleichzeitiger Neustart (z.B. vom Speichern nebenan) kappt trotzdem
+         die Verbindung. Auch hier: warten und neu laden statt "error". */
+      st.textContent = 'the service is not answering right now — this page reloads in a moment';
+      _neustartDann('/vision', st);
+    });
+}
+
+/* Zuruecksetzen schreibt den DEFAULT-WORTLAUT ins Feld (nicht leer): das Feld
+   zeigt immer, was das System wirklich fragt. Gespeichert wird erst mit Save —
+   und dort rechnet der Server den Default wieder auf "kein eigener Prompt"
+   zurueck, damit die Marke "custom prompt" ehrlich bleibt. */
+function visionPromptZurueck() {
+  var t = document.getElementById('vis-prompt');
+  if (!t) return;
+  if (!confirm('Reset the question to the default wording?')) return;
+  t.value = (typeof VIS_PROMPT_STD === 'string') ? VIS_PROMPT_STD : '';
+  document.getElementById('vision-status').textContent =
+    'default wording restored — press Save to store it';
+}
+
+/* --- Recognition test (konzept_vision.md v2 §4, Zug V4) ----------------------
+   Der Lauf faehrt den ECHTEN Urteilspfad und dauert je nach Backend Sekunden
+   bis Minuten; die Seite laedt sich waehrenddessen selbst nach (refresh). */
+function rtVision(btn) {
+  var st = document.getElementById('rt-vision-status');
+  btn.disabled = true;
+  st.textContent = 'starting the vision run …';
+  /* .164: die zwei Felder gelten NUR fuer diesen Lauf — sie fahren mit der
+     Anfrage mit und werden nirgends gespeichert. Fehlen sie (Seite ohne
+     Felder), entscheidet der Server mit den Config-Werten. */
+  var zf = document.getElementById('rt-zellen');
+  var vf = document.getElementById('rt-voten');
+  var df = document.getElementById('rt-doppel');
+  fetch('/vision/urteil', {method: 'POST', body: JSON.stringify(
+    {pass_key: RT_PASS,
+     zellen: zf ? zf.value : null,
+     voten: vf ? vf.value : null,
+     /* Checkbox: .checked, nicht .value — .value waere immer "on". */
+     doppellauf: df ? (df.checked ? 'true' : 'false') : null})})
+    .then(function (r) { return r.json(); })
+    .then(function (r) {
+      st.textContent = r.msg || '';
+      if (r.ok) setTimeout(function () { location.reload(); }, 4000);
+      else btn.disabled = false;
+    })
+    .catch(function () { st.textContent = 'the run could not be started'; btn.disabled = false; });
+}
+
+/* .161: den Durchgang noch einmal analysieren, wenn der Sammel-Modus AN ist und
+   trotzdem kein Material da ist. Der Knopf steht nur in genau diesem Fall auf
+   der Seite; hier wird er nur ausgeloest. */
+function rtNachanalyse(btn) {
+  var st = document.getElementById('rt-nach-status');
+  btn.disabled = true;
+  st.textContent = 'starting …';
+  fetch('/vision/nachanalyse', {method: 'POST', body: JSON.stringify({pass_key: RT_PASS})})
+    .then(function (r) { return r.json(); })
+    .then(function (r) {
+      st.textContent = r.msg || '';
+      if (r.ok) setTimeout(function () { location.reload(); }, 3000);
+      else btn.disabled = false;
+    })
+    .catch(function () { st.textContent = 'it could not be started'; btn.disabled = false; });
+}
+
+/* --- Vision detect V2: Kacheln, Key-Sofortpruefung, Modellwahl ---------------
+   Die Kachel wird NICHT beim Klick gespeichert, sondern nur angezeigt
+   (?kachel=). Sonst muesste man eine externe Verbindung speichern, um
+   ueberhaupt die Cloud-Bestaetigung zu sehen, die das Speichern verlangt — ein
+   Ring. Gespeichert wird erst mit "Save", geprueft mit "Check the key". */
+function visionKachel(name) {
+  if ((VIS_DIRTY.block || VIS_DIRTY.zahlen)
+      && !confirm('You have unsaved changes. Switching provider discards them. Continue?')) return;
+  VIS_NAV_OK = true;          /* bewusster Wechsel: kein zweiter Dialog */
+  location.href = '/vision?kachel=' + encodeURIComponent(name);
+}
+
+/* Nach dem Check wurde frueher stumpf neu geladen — und genau daran ist am
+   08.08. ein Nutzer haengengeblieben: eine noch NICHT gespeicherte Verbindung
+   (URL + Key eingetippt, sofort geprueft) war nach dem Reload wieder die
+   GESPEICHERTE, die Liste passte nicht mehr dazu und wurde verworfen. Fuer den
+   Nutzer sah es aus, als haette er nichts eingegeben.
+   Jetzt: die Antwort TRAEGT die gefundenen Modelle, der Browser rendert sie,
+   und die eingetippten Felder bleiben stehen. Die harte Entdecken-Regel bleibt
+   dabei unverletzt — die Liste gehoert per Konstruktion zu genau der
+   Verbindung, die im Formular steht; aendert man daran etwas, wird sie
+   verworfen (siehe _visionEntdeckungVerwerfen). */
+var VIS_ENTDECKT = null;
+
+function _visionModellListe(modelle, gewaehlt) {
+  var w = document.getElementById('vision-modell-wahl');
+  if (!w) return;
+  if (!modelle || !modelle.length) { w.innerHTML = ''; return; }
+  var s = document.createElement('select');
+  s.id = 'vision-modell';
+  s.className = 'vs-sel';
+  s.onchange = function () { visionModell(s); };
+  if (!gewaehlt) {
+    var leer = document.createElement('option');
+    leer.value = '';
+    leer.textContent = '— pick one —';
+    s.appendChild(leer);
+  }
+  for (var i = 0; i < modelle.length; i++) {
+    var m = modelle[i], o = document.createElement('option');
+    o.value = m.id;
+    /* Die Anmerkung kommt vom SERVER (Messwerte-Registry) — hier steht keine
+       Zahl und kein Modellname fest im Code. */
+    o.textContent = m.id + ' — ' + ((m.badge && m.badge.text) || 'untested here');
+    if (m.id === gewaehlt) o.selected = true;
+    s.appendChild(o);
+  }
+  w.innerHTML = '';
+  w.appendChild(s);
+}
+
+function _visionEntdeckungVerwerfen() {
+  /* Kachel- oder Endpunkt-Wechsel nach dem Check: die eben gezeigte Liste
+     gehoert dann zu einer anderen Verbindung und ist damit hinfaellig. */
+  if (!VIS_ENTDECKT) return;
+  VIS_ENTDECKT = null;
+  _visionModellListe([], '');
+  var i = document.getElementById('vision-modell-info');
+  if (i) i.textContent = 'the connection changed — check it again to see which models it has';
+}
+
+function visionSchluessel(btn) {
+  var st = document.getElementById('vision-key-status');
+  btn.disabled = true;
+  st.textContent = 'asking the provider which models you can use …';
+  fetch('/vision/schluessel', {method: 'POST', body: JSON.stringify(_visionFelder())})
+    .then(function (r) { return r.json(); })
+    .then(function (r) {
+      btn.disabled = false;
+      var d = r.msg || {};
+      st.textContent = d.text || d || '';
+      var info = document.getElementById('vision-modell-info');
+      if (!r.ok) { if (info) info.textContent = d.text || 'the check failed'; _visionModellListe([], ''); return; }
+      VIS_ENTDECKT = {endpunkt: d.endpunkt, kachel: d.kachel};
+      if (info) info.textContent = d.text || '';
+      var sel = document.getElementById('vision-modell');
+      _visionModellListe(d.modelle, sel ? sel.value : '');
+    })
+    .catch(function () { st.textContent = 'the check could not be run'; btn.disabled = false; });
+}
+
+/* Eingaben, die die Verbindung veraendern, entwerten eine gezeigte Liste. */
+['vis-endpunkt', 'vis-host', 'vis-port', 'vis-api_key'].forEach(function (id) {
+  var f = document.getElementById(id);
+  if (f) f.addEventListener('input', _visionEntdeckungVerwerfen);
+});
+_visionDirtyVerdrahten();
+
+/* Modell-Dropdown: die Wahl aus der ENTDECKTEN Liste wird sofort in den
+   vision-Block des Config-Stores geschrieben (Entscheid 08.08.), damit sie einen
+   Neustart ueberlebt und beim naechsten Aufruf vorausgewaehlt ist. Danach
+   Reload, weil die Detailzeile unter der Auswahl serverseitig aus der
+   Messwerte-Registry kommt — kein zweiter Badge-Bau im Browser. */
+function visionModell(sel) {
+  var st = document.getElementById('vision-modell-status');
+  if (!sel.value) { st.textContent = ''; return; }
+  st.textContent = 'saving …';
+  sel.disabled = true;
+  var d = _visionFelder();
+  d.modell = sel.value;
+  fetch('/vision/konfig', {method: 'POST', body: JSON.stringify(d)})
+    .then(function (r) { return r.json(); })
+    .then(function (r) {
+      st.textContent = r.msg || '';
+      if (r.ok) { VIS_DIRTY.block = false; VIS_NAV_OK = true; location.reload(); }
+      else sel.disabled = false;
+    })
+    .catch(function () { st.textContent = 'error'; sel.disabled = false; });
+}
+
+/* --- Galerie-Wizard (konzept_vision.md v2 §6) --------------------------------
+   VW_ZELLEN traegt die Lesereihenfolge (Reihe 1 links->rechts, dann Reihe 2 …);
+   eine abgelehnte Zelle wird serverseitig ins Gedaechtnis geschrieben und durch
+   den naechstbesten Kandidaten DERSELBEN Ansicht ersetzt. */
+function vwWeg(i) {
+  var z = VW_ZELLEN[i], k = document.getElementById('vwz_' + i);
+  if (!z || !z.schluessel) return;
+  var belegt = VW_ZELLEN.filter(function (x) { return x && x.schluessel; })
+    .map(function (x) { return x.schluessel; });
+  // Die Zellen DIESER Reihe fahren mit: der Kurator (.161) haelt seine
+  // Vielfalts-Deckel je Reihe, und der Nachruecker soll den Tag nicht doppeln,
+  // den der Nutzer gerade behalten hat.
+  var reiheBelegt = VW_ZELLEN.filter(function (x) {
+    return x && x.schluessel && x.reihe === z.reihe;
+  }).map(function (x) { return x.schluessel; });
+  k.style.opacity = '.4';
+  fetch('/vision/galerie/weg', {method: 'POST', body: JSON.stringify(
+    {person: VW_PERSON, schluessel: z.schluessel, reihe: z.reihe, belegt: belegt,
+     reihe_belegt: reiheBelegt})})
+    .then(function (r) { return r.json(); })
+    .then(function (r) {
+      if (!r.ok) { k.style.opacity = '1'; return; }
+      var neu = r.msg && r.msg.zelle;
+      if (!neu) { location.reload(); return; }
+      VW_ZELLEN[i].schluessel = r.msg.schluessel;
+      k.style.opacity = '1';
+      k.className = 'vw-z' + (neu.geliehen_aus ? ' geliehen' : '');
+      k.querySelector('img').src = '/personlauf/bild/'
+        + encodeURIComponent(neu.lauf_id) + '/' + encodeURIComponent(neu.datei);
+      // Die Begruendungszeile kommt FERTIG vom Server (core/visiongalerie) —
+      // der Browser baut keinen zweiten Satz, sonst driften zwei Fassungen.
+      var zeile = document.createElement('div');
+      zeile.textContent = neu.begruendung
+        || [neu.tag || '?', neu.camera || '?', (neu.hoehe || '?') + ' px'].join(' · ');
+      k.querySelector('.vw-m').innerHTML = zeile.innerHTML
+        + (neu.geliehen_aus ? '<div class="vw-warn">from the ' + neu.geliehen_aus + ' row</div>' : '');
+    })
+    .catch(function () { k.style.opacity = '1'; });
+}
+
+function vwVergessen() {
+  if (!confirm('Forget the images you rejected for this gallery? They can be proposed again.')) return;
+  fetch('/vision/galerie/vergessen', {method: 'POST', body: JSON.stringify({person: VW_PERSON})})
+    .then(function () { location.reload(); });
+}
+
+function vwAbnehmen(btn) {
+  var st = document.getElementById('vw-status');
+  var auswahl = VW_ZELLEN.map(function (z) { return z && z.schluessel ? z.schluessel : null; });
+  var leer = auswahl.filter(function (s) { return !s; }).length;
+  if (leer && !confirm(leer + ' cell(s) could not be filled. Approve the gallery anyway?')) return;
+  btn.disabled = true;
+  st.textContent = 'copying the pictures into the gallery …';
+  fetch('/vision/galerie/abnahme', {method: 'POST', body: JSON.stringify(
+    {person: VW_PERSON, groesse: VW_GROESSE, auswahl: auswahl})})
+    .then(function (r) { return r.json(); })
+    .then(function (r) {
+      st.textContent = r.msg || '';
+      if (r.ok) location.href = '/vision/galerie?person=' + encodeURIComponent(VW_PERSON);
+      else btn.disabled = false;
+    })
+    .catch(function () { st.textContent = 'error'; btn.disabled = false; });
+}
