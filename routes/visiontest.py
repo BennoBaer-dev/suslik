@@ -41,6 +41,15 @@ STIL = """<style>
  .rt-liste { margin:6px 0 0; padding:0; list-style:none; font-size:13px; }
  .rt-liste li { padding:3px 0; border-bottom:1px solid var(--border); }
  .rt-liste li:last-child { border-bottom:0; }
+ /* Die Pass-Auswahl klappt zu, sobald ein Durchgang gewaehlt ist (User 10.08.:
+    "der Auswahlblock erschlaegt"). Reines <details> — die Seite braucht dafuer
+    kein Javascript, und ohne Vorauswahl startet sie offen. */
+ .rt-wahl > summary { list-style:none; cursor:pointer; display:flex;
+   flex-wrap:wrap; align-items:baseline; gap:4px 10px; }
+ .rt-wahl > summary::-webkit-details-marker { display:none; }
+ .rt-wahl .rt-meta { color:var(--dim); font-size:12px; }
+ .rt-wahl .rt-mehr { margin-left:auto; font-size:12px; color:var(--accent); }
+ .rt-wahl[open] .rt-mehr { color:var(--dim); }
  .rt-p { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
  .rt-pk { text-align:left; padding:8px 10px; border-radius:8px; cursor:pointer;
    background:var(--surface-2); border:1px solid var(--border);
@@ -54,6 +63,13 @@ STIL = """<style>
    background:rgba(0,0,0,.25); border:1px solid var(--border); }
  .rt-b img { width:100%; height:120px; object-fit:contain; display:block; }
  .rt-b figcaption { font-size:11px; color:var(--dim); padding:3px 4px; }
+ /* Das GEFRAGTE Bild in voller Breite der Spalte — es ist das eine Bild, um das
+    der ganze Lauf geht, und es steht ueber den Einzelzellen. `height:auto` haelt
+    das Seitenverhaeltnis, `max-width` verhindert jeden Ueberlauf (S9). */
+ .rt-gv { margin:8px 0 0; border-radius:8px; overflow:hidden;
+   background:rgba(0,0,0,.25); border:1px solid var(--border); }
+ .rt-gv img { width:100%; max-width:100%; height:auto; display:block; }
+ .rt-gv figcaption { font-size:11px; color:var(--dim); padding:4px 5px; }
  .rt-log { margin-top:10px; border-top:1px solid var(--border); padding-top:8px; }
  .rt-log b { font-size:12px; color:var(--dim); text-transform:uppercase;
    letter-spacing:.04em; }
@@ -129,16 +145,30 @@ def _kopf(kosten):
             f"operation.</p><div class=\"card\">{kosten}</div>")
 
 
+def _wer(p):
+    """Wer in diesem Durchgang erkannt wurde &mdash; EINE Formulierung fuer die
+    Kachel und fuer die Kopfzeile des gewaehlten Durchgangs."""
+    return ", ".join(sorted(p.get("personen") or [])) or "nobody recognized"
+
+
 def _passliste(passe, gewaehlt):
+    """Der Auswahlblock &mdash; zugeklappt, sobald ein Durchgang gewaehlt ist.
+
+    Der Fall dahinter (User 10.08.): wer die Seite mit einem Durchgang betritt
+    (Deep-Link vom Event) oder gerade einen angeklickt hat, will das ERGEBNIS
+    sehen und nicht zuerst durch zwei Dutzend Kacheln scrollen. Der gewaehlte
+    Durchgang steht dann als eine Zeile da, die Auswahl bleibt einen Klick
+    entfernt. Ohne Vorauswahl startet der Block offen, denn dann ist die Wahl
+    das Einzige, was zu tun ist. Umgeschaltet wird an `gewaehlt`, also am
+    Query-Parameter `?pass=` der Seite &mdash; kein zweiter Zustand."""
     karten = []
     for p in passe or []:
-        wer = ", ".join(sorted(p.get("personen") or [])) or "nobody recognized"
         karten.append(
             f'<button class="rt-pk{" on" if p["pass_key"] == gewaehlt else ""}" '
             f"onclick=\"location.href='/erkennungstest?pass="
             f'{urllib.parse.quote(p["pass_key"])}\'">'
             f'<b>{_zeit(p.get("start"))}</b>'
-            f'<small>{html.escape(wer)}</small>'
+            f'<small>{html.escape(_wer(p))}</small>'
             f'<small>{p.get("events") or 0} events &middot; '
             f'{p.get("kameras") or 0} camera(s)'
             + (" &middot; vision done" if p.get("vision") else "")
@@ -147,10 +177,74 @@ def _passliste(passe, gewaehlt):
         return ('<div class="card"><b>1 &middot; Which walk-through</b>'
                 '<div class="dim">No passes recorded yet. As soon as somebody '
                 "walks across the property, they appear here.</div></div>")
-    return ('<div class="card"><b>1 &middot; Which walk-through</b>'
+    gew = next((p for p in passe or [] if p["pass_key"] == gewaehlt), None)
+    if gew:
+        # Die schmale Kopfzeile des gewaehlten Durchgangs. Genau die Angaben der
+        # Kachel, nur in einer Zeile — nichts wird hier neu behauptet.
+        kopf = (f'<b>{_zeit(gew.get("start"))} &middot; '
+                f'{html.escape(_wer(gew))}</b>'
+                f'<span class="rt-meta">{gew.get("events") or 0} event(s) '
+                f'&middot; {gew.get("kameras") or 0} camera(s)</span>'
+                '<span class="rt-mehr">choose another walk-through</span>')
+    elif gewaehlt:
+        # Gewaehlt, aber nicht in der Liste (aelter als die gezeigten Tage):
+        # dann behauptet die Kopfzeile nichts ueber ihn.
+        kopf = ('<b>1 &middot; Which walk-through</b>'
+                '<span class="rt-mehr">choose another walk-through</span>')
+    else:
+        kopf = ('<b>1 &middot; Choose a walk-through</b>'
+                f'<span class="rt-meta">{len(karten)} recent pass(es)</span>')
+    return ('<div class="card">'
+            f'<details class="rt-wahl"{"" if gewaehlt else " open"}>'
+            f"<summary>{kopf}</summary>"
             '<div class="dim">The most recent passes, grouped exactly like on '
             "the Today page.</div>"
-            f'<div class="rt-p">{"".join(karten)}</div></div>')
+            f'<div class="rt-p">{"".join(karten)}</div>'
+            "</details></div>")
+
+
+MAX_GESICHTER = 12          # so viele Kacheln wie die Gitter-Vorschau zeigt
+
+
+def _gesichtskacheln(g):
+    """Die Gesichter DIESES Durchgangs als Bilder (User 10.08.: "auch bei Face
+    die Bilder sehen &mdash; welche wurden gematcht und welche nicht").
+
+    Die Spalte sagte bis dahin nur, WIE VIELE Events einen Namen trugen. Person
+    und Vision zeigten daneben ihre Bilder, hier stand nur Text. Gezeigt wird
+    jetzt, was die Analyse damals abgelegt hat: je Event der erkannte Crop mit
+    seinem Score, und fuer ein Event ohne Namen derselbe Crop mit "not matched".
+
+    Ehrlich bleibt die Spalte dadurch, dass sie das FEHLEN benennt: hat ein
+    unerkanntes Event kein Bild hinterlassen, steht das als Satz da &mdash; die
+    Zahlen daneben stammen aus der Akte und werden nicht an den Bildern
+    nachgerechnet."""
+    kacheln = list(g.get("bilder") or [])
+    unbek = int(g.get("unbekannt") or 0)
+    ohne_name = sum(1 for b in kacheln if not b.get("person"))
+    zeigen = kacheln[:MAX_GESICHTER]
+    bilder = "".join(
+        '<figure><img loading="lazy" src="/events/'
+        + urllib.parse.quote(str(b.get("eid") or "")) + "/"
+        + urllib.parse.quote(str(b.get("datei") or "")) + '" alt="">'
+        "<figcaption>"
+        + (html.escape(str(b["person"])) if b.get("person") else "not matched")
+        + (f' {b["score"]:.2f}' if isinstance(b.get("score"), (int, float))
+           else "")
+        + "</figcaption></figure>"
+        for b in zeigen if b.get("eid") and b.get("datei"))
+    hinweise = []
+    if len(kacheln) > len(zeigen):
+        hinweise.append(f"showing {len(zeigen)} of {len(kacheln)} picture(s)")
+    if unbek > ohne_name:
+        fehlt = unbek - ohne_name
+        hinweise.append(f"{fehlt} of the {unbek} unmatched event(s) kept no "
+                        "picture")
+    if not kacheln:
+        hinweise.append("no face picture was kept for this pass")
+    return ((f'<div class="rt-b">{bilder}</div>' if bilder else "")
+            + (f'<div class="rt-q">{" &middot; ".join(hinweise)}</div>'
+               if hinweise else ""))
 
 
 def _gesicht(g):
@@ -171,7 +265,8 @@ def _gesicht(g):
             '<div class="rt-q">embedding comparison against your reference '
             "faces &mdash; from the record of this pass</div>"
             f'<div class="rt-erg">{erg}</div>'
-            f'<ul class="rt-liste">{li}</ul>{rest}</div>')
+            f'<ul class="rt-liste">{li}</ul>{rest}'
+            + _gesichtskacheln(g) + "</div>")
 
 
 def _koerper(k, pass_key):
@@ -236,13 +331,27 @@ def _gitter(z, pass_key):
 
     Bis .159 stand hier eine Liste mit einem Urteil JE BILD — die gibt es nicht
     mehr, weil der ganze Durchgang als EIN Gitter gefragt wird. Gezeigt wird
-    deshalb, was in das Gitter hineinging; das Urteil steht darunter, einmal."""
+    deshalb, was in das Gitter hineinging; das Urteil steht darunter, einmal.
+
+    Seit .169 steht darueber das GERENDERTE Gitter selbst, sofern der Lauf es
+    abgelegt hat (`gitter_datei`) — also genau das Bild, das der Urteiler sah.
+    Ausgeliefert ueber den vorhandenen Kontroll-Bild-Weg, kein eigener
+    Endpunkt. Alte Laeufe haben das Feld nicht; dann bleibt es bei den Zellen,
+    es wird nichts behauptet."""
     zellen = z.get("bilder") or []
     if not zellen:
         return ""
     g = z.get("gitter") or {}
     n = int(g.get("zellen") or len(zellen))
     luecken = int(g.get("luecken") or 0)
+    gd = z.get("gitter_datei")
+    voll = ("" if not gd else
+            '<figure class="rt-gv"><img loading="lazy" '
+            'src="/person/kontrolle/bild/'
+            + urllib.parse.quote(pass_key) + "/" + urllib.parse.quote(str(gd))
+            + '" alt="the candidate grid of this run">'
+            "<figcaption>the picture the model was actually shown</figcaption>"
+            "</figure>")
     bilder = "".join(
         '<figure><img loading="lazy" src="/person/kontrolle/bild/'
         + urllib.parse.quote(pass_key) + "/" + urllib.parse.quote(b["datei"])
@@ -251,7 +360,8 @@ def _gitter(z, pass_key):
     return (f'<div class="rt-q">candidate grid: {n} cell(s) from this '
             "walk-through, asked as ONE picture"
             + (f" ({luecken} cell(s) left empty)" if luecken else "")
-            + f'</div><div class="rt-b">{bilder}</div>')
+            + f"</div>{voll}"
+            + f'<div class="rt-b">{bilder}</div>')
 
 
 def _runden(z):
@@ -324,10 +434,19 @@ def _felder(lf):
 
     Sie sind bewusst KEINE Einstellung — sie werden nirgends gespeichert, die
     Automatik faehrt weiter mit den Werten aus den Einstellungen. Deshalb steht
-    "for this run" an beiden und der Hinweis darunter. Vorbelegt sind sie mit
-    genau den Config-Werten, und ihre Obergrenzen kommen aus der Wirklichkeit
-    dieses Durchgangs: mehr Zellen als brauchbare Bilder und mehr
-    Bestaetigungen als moegliche Vergleiche gibt es nicht."""
+    "for this run" an beiden und der Hinweis darunter. Vorbelegt sind beide mit
+    genau den Config-Werten.
+
+    OBERGRENZEN (.170): die Bestaetigungen deckelt die Wirklichkeit dieses
+    Durchgangs — mehr Vergleiche, als es Herausforderer-Galerien gibt, kann
+    niemand fahren. Die ZELLENZAHL deckelt sie nicht mehr: bis .169 war ihr
+    Maximum die Zahl der brauchbaren Bilder, und ein Durchgang mit einem
+    einzigen Bild belegte das Feld mit 1 — der Testlauf fuhr dann `cells=1/1`,
+    obwohl die Automatik denselben Durchgang mit dem Config-Wert gefahren
+    haette (User-Fund 09.08.). Ein Test, der stillschweigend andere Regeln
+    faehrt als der Betrieb, taugt nicht zum Vergleich. Zuwenig Material
+    verschwindet dadurch nicht aus der Anzeige: der Satz darunter nennt die
+    brauchbaren Bilder, und das Gitter wird schlicht kleiner."""
     lf = dict(lf or {})
     if not lf:
         return ""
@@ -347,8 +466,10 @@ def _felder(lf):
             "twice (swap check)</label></div>"
             f'<div class="rt-q">All three apply to THIS run only &mdash; nothing is '
             f"saved and normal operation keeps its own settings. This "
-            f'walk-through has {lf.get("material", 0)} usable picture(s), and '
-            f'{lf.get("galerien", 0)} approved galleries allow at most {v_max} '
+            f'walk-through has {lf.get("material", 0)} usable picture(s) '
+            "&mdash; asking for more cells than that is fine, the grid just "
+            f'gets smaller. {lf.get("galerien", 0)} approved galleries allow '
+            f"at most {v_max} "
             "comparison(s). With the swap check on, a comparison costs two "
             "requests; without it, one &mdash; and it then rests on a single "
             "answer.</div>")

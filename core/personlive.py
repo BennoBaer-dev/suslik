@@ -272,6 +272,21 @@ def kontrolle_raeumen(data_dir, kontrolle, jetzt=None):
                 letzt = max(letzt, float(e.get("ts") or 0))
         except OSError:
             pass                   # Ordner ohne Protokoll: Alter aus den Dateien
+        # Das abgelegte Kandidaten-Gitter des Vision-Laufs ist KEINE Waise: es
+        # steht mit Namen in der Abschlusszeile des Vision-Protokolls
+        # (`gitter_datei`, geschrieben von core.visionurteil.gitter_ablegen).
+        # Gebucht wird genau dieses Feld — VERFALL und SCHLANK gelten
+        # unveraendert weiter, es entsteht keine zweite Aufbewahrungsregel.
+        try:
+            for z in open(os.path.join(d, VISION_PROTOKOLL)):
+                try:
+                    e = json.loads(z)
+                except ValueError:
+                    continue
+                if e.get("gitter_datei"):
+                    gebucht.add(e["gitter_datei"])
+        except OSError:
+            pass
         for fn in dateien:
             try:
                 letzt = max(letzt, os.path.getmtime(os.path.join(d, fn)))
@@ -354,8 +369,16 @@ def _emb1(bild_rgb):
     from PIL import Image
     if _CACHE["sess"] is None:
         import onnxruntime as ort
+        # Thread-Kappung wie bei JEDER eigenen ORT-Session (face_audit._ort_thread_opts):
+        # ohne explizite intra_op_num_threads baut onnxruntime seinen Pool nach den
+        # HOST-Kernen und pinnt Thread i an Kern i -> pthread_setaffinity_np scheitert
+        # fuer jeden Kern ausserhalb der cgroup-Maske mit EINVAL. Das kostete je
+        # Vision-Lauf vier rote [E]-Zeilen im Prod-Log (.170). Kein Monkeypatch von
+        # ort.InferenceSession -- die Optionen haengen nur an unserer eigenen Session.
+        from face_audit import _ort_thread_opts
         _CACHE["sess"] = ort.InferenceSession(
-            _dino_pfad(), providers=["CPUExecutionProvider"])
+            _dino_pfad(), providers=["CPUExecutionProvider"],
+            sess_options=_ort_thread_opts())
     im = np.asarray(Image.fromarray(bild_rgb).resize(GROESSE),
                     dtype=np.float32) / 255.0
     x = ((im - MEAN) / STD).transpose(2, 0, 1)[None]
@@ -459,24 +482,47 @@ def _bild_holen(frigate_url, eid, data_dir=None):
             if _CACHE.get("wache") is None:
                 from pose_wache import PoseWache
                 _CACHE["wache"] = PoseWache()
-            from ernte_lauf import person_zuschnitt
-            beste, beste_px = None, 0
+            from ernte_lauf import person_zuschnitt, blick_bestimmen
+            beste, beste_px, beste_mess = None, 0, {}
             for _score, _fi, crop_bgr, hoehe in top[:2]:
                 if hoehe < 60:
                     continue
                 zug = crop_bgr
+                # pose_erkannt ist ausdruecklich FALSE und nicht bloss "Feld
+                # fehlt": ein Altbild von vor dieser Version traegt den
+                # Schluessel gar nicht und darf deshalb nicht wie ein Bild
+                # ohne Skelett behandelt werden. Genau diese Unterscheidung
+                # braucht die Kandidaten-Auswahl.
+                mess = {"pose_erkannt": False}
                 try:
                     _komplett, det = _CACHE["wache"].pruefen(crop_bgr)
                     if det.get("punkte") is not None:
-                        zug, _ant, _box = person_zuschnitt(
+                        zug, anteil, zbox = person_zuschnitt(
                             crop_bgr, det["punkte"], det["scores"])
+                        # Die Pose-Wache laeuft hier ohnehin, ihre Messwerte
+                        # wurden bisher weggeworfen (User-Fund 09.08.: "wir
+                        # nehmen alle Bilder, bei denen die Person optimal zu
+                        # sehen ist"). Genau dafuer ist `person_anteil` da —
+                        # Skelett-Box-Flaeche am Crop, also wie viel Person
+                        # ueberhaupt im Bild ist. Ohne ihn bewertet die
+                        # Kandidaten-Auswahl belaubte Buesche als "scharf".
+                        # FELDNAMEN WIE IM ERNTE-MANIFEST (core/personernte.py),
+                        # damit die Kurator-Bewertung sie ohne Umweg liest —
+                        # keine zweite Struktur fuer dieselbe Sache.
+                        blick, blick_mess = blick_bestimmen(det, crop_bgr.shape[0])
+                        mess = {"pose_erkannt": True,
+                                "person_anteil": anteil, "zuschnitt": zbox,
+                                "blick": blick, "blick_mess": blick_mess,
+                                "wache": {"kopf": det.get("kopf"),
+                                          "knoechel": det.get("knoechel"),
+                                          "fuesse": det.get("fuesse")}}
                 except Exception:
                     pass               # Zuschnitt ist Politur, nie Blocker
                 px = zug.shape[0] * zug.shape[1]
                 if px > beste_px:
-                    beste, beste_px = zug, px
+                    beste, beste_px, beste_mess = zug, px, mess
             if beste is not None:
-                return Image.fromarray(beste[:, :, ::-1]), "frames"
+                return Image.fromarray(beste[:, :, ::-1]), "frames", beste_mess
     except Exception:
         pass
     # Notnagel: Snapshot + Frigate-Box (Alt-Weg bis .147)
@@ -487,7 +533,7 @@ def _bild_holen(frigate_url, eid, data_dir=None):
             ev = json.loads(r.read())
         box = (ev.get("data") or {}).get("box")
         if not box:
-            return None, "snapshot"
+            return None, "snapshot", {}
         with urllib.request.urlopen(
                 f"{frigate_url.rstrip('/')}/api/events/{eid}"
                 "/snapshot-clean.webp", timeout=15) as r:
@@ -499,10 +545,10 @@ def _bild_holen(frigate_url, eid, data_dir=None):
         rt = min(W, int((x + w * (1 + RAND)) * W))
         bb = min(H, int((y + h * (1 + RAND)) * H))
         if bb - t < 60:
-            return None, "snapshot"
-        return im.crop((l, t, rt, bb)), "snapshot"
+            return None, "snapshot", {}
+        return im.crop((l, t, rt, bb)), "snapshot", {}
     except Exception:
-        return None, "snapshot"
+        return None, "snapshot", {}
 
 
 def urteilen(data_dir, frigate_url, eid, schwelle=None, kontrolle=None,
@@ -541,7 +587,7 @@ def urteilen(data_dir, frigate_url, eid, schwelle=None, kontrolle=None,
     if m is None:
         return None
     schwelle = float(schwelle or status.get("schwelle") or SCHWELLE_STD)
-    crop, quelle = _bild_holen(frigate_url, eid, data_dir)
+    crop, quelle, mess = _bild_holen(frigate_url, eid, data_dir)
     if crop is None:
         return None
     e = _emb1(np.asarray(crop))
@@ -552,11 +598,16 @@ def urteilen(data_dir, frigate_url, eid, schwelle=None, kontrolle=None,
     # verworfenen Faelle sichtbar bleiben (FREMD-Abweisung gleich unten,
     # unter der Schwelle weiter unten). Genau die sind interessant, wenn
     # jemand wissen will, WARUM ein Durchgang nicht gemeldet wurde.
+    # `mess` sind die Pose-Messwerte aus derselben Kette (person_anteil, blick,
+    # wache) — sie kosten nichts extra und beantworten die Frage, auf die es bei
+    # der Kandidaten-Auswahl ankommt: wie viel PERSON ist im Bild, statt wie
+    # viel Kantenstruktur. Beim Notnagel-Weg (quelle='snapshot') ist `mess` leer;
+    # fehlende Werte erzeugen in der Bewertung weder Bonus noch Abzug.
     kontrolle_ablegen(data_dir, kontrolle, eid, crop,
                       {"klasse": (m["personen"][k] if k < len(m["personen"])
                                   else "FREMD"),
                        "score": round(float(proba[k]), 3), "quelle": quelle,
-                       "schwelle": round(float(schwelle), 3)})
+                       "schwelle": round(float(schwelle), 3), **(mess or {})})
     if still:
         # HIER endet der stille Lauf — vor JEDEM Live-Anteil. Der Schnitt liegt
         # bewusst direkt hinter dem Ablegen und nicht weiter unten: alles ab

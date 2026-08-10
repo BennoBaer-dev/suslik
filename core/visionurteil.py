@@ -59,6 +59,7 @@ wird hier NIE genommen — dieses Modul kennt ihn nicht einmal.
 """
 import json
 import os
+import re
 import time
 
 from core import personlive as _plv
@@ -79,7 +80,7 @@ AUSFALL_COOLDOWN_S = 6 * 3600
 
 
 # ------------------------------------------------------------- Kandidatenbilder
-def kandidaten(data_dir, pass_key, n=1, jetzt=None, sammeln=None):
+def kandidaten(data_dir, pass_key, n=1, jetzt=None, sammeln=None, min_hoehe=None):
     """Die N besten Bilder EINES Durchgangs aus dem Kontroll-Speicher (§7) —
     sie werden zu EINEM Kandidaten-Gitter (V4c).
 
@@ -94,8 +95,31 @@ def kandidaten(data_dir, pass_key, n=1, jetzt=None, sammeln=None):
       1. das Bild existiert noch (im Schlank-Modus lebt es nur waehrend des
          Durchgangs plus Karenz),
       2. Mindesthoehe wie bei der Galerie,
-      3. Rang nach Guete (Hoehe x Schaerfe), bei Gleichstand nach Dateiname —
-         derselbe Bestand ergibt immer dieselbe Auswahl.
+      3. Rang nach der KURATOR-NOTE der Galerie, bei Gleichstand nach roher
+         Guete und dann nach Dateiname — derselbe Bestand ergibt immer dieselbe
+         Auswahl.
+
+    ZUR NOTE (User-Entscheid 09.08.: "die Basis hat 6, also sollte unser System
+    min. 6 aus dem Lauf nehmen und durch das Optimierungsskript ausgewaehlt"):
+    Bis .168 sortierte der Kandidat nach ROHER Guete (Hoehe x Schaerfe), die
+    Referenzgalerie dagegen nach der saettigenden Kurator-Note. Diese Schieflage
+    ist weg, beide Seiten nehmen jetzt dieselbe Regel. Die Note verwendet
+    automatisch nur die Messwerte, die da sind: `_spanne` liefert fuer fehlende
+    Werte None, und None erzeugt weder Bonus noch Abzug. Ueberstrahlung,
+    Personenanteil und Kopfhaltung entstehen erst im Lernlauf, im Kontroll-
+    Speicher gibt es sie nicht — hier wirkt deshalb die saettigende Basis aus
+    Hoehe und Schaerfe.
+    EHRLICH ZUR WIRKUNG (gemessen 09.08. an 3 Durchgaengen mit 7-8 Kandidaten):
+    die Auswahl der besten 6 war in ALLEN drei Faellen dieselbe wie vorher, nur
+    die Reihenfolge aendert sich. Der Grund sind die Mengen — bei 6 Zellen und
+    selten mehr als 7 brauchbaren Bildern faellt hoechstens eines weg. Die
+    Umstellung raeumt eine konzeptionelle Schieflage auf, sie ist kein
+    Erkennungs-Fix.
+
+    `min_hoehe` ueberschreibt die Mindesthoehe NUR fuer diesen Aufruf (Default
+    bleibt MIN_HOEHE_PX). Gebraucht fuer Messungen: die Konstante teilen sich
+    Galerie, Ernte und Urteilspfad, sie darf fuer einen Test nicht global
+    verstellt werden.
 
     KEIN Sieb mehr nach der Koerper-Einstufung (V4c, User-Entscheid 08.08. spaetabend:
     "Embedding-Tuersteher machen wir nicht — ist ja etwas Spezielles nur bei
@@ -108,6 +132,7 @@ def kandidaten(data_dir, pass_key, n=1, jetzt=None, sammeln=None):
     Rueckgabe: dict(bilder, geprueft, verworfen, eingestuft, grund). `grund` ist
     gefuellt, wenn nichts uebrig bleibt — er ist der Text, den die Anzeige
     zeigt."""
+    mindest = int(min_hoehe or MIN_HOEHE_PX)
     d = _plv.kontrolle_dir(data_dir, pass_key)
     aus, verworfen = [], {"kein_bild": 0, "zu_klein": 0, "unlesbar": 0}
     eingestuft = {"bekannt": 0, "unbekannt": 0}
@@ -141,15 +166,46 @@ def kandidaten(data_dir, pass_key, n=1, jetzt=None, sammeln=None):
         if hoehe is None:
             verworfen["unlesbar"] += 1
             continue
-        if hoehe < MIN_HOEHE_PX:
+        if hoehe < mindest:
             verworfen["zu_klein"] += 1
             continue
         aus.append({"eid": e.get("eid"), "datei": datei, "pfad": pfad,
                     "klasse": klasse, "score": e.get("score"),
                     "schwelle": e.get("schwelle"), "quelle": e.get("quelle"),
                     "ts": e.get("ts"), "hoehe": hoehe,
-                    "schaerfe": round(schaerfe, 2), "guete": guete})
-    aus.sort(key=lambda e: (-e["guete"], e["datei"]))
+                    "schaerfe": round(schaerfe, 2), "guete": guete,
+                    # Pose-Messwerte des Live-Pfads (ab .169 im Protokoll, bei
+                    # aelteren Zeilen schlicht nicht vorhanden). Die Namen sind
+                    # die des Ernte-Manifests, damit _vg.note() sie direkt liest:
+                    # `gesicht` und `kopf` erwartet sie flach, die Quelle haelt
+                    # sie verschachtelt.
+                    "pose_erkannt": e.get("pose_erkannt"),
+                    "person_anteil": e.get("person_anteil"),
+                    "blick": e.get("blick"),
+                    "gesicht": (e.get("blick_mess") or {}).get("gesicht"),
+                    "kopf": (e.get("wache") or {}).get("kopf")})
+    # Dieselbe Bewertung wie die Referenzgalerie (s. Kopfkommentar). Die rohe
+    # Guete bleibt als Gleichstands-Entscheid stehen, damit die Reihenfolge
+    # deterministisch ist, auch wenn zwei Noten auf dieselbe Zahl fallen.
+    #
+    # DAVOR steht seit .169 das einzige Merkmal, das an echtem Material
+    # nachweislich TRENNT (Messung 09.08., 45 Bilder aus 10 Durchgaengen):
+    # findet die Pose-Wache kein Skelett, taugt das Bild nichts. 4 von 45
+    # Bildern fielen so durch, und der User hat unabhaengig ALLE VIER als
+    # unbrauchbar eingestuft, die uebrigen 41 durchgewinkt. Der Messwert
+    # `person_anteil` selbst trennt NICHT (alle Werte 0,53-0,78, keiner unter
+    # der Kurator-Schwelle 0,45) — deshalb steht hier die Ja/Nein-Frage und
+    # keine Schwelle.
+    # WICHTIG, drei Zustaende statt zwei: `pose_erkannt` FEHLT bei Bildern, die
+    # vor .169 abgelegt wurden. Ein fehlender Messwert ist kein schlechter
+    # (dieselbe Haltung wie `_spanne`), er wird deshalb wie "erkannt" behandelt.
+    # Nur ein ausdrueckliches False sortiert nach hinten. Und es sortiert nur —
+    # ausgeschlossen wird nichts, sonst stuende ein Durchgang, in dem die Pose
+    # nirgends greift, voellig ohne Gitter da.
+    for e in aus:
+        e["note"] = _vg.note(e)["note"]
+    aus.sort(key=lambda e: (e.get("pose_erkannt") is False,
+                            -e["note"], -e["guete"], e["datei"]))
     grund, art = "", ""
     if not aus:
         if not zeilen:
@@ -180,7 +236,7 @@ def kandidaten(data_dir, pass_key, n=1, jetzt=None, sammeln=None):
         elif verworfen["zu_klein"]:
             art = "zu_klein"
             grund = ("every picture of this walk-through is too small for a "
-                     f"reliable comparison (under {MIN_HOEHE_PX} px)")
+                     f"reliable comparison (under {mindest} px)")
         else:
             art = "unbrauchbar"
             grund = "no usable picture of this walk-through"
@@ -229,6 +285,48 @@ def kandidaten_gitter(bilder, leinwand=None):
                 "zellen": len(pfade), "spalten": spalten,
                 "leinwand": list(leinwand or _vg.LEINWAND)}
     return base64.b64encode(buf.tobytes()).decode(), manifest
+
+
+# Namens-Praefix der abgelegten Gitter-Datei — EINE Quelle fuer den Schreiber
+# hier und den Leser (Renderer); die Waisen-Raeumung braucht den Namen gar
+# nicht, sie liest das Feld `gitter_datei` aus der Abschlusszeile.
+GITTER_VOR = "gitter_"
+_LAUF_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z_.\-]{0,63}")
+
+
+def gitter_ablegen(data_dir, pass_key, lauf_id, b64):
+    """Das GERENDERTE Kandidaten-Gitter als JPG neben das Protokoll des Passes.
+
+    Warum (User 09.08.): bis hierher entstand das Gitter nur im Speicher und
+    ging als base64 in die Anfrage. Nachvollziehen liess sich hinterher, WELCHE
+    Bilder hineingingen — nie das fertige Bild, das der Urteiler wirklich sah.
+    Genau das ist beim Einstellen der Zellenzahl aber die Frage.
+
+    KEIN zweites Aufbewahrungsregime: die Datei liegt im Pass-Ordner und faellt
+    ueber DENSELBEN Trim wie die uebrigen Pass-Bilder (core.personlive:
+    Verfall nach TRIM_TAGE, Schlank-Raeumung bei ausgeschaltetem Sammel-Modus).
+    Damit die WAISEN-Regel sie nicht sofort wieder wegnimmt, traegt die
+    Abschlusszeile ihren Namen im Feld `gitter_datei`; genau dieses Feld bucht
+    `core.personlive.kontrolle_raeumen` mit.
+
+    Reine Ablage wie `personlive.kontrolle_ablegen`: ein Fehler bleibt still und
+    aendert kein Urteil. Rueckgabe: Dateiname oder None."""
+    if not b64:
+        return None
+    d = _plv.kontrolle_dir(data_dir, pass_key)
+    if d is None or not _LAUF_RE.fullmatch(str(lauf_id)):
+        return None
+    import base64
+    datei = GITTER_VOR + str(lauf_id) + ".jpg"
+    try:
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, datei), "wb") as f:
+            f.write(base64.b64decode(b64))
+            f.flush()
+            os.fsync(f.fileno())
+    except (OSError, ValueError):
+        return None
+    return datei
 
 
 # ------------------------------------------------------- Reihenfolge (E2, §7)
@@ -1189,6 +1287,12 @@ def pass_urteilen(data_dir, pass_key, galerien, regeln, anfrage_fn,
         _sagen(melden, "nothing to judge: " + zeile["grund"])
         return _abschluss(data_dir, pass_key, zeile, z, jetzt, t0)
     zeile["gitter"] = kand_m
+    # Das gefragte Bild sichtbar machen (User 09.08.): dasselbe JPG, das gleich
+    # als base64 in die Anfrage geht, liegt danach im Kontroll-Ordner und wird
+    # von der Durchgangs-Seite ueber den vorhandenen Bild-Weg ausgeliefert.
+    # Der Name steht in der Zeile, damit die Waisen-Raeumung ihn kennt.
+    zeile["gitter_datei"] = gitter_ablegen(data_dir, pass_key, lauf_id,
+                                           kand_b64)
     zellen = int(kand_m["zellen"])
     # .164: der Lauf sagt, MIT WELCHEN Regeln er gefahren ist. Beim manuellen
     # Testlauf sind das die Feld-Werte, sonst die Config — der Erzaehl-Log und
@@ -1353,7 +1457,102 @@ def _abschluss(data_dir, pass_key, zeile, z, jetzt, t0):
 
 
 # ------------------------------------------------- Drei-Wege-Sicht (§4, Test)
-def dreiwege(szenario, kontroll_zeilen, treffer, vision_lauf, konfiguriert):
+def _event_scores(event_dir):
+    """`persons[..]["max"]` aus der results.jsonl EINES Events.
+
+    Genau die Zahl, aus der die Gesichts-Spalte ihr "best" bildet (in der Akte
+    heisst sie `ours`) — deshalb wird sie hier gelesen und nicht aus dem
+    Dateinamen des Crops geraten. Mehrere Zeilen (ein Label je Clip) werden zum
+    Maximum je Person zusammengefasst."""
+    werte = {}
+    try:
+        with open(os.path.join(event_dir, "results.jsonl")) as f:
+            for zeile in f:
+                try:
+                    d = json.loads(zeile)
+                except Exception:
+                    continue
+                for p, w in (d.get("persons") or {}).items():
+                    try:
+                        v = float((w or {}).get("max"))
+                    except (TypeError, ValueError):
+                        continue
+                    if p not in werte or v > werte[p]:
+                        werte[p] = v
+    except OSError:
+        pass
+    return werte
+
+
+def gesichtsbilder(data_dir, szenario):
+    """Die abgelegten GESICHTS-Crops eines Durchgangs, je Event eine Kachel.
+
+    Der Fall dahinter (User 10.08.): die Gesichts-Spalte des Erkennungstests
+    zeigte nur Text ("… 4 event(s) · best 0.60 · 2 event(s) with a face that was
+    not matched"), waehrend Person und Vision daneben ihre Bilder zeigten. Man
+    sah also nicht, WELCHE Gesichter des Durchgangs erkannt wurden und welche
+    nicht — genau die Sicht, um die es beim Nachvollziehen geht.
+
+    Genommen wird ausschliesslich, was die Analyse damals ohnehin geschrieben
+    hat: die Crops im Event-Ordner (`<label>_show_<Person>_NN…` bzw.
+    `_best_<Person>_NN…` fuer eine gestuetzte Person, `<label>_enroll_FREMD_…`
+    fuer ein Gesicht ohne Namen). KEIN neuer Speicher, kein Clip wird geoeffnet,
+    kein Frame dekodiert, nichts gegen Frigate gefragt — nur ein
+    Verzeichnis-Listing je Event des Durchgangs. Fehlt der Ordner (Retention),
+    entsteht schlicht keine Kachel; die Zahlen der Spalte kommen weiter aus der
+    Akte und bleiben davon unberuehrt.
+
+    Ausgeliefert werden die Bilder ueber den BESTEHENDEN Weg
+    `/events/<eid>/<datei>` — dieselbe Route, die die Heute-Seite fuer ihre
+    Avatare nutzt (`_crop_url`). Hier steht nur, welche Datei zu welchem Urteil
+    gehoert.
+
+    Rueckgabe (zeitlich sortiert, Szenario-Prinzip: der ganze Durchgang):
+    `{"eid", "kamera", "t", "datei", "person"|None, "score"|None}` — `person`
+    ist None, wenn das Event keinen bestaetigten Namen trug."""
+    s = szenario or {}
+    kacheln = []
+    for ev in s.get("evs") or []:
+        eid = str(ev.get("eid") or "")
+        if not eid:
+            continue
+        edir = os.path.join(data_dir, "events", eid.replace("/", "_"))
+        try:
+            dateien = sorted(d for d in os.listdir(edir) if d.endswith(".jpg"))
+        except OSError:
+            continue
+        scores = _event_scores(edir)
+        rumpf = {"eid": eid, "kamera": str(ev.get("cam") or ""), "t": ev.get("t")}
+        conf = [str(p) for p in (ev.get("conf") or [])]
+        for p in conf:
+            # Reihenfolge wie im Push-Bild: `_show_` (Gesicht mit Umfeld) vor
+            # dem engen `_best_`-Ausschnitt.
+            datei = (next((d for d in dateien if f"_show_{p}_" in d), None)
+                     or next((d for d in dateien if f"_best_{p}_NN" in d), None))
+            if datei:
+                kacheln.append({**rumpf, "datei": datei, "person": p,
+                                "score": scores.get(p)})
+        if conf:
+            continue
+        # OHNE bestaetigten Namen: das Gesicht, das die Analyse trotzdem
+        # aufgehoben hat — erst der Enrollment-Crop des Fremden, sonst der
+        # staerkste `_best_`-Ausschnitt (er lag ueber der Bild-Schwelle, aber
+        # unter der Bestaetigung). Der Score ist der beste, den irgendeine
+        # Referenz auf diesem Event erreicht hat.
+        datei = next((d for d in dateien if "_enroll_FREMD_" in d), None)
+        if datei is None:
+            uebrig = [d for d in dateien if "_best_" in d and "_NN" in d]
+            datei = sorted(uebrig)[0] if uebrig else None
+        if datei:
+            bester = max(scores.values(), default=None)
+            kacheln.append({**rumpf, "datei": datei, "person": None,
+                            "score": bester})
+    kacheln.sort(key=lambda b: (b.get("t") or 0, b.get("datei") or ""))
+    return kacheln
+
+
+def dreiwege(szenario, kontroll_zeilen, treffer, vision_lauf, konfiguriert,
+             gesichts_bilder=None):
     """Die drei Traegerwege eines Durchgangs NEBENEINANDER (User 08.08.:
     "optimal waere eine allgemeine Erkennung durch alle drei").
 
@@ -1362,11 +1561,14 @@ def dreiwege(szenario, kontroll_zeilen, treffer, vision_lauf, konfiguriert):
     Protokoll des ECHTEN Urteilspfads; ohne Konfiguration sagt die Spalte das
     ehrlich, statt eine leere Tabelle zu zeigen.
 
-    Reine Aufbereitung, keine Datei- und keine Netz-Zugriffe."""
+    Reine Aufbereitung, keine Datei- und keine Netz-Zugriffe. `gesichts_bilder`
+    ist die fertige Kachel-Liste aus `gesichtsbilder()` — DORT wird gelesen,
+    hier nur durchgereicht, damit dieser Kontrakt gilt."""
     s = szenario or {}
     gesicht = {"personen": [], "unbekannt": s.get("unbek") or 0,
                "events": s.get("n") or 0,
-               "kameras": len(s.get("kams") or {})}
+               "kameras": len(s.get("kams") or {}),
+               "bilder": list(gesichts_bilder or [])}
     for name, d in sorted((s.get("pers") or {}).items()):
         if d.get("quelle") == "koerper":
             continue                    # das ist die Koerper-Spalte, nicht diese

@@ -13,6 +13,43 @@ performance/fusion steps 0.1.0.114–0.1.0.117 ship together with **0.1.0.118**,
 frame-distributor and vision steps 0.1.0.142–0.1.0.167 ship together with **0.1.0.168**, and the
 learning-area/run-management steps 0.1.0.119–0.1.0.128 ship together with **0.1.0.129**.
 
+## 0.1.0.170 — 2026-08-10
+
+Version 0.1.0.169 was built and tested on the author's production box; its changes
+ship together with **0.1.0.170**. This release refines the vision path introduced in
+0.1.0.168 — nothing here changes how face or person recognition judge.
+
+- **The candidate grid can now use up to 12 cells**, the same width as your reference
+  galleries, instead of being capped at 6. More cells cost no extra requests: a gallery
+  pair is two requests regardless of grid size. The value is an upper bound, not a
+  demand — a walk-through with fewer usable pictures simply gets a smaller grid, and
+  the run's log line spells out `cells=<taken>/<wanted>` so you can see which it was.
+- **The exact grid the model was asked about is saved and shown** on the walk-through's
+  page. Until now you could read the verdict but not see the picture it came from. It is
+  the same JPEG that goes into the request, kept under the same retention as the other
+  pass images — no second storage regime.
+- **Better cell selection.** Proposals are sorted by a single curation score (height and
+  sharpness, both saturating, plus face visibility and a penalty for blown-out
+  highlights), and pictures where the pose check finds no skeleton are sorted to the
+  back. Sorting only: nothing is excluded, so a walk-through never ends up with no grid
+  at all. Grids whose cell count is not divisible by three no longer fail to build.
+- **The recognition test shows face pictures, not just numbers.** The face column now
+  carries one tile per event, labelled with the person and score, or with "not matched"
+  and the best score any reference reached there. These are the crops the analysis
+  already wrote — no new storage, no clip opened, no frame decoded. If an unmatched
+  event left no picture behind, the column says so rather than hiding the gap.
+- **The walk-through picker collapses** once you have chosen one, leaving a compact
+  header line with time, person, event and camera count — the results are what you came
+  for, not the list.
+- **The test now runs the same rules as normal operation.** Its cell count is
+  pre-filled from your configured value instead of being capped by the material of that
+  one walk-through; a pass with a single usable picture used to run a 1-cell grid while
+  the automatic path would have used twelve. A test that quietly follows different rules
+  than production is not a comparison.
+- **Fixed: four error lines per vision run in the log.** The DINOv2 session was built
+  without thread options, so onnxruntime sized its pool from the host's cores and failed
+  to pin threads outside the container's CPU mask. Embeddings were never affected.
+
 ## 0.1.0.168 — 2026-08-09
 
 Versions 0.1.0.142–0.1.0.167 were built and tested on the author's production box;
