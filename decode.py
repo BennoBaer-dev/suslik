@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# INVARIANTE: GEPINNTER_PIXELPFAD   (Marke: CLAUDE.md "Gepinnter Pixelpfad")
 """decode — die EINE Frame-Quelle fuer analyze/anlernen/abnahme (W1 der GPU-Welle, Plan v3).
 
 MIGRATION 04.08.2026 (User-Go, messgefuehrt — 'gepinnter Pixelpfad'):
@@ -15,10 +16,16 @@ jetzt EIN gepinnter Pfad fuer alle Urteils-Frames:
 Damit ist die Frame-Quelle auf jeder Hardware identisch BY CONSTRUCTION —
 die alte Invariante 'Analyse-Decode bleibt CPU' wird ersetzt durch
 'Analyse-KONVERTIERUNG bleibt cvtColor-I420, Decode-Quelle frei'.
-HW-Decode ist opt-in via env SUSLIK_HWDEC=vaapi (+SUSLIK_HWDEC_DEVICE,
-Default /dev/dri/renderD128); scheitert die HW-Pipe, faellt der Iterator
-LAUT (Flag .hwdec_fallback) auf Software zurueck — gleiche Bytes, nur
-langsamer. Preis der Migration: einmalige Soll-Neueinfrierung (E3);
+HW-Decode ist damit NICHT opt-in, sondern per Default AN: env SUSLIK_HWDEC
+ist ungesetzt gleichbedeutend mit 'auto' — h264/hevc gehen dann ueber die
+HW-Pipe, Intel (VAAPI) zuerst, sonst NVIDIA (NVDEC). Werte: 'auto' (Default)
+· 'vaapi'/'nvdec' = erzwingen · 'aus'/'off'/'0'/'nein' = nie. In JEDEM Modus
+greifen dieselben harten Gates (s. _hwdec): nur 8-bit yuv420p/yuvj420p und
+nur mit validierter Quelle (VA-Treiber + SUSLIK_HWDEC_DEVICE, Default
+/dev/dri/renderD128, bzw. /dev/nvidiactl); faellt ein Gate, laeuft es
+lautlos in Software. Scheitert die angeforderte HW-Pipe erst beim Decode,
+faellt der Iterator LAUT (Flag .hwdec_fallback) auf Software zurueck —
+gleiche Bytes, nur langsamer. Preis der Migration: einmalige Soll-Neueinfrierung (E3);
 Referenz-JPEGs (cv2.imread-Weg) sind NICHT betroffen.
 
 Vertrag (unveraendert zur cv2-Aera, Kalibrierung haengt daran):
@@ -30,6 +37,7 @@ Vertrag (unveraendert zur cv2-Aera, Kalibrierung haengt daran):
   (ffprobe -count_packets); Toleranz max(1, 2 %). Reaktion ist Sache des
   Aufrufers (analyze urteilt weiter + Flag; verifyd wertet <50 % als Fehler).
 """
+# INVARIANTE-ENDE: GEPINNTER_PIXELPFAD
 import os
 import subprocess
 
@@ -195,7 +203,14 @@ class FrameIter:
                     self.gelesen = i + 1      # Fortschritt in Original-Indizes
                     y = np.frombuffer(b, dtype=np.uint8) \
                         .reshape(self.hoehe * 3 // 2, self.breite)
+                    # INVARIANTE: GEPINNTER_PIXELPFAD   (Marke: CLAUDE.md "Gepinnter Pixelpfad")
+                    # HIER steht der gepinnte Pfad, nicht nur im Docstring oben:
+                    # rawvideo yuv420p aus der ffmpeg-Pipe -> DIE eine YUV->BGR-
+                    # Konvertierung. Nicht durch swscale (-pix_fmt bgr24 im
+                    # Kommando) oder cv2.VideoCapture ersetzen — die weichen um
+                    # mittl. ~1,5 Graustufen ab (Kanten 40+) und kippen Urteile.
                     yield i, cv2.cvtColor(y, cv2.COLOR_YUV2BGR_I420)
+                    # INVARIANTE-ENDE: GEPINNTER_PIXELPFAD
                     k += 1
             finally:
                 self._proc = None

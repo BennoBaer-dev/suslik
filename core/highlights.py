@@ -12,7 +12,7 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.0.168"
+STAND = "0.1.0.170"
 
 # HERVORHEBUNG (0.1.0.168): ein Eintrag kann optisch herausstechen — genau EIN
 # Fall ist dafuer vorgesehen, der Vorab-Hinweis am Anfang eines Releases. Die
@@ -28,12 +28,20 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
-    # .168 — mit dem User abgestimmt (09.08.), Wortlaut EXAKT so. Der erste
-    # Eintrag ist der Vorab-Hinweis und traegt deshalb die Betonungs-Marke.
+    # .170 — Release-Eintrag, mit dem User abgestimmt (10.08.): die
+    # KI-/Vision-Geschichte bleibt der Kern der Box (.168), .170 traegt NUR den
+    # kurzen Fix-Hinweis zur Galerie; der fruehere .169-Block ging darin auf.
+    ("0.1.0.170", (
+        "Fixes for the gallery comparison: the candidate grid now uses up to "
+        "12 cells (matching your reference galleries), the exact grid shown "
+        "to the model is saved and visible on the walk-through's page, and "
+        "the recognition test shows the face pictures alongside person and "
+        "vision.",
+    )),
+    # .168 — mit dem User abgestimmt (09.08.); der fruehere Betont-Punkt
+    # "early working version" wurde am 10.08. auf User-Anweisung ENTFERNT
+    # (kein Arbeitsversions-Hinweis mehr in der Box).
     ("0.1.0.168", (
-        BETONT + "This is an early working version, published ahead of "
-        "completion for testing. Things will still change and rough edges are "
-        "expected.",
         "Vision detect: a third, independent recognition path — each "
         "walk-through is judged as one candidate grid against your approved "
         "galleries (local llama.cpp or your own API endpoint).",

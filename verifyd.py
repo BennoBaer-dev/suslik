@@ -333,7 +333,15 @@ def load_config(path):
                          ("vision_timeout_s", 900),
                          # V4 (§7): die Regeln des Urteilspfads. Jede als PAAR
                          # (hier Default, dort Whitelist mit Erklaertext).
-                         ("vision_bilder_je_pass", 3),   # N beste Bilder je Durchgang
+                         # 12 statt 3 (User-Entscheid 09.08.: "immer 12 gegen max
+                         # 12") — die Referenzgalerien sind 12er, das Kandidaten-
+                         # Gitter darf genauso breit sein. OBERGRENZE, keine
+                         # Forderung: weniger brauchbare Bilder = kleineres Gitter
+                         # (`bilder_wirksam` <= `gewuenscht`), erfunden wird nichts.
+                         # Kostet nichts extra, ein Galerien-Paar bleibt ZWEI
+                         # Anfragen, egal wie viele Zellen. Prods Store traegt noch
+                         # 10 (alte Grenze) und wird nach dem Deploy auf 12 gestellt.
+                         ("vision_bilder_je_pass", 12),  # Zellen im Kandidaten-Gitter
                          ("vision_deadline_s", 1200),    # Gesamt-Deadline je Anfrage
                          ("vision_anfragen_h", 60),      # Mengendeckel je Stunde
                          ("vision_anfragen_tag", 300),   # und je Tag (= der E1-Tagesdeckel)
@@ -2347,9 +2355,10 @@ class Service:
         "vision_max_tokens": (int, 256, 32000, "vision detect: token budget for one answer — the default is 12000, which is the value that was measured to be enough. 3000 was measured to be too small: the answer was cut off in the middle and counted as no verdict, so a whole run was wasted. Lower it only if your endpoint charges per token and you have seen your model answer well below that"),
         "vision_timeout_s": (int, 10, 3600, "vision detect: seconds to wait for one request — a local model on a CPU machine needs minutes, an external endpoint seconds"),
         # V4 (§7): Auslöser, Reissleine, Deckel und Sammel-Regel des Urteilspfads.
-        # Der Startwert fuer N ist KEIN Messwert (die Testreihe steht aus) — er ist
-        # bewusst klein gewaehlt, weil jedes Bild ZWEI Anfragen kostet.
-        "vision_bilder_je_pass": (int, 1, 10, "vision detect: how many of a walk-through's best pictures go into the ONE candidate grid, as cells (starting value, not a measurement) — the whole walk is shown as a single grid, so the cost is TWO requests per compared PAIR of galleries, not per picture, because every question is asked again with the galleries swapped"),
+        # Obergrenze 12 statt 10 (User-Entscheid 09.08.): "immer 12 gegen max 12".
+        # Die Referenzgalerien sind 12er — das Kandidaten-Gitter darf dieselbe
+        # Breite haben, dann steht Gitter gegen Gitter in gleicher Groesse.
+        "vision_bilder_je_pass": (int, 1, 12, "vision detect: how many of a walk-through's best pictures go into the ONE candidate grid, as cells — the reference galleries hold 12 pictures, so 12 is the cap here too. This is an UPPER LIMIT, not a demand: a walk-through with fewer usable pictures simply gets a smaller grid, and nothing is invented to fill it. The whole walk is shown as a single grid, so the cost is TWO requests per compared PAIR of galleries — the same two requests whether the grid has three cells or twelve, because every question is asked again with the galleries swapped"),
         "vision_deadline_s": (int, 30, 7200, "vision detect: overall deadline for one request in seconds — the timeout above is a socket timeout, which a slowly trickling answer walks straight past; when this one hits, the connection is closed and the verdict is 'no vision verdict (timeout)'"),
         "vision_anfragen_h": (int, 2, 5000, "vision detect: request limit per hour (every attempt counts, including failed ones); when it is reached vision pauses itself and says so instead of running on quietly"),
         "vision_anfragen_tag": (int, 2, 20000, "vision detect: request limit per day — this is the day cap: one walk-through costs 2 requests per compared pair of galleries, and on a paid endpoint every request is money"),
@@ -3016,9 +3025,18 @@ class Service:
         z = _vu.pass_urteilen(self.cfg["data_dir"], pass_key, gal,
                               self._vision_regeln(lauf_regeln), _fragen,
                               manuell=manuell)
+        # Zellen-Ausweis (User 09.08.): WIE VIELE Bilder das Kandidaten-Gitter
+        # wirklich traegt, direkt in der End-Zeile — bisher stand das nur im
+        # Lauf-Protokoll (vision.jsonl), nicht im Dienst-Log. "7/10" heisst:
+        # 7 genommen, 10 waren als Obergrenze gewuenscht.
+        _rl = z.get("regeln_lauf") or {}
+        _zellen = _rl.get("bilder_wirksam")
+        _gew = _rl.get("bilder_je_pass")
         self.log(f"VISION run end: pass={pass_key} "
                  f"{'verdict' if z.get('person') else 'no verdict'} "
                  f"votes={z.get('voten')} requests={z.get('anfragen')} "
+                 f"cells={_zellen if _zellen is not None else '?'}"
+                 f"/{_gew if _gew is not None else '?'} "
                  f"{z.get('dauer_s')}s"
                  + (f" — {z['grund']}" if z.get("grund") else ""))
         try:
@@ -3162,7 +3180,8 @@ class Service:
             # V4b: der LAUF-Stand (Erzaehl-Schritte + Urteil), nicht nur das
             # Urteil — die Spalte zeigt waehrend eines Laufs mit, was passiert.
             sicht = _vu.dreiwege(treffer, zeilen, kmap, _vu.lauf_lesen(dd, pass_key),
-                                 bool((self.cfg.get("vision") or {}).get("modell")))
+                                 bool((self.cfg.get("vision") or {}).get("modell")),
+                                 _vu.gesichtsbilder(dd, treffer))
         with self._vision_lock:
             laeuft = bool(self._vision_flug and self._vision_flug.laeuft)
         # ... oder das Protokoll sagt, dass ein Lauf ohne Urteil offen ist (nach
@@ -3170,9 +3189,13 @@ class Service:
         laeuft = laeuft or bool((sicht or {}).get("vision", {}).get("laeuft"))
         with self._vision_lock:
             nach = dict(self._nachanalyse)
-        # .164: die Felder des manuellen Testlaufs brauchen ihre Grenzen —
-        # so viele Zellen, wie dieser Durchgang ueberhaupt brauchbare Bilder
-        # hat, und so viele Bestaetigungen, wie es Herausforderer gibt.
+        # .164: die Felder des manuellen Testlaufs brauchen ihre Grenzen — so
+        # viele Bestaetigungen, wie es Herausforderer gibt. Die ZELLENZAHL
+        # haengt seit .170 nicht mehr am Material (User-Fund: ein Durchgang mit
+        # einem Bild belegte das Feld mit 1, der Test fuhr `cells=1/1` statt
+        # der Config); Deckel ist die Whitelist-Obergrenze DERSELBEN
+        # Einstellung, kein zweites Literal. Begruendung im Docstring von
+        # routes.visiontest._felder.
         _mat = (_vu.kandidaten(dd, pass_key, 1,
                                sammeln=bool(self.cfg.get("diagnostic_collection")))
                 ["gesamt"] if treffer is not None else 0)
@@ -3181,7 +3204,8 @@ class Service:
                 "sicht": sicht, "laeuft": laeuft,
                 "lauffeld": {
                     "zellen": int(self.cfg.get("vision_bilder_je_pass") or 1),
-                    "zellen_max": max(1, int(_mat or 1)),
+                    "zellen_max": int(self.CONFIG_WHITELIST
+                                      ["vision_bilder_je_pass"][2]),
                     "material": int(_mat or 0),
                     "voten": int(self.cfg.get("vision_min_voten") or 1),
                     "voten_max": max(1, _gal_n - 1),

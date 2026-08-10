@@ -709,17 +709,27 @@ def nachruecken(kand, reihe, abgelehnt=(), belegt=(), gewaehlt=(),
 # ------------------------------------------------------------------ Gitter-Bild
 def gitter_bauen(zellen_pfade, groesse, leinwand=None):
     """Das gerenderte Gitter (BGR-Array). Layout exakt wie die abgenommenen
-    Beispiel-Galerien: drei Reihen (eine je Ansicht), `groesse//3` Spalten,
+    Beispiel-Galerien: drei Reihen (eine je Ansicht), `ceil(groesse/3)` Spalten,
     Zellen im Crop-Seitenverhaeltnis gefuellt durch HOCHSKALIEREN — nie durch
     Beschneiden des Koerpers (§6.4). Der Rest bleibt grau, das kostet keine
     Aussage und keine nennenswerten Token.
+
+    AUFGERUNDET, nicht abgeschnitten (09.08.): bei einer Zellenzahl, die nicht
+    durch drei teilbar ist, gab `groesse//3` ZU WENIGE Plaetze — 7 Bilder auf
+    2x3 = 6 Zellen, und `divmod(6, 2)` legte das siebte auf Reihe 3 (= ausserhalb
+    der Leinwand). Das Ergebnis war kein stiller Verlust, sondern ein Abbruch:
+    numpy weigert sich, in einen leeren Slice zu schreiben (ValueError). Fuer die
+    Galerie-Groessen 6 und 12 ist ceil == floor, das Layout der abgenommenen
+    Galerien aendert sich also NICHT — die Rundung greift nur bei den Zahlen, die
+    vorher gar nicht durchliefen. Ueberzaehlige Plaetze bleiben grau wie jede
+    andere Luecke.
 
     zellen_pfade: Liste in Lesereihenfolge (Reihe 1 links->rechts, dann Reihe 2
     ...), None fuer eine leere Zelle."""
     import cv2
     import numpy as np
     lw, lh = leinwand or LEINWAND
-    spalten = max(1, int(groesse) // len(REIHEN))
+    spalten = max(1, -(-int(groesse) // len(REIHEN)))
     zb, zh = lw // spalten, lh // len(REIHEN)
     bild = np.full((zh * len(REIHEN), zb * spalten, 3), HINTERGRUND,
                    dtype=np.uint8)

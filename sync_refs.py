@@ -7,9 +7,13 @@ Tombstones). Frigate-Ablage = /opt/frigate/media/clips/faces/<Person>/.
   sync_refs.py status              # Diff beider Seiten + offene Entscheidungen
   sync_refs.py import [--dry-run]  # NEUE Frigate-Bilder -> Master (mit Gesichts-Gate;
                                    #   Tombstones werden NIE re-importiert)
-  sync_refs.py export [--dry-run]  # aktive Master-Bilder, die Frigate fehlen -> POST
-                                   #   /api/faces/{name} (HTTP-API; der SSH/scp-Altweg ist
-                                   #   seit 0.1.0.107 abgeloest — Invariante + Shell-Injektion)
+  sync_refs.py export [--dry-run]  # aktive Master-Bilder, die Frigate fehlen -> HTTP-API:
+                                   #   POST /api/faces/{name}/create (nur wenn die Person dort
+                                   #   fehlt) + POST /api/faces/{name}/register (multipart,
+                                   #   Feld "file"). NICHT POST /api/faces/{name} — den Endpunkt
+                                   #   gibt es in Frigate 0.18 nicht (404, geprueft 05.08.).
+                                   #   Der SSH/scp-Altweg ist seit 0.1.0.107 abgeloest
+                                   #   (Invariante "nur API" + Shell-Injektion).
                                    #   --auswahl=<datei.json> = nur die dort gelisteten
                                    #   [[person, datei], …] (selektiver Sync, .133)
   sync_refs.py vorpruefung         # Vorpruefungs-Cache fuellen (nur neue/geaenderte Bilder),
@@ -609,6 +613,7 @@ def cmd_import(dry):
     print(msg)
 
 
+# INVARIANTE: FRIGATE_FACES_API   (Marke: CLAUDE.md "Frigate-Zugriff: NUR ueber die HTTP-API")
 def api_upload(person, datei, quelle, person_existiert=None):
     """Referenzbild ueber die Frigate-HTTP-API hochladen (Frigate 0.18.0, Endpunkte
     aus der OpenAPI der LAUFENDEN Instanz verifiziert, 05.08. — der fruehere
@@ -676,6 +681,7 @@ def api_upload(person, datei, quelle, person_existiert=None):
         f"{basis}/api/faces/{pq}/register",
         data=body, headers={"Content-Type": f"multipart/form-data; boundary={grenze}"}),
         "register")
+    # INVARIANTE-ENDE: FRIGATE_FACES_API
 
 
 def _fehler_einstufen(e):
