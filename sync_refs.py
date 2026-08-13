@@ -757,6 +757,22 @@ def _gesicht_pruefen(pfad):
             app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"],
                                allowed_modules=["detection"])
             app.prepare(ctx_id=-1, det_size=(320, 320))
+            # Thread-Kappung (#21) wie Embedder._to_backend auf cpu: die prepare()-Session
+            # kaeme sonst mit ungekapptem Default-Pool (hardware_concurrency des Wirts).
+            # Ersatz NACH prepare() aus der zentralen Quelle. EIGENER try (Widerleger
+            # 11.08.): die Kappung ist Optimierung — scheitert sie, laeuft der Vorpruefer
+            # UNGEKAPPT weiter statt sich ganz abzuschalten (das umgebende except wuerde
+            # sonst jede Vorpruefung opfern und unnoetige Frigate-Ablehnungen einkaufen).
+            try:
+                from face_audit import _ort_session
+                for _model in app.models.values():
+                    _s = _ort_session("cpu", None, _model.model_file)
+                    _model.session = _s
+                    _model.input_name = _s.get_inputs()[0].name
+                    _model.output_names = [o.name for o in _s.get_outputs()]
+            except Exception as _e:
+                print(f"  (Vorpruefung ungekappt — Session-Ersatz scheiterte: "
+                      f"{type(_e).__name__}: {_e})", file=sys.stderr)
             _VORPRUEFER = app
         except Exception as e:
             print(f"  (Vorpruefung ohne Detektor — fail-open: {type(e).__name__}: {e})",

@@ -968,7 +968,16 @@ function _visionDirtyZeigen() {
 }
 
 function _visionDirtySetzen(was) {
-  if (was) VIS_DIRTY[was] = true; else VIS_DIRTY = {block: false, zahlen: false};
+  if (was) {
+    VIS_DIRTY[was] = true;
+    /* Beim Dirty-Werden den alten Statustext raeumen (#22-Nebenbefund): sonst
+       steht "saved — …" vom letzten Speichern direkt neben "unsaved changes"
+       und die Leiste widerspricht sich selbst. */
+    var s = document.getElementById('vision-status');
+    if (s) s.textContent = '';
+  } else {
+    VIS_DIRTY = {block: false, zahlen: false};
+  }
   _visionDirtyZeigen();
 }
 
@@ -1379,3 +1388,142 @@ function vwAbnehmen(btn) {
     })
     .catch(function () { st.textContent = 'error'; btn.disabled = false; });
 }
+
+/* ---- Live watchers (Phase 2): Save / Toggle / Source test / Load measurement.
+   K1-Poll: die Seite zeigt Zustaende NUR aus der Engine-Quittung (/live_status
+   liest live_status.json); der Poll aktualisiert Countdown + Phase des
+   laufenden Auftrags ("watchers paused for measurement") und laedt die Seite
+   neu, sobald sich ein Kachel-ZUSTAND aendert (nicht bei blossen Detail-
+   Texten wie "last frame Xs ago" — sonst wuerde die Seite dauer-reloaden). */
+function _liveFelder() {
+  var q = (document.querySelector('input[name="lv-quelle"]:checked') || {}).value || 'proxy';
+  var kan = [];
+  document.querySelectorAll('.lv-kanal:checked').forEach(function (c) { kan.push(c.value); });
+  return {kamera: (document.getElementById('lv-kamera') || {}).value || '',
+          quelle: q,
+          url: (document.getElementById('lv-url') || {}).value || '',
+          ende_ohne_gesicht_s: (document.getElementById('lv-ende') || {}).value,
+          wieder_scharf_s: (document.getElementById('lv-scharf') || {}).value,
+          kanaele: kan,
+          schnell_urteil: (document.getElementById('lv-schnell') || {}).value === 'true'};
+}
+
+function liveSpeichern(btn) {
+  var s = document.getElementById('lv-status');
+  btn.disabled = true; if (s) s.textContent = 'saving …';
+  fetch('/live_speichern', {method: 'POST', body: JSON.stringify(_liveFelder())})
+    .then(function (r) { return r.json(); })
+    .then(function (d) { if (s) s.textContent = d.msg; btn.disabled = false; })
+    .catch(function () { if (s) s.textContent = 'error'; btn.disabled = false; });
+}
+
+function liveSchalter(kamera, an, btn) {
+  btn.disabled = true;
+  fetch('/live_schalter', {method: 'POST',
+                           body: JSON.stringify({kamera: kamera, enabled: an})})
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      var s = document.getElementById('lv-status') || document.getElementById('lv-job-' + kamera);
+      if (s) s.textContent = d.msg;
+      btn.disabled = false;
+    })
+    .catch(function () { btn.disabled = false; });
+}
+
+function liveTest(kamera, btn) {
+  btn.disabled = true;
+  fetch('/live_test', {method: 'POST', body: JSON.stringify({kamera: kamera})})
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      var s = document.getElementById('lv-job-' + kamera);
+      if (s) s.textContent = d.msg;
+      btn.disabled = false;
+    })
+    .catch(function () { btn.disabled = false; });
+}
+
+function liveMessung(kamera, btn) {
+  btn.disabled = true;
+  fetch('/live_messung', {method: 'POST', body: JSON.stringify({kamera: kamera})})
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      var s = document.getElementById('lv-job-' + kamera);
+      if (s) s.textContent = d.msg;
+      btn.disabled = false;
+    })
+    .catch(function () { btn.disabled = false; });
+}
+
+function _livePoll() {
+  fetch('/live_status')
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      /* UI-B2: der Server liefert auftrag/auftraege NUR bei frischem
+         Engine-Herzschlag (status_fuer_ui) — ein toter Auftrag kann Countdown
+         und Reload-Tor hier also nicht mehr einfrieren. */
+      var a = d.auftrag;
+      var el = document.getElementById('lv-auftrag');
+      if (el) {
+        if (a) {
+          var ph = {verbinden: 'Connecting', messen: 'Measuring',
+                    auswerten: 'Evaluating', abbruch: 'Aborting'}[a.phase] || a.phase;
+          var rest = (a.rest_s !== null && a.rest_s !== undefined)
+            ? ' — ' + Math.ceil(a.rest_s) + ' s left' : '';
+          /* UI-KANN 11: 'watchers paused' nur, wenn wirklich welche pausieren
+             (Quelltests pausieren nicht; ohne Waechter pausiert niemand). */
+          el.textContent = (a.art === 'messung' ? 'Load measurement' : 'Source test')
+            + ' on ' + a.kamera + ': ' + ph + rest
+            + (a.pausiert && a.pausiert.length
+               ? ' — watchers paused for measurement (' + a.pausiert.join(', ') + ')'
+               : '');
+        } else { el.textContent = ''; }
+      }
+      Object.keys(d.jobs || {}).forEach(function (kam) {
+        var j = d.jobs[kam];
+        var jel = document.getElementById('lv-job-' + kam);
+        if (!jel) return;
+        if (!j.fertig)
+          jel.textContent = 'source test running (helper process, up to ~2 minutes) …';
+        else if (j.text !== undefined)
+          /* UI-M3: das Helfer-ERGEBNIS anzeigen, nicht nur das Laufen. */
+          jel.textContent = (j.ok ? 'source test done: ' : 'source test FAILED: ')
+            + (j.text || '');
+      });
+      /* UI-M3: Fehl-Auftraege der Engine sichtbar machen (frisch-gegated). */
+      Object.keys(d.auftraege || {}).forEach(function (kam) {
+        var e = d.auftraege[kam];
+        ['test', 'messung'].forEach(function (art) {
+          var b = e[art];
+          if (b && b.ok === false && b.fehler) {
+            var jel = document.getElementById('lv-job-' + kam);
+            if (jel) jel.textContent = (art === 'messung'
+              ? 'load measurement failed: ' : 'source test failed: ') + b.fehler;
+          }
+        });
+      });
+      /* Reload NUR bei echter Zustands-/Ergebnis-Aenderung (s. Kopfkommentar);
+         waehrend eines laufenden Auftrags aufgeschoben (der Countdown soll
+         stehen bleiben) — nachgeholt, sobald der Auftrag endet, weil _liveSnap
+         den alten Stand behaelt. */
+      var kern = [];
+      Object.keys(d.zustaende || {}).sort().forEach(function (k) {
+        kern.push(k + ':' + d.zustaende[k].z);
+      });
+      Object.keys(d.auftraege || {}).sort().forEach(function (k) {
+        var e = d.auftraege[k];
+        ['test', 'messung'].forEach(function (art) {
+          if (e[art]) kern.push(k + ':' + art + ':' + e[art].ts);
+        });
+      });
+      Object.keys(d.jobs || {}).sort().forEach(function (k) {
+        kern.push(k + ':job:' + !!d.jobs[k].fertig);
+      });
+      kern.push('engine:' + !!(d.engine || {}).frisch);
+      var schnapp = kern.join('|');
+      if (window._liveSnap === undefined) { window._liveSnap = schnapp; return; }
+      if (schnapp !== window._liveSnap && !a) location.reload();
+    })
+    .catch(function () {});
+}
+
+if (window._livePage) setInterval(_livePoll, 1000);

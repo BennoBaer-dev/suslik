@@ -23,6 +23,7 @@ sys.path.insert(0, HERE)
 import cv2
 import numpy as np
 from face_audit import Embedder, aktuelles_modell, ist_fehldetektion
+from core.unbekanntpool import ARCHIV_TAGE   # EINE Quelle: Archiv-/Reaktivierungs-Fenster (auch Today-Kachel)
 
 DATA = os.environ.get("VERIFY_DATA_DIR") or os.path.join(HERE, "verify_data")  # von verifyd prozessweit gesetzt
 MASTER = os.path.join(DATA, "faces")
@@ -625,7 +626,7 @@ def _status(phase, done=0, total=0):
         pass
 
 
-def _reconcile_intern(archiv_tage=7, sim=SIM_DEFAULT):
+def _reconcile_intern(archiv_tage=ARCHIV_TAGE, sim=SIM_DEFAULT):
     """Ordnet die gesammelten Unbekannt-Gesichter persistenten Identitaeten zu — bestehende IDs
     bleiben stabil (Mehrheitsentscheid je Cluster ueber die schon zugeordneten Gesichter), neue
     Identitaeten kommen dazu, Einmal-Gaenger altern raus. Zusammenlege-Vorschlaege entstehen
@@ -634,15 +635,32 @@ def _reconcile_intern(archiv_tage=7, sim=SIM_DEFAULT):
     automatisch gemergt, verworfene Paare bleiben draussen. Rueckgabe: (identitaeten, vorschlaege)."""
     faces = {g["id"]: g for g in lade_gesichter()}
     idents = {u["id"]: u for u in lade_unbekannte()}
+    # OBJEKT-EINFRIERUNG (Baustein C 12.08., Klasse stiller Verlust — Realfall U132:
+    # der seit 20.07. als Objekt gemutete Cluster zog am 12.08. fuenf Besucher-Crops
+    # an und versteckte sie im eingeklappten "not people"-Bereich): ein als Objekt
+    # eingestufter Cluster nimmt KEINE neuen Members mehr an. Seine Members verlassen
+    # das Clustering (der Cluster selbst bleibt unveraendert stehen, nur geloeschte
+    # Gesichter fallen weiter raus); neue Funde, die zu ihm passen wuerden, bilden
+    # frische U-Cluster und bleiben damit normal sichtbar (User-Grundsatz: nicht
+    # loeschen, Mehrdeutigkeit aufloesen). Frueher faelschlich verschluckte Members
+    # loest das CLI-Kommando objekt_reparatur heraus — bewusst kein Automatismus.
+    eingefroren = {}
+    for _uid in [k for k, u in idents.items() if u.get("objekt")]:
+        u = idents.pop(_uid)
+        u["members"] = [m for m in u.get("members", []) if m in faces]
+        eingefroren[_uid] = u
+    fest = {m for u in eingefroren.values() for m in u["members"]}
+    frei = {fid: g for fid, g in faces.items() if fid not in fest}
     face2id = {}
     for u in idents.values():
-        u["members"] = [m for m in u.get("members", []) if m in faces]   # geloeschte Gesichter raus
+        u["members"] = [m for m in u.get("members", []) if m in frei]   # geloeschte + eingefrorene Gesichter raus
         for m in u["members"]:
             face2id[m] = u["id"]
-    _status("clustern", 0, len(faces))
-    clusters = clustere(list(faces.values()), sim=sim) if faces else []
-    _status("zuordnen", len(faces), len(faces))
-    nums = [int(k[1:]) for k in idents if k[:1] == "U" and k[1:].isdigit()]
+    _status("clustern", 0, len(frei))
+    clusters = clustere(list(frei.values()), sim=sim) if frei else []
+    _status("zuordnen", len(frei), len(frei))
+    nums = [int(k[1:]) for k in list(idents) + list(eingefroren)
+            if k[:1] == "U" and k[1:].isdigit()]
     naechste = (max(nums) + 1) if nums else 1
     neu, vorschlaege = {}, []
     for c in clusters:
@@ -683,7 +701,25 @@ def _reconcile_intern(archiv_tage=7, sim=SIM_DEFAULT):
             u["objekt"] = bool(p90 >= 0.75 and nnm < 0.20)
         else:
             u["objekt"] = bool(idents.get(u["id"], {}).get("objekt", False))
-    for u in neu.values():                                    # Einmal-Gaenger altern raus
+        if u["objekt"]:
+            # Zeitanker der Einstufung (Baustein C): objekt_reparatur loest spaeter
+            # genau die Members heraus, die JUENGER als dieser Anker sind. Bestehender
+            # Anker bleibt, neue Einstufung stempelt jetzt.
+            u["objekt_seit"] = idents.get(u["id"], {}).get("objekt_seit") or time.time()
+    for u in neu.values():                                    # Einmal-Gaenger altern raus …
+        # … und Rueckkehrer wachen LAUT wieder auf (Widerleger MUSS-2/KANN-4, Realfall
+        # U155: ein archivierter Einmal-Gaenger zog am 12.08. eine frische Besuchs-
+        # Stuetze an und blieb archiviert -> in Kachel UND /unbekannte unsichtbar).
+        # "archiviert" ist eine MASCHINEN-Entscheidung (Alterung), die die Maschine
+        # bei neuer Evidenz zuruecknehmen darf — anders als "besucher" (User-Entscheid,
+        # bleibt unangetastet). Bewusst KEINE Einfrierung wie bei Objekt-Clustern:
+        # ein Wiederkehrer soll seine persistente U-Identitaet behalten, nicht als
+        # frischer Cluster fragmentieren (Unbekannte-Reiter-Konzept).
+        if u["status"] == "archiviert" and \
+           (time.time() - u["last_seen"]) <= archiv_tage * 86400:
+            u["status"] = "aktiv"
+            print(f"  {u['id']}: archived cluster got a fresh member -> reactivated",
+                  flush=True)
         if u["status"] == "aktiv" and len(u["members"]) <= 1 and \
            (time.time() - u["last_seen"]) > archiv_tage * 86400:
             u["status"] = "archiviert"
@@ -713,7 +749,8 @@ def _reconcile_intern(archiv_tage=7, sim=SIM_DEFAULT):
                 kand.setdefault(frozenset((_ids[_i], _ids[_j])), s)
     vs = sorted(((p, s) for p, s in kand.items() if p not in verworfen), key=lambda t: -t[1])
     vs = [(min(p), max(p)) for p, _ in vs[:VORSCHLAG_MAX_N]]
-    _speichere_unbekannte(list(neu.values()))
+    alle = list(neu.values()) + list(eingefroren.values())   # Objekt-Cluster unveraendert zurueck
+    _speichere_unbekannte(alle)
     try:
         tmp = VORS_PATH + ".tmp"
         with open(tmp, "w") as f:
@@ -724,10 +761,10 @@ def _reconcile_intern(archiv_tage=7, sim=SIM_DEFAULT):
     except Exception:
         pass
     _status("fertig", len(faces), len(faces))
-    return list(neu.values()), vs
+    return alle, vs
 
 
-def reconcile_unbekannte(archiv_tage=7, sim=SIM_DEFAULT):
+def reconcile_unbekannte(archiv_tage=ARCHIV_TAGE, sim=SIM_DEFAULT):
     """Gelockter Wrapper: serialisiert das Neu-Ordnen der Identitaeten gegen sammle/migriere und
     gegen ein zweites reconcile (Review 21.07.: sonst Last-Writer-Wins auf unbekannte.jsonl)."""
     with pool_lock():
@@ -777,6 +814,7 @@ def fd_nachpruefung():
             bewertet = [x for x in urteile if x is not None]
             if bewertet and all(bewertet):
                 u["objekt"] = True
+                u["objekt_seit"] = time.time()   # Zeitanker fuer objekt_reparatur (Baustein C)
                 geaendert += 1
                 print(f"  {u['id']}: all {len(bewertet)} assessable member crop(s) match the "
                       f"non-face signature -> flagged as object", flush=True)
@@ -784,6 +822,80 @@ def fd_nachpruefung():
             _speichere_unbekannte(idents)
     print(f"fd re-check: {geaendert} identities flagged as objects", flush=True)
     return geaendert
+
+
+def objekt_reparatur(uid=None, seit=None):
+    """Einmalige Reparatur (Baustein C 12.08., Realfall U132: 5 Besucher-Crops vom
+    12.08. steckten in einem seit 20.07. gemuteten Objekt-Cluster): Members eines
+    Objekt-Clusters, die JUENGER sind als seine Objekt-Einstufung, herausloesen und
+    untereinander geclustert als frische U-Cluster sichtbar machen (User-Grundsatz:
+    nicht loeschen, Mehrdeutigkeit aufloesen — alle Crops bleiben erhalten, sie
+    werden nur wieder sichtbar; ob ein herausgeloester Cluster doch ein Objekt ist,
+    entscheidet der naechste Reconcile mit der EINEN Objekt-Regel neu). Bewusst NUR
+    als CLI-Kommando, nie automatisch beim Start.
+
+    uid=None: alle Objekt-Cluster. seit (epoch): Zeitanker der Einstufung; ohne
+    Angabe zaehlt das gespeicherte objekt_seit des Clusters — fehlt beides, wird der
+    Cluster LAUT uebersprungen (nie raten, wann die Einstufung war; Altbestand vor
+    dieser Runde traegt noch kein objekt_seit). Nach dem Lauf traegt der Cluster den
+    benutzten Anker als objekt_seit; zusammen mit der Einfrierung im Reconcile ist
+    das idempotent (es kommen keine juengeren Members mehr nach).
+    Rueckgabe: Liste der neu angelegten Identitaeten."""
+    with pool_lock():
+        faces = {g["id"]: g for g in lade_gesichter()}
+        U = lade_unbekannte()
+        ziele = [u for u in U if u.get("objekt") and (uid is None or u["id"] == uid)]
+        if not ziele:
+            print(f"objekt_reparatur: object cluster {uid!r} not found" if uid
+                  else "objekt_reparatur: no object clusters in the pool", flush=True)
+            return []
+        nums = [int(u["id"][1:]) for u in U
+                if u["id"][:1] == "U" and u["id"][1:].isdigit()]
+        naechste = (max(nums) + 1) if nums else 1
+        angelegt, geaendert = [], False
+        for u in ziele:
+            anker = seit if seit is not None else u.get("objekt_seit")
+            if anker is None:
+                print(f"  {u['id']}: no objekt_seit stored and no --seit given — "
+                      f"skipped (pass --seit; guessing the classification time "
+                      f"is not allowed)", flush=True)
+                continue
+            wann = time.strftime("%Y-%m-%d %H:%M", time.localtime(anker))
+            jung = [m for m in u.get("members", [])
+                    if m in faces and (faces[m].get("ts") or 0) > anker]
+            if not jung:
+                if u.get("objekt_seit") != anker:
+                    u["objekt_seit"] = anker            # Anker festschreiben (Altbestand)
+                    geaendert = True
+                print(f"  {u['id']}: no members younger than {wann} — nothing to extract",
+                      flush=True)
+                continue
+            weg = set(jung)
+            rest = [m for m in u.get("members", []) if m not in weg]
+            for c in clustere([faces[m] for m in jung], sim=SIM_DEFAULT):
+                mids = [g["id"] for g in c]
+                tss = [faces[m]["ts"] for m in mids]
+                nid = f"U{naechste}"; naechste += 1
+                neu = {"id": nid, "created": min(tss), "first_seen": min(tss),
+                       "last_seen": max(tss), "status": "aktiv", "label": None,
+                       "members": mids, "objekt": False}
+                U.append(neu)
+                angelegt.append(neu)
+                print(f"  {u['id']} -> {nid}: {len(mids)} member(s) extracted "
+                      f"({', '.join(mids[:4])}{'…' if len(mids) > 4 else ''})", flush=True)
+            u["members"] = rest
+            u["objekt_seit"] = anker
+            geaendert = True
+            resttss = [faces[m]["ts"] for m in rest if m in faces]
+            if resttss:
+                u["first_seen"], u["last_seen"] = min(resttss), max(resttss)
+            print(f"  {u['id']}: {len(jung)} member(s) younger than {wann} released, "
+                  f"{len(rest)} kept as object", flush=True)
+        if geaendert:
+            _speichere_unbekannte(U)
+        print(f"objekt_reparatur: {len(angelegt)} new identities out of "
+              f"{len(ziele)} object cluster(s)", flush=True)
+        return angelegt
 
 
 def reorganisieren():
@@ -841,6 +953,127 @@ def _unbekannt_merge_intern(uid_a, uid_b):
     return True
 
 
+def _pool_abzug_intern(mids):
+    """Der EINE Pool-Abzug nach dem Anlernen (Issue #19): angelernte Gesichter aus
+    gesichter.jsonl nehmen (atomar), ihre Crops loeschen und ihre Mitgliedschaften aus
+    ALLEN Unbekannt-Identitaeten austragen; dabei leergezogene Identitaeten entfallen.
+    Ersetzt das alte `del U[uid]` aus _unbekannt_benennen_intern; am ECHTEN Pool
+    identisch, in vier konstruierten Kanten bewusst ANDERS und besser (Widerleger
+    11.08.): geteilte mid verlaesst BEIDE Identitaeten (vorher Karteileiche), eine nur
+    noch aus toten members bestehende Identitaet entfaellt, members-loses Dict bekommt
+    [], doppelte uid-Zeilen ueberleben (vorher dedupte das dict still eine weg).
+    Wiederverwendet von _unbekannt_benennen_intern UND benenne_mit_abzug — vorher zog
+    nur der Unbekannt-Reiter ab; die Today-Karte ("Add selected faces") liess die
+    Gesichter im Pool zurueck, die Unknown-Karte blieb stehen. NUR unter pool_lock rufen."""
+    weg = set(mids)
+    G = [g for g in lade_gesichter() if g["id"] not in weg]
+    _schreibe_jsonl_atomar(GES_PATH, G)                     # atomar + gelockt (Review 21.07.)
+    for mid in weg:
+        try:
+            os.remove(os.path.join(CROPS, mid + ".jpg"))
+        except FileNotFoundError:
+            pass
+    U = lade_unbekannte()
+    behalten = []
+    for u in U:
+        alte = u.get("members", [])
+        u["members"] = [m for m in alte if m not in weg]
+        if u["members"] or not alte:                        # nur LEERGEZOGENE entfallen
+            behalten.append(u)
+    _speichere_unbekannte(behalten)
+
+
+def _pool_sicherung(mids):
+    """eid+Embedding+Modell der Pool-Eintraege VOR dem Abzug sichern — Futter fuer die
+    Event-Nachpruefung (nachpruefe_events), die nach dem Abzug nicht mehr an die
+    Embeddings kaeme. NUR unter pool_lock rufen (konsistenter Stand)."""
+    G = {g["id"]: g for g in lade_gesichter()}
+    return [{"eid": G[m]["eid"], "emb": G[m]["emb"], "modell": G[m].get("modell")}
+            for m in mids if m in G]
+
+
+def benenne_mit_abzug(gesicht_ids, person, beste_n=None):
+    """Anlern-Weg der Today-Karte und des Cluster-Anlernens (/anlernen_benennen,
+    Issue #19): benenne() + Pool-Abzug in EINEM gelockten Zug, damit angelernte
+    Gesichter nicht wieder als unbekannt clustern und die Unknown-Karte verschwindet.
+    beste_n = ALLE uebergebenen (Widerleger 11.08.): der User hat jedes Gesicht
+    EINZELN angekreuzt ("Tick the faces that really belong") — mit dem alten
+    beste_n=5 wurden bei 8 Haekchen 3 Gesichter abgezogen UND vernichtet, ohne je
+    Referenz zu werden. WICHTIG zur Grenze dieses Wegs: der Schutz vor einem
+    fehl-angekreuzten FREMDEN ist das bewusste Anklicken selbst — die Referenz-QS
+    danach meldet nur Verwechslungen mit BESTEHENDEN Personen, einen niemandem
+    aehnlichen Fremden sieht sie konstruktiv nicht (Widerleger-Recheck 11.08.).
+    Abgezogen werden NUR ids, deren Crop real existiert (struktureller Guard statt
+    Meldungstext: bei Teilausfall — Crop-Dateien fehlen — bleiben genau diese im
+    Pool statt ersatzlos vernichtet zu werden; ohne einen einzigen Crop passiert
+    GAR nichts, auch kein leerer Personen-Ordner).
+    Rueckgabe (ok, msg, betroffen); betroffen fuer verifyd.anlern_nachpruefung_starten."""
+    with pool_lock():
+        mit_crop = [i for i in gesicht_ids
+                    if os.path.isfile(os.path.join(CROPS, str(i) + ".jpg"))]
+        if not mit_crop:
+            return False, "keine Crop-Dateien zu den gewaehlten Gesichtern — nichts angelernt", []
+        betroffen = _pool_sicherung(mit_crop)
+        ok, msg = benenne(mit_crop, person,
+                          beste_n=beste_n if beste_n else max(1, len(mit_crop)))
+        if not ok:
+            return False, msg, []
+        _pool_abzug_intern(mit_crop)
+        if len(mit_crop) < len(gesicht_ids):
+            msg += (f" — {len(gesicht_ids) - len(mit_crop)} von {len(gesicht_ids)} ohne "
+                    f"Crop-Datei, bleiben im Pool")
+    return True, msg, betroffen
+
+
+def _person_refs(emb, person):
+    """Referenz-Embeddings EINER Person (det 320) — die gezielte Variante von
+    lade_master_refs. Die Nachpruefung (Issue #19) brauchte anfangs die ganze
+    Bibliothek und kostete damit 650+ s auf CPU (Widerleger 11.08.); fuer das
+    "traegt die NEUE Referenz das Event?"-Urteil zaehlt nur die eine Person."""
+    V = []
+    pd = os.path.join(MASTER, person)
+    if os.path.isdir(pd):
+        for f in sorted(os.listdir(pd)):
+            if not f.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+                continue
+            img = cv2.imread(os.path.join(pd, f))
+            if img is None:
+                continue
+            v = emb.embed(img)
+            if v is not None:
+                V.append(v.astype(np.float32))
+    return np.asarray(V, dtype=np.float32) if V else None
+
+
+def nachpruefe_events(person, faces):
+    """Issue #19 Teil 2: nach dem Anlernen die EVENTS der abgezogenen Gesichter gegen die
+    NEUEN Referenzen der Person pruefen — bewusst KEINE Video-Neuanalyse (auf 2C/4T-
+    Hardware genau falsch, Clip oft schon weg; ein Fehlschlag wuerde per last-wins eine
+    gute Zeile degradieren), sondern Embedding-Vergleich der gesicherten Pool-Embeddings.
+    Je Event zaehlt sein BESTES Gesicht. Gate ist die zentrale UNBEKANNT_MAX — exakt die
+    "jetzt bekannt"-Semantik von migriere_und_pruefe_pool (b), kein neues Streu-Literal.
+    Pool-Embeddings eines ANDEREN Recognition-Modells werden uebersprungen (Vergleich
+    waere bedeutungslos; fail-safe Richtung "Karte bleibt stehen").
+    faces = [{eid, emb, modell}, ...]; Rueckgabe {eid: {"sim": float, "bestaetigt": bool}}."""
+    emb = Embedder()
+    R = _person_refs(emb, person)
+    modell = aktuelles_modell()
+    out = {}
+    for f in faces:
+        eid, v = f.get("eid"), f.get("emb")
+        if not eid or v is None:
+            continue
+        if f.get("modell") is not None and f["modell"] != modell:
+            print(f"  {eid}: pool embedding from model '{f['modell']}' != active "
+                  f"'{modell}' — skipped (card stays)", flush=True)
+            continue
+        s = float((R @ np.asarray(v, np.float32)).max()) if R is not None and len(R) else -1.0
+        alt = out.get(eid)
+        if alt is None or s > alt["sim"]:
+            out[eid] = {"sim": round(s, 3), "bestaetigt": bool(s >= UNBEKANNT_MAX)}
+    return out
+
+
 def unbekannt_benennen(uid, person, beste_n=6):
     """Gelockter Wrapper (Review 21.07.: serialisiert gegen das kontinuierliche Sammeln, das
     dieselbe gesichter.jsonl schreibt)."""
@@ -851,26 +1084,19 @@ def unbekannt_benennen(uid, person, beste_n=6):
 def _unbekannt_benennen_intern(uid, person, beste_n=6):
     """Eine Unbekannt-Identitaet zu einer bekannten Person machen: beste Gesichter als Referenzen
     anlegen, die Gesichter aus dem Unbekannt-Pool entfernen (Crops + gesichter.jsonl), Identitaet
-    entfernen. Ab dem naechsten Event wird die Person erkannt und taucht nicht mehr als unbekannt auf."""
+    entfernen. Ab dem naechsten Event wird die Person erkannt und taucht nicht mehr als unbekannt
+    auf. Rueckgabe (ok, msg, betroffen) — betroffen wie benenne_mit_abzug fuer die
+    Event-Nachpruefung (Issue #19: auch dieser Weg liess die Event-Akten alt)."""
     U = {u["id"]: u for u in lade_unbekannte()}
     if uid not in U:
-        return False, "Identitaet nicht gefunden"
+        return False, "Identitaet nicht gefunden", []
     mids = U[uid].get("members", [])
+    betroffen = _pool_sicherung(mids)
     ok, msg = benenne(mids, person, beste_n=beste_n)
     if not ok:
-        return False, msg
-    # Gesichter aus dem Pool nehmen, damit sie nicht wieder als unbekannt clustern
-    weg = set(mids)
-    G = [g for g in lade_gesichter() if g["id"] not in weg]
-    _schreibe_jsonl_atomar(GES_PATH, G)                     # atomar + gelockt (Review 21.07.)
-    for mid in mids:
-        try:
-            os.remove(os.path.join(CROPS, mid + ".jpg"))
-        except FileNotFoundError:
-            pass
-    del U[uid]
-    _speichere_unbekannte(list(U.values()))
-    return True, msg
+        return False, msg, []
+    _pool_abzug_intern(mids)                                # Pool + Crops + Identitaet(en)
+    return True, msg, betroffen
 
 
 # ---------------------------------------------------------------- Referenz-QS (Verwechslungs-Check)
@@ -1302,6 +1528,13 @@ if __name__ == "__main__":
     s.add_argument("--kein-migriere", action="store_true")   # szenario-getriggert: nur sammeln, keine Pool-Neupruefung
     sub.add_parser("reorganisieren")                         # Button/Wartung: migriere + reconcile (kein neues Sammeln)
     sub.add_parser("fd-nachpruefung")                        # #42 Teil B: Alt-Pool einmalig gegen die Fehldetektions-Signatur
+    orp = sub.add_parser("objekt_reparatur")                 # Baustein C 12.08.: verschluckte Besucher-Crops
+    orp.add_argument("--uid", default=None)                  #   aus Objekt-Clustern herausloesen (nur juenger als Anker)
+    orp.add_argument("--seit", default=None,
+                     help="Zeitanker der Objekt-Einstufung (epoch oder YYYY-MM-DD[THH:MM]); "
+                          "ohne Angabe zaehlt das gespeicherte objekt_seit")
+    np_ = sub.add_parser("nachpruefen")                      # Issue #19: Events nach dem Anlernen
+    np_.add_argument("person"); np_.add_argument("faces_json")
     c = sub.add_parser("cluster"); c.add_argument("--sim", type=float, default=SIM_DEFAULT)
     pr = sub.add_parser("pruefe"); pr.add_argument("--sim", type=float, default=0.30)
     pr.add_argument("--unscharf", type=int, default=350)
@@ -1317,6 +1550,32 @@ if __name__ == "__main__":
         reorganisieren()
     elif a.cmd == "fd-nachpruefung":
         fd_nachpruefung()
+    elif a.cmd == "objekt_reparatur":
+        seit = None
+        if a.seit is not None:
+            try:
+                seit = float(a.seit)
+            except ValueError:
+                import datetime as _dt
+                for fmt in ("%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+                    try:
+                        seit = _dt.datetime.strptime(a.seit, fmt).timestamp()
+                        break
+                    except ValueError:
+                        pass
+                if seit is None:
+                    sys.exit(f"--seit '{a.seit}' not parseable (epoch or YYYY-MM-DD[THH:MM])")
+        objekt_reparatur(uid=a.uid, seit=seit)
+    elif a.cmd == "nachpruefen":
+        # Ergebnis in DATEI statt stdout: insightface druckt beim Modell-Laden auf stdout,
+        # der Aufrufer (verifyd.anlern_nachpruefung_starten) braucht einen sauberen Kanal.
+        faces = json.load(open(a.faces_json))
+        erg = nachpruefe_events(a.person, faces)
+        _schreibe_json_atomar(a.faces_json + ".ergebnis",
+                              {"schwelle": UNBEKANNT_MAX, "events": erg})
+        for eid, e in sorted(erg.items()):
+            print(f"  {eid}: sim={e['sim']} {'CONFIRMED' if e['bestaetigt'] else 'not confirmed'}",
+                  flush=True)
     elif a.cmd == "cluster":
         cl = clustere(sim=a.sim)
         print(f"\n{len(cl)} groups (sim>={a.sim}):")

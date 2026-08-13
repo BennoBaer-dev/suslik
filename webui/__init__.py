@@ -51,6 +51,11 @@ NAV = [
     # erklaert, was sie tut, ist leichter zu finden als eine, die je nach
     # Config verschwindet (dieselbe Begruendung wie bei "Judged images").
     ("Vision",   [("/vision", "Vision detect")]),
+    # Live direkt neben Vision (live_reiter_bauplan.md §2.1, User woertlich).
+    # Der Reiter steht auch sichtbar da, wenn kein Waechter laeuft — dieselbe
+    # Begruendung wie bei "Vision detect": eine Seite, die erklaert, was sie
+    # tut, ist leichter zu finden als eine, die je nach Config verschwindet.
+    ("Live",     [("/live", "Live watchers")]),
     # Areas als EIGENER Hauptbereich zwischen People und Learn (Design-Entscheid):
     # dort liegen Sicht-Einstieg UND Konfiguration (anlegen/loeschen/zuweisen).
     ("Areas",    [("/areas", "Areas")]),

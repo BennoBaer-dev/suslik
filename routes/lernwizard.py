@@ -29,20 +29,35 @@ def _dauer(s):
 
 def wizard(personen_zahl, auswahl, bilanz, prognose, quelle, schwellen,
            messung_laeuft=False, gemessen_felder=(), alle=False, bestaetigen_ab=1000,
-           max_events=40000):
+           max_events=40000, mess_wartet=False, mess_skip="", unbekannt_offen=0):
     """Wizard-Ansicht. auswahl = Event-Zahl (int) oder None; alle=True bei ?events=alle;
     quelle 'gemessen'|'rueckfall' + gemessen_felder = WIRKLICH gemessene Konstanten
     (Teil-Kennung, Widerleger F3.1); bestaetigen_ab: ab dieser Zahl verlangt der
-    Start-Knopf den Bestaetigungs-Dialog MIT den Schaetz-Zahlen (User-Wunsch 3)."""
+    Start-Knopf den Bestaetigungs-Dialog MIT den Schaetz-Zahlen (User-Wunsch 3);
+    unbekannt_offen = wartende Unbekannt-Cluster von heute (core/unbekanntpool,
+    dieselbe Quelle wie die Today-Kachel — Baustein B 12.08.)."""
     lage = ("B — existing references/unknowns will be extended"
             if personen_zahl else "A — cold start, no faces yet")
     teile = ["<h2>Learn people — guided run</h2>",
              '<p class="sub">Plans a learning run over your own recordings. '
              "Preparation, harvest, grouping and naming run for real; "
-             "adoption into recognition ships in the next updates.</p>",
+             "adoption into recognition ships in the next updates.</p>"]
+    if unbekannt_offen:
+        # Baustein B (12.08., Realfall Besuch): der Querverweis, der fehlte — ein
+        # Lernlauf ist fuer heutige unbekannte Besucher gar nicht noetig, ihre
+        # Gesichter liegen schon gesammelt unter People -> Unknown.
+        teile.append(
+            '<div class="card"><span class="badge warn">unknown visitors</span> '
+            f'<b>{int(unbekannt_offen)} unknown visitor'
+            f'{"s are" if unbekannt_offen != 1 else " is"} waiting under '
+            '<a href="/unbekannte">People &rarr; Unknown</a></b>'
+            '<div class="dim">Faces collected today that match no known person — '
+            'you can name, merge or mute them there right away; '
+            'no learning run needed for that.</div></div>')
+    teile.append(
              f'<div class="card"><b>Starting point</b><div>{html.escape(lage)}</div>'
              '<div class="dim">Clean-up switch for auto-collected unknowns: '
-             "arrives with the naming stage.</div></div>"]
+             "arrives with the naming stage.</div></div>")
     knoepfe = "".join(
         f'<a class="gtb{" on" if (auswahl == n and not alle) else ""}" '
         f'href="/lernlauf?events={n}">last {n}</a> '
@@ -71,8 +86,17 @@ def wizard(personen_zahl, auswahl, bilanz, prognose, quelle, schwellen,
                 q = ("analysis speed measured on THIS machine; download estimate uses "
                      "defaults" if gemessen_felder else "measured on THIS machine")
             else:
-                q = ("fallback values — not yet measured here"
-                     + (", measuring now …" if messung_laeuft else ""))
+                # Pflichtpunkt .172: Skip und Warten ehrlich benennen — "measuring
+                # now" waere in beiden Faellen gelogen (K1, falsche Darstellung).
+                if mess_skip:
+                    zusatz = f", measurement skipped on this machine ({mess_skip})"
+                elif mess_wartet:
+                    zusatz = ", measurement waiting for a free analysis slot …"
+                elif messung_laeuft:
+                    zusatz = ", measuring now …"
+                else:
+                    zusatz = ""
+                q = "fallback values — not yet measured here" + zusatz
             teile.append(
                 f'<div class="card"><b>Estimated duration</b> <span class="dim">({html.escape(q)})</span>'
                 f'<div>analysis ~{_dauer(prognose["analyse_s"])} · clip downloads '

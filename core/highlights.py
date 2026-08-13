@@ -12,7 +12,13 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.0.170"
+STAND = "0.1.0.183"   # .183 = Live-Release (Respin von .182: Kameranamen-Leck
+# in Code-Kommentaren gefixt, Audit-Stufe 8b ergaenzt; Box-Text unveraendert).
+# Box-Inhalt vom User DIKTIERT und abgestimmt (12.08. ~22:50 im Chat):
+# (1) BETONTER Hinweis ungetestete Zwischenversion/ganzer Live-Part neu,
+# (2) die Live-Story mit den gemessenen 199-801 ms. Weitere Kandidaten
+# (Unknown-Sichtbarkeit, Topic-Praefix .176) blieben BEWUSST draussen —
+# nicht ohne neue Abstimmung ergaenzen.
 
 # HERVORHEBUNG (0.1.0.168): ein Eintrag kann optisch herausstechen — genau EIN
 # Fall ist dafuer vorgesehen, der Vorab-Hinweis am Anfang eines Releases. Die
@@ -25,9 +31,45 @@ BETONT = "!! "
 # bekommen BEWUSST keinen Box-Eintrag: interne Prod-Schritte, kein Release. Der
 # Box-Inhalt der naechsten Veroeffentlichung wird wie immer vorher mit dem User
 # abgestimmt — hier wird nur STAND nachgezogen, die Box bleibt unveraendert.
+# .171 (Vision-Favorit aus Zellen-Stimmen, Analyse-Watchdog + RAM-Gate)
+# bekommt BEWUSST keinen Box-Eintrag: interner Prod-Schritt, Box-Inhalt der
+# naechsten Veroeffentlichung wird vorher mit dem User abgestimmt — hier wird
+# nur STAND nachgezogen, die Box bleibt unveraendert.
+# .172 (Tester-Paket: CPU-Thread-Kappung, Analyse-nice, Wanduhr-Serialisierung,
+# Ketten-Schalter, In-Job-RSS-Wache, Vision-Stimme, Vision-Seiten-CSS) bekommt
+# BEWUSST keinen Box-Eintrag: interner Prod-Schritt, Box-Inhalt der naechsten
+# Veroeffentlichung wird vorher mit dem User abgestimmt — nur STAND nachgezogen.
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # .183 — User-DIKTAT (12.08. ~22:50, Text im Chat abgestimmt; HALT-Gate
+    # dafuer abgegolten): betonter Zwischenversions-Hinweis + Live-Story.
+    # (.182 wurde nie als Release beworben — Respin wegen Kameranamen-Leck,
+    # der Eintrag wandert mit auf die ausgelieferte Version.)
+    ("0.1.0.183", (
+        BETONT + "Untested in-between release: the entire live-watcher part "
+        "is brand new in this version and has not seen wider testing yet — "
+        "expect rough edges and please report what breaks.",
+        "Live watchers: pick cameras to watch directly on the live stream — "
+        "first face to verified signal in under one second (measured "
+        "199-801 ms), e.g. to trigger Home Assistant via MQTT.",
+    )),
+    # .173 — mit dem User abgestimmt (11.08., Auswahl-Frage + Diktat-Ergaenzung):
+    # der BETONTE Test-Release-Hinweis fuer cpu/gpu-legacy plus der Auto-Default;
+    # #19/#9/#10 bleiben bewusst nur im CHANGELOG.
+    ("0.1.0.173", (
+        BETONT + "This build doubles as a test release for small machines: it "
+        "ships as version tags for the cpu and gpu-legacy variants, so "
+        "low-power boxes and older Intel iGPUs (5th–10th gen Core) can try "
+        "it. The recent load cuts — thread caps on every model session, "
+        "per-path recognition switches, conservative defaults on weak "
+        "hardware — are aimed exactly at that hardware. Feedback welcome.",
+        "Weak machines now default themselves: on the first start of this "
+        "version every install measures its usable physical cores, and below "
+        "the floor the recognition chain and the CPU thread cap are pre-set "
+        "conservatively — loud in the start log, explained next to the "
+        "settings, and never touching values you set yourself.",
+    )),
     # .170 — Release-Eintrag, mit dem User abgestimmt (10.08.): die
     # KI-/Vision-Geschichte bleibt der Kern der Box (.168), .170 traegt NUR den
     # kurzen Fix-Hinweis zur Galerie; der fruehere .169-Block ging darin auf.

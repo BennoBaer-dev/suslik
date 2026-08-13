@@ -24,6 +24,8 @@ import yaml
 from core.pfade import WURZEL as HERE, VERIFYD_PFAD   # M0-Anker (Falle 0): eine Pfad-Quelle
 from core import areas as _areas_mod                  # Areas Stufe 1 (Sicht + Meldetext, 30.07.)
 from core import registry as _reg                     # Dateinamen-Vertrag (Issues #11/#12)
+from core import kette as _kette                      # Modulumbau R2: die Erkennungskette (Default-Kette)
+from core import melden as _melden                    # Modulumbau R3: die Meldewege (Live-Andock-API)
 # Oeffentliche Projekt-Doku (GitHub). Lokale Arbeitsnotizen des Autors enthalten interne
 # IPs + Zugaenge und duerfen NICHT ueber das UI ausgeliefert werden -> System-Seite + /doc zeigen aufs Repo.
 DOCS_URL = "https://github.com/BennoBaer-dev/suslik"
@@ -125,6 +127,64 @@ def _mask_secret(s):
     return "•••• set" if str(s or "") else ""
 
 
+def _live_guards_aktiv(cfg):
+    """Autostart-Praedikat des Live-Supervisors: mindestens ein enabled-Guard
+    im STORE (frisch gelesen — Hand-Edits zaehlen, nicht die Prozess-Sicht).
+
+    Widerleger phase34 MUSS-1: die alte Fassung urteilte mit roher bool()-
+    Wahrheit (`g.get("enabled")`) — `"enabled": "false"` hielt der Supervisor
+    fuer AN, die Engine (livewache._bool_lesen via guards_lesen) fuer AUS.
+    Folge gemessen: Spawn -> "nothing to do" -> Fehlstart-Kette -> alle
+    15 min ein Stoerungs-Push, fuer einen ausdruecklich abgeschalteten
+    Waechter. EIN Praedikat fuer eine Frage (K3): dieselbe _bool_lesen-
+    Wahrheit wie die Engine, kein Nachbau. Log dabei stumm — der Takt fragt
+    alle 5 s, die LAUTE Meldung eines ungueltigen Werts gehoert der Engine
+    (guards_lesen beim Start); der Default False ist derselbe."""
+    from core import livewache as _lw
+    with _cfg_lock:
+        store = _lade_config_store(cfg)
+    blk = (store.get("live") or {}).get("guards") or {}
+    return any(isinstance(g, dict)
+               and _lw._bool_lesen(g.get("enabled"), False, lambda z: None,
+                                   f"live.guards.{name}.enabled")
+               for name, g in blk.items())
+
+
+def _pool_eid_karte(data_dir):
+    """/heute-Blick in den Unbekannt-Pool -> (eid2uid, uid_members): Event-ID
+    zu U-Nummer plus Mitglieder je Identitaet (fuer "seen Nx before").
+
+    Widerleger phase34 MUSS-2: der /heute-Handler trug hier einen DRITTEN
+    Streu-Parser derselben Datei — `{"members": 5}` warf `TypeError: 'int'
+    object is not iterable` UNGEFANGEN in do_GET, die Seite starb (gemessen),
+    waehrend der Harnisch nur das tolerante Modul prueft (K1). Deckungs-
+    Regel: EIN Leser fuer die Datei (core.unbekanntpool._cluster_lesen —
+    liefert nur Dicts) + Toleranz JE Cluster: eine kaputte Zeile kostet nur
+    sich selbst, nie die Seite. Semantik unveraendert: objekt-Zeilen fallen
+    raus (nie als "Unknown N" anbieten, 25.07.), Archiv-Cluster bleiben
+    drin (Vorbesuchs-Zaehlung), members nur als Liste."""
+    from core import unbekanntpool as _ubp
+    eid2uid, uid_members = {}, {}
+    for _d in _ubp._cluster_lesen(data_dir):
+        try:
+            _u = _d.get("uid") or _d.get("id")
+            if not _u or _d.get("objekt"):
+                continue
+            _mem = _d.get("members")
+            if not isinstance(_mem, list):
+                _mem = []
+            uid_members[_u] = _mem            # Mitglieder BEHALTEN, nicht nur
+            for _m in _mem:                   # zaehlen: "seen Nx before"
+                _s = str(_m)                  # braucht deren ZEITEN
+                eid2uid.setdefault(_s, _u)
+                # Top-3-Sammlung haengt ~2/~3 an die Event-ID — die Karte
+                # matcht ueber die BASIS-Event-ID des Durchgangs
+                eid2uid.setdefault(_s.split("~")[0], _u)
+        except (TypeError, ValueError, AttributeError):
+            continue
+    return eid2uid, uid_members
+
+
 def _migrate_layout(dd):
     """Einmalige, idempotente Migration flach -> Unterordner (config/ faces/ clips/ learn/ state/).
     `shutil.move` = Rename auf demselben Dateisystem (auch fuer die 77G clips instant, kein Kopieren).
@@ -172,6 +232,79 @@ def _placement_hw_key():
     devs = sorted(_glob.glob("/dev/dri/renderD*")) + sorted(_glob.glob("/dev/accel/accel*")) \
          + sorted(_glob.glob("/dev/kfd")) + sorted(_glob.glob("/dev/nvidia[0-9]*"))
     return f"{cpu}|{','.join(devs)}|ort{ov}|{os.environ.get('SUSLIK_VERSION', '')}"
+
+
+# Issue #21 (Tokn59, i5-5300U 2C/4T): die Wanduhr-Selbstmessung ist ein ZWEITER voller
+# Analyse-Prozess neben dem Live-Worker. Sie darf nur laufen, wo ZWEI Analyse-Akteure
+# nebeneinander passen — jeder Akteur besteht strukturell aus zwei nebenlaeufigen
+# Bausteinen (ffmpeg-Decode + Inferenz, s. decode.FrameIter). Die 4 ist damit eine
+# STRUKTUR-UNTERGRENZE (2 Akteure x 2 Bausteine, ein Axiom aus der Architektur),
+# KEINE Messung — der Dienstprozess (Poll/MQTT/UI/Alerts) laeuft obendrauf und ist
+# darin nicht einmal eingerechnet. Unter der Grenze ist die Messung Minuten Volllast
+# fuer eine blosse Prognose-Komfortzahl UND misst dort vor allem die eigene
+# Verdraengung statt der Maschine — ueberspringen, LAUT (K1: Startlog + /health
+# sagen warum). Wer es auf einer kleinen Maschine BEWUSST will (z. B. nachts),
+# senkt `wanduhr_min_kerne` in den Settings (CONFIG_WHITELIST) — ein Axiom darf
+# keinen Nutzer endgueltig aussperren (Nachbesserung W2).
+WANDUHR_AKTEURE = 2                # Live-Analyse + Mess-Roundtrip
+WANDUHR_BAUSTEINE_JE_AKTEUR = 2    # ffmpeg-Decode + Inferenz je Akteur nebenlaeufig
+WANDUHR_MIN_KERNE = WANDUHR_AKTEURE * WANDUHR_BAUSTEINE_JE_AKTEUR
+
+
+def _cpu_quote():
+    """cgroup-CPU-Quote (docker --cpus / LXC cpulimit): os.sched_getaffinity sieht
+    sie NICHT — ein Container mit cpus:1.0 auf einem 12-Kern-Wirt traegt die volle
+    Affinitaetsmaske, darf aber nur 1 CPU-Sekunde je Sekunde verbrauchen
+    (Nachbesserung W2: die Kern-Zaehlung war quota-blind). Rueckgabe: nutzbare
+    GANZE CPUs laut Quote (abgerundet — konservativ, es geht um eine
+    Ueberspringen-Entscheidung) oder None, wenn keine Quote gesetzt/lesbar ist.
+    cgroup v2 (`cpu.max`: '<quota> <period>' oder 'max ...'), v1 als Rueckfall."""
+    try:
+        with open("/sys/fs/cgroup/cpu.max") as f:
+            teile = f.read().split()
+        if teile and teile[0] != "max":
+            periode = int(teile[1]) if len(teile) > 1 else 100000
+            return max(1, int(teile[0]) // max(1, periode))
+    except (OSError, ValueError, IndexError):
+        pass
+    try:                                                   # cgroup v1
+        q = int(open("/sys/fs/cgroup/cpu/cpu.cfs_quota_us").read())
+        p = int(open("/sys/fs/cgroup/cpu/cpu.cfs_period_us").read())
+        if q > 0 and p > 0:
+            return max(1, q // p)
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def _phys_kerne():
+    """Physische Kerne unter den ERLAUBTEN CPUs (cgroup/LXC-Maske, Muster
+    face_audit._so_mit_threads): SMT-Geschwister zaehlen EINMAL — Hyperthreads sind
+    keine eigenen Rechenwerke, fuer 'traegt die Maschine zwei volle Analyse-Akteure?'
+    zaehlen nur Kerne (der 2C/4T-Ausloeser meldet cpu_count=4, hat aber 2). Topologie
+    aus /sys — auch im LXC/Container die Wirts-Nummerierung, dieselbe wie die
+    Affinitaetsmaske. Nicht lesbar -> konservativ erlaubte/2 aufgerundet (SMT-2
+    angenommen): lieber eine Messung zu viel LAUT ueberspringen als eine kleine
+    Maschine minutenlang saettigen. Eine cgroup-CPU-Quote (docker --cpus) deckelt
+    das Ergebnis zusaetzlich (_cpu_quote) — mehr Kerne als Quote sind fuer die
+    Frage 'passen zwei Analyse-Akteure nebeneinander?' nicht real vorhanden."""
+    try:
+        erlaubt = os.sched_getaffinity(0)
+    except AttributeError:                                 # nur ausserhalb Linux
+        erlaubt = set(range(os.cpu_count() or 1))
+    kerne = set()
+    n = None
+    for c in sorted(erlaubt):
+        try:
+            with open(f"/sys/devices/system/cpu/cpu{c}/topology/thread_siblings_list") as f:
+                kerne.add(f.read().strip())     # Geschwister tragen dieselbe Liste ->
+        except OSError:                         # ein Set-Eintrag je physischem Kern
+            n = max(1, (len(erlaubt) + 1) // 2)
+            break
+    if n is None:
+        n = max(1, len(kerne))
+    quote = _cpu_quote()
+    return min(n, quote) if quote is not None else n
 
 
 def placement_aufloesen(cfg):
@@ -271,6 +404,11 @@ def load_config(path):
                          ("anker_sim1", 0.25), ("anker_sim2", 0.35),
                          ("anker_marge_warn", 0.15), ("anker_hart", 0.35),
                          ("anker_k_min", 5), ("anker_deckel", 250), ("anker_deckel_hart", 300),
+                         # Crash-Loop-Wache Boot-Resume der Anker-Phase (#20 gr33nh07n:
+                         # ein 1000er-Lauf blieb in phase=anker stecken und wurde nach
+                         # jedem OOM-Neustart erneut angefahren — Endlosschleife bis
+                         # zum Host-OOM). 0 = nie automatisch wiederaufnehmen.
+                         ("anker_resume_max", 3),
                          ("benennung_k_je_bin", 4), ("benennung_yaw_grenze", 15.0),
                          ("benennung_dup_sim", 0.75), ("benennung_vorschlag_schwelle", 0.45),
                          ("required_zones", {}), ("areas", {}), ("alert_kategorien", ["widerspruch"]),
@@ -301,8 +439,29 @@ def load_config(path):
                          ("nachhol_intervall_s", 600),       # Takt: EIN Event pro Runde
                          ("nachhol_ruhe_s", 300),            # kein Nachholen kurz nach Live-Betrieb
                          ("nachhol_pause_s", 3600),          # Mindestabstand je Event (x Versuchsnr.)
-                         ("nachhol_analyse_timeout_s", 300), # harter Deckel (Live bleibt 1800)
+                         ("nachhol_analyse_timeout_s", 300), # harter Deckel der Retry-Laeufe
                          ("nachhol_start_s", 600),           # Anlauf nach Dienststart
+                         # Watchdog der LIVE-Analyse (Fix 10.08.; vorher fest 1800 s).
+                         # MESSBASIS deckung.jsonl 27.07.-10.08. (n=1394 Live-Analysen
+                         # auf der Prod-Maschine): Median 5,8 s, p90 20,2 s, p99 52,2 s,
+                         # Maximum eines NORMALEN (erfolgreichen) Laufs 257,9 s (02.08.).
+                         # 600 s = gut 2x dieses Maximum: kein regulaerer Lauf der
+                         # letzten zwei Wochen waere gerissen, aber ein Haenger wie am
+                         # 10.08. (Worker hing 1800 s im Swap-Thrashing, der Pass war
+                         # 34 min blockiert) wird nach 10 min gekappt und SOFORT einmal
+                         # nachgefahren (run_analyze). Der Riss ist MEHRDEUTIG
+                         # (haengend ODER Maschine langsamer als die Messbasis) —
+                         # der Retry faehrt deshalb mit VERDOPPELTER Frist:
+                         # Maschinen bis ~4,6x langsamer als die Referenz kommen
+                         # durch, Worst-Case-Blockade 600+1200 s = die alte feste
+                         # 1800-s-Frist (nie schlechter als vor dem Fix).
+                         ("analyse_timeout_s", 600),
+                         # Issue #21/W2: Kern-Untergrenze der Wanduhr-Selbstmessung.
+                         # Default = Struktur-Axiom 2 Akteure x 2 Bausteine (s.
+                         # WANDUHR_MIN_KERNE-Kopf), KEINE Messung — deshalb als
+                         # Config-Paar (Default HIER + Whitelist DORT) statt hart:
+                         # ein Sub-4-Kern-Nutzer darf bewusst trotzdem messen.
+                         ("wanduhr_min_kerne", WANDUHR_MIN_KERNE),
                          # W2: persistenter Analyse-Worker (worker.py) — Modelle EINMAL laden
                          ("worker", True),                   # aus = alter Subprozess-je-Event-Weg
                          # Z8 (konzept_frames.md §7): Kontroll-Speicher der beurteilten
@@ -362,6 +521,25 @@ def load_config(path):
                          ("vision_doppellauf", True),
                          ("vision_meldung", False),      # Nachzuegler-Info nach dem Urteil
                          ("vision_alarm_unbestaetigt", False),
+                         # Vision-STIMME (Fix vision-stimme-2): Urteil = EINE
+                         # zusaetzliche Stuetze Richtung koerper_ab bei
+                         # Namensgleichheit (szenarien.py). Default-Paar ist
+                         # PFLICHT: ein Whitelist-Bool ohne Paar hier ist die
+                         # stille Store-Falle der .171-Erstkontrolle (Seite
+                         # zeigt off, Code faehrt on; der erste Save einer
+                         # BELIEBIGEN Einstellung schriebe false).
+                         ("vision_stimme", True),
+                         # Ketten-Schalter (Issue #21, Entscheid 10.08.): jeder teure
+                         # Erkennungs-Weg je Stufe schaltbar — "immer" (heutiges
+                         # Verhalten), "nur_wenn_gesicht_leer" (erst wenn der Gesichts-
+                         # Weg den Durchgang NICHT restlos bestaetigt hat, Mehr-
+                         # Personen-Regel B) oder "aus" (der Weg startet an der QUELLE
+                         # nicht: keine Koerper-Crops/kein Embedding bzw. kein Vision-
+                         # Anstoss — auf 2C/4T-Maschinen die wirksamste Entlastung).
+                         # PAAR-Bauart wie die vision_*-Zahlen: Default hier,
+                         # Whitelist-Eintrag dort. Stufen-Quelle: KETTE_STUFEN.
+                         ("person_pfad", "immer"),
+                         ("vision_pfad", "immer"),
                          ("worker_rss_max_mb", 4096),        # Neustart-Schwelle (VmRSS des Workers;
                          # warm real ~1,9 GB [adaface/GPU] — 2048 liess nur 10 % Luft und riss im
                          # Soak 27.07.; 4096 = User-Entscheid: faengt Ausufern, nicht Normalbetrieb)
@@ -442,6 +620,12 @@ FRIGATE_READONLY_FORCED = False
 # konfigurierbare nachhol_tage (max 3): wuerde man gegen nachhol_tage prunen, koennte eine
 # UI-Aenderung Zaehler wegwerfen und damit aufgegebene Events wiederbeleben.
 NACHHOL_PRUNE_TAGE = 4
+
+# Live-Reiter (Engine-M6): Frist, nach der ein Helfer-Quelltest-Job als tot
+# gilt und seinen Riegel freigibt — der Subprozess hat timeout=180 s, der
+# Puffer deckt Start/Auswertung; ein haengender Eintrag sperrte den Quelltest
+# sonst bis zum Dienst-Neustart.
+_LIVE_HELFER_FRIST_S = 240.0
 
 
 def frigate_read_only(cfg):
@@ -544,6 +728,10 @@ def frigate_cameras(cfg, force=False):
             out[name] = {"enabled": bool(cc.get("enabled", True)),
                          "zones": sorted((cc.get("zones") or {}).keys()),
                          "width": det.get("width"), "height": det.get("height"),
+                         # detect.enabled aus DERSELBEN Ableitung (Sicht-
+                         # kontrolle 12.08., Realfall reiner Aufnahme-Klon:
+                         # Frigate detektiert dort nichts -> nie Events).
+                         "detect_enabled": bool(det.get("enabled", True)),
                          "record": bool((cc.get("record") or {}).get("enabled"))}
     # Fehler nach URSACHE auffaechern statt str(e) (Plan-QS 25.07.). Der haeufigste Erstnutzer-
     # Fehler ist Frigates AUTH-Port 8971 statt des internen Ports 5000 — und der zeigt sich real
@@ -598,12 +786,54 @@ def frigate_to_cos(score):
 
 
 # ------------------------------------------------------------------ Analyse (nutzt kalibriertes analyze.py)
+# Nachbesserung W8 (roundtrip-seriell): EIN Analyse-Slot auch im Legacy-Weg
+# (worker=aus). Im Worker-Modus serialisiert wk.lock; hier serialisiert dieses
+# Modul-Lock den Analyse-Subprozess gegen die Wanduhr-Messung (_roundtrip_seriell
+# nimmt bei worker=aus DASSELBE Lock). Vorher war die Live-Pruefung der Messung
+# reines check-then-act — im TOCTOU-Fenster liefen Messung und Live-Analyse
+# nachweislich PARALLEL (Kontroll-Harnisch W8).
+_ANALYSE_SERIELL = threading.Lock()
+
+# Issue #21 (Tokn59, i5-5300U 2C/4T): die Analyse-Kinder (worker.py bei ihm 2x ~160 %)
+# saettigten die kleine CPU, UI/Poll/MQTT wurden minutenlang zaeh. Deshalb laufen der
+# persistente Worker und jeder Analyse-Subprozess mit gesenkter CPU-Prioritaet
+# (nice +10). Das senkt KEINE Last und macht keine Analyse schneller — es verteilt nur
+# um, wer zuerst drankommt, wenn CPU knapp ist: der Dienstprozess (UI/Poll/MQTT) bleibt
+# auf nice 0 und gewinnt die Konkurrenz, die gefuehlte Reaktion bessert sich; ist der
+# Dienst idle (Normalfall), bekommt die Analyse weiter die volle CPU. 10 statt 19,
+# damit die Analyse unter Dauerfremdlast nicht verhungert (nice ist ein Gewicht, keine
+# Sperre). BEWUSST kein Config-Schalter (kein Config-Friedhof): es gibt keinen Fall,
+# in dem die Analyse den UI-Threads vorgehen soll. ffmpeg-Enkel der Analyse erben den
+# Wert per fork-Vererbung. Ein separates ionice ist unnoetig: ohne explizites
+# ioprio_set folgt die I/O-Prioritaet der CPU-nice ("If no I/O scheduler has been set
+# for a thread, then by default the I/O priority will follow the CPU nice value",
+# man ioprio_set(2), man-pages 6.9.1, am 11.08. gegengelesen) — und die stdlib hat
+# dafuer ohnehin keinen Wrapper, ein ctypes-Syscall waere arch-abhaengige Bastelei.
+ANALYSE_NICE = 10
+
+
+def _analyse_nice():
+    """preexec_fn fuer Analyse-Spawns — laeuft im Kind zwischen fork und exec.
+    Bewusst NUR dieser eine Syscall: kein Import, kein Lock, kein Log, keine
+    nennenswerte Allokation — mehr waere im fork-Fenster eines Multithread-
+    Prozesses nicht sicher (subprocess-Doku zu preexec_fn). nice ERHOEHEN ist
+    unprivilegiert immer erlaubt; das leere except deckt nur exotische
+    Sandbox-Policies ab und ist vertretbar, weil der Effekt reine Scheduling-
+    Hoeflichkeit ist (sein Fehlen bleibt per `ps -o ni` sichtbar) — ein Raise
+    hier liesse den Spawn und damit die ganze Analyse scheitern."""
+    try:
+        os.nice(ANALYSE_NICE)
+    except OSError:
+        pass
+
+
 def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=None,
-                koerper=False):
-    # Live bleibt bei 1800 (bit-identisch); nur Nachhol-Laeufe bekommen einen harten
-    # Deckel, damit ein pathologisches Alt-Event den Live-Pfad nicht minutenlang blockiert
-    # (gemessen an 1316 echten Analysen: Median 20,7s / p90 34,2s / p99 115,9s).
-    tmo = int(timeout_s or 1800)
+                koerper=False, info=None):
+    # Watchdog der Live-Analyse aus der Config (analyse_timeout_s, messbasiert —
+    # s. Default-Block; vorher fest 1800 s: am 10.08. hing der Worker exakt diese
+    # 1800 s im Swap-Thrashing und blockierte den Pass 34 min). Nachhol-Laeufe
+    # bekommen weiter ihren eigenen, haerteren Deckel (nachhol_analyse_timeout_s).
+    tmo = int(timeout_s or cfg.get("analyse_timeout_s") or 600)
     argv = [eid, "--labels", camera, "--persons", *persons,
             "--dir", event_dir, "--fps-sample", str(cfg["fps_sample"]),
             "--win-thresh", str(cfg["win_thresh"]),
@@ -623,10 +853,70 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
         # W2: Job in den persistenten Worker statt Prozess-Start je Event (~85 % der CPU
         # war Modell-Laden). Ergebnis-Kontrakt identisch: results.jsonl + analyze.log.
         open(logpfad, "w").close()            # wie der alte "w"-Modus: je Versuch frisch
-        antwort = worker.job({"typ": "analyze", "argv": argv, "log": logpfad}, tmo)
+        # Nachbesserung W7: die Wartezeit am Job-Lock (Ernte/Sammle/Wanduhr-
+        # Roundtrip halten es teils minutenlang) ist KEINE Analysezeit. job()
+        # meldet sie ueber `info` zurueck; dt (Watchdog-Einstufung, Logzeilen)
+        # und dauer_s beim Aufrufer rechnen sie heraus — sonst erfindet die
+        # Events-Anzeige eine Analysedauer und die watchdog/worker-died-
+        # Unterscheidung (:dt >= frist) kippt nach langem Lock-Warten.
+        w1, w2 = {}, {}
+        t0 = time.monotonic()
+        antwort = worker.job({"typ": "analyze", "argv": argv, "log": logpfad}, tmo,
+                             info=w1)
+        dt = time.monotonic() - t0 - float(w1.get("wartezeit_s") or 0.0)
+        frist = tmo
+        if antwort is None and timeout_s is None:
+            # Requeue-Strecke (Fix 10.08., nachgebessert F5): EINMAL sofort
+            # nachfassen, statt den Pass zu verlieren und auf die Nachhol-
+            # Runde zu warten (die kam am 10.08. erst 29 min nach dem Kill;
+            # der Sofort-Retry desselben Events lief dann in 9,4 s durch).
+            # job() liefert None fuer ZWEI verschiedene Faelle, und nur die
+            # gemessene Dauer trennt sie:
+            #  - Worker TOT (Absturz/OOM -> EOF): dt << Frist, der Retry ist
+            #    fast gratis -> gleiche Frist.
+            #  - WATCHDOG gerissen (select lief die volle Frist): dt >= Frist.
+            #    Das ist MEHRDEUTIG — wirklich haengend ODER die Maschine ist
+            #    nur langsamer als die Messbasis der 600 s (Prod-Maschine,
+            #    langsamster normaler Lauf 257,9 s). Der Retry faehrt deshalb
+            #    mit VERDOPPELTER Frist: eine bloss langsame Maschine (bis
+            #    ~4,6x Referenz, z. B. der ~774-s-Fall einer 3x langsameren
+            #    CPU-Kiste) kommt damit durch, ein echt haengendes Event
+            #    reisst erneut und geht in die stille Nachhol-Runde.
+            #    Worst-Case-Blockade 600+1200 s = exakt die alte feste
+            #    1800-s-Frist, nie schlechter als vor dem Fix.
+            # worker.job() hat den haengenden Prozess bereits gekillt und
+            # startet beim naechsten Job frisch; analyze ueberspringt via
+            # results.jsonl, was der erste Versuch schon fertig hatte.
+            # Bewusst nur EIN Retry (ein deterministisch haengendes Event
+            # soll nicht schleifen) und nur live — Nachhol-Laeufe haben ihr
+            # eigenes Versuchsbudget.
+            watchdog = dt >= tmo
+            frist = tmo * 2 if watchdog else tmo
+            with open(logpfad, "a") as lf:
+                if watchdog:
+                    lf.write(f"\nverifyd: analyze watchdog fired after {dt:.0f}s "
+                             f"(deadline {tmo}s) — one immediate retry on a "
+                             f"fresh worker, deadline doubled to {frist}s\n")
+                else:
+                    lf.write(f"\nverifyd: worker died after {dt:.0f}s — one "
+                             f"immediate retry on a fresh worker "
+                             f"(deadline {tmo}s)\n")
+            t0 = time.monotonic()
+            antwort = worker.job({"typ": "analyze", "argv": argv, "log": logpfad},
+                                 frist, info=w2)
+            dt = time.monotonic() - t0 - float(w2.get("wartezeit_s") or 0.0)
+        warte = float(w1.get("wartezeit_s") or 0.0) + float(w2.get("wartezeit_s") or 0.0)
+        if info is not None:
+            info["wartezeit_s"] = round(warte, 2)
         with open(logpfad, "a") as lf:
+            if warte >= 0.1:                  # unter der dauer_s-Aufloesung waere es Rauschen
+                lf.write(f"\nverifyd: waited {warte:.1f}s for the analysis slot "
+                         f"(another analysis/measurement held it) — not counted "
+                         f"as analysis time\n")
             if antwort is None:
-                lf.write(f"\nverifyd: analyze timeout ({tmo}s) or worker died, aborted\n")
+                art = ("watchdog" if dt >= frist else "worker died")
+                lf.write(f"\nverifyd: analyze aborted ({art} after {dt:.0f}s, "
+                         f"deadline {frist}s)\n")
                 return None
             if not antwort.get("ok"):
                 lf.write(f"\nverifyd: analyze failed in worker: {antwort.get('fehler')}\n")
@@ -636,27 +926,62 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
             # Stand danach), koerper_* der zusatz-Rueckweg des zweiten Abnehmers.
             lf.write(f"verifyd-worker: cpu_s={antwort.get('cpu_s')} rss_mb={antwort.get('rss_mb')} "
                      f"vmhwm_mb={antwort.get('vmhwm_mb')} koerper={antwort.get('koerper_crops')}"
+                     f"{'[' + str(antwort.get('koerper_degradiert')) + ']' if antwort.get('koerper_degradiert') else ''}"
                      f"{'/' + str(antwort.get('koerper_ausfall')) if antwort.get('koerper_ausfall') else ''}\n")
     else:
         env = dict(os.environ, OV_DEVICE=cfg["ov_device"], FRIGATE_URL=cfg["frigate_url"],
                    SCRATCH_DIR=os.path.join(cfg["data_dir"], "clips"))
         cmd = [sys.executable, os.path.join(HERE, "analyze.py"), *argv]
-        with open(logpfad, "w") as lf:
-            # W1: eigene Prozessgruppe + killpg — ein Timeout-Kill muss auch ffmpeg-ENKEL treffen
-            # (kuenftige HW-Decode-Pipes; der 480-MB-ffmpeg-Zombie aus der Plan-Recon war die
-            # Live-Demo dieser Luecke). subprocess.run killte nur das direkte Kind.
-            p = subprocess.Popen(cmd, env=env, stdout=lf, stderr=subprocess.STDOUT,
-                                 start_new_session=True)
-            try:
-                p.wait(timeout=tmo)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(p.pid, signal.SIGKILL)
-                except Exception:
-                    pass
-                p.wait()
-                lf.write(f"\nverifyd: analyze timeout ({tmo}s), aborted (process group killed)\n")
-                return None
+        # Nachbesserung W8: derselbe EINE Analyse-Slot wie im Worker-Zweig, hier
+        # als Modul-Lock (_ANALYSE_SERIELL, s. Kopf) — die Wanduhr-Messung haelt
+        # es waehrend ihres Roundtrips, ein Live-Lauf wartet dann HIER statt
+        # parallel zu rechnen (und umgekehrt sieht die Messung diesen Lauf).
+        # Wartezeit wie im Worker-Zweig herausrechnen (W7): die Frist beginnt
+        # erst NACH dem Lock, dauer_s beim Aufrufer zaehlt nur Analysezeit.
+        t_warte = time.monotonic()
+        with _ANALYSE_SERIELL:
+            warte = time.monotonic() - t_warte
+            if info is not None:
+                info["wartezeit_s"] = round(warte, 2)
+            with open(logpfad, "w") as lf:
+                if warte >= 0.1:              # unter der dauer_s-Aufloesung waere es Rauschen
+                    lf.write(f"verifyd: waited {warte:.1f}s for the analysis slot "
+                             f"(another analysis/measurement held it) — not "
+                             f"counted as analysis time\n")
+                # W1: eigene Prozessgruppe + killpg — ein Timeout-Kill muss auch ffmpeg-ENKEL treffen
+                # (kuenftige HW-Decode-Pipes; der 480-MB-ffmpeg-Zombie aus der Plan-Recon war die
+                # Live-Demo dieser Luecke). subprocess.run killte nur das direkte Kind.
+                # Nachbesserung F7: der Sofort-Retry des Watchdogs gilt in BEIDEN
+                # Zweigen — der Hilfetext von analyse_timeout_s verspricht ihn
+                # ohne Einschraenkung, vorher blieb dieser Legacy-Zweig
+                # (worker=false) Einzelschuss. Gleiche Politik wie im
+                # Worker-Zweig: EIN Retry, nur live, verdoppelte Frist (der Riss
+                # ist mehrdeutig: haengend oder bloss langsamer als die
+                # Messbasis); jeder Versuch ist hier ohnehin ein frischer
+                # Prozess, analyze ueberspringt via results.jsonl Fertiges.
+                frist = tmo
+                while True:
+                    p = subprocess.Popen(cmd, env=env, stdout=lf, stderr=subprocess.STDOUT,
+                                         start_new_session=True,
+                                         preexec_fn=_analyse_nice)   # Issue #21, s. ANALYSE_NICE
+                    try:
+                        p.wait(timeout=frist)
+                        break
+                    except subprocess.TimeoutExpired:
+                        try:
+                            os.killpg(p.pid, signal.SIGKILL)
+                        except Exception:
+                            pass
+                        p.wait()
+                        if frist == tmo and timeout_s is None:
+                            frist = tmo * 2
+                            lf.write(f"\nverifyd: analyze watchdog ({tmo}s) — one "
+                                     f"immediate retry in a fresh process, "
+                                     f"deadline doubled to {frist}s\n")
+                            lf.flush()
+                            continue
+                        lf.write(f"\nverifyd: analyze timeout ({frist}s), aborted (process group killed)\n")
+                        return None
     rp = os.path.join(event_dir, "results.jsonl")
     if not os.path.exists(rp):
         return None
@@ -699,7 +1024,9 @@ class WorkerProzess:
         # non-inheritable (CLOEXEC) -> nach einem execv von verifyd bekommt eine Waise EOF und endet.
         self.p = subprocess.Popen([sys.executable, os.path.join(HERE, "worker.py")],
                                   stdin=subprocess.PIPE, pass_fds=(w,), env=env,
-                                  start_new_session=True, text=True, bufsize=1)
+                                  start_new_session=True, text=True, bufsize=1,
+                                  preexec_fn=_analyse_nice)   # Issue #21, s. ANALYSE_NICE
+
         os.close(w)                         # unser Ende des Schreib-fd: nur das Kind schreibt
         self.rx = os.fdopen(r, "r")
         try:                                # bevorzugtes OOM-Opfer vor verifyd selbst (v2qs-B3);
@@ -746,14 +1073,28 @@ class WorkerProzess:
         with self.lock:
             self._stop()
 
-    def job(self, job, timeout_s):
+    def job(self, job, timeout_s, info=None):
         """Job senden, Antwort mit Timeout lesen. None = Timeout/Absturz (Worker wird
-        gekillt, der naechste Job startet ihn frisch); sonst die Antwort des Workers."""
+        gekillt, der naechste Job startet ihn frisch); sonst die Antwort des Workers.
+        `info` (optional, dict): bekommt `wartezeit_s` — wie lange DIESER Aufruf am
+        Job-Lock hing (Nachbesserung W7: Ernte/Sammle/Wanduhr-Roundtrip halten das
+        Lock teils minutenlang; die Wartezeit ist keine Analysezeit und darf weder
+        in dauer_s noch in die watchdog/worker-died-Einstufung fallen)."""
+        t_warte = time.monotonic()
         with self.lock:
+            if info is not None:
+                info["wartezeit_s"] = round(time.monotonic() - t_warte, 3)
             try:
                 if self.p is None or self.p.poll() is not None:
                     self._stop(kill=True)    # Reste (Pipe/Zombie) wegraeumen
                     self._start()
+                # Issue #20/#21: die In-Job-RSS-Wache bekommt ihre Politik-Grenze
+                # als Job-Feld (Protokoll im worker.py-Kopf, Rangfolge _job_rss_grenze).
+                # Deckungs-Vertrag: DIESELBE Config-Zahl wie die Neustart-Schwelle
+                # unten in dieser Methode — keine zweite Zahlenquelle.
+                if job.get("typ") != "ping":
+                    job.setdefault("rss_max_mb",
+                                   int(self.cfg.get("worker_rss_max_mb") or 4096))
                 self.p.stdin.write(json.dumps(job) + "\n")
                 self.p.stdin.flush()
                 r, _, _ = select.select([self.rx], [], [], timeout_s)
@@ -785,9 +1126,13 @@ class WorkerProzess:
 
 
 # ------------------------------------------------------------------ Deckungs-Logik (§6 Konzept)
-def verdict(cfg, frigate_label, ours):
-    """ours: {person: {win3s, max, ...}} -> (kategorie, bestaetigte_personen)"""
-    confirmed = sorted(p for p, r in ours.items() if r.get("win3s", 0) >= cfg["win_min"])
+def verdict(cfg, frigate_label, ours, confirmed=None):
+    """ours: {person: {win3s, max, ...}} -> (kategorie, bestaetigte_personen).
+    confirmed additiv (Issue #19): die deckung-Korrektur nach dem Anlernen liefert die
+    Bestaetigung selbst (Embedding-Nachpruefung statt win3s) — die Kategorie-Ableitung
+    bleibt trotzdem in DIESER einen Quelle statt als Kopie an der Korrektur-Stelle."""
+    if confirmed is None:
+        confirmed = sorted(p for p, r in ours.items() if r.get("win3s", 0) >= cfg["win_min"])
     if frigate_label and confirmed:
         return ("deckung" if frigate_label in confirmed else "widerspruch"), confirmed
     if frigate_label and not confirmed:
@@ -797,12 +1142,14 @@ def verdict(cfg, frigate_label, ours):
     return "beide_unknown", confirmed
 
 
-def verdict_v2(cfg, ours, max_bw):
+def verdict_v2(cfg, ours, max_bw, confirmed=None):
     """Schema v2 (Plan AP2, Frigate-unabhaengig): erkannt / fremd_verdacht /
     unbekannt_schwach. fremd_verdacht = brauchbares Gesicht (>=100 px), aber niemand
     bestaetigt. HINWEIS: Trockenlauf 18.07. ergab 10-17x/Tag -> vorerst NICHT in
-    alert_kategorien (Nachschaerfung in der Parallelphase mit GT-Labels)."""
-    confirmed = sorted(p for p, r in ours.items() if r.get("win3s", 0) >= cfg["win_min"])
+    alert_kategorien (Nachschaerfung in der Parallelphase mit GT-Labels).
+    confirmed additiv wie bei verdict (Issue #19, deckung-Korrektur)."""
+    if confirmed is None:
+        confirmed = sorted(p for p, r in ours.items() if r.get("win3s", 0) >= cfg["win_min"])
     if confirmed:
         return "erkannt", confirmed
     if (max_bw or 0) >= 100:
@@ -814,49 +1161,10 @@ def verdict_v2(cfg, ours, max_bw):
 # nur noch "widerspruch" (echte gegenteilige Erkennung); "frigate_nur" ("Person da,
 # Gesicht nicht erkannt") laeuft nur noch ins Log/die Statistik.
 
-# Kategorie-Slugs -> englische ANZEIGE-Labels (nur UI). Die Slugs selbst bleiben deutsch,
-# weil sie Datenwerte sind (deckung.jsonl, MQTT-Payload, Log, Filter-value). v2 = aktive
-# Achse (Events-Badge); v1 = Frigate-Vergleich, degeneriert, nur bei Altdaten noch im Filter.
-KAT_LABELS = {
-    "erkannt": "Recognized", "fremd_verdacht": "Stranger?",
-    "unbekannt_schwach": "Unknown (weak)", "fehler": "Error",
-    "no_person": "No person found (likely false trigger)",
-    "deckung": "Match", "widerspruch": "Conflict", "frigate_nur": "Frigate only",
-    "wir_nur": "suslik only", "beide_unknown": "Both unknown",
-}
-
-# Plakettenfarben je Kategorie — EINE Tabelle. Sie stand bisher wortgleich an zwei Stellen
-# (Event-Detail + Ereignisliste); genau so laufen solche Werte auseinander.
-# Drei Werte sind am 25.07. nachgerechnet und abgedunkelt worden: die Plaketten tragen weissen
-# Text (.k in style.css), und bei 12 px verlangt WCAG AA 4,5:1. Gemessen waren "Recognized"
-# 3,00:1 (die HAEUFIGSTE Plakette im ganzen UI), "Frigate only" 2,94:1 und "suslik only" 3,79:1.
-# Der Farbton bleibt erkennbar derselbe, nur dunkler: #2a6->#1b8650 (4,59), #c83->#a16b28 (4,52),
-# #38c->#2e7ab8 (4,57). Die uebrigen lagen bereits darueber (#c33 5,14 · #666 5,74 · #a3a 5,58).
-# Das gilt in BEIDEN Modi gleich — es war nie ein Hellmodus-Problem, sondern immer zu schwach.
-#
-# ROT HAT GENAU EINE BEDEUTUNG (User-Entscheid 25.07.): "jemand muss jetzt hinsehen".
-# Das ist ausschliesslich `fremd_verdacht`. Vorher trug Rot auch `widerspruch` — und
-# Widersprueche sind haeufig: von 144 fremd_verdacht-Faellen lagen 118 in einem Durchgang, in
-# dem dieselbe Person anderswo bestaetigt war. Wer Rot so oft sieht, lernt es als Rauschen und
-# uebersieht den einen echten Fall.
-# Fuenf Farben, sechs Bedeutungen — die Unterscheidung innerhalb einer Klasse traegt der TEXT,
-# nicht ein weiterer Farbton ("Frigate only" gegen "suslik only" sind beide informativ):
-#   gruen    Einigkeit / erkannt          rot     Fremder — hinsehen
-#   bernstein pruefenswert (Widerspruch)  lila    Dienstfehler
-#   blau     informativer Unterschied     grau    nichts bekannt
-# Alle Werte tragen weisse Schrift (.k) und liegen ueber WCAG AA 4,5:1, nachgerechnet.
-KAT_FARBE = {
-    "deckung": "#1b8650",          # 4,59  Einigkeit
-    "erkannt": "#1b8650",          # 4,59  erkannt
-    "fremd_verdacht": "#c33",      # 5,14  ROT — der einzige Fall, der Aufmerksamkeit will
-    "widerspruch": "#a16b28",      # 4,52  bernstein: pruefen, aber kein Vorfall
-    "frigate_nur": "#2e7ab8",      # 4,57  blau: informativer Unterschied
-    "wir_nur": "#2e7ab8",          # 4,57  blau: derselbe Fall spiegelverkehrt, Text unterscheidet
-    "beide_unknown": "#666",       # 5,74  grau
-    "unbekannt_schwach": "#666",   # 5,74  grau
-    "no_person": "#666",           # 5,74  grau: bewusst KEIN Rot — "hier war wohl niemand"
-    "fehler": "#a3a",              # 5,58  lila: Dienstfehler, keine Aussage ueber Personen
-}
+# Kategorie-ANZEIGE-Tabellen: KAT_LABELS/KAT_FARBE wohnen seit Modulumbau R1 in
+# webui/bausteine.py (Helfer-Heimat). Re-Import wie gt_leiste unten (Kompatibilitaet
+# fuer Service-Meldetexte und verbleibende Seiten; Abbau erst mit M-Schlussetappe).
+from webui.bausteine import KAT_LABELS, KAT_FARBE   # noqa: F401 (Re-Export)
 
 
 def gt_schnellpersonen(rows, cfg, n=2):
@@ -874,82 +1182,17 @@ def gt_schnellpersonen(rows, cfg, n=2):
 # Import-Zyklen VOR den Seiten-Umzuegen). Re-Export hier ist KOMPATIBILITAET nach
 # Modul-Konzept §4 (qs/Seiten nutzen verifyd als API) — Abbau erst mit M-Schlussetappe.
 from webui.bausteine import gt_leiste, bild_nn   # noqa: F401 (Re-Export)
+from webui.bausteine import fehler_grund as _fehler_grund   # Issue #9: die EINE Grund-Quelle
 
 
-# ------------------------------------------------------------------ Pushover
-def push(cfg, title, message, attachment=None, herkunft=None):
-    """`herkunft` (.163): woher die Meldung kommt — Werte und Praefixe in
-    core.registry.MELDE_HERKUNFT, Vorgabe live (keine Markierung). Alles, was
-    NICHT aus dem Live-Betrieb kommt, sagt es im Text; sonst liest sich eine
-    Test-Meldung am Handy wie ein Vorfall."""
-    po = cfg.get("pushover") or {}                 # fehlender Block darf keinen KeyError werfen
-    token, user = po.get("token"), po.get("user")  # (telegram_video() faengt das laengst ab)
-    if not (token and user):
-        return False
-    message = _reg.melde_text(message, herkunft)
-    boundary = uuid.uuid4().hex
-    parts = []
-    for k, v in [("token", token), ("user", user), ("title", title), ("message", message)]:
-        parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n".encode())
-    if attachment and os.path.exists(attachment):
-        img = open(attachment, "rb").read()
-        parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"attachment\"; "
-                     f"filename=\"crop.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n".encode() + img + b"\r\n")
-    body = b"".join(parts) + f"--{boundary}--\r\n".encode()
-    req = urllib.request.Request("https://api.pushover.net/1/messages.json", data=body,
-                                 headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
-    with urllib.request.urlopen(req, timeout=20) as r:
-        return json.load(r).get("status") == 1
-
-
-
-def stoerung_melden(cfg, text):
-    """P3.5 (Widerleger-Fund: SD4/Watchdog meldeten NUR Pushover — eine Telegram-only-
-    Installation erfuhr von Ausfaellen nichts): Stoerungs-Meldungen gehen ueber BEIDE
-    Push-Kanaele, je nachdem was konfiguriert ist. MQTT bleibt bewusst aussen vor
-    (Integrations-Bus, und bei MQTT-Stoerungen waere er selbst der kranke Kanal)."""
-    fehler = []
-    try:
-        push(cfg, "suslik-Stoerung", text, None)
-    except Exception as e:
-        fehler.append(f"pushover: {e}")
-    tg = (cfg.get("telegram") or {})
-    if tg.get("bot_token") and tg.get("chat_id"):
-        try:
-            telegram_video(cfg, None, f"suslik-Stoerung: {text}")
-        except Exception as e:
-            fehler.append(f"telegram: {e}")
-    return fehler
-
-def telegram_video(cfg, video_path, caption, crop=None, herkunft=None):
-    """Direktversand an die Telegram-Bot-API (Weg B): Video, sonst Foto, sonst reiner Text.
-    Multipart wie push(); Secrets aus cfg['telegram'] (per ${VAR} aus der .env expandiert).
-    `herkunft` (.163) wie bei push(): Nicht-Live-Meldungen tragen ihre Marke."""
-    tg = cfg.get("telegram") or {}
-    token, chat = tg.get("bot_token"), tg.get("chat_id")
-    if not token or not chat:
-        return False
-    caption = _reg.melde_text(caption, herkunft)
-    if video_path and os.path.exists(video_path) and os.path.getsize(video_path) <= 49 * 1024 * 1024:
-        method, field, fname, ctype = "sendVideo", "video", "clip.mp4", "video/mp4"
-        payload = open(video_path, "rb").read()
-    elif crop and os.path.exists(crop):
-        method, field, fname, ctype = "sendPhoto", "photo", "crop.jpg", "image/jpeg"
-        payload = open(crop, "rb").read()
-    else:
-        method, field, payload = "sendMessage", None, None
-    boundary = uuid.uuid4().hex
-    parts = []
-    for k, v in [("chat_id", str(chat)), ("caption" if payload else "text", caption)]:
-        parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n".encode())
-    if payload:
-        parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{field}\"; "
-                     f"filename=\"{fname}\"\r\nContent-Type: {ctype}\r\n\r\n".encode() + payload + b"\r\n")
-    body = b"".join(parts) + f"--{boundary}--\r\n".encode()
-    req = urllib.request.Request(f"https://api.telegram.org/bot{token}/{method}", data=body,
-                                 headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
-    with urllib.request.urlopen(req, timeout=60) as r:
-        return json.load(r).get("ok") is True
+# ---------------------------------------------------- Meldewege (Modulumbau R3)
+# push/stoerung_melden/telegram_video leben in core/melden.py (Live-Andock-API,
+# modulplan.md #3; Docstrings/Begruendungen dort). Re-Export wie KETTE_STUFEN:
+# bestehende Aufrufer (Service, Wartung/Watchdog, prototyp/live_wache) nutzen
+# verifyd weiter als API-Heimat — Abbau erst mit der M-Schlussetappe.
+push = _melden.push
+stoerung_melden = _melden.stoerung_melden
+telegram_video = _melden.telegram_video
 
 
 # ------------------------------------------------- Video-Transcode: Encoder-Wahl (NVENC/VAAPI/CPU)
@@ -1106,6 +1349,13 @@ def transcode_kommandos(src, ziel, hoehe, q_hw, q_cpu, dauer_s=None, q_vaapi=Non
     return hw, cpu
 
 
+# Ketten-Schalter (Issue #21): Stufen-Enum + die ganze Erkennungskette leben seit
+# Modulumbau R2 in core/kette.py (DEFAULT_KETTE als die EINE Stufen/Reihenfolge/
+# Bedingungs-Struktur). Re-Export hier haelt den Deckungs-Vertrag der Whitelist
+# (Stufen-Quelle bleibt EINE, qs_ebenen.md).
+KETTE_STUFEN = _kette.KETTE_STUFEN
+
+
 # ------------------------------------------------------------------ Kern: ein Event verarbeiten
 class Service:
     def __init__(self, cfg, dry_alert=False):
@@ -1121,7 +1371,9 @@ class Service:
         os.makedirs(os.path.join(cfg["data_dir"], "clips"), exist_ok=True)
         self.processed = self._load_processed()
         self.last_alert = 0.0
-        self._last_tg_unbekannt = 0.0             # Drossel Unbekannt-Telegram (telegram_cooldown)
+        self._melde_zustand = {}                  # Drossel-Zeitstempel der Meldewege (tg_unbekannt,
+                                                  # ha_warn) — Eigentum des Dienstes, core/melden
+                                                  # bekommt das Dict als Parameter (Modulumbau R3)
         self._sammel_lock = threading.Lock()      # schuetzt die Sammel-/Reorg-Flags (User 21.07.)
         self._sammel_laeuft = False               # ein Szenario-Sammeln gleichzeitig (Prozess-Ebene serialisiert der pool_lock in anlernen.py)
         self._sammel_nachhol = False              # Szenario waehrend eines Laufs -> danach EINMAL nachziehen statt verwerfen
@@ -1129,13 +1381,19 @@ class Service:
         self._qs_lock = threading.Lock()          # Guard-Zugriff (ThreadingHTTPServer-Threads)
         self._qs_laeuft = False
         self._qs_nochmal = False
+        self._live_jobs_lock = threading.Lock()   # Live-Reiter: Helfer-Quelltests
+        self._live_jobs = {}                      # kamera -> {art, weg, fertig, ...}
+        self._live_cmd_lock = threading.Lock()    # Engine-M3: Kommando-Slot pruefen+schreiben atomar (2 Klicks im 2-s-Fenster)
+        self._live_aufsicht = None                # Phase 4: Engine-Supervisor (core/liveaufsicht),
+        self._live_aufsicht_stop = threading.Event()   # gebaut in start_live_aufsicht()
         self._vs_laeuft = set()                   # Personen mit laufender Bestands-Suche
         self._nachlern_lock = threading.Lock()    # schuetzt _nachlern_timer
         self._nachlern_timer = {}                 # person -> Debounce-Timer: Bestands-Suche erst nach Durchgangs-Ende (User 21.07.)
-        self._gpu_bg_lock = threading.Lock()      # serialisiert schwere GPU-Hintergrund-Subprozesse (Review 21.07.): hoechstens EINER gleichzeitig, Live-run_analyze bleibt frei
+        self._gpu_bg_lock = threading.Lock()      # serialisiert schwere GPU-Hintergrund-Subprozesse (Review 21.07.): hoechstens EINER gleichzeitig, Live-run_analyze bleibt frei — AUSSER die Wanduhr-Messung: die serialisiert sich zusaetzlich ueber den Analyse-Slot gegen Live (_roundtrip_seriell, Issue #21: auf 2C/4T war "frei" = Minuten Doppellast) und nimmt DIESES Lock nur je Roundtrip, nie waehrend sie auf Live wartet (Nachbesserung W5, Regel wie start_nachhol)
         self._vision_lock = threading.Lock()      # V4: schuetzt Single-Flight + Debounce-Timer des Vision-Urteils
         self._vision_flug = None                  # core.visionurteil.Einfachlauf (lazy): 1 laufend + 1 wartend, Rest verworfen+gezaehlt
         self._vision_timer = {}                   # pass_key -> Debounce-Timer (Muster _nachlern_timer): Urteil erst nach Durchgangs-Ende
+        self._kette_stumm = {}                    # Ketten-Schalter: pass_key -> ts der EINEN "vision_pfad=aus"-Zeile (eine je Durchgang, nicht je Event)
         self._nachanalyse = {"laeuft": False, "pass_key": "", "gesamt": 0, "fertig": 0}  # .161: erneute Analyse EINES Durchgangs (Sammel-Modus an, Material fehlt)
         self._vision_lebt = set()                 # .164: pass_keys mit WIRKLICH laufendem Vision-Thread (Waisen-Zweitsicherung)
         self.last_seen = self._load_last_seen()   # Person -> ts letzte Bestaetigung; aus dem Log
@@ -1157,7 +1415,17 @@ class Service:
         self.enroll_warnung = None                # letzte Drift-Waechter-Warnung (UI/System)
         os.makedirs(os.path.join(cfg["data_dir"], "learn", "enroll"), exist_ok=True)
         self.lock = threading.Lock()
+        # Nachbesserung W1b: der Koerper-Strang (_person_live) laeuft in einem
+        # daemon-Thread, der self.lock UEBERLEBT (voller Decode + Pose + DINOv2 +
+        # SVM in-Prozess). 'Live laeuft' ist deshalb self.lock ODER dieser
+        # Zaehler > 0 (_live_aktiv) — self.lock allein uebersah genau die
+        # CPU-schwersten Installationen (Koerper-Strang opt-in, Issue-#21-Klasse).
+        self._personlive_lock = threading.Lock()
+        self._personlive_aktiv = 0
         self.logbuf = collections.deque(maxlen=300)   # Dienst-Log fuer Webview /log
+        # .173 Auto-Default (User-Go 10.08.): Erst-Boot-Entscheid HIER im __init__ —
+        # vor Publisher/Trigger/Web, es kann noch kein Event verarbeitet worden sein.
+        self._kette_auto_default()
 
     def _load_processed(self):
         done = set()
@@ -1236,104 +1504,27 @@ class Service:
             self.log(f"{eid}: sub_label write failed: {e}")
             return None
 
+    # Modulumbau R3: MQTT-Publisher lebt in core/melden.py (Docstrings/
+    # Begruendungen dort). Hier nur Einhaenge: der Dienst bleibt Halter von
+    # self.pub/self.letzter_hb (der Watchdog prueft weiter DENSELBEN Client),
+    # core/melden bekommt Zugriff als Callables — Injektion pur, kein Rueckimport.
     def _mqtt_pub(self, topic, payload, retain=False, herkunft=None):
-        """Publish MIT rc-Pruefung. Rueckgabe True = von paho angenommen.
+        return _melden.mqtt_pub(self.pub, self.log, topic, payload,
+                                retain=retain, herkunft=herkunft)
 
-        paho wirft bei getrenntem Broker KEINE Exception: publish() liefert rc=MQTT_ERR_NO_CONN und
-        die Nachricht ist bei QoS 0 verworfen. Ohne diese Pruefung stand die Erfolgszeile
-        ('SCENE recognized', 'SCENE unknown') im Log, waehrend die HA-Automation nie etwas bekam —
-        ein stiller Meldungsverlust, den niemand sehen konnte.
-
-        `herkunft` (.163): dieselbe Herkunft wie bei push()/telegram_video(), hier aber
-        als EIGENES FELD im Payload statt als Text-Praefix — Home Assistant soll darauf
-        filtern koennen, ohne einen Meldetext zu zerlegen. Das Feld steht IMMER da
-        (auch `live`), damit eine Automation sich auf seine Anwesenheit verlassen kann."""
-        payload = self._mqtt_herkunft(payload, herkunft)
-        if not self.pub:
-            return False
-        try:
-            info = self.pub.publish(topic, payload, retain=retain)
-            if getattr(info, "rc", 1) == 0:                  # 0 == MQTT_ERR_SUCCESS
-                return True
-            self.log(f"!! MQTT NOT delivered ({topic}, rc={info.rc}) — broker disconnected?")
-        except Exception as e:
-            self.log(f"!! MQTT publish failed ({topic}): {e}")
-        return False
-
-    @staticmethod
-    def _mqtt_herkunft(payload, herkunft=None):
-        """Das Herkunfts-Feld in einen JSON-Payload einsetzen (reine Textarbeit,
-        damit der Beweis sie ohne Broker pruefen kann). Ist der Payload kein
-        JSON-Objekt (Heartbeat sendet blanke Werte), bleibt er unangetastet —
-        ein Kennzeichen ist nie wichtiger als ein zustellbarer Payload."""
-        wert = herkunft or _reg.MELDE_HERKUNFT_STD
-        if wert not in _reg.MELDE_HERKUNFT:
-            wert = _reg.MELDE_HERKUNFT_STD
-        try:
-            d = json.loads(payload)
-        except (TypeError, ValueError):
-            return payload
-        if not isinstance(d, dict):
-            return payload
-        d["herkunft"] = wert
-        return json.dumps(d, ensure_ascii=False)
+    _mqtt_herkunft = staticmethod(_melden.mqtt_herkunft)
 
     def start_publisher(self):
-        """AP2: eigener MQTT-Publish-Client (auch im poll-Modus) + 60s-Heartbeat (retained)."""
-        if not self.cfg.get("mqtt_publish", True):
-            return
-        try:
-            import paho.mqtt.client as mqtt
-            m = self.cfg["mqtt"]
-            self.pub = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-            if m.get("user"):
-                self.pub.username_pw_set(m["user"], m.get("password", ""))
-            # connect_async + loop_start statt connect(): paho baut die Verbindung im Netzwerk-Thread
-            # auf UND reconnectet selbsttaetig. Vorher war ein Broker, der beim Dienststart kurz weg
-            # war (Reboot-Reihenfolge!), ein Dauerzustand: connect() warf, self.pub blieb None, der
-            # Heartbeat-Thread startete nie — und der Watchdog prueft 'self.pub and not is_connected()',
-            # konnte pub=None also NIE melden. MQTT war still tot, bis jemand den Dienst neu startete.
-            # Verbindungszustand ehrlich ins Log: connect_async kehrt SOFORT zurueck, die
-            # Verbindung steht da noch nicht. *args, weil paho die Callback-Signaturen
-            # zwischen Versionen geaendert hat — der Rueckgabewert wird hier nicht gebraucht.
-            def _on_connect(client, userdata, *a):
-                # a = (flags, reason_code[, properties]) — der Code steht in beiden
-                # Callback-API-Versionen an Index 1 (paho 2.1.0 geprueft: VERSION2 liefert
-                # ein ReasonCode mit .is_failure, VERSION1 einen MQTTErrorCode == 0).
-                rc = a[1] if len(a) > 1 else None
-                schlecht = getattr(rc, "is_failure", None)
-                if schlecht is None:
-                    schlecht = str(rc) not in ("0", "Success")
-                self.log(f"MQTT connection REJECTED: {rc} — check credentials/ACL." if schlecht
-                         else f"MQTT publisher connected to {m['host']}:{m.get('port', 1883)}")
+        def pub_setzen(client):
+            self.pub = client
 
-            def _on_disconnect(client, userdata, *a):
-                self.log("MQTT publisher disconnected — paho reconnects on its own.")
-            self.pub.on_connect, self.pub.on_disconnect = _on_connect, _on_disconnect
-            self.pub.reconnect_delay_set(min_delay=1, max_delay=60)
-            self.pub.connect_async(m["host"], int(m.get("port", 1883)), 60)
-            self.pub.loop_start()
-
-            def hb():
-                while True:
-                    try:
-                        info = self.pub.publish("verifyd/heartbeat", json.dumps(
-                            {"ts": round(time.time(), 1), "status": "ok",
-                             "processed": len(self.processed)}), retain=True)
-                        # rc pruefen: bei getrenntem Broker wirft paho NICHT, es verwirft still
-                        # (QoS 0). Ohne diese Pruefung war letzter_hb frisch, obwohl nichts ankam —
-                        # der Watchdog haette den Ausfall nie bemerkt.
-                        if info.rc == mqtt.MQTT_ERR_SUCCESS:
-                            self.letzter_hb = time.time()
-                    except Exception:
-                        pass
-                    time.sleep(60)
-            threading.Thread(target=hb, daemon=True).start()
-            self.log(f"MQTT publisher started, connecting to {m['host']} "
-                     f"(verifyd/erkennung + verifyd/heartbeat)")
-        except Exception as e:
-            self.pub = None
-            self.log(f"MQTT publisher not available: {e}")
+        def hb_setzen():
+            self.letzter_hb = time.time()
+        _melden.publisher_starten(self.cfg, self.log,
+                                  pub_setzen=pub_setzen,
+                                  pub_holen=lambda: self.pub,
+                                  processed_len=lambda: len(self.processed),
+                                  hb_setzen=hb_setzen)
 
     def _szene_unbekannt_pruefen(self, entry):
         """Szenen-Karenz (User 18.07.): fremd_verdacht wird erst nach szene_karenz_s
@@ -1363,7 +1554,7 @@ class Service:
             # Verhalten/Anzahl/Timing unveraendert — Melde-Scoping je Area kommt mit Stufe 2.
             _ar = _areas_mod.kamera_areas(_areas_mod.normalisieren(self.cfg.get("areas")),
                                           entry["camera"])
-            if self._mqtt_pub("verifyd/szene_unbekannt", json.dumps(
+            if self._mqtt_pub(_melden.topic(self.cfg, "szene_unbekannt"), json.dumps(
                     {"eid": entry["eid"], "camera": entry["camera"], "areas": _ar,
                      "ts": entry.get("start") or entry["ts"],      # Vorfalls-Zeit fuer die Caption
                      "max_bw": entry.get("max_bw")}, ensure_ascii=False)):
@@ -1483,199 +1674,34 @@ class Service:
             self._nachlern_timer.pop(person, None)
         self.vorschlaege_starten(person)                     # async, hat eigenen _vs_laeuft-Guard
 
+    # Modulumbau R3: Szenen-Telegram + Transcode-Lauf leben in core/melden.py
+    # (Docstrings/Begruendungen dort). Hier nur Einhaenge: Drossel-Zustand
+    # (_melde_zustand), Transcode-Registry (_review_lock/_transcode_procs — eine
+    # Lock-Quelle, Definition bleibt im Service) und die Bild-/Encoder-Quellen
+    # reicht der Dienst als Parameter/Callables herein.
     def publish_erkennung(self, entry):
-        if self._mqtt_pub("verifyd/erkennung", json.dumps({
-                "eid": entry["eid"], "camera": entry["camera"], "ts": entry["ts"],
-                # Areas Stufe 1: additives Feld, bestehende Schluessel unveraendert
-                # (an diesem Topic haengen HA-Automationen).
-                "areas": _areas_mod.kamera_areas(
-                    _areas_mod.normalisieren(self.cfg.get("areas")), entry["camera"]),
-                "kategorie": entry["kategorie"],
-                "personen": [{"name": p, "cos": (entry["ours"].get(p) or {}).get("max"),
-                              "win": (entry["ours"].get(p) or {}).get("win3s")}
-                             for p in entry["bestaetigt"]]}, ensure_ascii=False)):
-            self.debug(f"MQTT verifyd/erkennung -> {entry['eid']} cat={entry['kategorie']} "
-                       f"persons={entry['bestaetigt'] or '[]'}")
+        _melden.publish_erkennung(self.cfg, self.pub, self.log, self.debug, entry)
 
     def _telegram_melden(self, art, entry, personen=None):
-        """Szenen-Telegram direkt aus verifyd (ersetzt die HA-MQTT-Automationen, 19.07.).
-        art 'erkannt'|'unbekannt'; Modus telegram_modus: aus|ha|direkt|beide. Versand im
-        Thread (Transcode+Upload blockieren den GPU-Lock nicht); Unbekannt zusaetzlich
-        ueber telegram_cooldown gedrosselt (ersetzt die fehlerhafte HA-10-min-Sperre)."""
-        modus = self.cfg.get("telegram_modus", "aus")
-        if modus == "aus" or self.dry_alert:
-            return
-        if art == "unbekannt":
-            now = time.time()
-            if now - self._last_tg_unbekannt < self.cfg.get("telegram_cooldown", 600):
-                self.log(f"{entry['eid']}: Telegram unknown throttled (cooldown)")
-                return
-            self._last_tg_unbekannt = now
-        eid, camera = entry["eid"], entry["camera"]
-        cam_name = camera.replace("_", " ")
-        # Areas Stufe 1: die Caption nennt die Area(s) der Kamera — bei n:m ALLE,
-        # alphabetisch (nur das ist wahr); '' ohne Zuordnung = Caption wie bisher.
-        _ar = _areas_mod.melde_zusatz(self.cfg.get("areas"), camera)
-        cam_name += f" · {_ar}" if _ar else ""
-        t = datetime.datetime.fromtimestamp(entry.get("start") or entry["ts"]).strftime("%H:%M")
-        if art == "erkannt":
-            caption = f"✅ {cam_name}\n{' + '.join(personen or [])} erkannt um {t} (suslik)"
-        else:
-            caption = f"⚠️ {cam_name}\nUnbekannte Person um {t} — niemand erkannt (suslik)"
-        event_dir = os.path.join(self.cfg["data_dir"], "events", eid.replace("/", "_"))
-        crop = self._best_crop(event_dir, entry, personen or list(entry["ours"]))
-
-        def job():
-            try:
-                if modus in ("direkt", "beide"):
-                    # User-Wunsch 25.07.: Bild ODER Video je Kanal waehlbar. "bild" spart das
-                    # komplette Transcoding (ffmpeg 720p) — auf schwacher Hardware der Unterschied
-                    # zwischen sofortiger und minutenspaeter Meldung. Vorgabe "video" = bisheriges
-                    # Verhalten. Faellt das Video aus, obwohl es gewollt war, steht das ab jetzt IN
-                    # der Meldung — der stille Bild-Rueckfall war der Grund, warum der ffmpeg-Defekt
-                    # aus Welle 3 erst durch die Beobachtung des Users auffiel (Fehlerklasse C).
-                    will_video = self.cfg.get("telegram_inhalt", "video") != "bild"
-                    video = self._telegram_clip(eid) if will_video else None
-                    cap = caption + ("\n(video unavailable — sending image)"
-                                     if will_video and not video else "")
-                    ok = telegram_video(self.cfg, video, cap, crop)
-                    self.log(f"{eid}: Telegram {art} direct "
-                             f"{'sent' if ok else 'FAILED'}"
-                             + (" [video missing -> image]" if will_video and not video else "")
-                             + (" [telegram_inhalt=bild]" if not will_video else ""))
-                if modus in ("ha", "beide"):
-                    self._telegram_ha_script(eid, camera, caption)
-            except Exception as e:
-                self.log(f"{eid}: Telegram {art} error: {e}")
-        threading.Thread(target=job, daemon=True).start()
+        _melden.telegram_melden(self.cfg, self.log, self.dry_alert,
+                                self._melde_zustand, self._best_crop,
+                                self._telegram_clip, self._telegram_ha_script,
+                                art, entry, personen)
 
     def _telegram_ha_script(self, eid, camera, caption):
-        """Weg A: das vorhandene HA-Script frigate_telegram_video via HA-REST-API ausloesen
-        (HA transkodiert + versendet selbst). HA_URL/HA_TOKEN aus der .env."""
-        ha_url, ha_tok = os.environ.get("HA_URL"), os.environ.get("HA_TOKEN")
-        chat = (self.cfg.get("telegram") or {}).get("chat_id")
-        if not ha_url or not ha_tok or not chat:
-            # Frueher ein stummes return: telegram_modus stand auf "ha", die UI zeigte Telegram
-            # als aktiv, und es kam nie etwas an — ohne eine einzige Logzeile. Gedrosselt auf
-            # 1x/h, damit ein dauerhaft unvollstaendiges Setup das Log nicht flutet.
-            fehlt = ", ".join(n for n, v in (("HA_URL", ha_url), ("HA_TOKEN", ha_tok),
-                                             ("telegram.chat_id", chat)) if not v)
-            if time.time() - getattr(self, "_ha_warn_ts", 0) > 3600:
-                self._ha_warn_ts = time.time()
-                self.log(f"telegram_modus=ha, but {fehlt} is missing — NO Telegram will be sent.")
-            return
-        body = json.dumps({"event_id": eid, "camera": camera,
-                           "chat_id": str(chat), "caption": caption}).encode()
-        req = urllib.request.Request(ha_url + "/api/services/script/frigate_telegram_video",
-                                     data=body, method="POST",
-                                     headers={"Authorization": f"Bearer {ha_tok}",
-                                              "Content-Type": "application/json"})
-        try:
-            urllib.request.urlopen(req, timeout=30)
-            self.log(f"{eid}: Telegram triggered via HA script")
-        except Exception as e:
-            self.log(f"{eid}: HA script call failed: {e}")
+        _melden.telegram_ha_script(self.cfg, self.log, self._melde_zustand,
+                                   eid, camera, caption)
 
     def _transcode_lauf(self, cmd, timeout):
-        """ffmpeg-Transcode als EIGENE Prozessgruppe, registriert in _transcode_procs.
-        W3-Review-Fund: neustart() ersetzt per execv nur das Prozess-Image — ein laufendes
-        ffmpeg-Kind ueberlebte, schrieb weiter in seine .part, und der neue Prozess startete
-        einen ZWEITEN Bau auf denselben Namen -> gemeinsame Inode, dauerhaft kaputte Kopie
-        ohne Logzeile. Registrierung + killpg in neustart() schliessen das; der eindeutige
-        .part-Name je Versuch (s. Aufrufer) ist der doppelte Boden."""
-        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                             start_new_session=True)
-        with self._review_lock:
-            self._transcode_procs.add(p)
-        try:
-            try:
-                out, err = p.communicate(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(p.pid, signal.SIGKILL)
-                except Exception:
-                    pass
-                out, err = p.communicate()
-            return subprocess.CompletedProcess(cmd, p.returncode, out, err)
-        finally:
-            with self._review_lock:
-                self._transcode_procs.discard(p)
+        return _melden.transcode_lauf(cmd, timeout, self._review_lock,
+                                      self._transcode_procs)
 
     def transcodes_killen(self):
-        """Alle registrierten ffmpeg-Transcodes hart beenden — VOR execv (neustart)."""
-        with self._review_lock:
-            procs = list(self._transcode_procs)
-        for p in procs:
-            try:
-                os.killpg(p.pid, signal.SIGKILL)
-            except Exception:
-                pass
-            try:
-                p.wait(timeout=5)
-            except Exception:
-                pass
+        _melden.transcodes_killen(self._review_lock, self._transcode_procs)
 
     def _telegram_clip(self, eid):
-        """Kleines H.264-720p-Video (max 60 s, crf 28 CPU / cq 34 NVENC / qp 28 VAAPI) fuers
-        Telegram-Bot-Limit (50 MB). Die 1080p-Browser-Kopie ist dafuer zu gross (teils >300 MB).
-        Encoder aus video_encoder() (NVENC/VAAPI geprobt, sonst CPU), Fallback bleibt CPU;
-        Quelle ist der bereits geladene Original-Clip im Cache."""
-        base = os.path.join(self.cfg["data_dir"], "clips", eid.replace("/", "_"))
-        # Aufloesung waehlbar 720/480 (User 04.08.), gilt fuer Face UND
-        # Person (gemeinsamer Weg); Cache-Name traegt die Hoehe, sonst
-        # wuerde nach einem Umstellen die alte Datei ausgeliefert.
-        hoehe = int(self.cfg.get("telegram_hoehe", 720))
-        if hoehe not in (720, 480):
-            hoehe = 720
-        src, dst = base + ".mp4", base + f"_tg{hoehe}.mp4"
-        if os.path.exists(dst):
-            return dst
-        if not os.path.exists(src):
-            return None
-        # Eindeutiger .part-Name je Versuch (endet auf .part -> Retention raeumt Waisen weg);
-        # `-f mp4` steckt in transcode_kommandos(), s. dort: ffmpeg erkennt an ".part" kein Format
-        # und bricht ab. Genau daran ist das Telegram-Video seit Welle 3 gescheitert — User-Meldung
-        # 25.07.: "bei Telegram bekomme ich im Moment nur ein Bild und kein Video mehr". Der
-        # Rueckfall auf das Bild passierte still, waehrend "gesendet" im Log stand.
-        part = f"{dst}.{os.getpid()}-{threading.get_ident()}.part"
-        # W3/Issue #4: q_hw (NVENC) 28->34 — die HW-Quantizer sind nicht auf die crf-Skala
-        # kalibriert; cq 28 lieferte 3,4-3,7x groessere Dateien als der CPU-Pfad davor. cq 34 ist
-        # SSIM-gemessen quality- UND size-matched zu crf 28 (Feldbericht Issue #4, RTX 3060). VAAPI bleibt bei
-        # qp 28: dort ist die Qualitaets-Seite UNGEMESSEN (scale_vaapi-SSIM-Deckel, Issue §3) —
-        # Telegram-Qualitaet nicht blind verstellen. CPU-Wert unveraendert.
-        # N8a (RTX 2060 an 2 eigenen Clips + Feld-Sweep aus Issue #4): am FULL-HW-Pfad ist cq 34
-        # nicht mehr size-matched (scale_cuda-Shift, s. transcode_kommandos-Docstring); Paritaets-
-        # cq content-abhaengig 34-37 -> 36 als konservativer Mittelweg NUR fuer nvenc-voll.
-        hw, cpu = transcode_kommandos(src, part, hoehe, 34, 28, dauer_s=60,
-                                      q_vaapi=28, q_hw_voll=36)
-        try:
-            r = self._transcode_lauf(hw, 300) if hw else None
-            if r is None or r.returncode != 0 or not os.path.exists(part):
-                if r is not None:
-                    # HW lief und scheiterte, CPU rettet gleich: SICHTBAR machen (Review-Fund —
-                    # sonst waere der Laufzeit-Rueckfall genauso still wie der alte Start-Rueckfall,
-                    # waehrend Selbstcheck und QS-Gate weiter HW-Betrieb behaupten).
-                    e1 = (r.stderr or b"").decode("utf-8", "replace").strip().splitlines()
-                    self.log(f"{eid}: HW transcode ({video_encoder()[0]}) failed "
-                             f"(rc={r.returncode}) — CPU takes over: {e1[-1] if e1 else 'no stderr'}")
-                r = self._transcode_lauf(cpu, 600)
-            if r.returncode == 0 and os.path.exists(part) and os.path.getsize(part) > 0:
-                os.replace(part, dst)
-            else:                     # rc des Fallbacks wurde frueher verworfen -> Alert ohne Video,
-                err = (r.stderr or b"").decode("utf-8", "replace").strip().splitlines()   # ohne Grund
-                self.log(f"{eid}: Telegram clip failed (rc={r.returncode}): "
-                         f"{' | '.join(err[-2:]) if err else 'no stderr output'}")
-                try:
-                    os.remove(part)
-                except OSError:
-                    pass
-        except Exception as e:
-            self.log(f"{eid}: Telegram clip failed: {e}")
-            try:
-                os.remove(part)
-            except OSError:
-                pass
-        return dst if os.path.exists(dst) else None
+        return _melden.telegram_clip(self.cfg, self.log, self._transcode_lauf,
+                                     transcode_kommandos, video_encoder, eid)
 
     # ---------------------------------------------------------- Wartung + Watchdog (AP6/AP7)
     def qs_bericht_erzeugen(self, tage=14):
@@ -1934,7 +1960,8 @@ class Service:
                                     os.path.join(HERE, "anlernen.py"), "pruefe",
                                     "--unscharf", str(self.cfg.get("unscharf_max", 350)),
                                     "--minkante", str(self.cfg.get("min_kante", 70))],
-                                   capture_output=True, timeout=600, check=False, env=env)
+                                   capture_output=True, timeout=600, check=False, env=env,
+                                   preexec_fn=_analyse_nice)   # Issue #21, s. ANALYSE_NICE
                 self.log("reference QS recalculated")
             finally:
                 with self._qs_lock:
@@ -1960,12 +1987,107 @@ class Service:
                                     os.path.join(HERE, "anlernen.py"), "vorschlaege", person,
                                     "--unscharf", str(self.cfg.get("unscharf_max", 350)),
                                     "--minkante", str(self.cfg.get("min_kante", 70))],
-                                   capture_output=True, timeout=900, check=False, env=env)
+                                   capture_output=True, timeout=900, check=False, env=env,
+                                   preexec_fn=_analyse_nice)   # Issue #21, s. ANALYSE_NICE
                 self.log(f"reference search for {person} finished")
             finally:
                 with self._qs_lock:
                     self._vs_laeuft.discard(person)
         threading.Thread(target=job, daemon=True).start()
+
+    def anlern_nachpruefung_starten(self, person, betroffen):
+        """Issue #19 Teil 2: nach dem Anlernen die EVENTS der uebernommenen Gesichter im
+        Hintergrund gegen die neue Referenzbibliothek pruefen (anlernen.py nachpruefen,
+        Embedding-Vergleich, keine Video-Neuanalyse) und je bestaetigtem Event die
+        deckung-Akte korrigieren — vorher blieben die Karten der gerade angelernten
+        Person als "Unknown" stehen (Repro: 4/4 angelernte eids weiter bestaetigt=[]).
+        Subprozess-Muster wie vorschlaege_starten, MIT _gpu_bg_lock (Widerleger 11.08.:
+        die fruehere Fassung lud die KOMPLETTE Referenzbibliothek — 674 s auf CPU bei
+        260 Bildern — und kollidierte ungelockt mit dem qs_neu_starten desselben
+        Klicks; seitdem laedt anlernen.nachpruefe_events nur noch die Referenzen der
+        EINEN Person, der Lock bleibt trotzdem: Embedder-Bau + Einbettung gehoeren
+        serialisiert). Uebergabe/Ergebnis je Lauf in eigener Datei unter state/
+        (stdout ist durch die Modell-Lade-Prints kein Kanal)."""
+        faces = [f for f in (betroffen or []) if f.get("eid") and f.get("emb")]
+        if not faces:
+            return
+
+        def job():
+            pfad = os.path.join(self.cfg["data_dir"], "state",
+                                f"anlern_nachpruefung_{os.getpid()}_{threading.get_ident()}.json")
+            try:
+                with open(pfad, "w") as f:
+                    json.dump(faces, f)
+                env = dict(os.environ, OV_DEVICE=self.cfg["ov_device"])
+                with self._gpu_bg_lock:               # gegen qs_neu_starten/vorschlaege desselben Klicks (Widerleger 11.08.)
+                    r = subprocess.run([sys.executable, os.path.join(HERE, "anlernen.py"),
+                                        "nachpruefen", person, pfad],
+                                       capture_output=True, timeout=900, check=False, env=env,
+                                       preexec_fn=_analyse_nice)   # Issue #21, s. ANALYSE_NICE
+                if not os.path.exists(pfad + ".ergebnis"):
+                    self.log(f"enroll re-check FAILED rc={r.returncode}: "
+                             f"{(r.stderr or b'').decode(errors='replace')[-300:]}")
+                    return
+                erg = json.load(open(pfad + ".ergebnis"))
+                schwelle = erg.get("schwelle")
+                for eid, e in sorted((erg.get("events") or {}).items()):
+                    if e.get("bestaetigt"):
+                        self._deckung_korrektur(eid, person, e.get("sim"), "anlernen", schwelle)
+                    else:
+                        self.log(f"{eid}: enroll re-check NOT confirmed "
+                                 f"(sim {e.get('sim')} < {schwelle}) — card stays")
+            except Exception as e:
+                self.log(f"enroll re-check error: {type(e).__name__}: {e}")
+            finally:
+                for p in (pfad, pfad + ".ergebnis"):
+                    try:
+                        os.remove(p)
+                    except FileNotFoundError:
+                        pass
+        threading.Thread(target=job, daemon=True).start()
+
+    def _deckung_korrektur(self, eid, person, sim, quelle, schwelle=None):
+        """Issue #19: ein nachtraeglich bestaetigtes Event in der deckung-Akte korrigieren —
+        als ANGEHAENGTE Zeile (last-wins-Muster der Akte, kein Rewrite), unter self.lock
+        wie der process()-Append (_deckung_by_eid nimmt self.lock selbst NICHT — auf
+        genau dieser Invariante steht dieser with-Block, threading.Lock ist nicht
+        reentrant). Gehoben werden NUR ts/bestaetigt/kategorie/kategorie_v1; die
+        Kategorien kommen aus der EINEN zentralen Quelle verdict/verdict_v2
+        (confirmed-Override). `ours` bleibt UNANGETASTET (Widerleger 11.08.): die
+        Nachpruef-sim ist die Aehnlichkeit des gerade angelernten Crops zu sich selbst
+        (~0.99), keine Live-Messung — sie steht ehrlich im korrektur-Marker, nie als
+        Mess-Score in ours. alerted/presence_push/sublabel/frames bleiben historische
+        Wahrheit — sonst faelschte die Korrektur die Alert-Tageszahl. Events mit
+        Basis-Kategorie fehler/no_person werden NICHT gehoben (dort lief nie eine
+        tragende Analyse bzw. war keine Person — eine Bestaetigung wuerde das
+        maskieren). Kein Alarm, kein MQTT, kein sublabel; ground_truth.jsonl
+        unberuehrt."""
+        with self.lock:
+            basis = self._deckung_by_eid().get(eid)
+            if not basis:
+                self.log(f"{eid}: enroll re-check confirmed, but no deckung record — skipped")
+                return
+            if basis.get("kategorie") in ("fehler", "no_person"):
+                self.log(f"{eid}: enroll re-check confirmed, but record says "
+                         f"'{basis.get('kategorie')}' — not corrected (no analysis to lift)")
+                return
+            z = dict(basis)
+            z["ts"] = round(time.time(), 1)
+            ours = z.get("ours") or {}
+            confirmed = sorted(set((z.get("bestaetigt") or []) + [person]))
+            kategorie, _ = verdict_v2(self.cfg, ours, z.get("max_bw"), confirmed=confirmed)
+            kategorie_v1, _ = verdict(self.cfg, (z.get("frigate") or {}).get("label"),
+                                      ours, confirmed=confirmed)
+            z["bestaetigt"] = confirmed
+            z["kategorie"] = kategorie
+            z["kategorie_v1"] = kategorie_v1
+            z["korrektur"] = {"quelle": quelle, "person": person, "sim": sim,
+                              **({"schwelle": schwelle} if schwelle is not None else {})}
+            with open(self.log_path, "a") as f:
+                f.write(json.dumps(z, ensure_ascii=False) + "\n")
+                f.flush()
+        self.log(f"{eid}: record corrected after enrolling — now '{kategorie}' "
+                 f"({person}, sim {sim})")
 
     # ENTFERNT 0.1.0.45 (User 27.07.): suslik loescht NIE in Frigate. Richtung Frigate gibt
     # es nur Holen (Import) und Schicken (Export) — eine Fern-Loeschung muesste zu 100 %
@@ -2032,7 +2154,8 @@ class Service:
                 env = dict(os.environ, OV_DEVICE=self.cfg["ov_device"])
                 r = subprocess.run([sys.executable,
                                     os.path.join(HERE, "anlernen.py"), "reorganisieren"],
-                                   capture_output=True, text=True, timeout=1800, env=env)
+                                   capture_output=True, text=True, timeout=1800, env=env,
+                                   preexec_fn=_analyse_nice)   # Issue #21, s. ANALYSE_NICE
                 if r.returncode != 0:
                     tail = " | ".join((r.stderr or r.stdout or "").strip().splitlines()[-3:])[:300]
                     self.log(f"REORGANIZE FAILED (exit {r.returncode}): {tail}")
@@ -2085,7 +2208,8 @@ class Service:
         if not mit_migriere:
             cmd.append("--kein-migriere")
         with self._gpu_bg_lock:                  # gegen vorschlaege/qs/Netz serialisieren (Review 21.07.)
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env,
+                               preexec_fn=_analyse_nice)   # Issue #21, s. ANALYSE_NICE
         if r.returncode != 0:
             tail = " | ".join((r.stderr or r.stdout or "").strip().splitlines()[-3:])[:300]
             return (r.stdout or ""), f"exit {r.returncode}: {tail}"
@@ -2254,9 +2378,9 @@ class Service:
             f = zustand.get("fortschritt") or {}
             if ph == "ernte":
                 if str(f.get("status", "")).startswith("harvest finished"):
-                    self.log("learning run found complete (harvest finished) — "
-                             "starting the anchor stage")
-                    self.lernlauf_anker_starten()
+                    self._anker_boot_start(zustand,
+                                           "learning run found complete (harvest finished) — "
+                                           "starting the anchor stage")
                     return
                 self.log("learning run resumes after restart (harvest)")
                 self.lernlauf_ernte_starten()
@@ -2274,8 +2398,8 @@ class Service:
                 if _ll.benannte_zaehlen(self.cfg["data_dir"], zustand["lauf_id"]):
                     self.log("naming in progress — anchor stage not re-run")
                     return
-                self.log("learning run resumes after restart (anchor stage)")
-                self.lernlauf_anker_starten()
+                self._anker_boot_start(zustand,
+                                       "learning run resumes after restart (anchor stage)")
                 return
             if ph != "vorbereitung":
                 if "status" not in f:
@@ -2304,6 +2428,43 @@ class Service:
         except Exception as e:
             self.log(f"learning run resume failed ({type(e).__name__}: {e})")
 
+    def _anker_boot_start(self, zustand, meldung):
+        """Crash-Loop-Wache um jeden BOOT-Start der Anker-Phase (#20 gr33nh07n:
+        ein fertig geernteter 1000er-Lauf blieb in phase=anker; jeder Neustart
+        nahm die Phase erneut von vorn auf, riss das Container-Memory-Limit,
+        wurde vom OOM-Killer beendet und per Restart-Policy wieder gestartet —
+        Endlosschleife ohne Ausweg). Die Phase selbst bleibt bewusst
+        wiederhol-idempotent (kein Zwischen-Checkpoint: anker_lauf_schreiben
+        ersetzt nur unbenannte Zeilen dieses Laufs) — was fehlte, war das LAUTE
+        AUFGEBEN: anker_neuanlaeufe zaehlt die Boot-Starts write-ahead (VOR dem
+        Start, damit auch ein Kill mitten im Lauf zaehlt), ein erfolgreicher
+        Abschluss setzt auf 0 zurueck (_lernlauf_anker), und ab
+        anker_resume_max Fehlversuchen haelt der Lauf mit Klartext-Status an
+        ('anchor stage failed: …' — der Wizard zeigt dann den Abort-Knopf)
+        statt endlos neu anzufahren. Nur BOOT-Starts zaehlen; die Auto-Kette
+        Ernte->Anker im laufenden Dienst ist kein Neustart-Symptom."""
+        from core import lernlauf as _ll
+        dd = self.cfg["data_dir"]
+        limit = int(self.cfg["anker_resume_max"])
+        n = int(zustand.get("anker_neuanlaeufe") or 0)
+        if n >= limit:
+            halt = ("anchor stage failed: automatic resume is off "
+                    "(anker_resume_max 0) — abort the run, or raise the value "
+                    "in Settings and restart" if limit == 0 else
+                    f"anchor stage failed: interrupted {n} time(s) in a row — "
+                    "automatic resume stopped so a crash cannot loop (out of "
+                    "memory? check the container memory limit and "
+                    "anker_deckel_hart). Abort the run, or raise "
+                    "anker_resume_max in Settings and restart to retry")
+            if str((zustand.get("fortschritt") or {}).get("status", "")) != halt:
+                _ll.lauf_fortschreiben(dd, fortschritt={"status": halt})
+            self.log(f"learning run NOT resumed: anchor stage already interrupted "
+                     f"{n}x (anker_resume_max {limit}) — halted, waiting for user")
+            return
+        _ll.lauf_fortschreiben(dd, anker_neuanlaeufe=n + 1)
+        self.log(meldung + f" — attempt {n + 1}/{limit}")
+        self.lernlauf_anker_starten()
+
     # ---------------------------------------------------------- Konfigblatt (Plan AP5)
     CONFIG_WHITELIST = {          # UI-aenderbar (User-Entscheid: ohne PIN, mit Audit+Dialog)
         "win_thresh": (float, 0.30, 0.60, "per-frame threshold in the 3s window (calibrated 0.38)"),
@@ -2326,6 +2487,7 @@ class Service:
         "anker_k_min": (int, 2, 50, "minimum faces per anchor cluster (margin uncalibratable below 5)"),
         "anker_deckel": (int, 10, 2000, "stage-2 clustering cap per round (measured 250 for this hw class)"),
         "anker_deckel_hart": (int, 10, 4000, "hard stage-2 bound; runs never start above it (memory guard)"),
+        "anker_resume_max": (int, 0, 10, "automatic restarts of an interrupted anchor stage after a service restart before it halts and waits for you (crash-loop guard; 0 = never auto-resume)"),
         "benennung_k_je_bin": (int, 1, 50, "naming: recommended images kept per perspective bin (starting value, calibrate in the first naming run)"),
         "benennung_yaw_grenze": (float, 5, 40, "naming: yaw beyond this counts as looking left/right (sub-bin INSIDE the harvest gate window; starting value)"),
         "benennung_dup_sim": (float, 0.5, 0.99, "naming: embedding similarity at/above this = near-identical, one kept (same notion as pool sim_neu)"),
@@ -2348,6 +2510,8 @@ class Service:
         "nachhol_tage": (int, 1, 3, "how far back the retry looks for failed analyses (days)"),
         "worker": (bool, None, None, "persistent analysis worker: keeps the models loaded between events (large CPU saving); off = one process per event (pre-0.1.0.38 behavior)"),
         "worker_rss_max_mb": (int, 512, 16384, "memory threshold (MB): the worker is restarted cleanly once its RSS exceeds this"),
+        "wanduhr_min_kerne": (int, 1, 64, "self-measurement gate: minimum PHYSICAL cores (capped by a cgroup CPU quota if one is set) required to run the boot-time timing self-measurement, which is a second full analysis process next to the live one. The default 4 is a structural floor (2 processes x 2 concurrent parts each: video decode + inference), not a measured value. On a machine below the floor the measurement is skipped loudly and run-duration forecasts keep the labeled fallback values. Lower this deliberately if you accept minutes of full load on a small machine in exchange for measured forecasts. Also used as the weak-machine floor for the first-boot chain defaults (fresh installs below it start with person_pfad=nur_wenn_gesicht_leer, vision_pfad=aus) — raising it widens that group too"),
+        "analyse_timeout_s": (int, 60, 3600, "watchdog for one live analysis (seconds): if the analysis has not answered by then it is presumed hung, killed, and the event is retried once immediately with a doubled deadline (in worker mode on a fresh worker, otherwise in a fresh process). The default 600 is measured, not guessed: across 1394 live analyses on the reference machine the slowest successful run took 258 s, so 600 leaves over twice that, and the doubled retry additionally carries machines up to roughly 4-5x slower before an event is handed to the silent catch-up. Raise this if you keep seeing 'analyze watchdog' lines for runs that would have finished"),
         # Vision detect (konzept_vision.md v2 §5): die zwei reinen Zahlen des
         # Adapters. Endpunkt/Key/Prompt liegen im `vision`-Block und werden NUR
         # auf dem Vision-Reiter bearbeitet — ein Key in dieser Tabelle stuende
@@ -2370,6 +2534,12 @@ class Service:
         "vision_doppellauf": (bool, None, None, "vision detect: ask each pair twice with the galleries swapped (on by default) — the swap is what catches position bias: A in the first run and B in the swapped run mean the same gallery, so a contradiction exposes a model that just prefers the first picture. Measured here: every wrong answer across all test series was an \"A\", never a \"B\". Switching it off halves the requests and gives that check up; a comparison then rests on a single answer"),
         "vision_meldung": (bool, None, None, "vision detect: send a short note through your usual channels when a walk-through has been judged (off by default) — it arrives AFTER the pass, minutes late on a local model, and it is information only: it never raises or cancels an alarm"),
         "vision_alarm_unbestaetigt": (bool, None, None, "vision detect: alert when vision CONTRADICTS the body recognition (off by default) — it fires only when the body path claimed a known person, the run really happened, the model answered, and vision still confirmed nobody (neither, or the two swapped rounds disagreed). It stays quiet on walk-throughs the body path already called unknown (there vision agrees, so there is nothing to report) and when there was simply too little material: recognising known people is the strong side of this path, so a non-confirmation is a real signal — turning strangers away is the weak side, so it never votes in that direction"),
+        "vision_stimme": (bool, None, None, "vision detect: count a clean vision verdict as ONE additional support toward the body-path support rule, when it names the SAME person the body path already favors on that walk-through (on by default). It can only ever add that one vote: a contradiction or a tie between body candidates is simply no support (never a veto), vision alone never credits a pass, and alarms are completely untouched — this changes only how a pass is credited on the Today and Appearances pages. With the vision path set to 'aus' no automatic verdicts arise, so there is nothing to count; verdicts from runs you start yourself on the Vision page still vote, and verdicts that already exist keep voting even when vision detection as a whole is switched off later — this switch here is the one that silences them"),
+        # Ketten-Schalter (Issue #21): Enum aus KETTE_STUFEN (eine Quelle fuer
+        # Default, Whitelist und UI-Dropdown). "aus" ueberspringt den Weg an
+        # der QUELLE — die teuren Rechnungen starten gar nicht erst.
+        "person_pfad": (list, KETTE_STUFEN, None, "person (body) recognition path: immer = runs on every analyzed event once the person model is armed (today's behavior) | nur_wenn_gesicht_leer = the expensive person judgment (embedding) only starts when the FACE path could NOT confirm everyone on the walk-through — one unconfirmed or unclear person and it runs; body pictures are still collected during the analysis so the judgment has material when it is needed | aus = the path never starts by itself: no body pictures are collected and no person judgment is computed (the biggest saving on weak CPUs); a re-analysis you start yourself keeps working"),
+        "vision_pfad": (list, KETTE_STUFEN, None, "vision detect path: immer = a run starts automatically at the end of every walk-through, as long as vision detect itself is switched on (today's behavior) | nur_wenn_gesicht_leer = the automatic run only starts when the FACE path could NOT confirm everyone on the walk-through | aus = no automatic vision runs at all; runs you start yourself on the Vision page keep working"),
         "diagnostic_collection": (bool, None, None, "keep every JUDGED body image for inspection (Person -> Judged images): on = images of all passes stay for 30 days, roughly 20-40 MB a day; off (default) = they only live while the pass is running, then only the winning image and the verdict log remain"),
         "fd_front_min": (float, 0.5, 1.0, "false-detection rule: frontality at/above which a detection looks like a static object (calibrated 0.85)"),
         "fd_sharp_min": (int, 200, 5000, "false-detection rule: sharpness (Laplacian var.) at/above which a crop is edge-rich like vegetation/spokes (calibrated 1500)"),
@@ -2421,142 +2591,519 @@ class Service:
         self.neustart("Konfig")
         return True, f"gespeichert: {angewendet} — Dienst startet gleich neu"
 
+    # Modulumbau R2: Erst-Boot-Auto-Default + Settings-Hinweis leben in
+    # core/kette.py (Injektion pur: die EINEN Store-IO-/Mess-Funktionen dieses
+    # Dienstes kommen als Parameter mit — keine Duplikate, kein Rueckimport).
+    def _kette_auto_default(self):
+        _kette.auto_default(self.cfg, self.log_path, self.log,
+                            store_pfad=_config_store_pfad,
+                            store_laden=_lade_config_store,
+                            store_schreiben=_store_schreiben,
+                            phys_kerne=_phys_kerne,
+                            min_kerne_default=WANDUHR_MIN_KERNE)
+
+    def _kette_auto_hinweise(self):
+        return _kette.auto_hinweise(self.cfg)
+
+
+    # Modulumbau R3: Notifications-Settings (Store-Schreiber + Kanal-Tests) leben
+    # in core/melden.py (Docstrings dort). Injektion pur: Whitelist, Store-IO,
+    # Maskierung und Neustart reicht der Dienst als Parameter herein.
     def notif_speichern(self, d):
-        """SaveConfig fuer den Notifications-Reiter: die Kanal-Bloecke (telegram/pushover/mqtt inkl. Secrets),
-        die Melde-Schalter/Cooldowns und alert_kategorien atomar in den JSON-Store. Getrennt von
-        config_schreiben, weil die generische Whitelist keine Strings/verschachtelten Dicts kann.
-        Secrets: LEERES Feld = bestehenden Wert behalten (nie mit Leer ueberschreiben); Audit maskiert.
-        Der Store ersetzt ganze Top-Level-Keys -> die Kanal-Dicts werden KOMPLETT geschrieben."""
-        cfg = self.cfg
-        store = _lade_config_store(cfg)
-        audit = {}
-
-        def keep(neu, alt):                                # leeres Feld -> Bestand behalten
-            neu = str(neu if neu is not None else "").strip()
-            return neu if neu else (alt or "")
-
-        # 1) Skalare/Enum/Bool ueber die bestehende Whitelist validieren
-        for key in ("telegram_modus", "telegram_inhalt", "telegram_cooldown", "alert_cooldown",
-                    "anwesenheit_push", "anwesenheit_cooldown", "mqtt_publish", "szene_karenz_s"):
-            if key not in d:
-                continue
-            typ, lo, hi, _ = self.CONFIG_WHITELIST[key]
-            try:
-                if typ is list:
-                    w = str(d[key]).strip()
-                    if w not in lo:
-                        return False, f"'{key}': erlaubt {', '.join(lo)}"
-                elif typ is bool:
-                    w = str(d[key]).lower() in ("1", "true", "ja", "on")
-                else:
-                    w = typ(d[key])
-                    if not (lo <= w <= hi):
-                        return False, f"'{key}': erlaubt {lo}–{hi}"
-            except Exception:
-                return False, f"'{key}': ungueltiger Wert"
-            store[key] = w
-            audit[key] = w
-
-        # 2) alert_kategorien (Liste, nicht in der Whitelist)
-        if "alert_kategorien" in d:
-            erlaubt = {"widerspruch", "frigate_nur", "wir_nur", "beide_unknown",
-                       "erkannt", "fremd_verdacht", "unbekannt_schwach"}
-            kats = [k for k in (d.get("alert_kategorien") or []) if k in erlaubt]
-            store["alert_kategorien"] = kats
-            audit["alert_kategorien"] = kats
-
-        # 3) Kanal-Bloecke (kompletter Dict-Ersatz; Secrets maskiert im Audit)
-        a = cfg.get("telegram") or {}
-        tg = {"bot_token": keep(d.get("telegram_bot_token"), a.get("bot_token")),
-              "chat_id": keep(d.get("telegram_chat_id"), a.get("chat_id"))}
-        store["telegram"] = tg
-        audit["telegram"] = {"bot_token": _mask_secret(tg["bot_token"]), "chat_id": tg["chat_id"]}
-
-        a = cfg.get("pushover") or {}
-        po = {"token": keep(d.get("pushover_token"), a.get("token")),
-              "user": keep(d.get("pushover_user"), a.get("user"))}
-        store["pushover"] = po
-        audit["pushover"] = {"token": _mask_secret(po["token"]), "user": _mask_secret(po["user"])}
-
-        a = cfg.get("mqtt") or {}
-        mq = dict(a)
-        mq["host"] = keep(d.get("mqtt_host"), a.get("host"))
-        try:
-            mq["port"] = int(d.get("mqtt_port") or a.get("port") or 1883)
-        except Exception:
-            mq["port"] = a.get("port") or 1883
-        mq["user"] = keep(d.get("mqtt_user"), a.get("user"))
-        mq["password"] = keep(d.get("mqtt_password"), a.get("password"))
-        store["mqtt"] = mq
-        audit["mqtt"] = {"host": mq["host"], "port": mq["port"],
-                         "user": _mask_secret(mq["user"]), "password": _mask_secret(mq["password"])}
-
-        p = _config_store_pfad(cfg)
-        _store_schreiben(p, store)      # atomar + fsync, unter _cfg_lock (5 Schreibwege)
-        with open(os.path.join(cfg["data_dir"], "config", "config_audit.jsonl"), "a") as f:
-            f.write(json.dumps({"ts": round(time.time(), 1), "notif": audit}, ensure_ascii=False) + "\n")
-            f.flush()
-        self.log("NOTIFICATIONS changed via UI (secrets masked) — restart after the current analysis")
-        self.neustart("Notifications")
-        return True, "gespeichert — Dienst startet gleich neu"
+        return _melden.notif_speichern(self.cfg, d, log=self.log,
+                                       whitelist=self.CONFIG_WHITELIST,
+                                       store_pfad=_config_store_pfad,
+                                       store_laden=_lade_config_store,
+                                       store_schreiben=_store_schreiben,
+                                       maskieren=_mask_secret,
+                                       neustart=self.neustart)
 
     def notif_test(self, kanal, d):
-        """Echter Test-Versand je Kanal mit den AKTUELLEN Formularwerten (leeres Feld -> gespeicherter Wert).
-        Umgeht bewusst Drosseln/Modus-Gates. Gibt (ok, msg) zurueck; Secrets NIE in die Meldung."""
-        cfg = self.cfg
+        return _melden.notif_test(self.cfg, kanal, d)
 
-        def keep(neu, alt):
-            neu = str(neu if neu is not None else "").strip()
-            return neu if neu else (alt or "")
+    # ------------------------------------------------- Live-Reiter (Phase 2)
+    # Duenne Maentel: Zustands-Ableitung, Validierung und Store-Schreibwege
+    # liegen in core/livewache (ui_zustand/live_speichern/live_schalter,
+    # Injektion der EINEN Store-IO-Wege wie bei notif_speichern). Die Engine
+    # ist ein eigener Prozess; Auftraege (Quelltest/Last-Messung) laufen als
+    # Kommando-Datei + Status-Quittung — der STORE-Schreib der Ergebnisse
+    # bleibt bei DIESEM Dienst (live_quittungen_uebernehmen, _cfg_lock).
 
+    def _live_gesperrt(self):
+        """CPU-only-Sperre der Kacheln — DASSELBE Praedikat wie der Engine-
+        Startweg (livewached._cpu_sperre: resolve_backend kind == 'cpu').
+        -> (gesperrt, grund).
+
+        UI-M5 (Fix-Zyklus 12.08.): der Grund kommt aus der ECHTEN Ursache —
+        'CPU-only image' stimmt nur auf der cpu-Variante; ein gpu-/cuda-Image
+        ohne durchgereichte GPU loest AUTO ebenfalls auf cpu auf, und der
+        User braucht dann den Durchreichungs-Hinweis, keine Fehldiagnose.
+        FAIL-CLOSED wie die Engine (_cpu_sperre hat kein try): wirft die
+        Pruefung, gilt Live als gesperrt — nie stillschweigend freigeben."""
         try:
-            if kanal == "pushover":
-                a = cfg.get("pushover") or {}
-                tok, usr = keep(d.get("pushover_token"), a.get("token")), keep(d.get("pushover_user"), a.get("user"))
-                if not tok or not usr:
-                    return False, "token/user missing"
-                ok = push({"pushover": {"token": tok, "user": usr}}, "suslik",
-                          "Test notification from suslik ✓",
-                          herkunft="manuell")
-                return (True, "Pushover: sent ✓") if ok else (False, "Pushover rejected it (check token/user)")
-            if kanal == "telegram":
-                a = cfg.get("telegram") or {}
-                tok, chat = keep(d.get("telegram_bot_token"), a.get("bot_token")), keep(d.get("telegram_chat_id"), a.get("chat_id"))
-                if not tok or not chat:
-                    return False, "bot_token/chat_id missing"
-                ok = telegram_video({"telegram": {"bot_token": tok, "chat_id": chat}},
-                                    None, "Test notification from suslik ✓",
-                                    herkunft="manuell")
-                return (True, "Telegram: sent ✓") if ok else (False, "Telegram rejected it (check bot_token/chat_id)")
-            if kanal == "mqtt":
-                a = cfg.get("mqtt") or {}
-                host = keep(d.get("mqtt_host"), a.get("host"))
-                if not host:
-                    return False, "host missing"
-                try:
-                    port = int(d.get("mqtt_port") or a.get("port") or 1883)
-                except Exception:
-                    port = 1883
-                usr, pw = keep(d.get("mqtt_user"), a.get("user")), keep(d.get("mqtt_password"), a.get("password"))
-                import paho.mqtt.client as mqtt
-                c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-                if usr:
-                    c.username_pw_set(usr, pw)
-                c.connect(host, port, 10)
-                c.loop_start()
-                # .163: auch der Test-Publish traegt sein Herkunfts-Feld — er
-                # geht ueber einen eigenen Client, also wird das Kennzeichen
-                # hier ausdruecklich gesetzt (dieselbe EINE Quelle).
-                info = c.publish("verifyd/test", self._mqtt_herkunft(
-                    json.dumps({"test": True, "ts": round(time.time(), 1)}),
-                    "manuell"))
-                info.wait_for_publish(timeout=5)
-                c.loop_stop()
-                c.disconnect()
-                return True, f"MQTT: connected {host}:{port} + published verifyd/test ✓"
+            from face_audit import resolve_backend
+            kind, _dev = resolve_backend()
+            if kind != "cpu":
+                return False, ""
+            variante = os.environ.get("SUSLIK_VARIANT", "")
+            if variante == "cpu":
+                grund = ("Live watchers are not available on this build "
+                         "(CPU-only image)")
+            elif variante:
+                grund = (f"Live watchers need GPU recognition, but this "
+                         f"'{variante}' image is running on the CPU here — "
+                         f"no usable GPU was found or bound (check device "
+                         f"passthrough and host drivers)")
+            else:
+                grund = ("Live watchers need GPU recognition, but the "
+                         "detector backend resolved to CPU on this machine")
+            return True, grund
         except Exception as e:
-            return False, f"{kanal} error: {str(e)[:90]}"
-        return False, "unknown channel"
+            self.log(f"!! live: backend check failed ({type(e).__name__}: "
+                     f"{e}) — treating live as unavailable (fail-closed, "
+                     f"same direction as the engine lock)")
+            return True, ("Live watchers unavailable: the backend check "
+                          "failed (see service log)")
+
+    def live_lage(self, cams):
+        """Kachel-Daten des Live-Reiters: Kameras aus Frigate (injizierte
+        EINE Aufzaehlung) + konfigurierte Guards, Zustand je Kachel aus
+        ui_zustand (Engine-QUITTUNG, K1 in beide Richtungen).
+        -> (kacheln, engine_info, gesperrt).
+
+        UI-B2 (Frische-Tor): ALLE Anzeige-Inhalte aus dem Status (Zaehler,
+        Auftraege, Slot-Neubewertung) laufen durch livewache.status_fuer_ui —
+        ein toter Engine-Prozess friert sonst Zaehler/Countdown/re-check-
+        Texte als Dauer-Luege ein (UI-MUSS-1, RECHECK 12.08.: genau die
+        neubewertung lief noch am Tor vorbei)."""
+        from core import livewache as _lw
+        status, frisch = _lw.status_lesen(self.cfg)
+        if status:
+            self.live_quittungen_uebernehmen(status)
+        gesperrt, sperr_grund = self._live_gesperrt()
+        _auftrag, _auftraege, ks_ui, neb_ui = _lw.status_fuer_ui(status, frisch)
+        _d, guards = _lw.guards_lesen(self.cfg, lambda z: None)
+        kacheln = []
+        for name in sorted(set(cams or {}) | set(guards)):
+            g = guards.get(name)
+            ks = ((status or {}).get("kacheln") or {}).get(name)
+            verw = ((status or {}).get("verweigert") or {}).get(name, "")
+            z, detail = _lw.ui_zustand(g, ks, frisch, gesperrt,
+                                       verweigert_grund=verw,
+                                       sperr_grund=sperr_grund)
+            kacheln.append({
+                "name": name, "zustand": z, "detail": detail,
+                "in_frigate": name in (cams or {}),
+                "cam": (cams or {}).get(name) or {},
+                "guard": g, "live": ks_ui.get(name),
+                "test": (g or {}).get("test") or None,
+                "test_fehler": (g or {}).get("test_fehler") or None,
+                "messung": (g or {}).get("messung") or None,
+                "neubewertung": neb_ui.get(name, ""),
+            })
+        return kacheln, {"frisch": frisch, "status": status,
+                         "sperr_grund": sperr_grund,
+                         # Phase 4: Supervisor-Lage (Autostart/Standalone) —
+                         # dieselbe Quelle wie /health (live_aufsicht_status).
+                         "aufsicht": self.live_aufsicht_status()}, gesperrt
+
+    def live_health(self):
+        """Der /health-Block des Live-Reiters — aus DERSELBEN Ableitung wie
+        die Kacheln (ui_zustand + registry.LIVE_ZUSTAENDE, K3: eine Quelle).
+        Nur konfigurierte Guards (kein Frigate-Aufruf im health-Pfad)."""
+        from core import livewache as _lw
+        status, frisch = _lw.status_lesen(self.cfg)
+        gesperrt, sperr_grund = self._live_gesperrt()
+        _d, guards = _lw.guards_lesen(self.cfg, lambda z: None)
+        aus = {"engine": "ok" if frisch else "not running", "watchers": {}}
+        if status and status.get("engine") not in (None, "ok"):
+            aus["engine"] = str(status.get("engine"))
+        # Phase 4: Supervisor-Lage — Standalone-Erkennung sichtbar in /health
+        # ("standalone engine detected"), dieselbe Quelle wie die Live-Seite.
+        aus["supervisor"] = self.live_aufsicht_status()
+        for name, g in sorted(guards.items()):
+            ks = ((status or {}).get("kacheln") or {}).get(name)
+            verw = ((status or {}).get("verweigert") or {}).get(name, "")
+            z, detail = _lw.ui_zustand(g, ks, frisch, gesperrt,
+                                       verweigert_grund=verw,
+                                       sperr_grund=sperr_grund)
+            aus["watchers"][name] = ({"state": z, "detail": detail}
+                                     if detail else {"state": z})
+        return aus
+
+    def live_speichern(self, kamera, d):
+        # Engine-M5: das _cfg_lock umgreift Lesen+Aendern+Schreiben (Areas-
+        # Muster) — der Store-Schreibweg allein trennte nichts, der Verlierer
+        # war gemessen IMMER der Lock-Halter (Helfer-Testblock 40/40 weg).
+        from core import livewache as _lw
+        gesperrt, _grund = self._live_gesperrt()
+        if gesperrt:
+            # UI-KANN 4 (RECHECK 12.08.): die Kachel sagt 'Bedienelemente
+            # aus' — der Save-Weg haelt sich fail-closed daran, analog
+            # live_schalter (vorher 200 inkl. stiller Test-Entwertung).
+            return False, "not available on this build"
+        with _cfg_lock:
+            return _lw.live_speichern(self.cfg, kamera, d, log=self.log,
+                                      store_pfad=_config_store_pfad,
+                                      store_laden=_lade_config_store,
+                                      store_schreiben=_store_schreiben)
+
+    def live_schalter(self, kamera, enabled):
+        from core import livewache as _lw
+        gesperrt, _grund = self._live_gesperrt()
+        if gesperrt:
+            # UI-KANN 14: die Kachel zeigt 'Bedienelemente aus' — der Server
+            # haelt sich jetzt auch daran (vorher 200 am UI-Grau vorbei).
+            return False, "not available on this build"
+        with _cfg_lock:                    # Engine-M5, s. live_speichern
+            ok, msg = _lw.live_schalter(self.cfg, kamera, bool(enabled),
+                                        log=self.log,
+                                        store_pfad=_config_store_pfad,
+                                        store_laden=_lade_config_store,
+                                        store_schreiben=_store_schreiben)
+        # Phase 4: Enable startet die Engine, wenn sie nicht laeuft (Bauplan-
+        # Auftrag) — der Anstoss weckt den Supervisor-Takt sofort und hebt
+        # Pause/Backoff auf. Disable stoppt BEWUSST NICHT (naechstes Enable
+        # ist dann in Sekunden wirksam statt einen Kaltstart zu kosten).
+        if ok and enabled and self._live_aufsicht is not None:
+            self._live_aufsicht.anstossen()
+        return ok, msg
+
+    def live_quittungen_uebernehmen(self, status):
+        """Engine-Ergebnisse (Quelltest-Block, Last-Messung) in den Store —
+        der SCHREIBWEG bleibt beim Dienst (_cfg_lock), die Engine quittiert
+        nur im Status-JSON. Idempotent ueber den ts-Vergleich (jeder Poll
+        prueft, geschrieben wird nur Neues).
+
+        AUCH FEHL-AUFTRAEGE (UI-M3, gemessen: 'unreachable'/'0/20' erreichten
+        die Seite nie — der fehler-Zweig des Renderers war toter Code):
+         * Mess-FEHLER ersetzen den messung-Block (er ist reine Anzeige, kein
+           Riegel — die letzte Wahrheit zaehlt, auch wenn sie 'kaputt' heisst).
+         * Test-FEHLER gehen in ein EIGENES Feld test_fehler: der gruene
+           test-Block traegt den Enable-/Weiterlauf-Riegel (test_gueltig),
+           ein transient roter Re-Test darf einen laufenden Waechter nicht
+           stoppen. Ein neuer gruener Test raeumt das Feld."""
+        auftraege = (status or {}).get("auftraege") or {}
+        if not auftraege:
+            return
+        with _cfg_lock:
+            store = _lade_config_store(self.cfg)
+            geaendert = []
+            for kamera, erg in auftraege.items():
+                t = erg.get("test") or {}
+                block = t.get("block")
+                if t.get("ok") and block:
+                    g = (store.setdefault("live", {})
+                         .setdefault("guards", {}).setdefault(kamera, {}))
+                    if (g.get("test") or {}).get("ts") != block.get("ts"):
+                        g["test"] = block
+                        g.pop("test_fehler", None)
+                        geaendert.append(f"{kamera}:test")
+                elif t and not t.get("ok") and not t.get("vorab"):
+                    g = (store.setdefault("live", {})
+                         .setdefault("guards", {}).setdefault(kamera, {}))
+                    if (g.get("test_fehler") or {}).get("ts") != t.get("ts"):
+                        g["test_fehler"] = {
+                            "ok": False, "ts": t.get("ts"),
+                            "fehler": str(t.get("fehler") or t.get("text")
+                                          or "source test failed")[:300]}
+                        geaendert.append(f"{kamera}:test_fehler")
+                m = erg.get("messung") or {}
+                if m and m.get("ts") is not None and not m.get("vorab"):
+                    g = (store.setdefault("live", {})
+                         .setdefault("guards", {}).setdefault(kamera, {}))
+                    if (g.get("messung") or {}).get("ts") != m.get("ts"):
+                        g["messung"] = m
+                        geaendert.append(f"{kamera}:messung"
+                                         + ("" if m.get("ok") else "(fehler)"))
+            if geaendert:
+                _store_schreiben(_config_store_pfad(self.cfg), store)
+                self.cfg["live"] = store["live"]
+                self.log(f"LIVE: engine job results stored "
+                         f"({', '.join(geaendert)})")
+
+    def _live_jobs_altern(self):
+        """Engine-M6 (unter _live_jobs_lock aufrufen): haengende Helfer-Jobs
+        nach Frist in ein ehrliches Fehler-Ergebnis kippen — ein toter
+        Helfer-Thread sperrte den Quelltest sonst bis zum Dienst-Neustart
+        mit der falschen Meldung 'another test is already running'."""
+        jetzt = time.time()
+        for k, v in list(self._live_jobs.items()):
+            if (not v.get("fertig")
+                    and jetzt - v.get("seit", jetzt) > _LIVE_HELFER_FRIST_S):
+                self._live_jobs[k] = {
+                    "art": v.get("art") or "test", "weg": "prozess",
+                    "fertig": True, "ok": False,
+                    "text": (f"helper did not report back within "
+                             f"{_LIVE_HELFER_FRIST_S:.0f}s (thread died?) — "
+                             f"slot freed"),
+                    "ts": jetzt}
+                self.log(f"!! LIVE helper job {k}: stale after "
+                         f"{_LIVE_HELFER_FRIST_S:.0f}s — marked failed, "
+                         f"slot freed")
+
+    def live_test_starten(self, kamera):
+        """§5-Quelltest, asynchron: laeuft die ENGINE, uebernimmt SIE ihn
+        (geteilter Detektor — kein zweites Modell auf der iGPU, Lehre aus
+        dem Vier-Waechter-Tod 11.08.); ohne Engine faehrt ein Helfer-
+        Subprozess (`livewached test --json`, kurzlebiges eigenes Modell).
+        Ergebnis holt der UI-Poll ueber /live_status; den test-Block
+        schreibt in beiden Wegen DIESER Dienst. -> (ok, msg).
+
+        Engine-M3: der Kommando-Slot wird nie stumm ueberschrieben — haengt
+        ein unverarbeitetes ts (kommando_unverarbeitet gegen die Engine-
+        Quittung status.kommando_ts), wird ABGELEHNT statt ueberschrieben;
+        Pruefung+Schreib unter _live_cmd_lock (zwei UI-Klicks im selben
+        Fenster). Engine-M4: die Weg-Entscheidung Engine/Helfer haengt nicht
+        mehr allein an der 6-s-Frische — haelt ein Prozess das Engine-flock
+        (engine_lebt), startet NIE ein Helfer-Zweitmodell auf derselben GPU."""
+        from core import livewache as _lw
+        kamera = str(kamera or "").strip()
+        if not kamera:
+            return False, "camera name missing"
+        gesperrt, _grund = self._live_gesperrt()
+        if gesperrt:
+            return False, "not available on this build"
+        with self._live_cmd_lock:
+            status, frisch = _lw.status_lesen(self.cfg)
+            if frisch:
+                if (status or {}).get("auftrag"):
+                    return False, "another test/measurement is already running"
+                if _lw.kommando_unverarbeitet(self.cfg, status) is not None:
+                    return False, ("a command is already queued for the "
+                                   "engine — try again in a few seconds")
+                _lw.kommando_schreiben(self.cfg, "test", kamera)
+                return True, "source test started (inside the live engine)"
+        if _lw.engine_lebt(self.cfg):
+            return False, ("the live engine process is running but its "
+                           "status is stale (busy?) — not starting a second "
+                           "model on the same GPU; try again shortly")
+        with self._live_jobs_lock:
+            self._live_jobs_altern()
+            if any(not j.get("fertig") for j in self._live_jobs.values()):
+                return False, "another test is already running"
+            self._live_jobs[kamera] = {"art": "test", "weg": "prozess",
+                                       "fertig": False, "seit": time.time()}
+
+        def lauf():
+            # Engine-M6: erg ist VOR jedem riskanten Schritt belegt und das
+            # finally setzt IMMER fertig — der Store-Schreib lag vorher
+            # ausserhalb des try, ein Fehler dort (volle Platte, Rechte)
+            # liess den Job-Eintrag fuer immer 'laufend'.
+            erg = {"ok": False, "text": "helper crashed before reporting"}
+            try:
+                env = dict(os.environ)
+                env["VERIFYD_CONFIG"] = self.config_pfad or os.path.join(
+                    HERE, "verifyd.yaml")
+                p = subprocess.run(
+                    [sys.executable, "-m", "core.livewached", "test",
+                     kamera, "--json"],
+                    cwd=HERE, capture_output=True, text=True,
+                    timeout=180, env=env)
+                zeilen = [z for z in (p.stdout or "").splitlines()
+                          if z.strip().startswith("{")]
+                erg = json.loads(zeilen[-1]) if zeilen else {
+                    "ok": False, "text": (p.stderr or "no output")[-200:]}
+                with _cfg_lock:
+                    store = _lade_config_store(self.cfg)
+                    g = (store.setdefault("live", {})
+                         .setdefault("guards", {}).setdefault(kamera, {}))
+                    if erg.get("ok") and erg.get("block"):
+                        g["test"] = erg["block"]
+                        g.pop("test_fehler", None)
+                        _store_schreiben(_config_store_pfad(self.cfg), store)
+                        self.cfg["live"] = store["live"]
+                        self.log(f"LIVE source test {kamera}: stored "
+                                 f"(helper process)")
+                    elif not erg.get("ok"):
+                        # UI-M3: auch der Helfer-Fehlschlag wird sichtbar
+                        # gespeichert (test_fehler), nicht nur gepollt.
+                        g["test_fehler"] = {
+                            "ok": False, "ts": round(time.time(), 1),
+                            "fehler": str(erg.get("text") or "")[:300]}
+                        _store_schreiben(_config_store_pfad(self.cfg), store)
+                        self.cfg["live"] = store["live"]
+            except Exception as e:
+                erg = {"ok": False,
+                       "text": f"{type(e).__name__}: {str(e)[:120]}"}
+            finally:
+                with self._live_jobs_lock:
+                    self._live_jobs[kamera] = {
+                        "art": "test", "weg": "prozess", "fertig": True,
+                        "ok": bool(erg.get("ok")),
+                        "text": str(erg.get("text") or ""), "ts": time.time()}
+        threading.Thread(target=lauf, name=f"live-test-{kamera}",
+                         daemon=True).start()
+        return True, ("source test started — the engine is not running, so a "
+                      "helper process runs it (up to ~2 minutes)")
+
+    def live_messung_starten(self, kamera):
+        """Last-Messung EINES Waechters (User-Auflage 12.08.) — laeuft NUR
+        in der Engine (sie pausiert die anderen Kacheln, das Modell bleibt
+        geladen). -> (ok, msg); Fortschritt/Countdown via /live_status.
+        Kommando-Slot-Riegel wie live_test_starten (Engine-M3)."""
+        from core import livewache as _lw
+        kamera = str(kamera or "").strip()
+        if not kamera:
+            return False, "camera name missing"
+        gesperrt, _grund = self._live_gesperrt()
+        if gesperrt:
+            return False, "not available on this build"
+        with self._live_cmd_lock:
+            status, frisch = _lw.status_lesen(self.cfg)
+            if not frisch:
+                return False, ("the live engine is not running — the load "
+                               "measurement runs inside the engine; the "
+                               "service starts it automatically once a "
+                               "watcher is enabled")
+            if (status or {}).get("auftrag"):
+                return False, "another test/measurement is already running"
+            if _lw.kommando_unverarbeitet(self.cfg, status) is not None:
+                return False, ("a command is already queued for the engine — "
+                               "try again in a few seconds")
+            _lw.kommando_schreiben(self.cfg, "messung", kamera)
+        return True, ("measurement started — other watchers are paused while "
+                      "it runs")
+
+    def live_status_daten(self):
+        """JSON fuer den UI-Poll: Engine-Frische, laufender Auftrag (Phase +
+        Restsekunden fuer den Countdown), Ergebnisse, Helfer-Jobs und die
+        Kachel-Zustaende (Reload-Erkennung). Uebernimmt nebenbei frische
+        Engine-Ergebnisse in den Store (Schreibweg beim Dienst).
+
+        UI-B2: auftrag/auftraege laufen durch livewache.status_fuer_ui —
+        ohne frischen Herzschlag friert sonst ein toter Auftrag Countdown
+        und Reload-Tor der Seite als Dauer-Luege ein."""
+        from core import livewache as _lw
+        status, frisch = _lw.status_lesen(self.cfg)
+        if status:
+            self.live_quittungen_uebernehmen(status)
+        gesperrt, sperr_grund = self._live_gesperrt()
+        auftrag, auftraege, _ks_ui, _neb_ui = _lw.status_fuer_ui(status, frisch)
+        _d, guards = _lw.guards_lesen(self.cfg, lambda z: None)
+        zustaende = {}
+        for name, g in guards.items():
+            ks = ((status or {}).get("kacheln") or {}).get(name)
+            verw = ((status or {}).get("verweigert") or {}).get(name, "")
+            # UI-KANN 3 (RECHECK 12.08.): derselbe ehrliche Sperr-Text wie
+            # auf der Seite — vorher stand hier die CPU-only-Fehldiagnose.
+            z, detail = _lw.ui_zustand(g, ks, frisch, gesperrt,
+                                       verweigert_grund=verw,
+                                       sperr_grund=sperr_grund)
+            zustaende[name] = {"z": z, "detail": detail}
+        with self._live_jobs_lock:
+            self._live_jobs_altern()               # Engine-M6
+            jobs = {k: dict(v) for k, v in self._live_jobs.items()}
+            # abgeholte fertige Helfer-Jobs nach 60 s auskehren
+            for k in [k for k, v in self._live_jobs.items()
+                      if v.get("fertig")
+                      and time.time() - v.get("ts", 0) > 60]:
+                del self._live_jobs[k]
+        return {"engine": {"frisch": frisch,
+                           "zustand": (status or {}).get("engine")},
+                "auftrag": auftrag,
+                "auftraege": auftraege,
+                "jobs": jobs, "zustaende": zustaende}
+
+    # ---------------------------------------- Live-Engine-Supervisor (Phase 4)
+    # User-Entscheid 12.08. abends: der Dienst startet und ueberwacht die
+    # Engine als eigenen Prozess IM selben Container. Logik in
+    # core/liveaufsicht (injektionsrein, Harnisch tools/harnisch_phase34.py);
+    # hier nur die echten Aussenkontakte + der Takt-Thread.
+
+    def start_live_aufsicht(self):
+        """Supervisor-Thread starten (einmalig, im Serve-Pfad von main())."""
+        if self._live_aufsicht is not None:
+            return
+        from core import liveaufsicht as _la
+        from core import livewache as _lw
+
+        def spawn():
+            env = dict(os.environ)
+            cp = self.config_pfad or os.path.join(HERE, "verifyd.yaml")
+            env["VERIFYD_CONFIG"] = (cp if os.path.isabs(cp)
+                                     else os.path.join(HERE, cp))
+            # start_new_session: die Engine forkt (ffmpeg-Leser), und die
+            # Kinder ERBEN das flock — Stopp/Aufraeumen laeuft deshalb immer
+            # ueber die Prozessgruppe (killpg), nie nur die Eltern-PID.
+            return subprocess.Popen(
+                [sys.executable, "-m", "core.livewached", "run"],
+                cwd=HERE, env=env, start_new_session=True)
+
+        def guards_aktiv():
+            # STORE-Blick (Hand-Edits zaehlen) mit der EINEN enabled-Wahrheit
+            # der Engine — _live_guards_aktiv (MUSS-1: "enabled": "false"
+            # darf nie spawnen; Fall/Mutant in tools/harnisch_phase34.py).
+            try:
+                return _live_guards_aktiv(self.cfg)
+            except Exception:
+                return False
+
+        def gesperrt():
+            g, _grund = self._live_gesperrt()
+            return g
+
+        def frisch():
+            _st, f = _lw.status_lesen(self.cfg)
+            return f
+
+        def stoerung(text):
+            from core import melden
+            for fz in melden.stoerung_melden(self.cfg, text) or []:
+                self.log(f"!! live supervisor notice channel failed: {fz}")
+
+        a = _la.Aufsicht(self.log, spawn_fn=spawn, guards_aktiv_fn=guards_aktiv,
+                         gesperrt_fn=gesperrt,
+                         lock_gehalten_fn=lambda: _lw.engine_lebt(self.cfg),
+                         status_frisch_fn=frisch, stoerung_fn=stoerung)
+        self._live_aufsicht = a
+
+        def lauf():
+            while not self._live_aufsicht_stop.is_set():
+                a.weck.wait(_la.TAKT_S)
+                a.weck.clear()
+                if self._live_aufsicht_stop.is_set():
+                    break
+                try:
+                    a.takt()
+                except Exception as e:
+                    self.log(f"!! live supervisor tick failed: "
+                             f"{type(e).__name__}: {e}")
+        threading.Thread(target=lauf, name="live-aufsicht", daemon=True).start()
+        # sys.exit (SIGTERM-Handler) laeuft durch atexit — execv NICHT, dort
+        # ruft neustart() den Stopp explizit (Muster worker_stoppen).
+        import atexit
+        atexit.register(self.live_aufsicht_stoppen)
+        self.log("live supervisor started (engine autostarts once a watcher "
+                 "is enabled)")
+
+    def live_aufsicht_stoppen(self):
+        """Engine sauber beenden (SIGTERM-Prozessgruppe + Frist) — vor execv
+        (neustart) und am Dienst-Ende (atexit). Idempotent."""
+        a = self._live_aufsicht
+        if a is None:
+            return
+        self._live_aufsicht_stop.set()
+        try:
+            a.stop("service stop")
+        except Exception as e:
+            self.log(f"!! live supervisor stop failed: {type(e).__name__}: {e}")
+
+    def live_aufsicht_status(self):
+        """Anzeige-Block des Supervisors (Live-Seite + /health) — EINE Quelle.
+        getattr statt Attribut-Zugriff: T16-artige Pruef-Objekte bauen den
+        Service ohne __init__ (Service.__new__), die Lage-Ableitung muss
+        darauf antworten koennen statt zu werfen."""
+        a = getattr(self, "_live_aufsicht", None)
+        if a is None:
+            return {"laeuft": False, "standalone": False,
+                    "text": "supervisor not running (service still starting, "
+                            "or --once mode)"}
+        try:
+            return a.status()
+        except Exception as e:
+            return {"laeuft": False, "standalone": False,
+                    "text": f"supervisor status failed: {type(e).__name__}"}
 
     # ------------------------------------------------- Vision detect (V1, §5)
     # Duenne Maentel: Validierung, Test und Vorbedingungen liegen vollstaendig in
@@ -2884,6 +3431,20 @@ class Service:
         pk = (self._kontroll_speicher(eid, entry) or {}).get("pass_key")
         if not pk:
             return
+        if self.kette_stufe("vision") == "aus":
+            # Ketten-Schalter (Issue #21): QUELLE uebersprungen — kein Timer,
+            # kein Lauf. EINE laute Zeile je DURCHGANG, nicht je Event
+            # (Dedup unten; der 6-h-Verfall haelt die Map endlich).
+            jetzt = time.time()
+            with self._vision_lock:
+                self._kette_stumm = {k: t for k, t in self._kette_stumm.items()
+                                     if jetzt - t < 6 * 3600}
+                schon = pk in self._kette_stumm
+                self._kette_stumm[pk] = jetzt
+            if not schon:
+                self.log(f"VISION auto-run off (vision_pfad=aus) — pass {pk} "
+                         f"will not be judged automatically")
+            return
         with self._vision_lock:
             alt = self._vision_timer.get(pk)
             if alt:
@@ -2900,6 +3461,22 @@ class Service:
             if self._vision_timer.get(pass_key) is not mein_timer:
                 return                           # ein neuerer Timer hat uebernommen
             self._vision_timer.pop(pass_key, None)
+        # Ketten-Schalter (Issue #21), Stufe "nur_wenn_gesicht_leer": erst am
+        # Durchgangs-ENDE steht fest, ob der Gesichts-Weg restlos bestaetigt
+        # hat (Regel B) — deshalb faellt die Entscheidung HIER, nicht beim
+        # Timer-Start. Nur der automatische Anstoss; manuelle Laeufe gehen
+        # direkt ueber vision_urteil_anstossen und bleiben frei.
+        # Modulumbau R2: Entscheid in core/kette. "aus" laeuft hier bewusst
+        # DURCH (heutiges Verhalten: dieser Punkt prueft nur die
+        # nur_wenn_gesicht_leer-Bedingung; die "aus"-Quelle sitzt in
+        # _vision_anstossen und laesst gar keinen Timer entstehen).
+        if _kette.entscheide(
+                self.kette_stufe("vision"),
+                lambda: self._gesicht_pass_bestaetigt(pass_key=pass_key)
+                ) == "gesicht_bestaetigt":
+            self.log(f"VISION run for pass {pass_key} not started — face path "
+                     f"confirmed the whole pass (vision_pfad=nur_wenn_gesicht_leer)")
+            return
         self.vision_urteil_anstossen(pass_key)
 
     def vision_waisen(self, pass_key=None):
@@ -3117,7 +3694,7 @@ class Service:
         # eigenes Feld im MQTT-Payload). Die Unterscheidung steht schon im
         # Protokoll (`manuell`), sie wird hier nur durchgereicht.
         _herk = "manuell" if z.get("manuell") else "live"
-        self._mqtt_pub("verifyd/vision_urteil", json.dumps(
+        self._mqtt_pub(_melden.topic(self.cfg, "vision_urteil"), json.dumps(
             {"pass_key": z.get("pass_key"), "art": art,
              "person": z.get("person"), "voten": s.get("voten"),
              "bilder": s.get("bilder"), "ts": round(time.time(), 1)},
@@ -3135,6 +3712,7 @@ class Service:
         import datetime
         import szenarien as _sz
         from core import personlive as _plv
+        from core import personmodell as _pmz
         from core import visionurteil as _vu
         dd = self.cfg["data_dir"]
         by_eid = {}
@@ -3156,7 +3734,14 @@ class Service:
         if pass_key:
             self.vision_waisen(pass_key)
         kmap = _plv.treffer_karte(dd)
-        vmap = _vu.protokoll_karte(dd)      # nur URTEILE (Karte + Liste)
+        vmap = _vu.protokoll_karte(dd)      # nur URTEILE (Karte+Liste+Stimme)
+        # Stuetzen-Schwelle aus DERSELBEN Quelle wie /heute und /auftritte
+        # (status_lesen feuer_ab, Fallback personlive.FEUER_AB) — ohne sie
+        # fuhr die Passliste den Signatur-Default und driftete von /heute
+        # weg, sobald ein Nutzer die Feuer-Regel unter Person -> Modell-
+        # Status verstellt (Randbefund der vision-stimme-2-Drittkontrolle).
+        kab = int((_pmz.status_lesen(dd) or {}).get("feuer_ab")
+                  or _plv.FEUER_AB)
         passe, treffer = [], None
         for tag in range(3):
             t0 = (datetime.datetime.now().replace(hour=0, minute=0, second=0,
@@ -3165,7 +3750,7 @@ class Service:
             for s in _sz.szenarien_des_tages(
                     by_eid, t0.timestamp(),
                     (t0 + datetime.timedelta(days=1)).timestamp(), self.cfg,
-                    {}, koerper_map=kmap):
+                    {}, koerper_map=kmap, koerper_ab=kab, vision_map=vmap):
                 pk = "%d" % round(s["start"])
                 passe.append({"pass_key": pk, "start": s["start"],
                               "events": s["n"], "kameras": len(s["kams"]),
@@ -3409,6 +3994,9 @@ class Service:
             with self.lock:                        # wartet auf Abschluss einer laufenden Analyse
                 self.log(f"restarting now via re-exec{(': ' + grund) if grund else ''}")
                 self.worker_stoppen()              # W2: beenden+wait VOR execv (kein Waisen-Worker
+                self.live_aufsicht_stoppen()       # Phase 4: Engine sauber beenden (execv laeuft
+                #                                    NICHT durch atexit) — der neue Prozess zieht
+                #                                    sie via Supervisor wieder hoch (Bauplan §8)
                 self.transcodes_killen()           # W3: kein Waisen-ffmpeg, das nach dem re-exec
                 try:                               # weiter in eine .part schreibt (Review-Fund)
                     sys.stdout.flush(); sys.stderr.flush()
@@ -3453,7 +4041,25 @@ class Service:
     def wanduhr_messen_starten(self):
         """E1 3b (Fassung .71): Selbstmessung EINMAL je Prozess-Leben, gestartet vom
         BOOT (nie von Seitenbesuchen — der QS-Sweep loeste sonst Fremdlast im Gate aus,
-        F2.3). Lock gegen Doppelstart (F2.2); nach Scheitern 1 h persistierte Sperre."""
+        F2.3). Lock gegen Doppelstart (F2.2); nach Scheitern 1 h persistierte Sperre.
+        Issue #21: auf Maschinen unter `wanduhr_min_kerne` physischen Kernen
+        (Config-Paar, Default WANDUHR_MIN_KERNE — ein Struktur-Axiom, s. dessen
+        Kopf) wird GAR NICHT gemessen — LAUT + /health-Vermerk (K1), Prognosen
+        bleiben ehrlich auf den als 'rueckfall' gekennzeichneten Autorwerten."""
+        min_kerne = int(self.cfg.get("wanduhr_min_kerne") or WANDUHR_MIN_KERNE)
+        kerne = _phys_kerne()
+        if kerne < min_kerne:
+            # K1: der Grund steht im STARTLOG und klebt fuer /health am Dienst —
+            # sonst ist 'keine Messung vorhanden' nicht von 'still verhungert'
+            # unterscheidbar (Tokn59-Klasse: 2C/4T-NUC saettigte minutenlang).
+            self._wanduhr_skip = (
+                f"{kerne} physical core(s) usable (cgroup CPU quota counted), "
+                f"self-measurement needs >= {min_kerne} (it runs a second full "
+                f"analysis process next to the live one); run-duration forecasts "
+                f"keep the fallback values (labeled as such) — to measure anyway, "
+                f"deliberately lower wanduhr_min_kerne in Settings")
+            self.log(f"wanduhr: measurement SKIPPED on this machine — {self._wanduhr_skip}")
+            return False
         with self._wanduhr_start_lock:
             t = getattr(self, "_wanduhr_thread", None)
             if t and t.is_alive():
@@ -3478,6 +4084,33 @@ class Service:
         t = getattr(self, "_wanduhr_thread", None)
         return bool(t and t.is_alive())
 
+    def wanduhr_status(self):
+        """Wanduhr-Lage fuer /health (K1, Issue #21): OB Messwerte fuer DIESE
+        Maschine+Version vorliegen (quelle gemessen/rueckfall, dieselben Slugs wie
+        im Wizard), ob gerade gemessen wird, und WARUM nicht (uebersprungen /
+        letzter Fehlversuch) — vorher war eine fehlende Messung still und aus der
+        Ferne nicht diagnostizierbar."""
+        from core import wanduhr as _wu
+        _, quelle, _ = _wu.lesen(self.cfg["data_dir"], _placement_hw_key(),
+                                 os.environ.get("SUSLIK_VERSION", "dev"))
+        st = {"quelle": quelle, "laeuft": self.wanduhr_laeuft()}
+        if st["laeuft"]:
+            # Warte- und Mess-Zustand getrennt ausweisen (Pflichtpunkt .172):
+            # "waiting" = Schleife wartet lockfrei auf Live-Ende, "measuring" =
+            # Roundtrip rechnet wirklich — "laeuft" allein verschmolz beides.
+            st["phase"] = getattr(self, "_wanduhr_phase", None) or "starting"
+        grund = getattr(self, "_wanduhr_skip", None)
+        if grund:
+            st["uebersprungen"] = grund
+        try:
+            with open(os.path.join(self.cfg["data_dir"], "state",
+                                   "wanduhr_fehl.json")) as f:
+                d = json.load(f)
+            st["letzter_fehlversuch"] = {"ts": d.get("ts"), "grund": d.get("grund")}
+        except Exception:
+            pass
+        return st
+
     def _roundtrip_fahren(self, eid, person, out):
         """EIN worker-Roundtrip als Subprozess — mit derselben Umgebung wie die
         produktiven Spawns (F2.4: SCRATCH_DIR fehlte -> refcache/Clip landeten in /tmp
@@ -3490,7 +4123,20 @@ class Service:
                 "FRIGATE_URL": self.cfg.get("frigate_url") or "",
                 "SCRATCH_DIR": os.path.join(self.cfg["data_dir"], "clips"),
                 "OV_DEVICE": str(self.cfg.get("ov_device") or "")}
-        r = _sp.run(cmd, capture_output=True, text=True, timeout=1800, env=_env)
+        # Deckel je Roundtrip aus der Config statt hart 1800 (Nachbesserung W6):
+        # ein Roundtrip = kalter + warmer Lauf in EINEM Subprozess, also 2 Analysen
+        # + Kaltstart-Luft -> 3 x analyse_timeout_s (Default 3*600 = die bisherigen
+        # 1800). Waehrend der Frist haelt _roundtrip_seriell den Analyse-Slot —
+        # ein eintreffender Live-Job wartet dort; die Frist deckelt damit auch
+        # SEINE Wartezeit, und sie skaliert mit, wenn der Nutzer den Watchdog
+        # fuer eine langsame Maschine anhebt.
+        tmo = 3 * int(self.cfg.get("analyse_timeout_s") or 600)
+        # ANALYSE_NICE auch hier (Issue #21): die Wanduhr misst, wie lange eine
+        # Analyse auf DIESER Maschine dauert — die echten Analysen laufen mit
+        # nice +10, also muss die Messung es auch, sonst misst sie eine andere
+        # Scheduling-Welt als die, in der spaeter geurteilt wird.
+        r = _sp.run(cmd, capture_output=True, text=True, timeout=tmo, env=_env,
+                    preexec_fn=_analyse_nice)
         d = json.loads((r.stdout.strip().splitlines() or ["{}"])[-1])
         if not (d.get("lauf1", {}).get("ok") and d.get("lauf2", {}).get("ok")):
             grund = (d.get("lauf1", {}).get("fehler") or d.get("lauf2", {}).get("fehler")
@@ -3498,9 +4144,89 @@ class Service:
             raise RuntimeError(f"roundtrip not ok (rc={r.returncode}): {grund}")
         return d
 
+    def _live_aktiv(self):
+        """'Live laeuft' im Sinne der Wanduhr-Serialisierung (Nachbesserung W1b):
+        der Gesichts-Pass (process() haelt self.lock) ODER ein laufender
+        Koerper-Strang — _person_live startet einen daemon-Thread, der self.lock
+        UEBERLEBT und in-Prozess voll rechnet (Decode 3 fps + PoseWache + DINOv2 +
+        SVM); self.lock allein uebersah ihn, und zwar genau bei _koerper_scharf(),
+        also den CPU-schwersten Installationen der Issue-#21-Klasse. Vision zaehlt
+        bewusst NICHT: dessen Urteil rechnet nicht im Dienstprozess (eigener/
+        externer Endpunkt-Prozess), nur der Anstoss laeuft hier."""
+        return self.lock.locked() or self._personlive_aktiv > 0
+
+    def _roundtrip_seriell(self, eid, person, out):
+        """Issue #21 (Tokn59, 2C/4T): der Mess-Roundtrip ist ein ZWEITER voller
+        Analyse-Prozess neben der Live-Verarbeitung; _gpu_bg_lock liess Live
+        bewusst frei — auf kleinen Maschinen hiess 'frei' Minuten Doppellast.
+
+        Ablauf je Runde (Ernte-Muster, s. deren `with self._gpu_bg_lock`-Schleife
+        — ALLE Locks werden je Runde wieder hergegeben, gewartet wird IMMER
+        lockfrei):
+          (1) _gpu_bg_lock nehmen (BG-Jobs seriell). NIE waehrend des Wartens
+              halten (Nachbesserung W5: genau das blockierte _nachhol_runde,
+              _sammle_fahren und _szenario_nachsammeln — die start_nachhol-Regel
+              gilt auch hier).
+          (2) Live pruefen (_live_aktiv: Gesichts-Pass ODER Koerper-Strang, W1b)
+              und den Analyse-Slot NICHT-BLOCKIEREND nehmen (wk.lock; bei
+              worker=aus dasselbe _ANALYSE_SERIELL, das der Legacy-run_analyze
+              nimmt — Nachbesserung W8, vorher reines check-then-act mit
+              nachgewiesenem Parallel-Fenster).
+          (3) Live UNTER dem Slot erneut pruefen (TOCTOU: zwischen Pruefung und
+              acquire kann ein Pass self.lock genommen haben; der haengt dann
+              gleich am Slot — wir geben ihn zurueck statt neben ihm zu starten).
+          (4) Erst wenn alles haelt: Roundtrip fahren, Locks am Ende freigeben.
+
+        EHRLICHE GRENZEN (Nachbesserung W6, kein Vorrang-Ueberclaim): Vorrang hat
+        Live nur fuer den START der Messung. Laeuft der Roundtrip erst, wartet
+        ein NEU eintreffender Live-Job am Analyse-Slot bis zu dessen Ende (er
+        haelt dabei self.lock, die Live-Kette steht) — Obergrenze je Roundtrip
+        ist die _roundtrip_fahren-Frist 3 x analyse_timeout_s. Seine
+        Watchdog-Frist beginnt erst NACH dem Lock und die Wartezeit wird aus
+        dauer_s herausgerechnet (W7). Zwischen den beiden Roundtrips einer
+        Messung ist alles freigegeben, ein Wartender kommt dort dran. Das gilt
+        auf JEDER Maschine, die misst — auch auf grossen aendert die
+        Serialisierung den Messweg (dafuer misst sie unverfaelscht; "nicht
+        doppellastig" gilt gegen Gesichts-Pass, Koerper-Strang und Analyse-Slot,
+        s. _live_aktiv — Anzeige-Transcodes und der Vision-Anstoss bleiben
+        aussen vor, die rechnen im Dienstprozess nicht schwer).
+        Lock-Ordnung wie Ernte/_sammle_fahren: _gpu_bg_lock ->
+        Slot; niemand nimmt sie andersherum, der Slot wird nur nicht-blockierend
+        genommen, und kein self.lock-Halter blockiert auf _gpu_bg_lock (die
+        BG-Starter unter self.lock spawnen nur Threads) — deadlockfrei. Ein
+        Neustart (neustart -> worker_stoppen -> wk.lock) wartet das Ende des
+        laufenden Roundtrips ab, statt ihn als Vollast-Waise ins frische
+        Boot-Fenster zu entlassen."""
+        wk = self._worker()
+        slot = wk.lock if wk is not None else _ANALYSE_SERIELL
+        gemeldet = False
+        # Warten ist nicht Messen (Pflichtpunkt der .172-Kontrolle): die Schleife
+        # kann Minuten stehen, wanduhr_status zeigt die Phase getrennt an.
+        self._wanduhr_phase = "waiting"
+        while True:
+            with self._gpu_bg_lock:
+                if not self._live_aktiv() and slot.acquire(blocking=False):
+                    try:
+                        if not self._live_aktiv():          # Schritt (3), s. Docstring
+                            self._wanduhr_phase = "measuring"
+                            return self._roundtrip_fahren(eid, person, out)
+                    finally:
+                        slot.release()
+            if not gemeldet:
+                gemeldet = True
+                self.log("wanduhr: waiting for live activity (face pass / person "
+                         "judgment) to finish before measuring")
+            time.sleep(2)
+
     def _wanduhr_messen(self):
-        """Messablauf .71: (1) 90 s Boot-Ruhe, (2) unter _gpu_bg_lock (F2.3: hoechstens
-        EIN schwerer Hintergrundlauf), (3) Mess-Event mit MINDESTLAENGE via
+        """Messablauf .71: (1) 90 s Boot-Ruhe, (2) jeder Roundtrip einzeln gegen
+        Live serialisiert UND nur fuer seine Dauer unter _gpu_bg_lock
+        (_roundtrip_seriell; Nachbesserung W5: das Lock lag frueher um die GANZE
+        Messung und wurde damit unbegrenzt lange gehalten, waehrend auf Live
+        gewartet wurde — _nachhol_runde fiel aus, _sammle_fahren blockierte.
+        F2.3 'hoechstens EIN schwerer Hintergrundlauf' bleibt erfuellt: schwer
+        sind allein die Roundtrips, und die laufen unter dem Lock; die Event-Wahl
+        hier sind API-Reads), (3) Mess-Event mit MINDESTLAENGE via
         core.wanduhr.kontroll_event (F2.5), (4) Konstanten ableiten, (5) REALITAETS-
         KOPPLUNG an einem ZWEITEN Event (F1.5) — erst bei Bestehen wird gespeichert,
         mit ehrlicher Liste der wirklich gemessenen Felder (F3.1)."""
@@ -3509,46 +4235,45 @@ class Service:
             import shutil as _sh
             from core import ereignisse as _evm
             from core import wanduhr as _wu
-            with self._gpu_bg_lock:
-                evs, _ = _evm.person_events(lambda p: api(self.cfg, p), 40)
-                mess, clip_s = _wu.kontroll_event(evs)
-                personen = master_persons(self.cfg)
-                if mess is None or not personen:
-                    self.log("wanduhr: no suitable measurement event yet (need a clip "
-                             ">= %.0f s) or empty master — fallback values stay"
-                             % _wu.KONTROLL_MIN_CLIP_S)
-                    return
-                out = os.path.join(self.cfg["data_dir"], "state", "wanduhr_mess")
+            evs, _ = _evm.person_events(lambda p: api(self.cfg, p), 40)
+            mess, clip_s = _wu.kontroll_event(evs)
+            personen = master_persons(self.cfg)
+            if mess is None or not personen:
+                self.log("wanduhr: no suitable measurement event yet (need a clip "
+                         ">= %.0f s) or empty master — fallback values stay"
+                         % _wu.KONTROLL_MIN_CLIP_S)
+                return
+            out = os.path.join(self.cfg["data_dir"], "state", "wanduhr_mess")
+            _sh.rmtree(out, ignore_errors=True)
+            os.makedirs(out, exist_ok=True)
+            d = self._roundtrip_seriell(mess["id"], personen[0], out)
+            werte = _wu.aus_roundtrip(d["lauf1"], d["lauf2"], clip_s, None)
+            # Realitaets-Kopplung am ZWEITEN Event: warm-Lauf gegen die Prognose.
+            k2, k2_clip_s = _wu.zweit_event(evs, mess["id"])
+            if k2 is not None:
                 _sh.rmtree(out, ignore_errors=True)
                 os.makedirs(out, exist_ok=True)
-                d = self._roundtrip_fahren(mess["id"], personen[0], out)
-                werte = _wu.aus_roundtrip(d["lauf1"], d["lauf2"], clip_s, None)
-                # Realitaets-Kopplung am ZWEITEN Event: warm-Lauf gegen die Prognose.
-                k2, k2_clip_s = _wu.zweit_event(evs, mess["id"])
-                if k2 is not None:
-                    _sh.rmtree(out, ignore_errors=True)
-                    os.makedirs(out, exist_ok=True)
-                    d2 = self._roundtrip_fahren(k2["id"], personen[0], out)
-                    okk, abw = _wu.kopplung_pruefen(werte, k2_clip_s, None,
-                                                    float(d2["lauf2"]["wall_s"]))
-                    if not okk:
-                        raise RuntimeError(
-                            f"reality check failed on control event {k2['id']}: "
-                            f"prediction off by {abw:+.0%} (> ±{_wu.KOPPLUNG_TOLERANZ:.0%})")
-                    kopp = {"eid": k2["id"], "abweichung": round(abw, 3)}
-                else:
-                    kopp = None
-                    self.log("wanduhr: no second control event — storing measurement "
-                             "WITHOUT reality check (will be validated by later runs)")
-                _wu.schreiben(self.cfg["data_dir"], _placement_hw_key(),
-                              os.environ.get("SUSLIK_VERSION", "dev"), werte,
-                              {"eid": mess["id"], "clip_s": round(clip_s, 1),
-                               **({"kopplung": kopp} if kopp else {})},
-                              gemessen=_wu.GEMESSENE_FELDER_ROUNDTRIP)
-                self.log(f"wanduhr: measured — cold {d['lauf1'].get('wall_s')} s / warm "
-                         f"{d['lauf2'].get('wall_s')} s on {clip_s:.0f} s clip"
-                         + (f"; reality check on 2nd event passed ({kopp['abweichung']:+.0%})"
-                            if kopp else ""))
+                d2 = self._roundtrip_seriell(k2["id"], personen[0], out)
+                okk, abw = _wu.kopplung_pruefen(werte, k2_clip_s, None,
+                                                float(d2["lauf2"]["wall_s"]))
+                if not okk:
+                    raise RuntimeError(
+                        f"reality check failed on control event {k2['id']}: "
+                        f"prediction off by {abw:+.0%} (> ±{_wu.KOPPLUNG_TOLERANZ:.0%})")
+                kopp = {"eid": k2["id"], "abweichung": round(abw, 3)}
+            else:
+                kopp = None
+                self.log("wanduhr: no second control event — storing measurement "
+                         "WITHOUT reality check (will be validated by later runs)")
+            _wu.schreiben(self.cfg["data_dir"], _placement_hw_key(),
+                          os.environ.get("SUSLIK_VERSION", "dev"), werte,
+                          {"eid": mess["id"], "clip_s": round(clip_s, 1),
+                           **({"kopplung": kopp} if kopp else {})},
+                          gemessen=_wu.GEMESSENE_FELDER_ROUNDTRIP)
+            self.log(f"wanduhr: measured — cold {d['lauf1'].get('wall_s')} s / warm "
+                     f"{d['lauf2'].get('wall_s')} s on {clip_s:.0f} s clip"
+                     + (f"; reality check on 2nd event passed ({kopp['abweichung']:+.0%})"
+                        if kopp else ""))
         except Exception as ex:
             self.log(f"wanduhr: measurement failed ({ex}) — keeping fallback values; "
                      f"next attempt in 1 h (or on restart)")
@@ -3673,11 +4398,16 @@ class Service:
                           "anker_k_min", "anker_deckel", "anker_deckel_hart")}
             schwellen["szenario_gap_min"] = int(self.cfg.get("szenario_gap_min", 5))
             self.log(f"anchor stage starting (run {lauf_id})")
-            _ank.anker_phase_fahren(
+            erg = _ank.anker_phase_fahren(
                 dd, os.path.join(dd, "state", "lernlauf", lauf_id), lauf_id,
                 zustand["events_liste"], schwellen, _al.clustere,
                 os.environ.get("SUSLIK_VERSION", "dev"), self.log,
                 lambda **u: _ll.lauf_fortschreiben(dd, **u))
+            if erg is not None:
+                # Crash-Loop-Wache (#20): erfolgreicher Abschluss setzt den
+                # Boot-Resume-Zaehler zurueck — nur ununterbrochene Fehlserien
+                # derselben Phase laufen gegen anker_resume_max.
+                _ll.lauf_fortschreiben(dd, anker_neuanlaeufe=0)
         except Exception as e:
             from core import lernlauf as _ll2
             _ll2.lauf_fortschreiben(dd, fortschritt={"status": f"anchor stage failed: {e}"})
@@ -4090,7 +4820,8 @@ class Service:
                         self._sync_job_aktiv = False
             r = subprocess.run([sys.executable,
                                 os.path.join(HERE, "abnahme.py"), "--nach-enrollment"],
-                               capture_output=True, timeout=900, check=False, env=env)
+                               capture_output=True, timeout=900, check=False, env=env,
+                               preexec_fn=_analyse_nice)   # Issue #21, s. ANALYSE_NICE
             if r.returncode == 0:
                 self.enroll_warnung = None
                 self.log("drift watchdog GREEN after enrollment")
@@ -4285,7 +5016,24 @@ class Service:
             event_dir = os.path.join(cfg["data_dir"], "events", eid.replace("/", "_"))
             os.makedirs(event_dir, exist_ok=True)
             self.log(f"{eid} ({camera}, Frigate={f_label} {f_score}): analysis running ...")
+            # Ketten-Schalter (Issue #21): Stufe EINMAL je Lauf lesen. "aus"
+            # ueberspringt den Koerper-Strang an der QUELLE (kein --koerper im
+            # Job -> analyze sammelt keine Crops, unten startet kein Urteil).
+            # EINE laute Zeile je Lauf — und nur, wenn der Strang sonst
+            # gelaufen waere (Modell scharf); sonst waere die Zeile Rauschen.
+            kette_person = self.kette_stufe("person")
+            _koerper_will = (not nachhol and self._koerper_scharf())
+            if _koerper_will and kette_person == "aus":
+                self.log(f"{eid}: person path off (person_pfad=aus) — no body "
+                         f"crops collected, no person judgment started")
             t0 = time.time()
+            # Nachbesserung W7: run_analyze meldet ueber `info`, wie lange der
+            # Job am Analyse-Slot WARTETE (Ernte/Sammle/Wanduhr-Roundtrip halten
+            # ihn teils minutenlang). Die Wartezeit faellt aus dauer_s heraus —
+            # dauer_s traegt sonst erfundene Analysedauer in die Events-/Today-
+            # Anzeige, in den Szenario-Ende-Rueckfall (dort gemessen: 42/103
+            # Durchgaenge kippen bei 5x-Analysezeit) und in die Watchdog-Logzeilen.
+            _ainfo = {}
             res = run_analyze(cfg, eid, camera, persons, event_dir,
                               timeout_s=(int(cfg["nachhol_analyse_timeout_s"]) if nachhol else None),
                               worker=self._worker(),
@@ -4293,7 +5041,9 @@ class Service:
                               # der Analyse ist der Scharf-Zustand nicht mehr
                               # abfragbar (anderer Prozess). Nur Live-Laeufe:
                               # nur sie rufen unten _person_live.
-                              koerper=(not nachhol and self._koerper_scharf()))
+                              koerper=(_koerper_will and kette_person != "aus"),
+                              info=_ainfo)
+            _warte_s = float(_ainfo.get("wartezeit_s") or 0.0)
             # P1: Provider-Guard-Vorfaelle aus dem Subprozess ins DIENST-Log heben —
             # analyze.log liest sonst niemand, und ein degradierter Lauf bliebe unsichtbar
             # (Plan-QS Lens3-8). qs S4 warnt auf den Marker.
@@ -4387,7 +5137,11 @@ class Service:
                             **({"eigen": True} if eigen else {})},
                 "ours": {p: {"max": r.get("max"), "win3s": r.get("win3s")} for p, r in ours.items()},
                 "bestaetigt": confirmed, "kategorie": kategorie, "kategorie_v1": kategorie_v1,
-                "dauer_s": round(time.time() - t0, 1), "alerted": False,
+                # W7: reine Analysezeit — die Wartezeit am Analyse-Slot ist abgezogen
+                # und steht (wenn nennenswert) separat als warte_s daneben, additiv.
+                "dauer_s": round(max(0.0, time.time() - t0 - _warte_s), 1),
+                **({"warte_s": round(_warte_s, 1)} if _warte_s >= 0.1 else {}),
+                "alerted": False,
                 # Paket A (0.1.0.48, Today-QS F1): das ECHTE Event-Ende aus Frigate — die
                 # Szenario-Gruppierung rechnete das Ende bisher aus der ANALYSE-Wanduhr
                 # (dauer_s), wodurch derselbe Tag auf schneller/langsamer Hardware anders
@@ -4409,7 +5163,27 @@ class Service:
                 # PE4 (stufe2.md): Koerper-Strang — eigener, losgeloester
                 # Urteilsweg, nur wenn der User ihn scharf geschaltet hat;
                 # laeuft im Daemon-Thread, blockiert den Gesichts-Pfad nie.
-                self._person_live(entry.get("eid"), entry)
+                # Ketten-Schalter davor (Issue #21): "aus" wurde schon VOR der
+                # Analyse laut uebersprungen (eine Zeile je Lauf, steht oben);
+                # "nur_wenn_gesicht_leer" laesst das teure Urteil (Embedding)
+                # nur an, wenn der Gesichts-Weg den DURCHGANG nicht restlos
+                # bestaetigt hat (Mehr-Personen-Regel B, s. Helfer).
+                # Modulumbau R2: der Stufen-Entscheid faellt in core/kette.
+                # Das Pass-Urteil kommt lazy (nur "nur_wenn_gesicht_leer"
+                # wertet es aus) und in der ALTEN Reihenfolge: erst
+                # Scharf-Frage, dann Pass-Urteil.
+                _p_urteil = _kette.entscheide(
+                    kette_person,
+                    lambda: self._koerper_scharf()
+                    and self._gesicht_pass_bestaetigt(eid=eid, entry=entry))
+                if _p_urteil == "aus":
+                    pass
+                elif _p_urteil == "gesicht_bestaetigt":
+                    self.log(f"{eid}: person judgment skipped — face path "
+                             f"confirmed the whole pass "
+                             f"(person_pfad=nur_wenn_gesicht_leer)")
+                else:
+                    self._person_live(entry.get("eid"), entry)
                 # V4 (konzept_vision.md §7): dritter Weg, Auslöser auf
                 # PASS-Ebene und erst am Durchgangs-Ende (Debounce). Nur ein
                 # Timer-Start, keine Arbeit, kein Lock — die Analyse laeuft
@@ -4570,7 +5344,7 @@ class Service:
         # vom Pushover-Schalter; die HA-Telegram-Automation haengt hieran.
         # Areas Stufe 1: Area-Namen in Payload (additiv) + Log + Push-Text; Verhalten gleich.
         _ar = _areas_mod.kamera_areas(_areas_mod.normalisieren(cfg.get("areas")), entry["camera"])
-        if self._mqtt_pub("verifyd/szene_erkannt", json.dumps(
+        if self._mqtt_pub(_melden.topic(self.cfg, "szene_erkannt"), json.dumps(
                 {"eid": entry["eid"], "camera": entry["camera"], "areas": _ar,
                  "ts": entry.get("start") or entry["ts"],         # Vorfalls-Zeit fuer die Caption
                  "personen": [{"name": p,
@@ -4763,51 +5537,32 @@ class Service:
         except Exception as e:
             self.log(f"cache cleanup error: {e}")
 
+    # Modulumbau R2: die Ketten-Praedikate leben in core/kette.py (Docstrings/
+    # Begruendungen dort). Hier nur Einhaenge: der Dienst reicht cfg, den
+    # deckung-Pfad und seinen debug-Kanal herein. core/kette haelt keine Locks
+    # und keinen Zustand — die _deckung_korrektur-Invariante (deckung_by_eid
+    # nimmt self.lock NICHT) gilt unveraendert.
     def _koerper_scharf(self):
-        """Hat der User den Koerper-Strang scharf geschaltet? EINE Auskunft
-        fuer beide Fragesteller: den Job-Parameter --koerper VOR der Analyse
-        (Z5) und das Urteil danach (_person_live)."""
-        try:
-            from core import personmodell as pm
-            st = pm.status_lesen(self.cfg["data_dir"])
-        except Exception:
-            return False
-        return bool(st and st.get("scharf"))
+        return _kette.koerper_scharf(self.cfg["data_dir"])
+
+    def kette_stufe(self, weg):
+        return _kette.stufe(self.cfg, weg)
+
+    def kette_lage(self):
+        return _kette.lage(self.cfg)
+
+    def _deckung_by_eid(self, entry=None):
+        return _kette.deckung_by_eid(self.log_path, entry)
+
+    def _gesicht_pass_bestaetigt(self, eid=None, entry=None, pass_key=None):
+        return _kette.gesicht_pass_bestaetigt(self.cfg, self.log_path, self.debug,
+                                              eid=eid, entry=entry,
+                                              pass_key=pass_key)
 
     def _kontroll_speicher(self, eid, entry=None):
-        """Z8 (konzept_frames.md §7): der Auftrag an den Kontroll-Speicher fuer
-        DIESES Event — Betriebsmodus aus der Config (diagnostic_collection;
-        schlank ist der Produkt-Default) und der DURCHGANG, zu dem das Event
-        gehoert. Der pass_key kommt aus szenarien.pass_key, also aus derselben
-        Gruppierung wie /heute; die App leistet die Szenario-Bildung selbst,
-        damit niemand je Einzel-Event nachsehen muss (Szenario-Prinzip).
-        None = kein Durchgang bestimmbar -> lieber gar nichts ablegen als je
-        Einzel-Event, das waere genau der Fehler, den das Prinzip verbietet."""
-        try:
-            import szenarien as _sz
-            by_eid = {}
-            try:
-                with open(self.log_path) as f:
-                    for ln in f:
-                        try:
-                            r = json.loads(ln)
-                        except Exception:
-                            continue
-                        if r.get("eid"):
-                            by_eid[r["eid"]] = r      # last-wins je eid (wie /heute)
-            except FileNotFoundError:
-                pass
-            if entry and entry.get("eid"):
-                by_eid[entry["eid"]] = entry          # unsere Zeile wird erst NACH uns geschrieben
-            pk = _sz.pass_key(by_eid, eid, self.cfg)
-            if not pk:
-                return None
-            return {"sammeln": bool(self.cfg.get("diagnostic_collection")),
-                    "pass_key": pk,
-                    "karenz_s": int(self.cfg.get("szenario_gap_min", 5)) * 60}
-        except Exception as e:
-            self.debug(f"{eid}: control store not addressable ({e})")
-            return None
+        return _kette.kontroll_speicher(self.cfg, self.log_path, self.debug,
+                                        eid, entry)
+
 
     def _person_live(self, eid, entry=None, still=False):
         """PE4: Koerper-Urteil im Hintergrund (core/personlive) — Meldung
@@ -4827,56 +5582,78 @@ class Service:
 
         def lauf():
             try:
-                from core import personlive as plv
-                u = plv.urteilen(self.cfg["data_dir"],
-                                 os.environ.get("FRIGATE_URL", ""), eid,
-                                 kontrolle=self._kontroll_speicher(eid, entry),
-                                 still=still)
-                if still:
-                    # Zweite, unabhaengige Sperre. KEIN Personenname im
-                    # Dienst-Log (Log-Vertrag §9) — die Zeile sagt nur, dass
-                    # gearbeitet und geschwiegen wurde.
-                    print("[personlive] quiet re-analysis: judged image "
-                          "stored, nothing announced, live state untouched",
-                          flush=True)
-                    return
-                if u:
-                    # MQTT fuer HA-Automationen (User 04.08.): JEDER Treffer
-                    # ueber der Schwelle auf ein eigenes Topic — das Feld
-                    # feuer sagt, ob die Feuer-Regel erfuellt war.
-                    self._mqtt_pub("verifyd/person_erkennung", json.dumps({
-                        "eid": eid, "person": u["person"],
-                        "score": u["score"], "stuetzen": u["stuetzen"],
-                        "feuer": bool(u.get("feuer")),
-                        "quelle": "person_recognition",
-                        "ts": round(time.time(), 1)}, ensure_ascii=False))
-                if u and u.get("feuer"):
-                    text = (f"{u['person']} recognized by body "
-                            f"(person recognition, not face) — score "
-                            f"{u['score']}, {u['stuetzen']} supporting "
-                            "events")
-                    push(self.cfg, "suslik person recognition", text,
-                         attachment=u.get("bild"))
-                    # Telegram EXAKT wie die Gesichtsseite (User 04.08.:
-                    # allgemeine Einstellungen gelten fuer BEIDE Straenge):
-                    # _telegram_clip transkodiert mit der Guete-Einstellung,
-                    # telegram_inhalt bild/video und telegram_modus greifen.
-                    if self.cfg.get("telegram_modus", "aus") in ("direkt",
-                                                                 "beide"):
-                        will_video = self.cfg.get("telegram_inhalt",
-                                                  "video") != "bild"
-                        vid = self._telegram_clip(eid) if will_video else None
-                        cap = text + ("\n(video unavailable — sending image)"
-                                      if will_video and not vid else "")
-                        telegram_video(self.cfg, vid, cap,
-                                       crop=u.get("bild"))
-                    print(f"[personlive] MELDUNG {u}", flush=True)
-                elif u:
-                    print(f"[personlive] Treffer ohne Feuer {u}", flush=True)
-            except Exception as e:
-                print(f"[personlive] Fehler: {e}", flush=True)
-        threading.Thread(target=lauf, daemon=True,
-                         name="personlive").start()
+                self._person_lauf(eid, entry, still)
+            finally:
+                # W1b: Zaehler IMMER raeumen — sonst haelt ein einziger
+                # Fehlerfall die Wanduhr-Messung fuer immer im Warten.
+                with self._personlive_lock:
+                    self._personlive_aktiv -= 1
+        # W1b: Zaehler VOR dem Thread-Start erhoehen, noch UNTER self.lock des
+        # Aufrufers — erst im Thread erhoeht bliebe ein Fenster, in dem weder
+        # self.lock noch der Zaehler den laufenden Koerper-Strang verraten
+        # (_live_aktiv saehe 'frei', die Wanduhr-Messung startete daneben).
+        with self._personlive_lock:
+            self._personlive_aktiv += 1
+        try:
+            threading.Thread(target=lauf, daemon=True,
+                             name="personlive").start()
+        except Exception:
+            with self._personlive_lock:      # Start-Fehler: Zaehler ehrlich halten
+                self._personlive_aktiv -= 1
+            raise
+
+    def _person_lauf(self, eid, entry, still):
+        """Rumpf des Koerper-Urteils (aus _person_live.lauf ausgelagert, W1b:
+        der Mantel fuehrt jetzt den Aktiv-Zaehler fuer _live_aktiv)."""
+        try:
+            from core import personlive as plv
+            u = plv.urteilen(self.cfg["data_dir"],
+                             os.environ.get("FRIGATE_URL", ""), eid,
+                             kontrolle=self._kontroll_speicher(eid, entry),
+                             still=still)
+            if still:
+                # Zweite, unabhaengige Sperre. KEIN Personenname im
+                # Dienst-Log (Log-Vertrag §9) — die Zeile sagt nur, dass
+                # gearbeitet und geschwiegen wurde.
+                print("[personlive] quiet re-analysis: judged image "
+                      "stored, nothing announced, live state untouched",
+                      flush=True)
+                return
+            if u:
+                # MQTT fuer HA-Automationen (User 04.08.): JEDER Treffer
+                # ueber der Schwelle auf ein eigenes Topic — das Feld
+                # feuer sagt, ob die Feuer-Regel erfuellt war.
+                self._mqtt_pub(_melden.topic(self.cfg, "person_erkennung"), json.dumps({
+                    "eid": eid, "person": u["person"],
+                    "score": u["score"], "stuetzen": u["stuetzen"],
+                    "feuer": bool(u.get("feuer")),
+                    "quelle": "person_recognition",
+                    "ts": round(time.time(), 1)}, ensure_ascii=False))
+            if u and u.get("feuer"):
+                text = (f"{u['person']} recognized by body "
+                        f"(person recognition, not face) — score "
+                        f"{u['score']}, {u['stuetzen']} supporting "
+                        "events")
+                push(self.cfg, "suslik person recognition", text,
+                     attachment=u.get("bild"))
+                # Telegram EXAKT wie die Gesichtsseite (User 04.08.:
+                # allgemeine Einstellungen gelten fuer BEIDE Straenge):
+                # _telegram_clip transkodiert mit der Guete-Einstellung,
+                # telegram_inhalt bild/video und telegram_modus greifen.
+                if self.cfg.get("telegram_modus", "aus") in ("direkt",
+                                                             "beide"):
+                    will_video = self.cfg.get("telegram_inhalt",
+                                              "video") != "bild"
+                    vid = self._telegram_clip(eid) if will_video else None
+                    cap = text + ("\n(video unavailable — sending image)"
+                                  if will_video and not vid else "")
+                    telegram_video(self.cfg, vid, cap,
+                                   crop=u.get("bild"))
+                print(f"[personlive] MELDUNG {u}", flush=True)
+            elif u:
+                print(f"[personlive] Treffer ohne Feuer {u}", flush=True)
+        except Exception as e:
+            print(f"[personlive] Fehler: {e}", flush=True)
 
     def _maybe_alert(self, entry, event_dir):
         # matcht v2-Kategorie ODER v1-Vergleichskategorie (Parallelphase: "widerspruch" lebt in v1)
@@ -5020,7 +5797,11 @@ class Service:
                     except Exception:
                         continue
                     letzte[eid] = r
-                    if r.get("kategorie") != "fehler":
+                    # Korrekturzeilen (Issue #19) sind KEINE gelaufene Analyse — ihr ts ist
+                    # der Anlern-Zeitpunkt. Als "letzte gute" gezaehlt, taeuschten sie
+                    # "Stoerung nachweislich vorbei" vor und gaeben Nachhol-Versuche
+                    # mitten in einer laufenden Stoerung frei (Widerleger 11.08.).
+                    if r.get("kategorie") != "fehler" and not r.get("korrektur"):
                         letzte_gute = max(letzte_gute, float(r.get("ts") or 0))
         st = self._nachhol_lesen()
         kand, offen, tot, neu_aus = [], 0, 0, False
@@ -5287,7 +6068,11 @@ def make_handler(svc):
                 # deutsch UND nannte den gescheiterten Endpunkt nicht — "test ok" (config)
                 # und Banner-Rot (event poll) koennen GLEICHZEITIG wahr sein; das Label
                 # kommt seither von der Setz-Stelle mit (event fetch/poll/list).
-                return (f"Frigate unreachable (last error {t}): {f[1][:110]} — "
+                # 220 statt 110 Zeichen (Issue #14-Nachbefund): der Endpunkt-Fehlertext
+                # ("event poll: HTTP 500 ... bei /api/events?...") war laenger als die
+                # alte Kappung — genau das Detail, fuer das das Label gebaut wurde,
+                # fiel im Banner wieder weg.
+                return (f"Frigate unreachable (last error {t}): {f[1][:220]} — "
                         "the UI keeps serving local data.")
             # Issue #13: Daten-ohne-Mount geht vor Varianten-Hinweis — Datenverlust-
             # Risiko schlaegt Performance-Tipp (beide einmal je Start berechnet).
@@ -5471,10 +6256,15 @@ def make_handler(svc):
                         ok = anlernen.verwerfe_vorschlag(d.get("a", ""), d.get("b", ""))
                         res = (ok, "noted — won't suggest this pair again" if ok else "Fehler")
                     else:                                        # /unbekannt_benennen
-                        ok, msg = anlernen.unbekannt_benennen(d.get("uid", ""), (d.get("person") or "").strip())
+                        _person = (d.get("person") or "").strip()
+                        ok, msg, betroffen = anlernen.unbekannt_benennen(d.get("uid", ""), _person)
                         if ok:
                             svc.log(f"UNKNOWN NAMED: {d.get('uid')} -> {d.get('person')} ({msg})")
                             svc.qs_neu_starten()
+                            # Issue #19: Events der uebernommenen Gesichter nachpruefen,
+                            # damit die Unknown-Karten des Durchgangs verschwinden.
+                            svc.anlern_nachpruefung_starten(_person, betroffen)
+                            msg += " — re-checking this pass's events in the background"
                         res = (ok, msg)
                     return self._send(200, json.dumps({"ok": res[0], "msg": res[1]},
                                       ensure_ascii=False), "application/json")
@@ -5716,11 +6506,16 @@ def make_handler(svc):
                     d = json.loads(self.rfile.read(min(n, 65536)))
                     ids = [i for i in (d.get("ids") or "").split(",") if i]
                     person = (d.get("person") or "").strip()
-                    ok, msg = anlernen.benenne(ids, person)
+                    # Issue #19: benenne_mit_abzug statt benenne — die Today-Karte lief
+                    # ueber diesen Weg und liess die Gesichter im Unbekannt-Pool zurueck
+                    # (Karte blieb stehen, Event-Akte blieb "unknown").
+                    ok, msg, betroffen = anlernen.benenne_mit_abzug(ids, person)
                     if ok:
                         svc.log(f"ENROLL: {msg}")
                         svc.qs_neu_starten()               # nach Anlernen automatisch gegenpruefen
                         svc.frigate_sync_export()          # falls frigate_sync an: nach Frigate spiegeln
+                        svc.anlern_nachpruefung_starten(person, betroffen)
+                        msg += " — re-checking this pass's events in the background"
                     return self._send(200 if ok else 400,
                                       json.dumps({"ok": ok, "msg": msg}, ensure_ascii=False),
                                       "application/json")
@@ -6140,6 +6935,31 @@ def make_handler(svc):
                                       json.dumps({"ok": ok, "msg": msg}, ensure_ascii=False), "application/json")
                 except Exception as e:
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
+            if pfad in ("/live_speichern", "/live_schalter", "/live_test",
+                        "/live_messung"):
+                # Live-Reiter (Phase 2): duenne Maentel, Logik/Riegel in
+                # core/livewache (live_speichern/live_schalter serverseitig —
+                # ein direkter POST kommt hier am UI-Grau vorbei und MUSS am
+                # selben Riegel scheitern, Bauplan §2.4).
+                try:
+                    n = int(self.headers.get("Content-Length", 0))
+                    d = json.loads(self.rfile.read(min(n, 16384)) or b"{}")
+                except Exception:
+                    return self._send(400, json.dumps(
+                        {"ok": False, "msg": "bad json"}), "application/json")
+                kamera = str(d.get("kamera") or "")
+                if pfad == "/live_speichern":
+                    ok, msg = svc.live_speichern(kamera, d)
+                elif pfad == "/live_schalter":
+                    ok, msg = svc.live_schalter(kamera, bool(d.get("enabled")))
+                elif pfad == "/live_test":
+                    ok, msg = svc.live_test_starten(kamera)
+                else:
+                    ok, msg = svc.live_messung_starten(kamera)
+                return self._send(200 if ok else 400,
+                                  json.dumps({"ok": ok, "msg": msg},
+                                             ensure_ascii=False),
+                                  "application/json")
             if pfad.startswith("/vision/"):
                 try:                                           # Vision detect: duenne Maentel, Logik in core/
                     n = int(self.headers.get("Content-Length", 0))
@@ -6828,6 +7648,36 @@ def make_handler(svc):
                         # gemischten Summe.
                         if r.get("presence_push"):
                             z_presence += 1
+                # Live-Waechter-Meldungen (Phase 4 Baustein B, Sichtkontrolle
+                # .177 Befund 3: real rausgegangene Engine-Pushes tauchten in
+                # KEINEM Zaehler auf). EINE Quelle: das Melde-Protokoll der
+                # Engine (<data_dir>/live/meldungen.jsonl) — der Dienst liest
+                # nur, nichts wird doppelt gezaehlt. Zeile erscheint, sobald
+                # Live benutzt wird (Guards oder Historie), sonst gar nicht.
+                from core import livewache as _lwz
+                z_live = 0
+                z_live_kanaele = {}
+                _live_zeile = False
+                try:
+                    _live_zeile = (bool((cfg.get("live") or {}).get("guards"))
+                                   or _lwz.melde_protokoll_vorhanden(cfg))
+                    if _live_zeile:
+                        # KANN-7 (Widerleger phase34): kanalNEUTRAL zaehlen —
+                        # die Zeile zeigte nur ("alert","pushover"), eine
+                        # Telegram-only-Installation sah dauerhaft "Pushover 0"
+                        # als einzige Wahrheit. Summe + Aufschluesselung je
+                        # real benutztem Kanal (Reihenfolge = KANAELE_ERLAUBT,
+                        # zentrale Quelle).
+                        _zk = _lwz.melde_zaehler(cfg, heute0, tag_ende,
+                                                 kameras=_nk)
+                        z_live_kanaele = {
+                            k: _zk.get(("alert", k), 0)
+                            for k in _lwz.KANAELE_ERLAUBT
+                            if _zk.get(("alert", k), 0)}
+                        z_live = sum(z_live_kanaele.values())
+                except Exception as e:
+                    svc.log(f"!! live alert counter failed: "
+                            f"{type(e).__name__}: {e}")
                 for r in rows:                       # Personen-Historie ueber ALLE Zeilen
                     t = r.get("start") or r.get("ts", 0)
                     for p in r.get("bestaetigt") or []:
@@ -6885,16 +7735,17 @@ def make_handler(svc):
                 except Exception:
                     _kmap, _kab = {}, 2
                 try:                  # V4 (§7/E6): Vision-Urteil je Durchgang —
-                    from core import vision as _visx       # reine Zusatz-INFO auf
-                    from core import visionurteil as _vu   # der Karte, nie ein
-                    _vmap = _vu.protokoll_karte(cfg["data_dir"])  # Alarm-Ausloeser
-                    _vis_grund = _visx.grund_text          # und nie ein Veto
-                except Exception:
+                    from core import vision as _visx       # Info auf der Karte
+                    from core import visionurteil as _vu   # + Stimme der Zu-
+                    _vmap = _vu.protokoll_karte(cfg["data_dir"])  # schreibung
+                    _vis_grund = _visx.grund_text  # (vision_stimme, szenarien.py);
+                except Exception:                  # nie Alarm-Ausloeser, nie Veto
                     _vmap, _vis_grund = {}, str
                 szenarien = _szen.szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap_h,
                                                       nur_kameras=_nk,
                                                       koerper_map=_kmap,
-                                                      koerper_ab=_kab)
+                                                      koerper_ab=_kab,
+                                                      vision_map=_vmap)
                 interessant = [s for s in szenarien if s["kat"] != "motion"]
                 motion_n = len(szenarien) - len(interessant)
 
@@ -6902,28 +7753,10 @@ def make_handler(svc):
                 # laesst sich ein unerkannter Durchgang direkt einer U-Nummer zuordnen. User
                 # 25.07.: "dann könnte das auch angezeigt werden als unbekannt Nummer XY."
                 # Faellt still aus, wenn der Pool fehlt — dann steht schlicht "Unknown".
-                eid2uid, uid_members = {}, {}
-                try:
-                    with open(os.path.join(cfg["data_dir"], "learn", "unbekannte.jsonl")) as _uf:
-                        for _l in _uf:
-                            try:
-                                _d = json.loads(_l)
-                            except Exception:
-                                continue
-                            _u = _d.get("uid") or _d.get("id")
-                            if _d.get("objekt"):
-                                continue                     # statisches Objekt (Radkasten & Co.):
-                                                             # faengt Muell-Crops, wird aber NIE als
-                                                             # "Unknown N"-Person angeboten (25.07.)
-                            _mem = _d.get("members") or []
-                            uid_members[_u] = _mem           # Mitglieder BEHALTEN, nicht nur zaehlen:
-                            for _m in _mem:                  # "seen Nx before" braucht deren ZEITEN
-                                eid2uid.setdefault(_m, _u)
-                                # Top-3-Sammlung haengt ~2/~3 an die Event-ID — die Karte matcht
-                                # aber ueber die BASIS-Event-ID des Durchgangs
-                                eid2uid.setdefault(str(_m).split("~")[0], _u)
-                except OSError:
-                    pass
+                # MUSS-2 (Widerleger phase34): EIN toleranter Leser (_pool_eid_karte ->
+                # core.unbekanntpool._cluster_lesen) statt des dritten Streu-Parsers,
+                # der die Seite an {"members": 5} sterben liess.
+                eid2uid, uid_members = _pool_eid_karte(cfg["data_dir"])
 
                 def _besuche_vorher(u, start_t):
                     """Wie oft war Identitaet u VOR diesem Durchgang da — als BESUCHE gezaehlt,
@@ -6996,6 +7829,24 @@ def make_handler(svc):
                               if not s["pers"] and s["unbek"]
                               and s.get("unbek_stark", 1) > 0]   # Issue #16: stille Klasse
                 unbek_nebenbei = sum(s["unbek"] for s in interessant if s["pers"] and s["unbek"])
+                # Unbekannt-Sichtbarkeit Baustein A (12.08., Realfall Besuch 13:12-15:02):
+                # die Unidentified-Kachel ZUSAETZLICH aus dem UNBEKANNT-POOL speisen.
+                # Unbekannte, die MIT einer erkannten Person kommen (der haeufigste
+                # Besuchsfall), liefen in der Pass-Zaehlung als Fussnote "normally the
+                # same people" mit und verschwanden. EINE Quelle fuer Kachel + Learn-
+                # Hinweis: core/unbekanntpool (aktive Nicht-Objekt-Cluster mit Stuetzen
+                # im angezeigten Tag; Auftritte gap-gebuendelt wie die Vorbesuche).
+                from core import unbekanntpool as _ubp
+                pool_tag = _ubp.tages_cluster(cfg["data_dir"], heute0, tag_ende,
+                                              gap, log=svc.log)
+                pool_unbek_n = len(pool_tag)
+                pool_auftritte = sum(pool_tag.values())
+                # Widerleger MUSS-2 (Realfall U155): ARCHIVIERTE Nicht-Objekt-Cluster
+                # mit frischer Stuetze im Fenster als eigene Zeile mitzaehlen — der
+                # naechste Reconcile reaktiviert sie automatisch und laut (anlernen),
+                # bis dahin darf die Kachel sie nicht still verstecken.
+                pool_archiv_n = _ubp.tages_archiv(cfg["data_dir"], heute0,
+                                                  tag_ende, log=svc.log)
 
                 # Die vier gleichrangigen Kennzahlkacheln sind am 25.07. entfallen: "People
                 # recognized: 3" ist redundant, sobald drei Personenkarten dastehen, und "With
@@ -7097,8 +7948,16 @@ def make_handler(svc):
                         _nur_k = s["pers"] and all(
                             d.get("quelle") == "koerper" for d in s["pers"].values())
                         if _nur_k:
-                            mitte += ('<span class="fussnote">via person recognition, '
-                                      'no face</span>')
+                            # Fix vision-stimme-2: hat die Vision-Stimme die
+                            # Zuschreibung MITgetragen, weist die Quelle das
+                            # aus; reine Koerper-Zuschreibung bleibt woertlich
+                            # wie bisher (core/highlights.py zitiert den Text).
+                            mitte += ('<span class="fussnote">via person + '
+                                      'vision, no face</span>'
+                                      if any(d.get("vision_stimme")
+                                             for d in s["pers"].values())
+                                      else '<span class="fussnote">via person '
+                                           'recognition, no face</span>')
                         elif s["pers"] and _kp:
                             mitte += '<span class="fussnote">via face + person</span>'
                         elif s["pers"]:
@@ -7428,11 +8287,44 @@ def make_handler(svc):
                        f'</div></div>' if _nk is not None else '')
                     + '<div class="ts-block"><div class="ts-lab">'
                     '<a href="#unidentified" class="ts-link">Unidentified</a></div>'
-                    f'<div class="ts-val">{len(unbek_echt)}</div>'
-                    f'<div class="ts-meta">{html.escape(unbek_txt)}</div>'
-                    + (f'<div class="ts-meta">plus {unbek_nebenbei} event'
-                       f'{"s" if unbek_nebenbei != 1 else ""} not matched inside '
-                       f'recognized passes — normally the same people</div>' if unbek_nebenbei else '')
+                    # Baustein A: hat der Pool Unbekannt-Stuetzen im Tag, traegt ER die
+                    # Kachel-Zahl (PERSONEN aus einer Quelle, nicht Passes) — auch und
+                    # gerade, wenn die Unbekannten innerhalb erkannter Passes liefen.
+                    # "today"/"on this day" folgt der Tagesnavigation (Widerleger MUSS-3:
+                    # das Fenster war schon der ANGEZEIGTE Tag, nur das Wort log). Ohne
+                    # Pool-Stuetzen im Tag bleibt die alte Anzeige unveraendert.
+                    + (f'<div class="ts-val">{pool_unbek_n}</div>'
+                       f'<div class="ts-meta"><a class="ts-link" href="/unbekannte">'
+                       f'{pool_unbek_n} unknown person{"s" if pool_unbek_n != 1 else ""} '
+                       f'{"today" if ist_heute else "on this day"} '
+                       f'({pool_auftritte} appearance{"s" if pool_auftritte != 1 else ""}) '
+                       f'— see Unknown</a></div>'
+                       if pool_unbek_n else f'<div class="ts-val">{len(unbek_echt)}</div>')
+                    # EINE widerspruchsfreie Kachel (Widerleger MUSS-1, Realfall 12.08.:
+                    # "none unidentified" stand direkt unter "16 unknown persons today"):
+                    # neben der Pool-Zeile erscheint die Pass-Zeile nur, wenn sie selbst
+                    # etwas meldet — ein leeres unbek_echt schweigt dann, statt der
+                    # Pool-Zahl zu widersprechen. Ohne Pool-Zeile alte Anzeige.
+                    + (f'<div class="ts-meta">{html.escape(unbek_txt)}</div>'
+                       if unbek_echt or not (pool_unbek_n or pool_archiv_n) else '')
+                    # Widerleger MUSS-2 (U155): Archiv-Cluster mit frischer Fenster-
+                    # Stuetze als eigene Zeile — nie still verstecken; der naechste
+                    # Reconcile (Reorganize) reaktiviert sie automatisch und laut.
+                    + (f'<div class="ts-meta">{pool_archiv_n} more in archived '
+                       f'cluster{"s" if pool_archiv_n != 1 else ""} — reactivated by '
+                       f'the next reorganize</div>' if pool_archiv_n else '')
+                    # Der "normally the same people"-Satz war im Besuchsfall die Luege:
+                    # mit frischen Unbekannt-Stuetzen im Tag heisst es ehrlich, dass
+                    # mindestens ein Teil davon unbekannte Besucher sind.
+                    + ((f'<div class="ts-meta">plus {unbek_nebenbei} event'
+                        f'{"s" if unbek_nebenbei != 1 else ""} not matched inside '
+                        f'recognized passes — at least some belong to unknown visitors '
+                        f'(<a class="ts-link" href="/unbekannte">see Unknown</a>)</div>')
+                       if unbek_nebenbei and (pool_unbek_n or pool_archiv_n) else
+                       (f'<div class="ts-meta">plus {unbek_nebenbei} event'
+                        f'{"s" if unbek_nebenbei != 1 else ""} not matched inside '
+                        f'recognized passes — normally the same people</div>'
+                        if unbek_nebenbei else ''))
                     + '</div>'
                     '<div class="ts-block"><div class="ts-zeile"><span><a href="#passes" class="ts-link">Passes</a></span>'
                     f'<span class="num">{len(interessant)}</span></div>'
@@ -7441,7 +8333,21 @@ def make_handler(svc):
                     f'<span class="num">{z_events}</span></div>'
                     f'<div class="ts-zeile"><span>Alerts sent (Pushover)</span><span class="num">{z_alerts}</span></div>'
                     f'<div class="ts-zeile"><span>Presence pushes (Pushover)</span><span class="num">{z_presence}</span></div>'
-                    '</div></aside>')
+                    # Baustein B: eigene Zeile NEBEN den Event-Zaehlern — Live-
+                    # Meldungen kommen aus der Engine, nicht aus der Event-
+                    # Analyse, und wuerden in "Alerts sent" die Summen luegen.
+                    # KANN-7: kanalneutral (Summe), Aufschluesselung je real
+                    # benutztem Kanal darunter — nie "Pushover 0" als einzige
+                    # Wahrheit einer Telegram-only-Installation.
+                    + ((f'<div class="ts-zeile"><span><a class="ts-link" href="/live">'
+                        f'Live watcher alerts</a></span>'
+                        f'<span class="num">{z_live}</span></div>'
+                        + (f'<div class="ts-meta">'
+                           + " · ".join(f"{k} {n}"
+                                        for k, n in z_live_kanaele.items())
+                           + '</div>' if z_live_kanaele else ''))
+                       if _live_zeile else '')
+                    + '</div></aside>')
                 _dl = ('<datalist id="personen-liste">'
                        + "".join(f'<option value="{html.escape(p)}">' for p in master_persons(cfg))
                        + '</datalist>')
@@ -7771,7 +8677,8 @@ def make_handler(svc):
                     auswahl = None
                 werte, quelle, gemessen_f = _wu.lesen(cfg["data_dir"], _placement_hw_key(),
                                                       os.environ.get("SUSLIK_VERSION", "dev"))
-                mess_laeuft = svc.wanduhr_laeuft()    # Anzeige-Status; getriggert wird vom BOOT
+                mess_st = svc.wanduhr_status()        # Anzeige-Status; getriggert wird vom BOOT
+                mess_laeuft = bool(mess_st.get("laeuft"))
                 bilanz = prog = None
                 if auswahl or alle_modus:
                     try:
@@ -7798,10 +8705,25 @@ def make_handler(svc):
                               # E2: alle drei Ernte-Gates sichtbar (L = fd_* oben)
                               "ernte_m_det_min", "ernte_m_kante_min", "ernte_m_sharp_min",
                               "ernte_s_det_min", "ernte_s_winkel_max")]
+                # Unbekannt-Sichtbarkeit Baustein B (12.08.): der Wizard ist ein
+                # separater Lauf — wer nach einem Besuch hier landet, erfuhr nirgends,
+                # dass der Pool schon frische Unbekannt-Cluster von heute bereithaelt.
+                # DIESELBE Ableitung wie die Today-Kachel (core/unbekanntpool, Fenster
+                # = heutiger Tag), keine zweite Zaehlung.
+                from core import unbekanntpool as _ubp
+                _ub_tag = datetime.datetime.now().replace(hour=0, minute=0,
+                                                          second=0, microsecond=0)
+                _ub_k = len(_ubp.tages_cluster(
+                    cfg["data_dir"], _ub_tag.timestamp(),
+                    (_ub_tag + datetime.timedelta(days=1)).timestamp(),
+                    int(cfg.get("szenario_gap_min", 5)) * 60, log=svc.log))
                 inhalt = _r_wiz.wizard(len(master_persons(cfg)), auswahl, bilanz, prog,
                                        quelle, schwellen, mess_laeuft,
                                        gemessen_felder=gemessen_f, alle=alle_modus,
-                                       max_events=svc.LERNLAUF_EVENTS_MAX)
+                                       max_events=svc.LERNLAUF_EVENTS_MAX,
+                                       mess_wartet=(mess_st.get("phase") == "waiting"),
+                                       mess_skip=(mess_st.get("uebersprungen") or ""),
+                                       unbekannt_offen=_ub_k)
                 return self._send(200, webui.layout("Learn", "/lernlauf", inhalt,
                                                     self._banner()))
             if path == "/lernen":
@@ -7837,7 +8759,10 @@ def make_handler(svc):
             if path == "/unbekannte":                    # persistente Unbekannt-Identitaeten (User 20.07.)
                 import webui, anlernen
                 import numpy as _np
-                idents = anlernen.lade_unbekannte()
+                # kaputte Pool-Zeilen duerfen die Seite nie toeten (kc_phase34 R-2):
+                # nur Dicts mit Listen-members kommen in die Darstellung
+                idents = [u for u in anlernen.lade_unbekannte()
+                          if isinstance(u, dict) and isinstance(u.get("members"), list)]
                 faces = {g["id"]: g for g in anlernen.lade_gesichter()}
                 vors = anlernen.lade_unbekannt_vorschlaege()
                 opts = "".join(f"<option>{html.escape(p)}</option>" for p in master_persons(cfg))
@@ -7970,8 +8895,9 @@ def make_handler(svc):
                                '<p class="dim">Groups whose images are near-identical to each '
                                'other and unlike any person — typically a wheel arch, pavement '
                                'or light pattern the detector keeps mistaking for a face. They '
-                               'stay here so future junk lands on them instead of on your '
-                               'people cards.</p><div class="ukliste">'
+                               'are frozen: new finds are never added here (they form fresh, '
+                               'visible clusters and get re-checked by the same rule) — the '
+                               'groups stay listed so nothing is hidden.</p><div class="ukliste">'
                                + "".join(_kachel(i, besuch=True) for i in objekte) + '</div></details>')
                 if not (wieder or einzeln or besucher):
                     inhalt += webui.leer("No unknown faces collected yet.",
@@ -8052,56 +8978,14 @@ def make_handler(svc):
                 return self._send(200, webui.layout("Quality", "/qualitaet", inhalt, self._banner()))
             if path == "/kameras":                # Kamera-Blatt: Discovery + verwenden + Zonen (Phase 2b)
                 import webui
+                # Modulumbau R1: Rendern byte-treu in routes/kameras.py (Muster
+                # qualitaet/auftritte — Daten als Parameter, kein Dienst-Import).
+                from routes import kameras as _r_kameras
                 cams, err = frigate_cameras(cfg, force=("refresh" in qs))
-                kam_store = cfg.get("kameras") or {}
-                rz_cfg = cfg.get("required_zones") or {}
-                fehlerbanner = (f'<div class="banner">Could not read the Frigate config: '
-                                f'{html.escape(str(err))}</div>' if err else "")
-
-                def _eff(name, cc):                              # aktueller Zustand: Store, sonst Seed
-                    if name in kam_store:
-                        k = kam_store[name]
-                        return bool(k.get("verwenden", True)), list(k.get("zonen") or [])
-                    return bool(cc["enabled"]), list(rz_cfg.get(name) or [])
-
-                karten = []
-                for name in sorted(cams):
-                    cc = cams[name]
-                    verw, zonen_akt = _eff(name, cc)
-                    nid = html.escape(name, quote=True)
-                    verwenden = (f'<label class="sw"><input type="checkbox" class="kam-verw" '
-                                 f'data-cam="{nid}"{" checked" if verw else ""}> use this camera</label>')
-                    if cc["zones"]:
-                        zboxes = " ".join(
-                            f'<label class="zbox"><input type="checkbox" class="kam-zone" '
-                            f'data-cam="{nid}" value="{html.escape(z, quote=True)}"'
-                            f'{" checked" if z in zonen_akt else ""}> {html.escape(z)}</label>'
-                            for z in cc["zones"])
-                        zonen_ui = (f'<div class="zbar">{zboxes}'
-                                    '<span class="dim">none ticked = all events</span></div>')
-                    else:
-                        zonen_ui = '<div class="zbar dim">no zones defined in Frigate — all events</div>'
-                    res = f'{cc["width"]}×{cc["height"]}' if cc["width"] else "?"
-                    rec = "rec ✓" if cc["record"] else "no rec"
-                    fen = "" if cc["enabled"] else ' <span class="pill warn">off in Frigate</span>'
-                    karten.append(
-                        f'<div class="card"><div class="kamhead"><b>{html.escape(name)}</b>{fen}'
-                        f'<span class="dim num">{res} · {rec}</span>{verwenden}</div>{zonen_ui}</div>')
-                inhalt = ('<h2>Cameras</h2>'
-                          '<p class="sub">Read live from your Frigate config, nothing is hard-coded. '
-                          'Turn a camera <b>off</b> to stop looking for new faces on it; tick one or '
-                          'more <b>zones</b> to only analyze events that entered them (none ticked = '
-                          'all person events). Either way, if Frigate itself already claims a face, '
-                          'suslik still checks it, so Frigate\'s own mislabels never slip through. '
-                          '<a href="/kameras?refresh=1">Refresh</a>.</p>'
-                          + ("".join(karten) if cams else
-                             webui.leer("No cameras found in Frigate.",
-                                        "Check that suslik can reach the Frigate API."))
-                          + ('<p style="margin-top:1rem"><button class="gtb on" '
-                             'onclick="kamerasSpeichern(this)">Save cameras</button> '
-                             '<span id="kam-status" style="color:var(--dim)"></span></p>' if cams else ""))
+                inhalt = _r_kameras.render(cams, err, cfg.get("kameras") or {},
+                                           cfg.get("required_zones") or {})
                 return self._send(200, webui.layout("Cameras", "/kameras",
-                                                    fehlerbanner + inhalt, self._banner()))
+                                                    inhalt, self._banner()))
             if path == "/areas":                  # Areas-Hauptbereich: Sicht + Konfig
                 import webui
                 from routes import areas as _r_areas
@@ -8118,6 +9002,38 @@ def make_handler(svc):
                 from routes import benachrichtigungen as _r_benach
                 inhalt = _r_benach.render(cfg, KAT_LABELS)
                 return self._send(200, webui.layout("Notifications", "/benachrichtigungen", inhalt, self._banner()))
+            if path == "/live":                    # Live-Reiter (Phase 2)
+                import webui
+                from routes import live as _r_live
+                cams, err = frigate_cameras(cfg)
+                kacheln, engine_info, gesperrt = svc.live_lage(cams)
+                inhalt = _r_live.uebersicht(kacheln, engine_info, gesperrt, err)
+                return self._send(200, webui.layout("Live watchers", "/live",
+                                                    inhalt, self._banner()))
+            if path == "/live_status":             # UI-Poll (Countdown/Quittung)
+                return self._send(200, json.dumps(svc.live_status_daten(),
+                                                  ensure_ascii=False),
+                                  "application/json")
+            if path.startswith("/live/"):          # Detailseite /live/<kamera>
+                import webui
+                from routes import live as _r_live
+                kamera = urllib.parse.unquote(path[len("/live/"):])
+                cams, _err = frigate_cameras(cfg)
+                kacheln, engine_info, gesperrt = svc.live_lage(cams)
+                kd = next((x for x in kacheln if x["name"] == kamera), None)
+                if kd is None:
+                    # Kachel auch fuer eine (noch) unbekannte Kamera rendern
+                    # duerfen wir NICHT — der Name kaeme aus der URL, nicht
+                    # aus Frigate/Store (keine zweite Kamera-Quelle).
+                    return self._send(404, webui.layout(
+                        "Live watchers", "/live",
+                        webui.leer("Unknown camera.",
+                                   "Tiles come from Frigate's camera list "
+                                   "and saved watchers only."),
+                        self._banner()))
+                inhalt = _r_live.detail(kamera, kd.get("guard"), kd, gesperrt)
+                return self._send(200, webui.layout(
+                    f"Live — {kamera}", "/live", inhalt, self._banner()))
             if path == "/vision":                  # Vision detect (Reiter)
                 import webui
                 from core import vision as _vis
@@ -8200,49 +9116,10 @@ def make_handler(svc):
                 return self._send(404, b"gone")
             if path == "/konfiguration":
                 import webui
-                NOTIF_KEYS = {"alert_cooldown", "anwesenheit_cooldown", "anwesenheit_push",
-                              "mqtt_publish", "telegram_modus", "telegram_inhalt", "telegram_cooldown", "szene_karenz_s",
-                              # hat eine eigene, farbig hervorgehobene Karte auf der System-Seite —
-                              # hier NICHT nochmal als Tabellenzeile (Doppelbedienung verwirrt)
-                              "frigate_read_only"}
-                zeilen = []
-                for key, (typ, lo, hi, erkl) in svc.CONFIG_WHITELIST.items():
-                    if key in NOTIF_KEYS:                          # -> eigener Reiter / eigene Karte
-                        continue
-                    wert = cfg.get(key)
-                    if typ is list:
-                        opts = "".join(f'<option{" selected" if wert == o else ""}>{o}</option>' for o in lo)
-                        feld = f'<select id="cfg-{key}">{opts}</select>'
-                    elif typ is bool:
-                        feld = (f'<select id="cfg-{key}">'
-                                f'<option value="true"{" selected" if wert else ""}>on</option>'
-                                f'<option value="false"{"" if wert else " selected"}>off</option></select>')
-                    else:
-                        feld = (f'<input id="cfg-{key}" value="{wert}" size="7" '
-                                f'>')
-                    grenzen = f" ({lo}–{hi})" if lo is not None and typ is not list else ""
-                    zeilen.append(f"<tr><td><b>{key}</b></td><td>{feld}</td>"
-                                  f"<td>{html.escape(erkl)}{grenzen}</td></tr>")
-                nur_lesen = []
-                for key in ("trigger", "ov_device", "backend",
-                            "lookback_h", "clip_delay", "web_port"):
-                    if key in cfg and key not in svc.CONFIG_WHITELIST:
-                        nur_lesen.append(f"<tr><td>{key}</td><td colspan=2>"
-                                         f"{html.escape(json.dumps(cfg.get(key), ensure_ascii=False))}</td></tr>")
-                inhalt = ("<h2>Advanced settings</h2>"
-                          "<p>Changes are audited (config_audit.jsonl); after saving, the service "
-                          "restarts cleanly (it waits for a running analysis to finish). "
-                          'Alert channels (Telegram/Pushover/MQTT) and their secrets are on the '
-                          '<a href="/benachrichtigungen">Notifications</a> page.</p>'
-                          '<div class="tabelle-wrap"><table><tr><th>Parameter</th><th>Value</th><th>Meaning</th></tr>'
-                          + "".join(zeilen) + "</table></div>"
-                          '<p><button class="gtb on" onclick="konfigSpeichern()">Save + restart</button> '
-                          '<a href="/setup" class="gtb" style="text-decoration:none">Re-run setup wizard</a> '
-                          '<span id="cfg-status" style="color:var(--dim)"></span></p>'
-                          "<h3>Read-only (console/yaml)</h3>"
-                          '<div class="tabelle-wrap"><table>' + "".join(nur_lesen) + "</table></div>"
-                          '<p class="sub">Camera on/off and per-camera zone conditions are now edited '
-                          'on the <a href="/kameras">Cameras</a> page.</p>')
+                # Modulumbau R1: Rendern byte-treu in routes/konfiguration.py.
+                from routes import konfiguration as _r_konf
+                inhalt = _r_konf.render(cfg, svc.CONFIG_WHITELIST,
+                                        svc._kette_auto_hinweise())
                 return self._send(200, webui.layout("Settings", "/konfiguration", inhalt, self._banner()))
             if path == "/config_sichern":              # Config-Store als Download (UI 'Download configuration')
                 # Store + wirksame Verbindungs-Werte (Vertrag core.registry.EXPORT_VERBINDUNG):
@@ -8301,174 +9178,11 @@ def make_handler(svc):
                 return
             if path == "/system":
                 import webui
-                import shutil
-                # Ampel mit DEFINIERTEN Messungen (Plan AP5 — kein Latenz-Raten)
-                letzte = None
-                if os.path.exists(svc.log_path):
-                    with open(svc.log_path) as f:
-                        for l in f:
-                            try:
-                                d = json.loads(l)
-                                if d.get("nachhol"):
-                                    continue     # Retry misst einen Batch-Job, nicht den Live-Pfad
-                                letzte = d
-                            except Exception:
-                                pass
-                frei_gb = shutil.disk_usage(cfg["data_dir"]).free / 1e9
-                mq_ok = bool(svc.pub and svc.pub.is_connected())
-                hb_alter = time.time() - getattr(svc, "letzter_hb", 0)
-                ff = svc.frigate_fehler
-                _url_da = bool((cfg.get("frigate_url") or "").strip())
-                ampel = [
-                    ("Service", True, f"processed (session): {len(svc.processed)}"),
-                    # Erstlauf: "noch nie analysiert" ist KEIN Fehler — vorher stand hier eine
-                    # rote Lampe mit "last duration — s", bevor je ein Event kam (Plan-QS P.6).
-                    ("Analysis", (letzte is None) or (letzte.get('dauer_s') or 0) < 90,
-                     f"last duration {letzte.get('dauer_s')} s" if letzte else "no analysis yet"),
-                    # bewusst IMMER gruen: eine dauerhaft rote Lampe fuer aufgegebene Alt-Events
-                    # erzeugt nur Alarmmuedigkeit. Reine Bestandsanzeige.
-                    ("Retry queue", True,
-                     "{} open / {} given up (window {} d)".format(
-                         *getattr(svc, "_nachhol_stat", (0, 0)), cfg["nachhol_tage"])),
-                    # Ohne konfigurierte URL stand hier "reachable OK" — eine Erreichbarkeits-
-                    # aussage ueber etwas, das nie kontaktiert wurde.
-                    ("Frigate",
-                     _url_da and not (ff and time.time() - ff[0] < 600),
-                     ("not configured yet — set the URL in the setup wizard" if not _url_da else
-                      ("reachable" if not ff else
-                       f"last error {datetime.datetime.fromtimestamp(ff[0]):%H:%M}"))),
-                    # heartbeat-Alter gegen Epoche 0 gerechnet ergab "heartbeat 1784986e9 s ago".
-                    ("MQTT", mq_ok or not getattr(svc, "pub", None),
-                     (f"heartbeat {hb_alter:.0f} s ago" if getattr(svc, "letzter_hb", 0) else
-                      ("not configured" if not getattr(svc, "pub", None) else "no heartbeat yet"))),
-                    ("Disk", frei_gb > 20, f"{frei_gb:.0f} GB free"),
-                ]
-                a_teile = []
-                for name, ok, info in ampel:
-                    farbe = "var(--ok)" if ok else "var(--crit)"   # Tokens statt Hex: Hellmodus-Kontrast (Vor-Release-Pruefung B12)
-                    wort = "OK" if ok else "CHECK"
-                    a_teile.append(f'<div class="zaehler"><b style="color:{farbe}">{wort}</b>'
-                                   f'{name}<br><small>{html.escape(str(info))}</small></div>')
-                a_html = "".join(a_teile)
-                drift = ""
-                w = svc.enroll_warnung                   # s. Enroll-Seite: einmal binden (TOCTOU)
-                if w and time.time() - w[0] < 86400:
-                    drift = ('<div class="banner">DRIFT GUARD RED after the last reference add:'
-                             f"<pre style='white-space:pre-wrap'>{html.escape(w[1])}</pre></div>")
-                sync_html = ""
-                try:
-                    # .137: die System-Karte ist nur noch eine STATUSZEILE + Weg zur
-                    # Seite (eigener Nav-Punkt "Frigate sync"). Alles Bedienbare —
-                    # Auswahl, Transfer, Import, Entscheidungsfaelle — liegt dort,
-                    # damit es nicht zwei halbe Sync-Oberflaechen gibt.
-                    from sync_refs import abgleich as sync_abgleich
-                    # .138 Panel-Fix: die Zahlenzeile kommt aus DERSELBEN
-                    # Funktion wie auf der Sync-Seite (bilanz_zeile) — vorher
-                    # rechnete die Karte 'ready to transfer' selbst und ohne
-                    # die gemerkten Frigate-Ablehnungen: zwei Seiten, gleiche
-                    # Beschriftung, verschiedene Zahlen.
-                    from routes.syncauswahl import bilanz_zeile as sync_bilanz_zeile
-                    _ab = sync_abgleich()
-                    sync_html = ('<div class="card"><b>Sync with Frigate</b>'
-                                 + sync_bilanz_zeile(_ab, _ab.get("abgelehnt"),
-                                                     mit_personen=False)
-                                 + '<div style="margin-top:8px">'
-                                 '<a class="gtb on" href="/sync_auswahl">'
-                                 'Open Frigate sync</a></div>'
-                                 '<small>The sync page compares both libraries class by class, '
-                                 'pre-checks every candidate the way Frigate does, sends only what '
-                                 'you tick, and imports what only Frigate has. '
-                                 'If a sync reports a problem, <a href="/sync_diagnose" target="_blank">'
-                                 'open the diagnosis</a> — it bundles the suslik report and the Frigate '
-                                 'log, ready to copy into an issue.</small></div>')
-                except Exception as e:
-                    # Roher Python-Fehler stand hier direkt in der Karte (Plan-QS P.6) — fuer
-                    # den haeufigsten Fall (frisches System ohne Frigate/Referenzen) jetzt ein Satz.
-                    sync_html = ('<div class="card"><b>Sync with Frigate</b><br>'
-                                 '<span class="dim">not available yet — needs a reachable Frigate '
-                                 'and at least one reference face</span>'
-                                 f'<br><small class="dim">({html.escape(str(e)[:60])})</small>'
-                                 '<br><small><a href="/sync_diagnose" target="_blank">open the '
-                                 'diagnosis</a> — bundles the suslik report and the Frigate log.'
-                                 '</small></div>')
-                qs_html = ""
-                qp = os.path.join(cfg["data_dir"], "state", "qs_bericht.json")
-                if os.path.exists(qp):
-                    try:
-                        q = json.load(open(qp))
-                        zeilen = "".join(
-                            f"<tr><td>{html.escape(k)}</td><td>{v['events']}</td><td>{v['mit_gesicht']}</td>"
-                            f"<td>{v['bestaetigt']}</td><td>{v['fenster_quote']} %</td></tr>"
-                            for k, v in sorted(q.get("kameras", {}).items()))
-                        qs_html = (f'<div class="card"><b>QC report</b> (as of {html.escape(q.get("stand", "?"))}, '
-                                   f'{q.get("zeitraum_tage", "?")} days)'
-                                   '<div class="tabelle-wrap"><table><tr><th>Camera</th><th>Events</th>'
-                                   "<th>with face</th><th>confirmed</th><th>window rate</th></tr>"
-                                   + zeilen + "</table></div></div>")
-                    except Exception:
-                        pass
-                backup_html = (
-                    '<div class="card"><b>Configuration backup</b>'
-                    '<p class="dim">Download the settings stored in /data/config as one JSON file, or restore '
-                    'them from such a file. Honest scope: today that is the CAMERA SHEET (incl. its '
-                    'stored values); thresholds/channels set only in verifyd.yaml or via environment '
-                    'are NOT in this file. Learned people/references: use the full backup below.</p>'
-                    '<a class="gtb on" href="/config_sichern">Download configuration</a> '
-                    '<label class="gtb" style="cursor:pointer">Restore from file…'
-                    '<input type="file" accept="application/json,.json" style="display:none" '
-                    'onchange="configRestore(this)"></label> '
-                    '<span id="restore-status" class="dim"></span>'
-                    # E8 (konzept_vision.md §9): der Vision-API-Key faehrt wie die anderen
-                    # Meldekanal-Secrets MIT, damit ein Umzug ihn nicht still verliert. Das
-                    # ist ein Preis, also steht er hier — nicht in einer Fussnote. Text aus
-                    # der zentralen Quelle, kein zweites Literal.
-                    f'<p class="dim"><b>Careful:</b> this file {_reg.VISION_EXPORT_HINWEIS} '
-                    '(notification channels and vision detect), so that a restore on another '
-                    'machine really works.</p>'
-                    '<p class="dim">Restore overwrites the current settings (the previous ones are kept '
-                    'as a .bak) and restarts the service.</p></div>'
-                    '<div class="card"><b>Full backup</b>'
-                    '<p class="dim">One portable archive with everything you taught this '
-                    'installation: settings, the face reference library, learning-run '
-                    'results, the whole person-recognition material (images, your review '
-                    'verdicts, trained models) and the event record. Made for moving to '
-                    'another machine. Honest scope: the video clip cache and per-event '
-                    'analysis artifacts are NOT included — they are rebuilt over time.</p>'
-                    '<a class="gtb on" href="/backup_voll">Download full backup</a> '
-                    '<label class="gtb" style="cursor:pointer">Restore full backup…'
-                    '<input type="file" accept=".tar.gz,application/gzip" style="display:none" '
-                    'onchange="vollRestore(this)"></label> '
-                    '<span id="vollrestore-status" class="dim"></span>'
-                    f'<p class="dim"><b>Careful:</b> this archive {_reg.VISION_EXPORT_HINWEIS}.</p>'
-                    '<p class="dim">Restore replaces those parts (each previous one is kept '
-                    'once as *.pre-restore-*) and restarts the service. Uploading a few '
-                    'hundred MB can take a while — leave the page open.</p></div>')
-                ro = frigate_read_only(cfg); fsync = bool(cfg.get("frigate_sync"))
-                _rc = "var(--ok)" if ro else "var(--warn)"   # read-only = gruen/sicher, schreibend = Achtung; Tokens statt Hex (B12: 2,45/2,94 im Hellmodus)
-                write_html = (
-                    f'<div class="card" style="border-left:4px solid {_rc}"><b>Frigate write-back</b>'
-                    '<p class="dim">Does suslik write back to Frigate, or only read? Read-only is the safe '
-                    'default; enable writing only for parallel operation (Frigate-Face + suslik).</p>'
-                    f'<div>Current: <b style="color:{_rc}">'
-                    + ('READ-ONLY — suslik does not write to Frigate' if ro
-                       else 'WRITING to Frigate — sub_labels' + (' + reference sync' if fsync else '')) + '</b></div>'
-                    '<div style="margin-top:8px">'
-                    # Auswahl farbNEUTRAL markieren (.sel statt .on): .on ist gruen, und gruen heisst
-                    # auf dieser Karte sonst "sicher". Bei aktivem Schreiben stand deshalb ein gruener
-                    # Knopf neben dem orangen Warnrahmen — zwei Signale, die sich widersprachen. Der
-                    # Haken sagt, was gilt, auch ohne Farbe.
-                    f'<button class="gtb{"" if ro else " sel"}" onclick="frigateWrite(false)">'
-                    + ("" if ro else "✓ ") + 'Enable writing</button> '
-                    f'<button class="gtb{" sel" if ro else ""}" onclick="frigateWrite(true)">'
-                    + ("✓ " if ro else "") + 'Read-only</button> '
-                    '<span id="fw-status" class="dim"></span></div></div>')
-                inhalt = ("<h2>System</h2>"
-                          f'<div class="zeile">{a_html}</div>' + drift + write_html + sync_html + qs_html + backup_html +
-                          '<div class="card"><b>Tools</b><br>'
-                          '<a href="/log">Service log</a> · <a href="/health">health</a></div>'
-                          '<div class="card"><b>Docs</b><br>'
-                          f'<a href="{DOCS_URL}" target="_blank" rel="noopener noreferrer">'
-                          'Documentation on GitHub</a></div>')
+                # Modulumbau R1: Rendern byte-treu in routes/system.py (Service-Objekt
+                # injiziert — die Seite zeigt die Dienst-LAGE, s. Modul-Docstring;
+                # ro/docs_url bleiben Kern-Quellen).
+                from routes import system as _r_system
+                inhalt = _r_system.render(svc, cfg, frigate_read_only(cfg), DOCS_URL)
                 return self._send(200, webui.layout("System", "/system", inhalt, self._banner()))
             if path == "/health":
                 # version zuerst (Task #12, User 28.07.): eingesandte Log-AUSSCHNITTE tragen
@@ -8483,7 +9197,21 @@ def make_handler(svc):
                      # N8b: Cache-Groesse SICHTBAR (Feldbericht: 74-GB-Steady-State erst am
                      # 97 % vollen Host bemerkt) + der wirksame Deckel daneben.
                      "clip_cache_gb": round(svc.clip_cache_bytes() / 1024**3, 2),
-                     "clip_cache_max_gb": cfg["clip_cache_max_gb"]}
+                     "clip_cache_max_gb": cfg["clip_cache_max_gb"],
+                     # Ketten-Schalter (Issue #21, K1): konfigurierte Stufe UND
+                     # tatsaechliche Scharf-Lage je Erkennungs-Weg — aus DENSELBEN
+                     # Praedikaten wie die Quell-Hooks (kette_lage), die Anzeige
+                     # kann dem Verhalten nicht widersprechen.
+                     "erkennungskette": svc.kette_lage(),
+                     # Wanduhr-Lage (K1, Issue #21): sagt WARUM (k)eine Selbst-
+                     # messung vorliegt (uebersprungen auf kleinen Maschinen /
+                     # letzter Fehlversuch), statt still zu fehlen.
+                     "wanduhr": svc.wanduhr_status(),
+                     # Live-Reiter (Phase 2): Engine-Herzschlag + Waechter-
+                     # Zustaende aus DERSELBEN Ableitung wie die Kacheln
+                     # (livewache.ui_zustand + registry.LIVE_ZUSTAENDE — die
+                     # Anzeige kann den Kacheln nicht widersprechen, K3/K1).
+                     "live": svc.live_health()}
                 pi = cfg.get("placement_info")
                 if pi:                                     # P4: aufgeloestes Auto-Placement ausweisen
                     h["placement"] = {"backend": pi.get("backend"), "quelle": pi.get("quelle"),
@@ -8870,7 +9598,11 @@ def make_handler(svc):
                                                    cfg, gtmap)
                     _s = next((x for x in _sz
                                if any(e.get("eid") == eid for e in x.get("evs") or [])), None)
-                    if _s and _s["n"] > 1:
+                    if _s:
+                        # Auch bei n==1 (Issue #9-Nachbefund .173): die Leiste ist der
+                        # einzige Weg zur Pass-Seite und damit zum Analyse-Grund — ein
+                        # EINZELNES Fehler-Event (genau Tokn59s Screenshot-Fall) hatte
+                        # vorher keinen. prev/next entfallen bei n==1 von selbst.
                         _evs = [e for e in _s.get("evs") or [] if e.get("eid")]
                         _i = next((k for k, e in enumerate(_evs) if e["eid"] == eid), None)
                         _pl = (f'<a class="gtb" href="/event/{urllib.parse.quote(str(_evs[_i-1]["eid"]))}">&#8592; prev</a>'
@@ -8881,10 +9613,33 @@ def make_handler(svc):
                             f'<div class="card passleiste">Part of a pass '
                             f'<span class="num">{datetime.datetime.fromtimestamp(_s["start"]).strftime("%H:%M")}'
                             f'&ndash;{datetime.datetime.fromtimestamp(_s["ende"]).strftime("%H:%M")}</span>'
-                            f' · {_s["n"]} events · '
+                            f' · {_s["n"]} {"event" if _s["n"] == 1 else "events"} · '
                             f'<a class="gtb" href="/pass/{urllib.parse.quote(eid)}">view pass</a> {_pl}{_nl}</div>')
                 except Exception:
                     passleiste = ""               # Leiste ist Komfort, nie ein Seitenkiller
+                # Issue #9 (Tokn59, 31.07., Zusage endlich eingeloest .173): der GRUND
+                # eines Fehler-Events steht DIREKT auf der Event-Seite. Quelle ist die
+                # EINE Helferin webui.bausteine.fehler_grund (auch die Pass-Seite liest
+                # sie — Widerleger 11.08.: drei Streu-Antworten auf dieselbe Frage,
+                # zwei zeigten Nachspann statt Ursache). Ohne Log ein ehrlicher
+                # Verweis statt gar nichts (genau sein Screenshot-Fall).
+                fehlergrund = ""
+                if kat == "fehler":
+                    _lp = os.path.join(cfg["data_dir"], "events", ed, "analyze.log")
+                    try:
+                        _g = _fehler_grund(_lp)
+                        _hat_log = os.path.isfile(_lp)
+                    except Exception:
+                        _g, _hat_log = "", False   # Grund-Zeile ist Komfort, nie ein Seitenkiller
+                    # Zwei ehrliche Fallbacks (Widerleger-Recheck): ein VORHANDENES Log
+                    # ohne Grund-Zeile darf nicht als "kein Log" ausgegeben werden.
+                    fehlergrund = (
+                        f'<div class="evrow"><span class="lab">Error reason</span>'
+                        + (f'<span>{html.escape(_g)}</span></div>' if _g else
+                           ('<span class="dim">analyze.log holds no reason line — '
+                            'use the log button below</span></div>' if _hat_log else
+                            '<span class="dim">no analyze.log kept for this event — '
+                            'see the service log (System page)</span></div>')))
                 inhalt = (
                     f'<div class="evhead"><a href="/heute" class="back">← Today</a>'
                     f'<h2>{cam} · <span class="num">{t}</span></h2></div>'
@@ -8892,6 +9647,7 @@ def make_handler(svc):
                     f'<div class="card evmeta"><div class="evbadges">{kbadge}{conf}</div>'
                     f'<div class="evrow"><span class="lab">Frigate</span><span>{html.escape(ftxt)}</span></div>'
                     f'<div class="evrow"><span class="lab">suslik</span><span>{html.escape(ours)}</span></div>'
+                    f'{fehlergrund}'
                     f'<div class="evactions">{vid}{logl}</div>'
                     f'<div class="evgt"><span class="lab">{"Correct if wrong" if best else "Who was it?"}</span>{gtb}</div></div>'
                     f'<h3>Images</h3>{galerie}')
@@ -8906,271 +9662,23 @@ def make_handler(svc):
                     return self._send(200, open(p, "rb").read(), ct)
                 return self._send(404, "not found", "text/plain")
             if path == "/offen":                           # Abend-Arbeitsliste: unbestaetigt + Gesicht + ungelabelt
-                rows, gtmap = [], {}
-                if os.path.exists(svc.log_path):
-                    with open(svc.log_path) as f:
-                        for l in f:
-                            try:
-                                rows.append(json.loads(l))
-                            except Exception:
-                                pass
-                gtp = os.path.join(cfg["data_dir"], "state", "ground_truth.jsonl")
-                if os.path.exists(gtp):
-                    with open(gtp) as f:
-                        for l in f:
-                            try:
-                                d = json.loads(l)
-                                gtmap[d["eid"]] = d["label"]
-                            except Exception:
-                                pass
-                gt_schnell = gt_schnellpersonen(rows, cfg)
-                andere = [p for p in master_persons(cfg) if p not in gt_schnell]
-                by = {}
-                for r in rows:                             # --once-Duplikate: letzter Eintrag gewinnt
-                    if r.get("eid"):
-                        by[r["eid"]] = r
-                kand = [r for r in by.values()          # kategorien-agnostisch (Schema v1+v2, AP2)
-                        if r.get("faces_geprueft", r.get("faces", 0)) > 0 and not r.get("bestaetigt")
-                        and r["eid"] not in gtmap]      # #42 Teil B: gefilterte Zahl, faces-Fallback fuer Altzeilen
-                # Zeitfenster-Kontext (User-Punkt 18.07.): wurde im ±3-min-Fenster auf
-                # IRGENDEINER Kamera jemand bestaetigt? Nur ANZEIGE/Sortierung — kein
-                # Verstecken (Postbote-waehrend-Gartenarbeit-Falle; echte Fusion = v1.1).
-                bestaetigt_ts = [((r.get("start") or r.get("ts", 0)),
-                                  ", ".join(r.get("bestaetigt") or []), r.get("camera", "?"))
-                                 for r in by.values() if r.get("bestaetigt")]
-
-                def _fenster_kontext(t):
-                    nahe = [(abs(t - bt), wer, cam) for bt, wer, cam in bestaetigt_ts
-                            if abs(t - bt) <= 180]
-                    if not nahe:
-                        return None
-                    _, wer, cam = min(nahe)
-                    return f"{wer} ({cam})"
-                for r in kand:
-                    r["_kontext"] = _fenster_kontext(r.get("start") or r.get("ts", 0))
-                # Issue #16: schwache Gesichter OHNE bestaetigten Kontext sind
-                # fast immer Fehlausloeser — standardmaessig einklappen statt
-                # den Nutzer zum Labeln zu bitten (?schwach=1 zeigt sie).
-                zeige_schwach = (qs.get("schwach", ["0"])[0] == "1")
-                schwach_n = 0
-                if not zeige_schwach:
-                    schwach = [r for r in kand
-                               if r.get("kategorie") == "unbekannt_schwach"
-                               and not r.get("_kontext")]
-                    schwach_n = len(schwach)
-                    if schwach_n:
-                        sch_ids = {id(r) for r in schwach}
-                        kand = [r for r in kand if id(r) not in sch_ids]
-                kand.sort(key=lambda r: (r["_kontext"] is not None,
-                                         -(r.get("start") or r.get("ts", 0))))
-                # BLAETTERN (25.07.): vorher wurden ALLE Kandidaten gerendert — gemessen 564
-                # Karten, 704 KB und rund 2800 Knoepfe auf einer Seite. Das ist keine Arbeitsliste
-                # mehr, das ist eine Wand. 50 je Seite, dieselbe Groesse wie /ereignisse, damit
-                # sich beide gleich anfuehlen.
-                # Ehrliche Einschraenkung: geblaettert wird ueber die POSITION, nicht ueber einen
-                # Zeitanker. Wer auf Seite 3 etwas labelt, verschiebt die Liste um einen Eintrag —
-                # an der Seitengrenze kann dadurch beim naechsten Laden einer uebersprungen
-                # erscheinen. Ein Zeitanker ginge hier nicht, weil zweistufig sortiert wird
-                # (erst "hat Kontext im Zeitfenster", dann Zeit).
-                offen_gesamt = len(kand)
-                try:
-                    o_seite = max(1, int(qs.get("seite", ["1"])[0] or 1))
-                except (ValueError, TypeError):
-                    o_seite = 1
-                o_max = max(1, -(-offen_gesamt // 50))
-                o_seite = min(o_seite, o_max)
-                kand = kand[(o_seite - 1) * 50:o_seite * 50]
-                cards = []
-                for r in kand:
-                    eid = r["eid"]
-                    ed = eid.replace("/", "_")
-                    t = datetime.datetime.fromtimestamp(r.get("start") or r.get("ts", 0)).strftime("%d.%m %H:%M:%S")
-                    f = r.get("frigate") or {}
-                    ftxt = f"Frigate: {f.get('label')} {f['score']:.2f}" if f.get("label") and f.get("score") is not None else "Frigate: —"  # Frigate-Label bleibt wie geliefert
-                    ours = ", ".join(f"{p} {(v.get('max') or 0):+.2f}/{v.get('win3s', 0)}×" for p, v in
-                                     sorted((r.get("ours") or {}).items(),
-                                            key=lambda x: -(x[1].get("max") or 0))[:3]) or "—"
-                    edir = os.path.join(cfg["data_dir"], "events", ed)
-                    crop = ""
-                    if os.path.isdir(edir):
-                        jpgs = sorted((c for c in os.listdir(edir) if c.endswith(".jpg")),
-                                      key=lambda c: os.path.getsize(os.path.join(edir, c)), reverse=True)
-                        if jpgs:
-                            u = f"/events/{urllib.parse.quote(ed)}/{urllib.parse.quote(jpgs[0])}"
-                            crop = f'<img src="{u}">'
-                    vid = (f' <a href="/video/{urllib.parse.quote(ed)}">&#9654; Video</a>'
-                           if any(os.path.isfile(os.path.join(cfg["data_dir"], "clips", ed + s))
-                                  for s in ("_review.mp4", ".mp4")) else "")
-                    gtb = gt_leiste(eid, gt_schnell, andere)
-                    ktx = (f' · <span style="color:var(--dim)">recognized in the same time window: '
-                           f'{html.escape(r["_kontext"])}</span>' if r.get("_kontext") else
-                           ' · <b style="color:var(--warn)">no confirmed recognition nearby</b>')
-                    cards.append(f"<div class=card data-fade-on-label=1>{t} · "
-                                 f"{html.escape(str(r.get('camera', '?')))} · "
-                                 f"{html.escape(ftxt)} · {r.get('faces_geprueft', r.get('faces', 0))} faces · best: {html.escape(ours)}{ktx}"
-                                 f"<div class=crops>{crop}{vid}</div><div>{gtb}</div></div>")
                 import webui
-                _ol = lambda s, t: f'<a class="gtb" href="/offen?seite={s}">{t}</a>'
-                o_blaettern = (" · ".join(
-                    ([_ol(o_seite - 1, "← newer")] if o_seite > 1 else []) +
-                    [f"Page {o_seite}/{o_max} ({offen_gesamt} open)"] +
-                    ([_ol(o_seite + 1, "older →")] if o_seite < o_max else []))
-                    if offen_gesamt > 50 else "")
-                sch_hinweis = ""
-                if schwach_n:
-                    sch_hinweis = (f'<p class="pnote">{schwach_n} weak-face event'
-                                   f'{"s" if schwach_n != 1 else ""} hidden — '
-                                   "likely no usable face (nothing confirmed "
-                                   'nearby either). <a href="/offen?schwach=1">'
-                                   "show them</a></p>")
-                elif zeige_schwach:
-                    sch_hinweis = ('<p class="pnote">showing weak-face events too — '
-                                   '<a href="/offen">back to the worthwhile ones</a></p>')
-                inhalt = (f"<h2>Open cases to label ({offen_gesamt})</h2>"
-                          "<p>Filled automatically: all events with faces that nobody confirmed "
-                          "and that you haven't labeled yet. Ones with nobody recognized nearby "
-                          "come first — those are the ones worth looking at. After labeling, the "
-                          "card fades and disappears on the next load.</p>" + sch_hinweis
-                          + (f'<p class="pnote">{o_blaettern}</p>' if o_blaettern else "")
-                          + ("".join(cards) if cards else
-                             webui.leer("Nothing open — everything labeled.",
-                                        "New unconfirmed events with faces appear here automatically."))
-                          + (f'<p class="pnote">{o_blaettern}</p>' if o_blaettern else ""))
+                # Modulumbau R1: Rendern byte-treu in routes/ereignisliste.py
+                # (gt_schnellpersonen/master_persons injiziert — eine Quelle im Kern).
+                from routes import ereignisliste as _r_el
+                inhalt = _r_el.render_offen(cfg, svc.log_path, qs,
+                                            gt_schnellpersonen, master_persons)
                 return self._send(200, webui.layout("To label", "/offen", inhalt, self._banner()))
             if path != "/ereignisse":
                 return self._send(404, "not found", "text/plain")
-            by = {}
-            if os.path.exists(svc.log_path):
-                with open(svc.log_path) as f:
-                    for l in f:
-                        try:
-                            r = json.loads(l)
-                            if r.get("eid"):
-                                by[r["eid"]] = r       # letzte Zeile pro Event gewinnt
-                        except Exception:
-                            pass       # abgerissene Zeile (Crash mid-write) darf die UI nicht killen
-            rows = sorted(by.values(), key=lambda r: -(r.get("start") or r.get("ts", 0)))
-            f_kam = qs.get("kamera", [""])[0]
-            f_per = qs.get("person", [""])[0]
-            f_kat = qs.get("kategorie", [""])[0]
-            f_tag = qs.get("tag", [""])[0]             # JJJJ-MM-TT
-            if f_kam:
-                rows = [r for r in rows if r.get("camera") == f_kam]
-            if f_per:
-                rows = [r for r in rows if f_per in (r.get("bestaetigt") or [])]
-            if f_kat:
-                rows = [r for r in rows if f_kat in (r.get("kategorie"), r.get("kategorie_v1"))]
-            if f_tag:
-                try:
-                    _d0 = datetime.datetime.strptime(f_tag, "%Y-%m-%d")
-                    t0 = _d0.timestamp()
-                    # Kalendertag statt fixer 86400 s (Review .54): an Zeitumstellungstagen
-                    # ist der lokale Tag 23/25 h — /heute rechnet kalendertaeglich, der
-                    # "Events analysed"-Link muss dieselbe Menge treffen.
-                    t1 = (_d0 + datetime.timedelta(days=1)).timestamp()
-                    rows = [r for r in rows if t0 <= (r.get("start") or r.get("ts", 0)) < t1]
-                except ValueError:
-                    pass
-            # Areas Stufe 1: Area = grober Filter (Kamera-Menge der Sicht), der Kamera-
-            # Filter bleibt daneben (beide gesetzt = natuerliche Schnittmenge); die
-            # Blaetter-Links tragen ?area= ueber _seitenlink automatisch mit. Anders als
-            # auf /heute (Pass-AUSWAHL) filtert die Event-Liste je Zeile — eine Zeile
-            # ist eine Kamera-Tatsache, kein Durchgangs-Urteil.
-            _areas_e = _areas_mod.normalisieren(cfg.get("areas"))
-            _ar_akt_e, _nk_e = _areas_mod.sicht_aufloesen(
-                _areas_e, qs.get("area", [""])[0],
-                {str(r.get("camera", "?")) for r in by.values()})
-            _ar_werte = sorted(_areas_e) + ["Default"]
-            if _nk_e is not None:
-                rows = [r for r in rows if str(r.get("camera", "?")) in _nk_e]
-            gesamt = len(rows)
-            try:                                   # ?seite=abc riss sonst den Request-Thread ab
-                seite = max(1, int(qs.get("seite", ["1"])[0] or 1))
-            except (ValueError, TypeError):
-                seite = 1
-            rows = rows[(seite - 1) * 50: seite * 50]
-            kameras = sorted({r.get("camera", "?") for r in by.values()})
-            kats = sorted({k for r in by.values() for k in (r.get("kategorie"), r.get("kategorie_v1")) if k})
-            def _opt(werte, aktiv, labels=None):   # labels: Slug->Anzeige (value bleibt der Slug/Filterwert)
-                if labels is None:
-                    return "".join(f'<option{" selected" if w == aktiv else ""}>{html.escape(w)}</option>'
-                                   for w in werte)
-                return "".join(f'<option value="{html.escape(w)}"{" selected" if w == aktiv else ""}>'
-                               f'{html.escape(labels.get(w, w))}</option>' for w in werte)
-            filterleiste = (
-                '<form method="get" style="margin:8px 0">'
-                + (f'<select name="area"><option value="">all areas</option>'
-                   f'{_opt(_ar_werte, _ar_akt_e, {w: w for w in _ar_werte})}</select> '
-                   if _areas_e else '')
-                + f'<select name="kamera"><option value="">all cameras</option>{_opt(kameras, f_kam)}</select> '
-                f'<select name="person"><option value="">all persons</option>'
-                f'{_opt(master_persons(cfg), f_per)}</select> '
-                f'<select name="kategorie"><option value="">all categories</option>{_opt(kats, f_kat, KAT_LABELS)}</select> '
-                f'<input type="date" name="tag" value="{html.escape(f_tag)}" '
-                '> '
-                '<button class="gtb on">Filter</button> <a href="/ereignisse">reset</a></form>')
-            def _seitenlink(n, txt):
-                q = {k: v[0] for k, v in qs.items() if v and v[0]}
-                q["seite"] = str(n)
-                return f'<a href="/ereignisse?{urllib.parse.urlencode(q)}">{txt}</a>'
-            blaettern = " · ".join(
-                ([_seitenlink(seite - 1, "← newer")] if seite > 1 else []) +
-                [f"Page {seite}/{max(1, -(-gesamt // 50))} ({gesamt} events)"] +
-                ([_seitenlink(seite + 1, "older →")] if seite * 50 < gesamt else []))
-            gt_schnell = gt_schnellpersonen(list(by.values()), cfg)
-            andere = [p for p in master_persons(cfg) if p not in gt_schnell]
-            gtmap = {}                                     # User-Labels: letzte Zeile pro eid gewinnt
-            gtp = os.path.join(cfg["data_dir"], "state", "ground_truth.jsonl")
-            if os.path.exists(gtp):
-                with open(gtp) as f:
-                    for l in f:
-                        try:
-                            d = json.loads(l)
-                            gtmap[d["eid"]] = d["label"]
-                        except Exception:
-                            pass
-            body = ["<h2>Events</h2>", filterleiste, f"<p>{blaettern}</p>",
-                    '<div class="tabelle-wrap"><table><tr><th>Time</th><th>Camera</th>'
-                    "<th>Frigate</th><th>suslik</th>",
-                    "<th>Category</th><th>Crop</th><th>Confirm or correct (GT)</th></tr>"]
-            for r in rows:   # defensiv: alte/fremde Zeilen ohne heutige Pflichtfelder nicht crashen lassen
-                t = datetime.datetime.fromtimestamp(r.get("start") or r.get("ts", 0)).strftime("%d.%m %H:%M:%S")
-                f = r.get("frigate") or {}
-                fs = f"{f['score']:.2f}" if f.get("score") is not None else "?"
-                ftxt = f"{f.get('label')} {fs} (cos {f.get('cos')})" if f.get("label") else "—"
-                ours = ", ".join(f"{p} {(v.get('max') or 0):+.2f}/{v.get('win3s', 0)}×" for p, v in
-                                 sorted((r.get("ours") or {}).items(),
-                                        key=lambda x: -(x[1].get("max") or 0))[:3]) or "—"
-                ed = str(r.get("eid", "")).replace("/", "_")
-                edir = os.path.join(cfg["data_dir"], "events", ed)
-                crop = ""
-                if ed and os.path.isdir(edir):
-                    jpgs = sorted((c for c in os.listdir(edir) if c.endswith(".jpg")),
-                                  key=lambda c: os.path.getsize(os.path.join(edir, c)), reverse=True)
-                    if jpgs:
-                        u = f"/events/{urllib.parse.quote(ed)}/{urllib.parse.quote(jpgs[0])}"
-                        crop = f'<a href="{u}"><img src="{u}"></a>'
-                k = str(r.get("kategorie", "?"))
-                best = r.get("bestaetigt") or []
-                lg = (f' <a href="/events/{urllib.parse.quote(ed)}/analyze.log" style="color:var(--accent)">log</a>'
-                      if ed and os.path.isfile(os.path.join(edir, "analyze.log")) else "")
-                if ed and any(os.path.isfile(os.path.join(cfg["data_dir"], "clips", ed + s))
-                              for s in ("_review.mp4", ".mp4")):
-                    lg += f' <a href="/video/{urllib.parse.quote(ed)}" style="color:var(--accent)">video</a>'
-                eid = str(r.get("eid", ""))
-                cur = gtmap.get(eid, "")
-                gtb = gt_leiste(eid, gt_schnell, andere, cur) if eid else ""
-                unv = (' <span title="clip incomplete — judged from the readable part">⚠</span>'
-                       if r.get("frames_fehlen") else "")     # W1-Telemetrie in der Liste
-                body.append(f"<tr><td>{t}</td><td>{html.escape(str(r.get('camera', '?')))}</td>"
-                            f"<td>{html.escape(ftxt)}</td><td>{html.escape(ours)}"
-                            f"{' ✓' + html.escape(','.join(best)) if best else ''}</td>"
-                            f"<td><span class=k style=background:{KAT_FARBE.get(k, '#666')}>{html.escape(KAT_LABELS.get(k, k))}</span>"
-                            f"{' 📣' if r.get('alerted') else ''}{unv}{lg}</td><td>{crop}</td><td>{gtb}</td></tr>")
-            body.append("</table>")
             import webui
+            # Modulumbau R1: Rendern byte-treu in routes/ereignisliste.py.
+            from routes import ereignisliste as _r_el
             self._send(200, webui.layout("Events", "/ereignisse",
-                                         "".join(body) + "</table></div>", self._banner()))
+                                         _r_el.render_ereignisse(
+                                             cfg, svc.log_path, qs,
+                                             gt_schnellpersonen, master_persons),
+                                         self._banner()))
 
     return H
 
@@ -9786,14 +10294,20 @@ def main():
         svc.worker_stoppen()                  # W2: --once = start -> 1 Job -> geordnet beenden
         return                                # non-daemon Szenen-Timer haelt den Prozess ggf. karenz_s am Leben
 
+    # Publisher VOR dem Webserver (Widerleger 11.08.): die differenzierte MQTT-Ampel
+    # zeigte sonst in JEDEM Selfcheck-Fenster nach einem Config-Neustart minutenlang
+    # CHECK "publisher not started", obwohl nichts kaputt ist. start_publisher haengt
+    # nur an cfg und verbindet asynchron — es gibt keinen Grund, damit zu warten.
+    svc.start_publisher()
     web = ThreadingHTTPServer(("0.0.0.0", int(cfg["web_port"])), make_handler(svc))
     threading.Thread(target=web.serve_forever, daemon=True).start()
     svc.log(f"Webview: http://0.0.0.0:{cfg['web_port']}/")
     startup_selfcheck(svc)                    # strukturierter Selbstcheck nach stdout (Roadmap 4/10)
-    svc.start_publisher()
     svc.start_wartung()
     svc.start_stoerungswaechter()
     svc.start_nachhol()                   # gescheiterte Analysen spaeter stumm nachholen
+    svc.start_live_aufsicht()             # Phase 4: Live-Engine-Supervisor (Autostart, wenn
+    #                                       ein Waechter enabled ist; Standalone-Erkennung)
     svc.vision_waisen_start()             # .164: Laeufe schliessen, die der letzte
     #                                       Neustart mitten drin erwischt hat
     if not cfg["frigate_url"]:                 # frisch (Docker-Erstboot): erst der Setup-Wizard,

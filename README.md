@@ -7,11 +7,14 @@ recognition an independent second opinion.
 The learning module works end to end: a learning run walks through the person events
 Frigate already recorded, harvests the usable faces, groups them into recurring people,
 and lets you name a whole cluster at once instead of labeling single images. Named
-clusters go straight into recognition. Camera areas are the part still being built.
+clusters go straight into recognition. Camera areas (stage 1: areas as views) are in;
+per-area alert behavior is the part still being built. New and untested in 0.1.0.182:
+**live watchers** — a verified signal in under one second, straight off the live stream
+(see the roadmap section below).
 
 The `latest-*` image tags follow the newest release, so `docker compose pull` gets you
 what this README describes. To pin a version instead, use its tag explicitly:
-`ghcr.io/bennobaer-dev/suslik:0.1.0.170-gpu`.
+`ghcr.io/bennobaer-dev/suslik:0.1.0.183-gpu`.
 
 ## Why this exists
 
@@ -36,7 +39,7 @@ declines rather than mislabels.
 The Today page answers "who was on the property, when, and where did they go" — one card per
 person, one block per pass, unknowns kept visible instead of buried:
 
-![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.0.170)
+![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.0.183)
 
 *(Screenshot from a live install of v0.1.0.54; names and faces anonymized.)*
 
@@ -220,13 +223,18 @@ only needed for the optional push-notification channels.
 - **Learning module** *(works end to end)*: harvest, quality gates, clustering into
   recurring people, naming with per-perspective recommendations, and adoption into
   recognition (working since 0.1.0.102).
-- **Camera areas** *(stage 1 shipped in 0.1.0.103-alpha)*: group cameras into parts of your
+- **Camera areas** *(stage 1 shipped in 0.1.0.92-alpha)*: group cameras into parts of your
   property; areas act as views on Today/Appearances/Events, and alerts name the area.
   Passes are always judged across the whole property. Per-area alert behavior is stage 2.
-- **Exploring a live path (go2rtc)**: unchanged goal — fire a Home Assistant action the
-  moment a known face is confirmed. Sharpened by tester feedback: the version worth
-  building starts the analysis early on the partial recording when nothing has matched
-  yet, instead of a full live rewrite.
+- **Live watchers** *(shipped in 0.1.0.182, brand new)*: the live path is real now — a
+  Live tab watches selected cameras directly on the stream and raises a verified signal
+  in under one second (measured 199–801 ms from first face to signal on my machine),
+  e.g. to trigger a Home Assistant action via MQTT. Every active watcher costs real GPU
+  headroom, so cameras are enabled per tile after a source test and the service measures
+  how many watchers your GPU can carry. GPU-only for now (video decode via Intel VAAPI
+  or NVIDIA NVDEC, the latter verified on an RTX 2060). The entire live part is new and
+  has seen little wider testing yet — treat it as a preview and report what breaks.
+  How it works: [live-watchers.md](docs/live-watchers.md).
 - **Planned — "recurring, not a resident"**: a third review option next to naming and
   discarding, so the courier who comes three times a week doesn't silently disable your
   stranger alerts (tester feedback).
