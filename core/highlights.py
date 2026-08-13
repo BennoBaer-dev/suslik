@@ -12,7 +12,55 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.0.183"   # .183 = Live-Release (Respin von .182: Kameranamen-Leck
+STAND = "0.1.0.199"   # .199 = RELEASE (Buendel .184-.198), Box-Eintraege vom
+# User diktiert + abgestimmt (13.08. ~18:20 "das passt").
+# Davor .198 = Fix des .197-Start-Absturzes (livewached las den
+# abgeschafften Haken; referenzen_noetig + S10-Drift-Wache), kein Box-Eintrag.
+# Davor .197 = interner Prod-Schritt (Quick-verdict-Haken weg:
+# jeder enabled-Waechter erkennt Namen; live_speichern Felder-Fix: fehlende
+# Felder behalten Gespeichertes), kein Box-Eintrag.
+# Davor .196 = interner Prod-Schritt (Vereinfachungs-Schnitt:
+# Slot-Vergabe ohne Lastmodell — enabled = laeuft, Notbremsen nur harter
+# Deckel + RAM-Boden; Ueberlast regelt die Drossel; Quelltest misst echte
+# Lieferrate), kein Box-Eintrag.
+# Davor .195 = interner Prod-Schritt (Auftritts-Sicht der Live-
+# Alerts: Tagesansicht + Today-Karten zeigen je Auftritt ALLE Gesichts-Crops
+# + Rueckblick-Videos, analog der Pass-Ansicht; Slot-Riegel rechnet mit der
+# gemessenen Lieferrate statt Test-Durchsatz), kein Box-Eintrag.
+# Davor .194 = interner Prod-Schritt (Verarbeitungshoehe je Kachel
+# 360-2160, Default 1080; Beweisbild-Klick an Live-Karten), kein Box-Eintrag.
+# Davor .193 = interner Prod-Schritt (kontinuierliches Namens-Voting:
+# Stufe-2-Namens-Meldung nach NAME_STIMMEN konsistenten Treffern je Auftritt),
+# kein Box-Eintrag.
+# Davor .192 = interner Prod-Schritt (/live_alerts Tagesuebersicht
+# aller Trigger als Klickziel der Sidebar-Zeile), kein Box-Eintrag.
+# Davor .191 = interner Prod-Schritt (Recognized live zeigt NUR
+# erkannte Trigger — unknown erschlaegt die Reihe nicht mehr), kein Box-Eintrag.
+# Davor .190 = interner Prod-Schritt (Recognized-live-Kartenreihe
+# auf Today mit Beweisbild + Schnell-Urteils-Name), KEIN Box-Eintrag.
+# Davor .189 = interner Prod-Schritt (Recognition chain als vierter
+# Settings-Menuepunkt, eigenes Blatt /kette), KEIN Box-Eintrag.
+# Davor .188 = interner Prod-Schritt (Today zeigt Live-Alerts als
+# separate Liste mit Meldetext), KEIN Box-Eintrag.
+# Davor .187 = interner Prod-Schritt (Recognition-chain-Sektion in
+# Settings, ersetzt die zwei generischen Dropdowns), KEIN Box-Eintrag.
+# Davor .186 = interner Prod-Schritt (Zustands-Gruppen + Hide +
+# Stream-Steckbrief-Probe + Area-Schalter im Live-Reiter), KEIN Box-Eintrag.
+# Davor .185 = interner Prod-Schritt (Kachel-Vorschau + echte
+# Kopf-Aufloesung im Live-Reiter), KEIN Box-Eintrag ohne Abstimmung.
+# Davor .184 = interner Prod-Schritt (umask-022-Fix, Backup-
+# Klasse root:600), KEIN Box-Eintrag — Box bleibt auf dem .183-Stand.
+# BOX-DIKTAT fuers NAECHSTE Release (User 13.08. ~11:45, ERWEITERT ~14:15;
+# vor dem Release nochmal bestaetigen lassen). Kern und WICHTIGSTER Punkt:
+# der Appell um Rueckmeldung. Sinngemaess: Entwickeln macht Spass, aber es
+# kommt viel zu wenig Rueckmeldung — ohne sie weiss der Autor nicht, ob das
+# Gebaute wirklich Bedarf trifft und gewuenscht ist; die Downloads sieht er,
+# Rueckmeldung fehlt. Positiv WIE negativ erwuenscht. Speziell: zu rocm und
+# gpu-legacy kam bisher GAR NICHTS — dabei kann er diese Hardware nicht
+# selbst testen und weiss deshalb nicht einmal, ob es funktioniert (gerne
+# mit Log melden). Erreichbar auf ZWEI Wegen: suslik_dev@posteo.de und
+# GitHub. Dazu: Version 1.0 ist geplant, wenn das so funktioniert.
+# Davor: .183 = Live-Release (Respin von .182: Kameranamen-Leck
 # in Code-Kommentaren gefixt, Audit-Stufe 8b ergaenzt; Box-Text unveraendert).
 # Box-Inhalt vom User DIKTIERT und abgestimmt (12.08. ~22:50 im Chat):
 # (1) BETONTER Hinweis ungetestete Zwischenversion/ganzer Live-Part neu,
@@ -42,6 +90,36 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # .199 — User-DIKTAT (13.08. ~11:45, erweitert ~14:15, deutscher Entwurf
+    # abgestimmt "das passt" ~18:20): TOP = Feedback-Appell (rocm/gpu-legacy
+    # ungetestet, zwei Kontaktwege, 1.0-Plan), dann die fuenf Feature-Kerne
+    # des .184-.198-Buendels.
+    ("0.1.0.199", (
+        BETONT + "A personal note from the author: I can see the downloads, "
+        "but I get almost no feedback. Building this is fun — yet without "
+        "feedback I don't know whether it actually meets a need. Positive "
+        "and negative reports are equally welcome. Especially the rocm and "
+        "gpu-legacy variants: not a single report so far, and I cannot test "
+        "that hardware myself — I don't even know whether they work (a short "
+        "note with a log would be great). If this works out, version 1.0 is "
+        "the next step. You can reach me at suslik_dev@posteo.de or on "
+        "GitHub.",
+        "Recognized live, with a name: watchers now send a preliminary name "
+        "verdict seconds after the trigger, with a proof picture — several "
+        "people in the same pass are reported individually.",
+        "Appearance view: the live day view bundles each pass into one card "
+        "with all face pictures and recap videos; Today links straight to "
+        "it.",
+        "Per-camera processing resolution (360p-2160p, default 1080p) — "
+        "measurably faster name recognition than before.",
+        "Simpler and predictable: enabled means running — no load model "
+        "refuses a watcher anymore, overload is handled by the runtime "
+        "throttle; the source test now shows the camera's real delivery "
+        "rate.",
+        "A tidier Live tab: preview through the agent's eyes, real stream "
+        "resolution, grouping by state and area; recognition chain as its "
+        "own settings page.",
+    )),
     # .183 — User-DIKTAT (12.08. ~22:50, Text im Chat abgestimmt; HALT-Gate
     # dafuer abgegolten): betonter Zwischenversions-Hinweis + Live-Story.
     # (.182 wurde nie als Release beworben — Respin wegen Kameranamen-Leck,

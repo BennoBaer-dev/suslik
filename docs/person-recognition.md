@@ -11,9 +11,9 @@ Everything runs locally. Images are turned into a numerical fingerprint
 pictures decides which resident a fingerprint belongs to — with a decision
 threshold that strangers stay below.
 
-**Preview status:** the path works end to end. Since 0.1.0.118 the
+**Preview status:** the path works end to end. The
 decision threshold is measured on your own approved material after every
-training, and since 0.1.0.139 it can be measured against real strangers
+training, and it can be measured against real strangers
 (see below). Keep an eye on alerts and disarm any time. You can override
 the threshold and the fire rule under **Person → Model status**.
 
@@ -52,8 +52,7 @@ as current.
    scan. Start small (50). The run harvests full-body images from your
    recordings; an image is tied to a person only when a face-confirmed
    walk-through proves it. Identical frames are never stored twice (the
-   harvest has a duplicate guard; material harvested before 0.1.0.119 can
-   still contain such pairs). A run can legitimately finish with **zero
+   harvest has a duplicate guard). A run can legitimately finish with **zero
    images** — the wizard then explains why: either that person had no
    face-confirmed walk-throughs in the window (the card shows when the
    event record starts and whether they were seen *below* the
@@ -76,6 +75,9 @@ as current.
    Arming is only possible
    after at least one person has been learned *and* reviewed. Until then
    the path stays off and never sends anything.
+6. **Settings → Recognition chain** shows where the body path sits in the
+   chain face → person → vision, with a plain-language condition per step
+   (always / only when the face path could not confirm everyone / off).
 
 ## Alerts
 
@@ -95,7 +97,7 @@ walk-through, never on a single image.
 
 ## How it shows up on Today
 
-Since 0.1.0.118 the two paths cooperate on **Today** (and on the
+The two paths cooperate on **Today** (and on the
 Appearances day view): a pass with no usable face is **attributed** to the
 person the body path recognized — it needs at least as many supporting
 events as your fire rule requires, the person's card counts the pass, and
@@ -106,7 +108,9 @@ pass chip and the person card show the best body crop of that walk-through
 (the judged crops are kept under `personlern/treffer/` for 30 days).
 
 Every alert from this path is marked as coming from **person recognition,
-not face recognition**, so the two paths never get mixed up. Because both
-paths are independent, you may receive two notifications for the same
-walk-through — merging them into one smart alert is planned for a later
-version.
+not face recognition**, so the two paths never get mixed up. Because the
+paths are independent, one walk-through can produce more than one message:
+a live watcher may already have sent a presence trigger and a preliminary
+name while the event was still running, and the face and person paths
+report afterwards — merging them into one smart alert is planned for a
+later version.

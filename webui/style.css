@@ -644,6 +644,32 @@ a.pchip:hover, a.badge.warn:hover { filter: brightness(1.15); }
 .lvp-gruen { background: var(--ok-bg); color: var(--ok); }
 .lvp-rot   { background: var(--crit-bg); color: var(--crit); }
 .lv-zeile { margin: 3px 0; font-size: 13px; }
+.lv-vorschau { width: 100%; height: auto; display: block; border-radius: 6px;
+               margin: 6px 0 2px; border: 1px solid var(--border); }
+.lv-abschnitt { margin: 14px 0; }
+.lv-kopfzeile { font-weight: 600; margin: 0 0 6px; color: var(--dim);
+                text-transform: uppercase; font-size: 12px; letter-spacing: .04em; }
+.lv-abschnitt summary { cursor: pointer; font-weight: 600; color: var(--dim);
+                        text-transform: uppercase; font-size: 12px;
+                        letter-spacing: .04em; margin: 0 0 6px; }
+.lv-abschnitt details[open] summary, details.lv-abschnitt[open] summary { margin-bottom: 6px; }
+.lv-areazeile { margin: 8px 0 4px; font-size: 12px; }
+.lv-schalterzeile { margin: 6px 0; }
+.kt-kette { display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px;
+            margin: 10px 0 16px; }
+.kt-stufe { flex: 1 1 240px; max-width: 380px; }
+.kt-pfeil { align-self: center; font-size: 20px; }
+.kt-zeile { margin: 4px 0; font-size: 13px; }
+.lv-alarmreihe { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 14px; }
+.lv-alarmkarte { display: flex; align-items: center; gap: 8px; padding: 8px;
+                 font-size: 13px; }
+.lv-alarmbild { width: 110px; height: auto; border-radius: 6px;
+                border: 1px solid var(--border); }
+.lv-alarmmehr { align-self: center; }
+.lv-auftrittkarte { padding: 10px 12px; margin: 0 0 10px; font-size: 13px; }
+.lv-medienreihe { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.lv-thumb { height: 84px; width: auto; border-radius: 6px;
+            border: 1px solid var(--border); }
 .lv-knoepfe { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .lv-radio { display: block; margin: 3px 0; }
 .lv-erklaer { border-left: 4px solid var(--accent); }

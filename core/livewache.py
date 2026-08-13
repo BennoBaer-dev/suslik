@@ -54,6 +54,7 @@ import hashlib
 import json
 import os
 import queue
+import re
 import select
 import subprocess
 import sys
@@ -72,8 +73,13 @@ WURZEL = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # "defaults". Der Store-Block live.defaults darf sie ueberlagern (guards_lesen);
 # hier stehen sie als EINE Code-Quelle, nie verstreut. Herkunft je Wert im
 # Kommentar; ENV liest dieses Modul BEWUSST NICHT (Bauplan §3/§9).
-WACH_HOEHE = 720          # AR-treue Verkleinerung (GPU bei VAAPI, swscale sonst);
-#                           Breite folgt der Quelle (wach_skala)
+WACH_HOEHE = 1080         # AR-treue Verkleinerung (GPU bei VAAPI, swscale sonst);
+#                           Breite folgt der Quelle (wach_skala). 720 -> 1080
+#                           (.194, User-Entscheid "default immer auf 1080p",
+#                           messbasiert am 15:31-Gang: Name feuert bei 1080p
+#                           2,4 s frueher, det-Netz bleibt gleich gross —
+#                           Mehrkosten nur Decode/Scale, Last-Messung je
+#                           Kachel liefert die echte Zahl).
 DET_BASIS = 1280          # det-1280-Rezept (gemessen 10.08.: 320=blind, 1280=96 Funde)
 MIN_SCORE = 0.60          # echte Funde 0.79-0.88, Phantome ~0.50 (det 1280)
 POSE_KOPF = 0.70          # 54-Trigger-Eichung: Mensch 0.808-1.012, ohne max 0.594
@@ -104,6 +110,37 @@ WATCHDOG_S = 15.0         # Liefer-Watchdog: ~3x Normaltakt-Intervall (Bauplan �
 #                           Realbeleg 11.08. "lebt, liefert nichts")
 HERZSCHLAG_S = 2.0        # Status-Schreibtakt, ALLE Kacheln in EINEM Schreiber (§7 QS-Fund)
 VERBRAUCH_S = 60.0        # RSS-/Verbrauchszeile (Auflage aus dem Vorfall 10.08. 19:17)
+VORSCHAU_S = 2.0          # Kachel-Vorschau-JPEG-Takt (User-Wunsch 13.08.: ~1-5 s,
+#                           "sehen, was der Agent sieht" — Anzeige-Weg, nie Urteil)
+HOEHEN_ERLAUBT = (360, 720, 1080, 1440, 2160)   # je-Kachel-Verarbeitungshoehe
+#                           (.194, User 13.08.: 360-2160). Messbasis 15:31-
+#                           Gang: 1080p = Sweet Spot (Name 2,4 s frueher als
+#                           720p), 1440p flach, det-Netz bleibt ueber alle
+#                           Stufen gleich gross (Basis 1280) — Mehrkosten
+#                           stecken in Decode/Scale, die Last-Messung je
+#                           Kachel liefert die echte Zahl. 360p =
+#                           Schwach-GPU-Option.
+NAME_STIMMEN = 2          # kontinuierliches Namens-Voting (User 13.08.: "PersonA,
+#                           unbekannt, PersonA -> feuern"): so viele Funde ueber
+#                           win_thresh fuer DIESELBE Person, dann Namens-Meldung
+#                           (einmal je Auftritt+Person). Entspricht win_min der
+#                           Analyse — Zeitkonsistenz statt Einzelbild-Glueck.
+VORSCHAU_FRISCH_S = 60.0  # Auslieferungs-Frist des Dienst-Endpunkts /live_bild:
+#                           aeltere Vorschau = Waechter aus/gestoert -> 404 statt
+#                           eingefrorenes Bild als "live" servieren
+# Dateiname je Kachel = Kameraname: NUR mit diesem Muster wird ueberhaupt ein
+# Pfad gebaut (Frigate-Kameranamen sind Config-Schluessel, aber nie ungeprueft
+# in einen Pfad interpolieren — dieselbe Vorsicht wie beim Dienst-Endpunkt).
+VORSCHAU_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+# Vertrag Beweis-Medienpfad im Melde-Protokoll/-Endpunkt (.190, .195 um mp4
+# erweitert fuer die Rueckblick-Videos der Auftritts-Ansicht): data_dir-
+# relativ, exakt live/<kamera>/<datei>.(jpg|mp4) — Schreiber (_bild_rel,
+# schreibt nur jpg) UND Dienst-Endpunkt /live_alarmbild pruefen an DIESEM
+# einen Muster (kein Traversal, keine fremden Ordner). Beide Segmente
+# MUESSEN alnum beginnen (.195, T23-Fund): die alte Zeichenklasse liess
+# 'live/../x.jpg' durch — ein Punkt-Segment ist Traversal.
+ALARMBILD_RE = re.compile(
+    r"^live/[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*\.(jpg|mp4)$")
 # Gleitendes Liefer-fps-Fenster (KANN-Rest M-D Gegenrichtung, Widerleger 12.08.
 # gemessen: eine 3600 s verbundene Kachel mit nur 600 s Lieferung stand nach der
 # ERHOLUNG noch lange bei 2,5 statt 15 fps — der Schnitt "seit dem Verbinden"
@@ -182,20 +219,27 @@ HART_MAX_SLOTS = 5
 # (fps x det_ms, mit den Seeds 15 x 53 = 795 ms/s) wuerde das Budget allein
 # auffressen und liesse rechnerisch nur 1-2 Slots zu, obwohl real 5 Waechter
 # liefen (442 ms/s Normaltakt gesamt, fdinfo 7,3-h-Lauf, Bauplan §7). Die
-# BURST-Spitzen deckt nicht die Slot-Rechnung, sondern die Ueberlast-Drossel
-# zur Laufzeit (DROSSEL_*): sie nimmt dem Normaltakt Last weg, BEVOR die eine
-# Compute-Engine kippt. EHRLICH (Lens-B M6): die START-Vergabe rechnet mit
-# Seeds bzw. der je Kamera GEMESSENEN Test-fps (test.bilder_s); die eigene
-# EMA-Messung fliesst in die 60-s-NEUBEWERTUNG im Status ein (sichtbar, ob ein
-# verweigerter Slot inzwischen ginge) — ein automatischer NACHSTART verweigerter
-# Waechter ist ein Lebenszyklus-Eingriff und kommt mit der UI-Phase
-# (Entscheid im Bau-Bericht begruendet, Phase 3 misst vor dem 5-Kamera-Schritt).
-GPU_NORMAL_ANTEIL = 0.6
+# Ueberlast deckt die Drossel zur LAUFZEIT (DROSSEL_*): sie nimmt dem
+# Normaltakt Last weg, BEVOR die eine Compute-Engine kippt. Eine Slot-
+# VORHERSAGE aus diesen Werten gibt es seit .196 nicht mehr (Kommentar am
+# Vereinfachungs-Schnitt oben).
 DET_MS_SEED = 53.0        # SEED, GEMESSEN auf der Autor-Maschine (stand.md: det-1280
 #                           ~53 ms/Bild iGPU); wird im Betrieb durch die eigene
 #                           EMA-Messung ersetzt und ist im Status als Seed markiert
-FPS_SEED = 15.0           # SEED je Kachel bis der Steckbrief die echte fps liefert
-#                           (Prototyp-Messbasis 15 fps, live_wache.py-Kopf)
+# --- Vereinfachungs-Schnitt .196 (User 13.08.: "Entweder ist sie konsequent
+# an oder aus" / "zu komplex, ueberfrachtet"): Messwerte INFORMIEREN, sie
+# ENTSCHEIDEN nicht mehr, ob ein Waechter laufen darf. Das GPU-Budget-Urteil
+# der Slot-Vergabe (Vorhersage aus geschaetzten fps + det-Seed) ist raus —
+# es faellte je nach Zufalls-Zustand (Seed nach Neustart, Test-Durchsatz
+# 79,6 bei real 15,5 fps, Vergabe-Reihenfolge) verschiedene Urteile ueber
+# dieselbe Config. Ueberlast regelt die Drossel zur LAUFZEIT an der ECHTEN
+# Last. Als Notbremsen bleiben nur der harte Deckel (HART_MAX_SLOTS) und
+# der RAM-Boden (cgroup-Messwert, Thrashing-Vorfall 10.08.).
+LIEFER_BURST_S = 1.0      # RTSP liefert den gepufferten GOP als Anfangs-Burst —
+#                           Bilder dieses Fensters zaehlen NICHT zur Lieferrate
+#                           (gemessen 13.08.: Durchsatz 79,6 bei realen 15,5 fps)
+LIEFER_MESS_S = 5.0       # Mindest-Messfenster des Quelltests (wall-clock);
+#                           erst damit ist bilder_s eine LIEFERRATE
 RAM_REST_MIN_MB = 2048    # Restgrenze der RAM-Bilanz (Bauplan §2.3 Warnstufe):
 #                           der Analyse-Worker allein laeuft warm ~1,9 GB
 #                           (verifyd worker_rss_max_mb-Kommentar) — unter 2 GiB frei
@@ -990,10 +1034,20 @@ def producer_url(host, kamera, log=print):
     return None
 
 
+def proxy_url(cfg, kamera):
+    """Die EINE Proxy-URL-Formel (go2rtc-Restream) -> url|None. Verbraucher:
+    quelle_aufloesen UND der Stream-Steckbrief-Lauf des Dienstes (13.08.) —
+    K3: keine zweite Host-Zerlegung neben dieser."""
+    host = (cfg.get("frigate_url") or "").split("//")[-1].split(":")[0].split("/")[0]
+    if not host:
+        return None
+    return f"rtsp://{host}:8554/{kamera}"
+
+
 def quelle_aufloesen(cfg, kamera, guard, streng=False, log=print):
     """Guard-Config -> (url, weg, fehler). Wege: proxy | direct | url.
 
-    streng=True ist der TEST-Modus (Bauplan §5 Stufe 1): der User hat 'direct'
+    streng=True ist der TEST-MODUS (Bauplan §5 Stufe 1): der User hat 'direct'
     gewaehlt und soll erfahren, dass es nicht geht — KEIN stiller Proxy-
     Rueckfall. Im BETRIEB (streng=False) faellt 'direct' LAUT auf den Proxy
     zurueck (Reconnect-Verhalten des Prototyps: lieber Bilder als Stillstand,
@@ -1004,10 +1058,10 @@ def quelle_aufloesen(cfg, kamera, guard, streng=False, log=print):
         if not u:
             return None, q, "source 'url' selected but no stream URL configured"
         return u, q, None
-    host = (cfg.get("frigate_url") or "").split("//")[-1].split(":")[0].split("/")[0]
-    if not host:
+    proxy = proxy_url(cfg, kamera)
+    if not proxy:
         return None, q, "no Frigate URL configured"
-    proxy = f"rtsp://{host}:8554/{kamera}"
+    host = proxy.split("//")[-1].split(":")[0]
     if q == "proxy":
         return proxy, q, None
     if q == "direct":
@@ -1095,9 +1149,14 @@ def leser_mit_rueckfall(url, skala, log=print, probe_s=6.0):
 
 
 def quelle_fp(guard):
-    """Quell-Fingerprint (Bauplan §2.4/§5): Hash aus quelle+url. Aendert der
-    User ein Quellfeld, verfaellt der Test — Enable prueft serverseitig."""
+    """Quell-Fingerprint (Bauplan §2.4/§5): Hash aus quelle+url — und seit
+    .194 der EXPLIZIT gesetzten Verarbeitungshoehe (ein Hoehen-Wechsel
+    aendert Skala/Netz/Last, der alte Test gilt dann nicht mehr). Guards
+    OHNE eigenes hoehe-Feld behalten das alte Hash-Format — bestehende
+    gruene Tests verfallen beim Update NICHT."""
     roh = f"{guard.get('quelle') or 'proxy'}|{guard.get('url') or ''}"
+    if guard.get("hoehe"):
+        roh += f"|{guard['hoehe']}"
     return hashlib.sha256(roh.encode()).hexdigest()[:16]
 
 
@@ -1113,8 +1172,19 @@ def test_gueltig(guard):
     return True, ""
 
 
+def lieferrate(frames, n_nach, dauer):
+    """-> (rate, art) der Quelltest-Ratenmessung (.196). 'delivery' = Bilder
+    NACH dem Burst-Fenster je Sekunde (die echte Lieferrate der Quelle);
+    'throughput' = alles kam im Burst (Datei/kurzes Fenster) — dann ehrlich
+    der alte Durchsatz-Wert, gekennzeichnet statt als fps ausgegeben."""
+    if n_nach >= 3 and dauer > LIEFER_BURST_S + 0.5:
+        return round(n_nach / (dauer - LIEFER_BURST_S), 1), "delivery"
+    return round(frames / max(dauer, 0.001), 1), "throughput"
+
+
 def quelle_testen(cfg, kamera, guard, detektor, log=print, det_basis=None,
-                  hoehe=None, soll_frames=20, frist_s=15.0, kill_registrar=None):
+                  hoehe=None, soll_frames=20, frist_s=15.0, kill_registrar=None,
+                  mess_s=LIEFER_MESS_S):
     """Die Test-Strecke aus Bauplan §5 — vier Stufen, jede mit eigenem
     Fehlertext, nie Secrets in der Meldung. -> (ok, klartext, testblock|None).
 
@@ -1151,12 +1221,21 @@ def quelle_testen(cfg, kamera, guard, detektor, log=print, det_basis=None,
     frames = 0
     t0 = time.monotonic()
     frame_bgr = None
+    n_nach = 0        # Bilder NACH dem Burst-Fenster -> LIEFERRATE (.196):
+    #                   der alte Abbruch bei soll_frames mass den Decode-
+    #                   DURCHSATZ des gepufferten Anfangs-GOP (79,6 "fps" bei
+    #                   real 15,5) und liess den Slot-Riegel Fehlurteile
+    #                   faellen. Jetzt laeuft der Strom mindestens mess_s
+    #                   wall-clock, gezaehlt wird ab LIEFER_BURST_S.
     try:
         for yuv in bilder_yuv_frist(p, b, h, frist_s):
             frames += 1
             if frames == 1:
                 frame_bgr = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_I420)
-            if frames >= soll_frames:
+            vergangen = time.monotonic() - t0
+            if vergangen > LIEFER_BURST_S:
+                n_nach += 1
+            if frames >= soll_frames and vergangen >= mess_s:
                 break
     finally:
         try:
@@ -1168,7 +1247,7 @@ def quelle_testen(cfg, kamera, guard, detektor, log=print, det_basis=None,
     if frames < soll_frames:
         return False, (f"step 3/4 (stream): only {frames}/{soll_frames} frames "
                        f"in {dauer:.1f}s"), None
-    rate = round(frames / dauer, 1)
+    rate, rate_art = lieferrate(frames, n_nach, dauer)
     # 4) Detektor-Pass — ECHTER Provider aus der Session (K1-Lehre 09.08.:
     #    ohne die Kontrolle faellt onnxruntime lautlos auf CPU, Faktor ~150).
     try:
@@ -1178,7 +1257,7 @@ def quelle_testen(cfg, kamera, guard, detektor, log=print, det_basis=None,
         return False, f"step 4/4 (detector): {type(e).__name__}: {str(e)[:120]}", None
     block = {"ok": True, "ts": round(time.time(), 1), "quelle_fp": quelle_fp(guard),
              "aufloesung": f"{steck['breite']}x{steck['hoehe']}",
-             "skala": f"{b}x{h}", "bilder_s": rate,
+             "skala": f"{b}x{h}", "bilder_s": rate, "bilder_s_art": rate_art,
              "provider": prov, "hw": bool(hw)}
     warn = ""
     if prov.startswith("CPU"):
@@ -1420,12 +1499,11 @@ class Selbstvermessung:
      * grundkosten_mb: RSS nach Modell-Aufbau, vor dem ersten Stream."""
 
     def __init__(self, rss_holen=rss_mb, ram_holen=ram_frei_mb,
-                 hart_max=HART_MAX_SLOTS, gpu_budget_ms=GPU_BUDGET_MS_JE_S,
+                 hart_max=HART_MAX_SLOTS,
                  rest_min_mb=RAM_REST_MIN_MB):
         self.rss_holen = rss_holen
         self.ram_holen = ram_holen
         self.hart_max = int(hart_max)
-        self.gpu_budget_ms = float(gpu_budget_ms)
         self.rest_min_mb = float(rest_min_mb)
         self.det_ms = None
         self.grundkosten_mb = None
@@ -1469,41 +1547,20 @@ class Selbstvermessung:
             else 0.7 * self.je_stream_mb + 0.3 * delta
 
     # ---- Budget-Rechnung -------------------------------------------------
-    def gpu_ms_je_s(self, fps, rate):
-        det, _q = self.det_ms_wirksam()
-        f = fps or FPS_SEED
-        return (f / max(rate, 1)) * det
-
-    def slot_pruefen(self, aktive, neue):
+    def slot_pruefen(self, n_belegt):
         """Darf ein weiterer Slot vergeben werden? -> (ok, grund).
 
-        aktive: Liste von dicts {fps, rate} der laufenden Kacheln;
-        neue:   dict {fps, rate} des Kandidaten. Der Grund traegt IMMER die
-        Zahlen, auf denen die Entscheidung beruht — verweigern ohne Grund
-        waere die Fehlklasse 'falsche Darstellung'.
-
-        GPU-Regel: der NORMALTAKT aller Slots darf hoechstens
-        GPU_NORMAL_ANTEIL des Budgets belegen — der Rest ist Burst-/Pose-
-        Reserve, und Burst-SPITZEN deckt die Ueberlast-Drossel zur Laufzeit,
-        nicht diese Rechnung (Begruendung am GPU_NORMAL_ANTEIL-Literal)."""
-        n = len(aktive)
-        if n >= self.hart_max:
-            # "allocated", nicht "active" (M-A-Kosmetik, Widerleger 12.08.):
-            # im greedy Re-Check zaehlen bewilligte Kandidaten mit — die Zahl
-            # ist Aktive + Zusagen, keine reine Aktiv-Zahl.
+        .196 (User: 'Messwerte sollen NICHT entscheiden, ob ein Waechter
+        laufen kann'): KEIN GPU-Budget-Urteil mehr — die alte Vorhersage
+        (geschaetzte fps x det-Seed gegen 60 % von 900 ms/s) faellte je
+        nach Zufalls-Zustand verschiedene Urteile ueber dieselbe Config.
+        Ueberlast faengt die Drossel zur LAUFZEIT an der echten Last.
+        Es bleiben zwei NOTBREMSEN, beide ohne Schaetzwerte: der harte
+        Deckel und der RAM-Boden (nur cgroup-MESSWERT, nie die Wirt-Sicht).
+        Der Grund traegt immer die Zahlen der Entscheidung."""
+        if n_belegt >= self.hart_max:
             return False, (f"hard cap: {self.hart_max} watchers maximum "
-                           f"({n} already allocated)")
-        alle = list(aktive) + [neue]
-        normal = sum(self.gpu_ms_je_s(k.get("fps"), k.get("rate") or PRUEF_RATE)
-                     for k in alle)
-        deckel = GPU_NORMAL_ANTEIL * self.gpu_budget_ms
-        det, det_q = self.det_ms_wirksam()
-        if normal > deckel:
-            return False, (f"GPU budget: normal-rate load {normal:.0f} ms/s > "
-                           f"{deckel:.0f} ms/s ({GPU_NORMAL_ANTEIL:.0%} of "
-                           f"{self.gpu_budget_ms:.0f} ms/s — the rest is burst/pose "
-                           f"headroom, burst peaks are handled by the overload "
-                           f"throttle; detector {det:.0f} ms/frame, {det_q})")
+                           f"({n_belegt} already allocated)")
         frei, quelle = self.ram_holen()
         # Lens-B M7: /proc/meminfo zeigt im LXC den WIRT (CLAUDE.md-Maschinen-
         # regel; Thrashing-Vorfall 10.08.) — diese Quelle darf ANZEIGEN, aber
@@ -1527,8 +1584,7 @@ class Selbstvermessung:
                         "host view only)")
         else:
             ram_text = ", RAM not enforced (no memory source readable)"
-        return True, (f"ok: normal-rate load {normal:.0f} of {deckel:.0f} ms/s "
-                      f"(GPU budget {self.gpu_budget_ms:.0f} ms/s)" + ram_text)
+        return True, (f"ok: slot {n_belegt + 1} of {self.hart_max}" + ram_text)
 
     def status(self):
         det, det_q = self.det_ms_wirksam()
@@ -1756,6 +1812,127 @@ def melde_protokoll_vorhanden(cfg):
                for s in ("", ".1"))
 
 
+def melde_liste(cfg, von, bis, kameras=None, max_gruppen=12):
+    """Die Live-ALERTS eines Fensters ALS LISTE (.188, User 13.08.: Today
+    soll separat zeigen, WAS live erkannt wurde — der Zaehler sagt nur wie
+    viel). Ein Trigger meldet auf MEHREREN Kanaelen fast zeitgleich —
+    Zeilen derselben Kamera binnen 2 s werden zu EINER Zeile gebuendelt
+    (kanaele-Menge, erster zusatz gewinnt). -> (gruppen_neueste_zuerst
+    gekappt auf max_gruppen, gesamtzahl_gruppen). Kaputte Zeilen fallen
+    still raus (Anzeige-Pfad, wie melde_zaehler)."""
+    live_dir = os.path.join(cfg.get("data_dir") or os.path.join(WURZEL, "verify_data"),
+                            "live")
+    zeilen = []
+    for endung in (".1", ""):
+        try:
+            f = open(os.path.join(live_dir, MELDE_PROTOKOLL + endung))
+        except OSError:
+            continue
+        with f:
+            for zeile in f:
+                try:
+                    d = json.loads(zeile)
+                    ts = float(d["ts"])
+                    if str(d["art"]) != "alert" or not von <= ts < bis:
+                        continue
+                    kamera = str(d.get("kamera") or "")
+                    if kameras is not None and kamera not in kameras:
+                        continue
+                    zeilen.append((ts, kamera, str(d["kanal"]),
+                                   str(d.get("zusatz") or ""),
+                                   str(d.get("person") or ""),
+                                   str(d.get("bild") or "")))
+                except Exception:
+                    continue
+    zeilen.sort()
+    gruppen = []
+    for ts, kamera, kanal, zusatz, person, bild in zeilen:
+        g = gruppen[-1] if gruppen else None
+        if g and g["kamera"] == kamera and ts - g["ts_letzte"] <= 2.0:
+            g["ts_letzte"] = ts
+            if kanal not in g["kanaele"]:
+                g["kanaele"].append(kanal)
+            if zusatz and not g["zusatz"]:
+                g["zusatz"] = zusatz
+            if person and not g["person"]:
+                g["person"] = person
+            if bild and not g["bild"]:
+                g["bild"] = bild
+        else:
+            gruppen.append({"ts": ts, "ts_letzte": ts, "kamera": kamera,
+                            "kanaele": [kanal], "zusatz": zusatz,
+                            "person": person, "bild": bild})
+    gruppen.reverse()
+    return gruppen[:max_gruppen], len(gruppen)
+
+
+def auftritts_gruppen(gruppen, luecke=30.0):
+    """Trigger-Gruppen (melde_liste, neueste zuerst) derselben Kamera binnen
+    `luecke` Sekunden zu EINEM Auftritt buendeln (.195, User: die Live-Sicht
+    soll den Auftritt zeigen wie die Pass-Ansicht, nicht Einzel-Trigger).
+    Felder je Auftritt: ts/ts_letzte (Gesamtspanne), kamera, kanaele
+    (Vereinigung), person/zusatz/bild (erster nicht-leerer gewinnt),
+    trigger (Anzahl gebuendelter Gruppen). Reihenfolge bleibt neueste
+    zuerst."""
+    aus = []
+    je_kamera = {}      # kamera -> juengste Auftritts-Karte: verschachtelte
+    for g in sorted(gruppen, key=lambda g: g["ts"]):    # Kameras (K1-K2-K1,
+        # der Normalfall eines Durchgangs) duerfen die Buendelung je Kamera
+        # nicht zerreissen — nur der Zeitabstand JE KAMERA trennt (T23).
+        a = je_kamera.get(g["kamera"])
+        if a and g["ts"] - a["ts_letzte"] <= luecke:
+            a["ts_letzte"] = max(a["ts_letzte"], g["ts_letzte"])
+            a["trigger"] += 1
+            for k in g["kanaele"]:
+                if k not in a["kanaele"]:
+                    a["kanaele"].append(k)
+            for feld in ("person", "zusatz", "bild"):
+                if g.get(feld) and not a.get(feld):
+                    a[feld] = g[feld]
+        else:
+            neu = {"ts": g["ts"], "ts_letzte": g["ts_letzte"],
+                   "kamera": g["kamera"], "kanaele": list(g["kanaele"]),
+                   "person": g.get("person") or "",
+                   "zusatz": g.get("zusatz") or "",
+                   "bild": g.get("bild") or "", "trigger": 1}
+            aus.append(neu)
+            je_kamera[g["kamera"]] = neu
+    aus.reverse()
+    return aus
+
+
+def auftritt_medien(cfg, kamera, von, bis, rand=6.0):
+    """Alle gespeicherten Beweis-Medien eines Auftritts von der Platte
+    (.195): Ketten-Crops, Namens-Bilder UND die Rueckblick-Videos aus
+    <data_dir>/live/<kamera>/. Zuordnung ueber den Dateinamens-Stempel
+    (Wanduhr des Ausloesers) im Fenster [von-rand, bis+rand] — bewusst von
+    der Platte statt aus dem Protokoll, weil Karenz-Trigger Bilder
+    schreiben, aber KEINE Meldezeile haben. verworfen_-Dateien (Pose-Sieb)
+    bleiben draussen. -> (bilder_rel, videos_rel), chronologisch, jeder
+    Pfad genuegt ALARMBILD_RE (Vertrag des /live_alarmbild-Endpunkts)."""
+    ordner = os.path.join(cfg.get("data_dir") or os.path.join(WURZEL, "verify_data"),
+                          "live", kamera)
+    bilder, videos = [], []
+    try:
+        dateien = sorted(os.listdir(ordner))
+    except OSError:
+        return bilder, videos
+    for d in dateien:
+        if d.startswith("verworfen"):
+            continue
+        try:
+            t = time.mktime(time.strptime(d[:15], "%Y%m%d_%H%M%S"))
+        except ValueError:
+            continue
+        if not (von - rand <= t <= bis + rand):
+            continue
+        rel = f"live/{kamera}/{d}"
+        if not ALARMBILD_RE.match(rel):
+            continue
+        (videos if d.endswith(".mp4") else bilder).append(rel)
+    return bilder, videos
+
+
 def melde_zaehler(cfg, von, bis, kameras=None):
     """{(art, kanal): n} der REAL rausgegangenen Live-Meldungen mit
     von <= ts < bis. art: 'alert' (Personen-Meldung) | 'stoerung'
@@ -1817,19 +1994,16 @@ def status_fuer_ui(status, frisch):
     """UI-B2 (Frische-Tor, gemessen: toter Engine-Prozess -> Countdown und
     Zaehler froren als Dauer-Luege ein): ALLE anzeigbaren Status-Inhalte
     laufen durch DIESES eine Tor — ohne frischen Herzschlag gibt es keinen
-    Auftrag, keine Auftrags-Ergebnisse, keine Kachel-Zaehler und keine
-    Slot-Neubewertungs-Texte zu zeigen (die Zustands-Ableitung ui_zustand
-    hat ihr eigenes frisch-Urteil). Die Neubewertung gehoert seit dem
-    RECHECK 12.08. hierher (UI-MUSS-1, gemessen: 'would be granted now
-    (re-check ...)' stand aus einem 600 s alten Status auf der Kachel und
-    behauptete eine Rechnung im Praesens, die niemand mehr rechnete).
-    -> (auftrag|None, auftraege{}, kacheln{}, neubewertung{})."""
+    Auftrag, keine Auftrags-Ergebnisse und keine Kachel-Zaehler zu zeigen
+    (die Zustands-Ableitung ui_zustand hat ihr eigenes frisch-Urteil).
+    Die Slot-Neubewertungs-Texte sind seit .196 weg — mit ihnen die ganze
+    Budget-Vorhersage (User: Messwerte entscheiden nicht).
+    -> (auftrag|None, auftraege{}, kacheln{})."""
     if not frisch:
-        return None, {}, {}, {}
+        return None, {}, {}
     st = status or {}
     return (st.get("auftrag"), st.get("auftraege") or {},
-            st.get("kacheln") or {},
-            (st.get("slots") or {}).get("neubewertung") or {})
+            st.get("kacheln") or {})
 
 
 def quelle_vollstaendig(guard):
@@ -1954,6 +2128,75 @@ def _audit_zeile(cfg, eintrag):
         f.flush()
 
 
+STECKBRIEF_CACHE = "stream_steckbriefe.json"    # <data_dir>/state/… (Dienst-Probelauf)
+
+
+def _steckbrief_cache_pfad(cfg):
+    return os.path.join(cfg.get("data_dir") or os.path.join(WURZEL, "verify_data"),
+                        "state", STECKBRIEF_CACHE)
+
+
+def steckbriefe_lesen(cfg):
+    """Gecachte Stream-Steckbriefe des Dienst-Probelaufs -> {kamera: {...}}.
+    Fail-safe leer (kaputte/fehlende Datei toetet nie die Seite)."""
+    try:
+        with open(_steckbrief_cache_pfad(cfg)) as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def steckbrief_schreiben(cfg, kamera, brief):
+    """EINEN Steckbrief in den Cache mergen — tmp+os.replace, Flush je Kamera
+    (Absturz-Regel lange Laeufe: jeder fertige Posten ist sofort sicher)."""
+    pfad = _steckbrief_cache_pfad(cfg)
+    os.makedirs(os.path.dirname(pfad), exist_ok=True)
+    d = steckbriefe_lesen(cfg)
+    d[str(kamera)] = brief
+    tmp = pfad + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(d, f, ensure_ascii=False)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, pfad)
+
+
+def versteckt_lesen(cfg):
+    """Versteck-Liste des Live-Reiters (User 13.08.: Kacheln ausblendbar,
+    Ausgeblendete unten eingeklappt) -> [kamera, ...]. Fail-safe leer."""
+    v = (cfg.get("live") or {}).get("versteckt")
+    if not isinstance(v, list):
+        return []
+    return [x for x in v if isinstance(x, str) and x.strip()]
+
+
+def live_verstecken(cfg, kamera, versteckt, *, store_pfad, store_laden,
+                    store_schreiben, log):
+    """Hide/Show EINER Kachel -> (ok, msg). Reine Anzeige-Praeferenz, kein
+    Riegel (der Waechter-Betrieb haengt nicht daran; ein LAUFENDER Waechter
+    bleibt in der Running-Gruppe sichtbar, egal was hier steht — Regel im
+    Renderer routes/live.gruppen). Store-Muster wie live_schalter."""
+    kamera = str(kamera or "").strip()
+    if not kamera:
+        return False, "camera name missing"
+    store = store_laden(cfg)
+    blk = store.setdefault("live", {})
+    liste = blk.get("versteckt")
+    liste = ([x for x in liste if isinstance(x, str)]
+             if isinstance(liste, list) else [])
+    if versteckt and kamera not in liste:
+        liste.append(kamera)
+    if not versteckt:
+        liste = [x for x in liste if x != kamera]
+    blk["versteckt"] = liste
+    store_schreiben(store_pfad(cfg), store)
+    cfg["live"] = store["live"]                  # Prozess-Sicht sofort aktuell
+    _audit_zeile(cfg, {"live_versteckt": {kamera: bool(versteckt)}})
+    log(f"LIVE tile {kamera} {'hidden' if versteckt else 'shown'} via UI")
+    return True, ("hidden" if versteckt else "shown")
+
+
 def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
                    log):
     """Detailseite 'Save' -> Guard-Block in den Config-Store. Muster
@@ -1973,13 +2216,22 @@ def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
     kamera = str(kamera or "").strip()
     if not kamera:
         return False, "camera name missing"
-    q = str(d.get("quelle") or "proxy")
-    if q not in QUELLEN_ERLAUBT:
-        return False, f"'source': allowed {', '.join(QUELLEN_ERLAUBT)}"
-    url = str(d.get("url") or "").strip()
     store = store_laden(cfg)
     blk = store.setdefault("live", {}).setdefault("guards", {})
     alt = dict(blk.get(kamera) or {})
+
+    def _wert(feld, standard):
+        # .197 Felder-Fix (Vorfall 13.08.: ein API-Save OHNE ein Feld kippte
+        # den Schnell-Urteil-Schalter still auf Default — Namens-Stufe war
+        # unbemerkt aus): ein FEHLENDES Feld heisst BEHALTEN, nur ein
+        # mitgesandtes Feld aendert. Dieselbe Halte-Logik, die die URL-
+        # Maskierung (C4) fuer url schon immer hatte.
+        return d[feld] if feld in d else alt.get(feld, standard)
+
+    q = str(_wert("quelle", "proxy") or "proxy")
+    if q not in QUELLEN_ERLAUBT:
+        return False, f"'source': allowed {', '.join(QUELLEN_ERLAUBT)}"
+    url = str(_wert("url", "") or "").strip()
     # C4 (User-Auflage, Muster Notifications-Secrets): das Formular ist mit
     # der MASKIERTEN URL vorbelegt (Credentials nie im HTML). Kommt die
     # Maskierung unveraendert zurueck, will der User die gespeicherte URL
@@ -1993,8 +2245,8 @@ def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
     if url and "://" not in url:
         return False, "stream URL must be a full URL (e.g. rtsp://...)"
     try:
-        ende_s = int(d.get("ende_ohne_gesicht_s", ENDE_OHNE_GESICHT_S))
-        scharf_s = int(d.get("wieder_scharf_s", WIEDER_SCHARF_S))
+        ende_s = int(_wert("ende_ohne_gesicht_s", ENDE_OHNE_GESICHT_S))
+        scharf_s = int(_wert("wieder_scharf_s", WIEDER_SCHARF_S))
     except (TypeError, ValueError):
         return False, "the two times must be whole seconds"
     if not (ENDE_OHNE_GESICHT_MIN <= ende_s <= ENDE_OHNE_GESICHT_MAX):
@@ -2004,22 +2256,32 @@ def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
         return False, (f"'re-armed after': allowed "
                        f"{WIEDER_SCHARF_MIN}-{WIEDER_SCHARF_MAX} s "
                        f"(0 = every trigger alerts)")
-    kanaele = list(d.get("kanaele") or [])
+    kanaele = list(_wert("kanaele", []) or [])
     for kk in kanaele:
         if kk not in KANAELE_ERLAUBT:
             return False, (f"unknown channel {kk!r} "
                            f"(allowed: {', '.join(KANAELE_ERLAUBT)})")
-    schnell = bool(d.get("schnell_urteil"))
+    hoehe = _wert("hoehe", None)
+    if hoehe not in (None, ""):
+        try:
+            hoehe = int(hoehe)
+        except (TypeError, ValueError):
+            hoehe = -1
+        if hoehe not in HOEHEN_ERLAUBT:
+            return False, (f"'resolution': allowed "
+                           f"{', '.join(str(h) for h in HOEHEN_ERLAUBT)}")
+    else:
+        hoehe = None
     neu = dict(alt, quelle=q, url=url, ende_ohne_gesicht_s=ende_s,
-               wieder_scharf_s=scharf_s, kanaele=kanaele,
-               schnell_urteil=schnell)
+               wieder_scharf_s=scharf_s, kanaele=kanaele, hoehe=hoehe)
+    neu.pop("schnell_urteil", None)   # .197: Haken abgeschafft (Voting immer)
     blk[kamera] = neu
     store_schreiben(store_pfad(cfg), store)
     cfg["live"] = store["live"]                  # Prozess-Sicht sofort aktuell
     _audit_zeile(cfg, {"live": {kamera: {
         "quelle": q, "url": quelle_maskiert(url) if url else "",
         "ende_ohne_gesicht_s": ende_s, "wieder_scharf_s": scharf_s,
-        "kanaele": kanaele, "schnell_urteil": schnell}}})
+        "kanaele": kanaele, "hoehe": hoehe}}})
     log(f"LIVE guard {kamera} changed via UI (URL masked)")
     hinweis = ""
     alt_fp = (alt.get("test") or {}).get("quelle_fp")
@@ -2216,9 +2478,32 @@ KANAELE_ERLAUBT = ("pushover", "telegram", "mqtt")
 # laut. Der Harnisch haelt den Vertrag: jedes Feld muss die Normalisierung
 # ueberleben (tools/harnisch_live1.py, Render-/Vertrags-Block).
 GUARD_USER_FELDER = ("enabled", "quelle", "url", "ende_ohne_gesicht_s",
-                     "wieder_scharf_s", "kanaele", "schnell_urteil")
+                     "wieder_scharf_s", "kanaele", "hoehe")
+# .197: "schnell_urteil" ist KEIN Guard-Feld mehr — die Namens-Stufe laeuft
+# fuer jeden eingeschalteten Waechter (User: "Enable heisst alles laeuft";
+# der Haken stammte aus der Zeit, als das Urteil extra Rechenzeit kostete).
+# Alte Stores mit dem Feld sind gueltig: guards_lesen ignoriert es still,
+# der naechste Save raeumt es weg.
 GUARD_QUITTUNG_FELDER = ("test", "test_fehler", "messung")
 GUARD_FELDER = GUARD_USER_FELDER + GUARD_QUITTUNG_FELDER
+
+
+def _hoehe_lesen(wert, log, name):
+    """Je-Kachel-Verarbeitungshoehe (.194): nur HOEHEN_ERLAUBT; None =
+    NICHT gesetzt (dann gilt die Default-Kette live.defaults.hoehe ->
+    WACH_HOEHE beim Verbraucher). Ungueltiges faellt LAUT auf None — nie
+    klemmen (eine krumme Hoehe waere ein stilles anderes Rechenverhalten,
+    keine Naeherung)."""
+    if wert in (None, ""):
+        return None
+    try:
+        h = int(wert)
+    except (TypeError, ValueError):
+        h = None
+    if h in HOEHEN_ERLAUBT:
+        return h
+    log(f"live.guards.{name}.hoehe: {wert!r} unbekannt — Default gilt")
+    return None
 
 
 def guards_lesen(cfg, log=print):
@@ -2293,8 +2578,7 @@ def guards_lesen(cfg, log=print):
                                         WIEDER_SCHARF_MIN, WIEDER_SCHARF_MAX,
                                         log, name, "wieder_scharf_s"),
             "kanaele": kanaele,
-            "schnell_urteil": _bool_lesen(g.get("schnell_urteil", True), True, log,
-                                          f"live.guards.{name}.schnell_urteil"),
+            "hoehe": _hoehe_lesen(g.get("hoehe"), log, name),
         }
         # Quittungs-Bloecke (GUARD_QUITTUNG_FELDER) unveraendert durchreichen —
         # UI-B1: `messung` fehlte hier und die Last-Messung war unsichtbar.
@@ -2369,6 +2653,7 @@ class Kachel:
         self.letzter_trigger_wand = None
         self.verbunden_mono = None
         self.verbunden_bilder = 0                # k.bilder-Stand beim Verbinden (M-D)
+        self.vorschau_mono = 0.0                 # letzter Vorschau-JPEG-Schrieb (Drossel)
         self.fps_fenster = collections.deque()   # (mono, bilder)-Stuetzpunkte des
         #                                          Status-Takts — gleitende Liefer-fps
         #                                          (aktiv_fps, Spanne FPS_FENSTER_S)
@@ -2539,7 +2824,6 @@ class Engine:
         self._gestoppt = False        # stop()-Idempotenz UNABHAENGIG von stop_ev
         #                               (der Todespfad setzt stop_ev selbst — stop()
         #                               muss danach trotzdem joinen + final schreiben)
-        self._neubewertung = {}       # 60-s-Slot-Neubewertung (M6-Sichtbarkeit)
         self._melde_lock = threading.Lock()
         self._melde_threads = []      # Melde-/Stoerungs-Threads (M5: stop() joint sie)
         self._mess_start_mono = None  # offenes Ein-Stream-RSS-Messfenster
@@ -2591,15 +2875,10 @@ class Engine:
                 self._store_mtime = os.path.getmtime(self.store_pfad)
             except OSError:
                 pass
-        aktive_annahmen = []
         for name, guard in self.guards.items():
             if not guard["enabled"]:
                 continue
-            annahme = self._kachel_aufnehmen(name, guard,
-                                             aktive_annahmen=aktive_annahmen,
-                                             start_sofort=False)
-            if annahme:
-                aktive_annahmen.append(annahme)
+            self._kachel_aufnehmen(name, guard, start_sofort=False)
         # Ein-Stream-RSS-Messung NUR beim Start mit genau EINER Kachel oeffnen
         # (Lens-A M9: VOR dem Stream, und nie mit Nachbar-Streams im Fenster).
         if len(self.kacheln) == 1:
@@ -2745,29 +3024,21 @@ class Engine:
                          f"(camera renamed/removed? guard kept, Bauplan §3)")
 
     # ------------------------------------------------- Kachel-Lebenszyklus (Reload)
-    def _kachel_aufnehmen(self, name, guard, aktive_annahmen=None,
-                          start_sofort=True):
-        """Riegel + Slot-Pruefung fuer EINEN Waechter; bei Erfolg Kachel +
+    def _kachel_aufnehmen(self, name, guard, start_sofort=True):
+        """Riegel + Notbremsen fuer EINEN Waechter; bei Erfolg Kachel +
         Leser-Thread. EIN Weg fuer Boot (start(), start_sofort=False — die
         Threads starten dort gesammelt) und Store-Reload (start_sofort=True).
-        -> Annahme-dict {fps, rate} fuer die greedy Boot-Rechnung oder None.
+        -> True bei Start, None sonst.
 
-        Enable-Riegel SERVERSEITIG (§2.4): nicht nur UI-Grau. fps-Quelle
-        (Lens-A M10): die GEMESSENE Lieferrate aus dem §5-Quelltest
-        (test.bilder_s) statt blind FPS_SEED — der Test ist Enable-Pflicht,
-        der Wert existiert also fuer jede startbare Kachel."""
+        Enable-Riegel SERVERSEITIG (§2.4): nicht nur UI-Grau. Seit .196
+        entscheidet KEIN Lastmodell mehr (User: enabled = laeuft) — nur
+        harter Deckel + RAM-Boden (slot_pruefen)."""
         ok, grund = test_gueltig(guard)
         if not ok:
             self.verweigert[name] = f"enable refused: {grund}"
             self.log(f"live {name}: {self.verweigert[name]}")
             return None
-        fps_test = (guard.get("test") or {}).get("bilder_s") or None
-        neue = {"fps": fps_test, "rate": self.defaults["rate"]}
-        mono = self.jetzt()
-        basis = aktive_annahmen if aktive_annahmen is not None else [
-            {"fps": aktiv_fps(k, mono), "rate": self.defaults["rate"]}
-            for k in self.kacheln.values()]
-        ok, grund = self.vermessung.slot_pruefen(basis, neue)
+        ok, grund = self.vermessung.slot_pruefen(len(self.kacheln))
         if not ok:
             self.verweigert[name] = f"slot refused: {grund}"
             self.log(f"live {name}: {self.verweigert[name]}")
@@ -2782,7 +3053,7 @@ class Engine:
         self.threads.append(t)
         if start_sofort:
             t.start()
-        return neue
+        return True
 
     def _kachel_stoppen(self, name, grund):
         """EINEN Waechter beenden (Reload-Weg, §8 'nur der betroffene startet
@@ -2839,12 +3110,10 @@ class Engine:
         Kachel OHNE Neustart. Defaults-Aenderungen brauchen weiterhin einen
         Engine-Neustart (laut geloggt, nie still).
 
-        NACHSTART-Hinweis (C1, User 12.08. mittags): der HARTE Aktivier-
-        Riegel in live_schalter verhindert 'enabled aber wartend' im
-        Normalweg — der Slot-Neuversuch beim Store-Schreib (unten, k is None)
-        bleibt NUR als Randfall-Absicherung, wenn ein Engine-Neustart weniger
-        Kapazitaet misst, als der Store an enabled traegt. Ein TIMER-
-        Nachstart bleibt bewusst aus."""
+        NACHSTART-Hinweis (C1; .196 vereinfacht): der Slot-Neuversuch beim
+        Store-Schreib (unten, k is None) deckt den Randfall, dass eine
+        Notbremse (RAM-Boden/Deckel) beim letzten Versuch griff — ein
+        Lastmodell entscheidet seit .196 nicht mehr."""
         if not (self.config_quelle and self.store_pfad):
             return
         try:
@@ -2926,8 +3195,7 @@ class Engine:
                 self._kachel_stoppen(name, "source changed — restarting")
                 self._kachel_aufnehmen(name, g)
                 continue
-            leichte = ("ende_ohne_gesicht_s", "wieder_scharf_s", "kanaele",
-                       "schnell_urteil")
+            leichte = ("ende_ohne_gesicht_s", "wieder_scharf_s", "kanaele")
             if any(k.cfg.get(f) != g.get(f) for f in leichte):
                 self._klog(k, "Konfig uebernommen ohne Neustart "
                               "(Zeiten/Kanaele/Schnell-Urteil)")
@@ -2942,7 +3210,8 @@ class Engine:
         if fehler:
             raise RuntimeError(fehler)
         steck = steckbrief_ermitteln(url, log=self.log)
-        skala = wach_skala(steck["breite"], steck["hoehe"], self.defaults["hoehe"])
+        skala = wach_skala(steck["breite"], steck["hoehe"],
+                           k.cfg.get("hoehe") or self.defaults["hoehe"])
         p, b, h, hw = leser_mit_rueckfall(url, skala, log=self.log)
 
         def kill():
@@ -3248,7 +3517,8 @@ class Engine:
                 a["kill"] = toeten
         ok, text, block = self.quelltest_fn(
             self.cfg, kamera, guard, det, log=self.log,
-            det_basis=self.defaults["det_basis"], hoehe=self.defaults["hoehe"],
+            det_basis=self.defaults["det_basis"],
+            hoehe=guard.get("hoehe") or self.defaults["hoehe"],
             kill_registrar=reg)
         return {"ok": ok, "text": text, "block": block}
 
@@ -3281,8 +3551,7 @@ class Engine:
         rss_vor = rss_mb()
         # Phase 1: Verbinden (Quelle aufloesen + eigener Leser; Frame-Quelle
         # ist die injizierte Fabrik — der Harnisch misst damit ohne Stream).
-        tempk = Kachel(kamera, dict(guard, kanaele=[], schnell_urteil=False),
-                       self.defaults)
+        tempk = Kachel(kamera, dict(guard, kanaele=[]), self.defaults)
         frames, kill, steck = self.frames_fabrik(tempk)
         if a is not None:
             a["kill"] = kill              # Not-Aus kann die Verbindung beenden
@@ -3483,6 +3752,7 @@ class Engine:
             k.geprueft += 1                      # Lens-A M2: WIRKLICH detektiert
             try:
                 self._befund(k, frame, faces or [], mono, burst, yuv=yuv)
+                self._vorschau_schreiben(k, frame, mono)
             except Exception as e:
                 # B4: IO-/Verarbeitungs-Fehler sind KACHEL-Stoerungen — nie
                 # Engine-Ende, nie Modell-Neubau, nie still.
@@ -3542,6 +3812,90 @@ class Engine:
                                  if info["neben"] else " — ab jetzt jedes Bild"))
             elif ereignis == "trigger":
                 self._trigger(k, info, mono)
+        # Stufe 2 (.193, User 13.08.): kontinuierliches Namens-Voting ueber
+        # den GANZEN Auftritt — nicht nur die 4 Trigger-Ketten-Bilder.
+        if self.refs and self.win_thresh is not None:
+            self._namens_stimmen(k, frame, je_box)
+
+    def _namens_stimmen(self, k, frame, je_box):
+        """KONTINUIERLICHES Namens-Voting je Auftritt (.193, User: 'PersonA,
+        unbekannt, PersonA, PersonA -> feuern'): jedes echte Gesicht traegt sein
+        FERTIGES Embedding (der Detektionslauf rechnet Recognition mit, kein
+        zweiter Modelllauf) — hier faellt nur der NN-Vergleich an
+        (Mikrosekunden). Ab NAME_STIMMEN Funden >= win_thresh fuer DIESELBE
+        Person feuert die Namens-Meldung, EINMAL je Auftritt und Person.
+        Der Anwesenheits-Trigger (Stufe 1) bleibt unberuehrt — er meldet
+        weiterhin sofort JEDEN Menschen, auch Fremde."""
+        import anlernen
+        treffer = []
+        for g in je_box.values():
+            try:
+                v = np.asarray(g.normed_embedding, np.float32)
+            except Exception:
+                continue
+            if v.size != 512 or not np.all(np.isfinite(v)):
+                continue
+            p, s = anlernen.nn(self.refs, v)
+            if p is not None and s >= self.win_thresh:
+                treffer.append((p, float(s)))
+        if not treffer:
+            return
+        feuern = []
+        with k.lock:
+            a = k.auftritt
+            if a is None:
+                return
+            st = a.setdefault("stimmen", {})
+            genannt = a.setdefault("genannt", set())
+            for p, s in treffer:
+                zaehler = st.setdefault(p, [0, 0.0])
+                zaehler[0] += 1
+                zaehler[1] = max(zaehler[1], s)
+                if zaehler[0] >= NAME_STIMMEN and p not in genannt:
+                    genannt.add(p)
+                    feuern.append((p, zaehler[0], zaehler[1]))
+        for p, n, cos in feuern:
+            self._namens_meldung(k, p, n, cos, frame)
+
+    def _namens_meldung(self, k, person, stimmen, cos, frame):
+        """Die Namens-Meldung der zweiten Stufe: eigene Nachricht NEBEN der
+        Anwesenheits-Meldung. Die 120-s-Karenz der Stufe 1 gilt hier bewusst
+        NICHT — sie drosselt Anwesenheits-Spam, der Name ist genau EINE
+        zusaetzliche Nachricht je Auftritt und Person (das Einmal-Tor haelt
+        _namens_stimmen ueber a['genannt'])."""
+        self._klog(k, f"NAME [{person}]: {stimmen} Funde >= Schwelle, bester "
+                      f"Kosinus {cos:.2f} — Namens-Meldung (preliminary)")
+        if not self.melder or not k.cfg["kanaele"]:
+            return
+        text = (f"recognized (live, preliminary): {person} "
+                f"(cosine {cos:.2f}, {stimmen} consistent hits)")
+        bild = None
+        ablage = self._ablage_sichern(k)
+        if ablage:
+            stempel = time.strftime("%Y%m%d_%H%M%S",
+                                    time.localtime(self.wanduhr()))
+            sauber = re.sub(r"[^A-Za-z0-9._-]", "_", person)[:40]
+            bild = self._bild_schreiben(
+                k, os.path.join(ablage, f"{stempel}_NAME_{sauber}.jpg"), frame)
+        payload = {"ts": round(self.wanduhr(), 1), "kamera": k.name,
+                   "art": "name",
+                   "schnell_urteil": {"person": person,
+                                      "cosine": round(cos, 3),
+                                      "stimmen": stimmen,
+                                      "preliminary": True}}
+
+        def job():
+            for kanal in k.cfg["kanaele"]:
+                try:
+                    if self._kanal_senden(k, kanal, text, bild, None, payload):
+                        self._melde_protokoll(k.name, "alert", kanal,
+                                              zusatz=text, person=person,
+                                              bild=self._bild_rel(bild))
+                except Exception as e:
+                    self._fehler_log((kanal, k.name),
+                                     f"{k.name}: {kanal} failed (Name): "
+                                     f"{type(e).__name__}: {e}")
+        self._thread_starten(f"live-name-{k.name}", job)
 
     def _trigger(self, k, info, mono):
         stempel = time.strftime("%Y%m%d_%H%M%S", time.localtime(self.wanduhr()))
@@ -3589,10 +3943,11 @@ class Engine:
                           f"Mensch im Bild): Pose-Kopf hoechstens "
                           f"{(p_det or {}).get('kopf_max')} — keine Meldung, keine Karenz")
             return
-        u_text = None
-        if k.cfg["schnell_urteil"] and self.refs and self.win_thresh is not None:
+        u_text, u_person = None, None
+        if self.refs and self.win_thresh is not None:
             try:
-                u_text, _p, _c = schnell_urteil(self.refs, kandidaten, self.win_thresh)
+                u_text, u_person, _c = schnell_urteil(self.refs, kandidaten,
+                                                      self.win_thresh)
             except Exception as e:
                 self._klog(k, f"Schnell-Urteil entfaellt: {type(e).__name__}: {e}")
         beste_score = kandidaten[0][0] if kandidaten else 0.0
@@ -3620,7 +3975,10 @@ class Engine:
         payload = {"ts": round(self.wanduhr(), 1), "kamera": k.name,
                    "score": round(beste_score, 3), "bild_anzahl": len(info["kette"])}
         if u_text:
-            payload["schnell_urteil"] = {"text": u_text, "preliminary": True}
+            # .190: person ALS FELD (Today-Kartenreihe + MQTT-Konsumenten) —
+            # None bei "unknown"; das preliminary-Flag bleibt die Wahrheit.
+            payload["schnell_urteil"] = {"text": u_text, "preliminary": True,
+                                         "person": u_person}
         with k.lock:
             rb = list(k.rueckblick)
         # Video-Pfad unabhaengig von der Ablage-Pruefung bauen (K-1): scheitert
@@ -3663,6 +4021,37 @@ class Engine:
                          f"live {k.name}: Bild-Ablage fehlgeschlagen: {fehler}")
         return None
 
+    def _vorschau_schreiben(self, k, frame, mono):
+        """Vorschau-JPEG je Kachel fuer den Live-Reiter (User-Wunsch 13.08.:
+        sehen, WAS DER WAECHTER SIEHT — deshalb der VERARBEITETE Frame in
+        Waechter-Skala aus dem Detektor-Thread, nicht Frigates Bild).
+        Anzeige-Weg, nie Urteils-Pfad. Gedrosselt auf VORSCHAU_S; atomar per
+        tmp+os.replace (ein halb geschriebenes JPEG waere ein kaputtes <img>
+        im Reiter); Fehler laufen in die GEDROSSELTE Fehlerzeile
+        (ENOSPC-Klasse wie _bild_schreiben, nie Engine-Ende)."""
+        if mono - k.vorschau_mono < VORSCHAU_S:
+            return
+        if not VORSCHAU_NAME_RE.match(k.name):
+            return                     # nie einen Pfad aus Fremdnamen bauen
+        k.vorschau_mono = mono
+        try:
+            d = os.path.join(self.cfg.get("data_dir")
+                             or os.path.join(WURZEL, "verify_data"),
+                             "live", "preview")
+            os.makedirs(d, exist_ok=True)
+            ok, buf = cv2.imencode(".jpg", frame,
+                                   [cv2.IMWRITE_JPEG_QUALITY, 78])
+            if not ok:
+                raise RuntimeError("imencode=False")
+            tmp = os.path.join(d, f".{k.name}.tmp")
+            with open(tmp, "wb") as f:
+                f.write(buf.tobytes())
+            os.replace(tmp, os.path.join(d, f"{k.name}.jpg"))
+        except Exception as e:
+            self._fehler_log(("vorschau", k.name),
+                             f"live {k.name}: Vorschau-Bild fehlgeschlagen: "
+                             f"{type(e).__name__}: {str(e)[:120]}")
+
     def _thread_starten(self, name, ziel):
         """Melde-/Stoerungs-Thread starten UND registrieren (Lens-A M5:
         stop() joint die Registrierten — eine angestossene Meldung geht beim
@@ -3699,7 +4088,11 @@ class Engine:
                     if self._kanal_senden(k, kanal, text, bild, vid, payload):
                         # Baustein B: NUR die real angenommene Meldung landet
                         # im Protokoll (eine Quelle, kein Doppelzaehlen).
-                        self._melde_protokoll(k.name, "alert", kanal)
+                        sp = payload.get("schnell_urteil") or {}
+                        self._melde_protokoll(k.name, "alert", kanal,
+                                              zusatz=text,
+                                              person=sp.get("person") or "",
+                                              bild=self._bild_rel(bild))
                 except Exception as e:
                     # gedrosselt, nicht je Trigger neu (§6)
                     self._fehler_log((kanal, k.name),
@@ -3719,18 +4112,41 @@ class Engine:
             return bool(self.melder.mqtt(k.name, payload))
         return False
 
-    def _melde_protokoll(self, kamera, art, kanal):
+    def _melde_protokoll(self, kamera, art, kanal, zusatz="", person="",
+                         bild=""):
         """Buchhaltungs-Zeile je real rausgegangener Meldung (Baustein B:
         Today-/System-Zaehler des Dienstes lesen diese EINE Quelle).
-        IO-Fehler kosten nie die Meldung — nur eine gedrosselte Logzeile."""
+        IO-Fehler kosten nie die Meldung — nur eine gedrosselte Logzeile.
+        zusatz (.188): Meldetext gekappt. person/bild (.190, User: die
+        Today-Reihe 'Recognized live' braucht WEN und das Beweisbild):
+        Schnell-Urteils-Name und der DATA-DIR-RELATIVE Bildpfad (Vertrag
+        ALARMBILD_RE — der Dienst-Endpunkt serviert nur, was dem Muster
+        genuegt). Alte Zeilen ohne die Felder bleiben gueltig."""
         try:
-            melde_protokoll_zeile(self.live_dir,
-                                  {"ts": round(self.wanduhr(), 1),
-                                   "kamera": kamera, "art": art,
-                                   "kanal": kanal})
+            eintrag = {"ts": round(self.wanduhr(), 1),
+                       "kamera": kamera, "art": art, "kanal": kanal}
+            if zusatz:
+                eintrag["zusatz"] = str(zusatz)[:140]
+            if person:
+                eintrag["person"] = str(person)[:60]
+            if bild and ALARMBILD_RE.match(bild):
+                eintrag["bild"] = bild
+            melde_protokoll_zeile(self.live_dir, eintrag)
         except Exception as e:
             self._fehler_log(("melde_protokoll",),
                              f"Melde-Protokoll fehlgeschlagen: {e}")
+
+    def _bild_rel(self, pfad):
+        """Beweisbild-Pfad -> data_dir-relativ ('live/<kamera>/<datei>.jpg')
+        fuer das Melde-Protokoll; None/fremde Pfade -> '' (nie raten)."""
+        if not pfad:
+            return ""
+        wurzel = self.cfg.get("data_dir") or os.path.join(WURZEL, "verify_data")
+        try:
+            rel = os.path.relpath(pfad, wurzel)
+        except ValueError:
+            return ""
+        return rel if ALARMBILD_RE.match(rel) else ""
 
     # ---------------------------------------------------------------- Status/Watchdog
     def _status_lauf(self):
@@ -3757,7 +4173,6 @@ class Engine:
                     if mono - letzter_verbrauch >= VERBRAUCH_S:
                         letzter_verbrauch = mono
                         self._verbrauch_zeile()
-                        self._slots_neubewerten()
                     self._status_schreiben(mono)
                     fehler_serie = 0
                 except Exception as e:
@@ -3921,54 +4336,6 @@ class Engine:
                 self._auftrag = None
                 self._pause_ausser = None
 
-    def _slots_neubewerten(self):
-        """M6-Sichtbarkeit: die START-Vergabe ist seed-/test-fps-basiert; hier
-        wird je 60 s mit den GEMESSENEN Werten (EMA det_ms, reale Liefer-fps
-        der Aktiven, RSS-Delta) nachgerechnet, ob ein beim Start verweigerter
-        Slot inzwischen ginge — SICHTBAR im Status statt einer stillen Luege
-        im Kommentar. Der automatische NACHSTART bleibt bewusst aus (Lebens-
-        zyklus-Eingriff, kommt mit der UI-Phase; Entscheid im Bau-Bericht).
-
-        M-A (Betrieb-R1, gemessen: 3 aktive a 120 ms/s, Deckel 540 — +1
-        passt, +2 nicht, der Status versprach aber BEIDEN 'would be granted'):
-        dasselbe greedy-Aufsummieren wie in start() — jeder bewilligte
-        Re-Check belegt das Budget fuer die folgenden mit; wer nur deshalb
-        nicht mehr passt, wird ehrlich so ausgewiesen.
-
-        M-D (Sched-R2, Widerleger 12.08.): die Aktiv-Seite rechnet mit der
-        REALEN Lieferung (aktiv_fps: Bilder je Verbindungssekunde, Fallback
-        Steckbrief) — die ffprobe-Nennrate ueberschaetzte auf dieser Anlage
-        um 81 % und kippte das Urteil allein an der Eingangsgroesse."""
-        mono = self.jetzt()
-        aus = {}
-        aktive = [{"fps": aktiv_fps(k, mono),
-                   "rate": self.defaults["rate"]}
-                  for k in self.kacheln.values()
-                  if k.zustand in ("aktiv", "gestoert")]
-        angerechnet = list(aktive)             # + die bewilligten Re-Checks (greedy)
-        for name, grund in self.verweigert.items():
-            if not grund.startswith("slot refused"):
-                continue                       # Riegel-Verweigerungen misst niemand weg
-            g = self.guards.get(name) or {}
-            fps = (g.get("test") or {}).get("bilder_s") or None
-            kandidat = {"fps": fps, "rate": self.defaults["rate"]}
-            ok, neu = self.vermessung.slot_pruefen(angerechnet, kandidat)
-            if ok:
-                angerechnet.append(kandidat)
-                aus[name] = ("would be granted now (re-check with measured "
-                             "values): " + neu)
-                continue
-            if len(angerechnet) > len(aktive):
-                # Ehrlich trennen: passt der Kandidat ALLEIN (gegen die real
-                # Aktiven), hat nur der fruehere Re-Check das Budget belegt.
-                allein_ok, _ = self.vermessung.slot_pruefen(aktive, kandidat)
-                if allein_ok:
-                    aus[name] = ("refused: budget exhausted by the earlier "
-                                 "re-check above — " + neu)
-                    continue
-            aus[name] = "still refused: " + neu
-        self._neubewertung = aus
-
     def _status_schreiben(self, mono):
         # K-2 (Sched-R5): das try umfasst den GANZEN Aufbau, nicht nur den
         # Schreib — ein unerwarteter Kachel-Zustand machte den Wahrheits-
@@ -3987,30 +4354,23 @@ class Engine:
             raise
 
     def _kapazitaet(self):
-        """UI-M4/C1: der EFFEKTIVE dynamische Waechter-Deckel dieser Maschine
-        -> (anzahl, grund_der_grenze). Greedy wie die Slot-Neubewertung:
-        die Aktiven (reale Liefer-fps) plus hypothetische weitere Waechter
-        (fps unbekannt -> Seed) bis zur ersten Verweigerung — die Engine-
-        Karte zeigte vorher NUR die harte Wand (hart_max 5) und versprach
-        damit mehr, als das Budget traegt (gemessen: Seeds ergeben 3)."""
-        mono = self.jetzt()
-        basis = [{"fps": aktiv_fps(k, mono), "rate": self.defaults["rate"]}
-                 for k in self.kacheln.values()
-                 if k.zustand in ("aktiv", "gestoert")]
-        n = len(basis)
+        """-> (anzahl, grund). Seit .196 ohne Lastmodell (User: Messwerte
+        informieren, sie entscheiden nicht): der Deckel ist die harte Wand
+        bzw. der RAM-Boden (echter cgroup-Messwert) — dieselben zwei
+        Notbremsen wie in slot_pruefen, per Aufzaehlung bis zur ersten
+        Verweigerung."""
+        n = sum(1 for k in self.kacheln.values()
+                if k.zustand in ("aktiv", "gestoert"))
         grund = ""
         while True:
-            ok, grund = self.vermessung.slot_pruefen(
-                basis, {"fps": None, "rate": self.defaults["rate"]})
+            ok, grund = self.vermessung.slot_pruefen(n)
             if not ok:
                 break
-            basis.append({"fps": None, "rate": self.defaults["rate"]})
             n += 1
         return n, grund
 
     def _status_schreiben_innen(self, mono):
         slots = self.vermessung.status()
-        slots["neubewertung"] = dict(self._neubewertung)
         emax, egrund = self._kapazitaet()
         slots["effektiv_max"] = emax          # dynamischer Deckel (UI-M4/C1)
         slots["effektiv_grund"] = egrund      # die Grenze, mit Zahlen

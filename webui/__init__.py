@@ -70,6 +70,10 @@ NAV = [
     # ueber die System-Karte erreichbar — wer nach "Frigate" sucht, sucht oben.
     ("Frigate sync", [("/sync_auswahl", "Frigate sync")]),
     ("Settings", [("/kameras", "Cameras"), ("/benachrichtigungen", "Notifications"),
+                  # .189 (User 13.08.: "vier Menuepunkte"): die Erkennungskette
+                  # als EIGENES Blatt VOR Advanced — sie ist Verhaltens-Config
+                  # erster Klasse, kein versteckter Tabellen-Parameter.
+                  ("/kette", "Recognition chain"),
                   ("/konfiguration", "Advanced")]),
     # Recognition test als EIGENER Einstieg neben System (konzept_vision.md v2 §4,
     # User-Entscheid 08.08.): die Seite prueft einen Durchgang ueber ALLE DREI

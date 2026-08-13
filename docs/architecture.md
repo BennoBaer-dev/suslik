@@ -1,10 +1,20 @@
 # Architecture
 
+## Two paths
+
+suslik reacts on two independent paths. **Live watchers** read a camera stream
+directly and react while the person is still in frame, in two stages: a presence
+trigger (four spatially consistent face finds in about two seconds, pose-confirmed,
+alerted immediately with a picture) and a preliminary name stage (per-frame voting
+against the reference library across the whole appearance, fired once per appearance
+and person). Details: [live-watchers.md](live-watchers.md). The **verify layer**
+below delivers the confirmed verdict afterwards, from the finished recording.
+
 ## The verify layer
 
-suslik is a second-opinion layer on top of Frigate. The pipeline for each detection:
+suslik is a second-opinion layer on top of Frigate. The verify pipeline for each detection:
 
-1. **Trigger on person events.** suslik listens for Frigate **person** detections (via MQTT or
+1. **Trigger on person events.** The verify layer listens for Frigate **person** detections (via MQTT or
    polling), not for Frigate's own face-recognition result. Person detection is robust; face
    recognition is the part that struggles, so suslik doesn't depend on it to decide *when* to
    look.

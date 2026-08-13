@@ -45,12 +45,13 @@ Everything persistent is under the `/data` volume you mounted:
 | `faces/` | your reference face library (the "master") |
 | `learn/` | enrollment data and the persistent unknown pool |
 | `state/` | judgments, ground-truth labels, write-back log |
+| `live/` | live watchers: per-camera evidence pictures of triggers and name messages, the recap videos of the live day view, and the alert log |
 | `personlern/` | the person-recognition path: harvest runs with crops and your review verdicts, confirmed stranger images (`fremd/`), the trained model (`modell/`), judged live crops (`treffer/`, 30-day trim) and the fire-window state |
 | `clips/`, `events/` | cached recorded clips (auto-pruned) and per-event crops/logs |
 | `backups/` | daily rotating tar backups of the reference library + ground-truth files (14 kept) |
 
 **`personlern/fremd/` — the stranger folder.** A flat folder of `.jpg` body crops of
-people who are *not* residents. Since 0.1.0.139 the model trains them as a class of its
+people who are *not* residents. The model trains them as a class of its
 own, and the decision threshold is calibrated against them instead of only between your
 learned people (at least five images are needed; below that the old rule stays and Model
 status says so). The folder starts empty on a fresh install; drop confirmed stranger
@@ -67,14 +68,16 @@ and per-event artifacts), and the matching restore replaces those parts, keeps o
 
 These are the settings most people touch (all set via the wizard/UI; names shown for reference):
 
-- **`backend`** — `auto` (default in the Intel image since 0.1.0.44: a one-time startup
+- **`backend`** — `auto` (default in the Intel image: a one-time startup
   benchmark decides where recognition runs — Intel NPU (`openvino:MIXED`), GPU or CPU — and
   the choice sticks in `state/placement.json` until hardware, runtime or version change),
   or explicit: `openvino:GPU` \| `openvino:NPU` \| `openvino:MIXED` (Intel), `cuda` \| `cuda:0`
-  (NVIDIA), `cpu` (universal fallback). Explicit values are never overridden.
+  (NVIDIA), `cpu` (universal fallback for the analysis pipeline — note that **live
+  watchers need a GPU build**; the watcher engine refuses to start on the cpu backend).
+  Explicit values are never overridden.
   Equivalent environment variable: `VERIFY_BACKEND`.
 - **`worker`** / **`worker_rss_max_mb`** — the persistent analysis worker (default on) keeps
-  the models warm between events (the big per-event CPU win of 0.1.0.44). It exits by itself
+  the models warm between events (the big per-event CPU win). It exits by itself
   after 15 min of quiet and restarts lazily; if its memory ever exceeds
   `worker_rss_max_mb` (default 4096 MB) it is restarted cleanly. `worker: false` restores
   the old process-per-event behavior.
@@ -110,6 +113,14 @@ These are the settings most people touch (all set via the wizard/UI; names shown
   **Test** button per channel (see [usage.md](usage.md)).
 - **Recognition threshold** — the time-window criterion (how many consistent frames within the
   window count as "recognized"). The defaults are calibrated; change only if you know why.
+  The same similarity threshold also drives the live watchers' preliminary name stage.
+- **Recognition chain** — its own Settings page: the order face → person → vision with a
+  plain-language condition per step (always / only when the face path could not confirm
+  everyone / off).
+- **Live watchers** — configured per camera on the **Live** tab, not in the wizard:
+  source (`proxy` / `direct` / `url`), processing resolution (360p–2160p, default
+  1080p), the two times (appearance end, re-arm), and the notification channels per
+  watcher. See [live-watchers.md](live-watchers.md).
 
 ## Environment variables
 
