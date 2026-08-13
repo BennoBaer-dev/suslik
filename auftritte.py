@@ -18,6 +18,8 @@ import json
 import os
 import urllib.parse
 
+from core import unbekanntpool
+
 import szenarien as _szen
 from core import areas as _areas_mod        # Areas Stufe 1: Sicht-Aufloesung (30.07.)
 from routes import areas as _r_areas        # Chip-Leiste (reine Links)
@@ -83,21 +85,14 @@ def _eid2uid(cfg):
     /heute-Karten (face_id IST die Event-ID; ~2/~3-Suffixe der Top-3-Sammlung matchen
     ueber die Basis-ID; objekt-Identitaeten ausgenommen). Faellt still auf {} zurueck."""
     m = {}
-    try:
-        with open(os.path.join(cfg["data_dir"], "learn", "unbekannte.jsonl")) as f:
-            for l in f:
-                try:
-                    d = json.loads(l)
-                except Exception:
-                    continue
-                if d.get("objekt") or d.get("status", "aktiv") != "aktiv":
-                    continue          # Review .55: archivierte stehen auf /unbekannte nicht
-                u = d.get("uid") or d.get("id")
-                for g in d.get("members") or []:
-                    m.setdefault(g, u)
-                    m.setdefault(str(g).split("~")[0], u)
-    except OSError:
-        pass
+    for d in unbekanntpool._cluster_lesen(cfg["data_dir"]):
+        if d.get("objekt") or d.get("status", "aktiv") != "aktiv":
+            continue          # Review .55: archivierte stehen auf /unbekannte nicht
+        u = d.get("uid") or d.get("id")
+        mem = d.get("members")
+        for g in (mem if isinstance(mem, list) else []):
+            m.setdefault(g, u)
+            m.setdefault(str(g).split("~")[0], u)
     return m
 
 
@@ -240,6 +235,10 @@ def render(cfg, log_pfad, personen_bekannt, params):
         # Bestaetigung (Review .50 — das waren zwei verschiedene Events).
         be = next((e for e in evs if e.get("eid") and e.get("eid") == d.get("eid")), None)
         best_ort = f' ({html.escape(be["cam"])}, {_hhmm(be["t"])})' if be else ''
+        # "—" statt "0.00": eine per Anlern-Korrektur bestaetigte Person hat bewusst
+        # KEINEN ours-Score (Widerleger 11.08.) — 0.00 saehe nach schlechtester
+        # Messung aus, dabei gab es schlicht keine Live-Messung.
+        bm = f'{d["best"]:.2f}' if d["best"] else "—"
         bestz = (f'confirmed at {_hhmm(d["erst_t"])}' if _hhmm(d["erst_t"]) == _hhmm(d["letzt_t"]) else
                  f'confirmed {_hhmm(d["erst_t"])} &ndash; {_hhmm(d["letzt_t"])}')
         live = (' <span class="badge live"><span class="ldot"></span>in progress</span>'
@@ -253,7 +252,7 @@ def render(cfg, log_pfad, personen_bekannt, params):
             f' · {len(s["kams"])} {"camera" if len(s["kams"]) == 1 else "cameras"}{live}</div>'
             f'<div class="pass-body">{bild}<div class="pass-info">'
             f'<div class="pass-folge">{" &rarr; ".join(folge)}</div>'
-            f'<div class="dim">{bestz} · best match {d["best"]:.2f}{best_ort}</div>'
+            f'<div class="dim">{bestz} · best match {bm}{best_ort}</div>'
             + (f'<div class="dim">also in this pass: {dabei}</div>' if dabei else '')
             + (f'<div class="dim">{_unbek_zeile(s, e2u)}</div>'
                if s.get("unbek") else '')
@@ -328,10 +327,11 @@ def render_pass(cfg, log_pfad, personen_bekannt, eid):
         ort = f' ({html.escape(be["cam"])}, {_hhmm(be["t"])})' if be else ''
         spanne = (f'at {_hhmm(d["erst_t"])}' if _hhmm(d["erst_t"]) == _hhmm(d["letzt_t"])
                   else f'{_hhmm(d["erst_t"])} &ndash; {_hhmm(d["letzt_t"])}')
+        bm = f'{d["best"]:.2f}' if d["best"] else "—"   # s. Pass-Karte: Korrektur-Personen ohne Live-Score
         pzeilen.append(
             f'<div class="evrow"><span class="lab">'
             f'<a href="/auftritte?person={urllib.parse.quote(p)}&amp;tag={tag_str}">{html.escape(p)}</a></span>'
-            f'<span>confirmed {spanne} · best match {d["best"]:.2f}{ort}</span></div>')
+            f'<span>confirmed {spanne} · best match {bm}{ort}</span></div>')
     if s.get("unbek"):
         pzeilen.append(f'<div class="evrow"><span class="lab">Unmatched</span>'
                        f'<span>{_unbek_zeile(s, e2u)}</span></div>')
@@ -340,27 +340,25 @@ def render_pass(cfg, log_pfad, personen_bekannt, eid):
                        '<span class="badge-gtfremd">confirmed stranger</span></div>')
 
     # Task #9 (Tokn59 Issue #9, 31.07.): Fehler-Events erklaeren sich auf der Pass-Seite
-    # selbst. Der Grund stand seit jeher NUR im analyze.log des Events (verifyd:-Zeilen,
-    # z.B. "analyze failed in worker: ..." / "analyze timeout ..."); hier die LETZTE
-    # solche Zeile je Fehler-Event zeigen statt eines nackten "error" ohne Detail.
+    # selbst. Seit .173 liest die Zeile die EINE Quelle webui.bausteine.fehler_grund
+    # (Widerleger 11.08.: die alte lokale verifyd:-Zeilensuche traf an 0 von 3 echten
+    # Fehler-Events die Ursache — die letzte verifyd-Zeile ist die Telemetrie).
+    from webui.bausteine import fehler_grund as _fg
     for e in evs:
         r = by_h.get(e.get("eid") or "")
         if not r or r.get("kategorie") != "fehler":
             continue
-        grund = ""
         lp = os.path.join(cfg["data_dir"], "events",
                           str(e.get("eid") or "").replace("/", "_"), "analyze.log")
-        try:
-            with open(lp, encoding="utf-8", errors="replace") as f:
-                for l in f:
-                    if l.startswith("verifyd"):
-                        grund = l.split(":", 1)[-1].strip() if ":" in l else l.strip()
-        except OSError:
-            pass
+        grund = _fg(lp)
+        if not grund:                        # ehrlich unterscheiden (Widerleger-Recheck):
+            grund = ("analyze.log holds no reason line — open the event for the full log"
+                     if os.path.isfile(lp) else
+                     "no analyze.log kept for this event — see the service log")
         pzeilen.append(
             f'<div class="evrow"><span class="lab">Error</span>'
             f'<span>{html.escape(e["cam"])} {_hhmm(e["t"])}: '
-            f'{html.escape(grund or "no analyze.log kept for this event — see the service log")}'
+            f'{html.escape(grund)}'
             f'</span></div>')
 
     # Kamerafolge (fett = irgendeine Bestaetigung auf der Kamera)

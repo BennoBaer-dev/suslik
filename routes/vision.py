@@ -711,7 +711,8 @@ def _galerien(deckung, galerien, vor, rt):
             f'<div class="vs-zahl">{d["gesamt"]} usable images &middot; '
             f"{reihen}</div>{knopf}</div>")
     return ('<div class="card"><b>Galleries</b>'
-            f'<div>{n_fertig} of {vor.get("galerien_min", 2)} galleries ready '
+            f'<div>{n_fertig} galleries ready '
+            f'({vor.get("galerien_min", 2)} required) '
             "&mdash; vision needs at least two, because it always compares one "
             "person against another.</div>"
             '<div class="dim">Only people with a learned body model can get a '

@@ -113,18 +113,22 @@ VARIANTEN = {
         "encoder_erwartung": "hw-wenn-geraet", "latest": True, "status": "stable",
         "beleg": {"betrieb": "CUDA-NB 2026-07-30", "encoder": "sprior RTX3060 2026-07-30"},
     },
+    # latest True seit 11.08. (User: "alle 5 identisch" — keine Negativ-Meldungen, und
+    # ohne latest kommen keine neuen Tester). status bleibt testing, solange die Betriebs-
+    # Belege duenn sind: latest folgt jedem Release, ist aber nicht von unseren
+    # Testmaschinen abgedeckt — die Doku sagt das ehrlich dazu.
     "gpu-legacy": {
         "dockerfile": "docker/Dockerfile.gpu-legacy", "compose_test": None,
         "container_yaml": "docker/verifyd.container.gpu.yaml",
         "yaml_default": "auto", "wizard_default": "openvino:GPU",
-        "encoder_erwartung": "hw-wenn-geraet", "latest": False, "status": "testing",
+        "encoder_erwartung": "hw-wenn-geraet", "latest": True, "status": "testing",
         "beleg": {"betrieb": "Gen9-Tester UHD630 2026-07-29"},
     },
     "rocm": {
         "dockerfile": "docker/Dockerfile.rocm", "compose_test": None,
         "container_yaml": "docker/verifyd.container.rocm.yaml",
         "yaml_default": "migraphx", "wizard_default": "migraphx",
-        "encoder_erwartung": "hw-wenn-geraet", "latest": False, "status": "testing",
+        "encoder_erwartung": "hw-wenn-geraet", "latest": True, "status": "testing",
         "beleg": {"betrieb": "unbelegt", "encoder": "AMD-Tester 780M VAAPI 2026-07-30"},
     },
 }
@@ -367,6 +371,14 @@ MELDE_HERKUNFT = {
     "live": "",                       # echter Vorfall im Betrieb
     "manuell": "[test] ",             # Kanal-Test, manuell ausgeloester Lauf
     "nachanalyse": "[re-analysis] ",  # erneute Analyse eines vergangenen Durchgangs
+    # Live-Waechter-Engine (live_reiter_bauplan.md §6, K3-Loch-Fix: der Wert
+    # fiel vorher still auf "live" zurueck und markierte nichts). Ein Trigger
+    # der Engine ist ein ECHTES Live-Ereignis — der TEXT traegt deshalb keine
+    # Marke; die Waechter-Kennung sitzt im Meldungs-TITEL (EIN Literal,
+    # core/livewache.WATCHER_TITEL: "Live watcher <kamera>: ..."), und das
+    # MQTT-Payload-Feld `herkunft` traegt diesen Wert, damit Home Assistant
+    # Waechter-Meldungen filtern kann, ohne Meldetexte zu zerlegen.
+    "live_wache": "",
 }
 MELDE_HERKUNFT_STD = "live"
 
@@ -384,6 +396,27 @@ def melde_text(text, herkunft=None):
     p = melde_praefix(herkunft)
     t = str(text or "")
     return t if not p or t.startswith(p) else p + t
+
+
+# --- Kachel-Zustaende des Live-Reiters (live_reiter_bauplan.md §2.3, Phase 2) -------
+# Die EINE Quelle fuer Kachel-Farbe, Kachel-Text und /health (K3-Regel: nie als
+# Streu-Literal in Kachel-HTML, Engine und health getrennt gepflegt). ABGELEITET
+# wird der Zustand ausschliesslich in core.livewache.ui_zustand() aus Config +
+# Engine-QUITTUNG (Status-Datei) — K1 in BEIDE Richtungen: eine Kachel behauptet
+# nie einen Zustand, den die Engine nicht quittiert hat, und ein blosser
+# Config-Wunsch (enabled=true im Store) wird nie als 'active' gerendert.
+# BEWUSST GETRENNT von den Engine-LAUFZEIT-Zustaenden (livewache.KACHEL_ZUSTAENDE,
+# startet/aktiv/gestoert/...): die beschreiben den Thread im Engine-Prozess,
+# diese hier die Kachel im UI (Config + Test + Quittung zusammen).
+# farbe = CSS-Klasse lv-<farbe> in webui/style.css (eine Klasse je Farbwort).
+LIVE_ZUSTAENDE = {
+    "unconfigured": {"farbe": "grau",    "label": "Not configured"},
+    "untested":     {"farbe": "gelb",    "label": "Configured — test required"},
+    "tested":       {"farbe": "blau",    "label": "Tested — ready to enable"},
+    "active":       {"farbe": "gruen",   "label": "Active"},
+    "disturbed":    {"farbe": "rot",     "label": "Disturbed"},
+    "unsupported":  {"farbe": "neutral", "label": "Not available on this build"},
+}
 
 
 # --- Secret-Vertrag Vision (konzept_vision.md §9 + E8, Zug V1) ----------------------

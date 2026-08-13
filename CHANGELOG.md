@@ -13,6 +13,245 @@ performance/fusion steps 0.1.0.114–0.1.0.117 ship together with **0.1.0.118**,
 frame-distributor and vision steps 0.1.0.142–0.1.0.167 ship together with **0.1.0.168**, and the
 learning-area/run-management steps 0.1.0.119–0.1.0.128 ship together with **0.1.0.129**.
 
+## 0.1.0.183 — 2026-08-13
+
+- Privacy respin of 0.1.0.182 (which was public for under an hour and is
+  withdrawn): the author's camera names appeared in code comments inside the
+  shipped images. Comments anonymized, and the image privacy audit gained a
+  dedicated stage that scans every image for camera names before publishing.
+  No functional changes.
+
+## 0.1.0.182 — 2026-08-13
+
+- Live watcher sources: a custom stream URL (source "url") no longer fails for
+  non-RTSP inputs — the RTSP transport flag was passed to ffmpeg
+  unconditionally, so file/http sources were refused outright ("Option not
+  found"), including the software fallback. Found during the CUDA real test.
+- NVDEC live decoding confirmed on real NVIDIA hardware: watcher start line
+  shows "HW-Decode (nvdec)" on an RTX 2060 (driver 550) against a live
+  go2rtc restream, detector at 43 ms/frame.
+
+## 0.1.0.181 — 2026-08-13
+
+- Live watchers pick their video decoder by hardware: VAAPI on Intel/AMD
+  (unchanged), NVDEC on NVIDIA cards (previously the live reader was
+  VAAPI-only and fell back to software decoding on NVIDIA). The chosen mode
+  is logged in the watcher's start line; if the hardware pipe fails, the
+  loud software fallback remains.
+
+## 0.1.0.180 — 2026-08-12
+
+- Live watchers now start themselves: the service launches and supervises the
+  watcher engine as its own process — restart with backoff on failure, a loud
+  alert instead of a crash loop, clean shutdown with the service. A manually
+  started engine is detected and never doubled.
+- Live watcher alerts are counted on Today and System (per channel, with the
+  channels you actually use), backed by a restart-proof log.
+- The pose-gate model now ships inside every image variant (no manual staging
+  step), and a new QA stage guards the live path on built images.
+- Robustness: a corrupted unknown-pool line can no longer break the Today,
+  Unknown or Appearances pages — one tolerant reader everywhere.
+
+## 0.1.0.179 — 2026-08-12
+
+- Unknown visitors are visible now. The Today page counts unknown people from the
+  persistent unknown pool — including visitors who arrived together with a
+  recognized person, the case that used to vanish into "not matched inside
+  recognized passes". The tile links straight to People → Unknown for naming;
+  past days show their own day's numbers.
+- Clusters muted as "static object" no longer swallow new faces silently:
+  they are frozen (new matching finds form fresh, visible clusters), archived
+  clusters reactivate loudly when a fresh face arrives, and a one-time repair
+  command (anlernen.py objekt_reparatur) extracts faces that were swallowed
+  before the freeze.
+- The Learn page points to waiting unknown visitors ("K unknown visitors are
+  waiting under People → Unknown").
+
+## 0.1.0.178 — 2026-08-12
+
+- New: the "Live" tab — live watchers are now configurable in the UI. Pick which
+  cameras run a watcher; capacity is measured, not guessed: the page shows how
+  many watchers your GPU can carry, and enabling beyond that is refused with the
+  number ("disable one first"). Per camera: source test, a 15-30 s load
+  measurement with a visible countdown (other watchers pause honestly while it
+  runs), alarm-chain timing and notification channels. An intro card explains
+  the goal (a verified signal in under a second, e.g. to trigger home
+  automations via MQTT) and links to the new guide, docs/live-watchers.md.
+  The watcher engine itself still starts by hand in this phase; the page says
+  so honestly. GPU required for now.
+- Settings/Cameras: streams Frigate runs no detection on are now badged
+  ("no detection in Frigate") so recording-only camera entries are not mistaken
+  for analyzable ones.
+
+## 0.1.0.177 — 2026-08-12
+
+- New (groundwork, not yet in the UI): live watcher engine `core/livewache.py` —
+  one process, one detector model, N camera tiles. Self-measuring capacity slots
+  (GPU budget, measured detector time), burst-first scheduling with a load
+  throttle, a delivery watchdog per tile, and self-reporting of faults through
+  the regular alert channels. Ships as a separate entry point (`livewached`);
+  the UI tab for configuring watchers per camera follows in a later release.
+- The engine warns at startup if legacy prototype watchers are still running
+  (double-alert risk), scanning actual processes rather than stale pid files.
+
+## 0.1.0.176 — 2026-08-11
+
+- Refactor: the alerting paths (Pushover, Telegram incl. clip transcode, the MQTT
+  publisher, notification settings) moved from the service monolith into
+  `core/melden.py` — the attach point for the upcoming live watcher engine.
+  Behavior proven identical by a 115-case characterization harness.
+- New: the MQTT topic prefix is configurable in the notification settings
+  (requested in #23). Default stays `verifyd/`, existing setups are unaffected;
+  a custom prefix applies to all published topics.
+
+## 0.1.0.175 — 2026-08-11
+
+Internal restructuring release, no user-visible changes by design.
+
+- Refactor: the recognition chain (face → person → vision switches, pass verdict
+  conditions, the first-start auto-default) moved from the service monolith into
+  `core/kette.py` as one explicit structure — groundwork for a future chain
+  settings page. Behavior proven identical by a 184-case characterization harness.
+
+## 0.1.0.174 — 2026-08-11
+
+Internal restructuring release, no user-visible changes by design.
+
+- Refactor: the five display routes (`/ereignisse`, `/offen`, `/system`, `/kameras`,
+  `/konfiguration`) moved from the service monolith into `routes/` modules
+  (byte-identical HTTP output, proven by a characterization harness over 18 URLs).
+- New self-check: the documentation drift monitor (`tools/doku_drift.sh`) runs hourly
+  on the author's box; ships as tooling only, no runtime effect.
+
+## 0.1.0.173 — 2026-08-11
+
+The second half of the small-machines package: teaching now cleans up after itself,
+and weak hardware gets sensible defaults on its own.
+
+- **Naming faces finally clears their Unknown cards** (issue #19). "Add selected
+  faces" on a Today card (and naming on the Unknowns tab) now removes the chosen
+  faces from the unknown pool and re-checks that pass's events against the new
+  references in the background — confirmed events flip to *Recognized* and the
+  Unknown card disappears, instead of staying stuck until the next full re-cluster.
+  Every face you tick becomes a reference (previously only the best five made it;
+  the rest were silently discarded). The correction never invents measurements:
+  the record keeps its live scores untouched and carries an explicit
+  `korrektur` marker with the re-check similarity, alerts/statistics stay
+  historical truth, and error events are never lifted.
+- **Weak machines now default themselves.** On the first start of this version,
+  every install measures its usable physical cores; below the `wanduhr_min_kerne`
+  floor (default 4) the recognition chain is pre-set conservatively —
+  `person_pfad=nur_wenn_gesicht_leer`, `vision_pfad=aus`, and `cpu_threads` set to
+  the measured core count so the thread cap actually bites on SMT boxes. The
+  decision is taken exactly once (sticky marker), is loud in the start log and the
+  config audit, shows an explanatory note next to those three settings, and never
+  touches values you set yourself (UI or yaml). Strong machines only record the
+  marker. A corrupted config store is never overwritten.
+- **The CPU thread cap now also reaches the last three uncapped sessions** —
+  person-model embedding (DINOv2), the Frigate-sync upload pre-check and the pose
+  gate. A new QA stage enforces the class from now on: no ONNX session ships
+  without the cap.
+- **Error events explain themselves** (issue #9). The event page of a failed
+  analysis now shows the actual error reason inline (last line of the analysis
+  log) and links its pass even for single-event passes — previously a lone error
+  event had no path to its reason at all.
+- **The MQTT system light stopped lying** (issue #10). "not configured" used to
+  cover three different situations; the System page now distinguishes a broker
+  that is configured with publishing off, a publisher that failed to start (now
+  flagged as a problem instead of green), and a genuinely unconfigured broker.
+- **Frigate error details survive the banner** (issue #14 follow-up): the
+  unreachable-banner keeps 220 characters of the endpoint error instead of
+  cutting it at 110 — the part that named the failing endpoint was exactly what
+  got cut.
+- **Honest dashes instead of fake zeros:** a person confirmed by the teaching
+  re-check (no live face score) shows "best match —" instead of "0.00".
+- Docs: `latest-*` tags now exist for **all five** image variants (gpu-legacy and
+  rocm follow releases as testing variants relying on field reports); the
+  gpu-legacy pages now include 5th-gen Core/Broadwell (covered by Intel's legacy1
+  platform list, no field report yet) and the pinned version examples follow the
+  released version from now on (release-runbook duty).
+
+## 0.1.0.172 — 2026-08-11
+
+A package built from tester reports on small machines (a 2-core/4-thread NUC running
+five cameras): three of the six changes cut CPU pressure at its sources, the rest close
+gaps those reports uncovered.
+
+- **The CPU thread cap now reaches every model session.** On the pure CPU path the
+  five internal detector/landmark sessions kept default thread pools sized after the
+  HOST's core count (a container CPU mask changed nothing), so one analysis child
+  could run dozens of threads on a small machine; only the recognition model was
+  capped. All sessions are now rebuilt with the configured cap — embeddings stay
+  byte-identical, and a capped worker drops from ~78 to ~28 threads.
+- **Analysis children now run at low CPU priority.** The persistent worker, every
+  analysis subprocess and the maintenance runs start with `nice +10`, so the service
+  process (UI, polling, MQTT, alerts) wins the scheduler when the CPU is saturated —
+  the UI stays responsive during an analysis instead of freezing for minutes. When
+  the machine is idle, analyses keep the full CPU; nothing gets slower overall.
+- **The boot-time self-measurement no longer competes with live work.** The timing
+  measurement is a second full analysis process; it now takes the one analysis slot
+  (waiting lock-free until live face and person work has finished) instead of running
+  alongside, its per-roundtrip deadline follows `analyse_timeout_s`, and time a live
+  job spends waiting for the slot is no longer booked as analysis time. On machines
+  below `wanduhr_min_kerne` physical cores (default 4 — the measurement plus live
+  analysis are structurally two double-threaded actors; a container CPU quota counts)
+  it is skipped loudly: the log and `/health` say why, forecasts keep their labeled
+  fallback values, and the limit can be lowered deliberately in Settings.
+- **Each recognition path is now switchable.** New settings `person_pfad` and
+  `vision_pfad` take `immer` (today's behavior), `nur_wenn_gesicht_leer` (the
+  expensive person judgment or automatic vision run only starts when the face path
+  could not confirm everyone on the walk-through) or `aus` (the path never starts by
+  itself — no body pictures are collected, no automatic vision runs; the biggest
+  saving on weak CPUs). Skips are logged once per run or walk-through, `/health`
+  shows the configured level next to what is actually armed, and manual runs keep
+  working in every level.
+- **A memory guard now watches each worker job while it runs.** The worker's RSS used
+  to be checked only after a job, so a runaway job could grow unchecked (reported:
+  tens of GB on a host without a container limit). A watchdog thread samples the
+  job's memory every second: it warns once past `worker_rss_max_mb`, aborts the job
+  cleanly if the job alone grows by more than that limit, and aborts before the
+  container's own memory limit would be hit. The abort is an ordinary analysis error
+  — loud in the job log, retried later on a fresh worker.
+- **An interrupted anchor stage no longer restarts forever.** A learning run stuck in
+  the anchor phase used to be re-attempted on every service start; on a memory-limited
+  container that meant an out-of-memory crash loop with no exit. Boot resumes are now
+  counted, and after `anker_resume_max` failed attempts (default 3) the run halts with
+  a clear status and waits for you instead of looping.
+- **A clean vision verdict can add one supporting vote.** When the vision comparison
+  of a walk-through names the same person the body path already favors, it counts as
+  ONE additional support toward the attribution rule — only with an unambiguous
+  winner on both sides, only when the verdict rests on at least one picture the body
+  hits don't already cover, never on its own, never as a veto, and alarms are
+  untouched. The card then says "via person + vision". Switchable as `vision_stimme`
+  (on by default).
+- **Vision page: the unsaved-changes badge behaves again.** The top "not saved" badge
+  could stick forever because a CSS display rule beat the `hidden` attribute; a
+  central `[hidden]` rule ends that class of bug, and typing after a save now clears
+  the stale "saved" status text next to it.
+
+## 0.1.0.171 — 2026-08-10
+
+- **Vision: the grid cells now elect the favourite.** The comparison order used to be
+  derived from the first grid picture alone, so a walk-through whose cells all pointed
+  to the same person could still enter round one with the wrong favourite — reproduced
+  on a real walk-through that was judged as the wrong person because of it. Now the
+  body votes of all grid cells pick the favourite, the similarity measure averages
+  over every cell instead of just the first, and round one is fought against the
+  closest rival. Same number of requests, same budget; a single-picture walk-through
+  behaves exactly as before.
+- **A measured watchdog for the live analysis.** One analysis used to be allowed a flat
+  1800 seconds; a hung worker blocked the walk-through for over half an hour. The new
+  `analyse_timeout_s` (default 600, derived from 1394 real runs whose slowest success
+  took 258 s) kills a hung analysis and retries it once immediately with a doubled
+  deadline — on a fresh worker, or in a fresh process when the worker mode is off. A
+  merely slower machine passes the retry; a truly hung event goes to the silent
+  catch-up as before. The worst case equals the old flat deadline, never worse.
+- **The body sampler now degrades under memory pressure instead of failing.** If the
+  projected peak (samples times frame size plus evaluation) exceeds the container's
+  memory budget, the sampler thins the frames evenly and says so in the log and in the
+  result (`degradiert`); only below a density floor does it abort, loudly. Before, a
+  tight memory limit could kill the whole body path without a usable trace.
+
 ## 0.1.0.170 — 2026-08-10
 
 Version 0.1.0.169 was built and tested on the author's production box; its changes

@@ -8,7 +8,7 @@ hardware:
 |---|---|---|---|
 | **CPU** | `-cpu` | none (CPU only) | no GPU, or just trying it out (universal fallback) |
 | **Intel** | `-gpu` | Intel iGPU / NPU via OpenVINO | you have an Intel integrated GPU (and optionally NPU) |
-| **Intel legacy** | `-gpu-legacy` | Intel Gen8/9/11 iGPU (UHD 6xx) via OpenVINO legacy runtime | you have a 6th–10th gen Intel iGPU — the regular `-gpu` image cannot bind it |
+| **Intel legacy** | `-gpu-legacy` | Intel Gen8/9/11 iGPU (HD 5xxx/UHD 6xx) via OpenVINO legacy runtime | you have a 5th–10th gen Intel iGPU — the regular `-gpu` image cannot bind it |
 | **NVIDIA** | `-cuda` | NVIDIA GPU via CUDA | you have an NVIDIA GPU |
 | **AMD** | `-rocm` | AMD GPU via ROCm / MIGraphX (testing) | you have an AMD GPU — pass `/dev/kfd` + `/dev/dri` into the container |
 
@@ -58,25 +58,30 @@ You can either **pull a published image** or **build it yourself**.
 All variants are published on the GitHub Container Registry.
 
 > **Alpha note:** `latest-*` follows the newest published version (currently
-> **0.1.0.138** — learning module, camera areas, person recognition, Frigate sync; see the
-> README status), so a plain `docker compose pull` tracks the alpha. Every `latest-*` tag only
+> **0.1.0.170** — see the README status for what's new), so a plain
+> `docker compose pull` tracks the alpha. Every `latest-*` tag only
 > moves after that release ran on real test hardware. If you would rather decide yourself when
 > to move, pin the version tag explicitly (see *Staying on a fixed version* below):
 
 ```bash
 # the newest release — this is what latest-* points at:
-docker pull ghcr.io/bennobaer-dev/suslik:latest-gpu     # Intel (OpenVINO)
-docker pull ghcr.io/bennobaer-dev/suslik:latest-cuda    # NVIDIA
-docker pull ghcr.io/bennobaer-dev/suslik:latest-cpu     # CPU-only
+docker pull ghcr.io/bennobaer-dev/suslik:latest-gpu         # Intel (OpenVINO)
+docker pull ghcr.io/bennobaer-dev/suslik:latest-cuda        # NVIDIA
+docker pull ghcr.io/bennobaer-dev/suslik:latest-cpu         # CPU-only
+docker pull ghcr.io/bennobaer-dev/suslik:latest-gpu-legacy  # Intel Gen8/9/11 (testing)
+docker pull ghcr.io/bennobaer-dev/suslik:latest-rocm        # AMD (testing)
 
 # the same release, pinned so it never moves under you:
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.138-gpu
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.138-cuda
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.138-cpu
-# Older Intel iGPU (UHD 6xx, 6th–10th gen Core)? Use the gpu-legacy variant —
-# testing phase: version tag only, there is no latest-gpu-legacy yet.
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.138-gpu-legacy
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.183-gpu
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.183-cuda
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.183-cpu
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.183-gpu-legacy
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.183-rocm
 ```
+
+> **Testing variants:** `gpu-legacy` and `rocm` follow every release under `latest-*` like
+> the others, but they are not covered by our own release test machines — they rely on
+> field reports. If you need stability there, pin the version tag.
 
 > The **NVIDIA/CUDA** image is now on GHCR too (`latest-cuda`), so you can pull it like the
 > others. Note it is a **large image** — it bundles the multi-GB CUDA runtime — so the pull takes
@@ -193,18 +198,20 @@ it says `running on CPU` instead, the host driver/runtime versions don't match �
 ---
 
 
-## Older Intel iGPUs (UHD 6xx, 6th–10th gen Core): the `gpu-legacy` variant
+## Older Intel iGPUs (HD 5xxx/UHD 6xx, 5th–10th gen Core): the `gpu-legacy` variant
 
-Intel's current compute runtime only covers Gen12 and later — on a 6th–10th gen iGPU the
+Intel's current compute runtime only covers Gen12 and later — on a 5th–10th gen iGPU the
 regular `-gpu` image falls back to CPU (loudly, and with a banner pointing here). The
 `gpu-legacy` variant ships Intel's legacy1 runtime instead and is confirmed working on a
-UHD 630. The compose file is the same as for the regular Intel variant, with two
+UHD 630 (Gen9). Gen8/Broadwell (5th gen Core, e.g. HD 5500) is covered by Intel's legacy1
+platform list (OpenCL 3.0) but has no field confirmation yet — reports welcome. Note VAAPI
+video decode on Gen8 handles H.264 only, no HEVC. The compose file is the same as for the regular Intel variant, with two
 differences: the image tag, and no NPU line (these platforms have no NPU).
 
 ```yaml
 services:
   suslik:
-    image: ghcr.io/bennobaer-dev/suslik:0.1.0.138-gpu-legacy   # version tag — there is no latest-gpu-legacy during the testing phase
+    image: ghcr.io/bennobaer-dev/suslik:latest-gpu-legacy   # or pin the version tag (testing variant: not covered by our release test machines)
     container_name: suslik
     restart: unless-stopped
     ports:
@@ -220,9 +227,10 @@ services:
       - /path/to/suslik-data:/data
 ```
 
-Once the variant graduates from testing, a `latest-gpu-legacy` tag will exist and the
-version pin can go; check the [Packages page](https://github.com/BennoBaer-dev/suslik/pkgs/container/suslik)
-for the newest `-gpu-legacy` version tag until then.
+`latest-gpu-legacy` follows every release like the other variants. The variant itself is
+still in its testing phase (it relies on field reports rather than our own release test
+machines) — if that bothers you, pin a version tag from the
+[Packages page](https://github.com/BennoBaer-dev/suslik/pkgs/container/suslik) instead.
 
 ## NVIDIA variant (CUDA)
 
@@ -314,7 +322,7 @@ A `latest-*` tag only moves once a release has been deployed and verified on rea
 when to move, pin the version explicitly:
 
 ```yaml
-    image: ghcr.io/bennobaer-dev/suslik:0.1.0.138-cpu
+    image: ghcr.io/bennobaer-dev/suslik:0.1.0.183-cpu
 ```
 
 To move, change the tag and run `docker compose up -d`. Recent versions stay pullable, but a

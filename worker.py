@@ -23,7 +23,11 @@ serialisiert (self.lock) und haelt Timeout/killpg. stdin-EOF (execv-Waise/Ende) 
   {"typ":"ernte","eid":"...","kamera":"...","ts":0,"fps_sample":3,
    "schwellen":{...},"lauf_dir":"...","log":"..."}   (E2: 1 Event je Job, Live-Vorrang)
   {"typ":"ping"}
-Antwort: {"ok":bool,"cpu_s":float,"wall_s":float,"rss_mb":int,("fehler":str)}
+  Jeder Job (ausser ping) darf zusaetzlich "rss_max_mb" tragen: die Politik-Grenze
+  der In-Job-RSS-Wache (= worker_rss_max_mb des Dienstes; s. _JobRssWache und
+  _job_rss_grenze — ohne den Wert wacht nur die cgroup-Regel).
+Antwort: {"ok":bool,"cpu_s":float,"wall_s":float,"rss_mb":int,"vmhwm_mb":int,
+          "rss_spitze_mb":int,("fehler":str)}
          (ernte zusaetzlich: die Zaehler aus core.ernte.ernte_event)
 
 Idle-EXIT nach WORKER_IDLE_S (Default 900 s): der Worker beendet sich selbst, verifyd
@@ -43,6 +47,7 @@ import runpy
 import select
 import socket
 import sys
+import threading
 import time
 
 from core.pfade import WURZEL as HERE   # M0-Anker (Falle 0): eine Pfad-Quelle
@@ -100,6 +105,207 @@ def _vmhwm_mb():
     return _proc_mb("VmHWM")
 
 
+def _cgroup_frei_mb(wurzel="/sys/fs/cgroup"):
+    """Freier Speicher bis zur CGROUP-Grenze dieses Containers in MB,
+    MemAvailable-artig (Limit minus unverzichtbarem Verbrauch), -1 = keine
+    Grenze lesbar/gesetzt. `wurzel` ist nur fuer den Testharnisch.
+
+    Bewusst NIE /proc/meminfo: im Container zeigt das den WIRT (auf der
+    Prod-LXC gemessen 10.08.: meminfo sagt 64 GB Wirt, docker info 24 GiB
+    LXC-Limit — die dokumentierte Falle aus CLAUDE.md 'Maschine'). Nur die
+    eigene cgroup traegt die Wahrheit, die diesen Prozess wirklich toetet.
+
+    MemAvailable-ARTIG, nicht Limit minus current (Nachbesserung F4):
+    memory.current enthaelt den REKLAMIERBAREN Seiten-Cache, und der
+    besteht in diesem Dienst gerade aus den CLIPS, die die Analyse liest.
+    Am Prod-Container gemessen (10.08.): current 5534 MB, davon file
+    4395 MB (79 %), inactive_file allein 3201 MB. Ein naives Limit-current
+    haette bei einem 6-GiB-Docker-Limit nur 610 MB "frei" gemeldet, das
+    min() im Budget (analyze.py koerper_abnehmer) haette 2725 auf 610 MB
+    gedrueckt und damit genau den KeinKoerper-Totalausfall erzeugt, den
+    der Fix beseitigt — ausgerechnet auf den speicherbegrenzten
+    Installationen, fuer die der Deckel gebaut ist. Der Kernel wirft
+    inactive_file unter Druck zurueck, BEVOR er toetet; als Verbrauch
+    zaehlt deshalb current - inactive_file (memory.stat), MemAvailable-
+    artig = 3811 MB im selben Beispiel, das Budget bleibt unberuehrt.
+    Prod selbst: memory.max='max' (Docker ohne --memory; das LXC-Limit
+    liegt auf einem von hier unsichtbaren Eltern-cgroup) -> ehrlich -1
+    statt einer geratenen Zahl. Der v1-Zweig (total_inactive_file) deckt
+    Alt-Systeme ab."""
+    def _stat(pfad, feld):
+        try:
+            with open(pfad) as f:
+                for z in f:
+                    if z.startswith(feld + " "):
+                        return int(z.split()[1])
+        except Exception:
+            pass
+        return 0
+    try:                                          # cgroup v2 (unified)
+        with open(os.path.join(wurzel, "memory.max")) as f:
+            mx = f.read().strip()
+        if mx.isdigit():
+            with open(os.path.join(wurzel, "memory.current")) as f:
+                belegt = int(f.read())
+            belegt -= _stat(os.path.join(wurzel, "memory.stat"), "inactive_file")
+            return max(0, (int(mx) - max(0, belegt)) // 1048576)
+    except Exception:
+        pass
+    try:                                          # cgroup v1 (legacy)
+        with open(os.path.join(wurzel, "memory", "memory.limit_in_bytes")) as f:
+            mx = int(f.read())
+        if mx < 1 << 60:                          # ~2^63 = "unbegrenzt"
+            with open(os.path.join(wurzel, "memory", "memory.usage_in_bytes")) as f:
+                belegt = int(f.read())
+            belegt -= _stat(os.path.join(wurzel, "memory", "memory.stat"),
+                            "total_inactive_file")
+            return max(0, (mx - max(0, belegt)) // 1048576)
+    except Exception:
+        pass
+    return -1
+
+
+WACHE_INTERVALL_S = 1.0   # Abtast-Takt der In-Job-RSS-Wache. Reine Mess-Kadenz, kein
+#                           Budget: die Abbruch-Regeln skalieren ihre Marge mit dem
+#                           Wachstum JE INTERVALL (s. _JobRssWache Regel 3), der Takt
+#                           aendert also nur die Telemetrie-Aufloesung, nicht den Schutz.
+
+
+def _job_rss_grenze(job):
+    """Politik-Grenze der In-Job-Wache in MB (0 = unbekannt -> nur Regel 3).
+    Rangfolge — DECKUNGS-VERTRAG statt zweiter Zahlenquelle (beide Wege speist
+    verifyd aus DERSELBEN Config worker_rss_max_mb):
+      1. Job-Feld "rss_max_mb" (Protokoll oben): setzt der Dienst seit .172
+         per setdefault in WorkerProzess.job auf jeden Nicht-ping-Job — aus
+         derselben Config worker_rss_max_mb wie seine Neustart-Schwelle.
+      2. analyze-Jobs: der --koerper-rss-max-mb-Wert aus argv. verifyd
+         (run_analyze) setzt ihn aus worker_rss_max_mb, allerdings nur bei
+         scharfem Koerperpfad — derselbe Wert auf dem aelteren Transport."""
+    try:
+        g = job.get("rss_max_mb")
+        if g:
+            return max(0, int(float(g)))
+        argv = job.get("argv") or []
+        if job.get("typ") == "analyze" and "--koerper-rss-max-mb" in argv:
+            return max(0, int(float(argv[argv.index("--koerper-rss-max-mb") + 1])))
+    except Exception:
+        pass
+    return 0
+
+
+class _JobRssWache:
+    """In-Job-RSS-Wache — Issue #20, Bitte 1 des Melders: "Monitor or enforce
+    the worker RSS limit WHILE a job is running" (Nachbesserung 10.08.).
+
+    Der Dienst prueft rss_mb erst NACH dem Job (verifyd WorkerProzess.job):
+    die Spitze IM Job sah bis .172 niemand, und ein Ausreisser-Job konnte
+    unbegrenzt wachsen (Issue #20: 34-38 GB auf einem 46-GiB-Wirt ohne
+    Container-Limit -> Host-OOM, fremde Dienste starben mit). Diese Wache
+    laeuft als Thread NEBEN dem Job und tastet VmRSS im WACHE_INTERVALL_S-
+    Takt ab. Drei Regeln, KEIN neues Budget — beide Grenzen existieren schon:
+
+    1. LAUT (einmal je Job): VmRSS ueberschreitet die Politik-Grenze
+       (worker_rss_max_mb, Transport s. _job_rss_grenze) -> WARN-Zeile ins
+       Job-Log (fd 2 liegt waehrend des Jobs per dup2 dort).
+    2. ABBRUCH Politik: DIESER Job allein ist um mehr als die Grenze
+       gewachsen (rss - rss_start > grenze). Bewusst das Job-WACHSTUM, nicht
+       der Absolutwert: im Kriech-Fall (Worker beginnt den Job schon nahe der
+       Grenze, Soak-Befund 27.07.) wuerde der Absolutwert einen unschuldigen
+       Job killen — den faengt weiter der geordnete Neustart nach dem Job.
+       Ein Ausreisser wie #20 endet dagegen bei rss_start+grenze (Default:
+       nach ~4 GB Wachstum statt bei 34-38 GB).
+    3. ABBRUCH Physik: die cgroup-Grenze des Containers waere im NAECHSTEN
+       Intervall erreicht (frei <= eigenes Wachstum des letzten Intervalls;
+       frei MemAvailable-artig aus _cgroup_frei_mb, derselben Quelle wie das
+       RAM-Gate des Koerperpfads). Extrapolation statt fester Schwelle: die
+       Marge skaliert mit der Wachstumsgeschwindigkeit. Die Bedingung haengt
+       am EIGENEN Wachstum — frisst ein ANDERER Prozess der cgroup den
+       Speicher, bricht sie nicht ab.
+
+    ABBRUCH heisst: ok:false-Antwort auf die Antwort-Pipe (der Dienst
+    behandelt das wie jeden Analysefehler — bewusst KEIN Sofort-Retry, ein
+    deterministischer Ausreisser soll nicht schleifen; die Nachhol-Runde
+    versucht es spaeter auf einem frischen Worker), WARN ins Job-Log, dann
+    os._exit: nur ein Prozess-Ende gibt ORT-Arenas wirklich frei
+    (Soak-Befund 27.07.), und der naechste Job startet ohnehin frisch.
+
+    EHRLICHE GRENZEN: die Wache sieht nur DIESEN Prozess (ffmpeg-Kinder
+    zaehlen nie als Ausloeser), nur im Takt (eine einzelne Allokation
+    schneller als ein Intervall faengt erst der Kernel), und sie senkt den
+    Speicherbedarf keines Pfades — sie macht den Schaden endlich und laut.
+    Der reale 34-38-GB-Traeger von #20 (anker->clustere, n^2 im DIENST-
+    Prozess, nicht im Worker) ist hiermit NICHT gedeckelt; eigener Bauschritt."""
+
+    def __init__(self, grenze_mb, antwort_out, intervall_s=WACHE_INTERVALL_S):
+        self.grenze = int(grenze_mb or 0)   # 0 = Politik unbekannt -> nur Regel 3
+        self.out = antwort_out              # None (--roundtrip): Abbruch ohne Antwort-Zeile
+        self.intervall = float(intervall_s)
+        self.spitze = -1                    # groesster abgetasteter VmRSS im Job (MB)
+        self._stop = threading.Event()
+        self._t = None
+
+    def __enter__(self):
+        self._t = threading.Thread(target=self._lauf, daemon=True, name="job-rss-wache")
+        self._t.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        if self._t is not None:
+            self._t.join(timeout=self.intervall + 2)
+        return False
+
+    def _laut(self, text):
+        try:
+            os.write(2, (text + "\n").encode())   # fd 2 = Job-Log (_fd_umleitung)
+        except Exception:
+            pass
+
+    def _abbruch(self, grund, rss):
+        self._laut(f"WARN: {grund} — aborting this job; the worker exits and "
+                   f"the service starts a fresh one for the next job")
+        antwort = {"ok": False, "fehler": grund, "rss_mb": rss,
+                   "vmhwm_mb": _vmhwm_mb(), "rss_spitze_mb": max(self.spitze, rss)}
+        try:
+            if self.out is not None:
+                self.out.write(json.dumps(antwort, ensure_ascii=False) + "\n")
+                self.out.flush()
+        except Exception:
+            pass
+        os._exit(1)
+
+    def _lauf(self):
+        rss_start = rss_vor = _rss_mb()
+        gemeldet = False
+        while not self._stop.wait(self.intervall):
+            rss = _rss_mb()
+            if rss < 0:
+                continue                    # /proc nicht lesbar: Wache kann nur schweigen
+            if rss_start < 0:
+                rss_start = rss             # erster lesbarer Wert als Job-Basis
+            self.spitze = max(self.spitze, rss)
+            if self.grenze and not gemeldet and rss > self.grenze:
+                gemeldet = True             # Regel 1: LAUT, einmal je Job
+                self._laut(f"WARN: worker rss {rss} MB exceeds worker_rss_max_mb "
+                           f"{self.grenze} MB while the job is still running "
+                           f"(job started at {rss_start} MB; the service only "
+                           f"checks after the job)")
+            if self.grenze and rss - rss_start > self.grenze:
+                self._abbruch(              # Regel 2: Politik
+                    f"in-job rss guard: this job alone grew by {rss - rss_start} MB "
+                    f"(more than worker_rss_max_mb {self.grenze} MB), rss now "
+                    f"{rss} MB", rss)
+            frei = _cgroup_frei_mb()
+            wachstum = rss - rss_vor if rss_vor >= 0 else 0
+            if frei >= 0 and 0 < wachstum >= frei:
+                self._abbruch(              # Regel 3: Physik
+                    f"in-job rss guard: container memory almost exhausted "
+                    f"({frei} MB free, worker grew {wachstum} MB in the last "
+                    f"{self.intervall:.0f}s — the kernel OOM killer would strike "
+                    f"next), rss {rss} MB", rss)
+            rss_vor = rss
+
+
 def _koerper_zusatz(argv):
     """Z5 zusatz-Rueckweg: was der Koerper-Abnehmer im Analyse-Lauf geliefert
     hat, in die Job-Antwort heben (konzept_frames.md v2 §3.2 'Wo der Lauf
@@ -115,6 +321,8 @@ def _koerper_zusatz(argv):
     return {"koerper_crops": len(k.get("top") or []),
             "koerper_puffer_mb": k.get("puffer_mb"),
             "koerper_samples": k.get("samples"),
+            **({"koerper_degradiert": str(k.get("degradiert"))[:40]}
+               if k.get("degradiert") else {}),
             **({"koerper_ausfall": str(k.get("ausfall"))[:120]}
                if k.get("ausfall") else {})}
 
@@ -138,19 +346,22 @@ def _fd_umleitung(logpfad):
         os.close(alt1); os.close(alt2); lf.close()
 
 
-def _job_ausfuehren(job):
+def _job_ausfuehren(job, antwort_out=None):
     """Einen Job im Prozess ausfuehren; stdout/stderr in die Job-Logdatei.
-    SystemExit (z.B. analyze 'Referenz-Master leer') toetet den Worker NICHT."""
+    SystemExit (z.B. analyze 'Referenz-Master leer') toetet den Worker NICHT.
+    antwort_out: Antwort-Pipe fuer den ABBRUCH-Fall der In-Job-RSS-Wache
+    (None im --roundtrip: dort endet ein Abbruch als lauter Exit 1)."""
     typ = job.get("typ")
     if typ == "ping":
         return {"ok": True, "rss_mb": _rss_mb()}
     logpfad = job.get("log") or os.devnull
+    wache = _JobRssWache(_job_rss_grenze(job), antwort_out)
     t0 = os.times()
     t0w = time.monotonic()   # E1/V0.4: WANDUHR je Job — cpu_s allein hatte die v1-Hochrechnung
     #                          in die Irre gefuehrt (CPU-Sekunden sind KEINE Dauer)
     zusatz = None            # E2: ernte-Jobs liefern ihre Zaehler in der Antwort mit
     try:
-        with _fd_umleitung(logpfad):
+        with _fd_umleitung(logpfad), wache:
             if typ == "analyze":
                 sys.argv = ["analyze.py"] + list(job.get("argv") or [])
                 # analyze haelt Zustand auf Modulebene -> run_path gibt jedem Lauf ein
@@ -192,6 +403,9 @@ def _job_ausfuehren(job):
                "cpu_s": round(t1.user - t0.user + t1.system - t0.system, 1),
                "wall_s": round(time.monotonic() - t0w, 1),   # additiv; Leser nutzen .get()
                "rss_mb": _rss_mb(), "vmhwm_mb": _vmhwm_mb()}
+    # In-Job-Spitze (abgetastet, Wache oben): vmhwm_mb ist die Spitze der PROZESS-
+    # Lebenszeit, rss_spitze_mb ordnet sie dem einzelnen Job zu. Additiv (.get()).
+    antwort["rss_spitze_mb"] = max(wache.spitze, antwort["rss_mb"])
     # Z8 Mitnahme A (konzept_frames.md §3.2): der Verteiler-Rueckfall auf
     # GETRENNTE Laeufe faellt HIER an, nicht im Dienst — dessen eigenes
     # core.frames saehe fuer immer 0 und /health loege durch Auslassung.
@@ -234,7 +448,8 @@ def main():
         except Exception:
             out.write(json.dumps({"ok": False, "fehler": "job unlesbar"}) + "\n")
             continue
-        out.write(json.dumps(_job_ausfuehren(job), ensure_ascii=False) + "\n")
+        out.write(json.dumps(_job_ausfuehren(job, antwort_out=out),
+                             ensure_ascii=False) + "\n")
 
 
 def roundtrip(argv):

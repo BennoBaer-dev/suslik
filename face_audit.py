@@ -105,8 +105,11 @@ def _ort_thread_opts():
     Klasse durch eine Funktion, bricht Vererbung/Unpickling mit
     'TypeError: function() argument 'code' must be code, not str' -> JEDE Analyse stirbt nach 0.3s
     mit 0 Gesichtern, keine Erkennung, keine Alerts. Darum haengen wir die Optionen ausschliesslich
-    an unsere EIGENEN Sessions. Die insightface-internen prepare()-Sessions behalten ihr Verhalten
-    (im GPU/NPU-Betrieb werden sie ohnehin sofort durch _ort_session-Sessions ersetzt)."""
+    an unsere EIGENEN Sessions — Ersatz NACH prepare(), nie die Klasse patchen. Seit dem #21-Fix
+    ersetzt _to_backend() die insightface-internen prepare()-Sessions auf JEDEM Backend, auch cpu:
+    vorher behielten sie auf dem reinen CPU-Pfad ihre UNGEKAPPTEN Default-Pools (je Session
+    hardware_concurrency des WIRTS, fuenf Sessions), die cpu_threads-Config deckelte dort nur die
+    eigene Recognition-Session (Issue #21: 2C/4T-NUC, zwei Worker a ~160 %)."""
     import onnxruntime as ort
     global _ORT_THREADS
     if _ORT_THREADS is None:
@@ -120,6 +123,10 @@ def _ort_thread_opts():
                 _ORT_THREADS = max(1, os.cpu_count() or 1)
     so = ort.SessionOptions()
     so.intra_op_num_threads = _ORT_THREADS
+    # inter_op mitsetzen (#21): im Default-Modus ORT_SEQUENTIAL baut ORT zwar keinen
+    # Inter-Op-Pool, aber der Default-WERT waere wieder hardware_concurrency — sollte je
+    # eine Session in den Parallel-Modus geraten, gilt derselbe Deckel statt der Host-Kernzahl.
+    so.inter_op_num_threads = _ORT_THREADS
     return so
 
 
@@ -256,8 +263,10 @@ class Embedder:
       GPU   -> alle Modelle auf der Intel-iGPU
       MIXED -> Detektor+Landmarks auf GPU, ArcFace auf NPU
       leer/CPU -> unveraendert, nativer CPU-Provider (Default).
-    insightface reicht providers NICHT an seine Modell-Sessions durch, daher werden die
-    ONNX-Sessions nach prepare() durch OpenVINO-EP-Sessions ersetzt. Die Embeddings
+    insightface reicht providers NICHT an seine Modell-Sessions durch (und auch keine
+    SessionOptions), daher werden die ONNX-Sessions nach prepare() IMMER durch eigene
+    _ort_session-Sessions ersetzt: auf Beschleunigern wechselt dabei der EP, auf cpu bleibt
+    der EP und es greift die Thread-Kappung aus _ort_thread_opts (Issue #21). Die Embeddings
     bleiben numerisch praktisch identisch (cos > 0.9997 ggue. CPU), Schwellwerte gelten weiter."""
     def __init__(self, device=None, modell=None):
         import onnxruntime as ort
@@ -272,9 +281,8 @@ class Embedder:
         if MODELLE[self.modell]["art"] == "onnx":
             self._init_rec_onnx(MODELLE[self.modell])
         self._backend = resolve_backend(device)   # (kind, dev): device= gewinnt, sonst VERIFY_BACKEND/OV_DEVICE
-        if self._backend[0] != "cpu":
-            self._to_backend()
-            self._provider_guard("init")          # P1: Aufbau sofort verifizieren (nie Latenz raten)
+        self._to_backend()                        # IMMER — auch cpu ersetzt die prepare()-Sessions (Thread-Kappung, #21)
+        self._provider_guard("init")              # P1: Aufbau sofort verifizieren (nie Latenz raten); cpu: sofort True
 
     def _init_rec_onnx(self, spec):
         """Recognition durch eigenes ONNX ersetzen (AdaFace): insightface macht weiter
@@ -415,10 +423,21 @@ class Embedder:
         """Ersetzt die insightface-ONNX-Sessions UND das eigene Recognition-ONNX durch Sessions auf
         dem gewaehlten Backend (self._backend). BEIDE muessen umziehen, sonst Detektion auf dem
         Beschleuniger, Recognition auf CPU = gemischte Devices. openvino:MIXED verteilt Tasks
-        GPU/NPU (nur OpenVINO). cache_dir cacht kompilierte OV-Blobs (nur 1. Lauf kompiliert)."""
+        GPU/NPU (nur OpenVINO). cache_dir cacht kompilierte OV-Blobs (nur 1. Lauf kompiliert).
+        cpu-Backend (#21-Fix): gleiche Ersatz-Mechanik, nur mit CPU-Provider — die nativen
+        prepare()-Sessions kommen OHNE SessionOptions und bauen je einen Intra-Op-Pool nach
+        hardware_concurrency des WIRTS (nicht der cgroup-Maske); erst der Ersatz mit
+        _ort_thread_opts laesst SUSLIK_CPU_THREADS bzw. die erlaubten Kerne ALLE Sessions
+        deckeln. self._rec bleibt auf cpu unangetastet: der traegt seine Kappung schon aus
+        _init_rec_onnx (Neuaufbau waere nur doppelte Ladezeit)."""
         kind, dev = self._backend
         if kind == "cpu":
-            return                                    # native CPU-Sessions (aus prepare()) bleiben
+            for task, model in self.app.models.items():
+                s = _ort_session("cpu", None, model.model_file)
+                model.session = s
+                model.input_name = s.get_inputs()[0].name
+                model.output_names = [o.name for o in s.get_outputs()]
+            return
         # W0 (GPU-Welle, 26.07.): Kompilat-Cache ins VOLUME statt ~/.cache im Container-Layer —
         # sonst zahlt jeder Image-Pull die volle OV-Kaltkompilierung neu (Plan-QS Lens3-13).
         # VERIFY_DATA_DIR ist im Container immer gesetzt (/data); der Host-venv-Lauf ohne die

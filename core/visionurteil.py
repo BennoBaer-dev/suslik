@@ -15,7 +15,7 @@ Was hier passiert, und warum genau so:
     gitter_bauen; eine zweite Gitter-Implementierung gibt es ausdruecklich
     nicht). Gemessener Grund: derselbe Durchgang, Bild fuer Bild gefragt, wurde
     tausch-KONSISTENT falsch zugeordnet (6 von 6 Anfragen, scratchpad/
-    ionos_anker_heike.json) — als Gitter gefragt gab es ueber alle gemessenen
+    ionos_anker_p1.json) — als Gitter gefragt gab es ueber alle gemessenen
     Paare keine einzige konsistent falsche Zuordnung (ionos_pass_matrix.json,
     ionos_galerie_vs_galerie.json). Eine Anfrage traegt damit den ganzen
     Durchgang statt einer Momentaufnahme.
@@ -30,10 +30,13 @@ Was hier passiert, und warum genau so:
     (ionos_vierwahl.json). Je Paar GENAU ZWEI Anfragen (untauscht + getauscht).
   * **Reihenfolge OHNE Fremd-Voraussetzung (V4c).** Die Kaskaden-Reihenfolge
     kommt aus eigenem Material: zuletzt per Vision bestaetigte Person zuerst,
-    sonst Galerie-Alter. Liegt die Koerper-Rangfolge vor, darf sie als HINWEIS
+    sonst Galerie-Alter. Liegt die Koerper-Einstufung vor, darf sie als HINWEIS
     einfliessen — der Pfad laeuft ohne sie identisch, nur in anderer
     Pruef-Reihenfolge (User-Entscheid 08.08.: der Embedding-Weg ist unsere Spezialitaet,
-    Vision muss allein tragfaehig sein).
+    Vision muss allein tragfaehig sein). Seit .171 kommt der FAVORIT aus den
+    SVM-Stimmen ALLER Gitter-Zellen (dasselbe Mass wie die Zellen-Klassifikation),
+    und die Herausforderer stehen vom NAECHSTEN Rivalen abwaerts — Herleitung
+    und verworfene Vorgaenger-Regeln im Docstring von `ordnung_bauen`.
   * **Wertung nur tausch-konsistent.** A im untauschten und B im getauschten
     Lauf meinen dieselbe Galerie; Widerspruch ist "kein Votum", nie ein
     Negativ-Beweis. NEITHER ebenso.
@@ -355,18 +358,34 @@ def zentroide(data_dir):
 
 
 def reihenfolge(data_dir, bild_rgb, personen, einbetten=None):
-    """Die Reihenfolge der Kaskade (E2, User-Entscheid: "die Personenerkennung steuert
-    die Reihenfolge, nicht A/B/C/D"): Zentroid-Abstand im DINOv2-Raum, absteigend.
+    """Die DINOv2-Rangfolge (E2): Zentroid-Kosinus, absteigend.
 
     Massgeblich ist DINOv2 und nicht der Gesichts-Raum: Kandidat und Galerien
     sind KOERPER-Crops; der Gesichts-Raum lieferte hier einen Distraktor, der
     auf dem Bild gar nicht aehnlich aussieht. Personen ohne Embedding fallen
     nicht heraus, sie stehen hinten (nach Namen, damit es deterministisch ist).
 
+    SEIT .171 UEBER ALLE ZELLEN: `bild_rgb` darf eine LISTE von Bildern sein
+    (die Zellen des Kandidaten-Gitters); der Wert je Person ist dann der
+    MITTLERE Kosinus ueber alle Zellen. Anlass (Live-Fehlurteil 10.08., Pass
+    18:32): der Kosinus wurde bis .170 auf GENAU EINEM Bild (bilder[0])
+    gerechnet — ein einzelnes ungluecklich getroffenes Bild legte damit die
+    falsche Person 0.04 vor die richtige, obwohl vier weitere Zellen desselben
+    Durchgangs vorlagen. Gemittelt wird ueber die NORMIERTEN Zellen-Embeddings
+    ohne Re-Normierung: das Skalarprodukt mit dem Zentroid ist damit exakt der
+    Mittelwert der Einzel-Kosinus. Ein einzelnes Bild verhaelt sich wie bisher
+    (Mittel aus einem Wert).
+
     Rueckgabe: [(person, aehnlichkeit|None), ...]"""
     import numpy as np
     zs = zentroide(data_dir)
-    kand = (einbetten or _plv.einbetten)(bild_rgb)
+    fn = einbetten or _plv.einbetten
+    bilder = (list(bild_rgb) if isinstance(bild_rgb, (list, tuple))
+              else [bild_rgb])
+    embs = [fn(b) for b in bilder if b is not None]
+    if not embs:
+        return [(p, None) for p in sorted(personen)]
+    kand = np.mean(np.asarray(embs, dtype=float), axis=0)
     mit, ohne = [], []
     for p in personen:
         z = zs.get(p)
@@ -412,70 +431,113 @@ def eigene_ordnung(galerien, zuletzt=None):
                           float((g.get(n) or {}).get("abnahme_ts") or 0), n))]
 
 
-def kontrast_ordnung(ordnung):
-    """KONTRAST-REIHENFOLGE (.164, Entscheid 09.08. nach den 08:26er-Laeufen).
+def zellen_rangfolge(bilder, personen):
+    """Die SVM-Stimmen der GITTER-ZELLEN, je Person aufsummiert (.171).
 
-    Der FAVORIT bleibt, wo er ist: die wahrscheinlichste Person zuerst. Die
-    HERAUSFORDERER dagegen kommen ab jetzt vom UNAEHNLICHSTEN zum aehnlichsten.
+    DASSELBE Mass wie die Zellen-Klassifikation des Live-Pfads: jede Zelle
+    traegt Klasse (`klasse`) und `score` (koerper_score), die die SVM ihr beim
+    Beurteilen gegeben hat — hier wird nichts neu gerechnet, nur gelesen, was
+    je Bild schon geurteilt wurde. SUMMIERT statt gemittelt: fuenf Zellen mit
+    0.6 sind mehr Beleg als eine mit 0.9; ein Mittel saehe das umgekehrt, eine
+    reine Zellen-Zaehlung wuerfe die Score-Hoehe weg — die Summe traegt beides.
+    Nur Galerie-Personen zaehlen (FREMD und leere Klassen nicht); eine Zelle
+    ohne Score zaehlt als Zelle, traegt aber nichts zur Summe bei (fehlender
+    Messwert ist kein Messwert — dieselbe Haltung wie bei `_spanne`).
 
-    Warum: die B-Seite der Zwangswahl ist das Format-Gegenueber, nicht der
-    Pruefstein. Bis .163 stellte die Rangfolge dem Favoriten ausgerechnet die
-    AEHNLICHSTE Person gegenueber — also den schwersten denkbaren Vergleich in
-    Runde 1. Am Live-Lauf vom 09.08. kippte genau das zweimal in die
-    Positions-Schlagseite (beide Tauschseiten antworteten 'A'), das Paar wurde
-    zur Enthaltung; gegen den unaehnlichsten Gegner fiel dasselbe Paar
-    beidseitig sauber. Ein klarer Kontrast liefert das konsistente Paar in
-    Runde 1 — die schweren Vergleiche kommen danach, wenn sie ueberhaupt noch
-    gebraucht werden.
-
-    Gedreht wird NUR, wo es einen Aehnlichkeitswert gibt. Personen ohne
-    Embedding tragen keinen Abstand; sie zu "unaehnlich" zu erklaeren waere
-    erfunden, also bleiben sie hinten in ihrer deterministischen Namensfolge.
-    Rein: gleiche Eingabe -> gleiche Ausgabe."""
-    o = list(ordnung or ())
-    if len(o) < 3:
-        return o                    # ein Favorit und ein Herausforderer: nichts zu drehen
-    favorit, rest = o[0], o[1:]
-    mit = [e for e in rest if e[1] is not None]
-    ohne = [e for e in rest if e[1] is None]
-    return [favorit] + list(reversed(mit)) + ohne
+    Rueckgabe: {person: {"zellen": n, "summe": float}} — leer, wenn keine
+    Zelle eine bekannte Person traegt (Alt-Protokolle ohne Klasse, reine
+    FREMD-Durchgaenge)."""
+    zulaessig = set(personen or ())
+    aus = {}
+    for b in bilder or ():
+        k = str((b or {}).get("klasse") or "")
+        if k not in zulaessig:
+            continue
+        try:
+            s = float(b.get("score"))
+        except (TypeError, ValueError):
+            s = 0.0
+        e = aus.setdefault(k, {"zellen": 0, "summe": 0.0})
+        e["zellen"] += 1
+        e["summe"] = round(e["summe"] + s, 4)
+    return aus
 
 
 def ordnung_bauen(data_dir, galerien, bild_rgb=None, einbetten=None,
-                  zuletzt=None):
+                  zuletzt=None, zellen=None):
     """Die Reihenfolge, die die Kaskade wirklich faehrt — plus die QUELLE im
     Klartext (das Erzaehl-Log nennt sie, statt eine Herkunft zu verschweigen).
 
     ENTSCHEID (User 08.08. spaetabend): der Vision-Pfad darf die
-    Koerper-Rangfolge nicht VORAUSSETZEN — sie ist eine Eigenheit dieser
+    Koerper-Einstufung nicht VORAUSSETZEN — sie ist eine Eigenheit dieser
     Installation, Vision soll auch allein tragen. Liegt sie vor, ist sie ein
     HINWEIS und sortiert; liegt sie nicht vor, laeuft derselbe Pfad mit der
     eigenen Ordnung. Die URTEILE sind in beiden Faellen dieselben, nur die
     Pruef-Reihenfolge unterscheidet sich.
 
-    FORTGESCHRIEBEN .164: liegt die Rangfolge vor, wird sie fuer die
-    HERAUSFORDERER umgedreht (`kontrast_ordnung`) — Favorit unveraendert,
-    unaehnlichster Gegner zuerst. Ohne Rangfolge bleibt die eigene Ordnung wie
-    sie war: dort gibt es keinen Aehnlichkeits-Abstand, und eine Umdrehung
-    ohne Messgroesse waere Zufall mit dem Anschein von Methode. Die Quelle
-    sagt beides ehrlich.
+    FORTGESCHRIEBEN .171 (Live-Fehlurteil 10.08., Hinweg-Pass 18:32) — zwei
+    Regeln, beide an genau diesem Durchgang gerissen:
 
-    Rueckgabe: (ordnung, quelle)."""
+    (1) DER FAVORIT KOMMT AUS DEMSELBEN MASS WIE DIE ZELLEN-KLASSIFIKATION:
+    den SVM-Stimmen aller Gitter-Zellen (`zellen_rangfolge`, Summe der
+    koerper_scores je Person). Bis .170 entschied ein ANDERES Mass aus nur
+    EINEM Bild (DINOv2-Kosinus auf bilder[0]): am 18:32er-Pass stufte die SVM
+    alle 5 Zellen als DIESELBE Person ein (Scores 0.536-0.989), der
+    Ein-Bild-Kosinus legte trotzdem eine andere Person 0.04 davor — und genau
+    die wurde Favorit. Der DINOv2-Kosinus (seit .171 gemittelt ueber ALLE
+    Zellen) ist nur noch HINWEIS und Tie-Breaker: er ordnet die Personen, die
+    keine Zelle gewonnen haben, und entscheidet Gleichstaende — den Favoriten
+    stellt er nicht mehr, solange Zellen-Stimmen da sind.
+
+    (2) VERWORFENES SOLL (.164-.170, `kontrast_ordnung`): die Herausforderer
+    standen vom UNAEHNLICHSTEN zum aehnlichsten — der Favorit gewann sein
+    erstes (bei min_voten=1: einziges) Duell also ausgerechnet gegen den
+    leichtesten Gegner, und der NAECHSTE Rivale wurde nie gefragt. Genau so
+    bestand am 18:32er-Pass der falsche Favorit gegen den unaehnlichsten
+    Gegner, waehrend die richtige Person nie ins Duell kam. Seit .171 stehen
+    die Herausforderer vom NAECHSTEN RivalEN abwaerts: das erste Duell ist das
+    schwerste, ein Favorit, der nur gegen Leichtgewichte besteht, gewinnt
+    nicht mehr. Der .164-Anlass (Positions-Schlagseite machte das schwere Paar
+    in Runde 1 zur Enthaltung, und bis .161 beendete eine Enthaltung den Lauf)
+    ist seit .162 entschaerft: eine Enthaltung kostet nur noch ein Paar
+    Anfragen, der naechste Herausforderer kommt trotzdem dran.
+
+    Ohne Zellen-Stimmen und ohne Koerper-Modell bleibt die eigene Ordnung wie
+    sie war: dort gibt es kein Mass, und eine Rangfolge ohne Messgroesse
+    waere Zufall mit dem Anschein von Methode. Die Quelle sagt es ehrlich.
+
+    Rueckgabe: (ordnung, quelle) — ordnung = [(person, wert|None), ...]; der
+    Wert ist das Mass, das die Position bestimmt hat (SVM-Score-Summe fuer
+    Zellen-Gewinner, sonst der mittlere DINOv2-Kosinus, sonst None)."""
     eigen = eigene_ordnung(galerien, zuletzt)
     quelle = ("last confirmed person first" if zuletzt
               else "gallery age (nothing confirmed yet)")
-    if bild_rgb is None:
-        return eigen, quelle
-    try:
-        if not zentroide(data_dir):
-            return eigen, quelle          # kein Modell -> gar nicht erst rechnen
-        mit = reihenfolge(data_dir, bild_rgb, [n for n, _ in eigen], einbetten)
-    except Exception:
-        return eigen, quelle              # ein Hinweis kippt nie einen Lauf
-    if not mit or all(s is None for _, s in mit):
-        return eigen, quelle
-    return (kontrast_ordnung(mit),
-            "favourite by body ranking, challengers most-different first")
+    namen = [n for n, _ in eigen]
+    platz = {n: i for i, n in enumerate(namen)}
+    hinweis = []
+    if bild_rgb is not None:
+        try:
+            if zentroide(data_dir):
+                hinweis = reihenfolge(data_dir, bild_rgb, namen, einbetten)
+        except Exception:
+            hinweis = []              # ein Hinweis kippt nie einen Lauf
+    if hinweis and all(s is None for _, s in hinweis):
+        hinweis = []
+    dino = dict(hinweis)
+    svm = zellen_rangfolge(zellen, namen)
+    if svm:
+        geordnet = sorted(namen, key=lambda n: (
+            0 if n in svm else 1,
+            -float((svm.get(n) or {}).get("summe") or 0.0),
+            -dino[n] if dino.get(n) is not None else float("inf"),
+            platz[n]))
+        return ([(n, svm[n]["summe"] if n in svm else dino.get(n))
+                 for n in geordnet],
+                "favourite by the body votes of the grid cells, "
+                "closest rival first")
+    if hinweis:
+        return hinweis, "favourite by body ranking, closest rival first"
+    return eigen, quelle
 
 
 # ------------------------------------------------------------------- Kaskade
@@ -1318,18 +1380,24 @@ def pass_urteilen(data_dir, pass_key, galerien, regeln, anfrage_fn,
               f" — you asked for {gewuenscht} cells, this walk-through only "
               f"has {k['gesamt']} usable picture(s), so {zellen} were used"),
            zellen=zellen, gewuenscht=gewuenscht, gitter=kand_m["groesse"])
-    # Reihenfolge: eigenes Material zuerst, Koerper-Rangfolge nur als HINWEIS
+    # Reihenfolge: eigenes Material zuerst, Koerper-Einstufung nur als HINWEIS
     # (V4c) — der Pfad laeuft ohne sie identisch, nur in anderer Reihenfolge.
-    bild_rgb = None
+    # .171: der Favorit kommt aus den SVM-Stimmen ALLER Zellen (dasselbe Mass
+    # wie die Zellen-Klassifikation), der DINOv2-Kosinus laeuft ueber ALLE
+    # Zellenbilder statt nur bilder[0] und ordnet nur noch den Rest
+    # (Herleitung: Docstring `ordnung_bauen`).
+    zellen_rgb = []
     try:
         import cv2
-        im = cv2.imread(k["bilder"][0]["pfad"])
-        bild_rgb = None if im is None else im[:, :, ::-1]
+        for b in k["bilder"]:
+            im = cv2.imread(b["pfad"])
+            if im is not None:
+                zellen_rgb.append(im[:, :, ::-1])
     except Exception:
-        bild_rgb = None
+        zellen_rgb = []
     ordnung, quelle = ordnung_bauen(
-        data_dir, {n: gal[n][0] for n in gal}, bild_rgb, einbetten,
-        zuletzt_bestaetigt(data_dir))
+        data_dir, {n: gal[n][0] for n in gal}, zellen_rgb or None, einbetten,
+        zuletzt_bestaetigt(data_dir), zellen=k["bilder"])
     zeile["reihenfolge"] = [[p, s] for p, s in ordnung]
     zeile["reihenfolge_quelle"] = quelle
     _sagen(melden, f"order of the comparisons: {quelle} — "

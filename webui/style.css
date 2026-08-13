@@ -130,6 +130,13 @@
 
 
 * { box-sizing: border-box; }
+/* Das hidden-Attribut gewinnt IMMER — auch gegen Author-display-Regeln (#22):
+   die UA-Regel [hidden]{display:none} verliert per Kaskaden-Origin gegen JEDE
+   eigene display-Angabe (.vs-dirty-top mit inline-block liess so das obere
+   "not saved"-Badge dauerhaft stehen, obwohl hidden gesetzt war). !important
+   im Author-Origin schlaegt normale Author-Regeln — Toggles via el.hidden
+   funktionieren damit unabhaengig davon, ob die Klasse ein display setzt. */
+[hidden] { display: none !important; }
 body { font: 14px/1.45 var(--sans); background: var(--bg); color: var(--text);
        margin: 0; padding: 0 0 48px; -webkit-font-smoothing: antialiased; }
 a { color: var(--accent); text-decoration: none; }
@@ -186,7 +193,12 @@ nav .live .d { width: 7px; height: 7px; border-radius: 50%; background: var(--ok
 
 /* ---- Banner ---- */
 .banner { background: var(--crit-bg); border: 1px solid color-mix(in srgb, var(--crit) 45%, transparent);
-          color: var(--crit); border-radius: 10px; padding: 8px 12px; margin: 0 0 16px; font-weight: 500; }
+          color: var(--crit); border-radius: 10px; padding: 8px 12px; margin: 0 0 16px; font-weight: 500;
+          /* URLs im Fehlertext sind EIN 70+-Zeichen-Token — ohne Umbruch schob das auf dem
+             Telefon die ganze Seite in den Quer-Scroll (Widerleger 11.08.; Muster wie der
+             25.07.-Fund zwei Bloecke hoeher). */
+          overflow-wrap: break-word;   /* Rueckfall aelterer Mobil-Browser */
+          overflow-wrap: anywhere; }
 
 /* ---- KPI-Reihe ---- */
 /* Tagesnavigation (25.07.): ersetzt die feste Ueberschrift "Today". Datum in der Mitte, Pfeile
@@ -613,3 +625,25 @@ a.pchip:hover, a.badge.warn:hover { filter: brightness(1.15); }
 .wnblock .wn-toggle { margin-top: 6px; background: none; border: 0;
   color: var(--accent); cursor: pointer; padding: 0; font-size: 13px; }
 .wnblock .wn-toggle:hover { text-decoration: underline; }
+
+/* ---- Live-Reiter (Phase 2): Kachel-Farben aus registry.LIVE_ZUSTAENDE.farbe
+   (eine Quelle: die Farbworte grau/gelb/blau/gruen/rot/neutral kommen aus der
+   Enum, hier haengt je Wort GENAU EINE Klasse — kein Streu-Literal). */
+.lv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+.lv-kachel { border-left: 4px solid var(--border); }
+.lv-grau    { border-left-color: var(--dim); }
+.lv-gelb    { border-left-color: var(--warn); }
+.lv-blau    { border-left-color: var(--accent); }
+.lv-gruen   { border-left-color: var(--ok); }
+.lv-rot     { border-left-color: var(--crit); }
+.lv-neutral { border-left-color: var(--border); }
+.lvp { margin-left: auto; }
+.lvp-grau, .lvp-neutral { background: var(--surface-2); color: var(--dim); }
+.lvp-gelb  { background: var(--warn-bg); color: var(--warn); }
+.lvp-blau  { background: var(--accent-bg); color: var(--accent); }
+.lvp-gruen { background: var(--ok-bg); color: var(--ok); }
+.lvp-rot   { background: var(--crit-bg); color: var(--crit); }
+.lv-zeile { margin: 3px 0; font-size: 13px; }
+.lv-knoepfe { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.lv-radio { display: block; margin: 3px 0; }
+.lv-erklaer { border-left: 4px solid var(--accent); }

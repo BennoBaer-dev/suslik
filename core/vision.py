@@ -541,7 +541,7 @@ def antwort_auswerten(roh, *, kachel_name="", arm=None, galerie_stand=None,
     Regeln, jede an einem Messbefund (§5):
       * finish_reason/stop_reason == length/max_tokens -> KEIN Votum, Grund
         "length". Das ist kein falsches Urteil, sondern ein technischer Abbruch
-        (gemessen: ionos_vision_test D3/lindi_1 lieferte bei 3000 Token einen
+        (gemessen: ionos_vision_test D3/p2_1 lieferte bei 3000 Token einen
         LEEREN Text, im Nachlauf mit 12000 war dasselbe Paar korrekt).
       * Verweigerung (stop_reason "refusal" oder gefuelltes refusal-Feld) ->
         KEIN Votum, Grund "refusal". Nie ein Negativ-Beweis.

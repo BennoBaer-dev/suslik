@@ -231,7 +231,7 @@ def koerper_abnehmer(eid):
     Container die gestagte Kette greift und es keine zweite Pfad-Wahrheit gibt.
     Rueckgabe (Koerper, Abnehmer, EVENT_ZEITWACHE_S)."""
     from core.personlauf import _proto, EVENT_ZEITWACHE_S
-    from worker import _rss_mb          # EINE VmRSS-Quelle, keine zweite Formel
+    from worker import _rss_mb, _cgroup_frei_mb   # EINE Quelle je Messgroesse
     _proto()
     import pfad_snapshots
     # Kopfraum JETZT, nicht aus zweiter Hand: dieses Skript laeuft IM Worker
@@ -240,6 +240,17 @@ def koerper_abnehmer(eid):
     # gestarteten Worker gar keiner).
     rss = _rss_mb()                    # -1 = /proc nicht lesbar
     budget = (a.koerper_rss_max_mb - rss) if rss > 0 else 0.0
+    # Zweiter Deckel (Fix 10.08.): die CGROUP-Grenze des Containers. Das
+    # Budget oben ist nur POLITIK (worker_rss_max_mb minus eigener VmRSS,
+    # die Neustart-Schwelle des Dienstes) — /proc/meminfo stand hier nie im
+    # Spiel (im Container zeigt es den Wirt und waere eine Luege). Was den
+    # Prozess aber wirklich toetet, ist die cgroup: bei Installationen mit
+    # Docker-Memory-Limit darf der Puffer auch den REALEN Rest nicht
+    # reissen. -1 = keine Grenze lesbar (Prod 10.08.: memory.max='max')
+    # -> es bleibt beim Politik-Budget, geraten wird nichts.
+    cg = _cgroup_frei_mb()
+    if cg >= 0:
+        budget = min(budget, float(cg))
     k = pfad_snapshots.Koerper(eid, ram_budget_mb=budget)
     # Die zwei Frigate-Artefakte JETZT holen: ohne path_data/box gibt es
     # keinen Koerper-Abnehmer, und dann soll der Verteiler auch nichts von
@@ -293,7 +304,17 @@ def koerper_ablegen(k, wache, outdir, eid, rest_s):
                             "frame_i": int(fi), "hoehe": int(hoehe)})
     daten = {"eid": eid, "info": info, "top": dateien,
              "puffer_mb": round(k.puffer_mb, 1),
-             "samples": (wache.samples if wache is not None else 0),
+             # GEHALTENE Samples (Nachbesserung F6): vorher stand hier die
+             # GELIEFERTE Zahl der Wache (bei Degradation 166), waehrend
+             # puffer_mb die GEHALTENE abbildet (80 x 23,7 MB) — die
+             # KOERPER-Zeile unten widersprach sich damit selbst. Die
+             # gelieferte Zahl bleibt ueber 'degradiert' ("166->80") und die
+             # verifyd-worker-Telemetrie sichtbar.
+             "samples": int(getattr(k, "gehalten",
+                                    wache.samples if wache is not None else 0)),
+             # RAM-Gate-Degradation (Fix 10.08.): sichtbar machen, wenn der
+             # Puffer auf das Budget heruntergeduennt wurde ("166->80").
+             **({"degradiert": k.degradiert} if getattr(k, "degradiert", None) else {}),
              **({"ausfall": ausfall} if ausfall else {})}
     tmp = ziel + ".tmp"
     with open(tmp, "w") as f:
@@ -323,6 +344,20 @@ for k, eid in enumerate(a.eids):
     try:
         faces = []; sampled = 0
         show, nnctx = {}, {}   # person -> (flaeche, ctx-crop) bzw. (score, ctx-crop): Anzeige-Bilder
+        # Streaming-argmax statt Crop-Sammlung (Bau 10.08. im Umfeld von Issue #20):
+        # frueher hielt JEDE faces-Zeile ihren Crop bis Clip-Ende, verbraucht wird aber
+        # nur EIN Crop je Person (Bestbild-JPG unten). best_crop haelt je Person genau
+        # den Crop des bisher besten Frames (strikt > = erstes Maximum, exakt die
+        # max()-Semantik) — Speicher O(#Personen) statt O(#Detektionen), Ergebnis
+        # byte-identisch (Orakel-Test 288 Faelle / 158.515 Detektionen, 0 Abweichungen).
+        # EHRLICHE EINORDNUNG (Kontrolle 10.08.): das ist eine Haltbarkeits-Verbesserung
+        # im Gesichtspfad, NICHT die Ursache von Issue #20. Gemessen am 816-Detektionen-
+        # 4K-Lauf: die alte Sammlung hielt 117,5 MB Crops; die Prozess-Spitze (~1,9 GB,
+        # gesetzt vom ORT/OpenVINO-Aufbau) sinkt dadurch NICHT messbar. Der Melder hat
+        # die Crop-Ursache selbst widerrufen (Issue #20, Kommentar 3, 08.08.): seine
+        # 34-38 GB kamen von einem bei jedem Dienststart neu aufgenommenen Anker-
+        # Lernlauf (phase=anker), nicht aus dieser Sammlung.
+        best_crop = {}         # person -> (score, enger Crop des argmax-Gesichts)
         # Enrollment-Kandidaten (Plan AP4): pro Person das beste GATE-konforme Gesicht
         # (Kante>=100, front>=0.5, det>=0.7, sharp>=60, score>=0.45) und der beste
         # Fremd-Kandidat (grosses gutes Gesicht, bester Match ueberhaupt < 0.35).
@@ -368,12 +403,13 @@ for k, eid in enumerate(a.eids):
                               "yaw": yaw, "det": float(fc.det_score), "sharp": schaerfe0,
                               "sex": getattr(fc, "sex", "?"), "age": int(getattr(fc, "age", -1)),
                               "pose": [round(float(x),0) for x in getattr(fc,"pose",[])] or None,
-                              # .copy(): frame[y1:y2, x1:x2] ist ein numpy-VIEW und haelt den KOMPLETTEN
-                              # dekodierten Frame am Leben, solange er in faces liegt (bis Clip-Ende).
-                              # Bei 4 MP sind das ~11 MB pro Gesicht statt ~100 kB fuer den Crop —
-                              # lange Events mit dauerhaft sichtbarer Person liefen so in den OOM-Kill
-                              # (Analyse "fehler", Nachholversuche scheiterten identisch).
-                              "sc": sc, "p": p, "crop": crop.copy()})
+                              # KEIN "crop" mehr in faces: die Sammlung hielt jede Detektion
+                              # als Kopie bis Clip-Ende (nach dem .copy()-Fix von 0.1.0.21
+                              # ~100 kB statt ~11 MB je Gesicht, aber weiter linear in der
+                              # Detektionszahl). Einziger Verbraucher war das Bestbild je
+                              # Person — das haelt jetzt best_crop (streaming-argmax;
+                              # Einordnung und Messung im best_crop-Kommentar oben).
+                              "sc": sc, "p": p})
                 # Anzeige-Tracking (nur solange der Frame vorliegt): pro Person das
                 # GROESSTE verlaesslich erkannte Gesicht (score >= win-thresh) mit
                 # Umfeld; Fallback fuer nie Bestaetigte: Umfeld des Match-besten.
@@ -383,6 +419,12 @@ for k, eid in enumerate(a.eids):
                         show[pp_] = (area, ctx_crop(frame, x1, y1, x2, y2))
                     if s_ > nnctx.get(pp_, (-1.0, None))[0]:
                         nnctx[pp_] = (s_, ctx_crop(frame, x1, y1, x2, y2))
+                    # Bestbild-Crop je Person: strikt > haelt das ERSTE Maximum —
+                    # dieselbe Zeile, die max(faces, key=sc[person]) unten gewaehlt
+                    # haette. Sentinel -2.0: auch der Kein-Referenzen-Fall
+                    # (nn() == -1.0) liefert deterministisch das erste Gesicht.
+                    if s_ > best_crop.get(pp_, (-2.0,))[0]:
+                        best_crop[pp_] = (s_, crop.copy())
                 kante = min(x2 - x1, y2 - y1)
                 schaerfe = schaerfe0
                 gate = (kante >= 100 and front >= 0.5 and float(fc.det_score) >= 0.7
@@ -425,7 +467,7 @@ for k, eid in enumerate(a.eids):
             name="gesicht",
             fps_sample=a.fps_sample,   # derselbe Wert wie zuvor -> derselbe step
             zeitbezug="clip",          # t = i/fps, kein Wanduhr-Anker
-            bedarf="stream",           # haelt nur Crops (.copy()), nie den Frame
+            bedarf="stream",           # haelt nur O(#Personen) Best-Crops, nie den Frame
             hart=True,                 # verifyd:3447-3452 haengt am Gesichtsurteil:
                                        # faellt es aus, ist der Lauf zu Ende
             wache_politik="nachrechnen",
@@ -513,7 +555,9 @@ for k, eid in enumerate(a.eids):
         # Person, und 0 von 131 bestaetigten Auftritten bleibt ohne Bild (niedrigster NN
         # einer bestaetigten Person 0.410, 99. Perzentil der uebrigen 0.370).
         if mx >= a.win_thresh:
-            c = best["crop"]
+            # best_crop[person] existiert immer, wenn faces nicht leer ist (nn() liefert
+            # jede Person in sc); der Crop ist byte-identisch zu best["crop"] von frueher.
+            c = best_crop[person][1]
             if c.size:
                 fn = os.path.join(outdir, f"{label}_best_{person}_NN{mx:.2f}_t{best['t']:.0f}s.jpg")
                 cv2.imwrite(fn, c)

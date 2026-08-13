@@ -109,10 +109,10 @@ def _hwdec(meta=None):
     meta = meta or {}
     if meta.get("pix_fmt") not in ("yuv420p", "yuvj420p"):
         return None
-    va = (os.path.exists(os.environ.get("SUSLIK_HWDEC_DEVICE",
-                                        "/dev/dri/renderD128"))
-          and _va_treiber())
-    nv = os.path.exists("/dev/nvidiactl")     # NVIDIA-Runtime im Container
+    # Verfuegbarkeits-Praedikate ausgelagert (va_da/nv_da, Dateiende): auch
+    # der Live-Leser (core/livewache.hw_wahl) waehlt an DENSELBEN Kriterien
+    # (eine Quelle, kein zweites Rezept — K3-Regel).
+    va, nv = va_da(), nv_da()
     if m == "vaapi":
         return "vaapi" if va else None
     if m == "nvdec":
@@ -311,3 +311,24 @@ class FrameIter:
         # meldet jetzt der stderr-Zaehler.
         basis = s or self.samples or 1
         return self.decoder_fehler > toleranz(basis)
+
+
+# ---------------------------------------------------------------------------
+# Verfuegbarkeits-Praedikate der HW-Decode-Wahl — EINE Quelle fuer _hwdec
+# (oben) UND den Live-Leser (core/livewache.hw_wahl, Runde cuda-nvdec):
+# wer ein Kriterium aendert, aendert beide Nutzer mit. Bewusst am Dateiende,
+# damit die dokumentierten Zeilen-Anker (decode.py:1-30, :243) stabil bleiben.
+
+def va_da():
+    """Intel-VAAPI verfuegbar: Render-Node (SUSLIK_HWDEC_DEVICE, Default
+    /dev/dri/renderD128) UND validierter VA-Treiber (_va_treiber, iHD/i965).
+    Blosse Knoten-Existenz genuegt NICHT (Panel-Fund, s. _va_treiber)."""
+    return (os.path.exists(os.environ.get("SUSLIK_HWDEC_DEVICE",
+                                          "/dev/dri/renderD128"))
+            and _va_treiber())
+
+
+def nv_da():
+    """NVIDIA-Runtime im Container: /dev/nvidiactl (Kriterium unveraendert
+    aus der _hwdec-Historie; NVDEC-Byte-Beweis am NB 05.08.)."""
+    return os.path.exists("/dev/nvidiactl")

@@ -193,8 +193,11 @@ def _emb(pfade):
     aktuell). Unlesbares wird uebersprungen und GEZAEHLT, nie ein stiller
     Verlust; der Aufrufer haelt seine Label-Liste ueber ok_indices synchron."""
     import onnxruntime as ort
+    from face_audit import _ort_thread_opts   # zentrale Thread-Kappung (#21): ohne
+    # SessionOptions baut ORT den Intra-Op-Pool nach hardware_concurrency des WIRTS
     s = ort.InferenceSession(_dino_pfad(),
-                             providers=["CPUExecutionProvider"])
+                             providers=["CPUExecutionProvider"],
+                             sess_options=_ort_thread_opts())
     arrays, ok = [], []
     uebersprungen = 0
     for i, p in enumerate(pfade):
