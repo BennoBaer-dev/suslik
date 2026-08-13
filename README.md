@@ -42,7 +42,8 @@ person, one block per pass, unknowns kept visible instead of buried:
 
 ![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.0.199)
 
-*(Screenshot from a live install of v0.1.0.54; names and faces anonymized.)*
+*(Screenshot from a live install of v0.1.0.199; names and faces anonymized. The
+"Recognized live" row is the live watchers' preliminary naming, right on the stream.)*
 
 "Recognized live" cards collect the appearances a live watcher named right on the
 stream; clicking one opens the live day view with one card per camera appearance,
