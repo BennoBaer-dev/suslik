@@ -31,3 +31,13 @@ Intel's current compute runtime only covers Gen12 and later, the older generatio
 served by separate legacy1 packages, and that is exactly what `-gpu-legacy` ships.
 The regular `-gpu` image on such hardware falls back to CPU (loudly) and now shows a
 banner pointing to the right variant. Field reports welcome.
+
+**Live watchers and your hardware.** A live watcher decodes its camera stream
+continuously, so it is the most hardware-hungry part of suslik — and GPU-only for now
+(the cpu image shows the tiles as "not available"). There is no capacity verdict:
+enabled means running, limited only by a hard cap of **5 watchers** and a RAM floor
+read from the container's memory limit; under load the engine thins its own sampling
+and shows the throttle level. Each watcher has its own **processing resolution**
+(360p–2160p, default **1080p**) — that is the main lever between "runs comfortably"
+and "the throttle kicks in". The **Measure load** button tells you what one watcher
+really costs on *your* hardware.

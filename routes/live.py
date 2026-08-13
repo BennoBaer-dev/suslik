@@ -69,8 +69,12 @@ def _test_zeile(test, guard=None):
         return ""
     t = (f'source test {_wann(test.get("ts"))}: '
          f'{test.get("aufloesung", "?")} → {test.get("skala", "?")}, '
-         f'{test.get("bilder_s", "?")} frames/s, provider '
-         f'{test.get("provider", "?")}'
+         f'{test.get("bilder_s", "?")} frames/s'
+         # .196: Alt-Tests und Datei-Quellen tragen Durchsatz statt
+         # Lieferrate — ehrlich kennzeichnen statt eine echte fps vorzugeben.
+         + ("" if test.get("bilder_s_art") == "delivery"
+            else " (throughput, not delivery rate — rerun the source test)")
+         + f', provider {test.get("provider", "?")}'
          + ("" if test.get("hw") else " (software decode)")
          + _alter_marke(test.get("ts"))
          + (" — INVALIDATED: source changed since this test"
@@ -166,12 +170,12 @@ def _engine_karte(engine_info, gesperrt):
                       f'remain'
                       + (' — BELOW the safety floor, no further slot'
                          if slots.get("rest_warnung") else ''))
-    # UI-M4: der EFFEKTIVE Deckel aus der greedy-Rechnung — 'hard cap 5'
-    # allein versprach mehr, als das Budget traegt (gemessen: Seeds -> 3).
+    # .196: der Deckel kommt nur noch aus den zwei Notbremsen (harter Deckel,
+    # RAM-Boden als Messwert) — kein Lastmodell mehr (User: Messwerte
+    # informieren, sie entscheiden nicht).
     emax = slots.get("effektiv_max")
     if emax is not None:
-        zeilen.append(f'capacity: up to {emax} watcher(s) with the current '
-                      f'measurements (hard cap '
+        zeilen.append(f'capacity: up to {emax} watcher(s) (hard cap '
                       f'{slots.get("hart_max", "?")}) — limited by: '
                       f'{slots.get("effektiv_grund") or "?"}')
     else:
@@ -188,61 +192,170 @@ def _engine_karte(engine_info, gesperrt):
             + '</div>')
 
 
-def uebersicht(kacheln, engine_info, gesperrt, frigate_fehler=None):
-    """-> Seiten-INHALT der Kachel-Uebersicht."""
+GRUPPEN = (("laufend", "Running"), ("bereit", "Ready"),
+           ("rest", "Not set up"), ("versteckt", "Hidden"))
+
+
+def gruppen(kacheln):
+    """Kachel-Gruppierung des Reiters (User 13.08.: 'erst die aktiven sehen,
+    dann die deaktivierten' — die Wand aus gleichwertigen Kacheln erschlug):
+    Running = active UND disturbed (Stoerungen gehoeren nach OBEN; ein
+    LAUFENDER Waechter ist NIE versteckt, auch wenn er auf der Versteck-
+    Liste steht), Ready = tested, Hidden = Versteck-Liste, Rest = alles
+    andere. Reine Funktion -> {gruppe: [kd]} (Harnisch T19)."""
+    aus = {g: [] for g, _ in GRUPPEN}
+    for kd in kacheln:
+        z = kd.get("zustand")
+        if z in ("active", "disturbed"):
+            aus["laufend"].append(kd)
+        elif kd.get("versteckt"):
+            aus["versteckt"].append(kd)
+        elif z == "tested":
+            aus["bereit"].append(kd)
+        else:
+            aus["rest"].append(kd)
+    return aus
+
+
+def kopf_aufloesung(kd):
+    """Kopf-Aufloesung einer Kachel -> (text, echt). Rangfolge (User-Befund
+    13.08., '800×600 fuer eine 4K-Kamera passt nicht'): (1) Quelltest —
+    er misst die KONFIGURIERTE Quelle (auch eine Custom-URL); (2) Stream-
+    Steckbrief des Dienst-Probelaufs (echter Restream, ohne Klick da);
+    (3) Frigates detect-Substream-Groesse, ehrlich beschriftet. Reine
+    Funktion (Harnisch T19)."""
+    test = kd.get("test") or {}
+    if test.get("aufloesung"):
+        return str(test["aufloesung"]).replace("x", "×"), True
+    brief = kd.get("steckbrief") or {}
+    if brief.get("breite"):
+        return f'{brief["breite"]}×{brief.get("hoehe")}', True
+    cam = kd.get("cam") or {}
+    if cam.get("width"):
+        return f'{cam.get("width")}×{cam.get("height")} (detect)', False
+    return "", False
+
+
+def _karte(kd, gesperrt):
+    """-> HTML EINER Kachel (aus uebersicht herausgeloest, .186)."""
+    name = kd["name"]
+    nid = html.escape(name, quote=True)
+    z = kd["zustand"]
+    farbe = (LIVE_ZUSTAENDE.get(z) or {}).get("farbe", "neutral")
+    detail = (f'<div class="dim lv-zeile">{html.escape(kd["detail"])}</div>'
+              if kd.get("detail") else "")
+    fremd = ("" if kd.get("in_frigate")
+             else ' <span class="pill warn" title="configured here, but '
+                  'this camera is not in Frigate right now">not in '
+                  'Frigate</span>')
+    res_text, res_echt = kopf_aufloesung(kd)
+    res = (html.escape(res_text) if res_echt else
+           html.escape(res_text).replace(
+               "(detect)",
+               '<span title="Frigate detect stream — the real stream '
+               'resolution appears after the service probes the stream or '
+               'a source test runs">(detect)</span>'))
+    knoepfe = [f'<a class="gtb" href="/live/{nid}">Configure</a>']
+    if not gesperrt:
+        g = kd.get("guard")
+        if g is not None or kd.get("in_frigate"):
+            knoepfe.append(f'<button class="gtb" '
+                           f'onclick="liveTest(\'{nid}\',this)">'
+                           f'Run source test</button>')
+            knoepfe.append(f'<button class="gtb" '
+                           f'onclick="liveMessung(\'{nid}\',this)">'
+                           f'Measure load</button>')
+        if z == "tested":
+            knoepfe.append(f'<button class="gtb on" '
+                           f'onclick="liveSchalter(\'{nid}\',true,this)">'
+                           f'Enable</button>')
+        elif g is not None and g.get("enabled"):
+            knoepfe.append(f'<button class="gtb" '
+                           f'onclick="liveSchalter(\'{nid}\',false,this)">'
+                           f'Disable</button>')
+    # Hide/Show (User 13.08.) — NICHT an laufenden Kacheln (die Running-
+    # Gruppe zeigt immer alles; erst stoppen, dann verstecken).
+    if kd["zustand"] not in ("active", "disturbed"):
+        if kd.get("versteckt"):
+            knoepfe.append(f'<button class="gtb" '
+                           f'onclick="liveVerstecken(\'{nid}\',false,this)">'
+                           f'Show</button>')
+        else:
+            knoepfe.append(f'<button class="gtb" '
+                           f'onclick="liveVerstecken(\'{nid}\',true,this)">'
+                           f'Hide</button>')
+    # Vorschau-Bild NUR fuer aktive Kacheln (User-Wunsch 13.08.): das JPEG
+    # kommt aus dem Detektor-Thread der Engine (/live_bild, verarbeitete
+    # Waechter-Skala) — man sieht, was der Waechter sieht. Refresh macht
+    # der Poll in app.js ueber den data-kamera-Anker; onerror blendet aus
+    # (Engine-Neustart/Frische-404), onload wieder ein.
+    bild = (f'<img class="lv-vorschau" data-kamera="{nid}" alt="" '
+            f'src="/live_bild/{nid}?t=0" '
+            f'onerror="this.style.display=\'none\'" '
+            f'onload="this.style.display=\'\'">'
+            if z == "active" else "")
+    return (
+        f'<div class="card lv-kachel lv-{farbe}">'
+        f'<div class="kamhead"><b>{html.escape(name)}</b>{fremd}'
+        f'<span class="dim num">{res}</span>{_pill(z)}</div>'
+        + bild
+        + detail
+        + _zaehler_zeile(kd.get("live"))
+        + _test_zeile(kd.get("test"), kd.get("guard"))
+        + _test_fehler_zeile(kd.get("test_fehler"))
+        + (_messung_zeile(kd.get("messung"), kd.get("guard"))
+           if not gesperrt else "")
+        + f'<div class="lv-knoepfe">{" ".join(knoepfe)}</div>'
+        + f'<div class="dim lv-zeile" id="lv-job-{nid}"></div>'
+        + '</div>')
+
+
+def _gruppe_html(nach_area, cam_area, kds, gesperrt):
+    """Kacheln EINER Gruppe rendern — optional nach Area unterteilt
+    (?gruppe=area): je Area eine schmale Zwischenzeile, Kameras ohne Area
+    unter 'No area' ans Ende. Ohne Schalter die Frigate-Reihenfolge."""
+    if not nach_area:
+        return '<div class="lv-grid">' + "".join(
+            _karte(kd, gesperrt) for kd in kds) + '</div>'
+    je_area = {}
+    for kd in kds:
+        je_area.setdefault((cam_area or {}).get(kd["name"]) or "", []).append(kd)
+    teile = []
+    for area in sorted(je_area, key=lambda a: (a == "", a)):
+        teile.append(f'<div class="dim lv-areazeile">'
+                     f'{html.escape(area) if area else "No area"}</div>')
+        teile.append('<div class="lv-grid">' + "".join(
+            _karte(kd, gesperrt) for kd in je_area[area]) + '</div>')
+    return "".join(teile)
+
+
+def uebersicht(kacheln, engine_info, gesperrt, frigate_fehler=None,
+               nach_area=False, cam_area=None):
+    """-> Seiten-INHALT der Kachel-Uebersicht (.186: Zustands-Gruppen statt
+    einer Wand; 'Not set up' und 'Hidden' eingeklappt)."""
     fehlerbanner = (f'<div class="banner">Could not read the Frigate camera '
                     f'list: {html.escape(str(frigate_fehler))}</div>'
                     if frigate_fehler else "")
-    karten = []
-    for kd in kacheln:
-        name = kd["name"]
-        nid = html.escape(name, quote=True)
-        z = kd["zustand"]
-        farbe = (LIVE_ZUSTAENDE.get(z) or {}).get("farbe", "neutral")
-        detail = (f'<div class="dim lv-zeile">{html.escape(kd["detail"])}</div>'
-                  if kd.get("detail") else "")
-        fremd = ("" if kd.get("in_frigate")
-                 else ' <span class="pill warn" title="configured here, but '
-                      'this camera is not in Frigate right now">not in '
-                      'Frigate</span>')
-        cam = kd.get("cam") or {}
-        res = (f'{cam.get("width")}×{cam.get("height")}'
-               if cam.get("width") else "")
-        knoepfe = [f'<a class="gtb" href="/live/{nid}">Configure</a>']
-        if not gesperrt:
-            g = kd.get("guard")
-            if g is not None or kd.get("in_frigate"):
-                knoepfe.append(f'<button class="gtb" '
-                               f'onclick="liveTest(\'{nid}\',this)">'
-                               f'Run source test</button>')
-                knoepfe.append(f'<button class="gtb" '
-                               f'onclick="liveMessung(\'{nid}\',this)">'
-                               f'Measure load</button>')
-            if z == "tested":
-                knoepfe.append(f'<button class="gtb on" '
-                               f'onclick="liveSchalter(\'{nid}\',true,this)">'
-                               f'Enable</button>')
-            elif g is not None and g.get("enabled"):
-                knoepfe.append(f'<button class="gtb" '
-                               f'onclick="liveSchalter(\'{nid}\',false,this)">'
-                               f'Disable</button>')
-        neb = kd.get("neubewertung") or ""
-        neb_html = (f'<div class="dim lv-zeile">re-check: {html.escape(neb)}'
-                    f'</div>' if neb else "")
-        karten.append(
-            f'<div class="card lv-kachel lv-{farbe}">'
-            f'<div class="kamhead"><b>{html.escape(name)}</b>{fremd}'
-            f'<span class="dim num">{html.escape(res)}</span>{_pill(z)}</div>'
-            + detail
-            + _zaehler_zeile(kd.get("live"))
-            + _test_zeile(kd.get("test"), kd.get("guard"))
-            + _test_fehler_zeile(kd.get("test_fehler"))
-            + (_messung_zeile(kd.get("messung"), kd.get("guard"))
-               if not gesperrt else "")
-            + neb_html
-            + f'<div class="lv-knoepfe">{" ".join(knoepfe)}</div>'
-            + f'<div class="dim lv-zeile" id="lv-job-{nid}"></div>'
-            + '</div>')
+    grp = gruppen(kacheln)
+    abschnitte = []
+    for schluessel, titel in GRUPPEN:
+        kds = grp[schluessel]
+        if not kds:
+            continue
+        inhalt_g = _gruppe_html(nach_area, cam_area, kds, gesperrt)
+        if schluessel in ("rest", "versteckt"):
+            abschnitte.append(
+                f'<details class="lv-abschnitt"><summary>{titel} '
+                f'({len(kds)})</summary>{inhalt_g}</details>')
+        else:
+            abschnitte.append(
+                f'<div class="lv-abschnitt"><div class="lv-kopfzeile">'
+                f'{titel} ({len(kds)})</div>{inhalt_g}</div>')
+    schalter = (f'<a class="gtb" href="/live" '
+                f'onclick="liveAreaMerken(false)">ungrouped view</a>'
+                if nach_area else
+                f'<a class="gtb" href="/live?gruppe=area" '
+                f'onclick="liveAreaMerken(true)">group by area</a>')
     sperr_karte = ""
     if gesperrt:
         sperr_grund = (engine_info or {}).get("sperr_grund") or ""
@@ -282,7 +395,9 @@ def uebersicht(kacheln, engine_info, gesperrt, frigate_fehler=None):
         + sperr_karte
         + _engine_karte(engine_info, gesperrt)
         + '<div class="dim lv-zeile" id="lv-auftrag"></div>'
-        + ('<div class="lv-grid">' + "".join(karten) + '</div>' if karten else
+        + (f'<div class="lv-schalterzeile">{schalter}</div>'
+           if kacheln else "")
+        + ("".join(abschnitte) if abschnitte else
            '<div class="leer"><b>No cameras found.</b><br><small>Configure '
            'the Frigate connection first — tiles appear per camera.'
            '</small></div>')
@@ -313,12 +428,26 @@ def detail(name, guard, kd, gesperrt):
             ("proxy", "go2rtc restream via Frigate (default, recommended)"),
             ("direct", "camera producer URL discovered via go2rtc"),
             ("url", "a stream URL you enter yourself")))
+    # .194 (User: 360-2160, "default immer auf 1080p"): Verarbeitungshoehe je
+    # Kachel. "default" = KEIN Guard-Feld -> der Fingerprint des laufenden
+    # Tests bleibt beim blossen Speichern stabil (ein expliziter Wert zaehlt
+    # als Quell-Aenderung und entwertet den Test ehrlich).
+    hoehe_wert = g.get("hoehe")
+    hoehen = "".join(
+        f'<label class="lv-radio"><input type="radio" name="lv-hoehe" '
+        f'value="{w}"{" checked" if hoehe_wert == (int(w) if w else None) else ""}>'
+        f' {t}</label>'
+        for w, t in (("", "default (1080p)"),
+                     ("360", "360p — weak-GPU fallback, latest name fire (measured)"),
+                     ("720", "720p — lighter decode, name fires later"),
+                     ("1080", "1080p — sweet spot (measured: name ~2.4 s earlier than 720p)"),
+                     ("1440", "1440p — no measured gain over 1080p"),
+                     ("2160", "2160p — native 4K, marginal gain, highest decode cost")))
     kanaele = g.get("kanaele") if g.get("kanaele") is not None else ["pushover"]
     kboxen = "".join(
         f'<label class="lv-radio"><input type="checkbox" class="lv-kanal" '
         f'value="{k}"{" checked" if k in kanaele else ""}> {k}</label>'
         for k in ("pushover", "telegram", "mqtt"))
-    schnell = g.get("schnell_urteil", True)
     z = kd["zustand"]
     an = bool(g.get("enabled"))
     schalter = ""
@@ -352,6 +481,14 @@ def detail(name, guard, kd, gesperrt):
           'or paste a new one</span></div>'
         + '<div class="dim lv-zeile">Changing the source invalidates the '
           'source test — run it again before enabling.</div></div>'
+        + '<div class="card"><b>Processing resolution</b>'
+        + '<div class="dim lv-zeile">The watcher analyzes the stream at this '
+          'height (aspect-ratio kept). Higher = sharper face crops for the '
+          'name check; the detection net stays the same size, extra cost is '
+          'decode/scaling — use <b>Measure load</b> to see the real numbers '
+          'on your hardware. Changing this invalidates the source test.</div>'
+        + hoehen
+        + '</div>'
         + '<div class="card"><b>Alarm chain</b>'
         + f'<div>End after no face (s): <input id="lv-ende" size="5" '
           f'value="{html.escape(str(g.get("ende_ohne_gesicht_s", 10)))}"> '
@@ -364,12 +501,12 @@ def detail(name, guard, kd, gesperrt):
           f'alerts (0–3600)</span></div></div>'
         + '<div class="card"><b>Notification channels</b>'
         + kboxen
-        + '<div>Include preliminary name guess: '
-          f'<select id="lv-schnell"><option value="true"'
-          f'{" selected" if schnell else ""}>on</option><option value="false"'
-          f'{"" if schnell else " selected"}>off</option></select> '
-          '<span class="dim">adds "probably X (preliminary)" to the alert — '
-          'never stored, never used for learning</span></div>'
+        # .197: der "quick verdict"-Haken ist weg (User: Enable heisst alles
+        # laeuft) — die vorlaeufige Namens-Stufe gehoert seit dem Voting zu
+        # jedem eingeschalteten Waechter, sofern Referenzen da sind.
+        + '<div class="dim lv-zeile">Alerts include a preliminary name '
+          'guess ("probably X") when the face matches a known person — '
+          'never stored, never used for learning.</div>'
         + '<div class="dim lv-zeile">Channel credentials live on the '
           '<a href="/benachrichtigungen">Notifications</a> page — test them '
           'there.</div></div>'

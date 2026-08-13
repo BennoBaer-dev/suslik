@@ -10,12 +10,13 @@ Set it in the setup wizard, or via `VERIFY_BACKEND` (or `backend:` in the stored
 
 | Value | Runs on | Image variant |
 |---|---|---|
-| `auto` *(default in `-gpu` since 0.1.0.44)* | picks NPU/GPU/CPU once, sticks | `-gpu` |
+| `auto` *(default in `-gpu`)* | picks NPU/GPU/CPU once, sticks | `-gpu`, `-gpu-legacy` |
 | `cpu` | CPU only | any (always available) |
-| `openvino:GPU` | Intel iGPU | `-gpu` |
+| `openvino:GPU` | Intel iGPU | `-gpu`, `-gpu-legacy` |
 | `openvino:NPU` | Intel NPU | `-gpu` |
 | `openvino:MIXED` | Intel iGPU (detector) + NPU (recognition) | `-gpu` |
 | `cuda` / `cuda:0` | NVIDIA GPU | `-cuda` |
+| `migraphx` | AMD GPU (MIGraphX EP, experimental) | `-rocm` |
 
 **`auto` placement**: at first start a short real benchmark builds sessions on the NPU and
 GPU, measures them, and picks `openvino:MIXED` (recognition on the NPU — on a Core Ultra
@@ -32,19 +33,25 @@ self-check reports real bind probes per device (`found & usable — device bound
 backend on synthetic input so you can see it's really working. `/health` reports
 `backend` and `placement` too.
 
-**Why analysis decode stays on CPU (measured).** GPU *video decode* was tried and rejected
-on purpose: on fixed-point clips, VAAPI-decoded frames shifted recognition scores by up to
-0.021 (tolerance 0.005) and flipped time-window judgments. A verify layer whose verdict
-depends on the decode hardware would be worthless, so clip decode for **judgments** stays on
-CPU (with a frame-count guard against silent truncation) — while all **display** transcodes
-(browser copies, Telegram clips) do run on the media engine, where no judgment is made.
+**Why judgments are decode-independent (measured 2026-08-04).** An earlier measurement
+seemed to show that GPU video decode shifts recognition scores; a byte-level re-check
+found the real culprit: hardware and software decode deliver **bit-identical** raw YUV
+pixels (md5-verified on H.264 4K, HEVC 4K and HEVC 1080p clips) — the drift came from
+using a different YUV→BGR *conversion*. Since then every judgment frame goes through one
+pinned path: ffmpeg decode (software **or** hardware, provably identical) → raw YUV →
+one fixed conversion. Live watchers use hardware decode where available (Intel VAAPI,
+NVIDIA NVDEC) and fall back to software loudly, with identical pixels either way; all
+**display** transcodes (browser copies, Telegram clips) run on the media engine, where
+no judgment is made.
 
 ## Measured performance (author's machines, 2026-07-27)
 
 The same defined workload — 11 real events (3 fixed points + 8 stranger events), full
 analysis wall-clock in a fresh container, second run with warm compile caches — on three
 physically different boxes running 0.1.0.44. Different machines, so treat it as a trend,
-not a lab benchmark; judgments were identical (green acceptance) on all three:
+not a lab benchmark; judgments were identical (green acceptance) on all three. (These
+runs predate the pinned pixel path above and the live watchers; the trend between the
+backends still holds.)
 
 | System | cold | warm | ≈ per event (warm) |
 |---|---|---|---|
@@ -99,6 +106,16 @@ hardware.
 
 If you build your own CUDA image from another base, remember to do the same
 (`rm -rf /usr/local/cuda*/compat && ldconfig`), or you'll see error 804 on consumer GPUs.
+
+## Live watchers: continuous GPU load
+
+Everything above is per-event work. A live watcher adds *continuous* load: it decodes
+one camera stream (hardware decode where available) and runs the detector on every Nth
+frame, around the clock. That is why watchers are GPU-only for now, capped at five, and
+why each has a selectable processing resolution (default 1080p) — the main lever for
+their cost. Under load the engine thins its own sampling and shows the throttle level;
+the **Measure load** button reports the real per-watcher cost (frames/s, detector time,
+CPU and RAM) on your hardware. Details: [live-watchers.md](live-watchers.md).
 
 ## Verifying it's really on the GPU
 

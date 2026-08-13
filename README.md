@@ -8,13 +8,14 @@ The learning module works end to end: a learning run walks through the person ev
 Frigate already recorded, harvests the usable faces, groups them into recurring people,
 and lets you name a whole cluster at once instead of labeling single images. Named
 clusters go straight into recognition. Camera areas (stage 1: areas as views) are in;
-per-area alert behavior is the part still being built. New and untested in 0.1.0.182:
-**live watchers** — a verified signal in under one second, straight off the live stream
-(see the roadmap section below).
+per-area alert behavior is the part still being built. **Live watchers**, extended in
+0.1.0.199: selected cameras are watched directly on the stream — a presence signal with
+a picture within about a second, plus a preliminary name while the appearance is still
+running (see the roadmap section below).
 
 The `latest-*` image tags follow the newest release, so `docker compose pull` gets you
 what this README describes. To pin a version instead, use its tag explicitly:
-`ghcr.io/bennobaer-dev/suslik:0.1.0.183-gpu`.
+`ghcr.io/bennobaer-dev/suslik:0.1.0.199-gpu`.
 
 ## Why this exists
 
@@ -39,17 +40,24 @@ declines rather than mislabels.
 The Today page answers "who was on the property, when, and where did they go" — one card per
 person, one block per pass, unknowns kept visible instead of buried:
 
-![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.0.183)
+![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.0.199)
 
 *(Screenshot from a live install of v0.1.0.54; names and faces anonymized.)*
+
+"Recognized live" cards collect the appearances a live watcher named right on the
+stream; clicking one opens the live day view with one card per camera appearance,
+all stored face images and short look-back videos.
 
 ## Features
 
 - **Scenario grouping** across cameras — one walk = one verdict, not N noisy events.
 - **Time-window confirmation** (several consistent frames, not a single frame).
 - **Reference-library hygiene** tools (find no-face / mislabeled / confusable references).
-- **Runs locally** — no cloud required. Hardware-accelerated on Intel (iGPU/NPU via OpenVINO) or
-  NVIDIA (CUDA), with a CPU fallback that runs anywhere.
+- **Live watchers** — selected cameras are watched directly on the live stream: an
+  immediate presence signal with a picture for any person, and a preliminary name during
+  the same appearance, over the same Pushover / Telegram / MQTT channels.
+- **Runs locally** — no cloud required. Hardware-accelerated on Intel (iGPU/NPU via
+  OpenVINO), NVIDIA (CUDA) and AMD (ROCm), with a CPU fallback that runs anywhere.
 - **Alerts & integration** — Pushover, Telegram (via Home Assistant), and MQTT.
 - **Notifications tab** — configure the Pushover / Telegram / MQTT channels in the UI (secrets kept
   in the data volume, shown masked) and send a test message per channel.
@@ -80,15 +88,17 @@ person, one block per pass, unknowns kept visible instead of buried:
   alerts are clearly marked as person recognition. See **[Person recognition](docs/person-recognition.md)**
   for the step-by-step guide.
 
-## What suslik is not: a real-time trigger
+## Two speeds: the live trigger and the confirmed verdict
 
-suslik works on the finished clip, after the event ends — it waits for more evidence and then
-tries to be right. That is a design decision, and it has a measurable cost: from a person
-appearing to suslik's verdict is typically **25 seconds at the very best, usually noticeably
-more** (event duration + clip availability + analysis; measured across 414 real events by a
-user, median around a minute). Don't build arrival automations on it — a light that should
-turn on as someone walks up, or a spoken greeting, needs Frigate's own real-time events as
-the trigger. suslik's job is the part Frigate can't do: deliver the reliable answer afterwards
+The **verify layer** is not a real-time trigger. It works on the finished clip, after the
+event ends — it waits for more evidence and then tries to be right. That is a design
+decision, and it has a measurable cost: from a person appearing to the confirmed verdict is
+typically **25 seconds at the very best, usually noticeably more** (event duration + clip
+availability + analysis; measured across 414 real events by a user, median around a minute).
+For arrival automations — a light that should turn on as someone walks up, or a spoken
+greeting — use the **live watchers**: they signal a person off the stream within about a
+second and add a preliminary name during the same appearance, e.g. over MQTT. The verify
+layer's job is the part neither Frigate nor a live trigger can do: deliver the reliable answer afterwards
 and correct the record.
 
 ## Quick start
@@ -114,11 +124,11 @@ docker compose up -d
 docker compose logs -f          # watch the startup self-check
 ```
 
-> Using the **Intel** (`latest-gpu`, or the `gpu-legacy` version tag for 6th–10th gen
-> Core iGPUs) or **NVIDIA** (`latest-cuda`) variant? Those additionally
-> need device passthrough (`devices:`/`group_add:` for Intel, `--gpus` for NVIDIA) — without it
-> they silently fall back to CPU. See [installation](docs/installation.md) for the full compose
-> blocks. suslik runs happily **next to Frigate on the same machine** as a second container.
+> Using the **Intel** (`latest-gpu`, or `latest-gpu-legacy` for 6th–10th gen Core iGPUs),
+> **NVIDIA** (`latest-cuda`) or **AMD** (`latest-rocm`) variant? Those additionally
+> need device passthrough (`devices:`/`group_add:` for Intel and AMD, `--gpus` for NVIDIA) —
+> without it they silently fall back to CPU. See [installation](docs/installation.md) for the full
+> compose blocks. suslik runs happily **next to Frigate on the same machine** as a second container.
 
 Then open `http://<host>:8199/` and follow the setup wizard (connect Frigate → pick
 cameras/zones → choose backend).
@@ -130,16 +140,13 @@ fixed version instead: [installation.md](docs/installation.md#updating).
 ## Documentation
 
 - **[Changelog](CHANGELOG.md)** — what changed per release. Worth a look right now:
-  **0.1.0.168** added vision detect as a third recognition path (a whole walk-through
-  judged as one candidate grid against your approved galleries, against a local
-  llama.cpp server or your own endpoint), a gallery wizard that curates reference
-  proposals itself, and a recognition test that shows face, person and vision side by
-  side for any past pass. **0.1.0.138** added the Frigate sync page (both reference libraries reconciled class
-  by class, selective transfer with a pre-check, an honest per-image result and a
-  one-click diagnosis bundle), **0.1.0.129** lets you manage learning runs (delete
-  completely, dismiss with memory, "looks like" for residents, a false-trigger class),
-  and **0.1.0.118** moved video decoding to the GPU (Intel and NVIDIA) and roughly
-  halved learning-run times.
+  **0.1.0.199** gave the live watchers a preliminary **name stage** (per-frame voting
+  across the whole appearance, fired once per person — two people in one pass produce
+  two messages), made the processing resolution selectable per camera (default 1080p),
+  replaced the predictive capacity model with "enabled means running" plus a runtime
+  throttle, and added the appearance day view with all face pictures and recap videos
+  per pass. The changelog file keeps recent releases; older release notes live on the
+  [releases page](https://github.com/BennoBaer-dev/suslik/releases).
 - **[Installation](docs/installation.md)** — the five image variants (CPU / Intel / Intel legacy / NVIDIA / AMD-testing),
   pull from GHCR or build from the source in this repository, `docker run` and `docker compose`.
 - **[Configuration](docs/configuration.md)** — the setup wizard, config keys, environment
@@ -168,20 +175,22 @@ cameras into parts of the property as views, with per-area alerting to follow). 
 side already holds up well — a learning run over any number of past events reliably surfaces
 the people who keep coming back, ready to be named in one step. Everything around it is moving:
 treat version jumps as normal, and please open an issue if something doesn't fit your setup —
-[known issues & limitations](docs/known-issues.md) lists what we already know.
+[known issues & limitations](docs/known-issues.md) lists what we already know. If you'd
+rather write me directly: **suslik_dev@posteo.de** — feedback of any kind, positive or
+negative, is genuinely welcome.
 
-The **CPU**, **Intel** and **NVIDIA/CUDA** image variants are published on GHCR and validated on
-real hardware (the CUDA image is large, since it bundles the multi-GB CUDA runtime, so it takes
-longer to pull); the **gpu-legacy** variant for older Intel iGPUs is in testing with a community
-tester and has no `latest` tag yet.
+All five image variants — **CPU**, **Intel**, **Intel legacy**, **NVIDIA/CUDA** and
+**AMD/ROCm** — are published on GHCR (the CUDA image is large, since it bundles the multi-GB
+CUDA runtime, so it takes longer to pull). Every variant carries its own `latest-<variant>`
+tag; **gpu-legacy** and **rocm** are still community-tested — reports very welcome.
 
-**Source code:** published in this repository as of **0.1.0.92-alpha** (MIT). The images remain
+**Source code:** published in this repository (MIT). The images remain
 self-contained: everything runs locally, nothing is downloaded at runtime, and internet access is
 only needed for the optional push-notification channels.
 
 ## What's being worked on right now
 
-*(updated 2026-08-09 — this section changes with every release)*
+*(updated 2026-08-13 — this section changes with every release)*
 
 - **Vision detect (early working version)** *(shipped in 0.1.0.168)*: a third
   recognition path, independent of the other two. A vision-language model judges the
@@ -201,14 +210,14 @@ only needed for the optional push-notification channels.
   and every image reports Frigate's real answer. Open: Frigate renames what it accepts,
   so images sent through the API cannot be verified afterwards.
 - **Person recognition (preview)** *(shipped in 0.1.0.113, extended since)*: the second
-  recognition path that works without a visible face. As of 0.1.0.118 it cooperates with
+  recognition path that works without a visible face. It cooperates with
   the face path on Today (passes with no usable face are attributed to the person the body
   path recognized, clearly marked), its decision threshold is measured from your own
   reviewed material after every training, and the fire rule is configurable. Since
-  0.1.0.139 confirmed stranger images (`personlern/fremd/`) are trained as their own
+  Confirmed stranger images (`personlern/fremd/`) are trained as their own
   class and the threshold is calibrated against them. Next: collecting that stranger
   material from inside the UI, and moving the harvest inference to the GPU/NPU.
-- **Performance**: a big chunk landed in 0.1.0.118 — one pinned pixel path everywhere,
+- **Performance**: one pinned pixel path everywhere,
   video decoding on the GPU (Intel via VAAPI, NVIDIA via NVDEC) with hard gates and a loud
   software fallback, and only the sampled frames leave the decoder. On my machine a
   learning run went from 6.6 to 2.9 seconds per event. Still open: the person-harvest
@@ -222,18 +231,21 @@ only needed for the optional push-notification channels.
   re-harvested identically are dimmed so you only name the newest one.
 - **Learning module** *(works end to end)*: harvest, quality gates, clustering into
   recurring people, naming with per-perspective recommendations, and adoption into
-  recognition (working since 0.1.0.102).
+  recognition.
 - **Camera areas** *(stage 1 shipped in 0.1.0.92-alpha)*: group cameras into parts of your
   property; areas act as views on Today/Appearances/Events, and alerts name the area.
   Passes are always judged across the whole property. Per-area alert behavior is stage 2.
-- **Live watchers** *(shipped in 0.1.0.182, brand new)*: the live path is real now — a
-  Live tab watches selected cameras directly on the stream and raises a verified signal
-  in under one second (measured 199–801 ms from first face to signal on my machine),
-  e.g. to trigger a Home Assistant action via MQTT. Every active watcher costs real GPU
-  headroom, so cameras are enabled per tile after a source test and the service measures
-  how many watchers your GPU can carry. GPU-only for now (video decode via Intel VAAPI
-  or NVIDIA NVDEC, the latter verified on an RTX 2060). The entire live part is new and
-  has seen little wider testing yet — treat it as a preview and report what breaks.
+- **Live watchers** *(shipped in 0.1.0.182, substantially extended through 0.1.0.199)*:
+  the live path is real now — a Live tab watches selected cameras directly on the stream,
+  in two stages: the presence trigger reports any person with a picture after four
+  consistent face finds in about two seconds (measured 199–801 ms from first face to
+  signal on my machine), and the name stage then votes frame by frame across the whole
+  appearance and fires once per appearance and person — two people walking through
+  together produce two name messages. Watchers are switched on per tile after a source
+  test; enabled means running (no capacity estimate any more — the only hard limits are
+  five watchers at once and a memory floor, and under load the service thins out its own
+  sampling). GPU-only for now (video decode via Intel VAAPI or NVIDIA NVDEC, the latter
+  verified on an RTX 2060). The live part is still young — report what breaks.
   How it works: [live-watchers.md](docs/live-watchers.md).
 - **Planned — "recurring, not a resident"**: a third review option next to naming and
   discarding, so the courier who comes three times a week doesn't silently disable your
@@ -247,6 +259,18 @@ only needed for the optional push-notification channels.
   verdict is a measured no. Details in [known-issues.md](docs/known-issues.md).
 
 Thanks to everyone testing and reporting back — the feedback is directly shaping this list.
+
+## Contact
+
+Two ways to reach me, whichever suits you:
+
+- **GitHub** — [issues](https://github.com/BennoBaer-dev/suslik/issues) for bugs and
+  requests, [discussions](https://github.com/BennoBaer-dev/suslik/discussions) for
+  everything else.
+- **E-mail** — **suslik_dev@posteo.de** for anything you'd rather write directly.
+
+Positive or negative, short or long — every report helps, especially from hardware I
+can't test myself (rocm, gpu-legacy).
 
 ## License
 

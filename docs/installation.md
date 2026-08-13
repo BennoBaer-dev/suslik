@@ -35,6 +35,9 @@ for real performance.
   suslik (read-only is the default), and Frigate's own face recognition has to be turned
   on (`face_recognition.enabled: true`), otherwise Frigate refuses every upload with
   HTTP 400.
+- **RAM:** give the container real memory headroom. Live watchers are capped at 5 at a
+  time, and one more watcher is refused while less than ~2 GiB stays free — measured
+  from the container's own memory limit, so set one if you want that brake to work.
 - **For the Intel variant:** an Intel iGPU exposed at `/dev/dri` (and, if present, an NPU at
   `/dev/accel/accel0`) on the host.
 - **For the NVIDIA variant:** an NVIDIA driver (**R525 or newer**) on the host plus the
@@ -49,7 +52,7 @@ for real performance.
 
 You can either **pull a published image** or **build it yourself**.
 
-### Option 1 — pull from GHCR (CPU, Intel, NVIDIA)
+### Option 1 — pull from GHCR (all five variants)
 
 > ⚠️ **Mind the variant names:** `-gpu` means **Intel** (OpenVINO iGPU/dGPU), `-cuda` means
 > **NVIDIA**, `-cpu` is the CPU-only fallback. NVIDIA users want **`-cuda`** — don't pull `-gpu`
@@ -58,7 +61,7 @@ You can either **pull a published image** or **build it yourself**.
 All variants are published on the GitHub Container Registry.
 
 > **Alpha note:** `latest-*` follows the newest published version (currently
-> **0.1.0.170** — see the README status for what's new), so a plain
+> **0.1.0.199** — see the README status for what's new), so a plain
 > `docker compose pull` tracks the alpha. Every `latest-*` tag only
 > moves after that release ran on real test hardware. If you would rather decide yourself when
 > to move, pin the version tag explicitly (see *Staying on a fixed version* below):
@@ -72,11 +75,11 @@ docker pull ghcr.io/bennobaer-dev/suslik:latest-gpu-legacy  # Intel Gen8/9/11 (t
 docker pull ghcr.io/bennobaer-dev/suslik:latest-rocm        # AMD (testing)
 
 # the same release, pinned so it never moves under you:
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.183-gpu
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.183-cuda
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.183-cpu
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.183-gpu-legacy
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.183-rocm
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.199-gpu
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.199-cuda
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.199-cpu
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.199-gpu-legacy
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.199-rocm
 ```
 
 > **Testing variants:** `gpu-legacy` and `rocm` follow every release under `latest-*` like
@@ -90,7 +93,7 @@ docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.183-rocm
 
 ### Option 2 — build from source
 
-The application source is published in this repository as of **0.1.0.92-alpha** — you can
+The application source is published in this repository — you can
 read, audit and patch everything the images run. One honest limitation for now: the bundled
 ONNX **model files are not in the git tree** (~600 MB, and they carry their own third-party
 terms — see [NOTICE](../NOTICE)), so a fresh `docker build` will stop at the model `COPY`
@@ -322,7 +325,7 @@ A `latest-*` tag only moves once a release has been deployed and verified on rea
 when to move, pin the version explicitly:
 
 ```yaml
-    image: ghcr.io/bennobaer-dev/suslik:0.1.0.183-cpu
+    image: ghcr.io/bennobaer-dev/suslik:0.1.0.199-cpu
 ```
 
 To move, change the tag and run `docker compose up -d`. Recent versions stay pullable, but a

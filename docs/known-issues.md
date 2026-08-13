@@ -4,38 +4,21 @@ An honest list of what we know is rough, wrong or missing right now. If you hit
 something that is not on this list, please open an issue — that is exactly the kind
 of feedback this project needs.
 
-_Last updated: 2026-08-06 (0.1.0.138)._
+_Last updated: 2026-08-13 (0.1.0.199)._
 
 ## Known bugs
 
-- ~~**Installations older than 0.1.0.92 never see an update hint for alpha
-  releases.**~~ **Resolved by policy since 0.1.0.109:** releases carry no
-  version suffix anymore, and every old installation can parse the plain tags
-  (measured on a real 0.1.0.63 container against `v0.1.0.109`). Kept here for
-  the record.
-
 - **Deleting in Frigate is intentionally out of scope.** suslik never deletes anything
   in Frigate — removals stay local (a tombstone prevents re-import on the next sync).
-  Since 0.1.0.45 it does not even try (the old non-portable SSH attempt is gone).
-  Since 0.1.0.137 the opposite direction has an explicit place instead of being silent:
+  The opposite direction has an explicit place instead of being silent:
   a reference you deleted **in Frigate** is never re-sent on its own. It shows up on the
   **Frigate sync** page as your decision, *offer again* or *respect the deletion*, and
   nothing goes out until you choose. "Respect the deletion" keeps the picture in your own
   library and only stops it from going to Frigate, including in the automatic sync; it
   deletes nothing on either side.
-- ~~**Writing references back to Frigate is not portable yet.**~~ **Fixed in
-  0.1.0.107-alpha, endpoints corrected in 0.1.0.128.** The export direction used to
-  copy files over SSH, which only worked where suslik happens to have root SSH
-  access to the Frigate host. It now uploads through the official Frigate HTTP API
-  (`POST /api/faces/{name}/create` + `/register`), like every other Frigate call.
-  Note: Frigate only accepts face uploads while its own face recognition is
-  enabled (`face_recognition.enabled: true`); otherwise it answers
-  "Face recognition is not enabled." and suslik reports exactly that.
-- **Two GPU instances on one Intel iGPU could crash on startup** (exit 139) —
-  **fixed as of 0.1.0.44**: all compute jobs of one instance now run through a single
-  persistent worker process, which bundles the GPU contexts; the collision window was
-  verified gone in dedicated context tests. Running *multiple suslik instances* against
-  one iGPU is still not recommended.
+- **Running multiple suslik instances against one Intel iGPU is not recommended** —
+  one instance bundles its GPU contexts in a single worker process, but two instances
+  can still collide on the same device.
 - **AMD GPU support is experimental.** There is a dedicated `-rocm` image (analysis via
   ROCm/MIGraphX — pass `/dev/kfd` and `/dev/dri` into the container); it is in the testing
   phase and has not been confirmed on real AMD hardware yet, so it may fall back to CPU.
@@ -51,11 +34,21 @@ _Last updated: 2026-08-06 (0.1.0.138)._
 
 ## Limitations (by design, for now)
 
-- **Detection resolution follows the clip's aspect ratio since 0.1.0.44** (long edge
+- **Live watchers are capped at five, and heavy load thins the sampling.** An enabled
+  watcher simply runs — there is no capacity estimate deciding whether it may start.
+  The only hard stops are the cap of five and a RAM floor read from the container's
+  own memory limit; overload is handled at runtime by sampling frames more thinly
+  (visible as the throttle level on the engine card).
+- **Source-test results recorded before 0.1.0.199 measured decode throughput, not the
+  camera's real delivery rate.** Such results are marked "(throughput, not delivery
+  rate — rerun the source test)"; run the test again to get the real number.
+- **Detection resolution follows the clip's aspect ratio** (long edge
   1280, multiple-of-32 grid — bit-identical detections, about a quarter less GPU work
-  on 16:9). Making the base size configurable is still on the list.
+  on 16:9). Live watchers have a selectable per-camera processing resolution since
+  0.1.0.199 (360p–2160p, default 1080p); making the clip-analysis base size
+  configurable as well is still on the list.
 - **Person recognition (preview): the decision threshold is only as good as its
-  stranger material.** Since 0.1.0.139 the calibration uses real stranger images
+  stranger material.** The calibration uses real stranger images
   from `personlern/fremd/` when at least five are present, and the model drops
   bodies it reads as strangers; with an empty folder it falls back to calibrating
   between your learned people only. Either way, keep an eye on body-path alerts
@@ -67,7 +60,7 @@ _Last updated: 2026-08-06 (0.1.0.138)._
 - **Merge suggestions are capped at 20**, ordered by similarity, so the page stays
   usable. Answering them (Merge / Different) makes room for the next ones.
 - **Backup comes in two sizes.** The configuration backup covers the settings; the
-  **full backup** (System page, since 0.1.0.118) covers everything you taught the
+  **full backup** (System page) covers everything you taught the
   installation — settings, face references, learning results, person-recognition
   material and models. It deliberately excludes the clip cache and per-event
   artifacts (they rebuild over time). The `/data` volume remains the source of truth.
@@ -106,7 +99,7 @@ _Last updated: 2026-08-06 (0.1.0.138)._
   blocker is the physics of the shrunken model, not the tooling. If a
   small-accelerator path comes, it will more likely be a Hailo-8 investigation.
   A Coral still helps Frigate's own object detection — just not suslik's face pipeline.
-- **Building from source needs the model files** — the source is published (since 0.1.0.92), but the bundled ONNX models (~600 MB, third-party terms — see NOTICE)
+- **Building from source needs the model files** — the source is published, but the bundled ONNX models (~600 MB, third-party terms — see NOTICE)
   are not in the git tree. A checksummed fetch script is planned; until then the
   prebuilt images are the way to *run* suslik, and the source is there to read,
   audit and patch.
@@ -119,4 +112,5 @@ _Last updated: 2026-08-06 (0.1.0.138)._
 3. A "recurring, not a resident" review option, so naming the courier does not
    silently disable stranger alerts.
 4. Harder failure handling for the compute backend.
-5. Configurable detection resolution.
+5. Configurable base size for the clip-analysis detection resolution (the
+   per-camera live-watcher resolution shipped in 0.1.0.199).

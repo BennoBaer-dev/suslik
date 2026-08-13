@@ -1,14 +1,18 @@
 # Usage
 
 Once suslik is running and the wizard is done, everything happens through the web UI at
-`http://<host>:8199/` and, in the background, automatically as Frigate produces person events.
+`http://<host>:8199/` and, in the background, automatically: live watchers keep watching
+their camera streams and react while the person is still in the picture, and the full
+analysis runs as Frigate produces person events.
 
 ## The web UI
-The UI has **eight sections** (top bar): **Activity** (Today / Events / To label),
+The UI has **eleven sections** (top bar): **Activity** (Today / Events / To label),
 **People** (your reference library), **Person** (the body-recognition path:
-learned material and model status), **Areas** (camera groups), **Learn**
-(face learning runs, anchors, person learning), **Frigate sync** (the class-by-class
-comparison with Frigate's own face library), **Settings** and **System**.
+learned material and model status), **Vision** (vision detect), **Live**
+(live watchers — see [live-watchers.md](live-watchers.md)), **Areas** (camera groups),
+**Learn** (face learning runs, anchors, person learning), **Frigate sync** (the
+class-by-class comparison with Frigate's own face library), **Settings**,
+**Recognition test** and **System**.
 
 **Activity**
 
@@ -16,6 +20,10 @@ comparison with Frigate's own face library), **Settings** and **System**.
   grouped from the individual events across cameras and time. Recognized people lead the page;
   passes where nobody was recognized appear as "Unknown N" cards once the unknown pool has
   grouped them, and each card names the pool identity with how often it was seen before.
+  Below the recognized passes, a **Recognized live** row shows cards for appearances a live
+  watcher already put a name to (marked "quick check, preliminary"): evidence picture, name,
+  time and camera. Clicking a card opens the live day view with all face images and recap
+  videos of that appearance.
   Passes whose whole clip contains no serious face are the exception: those get a quiet
   "no usable face in this pass" note instead of a warning and never become unknown-visitor
   cards. Clicking a person card opens their **Appearances** day view (route `/auftritte`):
@@ -90,6 +98,10 @@ comparison with Frigate's own face library), **Settings** and **System**.
   judgment categories raise an alert. For Telegram you can choose the attachment: a short
   **video** clip (falls back to an image and says so) or **image only** (no transcoding —
   lighter on weak hardware). Each channel has a **Test** button; stored secrets are shown masked.
+  Live watchers use the same channels but pick them **per watcher** on the Live tab.
+- **Recognition chain** — its own page: the order and conditions of the recognition
+  paths (face → person → vision), each step with a plain-language condition. It used to
+  sit inside Advanced.
 - **Advanced** — the remaining configuration values and a clean restart.
 
 **System**
@@ -143,6 +155,11 @@ and matches it against your references over time. It reports one of:
 
 Alerts fire only for the categories you enable (disagreement by default), with a global cooldown
 so continuous presence doesn't spam you.
+
+Live watchers alert on a separate path these categories do not govern: the presence
+trigger reports every person immediately, and the preliminary name stage adds its own
+"recognized (live, preliminary)" message per appearance and person — both on the channels
+picked per watcher, with their own per-watcher re-arm time.
 
 ## Reading the startup self-check
 

@@ -149,6 +149,17 @@ def _mqtt_client(cfg, log=_log):
         return None
 
 
+def referenzen_noetig(guards):
+    """Sollen die Referenzen fuers Namens-Voting geladen werden? Seit .197
+    JA, sobald irgendein Waechter enabled ist (der Quick-verdict-Haken ist
+    abgeschafft). ALS FUNKTION herausgeloest (.198): der .197-Start-Absturz
+    (KeyError schnell_urteil, Engine 3x tot, 15-min-Pause) sass in genau
+    diesem Praedikat als Inline-Genexpr — die QS-Stufe S10 ruft die Funktion
+    jetzt mit guards_lesen-normalisierten Guards durch, Feld-Drift zwischen
+    guards_lesen und diesem Modul crasht damit im GATE, nicht auf Prod."""
+    return any(g["enabled"] for g in guards.values())
+
+
 def cmd_run():
     cfg, verifyd = _cfg_laden()
     if _cpu_sperre():
@@ -163,7 +174,7 @@ def cmd_run():
     # stellt erst der Betrieb je Kachel.
     det = Detektor(_log)
     refs, ref_quelle, schwelle = {}, "aus", None
-    if any(g["schnell_urteil"] for g in guards.values() if g["enabled"]):
+    if referenzen_noetig(guards):
         try:
             refs, ref_quelle = lw.referenzen_laden(det.app)
             schwelle = float(cfg["win_thresh"])
@@ -288,6 +299,11 @@ def cmd_status():
 
 
 def main(argv):
+    # umask 022 auch fuer den HANDSTART (der Aufsicht-Spawn erbt sie vom
+    # Dienst, verifyd.main setzt sie dort — hier dieselbe Regel fuer den
+    # Standalone-Weg; Realfall 13.08.: 600er-root-Dateien im /data-Mount
+    # waren vom Host nicht lesbar/sicherbar).
+    os.umask(0o022)
     was = argv[1] if len(argv) > 1 else "run"
     if was == "run":
         return cmd_run()

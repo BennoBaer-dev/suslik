@@ -1405,7 +1405,7 @@ function _liveFelder() {
           ende_ohne_gesicht_s: (document.getElementById('lv-ende') || {}).value,
           wieder_scharf_s: (document.getElementById('lv-scharf') || {}).value,
           kanaele: kan,
-          schnell_urteil: (document.getElementById('lv-schnell') || {}).value === 'true'};
+          hoehe: (document.querySelector('input[name="lv-hoehe"]:checked') || {}).value || null};
 }
 
 function liveSpeichern(btn) {
@@ -1527,3 +1527,38 @@ function _livePoll() {
 }
 
 if (window._livePage) setInterval(_livePoll, 1000);
+
+/* Kachel-Vorschau (User 13.08.): alle 2 s ein frisches JPEG aus dem AGENTEN
+   (/live_bild liefert den verarbeiteten Waechter-Frame; ?t= als Cache-Buster).
+   onerror/onload an der Kachel blenden bei 404 (Engine aus/Frische-Frist)
+   ehrlich aus und bei Rueckkehr wieder ein. */
+if (window._livePage) setInterval(function () {
+  document.querySelectorAll('img.lv-vorschau').forEach(function (im) {
+    im.src = '/live_bild/' + encodeURIComponent(im.getAttribute('data-kamera'))
+      + '?t=' + Date.now();
+  });
+}, 2000);
+
+/* Hide/Show je Kachel (.186, User 13.08.): reine Anzeige-Praeferenz im Store,
+   danach Reload (die Kachel wandert in die Hidden-Gruppe bzw. zurueck). */
+function liveVerstecken(kamera, an, btn) {
+  btn.disabled = true;
+  fetch('/live_verstecken', {method: 'POST',
+                             body: JSON.stringify({kamera: kamera, versteckt: an})})
+    .then(function (r) { return r.json(); })
+    .then(function () { location.reload(); })
+    .catch(function () { btn.disabled = false; });
+}
+
+/* Area-Gruppier-Schalter (.186): Wahl in localStorage, beim Seitenaufruf ohne
+   Parameter einmalig angewandt (replace, keine History-Muellzeile). */
+function liveAreaMerken(an) {
+  try { localStorage.setItem('vd-live-area', an ? '1' : '0'); } catch (e) {}
+}
+if (window._livePage) (function () {
+  try {
+    var will = localStorage.getItem('vd-live-area') === '1';
+    var hat = location.search.indexOf('gruppe=area') !== -1;
+    if (will && !hat) location.replace('/live?gruppe=area');
+  } catch (e) {}
+})();

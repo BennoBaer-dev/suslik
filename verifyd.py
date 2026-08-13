@@ -2681,8 +2681,10 @@ class Service:
         if status:
             self.live_quittungen_uebernehmen(status)
         gesperrt, sperr_grund = self._live_gesperrt()
-        _auftrag, _auftraege, ks_ui, neb_ui = _lw.status_fuer_ui(status, frisch)
+        _auftrag, _auftraege, ks_ui = _lw.status_fuer_ui(status, frisch)
         _d, guards = _lw.guards_lesen(self.cfg, lambda z: None)
+        versteckt = set(_lw.versteckt_lesen(self.cfg))
+        briefe = _lw.steckbriefe_lesen(self.cfg)
         kacheln = []
         for name in sorted(set(cams or {}) | set(guards)):
             g = guards.get(name)
@@ -2699,7 +2701,8 @@ class Service:
                 "test": (g or {}).get("test") or None,
                 "test_fehler": (g or {}).get("test_fehler") or None,
                 "messung": (g or {}).get("messung") or None,
-                "neubewertung": neb_ui.get(name, ""),
+                "versteckt": name in versteckt,
+                "steckbrief": briefe.get(name) or None,
             })
         return kacheln, {"frisch": frisch, "status": status,
                          "sperr_grund": sperr_grund,
@@ -2768,6 +2771,62 @@ class Service:
         if ok and enabled and self._live_aufsicht is not None:
             self._live_aufsicht.anstossen()
         return ok, msg
+
+    def live_verstecken(self, kamera, versteckt):
+        """Duenner Mantel (Muster live_schalter) — reine Anzeige-Praeferenz,
+        deshalb KEINE Build-Sperre: auch auf cpu-only darf man die Kachel-
+        Liste aufraeumen (die Kacheln existieren dort ja, nur gesperrt)."""
+        from core import livewache as _lw
+        with _cfg_lock:                    # Engine-M5, s. live_speichern
+            return _lw.live_verstecken(self.cfg, kamera, bool(versteckt),
+                                       log=self.log,
+                                       store_pfad=_config_store_pfad,
+                                       store_laden=_lade_config_store,
+                                       store_schreiben=_store_schreiben)
+
+    def start_stream_steckbriefe(self):
+        """Stream-Steckbriefe je Frigate-Kamera EINMAL je Dienststart im
+        Hintergrund proben (User 13.08.: der Kachel-Kopf soll die ECHTE
+        Stream-Aufloesung zeigen, ohne Quelltest-Klick — Frigates Config
+        kennt nur die kleine detect-Groesse). ffprobe am go2rtc-Restream
+        (dieselbe proxy_url-Formel wie der Waechter), Ergebnis je Kamera
+        SOFORT in den Cache geflusht (Absturz-Regel). Auf gesperrten Builds
+        (CPU-only) laeuft der Lauf trotzdem — die Seite zeigt die Kacheln
+        auch dort, und ffprobe ist ein Cent-Posten. Vorstufe des geplanten
+        vollen Stream-Analyse-Features (stand.md-Vormerkung)."""
+        from core import livewache as _lw
+
+        def lauf():
+            try:
+                cams, err = frigate_cameras(self.cfg)
+                if err or not cams:
+                    return
+                for name in sorted(cams):
+                    url = _lw.proxy_url(self.cfg, name)
+                    if not url:
+                        return
+                    try:
+                        s = _lw.steckbrief_ermitteln(url, versuche=1,
+                                                     log=lambda z: None)
+                        _lw.steckbrief_schreiben(
+                            self.cfg, name, dict(s, ts=round(time.time(), 1)))
+                        self.log(f"stream profile {name}: "
+                                 f"{s.get('breite')}x{s.get('hoehe')}"
+                                 + (f" @ {s.get('fps')} fps" if s.get("fps")
+                                    else "")
+                                 + (f", {s.get('codec')}" if s.get("codec")
+                                    else ""))
+                    except Exception as e:
+                        # LAUT je Kamera, aber der Lauf stirbt nie still an
+                        # EINER unerreichbaren Quelle.
+                        self.log(f"stream profile {name}: "
+                                 f"{type(e).__name__} — skipped")
+                    time.sleep(1.0)
+            except Exception as e:
+                self.log(f"!! stream profile run failed: "
+                         f"{type(e).__name__}: {e}")
+        threading.Thread(target=lauf, name="steckbriefe",
+                         daemon=True).start()
 
     def live_quittungen_uebernehmen(self, status):
         """Engine-Ergebnisse (Quelltest-Block, Last-Messung) in den Store —
@@ -2979,7 +3038,7 @@ class Service:
         if status:
             self.live_quittungen_uebernehmen(status)
         gesperrt, sperr_grund = self._live_gesperrt()
-        auftrag, auftraege, _ks_ui, _neb_ui = _lw.status_fuer_ui(status, frisch)
+        auftrag, auftraege, _ks_ui = _lw.status_fuer_ui(status, frisch)
         _d, guards = _lw.guards_lesen(self.cfg, lambda z: None)
         zustaende = {}
         for name, g in guards.items():
@@ -6936,7 +6995,7 @@ def make_handler(svc):
                 except Exception as e:
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad in ("/live_speichern", "/live_schalter", "/live_test",
-                        "/live_messung"):
+                        "/live_messung", "/live_verstecken"):
                 # Live-Reiter (Phase 2): duenne Maentel, Logik/Riegel in
                 # core/livewache (live_speichern/live_schalter serverseitig —
                 # ein direkter POST kommt hier am UI-Grau vorbei und MUSS am
@@ -6954,6 +7013,9 @@ def make_handler(svc):
                     ok, msg = svc.live_schalter(kamera, bool(d.get("enabled")))
                 elif pfad == "/live_test":
                     ok, msg = svc.live_test_starten(kamera)
+                elif pfad == "/live_verstecken":
+                    ok, msg = svc.live_verstecken(kamera,
+                                                  bool(d.get("versteckt")))
                 else:
                     ok, msg = svc.live_messung_starten(kamera)
                 return self._send(200 if ok else 400,
@@ -7657,6 +7719,7 @@ def make_handler(svc):
                 from core import livewache as _lwz
                 z_live = 0
                 z_live_kanaele = {}
+                z_live_liste, z_live_gruppen = [], 0
                 _live_zeile = False
                 try:
                     _live_zeile = (bool((cfg.get("live") or {}).get("guards"))
@@ -7675,6 +7738,17 @@ def make_handler(svc):
                             for k in _lwz.KANAELE_ERLAUBT
                             if _zk.get(("alert", k), 0)}
                         z_live = sum(z_live_kanaele.values())
+                        # .188 (User 13.08.): Today zeigt SEPARAT, was live
+                        # erkannt wurde — die Liste je Trigger (gebuendelte
+                        # Kanaele, Meldetext), dieselbe Quelle+Sicht wie der
+                        # Zaehler.
+                        # .191 (User: 'nur zeigen, was wirklich erkannt
+                        # wurde'): breit lesen, unten auf person-Gruppen
+                        # gefiltert — unknown-Trigger erschlagen die Reihe
+                        # nicht mehr, sie bleiben im Zaehler + Live-Reiter.
+                        z_live_liste, z_live_gruppen = _lwz.melde_liste(
+                            cfg, heute0, tag_ende, kameras=_nk,
+                            max_gruppen=200)
                 except Exception as e:
                     svc.log(f"!! live alert counter failed: "
                             f"{type(e).__name__}: {e}")
@@ -8339,7 +8413,8 @@ def make_handler(svc):
                     # KANN-7: kanalneutral (Summe), Aufschluesselung je real
                     # benutztem Kanal darunter — nie "Pushover 0" als einzige
                     # Wahrheit einer Telegram-only-Installation.
-                    + ((f'<div class="ts-zeile"><span><a class="ts-link" href="/live">'
+                    + ((f'<div class="ts-zeile"><span><a class="ts-link" '
+                        f'href="/live_alerts?tag={tag_dt.strftime("%Y-%m-%d")}">'
                         f'Live watcher alerts</a></span>'
                         f'<span class="num">{z_live}</span></div>'
                         + (f'<div class="ts-meta">'
@@ -8348,6 +8423,49 @@ def make_handler(svc):
                            + '</div>' if z_live_kanaele else ''))
                        if _live_zeile else '')
                     + '</div></aside>')
+                # .190 (User 13.08., ersetzt die .188-Sidebar-Liste): die
+                # Live-Trigger als KARTENREIHE unter Recognized — Beweisbild
+                # (Protokoll-Feld bild, ALARMBILD_RE-Vertrag), Schnell-
+                # Urteils-Name oder "unknown", Zeit + Kamera. Das Label sagt
+                # die VORLAEUFIGKEIT laut (Trigger != Urteil).
+                live_reihe = ""
+                # .195 (User: "nicht konsequent"): Karten sind jetzt
+                # AUFTRITTE (auftritts_gruppen), der Klick fuehrt zur
+                # Auftrittskarte der Tagesansicht mit ALLEN Gesichts-Crops —
+                # analog der Pass-Ansicht, nicht mehr nur ein Einzelbild.
+                _erkannt = [a for a in _lwz.auftritts_gruppen(z_live_liste)
+                            if a.get("person")] if z_live_liste else []
+                if _erkannt:
+                    _lk = []
+                    for g in _erkannt[:8]:
+                        _bu = (f'/live_alarmbild?p='
+                               f'{urllib.parse.quote(g["bild"])}'
+                               if g.get("bild") else "")
+                        _au = (f'/live_alerts?tag='
+                               f'{time.strftime("%Y-%m-%d", time.localtime(g["ts"]))}'
+                               f'#a{int(g["ts"])}')
+                        _lk.append(
+                            '<div class="card lv-alarmkarte">'
+                            + (f'<a href="{_au}">'
+                               f'<img class="lv-alarmbild" '
+                               f'loading="lazy" src="{_bu}" alt=""></a>'
+                               if _bu else '')
+                            + f'<div><b>{html.escape(g["person"])}</b>'
+                            + f'<div class="dim">'
+                              f'{time.strftime("%H:%M", time.localtime(g["ts"]))}'
+                              f' · {html.escape(g["kamera"])}</div></div></div>')
+                    live_reihe = (
+                        '<div class="listhead"><h3>Recognized live</h3>'
+                        '<span class="cnt">quick check, preliminary — '
+                        f'{len(_erkannt)} appearance'
+                        f'{"" if len(_erkannt) == 1 else "s"}, '
+                        f'{z_live_gruppen} trigger'
+                        f'{"" if z_live_gruppen == 1 else "s"}</span></div>'
+                        '<div class="lv-alarmreihe">' + "".join(_lk)
+                        + (f'<div class="dim lv-alarmmehr">… '
+                           f'{len(_erkannt) - 8} more</div>'
+                           if len(_erkannt) > 8 else '')
+                        + '</div>')
                 _dl = ('<datalist id="personen-liste">'
                        + "".join(f'<option value="{html.escape(p)}">' for p in master_persons(cfg))
                        + '</datalist>')
@@ -8356,6 +8474,7 @@ def make_handler(svc):
                           f'<div class="listhead" id="recognized"><h3>Recognized</h3>'
                           f'<span class="cnt">{len(pers_tag)} '
                           f'{"person" if len(pers_tag) == 1 else "people"}</span></div>{band}'
+                          f'{live_reihe}'
                           f'<div class="listhead" id="passes"><h3>Passes</h3>'
                           f'<span class="cnt">{cnt}</span></div>'
                           f'{liste}{motiv}</div>{neben}</div>')
@@ -9005,15 +9124,134 @@ def make_handler(svc):
             if path == "/live":                    # Live-Reiter (Phase 2)
                 import webui
                 from routes import live as _r_live
+                # _areas_mod ist der MODUL-Import (Z. 25) — ein lokaler
+                # Import hier wuerde ihn fuer den GANZEN Handler-Scope
+                # verschatten (UnboundLocalError-Klasse, Gate-Fang .186).
                 cams, err = frigate_cameras(cfg)
                 kacheln, engine_info, gesperrt = svc.live_lage(cams)
-                inhalt = _r_live.uebersicht(kacheln, engine_info, gesperrt, err)
+                # .186: optionale Area-Gruppierung (?gruppe=area) — die
+                # Kamera->Area-Zuordnung kommt aus der EINEN Areas-Quelle.
+                nach_area = (qs.get("gruppe") or [""])[0] == "area"
+                _am = _areas_mod.normalisieren(cfg.get("areas"))
+                cam_area = {kd["name"]: (_areas_mod.kamera_area(_am, kd["name"])
+                                         or "") for kd in kacheln}
+                inhalt = _r_live.uebersicht(kacheln, engine_info, gesperrt, err,
+                                            nach_area=nach_area,
+                                            cam_area=cam_area)
                 return self._send(200, webui.layout("Live watchers", "/live",
                                                     inhalt, self._banner()))
             if path == "/live_status":             # UI-Poll (Countdown/Quittung)
                 return self._send(200, json.dumps(svc.live_status_daten(),
                                                   ensure_ascii=False),
                                   "application/json")
+            if path == "/live_alerts":             # Tages-Uebersicht ALLER Live-
+                import webui                       #  Trigger (.192, User: 'was er
+                #  da wirklich erkannt hat' — auch die unbekannten Gesichter;
+                #  die Today-Reihe zeigt seit .191 nur Erkannte, DIESE Seite
+                #  ist der Klick dahinter mit allem, inkl. Beweisbild).
+                from core import livewache as _lwz
+                try:
+                    _tag = (qs.get("tag") or [""])[0]
+                    _t0 = (time.mktime(time.strptime(_tag, "%Y-%m-%d"))
+                           if _tag else None)
+                except Exception:
+                    _t0 = None
+                if _t0 is None:
+                    _lt = time.localtime()
+                    _t0 = time.mktime((_lt.tm_year, _lt.tm_mon, _lt.tm_mday,
+                                       0, 0, 0, 0, 0, -1))
+                gruppen, gesamt = _lwz.melde_liste(cfg, _t0, _t0 + 86400,
+                                                   max_gruppen=200)
+                # .195 (User: "bei Recognized live sehe ich nur ein Bild, das
+                # ist nicht konsequent"): je Kamera-AUFTRITT eine Karte mit
+                # ALLEN gespeicherten Gesichts-Crops von der Platte (auch
+                # Karenz-Trigger ohne Meldezeile) + Rueckblick-Video — analog
+                # der Pass-Ansicht unter Recognized.
+                auftritte = _lwz.auftritts_gruppen(gruppen)
+                karten = []
+                for a in auftritte:
+                    bilder, videos = _lwz.auftritt_medien(
+                        cfg, a["kamera"], a["ts"], a["ts_letzte"])
+                    if not bilder and a.get("bild"):
+                        bilder = [a["bild"]]   # Platte schon aufgeraeumt
+                    thumbs = "".join(
+                        f'<a href="/live_alarmbild?p={urllib.parse.quote(b)}"'
+                        f' target="_blank" rel="noopener">'
+                        f'<img class="lv-thumb" loading="lazy" '
+                        f'src="/live_alarmbild?p={urllib.parse.quote(b)}" '
+                        f'alt=""></a>' for b in bilder)
+                    vlinks = " ".join(
+                        f'<a href="/live_alarmbild?p={urllib.parse.quote(v)}"'
+                        f' target="_blank" rel="noopener">&#9654; video '
+                        f'{i + 1}</a>' for i, v in enumerate(videos))
+                    _bis = (f'&ndash;{time.strftime("%H:%M:%S", time.localtime(a["ts_letzte"]))}'
+                            if a["ts_letzte"] - a["ts"] >= 1 else "")
+                    karten.append(
+                        f'<div class="card lv-auftrittkarte" id="a{int(a["ts"])}">'
+                        f'<div><b>{html.escape(a.get("person") or "unknown")}</b>'
+                        f' <span class="dim">'
+                        f'{time.strftime("%H:%M:%S", time.localtime(a["ts"]))}{_bis}'
+                        f' · {html.escape(a["kamera"])}'
+                        f' · {a["trigger"]} trigger{"" if a["trigger"] == 1 else "s"}'
+                        f' · {html.escape("+".join(a["kanaele"]))}</span></div>'
+                        + (f'<div class="dim">{html.escape(a["zusatz"][:90])}'
+                           f'</div>' if a.get("zusatz") else '')
+                        + (f'<div class="lv-medienreihe">{thumbs}</div>'
+                           if thumbs else
+                           '<div class="dim">no stored pictures</div>')
+                        + (f'<div class="dim">{vlinks}</div>' if vlinks else '')
+                        + '</div>')
+                inhalt = (
+                    f'<h2>Live watcher alerts</h2>'
+                    f'<p class="sub">{len(auftritte)} appearance'
+                    f'{"" if len(auftritte) == 1 else "s"} ({gesamt} trigger'
+                    f'{"" if gesamt == 1 else "s"}) on '
+                    f'{time.strftime("%Y-%m-%d", time.localtime(_t0))} — '
+                    f'quick check, preliminary; the confirmed verdict comes '
+                    f'from the normal analysis. Entries from before 0.1.0.190 '
+                    f'have no picture or name recorded.</p>'
+                    + ("".join(karten) if karten else
+                       '<div class="leer"><b>No live alerts that day.</b></div>'))
+                return self._send(200, webui.layout(
+                    "Live alerts", "/live", inhalt, self._banner()))
+            if path == "/live_alarmbild":          # Beweismedium eines Live-Alerts (.190, .195: +mp4)
+                # Pfad kommt aus dem Melde-Protokoll bzw. der Auftritts-
+                # Ansicht und MUSS dem einen Vertrag ALARMBILD_RE genuegen
+                # (data_dir-relativ, kein Traversal) — derselbe Regex wie
+                # beim Schreiber.
+                from core import livewache as _lw
+                rel = (qs.get("p") or [""])[0]
+                if not _lw.ALARMBILD_RE.match(rel):
+                    return self._send(404, "not found", "text/plain")
+                p = os.path.join(cfg.get("data_dir") or "", rel)
+                try:
+                    roh_med = open(p, "rb").read()
+                except OSError:
+                    return self._send(404, "not found", "text/plain")
+                return self._send(200, roh_med,
+                                  "video/mp4" if rel.endswith(".mp4")
+                                  else "image/jpeg")
+            if path.startswith("/live_bild/"):     # Kachel-Vorschau (User 13.08.)
+                # Das JPEG schreibt der DETEKTOR-Thread der Engine aus dem
+                # VERARBEITETEN Frame (Waechter-Skala) — der Reiter zeigt, was
+                # der Waechter sieht, nicht Frigates Bild. Namens-Muster wie
+                # der Schreiber (nie Fremdnamen in einen Pfad); Frische-Frist,
+                # damit nach Waechter-Stopp kein eingefrorenes Bild als "live"
+                # rausgeht. Cache-Busting macht der Poll per ?t=-Zeitstempel.
+                from core import livewache as _lw
+                kamera = path[len("/live_bild/"):]
+                if not _lw.VORSCHAU_NAME_RE.match(kamera):
+                    return self._send(404, "not found", "text/plain")
+                p = os.path.join(cfg.get("data_dir") or "", "live", "preview",
+                                 f"{kamera}.jpg")
+                try:
+                    if (time.time() - os.path.getmtime(p)
+                            > _lw.VORSCHAU_FRISCH_S):
+                        return self._send(404, "preview stale", "text/plain")
+                    roh_jpg = open(p, "rb").read()
+                except OSError:
+                    return self._send(404, "not found", "text/plain")
+                return self._send(200, roh_jpg, "image/jpeg")
             if path.startswith("/live/"):          # Detailseite /live/<kamera>
                 import webui
                 from routes import live as _r_live
@@ -9114,9 +9352,21 @@ def make_handler(svc):
                     return self._send(200, open(_voll, "rb").read(),
                                       "image/jpeg")
                 return self._send(404, b"gone")
+            if path == "/kette":                   # Recognition chain (.189,
+                import webui                       #  eigener Settings-Punkt)
+                # _kette ist der MODUL-Import (Z. 27), nie lokal importieren
+                # (Schatten-Import-Klasse, Gate-Fang .186).
+                from routes import konfiguration as _r_konf
+                inhalt = _r_konf.kette_seite(cfg, _kette.DEFAULT_KETTE,
+                                             _kette.lage(cfg),
+                                             svc.CONFIG_WHITELIST,
+                                             svc._kette_auto_hinweise())
+                return self._send(200, webui.layout(
+                    "Recognition chain", "/kette", inhalt, self._banner()))
             if path == "/konfiguration":
                 import webui
                 # Modulumbau R1: Rendern byte-treu in routes/konfiguration.py.
+                # Die Ketten-Schalter leben seit .189 auf /kette.
                 from routes import konfiguration as _r_konf
                 inhalt = _r_konf.render(cfg, svc.CONFIG_WHITELIST,
                                         svc._kette_auto_hinweise())
@@ -10256,6 +10506,14 @@ def _sigterm(signum, frame):
 
 
 def main():
+    # umask 022 fuer den GANZEN Dienst-Baum (Kinder erben: Engine, Worker,
+    # Wartung): der Container schreibt als root, und mit der Default-umask
+    # entstanden 600er-Dateien, die der Host weder lesen noch sichern konnte
+    # (Realfall 13.08.: Lernlauf-Referenzen + state-JSONs fehlten im
+    # NAS-Backup; davor 11.08. dieselbe Klasse). Betriebsdaten im /data-Mount
+    # muessen host-lesbar sein — Geheimnisse liegen dort keine (Credential-
+    # Store maskiert, .env bleibt draussen).
+    os.umask(0o022)
     for _sig in (signal.SIGTERM, signal.SIGINT):
         try:
             signal.signal(_sig, _sigterm)
@@ -10308,6 +10566,8 @@ def main():
     svc.start_nachhol()                   # gescheiterte Analysen spaeter stumm nachholen
     svc.start_live_aufsicht()             # Phase 4: Live-Engine-Supervisor (Autostart, wenn
     #                                       ein Waechter enabled ist; Standalone-Erkennung)
+    svc.start_stream_steckbriefe()        # .186: echte Stream-Aufloesung je Kamera proben
+    #                                       (Kachel-Kopf ohne Quelltest-Klick, User 13.08.)
     svc.vision_waisen_start()             # .164: Laeufe schliessen, die der letzte
     #                                       Neustart mitten drin erwischt hat
     if not cfg["frigate_url"]:                 # frisch (Docker-Erstboot): erst der Setup-Wizard,
