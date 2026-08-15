@@ -61,6 +61,23 @@ sys.path.insert(0, HERE)
 
 _emb = None                      # der eine warme Embedder je Worker-Leben
 _EchterEmbedder = None
+_werk = {}                       # P1: warme Werkzeuge des personwork-Betriebs (PoseWache)
+
+
+def _koerper_budget(job):
+    """RAM-Budget eines Koerper-Jobs (P1, exakt das analyze.py-Muster):
+    Politik = rss_max_mb des Jobs minus eigener VmRSS, Physik = cgroup-Rest
+    (falls lesbar; -1 = keine Grenze -> Politik allein, geraten wird nichts).
+    Boden 256 MB: ein Budget unter dem Dichte-Boden lehnt Koerper._start
+    ohnehin laut ab — aber ein NEGATIVES Budget waere ein Rechenfehler,
+    kein Urteil."""
+    rss = _rss_mb()
+    grenze = float(job.get("rss_max_mb") or 3072)
+    budget = (grenze - rss) if rss > 0 else 256.0
+    cg = _cgroup_frei_mb()
+    if cg >= 0:
+        budget = min(budget, float(cg))
+    return max(budget, 256.0)
 
 
 def _factory(*a, **kw):
@@ -391,6 +408,44 @@ def _job_ausfuehren(job, antwort_out=None):
                         job["lauf_dir"], emb=face_audit.Embedder())
                 finally:
                     clipcache.frei(eid)   # nie eine Pin-Waise (Size-Cap)
+            elif typ == "koerper":
+                # P1 (.202, konzept_speicher.md): das Koerper-URTEIL laeuft im
+                # personwork-Prozess statt als ungedeckelter Thread im Main —
+                # der 15.08. hat den Main fuenfmal daran sterben lassen. Das
+                # RAM-Budget entsteht HIER (eigener VmRSS ist der wahre Stand,
+                # exakt das analyze.py-Muster), damit das 10.08.-Gate samt
+                # Degradation auf diesem Pfad ZUM ERSTEN MAL wirklich greift
+                # (I-1). Melde-/Kontroll-Folgen zieht der Dienst aus der
+                # Antwort — dieser Prozess urteilt nur.
+                from core import personlive as _plv
+                zusatz = {"u": _plv.urteilen(
+                    job["data_dir"], os.environ.get("FRIGATE_URL", ""),
+                    job["eid"], kontrolle=job.get("kontrolle"),
+                    still=bool(job.get("still")),
+                    ram_budget_mb=_koerper_budget(job))}
+            elif typ == "personlauf_ernte":
+                # P1: die ZWEITE Tuer (Personlauf-Ernte lief inline im Main,
+                # Widerleger-Fund W-F1) — EIN Event je Job, PoseWache bleibt
+                # warm (_werk, Muster des Embedder-Factory oben). Die alte
+                # Thread-Zeitwache des Mains entfaellt: haengt ein Event, killt
+                # der Dienst diesen Prozess ueber den Job-Timeout — sauberer
+                # als ein zurueckbleibender Daemon-Thread samt Puffer.
+                from core.personlauf import _proto
+                _proto()
+                import pfad_snapshots
+                from core import personernte as _pe
+                if _werk.get("wache") is None:
+                    from pose_wache import PoseWache
+                    _werk["wache"] = PoseWache()
+                budget = _koerper_budget(job)
+
+                def _extraktor(eid):
+                    return pfad_snapshots.event_verarbeiten(
+                        {"eid": eid}, ram_budget_mb=budget)
+
+                zusatz = {"r": _pe.ernte_event(
+                    job["data_dir"], job["lauf_id"], job["job"],
+                    _werk["wache"], _extraktor)}
             else:
                 return {"ok": False, "fehler": f"unbekannter typ '{typ}'"}
         ok, fehler = True, None

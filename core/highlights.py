@@ -12,7 +12,18 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.0.199"   # .199 = RELEASE (Buendel .184-.198), Box-Eintraege vom
+STAND = "0.1.0.202"   # .202 = interner Prod-Schritt (P1 Speicher-Redesign:
+# personwork-Prozess, Budget-Gate scharf, Wellen als Schlange — Box-Eintrag
+# kommt ERST mit dem Release und wird wie immer mit dem User abgestimmt).
+# Davor .201 = interner Prod-Schritt: basis_url/Push-Link aus
+# .200 wieder ENTFERNT (User-Entscheid 14.08.: erdachtes Personas-Beduerfnis, kein
+# realer Nutzerwunsch), kein Box-Eintrag.
+# Davor .200 = interner Prod-Schritt (Fix-Runde aus dem
+# Usersicht-Review 14.08.: Save-400 frische Installation, Kategorien wirken
+# auf alle Kanaele, Waechter-Kanal-Default aus konfigurierten Kanaelen,
+# Pushover-Link in die UI, fuenf veraltete Texte, /live_alerts in der Nav),
+# kein Box-Eintrag.
+# Davor .199 = RELEASE (Buendel .184-.198), Box-Eintraege vom
 # User diktiert + abgestimmt (13.08. ~18:20 "das passt").
 # Davor .198 = Fix des .197-Start-Absturzes (livewached las den
 # abgeschafften Haken; referenzen_noetig + S10-Drift-Wache), kein Box-Eintrag.
@@ -90,6 +101,19 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # .202 — MIT USER ABGESTIMMT (15.08. abends, "go aber nehme ergaenzend
+    # mit auf ..."): Speicherfix-Eintrag wie vorgeschlagen + Ausblick
+    # Easy/Expert-Mode + Feedback-Mail.
+    ("0.1.0.202", (
+        BETONT + "Important memory fix — please update. A burst of events "
+        "could exhaust memory and freeze the whole service; body recognition "
+        "now runs in its own supervised, memory-capped process. If suslik "
+        "ever felt sluggish or died on you, this is why.",
+        "Next up I'm working on a simpler Easy mode (with an Expert mode "
+        "keeping every control) — the current UI simply grew too complex. "
+        "Feedback keeps making a real difference and is very welcome: "
+        "suslik_dev@posteo.de.",
+    )),
     # .199 — User-DIKTAT (13.08. ~11:45, erweitert ~14:15, deutscher Entwurf
     # abgestimmt "das passt" ~18:20): TOP = Feedback-Appell (rocm/gpu-legacy
     # ungetestet, zwei Kontaktwege, 1.0-Plan), dann die fuenf Feature-Kerne

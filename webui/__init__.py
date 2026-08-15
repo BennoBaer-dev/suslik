@@ -55,7 +55,10 @@ NAV = [
     # Der Reiter steht auch sichtbar da, wenn kein Waechter laeuft — dieselbe
     # Begruendung wie bei "Vision detect": eine Seite, die erklaert, was sie
     # tut, ist leichter zu finden als eine, die je nach Config verschwindet.
-    ("Live",     [("/live", "Live watchers")]),
+    # .200 (Fix 6, Usersicht-Review): die Ergebnis-Seite der Waechter war nur
+    # ueber die Today-Seitenleiste erreichbar — "und wo sehe ich jetzt, was er
+    # gesehen hat?" hatte keinen Menue-Weg.
+    ("Live",     [("/live", "Live watchers"), ("/live_alerts", "Live alerts")]),
     # Areas als EIGENER Hauptbereich zwischen People und Learn (Design-Entscheid):
     # dort liegen Sicht-Einstieg UND Konfiguration (anlegen/loeschen/zuweisen).
     ("Areas",    [("/areas", "Areas")]),

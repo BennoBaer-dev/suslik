@@ -261,22 +261,28 @@ EVENT_ZEITWACHE_S = 120   # haengende Events (User-Fund 04.08.: Lauf fror bei
                           # 0% CPU ein) werden Ausfall statt Lauf-Blockade
 
 
-def fahren(data_dir, z, fortschritt=None):
-    """events_liste inline abarbeiten (Resume ueber Manifest-eids).
-    Je Event eine ZEITWACHE (Extraktion im Hilfs-Thread, hartes Timeout —
-    der haengende Thread bleibt als Daemon zurueck, der Lauf lebt weiter
-    und das Manifest nennt den Haenger). Abbruch: Seite setzt phase=
-    'abbruch', wird vor jedem Event gelesen; Geerntetes bleibt."""
+def fahren(data_dir, z, fortschritt=None, ernte_job=None):
+    """events_liste abarbeiten (Resume ueber Manifest-eids).
+    `ernte_job` (P1/.202, konzept_speicher.md W-F1): Injektion des Dienstes —
+    je Event ein personwork-JOB (eigener Prozess, RSS-Budget, Job-Timeout
+    statt Daemon-Thread-Zeitwache; die zweite 4-GB-Tuer des 15.08. ist damit
+    zu). OHNE Injektion (Werkzeug-/Altpfad) laeuft die alte Inline-Extraktion
+    mit FESTEM Budget — der laute I-1-Ausfall verbietet budgetlose Laeufe."""
     import concurrent.futures as cf
     from core import personernte as pe
     el = _proto()
     import pfad_snapshots
-    from pose_wache import PoseWache
-    wache = PoseWache()
+    wache = None
+    if ernte_job is None:
+        from pose_wache import PoseWache
+        wache = PoseWache()
 
     def extraktor(eid):
         pool = cf.ThreadPoolExecutor(max_workers=1)
-        fut = pool.submit(pfad_snapshots.event_verarbeiten, {"eid": eid})
+        # Werkzeug-Pfad: festes 2048-MB-Budget (deterministisch; Degradation
+        # greift bei Monster-Events statt Absturz). Der Dienst-Pfad laeuft
+        # nie hierher — er injiziert ernte_job.
+        fut = pool.submit(pfad_snapshots.event_verarbeiten, {"eid": eid}, 2048)
         try:
             return fut.result(timeout=EVENT_ZEITWACHE_S)
         except cf.TimeoutError:
@@ -294,7 +300,10 @@ def fahren(data_dir, z, fortschritt=None):
         if akt.get("phase") == "abbruch":
             abgebrochen = True
             break
-        r = pe.ernte_event(data_dir, z["lauf_id"], job, wache, extraktor)
+        if ernte_job is not None:
+            r = ernte_job(job) or {"ok": False, "bilder": 0}
+        else:
+            r = pe.ernte_event(data_dir, z["lauf_id"], job, wache, extraktor)
         ok += 1 if r["ok"] else 0
         bilder += r.get("bilder", 0)
         if fortschritt:

@@ -165,7 +165,12 @@ def kandidaten(data_dir, pass_key, n=1, jetzt=None, sammeln=None, min_hoehe=None
         if not os.path.isfile(pfad):
             verworfen["kein_bild"] += 1
             continue
-        hoehe, schaerfe, guete = _vg.guete_datei(pfad)
+        # .202 (konzept_speicher.md P1): Werte aus der Protokollzeile lesen —
+        # die Ablage rechnet sie seit .202 EINMAL (dieselbe Funktion an
+        # derselben Datei). Nur Alt-Zeilen ohne Werte dekodieren noch.
+        hoehe, schaerfe, guete = e.get("hoehe"), e.get("schaerfe"), e.get("guete")
+        if hoehe is None or schaerfe is None:
+            hoehe, schaerfe, guete = _vg.guete_datei(pfad)
         if hoehe is None:
             verworfen["unlesbar"] += 1
             continue

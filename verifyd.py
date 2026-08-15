@@ -411,9 +411,30 @@ def load_config(path):
                          ("anker_resume_max", 3),
                          ("benennung_k_je_bin", 4), ("benennung_yaw_grenze", 15.0),
                          ("benennung_dup_sim", 0.75), ("benennung_vorschlag_schwelle", 0.45),
-                         ("required_zones", {}), ("areas", {}), ("alert_kategorien", ["widerspruch"]),
+                         ("required_zones", {}), ("areas", {}),
+                         # .200: Default um "erkannt"+"fremd_verdacht" erweitert. Die Kategorien
+                         # steuern seither ALLE Kanaele (Pushover-Event-Alert wie bisher, NEU die
+                         # Szenen-Meldungen Telegram + MQTT szene_erkannt/szene_unbekannt) — die
+                         # Notifications-Seite versprach das schon immer, wirkte aber nur auf
+                         # Pushover. Der erweiterte Default haelt das BEOBACHTETE Verhalten einer
+                         # unveraenderten Installation exakt gleich: Szenen-Meldungen flossen
+                         # vorher bedingungslos, jetzt fliessen sie, weil ihre Kategorie ab Werk
+                         # angehakt ist. Der Event-Alert nimmt "erkannt" bewusst aus
+                         # (_maybe_alert): Erkannt-Pushes gehoeren dem Anwesenheits-Fluss mit
+                         # eigenem Schalter/Cooldown, sonst kippte der Stil von 1x je Auftauchen
+                         # auf 1x je Event.
+                         ("alert_kategorien", ["widerspruch", "erkannt", "fremd_verdacht"]),
                          ("sub_label_schreiben", True), ("mqtt_publish", True), ("frigate_read_only", True),
                          ("szene_karenz_s", 90),
+                         # .200 Whitelist-Paar-Nachzug (Usersicht-Review 14.08.): vier Whitelist-
+                         # Schluessel hatten KEIN Default-Paar hier. Folge auf einer frischen
+                         # Installation: /konfiguration renderte woertlich "None" in die Felder
+                         # und der Save der GANZEN Seite scheiterte mit 400; update_check war
+                         # zusaetzlich die stille Store-Falle der .171-Erstkontrolle (Code-Default
+                         # an, Seite zeigte off — der erste Save einer beliebigen Einstellung
+                         # haette false festgeschrieben). Werte = die bisherigen Inline-Defaults.
+                         ("szenario_gap_min", 5), ("besucher_sim", 0.50),
+                         ("update_check", True), ("debug", False),
                          ("anwesenheit_push", True), ("anwesenheit_cooldown", 1800),
                          ("telegram", {}), ("telegram_modus", "aus"), ("telegram_inhalt", "video"),
                          ("telegram_hoehe", 720), ("telegram_cooldown", 600),
@@ -540,6 +561,11 @@ def load_config(path):
                          # Whitelist-Eintrag dort. Stufen-Quelle: KETTE_STUFEN.
                          ("person_pfad", "immer"),
                          ("vision_pfad", "immer"),
+                         # P1 (.202): RSS-Schwelle des personwork-Prozesses (Koerper-
+                         # Urteile/Ernte). 3072 = traegt das Median-Event (M3: 266
+                         # Frames) vollstaendig; p95-Monster (960 Frames = 15,7 GB
+                         # Umsatz) laufen in die 10.08.-Degradation statt in den OOM.
+                         ("personwork_rss_max_mb", 3072),
                          ("worker_rss_max_mb", 4096),        # Neustart-Schwelle (VmRSS des Workers;
                          # warm real ~1,9 GB [adaface/GPU] — 2048 liess nur 10 % Luft und riss im
                          # Soak 27.07.; 4096 = User-Entscheid: faengt Ausufern, nicht Normalbetrieb)
@@ -1004,9 +1030,18 @@ class WorkerProzess:
     RSS-Schwelle (worker_rss_max_mb) -> geordneter Neustart; stop() vor execv/--once-Ende.
     Antworten kommen ueber eine EIGENE Pipe (WORKER_ANTWORT_FD) — stdout gehoert den Jobs."""
 
-    def __init__(self, cfg, log=None):
+    def __init__(self, cfg, log=None, rss_key="worker_rss_max_mb",
+                 rss_default=4096, name="worker"):
+        """rss_key/rss_default/name (P1, .202): dieselbe Maschinerie traegt
+        jetzt ZWEI Instanzen — den Analyse-Worker und personwork (Koerper-
+        Urteile/Ernte, konzept_speicher.md §3). Die RSS-Schwelle kommt je
+        Instanz aus ihrem eigenen Config-Paar, die Logzeilen tragen den
+        Instanz-Namen."""
         self.cfg = cfg
         self.log = log or (lambda m: None)
+        self.rss_key = rss_key
+        self.rss_default = rss_default
+        self.name = name
         self.p = None
         self.rx = None                      # Leseende der Antwort-Pipe
         self.lock = threading.Lock()        # EIN Job gleichzeitig (die Buendelung ist der Zweck)
@@ -1034,7 +1069,7 @@ class WorkerProzess:
                 f.write("500")
         except Exception:
             pass
-        self.log(f"worker started (pid {self.p.pid})")
+        self.log(f"{self.name} started (pid {self.p.pid})")
 
     def _stop(self, kill=False):
         p, rx = self.p, self.rx
@@ -1094,17 +1129,17 @@ class WorkerProzess:
                 # unten in dieser Methode — keine zweite Zahlenquelle.
                 if job.get("typ") != "ping":
                     job.setdefault("rss_max_mb",
-                                   int(self.cfg.get("worker_rss_max_mb") or 4096))
+                                   int(self.cfg.get(self.rss_key) or self.rss_default))
                 self.p.stdin.write(json.dumps(job) + "\n")
                 self.p.stdin.flush()
                 r, _, _ = select.select([self.rx], [], [], timeout_s)
                 if not r:
-                    self.log(f"worker job timeout ({timeout_s}s) — killing worker")
+                    self.log(f"{self.name} job timeout ({timeout_s}s) — killing {self.name}")
                     self._stop(kill=True)
                     return None
                 zeile = self.rx.readline()
                 if not zeile:                # Worker gestorben (Absturz/OOM) -> EOF
-                    self.log("worker died mid-job — restart on next job")
+                    self.log(f"{self.name} died mid-job — restart on next job")
                     self._stop(kill=True)
                     return None
                 antwort = json.loads(zeile)
@@ -1114,13 +1149,13 @@ class WorkerProzess:
                     # bei 0 begonnen); dann zaehlt n ganz, sonst nur der Zuwachs.
                     self.rueckfaelle["summe"] += n if n < letzt else n - letzt
                     self.rueckfaelle["letzt"] = n
-                grenze = int(self.cfg.get("worker_rss_max_mb") or 4096)
+                grenze = int(self.cfg.get(self.rss_key) or self.rss_default)
                 if int(antwort.get("rss_mb") or 0) > grenze:
-                    self.log(f"worker rss {antwort.get('rss_mb')} MB > {grenze} MB — restarting worker")
+                    self.log(f"{self.name} rss {antwort.get('rss_mb')} MB > {grenze} MB — restarting {self.name}")
                     self._stop()
                 return antwort
             except Exception as e:
-                self.log(f"worker error: {type(e).__name__}: {e} — killing worker")
+                self.log(f"{self.name} error: {type(e).__name__}: {e} — killing {self.name}")
                 self._stop(kill=True)
                 return None
 
@@ -1404,6 +1439,9 @@ class Service:
         self.frigate_fehler = None                # (ts, msg) letzter Frigate-API-Fehler -> UI-Banner
         self._emb = None                          # Lazy-Embedder (nur Upload-/Aufnahme-Gate, AP4)
         self._worker_obj = None                   # W2: persistenter Analyse-Worker (lazy, s. _worker)
+        self._personwork_obj = None               # P1 (.202): Koerper-Prozess (lazy, s. _personwork)
+        self._pw_prio_lock = threading.Lock()     # P1: Vorrang-Zaehler der Live-Spur
+        self._pw_live_offen = 0
         self._review_lock = threading.Lock()      # W3: laufende Lazy-Browser-Kopien (ein Bau je Clip)
         self._review_laeuft = set()
         self._review_fehler = {}                  # ed -> ts letzter Fehlschlag: /video zeigt dann eine
@@ -1554,14 +1592,25 @@ class Service:
             # Verhalten/Anzahl/Timing unveraendert — Melde-Scoping je Area kommt mit Stufe 2.
             _ar = _areas_mod.kamera_areas(_areas_mod.normalisieren(self.cfg.get("areas")),
                                           entry["camera"])
-            if self._mqtt_pub(_melden.topic(self.cfg, "szene_unbekannt"), json.dumps(
-                    {"eid": entry["eid"], "camera": entry["camera"], "areas": _ar,
-                     "ts": entry.get("start") or entry["ts"],      # Vorfalls-Zeit fuer die Caption
-                     "max_bw": entry.get("max_bw")}, ensure_ascii=False)):
-                self.log(f"SCENE unknown: {entry['eid']} ({entry['camera']}"
-                         f"{' · ' + ' + '.join(_ar) if _ar else ''}) — "
-                         f"nobody recognized in the {karenz}s window")
-            self._telegram_melden("unbekannt", entry)
+            # .200: Kategorien-Gate der Unbekannt-SZENE (Meldungstyp = "fremd_verdacht",
+            # so beschreibt ihn die Notifications-Seite). Vorher sendeten Telegram und
+            # das szene_unbekannt-Topic bedingungslos, obwohl die Seite die Kategorien
+            # als Gatekeeper ALLER Alerts ausweist. Ab Werk angehakt (load_config) —
+            # unveraenderte Installationen verhalten sich exakt wie bisher. Das
+            # Nachsammeln unten bleibt bewusst VOR der Meldefrage: Lernen haengt
+            # nicht davon ab, ob jemand benachrichtigt werden will.
+            if "fremd_verdacht" in self.cfg["alert_kategorien"]:
+                if self._mqtt_pub(_melden.topic(self.cfg, "szene_unbekannt"), json.dumps(
+                        {"eid": entry["eid"], "camera": entry["camera"], "areas": _ar,
+                         "ts": entry.get("start") or entry["ts"],      # Vorfalls-Zeit fuer die Caption
+                         "max_bw": entry.get("max_bw")}, ensure_ascii=False)):
+                    self.log(f"SCENE unknown: {entry['eid']} ({entry['camera']}"
+                             f"{' · ' + ' + '.join(_ar) if _ar else ''}) — "
+                             f"nobody recognized in the {karenz}s window")
+                self._telegram_melden("unbekannt", entry)
+            else:
+                self.log(f"{entry['eid']}: scene-unknown notification suppressed "
+                         f"(category fremd_verdacht not enabled)")
             self._szenario_nachsammeln()             # sofort sammeln+clustern statt bis 06:00 warten (User 21.07.)
         threading.Timer(karenz, entscheiden).start()
 
@@ -2510,6 +2559,7 @@ class Service:
         "nachhol_tage": (int, 1, 3, "how far back the retry looks for failed analyses (days)"),
         "worker": (bool, None, None, "persistent analysis worker: keeps the models loaded between events (large CPU saving); off = one process per event (pre-0.1.0.38 behavior)"),
         "worker_rss_max_mb": (int, 512, 16384, "memory threshold (MB): the worker is restarted cleanly once its RSS exceeds this"),
+        "personwork_rss_max_mb": (int, 512, 16384, "memory threshold (MB) of the body-recognition process — large events degrade sampling instead of exhausting memory"),
         "wanduhr_min_kerne": (int, 1, 64, "self-measurement gate: minimum PHYSICAL cores (capped by a cgroup CPU quota if one is set) required to run the boot-time timing self-measurement, which is a second full analysis process next to the live one. The default 4 is a structural floor (2 processes x 2 concurrent parts each: video decode + inference), not a measured value. On a machine below the floor the measurement is skipped loudly and run-duration forecasts keep the labeled fallback values. Lower this deliberately if you accept minutes of full load on a small machine in exchange for measured forecasts. Also used as the weak-machine floor for the first-boot chain defaults (fresh installs below it start with person_pfad=nur_wenn_gesicht_leer, vision_pfad=aus) — raising it widens that group too"),
         "analyse_timeout_s": (int, 60, 3600, "watchdog for one live analysis (seconds): if the analysis has not answered by then it is presumed hung, killed, and the event is retried once immediately with a doubled deadline (in worker mode on a fresh worker, otherwise in a fresh process). The default 600 is measured, not guessed: across 1394 live analyses on the reference machine the slowest successful run took 258 s, so 600 leaves over twice that, and the doubled retry additionally carries machines up to roughly 4-5x slower before an event is handed to the silent catch-up. Raise this if you keep seeing 'analyze watchdog' lines for runs that would have finished"),
         # Vision detect (konzept_vision.md v2 §5): die zwei reinen Zahlen des
@@ -4082,12 +4132,59 @@ class Service:
 
     def worker_stoppen(self):
         """Worker beenden+wait — VOR execv (neustart) und am --once-Ende. Sonst liefe eine
-        Waise parallel zum frischen Boot in dessen Startup-Benchmark (Exit-139-Bootfenster)."""
-        if self._worker_obj is not None:
-            try:
-                self._worker_obj.stop()
-            except Exception:
-                pass
+        Waise parallel zum frischen Boot in dessen Startup-Benchmark (Exit-139-Bootfenster).
+        P1: personwork wird im selben Zug gestoppt (gleiche Waisen-Klasse)."""
+        for obj in (self._worker_obj, self._personwork_obj):
+            if obj is not None:
+                try:
+                    obj.stop()
+                except Exception:
+                    pass
+
+    # ------------------------------------------- P1 (.202): personwork-Prozess
+    def _personwork(self):
+        """Zweite WorkerProzess-Instanz fuer Koerper-Urteile und Personlauf-
+        Ernte (konzept_speicher.md §3): eigener Prozess, eigene RSS-Schwelle
+        (personwork_rss_max_mb), EIN Job gleichzeitig — eine Welle wird zur
+        Schlange statt zum Thread-Faecher. Lazy wie der Analyse-Worker."""
+        if self._personwork_obj is None:
+            self._personwork_obj = WorkerProzess(
+                self.cfg, log=self.log, rss_key="personwork_rss_max_mb",
+                rss_default=3072, name="personwork")
+        return self._personwork_obj
+
+    def personwork_job_live(self, job, timeout_s):
+        """Vorrang-Spur (konzept_speicher.md L5): Live-Urteile melden sich an,
+        BEVOR sie am Job-Lock warten — Batch-Einreiher lassen sie vor."""
+        with self._pw_prio_lock:
+            self._pw_live_offen += 1
+        try:
+            return self._personwork().job(job, timeout_s)
+        finally:
+            with self._pw_prio_lock:
+                self._pw_live_offen -= 1
+
+    def personwork_job_batch(self, job, timeout_s, versuche=2):
+        """Batch-Spur (Nachanalyse, Personlauf-Ernte): wartet, solange ein
+        Live-Job angemeldet ist (strikte Prioritaet ohne Preemption), und
+        wiederholt einen gestorbenen Job genau EINMAL — danach gilt er als
+        vergiftet (laut, konzept_speicher.md §3)."""
+        for v in range(1, versuche + 1):
+            frist = time.monotonic() + 120
+            while time.monotonic() < frist:
+                with self._pw_prio_lock:
+                    frei = self._pw_live_offen == 0
+                if frei:
+                    break
+                time.sleep(0.5)
+            antwort = self._personwork().job(job, timeout_s)
+            if antwort is not None:
+                return antwort
+            self.log(f"personwork batch job attempt {v}/{versuche} died "
+                     f"(typ={job.get('typ')}, eid={job.get('eid') or job.get('lauf_id')})")
+        self.log(f"personwork job POISONED after {versuche} attempts — skipped "
+                 f"(typ={job.get('typ')}, eid={job.get('eid') or job.get('lauf_id')})")
+        return None
 
     # ------------------------------------------------- Lern-Lauf (E1): Selbstmessung
     _wanduhr_start_lock = threading.Lock()        # Klassen-Lock: Doppelstart-Rennen (F2.2)
@@ -5402,17 +5499,27 @@ class Service:
         # Auftauchen (die anwesenheit_cooldown-Ruhe definiert die Szene) — unabhaengig
         # vom Pushover-Schalter; die HA-Telegram-Automation haengt hieran.
         # Areas Stufe 1: Area-Namen in Payload (additiv) + Log + Push-Text; Verhalten gleich.
+        # .200: Kategorien-Gate der Erkannt-SZENE (Meldungstyp = "erkannt"). Ab Werk
+        # angehakt (load_config) — unveraenderte Installationen senden wie bisher;
+        # wer "erkannt" abhakt, stellt Telegram + szene_erkannt hiermit wirklich ab
+        # (die Seite behauptete das schon immer). Der Anwesenheits-PUSHOVER unten
+        # behaelt seinen eigenen Schalter (anwesenheit_push) — die Zustandspflege
+        # (last_seen/Nachlernen) laeuft oben IMMER, sie ist keine Meldung.
         _ar = _areas_mod.kamera_areas(_areas_mod.normalisieren(cfg.get("areas")), entry["camera"])
-        if self._mqtt_pub(_melden.topic(self.cfg, "szene_erkannt"), json.dumps(
-                {"eid": entry["eid"], "camera": entry["camera"], "areas": _ar,
-                 "ts": entry.get("start") or entry["ts"],         # Vorfalls-Zeit fuer die Caption
-                 "personen": [{"name": p,
-                               "cos": (entry["ours"].get(p) or {}).get("max"),
-                               "win": (entry["ours"].get(p) or {}).get("win3s")} for p in neu]},
-                ensure_ascii=False)):
-            self.log(f"SCENE recognized: {' + '.join(neu)} ({entry['camera']}"
-                     f"{' · ' + ' + '.join(_ar) if _ar else ''})")
-        self._telegram_melden("erkannt", entry, neu)
+        if "erkannt" in cfg["alert_kategorien"]:
+            if self._mqtt_pub(_melden.topic(self.cfg, "szene_erkannt"), json.dumps(
+                    {"eid": entry["eid"], "camera": entry["camera"], "areas": _ar,
+                     "ts": entry.get("start") or entry["ts"],         # Vorfalls-Zeit fuer die Caption
+                     "personen": [{"name": p,
+                                   "cos": (entry["ours"].get(p) or {}).get("max"),
+                                   "win": (entry["ours"].get(p) or {}).get("win3s")} for p in neu]},
+                    ensure_ascii=False)):
+                self.log(f"SCENE recognized: {' + '.join(neu)} ({entry['camera']}"
+                         f"{' · ' + ' + '.join(_ar) if _ar else ''})")
+            self._telegram_melden("erkannt", entry, neu)
+        else:
+            self.log(f"{entry['eid']}: scene-recognized notification suppressed "
+                     f"(category erkannt not enabled)")
         if not cfg["anwesenheit_push"] or entry.get("alerted"):
             return False
         t = datetime.datetime.fromtimestamp(entry.get("start") or entry["ts"]).strftime("%H:%M")
@@ -5663,13 +5770,27 @@ class Service:
 
     def _person_lauf(self, eid, entry, still):
         """Rumpf des Koerper-Urteils (aus _person_live.lauf ausgelagert, W1b:
-        der Mantel fuehrt jetzt den Aktiv-Zaehler fuer _live_aktiv)."""
+        der Mantel fuehrt jetzt den Aktiv-Zaehler fuer _live_aktiv).
+        P1 (.202, konzept_speicher.md): das URTEIL laeuft nicht mehr hier im
+        Main (5 Ausfaelle am 15.08.), sondern als Job im personwork-Prozess —
+        Live-Urteile auf der Vorrang-Spur, stille Nachanalyse auf der
+        Batch-Spur. Melde-/Kontroll-Folgen bleiben HIER: dieser Prozess
+        kennt MQTT, Pushover und Telegram, der Arbeiter nicht."""
         try:
-            from core import personlive as plv
-            u = plv.urteilen(self.cfg["data_dir"],
-                             os.environ.get("FRIGATE_URL", ""), eid,
-                             kontrolle=self._kontroll_speicher(eid, entry),
-                             still=still)
+            job = {"typ": "koerper", "data_dir": self.cfg["data_dir"],
+                   "eid": eid, "still": bool(still),
+                   "kontrolle": self._kontroll_speicher(eid, entry),
+                   "log": os.path.join(self.cfg["data_dir"], "events",
+                                       str(eid).replace("/", "_"),
+                                       "personlive.log")}
+            timeout = int(self.cfg.get("analyse_timeout_s") or 600)
+            antwort = (self.personwork_job_batch(job, timeout) if still
+                       else self.personwork_job_live(job, timeout))
+            if antwort is None:
+                print(f"[personlive] personwork job failed/timeout ({eid}) — "
+                      f"no body verdict for this event", flush=True)
+                return
+            u = antwort.get("u")
             if still:
                 # Zweite, unabhaengige Sperre. KEIN Personenname im
                 # Dienst-Log (Log-Vertrag §9) — die Zeile sagt nur, dass
@@ -5715,8 +5836,14 @@ class Service:
             print(f"[personlive] Fehler: {e}", flush=True)
 
     def _maybe_alert(self, entry, event_dir):
-        # matcht v2-Kategorie ODER v1-Vergleichskategorie (Parallelphase: "widerspruch" lebt in v1)
-        if not ({entry.get("kategorie"), entry.get("kategorie_v1")} & set(self.cfg["alert_kategorien"])):
+        # matcht v2-Kategorie ODER v1-Vergleichskategorie (Parallelphase: "widerspruch" lebt in v1).
+        # .200: "erkannt" zaehlt hier NICHT — seit der Default die Kategorie ab Werk
+        # traegt (Szenen-Gate), wuerde sie sonst jeden bestaetigten Lauf als Event-
+        # Alert pushen (1x je Event, Cooldown 300 s) und den Anwesenheits-Push
+        # verdraengen (der alerted-Riegel in _maybe_presence). Erkannt-Pushover
+        # gehoert dem Anwesenheits-Fluss: 1x je Auftauchen, eigener Schalter.
+        if not ({entry.get("kategorie"), entry.get("kategorie_v1")}
+                & (set(self.cfg["alert_kategorien"]) - {"erkannt"})):
             return False
         now = time.time()
         if now - self.last_alert < self.cfg["alert_cooldown"]:
@@ -6845,7 +6972,17 @@ def make_handler(svc):
                                                  "bilder": bilder,
                                                  "ts": time.time()}
                             _pl.zustand_schreiben(cfg["data_dir"], _z)
-                        _pl.fahren(cfg["data_dir"], _z, _fs)
+                        # P1 (.202): Ernte-Events als personwork-Jobs (Batch-
+                        # Spur) statt inline im Main — zweite 4-GB-Tuer zu.
+                        def _ernte_job(_j):
+                            _a = svc.personwork_job_batch(
+                                {"typ": "personlauf_ernte",
+                                 "data_dir": cfg["data_dir"],
+                                 "lauf_id": _z["lauf_id"], "job": _j},
+                                _pl.EVENT_ZEITWACHE_S + 60)
+                            return _a.get("r") if _a else None
+                        _pl.fahren(cfg["data_dir"], _z, _fs,
+                                   ernte_job=_ernte_job)
                     except Exception as e:
                         try:
                             _z2 = _pl.zustand_lesen(cfg["data_dir"]) \
@@ -7229,10 +7366,14 @@ def make_handler(svc):
                     _ll.anker_aktualisieren(
                         cfg["data_dir"], aid, person=name, status="benannt", mitglieder=mit,
                         auswahl={"ts": round(time.time(), 1), "n": len(gew), "bedingungs_tag": tag})
+                    # .200 (Fix 4): "ships with E4b"/"pending" war seit dem Bau der
+                    # Uebernahme (/lernlauf/uebernehmen) falsch — der Adopt-Knopf
+                    # erscheint direkt nach dem Benennen.
                     svc.log(f"anchor {aid} named '{name}' ({len(gew)} of {len(mit)} images "
-                            "selected) — adoption ships with E4b")
+                            "selected) — ready to adopt")
                     return self._send(200, json.dumps(
-                        {"ok": True, "msg": f"named '{name}' — {len(gew)} images selected, adoption pending"},
+                        {"ok": True, "msg": f"named '{name}' — {len(gew)} images selected, "
+                                            f"adopt it with the Adopt button"},
                         ensure_ascii=False), "application/json")
                 except Exception as e:
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
@@ -8339,9 +8480,10 @@ def make_handler(svc):
                                       "People appear here as soon as a pass is analysed.")
                 # Ab Werk ist JEDER Meldeweg aus — wer auf die erste Meldung wartet, wartet
                 # vergebens und erfaehrt es sonst nirgends (Plan-QS P.8).
-                _kanal_da = (cfg.get("telegram_modus", "aus") != "aus"
-                             or bool((cfg.get("pushover") or {}).get("token"))
-                             or bool(cfg.get("mqtt_publish")))
+                # .200: aus der EINEN Kanal-Quelle statt Inline-Ausdruck (Fix 3);
+                # nebenbei ehrlicher — mqtt_publish ohne Broker-Host zaehlte
+                # vorher als vorhandener Meldeweg.
+                _kanal_da = bool(_melden.konfigurierte_kanaele(cfg))
                 if ist_heute and not _kanal_da:
                     band += ('<p class="dim" style="margin-top:8px">No alert channel configured '
                              'yet — recognitions appear here, but nothing will notify you. '
@@ -9213,7 +9355,7 @@ def make_handler(svc):
                     + ("".join(karten) if karten else
                        '<div class="leer"><b>No live alerts that day.</b></div>'))
                 return self._send(200, webui.layout(
-                    "Live alerts", "/live", inhalt, self._banner()))
+                    "Live alerts", "/live_alerts", inhalt, self._banner()))
             if path == "/live_alarmbild":          # Beweismedium eines Live-Alerts (.190, .195: +mp4)
                 # Pfad kommt aus dem Melde-Protokoll bzw. der Auftritts-
                 # Ansicht und MUSS dem einen Vertrag ALARMBILD_RE genuegen
@@ -9269,7 +9411,15 @@ def make_handler(svc):
                                    "Tiles come from Frigate's camera list "
                                    "and saved watchers only."),
                         self._banner()))
-                inhalt = _r_live.detail(kamera, kd.get("guard"), kd, gesperrt)
+                _g = kd.get("guard")
+                if not _g or _g.get("kanaele") is None:
+                    # .200 (Fix 3): Kanal-Vorbelegung eines NEUEN Waechters aus den
+                    # real konfigurierten Kanaelen (EINE Quelle statt hart pushover;
+                    # gespeicherte Waechter kommen normalisiert aus guards_lesen
+                    # und tragen kanaele immer selbst).
+                    _g = dict(_g or {},
+                              kanaele=_melden.konfigurierte_kanaele(cfg))
+                inhalt = _r_live.detail(kamera, _g, kd, gesperrt)
                 return self._send(200, webui.layout(
                     f"Live — {kamera}", "/live", inhalt, self._banner()))
             if path == "/vision":                  # Vision detect (Reiter)

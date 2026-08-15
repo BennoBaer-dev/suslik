@@ -443,7 +443,10 @@ def detail(name, guard, kd, gesperrt):
                      ("1080", "1080p — sweet spot (measured: name ~2.4 s earlier than 720p)"),
                      ("1440", "1440p — no measured gain over 1080p"),
                      ("2160", "2160p — native 4K, marginal gain, highest decode cost")))
-    kanaele = g.get("kanaele") if g.get("kanaele") is not None else ["pushover"]
+    # .200 (Fix 3): kein eigenes Kanal-Literal mehr — gespeicherte Waechter kommen
+    # normalisiert aus guards_lesen, NEUE bekommen die Vorbelegung im /live/-Handler
+    # aus melden.konfigurierte_kanaele (die eine Quelle). Fehlt beides: nichts vorwaehlen.
+    kanaele = g.get("kanaele") or []
     kboxen = "".join(
         f'<label class="lv-radio"><input type="checkbox" class="lv-kanal" '
         f'value="{k}"{" checked" if k in kanaele else ""}> {k}</label>'

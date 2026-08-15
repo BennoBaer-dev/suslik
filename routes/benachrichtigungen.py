@@ -49,7 +49,13 @@ def render(cfg, kat_labels):
         'keep the stored value. Use <b>Test</b> next to a channel to send a real message right now '
         '(bypasses cooldowns).</p>'
         '<div class="card"><b>Alerts</b>'
-        '<p class="dim">Which judgment categories raise an alert:</p>' + cat_html +
+        # .200 (Fix 2): der Satz stimmt jetzt — die Kategorien steuern seither
+        # wirklich ALLE Kanaele (vorher wirkten sie nur auf Pushover, Telegram/
+        # MQTT-Szenen sendeten ungefragt).
+        '<p class="dim">Which judgment categories raise an alert — on every channel '
+        '(Pushover, Telegram, MQTT scene topics). The recognized-person push itself '
+        'is governed by the Presence toggle below; the MQTT data topics '
+        '(erkennung, heartbeat) always publish while MQTT publishing is on.</p>' + cat_html +
         '<div style="margin-top:8px">Presence push: ' + _selbool("n-anwesenheit_push", cfg.get("anwesenheit_push")) +
         ' &nbsp; Alert cooldown (s): ' + _num("n-alert_cooldown", cfg.get("alert_cooldown")) +
         ' &nbsp; Presence cooldown (s): ' + _num("n-anwesenheit_cooldown", cfg.get("anwesenheit_cooldown")) +

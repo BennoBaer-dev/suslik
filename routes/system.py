@@ -36,8 +36,18 @@ def render(svc, cfg, ro, docs_url):
     hb_alter = time.time() - getattr(svc, "letzter_hb", 0)
     ff = svc.frigate_fehler
     _url_da = bool((cfg.get("frigate_url") or "").strip())
+    # .200 (Fix 4): der Setup-Wizard verspricht seit jeher "whether the accelerator
+    # really engages is confirmed live on the System page" — die Lampe gab es nie.
+    # Quelle = dieselben Felder wie /health (placement_info/backend + Selbstcheck-
+    # Fails), die Anzeige kann dem Selbstcheck nicht widersprechen (K1).
+    _pi = cfg.get("placement_info") or {}
+    _bk = _pi.get("backend") or cfg.get("backend") or cfg.get("ov_device") or "?"
+    _sf = getattr(svc, "startup_fails", 0)
     ampel = [
         ("Service", True, f"processed (session): {len(svc.processed)}"),
+        ("Backend", _sf == 0,
+         f"{_bk} — self-check OK" if _sf == 0 else
+         f"{_bk} — {_sf} self-check FAIL(s), see service log"),
         # Erstlauf: "noch nie analysiert" ist KEIN Fehler — vorher stand hier eine
         # rote Lampe mit "last duration — s", bevor je ein Event kam (Plan-QS P.6).
         ("Analysis", (letzte is None) or (letzte.get('dauer_s') or 0) < 90,
@@ -224,8 +234,12 @@ def render(svc, cfg, ro, docs_url):
         '<span id="fw-status" class="dim"></span></div></div>')
     inhalt = ("<h2>System</h2>"
               f'<div class="zeile">{a_html}</div>' + drift + live_html + write_html + sync_html + qs_html + backup_html +
+              # .200 (Fix 4): der Abschluss-Text des Wizards verweist auf
+              # "System → Re-run setup wizard" — den Link gab es hier nie
+              # (nur auf Advanced). Jetzt steht er da, der Text stimmt.
               '<div class="card"><b>Tools</b><br>'
-              '<a href="/log">Service log</a> · <a href="/health">health</a></div>'
+              '<a href="/log">Service log</a> · <a href="/health">health</a> · '
+              '<a href="/setup">Re-run setup wizard</a></div>'
               '<div class="card"><b>Docs</b><br>'
               f'<a href="{docs_url}" target="_blank" rel="noopener noreferrer">'
               'Documentation on GitHub</a></div>')

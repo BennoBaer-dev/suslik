@@ -81,12 +81,34 @@ def topic(cfg, name):
     return f"{praefix(cfg)}/{name}"
 
 
+# --------------------------------------------- konfigurierte Kanaele (.200, Fix 3)
+def konfigurierte_kanaele(cfg):
+    """DIE eine Antwort auf "welche Meldekanaele sind real eingerichtet?" (K3-Regel:
+    nie wieder ein Streu-Literal). Nutzer: der Waechter-Kanal-Default in
+    livewache.guards_lesen, die Kanal-Vorbelegung neuer Waechter im /live-Handler
+    und der "no alert channel"-Hinweis der Today-Seite. Vorher stand dort dreimal
+    etwas Eigenes — und neue Waechter defaulteten hart auf ['pushover'], auch wenn
+    Pushover nie eingerichtet war: der Waechter triggerte und meldete NIRGENDWO.
+    Reihenfolge = KANAELE_ERLAUBT der Live-Engine (pushover, telegram, mqtt)."""
+    k = []
+    if (cfg.get("pushover") or {}).get("token"):
+        k.append("pushover")
+    if cfg.get("telegram_modus", "aus") != "aus":
+        k.append("telegram")
+    if cfg.get("mqtt_publish") and (cfg.get("mqtt") or {}).get("host"):
+        k.append("mqtt")
+    return k
+
+
 # ------------------------------------------------------------------ Pushover
 def push(cfg, title, message, attachment=None, herkunft=None):
     """`herkunft` (.163): woher die Meldung kommt — Werte und Praefixe in
     core.registry.MELDE_HERKUNFT, Vorgabe live (keine Markierung). Alles, was
     NICHT aus dem Live-Betrieb kommt, sagt es im Text; sonst liest sich eine
-    Test-Meldung am Handy wie ein Vorfall."""
+    Test-Meldung am Handy wie ein Vorfall.
+    Ein url/url_title-Link in den Payload (.200) wurde mit .201 wieder
+    ENTFERNT (User-Entscheid 14.08.: erdachtes Personas-Beduerfnis, kein realer
+    Nutzerwunsch; suslik ist nicht aus dem Internet erreichbar)."""
     po = cfg.get("pushover") or {}                 # fehlender Block darf keinen KeyError werfen
     token, user = po.get("token"), po.get("user")  # (telegram_video() faengt das laengst ab)
     if not (token and user):
@@ -550,6 +572,9 @@ def notif_speichern(cfg, d, *, log, whitelist, store_pfad, store_laden,
         kats = [k for k in (d.get("alert_kategorien") or []) if k in erlaubt]
         store["alert_kategorien"] = kats
         audit["alert_kategorien"] = kats
+
+    # (Ein basis_url-Feld aus .200 wurde mit .201 wieder entfernt — ein etwaiger
+    # Store-Rest bleibt wirkungslos liegen, kein Leser greift mehr darauf zu.)
 
     # 3) Kanal-Bloecke (kompletter Dict-Ersatz; Secrets maskiert im Audit)
     a = cfg.get("telegram") or {}
