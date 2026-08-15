@@ -207,10 +207,25 @@ def kontrolle_ablegen(data_dir, kontrolle, eid, crop, urteil):
     datei = str(eid).replace("/", "_") + ".jpg"
     try:
         os.makedirs(d, exist_ok=True)
-        crop.save(os.path.join(d, datei), "JPEG", quality=88)
+        pfad = os.path.join(d, datei)
+        crop.save(pfad, "JPEG", quality=88)
+        # .202 (konzept_speicher.md P1): Hoehe/Schaerfe EINMAL bei der Ablage
+        # in die Protokollzeile — vorher dekodierte visionurteil.kandidaten()
+        # bei JEDEM Lauf und JEDEM Seitenaufbau alle Bilder des Passes neu
+        # (CV_64F-Brocken bis 30 MB, Inventar Z.10). BEWUSST von der eben
+        # GESPEICHERTEN Datei gerechnet (dieselbe Funktion, dieselben Bytes
+        # wie der Alt-Zeilen-Fallback — kein zweiter Zahlenraum durch
+        # JPEG-Artefakte).
+        from core import visiongalerie as _vg
+        hoehe, schaerfe, guete = _vg.guete_datei(pfad)
         with open(os.path.join(d, KONTROLLE_PROTOKOLL), "a") as f:
             f.write(json.dumps({"ts": round(time.time(), 1), "eid": eid,
-                                "datei": datei, **(urteil or {})},
+                                "datei": datei,
+                                **({"hoehe": hoehe,
+                                    "schaerfe": round(schaerfe, 2),
+                                    "guete": guete}
+                                   if hoehe is not None else {}),
+                                **(urteil or {})},
                                ensure_ascii=False) + "\n")
             f.flush()
             os.fsync(f.fileno())
@@ -473,7 +488,11 @@ def _bild_holen(frigate_url, eid, data_dir=None):
             import concurrent.futures as cf
             import pfad_snapshots
             pool = cf.ThreadPoolExecutor(max_workers=1)
-            fut = pool.submit(pfad_snapshots.event_verarbeiten, {"eid": eid})
+            # P1 (.202): ram_budget_mb wird durchgereicht — im personwork-
+            # Prozess kommt es aus _koerper_budget; ein Aufrufer OHNE Budget
+            # laeuft in den lauten I-1-Ausfall von Koerper._start.
+            fut = pool.submit(pfad_snapshots.event_verarbeiten, {"eid": eid},
+                              ram_budget_mb)
             try:
                 top, _info = fut.result(timeout=EVENT_ZEITWACHE_S)
             finally:
@@ -552,7 +571,7 @@ def _bild_holen(frigate_url, eid, data_dir=None):
 
 
 def urteilen(data_dir, frigate_url, eid, schwelle=None, kontrolle=None,
-             still=False):
+             still=False, ram_budget_mb=None):
     """EIN Event beurteilen. Rueckgabe: dict(person, score, feuer:bool)
     oder None (kein Modell / kein Bild / unter Schwelle ohne Feuer).
     feuer=True heisst: Feuer-Regel erfuellt UND Karenz frei -> MELDEN.

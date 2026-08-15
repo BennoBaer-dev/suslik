@@ -192,9 +192,12 @@ def wizard(personen, auswahl_n, person_wahl, bilanz=None, lauf=None,
             f'material, {lauf.get("verworfen", 0)} rejected '
             f'(run {html.escape(str(lauf.get("lauf_id", "")))}).</div>'
             + fremd_zeile + vw_zeile
-            + '<div class="dim">Training on the approved material ships with '
-            "the next update — your review is stored and nothing needs to "
-            "be repeated. You can start another run below any time.</div>"
+            # .200 (Fix 4): "ships with the next update" war seit PE3 falsch —
+            # das Training laeuft automatisch nach jeder Abnahme (personmodell).
+            + '<div class="dim">Training on the approved material starts '
+            "automatically after the review — see "
+            '<a href="/person/modell">Model status</a>. '
+            "You can start another run below any time.</div>"
             '<div style="margin-top:8px"><a class="gtb" '
             'href="/person">View the learned material</a>'
             "</div></div>")

@@ -760,22 +760,37 @@ def senden_mit_deadline(url, kopf, body, timeout_s, deadline_s, geheimnisse=()):
     daten = json.dumps(body).encode()
     req = urllib.request.Request(url, data=daten, headers=kopf)
     kasten, fertig = {}, threading.Event()
+    # .202 (Widerleger-Fund): greift die Deadline, BEVOR resp existiert
+    # (Verbindungsaufbau/Senden), gab es nichts zu schliessen — der Thread
+    # lebte samt Closure (req mit allen Bild-Bytes) weiter. `verfallen`
+    # laesst ihn eine spaet ankommende Antwort SOFORT schliessen und
+    # verwerfen; zusaetzlich raeumt der Deadline-Pfad den kasten, damit
+    # nichts Grosses am gemeinsamen Dict haengen bleibt.
+    verfallen = threading.Event()
 
     def _lesen():
         try:
             r = urllib.request.urlopen(req, timeout=timeout_s)
+            if verfallen.is_set():                 # Deadline war schneller
+                try:
+                    r.close()
+                except Exception:
+                    pass
+                return
             kasten["resp"] = r                     # Griff fuer die Reissleine
             with r:
                 kasten["daten"] = r.read()
                 kasten["status"] = r.status
         except BaseException as ex:                # auch der Abriss durch close()
-            kasten["fehler"] = ex
+            if not verfallen.is_set():
+                kasten["fehler"] = ex
         finally:
             fertig.set()
 
     t = threading.Thread(target=_lesen, daemon=True, name="vision-anfrage")
     t.start()
     if not fertig.wait(max(1.0, float(deadline_s))):
+        verfallen.set()
         r = kasten.get("resp")
         if r is not None:
             try:
@@ -783,6 +798,11 @@ def senden_mit_deadline(url, kopf, body, timeout_s, deadline_s, geheimnisse=()):
             except Exception:
                 pass
         t.join(10)
+        kasten.clear()                             # keine Bild-Bytes am Dict halten
+        if t.is_alive():                           # Leck SICHTBAR statt still
+            print("[vision] WARN: request thread still alive after deadline "
+                  "+10s — it will end at the socket timeout at the latest",
+                  flush=True)
         raise VisionFehler(
             "no vision verdict (timeout) — the endpoint answered, but kept "
             f"trickling past the overall deadline of {int(deadline_s)} s",

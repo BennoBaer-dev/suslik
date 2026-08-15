@@ -39,9 +39,11 @@ def wizard(personen_zahl, auswahl, bilanz, prognose, quelle, schwellen,
     lage = ("B — existing references/unknowns will be extended"
             if personen_zahl else "A — cold start, no faces yet")
     teile = ["<h2>Learn people — guided run</h2>",
+             # .200 (Fix 4): "ships in the next updates" war seit E4b falsch und
+             # widersprach der Phasen-Karte weiter unten auf derselben Seite.
              '<p class="sub">Plans a learning run over your own recordings. '
-             "Preparation, harvest, grouping and naming run for real; "
-             "adoption into recognition ships in the next updates.</p>"]
+             "Preparation, harvest, grouping, naming and adoption into "
+             "recognition all run for real.</p>"]
     if unbekannt_offen:
         # Baustein B (12.08., Realfall Besuch): der Querverweis, der fehlte — ein
         # Lernlauf ist fuer heutige unbekannte Besucher gar nicht noetig, ihre

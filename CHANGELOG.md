@@ -7,6 +7,71 @@ this file — the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git
 history.
 
+## 0.1.0.202 — 2026-08-15
+
+Memory fix — the important one. On 2026-08-15 our own production box went
+down five times; the measured root cause applies to every installation:
+
+- **Body recognition now runs in its own supervised process** ("personwork")
+  instead of unbounded threads inside the main service. A burst of events
+  used to spawn one heavy 4K-decode thread each (a 41-event re-analysis
+  ate +1.2 GB in 30 s and froze the whole container); now they queue and
+  run one at a time, live verdicts take priority over batch work.
+- **The RAM budget guard from 0.1.0.172 finally applies to the body path.**
+  It existed, but the body path silently skipped it; that skip is now a
+  loud error, and a QA-gate check keeps it from ever coming back. Large
+  events degrade their sampling instead of exhausting memory (median
+  events are unaffected).
+- The person-learn harvest goes through the same supervised process
+  (it was the second unbounded door).
+- A vision-request thread could outlive its deadline holding the full
+  request body; it now discards late responses immediately.
+- Image sharpness/height are computed once when a judged image is stored,
+  instead of re-decoding every image of a pass on every vision run and
+  page view.
+- New setting `personwork_rss_max_mb` (default 3072) caps the body process.
+
+Next up: a simpler Easy mode (with an Expert mode keeping every control).
+Feedback is very welcome: suslik_dev@posteo.de.
+
+## 0.1.0.201 — 2026-08-14
+
+- Removes the "UI address" field and the push-message link again that
+  0.1.0.200 had introduced (that version was never published): no real user
+  ever asked for it, and suslik is deliberately not reachable from the
+  internet, so the link would only ever work on the home network.
+
+## 0.1.0.200 — 2026-08-14
+
+Fix round from a full user's-eye review of all 31 pages:
+
+- **Advanced settings page was unsaveable on a fresh installation**: four
+  whitelist keys had no code default, two of them rendered the literal
+  string "None" and any save of the whole page failed with HTTP 400. All
+  four now carry their code default; this also removes a silent trap where
+  the daily update check showed "off" on fresh installs while actually
+  running.
+- **Alert categories now govern every channel** as the Notifications page
+  always claimed: Telegram scene messages and the MQTT scene topics
+  (szene_erkannt/szene_unbekannt) respect the category checkboxes; the
+  factory default has the matching categories ticked, so unchanged
+  installations behave exactly as before. The MQTT data topics (erkennung,
+  heartbeat) keep publishing unfiltered.
+- **New live watchers no longer default to Pushover blindly**: the channel
+  preselection comes from the channels you actually configured; a watcher
+  whose channel list ends up empty says so loudly in the log.
+- **Push messages can carry a link back into suslik**: set the new "UI
+  address" field on the Notifications page and Pushover alerts get an
+  "Open in suslik" link to the event, live-alerts or System page. Blank
+  keeps the old behavior.
+- **Stale texts corrected**: the learning-run, anchors and person-learn
+  pages claimed naming/adoption/training would "ship in the next updates"
+  although all of it works in this build; the System page now really has
+  the "Re-run setup wizard" link and a Backend lamp confirming the
+  accelerator self-check, as the setup wizard always promised.
+- **Live alerts** is now in the navigation (Live section) instead of being
+  reachable only through the Today sidebar.
+
 ## 0.1.0.199 — 2026-08-13
 
 Release bundling the internal steps 0.1.0.184–0.1.0.198 (they were never

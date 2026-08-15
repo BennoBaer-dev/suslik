@@ -341,7 +341,10 @@ def anker_seite(saetze, kaputt, vorschlaege=None, dubletten=None):
     return (stil + "<h2>Anchor clusters</h2>"
             f'<div class="card">{len(saetze)} clusters from {ges} anchor-ready faces — '
             f'{ok_n} clean, {len(saetze) - ok_n} for review (dimmed, with the reason on the '
-            'badge). Open a cluster to review and name it; adoption into recognition ships with E4b. '
+            # .200 (Fix 4): E4b ist laengst gebaut (/lernlauf/uebernehmen) —
+            # der Adopt-Knopf steht im benannten Cluster.
+            'badge). Open a cluster to review and name it — named clusters are adopted '
+            'into recognition right there (Adopt button). '
             '<a href="/lernlauf">Back to the learning run</a>.</div>'
             + verworfen_hinweis + lauf_zeile
             + kopf_warn + "".join(karten))

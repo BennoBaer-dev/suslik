@@ -2549,7 +2549,18 @@ def guards_lesen(cfg, log=print):
             continue
         roh_kanaele = g.get("kanaele")
         if roh_kanaele is None:
-            roh_kanaele = ["pushover"]
+            # .200 (Fix 3, Usersicht-Review): Default = die REAL konfigurierten
+            # Kanaele (EINE Quelle: melden.konfigurierte_kanaele) statt hart
+            # ['pushover']. Der harte Default baute Waechter, die ausloesen und
+            # nirgendwo melden, wenn Pushover nie eingerichtet war. Bewusst zur
+            # LESE-Zeit ausgewertet: richtet der Nutzer spaeter einen Kanal ein,
+            # meldet ein Default-Waechter ab dann von selbst dorthin.
+            from core import melden as _melden
+            roh_kanaele = _melden.konfigurierte_kanaele(cfg)
+            if not roh_kanaele:
+                log(f"!! live.guards.{name}: kein Meldekanal konfiguriert — der "
+                    f"Waechter wuerde triggern, aber NIRGENDWO melden "
+                    f"(Notifications-Seite)")
         if isinstance(roh_kanaele, str):
             # YAML-/Hand-Edit-Klassiker: String statt Liste — tolerant lesen, laut.
             log(f"live.guards.{name}.kanaele ist ein String ({roh_kanaele!r}) — "
