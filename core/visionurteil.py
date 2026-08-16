@@ -326,8 +326,31 @@ def gitter_ablegen(data_dir, pass_key, lauf_id, b64):
         return None
     import base64
     datei = GITTER_VOR + str(lauf_id) + ".jpg"
+    # .217 (V3, Sofort-Buchung): der Name steht im Buchungs-Sidecar, BEVOR das
+    # JPG entsteht — die Waisen-Raeumung liest beide Quellen; damit gibt es
+    # kein Fenster mehr, in dem die Datei existiert, aber ungebucht ist. Eine
+    # gebuchte Datei, die nie geschrieben wurde, ist harmlos (die Buchung
+    # SCHONT nur, sie fordert nichts). Ein Sidecar-Fehler bleibt still (reine
+    # Ablage-Semantik); die Abschluss-Buchung via `gitter_datei` bleibt.
     try:
         os.makedirs(d, exist_ok=True)
+        bp = os.path.join(d, _plv.GITTER_BUCHUNG)
+        try:
+            with open(bp) as f:
+                buch = json.load(f)
+        except (OSError, ValueError):
+            buch = []
+        if not isinstance(buch, list):
+            buch = []
+        if datei not in buch:
+            buch.append(datei)
+            tmp = bp + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(buch, f)
+            os.replace(tmp, bp)
+    except Exception:
+        pass
+    try:
         with open(os.path.join(d, datei), "wb") as f:
             f.write(base64.b64decode(b64))
             f.flush()
@@ -339,8 +362,10 @@ def gitter_ablegen(data_dir, pass_key, lauf_id, b64):
 
 # ------------------------------------------------------- Reihenfolge (E2, §7)
 def zentroide(data_dir):
-    """Person -> normierter Zentroid im DINOv2-Raum (personlern/modell/
-    embeddings.npz). Leeres dict, wenn es kein Modell gibt."""
+    """Person -> normierter Zentroid im Backbone-Raum des Personen-Modells
+    (personlern/modell/embeddings.npz — seit .203 je nach Modell dinov2 oder
+    omz0277, immer derselbe Raum wie das Live-Urteil). Leeres dict, wenn es
+    kein Modell gibt."""
     import numpy as np
     from core.personmodell import modell_dir
     p = os.path.join(modell_dir(data_dir), "embeddings.npz")
@@ -384,7 +409,10 @@ def reihenfolge(data_dir, bild_rgb, personen, einbetten=None):
     Rueckgabe: [(person, aehnlichkeit|None), ...]"""
     import numpy as np
     zs = zentroide(data_dir)
-    fn = einbetten or _plv.einbetten
+    # data_dir mitgeben: das Embedding muss im Raum des AKTIVEN Modells
+    # rechnen (seit .203 traegt svm.pkl das Backbone; embeddings.npz und
+    # Live-Urteil wechseln beim Re-Training gemeinsam).
+    fn = einbetten or (lambda b: _plv.einbetten(b, data_dir))
     bilder = (list(bild_rgb) if isinstance(bild_rgb, (list, tuple))
               else [bild_rgb])
     embs = [fn(b) for b in bilder if b is not None]
@@ -776,7 +804,15 @@ def kaskade(galerien, ordnung, kandidat_b64, anfrage_fn, budget=None,
                        "einzeln": ([u1["wahl"], u2["wahl"]] if doppellauf
                                    else [u1["wahl"]]),
                        "doppellauf": doppellauf,
-                       "dauer_s": paar["dauer_s"]})
+                       "dauer_s": paar["dauer_s"],
+                       # .217 (V2): je Arm das, was der Adapter ohnehin liefert
+                       # — der Begruendungssatz des Modells war in den
+                       # Messlaeufen der entscheidende Erkenntnistraeger und
+                       # ging bisher verloren. Gleiche Datei, gleicher Trim.
+                       "arme": [{"wahl": a.get("wahl"), "grund": a.get("grund"),
+                                 "dauer_s": a.get("dauer_s"),
+                                 "sichtbar": (a.get("sichtbar") or "")[:200]}
+                                for a in ((u1, u2) if doppellauf else (u1,))]})
         if paar["kein_votum"]:
             # ENTHALTUNG (.162): NEITHER oder Tausch-Widerspruch heisst "dieses
             # Paar hat nichts entschieden" — weder fuer noch gegen einen der
@@ -915,6 +951,15 @@ def sammeln(urteile, quote=1.0, min_voten=2, paare_moeglich=None):
 
 
 # ------------------------------------------------- Zaehler, Deckel, Ausfall
+def _kv_schluessel(grund):
+    """Grund-Marke -> Zaehler-Schluessel. Die zwei Alt-Namen bleiben (der
+    Store draussen traegt sie seit .1xx), alles Weitere folgt dem Muster
+    kein_votum_<grund>."""
+    return {"neither": "kein_votum_neither",
+            "tausch_widerspruch": "kein_votum_widerspruch"}.get(
+        grund, f"kein_votum_{grund}")
+
+
 def zaehler_pfad(data_dir):
     return os.path.join(str(data_dir or ""), "state", ZAEHLER_DATEI)
 
@@ -924,6 +969,17 @@ def zaehler_lesen(data_dir):
             "fehler": 0, "timeouts": 0, "deckel_pausen": 0, "anfragen": [],
             "ausfall_serie": 0, "ausfall_gemeldet_ts": 0, "letzter_lauf": 0,
             "letzter_fehler": ""}
+    # .217 (V1, Hebel-Bilanz 16.08.): JEDE Runden-Grund-Marke bekommt ihren
+    # Zaehler — 25 length-Runden standen im Protokoll, der Store meldete
+    # fehler=0 und kannte length gar nicht; damit war der Erfolg des
+    # think-Schalters unmessbar. Deckungs-Vertrag: die Menge kommt aus
+    # _vis.GRUND_TEXT minus der Nur-Lauf-Gruende (EINE Quelle, kein Literal).
+    # BEWUSSTE UEBERLAPPUNG: `timeouts`/`fehler` zaehlen LAEUFE (Gesamt-grund),
+    # kein_votum_timeout/-fehler zaehlen RUNDEN — verschiedene Einheiten,
+    # ein Lauf kann in beiden Toepfen erscheinen.
+    for g in _vis.GRUND_TEXT:
+        if g not in _vis.NUR_LAUF_GRUENDE:
+            leer.setdefault(_kv_schluessel(g), 0)
     try:
         with open(zaehler_pfad(data_dir)) as f:
             d = json.load(f)
@@ -1373,6 +1429,12 @@ def pass_urteilen(data_dir, pass_key, galerien, regeln, anfrage_fn,
                             "min_voten": int(regeln.get("min_voten") or 1),
                             "doppellauf": doppellauf}
     zeile["doppellauf"] = doppellauf
+    # .217 (V2, Hebel-Bilanz 16.08.): die WIRKSAMEN Anfrage-Einstellungen in
+    # die Zeile — fuer keinen der bisherigen Prod-Laeufe liess sich belegen,
+    # mit welchem Modell/Think-Wert er lief (Fehlattributions-Fall 09:49/13:02).
+    # Der Aufrufer reicht sie fertig herein (verifyd kennt den Vision-Block).
+    if regeln.get("einstellungen"):
+        zeile["einstellungen"] = regeln["einstellungen"]
     _sagen(melden,
            f"built the candidate grid from {zellen} of {k['gesamt']} usable "
            "picture(s) of this walk-through (sharpest and largest first) — one "
@@ -1487,14 +1549,19 @@ def _zaehler_fortschreiben(z, u, runden=None):
     waeren sie ab dem zweiten Paar stillschweigend verschwunden. Ohne `runden`
     bleibt es beim alten Weg (Alt-Aufrufer)."""
     if runden is not None:
+        # .217 (V1): ALLE Runden-Gruende zaehlen, nicht nur neither/widerspruch
+        # — length/fehler/timeout je Runde verschwanden vorher spurlos, sobald
+        # irgendeine spaetere Runde ein Votum lieferte. Erlaubt ist jede Marke
+        # aus _vis.GRUND_TEXT minus Nur-Lauf-Gruende (Deckungs-Vertrag, kein
+        # Streu-Literal). Zu `timeouts`/`fehler` (Lauf-Ebene, unten) besteht
+        # eine BEWUSSTE Ueberlappung: andere Einheit (Runden gegen Laeufe).
         for r in runden:
             if not r.get("kein_votum"):
                 continue
-            if r.get("grund") == "neither":
-                z["kein_votum_neither"] = int(z.get("kein_votum_neither") or 0) + 1
-            elif r.get("grund") == "tausch_widerspruch":
-                z["kein_votum_widerspruch"] = \
-                    int(z.get("kein_votum_widerspruch") or 0) + 1
+            g = str(r.get("grund") or "")
+            if g in _vis.GRUND_TEXT and g not in _vis.NUR_LAUF_GRUENDE:
+                k = _kv_schluessel(g)
+                z[k] = int(z.get(k) or 0) + 1
         g = u.get("grund")
         if g == "timeout":
             z["timeouts"] = int(z.get("timeouts") or 0) + 1

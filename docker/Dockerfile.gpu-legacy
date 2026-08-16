@@ -62,6 +62,8 @@ COPY routes/ /app/routes/
 COPY docker/personlern_stage/ /app/prototyp/
 COPY docker/personlern_stage_modelle/ /app/prototyp/modelle/rtmpose/
 COPY modelle/dinov2_vits14_126x252.onnx /app/modelle/
+# .203: Person-ReID-Backbone (Intel OMZ 0277, Apache-2.0 inkl. Modelldatei; Bezug/Checksumme: core/personmodell.py BACKBONES + wiki/erkennung.md)
+COPY modelle/person-reidentification-retail-0265.onnx /app/modelle/
 ENV SUSLIK_DATA_DIR=/data SUSLIK_WERKSTATT=/data/personlern/werkstatt VERIFY_DATA_DIR=/data
 COPY VERSION /app/VERSION
 COPY docker/verifyd.container.gpu.yaml /app/verifyd.yaml

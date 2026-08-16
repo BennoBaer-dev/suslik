@@ -47,7 +47,7 @@ def render_offen(cfg, log_path, qs, gt_schnellpersonen, master_persons):
             and r["eid"] not in gtmap]      # #42 Teil B: gefilterte Zahl, faces-Fallback fuer Altzeilen
     # Zeitfenster-Kontext (User-Punkt 18.07.): wurde im ±3-min-Fenster auf
     # IRGENDEINER Kamera jemand bestaetigt? Nur ANZEIGE/Sortierung — kein
-    # Verstecken (Postbote-waehrend-Gartenarbeit-Falle; echte Fusion = v1.1).
+    # Verstecken (Zusteller-waehrend-Gartenarbeit-Falle; echte Fusion = v1.1).
     bestaetigt_ts = [((r.get("start") or r.get("ts", 0)),
                       ", ".join(r.get("bestaetigt") or []), r.get("camera", "?"))
                      for r in by.values() if r.get("bestaetigt")]

@@ -295,7 +295,7 @@ def anker_datensaetze(cluster, margen, lauf_id, schwellen, version):
             "qualitaet": {"stuetz": len(mitglieder),
                           "stuetz_phys": m.get("stuetz_phys", len(mitglieder)),
                           "durchgaenge": len(dgs),
-                          "tage": len(tage), "tage_liste": tage,     # Postbote-Ausweis
+                          "tage": len(tage), "tage_liste": tage,     # Stammgast-Ausweis
                           "marge": m["marge"], "bester_fremd": m["bester_fremd"],
                           "eimer": m["status"], "eimer_grund": m["grund"]},
             "quell_videos": sorted({mm["event"] for mm in mitglieder}),

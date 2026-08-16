@@ -15,7 +15,7 @@ running (see the roadmap section below).
 
 The `latest-*` image tags follow the newest release, so `docker compose pull` gets you
 what this README describes. To pin a version instead, use its tag explicitly:
-`ghcr.io/bennobaer-dev/suslik:0.1.0.202-gpu`.
+`ghcr.io/bennobaer-dev/suslik:0.1.0.243-gpu`.
 
 ## Why this exists
 

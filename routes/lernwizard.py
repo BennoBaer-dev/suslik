@@ -209,7 +209,66 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0):
     anker_link = (f' · <a href="/lernlauf/anker">view the {anker_zahl} anchor clusters</a>'
                   if anker_zahl else "")
     stil = ('<style>.phok{color:seagreen;font-weight:bold}'
-            '.phz{margin:2px 0}.phdet{margin:0 0 4px 1.4em;font-size:.9em}</style>')
+            '.phz{margin:2px 0}.phdet{margin:0 0 4px 1.4em;font-size:.9em}'
+            '.ll-stufen{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}'
+            '.ll-stufe{display:flex;align-items:center;gap:6px;'
+            'border:1px solid var(--border);border-radius:8px;'
+            'padding:6px 12px;font-size:13.5px;color:var(--dim)}'
+            '.ll-stufe b{background:var(--border);color:var(--text);'
+            'border-radius:50%;width:22px;height:22px;text-align:center;'
+            'line-height:22px;font-size:12px;flex:0 0 22px}'
+            '.ll-stufe.fertig b{background:seagreen;color:#fff}'
+            '.ll-stufe.dran{border-color:var(--accent);color:var(--text)}'
+            '.ll-stufe.dran b{background:var(--accent);color:#fff}'
+            '.ll-satz{font-size:15px;margin:6px 0 10px}</style>')
+    # .223 (User 16.08.: "hier verlieren wir den User komplett — er weiss gar
+    # nicht, was er wo klicken soll"): die EASY-Sicht ist ein gefuehrter Fluss
+    # aus Schritt-Balken, EINEM Klartext-Satz und EINEM Knopf. Keine Anker-/
+    # Cluster-/Harvest-Sprache; Phasen-Kette und Roh-Zaehler bleiben VOLL
+    # erhalten, aber als Expert-Sicht (nur-expert — ausblenden, nie loeschen).
+    # Vier Easy-Schritte auf acht interne Phasen gemappt: Collect
+    # (vorbereitung+ernte), Group (anker), Name (benennung, DEIN Schritt),
+    # Adopt (uebernahme/fertig; Seiten-/Ganzkoerper-Phasen sind Zukunft).
+    if ph in ("vorbereitung", "ernte"):
+        e_dran, e_satz, e_knopf = 1, ("Collecting pictures of people from "
+                                      "your recent recordings &mdash; step 1 "
+                                      "of 4. This runs on its own."), ""
+    elif ph == "anker" and not anker_fertig:
+        e_dran, e_satz, e_knopf = 2, ("Sorting the collected pictures into "
+                                      "face groups &mdash; step 2 of 4. This "
+                                      "runs on its own."), ""
+    elif anker_fertig and not anker_zahl:
+        e_dran = 3
+        e_satz = ("No new faces this time &mdash; nothing to name. That is "
+                  "fine: it just means the recordings held nobody new.")
+        e_knopf = ('<a class="gtb on" href="/lernlauf?neu=1">'
+                   'Start a new run</a>')
+    elif anker_fertig or ph == "benennung":
+        e_dran = 3
+        e_satz = (f"Done sorting &mdash; <b>{anker_zahl} face "
+                  f"group{'s' if anker_zahl != 1 else ''}</b> "
+                  f"{'are' if anker_zahl != 1 else 'is'} waiting for you: "
+                  "look at each group and say who it is.")
+        e_knopf = ('<a class="gtb on" href="/lernlauf/anker">'
+                   'Name the groups &#8230;</a>')
+    else:                                    # uebernahme / fertig
+        e_dran = 4
+        e_satz = ("All named pictures are adopted &mdash; they now count "
+                  "for recognition. You are done here.")
+        e_knopf = ('<a class="gtb on" href="/lernlauf?neu=1">'
+                   'Start a new run</a>')
+    stufen = "".join(
+        f'<div class="ll-stufe{" fertig" if n < e_dran else ""}'
+        f'{" dran" if n == e_dran else ""}>'
+        f'<b>{"&#10003;" if n < e_dran else n}</b>{t}</div>'
+        for n, t in ((1, "Collect"), (2, "Group"),
+                     (3, "Name"), (4, "Adopt")))
+    easy = (f'<div class="ll-stufen">{stufen}</div>'
+            f'<p class="ll-satz">{e_satz}</p>'
+            + (f"<p>{e_knopf}</p>" if e_knopf else "")
+            + ('<p class="dim nur-easy">&#9679; still working &mdash; this '
+               'page updates when you reload it.</p>'
+               if e_dran in (1, 2) else ""))
     # .88: den Nutzer ZUM ERGEBNIS fuehren — ohne diesen Block wuesste
     # niemand, dass die Bilder unter Anchors liegen.
     erfolg = ""
@@ -218,8 +277,11 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0):
                   f'— {anker_zahl} face cluster{"s" if anker_zahl != 1 else ""} ready: '
                   f'<a class="gtb on" href="/lernlauf/anker">View the anchor clusters</a> '
                   f'<span class="dim">open a cluster to name it</span></div>')
-    return (stil + "<h2>Learning run</h2>" + erfolg +
-            f'<div class="card"><b>Phases</b>{"".join(zeilen)}'
+    # .223: der gefuehrte Fluss fuehrt fuer BEIDE Sichten (Expert = Easy plus
+    # Details); Erfolgs-Banner, Phasen-Kette und Progress sind Expert-Tiefe.
+    return (stil + "<h2>Learning run</h2>" + easy
+            + f'<div class="nur-expert">{erfolg}'
+            + f'<div class="card"><b>Phases</b>{"".join(zeilen)}'
             '<div class="dim">Preparation, Harvest, Grouping, Naming and adoption into '
             "the master run for real in this build — side views and the full-body "
             "stock activate with the coming updates.</div></div>"
@@ -227,8 +289,9 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0):
             f'<div>{html.escape(st) if st else "—"}</div>{puls}{rest_html}'
             f'<div class="dim">anchors so far: {anker_zahl}{anker_link}{kaputt_html} · created '
             f'{_dt(zustand.get("ts"))} · scope {zustand.get("events", "?")} events · '
-            "survives restarts (resume built in)</div></div>"
-            + ('<p><a class="gtb on" href="/lernlauf?neu=1">Start a new run</a> '
+            "survives restarts (resume built in)</div></div></div>"
+            + ('<p class="nur-expert"><a class="gtb" href="/lernlauf?neu=1">'
+               'Start a new run</a> '
                '<span class="dim">this run stays — its anchors remain available</span></p>'
                if anker_fertig else
                '<p><button class="gtb" onclick="lernlaufAbbruch(this)">Abort run</button> '

@@ -207,7 +207,10 @@ def kontroll_speicher(cfg, log_path, debug, eid, entry=None):
             return None
         return {"sammeln": bool(cfg.get("diagnostic_collection")),
                 "pass_key": pk,
-                "karenz_s": int(cfg.get("szenario_gap_min", 5)) * 60}
+                "karenz_s": int(cfg.get("szenario_gap_min", 5)) * 60,
+                # .217 (V3): kein-Votum-Gitter im Schlank-Modus behalten —
+                # User-Schalter, Default aus (bewusster User-Entscheid).
+                "gitter_behalten": bool(cfg.get("vision_gitter_behalten"))}
     except Exception as e:
         debug(f"{eid}: control store not addressable ({e})")
         return None

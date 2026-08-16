@@ -319,6 +319,21 @@ def kachel(name):
     return KACHELN.get(str(name or "")) or KACHELN[KACHEL_DEFAULT]
 
 
+def think_aus_wirksam(vcfg, p=None):
+    """Wirksamer Denk-Abschalt-Wert (EINE Quelle fuer Anfrage UND UI):
+    Kachel-Faehigkeit UND (gespeicherter Wert, sonst DEFAULT AN — User-Entscheid
+    16.08. nach dem Token-Befund: Qwen3.5-9B dachte sich auf einem schweren
+    Gitter bis in den length-Abbruch, 47k Tokens/313 s; der A/B am Endpunkt
+    zeigte identisch richtige Antworten ohne Denken). Ein bewusst gespeichertes
+    False bleibt respektiert — der Default greift nur, solange der Nutzer den
+    Schalter nie angefasst hat."""
+    p = p or kachel(vcfg.get("kachel"))
+    if not p.get("kann_think_schalter"):
+        return False
+    w = vcfg.get("think_aus")
+    return True if w is None else bool(w)
+
+
 def kachel_namen():
     return KACHEL_REIHE
 
@@ -562,16 +577,24 @@ def antwort_auswerten(roh, *, kachel_name="", arm=None, galerie_stand=None,
                   "completion": u.get("completion_tokens", u.get(
                       "output_tokens", u.get("candidatesTokenCount"))),
                   "total": u.get("total_tokens", u.get("totalTokenCount"))}
+    # .217 (Widerleger-Fang): was das Modell VOR einem technischen Abbruch
+    # noch sagte, gehoert trotzdem in `sichtbar` — die Arm-Protokollierung
+    # (V2) waere sonst genau bei den length-Runden leer, die sie messbar
+    # machen soll.
+    _rest = sichtbar_machen(roh.get("text") or "")[:400]
     if roh.get("fehler"):
         o["grund"] = "fehler"
+        o["sichtbar"] = _rest
         return o
     stop = str(roh.get("finish_reason") or roh.get("stop_reason") or "").lower()
     if str(roh.get("refusal") or "").strip() or stop in ("refusal", "safety",
                                                          "prohibited_content"):
         o["grund"] = "refusal"
+        o["sichtbar"] = _rest or str(roh.get("refusal") or "")[:400]
         return o
     if stop in ("length", "max_tokens"):
         o["grund"] = "length"
+        o["sichtbar"] = _rest
         return o
     text = roh.get("text")
     if not str(text or "").strip():
@@ -601,6 +624,12 @@ GRUND_TEXT = {
     "tausch_widerspruch": "the two runs disagreed when the galleries were "
                           "swapped",
     "neither": "the model said neither person",
+    # .217 (V1, Hebel-Bilanz 16.08.): der GEMISCHTE Fall — ein Arm sagt
+    # NEITHER, der andere eine Person — ist KEIN Positions-Widerspruch,
+    # sondern eine halbe Enthaltung; im tausch_widerspruch-Topf war er
+    # unsichtbar und die Widerspruchs-Quote dadurch zu hoch.
+    "neither_einseitig": "one run said neither, the other picked a person — "
+                         "half an abstention, not a positional contradiction",
     "length": "the answer was cut off — the token budget was too small",
     "format": "the answer did not start with the required single word",
     "refusal": "the model refused to answer",
@@ -617,6 +646,19 @@ def grund_text(g):
     kommen unveraendert zurueck (ehrlicher als ein glattes 'unknown')."""
     g = str(g or "")
     return GRUND_TEXT.get(g, g)
+
+
+# .217 (Widerleger-Fang): DIE Menge der INHALTLICHEN Enthaltungen — das Modell
+# hat geantwortet, nur ohne verwertbares Votum. Genau diese Menge darf der
+# Nicht-bestaetigt-Alarm (verifyd._vision_unbestaetigt) als Widerspruch werten;
+# technische Ausfaelle (length/fehler/timeout/leer/format/refusal) sagen nichts
+# ueber die Person und gehoeren NICHT hinein. Vorher stand die Menge als
+# Streu-Literal im Alarm und haette neither_einseitig still verpasst.
+KEIN_VOTUM_INHALTLICH = ("neither", "tausch_widerspruch", "neither_einseitig")
+
+# Gruende, die nur auf LAUF-Ebene vorkommen koennen (nie als Runden-Grund) —
+# der Zaehler legt fuer sie keine kein_votum_-Marke an (sie blieben ewig 0).
+NUR_LAUF_GRUENDE = ("deckel", "zu_wenige_galerien")
 
 
 def paar_werten(u1, u2):
@@ -638,7 +680,11 @@ def paar_werten(u1, u2):
     spiegel = {"A": "B", "B": "A", "NEITHER": "NEITHER"}
     o["konsistent"] = (spiegel.get(u1["wahl"]) == u2["wahl"])
     if not o["konsistent"]:
-        o["grund"] = "tausch_widerspruch"
+        # .217 (V1): NEITHER auf genau EINEM Arm getrennt ausweisen — gegen
+        # einen NEITHER-Arm kann keine Wiederholung je ein Votum ergeben,
+        # der Fall gehoert nicht in die Widerspruchs-Statistik.
+        einseitig = (u1["wahl"] == "NEITHER") != (u2["wahl"] == "NEITHER")
+        o["grund"] = "neither_einseitig" if einseitig else "tausch_widerspruch"
         return o
     if u1["wahl"] == "NEITHER":
         o["wahl"] = "NEITHER"
@@ -829,7 +875,7 @@ def senden_mit_deadline(url, kopf, body, timeout_s, deadline_s, geheimnisse=()):
 
 
 def anfrage(vcfg, teile, *, prompt_kopf=None, timeout_s=None, think_aus=None,
-            deadline_s=None):
+            deadline_s=None, roh=False):
     """Eine Vision-Anfrage nach dem Adapter-Vertrag.
 
     GENAU EIN Wiederholversuch ohne die Zusatzfelder bei HTTP 400 (§5): der
@@ -853,13 +899,22 @@ def anfrage(vcfg, teile, *, prompt_kopf=None, timeout_s=None, think_aus=None,
     max_tokens = int(vcfg.get("max_tokens") or p["max_tokens"])
     timeout_s = int(timeout_s or vcfg.get("timeout_s") or 900)
     if think_aus is None:
-        think_aus = bool(vcfg.get("think_aus")) and bool(p["kann_think_schalter"])
+        think_aus = think_aus_wirksam(vcfg, p)   # .211: Default je Kachel
     else:
         think_aus = bool(think_aus) and bool(p["kann_think_schalter"])
-    kopf_text = prompt_voll(prompt_kopf if prompt_kopf is not None
-                            else vcfg.get("prompt"),
-                            bool(vcfg.get("cloud_ok")))
-    voll = list(teile) + [("text", kopf_text)]
+    if roh:
+        # .215: Roh-Modus fuer NICHT-Urteils-Anfragen (Modell-Handprobe).
+        # Der Standard-Anhang verlangt "exactly one word: A or B or NEITHER" —
+        # auf einer bildlosen Probe widerspricht das der Probe-Frage, und
+        # Qwen3.5-9B grumelte GEMESSEN bis in den length-Abbruch (512 Tokens
+        # unsichtbar, leerer content), waehrend derselbe Text ohne Anhang in
+        # ~150 Tokens antwortet. Urteils-Anfragen bleiben unveraendert.
+        voll = list(teile)
+    else:
+        kopf_text = prompt_voll(prompt_kopf if prompt_kopf is not None
+                                else vcfg.get("prompt"),
+                                bool(vcfg.get("cloud_ok")))
+        voll = list(teile) + [("text", kopf_text)]
     key = str(vcfg.get("api_key") or "")
     basis = endpunkt_wirksam(vcfg)
     url = url_bauen(basis, p["pfad"], modell, key, form)
@@ -1007,6 +1062,38 @@ def modelle_gueltig(prot, vcfg):
     if prot.get("kachel") != (vcfg.get("kachel") or KACHEL_DEFAULT):
         return False
     return prot.get("endpunkt") == _reg.endpunkt_anzeige(endpunkt_wirksam(vcfg))
+
+
+def modell_manuell_pruefen(vcfg, modell_id, timeout_s=30):
+    """.213 (User 16.08.: Endpunkte listen nicht immer alles): eine von Hand
+    eingetragene Modell-ID wird mit einer MINI-Anfrage real geprueft (reiner
+    Text, "Say OK", max_tokens klein — kein Bild verlaesst das Haus, Muster
+    Key-Sofortpruefung). Rueckgabe (ok, text). Die harte §5-Regel bleibt:
+    erst nach BESTANDENER Pruefung wandert die ID in die Entdeckungs-Liste
+    dieser Verbindung — gespeichert wird nie Ungeprueftes."""
+    modell_id = str(modell_id or "").strip()
+    if not modell_id:
+        return False, "enter a model id first"
+    # Deckel 512, nicht 64 (gemessen .214 an Qwen3.5-9B/IONOS): auch mit
+    # enable_thinking:false verbraucht das Template ~137-172 unsichtbare
+    # Tokens VOR dem "OK" — bei 64 kam length/leer, die Pruefung fiel fuer
+    # ein nachweislich funktionierendes Modell durch.
+    probe = dict(vcfg, modell=modell_id, max_tokens=512)
+    try:
+        # roh=True (.215): OHNE den Urteils-Anhang — der zwang die Probe in
+        # einen Anweisungs-Widerspruch (Say OK vs. one word A/B/NEITHER) und
+        # damit gemessen in den length-Abbruch mit leerem content.
+        antwort, meta = anfrage(probe, [("text", "Say OK.")],
+                                roh=True, timeout_s=timeout_s)
+    except VisionFehler as ex:
+        return False, f"the endpoint refused this id: {ex}"
+    except Exception as ex:
+        return False, f"check failed: {type(ex).__name__}"
+    text = (antwort.get("text") or "").strip()
+    if not text:
+        return False, ("the endpoint accepted the id but sent no answer — "
+                       "not usable")
+    return True, f"the endpoint answered ({meta.get('dauer_s', '?')} s)"
 
 
 def schluessel_pruefen(vcfg, timeout_s=30):

@@ -48,7 +48,7 @@ RAND = 0.08                 # wie szenario_ernte.crop_holen (Framing!)
 # und haette sonst eine zweite Aufbewahrungsregel danebengestellt.
 TRIM_TAGE = 30
 
-_CACHE = {"sess": None, "svm": None, "svm_mtime": None}
+_CACHE = {"sess": {}, "svm": None, "svm_mtime": None}
 
 
 def _fenster_pfad(data_dir):
@@ -174,7 +174,14 @@ KONTROLLE_PROTOKOLL = "urteile.jsonl"
 # EINE Liste haette die Waisen-Raeumung die Vision-Zeilen mitgenommen (und ein
 # zweites Literal in einem zweiten Modul waere die Streuklasse).
 VISION_PROTOKOLL = "vision.jsonl"
-PASS_PROTOKOLLE = (KONTROLLE_PROTOKOLL, VISION_PROTOKOLL)
+# .217 (V3): Sofort-Buchung der Kandidaten-Gitter. Bis .216 wurde ein Gitter
+# erst mit der ABSCHLUSSZEILE gebucht — waehrend eines langen Laufs war es
+# Waise, und die Raeumung loeschte bevorzugt die Beweisbilder der schweren
+# Faelle (gemessen: verschwundene Gitter gehoeren zu Laeufen mit Median
+# 175,6 s, erhaltene zu 41,8 s; Realfall 16.08. abends: das Gitter von Lauf
+# 1786884191 war binnen ~30 min weg, obwohl der Lauf laengst gebucht war).
+GITTER_BUCHUNG = "gitter_buchung.json"
+PASS_PROTOKOLLE = (KONTROLLE_PROTOKOLL, VISION_PROTOKOLL, GITTER_BUCHUNG)
 _PASS_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z_.\-]{0,63}")
 
 
@@ -292,6 +299,12 @@ def kontrolle_raeumen(data_dir, kontrolle, jetzt=None):
         # (`gitter_datei`, geschrieben von core.visionurteil.gitter_ablegen).
         # Gebucht wird genau dieses Feld — VERFALL und SCHLANK gelten
         # unveraendert weiter, es entsteht keine zweite Aufbewahrungsregel.
+        # .217 (V3): dazu die kein-Votum-Behalten-Menge — Laeufe OHNE Person
+        # sind die einzigen, deren NEITHER-Frage sich rueckwirkend nur am
+        # Gitter klaeren laesst (26 von 71 NEITHER-Runden waren mangels Bild
+        # nicht beurteilbar). Schalter `gitter_behalten`, Default aus.
+        behalten = set()
+        vision_lesbar = True
         try:
             for z in open(os.path.join(d, VISION_PROTOKOLL)):
                 try:
@@ -300,8 +313,23 @@ def kontrolle_raeumen(data_dir, kontrolle, jetzt=None):
                     continue
                 if e.get("gitter_datei"):
                     gebucht.add(e["gitter_datei"])
-        except OSError:
-            pass
+                    if not e.get("person"):
+                        behalten.add(e["gitter_datei"])
+        except OSError as ex:
+            import errno
+            # .217 (V3, defensiv): NUR "Datei existiert nicht" heisst "keine
+            # Vision-Buchungen". Jeder andere Lesefehler laesst den Pass in
+            # Ruhe — sonst macht ein transienter Fehler ALLE Gitter zu Waisen.
+            vision_lesbar = ex.errno == errno.ENOENT
+        # Sofort-Buchung (Sidecar, geschrieben VOR der ersten Anfrage): schuetzt
+        # das Gitter des LAUFENDEN Laufs, dessen Abschlusszeile noch fehlt.
+        try:
+            with open(os.path.join(d, GITTER_BUCHUNG)) as f:
+                buch = json.load(f)
+            if isinstance(buch, list):
+                gebucht.update(x for x in buch if isinstance(x, str))
+        except Exception:
+            pass                       # kaputtes Sidecar schuetzt nur nicht
         for fn in dateien:
             try:
                 letzt = max(letzt, os.path.getmtime(os.path.join(d, fn)))
@@ -311,12 +339,22 @@ def kontrolle_raeumen(data_dir, kontrolle, jetzt=None):
             shutil.rmtree(d, ignore_errors=True)
             weg["passe"] += 1
             continue
+        # .217 (Widerleger-Fang): erst NACH dem Verfall aussteigen — ein Pass
+        # mit dauerhaft unlesbarem vision.jsonl darf keine Waisen verlieren,
+        # aber sehr wohl noch als Ganzes verfallen (sonst lebte er ewig).
+        if not vision_lesbar:
+            continue
         # "Abgeschlossen" ist nicht "nicht der aktive": ein Pass ohne Auftrag
         # (Dienst-Neustart) darf nicht sofort ausgeraeumt werden, solange die
         # Karenz laeuft — dieselbe Karenz, die die Szenario-Gruppierung nutzt.
         fertig = pk != aktiv and (jetzt - letzt) > karenz
         for fn in dateien:
             if fn in PASS_PROTOKOLLE:
+                continue
+            # .217 (V3): kein-Votum-Gitter ueberleben auch den Schlank-Modus,
+            # wenn der Schalter an ist — der VERFALL (TRIM_TAGE, oben) raeumt
+            # sie weiterhin, es gibt keine ewige Ablage.
+            if (fn in behalten and bool(kontrolle.get("gitter_behalten"))):
                 continue
             if fn not in gebucht or (not sammeln and fertig):
                 try:
@@ -379,37 +417,48 @@ def _svm(data_dir):
     return _CACHE["svm"]
 
 
-def _emb1(bild_rgb):
-    from core.personmodell import _dino_pfad, MEAN, STD, GROESSE
+def _backbone(data_dir):
+    """Backbone des GELADENEN Modells (svm.pkl traegt seit .203 den Namen) —
+    Alt-Modelle ohne Feld laufen unveraendert auf dinov2, bis das naechste
+    Training sie auf den Standard hebt. Modell und Embedder muessen IMMER
+    zusammenpassen, deshalb entscheidet das Modell, nie die Config."""
+    from core import personmodell as pm
+    m = _svm(data_dir) if data_dir else None
+    return (m or {}).get("backbone") or pm.BACKBONE_ALT
+
+
+def _emb1(bild_rgb, data_dir=None):
+    from core import personmodell as pm
     from PIL import Image
-    if _CACHE["sess"] is None:
-        import onnxruntime as ort
-        # Thread-Kappung wie bei JEDER eigenen ORT-Session (face_audit._ort_thread_opts):
-        # ohne explizite intra_op_num_threads baut onnxruntime seinen Pool nach den
-        # HOST-Kernen und pinnt Thread i an Kern i -> pthread_setaffinity_np scheitert
-        # fuer jeden Kern ausserhalb der cgroup-Maske mit EINVAL. Das kostete je
-        # Vision-Lauf vier rote [E]-Zeilen im Prod-Log (.170). Kein Monkeypatch von
-        # ort.InferenceSession -- die Optionen haengen nur an unserer eigenen Session.
-        from face_audit import _ort_thread_opts
-        _CACHE["sess"] = ort.InferenceSession(
-            _dino_pfad(), providers=["CPUExecutionProvider"],
-            sess_options=_ort_thread_opts())
-    im = np.asarray(Image.fromarray(bild_rgb).resize(GROESSE),
+    bb_name = _backbone(data_dir)
+    bb = pm.BACKBONES[bb_name]
+    if _CACHE["sess"].get(bb_name) is None:
+        # Session-Fabrik von personmodell: EIN Bauweg fuer Training und
+        # Serving, inkl. Thread-Kappung (_ort_thread_opts, .170-Klasse) und
+        # person_backend-Schalter mit LAUTEM Rueckfall (Werte-Menge: NUR
+        # personmodell._providers, Deckungs-Vertrag — hier keine Teilliste).
+        _CACHE["sess"][bb_name] = pm.session_bauen(bb_name, data_dir)
+    im = np.asarray(Image.fromarray(bild_rgb)
+                    .resize(bb["groesse"], pm._resample(bb_name)),
                     dtype=np.float32) / 255.0
-    x = ((im - MEAN) / STD).transpose(2, 0, 1)[None]
-    e = _CACHE["sess"].run(None, {"bild": x.astype(np.float32)})[0]
+    x = ((im - pm.MEAN) / pm.STD).transpose(2, 0, 1)[None]
+    e = _CACHE["sess"][bb_name].run(None, {bb["eingang"]:
+                                           x.astype(np.float32)})[0]
     return (e / np.linalg.norm(e, axis=1, keepdims=True))[0]
 
 
-def einbetten(bild_rgb):
-    """DAS eine Koerper-Embedding dieses Projekts (DINOv2-ONNX, CPU, normiert).
+def einbetten(bild_rgb, data_dir=None):
+    """DAS eine Koerper-Embedding dieses Projekts (Backbone des aktiven
+    Personen-Modells, normiert; ohne data_dir/Modell: dinov2 wie vor .203).
 
     Oeffentlicher Griff fuer den Vision-Urteilspfad (V4): dessen Kaskade
     ordnet die Galerie-Personen nach Zentroid-Abstand IM SELBEN Raum, in dem
     auch das Live-Urteil rechnet (§7/E2). Ein zweiter Embedding-Weg waere die
     Streuklasse — und er wuerde eine andere Reihenfolge liefern als die
-    Erkennung, die er erklaeren soll."""
-    return _emb1(bild_rgb)
+    Erkennung, die er erklaeren soll. Deshalb entscheidet auch hier das
+    MODELL ueber den Raum (embeddings.npz und Live-Urteil wechseln beim
+    Re-Training gemeinsam)."""
+    return _emb1(bild_rgb, data_dir)
 
 
 def _uebergabe_dir(data_dir, eid):
@@ -609,7 +658,7 @@ def urteilen(data_dir, frigate_url, eid, schwelle=None, kontrolle=None,
     crop, quelle, mess = _bild_holen(frigate_url, eid, data_dir)
     if crop is None:
         return None
-    e = _emb1(np.asarray(crop))
+    e = _emb1(np.asarray(crop), data_dir)
     proba = m["svm"].predict_proba(e[None])[0]
     k = int(np.argmax(proba))
     # Kontroll-Speicher (§7/Z8): das BEURTEILTE Bild mit Klasse, Score und

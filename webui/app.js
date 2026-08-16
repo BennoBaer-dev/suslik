@@ -750,29 +750,8 @@ function setupSpeichern(btn) {                          // Setup-Wizard committe
    wirklich zur Person gehoert (Schutz gegen das Greedy-Seed-Clustering, #57: Identitaeten
    koennen gemischt sein oder Nicht-Gesichter enthalten). Uebernahme laeuft ueber den
    BESTEHENDEN Weg /anlernen_benennen — gleiche Mechanik wie die Vorschlags-Seite. */
-function ukKlappe(uid) {
-  var p = document.getElementById('ukp-' + uid);
-  if (p) p.hidden = !p.hidden;
-}
-function ukZuweisen(uid, btn) {
-  var cbs = document.querySelectorAll('.ukcb-' + uid + ':checked'), ids = [];
-  for (var i = 0; i < cbs.length; i++) ids.push(cbs[i].value);
-  var inp = document.getElementById('ukperson-' + uid);
-  var person = (inp && inp.value || '').trim();
-  var st = document.getElementById('ukst-' + uid);
-  if (!ids.length) { if (st) st.textContent = 'tick at least one face'; return; }
-  if (!person) { if (st) st.textContent = 'enter a person name'; return; }
-  if (!confirm('Add ' + ids.length + ' selected face(s) as "' + person + '"?')) return;
-  btn.disabled = true; if (st) st.textContent = 'learning …';
-  fetch('/anlernen_benennen', {method: 'POST', body: JSON.stringify({ids: ids.join(','), person: person})})
-    .then(function (r) { return r.json(); })
-    .then(function (d) {
-      if (st) st.textContent = d.msg;
-      if (d.ok) setTimeout(function () { location.reload(); }, 1400);
-      else btn.disabled = false;
-    })
-    .catch(function () { if (st) st.textContent = 'error'; btn.disabled = false; });
-}
+/* .234: ukKlappe/ukZuweisen entfernt — die Today-Klappe wich dem
+   konsistenten Karten-Link aufs Besucher-Profil (/unbekannte#uk-...). */
 
 /* ── Ganze Person loeschen (requirement: deleting a person removes the NAME, not just one image) ──────
    Serverseitig reversibel (wandert nach <data>/trash/). Doppelte Bestaetigung mit
@@ -1561,4 +1540,26 @@ if (window._livePage) (function () {
     var hat = location.search.indexOf('gruppe=area') !== -1;
     if (will && !hat) location.replace('/live?gruppe=area');
   } catch (e) {}
+})();
+
+/* Easy/Expert-Schalter (.204): NUR der Schalter — Modus in localStorage (analog Theme),
+   body-Klasse "easy" als Anker; die Seiten ziehen ihre Easy-Ansichten schrittweise nach. */
+(function () {
+  var w = document.getElementById('ui-modus');
+  if (!w) return;
+  function setzen(m) {
+    document.body.classList.toggle('easy', m === 'easy');
+    var bs = w.querySelectorAll('button');
+    for (var i = 0; i < bs.length; i++) {
+      bs[i].classList.toggle('an', bs[i].getAttribute('data-m') === m);
+    }
+    try { localStorage.setItem('vd-modus', m); } catch (e) {}
+  }
+  w.addEventListener('click', function (ev) {
+    var b = ev.target && ev.target.closest ? ev.target.closest('button') : null;
+    if (b) setzen(b.getAttribute('data-m'));
+  });
+  var m = null;
+  try { m = localStorage.getItem('vd-modus'); } catch (e) {}
+  setzen(m === 'easy' ? 'easy' : 'expert');
 })();

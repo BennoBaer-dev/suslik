@@ -489,6 +489,33 @@ def _modellwahl(prot, gewaehlt, stand, kname, pruef_wort="key",
             'onchange="visionModell(this)">'
             + "".join(opt) + "</select></div>" + unten
             + _klassen(klassen)
+            # .213 (User 16.08.: manche Endpunkte listen nicht alles): eine
+            # Hand-ID wird per Mini-Text-Anfrage REAL geprueft und wandert
+            # erst dann in die Liste — die §5-Regel (nie Ungeprueftes
+            # speichern) bleibt intakt, die Pruefung IST eine Entdeckung.
+            + '<div class="vs-feld" style="margin-top:10px">'
+              '<label>Model id by hand</label>'
+              '<input id="vis-modell-manuell" size="30" '
+              'placeholder="exact model id">'
+              '<button class="gtb" type="button" '
+              'onclick="visModellManuell(this)">Check this id</button>'
+              '<span id="vis-mm-status" class="dim"></span></div>'
+            + '<div class="dim">For endpoints that do not list everything: '
+              'the id is checked with a tiny text request first; nothing '
+              'unchecked can be saved.</div>'
+            + '<script>function visModellManuell(b){'
+              'var f=document.getElementById("vis-modell-manuell");'
+              'var s=document.getElementById("vis-mm-status");'
+              'if(!f.value.trim()){s.textContent="enter an id first";return;}'
+              'b.disabled=true;s.textContent="checking …";'
+              'fetch("/vision/modell_manuell",{method:"POST",'
+              'body:JSON.stringify({modell:f.value.trim()})})'
+              '.then(function(r){return r.json();})'
+              '.then(function(d){s.textContent=d.msg;'
+              'if(d.ok){setTimeout(function(){location.reload();},1200);}'
+              'else{b.disabled=false;}})'
+              '.catch(function(){s.textContent="error";b.disabled=false;});}'
+              '</script>'
             + '<span id="vision-modell-status" class="dim"></span></div>')
 
 
@@ -531,14 +558,18 @@ def _zahlen(vcfg, k):
     kann (Faehigkeits-Flag statt blindem Knopf)."""
     denk = ""
     if k.get("kann_think_schalter"):
+        # .211: der WIRKSAME Wert kommt aus der einen Quelle (Default an,
+        # User-Entscheid 16.08. nach dem Token-Befund) — die Checkbox zeigt,
+        # was wirklich gesendet wird, nicht den rohen Store-Wert.
+        from core.vision import think_aus_wirksam
         denk = ('<div class="vs-feld"><label><input type="checkbox" '
-                f'id="vis-think_aus"{" checked" if vcfg.get("think_aus") else ""}> '
+                f'id="vis-think_aus"{" checked" if think_aus_wirksam(vcfg, k) else ""}> '
                 "Turn the model&rsquo;s thinking off</label></div>"
-                '<div class="dim">Measured on a local setup: 2.7&times; faster '
-                "with the same answers. On one online endpoint it was "
-                "<b>worse</b> with thinking off. Strict endpoints reject the "
-                "switch; suslik then repeats the request once without it and "
-                "says so.</div>")
+                '<div class="dim">On since 0.1.0.211 by default: on hard '
+                "comparison grids a thinking model can talk itself past the "
+                "token budget and the run ends without a verdict. Strict "
+                "endpoints reject the switch; suslik then repeats the request "
+                "once without it and says so.</div>")
     return ('<div class="card"><b>Limits</b>'
             '<div class="vs-feld"><label>Max tokens per answer</label>'
             f'<input id="cfgv-vision_max_tokens" size="8" '
@@ -710,7 +741,7 @@ def _galerien(deckung, galerien, vor, rt):
             f"<div>{stand}</div>"
             f'<div class="vs-zahl">{d["gesamt"]} usable images &middot; '
             f"{reihen}</div>{knopf}</div>")
-    return ('<div class="card"><b>Galleries</b>'
+    return ('<div class="card" id="galerien"><b>Galleries</b>'
             f'<div>{n_fertig} galleries ready '
             f'({vor.get("galerien_min", 2)} required) '
             "&mdash; vision needs at least two, because it always compares one "
