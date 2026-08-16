@@ -12,7 +12,94 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.0.202"   # .202 = interner Prod-Schritt (P1 Speicher-Redesign:
+STAND = "0.1.0.243"   # .243 = RELEASE (zweiter Respin: das Export-Gate fand
+# nach dem Anlegen neuer Identitaeten weitere Namen in vier Alt-Kommentaren —
+# mehrteilige Ordnernamen fielen aus der Audit-Namensliste, Audit um
+# Segment-Zerlegung ergaenzt; die schon gepushten .242-Tags werden von GHCR
+# entfernt. Davor .242 = Respin von .241: Bewohnername in drei Kommentaren +
+# CHANGELOG-Beispiel. Box-Text durch beide Respins UNVERAENDERT; .241/.242
+# gingen nie als Release raus).
+# Box-Eintrag vom User diktiert: Zwischenversion, Vereinfachung/Klarheit,
+# Feedback-Appell.
+# Davor .240 = interner Prod-Schritt (Change-connection als
+# Inline-Form — kein Box-Eintrag).
+# Davor .239 = interner Prod-Schritt (Unbekannt-Klick = EIN Lauf,
+# dritte Fassung — kein Box-Eintrag).
+# Davor .238 = interner Prod-Schritt (Unbekannt-Sicht: Gruppen-
+# Zusammenfuehrung + Layout-Paritaet — kein Box-Eintrag).
+# Davor .237 = interner Prod-Schritt (Unbekannt-Tagessicht mit
+# Zuweisen — kein Box-Eintrag).
+# Davor .236 = interner Fix (refcache-Einpflege statt Verwerfen
+# — kein Box-Eintrag).
+# Davor .235 = interner Fix (Bruecke auf svc.embedder/OV
+# — kein Box-Eintrag).
+# Davor .234 = interner Prod-Schritt (Unbekannt-Karte = Link,
+# EIN Klick-Gesetz — kein Box-Eintrag).
+# Davor .233 = interner Prod-Schritt (Pass-Knopf-Optik mit Icons
+# — kein Box-Eintrag).
+# Davor .232 = interner Prod-Schritt (Vorwaermen+Leerlauf-Freigabe
+# +Lade-Anzeige — kein Box-Eintrag).
+# Davor .231 = interner Prod-Schritt (Grenzfaelle im Overlay,
+# ehrliche Meldung — kein Box-Eintrag).
+# Davor .230 = interner Fix (Embedder-Cache fuer Vorschlags-/
+# Bruecken-Strecke — kein Box-Eintrag).
+# Davor .229 = interner Prod-Schritt (Legende am gruenen Rand
+# — kein Box-Eintrag).
+# Davor .228 = interner Fix (eid ueberlebt refs_meta-Neuzeilen
+# — kein Box-Eintrag).
+# Davor .227 = interner Prod-Schritt (Referenz-Marker an den
+# Thumbs — kein Box-Eintrag).
+# Davor .226 = interner Prod-Schritt (Lern-Bruecke zweistufig
+# mit Auswahl-Overlay — kein Box-Eintrag).
+# Davor .225 = interner Prod-Schritt (Lern-Bruecke je Pass
+# — kein Box-Eintrag).
+# Davor .224 = interner Prod-Schritt (Benennungs-Karte mit
+# Weiter-Automatik — kein Box-Eintrag).
+# Davor .223 = interner Prod-Schritt (Lernlauf als gefuehrter
+# Fluss — kein Box-Eintrag).
+# Davor .222 = interner Prod-Schritt (Areas in die
+# Property-set-up-Reihe der Configuration — kein Box-Eintrag).
+# Davor .221 = interner Prod-Schritt (Faces-Anleitungen,
+# Frigate-Feinschliff, Namens-Fix — kein Box-Eintrag).
+# Davor .220 = interner Prod-Schritt (Faces-Startseite,
+# People+Learn eingedampft — Box-Eintrag erst beim Release mit User-Abstimmung).
+# Davor .219 = interner Prod-Schritt (Beta-Marke AI-vision-Kachel
+# — kein Box-Eintrag).
+# Davor .218 = interner Fix (Bewohnernamen aus .217-Kommentaren,
+# Gate-Fang — kein Box-Eintrag).
+# Davor .217 = interner Prod-Schritt (Vision-Diagnose-Paket V1-V3
+# — kein Box-Eintrag).
+# Davor .216 = interner Prod-Schritt (Frigate-Kachel-Startseite,
+# Nav "Frigate sync" -> "Frigate" — Box-Eintrag erst beim Release mit User-Abstimmung).
+# Davor .215 = interner Fix (Probe ohne Urteils-Anhang, roh=True —
+# kein Box-Eintrag).
+# Davor .214 = interner Fix (Probe-Deckel 512 — kein Box-Eintrag).
+# Davor .213 = interner Prod-Schritt (Vision-Modell-ID von
+# Hand eintragen, real am Endpunkt geprueft — kein Box-Eintrag).
+# Davor .212 = interner Prod-Schritt (Hilfe-Links deutlich
+# hervorgehoben — kein Box-Eintrag).
+# Davor .211 = interner Prod-Schritt (think_aus Default AN fuer
+# custom/lokal nach dem Token-Befund — kein Box-Eintrag).
+# Davor .210 = interner Prod-Schritt (Reiter Configuration statt
+# Settings, Ungespeichert-Warnung auf /erkennung — kein Box-Eintrag).
+# Davor .209 = interner Prod-Schritt (Anleitungs-Feinschliff
+# nach der Erst-Lektuere des Users — kein Box-Eintrag).
+# Davor .208 = interner Prod-Schritt (In-progress-Hinweis in der
+# Recognized-Zeile von /heute, Register-Knoepfe, Anleitungen — kein Box-Eintrag).
+# Davor .207 = interner Prod-Schritt (/erkennung wird Settings-
+# Startseite, Unterreiter nur-expert; Face-Zaehler-Fix — kein Box-Eintrag).
+# Davor .206 = interner Prod-Schritt (Fix /erkennung-Crash +
+# neue Gate-Stufe Seiten-Sweep im Image — kein Box-Eintrag).
+# Davor .205 = interner Prod-Schritt (Vier-Saeulen-Seite
+# /erkennung, erste Easy/Expert-Seite — Box-Eintrag kommt ERST mit dem Release
+# und wird wie immer mit dem User abgestimmt).
+# Davor .204 = interner Prod-Schritt (Easy/Expert-Schalter in der
+# Kopfzeile, nur der Schalter — Box-Eintrag kommt ERST mit dem Release und wird
+# wie immer mit dem User abgestimmt).
+# Davor .203 = interner Prod-Schritt (Person-Backbone dinov2 ->
+# Intel OMZ 0277 mit Selbst-Migration + person_backend-Schalter — Box-Eintrag
+# kommt ERST mit dem Release und wird wie immer mit dem User abgestimmt).
+# Davor .202 = interner Prod-Schritt (P1 Speicher-Redesign:
 # personwork-Prozess, Budget-Gate scharf, Wellen als Schlange — Box-Eintrag
 # kommt ERST mit dem Release und wird wie immer mit dem User abgestimmt).
 # Davor .201 = interner Prod-Schritt: basis_url/Push-Link aus
@@ -101,6 +188,19 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # .243 — MIT USER ABGESTIMMT (16./17.08. nachts, Inhalt von ihm diktiert:
+    # "Zwischenversion, Fokus auf Vereinfachung und Klarheit. Mittendrin,
+    # Umbau easy/expert, gerne mal auf Config, Today etc. schauen und gerne
+    # Rueckmeldung ob ich auf dem richtigen Weg bin per E-Mail" — englische
+    # Fassung im Chat bestaetigt, Adresse die oeffentliche posteo.
+    # Respin von .241/.242, Text identisch).
+    ("0.1.0.243", (
+        "Intermediate release — focus on simplification and clarity. We are "
+        "mid-way through the Easy/Expert rebuild: have a look at the new "
+        "Configuration start page, the Faces area, the Today cards and the "
+        "guided learning flow. Honest feedback on whether this direction "
+        "feels right is very welcome — suslik_dev@posteo.de.",
+    )),
     # .202 — MIT USER ABGESTIMMT (15.08. abends, "go aber nehme ergaenzend
     # mit auf ..."): Speicherfix-Eintrag wie vorgeschlagen + Ausblick
     # Easy/Expert-Mode + Feedback-Mail.

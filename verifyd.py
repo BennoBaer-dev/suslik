@@ -492,6 +492,9 @@ def load_config(path):
                          # alle beurteilten Crops bleiben rollierend liegen und sind unter
                          # /person/kontrolle anschaubar. Nie im Code entschieden, immer hier.
                          ("diagnostic_collection", False),
+                         # .217 (V3): kein-Votum-Gitter des Vision-Laufs auch
+                         # im Schlank-Modus behalten (30-Tage-Verfall bleibt).
+                         ("vision_gitter_behalten", False),
                          # Vision-Detect V1 (konzept_vision.md v2 §5). DREI Paare:
                          # die beiden Zahlen stehen zusaetzlich in CONFIG_WHITELIST
                          # (Default HIER + Eintrag DORT — sonst lehnt config_schreiben
@@ -566,6 +569,13 @@ def load_config(path):
                          # Frames) vollstaendig; p95-Monster (960 Frames = 15,7 GB
                          # Umsatz) laufen in die 10.08.-Degradation statt in den OOM.
                          ("personwork_rss_max_mb", 3072),
+                         # .203: Rechen-Placement des Personen-Backbones (OMZ-0277).
+                         # cpu = Default (35 ms/Bild gemessen, Decode dominiert den
+                         # Pfad); openvino:GPU/NPU nur nach Messung — 11.08. toetete
+                         # ein zusaetzlicher iGPU-Kontext die Waechter. PAAR-Bauart:
+                         # Default hier, Whitelist-Eintrag in der Tabelle; gelesen
+                         # von core/personmodell._person_backend (Config-Store).
+                         ("person_backend", "cpu"),
                          ("worker_rss_max_mb", 4096),        # Neustart-Schwelle (VmRSS des Workers;
                          # warm real ~1,9 GB [adaface/GPU] — 2048 liess nur 10 % Luft und riss im
                          # Soak 27.07.; 4096 = User-Entscheid: faengt Ausufern, nicht Normalbetrieb)
@@ -1171,7 +1181,7 @@ def verdict(cfg, frigate_label, ours, confirmed=None):
     if frigate_label and confirmed:
         return ("deckung" if frigate_label in confirmed else "widerspruch"), confirmed
     if frigate_label and not confirmed:
-        return "frigate_nur", confirmed          # Frigate behauptet, wir koennen nicht bestaetigen (Postbote-Muster)
+        return "frigate_nur", confirmed          # Frigate behauptet, wir koennen nicht bestaetigen (Zusteller-Muster)
     if confirmed:
         return "wir_nur", confirmed              # wir sehen jemanden, Frigate schweigt
     return "beide_unknown", confirmed
@@ -1437,7 +1447,8 @@ class Service:
         self.pub = None                           # MQTT-Publisher (AP2), Setup via start_publisher()
         self.mqtt_trigger = None                  # MQTT-Trigger-Client (nur trigger=mqtt), Setup via mqtt_loop()
         self.frigate_fehler = None                # (ts, msg) letzter Frigate-API-Fehler -> UI-Banner
-        self._emb = None                          # Lazy-Embedder (nur Upload-/Aufnahme-Gate, AP4)
+        self._emb = None                          # Lazy-Embedder (Upload-Gate + Lern-Bruecke seit .235)
+        self._emb_lock = threading.Lock()         # .235: Vorwaerm-Thread + Klick duerfen nicht doppelt bauen
         self._worker_obj = None                   # W2: persistenter Analyse-Worker (lazy, s. _worker)
         self._personwork_obj = None               # P1 (.202): Koerper-Prozess (lazy, s. _personwork)
         self._pw_prio_lock = threading.Lock()     # P1: Vorrang-Zaehler der Live-Spur
@@ -2560,6 +2571,7 @@ class Service:
         "worker": (bool, None, None, "persistent analysis worker: keeps the models loaded between events (large CPU saving); off = one process per event (pre-0.1.0.38 behavior)"),
         "worker_rss_max_mb": (int, 512, 16384, "memory threshold (MB): the worker is restarted cleanly once its RSS exceeds this"),
         "personwork_rss_max_mb": (int, 512, 16384, "memory threshold (MB) of the body-recognition process — large events degrade sampling instead of exhausting memory"),
+        "person_backend": (list, ["cpu", "openvino:GPU", "openvino:NPU", "cuda", "migraphx"], None, "compute placement of the body-recognition embedding model — cpu is the measured default (the path is dominated by video decode, not by this model; measured 18.8 ms/image on CPU vs 3.2 ms on an Intel iGPU). The accelerator values need the matching image variant (openvino in gpu/gpu-legacy, cuda in cuda, migraphx in rocm) and an extra GPU context can starve the live watchers — move it only after measuring on your box; on failure the model falls back to CPU loudly"),
         "wanduhr_min_kerne": (int, 1, 64, "self-measurement gate: minimum PHYSICAL cores (capped by a cgroup CPU quota if one is set) required to run the boot-time timing self-measurement, which is a second full analysis process next to the live one. The default 4 is a structural floor (2 processes x 2 concurrent parts each: video decode + inference), not a measured value. On a machine below the floor the measurement is skipped loudly and run-duration forecasts keep the labeled fallback values. Lower this deliberately if you accept minutes of full load on a small machine in exchange for measured forecasts. Also used as the weak-machine floor for the first-boot chain defaults (fresh installs below it start with person_pfad=nur_wenn_gesicht_leer, vision_pfad=aus) — raising it widens that group too"),
         "analyse_timeout_s": (int, 60, 3600, "watchdog for one live analysis (seconds): if the analysis has not answered by then it is presumed hung, killed, and the event is retried once immediately with a doubled deadline (in worker mode on a fresh worker, otherwise in a fresh process). The default 600 is measured, not guessed: across 1394 live analyses on the reference machine the slowest successful run took 258 s, so 600 leaves over twice that, and the doubled retry additionally carries machines up to roughly 4-5x slower before an event is handed to the silent catch-up. Raise this if you keep seeing 'analyze watchdog' lines for runs that would have finished"),
         # Vision detect (konzept_vision.md v2 §5): die zwei reinen Zahlen des
@@ -2591,6 +2603,7 @@ class Service:
         "person_pfad": (list, KETTE_STUFEN, None, "person (body) recognition path: immer = runs on every analyzed event once the person model is armed (today's behavior) | nur_wenn_gesicht_leer = the expensive person judgment (embedding) only starts when the FACE path could NOT confirm everyone on the walk-through — one unconfirmed or unclear person and it runs; body pictures are still collected during the analysis so the judgment has material when it is needed | aus = the path never starts by itself: no body pictures are collected and no person judgment is computed (the biggest saving on weak CPUs); a re-analysis you start yourself keeps working"),
         "vision_pfad": (list, KETTE_STUFEN, None, "vision detect path: immer = a run starts automatically at the end of every walk-through, as long as vision detect itself is switched on (today's behavior) | nur_wenn_gesicht_leer = the automatic run only starts when the FACE path could NOT confirm everyone on the walk-through | aus = no automatic vision runs at all; runs you start yourself on the Vision page keep working"),
         "diagnostic_collection": (bool, None, None, "keep every JUDGED body image for inspection (Person -> Judged images): on = images of all passes stay for 30 days, roughly 20-40 MB a day; off (default) = they only live while the pass is running, then only the winning image and the verdict log remain"),
+        "vision_gitter_behalten": (bool, None, None, "keep the candidate grid image of vision runs that ended WITHOUT a verdict, even in lean mode: it is the only evidence to judge later whether a 'neither' was right; grids still expire with the normal 30-day trim (default: off)"),
         "fd_front_min": (float, 0.5, 1.0, "false-detection rule: frontality at/above which a detection looks like a static object (calibrated 0.85)"),
         "fd_sharp_min": (int, 200, 5000, "false-detection rule: sharpness (Laplacian var.) at/above which a crop is edge-rich like vegetation/spokes (calibrated 1500)"),
         "fd_det_max": (float, 0.5, 0.9, "false-detection rule: only detections BELOW this detector score can be discarded (calibrated 0.70)"),
@@ -2876,6 +2889,47 @@ class Service:
                 self.log(f"!! stream profile run failed: "
                          f"{type(e).__name__}: {e}")
         threading.Thread(target=lauf, name="steckbriefe",
+                         daemon=True).start()
+
+    def start_backbone_migration(self):
+        """.203: Personen-Modell EINMALIG auf das Standard-Backbone heben
+        (dinov2 -> omz0277, User-Entscheid 15.08.). Ein Alt-Modell wuerde
+        sonst draussen ewig weiterlaufen, weil trainieren() nur nach
+        Review-Abschluss/Loeschung feuert — fremde Nutzer reviewen ggf. nie
+        wieder (Automatik-Regel: die Software uebernimmt das selbst).
+        Hintergrund-Thread, Sekunden bis wenige Minuten auf schwacher CPU;
+        das Alt-Modell urteilt bis zum atomaren status-Wechsel weiter.
+        Fehlschlag wird SICHTBAR vermerkt (.141-Klasse), nie still."""
+        from core import personmodell as _pm
+        try:
+            st = _pm.status_lesen(self.cfg["data_dir"])
+        except Exception:
+            st = None
+        if not st or not st.get("bilder"):
+            return                      # kein Modell -> nichts zu migrieren
+        if st.get("backbone") == _pm.BACKBONE_STANDARD:
+            return
+
+        def lauf():
+            try:
+                self.log(f"person model: migrating backbone "
+                         f"{st.get('backbone') or _pm.BACKBONE_ALT} -> "
+                         f"{_pm.BACKBONE_STANDARD} (one-time re-training)")
+                neu = _pm.trainieren(self.cfg["data_dir"])
+                ei = neu.get("eichung") or {}
+                self.log(f"person model: backbone migration done — "
+                         f"{neu.get('modell')}, threshold "
+                         f"{neu.get('schwelle')} ({ei.get('art', '?')})")
+            except Exception as e:
+                self.log(f"!! person model backbone migration failed: "
+                         f"{type(e).__name__}: {e}")
+                try:
+                    _pm.fehler_vermerken(self.cfg["data_dir"],
+                                         f"backbone migration: "
+                                         f"{type(e).__name__}: {e}")
+                except Exception:
+                    pass
+        threading.Thread(target=lauf, name="backbone-migration",
                          daemon=True).start()
 
     def live_quittungen_uebernehmen(self, status):
@@ -3518,6 +3572,27 @@ class Service:
             except (TypeError, ValueError):
                 continue
             r[feld] = max(tief, min(hoch, w))
+        # .217 (V2, Hebel-Bilanz 16.08.): die WIRKSAMEN Anfrage-Einstellungen
+        # fahren in die Lauf-Zeile (visionurteil schreibt sie als
+        # zeile["einstellungen"]). Anlass: fuer keinen Prod-Lauf war belegbar,
+        # mit welchem Modell/Think-Wert er lief — die 09:49/13:02-Attribution
+        # blieb deshalb unentscheidbar. Nur Ausweis, keine neue Quelle: alles
+        # kommt aus dem Vision-Block bzw. der Kachel.
+        try:
+            import hashlib
+            from core import vision as _vis
+            _b = _vis.block_migrieren(self.cfg.get("vision") or {})
+            _p = _vis.kachel(_b.get("kachel"))
+            _pr = (_b.get("prompt") or "").strip()
+            r["einstellungen"] = {
+                "kachel": _b.get("kachel"), "modell": _b.get("modell"),
+                "think_aus": _vis.think_aus_wirksam(_b, _p),
+                "max_tokens": int(_b.get("max_tokens") or _p["max_tokens"]),
+                "custom_prompt": bool(_pr),
+                "prompt_hash": (hashlib.sha1(_pr.encode()).hexdigest()[:10]
+                                if _pr else "std")}
+        except Exception:
+            pass                      # Ausweis ist Mitnahme, nie Voraussetzung
         return r
 
     def _vision_galerien(self):
@@ -3768,7 +3843,10 @@ class Service:
         if not self._vision_koerper_namen(z):
             return False            # unbekannt eingestuft -> kein Widerspruch
         gruende = [r.get("grund") for r in z["runden"] if r.get("kein_votum")]
-        return bool(gruende) and all(g in ("neither", "tausch_widerspruch")
+        # .217: die Menge kommt aus core.vision.KEIN_VOTUM_INHALTLICH (eine
+        # Quelle) — als Literal haette sie neither_einseitig still verpasst.
+        from core import vision as _vis
+        return bool(gruende) and all(g in _vis.KEIN_VOTUM_INHALTLICH
                                      for g in gruende)
 
     def _vision_koerper_namen(self, z):
@@ -4833,11 +4911,12 @@ class Service:
     # ---------------------------------------------------------- Enrollment (Plan AP4)
     @property
     def embedder(self):
-        if self._emb is None:
-            os.environ.setdefault("OV_DEVICE", self.cfg["ov_device"])
-            from face_audit import Embedder
-            self._emb = Embedder()                # det 320: Referenzbild-Groessen (Reihenfolge-Falle!)
-        return self._emb
+        with self._emb_lock:                      # .235: gegen Doppel-Aufbau
+            if self._emb is None:
+                os.environ.setdefault("OV_DEVICE", self.cfg["ov_device"])
+                from face_audit import Embedder
+                self._emb = Embedder()            # det 320: Referenzbild-Groessen (Reihenfolge-Falle!)
+            return self._emb
 
     def _enroll_queue_pfad(self):
         return os.path.join(self.cfg["data_dir"], "learn", "enroll", "queue.jsonl")
@@ -6661,6 +6740,106 @@ def make_handler(svc):
                                       "application/json")
                 except Exception as e:
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
+            if pfad == "/auftritt_lernen":                     # Lern-Bruecke (.225/.226): pruefen -> uebernehmen
+                try:
+                    import anlernen
+                    n = int(self.headers.get("Content-Length", 0))
+                    d = json.loads(self.rfile.read(min(n, 65536)))
+                    person = (d.get("person") or "").strip()
+                    if person not in master_persons(cfg):
+                        return self._send(400, json.dumps(
+                            {"ok": False, "msg": "unknown person"}), "application/json")
+                    if d.get("uebernehmen"):
+                        # Schritt 2 (.226): genau die GEPRUEFTEN Bilder — der
+                        # Nutzer hat sie gesehen und bestaetigt sie jetzt.
+                        dateien = anlernen.lernbruecke_uebernehmen(
+                            person, d["uebernehmen"], emb=svc.embedder)
+                        if dateien:
+                            svc.log(f"PASS LEARN: {len(dateien)} reference(s) "
+                                    f"adopted for {person} from one pass")
+                            svc.qs_neu_starten()
+                            svc.frigate_sync_export()
+                        return self._send(200, json.dumps(
+                            {"ok": True, "n": len(dateien), "dateien": dateien,
+                             "msg": f"{len(dateien)} picture(s) added"}),
+                            "application/json")
+                    # Schritt 1: nur pruefen, nichts uebernehmen.
+                    # .232 (User-Idee): kaltes Modell EHRLICH melden statt
+                    # stumm zu warten — das UI zeigt 'loading …' und fragt
+                    # automatisch nach, sobald warm. .235: es zaehlt die
+                    # DIENST-Instanz (svc.embedder, OV-schnell) — die zweite
+                    # In-Prozess-Instanz lief auf CPU (~2 s je Bild, User:
+                    # 'einige schnell, einige langsam').
+                    if svc._emb is None:
+                        threading.Thread(target=lambda: svc.embedder,
+                                         daemon=True).start()
+                        return self._send(200, json.dumps(
+                            {"ok": True, "laden": True,
+                             "msg": "loading the recognition model — a few "
+                                    "seconds …"}), "application/json")
+                    # .236: fehlender refcache (Undo/Loeschung invalidieren
+                    # weiterhin voll) heisst EHRLICH warten statt den
+                    # Komplett-Neuaufbau inline zu zahlen — Hintergrund-Bau,
+                    # das UI fragt automatisch nach.
+                    if not os.path.exists(os.path.join(
+                            cfg["data_dir"], "clips", "refcache.npz")):
+                        threading.Thread(
+                            target=anlernen.refcache_aufbauen,
+                            args=(svc.embedder,), daemon=True).start()
+                        return self._send(200, json.dumps(
+                            {"ok": True, "laden": True,
+                             "msg": "updating the reference library — a few "
+                                    "seconds …"}), "application/json")
+                    eids = [str(e) for e in (d.get("eids") or [])][:200]
+                    nehmen, grenz = anlernen.lernbruecke_pruefen(
+                        person, eids, emb=svc.embedder)
+                    # .226b: Bild-URL je Kandidat (derselbe Weg wie die
+                    # Thumb-Reihe) — das Auswahl-Overlay zeigt EXAKT die
+                    # Bilder, die uebernommen wuerden.
+                    for it in nehmen + grenz:
+                        _ed = str(it["eid"]).replace("/", "_")
+                        it["url"] = (f"/events/{urllib.parse.quote(_ed)}/"
+                                     f"{urllib.parse.quote(str(it['datei']))}")
+                    # .231: Grenzfaelle nie mehr verschweigen (Pass-3-Befund:
+                    # 8 sichere Identitaeten fielen still an der Gut-Qualitaet).
+                    if nehmen:
+                        msg = (f"the check picks {len(nehmen)} picture(s)"
+                               + (f" · {len(grenz)} borderline shown unticked"
+                                  if grenz else ""))
+                    elif grenz:
+                        msg = (f"nothing clearly helpful — {len(grenz)} "
+                               "borderline picture(s) kept back (identity "
+                               "sure, picture quality only fair); you can "
+                               "still take them")
+                    else:
+                        msg = ("nothing to take — no helpful new picture "
+                               "in this pass (that is fine)")
+                    return self._send(200, json.dumps(
+                        {"ok": True, "nehmen": nehmen, "grenz": grenz,
+                         "msg": msg}), "application/json")
+                except Exception as e:
+                    return self._send(500, json.dumps(
+                        {"ok": False, "msg": str(e)[:160]}), "application/json")
+            if pfad == "/auftritt_lernen_undo":                # Lern-Bruecke: Undo statt Dialog
+                try:
+                    import anlernen
+                    n = int(self.headers.get("Content-Length", 0))
+                    d = json.loads(self.rfile.read(min(n, 65536)))
+                    person = (d.get("person") or "").strip()
+                    n_weg = 0
+                    for datei in (d.get("dateien") or [])[:50]:
+                        ok, _m = anlernen.entferne_referenz(person, str(datei))
+                        if ok:
+                            n_weg += 1
+                    if n_weg:
+                        svc.log(f"PASS LEARN UNDO: {n_weg} reference(s) removed for {person}")
+                        svc.qs_neu_starten()
+                    return self._send(200, json.dumps(
+                        {"ok": True, "msg": f"{n_weg} picture(s) removed again"}),
+                        "application/json")
+                except Exception as e:
+                    return self._send(500, json.dumps(
+                        {"ok": False, "msg": str(e)[:160]}), "application/json")
             if pfad == "/vorschlag_aufnehmen":                 # Bestands-Vorschlaege uebernehmen
                 try:
                     import anlernen
@@ -7131,6 +7310,32 @@ def make_handler(svc):
                                       json.dumps({"ok": ok, "msg": msg}, ensure_ascii=False), "application/json")
                 except Exception as e:
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
+            if pfad == "/erkennung_live":
+                # .205 Sammel-Schalter der Vier-Saeulen-Seite: aus = alle
+                # LAUFENDEN Waechter aus, ein = alle EINGERICHTETEN an — je
+                # Kamera durch DENSELBEN Server-Riegel wie /live_schalter.
+                try:
+                    n = int(self.headers.get("Content-Length", 0))
+                    d = json.loads(self.rfile.read(min(n, 4096)) or b"{}")
+                except Exception:
+                    return self._send(400, json.dumps(
+                        {"ok": False, "msg": "bad json"}), "application/json")
+                an = bool(d.get("an"))
+                from core import livewache as _lw_s
+                _dflt, _g = _lw_s.guards_lesen(cfg, log=lambda z: None)
+                ziele = [k for k, g in sorted(_g.items())
+                         if bool(g.get("enabled")) != an]
+                fehl = []
+                for kam in ziele:
+                    ok, msg = svc.live_schalter(kam, an)
+                    if not ok:
+                        fehl.append(f"{kam}: {msg}")
+                m = ("nothing to change" if not ziele else
+                     f"{'started' if an else 'stopped'} "
+                     f"{len(ziele) - len(fehl)}/{len(ziele)} watcher(s)"
+                     + (" — " + "; ".join(fehl)[:300] if fehl else ""))
+                return self._send(200, json.dumps(
+                    {"ok": not fehl, "msg": m}), "application/json")
             if pfad in ("/live_speichern", "/live_schalter", "/live_test",
                         "/live_messung", "/live_verstecken"):
                 # Live-Reiter (Phase 2): duenne Maentel, Logik/Riegel in
@@ -7190,6 +7395,38 @@ def make_handler(svc):
                                      "doppellauf": d.get("doppellauf")})
                 elif pfad == "/vision/schluessel":              # Key-Sofortpruefung (Modell-Liste, kein Bild)
                     ok, msg = svc.vision_schluessel(d)
+                elif pfad == "/vision/modell_manuell":          # .213: Hand-ID pruefen -> Liste
+                    from core import vision as _vis_m
+                    _blk = _vis_m.block_migrieren(cfg.get("vision") or {})
+                    _mid = str(d.get("modell") or "").strip()
+                    ok, msg = _vis_m.modell_manuell_pruefen(_blk, _mid)
+                    if ok:
+                        # Bestandene Pruefung = eigene Entdeckung dieser
+                        # Verbindung: ID ins Protokoll, Badge aus der Registry,
+                        # als 'manuell' markiert — Save-Weg bleibt der normale.
+                        _pp = os.path.join(cfg["data_dir"], "state",
+                                           "vision_modelle.json")
+                        _prot = svc._vision_datei("vision_modelle.json") or {}
+                        if not _vis_m.modelle_gueltig(_prot, _blk):
+                            _prot = {"ts": time.time(),
+                                     "kachel": _blk.get("kachel"),
+                                     "endpunkt": _reg.endpunkt_anzeige(
+                                         _vis_m.endpunkt_wirksam(_blk)),
+                                     "ok": True, "ampel": "gruen",
+                                     "text": "manually checked model",
+                                     "modelle": [],
+                                     "gewaehlt": str(_blk.get("modell") or "")}
+                        if not any(m.get("id") == _mid
+                                   for m in _prot.get("modelle") or []):
+                            _b = _reg.vision_badge(_mid, _blk.get("kachel"))
+                            _prot.setdefault("modelle", []).append(
+                                {"id": _mid, "label": _mid, "badge": _b,
+                                 "gemessen": _b.get("gemessen"),
+                                 "manuell": True})
+                            _prot["ok"] = True
+                            _store_schreiben(_pp, _prot)
+                        msg = (f"model answered — added to the list as "
+                               f"manually checked; pick it there and save")
                 elif pfad in ("/vision/test", "/vision/konfig"):
                     ok, msg = (svc.vision_test(d) if pfad == "/vision/test"
                                else svc.vision_speichern(d))
@@ -7779,9 +8016,24 @@ def make_handler(svc):
                 # DURCHGAENGEN (Spec 02_today §4.3/S3), nicht mehr auf einem Einzel-Event.
                 import webui
                 import auftritte as _auf
-                _titel, _inhalt = _auf.render(cfg, svc.log_path, master_persons(cfg), qs)
+                if svc._emb is None:               # .232/.235: Vorwaermen wie /heute
+                    threading.Thread(target=lambda: svc.embedder,
+                                     daemon=True).start()
+                if (qs.get("u", [""])[0] or "").strip():
+                    # .237: Unbekannt-Tagessicht — gleiche Ansicht wie bei
+                    # Gelernten, plus Zuweisen (User-Zielbild).
+                    _titel, _inhalt = _auf.render_unbekannt(
+                        cfg, svc.log_path, master_persons(cfg), qs)
+                else:
+                    _titel, _inhalt = _auf.render(cfg, svc.log_path, master_persons(cfg), qs)
                 return self._send(200, webui.layout(_titel, "/heute", _inhalt, self._banner()))
             if path == "/heute":
+                # .232 (User-Entwurf): wer Today ansieht, klickt womoeglich
+                # gleich einen Pass-Check — .235: die DIENST-Instanz vorwaermen
+                # (svc.embedder, OV-schnell; dieselbe, die die Bruecke nutzt).
+                if svc._emb is None:
+                    threading.Thread(target=lambda: svc.embedder,
+                                     daemon=True).start()
                 rows, letzte = [], {}
                 if os.path.exists(svc.log_path):
                     with open(svc.log_path) as f:
@@ -8401,53 +8653,32 @@ def make_handler(svc):
                     nk = len(s["kams"])
                     _z = treffer_eid or s.get("unbek_eid")
                     ziel = f'/event/{urllib.parse.quote(str(_z))}' if _z else "/unbekannte"
-                    # Zuweisen DIREKT an der Karte (User-Entscheid 25.07. abends): Klappe mit den
-                    # Gesichtern der Identitaet, JEDES einzeln anwaehlbar — ausdruecklich KEINE
-                    # Pauschal-Zuweisung der ganzen Identitaet, weil das Clustering (Greedy-Seed,
-                    # #57) Identitaeten mischt und Nicht-Gesichter buendelt: der Nutzer sieht, was
-                    # er uebernimmt, und klickt es bewusst an ("der Benutzer sollte klicken,
-                    # welches der unbekannten Gesichter er hinzufuegen moechte"). Uebernahme laeuft
-                    # ueber den BESTEHENDEN Weg /anlernen_benennen (gleiches Verfahren wie die
-                    # Vorschlags-Seite) — beste Bilder werden Referenzen.
+                    # .234 (User 17.08.: "bei Unbekannt kommt was anderes, das ist
+                    # nicht konsistent"): die Karte ist wieder ein LINK wie bei den
+                    # bekannten Personen — Ziel ist das Besucher-Profil auf
+                    # /unbekannte (dort leben Gesichter, Benennen, Zusammenfuehren;
+                    # maechtiger als die alte 12-Bilder-Klappe vom 25.07., die es
+                    # damals mangels Unbekannt-Seite brauchte). EIN Klick-Gesetz
+                    # fuer alle Karten.
                     klappe = ""
-                    if uid:
-                        # User-Feedback 25.07. (Screenshot-Test): "hier wuerde ich auf einen
-                        # unknown klicken um den zuzuweisen" — der natuerliche Klick ist die
-                        # KARTE, nicht ein Extra-Knopf daneben. Also: uid-Karte klappt beim
-                        # Klick das Zuweisungsfeld auf; der Sprung zum Event liegt als Link IM
-                        # Feld. Karten ohne uid verlinken weiter direkt aufs Event.
-                        pass
-                    if uid:
-                        _mem = alle_member[:12]
-                        _thumbs = "".join(
-                            f'<label class="ukw"><input type="checkbox" class="ukcb-{html.escape(uid)}" '
-                            f'value="{html.escape(str(_m))}">'
-                            f'<img src="/anlern/crops/{urllib.parse.quote(str(_m))}.jpg" alt=""></label>'
-                            for _m in _mem)
-                        klappe = (
-                            f'<div class="ukpanel" id="ukp-{html.escape(uid)}" hidden>'
-                            f'<div class="dim" style="margin-bottom:4px">Tick the faces that really '
-                            f'belong to this person — junk stays behind:</div>'
-                            f'<div class="ukthumbs">{_thumbs}</div>'
-                            f'<input list="personen-liste" id="ukperson-{html.escape(uid)}" '
-                            f'placeholder="person (new or existing)" style="margin:6px 4px 0 0">'
-                            f'<button class="gtb on" onclick="ukZuweisen(\'{html.escape(uid)}\',this)">'
-                            f'Add selected faces</button> '
-                            f'<span class="dim" id="ukst-{html.escape(uid)}"></span>'
-                            f'<a class="fussnote" style="float:right" href="{ziel}">open event →</a></div>')
                     # "N faces" war falsch: `unbek` zaehlt EVENTS, nicht Gesichter (heute 43 Events
                     # gegen 657 in ihren faces-Feldern). Die faces-Zahl selbst taugt hier ohnehin
                     # nicht als Aussage, weil darin SCRFD-Fehldetektionen stecken (Gras, Laub,
                     # Radkasten — genau der Grund, aus dem die alte Kennzahlkachel abgeschafft
                     # wurde). Also die Zahl nennen, die stimmt, und sie richtig benennen.
                     if uid:
-                        huelle_auf = (f'<div{_uk_anker} class="pk pk-unbek pk-klick" role="button" tabindex="0" '
-                                      f'title="Click to assign these faces" '
-                                      f'onclick="ukKlappe(\'{html.escape(uid)}\')">')
-                        huelle_zu = '</div>'
+                        # .239 (User-Korrektur: 'ich dachte, ich sehe die
+                        # Bilder vom Lauf 12:19'): die Karte IST ein Lauf —
+                        # der Klick oeffnet GENAU diesen Lauf mit seinen
+                        # Gesichtern und der Zuweisung, kein Identitaets-Dossier.
+                        huelle_auf = (f'<a{_uk_anker} class="pk pk-unbek" '
+                                      f'title="Open this walk-through" '
+                                      f'href="/auftritte?u={urllib.parse.quote(str(uid))}'
+                                      f'&amp;tag={tag_dt.strftime("%Y-%m-%d")}'
+                                      f'&amp;p={s["start"]}">')
                     else:
                         huelle_auf = f'<a{_uk_anker} class="pk pk-unbek" href="{ziel}">'
-                        huelle_zu = '</a>'
+                    huelle_zu = '</a>'
                     _av_bild = (f'<img src="/anlern/crops/{urllib.parse.quote(str(alle_member[0]))}.jpg" '
                                 f'alt="">' if alle_member else "?")
                     pkarten.append(
@@ -8615,7 +8846,17 @@ def make_handler(svc):
                           f'<div class="tagraster"><div>'
                           f'<div class="listhead" id="recognized"><h3>Recognized</h3>'
                           f'<span class="cnt">{len(pers_tag)} '
-                          f'{"person" if len(pers_tag) == 1 else "people"}</span></div>{band}'
+                          f'{"person" if len(pers_tag) == 1 else "people"}</span>'
+                          # .208 (User-Fund 16.08.: Live meldete in Sekunden, der
+                          # normale Weg brauchte 76 s — wer frueh schaute, sah
+                          # hier nichts): laeuft noch ein Durchgang, sagt die Zeile
+                          # das EHRLICH, statt leer zu wirken. Seite laedt bei
+                          # live_offen ohnehin alle 30 s neu (refresh unten).
+                          + ('<span class="badge live"><span class="ldot"></span>'
+                             'pass in progress — events are analyzed as they '
+                             'finish and show up here</span>'
+                             if live_offen else '')
+                          + f'</div>{band}'
                           f'{live_reihe}'
                           f'<div class="listhead" id="passes"><h3>Passes</h3>'
                           f'<span class="cnt">{cnt}</span></div>'
@@ -8648,9 +8889,28 @@ def make_handler(svc):
                             referenz=_bn.referenz_zentroide(
                                 os.path.join(cfg["data_dir"], "clips",
                                              "refcache.npz"), cfg["modell"]))
+                        # .224: Fluss-Kontext (Group x of y + naechste offene
+                        # Gruppe) — dieselbe Reihenfolge wie die Listen-Seite
+                        # (Stuetz absteigend), damit Karte und Liste eine
+                        # Geschichte erzaehlen.
+                        _reihe = [x["anker_id"] for x in sorted(
+                            (x for x in saetze
+                             if x.get("status") not in ("uebernommen",
+                                                        "verworfen")),
+                            key=lambda x: (-(x.get("qualitaet") or {})
+                                           .get("stuetz", 0),
+                                           str(x.get("anker_id"))))]
+                        _fl = None
+                        if aid in _reihe:
+                            _i = _reihe.index(aid)
+                            _fl = {"pos": _i + 1, "gesamt": len(_reihe),
+                                   "naechster": (_reihe[_i + 1]
+                                                 if _i + 1 < len(_reihe)
+                                                 else None)}
                         return self._send(200, webui.layout(
                             "Anchor", "/lernlauf/anker",
-                            _r_ank.anker_detail_seite(satz, kaputt, benennung=bkt),
+                            _r_ank.anker_detail_seite(satz, kaputt,
+                                                      benennung=bkt, fluss=_fl),
                             self._banner()))
                 # Uebersichts-Zusatz (User 05.08.): looks-like-Vorschlag je
                 # Cluster (gleiche Rechnung wie die Detail-Seite, nur ohne das
@@ -9502,6 +9762,117 @@ def make_handler(svc):
                     return self._send(200, open(_voll, "rb").read(),
                                       "image/jpeg")
                 return self._send(404, b"gone")
+            if path.startswith("/hilfe/"):         # In-App-Anleitungen (.208,
+                import webui                       #  je Kachel, Easy+Expert)
+                from routes import hilfe as _r_hilfe
+                inhalt = _r_hilfe.render(path[len("/hilfe/"):])
+                if inhalt is None:
+                    return self._send(404, b"gone")
+                return self._send(200, webui.layout(
+                    "How it works", "/erkennung", inhalt, self._banner()))
+            if path == "/erkennung":               # Vier-Saeulen-Seite (.205,
+                import webui                       #  Easy+Expert, EINE Seite)
+                from routes import erkennung as _r_erk
+                from core import livewache as _lw_e
+                from core import personmodell as _pm_e
+                _dflt, _g = _lw_e.guards_lesen(cfg, log=lambda z: None)
+                # .207: Referenzen liegen unter faces/ (nicht refs/ — die
+                # Kachel zeigte 0/0, waehrend /gesichter 4 Personen listete)
+                _refs, _nb = os.path.join(cfg["data_dir"], "faces"), 0
+                _np = [d for d in (os.listdir(_refs)
+                                   if os.path.isdir(_refs) else [])
+                       if os.path.isdir(os.path.join(_refs, d))]
+                for _d in _np:
+                    _nb += sum(1 for f in os.listdir(
+                        os.path.join(_refs, _d))
+                        if f.lower().endswith(_reg.BILD_ENDUNGEN))
+                inhalt = _r_erk.render(
+                    cfg, svc.CONFIG_WHITELIST, _kette.lage(cfg),
+                    {"an": sum(1 for g in _g.values() if g.get("enabled")),
+                     "eingerichtet": len(_g)},
+                    {"personen": len(_np), "bilder": _nb},
+                    _pm_e.status_lesen(cfg["data_dir"]),
+                    n_areas=len(_areas_mod.normalisieren(cfg.get("areas"))))
+                return self._send(200, webui.layout(
+                    "Recognition", "/erkennung", inhalt, self._banner()))
+            if path == "/faces":                   # Faces-Startseite (.220,
+                import webui, anlernen             #  Mockup-Abnahme 16.08.)
+                from routes import faces as _r_fc
+                _fd = os.path.join(cfg["data_dir"], "faces")
+                # Avatar je Person: juengstes AKTIVES Referenzbild laut
+                # refs_meta; Fallback erste Datei des Ordners.
+                _neu = {}
+                try:
+                    for _l in open(os.path.join(_fd, "refs_meta.jsonl")):
+                        try:
+                            _e = json.loads(_l)
+                        except ValueError:
+                            continue
+                        if _e.get("aktiv") and _e.get("person") and _e.get("datei"):
+                            _alt = _neu.get(_e["person"])
+                            if not _alt or _e.get("ts", 0) > _alt[0]:
+                                _neu[_e["person"]] = (_e.get("ts", 0), _e["datei"])
+                except OSError:
+                    pass
+                _pl, _nb = [], 0
+                for _p in sorted(os.listdir(_fd) if os.path.isdir(_fd) else []):
+                    _pd = os.path.join(_fd, _p)
+                    if not os.path.isdir(_pd):
+                        continue
+                    _bl = sorted(f for f in os.listdir(_pd)
+                                 if f.lower().endswith(_reg.BILD_ENDUNGEN))
+                    if not _bl:
+                        continue
+                    _nb += len(_bl)
+                    _av = (_neu.get(_p) or (0, ""))[1]
+                    _pl.append((_p, _av if _av in _bl else _bl[0]))
+                try:
+                    _nu = sum(1 for u in anlernen.lade_unbekannte()
+                              if isinstance(u, dict)
+                              and isinstance(u.get("members"), list))
+                except Exception:
+                    _nu = 0
+                try:
+                    _lo = sum(1 for d in svc._enroll_queue().values()
+                              if d.get("status") == "offen")
+                except Exception:
+                    _lo = 0
+                return self._send(200, webui.layout(
+                    "Faces", "/faces",
+                    _r_fc.render(_pl, _nb, _nu, _lo), self._banner()))
+            if path == "/frigate":                 # Frigate-Kachel-Seite (.216,
+                import webui                       #  User: "Frigate sync" -> "Frigate")
+                from routes import frigate as _r_frig
+                import sync_refs as _sr
+                _furl = (cfg.get("frigate_url") or "").strip()
+                _verb = (None, "no Frigate URL configured")
+                if _furl:                          # Live-Probe wie frigate_fr_status:
+                    try:                           #  kurz, nie aus altem Status
+                        with urllib.request.urlopen(
+                                _furl.rstrip("/") + "/api/version",
+                                timeout=4) as _r:
+                            _verb = (True, _r.read(200).decode(
+                                "utf-8", "replace").strip() or "ok")
+                    except Exception as _ex:
+                        _verb = (False, f"{type(_ex).__name__}: {_ex}")
+                _ks = cfg.get("kameras") or {}
+                _kam = {"gesamt": len(_ks),
+                        "verwendet": sum(1 for k in _ks.values()
+                                         if k.get("verwenden", True))}
+                try:                               # EINE Quelle mit System-Karte
+                    from routes.syncauswahl import bilanz_zeile as _bz
+                    _ab = _sr.abgleich()
+                    _sync = _bz(_ab, _ab.get("abgelehnt"), mit_personen=False)
+                except Exception as _ex:
+                    _sync = ("sync status not available — "
+                             + html.escape(f"{type(_ex).__name__}: {_ex}"))
+                try:
+                    _fr = _sr.frigate_fr_status()
+                except Exception as _ex:
+                    _fr = (None, f"{type(_ex).__name__}: {_ex}")
+                inhalt = _r_frig.render(_furl, _verb, _kam, _sync, _fr)
+                return self._send(200, webui.layout(
+                    "Frigate", "/frigate", inhalt, self._banner()))
             if path == "/kette":                   # Recognition chain (.189,
                 import webui                       #  eigener Settings-Punkt)
                 # _kette ist der MODUL-Import (Z. 27), nie lokal importieren
@@ -10717,6 +11088,7 @@ def main():
     svc.start_live_aufsicht()             # Phase 4: Live-Engine-Supervisor (Autostart, wenn
     #                                       ein Waechter enabled ist; Standalone-Erkennung)
     svc.start_stream_steckbriefe()        # .186: echte Stream-Aufloesung je Kamera proben
+    svc.start_backbone_migration()        # .203: Alt-Modell einmalig auf omz0277 heben
     #                                       (Kachel-Kopf ohne Quelltest-Klick, User 13.08.)
     svc.vision_waisen_start()             # .164: Laeufe schliessen, die der letzte
     #                                       Neustart mitten drin erwischt hat

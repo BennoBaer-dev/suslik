@@ -1,9 +1,11 @@
 """core/personmodell — PE3: Training im Dienst (stufe2.md, User-Go 04.08.).
 
 Trainiert nach jedem Review-Abschluss (und nach Loeschungen) aus dem
-ABGENOMMENEN Material: DINOv2-ONNX-Embeddings (Einback-Etappe, onnxruntime,
-kein torch) + SVM (Familien-Sieger der Messreihe) bei >=2 Personen; bei
-EINER Person Referenz-Embeddings (Kosinus-Weg). Sekunden auf CPU.
+ABGENOMMENEN Material: Backbone-ONNX-Embeddings (onnxruntime, kein torch;
+seit .203 Standard omz0277 = Intel OMZ person-reid 0277 mit PCA-Whitening-
+Pipeline, davor dinov2 — BACKBONES unten ist die eine Quelle) + SVM
+(Familien-Sieger der Messreihe) bei >=2 Personen; bei EINER Person
+Referenz-Embeddings (Kosinus-Weg). Sekunden auf CPU.
 
 FREMD-KLASSE (.139, Erkennungs-Review Baustein 1): liegen unter
 <data_dir>/personlern/fremd/ bestaetigte Fremd-Bilder, lernt das SVM sie
@@ -24,7 +26,90 @@ import numpy as np
 WURZEL = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
-GROESSE = (126, 252)          # Mess-Konvention der ganzen Stufe-2-Reihe
+GROESSE = (126, 252)          # Mess-Konvention der ganzen Stufe-2-Reihe (dinov2)
+
+# ---- Backbones des Personen-Pfads (EINE zentrale Quelle, qs_ebenen-Regel).
+# "omz0277" = Intel OMZ person-reidentification-retail-0277 (ONNX-Datei 0265,
+# Apache-2.0 laut model.yml AUCH fuer die Modelldatei — der einzige gemessene
+# Kandidat, der stark UND auslieferbar ist; Waagschale 15.08.: 32/30/30 von 37
+# Szenarien gegen 18/16/16 des dinov2-Wegs, Besucherin-Haertefall 5/7 Stuetzen,
+# A/B-Personentest 6/12 gegen 3/12 — waagschale_reid.md).
+# Vorverarbeitung ImageNet-RGB + BILINEAR: empirisch bestimmt (Intra/Inter-
+# Kosinus 0.354 gegen 0.324 roh-BGR; Intels accuracy-check.yml resized
+# BILINEAR, fuer die ONNX-Datei nennt die Doku keine Normierung).
+# "whitening" = (top_k_weg, deckel) fuer PCA-Whitening JE TRAININGS-FALTE —
+# Sieger-Setting top-0/128 der Messreihe. "batch": die OMZ-Datei traegt eine
+# FESTE Batchgroesse 1. "filter": dinov2 bleibt beim PIL-Default BICUBIC
+# (Byte-Treue zur Stufe-2-Messreihe), omz0277 misst BILINEAR.
+BACKBONES = {
+    "dinov2": {"datei": "dinov2_vits14_126x252.onnx", "eingang": "bild",
+               "groesse": (126, 252), "dim": 384, "batch": 16,
+               "filter": "bicubic", "whitening": None, "env": "SUSLIK_DINO"},
+    "omz0277": {"datei": "person-reidentification-retail-0265.onnx",
+                "eingang": "data", "groesse": (128, 256), "dim": 256,
+                "batch": 1, "filter": "bilinear", "whitening": (0, 128),
+                "env": "SUSLIK_PERSON_REID"},
+}
+BACKBONE_STANDARD = "omz0277"  # User-Entscheid 15.08.: dinov2 wird ersetzt
+BACKBONE_ALT = "dinov2"        # Alt-Modelle ohne backbone-Feld (vor .203):
+                               # laufen unveraendert weiter, bis das naechste
+                               # Training sie auf den Standard hebt
+
+
+def _person_backend(data_dir=None):
+    """Rechen-Placement des Personen-Backbones: Config-Schalter
+    `person_backend` (Store <data_dir>/config.json, PAAR in verifyd),
+    Standard "cpu". GPU/NPU ist bewusst KEIN Automatismus: 11.08. toetete
+    ein zusaetzlicher OpenVINO-Kontext auf der iGPU die Live-Waechter
+    (CL_OUT_OF_RESOURCES) — heben nur nach Messung."""
+    if data_dir:
+        try:
+            wert = json.load(open(os.path.join(data_dir, "config.json"))) \
+                .get("person_backend")
+            if wert:
+                return str(wert)
+        except (OSError, ValueError):
+            pass
+    return "cpu"
+
+
+def _providers(backend):
+    """onnxruntime-Provider-Liste zum Backend-Schalter — VOLLE kind-Menge
+    der Registry (cpu / openvino / cuda / migraphx, Deckungs-Vertrag SK1):
+    "cpu" | "openvino:GPU" | "openvino:NPU" | "cuda" | "migraphx". Jeder
+    Wert setzt das passende Image voraus (openvino nur in gpu/gpu-legacy,
+    cuda nur im cuda-Image, migraphx nur in rocm); CPU haengt immer als
+    Fallback dran, session_bauen faellt LAUT zurueck."""
+    if isinstance(backend, str) and backend.startswith("openvino:"):
+        return [("OpenVINOExecutionProvider",
+                 {"device_type": backend.split(":", 1)[1]}),
+                "CPUExecutionProvider"]
+    if backend == "cuda":
+        return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    if backend == "migraphx":
+        return ["MIGraphXExecutionProvider", "CPUExecutionProvider"]
+    return ["CPUExecutionProvider"]
+
+
+def session_bauen(backbone, data_dir=None):
+    """DIE eine ORT-Session-Fabrik des Personen-Pfads (Training UND Serving,
+    personlive nutzt sie mit). Scheitert das konfigurierte Backend, faellt
+    sie LAUT auf CPU zurueck — nie still ein anderes Placement."""
+    import onnxruntime as ort
+    from face_audit import _ort_thread_opts
+    backend = _person_backend(data_dir)
+    try:
+        return ort.InferenceSession(_modell_pfad(backbone),
+                                    providers=_providers(backend),
+                                    sess_options=_ort_thread_opts())
+    except Exception:
+        if backend == "cpu":
+            raise
+        print(f"[personmodell] person_backend={backend} nicht verfuegbar — "
+              "LAUTER Rueckfall auf CPU", flush=True)
+        return ort.InferenceSession(_modell_pfad(backbone),
+                                    providers=["CPUExecutionProvider"],
+                                    sess_options=_ort_thread_opts())
 
 
 def modell_dir(data_dir):
@@ -82,7 +167,7 @@ EICH_SEEDS = (7, 17, 27)      # drei feste Faltenaufteilungen gegen die
                               # Einzellos-Unruhe der Schwelle (.141)
 
 
-def _eichung(X, y, k_max=5, k_fremd=None):
+def _eichung(X, y, k_max=5, k_fremd=None, whitening=None):
     """Schwellen-Eichung per Kreuz-Validierung AUF DEM GELERNTEN MATERIAL:
     je Haltefalte urteilt ein frisch trainiertes Modell ueber ungesehene
     Bilder.
@@ -100,13 +185,13 @@ def _eichung(X, y, k_max=5, k_fremd=None):
     Unter FREMD_MIN Fremden fallen wir auf die alte Regel zurueck (Falten
     nicht fuellbar) und vermerken n_fremd, damit der Status nicht luegt."""
     from sklearn.model_selection import StratifiedKFold, cross_val_predict
-    from sklearn.svm import SVC
     y = np.asarray(y)
     ist_fremd = (y == k_fremd) if k_fremd is not None \
         else np.zeros(len(y), dtype=bool)
     n_fremd = int(ist_fremd.sum())
     if k_fremd is not None and n_fremd < FREMD_MIN:
-        e = _eichung(X[~ist_fremd], y[~ist_fremd], k_max)   # alte Regel
+        e = _eichung(X[~ist_fremd], y[~ist_fremd], k_max,
+                     whitening=whitening)                   # alte Regel
         if e:
             e["n_fremd"] = n_fremd
         return e
@@ -117,7 +202,7 @@ def _eichung(X, y, k_max=5, k_fremd=None):
     lo, hi = REGEL_GRENZEN["schwelle"]
     if k_fremd is None:
         proba = cross_val_predict(
-            SVC(probability=True, class_weight="balanced", random_state=7),
+            _klassifikator(7, whitening),
             X, y, method="predict_proba",
             cv=StratifiedKFold(k, shuffle=True, random_state=7))
         eigen = proba[np.arange(len(y)), y]
@@ -137,7 +222,7 @@ def _eichung(X, y, k_max=5, k_fremd=None):
     # Spalten 0..k_fremd-1 sind die PERSONEN (Label-Index = Spalten-Index,
     # weil sklearn die Klassen sortiert und FREMD hinten haengt).
     probas = [cross_val_predict(
-        SVC(probability=True, class_weight="balanced", random_state=seed),
+        _klassifikator(seed, whitening),
         X, y, method="predict_proba",
         cv=StratifiedKFold(k, shuffle=True, random_state=seed))
         for seed in EICH_SEEDS]
@@ -168,49 +253,107 @@ def status_lesen(data_dir):
     return json.load(open(p))
 
 
-def _dino_pfad():
-    for k in (os.environ.get("SUSLIK_DINO") or "",
-              "/app/modelle/dinov2_vits14_126x252.onnx",
-              os.path.join(WURZEL, "modelle",
-                           "dinov2_vits14_126x252.onnx")):
+def _modell_pfad(backbone):
+    bb = BACKBONES[backbone]
+    for k in (os.environ.get(bb["env"]) or "",
+              "/app/modelle/" + bb["datei"],
+              os.path.join(WURZEL, "modelle", bb["datei"])):
         if k and os.path.exists(k):
             return k
-    raise RuntimeError("DINOv2-ONNX fehlt (modelle/)")
+    raise RuntimeError(f"Backbone-ONNX fehlt: {bb['datei']} (modelle/)")
 
 
-def _bild_array(p):
+def _dino_pfad():
+    """Rueckwaerts-Griff (Importeure vor .203)."""
+    return _modell_pfad(BACKBONE_ALT)
+
+
+def _resample(backbone):
     from PIL import Image
-    im = np.asarray(Image.open(p).convert("RGB").resize(GROESSE),
+    return (Image.BILINEAR if BACKBONES[backbone]["filter"] == "bilinear"
+            else Image.BICUBIC)
+
+
+def _bild_array(p, backbone=BACKBONE_ALT):
+    from PIL import Image
+    im = np.asarray(Image.open(p).convert("RGB")
+                    .resize(BACKBONES[backbone]["groesse"],
+                            _resample(backbone)),
                     dtype=np.float32) / 255.0
     return ((im - MEAN) / STD).transpose(2, 0, 1)
 
 
-def _emb(pfade):
+class PCAWhite:
+    """PCA-Whitening als sklearn-kompatibler Transformer: top-`k_weg`
+    Hauptkomponenten streichen, auf `deckel` Komponenten kappen, whiten,
+    danach wieder L2 (Mess-Konvention der Waagschale-Reihe). Als Pipeline-
+    Stufe wird er in der Kreuzvalidierung JE TRAININGS-FALTE gefittet —
+    leckfrei, exakt wie im Messpaket. Lebt hier (nicht im Skript), weil
+    svm.pkl ihn beim Entpickeln importieren koennen muss."""
+
+    def __init__(self, k_weg=0, deckel=128):
+        self.k_weg, self.deckel = k_weg, deckel
+
+    def fit(self, X, y=None):
+        from sklearn.decomposition import PCA
+        n = PCA(svd_solver="full").fit(X)
+        gueltig = int((n.explained_variance_ > 1e-10).sum())
+        if self.deckel:
+            gueltig = min(gueltig, self.k_weg + self.deckel)
+        self.mean_ = n.mean_
+        self.comp_ = n.components_[self.k_weg:gueltig]
+        self.skala_ = np.sqrt(n.explained_variance_[self.k_weg:gueltig])
+        return self
+
+    def transform(self, X):
+        Z = (np.asarray(X) - self.mean_) @ self.comp_.T / self.skala_
+        nn = np.linalg.norm(Z, axis=1, keepdims=True)
+        return Z / np.maximum(nn, 1e-12)
+
+    # clone()-Vertrag von sklearn (cross_val_predict klont den Estimator)
+    def get_params(self, deep=True):
+        return {"k_weg": self.k_weg, "deckel": self.deckel}
+
+    def set_params(self, **p):
+        for k, v in p.items():
+            setattr(self, k, v)
+        return self
+
+
+def _klassifikator(seed, whitening):
+    """SVC, bei Backbones mit Whitening als Pipeline (Whitening + SVC) —
+    Training, Eichung und Serving nutzen ausnahmslos DIESEN Bau."""
+    from sklearn.svm import SVC
+    m = SVC(probability=True, class_weight="balanced", random_state=seed)
+    if whitening:
+        from sklearn.pipeline import Pipeline
+        return Pipeline([("white", PCAWhite(*whitening)), ("svc", m)])
+    return m
+
+
+def _emb(pfade, backbone=BACKBONE_ALT, data_dir=None):
     """-> (X, ok_indices, uebersprungen). Je DATEI tolerant (.141 Panel-MUSS:
     eine einzige unlesbare Datei im hand-befuellten fremd/-Ordner — leere/
     abgebrochene Kopie, Nicht-Bild-Inhalt — legte sonst JEDES weitere
     Training still, und die Modell-Karte zeigte fuer immer den Alt-Stand als
     aktuell). Unlesbares wird uebersprungen und GEZAEHLT, nie ein stiller
     Verlust; der Aufrufer haelt seine Label-Liste ueber ok_indices synchron."""
-    import onnxruntime as ort
-    from face_audit import _ort_thread_opts   # zentrale Thread-Kappung (#21): ohne
-    # SessionOptions baut ORT den Intra-Op-Pool nach hardware_concurrency des WIRTS
-    s = ort.InferenceSession(_dino_pfad(),
-                             providers=["CPUExecutionProvider"],
-                             sess_options=_ort_thread_opts())
+    bb = BACKBONES[backbone]
+    s = session_bauen(backbone, data_dir)
     arrays, ok = [], []
     uebersprungen = 0
     for i, p in enumerate(pfade):
         try:
-            arrays.append(_bild_array(p))
+            arrays.append(_bild_array(p, backbone))
             ok.append(i)
         except Exception:
             uebersprungen += 1
     embs = []
-    for i in range(0, len(arrays), 16):
-        e = s.run(None, {"bild": np.stack(arrays[i:i + 16])})[0]
+    schritt = int(bb.get("batch") or 1)
+    for i in range(0, len(arrays), schritt):
+        e = s.run(None, {bb["eingang"]: np.stack(arrays[i:i + schritt])})[0]
         embs.append(e / np.linalg.norm(e, axis=1, keepdims=True))
-    X = np.concatenate(embs) if embs else np.zeros((0, 384))
+    X = np.concatenate(embs) if embs else np.zeros((0, bb["dim"]))
     return X, ok, uebersprungen
 
 
@@ -239,7 +382,12 @@ def trainieren(data_dir):
     personen = sorted(set(labels))
     fremde = fremd_pfade(data_dir)
     alt = status_lesen(data_dir) or {}
+    # .203: NEUE Trainings laufen auf dem Standard-Backbone (omz0277) —
+    # ein Alt-Modell laeuft bis dahin unveraendert auf seinem eigenen
+    # Backbone weiter (svm.pkl traegt den Namen, personlive liest ihn).
+    backbone = BACKBONE_STANDARD
     status = {"ts": time.time(), "bilder": len(pfade),
+              "backbone": backbone,
               "personen": {p: labels.count(p) for p in personen},
               "fremd_bilder": len(fremde),
               # Scharf-Zustand + Regel-Werte UEBERLEBEN ein Re-Training —
@@ -253,7 +401,7 @@ def trainieren(data_dir):
     if not pfade:
         status["modell"] = "leer"
     else:
-        X, ok, skip_p = _emb(pfade)
+        X, ok, skip_p = _emb(pfade, backbone, data_dir)
         labels = [labels[i] for i in ok]
         personen = sorted(set(labels))
         status["personen"] = {p: labels.count(p) for p in personen}
@@ -261,7 +409,6 @@ def trainieren(data_dir):
         np.savez(os.path.join(md, "embeddings.npz"), X=X,
                  labels=np.array(labels))
         if len(personen) >= 2:
-            from sklearn.svm import SVC
             import pickle
             y = np.array([personen.index(l) for l in labels])
             # .139: bestaetigte Fremde als EIGENE Klasse HINTER den Personen
@@ -274,21 +421,22 @@ def trainieren(data_dir):
             # die Fremden komplett draussen, Modell und Zahlen stimmen
             # wieder ueberein.
             skip_f = 0
-            X_fr = np.zeros((0, X.shape[1] if len(X) else 384))
+            X_fr = np.zeros((0, X.shape[1] if len(X)
+                             else BACKBONES[backbone]["dim"]))
             if fremde:
-                X_fr, _okf, skip_f = _emb(fremde)
+                X_fr, _okf, skip_f = _emb(fremde, backbone, data_dir)
             fremd_aktiv = len(X_fr) >= FREMD_MIN
             k_fremd = len(personen) if fremd_aktiv else None
             Xt, yt = X, y
             if fremd_aktiv:
                 Xt = np.vstack([X, X_fr])
                 yt = np.concatenate([y, np.full(len(X_fr), k_fremd)])
-            m = SVC(probability=True, class_weight="balanced",
-                    random_state=7)
+            m = _klassifikator(7, BACKBONES[backbone]["whitening"])
             m.fit(Xt, yt)
             with open(os.path.join(md, "svm.pkl"), "wb") as f:
                 pickle.dump({"personen": personen, "svm": m,
-                             "fremd": fremd_aktiv}, f)
+                             "fremd": fremd_aktiv,
+                             "backbone": backbone}, f)
             status["modell"] = (f"svm ({len(personen)} classes"
                                 + (" + strangers)" if fremd_aktiv else ")"))
             status["fremd_bilder"] = len(X_fr)
@@ -296,7 +444,9 @@ def trainieren(data_dir):
             if skip_p or skip_f:
                 status["unlesbar_uebersprungen"] = {"personen": skip_p,
                                                    "fremd": skip_f}
-            status["eichung"] = _eichung(Xt, yt, k_fremd=k_fremd)
+            status["eichung"] = _eichung(
+                Xt, yt, k_fremd=k_fremd,
+                whitening=BACKBONES[backbone]["whitening"])
         else:
             for rest in glob.glob(os.path.join(md, "svm.pkl")):
                 os.remove(rest)

@@ -34,8 +34,16 @@ _STATIK_STEMPEL = _statik_stempel()
 # Detection-Einstellung (szenario_gap_min, clip_retention_d, frigate_sync, debug …).
 NAV = [
     ("Activity", [("/heute", "Today"), ("/ereignisse", "Events"), ("/offen", "To label")]),
-    ("People",   [("/gesichter", "Known"), ("/unbekannte", "Unknown"),
-                  ("/lernen", "Suggestions"), ("/qualitaet", "Quality")]),
+    # .220 (User 16.08., Mockup-Abnahme): der Gesichts-Bereich "eingedampft" —
+    # People + Face-Learn verschmelzen zu FACES mit Kachel-Startseite
+    # (Avatar-Leiste, gefuehrter Lern-Fluss). Easy sieht nur die Startseite,
+    # Expert behaelt alle Detail-Blaetter als Unterreiter (NUR_EXPERT_BLAETTER
+    # blendet aus, nichts wird geloescht; Erreichbarkeit fuer Easy laeuft ueber
+    # die Kachel-Knoepfe — dasselbe Muster wie bei Configuration).
+    ("Faces",    [("/faces", "Faces"),
+                  ("/gesichter", "Known"), ("/unbekannte", "Unknown"),
+                  ("/lernen", "Suggestions"), ("/lernlauf", "Face learn"),
+                  ("/lernlauf/anker", "Anchors"), ("/qualitaet", "Quality")]),
     # Person als EIGENER Hauptbereich neben People (User 04.08. abend):
     # People zeigt die GESICHTER, Person die KOERPER-Bilder je Person.
     # Z8 (konzept_frames.md §7): "Judged images" = Kontroll-Speicher der
@@ -44,7 +52,10 @@ NAV = [
     # verschwindet, ist schwerer zu finden als einer, der sich erklaert.
     ("Person",   [("/person", "Body images"),
                   ("/person/kontrolle", "Judged images"),
-                  ("/person/modell", "Model status")]),
+                  ("/person/modell", "Model status"),
+                  # .220: Person learn zieht aus dem aufgeloesten Learn-Bereich
+                  # hierher — der Koerper-Lernlauf gehoert fachlich zu Person.
+                  ("/personlauf", "Person learn")]),
     # Vision detect zwischen Person und Area (konzept_vision.md v2 §4): der
     # dritte Erkennungspfad. V1 zeigt Verbindung + Test; Galerie-Wizard und
     # Status folgen. Der Reiter steht auch AUS sichtbar da — eine Seite, die
@@ -59,23 +70,31 @@ NAV = [
     # ueber die Today-Seitenleiste erreichbar — "und wo sehe ich jetzt, was er
     # gesehen hat?" hatte keinen Menue-Weg.
     ("Live",     [("/live", "Live watchers"), ("/live_alerts", "Live alerts")]),
-    # Areas als EIGENER Hauptbereich zwischen People und Learn (Design-Entscheid):
-    # dort liegen Sicht-Einstieg UND Konfiguration (anlegen/loeschen/zuweisen).
-    ("Areas",    [("/areas", "Areas")]),
-    # .83: Learn als EIGENER Hauptbereich — Kernfunktion, nicht
-    # laenger ein Anhaengsel der People-Seite.
-    # PE1 (stufe2.md): Learn geteilt in Face learn (bisheriger Lernlauf)
-    # und Person learn (Koerper-Strang) — User-Entscheid 04.08.
-    ("Learn",    [("/lernlauf", "Face learn"), ("/lernlauf/anker", "Anchors"),
-                  ("/personlauf", "Person learn")]),
-    # .137: der Frigate-Abgleich bekommt einen EIGENEN Hauptbereich (User 06.08.).
-    # Die Seite ist die einzige Sync-Strecke in beide Richtungen und war bisher nur
-    # ueber die System-Karte erreichbar — wer nach "Frigate" sucht, sucht oben.
-    ("Frigate sync", [("/sync_auswahl", "Frigate sync")]),
-    ("Settings", [("/kameras", "Cameras"), ("/benachrichtigungen", "Notifications"),
+    # Areas war .83-.221 ein eigener Hauptbereich; .222 (User): "kein extra
+    # Punkt mehr" — das Blatt lebt als Expert-Unterreiter von Configuration,
+    # Easy erreicht es ueber die Areas-Kachel der Property-set-up-Reihe.
+    # .83-.219 stand hier "Learn" als eigener Hauptbereich; .220 loest ihn auf:
+    # Face learn/Anchors leben unter FACES, Person learn unter PERSON.
+    # .137: der Frigate-Abgleich bekam einen EIGENEN Hauptbereich (User 06.08.).
+    # .216 (User 16.08.): der Bereich heisst "Frigate" und beginnt mit einer
+    # Kachel-Startseite im /erkennung-Muster (Connection/Cameras/Sync/FR-Zustand);
+    # die Sync-Seite bleibt als Unterreiter, in der Easy-Sicht ausgeblendet
+    # (die Kachel fuehrt hin — dieselbe Mechanik wie bei Configuration).
+    ("Frigate", [("/frigate", "Frigate"),
+                 ("/sync_auswahl", "Frigate sync")]),
+    # .207 (User 16.08.: die Vier-Saeulen-Seite ist "die Startseite fuer die
+    # Konfiguration"): /erkennung steht VORN — der Settings-Klick oben landet
+    # direkt dort (Abschnitts-Link = kinder[0]). Die uebrigen Blaetter sind
+    # Expert-Sicht (NUR_EXPERT_BLAETTER, Easy blendet ihre Unterreiter aus).
+    # .210 (User 16.08.): der Reiter heisst "Configuration", nicht "Settings".
+    ("Configuration", [("/erkennung", "Recognition"),
+                  ("/kameras", "Cameras"), ("/benachrichtigungen", "Notifications"),
+                  ("/areas", "Areas"),          # .222: aus der Hauptnav hierher
                   # .189 (User 13.08.: "vier Menuepunkte"): die Erkennungskette
                   # als EIGENES Blatt VOR Advanced — sie ist Verhaltens-Config
-                  # erster Klasse, kein versteckter Tabellen-Parameter.
+                  # erster Klasse, kein versteckter Tabellen-Parameter; seit
+                  # .207 Teil der Expert-Sicht (der User-Menue-Entscheid bleibt
+                  # dort erhalten, Easy blendet nur aus).
                   ("/kette", "Recognition chain"),
                   ("/konfiguration", "Advanced")]),
     # Recognition test als EIGENER Einstieg neben System (konzept_vision.md v2 §4,
@@ -88,6 +107,17 @@ NAV = [
 # Blattseiten ohne eigenen Reiter ihrem Abschnitt zuordnen, damit oben trotzdem der richtige
 # Bereich leuchtet (heute leuchtet auf /setup gar nichts).
 BLATT = {"/setup": "/kameras", "/aehnliche": "/gesichter", "/event": "/heute", "/auftritte": "/heute"}
+
+# .207 (User 16.08.: "wenn der Schalter auf Basis ist, erscheint dieses Bild und
+# nicht mehr die anderen zusaetzlich"): Blaetter, deren UNTERREITER nur im
+# Expert-Modus sichtbar sind (CSS-Klasse nur-expert, body.easy versteckt).
+# Nur ausgeblendet, nie gesperrt — die Seiten bleiben per URL erreichbar.
+NUR_EXPERT_BLAETTER = {"/kameras", "/benachrichtigungen", "/kette", "/konfiguration",
+                       "/sync_auswahl", "/areas",
+                       # .220: die Faces-Detail-Blaetter — Easy fuehrt ueber
+                       # die Kachel-Knoepfe der Startseite dorthin.
+                       "/gesichter", "/unbekannte", "/lernen", "/lernlauf",
+                       "/lernlauf/anker", "/qualitaet"}
 
 # Die beiden Galerie-Links ("Review gallery", "Strangers gallery") sind am 25.07. entfernt worden:
 # erzeugt wurden die Seiten von prototypes/backtest.py, das in keinem Image liegt. Fuer JEDE
@@ -120,9 +150,13 @@ def layout(titel, aktiv, inhalt, banner=None, refresh=None):
     # BLATT bildet /setup auf /kameras ab, damit oben "Settings" leuchtet — aber der
     # Unterreiter "Cameras" leuchtete dadurch MIT, obwohl man gar nicht auf /kameras ist.
     # Der Abschnitt kommt aus dem gemappten Pfad (a), der Unterreiter aus dem echten (aktiv).
+    def _u_klasse(p):
+        k = (["aktiv"] if p == aktiv else []) \
+            + (["nur-expert"] if p in NUR_EXPERT_BLAETTER else [])
+        return f' class="{" ".join(k)}"' if k else ""
     unter = ("" if len(kinder) < 2 else
              '<div class="subnav"><div class="inner">' + "".join(
-                 f'<a href="{p}"{" class=aktiv" if p == aktiv else ""}>{html.escape(n)}</a>'
+                 f'<a href="{p}"{_u_klasse(p)}>{html.escape(n)}</a>'
                  for p, n in kinder) + "</div></div>")
     ver = os.environ.get("SUSLIK_VERSION", "")   # feste Image-Version (leer im rohen dev-Lauf)
     # Update-Marke (#53): fest im Kopf, aber leise — ein kleiner Link neben der Version,
@@ -142,7 +176,19 @@ def layout(titel, aktiv, inhalt, banner=None, refresh=None):
     # gefunden ("sollten wir nicht darauf hinweisen, dass es beide gibt"). Ein Bedienelement,
     # das der Betreiber uebersieht, existiert praktisch nicht. Jetzt mit sichtbarer Beschriftung,
     # die den ZIELzustand nennt (nicht den aktuellen — sonst raet man, was der Klick tut).
-    rechts = ('<span class="rechts"><span class="live"><span class="d"></span>Live</span>'
+    # Easy/Expert-Schalter (.204, User 15.08.: "links neben Live, deutlich erkennbar",
+    # Optik analog Theme-Knopf): Zwei-Segment-Pille zeigt BEIDE Modi, der aktive traegt
+    # die Akzentfarbe — Zustand und Klickziel in einem, nichts zum Raten (◐-Lehre oben).
+    # AKTUELL NUR DER SCHALTER: Modus wird gemerkt (localStorage, analog Theme) und
+    # steht als body-Klasse "easy" bereit; die Seiten ziehen ihre Easy-Ansichten
+    # Schritt fuer Schritt nach (stand.md Easy-Umbau).
+    rechts = ('<span class="rechts">'
+              '<span class="modus" id="ui-modus" '
+              'title="Easy shows the core pages — Expert shows everything. '
+              'Nothing is deleted, Easy only hides.">'
+              '<button type="button" data-m="easy">Easy</button>'
+              '<button type="button" data-m="expert">Expert</button></span>'
+              '<span class="live"><span class="d"></span>Live</span>'
               '<button class="toggle" id="theme-toggle" '
               'title="Switch between light and dark" aria-label="Switch colour theme">'
               '<span class="tg-ico" aria-hidden="true">◐</span>'

@@ -522,17 +522,8 @@ a.pchip:hover, a.badge.warn:hover { filter: brightness(1.15); }
 .pkwrap { display: flex; flex-direction: column; gap: 4px; }
 .pkwrap .pk { flex: 1; }
 .ukassign { align-self: flex-start; }
-.ukpanel { background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
-           padding: 8px; }
-.ukthumbs { display: flex; flex-wrap: wrap; gap: 6px; }
-.ukw { cursor: pointer; border: 2px solid transparent; border-radius: 6px; line-height: 0; }
-.ukw input { position: absolute; opacity: 0; pointer-events: none; }
-.ukw img { height: 64px; border-radius: 4px; display: block; }
-.ukw:has(input:checked) { border-color: var(--accent); }
-.ukw:hover { border-color: var(--border-strong); }
-/* uid-Karte ist selbst der Zuweisungs-Klick (User-Feedback 25.07., Screenshot-Test) */
-.pk-klick { cursor: pointer; }
-.pk-klick:hover { border-color: var(--accent); }
+/* .234: ukpanel/ukw/pk-klick entfernt — Today-Klappe wich dem
+   konsistenten Karten-Link (EIN Klick-Gesetz fuer alle Karten). */
 /* Event-Galerie pro Person (User-Befund 25.07.: flaches Raster = Durcheinander) */
 .evgrp { margin: 14px 0 6px; font-size: 14px; }
 .evgrp .cnt { color: var(--dim); font-weight: 400; margin-left: 6px; }
@@ -673,3 +664,123 @@ a.pchip:hover, a.badge.warn:hover { filter: brightness(1.15); }
 .lv-knoepfe { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .lv-radio { display: block; margin: 3px 0; }
 .lv-erklaer { border-left: 4px solid var(--accent); }
+
+/* ---- Easy/Expert-Schalter (.204): in der Kopfzeile links neben Live, Optik analog
+   Theme-Knopf. AKTUELL nur der Schalter (Modus als body-Klasse "easy"); die Seiten
+   ziehen ihre Easy-Ansichten Schritt fuer Schritt nach. ---- */
+nav .modus { display: inline-flex; border: 1px solid var(--border); border-radius: 999px;
+             overflow: hidden; }
+nav .modus button { background: var(--surface-2); border: 0; color: var(--dim);
+                    font-size: 12px; font-weight: 600; padding: 6px 12px; cursor: pointer;
+                    line-height: 1; }
+nav .modus button:hover { color: var(--text); }
+nav .modus button.an { background: var(--accent); color: #fff; }
+
+/* ---- Vier-Saeulen-Erkennungsseite /erkennung (.205): EINE Seite fuer Easy und
+   Expert — Elemente mit .nur-expert blendet der Easy-Modus aus (nie loeschen,
+   nur ausblenden). Kippschalter-Bauform = die vom User bestaetigte Vorlage. ---- */
+body.easy .nur-expert { display: none; }
+.ek-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+@media (max-width: 1100px) { .ek-grid { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 560px) { .ek-grid { grid-template-columns: 1fr; } }
+.ek-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+           padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.ek-card h3 { margin: 0; font-size: 16px; display: flex; align-items: center; gap: 8px; }
+.ek-satz { color: var(--dim); font-size: 13px; line-height: 1.45; margin: 0; }
+.ek-beweis { font-size: 12px; color: var(--dim); border-top: 1px dashed var(--border);
+             padding-top: 8px; }
+.ek-beweis b { color: var(--text); font-weight: 600; }
+.ek-fuss { margin-top: auto; }
+.ek-kippzeile { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ek-kippzeile .ek-zl { font-size: 13px; font-weight: 600; }
+.ek-kipp { position: relative; width: 46px; height: 24px; border-radius: 999px;
+           border: 1px solid var(--border); background: var(--surface-2); cursor: pointer;
+           transition: background .15s; flex: none; }
+.ek-kipp::after { content: ""; position: absolute; top: 2px; left: 2px; width: 18px;
+                  height: 18px; border-radius: 50%; background: var(--dim);
+                  transition: left .15s, background .15s; }
+.ek-kipp.an { background: var(--accent); }
+.ek-kipp.an::after { left: 24px; background: #fff; }
+.ek-kipp.fest { cursor: not-allowed; opacity: .75; }
+.ek-unter { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.ek-unter button { flex: 1; background: var(--surface-2); border: 0; color: var(--dim);
+                   font-size: 12px; font-weight: 600; padding: 6px 4px; cursor: pointer;
+                   line-height: 1.2; }
+.ek-unter button.an { background: var(--accent-weak); color: var(--accent); }
+.ek-card.aus .ek-satz, .ek-card.aus .ek-beweis { opacity: .55; }
+.ek-card.aus .ek-unter { display: none; }
+.ek-knopf { display: inline-block; width: 100%; text-align: center; background: var(--surface-2);
+            border: 1px solid var(--border); border-radius: 8px; color: var(--text);
+            font-size: 13px; font-weight: 600; padding: 8px 10px; box-sizing: border-box; }
+.ek-knopf:hover { border-color: var(--accent); text-decoration: none; }
+
+/* ---- In-App-Anleitungen (.208): Hilfe-Link je Kachel + Zwei-Tiefen-Seite.
+   nur-easy = nur im Easy-Modus sichtbar (Hinweis "Expert zeigt mehr");
+   Gegenstueck zu body.easy .nur-expert weiter oben. ---- */
+body:not(.easy) .nur-easy { display: none; }
+/* .212 (User 16.08.: "sehr wenig deutlich"): der Hilfe-Link ist fuer neue
+   Nutzer der ERSTE Griff der Kachel — halbfett + unterstrichen (das aelteste
+   und eindeutigste Link-Signal, Zielgruppe liest Text besser als Icons),
+   ohne mit Kippschalter/Knoepfen zu konkurrieren. */
+/* .237: Zuweisen-Auswahl der Unbekannt-Tagessicht (bewusste Einzel-Auswahl,
+   Muster der frueheren Today-Klappe — jetzt am richtigen Ort). */
+.ub-wahl { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 10px; }
+.ubw { cursor: pointer; border: 2px solid transparent; border-radius: 6px;
+  line-height: 0; position: relative; }
+.ubw input { position: absolute; opacity: 0; pointer-events: none; }
+.ubw img { height: 64px; border-radius: 4px; display: block; }
+.ubw:has(input:checked) { border-color: var(--accent); }
+.ubw:hover { border-color: var(--border-strong); }
+/* .233: Pass-Knoepfe (User: "schicker, mit kleinem Icon") — einheitliche
+   Hoehe, Icon-Slot, ruhiger Hover; Emoji-Ikonografie wie die Kacheln. */
+.pass-knopf { display: inline-flex; align-items: center; gap: 6px;
+  border-radius: 8px; padding: 5px 13px; font-weight: 600; }
+.pass-knopf .pk-icon { font-size: 13px; line-height: 1; }
+.pass-knopf:hover:not(:disabled) { border-color: var(--accent); }
+/* .227: Referenz-Marker am Thumb (User: 'kann nicht erkennen, wurden die
+   uebernommen?') — gruen umrandet = dieses Event traegt eine aktive Referenz;
+   Server rendert dauerhaft, JS setzt es nach der Uebernahme sofort. */
+.pass-thumb.pass-thumb-ref img { outline: 3px solid var(--ok); }
+/* .226: Lern-Bruecke — Auswahl-OVERLAY (User: 'Popup mit den Gesichtern,
+   deselektieren, OK oder Abbruch' + Sorge vor Browser-Popups): ein In-Page-
+   Dialog aus eigenem HTML, kein window.open — das blockt kein Browser. */
+.lb-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.55);
+  z-index: 300; display: flex; align-items: center; justify-content: center; }
+.lb-dialog { background: var(--bg); border: 1px solid var(--border-strong);
+  border-radius: 12px; padding: 18px; max-width: 640px; max-height: 80vh;
+  overflow-y: auto; box-shadow: var(--shadow); }
+.lb-wahl { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.lb-wahl label { position: relative; cursor: pointer; display: block; }
+.lb-wahl input { position: absolute; top: 4px; left: 4px; z-index: 2; }
+.lb-wahl img { width: 96px; height: 96px; object-fit: cover;
+  border-radius: 6px; display: block; }
+.lb-wahl input:not(:checked) + img { opacity: .35; outline: none; }
+.lb-wahl input:checked + img { outline: 3px solid var(--ok); }
+/* .222: Abschnitts-Titel zwischen zwei Kachel-Reihen (Property set-up). */
+.ek-abschnitt { margin: 18px 0 8px; font-size: 15px; color: var(--dim); }
+/* .220: Faces-Startseite — Avatar-Leiste (User: je Person ein kleines
+   Gesicht als Icon, Klick zeigt alle dahinter) + Schritt-Zeilen. */
+.fc-avatare { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0; }
+.fc-avatar { display:block; text-align:center; text-decoration:none;
+  color:var(--text); font-size:11px; width:56px; }
+.fc-avatar img { width:52px; height:52px; border-radius:50%;
+  object-fit:cover; object-position:top; border:2px solid var(--border); }
+.fc-avatar:hover img { border-color:var(--accent); }
+.fc-avatar span { display:block; overflow:hidden; text-overflow:ellipsis;
+  white-space:nowrap; }
+.fc-schritt { display:flex; gap:10px; margin:7px 0; font-size:13.5px; }
+.fc-schritt b { background:var(--accent); color:var(--on-ink);
+  border-radius:50%; width:22px; height:22px; flex:0 0 22px;
+  text-align:center; line-height:22px; font-size:12px; }
+/* .219: Beta-Marke der AI-vision-Kachel (User 16.08.: "klar sehen, dass
+   dieser Bereich noch Beta-Funktion hat") — Text, kein Farbalarm. */
+.ek-beta { font-size: 11px; font-weight: 600; letter-spacing: .4px;
+  text-transform: uppercase; color: var(--dim);
+  border: 1px solid var(--border-strong); border-radius: 4px;
+  padding: 1px 6px; margin-left: 6px; vertical-align: 2px; }
+.ek-hilfe { font-size: 13px; }
+.ek-hilfe a { color: var(--accent); font-weight: 600;
+              text-decoration: underline; text-underline-offset: 3px; }
+.ek-hilfe a:hover { color: var(--text); }
+.hilfe { max-width: 640px; }
+.hilfe p { line-height: 1.55; }

@@ -1375,9 +1375,66 @@ def lade_vorschlaege(person):
         return None
 
 
+# .230 (User 17.08.: "der Check ist sehr sehr langsam" — GEMESSEN: 11-13 s
+# Embedder-Aufbau bei JEDEM Aufruf, refcache-Lesen 0,01 s): der Embedder der
+# Vorschlags-/Bruecken-Strecke wird prozessweit EINMAL gebaut und danach
+# wiederverwendet. Bewusst stehende Belegung statt wiederkehrender
+# Lade-Spitzen (nach der OOM-Jagd die vorhersagbarere Form); Lock gegen
+# parallele Erst-Initialisierung (Nachlern-Timer + Bruecken-Klick).
+_EMB_CACHE = None
+_EMB_LOCK = threading.Lock()
+_EMB_LETZTE = 0.0
+# .232 (User-Entwurf 17.08.: "wenn jemand auf Today klickt, das Modell
+# vorbereiten und nach einer gewissen Zeit aus dem Speicher nehmen"):
+# Leerlauf-Freigabe statt Dauerbelegung — gemessen 379 MB RSS; auf 24 GiB
+# egal, auf kleinen Produkt-Kisten nicht. Der Waechter prueft alle 5 min.
+EMB_LEERLAUF_S = 15 * 60
+_EMB_WAECHTER = False
+
+
+def _emb_waechter():
+    global _EMB_CACHE, _EMB_WAECHTER
+    with _EMB_LOCK:
+        if _EMB_CACHE is not None and time.time() - _EMB_LETZTE > EMB_LEERLAUF_S:
+            _EMB_CACHE = None              # laufende Nutzer halten ihre lokale
+            _EMB_WAECHTER = False          # Referenz; Neu-Aufbau beim naechsten
+            return                         # Griff. Waechter endet mit dem Cache.
+    t = threading.Timer(300, _emb_waechter)
+    t.daemon = True
+    t.start()
+
+
+def _embedder_geteilt():
+    global _EMB_CACHE, _EMB_LETZTE, _EMB_WAECHTER
+    with _EMB_LOCK:
+        _EMB_LETZTE = time.time()
+        if _EMB_CACHE is None:
+            _EMB_CACHE = Embedder()
+        if not _EMB_WAECHTER:
+            _EMB_WAECHTER = True
+            t = threading.Timer(300, _emb_waechter)
+            t.daemon = True
+            t.start()
+        return _EMB_CACHE
+
+
+def embedder_vorwaermen():
+    """Nicht-blockierender Vorwaerm-Anstoss (Today-/Auftritts-Klick): baut den
+    geteilten Embedder im Hintergrund auf, damit der erste Check sofort
+    antwortet. Mehrfach-Anstoesse laufen auf das Lock und sind harmlos."""
+    threading.Thread(target=_embedder_geteilt, daemon=True).start()
+
+
+def embedder_warm():
+    """Ist der geteilte Embedder aufgebaut? (Fuer die ehrliche
+    'model wird geladen'-Antwort des Pruef-Endpunkts, User-Idee 17.08.)"""
+    return _EMB_CACHE is not None
+
+
 def vorschlaege_person(person, tage=7.0, max_n=16, min_kante=70, unscharf_max=350,
                        sim_min=0.45, sim_neu=0.75, sim_unsicher=0.30, abstand=0.10,
-                       kante_gut=120, sharp_gut=700, max_pruef=80):
+                       kante_gut=120, sharp_gut=700, max_pruef=80,
+                       nur_eids=None, schreiben=True, emb=None):
     """Bestands-Suche (User 19.07.): durchsucht die Events der Person aus den letzten Tagen
     nach referenz-tauglichen NEUEN Gesichtern. Quelle sind Events, in denen die Person
     bestaetigt ist ODER (User 21.07.) ihr bestes Match ist — so tauchen auch SCHWACH
@@ -1390,7 +1447,9 @@ def vorschlaege_person(person, tage=7.0, max_n=16, min_kante=70, unscharf_max=35
     Stufe: sicher&gut -> 'empfohlen'; genau eins von beiden -> 'neutral'; sonst -> raus
     ('Not recommended' wird NICHT angezeigt). Neuheit: eigen<sim_neu, sonst Duplikat.
     Neueste Events zuerst, hoechstens max_pruef Bild-Messungen. Ergebnis -> vorschlaege_*.json."""
-    emb = Embedder()
+    # .235: uebergebene Instanz (svc.embedder, OV-schnell) hat Vorrang —
+    # die Bruecke lief sonst auf einer zweiten CPU-Instanz (~2 s je Bild).
+    emb = emb or _embedder_geteilt()
     refs = {}
     cache = os.path.join(CLIPS, "refcache.npz")
     if os.path.exists(cache):                      # pruefe_referenzen haelt ihn frisch
@@ -1418,6 +1477,10 @@ def vorschlaege_person(person, tage=7.0, max_n=16, min_kante=70, unscharf_max=35
                 continue
             eid = d.get("eid")
             if not eid or eid in seen or (d.get("ts") or 0) < grenze:
+                continue
+            # .225 (Lern-Bruecke): auf die Events EINES Durchgangs gescoped —
+            # dieselben Siebe, nur die Quelle ist der eine Pass.
+            if nur_eids is not None and eid not in nur_eids:
                 continue
             if person not in (d.get("bestaetigt") or []):
                 ours = d.get("ours") or {}
@@ -1481,13 +1544,92 @@ def vorschlaege_person(person, tage=7.0, max_n=16, min_kante=70, unscharf_max=35
         if gedeckelt:
             print(f"vorschlaege {person}: cap of {max_pruef} image measurements reached, "
                   f"older events unchecked", flush=True)
-    os.makedirs(ANLERN, exist_ok=True)
-    _schreibe_json_atomar(_vorschlaege_pfad(person),
-                          {"ts": time.time(), "person": person, "tage": tage, "kandidaten": kand})
+    if schreiben:
+        os.makedirs(ANLERN, exist_ok=True)
+        _schreibe_json_atomar(_vorschlaege_pfad(person),
+                              {"ts": time.time(), "person": person, "tage": tage,
+                               "kandidaten": kand})
     return kand
 
 
-def vorschlag_aufnehmen(person, eid, datei):
+def refcache_ergaenzen(person, bild_pfad, datei, emb):
+    """.236 (User-Befund: nach einer Uebernahme war die naechste Pruefung
+    wieder langsam, OHNE Lade-Hinweis — das Modell war warm, aber der
+    verworfene refcache zwang einen vollen Inline-Neuaufbau ueber ~300
+    Referenzbilder): EIN neues Bild wird in den Cache EINGEPFLEGT statt ihn
+    zu verwerfen — Embedding anhaengen + Datei-Liste im §meta nachziehen,
+    atomar (tmp+fsync+replace wie pruefe_referenzen). False = Aufrufer
+    verwirft wie bisher (kein Cache, Modell-Mismatch, Lesefehler)."""
+    ziel = os.path.join(CLIPS, "refcache.npz")
+    tmp = f"{ziel}.tmp-{os.getpid()}"
+    try:
+        if emb is None or not os.path.exists(ziel):
+            return False
+        z = np.load(ziel, allow_pickle=True)
+        meta = _cache_meta(z)
+        if str(meta.get("§modell", "")) != emb.modell:
+            return False
+        img = cv2.imread(bild_pfad)
+        v = emb.embed(img) if img is not None else None
+        if v is None:
+            return False
+        refs = {p: np.asarray(z[p], np.float32) for p in z.files
+                if p not in ("meta", "§meta")}
+        alt = refs.get(person)
+        neu = v.astype(np.float32)[None, :]
+        refs[person] = np.vstack([alt, neu]) if alt is not None and len(alt) else neu
+        want = {k: list(w) for k, w in meta.items() if not str(k).startswith("§")}
+        want.setdefault(person, []).append(datei)
+        want[person] = sorted(set(want[person]))
+        with open(tmp, "wb") as f:
+            np.savez(f, **{"§meta": json.dumps({**want, "§modell": emb.modell})},
+                     **refs)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, ziel)
+        return True
+    except Exception:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return False
+
+
+_REFCACHE_BAU = threading.Lock()
+
+
+def refcache_aufbauen(emb):
+    """.236: refcache im HINTERGRUND neu aufbauen (fuer die Faelle, die weiter
+    voll invalidieren: Undo, Loeschung, Cluster-benenne) — die Bruecke meldet
+    solange ehrlich 'updating …' statt den Neuaufbau inline zu zahlen.
+    Nicht-blockierend fuer Zweitaufrufer (Lock non-blocking)."""
+    if not _REFCACHE_BAU.acquire(blocking=False):
+        return False
+    try:
+        refs = lade_master_refs(emb)
+        want = {}
+        for p in sorted(refs):
+            pd = os.path.join(MASTER, p)
+            want[p] = sorted(f for f in os.listdir(pd)
+                             if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp")))
+        ziel = os.path.join(CLIPS, "refcache.npz")
+        os.makedirs(CLIPS, exist_ok=True)
+        tmp = f"{ziel}.tmp-{os.getpid()}"
+        with open(tmp, "wb") as f:
+            np.savez(f, **{"§meta": json.dumps({**want, "§modell": emb.modell})},
+                     **refs)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, ziel)
+        return True
+    except Exception:
+        return False
+    finally:
+        _REFCACHE_BAU.release()
+
+
+def vorschlag_aufnehmen(person, eid, datei, emb=None):
     """Einen Bestands-Vorschlag als Referenz uebernehmen: Event-Crop -> Master (Containment),
     refs_meta, refcache-Invalidierung; Vorschlags-JSON um den Eintrag bereinigen."""
     import re, shutil
@@ -1513,11 +1655,52 @@ def vorschlag_aufnehmen(person, eid, datei):
         v["kandidaten"] = [k for k in v.get("kandidaten", [])
                            if not (k.get("eid") == eid and k.get("datei") == datei)]
         _schreibe_json_atomar(_vorschlaege_pfad(person), v)   # parallel zum vorschlaege-Subprozess
-    try:
-        os.remove(os.path.join(CLIPS, "refcache.npz"))
-    except FileNotFoundError:
-        pass
-    return True, f"{ziel} aufgenommen"
+    # .236: mit uebergebenem Embedder wird der Cache EINGEPFLEGT statt
+    # verworfen (sonst zahlt die naechste Pruefung den vollen Neuaufbau).
+    if not refcache_ergaenzen(person, os.path.join(zdir, ziel), ziel, emb):
+        try:
+            os.remove(os.path.join(CLIPS, "refcache.npz"))
+        except FileNotFoundError:
+            pass
+    # .225: der ZIEL-Dateiname als zweiter Wert (Lern-Bruecke braucht ihn fuer
+    # das Undo via entferne_referenz); der /lernen-Aufrufer ignoriert ihn.
+    return True, ziel
+
+
+def lernbruecke_pruefen(person, eids, emb=None):
+    """Lern-Bruecke Schritt 1 (User 16.08., zweite Fassung: 'erst pruefen,
+    welche Bilder uebernommen werden sollen — dann ist der gleiche Schalter:
+    uebernehme diese Bilder'): dieselben Siebe wie die Bestands-Suche
+    (Identitaet/Qualitaet/Neuheit), gescoped auf die Pass-Events. UEBERNIMMT
+    NICHTS — liefert nur, was Stufe 'empfohlen' erreicht hat, damit der
+    Nutzer es sieht und entscheidet. -> (kandidaten, zurueckgehalten)."""
+    eids = {str(e) for e in (eids or []) if e}
+    if not eids:
+        return [], []
+    kand = vorschlaege_person(person, nur_eids=eids, schreiben=False, emb=emb)
+    nehmen = [{"eid": k["eid"], "datei": k["datei"]}
+              for k in kand if k.get("stufe") == "empfohlen"]
+    # .231 (User-Go nach dem Pass-3-Befund: 8 sichere Identitaeten fielen
+    # still an der Gut-Qualitaet): die Stufe 'neutral' wird nicht mehr
+    # verschwiegen, sondern als GRENZFAELLE mitgegeben — das Overlay zeigt
+    # sie OHNE Haken, der Nutzer entscheidet am Bild.
+    grenz = [{"eid": k["eid"], "datei": k["datei"]}
+             for k in kand if k.get("stufe") == "neutral"]
+    return nehmen, grenz
+
+
+def lernbruecke_uebernehmen(person, items, emb=None):
+    """Lern-Bruecke Schritt 2: genau die geprueften Bilder uebernehmen (der
+    Nutzer hat sie gesehen und bestaetigt). Containment/Format prueft
+    vorschlag_aufnehmen. -> Ziel-Dateinamen (fuers Undo via
+    entferne_referenz)."""
+    dateien = []
+    for it in (items or [])[:50]:
+        ok, ziel = vorschlag_aufnehmen(person, str(it.get("eid") or ""),
+                                       str(it.get("datei") or ""), emb=emb)
+        if ok:
+            dateien.append(ziel)
+    return dateien
 
 
 # ---------------------------------------------------------------- CLI

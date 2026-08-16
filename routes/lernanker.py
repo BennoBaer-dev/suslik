@@ -11,6 +11,12 @@ import html
 CROPS_JE_CLUSTER = 12      # Anzeige-Deckel je Karte (74 Cluster x 12 = tragbare Seite)
 
 
+# .224 (User-Fund am Screenshot): interne Eimer-Marken erschienen ROH in der
+# englischen UI ("UNBESTAETIGT: ..."). Anzeige-Map, Tokens bleiben unberuehrt.
+EIMER_TEXT = {"ok": "clean", "unbestaetigt": "unconfirmed",
+              "zu_duenn": "thin", "hart": "mixed"}
+
+
 def _badge(txt, dim=False):
     return f'<span class="pill{" dim" if dim else ""}">{html.escape(str(txt))}</span>'
 
@@ -44,13 +50,19 @@ def _thumb_w(m, lauf_id, dim, checked, grund=None):
 BIN_TITEL = {"frontal": "Frontal", "links": "Looking left", "rechts": "Looking right"}
 
 
-def anker_detail_seite(s, kaputt=0, benennung=None):
+def anker_detail_seite(s, kaputt=0, benennung=None, fluss=None):
     """.83: Detail-Ansicht EINES Clusters — alle Crops, klickbar zum Clip.
     E4a (Zug 2b): mit benennung={bewertet, flags, personen, vorschlag} wird die
     Seite zum Benennungs-Fluss (Bauplan §E4a-UI-Fluss v2): Empfohlen je
     Perspektive vorausgewaehlt, Nicht-empfohlen gedimmt MIT Grund (nichts
     verschwindet), Sammel-Schalter, Ziel neu/bestehend. Der POST laeuft gegen
-    /lernlauf/benennen; Kollisions-Rueckfrage macht der Server (kollision-Feld)."""
+    /lernlauf/benennen; Kollisions-Rueckfrage macht der Server (kollision-Feld).
+
+    .224 (User: 'kein Fluss, der an die Hand nimmt'): fluss={pos, gesamt,
+    naechster} macht die Easy-Sicht zur BENENNUNGS-KARTE — 'Group 2 of 7',
+    EINE Frage (Who is this?), vorbereitete Antwort aus dem looks-like-
+    Vorschlag, ein Klick benennt UND uebernimmt und springt zur naechsten
+    Gruppe. Expert behaelt die volle Auswahl-Ansicht (nur-expert)."""
     q = s.get("qualitaet") or {}
     lauf_id = (s.get("lauf") or {}).get("lauf_id", "")
     aid = html.escape(str(s.get("anker_id")))
@@ -75,12 +87,26 @@ def anker_detail_seite(s, kaputt=0, benennung=None):
             '.pill.dim{opacity:.6}'
             '.bn-leiste{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px}'
             '.bn-leiste input[type=text]{padding:4px 8px;min-width:180px}</style>')
-    kopf = (f'<h2>{aid}</h2>'
-            f'<div class="card">{_badge(q.get("eimer", "ok"), dim=dim)}'
+    # .224: Cluster-ID und Kenn-Badges sind Expert-Tiefe; die Easy-Karte traegt
+    # ihren eigenen Kopf (Group x of y + die eine Frage).
+    fluss = fluss or {}
+    e_kopf = ""
+    if fluss.get("pos"):
+        _frage = (benennung is not None
+                  and s.get("status") not in ("uebernommen", "verworfen"))
+        e_kopf = ('<div class="nur-easy" style="margin:2px 0 6px">'
+                  f'<div class="dim">Group {fluss["pos"]} of '
+                  f'{fluss["gesamt"]}</div>'
+                  + ('<h2 style="margin:2px 0">Who is this?</h2>'
+                     if _frage else "") + "</div>")
+    kopf = (e_kopf + f'<h2 class="nur-expert">{aid}</h2>'
+            '<div class="card"><div class="nur-expert">'
+            + _badge(EIMER_TEXT.get(q.get("eimer", "ok"),
+                                    q.get("eimer", "ok")), dim=dim)
             + _badge(f'{q.get("stuetz", 0)} faces ({q.get("stuetz_phys", "?")} physical)')
             + _badge(f'{q.get("durchgaenge", 0)} passes')
             + _badge(f'{q.get("tage", 0)} day(s): {spanne}')
-            + _badge(f'margin {q.get("marge")}'))
+            + _badge(f'margin {q.get("marge")}') + "</div>")
     if not benennung:
         thumbs = "".join(_thumb(m, lauf_id, dim) for m in mitglieder)
         return (stil + kopf
@@ -92,6 +118,14 @@ def anker_detail_seite(s, kaputt=0, benennung=None):
     flags = benennung.get("flags") or {}
     schon = s.get("status") == "benannt"
     uebernommen = s.get("status") == "uebernommen"
+    # .224: in abgeschlossenen Zustaenden fuehrt Easy zur naechsten Gruppe
+    # weiter, statt den Nutzer in einer Sackgasse stehenzulassen.
+    e_weiter = ""
+    if fluss.get("naechster"):
+        e_weiter = ('<p class="nur-easy"><a class="gtb on" '
+                    f'href="/lernlauf/anker?a='
+                    f'{html.escape(str(fluss["naechster"]))}">'
+                    "Next group &#8230;</a></p>")
     if uebernommen:
         # E4b: uebernommene Anker sind abgeschlossen — Bilder bleiben sichtbar,
         # aber keine Auswahl/Umbenennung mehr (Referenz-Hygiene laeuft ueber die
@@ -99,8 +133,8 @@ def anker_detail_seite(s, kaputt=0, benennung=None):
         thumbs = "".join(_thumb(m, lauf_id, False) for m in mitglieder)
         return (stil + kopf
                 + f'<div class="pill">adopted as <b>{html.escape(str(s.get("person")))}</b>'
-                  ' — these faces feed recognition now</div>'
-                + '<div class="dim"><a href="/lernlauf/anker">back to all clusters</a> · '
+                  ' — these faces feed recognition now</div>' + e_weiter
+                + '<div class="dim nur-expert"><a href="/lernlauf/anker">back to all clusters</a> · '
                   'reference upkeep lives on the Quality page</div>'
                 + f'<div class="anker-reihe">{thumbs}</div></div>')
     if s.get("status") == "verworfen":
@@ -109,7 +143,8 @@ def anker_detail_seite(s, kaputt=0, benennung=None):
         return (stil + kopf
                 + '<div class="pill">dismissed — images removed; the cluster is '
                   'remembered so re-harvests of the same events stay quiet</div>'
-                + '<div class="dim"><a href="/lernlauf/anker">back to all clusters</a></div>'
+                + e_weiter
+                + '<div class="dim nur-expert"><a href="/lernlauf/anker">back to all clusters</a></div>'
                 + '</div>')
     hinweis = ""
     if schon:
@@ -146,13 +181,35 @@ def anker_detail_seite(s, kaputt=0, benennung=None):
             checked=bool(m.get("gewaehlt", False)) if hat_persist else False,
             grund=bew.get(str(m.get("datei", "")), {}).get("grund") or "not rated")
             for m in nicht)
-        sektionen.append(f'<h3>Not recommended ({len(nicht)}) — kept visible, '
+        # .224: die Nicht-empfohlen-Sektion ist Expert-Tiefe — Easy urteilt
+        # ueber die empfohlene Auswahl (dieselben Checkboxen, gleiche Wirkung).
+        sektionen.append('<div class="nur-expert">'
+                         f'<h3>Not recommended ({len(nicht)}) — kept visible, '
                          'reason on each image</h3>'
-                         f'<div class="anker-reihe">{kacheln}</div>')
+                         f'<div class="anker-reihe">{kacheln}</div></div>')
     personen = benennung.get("personen") or []
     opts = "".join(f'<option value="{html.escape(p)}">' for p in personen)
+    # .224: die Easy-Antwortzeile — vorbereitete Antwort aus dem Vorschlag,
+    # ein Klick benennt UND uebernimmt (JS-Kette) und springt weiter. Ohne
+    # Vorschlag fragt sie direkt nach dem Namen (dieselbe Eingabe wie Expert).
+    naechster = fluss.get("naechster")
+    weiter_url = (f'/lernlauf/anker?a={html.escape(str(naechster))}'
+                  if naechster else "/lernlauf/anker")
+    skip_text = ("Skip this group" if naechster else
+                 "Skip — back to the groups")
+    e_leiste = (
+        '<div class="bn-leiste nur-easy">'
+        + (f'<button type="button" id="bn-easy-ja" class="gtb on" '
+           f'data-name="{html.escape(v["name"])}">'
+           f'Yes, it&rsquo;s {html.escape(v["name"])}</button>'
+           '<button type="button" id="bn-easy-andere">Someone else &#8230;'
+           '</button>' if v else
+           '<button type="button" id="bn-easy-andere" class="gtb on">'
+           'Name this group &#8230;</button>')
+        + f'<a class="gtb" href="{weiter_url}">{html.escape(skip_text)}</a>'
+        + '<span id="bn-easy-status" class="dim"></span></div>')
     leiste = (
-        '<div class="bn-leiste">'
+        '<div class="bn-leiste nur-expert" id="bn-expertleiste">'
         '<button type="button" id="bn-alle">Select all recommended</button>'
         '<button type="button" id="bn-keine">Deselect all</button>'
         '<span class="dim">·</span>'
@@ -164,6 +221,7 @@ def anker_detail_seite(s, kaputt=0, benennung=None):
         + (f'<button type="button" id="bn-adopt" data-aid="{aid}" class="gtb on">'
            'Adopt into recognition</button>' if schon else "")
         + '<span id="bn-status" class="dim"></span></div>')
+    nx_js = (f'"{html.escape(str(naechster))}"' if naechster else "null")
     js = ('<script>(function(){'
           'var alle=document.getElementById("bn-alle"),keine=document.getElementById("bn-keine");'
           'function boxen(){return document.querySelectorAll(".anker-w input[name=sel]")}'
@@ -171,37 +229,54 @@ def anker_detail_seite(s, kaputt=0, benennung=None):
           'b.checked=!b.closest(".anker-w").classList.contains("gedimmt");});};'
           'keine.onclick=function(){boxen().forEach(function(b){b.checked=false;});};'
           'var save=document.getElementById("bn-save"),st=document.getElementById("bn-status");'
+          'var est=document.getElementById("bn-easy-status");'
+          f'var CHAIN=false,NX={nx_js};'
+          'function melden(t){st.textContent=t;if(est)est.textContent=t;}'
+          # .224: Uebernahme als eigene Funktion — Expert-Knopf UND Easy-Kette
+          # nutzen denselben Weg; danach traegt die Kette zur naechsten Gruppe.
+          'function adoptieren(best){melden("adopting\\u2026");'
+          'fetch("/lernlauf/uebernehmen",{method:"POST",headers:{"Content-Type":"application/json"},'
+          'body:JSON.stringify({anker_id:save.dataset.aid,bestaetigt:best})})'
+          '.then(function(r){return r.json()}).then(function(d){'
+          'if(d.tag_abweichung){if(confirm("Settings changed since naming:\\n"+'
+          'd.tag_abweichung.join("\\n")+"\\nAdopt anyway with the named selection?"))'
+          '{adoptieren(true);}else melden("not adopted");return;}'
+          'if(!d.ok){melden("error: "+d.msg);return;}'
+          'if(CHAIN){if(NX){melden("saved \\u2014 next group\\u2026");'
+          'setTimeout(function(){location="/lernlauf/anker?a="+encodeURIComponent(NX)},500);}'
+          'else{melden("All groups done \\u2014 the named pictures now count for recognition.");'
+          'setTimeout(function(){location="/lernlauf/anker"},1600);}return;}'
+          'melden(d.msg);setTimeout(function(){location.reload()},1200);})'
+          '.catch(function(e){melden("error: "+e);});}'
           'function senden(name,bestaetigt){'
           'var sel=[];boxen().forEach(function(b){if(b.checked)sel.push(b.value);});'
-          'st.textContent="saving\\u2026";'
+          'melden("saving\\u2026");'
           'fetch("/lernlauf/benennen",{method:"POST",headers:{"Content-Type":"application/json"},'
           'body:JSON.stringify({anker_id:save.dataset.aid,person:name,gewaehlt:sel,'
           'bestaetigt:!!bestaetigt})}).then(function(r){return r.json()})'
           '.then(function(d){if(d.kollision){'
           'if(confirm("\\u2019"+name+"\\u2019 matches existing \\u2019"+d.kollision+'
           '"\\u2019 \\u2014 add to that person instead?"))senden(d.kollision,true);'
-          'else st.textContent="not saved";return;}'
-          'st.textContent=d.ok?d.msg:("error: "+d.msg);'
-          'if(d.ok)setTimeout(function(){location.reload()},600);})'
-          '.catch(function(e){st.textContent="error: "+e;});}'
+          'else melden("not saved");return;}'
+          'if(!d.ok){melden("error: "+d.msg);return;}'
+          'if(CHAIN){adoptieren(false);return;}'
+          'melden(d.msg);setTimeout(function(){location.reload()},600);})'
+          '.catch(function(e){melden("error: "+e);});}'
           'save.onclick=function(){senden(document.getElementById("bn-name").value,false);};'
           'var ad=document.getElementById("bn-adopt");'
-          'if(ad)ad.onclick=function(){var best=false;'
-          'function los(){st.textContent="adopting\\u2026";'
-          'fetch("/lernlauf/uebernehmen",{method:"POST",headers:{"Content-Type":"application/json"},'
-          'body:JSON.stringify({anker_id:ad.dataset.aid,bestaetigt:best})})'
-          '.then(function(r){return r.json()}).then(function(d){'
-          'if(d.tag_abweichung){if(confirm("Settings changed since naming:\\n"+'
-          'd.tag_abweichung.join("\\n")+"\\nAdopt anyway with the named selection?"))'
-          '{best=true;los();}else st.textContent="not adopted";return;}'
-          'st.textContent=d.ok?d.msg:("error: "+d.msg);'
-          'if(d.ok)setTimeout(function(){location.reload()},1200);})'
-          '.catch(function(e){st.textContent="error: "+e;});}los();};'
+          'if(ad)ad.onclick=function(){CHAIN=false;adoptieren(false);};'
+          'var ja=document.getElementById("bn-easy-ja");'
+          'if(ja)ja.onclick=function(){CHAIN=true;senden(ja.dataset.name,false);};'
+          'var an=document.getElementById("bn-easy-andere");'
+          'if(an)an.onclick=function(){CHAIN=true;'
+          'var l=document.getElementById("bn-expertleiste");'
+          'l.classList.remove("nur-expert");'
+          'document.getElementById("bn-name").focus();};'
           '})();</script>')
     return (stil + kopf + hinweis
-            + '<div class="dim">click an image to select or deselect it · the little '
+            + '<div class="dim nur-expert">click an image to select or deselect it · the little '
               '&#9654; opens the clip · <a href="/lernlauf/anker">back to all clusters</a></div>'
-            + "".join(sektionen) + leiste + '</div>' + js)
+            + "".join(sektionen) + e_leiste + leiste + '</div>' + js)
 
 
 def anker_seite(saetze, kaputt, vorschlaege=None, dubletten=None):
@@ -288,7 +363,8 @@ def anker_seite(saetze, kaputt, vorschlaege=None, dubletten=None):
         spanne = f'{tage[0]} … {tage[-1]}' if len(tage) > 1 else (tage[0] if tage else "—")
         kams = sorted({m.get("kamera", "?") for m in mitglieder})
         status_html = (_badge("clean") if not dim else
-                       _badge(f'{eimer}: {q.get("eimer_grund", "")}', dim=True))
+                       _badge(f'{EIMER_TEXT.get(eimer, eimer)}: '
+                              f'{q.get("eimer_grund", "")}', dim=True))
         if dup_von:
             status_html += _badge(f"same cluster as {dup_von} \u2014 "
                                   "harvested again by a newer run; name it there",

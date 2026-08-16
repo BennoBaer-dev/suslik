@@ -7,6 +7,381 @@ this file — the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git
 history.
 
+## 0.1.0.243 — 2026-08-17
+
+Intermediate release — focus on simplification and clarity. We are mid-way
+through the Easy/Expert rebuild; this release bundles the internal steps
+0.1.0.203–0.1.0.242 (each documented below; 0.1.0.241/.242 were respun as
+0.1.0.243 after the privacy gates flagged private names in old code
+comments — comments neutralized, the name check itself hardened, nothing
+else changed). The visible core:
+
+- **Configuration start page, Faces area, guided learning flow**: tile-based
+  start pages with plain-language "How it works" texts, a step-by-step
+  learning run, and a naming card that walks you through the found groups.
+- **Learn directly from the day view**: a person's pass cards offer a
+  check/adopt bridge — review the suggested faces (borderline ones shown
+  unticked), adopt them as references in one click, undo if needed. Already
+  adopted references carry a green outline.
+- **Unknown visitors, consistently**: clicking an unknown card on Today opens
+  exactly that walk-through with its faces, ready to assign to a new or
+  existing person.
+- **Change connection inline**: the Frigate Connection tile edits the URL
+  right there instead of routing you to the Advanced table.
+- Honest feedback on whether this direction feels right is very welcome —
+  suslik_dev@posteo.de.
+
+## 0.1.0.240 — 2026-08-17
+
+- "Change connection" on the Frigate page no longer dumps you into the whole
+  Advanced table: the Connection tile opens a small form right there —
+  current URL prefilled, Save & restart, Cancel. After the restart the tile
+  itself shows live whether the new address answers.
+
+## 0.1.0.239 — 2026-08-17
+
+- Third and final shape of the unknown-visitor click, exactly as our user
+  meant it: the Today card IS one walk-through, so clicking it opens exactly
+  that walk — its camera chain, video and ONLY the faces collected on this
+  walk (whatever internal group they landed in). Tick them, name them (new
+  or existing person), done; doing nothing keeps them unknown. The full
+  cross-day profile stays on the Unknown page.
+
+## 0.1.0.238 — 2026-08-17
+
+- The unknown visitor's page now really matches the person view: it merges
+  the linked face groups of the same walks (the good pictures often sit in a
+  neighbour group — 16 faces instead of 4 on the real test case), and every
+  appearance card carries the big preview image on the left like a person's
+  pass card.
+
+## 0.1.0.237 — 2026-08-17
+
+- Clicking an unknown visitor now opens the same kind of view as for known
+  people: their appearances as pass cards (camera chain, face thumbnails,
+  video), with one addition on top — "Who is this?": tick the faces that
+  really belong to them, name them (new or existing person) and they are
+  learned like everyone else.
+
+## 0.1.0.236 — 2026-08-17
+
+- Fix: after taking pictures, the NEXT check was slow again without saying
+  why — adopting used to throw the whole reference cache away, and the next
+  check rebuilt all ~300 reference embeddings inline. Taking pictures now
+  slots the new embeddings into the cache directly; where a full rebuild is
+  still needed (undo, deletions) the check honestly says "updating the
+  reference library …", rebuilds in the background and re-runs by itself.
+
+## 0.1.0.235 — 2026-08-17
+
+- The pass check is fast for every pass now: it accidentally ran on a second,
+  CPU-only model instance (~2 s per picture — passes with many faces took
+  half a minute, passes with none answered instantly, which looked
+  inconsistent). It now shares the service's accelerated instance; the
+  warm-up on opening Today prepares exactly that one.
+
+## 0.1.0.234 — 2026-08-17
+
+- One click rule for all Today cards: clicking an unknown visitor now opens
+  their profile on the Unknown page (all faces, naming, merging) — exactly
+  like clicking a known person opens their day. The old inline
+  assign-panel on Today is gone; assigning lives on the Unknown page.
+
+## 0.1.0.233 — 2026-08-17
+
+- The pass buttons got a cleaner look: consistent height and rounded corners,
+  a small icon each (play for video, magnifier for the picture check, a check
+  mark once pictures were taken) and a calm hover.
+
+## 0.1.0.232 — 2026-08-17
+
+- Smart model warm-up, designed by our user: opening Today (or a person's
+  day) quietly prepares the face model in the background, so the pass check
+  answers instantly; after 15 minutes without use the model is released from
+  memory again (measured 379 MB — small boxes get it back). If you click a
+  check while the model is still cold, the button says honestly "loading the
+  recognition model — a few seconds …" and runs the check by itself once
+  ready.
+
+## 0.1.0.231 — 2026-08-17
+
+- The pass check no longer hides borderline pictures: faces whose identity is
+  sure but whose picture quality is only fair now appear in the dialog too —
+  unticked, clearly labeled, tick to take anyway. The status line says
+  honestly how many were kept back instead of a bare "nothing to take".
+
+## 0.1.0.230 — 2026-08-17
+
+- The pass check (and the automatic after-pass suggestion search) is much
+  faster: the face-embedding models were rebuilt from scratch on every call
+  (measured 11-13 s each time); they are now built once per service run and
+  reused — a click costs the actual picture measurement only.
+
+## 0.1.0.229 — 2026-08-17
+
+- Rows with green-outlined pictures now say what the outline means, right
+  next to the pictures: "green border = already in the references" — no
+  hovering needed.
+
+## 0.1.0.228 — 2026-08-17
+
+- Fix: the green reference outlines from .227 did not appear — the periodic
+  reference re-check rewrites metadata lines without the event link, and the
+  newest line silently erased it. The event link now survives those
+  rewrites (verified on the real library: 11 marked events instead of 1).
+
+## 0.1.0.227 — 2026-08-17
+
+- You can now SEE which pictures made it into the references: on a person's
+  day view, every thumbnail whose event contributed an active reference is
+  outlined green (tooltip "in the references") — immediately after taking
+  pictures, permanently on every later visit, and Undo removes exactly those
+  outlines again.
+
+## 0.1.0.226 — 2026-08-17
+
+- The pass-learning button is now two honest steps: "Check this pass for
+  good pictures" runs the sieve and opens an in-page dialog showing exactly
+  the pictures it would take — untick any you do not trust, then "Take N
+  pictures" or Cancel. Nothing is adopted before you confirmed what you saw
+  (no browser popup involved — the dialog is part of the page, so popup
+  blockers cannot break it). Undo still works afterwards.
+
+## 0.1.0.225 — 2026-08-16
+
+- Learning where you already are: every confirmed pass on a person's day view
+  got one button — "Add <name>'s faces from this pass". One click, the
+  built-in check picks only clearly helpful new pictures (same identity,
+  quality and novelty sieves as the reference search — a stranger's face can
+  not be adopted by construction), the answer appears right there ("3
+  pictures added · 2 kept back by the check"), and Undo takes them out again
+  without a dialog.
+
+## 0.1.0.224 — 2026-08-16
+
+- Naming is now a guided card, not a document: the easy view shows "Group 2
+  of 7" and one question — "Who is this?" — with the answer prepared when
+  the system has a suggestion ("Yes, it's &lt;name&gt;"). One click names
+  the group, adopts it into recognition and jumps to the next group; skip
+  works the
+  same way, and the last group says so. The full selection view (all images,
+  checkboxes, per-image reasons) is the expert view, unchanged.
+- Internal cluster-state words no longer leak into the interface in German
+  ("unbestaetigt" → "unconfirmed").
+
+## 0.1.0.223 — 2026-08-16
+
+- The learning-run page is now a guided flow: a four-step bar (Collect →
+  Group → Name → Adopt), one plain sentence saying where the run stands, and
+  one button for the single next action — no anchor/cluster/harvest jargon
+  in the easy view. The full phase chain with all counters is still there,
+  one switch away in the expert view.
+
+## 0.1.0.222 — 2026-08-16
+
+- Areas left the main menu: the Recognition start page got a second, smaller
+  tile row "Property set-up" with the Areas card (count + Manage areas), and
+  the Areas sheet itself lives on as an expert tab under Configuration —
+  same pattern as everywhere else, one menu entry less.
+
+## 0.1.0.221 — 2026-08-16
+
+- The four Faces tiles each got their "How it works" guide (same plain
+  language as the recognition guides), leading back to Faces.
+- Frigate page: the Connection tile has a "Change connection" button for
+  both views, and the read-only "Frigate's own face recognition" tile moved
+  to the expert view.
+- Internal: a resident name in a code comment slipped past me again in .220
+  and the privacy gate caught it; reworded. (.220 briefly ran on the in-house
+  test instance despite the red gate — process slip on my side, the name
+  never left the house.)
+
+## 0.1.0.220 — 2026-08-16
+
+- The face area is consolidated into one "Faces" start page (same tile
+  pattern as Recognition and Frigate): Known people with an avatar row —
+  one real face icon per person, tap it to see every reference picture —
+  plus Learning as a guided three-step routine and Unknown for recurring
+  visitors you have not named yet. Every tile's first sentence says WHEN
+  you need it. The former People and Learn menus merge behind it: easy view
+  shows the start page, expert view keeps all detail tabs; Person learn
+  moved to the Person section. "How it works" guides per tile follow in a
+  later step.
+
+## 0.1.0.219 — 2026-08-16
+
+- The AI vision card on the Recognition page now carries a visible "Beta"
+  mark: this path still matures (mixed-grid handling and the per-endpoint
+  calibration test are open) and users should know before they rely on it.
+
+## 0.1.0.218 — 2026-08-16
+
+- Internal: two code comments from .217 carried resident names; the privacy
+  gate caught them before anything shipped. Reworded, no functional change.
+
+## 0.1.0.217 — 2026-08-16
+
+- Vision diagnosis package (V1-V3 from the lever analysis): the counters now
+  see every round outcome (cut-off answers, errors and timeouts per round were
+  invisible before — the store said 0 while the logs held 28 of them); a mixed
+  round (one run "neither", the other picking a person) is counted as half an
+  abstention instead of a positional contradiction; every run records the
+  settings it actually ran with (model, thinking switch, token budget, prompt
+  mark) plus each arm's visible answer text; and the candidate grid image is
+  booked against the orphan cleanup the moment it is written — before, long
+  runs lost exactly the evidence pictures of their hardest cases. New optional
+  switch `vision_gitter_behalten` keeps no-verdict grids even in lean mode
+  (default off, normal 30-day expiry still applies).
+
+## 0.1.0.216 — 2026-08-16
+
+- The "Frigate sync" section is now called "Frigate" and opens with a tile
+  start page like Recognition: Connection (live reachability + Frigate
+  version), Cameras (which ones are in use), Sync (same balance line as the
+  sync page), and the live state of Frigate's own face recognition. The sync
+  page itself is unchanged, one tab further (expert view).
+
+## 0.1.0.215 — 2026-08-16
+
+- Fix: the manual model-id check now really works. The probe request used to
+  carry the standard verdict instruction ("answer A or B or NEITHER") next to
+  its own "Say OK" — two contradicting orders; the model silently ruminated
+  into the token cap and the check rejected working models. The probe now
+  sends its question without the verdict instruction (verified against the
+  live endpoint: real id passes in seconds, fake id gets a clear refusal).
+
+## 0.1.0.214 — 2026-08-16
+
+- Fix: the manual model-id check rejected working models. The tiny "Say OK"
+  probe capped the answer at 64 tokens, but some models spend ~140 invisible
+  template tokens before the first visible word (measured on Qwen3.5-9B) —
+  the probe now allows 512.
+
+## 0.1.0.213 — 2026-08-16
+
+- Vision: you can now add a model id by hand on the Vision page — for
+  endpoints that do not list every model they serve. The id is verified with
+  a tiny real request first; only a model that actually answers is added to
+  the list (marked "manually checked"), nothing unchecked can be saved.
+
+## 0.1.0.212 — 2026-08-16
+
+- The "How it works" guide links on the Recognition cards are now clearly
+  visible: semibold, underlined, slightly larger — for a new user they are
+  the first thing to click, and they looked like a footnote.
+
+## 0.1.0.211 — 2026-08-16
+
+- Vision: "thinking off" is now the default on endpoints that support the
+  switch (local and custom). Reason, measured in production: on a hard
+  comparison grid a thinking model talked itself past the token budget
+  (47k tokens, requests over five minutes) and the pass ended without a
+  verdict; with thinking off the same endpoint answers the same question
+  correctly in seconds. A deliberately saved "off" stays respected, and
+  the checkbox on the Vision page now shows the value that is actually
+  sent.
+
+## 0.1.0.210 — 2026-08-16
+
+- The top navigation section is now called **Configuration** instead of
+  Settings (all addresses unchanged).
+- The Recognition page warns before you leave it with unsaved body or
+  vision changes (browser dialog); the Live switch is exempt because it
+  applies immediately.
+
+## 0.1.0.209 — 2026-08-16
+
+- Guide polish after the first read-through: the "Is it for you?" closers
+  are gone, and the Face guide now says clearly that suslik alerts on its
+  own channels (Pushover, Telegram, MQTT) when a face is recognized or an
+  unknown one shows up — completely independent of Frigate, which needs no
+  notification setup at all.
+
+## 0.1.0.208 — 2026-08-16
+
+- **Every Recognition card now carries a built-in guide** ("How it works …"):
+  plain-language pages inside suslik, no GitHub needed. Each guide has two
+  depths and follows the Easy/Expert switch: Easy readers get what the way
+  does, what it costs and whether it is for them; Expert adds how the
+  verdict forms, written for an interested user, not an engineer.
+- **Register buttons per card**: Live and Face carry "Register face" (both
+  use the same face library), Body "Register body", AI vision "Register
+  vision" (jumps straight to the galleries). Each button leads into the
+  existing flow of its own method — registering never drags you through
+  methods you switched off. No photo upload, by design: the system learns
+  from your cameras; Frigate import remains the supplementary source.
+- Today's "Recognized" row now says honestly when a pass is still in
+  progress ("events are analyzed as they finish and show up here") instead
+  of looking empty for the minute or two the normal path needs after the
+  live alert. The page already refreshes itself while a pass is running.
+
+## 0.1.0.207 — 2026-08-16
+
+- **The Recognition page is now the front door of Settings**: clicking
+  "Settings" in the top navigation lands directly on the four pillars. In
+  Easy mode it is the whole configuration view — the sub-tabs (Cameras,
+  Notifications, Recognition chain, Advanced) appear in Expert mode; they
+  are only hidden, never locked, and stay reachable by URL.
+- Fixes the Face card claiming "0 people · 0 reference images": the counter
+  looked in the wrong folder; it now counts the real reference library.
+
+## 0.1.0.206 — 2026-08-15
+
+- Fixes the new Recognition page crashing on load (0.1.0.205 was on the
+  production box for minutes and never published): the watcher summary read
+  the guard store with the wrong shape. The QA gate gained a new stage that
+  starts the built image data-free and fetches EVERY navigation page over
+  HTTP — the class "page renders in review but crashes in the image" cannot
+  pass silently again.
+
+## 0.1.0.205 — 2026-08-15
+
+- **New "Recognition" settings page: four pillars, one per recognition
+  method** (Live watch, Face, Body, AI vision). Each card leads with an
+  enable/disable toggle so you decide per method what runs, followed by a
+  plain-language sentence, the honest current state and one setup button.
+  The Live toggle acts immediately (it starts/stops the set-up watchers
+  through the same per-camera gate as the Live tab); body and vision
+  changes apply with Save + restart — the same audited settings as the
+  Recognition-chain page, one value shown in one more place. Face has no
+  off switch today (it is the backbone the other methods hang off) and
+  the card says so instead of faking one.
+- The page is the first to use the Easy/Expert switch: both modes see the
+  four cards, Expert additionally shows status details and deep links.
+
+## 0.1.0.204 — 2026-08-15
+
+- **New Easy/Expert switch in the header** (left of the Live indicator, styled
+  like the Theme button): a two-segment pill showing both modes with the
+  active one highlighted. For now it is just the switch — the choice is
+  remembered per browser (like the theme choice) and pages will adopt their
+  simplified Easy views step by step in the coming versions. Nothing is ever
+  deleted; Easy only hides.
+
+## 0.1.0.203 — 2026-08-15
+
+Body recognition gets a new, measurably better and properly licensed model:
+
+- **The person path now runs on Intel's OMZ person-reidentification-retail-0277**
+  (Apache-2.0 including the model file) instead of DINOv2. Measured on the
+  frozen benchmark: 32/30/30 of 37 scenarios across three seed sets vs
+  18/16/16 before, max confusion probability 0.20 vs 0.89, and it passes
+  the real hard-case walk the old candidate failed. An A/B on fresh
+  out-of-sample walks fired 6/12 scenarios vs 3/12.
+- **Existing installations migrate themselves**: on the first start after
+  the update the service re-trains the person model once in the background
+  from the stored, reviewed images (seconds to a few minutes on small
+  CPUs); until then the old model keeps judging. A failure is shown on the
+  model card, never silent.
+- New setting `person_backend` (default `cpu`): compute placement of the
+  embedding model. Measured on the reference box: 18.8 ms/image on CPU,
+  3.2 ms on the iGPU, 3.6 ms on the NPU — the path is dominated by video
+  decode, so CPU stays the default; move it only after measuring, an extra
+  GPU context can starve the live watchers.
+- The whitening step (PCA, fitted per training fold) ships inside the
+  stored model; threshold calibration is unchanged in method and now lands
+  at ~0.74 on the reference data.
+
 ## 0.1.0.202 — 2026-08-15
 
 Memory fix — the important one. On 2026-08-15 our own production box went
