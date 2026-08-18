@@ -392,13 +392,17 @@ def anker_seite(saetze, kaputt, vorschlaege=None, dubletten=None):
         knopf_txt = ("Review naming" if st_a == "benannt" else
                      ("View cluster" if st_a == "uebernommen" else
                       f'Name these {q.get("stuetz", 0)} faces'))
-        # Dismiss mit Gedaechtnis (User 05.08.): nur unbenannte Cluster —
-        # Zeile+Zentroid bleiben, Wiederernten derselben Events erben still.
-        verwerf = ('' if st_a in ("benannt", "uebernommen") else
+        # Dismiss mit Gedaechtnis (User 05.08.): Zeile+Zentroid bleiben,
+        # Wiederernten derselben Events erben still. Seit .259 auch fuer
+        # BENANNTE Cluster (Endpunkt-Erweiterung mit der Zuweisungs-Flaeche
+        # — nichts ist im Master, die Benennung wird mit verworfen); nur
+        # uebernommene nie.
+        verwerf = ('' if st_a == "uebernommen" else
                    f'<button class="gtb" onclick="ankerVerwerfen(\'{aid}\',this)" '
-                   'data-frage="Dismiss this cluster? Its images are removed; '
-                   'the cluster is remembered so re-harvests of the same events '
-                   'stay quiet.">Dismiss</button>')
+                   'data-frage="Dismiss this cluster? Its images are removed'
+                   + (' and the pending naming is discarded' if st_a == "benannt" else '')
+                   + '; the cluster is remembered so re-harvests of the same '
+                     'events stay quiet.">Dismiss</button>')
         knopf = (f'<div style="margin-top:6px"><a class="gtb on" href="/lernlauf/anker?a={aid}">'
                  f"{knopf_txt}</a> {verwerf}</div>")
         karten.append(

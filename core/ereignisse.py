@@ -8,12 +8,16 @@ MAX_SEITEN = 200          # Deckel (Widerleger F2.1): 200 Seiten x 200 = 40.000 
 #                           mehr zieht kein Lernlauf; schuetzt Request-Threads + Frigate.
 
 
-def person_events(hole, anzahl=None, kameras=None, seite=200, max_seiten=MAX_SEITEN):
+def person_events(hole, anzahl=None, kameras=None, seite=200, max_seiten=MAX_SEITEN,
+                  fenster=None):
     """Die juengsten `anzahl` person-Events (None = ALLE bis Historien-Ende), notfalls
     ueber MEHRERE Seiten (before-Cursor auf start_time). -> (events, seiten_geholt).
     Duplikat-sicher UND verlustfrei am Gleichstand-Cursor (Widerleger F2.6: Frigate
     filtert before strikt '<'; Cursor = min + 1 µs, Duplikate faengt die id-Menge).
-    max_seiten deckelt hart — nie unbegrenzt im Request-Thread (F2.1)."""
+    max_seiten deckelt hart — nie unbegrenzt im Request-Thread (F2.1).
+    fenster=(after_ts, before_ts) (.263 Tages-Modus): begrenzt auf das
+    Zeitfenster — after konstant je Seite, der Cursor wandert im Fenster
+    (Frigate-Filter live verifiziert 17.08.: strikt after < t < before)."""
     events, gesehen, seiten = [], set(), 0
     before, limit = None, min(seite, 1000)
     ziel = anzahl if anzahl is not None else float("inf")
@@ -21,8 +25,12 @@ def person_events(hole, anzahl=None, kameras=None, seite=200, max_seiten=MAX_SEI
         pfad = f"/api/events?labels=person&limit={limit}"
         if kameras:
             pfad += "&cameras=" + ",".join(kameras)
+        if fenster:
+            pfad += f"&after={fenster[0]}"
         if before is not None:
             pfad += f"&before={before}"
+        elif fenster:
+            pfad += f"&before={fenster[1]}"
         batch = hole(pfad) or []
         seiten += 1
         neu = [e for e in batch if e.get("id") not in gesehen]

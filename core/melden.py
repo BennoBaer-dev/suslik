@@ -37,6 +37,7 @@ import uuid
 
 from core import areas as _areas_mod       # Areas Stufe 1 (Meldetext + Payload-Feld)
 from core import registry as _reg          # MELDE_HERKUNFT (eine Quelle, .163)
+from core import vertrauen as _vertrauen   # Wortstufen (.249, Kosinus-raus)
 
 
 # ------------------------------------------- MQTT-Topic-Praefix (#23, Zusage an Tokn59)
@@ -323,8 +324,14 @@ def publish_erkennung(cfg, pub, log, debug, entry):
             "areas": _areas_mod.kamera_areas(
                 _areas_mod.normalisieren(cfg.get("areas")), entry["camera"]),
             "kategorie": entry["kategorie"],
+            # "stufe" ADDITIV (.249, Kosinus-raus — User-Auflage 17.08.:
+            # bestehende Schluessel byte-gleich, HA-Skripte duerfen nie
+            # brechen; dasselbe Muster wie areas oben).
             "personen": [{"name": p, "cos": (entry["ours"].get(p) or {}).get("max"),
-                          "win": (entry["ours"].get(p) or {}).get("win3s")}
+                          "win": (entry["ours"].get(p) or {}).get("win3s"),
+                          "stufe": _vertrauen.stufe(
+                              (entry["ours"].get(p) or {}).get("max"),
+                              cfg.get("win_thresh"))}
                          for p in entry["bestaetigt"]]}, ensure_ascii=False)):
         debug(f"MQTT {t} -> {entry['eid']} cat={entry['kategorie']} "
               f"persons={entry['bestaetigt'] or '[]'}")
@@ -545,7 +552,8 @@ def notif_speichern(cfg, d, *, log, whitelist, store_pfad, store_laden,
 
     # 1) Skalare/Enum/Bool ueber die bestehende Whitelist validieren
     for key in ("telegram_modus", "telegram_inhalt", "telegram_cooldown", "alert_cooldown",
-                "anwesenheit_push", "anwesenheit_cooldown", "mqtt_publish", "szene_karenz_s"):
+                "anwesenheit_push", "anwesenheit_cooldown", "mqtt_publish", "szene_karenz_s",
+                "alert_stil"):                    # .249 Kosinus-raus (Worte/Worte+Zahlen)
         if key not in d:
             continue
         typ, lo, hi, _ = whitelist[key]

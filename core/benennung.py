@@ -15,9 +15,47 @@ gemessene Skalar-Guete kann ihn spaeter ersetzen, dann HIER, nirgendwo sonst."""
 import numpy as np
 
 
+# .265: DIE Referenz-Latte als EINE Quelle (QS-Ebenen-Regel; Verbraucher:
+# _lattenklasse/_reihung hier + anlernen.bild_stufe/vorschlaege_person —
+# anlernen importiert von HIER, nie umgekehrt: dieses Modul bleibt leicht).
+# .272 (User-Entscheid 18.08. 'senken'): GUT-Kante von 120 runter, Schaerfe-
+# Anforderung dafuer auf 1000. .274 (User-Entscheid nach der 4-Varianten-
+# Messung an 73 realen Kandidaten): Kante = 112 — die NATIVE Eingangs-
+# Groesse des Erkennungs-Modells (ArcFace 112x112): nichts wird automatisch
+# geadelt, was das Modell hochskalieren muesste; kostete real 1 von 14
+# Bildern gegenueber 100. Mindest-Gate (70/350) UNVERAENDERT.
+# .275 (User-Go nach der Schaerfe-MESSREIHE 18.08., verify_data/messungen/
+# schaerfe_messreihe_20260818.json): sharp_gut 1000 -> 600 — Gauss-Blur
+# laesst die Erkennungs-Marge unberuehrt, Bewegungsunschaerfe kostet erst
+# ab ~sharp 355 messbar (-6 %), ab ~600 ist die Marge verlustfrei (<1 %);
+# 1000 verwarf Bilder ohne Qualitaetsgewinn. Gemessen an der 112er-Klasse
+# mit DIESEM Messverfahren (Laplace am ganzen Crop) — die normierte
+# Crop-Schaerfe bleibt Runde-2-Punkt (Task 7).
+REF_LATTE = {"min_kante": 70, "unscharf_max": 350,
+             "kante_gut": 112, "sharp_gut": 600}
+
+
+def _lattenklasse(m):
+    """0 = GUT / 1 = Mindest bestanden / 2 = darunter — Ernte-Messwerte
+    (Video-Frame) als VORsortierung; letzte Instanz bleibt die
+    Benenn-Pruefung am Crop (anlernen.benennung_bewerten, .257)."""
+    k = float(m.get("kante") or 0)
+    s = float(m.get("sharp") or 0)
+    if k >= REF_LATTE["kante_gut"] and s >= REF_LATTE["sharp_gut"]:
+        return 0
+    if k >= REF_LATTE["min_kante"] and s >= REF_LATTE["unscharf_max"]:
+        return 1
+    return 2
+
+
 def _reihung(m):
-    """Sortier-Schluessel der Empfehlungs-Reihung (bester zuerst via sorted())."""
-    return (-float(m.get("front") or 0.0), -float(m.get("sharp") or 0.0),
+    """Sortier-Schluessel der Empfehlungs-Reihung (bester zuerst via sorted()).
+    .265: Latten-Klasse VOR Frontalitaet (User-Fund 18.08.: Gruppe mit 144
+    Bildern trug 9 nachgemessen GUTE — die Flaeche zeigte trotzdem 12 kleine
+    Frontal-Matsch-Bilder, weil front alles dominierte und die Bildgroesse
+    im Schluessel fehlte; Folge: 11 von 12 fielen in der Benenn-Pruefung)."""
+    return (_lattenklasse(m),
+            -float(m.get("front") or 0.0), -float(m.get("sharp") or 0.0),
             -float(m.get("det") or 0.0), str(m.get("datei", "")))
 
 

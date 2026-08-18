@@ -26,6 +26,7 @@ from core import areas as _areas_mod                  # Areas Stufe 1 (Sicht + M
 from core import registry as _reg                     # Dateinamen-Vertrag (Issues #11/#12)
 from core import kette as _kette                      # Modulumbau R2: die Erkennungskette (Default-Kette)
 from core import melden as _melden                    # Modulumbau R3: die Meldewege (Live-Andock-API)
+from core.schoner import Schoner                      # .264: Frigate-Schoner (Rueckzug statt Retry)
 # Oeffentliche Projekt-Doku (GitHub). Lokale Arbeitsnotizen des Autors enthalten interne
 # IPs + Zugaenge und duerfen NICHT ueber das UI ausgeliefert werden -> System-Seite + /doc zeigen aufs Repo.
 DOCS_URL = "https://github.com/BennoBaer-dev/suslik"
@@ -436,6 +437,7 @@ def load_config(path):
                          ("szenario_gap_min", 5), ("besucher_sim", 0.50),
                          ("update_check", True), ("debug", False),
                          ("anwesenheit_push", True), ("anwesenheit_cooldown", 1800),
+                         ("alert_stil", "worte"),
                          ("telegram", {}), ("telegram_modus", "aus"), ("telegram_inhalt", "video"),
                          ("telegram_hoehe", 720), ("telegram_cooldown", 600),
                          ("frigate_sync", False), ("unscharf_max", 350), ("min_kante", 70),
@@ -462,6 +464,10 @@ def load_config(path):
                          ("nachhol_pause_s", 3600),          # Mindestabstand je Event (x Versuchsnr.)
                          ("nachhol_analyse_timeout_s", 300), # harter Deckel der Retry-Laeufe
                          ("nachhol_start_s", 600),           # Anlauf nach Dienststart
+                         # .264 Frigate-Schoner (Verklemmungs-Vorfall 17.08.):
+                         # nach N Netz-Fehlern in Folge pause_s zurueckziehen.
+                         ("frigate_schoner_fehler", 3),
+                         ("frigate_schoner_pause_s", 180),
                          # Watchdog der LIVE-Analyse (Fix 10.08.; vorher fest 1800 s).
                          # MESSBASIS deckung.jsonl 27.07.-10.08. (n=1394 Live-Analysen
                          # auf der Prod-Maschine): Median 5,8 s, p90 20,2 s, p99 52,2 s,
@@ -668,6 +674,11 @@ def frigate_read_only(cfg):
     return FRIGATE_READONLY_FORCED or bool(cfg.get("frigate_read_only", True))
 
 
+# .264: EIN Schoner je Prozess — api() fragt ihn vor jedem GET; der Dienst
+# verdrahtet log + Config-Werte beim Start (Defaults tragen bis dahin).
+frigate_schoner = Schoner()
+
+
 class FrigateHttpFehler(urllib.error.HTTPError):
     """HTTPError MIT Antwort-Auszug und Pfad. Anlass Issue #14 (Tokn59): das Log
     zeigte 67x nur 'HTTP Error 500: Internal Server Error' — Frigate schreibt die
@@ -703,12 +714,32 @@ def api_post(cfg, path, payload):
         raise FrigateHttpFehler(e, path) from None
 
 
+_frigate_ok = {"ts": 0.0}   # Wanduhr der letzten ECHTEN Frigate-Antwort
+#                             (.281: Banner-Entwarnung; der Schoner selbst
+#                             laeuft auf monotonic und taugt nicht zum
+#                             Vergleich mit dem Fehler-Zeitstempel)
+
+
 def api(cfg, path):
+    # .264 Frigate-Schoner: EIN Drosselpunkt fuer alle API-GETs — waehrend
+    # einer Sperre kommt nur der Probe-Slot durch (core/schoner, Anlass:
+    # API-Verklemmung 17.08., drei Instanzen hielten den Stau mit Retries).
+    if not frigate_schoner.erlaubt():
+        raise urllib.error.URLError(
+            "frigate protector active — backing off after repeated timeouts")
     try:
         with urllib.request.urlopen(cfg["frigate_url"] + path, timeout=20) as r:
-            return json.load(r)
+            daten = json.load(r)
     except urllib.error.HTTPError as e:
+        frigate_schoner.ok()          # der Server LEBT — 4xx/5xx ist eine Antwort
+        _frigate_ok["ts"] = time.time()
         raise FrigateHttpFehler(e, path) from None
+    except (TimeoutError, urllib.error.URLError, OSError):
+        frigate_schoner.fehler()
+        raise
+    frigate_schoner.ok()
+    _frigate_ok["ts"] = time.time()
+    return daten
 
 
 _frigate_cams_cache = {"ts": 0.0, "data": None, "err": None, "url": None}
@@ -1447,6 +1478,10 @@ class Service:
         self.pub = None                           # MQTT-Publisher (AP2), Setup via start_publisher()
         self.mqtt_trigger = None                  # MQTT-Trigger-Client (nur trigger=mqtt), Setup via mqtt_loop()
         self.frigate_fehler = None                # (ts, msg) letzter Frigate-API-Fehler -> UI-Banner
+        # .264 Frigate-Schoner: Config-Werte + lauter Log-Kanal verdrahten.
+        frigate_schoner.schwelle = int(self.cfg.get("frigate_schoner_fehler") or 3)
+        frigate_schoner.pause_s = float(self.cfg.get("frigate_schoner_pause_s") or 180)
+        frigate_schoner.log = self.log
         self._emb = None                          # Lazy-Embedder (Upload-Gate + Lern-Bruecke seit .235)
         self._emb_lock = threading.Lock()         # .235: Vorwaerm-Thread + Klick duerfen nicht doppelt bauen
         self._worker_obj = None                   # W2: persistenter Analyse-Worker (lazy, s. _worker)
@@ -2004,8 +2039,11 @@ class Service:
 
     def qs_neu_starten(self):
         """Referenz-QS im Hintergrund (separater Prozess) neu berechnen — nach jedem Anlernen/
-        Entfernen und auf Knopfdruck. Doppelstart-Guard: parallele Laeufe wuerden sich GPU und
-        das JSON-Schreiben streiten (Einzel-Loeschungen kommen sonst im Sekundentakt)."""
+        Entfernen und auf Knopfdruck (.273 Bestands-QS-Knopf: der Lauf ist
+        IMMER ungefiltert — der Personen-Filter ist reine Anzeige, Widerleger-
+        Blocker 'gefilterter Lauf loescht den Gesamtbericht'). Doppelstart-
+        Guard: parallele Laeufe wuerden sich GPU und das JSON-Schreiben
+        streiten (Einzel-Loeschungen kommen sonst im Sekundentakt)."""
         with self._qs_lock:
             if self._qs_laeuft:
                 self._qs_nochmal = True            # nicht still verwerfen: nach dem Lauf nachholen
@@ -2014,21 +2052,59 @@ class Service:
 
         def job():
             try:
+                # Widerleger-Blocker (Konzept-QS 18.08.): fester 600-s-Deckel
+                # koepfte den Lauf bei grossem Bestand STILL (CPU ~2 s/Bild,
+                # 339 Bilder real) — Timeout aus der Bildzahl ableiten,
+                # Timeout/Fehl-Exit LAUT in die Lauf-Datei schreiben (die
+                # Seite zeigt dann FAILED statt ewigem 'checking').
+                _n_bilder = 0
+                _fd = os.path.join(self.cfg["data_dir"], "faces")
+                try:
+                    for _p0 in os.listdir(_fd) if os.path.isdir(_fd) else []:
+                        _pd0 = os.path.join(_fd, _p0)
+                        if os.path.isdir(_pd0):
+                            _n_bilder += sum(
+                                1 for f in os.listdir(_pd0)
+                                if f.lower().endswith((".jpg", ".jpeg",
+                                                       ".png", ".webp")))
+                except OSError:
+                    pass
+                deckel_s = max(600, 3 * _n_bilder + 120)
                 env = dict(os.environ, OV_DEVICE=self.cfg["ov_device"])
+                fehler = None
                 with self._gpu_bg_lock:                       # gegen die anderen GPU-Hintergrund-Jobs serialisieren (Review 21.07.)
-                    subprocess.run([sys.executable,
-                                    os.path.join(HERE, "anlernen.py"), "pruefe",
-                                    "--unscharf", str(self.cfg.get("unscharf_max", 350)),
-                                    "--minkante", str(self.cfg.get("min_kante", 70))],
-                                   capture_output=True, timeout=600, check=False, env=env,
-                                   preexec_fn=_analyse_nice)   # Issue #21, s. ANALYSE_NICE
-                self.log("reference QS recalculated")
+                    try:
+                        r = subprocess.run([sys.executable,
+                                        os.path.join(HERE, "anlernen.py"), "pruefe",
+                                        "--unscharf", str(self.cfg.get("unscharf_max", 350)),
+                                        "--minkante", str(self.cfg.get("min_kante", 70)),
+                                        "--dupsim", str(self.cfg["benennung_dup_sim"])],
+                                       capture_output=True, timeout=deckel_s, check=False, env=env,
+                                       preexec_fn=_analyse_nice)   # Issue #21, s. ANALYSE_NICE
+                        if r.returncode != 0:
+                            fehler = (f"check exited with {r.returncode}: "
+                                      + (r.stderr or b"")[-200:].decode("utf-8", "replace"))
+                    except subprocess.TimeoutExpired:
+                        fehler = (f"check did not finish within {deckel_s}s "
+                                  "— start it again")
+                if fehler:
+                    self.log(f"reference QS FAILED: {fehler}")
+                    try:
+                        import anlernen as _al
+                        _al._schreibe_json_atomar(
+                            os.path.join(_al.ANLERN, "refs_qs_lauf.json"),
+                            {"fehler": fehler, "ts": round(time.time(), 1)})
+                    except Exception:
+                        pass
+                else:
+                    self.log("reference QS recalculated")
             finally:
                 with self._qs_lock:
                     self._qs_laeuft = False
                     nochmal, self._qs_nochmal = self._qs_nochmal, False
-            if nochmal:                            # waehrend des Laufs kam eine Aenderung
-                self.qs_neu_starten()
+                if nochmal:                        # waehrend des Laufs kam eine Aenderung
+                    self.qs_neu_starten()          # Widerleger: nie mehr hinter
+                    #                                einem stillen Thread-Tod verfallen
         threading.Thread(target=job, daemon=True).start()
 
     def vorschlaege_starten(self, person):
@@ -2478,13 +2554,17 @@ class Service:
                 self.lernlauf_ernte_starten()
                 return
             ev = int(zustand.get("events") or 0)
-            if ev <= 0:
-                # NIE einen Ersatz-Umfang raten (frueher: stiller 100er-Rueckfall)
+            _rtag = str(zustand.get("tag") or "")
+            if ev <= 0 and not _rtag:
+                # NIE einen Ersatz-Umfang raten (frueher: stiller 100er-Rueckfall);
+                # .263: ein Tages-Lauf traegt seinen Umfang im tag-Feld.
                 self.log("learning run state incomplete (no scope) — not resuming; "
                          "abort the run and create a new one")
                 return
             self.log("learning run resumes after restart (preparation from scratch)")
-            self.lernlauf_vorbereiten_starten(ev, alle_modus=bool(zustand.get("alle")))
+            self.lernlauf_vorbereiten_starten(ev, alle_modus=bool(zustand.get("alle")),
+                                              nur_neue=bool(zustand.get("nur_neue")),
+                                              tag=_rtag or None)
         except Exception as e:
             self.log(f"learning run resume failed ({type(e).__name__}: {e})")
 
@@ -2554,6 +2634,7 @@ class Service:
         "benennung_vorschlag_schwelle": (float, 0.2, 0.95, "naming: 'looks like X' suggestion threshold vs named-anchor centroids (conservative start; suggestion only, never forces)"),
         "fps_sample": (float, 1, 30, "analysis sampling rate (calibrated 3)"),
         "szene_karenz_s": (int, 30, 900, "scene grace: unknown alert only if nobody was confirmed in the window"),
+        "alert_stil": (list, ["worte", "worte_zahlen"], None, "alert text style (.249 Kosinus-raus): worte (plain words, default) / worte_zahlen (words plus raw scores)"),
         "telegram_modus": (list, ["aus", "ha", "direkt", "beide"], None, "Telegram sending: aus (off) / ha (HA script) / direkt (direct) / beide (both)"),
         "telegram_inhalt": (list, ["video", "bild"], None, "Telegram attachment: video (short clip, image if unavailable) / bild (image only, no transcoding)"),
         "telegram_hoehe": (list, [720, 480], None, "Telegram video height: 720 (default) / 480 (smaller files, faster on weak hardware) — applies to face AND person alerts"),
@@ -2710,8 +2791,11 @@ class Service:
                 return False, ""
             variante = os.environ.get("SUSLIK_VARIANT", "")
             if variante == "cpu":
-                grund = ("Live watchers are not available on this build "
-                         "(CPU-only image)")
+                # CPU-Runde 17.08. (User-Go nach Messung cpu_live_haustuer_
+                # 20260817): die cpu-VARIANTE ist nicht mehr gesperrt,
+                # sondern BEGRENZT (ein Waechter, ehrliche 1-2-s-Erwartung)
+                # — dasselbe Praedikat wie livewached._cpu_lage.
+                return False, ""
             elif variante:
                 grund = (f"Live watchers need GPU recognition, but this "
                          f"'{variante}' image is running on the CPU here — "
@@ -2814,6 +2898,50 @@ class Service:
                                       store_laden=_lade_config_store,
                                       store_schreiben=_store_schreiben)
 
+    def _container_cpu_last(self):
+        """.252 (User: 'worauf soll er entscheiden?'): ECHTE CPU-Nutzung des
+        GANZEN suslik-Containers (Dienst + Engine + Worker) aus der eigenen
+        cgroup — die einzige Quelle, die im Container nicht luegt (/proc/*
+        zeigt den Wirt, s. CLAUDE.md-Meminfo-Falle). 0,2-s-Fenster.
+        -> (genutzte_kerne, limit_kerne|None) oder None (cgroup unlesbar,
+        dann zeigt die Seite ehrlich nichts)."""
+        try:
+            import time as _t
+            def _lesen():
+                with open("/sys/fs/cgroup/cpu.stat") as f:
+                    for z in f:
+                        if z.startswith("usage_usec"):
+                            return int(z.split()[1])
+                return None
+            u1 = _lesen()
+            if u1 is None:
+                return None
+            _t.sleep(0.2)
+            u2 = _lesen()
+            kerne = (u2 - u1) / 0.2 / 1_000_000
+            limit = None
+            try:
+                quota, periode = open("/sys/fs/cgroup/cpu.max").read().split()
+                if quota != "max":
+                    limit = round(int(quota) / int(periode), 1)
+            except Exception:
+                pass
+            return (round(max(kerne, 0.0), 2), limit)
+        except Exception:
+            return None
+
+    def _live_cpu_begrenzt(self):
+        """CPU-Runde 17.08.: laeuft dieser Dienst im BEGRENZTEN CPU-Modus
+        (kind=cpu auf der cpu-Variante)? Fail-closed: Pruef-Fehler = False
+        (dann greift ohnehin _live_gesperrt)."""
+        try:
+            from face_audit import resolve_backend
+            kind, _dev = resolve_backend()
+            return (kind == "cpu"
+                    and os.environ.get("SUSLIK_VARIANT", "") == "cpu")
+        except Exception:
+            return False
+
     def live_schalter(self, kamera, enabled):
         from core import livewache as _lw
         gesperrt, _grund = self._live_gesperrt()
@@ -2821,6 +2949,22 @@ class Service:
             # UI-KANN 14: die Kachel zeigt 'Bedienelemente aus' — der Server
             # haelt sich jetzt auch daran (vorher 200 am UI-Grau vorbei).
             return False, "not available on this build"
+        # CPU-Empfehlung (.252, User-Entscheid 17.08.: ER entscheidet, wir
+        # warnen): der Schalter laesst im begrenzten Modus JEDE Zahl zu,
+        # haengt aber ueber der Empfehlung eine laute Warnung an die
+        # Erfolgsmeldung (Engine warnt beim Start zusaetzlich im Log).
+        cpu_warnung = ""
+        if enabled and self._live_cpu_begrenzt():
+            from core.livewached import CPU_EMPFOHLEN
+            _d, _guards = _lw.guards_lesen(self.cfg, lambda z: None)
+            an = [k for k, g in _guards.items()
+                  if g["enabled"] and k != kamera]
+            if len(an) >= CPU_EMPFOHLEN:
+                cpu_warnung = (f" — CPU mode now runs {len(an) + 1} "
+                               f"watchers (recommended: {CPU_EMPFOHLEN}). "
+                               "They share the same cores: each additional "
+                               "watcher slows all of them and heats the "
+                               "machine. Check Measure load per camera.")
         with _cfg_lock:                    # Engine-M5, s. live_speichern
             ok, msg = _lw.live_schalter(self.cfg, kamera, bool(enabled),
                                         log=self.log,
@@ -2833,6 +2977,8 @@ class Service:
         # ist dann in Sekunden wirksam statt einen Kaltstart zu kosten).
         if ok and enabled and self._live_aufsicht is not None:
             self._live_aufsicht.anstossen()
+        if ok and cpu_warnung:
+            msg = (msg or "") + cpu_warnung
         return ok, msg
 
     def live_verstecken(self, kamera, versteckt):
@@ -4522,31 +4668,65 @@ class Service:
             _sh.rmtree(os.path.join(self.cfg["data_dir"], "state", "wanduhr_mess"),
                        ignore_errors=True)
 
-    def lernlauf_vorbereiten_starten(self, anzahl, alle_modus=False):
+    def lernlauf_vorbereiten_starten(self, anzahl, alle_modus=False, nur_neue=False,
+                                     tag=None):
         """E1.72: die Vorbereitungs-Phase ARBEITET sichtbar (User-Wunsch nach dem
         ersten 10er-Lauf: 'dann wuesste man, der arbeitet im Hintergrund') — geht die
         gewaehlten Events einzeln durch, prueft Clip-Verfuegbarkeit, zaehlt im
         Lauf-Zustand hoch und persistiert die GEPRUEFTE Event-Liste (die braucht E2
-        ohnehin; schliesst zugleich die Widerleger-Luecke 'nur die Zahl gespeichert')."""
+        ohnehin; schliesst zugleich die Widerleger-Luecke 'nur die Zahl gespeichert').
+        nur_neue (.262 Fortsetzungs-Suche): schon durchsuchte Events ueberspringen.
+        tag (.263 Tages-Modus): 'YYYY-MM-DD' — ALLE person-Events dieses Tages
+        statt der letzten anzahl (anzahl wird dann ignoriert)."""
         with self._lernlauf_start_lock:               # F2.2: check-then-act atomar
             t = getattr(self, "_lernlauf_prep_thread", None)
             if t and t.is_alive():
                 return False
             t = threading.Thread(target=self._lernlauf_vorbereiten, daemon=True,
-                                 name="lernlauf-prep", args=(anzahl, alle_modus))
+                                 name="lernlauf-prep",
+                                 args=(anzahl, alle_modus, nur_neue, tag))
             self._lernlauf_prep_thread = t
         t.start()
         return True
 
-    def _lernlauf_vorbereiten(self, anzahl, alle_modus):
+    def _lernlauf_vorbereiten(self, anzahl, alle_modus, nur_neue=False, tag=None):
         from core import ereignisse as _evm
         from core import lernlauf as _ll
         dd = self.cfg["data_dir"]
         try:
-            evs, _ = _evm.person_events(lambda p: api(self.cfg, p),
-                                        None if alle_modus else anzahl)
+            # .262 Fortsetzungs-Suche: genug NEUERE Events mitholen, damit nach
+            # dem Filter noch 'anzahl' UNdurchsuchte uebrig sind (hoechstens
+            # len(gesehen) der Neuesten koennen wegfallen; Kappe bleibt der
+            # Pagination-Deckel). Unlesbare Vermerk-Zeilen zaehlen, nie still.
+            gesehen, _gk = (_ll.durchsucht_lesen(dd) if nur_neue else (set(), 0))
+            if _gk:
+                self.log(f"learning run: {_gk} unreadable searched-index "
+                         "line(s) — affected events may be searched again")
+            if tag:
+                # .263 Tages-Modus: das Fenster ist der lokale Kalendertag.
+                _t0 = datetime.datetime.strptime(tag, "%Y-%m-%d")
+                evs, _ = _evm.person_events(
+                    lambda p: api(self.cfg, p), None,
+                    fenster=(_t0.timestamp(),
+                             (_t0 + datetime.timedelta(days=1)).timestamp()))
+            else:
+                hol_n = (None if alle_modus else
+                         min(anzahl + len(gesehen), self.LERNLAUF_EVENTS_MAX))
+                evs, _ = _evm.person_events(lambda p: api(self.cfg, p), hol_n)
+            alt_uebersprungen = 0
+            if gesehen:
+                _v = len(evs)
+                evs = [e for e in evs if str(e.get("id")) not in gesehen]
+                alt_uebersprungen = _v - len(evs)
+                if not (alle_modus or tag):
+                    evs = evs[:anzahl]
             n = len(evs)
-            _ll.lauf_fortschreiben(dd, fortschritt={"checking events": f"0/{n}"})
+            # Umfang EHRLICH nachziehen (Tages-Modus startet mit events=0;
+            # auch ein weiter-Lauf am Historien-Ende findet weniger als anzahl).
+            _ll.lauf_fortschreiben(dd, events=n, fortschritt=dict(
+                {"checking events": f"0/{n}"},
+                **({"already searched (skipped)": alt_uebersprungen}
+                   if nur_neue else {})))
             liste, mit_clip = [], 0
             for i, e in enumerate(evs, 1):
                 hat_clip = e.get("has_clip") is True
@@ -4775,6 +4955,44 @@ class Service:
                 # Haenger aus, obwohl Event 12 mitten in der Analyse steckte.
                 _ll.lauf_fortschreiben(dd, fortschritt={
                     "analysing": f"{e.get('kamera', '?')} clip {round(e.get('clip_s') or 0)}s"})
+                # .262 Hebel 2 (gemessen 17.08.: Download 0.4-0.6 s je Clip bei
+                # ~2.5 s Analyse): EIN Vorlade-Slot — waehrend der Worker dieses
+                # Event rechnet, holt ein Thread den NAECHSTEN Clip in den
+                # Cache (clip_holen: eindeutige .part-Datei, atomar; der
+                # Vorlader gibt seinen Pin sofort frei, die Datei bleibt im
+                # Cache und der Worker trifft sie). Laeuft der Vorlader noch
+                # am AKTUELLEN Event, kurz warten statt doppelt zu laden.
+                vor = getattr(self, "_lernlauf_vorlader", None)
+                if vor and vor[1] == eid and vor[0].is_alive():
+                    vor[0].join(timeout=45)
+                # .264: waehrend einer Schoner-Sperre KEIN Vorladen — der
+                # Vorlader waere sonst genau der Hammer, den der Schoner
+                # verhindern soll.
+                if frigate_schoner.gesperrt():
+                    pass
+                elif vor is None or not vor[0].is_alive():
+                    _nx = next(
+                        (x for x in mit_clip[i:]
+                         if x.get("eid") not in fertig
+                         and not os.path.isfile(os.path.join(
+                             clips_dir,
+                             str(x.get("eid")).replace("/", "_") + ".mp4"))),
+                        None)
+                    if _nx is not None:
+                        def _vorladen(_ne=_nx.get("eid")):
+                            from core import frames as _fr
+                            try:
+                                _fr.clip_holen(
+                                    _ne, data_dir=dd,
+                                    frigate_url=self.cfg.get("frigate_url"))
+                            except Exception:
+                                pass       # der Ernte-Job meldet Fehler selbst
+                            finally:
+                                _fr.frei(_ne, data_dir=dd)
+                        _vt = threading.Thread(target=_vorladen, daemon=True,
+                                               name="lernlauf-vorlader")
+                        self._lernlauf_vorlader = (_vt, _nx.get("eid"))
+                        _vt.start()
                 z, ferr = _ll.lauf_lesen(dd)
                 if z is None:
                     self.log(f"harvest stopped: run state unreadable ({ferr})"
@@ -4835,12 +5053,57 @@ class Service:
                     if antwort.get("letzter_m"):
                         summe["letzter_fund"] = antwort["letzter_m"]
                 else:
+                    # .264 Frigate-Schoner: VOR der Fehler-Buchung pruefen, ob
+                    # Frigate ueberhaupt noch antwortet — ein Infrastruktur-
+                    # Ausfall darf das Event weder als 'fehler' verbuchen noch
+                    # in den durchsucht-Vermerk schreiben (es war nie dran
+                    # schuld). Stattdessen sichtbar warten, bis die Sperre
+                    # faellt, und das Event UNGEBUCHT lassen (naechster
+                    # Lauf/Resume holt es nach).
+                    infra = False
+                    try:
+                        api(self.cfg, "/api/version")
+                    except FrigateHttpFehler:
+                        pass                       # Antwort = Frigate lebt
+                    except Exception:
+                        infra = True
+                    if infra:
+                        self.log(f"harvest {eid}: Frigate not answering — "
+                                 "event NOT booked, waiting for recovery")
+                        while frigate_schoner.gesperrt():
+                            if _ll.lauf_fortschreiben(dd, fortschritt={
+                                    "status": "waiting for Frigate to recover "
+                                              "(protector active)"}) is None:
+                                self.log("harvest stopped while waiting for "
+                                         "Frigate (run aborted)")
+                                return
+                            if frigate_schoner.erlaubt():
+                                try:            # aktive Probe haelt die Sperre
+                                    api(self.cfg, "/api/version")   # ehrlich
+                                except FrigateHttpFehler:
+                                    pass        # Antwort = lebt, ok() lief
+                                except Exception:
+                                    pass        # fehler() lief, Sperre verlaengert
+                            time.sleep(10)
+                        if _ll.lauf_fortschreiben(dd, fortschritt={
+                                "status": "harvesting"}) is None:
+                            return
+                        continue
                     eintrag["fehler"] = ((antwort or {}).get("fehler")
                                          or "worker timeout/crash")
                     summe["fehler"] = summe.get("fehler", 0) + 1
                     self.log(f"harvest {eid} FAILED: {eintrag['fehler']}")
                     _ern.event_aufraeumen(lauf_dir, eid)   # keine Teilzeilen-Leichen
                 _ern.fertig_anhaengen(lauf_dir, eintrag)
+                # .262 Fortsetzungs-Suche: Vermerk ok UND fehler (ein heute
+                # toter Clip ist im naechsten Lauf erst recht weg); ein
+                # Schreibfehler stoppt NIE die Ernte, nur den Vermerk.
+                try:
+                    _ll.durchsucht_merken(dd, eid,
+                                          "ok" if eintrag.get("ok") else "fehler")
+                except OSError as _de:
+                    self.log(f"searched-index write failed ({_de}) — the event "
+                             "may be searched again in a later run")
                 fertig.add(eid)
                 rest_txt = "?"
                 try:
@@ -5878,21 +6141,45 @@ class Service:
                       "stored, nothing announced, live state untouched",
                       flush=True)
                 return
+            # .249 (Kosinus-raus): Wortstufe an der GEEICHTEN Koerper-Latte
+            # (status.json: schwelle + fremd_max — das Band ist hier
+            # MESSBASIERT, kein Default-Heuristik-Band).
+            _vt_wort, _vt_stufe = "", None
             if u:
+                try:
+                    from core import personmodell as _pm2
+                    from core import vertrauen as _vt
+                    _st = _pm2.status_lesen(self.cfg["data_dir"]) or {}
+                    _band = None
+                    if _st.get("schwelle") and _st.get("fremd_max"):
+                        _band = max(0.0, float(_st["schwelle"])
+                                    - float(_st["fremd_max"]))
+                    _vt_stufe = _vt.stufe(u["score"], _st.get("schwelle"),
+                                          _band)
+                    _vt_wort = _vt.label(_vt_stufe)
+                except Exception:
+                    _vt_wort, _vt_stufe = "", None
                 # MQTT fuer HA-Automationen (User 04.08.): JEDER Treffer
                 # ueber der Schwelle auf ein eigenes Topic — das Feld
-                # feuer sagt, ob die Feuer-Regel erfuellt war.
-                self._mqtt_pub(_melden.topic(self.cfg, "person_erkennung"), json.dumps({
+                # feuer sagt, ob die Feuer-Regel erfuellt war. "stufe"
+                # ADDITIV (.249): bestehende Schluessel byte-gleich.
+                _payload = {
                     "eid": eid, "person": u["person"],
                     "score": u["score"], "stuetzen": u["stuetzen"],
                     "feuer": bool(u.get("feuer")),
                     "quelle": "person_recognition",
-                    "ts": round(time.time(), 1)}, ensure_ascii=False))
+                    "ts": round(time.time(), 1)}
+                if _vt_stufe is not None:
+                    _payload["stufe"] = _vt_stufe
+                self._mqtt_pub(_melden.topic(self.cfg, "person_erkennung"),
+                               json.dumps(_payload, ensure_ascii=False))
             if u and u.get("feuer"):
                 text = (f"{u['person']} recognized by body "
-                        f"(person recognition, not face) — score "
-                        f"{u['score']}, {u['stuetzen']} supporting "
+                        f"(person recognition, not face) — "
+                        f"{_vt_wort or 'match'}, {u['stuetzen']} supporting "
                         "events")
+                if str(self.cfg.get("alert_stil") or "worte") == "worte_zahlen":
+                    text += f" [score {u['score']}]"
                 push(self.cfg, "suslik person recognition", text,
                      attachment=u.get("bild"))
                 # Telegram EXAKT wie die Gesichtsseite (User 04.08.:
@@ -5930,12 +6217,35 @@ class Service:
             return False
         f = entry["frigate"]
         fs = f"{f['score']:.2f}" if f["score"] is not None else "?"
-        ours_txt = ", ".join(f"{p} {r['max']:+.2f}/{r['win3s']}x" for p, r in sorted(entry["ours"].items(),
-                             key=lambda x: -(x[1]["max"] or 0))[:3]) or "keine Gesichter"
         _ar = _areas_mod.melde_zusatz(self.cfg.get("areas"), entry["camera"])   # Areas Stufe 1
-        msg = (f"{entry['camera']}{f' · {_ar}' if _ar else ''} — Frigate: '{f['label']} {fs}' (= cos {f['cos']})"
-               f" | Verify: {'bestaetigt: ' + ', '.join(entry['bestaetigt']) if entry['bestaetigt'] else 'NICHT bestaetigt'}"
-               f" — {ours_txt} ({entry['faces']} Gesichter)")
+        # .249 (Kosinus-raus, Konzept M1): Worte statt Zahlensalat — und der
+        # alte Text war obendrein deutsch-englisch gemischt ('bestaetigt',
+        # 'Gesichter'). Rohzahlen nur im Stil 'worte_zahlen' als Anhang.
+        from core import vertrauen as _vt
+        _bar = self.cfg["win_thresh"]
+        _reihe = sorted(entry["ours"].items(),
+                        key=lambda x: -(x[1]["max"] or 0))[:3]
+        if entry["bestaetigt"]:
+            _teile = []
+            for p in entry["bestaetigt"]:
+                r = entry["ours"].get(p) or {}
+                _teile.append(f"{p} confirmed ({_vt.wort(r.get('max'), _bar)}, "
+                              f"seen in {r.get('win3s', 0)} windows)")
+            verify_txt = "; ".join(_teile)
+        elif _reihe:
+            p, r = _reihe[0]
+            verify_txt = (f"no one confirmed — closest is {p} "
+                          f"({_vt.wort(r.get('max'), _bar)})")
+        else:
+            verify_txt = "no one confirmed — no usable faces"
+        msg = (f"{entry['camera']}{f' · {_ar}' if _ar else ''} — {verify_txt}. "
+               f"Frigate saw: {f['label']}. "
+               f"{entry['faces']} face{'s' if entry['faces'] != 1 else ''} "
+               "in this event.")
+        if str(self.cfg.get("alert_stil") or "worte") == "worte_zahlen":
+            ours_txt = ", ".join(f"{p} {r['max']:+.2f}/{r['win3s']}x"
+                                 for p, r in _reihe) or "-"
+            msg += (f" [Frigate {fs} (= cos {f['cos']}) | {ours_txt}]")
         anhang = self._best_crop(event_dir, entry, entry["bestaetigt"] or list(entry["ours"]))
         if self.dry_alert:
             self.log(f"DRY-ALERT: {msg}")
@@ -6217,6 +6527,36 @@ class Service:
                  f"{self.cfg['nachhol_tage']}d, max {self.cfg['nachhol_versuche']} attempts, "
                  f"analysis cap {self.cfg['nachhol_analyse_timeout_s']}s, silent (no alerts)")
 
+    def start_frigate_probe(self):
+        """.281: der Probe-Slot des Schoners bekommt einen NUTZER auch ohne
+        Event-Anlass. Im MQTT-Betrieb ruft nach dem Start-Sweep niemand die
+        Frigate-API, solange keine Events kommen — eine Schoner-Sperre
+        bliebe unbemerkt bestehen (Vorfall 18.08.: Banner stand 10 min
+        laenger als noetig). Der Loop schlaeft, solange keine Sperre aktiv
+        ist; waehrend einer Sperre versucht er /api/version — api() selbst
+        drosselt auf den EINEN Probe-Slot je probe_s, Erfolg loest die
+        Sperre laut (schoner.ok) und stempelt die Banner-Entwarnung."""
+        def lauf():
+            while True:
+                time.sleep(15)
+                if not self.cfg.get("frigate_url"):
+                    continue
+                # .283: auch OHNE Sperre proben, solange ein Fehler ansteht —
+                # 1-2 Timeouts + Neustart durch den User erreichten die
+                # Schwelle nie, und der Banner stand trotz erholtem Frigate
+                # (Live-Beweis 18.08. 14:47: kein Event = keine Entwarnung).
+                if not (frigate_schoner.gesperrt() or self.frigate_fehler):
+                    continue
+                try:
+                    api(self.cfg, "/api/version")
+                    if self.frigate_fehler:
+                        self.log("Frigate reachable again (probe)")
+                    self.frigate_fehler = None
+                    self.frigate_fehlerserie = 0
+                except Exception:
+                    pass          # Drossel/Fehler bucht api() selbst
+        threading.Thread(target=lauf, daemon=True).start()
+
     def poll_loop(self):
         cfg = self.cfg
         self.log(f"poll mode: every {cfg['poll_interval']}s, lookback {cfg['lookback_h']}h, "
@@ -6326,7 +6666,21 @@ def make_handler(svc):
                 pass                              # Client weg — nichts mehr zuzustellen
 
         def _banner(self):
+            # .264: aktive Schoner-Sperre geht vor — sie erklaert, WARUM
+            # gerade keine frischen Frigate-Daten kommen.
+            if frigate_schoner.gesperrt():
+                return ("Frigate is not answering — backing off and probing "
+                        "every few seconds until it recovers; the UI keeps "
+                        "serving local data.")
             f = getattr(svc, "frigate_fehler", None)
+            # .281 (User 18.08.: Banner stand nach dem Frigate-Neustart 10 min):
+            # JEDE echte Frigate-Antwort NACH dem Fehler entwarnt sofort —
+            # vorher taten das nur sweep() und der Event-Retry, im MQTT-
+            # Betrieb ohne neues Event also niemand.
+            if f and _frigate_ok["ts"] > f[0]:
+                svc.frigate_fehler = None
+                svc.frigate_fehlerserie = 0
+                f = None
             if f and time.time() - f[0] < 600:
                 t = datetime.datetime.fromtimestamp(f[0]).strftime("%H:%M:%S")
                 # Tokn59-Fund Issue #8 (31.07.): der Banner war als letzte UI-Stelle noch
@@ -6494,6 +6848,26 @@ def make_handler(svc):
                 return self._send(200, json.dumps({"ok": True,
                                   "msg": "Prüfung läuft, Seite in ~1 min neu laden"}, ensure_ascii=False),
                                   "application/json")
+            if pfad == "/qualitaet/start":                     # .273 Bestands-QS-Knopf
+                # Derselbe bewaehrte Hintergrund-Runner wie nach jedem
+                # Anlernen (qs_neu_starten: Doppelstart-Guard, GPU-Lock,
+                # Nachholen). Der Lauf ist IMMER ungefiltert; die gewaehlte
+                # Person ist reine ANZEIGE (?person auf der Ergebnis-Seite).
+                try:
+                    n = int(self.headers.get("Content-Length", 0))
+                    d = json.loads(self.rfile.read(min(n, 4096)) or b"{}")
+                    pers = str(d.get("person") or "").strip()
+                    if pers and pers not in master_persons(cfg):
+                        return self._send(400, json.dumps(
+                            {"ok": False, "msg": "unknown person"}),
+                            "application/json")
+                    svc.qs_neu_starten()
+                    return self._send(200, json.dumps(
+                        {"ok": True, "msg": "check started",
+                         "person": pers}), "application/json")
+                except Exception as e:
+                    return self._send(400, json.dumps(
+                        {"ok": False, "msg": str(e)}), "application/json")
             if pfad == "/anlern_wartung_jetzt":                # Reorganisieren (Pool-Neupruefung + Cluster neu), manuell
                 gestartet = svc._reorganisieren()
                 msg = ("Reorganizing (pool re-check + re-cluster, 1-2 min, then reload the pages)"
@@ -6788,8 +7162,8 @@ def make_handler(svc):
                             args=(svc.embedder,), daemon=True).start()
                         return self._send(200, json.dumps(
                             {"ok": True, "laden": True,
-                             "msg": "updating the reference library — a few "
-                                    "seconds …"}), "application/json")
+                             "msg": "rebuilding the reference library — with a "
+                                    "large library this can take a minute …"}), "application/json")
                     eids = [str(e) for e in (d.get("eids") or [])][:200]
                     nehmen, grenz = anlernen.lernbruecke_pruefen(
                         person, eids, emb=svc.embedder)
@@ -7191,13 +7565,35 @@ def make_handler(svc):
                     lauf_fps = float(d.get("fps") or 0)
                     if not (1 <= lauf_fps <= 30):
                         lauf_fps = 0
+                    # .259 (Such-Popup): optionale Zielperson — die Suche
+                    # laeuft identisch, passende Gruppen stehen danach vorn.
+                    zielperson = str(d.get("person") or "").strip()
+                    # .262 Fortsetzungs-Suche: schon Durchsuchtes ueberspringen.
+                    nur_neue = bool(d.get("weiter"))
+                    # .263 Tages-Modus (Wechselschalter): ein ganzer Tag statt
+                    # der letzten N Events (Frigate after/before, live belegt).
+                    tag_wahl = str(d.get("tag") or "").strip()
                 except (ValueError, TypeError):
                     ev = 0
                     lauf_fps = 0
-                if ev <= 0 or ev > svc.LERNLAUF_EVENTS_MAX:
+                    zielperson = ""
+                    nur_neue = False
+                    tag_wahl = ""
+                if tag_wahl:
+                    try:
+                        datetime.datetime.strptime(tag_wahl, "%Y-%m-%d")
+                    except ValueError:
+                        return self._send(400, json.dumps(
+                            {"ok": False, "msg": "invalid day (YYYY-MM-DD)"}),
+                            "application/json")
+                elif ev <= 0 or ev > svc.LERNLAUF_EVENTS_MAX:
                     return self._send(400, json.dumps({"ok": False,
                                       "msg": f"events must be 1..{svc.LERNLAUF_EVENTS_MAX}"}),
                                       "application/json")
+                if zielperson and zielperson not in master_persons(cfg):
+                    return self._send(400, json.dumps(
+                        {"ok": False, "msg": "unknown person"}),
+                        "application/json")
                 with svc._lernlauf_start_lock:
                     # Phasen-Wache (F5.3): ein alter Browser-Tab darf einen
                     # fortgeschrittenen Lauf nicht still zuruecksetzen.
@@ -7237,14 +7633,25 @@ def make_handler(svc):
                                                              "ts": round(time.time(), 1),
                                                              "fortschritt": {}},
                                                             **({"fps_sample": lauf_fps}
-                                                               if lauf_fps else {})))
+                                                               if lauf_fps else {}),
+                                                            **({"zielperson": zielperson}
+                                                               if zielperson else {}),
+                                                            **({"nur_neue": True}
+                                                               if nur_neue else {}),
+                                                            **({"tag": tag_wahl}
+                                                               if tag_wahl else {})))
                     except OSError as e:           # F2.7: voller Datentraeger u.ae. LAUT
                         svc.log(f"learning run NOT created: {e}")
                         return self._send(500, json.dumps({"ok": False,
                                           "msg": f"could not write run state: {e}"}),
                                           "application/json")
-                    svc.log(f"learning run created: scope {ev} events")
-                    svc.lernlauf_vorbereiten_starten(ev, alle_modus=bool(d.get("alle")))
+                    svc.log("learning run created: scope "
+                            + (f"day {tag_wahl}" if tag_wahl else f"{ev} events")
+                            + (f", looking for {zielperson}" if zielperson else "")
+                            + (", skipping already-searched events" if nur_neue else ""))
+                    svc.lernlauf_vorbereiten_starten(ev, alle_modus=bool(d.get("alle")),
+                                                     nur_neue=nur_neue,
+                                                     tag=tag_wahl or None)
                 return self._send(200, json.dumps({"ok": True, "msg": "run created"}),
                                   "application/json")
             if pfad == "/lernlauf_abbruch":
@@ -7624,9 +8031,14 @@ def make_handler(svc):
                     aid = str(d.get("anker_id") or "")
                     saetze, _k = _ll.anker_lesen(cfg["data_dir"])
                     satz = next((s for s in saetze if s.get("anker_id") == aid), None)
-                    if satz is None or satz.get("status") != "unbenannt":
+                    # .259 (User: 'der Knopf delete the group fehlt'): auch
+                    # BENANNTE Gruppen sind verwerfbar — die Benennung hat
+                    # nichts in den Master kopiert, anker_verwerfen raeumt
+                    # person mit ab. Uebernommene nie (Referenzen existieren).
+                    if satz is None or satz.get("status") not in ("unbenannt", "benannt"):
                         return self._send(400, json.dumps(
-                            {"ok": False, "msg": "only unnamed clusters can be dismissed"}),
+                            {"ok": False, "msg": "only groups without adopted "
+                                                 "pictures can be dismissed"}),
                             "application/json")
                     _s2, ncrops = _ll.anker_verwerfen(cfg["data_dir"], aid)
                     return self._send(200, json.dumps(
@@ -7702,6 +8114,124 @@ def make_handler(svc):
                         ensure_ascii=False), "application/json")
                 except Exception as e:
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
+            if pfad == "/lernlauf/sichtung":                   # .266 Erst-Sichtung
+                # 'Sicht = Pruefergebnis' (User 18.08.): die Gruppe EINMAL mit
+                # der echten Crop-Messung sichten und cachen — die Flaeche
+                # rendert danach NUR aus diesem Ergebnis. Warm-Check wie die
+                # Bruecke; READ-ONLY bis auf den Cache im Lauf-Ordner.
+                try:
+                    import anlernen
+                    n = int(self.headers.get("Content-Length", 0))
+                    d = json.loads(self.rfile.read(min(n, 65536)))
+                    from core import lernlauf as _ll
+                    aid = str(d.get("anker_id") or "")
+                    saetze, _k = _ll.anker_lesen(cfg["data_dir"])
+                    satz = next((s for s in saetze
+                                 if s.get("anker_id") == aid), None)
+                    if satz is None or satz.get("status") in ("uebernommen",
+                                                              "verworfen"):
+                        return self._send(400, json.dumps(
+                            {"ok": False, "msg": "unknown or closed group"}),
+                            "application/json")
+                    if svc._emb is None:
+                        threading.Thread(target=lambda: svc.embedder,
+                                         daemon=True).start()
+                        return self._send(200, json.dumps(
+                            {"ok": True, "laden": True,
+                             "msg": "loading the recognition model — a few "
+                                    "seconds …"}), "application/json")
+                    # .267 (Widerleger-Blocker): die Uebernahme loescht den
+                    # refcache — OHNE ihn wuerde die Flaeche qualitaets-only
+                    # urteilen und 'reference check' behaupten. Hier neu
+                    # bauen (Bruecken-Muster), der Render wartet solange.
+                    if not os.path.exists(os.path.join(
+                            cfg["data_dir"], "clips", "refcache.npz")):
+                        threading.Thread(
+                            target=anlernen.refcache_aufbauen,
+                            args=(svc.embedder,), daemon=True).start()
+                        return self._send(200, json.dumps(
+                            {"ok": True, "laden": True,
+                             "msg": "rebuilding the reference library — with a "
+                                    "large library this can take a minute …"}), "application/json")
+                    lid = (satz.get("lauf") or {}).get("lauf_id", "")
+                    # .273 (Widerleger-Rest c): In-Flight-Riegel — Retry-
+                    # Schleife/zweiter Tab starten die 40-Bild-Messung sonst
+                    # mehrfach parallel auf derselben Gruppe.
+                    with svc._lernlauf_start_lock:
+                        if getattr(svc, "_sichtung_aid", None) == aid:
+                            return self._send(200, json.dumps(
+                                {"ok": True, "laden": True,
+                                 "msg": "checking pictures — a few seconds …"}),
+                                "application/json")
+                        svc._sichtung_aid = aid
+                    try:
+                        anlernen.gruppen_sichtung(
+                            satz, os.path.join(cfg["data_dir"], "state",
+                                               "lernlauf", str(lid)),
+                            emb=svc.embedder,
+                            yaw_grenze=cfg["benennung_yaw_grenze"])
+                    finally:
+                        svc._sichtung_aid = None
+                    return self._send(200, json.dumps({"ok": True}),
+                                      "application/json")
+                except Exception as e:
+                    return self._send(500, json.dumps(
+                        {"ok": False, "msg": f"{type(e).__name__}: {e}"}),
+                        "application/json")
+            if pfad == "/lernlauf/benenn_pruefung":            # .257 (User-Fang 17.08.):
+                # Benenn-Pruefung der Zuweisungs-Flaeche = DIESELBE Latte wie
+                # die Lern-Bruecke (anlernen.benennung_bewerten: bild_stufe-
+                # Achsen + Uebernahme-Dedup) mit dem warmen Dienst-Modell,
+                # READ-ONLY. Die .256-Fassung rechnete nur den Dedup — 12
+                # sichtbar schlechte Bilder bekamen gruene Rahmen.
+                try:
+                    import anlernen
+                    n = int(self.headers.get("Content-Length", 0))
+                    d = json.loads(self.rfile.read(min(n, 65536)))
+                    from core import lernlauf as _ll, uebernahme as _ue
+                    aid = str(d.get("anker_id") or "")
+                    saetze, _k = _ll.anker_lesen(cfg["data_dir"])
+                    satz = next((s for s in saetze
+                                 if s.get("anker_id") == aid), None)
+                    if satz is None or satz.get("status") != "benannt":
+                        return self._send(400, json.dumps(
+                            {"ok": False,
+                             "msg": "anchor is not named (or unknown)"}),
+                            "application/json")
+                    # Warm-Checks wie die Bruecke (.232/.236): kaltes Modell
+                    # bzw. fehlender refcache EHRLICH melden, UI fragt nach.
+                    if svc._emb is None:
+                        threading.Thread(target=lambda: svc.embedder,
+                                         daemon=True).start()
+                        return self._send(200, json.dumps(
+                            {"ok": True, "laden": True,
+                             "msg": "loading the recognition model — a few "
+                                    "seconds …"}), "application/json")
+                    if not os.path.exists(os.path.join(
+                            cfg["data_dir"], "clips", "refcache.npz")):
+                        threading.Thread(
+                            target=anlernen.refcache_aufbauen,
+                            args=(svc.embedder,), daemon=True).start()
+                        return self._send(200, json.dumps(
+                            {"ok": True, "laden": True,
+                             "msg": "rebuilding the reference library — with a "
+                                    "large library this can take a minute …"}), "application/json")
+                    person = satz.get("person")
+                    lid = (satz.get("lauf") or {}).get("lauf_id", "")
+                    bew = anlernen.benennung_bewerten(
+                        person, satz, cfg["benennung_dup_sim"],
+                        _ue.adoptierte_embs(cfg["data_dir"], person),
+                        emb=svc.embedder,
+                        lauf_dir=os.path.join(cfg["data_dir"], "state",
+                                              "lernlauf", lid))
+                    return self._send(200, json.dumps(
+                        {"ok": True, "person": person, "bewertung": bew},
+                        ensure_ascii=False), "application/json")
+                except Exception as e:
+                    return self._send(500, json.dumps(
+                        {"ok": False,
+                         "msg": f"{type(e).__name__}: {e}"}),
+                        "application/json")
             if pfad == "/lernlauf/uebernehmen":                # E4b: Uebernahme in den Master
                 # Duenner Mantel: Plan/Dedup/Tag-Pruefung/Alles-oder-nichts im Modul
                 # (core/uebernahme), Nacharbeit = derselbe Weg wie Pool-Enrollment.
@@ -8126,9 +8656,12 @@ def make_handler(svc):
                         # zentrale Quelle).
                         _zk = _lwz.melde_zaehler(cfg, heute0, tag_ende,
                                                  kameras=_nk)
+                        # .245: 'none' = journalte, nicht versendete Ergebnisse
+                        # (kanal-lose Installation) — zaehlen mit, Label unten
+                        # sagt ehrlich 'not sent'.
                         z_live_kanaele = {
                             k: _zk.get(("alert", k), 0)
-                            for k in _lwz.KANAELE_ERLAUBT
+                            for k in (*_lwz.KANAELE_ERLAUBT, "none")
                             if _zk.get(("alert", k), 0)}
                         z_live = sum(z_live_kanaele.values())
                         # .188 (User 13.08.): Today zeigt SEPARAT, was live
@@ -8339,7 +8872,13 @@ def make_handler(svc):
                           else f'<span class="avs" style="background:{_av_farbe(name)}">'
                                f'{html.escape(name[:1].upper())}</span>')
                     cnt = f' <span class="sc">×{count}</span>' if count > 1 else ''
-                    sc = f' <span class="sc">{best:.2f}</span>' if best else ''
+                    # .249 (Kosinus-raus U1): die Rohzahl ist Expert-Tiefe;
+                    # Easy traegt die Wortstufe als title (Pill-Optik folgt
+                    # mit Haeppchen 2).
+                    from core import vertrauen as _vt
+                    sc = (f' <span class="sc nur-expert" title="'
+                          f'{_vt.wort(best, cfg.get("win_thresh"))}">'
+                          f'{best:.2f}</span>' if best else '')
                     inner = f'{av}{html.escape(name)}{cnt}{sc}'
                     # Paket B (.50): Chip -> Personen-Tagessicht (Spec: Chips wie Karten);
                     # eine aktive Area-Sicht wird mitgetragen (der Blick bleibt im Bereich).
@@ -8791,8 +9330,9 @@ def make_handler(svc):
                         f'Live watcher alerts</a></span>'
                         f'<span class="num">{z_live}</span></div>'
                         + (f'<div class="ts-meta">'
-                           + " · ".join(f"{k} {n}"
-                                        for k, n in z_live_kanaele.items())
+                           + " · ".join(
+                               f'{"not sent" if k == "none" else k} {n}'
+                               for k, n in z_live_kanaele.items())
                            + '</div>' if z_live_kanaele else ''))
                        if _live_zeile else '')
                     + '</div></aside>')
@@ -9146,6 +9686,19 @@ def make_handler(svc):
                 return self._send(200, webui.layout("Learn", "/personlauf",
                                                     inhalt, self._banner(),
                                                     refresh=3 if _tickt else None))
+            if path == "/lernlauf_status":                 # .260 Saeule-Widget (Poll)
+                # EINE Quelle: routes.lernwizard.lauf_status — dieselbe
+                # Rechnung, die die Seite rendert; das Browser-JS wendet die
+                # Werte nur an (kein Zweit-Rechner, QS-Ebenen-Regel).
+                from core import lernlauf as _ll
+                from routes import lernwizard as _r_wiz
+                try:
+                    zustand, _le = _ll.lauf_lesen(cfg["data_dir"])
+                except Exception:
+                    zustand = None
+                return self._send(200, json.dumps(
+                    dict(_r_wiz.lauf_status(zustand), ok=True),
+                    ensure_ascii=False), "application/json")
             if path == "/lernlauf":
                 import webui
                 # E1 (S6): Anlern-Wizard + Lauf-Seite (Shadow — plant, lernt nichts).
@@ -9172,19 +9725,160 @@ def make_handler(svc):
                     # naechsten Lauf mit den Waisen des abgebrochenen.
                     eigene = [s for s in saetze
                               if (s.get("lauf") or {}).get("lauf_id") == zustand.get("lauf_id")]
-                    inhalt = _r_wiz.lauf_seite(zustand, len(eigene), kaputt)
-                    f = zustand.get("fortschritt") or {}
-                    st = str(f.get("status", ""))
-                    # E2: die Seite tickt in Vorbereitung UND Ernte; .83: auch waehrend
-                    # der Anker-Phase (vorher fror die Anzeige bei 'grouping starting' ein).
-                    tickt = ((zustand.get("phase") in ("vorbereitung", "ernte")
-                              and (not st
-                                   or st.startswith(("prepared", "harvesting", "waiting"))))
-                             or (zustand.get("phase") == "anker"
-                                 and not st.startswith(("anchors", "anchor stage failed"))))
+                    # .244: Fertig-Bilanz aus dem Uebernahme-Protokoll — je Anker
+                    # DIESES Laufs die letzte Protokoll-Zeile (mehr als eine gibt
+                    # der Fluss nicht her: Uebernahme setzt status=uebernommen),
+                    # gezaehlt werden real kopierte Dateien und Personen.
+                    from core import uebernahme as _ue
+                    _aids = {s.get("anker_id") for s in eigene}
+                    _prot, _pk = _ue.protokoll_lesen(cfg["data_dir"])
+                    _je = {}
+                    for _z in _prot:
+                        if _z.get("anker_id") in _aids:
+                            _je[_z["anker_id"]] = _z
+                    adoptiert = {
+                        "bilder": sum(len(z.get("dateien") or [])
+                                      for z in _je.values()),
+                        "personen": len({z.get("person") for z in _je.values()
+                                         if z.get("person") and (z.get("dateien"))})}
+                    # .246 (Lernfluss-Redesign): aktuelle Gruppe fuer die
+                    # Zuweisungs-Flaeche — ?g=<anker_id> waehlt (Queue-Klick/
+                    # Skip), sonst die erste wartende; Kontext = DIESELBE
+                    # Rechnung wie die Benennungs-Karte (core/benennung),
+                    # Mutationen laufen weiter nur ueber /lernlauf/benennen
+                    # + /lernlauf/uebernehmen.
+                    _wart = sorted(
+                        (s for s in eigene
+                         if s.get("status") not in ("uebernommen",
+                                                    "verworfen")),
+                        key=lambda s: (-(s.get("qualitaet") or {})
+                                       .get("stuetz", 0),
+                                       str(s.get("anker_id"))))
+                    # .259 (Such-Popup): mit Zielperson stehen passende
+                    # Gruppen VORN (Zentroid-Cosinus gegen Referenz- und
+                    # benannte-Anker-Zentroide der Person; stabile Sortierung
+                    # haelt die Stuetz-Ordnung als Tie-Break). Nichts wird
+                    # versteckt — nur die Reihenfolge aendert sich.
+                    _zp = str(zustand.get("zielperson") or "")
+                    if _zp and _wart:
+                        try:
+                            from core import benennung as _bnz
+                            _rz = _bnz.referenz_zentroide(
+                                os.path.join(cfg["data_dir"], "clips",
+                                             "refcache.npz"), cfg["modell"])
+                            _zents = ([_rz[_zp]] if _zp in _rz else []) + [
+                                s.get("zentroid") for s in saetze
+                                if s.get("status") == "benannt"
+                                and s.get("person") == _zp
+                                and s.get("zentroid")]
+
+                            def _zsim(s):
+                                zc = s.get("zentroid")
+                                if not zc or not _zents:
+                                    return -1.0
+                                return max(
+                                    (x for x in (_bnz._cos(zc, z2)
+                                                 for z2 in _zents)
+                                     if x is not None), default=-1.0)
+                            _wart.sort(key=_zsim, reverse=True)
+                        except Exception as e:
+                            svc.log(f"lernlauf: zielperson ordering failed "
+                                    f"({type(e).__name__}: {e})")
+                    _gw = (_qd0.get("g", [""])[0] or "").strip()
+                    aktuelle = (next((s for s in _wart
+                                      if s.get("anker_id") == _gw), None)
+                                or (_wart[0] if _wart else None))
+                    naechste_id, benennung = None, None
+                    if aktuelle is not None:
+                        _ids = [s.get("anker_id") for s in _wart]
+                        _i = _ids.index(aktuelle.get("anker_id"))
+                        naechste_id = (_ids[_i + 1]
+                                       if _i + 1 < len(_ids) else None)
+                        try:
+                            from core import benennung as _bn
+                            benennung = _bn.benennungs_kontext(
+                                aktuelle, saetze, master_persons(cfg),
+                                {k: cfg["benennung_" + k] for k in
+                                 ("k_je_bin", "yaw_grenze", "dup_sim",
+                                  "vorschlag_schwelle")},
+                                _ll.person_norm,
+                                referenz=_bn.referenz_zentroide(
+                                    os.path.join(cfg["data_dir"], "clips",
+                                                 "refcache.npz"),
+                                    cfg["modell"]))
+                        except Exception as e:
+                            # Flaeche ist Zusatz-Weg — die Benennungs-Karte
+                            # bleibt erreichbar, deshalb laut statt Blocker.
+                            svc.log(f"lernlauf: benennungs_kontext failed "
+                                    f"({type(e).__name__}: {e})")
+                    # .266 'Sicht = Pruefergebnis': liegt fuer die offene
+                    # Gruppe ein Sichtungs-Cache (echte Crop-Messung), wird
+                    # die Flaeche AUS ihm gebaut (Matrix-Anwendung ohne
+                    # Modell/Embedder: refs aus dem refcache, Person =
+                    # benannt oder looks-like-Vorschlag); ohne Cache zeigt
+                    # die Flaeche den checking-Zustand und das JS stoesst
+                    # /lernlauf/sichtung an.
+                    sichtung_liste, sichtung_gesamt = None, 0
+                    if aktuelle is not None:
+                        try:
+                            import anlernen as _al2
+                            from core import uebernahme as _ue3
+                            _ldir = os.path.join(
+                                cfg["data_dir"], "state", "lernlauf",
+                                str((aktuelle.get("lauf") or {})
+                                    .get("lauf_id", "")))
+                            _si = _al2.sichtung_lesen(aktuelle, _ldir,
+                                                      cfg["modell"])
+                            # .267: fehlt der refcache (Uebernahme loescht
+                            # ihn), zaehlt der Sichtungs-Cache als NICHT
+                            # bereit — der Warte-Zustand laesst den Endpunkt
+                            # beides nachbauen, statt hier ohne Identitaets-
+                            # Achse 'reference check' zu behaupten.
+                            if not os.path.exists(os.path.join(
+                                    cfg["data_dir"], "clips",
+                                    "refcache.npz")):
+                                _si = None
+                            if _si is not None:
+                                # .267 (Widerleger): Identitaets-Achse NUR
+                                # mit vom User BENANNTER Person — der blosse
+                                # looks-like-Vorschlag darf keine Gruppe
+                                # leer-urteilen; unbenannt = Qualitaet-only.
+                                _pf = aktuelle.get("person") or None
+                                sichtung_liste = _al2.sichtung_bewerten(
+                                    _pf, _si, _al2.refs_matrix_roh(cfg["modell"]),
+                                    cfg["benennung_dup_sim"],
+                                    _ue3.adoptierte_embs(cfg["data_dir"], _pf)
+                                    if _pf else [])
+                                sichtung_gesamt = _si.get("gesamt", 0)
+                        except Exception as e:
+                            svc.log(f"lernlauf: sichtung render failed "
+                                    f"({type(e).__name__}: {e})")
+                            sichtung_liste = False   # .267: Fehler != kein
+                            #                          Cache — nie die
+                            #                          Reload-Schleife drehen
+                    inhalt = _r_wiz.lauf_seite(zustand, len(eigene), kaputt,
+                                               gruppen=eigene,
+                                               adoptiert=adoptiert,
+                                               benennung=benennung,
+                                               aktuelle=aktuelle,
+                                               naechste_id=naechste_id,
+                                               sichtung=sichtung_liste,
+                                               sichtung_gesamt=sichtung_gesamt,
+                                               easy_events=min(
+                                                   int(cfg.get("lernlauf_easy_events") or 300),
+                                                   svc.LERNLAUF_EVENTS_MAX),
+                                               max_events=svc.LERNLAUF_EVENTS_MAX,
+                                               personen=master_persons(cfg),
+                                               zielperson=_zp,
+                                               reihenfolge=([s.get("anker_id")
+                                                             for s in _wart]
+                                                            if _zp else None))
+                    # .260: kein meta-refresh mehr — das Saeule-Widget der
+                    # Seite pollt /lernlauf_status (Tick-Regel lebt als EINE
+                    # Quelle in lernwizard.lauf_status) und laedt genau EINMAL
+                    # voll neu, wenn der Lauf in die Benennung wechselt.
                     return self._send(200, webui.layout("Learn", "/lernlauf", inhalt,
-                                                        self._banner(),
-                                                        refresh=3 if tickt else None))
+                                                        self._banner()))
                 qd = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
                 roh = (qd.get("events", [""])[0] or "").strip().lower()
                 alle_modus = roh in ("alle", "all")
@@ -9238,13 +9932,25 @@ def make_handler(svc):
                     cfg["data_dir"], _ub_tag.timestamp(),
                     (_ub_tag + datetime.timedelta(days=1)).timestamp(),
                     int(cfg.get("szenario_gap_min", 5)) * 60, log=svc.log))
-                inhalt = _r_wiz.wizard(len(master_persons(cfg)), auswahl, bilanz, prog,
-                                       quelle, schwellen, mess_laeuft,
-                                       gemessen_felder=gemessen_f, alle=alle_modus,
-                                       max_events=svc.LERNLAUF_EVENTS_MAX,
-                                       mess_wartet=(mess_st.get("phase") == "waiting"),
-                                       mess_skip=(mess_st.get("uebersprungen") or ""),
-                                       unbekannt_offen=_ub_k)
+                # .246: Easy sieht den Vier-Kachel-Fluss mit EINEM Start-Knopf
+                # (kalibrierte Defaults; Kappe = Pagination-Deckel), der volle
+                # Planer bleibt als Expert-Tiefe darunter (User-Brief 17.08.:
+                # "Wizard-Seite bleibt Expert").
+                _easy_n = min(int(cfg.get("lernlauf_easy_events") or 300),
+                              svc.LERNLAUF_EVENTS_MAX)
+                inhalt = (_r_wiz.lauf_seite(None, easy_events=_easy_n,
+                                            unbekannt_offen=_ub_k,
+                                            max_events=svc.LERNLAUF_EVENTS_MAX,
+                                            personen=master_persons(cfg))
+                          + '<div class="nur-expert">'
+                          + _r_wiz.wizard(len(master_persons(cfg)), auswahl, bilanz, prog,
+                                          quelle, schwellen, mess_laeuft,
+                                          gemessen_felder=gemessen_f, alle=alle_modus,
+                                          max_events=svc.LERNLAUF_EVENTS_MAX,
+                                          mess_wartet=(mess_st.get("phase") == "waiting"),
+                                          mess_skip=(mess_st.get("uebersprungen") or ""),
+                                          unbekannt_offen=_ub_k)
+                          + '</div>')
                 return self._send(200, webui.layout("Learn", "/lernlauf", inhalt,
                                                     self._banner()))
             if path == "/lernen":
@@ -9487,7 +10193,7 @@ def make_handler(svc):
                 ansicht = qd.get("ansicht", ["verwechslung"])[0]
                 if ansicht == "unschaerfe":              # alter Deep-Link
                     ansicht = "eignung"
-                if ansicht not in ("verwechslung", "eignung"):
+                if ansicht not in ("verwechslung", "eignung", "doppel"):
                     ansicht = "verwechslung"
                 qs = {}
                 if os.path.exists(anlernen.QS_PATH):
@@ -9495,8 +10201,27 @@ def make_handler(svc):
                         qs = json.load(open(anlernen.QS_PATH))
                     except Exception:
                         qs = {}
-                inhalt = _r_qualitaet.render(ansicht, qs, cfg["data_dir"])
-                return self._send(200, webui.layout("Quality", "/qualitaet", inhalt, self._banner()))
+                # .273 Bestands-QS: Lauf-Fortschritt (Datei existiert nur
+                # waehrend eines Laufs bzw. nach einem Fehlschlag).
+                lauf = None
+                _lp = os.path.join(anlernen.ANLERN, "refs_qs_lauf.json")
+                if os.path.exists(_lp):
+                    try:
+                        lauf = json.load(open(_lp))
+                    except Exception:
+                        lauf = None
+                aktiv = bool(lauf and not lauf.get("fehler")
+                             and time.time() - (lauf.get("ts") or 0) < 900)
+                _pq = (qd.get("person", [""])[0] or "").strip() or None
+                inhalt = _r_qualitaet.render(ansicht, qs, cfg["data_dir"],
+                                             lauf=lauf, aktiv=aktiv,
+                                             person=_pq)
+                # .282: Auto-Refresh NUR auf der Uebersicht — die Galerie
+                # traegt Checkboxen und Reiter-Wahl, ein Reload wirft beides
+                # weg (User-Befund: 'Banner springt immer wieder zurueck').
+                return self._send(200, webui.layout("Quality", "/qualitaet",
+                                                    inhalt, self._banner(),
+                                                    refresh=3 if aktiv and not _pq else None))
             if path == "/kameras":                # Kamera-Blatt: Discovery + verwenden + Zonen (Phase 2b)
                 import webui
                 # Modulumbau R1: Rendern byte-treu in routes/kameras.py (Muster
@@ -9538,6 +10263,8 @@ def make_handler(svc):
                 cam_area = {kd["name"]: (_areas_mod.kamera_area(_am, kd["name"])
                                          or "") for kd in kacheln}
                 inhalt = _r_live.uebersicht(kacheln, engine_info, gesperrt, err,
+                                            cpu_begrenzt=svc._live_cpu_begrenzt(),
+                                            container_last=svc._container_cpu_last(),
                                             nach_area=nach_area,
                                             cam_area=cam_area)
                 return self._send(200, webui.layout("Live watchers", "/live",
@@ -9595,7 +10322,7 @@ def make_handler(svc):
                         f'{time.strftime("%H:%M:%S", time.localtime(a["ts"]))}{_bis}'
                         f' · {html.escape(a["kamera"])}'
                         f' · {a["trigger"]} trigger{"" if a["trigger"] == 1 else "s"}'
-                        f' · {html.escape("+".join(a["kanaele"]))}</span></div>'
+                        f' · {html.escape("+".join("not sent (no channel)" if _kn == "none" else _kn for _kn in a["kanaele"]))}</span></div>'
                         + (f'<div class="dim">{html.escape(a["zusatz"][:90])}'
                            f'</div>' if a.get("zusatz") else '')
                         + (f'<div class="lv-medienreihe">{thumbs}</div>'
@@ -9837,9 +10564,23 @@ def make_handler(svc):
                               if d.get("status") == "offen")
                 except Exception:
                     _lo = 0
+                # .273 Bestands-QS-Karte: Stand der letzten Pruefung
+                _qs_stand = None
+                try:
+                    if os.path.exists(anlernen.QS_PATH):
+                        _q = json.load(open(anlernen.QS_PATH))
+                        _qs_stand = {"ts": _q.get("ts"),
+                                     "funde": (len(_q.get("ungeeignet") or [])
+                                               + len(_q.get("doppel") or [])
+                                               + sum(1 for p in
+                                                     _q.get("paare") or []
+                                                     if p.get("kritisch")))}
+                except Exception:
+                    _qs_stand = None
                 return self._send(200, webui.layout(
                     "Faces", "/faces",
-                    _r_fc.render(_pl, _nb, _nu, _lo), self._banner()))
+                    _r_fc.render(_pl, _nb, _nu, _lo, qs_stand=_qs_stand),
+                    self._banner()))
             if path == "/frigate":                 # Frigate-Kachel-Seite (.216,
                 import webui                       #  User: "Frigate sync" -> "Frigate")
                 from routes import frigate as _r_frig
@@ -10260,6 +11001,25 @@ def make_handler(svc):
                         else "—")
                 ours = ", ".join(f"{p} {(v.get('max') or 0):+.2f}/{v.get('win3s', 0)}×" for p, v in
                                  sorted((row.get("ours") or {}).items(), key=lambda x: -(x[1].get("max") or 0))) or "—"
+                # .249 (Kosinus-raus U3): Easy sieht Worte an der Messlatte,
+                # die Rohzahlen-Zeile bleibt als Expert-Tiefe erhalten.
+                # .250: nur echte Kandidaten (Stufe != none) ausgeschrieben —
+                # der no-match-Schwanz aller Personen wird GEZAEHLT statt
+                # aufgezaehlt (nichts verschwindet still, nichts lullt).
+                from core import vertrauen as _vt
+                _ow, _ow_rest = [], 0
+                for p, v in sorted((row.get("ours") or {}).items(),
+                                   key=lambda x: -(x[1].get("max") or 0)):
+                    _st9 = _vt.stufe(v.get("max"), cfg.get("win_thresh"))
+                    if _st9 == "none":
+                        _ow_rest += 1
+                        continue
+                    _ow.append(f"{p} — {_vt.label(_st9)} (seen in "
+                               f"{v.get('win3s', 0)} window"
+                               f"{'s' if v.get('win3s', 0) != 1 else ''})")
+                ours_wort = (", ".join(_ow) or "no match for anyone") + (
+                    f" · {_ow_rest} other{'s' if _ow_rest != 1 else ''}: "
+                    "no match" if _ow and _ow_rest else "")
                 best = row.get("bestaetigt") or []
                 if os.path.isdir(edir):
                     # PRO PERSON gruppiert (User 25.07., Screenshot-Befund: "die Bilder eines
@@ -10417,7 +11177,8 @@ def make_handler(svc):
                     f'{passleiste}'
                     f'<div class="card evmeta"><div class="evbadges">{kbadge}{conf}</div>'
                     f'<div class="evrow"><span class="lab">Frigate</span><span>{html.escape(ftxt)}</span></div>'
-                    f'<div class="evrow"><span class="lab">suslik</span><span>{html.escape(ours)}</span></div>'
+                    f'<div class="evrow"><span class="lab">suslik</span><span>{html.escape(ours_wort)}'
+                    f' <span class="dim nur-expert">· {html.escape(ours)}</span></span></div>'
                     f'{fehlergrund}'
                     f'<div class="evactions">{vid}{logl}</div>'
                     f'<div class="evgt"><span class="lab">{"Correct if wrong" if best else "Who was it?"}</span>{gtb}</div></div>'
@@ -11085,6 +11846,7 @@ def main():
     svc.start_wartung()
     svc.start_stoerungswaechter()
     svc.start_nachhol()                   # gescheiterte Analysen spaeter stumm nachholen
+    svc.start_frigate_probe()             # .281: Schoner-Sperre aktiv proben (MQTT-Leerlauf)
     svc.start_live_aufsicht()             # Phase 4: Live-Engine-Supervisor (Autostart, wenn
     #                                       ein Waechter enabled ist; Standalone-Erkennung)
     svc.start_stream_steckbriefe()        # .186: echte Stream-Aufloesung je Kamera proben

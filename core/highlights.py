@@ -12,7 +12,47 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.0.243"   # .243 = RELEASE (zweiter Respin: das Export-Gate fand
+STAND = "0.1.0.286"   # .286 = RELEASE-Respin 2 (S9: Expert-Tabelle /qualitaet
+                      # scrollt statt 785-px-Ueberlauf auf Handy-Breiten;
+                      # Box-Text UNVERAENDERT). .285 ging nie raus.
+                      # Davor .285 = Respin 1 (Betreiber-Genitiv in 2 Alt-
+                      # Kommentaren, Image-Audit-Fang; Box-Text UNVERAENDERT).
+                      # .284 ging nie raus.
+                      # Davor .283 = Probe raeumt Fehler auch ohne Sperre
+                      # (kein Box-Eintrag).
+                      # Davor .282 = Galerie ohne Auto-Refresh, lauter qsStart
+                      # (kein Box-Eintrag).
+                      # Davor .281 = Banner-Entwarnung + Schoner-Probe-Loop
+                      # (kein Box-Eintrag).
+                      # Davor .280 = Kachel-Knoepfe oben, Galerie ersetzt
+                      # Alt-Tabs (kein Box-Eintrag).
+                      # Davor .279 = Galerie-Reiter + Faces-Kurztexte
+                      # (kein Box-Eintrag).
+                      # Davor .255 = Lernlauf-Feinschliff (Neulern-Schalter in der
+                      # Kachel, Erklaer-Satz weg; kein Box-Eintrag).
+                      # Davor .254 = Learn zurueck als Hauptmenue-Punkt (User-Wunsch;
+                      # Startseite = neuer Lernfluss; kein Box-Eintrag).
+                      # Davor .253 = HOTFIX /live-NameError (Lastzeile-Parameter
+                      # erreichte _engine_karte nicht; Gate-Stufe ergaenzt).
+                      # Davor .252 = CPU-Modus: Empfehlung statt Verbot (User-
+                      # Entscheid; Warnungen, Lastzeile, Label-Fix).
+                      # Davor .251 = Feinschliff (M6 Anwesenheits-Push: Score/Latenz
+                      # nur noch im Zahlen-Stil; kein Box-Eintrag).
+                      # Davor .250 = Feinschliff (Event-Zeile: no-match-Schwanz
+                      # gezaehlt statt aufgezaehlt; kein Box-Eintrag).
+                      # Davor .249 = interner Stand (Kosinus-raus Haeppchen 1:
+                      # Wortstufen core/vertrauen in Meldetexten M1-M6,
+                      # MQTT-stufe additiv, alert_stil-Option; Box unveraendert).
+                      # Davor .248 = interner Fix (Quelltest nutzt guard.hoehe statt
+                      # stur Default — Fund beim CPU-Setup; kein Box-Eintrag).
+                      # Davor .247 = interner Stand (CPU-Runde: Live auf der cpu-
+                      # Variante BEGRENZT erlaubt, 1 Waechter, ehrliche
+                      # 1-2-s-Erwartung — User-Go nach Messung 17.08.).
+                      # Davor .246 = interner Prod-Stand (Lernfluss-Redesign: Vier-
+                      # Kachel-Fluss + Saeule + Zuweisungs-Flaeche), Box
+                      # unveraendert. Davor .245 = Live-Journal ohne Meldekanal,
+                      # .244 = Lernlauf-Lauf-Seite Teil 1+2.
+                      # Davor: .243 = RELEASE (zweiter Respin: das Export-Gate fand
 # nach dem Anlegen neuer Identitaeten weitere Namen in vier Alt-Kommentaren —
 # mehrteilige Ordnernamen fielen aus der Audit-Namensliste, Audit um
 # Segment-Zerlegung ergaenzt; die schon gepushten .242-Tags werden von GHCR
@@ -188,6 +228,18 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # .284 — MIT USER ABGESTIMMT (18.08. nachmittags, Inhalt von ihm
+    # diktiert: "Zwischenversion; fokussiert an den Lernmoeglichkeiten
+    # fuer Gesichter gearbeitet, am Zuweisen, an der Qualitaet der
+    # Gesichtserkennung, an der Konfiguration wie man Kameras hinterlegt";
+    # drei englische Zeilen im Chat abgenommen: "die zeilen passen").
+    ("0.1.0.286", (
+        "Interim release — focused work on face learning: guided learning "
+        "runs and easier assigning of faces to people.",
+        "Picture quality: a one-click check finds weak, duplicate and "
+        "mixed-up reference pictures for you.",
+        "Clearer camera setup and configuration.",
+    )),
     # .243 — MIT USER ABGESTIMMT (16./17.08. nachts, Inhalt von ihm diktiert:
     # "Zwischenversion, Fokus auf Vereinfachung und Klarheit. Mittendrin,
     # Umbau easy/expert, gerne mal auf Config, Today etc. schauen und gerne

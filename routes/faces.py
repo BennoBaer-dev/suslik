@@ -21,7 +21,7 @@ def _q(s):
     return urllib.parse.quote(str(s), safe="")
 
 
-def render(personen, n_bilder, n_unbekannt, lern_offen):
+def render(personen, n_bilder, n_unbekannt, lern_offen, qs_stand=None):
     """-> Seiten-INHALT /faces.
     personen    = [(name, avatar_datei), ...] (Avatar = juengstes aktives
                   Referenzbild laut refs_meta, Fallback erste Datei)
@@ -34,24 +34,26 @@ def render(personen, n_bilder, n_unbekannt, lern_offen):
         f'<span>{html.escape(p)}</span></a>'
         for p, d in personen)
 
+    # .280 (User 18.08.: 'Button nach oben, damit nichts unten wegrutscht —
+    # oben gleichmaessig vom Look and Feel; Texte weg oder deutlich kuerzer,
+    # alles steht ja im How it works'): jede Kachel ist gleich gebaut —
+    # Titel, KNOEPFE direkt darunter, Stand-Zeile, Mini-Zeile + Hilfe-Link.
+    # Bewusst OHNE ek-fuss (dessen margin-top:auto drueckte die Knoepfe an
+    # den Kachelboden); die Regel selbst bleibt fuer andere Seiten.
     bekannt = (
         '<div class="ek-card" id="fc-bekannt">'
         '<h3>&#128578; Known people</h3>'
-        '<p class="ek-satz">Everyone the system already knows — tap a face '
-        'to see every reference picture behind it. <b>Someone new in the '
-        'household?</b> Use &bdquo;Register face&ldquo;: their face is '
-        'collected from normal camera footage, no photo upload needed.</p>'
-        '<div class="ek-hilfe"><a href="/hilfe/faces_bekannt">'
-        'How it works &#8230;</a></div>'
+        '<div><a class="ek-knopf" href="/gesichter">'
+        'Manage people &#8230;</a>'
+        '<a class="ek-knopf" style="margin-top:6px" href="/lernlauf">'
+        'Register face &#8230;</a></div>'
         + (f'<div class="fc-avatare">{avatare}</div>' if avatare else
            '<div class="ek-beweis">no people learned yet — register the '
-           'first face below</div>')
+           'first face above</div>')
         + (f'<div class="ek-beweis"><b>{len(personen)} people</b> &middot; '
            f'{n_bilder} reference images</div>' if avatare else "")
-        + '<div class="ek-fuss"><a class="ek-knopf" href="/gesichter">'
-          'Manage people &#8230;</a>'
-          '<a class="ek-knopf" style="margin-top:6px" href="/lernlauf">'
-          'Register face &#8230;</a></div></div>')
+        + '<div class="ek-hilfe"><a href="/hilfe/faces_bekannt">'
+          'How it works &#8230;</a></div></div>')
 
     lern_beweis = (f'<b>{lern_offen}</b> suggestion(s) waiting for review'
                    if lern_offen else
@@ -59,48 +61,89 @@ def render(personen, n_bilder, n_unbekannt, lern_offen):
     lernen = (
         '<div class="ek-card" id="fc-lernen">'
         '<h3>&#127891; Learning</h3>'
-        '<p class="ek-satz"><b>The regular care routine:</b> while the '
-        'cameras run, the system keeps collecting new pictures of the '
-        'people it knows — here you review what it gathered, every few '
-        'days or whenever you like.</p>'
-        '<div class="ek-hilfe"><a href="/hilfe/faces_lernen">'
-        'How it works &#8230;</a></div>'
-        '<div class="fc-schritt"><b>1</b><span>Run a learning pass over '
-        'the recent recordings</span></div>'
-        '<div class="fc-schritt"><b>2</b><span>Review the suggestions — '
-        'confirm, correct or dismiss</span></div>'
-        '<div class="fc-schritt"><b>3</b><span>Name new faces the system '
-        'found on its own</span></div>'
+        '<div><a class="ek-knopf" href="/lernlauf">'
+        'Start learning &#8230;</a>'
+        '<a class="ek-knopf" style="margin-top:6px" href="/lernen">'
+        'Review suggestions &#8230;</a></div>'
         + f'<div class="ek-beweis">{lern_beweis}</div>'
-        + '<div class="ek-fuss"><a class="ek-knopf" href="/lernlauf">'
-          'Start learning &#8230;</a>'
-          '<a class="ek-knopf" style="margin-top:6px" href="/lernen">'
-          'Review suggestions &#8230;</a></div></div>')
+        + '<p class="ek-satz">Review what the cameras collected.</p>'
+          '<div class="ek-hilfe"><a href="/hilfe/faces_lernen">'
+          'How it works &#8230;</a></div></div>')
 
     unb_beweis = (f'<b>{n_unbekannt}</b> recurring unknown visitor(s)'
                   if n_unbekannt else "no recurring unknown visitors")
     unbekannt = (
         '<div class="ek-card" id="fc-unbekannt">'
         '<h3>&#10067; Unknown</h3>'
-        '<p class="ek-satz"><b>The system asks YOU here:</b> it noticed '
-        'people coming back that it cannot name yet — decide who they are '
-        '(the postman? a neighbour?) or leave them unknown on purpose.</p>'
-        '<div class="ek-hilfe"><a href="/hilfe/faces_unbekannt">'
-        'How it works &#8230;</a></div>'
+        '<div><a class="ek-knopf" href="/unbekannte">'
+        'Review unknown &#8230;</a></div>'
         + f'<div class="ek-beweis">{unb_beweis}</div>'
-        + '<div class="ek-fuss"><a class="ek-knopf" href="/unbekannte">'
-          'Review unknown &#8230;</a></div></div>')
+        + '<p class="ek-satz">Visitors without a name yet.</p>'
+          '<div class="ek-hilfe"><a href="/hilfe/faces_unbekannt">'
+          'How it works &#8230;</a></div></div>')
 
+    # .273 (User 18.08.: 'Qualitaetssichere alle meine Bilder'): die Karte
+    # ist EASY, traegt den Stand der letzten Pruefung und startet den Lauf
+    # ueber ein Popup (alle Personen ODER eine; Muster Such-Popup .259).
+    import html as _html
+    stand_zeile = ""
+    if qs_stand and qs_stand.get("ts"):
+        import datetime as _dt
+        stand_zeile = ('<p class="ek-satz dim">last checked '
+                       + _dt.datetime.fromtimestamp(qs_stand["ts"])
+                       .strftime("%d.%m. %H:%M")
+                       + f' &middot; {int(qs_stand.get("funde", 0))} '
+                         'finding(s)</p>')
+    opts = "".join(f'<option>{_html.escape(p)}</option>' for p, _d in personen)
+    wen = ""
+    if opts:
+        wen = ('<div class="qsz"><label><input type="radio" name="qs-wen" '
+               'checked onchange="document.getElementById(\'qs-ziel\')'
+               '.disabled=true"> All people</label> '
+               '<label><input type="radio" name="qs-wen" '
+               'onchange="document.getElementById(\'qs-ziel\')'
+               '.disabled=false"> One person:</label> '
+               f'<select id="qs-ziel" disabled>{opts}</select></div>')
+    popup = (
+        '<div id="qs-deck" onclick="if(event.target===this)'
+        'this.style.display=\'none\'" style="position:fixed;inset:0;'
+        'background:#000a;display:none;place-items:center;z-index:9">'
+        '<div style="background:var(--surface);border:1px solid '
+        'var(--border-strong,var(--border));border-radius:12px;'
+        'padding:18px 20px;width:min(420px,92vw)">'
+        '<h3 style="margin:0 0 4px">Quality-check my pictures</h3>'
+        '<p class="ek-satz">Re-measures every reference picture and looks '
+        'for weak ones, near-duplicates and mixed-up faces. Takes about a '
+        'minute and runs in the background.</p>'
+        + wen +
+        '<div style="display:flex;gap:8px;margin-top:14px;align-items:center">'
+        '<button class="gtb on" onclick="qsStart(this)">Start check</button>'
+        '<button class="gtb" onclick="document.getElementById(\'qs-deck\')'
+        '.style.display=\'none\'">Cancel</button>'
+        '<span id="qs-status" class="dim"></span></div></div></div>'
+        '<style>.qsz{display:flex;gap:8px;align-items:center;flex-wrap:wrap;'
+        'font-size:14px}.qsz select{background:var(--surface-2);'
+        'color:var(--text);border:1px solid '
+        'var(--border-strong,var(--border));border-radius:6px;'
+        'padding:4px 6px}</style>')
     qualitaet = (
-        '<div class="ek-card nur-expert" id="fc-qualitaet">'
-        '<h3>&#129658; Quality</h3>'
-        '<p class="ek-satz"><b>For a health check now and then:</b> finds '
-        'weak or mixed-up reference pictures before they cost you a '
-        'recognition.</p>'
+        '<div class="ek-card" id="fc-qualitaet">'
+        '<h3>&#129658; Picture quality</h3>'
+        # .276 (User: 'finde den Button nirgends' — Suchknopf-Lektion):
+        # grosser gruener Knopf; seit .280 OBEN direkt unter dem Titel.
+        '<div><button style="display:block;width:100%;padding:12px 14px;'
+        'font-size:15px;font-weight:600;border-radius:9px;cursor:pointer;'
+        'background:var(--ok);border:1px solid var(--ok);'
+        'color:var(--on-ink);text-align:center;margin-bottom:6px" '
+        'onclick="document.getElementById(\'qs-deck\')'
+        '.style.display=\'grid\'">&#129658;&nbsp; Quality-check my '
+        'pictures</button>'
+        '<a class="ek-knopf" href="/qualitaet">Last results &#8230;</a>'
+        '</div>' + stand_zeile +
+        '<p class="ek-satz">Finds weak or mixed-up pictures.</p>'
         '<div class="ek-hilfe"><a href="/hilfe/faces_qualitaet">'
         'How it works &#8230;</a></div>'
-        '<div class="ek-fuss"><a class="ek-knopf" href="/qualitaet">'
-        'Open quality check &#8230;</a></div></div>')
+        '</div>' + popup)
 
     return ('<h2 style="margin:2px 0 10px">Faces</h2>'
             '<p class="dim" style="margin:0 0 14px">Everything about the '

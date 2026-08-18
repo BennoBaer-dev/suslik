@@ -77,6 +77,35 @@ function lernlaufStart(n, btn) {
     .catch(function () { btn.disabled = false; });
 }
 
+function lernlaufPopupStart(btn) {
+  /* .259 Such-Popup (Mockup-Abnahme): Events + Bilder/s + Zielperson lesen;
+     person leer = alle Gesichter. Eigene Feld-IDs (lf-pop-*), damit der
+     Expert-Planer (ll-fps/ll-status) nicht kollidiert. */
+  var n = parseInt(document.getElementById('lf-pop-n').value) || 0;
+  var fps = parseFloat(document.getElementById('lf-pop-fps').value) || 0;
+  var z = document.getElementById('lf-ziel');
+  var person = (z && !z.disabled) ? z.value : '';
+  var w = document.getElementById('lf-weiter');
+  /* .263 Wechselschalter: Tages-Modus schickt tag statt events. */
+  var tEl = document.getElementById('lf-pop-tag');
+  var tag = (tEl && !tEl.disabled) ? tEl.value : '';
+  if (tEl && !tEl.disabled && !tag) {
+    document.getElementById('lf-pop-status').textContent = 'pick a day first';
+    return;
+  }
+  btn.disabled = true;
+  var body = {fps: fps, person: person, weiter: !!(w && w.checked)};
+  if (tag) body.tag = tag; else body.events = n;
+  fetch('/lernlauf_start', {method: 'POST', body: JSON.stringify(body)})
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      document.getElementById('lf-pop-status').textContent = d.msg || (d.ok ? 'ok' : 'error');
+      if (d.ok) setTimeout(function () { location.href = '/lernlauf'; }, 500);
+      else btn.disabled = false;
+    })
+    .catch(function () { btn.disabled = false; });
+}
+
 function ankerVerwerfen(aid, btn) {
   /* Dismiss mit Gedaechtnis: Zeile+Zentroid bleiben (Wiederernten erben
      still), Crops werden geloescht — Bestaetigung via data-frage. */
@@ -561,6 +590,43 @@ function refEntfernen(person, datei, btn) {
       if (d.ok && c) { c.style.opacity = 0.4; }
     });
 }
+function qsStart(btn) {
+  /* .273 Bestands-QS-Popup (Faces-Karte): Start mit Personen-Wahl; laeuft
+     ueber denselben Hintergrund-Runner wie der automatische Re-Check. */
+  btn.disabled = true;
+  var z = document.getElementById('qs-ziel');
+  var person = (z && !z.disabled) ? z.value : '';
+  fetch('/qualitaet/start', {method: 'POST',
+                             body: JSON.stringify({person: person})})
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      var s = document.getElementById('qs-status');
+      if (!d.ok) { if (s) s.textContent = d.msg || 'error'; btn.disabled = false; return; }
+      location.href = '/qualitaet' + (d.person ? '?person=' + encodeURIComponent(d.person) : '');
+    })
+    .catch(function () {
+      /* .282: NIE still scheitern — Klicks waehrend eines Dienst-Neustarts
+         (Deploy) liefen sonst ins Leere und der Knopf wirkte tot. */
+      var s = document.getElementById('qs-status');
+      if (s) s.textContent = 'cannot reach the service — try again in a moment.';
+      btn.disabled = false;
+    });
+}
+
+function qsPerson(name, btn) {
+  /* .273c: Kontext-Start von der Personen-Seite — Lauf ist immer global,
+     die Ergebnis-Sicht springt gefiltert auf die Person. */
+  btn.disabled = true; btn.textContent = 'checking …';
+  fetch('/qualitaet/start', {method: 'POST',
+                             body: JSON.stringify({person: name})})
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d.ok) { btn.textContent = d.msg || 'error'; btn.disabled = false; return; }
+      location.href = '/qualitaet?person=' + encodeURIComponent(name);
+    })
+    .catch(function () { btn.disabled = false; });
+}
+
 function refPruefNeu(btn) {
   btn.disabled = true; btn.textContent = 'checking …';
   fetch('/ref_pruef_neu', {method: 'POST', body: '{}'})

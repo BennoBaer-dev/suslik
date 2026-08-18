@@ -210,6 +210,22 @@ get concrete pointers which pictures to look at &mdash; nothing is deleted
 unless you decide it yourself.</p>""",
         "mehr": "",
     },
+    # .244: Lernlauf-Anleitung (vier Saetze vom User 17.08. pauschal gebilligt,
+    # "passt") — verlinkt von der Lauf-Seite (/lernlauf), Rueckweg dorthin.
+    "faces_lernlauf": {
+        "titel": "The learning run, explained",
+        "zurueck": "/lernlauf",
+        "basis": """
+<p>You start a run; the system re-reads your recent recordings and collects
+faces on its own.</p>
+<p>It sorts them into groups. One group should be one person.</p>
+<p>You name each group, or skip it. That is the only step that needs
+you.</p>
+<p>Named pictures become references and count for recognition right away.
+Repeat every few days, or let the day view top up known people in
+between.</p>""",
+        "mehr": "",
+    },
 }
 
 
@@ -225,7 +241,8 @@ def render(weg):
     # .221: Faces-Anleitungen fuehren zurueck nach /faces, die Erkennungs-
     # Anleitungen wie bisher nach /erkennung (Feld "zurueck", Default alt).
     zurueck = t.get("zurueck") or "/erkennung"
-    ziel = "Faces" if zurueck == "/faces" else "Recognition"
+    ziel = {"/faces": "Faces",
+            "/lernlauf": "the learning run"}.get(zurueck, "Recognition")
     return (
         f"<h2>{html.escape(t['titel'])}</h2>"
         '<div class="hilfe">' + t["basis"]

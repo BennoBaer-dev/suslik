@@ -64,6 +64,43 @@ def _pfad(data_dir, name):
     return os.path.join(data_dir, "state", name)
 
 
+DURCHSUCHT_DATEI = "lernlauf_durchsucht.jsonl"
+
+
+def durchsucht_merken(data_dir, eid, ausgang):
+    """.262 Fortsetzungs-Suche (User 17.08.: '5 x 100 statt 1 x 500'): jedes
+    geerntete Event dauerhaft vermerken (ok UND fehler — ein Clip, der heute
+    stallt/fehlt, ist morgen erst recht weg). 'Weiter zurueck'-Laeufe
+    ueberspringen vermerkte Events und wandern so je Lauf tiefer in die
+    Vergangenheit. Ueberlebt Lauf-Loeschungen BEWUSST: der Zweck ist das
+    Gedaechtnis, nicht der Lauf."""
+    p = _pfad(data_dir, DURCHSUCHT_DATEI)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"eid": str(eid), "ausgang": str(ausgang),
+                            "ts": round(time.time(), 1)},
+                           ensure_ascii=False) + "\n")
+        f.flush()
+
+
+def durchsucht_lesen(data_dir):
+    """-> (set der vermerkten Event-IDs, unlesbare Zeilen GEZAEHLT — nie
+    still verworfen, aber der Lauf scheitert nicht an einer kaputten Zeile:
+    schlimmstenfalls wird ein Event erneut durchsucht, nie eines verloren)."""
+    p = _pfad(data_dir, DURCHSUCHT_DATEI)
+    eids, kaputt = set(), 0
+    if os.path.exists(p):
+        with open(p, encoding="utf-8") as f:
+            for z in f:
+                if not z.strip():
+                    continue
+                try:
+                    eids.add(str(json.loads(z)["eid"]))
+                except Exception:
+                    kaputt += 1
+    return eids, kaputt
+
+
 def lauf_abgeschlossen(lauf):
     """Abschluss-Kriterium des Face-Lernlaufs — ZENTRALE QUELLE (.125, Review-
     MUSS): 'fertig' steht zwar in PHASEN, wird vom Lernlauf aber nie geschrieben;

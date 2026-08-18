@@ -30,6 +30,10 @@ def render(personen, data_dir):
             f'<div class="card"><b>{html.escape(pp)}</b> — {len(bil)} images &nbsp; '
             f'<a class="gtb" href="/aehnliche?person={urllib.parse.quote(pp)}">'
             f'find matching faces</a> '
+            # .273c (User: Aufruf an mehreren Stellen, kontext-vorausgewaehlt):
+            # startet den Bestands-Check und springt gefiltert auf die Person.
+            f'<button class="gtb" onclick="qsPerson(\'{_js(pp)}\',this)">'
+            f'Quality-check</button> '
             f'<button class="gtb" style="color:var(--crit);border-color:var(--crit)" '
             f'onclick="personLoeschen(\'{_js(pp)}\',this)">Delete person…</button>'
             f'<div style="margin-top:8px">{thumbs or "<i>no images yet</i>"}</div></div>')
