@@ -26,6 +26,7 @@ LaufInfo.soll_samples (Vorab-Groesse fuer das RAM-Gate des Halters).
 
 Dieses Modul liefert Dateien und Frames, nie Urteile."""
 import os
+import shutil
 import tempfile
 import threading
 import time
@@ -102,28 +103,38 @@ def gepinnt(pfad):
     return lebt
 
 
-def clip_holen(eid, data_dir=None, frigate_url=None):
+def clip_holen(eid, data_dir=None, frigate_url=None, timeout=30):
     """Clip beschaffen: Cache-Treffer ODER atomarer Download (.part wie
     analyze.py — ein abgerissener Download darf nie als halbes Video
     durchgehen). Der PIN dieses Halters wird IM SELBEN ZUG gesetzt
     (Download UND Cache-Treffer). Rueckgabe: Pfad. Aufrufer ruft frei().
-    Fehler raeumen .part-Waisen und den eigenen Pin."""
+    Fehler raeumen .part-Waisen und den eigenen Pin.
+    .262 Hebel 1 (gemessen am 300er-Lauf 17.08.: DREI Events liefen je in
+    den prozessweiten 120-s-Socket-Default und frassen 6 der ersten 15 min;
+    gesunde LAN-Downloads liefern in <1 s erste Bytes, gemessen 0.4-0.6 s
+    je Clip): timeout wirkt je Socket-Operation — ein STALL (timeout s ohne
+    Bytes) bricht ab, ein langsamer, aber FLIESSENDER Download nie. Der
+    .part-Name traegt PID+TID (endet auf .part — cleanup_cache raeumt
+    Waisen weiter): zwei parallele Beschaffer desselben Clips (Vorlader +
+    Worker, Hebel 2) schrieben sonst in DIESELBE Teil-Datei."""
     pfad = cache_pfad(eid, data_dir)
     pin(eid, data_dir)
+    teil = f"{pfad}.{os.getpid()}.{threading.get_native_id()}.part"
     try:
         if not os.path.exists(pfad):
             basis = (frigate_url
                      or os.environ.get("FRIGATE_URL", "")).rstrip("/")
-            urllib.request.urlretrieve(
-                f"{basis}/api/events/{eid}/clip.mp4", pfad + ".part")
-            os.replace(pfad + ".part", pfad)
+            with urllib.request.urlopen(f"{basis}/api/events/{eid}/clip.mp4",
+                                        timeout=timeout) as r, \
+                 open(teil, "wb") as f:
+                shutil.copyfileobj(r, f)
+            os.replace(teil, pfad)
         return pfad
     except Exception:
-        for rest in (pfad + ".part",):
-            try:
-                os.unlink(rest)
-            except FileNotFoundError:
-                pass
+        try:
+            os.unlink(teil)
+        except FileNotFoundError:
+            pass
         frei(eid, data_dir)
         raise
 

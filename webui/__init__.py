@@ -42,8 +42,15 @@ NAV = [
     # die Kachel-Knoepfe — dasselbe Muster wie bei Configuration).
     ("Faces",    [("/faces", "Faces"),
                   ("/gesichter", "Known"), ("/unbekannte", "Unknown"),
-                  ("/lernen", "Suggestions"), ("/lernlauf", "Face learn"),
-                  ("/lernlauf/anker", "Anchors"), ("/qualitaet", "Quality")]),
+                  ("/qualitaet", "Quality")]),
+    # .254 (User 17.08.: "ich vermisse den Knopf fuer das Lernen oben im
+    # Menue, er gehoert da rein"): Learn kehrt als Hauptbereich zurueck —
+    # Startseite ist der NEUE gefuehrte Lernfluss (.246); Anchors/Suggestions
+    # ziehen aus Faces mit (Expert-Unterreiter). Person learn bleibt bewusst
+    # unter Person (fachliche Heimat, .220-Entscheid ungebrochen).
+    ("Learn",    [("/lernlauf", "Learning run"),
+                  ("/lernlauf/anker", "Anchors"),
+                  ("/lernen", "Suggestions")]),
     # Person als EIGENER Hauptbereich neben People (User 04.08. abend):
     # People zeigt die GESICHTER, Person die KOERPER-Bilder je Person.
     # Z8 (konzept_frames.md §7): "Judged images" = Kontroll-Speicher der
@@ -115,9 +122,11 @@ BLATT = {"/setup": "/kameras", "/aehnliche": "/gesichter", "/event": "/heute", "
 NUR_EXPERT_BLAETTER = {"/kameras", "/benachrichtigungen", "/kette", "/konfiguration",
                        "/sync_auswahl", "/areas",
                        # .220: die Faces-Detail-Blaetter — Easy fuehrt ueber
-                       # die Kachel-Knoepfe der Startseite dorthin.
-                       "/gesichter", "/unbekannte", "/lernen", "/lernlauf",
-                       "/lernlauf/anker", "/qualitaet"}
+                       # die Kachel-Knoepfe der Startseite dorthin. .254:
+                       # /lernlauf ist RAUS aus der Menge (eigener Learn-
+                       # Hauptbereich, sein Unterreiter darf in Easy leuchten).
+                       "/gesichter", "/unbekannte", "/lernen",
+                       "/lernlauf/anker"}   # .273: /qualitaet ist EASY (Bestands-QS-Knopf)
 
 # Die beiden Galerie-Links ("Review gallery", "Strangers gallery") sind am 25.07. entfernt worden:
 # erzeugt wurden die Seiten von prototypes/backtest.py, das in keinem Image liegt. Fuer JEDE
@@ -159,6 +168,12 @@ def layout(titel, aktiv, inhalt, banner=None, refresh=None):
                  f'<a href="{p}"{_u_klasse(p)}>{html.escape(n)}</a>'
                  for p, n in kinder) + "</div></div>")
     ver = os.environ.get("SUSLIK_VERSION", "")   # feste Image-Version (leer im rohen dev-Lauf)
+    # Issue #24 (Tokn59, 18.08.): die VOLLE installierte Variante zeigen
+    # ('0.1.0.X-gpu') — SUSLIK_VARIANT steckt seit den Varianten-Builds im
+    # Image; im rohen dev-Lauf fehlen beide, dann bleibt der Kopf nackt.
+    _vari = os.environ.get("SUSLIK_VARIANT", "")
+    if ver and _vari:
+        ver = f"{ver}-{_vari}"
     # Update-Marke (#53): fest im Kopf, aber leise — ein kleiner Link neben der Version,
     # kein Banner, kein Blinken (User-Vorgabe "fest auf der Startseite, nicht zu aufdringlich").
     upd = ""

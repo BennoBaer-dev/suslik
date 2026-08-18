@@ -56,6 +56,14 @@ def render(cfg, kat_labels):
         '(Pushover, Telegram, MQTT scene topics). The recognized-person push itself '
         'is governed by the Presence toggle below; the MQTT data topics '
         '(erkennung, heartbeat) always publish while MQTT publishing is on.</p>' + cat_html +
+        '<div style="margin-top:8px">Alert text style: '
+        '<select id="n-alert_stil" style="' + _st + '">'
+        + "".join(f'<option value="{o}"{" selected" if (cfg.get("alert_stil") or "worte") == o else ""}>{t}</option>'
+                  for o, t in (("worte", "plain words"),
+                               ("worte_zahlen", "words + raw scores")))
+        + '</select> <span class="dim">— how alerts describe a match '
+          '(plain words is the default; raw cosine/score numbers only if '
+          'you want them back)</span></div>'
         '<div style="margin-top:8px">Presence push: ' + _selbool("n-anwesenheit_push", cfg.get("anwesenheit_push")) +
         ' &nbsp; Alert cooldown (s): ' + _num("n-alert_cooldown", cfg.get("alert_cooldown")) +
         ' &nbsp; Presence cooldown (s): ' + _num("n-anwesenheit_cooldown", cfg.get("anwesenheit_cooldown")) +

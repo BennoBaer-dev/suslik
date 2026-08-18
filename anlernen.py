@@ -15,7 +15,7 @@ Unknown-Reiter (22.07.) NUR noch intern gerufen (_reconcile_intern + CLI 'cluste
 Widerleger-Fund 30.07.: die alte Import-Behauptung fuehrte Reviews in die Irre.
 Read-only gegen Frigate; schreibt nur in verify_data/anlernen/ (+ refs/ beim Benennen).
 """
-import os, sys, json, time, argparse, collections, fcntl, threading
+import os, sys, json, time, argparse, collections, fcntl, tempfile, threading
 from contextlib import contextmanager
 os.environ.setdefault("OV_DEVICE", "GPU")
 from core.pfade import WURZEL as HERE   # M0-Anker (Falle 0): eine Pfad-Quelle
@@ -24,6 +24,7 @@ import cv2
 import numpy as np
 from face_audit import Embedder, aktuelles_modell, ist_fehldetektion
 from core.unbekanntpool import ARCHIV_TAGE   # EINE Quelle: Archiv-/Reaktivierungs-Fenster (auch Today-Kachel)
+from core.benennung import REF_LATTE         # .265 EINE Quelle: Referenz-Latte (auch _reihung/empfehlen)
 
 DATA = os.environ.get("VERIFY_DATA_DIR") or os.path.join(HERE, "verify_data")  # von verifyd prozessweit gesetzt
 MASTER = os.path.join(DATA, "faces")
@@ -1103,11 +1104,14 @@ def _unbekannt_benennen_intern(uid, person, beste_n=6):
 QS_PATH = os.path.join(ANLERN, "refs_qs.json")
 
 
-def bild_metriken(emb, img):
+def bild_metriken(emb, img, mit_pose=False):
     """QS-Metriken eines Einzelbilds (det 320): (embedding|None, gesichts_kante_orig|None,
-    sharp). kante = Gesichtsgroesse in ORIGINAL-Pixeln (Upscaling wie Embedder.embed
-    herausgerechnet). Eine Quelle fuer Eignungspruefung UND Bestands-Suche — was die Suche
-    vorschlaegt, besteht damit garantiert auch die Pruefung."""
+    sharp[, pose|None]). kante = Gesichtsgroesse in ORIGINAL-Pixeln (Upscaling wie
+    Embedder.embed herausgerechnet). Eine Quelle fuer Eignungspruefung UND Bestands-
+    Suche — was die Suche vorschlaegt, besteht damit garantiert auch die Pruefung.
+    mit_pose (.273c, Blick-Statistik): liefert zusaetzlich fc.pose (Widerleger-
+    Befund: die Pose wurde bisher weggeworfen) — als 4. Wert, damit die drei
+    Bestands-Aufrufer unveraendert bleiben."""
     h, w = img.shape[:2]
     sh = float(cv2.Laplacian(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var())
     scale = max(1.0, 224.0 / min(h, w))
@@ -1115,46 +1119,83 @@ def bild_metriken(emb, img):
                        interpolation=cv2.INTER_CUBIC) if scale > 1.0 else img
     faces = emb.app.get(gross)
     if not faces:
-        return None, None, round(sh, 0)
+        return (None, None, round(sh, 0), None) if mit_pose else (None, None, round(sh, 0))
     fc = max(faces, key=lambda x: (x.bbox[2] - x.bbox[0]) * (x.bbox[3] - x.bbox[1]))
     x1, y1, x2, y2 = fc.bbox
     kante = round(min(x2 - x1, y2 - y1) / scale)
-    return np.asarray(fc.normed_embedding, dtype=np.float32), kante, round(sh, 0)
+    v = np.asarray(fc.normed_embedding, dtype=np.float32)
+    if mit_pose:
+        pose = getattr(fc, "pose", None)
+        return v, kante, round(sh, 0), (
+            [round(float(x), 1) for x in pose] if pose is not None else None)
+    return v, kante, round(sh, 0)
 
 
-def lade_master_bilder(emb):
+def lade_master_bilder(emb, fortschritt=None):
     """Alle Referenzbilder EINZELN mit Eignungs-Metriken (det 320, Ref-Crops). Liefert AUCH
     Bilder ohne detektierbares Gesicht (emb None) und defekte Dateien — genau die gehoeren
-    in die Eignungspruefung, nicht stillschweigend uebersprungen."""
-    out = []
+    in die Eignungspruefung, nicht stillschweigend uebersprungen.
+    fortschritt (.273 Bestands-QS): Callback (i, n) je gemessenem Bild —
+    die Dateiliste steht vorab, damit n von Anfang an stimmt."""
     if not os.path.isdir(MASTER):
-        return out
+        return []
+    dateien = []
     for p in sorted(os.listdir(MASTER)):
         pd = os.path.join(MASTER, p)
         if not os.path.isdir(pd):
             continue
-        for f in sorted(os.listdir(pd)):
-            if not f.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
-                continue
-            img = cv2.imread(os.path.join(pd, f))
-            if img is None:
-                out.append({"person": p, "datei": f, "emb": None, "sharp": 0.0,
-                            "kante": None, "wh": "?", "defekt": True})
-                continue
-            v, kante, sh = bild_metriken(emb, img)
+        dateien += [(p, f) for f in sorted(os.listdir(pd))
+                    if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))]
+    out = []
+    for i, (p, f) in enumerate(dateien, 1):
+        img = cv2.imread(os.path.join(MASTER, p, f))
+        if img is None:
+            out.append({"person": p, "datei": f, "emb": None, "sharp": 0.0,
+                        "kante": None, "wh": "?", "defekt": True})
+        else:
+            v, kante, sh, pose = bild_metriken(emb, img, mit_pose=True)
             out.append({"person": p, "datei": f, "emb": v, "sharp": sh,
-                        "kante": kante, "wh": f"{img.shape[1]}x{img.shape[0]}", "defekt": False})
+                        "kante": kante, "pose": pose,
+                        "wh": f"{img.shape[1]}x{img.shape[0]}",
+                        "defekt": False})
+        if fortschritt:
+            fortschritt(i, len(dateien))
     return out
 
 
-def pruefe_referenzen(flag_sim=0.30, top=40, unscharf_max=350, min_kante=70):
-    """Referenz-QS in zwei Teilen: (1) EIGNUNG jedes einzelnen Bildes — defekt / kein
-    Gesicht detektierbar / Gesicht zu klein / unscharf (alles Loesch-Kandidaten, nach
-    Grund gruppiert); (2) Cross-Person-VERWECHSLUNG ueber die Bilder mit Embedding
-    ('kritisch' bei hoher Fremd-Aehnlichkeit oder fremd >= eigen = Fehllabel-Verdacht).
-    Ergebnis -> refs_qs.json fuer den Qualitaet-Reiter."""
-    emb = Embedder()                              # det 320 default — genau richtig fuer Ref-Crops
-    B = lade_master_bilder(emb)
+def pruefe_referenzen(flag_sim=0.30, top=40,
+                      unscharf_max=REF_LATTE["unscharf_max"],
+                      min_kante=REF_LATTE["min_kante"],
+                      kante_gut=REF_LATTE["kante_gut"],
+                      sharp_gut=REF_LATTE["sharp_gut"],
+                      dup_sim=0.75, person=None, emb=None, fortschritt=None):
+    """Referenz-QS (.273 zum Bestands-QS-Knopf ausgebaut, Konzept
+    konzept_bestandsqs.md) in VIER Teilen: (1) EIGNUNG jedes einzelnen
+    Bildes — defekt / kein Gesicht / zu klein / unscharf (Loesch-Kandidaten,
+    nach Grund gruppiert) + Qualitaets-STUFE gut/mindest/unter aus der
+    REF_LATTE (eine Quelle mit Bruecke/Sichtung); (2) Cross-Person-
+    VERWECHSLUNG ('kritisch' bei hoher Fremd-Aehnlichkeit oder fremd >=
+    eigen-Kohaerenz = Fehllabel-Verdacht); (3) DOPPELTE innerhalb jeder
+    Person (>= dup_sim, greedy entlang Latten-Klasse+Schaerfe: der beste
+    bleibt Vertreter, der Rest ist redundant — VORSCHLAG, kein Auto-
+    Loeschen); (4) ZUSAMMENFASSUNG je Person fuer die Kopf-Tabelle.
+    person: filtert NUR den Bericht — gemessen und verglichen wird IMMER
+    der Gesamtbestand (die Verwechslungs-Achse braucht alle als Gegenseite).
+    emb: warmer Dienst-Embedder (det 320) statt Neubau; fortschritt(i, n)
+    fuer die Anzeige. Ergebnis -> refs_qs.json fuer die Qualitaets-Seite."""
+    emb = emb or Embedder()                       # det 320 default — genau richtig fuer Ref-Crops
+    B = lade_master_bilder(emb, fortschritt=fortschritt)
+    # .273 Qualitaets-Stufe je Bild (REF_LATTE = eine Quelle mit Bruecke/
+    # Sichtung): unmessbar / unter / mindest / gut.
+    for b in B:
+        if b.get("defekt") or b["emb"] is None:
+            b["stufe"] = "unmessbar"
+        elif (b["kante"] or 0) >= kante_gut and b["sharp"] >= sharp_gut:
+            b["stufe"] = "gut"
+        elif (b["kante"] or 0) >= min_kante and b["sharp"] >= unscharf_max:
+            b["stufe"] = "mindest"
+        else:
+            b["stufe"] = "unter"
     PRIO = ("defekt", "kein_gesicht", "zu_klein", "unscharf")
     ungeeignet = []
     for b in B:
@@ -1170,6 +1211,7 @@ def pruefe_referenzen(flag_sim=0.30, top=40, unscharf_max=350, min_kante=70):
         if gruende:
             ungeeignet.append({"person": b["person"], "datei": b["datei"],
                                "gruende": gruende, "hauptgrund": next(g for g in PRIO if g in gruende),
+                               "stufe": b["stufe"],
                                "sharp": b["sharp"], "kante": b["kante"], "wh": b["wh"]})
     ungeeignet.sort(key=lambda u: (PRIO.index(u["hauptgrund"]), u["kante"] or 0, u["sharp"]))
     BE = [b for b in B if b["emb"] is not None]
@@ -1207,22 +1249,94 @@ def pruefe_referenzen(flag_sim=0.30, top=40, unscharf_max=350, min_kante=70):
             if key not in seen:
                 seen[key] = pr
         paare = sorted(seen.values(), key=lambda x: (-int(x["kritisch"]), -x["sim"]))[:top]
+    # .273 Achse 3: DOPPELTE innerhalb jeder Person — greedy entlang
+    # Latten-Klasse + Schaerfe (bester bleibt Vertreter); Embeddings sind
+    # L2-normiert (bild_metriken), dot == Cosinus. VORSCHLAG, nie Auto-Loeschen.
+    from core.benennung import _lattenklasse as _lk273
+    doppel = []
+    _je_p = {}
+    for b in BE:
+        _je_p.setdefault(b["person"], []).append(b)
+    for _p, _bs in sorted(_je_p.items()):
+        vertreter = []
+        for b in sorted(_bs, key=lambda x: (_lk273(x), -x["sharp"])):
+            naher, nsim = None, -1.0
+            for v in vertreter:
+                s = float(np.dot(b["emb"], v["emb"]))
+                if s >= float(dup_sim) and s > nsim:
+                    naher, nsim = v, s
+            if naher is None:
+                vertreter.append(b)
+                continue
+            doppel.append({"person": _p, "datei": b["datei"],
+                           "behalten": naher["datei"],
+                           "sim": round(nsim, 3), "stufe": b["stufe"]})
+    # .273 Achse 4: Zusammenfassung je Person (Kopf-Tabelle der Seite)
+    from core.benennung import perspektiv_bin as _pb273
+    personen = {}
+    for b in B:
+        e = personen.setdefault(b["person"], {"n": 0, "gut": 0, "mindest": 0,
+                                              "unter": 0, "unmessbar": 0,
+                                              "links": 0, "frontal": 0,
+                                              "rechts": 0})
+        e["n"] += 1
+        e[b["stufe"]] += 1
+        if b.get("emb") is not None:
+            # .273c (User: 'wie viele Bilder von jeder Seite'): Blick-Zaehler
+            # je Person — dieselbe Bin-Regel wie Lern-Sichtung (15 Grad).
+            e[_pb273(b.get("pose") or [], 15.0)] += 1
+    _red = collections.Counter(d["person"] for d in doppel)
+    _krit = collections.Counter()
+    for pr in paare:
+        if pr.get("kritisch"):
+            _krit[pr["a_person"]] += 1
+            _krit[pr["b_person"]] += 1
+    for _p, e in personen.items():
+        e["redundant"] = _red.get(_p, 0)
+        e["kritisch"] = _krit.get(_p, 0)
+    # Widerleger-Blocker (Konzept-QS 18.08.): der Personen-Filter wird NIE
+    # persistiert — ein Ein-Person-Lauf haette sonst den Bericht ALLER
+    # anderen geloescht. refs_qs.json traegt IMMER den vollen Befund; der
+    # Filter wirkt allein auf die RUECKGABE (und die Seite filtert beim
+    # Rendern ueber ?person=...).
     os.makedirs(ANLERN, exist_ok=True)
     _schreibe_json_atomar(QS_PATH, {"ts": time.time(), "ref_count": len(B), "flag_sim": flag_sim,
                                     "unscharf_max": unscharf_max, "min_kante": min_kante,
+                                    "kante_gut": kante_gut, "sharp_gut": sharp_gut,
+                                    "dup_sim": dup_sim,
+                                    "modell": emb.modell, "personen": personen,
+                                    "doppel": doppel,
+                                    "stufen": {p_: {b["datei"]: b["stufe"]
+                                               for b in B if b["person"] == p_}
+                                               for p_ in personen},
                                     "paare": paare, "ungeeignet": ungeeignet})
+    if person:
+        ungeeignet = [u for u in ungeeignet if u["person"] == person]
+        doppel = [d for d in doppel if d["person"] == person]
+        paare = [pr for pr in paare
+                 if person in (pr["a_person"], pr["b_person"])]
+        personen = {p_: e for p_, e in personen.items() if p_ == person}
     # refcache im analyze-Format gleich mitschreiben (identische det-320-Embeddings, meta =
     # sortierte Dateilisten wie sync_refs.master_stand): /aehnliche und analyze funktionieren
     # damit SOFORT nach Loeschungen/Anlernen, ohne auf das naechste Kamera-Event zu warten
     # (User-Befund 19.07.: "Referenz-Cache wird gerade neu aufgebaut" nach dem Aufraeumen)
     try:
+        # Widerleger-Blocker (Konzept-QS 18.08.): waehrend der Messung kann
+        # der User Referenzen GELOESCHT haben — der Cache darf sie nicht
+        # wiederbeleben (Sichtungs-/Vorschlags-Geister). Existenz frisch
+        # pruefen, unmittelbar vor dem Schreiben.
+        def _lebt(b):
+            return os.path.isfile(os.path.join(MASTER, b["person"], b["datei"]))
         want = {}
         refs = {}
         for b in B:
+            if not _lebt(b):
+                continue
             want.setdefault(b["person"], []).append(b["datei"])
             refs.setdefault(b["person"], [])
         for b in BE:
-            refs[b["person"]].append(b["emb"])
+            if _lebt(b):
+                refs[b["person"]].append(b["emb"])
         os.makedirs(CLIPS, exist_ok=True)
         # Atomar (tmp + fsync + os.replace) wie in analyze.py: analyze LIEST diesen Cache, waehrend
         # dieser Lauf ihn schreibt — direkt aufs Ziel geschrieben, konnte der Leser eine halbe npz
@@ -1247,7 +1361,8 @@ def pruefe_referenzen(flag_sim=0.30, top=40, unscharf_max=350, min_kante=70):
     except Exception as e:
         print(f"refcache not written: {e}", flush=True)   # Cache ist Beschleunigung, kein Muss —
                                                                 # aber nicht mehr STILL scheitern
-    return {"paare": paare, "ungeeignet": ungeeignet}
+    return {"paare": paare, "ungeeignet": ungeeignet,
+            "doppel": doppel, "personen": personen}
 
 
 def entferne_referenz(person, datei):
@@ -1431,9 +1546,77 @@ def embedder_warm():
     return _EMB_CACHE is not None
 
 
-def vorschlaege_person(person, tage=7.0, max_n=16, min_kante=70, unscharf_max=350,
+def bild_stufe(eigen, fremd, kante, sh, *,
+               min_kante=REF_LATTE["min_kante"],
+               unscharf_max=REF_LATTE["unscharf_max"],
+               sim_min=0.45, sim_neu=0.75, sim_unsicher=0.30, abstand=0.10,
+               kante_gut=REF_LATTE["kante_gut"],
+               sharp_gut=REF_LATTE["sharp_gut"]):
+    """.257: die Zwei-Achsen-Bewertung der Bruecke als EINE QUELLE (QS-Ebenen-
+    Regel; Anlass: die Benenn-Pruefung der Zuweisungs-Flaeche hatte nur den
+    Dedup und liess 12 matschige Bilder als 'neu' durch — User-Fang am
+    Screenshot). Identitaet: eigen>=sim_min sicher / eigen>=sim_unsicher mit
+    Abstand wahrscheinlich / sonst raus; eigen>=sim_neu = Bestands-Duplikat;
+    fremd>=eigen = raus. Qualitaet: Mindest-Gate kante/sharp, GUT ab
+    kante_gut/sharp_gut. eigen=None (Person ohne Referenzen, Kaltstart der
+    Gruppe): Identitaet gilt als User-Wort, nur die Qualitaets-Achse traegt.
+    -> (stufe 'empfohlen'|'neutral'|None, grund_englisch fuer die UI)."""
+    if kante is None or sh is None or kante < min_kante or sh < unscharf_max:
+        return None, "too small or too blurry for a reference"
+    if eigen is not None:
+        if eigen >= sim_neu:
+            return None, "already covered (near-identical to a reference)"
+        if fremd is not None and fremd >= eigen:
+            return None, "closer to someone else"
+        if eigen >= sim_min:
+            id_sicher = True
+        elif eigen >= sim_unsicher and (fremd is None
+                                        or (eigen - fremd) >= abstand):
+            id_sicher = False
+        else:
+            return None, "identity not certain enough"
+    else:
+        id_sicher = True
+    qual_gut = kante >= kante_gut and sh >= sharp_gut
+    if id_sicher and qual_gut:
+        return "empfohlen", ""
+    if id_sicher or qual_gut:
+        return "neutral", ("quality only fair" if not qual_gut
+                           else "identity not fully certain")
+    return None, "neither quality nor identity strong enough"
+
+
+def refs_matrix_roh(modell):
+    """Referenz-Matrizen je Person aus dem refcache OHNE Embedder (.266,
+    Seiten-Render): der modell-String kommt vom Aufrufer (cfg['modell']).
+    Kein Master-Fallback — der braeuchte das Modell; eine fehlende Person
+    heisst fuer die Matrix: Identitaet ist das User-Wort."""
+    refs = {}
+    cache = os.path.join(CLIPS, "refcache.npz")
+    if os.path.exists(cache):                      # pruefe_referenzen haelt ihn frisch
+        try:
+            z = np.load(cache, allow_pickle=True)
+            if str(_cache_meta(z).get("§modell", "")) != str(modell):
+                raise ValueError("refcache anderes Recognition-Modell")   # -> frisch aus Master
+            refs = {p: np.asarray(z[p], np.float32) for p in z.files if p not in ("meta", "§meta")}
+        except Exception:
+            refs = {}
+    return refs
+
+
+def refs_matrix(emb):
+    """Referenz-Matrizen je Person: refcache wenn modellgleich, sonst Master.
+    .257 extrahiert aus vorschlaege_person (EINE Quelle — Bruecke UND
+    Benenn-Pruefung laden identisch); .266 duenner Mantel um refs_matrix_roh."""
+    return refs_matrix_roh(emb.modell)
+
+
+def vorschlaege_person(person, tage=7.0, max_n=16,
+                       min_kante=REF_LATTE["min_kante"],
+                       unscharf_max=REF_LATTE["unscharf_max"],
                        sim_min=0.45, sim_neu=0.75, sim_unsicher=0.30, abstand=0.10,
-                       kante_gut=120, sharp_gut=700, max_pruef=80,
+                       kante_gut=REF_LATTE["kante_gut"],
+                       sharp_gut=REF_LATTE["sharp_gut"], max_pruef=80,
                        nur_eids=None, schreiben=True, emb=None):
     """Bestands-Suche (User 19.07.): durchsucht die Events der Person aus den letzten Tagen
     nach referenz-tauglichen NEUEN Gesichtern. Quelle sind Events, in denen die Person
@@ -1450,16 +1633,7 @@ def vorschlaege_person(person, tage=7.0, max_n=16, min_kante=70, unscharf_max=35
     # .235: uebergebene Instanz (svc.embedder, OV-schnell) hat Vorrang —
     # die Bruecke lief sonst auf einer zweiten CPU-Instanz (~2 s je Bild).
     emb = emb or _embedder_geteilt()
-    refs = {}
-    cache = os.path.join(CLIPS, "refcache.npz")
-    if os.path.exists(cache):                      # pruefe_referenzen haelt ihn frisch
-        try:
-            z = np.load(cache, allow_pickle=True)
-            if str(_cache_meta(z).get("§modell", "")) != emb.modell:
-                raise ValueError("refcache anderes Recognition-Modell")   # -> frisch aus Master
-            refs = {p: np.asarray(z[p], np.float32) for p in z.files if p not in ("meta", "§meta")}
-        except Exception:
-            refs = {}
+    refs = refs_matrix(emb)                        # .257: EINE Ladequelle
     if not len(refs.get(person, [])):
         refs = lade_master_refs(emb)
     kand = []
@@ -1517,24 +1691,15 @@ def vorschlaege_person(person, tage=7.0, max_n=16, min_kante=70, unscharf_max=35
             eigen = float((refs[person] @ v).max())
             fremd = max((float((M @ v).max()) for p2, M in refs.items()
                          if p2 != person and len(M)), default=-1.0)
-            if eigen >= sim_neu or fremd >= eigen:        # Duplikat des Bestands oder naeher an fremd
+            # .257: Zwei-Achsen-Matrix aus der EINEN Quelle (bild_stufe) —
+            # identische Semantik wie die Inline-Fassung davor.
+            stufe, _grund = bild_stufe(
+                eigen, fremd, kante, sh, min_kante=min_kante,
+                unscharf_max=unscharf_max, sim_min=sim_min, sim_neu=sim_neu,
+                sim_unsicher=sim_unsicher, abstand=abstand,
+                kante_gut=kante_gut, sharp_gut=sharp_gut)
+            if stufe is None:
                 continue
-            # Achse 1 Identitaet: sicher / wahrscheinlich (HITL, Grenzfall 19.07.) / unsicher(raus)
-            if eigen >= sim_min:
-                id_sicher = True
-            elif eigen >= sim_unsicher and (eigen - fremd) >= abstand:
-                id_sicher = False
-            else:
-                continue                                   # unsicher -> Not recommended, nicht zeigen
-            # Achse 2 Bildqualitaet gut/maessig (Mindest-Gate ist schon bestanden)
-            qual_gut = kante >= kante_gut and sh >= sharp_gut
-            # Zwei-Achsen-Matrix -> nur die oberen zwei Stufen behalten (User 21.07.)
-            if id_sicher and qual_gut:
-                stufe = "empfohlen"
-            elif id_sicher or qual_gut:
-                stufe = "neutral"
-            else:
-                continue                                   # wahrscheinlich + maessig -> raus
             kand.append({"eid": d["eid"], "datei": js[0], "sim": round(eigen, 3),
                          "fremd": round(fremd, 3), "kante": kante, "sharp": sh,
                          "stufe": stufe, "sicher": (stufe == "empfohlen"),
@@ -1689,6 +1854,208 @@ def lernbruecke_pruefen(person, eids, emb=None):
     return nehmen, grenz
 
 
+SICHTUNG_JE_BLICK = 14   # .271: Pruef-Kandidaten je Blickwinkel-Reihe
+SICHTUNG_DECKEL = 40   # (Alt-Kommentar) Pruef-Kandidaten je Gruppe;
+#                        haelt die Erst-Sichtung mit warmem Modell bei wenigen
+#                        Sekunden — die Flaeche zeigt ohnehin maximal zwei
+#                        Reihen, der Rest waere Messung ohne Abnehmer.
+
+
+BLICK_REIHEN = ("links", "frontal", "rechts")
+
+
+def _sichtungs_kandidaten(mitglieder, deckel_je_blick, yaw_grenze):
+    """.271 (User-Zielbild: 'eine Reihe links, eine frontal, eine rechts —
+    und das sind schon die optimalen'): Kandidaten-Wahl JE BLICKWINKEL-BIN
+    (perspektiv_bin) und darin JE EVENT verteilt (Round-Robin, innerhalb
+    des Events nach _reihung; latten-taugliche Frames zuerst, Unter-Latte
+    fuellt nur nach — Lehren aus .269/.270: Top-N am Stueck = Serien-Frames,
+    reines Event-RR = schwache Events fressen Plaetze).
+    -> Liste von (mitglied, blick), je Bin hoechstens deckel_je_blick."""
+    from core.benennung import _reihung, _lattenklasse, perspektiv_bin
+    kand = []
+    for blick in BLICK_REIHEN:
+        im_bin = [x for x in sorted(mitglieder, key=_reihung)
+                  if perspektiv_bin(x.get("pose") or [], yaw_grenze) == blick]
+        je_event = {}
+        for x in im_bin:
+            je_event.setdefault(str(x.get("event", "")), []).append(x)
+        n0 = len(kand)
+        for nur_tauglich in (True, False):
+            reihen = [[x for x in r
+                       if (_lattenklasse(x) <= 1) == nur_tauglich]
+                      for r in je_event.values()]
+            while len(kand) - n0 < int(deckel_je_blick) and any(reihen):
+                for r in reihen:
+                    if r:
+                        kand.append((r.pop(0), blick))
+                        if len(kand) - n0 >= int(deckel_je_blick):
+                            break
+            if len(kand) - n0 >= int(deckel_je_blick):
+                break
+    return kand
+
+
+def gruppen_sichtung(satz, lauf_dir, emb=None,
+                     deckel_je_blick=SICHTUNG_JE_BLICK, yaw_grenze=15.0):
+    """.266 'Sicht = Pruefergebnis' (User 18.08.: 'erst ein Schnellcheck,
+    welche Bilder wirklich gut sind, und DAVON die Anzeige'): die besten
+    `deckel` Mitglieder der Gruppe (Reihung `_reihung`) werden EINMAL mit
+    der echten Crop-Messung gesichtet (`bild_metriken`, det 320 — dieselbe
+    Messung wie Bruecke und Benenn-Pruefung) und das Ergebnis samt
+    Crop-Embedding im Lauf-Ordner gecacht (`sichtung_<anker>.json`,
+    modell-gebunden, faellt mit dem Lauf; Neuaufbau wenn sich die
+    Mitglieder-Zahl aendert). Flaeche UND Benenn-Pruefung zehren daraus —
+    EINE Messung je Bild, nie zwei Massstaebe.
+    -> {"modell", "gesamt", "bilder": [{datei, kante, sharp, emb|None,
+    grund?}...]} in Reihungs-Ordnung."""
+    from core.benennung import _reihung
+    emb = emb or _embedder_geteilt()
+    aid = str(satz.get("anker_id"))
+    pfad = os.path.join(lauf_dir, f"sichtung_{aid}.json")
+    m = satz.get("mitglieder") or []
+    try:
+        with open(pfad, encoding="utf-8") as f:
+            d = json.load(f)
+        if (d.get("modell") == emb.modell and d.get("gesamt") == len(m)
+                and d.get("wahl") == "blick-rr"):   # .269: Alt-Caches neu
+            return d
+    except (OSError, ValueError):
+        pass
+    bilder = []
+    for x, blick in _sichtungs_kandidaten(m, deckel_je_blick, yaw_grenze):
+        rel = str(x.get("datei", ""))
+        img = cv2.imread(os.path.join(lauf_dir, rel))
+        if img is None:
+            bilder.append({"datei": rel, "blick": blick, "kante": None,
+                           "sharp": 0.0, "emb": None,
+                           "grund": "crop not readable"})
+            continue
+        v, kante, sh = bild_metriken(emb, img)
+        bilder.append({"datei": rel, "blick": blick, "kante": kante,
+                       "sharp": sh,
+                       "emb": ([round(float(t), 5) for t in v]
+                               if v is not None else None)})
+    d = {"modell": emb.modell, "gesamt": len(m), "wahl": "blick-rr",
+         "bilder": bilder, "ts": round(time.time(), 1)}
+    fd, tmp = tempfile.mkstemp(dir=lauf_dir, prefix=".sichtung.")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(d, f, ensure_ascii=False)
+    os.replace(tmp, pfad)
+    os.chmod(pfad, 0o644)          # mkstemp-0600-Falle (Backup-Befund 17.08.)
+    return d
+
+
+def sichtung_lesen(satz, lauf_dir, modell):
+    """Nur-Lese-Zugriff auf den Sichtungs-Cache (fuer den Seiten-Render,
+    der weder Modell noch Embedder anfassen darf): None wenn kein gueltiger
+    Cache liegt — dann zeigt die Flaeche den 'checking pictures'-Zustand
+    und das JS stoesst die Sichtung an."""
+    aid = str(satz.get("anker_id"))
+    try:
+        with open(os.path.join(lauf_dir, f"sichtung_{aid}.json"),
+                  encoding="utf-8") as f:
+            d = json.load(f)
+        if (d.get("modell") == str(modell)
+                and d.get("gesamt") == len(satz.get("mitglieder") or [])
+                and d.get("wahl") == "blick-rr"):   # .269: Alt-Cache = neu sichten
+            return d
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def sichtung_bewerten(person, sichtung, refs, dup_sim, adoptierte):
+    """Matrix-Anwendung auf die GECACHTEN Sichtungs-Messwerte (.266): keine
+    Bild-I/O, kein Modell — Identitaets-Achse gegen `refs` (Matrizen je
+    Person; person=None oder ohne Referenzen -> Identitaet ist das
+    User-Wort, nur Qualitaet traegt, wie bild_stufe eigen=None), Qualitaet
+    aus kante/sharp der Sichtung, Dedup gegen adoptierte Lern-Referenzen +
+    innerhalb der Reihung (identisch zu plan_bauen). -> Liste in
+    Sichtungs-Ordnung: {datei, stufe 'gut'|'grenzfall'|'raus', grund}."""
+    from core.uebernahme import _cos
+    eigen_refs = refs.get(person) if person else None
+    if eigen_refs is not None and not len(eigen_refs):
+        eigen_refs = None
+    aus, gesehen = [], [list(e) for e in (adoptierte or [])]
+    for b in (sichtung or {}).get("bilder", []):
+        datei = os.path.basename(str(b.get("datei", "")))
+        if b.get("emb") is None:
+            aus.append({"datei": datei, "stufe": "raus",
+                        "grund": b.get("grund")
+                        or "no measurable face in this crop",
+                        "blick": b.get("blick") or "frontal"})
+            continue
+        v = np.asarray(b["emb"], dtype=np.float32)
+        eigen = (float((eigen_refs @ v).max())
+                 if eigen_refs is not None else None)
+        fremd = (max((float((M @ v).max()) for p2, M in refs.items()
+                      if p2 != person and len(M)), default=None)
+                 if person else None)
+        stufe, grund = bild_stufe(eigen, fremd, b.get("kante"), b.get("sharp"))
+        # .276 (User-Bauchgefuehl vs Messung, Werte-Tabelle 18.08.): Zahlen an die
+        # Gate-Urteile — 'too small or too blurry' allein erklaert einem
+        # scharfen 58-px-Gesicht nichts.
+        if stufe is None and grund and grund.startswith("too small"):
+            grund = (f"too small or too blurry for a reference "
+                     f"({b.get('kante') if b.get('kante') is not None else '?'} px, "
+                     f"sharpness {int(b.get('sharp') or 0)} — needs "
+                     f"{REF_LATTE['min_kante']} px / {REF_LATTE['unscharf_max']})")
+        # .267 (Widerleger): Dup GEGEN ADOPTIERTE Referenzen bleibt raus
+        # (schon gelernt); Dup INNERHALB der Auswahl wird GRENZFALL — sonst
+        # verdraengt ein abgewaehltes Bild sein besseres Double endgueltig.
+        if stufe is not None and any(
+                (s := _cos(v, e)) is not None and s >= float(dup_sim)
+                for e in (adoptierte or [])):
+            stufe, grund = None, ("near-identical to a picture already "
+                                  "learned as a reference")
+        dup = False
+        if stufe is not None and any(
+                (s := _cos(v, e)) is not None and s >= float(dup_sim)
+                for e in gesehen):
+            # .268: Beinahe-Double INNERHALB der Auswahl — als ALTERNATIVE
+            # markiert (dup=True); die Flaeche reiht sie ganz nach hinten,
+            # damit Serien-Frames nicht die zwei Reihen fluten (User-
+            # Screenshot 18.08.: 19 von 24 Kacheln waren Doubles).
+            stufe, dup = "neutral", True
+            grund = "near-identical alternative to a picture shown here"
+        blick = b.get("blick") or "frontal"
+        if stufe is None:
+            aus.append({"datei": datei, "stufe": "raus", "grund": grund,
+                        "blick": blick})
+            continue
+        gesehen.append(v.tolist())
+        aus.append({"datei": datei,
+                    "stufe": "gut" if stufe == "empfohlen" else "grenzfall",
+                    "grund": grund, "blick": blick,
+                    **({"dup": True} if dup else {})})
+    return aus
+
+
+def benennung_bewerten(person, satz, dup_sim, adoptierte, lauf_dir, emb=None):
+    """.257/.266: DIESELBE Pruefung wie die Lern-Bruecke, identisch by
+    construction (User-Auflage 17.08.: nie zwei verschiedene Pruefungen fuer
+    dasselbe Bild). Seit .266 zehrt sie aus dem Sichtungs-Cache
+    (gruppen_sichtung = die EINE Crop-Messung je Bild via bild_metriken,
+    det 320 — NIE die Ernte-Werte im Anker, die am Video-Frame mit det 1280
+    gemessen sind) und wendet nur noch die Matrix an (sichtung_bewerten:
+    bild_stufe + Uebernahme-Dedup). Beurteilt werden die GEWAEHLTEN
+    Mitglieder; Gewaehlte ausserhalb der Sichtungs-Kandidaten (Deckel)
+    fallen EHRLICH mit Grund. Kein Schrieb ausser dem Sichtungs-Cache.
+    -> Liste {datei, stufe 'gut'|'grenzfall'|'raus', grund}."""
+    emb = emb or _embedder_geteilt()
+    refs = refs_matrix(emb)
+    if not len(refs.get(person, [])) and os.path.isdir(os.path.join(MASTER, person)):
+        refs = lade_master_refs(emb)               # Cache kennt die Person noch nicht
+    sicht = gruppen_sichtung(satz, lauf_dir, emb=emb)
+    # .267 (Widerleger-Blocker): beurteilt werden ALLE Sichtungs-Kandidaten —
+    # exakt die Menge, aus der die Flaeche rendert. Die frueher persistierte
+    # gewaehlt-Auswahl ist fuer die Pruefung bedeutungslos (sie wird beim
+    # Take ohnehin mit der SICHTBAREN Auswahl neu geschrieben); sie zu
+    # filtern liess Pruefung und Anzeige wieder auseinanderlaufen.
+    return sichtung_bewerten(person, sicht, refs, dup_sim, adoptierte)
+
+
 def lernbruecke_uebernehmen(person, items, emb=None):
     """Lern-Bruecke Schritt 2: genau die geprueften Bilder uebernehmen (der
     Nutzer hat sie gesehen und bestaetigt). Containment/Format prueft
@@ -1720,8 +2087,10 @@ if __name__ == "__main__":
     np_.add_argument("person"); np_.add_argument("faces_json")
     c = sub.add_parser("cluster"); c.add_argument("--sim", type=float, default=SIM_DEFAULT)
     pr = sub.add_parser("pruefe"); pr.add_argument("--sim", type=float, default=0.30)
-    pr.add_argument("--unscharf", type=int, default=350)
-    pr.add_argument("--minkante", type=int, default=70)
+    pr.add_argument("--unscharf", type=int, default=REF_LATTE["unscharf_max"])
+    pr.add_argument("--minkante", type=int, default=REF_LATTE["min_kante"])
+    pr.add_argument("--person", default=None)      # .273: Bericht-Filter
+    pr.add_argument("--dupsim", type=float, default=0.75)
     vo = sub.add_parser("vorschlaege"); vo.add_argument("person")
     vo.add_argument("--tage", type=float, default=7.0)
     vo.add_argument("--unscharf", type=int, default=350)
@@ -1768,7 +2137,29 @@ if __name__ == "__main__":
                   f"({rep['camera']}, nearest known: {rep['nn_person']} {rep['nn_score']}) | "
                   f"cameras: {sorted(set(g['camera'] for g in c))}")
     elif a.cmd == "pruefe":
-        erg = pruefe_referenzen(a.sim, unscharf_max=a.unscharf, min_kante=a.minkante)
+        # .273 Bestands-QS: Fortschritt fuer die Seite (refs_qs_lauf.json —
+        # existiert nur waehrend des Laufs bzw. nach einem Fehlschlag mit
+        # 'fehler'; Erfolg raeumt sie weg).
+        _lp = os.path.join(ANLERN, "refs_qs_lauf.json")
+        os.makedirs(ANLERN, exist_ok=True)
+
+        def _fs(i, n):
+            if i == 1 or i % 5 == 0 or i == n:
+                _schreibe_json_atomar(_lp, {"i": i, "n": n,
+                                            "ts": round(time.time(), 1),
+                                            "person": a.person})
+        try:
+            erg = pruefe_referenzen(a.sim, unscharf_max=a.unscharf,
+                                    min_kante=a.minkante, person=a.person,
+                                    dup_sim=a.dupsim, fortschritt=_fs)
+            try:
+                os.unlink(_lp)
+            except FileNotFoundError:
+                pass
+        except Exception as e:
+            _schreibe_json_atomar(_lp, {"fehler": f"{type(e).__name__}: {e}",
+                                        "ts": round(time.time(), 1)})
+            raise
         paare, ug = erg["paare"], erg["ungeeignet"]
         import collections
         print(f"\nSUITABILITY: {len(ug)} images flagged:",

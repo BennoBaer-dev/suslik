@@ -21,6 +21,14 @@ from core.registry import LIVE_ZUSTAENDE
 
 GPU_HINWEIS = ("Works with a GPU only for now — we are working on a CPU "
                "option but can't promise it.")
+# CPU-Runde 17.08. (User-Go nach Messung): auf der cpu-Variante ist Live
+# BEGRENZT erlaubt — der Text sagt ehrlich, was gemessen ist, und verspricht
+# keine Unter-einer-Sekunde-Reaktion.
+CPU_HINWEIS = ("CPU mode: watchers are expensive here — the quick check "
+               "typically takes 1–2 s (a GPU build reacts in under a "
+               "second), and additional watchers slow each other down. "
+               "How many you run is your call; we recommend starting "
+               "with one.")
 
 DOKU_URL = "https://github.com/BennoBaer-dev/suslik/blob/main/docs/live-watchers.md"
 
@@ -121,7 +129,7 @@ def _zaehler_zeile(live):
             + html.escape(" · ".join(teile)) + "</div>")
 
 
-def _engine_karte(engine_info, gesperrt):
+def _engine_karte(engine_info, gesperrt, container_last=None):
     """Engine-Lage + RAM-Ehrlichkeit (§2.3: Messwerte dieser Maschine, nie
     Literaturwerte — ungemessen heisst sichtbar 'not yet measured')."""
     if gesperrt:
@@ -149,7 +157,19 @@ def _engine_karte(engine_info, gesperrt):
               "per-stream RAM not yet measured on this machine")
     frei = slots.get("ram_frei_mb")
     rss = slots.get("rss_mb")
-    zeilen = [
+    # .252 (User: "worauf soll er entscheiden?"): die ECHTE momentane
+    # CPU-Nutzung des ganzen suslik-Containers als erste Zeile — cgroup-
+    # gemessen (einzige nicht-luegende Quelle im Container), mit Limit
+    # falls eines gesetzt ist. Entscheidungsgrundlage fuer "noch ein
+    # Waechter?", zusammen mit Measure load je Kamera.
+    zeilen = []
+    if container_last:
+        _ck, _cl = container_last
+        zeilen.append(
+            f'suslik CPU right now: {_ck:g}'
+            + (f' of {_cl:g} allowed cores' if _cl else ' cores')
+            + ' (whole container: watchers, analysis, service)')
+    zeilen += [
         # UI-KANN 10: Python-Leerwert nie in die Karte ('RSS None MB').
         f'engine RSS {rss if rss is not None else "?"} MB'
         + (f' · base cost {slots.get("grundkosten_mb"):.0f} MB'
@@ -330,7 +350,8 @@ def _gruppe_html(nach_area, cam_area, kds, gesperrt):
 
 
 def uebersicht(kacheln, engine_info, gesperrt, frigate_fehler=None,
-               nach_area=False, cam_area=None):
+               nach_area=False, cam_area=None, cpu_begrenzt=False,
+               container_last=None):
     """-> Seiten-INHALT der Kachel-Uebersicht (.186: Zustands-Gruppen statt
     einer Wand; 'Not set up' und 'Hidden' eingeklappt)."""
     fehlerbanner = (f'<div class="banner">Could not read the Frigate camera '
@@ -357,6 +378,11 @@ def uebersicht(kacheln, engine_info, gesperrt, frigate_fehler=None,
                 f'<a class="gtb" href="/live?gruppe=area" '
                 f'onclick="liveAreaMerken(true)">group by area</a>')
     sperr_karte = ""
+    if cpu_begrenzt and not gesperrt:
+        sperr_karte = ('<div class="card"><b>CPU mode</b>'
+                       f'<div class="dim">{html.escape(CPU_HINWEIS)} '
+                       'Use <b>Measure load</b> per camera and the load '
+                       'line above before enabling more.</div></div>')
     if gesperrt:
         sperr_grund = (engine_info or {}).get("sperr_grund") or ""
         sperr_karte = ('<div class="card"><b>Not available on this build</b>'
@@ -384,7 +410,7 @@ def uebersicht(kacheln, engine_info, gesperrt, frigate_fehler=None,
         'confirmed identification still comes from the normal analysis. '
         'Every active watcher draws real GPU/CPU capacity: pick the cameras '
         'that matter and use <b>Measure load</b> before enabling. '
-        + html.escape(GPU_HINWEIS) + '</div>'
+        + html.escape(CPU_HINWEIS if cpu_begrenzt else GPU_HINWEIS) + '</div>'
         f'<div class="dim lv-zeile"><a href="{DOKU_URL}" target="_blank" '
         f'rel="noopener">Read more: how live watchers work</a></div>'
         '</div>')
@@ -393,7 +419,7 @@ def uebersicht(kacheln, engine_info, gesperrt, frigate_fehler=None,
         + '<h2>Live watchers</h2>'
         + erklaer
         + sperr_karte
-        + _engine_karte(engine_info, gesperrt)
+        + _engine_karte(engine_info, gesperrt, container_last)
         + '<div class="dim lv-zeile" id="lv-auftrag"></div>'
         + (f'<div class="lv-schalterzeile">{schalter}</div>'
            if kacheln else "")
@@ -517,7 +543,12 @@ def detail(name, guard, kd, gesperrt):
         + _test_zeile(g.get("test"), g)
         + _test_fehler_zeile(g.get("test_fehler"))
         + (_messung_zeile(g.get("messung"), g) if not gesperrt else "")
-        + ('' if gesperrt else
+        # Issue #24 (Tokn59, 18.08.): im gesperrten Zustand fehlten die
+        # Knoepfe KOMMENTARLOS — die Karte wirkte kaputt ('can not be
+        # clicked or activated in any way'). Jetzt sagt sie, warum.
+        + ('<div class="dim lv-zeile">testing and measuring are unavailable '
+           'while live watching is locked on this machine — the note at the '
+           'top of this page explains why.</div>' if gesperrt else
            f'<button class="gtb" onclick="liveTest(\'{nid}\',this)">Run '
            f'source test</button> '
            f'<button class="gtb" onclick="liveMessung(\'{nid}\',this)">'

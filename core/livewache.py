@@ -842,9 +842,12 @@ def referenzen_laden(app):
 # Meldungs-Texte des Schnell-Urteils. Engine-Default englisch (UI-Sprache,
 # Bauplan §1/§6); der Prototyp reicht seine deutschen Bestands-Texte durch,
 # damit seine Meldungen byte-gleich bleiben. [ERBE-ANPASSUNG]
-TEXT_URTEIL_TREFFER = "probably {name} (preliminary, cosine {cos:.2f})"
-TEXT_URTEIL_UNSICHER = ("unknown/uncertain (preliminary, best cosine {cos:.2f} "
-                        "against {name}, threshold {schwelle:.2f})")
+# Kosinus-raus (.249, User-Go 17.08.): Default-Texte sprechen WORTE aus der
+# einen Quelle core/vertrauen ({wort} = Lage zur Messlatte); die Rohzahl
+# haengt der Aufrufer nur im Stil 'worte_zahlen' an (alert_stil-Option).
+TEXT_URTEIL_TREFFER = "probably {name} (preliminary quick check — {wort})"
+TEXT_URTEIL_UNSICHER = ("unknown/uncertain (preliminary — best candidate "
+                        "{name} is {wort})")
 
 
 def schnell_urteil(refs, kandidaten, schwelle, max_bilder=None,
@@ -878,10 +881,14 @@ def schnell_urteil(refs, kandidaten, schwelle, max_bilder=None,
             bester_name, bester_cos = p, s
     if bester_name is None:
         return None, None, None
+    from core import vertrauen as _vt
+    _wort = _vt.wort(bester_cos, schwelle)
     if bester_cos >= schwelle:
-        return (text_treffer.format(name=bester_name, cos=bester_cos),
+        return (text_treffer.format(name=bester_name, cos=bester_cos,
+                                    wort=_wort),
                 bester_name, bester_cos)
-    return (text_unsicher.format(cos=bester_cos, name=bester_name, schwelle=schwelle),
+    return (text_unsicher.format(cos=bester_cos, name=bester_name,
+                                 schwelle=schwelle, wort=_wort),
             None, bester_cos)
 
 
@@ -2559,7 +2566,8 @@ def guards_lesen(cfg, log=print):
             roh_kanaele = _melden.konfigurierte_kanaele(cfg)
             if not roh_kanaele:
                 log(f"!! live.guards.{name}: kein Meldekanal konfiguriert — der "
-                    f"Waechter wuerde triggern, aber NIRGENDWO melden "
+                    f"Waechter triggert und erscheint unter Live alerts (.245), "
+                    f"aber es geht KEINE Benachrichtigung raus "
                     f"(Notifications-Seite)")
         if isinstance(roh_kanaele, str):
             # YAML-/Hand-Edit-Klassiker: String statt Liste — tolerant lesen, laut.
@@ -2575,7 +2583,8 @@ def guards_lesen(cfg, log=print):
                     f"verworfen (erlaubt: {', '.join(KANAELE_ERLAUBT)})")
         if not kanaele and roh_kanaele:
             log(f"!! live.guards.{name}: nach dem Kanal-Sieb ist KEIN Meldekanal "
-                f"uebrig — der Waechter wuerde triggern, aber NIRGENDWO melden")
+                f"uebrig — der Waechter triggert und erscheint unter Live alerts "
+                f"(.245), aber es geht KEINE Benachrichtigung raus")
         guards[name] = {
             "enabled": _bool_lesen(g.get("enabled"), False, log,
                                    f"live.guards.{name}.enabled"),
@@ -3676,7 +3685,10 @@ class Engine:
                          f"engine CPU {e['cpu_prozent']}%"
                          + (f" + decode {e['decode_cpu_prozent']}%"
                             if e["decode_cpu_prozent"] is not None else "")
-                         + (f", GPU budget share "
+                         # .252 (User-Fund am cpu-Build: "GPU budget share"
+                         # auf einer CPU-Maschine ist gelogen): das Budget
+                         # ist das DETEKTOR-Zeitbudget, backend-neutral.
+                         + (f", detector budget share "
                             f"{e['gpu_budget_anteil']:.0%}"
                             if e["gpu_budget_anteil"] is not None else "")
                          + (f", RSS +{e['rss_delta_mb']} MB"
@@ -3876,10 +3888,21 @@ class Engine:
         _namens_stimmen ueber a['genannt'])."""
         self._klog(k, f"NAME [{person}]: {stimmen} Funde >= Schwelle, bester "
                       f"Kosinus {cos:.2f} — Namens-Meldung (preliminary)")
-        if not self.melder or not k.cfg["kanaele"]:
+        # .245 (User-Go 17.08.): OHNE Meldekanal kein frueher Abbruch mehr —
+        # das Ergebnis wird trotzdem journalt (kanal 'none', Anzeige ja,
+        # Versand nein); vorher sah eine kanal-lose Installation NIE, was
+        # live erkannt wurde. Fehlt nur der Versandapparat, bleibt es beim
+        # alten Verhalten.
+        if not self.melder and k.cfg["kanaele"]:
             return
+        # .249 (Kosinus-raus): Worte aus der einen Quelle; Rohzahl nur im
+        # Stil 'worte_zahlen' (alert_stil, Notifications-Option).
+        from core import vertrauen as _vt
         text = (f"recognized (live, preliminary): {person} "
-                f"(cosine {cos:.2f}, {stimmen} consistent hits)")
+                f"({_vt.wort(cos, self.win_thresh)}, {stimmen} "
+                "consistent looks)")
+        if str(self.cfg.get("alert_stil") or "worte") == "worte_zahlen":
+            text += f" [cosine {cos:.2f}]"
         bild = None
         ablage = self._ablage_sichern(k)
         if ablage:
@@ -3890,10 +3913,20 @@ class Engine:
                 k, os.path.join(ablage, f"{stempel}_NAME_{sauber}.jpg"), frame)
         payload = {"ts": round(self.wanduhr(), 1), "kamera": k.name,
                    "art": "name",
+                   # "stufe" ADDITIV (.249, User-Auflage: bestehende
+                   # Schluessel byte-gleich — HA-Skripte duerfen nie brechen).
                    "schnell_urteil": {"person": person,
                                       "cosine": round(cos, 3),
                                       "stimmen": stimmen,
-                                      "preliminary": True}}
+                                      "preliminary": True,
+                                      "stufe": _vt.stufe(cos,
+                                                         self.win_thresh)}}
+        if not k.cfg["kanaele"]:
+            # .245: Journal-Zeile statt Versand — EINE Zeile, kanal 'none'
+            # (nie aus Config waehlbar, KANAELE_ERLAUBT bleibt ohne 'none').
+            self._melde_protokoll(k.name, "alert", "none", zusatz=text,
+                                  person=person, bild=self._bild_rel(bild))
+            return
 
         def job():
             for kanal in k.cfg["kanaele"]:
@@ -3979,8 +4012,15 @@ class Engine:
                           f"{k.melde_bis_mono - mono:.0f} s)")
             return
         k.melde_bis_mono = mono + k.cfg["wieder_scharf_s"]
-        text = (f"{len(info['kette'])} faces in {info['spanne']:.1f} s "
-                f"(score {beste_score:.2f}, {info['latenz_ms']:.0f} ms)")
+        # .251 (Kosinus-raus M6, User-Screenshot 17.08.): Detektions-Score +
+        # Latenz sind Technik-Zahlen — im Worte-Stil raus aus dem Push, im
+        # Stil 'worte_zahlen' bleiben sie dran (Payload traegt sie IMMER).
+        text = (f"{len(info['kette'])} face"
+                f"{'s' if len(info['kette']) != 1 else ''} in "
+                f"{info['spanne']:.1f} s")
+        if str(self.cfg.get("alert_stil") or "worte") == "worte_zahlen":
+            text += (f" (score {beste_score:.2f}, "
+                     f"{info['latenz_ms']:.0f} ms)")
         if u_text:
             text += f" — {u_text}"
         payload = {"ts": round(self.wanduhr(), 1), "kamera": k.name,
@@ -4076,8 +4116,18 @@ class Engine:
 
     def _meldung_starten(self, k, text, bild, rueckblick, payload, video_pfad):
         """Versand im Thread (Transcode+Upload blockieren die Detektion nicht,
-        telegram_melden-Muster). Kanalausfall ist nie Waechterausfall."""
-        if not self.melder or not k.cfg["kanaele"]:
+        telegram_melden-Muster). Kanalausfall ist nie Waechterausfall.
+        .245 (User-Go 17.08.): ohne Meldekanal wird das Ergebnis JOURNALT
+        statt verworfen (kanal 'none' — Anzeige ja, Versand nein); die
+        Recognized-live-Reihe und /live_alerts lesen genau dieses Protokoll
+        und blieben auf kanal-losen Installationen sonst fuer immer leer."""
+        if not k.cfg["kanaele"]:
+            sp = payload.get("schnell_urteil") or {}
+            self._melde_protokoll(k.name, "alert", "none", zusatz=text,
+                                  person=sp.get("person") or "",
+                                  bild=self._bild_rel(bild))
+            return
+        if not self.melder:
             return
 
         def job():
@@ -4099,6 +4149,8 @@ class Engine:
                     if self._kanal_senden(k, kanal, text, bild, vid, payload):
                         # Baustein B: NUR die real angenommene Meldung landet
                         # im Protokoll (eine Quelle, kein Doppelzaehlen).
+                        # Einzige Ausnahme seit .245: kanal-lose Installation
+                        # -> EINE 'none'-Zeile (oben, vor dem job).
                         sp = payload.get("schnell_urteil") or {}
                         self._melde_protokoll(k.name, "alert", kanal,
                                               zusatz=text,

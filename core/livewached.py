@@ -98,26 +98,55 @@ class Detektor:
         return self.app.app.get(frame_bgr) or []
 
 
-def _cpu_sperre(log=_log):
-    """§11 Entscheid 3: Live ist fuer CPU-only GESPERRT (Messbasis: CPU-Sub-
-    Test 11.08. — funktional, aber erst nach Anpassungen tragfaehig; bis
-    dahin fail-closed). -> True, wenn gesperrt.
+CPU_EMPFOHLEN = 1     # CPU-Runde 17.08., .252 (User-Entscheid nachmittags):
+                      # der User entscheidet SELBST, wie viele Waechter er dem
+                      # CPU-Modus zumutet — wir EMPFEHLEN einen und warnen laut
+                      # (kein Verbot mehr; die generelle Notbremse bleibt der
+                      # harte Engine-Deckel fuer alle Builds).
 
-    Der Hinweistext nennt die GANZE Hardware-Welt (Lens-B B2: der alte Text
-    kannte nur Intel/NVIDIA — ein ROCm-Nutzer las, dass sein Geraet nicht
-    vorkommt). Deckungs-Vertrag tools/deckung_pruefen.py, Mengen-Quelle
-    core.registry: kinds cpu, openvino, cuda, migraphx · Image-Varianten
-    gpu, cpu, cuda, gpu-legacy, rocm."""
+
+def _cpu_lage(log=_log):
+    """§11 Entscheid 3, UMGEBAUT in der CPU-Runde 17.08. (User-Go nach der
+    Messung verify_data/messungen/cpu_live_haustuer_20260817.json):
+    -> 'frei' (GPU-Backend) | 'begrenzt' (kind=cpu AUF der cpu-Variante:
+    erlaubt; die Waechter-Zahl entscheidet der USER, wir empfehlen
+    CPU_EMPFOHLEN und warnen laut — .252, gemessen det ~330 ms = ~3
+    Bilder/s, Quick-Check 1-2 s statt <1 s) | 'gesperrt' (kind=cpu auf
+    einer GPU-Variante = Fehlkonfiguration: der User braucht den
+    Durchreichungs-Hinweis, keinen CPU-Betrieb; ebenso unbekannte
+    Variante — fail-closed).
+
+    Der Hinweistext nennt die GANZE Hardware-Welt (Lens-B B2). Deckungs-
+    Vertrag tools/deckung_pruefen.py, Mengen-Quelle core.registry: kinds
+    cpu, openvino, cuda, migraphx · Image-Varianten gpu, cpu, cuda,
+    gpu-legacy, rocm."""
     from face_audit import resolve_backend
     kind, _dev = resolve_backend()
     if kind == "cpu":
-        log("Live watchers require a GPU build — integrated Intel graphics "
-            "(gpu / gpu-legacy images, OpenVINO), an NVIDIA card (cuda image) "
-            "or an AMD card (rocm image, MIGraphX) all qualify. They are not "
-            "available on the cpu image (CPU-only). "
-            "(Bauplan §11 Entscheid 3; engine refuses to start)")
-        return True
-    return False
+        variante = os.environ.get("SUSLIK_VARIANT", "")
+        if variante == "cpu":
+            log(f"live: CPU mode (cpu image) — watchers are expensive here "
+                f"(quick check typically 1-2 s, ~3 processed frames/s "
+                f"measured; GPU builds react in under a second). "
+                f"Recommended: {CPU_EMPFOHLEN} watcher; more is your call, "
+                "they share the same cores")
+            return "begrenzt"
+        log("Live watchers need GPU recognition — integrated Intel graphics "
+            "(gpu / gpu-legacy images, OpenVINO), an NVIDIA card (cuda "
+            "image) or an AMD card (rocm image, MIGraphX) all qualify. "
+            "This build resolved to CPU"
+            + (f" although it is the '{variante}' image — check device "
+               "passthrough and host drivers. " if variante else ". ")
+            + "(Bauplan §11 Entscheid 3; engine refuses to start)")
+        return "gesperrt"
+    return "frei"
+
+
+def _cpu_sperre(log=_log):
+    """Rueckwaerts-Vertrag fuer die S10-Verdrahtung (cmd_run/cmd_test
+    befragen die Sperre): True NUR noch im echten Sperr-Fall — der
+    begrenzte CPU-Modus laeuft durch, den Deckel setzt cmd_run."""
+    return _cpu_lage(log) == "gesperrt"
 
 
 def _mqtt_client(cfg, log=_log):
@@ -169,6 +198,18 @@ def cmd_run():
         _log("live: no enabled guard in config store (live.guards.<camera>."
              "enabled) — nothing to do. Run 'test <camera>' first, then enable.")
         return RC_NICHTS_ZU_TUN
+    # CPU-Empfehlung (.252, User-Entscheid: er entscheidet, wir warnen):
+    # im begrenzten Modus startet die Engine mit BELIEBIG vielen Waechtern
+    # (Notbremse bleibt der generelle harte Deckel) — ueber CPU_EMPFOHLEN
+    # hinaus aber mit LAUTER Warnung statt stillem Schlucken.
+    if _cpu_lage(log=lambda z: None) == "begrenzt":
+        an = [k for k, g in guards.items() if g["enabled"]]
+        if len(an) > CPU_EMPFOHLEN:
+            _log(f"live: CPU mode with {len(an)} watchers "
+                 f"({', '.join(sorted(an))}) — recommended is "
+                 f"{CPU_EMPFOHLEN}. They share the same cores: every "
+                 "additional watcher slows ALL of them and heats the "
+                 "machine. Watch Measure load and your temperatures.")
     # Detektor + Referenzen: die det-320-FALLE gilt (referenzen_laden-Docstring)
     # — Referenzen ZUERST, solange der Embedder auf 320 steht; das grosse Netz
     # stellt erst der Betrieb je Kachel.
@@ -251,9 +292,14 @@ def cmd_test(kamera, als_json=False):
             return 1
         guard = {"quelle": "proxy", "url": ""}
     det = Detektor(_log)
+    # .248 (Fund beim CPU-Setup 17.08.): der Test lief IMMER mit der
+    # globalen Default-Hoehe und ignorierte guard['hoehe'] — der gruene
+    # Test mass damit eine ANDERE Skala als der Betrieb (der nutzt
+    # guard.hoehe, livewache:3534). Jetzt dieselbe Vorrangregel.
     ok, text, block = lw.quelle_testen(cfg, kamera, guard, det, log=_log,
                                        det_basis=_defaults["det_basis"],
-                                       hoehe=_defaults["hoehe"])
+                                       hoehe=(guard.get("hoehe")
+                                              or _defaults["hoehe"]))
     _log(f"live test {kamera}: {'GRUEN' if ok else 'ROT'} — {text}")
     if als_json:
         print(json.dumps({"ok": ok, "text": text, "block": block},
