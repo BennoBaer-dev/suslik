@@ -5,7 +5,12 @@ Dienst-Import). gt_schnellpersonen/master_persons bleiben im Kern (dritter
 Nutzer: /event/-Seite) und kommen als CALLABLES herein — modulplan §2c
 (Callback-Injektion, nie Rueckimport) statt einer zweiten Quelle.
 KAT_LABELS/KAT_FARBE kommen aus webui/bausteine (Helfer-Heimat, mit R1 dorthin
-gezogen)."""
+gezogen).
+Sprach-Stufe 0 (konzept_sprache.md v2): sichtbare Texte aus core/sprache.t()
+— BYTE-TREU (Harnisch tools/harnisch_sprache.py). Grenzen dieser Stufe (siehe
+Abschnitts-Kommentar in core/texte/en.py): Produktnamen-Kopfzellen und
+KAT_LABELS bleiben literal; die frueheren Zeitvariablen `t` sind umbenannt,
+damit sie t() nicht verschatten."""
 import datetime
 import html
 import json
@@ -14,6 +19,7 @@ import urllib.parse
 
 import webui
 from core import areas as _areas_mod
+from core.sprache import t, t_n
 from webui.bausteine import KAT_FARBE, KAT_LABELS, gt_leiste
 
 
@@ -52,9 +58,9 @@ def render_offen(cfg, log_path, qs, gt_schnellpersonen, master_persons):
                       ", ".join(r.get("bestaetigt") or []), r.get("camera", "?"))
                      for r in by.values() if r.get("bestaetigt")]
 
-    def _fenster_kontext(t):
-        nahe = [(abs(t - bt), wer, cam) for bt, wer, cam in bestaetigt_ts
-                if abs(t - bt) <= 180]
+    def _fenster_kontext(wann):
+        nahe = [(abs(wann - bt), wer, cam) for bt, wer, cam in bestaetigt_ts
+                if abs(wann - bt) <= 180]
         if not nahe:
             return None
         _, wer, cam = min(nahe)
@@ -97,9 +103,11 @@ def render_offen(cfg, log_path, qs, gt_schnellpersonen, master_persons):
     for r in kand:
         eid = r["eid"]
         ed = eid.replace("/", "_")
-        t = datetime.datetime.fromtimestamp(r.get("start") or r.get("ts", 0)).strftime("%d.%m %H:%M:%S")
+        zeit = datetime.datetime.fromtimestamp(r.get("start") or r.get("ts", 0)).strftime("%d.%m %H:%M:%S")
         f = r.get("frigate") or {}
-        ftxt = f"Frigate: {f.get('label')} {f['score']:.2f}" if f.get("label") and f.get("score") is not None else "Frigate: —"  # Frigate-Label bleibt wie geliefert
+        ftxt = (t("ereignisliste.offen.frigate_mit", label=f.get("label"), score=f"{f['score']:.2f}")
+                if f.get("label") and f.get("score") is not None
+                else t("ereignisliste.offen.frigate_ohne"))  # Frigate-Label bleibt wie geliefert
         ours = ", ".join(f"{p} {(v.get('max') or 0):+.2f}/{v.get('win3s', 0)}×" for p, v in
                          sorted((r.get("ours") or {}).items(),
                                 key=lambda x: -(x[1].get("max") or 0))[:3]) or "—"
@@ -111,42 +119,44 @@ def render_offen(cfg, log_path, qs, gt_schnellpersonen, master_persons):
             if jpgs:
                 u = f"/events/{urllib.parse.quote(ed)}/{urllib.parse.quote(jpgs[0])}"
                 crop = f'<img src="{u}">'
-        vid = (f' <a href="/video/{urllib.parse.quote(ed)}">&#9654; Video</a>'
+        vid = (f' <a href="/video/{urllib.parse.quote(ed)}">&#9654; '
+               f'{t("ereignisliste.offen.link_video")}</a>'
                if any(os.path.isfile(os.path.join(cfg["data_dir"], "clips", ed + s))
                       for s in ("_review.mp4", ".mp4")) else "")
         gtb = gt_leiste(eid, gt_schnell, andere)
-        ktx = (f' · <span style="color:var(--dim)">recognized in the same time window: '
-               f'{html.escape(r["_kontext"])}</span>' if r.get("_kontext") else
-               ' · <b style="color:var(--warn)">no confirmed recognition nearby</b>')
-        cards.append(f"<div class=card data-fade-on-label=1>{t} · "
+        ktx = (f' · <span style="color:var(--dim)">'
+               f'{t("ereignisliste.offen.kontext_erkannt", wer=html.escape(r["_kontext"]))}</span>'
+               if r.get("_kontext") else
+               f' · <b style="color:var(--warn)">{t("ereignisliste.offen.kontext_fehlt")}</b>')
+        cards.append(f"<div class=card data-fade-on-label=1>{zeit} · "
                      f"{html.escape(str(r.get('camera', '?')))} · "
-                     f"{html.escape(ftxt)} · {r.get('faces_geprueft', r.get('faces', 0))} faces · best: {html.escape(ours)}{ktx}"
+                     f"{html.escape(ftxt)} · "
+                     + t("ereignisliste.offen.zeile_faces",
+                         n=r.get("faces_geprueft", r.get("faces", 0)),
+                         beste=html.escape(ours)) + f"{ktx}"
                      f"<div class=crops>{crop}{vid}</div><div>{gtb}</div></div>")
-    _ol = lambda s, t: f'<a class="gtb" href="/offen?seite={s}">{t}</a>'
+    _ol = lambda s, txt: f'<a class="gtb" href="/offen?seite={s}">{txt}</a>'
     o_blaettern = (" · ".join(
-        ([_ol(o_seite - 1, "← newer")] if o_seite > 1 else []) +
-        [f"Page {o_seite}/{o_max} ({offen_gesamt} open)"] +
-        ([_ol(o_seite + 1, "older →")] if o_seite < o_max else []))
+        ([_ol(o_seite - 1, t("ereignisliste.blaettern.neuer"))] if o_seite > 1 else []) +
+        [t("ereignisliste.offen.blaettern_stand",
+           seite=o_seite, max=o_max, n=offen_gesamt)] +
+        ([_ol(o_seite + 1, t("ereignisliste.blaettern.aelter"))] if o_seite < o_max else []))
         if offen_gesamt > 50 else "")
     sch_hinweis = ""
     if schwach_n:
-        sch_hinweis = (f'<p class="pnote">{schwach_n} weak-face event'
-                       f'{"s" if schwach_n != 1 else ""} hidden — '
-                       "likely no usable face (nothing confirmed "
-                       'nearby either). <a href="/offen?schwach=1">'
-                       "show them</a></p>")
+        sch_hinweis = (f'<p class="pnote">'
+                       f'{t_n("ereignisliste.offen.schwach_versteckt", schwach_n)}'
+                       f' <a href="/offen?schwach=1">'
+                       f'{t("ereignisliste.offen.schwach_zeigen")}</a></p>')
     elif zeige_schwach:
-        sch_hinweis = ('<p class="pnote">showing weak-face events too — '
-                       '<a href="/offen">back to the worthwhile ones</a></p>')
-    inhalt = (f"<h2>Open cases to label ({offen_gesamt})</h2>"
-              "<p>Filled automatically: all events with faces that nobody confirmed "
-              "and that you haven't labeled yet. Ones with nobody recognized nearby "
-              "come first — those are the ones worth looking at. After labeling, the "
-              "card fades and disappears on the next load.</p>" + sch_hinweis
+        sch_hinweis = (f'<p class="pnote">{t("ereignisliste.offen.schwach_alle")} '
+                       f'<a href="/offen">{t("ereignisliste.offen.schwach_zurueck")}</a></p>')
+    inhalt = (f"<h2>{t('ereignisliste.offen.titel', n=offen_gesamt)}</h2>"
+              f"<p>{t('ereignisliste.offen.satz')}</p>" + sch_hinweis
               + (f'<p class="pnote">{o_blaettern}</p>' if o_blaettern else "")
               + ("".join(cards) if cards else
-                 webui.leer("Nothing open — everything labeled.",
-                            "New unconfirmed events with faces appear here automatically."))
+                 webui.leer(t("ereignisliste.offen.leer_titel"),
+                            t("ereignisliste.offen.leer_hinweis")))
               + (f'<p class="pnote">{o_blaettern}</p>' if o_blaettern else ""))
     return inhalt
 
@@ -213,24 +223,26 @@ def render_ereignisse(cfg, log_path, qs, gt_schnellpersonen, master_persons):
                        f'{html.escape(labels.get(w, w))}</option>' for w in werte)
     filterleiste = (
         '<form method="get" style="margin:8px 0">'
-        + (f'<select name="area"><option value="">all areas</option>'
+        + (f'<select name="area"><option value="">{t("ereignisliste.filter.alle_areas")}</option>'
            f'{_opt(_ar_werte, _ar_akt_e, {w: w for w in _ar_werte})}</select> '
            if _areas_e else '')
-        + f'<select name="kamera"><option value="">all cameras</option>{_opt(kameras, f_kam)}</select> '
-        f'<select name="person"><option value="">all persons</option>'
+        + f'<select name="kamera"><option value="">{t("ereignisliste.filter.alle_kameras")}</option>{_opt(kameras, f_kam)}</select> '
+        f'<select name="person"><option value="">{t("ereignisliste.filter.alle_personen")}</option>'
         f'{_opt(master_persons(cfg), f_per)}</select> '
-        f'<select name="kategorie"><option value="">all categories</option>{_opt(kats, f_kat, KAT_LABELS)}</select> '
+        f'<select name="kategorie"><option value="">{t("ereignisliste.filter.alle_kategorien")}</option>{_opt(kats, f_kat, KAT_LABELS)}</select> '
         f'<input type="date" name="tag" value="{html.escape(f_tag)}" '
         '> '
-        '<button class="gtb on">Filter</button> <a href="/ereignisse">reset</a></form>')
+        f'<button class="gtb on">{t("ereignisliste.filter.knopf")}</button> '
+        f'<a href="/ereignisse">{t("ereignisliste.filter.reset")}</a></form>')
     def _seitenlink(n, txt):
         q = {k: v[0] for k, v in qs.items() if v and v[0]}
         q["seite"] = str(n)
         return f'<a href="/ereignisse?{urllib.parse.urlencode(q)}">{txt}</a>'
     blaettern = " · ".join(
-        ([_seitenlink(seite - 1, "← newer")] if seite > 1 else []) +
-        [f"Page {seite}/{max(1, -(-gesamt // 50))} ({gesamt} events)"] +
-        ([_seitenlink(seite + 1, "older →")] if seite * 50 < gesamt else []))
+        ([_seitenlink(seite - 1, t("ereignisliste.blaettern.neuer"))] if seite > 1 else []) +
+        [t("ereignisliste.tabelle.blaettern_stand",
+           seite=seite, max=max(1, -(-gesamt // 50)), n=gesamt)] +
+        ([_seitenlink(seite + 1, t("ereignisliste.blaettern.aelter"))] if seite * 50 < gesamt else []))
     gt_schnell = gt_schnellpersonen(list(by.values()), cfg)
     andere = [p for p in master_persons(cfg) if p not in gt_schnell]
     gtmap = {}                                     # User-Labels: letzte Zeile pro eid gewinnt
@@ -243,15 +255,21 @@ def render_ereignisse(cfg, log_path, qs, gt_schnellpersonen, master_persons):
                     gtmap[d["eid"]] = d["label"]
                 except Exception:
                     pass
-    body = ["<h2>Events</h2>", filterleiste, f"<p>{blaettern}</p>",
-            '<div class="tabelle-wrap"><table><tr><th>Time</th><th>Camera</th>'
+    # Kopfzellen "Frigate"/"suslik" sind reine Produktnamen (Stufe-0-Grenze).
+    body = [f"<h2>{t('ereignisliste.titel')}</h2>", filterleiste, f"<p>{blaettern}</p>",
+            f'<div class="tabelle-wrap"><table><tr><th>{t("ereignisliste.tabelle.kopf_zeit")}</th>'
+            f'<th>{t("ereignisliste.tabelle.kopf_kamera")}</th>'
             "<th>Frigate</th><th>suslik</th>",
-            "<th>Category</th><th>Crop</th><th>Confirm or correct (GT)</th></tr>"]
+            f'<th>{t("ereignisliste.tabelle.kopf_kategorie")}</th>'
+            f'<th>{t("ereignisliste.tabelle.kopf_crop")}</th>'
+            f'<th>{t("ereignisliste.tabelle.kopf_gt")}</th></tr>']
     for r in rows:   # defensiv: alte/fremde Zeilen ohne heutige Pflichtfelder nicht crashen lassen
-        t = datetime.datetime.fromtimestamp(r.get("start") or r.get("ts", 0)).strftime("%d.%m %H:%M:%S")
+        zeit = datetime.datetime.fromtimestamp(r.get("start") or r.get("ts", 0)).strftime("%d.%m %H:%M:%S")
         f = r.get("frigate") or {}
         fs = f"{f['score']:.2f}" if f.get("score") is not None else "?"
-        ftxt = f"{f.get('label')} {fs} (cos {f.get('cos')})" if f.get("label") else "—"
+        ftxt = (t("ereignisliste.tabelle.frigate_zelle",
+                  label=f.get("label"), score=fs, cos=f.get("cos"))
+                if f.get("label") else "—")
         ours = ", ".join(f"{p} {(v.get('max') or 0):+.2f}/{v.get('win3s', 0)}×" for p, v in
                          sorted((r.get("ours") or {}).items(),
                                 key=lambda x: -(x[1].get("max") or 0))[:3]) or "—"
@@ -266,17 +284,19 @@ def render_ereignisse(cfg, log_path, qs, gt_schnellpersonen, master_persons):
                 crop = f'<a href="{u}"><img src="{u}"></a>'
         k = str(r.get("kategorie", "?"))
         best = r.get("bestaetigt") or []
-        lg = (f' <a href="/events/{urllib.parse.quote(ed)}/analyze.log" style="color:var(--accent)">log</a>'
+        lg = (f' <a href="/events/{urllib.parse.quote(ed)}/analyze.log" style="color:var(--accent)">'
+              f'{t("ereignisliste.tabelle.link_log")}</a>'
               if ed and os.path.isfile(os.path.join(edir, "analyze.log")) else "")
         if ed and any(os.path.isfile(os.path.join(cfg["data_dir"], "clips", ed + s))
                       for s in ("_review.mp4", ".mp4")):
-            lg += f' <a href="/video/{urllib.parse.quote(ed)}" style="color:var(--accent)">video</a>'
+            lg += (f' <a href="/video/{urllib.parse.quote(ed)}" style="color:var(--accent)">'
+                   f'{t("ereignisliste.tabelle.link_video")}</a>')
         eid = str(r.get("eid", ""))
         cur = gtmap.get(eid, "")
         gtb = gt_leiste(eid, gt_schnell, andere, cur) if eid else ""
-        unv = (' <span title="clip incomplete — judged from the readable part">⚠</span>'
+        unv = (f' <span title="{t("ereignisliste.tabelle.attr_unvollstaendig")}">⚠</span>'
                if r.get("frames_fehlen") else "")     # W1-Telemetrie in der Liste
-        body.append(f"<tr><td>{t}</td><td>{html.escape(str(r.get('camera', '?')))}</td>"
+        body.append(f"<tr><td>{zeit}</td><td>{html.escape(str(r.get('camera', '?')))}</td>"
                     f"<td>{html.escape(ftxt)}</td><td>{html.escape(ours)}"
                     f"{' ✓' + html.escape(','.join(best)) if best else ''}</td>"
                     f"<td><span class=k style=background:{KAT_FARBE.get(k, '#666')}>{html.escape(KAT_LABELS.get(k, k))}</span>"

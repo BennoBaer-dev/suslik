@@ -26,10 +26,11 @@ LaufInfo.soll_samples (Vorab-Groesse fuer das RAM-Gate des Halters).
 
 Dieses Modul liefert Dateien und Frames, nie Urteile."""
 import os
-import shutil
+import subprocess
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.request
 
 
@@ -103,7 +104,214 @@ def gepinnt(pfad):
     return lebt
 
 
-def clip_holen(eid, data_dir=None, frigate_url=None, timeout=30):
+# ================================================= Clip-Debug ([clipdbg]) ==
+# .287 (User-Auftrag 18.08.; Frigate-Haenger-Klasse bewiesen, Task #11,
+# verify_data/messungen/frigate_haenger_20260818_191803): Frigates 40er-API-
+# Threadpool wird von akkumulierenden Clip-Leser-Threads erschoepft — beim
+# naechsten Vorfall muss die suslik-Seite JEDER Clip-Interaktion lueckenlos
+# belegt sein. Geschaltet wird ueber den EINEN bestehenden Schalter
+# cfg['debug'] (verifyd.debug(), Whitelist-Key) — kein zweiter Schalter:
+#   - DIENST-Prozess: verifyd haengt seine Senke in CLIP_DBG ein; sie prueft
+#     cfg['debug'] je Zeile -> Umschalten wirkt sofort.
+#   - WORKER-Prozess: der Dienst reicht den Schalter als Job-Feld 'clip_dbg'
+#     durch (WorkerProzess.job, setdefault wie rss_max_mb); worker.py
+#     armiert CLIP_DBG/CLIP_QUELLE/CLIP_ALTER_MIN je Job, die Zeilen landen
+#     im Log DIESES Jobs (analyze.log/ernte.log).
+#   - analyze-SUBPROZESS (Legacy-Weg ohne Worker): ENV SUSLIK_CLIP_DBG/
+#     SUSLIK_CLIP_QUELLE/SUSLIK_CLIP_ALTER_MIN, gesetzt von run_analyze.
+# JE EREIGNIS genau EINE kompakte Zeile (Beginn / Ende / Cache-Treffer),
+# nie ein Roh-Dump. Nur Telemetrie — nie Verhalten.
+
+CLIP_DBG = ((lambda z: print(z, flush=True))
+            if os.environ.get("SUSLIK_CLIP_DBG") else None)  # Senke | None=aus
+CLIP_QUELLE = os.environ.get("SUSLIK_CLIP_QUELLE") or None   # ernte/vorlader/
+#                                                              nachhol/live
+CLIP_ALTER_MIN = os.environ.get("SUSLIK_CLIP_ALTER_MIN") or None
+# .290 Erzeugungs-Modus-Defaults DIESES Prozesses/Jobs (gleiches Muster wie
+# CLIP_QUELLE, aber VERHALTEN statt Telemetrie): der Analyze-Weg ruft
+# clip_holen ohne eigene Parameter — worker.py armiert je Job aus den
+# Job-Feldern, der Legacy-Subprozess aus diesen ENV-Variablen. Explizite
+# clip_holen-Argumente (Ernte/Vorlader) gewinnen immer.
+CLIP_ERZEUGUNG = bool(os.environ.get("SUSLIK_CLIP_ERZEUGUNG"))
+CLIP_ERZEUGUNG_DECKEL_S = (
+    float(os.environ["SUSLIK_CLIP_ERZEUGUNG_DECKEL_S"])
+    if os.environ.get("SUSLIK_CLIP_ERZEUGUNG_DECKEL_S") else None)
+# .292 VOD-Weg-Default (Config-Key clip_vod, Muster wie CLIP_ERZEUGUNG):
+# True = Alt-Event-Clips zuerst ueber Frigates /vod/event/{id}/master.m3u8
+# beschaffen (nginx-vod liefert die Segmente direkt, der bewiesen kranke
+# Python-Erzeugungspfad in Frigate — ungelesene ffmpeg-stderr-Pipe, je Zug
+# +1 Thread/+1 ffmpeg-Leiche, Discussion frigate#24029 — wird gar nicht
+# betreten). Das Zusammenfuegen macht das LOKALE ffmpeg als reines
+# Stream-Copy (bitgleiche Pakete, Pixelpfad-Invariante unberuehrt).
+CLIP_VOD = os.environ.get("SUSLIK_CLIP_VOD", "1") != "0"
+
+
+def clip_dbg(msg):
+    """[clipdbg]-Zeile an die Prozess-Senke — das EINE Praefix an der EINEN
+    Stelle. Eine kaputte Senke darf nie die Clip-Beschaffung reissen."""
+    s = CLIP_DBG
+    if s is None:
+        return
+    try:
+        s(f"[clipdbg] {msg}")
+    except Exception:
+        pass
+
+
+def _fehler_art(e, geladen):
+    """Fehlerklasse fuer die [clipdbg]-Endzeile: 'http <code>' | 'timeout'
+    (nie ein Byte angekommen) | 'stall' (Strom riss nach `geladen` Bytes ab —
+    der .262-Socket-Timeout je Operation hat zugeschlagen) | 'error';
+    .288: dazu die zwei Erzeugungs-Abbruch-Klassen (frigate_stoerung/
+    erzeugung_deckel) mit ihrem Klassennamen."""
+    if isinstance(e, ClipErzeugungAbbruch):
+        return e.klasse
+    if isinstance(e, urllib.error.HTTPError):
+        return f"http {e.code}"
+    grund = getattr(e, "reason", e)   # URLError verpackt den Socket-Fehler
+    if isinstance(grund, TimeoutError) or "timed out" in str(grund).lower():
+        return "stall" if geladen else "timeout"
+    return "error"
+
+
+# ==================================== Erzeugungs-Modus (.288, Task #11) ====
+# GEMESSENE Grundlage (prototyp/frigate_leak_probe.py Serie E, 18.08. +
+# Header-Messung .288): fordert man den Clip eines ALTEN Events an, muss
+# Frigate ihn erst aus Aufnahme-Segmenten ERZEUGEN — die HTTP-Header kommen
+# in <1 s (chunked), dann fliesst >30 s lang KEIN Byte. Unser 30-s-Socket-
+# Timeout brach genau da ab, und JEDER solche Abbruch laesst drueben
+# DAUERHAFT 1 API-Thread (anon_pipe_read) + 1 ffmpeg zurueck (Serie E:
+# 19 Zuege = +19/+19, Ruhe raeumt nichts) — bis Frigates 40er-Threadpool
+# erschoepft ist (die Totalhaenger 17./18.08.). Fertige Clips liefern
+# dagegen in <1,2 s und sind in ALLEN Abbruch-Formen leakfrei (Serien A-D).
+# Der Erzeugungs-Modus ersetzt deshalb NUR den Abbruch VOR dem ersten Byte
+# durch eine Warte-Schleife: je 30-s-Stall EINE billige /api/version-Probe
+# (6 s) — antwortet Frigate, ist es BESCHAEFTIGT (weiter warten, bis zum
+# konfigurierten Ober-Deckel); antwortet es nicht, ist die Verbindung
+# wirklich tot (Abbruch 'frigate_stoerung'). SOBALD Bytes fliessen, gilt
+# unveraendert die strenge Zwischen-Byte-Stall-Logik (gemessen sauber).
+
+class ClipErzeugungAbbruch(RuntimeError):
+    """Abbruch der Clip-Beschaffung im Erzeugungs-Modus. klasse:
+    'frigate_stoerung' (Version-Probe tot — echte tote Verbindung) |
+    'erzeugung_deckel' (Ober-Deckel erreicht, Frigate antwortete zwar,
+    lieferte aber nie ein Byte). Der Ernte-Pfad bucht solche Events NICHT
+    als 'fehler' — sie bleiben ungebucht und ein spaeterer Lauf holt sie."""
+
+    def __init__(self, klasse, msg):
+        super().__init__(msg)
+        self.klasse = klasse
+
+
+class ErzeugungsWarte:
+    """Warte-Politik der Clip-Erzeugung — reine Entscheidungslogik, Uhr und
+    Probe injizierbar (Kontrakt wie core/schoner: kein Netz im Test).
+    entscheide() faellt nach JEDEM Null-Byte-Stall: erst der Deckel (die
+    absolute Grenze), dann die Probe (lebt Frigate ueberhaupt noch?)."""
+
+    def __init__(self, deckel_s, probe, uhr=None):
+        self.deckel_s = float(deckel_s)
+        self.probe = probe                    # callable -> bool (True=lebt)
+        self.uhr = uhr or time.monotonic
+        self.start = self.uhr()
+
+    def gewartet_s(self):
+        return self.uhr() - self.start
+
+    def entscheide(self):
+        """'warten' | raise ClipErzeugungAbbruch(erzeugung_deckel/
+        frigate_stoerung)."""
+        w = self.gewartet_s()
+        if w >= self.deckel_s:
+            raise ClipErzeugungAbbruch(
+                "erzeugung_deckel",
+                f"clip generation exceeded the {self.deckel_s:.0f}s cap "
+                f"({w:.0f}s without a first byte) — aborted, the event "
+                "stays unbooked for a later run")
+        if not self.probe():
+            raise ClipErzeugungAbbruch(
+                "frigate_stoerung",
+                f"no clip bytes after {w:.0f}s AND the /api/version probe "
+                "does not answer — Frigate itself is unreachable")
+        return "warten"
+
+
+def _version_probe(basis):
+    """Die billige Lebt-Frigate-Probe des Erzeugungs-Modus: GET /api/version
+    mit kurzem Timeout auf einer EIGENEN Verbindung (die wartende Clip-
+    Verbindung bleibt unberuehrt). Ein HTTP-Fehlerstatus zaehlt als LEBT —
+    dieselbe Regel wie im Schoner (ein 4xx/5xx ist eine Antwort)."""
+    def probe():
+        try:
+            with urllib.request.urlopen(f"{basis}/api/version", timeout=6) as r:
+                r.read(64)
+            return True
+        except urllib.error.HTTPError:
+            return True
+        except Exception:
+            return False
+    return probe
+
+
+def _ist_stall(e):
+    """War diese Lese-Ausnahme ein Socket-Timeout (Stall)? Waehrend des
+    BODY-Lesens wirft Python den rohen TimeoutError (socket.timeout),
+    urllib verpackt nur die Verbindungsphase in URLError."""
+    grund = getattr(e, "reason", e)
+    return (isinstance(grund, TimeoutError)
+            or "timed out" in str(grund).lower())
+
+
+def _vod_holen(eid, teil, basis, deckel_s):
+    """Alt-Event-Clip ueber Frigates VOD-Weg beschaffen (.292, Machbarkeit
+    bewiesen in prototyp/frigate_vod_probe.py am ungefixten 0.18.0-beta3):
+    /vod/event/{id}/master.m3u8 beantwortet das nginx-vod-Modul direkt aus
+    den Segment-Dateien — Frigates kranker Python-Erzeugungspfad (frigate
+    #24029) wird nicht betreten, serverseitig entsteht weder ffmpeg noch
+    Pool-Thread. Das LOKALE ffmpeg fuegt per Stream-Copy zusammen (-c copy
+    = bitgleiche Pakete). stderr geht bewusst nach DEVNULL — die Warnflut
+    der Audio-degenerierten Segmente ist genau das, was drueben die
+    ungelesene Pipe fuellte; wir bauen dieselbe Falle nicht nach. Ein
+    Fehlschlag (aelteres Frigate ohne vod/event -> 404-Probe, ffmpeg-Fehler,
+    Deckel) ist LAUT und liefert False — der Aufrufer faellt auf den
+    gehaerteten clip.mp4-Weg zurueck."""
+    url = f"{basis}/vod/event/{eid}/master.m3u8"
+    try:
+        with urllib.request.urlopen(url, timeout=10) as r:
+            if r.status != 200:
+                clip_dbg(f"{eid}: vod probe HTTP {r.status} — falling back")
+                return False
+    except Exception as e:
+        clip_dbg(f"{eid}: vod probe failed ({type(e).__name__}: "
+                 f"{str(e)[:80]}) — falling back")
+        return False
+    t0 = time.monotonic()
+    try:
+        lauf = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-y", "-i", url,
+             "-c", "copy", "-f", "mp4", teil],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=deckel_s)
+    except subprocess.TimeoutExpired:
+        clip_dbg(f"{eid}: vod remux hit cap ({deckel_s:.0f}s) — falling back")
+        return False
+    except Exception as e:
+        clip_dbg(f"{eid}: vod remux failed ({type(e).__name__}: "
+                 f"{str(e)[:80]}) — falling back")
+        return False
+    if (lauf.returncode != 0 or not os.path.exists(teil)
+            or not os.path.getsize(teil)):
+        clip_dbg(f"{eid}: vod remux exit {lauf.returncode} — falling back")
+        return False
+    clip_dbg(f"{eid}: vod fetch ok s={time.monotonic() - t0:.1f} "
+             f"bytes={os.path.getsize(teil)} (local remux, no server-side "
+             "clip generation)")
+    return True
+
+
+def clip_holen(eid, data_dir=None, frigate_url=None, timeout=30,
+               quelle=None, alter_min=None,
+               erzeugung=None, erzeugung_deckel_s=None, warte=None):
     """Clip beschaffen: Cache-Treffer ODER atomarer Download (.part wie
     analyze.py — ein abgerissener Download darf nie als halbes Video
     durchgehen). Der PIN dieses Halters wird IM SELBEN ZUG gesetzt
@@ -116,21 +324,144 @@ def clip_holen(eid, data_dir=None, frigate_url=None, timeout=30):
     Bytes) bricht ab, ein langsamer, aber FLIESSENDER Download nie. Der
     .part-Name traegt PID+TID (endet auf .part — cleanup_cache raeumt
     Waisen weiter): zwei parallele Beschaffer desselben Clips (Vorlader +
-    Worker, Hebel 2) schrieben sonst in DIESELBE Teil-Datei."""
+    Worker, Hebel 2) schrieben sonst in DIESELBE Teil-Datei.
+    quelle/alter_min (.287, [clipdbg]): Herkunft (ernte/vorlader/nachhol/
+    live) und Event-Alter in Minuten fuer die Debug-Zeilen — reine
+    Telemetrie, nie Verhalten; ungesetzt greifen die Prozess-Defaults
+    CLIP_QUELLE/CLIP_ALTER_MIN (Block oben).
+    erzeugung (.288, Task #11 — Block oben): True = Alt-Event, Frigate muss
+    den Clip erst ERZEUGEN. Dann ersetzt die Warte-Schleife den harten
+    Abbruch, SOLANGE noch kein Byte floss: je Stall eine /api/version-Probe,
+    weiter warten bis erzeugung_deckel_s (PFLICHT bei erzeugung=True — der
+    Wert kommt aus der Dienst-Config, hier gibt es bewusst keinen zweiten
+    Default). Ab dem ersten Byte gilt unveraendert die strenge Stall-Logik.
+    .290: erzeugung=None (Default) uebernimmt die Prozess-/Job-Defaults
+    CLIP_ERZEUGUNG/CLIP_ERZEUGUNG_DECKEL_S (Analyze-Weg: worker.py armiert
+    je Job, Legacy-Subprozess via ENV) — explizite Argumente gewinnen.
+    warte: injizierbare ErzeugungsWarte (Tests); None = echte Uhr + Probe."""
+    if erzeugung is None:
+        erzeugung = CLIP_ERZEUGUNG
+    if erzeugung_deckel_s is None:
+        erzeugung_deckel_s = CLIP_ERZEUGUNG_DECKEL_S
+    erzeugung = bool(erzeugung)
     pfad = cache_pfad(eid, data_dir)
     pin(eid, data_dir)
     teil = f"{pfad}.{os.getpid()}.{threading.get_native_id()}.part"
+    q = quelle or CLIP_QUELLE or "?"
+    alter = alter_min if alter_min is not None else CLIP_ALTER_MIN
+    t0 = time.monotonic()
+    geladen = 0
     try:
         if not os.path.exists(pfad):
+            clip_dbg(f"{eid}: GET clip.mp4 start src={q} "
+                     f"age_min={alter if alter is not None else '?'}"
+                     + (" erzeugung=1" if erzeugung else ""))
             basis = (frigate_url
                      or os.environ.get("FRIGATE_URL", "")).rstrip("/")
+            if erzeugung and warte is None:
+                if erzeugung_deckel_s is None:
+                    raise ValueError(
+                        "clip_holen(erzeugung=True) braucht erzeugung_"
+                        "deckel_s aus der Config — kein Modul-Default")
+                warte = ErzeugungsWarte(erzeugung_deckel_s,
+                                        _version_probe(basis))
+            # .292 VOD-Weg ZUERST — fuer JEDEN Clip-Zug (User-Auftrag 19.08.:
+            # „jedes Mal, wenn wir ein Event holen", Lernlauf/Live/Nachhol/
+            # Meldung gleichermassen; kranke Segment-Fenster koennen auch
+            # frische Events treffen, z. B. direkt nach Frigate-Neustarts).
+            # Gelingt der lokale Remux, ist der Zug hier fertig — Frigates
+            # kranker Erzeugungspfad wird nie betreten. Jeder Fehlschlag ist
+            # laut (clip_dbg in _vod_holen) und faellt auf den gehaerteten
+            # clip.mp4-Weg darunter zurueck. Deckel: im Erzeugungs-Fall der
+            # Config-Deckel, sonst das normale Socket-Fenster (VOD liefert
+            # frisch in <1 s, gemessen).
+            if CLIP_VOD and _vod_holen(
+                    eid, teil, basis,
+                    warte.deckel_s if (erzeugung and warte is not None)
+                    else float(timeout)):
+                os.replace(teil, pfad)
+                return pfad
+            # .289 (Haertungstest-Fang am Frisch-Event): Frigate schickt bei
+            # der Erzeugung auch die RESPONSE-HEADER erst am Ende — der
+            # strenge Verbindungs-Timeout brach dann VOR der Warte-Schleife
+            # ab (exakt der 1:1-Leak-Trigger aus Serie E). Im Erzeugungs-
+            # Modus wartet der Aufbau deshalb bis zum Deckel; direkt nach
+            # den Headern stellt settimeout() das strenge Fenster zurueck.
+            _aufbau_to = (warte.deckel_s if (erzeugung and warte is not None)
+                          else timeout)
             with urllib.request.urlopen(f"{basis}/api/events/{eid}/clip.mp4",
-                                        timeout=timeout) as r, \
+                                        timeout=_aufbau_to) as r, \
                  open(teil, "wb") as f:
-                shutil.copyfileobj(r, f)
+                if erzeugung:
+                    # .290: Griff gehaertet — ein Antwort-Objekt OHNE fp
+                    # (Test-Fake, exotischer Opener) liess den nackten
+                    # r.fp-Zugriff mit AttributeError reissen statt laut
+                    # zu degradieren (Gate-Fang beim Zusammenfuehren).
+                    try:
+                        _sock = r.fp.raw._sock
+                    except AttributeError:
+                        _sock = None
+                    if _sock is not None:
+                        _sock.settimeout(timeout)
+                    else:
+                        clip_dbg(f"{eid}: WARN kein Socket-Zugriff nach "
+                                 f"Headern — Zwischen-Byte-Fenster bleibt "
+                                 f"auf {_aufbau_to:.0f}s")
+                # Byte-zaehlende 64k-Schleife (ehem. shutil.copyfileobj):
+                # die [clipdbg]-Endzeile braucht bytes= — und nur der Zaehler
+                # trennt 'stall' (Bytes kamen, dann riss der Strom) von
+                # 'timeout' (nie ein Byte). read1 statt read, weil read(n)
+                # im BufferedReader BLOCKIEREND auf volle n Bytes wartet:
+                # ein Stall mitten im 64k-Chunk saehe sonst wie bytes=0 aus
+                # (im Smoke-Test nachgestellt). read1 liefert, was der
+                # Socket hergibt — gleiche Daten, gleicher Timeout je
+                # Socket-Operation.
+                leser = getattr(r, "read1", r.read)
+                while True:
+                    try:
+                        stueck = leser(65536)
+                    except Exception as le:
+                        # .288 Erzeugungs-Warten: NUR solange kein Byte
+                        # floss und NUR fuer echte Stalls — deckt den
+                        # chunked-Fall (Header frueh, Bytes spaet); den
+                        # gemessen haeufigeren Header-erst-am-Ende-Fall
+                        # deckt seit .289 der Aufbau-Timeout oben. Die
+                        # Verbindung bleibt OFFEN (ein Neuaufbau je Runde
+                        # waere selbst der 1:1-Leak-Trigger aus Serie E).
+                        # .291 (Direkttest-Fang, nginx-Beleg 31,9 s): bei der
+                        # Erzeugung STREAMT Frigate haeppchenweise und die
+                        # >30-s-Stille kommt am ENDE (MP4-Finalisierung) —
+                        # gemessen 29 MB geflossen, Abbruch auf der
+                        # Ziellinie. Im Erzeugungs-Modus traegt die Probe-
+                        # Warte deshalb JEDEN Stall (nicht nur vor dem
+                        # ersten Byte); ohne erzeugung bleibt der Stall
+                        # nach Bytes die alte strenge Klasse.
+                        if (warte is not None
+                                and erzeugung and _ist_stall(le)):
+                            clip_dbg(f"{eid}: wartet_auf_erzeugung src={q} "
+                                     f"s={time.monotonic() - t0:.0f} "
+                                     f"bytes={geladen} "
+                                     f"(deckel {warte.deckel_s:.0f}s)")
+                            warte.entscheide()   # raise bei tot/deckel
+                            clip_dbg(f"{eid}: probe_ok src={q} — Frigate "
+                                     "answers, still generating the clip")
+                            continue
+                        raise
+                    if not stueck:
+                        break
+                    f.write(stueck)
+                    geladen += len(stueck)
             os.replace(teil, pfad)
+            clip_dbg(f"{eid}: GET clip.mp4 ok src={q} "
+                     f"s={time.monotonic() - t0:.1f} bytes={geladen}")
+        else:
+            clip_dbg(f"{eid}: clip cache hit src={q} "
+                     f"bytes={os.path.getsize(pfad)} — no Frigate request")
         return pfad
-    except Exception:
+    except Exception as e:
+        clip_dbg(f"{eid}: GET clip.mp4 {_fehler_art(e, geladen)} src={q} "
+                 f"s={time.monotonic() - t0:.1f} bytes={geladen} "
+                 f"({type(e).__name__}: {str(e)[:120]})")
         try:
             os.unlink(teil)
         except FileNotFoundError:

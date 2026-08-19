@@ -5,16 +5,26 @@ Benennungs-Phase. Reine Renderer-Funktion; Daten (anker_lesen) und Bild-Route
 
 Zeigt je Cluster die det-besten Crops (deterministisch sortiert), Eimer-Status
 sichtbar aber NIE versteckt (zur Ansicht/hart = gedimmt + Grund) — Leitprinzip 3:
-nichts verschwindet still, auch Mehrdeutiges bleibt sichtbar."""
+nichts verschwindet still, auch Mehrdeutiges bleibt sichtbar.
+Sprach-Stufe 0 (konzept_sprache.md v2): sichtbare Texte aus core/sprache.t()
+— BYTE-TREU (Harnisch tools/harnisch_sprache.py). Grenzen dieser Stufe (siehe
+Abschnitts-Kommentar in core/texte/en.py): Pills mit <b> mitten im Satz und
+die JS-Texte mit Escape-Folgen bleiben literal; EIMER_TEXT/BIN_TITEL wurden
+zu Funktionen (t() zur Render-Zeit, nie beim Import)."""
 import html
+
+from core.sprache import t
 
 CROPS_JE_CLUSTER = 12      # Anzeige-Deckel je Karte (74 Cluster x 12 = tragbare Seite)
 
 
 # .224 (User-Fund am Screenshot): interne Eimer-Marken erschienen ROH in der
 # englischen UI ("UNBESTAETIGT: ..."). Anzeige-Map, Tokens bleiben unberuehrt.
-EIMER_TEXT = {"ok": "clean", "unbestaetigt": "unconfirmed",
-              "zu_duenn": "thin", "hart": "mixed"}
+def _eimer_text():
+    return {"ok": t("lernanker.eimer.ok"),
+            "unbestaetigt": t("lernanker.eimer.unbestaetigt"),
+            "zu_duenn": t("lernanker.eimer.zu_duenn"),
+            "hart": t("lernanker.eimer.hart")}
 
 
 def _badge(txt, dim=False):
@@ -26,8 +36,9 @@ def _thumb(m, lauf_id, dim):
     Gesicht steckt ('Gesicht in Gross UND Video'). Das Roh-Bild haengt am img selbst."""
     name = html.escape(str(m.get("datei", "")).rsplit("/", 1)[-1])
     ev = html.escape(str(m.get("event", "")))
-    return (f'<a href="/video/{ev}" title="{html.escape(m.get("kamera", "?"))} · '
-            f'det {m.get("det")} · click opens the clip">'
+    return (f'<a href="/video/{ev}" title="'
+            + t("lernanker.kachel.attr_clip",
+                kamera=html.escape(m.get("kamera", "?")), det=m.get("det")) + '">'
             f'<img src="/lernlauf/crop/{html.escape(lauf_id)}/{name}" loading="lazy" '
             f'class="anker-thumb{" gedimmt" if dim else ""}"></a>')
 
@@ -37,17 +48,21 @@ def _thumb_w(m, lauf_id, dim, checked, grund=None):
     Clip-Link wandert auf ein kleines ▶, damit Klick aufs Bild = an-/abwaehlen)."""
     name = html.escape(str(m.get("datei", "")).rsplit("/", 1)[-1])
     ev = html.escape(str(m.get("event", "")))
-    titel = html.escape(grund or f'{m.get("kamera", "?")} · det {m.get("det")}')
+    titel = html.escape(grund or t("lernanker.kachel.attr_kurz",
+                                   kamera=m.get("kamera", "?"), det=m.get("det")))
     return (f'<label class="anker-w{" gedimmt" if dim else ""}" title="{titel}">'
             f'<input type="checkbox" name="sel" value="{name}"{" checked" if checked else ""}>'
             f'<img src="/lernlauf/crop/{html.escape(lauf_id)}/{name}" loading="lazy" '
             f'class="anker-thumb">'
-            f'<a class="anker-clip" href="/video/{ev}" title="open the clip">&#9654;</a>'
+            f'<a class="anker-clip" href="/video/{ev}" title="{t("lernanker.kachel.attr_klick")}">&#9654;</a>'
             + (f'<span class="anker-grund">{html.escape(grund)}</span>' if grund else "")
             + '</label>')
 
 
-BIN_TITEL = {"frontal": "Frontal", "links": "Looking left", "rechts": "Looking right"}
+def _bin_titel():
+    return {"frontal": t("lernanker.bin.frontal"),
+            "links": t("lernanker.bin.links"),
+            "rechts": t("lernanker.bin.rechts")}
 
 
 def anker_detail_seite(s, kaputt=0, benennung=None, fluss=None):
@@ -95,23 +110,25 @@ def anker_detail_seite(s, kaputt=0, benennung=None, fluss=None):
         _frage = (benennung is not None
                   and s.get("status") not in ("uebernommen", "verworfen"))
         e_kopf = ('<div class="nur-easy" style="margin:2px 0 6px">'
-                  f'<div class="dim">Group {fluss["pos"]} of '
-                  f'{fluss["gesamt"]}</div>'
-                  + ('<h2 style="margin:2px 0">Who is this?</h2>'
+                  f'<div class="dim">'
+                  + t("lernanker.detail.gruppe",
+                      pos=fluss["pos"], gesamt=fluss["gesamt"]) + '</div>'
+                  + (f'<h2 style="margin:2px 0">{t("lernanker.detail.frage")}</h2>'
                      if _frage else "") + "</div>")
     kopf = (e_kopf + f'<h2 class="nur-expert">{aid}</h2>'
             '<div class="card"><div class="nur-expert">'
-            + _badge(EIMER_TEXT.get(q.get("eimer", "ok"),
-                                    q.get("eimer", "ok")), dim=dim)
-            + _badge(f'{q.get("stuetz", 0)} faces ({q.get("stuetz_phys", "?")} physical)')
-            + _badge(f'{q.get("durchgaenge", 0)} passes')
-            + _badge(f'{q.get("tage", 0)} day(s): {spanne}')
-            + _badge(f'margin {q.get("marge")}') + "</div>")
+            + _badge(_eimer_text().get(q.get("eimer", "ok"),
+                                       q.get("eimer", "ok")), dim=dim)
+            + _badge(t("lernanker.badge.stuetz", n=q.get("stuetz", 0),
+                       phys=q.get("stuetz_phys", "?")))
+            + _badge(t("lernanker.badge.durchgaenge", n=q.get("durchgaenge", 0)))
+            + _badge(t("lernanker.badge.tage", n=q.get("tage", 0), spanne=spanne))
+            + _badge(t("lernanker.badge.marge", marge=q.get("marge"))) + "</div>")
     if not benennung:
         thumbs = "".join(_thumb(m, lauf_id, dim) for m in mitglieder)
         return (stil + kopf
-                + '<div class="dim">click a face to open its clip · '
-                  '<a href="/lernlauf/anker">back to all clusters</a></div>'
+                + f'<div class="dim">{t("lernanker.detail.hinweis_klick")} · '
+                  f'<a href="/lernlauf/anker">{t("lernanker.link_zurueck")}</a></div>'
                 + f'<div class="anker-reihe">{thumbs}</div></div>')
     # ---- Benennungs-Modus (E4a Zug 2b) ------------------------------------
     bew = {b["datei"]: b for b in benennung.get("bewertet") or []}
@@ -125,39 +142,39 @@ def anker_detail_seite(s, kaputt=0, benennung=None, fluss=None):
         e_weiter = ('<p class="nur-easy"><a class="gtb on" '
                     f'href="/lernlauf/anker?a='
                     f'{html.escape(str(fluss["naechster"]))}">'
-                    "Next group &#8230;</a></p>")
+                    + t("lernanker.detail.weiter") + "</a></p>")
     if uebernommen:
         # E4b: uebernommene Anker sind abgeschlossen — Bilder bleiben sichtbar,
         # aber keine Auswahl/Umbenennung mehr (Referenz-Hygiene laeuft ueber die
         # Quality-Werkzeuge, nicht rueckwaerts durch den Lernlauf).
+        # Stufe-0-Grenze: adopted-Pill traegt <b> mitten im Satz — literal.
         thumbs = "".join(_thumb(m, lauf_id, False) for m in mitglieder)
         return (stil + kopf
                 + f'<div class="pill">adopted as <b>{html.escape(str(s.get("person")))}</b>'
                   ' — these faces feed recognition now</div>' + e_weiter
-                + '<div class="dim nur-expert"><a href="/lernlauf/anker">back to all clusters</a> · '
-                  'reference upkeep lives on the Quality page</div>'
+                + f'<div class="dim nur-expert"><a href="/lernlauf/anker">{t("lernanker.link_zurueck")}</a> · '
+                + t("lernanker.detail.pflege_hinweis") + '</div>'
                 + f'<div class="anker-reihe">{thumbs}</div></div>')
     if s.get("status") == "verworfen":
         # Dismiss mit Gedaechtnis: Crops sind geloescht, die Zeile traegt nur
         # noch das Erbschafts-Gedaechtnis — Direktaufruf ehrlich beantworten.
         return (stil + kopf
-                + '<div class="pill">dismissed — images removed; the cluster is '
-                  'remembered so re-harvests of the same events stay quiet</div>'
+                + f'<div class="pill">{t("lernanker.detail.verworfen")}</div>'
                 + e_weiter
-                + '<div class="dim nur-expert"><a href="/lernlauf/anker">back to all clusters</a></div>'
+                + f'<div class="dim nur-expert"><a href="/lernlauf/anker">{t("lernanker.link_zurueck")}</a></div>'
                 + '</div>')
     hinweis = ""
     if schon:
+        # Stufe-0-Grenze: named-Pill traegt <b> mitten im Satz — literal.
         hinweis = (f'<div class="pill">named <b>{html.escape(str(s.get("person")))}</b>'
                    ' — adoption pending (naming can still be changed)</div>')
     if flags.get("emb_fehlt"):
-        hinweis += ('<div class="pill dim">duplicate check unavailable '
-                    '(anchor predates embedding persistence) — physical duplicates '
-                    'are still filtered</div>')
+        hinweis += (f'<div class="pill dim">{t("lernanker.detail.dublette_hinweis")}</div>')
     v = benennung.get("vorschlag")
     if v:
-        _bek = ("already in your system" if {"referenz", "master"}
-                & set(v.get("quellen") or []) else "named on another cluster")
+        _bek = (t("lernanker.bekannt.system") if {"referenz", "master"}
+                & set(v.get("quellen") or []) else t("lernanker.bekannt.anker"))
+        # Stufe-0-Grenze: looks-like-Pill traegt <b> mitten im Satz — literal.
         hinweis += (f'<div class="pill">looks like <b>{html.escape(v["name"])}</b> '
                     f'(similarity {v["sim"]}) — {_bek}; suggestion only</div>')
     # gewaehlt-Vorbelegung: persistierte Auswahl (Reload) schlaegt die Empfehlung.
@@ -173,19 +190,19 @@ def anker_detail_seite(s, kaputt=0, benennung=None, fluss=None):
         kacheln = "".join(_thumb_w(
             m, lauf_id, False,
             checked=(m.get("gewaehlt", False) if hat_persist else True)) for m in ms)
-        sektionen.append(f'<h3>Recommended — {BIN_TITEL[bin_key]} ({len(ms)})</h3>'
+        sektionen.append(f'<h3>{t("lernanker.detail.empfohlen", bin=_bin_titel()[bin_key], n=len(ms))}</h3>'
                          f'<div class="anker-reihe">{kacheln}</div>')
     if nicht:
         kacheln = "".join(_thumb_w(
             m, lauf_id, True,
             checked=bool(m.get("gewaehlt", False)) if hat_persist else False,
-            grund=bew.get(str(m.get("datei", "")), {}).get("grund") or "not rated")
+            grund=bew.get(str(m.get("datei", "")), {}).get("grund")
+            or t("lernanker.kachel.grund_fehlt"))
             for m in nicht)
         # .224: die Nicht-empfohlen-Sektion ist Expert-Tiefe — Easy urteilt
         # ueber die empfohlene Auswahl (dieselben Checkboxen, gleiche Wirkung).
         sektionen.append('<div class="nur-expert">'
-                         f'<h3>Not recommended ({len(nicht)}) — kept visible, '
-                         'reason on each image</h3>'
+                         f'<h3>{t("lernanker.detail.nicht_empfohlen", n=len(nicht))}</h3>'
                          f'<div class="anker-reihe">{kacheln}</div></div>')
     personen = benennung.get("personen") or []
     opts = "".join(f'<option value="{html.escape(p)}">' for p in personen)
@@ -195,33 +212,38 @@ def anker_detail_seite(s, kaputt=0, benennung=None, fluss=None):
     naechster = fluss.get("naechster")
     weiter_url = (f'/lernlauf/anker?a={html.escape(str(naechster))}'
                   if naechster else "/lernlauf/anker")
-    skip_text = ("Skip this group" if naechster else
-                 "Skip — back to the groups")
+    skip_text = (t("lernanker.detail.skip_weiter") if naechster else
+                 t("lernanker.detail.skip_zurueck"))
     e_leiste = (
         '<div class="bn-leiste nur-easy">'
         + (f'<button type="button" id="bn-easy-ja" class="gtb on" '
            f'data-name="{html.escape(v["name"])}">'
-           f'Yes, it&rsquo;s {html.escape(v["name"])}</button>'
-           '<button type="button" id="bn-easy-andere">Someone else &#8230;'
+           + t("lernanker.detail.knopf_ja", name=html.escape(v["name"]))
+           + '</button>'
+           f'<button type="button" id="bn-easy-andere">{t("lernanker.detail.knopf_andere")}'
            '</button>' if v else
            '<button type="button" id="bn-easy-andere" class="gtb on">'
-           'Name this group &#8230;</button>')
+           + t("lernanker.detail.knopf_benennen_easy") + '</button>')
         + f'<a class="gtb" href="{weiter_url}">{html.escape(skip_text)}</a>'
         + '<span id="bn-easy-status" class="dim"></span></div>')
     leiste = (
         '<div class="bn-leiste nur-expert" id="bn-expertleiste">'
-        '<button type="button" id="bn-alle">Select all recommended</button>'
-        '<button type="button" id="bn-keine">Deselect all</button>'
+        f'<button type="button" id="bn-alle">{t("lernanker.detail.knopf_alle")}</button>'
+        f'<button type="button" id="bn-keine">{t("lernanker.detail.knopf_keine")}</button>'
         '<span class="dim">·</span>'
         f'<input type="text" id="bn-name" list="bn-personen" '
-        f'placeholder="person name (new or existing)" '
+        f'placeholder="{t("lernanker.detail.attr_name")}" '
         f'value="{html.escape(str(s.get("person") or ""))}">'
         f'<datalist id="bn-personen">{opts}</datalist>'
-        f'<button type="button" id="bn-save" data-aid="{aid}">Name this cluster</button>'
+        f'<button type="button" id="bn-save" data-aid="{aid}">{t("lernanker.detail.knopf_benennen")}</button>'
         + (f'<button type="button" id="bn-adopt" data-aid="{aid}" class="gtb on">'
-           'Adopt into recognition</button>' if schon else "")
+           + t("lernanker.detail.knopf_adopt") + '</button>' if schon else "")
         + '<span id="bn-status" class="dim"></span></div>')
     nx_js = (f'"{html.escape(str(naechster))}"' if naechster else "null")
+    # Stufe-0-Grenze: die JS-Texte mit \u-/\n-Escape-Folgen bleiben literal —
+    # window.T existiert seit Stufe 1, Einzug folgt mit der Stufe-2-Tranche
+    # dieser Seite; nur die drei escape-freien Kurztexte sind nach
+    # dem frigate.js-Muster eingezogen.
     js = ('<script>(function(){'
           'var alle=document.getElementById("bn-alle"),keine=document.getElementById("bn-keine");'
           'function boxen(){return document.querySelectorAll(".anker-w input[name=sel]")}'
@@ -240,14 +262,15 @@ def anker_detail_seite(s, kaputt=0, benennung=None, fluss=None):
           '.then(function(r){return r.json()}).then(function(d){'
           'if(d.tag_abweichung){if(confirm("Settings changed since naming:\\n"+'
           'd.tag_abweichung.join("\\n")+"\\nAdopt anyway with the named selection?"))'
-          '{adoptieren(true);}else melden("not adopted");return;}'
-          'if(!d.ok){melden("error: "+d.msg);return;}'
+          '{adoptieren(true);}else melden("' + t("lernanker.js.nicht_uebernommen")
+          + '");return;}'
+          'if(!d.ok){melden("' + t("lernanker.js.fehler") + ' "+d.msg);return;}'
           'if(CHAIN){if(NX){melden("saved \\u2014 next group\\u2026");'
           'setTimeout(function(){location="/lernlauf/anker?a="+encodeURIComponent(NX)},500);}'
           'else{melden("All groups done \\u2014 the named pictures now count for recognition.");'
           'setTimeout(function(){location="/lernlauf/anker"},1600);}return;}'
           'melden(d.msg);setTimeout(function(){location.reload()},1200);})'
-          '.catch(function(e){melden("error: "+e);});}'
+          '.catch(function(e){melden("' + t("lernanker.js.fehler") + ' "+e);});}'
           'function senden(name,bestaetigt){'
           'var sel=[];boxen().forEach(function(b){if(b.checked)sel.push(b.value);});'
           'melden("saving\\u2026");'
@@ -257,11 +280,11 @@ def anker_detail_seite(s, kaputt=0, benennung=None, fluss=None):
           '.then(function(d){if(d.kollision){'
           'if(confirm("\\u2019"+name+"\\u2019 matches existing \\u2019"+d.kollision+'
           '"\\u2019 \\u2014 add to that person instead?"))senden(d.kollision,true);'
-          'else melden("not saved");return;}'
-          'if(!d.ok){melden("error: "+d.msg);return;}'
+          'else melden("' + t("lernanker.js.nicht_gespeichert") + '");return;}'
+          'if(!d.ok){melden("' + t("lernanker.js.fehler") + ' "+d.msg);return;}'
           'if(CHAIN){adoptieren(false);return;}'
           'melden(d.msg);setTimeout(function(){location.reload()},600);})'
-          '.catch(function(e){melden("error: "+e);});}'
+          '.catch(function(e){melden("' + t("lernanker.js.fehler") + ' "+e);});}'
           'save.onclick=function(){senden(document.getElementById("bn-name").value,false);};'
           'var ad=document.getElementById("bn-adopt");'
           'if(ad)ad.onclick=function(){CHAIN=false;adoptieren(false);};'
@@ -274,8 +297,9 @@ def anker_detail_seite(s, kaputt=0, benennung=None, fluss=None):
           'document.getElementById("bn-name").focus();};'
           '})();</script>')
     return (stil + kopf + hinweis
-            + '<div class="dim nur-expert">click an image to select or deselect it · the little '
-              '&#9654; opens the clip · <a href="/lernlauf/anker">back to all clusters</a></div>'
+            + f'<div class="dim nur-expert">{t("lernanker.detail.hinweis_auswahl")} · '
+            + t("lernanker.detail.hinweis_pfeil")
+            + f' · <a href="/lernlauf/anker">{t("lernanker.link_zurueck")}</a></div>'
             + "".join(sektionen) + e_leiste + leiste + '</div>' + js)
 
 
@@ -304,10 +328,8 @@ def anker_seite(saetze, kaputt, vorschlaege=None, dubletten=None):
     if laeufe:
         knoepfe = "".join(
             f'<button class="gtb" onclick="laufLoeschen(\'{html.escape(lid)}\',this)" '
-            f'data-frage="Delete run {html.escape(lid)} and all its data? This '
-            f'permanently removes its {n} cluster(s) — including named and '
-            'dismissed ones — and all harvested images. References already '
-            'adopted into recognition stay. This cannot be undone.">'
+            f'data-frage="'
+            + t("lernanker.liste.frage_lauf", lid=html.escape(lid), n=n) + '">'
             f'{html.escape(lid)} ({n})</button> '
             for lid, n in sorted(laeufe.items()))
         # Sammel-Knopf (User 05.08.): alle ALTEN Laeufe mit EINEM OK weg, der
@@ -318,29 +340,28 @@ def anker_seite(saetze, kaputt, vorschlaege=None, dubletten=None):
             alt_n = sum(n for lid, n in laeufe.items() if lid != neuester)
             alle_knopf = (
                 f'<button class="gtb" onclick="alteLaeufeLoeschen(this)" '
-                f'data-frage="Delete ALL {len(laeufe) - 1} old run(s) with their '
-                f'{alt_n} cluster(s) and all harvested images? Only the newest '
-                f'run {html.escape(neuester)} is kept. References already '
-                'adopted into recognition stay. This cannot be undone.">'
-                f'Delete all old runs (keep {html.escape(neuester)})</button>')
-        lauf_zeile = ('<div class="card">Delete a run — permanently removes all '
-                      'its clusters and harvested images (references you already '
-                      f'adopted stay): {knoepfe}{alle_knopf}</div>')
+                f'data-frage="'
+                + t("lernanker.liste.frage_alle", alt=len(laeufe) - 1,
+                    n=alt_n, neuester=html.escape(neuester)) + '">'
+                + t("lernanker.liste.knopf_alte",
+                    neuester=html.escape(neuester)) + '</button>')
+        lauf_zeile = (f'<div class="card">{t("lernanker.liste.lauf_zeile")}'
+                      f' {knoepfe}{alle_knopf}</div>')
     # Dismiss mit Gedaechtnis (User 05.08.): verworfene Cluster verschwinden aus
     # der Liste, ihre Zeilen bleiben als Erbschafts-Gedaechtnis — GEZAEHLT
     # ausgewiesen, nie still (Leitprinzip 3).
     verworfen_n = sum(1 for s in saetze if s.get("status") == "verworfen")
     saetze = [s for s in saetze if s.get("status") != "verworfen"]
     verworfen_hinweis = (
-        f'<div class="dim">{verworfen_n} dismissed cluster(s) remembered — '
-        're-harvests of the same events stay quiet</div>' if verworfen_n else "")
+        f'<div class="dim">{t("lernanker.liste.verworfen", n=verworfen_n)}</div>'
+        if verworfen_n else "")
     if not saetze:
-        return ("<h2>Anchor clusters</h2>" + verworfen_hinweis + lauf_zeile
-                + '<div class="card">No anchors yet — a learning run builds them '
-                  '(Preparation → Harvest → Grouping). '
-                  '<a href="/lernlauf">Open the learning run page</a>.</div>')
+        return (f"<h2>{t('lernanker.titel')}</h2>" + verworfen_hinweis + lauf_zeile
+                + f'<div class="card">{t("lernanker.liste.leer")} '
+                  f'<a href="/lernlauf">{t("lernanker.liste.leer_link")}</a>.</div>')
     ok_n = sum(1 for s in saetze if (s.get("qualitaet") or {}).get("eimer") == "ok")
     ges = sum((s.get("qualitaet") or {}).get("stuetz", 0) for s in saetze)
+    # Stufe-0-Grenze: <b>-Satzteil der Kaputt-Warnung bleibt literal.
     kopf_warn = (f'<div class="card"><b>{kaputt} unreadable anchor lines counted</b> '
                  "— they are never dropped silently.</div>" if kaputt else "")
     karten = []
@@ -357,26 +378,27 @@ def anker_seite(saetze, kaputt, vorschlaege=None, dubletten=None):
         rest = len(mitglieder) - len(beste[:CROPS_JE_CLUSTER])
         # .83: '+N more faces' oeffnet die Cluster-Detail-Seite mit ALLEN Crops.
         aid = html.escape(str(s.get("anker_id")))
-        mehr = (f'<a class="pill" href="/lernlauf/anker?a={aid}">+{rest} more faces</a>'
+        mehr = (f'<a class="pill" href="/lernlauf/anker?a={aid}">'
+                f'{t("lernanker.liste.mehr", n=rest)}</a>'
                 if rest > 0 else "")
         tage = q.get("tage_liste") or []
         spanne = f'{tage[0]} … {tage[-1]}' if len(tage) > 1 else (tage[0] if tage else "—")
         kams = sorted({m.get("kamera", "?") for m in mitglieder})
-        status_html = (_badge("clean") if not dim else
-                       _badge(f'{EIMER_TEXT.get(eimer, eimer)}: '
+        status_html = (_badge(t("lernanker.eimer.ok")) if not dim else
+                       _badge(f'{_eimer_text().get(eimer, eimer)}: '
                               f'{q.get("eimer_grund", "")}', dim=True))
         if dup_von:
-            status_html += _badge(f"same cluster as {dup_von} \u2014 "
-                                  "harvested again by a newer run; name it there",
+            status_html += _badge(t("lernanker.liste.dublette", anker=dup_von),
                                   dim=True)
         _vs = vorschlaege.get(s.get("anker_id"))
         if _vs and s.get("status") not in ("benannt", "uebernommen"):
             # "kennen wir schon"-Semantik (User 05.08.): Referenz-/Master-Treffer
             # heisst, die Person IST im System — der Lauf liefert nur neues
             # Material fuer sie. Treffer aus bloss benannten Ankern sagen das
-            # ehrlich schwaecher.
-            _bek = ("already in your system" if {"referenz", "master"}
-                    & set(_vs.get("quellen") or []) else "named on another cluster")
+            # ehrlich schwaecher. Stufe-0-Grenze: der looks-like-Pill traegt
+            # <b> mitten im Satz — Rahmen literal, _bek-Halbsatz Schluessel.
+            _bek = (t("lernanker.bekannt.system") if {"referenz", "master"}
+                    & set(_vs.get("quellen") or []) else t("lernanker.bekannt.anker"))
             status_html += ('<span class="pill" style="border-color:var(--ok)">'
                             f'looks like <b>{html.escape(str(_vs.get("name")))}</b> '
                             f'({_vs.get("sim")}) — {_bek}; naming the cluster '
@@ -385,32 +407,34 @@ def anker_seite(saetze, kaputt, vorschlaege=None, dubletten=None):
         # sein — ein Knopf je Cluster, unter den Gesichtern. Benannte tragen den
         # Namen als Badge und der Knopf wechselt auf "Review naming".
         st_a = s.get("status")
+        # Stufe-0-Grenze: named-/adopted-Pill (<b> im Satz) bleibt literal.
         benannt_pill = (f'<span class="pill">named: <b>{html.escape(str(s.get("person")))}</b>'
                         ' — adoption pending</span>' if st_a == "benannt" else
                         (f'<span class="pill">adopted: <b>{html.escape(str(s.get("person")))}</b></span>'
                          if st_a == "uebernommen" else ""))
-        knopf_txt = ("Review naming" if st_a == "benannt" else
-                     ("View cluster" if st_a == "uebernommen" else
-                      f'Name these {q.get("stuetz", 0)} faces'))
+        knopf_txt = (t("lernanker.liste.knopf_review") if st_a == "benannt" else
+                     (t("lernanker.liste.knopf_view") if st_a == "uebernommen" else
+                      t("lernanker.liste.knopf_benennen", n=q.get("stuetz", 0))))
         # Dismiss mit Gedaechtnis (User 05.08.): Zeile+Zentroid bleiben,
         # Wiederernten derselben Events erben still. Seit .259 auch fuer
         # BENANNTE Cluster (Endpunkt-Erweiterung mit der Zuweisungs-Flaeche
         # — nichts ist im Master, die Benennung wird mit verworfen); nur
-        # uebernommene nie.
+        # uebernommene nie. B9: je Zweig ein GANZER Satz-Schluessel.
+        frage = (t("lernanker.liste.frage_verwerfen_benannt")
+                 if st_a == "benannt" else t("lernanker.liste.frage_verwerfen"))
         verwerf = ('' if st_a == "uebernommen" else
                    f'<button class="gtb" onclick="ankerVerwerfen(\'{aid}\',this)" '
-                   'data-frage="Dismiss this cluster? Its images are removed'
-                   + (' and the pending naming is discarded' if st_a == "benannt" else '')
-                   + '; the cluster is remembered so re-harvests of the same '
-                     'events stay quiet.">Dismiss</button>')
+                   f'data-frage="{frage}">'
+                   + t("lernanker.liste.knopf_verwerfen") + '</button>')
         knopf = (f'<div style="margin-top:6px"><a class="gtb on" href="/lernlauf/anker?a={aid}">'
                  f"{knopf_txt}</a> {verwerf}</div>")
         karten.append(
             f'<div class="card"><b>{html.escape(str(s.get("anker_id")))}</b> {status_html} '
             + benannt_pill
-            + _badge(f'{q.get("stuetz", 0)} faces') + _badge(f'{q.get("durchgaenge", 0)} passes')
-            + _badge(f'{q.get("tage", 0)} day(s): {spanne}')
-            + _badge(", ".join(kams)) + _badge(f'margin {q.get("marge")}')
+            + _badge(t("lernanker.badge.faces", n=q.get("stuetz", 0)))
+            + _badge(t("lernanker.badge.durchgaenge", n=q.get("durchgaenge", 0)))
+            + _badge(t("lernanker.badge.tage", n=q.get("tage", 0), spanne=spanne))
+            + _badge(", ".join(kams)) + _badge(t("lernanker.badge.marge", marge=q.get("marge")))
             + f'<div class="anker-reihe">{"".join(thumbs)}{mehr}</div>{knopf}</div>')
     stil = ('<style>.anker-reihe{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}'
             '.anker-thumb{width:72px;height:72px;object-fit:cover;border-radius:4px}'
@@ -418,13 +442,12 @@ def anker_seite(saetze, kaputt, vorschlaege=None, dubletten=None):
             '.pill{display:inline-block;border:1px solid var(--rand,#8884);'
             'border-radius:10px;padding:0 8px;margin:0 4px 2px 0;font-size:.85em}'
             '.pill.dim{opacity:.6}</style>')
-    return (stil + "<h2>Anchor clusters</h2>"
-            f'<div class="card">{len(saetze)} clusters from {ges} anchor-ready faces — '
-            f'{ok_n} clean, {len(saetze) - ok_n} for review (dimmed, with the reason on the '
-            # .200 (Fix 4): E4b ist laengst gebaut (/lernlauf/uebernehmen) —
-            # der Adopt-Knopf steht im benannten Cluster.
-            'badge). Open a cluster to review and name it — named clusters are adopted '
-            'into recognition right there (Adopt button). '
-            '<a href="/lernlauf">Back to the learning run</a>.</div>'
+    # .200 (Fix 4): E4b ist laengst gebaut (/lernlauf/uebernehmen) —
+    # der Adopt-Knopf steht im benannten Cluster.
+    return (stil + f"<h2>{t('lernanker.titel')}</h2>"
+            f'<div class="card">'
+            + t("lernanker.liste.kopf", n=len(saetze), ges=ges, ok=ok_n,
+                rest=len(saetze) - ok_n)
+            + f' <a href="/lernlauf">{t("lernanker.liste.kopf_link")}</a>.</div>'
             + verworfen_hinweis + lauf_zeile
             + kopf_warn + "".join(karten))

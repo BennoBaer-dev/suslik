@@ -2,16 +2,24 @@
 Modulumbau R1, byte-treu aus verifyd extrahiert; Muster auftritte.py — Daten als
 Parameter, kein Dienst-Import). Der Handler holt frigate_cameras() und reicht
 cams/err + die zwei Config-Bloecke (Store-Kamerablatt, required_zones) herein;
-hier wird NUR gerendert (layout/banner bleiben beim Handler)."""
+hier wird NUR gerendert (layout/banner bleiben beim Handler).
+Sprach-Stufe 0 (konzept_sprache.md v2): sichtbare Texte kommen aus
+core/sprache.t() gegen die en-Referenz — BYTE-TREU (Harnisch
+tools/harnisch_sprache.py). Der Einleitungs-Absatz (sub) traegt Inline-Markup
+mitten im Satz und bleibt deshalb bewusst literal (Stufe-0-Grenze: Plaintext-
+Schluessel ohne HTML; Aufloesung kommt mit dem t_html-Weg spaeterer Stufen)."""
 import html
 
 import webui
 
+from core.sprache import t
+
 
 def render(cams, err, kam_store, rz_cfg):
     """-> Seiten-INHALT inkl. Fehlerbanner."""
-    fehlerbanner = (f'<div class="banner">Could not read the Frigate config: '
-                    f'{html.escape(str(err))}</div>' if err else "")
+    fehlerbanner = (f'<div class="banner">'
+                    f'{t("kameras.banner.config_fehler", fehler=html.escape(str(err)))}'
+                    f'</div>' if err else "")
 
     def _eff(name, cc):                              # aktueller Zustand: Store, sonst Seed
         if name in kam_store:
@@ -25,7 +33,8 @@ def render(cams, err, kam_store, rz_cfg):
         verw, zonen_akt = _eff(name, cc)
         nid = html.escape(name, quote=True)
         verwenden = (f'<label class="sw"><input type="checkbox" class="kam-verw" '
-                     f'data-cam="{nid}"{" checked" if verw else ""}> use this camera</label>')
+                     f'data-cam="{nid}"{" checked" if verw else ""}> '
+                     f'{t("kameras.karte.verwenden")}</label>')
         if cc["zones"]:
             zboxes = " ".join(
                 f'<label class="zbox"><input type="checkbox" class="kam-zone" '
@@ -33,25 +42,26 @@ def render(cams, err, kam_store, rz_cfg):
                 f'{" checked" if z in zonen_akt else ""}> {html.escape(z)}</label>'
                 for z in cc["zones"])
             zonen_ui = (f'<div class="zbar">{zboxes}'
-                        '<span class="dim">none ticked = all events</span></div>')
+                        f'<span class="dim">{t("kameras.karte.zonen_hinweis")}</span></div>')
         else:
-            zonen_ui = '<div class="zbar dim">no zones defined in Frigate — all events</div>'
+            zonen_ui = f'<div class="zbar dim">{t("kameras.karte.zonen_keine")}</div>'
         res = f'{cc["width"]}×{cc["height"]}' if cc["width"] else "?"
-        rec = "rec ✓" if cc["record"] else "no rec"
-        fen = "" if cc["enabled"] else ' <span class="pill warn">off in Frigate</span>'
+        rec = t("kameras.karte.rec_an") if cc["record"] else t("kameras.karte.rec_aus")
+        fen = ("" if cc["enabled"] else
+               f' <span class="pill warn">{t("kameras.karte.pill_aus")}</span>')
         if not fen and not cc.get("detect_enabled", True):
             # Sichtkontrolle 12.08. (Realfall reiner Aufnahme-Klon): Frigate
             # faehrt auf diesem Stream KEINE Personen-Detektion — es koennen
             # hier nie Events ankommen. Quelle ist dieselbe Frigate-Config-
             # Ableitung wie das enabled-Badge (frigate_cameras), kein
             # eigenes Literal-Streufeld; die Checkbox bleibt bedienbar.
-            fen = (' <span class="pill warn" title="Frigate runs no person '
-                   'detection on this stream &mdash; no events can arrive '
-                   'here">no detection in Frigate</span>')
+            fen = (f' <span class="pill warn" '
+                   f'title="{t("kameras.karte.pill_keine_detektion_titel")}">'
+                   f'{t("kameras.karte.pill_keine_detektion")}</span>')
         karten.append(
             f'<div class="card"><div class="kamhead"><b>{html.escape(name)}</b>{fen}'
             f'<span class="dim num">{res} · {rec}</span>{verwenden}</div>{zonen_ui}</div>')
-    inhalt = ('<h2>Cameras</h2>'
+    inhalt = (f'<h2>{t("kameras.titel")}</h2>'
               '<p class="sub">Read live from your Frigate config, nothing is hard-coded. '
               'Turn a camera <b>off</b> to stop looking for new faces on it; tick one or '
               'more <b>zones</b> to only analyze events that entered them (none ticked = '
@@ -59,9 +69,9 @@ def render(cams, err, kam_store, rz_cfg):
               'suslik still checks it, so Frigate\'s own mislabels never slip through. '
               '<a href="/kameras?refresh=1">Refresh</a>.</p>'
               + ("".join(karten) if cams else
-                 webui.leer("No cameras found in Frigate.",
-                            "Check that suslik can reach the Frigate API."))
-              + ('<p style="margin-top:1rem"><button class="gtb on" '
-                 'onclick="kamerasSpeichern(this)">Save cameras</button> '
+                 webui.leer(t("kameras.leer.titel"),
+                            t("kameras.leer.hinweis")))
+              + (f'<p style="margin-top:1rem"><button class="gtb on" '
+                 f'onclick="kamerasSpeichern(this)">{t("kameras.fuss.knopf_speichern")}</button> '
                  '<span id="kam-status" style="color:var(--dim)"></span></p>' if cams else ""))
     return fehlerbanner + inhalt

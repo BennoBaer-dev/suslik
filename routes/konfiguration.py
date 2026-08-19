@@ -5,32 +5,39 @@ CONFIG_WHITELIST des Service und die Auto-Default-Hinweise
 Seit .187 dazu: die Sektion 'Recognition chain' (User-Entscheid 12./13.08.,
 konzept_kette_seite.md Stufe 1) — sie ERSETZT die zwei generischen
 Dropdown-Zeilen person_pfad/vision_pfad (User: 'die Dropdowns ersetzen';
-ein Wert, EIN Bedienort). Andock: core/kette.DEFAULT_KETTE + lage()."""
+ein Wert, EIN Bedienort). Andock: core/kette.DEFAULT_KETTE + lage().
+Sprach-Stufe 0 (konzept_sprache.md v2): sichtbare Texte aus core/sprache.t()
+— BYTE-TREU (Harnisch tools/harnisch_sprache.py). Grenzen dieser Stufe:
+Abschnitts-Kommentar in core/texte/en.py; KETTE_ANZEIGE wurde dafuer zur
+Funktion _kette_anzeige() (t() zur Render-Zeit, nie beim Import — sonst
+froere die Sprachwahl auf den Import-Moment ein)."""
 import html
 import json
+
+from core.sprache import t
 
 # person_pfad/vision_pfad erscheinen NICHT mehr in der generischen Tabelle —
 # sie leben in der Ketten-Sektion (dieselben cfg-<key>-IDs, derselbe Save-Weg:
 # konfigSpeichern sammelt alle [id^=cfg-]-Felder der Seite ein).
 KETTE_KEYS = ("person_pfad", "vision_pfad")
 
-# Anzeige-Fakten je Ketten-Stufe, die NICHT aus der Whitelist kommen (die
-# Erklaertexte der Schalter kommen weiterhin von dort — eine Quelle): Titel,
-# Kosten-Ehrlichkeit (konzept_kette_seite.md: zeigen, WAS ein Schalter spart)
-# und der Entscheid-Zeitpunkt in Nutzerworten.
-KETTE_ANZEIGE = {
-    "gesicht": {"titel": "Face",
-                "kosten": "base analysis on the recorded clip — always on",
-                "zeitpunkt": "per event"},
-    "person": {"titel": "Person (body)",
-               "kosten": "the most expensive local step (body embedding on "
-                         "your hardware)",
-               "zeitpunkt": "per event, decided on the walk-through verdict"},
-    "vision": {"titel": "Vision",
-               "kosten": "one request per walk-through to your configured "
-                         "vision endpoint",
-               "zeitpunkt": "at the end of the walk-through"},
-}
+
+def _kette_anzeige():
+    """Anzeige-Fakten je Ketten-Stufe, die NICHT aus der Whitelist kommen (die
+    Erklaertexte der Schalter kommen weiterhin von dort — eine Quelle): Titel,
+    Kosten-Ehrlichkeit (konzept_kette_seite.md: zeigen, WAS ein Schalter spart)
+    und der Entscheid-Zeitpunkt in Nutzerworten."""
+    return {
+        "gesicht": {"titel": t("konfiguration.kette.gesicht_titel"),
+                    "kosten": t("konfiguration.kette.gesicht_kosten"),
+                    "zeitpunkt": t("konfiguration.kette.gesicht_zeitpunkt")},
+        "person": {"titel": t("konfiguration.kette.person_titel"),
+                   "kosten": t("konfiguration.kette.person_kosten"),
+                   "zeitpunkt": t("konfiguration.kette.person_zeitpunkt")},
+        "vision": {"titel": t("konfiguration.kette.vision_titel"),
+                   "kosten": t("konfiguration.kette.vision_kosten"),
+                   "zeitpunkt": t("konfiguration.kette.vision_zeitpunkt")},
+    }
 
 
 def kette_sektion(cfg, kette, lage, whitelist, auto_hinweis):
@@ -39,10 +46,11 @@ def kette_sektion(cfg, kette, lage, whitelist, auto_hinweis):
     kette = core/kette.DEFAULT_KETTE (Reihenfolge = Ketten-Reihenfolge),
     lage = core/kette.lage(cfg) (K1: dieselbe Quelle wie /health)."""
     karten = []
+    anzeige = _kette_anzeige()
     for g in kette:
         stufe_name = g["stufe"]
-        anz = KETTE_ANZEIGE.get(stufe_name) or {"titel": stufe_name,
-                                                "kosten": "", "zeitpunkt": ""}
+        anz = anzeige.get(stufe_name) or {"titel": stufe_name,
+                                          "kosten": "", "zeitpunkt": ""}
         schalter = g.get("schalter")
         if schalter:
             wert = cfg.get(schalter)
@@ -55,25 +63,26 @@ def kette_sektion(cfg, kette, lage, whitelist, auto_hinweis):
                     f'{html.escape(auto_hinweis[schalter])}</b></div>'
                     if schalter in auto_hinweis else "")
         else:
-            feld = '<b>always</b> <span class="dim">(not switchable today)</span>'
-            erkl = ("the face path is the backbone of every analysis — "
-                    "person and vision hang off its walk-through verdict")
+            feld = (f'<b>{t("konfiguration.kette.immer_an")}</b> '
+                    f'<span class="dim">{t("konfiguration.kette.immer_hinweis")}</span>')
+            erkl = t("konfiguration.kette.gesicht_erkl")
             auto = ""
         lg = (lage or {}).get(stufe_name) or {}
         if not schalter:
             status = ""
         elif lg.get("wirksam"):
+            # Stufe-0-Grenze: <b>armed</b> mitten im Satz bleibt literal.
             status = ('<div class="dim kt-zeile">status: <b>armed</b> — '
                       'runs by itself</div>')
         else:
             if stufe_name == "person" and not lg.get("modell_scharf"):
-                grund = "no trained person model armed yet"
+                grund = t("konfiguration.kette.grund_person")
             elif stufe_name == "vision" and not lg.get("aktiv"):
-                grund = "vision detect is switched off"
+                grund = t("konfiguration.kette.grund_vision")
             else:
-                grund = "switched off here"
-            status = (f'<div class="dim kt-zeile">status: not running '
-                      f'({html.escape(grund)})</div>')
+                grund = t("konfiguration.kette.grund_aus")
+            status = (f'<div class="dim kt-zeile">'
+                      f'{t("konfiguration.kette.status_aus", grund=html.escape(grund))}</div>')
         karten.append(
             f'<div class="card kt-stufe">'
             f'<div class="kamhead"><b>{html.escape(anz["titel"])}</b>'
@@ -82,18 +91,14 @@ def kette_sektion(cfg, kette, lage, whitelist, auto_hinweis):
             + status
             + (f'<div class="dim kt-zeile">{html.escape(erkl)}</div>'
                if erkl else "")
-            + (f'<div class="dim kt-zeile">cost: '
-               f'{html.escape(anz["kosten"])}</div>' if anz["kosten"] else "")
+            + (f'<div class="dim kt-zeile">'
+               f'{t("konfiguration.kette.zeile_kosten", kosten=html.escape(anz["kosten"]))}</div>'
+               if anz["kosten"] else "")
             + auto
             + '</div>')
     pfeil = '<div class="kt-pfeil dim">→</div>'
-    return ('<h3>Recognition chain</h3>'
-            '<p class="sub">Which recognizers run, and in which order. The '
-            'condition "nur_wenn_gesicht_leer" means: the step only runs '
-            'when the face path could NOT confirm everyone on the '
-            'walk-through — decided on the whole pass, never on a single '
-            'event. Changing the order itself is a later stage; today the '
-            'chain always starts with the face path.</p>'
+    return (f'<h3>{t("konfiguration.kette.titel")}</h3>'
+            f'<p class="sub">{t("konfiguration.kette.satz")}</p>'
             '<div class="kt-kette">' + pfeil.join(karten) + '</div>')
 
 
@@ -104,10 +109,11 @@ def kette_seite(cfg, kette, lage, whitelist, auto_hinweis):
     Seite; config_schreiben schreibt nur gelieferte Schluessel)."""
     return (kette_sektion(cfg, kette, lage, whitelist, auto_hinweis)
             + '<p><button class="gtb on" onclick="konfigSpeichern()">'
-              'Save + restart</button> '
+            + t("konfiguration.knopf_speichern") + '</button> '
               '<span id="cfg-status" style="color:var(--dim)"></span></p>'
-              '<p class="sub">Changes are audited (config_audit.jsonl); after '
-              'saving, the service restarts cleanly. All other parameters '
+              # Stufe-0-Grenze: der Satzrest mit <a>-Link bleibt literal.
+              f'<p class="sub">{t("konfiguration.kette_blatt.hinweis")} '
+              'All other parameters '
               'live under <a href="/konfiguration">Advanced</a>.</p>')
 
 
@@ -133,8 +139,10 @@ def render(cfg, whitelist, auto_hinweis, kette=None, kette_lage=None):
             feld = f'<select id="cfg-{key}">{opts}</select>'
         elif typ is bool:
             feld = (f'<select id="cfg-{key}">'
-                    f'<option value="true"{" selected" if wert else ""}>on</option>'
-                    f'<option value="false"{"" if wert else " selected"}>off</option></select>')
+                    f'<option value="true"{" selected" if wert else ""}>'
+                    f'{t("konfiguration.feld.option_an")}</option>'
+                    f'<option value="false"{"" if wert else " selected"}>'
+                    f'{t("konfiguration.feld.option_aus")}</option></select>')
         else:
             feld = (f'<input id="cfg-{key}" value="{wert}" size="7" '
                     f'>')
@@ -153,21 +161,24 @@ def render(cfg, whitelist, auto_hinweis, kette=None, kette_lage=None):
     kette_html = (kette_sektion(cfg, kette, kette_lage, whitelist,
                                 auto_hinweis)
                   if kette is not None else "")
-    inhalt = ("<h2>Advanced settings</h2>"
-              "<p>Changes are audited (config_audit.jsonl); after saving, the service "
-              "restarts cleanly (it waits for a running analysis to finish). "
+    # Stufe-0-Grenze: die Satzreste mit <a>-Links (Kopf-Absatz, Fussnote
+    # zur Cameras-Seite) bleiben literal (t_html-Weg spaeterer Stufen).
+    inhalt = (f"<h2>{t('konfiguration.titel')}</h2>"
+              f"<p>{t('konfiguration.kopf.satz1')} "
               'Alert channels (Telegram/Pushover/MQTT) and their secrets are on the '
               '<a href="/benachrichtigungen">Notifications</a> page; which '
               'recognizers run is on the <a href="/kette">Recognition '
               'chain</a> page.</p>'
               + kette_html
-              + '<h3>All parameters</h3>'
-              '<div class="tabelle-wrap"><table><tr><th>Parameter</th><th>Value</th><th>Meaning</th></tr>'
+              + f'<h3>{t("konfiguration.abschnitt_alle")}</h3>'
+              f'<div class="tabelle-wrap"><table><tr><th>{t("konfiguration.tabelle.kopf_parameter")}</th>'
+              f'<th>{t("konfiguration.tabelle.kopf_wert")}</th>'
+              f'<th>{t("konfiguration.tabelle.kopf_bedeutung")}</th></tr>'
               + "".join(zeilen) + "</table></div>"
-              '<p><button class="gtb on" onclick="konfigSpeichern()">Save + restart</button> '
-              '<a href="/setup" class="gtb" style="text-decoration:none">Re-run setup wizard</a> '
+              f'<p><button class="gtb on" onclick="konfigSpeichern()">{t("konfiguration.knopf_speichern")}</button> '
+              f'<a href="/setup" class="gtb" style="text-decoration:none">{t("konfiguration.knopf_setup")}</a> '
               '<span id="cfg-status" style="color:var(--dim)"></span></p>'
-              "<h3>Read-only (console/yaml)</h3>"
+              f"<h3>{t('konfiguration.abschnitt_readonly')}</h3>"
               '<div class="tabelle-wrap"><table>' + "".join(nur_lesen) + "</table></div>"
               '<p class="sub">Camera on/off and per-camera zone conditions are now edited '
               'on the <a href="/kameras">Cameras</a> page.</p>')

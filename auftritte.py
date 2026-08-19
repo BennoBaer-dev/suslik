@@ -11,7 +11,10 @@ grauer Uhrzeit-Kacheln; Rest als "+N events without a face"); unbestaetigte Crop
 Kopfzeile = Durchgangs-Spanne, Bestaetigungs-Spanne separat; best-match-Kamera aus dem
 BEST-Event (nicht der letzten Bestaetigung); Unbekannt-Angabe zaehlt ehrlich EVENTS.
 v1-Abweichung von der Spec (dokumentiert): U-Nummern-Anreicherung folgt mit dem
-Label-Schritt (naechste Etappe)."""
+Label-Schritt (naechste Etappe).
+Sprach-Stufe 2 Tranche A (konzept_sprache.md): sichtbare Texte kommen aus
+core/sprache.t()/t_n() gegen die en-Referenz — BYTE-TREU (Harnisch
+tools/harnisch_sprache.py beweist identisches Render gegen den git-Basis-Stand)."""
 import datetime
 import html
 import json
@@ -19,6 +22,7 @@ import os
 import urllib.parse
 
 from core import unbekanntpool
+from core.sprache import t, t_n
 
 import szenarien as _szen
 from core import areas as _areas_mod        # Areas Stufe 1: Sicht-Aufloesung (30.07.)
@@ -131,8 +135,7 @@ def _unbek_zeile(s, eid2uid):
     if not s.get("unbek"):
         return ""
     if s.get("pers"):
-        n = s["unbek"]
-        return f'+{n} not matched (usually the same people)'
+        return t("auftritte.unbek.zaehlung", n=s["unbek"])
     uids, ohne = [], 0
     for e in s.get("unbek_eids") or []:
         u = eid2uid.get(str(e or "").replace("/", "_")) or eid2uid.get(str(e or ""))
@@ -142,10 +145,12 @@ def _unbek_zeile(s, eid2uid):
         else:
             ohne += 1
     teile = [f'<a href="/unbekannte#uk-{urllib.parse.quote(str(u))}">'
-             f'Unknown {html.escape(str(u).lstrip("U"))}</a>' for u in uids]
+             + t("auftritte.unbek.name",
+                 nummer=html.escape(str(u).lstrip("U")))
+             + '</a>' for u in uids]
     if ohne or not teile:
         n = ohne if teile else s["unbek"]
-        teile.append(f'{n} {"event" if n == 1 else "events"} with an unmatched face')
+        teile.append(t_n("auftritte.unbek.ohne_treffer", n))
     return " · ".join(teile)
 
 
@@ -171,10 +176,11 @@ def render_unbekannt(cfg, log_pfad, personen_bekannt, params):
         tag_dt = None
     zurueck_url = f"/heute?tag={tag_par}" if tag_par else "/heute"
     zurueck = (f'<div class="tagnav"><a class="gtb" href="{zurueck_url}">'
-               '&#8592; Today</a></div>')
+               f'{t("auftritte.nav.zurueck_heute")}</a></div>')
     if tag_dt is None or p_start is None:
-        return "Unknown", zurueck + webui.leer(
-            "This link is missing its walk-through.",
+        return t("auftritte.unbek.titel"), zurueck + webui.leer(
+            t("auftritte.unbek.leer_link"),
+            # Stufe-2-Grenze (§8.1): <a>-Link mitten im Hinweis-Satz — literal.
             'Open the visitor from a day card on Today, or see '
             '<a href="/unbekannte">Unknown</a> for the full profiles.')
     # Den EINEN Durchgang des Tages finden (Toleranz: die Karte gibt den
@@ -189,9 +195,9 @@ def render_unbekannt(cfg, log_pfad, personen_bekannt, params):
     s = min((x for x in szen), key=lambda x: abs(x["start"] - p_start),
             default=None)
     if s is None or abs(s["start"] - p_start) > 120:
-        return "Unknown", zurueck + webui.leer(
-            "This walk-through is no longer in the day view.",
-            "The day may have been re-grouped — open it again from Today.")
+        return t("auftritte.unbek.titel"), zurueck + webui.leer(
+            t("auftritte.unbek.leer_weg"),
+            t("auftritte.unbek.leer_weg_hinweis"))
     evs = s.get("evs") or []
     pass_eids = {str(e.get("eid")) for e in evs if e.get("eid")}
     # ALLE unbekannten Gesichter DIESES Laufs, quer ueber die Gruppchen.
@@ -209,9 +215,9 @@ def render_unbekannt(cfg, log_pfad, personen_bekannt, params):
     nummer = html.escape(uid.lstrip("U"))
     weitere = max(0, len(uids) - 1)
     if not member:
-        return f"Unknown {nummer}", zurueck + webui.leer(
-            "No collected faces for this walk-through.",
-            "The pool may have been cleaned up in the meantime.")
+        return t("auftritte.unbek.name", nummer=nummer), zurueck + webui.leer(
+            t("auftritte.unbek.leer_pool"),
+            t("auftritte.unbek.leer_pool_hinweis"))
     # Lauf-Karte im Personen-Layout.
     folge, gesehen = [], set()
     for e in evs:
@@ -225,7 +231,7 @@ def render_unbekannt(cfg, log_pfad, personen_bekannt, params):
             f'alt=""></a>')
     video = (f' <a class="gtb pass-knopf" href="/video/'
              f'{urllib.parse.quote(str(evs[0].get("eid")))}">'
-             f'<span class="pk-icon">&#9654;</span>video</a>'
+             f'<span class="pk-icon">&#9654;</span>{t("auftritte.knopf.video")}</a>'
              if evs and evs[0].get("eid") else "")
     thumbs = "".join(
         f'<a class="pass-thumb" href="/event/'
@@ -235,10 +241,11 @@ def render_unbekannt(cfg, log_pfad, personen_bekannt, params):
         for m in sorted(member))
     lauf_karte = (
         f'<div class="card pass-card"><div class="pass-kopf">'
+        # Stufe-2-Grenze (B19): Datumsformat je Sprache = eigener Zug.
         f'<b>{tag_dt.strftime("%A, %d %B %Y")}</b>'
         f' · {_hhmm(s["start"])} &ndash; {_hhmm(s["ende"])}'
-        f' · {len(member)} face{"s" if len(member) != 1 else ""}'
-        f' · {len(s["kams"])} camera{"s" if len(s["kams"]) != 1 else ""}</div>'
+        f' · {t_n("auftritte.karte.faces", len(member))}'
+        f' · {t_n("auftritte.karte.kameras", len(s["kams"]))}</div>'
         f'<div class="pass-body">{held}<div class="pass-info">'
         f'<div class="pass-folge">{" &rarr; ".join(folge)}</div>'
         f'<div class="pass-links">{video}</div></div></div>'
@@ -251,27 +258,34 @@ def render_unbekannt(cfg, log_pfad, personen_bekannt, params):
         for m in sorted(member))
     kopf = (
         zurueck
-        + f'<h2>Unknown {nummer}'
-        + (f' <span class="dim" style="font-size:15px">+{weitere} more in '
-           'this walk</span>' if weitere else "") + "</h2>"
-        f'<div class="dim" style="margin:0 0 10px">one walk-through · '
+        + f'<h2>{t("auftritte.unbek.name", nummer=nummer)}'
+        + (f' <span class="dim" style="font-size:15px">'
+           f'{t("auftritte.unbek.mehr_im_lauf", n=weitere)}</span>'
+           if weitere else "") + "</h2>"
+        # Stufe-2-Grenze (B19): %d.%m.-Datum literal. Stufe-2-Grenze (§8.1):
+        # der full-profile-Halbsatz traegt den <a>-Link im Satz — literal.
+        f'<div class="dim" style="margin:0 0 10px">'
+        f'{t("auftritte.unbek.ein_lauf")} · '
         f'{tag_dt.strftime("%d.%m.")} {_hhmm(s["start"])} · full profile on '
         f'<a href="/unbekannte#uk-{urllib.parse.quote(uid)}">Unknown</a></div>'
-        '<div class="card"><b>Who is this?</b>'
-        '<div class="dim" style="margin:4px 0 8px">These are the faces from '
-        'THIS walk-through. Tick the ones that really belong to the person '
-        '&mdash; junk stays behind. Give them a name (new or existing) and '
-        'they are learned; doing nothing keeps them unknown.</div>'
+        f'<div class="card"><b>{t("auftritte.zuweisen.titel")}</b>'
+        f'<div class="dim" style="margin:4px 0 8px">'
+        f'{t("auftritte.zuweisen.satz")}</div>'
         f'<div class="ub-wahl">{wahl}</div>'
         '<div class="bn-leiste">'
-        '<button type="button" class="gtb" onclick="ubAlle(true)">Select all</button>'
-        '<button type="button" class="gtb" onclick="ubAlle(false)">None</button>'
+        f'<button type="button" class="gtb" onclick="ubAlle(true)">'
+        f'{t("auftritte.zuweisen.knopf_alle")}</button>'
+        f'<button type="button" class="gtb" onclick="ubAlle(false)">'
+        f'{t("auftritte.zuweisen.knopf_keine")}</button>'
         '<input list="ub-personen" id="ub-name" '
-        'placeholder="person (new or existing)">'
+        f'placeholder="{t("auftritte.zuweisen.attr_person")}">'
         f'<datalist id="ub-personen">{opts}</datalist>'
         '<button type="button" class="gtb on" onclick="ubZuweisen(this)">'
-        'Add selected faces</button>'
+        f'{t("auftritte.zuweisen.knopf_zuweisen")}</button>'
         '<span class="dim" id="ub-status"></span></div></div>')
+    # Kurze escape-freie JS-Texte serverseitig via json.dumps (\u00a78.4-konform);
+    # ensure_ascii=False, weil das Original ein ECHTES \u2026 ausliefert
+    # (\u2026 ohne Doppel-Backslash war ein Python-Escape, kein JS-Escape).
     js = ('<script>'
           'function ubAlle(an){document.querySelectorAll("input[name=ub-sel]")'
           '.forEach(function(c){c.checked=an;});}'
@@ -280,18 +294,26 @@ def render_unbekannt(cfg, log_pfad, personen_bekannt, params):
           '.forEach(function(c){ids.push(c.value);});'
           'var person=(document.getElementById("ub-name").value||"").trim();'
           'var st=document.getElementById("ub-status");'
-          'if(!ids.length){st.textContent="tick at least one face";return;}'
-          'if(!person){st.textContent="enter a person name";return;}'
-          'b.disabled=true;st.textContent="learning\u2026";'
+          'if(!ids.length){st.textContent='
+          + json.dumps(t("auftritte.zuweisen.js_keine"), ensure_ascii=False)
+          + ';return;}'
+          'if(!person){st.textContent='
+          + json.dumps(t("auftritte.zuweisen.js_name"), ensure_ascii=False)
+          + ';return;}'
+          'b.disabled=true;st.textContent='
+          + json.dumps(t("auftritte.zuweisen.js_lernt"), ensure_ascii=False)
+          + ';'
           'fetch("/anlernen_benennen",{method:"POST",'
           'body:JSON.stringify({ids:ids.join(","),person:person})})'
           '.then(function(r){return r.json()}).then(function(d){'
           'st.textContent=d.msg;'
           f'if(d.ok)setTimeout(function(){{location="{zurueck_url}"}},1400);'
           'else b.disabled=false;})'
-          '.catch(function(){st.textContent="error";b.disabled=false;});}'
+          '.catch(function(){st.textContent='
+          + json.dumps(t("auftritte.zuweisen.js_fehler"), ensure_ascii=False)
+          + ';b.disabled=false;});}'
           '</script>')
-    return (f"Unknown {nummer} — walk-through",
+    return (t("auftritte.unbek.titel_lauf", nummer=nummer),
             kopf + lauf_karte + js)
 
 
@@ -304,9 +326,11 @@ def render(cfg, log_pfad, personen_bekannt, params):
     tag_dt = heute_dt
     if tag_par:
         try:                                   # dasselbe robuste Muster wie /heute (9999-12-31-Falle)
-            t = datetime.datetime.strptime(tag_par, "%Y-%m-%d")
-            heute0, tag_ende = t.timestamp(), (t + datetime.timedelta(days=1)).timestamp()
-            tag_dt = t
+            # (Sprach-Stufe 2: lokale Variable von `t` auf `tp` umbenannt —
+            # sie beschattete sonst core.sprache.t in der ganzen Funktion.)
+            tp = datetime.datetime.strptime(tag_par, "%Y-%m-%d")
+            heute0, tag_ende = tp.timestamp(), (tp + datetime.timedelta(days=1)).timestamp()
+            tag_dt = tp
         except (ValueError, OverflowError, OSError):
             tag_par = ""
     if not tag_par:
@@ -322,8 +346,9 @@ def render(cfg, log_pfad, personen_bekannt, params):
     bekannt = person and (person in personen_bekannt or
                           any(person in (r.get("bestaetigt") or []) for r in rows))
     if not bekannt:
-        inhalt = webui.leer("Unknown person.", "Pick a person on the Today page.")
-        return "Appearances", f'<div class="tagnav"><a class="gtb" href="/heute">&#8592; Today</a></div>' + inhalt
+        inhalt = webui.leer(t("auftritte.leer_person"),
+                            t("auftritte.leer_person_hinweis"))
+        return t("auftritte.titel"), f'<div class="tagnav"><a class="gtb" href="/heute">{t("auftritte.nav.zurueck_heute")}</a></div>' + inhalt
 
     by_h = {}
     for r in rows:
@@ -350,19 +375,20 @@ def render(cfg, log_pfad, personen_bekannt, params):
     pq = urllib.parse.quote(person)
     fest = {"person": person} if ist_heute else {"person": person, "tag": tag_str}
     kopf = (f'<div class="tagnav">'
-            f'<a class="gtb" href="{heute_link}" title="back to the day">&#8592; Today</a>'
-            f'<a class="gtb" href="/auftritte?person={pq}&amp;tag={vortag}{aq}" title="previous day">&#8592;</a>'
+            f'<a class="gtb" href="{heute_link}" title="{t("auftritte.nav.attr_tag")}">{t("auftritte.nav.zurueck_heute")}</a>'
+            f'<a class="gtb" href="/auftritte?person={pq}&amp;tag={vortag}{aq}" title="{t("auftritte.nav.attr_vortag")}">&#8592;</a>'
+            # Stufe-2-Grenze (B19): Datumsformat je Sprache = eigener Zug.
             f'<div class="tagnav-mitte"><div class="tagnav-t">{html.escape(person)} — '
             f'{tag_dt.strftime("%A, %d %B %Y")}</div>'
-            f'<div class="tagnav-u">{len(paesse)} {"pass" if len(paesse) == 1 else "passes"}</div></div>'
-            + (f'<span class="gtb" aria-disabled="true" title="no future days">&#8594;</span>' if ist_heute else
-               f'<a class="gtb" href="/auftritte?person={pq}&amp;tag={folgetag}{aq}" title="next day">&#8594;</a>')
+            f'<div class="tagnav-u">{t_n("auftritte.kopf.passzahl", len(paesse))}</div></div>'
+            + (f'<span class="gtb" aria-disabled="true" title="{t("auftritte.nav.attr_kein_morgen")}">&#8594;</span>' if ist_heute else
+               f'<a class="gtb" href="/auftritte?person={pq}&amp;tag={folgetag}{aq}" title="{t("auftritte.nav.attr_folgetag")}">&#8594;</a>')
             + '</div>' + _r_areas.chips(areas_cfg, ar_aktiv, "/auftritte", fest))
 
     if not paesse:
-        return (f"{person} — Appearances",
-                kopf + webui.leer(f"No confirmed passes of {person} on this day.",
-                                  "Use the day arrows to look around."))
+        return (t("auftritte.titel_person", person=person),
+                kopf + webui.leer(t("auftritte.leer_passe", person=person),
+                                  t("auftritte.leer_passe_hinweis")))
 
     e2u = _eid2uid(cfg)              # Haeppchen 2: U-Nummern in der Unbekannt-Angabe
     ref_eids = _ref_eids(cfg, person)   # .227: Referenz-Marker je Thumb
@@ -385,7 +411,7 @@ def render(cfg, log_pfad, personen_bekannt, params):
         best_url = _crop_url(cfg, d.get("eid"), person)
         bild = (f'<a class="pass-bild" href="/event/{urllib.parse.quote(str(d["eid"]))}">'
                 f'<img src="{best_url}" alt=""></a>' if best_url and d.get("eid") else
-                '<div class="pass-bild pass-bild-leer">no image</div>')
+                f'<div class="pass-bild pass-bild-leer">{t("auftritte.karte.kein_bild")}</div>')
         # Thumbnails = NUR Events mit Gesichts-Crop der Person (User 27.07.: Entwicklung
         # des Gesichts ueber den Durchgang zeigen; Uhrzeit-Kacheln ohne Gesicht raus).
         # Unbestaetigte Treffer (Crop da, Event nicht bestaetigt) gedimmt + benannt.
@@ -402,20 +428,22 @@ def render(cfg, log_pfad, personen_bekannt, params):
             ist_ref = e.get("eid") in ref_eids
             if ist_ref:
                 kl += " pass-thumb-ref"
-            tt = f'{html.escape(e["cam"])} {_hhmm(e["t"])}' + (" — not confirmed here" if schwach else "") \
-                + (" — in the references" if ist_ref else "")
+            # Konditionale Annotations-Anhaenge (§8.11): eigene Schluessel.
+            tt = f'{html.escape(e["cam"])} {_hhmm(e["t"])}' \
+                + (t("auftritte.thumb.zusatz_unbestaetigt") if schwach else "") \
+                + (t("auftritte.thumb.zusatz_referenz") if ist_ref else "")
             thumbs.append(f'<a class="{kl}" title="{tt}" '
                           f'href="/event/{urllib.parse.quote(str(e.get("eid") or ""))}">'
                           f'<img src="{tu}" alt=""><small>{_hhmm(e["t"])}</small></a>')
         if ohne_gesicht:
-            thumbs.append(f'<span class="pass-thumbs-rest">+{ohne_gesicht} '
-                          f'{"event" if ohne_gesicht == 1 else "events"} without a face</span>')
+            thumbs.append(f'<span class="pass-thumbs-rest">'
+                          f'{t_n("auftritte.thumb.ohne_gesicht", ohne_gesicht)}</span>')
         # .229 (User: "so dass der User weiss, die sind schon uebernommen"):
         # die Bedeutung des gruenen Rands steht AN der Reihe, nicht nur im
         # Tooltip — aber nur, wenn die Reihe markierte Bilder traegt.
         if any(e.get("eid") in ref_eids for e in evs):
-            thumbs.append('<span class="pass-thumbs-rest">green border = '
-                          'already in the references</span>')
+            thumbs.append(f'<span class="pass-thumbs-rest">'
+                          f'{t("auftritte.thumb.hinweis_referenz")}</span>')
         # best match: Kamera/Zeit des BEST-Events (d["eid"]), nicht der letzten
         # Bestaetigung (Review .50 — das waren zwei verschiedene Events).
         be = next((e for e in evs if e.get("eid") and e.get("eid") == d.get("eid")), None)
@@ -423,17 +451,19 @@ def render(cfg, log_pfad, personen_bekannt, params):
         # "—" statt "0.00": eine per Anlern-Korrektur bestaetigte Person hat bewusst
         # KEINEN ours-Score (Widerleger 11.08.) — 0.00 saehe nach schlechtester
         # Messung aus, dabei gab es schlicht keine Live-Messung.
-        bm = f'{d["best"]:.2f}' if d["best"] else "—"
-        bestz = (f'confirmed at {_hhmm(d["erst_t"])}' if _hhmm(d["erst_t"]) == _hhmm(d["letzt_t"]) else
-                 f'confirmed {_hhmm(d["erst_t"])} &ndash; {_hhmm(d["letzt_t"])}')
-        live = (' <span class="badge live"><span class="ldot"></span>in progress</span>'
+        bm = f'{d["best"]:.2f}' if d["best"] else "—"   # §8.8: vorformatiert, Schluessel kennt nur {wert}
+        bestz = (t("auftritte.karte.best_punkt", zeit=_hhmm(d["erst_t"]))
+                 if _hhmm(d["erst_t"]) == _hhmm(d["letzt_t"]) else
+                 t("auftritte.karte.best_spanne", von=_hhmm(d["erst_t"]),
+                   bis=_hhmm(d["letzt_t"])))
+        live = (f' <span class="badge live"><span class="ldot"></span>{t("auftritte.karte.badge_laeuft")}</span>'
                 if s.get("laeuft") else '')
         # .233 (User: "bekommst du die Buttons schicker hin? auch mit kleinem
         # Icon?"): einheitliche pass-knopf-Optik + Emoji-Ikonografie wie auf
         # den Kachel-Seiten (Video behaelt sein Play, der Check bekommt die
         # Lupe; das Haekchen nach der Uebernahme setzt das JS).
         video = (f' <a class="gtb pass-knopf" href="/video/{urllib.parse.quote(str(d["eid"]))}">'
-                 f'<span class="pk-icon">&#9654;</span>video</a>'
+                 f'<span class="pk-icon">&#9654;</span>{t("auftritte.knopf.video")}</a>'
                  if d.get("eid") else '')
         # .225 Lern-Bruecke (User-Ablauf abgenommen): EIN Knopf je Pass — das
         # System siebt selbst (anlernen.lernbruecke, nur 'empfohlen'), die
@@ -443,20 +473,24 @@ def render(cfg, log_pfad, personen_bekannt, params):
         # uebernommen werden.
         _eids = html.escape(json.dumps(
             [str(e.get("eid")) for e in evs if e.get("eid")]), quote=True)
+        # Stufe-2-Grenze (§8.17 + §8.4): Toggle-Label — dieselbe Beschriftung
+        # setzt das Inline-JS (lbStart, \u-escaped Surrogate) zur Laufzeit neu;
+        # beide Fassungen muessen aus EINER Quelle kommen, sonst kippt der
+        # Knopf nach Gebrauch zurueck ins Englische. Bleibt samt JS literal.
         lern = (f' <button class="gtb pass-knopf" data-person="{html.escape(person, quote=True)}" '
                 f'data-eids="{_eids}" onclick="lernBruecke(this)">'
                 f'<span class="pk-icon">&#128269;</span>'
                 f'Check this pass for good pictures &#8230;</button>'
                 '<span class="dim lb-status" style="margin-left:8px"></span>')
         bloecke.append(
-            f'<div class="card pass-card"><div class="pass-kopf"><b>Pass {i}</b>'
+            f'<div class="card pass-card"><div class="pass-kopf"><b>{t("auftritte.karte.pass_nr", n=i)}</b>'
             f' · {_hhmm(s["start"])} &ndash; {_hhmm(s["ende"])}'
-            f' · {s["n"]} {"event" if s["n"] == 1 else "events"}'
-            f' · {len(s["kams"])} {"camera" if len(s["kams"]) == 1 else "cameras"}{live}</div>'
+            f' · {t_n("auftritte.karte.events", s["n"])}'
+            f' · {t_n("auftritte.karte.kameras", len(s["kams"]))}{live}</div>'
             f'<div class="pass-body">{bild}<div class="pass-info">'
             f'<div class="pass-folge">{" &rarr; ".join(folge)}</div>'
-            f'<div class="dim">{bestz} · best match {bm}{best_ort}</div>'
-            + (f'<div class="dim">also in this pass: {dabei}</div>' if dabei else '')
+            f'<div class="dim">{bestz} · {t("auftritte.karte.best_match", wert=bm)}{best_ort}</div>'
+            + (f'<div class="dim">{t("auftritte.karte.auch_dabei", namen=dabei)}</div>' if dabei else '')
             + (f'<div class="dim">{_unbek_zeile(s, e2u)}</div>'
                if s.get("unbek") else '')
             + f'<div class="pass-links">{video}{lern}</div></div></div>'
@@ -467,6 +501,9 @@ def render(cfg, log_pfad, personen_bekannt, params):
     # abwaehlbar, dann OK oder Cancel (KEIN window.open: Browser-Popup-Blocker
     # koennen eigenes Seiten-HTML nicht blocken, User-Fallen-Sorge). Nach
     # der Uebernahme bleibt Undo.
+    # Stufe-2-Grenze (§8.4): Inline-Script mit \u-Escapes (Surrogate-Emoji,
+    # \\"-Escapes, Laufzeit-Konkatenation) — JS-Texte bleiben literal, bis
+    # window.T diese Seite versorgt (beide Toggle-Fassungen, §8.17).
     js = ('<script>'
           'function lbStart(b){b.disabled=false;'
           'b.innerHTML="<span class=\\"pk-icon\\">\\uD83D\\uDD0D</span>'
@@ -563,7 +600,8 @@ def render(cfg, log_pfad, personen_bekannt, params):
           'lbOverlay(b,st,d);})'
           '.catch(function(e){st.textContent="error: "+e;b.disabled=false;});}'
           '</script>')
-    return f"{person} — Appearances", kopf + "".join(bloecke) + js
+    return (t("auftritte.titel_person", person=person),
+            kopf + "".join(bloecke) + js)
 
 
 def render_pass(cfg, log_pfad, personen_bekannt, eid):
@@ -578,8 +616,9 @@ def render_pass(cfg, log_pfad, personen_bekannt, eid):
         if r.get("eid") == eid:
             zeile = r                                     # letzte Zeile gewinnt
     if not zeile:
-        return "Pass", ('<div class="tagnav"><a class="gtb" href="/heute">&#8592; Today</a></div>'
-                        + webui.leer("Event not found.", "It may have aged out of the log."))
+        return t("auftritte.pass.titel"), (f'<div class="tagnav"><a class="gtb" href="/heute">{t("auftritte.nav.zurueck_heute")}</a></div>'
+                        + webui.leer(t("auftritte.pass.leer_event"),
+                                     t("auftritte.pass.leer_event_hinweis")))
     t0 = zeile.get("start") or zeile.get("ts") or 0
     tag_dt = datetime.datetime.fromtimestamp(t0).replace(hour=0, minute=0, second=0, microsecond=0)
     heute0 = tag_dt.timestamp()
@@ -597,9 +636,9 @@ def render_pass(cfg, log_pfad, personen_bekannt, eid):
     idx = next((i for i, s in enumerate(szen)
                 if any(e.get("eid") == eid for e in s.get("evs") or [])), None)
     if idx is None:
-        return "Pass", ('<div class="tagnav"><a class="gtb" href="/heute">&#8592; Today</a></div>'
-                        + webui.leer("This event is not part of a grouped pass.",
-                                     "Grouping needs the day view context."))
+        return t("auftritte.pass.titel"), (f'<div class="tagnav"><a class="gtb" href="/heute">{t("auftritte.nav.zurueck_heute")}</a></div>'
+                        + webui.leer(t("auftritte.pass.leer_gruppe"),
+                                     t("auftritte.pass.leer_gruppe_hinweis")))
     s = szen[idx]
     evs = s.get("evs") or []
     e2u = _eid2uid(cfg)
@@ -612,14 +651,16 @@ def render_pass(cfg, log_pfad, personen_bekannt, eid):
 
     heute_link = "/heute" if ist_heute else f"/heute?tag={tag_str}"
     kopf = (f'<div class="tagnav">'
-            f'<a class="gtb" href="{heute_link}" title="back to the day">&#8592; Day</a>'
-            + (_pass_link(szen[idx - 1], "&#8592;", "previous pass of the day") if idx > 0
+            f'<a class="gtb" href="{heute_link}" title="{t("auftritte.nav.attr_tag")}">{t("auftritte.nav.zurueck_tag")}</a>'
+            + (_pass_link(szen[idx - 1], "&#8592;", t("auftritte.pass.attr_vor")) if idx > 0
                else '<span class="gtb" aria-disabled="true">&#8592;</span>')
-            + f'<div class="tagnav-mitte"><div class="tagnav-t">Pass {_hhmm(s["start"])}'
-              f' &ndash; {_hhmm(s["ende"])} — {tag_dt.strftime("%A, %d %B %Y")}</div>'
-              f'<div class="tagnav-u">{s["n"]} {"event" if s["n"] == 1 else "events"} · '
-              f'{len(s["kams"])} {"camera" if len(s["kams"]) == 1 else "cameras"}</div></div>'
-            + (_pass_link(szen[idx + 1], "&#8594;", "next pass of the day") if idx + 1 < len(szen)
+            # Stufe-2-Grenze (B19): Datumsformat je Sprache = eigener Zug.
+            + f'<div class="tagnav-mitte"><div class="tagnav-t">'
+              f'{t("auftritte.pass.kopf", von=_hhmm(s["start"]), bis=_hhmm(s["ende"]))}'
+              f' — {tag_dt.strftime("%A, %d %B %Y")}</div>'
+              f'<div class="tagnav-u">{t_n("auftritte.karte.events", s["n"])} · '
+              f'{t_n("auftritte.karte.kameras", len(s["kams"]))}</div></div>'
+            + (_pass_link(szen[idx + 1], "&#8594;", t("auftritte.pass.attr_nach")) if idx + 1 < len(szen)
                else '<span class="gtb" aria-disabled="true">&#8594;</span>')
             + '</div>')
 
@@ -629,19 +670,25 @@ def render_pass(cfg, log_pfad, personen_bekannt, eid):
     for p, d in sorted(s["pers"].items(), key=lambda x: x[1]["erst_t"]):
         be = next((e for e in evs if e.get("eid") and e.get("eid") == d.get("eid")), None)
         ort = f' ({html.escape(be["cam"])}, {_hhmm(be["t"])})' if be else ''
-        spanne = (f'at {_hhmm(d["erst_t"])}' if _hhmm(d["erst_t"]) == _hhmm(d["letzt_t"])
-                  else f'{_hhmm(d["erst_t"])} &ndash; {_hhmm(d["letzt_t"])}')
-        bm = f'{d["best"]:.2f}' if d["best"] else "—"   # s. Pass-Karte: Korrektur-Personen ohne Live-Score
+        # §8.3-Splice ("confirmed " + Halbsatz) aufgeloest zu den beiden
+        # Ganz-Satz-Schluesseln der Pass-Karte (B9) — byte-gleich, weil
+        # "confirmed at {zeit}" / "confirmed {von} &ndash; {bis}" exakt die
+        # zusammengesetzten Formen waren.
+        bestz = (t("auftritte.karte.best_punkt", zeit=_hhmm(d["erst_t"]))
+                 if _hhmm(d["erst_t"]) == _hhmm(d["letzt_t"])
+                 else t("auftritte.karte.best_spanne", von=_hhmm(d["erst_t"]),
+                        bis=_hhmm(d["letzt_t"])))
+        bm = f'{d["best"]:.2f}' if d["best"] else "—"   # s. Pass-Karte: Korrektur-Personen ohne Live-Score (§8.8: vorformatiert)
         pzeilen.append(
             f'<div class="evrow"><span class="lab">'
             f'<a href="/auftritte?person={urllib.parse.quote(p)}&amp;tag={tag_str}">{html.escape(p)}</a></span>'
-            f'<span>confirmed {spanne} · best match {bm}{ort}</span></div>')
+            f'<span>{bestz} · {t("auftritte.karte.best_match", wert=bm)}{ort}</span></div>')
     if s.get("unbek"):
-        pzeilen.append(f'<div class="evrow"><span class="lab">Unmatched</span>'
+        pzeilen.append(f'<div class="evrow"><span class="lab">{t("auftritte.pass.label_unbek")}</span>'
                        f'<span>{_unbek_zeile(s, e2u)}</span></div>')
     if s.get("gt_fremd"):
-        pzeilen.append('<div class="evrow"><span class="lab">Label</span>'
-                       '<span class="badge-gtfremd">confirmed stranger</span></div>')
+        pzeilen.append(f'<div class="evrow"><span class="lab">{t("auftritte.pass.label_gt")}</span>'
+                       f'<span class="badge-gtfremd">{t("auftritte.pass.badge_fremd")}</span></div>')
 
     # Task #9 (Tokn59 Issue #9, 31.07.): Fehler-Events erklaeren sich auf der Pass-Seite
     # selbst. Seit .173 liest die Zeile die EINE Quelle webui.bausteine.fehler_grund
@@ -656,11 +703,11 @@ def render_pass(cfg, log_pfad, personen_bekannt, eid):
                           str(e.get("eid") or "").replace("/", "_"), "analyze.log")
         grund = _fg(lp)
         if not grund:                        # ehrlich unterscheiden (Widerleger-Recheck):
-            grund = ("analyze.log holds no reason line — open the event for the full log"
+            grund = (t("auftritte.pass.grund_ohne_zeile")
                      if os.path.isfile(lp) else
-                     "no analyze.log kept for this event — see the service log")
+                     t("auftritte.pass.grund_ohne_log"))
         pzeilen.append(
-            f'<div class="evrow"><span class="lab">Error</span>'
+            f'<div class="evrow"><span class="lab">{t("auftritte.pass.label_fehler")}</span>'
             f'<span>{html.escape(e["cam"])} {_hhmm(e["t"])}: '
             f'{html.escape(grund)}'
             f'</span></div>')
@@ -690,11 +737,12 @@ def render_pass(cfg, log_pfad, personen_bekannt, eid):
                       f'href="/event/{urllib.parse.quote(str(e.get("eid") or ""))}">{inner}'
                       f'<small>{_hhmm(e["t"])}</small></a>')
 
-    live = (' <span class="badge live"><span class="ldot"></span>in progress</span>'
+    live = (f' <span class="badge live"><span class="ldot"></span>{t("auftritte.karte.badge_laeuft")}</span>'
             if s.get("laeuft") else '')
     inhalt = (kopf
-              + f'<div class="card pass-card"><div class="pass-kopf"><b>Who</b>{live}</div>'
+              + f'<div class="card pass-card"><div class="pass-kopf"><b>{t("auftritte.pass.wer")}</b>{live}</div>'
               + "".join(pzeilen)
               + f'<div class="pass-folge" style="margin-top:8px">{" &rarr; ".join(folge)}</div>'
               + f'<div class="pass-thumbs">{"".join(thumbs)}</div></div>')
-    return f"Pass {_hhmm(s['start'])} — {tag_str}", inhalt
+    return (t("auftritte.pass.titel_zeit", zeit=_hhmm(s["start"]),
+              tag=tag_str), inhalt)

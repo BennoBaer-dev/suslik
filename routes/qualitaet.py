@@ -6,7 +6,12 @@ an einen anderen Ort und optisch besser') — alle drei Befund-Arten leben in
 der Galerie, Verwechslungs-Kacheln tragen das Gegenbild als Mini-Thumb.
 Der Handler laedt das QS-JSON (anlernen.QS_PATH) und reicht es mit data_dir
 herein; hier wird NUR gerendert (inkl. Existenz-Filter gegen tote Bild-Links,
-User-Befund 19.07.)."""
+User-Befund 19.07.).
+
+Sprach-Stufe 0 (konzept_sprache.md v2): sichtbare Texte aus core/sprache.t()
+— BYTE-TREU (Harnisch tools/harnisch_sprache.py). Grenzen dieser Stufe:
+Abschnitts-Kommentar in core/texte/en.py (Luecken-Block, filt-Zeile und
+Funde-Ergebnis-Satz bleiben literal — Splicing/Inline-Markup)."""
 import datetime
 import html
 import json  # noqa: F401 (Kontrakt-Naehe zum Bestand; Laden macht der Handler)
@@ -14,6 +19,7 @@ import os
 import urllib.parse
 
 import webui
+from core.sprache import t
 
 
 def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
@@ -49,22 +55,24 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
         doppel = [d for d in doppel if d["person"] == person]
     lauf_zeile = ""
     if lauf and lauf.get("fehler"):
-        lauf_zeile = ('<p style="color:var(--crit)">last check FAILED: '
-                      f'{html.escape(str(lauf["fehler"])[:180])} &mdash; '
-                      'start it again.</p>')
+        # §8.14 Slice-vor-Format: {fehler} kommt escaped+gesliced ([:180]).
+        lauf_zeile = ('<p style="color:var(--crit)">'
+                      + t("qualitaet.lauf.fehler",
+                          fehler=html.escape(str(lauf["fehler"])[:180]))
+                      + '</p>')
     elif lauf and aktiv:
         # .282 (User: 'Banner springt immer wieder zurueck'): die GALERIE
         # refresht sich NIE selbst — der 3-s-Reload warf Reiter-Wahl und
         # gesetzte Haken weg. Nur die Uebersicht (ohne Checkboxen) darf.
-        lauf_zeile = (f'<p>&#9203; checking picture {int(lauf.get("i", 0))} '
-                      f'of {int(lauf.get("n", 0))} &hellip; '
-                      + ('reload this page afterwards for the fresh '
-                         'result.</p>' if person else
-                         'the page refreshes on its own.</p>'))
+        lauf_zeile = ('<p>&#9203; '
+                      + t("qualitaet.lauf.checking", i=int(lauf.get("i", 0)),
+                          n=int(lauf.get("n", 0))) + ' '
+                      + (t("qualitaet.lauf.reload_person") if person else
+                         t("qualitaet.lauf.reload_auto"))
+                      + '</p>')
     elif lauf:
-        lauf_zeile = ('<p style="color:var(--warn)">the last check did not '
-                      'finish (service restart or it was stopped) &mdash; '
-                      'start it again.</p>')
+        lauf_zeile = ('<p style="color:var(--warn)">'
+                      + t("qualitaet.lauf.abgebrochen") + '</p>')
     pers_tab = ""
     _pers_map = qs.get("personen") or {}
     if person:
@@ -92,11 +100,13 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
             funde_p = (e.get("kritisch", 0) + e.get("redundant", 0)
                        + e.get("unter", 0) + e.get("unmessbar", 0))
             if funde_p:
-                status = (f'{funde_p} picture(s) worth a look'
-                          + (' &middot; <span style="color:var(--crit)">maybe '
-                             'mixed-up</span>' if e.get("kritisch") else ""))
+                status = (t("qualitaet.person.funde", n=funde_p)
+                          + (' &middot; <span style="color:var(--crit)">'
+                             + t("qualitaet.person.verwechselt") + '</span>'
+                             if e.get("kritisch") else ""))
             else:
-                status = '<span style="color:seagreen">&#10003; all good</span>'
+                status = ('<span style="color:seagreen">&#10003; '
+                          + t("qualitaet.person.alles_gut") + '</span>')
             easy_zeilen.append(
                 f'<a href="/qualitaet?person={urllib.parse.quote(p)}" '
                 'style="display:block;padding:9px 12px;margin:4px 0;'
@@ -111,13 +121,22 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
         # sprengen (Testbett-Daten haben keine personen-Map, dort war S9
         # blind fuer den Fall).
         pers_tab = ('<div style="overflow-x:auto">'
-                    '<table style="margin:4px 0 8px"><tr><th>person</th>'
-                    '<th>pictures</th><th>good</th><th>fair</th>'
-                    '<th>below bar</th><th>&larr; left</th><th>front</th>'
-                    '<th>right &rarr;</th><th>duplicates</th>'
-                    '<th>confusion</th></tr>' + zeilen + '</table></div>')
+                    '<table style="margin:4px 0 8px"><tr>'
+                    f'<th>{t("qualitaet.tabelle.kopf_person")}</th>'
+                    f'<th>{t("qualitaet.tabelle.kopf_bilder")}</th>'
+                    f'<th>{t("qualitaet.tabelle.kopf_gut")}</th>'
+                    f'<th>{t("qualitaet.tabelle.kopf_mittel")}</th>'
+                    f'<th>{t("qualitaet.tabelle.kopf_unter")}</th>'
+                    f'<th>{t("qualitaet.tabelle.kopf_links")}</th>'
+                    f'<th>{t("qualitaet.tabelle.kopf_front")}</th>'
+                    f'<th>{t("qualitaet.tabelle.kopf_rechts")}</th>'
+                    f'<th>{t("qualitaet.tabelle.kopf_doppel")}</th>'
+                    f'<th>{t("qualitaet.tabelle.kopf_verwechslung")}</th>'
+                    '</tr>' + zeilen + '</table></div>')
         # .273c (User: 'dass der User sieht: mir fehlen Bilder von der
         # Seite'): ehrliche Luecken-Hinweise je Person, kein Bandwurm.
+        # Stufe-0-Grenze (§8.3): "no X and no Y yet …" spliced Satzteile
+        # ueber " and no ".join — bleibt literal bis zum Ganz-Satz-Umbau.
         luecken = []
         for p, e in sorted(_pers_map.items()):
             if e.get("n", 0) < 3 or "links" not in e:
@@ -136,6 +155,7 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
                          + "<br>".join(luecken) + "</p>")
         pers_tab = (pers_easy + '<div class="nur-expert">' + pers_tab
                     + '</div>')
+    # Stufe-0-Grenze (§8.1): <b>-Name + <a>-Link mitten im Satz — literal.
     filt = (f' &middot; showing only <b>{html.escape(str(person))}</b> '
             f'(<a href="/qualitaet">show everyone</a>; '
             'checked against the whole library)'
@@ -148,11 +168,17 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
         _funde = len(krit) + len(ug) + len(doppel)
         _np = len(qs.get("personen") or {}) or "?"
         if _funde == 0:
+            # Die <b>-Grenze trennt zwei VOLLSTAENDIGE Saetze — B9-sicherer
+            # Split an der Markup-Grenze.
             ergebnis_satz = (
-                f'<p style="font-size:15px">&#9989; <b>All good.</b> Checked '
-                f'{qs.get("ref_count", "?")} pictures of {_np} people &mdash; '
-                'nothing needs your attention.</p>')
+                '<p style="font-size:15px">&#9989; <b>'
+                + t("qualitaet.ergebnis.alles_gut") + '</b> '
+                + t("qualitaet.ergebnis.alles_gut_satz",
+                    n=qs.get("ref_count", "?"), np=_np)
+                + '</p>')
         else:
+            # Stufe-0-Grenze (§8.3): der Funde-Satz joint <b>-Zaehler-
+            # Fragmente mit ", "/" and " — bleibt literal.
             teile = []
             if krit:
                 teile.append(f'<b>{len(krit)}</b> possibly mixed-up')
@@ -166,13 +192,14 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
                 f'&mdash; {" and ".join([", ".join(teile[:-1]), teile[-1]] if len(teile) > 1 else teile)} '
                 'picture(s) worth a look &mdash; nothing is deleted unless '
                 'you say so.</p>')
-    kopf = (f"<h2>Quality — reference library</h2>" + lauf_zeile
+    kopf = (f'<h2>{t("qualitaet.kopf.titel")}</h2>' + lauf_zeile
             + ergebnis_satz
-            + '<p class="dim">tap a person below to see all their '
-            'pictures with the weak ones marked.</p>'
+            + f'<p class="dim">{t("qualitaet.kopf.hinweis")}</p>'
             + pers_tab
-            + f'<p>As of: {stand} · {qs.get("ref_count", "?")} references{filt} '
-            f'<button class="gtb on" onclick="refPruefNeu(this)">Re-check now</button></p>')
+            + '<p>' + t("qualitaet.kopf.stand", stand=stand,
+                        n=qs.get("ref_count", "?")) + filt + ' '
+            f'<button class="gtb on" onclick="refPruefNeu(this)">'
+            f'{t("qualitaet.kopf.knopf_neu")}</button></p>')
 
     # .277 (User: 'Wie will ein User das verstehen? EINE Seite je Person,
     # alle Gesichter, schlechte markiert — nicht mit technischen Werten'):
@@ -198,8 +225,11 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
             if pr["b_person"] == person:
                 verwechselt.setdefault(pr["b_datei"],
                                        (pr["a_person"], pr["a_datei"]))
-        WORT = {"defekt": "broken file", "kein_gesicht": "no face found",
-                "zu_klein": "too small", "unscharf": "blurry"}
+        # Anzeige-Map zur Render-Zeit (Funktion statt Konstante, §8.12).
+        WORT = {"defekt": t("qualitaet.wort.defekt"),
+                "kein_gesicht": t("qualitaet.wort.kein_gesicht"),
+                "zu_klein": t("qualitaet.wort.zu_klein"),
+                "unscharf": t("qualitaet.wort.unscharf")}
         # .279 (User: '97 Bilder erschlagen — drei Gruppen: gut / pruefen /
         # loeschen, als Registerkarten mit Select all/Deselect all, Knoepfe
         # nach OBEN'): Kacheln in drei Reitern statt einer Bandwurmliste.
@@ -213,7 +243,9 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
             if f in verwechselt:
                 vp, vd = verwechselt[f]
                 rand = "var(--crit)"
-                wort = f"looks like {html.escape(vp)}"
+                # {name} kommt escaped (Muster lernanker {kamera}).
+                wort = t("qualitaet.galerie.looks_like",
+                         name=html.escape(vp))
                 grp = "check"
                 # .280: das GEGENBILD als Mini-Thumb — ersetzt den alten
                 # Confusion-Tab (dort stand das Paar nebeneinander).
@@ -225,14 +257,15 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
                           'border:1px solid var(--crit)">')
             elif f in dup_weg:
                 rand, grp = "var(--dim)", "weg"
-                wort = "duplicate — the kept one covers it"
+                wort = t("qualitaet.galerie.doppel")
             elif f in gruende:
                 rand, grp = "var(--warn)", "weg"
-                wort = WORT.get(gruende[f]["hauptgrund"], "weak picture")
+                wort = WORT.get(gruende[f]["hauptgrund"],
+                                t("qualitaet.wort.schwach"))
             elif stufen.get(f) == "gut":
-                rand, wort = "seagreen", "good"
+                rand, wort = "seagreen", t("qualitaet.galerie.gut")
             elif f in dup_kept:
-                rand, wort = "seagreen", "good — kept of its duplicates"
+                rand, wort = "seagreen", t("qualitaet.galerie.gut_behalten")
             markiert = grp != "gut"
             val = html.escape(person + "|" + f, quote=True)
             gruppen_k[grp].append(
@@ -242,36 +275,45 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
                 f'display:block;margin:0 auto 3px;border:3px solid {rand}">'
                 f'<input type="checkbox" class="us-cb g-person" '
                 f'value="{val}"> <span class="{"dim" if not markiert else ""}"'
-                f' style="font-size:12px">{wort or "okay"}{zusatz}'
+                f' style="font-size:12px">{wort or t("qualitaet.galerie.okay")}'
+                f'{zusatz}'
                 '</span></label>')
         funde_n = len(gruppen_k["check"]) + len(gruppen_k["weg"])
-        satz = (f"All {len(alle)} pictures look fine." if funde_n == 0 else
-                f"{funde_n} of {len(alle)} pictures are worth a look — "
-                "the two right-hand tabs hold them. Tick what you want to "
-                "remove — nothing happens without your click.")
+        satz = (t("qualitaet.galerie.satz_gut", n=len(alle))
+                if funde_n == 0 else
+                t("qualitaet.galerie.satz_funde", funde=funde_n,
+                  n=len(alle)))
         start = ("check" if gruppen_k["check"] else
                  "weg" if gruppen_k["weg"] else "gut")
-        REITER = [("gut", f"Good ({len(gruppen_k['gut'])})"),
-                  ("check", f"Check these ({len(gruppen_k['check'])})"),
-                  ("weg", f"Suggest removing ({len(gruppen_k['weg'])})")]
+        REITER = [("gut", t("qualitaet.reiter.gut",
+                            n=len(gruppen_k['gut']))),
+                  ("check", t("qualitaet.reiter.check",
+                              n=len(gruppen_k['check']))),
+                  ("weg", t("qualitaet.reiter.weg",
+                            n=len(gruppen_k['weg'])))]
         leiste = ("".join(
             f'<button class="gtb{" on" if g == start else ""}" id="qgt-{g}" '
             f'onclick="qgTab(\'{g}\')">{txt}</button> '
             for g, txt in REITER)
             + '<span style="margin:0 6px;color:var(--border)">|</span>'
-            '<button class="gtb" onclick="qgAlle(true)">Select all</button> '
-            '<button class="gtb" onclick="qgAlle(false)">Deselect all'
-            '</button> '
+            '<button class="gtb" onclick="qgAlle(true)">'
+            + t("qualitaet.galerie.knopf_alle") + '</button> '
+            '<button class="gtb" onclick="qgAlle(false)">'
+            + t("qualitaet.galerie.knopf_keine") + '</button> '
             '<button class="gtb on" onclick="refBatchLoeschen(this)">'
-            'Remove selected</button> <span id="qg-n" class="dim"></span>')
+            + t("qualitaet.galerie.knopf_entfernen")
+            + '</button> <span id="qg-n" class="dim"></span>')
         boxen = "".join(
             f'<div id="qg-{g}" style="margin-top:8px;'
             f'display:{"block" if g == start else "none"}">'
-            + ("".join(ks) or '<p class="dim">nothing in this group.</p>')
+            + ("".join(ks)
+               or f'<p class="dim">{t("qualitaet.galerie.leer_gruppe")}</p>')
             + '</div>' for g, ks in gruppen_k.items())
         # Der Zaehler neben Remove zaehlt ALLE Haken (auch in gerade
         # verdeckten Reitern) — refBatchLoeschen loescht genau diese Menge,
         # der Knopf darf nie weniger versprechen als er tut.
+        # Stufe-0-Grenze: der JS-Text '" selected"' — window.T existiert
+        # seit Stufe 1, Einzug folgt mit der Stufe-2-Tranche dieser Seite.
         js = ('<script>function qgTab(g){["gut","check","weg"].forEach('
               'function(k){document.getElementById("qg-"+k).style.display='
               '(k===g)?"block":"none";document.getElementById("qgt-"+k)'
@@ -288,16 +330,17 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
               '&&e.target.classList&&e.target.classList.contains("us-cb"))'
               'qgZaehl();});</script>')
         koerper = (
-            f'<h2>{html.escape(person)} — picture quality</h2>'
-            f'<p><a href="/qualitaet">&larr; back to the overview</a></p>'
+            f'<h2>{t("qualitaet.galerie.titel", name=html.escape(person))}</h2>'
+            f'<p><a href="/qualitaet">{t("qualitaet.galerie.link_zurueck")}</a></p>'
             + lauf_zeile
             + f'<p style="font-size:15px">{satz}</p>'
             + (f'<div style="margin:2px 0 4px">{leiste}</div>' + boxen + js
-               if alle else '<p>no pictures for this person.</p>'))
+               if alle else
+               f'<p>{t("qualitaet.galerie.leer_person")}</p>'))
         return koerper
     # .280: keine Unter-Tabs mehr — die Uebersicht IST die Seite; ohne
     # ersten Lauf ehrlich sagen, dass noch nichts berechnet wurde.
     if not qs.get("ts"):
-        return kopf + webui.leer("No check computed yet.",
-                                 "Click Re-check now above.")
+        return kopf + webui.leer(t("qualitaet.leer.titel"),
+                                 t("qualitaet.leer.hinweis"))
     return kopf
