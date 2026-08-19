@@ -12,23 +12,24 @@ der abgeleitete Zustand, nie der Store-Wunsch.
 GPU-only-Hinweis (User-Auflage 12.08., KEIN Versprechen): fester Text auf
 Uebersicht und Detailseite — "Works with a GPU only for now — we are working
 on a CPU option but can't promise it."
+
+Sprach-Stufe 0 (konzept_sprache.md v2): sichtbare Texte aus core/sprache.t()
+— BYTE-TREU (Harnisch tools/harnisch_sprache.py). Grenzen dieser Stufe:
+Abschnitts-Kommentar in core/texte/en.py; GPU_/CPU_HINWEIS wurden dafuer zu
+Schluesseln (live.hinweis_gpu/_cpu, t() zur Render-Zeit — Modul-Konstanten
+froeren die Sprachwahl auf den Import ein); die frueheren Schleifen-/
+Textvariablen `t` sind umbenannt, damit sie t() nicht verschatten.
 """
 import html
 import time
 
 from core.livewache import quelle_fp, quelle_maskiert
 from core.registry import LIVE_ZUSTAENDE
+from core.sprache import t
 
-GPU_HINWEIS = ("Works with a GPU only for now — we are working on a CPU "
-               "option but can't promise it.")
 # CPU-Runde 17.08. (User-Go nach Messung): auf der cpu-Variante ist Live
-# BEGRENZT erlaubt — der Text sagt ehrlich, was gemessen ist, und verspricht
-# keine Unter-einer-Sekunde-Reaktion.
-CPU_HINWEIS = ("CPU mode: watchers are expensive here — the quick check "
-               "typically takes 1–2 s (a GPU build reacts in under a "
-               "second), and additional watchers slow each other down. "
-               "How many you run is your call; we recommend starting "
-               "with one.")
+# BEGRENZT erlaubt — der Text (live.hinweis_cpu) sagt ehrlich, was gemessen
+# ist, und verspricht keine Unter-einer-Sekunde-Reaktion.
 
 DOKU_URL = "https://github.com/BennoBaer-dev/suslik/blob/main/docs/live-watchers.md"
 
@@ -53,7 +54,7 @@ def _alter_marke(ts):
     except (TypeError, ValueError):
         return ""
     if tage >= _ALT_AB_TAGE:
-        return f" ({tage:.0f} day(s) old)"
+        return " " + t("live.zeile.alter", tage=f"{tage:.0f}")
     return ""
 
 
@@ -75,19 +76,20 @@ def _fp_veraltet(block, guard):
 def _test_zeile(test, guard=None):
     if not test or not test.get("ok"):
         return ""
-    t = (f'source test {_wann(test.get("ts"))}: '
-         f'{test.get("aufloesung", "?")} → {test.get("skala", "?")}, '
-         f'{test.get("bilder_s", "?")} frames/s'
-         # .196: Alt-Tests und Datei-Quellen tragen Durchsatz statt
-         # Lieferrate — ehrlich kennzeichnen statt eine echte fps vorzugeben.
-         + ("" if test.get("bilder_s_art") == "delivery"
-            else " (throughput, not delivery rate — rerun the source test)")
-         + f', provider {test.get("provider", "?")}'
-         + ("" if test.get("hw") else " (software decode)")
-         + _alter_marke(test.get("ts"))
-         + (" — INVALIDATED: source changed since this test"
-            if _fp_veraltet(test, guard) else ""))
-    return f'<div class="dim lv-zeile">{html.escape(t)}</div>'
+    txt = (t("live.test.zeile", wann=_wann(test.get("ts")),
+             aufloesung=test.get("aufloesung", "?"),
+             skala=test.get("skala", "?"),
+             bilder_s=test.get("bilder_s", "?"))
+           # .196: Alt-Tests und Datei-Quellen tragen Durchsatz statt
+           # Lieferrate — ehrlich kennzeichnen statt eine echte fps vorzugeben.
+           + ("" if test.get("bilder_s_art") == "delivery"
+              else " " + t("live.test.durchsatz"))
+           + ", " + t("live.test.provider", provider=test.get("provider", "?"))
+           + ("" if test.get("hw") else " " + t("live.test.sw"))
+           + _alter_marke(test.get("ts"))
+           + (" " + t("live.test.entwertet")
+              if _fp_veraltet(test, guard) else ""))
+    return f'<div class="dim lv-zeile">{html.escape(txt)}</div>'
 
 
 def _test_fehler_zeile(tf):
@@ -95,22 +97,24 @@ def _test_fehler_zeile(tf):
     test-Block bleibt daneben stehen — er traegt den Enable-Riegel)."""
     if not tf or not tf.get("fehler"):
         return ""
-    t = f'last source test FAILED ({_wann(tf.get("ts"))}): {tf["fehler"]}'
-    return f'<div class="dim lv-zeile">{html.escape(t)}</div>'
+    txt = t("live.test.fehlgeschlagen", wann=_wann(tf.get("ts")),
+            fehler=tf["fehler"])
+    return f'<div class="dim lv-zeile">{html.escape(txt)}</div>'
 
 
 def _messung_zeile(messung, guard=None):
     if messung and messung.get("ok"):
-        t = (f'load measured on {_wann(messung.get("ts"))}: '
-             f'{messung.get("text", "")}'
-             + _alter_marke(messung.get("ts"))
-             + (" — STALE: source changed since this measurement, measure "
-                "again" if _fp_veraltet(messung, guard) else ""))
-        return f'<div class="dim lv-zeile">{html.escape(t)}</div>'
+        txt = (t("live.messung.zeile", wann=_wann(messung.get("ts")),
+                 text=messung.get("text", ""))
+               + _alter_marke(messung.get("ts"))
+               + (" " + t("live.messung.veraltet")
+                  if _fp_veraltet(messung, guard) else ""))
+        return f'<div class="dim lv-zeile">{html.escape(txt)}</div>'
     if messung and messung.get("fehler"):
-        t = (f'last load measurement FAILED ({_wann(messung.get("ts"))}): '
-             f'{messung["fehler"]}')
-        return f'<div class="dim lv-zeile">{html.escape(t)}</div>'
+        txt = t("live.messung.fehlgeschlagen",
+                wann=_wann(messung.get("ts")), fehler=messung["fehler"])
+        return f'<div class="dim lv-zeile">{html.escape(txt)}</div>'
+    # Stufe-0-Grenze: <b>Measure load</b> mitten im Satz — bleibt literal.
     return ('<div class="dim lv-zeile">load not measured yet — use '
             '<b>Measure load</b> before enabling</div>')
 
@@ -118,15 +122,17 @@ def _messung_zeile(messung, guard=None):
 def _zaehler_zeile(live):
     if not live:
         return ""
-    teile = [f'{live.get("auftritte", 0)} appearances',
-             f'{live.get("trigger", 0)} triggers',
-             f'{live.get("gemeldet", 0)} alerts']
+    teile = [t("live.zaehler.auftritte", n=live.get("auftritte", 0)),
+             t("live.zaehler.trigger", n=live.get("trigger", 0)),
+             t("live.zaehler.alerts", n=live.get("gemeldet", 0))]
     lt = live.get("letzter_trigger_ts")
     if lt:
-        teile.append("last trigger "
-                     + time.strftime("%H:%M:%S", time.localtime(float(lt))))
-    return ('<div class="dim lv-zeile">since engine start: '
-            + html.escape(" · ".join(teile)) + "</div>")
+        teile.append(t("live.zaehler.letzter",
+                       zeit=time.strftime("%H:%M:%S",
+                                          time.localtime(float(lt)))))
+    return ('<div class="dim lv-zeile">'
+            + html.escape(t("live.zaehler.kopf") + " " + " · ".join(teile))
+            + "</div>")
 
 
 def _engine_karte(engine_info, gesperrt, container_last=None):
@@ -142,19 +148,16 @@ def _engine_karte(engine_info, gesperrt, container_last=None):
     aufsicht_zeile = (f'<div class="dim lv-zeile">{html.escape(str(aufsicht.get("text")))}'
                       f'</div>' if aufsicht.get("text") else "")
     if not engine_info.get("frisch"):
-        return ('<div class="card"><b>Live engine: not running</b>'
+        return (f'<div class="card"><b>{t("live.engine.titel_aus")}</b>'
                 + aufsicht_zeile
-                + '<div class="dim">No heartbeat from the engine process. '
-                'Tiles show the saved configuration; enabling, testing '
-                'against a running watcher and load measurements need the '
-                'engine — the service starts it automatically once at least '
-                'one watcher is enabled.</div></div>')
+                + f'<div class="dim">{t("live.engine.satz_aus")}</div></div>')
     slots = st.get("slots") or {}
     sch = st.get("scheduler") or {}
     je = slots.get("je_stream_mb")
-    je_txt = (f'{je:.0f} MB per stream ({slots.get("je_stream_quelle", "")})'
+    je_txt = (t("live.engine.je_stream", mb=f"{je:.0f}",
+                quelle=slots.get("je_stream_quelle", ""))
               if je is not None else
-              "per-stream RAM not yet measured on this machine")
+              t("live.engine.je_stream_fehlt"))
     frei = slots.get("ram_frei_mb")
     rss = slots.get("rss_mb")
     # .252 (User: "worauf soll er entscheiden?"): die ECHTE momentane
@@ -165,46 +168,49 @@ def _engine_karte(engine_info, gesperrt, container_last=None):
     zeilen = []
     if container_last:
         _ck, _cl = container_last
+        # B9: je Zweig ein GANZER Satz-Schluessel; {kerne}/{limit} kommen
+        # vorformatiert (:g) aus der Route.
         zeilen.append(
-            f'suslik CPU right now: {_ck:g}'
-            + (f' of {_cl:g} allowed cores' if _cl else ' cores')
-            + ' (whole container: watchers, analysis, service)')
+            t("live.engine.cpu_mit_limit", kerne=f"{_ck:g}", limit=f"{_cl:g}")
+            if _cl else
+            t("live.engine.cpu_ohne_limit", kerne=f"{_ck:g}"))
     zeilen += [
         # UI-KANN 10: Python-Leerwert nie in die Karte ('RSS None MB').
-        f'engine RSS {rss if rss is not None else "?"} MB'
-        + (f' · base cost {slots.get("grundkosten_mb"):.0f} MB'
+        t("live.engine.rss", rss=rss if rss is not None else "?")
+        + (" · " + t("live.engine.grundkosten",
+                     mb=f'{slots.get("grundkosten_mb"):.0f}')
            if slots.get("grundkosten_mb") is not None else ""),
         je_txt,
-        (f'{frei:.0f} MB RAM free ({slots.get("ram_quelle", "?")})'
-         if frei is not None else "RAM: no container limit readable"),
-        f'detector {slots.get("det_ms", "?")} ms/frame '
-        f'({slots.get("det_ms_quelle", "?")})',
-        f'throttle level {sch.get("drossel_stufe", "?")}, utilization '
-        f'{sch.get("auslastung", "?")}',
+        (t("live.engine.ram_frei", mb=f"{frei:.0f}",
+           quelle=slots.get("ram_quelle", "?"))
+         if frei is not None else t("live.engine.ram_unlesbar")),
+        t("live.engine.detektor", ms=slots.get("det_ms", "?"),
+          quelle=slots.get("det_ms_quelle", "?")),
+        t("live.engine.drossel", stufe=sch.get("drossel_stufe", "?"),
+          auslastung=sch.get("auslastung", "?")),
     ]
     # UI-M4 Rest-RAM-Ehrlichkeit (§2.3): was nach EINEM weiteren Stream
     # rechnerisch uebrig bliebe, mit Warnstufe unter der Restgrenze.
     rest = slots.get("rest_nach_slot_mb")
     if rest is not None:
-        zeilen.append(f'after one more stream: ~{rest:.0f} MB RAM would '
-                      f'remain'
-                      + (' — BELOW the safety floor, no further slot'
+        zeilen.append(t("live.engine.rest", mb=f"{rest:.0f}")
+                      + (" " + t("live.engine.rest_warnung")
                          if slots.get("rest_warnung") else ''))
     # .196: der Deckel kommt nur noch aus den zwei Notbremsen (harter Deckel,
     # RAM-Boden als Messwert) — kein Lastmodell mehr (User: Messwerte
     # informieren, sie entscheiden nicht).
     emax = slots.get("effektiv_max")
     if emax is not None:
-        zeilen.append(f'capacity: up to {emax} watcher(s) (hard cap '
-                      f'{slots.get("hart_max", "?")}) — limited by: '
-                      f'{slots.get("effektiv_grund") or "?"}')
+        zeilen.append(t("live.engine.kapazitaet", n=emax,
+                        hart=slots.get("hart_max", "?"),
+                        grund=slots.get("effektiv_grund") or "?"))
     else:
-        zeilen.append(f'hard cap {slots.get("hart_max", "?")} watchers')
+        zeilen.append(t("live.engine.hart", hart=slots.get("hart_max", "?")))
     # Standalone LAUT auf der Karte (Bauplan-Auftrag Phase 4): eine fremd
     # gestartete Engine liefert zwar Herzschlag, aber der Dienst startet
     # keine zweite und uebernimmt erst nach deren Ende.
-    kopf = ("Live engine: running (standalone engine detected)"
-            if aufsicht.get("standalone") else "Live engine: running")
+    kopf = (t("live.engine.titel_standalone")
+            if aufsicht.get("standalone") else t("live.engine.titel_an"))
     return (f'<div class="card"><b>{kopf}</b>'
             + aufsicht_zeile
             + "".join(f'<div class="dim lv-zeile">{html.escape(z)}</div>'
@@ -265,45 +271,44 @@ def _karte(kd, gesperrt):
     detail = (f'<div class="dim lv-zeile">{html.escape(kd["detail"])}</div>'
               if kd.get("detail") else "")
     fremd = ("" if kd.get("in_frigate")
-             else ' <span class="pill warn" title="configured here, but '
-                  'this camera is not in Frigate right now">not in '
-                  'Frigate</span>')
+             else f' <span class="pill warn" title="{t("live.kachel.attr_fremd")}">'
+                  + t("live.kachel.pill_fremd") + '</span>')
+    # "(detect)" ist Anzeige UND Ersetzungs-Token zugleich (Stufe-0-Grenze
+    # Anzeige==Kennung) — bleibt literal, nur der title-Text ist Schluessel.
     res_text, res_echt = kopf_aufloesung(kd)
     res = (html.escape(res_text) if res_echt else
            html.escape(res_text).replace(
                "(detect)",
-               '<span title="Frigate detect stream — the real stream '
-               'resolution appears after the service probes the stream or '
-               'a source test runs">(detect)</span>'))
-    knoepfe = [f'<a class="gtb" href="/live/{nid}">Configure</a>']
+               f'<span title="{t("live.kachel.attr_detect")}">(detect)</span>'))
+    knoepfe = [f'<a class="gtb" href="/live/{nid}">{t("live.knopf_konfigurieren")}</a>']
     if not gesperrt:
         g = kd.get("guard")
         if g is not None or kd.get("in_frigate"):
             knoepfe.append(f'<button class="gtb" '
                            f'onclick="liveTest(\'{nid}\',this)">'
-                           f'Run source test</button>')
+                           f'{t("live.knopf_test")}</button>')
             knoepfe.append(f'<button class="gtb" '
                            f'onclick="liveMessung(\'{nid}\',this)">'
-                           f'Measure load</button>')
+                           f'{t("live.knopf_messung")}</button>')
         if z == "tested":
             knoepfe.append(f'<button class="gtb on" '
                            f'onclick="liveSchalter(\'{nid}\',true,this)">'
-                           f'Enable</button>')
+                           f'{t("live.knopf_enable")}</button>')
         elif g is not None and g.get("enabled"):
             knoepfe.append(f'<button class="gtb" '
                            f'onclick="liveSchalter(\'{nid}\',false,this)">'
-                           f'Disable</button>')
+                           f'{t("live.knopf_disable")}</button>')
     # Hide/Show (User 13.08.) — NICHT an laufenden Kacheln (die Running-
     # Gruppe zeigt immer alles; erst stoppen, dann verstecken).
     if kd["zustand"] not in ("active", "disturbed"):
         if kd.get("versteckt"):
             knoepfe.append(f'<button class="gtb" '
                            f'onclick="liveVerstecken(\'{nid}\',false,this)">'
-                           f'Show</button>')
+                           f'{t("live.knopf_zeigen")}</button>')
         else:
             knoepfe.append(f'<button class="gtb" '
                            f'onclick="liveVerstecken(\'{nid}\',true,this)">'
-                           f'Hide</button>')
+                           f'{t("live.knopf_verstecken")}</button>')
     # Vorschau-Bild NUR fuer aktive Kacheln (User-Wunsch 13.08.): das JPEG
     # kommt aus dem Detektor-Thread der Engine (/live_bild, verarbeitete
     # Waechter-Skala) — man sieht, was der Waechter sieht. Refresh macht
@@ -343,7 +348,7 @@ def _gruppe_html(nach_area, cam_area, kds, gesperrt):
     teile = []
     for area in sorted(je_area, key=lambda a: (a == "", a)):
         teile.append(f'<div class="dim lv-areazeile">'
-                     f'{html.escape(area) if area else "No area"}</div>')
+                     f'{html.escape(area) if area else t("live.gruppe.ohne_area")}</div>')
         teile.append('<div class="lv-grid">' + "".join(
             _karte(kd, gesperrt) for kd in je_area[area]) + '</div>')
     return "".join(teile)
@@ -354,12 +359,21 @@ def uebersicht(kacheln, engine_info, gesperrt, frigate_fehler=None,
                container_last=None):
     """-> Seiten-INHALT der Kachel-Uebersicht (.186: Zustands-Gruppen statt
     einer Wand; 'Not set up' und 'Hidden' eingeklappt)."""
-    fehlerbanner = (f'<div class="banner">Could not read the Frigate camera '
-                    f'list: {html.escape(str(frigate_fehler))}</div>'
+    fehlerbanner = (f'<div class="banner">'
+                    + t("live.banner.kameraliste",
+                        fehler=html.escape(str(frigate_fehler))) + '</div>'
                     if frigate_fehler else "")
     grp = gruppen(kacheln)
+    # Anzeige-Titel je Gruppe aus t(); die EN-Literale in GRUPPEN bleiben
+    # als Kennungs-Kontrakt (harnisch_live1 iteriert die Paare) und als
+    # Fallback — Deckungs-Vertrag: Map-Schluessel == GRUPPEN-Tokens.
+    titel_t = {"laufend": t("live.gruppe.laufend"),
+               "bereit": t("live.gruppe.bereit"),
+               "rest": t("live.gruppe.rest"),
+               "versteckt": t("live.gruppe.versteckt")}
     abschnitte = []
     for schluessel, titel in GRUPPEN:
+        titel = titel_t.get(schluessel, titel)
         kds = grp[schluessel]
         if not kds:
             continue
@@ -373,50 +387,44 @@ def uebersicht(kacheln, engine_info, gesperrt, frigate_fehler=None,
                 f'<div class="lv-abschnitt"><div class="lv-kopfzeile">'
                 f'{titel} ({len(kds)})</div>{inhalt_g}</div>')
     schalter = (f'<a class="gtb" href="/live" '
-                f'onclick="liveAreaMerken(false)">ungrouped view</a>'
+                f'onclick="liveAreaMerken(false)">{t("live.schalter.ungruppiert")}</a>'
                 if nach_area else
                 f'<a class="gtb" href="/live?gruppe=area" '
-                f'onclick="liveAreaMerken(true)">group by area</a>')
+                f'onclick="liveAreaMerken(true)">{t("live.schalter.area")}</a>')
     sperr_karte = ""
     if cpu_begrenzt and not gesperrt:
-        sperr_karte = ('<div class="card"><b>CPU mode</b>'
-                       f'<div class="dim">{html.escape(CPU_HINWEIS)} '
+        # Stufe-0-Grenze: der Satzrest mit <b>Measure load</b> bleibt literal.
+        sperr_karte = (f'<div class="card"><b>{t("live.sperre.cpu_titel")}</b>'
+                       f'<div class="dim">{html.escape(t("live.hinweis_cpu"))} '
                        'Use <b>Measure load</b> per camera and the load '
                        'line above before enabling more.</div></div>')
     if gesperrt:
         sperr_grund = (engine_info or {}).get("sperr_grund") or ""
-        sperr_karte = ('<div class="card"><b>Not available on this build</b>'
-                       '<div class="dim">Live watchers require a GPU build — '
-                       'integrated Intel graphics (gpu / gpu-legacy images), '
-                       'an NVIDIA card (cuda image) or an AMD card (rocm '
-                       'image) all qualify.'
+        sperr_karte = (f'<div class="card"><b>{t("live.sperre.titel")}</b>'
+                       f'<div class="dim">{t("live.sperre.satz")}'
                        + (f' {html.escape(sperr_grund)}.' if sperr_grund
-                          else ' They are not available on the CPU-only '
-                               'image.')
+                          else ' ' + t("live.sperre.cpu_only"))
                        + '</div></div>')
     # Erklaer-Kachel (User-Auflage 12.08. mittags, C2): oben, GESAMTE
     # Breite, KURZ — Zweck, Leistungs-Hinweis, Read-more-Link. Der fruehere
     # Kurz-Erklaertext (<p class="sub">) ist hierin aufgegangen.
+    # Stufe-0-Grenze: Satz 2 traegt <b>Measure load</b> — bleibt literal.
     erklaer = (
         '<div class="card lv-erklaer">'
-        '<b>Live watchers — instant reaction at the camera stream</b>'
-        '<div class="dim lv-zeile">A live watcher connects straight to one '
-        'camera stream and reacts while the person is still in the picture: '
-        'the first face starts a check, and after the configured number of '
-        'consistent detections a verified signal goes out — the goal is '
-        'under one second (measured 199–801 ms on the reference setup). Use '
-        'it to trigger home automations, e.g. via MQTT.</div>'
+        f'<b>{t("live.erklaer.titel")}</b>'
+        f'<div class="dim lv-zeile">{t("live.erklaer.satz1")}</div>'
         '<div class="dim lv-zeile">It is a fast trigger, not a verdict — the '
         'confirmed identification still comes from the normal analysis. '
         'Every active watcher draws real GPU/CPU capacity: pick the cameras '
         'that matter and use <b>Measure load</b> before enabling. '
-        + html.escape(CPU_HINWEIS if cpu_begrenzt else GPU_HINWEIS) + '</div>'
+        + html.escape(t("live.hinweis_cpu") if cpu_begrenzt
+                      else t("live.hinweis_gpu")) + '</div>'
         f'<div class="dim lv-zeile"><a href="{DOKU_URL}" target="_blank" '
-        f'rel="noopener">Read more: how live watchers work</a></div>'
+        f'rel="noopener">{t("live.erklaer.link")}</a></div>'
         '</div>')
     return (
         fehlerbanner
-        + '<h2>Live watchers</h2>'
+        + f'<h2>{t("live.titel")}</h2>'
         + erklaer
         + sperr_karte
         + _engine_karte(engine_info, gesperrt, container_last)
@@ -424,9 +432,8 @@ def uebersicht(kacheln, engine_info, gesperrt, frigate_fehler=None,
         + (f'<div class="lv-schalterzeile">{schalter}</div>'
            if kacheln else "")
         + ("".join(abschnitte) if abschnitte else
-           '<div class="leer"><b>No cameras found.</b><br><small>Configure '
-           'the Frigate connection first — tiles appear per camera.'
-           '</small></div>')
+           f'<div class="leer"><b>{t("live.leer.titel")}</b><br><small>'
+           + t("live.leer.hinweis") + '</small></div>')
         + '<script>window._livePage=true;</script>')
 
 
@@ -438,7 +445,8 @@ def _save_knopf(gesperrt):
     Mutations-Selbsttest die Sperre fassen kann."""
     if gesperrt:
         return ""
-    return '<button class="gtb on" onclick="liveSpeichern(this)">Save</button> '
+    return ('<button class="gtb on" onclick="liveSpeichern(this)">'
+            + t("live.knopf_speichern") + '</button> ')
 
 
 def detail(name, guard, kd, gesperrt):
@@ -446,14 +454,17 @@ def detail(name, guard, kd, gesperrt):
     nid = html.escape(name, quote=True)
     g = guard or {}
     quelle = g.get("quelle") or "proxy"
+    # Die Quell-Tokens proxy/direct/url sind Anzeige==Kennung (radio-value
+    # UND sichtbares Wort) und bleiben literal; nur die Erklaerung je
+    # Zeile ist Schluessel.
     radios = "".join(
         f'<label class="lv-radio"><input type="radio" name="lv-quelle" '
         f'value="{q}"{" checked" if quelle == q else ""}> {q} '
-        f'<span class="dim">— {t}</span></label>'
-        for q, t in (
-            ("proxy", "go2rtc restream via Frigate (default, recommended)"),
-            ("direct", "camera producer URL discovered via go2rtc"),
-            ("url", "a stream URL you enter yourself")))
+        f'<span class="dim">— {beschr}</span></label>'
+        for q, beschr in (
+            ("proxy", t("live.quelle.proxy")),
+            ("direct", t("live.quelle.direct")),
+            ("url", t("live.quelle.url"))))
     # .194 (User: 360-2160, "default immer auf 1080p"): Verarbeitungshoehe je
     # Kachel. "default" = KEIN Guard-Feld -> der Fingerprint des laufenden
     # Tests bleibt beim blossen Speichern stabil (ein expliziter Wert zaehlt
@@ -462,13 +473,13 @@ def detail(name, guard, kd, gesperrt):
     hoehen = "".join(
         f'<label class="lv-radio"><input type="radio" name="lv-hoehe" '
         f'value="{w}"{" checked" if hoehe_wert == (int(w) if w else None) else ""}>'
-        f' {t}</label>'
-        for w, t in (("", "default (1080p)"),
-                     ("360", "360p — weak-GPU fallback, latest name fire (measured)"),
-                     ("720", "720p — lighter decode, name fires later"),
-                     ("1080", "1080p — sweet spot (measured: name ~2.4 s earlier than 720p)"),
-                     ("1440", "1440p — no measured gain over 1080p"),
-                     ("2160", "2160p — native 4K, marginal gain, highest decode cost")))
+        f' {beschr}</label>'
+        for w, beschr in (("", t("live.hoehe.default")),
+                          ("360", t("live.hoehe.h360")),
+                          ("720", t("live.hoehe.h720")),
+                          ("1080", t("live.hoehe.h1080")),
+                          ("1440", t("live.hoehe.h1440")),
+                          ("2160", t("live.hoehe.h2160"))))
     # .200 (Fix 3): kein eigenes Kanal-Literal mehr — gespeicherte Waechter kommen
     # normalisiert aus guards_lesen, NEUE bekommen die Vorbelegung im /live/-Handler
     # aus melden.konfigurierte_kanaele (die eine Quelle). Fehlt beides: nichts vorwaehlen.
@@ -483,21 +494,24 @@ def detail(name, guard, kd, gesperrt):
     if not gesperrt:
         if z == "tested":
             schalter = (f'<button class="gtb on" '
-                        f'onclick="liveSchalter(\'{nid}\',true,this)">Enable'
-                        f'</button>')
+                        f'onclick="liveSchalter(\'{nid}\',true,this)">'
+                        f'{t("live.knopf_enable")}</button>')
         elif an:
             schalter = (f'<button class="gtb" '
-                        f'onclick="liveSchalter(\'{nid}\',false,this)">Disable'
-                        f'</button>')
+                        f'onclick="liveSchalter(\'{nid}\',false,this)">'
+                        f'{t("live.knopf_disable")}</button>')
+    # Stufe-0-Grenzen hier: der Aufloesungs-Absatz (<b>Measure load</b>) und
+    # die Credentials-Zeile (<a>-Link) bleiben literal; die Kanal-Haekchen
+    # pushover/telegram/mqtt sind Anzeige==Kennung + Produktnamen.
     return (
-        f'<h2>Live watcher — {html.escape(name)} {_pill(z)}</h2>'
+        f'<h2>{t("live.detail.titel", name=html.escape(name))} {_pill(z)}</h2>'
         + (f'<p class="sub">{html.escape(kd["detail"])}</p>'
            if kd.get("detail") else "")
-        + f'<p class="sub">{html.escape(GPU_HINWEIS)}</p>'
+        + f'<p class="sub">{html.escape(t("live.hinweis_gpu"))}</p>'
         + f'<input type="hidden" id="lv-kamera" value="{nid}">'
-        + '<div class="card"><b>Source</b>'
+        + f'<div class="card"><b>{t("live.abschnitt.quelle")}</b>'
         + radios
-        + '<div>Stream URL (source \'url\' only): '
+        + f'<div>{t("live.detail.url_label")} '
           # C4 (Muster Notifications-Secrets): das Feld ist mit der
           # MASKIERTEN URL vorbelegt — das Credential erreicht das HTML nie;
           # bleibt die Maskierung unveraendert, behaelt der Server die
@@ -505,12 +519,9 @@ def detail(name, guard, kd, gesperrt):
           f'<input id="lv-url" '
           f'value="{html.escape(quelle_maskiert(str(g.get("url") or "")), quote=True)}" '
           f'size="40" placeholder="rtsp://..." autocomplete="off"> '
-          '<span class="dim">credentials in the URL are masked everywhere '
-          'they are shown — leave the field as shown to keep the saved URL, '
-          'or paste a new one</span></div>'
-        + '<div class="dim lv-zeile">Changing the source invalidates the '
-          'source test — run it again before enabling.</div></div>'
-        + '<div class="card"><b>Processing resolution</b>'
+          f'<span class="dim">{t("live.detail.url_hinweis")}</span></div>'
+        + f'<div class="dim lv-zeile">{t("live.detail.quelle_hinweis")}</div></div>'
+        + f'<div class="card"><b>{t("live.abschnitt.aufloesung")}</b>'
         + '<div class="dim lv-zeile">The watcher analyzes the stream at this '
           'height (aspect-ratio kept). Higher = sharper face crops for the '
           'name check; the detection net stays the same size, extra cost is '
@@ -518,46 +529,39 @@ def detail(name, guard, kd, gesperrt):
           'on your hardware. Changing this invalidates the source test.</div>'
         + hoehen
         + '</div>'
-        + '<div class="card"><b>Alarm chain</b>'
-        + f'<div>End after no face (s): <input id="lv-ende" size="5" '
+        + f'<div class="card"><b>{t("live.abschnitt.alarm")}</b>'
+        + f'<div>{t("live.detail.ende_label")} <input id="lv-ende" size="5" '
           f'value="{html.escape(str(g.get("ende_ohne_gesicht_s", 10)))}"> '
-          f'<span class="dim">an appearance ends after this many seconds '
-          f'without a face (3–120)</span></div>'
-        + f'<div>Re-armed after (s): <input id="lv-scharf" size="5" '
+          f'<span class="dim">{t("live.detail.ende_hinweis")}</span></div>'
+        + f'<div>{t("live.detail.scharf_label")} <input id="lv-scharf" size="5" '
           f'value="{html.escape(str(g.get("wieder_scharf_s", 120)))}"> '
-          f'<span class="dim">minimum seconds between alerts — with someone '
-          f'present it alerts again after this time; 0 = every trigger '
-          f'alerts (0–3600)</span></div></div>'
-        + '<div class="card"><b>Notification channels</b>'
+          f'<span class="dim">{t("live.detail.scharf_hinweis")}</span></div></div>'
+        + f'<div class="card"><b>{t("live.abschnitt.kanaele")}</b>'
         + kboxen
         # .197: der "quick verdict"-Haken ist weg (User: Enable heisst alles
         # laeuft) — die vorlaeufige Namens-Stufe gehoert seit dem Voting zu
         # jedem eingeschalteten Waechter, sofern Referenzen da sind.
-        + '<div class="dim lv-zeile">Alerts include a preliminary name '
-          'guess ("probably X") when the face matches a known person — '
-          'never stored, never used for learning.</div>'
+        + f'<div class="dim lv-zeile">{t("live.detail.namensschaetzung")}</div>'
         + '<div class="dim lv-zeile">Channel credentials live on the '
           '<a href="/benachrichtigungen">Notifications</a> page — test them '
           'there.</div></div>'
-        + '<div class="card"><b>Test &amp; measure</b>'
+        + f'<div class="card"><b>{t("live.abschnitt.test")}</b>'
         + _test_zeile(g.get("test"), g)
         + _test_fehler_zeile(g.get("test_fehler"))
         + (_messung_zeile(g.get("messung"), g) if not gesperrt else "")
         # Issue #24 (Tokn59, 18.08.): im gesperrten Zustand fehlten die
         # Knoepfe KOMMENTARLOS — die Karte wirkte kaputt ('can not be
         # clicked or activated in any way'). Jetzt sagt sie, warum.
-        + ('<div class="dim lv-zeile">testing and measuring are unavailable '
-           'while live watching is locked on this machine — the note at the '
-           'top of this page explains why.</div>' if gesperrt else
-           f'<button class="gtb" onclick="liveTest(\'{nid}\',this)">Run '
-           f'source test</button> '
+        + (f'<div class="dim lv-zeile">{t("live.detail.gesperrt_hinweis")}</div>'
+           if gesperrt else
+           f'<button class="gtb" onclick="liveTest(\'{nid}\',this)">'
+           f'{t("live.knopf_test")}</button> '
            f'<button class="gtb" onclick="liveMessung(\'{nid}\',this)">'
-           f'Measure load (15–30 s)</button> '
-           '<span class="dim">the load measurement pauses the other watchers '
-           'while it runs</span>')
+           f'{t("live.knopf_messung_lang")}</button> '
+           f'<span class="dim">{t("live.detail.messung_hinweis")}</span>')
         + f'<div class="dim lv-zeile" id="lv-job-{nid}"></div>'
         + '<div class="dim lv-zeile" id="lv-auftrag"></div></div>'
         + '<p>' + _save_knopf(gesperrt) + schalter
         + ' <span id="lv-status" style="color:var(--dim)"></span> '
-        + f'&nbsp; <a href="/live">back to overview</a></p>'
+        + f'&nbsp; <a href="/live">{t("live.detail.link_zurueck")}</a></p>'
         + '<script>window._livePage=true;</script>')

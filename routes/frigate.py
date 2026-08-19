@@ -10,8 +10,14 @@ Bedienung bleibt dort, wo sie heute liegt (kein zweites halbes Sync-UI, dieselbe
 Begruendung wie die .137-Statuszeile der System-Karte).
 
 Injektion pur (Muster routes/konfiguration.py): alles kommt als Parameter,
-dieses Modul importiert verifyd nie."""
+dieses Modul importiert verifyd nie.
+Sprach-Stufe 0 (konzept_sprache.md v2): sichtbare Texte aus core/sprache.t()
+— BYTE-TREU (Harnisch tools/harnisch_sprache.py). Grenzen dieser Stufe siehe
+Abschnitts-Kommentar in core/texte/en.py (Markup-Beweiszeilen, Expert-Zeilen,
+JS-Texte mit \\u-Escapes bleiben literal)."""
 import html
+
+from core.sprache import t
 
 
 def _karte(kid, titel, satz, beweis, expert="", fuss="", klasse=""):
@@ -45,9 +51,8 @@ def render(url, verbindung, kameras, sync_html, fr):
         verb_beweis = (f"<b>not reachable</b> — {html.escape(v_detail)}"
                        f"<br>{html.escape(url)}")
     verbindung_k = _karte(
-        "frigate-verbindung", "&#128268; Connection",
-        "My program reads events and snapshots from your Frigate over its "
-        "HTTP API — nothing is installed on the Frigate side.",
+        "frigate-verbindung", f'&#128268; {t("frigate.verbindung.titel")}',
+        t("frigate.verbindung.satz"),
         verb_beweis,
         expert='credentials and everything else live under '
                '<a href="/konfiguration">Advanced</a>',
@@ -56,40 +61,35 @@ def render(url, verbindung, kameras, sync_html, fr):
         # DIREKT auf der Kachel; Speichern laeuft ueber /setup_speichern
         # (validiert gegen die echte Frigate, auditiert, Neustart).
         fuss=('<button class="ek-knopf" type="button" '
-              'onclick="fgForm(true)">Change connection &#8230;</button>'
+              f'onclick="fgForm(true)">{t("frigate.verbindung.knopf_aendern")} &#8230;</button>'
               '<div id="fg-form" hidden style="margin-top:8px">'
               f'<input id="fg-url" size="26" value="{html.escape(url)}" '
               'placeholder="http://frigate:5000">'
               '<div style="margin-top:6px">'
               '<button class="ek-knopf" type="button" onclick="fgSave(this)">'
-              'Save &amp; restart</button> '
+              f'{t("frigate.verbindung.knopf_speichern")}</button> '
               '<button class="ek-knopf" type="button" onclick="fgForm(false)">'
-              'Cancel</button></div>'
+              f'{t("frigate.verbindung.knopf_abbrechen")}</button></div>'
               '<div class="dim" id="fg-status" style="margin-top:4px">'
-              'saving restarts the service briefly; this tile then shows '
-              'live whether the new address answers</div></div>'))
+              f'{t("frigate.verbindung.hinweis_speichern")}</div></div>'))
 
     if kameras["gesamt"]:
         kam_beweis = (f'<b>{kameras["verwendet"]} of {kameras["gesamt"]}</b> '
                       "Frigate cameras in use")
     else:
-        kam_beweis = ("no camera selection saved yet — every camera Frigate "
-                      "offers is used")
+        kam_beweis = t("frigate.kameras.beweis_keine_auswahl")
     kameras_k = _karte(
-        "frigate-kameras", "&#128247; Cameras",
-        "Which of Frigate&rsquo;s cameras this program watches, and which "
-        "zones count. Everything else is ignored.",
+        "frigate-kameras", f'&#128247; {t("frigate.kameras.titel")}',
+        t("frigate.kameras.satz"),
         kam_beweis,
-        fuss='<a class="ek-knopf" href="/kameras">Manage cameras &#8230;</a>')
+        fuss=f'<a class="ek-knopf" href="/kameras">{t("frigate.kameras.knopf")} &#8230;</a>')
 
     sync_k = _karte(
-        "frigate-sync", "&#128260; Sync",
-        "Keeps the two face libraries in step: send reviewed faces to "
-        "Frigate, import what only Frigate has &mdash; always your call, "
-        "never automatic.",
+        "frigate-sync", f'&#128260; {t("frigate.sync.titel")}',
+        t("frigate.sync.satz"),
         sync_html,
         fuss='<a class="ek-knopf" href="/sync_auswahl">'
-             'Review &amp; sync &#8230;</a>')
+             f'{t("frigate.sync.knopf")} &#8230;</a>')
 
     fr_ok, fr_detail = fr
     if fr_ok is True:
@@ -100,15 +100,14 @@ def render(url, verbindung, kameras, sync_html, fr):
                      "uploads while it is off (reading still works); "
                      "recognition here is not affected")
     else:
-        fr_beweis = f"state unknown — {html.escape(fr_detail or '')}"
+        fr_beweis = t("frigate.fr.beweis_unbekannt",
+                      detail=html.escape(fr_detail or ''))
     # .221 (User 16.08.: "beim normalen View haette ich die definitiv
     # rausgenommen, was bringt sie uns"): reine Zustands-Kachel ohne
     # Handlung -> nur Expert; der Sync-Kenner braucht sie, sonst niemand.
     fr_k = _karte(
-        "frigate-fr", "&#128100; Frigate&rsquo;s own face recognition",
-        "Frigate can recognize faces too. This program works with or "
-        "without it &mdash; the switch lives in Frigate&rsquo;s config, "
-        "read here live so you know what a sync can do right now.",
+        "frigate-fr", f'&#128100; {t("frigate.fr.titel")}',
+        t("frigate.fr.satz"),
         fr_beweis,
         expert="checked live via <code>GET /api/config</code> "
                "(face_recognition.enabled), never from a stored status",
@@ -118,7 +117,7 @@ def render(url, verbindung, kameras, sync_html, fr):
           'function fgForm(an){document.getElementById("fg-form").hidden=!an;}'
           'function fgSave(b){var u=(document.getElementById("fg-url").value||"").trim();'
           'var st=document.getElementById("fg-status");'
-          'if(!u){st.textContent="enter the Frigate URL";return;}'
+          'if(!u){st.textContent="' + t("frigate.js.url_fehlt") + '";return;}'
           'b.disabled=true;st.textContent="checking the connection\\u2026";'
           'fetch("/setup_speichern",{method:"POST",'
           'headers:{"Content-Type":"application/json"},'
@@ -127,7 +126,7 @@ def render(url, verbindung, kameras, sync_html, fr):
           'if(!d.ok){st.textContent=d.msg;b.disabled=false;return;}'
           'st.textContent="saved \\u2014 restarting, this page reloads\\u2026";'
           'setTimeout(function(){location.reload()},6000);})'
-          '.catch(function(e){st.textContent="error: "+e;b.disabled=false;});}'
+          '.catch(function(e){st.textContent="' + t("frigate.js.fehler") + ' "+e;b.disabled=false;});}'
           '</script>')
     return ('<h2 style="margin:2px 0 10px">Frigate</h2>'
             '<p class="dim" style="margin:0 0 14px">Everything about the '

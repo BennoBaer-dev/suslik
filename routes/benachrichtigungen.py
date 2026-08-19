@@ -1,7 +1,14 @@
 """routes/benachrichtigungen — die Notifications-Seite (M1a, byte-treu aus verifyd
 extrahiert; Muster auftritte.py: Daten als Parameter, kein Dienst-Import).
-Secrets werden NIE im Klartext gerendert (Platzhalter, leer lassen = behalten)."""
+Secrets werden NIE im Klartext gerendert (Platzhalter, leer lassen = behalten).
+Sprach-Stufe 0 (konzept_sprache.md v2): sichtbare Texte aus core/sprache.t()
+— BYTE-TREU (Harnisch tools/harnisch_sprache.py). Zwei Markup-Saetze und die
+Produktnamen-Titel bleiben literal (Grenzen: Abschnitts-Kommentar in en.py);
+die frueheren Schleifenvariablen `t` sind umbenannt, damit sie t() nicht
+verschatten."""
 import html
+
+from core.sprache import t
 
 
 def render(cfg, kat_labels):
@@ -12,30 +19,33 @@ def render(cfg, kat_labels):
     _st = "margin:2px 0"
 
     def _selbool(id_, val):
-        return (f'<select id="{id_}" style="{_st}"><option value="true"{" selected" if val else ""}>on</option>'
-                f'<option value="false"{"" if val else " selected"}>off</option></select>')
+        return (f'<select id="{id_}" style="{_st}"><option value="true"{" selected" if val else ""}>'
+                f'{t("benachrichtigungen.felder.option_an")}</option>'
+                f'<option value="false"{"" if val else " selected"}>'
+                f'{t("benachrichtigungen.felder.option_aus")}</option></select>')
 
     def _num(id_, val):
         return f'<input id="{id_}" value="{html.escape(str(val))}" size="7" style="{_st}">'
 
     def _txt(id_, val, secret=False):
         if secret:                              # Secret NIE im Klartext rendern
-            ph = "•••• stored — blank keeps it" if val else "not set"
+            ph = (t("benachrichtigungen.felder.secret_gesetzt") if val
+                  else t("benachrichtigungen.felder.secret_leer"))
             return f'<input id="{id_}" value="" placeholder="{ph}" size="36" autocomplete="off" style="{_st}">'
         return f'<input id="{id_}" value="{html.escape(str(val or ""))}" size="36" style="{_st}">'
 
-    CATS = [("widerspruch", "suslik confirms a different person than Frigate"),
-            ("frigate_nur", "Frigate labeled someone, suslik saw no usable face"),
-            ("wir_nur", "suslik recognized someone, Frigate did not"),
-            ("beide_unknown", "neither side identified a face"),
-            ("erkannt", "a known person was recognized"),
-            ("fremd_verdacht", "a usable face, but nobody confirmed (possible stranger)"),
-            ("unbekannt_schwach", "a face too weak or small to identify")]
+    CATS = [("widerspruch", t("benachrichtigungen.kategorien.widerspruch")),
+            ("frigate_nur", t("benachrichtigungen.kategorien.frigate_nur")),
+            ("wir_nur", t("benachrichtigungen.kategorien.wir_nur")),
+            ("beide_unknown", t("benachrichtigungen.kategorien.beide_unknown")),
+            ("erkannt", t("benachrichtigungen.kategorien.erkannt")),
+            ("fremd_verdacht", t("benachrichtigungen.kategorien.fremd_verdacht")),
+            ("unbekannt_schwach", t("benachrichtigungen.kategorien.unbekannt_schwach"))]
     aktive = set(cfg.get("alert_kategorien") or [])
     cat_html = "".join(
         f'<label style="display:block;margin:3px 0"><input type="checkbox" class="n-cat" value="{c}"'
-        f'{" checked" if c in aktive else ""}> <b>{html.escape(kat_labels.get(c, c))}</b> <span class="dim">— {html.escape(t)}</span></label>'
-        for c, t in CATS)
+        f'{" checked" if c in aktive else ""}> <b>{html.escape(kat_labels.get(c, c))}</b> <span class="dim">— {html.escape(beschr)}</span></label>'
+        for c, beschr in CATS)
     mod = cfg.get("telegram_modus", "aus")
     mod_opts = "".join(f'<option{" selected" if mod == o else ""}>{o}</option>'
                        for o in ("aus", "ha", "direkt", "beide"))
@@ -43,58 +53,73 @@ def render(cfg, kat_labels):
     inh_opts = "".join(f'<option{" selected" if inh == o else ""}>{o}</option>'
                        for o in ("video", "bild"))
     return (
-        "<h2>Notifications</h2>"
+        f"<h2>{t('benachrichtigungen.titel')}</h2>"
         '<p class="sub">Alert channels and their secrets are stored with everything else in '
         '<b>/data</b>; an environment variable still wins if it is set. Leave a secret field blank to '
         'keep the stored value. Use <b>Test</b> next to a channel to send a real message right now '
         '(bypasses cooldowns).</p>'
-        '<div class="card"><b>Alerts</b>'
+        f'<div class="card"><b>{t("benachrichtigungen.alerts.titel")}</b>'
         # .200 (Fix 2): der Satz stimmt jetzt — die Kategorien steuern seither
         # wirklich ALLE Kanaele (vorher wirkten sie nur auf Pushover, Telegram/
         # MQTT-Szenen sendeten ungefragt).
-        '<p class="dim">Which judgment categories raise an alert — on every channel '
-        '(Pushover, Telegram, MQTT scene topics). The recognized-person push itself '
-        'is governed by the Presence toggle below; the MQTT data topics '
-        '(erkennung, heartbeat) always publish while MQTT publishing is on.</p>' + cat_html +
-        '<div style="margin-top:8px">Alert text style: '
+        f'<p class="dim">{t("benachrichtigungen.alerts.hinweis")}</p>' + cat_html +
+        f'<div style="margin-top:8px">{t("benachrichtigungen.alerts.stil_label")} '
         '<select id="n-alert_stil" style="' + _st + '">'
-        + "".join(f'<option value="{o}"{" selected" if (cfg.get("alert_stil") or "worte") == o else ""}>{t}</option>'
-                  for o, t in (("worte", "plain words"),
-                               ("worte_zahlen", "words + raw scores")))
-        + '</select> <span class="dim">— how alerts describe a match '
-          '(plain words is the default; raw cosine/score numbers only if '
-          'you want them back)</span></div>'
-        '<div style="margin-top:8px">Presence push: ' + _selbool("n-anwesenheit_push", cfg.get("anwesenheit_push")) +
-        ' &nbsp; Alert cooldown (s): ' + _num("n-alert_cooldown", cfg.get("alert_cooldown")) +
-        ' &nbsp; Presence cooldown (s): ' + _num("n-anwesenheit_cooldown", cfg.get("anwesenheit_cooldown")) +
-        ' &nbsp; Scene grace (s): ' + _num("n-szene_karenz_s", cfg.get("szene_karenz_s")) + '</div></div>'
+        + "".join(f'<option value="{o}"{" selected" if (cfg.get("alert_stil") or "worte") == o else ""}>{lbl}</option>'
+                  for o, lbl in (("worte", t("benachrichtigungen.alerts.stil_worte")),
+                                 ("worte_zahlen", t("benachrichtigungen.alerts.stil_worte_zahlen"))))
+        + f'</select> <span class="dim">— {t("benachrichtigungen.alerts.stil_hinweis")}</span></div>'
+        f'<div style="margin-top:8px">{t("benachrichtigungen.alerts.label_anwesenheit_push")} '
+        + _selbool("n-anwesenheit_push", cfg.get("anwesenheit_push")) +
+        f' &nbsp; {t("benachrichtigungen.alerts.label_alert_cooldown")} '
+        + _num("n-alert_cooldown", cfg.get("alert_cooldown")) +
+        f' &nbsp; {t("benachrichtigungen.alerts.label_anwesenheit_cooldown")} '
+        + _num("n-anwesenheit_cooldown", cfg.get("anwesenheit_cooldown")) +
+        f' &nbsp; {t("benachrichtigungen.alerts.label_szene_karenz")} '
+        + _num("n-szene_karenz_s", cfg.get("szene_karenz_s")) + '</div></div>'
         '<div class="card"><b>Pushover</b>'
-        '<div>Token: ' + _txt("n-pushover_token", po.get("token"), secret=True) + '</div>'
-        '<div>User key: ' + _txt("n-pushover_user", po.get("user")) + '</div>'
-        '<button class="gtb" onclick="testKanal(\'pushover\',this)">Test Pushover</button> '
+        f'<div>{t("benachrichtigungen.pushover.label_token")} '
+        + _txt("n-pushover_token", po.get("token"), secret=True) + '</div>'
+        f'<div>{t("benachrichtigungen.pushover.label_user")} '
+        + _txt("n-pushover_user", po.get("user")) + '</div>'
+        '<button class="gtb" onclick="testKanal(\'pushover\',this)">'
+        f'{t("benachrichtigungen.pushover.knopf_test")}</button> '
         '<span id="test-pushover" class="dim"></span></div>'
         '<div class="card"><b>Telegram</b>'
-        '<div>Mode: <select id="n-telegram_modus" style="' + _st + '">' + mod_opts + '</select> '
-        '<span class="dim">aus=off · ha=via Home Assistant · direkt=direct bot · beide=both</span></div>'
-        '<div>Attachment: <select id="n-telegram_inhalt" style="' + _st + '">' + inh_opts + '</select> '
-        '<span class="dim">video=short clip, image if unavailable · bild=image only '
-        '(no transcoding — lighter on weak hardware)</span></div>'
-        '<div>Bot token: ' + _txt("n-telegram_bot_token", tg.get("bot_token"), secret=True) + '</div>'
-        '<div>Chat ID: ' + _txt("n-telegram_chat_id", tg.get("chat_id")) + '</div>'
-        '<div>Unknown cooldown (s): ' + _num("n-telegram_cooldown", cfg.get("telegram_cooldown")) + '</div>'
-        '<button class="gtb" onclick="testKanal(\'telegram\',this)">Test Telegram</button> '
+        f'<div>{t("benachrichtigungen.telegram.label_modus")} '
+        '<select id="n-telegram_modus" style="' + _st + '">' + mod_opts + '</select> '
+        f'<span class="dim">{t("benachrichtigungen.telegram.hinweis_modus")}</span></div>'
+        f'<div>{t("benachrichtigungen.telegram.label_inhalt")} '
+        '<select id="n-telegram_inhalt" style="' + _st + '">' + inh_opts + '</select> '
+        f'<span class="dim">{t("benachrichtigungen.telegram.hinweis_inhalt")}</span></div>'
+        f'<div>{t("benachrichtigungen.telegram.label_bot_token")} '
+        + _txt("n-telegram_bot_token", tg.get("bot_token"), secret=True) + '</div>'
+        f'<div>{t("benachrichtigungen.telegram.label_chat_id")} '
+        + _txt("n-telegram_chat_id", tg.get("chat_id")) + '</div>'
+        f'<div>{t("benachrichtigungen.telegram.label_cooldown")} '
+        + _num("n-telegram_cooldown", cfg.get("telegram_cooldown")) + '</div>'
+        '<button class="gtb" onclick="testKanal(\'telegram\',this)">'
+        f'{t("benachrichtigungen.telegram.knopf_test")}</button> '
         '<span id="test-telegram" class="dim"></span></div>'
         '<div class="card"><b>MQTT</b>'
-        '<div>Publish recognition topics: ' + _selbool("n-mqtt_publish", cfg.get("mqtt_publish")) + '</div>'
-        '<div>Host: ' + _txt("n-mqtt_host", mq.get("host")) +
-        ' Port: ' + _num("n-mqtt_port", mq.get("port") or 1883) + '</div>'
-        '<div>User: ' + _txt("n-mqtt_user", mq.get("user")) + '</div>'
-        '<div>Password: ' + _txt("n-mqtt_password", mq.get("password"), secret=True) + '</div>'
-        '<div>Topic prefix: ' + _txt("n-mqtt_topic_praefix", mq.get("topic_praefix")) + ' '
+        f'<div>{t("benachrichtigungen.mqtt.label_publish")} '
+        + _selbool("n-mqtt_publish", cfg.get("mqtt_publish")) + '</div>'
+        f'<div>{t("benachrichtigungen.mqtt.label_host")} '
+        + _txt("n-mqtt_host", mq.get("host")) +
+        f' {t("benachrichtigungen.mqtt.label_port")} '
+        + _num("n-mqtt_port", mq.get("port") or 1883) + '</div>'
+        f'<div>{t("benachrichtigungen.mqtt.label_user")} '
+        + _txt("n-mqtt_user", mq.get("user")) + '</div>'
+        f'<div>{t("benachrichtigungen.mqtt.label_password")} '
+        + _txt("n-mqtt_password", mq.get("password"), secret=True) + '</div>'
+        f'<div>{t("benachrichtigungen.mqtt.label_topic_praefix")} '
+        + _txt("n-mqtt_topic_praefix", mq.get("topic_praefix")) + ' '
         '<span class="dim">all published topics start with this — blank keeps the default '
         '<b>verifyd</b> (verifyd/erkennung, verifyd/heartbeat, …), so existing setups keep '
         'working; letters, digits, "_", "-", ".", "/"</span></div>'
-        '<button class="gtb" onclick="testKanal(\'mqtt\',this)">Test MQTT</button> '
+        '<button class="gtb" onclick="testKanal(\'mqtt\',this)">'
+        f'{t("benachrichtigungen.mqtt.knopf_test")}</button> '
         '<span id="test-mqtt" class="dim"></span></div>'
-        '<p><button class="gtb on" onclick="notifSpeichern()">Save + restart</button> '
+        f'<p><button class="gtb on" onclick="notifSpeichern()">'
+        f'{t("benachrichtigungen.fuss.knopf_speichern")}</button> '
         '<span id="notif-status" style="color:var(--dim)"></span></p>')

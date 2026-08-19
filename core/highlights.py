@@ -12,9 +12,35 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.0.286"   # .286 = RELEASE-Respin 2 (S9: Expert-Tabelle /qualitaet
-                      # scrollt statt 785-px-Ueberlauf auf Handy-Breiten;
-                      # Box-Text UNVERAENDERT). .285 ging nie raus.
+STAND = "0.1.0.298"   # .298 = Release-Stand (User 19.08. abends): die zwei ABGESTIMMTEN
+                      # Punkte — Absturz-Fix (Wortlaut vom User diktiert, FIX) +
+                      # Mehrsprachigkeit (EN-Wortlaut vom User abgenommen). Seit .298
+                      # sind Eintraege MEHRSPRACHIG (§6.3): dict {en,de,es,it,fr
+                      # [,betont]}, Alt-Eintraege bleiben str (= nur englisch);
+                      # webui.whatsnew_block kann beides, das Gate prueft beide Formen.
+                      # Davor .297 = Sprach-Stufe 1 (Sprachschalter live; kein
+                      # Box-Eintrag).
+                      # Davor .296 = Sprach-Stufe 0 komplett (alle 16 Anzeige-Routen lesen ihre
+                      # Texte aus core/texte/en.py, byte-gleich bewiesen) + Recognized-
+                      # live-Karten im Grid (kein Box-Eintrag).
+                      # Davor .295 = verworfene Gruppen unsichtbar im Streifen (Sammelzeile), Zaehler ehrlich
+                      # (kein Box-Eintrag).
+                      # Davor .290 = Erzeugungs-Modus auch im ANALYZE-Weg — der
+                      # Nachhol-Backlog alter Events leakte sonst weiter
+                      # (Realbeleg 20:26 e16pp1); dazu settimeout-Griff
+                      # gehaertet (kein Box-Eintrag).
+                      # Davor .289 = Erzeugungs-Aufbau-Timeout
+                      # (Haertungstest-Fang; kein Box-Eintrag).
+                      # Davor .288 = Ernte-Haertung nach Leak-Beweis (Task #11,
+                      # Serie E): Erzeugungs-Modus fuer Alt-Clips (Probe-
+                      # Warte statt Leak-Abbruch), Vorlader-Serialisierung,
+                      # Nachhol ohne clip.mp4-HEAD (kein Box-Eintrag).
+                      # Davor .287 = Clip-Debug-Trace [clipdbg] hinter dem
+                      # debug-Schalter (Frigate-Haenger-Beweissicherung,
+                      # Task #11; kein Box-Eintrag).
+                      # Davor .286 = RELEASE-Respin 2 (S9: Expert-Tabelle
+                      # /qualitaet scrollt statt 785-px-Ueberlauf auf
+                      # Handy-Breiten; Box-Text UNVERAENDERT). .285 ging nie raus.
                       # Davor .285 = Respin 1 (Betreiber-Genitiv in 2 Alt-
                       # Kommentaren, Image-Audit-Fang; Box-Text UNVERAENDERT).
                       # .284 ging nie raus.
@@ -228,6 +254,46 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # .298 — MIT USER ABGESTIMMT (19.08. abends): Punkt 1 Wortlaut vom User
+    # diktiert (stand.md What's-new-Kandidaten, "kurz, ohne Frigate-Details");
+    # Punkt 2 EN-Wortlaut vom User abgenommen ("Wortlaut ok"). Uebersetzungen
+    # laufen durch dieselbe Muttersprachler-QS wie core/texte (Stufe-2-Runde).
+    ("0.1.0.298", (
+        # User 19.08. spaetabends: Interim-Hinweis wie .286 vorangestellt
+        # ("ok incl dem interims hinweis"); Rest-Wortlaut unveraendert diktiert.
+        {"en": "Interim release — found and fixed a bug that could cause a "
+               "crash of Frigate during very large, long learning runs with many events.",
+         "de": "Zwischenversion — einen Fehler gefunden und behoben, der bei sehr großen, "
+               "langen Lernläufen mit vielen Events zum Absturz von Frigate führen konnte.",
+         "es": "Versión intermedia: encontrado y corregido un fallo que podía provocar un cierre "
+               "inesperado de Frigate en ejecuciones de aprendizaje muy grandes y largas "
+               "con muchos eventos.",
+         "it": "Versione intermedia — trovato e corretto un errore che poteva causare un crash di Frigate "
+               "durante sessioni di apprendimento molto grandi e lunghe, "
+               "con molti eventi.",
+         "fr": "Version intermédiaire — un bug pouvant provoquer un plantage de Frigate lors de sessions "
+               "d'apprentissage très longues et de grande ampleur, avec de "
+               "nombreux événements, a été trouvé et corrigé."},
+        {"en": "suslik now speaks five languages — English, German, Spanish, "
+               "Italian and French. Pick yours in the header; pages not yet "
+               "translated say so and follow with the next releases.",
+         "de": "suslik spricht jetzt fünf Sprachen — Englisch, Deutsch, "
+               "Spanisch, Italienisch und Französisch. Wähle deine Sprache "
+               "in der Kopfleiste. Noch nicht übersetzte Seiten sagen es "
+               "dir; die Übersetzung folgt mit den nächsten Versionen.",
+         "es": "suslik ahora habla cinco idiomas: inglés, alemán, español, "
+               "italiano y francés. Elige el tuyo en la cabecera; las páginas "
+               "aún sin traducir lo indican y llegarán con las próximas "
+               "versiones.",
+         "it": "suslik ora parla cinque lingue: inglese, tedesco, spagnolo, "
+               "italiano e francese. Scegli la tua nell’intestazione; le "
+               "pagine non ancora tradotte lo segnalano e arriveranno con le "
+               "prossime versioni.",
+         "fr": "suslik parle désormais cinq langues : anglais, allemand, "
+               "espagnol, italien et français. Choisissez la vôtre dans "
+               "l'en-tête ; les pages pas encore traduites l'indiquent et "
+               "arriveront avec les prochaines versions."},
+    )),
     # .284 — MIT USER ABGESTIMMT (18.08. nachmittags, Inhalt von ihm
     # diktiert: "Zwischenversion; fokussiert an den Lernmoeglichkeiten
     # fuer Gesichter gearbeitet, am Zuweisen, an der Qualitaet der

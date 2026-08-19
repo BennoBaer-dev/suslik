@@ -7,6 +7,41 @@ this file — the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git
 history.
 
+## 0.1.0.298 — 2026-08-19
+
+Interim release. Bundles the internal steps 0.1.0.287–0.1.0.297.
+
+- **Crash fix for large learning runs**: found and fixed a bug that could
+  cause a crash of Frigate during very large, long learning runs with many
+  events. Clip fetching for past events now takes a sturdier path and
+  reports failures instead of piling up stalled downloads.
+- **suslik now speaks five languages** — English, German, Spanish, Italian
+  and French. Pick yours with the new switch in the header (or in step 0 of
+  the setup wizard); the choice applies to the whole installation and
+  survives backups. Translation is rolling out page by page: the menu, all
+  dialogs, the main pages and the Today view are done, pages not yet
+  translated say so honestly and follow with the next releases.
+- **Learning runs tidy up after themselves**: groups without usable faces
+  are set aside automatically at the end of a run (with a review link,
+  nothing is deleted), so naming only shows real groups and the counters
+  stay accurate.
+- **Today as a tile grid**: the recognized-live row and person cards align
+  in a steady grid instead of ragged rows.
+
+## 0.1.0.286 — 2026-08-18
+
+Interim release (entry added retroactively — it was missing from this file;
+the GitHub release existed all along). Bundles the internal steps
+0.1.0.244–0.1.0.285; 0.1.0.284/.285 were respun as 0.1.0.286 after the
+privacy and layout gates flagged two issues (an operator name in old
+comments, a table overflow on phone widths).
+
+- Focused work on face learning: guided learning runs and easier assigning
+  of faces to people.
+- Picture quality: a one-click check finds weak, duplicate and mixed-up
+  reference pictures for you.
+- Clearer camera setup and configuration.
+
 ## 0.1.0.243 — 2026-08-17
 
 Intermediate release — focus on simplification and clarity. We are mid-way

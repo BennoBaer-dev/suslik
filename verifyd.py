@@ -26,7 +26,9 @@ from core import areas as _areas_mod                  # Areas Stufe 1 (Sicht + M
 from core import registry as _reg                     # Dateinamen-Vertrag (Issues #11/#12)
 from core import kette as _kette                      # Modulumbau R2: die Erkennungskette (Default-Kette)
 from core import melden as _melden                    # Modulumbau R3: die Meldewege (Live-Andock-API)
+from core import frames as _frames                    # .287: Clip-Debug [clipdbg] (Senke + Direkt-Zeilen; leichtgewichtig, kein cv2)
 from core.schoner import Schoner                      # .264: Frigate-Schoner (Rueckzug statt Retry)
+from core import sprache as _sprache                  # Sprach-Stufe 1: contextvar je Request + Schalter
 # Oeffentliche Projekt-Doku (GitHub). Lokale Arbeitsnotizen des Autors enthalten interne
 # IPs + Zugaenge und duerfen NICHT ueber das UI ausgeliefert werden -> System-Seite + /doc zeigen aufs Repo.
 DOCS_URL = "https://github.com/BennoBaer-dev/suslik"
@@ -91,13 +93,13 @@ def _lade_config_store(cfg):
     return {}
 
 
-# Sechs Wege schreiben den Config-Store (config_schreiben, notif_speichern, config_wiederherstellen,
-# Setup-Wizard, Kamera-Blatt, Areas) — teils aus parallelen HTTP-Threads. Ohne gemeinsames Lock ist der
+# Sieben Wege schreiben den Config-Store (config_schreiben, notif_speichern, config_wiederherstellen,
+# Setup-Wizard, Kamera-Blatt, Areas, Sprache) — teils aus parallelen HTTP-Threads. Ohne gemeinsames Lock ist der
 # Read-Modify-Write ein Race (letzter gewinnt, Aenderung des anderen weg), und mit dem FESTEN
 # tmp-Namen "<p>.tmp" haetten sich zwei Schreiber gegenseitig die halbfertige Datei umbenannt.
 # EHRLICH (Widerleger .91): das Lock deckt hier nur das SCHREIBEN; die fuenf Alt-Wege lesen den
 # Store weiter ungeschuetzt davor (Race bleibt dort, entschaerft durch den folgenden neustart).
-# Der Areas-Weg (.92, einziger OHNE Neustart) haelt als erster das Lock um Lesen+Aendern+Schreiben —
+# Areas-Weg (.92) und Sprache-Weg (Stufe 1) laufen OHNE Neustart und halten das Lock um Lesen+Aendern+Schreiben —
 # deshalb RLock (die verschachtelte Sperre in _store_schreiben darf nicht klemmen); die Alt-Wege
 # auf denselben Griff umzustellen ist als Task notiert.
 _cfg_lock = threading.RLock()
@@ -468,6 +470,14 @@ def load_config(path):
                          # nach N Netz-Fehlern in Folge pause_s zurueckziehen.
                          ("frigate_schoner_fehler", 3),
                          ("frigate_schoner_pause_s", 180),
+                         # .288 Erzeugungs-Modus der Ernte (Task #11, Serie-E-
+                         # Beweis 18.08.): Events aelter als alter_min ziehen
+                         # ihren Clip im Erzeugungs-Modus (Warte-Schleife mit
+                         # /api/version-Probe statt hartem 30-s-Abbruch, der
+                         # drueben je Zug 1 API-Thread + 1 ffmpeg liegen
+                         # liess); deckel_s ist die absolute Wartegrenze.
+                         ("clip_erzeugung_alter_min", 30),
+                         ("clip_erzeugung_deckel_s", 300),
                          # Watchdog der LIVE-Analyse (Fix 10.08.; vorher fest 1800 s).
                          # MESSBASIS deckung.jsonl 27.07.-10.08. (n=1394 Live-Analysen
                          # auf der Prod-Maschine): Median 5,8 s, p90 20,2 s, p99 52,2 s,
@@ -585,7 +595,11 @@ def load_config(path):
                          ("worker_rss_max_mb", 4096),        # Neustart-Schwelle (VmRSS des Workers;
                          # warm real ~1,9 GB [adaface/GPU] — 2048 liess nur 10 % Luft und riss im
                          # Soak 27.07.; 4096 = User-Entscheid: faengt Ausufern, nicht Normalbetrieb)
-                         ("zeitzone", "")]:                  # leer = keine eigene Vorgabe (s. TZ-Block unten)
+                         ("zeitzone", ""),                  # leer = keine eigene Vorgabe (s. TZ-Block unten)
+                         # Sprach-Stufe 1: Default-Paar nur fuer Sichtbarkeit in /health und
+                         # Config-Export — der ECHTE Leser ist core/sprache.store_sprache()
+                         # (mtime-gecacht, auch aus Prozessen ohne Dienst-Config).
+                         ("sprache", "en")]:
         cfg.setdefault(key, default)
     os.environ["VERIFY_DATA_DIR"] = cfg["data_dir"]   # Subprozesse (anlernen) erben den Datenpfad
     # #42 Teil B: Fehldetektions-Schwellen fuer anlernen (Sammel-Gate) — gleiches
@@ -894,13 +908,37 @@ def _analyse_nice():
         pass
 
 
+def _clip_alter_min(ende_ts, start_ts=None):
+    """[clipdbg] (.287): Event-Alter in Minuten = jetzt minus Event-ENDEzeit.
+    Fehlt das Ende (laufendes Event), zaehlt der Start; ohne beides None.
+    Reine Telemetrie fuer die Clip-Debug-Zeilen (core.frames), nie Verhalten —
+    der Haenger-Befund (Task #11) haengt am ALTER der gezogenen Events."""
+    try:
+        t = float(ende_ts or 0) or float(start_ts or 0)
+        return round((time.time() - t) / 60, 1) if t else None
+    except Exception:
+        return None
+
+
 def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=None,
-                koerper=False, info=None):
+                koerper=False, info=None, clip_quelle="live", clip_alter_min=None):
     # Watchdog der Live-Analyse aus der Config (analyse_timeout_s, messbasiert —
     # s. Default-Block; vorher fest 1800 s: am 10.08. hing der Worker exakt diese
     # 1800 s im Swap-Thrashing und blockierte den Pass 34 min). Nachhol-Laeufe
     # bekommen weiter ihren eigenen, haerteren Deckel (nachhol_analyse_timeout_s).
     tmo = int(timeout_s or cfg.get("analyse_timeout_s") or 600)
+    # .290 (Task #11): Alt-Event-Weiche auch fuer den Analyze-Weg — der
+    # Nachhol-Lauf zieht Clips ALTER Events (Frigate muss sie erst erzeugen);
+    # ohne Erzeugungs-Modus riss dessen 30-s-Timeout genau in den Serie-E-
+    # Leak (real belegt 18.08. 20:26, e16pp1: 'TimeoutError: timed out').
+    # Dieselbe Config-Quelle wie die Ernte; der Job-/Prozess-Timeout traegt
+    # den Deckel MIT (ein Kill mitten im Warten waere selbst der Leak).
+    erz = (clip_alter_min is not None
+           and float(clip_alter_min)
+           >= float(cfg.get("clip_erzeugung_alter_min") or 30))
+    erz_deckel = int(cfg.get("clip_erzeugung_deckel_s") or 300)
+    if erz:
+        tmo += erz_deckel
     argv = [eid, "--labels", camera, "--persons", *persons,
             "--dir", event_dir, "--fps-sample", str(cfg["fps_sample"]),
             "--win-thresh", str(cfg["win_thresh"]),
@@ -928,8 +966,16 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
         # Unterscheidung (:dt >= frist) kippt nach langem Lock-Warten.
         w1, w2 = {}, {}
         t0 = time.monotonic()
-        antwort = worker.job({"typ": "analyze", "argv": argv, "log": logpfad}, tmo,
-                             info=w1)
+        # .287 [clipdbg]: Quelle (live/nachhol) + Event-Alter reisen als
+        # Job-Felder mit — der Worker armiert damit core.frames je Job.
+        # .290: dazu die Erzeugungs-Weiche + Deckel (Verhalten, s.o.).
+        antwort = worker.job({"typ": "analyze", "argv": argv, "log": logpfad,
+                              "clip_quelle": clip_quelle,
+                              "clip_alter_min": clip_alter_min,
+                              "clip_erzeugung": erz,
+                              "clip_erzeugung_deckel_s": erz_deckel,
+                              "clip_vod": cfg.get("clip_vod") is not False},
+                             tmo, info=w1)
         dt = time.monotonic() - t0 - float(w1.get("wartezeit_s") or 0.0)
         frist = tmo
         if antwort is None and timeout_s is None:
@@ -969,7 +1015,13 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
                              f"immediate retry on a fresh worker "
                              f"(deadline {tmo}s)\n")
             t0 = time.monotonic()
-            antwort = worker.job({"typ": "analyze", "argv": argv, "log": logpfad},
+            antwort = worker.job({"typ": "analyze", "argv": argv, "log": logpfad,
+                                  "clip_quelle": clip_quelle,
+                                  "clip_alter_min": clip_alter_min,
+                                  "clip_erzeugung": erz,
+                                  "clip_erzeugung_deckel_s": erz_deckel,
+                                  "clip_vod": cfg.get("clip_vod")
+                                  is not False},
                                  frist, info=w2)
             dt = time.monotonic() - t0 - float(w2.get("wartezeit_s") or 0.0)
         warte = float(w1.get("wartezeit_s") or 0.0) + float(w2.get("wartezeit_s") or 0.0)
@@ -998,6 +1050,24 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
     else:
         env = dict(os.environ, OV_DEVICE=cfg["ov_device"], FRIGATE_URL=cfg["frigate_url"],
                    SCRATCH_DIR=os.path.join(cfg["data_dir"], "clips"))
+        if erz:
+            # .290: Erzeugungs-Modus im Legacy-Subprozess-Weg — VERHALTEN,
+            # deshalb UNABHAENGIG vom debug-Schalter (die [clipdbg]-ENVs
+            # darunter sind reine Telemetrie).
+            env["SUSLIK_CLIP_ERZEUGUNG"] = "1"
+            env["SUSLIK_CLIP_ERZEUGUNG_DECKEL_S"] = str(erz_deckel)
+        # .292: VOD-Weg-Schalter im Legacy-Subprozess — gilt fuer JEDEN
+        # Clip-Zug, nicht nur den Erzeugungs-Fall (Modul-Default ist AN;
+        # nur explizites False der Config schaltet ab).
+        if cfg.get("clip_vod") is False:
+            env["SUSLIK_CLIP_VOD"] = "0"
+        if cfg.get("debug"):
+            # .287 [clipdbg] auch im Legacy-Subprozess-Weg (ohne Worker):
+            # core.frames armiert sich beim Import aus diesen ENV-Variablen.
+            env["SUSLIK_CLIP_DBG"] = "1"
+            env["SUSLIK_CLIP_QUELLE"] = str(clip_quelle)
+            if clip_alter_min is not None:
+                env["SUSLIK_CLIP_ALTER_MIN"] = str(clip_alter_min)
         cmd = [sys.executable, os.path.join(HERE, "analyze.py"), *argv]
         # Nachbesserung W8: derselbe EINE Analyse-Slot wie im Worker-Zweig, hier
         # als Modul-Lock (_ANALYSE_SERIELL, s. Kopf) — die Wanduhr-Messung haelt
@@ -1171,6 +1241,11 @@ class WorkerProzess:
                 if job.get("typ") != "ping":
                     job.setdefault("rss_max_mb",
                                    int(self.cfg.get(self.rss_key) or self.rss_default))
+                    # .287 [clipdbg]: der EINE debug-Schalter (Whitelist-Key
+                    # 'debug') wandert als Job-Feld in den Worker — gleicher
+                    # Deckungs-Vertrag wie rss_max_mb, keine zweite Quelle.
+                    # worker.py armiert damit core.frames je Job.
+                    job.setdefault("clip_dbg", bool(self.cfg.get("debug")))
                 self.p.stdin.write(json.dumps(job) + "\n")
                 self.p.stdin.flush()
                 r, _, _ = select.select([self.rx], [], [], timeout_s)
@@ -1437,6 +1512,16 @@ class Service:
     def __init__(self, cfg, dry_alert=False):
         self.cfg = cfg
         self.dry_alert = dry_alert
+        # .287 Clip-Debug: die [clipdbg]-Senke des DIENST-Prozesses einhaengen
+        # (core.frames.clip_dbg — Vorlader-Downloads, Nachhol-Meta-Auskunft
+        # [has_clip statt HEAD seit .288], Qualitaets-Zeilen). Der Schalter
+        # ist cfg['debug'] und wird JE ZEILE geprueft (s. _clip_dbg_senke)
+        # — Umschalten wirkt sofort.
+        _frames.CLIP_DBG = self._clip_dbg_senke
+        # .292: VOD-Weg-Schalter des DIENST-Prozesses (Melden-Video, direkte
+        # Zuege) — beim Start aus der Config; der Vorlader armiert je Zug
+        # zusaetzlich frisch, Worker-Jobs tragen ihn als Job-Feld.
+        _frames.CLIP_VOD = cfg.get("clip_vod") is not False
         if cfg.get("cpu_threads"):
             # N9: EIN Knopf fuer beide Prozesse — ENV erbt der Worker-Subprozess; face_audit
             # liest es beim ersten Session-Bau (_so_mit_threads), Transcode je Kommando.
@@ -2646,7 +2731,10 @@ class Service:
         "besucher_sim": (float, 0.40, 0.70, "threshold: at this similarity an unknown event counts as an ignored visitor (no alert)"),
         "modell": (list, ["buffalo", "adaface"], None, "recognition model: buffalo (insightface w600k_r50) | adaface (IR101, better separation) — the refcache is rebuilt automatically after a switch"),
         "update_check": (bool, None, None, "daily anonymous check for a newer release on GitHub — shows a quiet hint in the header; the only outbound call besides notification channels"),
-        "debug": (bool, None, None, "verbose debug logging: per-person scores/windows, MQTT payloads, timing (INFO stays the default; turn on to validate the system in depth)"),
+        "debug": (bool, None, None, "verbose debug logging: per-person scores/windows, MQTT payloads, timing, plus a [clipdbg] trace of every Frigate clip interaction (fetch start/end with bytes+duration, clip-generation waits, per-clip frame quality) (INFO stays the default; turn on to validate the system in depth)"),
+        "clip_erzeugung_alter_min": (int, 5, 1440, "harvest: events older than this (minutes) count as ARCHIVED — Frigate has to rebuild their clip from recording segments before a single byte arrives, which takes far longer than a live download. For those the fetch waits patiently (see the cap below) instead of aborting; a measured abort during that rebuild permanently leaks one API thread and one ffmpeg inside Frigate until Frigate is restarted"),
+        "clip_erzeugung_deckel_s": (int, 60, 1800, "harvest: absolute cap (seconds) on waiting for Frigate to rebuild an archived event's clip. While waiting, a cheap probe checks every stall that Frigate itself still answers — if it does, the wait continues up to this cap; if not, the fetch stops immediately. Events hitting the cap stay unbooked and are retried in a later run"),
+        "clip_vod": (bool, None, None, "harvest: fetch archived events' clips via Frigate's VOD playlist (/vod/event/.../master.m3u8) and merge the segments locally instead of asking Frigate to rebuild the clip server-side. Frigate's clip generation can stall for minutes and leak a worker thread plus an ffmpeg process per request until its whole API freezes (reported upstream); the VOD route bypasses that code path entirely. On any failure (older Frigate without the endpoint, local ffmpeg error) the fetch falls back to the classic clip.mp4 path with all its safeguards"),
         "nachhol_versuche": (int, 0, 5, "retry attempts for events whose analysis failed (0 = off); retries are silent, they never alert"),
         "nachhol_tage": (int, 1, 3, "how far back the retry looks for failed analyses (days)"),
         "worker": (bool, None, None, "persistent analysis worker: keeps the models loaded between events (large CPU saving); off = one process per event (pre-0.1.0.38 behavior)"),
@@ -4822,10 +4910,68 @@ class Service:
                 # Boot-Resume-Zaehler zurueck — nur ununterbrochene Fehlserien
                 # derselben Phase laufen gegen anker_resume_max.
                 _ll.lauf_fortschreiben(dd, anker_neuanlaeufe=0)
+                # .294 (User 19.08.: 'das muss in dem Analyselauf sein, nicht
+                # im Browser'): LAUF-END-SICHTUNG — der Lauf prueft jede
+                # unbenannte Gruppe selbst (dieselbe Crop-Messung wie die
+                # spaetere Flaeche, Cache wird dabei warm — kein
+                # checking-Moment mehr) und verwirft Gruppen ohne EIN
+                # brauchbares Bild direkt (Dismiss-mit-Gedaechtnis wie
+                # .293). Der .293-Handler-Fang bleibt als Netz fuer
+                # Altbestaende. Fehler je Gruppe sind laut, kippen aber
+                # nie den Lauf-Abschluss.
+                self._lernlauf_endsichtung(lauf_id)
         except Exception as e:
             from core import lernlauf as _ll2
             _ll2.lauf_fortschreiben(dd, fortschritt={"status": f"anchor stage failed: {e}"})
             self.log(f"anchor stage failed ({type(e).__name__}: {e})")
+
+    def _lernlauf_endsichtung(self, lauf_id):
+        """.294: Sichtung + 0-Treffer-Aussortierung als TEIL des Laufs."""
+        from core import lernlauf as _ll
+        import anlernen as _al
+        dd = self.cfg["data_dir"]
+        ldir = os.path.join(dd, "state", "lernlauf", str(lauf_id))
+        try:
+            saetze, _k = _ll.anker_lesen(dd)
+        except Exception as e:
+            self.log(f"end check skipped: anchors unreadable "
+                     f"({type(e).__name__}: {e})")
+            return
+        offen = [s for s in saetze
+                 if (s.get("lauf") or {}).get("lauf_id") == str(lauf_id)
+                 and s.get("status") == "unbenannt"
+                 and not s.get("person")]
+        if not offen:
+            return
+        weg, behalten = 0, 0
+        for satz in offen:
+            try:
+                _al.gruppen_sichtung(satz, ldir, emb=self.embedder)
+                si = _al.sichtung_lesen(satz, ldir, self.cfg["modell"])
+                if si is None:
+                    behalten += 1
+                    continue
+                bew = _al.sichtung_bewerten(
+                    None, si, _al.refs_matrix_roh(self.cfg["modell"]),
+                    self.cfg["benennung_dup_sim"], [])
+                if bew and not any(s.get("stufe") in ("gut", "grenzfall")
+                                   for s in bew):
+                    _ll.anker_verwerfen(dd, str(satz.get("anker_id")))
+                    weg += 1
+                    self.log(f"end check: group {satz.get('anker_id')} set "
+                             f"aside — nothing passed the picture check "
+                             f"({int(si.get('gesamt') or 0)} pictures, "
+                             "detector false hits)")
+                else:
+                    behalten += 1
+            except Exception as e:
+                behalten += 1
+                self.log(f"end check: group {satz.get('anker_id')} not "
+                         f"judged ({type(e).__name__}: {e}) — kept")
+        if weg:
+            self.log(f"end check (run {lauf_id}): {behalten} group"
+                     f"{'s' if behalten != 1 else ''} kept, {weg} set aside "
+                     "(no usable faces)")
 
     def _lernlauf_ernte(self):
         """Frontal-Ernte (Konzept §P1): 1 Event je Worker-Job; die Live-Wache wird
@@ -4946,10 +5092,24 @@ class Service:
             # Event darf den Live-Pfad nicht minutenlang halten (Leitprinzip 5;
             # 1800 hart war das Loch, das dieser Key historisch geschlossen hat).
             timeout_s = int(self.cfg.get("nachhol_analyse_timeout_s") or 300)
+            # .288 (Task #11): Schwelle + Deckel des Erzeugungs-Modus EINMAL
+            # aus der Config (Default-Paar in load_config, kein Hardcode).
+            erz_alter_min = float(self.cfg.get("clip_erzeugung_alter_min") or 30)
+            erz_deckel_s = int(self.cfg.get("clip_erzeugung_deckel_s") or 300)
             for i, e in enumerate(mit_clip, 1):
                 eid = e.get("eid")
                 if eid in fertig:
                     continue
+                # .288 Alt-Event-Weiche: Alter = jetzt minus Event-ENDE
+                # (start + clip_s). Ab erz_alter_min muss Frigate den Clip
+                # erst aus Segmenten ERZEUGEN — der Zug laeuft dann im
+                # Erzeugungs-Modus (core.frames: Warte-Schleife mit Probe
+                # statt des 30-s-Abbruchs, der drueben je Zug 1 API-Thread
+                # + 1 ffmpeg liegen liess; Serie-E-Beweis 18.08.).
+                _am = _clip_alter_min(
+                    (float(e.get("start") or 0)
+                     + float(e.get("clip_s") or 0)) or None, e.get("start"))
+                alt_ev = _am is not None and _am >= erz_alter_min
                 # .86: das AKTUELLE Event sichtbar machen — bei hoher fps dauert
                 # ein Event Minuten, und ohne diese Zeile sah 'event: 11/50' wie ein
                 # Haenger aus, obwohl Event 12 mitten in der Analyse steckte.
@@ -4964,10 +5124,23 @@ class Service:
                 # am AKTUELLEN Event, kurz warten statt doppelt zu laden.
                 vor = getattr(self, "_lernlauf_vorlader", None)
                 if vor and vor[1] == eid and vor[0].is_alive():
-                    vor[0].join(timeout=45)
+                    # .288: haengt der Vorlader gerade an der ERZEUGUNG
+                    # genau dieses Alt-Events, warten wir bis zu dessen
+                    # Deckel mit — nach 45 s aufzugeben hiess, denselben
+                    # Clip PARALLEL als ZWEITE Erzeugung zu ziehen (die
+                    # Doppellast, die Serie E beim Vorlader+Worker mass).
+                    vor[0].join(timeout=(erz_deckel_s + 60) if alt_ev else 45)
                 # .264: waehrend einer Schoner-Sperre KEIN Vorladen — der
                 # Vorlader waere sonst genau der Hammer, den der Schoner
                 # verhindern soll.
+                # .288 Serialisierung der teuren Erzeugungen: erzeugt der
+                # WORKER diesen Clip gleich selbst frisch (Alt-Event, kein
+                # Cache-Treffer), startet der Vorlader KEINEN eigenen
+                # Alt-Clip-Zug daneben — je Zeitpunkt hoechstens EINE
+                # Clip-Erzeugung drueben (Flag am Cache-Stand, kein
+                # Busy-Wait; junge Clips laden weiter parallel vor).
+                worker_erzeugt = alt_ev and not os.path.isfile(os.path.join(
+                    clips_dir, str(eid).replace("/", "_") + ".mp4"))
                 if frigate_schoner.gesperrt():
                     pass
                 elif vor is None or not vor[0].is_alive():
@@ -4979,20 +5152,42 @@ class Service:
                              str(x.get("eid")).replace("/", "_") + ".mp4"))),
                         None)
                     if _nx is not None:
-                        def _vorladen(_ne=_nx.get("eid")):
-                            from core import frames as _fr
-                            try:
-                                _fr.clip_holen(
-                                    _ne, data_dir=dd,
-                                    frigate_url=self.cfg.get("frigate_url"))
-                            except Exception:
-                                pass       # der Ernte-Job meldet Fehler selbst
-                            finally:
-                                _fr.frei(_ne, data_dir=dd)
-                        _vt = threading.Thread(target=_vorladen, daemon=True,
-                                               name="lernlauf-vorlader")
-                        self._lernlauf_vorlader = (_vt, _nx.get("eid"))
-                        _vt.start()
+                        # .287 [clipdbg]/.288 Weiche: Alter = jetzt minus
+                        # Event-ENDE (start + clip_s).
+                        _nx_alter = _clip_alter_min(
+                            (float(_nx.get("start") or 0)
+                             + float(_nx.get("clip_s") or 0))
+                            or None, _nx.get("start"))
+                        _nx_alt = (_nx_alter is not None
+                                   and _nx_alter >= erz_alter_min)
+                        if worker_erzeugt and _nx_alt:
+                            pass   # Serialisierung (s.o.): der Worker-Zug
+                            #        erzeugt schon — kein zweiter Alt-Zug
+                        else:
+                            def _vorladen(_ne=_nx.get("eid"),
+                                          _alter=_nx_alter, _erz=_nx_alt):
+                                from core import frames as _fr
+                                # .292: VOD-Schalter fuer den DIENST-Prozess
+                                # je Zug frisch aus der Config armieren
+                                # (Worker-Jobs bekommen ihn als Job-Feld).
+                                _fr.CLIP_VOD = (self.cfg.get("clip_vod")
+                                                is not False)
+                                try:
+                                    _fr.clip_holen(
+                                        _ne, data_dir=dd,
+                                        frigate_url=self.cfg.get("frigate_url"),
+                                        quelle="vorlader", alter_min=_alter,
+                                        erzeugung=_erz,
+                                        erzeugung_deckel_s=erz_deckel_s)
+                                except Exception:
+                                    pass   # der Ernte-Job meldet Fehler selbst
+                                finally:
+                                    _fr.frei(_ne, data_dir=dd)
+                            _vt = threading.Thread(target=_vorladen,
+                                                   daemon=True,
+                                                   name="lernlauf-vorlader")
+                            self._lernlauf_vorlader = (_vt, _nx.get("eid"))
+                            _vt.start()
                 z, ferr = _ll.lauf_lesen(dd)
                 if z is None:
                     self.log(f"harvest stopped: run state unreadable ({ferr})"
@@ -5011,8 +5206,32 @@ class Service:
                                 {"typ": "ernte", "eid": eid, "kamera": e.get("kamera"),
                                  "ts": e.get("start") or 0, "fps_sample": fps,
                                  "schwellen": schwellen, "lauf_dir": lauf_dir,
+                                 # .287 [clipdbg]: Quelle + Event-Alter (jetzt
+                                 # minus Ende = start + clip_s) fuer die
+                                 # Clip-Debug-Zeilen im Worker (ernte.log).
+                                 "clip_quelle": "ernte",
+                                 "clip_alter_min": _am,
+                                 # .288: Erzeugungs-Modus-Weiche + Deckel als
+                                 # Job-Felder (Deckungs-Vertrag wie rss_max_mb
+                                 # — EINE Config-Quelle, der Worker rechnet
+                                 # nichts selbst).
+                                 "clip_erzeugung": alt_ev,
+                                 "clip_erzeugung_deckel_s": erz_deckel_s,
+                                 # .292: VOD-Weg-Schalter (clip_vod, Default
+                                 # AN) — Alt-Clips kommen zuerst ueber
+                                 # Frigates nginx-vod + lokalen Remux, der
+                                 # kranke Erzeugungspfad (frigate#24029)
+                                 # wird nur noch als Fallback betreten.
+                                 "clip_vod": self.cfg.get("clip_vod")
+                                 is not False,
                                  "log": os.path.join(lauf_dir, "ernte.log")},
-                                timeout_s=timeout_s)
+                                # .288: der Job-Timeout traegt die moegliche
+                                # Erzeugungs-Wartezeit MIT — sonst killte der
+                                # Dienst den Worker mitten im Erzeugungs-
+                                # Warten und der Kill waere selbst wieder der
+                                # Leak-Abbruch aus Serie E.
+                                timeout_s=timeout_s
+                                + (erz_deckel_s if alt_ev else 0))
                             abgesendet = True
                     if not abgesendet:
                         time.sleep(1)
@@ -5037,6 +5256,16 @@ class Service:
                         summe[k] = summe.get(k, 0) + eintrag[k]
                     for k in ("frames_gelesen", "frames_soll"):
                         eintrag[k] = antwort.get(k)
+                    if antwort.get("frames_soll"):
+                        # .287 [clipdbg] (c): Clip-Qualitaet der Ernte-Analyse
+                        # im DIENST-Log (die Download-Zeilen stehen im
+                        # ernte.log des Worker-Jobs).
+                        _frames.clip_dbg(
+                            f"{eid}: harvest clip quality frames "
+                            f"{antwort.get('frames_gelesen')}/"
+                            f"{antwort.get('frames_soll')} readable"
+                            + (" INCOMPLETE" if antwort.get("unvollstaendig")
+                               else ""))
                     inv = _ern.zaehler_pruefen(antwort)
                     if inv:
                         summe["invariante"] = summe.get("invariante", 0) + 1
@@ -5088,6 +5317,19 @@ class Service:
                         if _ll.lauf_fortschreiben(dd, fortschritt={
                                 "status": "harvesting"}) is None:
                             return
+                        continue
+                    # .288: Erzeugungs-Abbrueche (Deckel erreicht ODER Probe
+                    # tot, Frigate inzwischen aber wieder da) NIE als
+                    # 'fehler' buchen und NIE sofort neu ziehen — das Event
+                    # bleibt ungebucht (kein fertig-, kein durchsucht-
+                    # Vermerk), ein spaeterer Lauf/Resume holt es nach
+                    # (derselbe Nicht-gebucht-Weg wie beim Infra-Ausfall).
+                    _ftxt = str((antwort or {}).get("fehler") or "")
+                    if ("frigate_stoerung" in _ftxt
+                            or "erzeugung_deckel" in _ftxt):
+                        self.log(f"harvest {eid}: clip generation aborted "
+                                 f"({_ftxt[:120]}) — event NOT booked, "
+                                 "a later run retries it")
                         continue
                     eintrag["fehler"] = ((antwort or {}).get("fehler")
                                          or "worker timeout/crash")
@@ -5454,6 +5696,14 @@ class Service:
         if self.cfg.get("debug"):
             self.log(f"[dbg] {msg}")
 
+    def _clip_dbg_senke(self, zeile):
+        """[clipdbg]-Senke (core.frames.clip_dbg, .287, User-Auftrag 18.08.):
+        DERSELBE Schalter wie debug() (Whitelist-Key 'debug'), die Zeilen gehen
+        ueber log() (stdout + /log-Ringpuffer). Das Praefix setzt core.frames —
+        die eine Stelle fuer alle Prozesse."""
+        if self.cfg.get("debug"):
+            self.log(zeile)
+
     def process(self, eid, nachhol=0, koerper=False):
         """nachhol=N (N>=1): Wiederholung einer frueher mit 'fehler' geendeten Analyse.
         Ein Nachhol-Lauf ist STUMM (kein Alert/Push/Telegram/MQTT, s. _nachhol_runde) und
@@ -5540,7 +5790,12 @@ class Service:
                               # abfragbar (anderer Prozess). Nur Live-Laeufe:
                               # nur sie rufen unten _person_live.
                               koerper=(_koerper_will and kette_person != "aus"),
-                              info=_ainfo)
+                              info=_ainfo,
+                              # .287 [clipdbg]: Quelle + Event-Alter (jetzt
+                              # minus ENDEzeit) fuer die Clip-Debug-Zeilen.
+                              clip_quelle=("nachhol" if nachhol else "live"),
+                              clip_alter_min=_clip_alter_min(
+                                  ev.get("end_time"), ev.get("start_time")))
             _warte_s = float(_ainfo.get("wartezeit_s") or 0.0)
             # P1: Provider-Guard-Vorfaelle aus dem Subprozess ins DIENST-Log heben —
             # analyze.log liest sonst niemand, und ein degradierter Lauf bliebe unsichtbar
@@ -5563,6 +5818,12 @@ class Service:
             # seinem Versuchsbudget erneut). Darueber: Teilurteil MIT sichtbarem Flag.
             _fg = (res or {}).get("frames_gelesen")
             _fs = (res or {}).get("frames_soll")
+            if _fs:
+                # .287 [clipdbg] (c): Clip-Qualitaet nach der Analyse — die
+                # '1/210'-Klasse des Haenger-Befunds wird hier je Event belegt.
+                _frames.clip_dbg(f"{eid}: clip quality after analysis frames "
+                                 f"{_fg}/{_fs} readable "
+                                 f"src={'nachhol' if nachhol else 'live'}")
             if res is not None and _fs and _fg is not None and _fg * 2 < _fs:
                 self.log(f"{eid}: clip only {_fg}/{_fs} frames readable (<50%) — "
                          f"treated as analysis failure")
@@ -6414,27 +6675,30 @@ class Service:
         return [(e, v) for _, _, e, v in kand], offen, tot
 
     def _nachhol_vorpruefung(self, eid):
-        """Billig, zwei HTTP-Calls, KEINE GPU. Trennt 'reparierbar' von 'dauerhaft tot':
-          GET  /api/events/<eid>          -> 404, wenn das Event weg ist
-          HEAD /api/events/<eid>/clip.mp4 -> 400/404/410, wenn die Aufnahme weg ist
-        Ohne das wuerde jedes Event mit geloeschter Aufnahme 3x den Modell-Init verbrennen.
+        """Billig, EIN HTTP-Call, KEINE GPU. Trennt 'reparierbar' von 'dauerhaft tot':
+          GET /api/events/<eid> -> 404 = Event weg; im JSON sagt `has_clip`,
+          ob die Aufnahme noch existiert (Feld am 18.08. live gegen die
+          laufende Frigate 0.18.0 verifiziert, Einzel-Event-GET traegt es).
+        .288 (Task #11, Serie-E-Beweis): der fruehere ZWEITE Call — HEAD auf
+        clip.mp4 — ist ERSETZT: auch ein HEAD stoesst bei Frigate die teure
+        Clip-Erzeugung an bzw. haelt einen API-Thread; das Meta-GET traegt
+        dieselbe Auskunft ohne den Clip-Endpunkt anzufassen.
+        Ohne die Vorpruefung wuerde jedes Event mit geloeschter Aufnahme 3x
+        den Modell-Init verbrennen.
         Rueckgabe: None (weiter) | 'event_weg' | 'clip_weg' | 'frigate' (Runde abbrechen)."""
         cfg = self.cfg
         try:
-            api(cfg, f"/api/events/{eid}")
+            ev = api(cfg, f"/api/events/{eid}")
         except urllib.error.HTTPError as e:
             return "event_weg" if e.code == 404 else "frigate"
         except Exception:
             return "frigate"
-        try:
-            req = urllib.request.Request(cfg["frigate_url"].rstrip("/") + f"/api/events/{eid}/clip.mp4",
-                                         method="HEAD")
-            with urllib.request.urlopen(req, timeout=20) as r:
-                return None if r.status < 400 else "clip_weg"
-        except urllib.error.HTTPError as e:
-            return "clip_weg" if e.code in (400, 404, 410) else "frigate"
-        except Exception:
-            return "frigate"
+        hat = (ev or {}).get("has_clip")
+        _frames.clip_dbg(f"{eid}: event meta src=nachhol -> has_clip={hat} "
+                         "(no clip.mp4 HEAD — meta GET carries the answer)")
+        # Nur ein AUSDRUECKLICHES False gibt auf; fehlt das Feld (fremde/
+        # aeltere Frigate), laeuft der Versuch und scheitert notfalls LAUT.
+        return "clip_weg" if hat is False else None
 
     def _nachhol_aufraeumen(self, eid, n):
         """Vor jedem Versuch: Artefakte des gescheiterten Laufs weg, altes analyze.log sichern.
@@ -6637,6 +6901,21 @@ def make_handler(svc):
         # Netz, halber Upload) ihren Thread unbegrenzt — ueber Wochen ein Thread-Leck, ganz ohne
         # Angreifer. 60 s ist grosszuegig genug fuer Video-Ranges an einen langsamen Client.
         timeout = 60
+
+        def handle_one_request(self):
+            # Sprach-Stufe 1 (konzept_sprache.md B1, Eintrittspunkt a): DIE
+            # eine Stelle je Request fuer GET UND POST — die contextvar wird
+            # aus dem Store gesetzt, bevor irgendein t() laeuft. HEUTE gibt
+            # es kein keep-alive (protocol_version-Default HTTP/1.0, _send
+            # ohne Content-Length -> close_connection bleibt True), ein
+            # Setzen je Verbindung waere also gleichwertig — je REQUEST ist
+            # trotzdem der richtige Vertrag: bei einer spaeteren Umstellung
+            # auf HTTP/1.1 wuerde eine geparkte Verbindung sonst die Sprache
+            # des Vor-Requests behalten (Widerleger P7). Achtung: aktivieren()
+            # laeuft VOR dem blockierenden readline() in super(); der
+            # Store-Reader ist mtime-gecacht (B2), im Normalfall eine stat().
+            _sprache.aktivieren()
+            super().handle_one_request()
 
         def log_message(self, *a):
             pass
@@ -8320,6 +8599,32 @@ def make_handler(svc):
                                + " — drift watchdog running (System page)"}, ensure_ascii=False), "application/json")
                 except Exception as e:
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
+            if pfad == "/sprache_speichern":       # Sprach-Stufe 1: Schrieb OHNE Neustart (Areas-Muster B12)
+                try:
+                    n = int(self.headers.get("Content-Length", 0))
+                    d = json.loads(self.rfile.read(min(n, 4096)))
+                    ok, erg = _sprache.validieren(d.get("sprache"))
+                    if not ok:
+                        return self._send(400, json.dumps({"ok": False, "msg": erg},
+                                                          ensure_ascii=False), "application/json")
+                    with _cfg_lock:                   # Lesen+Aendern+Schreiben unter EINEM Lock
+                        store = _lade_config_store(cfg)
+                        store["sprache"] = erg
+                        _store_schreiben(_config_store_pfad(cfg), store)
+                    # KEIN svc.neustart(): die Aufloesung liest den Store mtime-gecacht je
+                    # Request (core/sprache B2) — frisches cfg-Feld nur fuer /health/Export.
+                    cfg["sprache"] = erg
+                    try:
+                        with open(os.path.join(cfg["data_dir"], "config", "config_audit.jsonl"), "a") as f:
+                            f.write(json.dumps({"ts": round(time.time(), 1), "sprache": erg},
+                                               ensure_ascii=False) + "\n")
+                            f.flush()
+                    except OSError as e:
+                        svc.log(f"SPRACHE audit line failed ({e}) — change is saved and active")
+                    svc.log(f"SPRACHE saved: {erg} (no restart)")
+                    return self._send(200, json.dumps({"ok": True, "msg": erg}), "application/json")
+                except Exception as e:
+                    return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad == "/areas_speichern":                     # Areas Stufe 1: Schrieb OHNE Neustart
                 try:
                     n = int(self.headers.get("Content-Length", 0))
@@ -8530,11 +8835,26 @@ def make_handler(svc):
                       + (' checked' if _wb_ro else '') + '> Read-only (recommended) — suslik never writes to Frigate</label>'
                       '<label style="display:block;margin:3px 0"><input type="radio" name="setup-write" value="rw"'
                       + ('' if _wb_ro else ' checked') + '> Write back to Frigate (parallel operation)</label></div>')
+                # --- Schritt 0: Sprachwahl (Sprach-Stufe 1, B20 — laeuft VOR jedem
+                # Store-Inhalt, sonst ist die Ersteinrichtung immer englisch).
+                # Eigener Sofort-Schrieb ohne Neustart: Klick -> app.js
+                # spracheSetzen() -> POST /sprache_speichern (Areas-Muster) ->
+                # Reload; die restlichen Schritte erscheinen dann uebersetzt,
+                # soweit eingezogen. Unsichtbar, solange nur en registriert ist.
+                s_spr = ""
+                if len(_sprache.SPRACHEN) >= 2:
+                    s_spr = ('<div class="setup-step"><div class="sh"><span class="sn">0</span>'
+                             f'<b>{html.escape(_sprache.t("setup.sprache.titel"))}</b></div>'
+                             f'<p class="sub">{html.escape(_sprache.t("setup.sprache.satz"))}</p>'
+                             f'<div class="sp-reihe">{webui.sprache_knoepfe()}</div></div>')
                 inhalt = ('<h2>Welcome to suslik</h2>'
                           '<p class="sub">A quick guided setup — or load an existing configuration to skip it. '
                           'Everything here is editable later on the normal pages.</p>'
-                          + s0 + s1 + s2 + s3 + s4 + s5 + fertig)
-                return self._send(200, webui.layout("Setup", "/setup", inhalt, self._banner()))
+                          + s_spr + s0 + s1 + s2 + s3 + s4 + s5 + fertig)
+                # Sprach-Stufe 1: Seitentitel aus Schluesseln — NAV-Seiten nutzen
+                # DENSELBEN nav.*-Schluessel wie ihr Menue-Linktext (Pflicht
+                # Linktext == Seitentitel, begriffe_tabellen.md Notiert-Liste).
+                return self._send(200, webui.layout(_sprache.t("titel.setup"), "/setup", inhalt, self._banner()))
             if path.startswith("/pass/"):         # Haeppchen 2: Durchgangs-Seite
                 import webui
                 import auftritte as _auf
@@ -9448,7 +9768,7 @@ def make_handler(svc):
                                                  if _i + 1 < len(_reihe)
                                                  else None)}
                         return self._send(200, webui.layout(
-                            "Anchor", "/lernlauf/anker",
+                            _sprache.t("titel.anker_detail"), "/lernlauf/anker",
                             _r_ank.anker_detail_seite(satz, kaputt,
                                                       benennung=bkt, fluss=_fl),
                             self._banner()))
@@ -9496,7 +9816,7 @@ def make_handler(svc):
                 except Exception:
                     pass                       # Zusatz-Nutzen, nie Seiten-Blocker
                 return self._send(200, webui.layout(
-                    "Anchors", "/lernlauf/anker",
+                    _sprache.t("nav.anker"), "/lernlauf/anker",
                     _r_ank.anker_seite(saetze, kaputt, vorschlaege, dubletten),
                     self._banner()))
             if path.startswith("/lernlauf/crop/"):
@@ -9565,7 +9885,7 @@ def make_handler(svc):
                     _plv.kontrolle_lesen(cfg["data_dir"]),
                     bool(cfg.get("diagnostic_collection")))
                 return self._send(200, webui.layout(
-                    "Person", "/person/kontrolle", inhalt, self._banner()))
+                    _sprache.t("nav.person_kontrolle"), "/person/kontrolle", inhalt, self._banner()))
             m = re.match(r"^/person/treffer/([\w.\-]+)\.jpg$", path)
             if m:                # Koerper-Treffer-Crop (Chip-Bild, .120)
                 base = os.path.realpath(os.path.join(cfg["data_dir"],
@@ -9590,7 +9910,7 @@ def make_handler(svc):
                 inhalt = _r_pw.modell_seite(_pm.status_lesen(cfg["data_dir"]),
                                             regeln)
                 return self._send(200, webui.layout(
-                    "Person", "/person/modell", inhalt, self._banner()))
+                    _sprache.t("nav.person_modell"), "/person/modell", inhalt, self._banner()))
             if path in ("/person", "/personlauf/bestand"):
                 import webui
                 # PE2b (User 04.08.: Anchors-Pendant fuer Personen), seit
@@ -9618,7 +9938,7 @@ def make_handler(svc):
                     modell=_pm.status_lesen(cfg["data_dir"]),
                     wer=_wer, fremd=_fremd)
                 return self._send(200, webui.layout(
-                    "Person", "/person", inhalt, self._banner()))
+                    _sprache.t("nav.person"), "/person", inhalt, self._banner()))
             if path == "/personlauf/abnahme":
                 import webui
                 # PE2 (User 04.08.: "haette ich jetzt nicht die Bilder
@@ -9643,7 +9963,7 @@ def make_handler(svc):
                                 (_markiert.add if _u["urteil"] == "falsch"
                                  else _markiert.discard)(_u["datei"])
                 inhalt = _r_pw.abnahme_seite(_z, _zeilen, _markiert)
-                return self._send(200, webui.layout("Learn", "/personlauf",
+                return self._send(200, webui.layout(_sprache.t("nav.personlauf"), "/personlauf",
                                                     inhalt, self._banner()))
             if path == "/personlauf":
                 import webui
@@ -9683,7 +10003,7 @@ def make_handler(svc):
                                       modell=_pm.status_lesen(cfg["data_dir"]))
                 _tickt = bool(_z and _z.get("phase") in ("vorbereitung",
                                                          "ernte"))
-                return self._send(200, webui.layout("Learn", "/personlauf",
+                return self._send(200, webui.layout(_sprache.t("nav.personlauf"), "/personlauf",
                                                     inhalt, self._banner(),
                                                     refresh=3 if _tickt else None))
             if path == "/lernlauf_status":                 # .260 Saeule-Widget (Poll)
@@ -9856,6 +10176,38 @@ def make_handler(svc):
                             sichtung_liste = False   # .267: Fehler != kein
                             #                          Cache — nie die
                             #                          Reload-Schleife drehen
+                    # .293 (User-Fund 19.08. + Issue #16): eine Gruppe, in
+                    # der KEIN Bild den Bild-Check besteht (0 gut, 0 grenz-
+                    # fall — z. B. Detektor-Fehltreffer wie Planen/Laub, die
+                    # sich zu einer eigenen Gruppe clustern), darf keinen
+                    # Benennungs-Schritt kosten: automatisch der bestehende
+                    # Dismiss-mit-Gedaechtnis-Weg (Zeile+Zentroid bleiben,
+                    # Wiederernten erben still; als Chip weiter einsehbar),
+                    # dann rueckt die Rotation weiter. NUR unbenannte
+                    # Gruppen mit fertiger Qualitaets-Sichtung — bei einer
+                    # BENANNTEN Gruppe urteilt der reference check, dort
+                    # entscheidet der User selbst. Scheitert das Verwerfen,
+                    # rendert die Karte normal (skip/delete wie bisher).
+                    if (isinstance(sichtung_liste, list) and sichtung_liste
+                            and aktuelle is not None
+                            and not aktuelle.get("person")
+                            and aktuelle.get("status") == "unbenannt"
+                            and not any(s.get("stufe") in ("gut", "grenzfall")
+                                        for s in sichtung_liste)):
+                        try:
+                            from core import lernlauf as _ll3
+                            _ll3.anker_verwerfen(
+                                cfg["data_dir"],
+                                str(aktuelle.get("anker_id")))
+                            svc.log(
+                                f"lernlauf: group {aktuelle.get('anker_id')} "
+                                f"auto-dismissed — nothing passed the "
+                                f"picture check ({int(sichtung_gesamt)} "
+                                "pictures, detector false hits)")
+                            return self._send(302, "", location="/lernlauf")
+                        except Exception as e:
+                            svc.log(f"lernlauf: auto-dismiss failed "
+                                    f"({type(e).__name__}: {e})")
                     inhalt = _r_wiz.lauf_seite(zustand, len(eigene), kaputt,
                                                gruppen=eigene,
                                                adoptiert=adoptiert,
@@ -9877,7 +10229,7 @@ def make_handler(svc):
                     # Seite pollt /lernlauf_status (Tick-Regel lebt als EINE
                     # Quelle in lernwizard.lauf_status) und laedt genau EINMAL
                     # voll neu, wenn der Lauf in die Benennung wechselt.
-                    return self._send(200, webui.layout("Learn", "/lernlauf", inhalt,
+                    return self._send(200, webui.layout(_sprache.t("nav.lernlauf"), "/lernlauf", inhalt,
                                                         self._banner()))
                 qd = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
                 roh = (qd.get("events", [""])[0] or "").strip().lower()
@@ -9951,7 +10303,7 @@ def make_handler(svc):
                                           mess_skip=(mess_st.get("uebersprungen") or ""),
                                           unbekannt_offen=_ub_k)
                           + '</div>')
-                return self._send(200, webui.layout("Learn", "/lernlauf", inhalt,
+                return self._send(200, webui.layout(_sprache.t("nav.lernlauf"), "/lernlauf", inhalt,
                                                     self._banner()))
             if path == "/lernen":
                 import webui
@@ -9969,7 +10321,7 @@ def make_handler(svc):
                 if w and time.time() - w[0] < 86400:
                     warnung = "DRIFT GUARD RED after the last add — details on the System page!"
                 inhalt = _r_lernen.render(offen, master_persons(cfg), cfg["data_dir"])
-                return self._send(200, webui.layout("Enroll", "/lernen", inhalt, warnung or self._banner()))
+                return self._send(200, webui.layout(_sprache.t("nav.lernen"), "/lernen", inhalt, warnung or self._banner()))
             if path.startswith("/refs/"):              # Master-Referenzbilder (read-only, Containment)
                 # ~ auch hier (Issue-#11-Klasse): uebernommene Lern-Referenzen behalten
                 # den Crop-Namen (lern_<anker>_<eid>~N.jpg) — ohne ~ waeren sie auf der
@@ -10129,13 +10481,13 @@ def make_handler(svc):
                 if not (wieder or einzeln or besucher):
                     inhalt += webui.leer("No unknown faces collected yet.",
                                          "Identities appear here after the next unknown visitor.")
-                return self._send(200, webui.layout("Unknown", "/unbekannte", inhalt, self._banner()))
+                return self._send(200, webui.layout(_sprache.t("nav.unbekannte"), "/unbekannte", inhalt, self._banner()))
             if path == "/gesichter":                     # zentrale Personen-/Referenzverwaltung (19.07.)
                 import webui
                 # M1b (S5): Rendern byte-treu in routes/gesichter.py.
                 from routes import gesichter as _r_gesichter
                 inhalt = _r_gesichter.render(master_persons(cfg), cfg["data_dir"])
-                return self._send(200, webui.layout("Faces", "/gesichter", inhalt, self._banner()))
+                return self._send(200, webui.layout(_sprache.t("nav.gesichter"), "/gesichter", inhalt, self._banner()))
             if path == "/reconcile_status":            # Fortschritt des Pool-Umbaus (User 25.07.:
                 # "ich kann nicht sehen, was er macht")
                 p = os.path.join(cfg["data_dir"], "learn", "reconcile_status.json")
@@ -10171,7 +10523,7 @@ def make_handler(svc):
                 if vs is None:
                     svc.vorschlaege_starten(person)
                 inhalt, refresh = _r_aehnliche.render(person, kand, vs, cfg["data_dir"])
-                return self._send(200, webui.layout("Matching faces", "/gesichter", inhalt,
+                return self._send(200, webui.layout(_sprache.t("titel.aehnliche"), "/gesichter", inhalt,
                                                     self._banner(), refresh=refresh))
             if path.startswith("/anlern/crops/"):        # Anlern-Crops (read-only, Containment)
                 # ~ gehoert in die Klasse (Issue #11, fvdpol): Mehr-Gesichter-Crops
@@ -10219,7 +10571,7 @@ def make_handler(svc):
                 # .282: Auto-Refresh NUR auf der Uebersicht — die Galerie
                 # traegt Checkboxen und Reiter-Wahl, ein Reload wirft beides
                 # weg (User-Befund: 'Banner springt immer wieder zurueck').
-                return self._send(200, webui.layout("Quality", "/qualitaet",
+                return self._send(200, webui.layout(_sprache.t("nav.qualitaet"), "/qualitaet",
                                                     inhalt, self._banner(),
                                                     refresh=3 if aktiv and not _pq else None))
             if path == "/kameras":                # Kamera-Blatt: Discovery + verwenden + Zonen (Phase 2b)
@@ -10230,7 +10582,7 @@ def make_handler(svc):
                 cams, err = frigate_cameras(cfg, force=("refresh" in qs))
                 inhalt = _r_kameras.render(cams, err, cfg.get("kameras") or {},
                                            cfg.get("required_zones") or {})
-                return self._send(200, webui.layout("Cameras", "/kameras",
+                return self._send(200, webui.layout(_sprache.t("nav.kameras"), "/kameras",
                                                     inhalt, self._banner()))
             if path == "/areas":                  # Areas-Hauptbereich: Sicht + Konfig
                 import webui
@@ -10239,7 +10591,7 @@ def make_handler(svc):
                 fehlerbanner = (f'<div class="banner">Could not read the Frigate config: '
                                 f'{html.escape(str(err))}</div>' if err else "")
                 inhalt = _r_areas.uebersicht(_areas_mod.normalisieren(cfg.get("areas")), set(cams))
-                return self._send(200, webui.layout("Areas", "/areas",
+                return self._send(200, webui.layout(_sprache.t("nav.areas"), "/areas",
                                                     fehlerbanner + inhalt, self._banner()))
             if path == "/benachrichtigungen":
                 import webui
@@ -10247,7 +10599,7 @@ def make_handler(svc):
                 # (auftritte-Muster: cfg+Labels als Parameter, layout/banner bleiben hier).
                 from routes import benachrichtigungen as _r_benach
                 inhalt = _r_benach.render(cfg, KAT_LABELS)
-                return self._send(200, webui.layout("Notifications", "/benachrichtigungen", inhalt, self._banner()))
+                return self._send(200, webui.layout(_sprache.t("nav.benachrichtigungen"), "/benachrichtigungen", inhalt, self._banner()))
             if path == "/live":                    # Live-Reiter (Phase 2)
                 import webui
                 from routes import live as _r_live
@@ -10267,7 +10619,7 @@ def make_handler(svc):
                                             container_last=svc._container_cpu_last(),
                                             nach_area=nach_area,
                                             cam_area=cam_area)
-                return self._send(200, webui.layout("Live watchers", "/live",
+                return self._send(200, webui.layout(_sprache.t("nav.live"), "/live",
                                                     inhalt, self._banner()))
             if path == "/live_status":             # UI-Poll (Countdown/Quittung)
                 return self._send(200, json.dumps(svc.live_status_daten(),
@@ -10342,7 +10694,7 @@ def make_handler(svc):
                     + ("".join(karten) if karten else
                        '<div class="leer"><b>No live alerts that day.</b></div>'))
                 return self._send(200, webui.layout(
-                    "Live alerts", "/live_alerts", inhalt, self._banner()))
+                    _sprache.t("nav.live_alerts"), "/live_alerts", inhalt, self._banner()))
             if path == "/live_alarmbild":          # Beweismedium eines Live-Alerts (.190, .195: +mp4)
                 # Pfad kommt aus dem Melde-Protokoll bzw. der Auftritts-
                 # Ansicht und MUSS dem einen Vertrag ALARMBILD_RE genuegen
@@ -10393,7 +10745,7 @@ def make_handler(svc):
                     # duerfen wir NICHT — der Name kaeme aus der URL, nicht
                     # aus Frigate/Store (keine zweite Kamera-Quelle).
                     return self._send(404, webui.layout(
-                        "Live watchers", "/live",
+                        _sprache.t("nav.live"), "/live",
                         webui.leer("Unknown camera.",
                                    "Tiles come from Frigate's camera list "
                                    "and saved watchers only."),
@@ -10408,7 +10760,7 @@ def make_handler(svc):
                               kanaele=_melden.konfigurierte_kanaele(cfg))
                 inhalt = _r_live.detail(kamera, _g, kd, gesperrt)
                 return self._send(200, webui.layout(
-                    f"Live — {kamera}", "/live", inhalt, self._banner()))
+                    _sprache.t("titel.live_kamera", kamera=kamera), "/live", inhalt, self._banner()))
             if path == "/vision":                  # Vision detect (Reiter)
                 import webui
                 from core import vision as _vis
@@ -10448,7 +10800,7 @@ def make_handler(svc):
                     # .165: der Orientierungssatz zur Modellklasse — ERZEUGT
                     # aus der Messwerte-Registry, nie im Renderer formuliert.
                     _reg.vision_klassen_hinweis(_blk.get("kachel")))
-                return self._send(200, webui.layout("Vision detect", "/vision",
+                return self._send(200, webui.layout(_sprache.t("nav.vision"), "/vision",
                                                     inhalt, self._banner()))
             if path == "/erkennungstest":          # Szenario-Test, DREI Wege (V4, §4)
                 import webui
@@ -10456,7 +10808,7 @@ def make_handler(svc):
                 _q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
                 _l = svc.vision_test_lage((_q.get("pass") or [""])[0])
                 return self._send(200, webui.layout(
-                    "Recognition test", "/erkennungstest",
+                    _sprache.t("nav.erkennungstest"), "/erkennungstest",
                     _r_vt.seite(_l["passe"], _l["pass_key"], _l["sicht"],
                                 _l["laeuft"], nachanalyse=_l["nachanalyse"],
                                 lauffeld=_l["lauffeld"], laeufe=_l["laeufe"]),
@@ -10476,7 +10828,7 @@ def make_handler(svc):
                 _l = svc.vision_galerie_lage(_p, _g or None,
                                              bool((_q.get("neu") or [""])[0]))
                 return self._send(200, webui.layout(
-                    "Build a gallery", "/vision", _r_vw.seite(**_l),
+                    _sprache.t("titel.vision_galerie"), "/vision", _r_vw.seite(**_l),
                     self._banner()))
             if path.startswith("/vision/galerie/bild/"):
                 # Galerie-KOPIE ausliefern, Containment wie /personlauf/bild
@@ -10496,7 +10848,12 @@ def make_handler(svc):
                 if inhalt is None:
                     return self._send(404, b"gone")
                 return self._send(200, webui.layout(
-                    "How it works", "/erkennung", inhalt, self._banner()))
+                    # aktiv="/hilfe" statt "/erkennung" (Widerleger P1, Stufe 1):
+                    # die Anleitungen sind englisch, /erkennung ist uebersetzt —
+                    # ein geteilter aktiv-Pfad kann den Mischzustands-Hinweis
+                    # nicht je Seite treffen. BLATT mappt /hilfe auf den
+                    # Configuration-Bereich, die Kopfleiste leuchtet wie vorher.
+                    _sprache.t("titel.hilfe"), "/hilfe", inhalt, self._banner()))
             if path == "/erkennung":               # Vier-Saeulen-Seite (.205,
                 import webui                       #  Easy+Expert, EINE Seite)
                 from routes import erkennung as _r_erk
@@ -10521,7 +10878,7 @@ def make_handler(svc):
                     _pm_e.status_lesen(cfg["data_dir"]),
                     n_areas=len(_areas_mod.normalisieren(cfg.get("areas"))))
                 return self._send(200, webui.layout(
-                    "Recognition", "/erkennung", inhalt, self._banner()))
+                    _sprache.t("nav.erkennung"), "/erkennung", inhalt, self._banner()))
             if path == "/faces":                   # Faces-Startseite (.220,
                 import webui, anlernen             #  Mockup-Abnahme 16.08.)
                 from routes import faces as _r_fc
@@ -10578,7 +10935,7 @@ def make_handler(svc):
                 except Exception:
                     _qs_stand = None
                 return self._send(200, webui.layout(
-                    "Faces", "/faces",
+                    _sprache.t("nav.faces"), "/faces",
                     _r_fc.render(_pl, _nb, _nu, _lo, qs_stand=_qs_stand),
                     self._banner()))
             if path == "/frigate":                 # Frigate-Kachel-Seite (.216,
@@ -10613,7 +10970,7 @@ def make_handler(svc):
                     _fr = (None, f"{type(_ex).__name__}: {_ex}")
                 inhalt = _r_frig.render(_furl, _verb, _kam, _sync, _fr)
                 return self._send(200, webui.layout(
-                    "Frigate", "/frigate", inhalt, self._banner()))
+                    _sprache.t("nav.frigate"), "/frigate", inhalt, self._banner()))
             if path == "/kette":                   # Recognition chain (.189,
                 import webui                       #  eigener Settings-Punkt)
                 # _kette ist der MODUL-Import (Z. 27), nie lokal importieren
@@ -10624,7 +10981,7 @@ def make_handler(svc):
                                              svc.CONFIG_WHITELIST,
                                              svc._kette_auto_hinweise())
                 return self._send(200, webui.layout(
-                    "Recognition chain", "/kette", inhalt, self._banner()))
+                    _sprache.t("nav.kette"), "/kette", inhalt, self._banner()))
             if path == "/konfiguration":
                 import webui
                 # Modulumbau R1: Rendern byte-treu in routes/konfiguration.py.
@@ -10632,7 +10989,7 @@ def make_handler(svc):
                 from routes import konfiguration as _r_konf
                 inhalt = _r_konf.render(cfg, svc.CONFIG_WHITELIST,
                                         svc._kette_auto_hinweise())
-                return self._send(200, webui.layout("Settings", "/konfiguration", inhalt, self._banner()))
+                return self._send(200, webui.layout(_sprache.t("nav.konfiguration"), "/konfiguration", inhalt, self._banner()))
             if path == "/config_sichern":              # Config-Store als Download (UI 'Download configuration')
                 # Store + wirksame Verbindungs-Werte (Vertrag core.registry.EXPORT_VERBINDUNG):
                 # ENV-/yaml-konfigurierte Installationen haben frigate_url/mqtt NICHT im Store,
@@ -10695,7 +11052,7 @@ def make_handler(svc):
                 # ro/docs_url bleiben Kern-Quellen).
                 from routes import system as _r_system
                 inhalt = _r_system.render(svc, cfg, frigate_read_only(cfg), DOCS_URL)
-                return self._send(200, webui.layout("System", "/system", inhalt, self._banner()))
+                return self._send(200, webui.layout(_sprache.t("nav.system"), "/system", inhalt, self._banner()))
             if path == "/health":
                 # version zuerst (Task #12, User 28.07.): eingesandte Log-AUSSCHNITTE tragen
                 # die Startup-Banner-Zeile oft nicht, und "latest-gpu" im Issue-Formular ist
@@ -10901,7 +11258,7 @@ def make_handler(svc):
                                       bilanz=bilanz,
                                       ablehnungen=(bilanz or {}).get("abgelehnt") or {},
                                       fr=fr)
-                return self._send(200, webui.layout("Frigate sync", "/sync_auswahl",
+                return self._send(200, webui.layout(_sprache.t("nav.sync_auswahl"), "/sync_auswahl",
                                                     inhalt, self._banner()))
             if path == "/sync_vorpruefung_status":         # .133: Fortschritt der Vorpruefung
                 import sync_refs as _sr
@@ -10942,14 +11299,14 @@ def make_handler(svc):
                               '<p style="color:var(--dim)">Reload this page to retry, or open the '
                               f'original clip: <a href="/clip/{urllib.parse.quote(ed)}">'
                               '4K/HEVC</a></p></div>')
-                    return self._send(200, webui.layout("Video", "", inhalt, self._banner()))
+                    return self._send(200, webui.layout(_sprache.t("titel.video"), "/video", inhalt, self._banner()))
                 svc.review_anfordern(ed)
                 inhalt = ('<div class="card" style="text-align:center;padding:40px">'
                           '<div class="spin"></div>'
                           '<p>Preparing browser video (H.264)&nbsp;…</p>'
                           '<p style="color:var(--dim)">This page refreshes automatically. '
                           'The copy is built once and then cached.</p></div>')
-                return self._send(200, webui.layout("Video", "", inhalt, self._banner(), refresh=2))
+                return self._send(200, webui.layout(_sprache.t("titel.video"), "/video", inhalt, self._banner(), refresh=2))
             m = re.match(r"^/clip/([\w.\-]+)$", path)
             if m:                                          # der analysierte Record-Clip aus dem Cache
                 base = os.path.realpath(os.path.join(cfg["data_dir"], "clips"))
@@ -10988,7 +11345,7 @@ def make_handler(svc):
                             if r.get("eid") == eid:
                                 row = r                    # letzter Eintrag pro eid gewinnt
                 if not row:
-                    return self._send(404, webui.layout("Event", "/heute",
+                    return self._send(404, webui.layout(_sprache.t("titel.event"), "/heute",
                                       webui.leer("Event not found.", "It may have aged out of the log."),
                                       self._banner()))
                 ed = eid.replace("/", "_")
@@ -11183,7 +11540,7 @@ def make_handler(svc):
                     f'<div class="evactions">{vid}{logl}</div>'
                     f'<div class="evgt"><span class="lab">{"Correct if wrong" if best else "Who was it?"}</span>{gtb}</div></div>'
                     f'<h3>Images</h3>{galerie}')
-                return self._send(200, webui.layout("Event", "/heute", inhalt, self._banner()))
+                return self._send(200, webui.layout(_sprache.t("titel.event"), "/heute", inhalt, self._banner()))
             m = re.match(rf"^/events/({_reg.EID_RE})/({_reg.DATEI_RE}\.(?:jpg|log|jsonl))$", path)
             if m:                                          # Crops/Logs ausliefern (Pfad strikt validiert)
                 base = os.path.realpath(os.path.join(cfg["data_dir"], "events"))
@@ -11200,13 +11557,13 @@ def make_handler(svc):
                 from routes import ereignisliste as _r_el
                 inhalt = _r_el.render_offen(cfg, svc.log_path, qs,
                                             gt_schnellpersonen, master_persons)
-                return self._send(200, webui.layout("To label", "/offen", inhalt, self._banner()))
+                return self._send(200, webui.layout(_sprache.t("nav.offen"), "/offen", inhalt, self._banner()))
             if path != "/ereignisse":
                 return self._send(404, "not found", "text/plain")
             import webui
             # Modulumbau R1: Rendern byte-treu in routes/ereignisliste.py.
             from routes import ereignisliste as _r_el
-            self._send(200, webui.layout("Events", "/ereignisse",
+            self._send(200, webui.layout(_sprache.t("nav.ereignisse"), "/ereignisse",
                                          _r_el.render_ereignisse(
                                              cfg, svc.log_path, qs,
                                              gt_schnellpersonen, master_persons),

@@ -1,6 +1,43 @@
 /* verifyd Web UI — central JS (AP3): GT labeling, previously duplicated per page. */
 /* Config sheet (AP5): collect whitelist values, confirm, save, restart */
 
+/* ── Sprach-Stufe 1 (konzept_sprache.md B3/B4): window.T traegt die
+   js.*-Schluessel der aktiven Sprache (das Seitenskelett injiziert sie als
+   json.dumps). TT() liest mit ENGLISCHEM Literal-Fallback — fehlt die
+   Tabelle oder der Schluessel, bleibt die Seite exakt englisch. Platzhalter
+   sind {name}-Felder wie in core/texte (split/join statt Regex: kein
+   Escaping-Risiko). VERTRAG: app.js nutzt Texte NUR ueber TT() mit
+   js.*-Schluesseln; beide Richtungen prueft die Gate-Stufe Sprach-Deckung. */
+function TT(key, fb, kw) {
+  var s = (window.T && window.T[key]) || fb;
+  if (kw) { Object.keys(kw).forEach(function (k) {
+    s = s.split('{' + k + '}').join(String(kw[k]));
+  }); }
+  return s;
+}
+
+/* Sprachwahl (Kopfleisten-Menue + Wizard-Schritt 0): POST an
+   /sprache_speichern (Areas-Muster, kein Neustart), dann Reload. Ein
+   delegierter Listener deckt beide Einbauorte (.sp-knopf[data-s]). */
+document.addEventListener('click', function (ev) {
+  var b = ev.target && ev.target.closest ? ev.target.closest('.sp-knopf[data-s]') : null;
+  if (!b) {
+    /* Klick neben das offene Kopfleisten-Menue schliesst es */
+    var w = document.getElementById('sprache-wahl');
+    if (w && w.open && !w.contains(ev.target)) w.open = false;
+    return;
+  }
+  b.disabled = true;
+  fetch('/sprache_speichern', {method: 'POST',
+                               body: JSON.stringify({sprache: b.getAttribute('data-s')})})
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (d.ok) { location.reload(); }
+      else { alert(d.msg || TT('js.status.fehler', 'error')); b.disabled = false; }
+    })
+    .catch(function () { b.disabled = false; });
+});
+
 /* Shared: nach einem Selbst-Neustart (re-exec) warten bis der Dienst wieder antwortet, dann weiter.
    Erkennt die Restart-Grenze robust als "erst unten, dann wieder oben" — kein fixer Timer, der den
    ~20s Reinit/Modell-Load ueberholt und in ein "Seite kann nicht laden" rennt. */
@@ -11,11 +48,12 @@ function _neustartDann(ziel, s) {
     if (Date.now() - start > MAX) { location.href = ziel; return; }   /* Deckel: trotzdem weiter */
     fetch('/health', {cache: 'no-store'})
       .then(function (r) {
-        if (r.ok && warUnten) { txt('Service is back, loading …'); location.href = ziel; return; }
-        txt(warUnten ? 'Service coming back …' : 'Saved. Restarting service, please wait …');
+        if (r.ok && warUnten) { txt(TT('js.neustart.zurueck', 'Service is back, loading …')); location.href = ziel; return; }
+        txt(warUnten ? TT('js.neustart.kommt', 'Service coming back …')
+                     : TT('js.neustart.gespeichert', 'Saved. Restarting service, please wait …'));
         setTimeout(tick, 1500);
       })
-      .catch(function () { warUnten = true; txt('Restarting service, please wait …'); setTimeout(tick, 1500); });
+      .catch(function () { warUnten = true; txt(TT('js.neustart.warten', 'Restarting service, please wait …')); setTimeout(tick, 1500); });
   }
   tick();
 }
@@ -26,8 +64,8 @@ function konfigSpeichern() {
   for (var i = 0; i < felder.length; i++) {
     d[felder[i].id.slice(4)] = felder[i].value;
   }
-  if (!confirm('Save configuration and restart the service?')) return;
-  s.textContent = 'saving …';
+  if (!confirm(TT('js.konfig.frage', 'Save configuration and restart the service?'))) return;
+  s.textContent = TT('js.status.speichern', 'saving …');
   fetch('/konfig', {method: 'POST', body: JSON.stringify(d)})
     .then(function (r) { return r.json(); })
     .then(function (r) {
@@ -56,8 +94,10 @@ function llFpsUpdate(el) {
   var fps = parseFloat(el.value) || 3;
   if (!a) { out.textContent = ''; return; }
   var s = Math.round(a * (fps / 3) + r);
-  out.textContent = '≈ total ~' + (s >= 60 ? Math.round(s / 60) + ' min' : s + ' s') +
-                    ' at ' + fps + '/s';
+  var dauer = s >= 60 ? TT('js.einheit.min', '{n} min', {n: Math.round(s / 60)})
+                      : TT('js.einheit.s', '{n} s', {n: s});
+  out.textContent = TT('js.lernlauf.fps_zeile', '≈ total ~{dauer} at {fps}/s',
+                       {dauer: dauer, fps: fps});
 }
 
 function lernlaufStart(n, btn) {
@@ -70,7 +110,8 @@ function lernlaufStart(n, btn) {
                             body: JSON.stringify({events: n, fps: fps || 0})})
     .then(function (r) { return r.json(); })
     .then(function (d) {
-      document.getElementById('ll-status').textContent = d.msg || (d.ok ? 'ok' : 'error');
+      document.getElementById('ll-status').textContent =
+        d.msg || (d.ok ? TT('js.status.ok', 'ok') : TT('js.status.fehler', 'error'));
       if (d.ok) setTimeout(function () { location.href = '/lernlauf'; }, 500);
       else btn.disabled = false;
     })
@@ -90,7 +131,7 @@ function lernlaufPopupStart(btn) {
   var tEl = document.getElementById('lf-pop-tag');
   var tag = (tEl && !tEl.disabled) ? tEl.value : '';
   if (tEl && !tEl.disabled && !tag) {
-    document.getElementById('lf-pop-status').textContent = 'pick a day first';
+    document.getElementById('lf-pop-status').textContent = TT('js.lernlauf.tag_fehlt', 'pick a day first');
     return;
   }
   btn.disabled = true;
@@ -99,7 +140,8 @@ function lernlaufPopupStart(btn) {
   fetch('/lernlauf_start', {method: 'POST', body: JSON.stringify(body)})
     .then(function (r) { return r.json(); })
     .then(function (d) {
-      document.getElementById('lf-pop-status').textContent = d.msg || (d.ok ? 'ok' : 'error');
+      document.getElementById('lf-pop-status').textContent =
+        d.msg || (d.ok ? TT('js.status.ok', 'ok') : TT('js.status.fehler', 'error'));
       if (d.ok) setTimeout(function () { location.href = '/lernlauf'; }, 500);
       else btn.disabled = false;
     })
@@ -117,7 +159,7 @@ function ankerVerwerfen(aid, btn) {
     .then(function (r) { return r.json(); })
     .then(function (d) {
       if (d.ok) location.reload();
-      else { alert(d.msg || 'error'); btn.disabled = false; }
+      else { alert(d.msg || TT('js.status.fehler', 'error')); btn.disabled = false; }
     })
     .catch(function () { btn.disabled = false; });
 }
@@ -133,7 +175,7 @@ function laufLoeschen(lid, btn) {
     .then(function (r) { return r.json(); })
     .then(function (d) {
       if (d.ok) location.reload();
-      else { alert(d.msg || 'error'); btn.disabled = false; }
+      else { alert(d.msg || TT('js.status.fehler', 'error')); btn.disabled = false; }
     })
     .catch(function () { btn.disabled = false; });
 }
@@ -148,13 +190,13 @@ function alteLaeufeLoeschen(btn) {
     .then(function (r) { return r.json(); })
     .then(function (d) {
       if (d.ok) location.reload();
-      else { alert(d.msg || 'error'); btn.disabled = false; }
+      else { alert(d.msg || TT('js.status.fehler', 'error')); btn.disabled = false; }
     })
     .catch(function () { btn.disabled = false; });
 }
 
 function lernlaufAbbruch(btn) {
-  if (!confirm('Abort this learning run?')) return;
+  if (!confirm(TT('js.lernlauf.abbruch_frage', 'Abort this learning run?'))) return;
   btn.disabled = true;
   fetch('/lernlauf_abbruch', {method: 'POST', body: '{}'})
     .then(function (r) { return r.json(); })
@@ -164,8 +206,8 @@ function lernlaufAbbruch(btn) {
 
 function notifSpeichern() {
   var s = document.getElementById('notif-status');
-  if (!confirm('Save notification settings and restart the service?')) return;
-  s.textContent = 'saving …';
+  if (!confirm(TT('js.notif.frage', 'Save notification settings and restart the service?'))) return;
+  s.textContent = TT('js.status.speichern', 'saving …');
   fetch('/benachrichtigung_speichern', {method: 'POST', body: JSON.stringify(_notifFelder())})
     .then(function (r) { return r.json(); })
     .then(function (r) { s.textContent = r.msg; if (r.ok) _neustartDann('/benachrichtigungen', s); })
@@ -174,31 +216,31 @@ function notifSpeichern() {
 
 function testKanal(kanal, btn) {
   var st = document.getElementById('test-' + kanal);
-  btn.disabled = true; st.textContent = 'sending …';
+  btn.disabled = true; st.textContent = TT('js.status.senden', 'sending …');
   fetch('/test_' + kanal, {method: 'POST', body: JSON.stringify(_notifFelder())})
     .then(function (r) { return r.json(); })
     .then(function (r) { st.textContent = r.msg; btn.disabled = false; })
-    .catch(function (e) { st.textContent = 'error'; btn.disabled = false; });
+    .catch(function (e) { st.textContent = TT('js.status.fehler', 'error'); btn.disabled = false; });
 }
 
 function frigateWrite(readonly) {
-  var txt = readonly ? 'Switch to READ-ONLY? suslik will stop writing to Frigate.'
-                     : 'Enable WRITING to Frigate (sub_labels + reference sync)?';
+  var txt = readonly ? TT('js.frigate.ro_frage', 'Switch to READ-ONLY? suslik will stop writing to Frigate.')
+                     : TT('js.frigate.rw_frage', 'Enable WRITING to Frigate (sub_labels + reference sync)?');
   if (!confirm(txt)) return;
   var st = document.getElementById('fw-status');
-  st.textContent = 'saving …';
+  st.textContent = TT('js.status.speichern', 'saving …');
   fetch('/konfig', {method: 'POST', body: JSON.stringify({frigate_read_only: readonly})})
     .then(function (r) { return r.json(); })
-    .then(function (d) { st.textContent = d.msg || (d.ok ? 'saved' : 'error'); if (d.ok) setTimeout(function () { location.reload(); }, 800); })
+    .then(function (d) { st.textContent = d.msg || (d.ok ? TT('js.status.gespeichert', 'saved') : TT('js.status.fehler', 'error')); if (d.ok) setTimeout(function () { location.reload(); }, 800); })
     .catch(function () {});
 }
 
 function configRestore(input) {
   var f = input.files && input.files[0];
   if (!f) return;
-  if (!confirm('Restore configuration from "' + f.name + '"? This overwrites the current settings and restarts the service.')) { input.value = ''; return; }
+  if (!confirm(TT('js.restore.frage', 'Restore configuration from "{name}"? This overwrites the current settings and restarts the service.', {name: f.name}))) { input.value = ''; return; }
   var st = document.getElementById('restore-status');
-  st.textContent = 'restoring …';
+  st.textContent = TT('js.status.wiederherstellen', 'restoring …');
   var rd = new FileReader();
   rd.onload = function () {
     fetch('/config_wiederherstellen', {method: 'POST', body: rd.result})
@@ -215,9 +257,9 @@ function configRestore(input) {
 function vollRestore(input) {
   var f = input.files && input.files[0];
   if (!f) return;
-  if (!confirm('Restore the FULL backup "' + f.name + '"? This replaces settings, references and all learned material, then restarts the service.')) { input.value = ''; return; }
+  if (!confirm(TT('js.vollrestore.frage', 'Restore the FULL backup "{name}"? This replaces settings, references and all learned material, then restarts the service.', {name: f.name}))) { input.value = ''; return; }
   var st = document.getElementById('vollrestore-status');
-  st.textContent = 'uploading + restoring … (large files take a while)';
+  st.textContent = TT('js.vollrestore.laeuft', 'uploading + restoring … (large files take a while)');
   fetch('/backup_voll_wiederherstellen', {method: 'POST', body: f})
     .then(function (r) { return r.json(); })
     .then(function (d) { st.textContent = d.msg; if (d.ok) _neustartDann('/system', st); })
@@ -235,7 +277,7 @@ function enroll(id, aktion, person, el) {
         var card = el.closest('.card');
         if (card) card.style.opacity = 0.35;
       } else {
-        alert('Error: ' + d.msg);
+        alert(TT('js.enroll.fehler', 'Error: {msg}', {msg: d.msg}));
       }
     });
 }
@@ -243,7 +285,7 @@ function enrollFremd(id, el) {
   var sel = document.getElementById('sel-' + id),
       neu = document.getElementById('neu-' + id),
       person = (neu && neu.value.trim()) || (sel && sel.value) || '';
-  if (!person) { alert('Choose a person or enter a new one.'); return; }
+  if (!person) { alert(TT('js.enroll.person_fehlt', 'Choose a person or enter a new one.')); return; }
   enroll(id, 'aufnehmen', person, el);
 }
 function uploadRef() {
@@ -251,14 +293,17 @@ function uploadRef() {
       p = (neu && neu.value.trim()) || document.getElementById('up-person').value,
       f = document.getElementById('up-datei').files[0],
       s = document.getElementById('up-status');
-  if (!p || !f) { alert('Choose a person (dropdown or new) and a file.'); return; }
-  s.textContent = 'uploading …';
+  if (!p || !f) { alert(TT('js.upload.fehlt', 'Choose a person (dropdown or new) and a file.')); return; }
+  s.textContent = TT('js.status.hochladen', 'uploading …');
   var senden = function (personWert) {
     fetch('/upload?person=' + encodeURIComponent(personWert), {method: 'POST', body: f})
       .then(function (r) { return r.json(); })
       .then(function (d) {
+        /* ACHTUNG Anzeige==Kennung (§8-Nachtrag): das 'GATE'-Praefix ist ein
+           SERVER-Protokollwort im msg-Text — bleibt englisch, bis die
+           JSON-msg-Felder (Stufe 2) Kennung und Anzeige trennen. */
         if (!d.ok && d.msg && d.msg.indexOf('GATE') === 0 &&
-            confirm(d.msg + '\n\nAdd anyway?')) {
+            confirm(TT('js.upload.trotzdem', '{msg}\n\nAdd anyway?', {msg: d.msg}))) {
           senden(personWert + '!');
           return;
         }
@@ -270,8 +315,8 @@ function uploadRef() {
 
 /* Cluster (19.07.): group as new person (name via prompt) or existing (dropdown) */
 function anlernSenden(ids, person, btn) {
-  if (!confirm('Add group as "' + person + '" (best images become references)?')) return;
-  btn.disabled = true; btn.textContent = 'learning …';
+  if (!confirm(TT('js.anlernen.frage', 'Add group as "{person}" (best images become references)?', {person: person}))) return;
+  btn.disabled = true; btn.textContent = TT('js.status.lernen', 'learning …');
   fetch('/anlernen_benennen', {method: 'POST', body: JSON.stringify({ids: ids, person: person})})
     .then(function (r) { return r.json(); })
     .then(function (d) {
@@ -279,22 +324,22 @@ function anlernSenden(ids, person, btn) {
       var c = btn.closest('.card');
       if (d.ok && c) { c.style.opacity = 0.45; } else { btn.disabled = false; }
     })
-    .catch(function () { btn.textContent = 'Error'; btn.disabled = false; });
+    .catch(function () { btn.textContent = TT('js.status.fehler_gross', 'Error'); btn.disabled = false; });
 }
 function anlernNeu(ids, btn) {
-  var person = (window.prompt('Name of the new person:') || '').trim();
+  var person = (window.prompt(TT('js.anlernen.name_frage', 'Name of the new person:')) || '').trim();
   if (person) anlernSenden(ids, person, btn);
 }
 function anlernZu(ids, selId, btn) {
   var person = document.getElementById(selId).value;
-  if (!person) { alert('Please choose an existing person.'); return; }
+  if (!person) { alert(TT('js.anlernen.person_fehlt', 'Please choose an existing person.')); return; }
   anlernSenden(ids, person, btn);
 }
 /* reverse path: add ticked matching faces to an existing person */
 function aehnlicheHinzu(person, btn) {
   var cbs = document.querySelectorAll('.ae-cb:checked'), ids = [];
   for (var i = 0; i < cbs.length; i++) ids.push(cbs[i].value);
-  if (!ids.length) { alert('Please tick at least one face.'); return; }
+  if (!ids.length) { alert(TT('js.auswahl.gesicht_fehlt', 'Please tick at least one face.')); return; }
   anlernSenden(ids.join(','), person, btn);
 }
 /* Library search: take ticked suggestions from recognized events / search again */
@@ -304,10 +349,11 @@ function vorschlaegeAlleEmpfohlen(person, btn) {   // Auto-Uebernehmen: alle emp
     var v = cbs[i].value.split('|');
     items.push({eid: v[0], datei: v.slice(1).join('|')});
   }
-  if (!items.length) { alert('No recommended faces.'); return; }
-  if (!confirm('Add all ' + items.length + ' recommended face(s) to ' + person +
-               '? They become references immediately.')) return;
-  btn.disabled = true; btn.textContent = 'adding …';
+  if (!items.length) { alert(TT('js.vorschlag.keine', 'No recommended faces.')); return; }
+  if (!confirm(TT('js.vorschlag.alle_frage',
+                  'Add all {n} recommended face(s) to {person}? They become references immediately.',
+                  {n: items.length, person: person}))) return;
+  btn.disabled = true; btn.textContent = TT('js.status.hinzufuegen', 'adding …');
   fetch('/vorschlag_aufnehmen', {method: 'POST', body: JSON.stringify({person: person, items: items})})
     .then(function (r) { return r.json(); })
     .then(function (d) {
@@ -322,9 +368,10 @@ function vorschlagAufnehmen(person, btn) {
     var v = cbs[i].value.split('|');
     items.push({eid: v[0], datei: v.slice(1).join('|')});
   }
-  if (!items.length) { alert('Please tick at least one face.'); return; }
-  if (!confirm('Add ' + items.length + ' face(s) to ' + person + '?')) return;
-  btn.disabled = true; btn.textContent = 'adding …';
+  if (!items.length) { alert(TT('js.auswahl.gesicht_fehlt', 'Please tick at least one face.')); return; }
+  if (!confirm(TT('js.vorschlag.frage', 'Add {n} face(s) to {person}?',
+                  {n: items.length, person: person}))) return;
+  btn.disabled = true; btn.textContent = TT('js.status.hinzufuegen', 'adding …');
   fetch('/vorschlag_aufnehmen', {method: 'POST', body: JSON.stringify({person: person, items: items})})
     .then(function (r) { return r.json(); })
     .then(function (d) {
@@ -333,7 +380,7 @@ function vorschlagAufnehmen(person, btn) {
     });
 }
 function vorschlagNeu(person, btn) {
-  btn.disabled = true; btn.textContent = 'searching …';
+  btn.disabled = true; btn.textContent = TT('js.status.suchen', 'searching …');
   fetch('/vorschlaege_neu', {method: 'POST', body: JSON.stringify({person: person})})
     .then(function (r) { return r.json(); })
     .then(function (d) {
@@ -343,16 +390,18 @@ function vorschlagNeu(person, btn) {
 }
 /* Maintenance (collect + check) manually */
 function anlernWartungJetzt(btn) {
-  btn.disabled = true; btn.textContent = 'running …';
+  btn.disabled = true; btn.textContent = TT('js.status.laeuft', 'running …');
   fetch('/anlern_wartung_jetzt', {method: 'POST', body: '{}'})
     .then(function (r) { return r.json(); })
     .then(function (d) { btn.textContent = d.msg; });
 }
 /* Reference sync Master <-> Frigate (System page) */
 function syncAktion(modus, btn) {
+  /* 'Master → Frigate': beides Eigennamen (Produktnamen-Regel §8.6) —
+     die Richtungsangabe bleibt in jeder Sprache identisch. */
   var txt = modus === 'export' ? 'Master → Frigate' : 'Frigate → Master';
-  if (!confirm('Synchronize: ' + txt + '?')) return;
-  btn.disabled = true; btn.textContent = 'starting …';
+  if (!confirm(TT('js.sync.frage', 'Synchronize: {richtung}?', {richtung: txt}))) return;
+  btn.disabled = true; btn.textContent = TT('js.status.starten', 'starting …');
   fetch('/sync_' + modus, {method: 'POST', body: '{}'})
     .then(function (r) { return r.json(); })
     .then(function (d) {
@@ -360,19 +409,22 @@ function syncAktion(modus, btn) {
       var poll = setInterval(function () {
         fetch('/sync_status').then(function (r) { return r.json(); }).then(function (s) {
           if (s.phase === 'loading') {
-            btn.textContent = 'loading model …';
+            btn.textContent = TT('js.sync.modell_laedt', 'loading model …');
           } else if (s.phase === 'import' || s.phase === 'export') {
             var pct = s.total ? Math.round(100 * s.done / s.total) : 0;
-            btn.textContent = s.done + '/' + s.total + ' faces (' + (s.current || '') + ') ' + pct + '%';
+            btn.textContent = TT('js.sync.fortschritt', '{done}/{total} faces ({current}) {pct}%',
+                                 {done: s.done, total: s.total, current: s.current || '', pct: pct});
           } else if (s.phase === 'done') {
             clearInterval(poll);
-            btn.textContent = 'done: ' + (s.ok || 0) + ' ok, ' + (s.gate || 0) + ' skipped — reloading …';
+            btn.textContent = TT('js.sync.fertig', 'done: {ok} ok, {gate} skipped — reloading …',
+                                 {ok: s.ok || 0, gate: s.gate || 0});
             setTimeout(function () { location.reload(); }, 2000);
           } else if (s.phase === 'error') {
             clearInterval(poll);
             /* .131: Ursache/Hinweis zeigen, nicht nur 'rc=1' (carlsmith-Fall:
                Frigate-Erkennung aus -> Schalt-Hinweis direkt am Knopf). */
-            btn.textContent = 'sync failed: ' + (s.hinweis || s.detail || s.msg || 'see service log');
+            btn.textContent = TT('js.sync.fehler', 'sync failed: {grund}',
+                                 {grund: s.hinweis || s.detail || s.msg || TT('js.status.siehe_log', 'see service log')});
           }
         }).catch(function () {});
       }, 1500);
@@ -389,7 +441,8 @@ function syncAuswahlZaehlen() {
   if (z) z.textContent = n;
   var b = document.getElementById('sa-start');
   if (b && !b.disabled) {
-    b.textContent = n ? 'Transfer ' + n + ' selected to Frigate' : 'Nothing selected';
+    b.textContent = n ? TT('js.syncauswahl.knopf', 'Transfer {n} selected to Frigate', {n: n})
+                      : TT('js.syncauswahl.nichts', 'Nothing selected');
     /* .138: ein frueherer Fehlschlag hat den Knopf rot gefaerbt (scheitern());
        wer die Auswahl aendert, bekommt wieder einen normalen Start-Knopf —
        vorher stand ein Start-Text im Fehler-Rot (Panel-Hinweis: die Umkehrung
@@ -409,15 +462,17 @@ function syncAbwahl(btn, weg) {
   d[weg ? 'abwahl' : 'zurueck'] = paar;
   /* .137: der Ruecksetz-Text kommt aus data-label — derselbe Knopf heisst auf der
      Entscheidungs-Kachel 'respect the deletion', nicht 'skip'. */
-  var zurueck = btn.dataset.label || (weg ? 'skip' : 'restore');
-  btn.disabled = true; btn.textContent = weg ? 'skipping …' : 'restoring …';
+  var zurueck = btn.dataset.label || (weg ? TT('js.syncauswahl.skip', 'skip')
+                                          : TT('js.syncauswahl.restore', 'restore'));
+  btn.disabled = true; btn.textContent = weg ? TT('js.status.ueberspringen', 'skipping …')
+                                             : TT('js.status.wiederherstellen', 'restoring …');
   fetch('/sync_abwahl', {method: 'POST', body: JSON.stringify(d)})
     .then(function (r) { return r.json(); })
     .then(function (dd) {
       /* .134: ok:false auswerten — eine fehlgeschlagene Abwahl sah vorher wie
          eine erfolgreiche aus (Seite lud einfach neu). */
       if (dd && dd.ok) { location.reload(); return; }
-      alert((dd && dd.msg) || 'error');
+      alert((dd && dd.msg) || TT('js.status.fehler', 'error'));
       btn.disabled = false; btn.textContent = zurueck;
     })
     .catch(function () { btn.disabled = false; btn.textContent = zurueck; });
@@ -425,14 +480,14 @@ function syncAbwahl(btn, weg) {
 /* .137 'offer again': ein in Frigate geloeschtes oder frueher exportiertes Bild
    wieder zum normalen Kandidaten machen (POST /sync_wieder_anbieten). */
 function syncWiederAnbieten(btn) {
-  var zurueck = btn.dataset.label || 'offer again';
-  btn.disabled = true; btn.textContent = 'putting it back …';
+  var zurueck = btn.dataset.label || TT('js.syncauswahl.wieder', 'offer again');
+  btn.disabled = true; btn.textContent = TT('js.syncauswahl.zurueck_laeuft', 'putting it back …');
   fetch('/sync_wieder_anbieten', {method: 'POST',
         body: JSON.stringify({bilder: [[btn.dataset.person, btn.dataset.datei]]})})
     .then(function (r) { return r.json(); })
     .then(function (dd) {
       if (dd && dd.ok) { location.reload(); return; }
-      alert((dd && dd.msg) || 'error');
+      alert((dd && dd.msg) || TT('js.status.fehler', 'error'));
       btn.disabled = false; btn.textContent = zurueck;
     })
     .catch(function () { btn.disabled = false; btn.textContent = zurueck; });
@@ -443,22 +498,22 @@ function syncAuswahlStart(btn) {
     if (cbs[i].checked) sel.push([cbs[i].dataset.person, cbs[i].dataset.datei]);
   }
   var st = document.getElementById('sa-status');
-  if (!sel.length) { if (st) st.textContent = 'nothing selected'; return; }
-  if (!confirm('Send ' + sel.length + ' reference image(s) to Frigate?')) return;
+  if (!sel.length) { if (st) st.textContent = TT('js.syncauswahl.nichts_klein', 'nothing selected'); return; }
+  if (!confirm(TT('js.syncauswahl.frage', 'Send {n} reference image(s) to Frigate?', {n: sel.length}))) return;
   /* .137: Fehlertexte gehoeren NICHT in den gruenen Startknopf (Operator-Fund
      06.08.: ein gruener Knopf mit Fehlermeldung darin liest sich wie Erfolg).
      Der Knopf wird neutral-rot beschriftet, der Text steht daneben — mit dem
      Diagnose-Anker, Muster gesImport. */
   function scheitern(txt) {
-    btn.className = 'gtb sa-crit'; btn.textContent = 'transfer failed';
+    btn.className = 'gtb sa-crit'; btn.textContent = TT('js.syncauswahl.fehl_knopf', 'transfer failed');
     btn.disabled = false;
     if (!st) return;
     st.className = 'sa-crit'; st.textContent = txt + ' ';
     var dg = document.createElement('a');
-    dg.href = '/sync_diagnose'; dg.target = '_blank'; dg.textContent = 'diagnosis';
+    dg.href = '/sync_diagnose'; dg.target = '_blank'; dg.textContent = TT('js.status.diagnose', 'diagnosis');
     st.appendChild(dg);
   }
-  btn.disabled = true; btn.textContent = 'starting …';
+  btn.disabled = true; btn.textContent = TT('js.status.starten', 'starting …');
   fetch('/sync_auswahl_start', {method: 'POST', body: JSON.stringify({auswahl: sel})})
     .then(function (r) { return r.json(); })
     .then(function (d) {
@@ -467,16 +522,18 @@ function syncAuswahlStart(btn) {
         fetch('/sync_status').then(function (r) { return r.json(); }).then(function (s) {
           if (s.phase === 'export') {
             var pct = s.total ? Math.round(100 * s.done / s.total) : 0;
-            btn.textContent = s.done + '/' + s.total + ' (' + (s.current || '') + ') ' + pct + '%';
+            btn.textContent = TT('js.syncauswahl.fortschritt', '{done}/{total} ({current}) {pct}%',
+                                 {done: s.done, total: s.total, current: s.current || '', pct: pct});
           } else if (s.phase === 'done') {
             clearInterval(poll);
-            btn.textContent = 'done: ' + (s.ok || 0) + ' uploaded, ' + (s.gate || 0)
-              + ' not accepted — reloading …';
+            btn.textContent = TT('js.syncauswahl.fertig', 'done: {ok} uploaded, {gate} not accepted — reloading …',
+                                 {ok: s.ok || 0, gate: s.gate || 0});
             setTimeout(function () { location.reload(); }, 1500);
           } else if (s.phase === 'error') {
             clearInterval(poll);
             /* Ursache/Hinweis zeigen, nicht 'rc=1' (carlsmith-Fall .131) */
-            scheitern('transfer failed: ' + (s.hinweis || s.detail || s.msg || 'see service log'));
+            scheitern(TT('js.syncauswahl.fehler', 'transfer failed: {grund}',
+                         {grund: s.hinweis || s.detail || s.msg || TT('js.status.siehe_log', 'see service log')}));
           }
         }).catch(function () {});
       }, 1200);
@@ -496,14 +553,15 @@ function syncVorpruefungPoll() {
         if ((s.fertig || 0) === letzterStand) { stillstand++; } else { stillstand = 0; letzterStand = s.fertig || 0; }
         if (stillstand > 240) {
           clearInterval(poll);
-          el.textContent = 'pre-check appears stuck — reload the page to retry';
+          el.textContent = TT('js.vorpruef.haengt', 'pre-check appears stuck — reload the page to retry');
           return;
         }
-        el.textContent = 'checking images … ' + (s.fertig || 0) + '/' + (s.gesamt || 0);
+        el.textContent = TT('js.vorpruef.laeuft', 'checking images … {fertig}/{gesamt}',
+                            {fertig: s.fertig || 0, gesamt: s.gesamt || 0});
       } else {
         clearInterval(poll);
-        if (s.fehler) { el.textContent = 'pre-check failed: ' + s.fehler; return; }
-        el.textContent = 'pre-check done — reloading …';
+        if (s.fehler) { el.textContent = TT('js.vorpruef.fehler', 'pre-check failed: {grund}', {grund: s.fehler}); return; }
+        el.textContent = TT('js.vorpruef.fertig', 'pre-check done — reloading …');
         setTimeout(function () { location.reload(); }, 800);
       }
     }).catch(function () {});
@@ -514,31 +572,33 @@ function syncVorpruefungPoll() {
 function wizImport(btn) {
   var url = (document.getElementById('setup-url') || {}).value || '';
   var st = document.getElementById('wiz-import-status');
-  btn.disabled = true; btn.textContent = 'starting …';
+  btn.disabled = true; btn.textContent = TT('js.status.starten', 'starting …');
   fetch('/sync_import', {method: 'POST', body: JSON.stringify({url: url})})
     .then(function (r) { return r.json(); })
     .then(function (d) {
-      if (!d.ok) { if (st) st.textContent = d.msg || 'error'; btn.disabled = false; return; }
+      if (!d.ok) { if (st) st.textContent = d.msg || TT('js.status.fehler', 'error'); btn.disabled = false; return; }
       var poll = setInterval(function () {
         fetch('/sync_status').then(function (r) { return r.json(); }).then(function (s) {
           if (!st) return;
           if (s.phase === 'import') {
             var pct = s.total ? Math.round(100 * s.done / s.total) : 0;
-            st.textContent = 'downloading ' + s.done + '/' + s.total + ' (' + (s.current || '') + ') ' + pct + '%';
+            st.textContent = TT('js.import.fortschritt', 'downloading {done}/{total} ({current}) {pct}%',
+                                {done: s.done, total: s.total, current: s.current || '', pct: pct});
           } else if (s.phase === 'done') {
             clearInterval(poll);
-            st.textContent = '✓ imported ' + (s.ok || 0) + ' — computing features on the accelerator …';
-            btn.textContent = 'Imported ✓';
+            st.textContent = TT('js.import.fertig_wiz', '✓ imported {n} — computing features on the accelerator …', {n: s.ok || 0});
+            btn.textContent = TT('js.import.knopf_fertig', 'Imported ✓');
           } else if (s.phase === 'error') {
             /* Der Server meldet Fehler sauber (phase:'error'), aber diese Schleife wertete nur
                import/done aus — bei einem Fehler pollte sie endlos, der Text fror ein und der
                Knopf blieb tot (Plan-QS P.9). Die Zwillingsfunktion oben macht es laengst so. */
             clearInterval(poll);
-            st.textContent = 'import failed: ' + (s.hinweis || s.detail || s.msg || 'see service log') + ' ';
+            st.textContent = TT('js.import.fehler', 'import failed: {grund}',
+                                {grund: s.hinweis || s.detail || s.msg || TT('js.status.siehe_log', 'see service log')}) + ' ';
             var dg1 = document.createElement('a');
-            dg1.href = '/sync_diagnose'; dg1.target = '_blank'; dg1.textContent = 'diagnosis';
+            dg1.href = '/sync_diagnose'; dg1.target = '_blank'; dg1.textContent = TT('js.status.diagnose', 'diagnosis');
             st.appendChild(dg1);
-            btn.disabled = false; btn.textContent = 'Import faces';
+            btn.disabled = false; btn.textContent = TT('js.import.knopf', 'Import faces');
           }
         }).catch(function () {});
       }, 1000);
@@ -550,28 +610,30 @@ function wizImport(btn) {
    empty url => server falls back to the configured frigate_url. */
 function gesImport(btn) {
   var st = document.getElementById('ges-import-status');
-  btn.disabled = true; btn.textContent = 'starting …';
+  btn.disabled = true; btn.textContent = TT('js.status.starten', 'starting …');
   fetch('/sync_import', {method: 'POST', body: JSON.stringify({})})
     .then(function (r) { return r.json(); })
     .then(function (d) {
-      if (!d.ok) { if (st) st.textContent = d.msg || 'error'; btn.disabled = false; btn.textContent = 'Import faces from Frigate'; return; }
+      if (!d.ok) { if (st) st.textContent = d.msg || TT('js.status.fehler', 'error'); btn.disabled = false; btn.textContent = TT('js.import.knopf_ges', 'Import faces from Frigate'); return; }
       var poll = setInterval(function () {
         fetch('/sync_status').then(function (r) { return r.json(); }).then(function (s) {
           if (!st) return;
           if (s.phase === 'import') {
             var pct = s.total ? Math.round(100 * s.done / s.total) : 0;
-            st.textContent = 'downloading ' + s.done + '/' + s.total + ' (' + (s.current || '') + ') ' + pct + '%';
+            st.textContent = TT('js.import.fortschritt', 'downloading {done}/{total} ({current}) {pct}%',
+                                {done: s.done, total: s.total, current: s.current || '', pct: pct});
           } else if (s.phase === 'done') {
             clearInterval(poll);
-            st.textContent = '✓ imported ' + (s.ok || 0) + ' — computing features, page reloads …';
+            st.textContent = TT('js.import.fertig_ges', '✓ imported {n} — computing features, page reloads …', {n: s.ok || 0});
             setTimeout(function () { location.reload(); }, 2500);
           } else if (s.phase === 'error') {
             clearInterval(poll);
-            st.textContent = 'import failed: ' + (s.hinweis || s.detail || s.msg || 'see service log') + ' ';
+            st.textContent = TT('js.import.fehler', 'import failed: {grund}',
+                                {grund: s.hinweis || s.detail || s.msg || TT('js.status.siehe_log', 'see service log')}) + ' ';
             var dg2 = document.createElement('a');
-            dg2.href = '/sync_diagnose'; dg2.target = '_blank'; dg2.textContent = 'diagnosis';
+            dg2.href = '/sync_diagnose'; dg2.target = '_blank'; dg2.textContent = TT('js.status.diagnose', 'diagnosis');
             st.appendChild(dg2);
-            btn.disabled = false; btn.textContent = 'Import faces from Frigate';
+            btn.disabled = false; btn.textContent = TT('js.import.knopf_ges', 'Import faces from Frigate');
           }
         }).catch(function () {});
       }, 1000);
@@ -580,8 +642,8 @@ function gesImport(btn) {
 
 /* Check (19.07.): remove a single reference image / recompute reference QC */
 function refEntfernen(person, datei, btn) {
-  if (!confirm('Remove reference image of ' + person + '?')) return;
-  btn.disabled = true; btn.textContent = 'removing …';
+  if (!confirm(TT('js.ref.frage', 'Remove reference image of {person}?', {person: person}))) return;
+  btn.disabled = true; btn.textContent = TT('js.status.entfernen', 'removing …');
   fetch('/ref_entfernen', {method: 'POST', body: JSON.stringify({person: person, datei: datei})})
     .then(function (r) { return r.json(); })
     .then(function (d) {
@@ -601,14 +663,14 @@ function qsStart(btn) {
     .then(function (r) { return r.json(); })
     .then(function (d) {
       var s = document.getElementById('qs-status');
-      if (!d.ok) { if (s) s.textContent = d.msg || 'error'; btn.disabled = false; return; }
+      if (!d.ok) { if (s) s.textContent = d.msg || TT('js.status.fehler', 'error'); btn.disabled = false; return; }
       location.href = '/qualitaet' + (d.person ? '?person=' + encodeURIComponent(d.person) : '');
     })
     .catch(function () {
       /* .282: NIE still scheitern — Klicks waehrend eines Dienst-Neustarts
          (Deploy) liefen sonst ins Leere und der Knopf wirkte tot. */
       var s = document.getElementById('qs-status');
-      if (s) s.textContent = 'cannot reach the service — try again in a moment.';
+      if (s) s.textContent = TT('js.dienst.nicht_erreichbar', 'cannot reach the service — try again in a moment.');
       btn.disabled = false;
     });
 }
@@ -616,19 +678,19 @@ function qsStart(btn) {
 function qsPerson(name, btn) {
   /* .273c: Kontext-Start von der Personen-Seite — Lauf ist immer global,
      die Ergebnis-Sicht springt gefiltert auf die Person. */
-  btn.disabled = true; btn.textContent = 'checking …';
+  btn.disabled = true; btn.textContent = TT('js.status.pruefen', 'checking …');
   fetch('/qualitaet/start', {method: 'POST',
                              body: JSON.stringify({person: name})})
     .then(function (r) { return r.json(); })
     .then(function (d) {
-      if (!d.ok) { btn.textContent = d.msg || 'error'; btn.disabled = false; return; }
+      if (!d.ok) { btn.textContent = d.msg || TT('js.status.fehler', 'error'); btn.disabled = false; return; }
       location.href = '/qualitaet?person=' + encodeURIComponent(name);
     })
     .catch(function () { btn.disabled = false; });
 }
 
 function refPruefNeu(btn) {
-  btn.disabled = true; btn.textContent = 'checking …';
+  btn.disabled = true; btn.textContent = TT('js.status.pruefen', 'checking …');
   fetch('/ref_pruef_neu', {method: 'POST', body: '{}'})
     .then(function (r) { return r.json(); })
     .then(function (d) { btn.textContent = d.msg; });
@@ -645,9 +707,9 @@ function refBatchLoeschen(btn) {
     var v = cbs[i].value.split('|');
     items.push({person: v[0], datei: v.slice(1).join('|')});
   }
-  if (!items.length) { alert('Please select at least one image.'); return; }
-  if (!confirm('Delete ' + items.length + ' image(s)?')) return;
-  btn.disabled = true; btn.textContent = 'deleting …';
+  if (!items.length) { alert(TT('js.auswahl.bild_fehlt', 'Please select at least one image.')); return; }
+  if (!confirm(TT('js.ref.batch_frage', 'Delete {n} image(s)?', {n: items.length}))) return;
+  btn.disabled = true; btn.textContent = TT('js.status.loeschen', 'deleting …');
   fetch('/ref_entfernen_batch', {method: 'POST', body: JSON.stringify({items: items})})
     .then(function (r) { return r.json(); })
     .then(function (d) {
@@ -686,11 +748,14 @@ function unbReconcile(btn) {
   var start = Date.now();
   var tick = setInterval(function () {
     var s = Math.round((Date.now() - start) / 1000);
+    /* Uhr-Stub-Muster (§8-Nachtrag): der Zaehler-Rahmen ist ein Schluessel,
+       die Phase kommt (noch englisch) vom Server. */
     fetch('/reconcile_status').then(function (r) { return r.json(); }).then(function (d) {
-      btn.textContent = (d.phase && d.phase !== '-' ? d.phase : 'running') + ' … ' + s + ' s';
-    }).catch(function () { btn.textContent = 'running … ' + s + ' s'; });
+      btn.textContent = TT('js.unb.tick', '{phase} … {s} s',
+                           {phase: (d.phase && d.phase !== '-' ? d.phase : TT('js.status.laeuft_wort', 'running')), s: s});
+    }).catch(function () { btn.textContent = TT('js.unb.tick', '{phase} … {s} s', {phase: TT('js.status.laeuft_wort', 'running'), s: s}); });
   }, 1000);
-  btn.textContent = 'running … 0 s';
+  btn.textContent = TT('js.unb.tick', '{phase} … {s} s', {phase: TT('js.status.laeuft_wort', 'running'), s: 0});
   fetch('/unbekannt_reconcile', {method: 'POST', body: '{}'})
     .then(function (r) { return r.json(); })
     .then(function (d) {
@@ -698,10 +763,10 @@ function unbReconcile(btn) {
       btn.textContent = d.msg;
       setTimeout(function () { location.reload(); }, 1200);
     })
-    .catch(function () { clearInterval(tick); btn.textContent = 'error'; btn.disabled = false; });
+    .catch(function () { clearInterval(tick); btn.textContent = TT('js.status.fehler', 'error'); btn.disabled = false; });
 }
 function unbBesucher(uid, an, btn) {
-  if (an && !confirm('Ignore as a known stranger? It will no longer trigger alerts. (Re-activate any time under "known visitors" below.)')) return;
+  if (an && !confirm(TT('js.unb.besucher_frage', 'Ignore as a known stranger? It will no longer trigger alerts. (Re-activate any time under "known visitors" below.)'))) return;
   fetch('/unbekannt_besucher', {method: 'POST', body: JSON.stringify({uid: uid, an: an})})
     .then(function (r) { return r.json(); })
     .then(function (d) {
@@ -711,11 +776,11 @@ function unbBesucher(uid, an, btn) {
 }
 function unbMerge(uid, btn) {
   var sel = document.getElementById('mg-' + uid), b = sel && sel.value;
-  if (!b) { alert('Choose a target identity.'); return; }
+  if (!b) { alert(TT('js.unb.ziel_fehlt', 'Choose a target identity.')); return; }
   unbMergePaar(uid, b, btn);
 }
 function unbMergePaar(a, b, btn) {
-  if (!confirm('Merge?')) return;
+  if (!confirm(TT('js.unb.merge_frage', 'Merge?'))) return;
   btn.disabled = true;
   fetch('/unbekannt_merge', {method: 'POST', body: JSON.stringify({a: a, b: b})})
     .then(function (r) { return r.json(); })
@@ -730,9 +795,9 @@ function unbVerwerfen(a, b, btn) {
 }
 function unbBenennen(uid, btn) {
   var nm = document.getElementById('nm-' + uid), p = nm && nm.value.trim();
-  if (!p) { alert('Enter a name (new or existing person).'); return; }
-  if (!confirm('Assign to "' + p + '"? The best images become references.')) return;
-  btn.disabled = true; btn.textContent = 'learning …';
+  if (!p) { alert(TT('js.unb.name_fehlt', 'Enter a name (new or existing person).')); return; }
+  if (!confirm(TT('js.unb.benennen_frage', 'Assign to "{person}"? The best images become references.', {person: p}))) return;
+  btn.disabled = true; btn.textContent = TT('js.status.lernen', 'learning …');
   fetch('/unbekannt_benennen', {method: 'POST', body: JSON.stringify({uid: uid, person: p})})
     .then(function (r) { return r.json(); })
     .then(function (d) {
@@ -755,7 +820,7 @@ function kamerasSpeichern(btn) {
     if (kameras[zs[i].dataset.cam]) kameras[zs[i].dataset.cam].zonen.push(zs[i].value);
   }
   var s = document.getElementById('kam-status');
-  btn.disabled = true; if (s) s.textContent = 'saving …';
+  btn.disabled = true; if (s) s.textContent = TT('js.status.speichern', 'saving …');
   fetch('/kameras_speichern', {method: 'POST', body: JSON.stringify({kameras: kameras})})
     .then(function (r) { return r.json(); })
     .then(function (d) {
@@ -788,7 +853,7 @@ function setupSpeichern(btn) {                          // Setup-Wizard committe
   if (wr) body.frigate_read_only = (wr.value === 'ro');
   if (Object.keys(kameras).length) body.kameras = kameras;
   var s = document.getElementById('setup-status');
-  btn.disabled = true; if (s) s.textContent = 'saving …';
+  btn.disabled = true; if (s) s.textContent = TT('js.status.speichern', 'saving …');
   fetch('/setup_speichern', {method: 'POST', body: JSON.stringify(body)})
     .then(function (r) { return r.json(); })
     .then(function (d) {
@@ -824,12 +889,13 @@ function setupSpeichern(btn) {                          // Setup-Wizard committe
    getipptem Namen: das ist die einzige Aktion, die eine komplette Referenzbibliothek
    einer Person auf einmal entfernt — ein Fehlklick darf dafuer nicht reichen. */
 function personLoeschen(person, btn) {
-  var tipp = prompt('Delete ALL references and the name "' + person + '"?\n' +
-                    'The images move to the trash folder (recoverable).\n\n' +
-                    'Type the name to confirm:');
+  var tipp = prompt(TT('js.person.loesch_frage',
+                       'Delete ALL references and the name "{person}"?\n' +
+                       'The images move to the trash folder (recoverable).\n\n' +
+                       'Type the name to confirm:', {person: person}));
   if (tipp === null) return;
-  if (tipp.trim() !== person) { alert('Name did not match — nothing deleted.'); return; }
-  btn.disabled = true; btn.textContent = 'removing …';
+  if (tipp.trim() !== person) { alert(TT('js.person.name_falsch', 'Name did not match — nothing deleted.')); return; }
+  btn.disabled = true; btn.textContent = TT('js.status.entfernen', 'removing …');
   fetch('/person_loeschen', {method: 'POST', body: JSON.stringify({person: person})})
     .then(function (r) { return r.json(); })
     .then(function (d) {
@@ -837,7 +903,7 @@ function personLoeschen(person, btn) {
       if (d.ok) setTimeout(function () { location.href = '/gesichter'; }, 1500);
       else btn.disabled = false;
     })
-    .catch(function () { btn.textContent = 'error'; btn.disabled = false; });
+    .catch(function () { btn.textContent = TT('js.status.fehler', 'error'); btn.disabled = false; });
 }
 
 /* ── Hochzaehlen bei laufender Suche (requirement: show elapsed time while searching) ────────
@@ -859,7 +925,7 @@ function personLoeschen(person, btn) {
   if (!start) { start = Date.now(); sessionStorage.setItem(key, String(start)); }
   function tick() {
     var s = Math.round((Date.now() - start) / 1000);
-    for (var i = 0; i < spans.length; i++) spans[i].textContent = '(' + s + ' s)';
+    for (var i = 0; i < spans.length; i++) spans[i].textContent = TT('js.einheit.klammer_s', '({n} s)', {n: s});
   }
   tick();
   setInterval(tick, 1000);
@@ -898,7 +964,7 @@ function areasSpeichern(btn, paare) {
   paare = paare || _areasSammeln();
   var s = document.getElementById('ar-status');
   if (btn) btn.disabled = true;
-  if (s) s.textContent = 'saving …';
+  if (s) s.textContent = TT('js.status.speichern', 'saving …');
   fetch('/areas_speichern', {method: 'POST',
     body: JSON.stringify({areas: _areasPaareObjekt(paare)})})
     .then(function (r) { return r.json(); })
@@ -908,16 +974,16 @@ function areasSpeichern(btn, paare) {
       else if (btn) btn.disabled = false;
     })
     .catch(function () {
-      if (s) s.textContent = 'save failed — is the service reachable?';
+      if (s) s.textContent = TT('js.areas.fehl', 'save failed — is the service reachable?');
       if (btn) btn.disabled = false;
     });
 }
 function areaAnlegen(btn) {
   var f = document.getElementById('ar-neu'), n = (f && f.value || '').trim();
-  if (!n) { alert('Enter an area name first.'); return; }
+  if (!n) { alert(TT('js.areas.name_fehlt', 'Enter an area name first.')); return; }
   var paare = _areasSammeln(), i;
   for (i = 0; i < paare.length; i++) {
-    if (paare[i][0].toLowerCase() === n.toLowerCase()) { alert('This area already exists.'); return; }
+    if (paare[i][0].toLowerCase() === n.toLowerCase()) { alert(TT('js.areas.existiert', 'This area already exists.')); return; }
   }
   paare.push([n, []]);
   areasSpeichern(btn, paare);
@@ -925,7 +991,9 @@ function areaAnlegen(btn) {
 function areaEntfernen(btn) {
   var p = btn.closest('.ar-pill'), n = p && p.dataset.area;
   if (!n) return;
-  if (!confirm('Remove area "' + n + '"? Its cameras return to Default — nothing else changes.')) return;
+  /* "Default" ist zugleich Kennung der Standard-Area (Anzeige==Kennung,
+     §8.2) — im Satz bleibt das Wort deshalb in jeder Sprache "Default". */
+  if (!confirm(TT('js.areas.entfernen_frage', 'Remove area "{name}"? Its cameras return to Default — nothing else changes.', {name: n}))) return;
   areasSpeichern(btn, _areasSammeln().filter(function (q) { return q[0] !== n; }));
 }
 
@@ -942,16 +1010,16 @@ async function personlaufStart(n, btn) {
     });
     var d = await r.json();
     if (r.ok && d.ok) { location.href = '/personlauf'; return; }
-    if (st) st.textContent = 'error: ' + (d.msg || r.status);
+    if (st) st.textContent = TT('js.status.fehler_detail', 'error: {msg}', {msg: d.msg || r.status});
   } catch (e) {
-    if (st) st.textContent = 'error: ' + e;
+    if (st) st.textContent = TT('js.status.fehler_detail', 'error: {msg}', {msg: e});
   }
   btn.disabled = false;
 }
 
 // PE1: laufenden Person-Learn-Lauf abbrechen (Geerntetes bleibt).
 async function personlaufAbbruch(btn) {
-  if (!confirm('Abort this person-learn run? Harvested images are kept.')) return;
+  if (!confirm(TT('js.personlauf.abbruch_frage', 'Abort this person-learn run? Harvested images are kept.'))) return;
   btn.disabled = true;
   try {
     var r = await fetch('/personlauf_abbruch', { method: 'POST' });
@@ -962,7 +1030,7 @@ async function personlaufAbbruch(btn) {
 
 // PE2b: kompletten Lauf verwerfen (schlechtes Ergebnis), Wizard wird frei.
 async function personlaufVerwerfen(lid) {
-  if (!confirm('Discard run ' + lid + ' completely? All its images are deleted; a new run can re-harvest any time.')) return;
+  if (!confirm(TT('js.personlauf.verwerfen_frage', 'Discard run {lid} completely? All its images are deleted; a new run can re-harvest any time.', {lid: lid}))) return;
   var r = await fetch('/personlauf/loeschen', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ lauf_id: lid })
@@ -1082,7 +1150,7 @@ function _visionFrage(titel, text, wahlen) {
    ERSTE Aufruf scheitert, ist wirklich nichts gespeichert. */
 function visionSpeichern(danach) {
   var s = document.getElementById('vision-status');
-  s.textContent = 'saving …';
+  s.textContent = TT('js.status.speichern', 'saving …');
   var zahlen = {}, zf = document.querySelectorAll('[id^="cfgv-"]');
   /* Checkboxen (die zwei optionalen Meldungen) tragen ihren Zustand in
      .checked, nicht in .value — .value waere immer "on". */
@@ -1097,13 +1165,13 @@ function visionSpeichern(danach) {
   var zahlenDirty = VIS_DIRTY.zahlen;
   fetch('/vision/konfig', {method: 'POST', body: JSON.stringify(_visionFelder())})
     .then(function (r) { return r.json(); })
-    .catch(function () { return {ok: false, msg: 'could not reach the service — nothing was saved'}; })
+    .catch(function () { return {ok: false, msg: TT('js.vision.nicht_erreichbar', 'could not reach the service — nothing was saved')}; })
     .then(function (r) {
       if (!r.ok) { s.textContent = r.msg; return; }
       VIS_DIRTY.block = false;
       _visionDirtyZeigen();
       if (!zahlenDirty) {
-        s.textContent = 'saved — recognition uses this connection from now on';
+        s.textContent = TT('js.vision.gespeichert', 'saved — recognition uses this connection from now on');
         _visionDirtySetzen(null);
         if (danach) danach();
         return;
@@ -1111,11 +1179,11 @@ function visionSpeichern(danach) {
       return fetch('/konfig', {method: 'POST', body: JSON.stringify(zahlen)})
         .then(function (r2) { return r2.json(); })
         .then(function (r2) {
-          s.textContent = r2.ok ? 'saved — the service restarts in a moment' : r2.msg;
+          s.textContent = r2.ok ? TT('js.vision.gespeichert_neustart', 'saved — the service restarts in a moment') : r2.msg;
           if (r2.ok) { _visionDirtySetzen(null); VIS_NAV_OK = true; _neustartDann('/vision', s); }
         })
         .catch(function () {
-          s.textContent = 'saved — the service is restarting, this page reloads in a moment';
+          s.textContent = TT('js.vision.gespeichert_reload', 'saved — the service is restarting, this page reloads in a moment');
           _visionDirtySetzen(null);
           VIS_NAV_OK = true;
           _neustartDann('/vision', s);
@@ -1130,9 +1198,9 @@ function visionSpeichern(danach) {
    als "not run" stehen. Kein Polling, kein Server-Zustand. */
 function _visionStufeText(s) {
   var w = [];
-  if (s.dauer_s != null) w.push(s.dauer_s + ' s');
-  if (s.treffer != null) w.push(s.treffer + '/2 right');
-  if (s.ist != null) w.push(s.ist + ' tokens vs ' + s.soll);
+  if (s.dauer_s != null) w.push(TT('js.einheit.s', '{n} s', {n: s.dauer_s}));
+  if (s.treffer != null) w.push(TT('js.vision.treffer', '{n}/2 right', {n: s.treffer}));
+  if (s.ist != null) w.push(TT('js.vision.tokens', '{ist} tokens vs {soll}', {ist: s.ist, soll: s.soll}));
   return (s.text || '') + (w.length ? ' · ' + w.join(' · ') : '');
 }
 
@@ -1141,13 +1209,14 @@ function visionTest(btn) {
     /* Der Irrtum, den der User beschrieben hat: nach einem gruenen Test hielt
        er die Sache fuer erledigt — dabei hatte er nie gespeichert. */
     _visionFrage(
-      'You have not saved this connection',
-      'The test would use the values you just typed. Recognition keeps using ' +
-      'the SAVED connection until you press Save — a green test alone changes ' +
-      'nothing about the verdicts.',
-      [['Save first, then test', function () { visionSpeichern(function () { _visionTestLauf(btn); }); }],
-       ['Test without saving', function () { _visionTestLauf(btn); }],
-       ['Cancel', function () { btn.disabled = false; }]]);
+      TT('js.vision.dirty_titel', 'You have not saved this connection'),
+      TT('js.vision.dirty_text',
+         'The test would use the values you just typed. Recognition keeps using ' +
+         'the SAVED connection until you press Save — a green test alone changes ' +
+         'nothing about the verdicts.'),
+      [[TT('js.vision.dirty_save', 'Save first, then test'), function () { visionSpeichern(function () { _visionTestLauf(btn); }); }],
+       [TT('js.vision.dirty_test', 'Test without saving'), function () { _visionTestLauf(btn); }],
+       [TT('js.allg.abbrechen', 'Cancel'), function () { btn.disabled = false; }]]);
     return;
   }
   _visionTestLauf(btn);
@@ -1155,32 +1224,34 @@ function visionTest(btn) {
 
 function _visionTestLauf(btn) {
   var st = document.getElementById('vision-test-status');
-  var namen = ['reachability and model', 'forced-choice shape grids', 'token count'];
+  var namen = [TT('js.vision.stufe1', 'reachability and model'),
+               TT('js.vision.stufe2', 'forced-choice shape grids'),
+               TT('js.vision.stufe3', 'token count')];
   btn.disabled = true;
   var felder = _visionFelder();
   function stufe(nr) {
-    st.textContent = 'step ' + nr + '/3 — ' + namen[nr - 1] +
-      ' … (a local model on CPU can take minutes)';
+    st.textContent = TT('js.vision.stufe_laeuft', 'step {nr}/3 — {name} … (a local model on CPU can take minutes)',
+                        {nr: nr, name: namen[nr - 1]});
     var z = document.getElementById('vs-log-' + nr);
-    if (z) z.textContent = 'running …';
+    if (z) z.textContent = TT('js.status.laeuft', 'running …');
     felder.stufe = nr;
     return fetch('/vision/test', {method: 'POST', body: JSON.stringify(felder)})
       .then(function (r) { return r.json(); })
       .then(function (r) {
         var s = r.msg && r.msg.stufe;
-        if (!s) { st.textContent = (r.msg && r.msg.msg) || r.msg || 'the test could not be run'; btn.disabled = false; return; }
+        if (!s) { st.textContent = (r.msg && r.msg.msg) || r.msg || TT('js.vision.test_fehl', 'the test could not be run'); btn.disabled = false; return; }
         if (z) z.textContent = _visionStufeText(s);
         if (!r.msg.weiter) {
-          st.textContent = 'stopped at step ' + nr + ' — see the log below';
+          st.textContent = TT('js.vision.stufe_stop', 'stopped at step {nr} — see the log below', {nr: nr});
           location.reload();
           return;
         }
         if (nr < 3) return stufe(nr + 1);
-        st.textContent = 'done — ' + r.msg.ampel.toUpperCase();
+        st.textContent = TT('js.vision.fertig', 'done — {ampel}', {ampel: r.msg.ampel.toUpperCase()});
         location.reload();
       })
       .catch(function () {
-        st.textContent = 'step ' + nr + ' could not be run';
+        st.textContent = TT('js.vision.stufe_fehl', 'step {nr} could not be run', {nr: nr});
         btn.disabled = false;
       });
   }
@@ -1189,7 +1260,7 @@ function _visionTestLauf(btn) {
 
 function visionSchalter(an) {
   var st = document.getElementById('vision-schalter-status');
-  st.textContent = 'saving …';
+  st.textContent = TT('js.status.speichern', 'saving …');
   fetch('/vision/schalter', {method: 'POST', body: JSON.stringify({aktiv: an})})
     .then(function (r) { return r.json(); })
     .then(function (r) { st.textContent = r.msg || ''; if (r.ok) location.reload(); })
@@ -1197,7 +1268,7 @@ function visionSchalter(an) {
       /* Der Schalter selbst startet den Dienst nicht neu — aber ein
          gleichzeitiger Neustart (z.B. vom Speichern nebenan) kappt trotzdem
          die Verbindung. Auch hier: warten und neu laden statt "error". */
-      st.textContent = 'the service is not answering right now — this page reloads in a moment';
+      st.textContent = TT('js.vision.neustart_warte', 'the service is not answering right now — this page reloads in a moment');
       _neustartDann('/vision', st);
     });
 }
@@ -1209,10 +1280,10 @@ function visionSchalter(an) {
 function visionPromptZurueck() {
   var t = document.getElementById('vis-prompt');
   if (!t) return;
-  if (!confirm('Reset the question to the default wording?')) return;
+  if (!confirm(TT('js.vision.prompt_frage', 'Reset the question to the default wording?'))) return;
   t.value = (typeof VIS_PROMPT_STD === 'string') ? VIS_PROMPT_STD : '';
   document.getElementById('vision-status').textContent =
-    'default wording restored — press Save to store it';
+    TT('js.vision.prompt_zurueck', 'default wording restored — press Save to store it');
 }
 
 /* --- Recognition test (konzept_vision.md v2 §4, Zug V4) ----------------------
@@ -1221,7 +1292,7 @@ function visionPromptZurueck() {
 function rtVision(btn) {
   var st = document.getElementById('rt-vision-status');
   btn.disabled = true;
-  st.textContent = 'starting the vision run …';
+  st.textContent = TT('js.rt.start', 'starting the vision run …');
   /* .164: die zwei Felder gelten NUR fuer diesen Lauf — sie fahren mit der
      Anfrage mit und werden nirgends gespeichert. Fehlen sie (Seite ohne
      Felder), entscheidet der Server mit den Config-Werten. */
@@ -1240,7 +1311,7 @@ function rtVision(btn) {
       if (r.ok) setTimeout(function () { location.reload(); }, 4000);
       else btn.disabled = false;
     })
-    .catch(function () { st.textContent = 'the run could not be started'; btn.disabled = false; });
+    .catch(function () { st.textContent = TT('js.rt.fehl', 'the run could not be started'); btn.disabled = false; });
 }
 
 /* .161: den Durchgang noch einmal analysieren, wenn der Sammel-Modus AN ist und
@@ -1249,7 +1320,7 @@ function rtVision(btn) {
 function rtNachanalyse(btn) {
   var st = document.getElementById('rt-nach-status');
   btn.disabled = true;
-  st.textContent = 'starting …';
+  st.textContent = TT('js.status.starten', 'starting …');
   fetch('/vision/nachanalyse', {method: 'POST', body: JSON.stringify({pass_key: RT_PASS})})
     .then(function (r) { return r.json(); })
     .then(function (r) {
@@ -1257,7 +1328,7 @@ function rtNachanalyse(btn) {
       if (r.ok) setTimeout(function () { location.reload(); }, 3000);
       else btn.disabled = false;
     })
-    .catch(function () { st.textContent = 'it could not be started'; btn.disabled = false; });
+    .catch(function () { st.textContent = TT('js.rt.nach_fehl', 'it could not be started'); btn.disabled = false; });
 }
 
 /* --- Vision detect V2: Kacheln, Key-Sofortpruefung, Modellwahl ---------------
@@ -1267,7 +1338,7 @@ function rtNachanalyse(btn) {
    Ring. Gespeichert wird erst mit "Save", geprueft mit "Check the key". */
 function visionKachel(name) {
   if ((VIS_DIRTY.block || VIS_DIRTY.zahlen)
-      && !confirm('You have unsaved changes. Switching provider discards them. Continue?')) return;
+      && !confirm(TT('js.vision.kachel_frage', 'You have unsaved changes. Switching provider discards them. Continue?'))) return;
   VIS_NAV_OK = true;          /* bewusster Wechsel: kein zweiter Dialog */
   location.href = '/vision?kachel=' + encodeURIComponent(name);
 }
@@ -1295,7 +1366,7 @@ function _visionModellListe(modelle, gewaehlt) {
   if (!gewaehlt) {
     var leer = document.createElement('option');
     leer.value = '';
-    leer.textContent = '— pick one —';
+    leer.textContent = TT('js.vision.pick', '— pick one —');
     s.appendChild(leer);
   }
   for (var i = 0; i < modelle.length; i++) {
@@ -1303,7 +1374,7 @@ function _visionModellListe(modelle, gewaehlt) {
     o.value = m.id;
     /* Die Anmerkung kommt vom SERVER (Messwerte-Registry) — hier steht keine
        Zahl und kein Modellname fest im Code. */
-    o.textContent = m.id + ' — ' + ((m.badge && m.badge.text) || 'untested here');
+    o.textContent = m.id + ' — ' + ((m.badge && m.badge.text) || TT('js.vision.untested', 'untested here'));
     if (m.id === gewaehlt) o.selected = true;
     s.appendChild(o);
   }
@@ -1318,13 +1389,13 @@ function _visionEntdeckungVerwerfen() {
   VIS_ENTDECKT = null;
   _visionModellListe([], '');
   var i = document.getElementById('vision-modell-info');
-  if (i) i.textContent = 'the connection changed — check it again to see which models it has';
+  if (i) i.textContent = TT('js.vision.neu_pruefen', 'the connection changed — check it again to see which models it has');
 }
 
 function visionSchluessel(btn) {
   var st = document.getElementById('vision-key-status');
   btn.disabled = true;
-  st.textContent = 'asking the provider which models you can use …';
+  st.textContent = TT('js.vision.key_laeuft', 'asking the provider which models you can use …');
   fetch('/vision/schluessel', {method: 'POST', body: JSON.stringify(_visionFelder())})
     .then(function (r) { return r.json(); })
     .then(function (r) {
@@ -1332,13 +1403,13 @@ function visionSchluessel(btn) {
       var d = r.msg || {};
       st.textContent = d.text || d || '';
       var info = document.getElementById('vision-modell-info');
-      if (!r.ok) { if (info) info.textContent = d.text || 'the check failed'; _visionModellListe([], ''); return; }
+      if (!r.ok) { if (info) info.textContent = d.text || TT('js.vision.key_fehl', 'the check failed'); _visionModellListe([], ''); return; }
       VIS_ENTDECKT = {endpunkt: d.endpunkt, kachel: d.kachel};
       if (info) info.textContent = d.text || '';
       var sel = document.getElementById('vision-modell');
       _visionModellListe(d.modelle, sel ? sel.value : '');
     })
-    .catch(function () { st.textContent = 'the check could not be run'; btn.disabled = false; });
+    .catch(function () { st.textContent = TT('js.vision.key_fehl2', 'the check could not be run'); btn.disabled = false; });
 }
 
 /* Eingaben, die die Verbindung veraendern, entwerten eine gezeigte Liste. */
@@ -1356,7 +1427,7 @@ _visionDirtyVerdrahten();
 function visionModell(sel) {
   var st = document.getElementById('vision-modell-status');
   if (!sel.value) { st.textContent = ''; return; }
-  st.textContent = 'saving …';
+  st.textContent = TT('js.status.speichern', 'saving …');
   sel.disabled = true;
   var d = _visionFelder();
   d.modell = sel.value;
@@ -1367,7 +1438,7 @@ function visionModell(sel) {
       if (r.ok) { VIS_DIRTY.block = false; VIS_NAV_OK = true; location.reload(); }
       else sel.disabled = false;
     })
-    .catch(function () { st.textContent = 'error'; sel.disabled = false; });
+    .catch(function () { st.textContent = TT('js.status.fehler', 'error'); sel.disabled = false; });
 }
 
 /* --- Galerie-Wizard (konzept_vision.md v2 §6) --------------------------------
@@ -1405,13 +1476,15 @@ function vwWeg(i) {
       zeile.textContent = neu.begruendung
         || [neu.tag || '?', neu.camera || '?', (neu.hoehe || '?') + ' px'].join(' · ');
       k.querySelector('.vw-m').innerHTML = zeile.innerHTML
-        + (neu.geliehen_aus ? '<div class="vw-warn">from the ' + neu.geliehen_aus + ' row</div>' : '');
+        + (neu.geliehen_aus
+           ? '<div class="vw-warn">' + TT('js.vw.geliehen', 'from the {reihe} row', {reihe: neu.geliehen_aus}) + '</div>'
+           : '');
     })
     .catch(function () { k.style.opacity = '1'; });
 }
 
 function vwVergessen() {
-  if (!confirm('Forget the images you rejected for this gallery? They can be proposed again.')) return;
+  if (!confirm(TT('js.vw.vergessen_frage', 'Forget the images you rejected for this gallery? They can be proposed again.'))) return;
   fetch('/vision/galerie/vergessen', {method: 'POST', body: JSON.stringify({person: VW_PERSON})})
     .then(function () { location.reload(); });
 }
@@ -1420,9 +1493,9 @@ function vwAbnehmen(btn) {
   var st = document.getElementById('vw-status');
   var auswahl = VW_ZELLEN.map(function (z) { return z && z.schluessel ? z.schluessel : null; });
   var leer = auswahl.filter(function (s) { return !s; }).length;
-  if (leer && !confirm(leer + ' cell(s) could not be filled. Approve the gallery anyway?')) return;
+  if (leer && !confirm(TT('js.vw.leer_frage', '{n} cell(s) could not be filled. Approve the gallery anyway?', {n: leer}))) return;
   btn.disabled = true;
-  st.textContent = 'copying the pictures into the gallery …';
+  st.textContent = TT('js.vw.kopiert', 'copying the pictures into the gallery …');
   fetch('/vision/galerie/abnahme', {method: 'POST', body: JSON.stringify(
     {person: VW_PERSON, groesse: VW_GROESSE, auswahl: auswahl})})
     .then(function (r) { return r.json(); })
@@ -1431,7 +1504,7 @@ function vwAbnehmen(btn) {
       if (r.ok) location.href = '/vision/galerie?person=' + encodeURIComponent(VW_PERSON);
       else btn.disabled = false;
     })
-    .catch(function () { st.textContent = 'error'; btn.disabled = false; });
+    .catch(function () { st.textContent = TT('js.status.fehler', 'error'); btn.disabled = false; });
 }
 
 /* ---- Live watchers (Phase 2): Save / Toggle / Source test / Load measurement.
@@ -1455,11 +1528,11 @@ function _liveFelder() {
 
 function liveSpeichern(btn) {
   var s = document.getElementById('lv-status');
-  btn.disabled = true; if (s) s.textContent = 'saving …';
+  btn.disabled = true; if (s) s.textContent = TT('js.status.speichern', 'saving …');
   fetch('/live_speichern', {method: 'POST', body: JSON.stringify(_liveFelder())})
     .then(function (r) { return r.json(); })
     .then(function (d) { if (s) s.textContent = d.msg; btn.disabled = false; })
-    .catch(function () { if (s) s.textContent = 'error'; btn.disabled = false; });
+    .catch(function () { if (s) s.textContent = TT('js.status.fehler', 'error'); btn.disabled = false; });
 }
 
 function liveSchalter(kamera, an, btn) {
@@ -1510,17 +1583,23 @@ function _livePoll() {
       var el = document.getElementById('lv-auftrag');
       if (el) {
         if (a) {
-          var ph = {verbinden: 'Connecting', messen: 'Measuring',
-                    auswerten: 'Evaluating', abbruch: 'Aborting'}[a.phase] || a.phase;
+          /* Status-replace-Mapping (§8-Nachtrag): a.phase ist eine KENNUNG,
+             das Anzeige-Wort kommt je Kennung aus einem eigenen Schluessel —
+             unbekannte Kennungen zeigen sich selbst (ehrlich statt leer). */
+          var ph = {verbinden: TT('js.live.phase_verbinden', 'Connecting'),
+                    messen: TT('js.live.phase_messen', 'Measuring'),
+                    auswerten: TT('js.live.phase_auswerten', 'Evaluating'),
+                    abbruch: TT('js.live.phase_abbruch', 'Aborting')}[a.phase] || a.phase;
           var rest = (a.rest_s !== null && a.rest_s !== undefined)
-            ? ' — ' + Math.ceil(a.rest_s) + ' s left' : '';
+            ? TT('js.live.rest', ' — {n} s left', {n: Math.ceil(a.rest_s)}) : '';
           /* UI-KANN 11: 'watchers paused' nur, wenn wirklich welche pausieren
              (Quelltests pausieren nicht; ohne Waechter pausiert niemand). */
-          el.textContent = (a.art === 'messung' ? 'Load measurement' : 'Source test')
-            + ' on ' + a.kamera + ': ' + ph + rest
-            + (a.pausiert && a.pausiert.length
-               ? ' — watchers paused for measurement (' + a.pausiert.join(', ') + ')'
-               : '');
+          el.textContent = TT('js.live.auftrag_zeile', '{art} on {kamera}: {phase}{rest}{pausiert}',
+            {art: (a.art === 'messung' ? TT('js.live.messung', 'Load measurement') : TT('js.live.quelltest', 'Source test')),
+             kamera: a.kamera, phase: ph, rest: rest,
+             pausiert: (a.pausiert && a.pausiert.length
+               ? TT('js.live.pausiert', ' — watchers paused for measurement ({liste})', {liste: a.pausiert.join(', ')})
+               : '')});
         } else { el.textContent = ''; }
       }
       Object.keys(d.jobs || {}).forEach(function (kam) {
@@ -1528,11 +1607,11 @@ function _livePoll() {
         var jel = document.getElementById('lv-job-' + kam);
         if (!jel) return;
         if (!j.fertig)
-          jel.textContent = 'source test running (helper process, up to ~2 minutes) …';
+          jel.textContent = TT('js.live.job_laeuft', 'source test running (helper process, up to ~2 minutes) …');
         else if (j.text !== undefined)
           /* UI-M3: das Helfer-ERGEBNIS anzeigen, nicht nur das Laufen. */
-          jel.textContent = (j.ok ? 'source test done: ' : 'source test FAILED: ')
-            + (j.text || '');
+          jel.textContent = (j.ok ? TT('js.live.job_ok', 'source test done: {text}', {text: j.text || ''})
+                                  : TT('js.live.job_fehl', 'source test FAILED: {text}', {text: j.text || ''}));
       });
       /* UI-M3: Fehl-Auftraege der Engine sichtbar machen (frisch-gegated). */
       Object.keys(d.auftraege || {}).forEach(function (kam) {
@@ -1542,7 +1621,8 @@ function _livePoll() {
           if (b && b.ok === false && b.fehler) {
             var jel = document.getElementById('lv-job-' + kam);
             if (jel) jel.textContent = (art === 'messung'
-              ? 'load measurement failed: ' : 'source test failed: ') + b.fehler;
+              ? TT('js.live.messung_fehl', 'load measurement failed: {grund}', {grund: b.fehler})
+              : TT('js.live.test_fehl', 'source test failed: {grund}', {grund: b.fehler}));
           }
         });
       });

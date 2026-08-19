@@ -372,6 +372,29 @@ def _job_ausfuehren(job, antwort_out=None):
     if typ == "ping":
         return {"ok": True, "rss_mb": _rss_mb()}
     logpfad = job.get("log") or os.devnull
+    # .287 Clip-Debug (User-Auftrag 18.08., Frigate-Haenger-Klasse Task #11):
+    # der Dienst reicht seinen cfg['debug']-Schalter als Job-Feld 'clip_dbg'
+    # durch (WorkerProzess.job, setdefault wie rss_max_mb — EINE Quelle).
+    # Armiert wird JE Job: die [clipdbg]-Zeilen der Clip-Beschaffung
+    # (core.frames.clip_holen) landen via print im Log DIESES Jobs
+    # (analyze.log/ernte.log, fd-Umleitung unten); Quelle + Event-Alter
+    # kommen als Job-Felder mit. Ein Job at a time -> Modul-Zustand ist safe.
+    from core import frames as _clipdbg_fr
+    _clipdbg_fr.CLIP_DBG = ((lambda z: print(z, flush=True))
+                            if job.get("clip_dbg") else None)
+    _clipdbg_fr.CLIP_QUELLE = job.get("clip_quelle")
+    _clipdbg_fr.CLIP_ALTER_MIN = job.get("clip_alter_min")
+    # .290 (Task #11): Erzeugungs-Modus-Defaults je Job armieren — der
+    # Analyze-Weg (runpy analyze.py) ruft clip_holen ohne eigene Parameter;
+    # ohne diese Armierung zoege ein Nachhol-Lauf auf einem ALTEN Event den
+    # Clip mit hartem 30-s-Abbruch und fuetterte genau den Serie-E-Leak.
+    # VERHALTEN, nicht Telemetrie; explizite clip_holen-Argumente (Ernte-
+    # Branch unten) gewinnen.
+    _clipdbg_fr.CLIP_ERZEUGUNG = bool(job.get("clip_erzeugung"))
+    _clipdbg_fr.CLIP_ERZEUGUNG_DECKEL_S = job.get("clip_erzeugung_deckel_s")
+    # .292: VOD-Weg-Schalter je Job (Default AN — nur explizites False der
+    # Dienst-Config schaltet ab); wirkt nur im Erzeugungs-Fall (Alt-Events).
+    _clipdbg_fr.CLIP_VOD = job.get("clip_vod") is not False
     wache = _JobRssWache(_job_rss_grenze(job), antwort_out)
     t0 = os.times()
     t0w = time.monotonic()   # E1/V0.4: WANDUHR je Job — cpu_s allein hatte die v1-Hochrechnung
@@ -400,7 +423,14 @@ def _job_ausfuehren(job, antwort_out=None):
                 from core import frames as clipcache
                 import face_audit
                 eid = job["eid"]
-                vid = clipcache.clip_holen(eid)
+                # .288 (Task #11): Alt-Event-Weiche des Dienstes — bei
+                # clip_erzeugung wartet clip_holen auf Frigates Clip-
+                # ERZEUGUNG (Probe-Schleife statt hartem 30-s-Abbruch, der
+                # drueben je Zug 1 Thread + 1 ffmpeg liegen liess, Serie E).
+                # Der Deckel kommt aus der Dienst-Config via Job-Feld.
+                vid = clipcache.clip_holen(
+                    eid, erzeugung=bool(job.get("clip_erzeugung")),
+                    erzeugung_deckel_s=job.get("clip_erzeugung_deckel_s"))
                 try:
                     zusatz = _ernte.ernte_event(
                         vid, eid, job.get("kamera"), float(job.get("ts") or 0),
