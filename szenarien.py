@@ -14,6 +14,15 @@ import time
 # matchten nie; an den Echtdaten verifiziert: 10x 'Fremd', 7x 'unklar' im Bestand).
 GT_OFFEN_LABELS = ("Fremd", "unklar")
 GT_KEIN_MENSCH = "kein_mensch"   # Issue #16: manuelles 'keine Person'-Urteil —
+# .313 GT als MENGE (Tester-Fund 21.08., 'C+R'-Knopf): eine Zeile in ground_truth.jsonl
+# traegt zusaetzlich "personen": [...] — die Wahrheit; "label" bleibt fuer ALLE
+# Altleser byte-gleich abgeleitet (gt_label_aus_personen). Exklusive Werte: unklar und
+# kein_mensch stehen nie neben anderen; Fremd darf Mitglied neben Namen sein
+# (Zusteller waehrend der Gartenarbeit ist eine reale Wahrheit). GT_MAX_PERSONEN deckelt
+# die Liste, jeder Name einzeln bis PERSON_RE (60) — die alte [:40]-Kappung des
+# Kombi-Strings schnitt zwei lange Namen still ab.
+GT_EXKLUSIV = ("unklar", GT_KEIN_MENSCH)
+GT_MAX_PERSONEN = 10
 # schliesst das Event (nicht in GT_OFFEN_LABELS), Anzeige-Text lebt in gt_leiste
 
 
@@ -62,13 +71,110 @@ def vision_stimme_gilt(zeile):
     return p
 
 
+def gt_label_aus_personen(personen):
+    """EINE Ableitung des Altfeldes 'label' aus der Menge: [] -> 'unklar' (kein Urteil =
+    offen, wie '?'), ein Wert -> der Wert, mehrere -> '+'-verkettet und sortiert (so ist
+    'A+B' == 'B+A' dieselbe Wahrheit; Altleser werten jeden Nicht-Offen-Wert als
+    'beurteilt')."""
+    p = sorted(set(str(x) for x in (personen or []) if str(x)))
+    if not p:
+        return "unklar"
+    return p[0] if len(p) == 1 else "+".join(p)
+
+
+def gt_personen_aus_label(label, master):
+    """Lese-Migration fuer Altzeilen ohne 'personen': reservierte Werte bleiben einzeln,
+    ein '+'-String wird gespalten, wenn JEDES Stueck eine Master-Person ist (sonst
+    bleibt er als opaker Einzelwert stehen — nie raten). Sortiert."""
+    lbl = str(label or "")
+    if not lbl:
+        return []
+    if lbl in GT_OFFEN_LABELS or lbl == GT_KEIN_MENSCH:
+        return [lbl]
+    teile = [t for t in lbl.split("+") if t]
+    if len(teile) > 1 and all(t in master for t in teile):
+        return sorted(set(teile))
+    return [lbl]
+
+
+def gt_pruefen(personen, master):
+    """Handler-Validierung: Liste aus Master-Personen und/oder reservierten Werten,
+    exklusive Werte allein, Deckel GT_MAX_PERSONEN, Namenslaenge je Stueck.
+    -> (ok, bereinigte_liste_sortiert, grund)."""
+    if not isinstance(personen, (list, tuple)):
+        return False, [], "personen muss eine Liste sein"
+    p = []
+    for x in personen:
+        x = str(x).strip()
+        if not x or x in p:
+            continue
+        if len(x) > 60:
+            return False, [], "Name zu lang"
+        if x not in master and x not in GT_OFFEN_LABELS and x != GT_KEIN_MENSCH:
+            return False, [], f"unbekannter Wert {x!r}"
+        p.append(x)
+    if len(p) > GT_MAX_PERSONEN:
+        return False, [], "zu viele Personen"
+    if any(x in GT_EXKLUSIV for x in p) and len(p) > 1:
+        return False, [], "unklar/kein_mensch stehen allein"
+    return True, sorted(p), ""
+
+
+def gt_laden(pfad, master=None):
+    """EINE Lese-Quelle der GT-Datei (statt fuenf handgeschriebener Parser): eid ->
+    {'label': <Altfeld, letzte Zeile gewinnt>, 'personen': [...]}. Zeilen ohne
+    'personen' werden ueber gt_personen_aus_label migriert (ohne master: nur
+    reservierte Werte und Einzelwerte, '+'-Strings bleiben opak). Unlesbare Zeilen
+    werden uebersprungen wie bisher."""
+    import json as _json
+    import os as _os
+    out = {}
+    if not pfad or not _os.path.exists(pfad):
+        return out
+    master = set(master or ())
+    with open(pfad, encoding="utf-8") as f:
+        for l in f:
+            try:
+                d = _json.loads(l)
+                eid, lbl = d["eid"], d["label"]     # KeyError -> Zeile faellt wie in den Alt-Parsern
+                pers = d.get("personen")
+                if not isinstance(pers, list):
+                    pers = gt_personen_aus_label(lbl, master)
+                out[eid] = {"label": lbl, "personen": [str(x) for x in pers]}
+            except Exception:
+                continue
+    return out
+
+
+def gt_labelmap(pfad):
+    """Altform eid -> label (letzte Zeile gewinnt), aus derselben Quelle."""
+    return {k: v["label"] for k, v in gt_laden(pfad).items()}
+
+
+def gt_segmente(label):
+    """Segmente eines GT-Labels (.313): das abgeleitete Label ist '+'-verkettet
+    (gt_label_aus_personen); Personennamen enthalten nie '+' (PERSON_RE). So sieht
+    jeder Leser 'Fremd' auch NEBEN einem Namen ('Fremd+Rose') — ohne Master-Liste."""
+    lbl = str(label or "")
+    return [t for t in lbl.split("+") if t] if lbl else []
+
+
+def gt_hat_fremd(gtmap, eid):
+    """Traegt das GT dieses Events die Fremd-Wahrheit (allein ODER neben Namen)?"""
+    return isinstance(gtmap, dict) and GT_OFFEN_LABELS[0] in gt_segmente(gtmap.get(eid))
+
+
 def _gt_offen(gtmap, eid):
     """F2: zaehlt dieses gelabelte Event weiter als offen/unbekannt? Kein Label -> ja.
-    'Fremd'/'unklar' -> ja (Fremder bleibt Fremder, unklar bleibt offen). Personen-Label
-    -> nein (beurteilt). Set-Aufrufer behalten das alte Verhalten (Label = raus)."""
+    'Fremd'/'unklar' -> ja (Fremder bleibt Fremder, unklar bleibt offen), auch als
+    MITGLIED neben Namen (.313: 'Fremd+Rose' heisst 'Rose UND ein Fremder' — der
+    Fremde bleibt sichtbar). Reines Personen-Label -> nein (beurteilt). Set-Aufrufer
+    behalten das alte Verhalten (Label = raus)."""
     if isinstance(gtmap, dict):
         lbl = gtmap.get(eid)
-        return lbl is None or lbl in GT_OFFEN_LABELS
+        if lbl is None:
+            return True
+        return any(t in GT_OFFEN_LABELS for t in gt_segmente(lbl))
     return eid not in gtmap
 
 
@@ -217,15 +323,15 @@ def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kamera
                     cl["erk"][p] += 1
                     cl["eid"].setdefault(p, x.get("eid"))
             elif (x.get("faces_geprueft", x.get("faces", 0)) > 0
-                  or (isinstance(gtmap, dict) and gtmap.get(x["eid"]) == "Fremd")) and \
+                  or gt_hat_fremd(gtmap, x["eid"])) and \
                     _gt_offen(gtmap, x["eid"]):   # #42 Teil B: gefilterte Zahl; F2: Label-KLASSE
                 # entscheidet; ein User-'Fremd'-Label haelt das Event auch dann sichtbar,
                 # wenn der fd-Filter alle Detektionen frisst (User-Urteil schlaegt Filter).
                 unbek += 1; cl["unbek"] += 1
                 if x.get("kategorie") == "fremd_verdacht" or (
-                        isinstance(gtmap, dict) and gtmap.get(x["eid"]) == "Fremd"):
+                        gt_hat_fremd(gtmap, x["eid"])):
                     unbek_stark += 1
-                if isinstance(gtmap, dict) and gtmap.get(x["eid"]) == "Fremd":
+                if gt_hat_fremd(gtmap, x["eid"]):
                     gt_fremd = True          # F2/A2: vom User bestaetigter Fremder (Badge)
                 # ALLE unerkannten Events sammeln, nicht nur das erste (Fund 25.07.).
                 # Die Zuordnung zum Unbekannt-Pool lief ueber `unbek_eid`, also ueber das

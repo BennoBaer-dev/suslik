@@ -35,26 +35,50 @@ REF_LATTE = {"min_kante": 70, "unscharf_max": 350,
              "kante_gut": 112, "sharp_gut": 600}
 
 
-def _lattenklasse(m):
+# .308 — die NORM-Latte als EINE Quelle der Auslieferungs-Defaults (bauplan_vorrat.md,
+# alle Werte GEMESSEN 20.08.: Linie 24 = beste 22 %% des Bestands, Sammel-Schwelle 22,
+# Vorrats-Boeden Kante 40 / Schaerfe 600). verifyd.load_config zieht seine
+# vorrat_*/katalog_*-Defaults von HIER; zur Laufzeit reicht der Dienst die
+# Config-Werte als norm_latte-Dict {gut, min, kante, sharp} herein (ohne Dict =
+# Pixel-Latte allein, byte-gleich zum Altverhalten).
+NORM_LATTE = {"gut": 24.0, "min": 22.0, "kante": 40, "sharp": 600}
+
+
+def _lattenklasse(m, norm_latte=None):
     """0 = GUT / 1 = Mindest bestanden / 2 = darunter — Ernte-Messwerte
     (Video-Frame) als VORsortierung; letzte Instanz bleibt die
-    Benenn-Pruefung am Crop (anlernen.benennung_bewerten, .257)."""
+    Benenn-Pruefung am Crop (anlernen.benennung_bewerten, .257).
+    .308 NORM-WEG (User 21.08.: die Vorauswahl sperrte norm-starke
+    Klein-Gesichter schon VOR der Messung aus): traegt die Zeile eine
+    Ernte-Norm und ist norm_latte gesetzt, qualifiziert die Norm ALTERNATIV
+    zur Pixel-Latte (dieselbe Regel wie bild_stufe)."""
     k = float(m.get("kante") or 0)
     s = float(m.get("sharp") or 0)
     if k >= REF_LATTE["kante_gut"] and s >= REF_LATTE["sharp_gut"]:
         return 0
+    nl = norm_latte or {}
+    n = m.get("norm")
+    norm_ok = (n is not None and nl.get("min") is not None
+               and k >= float(nl.get("kante") or 0) and s >= float(nl.get("sharp") or 0))
+    if norm_ok and nl.get("gut") is not None and float(n) >= float(nl["gut"]):
+        return 0
     if k >= REF_LATTE["min_kante"] and s >= REF_LATTE["unscharf_max"]:
+        return 1
+    if norm_ok and float(n) >= float(nl["min"]):
         return 1
     return 2
 
 
-def _reihung(m):
+def _reihung(m, norm_latte=None):
     """Sortier-Schluessel der Empfehlungs-Reihung (bester zuerst via sorted()).
     .265: Latten-Klasse VOR Frontalitaet (User-Fund 18.08.: Gruppe mit 144
     Bildern trug 9 nachgemessen GUTE — die Flaeche zeigte trotzdem 12 kleine
     Frontal-Matsch-Bilder, weil front alles dominierte und die Bildgroesse
-    im Schluessel fehlte; Folge: 11 von 12 fielen in der Benenn-Pruefung)."""
-    return (_lattenklasse(m),
+    im Schluessel fehlte; Folge: 11 von 12 fielen in der Benenn-Pruefung).
+    .308: innerhalb der Klasse reiht die Norm (wenn vorhanden) vor der
+    Frontalitaet — Identitaetsstaerke vor Blickrichtung."""
+    return (_lattenklasse(m, norm_latte),
+            -float(m.get("norm") or 0.0) if norm_latte else 0.0,
             -float(m.get("front") or 0.0), -float(m.get("sharp") or 0.0),
             -float(m.get("det") or 0.0), str(m.get("datei", "")))
 

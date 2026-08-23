@@ -65,6 +65,7 @@ import cv2
 import numpy as np
 
 from core import registry as _reg      # MELDE_HERKUNFT-Bindung (stdlib-only, kein Zyklus)
+from core import sprache as _sprache   # Sprach-Stufe 4: Waechter-Meldetexte (stdlib-only)
 
 WURZEL = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -246,6 +247,11 @@ RAM_REST_MIN_MB = 2048    # Restgrenze der RAM-Bilanz (Bauplan §2.3 Warnstufe):
 #                           wird kein weiterer Slot vergeben
 
 # Meldungs-Literale (EIN Literal je Zweck, Bauplan §6 — UI-Sprache englisch).
+# Sprach-Stufe 4: WATCHER_TITEL bleibt ENGLISCH und literal — er ist die
+# KENNUNG des Waechters im Meldungstitel (Invariante §6, core/registry.py:378:
+# "Live watcher <kamera>: ..."), nicht Prosa. Uebersetzt wird der Rest des
+# Titels: die meldung.wache.*-Schluessel tragen ihn als Platzhalter {wache}
+# (Muster §8.13/§8.16 — Kennung intern, Anzeige als Schluessel).
 WATCHER_TITEL = "Live watcher"
 HERKUNFT = "live_wache"
 # Bindung an die EINE Quelle (Lens-B M1, per Mutation bewiesen: ein verstelltes
@@ -439,6 +445,29 @@ def bilder_yuv_frist(p, b, h, frist_s, jetzt=time.monotonic):
         if len(puffer) >= fsz:
             yield np.frombuffer(bytes(puffer[:fsz]), np.uint8).reshape(h * 3 // 2, b)
             del puffer[:fsz]
+
+
+def bild_mit_box(frame, box, farbe=(0, 200, 255), dicke=2):
+    """Beweisbild mit markierter Fundstelle (.313): Rechteck um `box`
+    (x1, y1, x2, y2) auf einer KOPIE des Frames — das Original bleibt fuer
+    Rueckblick/Video unberuehrt. Ohne Box: das Bild unveraendert."""
+    if box is None or frame is None:
+        return frame
+    try:
+        x1, y1, x2, y2 = [int(round(float(v))) for v in box[:4]]
+    except (TypeError, ValueError):
+        return frame
+    h, w = frame.shape[:2]
+    x1, x2 = max(0, min(w - 1, x1)), max(0, min(w - 1, x2))
+    y1, y2 = max(0, min(h - 1, y1)), max(0, min(h - 1, y2))
+    if x2 <= x1 or y2 <= y1:
+        return frame
+    aus = frame.copy()
+    # Rand mitnehmen, damit ein 20-px-Gesicht nicht unter dem Strich verschwindet
+    r = max(4, int(0.35 * max(x2 - x1, y2 - y1)))
+    cv2.rectangle(aus, (max(0, x1 - r), max(0, y1 - r)),
+                  (min(w - 1, x2 + r), min(h - 1, y2 + r)), farbe, dicke)
+    return aus
 
 
 def echtes_gesicht(f, frame, min_score=None):
@@ -845,6 +874,19 @@ def referenzen_laden(app):
 # Kosinus-raus (.249, User-Go 17.08.): Default-Texte sprechen WORTE aus der
 # einen Quelle core/vertrauen ({wort} = Lage zur Messlatte); die Rohzahl
 # haengt der Aufrufer nur im Stil 'worte_zahlen' an (alert_stil-Option).
+#
+# SPRACH-STUFE 4 — GRENZE, BEWUSST (der EINE echte Konflikt der Stufe):
+# dieser Text ist DREIFACH genutzt und nicht ohne Struktur-Umbau teilbar —
+# (1) er steht als WERT im MQTT-Payload (Engine._trigger:
+#     payload["schnell_urteil"]["text"]), und die Additiv-Invariante sagt:
+#     kein bestehendes MQTT-Feld aendert seine Bytes;
+# (2) er steht in der Kachel-Log-Zeile (_klog) — Log bleibt englisch (B20);
+# (3) er haengt am Push-/Telegram-Text (dort waere er sprachfaehig).
+# Eine Trennung braucht eine zweite Rueckgabe aus schnell_urteil(), also
+# einen Bruch des [ERBE-ANPASSUNG]-Kontrakts mit prototyp/live_wache.py
+# (drei Aufrufstellen mit Tupel-Entpackung). Das ist ein eigener Zug mit
+# User-Entscheid, nicht Teil des Einzugs — bis dahin bleibt der Text
+# englisch, und mit ihm die Wortstufe darin (vertrauen.wort, Zeile ~891).
 TEXT_URTEIL_TREFFER = "probably {name} (preliminary quick check — {wort})"
 TEXT_URTEIL_UNSICHER = ("unknown/uncertain (preliminary — best candidate "
                         "{name} is {wort})")
@@ -1893,9 +1935,20 @@ def auftritts_gruppen(gruppen, luecke=30.0):
             for k in g["kanaele"]:
                 if k not in a["kanaele"]:
                     a["kanaele"].append(k)
-            for feld in ("person", "zusatz", "bild"):
-                if g.get(feld) and not a.get(feld):
-                    a[feld] = g[feld]
+            # .313: Name und Bild kommen aus DERSELBEN Meldung — vorher
+            # 'erster nicht-leerer gewinnt' je Feld, die Karte zeigte den Namen
+            # der einen und das Bild einer anderen Meldung (bis 30 s auseinander,
+            # Tester-Fund: 'Carl' auf leerem Garten).
+            if g.get("person") and not a.get("person"):
+                a["person"] = g["person"]
+                if g.get("zusatz"):
+                    a["zusatz"] = g["zusatz"]
+                if g.get("bild"):
+                    a["bild"] = g["bild"]
+            elif not a.get("person"):
+                for feld in ("zusatz", "bild"):
+                    if g.get(feld) and not a.get(feld):
+                        a[feld] = g[feld]
         else:
             neu = {"ts": g["ts"], "ts_letzte": g["ts_letzte"],
                    "kamera": g["kamera"], "kanaele": list(g["kanaele"]),
@@ -2698,7 +2751,15 @@ class Melder:
     Waechter-Kennung im Titel (Invariante §6): EIN Literal WATCHER_TITEL fuer
     Pushover-Titel UND Telegram-Caption, damit die vorlaeufige Waechter-Meldung
     nie mit dem bestaetigten suslik-Urteil verwechselt wird. herkunft ist
-    IMMER `live_wache` (core.registry.MELDE_HERKUNFT; MQTT-Feld traegt sie)."""
+    IMMER `live_wache` (core.registry.MELDE_HERKUNFT; MQTT-Feld traegt sie).
+
+    SPRACH-STUFE 4: diese Klasse IST der Alert-Pfad des Live-Waechters —
+    Eintrittspunkt (c) der Sprachaufloesung (konzept_sprache.md §2). Sie
+    laeuft im eigenen livewached-Prozess UND in eigenen Melde-Threads (je
+    Thread ein frischer contextvar-Kontext), deshalb aktiviert JEDE
+    Melde-Methode selbst, unmittelbar vor dem Titel-Bau
+    (`_sprache.aktivieren()` ist dieselbe Funktion wie
+    `melden.sprache_aktivieren()`, dort steht ihre Begruendung)."""
 
     def __init__(self, cfg, log=print, pub=None):
         self.cfg = cfg
@@ -2707,13 +2768,19 @@ class Melder:
 
     def push(self, kamera, text, bild=None):
         from core import melden
-        return melden.push(self.cfg, f"{WATCHER_TITEL} {kamera}: person detected",
+        _sprache.aktivieren()                     # Eintrittspunkt (c)
+        return melden.push(self.cfg,
+                           _sprache.t("meldung.wache.titel_person",
+                                      wache=WATCHER_TITEL, kamera=kamera),
                            text, attachment=bild, herkunft=HERKUNFT)
 
     def telegram(self, kamera, video, text, bild=None):
         from core import melden
+        _sprache.aktivieren()                     # Eintrittspunkt (c)
         return melden.telegram_video(self.cfg, video,
-                                     f"{WATCHER_TITEL} {kamera}: {text}",
+                                     _sprache.t("meldung.wache.caption",
+                                                wache=WATCHER_TITEL,
+                                                kamera=kamera, text=text),
                                      crop=bild, herkunft=HERKUNFT)
 
     def mqtt(self, kamera, payload):
@@ -2729,12 +2796,20 @@ class Melder:
         -> (gesendet, fehler): Kanaele, die die Meldung ANGENOMMEN haben
         (Baustein B: nur die landen im Melde-Protokoll/den Dienst-Zaehlern),
         und Fehlertexte. Der Engine-Aufrufer parst tolerant — Harnisch-Stubs
-        mit blosser Fehlerliste bleiben gueltig."""
+        mit blosser Fehlerliste bleiben gueltig.
+
+        SPRACH-STUFE 4 — GRENZE, BEWUSST: nur der TITEL ist sprachfaehig.
+        `text` ist die technische Stoerungs-Diagnose der Engine ("detector
+        failure: …", "engine state 'x': …"), die wortgleich auch ins Log
+        geht — Log bleibt englisch/maschinenlesbar (§4 B20)."""
         from core import melden
+        _sprache.aktivieren()                     # Eintrittspunkt (c)
         gesendet, fehler = [], []
         if "pushover" in kanaele:
             try:
-                if melden.push(self.cfg, f"{WATCHER_TITEL} {kamera}: disturbance",
+                if melden.push(self.cfg,
+                               _sprache.t("meldung.wache.titel_stoerung",
+                                          wache=WATCHER_TITEL, kamera=kamera),
                                text, herkunft=HERKUNFT):
                     gesendet.append("pushover")
             except Exception as e:
@@ -2742,7 +2817,9 @@ class Melder:
         if "telegram" in kanaele:
             try:
                 if melden.telegram_video(self.cfg, None,
-                                         f"{WATCHER_TITEL} {kamera}: {text}",
+                                         _sprache.t("meldung.wache.caption",
+                                                    wache=WATCHER_TITEL,
+                                                    kamera=kamera, text=text),
                                          herkunft=HERKUNFT):
                     gesendet.append("telegram")
             except Exception as e:
@@ -3850,7 +3927,10 @@ class Engine:
         Der Anwesenheits-Trigger (Stufe 1) bleibt unberuehrt — er meldet
         weiterhin sofort JEDEN Menschen, auch Fremde."""
         import anlernen
-        treffer = []
+        # .313 (Tester-Fund 21.08., 8x 'Carl' auf leerem Garten): EINE Stimme je
+        # Person je Frame — vorher zaehlten zwei Boxen desselben Bildes doppelt,
+        # NAME_STIMMEN=2 war damit aus einem einzigen Frame erreichbar.
+        treffer = {}
         for g in je_box.values():
             try:
                 v = np.asarray(g.normed_embedding, np.float32)
@@ -3860,32 +3940,78 @@ class Engine:
                 continue
             p, s = anlernen.nn(self.refs, v)
             if p is not None and s >= self.win_thresh:
-                treffer.append((p, float(s)))
+                if p not in treffer or float(s) > treffer[p][0]:
+                    treffer[p] = (float(s), tuple(float(x) for x in g.bbox))
         if not treffer:
             return
-        feuern = []
         with k.lock:
             a = k.auftritt
             if a is None:
                 return
             st = a.setdefault("stimmen", {})
-            genannt = a.setdefault("genannt", set())
-            for p, s in treffer:
-                zaehler = st.setdefault(p, [0, 0.0])
+            for p, (s, box) in treffer.items():
+                zaehler = st.setdefault(p, [0, 0.0, None])
                 zaehler[0] += 1
-                zaehler[1] = max(zaehler[1], s)
+                if s >= zaehler[1]:
+                    zaehler[1] = s
+                    zaehler[2] = box          # Box des besten Fundes (Beweisbild)
+        self._namens_pending_feuern(k, frame)
+
+    def _namens_pending_feuern(self, k, frame):
+        """Namens-Meldungen, deren Stimmenzahl reicht, feuern — aber NUR, wenn
+        der Auftritt schon einen pose-bestaetigten Trigger hat (.313: die
+        Namens-Stufe lief bis dahin OHNE die Menschen-Pruefung der Stufe 1;
+        docs/live-watchers.md versprach sie vor jeder Meldung). Ohne Pose-Gate
+        (Config aus) gilt die Stimmenzahl allein. Aufgerufen je Frame aus
+        _namens_stimmen und aus _trigger, sobald der Mensch bestaetigt ist."""
+        feuern = []
+        with k.lock:
+            a = k.auftritt
+            if a is None:
+                return
+            if self.defaults.get("pose_gate") and not a.get("mensch_bestaetigt"):
+                return
+            st = a.get("stimmen") or {}
+            genannt = a.setdefault("genannt", set())
+            for p, zaehler in st.items():
                 if zaehler[0] >= NAME_STIMMEN and p not in genannt:
                     genannt.add(p)
-                    feuern.append((p, zaehler[0], zaehler[1]))
-        for p, n, cos in feuern:
-            self._namens_meldung(k, p, n, cos, frame)
+                    feuern.append((p, zaehler[0], zaehler[1], zaehler[2]))
+        for p, n, cos, box in feuern:
+            self._namens_meldung(k, p, n, cos, frame, box=box)
 
-    def _namens_meldung(self, k, person, stimmen, cos, frame):
+    def _namens_meldung(self, k, person, stimmen, cos, frame, box=None):
         """Die Namens-Meldung der zweiten Stufe: eigene Nachricht NEBEN der
-        Anwesenheits-Meldung. Die 120-s-Karenz der Stufe 1 gilt hier bewusst
-        NICHT — sie drosselt Anwesenheits-Spam, der Name ist genau EINE
-        zusaetzliche Nachricht je Auftritt und Person (das Einmal-Tor haelt
-        _namens_stimmen ueber a['genannt'])."""
+        Anwesenheits-Meldung.
+
+        .319 MELDE-ANKER AUCH HIER (User 22.08., gemessen): bis dahin galt die
+        Karenz der Stufe 1 hier bewusst NICHT — mit der Begruendung, der Name
+        sei "genau EINE zusaetzliche Nachricht je Auftritt und Person" (das
+        Einmal-Tor haelt _namens_stimmen ueber a['genannt']). Im Betrieb stimmt
+        das nicht: das Tor gilt je AUFTRITT, und derselbe Mensch erzeugt auf
+        derselben Kamera viele Auftritte hintereinander. Gemessen an
+        verify_data/live/meldungen.jsonl (1030 Pushover, 13.-22.08.): die
+        Namens-Meldung lief an der Drossel vorbei, weil _namens_pending_feuern
+        VOR der melde_erlaubt-Pruefung des Triggers laeuft. Mit demselben Anker
+        blieben 494 statt 1030 Meldungen (-52 %) — mehr Wirkung als jedes
+        Sammelfenster, ohne Verzoegerung und ohne neuen Config-Wert.
+        GEDROSSELT WIRD NUR DER VERSAND an die Push-Kanaele. Nicht gedrosselt:
+        (a) MQTT — Home Assistant liest verifyd/live/<kamera> und die
+        Additiv-Invariante verbietet, bestehende Ereignisse wegfallen zu
+        lassen; (b) das Melde-Protokoll — die Live-Sicht und die Today-Zaehler
+        zehren daraus, sie duerfen keine Auftritte verlieren. Der Anker ist
+        derselbe wie beim Trigger (k.melde_bis_mono / wieder_scharf_s je
+        Kachel, melde_erlaubt) — bewusst KEIN dritter Drossel-Begriff
+        (qs_ebenen-Regel gegen verstreute Literale).
+
+        SPRACH-STUFE 4: der Meldetext ist sprachfaehig (Eintrittspunkt (c)).
+        Der MQTT-Payload unten bleibt byte-gleich — er traegt nur Kennungen
+        (person/cosine/stimmen/preliminary/stufe), keinen Anzeigetext; genau
+        deshalb ist diese Meldung teilbar, das Schnell-Urteil (§ oben) nicht.
+        Der Text landet zusaetzlich im Melde-Protokoll (`zusatz`), das die
+        UI nur ANZEIGT (html.escape, gekappt) — dort steht kuenftig die
+        Sprache, in der wirklich gemeldet wurde."""
+        _sprache.aktivieren()         # Eintrittspunkt (c), s. melden.sprache_aktivieren()
         self._klog(k, f"NAME [{person}]: {stimmen} Funde >= Schwelle, bester "
                       f"Kosinus {cos:.2f} — Namens-Meldung (preliminary)")
         # .245 (User-Go 17.08.): OHNE Meldekanal kein frueher Abbruch mehr —
@@ -3898,19 +4024,26 @@ class Engine:
         # .249 (Kosinus-raus): Worte aus der einen Quelle; Rohzahl nur im
         # Stil 'worte_zahlen' (alert_stil, Notifications-Option).
         from core import vertrauen as _vt
-        text = (f"recognized (live, preliminary): {person} "
-                f"({_vt.wort(cos, self.win_thresh)}, {stimmen} "
-                "consistent looks)")
+        text = _sprache.t("meldung.wache.name_satz", name=person,
+                          wort=_vt.wort_sprachig(cos, self.win_thresh),
+                          n=stimmen)
         if str(self.cfg.get("alert_stil") or "worte") == "worte_zahlen":
-            text += f" [cosine {cos:.2f}]"
+            # §8.8: Format-Spezifika (:.2f) NIE in den Textwert — hier
+            # vorformatieren, der Schluessel kennt nur {cos}.
+            text += " " + _sprache.t("meldung.wache.name_zahl",
+                                     cos=f"{cos:.2f}")
         bild = None
         ablage = self._ablage_sichern(k)
         if ablage:
             stempel = time.strftime("%Y%m%d_%H%M%S",
                                     time.localtime(self.wanduhr()))
             sauber = re.sub(r"[^A-Za-z0-9._-]", "_", person)[:40]
+            # .313: die Fundstelle sichtbar machen — Rechteck um die Box des
+            # besten Fundes (vorher: unmarkiertes Vollbild, bei 20-px-Gesichtern
+            # sah der Nutzer einen leeren Garten).
             bild = self._bild_schreiben(
-                k, os.path.join(ablage, f"{stempel}_NAME_{sauber}.jpg"), frame)
+                k, os.path.join(ablage, f"{stempel}_NAME_{sauber}.jpg"),
+                bild_mit_box(frame, box))
         payload = {"ts": round(self.wanduhr(), 1), "kamera": k.name,
                    "art": "name",
                    # "stufe" ADDITIV (.249, User-Auflage: bestehende
@@ -3928,8 +4061,22 @@ class Engine:
                                   person=person, bild=self._bild_rel(bild))
             return
 
+        # .319: Push-Kanaele nur, wenn der Melde-Anker offen ist; MQTT immer.
+        # Der Anker wird hier NICHT neu gesetzt — das bleibt allein Sache des
+        # Triggers (_trigger), sonst verschoebe eine Namens-Meldung die Ruhe
+        # der Stufe 1 und die beiden Stufen wuerden sich gegenseitig
+        # aushungern. Gelesen wird derselbe Wert, den der Trigger setzt.
+        mono_jetzt = self.jetzt()
+        push_offen = melde_erlaubt(k, mono_jetzt)
+        if not push_offen:
+            self._klog(k, f"NAME [{person}]: push suppressed, quiet for "
+                          f"{k.melde_bis_mono - mono_jetzt:.0f} s more "
+                          f"(MQTT and journal unaffected)")
+
         def job():
             for kanal in k.cfg["kanaele"]:
+                if kanal != "mqtt" and not push_offen:
+                    continue                  # gedrosselt: nur der Versand
                 try:
                     if self._kanal_senden(k, kanal, text, bild, None, payload):
                         self._melde_protokoll(k.name, "alert", kanal,
@@ -3939,6 +4086,11 @@ class Engine:
                     self._fehler_log((kanal, k.name),
                                      f"{k.name}: {kanal} failed (Name): "
                                      f"{type(e).__name__}: {e}")
+            if not push_offen:
+                # Die Live-Sicht darf den Auftritt nicht verlieren (QS-Auflage):
+                # eine Journal-Zeile mit kanal 'none' wie im kanallosen Fall.
+                self._melde_protokoll(k.name, "alert", "none", zusatz=text,
+                                      person=person, bild=self._bild_rel(bild))
         self._thread_starten(f"live-name-{k.name}", job)
 
     def _trigger(self, k, info, mono):
@@ -3963,6 +4115,22 @@ class Engine:
                                  f"Trigger melden UNGEFILTERT (jede Katze meldet)")
                 self._stoerung_global(f"pose gate unavailable: {p_det['grund']}")
         praefix = "" if p_ok else "verworfen_"
+        # .32x (User 22.08.: "gar nicht erst schreiben"): der Pose-Sieb-Ausschuss
+        # ist reine Nachpruef-Diagnose — die Anzeige zeigt ihn nie, und er ist der
+        # groesste Einzelposten unter <data_dir>/live/ (gemessen 1068 Dateien
+        # hier, auf der Testanlage 61 GB in neun Tagen). Er wird deshalb per
+        # Vorgabe nur noch GEZAEHLT (k.verworfen_pose, /live und Protokoll), nicht
+        # gespeichert. Wer eine Fehlersuche fuehrt, schaltet ihn mit
+        # live_verworfen_speichern wieder an.
+        if not p_ok and not self.cfg.get("live_verworfen_speichern"):
+            with k.lock:
+                k.burst.karenz_aufheben(info["track"])
+            k.verworfen_pose += 1
+            self._klog(k, f"TRIGGER #{t_nr} [T{info['track']}] VERWORFEN (kein "
+                          f"Mensch im Bild): Pose-Kopf hoechstens "
+                          f"{(p_det or {}).get('kopf_max')} — keine Meldung, keine "
+                          f"Karenz, kein Bild (live_verworfen_speichern=off)")
+            return
         # K-1 (Sched-R4): die Beweisbild-Ablage darf die MELDUNG nie kosten —
         # volle Platte (ENOSPC-Klasse) schlug hier VOR _meldung_starten zu,
         # und der Alarm zu diesem Trigger ging verloren. Lokal gefangen:
@@ -3976,7 +4144,7 @@ class Engine:
                 continue
             pfad = self._bild_schreiben(
                 k, os.path.join(ablage, f"{praefix}{stempel}_T{t_nr}_{nr}.jpg"),
-                nutzlast[0])
+                bild_mit_box(nutzlast[0], _bx))     # .313: Fundstelle markiert
             if pfad:
                 bestes = pfad
         if not p_ok:
@@ -3987,6 +4155,15 @@ class Engine:
                           f"Mensch im Bild): Pose-Kopf hoechstens "
                           f"{(p_det or {}).get('kopf_max')} — keine Meldung, keine Karenz")
             return
+        # .313: ab hier ist ein Mensch bestaetigt (Pose-Gate bestanden oder aus) —
+        # die Namens-Stufe darf fuer diesen Auftritt feuern (aufgelaufene
+        # Stimmen sofort, spaetere je Frame).
+        with k.lock:
+            if k.auftritt is not None:
+                k.auftritt["mensch_bestaetigt"] = True
+        _kf = next((nl[0] for _t, _bx, nl in reversed(info["kette"]) if nl and nl[0] is not None), None)
+        if _kf is not None:
+            self._namens_pending_feuern(k, _kf)
         u_text, u_person = None, None
         if self.refs and self.win_thresh is not None:
             try:
@@ -4015,13 +4192,19 @@ class Engine:
         # .251 (Kosinus-raus M6, User-Screenshot 17.08.): Detektions-Score +
         # Latenz sind Technik-Zahlen — im Worte-Stil raus aus dem Push, im
         # Stil 'worte_zahlen' bleiben sie dran (Payload traegt sie IMMER).
-        text = (f"{len(info['kette'])} face"
-                f"{'s' if len(info['kette']) != 1 else ''} in "
-                f"{info['spanne']:.1f} s")
+        # Sprach-Stufe 4 (Eintrittspunkt (c)): der PUSH-Text ist sprachfaehig;
+        # {n} war schon im Original ein echter Plural (face/faces) -> t_n.
+        # §8.8: Sekunden/Score/Latenz kommen vorformatiert aus dem Code.
+        _sprache.aktivieren()
+        text = _sprache.t_n("meldung.wache.funde", len(info["kette"]),
+                            sek=f"{info['spanne']:.1f}")
         if str(self.cfg.get("alert_stil") or "worte") == "worte_zahlen":
-            text += (f" (score {beste_score:.2f}, "
-                     f"{info['latenz_ms']:.0f} ms)")
+            text += " " + _sprache.t("meldung.wache.funde_zahl",
+                                     score=f"{beste_score:.2f}",
+                                     ms=f"{info['latenz_ms']:.0f}")
         if u_text:
+            # u_text bleibt ENGLISCH (Schnell-Urteil, s. TEXT_URTEIL_*-
+            # Grenz-Marker: derselbe String ist MQTT-Payload-Wert).
             text += f" — {u_text}"
         payload = {"ts": round(self.wanduhr(), 1), "kamera": k.name,
                    "score": round(beste_score, 3), "bild_anzahl": len(info["kette"])}

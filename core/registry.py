@@ -183,6 +183,13 @@ FRAMEITER_AUSNAHMEN = {
         "hier bewusst nicht (frame_iter-Docstring) — ein Teil-Clip liefert eben "
         "weniger Kandidaten, nie ein falsches Urteil. konzept_frames.md v2 Z7 fuehrt "
         "anlernen.py ausdruecklich als die einzige verbleibende Ausnahme.",
+    "prototyp/norm_vorrat.py":
+        "MESSWERKBANK des Lernvorrats (bauplan_vorrat.md, 20.08.), KEIN Urteilspfad: "
+        "sie nutzt decode.FrameIter BEWUSST direkt — der gepinnte Pixelpfad ohne "
+        "Verteiler-Mantel ist hier die Messbedingung (die Zahlen muessen mit der "
+        "Knecht-Container-Umgebung bit-vergleichbar bleiben, Parallel-Validierung "
+        "20.08.: 0 Abweichungen). Laeuft nie automatisch, liegt nicht im Image "
+        "(prototyp/ wird nur fuer personlern gestaged, norm_vorrat gehoert nicht dazu).",
     "prototyp/frame_vergleich.py":
         "Prototyp (E-P1b Frame-Vergleich, 03.08.), KEIN Urteilspfad: der Direktzugriff "
         "sitzt in event_verarbeiten(), und das ruft nur main() dieses Werkzeugs. Der "
@@ -442,6 +449,10 @@ VISION_URL_FELDER = ("endpunkt",)           # zweiter Key-Traeger -> endpunkt_an
 # Query-Parameter, die in einer URL ein Geheimnis tragen (klein geschrieben; der
 # Ersetzer arbeitet case-insensitiv).
 SECRET_QUERY_PARAM = ("key", "api_key", "api-key", "token", "access_token")
+# Sprach-Stufe 2 Tranche D (3a): die UI-ANZEIGE laeuft ueber den Schluessel
+# system.backup.hinweis (core/texte, uebersetzbar); diese Konstante bleibt
+# die englische Referenz-Quelle — das Gate prueft die Wortgleichheit
+# en.T["system.backup.hinweis"] == VISION_EXPORT_HINWEIS (kein Zweit-Literal).
 VISION_EXPORT_HINWEIS = ("contains your API keys — treat this file like a password")
 
 # --- Messwerte-Registry Vision (konzept_vision.md v2 §5, Zug V2) --------------------

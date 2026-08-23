@@ -13,9 +13,11 @@ Anker) und die Inline-Markup-Saetze literal. PHASEN_TEXT wurde zu
 _phasen_text() (§8.12: t() nie auf Modulebene, Muster live.py)."""
 import datetime
 import html
+import json
 
 from core.lernlauf import PHASEN
 from core.sprache import t, t_n
+from webui.bausteine import js_literal, lauffluss_stil
 
 
 def _phasen_text():
@@ -104,7 +106,9 @@ def wizard(personen_zahl, auswahl, bilanz, prognose, quelle, schwellen,
                 wann=_dt(b["aeltester_ts"]), clips=b["mit_clip"])
             + (' — <b>'
                + t("lernwizard.wizard.auswahl_ohne_clip", n=b["ohne_clip"])
-               + '</b>' if b["ohne_clip"] else "") + "</div>"
+               + '</b>' if b["ohne_clip"] else "")
+            + (('<br>' + t("lernwizard.wizard.auswahl_durchsucht", k=b["durchsucht"], n=b["n"]))
+               if b.get("durchsucht") else "") + "</div>"
             f'<div class="dim">{t("lernwizard.wizard.auswahl_hinweis")}'
             '</div></div>')
         if prognose:
@@ -208,9 +212,16 @@ _PHASEN_KEYS = {
 # warmes Modell mit laden-Nachfrage wie das Bruecken-Overlay); Grenzfaelle
 # kommen abgehakt in goldenrod und sind wieder anhakbar, der Take-Knopf
 # zaehlt live die Haken.
-# Stufe-0-Grenze (§8.4): JS-Strings mit \\u-Escapes — window.T existiert
-# seit Stufe 1, Einzug folgt mit der Stufe-2-Tranche dieser Seite.
-_ZW_JS = (
+# Stufe 2 Tranche D (§8.4): Funktion statt Konstante (§8.12) — die JS-Texte
+# kommen server-seitig via json.dumps(t(...)) BYTE-TREU in den Script-Text
+# (ensure_ascii=True reproduziert die \uXXXX-Escapes des Originals).
+# Zaehler-/Fragment-Splits an den Konkatenationsgrenzen sind deklariert
+# (en.py-Abschnitt Tranche D). Stufe-2-Grenze (§8.18): der Take-Knopf
+# ("Take N picture(s) for X") und die Pruef-Bilanz ("N good for X, …")
+# bauen Laufzeit-Plural + Name im Browser zusammen — bleibt literal bis
+# zum bewussten Ganz-Satz-Umbau (JS-Template, Byte-Aenderung).
+def _zw_js():
+    return (
     '<script>(function(){'
     'var zw=document.getElementById("lf-zw");if(!zw)return;'
     'var AID=zw.dataset.aid,st=document.getElementById("lf-status"),'
@@ -225,33 +236,44 @@ _ZW_JS = (
     '.length,'
     'n=document.querySelectorAll(".lf-zwg input:checked").length;'
     'document.getElementById("lf-zaehl").textContent='
-    'n+" of "+a+" pictures selected";};'
+    'n+' + json.dumps(t("lernwizard.zw.js_zaehl_mitte")) + '+a+'
+    + json.dumps(t("lernwizard.zw.js_zaehl_nach")) + ';};'
     'lfZaehl();'
-    'function adoptieren(best){melden("adopting\\u2026");'
+    'function adoptieren(best){melden('
+    + json.dumps(t("lernanker.js.uebernimmt")) + ');'
     'fetch("/lernlauf/uebernehmen",{method:"POST",'
     'headers:{"Content-Type":"application/json"},'
     'body:JSON.stringify({anker_id:AID,bestaetigt:best})})'
     '.then(function(r){return r.json()}).then(function(d){'
-    'if(d.tag_abweichung){if(confirm("Settings changed since naming:\\n"+'
-    'd.tag_abweichung.join("\\n")+"\\nAdopt anyway with the named selection?"'
-    '))adoptieren(true);else melden("not adopted");return;}'
-    'if(!d.ok){melden("error: "+d.msg);return;}'
-    'melden("saved \\u2014 next group\\u2026");'
+    'if(d.tag_abweichung){if(confirm('
+    + json.dumps(t("lernanker.js.tag_frage_vor")) + '+'
+    'd.tag_abweichung.join("\\n")+'
+    + json.dumps(t("lernanker.js.tag_frage_nach"))
+    + '))adoptieren(true);else melden('
+    + json.dumps(t("lernanker.js.nicht_uebernommen")) + ');return;}'
+    'if(!d.ok){melden(' + json.dumps(t("lernanker.js.fehler") + " ")
+    + '+d.msg);return;}'
+    'melden(' + json.dumps(t("lernanker.js.weiter")) + ');'
     'setTimeout(function(){location="/lernlauf"},500);})'
-    '.catch(function(e){melden("error: "+e);});}'
+    '.catch(function(e){melden(' + json.dumps(t("lernanker.js.fehler") + " ")
+    + '+e);});}'
     'function takeText(name){'
     'var n=document.querySelectorAll(".lf-zwg input:checked").length,'
     'tk=document.getElementById("lf-take");'
     'tk.textContent="Take "+n+" picture"+(n==1?"":"s")+" for "+name;'
     'tk.disabled=!n;}'
     'function pruefen(name){NAME=name;'
-    'melden("saved as "+name+" \\u2014 checking the pictures \\u2026");'
+    'melden(' + json.dumps(t("lernwizard.zw.js_gespeichert_vor"))
+    + '+name+' + json.dumps(t("lernwizard.zw.js_gespeichert_nach")) + ');'
     'fetch("/lernlauf/benenn_pruefung",{method:"POST",'
     'headers:{"Content-Type":"application/json"},'
     'body:JSON.stringify({anker_id:AID})})'
     '.then(function(r){return r.json()}).then(function(d){'
-    'if(!d.ok){melden("error: "+d.msg);return;}'
+    'if(!d.ok){melden(' + json.dumps(t("lernanker.js.fehler") + " ")
+    + '+d.msg);return;}'
     'if(d.laden){melden(d.msg);'
+    # .311: Balken auch in der Benenn-Pruefung (gleiche Warte-Antwort).
+    'if(d.zustand&&window.ladeBalken)ladeBalken(st,d.i,d.n,d.zustand);'
     'setTimeout(function(){pruefen(name)},1500);return;}'
     'var bew={};var g=0,gz=0,rs=0;'
     # .266: Zaehler aus der ANTWORT (alle gesichteten Kandidaten) — die
@@ -282,22 +304,27 @@ _ZW_JS = (
     'document.querySelectorAll(".lf-zwg input").forEach(function(b){'
     'b.onchange=function(){lfZaehl();takeText(name);};});'
     'document.getElementById("lf-knopfzeile-2").style.display="flex";})'
-    '.catch(function(e){melden("error: "+e);});}'
+    '.catch(function(e){melden(' + json.dumps(t("lernanker.js.fehler") + " ")
+    + '+e);});}'
     'function senden(name,best,dann){var sel=[];'
     'document.querySelectorAll(".lf-zwg input:checked")'
     '.forEach(function(b){sel.push(b.value);});'
-    'melden("saving\\u2026");'
+    'melden(' + json.dumps(t("lernanker.js.speichert")) + ');'
     'fetch("/lernlauf/benennen",{method:"POST",'
     'headers:{"Content-Type":"application/json"},'
     'body:JSON.stringify({anker_id:AID,person:name,gewaehlt:sel,'
     'bestaetigt:!!best})})'
     '.then(function(r){return r.json()}).then(function(d){'
-    'if(d.kollision){if(confirm("\\u2019"+name+"\\u2019 matches existing '
-    '\\u2019"+d.kollision+"\\u2019 \\u2014 add to that person instead?"))'
-    'senden(d.kollision,true,dann);else melden("not saved");return;}'
-    'if(!d.ok){melden("error: "+d.msg);return;}'
+    'if(d.kollision){if(confirm(' + json.dumps(t("lernanker.js.koll_vor"))
+    + '+name+' + json.dumps(t("lernanker.js.koll_mitte"))
+    + '+d.kollision+' + json.dumps(t("lernanker.js.koll_nach")) + '))'
+    'senden(d.kollision,true,dann);else melden('
+    + json.dumps(t("lernanker.js.nicht_gespeichert")) + ');return;}'
+    'if(!d.ok){melden(' + json.dumps(t("lernanker.js.fehler") + " ")
+    + '+d.msg);return;}'
     'dann(d.person||name);})'
-    '.catch(function(e){melden("error: "+e);});}'
+    '.catch(function(e){melden(' + json.dumps(t("lernanker.js.fehler") + " ")
+    + '+e);});}'
     'var ja=document.getElementById("lf-ja");'
     'if(ja)ja.onclick=function(){senden(ja.dataset.name,false,pruefen);};'
     'var ad=document.getElementById("lf-adopt");'
@@ -329,9 +356,12 @@ def _frac(s):
 
 # .266: Erst-Sichtung anstossen (Cache fehlt) — Warm-Lade-Schleife wie die
 # Bruecke, danach EIN Reload; die Flaeche rendert dann aus dem Ergebnis.
-# Stufe-0-Grenze (§8.4): JS-Strings — window.T existiert seit Stufe 1,
-# Einzug folgt mit der Stufe-2-Tranche dieser Seite.
-_SICHT_JS = (
+# Stufe 2 Tranche D (§8.4): Funktion statt Konstante (§8.12); der Fallback-
+# Text kommt via json.dumps(t(...), ensure_ascii=False) byte-treu (das
+# Original traegt den Gedankenstrich roh). Das "⏳ "-Praefix ist ein
+# Symbol, keine Sprache — bleibt Code.
+def _sicht_js():
+    return (
     '<script>(function(){'
     'var aid=document.getElementById("lf-zw").getAttribute("data-aid");'
     'function los(){'
@@ -340,10 +370,17 @@ _SICHT_JS = (
     '.then(function(r){return r.json()})'
     '.then(function(d){'
     'if(d.laden){var w=document.getElementById("lf-sicht-warte");'
-    'if(w&&d.msg)w.textContent="\\u23f3 "+d.msg;'
+    # .311: refcache-Neuaufbau meldet i/n/zustand — schmaler Balken + Zaehler
+    # hinter dem Text (ladeBalken, app.js); Balken NUR im selben Zweig wie der
+    # Text-Reset (textContent raeumt den vorigen Balken ab — sonst stapelte
+    # jeder Poll einen weiteren an).
+    'if(w&&d.msg){w.textContent="\\u23f3 "+d.msg;'
+    'if(d.zustand&&window.ladeBalken)ladeBalken(w,d.i,d.n,d.zustand);}'
     'setTimeout(los,1200);return;}'
     'if(!d.ok){var w2=document.getElementById("lf-sicht-warte");'
-    'if(w2)w2.textContent=d.msg||"check failed — reload to retry";return;}'
+    'if(w2)w2.textContent=d.msg||'
+    + json.dumps(t("lernwizard.sicht.js_fehl"), ensure_ascii=False)
+    + ';return;}'
     'location.reload();'
     '}).catch(function(){setTimeout(los,3000);});}'
     'los();})();</script>')
@@ -430,8 +467,9 @@ def _seg_html(sg):
 # Saeule/Marken/Zeit/Zaehler (kein Flackern, kein Scroll-Sprung); wechselt
 # der Lauf in die Benennung (tickt->False), laedt es genau EINMAL voll neu.
 # mark() spiegelt _seg_html — beide bauen aus denselben lauf_status-Werten.
-# Stufe-0-Grenze (§8.4): JS-Strings mit \\u-Escapes — window.T existiert
-# seit Stufe 1, Einzug folgt mit der Stufe-2-Tranche dieser Seite.
+# Sprach-Pruefung Tranche D: das Widget traegt KEINE Sprache — die
+# \u-Escapes sind Symbole (Haken/Punkt), Zeit-/Zaehlerzeile kommen fertig
+# uebersetzt aus lauf_status(); nichts einzuziehen.
 _WIDGET_JS = (
     '<script>(function(){'
     'function mark(z){return z=="ok"?\'<span class="phok">\\u2713</span>\':'
@@ -528,122 +566,12 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
                   if anker_zahl else "")
     # .246: das Chip-/Vorschau-CSS der .223/.244-Fassung ist ersetzt — die
     # Kacheln, Queue und Flaeche unten sind jetzt die eine Darstellung.
-    stil = ('<style>.phok{color:seagreen;font-weight:bold}'
-            '.phz{margin:2px 0}.phdet{margin:0 0 4px 1.4em;font-size:.9em}'
-            # .246: Vier-Kachel-Fluss + Saeule + Zuweisungs-Flaeche (Mockup
-            # b_lernfluss, User-Abnahme 17.08.)
-            '.lf-fluss{display:grid;grid-template-columns:repeat(4,1fr);'
-            'gap:14px;margin:14px 0}'
-            '@media(max-width:1000px){.lf-fluss{grid-template-columns:1fr 1fr}}'
-            '@media(max-width:560px){.lf-fluss{grid-template-columns:1fr}}'
-            '.lf-k{position:relative;background:var(--surface);'
-            'border:1px solid var(--border);border-radius:12px;'
-            'padding:14px 14px 12px;min-height:220px;display:flex;'
-            'flex-direction:column;gap:7px}'
-            '.lf-k.dran{border-color:var(--accent);'
-            'box-shadow:0 0 0 1px var(--accent)}'
-            '.lf-k.folgt{opacity:.45}'
-            '.lf-k.fertig{border-color:seagreen}'
-            '.lf-k h3{margin:0;font-size:15px;display:flex;align-items:center;gap:8px}'
-            '.lf-k .nr{width:23px;height:23px;border-radius:50%;'
-            'background:var(--border);display:grid;place-items:center;'
-            'font-size:12px;font-weight:bold;flex:0 0 23px}'
-            '.lf-k.dran .nr{background:var(--accent);color:#fff}'
-            '.lf-k.fertig .nr{background:seagreen;color:#fff}'
-            '.lf-satz{font-size:13.5px;color:var(--dim);margin:0}'
-            '.lf-rest{margin-top:auto}'
-            '.lf-saeule-w{display:flex;gap:12px;align-items:stretch;flex:1}'
-            '.lf-saeule{width:32px;height:150px;border:1px solid var(--border);'
-            'border-radius:8px;position:relative;overflow:hidden;'
-            'background:var(--bg);flex:0 0 32px;align-self:flex-end}'
-            '.lf-saeule .fuell{position:absolute;bottom:0;left:0;right:0;'
-            'background:linear-gradient(180deg,var(--accent),seagreen)}'
-            '.lf-saeule .marke{position:absolute;left:0;right:0;'
-            'border-top:1px dashed var(--border)}'
-            '.lf-phasen{display:flex;flex-direction:column-reverse;'
-            'justify-content:space-between;font-size:12.5px;height:150px;'
-            'align-self:flex-end;padding:2px 0}'
-            '.lf-phasen div{display:flex;gap:6px;align-items:center;color:var(--dim)}'
-            '.lf-phasen .an{color:var(--text);font-weight:bold}'
-            '.lf-phasen .ok{color:seagreen}'
-            '.lf-puls{display:inline-block;width:8px;height:8px;'
-            'border-radius:50%;background:var(--accent);'
-            'animation:lfpu 1.2s infinite}'
-            '@keyframes lfpu{50%{opacity:.25}}'
-            '.lf-q{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0}'
-            '.lf-q a{position:relative;display:block;width:44px;height:44px}'
-            '.lf-q img{width:44px;height:44px;object-fit:cover;border-radius:8px;'
-            'border:1px solid var(--border)}'
-            '.lf-q .jetzt img{outline:2px solid var(--accent);outline-offset:2px}'
-            '.lf-q .done::after{content:"\\2713";position:absolute;inset:0;'
-            'display:grid;place-items:center;background:#1f7a5fd9;color:#fff;'
-            'border-radius:8px;font-size:18px}'
-            '.lf-q .skip::after{content:"\\2013";position:absolute;inset:0;'
-            'display:grid;place-items:center;background:#555c66d9;color:#fff;'
-            'border-radius:8px;font-size:18px}'
-            '.lf-zw{background:var(--surface);border:1px solid var(--accent);'
-            'border-radius:12px;box-shadow:0 0 0 1px var(--accent);'
-            'padding:14px 16px;margin:0 0 16px}'
-            '.lf-zw h3{margin:0 0 2px;font-size:16px}'
-            '.lf-zwg{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 12px}'
-            '.lf-zwg label{position:relative;display:block;cursor:pointer}'
-            '.lf-zwg input{position:absolute;top:4px;left:4px;z-index:2}'
-            '.lf-zwg img{width:84px;height:84px;object-fit:cover;border-radius:8px}'
-            '.lf-zwg input:not(:checked)+img{opacity:.4}'
-            '.lf-zwg input:checked+img{outline:2px solid var(--accent);'
-            'outline-offset:2px}'
-            # .258: Pfeil INS Bild gelegt (top statt bottom) — seit die
-            # Grund-Zeile unter dem Bild haengt, ueberlappte er sie.
-            '.lf-zwclip{position:absolute;right:4px;top:62px;font-size:11px;'
-            'background:var(--surface);border-radius:4px;padding:0 4px;'
-            'text-decoration:none}'
-            # .257: Pruef-Rahmen — gut=seagreen (angehakt), Grenzfall=goldenrod
-            # (abgehakt, wieder anhakbar wie im Bruecken-Overlay), raus
-            # gedimmt mit Grund.
-            '.lf-zwg .lf-neu input:checked+img{outline-color:seagreen}'
-            '.lf-zwg .lf-grenz input:checked+img{outline-color:goldenrod}'
-            '.lf-zwg .lf-grenz .lf-zwgrund{color:goldenrod}'
-            '.lf-zwg .lf-dup img{opacity:.3}'
-            '.lf-zwgrund{display:block;max-width:84px;font-size:10px;'
-            'color:var(--dim);line-height:1.2;padding-top:2px}'
-            '.lf-knoepfe{display:flex;gap:8px;flex-wrap:wrap;align-items:center}'
-            # .258: gesperrter Take-Knopf (0 Haken) sieht auch gesperrt aus.
-            '.lf-knoepfe button.gtb:disabled{opacity:.45;cursor:default;'
-            'filter:grayscale(.6)}'
-            # .259 (Mockup b_suchknopf, Variante A): grosser gruener
-            # Suchknopf, Einstellungs-Popup, Delete rechtsbuendig rot umrandet.
-            '.lf-such{display:block;width:100%;margin-top:auto;'
-            'padding:13px 14px;font-size:15.5px;font-weight:600;'
-            'border-radius:9px;cursor:pointer;text-align:center;'
-            'background:var(--ok);border:1px solid var(--ok);'
-            'color:var(--on-ink)}'
-            '.lf-such small{display:block;font-weight:400;font-size:12px;'
-            'opacity:.85;margin-top:2px}'
-            '.lf-such:hover{filter:brightness(1.08)}'
-            '.lf-deck{position:fixed;inset:0;background:#000a;display:none;'
-            'place-items:center;z-index:9}'
-            '.lf-pop{background:var(--surface);'
-            'border:1px solid var(--border-strong,var(--border));'
-            'border-radius:12px;padding:18px 20px;width:min(440px,92vw);'
-            'box-shadow:0 12px 40px #000a;text-align:left;font-weight:400}'
-            '.lf-pop h3{margin:0 0 4px}'
-            '.lf-popz{margin:12px 0;font-size:14px;display:flex;'
-            'align-items:center;gap:8px;flex-wrap:wrap}'
-            '.lf-hint{color:var(--dim);font-size:12px;flex-basis:100%}'
-            '.lf-popf{display:flex;gap:8px;margin-top:16px;'
-            'align-items:center}'
-            '.lf-spacer{flex:1}'
-            # .271/.271b: Blickwinkel-Kaesten mit Rahmen + Legende
-            '.lf-blickbox{border:1px solid var(--border-strong,var(--border));'
-            'border-radius:10px;padding:6px 10px 10px;margin:10px 0}'
-            '.lf-blickbox legend{font-weight:600;font-size:13px;'
-            'padding:0 6px}'
-            '.lf-blickbox.lf-leer{opacity:.6}'
-            '.lf-del{background:transparent;border:1px solid var(--crit);'
-            'color:var(--crit);border-radius:6px;padding:6px 12px;'
-            'cursor:pointer}'
-            '.lf-del:hover{background:var(--crit);color:#fff}'
-            '</style>')
+    # 20.08.: das Blatt selbst wohnt seit dem /personlauf-Nachzug in
+    # webui.bausteine.lauffluss_stil() — BEIDE Lauf-Seiten rendern dieselben
+    # Klassen aus DERSELBEN Quelle (K3-Regel: nie ein zweites, wortgleiches
+    # CSS-Blatt). Der Rueckgabestring ist byte-identisch zur alten Fassung
+    # (Beweis harnisch_sprache, Fall lernwizard).
+    stil = lauffluss_stil()
     # .223 (User 16.08.: "hier verlieren wir den User komplett — er weiss gar
     # nicht, was er wo klicken soll"): die EASY-Sicht ist ein gefuehrter Fluss
     # aus Schritt-Balken, EINEM Klartext-Satz und EINEM Knopf. Keine Anker-/
@@ -754,7 +682,8 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
         '<input id="lf-pop-tag" type="date" disabled>'
         '<span class="lf-hint">' + t("lernwizard.pop.hint_tag")
         + '</span></div>'
-        # Stufe-0-Grenze (§8.4): Inline-Script — JS bleibt literal.
+        # Sprach-Pruefung Tranche D: reines Schalt-JS ohne Sprache —
+        # nichts einzuziehen.
         '<script>function lfUmschalten(){'
         'var t=document.getElementById("lf-um-tag").checked;'
         'document.getElementById("lf-pop-n").disabled=t;'
@@ -1028,21 +957,24 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
                     '</fieldset>')
             kacheln_html = "".join(reihen_html)
             mehr = ""
-            # Stufe-0-Grenze: der Mehr-Knopf ist JS-gekoppelt (das onclick-
-            # JS setzt textContent wortgleich neu) — Show/Hide bleiben
-            # literal, bis window.T beide Seiten versorgt (§8.4).
+            # Stufe 2 Tranche D (§8.17 Toggle-Label): BEIDE Fassungen kommen
+            # fertig formatiert vom Server — im onclick als einfach-quotierte
+            # JS-Literale (bausteine.js_literal, byte-treu; json.dumps
+            # braeche mit Doppel-Quotes das Attribut), sichtbarer Knopftext
+            # aus DEMSELBEN Schluessel.
             if rest:
                 mk = [_kachel_s(s, "lf-grenz" if s.get("stufe") == "grenzfall"
                                 else "lf-dup", False) for s in rest]
+                _txt_zu = t("lernwizard.zw.js_verbergen", n=len(rest))
+                _txt_auf = t("lernwizard.zw.js_zeigen", n=len(sichtung))
                 mehr = (
                     '<button type="button" class="gtb" id="lf-mehr-knopf" '
                     'onclick="var m=document.getElementById(\'lf-mehr\');'
                     'var auf=m.style.display===\'none\';'
                     'm.style.display=auf?\'\':\'none\';'
-                    f'this.textContent=auf?\'Hide the other {len(rest)} '
-                    f'checked pictures\':\'Show all {len(sichtung)} checked '
-                    'pictures\';lfZaehl();">'
-                    f'Show all {len(sichtung)} checked pictures</button>'
+                    'this.textContent=auf?' + js_literal(_txt_zu) + ':'
+                    + js_literal(_txt_auf) + ';lfZaehl();">'
+                    f'{html.escape(_txt_auf)}</button>'
                     f'<div class="lf-zwg" id="lf-mehr" style="display:none">'
                     + "".join(mk) + '</div>')
             # Stufe-0-Grenze (§8.3 + qs.sh-.257-Anker): pruef_wort wird in
@@ -1106,7 +1038,7 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
         elif sicht_warte:
             mitte = ('<div class="lf-satz" id="lf-sicht-warte">&#9203; '
                      + t("lernwizard.zw.warte") + '</div>'
-                     + _SICHT_JS)
+                     + _sicht_js())
             benenn_aktiv = False
         else:
             mitte = kacheln_html + mehr + sicht_zeile
@@ -1158,7 +1090,7 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
               f'<a href="/lernlauf/anker?a={aid}">'
             + t("lernwizard.zw.link_detail") + '</a> '
             + t("lernwizard.zw.detail_zusatz") + '</div>'
-            + '</div>' + _ZW_JS)
+            + '</div>' + _zw_js())
     easy = fluss + zuweisung
     # Seiten-Kopf: Titel + der eine Erklaer-Satz + Anleitung (ek-hilfe wie
     # auf den Kacheln — .244-Vertrag bleibt).

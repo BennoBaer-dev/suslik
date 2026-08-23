@@ -112,21 +112,40 @@ def _refcache_schreiben(cache, meta, refs):
 
 def load_refs():
     cache = os.path.join(SCRATCH, "refcache.npz")
-    want = {p: idx.get(p, []) for p in a.persons}
+    # .313 (Prod-Fund 21.08. 19:01): der Cache ist ein GEMEINSAMER Speicher aller Leser
+    # (Urteil, Ernte, Sichtung, Live-Wache). Ein Lauf mit Teil-Personenliste (Wanduhr-
+    # Roundtrip: --persons <eine Kontrollperson>) schrieb ihn mit GENAU dieser Teilmenge
+    # zurueck — danach kannte die Ernte nur noch eine Person, die Sichtung verlor ihre
+    # Referenzpruefung, bis das naechste volle Urteil ihn neu baute. Deshalb: der Cache
+    # wird IMMER ueber ALLE Personen des Masters gefuehrt (+ die angefragten), zurueck
+    # geht nur die angefragte Teilmenge.
+    alle = sorted(set(idx.keys()) | set(a.persons))
+    want = {p: idx.get(p, []) for p in alle}
     if os.path.exists(cache):
         try:                                       # np.load MIT in den try: eine abgeschnittene/
             z = np.load(cache, allow_pickle=True)  # fremde npz darf den Lauf nicht abbrechen,
             meta = _refcache_meta(z)               # sondern nur den Cache verwerfen (neu rechnen)
-            if str(meta.get("§modell", "")) == emb.modell and all(meta.get(p) == want[p] for p in a.persons):
+            if str(meta.get("§modell", "")) == emb.modell and all(meta.get(p) == want[p] for p in alle):
                 print("Referenz-Embeddings aus Cache.")
-                return {p: z[p] for p in a.persons}
+                return {p: (z[p] if p in z.files else np.zeros((0, 512), np.float32)) for p in a.persons}
         except Exception as e:
             print(f"   (refcache unlesbar: {e} — wird neu berechnet)")
     print("Referenz-Embeddings werden berechnet (einmalig, dann gecacht) ...")
+    # A2-Beiwert (core/refbeiwert-Vertrag Stelle 2, der URTEILSPFAD): Vorrats-
+    # Referenzen tragen ihren Vektor im refs_meta-Beiwert — embed() auf der
+    # kleinen Datei findet gemessen in 28/40 kein Gesicht, und dieser Neuaufbau
+    # schriebe den Verlust in den refcache zurueck (Konzept-QS W1.1).
+    from core.refbeiwert import beiwerte as _bw
+    bw, _fremd = _bw(MASTER, emb.modell)
+    if _fremd:
+        print(f"   ({_fremd} Vorrats-Referenz(en) mit fremdem Modell-Beiwert — unbrauchbar)")
     refs = {}
-    for p in a.persons:
+    for p in alle:
         V = []
         for f in want[p]:
+            b = bw.get((p, f))
+            if b is not None:
+                V.append(np.asarray(b["emb"], np.float32)); continue
             img = cv2.imread(os.path.join(MASTER, p, f))
             if img is None: continue
             v = emb.embed(img)
@@ -137,6 +156,7 @@ def load_refs():
         _refcache_schreiben(cache, {**want, "§modell": emb.modell}, refs)
     except Exception as e:                         # Cache ist regenerierbar -> Lauf nicht abbrechen,
         print(f"   (refcache nicht schreibbar: {e} — wird beim naechsten Lauf neu berechnet)")
+    refs = {p: refs.get(p, np.zeros((0, 512), np.float32)) for p in a.persons}
     return refs
 
 refs = load_refs()
@@ -401,7 +421,10 @@ for k, eid in enumerate(a.eids):
                                        a.fd_front_min, a.fd_sharp_min, a.fd_det_max)
                 faces.append({"t": i/fps, "bw": x2-x1, "bh": y2-y1, "front": front, "fd": fd,
                               "yaw": yaw, "det": float(fc.det_score), "sharp": schaerfe0,
-                              "sex": getattr(fc, "sex", "?"), "age": int(getattr(fc, "age", -1)),
+                              # .313: genderage laeuft nicht mehr mit (ungenutzt) — Felder bleiben
+                              # im Bestandsformat, jetzt '?'/-1 statt eines Modellwerts.
+                              "sex": getattr(fc, "sex", None) or "?",
+                              "age": int(getattr(fc, "age", None) if getattr(fc, "age", None) is not None else -1),
                               "pose": [round(float(x),0) for x in getattr(fc,"pose",[])] or None,
                               # KEIN "crop" mehr in faces: die Sammlung hielt jede Detektion
                               # als Kopie bis Clip-Ende (nach dem .copy()-Fix von 0.1.0.21

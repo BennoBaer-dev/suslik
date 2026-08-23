@@ -390,7 +390,83 @@ def fehler_kern(text, n=220):
     return (zeilen[-1] if zeilen else "")[:n]
 
 
+def norm_latte_aus_cfg(cfg):
+    """Norm-Latte fuer die Sichtungs-/Benenn-Bewertung (.307): dieselben
+    Config-Achsen wie Vorrat/Katalog — GUT ab der Qualitaetslinie, Mindest ab
+    der Sammel-Schwelle, mit den Vorrats-Boeden. None, wenn der Vorrat aus
+    ist (Registrieren nach Schaltern: dann urteilt die alte Pixel-Latte
+    allein, byte-gleich zu .306)."""
+    if not cfg.get("vorrat_aktiv"):
+        return None
+    return {"gut": cfg.get("katalog_norm_min"),
+            "min": cfg.get("vorrat_norm_min"),
+            "kante": cfg.get("vorrat_kante_min"),
+            "sharp": cfg.get("vorrat_sharp_min"),
+            # .316: Veto-Linie der Gruppen-Sichtung (0 = aus). Eigener Config-Wert,
+            # damit die ANZEIGE unabhaengig von den Ernte-Achsen drehbar bleibt.
+            "veto": (float(cfg["sichtung_norm_veto"])
+                     if cfg.get("sichtung_norm_veto") else None),
+            # .32x: Struktur-Linie der ANZEIGE (0 = aus). Liegt ueber der
+            # Ernte-Linie: was dazwischen liegt, wird geerntet und bleibt auf der
+            # Platte, wird aber nicht als Vorschlag angeboten — es steht im
+            # aufklappbaren Rest und der User kann es zurueckholen.
+            "struktur": (float(cfg["sichtung_struktur_min"])
+                         if cfg.get("sichtung_struktur_min") else None)}
+
+
+def refcache_warte_antwort(anlernen):
+    """.311 (User 21.08.): EINE Quelle fuer die Warte-Antwort 'die Referenzen
+    werden neu aufgebaut' der drei Handler (Bruecke /auftritt_lernen, Erst-
+    Sichtung, Benenn-Pruefung) — laden + Text + i/n/zustand aus
+    anlernen.refcache_fortschritt(); das Blatt malt daraus den schmalen
+    Balken (ladeBalken in app.js bzw. lbBalken im Auftritte-Blatt), statt
+    nur den Text zu zeigen. Ein Zweig, der den Text ohne i/n zurueckgibt,
+    waere K3 (Balken erreicht nicht alle Stellen) — deshalb der Helfer."""
+    rf = anlernen.refcache_fortschritt()
+    if rf["pause"]:
+        # Zwei Fehlschlaege in Folge (Widerleger .311): ok:false beendet alle
+        # drei Warteschleifen (Knopf wieder frei), statt endlos zu pollen.
+        return json.dumps({"ok": False,
+                           "msg": _sprache.t("antwort.refcache_fehler")},
+                          ensure_ascii=False)
+    antwort = {"ok": True, "laden": True,
+               "msg": _sprache.t("antwort.refcache_baut")}
+    if rf["laeuft"]:
+        # zustand/i/n NUR bei laufendem Bau: so bleibt im Auftritte-Blatt der
+        # 60-s-Zaehler-Deckel auf Polls ohne Bau erreichbar, und der erste
+        # Poll zeigt nie den Endstand eines frueheren Baus.
+        antwort.update(i=rf["i"], n=rf["n"], zustand="refcache")
+    return json.dumps(antwort, ensure_ascii=False)
+
+
+def ernte_schwellen_aus_cfg(cfg):
+    """Das Ernte-Regime aus der Config (EINE Quelle, .308): Pflicht-Gates + bei
+    aktivem Vorrat die gleichnamigen Sammel-/Phasen-Schwellen. Lernlauf-Manifest
+    und Pass-Check-Bruecke frieren exakt dieses Dict ein."""
+    from core import ernte as _ern
+    s = {"det_thresh": cfg.get("det_thresh"),
+         "fd_front_min": cfg.get("fd_front_min"),
+         "fd_sharp_min": cfg.get("fd_sharp_min"),
+         "fd_det_max": cfg.get("fd_det_max"),
+         "m_det_min": cfg.get("ernte_m_det_min"),
+         "m_kante_min": cfg.get("ernte_m_kante_min"),
+         "m_sharp_min": cfg.get("ernte_m_sharp_min"),
+         "s_det_min": cfg.get("ernte_s_det_min"),
+         "s_winkel_max": cfg.get("ernte_s_winkel_max"),
+         # .32x STRUKTUR-Linie der ERNTE: bewusst AUSSERHALB des vorrat_aktiv-
+         # Zweigs — der Struktur-Test hat mit der Feature-Norm nichts zu tun und
+         # duerfte sonst auf Anlagen ohne Vorrat still ausfallen.
+         "struktur_min": cfg.get("ernte_struktur_min")}
+    if cfg.get("vorrat_aktiv"):
+        s.update({k: cfg.get(k) for k in
+                  (*_ern.VORRAT_SCHLUESSEL, "vorrat_konsens_min",
+                   "vorrat_zwilling_sim",
+                   "katalog_norm_min", "katalog_norm_min_profil")})
+    return s
+
+
 def load_config(path):
+    from core.benennung import NORM_LATTE as _NL   # .308: EINE Quelle der Norm-Defaults
     raw = open(path).read()
     raw = re.sub(r"\$\{(\w+)\}", lambda m: os.environ.get(m.group(1), ""), raw)
     cfg = yaml.safe_load(raw)
@@ -402,8 +478,33 @@ def load_config(path):
                          # (GPU/NPU/MIXED/CPU bzw. backend:) verhalten sich exakt wie bisher.
                          ("ov_device", "AUTO"), ("backend", ""), ("win_min", 3), ("win_thresh", 0.40), ("alert_cooldown", 300),
                          ("web_port", 8199), ("data_dir", os.path.join(HERE, "verify_data")),
-                         ("trigger", "poll"), ("lookback_h", 2), ("clip_retention_d", 7),
-                         ("clip_cache_max_gb", 50), ("cpu_threads", 0),
+                         ("trigger", "poll"), ("lookback_h", 2),
+                         # .32x (User 22.08. + Issue #25): der Clip-Cache war der
+                         # groesste Posten im Datenordner — gemessen 22,6 GB in
+                         # 1542 Clips, davon 1212 aelter als zwei Tage. Ein Clip
+                         # wird typisch EINMAL analysiert; wiederverwendet wird er
+                         # nur von Nachhol-/Wiederholungslaeufen, und die greifen
+                         # auf die letzten Stunden zu, nicht auf die letzte Woche.
+                         # Der Cache existiert wegen Frigates haengender
+                         # Clip-Erzeugung — das rechtfertigt Stunden, nicht Tage.
+                         # 7 -> 2 Tage senkt den Cache hier von 22,6 auf ~4 GB.
+                         ("clip_retention_d", 2),
+                         # Und der Deckel war MEHR ALS DIE PLATTE: der Melder von
+                         # Issue #25 hat 32 GB, der Vorgabewert stand auf 50 —
+                         # der Deckel konnte per Konstruktion nie greifen, sein
+                         # System blieb stehen ("No space left on device").
+                         # Ein absoluter Wert ist auf kleinen Systemen immer
+                         # falsch; 10 GB passen auf jede Platte, auf der suslik
+                         # ueberhaupt laufen kann, und wer mehr will, dreht ihn hoch.
+                         # 0 = AUTOMATISCH aus der Plattengroesse (User-Entscheid
+                         # 22.08.: "die Platten koennen ja alle sehr
+                         # unterschiedlich sein"). Feste Zahlen sind bei
+                         # unbekannter Hardware immer falsch — Issue #25 ist der
+                         # Beweis: 50 GB Deckel auf 32 GB Platte war eine Zahl
+                         # ohne Wirkung. Anteile skalieren von 32 GB bis 2 TB.
+                         # Wer feste Werte will, traegt sie ein; die haben Vorrang.
+                         ("clip_cache_max_gb", 0), ("disk_frei_min_gb", 0),
+                         ("live_verworfen_speichern", False), ("cpu_threads", 0),
                          ("anker_sim1", 0.25), ("anker_sim2", 0.35),
                          ("anker_marge_warn", 0.15), ("anker_hart", 0.35),
                          ("anker_k_min", 5), ("anker_deckel", 250), ("anker_deckel_hart", 300),
@@ -455,6 +556,50 @@ def load_config(path):
                          ("ernte_m_det_min", 0.60), ("ernte_m_kante_min", 60),
                          ("ernte_m_sharp_min", 60),
                          ("ernte_s_det_min", 0.70), ("ernte_s_winkel_max", 30),
+                         # Lernvorrat nach Feature-Norm (bauplan_vorrat.md, alle
+                         # Werte GEMESSEN 20.08.: Norm-AUC 0.731, Profil-Median
+                         # 21.5, Konsens Hund 0.15 vs echte 0.59+, Schaerfe aus
+                         # REF_LATTE sharp_gut, Linie = beste 22 % des Bestands).
+                         # Live-Wache-Retention (.315, User 21.08.: "sollte das nicht
+                         # aufgeraeumt werden"): <data_dir>/live/ war der EINZIGE Datenweg
+                         # ohne Raeumer — gemessen 72,9 GB in 137.719 Dateien nach neun
+                         # Tagen, davon 61,1 GB (128.176 Dateien) Pose-Sieb-Ausschuss
+                         # (verworfen_*, von der Alarmbild-Anzeige ohnehin ausgeschlossen).
+                         # Zwei Achsen, weil die Klassen verschieden wertvoll sind: der
+                         # Ausschuss ist reine Nachpruef-Diagnose und faellt mit ~15-20 GB
+                         # je Tag an, die Beweis-Medien haengen an gemeldeten Auftritten.
+                         ("live_retention_d", 7), ("live_verworfen_retention_d", 2),
+                         # .316 (User 22.08.): Veto-Linie der Gruppen-Sichtung. Eigener
+                         # Wert statt vorrat_norm_min mitzubenutzen, damit der User die
+                         # ANZEIGE drehen kann, ohne die Ernte-Achsen zu verstellen.
+                         ("sichtung_norm_veto", 22.0),
+                         # .32x STRUKTUR-TEST (User-Entscheide 22.08.) — er ersetzt den
+                         # .316b-Gruppen-Konsens, der ersatzlos entfaellt: gemessen kippte
+                         # der neun Gruppen, davon FUENF mit erkannter Person und fast
+                         # durchweg brauchbaren Bildern (bis 18/18 ueber der Linie), und
+                         # nur zwei echte Fehlerkennungen — die der Struktur-Test
+                         # vollstaendig leert (0/7 und 0/19).
+                         # Zwei Linien, weil die beiden Wege NICHT gleichwertig sind:
+                         #   ernte_struktur_min   filtert VOR dem Crop-Schreiben. Was hier
+                         #     faellt, kostet keinen Platz und keine Norm-Inferenz, ist
+                         #     aber fuer DIESEN Lauf weg (ein neuer Lauf ueber dieselben
+                         #     Events holt es zurueck, solange Frigates Retention reicht).
+                         #     0,11 (User 22.08. am Bild entschieden): verwirft 12,6 % des
+                         #     Ernte-Materials; darunter liegen gemessen Nacken, Ohren,
+                         #     Hinterkoepfe, Vegetation. Kalibriert an 2000 zufaelligen
+                         #     M-Crops aus 36 Laeufen (Median rohen Materials 0,146).
+                         #   sichtung_struktur_min  urteilt nur ueber die ANZEIGE. Was hier
+                         #     faellt, bleibt auf der Platte und im aufklappbaren Rest —
+                         #     sichtbar und zurueckholbar (.313-Regel). 0,15.
+                         # 0 = aus. Ohne Messwert wird NIE gefiltert.
+                         ("ernte_struktur_min", 0.11),
+                         ("sichtung_struktur_min", 0.15),
+                         ("vorrat_aktiv", True),
+                         ("vorrat_norm_min", _NL["min"]), ("vorrat_norm_min_profil", 21.5),
+                         ("vorrat_front_profil", 0.61), ("vorrat_kante_min", _NL["kante"]),
+                         ("vorrat_sharp_min", _NL["sharp"]), ("vorrat_rand_faktor", 2.2),
+                         ("vorrat_konsens_min", 0.30), ("vorrat_zwilling_sim", 0.95),
+                         ("katalog_norm_min", _NL["gut"]), ("katalog_norm_min_profil", 23.5),
                          # S2 no_person (konzept_no_person.md): Schwellen setzt der
                          # Retro-Backtest; None = Klassifikation komplett AUS (kein Rate-Default).
                          ("np_det_max", None), ("np_frigate_max", None),
@@ -1166,6 +1311,12 @@ class WorkerProzess:
         env = dict(os.environ, OV_DEVICE=self.cfg["ov_device"], FRIGATE_URL=self.cfg["frigate_url"],
                    SCRATCH_DIR=os.path.join(self.cfg["data_dir"], "clips"),
                    WORKER_ANTWORT_FD=str(w))
+        if self.cfg.get("vorrat_aktiv"):
+            # Vorrat B1 (W2.9-Vorbedingung): der Worker baut seine NormMass beim
+            # PROZESS-START — die ~1-GB-Bauspitze faellt damit ausserhalb jedes
+            # _JobRssWache-Fensters an (In-Job-Spitzen liegen heute schon bei
+            # 3,7-4,0 GB gegen die 4096er-Default-Grenze).
+            env["SUSLIK_VORRAT"] = "1"
         # start_new_session: killpg muss auch ffmpeg-ENKEL treffen (W1-Lektion). stdin-Pipe ist
         # non-inheritable (CLOEXEC) -> nach einem execv von verifyd bekommt eine Waise EOF und endet.
         self.p = subprocess.Popen([sys.executable, os.path.join(HERE, "worker.py")],
@@ -1315,7 +1466,33 @@ def verdict_v2(cfg, ours, max_bw, confirmed=None):
 # Kategorie-ANZEIGE-Tabellen: KAT_LABELS/KAT_FARBE wohnen seit Modulumbau R1 in
 # webui/bausteine.py (Helfer-Heimat). Re-Import wie gt_leiste unten (Kompatibilitaet
 # fuer Service-Meldetexte und verbleibende Seiten; Abbau erst mit M-Schlussetappe).
+# Tranche D (Kennung/Anzeige-Trennung): kat_wort/kat_map/stufe_wort/reihen_wort
+# sind die UEBERSETZTEN Anzeige-Fassungen. Sprach-Stufe 4 hat die MELDETEXTE
+# nachgezogen — Push-Titel und Alert-Saetze lesen jetzt ebenfalls
+# _kat_wort()/vertrauen.wort_sprachig(). KAT_LABELS/vertrauen.LABELS bleiben
+# die englischen QUELLEN (Fallback, EN-Deckungsvertrag) und die Sprache der
+# LOGS/MQTT-Kennungen (B20/Additiv-Regel).
+#
+# SPRACH-STUFE 4 — SAMMEL-GRENZMARKER der Meldetexte in verifyd.py (Muster
+# des do_POST-Kopfes). Sprachfaehig sind: Push-Titel (Kategorie), Event-Alert,
+# Anwesenheits-TITEL, Personen-Erkennung (Koerper), Vision-Meldungen und der
+# Video-Rueckfall-Zusatz. BEWUSST literal bleiben:
+# (a) DEUTSCHE Alt-Meldetexte — Anwesenheits-Satz ("… erkannt (…)") und alle
+#     Stoerungs-Pushes der Wartungsjobs ("suslik-Stoerung", "Master-Backup
+#     fehlgeschlagen/leer/ohne Referenzen", "Reorganisieren …", "Netz-Sammeln
+#     …", "Seit >4 h tagsueber kein Event …", "5+ Frigate-Abrufe …", "3
+#     Analysen in Folge …"). de->en waere eine bewusste TEXTAENDERUNG, nie
+#     Teil des Einzugs (derselbe User-Entscheid wie do_POST-Marker (b)).
+# (b) Stoerungs-DIAGNOSEN, die wortgleich auch ins Log gehen (melde()/
+#     stoerung_melden-Aufrufer, live-supervisor) — Log bleibt englisch und
+#     maschinenlesbar (§4 B20); UI/Log zu trennen ist ein eigener Umbau.
+# (c) MQTT-Payloads: KEIN Feld aendert seine Bytes (Additiv-Regel) — die
+#     Wortstufe steht dort als KENNUNG ("stufe": clear|narrow|below|none),
+#     nie als Anzeigewort.
 from webui.bausteine import KAT_LABELS, KAT_FARBE   # noqa: F401 (Re-Export)
+from webui.bausteine import kat_map as _kat_map, kat_wort as _kat_wort
+from webui.bausteine import reihen_wort as _reihen_wort, stufe_wort as _stufe_wort
+from webui.bausteine import bruecke_grund as _bruecke_grund   # D1: Diagnose-Kennung -> Satz
 
 
 def gt_schnellpersonen(rows, cfg, n=2):
@@ -1550,6 +1727,7 @@ class Service:
         self._vs_laeuft = set()                   # Personen mit laufender Bestands-Suche
         self._nachlern_lock = threading.Lock()    # schuetzt _nachlern_timer
         self._nachlern_timer = {}                 # person -> Debounce-Timer: Bestands-Suche erst nach Durchgangs-Ende (User 21.07.)
+        self._nachlern_eids = {}                  # person -> Events des laufenden Durchgangs (.308 Auto-Vorrat)
         self._gpu_bg_lock = threading.Lock()      # serialisiert schwere GPU-Hintergrund-Subprozesse (Review 21.07.): hoechstens EINER gleichzeitig, Live-run_analyze bleibt frei — AUSSER die Wanduhr-Messung: die serialisiert sich zusaetzlich ueber den Analyse-Slot gegen Live (_roundtrip_seriell, Issue #21: auf 2C/4T war "frei" = Minuten Doppellast) und nimmt DIESES Lock nur je Roundtrip, nie waehrend sie auf Live wartet (Nachbesserung W5, Regel wie start_nachhol)
         self._vision_lock = threading.Lock()      # V4: schuetzt Single-Flight + Debounce-Timer des Vision-Urteils
         self._vision_flug = None                  # core.visionurteil.Einfachlauf (lazy): 1 laufend + 1 wartend, Rest verworfen+gezaehlt
@@ -1563,6 +1741,8 @@ class Service:
         self.pub = None                           # MQTT-Publisher (AP2), Setup via start_publisher()
         self.mqtt_trigger = None                  # MQTT-Trigger-Client (nur trigger=mqtt), Setup via mqtt_loop()
         self.frigate_fehler = None                # (ts, msg) letzter Frigate-API-Fehler -> UI-Banner
+        self.disk_warnung = None                  # .313 (ts, frei_gb): Platte unter Mindestfrei trotz leerem Clip-Cache
+        self._cleanup_lock = threading.Lock()     # Event-Hook, Platten-Wache und Knopf raeumen nie gleichzeitig
         # .264 Frigate-Schoner: Config-Werte + lauter Log-Kanal verdrahten.
         frigate_schoner.schwelle = int(self.cfg.get("frigate_schoner_fehler") or 3)
         frigate_schoner.pause_s = float(self.cfg.get("frigate_schoner_pause_s") or 180)
@@ -1828,7 +2008,7 @@ class Service:
                 self._sammel_laeuft = False
             self.log(f"scenario collection thread start error: {e}")
 
-    def _nachlern_anstossen(self, person):
+    def _nachlern_anstossen(self, person, eid=None):
         """Nach einem abgeschlossenen Durchgang mit einer erkannten BEKANNTEN Person die
         Nachlern-Vorschlaege (vorschlaege_person) automatisch aktualisieren — 'am Ende des
         Durchgangs, ohne Klick' (User 21.07.). Debounce pro Person: jeder neue Treffer setzt
@@ -1838,6 +2018,8 @@ class Service:
         laeuft automatisch."""
         karenz = int(self.cfg.get("szene_karenz_s", 90))
         with self._nachlern_lock:
+            if eid:
+                self._nachlern_eids.setdefault(person, set()).add(str(eid))
             alt = self._nachlern_timer.get(person)
             if alt:
                 alt.cancel()
@@ -1852,7 +2034,18 @@ class Service:
             if self._nachlern_timer.get(person) is not mein_timer:
                 return                                       # ein neuerer Timer hat uebernommen -> No-op (kein Doppellauf)
             self._nachlern_timer.pop(person, None)
+            eids = sorted(self._nachlern_eids.pop(person, set()))
         self.vorschlaege_starten(person)                     # async, hat eigenen _vs_laeuft-Guard
+        if eids and self.cfg.get("vorrat_aktiv"):
+            # .308 AUTO-VORRAT (runde Loesung, User 21.08.): die Pass-Ernte
+            # laeuft JETZT, nach Durchgangs-Ende — wer spaeter auf 'Check this
+            # pass' klickt, findet fertige Angebote statt zu warten.
+            try:
+                zst, txt = self.bruecke_vorrat(person, eids)
+                self.log(f"pass stock for {person}: {zst} ({len(eids)} confirmed event(s))"
+                         + (f" — {txt}" if zst == "fehler" else ""))
+            except Exception as e:
+                self.log(f"pass stock for {person} failed to start: {type(e).__name__}: {e}")
 
     # Modulumbau R3: Szenen-Telegram + Transcode-Lauf leben in core/melden.py
     # (Docstrings/Begruendungen dort). Hier nur Einhaenge: Drossel-Zustand
@@ -2163,7 +2356,13 @@ class Service:
                                         os.path.join(HERE, "anlernen.py"), "pruefe",
                                         "--unscharf", str(self.cfg.get("unscharf_max", 350)),
                                         "--minkante", str(self.cfg.get("min_kante", 70)),
-                                        "--dupsim", str(self.cfg["benennung_dup_sim"])],
+                                        "--dupsim", str(self.cfg["benennung_dup_sim"])]
+                                       # .308: Norm-Weg der Einstufung — EINE Quelle
+                                       # (norm_latte_aus_cfg), None bei Vorrat aus
+                                       + (lambda _nl: ([] if not _nl else [
+                                           "--norm-gut", str(_nl["gut"]), "--norm-min", str(_nl["min"]),
+                                           "--norm-kante", str(_nl["kante"]), "--norm-sharp", str(_nl["sharp"])]))
+                                         (norm_latte_aus_cfg(self.cfg)),
                                        capture_output=True, timeout=deckel_s, check=False, env=env,
                                        preexec_fn=_analyse_nice)   # Issue #21, s. ANALYSE_NICE
                         if r.returncode != 0:
@@ -2207,7 +2406,11 @@ class Service:
                     subprocess.run([sys.executable,
                                     os.path.join(HERE, "anlernen.py"), "vorschlaege", person,
                                     "--unscharf", str(self.cfg.get("unscharf_max", 350)),
-                                    "--minkante", str(self.cfg.get("min_kante", 70))],
+                                    "--minkante", str(self.cfg.get("min_kante", 70))]
+                                   + (lambda _nl: ([] if not _nl else [
+                                       "--norm-gut", str(_nl["gut"]), "--norm-min", str(_nl["min"]),
+                                       "--norm-kante", str(_nl["kante"]), "--norm-sharp", str(_nl["sharp"])]))
+                                     (norm_latte_aus_cfg(self.cfg)),
                                    capture_output=True, timeout=900, check=False, env=env,
                                    preexec_fn=_analyse_nice)   # Issue #21, s. ANALYSE_NICE
                 self.log(f"reference search for {person} finished")
@@ -2702,8 +2905,15 @@ class Service:
         # Write-back-Schalter auf der System-Seite war wirkungslos (nur ueber den Wizard setzbar).
         "frigate_read_only": (bool, None, None, "read-only mode: never write anything back to Frigate"),
         "mqtt_publish": (bool, None, None, "publish verifyd/erkennung + heartbeat"),
-        "clip_retention_d": (int, 1, 60, "clip cache retention in days"),
-        "clip_cache_max_gb": (int, 1, 500, "clip cache size cap in GB, oldest evicted first (age eviction stays)"),
+        "clip_retention_d": (int, 1, 60, "how long downloaded clips are kept as a cache, in days. They are only a cache — suslik fetches a clip from Frigate again whenever it needs one, so a short time costs nothing except a second download. The cache exists because Frigate's clip generation can stall, which is worth avoiding for the last hours, not for the last week: measured on the development system, 1212 of 1542 cached clips were older than two days and none of them was ever read again"),
+        "live_verworfen_speichern": (bool, None, None, "keep the pictures the live watchers threw away (no human in frame): off by default — they are pure diagnostics, the interface never shows them, and they were the single largest item under the data folder (61 GB in nine days on the development system). They are still counted, so you can see how often the pose gate rejected something. Turn on only while chasing a bug"),
+        "clip_cache_max_gb": (int, 0, 500, "clip cache size cap in GB, oldest evicted first (age eviction stays). 0 = derive it from the disk (15 % of its size), which is the sensible default because disks differ wildly — a fixed cap larger than the disk can never take effect, and that is exactly how one installation filled up (issue #25). Set a number only if you want a fixed cap; keep it well below the size of the disk — a cap larger than the disk can never take effect, and the cache will fill the disk before it is reached (issue #25). suslik warns at startup if the two do not fit together"),
+        "disk_frei_min_gb": (int, 0, 500, "minimum free disk space in GB — below it the oldest clips are evicted regardless of the cap. 0 = derive it from the disk (10 % of its size, at least 2 GB) (checked every 10 min, at startup and after each event; Issue #25)"),
+        "ernte_struktur_min": (float, 0.0, 0.5, "face structure line for harvesting: crops whose facial landmarks collapse towards the centre — necks, ears, backs of heads, foliage, tarmac — are not saved at all, so they cost no disk and no quality inference. Measured on 2000 random crops from 36 runs; 0.11 drops 12.6 % of harvested material. What is dropped is gone for that run, but a fresh run over the same events brings it back while the clips are still in Frigate (0 = off)"),
+        "sichtung_struktur_min": (float, 0.0, 0.5, "face structure line for the group view: pictures below it are not offered for learning, but stay on disk and remain visible under \"show all\" — you can always take them back. Should sit above the harvesting line (0 = off)"),
+        "sichtung_norm_veto": (float, 0.0, 40.0, "quality line for learning runs: faces at or below this feature-norm value are dropped from the group view — this is what separates false detections (hedges, wheel arches) from small real faces, because the detector itself is confident about both (0 = off)"),
+        "live_retention_d": (int, 0, 365, "how many days the live watchers' evidence pictures and look-back clips are kept in <data_dir>/live/ (0 = keep forever)"),
+        "live_verworfen_retention_d": (int, 0, 365, "how many days the live watchers' rejected frames (pose check, prefix verworfen_) are kept — they are diagnostic material only and are never shown; they are by far the largest part of <data_dir>/live/ (0 = keep forever)"),
         "cpu_threads": (int, 0, 64, "CPU thread cap for inference sessions + transcode (0 = auto: allowed cores)"),
         "anker_sim1": (float, 0.05, 0.95, "anchor clustering stage 1 (within a pass; measured 0.25)"),
         "anker_sim2": (float, 0.05, 0.95, "anchor clustering stage 2 (pass centroids; measured 0.35)"),
@@ -2783,6 +2993,19 @@ class Service:
         "ernte_m_sharp_min": (int, 10, 500, "harvest gate M: min. sharpness (calibrated 60)"),
         "ernte_s_det_min": (float, 0.5, 0.95, "harvest gate S (anchor-ready): min. detector score (calibrated 0.70)"),
         "ernte_s_winkel_max": (int, 10, 60, "harvest gate S: max. |pitch|/|yaw|/|roll| in degrees (calibrated 30)"),
+        # Learning stock by feature norm (reference-free quality measure; all
+        # defaults measured 2026-08-20 — see bauplan_vorrat.md)
+        "vorrat_aktiv": (bool, None, None, "learning stock: collect high-quality face material during learning runs, judged by the reference-free feature norm; off = harvest behaves exactly as before"),
+        "vorrat_norm_min": (float, 15.0, 35.0, "stock gate: min. feature norm for frontal faces (measured 22.0 = top 65%% of good material)"),
+        "vorrat_norm_min_profil": (float, 15.0, 35.0, "stock gate: min. feature norm for profile views — profiles carry ~1 point less norm at equal identity strength (measured 21.5)"),
+        "vorrat_front_profil": (float, 0.3, 0.9, "stock gate: keypoint frontality BELOW which a face counts as profile (measured 0.61)"),
+        "vorrat_kante_min": (int, 20, 200, "stock gate: min. face edge in px — deliberately lower than the harvest gate, the norm carries the quality judgment (measured 40)"),
+        "vorrat_sharp_min": (int, 100, 5000, "stock gate: min. sharpness, the 'good' tier of the reference bar (measured 600)"),
+        "vorrat_rand_faktor": (float, 1.0, 4.0, "stock crops: context margin factor around the face box — for the human eye in the offer view, never an embedding source (2.2)"),
+        "vorrat_zwilling_sim": (float, 0.8, 0.99, "stock offers: near-identical twins within one walk-through are folded into the strongest picture at/above this cosine similarity (measured: neighbour frames ~1.0, real variety 0.41-0.70; 0.95)"),
+        "vorrat_konsens_min": (float, 0.1, 0.6, "stock offers: min. scenario consensus — best similarity to another stock face of the same walk-through; filters foreign faces like animals (measured: dog 0.15 vs. real 0.59+, threshold 0.30)"),
+        "katalog_norm_min": (float, 15.0, 35.0, "catalog offer line: min. feature norm for frontal faces offered as new references (measured 24.0 = top 22%% of the existing reference set)"),
+        "katalog_norm_min_profil": (float, 15.0, 35.0, "catalog offer line: min. feature norm for profile views (measured 23.5)"),
     }
 
     def config_schreiben(self, aenderungen):
@@ -3701,10 +3924,18 @@ class Service:
         gewaehlt = [nach_s[s] for s in (reihe_belegt or ())
                     if s in nach_s and s != schluessel]
         neu = _vg.nachruecken(k, reihe, abgelehnt, belegt, gewaehlt)
-        return True, {"zelle": {kk: neu[kk] for kk in
-                                ("lauf_id", "datei", "blick", "hoehe", "tag",
-                                 "camera", "geliehen_aus", "note",
-                                 "begruendung")} if neu else None,
+        # Tranche D (Kennung/Anzeige-Trennung 3b): geliehen_text ist die
+        # UEBERSETZTE Anzeige fuer app.js (js.vw.geliehen); geliehen_aus
+        # bleibt die interne Kennung (Logik + Fallback). Additiv — kein
+        # bestehendes Feld aendert sich.
+        return True, {"zelle": dict(
+                          {kk: neu[kk] for kk in
+                           ("lauf_id", "datei", "blick", "hoehe", "tag",
+                            "camera", "geliehen_aus", "note",
+                            "begruendung")},
+                          geliehen_text=(_reihen_wort(neu["geliehen_aus"])
+                                         if neu.get("geliehen_aus")
+                                         else None)) if neu else None,
                       "schluessel": (f'{neu["lauf_id"]}/{neu["datei"]}'
                                      if neu else None),
                       "abgelehnt": len(abgelehnt)}
@@ -4095,19 +4326,30 @@ class Service:
         eigenen Weg. Beide Schalter sind Produkt-Default AUS; ohne sie passiert
         hier nichts. Personennamen stehen NUR im Meldungs-INHALT (das sind die
         Nutzdaten), nie in der Service-Log-Zeile daneben."""
+        # Sprach-Stufe 4 (Eintrittspunkt (b)): die zwei Meldungen gehen in
+        # der gewaehlten Sprache raus; der MQTT-Payload unten bleibt
+        # byte-gleich (er traegt nur Kennungen, keinen Anzeigetext). Die
+        # Klammer-Plurale "picture(s)"/"comparison(s)" bleiben EINE Form
+        # (§8.18 — echte Pluralformen waeren eine bewusste Textaenderung),
+        # der Gedankenstrich-Zusatz ist ein eigener Schluessel (§8.11).
+        _melden.sprache_aktivieren()
         s = z.get("sammlung") or {}
         art, titel, text = None, None, None
         if self.cfg.get("vision_alarm_unbestaetigt") and self._vision_unbestaetigt(z):
-            art, titel = "unbestaetigt", "suslik vision"
+            art, titel = "unbestaetigt", _sprache.t("meldung.vision.titel")
             wer = self._vision_koerper_namen(z)
-            text = ("vision could not confirm anyone on this pass"
-                    + (f" — the body ranking said {', '.join(wer)}" if wer else "")
-                    + f" ({len(z['bilder'])} picture(s) in the grid)")
+            text = (_sprache.t("meldung.vision.unbestaetigt")
+                    + (" " + _sprache.t("meldung.vision.koerper_zusatz",
+                                        namen=", ".join(wer)) if wer else "")
+                    + " " + _sprache.t("meldung.vision.bilder_zusatz",
+                                       n=len(z["bilder"])))
         elif self.cfg.get("vision_meldung") and (z.get("person") or z.get("bilder")):
-            art, titel = "info", "suslik vision"
-            text = (f"vision: {z['person']} — unanimous, {s.get('voten')} of "
-                    f"{s.get('bilder')} comparison(s)" if z.get("person") else
-                    f"vision: no verdict — {z.get('grund') or s.get('grund')}")
+            art, titel = "info", _sprache.t("meldung.vision.titel")
+            text = (_sprache.t("meldung.vision.einig", name=z["person"],
+                               voten=s.get("voten"), bilder=s.get("bilder"))
+                    if z.get("person") else
+                    _sprache.t("meldung.vision.kein_urteil",
+                               grund=z.get("grund") or s.get("grund")))
         if not text:
             return None
         # .163: ein Lauf, den der Nutzer im Erkennungstest selbst angestossen
@@ -4920,13 +5162,330 @@ class Service:
                 # Altbestaende. Fehler je Gruppe sind laut, kippen aber
                 # nie den Lauf-Abschluss.
                 self._lernlauf_endsichtung(lauf_id)
+                # Vorrat B3: Katalog-Angebots-Bewertung als Schritt INNERHALB
+                # der Anker-Phase (bewusst KEIN eigener Phasenwert — W2.1:
+                # PHASEN/lauf_abgeschlossen/das 8006er-Literal haetten den
+                # Wizard dauerhaft blockiert). Schreibt nur ZUSATZ-Schluessel
+                # in fortschritt (gemischt), nie den anchors-Status.
+                self._lernlauf_vorrat(lauf_id, zustand["events_liste"])
         except Exception as e:
             from core import lernlauf as _ll2
             _ll2.lauf_fortschreiben(dd, fortschritt={"status": f"anchor stage failed: {e}"})
             self.log(f"anchor stage failed ({type(e).__name__}: {e})")
 
+    def bruecke_vorrat(self, person, eids):
+        """Pass-Check ueber die NEUE Kette (.308, User 21.08.: 'Check this pass'
+        lieferte aus 13 Events/5 Kameras EIN Bild — die alte Bruecke misst je
+        Event nur den gespeicherten Crop an der Pixel-Latte). Hier: die Events
+        des Durchgangs werden wie im Lernlauf GEERNTET (alle Frames, Worker-Job
+        je Event unter Live-Vorrang, Norm inklusive), dann Konsens + Linie
+        (core.vorrat.angebote_bewerten) — Ergebnis in einem Bruecken-Laufordner
+        state/lernlauf/B<hash>/ (gleiche Ablage wie Lernlaeufe: Bild-Route,
+        vorrat_aufnehmen und /aehnliche kennen ihn damit automatisch).
+
+        RUNDE LOESUNG (User 21.08.: kein Browser-Pflaster fuer selbst erzeugtes
+        Warten): dieselbe Routine laeuft AUTOMATISCH nach jedem abgeschlossenen
+        Durchgang (Nachlern-Anstoss) UND beim Klick — beide treffen per
+        Event-Ueberlapp denselben Ordner; der Klick erntet hoechstens noch
+        fehlende Events nach (idempotent je Event) und wertet die Vereinigung
+        neu aus. Im Normalfall ist der Vorrat fertig, bevor jemand klickt.
+        -> ("fertig", {nehmen, grenz, v_gesamt}) | ("laeuft", fortschritt_text)
+           | ("fehler", text)."""
+        import hashlib
+        from core import ernte as _ern
+        dd = self.cfg["data_dir"]
+        eids = sorted({str(e) for e in eids if e})
+        if not eids:
+            return "fehler", "no events in this pass"
+        wurzel = os.path.join(dd, "state", "lernlauf")
+        bdir, bid, bekannt = None, None, set()
+        # Ueberlapp-Suche: ein Bruecken-Lauf derselben Person, der mindestens
+        # ein Event dieses Passes traegt (Hook kennt nur die bestaetigten
+        # Events, der Klick den ganzen Durchgang — beide meinen denselben Pass).
+        best = 0
+        try:
+            for d in os.listdir(wurzel):
+                if not d.startswith("B"):
+                    continue
+                m = _ern.manifest_lesen(os.path.join(wurzel, d)) or {}
+                if m.get("person") != person:
+                    continue
+                ue = len(set(m.get("eids") or []) & set(eids))
+                if ue > best:
+                    best, bdir, bid, bekannt = ue, os.path.join(wurzel, d), d, set(m.get("eids") or [])
+        except OSError:
+            pass
+        if bdir is None:
+            bid = "B" + hashlib.sha1("\n".join(eids).encode()).hexdigest()[:10]
+            bdir = os.path.join(wurzel, bid)
+        laeuft = os.path.join(bdir, "laeuft.json")
+        fehler = os.path.join(bdir, "fehler.json")
+        if os.path.isfile(fehler):
+            try:
+                with open(fehler, encoding="utf-8") as f:
+                    txt = json.load(f).get("fehler", "")
+            except Exception:
+                txt = "harvest failed"
+            try:
+                os.unlink(fehler)          # naechster Anstoss versucht es neu
+            except OSError:
+                pass
+            return "fehler", txt
+        if os.path.isfile(laeuft):
+            try:
+                alter = time.time() - os.path.getmtime(laeuft)
+            except OSError:
+                alter = 0
+            if alter < 900:
+                # .310 (User-Fund: 'model did not load' nach 60 s Warten hinter
+                # der Bestands-QS): die Ernte schreibt i/n/zustand in
+                # laeuft.json — der Klick-Handler reicht es durch, das Blatt
+                # zeigt einen kleinen Balken und gibt nicht per Zaehler auf.
+                return "laeuft", self._bruecke_fortschritt(laeuft)
+        geerntet, _summe = _ern.fertig_lesen(bdir) if os.path.isdir(bdir) else (set(), {})
+        fehlend = [e for e in eids if e not in geerntet]
+        if not fehlend and os.path.isfile(os.path.join(bdir, "vorrat.jsonl")):
+            return "fertig", self._bruecke_angebote(bdir, bid, person)
+        # Start (oder Nachernte der fehlenden Events): Regime einfrieren,
+        # Event-Menge im Manifest vereinigen, Hintergrund-Ernte
+        os.makedirs(bdir, exist_ok=True)
+        schwellen = ernte_schwellen_aus_cfg(self.cfg)
+        if _ern.schwellen_pruefen(schwellen):
+            return "fehler", "harvest thresholds missing in config"
+        alle = sorted(bekannt | set(eids))
+        _ern.manifest_schreiben(bdir, {"schema": 2, "bruecke": True, "person": person,
+                                       "version": os.environ.get("SUSLIK_VERSION", "dev"),
+                                       "modell": self.cfg.get("modell"),
+                                       "fps_sample": self.cfg.get("fps_sample"),
+                                       "schwellen": schwellen, "eids": alle,
+                                       "angelegt": round(time.time(), 1)})
+        self._bruecke_puls(laeuft, 0, len(fehlend), "wartet")
+        self._bruecke_alt_raeumen(dd)
+        threading.Thread(target=self._bruecke_ernte,
+                         args=(bdir, bid, fehlend, alle, schwellen),
+                         daemon=True, name="bruecke-ernte").start()
+        return "laeuft", self._bruecke_fortschritt(laeuft)
+
+    @staticmethod
+    def _bruecke_puls(laeuft, i, n, zustand):
+        """laeuft.json der Pass-Ernte: Frische-Puls (mtime) + Fortschritt.
+        zustand: 'wartet' (Slot belegt: anderer Hintergrund-Job oder Live) |
+        'erntet' | 'bewertet'. Schreibfehler sind nie fatal (nur Anzeige)."""
+        try:
+            with open(laeuft, "w", encoding="utf-8") as f:
+                json.dump({"ts": round(time.time(), 1), "i": int(i), "n": int(n),
+                           "zustand": zustand}, f)
+        except OSError:
+            pass
+
+    @staticmethod
+    def _bruecke_fortschritt(laeuft):
+        """-> {"msg", "i", "n", "zustand"} fuer den Klick-Handler (laden=True).
+        Texte englisch wie die uebrigen Bruecken-Meldungen dieses Blatts
+        (Overlay-Texte: ME2-Uebersetzungsstrang)."""
+        d = {}
+        try:
+            with open(laeuft, encoding="utf-8") as f:
+                d = json.load(f) or {}
+        except (OSError, ValueError):
+            pass
+        i, n, z = int(d.get("i") or 0), int(d.get("n") or 0), str(d.get("zustand") or "erntet")
+        if z == "wartet":
+            msg = ("waiting for another background job to finish, then preparing "
+                   f"the pictures of this pass ({i} of {n} event(s) done) \u2026")
+        elif z == "bewertet":
+            msg = f"rating the pictures of this pass ({n} event(s) harvested) \u2026"
+        else:
+            msg = f"preparing the pictures of this pass: {i} of {n} event(s) done \u2026"
+        return {"msg": msg, "i": i, "n": n, "zustand": z}
+
+    def _bruecke_angebote(self, bdir, bid, person):
+        """Angebote + Grenzfaelle EINER Person aus der vorrat.jsonl eines
+        Bruecken-Laufs, in der Item-Form des Overlays."""
+        zeilen = []
+        with open(os.path.join(bdir, "vorrat.jsonl"), encoding="utf-8") as f:
+            for l in f:
+                try:
+                    zeilen.append(json.loads(l))
+                except Exception:
+                    pass
+        sim_min = 0.45   # dieselbe 'sicher'-Grenze wie bild_stufe/angebote_bewerten
+
+        def _item(z):
+            basis = os.path.basename(str(z.get("datei_v") or ""))
+            return {"eid": z["eid"], "datei": basis, "lauf_id": bid,
+                    "herkunft": "vorrat", "sim": z.get("sim"), "norm": z.get("norm"),
+                    "richtung": z.get("richtung"),
+                    "url": f"/lernlauf/vorrat/{bid}/{urllib.parse.quote(basis)}"}
+        nehmen = [_item(z) for z in zeilen
+                  if z.get("angebot") and z.get("person") == person]
+        # Grenzfaelle = Identitaet sicher, Norm unter der Linie aber ueber der
+        # Sammel-Schwelle (die 'quality only fair'-Stufe der alten Bruecke)
+        grenz = [_item(z) for z in zeilen
+                 if not z.get("angebot") and z.get("grund") == "unter_linie"
+                 and z.get("person") == person and (z.get("sim") or 0) >= sim_min
+                 and (z.get("fremd") is None or z["fremd"] < z["sim"])]
+        return {"nehmen": nehmen, "grenz": grenz, "v_gesamt": len(zeilen)}
+
+    def _bruecke_alt_raeumen(self, dd, tage=7):
+        """Bruecken-Ordner aelter als `tage` entfernen (sie sind klein und
+        nur Angebots-Zwischenstand; Uebernahmen sind Kopien in faces/)."""
+        import shutil
+        wurzel = os.path.join(dd, "state", "lernlauf")
+        grenze = time.time() - tage * 86400
+        try:
+            for d in os.listdir(wurzel):
+                p = os.path.join(wurzel, d)
+                if d.startswith("B") and os.path.isdir(p) and os.path.getmtime(p) < grenze:
+                    shutil.rmtree(p, ignore_errors=True)
+        except OSError:
+            pass
+
+    def _bruecke_ernte(self, bdir, bid, eids, alle_eids, schwellen):
+        """Hintergrund-Ernte eines Passes: 1 Worker-Job je FEHLENDEM Event
+        (eids) unter Live-Vorrang (dasselbe Lock-Muster wie _lernlauf_ernte),
+        danach Vorrat-Bewertung ueber ALLE Events des Laufs (alle_eids).
+        Fehler landen LAUT in fehler.json + Log."""
+        from core import ernte as _ern, vorrat as _vor
+        import anlernen as _al
+        dd = self.cfg["data_dir"]
+        laeuft = os.path.join(bdir, "laeuft.json")
+        try:
+            # Event-Daten (start/kamera/clip_s) aus der Akte — fuer die
+            # Durchgangs-Kette der Vorrat-Bewertung
+            akte = {}
+            dp = os.path.join(dd, "state", "deckung.jsonl")
+            if os.path.exists(dp):
+                with open(dp, encoding="utf-8") as f:
+                    for l in f:
+                        try:
+                            d = json.loads(l)
+                        except Exception:
+                            continue
+                        if d.get("eid") in alle_eids:
+                            akte[d["eid"]] = d
+            events_liste = []
+            for eid in alle_eids:
+                d = akte.get(eid) or {}
+                events_liste.append({"eid": eid,
+                                     "start": float(d.get("start") or d.get("ts") or 0),
+                                     "kamera": d.get("camera") or "?",
+                                     "clip_s": float(d.get("clip_s") or d.get("dauer_s") or 0)})
+            timeout_s = int(self.cfg.get("nachhol_analyse_timeout_s") or 300)
+            fps = self.cfg.get("fps_sample")
+            n_ges, i_fertig = len(eids), 0
+            for eid in eids:
+                d = akte.get(eid) or {}
+                start = float(d.get("start") or d.get("ts") or 0)
+                abgesendet, antwort = False, None
+                while not abgesendet:
+                    # Slot belegt (anderer GPU-Hintergrund-Job oder Live) ->
+                    # EHRLICH 'wartet' melden statt still zu stehen (.310)
+                    if self._gpu_bg_lock.locked() or self.lock.locked():
+                        self._bruecke_puls(laeuft, i_fertig, n_ges, "wartet")
+                    with self._gpu_bg_lock:
+                        if not self.lock.locked():
+                            self._bruecke_puls(laeuft, i_fertig, n_ges, "erntet")
+                            antwort = self._worker().job(
+                                {"typ": "ernte", "eid": eid, "kamera": d.get("camera"),
+                                 "ts": start, "fps_sample": fps,
+                                 "schwellen": schwellen, "lauf_dir": bdir,
+                                 "clip_quelle": "bruecke",
+                                 "clip_vod": self.cfg.get("clip_vod") is not False,
+                                 "log": os.path.join(bdir, "ernte.log")},
+                                timeout_s=timeout_s)
+                            abgesendet = True
+                    if not abgesendet:
+                        time.sleep(1)
+                eintrag = {"eid": eid, "ok": bool(antwort and antwort.get("ok"))}
+                if antwort:
+                    for k in ("detektionen", "kandidaten", "m", "s", "v"):
+                        eintrag[k] = antwort.get(k)
+                    if not antwort.get("ok"):
+                        eintrag["fehler"] = str(antwort.get("fehler"))[:160]
+                _ern.fertig_anhaengen(bdir, eintrag)
+                i_fertig += 1
+                # Puls fuer die Frische-Pruefung des Klick-Handlers + Fortschritt
+                self._bruecke_puls(laeuft, i_fertig, n_ges, "erntet")
+            self._bruecke_puls(laeuft, n_ges, n_ges, "bewertet")
+            refs = _al.refs_matrix_roh(self.cfg.get("modell"))
+            if not any(len(M) for M in refs.values()):
+                raise RuntimeError("reference cache empty — open the person page "
+                                   "once more in a minute")
+            s = dict(schwellen)
+            s["szenario_gap_min"] = int(self.cfg.get("szenario_gap_min", 5))
+            erg = _vor.angebote_bewerten(bdir, events_liste, s, refs)
+            self.log(f"PASS STOCK ({bid}): {len(eids)} event(s) harvested "
+                     f"({len(alle_eids)} in the pass) -> {erg['angebote']} offer(s) "
+                     f"from {erg['v_gesamt']} stock faces"
+                     + (f"; rejected {erg['gruende']}" if erg["gruende"] else ""))
+        except Exception as e:
+            self.log(f"PASS CHECK (stock chain, {bid}) failed: {type(e).__name__}: {e}")
+            try:
+                with open(os.path.join(bdir, "fehler.json"), "w", encoding="utf-8") as f:
+                    json.dump({"fehler": f"{type(e).__name__}: {e}"[:200]}, f)
+            except OSError:
+                pass
+        finally:
+            try:
+                os.unlink(laeuft)
+            except OSError:
+                pass
+
+    def _lernlauf_vorrat(self, lauf_id, events_liste):
+        """Vorrat-Bewertung (core/vorrat.angebote_bewerten) fuer EINEN Lauf.
+        Fehler bleiben LAUT im Log + fortschritt, kippen aber nie den
+        Lauf-Abschluss (der Anker-Status ist zu diesem Zeitpunkt final)."""
+        from core import ernte as _ern, vorrat as _vor
+        import anlernen as _al
+        dd = self.cfg["data_dir"]
+        lauf_dir = os.path.join(dd, "state", "lernlauf", str(lauf_id))
+        try:
+            manifest = _ern.manifest_lesen(lauf_dir) or {}
+            schwellen = dict(manifest.get("schwellen") or {})
+            if not _ern.vorrat_schwellen_da(schwellen):
+                self.log(f"stock stage skipped (run {lauf_id}): run regime carries "
+                         "no stock thresholds (older run or stock disabled)")
+                return
+            schwellen["szenario_gap_min"] = int(self.cfg.get("szenario_gap_min", 5))
+            refs = _al.refs_matrix_roh(self.cfg.get("modell"))
+            if not any(len(M) for M in refs.values()):
+                # W2.13: mit leeren Matrizen wird NICHT geurteilt — laut
+                # aussetzen statt 'empfohlen fuer niemanden'. Kaltstart laeuft
+                # ueber die Anker-/Unbekannt-Maschinerie, nicht ueber den Vorrat.
+                from core import lernlauf as _ll
+                _ll.lauf_fortschreiben(dd, fortschritt={
+                    "stock offers": "skipped — reference cache empty/stale "
+                                    "(rebuilds after the next check)"})
+                self.log(f"stock stage skipped (run {lauf_id}): reference cache "
+                         "empty or built for another model — no identity axis, "
+                         "no offers")
+                return
+            erg = _vor.angebote_bewerten(lauf_dir, events_liste, schwellen, refs)
+            from core import lernlauf as _ll
+            _ll.lauf_fortschreiben(dd, fortschritt={
+                "stock offers": erg["angebote"],
+                "stock faces": erg["v_gesamt"]})
+            self.log(f"stock stage finished (run {lauf_id}): "
+                     f"{erg['angebote']} catalog offers from {erg['v_gesamt']} "
+                     f"stock faces across {erg['durchgaenge']} passes"
+                     + (f"; rejected: {erg['gruende']}" if erg["gruende"] else "")
+                     + (f"; {erg['fehlend']} candidate files missing" if erg["fehlend"] else ""))
+        except Exception as e:
+            self.log(f"stock stage failed (run {lauf_id}): {type(e).__name__}: {e}")
+            try:
+                from core import lernlauf as _ll
+                _ll.lauf_fortschreiben(dd, fortschritt={
+                    "stock offers": f"failed: {type(e).__name__}: {e}"[:120]})
+            except Exception:
+                pass
+
     def _lernlauf_endsichtung(self, lauf_id):
-        """.294: Sichtung + 0-Treffer-Aussortierung als TEIL des Laufs."""
+        """.294: Sichtung als TEIL des Laufs (Cache je Gruppe vorrechnen, damit
+        die Benennung sofort antwortet). .313 (User 21.08., 'nicht automatisch
+        rausnehmen'): die 0-Treffer-AUSSORTIERUNG ist abgeschaltet — keine
+        Gruppe wird hier mehr verworfen oder ihrer Bilder beraubt; der User
+        sieht jede Gruppe und entscheidet selbst."""
         from core import lernlauf as _ll
         import anlernen as _al
         dd = self.cfg["data_dir"]
@@ -4943,35 +5502,20 @@ class Service:
                  and not s.get("person")]
         if not offen:
             return
-        weg, behalten = 0, 0
+        fertig, fehler = 0, 0
         for satz in offen:
             try:
-                _al.gruppen_sichtung(satz, ldir, emb=self.embedder)
-                si = _al.sichtung_lesen(satz, ldir, self.cfg["modell"])
-                if si is None:
-                    behalten += 1
-                    continue
-                bew = _al.sichtung_bewerten(
-                    None, si, _al.refs_matrix_roh(self.cfg["modell"]),
-                    self.cfg["benennung_dup_sim"], [])
-                if bew and not any(s.get("stufe") in ("gut", "grenzfall")
-                                   for s in bew):
-                    _ll.anker_verwerfen(dd, str(satz.get("anker_id")))
-                    weg += 1
-                    self.log(f"end check: group {satz.get('anker_id')} set "
-                             f"aside — nothing passed the picture check "
-                             f"({int(si.get('gesamt') or 0)} pictures, "
-                             "detector false hits)")
-                else:
-                    behalten += 1
+                _al.gruppen_sichtung(satz, ldir, emb=self.embedder,
+                                     norm_latte=norm_latte_aus_cfg(self.cfg))
+                fertig += 1
             except Exception as e:
-                behalten += 1
+                fehler += 1
                 self.log(f"end check: group {satz.get('anker_id')} not "
-                         f"judged ({type(e).__name__}: {e}) — kept")
-        if weg:
-            self.log(f"end check (run {lauf_id}): {behalten} group"
-                     f"{'s' if behalten != 1 else ''} kept, {weg} set aside "
-                     "(no usable faces)")
+                         f"pre-checked ({type(e).__name__}: {e})")
+        self.log(f"end check (run {lauf_id}): picture check prepared for "
+                 f"{fertig} group{'s' if fertig != 1 else ''}"
+                 + (f", {fehler} failed" if fehler else "")
+                 + " — nothing is set aside automatically")
 
     def _lernlauf_ernte(self):
         """Frontal-Ernte (Konzept §P1): 1 Event je Worker-Job; die Live-Wache wird
@@ -5012,15 +5556,12 @@ class Service:
         # mischt eine Schwellen-Aenderung + execv zwei Gate-Saetze in EINEN Lauf.
         manifest = _ern.manifest_lesen(lauf_dir)
         if manifest is None:
-            schwellen = {"det_thresh": self.cfg.get("det_thresh"),
-                         "fd_front_min": self.cfg.get("fd_front_min"),
-                         "fd_sharp_min": self.cfg.get("fd_sharp_min"),
-                         "fd_det_max": self.cfg.get("fd_det_max"),
-                         "m_det_min": self.cfg.get("ernte_m_det_min"),
-                         "m_kante_min": self.cfg.get("ernte_m_kante_min"),
-                         "m_sharp_min": self.cfg.get("ernte_m_sharp_min"),
-                         "s_det_min": self.cfg.get("ernte_s_det_min"),
-                         "s_winkel_max": self.cfg.get("ernte_s_winkel_max")}
+            # Vorrat B2/B3: Sammel- UND Phasen-Schwellen wandern GLEICHNAMIG
+            # ins Regime (kein Umbenennungs-Mapping wie ernte_m_* -> m_*,
+            # Bauplan B5) — Resume und Vorrat-Bewertung lesen IMMER das
+            # Manifest, nie die aktuelle Config. Alte Manifeste ohne die
+            # Keys: v-Gate aus, deklariert. .308: EINE Quelle mit der Bruecke.
+            schwellen = ernte_schwellen_aus_cfg(self.cfg)
             fehlend = _ern.schwellen_pruefen(schwellen)
             if fehlend:
                 _ll.lauf_fortschreiben(dd, fortschritt={
@@ -5028,7 +5569,13 @@ class Service:
                 self.log(f"harvest failed: thresholds missing ({fehlend})")
                 return
             starts = [e.get("start") for e in liste if e.get("start")]
-            manifest = {"schema": 1,
+            manifest = {"schema": 2 if self.cfg.get("vorrat_aktiv") else 1,
+                        # schema 2 = Regime traegt Vorrats-Schwellen (W1.21:
+                        # ein Downgrade-Resume ist damit wenigstens ERKENNBAR;
+                        # Altversionen ignorieren unbekannte Keys und ernten
+                        # ohne v weiter — die Vorrat-Bewertung sieht das an
+                        # fehlenden Feldern und urteilt nur auf dem Material,
+                        # das v-faehig geerntet wurde).
                         "version": os.environ.get("SUSLIK_VERSION", "dev"),
                         "modell": self.cfg.get("modell"),
                         # .83: Lauf-Wahl aus dem Wizard schlaegt den Config-Default
@@ -5096,10 +5643,19 @@ class Service:
             # aus der Config (Default-Paar in load_config, kein Hardcode).
             erz_alter_min = float(self.cfg.get("clip_erzeugung_alter_min") or 30)
             erz_deckel_s = int(self.cfg.get("clip_erzeugung_deckel_s") or 300)
+            # .313 Ernte-Rate (User-Fund 21.08.: '~5 min' geschaetzt, 11 min real):
+            # die Restzeit kommt aus den EIGENEN Proben dieses Laufs (clip_s,
+            # wall_s je fertigem Event), bis dahin aus der gespeicherten Rate des
+            # letzten Laufs dieser Maschine, erst ganz ohne beides aus den
+            # Analyse-Konstanten der Wanduhr (altes Verhalten).
+            _rate_hw, _rate_ver = _placement_hw_key(), os.environ.get("SUSLIK_VERSION", "dev")
+            rate_alt = _wu.ernte_rate_lesen(dd, _rate_hw, _rate_ver)
+            proben = []
             for i, e in enumerate(mit_clip, 1):
                 eid = e.get("eid")
                 if eid in fertig:
                     continue
+                _t_ev = time.perf_counter()
                 # .288 Alt-Event-Weiche: Alter = jetzt minus Event-ENDE
                 # (start + clip_s). Ab erz_alter_min muss Frigate den Clip
                 # erst aus Segmenten ERZEUGEN — der Zug laeuft dann im
@@ -5251,7 +5807,12 @@ class Service:
                     return
                 eintrag = {"eid": eid, "ok": bool(antwort and antwort.get("ok"))}
                 if antwort and antwort.get("ok"):
-                    for k in ("detektionen", "fd", "ohne_pose", "kandidaten", "m", "s"):
+                    # .32x: ohne_struktur MIT transportieren — sonst faellt die
+                    # Diagnose des Struktur-Tests still raus (QS-Befund 22.08.:
+                    # "der neue Zaehler erreicht weder fertig.jsonl noch die
+                    # Anzeige"; im Lauf L20260822_201944 live bestaetigt).
+                    for k in ("detektionen", "fd", "ohne_pose", "kandidaten", "m", "s",
+                              "ohne_struktur"):
                         eintrag[k] = int(antwort.get(k) or 0)
                         summe[k] = summe.get(k, 0) + eintrag[k]
                     for k in ("frames_gelesen", "frames_soll"):
@@ -5347,14 +5908,21 @@ class Service:
                     self.log(f"searched-index write failed ({_de}) — the event "
                              "may be searched again in a later run")
                 fertig.add(eid)
+                proben.append((float(e.get("clip_s") or 0.0),
+                               time.perf_counter() - _t_ev))
                 rest_txt = "?"
                 try:
                     offen = [{"clip_s": x.get("clip_s") or 0.0,
                               "im_cache": os.path.isfile(os.path.join(
                                   clips_dir, str(x.get("eid")).replace("/", "_") + ".mp4"))}
                              for x in mit_clip[i:] if x.get("eid") not in fertig]
-                    p = _wu.lauf_prognose(werte, offen, live_last=True)
-                    rest_txt = f"~{int(round((p['gesamt_s'] - p['kalt_s']) / 60))} min"
+                    rate = _wu.ernte_rate_fit(proben) or rate_alt
+                    if rate:
+                        rest_s = _wu.ernte_prognose_s(rate, offen)
+                    else:
+                        p = _wu.lauf_prognose(werte, offen, live_last=True)
+                        rest_s = p['gesamt_s'] - p['kalt_s']
+                    rest_txt = f"~{int(round(rest_s / 60))} min"
                 except Exception:
                     pass
                 fs = {"event": f"{i}/{n}", "candidates": summe.get("kandidaten", 0),
@@ -5364,6 +5932,10 @@ class Service:
                       "without a face": summe.get("ohne_gesicht", 0),
                       "clip not readable": summe.get("unlesbar", 0),
                       "rest": rest_txt}
+                if summe.get("ohne_struktur"):
+                    # .32x: was der Struktur-Test aussortiert hat — Nacken, Ohren,
+                    # Hinterkoepfe, Vegetation. Nur zeigen, wenn es etwas gab.
+                    fs["no face structure"] = summe["ohne_struktur"]
                 if summe.get("ohne_pose"):
                     fs["no pose data"] = summe["ohne_pose"]
                 if summe.get("unvollstaendig"):
@@ -5391,6 +5963,16 @@ class Service:
             if befunde:
                 schluss["files vs counters"] = f"{len(befunde)} mismatches (see log)"
             _ll.lauf_fortschreiben(dd, fortschritt=schluss)
+            _rate = _wu.ernte_rate_fit(proben)
+            if _rate:
+                try:
+                    _wu.ernte_rate_schreiben(dd, _rate_hw, _rate_ver, _rate, lauf_id)
+                    self.log(f"harvest rate measured: {_rate['k']} s per clip-second "
+                             f"+ {_rate['fix_s']} s per event over {_rate['n']} events "
+                             f"({_rate['wall_s']} s for {_rate['clip_s']} clip-s) — "
+                             "next run estimates with it")
+                except OSError as _re:
+                    self.log(f"harvest rate not saved ({_re})")
             self.log(f"harvest finished (run {lauf_id}): "
                      f"{summe.get('kandidaten', 0)} candidates "
                      f"({summe.get('m', 0)} crop-worthy, {summe.get('s', 0)} anchor-ready) "
@@ -5520,10 +6102,13 @@ class Service:
                                 "datei": ziel_name, "herkunft": "enrollment",
                                 "eid": d["eid"], "aktiv": True}, ensure_ascii=False) + "\n")
             f.flush()
-        try:
-            os.remove(os.path.join(self.cfg["data_dir"], "clips", "refcache.npz"))
-        except FileNotFoundError:
-            pass                                  # naechster Analyse-Lauf baut mit neuem Master
+        import anlernen as _al                    # .313: einpflegen statt verwerfen
+        if not _al.refcache_ergaenzen_viele(ziel_person, [(os.path.join(ziel_dir, ziel_name),
+                                                          ziel_name)], self._emb):
+            try:
+                os.remove(os.path.join(self.cfg["data_dir"], "clips", "refcache.npz"))
+            except FileNotFoundError:
+                pass                              # naechster Analyse-Lauf baut mit neuem Master
         self._enroll_append({**d, "status": "aufgenommen", "als": ziel_person,
                              "ts_entschieden": round(time.time(), 1)})
         self.log(f"ENROLLMENT: {d['datei']} -> master/{ziel_person}/ (export + drift watchdog running)")
@@ -5570,7 +6155,17 @@ class Service:
                 # Fixture sofort mit Traceback auf STDERR — der Banner zeigte ROT mit leerem
                 # Text. Eine Warnung ohne Grund ist nicht pruefbar und erzieht zum Wegklicken.
                 _txt = ((r.stdout or b"") + b"\n" + (r.stderr or b"")).decode(errors="replace").strip()
-                self.enroll_warnung = (time.time(), _txt[-400:])
+                # .313 (User-Screenshot 21.08.): die letzten 400 Zeichen waren NUR die
+                # insightface-FutureWarning — der ROT-Block davor blieb unsichtbar.
+                # Warn-/Rauschzeilen raus, dann ab dem ROT-Block (sonst Schwanz).
+                _zl = [z for z in _txt.splitlines()
+                       if z.strip() and not any(m in z for m in (
+                           "FutureWarning", "tform.estimate", "set det-size",
+                           "pthread_setaffinity", "find model", "Applied providers",
+                           "warnings.warn"))]
+                _ab = next((i for i, z in enumerate(_zl) if z.startswith("ROT")), None)
+                _txt = "\n".join(_zl[_ab:] if _ab is not None else _zl)
+                self.enroll_warnung = (time.time(), _txt[-700:])
                 self.log("DRIFT WATCHDOG RED after enrollment — check the reference! (System page)")
         threading.Thread(target=nacharbeit, daemon=True).start()
 
@@ -5598,10 +6193,13 @@ class Service:
             f.write(json.dumps({"ts": round(time.time(), 1), "person": person, "datei": name,
                                 "herkunft": "upload", "aktiv": True}, ensure_ascii=False) + "\n")
             f.flush()
-        try:
-            os.remove(os.path.join(self.cfg["data_dir"], "clips", "refcache.npz"))
-        except FileNotFoundError:
-            pass
+        import anlernen as _al                    # .313: einpflegen statt verwerfen
+        if not _al.refcache_ergaenzen_viele(person, [(os.path.join(ziel_dir, name), name)],
+                                            self._emb):
+            try:
+                os.remove(os.path.join(self.cfg["data_dir"], "clips", "refcache.npz"))
+            except FileNotFoundError:
+                pass
         self.log(f"UPLOAD: {person}/{name} into the master")
         return True, f"{name} aufgenommen (Export beim naechsten sync/Enrollment)"
 
@@ -5722,10 +6320,20 @@ class Service:
                     self.frigate_fehler = None            # Frigate-Ausfall, und ein geglueckter Retry
                     self.frigate_fehlerserie = 0          # darf keine echte Fehlerserie loeschen
             except Exception as e:
-                if not nachhol:
+                # .312 (User-Screenshot 21.08. 13:4x): ein 404 auf EIN Event heisst
+                # 'Frigate antwortet, das Event gibt es dort nicht (mehr)' — z. B.
+                # ein kurzer Fehlstart, den Frigate nach dem MQTT-'new' wieder
+                # verwirft. Das ist KEIN Ausfall: weder Banner noch Fehlerserie
+                # (der Banner blieb sonst bis zum naechsten Event stehen — im
+                # MQTT-Betrieb stundenlang; der Kommentar oben sagte das seit je,
+                # der Code tat es nicht).
+                if not nachhol and getattr(e, "code", None) != 404:
                     self.frigate_fehler = (time.time(), f"event fetch: {e}")
                     self.frigate_fehlerserie = getattr(self, "frigate_fehlerserie", 0) + 1
-                self.log(f"{eid}: Frigate fetch failed: {e} (no processed entry, sweep will catch up)")
+                self.log(f"{eid}: Frigate fetch failed: {e} ("
+                         + ("event not found — Frigate discarded it; no banner"
+                            if getattr(e, "code", None) == 404
+                            else "no processed entry, sweep will catch up") + ")")
                 return None
             camera = ev.get("camera", "?")
             eigen = eid in self.own_writes          # Echo-Freiheit: unser eigenes Label ist
@@ -6095,7 +6703,7 @@ class Service:
             # EVENT-Zeit statt Verarbeitungszeit (Szenen-Fenster rechnet in Event-Zeit;
             # Sweep-Nachverarbeitung bleibt damit zeitlich konsistent)
             self.last_seen[p] = max(self.last_seen.get(p, 0), entry.get("start") or now)
-            self._nachlern_anstossen(p)      # Bestands-Suche nach Durchgangs-Ende (Debounce, User 21.07.)
+            self._nachlern_anstossen(p, entry.get("eid"))   # Bestands-Suche + Auto-Vorrat nach Durchgangs-Ende (Debounce, User 21.07./.308)
         if alt or not neu:
             return False
         # SZENEN-Ereignis (User 18.07. "szenenorientiert"): genau EIN Publish pro
@@ -6125,7 +6733,12 @@ class Service:
                      f"(category erkannt not enabled)")
         if not cfg["anwesenheit_push"] or entry.get("alerted"):
             return False
+        _melden.sprache_aktivieren()   # Sprach-Stufe 4, Eintrittspunkt (b)
         t = datetime.datetime.fromtimestamp(entry.get("start") or entry["ts"]).strftime("%H:%M")
+        # SPRACH-STUFE 4 — GRENZE, BEWUSST: dieser Anwesenheits-Satz ist
+        # DEUTSCH ("… erkannt (…)"); de->en waere eine bewusste Textaenderung,
+        # nie Teil des Einzugs (do_POST-Marker (b)). Nur der TITEL ist
+        # sprachfaehig — er kommt aus der Kategorie-Anzeige (Tranche D).
         msg = (f"{' + '.join(neu)} erkannt ({entry['camera']}"
                f"{' · ' + ' + '.join(_ar) if _ar else ''}, {t})")
         if self.dry_alert:
@@ -6135,7 +6748,9 @@ class Service:
             # push() liefert False, wenn Pushover die Nachricht ABLEHNT (status != 1, z.B.
             # falsches token/user). Ohne diese Pruefung stand "PRESENCE-PUSH" im Log und die
             # UI zeigte "gepusht", waehrend nie ein Push ankam.
-            if not push(cfg, f"suslik: {KAT_LABELS['erkannt']}", msg, self._best_crop(event_dir, entry, neu)):
+            if not push(cfg, _sprache.t("meldung.titel.kategorie",
+                                        wort=_kat_wort("erkannt")),
+                        msg, self._best_crop(event_dir, entry, neu)):
                 self.log(f"presence push REJECTED by Pushover (status!=1) — check token/user: {msg}")
                 return False
             self.log(f"PRESENCE-PUSH: {msg}")
@@ -6257,54 +6872,255 @@ class Service:
         except OSError:
             return 0
 
-    def cleanup_cache(self):
+    def cache_stand(self):
+        """Clip-Cache-Groesse (GB) und freier Platz (GB) am Datenverzeichnis — EINE Quelle fuer
+        System-Seite, Aufraeum-Knopf und Platten-Wache."""
+        import shutil
+        cache = os.path.join(self.cfg["data_dir"], "clips")
+        gesamt = 0
+        try:
+            for fn in os.listdir(cache):
+                if fn.endswith((".mp4", ".part")):
+                    try:
+                        gesamt += os.path.getsize(os.path.join(cache, fn))
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+        try:
+            frei = shutil.disk_usage(self.cfg["data_dir"]).free
+        except OSError:
+            frei = 0
+        return gesamt / 1024**3, frei / 1024**3
+
+    def cleanup_cache(self, grund="event"):
         """Record-Clips aelter clip_retention_d Tage loeschen (Crops/Logs/refcache bleiben;
         Frigate haelt die Aufnahme selbst vor, der Clip ist bei Bedarf erneut holbar).
         N8b (Issue #4): zusaetzlich Size-Cap clip_cache_max_gb — bei hoher Input-
         Bitrate (Feldbericht: ~10,5 GB/Tag -> ~74 GB steady) laeuft die Platte sonst voll,
-        bevor die Alters-Eviction je greift. Aelteste zuerst, bis unter den Deckel."""
-        try:
-            cutoff = time.time() - self.cfg["clip_retention_d"] * 86400
-            cache = os.path.join(self.cfg["data_dir"], "clips")
-            gone = [fn for fn in os.listdir(cache)
-                    if fn.endswith((".mp4", ".part")) and os.path.getmtime(os.path.join(cache, fn)) < cutoff]
-            for fn in gone:
-                os.remove(os.path.join(cache, fn))
-            if gone:
-                self.log(f"cache cleanup: {len(gone)} clips older than {self.cfg['clip_retention_d']}d deleted")
-            cap = self.cfg["clip_cache_max_gb"] * 1024**3
-            rest = []
-            for fn in os.listdir(cache):
-                if fn.endswith((".mp4", ".part")):
-                    p = os.path.join(cache, fn)
-                    try:
-                        rest.append((os.path.getmtime(p), os.path.getsize(p), p))
-                    except OSError:
-                        pass
-            gesamt = sum(r[1] for r in rest)
-            if gesamt > cap:
-                rest.sort()                                   # aelteste zuerst
-                n = 0
+        bevor die Alters-Eviction je greift. Aelteste zuerst, bis unter den Deckel.
+        .313 (Issue #25, Tokn59: 'Disk 0 bytes'): dritte Regel = MINDESTFREI
+        disk_frei_min_gb — unter der Marke fliegen die aeltesten Clips unabhaengig vom
+        Deckel, bis wieder Luft ist. Und: der Lauf haengt nicht mehr NUR am verarbeiteten
+        Event (auf voller Platte scheiterte die Verarbeitung und damit das Aufraeumen),
+        sondern laeuft auch beim Start, alle 10 min (start_plattenwache) und per Knopf.
+        Reicht der Clip-Cache nicht, wird es LAUT (disk_warnung -> System-Ampel rot).
+        -> dict {geloescht, frei_mb, cache_gb, frei_gb, knapp} fuer den Knopf."""
+        import shutil
+        erg = {"geloescht": 0, "frei_mb": 0.0, "cache_gb": 0.0, "frei_gb": 0.0, "knapp": False}
+        with self._cleanup_lock:
+            try:
+                cutoff = time.time() - self.cfg["clip_retention_d"] * 86400
+                cache = os.path.join(self.cfg["data_dir"], "clips")
                 from core import frames as _fr
-                for _, groesse, p in rest:
-                    # Z1 (konzept_frames v2): GEPINNTE Clips haelt gerade
-                    # ein Abnehmer (Refcount je Halter) — nie wegraeumen,
-                    # sonst reisst der Size-Cap dem zweiten Halter die
-                    # Datei unterm Urteil weg (Widerleger-MUSS 4).
-                    if _fr.gepinnt(p):
-                        continue
-                    if gesamt <= cap:
-                        break
+                # .32x (Vorfall 22.08.): der ALTERS-Zweig prueft die Pins jetzt
+                # ebenfalls. Bis hierher tat das NUR der Size-Cap unten — mit
+                # derselben Begruendung (Widerleger-MUSS 4), aber eben nur dort.
+                # Folge: ein gepinnter Clip, der aelter als clip_retention_d ist,
+                # wurde weggeraeumt, obwohl ihn gerade jemand haelt. Real
+                # passiert um 18:37 mit dem Fixpunkt-Clip des Qualitaetsgates
+                # ("cache cleanup: 1 clips older than 7d deleted"): das Gate
+                # verlor sein Pruefmaterial, die Pin-Datei blieb als Waise
+                # liegen. Dasselbe kann einen laufenden Lernlauf treffen.
+                gone = [fn for fn in os.listdir(cache)
+                        if fn.endswith((".mp4", ".part"))
+                        and os.path.getmtime(os.path.join(cache, fn)) < cutoff
+                        and not _fr.gepinnt(os.path.join(cache, fn))]
+                befreit = 0
+                for fn in gone:
                     try:
-                        os.remove(p)
-                        gesamt -= groesse
-                        n += 1
+                        befreit += os.path.getsize(os.path.join(cache, fn))
                     except OSError:
                         pass
-                self.log(f"cache cleanup: size cap {self.cfg['clip_cache_max_gb']} GB exceeded — "
-                         f"{n} oldest clips deleted, now {gesamt / 1024**3:.1f} GB")
-        except Exception as e:
-            self.log(f"cache cleanup error: {e}")
+                    os.remove(os.path.join(cache, fn))
+                if gone:
+                    self.log(f"cache cleanup: {len(gone)} clips older than {self.cfg['clip_retention_d']}d deleted")
+                erg["geloescht"] += len(gone)
+                _cap_gb, _frei_gb, _quelle = self.speichergrenzen()
+                cap = _cap_gb * 1024**3
+                boden = _frei_gb * 1024**3
+                rest = []
+                for fn in os.listdir(cache):
+                    if fn.endswith((".mp4", ".part")):
+                        p = os.path.join(cache, fn)
+                        try:
+                            rest.append((os.path.getmtime(p), os.path.getsize(p), p))
+                        except OSError:
+                            pass
+                gesamt = sum(r[1] for r in rest)
+                frei = shutil.disk_usage(self.cfg["data_dir"]).free
+                if gesamt > cap or frei < boden:
+                    rest.sort()                                   # aelteste zuerst
+                    n = 0
+                    for _, groesse, p in rest:
+                        # Z1 (konzept_frames v2): GEPINNTE Clips haelt gerade
+                        # ein Abnehmer (Refcount je Halter) — nie wegraeumen,
+                        # sonst reisst der Size-Cap dem zweiten Halter die
+                        # Datei unterm Urteil weg (Widerleger-MUSS 4).
+                        if _fr.gepinnt(p):
+                            continue
+                        if gesamt <= cap and frei >= boden:
+                            break
+                        try:
+                            os.remove(p)
+                            gesamt -= groesse
+                            frei += groesse
+                            befreit += groesse
+                            n += 1
+                        except OSError:
+                            pass
+                    erg["geloescht"] += n
+                    self.log(f"cache cleanup ({grund}): "
+                             + ("size cap exceeded" if gesamt + befreit > cap else f"free space below {_frei_gb:.0f} GB")
+                             + f" — {n} oldest clips deleted, cache now {gesamt / 1024**3:.1f} GB, "
+                             f"{frei / 1024**3:.1f} GB free")
+                # .315 (User 21.08.): live/ raeumen — zwei Alters-Achsen, Ausschuss
+                # zuerst. NUR Kamera-Unterordner; preview/, meldungen.jsonl und
+                # verbrauch.csv sind laufende Dateien und bleiben unangetastet.
+                lv_n, lv_b = self._live_aufraeumen()
+                if lv_n:
+                    befreit += lv_b
+                    erg["geloescht"] += lv_n
+                    self.log(f"live cleanup ({grund}): {lv_n} files deleted, "
+                             f"{lv_b / 1024**3:.1f} GB freed")
+                frei = shutil.disk_usage(self.cfg["data_dir"]).free
+                erg.update(frei_mb=befreit / 1024**2, cache_gb=gesamt / 1024**3, frei_gb=frei / 1024**3,
+                           knapp=bool(boden and frei < boden))
+                if erg["knapp"]:
+                    # Der Clip-Cache allein reicht nicht mehr: LAUT statt still sterben.
+                    self.disk_warnung = (time.time(), round(frei / 1024**3, 1))
+                    self.log(f"DISK LOW: {frei / 1024**3:.1f} GB free below {_frei_gb:.0f} GB "
+                             f"and the clip cache is empty — free space on the data volume (System page)")
+                else:
+                    self.disk_warnung = None
+            except Exception as e:
+                self.log(f"cache cleanup error: {e}")
+        return erg
+
+    def _live_aufraeumen(self):
+        """.315 (User 21.08. "sollte das nicht aufgeraeumt werden"): Retention fuer
+        <data_dir>/live/<kamera>/ — der einzige Datenweg, den die Platten-Wache nicht
+        kannte (cleanup_cache filtert auf .mp4/.part im clips-Ordner). Gemessen am
+        21.08.: 72,9 GB / 137.719 Dateien in neun Tagen, davon 61,1 GB Pose-Sieb-
+        Ausschuss. Zwei Alters-Achsen aus der Config: verworfen_* (Diagnose) faellt
+        frueher, Beweis-Medien (Bilder + Rueckblick-Videos gemeldeter Auftritte,
+        core.livewache.alarmbilder liest sie) halten laenger. Nur Kamera-Unterordner —
+        preview/, meldungen.jsonl und verbrauch.csv sind laufende Dateien.
+        -> (anzahl, bytes)."""
+        basis = os.path.join(self.cfg["data_dir"], "live")
+        if not os.path.isdir(basis):
+            return 0, 0
+        d_alle = float(self.cfg.get("live_retention_d") or 0)
+        d_vw = float(self.cfg.get("live_verworfen_retention_d") or 0)
+        if d_alle <= 0 and d_vw <= 0:
+            return 0, 0                          # ausgeschaltet = kein Raeumen
+        jetzt = time.time()
+        n = befreit = 0
+        for kam in os.listdir(basis):
+            ordner = os.path.join(basis, kam)
+            if not os.path.isdir(ordner) or kam == "preview":
+                continue
+            try:
+                dateien = os.listdir(ordner)
+            except OSError:
+                continue
+            for fn in dateien:
+                tage = d_vw if fn.startswith("verworfen_") else d_alle
+                if tage <= 0:
+                    continue
+                pfad = os.path.join(ordner, fn)
+                try:
+                    st = os.stat(pfad)
+                    if jetzt - st.st_mtime <= tage * 86400:
+                        continue
+                    os.remove(pfad)
+                    n += 1
+                    befreit += st.st_size
+                except OSError:
+                    pass
+        return n, befreit
+
+    # .32x AUTOMATISCHE SPEICHERGRENZEN (User-Entscheid 22.08.). Anteile statt
+    # absoluter Zahlen, damit dieselbe Vorgabe auf einer 32-GB-Platte und auf
+    # 2 TB sinnvoll ist. Die Werte sind bewusst konservativ: der Cache ist reiner
+    # Komfort (jeder Clip ist nachladbar), der Grundbedarf von suslik liegt
+    # gemessen bei ~2,5 GB (Referenzen 19 MB, Beweisbilder 1,5 GB, Zustand 0,9 GB).
+    # .331: Grundtakt der Platten-Wache. Taeglich reicht, weil der Event-Pfad
+    # ohnehin nach jeder Verarbeitung raeumt; der enge Takt greift nur, solange
+    # die Platte unter dem Mindestfrei liegt (dann kommen keine Events mehr).
+    WACHE_TAKT_S = 86400         # entspannt: einmal am Tag
+    WACHE_ENG_S = 600            # knapp: alle 10 min, bis wieder Luft ist
+    CACHE_ANTEIL = 0.15          # Deckel des Clip-Caches
+    FREI_ANTEIL = 0.10           # was frei bleiben soll
+    FREI_MIN_GB = 2              # Boden: darunter ist keine Anlage betreibbar
+
+    def speichergrenzen(self):
+        """-> (cache_max_gb, frei_min_gb, quelle). Ein konfigurierter Wert > 0
+        gewinnt IMMER; 0 heisst 'aus der Plattengroesse ableiten'. Ist die Platte
+        nicht messbar, bleibt es bei den alten festen Zahlen — nie raten."""
+        cap = float(self.cfg.get("clip_cache_max_gb") or 0)
+        frei = float(self.cfg.get("disk_frei_min_gb") or 0)
+        if cap and frei:
+            return cap, frei, "configured"
+        try:
+            import shutil as _sh
+            ges = _sh.disk_usage(self.cfg["data_dir"]).total / 1024**3
+        except Exception:                                         # noqa: BLE001
+            return (cap or 10), (frei or 10), "fallback (disk size unreadable)"
+        # JEDER Wert wird EINZELN aufgeloest — wer nur den Deckel setzt, will die
+        # Automatik fuers Mindestfrei behalten und umgekehrt. Ein gemeinsames
+        # "beide oder keiner" liess einen einzeln gesetzten Wert still in die
+        # Automatik kippen und damit wirkungslos werden (Gate-Fang 22.08.: zwei
+        # Fixfaelle setzten nur den Deckel und bekamen die Grenzen der echten
+        # Platte, also loeschte cleanup_cache nichts mehr).
+        a_cap = max(2.0, round(ges * self.CACHE_ANTEIL, 1))
+        a_frei = max(float(self.FREI_MIN_GB), round(ges * self.FREI_ANTEIL, 1))
+        quelle = ("auto" if not cap and not frei else "part-auto")
+        return (cap or a_cap), (frei or a_frei), f"{quelle} ({ges:.0f} GB disk)"
+
+    def start_plattenwache(self):
+        """.313 (Issue #25): Platten-Wache — beim Start und alle 600 s cleanup_cache, damit
+        das Aufraeumen nicht vom naechsten verarbeiteten Event abhaengt (das auf voller
+        Platte gerade nicht mehr kommt)."""
+        def lauf():
+            time.sleep(20)                        # Start abwarten (Worker/Engine zuerst)
+            # .32x (Issue #25, zweiter Befund): ein Cache-Deckel, der GROESSER ist
+            # als die Platte, kann nie greifen — beim Melder stand er auf 50 GB
+            # bei 32 GB Platte, und sein System lief voll, ohne dass die Einstellung
+            # je gewirkt haette. Das ist keine Fehlbedienung, sondern eine stille
+            # Wirkungslosigkeit: die Zahl steht in den Einstellungen und tut nichts.
+            # Deshalb EINMAL beim Start laut sagen, wenn sie nicht passen kann.
+            try:
+                import shutil as _sh
+                _ges = _sh.disk_usage(self.cfg["data_dir"]).total / 1024**3
+                _cap, _fr, _q = self.speichergrenzen()
+                self.log(f"disk limits: cache cap {_cap:.0f} GB, keep "
+                         f"{_fr:.0f} GB free — {_q}")
+                if _cap >= _ges * 0.8:
+                    self.log(f"!! clip_cache_max_gb is {_cap:.0f} GB but the disk "
+                             f"holds only {_ges:.0f} GB — the cap can never take "
+                             f"effect. Lower it (Settings, Expert) or rely on "
+                             f"disk_frei_min_gb "
+                             f"({_fr:.0f} GB).")
+            except Exception:                                     # noqa: BLE001
+                pass
+            # .331 (User-Entscheid 22.08.: "einmal am Tag und bei jedem Start"):
+            # der Grundtakt ist TAEGLICH, nicht mehr alle 10 min. Begruendung
+            # gemessen: cleanup_cache haengt ohnehin an JEDEM verarbeiteten Event
+            # (s. Aufruf im Event-Pfad) — im Normalbetrieb raeumt also der
+            # Ereignisstrom, und die Wache ist nur ein Auffangnetz.
+            #
+            # Das Netz bleibt aber engmaschig, SOLANGE es knapp ist: genau der
+            # Fall, fuer den .313 gebaut wurde (volle Platte -> Verarbeitung
+            # scheitert -> keine Events mehr -> ohne eigenen Takt raeumt niemand).
+            # Mit einem reinen Tagestakt haette das System darin bis zu 24 h
+            # gehangen. Deshalb zwei Takte statt eines Kompromisswertes:
+            # entspannt taeglich, knapp alle 10 min, bis wieder Luft ist.
+            while True:
+                _erg = self.cleanup_cache(grund="watch")
+                _eng = bool((_erg or {}).get("knapp")) or bool(self.disk_warnung)
+                time.sleep(self.WACHE_ENG_S if _eng else self.WACHE_TAKT_S)
+        threading.Thread(target=lauf, daemon=True, name="plattenwache").start()
 
     # Modulumbau R2: die Ketten-Praedikate leben in core/kette.py (Docstrings/
     # Begruendungen dort). Hier nur Einhaenge: der Dienst reicht cfg, den
@@ -6405,6 +7221,10 @@ class Service:
             # .249 (Kosinus-raus): Wortstufe an der GEEICHTEN Koerper-Latte
             # (status.json: schwelle + fremd_max — das Band ist hier
             # MESSBASIERT, kein Default-Heuristik-Band).
+            # Sprach-Stufe 4 (Eintrittspunkt (b)): das WORT geht uebersetzt
+            # raus (§6.4), die KENNUNG _vt_stufe bleibt unangetastet — sie
+            # ist es, die additiv im MQTT-Payload steht (Additiv-Regel).
+            _melden.sprache_aktivieren()
             _vt_wort, _vt_stufe = "", None
             if u:
                 try:
@@ -6417,7 +7237,7 @@ class Service:
                                     - float(_st["fremd_max"]))
                     _vt_stufe = _vt.stufe(u["score"], _st.get("schwelle"),
                                           _band)
-                    _vt_wort = _vt.label(_vt_stufe)
+                    _vt_wort = _vt.label_sprachig(_vt_stufe)
                 except Exception:
                     _vt_wort, _vt_stufe = "", None
                 # MQTT fuer HA-Automationen (User 04.08.): JEDER Treffer
@@ -6435,13 +7255,14 @@ class Service:
                 self._mqtt_pub(_melden.topic(self.cfg, "person_erkennung"),
                                json.dumps(_payload, ensure_ascii=False))
             if u and u.get("feuer"):
-                text = (f"{u['person']} recognized by body "
-                        f"(person recognition, not face) — "
-                        f"{_vt_wort or 'match'}, {u['stuetzen']} supporting "
-                        "events")
+                text = _sprache.t(
+                    "meldung.person.satz", name=u["person"],
+                    wort=_vt_wort or _sprache.t("meldung.person.wort_ersatz"),
+                    n=u["stuetzen"])
                 if str(self.cfg.get("alert_stil") or "worte") == "worte_zahlen":
-                    text += f" [score {u['score']}]"
-                push(self.cfg, "suslik person recognition", text,
+                    text += " " + _sprache.t("meldung.person.zahl",
+                                             score=u["score"])
+                push(self.cfg, _sprache.t("meldung.person.titel"), text,
                      attachment=u.get("bild"))
                 # Telegram EXAKT wie die Gesichtsseite (User 04.08.:
                 # allgemeine Einstellungen gelten fuer BEIDE Straenge):
@@ -6452,7 +7273,7 @@ class Service:
                     will_video = self.cfg.get("telegram_inhalt",
                                               "video") != "bild"
                     vid = self._telegram_clip(eid) if will_video else None
-                    cap = text + ("\n(video unavailable — sending image)"
+                    cap = text + ("\n" + _sprache.t("meldung.video_ersatz.satz")
                                   if will_video and not vid else "")
                     telegram_video(self.cfg, vid, cap,
                                    crop=u.get("bild"))
@@ -6482,6 +7303,11 @@ class Service:
         # .249 (Kosinus-raus, Konzept M1): Worte statt Zahlensalat — und der
         # alte Text war obendrein deutsch-englisch gemischt ('bestaetigt',
         # 'Gesichter'). Rohzahlen nur im Stil 'worte_zahlen' als Anhang.
+        # Sprach-Stufe 4 (Eintrittspunkt (b)): jeder Urteils-ZWEIG ist ein
+        # voller Satz-Schluessel (B9), die Wortstufe kommt uebersetzt aus
+        # der einen Quelle (§6.4), face/faces war schon im Original ein
+        # echter Plural -> t_n. Zahlen kommen vorformatiert (§8.8).
+        _melden.sprache_aktivieren()
         from core import vertrauen as _vt
         _bar = self.cfg["win_thresh"]
         _reihe = sorted(entry["ours"].items(),
@@ -6490,29 +7316,36 @@ class Service:
             _teile = []
             for p in entry["bestaetigt"]:
                 r = entry["ours"].get(p) or {}
-                _teile.append(f"{p} confirmed ({_vt.wort(r.get('max'), _bar)}, "
-                              f"seen in {r.get('win3s', 0)} windows)")
+                _teile.append(_sprache.t(
+                    "meldung.alert.bestaetigt", name=p,
+                    wort=_vt.wort_sprachig(r.get("max"), _bar),
+                    n=r.get("win3s", 0)))
             verify_txt = "; ".join(_teile)
         elif _reihe:
             p, r = _reihe[0]
-            verify_txt = (f"no one confirmed — closest is {p} "
-                          f"({_vt.wort(r.get('max'), _bar)})")
+            verify_txt = _sprache.t(
+                "meldung.alert.keiner_naechster", name=p,
+                wort=_vt.wort_sprachig(r.get("max"), _bar))
         else:
-            verify_txt = "no one confirmed — no usable faces"
-        msg = (f"{entry['camera']}{f' · {_ar}' if _ar else ''} — {verify_txt}. "
-               f"Frigate saw: {f['label']}. "
-               f"{entry['faces']} face{'s' if entry['faces'] != 1 else ''} "
-               "in this event.")
+            verify_txt = _sprache.t("meldung.alert.keiner_ohne_gesicht")
+        msg = _sprache.t(
+            "meldung.alert.satz",
+            kamera=f"{entry['camera']}{f' · {_ar}' if _ar else ''}",
+            urteil=verify_txt, label=f["label"],
+            gesichter=_sprache.t_n("meldung.alert.gesichter", entry["faces"]))
         if str(self.cfg.get("alert_stil") or "worte") == "worte_zahlen":
             ours_txt = ", ".join(f"{p} {r['max']:+.2f}/{r['win3s']}x"
                                  for p, r in _reihe) or "-"
-            msg += (f" [Frigate {fs} (= cos {f['cos']}) | {ours_txt}]")
+            msg += " " + _sprache.t("meldung.alert.zahl", score=fs,
+                                    cos=f["cos"], unsere=ours_txt)
         anhang = self._best_crop(event_dir, entry, entry["bestaetigt"] or list(entry["ours"]))
         if self.dry_alert:
             self.log(f"DRY-ALERT: {msg}")
             return False
         try:
-            ok = push(self.cfg, f"suslik: {KAT_LABELS.get(entry['kategorie'], entry['kategorie'])}", msg, anhang)
+            ok = push(self.cfg, _sprache.t("meldung.titel.kategorie",
+                                           wort=_kat_wort(entry["kategorie"])),
+                      msg, anhang)
             if ok:
                 self.last_alert = now
             else:
@@ -6948,9 +7781,7 @@ def make_handler(svc):
             # .264: aktive Schoner-Sperre geht vor — sie erklaert, WARUM
             # gerade keine frischen Frigate-Daten kommen.
             if frigate_schoner.gesperrt():
-                return ("Frigate is not answering — backing off and probing "
-                        "every few seconds until it recovers; the UI keeps "
-                        "serving local data.")
+                return _sprache.t("banner.schoner")
             f = getattr(svc, "frigate_fehler", None)
             # .281 (User 18.08.: Banner stand nach dem Frigate-Neustart 10 min):
             # JEDE echte Frigate-Antwort NACH dem Fehler entwarnt sofort —
@@ -6970,8 +7801,7 @@ def make_handler(svc):
                 # ("event poll: HTTP 500 ... bei /api/events?...") war laenger als die
                 # alte Kappung — genau das Detail, fuer das das Label gebaut wurde,
                 # fiel im Banner wieder weg.
-                return (f"Frigate unreachable (last error {t}): {f[1][:220]} — "
-                        "the UI keeps serving local data.")
+                return _sprache.t("banner.fehler", zeit=t, fehler=f[1][:220])
             # Issue #13: Daten-ohne-Mount geht vor Varianten-Hinweis — Datenverlust-
             # Risiko schlaegt Performance-Tipp (beide einmal je Start berechnet).
             d = getattr(svc, "daten_hinweis", None)
@@ -7038,6 +7868,30 @@ def make_handler(svc):
                         return self._send(403, json.dumps({"ok": False, "msg": "cross-origin POST refused"}),
                                           "application/json")
                     break
+            # Sprach-Stufe 2 Tranche D: die STATISCHEN englischen msg-Texte
+            # dieses POST-Dispatchers laufen ueber server-seitiges t()
+            # (antwort.*-Schluessel; die Sprache ist je Request als
+            # contextvar aktiv, handle_one_request). Stufe-2-Grenzen, die
+            # BEWUSST literal bleiben (je ein Marker-Typ, Bericht Tranche D):
+            # (a) Fachschicht-msg — ok/msg-Paare aus anlernen/svc-Methoden/
+            #     core-Modulen (enroll, entferne_referenz, config_schreiben,
+            #     notif_*, live_*, vision_*, personmodell, upload_referenz,
+            #     sync_refs-Status): die msg entsteht ausserhalb des
+            #     Handlers, ihr Einzug ist ein eigener Zug je Modul.
+            # (b) Deutsche Alt-msg ("… Bild(er) entfernt", "Person
+            #     unbekannt", "Sync läuft …", "… übernommen", "Prüfung
+            #     läuft …", "Suche läuft …", "Person fehlt/ungueltig",
+            #     "Datei > 15 MB", unbekannt_*-Kurzworte): de->en waere
+            #     eine bewusste TEXTAENDERUNG, nie Teil des Einzugs.
+            # (c) msg-Bausteine, die zugleich ins LOG gehen (lauf_loeschen/
+            #     alte_loeschen: detail/warn) — Log bleibt englisch, die
+            #     Trennung UI/Log ist ein eigener Umbau.
+            # (d) API-/Debug-Antworten ("bad json", "cross-origin POST
+            #     refused", 404 "unknown", str(e)/{type(e).__name__}) —
+            #     maschinennah, bleiben englisch (Konzept Stufe-4-Regel).
+            # (e) GATE-Protokollwort im Upload-Weg (§8.16, app.js prueft
+            #     d.msg.indexOf('GATE')) — erst mit der Kennung/Anzeige-
+            #     Trennung des upload_referenz-Weges (Fachschicht, a+b).
             if pfad == "/enroll":                              # Lern-Entscheidung (AP4)
                 try:
                     n = int(self.headers.get("Content-Length", 0))
@@ -7081,13 +7935,13 @@ def make_handler(svc):
                     d = json.loads(self.rfile.read(min(n, 8192))) if n else {}
                     p = (d.get("person") or "").strip()
                     if not p or p not in master_persons(cfg):
-                        return self._send(200, json.dumps({"ok": False, "msg": "unknown person"}),
-                                          "application/json")
+                        return self._send(200, json.dumps({"ok": False, "msg": _sprache.t("antwort.person_unbekannt")},
+                                          ensure_ascii=False), "application/json")
                     quelle = os.path.join(cfg["data_dir"], "faces", p)
                     if os.path.realpath(quelle) != os.path.realpath(
                             os.path.join(cfg["data_dir"], "faces", os.path.basename(p))):
-                        return self._send(200, json.dumps({"ok": False, "msg": "invalid name"}),
-                                          "application/json")
+                        return self._send(200, json.dumps({"ok": False, "msg": _sprache.t("antwort.person_name_ungueltig")},
+                                          ensure_ascii=False), "application/json")
                     papierkorb = os.path.join(cfg["data_dir"], "trash")
                     os.makedirs(papierkorb, exist_ok=True)
                     ziel = os.path.join(papierkorb, f"person_{p}_{int(time.time())}")
@@ -7101,8 +7955,9 @@ def make_handler(svc):
                     svc.log(f"PERSON DELETED: {p} ({n_bilder} reference image(s)) -> trash/"
                             f"{os.path.basename(ziel)} — recoverable by moving back")
                     return self._send(200, json.dumps(
-                        {"ok": True, "msg": f"{p} removed ({n_bilder} reference images moved "
-                                            f"to trash — recoverable)"}), "application/json")
+                        {"ok": True, "msg": _sprache.t("antwort.person_entfernt",
+                                                       person=p, n=n_bilder)},
+                        ensure_ascii=False), "application/json")
                 except Exception as e:
                     return self._send(200, json.dumps({"ok": False, "msg": str(e)[:120]}),
                                       "application/json")
@@ -7122,6 +7977,14 @@ def make_handler(svc):
                                       "application/json")
                 except Exception as e:
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
+            if pfad == "/cache_aufraeumen":                    # .313 Issue #25: Aufraeum-Knopf (System-Seite)
+                erg = svc.cleanup_cache(grund="button")
+                return self._send(200, json.dumps(
+                    {"ok": True, "knapp": erg["knapp"],
+                     "msg": _sprache.t("antwort.cache_aufgeraeumt", n=erg["geloescht"],
+                                       mb=f"{erg['frei_mb']:.0f}", cache=f"{erg['cache_gb']:.1f}",
+                                       frei=f"{erg['frei_gb']:.0f}")},
+                    ensure_ascii=False), "application/json")
             if pfad == "/ref_pruef_neu":                       # Referenz-QS neu berechnen (Hintergrund)
                 svc.qs_neu_starten()
                 return self._send(200, json.dumps({"ok": True,
@@ -7138,19 +8001,19 @@ def make_handler(svc):
                     pers = str(d.get("person") or "").strip()
                     if pers and pers not in master_persons(cfg):
                         return self._send(400, json.dumps(
-                            {"ok": False, "msg": "unknown person"}),
-                            "application/json")
+                            {"ok": False, "msg": _sprache.t("antwort.person_unbekannt")},
+                            ensure_ascii=False), "application/json")
                     svc.qs_neu_starten()
                     return self._send(200, json.dumps(
-                        {"ok": True, "msg": "check started",
-                         "person": pers}), "application/json")
+                        {"ok": True, "msg": _sprache.t("antwort.pruefung_gestartet"),
+                         "person": pers}, ensure_ascii=False), "application/json")
                 except Exception as e:
                     return self._send(400, json.dumps(
                         {"ok": False, "msg": str(e)}), "application/json")
             if pfad == "/anlern_wartung_jetzt":                # Reorganisieren (Pool-Neupruefung + Cluster neu), manuell
                 gestartet = svc._reorganisieren()
-                msg = ("Reorganizing (pool re-check + re-cluster, 1-2 min, then reload the pages)"
-                       if gestartet else "Reorganizing already running — please wait")
+                msg = (_sprache.t("antwort.reorg_los")
+                       if gestartet else _sprache.t("antwort.reorg_laeuft"))
                 return self._send(200, json.dumps({"ok": bool(gestartet), "msg": msg},
                                   ensure_ascii=False), "application/json")
             if pfad in ("/unbekannt_reconcile", "/unbekannt_besucher", "/unbekannt_verwerfen",
@@ -7172,17 +8035,19 @@ def make_handler(svc):
                         res = (ok, "zusammengelegt" if ok else "Fehler")
                     elif pfad == "/unbekannt_verwerfen":       # 'Different' persistent (25.07.)
                         ok = anlernen.verwerfe_vorschlag(d.get("a", ""), d.get("b", ""))
-                        res = (ok, "noted — won't suggest this pair again" if ok else "Fehler")
+                        res = (ok, _sprache.t("antwort.paar_notiert") if ok else "Fehler")
                     else:                                        # /unbekannt_benennen
                         _person = (d.get("person") or "").strip()
-                        ok, msg, betroffen = anlernen.unbekannt_benennen(d.get("uid", ""), _person)
+                        ok, msg, betroffen = anlernen.unbekannt_benennen(d.get("uid", ""), _person, emb=svc._emb)
                         if ok:
                             svc.log(f"UNKNOWN NAMED: {d.get('uid')} -> {d.get('person')} ({msg})")
                             svc.qs_neu_starten()
                             # Issue #19: Events der uebernommenen Gesichter nachpruefen,
                             # damit die Unknown-Karten des Durchgangs verschwinden.
                             svc.anlern_nachpruefung_starten(_person, betroffen)
-                            msg += " — re-checking this pass's events in the background"
+                            # §8.11-Anhang uebersetzt; die Basis-msg kommt aus
+                            # der Fachschicht (Grenze a).
+                            msg += _sprache.t("antwort.nachpruefung_anhang")
                         res = (ok, msg)
                     return self._send(200, json.dumps({"ok": res[0], "msg": res[1]},
                                       ensure_ascii=False), "application/json")
@@ -7222,7 +8087,7 @@ def make_handler(svc):
                     if n_wa:
                         svc.log(f"sync selection: {n_wa} image(s) offered again")
                     return self._send(200, json.dumps(
-                        {"ok": True, "msg": f"{n_wa} back on the candidate list"},
+                        {"ok": True, "msg": _sprache.t("antwort.sync_wieder", n=n_wa)},
                         ensure_ascii=False), "application/json")
                 try:
                     n_ab = _sr.abwahl_setzen(_paare("abwahl"), True)
@@ -7233,7 +8098,8 @@ def make_handler(svc):
                 if n_ab or n_zu:
                     svc.log(f"sync selection: {n_ab} deselected, {n_zu} restored")
                 return self._send(200, json.dumps(
-                    {"ok": True, "msg": f"{n_ab} deselected, {n_zu} restored"},
+                    {"ok": True, "msg": _sprache.t("antwort.sync_auswahl",
+                                                   ab=n_ab, zu=n_zu)},
                     ensure_ascii=False), "application/json")
             if pfad in ("/sync_export", "/sync_import", "/sync_auswahl_start"):
                 # Referenz-Sync Master <-> Frigate manuell. /sync_auswahl_start ist
@@ -7246,11 +8112,11 @@ def make_handler(svc):
                 # eigener_status und Ergebnisanzeige (gemeinsame Status-Dateien).
                 if getattr(svc, "_sync_job_aktiv", False):
                     return self._send(409, json.dumps({"ok": False,
-                        "msg": "a sync is already running — wait for it to finish"},
+                        "msg": _sprache.t("antwort.sync_laeuft")},
                         ensure_ascii=False), "application/json")
                 if modus == "export" and frigate_read_only(svc.cfg):   # read-only: kein Schreiben nach Frigate (Import bleibt)
                     return self._send(403, json.dumps({"ok": False,
-                        "msg": "read-only mode: writing references to Frigate is disabled (see the System page switch)"},
+                        "msg": _sprache.t("antwort.sync_readonly")},
                         ensure_ascii=False), "application/json")
                 try:
                     _n = int(self.headers.get("Content-Length", 0))
@@ -7266,7 +8132,7 @@ def make_handler(svc):
                               if isinstance(x, (list, tuple)) and len(x) >= 2]
                     if not _paare:
                         return self._send(400, json.dumps(
-                            {"ok": False, "msg": "nothing selected — tick at least one image"},
+                            {"ok": False, "msg": _sprache.t("antwort.sync_nichts")},
                             ensure_ascii=False), "application/json")
                     # Uebergabe als DATEI, nie als argv (hunderte Namen sprengen jede
                     # Kommandozeile); sync_refs filtert damit die ECHTE Kandidatenliste.
@@ -7279,7 +8145,8 @@ def make_handler(svc):
                 if furl:                                   # Fremdeingabe -> nur http(s), sonst spricht urlopen auch file://
                     _ok, _res = pruefe_url(furl)
                     if not _ok:
-                        return self._send(400, json.dumps({"ok": False, "msg": f"Frigate URL: {_res}"},
+                        return self._send(400, json.dumps({"ok": False,
+                                                          "msg": _sprache.t("antwort.frigate_url", fehler=_res)},
                                                           ensure_ascii=False), "application/json")
                     furl = _res
                 def job():
@@ -7368,7 +8235,7 @@ def make_handler(svc):
                 threading.Thread(target=_job_mit_riegel, daemon=True).start()
                 if auswahl_pfad:
                     return self._send(200, json.dumps({"ok": True,
-                                      "msg": f"transfer running ({len(_paare)} selected)"},
+                                      "msg": _sprache.t("antwort.sync_transfer", n=len(_paare))},
                                       ensure_ascii=False), "application/json")
                 ziel = "Master → Frigate" if modus == "export" else "Frigate → Master"
                 return self._send(200, json.dumps({"ok": True,
@@ -7401,12 +8268,28 @@ def make_handler(svc):
                     person = (d.get("person") or "").strip()
                     if person not in master_persons(cfg):
                         return self._send(400, json.dumps(
-                            {"ok": False, "msg": "unknown person"}), "application/json")
+                            {"ok": False, "msg": _sprache.t("antwort.person_unbekannt")},
+                            ensure_ascii=False), "application/json")
                     if d.get("uebernehmen"):
                         # Schritt 2 (.226): genau die GEPRUEFTEN Bilder — der
                         # Nutzer hat sie gesehen und bestaetigt sie jetzt.
-                        dateien = anlernen.lernbruecke_uebernehmen(
-                            person, d["uebernehmen"], emb=svc.embedder)
+                        # .308: Items der NEUEN Kette (herkunft vorrat) gehen
+                        # ueber den Beiwert-Weg (vorrat_aufnehmen), Event-Crops
+                        # wie bisher.
+                        _items = d["uebernehmen"] or []
+                        _vo = [it for it in _items if it.get("herkunft") == "vorrat"]
+                        _ev = [it for it in _items if it.get("herkunft") != "vorrat"]
+                        dateien = []
+                        for it in _vo[:50]:
+                            _ok, _ziel = anlernen.vorrat_aufnehmen(
+                                person, str(it.get("lauf_id") or ""),
+                                str(it.get("datei") or ""), str(it.get("eid") or ""),
+                                data_dir=cfg["data_dir"])
+                            if _ok:
+                                dateien.append(_ziel)
+                        if _ev:
+                            dateien += anlernen.lernbruecke_uebernehmen(
+                                person, _ev, emb=svc.embedder)
                         if dateien:
                             svc.log(f"PASS LEARN: {len(dateien)} reference(s) "
                                     f"adopted for {person} from one pass")
@@ -7414,8 +8297,8 @@ def make_handler(svc):
                             svc.frigate_sync_export()
                         return self._send(200, json.dumps(
                             {"ok": True, "n": len(dateien), "dateien": dateien,
-                             "msg": f"{len(dateien)} picture(s) added"}),
-                            "application/json")
+                             "msg": _sprache.t("antwort.bruecke_hinzu", n=len(dateien))},
+                            ensure_ascii=False), "application/json")
                     # Schritt 1: nur pruefen, nichts uebernehmen.
                     # .232 (User-Idee): kaltes Modell EHRLICH melden statt
                     # stumm zu warten — das UI zeigt 'loading …' und fragt
@@ -7428,8 +8311,8 @@ def make_handler(svc):
                                          daemon=True).start()
                         return self._send(200, json.dumps(
                             {"ok": True, "laden": True,
-                             "msg": "loading the recognition model — a few "
-                                    "seconds …"}), "application/json")
+                             "msg": _sprache.t("antwort.modell_laedt")},
+                            ensure_ascii=False), "application/json")
                     # .236: fehlender refcache (Undo/Loeschung invalidieren
                     # weiterhin voll) heisst EHRLICH warten statt den
                     # Komplett-Neuaufbau inline zu zahlen — Hintergrund-Bau,
@@ -7439,13 +8322,47 @@ def make_handler(svc):
                         threading.Thread(
                             target=anlernen.refcache_aufbauen,
                             args=(svc.embedder,), daemon=True).start()
-                        return self._send(200, json.dumps(
-                            {"ok": True, "laden": True,
-                             "msg": "rebuilding the reference library — with a "
-                                    "large library this can take a minute …"}), "application/json")
+                        return self._send(200, refcache_warte_antwort(anlernen),
+                                          "application/json")
                     eids = [str(e) for e in (d.get("eids") or [])][:200]
+                    if cfg.get("vorrat_aktiv"):
+                        # .308: Pass-Check ueber die NEUE Kette — alle Frames
+                        # des Durchgangs geerntet, Konsens + Linie; der Alt-Weg
+                        # (ein Event-Crop je Event) bleibt bei Vorrat=aus.
+                        _zst, _nutz = svc.bruecke_vorrat(person, eids)
+                        if _zst == "laeuft":
+                            # Im Normalfall ist der Pass schon geerntet (Auto-
+                            # Vorrat nach Durchgangs-Ende); nur ein Klick
+                            # WAEHREND der Karenz/Ernte trifft dieses Warten —
+                            # der Browser fragt wie beim Modell-Laden nach.
+                            return self._send(200, json.dumps(
+                                {"ok": True, "laden": True, "msg": _nutz["msg"],
+                                 "i": _nutz["i"], "n": _nutz["n"],
+                                 "zustand": _nutz["zustand"]},
+                                ensure_ascii=False), "application/json")
+                        if _zst == "fehler":
+                            return self._send(200, json.dumps(
+                                {"ok": False, "msg": str(_nutz)[:160]},
+                                ensure_ascii=False), "application/json")
+                        nehmen, grenz = _nutz["nehmen"], _nutz["grenz"]
+                        if nehmen:
+                            msg = (_sprache.t("antwort.bruecke_nimmt", n=len(nehmen))
+                                   + (_sprache.t("antwort.bruecke_grenz_zusatz",
+                                                 n=len(grenz)) if grenz else ""))
+                        elif grenz:
+                            msg = _sprache.t("antwort.bruecke_nur_grenz", n=len(grenz))
+                        else:
+                            msg = _sprache.t("antwort.bruecke_nichts")
+                        svc.log(f"PASS CHECK: {person} — {len(eids)} event(s) via stock "
+                                f"chain -> {len(nehmen)} to take / {len(grenz)} borderline "
+                                f"({_nutz.get('v_gesamt', 0)} stock faces)")
+                        return self._send(200, json.dumps(
+                            {"ok": True, "nehmen": nehmen, "grenz": grenz,
+                             "msg": msg}, ensure_ascii=False), "application/json")
+                    dg = {}          # D1: Diagnose-Satz der Pruefung (Zahlen)
                     nehmen, grenz = anlernen.lernbruecke_pruefen(
-                        person, eids, emb=svc.embedder)
+                        person, eids, emb=svc.embedder, diagnose=dg,
+                        norm_latte=norm_latte_aus_cfg(cfg))
                     # .226b: Bild-URL je Kandidat (derselbe Weg wie die
                     # Thumb-Reihe) — das Auswahl-Overlay zeigt EXAKT die
                     # Bilder, die uebernommen wuerden.
@@ -7455,18 +8372,38 @@ def make_handler(svc):
                                      f"{urllib.parse.quote(str(it['datei']))}")
                     # .231: Grenzfaelle nie mehr verschweigen (Pass-3-Befund:
                     # 8 sichere Identitaeten fielen still an der Gut-Qualitaet).
+                    # D1 (.30x): der dominante Ausschlussgrund MIT ZAHLEN statt
+                    # des Pauschalsatzes "(that is fine)" — ohne Diagnose
+                    # (grund None) bleibt es beim alten Wortlaut.
+                    grund = _bruecke_grund(dg)
                     if nehmen:
-                        msg = (f"the check picks {len(nehmen)} picture(s)"
-                               + (f" · {len(grenz)} borderline shown unticked"
+                        msg = (_sprache.t("antwort.bruecke_nimmt", n=len(nehmen))
+                               + (_sprache.t("antwort.bruecke_grenz_zusatz",
+                                             n=len(grenz))
                                   if grenz else ""))
                     elif grenz:
-                        msg = (f"nothing clearly helpful — {len(grenz)} "
-                               "borderline picture(s) kept back (identity "
-                               "sure, picture quality only fair); you can "
-                               "still take them")
+                        msg = (_sprache.t("antwort.bruecke_nur_grenz",
+                                          n=len(grenz))
+                               + (_sprache.t("antwort.bruecke_grund_zusatz",
+                                             grund=grund) if grund else ""))
+                    elif grund:
+                        msg = _sprache.t("antwort.bruecke_nichts_grund",
+                                         grund=grund)
                     else:
-                        msg = ("nothing to take — no helpful new picture "
-                               "in this pass (that is fine)")
+                        msg = _sprache.t("antwort.bruecke_nichts")
+                    # D2 (.30x): der Pruefzweig protokollierte bisher NICHTS
+                    # (K1 — die Diagnose stand nur im Browser). EINE Zeile je
+                    # Pruefung, englisch wie jedes Log (B20); die Klassen sind
+                    # Kennungen, die Schwellen kommen aus der Diagnose.
+                    _kl = dg.get("klassen") or {}
+                    svc.log(
+                        f"PASS CHECK: {person} — {len(eids)} event(s), "
+                        f"{dg.get('geprueft') or 0} crop(s) measured -> "
+                        f"{len(nehmen)} to take / {len(grenz)} borderline; "
+                        f"reason={dg.get('dominant') or '-'} {_kl or '{}'} "
+                        f"(best {dg.get('kante_max') or '-'} px / sharpness "
+                        f"{dg.get('sharp_max') or '-'}, needs "
+                        f"{dg.get('min_kante')} px / {dg.get('unscharf_max')})")
                     return self._send(200, json.dumps(
                         {"ok": True, "nehmen": nehmen, "grenz": grenz,
                          "msg": msg}), "application/json")
@@ -7488,8 +8425,8 @@ def make_handler(svc):
                         svc.log(f"PASS LEARN UNDO: {n_weg} reference(s) removed for {person}")
                         svc.qs_neu_starten()
                     return self._send(200, json.dumps(
-                        {"ok": True, "msg": f"{n_weg} picture(s) removed again"}),
-                        "application/json")
+                        {"ok": True, "msg": _sprache.t("antwort.bruecke_undo", n=n_weg)},
+                        ensure_ascii=False), "application/json")
                 except Exception as e:
                     return self._send(500, json.dumps(
                         {"ok": False, "msg": str(e)[:160]}), "application/json")
@@ -7517,6 +8454,38 @@ def make_handler(svc):
                                                  ensure_ascii=False), "application/json")
                 except Exception as e:
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
+            if pfad == "/vorrat_aufnehmen":                    # Vorrats-Angebote uebernehmen (B4)
+                try:
+                    import anlernen
+                    n = int(self.headers.get("Content-Length", 0))
+                    d = json.loads(self.rfile.read(min(n, 65536)))
+                    person = (d.get("person") or "").strip()
+                    if person not in master_persons(cfg):
+                        return self._send(400, json.dumps({"ok": False, "msg": "Person unbekannt"}),
+                                          "application/json")
+                    n_ok, letzter = 0, ""
+                    for it in (d.get("items") or []):
+                        ok, meldung = anlernen.vorrat_aufnehmen(
+                            person, (it.get("lauf_id") or "").strip(),
+                            (it.get("datei") or "").strip(),
+                            (it.get("eid") or "").strip(),
+                            data_dir=cfg["data_dir"])
+                        if ok:
+                            n_ok += 1
+                        else:
+                            letzter = meldung
+                    if n_ok:
+                        svc.log(f"STOCK: {n_ok} reference(s) adopted for {person} "
+                                f"(embedding sidecar, kept local)")
+                        svc.qs_neu_starten()
+                        svc.frigate_sync_export()   # exportiert NICHT (diff schliesst vorrat aus) —
+                        #                             haelt aber den Vier-Klassen-Abgleich frisch
+                    return self._send(200 if n_ok else 400,
+                                      json.dumps({"ok": n_ok > 0,
+                                                  "msg": (f"{n_ok} übernommen" if n_ok else letzter)},
+                                                 ensure_ascii=False), "application/json")
+                except Exception as e:
+                    return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad == "/anlernen_benennen":                   # Cluster als Person anlernen (19.07.)
                 try:
                     import anlernen
@@ -7527,13 +8496,14 @@ def make_handler(svc):
                     # Issue #19: benenne_mit_abzug statt benenne — die Today-Karte lief
                     # ueber diesen Weg und liess die Gesichter im Unbekannt-Pool zurueck
                     # (Karte blieb stehen, Event-Akte blieb "unknown").
-                    ok, msg, betroffen = anlernen.benenne_mit_abzug(ids, person)
+                    ok, msg, betroffen = anlernen.benenne_mit_abzug(ids, person, emb=svc._emb)
                     if ok:
                         svc.log(f"ENROLL: {msg}")
                         svc.qs_neu_starten()               # nach Anlernen automatisch gegenpruefen
                         svc.frigate_sync_export()          # falls frigate_sync an: nach Frigate spiegeln
                         svc.anlern_nachpruefung_starten(person, betroffen)
-                        msg += " — re-checking this pass's events in the background"
+                        # §8.11-Anhang uebersetzt; Basis-msg = Fachschicht (Grenze a).
+                        msg += _sprache.t("antwort.nachpruefung_anhang")
                     return self._send(200 if ok else 400,
                                       json.dumps({"ok": ok, "msg": msg}, ensure_ascii=False),
                                       "application/json")
@@ -7683,8 +8653,8 @@ def make_handler(svc):
                 _zf = _pl.zustand_lesen(cfg["data_dir"])
                 if not _zf or _zf.get("phase") != "abnahme":
                     return self._send(409, json.dumps(
-                        {"ok": False, "msg": "no run awaiting review"}),
-                        "application/json")
+                        {"ok": False, "msg": _sprache.t("antwort.personlauf_kein_review")},
+                        ensure_ascii=False), "application/json")
                 _lid = str(_zf.get("lauf_id") or "")
                 _falsch = set()
                 _up = os.path.join(_pe.lauf_dir(cfg["data_dir"], _lid),
@@ -7738,8 +8708,8 @@ def make_handler(svc):
                 if not _za or _za.get("phase") not in ("vorbereitung",
                                                        "ernte"):
                     return self._send(409, json.dumps(
-                        {"ok": False, "msg": "no active run"}),
-                        "application/json")
+                        {"ok": False, "msg": _sprache.t("antwort.personlauf_kein_lauf")},
+                        ensure_ascii=False), "application/json")
                 _za["phase"] = "abbruch"
                 _pl.zustand_schreiben(cfg["data_dir"], _za)
                 return self._send(200, json.dumps({"ok": True}),
@@ -7760,8 +8730,9 @@ def make_handler(svc):
                 if _ev <= 0 or _ev > svc.LERNLAUF_EVENTS_MAX:
                     return self._send(400, json.dumps(
                         {"ok": False,
-                         "msg": f"events must be 1..{svc.LERNLAUF_EVENTS_MAX}"}),
-                        "application/json")
+                         "msg": _sprache.t("antwort.events_bereich",
+                                           max=svc.LERNLAUF_EVENTS_MAX)},
+                        ensure_ascii=False), "application/json")
                 _z0 = _pl.zustand_lesen(cfg["data_dir"])
                 # aktiv = Phase sagt aktiv UND der Thread lebt wirklich —
                 # nach einem Dienst-Neustart ist die Disk-Phase sonst eine
@@ -7772,8 +8743,8 @@ def make_handler(svc):
                         and _lebt:
                     return self._send(409, json.dumps(
                         {"ok": False,
-                         "msg": "a person-learn run is already active"}),
-                        "application/json")
+                         "msg": _sprache.t("antwort.personlauf_aktiv")},
+                        ensure_ascii=False), "application/json")
                 import threading as _th
                 # Sofort-Feedback (User-Fund 04.08.: Bindung dauert 1-2 min,
                 # die Seite zeigte solange den ALTEN Zustand): Vorbereitungs-
@@ -7863,16 +8834,17 @@ def make_handler(svc):
                         datetime.datetime.strptime(tag_wahl, "%Y-%m-%d")
                     except ValueError:
                         return self._send(400, json.dumps(
-                            {"ok": False, "msg": "invalid day (YYYY-MM-DD)"}),
-                            "application/json")
+                            {"ok": False, "msg": _sprache.t("antwort.lernlauf_tag_ungueltig")},
+                            ensure_ascii=False), "application/json")
                 elif ev <= 0 or ev > svc.LERNLAUF_EVENTS_MAX:
                     return self._send(400, json.dumps({"ok": False,
-                                      "msg": f"events must be 1..{svc.LERNLAUF_EVENTS_MAX}"}),
-                                      "application/json")
+                                      "msg": _sprache.t("antwort.events_bereich",
+                                                        max=svc.LERNLAUF_EVENTS_MAX)},
+                                      ensure_ascii=False), "application/json")
                 if zielperson and zielperson not in master_persons(cfg):
                     return self._send(400, json.dumps(
-                        {"ok": False, "msg": "unknown person"}),
-                        "application/json")
+                        {"ok": False, "msg": _sprache.t("antwort.person_unbekannt")},
+                        ensure_ascii=False), "application/json")
                 with svc._lernlauf_start_lock:
                     # Phasen-Wache (F5.3): ein alter Browser-Tab darf einen
                     # fortgeschrittenen Lauf nicht still zuruecksetzen.
@@ -7887,9 +8859,9 @@ def make_handler(svc):
                                         and bst.startswith(("anchors ready", "anchors: none")))
                         if not fertig_anker:
                             return self._send(409, json.dumps({"ok": False,
-                                              "msg": f"a run is already in phase "
-                                                     f"'{bestand.get('phase')}' — abort it first"}),
-                                              "application/json")
+                                              "msg": _sprache.t("antwort.lernlauf_phase",
+                                                                phase=bestand.get("phase"))},
+                                              ensure_ascii=False), "application/json")
                         svc.log(f"learning run {bestand.get('lauf_id')} is complete — "
                                 "starting a new run, keeping its folder and anchors")
                     # Laufende Arbeits-Threads nicht mit neuem Umfang ueberschreiben.
@@ -7900,9 +8872,8 @@ def make_handler(svc):
                         t = getattr(svc, tn, None)
                         if t and t.is_alive():
                             return self._send(409, json.dumps({"ok": False,
-                                              "msg": "the previous run is still finishing "
-                                                     "its current event — try again in a "
-                                                     "moment"}), "application/json")
+                                              "msg": _sprache.t("antwort.lernlauf_beschaeftigt")},
+                                              ensure_ascii=False), "application/json")
                     try:
                         with _ll.store_lock(cfg["data_dir"]):     # .87: Anlage unter dem Store-Lock
                             _ll.lauf_schreiben(cfg["data_dir"], dict({"phase": "vorbereitung",
@@ -7922,8 +8893,9 @@ def make_handler(svc):
                     except OSError as e:           # F2.7: voller Datentraeger u.ae. LAUT
                         svc.log(f"learning run NOT created: {e}")
                         return self._send(500, json.dumps({"ok": False,
-                                          "msg": f"could not write run state: {e}"}),
-                                          "application/json")
+                                          "msg": _sprache.t("antwort.lernlauf_schreibfehler",
+                                                            fehler=e)},
+                                          ensure_ascii=False), "application/json")
                     svc.log("learning run created: scope "
                             + (f"day {tag_wahl}" if tag_wahl else f"{ev} events")
                             + (f", looking for {zielperson}" if zielperson else "")
@@ -7931,8 +8903,9 @@ def make_handler(svc):
                     svc.lernlauf_vorbereiten_starten(ev, alle_modus=bool(d.get("alle")),
                                                      nur_neue=nur_neue,
                                                      tag=tag_wahl or None)
-                return self._send(200, json.dumps({"ok": True, "msg": "run created"}),
-                                  "application/json")
+                return self._send(200, json.dumps({"ok": True,
+                                  "msg": _sprache.t("antwort.lernlauf_angelegt")},
+                                  ensure_ascii=False), "application/json")
             if pfad == "/lernlauf_abbruch":
                 # E2: Abbruch = Zustand entfernen + geerntete Artefakte nach
                 # state/lernlauf/trash/ verschieben (§6 Speicher-Reste: gesammelte
@@ -7975,8 +8948,8 @@ def make_handler(svc):
                         svc.log(f"learning run abort: could not clean anchors of {lid} ({e3})")
                 svc.log(f"learning run aborted (state removed{verschoben})")
                 return self._send(200, json.dumps(
-                    {"ok": True, "msg": "aborted — a running event may still finish "
-                                        "in the background"}), "application/json")
+                    {"ok": True, "msg": _sprache.t("antwort.lernlauf_abgebrochen")},
+                    ensure_ascii=False), "application/json")
             if pfad == "/konfig":                              # Konfigblatt speichern (AP5)
                 try:
                     n = int(self.headers.get("Content-Length", 0))
@@ -8016,9 +8989,14 @@ def make_handler(svc):
                     ok, msg = svc.live_schalter(kam, an)
                     if not ok:
                         fehl.append(f"{kam}: {msg}")
-                m = ("nothing to change" if not ziele else
-                     f"{'started' if an else 'stopped'} "
-                     f"{len(ziele) - len(fehl)}/{len(ziele)} watcher(s)"
+                # Tranche D: je Zweig ein voller Text (B9); die fehl-Liste
+                # ("{kamera}: {fachschicht-msg}") bleibt Grenze (a).
+                m = (_sprache.t("antwort.live_nichts") if not ziele else
+                     (_sprache.t("antwort.live_an",
+                                 ok=len(ziele) - len(fehl), alle=len(ziele))
+                      if an else
+                      _sprache.t("antwort.live_aus",
+                                 ok=len(ziele) - len(fehl), alle=len(ziele)))
                      + (" — " + "; ".join(fehl)[:300] if fehl else ""))
                 return self._send(200, json.dumps(
                     {"ok": not fehl, "msg": m}), "application/json")
@@ -8111,8 +9089,7 @@ def make_handler(svc):
                                  "manuell": True})
                             _prot["ok"] = True
                             _store_schreiben(_pp, _prot)
-                        msg = (f"model answered — added to the list as "
-                               f"manually checked; pick it there and save")
+                        msg = _sprache.t("antwort.vision_modell_ok")
                 elif pfad in ("/vision/test", "/vision/konfig"):
                     ok, msg = (svc.vision_test(d) if pfad == "/vision/test"
                                else svc.vision_speichern(d))
@@ -8135,7 +9112,8 @@ def make_handler(svc):
                     n = int(self.headers.get("Content-Length", 0))
                     if n <= 0 or n > 8 * 1024 ** 3:
                         return self._send(400, json.dumps(
-                            {"ok": False, "msg": "missing or oversized upload"}), "application/json")
+                            {"ok": False, "msg": _sprache.t("antwort.restore_upload_fehlt")},
+                            ensure_ascii=False), "application/json")
                     with tempfile.NamedTemporaryFile(prefix=".restore-up-", suffix=".tar.gz",
                                                      dir=svc.cfg["data_dir"], delete=False) as f:
                         tmp, rest = f.name, n
@@ -8148,7 +9126,8 @@ def make_handler(svc):
                     if rest > 0:
                         os.unlink(tmp)
                         return self._send(400, json.dumps(
-                            {"ok": False, "msg": "upload truncated"}), "application/json")
+                            {"ok": False, "msg": _sprache.t("antwort.restore_upload_kaputt")},
+                            ensure_ascii=False), "application/json")
                     try:
                         ok, msg = svc.voll_wiederherstellen(tmp)
                     finally:
@@ -8179,7 +9158,8 @@ def make_handler(svc):
                     if url:
                         _ok, _res = pruefe_url(url)        # startswith("http") liess 'httpx://' & Co durch
                         if not _ok:
-                            return self._send(400, json.dumps({"ok": False, "msg": f"Frigate URL: {_res}"},
+                            return self._send(400, json.dumps({"ok": False,
+                                                              "msg": _sprache.t("antwort.frigate_url", fehler=_res)},
                                                               ensure_ascii=False), "application/json")
                         url = _res
                         updates["frigate_url"] = url
@@ -8188,12 +9168,13 @@ def make_handler(svc):
                     ALLOWED_BK = alle_wizard_werte()   # P3.1: statische Whitelist aus der Registry
                     if backend:
                         if backend not in ALLOWED_BK:
-                            return self._send(400, json.dumps({"ok": False, "msg": f"unknown backend '{backend}'"}), "application/json")
+                            return self._send(400, json.dumps({"ok": False, "msg": _sprache.t("antwort.backend_unbekannt", backend=backend)}, ensure_ascii=False), "application/json")
                         updates["backend"] = backend
                     if d.get("kameras") is not None:               # gegen die REALE Frigate validieren (neue URL falls gesetzt)
                         kams, err = frigate_cameras({**cfg, **({"frigate_url": url} if url else {})}, force=True)
                         if err or not kams:
-                            return self._send(400, json.dumps({"ok": False, "msg": f"Frigate cameras not available: {err or 'none'}"}, ensure_ascii=False), "application/json")
+                            # 'none' bleibt englische Diagnose-Kennung (Grenze d).
+                            return self._send(400, json.dumps({"ok": False, "msg": _sprache.t("antwort.kameras_fehlen", fehler=err or "none")}, ensure_ascii=False), "application/json")
                         neu = {}
                         for name, k in (d.get("kameras") or {}).items():
                             if name not in kams:
@@ -8219,7 +9200,7 @@ def make_handler(svc):
                     svc.log(f"SETUP WIZARD saved: {list(updates.keys())} — restart after the current analysis")
 
                     svc.neustart("Setup-Wizard")
-                    return self._send(200, json.dumps({"ok": True, "msg": "Setup saved — restarting"}, ensure_ascii=False), "application/json")
+                    return self._send(200, json.dumps({"ok": True, "msg": _sprache.t("antwort.setup_gespeichert")}, ensure_ascii=False), "application/json")
                 except Exception as e:
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False), "application/json")
             if pfad == "/kameras_speichern":                   # Kamera-Blatt speichern (Phase 2b)
@@ -8229,7 +9210,8 @@ def make_handler(svc):
                     kams, err = frigate_cameras(cfg)
                     if err or not kams:
                         return self._send(400, json.dumps({"ok": False,
-                            "msg": f"Frigate cameras not available: {err or 'none'}"},
+                            "msg": _sprache.t("antwort.kameras_fehlen",
+                                              fehler=err or "none")},
                             ensure_ascii=False), "application/json")
                     neu = {}
                     for name, k in (d.get("kameras") or {}).items():
@@ -8252,7 +9234,8 @@ def make_handler(svc):
 
                     svc.neustart("Kamera-Blatt")
                     return self._send(200, json.dumps({"ok": True,
-                        "msg": f"{len(neu)} cameras saved — restarting"}, ensure_ascii=False),
+                        "msg": _sprache.t("antwort.kameras_gespeichert", n=len(neu))},
+                        ensure_ascii=False),
                         "application/json")
                 except Exception as e:
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
@@ -8267,11 +9250,12 @@ def make_handler(svc):
                     name = _ll.person_norm(d.get("person"))
                     if not (name and re.match(_ll.PERSON_RE, name)):
                         return self._send(400, json.dumps(
-                            {"ok": False, "msg": "invalid person name (2-40 letters, digits, space, -)"}), "application/json")
+                            {"ok": False, "msg": _sprache.t("antwort.name_ungueltig")},
+                            ensure_ascii=False), "application/json")
                     saetze, _k = _ll.anker_lesen(cfg["data_dir"])
                     satz = next((s for s in saetze if s.get("anker_id") == aid), None)
                     if satz is None:
-                        return self._send(404, json.dumps({"ok": False, "msg": "unknown anchor"}), "application/json")
+                        return self._send(404, json.dumps({"ok": False, "msg": _sprache.t("antwort.anker_unbekannt")}, ensure_ascii=False), "application/json")
                     quelle = _bn.personen_quelle(
                         master_persons(cfg),
                         [a for a in saetze if a.get("anker_id") != aid], _ll.person_norm)
@@ -8295,8 +9279,8 @@ def make_handler(svc):
                     svc.log(f"anchor {aid} named '{name}' ({len(gew)} of {len(mit)} images "
                             "selected) — ready to adopt")
                     return self._send(200, json.dumps(
-                        {"ok": True, "msg": f"named '{name}' — {len(gew)} images selected, "
-                                            f"adopt it with the Adopt button"},
+                        {"ok": True, "msg": _sprache.t("antwort.anker_benannt",
+                                                       name=name, n=len(gew))},
                         ensure_ascii=False), "application/json")
                 except Exception as e:
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
@@ -8316,13 +9300,11 @@ def make_handler(svc):
                     # person mit ab. Uebernommene nie (Referenzen existieren).
                     if satz is None or satz.get("status") not in ("unbenannt", "benannt"):
                         return self._send(400, json.dumps(
-                            {"ok": False, "msg": "only groups without adopted "
-                                                 "pictures can be dismissed"}),
-                            "application/json")
+                            {"ok": False, "msg": _sprache.t("antwort.anker_nur_unadoptiert")},
+                            ensure_ascii=False), "application/json")
                     _s2, ncrops = _ll.anker_verwerfen(cfg["data_dir"], aid)
                     return self._send(200, json.dumps(
-                        {"ok": True, "msg": f"dismissed — {ncrops} images removed, "
-                                            "re-harvests of these events stay quiet"},
+                        {"ok": True, "msg": _sprache.t("antwort.anker_verworfen", n=ncrops)},
                         ensure_ascii=False), "application/json")
                 except Exception as e:
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
@@ -8337,7 +9319,8 @@ def make_handler(svc):
                     lid = str(d.get("lauf_id") or "")
                     if not re.match(r"^L[\w]+$", lid):
                         return self._send(400, json.dumps(
-                            {"ok": False, "msg": "invalid run id"}), "application/json")
+                            {"ok": False, "msg": _sprache.t("antwort.lauf_id_ungueltig")},
+                            ensure_ascii=False), "application/json")
                     lauf, _f = _ll.lauf_lesen(cfg["data_dir"])
                     # Review-MUSS .125: 'fertig' wird vom Lernlauf nie geschrieben —
                     # abgeschlossen entscheidet die zentrale Quelle lauf_abgeschlossen
@@ -8345,13 +9328,15 @@ def make_handler(svc):
                     if lauf and str(lauf.get("lauf_id") or "") == lid \
                             and not _ll.lauf_abgeschlossen(lauf):
                         return self._send(400, json.dumps(
-                            {"ok": False, "msg": "this run is still active — abort it first"}),
-                            "application/json")
+                            {"ok": False, "msg": _sprache.t("antwort.lauf_aktiv")},
+                            ensure_ascii=False), "application/json")
                     z = _ll.lauf_loeschen(cfg["data_dir"], lid)
                     if not z["entfernt"] and not z["dateien"] and z["ordner"]:
                         return self._send(200, json.dumps(
-                            {"ok": True, "msg": f"nothing found for run {lid} — already deleted?"},
+                            {"ok": True, "msg": _sprache.t("antwort.lauf_nichts", lauf=lid)},
                             ensure_ascii=False), "application/json")
+                    # Stufe-2-Grenze (c): detail/warn speisen msg UND svc.log —
+                    # das Log bleibt englisch, die Trennung ist ein eigener Zug.
                     detail = ", ".join(t for t in (
                         f"{z['benannt']} named/adopted" if z["benannt"] else "",
                         f"{z['verworfen']} dismissed" if z["verworfen"] else "") if t)
@@ -8379,8 +9364,9 @@ def make_handler(svc):
                     z, weg, behalten = _ll.alte_laeufe_loeschen(cfg["data_dir"])
                     if not weg:
                         return self._send(200, json.dumps(
-                            {"ok": True, "msg": "nothing to delete — only one run in the store"},
+                            {"ok": True, "msg": _sprache.t("antwort.lauf_nur_einer")},
                             ensure_ascii=False), "application/json")
+                    # Stufe-2-Grenze (c): warn speist msg UND svc.log (s.o.).
                     warn = ("" if z["ordner"] else
                             "; WARNING: not every run folder could be fully removed"
                             + (f" — {z['rest']} file(s) remain on disk" if z["rest"] else ""))
@@ -8410,15 +9396,15 @@ def make_handler(svc):
                     if satz is None or satz.get("status") in ("uebernommen",
                                                               "verworfen"):
                         return self._send(400, json.dumps(
-                            {"ok": False, "msg": "unknown or closed group"}),
-                            "application/json")
+                            {"ok": False, "msg": _sprache.t("antwort.gruppe_unbekannt")},
+                            ensure_ascii=False), "application/json")
                     if svc._emb is None:
                         threading.Thread(target=lambda: svc.embedder,
                                          daemon=True).start()
                         return self._send(200, json.dumps(
                             {"ok": True, "laden": True,
-                             "msg": "loading the recognition model — a few "
-                                    "seconds …"}), "application/json")
+                             "msg": _sprache.t("antwort.modell_laedt")},
+                            ensure_ascii=False), "application/json")
                     # .267 (Widerleger-Blocker): die Uebernahme loescht den
                     # refcache — OHNE ihn wuerde die Flaeche qualitaets-only
                     # urteilen und 'reference check' behaupten. Hier neu
@@ -8428,10 +9414,8 @@ def make_handler(svc):
                         threading.Thread(
                             target=anlernen.refcache_aufbauen,
                             args=(svc.embedder,), daemon=True).start()
-                        return self._send(200, json.dumps(
-                            {"ok": True, "laden": True,
-                             "msg": "rebuilding the reference library — with a "
-                                    "large library this can take a minute …"}), "application/json")
+                        return self._send(200, refcache_warte_antwort(anlernen),
+                                          "application/json")
                     lid = (satz.get("lauf") or {}).get("lauf_id", "")
                     # .273 (Widerleger-Rest c): In-Flight-Riegel — Retry-
                     # Schleife/zweiter Tab starten die 40-Bild-Messung sonst
@@ -8440,15 +9424,16 @@ def make_handler(svc):
                         if getattr(svc, "_sichtung_aid", None) == aid:
                             return self._send(200, json.dumps(
                                 {"ok": True, "laden": True,
-                                 "msg": "checking pictures — a few seconds …"}),
-                                "application/json")
+                                 "msg": _sprache.t("antwort.sichtung_laeuft")},
+                                ensure_ascii=False), "application/json")
                         svc._sichtung_aid = aid
                     try:
                         anlernen.gruppen_sichtung(
                             satz, os.path.join(cfg["data_dir"], "state",
                                                "lernlauf", str(lid)),
                             emb=svc.embedder,
-                            yaw_grenze=cfg["benennung_yaw_grenze"])
+                            yaw_grenze=cfg["benennung_yaw_grenze"],
+                            norm_latte=norm_latte_aus_cfg(cfg))
                     finally:
                         svc._sichtung_aid = None
                     return self._send(200, json.dumps({"ok": True}),
@@ -8475,8 +9460,8 @@ def make_handler(svc):
                     if satz is None or satz.get("status") != "benannt":
                         return self._send(400, json.dumps(
                             {"ok": False,
-                             "msg": "anchor is not named (or unknown)"}),
-                            "application/json")
+                             "msg": _sprache.t("antwort.anker_unbenannt")},
+                            ensure_ascii=False), "application/json")
                     # Warm-Checks wie die Bruecke (.232/.236): kaltes Modell
                     # bzw. fehlender refcache EHRLICH melden, UI fragt nach.
                     if svc._emb is None:
@@ -8484,17 +9469,15 @@ def make_handler(svc):
                                          daemon=True).start()
                         return self._send(200, json.dumps(
                             {"ok": True, "laden": True,
-                             "msg": "loading the recognition model — a few "
-                                    "seconds …"}), "application/json")
+                             "msg": _sprache.t("antwort.modell_laedt")},
+                            ensure_ascii=False), "application/json")
                     if not os.path.exists(os.path.join(
                             cfg["data_dir"], "clips", "refcache.npz")):
                         threading.Thread(
                             target=anlernen.refcache_aufbauen,
                             args=(svc.embedder,), daemon=True).start()
-                        return self._send(200, json.dumps(
-                            {"ok": True, "laden": True,
-                             "msg": "rebuilding the reference library — with a "
-                                    "large library this can take a minute …"}), "application/json")
+                        return self._send(200, refcache_warte_antwort(anlernen),
+                                          "application/json")
                     person = satz.get("person")
                     lid = (satz.get("lauf") or {}).get("lauf_id", "")
                     bew = anlernen.benennung_bewerten(
@@ -8502,7 +9485,8 @@ def make_handler(svc):
                         _ue.adoptierte_embs(cfg["data_dir"], person),
                         emb=svc.embedder,
                         lauf_dir=os.path.join(cfg["data_dir"], "state",
-                                              "lernlauf", lid))
+                                              "lernlauf", lid),
+                        norm_latte=norm_latte_aus_cfg(cfg))
                     return self._send(200, json.dumps(
                         {"ok": True, "person": person, "bewertung": bew},
                         ensure_ascii=False), "application/json")
@@ -8523,7 +9507,7 @@ def make_handler(svc):
                     satz = next((s for s in saetze if s.get("anker_id") == aid), None)
                     if satz is None or satz.get("status") != "benannt":
                         return self._send(400, json.dumps(
-                            {"ok": False, "msg": "anchor is not named (or unknown)"}), "application/json")
+                            {"ok": False, "msg": _sprache.t("antwort.anker_unbenannt")}, ensure_ascii=False), "application/json")
                     person = satz.get("person")
                     werte = {"k_je_bin": cfg["benennung_k_je_bin"],
                              "yaw_grenze": cfg["benennung_yaw_grenze"],
@@ -8536,7 +9520,7 @@ def make_handler(svc):
                     if not plan["aufnehmen"]:
                         if not plan["uebersprungen"]:
                             return self._send(400, json.dumps(
-                                {"ok": False, "msg": "nothing selected — tick at least one image to adopt"}), "application/json")
+                                {"ok": False, "msg": _sprache.t("antwort.adopt_nichts")}, ensure_ascii=False), "application/json")
                         # #17 (Tokn59): ALLE gewaehlten Bilder sind Beinahe-Duplikate schon
                         # uebernommener Referenzen — das Dedup-Urteil ist richtig, aber kein
                         # Fehler: Cluster ehrlich als uebernommen abschliessen (0 neue Dateien,
@@ -8550,10 +9534,8 @@ def make_handler(svc):
                                 f.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))
                                 for f in os.listdir(_rd))):
                             return self._send(400, json.dumps(
-                                {"ok": False, "msg": "dedup matched only references that no "
-                                                     "longer exist on disk — please retry the "
-                                                     "adoption; if this persists, report it"}),
-                                "application/json")
+                                {"ok": False, "msg": _sprache.t("antwort.adopt_phantom")},
+                                ensure_ascii=False), "application/json")
                         _ue.protokoll_anhaengen(cfg["data_dir"], {
                             "ts": round(time.time(), 1), "anker_id": aid, "person": person,
                             "dateien": [], "uebersprungen": plan["uebersprungen"],
@@ -8564,18 +9546,35 @@ def make_handler(svc):
                         svc.log(f"ADOPTION: anchor {aid} -> master/{person}/ (0 new refs — already "
                                 f"covered, {len(plan['uebersprungen'])} near-identical)")
                         return self._send(200, json.dumps(
-                            {"ok": True, "msg": f"already covered — all {len(plan['uebersprungen'])} "
-                                                f"selected image(s) are near-identical to {person}'s "
-                                                "existing references; cluster marked as adopted, "
-                                                "nothing copied"},
+                            {"ok": True, "msg": _sprache.t("antwort.adopt_gedeckt",
+                                                           n=len(plan["uebersprungen"]),
+                                                           person=person)},
                             ensure_ascii=False), "application/json")
                     lid = (satz.get("lauf") or {}).get("lauf_id", "")
                     namen = _ue.uebernehmen(cfg["data_dir"], lid, aid, person, plan)
+                    # .313b (User 21.08., 'immer alle Bilder sehen'): die Ernte-Messung des
+                    # Mitglieds (emb/kante/sharp/norm aus der Vollbild-Detektion) wandert als
+                    # A2-BEIWERT in refs_meta — wie beim Vorrats-Weg (anlernen.vorrat_aufnehmen).
+                    # Ohne Beiwert misst lade_master_refs/lade_master_bilder die DATEI mit det
+                    # 320, und randlose Klein-Crops (61–98 px) sind dort gemessen tot: die
+                    # Referenz laege im Master, fehlte aber im refcache und stuende in der
+                    # Bestands-QS als 'kein Gesicht' zum Loeschen. Mitglieder ohne Ernte-
+                    # Embedding (Alt-Laeufe) schreiben die Zeile wie bisher ohne Beiwert.
                     with open(os.path.join(cfg["data_dir"], "faces", "refs_meta.jsonl"), "a") as f:
-                        for nm in namen:
-                            f.write(json.dumps({"ts": round(time.time(), 1), "person": person,
-                                                "datei": nm, "herkunft": "lernlauf",
-                                                "anker": aid, "aktiv": True}, ensure_ascii=False) + "\n")
+                        for nm, m in zip(namen, plan["aufnehmen"]):
+                            zeile = {"ts": round(time.time(), 1), "person": person,
+                                     "datei": nm, "herkunft": "lernlauf",
+                                     "anker": aid, "aktiv": True}
+                            if m.get("emb"):
+                                zeile.update({"emb": [round(float(t), 5) for t in m["emb"]],
+                                              "emb_modell": m.get("modell") or cfg["modell"],
+                                              "kante": m.get("kante"), "sharp": m.get("sharp"),
+                                              "norm": m.get("norm"), "lauf_id": lid,
+                                              # .314b (Widerleger): OHNE pose zaehlt die
+                                              # Blickrichtungs-Tabelle der Qualitaets-Seite
+                                              # (.273c) jede Lernlauf-Referenz als frontal.
+                                              "pose": m.get("pose")})
+                            f.write(json.dumps(zeile, ensure_ascii=False) + "\n")
                         f.flush()
                     _ue.protokoll_anhaengen(cfg["data_dir"], {
                         "ts": round(time.time(), 1), "anker_id": aid, "person": person,
@@ -8586,17 +9585,34 @@ def make_handler(svc):
                         "bedingungs_tag": (satz.get("auswahl") or {}).get("bedingungs_tag"),
                         "tag_abweichung": ab})
                     _ll.anker_aktualisieren(cfg["data_dir"], aid, status="uebernommen")
-                    try:
-                        os.remove(os.path.join(cfg["data_dir"], "clips", "refcache.npz"))
-                    except FileNotFoundError:
-                        pass                      # naechster Analyse-Lauf baut mit neuem Master
+                    # .313 (User-Fund 21.08.: nach JEDER Gruppe ein Voll-Neuaufbau,
+                    # 327 Referenzen ~1 min): die neuen Bilder EINPFLEGEN statt den
+                    # Cache zu verwerfen; ohne warmen Embedder (svc._emb None) faellt
+                    # es auf das alte Verwerfen zurueck.
+                    import anlernen as _al
+                    _zdir = os.path.join(cfg["data_dir"], "faces", person)
+                    # .313b: Beiwert-Vektor mitgeben — die Datei wird dann nicht gemessen
+                    # (Ergebnis gleich zum Neuaufbau, der fuer Beiwert-Referenzen ebenfalls
+                    # den Beiwert nimmt); ohne Vektor bleibt der Datei-Weg.
+                    if not _al.refcache_ergaenzen_viele(
+                            person, [(os.path.join(_zdir, nm), nm,
+                                      (m.get("emb") if (m.get("emb") and str(
+                                          m.get("modell") or cfg["modell"]).lower()
+                                          == str(cfg["modell"]).lower()) else None))
+                                     for nm, m in zip(namen, plan["aufnehmen"])],
+                            svc._emb, modell=cfg["modell"]):
+                        try:
+                            os.remove(os.path.join(cfg["data_dir"], "clips", "refcache.npz"))
+                        except FileNotFoundError:
+                            pass                  # naechster Analyse-Lauf baut mit neuem Master
                     svc.log(f"ADOPTION: anchor {aid} -> master/{person}/ ({len(namen)} refs, "
                             f"{len(plan['uebersprungen'])} skipped) — export + drift watchdog running")
                     svc.referenz_nacharbeit()
+                    # §8.10-Plural via t_n + §8.11-Anhaenge (skip/watchdog).
                     return self._send(200, json.dumps({"ok": True,
-                        "msg": f"adopted {len(namen)} reference{'s' if len(namen) != 1 else ''} for '{person}'"
-                               + (f", {len(plan['uebersprungen'])} skipped as near-identical" if plan["uebersprungen"] else "")
-                               + " — drift watchdog running (System page)"}, ensure_ascii=False), "application/json")
+                        "msg": _sprache.t_n("antwort.adopt_fertig", len(namen), person=person)
+                               + (_sprache.t("antwort.adopt_skip", n=len(plan["uebersprungen"])) if plan["uebersprungen"] else "")
+                               + _sprache.t("antwort.adopt_watchdog")}, ensure_ascii=False), "application/json")
                 except Exception as e:
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad == "/sprache_speichern":       # Sprach-Stufe 1: Schrieb OHNE Neustart (Areas-Muster B12)
@@ -8652,8 +9668,9 @@ def make_handler(svc):
                     except OSError as e:
                         svc.log(f"AREAS audit line failed ({e}) — change is saved and active")
                     svc.log(f"AREAS saved: {len(erg)} area{'s' if len(erg) != 1 else ''} (no restart)")
+                    # §8.10-Plural via t_n (frueher {'s' if n != 1} im f-String).
                     return self._send(200, json.dumps({"ok": True,
-                        "msg": f"{len(erg)} area{'s' if len(erg) != 1 else ''} saved"},
+                        "msg": _sprache.t_n("antwort.areas_gespeichert", len(erg))},
                         ensure_ascii=False), "application/json")
                 except Exception as e:
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
@@ -8679,16 +9696,35 @@ def make_handler(svc):
             if pfad != "/gt":                                  # Ground-Truth-Label (User-Klick in der UI)
                 return self._send(404, "not found", "text/plain")
             try:
+                import szenarien as _szen
                 n = int(self.headers.get("Content-Length", 0))
                 d = json.loads(self.rfile.read(min(n, 4096)))
-                eid, label = str(d["eid"]), str(d["label"])[:40]
+                eid = str(d["eid"])
                 if not re.match(r"^[\w.\-]+$", eid):
                     return self._send(400, '{"ok": false}', "application/json")
+                # .313 GT als MENGE: 'personen' (Liste) ist die Wahrheit, 'label' wird
+                # EINMAL abgeleitet (szenarien.gt_label_aus_personen) und haelt alle
+                # Altleser byte-gleich; Altaufrufer mit nur 'label' laufen als
+                # Ein-Element-Menge. Jeder Wert wird gegen Master + reservierte Werte
+                # geprueft (vorher: beliebiger String, still auf 40 Zeichen gekappt).
+                if "personen" in d:
+                    roh = d.get("personen")
+                else:
+                    roh = _szen.gt_personen_aus_label(str(d.get("label", "")),
+                                                      set(master_persons(cfg)))
+                ok, personen, grund = _szen.gt_pruefen(roh, set(master_persons(cfg)))
+                if not ok:
+                    return self._send(400, json.dumps({"ok": False, "msg": grund}),
+                                      "application/json")
+                label = _szen.gt_label_aus_personen(personen)
                 with open(os.path.join(cfg["data_dir"], "state", "ground_truth.jsonl"), "a") as f:
                     f.write(json.dumps({"ts": round(time.time(), 1), "eid": eid,
-                                        "label": label}, ensure_ascii=False) + "\n")
+                                        "label": label, "personen": personen},
+                                       ensure_ascii=False) + "\n")
                     f.flush()
-                return self._send(200, '{"ok": true}', "application/json")
+                return self._send(200, json.dumps({"ok": True, "personen": personen,
+                                                   "label": label}, ensure_ascii=False),
+                                  "application/json")
             except Exception:
                 return self._send(400, '{"ok": false}', "application/json")
 
@@ -8708,149 +9744,13 @@ def make_handler(svc):
                 return self._send(302, "", "text/plain", location=ziel)
             if path == "/setup":                          # gefuehrter Erst-Einrichtungs-Wizard (User 22.07.)
                 import webui
-                import onnxruntime as _ort
-                url = (qs.get("url", [""])[0] or cfg.get("frigate_url", "")
-                       or os.environ.get("FRIGATE_URL", "")).strip()   # Vorbelegung: unser Deployment setzt FRIGATE_URL
-                cams, ferr = ({}, None)
-                if url:
-                    _ok, _res = pruefe_url(url)   # aus dem Query-String -> ungeprueft waere die Seite ein Datei-/Port-Orakel
-                    if not _ok:
-                        url, ferr = "", _res
-                if url:
-                    cams, ferr = frigate_cameras({**cfg, "frigate_url": url}, force=("url" in qs))
-                # --- Schritt 1: Frigate-Verbindung ---
-                if url and not ferr and cams:
-                    fstat = f'<div class="ok-box">✓ Connected — {len(cams)} camera(s) found</div>'
-                elif url or ferr:          # ferr auch OHNE url zeigen: eine abgelehnte URL (Tippfehler
-                                           # wie 'htp://…') darf nicht stillschweigend wirkungslos bleiben
-                    fstat = f'<div class="err-box">✗ Could not reach Frigate: {html.escape(str(ferr or "no cameras"))}<br><small>Fix the URL (or set FRIGATE_URL in your .env / docker-compose) and test again.</small></div>'
-                else:
-                    fstat = '<div class="dim">Enter your Frigate URL and test the connection.</div>'
-                s1 = ('<div class="card setup-step"><div class="sh"><span class="sn">1</span>'
-                      '<b>Connect to Frigate</b></div>'
-                      '<p class="sub">suslik reads your cameras straight from Frigate\'s API '
-                      '(usually port 5000). No cameras are hard-coded.</p>'
-                      f'<div class="frow"><input id="setup-url" value="{html.escape(url)}" '
-                      'placeholder="http://192.168.x.x:5000" style="min-width:16rem">'
-                      '<button class="gtb" onclick="setupTest()">Test connection</button></div>'
-                      f'{fstat}</div>')
-                # --- Schritt 2: Kameras + Zonen (nur wenn verbunden) ---
-                kam_store = cfg.get("kameras") or {}
-                rz_cfg = cfg.get("required_zones") or {}
-                if cams and not ferr:
-                    karten = []
-                    for name in sorted(cams):
-                        cc = cams[name]
-                        if name in kam_store:
-                            verw = bool(kam_store[name].get("verwenden", True)); zonen_akt = list(kam_store[name].get("zonen") or [])
-                        else:
-                            verw = bool(cc["enabled"]); zonen_akt = list(rz_cfg.get(name) or [])
-                        nid = html.escape(name, quote=True)
-                        verwenden = (f'<label class="sw"><input type="checkbox" class="kam-verw" '
-                                     f'data-cam="{nid}"{" checked" if verw else ""}> use this camera</label>')
-                        if cc["zones"]:
-                            zboxes = " ".join(
-                                f'<label class="zbox"><input type="checkbox" class="kam-zone" '
-                                f'data-cam="{nid}" value="{html.escape(z, quote=True)}"'
-                                f'{" checked" if z in zonen_akt else ""}> {html.escape(z)}</label>'
-                                for z in cc["zones"])
-                            zonen_ui = f'<div class="zbar">{zboxes}<span class="dim">none ticked = all events</span></div>'
-                        else:
-                            zonen_ui = '<div class="zbar dim">no zones defined in Frigate — all events</div>'
-                        karten.append(f'<div class="card"><div class="kamhead"><b>{html.escape(name)}</b>'
-                                      f'<span class="dim num">{cc["width"] or "?"}×{cc["height"] or "?"}</span>'
-                                      f'{verwenden}</div>{zonen_ui}</div>')
-                    s2 = ('<div class="setup-step"><div class="sh"><span class="sn">2</span>'
-                          '<b>Pick cameras &amp; conditions</b></div>'
-                          '<p class="sub">Tick which cameras to watch; tick one or more zones to only '
-                          'analyze events that entered them (e.g. person in the garden). None ticked = all events.</p>'
-                          + "".join(karten) + '</div>')
-                else:
-                    s2 = ('<div class="setup-step dim"><div class="sh"><span class="sn">2</span>'
-                          '<b>Pick cameras &amp; conditions</b></div>'
-                          '<p class="sub">Connect to Frigate first — your cameras appear here.</p></div>')
-                # --- Schritt 3: Backend/GPU ---
-                avail = _ort.get_available_providers()
-                # P3.1: Optionen + Labels aus der Registry (wizard_optionen liefert die
-                # Werte in der bisherigen Reihenfolge, cpu zuletzt als Universal-Fallback).
-                from core.registry import wizard_optionen, WIZARD_LABELS
-                _werte = wizard_optionen(avail)
-                cur_bk = cfg.get("backend") or next(
-                    (w for w in _werte if w != "cpu"), "cpu")
-                bk_opts = [(w, WIZARD_LABELS[w]) for w in _werte]
-                bk_html = "".join(
-                    f'<label class="bk"><input type="radio" name="setup-backend" value="{html.escape(bid, quote=True)}"'
-                    f'{" checked" if bid == cur_bk else ""}> {html.escape(lbl)}</label>' for bid, lbl in bk_opts)
-                s3 = ('<div class="setup-step"><div class="sh"><span class="sn">3</span>'
-                      '<b>Acceleration</b></div>'
-                      f'<p class="sub">Available on this machine: <span class="num">{html.escape(", ".join(avail))}</span>. '
-                      'Pick one — CPU always works. Whether the accelerator really engages is confirmed live on the '
-                      '<b>System</b> page after start (suslik never silently falls back to CPU without saying so).</p>'
-                      f'<div class="bks">{bk_html}</div></div>')
-                # --- Schritt 4: Gesichter aus Frigate importieren ---
-                if cams and not ferr and url:
-                    try:
-                        with urllib.request.urlopen(f"{url}/api/faces", timeout=15) as r:
-                            _fi = json.load(r)
-                        n_pers = len([k for k in _fi if k != "train"])
-                        n_img = sum(len(v) for k, v in _fi.items() if k != "train")
-                    except Exception:
-                        n_pers = n_img = 0
-                    if n_img:
-                        s4 = ('<div class="setup-step"><div class="sh"><span class="sn">4</span>'
-                              '<b>Import faces from Frigate</b></div>'
-                              f'<p class="sub">Frigate already has <b>{n_img}</b> reference image(s) of '
-                              f'<b>{n_pers}</b> person(s). Import them so suslik recognizes everyone from the start. '
-                              'The images are downloaded quickly, then suslik computes its own face features on '
-                              'your accelerator (GPU/NPU).</p>'
-                              f'<button class="gtb on" onclick="wizImport(this)">Import {n_img} faces from Frigate</button> '
-                              '<span id="wiz-import-status" class="dim"></span></div>')
-                    else:
-                        s4 = ('<div class="setup-step dim"><div class="sh"><span class="sn">4</span>'
-                              '<b>Import faces from Frigate</b></div>'
-                              '<p class="sub">No faces in Frigate yet. Note: suslik needs at least one reference face before it can recognize anyone — import from Frigate here, or upload photos later on the Known page.</p></div>')
-                else:
-                    s4 = ('<div class="setup-step dim"><div class="sh"><span class="sn">4</span>'
-                          '<b>Import faces from Frigate</b></div>'
-                          '<p class="sub">Connect to Frigate first — then you can import its known faces here.</p></div>')
-                # --- Abschluss ---
-                fertig = ('<div class="setup-step"><button class="gtb on" onclick="setupSpeichern(this)">'
-                          'Save &amp; start suslik</button> '
-                          '<span id="setup-status" style="color:var(--dim)"></span>'
-                          '<p class="sub">Saves your choices and restarts the service once. You can re-run this '
-                          'wizard any time from <b>System → Re-run setup wizard</b>.</p></div>')
-                s0 = ('<div class="setup-step"><div class="sh"><b>Already have a configuration?</b></div>'
-                      '<p class="sub">If you exported a suslik configuration before (System → Configuration '
-                      'backup), load it here to restore all settings and skip the wizard.</p>'
-                      '<label class="gtb" style="cursor:pointer">Load configuration file…'
-                      '<input type="file" accept="application/json,.json" style="display:none" '
-                      'onchange="configRestore(this)"></label> '
-                      '<span id="restore-status" class="dim"></span></div>')
-                _wb_ro = frigate_read_only(cfg)     # Vorbelegung mit dem Ist-Wert (Wizard-Durchlauf kippt prod nicht)
-                s5 = ('<div class="setup-step"><div class="sh"><span class="sn">5</span>'
-                      '<b>Write back to Frigate?</b></div>'
-                      '<p class="sub">suslik can write its verdicts back to Frigate (sub_labels) and mirror '
-                      'references, for running both in parallel. Read-only is the safe default.</p>'
-                      '<label style="display:block;margin:3px 0"><input type="radio" name="setup-write" value="ro"'
-                      + (' checked' if _wb_ro else '') + '> Read-only (recommended) — suslik never writes to Frigate</label>'
-                      '<label style="display:block;margin:3px 0"><input type="radio" name="setup-write" value="rw"'
-                      + ('' if _wb_ro else ' checked') + '> Write back to Frigate (parallel operation)</label></div>')
-                # --- Schritt 0: Sprachwahl (Sprach-Stufe 1, B20 — laeuft VOR jedem
-                # Store-Inhalt, sonst ist die Ersteinrichtung immer englisch).
-                # Eigener Sofort-Schrieb ohne Neustart: Klick -> app.js
-                # spracheSetzen() -> POST /sprache_speichern (Areas-Muster) ->
-                # Reload; die restlichen Schritte erscheinen dann uebersetzt,
-                # soweit eingezogen. Unsichtbar, solange nur en registriert ist.
-                s_spr = ""
-                if len(_sprache.SPRACHEN) >= 2:
-                    s_spr = ('<div class="setup-step"><div class="sh"><span class="sn">0</span>'
-                             f'<b>{html.escape(_sprache.t("setup.sprache.titel"))}</b></div>'
-                             f'<p class="sub">{html.escape(_sprache.t("setup.sprache.satz"))}</p>'
-                             f'<div class="sp-reihe">{webui.sprache_knoepfe()}</div></div>')
-                inhalt = ('<h2>Welcome to suslik</h2>'
-                          '<p class="sub">A quick guided setup — or load an existing configuration to skip it. '
-                          'Everything here is editable later on the normal pages.</p>'
-                          + s_spr + s0 + s1 + s2 + s3 + s4 + s5 + fertig)
+                # ME1: Wizard-Render byte-treu in routes/setup.py (Schnappschuss-
+                # Beweis scratchpad/me1_schnappschuss.py); pruefe_url/
+                # frigate_cameras/frigate_read_only als CALLABLES injiziert
+                # (Inventur 1.4 — sie wandern erst mit ME5 nach core/frigatehttp).
+                from routes import setup as _r_setup
+                inhalt = _r_setup.render(qs, cfg, pruefe_url, frigate_cameras,
+                                         frigate_read_only)
                 # Sprach-Stufe 1: Seitentitel aus Schluesseln — NAV-Seiten nutzen
                 # DENSELBEN nav.*-Schluessel wie ihr Menue-Linktext (Pflicht
                 # Linktext == Seitentitel, begriffe_tabellen.md Notiert-Liste).
@@ -9004,18 +9904,12 @@ def make_handler(svc):
                         if t > letzte.get(p, (0, None))[0]:
                             letzte[p] = (t, r)
                 import webui
-                gtmap_h = {}   # F2 (.54): eid -> LETZTES Label (Muster Event-Seite) — der
-                #  Label-WERT entscheidet: Person=beurteilt/raus, "Stranger"/"?"=BLEIBT
-                #  sichtbar (konzept_gt_label_fix.md, abgenommen; vorher warf das reine
-                #  eid-Set auch bestaetigte Fremde aus der Unbekannt-Zaehlung).
-                gtp_h = os.path.join(cfg["data_dir"], "state", "ground_truth.jsonl")
-                if os.path.exists(gtp_h):
-                    with open(gtp_h) as f:
-                        for l in f:
-                            try:
-                                _d = json.loads(l); gtmap_h[_d["eid"]] = _d["label"]
-                            except Exception:
-                                pass
+                import szenarien as _szen
+                # F2 (.54): eid -> LETZTES Label — der Label-WERT entscheidet:
+                #  Person=beurteilt/raus, "Stranger"/"?"=BLEIBT sichtbar
+                #  (konzept_gt_label_fix.md); .313: EINE Lese-Quelle (szenarien.gt_labelmap).
+                gtmap_h = _szen.gt_labelmap(
+                    os.path.join(cfg["data_dir"], "state", "ground_truth.jsonl"))
                 # (by_h wird oben vor der KPI gebaut)
 
                 def _av_farbe(name):
@@ -9140,6 +10034,37 @@ def make_handler(svc):
                             e["best"], e["eid"] = d["best"], d["eid"]
                         e["laeuft"] = e["laeuft"] or bool(s.get("laeuft"))
 
+                # .32x GRUPPEN-KACHEL (User 22.08.): "wenn in dem Szenario drei
+                # oder zwei Personen erkannt worden sind, dann muss das als
+                # Gruppe gebildet werden". Ein gemeinsamer Durchgang ist ein
+                # eigener Sachverhalt — wer mit wem unterwegs war —, und der geht
+                # verloren, wenn jede Person nur einzeln gezaehlt wird.
+                # Der Name ist ALPHABETISCH sortiert (User-Auflage 22.08.: eine
+                # Gruppe darf nicht mal in der einen, mal in der anderen
+                # Reihenfolge heissen), damit dieselbe Gruppe immer gleich heisst
+                # — unabhaengig davon, wer zuerst erkannt wurde oder wessen
+                # Treffer besser war.
+                gruppen_tag = {}
+                for s in interessant:
+                    if len(s["pers"]) < 2:
+                        continue
+                    schl = " & ".join(sorted(s["pers"]))
+                    g = gruppen_tag.setdefault(schl, {
+                        "durchgaenge": 0, "erst": None, "letzt": 0, "eid": None,
+                        "best": -1.0, "kam": None, "laeuft": False,
+                        "namen": sorted(s["pers"])})
+                    g["durchgaenge"] += 1
+                    for p, d in s["pers"].items():
+                        g["erst"] = (d["erst_t"] if g["erst"] is None
+                                     else min(g["erst"], d["erst_t"]))
+                        if d["letzt_t"] >= g["letzt"]:
+                            g["letzt"], g["kam"] = d["letzt_t"], d["letzt_cam"]
+                        # Karten-Foto wie bei den Personen-Karten: nur Gesichts-
+                        # Quellen, sonst faellt die Kachel auf den Buchstaben zurueck.
+                        if d.get("quelle") != "koerper" and d["best"] >= g["best"]:
+                            g["best"], g["eid"] = d["best"], d["eid"]
+                    g["laeuft"] = g["laeuft"] or bool(s.get("laeuft"))
+
                 # Unbekannte KONTEXTABHAENGIG trennen (User-Entscheid 25.07., Kernpunkt): Gesichter, die in
                 # einem Durchgang MIT bestaetigter Person nicht zugeordnet wurden, sind harmlos —
                 # das sind dieselben Leute, nur schlecht getroffen. Sie gehoeren als Fussnote an
@@ -9194,10 +10119,11 @@ def make_handler(svc):
                     cnt = f' <span class="sc">×{count}</span>' if count > 1 else ''
                     # .249 (Kosinus-raus U1): die Rohzahl ist Expert-Tiefe;
                     # Easy traegt die Wortstufe als title (Pill-Optik folgt
-                    # mit Haeppchen 2).
+                    # mit Haeppchen 2). Tranche D (3d): UI-Wort uebersetzt
+                    # via bausteine.stufe_wort; Meldetexte bleiben _vt.wort.
                     from core import vertrauen as _vt
                     sc = (f' <span class="sc nur-expert" title="'
-                          f'{_vt.wort(best, cfg.get("win_thresh"))}">'
+                          f'{_stufe_wort(_vt.stufe(best, cfg.get("win_thresh")))}">'
                           f'{best:.2f}</span>' if best else '')
                     inner = f'{av}{html.escape(name)}{cnt}{sc}'
                     # Paket B (.50): Chip -> Personen-Tagessicht (Spec: Chips wie Karten);
@@ -9353,17 +10279,20 @@ def make_handler(svc):
                 elif _nk is not None:
                     # Leerzustand einer Area-Sicht: der Standard-Text waere hier woertlich
                     # falsch ('niemand auf dem Grundstueck'), wenn nur DIESE Sicht leer ist.
-                    liste = webui.leer(f"No passes touched {_ar_aktiv} "
-                                       + ("yet today." if ist_heute else "on this day."),
-                                       "The All chip above shows the whole property.")
+                    # B9-Ganz-Satz-Umbau: je Zweig ein VOLLER Satz-Schluessel
+                    # (kein Halbsatz-Splicing mehr), Ausgabe byte-identisch.
+                    liste = webui.leer(_sprache.t("leer.passe_area_heute", area=_ar_aktiv)
+                                       if ist_heute else
+                                       _sprache.t("leer.passe_area_tag", area=_ar_aktiv),
+                                       _sprache.t("leer.passe_area_hinweis"))
                 elif ist_heute:
                     # Pass-Begriffs-Hygiene (Areas Stufe 1/K4): sichtbar heisst es ueberall
                     # "pass" — "scenario" bleibt interner Begriff (Speicherwerte-Regel).
-                    liste = webui.leer("No passes with a face yet today.",
-                                       "As soon as someone walks across the property, the pass appears here.")
+                    liste = webui.leer(_sprache.t("leer.passe_heute"),
+                                       _sprache.t("leer.passe_heute_hinweis"))
                 else:
-                    liste = webui.leer("Nothing with a face on this day.",
-                                       "Use the arrows to look at another day, or open Events for the full list.")
+                    liste = webui.leer(_sprache.t("leer.tag"),
+                                       _sprache.t("leer.tag_hinweis"))
                 motiv = (f'<div class="pnote">{motion_n} motion-only passes without a face are hidden, '
                          f'fully listed under <a href="/ereignisse?tag={tag_dt.strftime("%Y-%m-%d")}{_aq}">'
                          f'Events</a>.</div>' if motion_n else '')
@@ -9445,6 +10374,27 @@ def make_handler(svc):
                         f'{_av(p, e["eid"], cls="pk-av")}'
                         f'<div class="pk-txt"><div class="pk-name">{html.escape(p)} {live}</div>'
                         f'<div class="pk-meta">{dg} · {spanne}</div>{kam}</div></a>')
+                # .32x: die Gruppen-Kacheln stehen NACH den Einzelpersonen —
+                # sie ergaenzen sie, sie ersetzen sie nicht (wer zu zweit kam,
+                # war auch einzeln da). Optisch als Gruppe erkennbar (pk-gruppe).
+                for gs, g in sorted(gruppen_tag.items(), key=lambda x: -x[1]["letzt"]):
+                    g_spanne = (_hhmm(g["erst"]) if (g["letzt"] - g["erst"]) < 60
+                                else f'{_hhmm(g["erst"])}\u2013{_hhmm(g["letzt"])}')
+                    g_dg = (f'{g["durchgaenge"]} passes together'
+                            if g["durchgaenge"] != 1 else '1 pass together')
+                    g_kam = (f'<div class="pk-kam">last seen {html.escape(str(g["kam"]))}, '
+                             f'{_hhmm(g["letzt"])}</div>' if g["kam"] else '')
+                    g_live = ('<span class="badge live"><span class="ldot"></span>in progress</span>'
+                              if g["laeuft"] else '')
+                    g_ziel = (f'/auftritte?gruppe={urllib.parse.quote(gs)}'
+                              + ('' if ist_heute else f'&tag={tag_dt.strftime("%Y-%m-%d")}')
+                              + (f'&area={urllib.parse.quote(_ar_aktiv)}' if _nk is not None else ''))
+                    pkarten.append(
+                        f'<a class="pk pk-gruppe{" pk-live" if g["laeuft"] else ""}" href="{g_ziel}">'
+                        + "".join(_av(n, g["eid"] if n == g["namen"][0] else None, cls="pk-av pk-av-klein")
+                                  for n in g["namen"][:3])
+                        + f'<div class="pk-txt"><div class="pk-name">{html.escape(gs)} {g_live}</div>'
+                        f'<div class="pk-meta">{g_dg} · {g_spanne}</div>{g_kam}</div></a>')
                 # --- Unerkannte Durchgaenge GEHOEREN INS BAND (User 25.07.) ---
                 # "Ich habe oben zwei gesehen, heute waren aber mehr Events." Wer nicht erkannt
                 # wurde, war trotzdem da. Optisch abgesetzt (bernstein statt gruen), und wo unser
@@ -9554,20 +10504,18 @@ def make_handler(svc):
                 # niemand da". Ohne Frigate-URL kann nie etwas kommen; ohne Referenzgesichter
                 # wird KEIN Event verarbeitet (der Wizard behauptete frueher das Gegenteil).
                 if not pkarten and not (cfg.get("frigate_url") or "").strip():
-                    band = webui.leer("No Frigate connected yet.",
-                                      "Set your Frigate URL in the setup wizard (Settings) — "
-                                      "then passes appear here automatically.")
+                    band = webui.leer(_sprache.t("leer.frigate"),
+                                      _sprache.t("leer.frigate_hinweis"))
                 elif not pkarten and not master_persons(cfg):
-                    band = webui.leer("Connected — but no reference faces yet, so nobody can "
-                                      "be recognized.",
-                                      "Import faces from Frigate or upload photos — both on the "
-                                      "Known page. suslik then keeps learning from the "
-                                      "cameras on its own.")
+                    band = webui.leer(_sprache.t("leer.refs"),
+                                      _sprache.t("leer.refs_hinweis"))
                 elif pkarten:
                     band = f'<div class="pband">{"".join(pkarten)}</div>'
                 else:
-                    band = webui.leer("Nothing with a face " + ("yet today." if ist_heute else "on this day."),
-                                      "People appear here as soon as a pass is analysed.")
+                    # B9-Ganz-Satz-Umbau wie oben: zwei volle Satz-Schluessel.
+                    band = webui.leer(_sprache.t("leer.band_heute") if ist_heute
+                                      else _sprache.t("leer.band_tag"),
+                                      _sprache.t("leer.band_hinweis"))
                 # Ab Werk ist JEDER Meldeweg aus — wer auf die erste Meldung wartet, wartet
                 # vergebens und erfaehrt es sonst nirgends (Plan-QS P.8).
                 # .200: aus der EINEN Kanal-Quelle statt Inline-Ausdruck (Fix 3);
@@ -9829,6 +10777,18 @@ def make_handler(svc):
                     if p.startswith(base + os.sep) and os.path.isfile(p):
                         return self._send(200, open(p, "rb").read(), "image/jpeg")
                 return self._send(404, "not found", "text/plain")
+            if path.startswith("/lernlauf/vorrat/"):
+                # Vorrats-Crops (bauplan_vorrat.md B4; ohne diese Route haette
+                # keine Angebots-Kachel ein Bild — Konzept-QS W1.10). Muster
+                # und Containment wie /lernlauf/crop/.
+                m = re.match(rf"^/lernlauf/vorrat/([LB][\w]+)/({_reg.DATEI_RE}\.jpg)$", path)
+                if m:
+                    base = os.path.realpath(os.path.join(
+                        cfg["data_dir"], "state", "lernlauf", m.group(1), "vorrat"))
+                    p = os.path.realpath(os.path.join(base, m.group(2)))
+                    if p.startswith(base + os.sep) and os.path.isfile(p):
+                        return self._send(200, open(p, "rb").read(), "image/jpeg")
+                return self._send(404, "not found", "text/plain")
             if path.startswith("/personlauf/bild/"):
                 # PE2: Crop-Auslieferung mit Containment (Muster /lernlauf/crop)
                 _rel = urllib.parse.unquote(path[len("/personlauf/bild/"):])
@@ -10067,6 +11027,7 @@ def make_handler(svc):
                     # Rechnung wie die Benennungs-Karte (core/benennung),
                     # Mutationen laufen weiter nur ueber /lernlauf/benennen
                     # + /lernlauf/uebernehmen.
+                    import anlernen as _al_leer          # .318: Leer-Sortierung
                     _wart = sorted(
                         (s for s in eigene
                          if s.get("status") not in ("uebernommen",
@@ -10104,6 +11065,25 @@ def make_handler(svc):
                         except Exception as e:
                             svc.log(f"lernlauf: zielperson ordering failed "
                                     f"({type(e).__name__}: {e})")
+                    # .318 (User 22.08.): Gruppen, in denen nach der Bewertung KEIN
+                    # Bild mehr im Rahmen steht (Norm-Veto/Gruppen-Konsens), kommen
+                    # ans ENDE der Reihenfolge — der User soll nicht als erstes eine
+                    # leere Karte aufschlagen. Bewusst SORTIEREN statt filtern: die
+                    # Gruppe bleibt im Streifen, ueber ?g= direkt erreichbar und
+                    # loeschbar; nichts wird verworfen (.313-Regel). Ohne Sichtungs-
+                    # Cache ist der Zustand unbekannt -> die Gruppe bleibt vorn.
+                    # stabil (sorted): die Stuetz-/Zielperson-Ordnung bleibt erhalten.
+                    try:
+                        _lz = os.path.join(cfg["data_dir"], "state", "lernlauf",
+                                           str(zustand.get("lauf_id") or ""))
+                        _rfz = _al_leer.refs_matrix_roh(cfg["modell"])
+                        _nlz = norm_latte_aus_cfg(cfg)
+                        _wart.sort(key=lambda s: 1 if _al_leer.sichtung_hat_sichtbare(
+                            s, _lz, cfg["modell"], _rfz, cfg["benennung_dup_sim"],
+                            norm_latte=_nlz) is False else 0)
+                    except Exception as e:
+                        svc.log(f"lernlauf: empty-group ordering failed "
+                                f"({type(e).__name__}: {e})")
                     _gw = (_qd0.get("g", [""])[0] or "").strip()
                     aktuelle = (next((s for s in _wart
                                       if s.get("anker_id") == _gw), None)
@@ -10168,7 +11148,8 @@ def make_handler(svc):
                                     _pf, _si, _al2.refs_matrix_roh(cfg["modell"]),
                                     cfg["benennung_dup_sim"],
                                     _ue3.adoptierte_embs(cfg["data_dir"], _pf)
-                                    if _pf else [])
+                                    if _pf else [],
+                                    norm_latte=norm_latte_aus_cfg(cfg))
                                 sichtung_gesamt = _si.get("gesamt", 0)
                         except Exception as e:
                             svc.log(f"lernlauf: sichtung render failed "
@@ -10176,38 +11157,11 @@ def make_handler(svc):
                             sichtung_liste = False   # .267: Fehler != kein
                             #                          Cache — nie die
                             #                          Reload-Schleife drehen
-                    # .293 (User-Fund 19.08. + Issue #16): eine Gruppe, in
-                    # der KEIN Bild den Bild-Check besteht (0 gut, 0 grenz-
-                    # fall — z. B. Detektor-Fehltreffer wie Planen/Laub, die
-                    # sich zu einer eigenen Gruppe clustern), darf keinen
-                    # Benennungs-Schritt kosten: automatisch der bestehende
-                    # Dismiss-mit-Gedaechtnis-Weg (Zeile+Zentroid bleiben,
-                    # Wiederernten erben still; als Chip weiter einsehbar),
-                    # dann rueckt die Rotation weiter. NUR unbenannte
-                    # Gruppen mit fertiger Qualitaets-Sichtung — bei einer
-                    # BENANNTEN Gruppe urteilt der reference check, dort
-                    # entscheidet der User selbst. Scheitert das Verwerfen,
-                    # rendert die Karte normal (skip/delete wie bisher).
-                    if (isinstance(sichtung_liste, list) and sichtung_liste
-                            and aktuelle is not None
-                            and not aktuelle.get("person")
-                            and aktuelle.get("status") == "unbenannt"
-                            and not any(s.get("stufe") in ("gut", "grenzfall")
-                                        for s in sichtung_liste)):
-                        try:
-                            from core import lernlauf as _ll3
-                            _ll3.anker_verwerfen(
-                                cfg["data_dir"],
-                                str(aktuelle.get("anker_id")))
-                            svc.log(
-                                f"lernlauf: group {aktuelle.get('anker_id')} "
-                                f"auto-dismissed — nothing passed the "
-                                f"picture check ({int(sichtung_gesamt)} "
-                                "pictures, detector false hits)")
-                            return self._send(302, "", location="/lernlauf")
-                        except Exception as e:
-                            svc.log(f"lernlauf: auto-dismiss failed "
-                                    f"({type(e).__name__}: {e})")
+                    # .293 hatte hier Gruppen ohne EIN Check-bestehendes Bild
+                    # automatisch verworfen (Crops geloescht) — .313 (User
+                    # 21.08.): ABGESCHALTET, keine Automatik nimmt Gruppen
+                    # weg; die Karte zeigt 0 gute Bilder + 'show all', der
+                    # User entscheidet (benennen / skip / delete).
                     inhalt = _r_wiz.lauf_seite(zustand, len(eigene), kaputt,
                                                gruppen=eigene,
                                                adoptiert=adoptiert,
@@ -10252,11 +11206,30 @@ def make_handler(svc):
                         evs, _ = _evm.person_events(lambda p: api(cfg, p),
                                                     None if alle_modus else auswahl)
                         bilanz = _evm.auswahl_bilanz(evs)
+                        # .313 (User 21.08.: 'die letzten 30' landeten am 15.08., weil alles
+                        # Neuere schon durchsucht war): ehrlich ausweisen, wie viele der
+                        # gewaehlten Events der Fortsetzungs-Modus ueberspringen wuerde.
+                        try:
+                            from core import lernlauf as _ll_w
+                            _ds = _ll_w.durchsucht_lesen(cfg["data_dir"]) or {}
+                            bilanz["durchsucht"] = sum(1 for e in evs if str(e.get("id")) in _ds)
+                        except Exception:
+                            bilanz["durchsucht"] = None
                         _cd = os.path.join(cfg["data_dir"], "clips")
                         clips = _evm.clips_fuer_prognose(
                             evs, None, cache_pruefer=lambda eid: os.path.isfile(
                                 os.path.join(_cd, str(eid).replace("/", "_") + ".mp4")))
                         prog = _wu.lauf_prognose(werte, clips)
+                        # .313: gemessene Ernte-Rate des letzten Laufs (gleiche
+                        # Maschine+Version) ersetzt den Analyse-Posten — die
+                        # Wanduhr-Konstanten kennen die Ernte-Kosten nicht.
+                        _er = _wu.ernte_rate_lesen(cfg["data_dir"], _placement_hw_key(),
+                                                   os.environ.get("SUSLIK_VERSION", "dev"))
+                        if _er:
+                            _a = _wu.ernte_prognose_s(_er, clips)
+                            prog = {**prog, "analyse_s": _a,
+                                    "gesamt_s": _a + prog["download_s"] + prog["kalt_s"],
+                                    "quelle_analyse": "ernte_rate"}
                     except (urllib.error.URLError, OSError, TimeoutError) as e:
                         # ECHTER Frigate-/Netz-Ausfall -> Banner + Seite bleibt nutzbar
                         svc.frigate_fehler = (time.time(), f"event list: {e}")
@@ -10271,7 +11244,13 @@ def make_handler(svc):
                               "win_thresh",
                               # E2: alle drei Ernte-Gates sichtbar (L = fd_* oben)
                               "ernte_m_det_min", "ernte_m_kante_min", "ernte_m_sharp_min",
-                              "ernte_s_det_min", "ernte_s_winkel_max")]
+                              "ernte_s_det_min", "ernte_s_winkel_max",
+                              # Vorrat (bauplan_vorrat.md B5): das Regime, das der
+                              # Lauf einfrieren wird, ist VOR dem Start sichtbar
+                              "vorrat_norm_min", "vorrat_norm_min_profil",
+                              "vorrat_kante_min", "vorrat_sharp_min",
+                              "vorrat_konsens_min", "katalog_norm_min",
+                              "katalog_norm_min_profil")]
                 # Unbekannt-Sichtbarkeit Baustein B (12.08.): der Wizard ist ein
                 # separater Lauf — wer nach einem Besuch hier landet, erfuhr nirgends,
                 # dass der Pool schon frische Unbekannt-Cluster von heute bereithaelt.
@@ -10337,150 +11316,14 @@ def make_handler(svc):
                 return self._send(302, "", "text/plain", location="/unbekannte")
             if path == "/unbekannte":                    # persistente Unbekannt-Identitaeten (User 20.07.)
                 import webui, anlernen
-                import numpy as _np
-                # kaputte Pool-Zeilen duerfen die Seite nie toeten (kc_phase34 R-2):
-                # nur Dicts mit Listen-members kommen in die Darstellung
-                idents = [u for u in anlernen.lade_unbekannte()
-                          if isinstance(u, dict) and isinstance(u.get("members"), list)]
-                faces = {g["id"]: g for g in anlernen.lade_gesichter()}
-                vors = anlernen.lade_unbekannt_vorschlaege()
-                opts = "".join(f"<option>{html.escape(p)}</option>" for p in master_persons(cfg))
-
-                def _info(u):
-                    mids = [m for m in u.get("members", []) if m in faces]
-                    if not mids:
-                        return None
-                    cams = {}
-                    for m in mids:
-                        c = str(faces[m].get("camera", "?"))
-                        cams[c] = cams.get(c, 0) + 1
-                    tss = [faces[m]["ts"] for m in mids]
-                    rep = max(mids, key=lambda m: faces[m].get("guete", 0))
-                    coh = 1.0
-                    if len(mids) > 1:
-                        M = _np.asarray([faces[m]["emb"] for m in mids], dtype=_np.float32)
-                        M = M / (_np.linalg.norm(M, axis=1, keepdims=True) + 1e-9)
-                        S = M @ M.T
-                        coh = float((S.sum() - len(mids)) / (len(mids) * (len(mids) - 1)))
-                    return {"u": u, "mids": mids, "cams": cams, "von": min(tss), "bis": max(tss),
-                            "rep": rep, "coh": coh, "n": len(mids)}
-
-                infos = [i for i in (_info(u) for u in idents) if i]
-                # Statische Objekte (Radkasten, Lichtflecken — Objekt-Regel des Reconcile,
-                # 25.07.) raus aus den Personen-Eimern: sie sind keine Besucher und duerfen
-                # nirgends als "Unknown N" zum Anlernen angeboten werden. Eigener Eimer
-                # unten, damit sichtbar bleibt, WAS aussortiert wurde (kein stiller Verlust).
-                objekte = [i for i in infos if i["u"].get("objekt")]
-                infos = [i for i in infos if not i["u"].get("objekt")]
-                aktiv = sorted((i for i in infos if i["u"].get("status", "aktiv") == "aktiv"),
-                               key=lambda i: -i["bis"])
-                besucher = [i for i in infos if i["u"].get("status") == "besucher"]
-                wieder = [i for i in aktiv if i["n"] >= 2]
-                einzeln = [i for i in aktiv if i["n"] == 1]
-
-                def _tag(t0, t1):
-                    d0 = datetime.datetime.fromtimestamp(t0)
-                    d1 = datetime.datetime.fromtimestamp(t1)
-                    if d0.date() == d1.date():
-                        s = d0.strftime("%d.%m. %H:%M")
-                        return s if t1 - t0 < 60 else f"{s}–{d1.strftime('%H:%M')}"
-                    return f"{d0.strftime('%d.%m.')}–{d1.strftime('%d.%m.')}"
-
-                def _kachel(i, besuch=False):
-                    u = i["u"]
-                    uid = html.escape(u["id"], quote=True)
-                    name = html.escape(u["id"].replace("U", "Unknown "))
-                    thumbs = "".join(
-                        f'<img src="/anlern/crops/{urllib.parse.quote(m)}.jpg" alt="">'
-                        for m in sorted(i["mids"], key=lambda m: -faces[m].get("guete", 0))[:6])
-                    if i["coh"] >= 0.55:
-                        sicher = '<span class="badge ok">clearly one person</span>'
-                    elif i["n"] > 1:
-                        sicher = f'<span class="badge">similarity {i["coh"]:.2f}</span>'
-                    else:
-                        sicher = '<span class="badge">seen once</span>'
-                    cams = " · ".join(f'{html.escape(c)} {n}'
-                                      for c, n in sorted(i["cams"].items(), key=lambda x: -x[1]))
-                    andere = "".join(
-                        f'<option value="{html.escape(j["u"]["id"], quote=True)}">'
-                        f'{html.escape(j["u"]["id"].replace("U", "Unknown "))}</option>'
-                        for j in aktiv if j["u"]["id"] != u["id"])
-                    if besuch:
-                        akt = (f'<button class="gtb" onclick="unbBesucher(\'{uid}\',false,this)">'
-                               'reactivate</button>')
-                    else:
-                        akt = (f'<input id="nm-{uid}" placeholder="Name (new or existing)" list="pers-list">'
-                               f'<button class="gtb on" onclick="unbBenennen(\'{uid}\',this)">Assign person</button>'
-                               f'<button class="gtb" onclick="unbBesucher(\'{uid}\',true,this)">Ignore</button>'
-                               + (f'<select id="mg-{uid}"><option value="">merge with…</option>{andere}</select>'
-                                  f'<button class="gtb" onclick="unbMerge(\'{uid}\',this)">OK</button>' if andere else ''))
-                    return (
-                        f'<div class="uk" id="uk-{uid}">'
-                        f'<div class="uk-kopf">'
-                        f'<img class="uk-face" src="/anlern/crops/{urllib.parse.quote(i["rep"])}.jpg" alt="">'
-                        f'<div style="min-width:0"><div class="uk-titel">{name}</div>'
-                        f'<div class="uk-meta"><span class="num">{i["n"]}</span> appearances · {_tag(i["von"], i["bis"])}</div>'
-                        f'<div class="chips">{sicher}<span class="chip">{cams}</span></div></div></div>'
-                        f'<div class="streifen">{thumbs}</div>'
-                        f'<div class="uk-akt">{akt}</div></div>')
-
-                vors_html = ""
-                # Vorschlag MIT Gesichtern (User 25.07., Screenshot: "welche Person soll same
-                # person sein?" — eine Gleiche-Person-Frage ohne Bilder ist nicht beantwortbar).
-                # Je Seite bis zu drei Crops, dazwischen ein Trenner; erst dann die Knoepfe.
-                _mitglieder = {u["id"]: (u.get("members") or []) for u in idents}
-                def _merge_thumbs(uid_):
-                    return "".join(
-                        f'<img src="/anlern/crops/{urllib.parse.quote(str(m))}.jpg" alt="">'
-                        for m in _mitglieder.get(uid_, [])[:3])
-                for a, b in vors:
-                    if a in [i["u"]["id"] for i in aktiv] and b in [i["u"]["id"] for i in aktiv]:
-                        vors_html += (
-                            '<div class="merge"><span class="badge warn">same person?</span>'
-                            f'<span class="merge-seite"><b>{html.escape(a.replace("U", "Unknown "))}</b>'
-                            f'<span class="merge-thumbs">{_merge_thumbs(a)}</span></span>'
-                            '<span class="merge-vs">↔</span>'
-                            f'<span class="merge-seite"><b>{html.escape(b.replace("U", "Unknown "))}</b>'
-                            f'<span class="merge-thumbs">{_merge_thumbs(b)}</span></span>'
-                            f'<button class="gtb on" onclick="unbMergePaar(\'{html.escape(a, quote=True)}\','
-                            f'\'{html.escape(b, quote=True)}\',this)">Merge</button>'
-                            f'<button class="gtb" onclick="unbVerwerfen(\'{html.escape(a, quote=True)}\','
-                            f'\'{html.escape(b, quote=True)}\',this)">Different</button></div>')
-
-                kopf = ('<h2>Unknown</h2>'
-                        '<p class="sub">Faces with no known match, grouped into recurring identities. '
-                        '<b>Assign person</b> links a tile to a person (new or existing, type the name), '
-                        '<b>Ignore</b> mutes a known stranger (no alert). '
-                        'New faces are collected automatically after each pass.</p>'
-                        '<p><button class="gtb on" onclick="anlernWartungJetzt(this)">Reorganize now</button> '
-                        '<span style="color:var(--dim);font-size:13px">re-check the pool and rebuild the '
-                        'clusters — collection itself runs automatically (1-2 min)</span></p>'
-                        f'<datalist id="pers-list">{opts}</datalist>')
-                inhalt = kopf + vors_html
-                if wieder:
-                    inhalt += ('<h3>Recurring</h3><div class="ukliste">'
-                               + "".join(_kachel(i) for i in wieder) + '</div>')
-                if einzeln:
-                    inhalt += (f'<details class="mehr"><summary>{len(einzeln)} single appearances '
-                               '(seen once so far)</summary><div class="ukliste">'
-                               + "".join(_kachel(i) for i in einzeln) + '</div></details>')
-                if besucher:
-                    inhalt += (f'<details class="mehr"><summary>{len(besucher)} known visitors '
-                               '(muted)</summary><div class="ukliste">'
-                               + "".join(_kachel(i, besuch=True) for i in besucher) + '</div></details>')
-                if objekte:
-                    inhalt += (f'<details class="mehr"><summary>{len(objekte)} static objects '
-                               '(auto-detected — not people)</summary>'
-                               '<p class="dim">Groups whose images are near-identical to each '
-                               'other and unlike any person — typically a wheel arch, pavement '
-                               'or light pattern the detector keeps mistaking for a face. They '
-                               'are frozen: new finds are never added here (they form fresh, '
-                               'visible clusters and get re-checked by the same rule) — the '
-                               'groups stay listed so nothing is hidden.</p><div class="ukliste">'
-                               + "".join(_kachel(i, besuch=True) for i in objekte) + '</div></details>')
-                if not (wieder or einzeln or besucher):
-                    inhalt += webui.leer("No unknown faces collected yet.",
-                                         "Identities appear here after the next unknown visitor.")
+                # ME1: Seite byte-treu in routes/unbekannte.py (Schnappschuss-
+                # Beweis scratchpad/me1_schnappschuss.py); Pool-Staende + Personen
+                # als Parameter — kein Pool-/Store-Zugriff im Renderer.
+                from routes import unbekannte as _r_unbek
+                inhalt = _r_unbek.render(anlernen.lade_unbekannte(),
+                                         anlernen.lade_gesichter(),
+                                         anlernen.lade_unbekannt_vorschlaege(),
+                                         master_persons(cfg))
                 return self._send(200, webui.layout(_sprache.t("nav.unbekannte"), "/unbekannte", inhalt, self._banner()))
             if path == "/gesichter":                     # zentrale Personen-/Referenzverwaltung (19.07.)
                 import webui
@@ -10496,6 +11339,33 @@ def make_handler(svc):
                 except Exception:
                     d = {"phase": "-", "done": 0, "total": 0, "ts": 0}
                 return self._send(200, json.dumps(d), "application/json")
+            if path == "/qualitaet/status":           # .310 Fortschritts-Widget der Bestands-QS (kein Seiten-Reload)
+                import anlernen
+                _lp = os.path.join(anlernen.ANLERN, "refs_qs_lauf.json")
+                lauf = None
+                if os.path.exists(_lp):
+                    try:
+                        lauf = json.load(open(_lp))
+                    except Exception:
+                        lauf = None
+                aktiv = bool(lauf and not lauf.get("fehler")
+                             and time.time() - (lauf.get("ts") or 0) < 900)
+                # Sichtprobe .310: die ersten ~20 s (Modell-Laden im Pruef-
+                # Prozess) gibt es noch keine Lauf-Datei — der Dienst WEISS
+                # aber, dass der Runner laeuft (_qs_laeuft). Ohne das sah
+                # der Nutzer nach 'Start' nichts ('scheint sich aufgehaengt
+                # zu haben'); i=n=0 heisst 'startet', das Widget sagt es so.
+                aktiv = aktiv or bool(getattr(svc, "_qs_laeuft", False))
+                fertig_ts = 0
+                try:
+                    fertig_ts = os.path.getmtime(anlernen.QS_PATH)
+                except OSError:
+                    pass
+                return self._send(200, json.dumps(
+                    {"laeuft": aktiv, "i": int((lauf or {}).get("i") or 0),
+                     "n": int((lauf or {}).get("n") or 0),
+                     "fehler": (lauf or {}).get("fehler"),
+                     "fertig_ts": round(fertig_ts, 1)}), "application/json")
             if path == "/aehnliche_status":            # Poll der Wartezustaende (Hochzaehlen, 25.07.)
                 import anlernen
                 qp = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
@@ -10514,15 +11384,31 @@ def make_handler(svc):
                 qd = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
                 person = urllib.parse.unquote(qd.get("person", [""])[0]).strip()
                 if person not in master_persons(cfg):
+                    # Der "?"-Titel bleibt literal (kein Text, bewusste Vorgabe)
                     return self._send(200, webui.layout("?", "/gesichter",
-                                      webui.leer("Person unknown."), self._banner()))
+                                      webui.leer(_sprache.t("leer.person_unbekannt")), self._banner()))
                 kand = anlernen.aehnliche_unbekannte(person)
                 if kand is None:
                     svc.qs_neu_starten()           # rechnet Embeddings UND schreibt den refcache
                 vs = anlernen.lade_vorschlaege(person)
                 if vs is None:
                     svc.vorschlaege_starten(person)
-                inhalt, refresh = _r_aehnliche.render(person, kand, vs, cfg["data_dir"])
+                # Vorrat B4: Quelle 3 direkt aus den vorrat.jsonl der EXISTIE-
+                # RENDEN Laeufe (kein Misch-File — Konzept-QS W1.14/W2.4/W2.10);
+                # bereits uebernommene Angebote via refs_meta ausgeblendet.
+                va = []
+                try:
+                    from core import vorrat as _vor, refbeiwert as _rb
+                    _bw, _f = _rb.beiwerte(os.path.join(cfg["data_dir"], "faces"),
+                                           cfg.get("modell"))
+                    _genommen = {(z.get("eid"), z.get("datei_v"))
+                                 for z in _bw.values() if z.get("datei_v")}
+                    va = [z for z in _vor.angebote_lesen(cfg["data_dir"], _genommen)
+                          if z.get("person") == person]
+                except Exception as _e:
+                    svc.log(f"stock offers unavailable ({type(_e).__name__}: {_e})")
+                inhalt, refresh = _r_aehnliche.render(person, kand, vs, cfg["data_dir"],
+                                                      va=va)
                 return self._send(200, webui.layout(_sprache.t("titel.aehnliche"), "/gesichter", inhalt,
                                                     self._banner(), refresh=refresh))
             if path.startswith("/anlern/crops/"):        # Anlern-Crops (read-only, Containment)
@@ -10564,6 +11450,11 @@ def make_handler(svc):
                         lauf = None
                 aktiv = bool(lauf and not lauf.get("fehler")
                              and time.time() - (lauf.get("ts") or 0) < 900)
+                # .310 Anlaufphase (s. /qualitaet/status): Runner laeuft, Datei
+                # noch nicht da -> Leiste mit 0/0, das Widget zeigt 'starting'.
+                if not aktiv and not (lauf and lauf.get("fehler")) \
+                        and getattr(svc, "_qs_laeuft", False):
+                    aktiv, lauf = True, {"i": 0, "n": 0}
                 _pq = (qd.get("person", [""])[0] or "").strip() or None
                 inhalt = _r_qualitaet.render(ansicht, qs, cfg["data_dir"],
                                              lauf=lauf, aktiv=aktiv,
@@ -10571,9 +11462,11 @@ def make_handler(svc):
                 # .282: Auto-Refresh NUR auf der Uebersicht — die Galerie
                 # traegt Checkboxen und Reiter-Wahl, ein Reload wirft beides
                 # weg (User-Befund: 'Banner springt immer wieder zurueck').
+                # .310 (User: 'eine kleine Leiste, die hochzaehlt, ohne den
+                # Browser zu aktualisieren'): das Widget (qsFortschritt in
+                # app.js, pollt /qualitaet/status) ersetzt den 3-s-Reload.
                 return self._send(200, webui.layout(_sprache.t("nav.qualitaet"), "/qualitaet",
-                                                    inhalt, self._banner(),
-                                                    refresh=3 if aktiv and not _pq else None))
+                                                    inhalt, self._banner()))
             if path == "/kameras":                # Kamera-Blatt: Discovery + verwenden + Zonen (Phase 2b)
                 import webui
                 # Modulumbau R1: Rendern byte-treu in routes/kameras.py (Muster
@@ -10598,7 +11491,10 @@ def make_handler(svc):
                 # M1a (S4): Seite byte-treu nach routes/benachrichtigungen.py extrahiert
                 # (auftritte-Muster: cfg+Labels als Parameter, layout/banner bleiben hier).
                 from routes import benachrichtigungen as _r_benach
-                inhalt = _r_benach.render(cfg, KAT_LABELS)
+                # Tranche D (3c): uebersetzte Kategorie-Labels (bausteine.
+                # kat_map, EN wortgleich zu KAT_LABELS); seit Stufe 4 liest
+                # auch der Push-Titel ueber kat_wort (meldung.titel.*).
+                inhalt = _r_benach.render(cfg, _kat_map())
                 return self._send(200, webui.layout(_sprache.t("nav.benachrichtigungen"), "/benachrichtigungen", inhalt, self._banner()))
             if path == "/live":                    # Live-Reiter (Phase 2)
                 import webui
@@ -10649,50 +11545,18 @@ def make_handler(svc):
                 # Karenz-Trigger ohne Meldezeile) + Rueckblick-Video — analog
                 # der Pass-Ansicht unter Recognized.
                 auftritte = _lwz.auftritts_gruppen(gruppen)
-                karten = []
+                # ME1: Karten-Render byte-treu in routes/live.py (alerts_tag,
+                # Schnappschuss-Beweis scratchpad/me1_schnappschuss.py); die
+                # Medien-Suche je Auftritt bleibt hier (Daten als Parameter).
+                from routes import live as _r_live
+                eintraege = []
                 for a in auftritte:
                     bilder, videos = _lwz.auftritt_medien(
                         cfg, a["kamera"], a["ts"], a["ts_letzte"])
                     if not bilder and a.get("bild"):
                         bilder = [a["bild"]]   # Platte schon aufgeraeumt
-                    thumbs = "".join(
-                        f'<a href="/live_alarmbild?p={urllib.parse.quote(b)}"'
-                        f' target="_blank" rel="noopener">'
-                        f'<img class="lv-thumb" loading="lazy" '
-                        f'src="/live_alarmbild?p={urllib.parse.quote(b)}" '
-                        f'alt=""></a>' for b in bilder)
-                    vlinks = " ".join(
-                        f'<a href="/live_alarmbild?p={urllib.parse.quote(v)}"'
-                        f' target="_blank" rel="noopener">&#9654; video '
-                        f'{i + 1}</a>' for i, v in enumerate(videos))
-                    _bis = (f'&ndash;{time.strftime("%H:%M:%S", time.localtime(a["ts_letzte"]))}'
-                            if a["ts_letzte"] - a["ts"] >= 1 else "")
-                    karten.append(
-                        f'<div class="card lv-auftrittkarte" id="a{int(a["ts"])}">'
-                        f'<div><b>{html.escape(a.get("person") or "unknown")}</b>'
-                        f' <span class="dim">'
-                        f'{time.strftime("%H:%M:%S", time.localtime(a["ts"]))}{_bis}'
-                        f' · {html.escape(a["kamera"])}'
-                        f' · {a["trigger"]} trigger{"" if a["trigger"] == 1 else "s"}'
-                        f' · {html.escape("+".join("not sent (no channel)" if _kn == "none" else _kn for _kn in a["kanaele"]))}</span></div>'
-                        + (f'<div class="dim">{html.escape(a["zusatz"][:90])}'
-                           f'</div>' if a.get("zusatz") else '')
-                        + (f'<div class="lv-medienreihe">{thumbs}</div>'
-                           if thumbs else
-                           '<div class="dim">no stored pictures</div>')
-                        + (f'<div class="dim">{vlinks}</div>' if vlinks else '')
-                        + '</div>')
-                inhalt = (
-                    f'<h2>Live watcher alerts</h2>'
-                    f'<p class="sub">{len(auftritte)} appearance'
-                    f'{"" if len(auftritte) == 1 else "s"} ({gesamt} trigger'
-                    f'{"" if gesamt == 1 else "s"}) on '
-                    f'{time.strftime("%Y-%m-%d", time.localtime(_t0))} — '
-                    f'quick check, preliminary; the confirmed verdict comes '
-                    f'from the normal analysis. Entries from before 0.1.0.190 '
-                    f'have no picture or name recorded.</p>'
-                    + ("".join(karten) if karten else
-                       '<div class="leer"><b>No live alerts that day.</b></div>'))
+                    eintraege.append((a, bilder, videos))
+                inhalt = _r_live.alerts_tag(eintraege, gesamt, _t0)
                 return self._send(200, webui.layout(
                     _sprache.t("nav.live_alerts"), "/live_alerts", inhalt, self._banner()))
             if path == "/live_alarmbild":          # Beweismedium eines Live-Alerts (.190, .195: +mp4)
@@ -10746,9 +11610,8 @@ def make_handler(svc):
                     # aus Frigate/Store (keine zweite Kamera-Quelle).
                     return self._send(404, webui.layout(
                         _sprache.t("nav.live"), "/live",
-                        webui.leer("Unknown camera.",
-                                   "Tiles come from Frigate's camera list "
-                                   "and saved watchers only."),
+                        webui.leer(_sprache.t("leer.kamera_unbekannt"),
+                                   _sprache.t("leer.kamera_unbekannt_hinweis")),
                         self._banner()))
                 _g = kd.get("guard")
                 if not _g or _g.get("kanaele") is None:
@@ -11066,7 +11929,7 @@ def make_handler(svc):
                      # N8b: Cache-Groesse SICHTBAR (Feldbericht: 74-GB-Steady-State erst am
                      # 97 % vollen Host bemerkt) + der wirksame Deckel daneben.
                      "clip_cache_gb": round(svc.clip_cache_bytes() / 1024**3, 2),
-                     "clip_cache_max_gb": cfg["clip_cache_max_gb"],
+                     "clip_cache_max_gb": round(svc.speichergrenzen()[0], 1),   # .32x: WIRKSAM, nicht roh (0 = abgeleitet)
                      # Ketten-Schalter (Issue #21, K1): konfigurierte Stufe UND
                      # tatsaechliche Scharf-Lage je Erkennungs-Weg — aus DENSELBEN
                      # Praedikaten wie die Quell-Hooks (kette_lage), die Anzeige
@@ -11286,8 +12149,9 @@ def make_handler(svc):
                     return self._send(302, "", "text/plain",
                                       location=f"/clip/{urllib.parse.quote(ed)}_review")
                 if not os.path.isfile(src):
-                    return self._send(404, "Clip no longer in cache — retention "
-                                      f"{cfg['clip_retention_d']} days", "text/plain; charset=utf-8")
+                    # Tranche D: nutzersichtbare text/plain-Antwort -> t().
+                    return self._send(404, _sprache.t("antwort.clip_weg",
+                                      tage=cfg['clip_retention_d']), "text/plain; charset=utf-8")
                 with svc._review_lock:
                     laeuft = ed in svc._review_laeuft
                     fehler = None if laeuft else svc._review_fehler.pop(ed, None)
@@ -11295,17 +12159,16 @@ def make_handler(svc):
                     # Bau ist gescheitert (Details im Dienst-Log). KEIN Auto-Refresh — sonst
                     # Endlos-Neubau-Schleife; ein manueller Reload versucht es bewusst erneut.
                     inhalt = ('<div class="card" style="text-align:center;padding:40px">'
-                              '<p>&#9888; Transcode failed — see the service log (/log).</p>'
-                              '<p style="color:var(--dim)">Reload this page to retry, or open the '
-                              f'original clip: <a href="/clip/{urllib.parse.quote(ed)}">'
+                              f'<p>{_sprache.t("video.fehl")}</p>'
+                              f'<p style="color:var(--dim)">{_sprache.t("video.fehl_hinweis")} '
+                              f'<a href="/clip/{urllib.parse.quote(ed)}">'
                               '4K/HEVC</a></p></div>')
                     return self._send(200, webui.layout(_sprache.t("titel.video"), "/video", inhalt, self._banner()))
                 svc.review_anfordern(ed)
                 inhalt = ('<div class="card" style="text-align:center;padding:40px">'
                           '<div class="spin"></div>'
-                          '<p>Preparing browser video (H.264)&nbsp;…</p>'
-                          '<p style="color:var(--dim)">This page refreshes automatically. '
-                          'The copy is built once and then cached.</p></div>')
+                          f'<p>{_sprache.t("video.warte")}</p>'
+                          f'<p style="color:var(--dim)">{_sprache.t("video.warte_satz")}</p></div>')
                 return self._send(200, webui.layout(_sprache.t("titel.video"), "/video", inhalt, self._banner(), refresh=2))
             m = re.match(r"^/clip/([\w.\-]+)$", path)
             if m:                                          # der analysierte Record-Clip aus dem Cache
@@ -11313,8 +12176,9 @@ def make_handler(svc):
                 p = os.path.realpath(os.path.join(base, m.group(1) + ".mp4"))
                 if p.startswith(base + os.sep) and os.path.isfile(p):
                     return self._send_file_ranged(p, "video/mp4", dl_name=m.group(1) + ".mp4")
-                return self._send(404, "Clip no longer in cache — retention "
-                                  f"{cfg['clip_retention_d']} days", "text/plain; charset=utf-8")
+                # Tranche D: nutzersichtbare text/plain-Antwort -> t().
+                return self._send(404, _sprache.t("antwort.clip_weg",
+                                  tage=cfg['clip_retention_d']), "text/plain; charset=utf-8")
             if path in ("/review", "/fremde"):
                 # Alt-Galerien aus prototypes/backtest.py — das Werkzeug liegt in keinem Image, die
                 # Seiten entstehen dort also nie. Die Links dorthin sind am 25.07. aus Fusszeile und
@@ -11332,215 +12196,16 @@ def make_handler(svc):
                 return self._send(302, "", "text/plain", location=DOCS_URL)
             if path.startswith("/event/"):        # Einzel-Event-Detail (Klick aus Today, User 22.07.)
                 import webui
+                # ME1: Seite byte-treu in routes/event.py (Schnappschuss-Beweis
+                # scratchpad/me1_schnappschuss.py); log_path + die Kern-Helfer
+                # gt_schnellpersonen/master_persons als Parameter/CALLABLES
+                # (ereignisliste-Muster, modulplan §2c). status 404/200 kommt aus
+                # dem Renderer (Event nicht im Log), Layout/Banner bleiben hier.
+                from routes import event as _r_event
                 eid = urllib.parse.unquote(path[len("/event/"):])
-                row, rows_all = None, []
-                if os.path.exists(svc.log_path):
-                    with open(svc.log_path) as f:
-                        for l in f:
-                            try:
-                                r = json.loads(l)
-                            except Exception:
-                                continue
-                            rows_all.append(r)
-                            if r.get("eid") == eid:
-                                row = r                    # letzter Eintrag pro eid gewinnt
-                if not row:
-                    return self._send(404, webui.layout(_sprache.t("titel.event"), "/heute",
-                                      webui.leer("Event not found.", "It may have aged out of the log."),
-                                      self._banner()))
-                ed = eid.replace("/", "_")
-                edir = os.path.join(cfg["data_dir"], "events", ed)
-                t = datetime.datetime.fromtimestamp(row.get("start") or row.get("ts", 0)).strftime("%d.%m.%Y %H:%M:%S")
-                cam = html.escape(str(row.get("camera", "?")))
-                kat = str(row.get("kategorie", "?"))
-                fr = row.get("frigate") or {}
-                ftxt = (f"{fr.get('label')} {fr['score']:.2f}" if fr.get("label") and fr.get("score") is not None
-                        else "—")
-                ours = ", ".join(f"{p} {(v.get('max') or 0):+.2f}/{v.get('win3s', 0)}×" for p, v in
-                                 sorted((row.get("ours") or {}).items(), key=lambda x: -(x[1].get("max") or 0))) or "—"
-                # .249 (Kosinus-raus U3): Easy sieht Worte an der Messlatte,
-                # die Rohzahlen-Zeile bleibt als Expert-Tiefe erhalten.
-                # .250: nur echte Kandidaten (Stufe != none) ausgeschrieben —
-                # der no-match-Schwanz aller Personen wird GEZAEHLT statt
-                # aufgezaehlt (nichts verschwindet still, nichts lullt).
-                from core import vertrauen as _vt
-                _ow, _ow_rest = [], 0
-                for p, v in sorted((row.get("ours") or {}).items(),
-                                   key=lambda x: -(x[1].get("max") or 0)):
-                    _st9 = _vt.stufe(v.get("max"), cfg.get("win_thresh"))
-                    if _st9 == "none":
-                        _ow_rest += 1
-                        continue
-                    _ow.append(f"{p} — {_vt.label(_st9)} (seen in "
-                               f"{v.get('win3s', 0)} window"
-                               f"{'s' if v.get('win3s', 0) != 1 else ''})")
-                ours_wort = (", ".join(_ow) or "no match for anyone") + (
-                    f" · {_ow_rest} other{'s' if _ow_rest != 1 else ''}: "
-                    "no match" if _ow and _ow_rest else "")
-                best = row.get("bestaetigt") or []
-                if os.path.isdir(edir):
-                    # PRO PERSON gruppiert (User 25.07., Screenshot-Befund: "die Bilder eines
-                    # Events sind voellig unordentlich und durcheinander — es haette pro Gesicht
-                    # geordnet angezeigt werden muessen"). Vorher war das Raster EINE flache
-                    # Liste ueber alle Personen des Events; bei dreien ein Durcheinander. Die
-                    # Zuordnung steckt im Dateinamen (…_best_<Person>_NN… / …_show_<Person>_NN…),
-                    # es braucht keine neue Analyse. Abschnitte nach bestem NN sortiert,
-                    # innerhalb wie gehabt NN und dann Groesse; Bilder ohne Zuordnung
-                    # (z.B. Enrollment-Crops) zuletzt.
-                    def _gal_rang(c):
-                        nn = bild_nn(c)
-                        return (nn if nn is not None else -9.0,
-                                os.path.getsize(os.path.join(edir, c)))
-                    def _gal_person(c):
-                        m2 = re.search(r"_(?:best|show)_(.+?)_NN", c)
-                        return m2.group(1) if m2 else None
-                    jpgs = sorted((c for c in os.listdir(edir) if c.endswith(".jpg")),
-                                  key=_gal_rang, reverse=True)
-                    gruppen = {}
-                    for c in jpgs:
-                        gruppen.setdefault(_gal_person(c), []).append(c)
-                    def _grp_rang(pn):
-                        return max((bild_nn(c) or -9.0) for c in gruppen[pn])
-                    # SICHTBARE GRENZE sicher/unsicher (User-Befund an einer Tuerkamera:
-                    # "hier sollte eine deutliche sichtbare Grenze sein — das habe ich klar
-                    # erkannt, und diese koennten ggf. als falsche Person erkannt werden").
-                    # Grenze = anlernen.UNBEKANNT_MAX: unterhalb davon haelt suslik ein Gesicht
-                    # selbst fuer "unbekannt" — eine Namenszuordnung darunter ist also nur eine
-                    # Vermutung (+0.41, Hinterkopf), keine Erkennung (+0.70). Beurteilt
-                    # wird die GRUPPE an ihrem besten Bild: traegt eine Person EIN starkes Bild,
-                    # sind ihre schwaecheren Zusatz-Crops mitbelegt und gehoeren nicht unter den
-                    # Strich. Import HIER noetig: do_GET importiert anlernen an anderer Stelle
-                    # lokal, damit ist der Name in der GANZEN Funktion lokal — ohne diesen
-                    # Import flog auf jeder Event-Seite ein UnboundLocalError (Prod 25.07. 21:30).
-                    import anlernen
-                    _grenze_nn = anlernen.UNBEKANNT_MAX
-                    teile_gal, _unter_grenze = [], False
-                    _namen = sorted((k for k in gruppen if k is not None), key=_grp_rang,
-                                    reverse=True)
-                    _klar = [p for p in _namen if _grp_rang(p) >= _grenze_nn]
-                    _vage = [p for p in _namen if _grp_rang(p) < _grenze_nn]
-                    for pn in _klar + _vage + ([None] if None in gruppen else []):
-                        if not _unter_grenze and (pn in _vage or pn is None):
-                            teile_gal.append(
-                                '<div class="evgrenze">below this line: weak matches '
-                                f'(best score &lt; {_grenze_nn:.2f}) — the name is a guess, '
-                                'this could be a different person</div>')
-                            _unter_grenze = True
-                        zellen = "".join(
-                            f'<a href="/events/{urllib.parse.quote(ed)}/{urllib.parse.quote(c)}" '
-                            f'class="evimg"><img src="/events/{urllib.parse.quote(ed)}/'
-                            f'{urllib.parse.quote(c)}" alt="{html.escape(c)}"></a>'
-                            for c in gruppen[pn])
-                        titel = html.escape(pn) if pn else "Unattributed"
-                        _b = ' <span class="badge warn">unsure</span>' if pn in _vage else ""
-                        teile_gal.append(
-                            f'<h4 class="evgrp">{titel} <span class="cnt">{len(gruppen[pn])}'
-                            f'</span>{_b}</h4><div class="evgal">{zellen}</div>')
-                    galerie = "".join(teile_gal) if teile_gal                         else webui.leer("No face crops stored for this event.")
-                else:
-                    galerie = webui.leer("No face crops stored for this event.")
-                vid = ""
-                # W3: /video baut die Browser-Kopie lazy beim Klick (Spinner) bzw. leitet auf die
-                # fertige Kopie weiter. Link zeigen, solange EINE der beiden Dateien lebt — die
-                # Kopie ueberlebt ihren Quell-Clip um bis zu clip_retention_d (Review-Fund).
-                if any(os.path.isfile(os.path.join(cfg["data_dir"], "clips", ed + s))
-                       for s in ("_review.mp4", ".mp4")):
-                    vid = f'<a class="btn" href="/video/{urllib.parse.quote(ed)}">&#9654; Video</a>'
-                logl = (f'<a class="btn" href="/events/{urllib.parse.quote(ed)}/analyze.log">Analysis log</a>'
-                        if os.path.isfile(os.path.join(edir, "analyze.log")) else "")
-                gtmap = {}
-                gtp = os.path.join(cfg["data_dir"], "state", "ground_truth.jsonl")
-                if os.path.exists(gtp):
-                    with open(gtp) as f:
-                        for l in f:
-                            try:
-                                d = json.loads(l); gtmap[d["eid"]] = d["label"]
-                            except Exception:
-                                pass
-                gt_schnell = gt_schnellpersonen(rows_all, cfg)
-                andere = [p for p in master_persons(cfg) if p not in gt_schnell]
-                gtb = gt_leiste(eid, gt_schnell, andere, gtmap.get(eid, ""))
-                kbadge = (f'<span class=k style=background:{KAT_FARBE.get(kat, "#666")}>'
-                          f'{html.escape(KAT_LABELS.get(kat, kat))}</span>')
-                if row.get("frames_fehlen"):   # W1: unvollstaendig gelesener Clip sichtbar machen
-                    kbadge += (' <span class=k style="background:#8a6d1a" title="clip incomplete — '
-                               f'read {row.get("frames_gelesen")}/{row.get("frames_soll")} frames; '
-                               'judged from the readable part">⚠ incomplete clip</span>')
-                conf = (' · <b style="color:var(--ok)">✓ ' + html.escape(", ".join(best)) + '</b>') if best else ''
-                # Haeppchen 2: Szenario-Leiste — das Event im Kontext seines Durchgangs
-                # (Szenario-Prinzip als Navigation: view pass + prev/next INNERHALB des
-                # Durchgangs). Faellt still weg, wenn das Event keinem Durchgang angehoert.
-                passleiste = ""
-                try:
-                    import szenarien as _szn
-                    _t0 = row.get("start") or row.get("ts") or 0
-                    _tagd = datetime.datetime.fromtimestamp(_t0).replace(
-                        hour=0, minute=0, second=0, microsecond=0)
-                    _byh = {}
-                    for _r in rows_all:
-                        if _r.get("eid"):
-                            _byh[_r["eid"]] = _r
-                    # Kalendertag statt 86400 s (Review .55 — DST-Klasse wie .54/ereignisse)
-                    _sz = _szn.szenarien_des_tages(_byh, _tagd.timestamp(),
-                                                   (_tagd + datetime.timedelta(days=1)).timestamp(),
-                                                   cfg, gtmap)
-                    _s = next((x for x in _sz
-                               if any(e.get("eid") == eid for e in x.get("evs") or [])), None)
-                    if _s:
-                        # Auch bei n==1 (Issue #9-Nachbefund .173): die Leiste ist der
-                        # einzige Weg zur Pass-Seite und damit zum Analyse-Grund — ein
-                        # EINZELNES Fehler-Event (genau Tokn59s Screenshot-Fall) hatte
-                        # vorher keinen. prev/next entfallen bei n==1 von selbst.
-                        _evs = [e for e in _s.get("evs") or [] if e.get("eid")]
-                        _i = next((k for k, e in enumerate(_evs) if e["eid"] == eid), None)
-                        _pl = (f'<a class="gtb" href="/event/{urllib.parse.quote(str(_evs[_i-1]["eid"]))}">&#8592; prev</a>'
-                               if _i and _i > 0 else '')
-                        _nl = (f'<a class="gtb" href="/event/{urllib.parse.quote(str(_evs[_i+1]["eid"]))}">next &#8594;</a>'
-                               if _i is not None and _i + 1 < len(_evs) else '')
-                        passleiste = (
-                            f'<div class="card passleiste">Part of a pass '
-                            f'<span class="num">{datetime.datetime.fromtimestamp(_s["start"]).strftime("%H:%M")}'
-                            f'&ndash;{datetime.datetime.fromtimestamp(_s["ende"]).strftime("%H:%M")}</span>'
-                            f' · {_s["n"]} {"event" if _s["n"] == 1 else "events"} · '
-                            f'<a class="gtb" href="/pass/{urllib.parse.quote(eid)}">view pass</a> {_pl}{_nl}</div>')
-                except Exception:
-                    passleiste = ""               # Leiste ist Komfort, nie ein Seitenkiller
-                # Issue #9 (Tokn59, 31.07., Zusage endlich eingeloest .173): der GRUND
-                # eines Fehler-Events steht DIREKT auf der Event-Seite. Quelle ist die
-                # EINE Helferin webui.bausteine.fehler_grund (auch die Pass-Seite liest
-                # sie — Widerleger 11.08.: drei Streu-Antworten auf dieselbe Frage,
-                # zwei zeigten Nachspann statt Ursache). Ohne Log ein ehrlicher
-                # Verweis statt gar nichts (genau sein Screenshot-Fall).
-                fehlergrund = ""
-                if kat == "fehler":
-                    _lp = os.path.join(cfg["data_dir"], "events", ed, "analyze.log")
-                    try:
-                        _g = _fehler_grund(_lp)
-                        _hat_log = os.path.isfile(_lp)
-                    except Exception:
-                        _g, _hat_log = "", False   # Grund-Zeile ist Komfort, nie ein Seitenkiller
-                    # Zwei ehrliche Fallbacks (Widerleger-Recheck): ein VORHANDENES Log
-                    # ohne Grund-Zeile darf nicht als "kein Log" ausgegeben werden.
-                    fehlergrund = (
-                        f'<div class="evrow"><span class="lab">Error reason</span>'
-                        + (f'<span>{html.escape(_g)}</span></div>' if _g else
-                           ('<span class="dim">analyze.log holds no reason line — '
-                            'use the log button below</span></div>' if _hat_log else
-                            '<span class="dim">no analyze.log kept for this event — '
-                            'see the service log (System page)</span></div>')))
-                inhalt = (
-                    f'<div class="evhead"><a href="/heute" class="back">← Today</a>'
-                    f'<h2>{cam} · <span class="num">{t}</span></h2></div>'
-                    f'{passleiste}'
-                    f'<div class="card evmeta"><div class="evbadges">{kbadge}{conf}</div>'
-                    f'<div class="evrow"><span class="lab">Frigate</span><span>{html.escape(ftxt)}</span></div>'
-                    f'<div class="evrow"><span class="lab">suslik</span><span>{html.escape(ours_wort)}'
-                    f' <span class="dim nur-expert">· {html.escape(ours)}</span></span></div>'
-                    f'{fehlergrund}'
-                    f'<div class="evactions">{vid}{logl}</div>'
-                    f'<div class="evgt"><span class="lab">{"Correct if wrong" if best else "Who was it?"}</span>{gtb}</div></div>'
-                    f'<h3>Images</h3>{galerie}')
-                return self._send(200, webui.layout(_sprache.t("titel.event"), "/heute", inhalt, self._banner()))
+                status, inhalt = _r_event.render(cfg, svc.log_path, eid,
+                                                 gt_schnellpersonen, master_persons)
+                return self._send(status, webui.layout(_sprache.t("titel.event"), "/heute", inhalt, self._banner()))
             m = re.match(rf"^/events/({_reg.EID_RE})/({_reg.DATEI_RE}\.(?:jpg|log|jsonl))$", path)
             if m:                                          # Crops/Logs ausliefern (Pfad strikt validiert)
                 base = os.path.realpath(os.path.join(cfg["data_dir"], "events"))
@@ -12202,6 +12867,7 @@ def main():
     startup_selfcheck(svc)                    # strukturierter Selbstcheck nach stdout (Roadmap 4/10)
     svc.start_wartung()
     svc.start_stoerungswaechter()
+    svc.start_plattenwache()                      # .313 Issue #25
     svc.start_nachhol()                   # gescheiterte Analysen spaeter stumm nachholen
     svc.start_frigate_probe()             # .281: Schoner-Sperre aktiv proben (MQTT-Leerlauf)
     svc.start_live_aufsicht()             # Phase 4: Live-Engine-Supervisor (Autostart, wenn

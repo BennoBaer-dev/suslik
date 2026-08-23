@@ -148,19 +148,46 @@ def ctx_crop(frame, x1, y1, x2, y2, faktor=2.5, max_kante=560):
 
 
 # ---------------------------------------------------------------- Referenz-Embeddings (det 320!)
-def lade_master_refs(emb):
+def lade_master_refs(emb, puls=None):
     """Embeddings aller bekannten Personen aus dem Master — MIT det 320 (kleine Ref-Crops),
-    VOR dem Umschalten auf 1280 fuers Video (Memory-Regel: sonst brechen die Embeddings ein)."""
+    VOR dem Umschalten auf 1280 fuers Video (Memory-Regel: sonst brechen die Embeddings ein).
+    Vorrats-Referenzen (A2, core/refbeiwert-Vertrag Stelle 1): ihr Vektor kommt
+    aus dem refs_meta-Beiwert, NIE aus embed(datei) — die kleinen Crops sind
+    fuer die Datei-Detektion gemessen tot (28/40).
+    puls(i, n) (.311, optional): Fortschritt je Referenzbild — n wird VORAB
+    gezaehlt, i laeuft ueber alle Bilddateien (Beiwert-Referenzen zaehlen mit,
+    sie sind nur schneller). Reihenfolge und Ergebnis bleiben ohne Puls
+    byte-gleich; der einzige Verbraucher ist refcache_aufbauen (Balken)."""
+    from core import refbeiwert as _rb
     refs = {}
     if not os.path.isdir(MASTER):
         return refs
+    endungen = (".jpg", ".jpeg", ".png", ".webp")
+    i = n = 0
+    if puls:
+        for p in os.listdir(MASTER):
+            pd = os.path.join(MASTER, p)
+            if os.path.isdir(pd):
+                n += sum(1 for f in os.listdir(pd) if f.lower().endswith(endungen))
+        puls(0, n)
+    bw, fremd = _rb.beiwerte(MASTER, emb.modell)
+    if fremd:
+        print(f"lade_master_refs: {fremd} stock reference(s) carry an embedding "
+              f"for another model — not usable, re-learn them", flush=True)
     for p in sorted(os.listdir(MASTER)):
         pd = os.path.join(MASTER, p)
         if not os.path.isdir(pd):
             continue
         V = []
         for f in os.listdir(pd):
-            if not f.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+            if not f.lower().endswith(endungen):
+                continue
+            i += 1
+            if puls:
+                puls(i, n)
+            b = bw.get((p, f))
+            if b is not None:
+                V.append(np.asarray(b["emb"], dtype=np.float32))
                 continue
             img = cv2.imread(os.path.join(pd, f))
             if img is None:
@@ -496,9 +523,10 @@ def _clustere_referenz(gesichter=None, sim=SIM_DEFAULT):
 
 
 # ---------------------------------------------------------------- Benennen (Cluster -> Referenzen)
-def benenne(gesicht_ids, person, beste_n=5):
+def benenne(gesicht_ids, person, beste_n=5, emb=None):
     """Die besten Gesichter eines Clusters als Referenzen fuer <person> in den Master legen.
-    Legt refs/<person>/ an (neue Person moeglich), schreibt refs_meta, verwirft den refcache."""
+    Legt refs/<person>/ an (neue Person moeglich), schreibt refs_meta; mit emb wird
+    der refcache EINGEPFLEGT (.313), ohne emb verworfen wie bisher."""
     import re, shutil
     from core.registry import PERSON_RE
     if not re.fullmatch(PERSON_RE, person or ""):
@@ -513,6 +541,7 @@ def benenne(gesicht_ids, person, beste_n=5):
     os.makedirs(zdir, exist_ok=True)
     meta = os.path.join(MASTER, "refs_meta.jsonl")
     n = 0
+    neue = []
     with open(meta, "a") as mf:
         for g in gewaehlt:
             quelle = os.path.join(CROPS, g["id"] + ".jpg")
@@ -523,12 +552,14 @@ def benenne(gesicht_ids, person, beste_n=5):
             mf.write(json.dumps({"ts": round(time.time(), 1), "person": person, "datei": ziel,
                                  "herkunft": "anlernen", "eid": g["eid"], "aktiv": True},
                                 ensure_ascii=False) + "\n")
+            neue.append((os.path.join(zdir, ziel), ziel))
             n += 1
         mf.flush()
-    try:
-        os.remove(os.path.join(CLIPS, "refcache.npz"))
-    except FileNotFoundError:
-        pass
+    if not refcache_ergaenzen_viele(person, neue, emb):
+        try:
+            os.remove(os.path.join(CLIPS, "refcache.npz"))
+        except FileNotFoundError:
+            pass
     return True, f"{n} Referenzen fuer '{person}' angelegt"
 
 
@@ -993,7 +1024,7 @@ def _pool_sicherung(mids):
             for m in mids if m in G]
 
 
-def benenne_mit_abzug(gesicht_ids, person, beste_n=None):
+def benenne_mit_abzug(gesicht_ids, person, beste_n=None, emb=None):
     """Anlern-Weg der Today-Karte und des Cluster-Anlernens (/anlernen_benennen,
     Issue #19): benenne() + Pool-Abzug in EINEM gelockten Zug, damit angelernte
     Gesichter nicht wieder als unbekannt clustern und die Unknown-Karte verschwindet.
@@ -1015,7 +1046,7 @@ def benenne_mit_abzug(gesicht_ids, person, beste_n=None):
         if not mit_crop:
             return False, "keine Crop-Dateien zu den gewaehlten Gesichtern — nichts angelernt", []
         betroffen = _pool_sicherung(mit_crop)
-        ok, msg = benenne(mit_crop, person,
+        ok, msg = benenne(mit_crop, person, emb=emb,
                           beste_n=beste_n if beste_n else max(1, len(mit_crop)))
         if not ok:
             return False, msg, []
@@ -1031,11 +1062,17 @@ def _person_refs(emb, person):
     lade_master_refs. Die Nachpruefung (Issue #19) brauchte anfangs die ganze
     Bibliothek und kostete damit 650+ s auf CPU (Widerleger 11.08.); fuer das
     "traegt die NEUE Referenz das Event?"-Urteil zaehlt nur die eine Person."""
+    from core import refbeiwert as _rb
     V = []
     pd = os.path.join(MASTER, person)
     if os.path.isdir(pd):
+        bw, _fremd = _rb.beiwerte(MASTER, emb.modell)   # A2-Vertrag Stelle 3
         for f in sorted(os.listdir(pd)):
             if not f.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+                continue
+            b = bw.get((person, f))
+            if b is not None:
+                V.append(np.asarray(b["emb"], dtype=np.float32))
                 continue
             img = cv2.imread(os.path.join(pd, f))
             if img is None:
@@ -1075,14 +1112,14 @@ def nachpruefe_events(person, faces):
     return out
 
 
-def unbekannt_benennen(uid, person, beste_n=6):
+def unbekannt_benennen(uid, person, beste_n=6, emb=None):
     """Gelockter Wrapper (Review 21.07.: serialisiert gegen das kontinuierliche Sammeln, das
     dieselbe gesichter.jsonl schreibt)."""
     with pool_lock():
-        return _unbekannt_benennen_intern(uid, person, beste_n)
+        return _unbekannt_benennen_intern(uid, person, beste_n, emb=emb)
 
 
-def _unbekannt_benennen_intern(uid, person, beste_n=6):
+def _unbekannt_benennen_intern(uid, person, beste_n=6, emb=None):
     """Eine Unbekannt-Identitaet zu einer bekannten Person machen: beste Gesichter als Referenzen
     anlegen, die Gesichter aus dem Unbekannt-Pool entfernen (Crops + gesichter.jsonl), Identitaet
     entfernen. Ab dem naechsten Event wird die Person erkannt und taucht nicht mehr als unbekannt
@@ -1093,7 +1130,7 @@ def _unbekannt_benennen_intern(uid, person, beste_n=6):
         return False, "Identitaet nicht gefunden", []
     mids = U[uid].get("members", [])
     betroffen = _pool_sicherung(mids)
-    ok, msg = benenne(mids, person, beste_n=beste_n)
+    ok, msg = benenne(mids, person, beste_n=beste_n, emb=emb)
     if not ok:
         return False, msg, []
     _pool_abzug_intern(mids)                                # Pool + Crops + Identitaet(en)
@@ -1104,14 +1141,32 @@ def _unbekannt_benennen_intern(uid, person, beste_n=6):
 QS_PATH = os.path.join(ANLERN, "refs_qs.json")
 
 
-def bild_metriken(emb, img, mit_pose=False):
+_NORMMASS = None
+
+
+def _normmass_geteilt():
+    """Die eine NormMass des Prozesses (User 20.08.: die virtuelle Qualitaets-
+    linie gehoert auch in die Bestands-QS) — lazy, Neubau nur bei Modellwechsel;
+    ok=False (fremdes Modell) liefert None und die Messung laeuft ohne Norm
+    weiter, deklariert je Zeile (norm=None)."""
+    global _NORMMASS
+    from face_audit import NormMass, aktuelles_modell
+    m = aktuelles_modell()
+    if _NORMMASS is None or _NORMMASS.modell != m:
+        _NORMMASS = NormMass(modell=m)
+    return _NORMMASS if _NORMMASS.ok else None
+
+
+def bild_metriken(emb, img, mit_pose=False, mit_norm=False):
     """QS-Metriken eines Einzelbilds (det 320): (embedding|None, gesichts_kante_orig|None,
-    sharp[, pose|None]). kante = Gesichtsgroesse in ORIGINAL-Pixeln (Upscaling wie
+    sharp[, pose|None][, norm|None]). kante = Gesichtsgroesse in ORIGINAL-Pixeln (Upscaling wie
     Embedder.embed herausgerechnet). Eine Quelle fuer Eignungspruefung UND Bestands-
     Suche — was die Suche vorschlaegt, besteht damit garantiert auch die Pruefung.
     mit_pose (.273c, Blick-Statistik): liefert zusaetzlich fc.pose (Widerleger-
     Befund: die Pose wurde bisher weggeworfen) — als 4. Wert, damit die drei
-    Bestands-Aufrufer unveraendert bleiben."""
+    Bestands-Aufrufer unveraendert bleiben. mit_norm (User 20.08.: virtuelle
+    Qualitaetslinie auch in der Bestands-QS): Feature-Norm DERSELBEN Detektion
+    als weiterer Wert, None wenn NormMass nicht traegt (fremdes Modell)."""
     h, w = img.shape[:2]
     sh = float(cv2.Laplacian(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var())
     scale = max(1.0, 224.0 / min(h, w))
@@ -1119,16 +1174,34 @@ def bild_metriken(emb, img, mit_pose=False):
                        interpolation=cv2.INTER_CUBIC) if scale > 1.0 else img
     faces = emb.app.get(gross)
     if not faces:
-        return (None, None, round(sh, 0), None) if mit_pose else (None, None, round(sh, 0))
+        leer = [None, None, round(sh, 0)]
+        if mit_pose:
+            leer.append(None)
+        if mit_norm:
+            leer.append(None)
+        return tuple(leer)
     fc = max(faces, key=lambda x: (x.bbox[2] - x.bbox[0]) * (x.bbox[3] - x.bbox[1]))
     x1, y1, x2, y2 = fc.bbox
     kante = round(min(x2 - x1, y2 - y1) / scale)
     v = np.asarray(fc.normed_embedding, dtype=np.float32)
+    aus = [v, kante, round(sh, 0)]
     if mit_pose:
         pose = getattr(fc, "pose", None)
-        return v, kante, round(sh, 0), (
-            [round(float(x), 1) for x in pose] if pose is not None else None)
-    return v, kante, round(sh, 0)
+        aus.append([round(float(x), 1) for x in pose] if pose is not None else None)
+    if mit_norm:
+        # KEINE zweite Detektion: dieselbe fc, dasselbe Alignment wie der
+        # Urteilspfad; nm=None (fremdes Modell) -> None, deklariert.
+        norm = None
+        nm = _normmass_geteilt()
+        if nm is not None:
+            try:
+                from insightface.utils import face_align
+                c112 = face_align.norm_crop(gross, landmark=fc.kps, image_size=112)
+                norm = round(float(nm.feature_norm([c112])[0]), 2)
+            except Exception:
+                pass                          # Zusatz-Auskunft, nie Blocker
+        aus.append(norm)
+    return tuple(aus)
 
 
 def lade_master_bilder(emb, fortschritt=None):
@@ -1146,18 +1219,51 @@ def lade_master_bilder(emb, fortschritt=None):
             continue
         dateien += [(p, f) for f in sorted(os.listdir(pd))
                     if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))]
+    from core import refbeiwert as _rb
+    bw, _fremd = _rb.beiwerte(MASTER, emb.modell)   # A2-Vertrag Stelle 5
+    if _fremd:
+        print(f"lade_master_bilder: {_fremd} stock reference(s) with foreign-model "
+              f"embedding — measured from file instead (will show as unusable)",
+              flush=True)
     out = []
     for i, (p, f) in enumerate(dateien, 1):
-        img = cv2.imread(os.path.join(MASTER, p, f))
-        if img is None:
-            out.append({"person": p, "datei": f, "emb": None, "sharp": 0.0,
-                        "kante": None, "wh": "?", "defekt": True})
+        b = bw.get((p, f))
+        if b is not None:
+            # Beiwert-Referenz: VOLLWERTIGE Messzeile aus den Lauf-Messwerten
+            # (Konzept-QS W2.6 — vorher waere sie mit emb=None aus Verwechs-
+            # lungs-Matrix UND refcache-Schrieb gefallen und als 'kein_gesicht'
+            # zum Loesch-Kandidaten geworden). Die Datei wird NIE gemessen.
+            # .313b: Beiwerte schreibt neben dem Vorrats-Weg auch die Lernlauf-
+            # Uebernahme (Ernte-Messung). NUR die Vorrats-Herkunft bekommt das
+            # vorrat-Flag (eigene Achsen, nie Loesch-Kandidat); eine Lernlauf-
+            # Referenz laeuft mit ihren Ernte-Werten (kante/sharp/norm, gleiche
+            # Skalen) an der regulaeren Latte wie eine gemessene Datei.
+            img = cv2.imread(os.path.join(MASTER, p, f))
+            out.append({"person": p, "datei": f,
+                        "emb": np.asarray(b["emb"], np.float32),
+                        "sharp": float(b.get("sharp") or 0.0),
+                        "kante": b.get("kante"), "pose": b.get("pose"),
+                        "wh": (f"{img.shape[1]}x{img.shape[0]}"
+                               if img is not None else "?"),
+                        "defekt": False,
+                        "vorrat": str(b.get("herkunft") or "vorrat") == "vorrat",
+                        "norm": b.get("norm")})
         else:
-            v, kante, sh, pose = bild_metriken(emb, img, mit_pose=True)
-            out.append({"person": p, "datei": f, "emb": v, "sharp": sh,
-                        "kante": kante, "pose": pose,
-                        "wh": f"{img.shape[1]}x{img.shape[0]}",
-                        "defekt": False})
+            img = cv2.imread(os.path.join(MASTER, p, f))
+            if img is None:
+                out.append({"person": p, "datei": f, "emb": None, "sharp": 0.0,
+                            "kante": None, "wh": "?", "defekt": True})
+            else:
+                # Virtuelle Qualitaetslinie AUCH fuer den Alt-Bestand (User
+                # 20.08.): jede messbare Referenz bekommt ihre Feature-Norm —
+                # dieselbe Skala wie Vorrat/Katalog-Linie, aus DERSELBEN
+                # Detektion (mit_norm, keine Doppelmessung).
+                v, kante, sh, pose, norm = bild_metriken(emb, img, mit_pose=True,
+                                                         mit_norm=True)
+                out.append({"person": p, "datei": f, "emb": v, "sharp": sh,
+                            "kante": kante, "pose": pose, "norm": norm,
+                            "wh": f"{img.shape[1]}x{img.shape[0]}",
+                            "defekt": False})
         if fortschritt:
             fortschritt(i, len(dateien))
     return out
@@ -1168,7 +1274,8 @@ def pruefe_referenzen(flag_sim=0.30, top=40,
                       min_kante=REF_LATTE["min_kante"],
                       kante_gut=REF_LATTE["kante_gut"],
                       sharp_gut=REF_LATTE["sharp_gut"],
-                      dup_sim=0.75, person=None, emb=None, fortschritt=None):
+                      dup_sim=0.75, person=None, emb=None, fortschritt=None,
+                      norm_latte=None):
     """Referenz-QS (.273 zum Bestands-QS-Knopf ausgebaut, Konzept
     konzept_bestandsqs.md) in VIER Teilen: (1) EIGNUNG jedes einzelnen
     Bildes — defekt / kein Gesicht / zu klein / unscharf (Loesch-Kandidaten,
@@ -1187,18 +1294,64 @@ def pruefe_referenzen(flag_sim=0.30, top=40,
     B = lade_master_bilder(emb, fortschritt=fortschritt)
     # .273 Qualitaets-Stufe je Bild (REF_LATTE = eine Quelle mit Bruecke/
     # Sichtung): unmessbar / unter / mindest / gut.
+    # .308 (User-Go 21.08. — 'auch der QS-Knopf aufs neue Regelwerk'):
+    # NORM-WEG in der Einstufung — dieselbe Alternativ-Regel wie bild_stufe
+    # (.307): Norm >= gut-Linie = GUT, Norm >= Sammel-Schwelle = mindest,
+    # jeweils mit den Vorrats-Boeden fuer Kante/Schaerfe. Ohne norm_latte
+    # (Vorrat aus) urteilt die Stufe BYTE-GLEICH wie .306. Messbasis der
+    # Entscheidung (Prod 20.08., 296 Referenzen): 50 Bilder mit Norm >= 24
+    # trugen nur 'mindest'/'unter', und 30 von 39 Loeschkandidaten der
+    # Pixel-Latte hatten Norm >= 22 (bis 25,1) — die Latte haette
+    # identitaetsstarke Fern-Referenzen zum Loeschen vorgeschlagen.
+    _nl = norm_latte or {}
+
+    def _norm_stufe(b):
+        """'gut'|'mindest'|None ueber den Norm-Weg (None = nicht qualifiziert)."""
+        n = b.get("norm")
+        if n is None or _nl.get("min") is None:
+            return None
+        if (b.get("kante") or 0) < (_nl.get("kante") or 0) or b["sharp"] < (_nl.get("sharp") or 0):
+            return None
+        if _nl.get("gut") is not None and n >= _nl["gut"]:
+            return "gut"
+        if n >= _nl["min"]:
+            return "mindest"
+        return None
+
     for b in B:
-        if b.get("defekt") or b["emb"] is None:
-            b["stufe"] = "unmessbar"
-        elif (b["kante"] or 0) >= kante_gut and b["sharp"] >= sharp_gut:
+        if b.get("vorrat"):
+            # Vorrats-Referenz (A2): an ihren EIGENEN Achsen qualifiziert
+            # (Norm-Linie + Konsens + Schaerfe 600) — die Pixel-Latte gilt
+            # fuer sie nicht. Klasse 'gut' statt neuem Enum-Wert (kein
+            # unbekannter stufe-Wert fuer bestehende Leser), das
+            # vorrat-Flag traegt die Transparenz.
             b["stufe"] = "gut"
-        elif (b["kante"] or 0) >= min_kante and b["sharp"] >= unscharf_max:
+        elif b.get("defekt") or b["emb"] is None:
+            b["stufe"] = "unmessbar"
+        elif ((b["kante"] or 0) >= kante_gut and b["sharp"] >= sharp_gut) \
+                or _norm_stufe(b) == "gut":
+            b["stufe"] = "gut"
+        elif ((b["kante"] or 0) >= min_kante and b["sharp"] >= unscharf_max) \
+                or _norm_stufe(b) == "mindest":
             b["stufe"] = "mindest"
         else:
             b["stufe"] = "unter"
+        if _norm_stufe(b) and not ((b.get("kante") or 0) >= min_kante
+                                   and (b.get("sharp") or 0) >= unscharf_max):
+            b["norm_traegt"] = True        # Transparenz: Stufe kommt vom Norm-Weg
     PRIO = ("defekt", "kein_gesicht", "zu_klein", "unscharf")
     ungeeignet = []
     for b in B:
+        if b.get("vorrat"):
+            # W1.16: eine Vorrats-Referenz darf NIE als Loesch-Kandidat der
+            # Pixel-Latte gefuehrt werden — ihre Achsen sind Norm/Konsens/
+            # Schaerfe-600, und die Latten-Messung an der Datei waere ohnehin
+            # die tote Nach-Detektion (28/40-Befund).
+            continue
+        if b.get("norm_traegt"):
+            # .308: am Norm-Weg qualifiziert -> KEIN Loeschkandidat der
+            # Pixel-Latte (zu_klein/unscharf), egal wie klein die Kante.
+            continue
         gruende = []
         if b.get("defekt"):
             gruende.append("defekt")
@@ -1309,6 +1462,19 @@ def pruefe_referenzen(flag_sim=0.30, top=40,
                                     "stufen": {p_: {b["datei"]: b["stufe"]
                                                for b in B if b["person"] == p_}
                                                for p_ in personen},
+                                    # Virtuelle Qualitaetslinie (User 20.08.):
+                                    # Feature-Norm je messbarer Referenz —
+                                    # dieselbe Skala wie Vorrat/Katalog-Linie;
+                                    # vorrat=True markiert Beiwert-Referenzen.
+                                    "normen": {p_: {b["datei"]: b.get("norm")
+                                               for b in B if b["person"] == p_
+                                               and b.get("norm") is not None}
+                                               for p_ in personen},
+                                    "vorrat_refs": sorted(
+                                        b["datei"] for b in B if b.get("vorrat")),
+                                    "norm_latte": _nl or None,
+                                    "norm_traegt": sorted(
+                                        b["datei"] for b in B if b.get("norm_traegt")),
                                     "paare": paare, "ungeeignet": ungeeignet})
     if person:
         ungeeignet = [u for u in ungeeignet if u["person"] == person]
@@ -1413,7 +1579,7 @@ def _cache_meta(z):
     return json.loads(str(z[key]))
 
 
-def aehnliche_unbekannte(person, max_n=12, min_sim=0.28):
+def aehnliche_unbekannte(person, max_n=12, min_sim=0.28, abstand=0.10):
     """Umgedrehter Weg (User 19.07.): gesammelte UNBEKANNTE Gesichter, sortiert nach Aehnlichkeit
     zu den vorhandenen Referenzen von <person>. Nutzt den refcache (von analyze gepflegt, det 320)
     — schnell, kein Embedder. Rueckgabe: Liste (evtl. leer), oder None wenn der Cache die Person
@@ -1435,6 +1601,12 @@ def aehnliche_unbekannte(person, max_n=12, min_sim=0.28):
     R = np.asarray(z[person], np.float32)
     if len(R) == 0:
         return []
+    # .310 (User-Fund 21.08.: die Liste bot fuer eine Bewohnerin drei Gesichter
+    # einer ANDEREN Bewohnerin an, Sim 0,28-0,30): dieselbe Identitaets-Regel
+    # wie ueberall (bild_stufe): ist eine andere Person naeher oder fehlt der
+    # Abstand, ist das Gesicht KEIN Vorschlag fuer diese Person.
+    fremd_M = {p: np.asarray(z[p], np.float32) for p in z.files
+               if p not in ("meta", "§meta", person) and len(z[p])}
     # pro (person,datei): aktiv-Status aus der LETZTEN Zeile, eid aus IRGENDEINER Zeile des
     # Keys — spaetere Zeilen ohne eid (z.B. der Export-Vermerk von sync_refs) duerfen die
     # benenne-Zuordnung nicht verdraengen (Review-Finding 19.07.); ein geloeschtes
@@ -1468,9 +1640,12 @@ def aehnliche_unbekannte(person, max_n=12, min_sim=0.28):
         v = np.asarray(g["emb"], np.float32)
         s = float((R @ v).max())
         if s >= min_sim:
+            fremd = max((float((M @ v).max()) for M in fremd_M.values()), default=None)
+            if fremd is not None and (fremd >= s or (s - fremd) < abstand):
+                continue                      # fremd naeher / zu wenig Abstand -> raus
             out.append({"id": g["id"], "camera": g.get("camera"), "ts": g.get("ts"),
                         "nn_person": g.get("nn_person"), "nn_score": g.get("nn_score"),
-                        "sim": round(s, 3)})
+                        "sim": round(s, 3), "fremd": (round(fremd, 3) if fremd is not None else None)})
     out.sort(key=lambda x: -x["sim"])
     return out[:max_n]
 
@@ -1546,12 +1721,42 @@ def embedder_warm():
     return _EMB_CACHE is not None
 
 
+# D1 (.30x, User-Fund 20.08.: der Pass-Knopf meldete "nothing to take …
+# (that is fine)", obwohl ALLE 149 Gesichter unter der Groessen-Latte lagen):
+# die Gruende von bild_stufe als EINE benannte Quelle. Ein Eintrag traegt
+# beides — den UI-Text (Wortlaut UNVERAENDERT) und die sprachneutrale
+# Diagnose-KENNUNG (§8.19). Ohne die Tabelle muesste die Diagnose die Texte
+# raten: eine zweite verstreute Aufzaehlung genau der Klasse, die die
+# QS-Ebenen-Regel verbietet (K3).
+GRUND_TEXT = {
+    "zu_klein_unscharf": "too small or too blurry for a reference",
+    "gedeckt":           "already covered (near-identical to a reference)",
+    "fremd_naeher":      "closer to someone else",
+    "id_unsicher":       "identity not certain enough",
+    "beides_schwach":    "neither quality nor identity strong enough",
+    # .316 (User 22.08.): Veto der virtuellen Qualitaetslinie. Der Text nennt die
+    # Zahl nicht — die haengt die Flaeche an (wie bei 'zu_klein_unscharf').
+    "unter_linie":       "not a face by the quality measure",
+    # .32x: Struktur-Test — der Ausschnitt zeigt keine Gesichtsstruktur (Nacken,
+    # Ohr, Hinterkopf, Vegetation). Die Zahl haengt die Flaeche an.
+    "keine_struktur": "no face structure in this crop",
+    # Die zwei Grade der Stufe 'neutral' (kein Ausschluss) — der
+    # Vollstaendigkeit halber hier, damit bild_stufe KEINEN Text
+    # ausserhalb dieser Tabelle bildet.
+    "nur_qualitaet":     "quality only fair",
+    "nur_identitaet":    "identity not fully certain",
+}
+GRUND_KLASSE = {text: kennung for kennung, text in GRUND_TEXT.items()}
+
+
 def bild_stufe(eigen, fremd, kante, sh, *,
                min_kante=REF_LATTE["min_kante"],
                unscharf_max=REF_LATTE["unscharf_max"],
                sim_min=0.45, sim_neu=0.75, sim_unsicher=0.30, abstand=0.10,
                kante_gut=REF_LATTE["kante_gut"],
-               sharp_gut=REF_LATTE["sharp_gut"]):
+               sharp_gut=REF_LATTE["sharp_gut"],
+               norm=None, norm_gut=None, norm_min=None,
+               norm_kante_min=None, norm_sharp_min=None):
     """.257: die Zwei-Achsen-Bewertung der Bruecke als EINE QUELLE (QS-Ebenen-
     Regel; Anlass: die Benenn-Pruefung der Zuweisungs-Flaeche hatte nur den
     Dedup und liess 12 matschige Bilder als 'neu' durch — User-Fang am
@@ -1560,30 +1765,45 @@ def bild_stufe(eigen, fremd, kante, sh, *,
     fremd>=eigen = raus. Qualitaet: Mindest-Gate kante/sharp, GUT ab
     kante_gut/sharp_gut. eigen=None (Person ohne Referenzen, Kaltstart der
     Gruppe): Identitaet gilt als User-Wort, nur die Qualitaets-Achse traegt.
+    NORM-WEG (.307, User-Go 20.08. — Screenshot-Fund: 27 scharfe Bilder an
+    'needs 70 px' abgelehnt): tragen die norm_*-Parameter Werte (Aufrufer
+    liefert sie aus der Config, nur bei vorrat_aktiv) und ist eine
+    Feature-Norm gemessen, qualifiziert sie ALTERNATIV zur Pixel-Latte:
+    norm >= norm_min als Mindest-Gate, norm >= norm_gut als GUT-Stufe,
+    jeweils mit den Vorrats-Boeden norm_kante_min/norm_sharp_min. Ohne die
+    Parameter (Default) urteilt die Funktion UNVERAENDERT (.257-Gate-Vektoren).
     -> (stufe 'empfohlen'|'neutral'|None, grund_englisch fuer die UI)."""
-    if kante is None or sh is None or kante < min_kante or sh < unscharf_max:
-        return None, "too small or too blurry for a reference"
+    _norm_ok = (norm is not None and norm_min is not None
+                and kante is not None and sh is not None
+                and norm >= norm_min
+                and kante >= (norm_kante_min or 0)
+                and sh >= (norm_sharp_min or 0))
+    if ((kante is None or sh is None or kante < min_kante or sh < unscharf_max)
+            and not _norm_ok):
+        return None, GRUND_TEXT["zu_klein_unscharf"]
     if eigen is not None:
         if eigen >= sim_neu:
-            return None, "already covered (near-identical to a reference)"
+            return None, GRUND_TEXT["gedeckt"]
         if fremd is not None and fremd >= eigen:
-            return None, "closer to someone else"
+            return None, GRUND_TEXT["fremd_naeher"]
         if eigen >= sim_min:
             id_sicher = True
         elif eigen >= sim_unsicher and (fremd is None
                                         or (eigen - fremd) >= abstand):
             id_sicher = False
         else:
-            return None, "identity not certain enough"
+            return None, GRUND_TEXT["id_unsicher"]
     else:
         id_sicher = True
-    qual_gut = kante >= kante_gut and sh >= sharp_gut
+    qual_gut = (kante >= kante_gut and sh >= sharp_gut) or (
+        norm is not None and norm_gut is not None and norm >= norm_gut
+        and kante >= (norm_kante_min or 0) and sh >= (norm_sharp_min or 0))
     if id_sicher and qual_gut:
         return "empfohlen", ""
     if id_sicher or qual_gut:
-        return "neutral", ("quality only fair" if not qual_gut
-                           else "identity not fully certain")
-    return None, "neither quality nor identity strong enough"
+        return "neutral", (GRUND_TEXT["nur_qualitaet"] if not qual_gut
+                           else GRUND_TEXT["nur_identitaet"])
+    return None, GRUND_TEXT["beides_schwach"]
 
 
 def refs_matrix_roh(modell):
@@ -1611,13 +1831,35 @@ def refs_matrix(emb):
     return refs_matrix_roh(emb.modell)
 
 
+def diagnose_dominant(dg):
+    """D1 (.30x): DIE eine Klasse, die den Ausgang einer Bestands-/Pass-Pruefung
+    erklaert. Zuerst die Faelle, die die Zaehlung selbst erklaeren (Person ohne
+    Referenzen / kein Event im Scope / kein einziges gemessenes Bild), danach
+    der haeufigste Ausschlussgrund. Gleichstand loest alphabetisch auf, damit
+    dieselben Zahlen immer denselben Satz ergeben (kein Zufall aus der
+    dict-Reihenfolge). -> Kennung|None (None = nichts zu erklaeren)."""
+    if not dg:
+        return None
+    if dg.get("keine_referenzen"):
+        return "keine_referenzen"
+    if not dg.get("events"):
+        return "keine_events"
+    if not dg.get("geprueft"):
+        return "kein_crop"
+    klassen = dg.get("klassen") or {}
+    if not klassen:
+        return None
+    return max(sorted(klassen), key=lambda k: klassen[k])
+
+
 def vorschlaege_person(person, tage=7.0, max_n=16,
                        min_kante=REF_LATTE["min_kante"],
                        unscharf_max=REF_LATTE["unscharf_max"],
                        sim_min=0.45, sim_neu=0.75, sim_unsicher=0.30, abstand=0.10,
                        kante_gut=REF_LATTE["kante_gut"],
                        sharp_gut=REF_LATTE["sharp_gut"], max_pruef=80,
-                       nur_eids=None, schreiben=True, emb=None):
+                       nur_eids=None, schreiben=True, emb=None,
+                       diagnose=None, norm_latte=None):
     """Bestands-Suche (User 19.07.): durchsucht die Events der Person aus den letzten Tagen
     nach referenz-tauglichen NEUEN Gesichtern. Quelle sind Events, in denen die Person
     bestaetigt ist ODER (User 21.07.) ihr bestes Match ist — so tauchen auch SCHWACH
@@ -1629,7 +1871,12 @@ def vorschlaege_person(person, tage=7.0, max_n=16,
                      kante>=min_kante & sharp>=unscharf_max) / unbrauchbar (raus)
     Stufe: sicher&gut -> 'empfohlen'; genau eins von beiden -> 'neutral'; sonst -> raus
     ('Not recommended' wird NICHT angezeigt). Neuheit: eigen<sim_neu, sonst Duplikat.
-    Neueste Events zuerst, hoechstens max_pruef Bild-Messungen. Ergebnis -> vorschlaege_*.json."""
+    Neueste Events zuerst, hoechstens max_pruef Bild-Messungen. Ergebnis -> vorschlaege_*.json.
+    diagnose (D1, .30x): OPTIONALES dict des Aufrufers, das hier BEFUELLT wird —
+    je Ausschlussklasse ein Zaehler plus die Bestwerte (kante_max/sharp_max) und
+    die geltenden Schwellen. Reine Berichts-Erweiterung: die Entscheidung, wer
+    durchkommt, ist unveraendert; gezaehlt wird nur, WORAN es lag. Ohne dict
+    kostet sie ein paar Additionen und sonst nichts."""
     # .235: uebergebene Instanz (svc.embedder, OV-schnell) hat Vorrang —
     # die Bruecke lief sonst auf einer zweiten CPU-Instanz (~2 s je Bild).
     emb = emb or _embedder_geteilt()
@@ -1637,6 +1884,17 @@ def vorschlaege_person(person, tage=7.0, max_n=16,
     if not len(refs.get(person, [])):
         refs = lade_master_refs(emb)
     kand = []
+    # D1: der Diagnose-Satz wird IMMER mitgefuehrt (billig) und nur am Ende in
+    # das dict des Aufrufers gespiegelt. 'klassen' sind Kennungen, keine Texte.
+    dg = {"person": person, "events": 0, "geprueft": 0, "klassen": {},
+          "kante_max": None, "sharp_max": None,
+          "min_kante": int(min_kante), "unscharf_max": int(unscharf_max),
+          "keine_referenzen": not len(refs.get(person, [])),
+          "gedeckelt": False, "empfohlen": 0, "neutral": 0}
+
+    def _zaehl(klasse):
+        dg["klassen"][klasse] = dg["klassen"].get(klasse, 0) + 1
+
     if len(refs.get(person, [])):
         grenze = time.time() - tage * 86400
         dp = os.path.join(DATA, "state", "deckung.jsonl")
@@ -1666,49 +1924,97 @@ def vorschlaege_person(person, tage=7.0, max_n=16,
             seen.add(eid)
             eventliste.append(d)
         eventliste.sort(key=lambda d: -(d.get("start") or d.get("ts") or 0))   # neueste zuerst
+        dg["events"] = len(eventliste)
         # 2) teure Bild-Messung nur auf die neuesten max_pruef Events mit Crop
         geprueft = 0
         gedeckelt = False
         for d in eventliste:
             ed = os.path.join(DATA, "events", d["eid"].replace("/", "_"))
             if not os.path.isdir(ed):
+                _zaehl("kein_crop")
                 continue
-            js = ([f for f in os.listdir(ed) if f"_show_{person}_" in f] or
-                  [f for f in os.listdir(ed) if f"_best_{person}_NN" in f])
+            # D3 (.30x): EXAKT dieselbe Wahl wie die Auftritte-Seite
+            # (auftritte._crop_url: sorted + [-1]). Vorher entschied
+            # os.listdir()[0], also die Verzeichnisreihenfolge — die Pruefung
+            # konnte ein ANDERES Bild messen als der Nutzer auf der Seite
+            # sieht. Ziel ist die Deckungsgleichheit, nicht eine bessere
+            # Formel: dass die Sortierung bei mehreren label-Praefixen im
+            # Namen nicht streng nach dem NN-Score geht, ist eine Eigenschaft
+            # BEIDER Stellen und bleibt hier unangetastet (Wahl waere sonst
+            # wieder verschieden).
+            js = (sorted(f for f in os.listdir(ed) if f"_show_{person}_" in f) or
+                  sorted(f for f in os.listdir(ed) if f"_best_{person}_NN" in f))
             if not js:
+                _zaehl("kein_crop")
                 continue
             if geprueft >= max_pruef:
                 gedeckelt = True
+                dg["gedeckelt"] = True
                 break
-            img = cv2.imread(os.path.join(ed, js[0]))
+            datei = js[-1]
+            img = cv2.imread(os.path.join(ed, datei))
             if img is None:
+                _zaehl("kein_crop")
                 continue
             geprueft += 1
-            v, kante, sh = bild_metriken(emb, img)
-            # Bildqualitaet-Mindest-Gate: zu klein/unscharf -> unbrauchbare Referenz
-            if v is None or kante is None or kante < min_kante or sh < unscharf_max:
+            dg["geprueft"] = geprueft
+            # .308: Norm aus DERSELBEN Detektion — der Norm-Weg qualifiziert
+            # alternativ zur Pixel-Latte (norm_latte aus der Dienst-Config).
+            v, kante, sh, norm = bild_metriken(emb, img, mit_norm=True)
+            _nl = norm_latte or {}
+            _norm_ok = (norm is not None and _nl.get("min") is not None
+                        and kante is not None and norm >= _nl["min"]
+                        and kante >= (_nl.get("kante") or 0) and sh >= (_nl.get("sharp") or 0))
+            if kante is not None:
+                dg["kante_max"] = max(dg["kante_max"] or 0, int(kante))
+            if sh is not None:
+                dg["sharp_max"] = max(dg["sharp_max"] or 0, int(sh))
+            # Bildqualitaet-Mindest-Gate: zu klein/unscharf -> unbrauchbare Referenz.
+            # D1: dieselbe Reihenfolge derselben drei Bedingungen wie vorher
+            # (v/kante -> min_kante -> unscharf_max), nur benannt statt gebuendelt —
+            # die Entscheidung ist Zeile fuer Zeile dieselbe.
+            if v is None or kante is None:
+                _zaehl("kein_gesicht")
+                continue
+            if kante < min_kante and not _norm_ok:
+                _zaehl("zu_klein")
+                continue
+            if sh < unscharf_max and not _norm_ok:
+                _zaehl("zu_unscharf")
                 continue
             eigen = float((refs[person] @ v).max())
             fremd = max((float((M @ v).max()) for p2, M in refs.items()
                          if p2 != person and len(M)), default=-1.0)
             # .257: Zwei-Achsen-Matrix aus der EINEN Quelle (bild_stufe) —
             # identische Semantik wie die Inline-Fassung davor.
-            stufe, _grund = bild_stufe(
+            stufe, grund = bild_stufe(
                 eigen, fremd, kante, sh, min_kante=min_kante,
                 unscharf_max=unscharf_max, sim_min=sim_min, sim_neu=sim_neu,
                 sim_unsicher=sim_unsicher, abstand=abstand,
-                kante_gut=kante_gut, sharp_gut=sharp_gut)
+                kante_gut=kante_gut, sharp_gut=sharp_gut,
+                norm=norm, norm_gut=_nl.get("gut"), norm_min=_nl.get("min"),
+                norm_kante_min=_nl.get("kante"), norm_sharp_min=_nl.get("sharp"))
             if stufe is None:
+                # D1: der Grund wurde hier bisher weggeworfen (_grund) — genau
+                # deshalb konnte die Bruecke "nichts Brauchbares" melden, ohne
+                # sagen zu koennen woran es lag. Kennung statt Text (§8.19).
+                _zaehl(GRUND_KLASSE.get(grund, "sonstiges"))
                 continue
-            kand.append({"eid": d["eid"], "datei": js[0], "sim": round(eigen, 3),
+            kand.append({"eid": d["eid"], "datei": datei, "sim": round(eigen, 3),
                          "fremd": round(fremd, 3), "kante": kante, "sharp": sh,
+                         "norm": norm,
                          "stufe": stufe, "sicher": (stufe == "empfohlen"),
                          "camera": d.get("camera"), "ts": d.get("start") or d.get("ts")})
         kand.sort(key=lambda k: (0 if k["stufe"] == "empfohlen" else 1, k["sim"]))
         kand = kand[:max_n]
+        dg["empfohlen"] = sum(1 for k in kand if k["stufe"] == "empfohlen")
+        dg["neutral"] = sum(1 for k in kand if k["stufe"] == "neutral")
         if gedeckelt:
             print(f"vorschlaege {person}: cap of {max_pruef} image measurements reached, "
                   f"older events unchecked", flush=True)
+    dg["dominant"] = diagnose_dominant(dg)
+    if diagnose is not None:
+        diagnose.update(dg)
     if schreiben:
         os.makedirs(ANLERN, exist_ok=True)
         _schreibe_json_atomar(_vorschlaege_pfad(person),
@@ -1717,7 +2023,7 @@ def vorschlaege_person(person, tage=7.0, max_n=16,
     return kand
 
 
-def refcache_ergaenzen(person, bild_pfad, datei, emb):
+def refcache_ergaenzen(person, bild_pfad, datei, emb, emb_vec=None, emb_modell=None):
     """.236 (User-Befund: nach einer Uebernahme war die naechste Pruefung
     wieder langsam, OHNE Lade-Hinweis — das Modell war warm, aber der
     verworfene refcache zwang einen vollen Inline-Neuaufbau ueber ~300
@@ -1728,16 +2034,23 @@ def refcache_ergaenzen(person, bild_pfad, datei, emb):
     ziel = os.path.join(CLIPS, "refcache.npz")
     tmp = f"{ziel}.tmp-{os.getpid()}"
     try:
-        if emb is None or not os.path.exists(ziel):
+        if not os.path.exists(ziel):
             return False
         z = np.load(ziel, allow_pickle=True)
         meta = _cache_meta(z)
-        if str(meta.get("§modell", "")) != emb.modell:
-            return False
-        img = cv2.imread(bild_pfad)
-        v = emb.embed(img) if img is not None else None
-        if v is None:
-            return False
+        if emb_vec is not None:
+            # A2-Vertrag Stelle 6 (Vorrats-Uebernahme): der Vollbild-Beiwert
+            # ist der Vektor — embed(datei) waere die tote Nach-Detektion.
+            if str(meta.get("§modell", "")) != str(emb_modell or ""):
+                return False
+            v = np.asarray(emb_vec, dtype=np.float64)
+        else:
+            if emb is None or str(meta.get("§modell", "")) != emb.modell:
+                return False
+            img = cv2.imread(bild_pfad)
+            v = emb.embed(img) if img is not None else None
+            if v is None:
+                return False
         refs = {p: np.asarray(z[p], np.float32) for p in z.files
                 if p not in ("meta", "§meta")}
         alt = refs.get(person)
@@ -1747,7 +2060,11 @@ def refcache_ergaenzen(person, bild_pfad, datei, emb):
         want.setdefault(person, []).append(datei)
         want[person] = sorted(set(want[person]))
         with open(tmp, "wb") as f:
-            np.savez(f, **{"§meta": json.dumps({**want, "§modell": emb.modell})},
+            # .309: im Beiwert-Zweig gibt es kein emb — das Modell kommt aus dem
+            # (bereits geprueften) Meta-Block; emb.modell warf hier einen
+            # AttributeError -> False -> Cache verworfen -> Voll-Neuaufbau je
+            # Uebernahme (User-Fund 21.08. 'Referenzen werden neu aufgebaut').
+            np.savez(f, **{"§meta": json.dumps({**want, "§modell": str(meta.get("§modell", ""))})},
                      **refs)
             f.flush()
             os.fsync(f.fileno())
@@ -1761,18 +2078,123 @@ def refcache_ergaenzen(person, bild_pfad, datei, emb):
         return False
 
 
+def refcache_ergaenzen_viele(person, bilder, emb, modell=None):
+    """.313 (User-Fund 21.08. am Lernlauf: nach JEDER Gruppen-Benennung lief ein
+    Voll-Neuaufbau ueber ~327 Referenzen, weil die Uebernahme den Cache verwarf):
+    MEHRERE neue Referenzen einer Person in EINEM Zug einpflegen — Gruppen-
+    Uebernahme im Lernlauf, Unbekannt-Benennung, Enrollment, Upload. Liest die
+    npz einmal, schreibt einmal atomar (tmp+fsync+replace).
+    bilder: [(bild_pfad, datei)] ODER [(bild_pfad, datei, emb_vec)] — mit
+    Vektor (.313b: A2-Beiwert der Lernlauf-Uebernahme = Ernte-Messung) wird
+    die Datei NICHT gemessen (fuer randlose Klein-Crops ist die Datei-Detektion
+    gemessen tot, 28/40 — lade_master_refs nimmt fuer Beiwert-Referenzen
+    ebenfalls den Beiwert, Ergebnis gleich zum Neuaufbau); ohne Vektor wird
+    wie bisher auf demselben Weg wie lade_master_refs embeddet.
+    modell: Modell-Kennung, wenn KEIN Embedder da ist (nur Beiwert-Zeilen).
+    -> True = Cache konsistent: eingepflegt, oder es gab keinen Cache (dann baut
+       ihn die naechste Pruefung ohnehin). False = Aufrufer verwirft den Cache
+       wie bisher (kein Embedder UND kein Vektor, Modell-Mismatch, Lese-/
+       Schreibfehler).
+    Dateien ohne Nach-Detektion (embed -> None) werden uebersprungen — der
+    Neuaufbau liesse sie genauso aus (lade_master_refs: 'if v is not None')."""
+    ziel = os.path.join(CLIPS, "refcache.npz")
+    tmp = f"{ziel}.tmp-{os.getpid()}"
+    try:
+        if not os.path.exists(ziel):
+            return True
+        eintraege = [tuple(b) for b in bilder]
+        if emb is None and any(len(b) < 3 or b[2] is None for b in eintraege):
+            return False
+        modell = str(emb.modell if emb is not None else (modell or aktuelles_modell())).lower()
+        z = np.load(ziel, allow_pickle=True)
+        meta = _cache_meta(z)
+        if str(meta.get("§modell", "")) != modell:
+            return False
+        neue = []
+        for b in eintraege:
+            bild_pfad, datei = b[0], b[1]
+            if len(b) >= 3 and b[2] is not None:
+                v = np.asarray(b[2], np.float32)
+            else:
+                img = cv2.imread(bild_pfad)
+                v = emb.embed(img) if img is not None else None
+            if v is not None:
+                neue.append((datei, v.astype(np.float32)))
+        refs = {p: np.asarray(z[p], np.float32) for p in z.files
+                if p not in ("meta", "§meta")}
+        want = {k: list(w) for k, w in meta.items() if not str(k).startswith("§")}
+        if neue:
+            alt = refs.get(person)
+            M = np.vstack([v[None, :] for _, v in neue])
+            refs[person] = np.vstack([alt, M]) if alt is not None and len(alt) else M
+        # Datei-Liste traegt ALLE neuen Dateien (auch ohne Vektor) — wie want in
+        # lade_master_refs/refcache_aufbauen: sync_refs.master_stand vergleicht
+        # Dateilisten, nicht Vektoren.
+        want.setdefault(person, []).extend(b[1] for b in eintraege)
+        want[person] = sorted(set(want[person]))
+        with open(tmp, "wb") as f:
+            np.savez(f, **{"§meta": json.dumps({**want, "§modell": modell})}, **refs)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, ziel)
+        return True
+    except Exception as e:
+        print(f"refcache_ergaenzen_viele failed: {type(e).__name__}: {e}", flush=True)
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return False
+
+
 _REFCACHE_BAU = threading.Lock()
+# .311 (User 21.08., Lernlauf-Karte: 'hier koennte man auch so einen kleinen
+# Balken bauen, damit der User ein Gefuehl bekommt, dass noch etwas im
+# Hintergrund passiert'): EIN Modul-Stand fuer den Hintergrund-Neuaufbau —
+# refcache_aufbauen pulst i/n hinein, refcache_fortschritt liest ihn, die drei
+# Warte-Antworten (Bruecke, Sichtung, Benenn-Pruefung) reichen ihn durch.
+_REFCACHE_STAND = {"laeuft": False, "i": 0, "n": 0, "fehler": 0, "fehler_ts": 0.0}
+# Fehler-Pause (Widerleger .311, beide Linsen): scheitert der Bau zweimal in
+# Folge (Platte voll, Rechte, Ordner weg), startete sonst JEDER Poll alle
+# 2,5 s einen neuen Voll-Neuaufbau, und die Blaetter pollten endlos (der
+# 60-s-Deckel des Auftritte-Blatts greift auf dem zustand-Ast nicht). In der
+# Pause laeuft kein Bau, die Warte-Antwort wird ok:false -> Schleifen enden.
+REFCACHE_FEHLER_PAUSE_S = 600
+
+
+def _refcache_puls(i, n):
+    # n zieht mit i nach: waechst MASTER waehrend des Baus (Uebernahme ohne
+    # Bau-Lock), liefe i sonst ueber das vorab gezaehlte n hinaus ('313/312').
+    _REFCACHE_STAND["i"], _REFCACHE_STAND["n"] = int(i), max(int(n), int(i))
+
+
+def refcache_fortschritt():
+    """Fortschritt des refcache-Neuaufbaus: {laeuft, i, n, fehler, pause} —
+    i/n sind 0/0, solange noch gezaehlt wird (Blatt zeigt den leeren Balken);
+    pause=True heisst: zwei Fehlschlaege in Folge, Bau ruht fuer
+    REFCACHE_FEHLER_PAUSE_S (die Warte-Antwort meldet dann einen Fehler)."""
+    s = _REFCACHE_STAND
+    pause = (s["fehler"] >= 2
+             and time.time() - s["fehler_ts"] < REFCACHE_FEHLER_PAUSE_S)
+    return {"laeuft": bool(s["laeuft"]), "i": int(s["i"]), "n": int(s["n"]),
+            "fehler": int(s["fehler"]), "pause": bool(pause)}
 
 
 def refcache_aufbauen(emb):
     """.236: refcache im HINTERGRUND neu aufbauen (fuer die Faelle, die weiter
     voll invalidieren: Undo, Loeschung, Cluster-benenne) — die Bruecke meldet
     solange ehrlich 'updating …' statt den Neuaufbau inline zu zahlen.
-    Nicht-blockierend fuer Zweitaufrufer (Lock non-blocking)."""
+    Nicht-blockierend fuer Zweitaufrufer (Lock non-blocking). .311: pulst
+    i/n in _REFCACHE_STAND, meldet Fehlschlaege LAUT und haelt nach zwei
+    Fehlschlaegen in Folge die Fehler-Pause ein (kein dritter Voll-Neuaufbau
+    je Poll); der naechste Erfolg setzt den Zaehler zurueck."""
+    if refcache_fortschritt()["pause"]:
+        return False
     if not _REFCACHE_BAU.acquire(blocking=False):
         return False
+    _REFCACHE_STAND.update(laeuft=True, i=0, n=0)
     try:
-        refs = lade_master_refs(emb)
+        refs = lade_master_refs(emb, puls=_refcache_puls)
         want = {}
         for p in sorted(refs):
             pd = os.path.join(MASTER, p)
@@ -1787,10 +2209,16 @@ def refcache_aufbauen(emb):
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, ziel)
+        _REFCACHE_STAND["fehler"] = 0
         return True
-    except Exception:
+    except Exception as e:
+        _REFCACHE_STAND["fehler"] += 1
+        _REFCACHE_STAND["fehler_ts"] = time.time()
+        print(f"refcache_aufbauen failed ({_REFCACHE_STAND['fehler']}x in a row): "
+              f"{type(e).__name__}: {e}", flush=True)
         return False
     finally:
+        _REFCACHE_STAND["laeuft"] = False
         _REFCACHE_BAU.release()
 
 
@@ -1832,29 +2260,130 @@ def vorschlag_aufnehmen(person, eid, datei, emb=None):
     return True, ziel
 
 
-def lernbruecke_pruefen(person, eids, emb=None):
+def vorrat_aufnehmen(person, lauf_id, datei, eid, data_dir=None):
+    """Ein Vorrats-Angebot als Referenz uebernehmen (bauplan_vorrat.md B4;
+    EIGENER Zweig neben vorschlag_aufnehmen — der Event-Crop-Draht kann den
+    Vorrats-Pfad nicht transportieren, Konzept-QS W1.13):
+    v-Crop -> Master (eigene Containment-Basis state/lernlauf/<lid>/vorrat),
+    refs_meta MIT A2-Beiwert (emb + emb_modell + Lauf-Messwerte, serverseitig
+    aus der vorrat.jsonl des Laufs nachgeschlagen — W2.11), refcache-Einpflege
+    ueber den Beiwert. -> (ok, ziel_oder_fehler)."""
+    import re, shutil
+    from core.registry import PERSON_RE, DATEI_RE   # Namens-Vertrag statt Streu-Literal
+    from core import vorrat as _vor
+    dd = data_dir or DATA
+    if (not re.fullmatch(PERSON_RE, person or "")
+            or not re.fullmatch(r"[LB]\w+", str(lauf_id or ""))   # L = Lernlauf, B = Bruecke
+            or not str(datei or "").startswith("v_")
+            or not re.fullmatch(rf"{DATEI_RE}\.jpg", str(datei or ""), re.I)):
+        return False, "ungueltige Angaben"
+    basis = os.path.realpath(os.path.join(dd, "state", "lernlauf",
+                                          str(lauf_id), "vorrat"))
+    quelle = os.path.realpath(os.path.join(basis, datei))
+    if not quelle.startswith(basis + os.sep) or not os.path.isfile(quelle):
+        return False, "Vorrats-Crop nicht gefunden (Lauf geloescht?)"
+    emb_vec, zeile = _vor.beiwert_nachschlagen(dd, lauf_id,
+                                               os.path.join("vorrat", datei))
+    if emb_vec is None:
+        # Ohne Beiwert keine Uebernahme: die Datei allein waere die tote
+        # Referenz aus dem 28/40-Befund — LAUT ablehnen statt still anlegen.
+        return False, "kein Embedding-Beiwert im Lauf (vorrat.jsonl fehlt/alt)"
+    if str(zeile.get("eid") or "") != str(eid or ""):
+        return False, "Angebot passt nicht zum Event"
+    zdir = os.path.join(MASTER, person)
+    os.makedirs(zdir, exist_ok=True)
+    ed = str(eid).replace("/", "_")
+    ziel = f"vorrat_{int(time.time())}_{ed[-10:]}_{re.sub(r'[^\w.-]', '_', datei)[-30:]}"
+    shutil.copyfile(quelle, os.path.join(zdir, ziel))
+    with open(os.path.join(MASTER, "refs_meta.jsonl"), "a") as f:
+        f.write(json.dumps({"ts": round(time.time(), 1), "person": person,
+                            "datei": ziel, "herkunft": "vorrat", "eid": eid,
+                            "aktiv": True, "emb": emb_vec,
+                            "emb_modell": zeile.get("modell"),
+                            "kante": zeile.get("kante"),
+                            "sharp": zeile.get("sharp"),
+                            "norm": zeile.get("norm"),
+                            "lauf_id": lauf_id, "datei_v": zeile.get("datei_v")},
+                           ensure_ascii=False) + "\n")
+        f.flush()
+    if not refcache_ergaenzen(person, os.path.join(zdir, ziel), ziel, None,
+                              emb_vec=emb_vec, emb_modell=zeile.get("modell")):
+        try:
+            os.remove(os.path.join(CLIPS, "refcache.npz"))
+        except FileNotFoundError:
+            pass
+    return True, ziel
+
+
+def lernbruecke_pruefen(person, eids, emb=None, diagnose=None, norm_latte=None):
     """Lern-Bruecke Schritt 1 (User 16.08., zweite Fassung: 'erst pruefen,
     welche Bilder uebernommen werden sollen — dann ist der gleiche Schalter:
     uebernehme diese Bilder'): dieselben Siebe wie die Bestands-Suche
     (Identitaet/Qualitaet/Neuheit), gescoped auf die Pass-Events. UEBERNIMMT
     NICHTS — liefert nur, was Stufe 'empfohlen' erreicht hat, damit der
-    Nutzer es sieht und entscheidet. -> (kandidaten, zurueckgehalten)."""
+    Nutzer es sieht und entscheidet. -> (kandidaten, zurueckgehalten).
+    diagnose (D1, .30x): OPTIONALES dict, das mit den Zahlen der Pruefung
+    befuellt wird (Klassen-Zaehler, Bestwerte, Schwellen, 'dominant'). Der
+    Aufrufer beantwortet damit die Frage 'warum nichts?' mit Zahlen statt
+    mit dem Pauschal-Satz — die Auswahl selbst ist unveraendert."""
     eids = {str(e) for e in (eids or []) if e}
     if not eids:
+        if diagnose is not None:
+            diagnose.update({"person": person, "events": 0, "geprueft": 0,
+                             "klassen": {}, "kante_max": None, "sharp_max": None,
+                             "min_kante": int(REF_LATTE["min_kante"]),
+                             "unscharf_max": int(REF_LATTE["unscharf_max"]),
+                             "keine_referenzen": False, "gedeckelt": False,
+                             "empfohlen": 0, "neutral": 0,
+                             "dominant": "keine_events"})
         return [], []
-    kand = vorschlaege_person(person, nur_eids=eids, schreiben=False, emb=emb)
-    nehmen = [{"eid": k["eid"], "datei": k["datei"]}
-              for k in kand if k.get("stufe") == "empfohlen"]
+    kand = vorschlaege_person(person, nur_eids=eids, schreiben=False, norm_latte=norm_latte, emb=emb,
+                              diagnose=diagnose)
+    # .32x DECKEL JE EVENT (User-Fund 22.08. am Overlay: "sieht aus als wenn es
+    # 5 mal die gleichen Gesichter sind"). Nachgemessen an den zuletzt
+    # uebernommenen Referenzen: vier von sechs kamen aus EINEM Event, aus den
+    # Frames 30/45/50/55 — bei 3 fps also die Sekunden 10 bis 18 derselben
+    # Aufnahme, gleiche Pose, gleicher Hintergrund. Weder das Dedup (0,97) noch
+    # die Zwillings-Erkennung des Vorrats (0,95) fassen das an: die Embeddings
+    # liegen bei 0,75-0,85 auseinander, das Auge sieht keinen Unterschied.
+    # Fuer den Lernvorrat zaehlt aber Vielfalt, nicht Menge — fuenf Bilder einer
+    # Sekunde bringen weniger als fuenf Blickwinkel.
+    # Deshalb: je Event hoechstens BRUECKE_JE_EVENT Bilder, die BESTEN zuerst
+    # (vorschlaege_person liefert bereits nach Guete sortiert). Der Rest der
+    # Auswahl fuellt sich aus den anderen Events des Durchgangs. Kein Bild geht
+    # verloren — was der Deckel abschneidet, bleibt Grenzfall und damit im
+    # Overlay sichtbar, nur ohne Haken.
+    _je_event = {}
+    nehmen, ueberzaehlig = [], []
+    for k in kand:
+        if k.get("stufe") != "empfohlen":
+            continue
+        e = str(k.get("eid"))
+        _je_event[e] = _je_event.get(e, 0) + 1
+        (nehmen if _je_event[e] <= BRUECKE_JE_EVENT else ueberzaehlig).append(
+            {"eid": k["eid"], "datei": k["datei"]})
     # .231 (User-Go nach dem Pass-3-Befund: 8 sichere Identitaeten fielen
     # still an der Gut-Qualitaet): die Stufe 'neutral' wird nicht mehr
     # verschwiegen, sondern als GRENZFAELLE mitgegeben — das Overlay zeigt
     # sie OHNE Haken, der Nutzer entscheidet am Bild.
     grenz = [{"eid": k["eid"], "datei": k["datei"]}
-             for k in kand if k.get("stufe") == "neutral"]
+             for k in kand if k.get("stufe") == "neutral"] + ueberzaehlig
+    if diagnose is not None:
+        diagnose["je_event_deckel"] = BRUECKE_JE_EVENT
+        diagnose["ueberzaehlig"] = len(ueberzaehlig)
     return nehmen, grenz
 
 
+BRUECKE_JE_EVENT = 2   # .32x: wie viele Bilder die Pass-Pruefung je EVENT
+#                        vorschlaegt. Zwei statt einem, weil ein zweites Bild
+#                        derselben Szene durchaus einen anderen Winkel zeigen
+#                        kann; alles darueber ist gemessen dieselbe Sekunde.
+#                        Was der Deckel abschneidet, wird Grenzfall (sichtbar,
+#                        ohne Haken) — nie stiller Verlust.
 SICHTUNG_JE_BLICK = 14   # .271: Pruef-Kandidaten je Blickwinkel-Reihe
+SICHTUNG_WAHL = "blick-rr-ernte-struktur"  # .32x: Cache-Kennung der Sichtung.
+                                   # Alt-Tags ('blick-rr-norm2' = Crop-Nachmessung bis .313,
+                                   # 'blick-rr-ernte' = ohne Gruppen-Konsens) -> neu sichten
 SICHTUNG_DECKEL = 40   # (Alt-Kommentar) Pruef-Kandidaten je Gruppe;
 #                        haelt die Erst-Sichtung mit warmem Modell bei wenigen
 #                        Sekunden — die Flaeche zeigt ohnehin maximal zwei
@@ -1864,18 +2393,72 @@ SICHTUNG_DECKEL = 40   # (Alt-Kommentar) Pruef-Kandidaten je Gruppe;
 BLICK_REIHEN = ("links", "frontal", "rechts")
 
 
-def _sichtungs_kandidaten(mitglieder, deckel_je_blick, yaw_grenze):
+def _ueber_qualitaetslinie(x, norm_latte):
+    """.314b (User-Auflage 21.08.): besteht dieses Mitglied die Qualitaetslinie?
+    Mit gemessener Feature-Norm entscheidet die virtuelle Linie (norm_latte:
+    Norm ueber `min`, dazu die Boeden kante/sharp) — das ist die Achse, die der
+    User meint. Ohne Norm (Alt-Anker, Laeufe vor der Vorrats-Einfuehrung) tritt
+    die Pixel-Latte an ihre Stelle, damit die Frage ueberhaupt beantwortbar
+    bleibt; eine Norm-Nachmessung nur zum Sortieren waere hier zu teuer (sie
+    laeuft spaeter in gruppen_sichtung fuer die Bilder, bei denen sie das
+    Urteil noch drehen kann)."""
+    nl = norm_latte or {}
+    n, k, sh = x.get("norm"), x.get("kante") or 0, x.get("sharp") or 0
+    if nl.get("min") is not None and n is not None:
+        return (n >= nl["min"] and k >= (nl.get("kante") or 0)
+                and sh >= (nl.get("sharp") or 0))
+    return k >= REF_LATTE["min_kante"] and sh >= REF_LATTE["unscharf_max"]
+
+
+def _norm_lohnt(kante, sharp, norm_latte):
+    """.314b: lohnt eine Norm-Nachmessung fuer dieses Mitglied? Nur wenn (a) der
+    Norm-Weg ueberhaupt aktiv ist, (b) das Bild seine Boeden erfuellt und (c) es
+    an der PIXEL-Latte scheitern wuerde — nur dann kann die Norm das Urteil noch
+    drehen. Ohne diese drei Bedingungen waere die Messung reine Arbeit."""
+    nl = norm_latte or {}
+    if nl.get("min") is None or kante is None or sharp is None:
+        return False
+    if kante < (nl.get("kante") or 0) or sharp < (nl.get("sharp") or 0):
+        return False
+    return kante < REF_LATTE["min_kante"] or sharp < REF_LATTE["unscharf_max"]
+
+
+def _norm_nachmessen(lauf_dir, rel, emb=None):
+    """.314b: NUR die Feature-Norm eines Crops nachmessen (Detektion + Alignment
+    wie bild_metriken, gleiche Skala wie die Ernte-Norm — gemessen Median 0,12
+    Versatz). None, wenn die Detektion auf dem randlosen Crop scheitert (56 %
+    der Faelle) oder die Datei fehlt: dann urteilt die Pixel-Latte."""
+    try:
+        img = cv2.imread(os.path.join(lauf_dir, rel))
+        if img is None:
+            return None
+        e = emb or _embedder_geteilt()
+        return bild_metriken(e, img, mit_norm=True)[3]
+    except Exception:
+        return None                       # Zusatz-Auskunft, nie Blocker
+
+
+def _sichtungs_kandidaten(mitglieder, deckel_je_blick, yaw_grenze, norm_latte=None):
     """.271 (User-Zielbild: 'eine Reihe links, eine frontal, eine rechts —
     und das sind schon die optimalen'): Kandidaten-Wahl JE BLICKWINKEL-BIN
     (perspektiv_bin) und darin JE EVENT verteilt (Round-Robin, innerhalb
     des Events nach _reihung; latten-taugliche Frames zuerst, Unter-Latte
     fuellt nur nach — Lehren aus .269/.270: Top-N am Stueck = Serien-Frames,
     reines Event-RR = schwache Events fressen Plaetze).
-    -> Liste von (mitglied, blick), je Bin hoechstens deckel_je_blick."""
+    .314b: der Deckel begrenzt nur noch die VORDEREN Plaetze je Bin; dahinter
+    folgen die uebrigen Mitglieder, die die QUALITAETSLINIE bestehen (User
+    21.08.: "aber nur wenn sie ueber der Normierung sind") — vorher fielen sie
+    ersatzlos aus der Sichtung, im Lauf L20260821_154851 waren das 79 von 121
+    Bildern EINER Gruppe. -> Liste von (mitglied, blick)."""
     from core.benennung import _reihung, _lattenklasse, perspektiv_bin
+    import functools
+    # .308: Reihung UND Tauglichkeits-Schnitt kennen den Norm-Weg (norm_latte
+    # aus der Dienst-Config; None = Pixel-Latte allein wie bisher).
+    _rk = functools.partial(_reihung, norm_latte=norm_latte)
+    _lk = functools.partial(_lattenklasse, norm_latte=norm_latte)
     kand = []
     for blick in BLICK_REIHEN:
-        im_bin = [x for x in sorted(mitglieder, key=_reihung)
+        im_bin = [x for x in sorted(mitglieder, key=_rk)
                   if perspektiv_bin(x.get("pose") or [], yaw_grenze) == blick]
         je_event = {}
         for x in im_bin:
@@ -1883,7 +2466,7 @@ def _sichtungs_kandidaten(mitglieder, deckel_je_blick, yaw_grenze):
         n0 = len(kand)
         for nur_tauglich in (True, False):
             reihen = [[x for x in r
-                       if (_lattenklasse(x) <= 1) == nur_tauglich]
+                       if (_lk(x) <= 1) == nur_tauglich]
                       for r in je_event.values()]
             while len(kand) - n0 < int(deckel_je_blick) and any(reihen):
                 for r in reihen:
@@ -1893,51 +2476,132 @@ def _sichtungs_kandidaten(mitglieder, deckel_je_blick, yaw_grenze):
                             break
             if len(kand) - n0 >= int(deckel_je_blick):
                 break
+    # .314b (User 21.08.: "bei einem Lauf immer die Bilder sehen"; Widerleger
+    # HOCH): der Deckel entschied bis hier, welche Bilder es ueberhaupt auf die
+    # Seite schaffen — im Lauf L20260821_154851 erschienen 79 von 121 Bildern
+    # einer Gruppe NIRGENDS, auch nicht im "show all"-Aufklapper. Der Deckel war
+    # ein KOSTEN-Deckel fuer die Crop-Nachmessung; seit die Sichtung die
+    # Ernte-Messung nimmt (.314), kostet ein weiteres Mitglied weder Bild-I/O
+    # noch Modell. Also: die uebrigen Mitglieder kommen HINTEN dran (Reihung
+    # unveraendert), die Flaeche zeigt sie im Rest. Der Deckel bestimmt jetzt
+    # nur noch, was VORNE in den drei Blickwinkel-Reihen landet.
+    drin = {id(x) for x, _b in kand}
+    for blick in BLICK_REIHEN:
+        for x in sorted(mitglieder, key=_rk):
+            if id(x) in drin:
+                continue
+            if perspektiv_bin(x.get("pose") or [], yaw_grenze) != blick:
+                continue
+            # User-Auflage 21.08. ("aber nur wenn sie ueber der Normierung
+            # sind"): der Nachzug ist kein Alles-Zeigen — er holt genau die
+            # Bilder dazu, die die QUALITAETSLINIE bestehen. Was darunter
+            # liegt, bleibt wie bisher aus der Sichtung heraus.
+            if not _ueber_qualitaetslinie(x, norm_latte):
+                continue
+            kand.append((x, blick))
+            drin.add(id(x))
     return kand
 
 
 def gruppen_sichtung(satz, lauf_dir, emb=None,
-                     deckel_je_blick=SICHTUNG_JE_BLICK, yaw_grenze=15.0):
+                     deckel_je_blick=SICHTUNG_JE_BLICK, yaw_grenze=15.0,
+                     norm_latte=None):
     """.266 'Sicht = Pruefergebnis' (User 18.08.: 'erst ein Schnellcheck,
     welche Bilder wirklich gut sind, und DAVON die Anzeige'): die besten
-    `deckel` Mitglieder der Gruppe (Reihung `_reihung`) werden EINMAL mit
-    der echten Crop-Messung gesichtet (`bild_metriken`, det 320 — dieselbe
-    Messung wie Bruecke und Benenn-Pruefung) und das Ergebnis samt
-    Crop-Embedding im Lauf-Ordner gecacht (`sichtung_<anker>.json`,
-    modell-gebunden, faellt mit dem Lauf; Neuaufbau wenn sich die
-    Mitglieder-Zahl aendert). Flaeche UND Benenn-Pruefung zehren daraus —
-    EINE Messung je Bild, nie zwei Massstaebe.
-    -> {"modell", "gesamt", "bilder": [{datei, kante, sharp, emb|None,
+    `deckel` Mitglieder der Gruppe (Reihung `_reihung`) werden gesichtet
+    und das Ergebnis samt Embedding im Lauf-Ordner gecacht
+    (`sichtung_<anker>.json`, modell-gebunden, faellt mit dem Lauf;
+    Neuaufbau wenn sich die Mitglieder-Zahl aendert). Flaeche UND
+    Benenn-Pruefung zehren daraus — EINE Messung je Bild, nie zwei Massstaebe.
+    .313b (User 21.08.: 'bei einem Lauf immer die Bilder sehen'): die EINE
+    Messung ist die ERNTE-Messung des Mitglieds (emb/kante/sharp/norm aus der
+    Vollbild-Detektion, im Anker-Satz hinterlegt) — nicht mehr eine zweite
+    Detektion auf dem eng geschnittenen Crop. Gemessen (Lauf L20260821_210230,
+    A/B .312 = .313): die Crop-Nachmessung fand in 11 von 13 Crops (61–98 px,
+    randlos) KEIN Gesicht, obwohl die Ernte dieselben Gesichter im 4K-Bild mit
+    det 0,72–0,87 hatte; ueber den Tag fielen so 30–60 % der Sichtungsbilder
+    als 'no measurable face' aus der Flaeche (bekannte Klasse: anlernen.py
+    lade_master_refs, 'kleine Crops sind fuer die Datei-Detektion gemessen
+    tot, 28/40' — fuer Vorrats-Referenzen per A2-Beiwert geloest, hier nie).
+    Die Crop-Nachmessung (`bild_metriken`, det 320) bleibt NUR als Fallback
+    fuer Alt-Mitglieder ohne Ernte-Embedding; der Embedder wird erst dann
+    gebaut. kante bleibt Original-Pixel, sharp die Laplace-Varianz des Crops,
+    norm die Feature-Norm derselben Detektion — dieselben Skalen wie zuvor.
+    -> {"modell", "gesamt", "bilder": [{datei, kante, sharp, norm, emb|None,
     grund?}...]} in Reihungs-Ordnung."""
     from core.benennung import _reihung
-    emb = emb or _embedder_geteilt()
     aid = str(satz.get("anker_id"))
     pfad = os.path.join(lauf_dir, f"sichtung_{aid}.json")
     m = satz.get("mitglieder") or []
+    # Modell-Bindung ohne Embedder-Aufbau: Ernte-Mitglieder tragen 'modell';
+    # sonst der uebergebene Embedder, sonst das konfigurierte Modell.
+    modell = str(emb.modell if emb is not None else
+                 next((x.get("modell") for x in m if x.get("modell")), None)
+                 or aktuelles_modell()).lower()
     try:
         with open(pfad, encoding="utf-8") as f:
             d = json.load(f)
-        if (d.get("modell") == emb.modell and d.get("gesamt") == len(m)
-                and d.get("wahl") == "blick-rr"):   # .269: Alt-Caches neu
+        if (d.get("modell") == modell and d.get("gesamt") == len(m)
+                and d.get("wahl") == SICHTUNG_WAHL):   # .313b: Alt-Caches (Crop-Nachmessung) -> neu
             return d
     except (OSError, ValueError):
         pass
     bilder = []
-    for x, blick in _sichtungs_kandidaten(m, deckel_je_blick, yaw_grenze):
+    for x, blick in _sichtungs_kandidaten(m, deckel_je_blick, yaw_grenze,
+                                          norm_latte=norm_latte):
         rel = str(x.get("datei", ""))
+        v = x.get("emb")
+        if v is not None and str(x.get("modell") or modell).lower() == modell:
+            # Ernte-Messung (Vollbild-Detektion) = DIE eine Messung.
+            _k, _s = x.get("kante"), float(x.get("sharp") or 0.0)
+            _n = x.get("norm")
+            if _n is None and _norm_lohnt(_k, _s, norm_latte):
+                # .314b (Widerleger-Blocker): die Ernte schreibt die Norm NUR
+                # fuer Vorrats-Kandidaten (core/ernte gate_v_vor) und in Laeufen
+                # vor .308 gar nicht — ein Anker-Mitglied ohne Norm haette den
+                # .307/.308-Norm-Weg still verloren und waere an der Pixel-Latte
+                # gescheitert, obwohl die Crop-Messung bis .313 eine Norm lieferte
+                # (gemessen: 78 von 833 Kandidaten der offenen Anker betroffen).
+                # Deshalb NUR die Norm nachmessen — emb/kante/sharp bleiben die
+                # Ernte-Werte, es gibt weiterhin genau EINE Identitaets-/
+                # Qualitaetsquelle. Skalen-Beleg (150 Proben mit bekannter
+                # Ernte-Norm): diese Nachmessung liegt im Median 0,12 daneben,
+                # 1 Kipper an der 22,0-Linie von 66; sie gelingt aber nur in 44 %
+                # (Detektion auf dem randlosen Crop) — sonst bleibt norm None und
+                # die Pixel-Latte urteilt wie in .313 auch. Ein Resize-Weg OHNE
+                # Detektion waere immer verfuegbar, kippt aber 25 % (kein
+                # Alignment) und ist deshalb bewusst NICHT genommen.
+                emb = emb or _embedder_geteilt()   # erst JETZT, nie fuer den Normalfall
+                _n = _norm_nachmessen(lauf_dir, rel, emb)
+            bilder.append({"datei": rel, "blick": blick,
+                           "kante": _k, "sharp": _s, "norm": _n,
+                           # .32x: die Struktur kommt aus der Ernte mit (core/anker
+                           # kopiert sie ins Mitglied). Fehlt sie — Alt-Anker vor
+                           # dem Struktur-Test —, bleibt sie None und die Anzeige
+                           # filtert nicht darauf: ein Urteil ohne Messgrundlage
+                           # waere ein stiller Verlust.
+                           "struktur": x.get("struktur"),
+                           "emb": [round(float(t), 5) for t in v],
+                           "quelle": "ernte" if x.get("norm") is not None
+                                     else ("ernte+norm" if _n is not None else "ernte")})
+            continue
+        # Fallback (Alt-Mitglied ohne Ernte-Embedding): Crop-Nachmessung wie bis .313.
         img = cv2.imread(os.path.join(lauf_dir, rel))
         if img is None:
             bilder.append({"datei": rel, "blick": blick, "kante": None,
                            "sharp": 0.0, "emb": None,
                            "grund": "crop not readable"})
             continue
-        v, kante, sh = bild_metriken(emb, img)
+        emb = emb or _embedder_geteilt()
+        v, kante, sh, norm = bild_metriken(emb, img, mit_norm=True)
         bilder.append({"datei": rel, "blick": blick, "kante": kante,
-                       "sharp": sh,
+                       "sharp": sh, "norm": norm, "struktur": None,
                        "emb": ([round(float(t), 5) for t in v]
-                               if v is not None else None)})
-    d = {"modell": emb.modell, "gesamt": len(m), "wahl": "blick-rr",
-         "bilder": bilder, "ts": round(time.time(), 1)}
+                               if v is not None else None),
+                       "quelle": "crop"})
+    d = {"modell": modell, "gesamt": len(m), "wahl": SICHTUNG_WAHL,
+         "bilder": bilder,
+         "ts": round(time.time(), 1)}
     fd, tmp = tempfile.mkstemp(dir=lauf_dir, prefix=".sichtung.")
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(d, f, ensure_ascii=False)
@@ -1958,26 +2622,58 @@ def sichtung_lesen(satz, lauf_dir, modell):
             d = json.load(f)
         if (d.get("modell") == str(modell)
                 and d.get("gesamt") == len(satz.get("mitglieder") or [])
-                and d.get("wahl") == "blick-rr"):   # .269: Alt-Cache = neu sichten
+                and d.get("wahl") == SICHTUNG_WAHL):   # .269: Alt-Cache = neu sichten
             return d
     except (OSError, ValueError):
         pass
     return None
 
 
-def sichtung_bewerten(person, sichtung, refs, dup_sim, adoptierte):
+def sichtung_hat_sichtbare(satz, lauf_dir, modell, refs, dup_sim,
+                           norm_latte=None):
+    """.318 (User 22.08.: "da brauchst du sie auch gar nicht erst als Gruppe
+    angezeigt werden beim Aufrufen"): traegt diese Gruppe nach der Bewertung noch
+    EIN Bild im Rahmen? Rein lesend — Sichtungs-Cache + Matrix, kein Modell, keine
+    Bild-I/O; der Aufrufer sortiert damit leere Gruppen ans Ende, statt sie dem
+    User als erstes vorzulegen.
+    -> True/False, oder None wenn (noch) kein Cache liegt: dann ist es UNBEKANNT
+    und der Aufrufer behandelt die Gruppe wie eine volle (nie wegen fehlender
+    Messung nach hinten schieben).
+    Die Gruppe wird dadurch NICHT verworfen und verliert nichts (.313-Regel) —
+    sie steht weiter im Streifen und ueber ?g=<anker_id> direkt an."""
+    si = sichtung_lesen(satz, lauf_dir, modell)
+    if si is None:
+        return None
+    bew = sichtung_bewerten(satz.get("person") or None, si, refs, dup_sim, [],
+                            norm_latte=norm_latte)
+    return any(b.get("stufe") != "raus" for b in bew)
+
+
+def sichtung_bewerten(person, sichtung, refs, dup_sim, adoptierte,
+                      norm_latte=None):
     """Matrix-Anwendung auf die GECACHTEN Sichtungs-Messwerte (.266): keine
     Bild-I/O, kein Modell — Identitaets-Achse gegen `refs` (Matrizen je
     Person; person=None oder ohne Referenzen -> Identitaet ist das
     User-Wort, nur Qualitaet traegt, wie bild_stufe eigen=None), Qualitaet
-    aus kante/sharp der Sichtung, Dedup gegen adoptierte Lern-Referenzen +
-    innerhalb der Reihung (identisch zu plan_bauen). -> Liste in
+    aus kante/sharp der Sichtung, Dedup innerhalb der Reihung; Naehe zu
+    adoptierten/Katalog-Referenzen wird seit .313b nur ANGESAGT, nie
+    versteckt (die Doppel-Uebernahme faengt plan_bauen).
+    norm_latte["veto"] (.316): gemessene Feature-Norm AUF ODER UNTER diesem Wert
+    schliesst aus — die einzige Achse, die SCRFD-Fehldetektionen mit hohem
+    det_score von echten Klein-Gesichtern trennt.
+    norm_latte["struktur"] (.32x): gemessene Gesichts-STRUKTUR unter diesem Wert
+    schliesst aus — der Ausschnitt zeigt kein Gesicht (Nacken, Ohr, Hinterkopf,
+    Vegetation). Ersetzt den .316b-Gruppen-Konsens, der ersatzlos entfaellt.
+    -> Liste in
     Sichtungs-Ordnung: {datei, stufe 'gut'|'grenzfall'|'raus', grund}."""
     from core.uebernahme import _cos
     eigen_refs = refs.get(person) if person else None
     if eigen_refs is not None and not len(eigen_refs):
         eigen_refs = None
-    aus, gesehen = [], [list(e) for e in (adoptierte or [])]
+    # .313b: `gesehen` startet LEER — Naehe zu adoptierten Referenzen ist
+    # seither eine Ansage (schon_gelernt unten), kein Double 'zu einem hier
+    # gezeigten Bild'; das Dedup innerhalb der Reihung bleibt.
+    aus, gesehen = [], []
     for b in (sichtung or {}).get("bilder", []):
         datei = os.path.basename(str(b.get("datei", "")))
         if b.get("emb") is None:
@@ -1992,23 +2688,114 @@ def sichtung_bewerten(person, sichtung, refs, dup_sim, adoptierte):
         fremd = (max((float((M @ v).max()) for p2, M in refs.items()
                       if p2 != person and len(M)), default=None)
                  if person else None)
-        stufe, grund = bild_stufe(eigen, fremd, b.get("kante"), b.get("sharp"))
+        _nl = norm_latte or {}
+        # .316 VETO DER QUALITAETSLINIE (User 22.08., nach dem Gras-Fund in
+        # L20260821_230529-A1): eine gemessene Feature-Norm AUF ODER UNTER der Linie
+        # schliesst das Bild aus — bis .315 qualifizierte die Norm nur ZUSAETZLICH
+        # zur Pixel-Latte und konnte nie ausschliessen. Anlass: SCRFD hielt 19
+        # Hecken-Ausschnitte fuer Gesichter (det 0,74-0,85, front bis 0,91), die
+        # Pixel-Latte liess sie durch (73-89 px, scharf), und der Objekt-Filter
+        # ist_fehldetektion greift dort per Konstruktion nicht (er sucht det NIEDRIG).
+        # Die Norm sah es als Einzige: Median 20,5 gegen 22,1/23,6 der echten Gruppen.
+        # GEMESSEN zur Wahl der Schwelle: <= 22,0 faengt 15 der 19 Gras-Bilder und
+        # kostet in den echten Gruppen 3 von 13 bzw. 4 von 10; <= 23,0 faengt alle 19,
+        # traefe aber 47 % der Norm-Werte der 348 bestaetigten Bestands-Referenzen
+        # (Median 23,1) — deshalb 22,0 (User-Entscheid).
+        # NUR mit gemessener Norm: fehlt sie (Alt-Anker vor der Vorrats-Einfuehrung,
+        # Norm-Nachmessung gescheitert), urteilt die Pixel-Latte wie bisher — ein Veto
+        # ohne Messgrundlage waere ein stiller Verlust.
+        # .32x STRUKTUR-TEST (User-Entscheid 22.08.) — ERSTE Frage, vor allen
+        # Qualitaets-Achsen: zeigt der Ausschnitt ueberhaupt ein Gesicht?
+        # Er ersetzt den .316b-Gruppen-Konsens. Der urteilte ueber die GRUPPE und
+        # bestrafte damit gute Bilder fuer ihre schlechten Nachbarn: gemessen kippte
+        # er neun Gruppen, davon FUENF mit erkannter Person und fast durchweg
+        # brauchbaren Bildern (bis 18/18 ueber der Struktur-Linie) — darunter der
+        # Anlassfall: eine Gruppe mit erkannter Person, aus der der Lauf NULL
+        # Bilder anbot.
+        # Die beiden echten Fehlerkennungen leert der Struktur-Test vollstaendig
+        # (0/7 und 0/19), er braucht die Gruppen-Regel also nicht.
+        # OHNE gemessene Struktur wird NIE gefiltert (Alt-Mitglieder, gescheiterte
+        # Messung) — ein Test ohne Messgrundlage waere ein stiller Verlust.
+        _st_linie = _nl.get("struktur")
+        if (_st_linie is not None and b.get("struktur") is not None
+                and float(b["struktur"]) < float(_st_linie)):
+            aus.append({"datei": datei, "stufe": "raus",
+                        "grund": f"{GRUND_TEXT['keine_struktur']} "
+                                 f"(structure {b['struktur']} — needs {_st_linie}+)",
+                        "blick": b.get("blick") or "frontal"})
+            continue
+        _linie = _nl.get("veto")
+        if (_linie is not None and b.get("norm") is not None
+                and float(b["norm"]) <= float(_linie)):
+            aus.append({"datei": datei, "stufe": "raus",
+                        "grund": f"{GRUND_TEXT['unter_linie']} "
+                                 f"(face quality {b['norm']} — needs more than {_linie})",
+                        "blick": b.get("blick") or "frontal"})
+            continue
+        stufe, grund = bild_stufe(eigen, fremd, b.get("kante"), b.get("sharp"),
+                                  norm=b.get("norm"),
+                                  norm_gut=_nl.get("gut"), norm_min=_nl.get("min"),
+                                  norm_kante_min=_nl.get("kante"),
+                                  norm_sharp_min=_nl.get("sharp"))
+        # .313b (User 21.08.): 'gedeckt' (eigen >= sim_neu, Bestands-Duplikat)
+        # ist fuer die Bruecke ein Nicht-Vorschlag, fuer die Gruppen-Flaeche
+        # aber ein SICHTBARER Grenzfall — schon zugewiesene Bilder bleiben im
+        # Rahmen (abgehakt, mit Grund), statt im zugeklappten Rest zu liegen.
+        # bild_stufe selbst bleibt unveraendert (.257-Gate-Vektoren der Bruecke).
+        gedeckt_sichtbar = False
+        if stufe is None and grund == GRUND_TEXT["gedeckt"]:
+            stufe, gedeckt_sichtbar = "neutral", True
         # .276 (User-Bauchgefuehl vs Messung, Werte-Tabelle 18.08.): Zahlen an die
         # Gate-Urteile — 'too small or too blurry' allein erklaert einem
         # scharfen 58-px-Gesicht nichts.
         if stufe is None and grund and grund.startswith("too small"):
+            _n_txt = ""
+            if _nl.get("min") is not None:
+                _n_txt = (f", face quality "
+                          f"{b.get('norm') if b.get('norm') is not None else '?'}"
+                          f" — needs {_nl['min']}+")
             grund = (f"too small or too blurry for a reference "
                      f"({b.get('kante') if b.get('kante') is not None else '?'} px, "
                      f"sharpness {int(b.get('sharp') or 0)} — needs "
-                     f"{REF_LATTE['min_kante']} px / {REF_LATTE['unscharf_max']})")
-        # .267 (Widerleger): Dup GEGEN ADOPTIERTE Referenzen bleibt raus
-        # (schon gelernt); Dup INNERHALB der Auswahl wird GRENZFALL — sonst
+                     f"{REF_LATTE['min_kante']} px / {REF_LATTE['unscharf_max']}"
+                     f"{_n_txt})")
+        # .313b (User 21.08., 'bei einem Lauf immer die Bilder sehen, egal ob
+        # ich die schon mal zugewiesen habe'): SCHON GELERNT versteckt nicht
+        # mehr. Bis .313 nahm die .267-Regel ein Double einer adoptierten
+        # Referenz aus der Flaeche ('raus'), und die .313-Katalog-Regel tat
+        # dasselbe fuer Doubles zu IRGENDEINER Referenz — gemessen am
+        # 15:48-Lauf verschwanden so 23 von 226 Bildern, genau die schon
+        # zugewiesenen. Jetzt: Stufe bleibt das Qualitaets-/Identitaets-
+        # Urteil, die Naehe wird nur als Grund ANGESAGT (Kachel bleibt im
+        # Rahmen, angehakt wie ihre Stufe); die Doppel-Uebernahme faengt
+        # weiterhin plan_bauen ab (Dedup gegen die Bestands-Embeddings).
+        # Dup INNERHALB der Auswahl wird weiter GRENZFALL (.267) — sonst
         # verdraengt ein abgewaehltes Bild sein besseres Double endgueltig.
+        schon_gelernt = None
         if stufe is not None and any(
                 (s := _cos(v, e)) is not None and s >= float(dup_sim)
                 for e in (adoptierte or [])):
-            stufe, grund = None, ("near-identical to a picture already "
-                                  "learned as a reference")
+            schon_gelernt = "already learned as a reference (near-identical)"
+        elif stufe is not None and any(
+                len(M) and float((M @ v).max()) >= float(dup_sim)
+                for M in (refs or {}).values()):
+            schon_gelernt = "already in the catalog (near-identical reference exists)"
+        if schon_gelernt and grund != GRUND_TEXT["gedeckt"]:
+            grund = f"{grund} — {schon_gelernt}" if grund else schon_gelernt
+        if schon_gelernt and stufe == "empfohlen":
+            # .314b (Widerleger, HOCH — die schlimmste Nebenwirkung von .314):
+            # SICHTBAR heisst nicht VORGESCHLAGEN. Die Kacheln der Stufe 'gut'
+            # sind in der Flaeche VORAUSGEWAEHLT (routes/lernwizard._kachel_s,
+            # checked = stufe 'gut'); ein Bild, das beinahe-identisch zu einer
+            # schon gelernten Referenz ist, wanderte damit per Ein-Klick-Take
+            # in den Referenzordner — bei einer Gruppe, die auf einen NEUEN
+            # Namen getauft wird, sogar das Gesicht einer ANDEREN Person
+            # (gemessen an L20260821_154851-A2: 5 Mitglieder mit Kosinus
+            # 0,942-0,975 zu den Referenzen einer anderen Person, und
+            # plan_bauen dedupliziert nur gegen die Referenzen DIESER Person).
+            # Also: Stufe auf 'neutral' deckeln — die Kachel bleibt im Rahmen
+            # sichtbar und traegt ihren Grund, aber ohne Haken.
+            stufe = "neutral"
         dup = False
         if stufe is not None and any(
                 (s := _cos(v, e)) is not None and s >= float(dup_sim)
@@ -2024,7 +2811,13 @@ def sichtung_bewerten(person, sichtung, refs, dup_sim, adoptierte):
             aus.append({"datei": datei, "stufe": "raus", "grund": grund,
                         "blick": blick})
             continue
-        gesehen.append(v.tolist())
+        if not gedeckt_sichtbar:
+            # .314b (Widerleger): ein nur zur ANSICHT hochgestuftes 'gedecktes'
+            # Bild darf kein Dedup-Saatkorn werden — sonst verdraengt es sein
+            # noch ungelerntes Double in den Alternativ-Rang, obwohl es selbst
+            # gar nicht uebernommen werden soll (bis .313 verliess es die
+            # Schleife vor gesehen.append).
+            gesehen.append(v.tolist())
         aus.append({"datei": datei,
                     "stufe": "gut" if stufe == "empfohlen" else "grenzfall",
                     "grund": grund, "blick": blick,
@@ -2032,13 +2825,17 @@ def sichtung_bewerten(person, sichtung, refs, dup_sim, adoptierte):
     return aus
 
 
-def benennung_bewerten(person, satz, dup_sim, adoptierte, lauf_dir, emb=None):
+def benennung_bewerten(person, satz, dup_sim, adoptierte, lauf_dir, emb=None,
+                       norm_latte=None):
     """.257/.266: DIESELBE Pruefung wie die Lern-Bruecke, identisch by
     construction (User-Auflage 17.08.: nie zwei verschiedene Pruefungen fuer
     dasselbe Bild). Seit .266 zehrt sie aus dem Sichtungs-Cache
-    (gruppen_sichtung = die EINE Crop-Messung je Bild via bild_metriken,
-    det 320 — NIE die Ernte-Werte im Anker, die am Video-Frame mit det 1280
-    gemessen sind) und wendet nur noch die Matrix an (sichtung_bewerten:
+    (gruppen_sichtung = die EINE Messung je Bild; seit .313b ist das die
+    ERNTE-Messung des Mitglieds aus der Vollbild-Detektion — die fruehere
+    Crop-Nachmessung mit det 320 fand auf randlosen 61–98-px-Crops meist
+    kein Gesicht; dieselbe Messung traegt die Uebernahme als A2-Beiwert in
+    refs_meta, damit Bestands-QS und refcache nie die Datei messen)
+    und wendet nur noch die Matrix an (sichtung_bewerten:
     bild_stufe + Uebernahme-Dedup). Beurteilt werden die GEWAEHLTEN
     Mitglieder; Gewaehlte ausserhalb der Sichtungs-Kandidaten (Deckel)
     fallen EHRLICH mit Grund. Kein Schrieb ausser dem Sichtungs-Cache.
@@ -2047,13 +2844,14 @@ def benennung_bewerten(person, satz, dup_sim, adoptierte, lauf_dir, emb=None):
     refs = refs_matrix(emb)
     if not len(refs.get(person, [])) and os.path.isdir(os.path.join(MASTER, person)):
         refs = lade_master_refs(emb)               # Cache kennt die Person noch nicht
-    sicht = gruppen_sichtung(satz, lauf_dir, emb=emb)
+    sicht = gruppen_sichtung(satz, lauf_dir, emb=emb, norm_latte=norm_latte)
     # .267 (Widerleger-Blocker): beurteilt werden ALLE Sichtungs-Kandidaten —
     # exakt die Menge, aus der die Flaeche rendert. Die frueher persistierte
     # gewaehlt-Auswahl ist fuer die Pruefung bedeutungslos (sie wird beim
     # Take ohnehin mit der SICHTBAREN Auswahl neu geschrieben); sie zu
     # filtern liess Pruefung und Anzeige wieder auseinanderlaufen.
-    return sichtung_bewerten(person, sicht, refs, dup_sim, adoptierte)
+    return sichtung_bewerten(person, sicht, refs, dup_sim, adoptierte,
+                             norm_latte=norm_latte)
 
 
 def lernbruecke_uebernehmen(person, items, emb=None):
@@ -2091,10 +2889,19 @@ if __name__ == "__main__":
     pr.add_argument("--minkante", type=int, default=REF_LATTE["min_kante"])
     pr.add_argument("--person", default=None)      # .273: Bericht-Filter
     pr.add_argument("--dupsim", type=float, default=0.75)
+    # .308 Norm-Weg (Vorrat aktiv): Werte aus der Dienst-Config, None = aus
+    pr.add_argument("--norm-gut", type=float, default=None)
+    pr.add_argument("--norm-min", type=float, default=None)
+    pr.add_argument("--norm-kante", type=int, default=None)
+    pr.add_argument("--norm-sharp", type=int, default=None)
     vo = sub.add_parser("vorschlaege"); vo.add_argument("person")
     vo.add_argument("--tage", type=float, default=7.0)
     vo.add_argument("--unscharf", type=int, default=350)
     vo.add_argument("--minkante", type=int, default=70)
+    vo.add_argument("--norm-gut", type=float, default=None)    # .308 Norm-Weg
+    vo.add_argument("--norm-min", type=float, default=None)
+    vo.add_argument("--norm-kante", type=int, default=None)
+    vo.add_argument("--norm-sharp", type=int, default=None)
     a = ap.parse_args()
     if a.cmd == "sammle":
         sammle(a.tage, mit_migriere=not a.kein_migriere)
@@ -2149,9 +2956,13 @@ if __name__ == "__main__":
                                             "ts": round(time.time(), 1),
                                             "person": a.person})
         try:
+            _nl_cli = ({"gut": a.norm_gut, "min": a.norm_min,
+                        "kante": a.norm_kante, "sharp": a.norm_sharp}
+                       if a.norm_min is not None else None)
             erg = pruefe_referenzen(a.sim, unscharf_max=a.unscharf,
                                     min_kante=a.minkante, person=a.person,
-                                    dup_sim=a.dupsim, fortschritt=_fs)
+                                    dup_sim=a.dupsim, fortschritt=_fs,
+                                    norm_latte=_nl_cli)
             try:
                 os.unlink(_lp)
             except FileNotFoundError:
@@ -2179,7 +2990,10 @@ if __name__ == "__main__":
                   f"{p['b_person']}/{p['b_datei'][:22]}  (own {ek}){fl}")
     elif a.cmd == "vorschlaege":
         kand = vorschlaege_person(a.person, tage=a.tage, min_kante=a.minkante,
-                                  unscharf_max=a.unscharf)
+                                  unscharf_max=a.unscharf,
+                                  norm_latte=({"gut": a.norm_gut, "min": a.norm_min,
+                                               "kante": a.norm_kante, "sharp": a.norm_sharp}
+                                              if a.norm_min is not None else None))
         print(f"\n{len(kand)} reference suggestions for {a.person}:")
         for k in kand:
             print(f"  sim={k['sim']} fremd={k['fremd']} kante={k['kante']} sharp={k['sharp']:.0f} "

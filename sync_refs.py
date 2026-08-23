@@ -395,6 +395,13 @@ def diff():
             herkunft = (aktiv.get((p, datei)) or {}).get("herkunft", "?")
             if herkunft.startswith("frigate-import"):
                 extern_geloescht.append((p, datei))
+            elif herkunft == "vorrat":
+                # Vorrats-Referenzen (bauplan_vorrat.md B4, W1.15): NIE
+                # exportieren — ihre Wahrheit ist der Embedding-Beiwert, die
+                # kleine Bilddatei kann Frigates eigene Anlern-Pipeline
+                # gemessen oft nicht detektieren (28/40 tot). Bewusst KEIN
+                # Kandidat, bleibt lokal (Registrieren-nach-Schaltern).
+                pass
             elif herkunft != "export":
                 nur_master.append((p, datei))
     return nur_frigate, nur_master, extern_geloescht
@@ -421,7 +428,7 @@ def abgleich():
 
     -> dict, die Klassen sind DISJUNKT und decken jedes Master-Bild genau einmal:
        gesamt      == len(in_beiden) + len(kandidaten) + len(geloescht)
-                      + len(api_export) + len(abgewaehlt)
+                      + len(api_export) + len(abgewaehlt) + len(vorrat_lokal)
       gesamt       Zahl aller Master-Referenzbilder (die ehrliche Bezugsgroesse),
       in_beiden    [(person, datei)] Name auf BEIDEN Seiten (A),
       je_person    {person: {"gesamt", "beide", "frigate"}} fuer die Zeilen je
@@ -448,7 +455,13 @@ def abgleich():
     abl = ablehnungen_aktiv()
     erg = {"gesamt": 0, "in_beiden": [], "je_person": {}, "nur_frigate": [],
            "kandidaten": [], "abgelehnt": {}, "geloescht": [], "api_export": [],
-           "abgewaehlt": [], "abgewaehlt_unpruefbar": []}
+           "abgewaehlt": [], "abgewaehlt_unpruefbar": [],
+           # bauplan_vorrat.md B4 (Klassen-Invariante unten erweitert):
+           # Vorrats-Referenzen sind NIE Export-Kandidaten — stuenden sie in
+           # 'kandidaten', liefe die Erzeuger-Menge (diff() schliesst sie aus)
+           # gegen die Verbraucher-Menge auseinander, exakt die K3-Klasse aus
+           # dem .138-Panel-Befund.
+           "vorrat_lokal": []}
     for p in sorted(set(m) | set(f)):
         ms, fs = set(m.get(p, [])), set(f.get(p, []))
         for datei in sorted(fs - ms):
@@ -474,6 +487,8 @@ def abgleich():
                     klasse, grund = "api_export", None
                 else:
                     klasse, grund = "geloescht", D1_EXPORT
+            elif herkunft == "vorrat":            # V: Beiwert-Referenz, bleibt lokal
+                klasse, grund = "vorrat_lokal", None
             else:                                 # C: nie geschickt -> uebertragbar
                 klasse, grund = "kandidaten", None
             k = schluessel(p, datei)
@@ -486,6 +501,8 @@ def abgleich():
                 erg["geloescht"].append((p, datei, grund))
             elif klasse == "api_export":
                 erg["api_export"].append((p, datei))
+            elif klasse == "vorrat_lokal":
+                erg["vorrat_lokal"].append((p, datei))
             else:
                 erg["kandidaten"].append((p, datei))
                 if k in abl:

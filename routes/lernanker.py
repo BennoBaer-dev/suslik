@@ -12,6 +12,7 @@ Abschnitts-Kommentar in core/texte/en.py): Pills mit <b> mitten im Satz und
 die JS-Texte mit Escape-Folgen bleiben literal; EIMER_TEXT/BIN_TITEL wurden
 zu Funktionen (t() zur Render-Zeit, nie beim Import)."""
 import html
+import json
 
 from core.sprache import t
 
@@ -240,10 +241,13 @@ def anker_detail_seite(s, kaputt=0, benennung=None, fluss=None):
            + t("lernanker.detail.knopf_adopt") + '</button>' if schon else "")
         + '<span id="bn-status" class="dim"></span></div>')
     nx_js = (f'"{html.escape(str(naechster))}"' if naechster else "null")
-    # Stufe-0-Grenze: die JS-Texte mit \u-/\n-Escape-Folgen bleiben literal —
-    # window.T existiert seit Stufe 1, Einzug folgt mit der Stufe-2-Tranche
-    # dieser Seite; nur die drei escape-freien Kurztexte sind nach
-    # dem frigate.js-Muster eingezogen.
+    # Stufe 2 Tranche D (§8.4): ALLE JS-Texte kommen server-seitig aus
+    # Schluesseln — json.dumps(t(...)) reproduziert die \u-/\n-Escapes des
+    # Originals byte-treu (ensure_ascii=True); die drei Alt-Kurztexte
+    # behalten ihr frigate.js-Interpolations-Muster. Kollisions-/Tag-Frage:
+    # deklarierte Fragment-Splits an den Konkatenationsgrenzen (en.py
+    # Tranche-D-Kommentar), wortgleich mit der Zuweisungs-Flaeche
+    # (routes/lernwizard._zw_js — gemeinsame lernanker.js.*-Schluessel).
     js = ('<script>(function(){'
           'var alle=document.getElementById("bn-alle"),keine=document.getElementById("bn-keine");'
           'function boxen(){return document.querySelectorAll(".anker-w input[name=sel]")}'
@@ -256,30 +260,35 @@ def anker_detail_seite(s, kaputt=0, benennung=None, fluss=None):
           'function melden(t){st.textContent=t;if(est)est.textContent=t;}'
           # .224: Uebernahme als eigene Funktion — Expert-Knopf UND Easy-Kette
           # nutzen denselben Weg; danach traegt die Kette zur naechsten Gruppe.
-          'function adoptieren(best){melden("adopting\\u2026");'
+          'function adoptieren(best){melden('
+          + json.dumps(t("lernanker.js.uebernimmt")) + ');'
           'fetch("/lernlauf/uebernehmen",{method:"POST",headers:{"Content-Type":"application/json"},'
           'body:JSON.stringify({anker_id:save.dataset.aid,bestaetigt:best})})'
           '.then(function(r){return r.json()}).then(function(d){'
-          'if(d.tag_abweichung){if(confirm("Settings changed since naming:\\n"+'
-          'd.tag_abweichung.join("\\n")+"\\nAdopt anyway with the named selection?"))'
+          'if(d.tag_abweichung){if(confirm('
+          + json.dumps(t("lernanker.js.tag_frage_vor")) + '+'
+          'd.tag_abweichung.join("\\n")+'
+          + json.dumps(t("lernanker.js.tag_frage_nach")) + '))'
           '{adoptieren(true);}else melden("' + t("lernanker.js.nicht_uebernommen")
           + '");return;}'
           'if(!d.ok){melden("' + t("lernanker.js.fehler") + ' "+d.msg);return;}'
-          'if(CHAIN){if(NX){melden("saved \\u2014 next group\\u2026");'
+          'if(CHAIN){if(NX){melden(' + json.dumps(t("lernanker.js.weiter")) + ');'
           'setTimeout(function(){location="/lernlauf/anker?a="+encodeURIComponent(NX)},500);}'
-          'else{melden("All groups done \\u2014 the named pictures now count for recognition.");'
+          'else{melden(' + json.dumps(t("lernanker.js.alle_fertig")) + ');'
           'setTimeout(function(){location="/lernlauf/anker"},1600);}return;}'
           'melden(d.msg);setTimeout(function(){location.reload()},1200);})'
           '.catch(function(e){melden("' + t("lernanker.js.fehler") + ' "+e);});}'
           'function senden(name,bestaetigt){'
           'var sel=[];boxen().forEach(function(b){if(b.checked)sel.push(b.value);});'
-          'melden("saving\\u2026");'
+          'melden(' + json.dumps(t("lernanker.js.speichert")) + ');'
           'fetch("/lernlauf/benennen",{method:"POST",headers:{"Content-Type":"application/json"},'
           'body:JSON.stringify({anker_id:save.dataset.aid,person:name,gewaehlt:sel,'
           'bestaetigt:!!bestaetigt})}).then(function(r){return r.json()})'
           '.then(function(d){if(d.kollision){'
-          'if(confirm("\\u2019"+name+"\\u2019 matches existing \\u2019"+d.kollision+'
-          '"\\u2019 \\u2014 add to that person instead?"))senden(d.kollision,true);'
+          'if(confirm(' + json.dumps(t("lernanker.js.koll_vor")) + '+name+'
+          + json.dumps(t("lernanker.js.koll_mitte")) + '+d.kollision+'
+          + json.dumps(t("lernanker.js.koll_nach"))
+          + '))senden(d.kollision,true);'
           'else melden("' + t("lernanker.js.nicht_gespeichert") + '");return;}'
           'if(!d.ok){melden("' + t("lernanker.js.fehler") + ' "+d.msg);return;}'
           'if(CHAIN){adoptieren(false);return;}'

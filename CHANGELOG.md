@@ -7,6 +7,204 @@ this file — the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git
 history.
 
+## 0.1.0.331 — 2026-08-22
+
+Bundles the internal steps 0.1.0.299–0.1.0.330.
+
+- **Disk limits now fit the disk** (issue #25): suslik measures the disk at
+  startup and derives its cache cap and free-space floor from it, instead of
+  using fixed numbers that suit one machine and not another. A 32 GB disk gets a
+  4.8 GB cap, a 2 TB disk gets 300 GB. Fixed values still win if you set them.
+  Cached clips are also kept for 2 days instead of 7 — they are only a cache,
+  every clip can be fetched from Frigate again. The old default of 50 GB could
+  never take effect on a 32 GB disk, which is exactly how one installation
+  filled its disk and stopped; measured on the development system the change
+  turns 25 GB of cached video into 4.9 GB. suslik now also says at startup which
+  limits it is using and where they come from.
+- **The example configuration no longer overrides the new default**: the
+  shipped `verifyd.yaml` pinned the clip retention to 7 days, so anyone using it
+  kept a week of video no matter what the default said. The line is gone. If you
+  copied it into your own config, remove `clip_retention_d` there to get the
+  2-day default, or set the number you want.
+- **The disk tile showed a limit of 0 GB**: with the new automatic limits the
+  System page printed the raw setting instead of the value actually in use, and
+  the traffic light compared free space against 10 GB instead of the real floor.
+  It would have stayed green well past the point where cleanup starts.
+  Both now read the same source as the cleanup itself.
+- **The disk check runs once a day instead of every ten minutes**: cleanup
+  already runs after every processed event, so the timer is only a safety net.
+  It stays at ten minutes while space is actually tight, because that is the
+  situation where processing stops and no events arrive to trigger it.
+- **The live watchers stop writing pictures nobody sees**: frames rejected by
+  the pose gate (no human in view) were saved for two days, although the
+  interface never shows them; on the development system they were the largest
+  single item in the data folder. They are now only counted. A switch brings
+  them back for troubleshooting.
+
+- **People who arrive together now show up as a group**: next to the cards for
+  each person, the Today page lists the passes in which two or three people were
+  recognised together, with all their faces on one card. Clicking it opens
+  exactly those shared passes. The group is always named in alphabetical order,
+  so the same pair is always called the same thing.
+- **The pass check no longer offers five pictures of the same second**: it
+  suggested up to five frames from one recording, taken seconds apart in the
+  same pose — different enough for the duplicate check, identical to the eye.
+  At most two per event are now proposed; the rest stay visible as borderline.
+
+- **A pass with several people now shows all of them**: until now a pass card
+  showed the pictures of one person and squeezed everyone else into a line of
+  names, even though each person has her own best shot, her own score and her
+  own thumbnails. Now up to three people stand side by side with their own
+  picture and value, and each gets her own row of thumbnails with her own
+  "check this pass" button — so the button behind one person checks that
+  person's pictures.
+
+- **The face structure check no longer hogs the CPU**: its model was loaded in a
+  way that bypassed the project's thread cap, so a single measurement spread
+  over about ten threads and cost 126 ms of CPU time for 11 ms of wall clock.
+  Capped at two threads it costs 15 ms of CPU for 3.8 ms wall clock, with
+  bit-identical results. On small machines this is the difference between
+  workable and not.
+
+- **Cached clips that are in use are no longer deleted**: the cleanup had two
+  paths — by age and by size — and only the size path checked whether someone
+  was currently holding a clip. The age path did not, so a clip could be pulled
+  away from a running job. Now both paths check.
+
+- **Learning runs tell a face from a hedge**: the detector sometimes reports
+  foliage, a neck or the back of a head as a face, and it is confident about
+  it, so neither the size bar nor the object filter catches it. suslik now
+  asks a different question first: it puts a 106-point landmark model on the
+  crop and measures whether the points spread across a face or collapse to the
+  centre. Crops without face structure are no longer harvested at all
+  (`ernte_struktur_min`, default 0.11), and what is harvested but still weak is
+  shown under "show all" instead of being offered (`sichtung_struktur_min`,
+  default 0.15). Measured on 2000 random crops from 36 runs.
+  The group consensus introduced in the previous step is gone: it judged whole
+  groups by the quality measure and threw away five groups of real, recognised
+  people to catch two hedges — the structure test catches those hedges on its
+  own, picture by picture.
+
+- **Face learning finds better pictures**: after a pass, the face check
+  ("Check this pass for good pictures") now looks at every frame from every
+  camera of that pass, measures how good a face really is with a
+  reference-free quality score, and offers more and better pictures, grouped
+  by view (left, front, right). It runs on its own right after each pass, so
+  the check answers instantly. Faces that belong to a different person in the
+  same pass (or a dog) are kept out by a consensus check.
+- **Quality you can see**: every reference picture now carries a quality
+  value, shown on the Quality page; weak pictures are flagged, and group
+  naming in learning runs pre-selects by the same measure. "Matching faces"
+  suggestions are checked against the other people you know before they are
+  shown.
+- **Progress bars for long steps**: the quality check, the pass check and
+  rebuilding the reference library show a bar with a counter instead of a
+  static "please wait" text; a stuck rebuild is reported after two failed
+  attempts instead of retrying forever.
+- **No more full rebuild after every group**: naming a group in a learning
+  run (and adopting a face from the Unknown card, an enrollment suggestion or
+  an upload) now adds the new pictures to the reference cache instead of
+  throwing it away, so the next group opens right away instead of waiting a
+  minute for a rebuild.
+- **Honest learning-run estimate**: the remaining time is measured from the
+  run itself (seconds per clip-second over the events already harvested) and
+  the measured rate is kept for the next run's estimate on the same machine;
+  the old estimate used the analysis constants and was off by a factor of two.
+- **Translation almost complete**: the help pages, the setup wizard, the
+  system, vision and person pages, all dialogs and the notification texts
+  (Pushover/Telegram) are translated; only the Today page still has a few
+  English bits.
+- **The Crop column shows the face that was confirmed**: the Events list
+  and the review list used to show the largest image of the event, which
+  with small faces was the context picture, often with a different person
+  in front. Now each confirmed person gets her own face crop with the name
+  under it (click opens the context picture); unconfirmed rows show the
+  best face, and rows without a usable face say so instead of staying empty.
+- **Disk watch** (issue #25): the clip cache used to be trimmed only after
+  an event had been processed, so a full disk stopped the processing and
+  with it the cleanup. Now free space is checked at startup and every ten
+  minutes, the cache is trimmed before it gets tight (`disk_frei_min_gb`,
+  default 10 GB, next to the age and size limits), the System page shows
+  the cache size and has a "clean up now" button, and a disk that stays
+  tight raises a warning banner.
+- **Learning runs no longer drop groups on their own**: a group whose
+  pictures all fail the picture check used to be set aside automatically,
+  and a group that looked like one you had dismissed in an earlier run was
+  dismissed again silently, both with their pictures deleted. Now every
+  group the run finds stays in naming until you name, skip or delete it,
+  and only your own "Delete this group" removes pictures.
+- **Learning runs always show their pictures**: the picture check used to
+  detect the face a second time on the small, tightly cut crop and, on
+  faces of 60–100 px, mostly found nothing ("no measurable face"), so whole
+  groups looked empty; and pictures that were already learned were moved to
+  the collapsed "show all" rest. Now the check uses the measurement the
+  harvest already made on the full frame (the same one that fed the group),
+  pictures you have already assigned stay visible with a note ("already
+  learned", "already in the catalog") instead of being hidden, and adopting
+  a picture from a learning run stores that measurement with the reference
+  so the Quality page and the reference cache never re-detect the small file.
+  Pictures that are already learned are shown but no longer pre-selected, so
+  a single "take" cannot add a duplicate — or a face that belongs to someone
+  else. A group no longer stops at 14 pictures per view either: everything
+  above the quality line is listed behind them.
+- **The quality measure can now rule a picture out**: the detector sometimes
+  reports a hedge or a bush as a face, and it is confident about it — so
+  neither the size/sharpness bar nor the object filter (which looks for a
+  *low* detector score) catches it, and a whole group can end up showing
+  greenery. The reference-free quality measure sees the difference, so it is
+  now a veto: a face at or below `sichtung_norm_veto` (default 22) is dropped
+  from the group view, with the measured value in the reason. Pictures whose
+  quality was never measured are unaffected — they are judged by size and
+  sharpness as before. A group is also judged as a whole: if fewer than
+  `sichtung_konsens_min` (default 40 %) of its faces reach the line, the whole
+  group is treated as a false detection — that catches a hedge whose few best
+  crops sneak over the line, without raising the line for everyone. Nothing is
+  deleted: the pictures stay under "show all", and only you remove a group.
+  A group with nothing left to show is no longer the first one you are handed —
+  it moves to the end of the run, still reachable and still deletable.
+- **Far fewer notifications from the live watchers**: a watcher already had a
+  quiet period after each alert (`wieder_scharf_s`, 120 s by default), but the
+  name message slipped past it — it was sent before the check ran. It now uses
+  the same quiet period, which cut the messages by half on the test system
+  (1030 to 494 over nine days, from 115 a day to 55). Nothing else changes:
+  MQTT still publishes every event, so Home Assistant automations are
+  unaffected, and the live view still lists every appearance.
+- **The live watchers clean up after themselves** (follow-up to the disk watch):
+  `<data_dir>/live/` was the only data path without a cleaner. On the test
+  machine it had grown to 73 GB in 137,719 files within nine days, 61 GB of
+  which were frames the pose check had rejected — diagnostic material that is
+  never shown. Both are now covered by the same disk watch, with separate
+  retention times: `live_retention_d` (default 7) for evidence pictures and
+  look-back clips, `live_verworfen_retention_d` (default 2) for the rejected
+  frames. Set either to 0 to keep them forever.
+- **Built with a different AI model**: this release was built with Claude Opus
+  instead of Claude Fable 5. It passed the same quality gate as every other
+  release, but there may be more mistakes than usual — please report anything
+  that looks wrong.
+- **Ground truth as a set**: the ground-truth buttons on the Events list
+  and the review list now toggle each person separately (plus "stranger",
+  "unclear", "nobody"), so a pass with two known people is one entry with
+  both names; the combined "C+R" button is gone. The pass check reads the
+  same set.
+- **Live watchers**: one name vote per person and frame (a second face of
+  the same person in a frame no longer doubles the vote), name messages are
+  only sent after the pose check has confirmed a person, and the alert
+  carries the frame with the face box of the person it names.
+- **Face quality on the NPU**: the feature-norm measurement that the pass
+  check and learning runs use now runs on the NPU when there is one, with
+  the GPU and then the CPU as fallbacks (NPU→GPU→CPU, cross-checked at
+  startup). On the test machine a 30-event learning run dropped from
+  0.47 s to 0.12 s per clip-second.
+- **Fixes**: adopting a picture from the pass check no longer throws the
+  reference cache away (which forced a full rebuild on the next check);
+  learning-run files are readable for backups again; a single event that
+  Frigate discarded (HTTP 404) no longer raises the "Frigate unreachable"
+  banner, which could otherwise stay up for hours in MQTT mode; a learning
+  run with a single person no longer leaves the reference cache with only
+  that person (which hid the others' pictures in the next run); the
+  learning wizard now says which range of events was searched when the
+  newest ones are all known already.
+
 ## 0.1.0.298 — 2026-08-19
 
 Interim release. Bundles the internal steps 0.1.0.287–0.1.0.297.

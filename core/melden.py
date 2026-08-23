@@ -37,7 +37,33 @@ import uuid
 
 from core import areas as _areas_mod       # Areas Stufe 1 (Meldetext + Payload-Feld)
 from core import registry as _reg          # MELDE_HERKUNFT (eine Quelle, .163)
+from core import sprache as _sprache       # Sprach-Stufe 4: Meldetexte (Eintrittspunkt b/c)
 from core import vertrauen as _vertrauen   # Wortstufen (.249, Kosinus-raus)
+
+
+# ------------------------------------------------- Sprache am Meldeweg (Stufe 4)
+# konzept_sprache.md §2 nennt drei Eintrittspunkte der Sprachaufloesung:
+# (a) Request-Beginn (verifyd.handle_one_request), (b) Beginn jedes
+# Meldetext-Baus, (c) Alert-Pfad des Live-Waechters. (b) und (c) sind DIESE
+# Funktion — Meldungen entstehen OHNE Request, ihre Sprache kommt deshalb
+# direkt aus dem Config-Store (mtime-gecacht, im Normalfall eine stat()).
+#
+# WARUM ueberhaupt ein Aufruf: sprache.aktive() faellt ohne gesetzte
+# contextvar ohnehin auf store_sprache() zurueck — jede t()-Zeile fuer sich.
+# aktivieren() PINNT die Sprache stattdessen fuer den ganzen Kontext: EIN
+# Meldetext ist damit auch dann in EINER Sprache, wenn der Nutzer waehrend
+# des Baus umschaltet (dieselbe Zusage wie "konsistent je Seite" beim
+# Request). Der Aufruf steht deshalb am Beginn des TEXTBAUS, nicht im
+# Sender.
+#
+# EIGENER PROZESS (c): core/livewached laeuft als eigener Prozess und hat
+# keine Dienst-Config — er liest denselben Store. VERIFY_DATA_DIR ist im
+# Image gesetzt (docker/Dockerfile*) und wird vom Dienst fuer Kinder
+# gesetzt (verifyd.load_config); fehlt es, gilt Englisch (nie ein Fehler,
+# nie eine Exception — store_sprache faengt selbst).
+def sprache_aktivieren():
+    """Aktive Sprache dieses Kontexts aus dem Config-Store pinnen -> Code."""
+    return _sprache.aktivieren()
 
 
 # ------------------------------------------- MQTT-Topic-Praefix (#23, Zusage an Tokn59)
@@ -141,7 +167,14 @@ def stoerung_melden(cfg, text, herkunft=None, bericht=None):
     `bericht` (Live-Phase 4, additiv): Liste des Aufrufers — je versuchtem Kanal
     wird ("pushover"|"telegram", ok) angehaengt (ok = Sender hat ANGENOMMEN).
     Die Live-Engine protokolliert damit real rausgegangene Stoerungen fuer die
-    Dienst-Zaehler; Rueckgabe (Fehlerliste) bleibt unveraendert."""
+    Dienst-Zaehler; Rueckgabe (Fehlerliste) bleibt unveraendert.
+
+    SPRACH-STUFE 4 — GRENZE, BEWUSST: der Titel "suslik-Stoerung" ist ein
+    deutsches Wort (Alt-Bestand) und die `text`-Inhalte der Aufrufer sind
+    technische Stoerungs-DIAGNOSEN, die wortgleich auch ins Log gehen
+    (Log bleibt englisch/maschinenlesbar, konzept_sprache.md §4 B20).
+    Beides bleibt literal — de->en waere eine bewusste Textaenderung, und
+    UI/Log zu trennen ist ein eigener Umbau (do_POST-Marker (b)+(c))."""
     fehler = []
     try:
         ok = push(cfg, "suslik-Stoerung", text, None, herkunft=herkunft)
@@ -347,7 +380,15 @@ def telegram_melden(cfg, log, dry_alert, zustand, best_crop, clip_holen, ha_meld
 
     Injektion: `zustand` ist das Drossel-Dict des Aufrufers (tg_unbekannt),
     `best_crop`/`clip_holen`/`ha_melden` seine Bild-/Clip-/HA-Quellen — die
-    Live-Engine haengt hier mit eigenem Zustand und Burst-Clip an."""
+    Live-Engine haengt hier mit eigenem Zustand und Burst-Clip an.
+
+    SPRACH-STUFE 4 — GRENZE, BEWUSST (Bericht Stufe 4): die beiden Captions
+    unten sind DEUTSCH ("… erkannt um …", "Unbekannte Person um … — niemand
+    erkannt"). de->en waere eine bewusste TEXTAENDERUNG, nie Teil des
+    Einzugs (dieselbe Regel wie die deutschen Alt-msgs im do_POST-Marker
+    (b)) — sie bleiben literal, bis der User den Wortlaut entscheidet.
+    Sprachfaehig ist hier nur der englische Video-Rueckfall-Zusatz."""
+    sprache_aktivieren()          # Eintrittspunkt (b), s. sprache_aktivieren()
     modus = cfg.get("telegram_modus", "aus")
     if modus == "aus" or dry_alert:
         return
@@ -382,7 +423,7 @@ def telegram_melden(cfg, log, dry_alert, zustand, best_crop, clip_holen, ha_meld
                 # aus Welle 3 erst durch die Beobachtung des Users auffiel (Fehlerklasse C).
                 will_video = cfg.get("telegram_inhalt", "video") != "bild"
                 video = clip_holen(eid) if will_video else None
-                cap = caption + ("\n(video unavailable — sending image)"
+                cap = caption + ("\n" + _sprache.t("meldung.video_ersatz.satz")
                                  if will_video and not video else "")
                 ok = telegram_video(cfg, video, cap, crop)
                 log(f"{eid}: Telegram {art} direct "
@@ -634,7 +675,15 @@ def notif_speichern(cfg, d, *, log, whitelist, store_pfad, store_laden,
 
 def notif_test(cfg, kanal, d):
     """Echter Test-Versand je Kanal mit den AKTUELLEN Formularwerten (leeres Feld -> gespeicherter Wert).
-    Umgeht bewusst Drosseln/Modus-Gates. Gibt (ok, msg) zurueck; Secrets NIE in die Meldung."""
+    Umgeht bewusst Drosseln/Modus-Gates. Gibt (ok, msg) zurueck; Secrets NIE in die Meldung.
+
+    SPRACH-STUFE 4: der VERSENDETE Text ist sprachfaehig (er landet am Handy
+    des Nutzers). Die (ok, msg)-RUECKGABE bleibt englisch — sie ist eine
+    Fachschicht-msg des Notifications-Reiters und faellt damit unter
+    Stufe-2-Marker (a) im do_POST-Dispatcher: ihr Einzug ist ein eigener Zug
+    je Modul, kein Meldetext."""
+    sprache_aktivieren()          # Eintrittspunkt (b), s. sprache_aktivieren()
+
     def keep(neu, alt):
         neu = str(neu if neu is not None else "").strip()
         return neu if neu else (alt or "")
@@ -646,7 +695,7 @@ def notif_test(cfg, kanal, d):
             if not tok or not usr:
                 return False, "token/user missing"
             ok = push({"pushover": {"token": tok, "user": usr}}, "suslik",
-                      "Test notification from suslik ✓",
+                      _sprache.t("meldung.test.satz"),
                       herkunft="manuell")
             return (True, "Pushover: sent ✓") if ok else (False, "Pushover rejected it (check token/user)")
         if kanal == "telegram":
@@ -655,7 +704,7 @@ def notif_test(cfg, kanal, d):
             if not tok or not chat:
                 return False, "bot_token/chat_id missing"
             ok = telegram_video({"telegram": {"bot_token": tok, "chat_id": chat}},
-                                None, "Test notification from suslik ✓",
+                                None, _sprache.t("meldung.test.satz"),
                                 herkunft="manuell")
             return (True, "Telegram: sent ✓") if ok else (False, "Telegram rejected it (check bot_token/chat_id)")
         if kanal == "mqtt":

@@ -15,9 +15,12 @@ import webui
 from core.sprache import t
 
 
-def render(person, kand, vs, data_dir):
+def render(person, kand, vs, data_dir, va=None):
     """-> (inhalt, refresh). kand = anlernen.aehnliche_unbekannte(person) (None = laeuft),
-    vs = anlernen.lade_vorschlaege(person) (None = laeuft)."""
+    vs = anlernen.lade_vorschlaege(person) (None = laeuft),
+    va = offene Vorrats-Angebote der Person (core.vorrat.angebote_lesen,
+    bauplan_vorrat.md B4) — None/leer: der Abschnitt erscheint gar nicht
+    (Alt-Render byte-identisch)."""
     pe = html.escape(person)
     pj = html.escape(person.replace("\\", "\\\\").replace("'", "\\'"), quote=True)
     refresh = None
@@ -110,4 +113,39 @@ def render(person, kand, vs, data_dir):
                                     t("aehnliche.vorschlaege.hinweis_leer_kriterien"))
                          + f'<p><button class="gtb" onclick="vorschlagNeu(\'{pj}\',this)">'
                          f'{t("aehnliche.vorschlaege.knopf_neu")}</button></p>')
+    # --- Quelle 3: Vorrats-Angebote der Lernlaeufe (bauplan_vorrat.md B4) ---
+    # Direkt aus vorrat.jsonl der EXISTIERENDEN Laeufe gerendert (kein Misch-
+    # File, Konzept-QS W1.14/W2.10); eigener Draht ueber data-Attribute — der
+    # eid|datei-Wert der Bestands-Suche kann den Lauf-Pfad nicht transportieren.
+    if va:
+        teile.append(f"<h3>{t('aehnliche.vorrat.titel')}</h3>"
+                     f"<p style='color:var(--dim);font-size:13px;margin:0 0 6px'>"
+                     f"{t('aehnliche.vorrat.hinweis')}</p>")
+        for z in va:
+            lid = urllib.parse.quote(str(z.get("lauf_id") or ""))
+            basis = os.path.basename(str(z.get("datei_v") or ""))
+            wann = datetime.datetime.fromtimestamp(
+                (z.get("ts") or 0) + (z.get("t") or 0)).strftime("%d.%m. %H:%M")
+            zeile = t("aehnliche.vorrat.kachel_zeile", wann=wann,
+                      kamera=html.escape(str(z.get("kamera") or "?")),
+                      sim="%.2f" % (z.get("sim") or 0),
+                      norm="%.1f" % (z.get("norm") or 0))
+            anker = (f' <span style="color:var(--dim);font-size:11px">'
+                     f'{t("aehnliche.vorrat.auch_anker")}</span>'
+                     if z.get("auch_anker") else "")
+            teile.append(
+                f'<label class="card" style="display:inline-block;width:auto;'
+                f'text-align:center;margin:4px;vertical-align:top;'
+                f'outline:2px solid #2a6db8">'
+                f'<img src="/lernlauf/vorrat/{lid}/{urllib.parse.quote(basis)}" '
+                f'style="height:120px;border-radius:5px;display:block;margin-bottom:4px">'
+                f'<input type="checkbox" class="vo-cb" '
+                f'data-lauf="{html.escape(str(z.get("lauf_id") or ""), quote=True)}" '
+                f'data-datei="{html.escape(basis, quote=True)}" '
+                f'data-eid="{html.escape(str(z.get("eid") or ""), quote=True)}"> '
+                f'{zeile}{anker}</label>')
+        teile.append(
+            f'<div style="margin:6px 0 14px">'
+            f'<button class="gtb on" onclick="vorratAufnehmen(\'{pj}\',this)">'
+            f'{t("aehnliche.vorrat.knopf_gewaehlt", person=pe)}</button></div>')
     return "".join(teile), refresh

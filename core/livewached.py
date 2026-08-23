@@ -29,6 +29,17 @@ neu") kommt mit der UI-Phase — dokumentierter offener Punkt, kein Versehen.
 CPU-ONLY-SPERRE (§11 Entscheid 3): auf einem cpu-Backend startet die Engine
 NICHT (klarer Text statt stillem 1090-%-CPU-Betrieb); der sichtbare
 UI-Hinweis dazu kommt mit dem Live-Reiter (Phase 2).
+
+SPRACH-STUFE 4 in DIESEM Modul (Grenz-Marker, bewusst): der Startweg
+schreibt ausschliesslich LOG-Zeilen (_log) — Aktivierungs-/Sperr-/
+CPU-Hinweise, Referenz-Bilanz, Quelltest-Ergebnis, Status-Ausgabe. Logs
+bleiben englisch und maschinenlesbar (konzept_sprache.md §4 B20); die
+UI-Fassung dieser Zustaende kommt aus core/registry.LIVE_ZUSTAENDE bzw.
+livewache.ui_zustand, nicht von hier. Sprachfaehig ist im
+livewached-PROZESS deshalb nur das, was wirklich beim Nutzer ankommt:
+die Waechter-Meldungen ueber core/livewache.Melder (Eintrittspunkt (c),
+Sprache aus dem Config-Store — dieser Prozess hat keine Dienst-Config,
+liest den Store aber ueber VERIFY_DATA_DIR wie der Dienst).
 """
 import json
 import os

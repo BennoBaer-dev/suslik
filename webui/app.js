@@ -379,6 +379,25 @@ function vorschlagAufnehmen(person, btn) {
       if (d.ok) setTimeout(function () { location.reload(); }, 900);
     });
 }
+function vorratAufnehmen(person, btn) {   // Vorrats-Angebote (bauplan_vorrat B4): eigener
+  // Draht mit data-Attributen — der eid|datei-Wert des Bestands-Wegs kann den
+  // Lauf-Pfad nicht transportieren (Konzept-QS W1.13).
+  var cbs = document.querySelectorAll('.vo-cb:checked'), items = [];
+  for (var i = 0; i < cbs.length; i++) {
+    items.push({lauf_id: cbs[i].dataset.lauf, datei: cbs[i].dataset.datei,
+                eid: cbs[i].dataset.eid});
+  }
+  if (!items.length) { alert(TT('js.auswahl.gesicht_fehlt', 'Please tick at least one face.')); return; }
+  if (!confirm(TT('js.vorrat.frage', 'Add {n} stock face(s) to {person}? They become references immediately (kept local, not exported).',
+                  {n: items.length, person: person}))) return;
+  btn.disabled = true; btn.textContent = TT('js.status.hinzufuegen', 'adding …');
+  fetch('/vorrat_aufnehmen', {method: 'POST', body: JSON.stringify({person: person, items: items})})
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      btn.textContent = d.msg;
+      if (d.ok) setTimeout(function () { location.reload(); }, 900);
+    });
+}
 function vorschlagNeu(person, btn) {
   btn.disabled = true; btn.textContent = TT('js.status.suchen', 'searching …');
   fetch('/vorschlaege_neu', {method: 'POST', body: JSON.stringify({person: person})})
@@ -652,6 +671,56 @@ function refEntfernen(person, datei, btn) {
       if (d.ok && c) { c.style.opacity = 0.4; }
     });
 }
+function ladeBalken(el, i, n, z) {
+  /* .311 (User 21.08., Lernlauf-Karte 'Gruppe 2 von 3': 'hier koennte man auch
+     so einen kleinen Balken bauen'): schmaler Fortschrittsbalken + Zaehler
+     hinter einem Warte-Text — fuer Antworten mit laden + i/n/zustand
+     (refcache-Neuaufbau, Pass-Ernte). Haengt sich an das Element an; der
+     Aufrufer setzt vorher den Text (textContent loescht alte Balken mit).
+     Gleiche Form wie lbBalken im Auftritte-Blatt (dessen JS ist inline und
+     eigenstaendig) und der Bestands-QS-Balken (#qs-lauf-balken). */
+  if (!el) return;
+  var w = document.createElement('span');
+  w.style.cssText = 'display:inline-block;vertical-align:middle;width:110px;height:6px;' +
+    'margin-left:8px;border-radius:3px;background:var(--surface-2);' +
+    'border:1px solid var(--border);overflow:hidden';
+  var f = document.createElement('span');
+  var pz = n ? Math.round(100 * i / n) : 0;
+  f.style.cssText = 'display:block;height:100%;width:' + pz + '%;' +
+    'background:' + (z === 'wartet' ? 'var(--warn)' : 'seagreen') + ';transition:width .6s';
+  w.appendChild(f); el.appendChild(w);
+  if (n) {
+    var c = document.createElement('span');
+    c.className = 'dim'; c.style.marginLeft = '6px';
+    c.textContent = i + '/' + n;
+    el.appendChild(c);
+  }
+}
+function qsFortschritt() {
+  /* .310 Bestands-QS-Fortschritt ohne Seiten-Reload (Lernlauf-Muster):
+     pollt /qualitaet/status alle 3 s, fuehrt Balken + Zaehler nach und laedt
+     GENAU EINMAL neu, wenn der Lauf fertig ist — nur auf der Uebersicht
+     (data-reload=1); die Galerie mit Haken bekommt stattdessen den Hinweis. */
+  var box = document.getElementById('qs-lauf');
+  if (!box) return;
+  fetch('/qualitaet/status').then(function (r) { return r.json(); }).then(function (d) {
+    var b = document.getElementById('qs-lauf-balken'), tx = document.getElementById('qs-lauf-text');
+    if (d.laeuft) {
+      var pz = d.n ? Math.round(100 * d.i / d.n) : 0;
+      if (b) b.style.width = pz + '%';
+      if (tx) tx.textContent = '\u23F3 ' + (d.n ? TT('js.qs.fortschritt', 'checking picture {i} of {n} …', {i: d.i, n: d.n})
+                                                 : TT('js.status.starten', 'starting …'));
+      setTimeout(qsFortschritt, 3000);
+    } else {
+      if (b) b.style.width = '100%';
+      if (box.getAttribute('data-reload') === '1') { location.reload(); return; }
+      /* Galerie mit Haken/Reitern: NIE selbst neu laden (.282) — nur sagen, dass es fertig ist */
+      if (tx) tx.textContent = '\u2705 ' + (box.getAttribute('data-fertig') || '');
+    }
+  }).catch(function () { setTimeout(qsFortschritt, 5000); });
+}
+document.addEventListener('DOMContentLoaded', function () { if (document.getElementById('qs-lauf')) qsFortschritt(); });
+
 function qsStart(btn) {
   /* .273 Bestands-QS-Popup (Faces-Karte): Start mit Personen-Wahl; laeuft
      ueber denselben Hintergrund-Runner wie der automatische Re-Check. */
@@ -675,6 +744,23 @@ function qsStart(btn) {
     });
 }
 
+function cacheAufraeumen(btn) {
+  /* .313 (Issue #25): Aufraeum-Knopf der System-Seite — raeumt Clip-Cache nach Alter,
+     Deckel und Mindestfrei und zeigt, was frei wurde. */
+  btn.disabled = true;
+  var m = document.getElementById('disk-msg'); if (m) m.textContent = TT('js.status.pruefen', 'checking …');
+  fetch('/cache_aufraeumen', {method: 'POST', body: '{}'})
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (m) m.textContent = d.msg || TT('js.status.fehler', 'error');
+      btn.disabled = false;
+      if (d.ok) setTimeout(function () { location.reload(); }, 2500);
+    })
+    .catch(function () {
+      if (m) m.textContent = TT('js.dienst.nicht_erreichbar', 'cannot reach the service — try again in a moment.');
+      btn.disabled = false;
+    });
+}
 function qsPerson(name, btn) {
   /* .273c: Kontext-Start von der Personen-Seite — Lauf ist immer global,
      die Ergebnis-Sicht springt gefiltert auf die Person. */
@@ -718,26 +804,91 @@ function refBatchLoeschen(btn) {
     });
 }
 
-function gt(eid, label, el) {
-  fetch('/gt', {method: 'POST', body: JSON.stringify({eid: eid, label: label})})
-    .then(function (r) {
-      if (!r.ok) return;
-      var p = el.parentElement,
-          bs = p.querySelectorAll('.gtb'),
-          ss = p.querySelectorAll('select');
-      /* Auswahl ueber Klassen, NICHT ueber Inline-Farben (Fund 25.07.). Vorher setzte diese
-         Funktion nach jedem Klick '#333' auf alle Selects und '#2a6' auf das gewaehlte — ohne die
-         Textfarbe mitzusetzen, die vorher als 'color:#eee' daneben stand und beim Zentralisieren
-         der Formularelemente entfiel. Ergebnis im jetzt voreingestellten Hellmodus: dunkler Grund
-         unter dunklem Text, gemessen 1,31:1 statt 10,89. Das Zentralisieren hatte nur verifyd.py
-         erfasst; das JavaScript schrieb die Festfarben stillschweigend wieder hin. */
-      for (var i = 0; i < bs.length; i++) bs[i].className = 'gtb';
-      for (var i = 0; i < ss.length; i++) ss[i].classList.remove('gewaehlt');
-      if (el.tagName === 'SELECT') { el.classList.add('gewaehlt'); }
-      else { el.className = 'gtb on'; }
-      var card = el.closest('.card');
+function gtSenden(leiste, personen, fertig) {
+  /* .313 GT als MENGE: POST {eid, personen:[...]}; der Dienst prueft, speichert
+     (label wird dort abgeleitet) und antwortet mit der gueltigen Menge. Die Menge
+     wird SOFORT im Datensatz fortgeschrieben (zwei schnelle Klicks rechnen sonst
+     auf demselben alten Stand), gemalt wird nur die JUENGSTE Antwort (Folgezaehler);
+     eine Ablehnung des Dienstes wird an der Leiste gezeigt, nie verschluckt. */
+  var folge = (parseInt(leiste.dataset.folge || '0', 10) + 1);
+  leiste.dataset.folge = folge;
+  var vorher = leiste.dataset.personen;
+  leiste.dataset.personen = JSON.stringify(personen);
+  var msg = leiste.querySelector('.gt-msg');
+  if (msg) msg.textContent = '';
+  fetch('/gt', {method: 'POST', body: JSON.stringify({eid: leiste.dataset.eid, personen: personen})})
+    .then(function (r) { return r.json().catch(function () { return {ok: false, msg: 'HTTP ' + r.status}; }); })
+    .then(function (d) {
+      if (parseInt(leiste.dataset.folge || '0', 10) !== folge) return;   /* aelter als der letzte Klick */
+      if (!d || !d.ok) {
+        leiste.dataset.personen = vorher;
+        if (msg) msg.textContent = (d && d.msg) ? d.msg : TT('js.status.fehler', 'error');
+        gtMalen(leiste, JSON.parse(vorher || '[]'));
+        return;
+      }
+      gtMalen(leiste, d.personen || []);
+      var card = leiste.closest('.card');
       if (card && card.dataset.fadeOnLabel) { card.style.opacity = 0.35; }
+      if (fertig) fertig(d);
+    })
+    .catch(function () {
+      if (parseInt(leiste.dataset.folge || '0', 10) !== folge) return;
+      leiste.dataset.personen = vorher;
+      if (msg) msg.textContent = TT('js.dienst.nicht_erreichbar', 'cannot reach the service — try again in a moment.');
+      gtMalen(leiste, JSON.parse(vorher || '[]'));
     });
+}
+function gtMalen(leiste, personen) {
+  leiste.dataset.personen = JSON.stringify(personen);
+  var bs = leiste.querySelectorAll('button[data-gt]');
+  for (var i = 0; i < bs.length; i++) {
+    bs[i].className = personen.indexOf(bs[i].dataset.gt) >= 0 ? 'gtb on' : 'gtb';
+  }
+  /* Uebernehmen-Knopf nur, solange nichts gewaehlt ist */
+  var alle = leiste.querySelector('button[data-gt-alle]');
+  if (alle) alle.style.display = personen.length ? 'none' : '';
+  /* gewaehlte Person aus dem Dropdown bekommt ihren eigenen Schalter in dieser Zeile */
+  for (var j = 0; j < personen.length; j++) {
+    if (!leiste.querySelector('button[data-gt="' + CSS.escape(personen[j]) + '"]')) {
+      var b = document.createElement('button');
+      b.className = 'gtb on'; b.dataset.gt = personen[j]; b.textContent = personen[j];
+      b.onclick = function () { gtT(this); };
+      var anker = leiste.querySelector('button[data-gt="Fremd"]');
+      leiste.insertBefore(b, anker || null);
+    }
+  }
+  var sel = leiste.querySelector('select');
+  if (sel) {
+    sel.value = '';
+    for (var k = 0; k < sel.options.length; k++) {
+      var weg = sel.options[k].value && personen.indexOf(sel.options[k].value) >= 0;
+      sel.options[k].hidden = weg; sel.options[k].disabled = weg;
+    }
+  }
+}
+function gtT(el, wert) {
+  /* Schalter: an/aus. '?' und 'No person' sind exklusiv (leeren die Menge);
+     sie wieder auszuschalten entfernt das Urteil (= '?' im Dienst).
+     el = Knopf (Wert aus data-gt) oder Select (Wert als 2. Argument). */
+  var leiste = el.closest('.gtl'); if (!leiste) return;
+  wert = (wert === undefined) ? el.dataset.gt : wert;
+  if (!wert) return;
+  var cur = []; try { cur = JSON.parse(leiste.dataset.personen || '[]'); } catch (e) {}
+  var exklusiv = (wert === 'unklar' || wert === 'kein_mensch');
+  var neu;
+  if (cur.indexOf(wert) >= 0) { neu = cur.filter(function (x) { return x !== wert; }); }
+  else if (exklusiv) { neu = [wert]; }
+  else { neu = cur.filter(function (x) { return x !== 'unklar' && x !== 'kein_mensch'; }); neu.push(wert); }
+  gtSenden(leiste, neu);
+}
+function gtAlle(el) {
+  var leiste = el.closest('.gtl'); if (!leiste) return;
+  var alle = []; try { alle = JSON.parse(el.dataset.gtAlle || '[]'); } catch (e) {}
+  gtSenden(leiste, alle);
+}
+function gt(eid, label, el) {
+  /* Altaufrufer (ein Wert = Menge mit einem Element) */
+  gtT(el, label);
 }
 
 /* Unknown tab (20.07.): assign to person / ignore / merge / re-run */
@@ -1212,8 +1363,8 @@ function visionTest(btn) {
       TT('js.vision.dirty_titel', 'You have not saved this connection'),
       TT('js.vision.dirty_text',
          'The test would use the values you just typed. Recognition keeps using ' +
-         'the SAVED connection until you press Save — a green test alone changes ' +
-         'nothing about the verdicts.'),
+         'the SAVED connection until you press "Save connection" — a green test ' +
+         'alone changes nothing about the verdicts.'),
       [[TT('js.vision.dirty_save', 'Save first, then test'), function () { visionSpeichern(function () { _visionTestLauf(btn); }); }],
        [TT('js.vision.dirty_test', 'Test without saving'), function () { _visionTestLauf(btn); }],
        [TT('js.allg.abbrechen', 'Cancel'), function () { btn.disabled = false; }]]);
@@ -1283,7 +1434,7 @@ function visionPromptZurueck() {
   if (!confirm(TT('js.vision.prompt_frage', 'Reset the question to the default wording?'))) return;
   t.value = (typeof VIS_PROMPT_STD === 'string') ? VIS_PROMPT_STD : '';
   document.getElementById('vision-status').textContent =
-    TT('js.vision.prompt_zurueck', 'default wording restored — press Save to store it');
+    TT('js.vision.prompt_zurueck', 'default wording restored — press "Save connection" to store it');
 }
 
 /* --- Recognition test (konzept_vision.md v2 §4, Zug V4) ----------------------
@@ -1475,9 +1626,12 @@ function vwWeg(i) {
       var zeile = document.createElement('div');
       zeile.textContent = neu.begruendung
         || [neu.tag || '?', neu.camera || '?', (neu.hoehe || '?') + ' px'].join(' · ');
+      /* Tranche D (Kennung/Anzeige-Trennung 3b): geliehen_text kommt fertig
+         uebersetzt vom Server (bausteine.reihen_wort); geliehen_aus bleibt
+         die interne Kennung (Logik oben) und der ehrliche Fallback. */
       k.querySelector('.vw-m').innerHTML = zeile.innerHTML
         + (neu.geliehen_aus
-           ? '<div class="vw-warn">' + TT('js.vw.geliehen', 'from the {reihe} row', {reihe: neu.geliehen_aus}) + '</div>'
+           ? '<div class="vw-warn">' + TT('js.vw.geliehen', 'from the {reihe} row', {reihe: neu.geliehen_text || neu.geliehen_aus}) + '</div>'
            : '');
     })
     .catch(function () { k.style.opacity = '1'; });

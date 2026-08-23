@@ -22,10 +22,11 @@ Textvariablen `t` sind umbenannt, damit sie t() nicht verschatten.
 """
 import html
 import time
+import urllib.parse
 
 from core.livewache import quelle_fp, quelle_maskiert
 from core.registry import LIVE_ZUSTAENDE
-from core.sprache import t
+from core.sprache import t, t_n
 
 # CPU-Runde 17.08. (User-Go nach Messung): auf der cpu-Variante ist Live
 # BEGRENZT erlaubt — der Text (live.hinweis_cpu) sagt ehrlich, was gemessen
@@ -565,3 +566,53 @@ def detail(name, guard, kd, gesperrt):
         + ' <span id="lv-status" style="color:var(--dim)"></span> '
         + f'&nbsp; <a href="/live">{t("live.detail.link_zurueck")}</a></p>'
         + '<script>window._livePage=true;</script>')
+
+
+def alerts_tag(eintraege, gesamt, t0):
+    """-> Seiten-INHALT der Tages-Uebersicht /live_alerts (ME1, byte-treu aus
+    verifyd extrahiert; Schnappschuss-Beweis scratchpad/me1_schnappschuss.py).
+    eintraege = [(auftritt, bilder, videos), ...] — die Medien-Suche je
+    Auftritt (livewache.auftritt_medien + Platte-schon-aufgeraeumt-Fallback)
+    bleibt beim Handler (Daten als Parameter, Muster dieses Moduls); gesamt =
+    Trigger-Zahl aus melde_liste, t0 = Tagesanfang (Epoche)."""
+    karten = []
+    for a, bilder, videos in eintraege:
+        thumbs = "".join(
+            f'<a href="/live_alarmbild?p={urllib.parse.quote(b)}"'
+            f' target="_blank" rel="noopener">'
+            f'<img class="lv-thumb" loading="lazy" '
+            f'src="/live_alarmbild?p={urllib.parse.quote(b)}" '
+            f'alt=""></a>' for b in bilder)
+        vlinks = " ".join(
+            f'<a href="/live_alarmbild?p={urllib.parse.quote(v)}"'
+            f' target="_blank" rel="noopener">'
+            f'{t("livealerts.link_video", n=i + 1)}</a>'
+            for i, v in enumerate(videos))
+        _bis = (f'&ndash;{time.strftime("%H:%M:%S", time.localtime(a["ts_letzte"]))}'
+                if a["ts_letzte"] - a["ts"] >= 1 else "")
+        karten.append(
+            f'<div class="card lv-auftrittkarte" id="a{int(a["ts"])}">'
+            f'<div><b>{html.escape(a.get("person") or t("livealerts.person_unbekannt"))}</b>'
+            f' <span class="dim">'
+            f'{time.strftime("%H:%M:%S", time.localtime(a["ts"]))}{_bis}'
+            f' · {html.escape(a["kamera"])}'
+            f' · {t_n("livealerts.trigger", a["trigger"])}'
+            f' · {html.escape("+".join(t("livealerts.kanal_keiner") if _kn == "none" else _kn for _kn in a["kanaele"]))}</span></div>'
+            + (f'<div class="dim">{html.escape(a["zusatz"][:90])}'
+               f'</div>' if a.get("zusatz") else '')
+            + (f'<div class="lv-medienreihe">{thumbs}</div>'
+               if thumbs else
+               f'<div class="dim">{t("livealerts.keine_bilder")}</div>')
+            + (f'<div class="dim">{vlinks}</div>' if vlinks else '')
+            + '</div>')
+    # Zaehler-Splits (§8.10) via t_n; der Satz-Rest ist EIN
+    # Ganz-Schluessel mit {tag} (ISO-Datum bleibt Code).
+    inhalt = (
+        f'<h2>{t("livealerts.titel")}</h2>'
+        f'<p class="sub">{t_n("livealerts.kopf.auftritte", len(eintraege))}'
+        f' ({t_n("livealerts.trigger", gesamt)})'
+        f'{t("livealerts.kopf.satz", tag=time.strftime("%Y-%m-%d", time.localtime(t0)))}'
+        f' {t("livealerts.kopf.satz_alt")}</p>'
+        + ("".join(karten) if karten else
+           f'<div class="leer"><b>{t("livealerts.leer")}</b></div>'))
+    return inhalt

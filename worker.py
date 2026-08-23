@@ -62,6 +62,43 @@ sys.path.insert(0, HERE)
 _emb = None                      # der eine warme Embedder je Worker-Leben
 _EchterEmbedder = None
 _werk = {}                       # P1: warme Werkzeuge des personwork-Betriebs (PoseWache)
+_normmass = None                 # die eine warme NormMass je Worker-Leben (Vorrat B2)
+_strukturmass = None             # die eine warme StrukturMass je Worker-Leben (.32x)
+
+
+def _normmass_holen():
+    """Warme NormMass wie der _emb-Cache: EIN Bau je Worker-Leben, Neubau nur
+    bei Modellwechsel. Der Bau gehoert in den PROZESS-START (main(), ENV-
+    Schalter SUSLIK_VORRAT vom Dienst), NIE lazy in ein Job-Fenster: die
+    _JobRssWache misst das Job-WACHSTUM, und die gemessene ~1-GB-Bauspitze
+    obendrauf auf typisch 2,4-2,7 GB Job-Wachstum liesse bei der 4096er-
+    Default-Grenze nur ~10 %% Luft (Bauplan B1/W2.9). Faellt der Bau aus
+    (fremdes Modell, Graph-Fehler), traegt die Instanz ok=False und die Ernte
+    laeuft DEKLARIERT ohne v weiter."""
+    global _normmass
+    import face_audit
+    modell = face_audit.aktuelles_modell()
+    if _normmass is None or _normmass.modell != modell:
+        _normmass = face_audit.NormMass(modell=modell)
+    return _normmass
+
+
+def _strukturmass_holen():
+    """Warme StrukturMass — HIER GILT DAS GEGENTEIL DER NormMass-REGEL.
+
+    NormMass wird eager am Prozess-Start gebaut, weil ihre ~1-GB-Bauspitze sonst
+    in ein _JobRssWache-Fenster fiele. StrukturMass ist umgekehrt: ihr 5-MB-Modell
+    kostet NEBEN einer schon warmen Session gemessen 0 MB RSS und 0,2 s — in einem
+    NACKTEN Prozess dagegen +464 MB (nicht das Modell, sondern das Plugin, das
+    dort erst aufgebaut wuerde). Deshalb LAZY beim ersten Ernte-Job,
+    wenn Embedder und NormMass ohnehin stehen. Faellt der Bau aus, traegt die
+    Instanz ok=False und die Ernte laeuft DEKLARIERT ohne Struktur-Test weiter
+    (z["struktur_aus"])."""
+    global _strukturmass
+    import face_audit
+    if _strukturmass is None:
+        _strukturmass = face_audit.StrukturMass()
+    return _strukturmass
 
 
 def _koerper_budget(job):
@@ -432,10 +469,17 @@ def _job_ausfuehren(job, antwort_out=None):
                     eid, erzeugung=bool(job.get("clip_erzeugung")),
                     erzeugung_deckel_s=job.get("clip_erzeugung_deckel_s"))
                 try:
+                    # Vorrats-Gate nur, wenn das eingefrorene Job-Regime die
+                    # vorrat-Keys traegt (alte Manifeste: None -> Alt-Verhalten).
+                    nm = (_normmass_holen()
+                          if _ernte.vorrat_schwellen_da(job["schwellen"]) else None)
                     zusatz = _ernte.ernte_event(
                         vid, eid, job.get("kamera"), float(job.get("ts") or 0),
                         float(job.get("fps_sample") or 3), job["schwellen"],
-                        job["lauf_dir"], emb=face_audit.Embedder())
+                        job["lauf_dir"], emb=face_audit.Embedder(), norm_mass=nm,
+                        struktur_mass=(_strukturmass_holen()
+                                       if job["schwellen"].get("struktur_min")
+                                       else None))
                 finally:
                     clipcache.frei(eid)   # nie eine Pin-Waise (Size-Cap)
             elif typ == "koerper":
@@ -517,6 +561,12 @@ def _patch_embedder():
 
 def main():
     _patch_embedder()
+    if os.environ.get("SUSLIK_VORRAT") == "1":
+        # Vorrat aktiv (Dienst setzt den Schalter aus seiner Config beim
+        # Worker-Start): NormMass JETZT bauen — die ~1-GB-Bauspitze faellt
+        # damit VOR dem ersten Job an, ausserhalb jedes _JobRssWache-Fensters
+        # (Bauplan B1, W2.9-Vorbedingung). Dauer ~3 s, danach ~300 MB Sockel.
+        _normmass_holen()
     idle_s = int(os.environ.get("WORKER_IDLE_S", "900"))
     fd = int(os.environ["WORKER_ANTWORT_FD"])
     out = os.fdopen(fd, "w", buffering=1)

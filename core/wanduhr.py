@@ -175,3 +175,88 @@ def aus_roundtrip(kalt, warm, clip_s, aufloesung, download_probe=None, basis=Non
         mb, dw = float(download_probe["mb"]), float(download_probe["wall_s"])
         b["download_s_je_mb"] = round(max(dw - b["download_fix_s"], 0.01) / mb, 4)
     return b
+
+
+# ---------------------------------------------------------------- Ernte-Rate (.313)
+# User-Fund 21.08.: der Lernlauf sagte beim Start „~5 min" und brauchte 11 min.
+# Die Restzeit rechnete mit den ANALYSE-Konstanten oben (k je Clip-Sekunde aus dem
+# analyze.py-Roundtrip); die Ernte hat seit .306 ein anderes Kostenprofil (alle
+# Frames des Clips, Norm-Messung, Vorrats-Achsen), das dieses Modell nicht kennt.
+# Statt einer weiteren Konstante misst die Ernte ihre Rate SELBST: je fertigem Event
+# (clip_s, wall_s); ab ERNTE_RATE_MIN_PROBEN wird daraus die Restzeit des laufenden
+# Laufs gerechnet, am Lauf-Ende wird die Rate gespeichert, und der Start-Schaetzer
+# des naechsten Laufs nimmt sie (gleiche Maschine + Version) statt der Analyse-
+# Konstanten. Kein Lauf = Wanduhr-Rueckfall wie bisher.
+ERNTE_RATE_SCHEMA = 1
+ERNTE_RATE_MIN_PROBEN = 3
+
+
+def _ernte_rate_pfad(data_dir):
+    return os.path.join(data_dir, "state", "lernlauf", "ernte_rate.json")
+
+
+def ernte_rate_fit(proben):
+    """proben = [(clip_s, wall_s)] der fertigen Events EINES Laufs ->
+    {"fix_s", "k", "n", "clip_s", "wall_s"} oder None (unter ERNTE_RATE_MIN_PROBEN).
+    Kleinste Quadrate wall = fix + k*clip_s mit fix, k >= 0; bei fehlender
+    Streuung der Clip-Laengen (alle gleich lang) Verhaeltnis-Schaetzer k =
+    sum(wall)/sum(clip_s), fix = 0. Reine Arithmetik, keine Annahmen ueber
+    Hardware — die Proben SIND die Messung."""
+    p = [(max(float(c), 0.0), max(float(w), 0.0)) for c, w in proben
+         if c is not None and w is not None]
+    n = len(p)
+    if n < ERNTE_RATE_MIN_PROBEN:
+        return None
+    sc = sum(c for c, _ in p)
+    sw = sum(w for _, w in p)
+    mc, mw = sc / n, sw / n
+    sxx = sum((c - mc) ** 2 for c, _ in p)
+    sxy = sum((c - mc) * (w - mw) for c, w in p)
+    if sxx > 1e-9:
+        k = max(sxy / sxx, 0.0)
+        fix = max(mw - k * mc, 0.0)
+        if k <= 0.0:            # negativer Zusammenhang = Rauschen -> Verhaeltnis
+            k, fix = (sw / sc if sc > 0 else 0.0), 0.0
+    else:
+        k, fix = (sw / sc if sc > 0 else 0.0), 0.0
+    return {"fix_s": round(fix, 3), "k": round(k, 4), "n": n,
+            "clip_s": round(sc, 1), "wall_s": round(sw, 1)}
+
+
+def ernte_prognose_s(rate, clips):
+    """Restdauer der Ernte fuer offene clips = [{'clip_s': …}] aus einer Rate."""
+    return sum(rate["fix_s"] + rate["k"] * max(float(c.get("clip_s") or 0.0), 0.0)
+               for c in clips)
+
+
+def ernte_rate_lesen(data_dir, hw_key, version):
+    """Gespeicherte Ernte-Rate fuer GENAU diese Maschine+Version, sonst None."""
+    try:
+        with open(_ernte_rate_pfad(data_dir), encoding="utf-8") as f:
+            d = json.load(f)
+        if (d.get("schema") == ERNTE_RATE_SCHEMA and d.get("hw_key") == hw_key
+                and d.get("version") == version and isinstance(d.get("rate"), dict)
+                and d["rate"].get("n", 0) >= ERNTE_RATE_MIN_PROBEN):
+            return d["rate"]
+    except Exception:
+        pass
+    return None
+
+
+def ernte_rate_schreiben(data_dir, hw_key, version, rate, lauf_id=None):
+    """Atomar (tmp+fsync+replace), 0644 (mkstemp-0600-Falle .309)."""
+    p = _ernte_rate_pfad(data_dir)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    d = {"schema": ERNTE_RATE_SCHEMA, "hw_key": hw_key, "version": version,
+         "rate": rate, **({"lauf_id": lauf_id} if lauf_id else {})}
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(p), prefix=".ernte_rate-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False, indent=1)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, p)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)

@@ -35,12 +35,15 @@ overrules the real verdict.
 **Stage 2 — the preliminary name.** While the appearance lasts, every real
 face votes: each detected face is compared against your references frame by
 frame (the embedding is computed during detection anyway, so this costs
-microseconds). Once the same person is hit twice at or above the recognition
-threshold, the watcher sends one extra message for that person:
+microseconds). A person collects at most one vote per frame. Once the same
+person is hit in two different frames at or above the recognition threshold,
+and the appearance has passed the pose confirmation of stage 1, the watcher
+sends one extra message for that person:
 `recognized (live, preliminary): <name> (cosine 0.47, 2 consistent hits)` —
-with a proof picture. It fires once per appearance and per person, so two
-people walking through together produce two name messages. Stage 1 keeps
-alerting for everyone regardless.
+with a proof picture in which the face that carried the vote is framed. It
+fires once per appearance and per person, so two people walking through
+together produce two name messages. Stage 1 keeps alerting for everyone
+regardless. Proof pictures of stage 1 frame the triggering detection as well.
 
 The watcher also reports its own disturbances: if the stream stops delivering
 frames for several minutes, you get a disturbance alert on the same channels,
