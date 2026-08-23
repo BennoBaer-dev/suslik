@@ -4292,7 +4292,7 @@ class Service:
         ueber Durchgaenge, die die Koerper-Erkennung als UNBEKANNT gefuehrt hat
         — dort ist ein Nicht-Bestaetigen aber ueberhaupt kein Widerspruch,
         sondern UEBEREINSTIMMUNG, und der Alarm bleibt still (sonst feuerte er
-        bei jedem Postboten: Laerm statt Signal). Die Koerper-Einstufung wird
+        bei jeder Paketlieferung: Laerm statt Signal). Die Koerper-Einstufung wird
         dafuer als Vergleichs-INPUT gelesen (die Zeilen liegen ohnehin da), NICHT
         als Vorschaltung des Laufs — der Lauf selbst kennt sie nicht mehr.
 
