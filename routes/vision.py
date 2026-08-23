@@ -30,16 +30,31 @@ neues Framework und keine <table> fuer Layout — style.css setzt
 table{width:100%}, das hat schon einmal eine Bilanz ueber die halbe Seite
 gezogen. Die Stilblock-Konvention ist die der Abnahme-Seiten: ein knapper,
 seiteneigener <style> direkt beim Markup.
+
+Sprach-Stufe 2 (Tranche C, konzept_sprache.md v2): sichtbare Texte aus
+core/sprache.t() — BYTE-TREU (Harnisch tools/harnisch_sprache.py). Die
+Markup-Prosa (§8.1: Einleitung, Hinweis-Absaetze, Key-Ort, Modell-Leerzustand
+und -Antwort, eigen-Prompt, Cloud-Satz, Drei-Stufen-Text) liegt seit Stufe 3
+als t_html-Schluessel vor. Verbleibende Grenzen (Kommentar je Fundstelle):
+die "Check the {pruef_wort}"-Rahmen von Knopf + Schluss-Satz (B9 — das Wort
+kommt aus core/vision.pruef_wort, eigener Umbau-Zug; der Leerzustand ist
+schon B9-konform je Wort geschluesselt), Inline-JS des Hand-ID-Blocks (§8.4,
+Tranche D), Datumsformate (B19), Kachel-Vertrag (label/anbieter/basis) und
+Badge-/Protokolltexte als Daten (eigene Quelle).
 """
 import html
 import json
 import time
 import urllib.parse
 
+from core.sprache import t, t_html
+from webui.bausteine import reihen_wort
+
 
 def _zeit(ts):
+    # Datumsformat bleibt in der Route (B19-Stufe); nur das Wort ist Text.
     if not ts:
-        return "never"
+        return t("vision.zeit.nie")
     return time.strftime("%Y-%m-%d %H:%M", time.localtime(float(ts)))
 
 
@@ -119,46 +134,25 @@ def _kopf():
     # klebenden Save-Leiste. Zwei Anzeigen, EIN Zustand — beide schaltet
     # dieselbe Stelle im Browser-Code.
     return (
-        '<h2>Vision detect <span id="vision-dirty-oben" class="vs-dirty-top" '
-        'hidden>not saved</span></h2>' 
-        '<p class="sub">A third recognition path next to face and body: a vision '
-        "language model looks at one picture from a walk-through and says which "
-        "of your learned people it shows &mdash; by comparing it against a small "
-        "gallery of that person. It is an <b>extra voice</b>, never the "
-        "doorkeeper: the forced choice answers &bdquo;A or B&ldquo;, so it can "
-        "confirm a resident but it cannot turn a stranger away. That stays the "
-        "job of the existing recognition.</p>")
+        f'<h2>{t("vision.titel")} <span id="vision-dirty-oben" class="vs-dirty-top" '
+        f'hidden>{t("vision.kopf.dirty")}</span></h2>'
+        # Stufe 3 (t_html): Einleitungs-Absatz mit <b> mitten im Satz.
+        f'<p class="sub">{t_html("vision.kopf.einleitung")}</p>')
 
 
 def _hinweis():
     """Hinweisfeld: welches Modell, dass es auf einem EIGENEN Rechner im Netz
     laufen kann, und der ausdrueckliche Satz zur Host-Groesse (§4)."""
     return (
-        '<div class="card"><b>What you need for this</b>'
-        "<div>A vision model that can look at several pictures at once. You can "
-        "use one of the online providers below, or run one yourself &mdash; the "
-        "combination measured here is <b>llama.cpp</b> with a <b>Qwen3.5</b> "
-        "vision model (the 4B is as good as the 9B on this task and needs about "
-        "half the memory). It does <b>not</b> have to run on this machine.</div>"
-        '<div class="dim" style="margin-top:6px"><b>This host is usually too '
-        "small for a local model.</b> The 9B needs roughly 12 GB of working set, "
-        "the 4B about 6.6 GB, and suslik plus the analysis worker already live "
-        "here &mdash; the worker is the first thing the kernel kills when memory "
-        "runs out. A second machine, or an online provider, is the sane setup."
-        "</div>"
-        '<div class="dim">A warning about measuring that memory: '
-        "<code>docker stats</code> shows about 2.7 GiB for the model container "
-        "because the weights are mapped, not copied. The real working set is "
-        "~11.6 GiB. If you size <code>--memory</code> by what "
-        "<code>docker stats</code> says, the model reloads its weights "
-        "continuously and everything crawls.</div>"
-        '<div class="dim">Speed and cost, measured, so nothing surprises you '
-        "later: the whole walk-through goes in as <b>one candidate grid</b>, "
-        "and each <b>compared pair of galleries is two requests</b> (the same "
-        "question is asked again with the two galleries swapped, to catch a "
-        "position bias). Usually one pair settles it. On a CPU-class machine "
-        "that is about 7 minutes per pair; on the online endpoints measured "
-        "here, seconds.</div></div>")
+        f'<div class="card"><b>{t("vision.hinweis.titel")}</b>'
+        # Stufe 3 (t_html): die vier Absaetze mit <b>/<code> mitten in der
+        # Prosa — Produktnamen darin (llama.cpp, Qwen3.5, docker stats)
+        # bleiben je Sprache wortgleich (§8.7, Kommentar am Schluessel).
+        f'<div>{t_html("vision.hinweis.modell_satz")}</div>'
+        '<div class="dim" style="margin-top:6px">'
+        f'{t_html("vision.hinweis.host_satz")}</div>'
+        f'<div class="dim">{t_html("vision.hinweis.mess_satz")}</div>'
+        f'<div class="dim">{t_html("vision.hinweis.kosten_satz")}</div></div>')
 
 
 def _schalter(vor, aktiv, vcfg):
@@ -167,18 +161,19 @@ def _schalter(vor, aktiv, vcfg):
     if vor.get("erfuellt"):
         knopf = (f'<button class="gtb{" on" if aktiv else ""}" '
                  f'onclick="visionSchalter({str(not aktiv).lower()})">'
-                 f'{"Turn off" if aktiv else "Turn on"}</button>')
+                 f'{t("vision.schalter.knopf_aus") if aktiv else t("vision.schalter.knopf_an")}</button>')
         rest = ""
     else:
-        knopf = '<button class="gtb" disabled>Turn on</button>'
-        rest = ('<div class="dim" style="margin-top:6px">Still missing:<ul>'
+        knopf = f'<button class="gtb" disabled>{t("vision.schalter.knopf_an")}</button>'
+        rest = (f'<div class="dim" style="margin-top:6px">{t("vision.schalter.fehlt")}<ul>'
                 + "".join(f"<li>{html.escape(f)}</li>" for f in vor["fehlt"])
                 + "</ul></div>")
-    zustand = "on" if aktiv else "off"
-    return ('<div class="card"><b>Vision detect is ' + zustand + "</b> "
+    # B9: je Zweig ein GANZER Titel-Satz statt "… is " + zustand.
+    titel = (t("vision.schalter.titel_an") if aktiv
+             else t("vision.schalter.titel_aus"))
+    return ('<div class="card"><b>' + titel + "</b> "
             + knopf + rest
-            + '<div class="dim" style="margin-top:6px">While it is off nothing '
-            "is sent anywhere and no image leaves this machine.</div>"
+            + f'<div class="dim" style="margin-top:6px">{t("vision.schalter.aus_satz")}</div>'
             '<span id="vision-schalter-status" class="dim"></span></div>'
             + _meldungen(vcfg))
 
@@ -203,45 +198,27 @@ def _meldungen(vcfg):
         return ('<label style="display:block;margin-top:8px">'
                 f'<input type="checkbox" id="cfgv-{feld}"{an}> <b>{titel}</b>'
                 f'</label><div class="dim">{satz}</div>')
-    return ('<div class="card"><b>How a comparison is asked</b>'
+    return (f'<div class="card"><b>{t("vision.frage.titel")}</b>'
             + _kasten("vision_doppellauf",
-                      "Ask each pair twice, with the galleries swapped",
-                      "This is the position check. A in the first run and B in "
-                      "the swapped run mean the SAME gallery, so a "
-                      "contradiction exposes a model that simply prefers "
-                      "whatever comes first. Measured here: every wrong answer "
-                      "across all our test series was an &bdquo;A&ldquo;, "
-                      "never a &bdquo;B&ldquo;. Turning it off halves the "
-                      "requests &mdash; and a comparison then rests on a "
-                      "single answer, with nothing to check it against.")
+                      t("vision.frage.doppel_titel"),
+                      t("vision.frage.doppel_satz"))
             + "</div>"
-            '<div class="card"><b>Extra messages</b>'
-            '<div class="dim">Both are off unless you turn them on, and '
-            "neither changes the existing alarms: vision cannot raise one, "
-            "cancel one, or overrule the face and body paths.</div>"
-            + _kasten("vision_meldung", "Tell me when a walk-through has been "
-                      "judged",
-                      "A short note through your usual channels once the "
-                      "verdict is in &mdash; with the real vote count. It "
-                      "arrives after the pass is over, on a local model that "
-                      "can be minutes later. Information, not an alarm.")
-            + _kasten("vision_alarm_unbestaetigt", "Alert me when vision "
-                      "contradicts the body recognition",
-                      "Fires only when a run really happened, the model "
-                      "answered, and it still confirmed nobody. It stays quiet "
-                      "when there was simply not enough material &mdash; that "
-                      "would be noise. Recognising people you taught it is the "
-                      "strong side of this path, so a non-confirmation means "
-                      "something; turning strangers away is the weak side, so "
-                      "vision never votes in that direction.")
+            f'<div class="card"><b>{t("vision.meld.titel")}</b>'
+            f'<div class="dim">{t("vision.meld.satz")}</div>'
+            + _kasten("vision_meldung", t("vision.meld.judged_titel"),
+                      t("vision.meld.judged_satz"))
+            + _kasten("vision_alarm_unbestaetigt",
+                      t("vision.meld.alarm_titel"),
+                      t("vision.meld.alarm_satz"))
             + "</div>")
 
 
 def _kacheln(kacheln, reihe, gewaehlt):
     """Die Anbieter-Reihe. Jede Kachel sagt, was sie von dir braucht — und die
     Anthropic-Kachel traegt ihren Klartext-Hinweis direkt daran (E7)."""
-    was = {"key": "you enter an API key", "host_port": "you enter host and port",
-           "url_key": "you enter a URL and an optional key"}
+    was = {"key": t("vision.kachel.was_key"),
+           "host_port": t("vision.kachel.was_host"),
+           "url_key": t("vision.kachel.was_url")}
     stuecke = []
     for name in reihe:
         k = kacheln[name]
@@ -257,11 +234,8 @@ def _kacheln(kacheln, reihe, gewaehlt):
             f'<span class="vs-sub">{html.escape(k["anbieter"])}</span>'
             f'<span class="vs-sub">{html.escape(was.get(k["eingabe"], ""))}'
             f"</span>{mark}</button>")
-    return ('<div class="card"><b>Where the model runs</b>'
-            '<p class="dim">Pick a provider. For the three named ones the '
-            "official API address is already built in &mdash; you only enter "
-            "your key. Nothing is sent anywhere until you press a button "
-            "yourself.</p>"
+    return (f'<div class="card"><b>{t("vision.kachel.titel")}</b>'
+            f'<p class="dim">{t("vision.kachel.satz")}</p>'
             f'<div class="vs-kacheln">{"".join(stuecke)}</div></div>')
 
 
@@ -275,11 +249,14 @@ def _verbindung(vcfg, kname, k, endpunkt_anzeige, pruef_wort):
     dort nicht gibt. Das Wort kommt aus core/vision.pruef_wort (abgeleitet aus
     `key_pflicht`), nicht aus einer Liste von Kachel-Namen."""
     pflicht = bool(k.get("key_pflicht"))
+    # Stufe-2-Grenze (B9/§8.2): "Check the {pruef_wort}" ist ein Nomen-in-
+    # Rahmen-Konstrukt, das Wort kommt aus core/vision.pruef_wort — der
+    # Umbau auf Ganz-Satz-Schluessel je Wort ist ein eigener Zug.
     knopf = f"Check the {pruef_wort}"
-    key_ph = ("&bull;&bull;&bull;&bull; stored &mdash; leave blank to keep it"
+    key_ph = (t("vision.verb.key_gespeichert")
               if vcfg.get("api_key_gesetzt") else
-              "paste your key here" if pflicht else
-              "only if your server asks for one")
+              t("vision.verb.key_pflicht_ph") if pflicht else
+              t("vision.verb.key_frei_ph"))
     # Die gewaehlte Kachel faehrt als verstecktes Feld mit: jeder Knopf auf
     # dieser Seite schickt EIN Formular, und die Kachel entscheidet, welche
     # Felder ueberhaupt gelten.
@@ -287,64 +264,56 @@ def _verbindung(vcfg, kname, k, endpunkt_anzeige, pruef_wort):
               f'value="{html.escape(kname, quote=True)}">']
     if k["eingabe"] == "host_port":
         felder.append(
-            '<div class="vs-feld"><label>Host</label>'
+            f'<div class="vs-feld"><label>{t("vision.verb.host")}</label>'
             f'<input id="vis-host" size="26" value="{html.escape(vcfg.get("host") or "")}" '
-            'placeholder="the name or address of that machine">'
-            '<label style="min-width:auto">Port</label>'
+            f'placeholder="{t("vision.verb.host_ph")}">'
+            f'<label style="min-width:auto">{t("vision.verb.port")}</label>'
             f'<input id="vis-port" size="6" value="{html.escape(str(vcfg.get("port") or ""))}" '
             'placeholder="8080"></div>'
-            '<div class="dim">Just the machine &mdash; suslik adds the rest of '
-            "the address itself. The example port is the one llama.cpp uses by "
-            "default; use whatever yours listens on.</div>")
+            f'<div class="dim">{t("vision.verb.host_satz")}</div>')
     elif k["eingabe"] == "url_key":
         # Vorbefuellt mit dem Beispiel-Endpunkt aus dem Kachel-Vertrag (EIN
         # Eintrag, kein Literal im Renderer) — ein GESPEICHERTER Wert gewinnt
         # immer.
         felder.append(
-            '<div class="vs-feld"><label>Endpoint URL</label>'
+            f'<div class="vs-feld"><label>{t("vision.verb.endpunkt")}</label>'
             f'<input id="vis-endpunkt" size="46" '
             f'value="{html.escape(endpunkt_anzeige or k.get("beispiel_url") or "")}" '
             'placeholder="https://your-service.example/v1"></div>'
             + ("" if endpunkt_anzeige else
-               '<div class="dim">That is an example of an OpenAI-compatible '
-               "endpoint &mdash; replace it with yours if you use another "
-               "provider.</div>")
+               f'<div class="dim">{t("vision.verb.endpunkt_satz")}</div>')
             # .167: der Satz nennt die beiden Traeger, ohne das woertliche
             # Zugangsdaten-Muster auszuschreiben — das Datenschutz-Gate
             # (Stufe 10) sucht nach genau diesem Muster im Image, und es soll
             # weiter danach suchen duerfen. Die Aussage bleibt unveraendert.
-            + '<div class="dim"><b>Put the key in the key field, not in the '
-            "URL</b>: an endpoint that carries credentials in its address "
-            "&mdash; in front of the host name, or as a query parameter "
-            "&mdash; holds the same secret, and it shows up in far more "
-            "places (status, log, backup).</div>"
-            '<div class="vs-feld"><label>This endpoint is</label>'
+            # Stufe 3 (t_html): <b>-Vorsatz mitten im Satz.
+            + f'<div class="dim">{t_html("vision.verb.key_ort")}</div>'
+            f'<div class="vs-feld"><label>{t("vision.verb.betriebsart")}</label>'
             f'<select id="vis-betriebsart">'
             f'<option value="extern"{" selected" if vcfg.get("betriebsart") != "lokal" else ""}>'
-            "on the internet</option>"
+            f'{t("vision.verb.betriebsart_extern")}</option>'
             f'<option value="lokal"{" selected" if vcfg.get("betriebsart") == "lokal" else ""}>'
-            "in my own network</option></select></div>")
+            f'{t("vision.verb.betriebsart_lokal")}</option></select></div>')
     else:
         felder.append(
-            '<div class="vs-feld"><label>API address</label>'
+            f'<div class="vs-feld"><label>{t("vision.verb.adresse")}</label>'
             f'<code class="vs-url">{html.escape(k["basis"])}</code></div>'
-            '<div class="dim">Built in &mdash; there is nothing to type wrong '
-            "here.</div>")
+            f'<div class="dim">{t("vision.verb.adresse_satz")}</div>')
     # Das Key-Feld steht bei JEDER Kachel — auch ein eigener Server kann einen
     # verlangen. Der Knopf daneben ist die Sofort-Pruefung: er holt die
     # Modell-Liste und ist damit zugleich der einzige Weg zur Modellwahl.
     felder.append(
-        '<div class="vs-feld"><label>API key</label>'
+        f'<div class="vs-feld"><label>{t("vision.verb.key")}</label>'
         f'<input id="vis-api_key" size="46" value="" autocomplete="off" '
         f'placeholder="{key_ph}">'
         f'<button class="gtb on" onclick="visionSchluessel(this)">{knopf}'
         "</button>"
         '<span id="vision-key-status" class="dim"></span></div>'
         + ("" if pflicht else
-           '<div class="dim">Optional here &mdash; most local servers do not '
-           "ask for one. Press the button anyway: it also fetches the list of "
-           "models your server has.</div>"))
-    return ('<div class="card"><b>Connection</b>' + "".join(felder)
+           f'<div class="dim">{t("vision.verb.key_frei_satz")}</div>'))
+    # Stufe-2-Grenze (B9): der Schluss-Satz splict pruef_wort in einen
+    # Rahmen — bleibt literal (s. knopf-Kommentar oben).
+    return (f'<div class="card"><b>{t("vision.verb.titel")}</b>' + "".join(felder)
             + f'<div class="dim" style="margin-top:6px">Checking the '
             f"{html.escape(pruef_wort)} asks the endpoint which models it has. "
             "It costs nothing and no picture is sent.</div></div>")
@@ -393,23 +362,25 @@ def _modellwahl(prot, gewaehlt, stand, kname, pruef_wort="key",
     if prot and prot.get("kachel") and prot.get("kachel") != kname:
         prot = None
     if not prot:
-        vor = ("Enter your key above and press" if pruef_wort == "key" else
-               "Fill in the fields above and press")
-        return ('<div class="card"><b>Model</b>'
-                '<div id="vision-modell-info" class="dim">Nothing to choose '
-                f"yet. {vor} <b>Check the {html.escape(pruef_wort)}</b>: "
-                "suslik connects to the endpoint, asks what is there, and "
-                "shows you what it found. You pick from that list.</div>"
+        # Stufe 3 (t_html, B9-konform): je pruef_wort EIN ganzer Block-
+        # Schluessel (Woerter aus core/vision.pruef_wort: key/connection,
+        # Deckungs-Vertrag am Schluessel-Kommentar in en.py). Das Zitat
+        # <b>Check the key/connection</b> haengt am noch literalen
+        # Pruef-Knopf (B9-Grenze in _verbindung).
+        leer = (t_html("vision.modell.leer_key") if pruef_wort == "key"
+                else t_html("vision.modell.leer_verbindung"))
+        return (f'<div class="card"><b>{t("vision.modell.titel")}</b>'
+                f'<div id="vision-modell-info" class="dim">{leer}</div>'
                 + _klassen(klassen)
                 + '<div id="vision-modell-wahl"></div>'
                 '<span id="vision-modell-status" class="dim"></span></div>')
     if not prot.get("ok"):
-        return ('<div class="card"><b>Model</b>'
+        return (f'<div class="card"><b>{t("vision.modell.titel")}</b>'
                 '<div id="vision-modell-info">'
                 + _ampel_punkt("rot", prot.get("text")
-                               or "the endpoint refused the connection")
-                + f'</div><div class="dim">Checked {_zeit(prot.get("ts"))} '
-                f'against <code class="vs-url">'
+                               or t("vision.modell.verweigert"))
+                + f'</div><div class="dim">{t("vision.modell.geprueft", zeit=_zeit(prot.get("ts")))} '
+                f'<code class="vs-url">'
                 f'{html.escape(prot.get("endpunkt") or "")}</code></div>'
                 + _klassen(klassen)
                 + '<div id="vision-modell-wahl"></div>'
@@ -422,12 +393,12 @@ def _modellwahl(prot, gewaehlt, stand, kname, pruef_wort="key",
     # Mess-Zahl, auch nicht als Beispiel im Kommentar — sie veraltet still.
     opt, gefunden = [], False
     if not gewaehlt:
-        opt.append('<option value="" selected>&mdash; pick one &mdash;</option>')
+        opt.append(f'<option value="" selected>{t("vision.modell.opt_wahl")}</option>')
     for m in prot.get("modelle") or []:
         b = m.get("badge") or {}
         ist = m["id"] == gewaehlt
         gefunden = gefunden or ist
-        anmerkung = b["text"] if b.get("gemessen") else "untested here"
+        anmerkung = b["text"] if b.get("gemessen") else t("vision.modell.ungetestet")
         opt.append(f'<option value="{html.escape(m["id"], quote=True)}"'
                    + (" selected" if ist else "") + ">"
                    + html.escape(f'{m["id"]} — {anmerkung}') + "</option>")
@@ -436,23 +407,20 @@ def _modellwahl(prot, gewaehlt, stand, kname, pruef_wort="key",
         # nicht mehr anzeigen. Sie bleibt sichtbar und sagt, was mit ihr ist.
         opt.insert(0, f'<option value="{html.escape(gewaehlt, quote=True)}" '
                    "selected>" + html.escape(gewaehlt)
-                   + " — saved earlier, the endpoint does not list it now"
-                   "</option>")
-    unten = ('<div class="vs-detail dim">Pick one from the list &mdash; the '
-             "note next to each name is ours, the names are the "
-             "endpoint&rsquo;s.</div>")
+                   + t("vision.modell.opt_verschollen")
+                   + "</option>")
+    unten = f'<div class="vs-detail dim">{t("vision.modell.wahl_satz")}</div>'
     gb = next((m.get("badge") or {} for m in prot.get("modelle") or []
                if m["id"] == gewaehlt), None)
     if gewaehlt and gb is None:
-        unten = ('<div class="vs-detail" style="color:var(--warn)">This model '
-                 "is saved and still in use, but the endpoint did not list it "
-                 "this time. Check the name, or pick one from the list.</div>")
+        unten = ('<div class="vs-detail" style="color:var(--warn)">'
+                 f'{t("vision.modell.verschollen_satz")}</div>')
     elif gb is not None and gb.get("gemessen"):
         extra = []
         if not gb.get("exakt"):
-            extra.append("measured on another platform")
+            extra.append(t("vision.modell.fremde_plattform"))
         if not gb.get("roh_archiviert"):
-            extra.append("no raw result archived for this one")
+            extra.append(t("vision.modell.kein_rohergebnis"))
         if gb.get("unvollstaendig"):
             extra.append(gb["unvollstaendig"])
         if gb.get("notiz"):
@@ -460,30 +428,20 @@ def _modellwahl(prot, gewaehlt, stand, kname, pruef_wort="key",
         farbe = "var(--ok)" if gb.get("abweisen") == "✓" else "var(--warn)"
         unten = (f'<div class="vs-detail"><span style="color:{farbe}">'
                  f'{html.escape(gb["text"])}</span>'
-                 f'<div class="vs-quelle">measured '
-                 f'{html.escape(gb.get("datum") or "")} &middot; '
-                 f'{html.escape(gb.get("quelle") or "")}'
+                 f'<div class="vs-quelle">'
+                 f'{t("vision.modell.gemessen", datum=html.escape(gb.get("datum") or ""), quelle=html.escape(gb.get("quelle") or ""))}'
                  + "".join(f"<br>{html.escape(x)}" for x in extra)
                  + "</div></div>")
     elif gb is not None:
-        unten = ('<div class="vs-detail dim">Not measured here &mdash; that is '
-                 "not a verdict, just honesty. Run the connection test below "
-                 "before you rely on it.</div>")
-    return ('<div class="card"><b>Model</b>'
+        unten = f'<div class="vs-detail dim">{t("vision.modell.ungemessen_satz")}</div>'
+    return (f'<div class="card"><b>{t("vision.modell.titel")}</b>'
             '<div id="vision-modell-info">'
             + _ampel_punkt("gruen", prot.get("text") or "")
-            + f'</div><div class="dim">This is what the endpoint answered when '
-            f'suslik asked it, {_zeit(prot.get("ts"))} &mdash; nothing here is '
-            "a suggestion from us. Where we have measured a model, the note "
-            "sits on that model. Two abilities are shown separately, because "
-            "they fall apart: "
-            "<b>residents</b> is picking the right one of two known people, "
-            "<b>strangers</b> is answering &bdquo;neither&ldquo; for somebody "
-            "you never taught it. A tick means every judgement of that kind in "
-            "our measurement was right; the fraction next to it is the whole "
-            "story. Models without a measurement here say <b>untested "
-            f'here</b> &mdash; that is not a verdict, just honesty (measurements '
-            f'from {html.escape(stand or "")}).</div>'
+            # Stufe 3 (t_html): Antwort-Prosa mit <b>-Inseln; {zeit}/{stand}
+            # escapt t_html selbst (quote=True — deckt das bisherige
+            # html.escape(stand) mit ab, _zeit liefert nur Ziffern/never).
+            + f'</div><div class="dim">'
+            f'{t_html("vision.modell.antwort_satz", zeit=_zeit(prot.get("ts")), stand=stand or "")}</div>'
             + '<div id="vision-modell-wahl">'
             + '<select id="vision-modell" class="vs-sel" '
             'onchange="visionModell(this)">'
@@ -494,27 +452,33 @@ def _modellwahl(prot, gewaehlt, stand, kname, pruef_wort="key",
             # erst dann in die Liste — die §5-Regel (nie Ungeprueftes
             # speichern) bleibt intakt, die Pruefung IST eine Entdeckung.
             + '<div class="vs-feld" style="margin-top:10px">'
-              '<label>Model id by hand</label>'
+              f'<label>{t("vision.modell.manuell")}</label>'
               '<input id="vis-modell-manuell" size="30" '
-              'placeholder="exact model id">'
+              f'placeholder="{t("vision.modell.manuell_ph")}">'
               '<button class="gtb" type="button" '
-              'onclick="visModellManuell(this)">Check this id</button>'
+              f'onclick="visModellManuell(this)">{t("vision.modell.manuell_knopf")}</button>'
               '<span id="vis-mm-status" class="dim"></span></div>'
-            + '<div class="dim">For endpoints that do not list everything: '
-              'the id is checked with a tiny text request first; nothing '
-              'unchecked can be saved.</div>'
+            + f'<div class="dim">{t("vision.modell.manuell_satz")}</div>'
+            # Stufe 2 Tranche D (§8.4): die Script-Texte kommen server-
+            # seitig via json.dumps(t(...)) byte-treu ("checking …" traegt
+            # den Rohpunkt-Dreier — ensure_ascii=False wie das Original).
             + '<script>function visModellManuell(b){'
               'var f=document.getElementById("vis-modell-manuell");'
               'var s=document.getElementById("vis-mm-status");'
-              'if(!f.value.trim()){s.textContent="enter an id first";return;}'
-              'b.disabled=true;s.textContent="checking …";'
+              'if(!f.value.trim()){s.textContent='
+            + json.dumps(t("vision.modell.js_id_fehlt")) + ';return;}'
+              'b.disabled=true;s.textContent='
+            + json.dumps(t("vision.modell.js_prueft"), ensure_ascii=False)
+            + ';'
               'fetch("/vision/modell_manuell",{method:"POST",'
               'body:JSON.stringify({modell:f.value.trim()})})'
               '.then(function(r){return r.json();})'
               '.then(function(d){s.textContent=d.msg;'
               'if(d.ok){setTimeout(function(){location.reload();},1200);}'
               'else{b.disabled=false;}})'
-              '.catch(function(){s.textContent="error";b.disabled=false;});}'
+              '.catch(function(){s.textContent='
+            + json.dumps(t("vision.modell.js_fehler"))
+            + ';b.disabled=false;});}'
               '</script>'
             + '<span id="vision-modell-status" class="dim"></span></div>')
 
@@ -528,23 +492,19 @@ def _prompt(vcfg, anker, prompt_std):
     Wortlaut."""
     eigen = bool(str(vcfg.get("prompt") or "").strip())
     prompt = vcfg.get("prompt") or prompt_std
-    stand = ('<div class="dim">This is your own wording &mdash; verdicts made '
-             "with it are marked <b>custom prompt</b>. Reset it to go back to "
-             "the measured default.</div>" if eigen else
-             '<div class="dim">This is the measured default wording. As long '
-             "as you leave it exactly like this, verdicts are not marked as "
-             "custom.</div>")
-    return ('<div class="card"><b>The question suslik asks</b>'
-            '<div class="dim">You can change the wording. The last paragraph is '
-            "fixed: it is the one-word instruction the answer parser depends "
-            "on, and it is what was measured.</div>" + stand
+    # Stufe 3 (t_html) im eigen-Zweig: <b>custom prompt</b> mitten im Satz —
+    # zitiert die Urteils-Marke (visiontest.vision.custom_prompt).
+    stand = (f'<div class="dim">{t_html("vision.prompt.eigen_satz")}</div>'
+             if eigen else
+             f'<div class="dim">{t("vision.prompt.standard_satz")}</div>')
+    return (f'<div class="card"><b>{t("vision.prompt.titel")}</b>'
+            f'<div class="dim">{t("vision.prompt.satz")}</div>' + stand
             + f'<textarea id="vis-prompt" rows="6" style="width:100%">'
             f"{html.escape(prompt)}</textarea>"
             '<div class="dim" style="white-space:pre-wrap;opacity:.75;'
             'border-left:3px solid var(--dim);padding-left:8px;margin-top:4px">'
             f"{html.escape(anker)}</div>"
-            '<button class="gtb" onclick="visionPromptZurueck()">Reset to '
-            "default</button>"
+            f'<button class="gtb" onclick="visionPromptZurueck()">{t("vision.prompt.knopf_zurueck")}</button>'
             # Der Default-WORTLAUT geht als Wert in die Seite (nicht als
             # zweiter Text im Browser-Code): der Zuruecksetzen-Knopf schreibt
             # genau ihn ins Feld. Quelle ist dieselbe Konstante, die auch der
@@ -564,23 +524,16 @@ def _zahlen(vcfg, k):
         from core.vision import think_aus_wirksam
         denk = ('<div class="vs-feld"><label><input type="checkbox" '
                 f'id="vis-think_aus"{" checked" if think_aus_wirksam(vcfg, k) else ""}> '
-                "Turn the model&rsquo;s thinking off</label></div>"
-                '<div class="dim">On since 0.1.0.211 by default: on hard '
-                "comparison grids a thinking model can talk itself past the "
-                "token budget and the run ends without a verdict. Strict "
-                "endpoints reject the switch; suslik then repeats the request "
-                "once without it and says so.</div>")
-    return ('<div class="card"><b>Limits</b>'
-            '<div class="vs-feld"><label>Max tokens per answer</label>'
+                f'{t("vision.zahlen.think")}</label></div>'
+                f'<div class="dim">{t("vision.zahlen.think_satz")}</div>')
+    return (f'<div class="card"><b>{t("vision.zahlen.titel")}</b>'
+            f'<div class="vs-feld"><label>{t("vision.zahlen.max_tokens")}</label>'
             f'<input id="cfgv-vision_max_tokens" size="8" '
             f'value="{html.escape(str(vcfg.get("max_tokens") or ""))}">'
-            "<label>Timeout per request (s)</label>"
+            f'<label>{t("vision.zahlen.timeout")}</label>'
             f'<input id="cfgv-vision_timeout_s" size="8" '
             f'value="{html.escape(str(vcfg.get("timeout_s") or ""))}"></div>'
-            '<div class="dim">3000 tokens was measured to be not enough on one '
-            "run &mdash; the answer was cut off and counted as no verdict, and "
-            "the same question was right with 12000. A local model on a CPU "
-            "machine needs minutes per request, an online one seconds.</div>"
+            f'<div class="dim">{t("vision.zahlen.satz")}</div>'
             + denk + "</div>")
 
 
@@ -596,21 +549,17 @@ def _cloud(vcfg, endpunkt_anzeige, k):
     if k.get("betriebsart") != "extern":
         return ""
     ziel = (endpunkt_anzeige or k.get("basis") or k.get("beispiel_url")
-            or "the endpoint you configure above")
+            or t("vision.cloud.ziel_fallback"))
+    # Stufe 3 (t_html) im ersten Satz: <b>{ziel}</b> mitten im Satz — {ziel}
+    # escapt t_html selbst (quote=True, wie das bisherige html.escape).
     return ('<div class="card" style="border-left-color:var(--warn)">'
-            "<b>Sending pictures to an outside service</b>"
-            '<div class="dim">This sends pictures of people from your cameras '
-            f'to <b class="vs-url">{html.escape(ziel)}</b>. '
-            "Those pictures are not only of the people who live here: the "
-            "uncertain cases are mostly strangers &mdash; visitors, delivery "
-            "drivers, neighbours, passers-by. You are the one responsible for "
-            "that, not the operator of the service. Your confirmation is "
-            "written to the audit log with a timestamp; switching back to a "
-            "local model withdraws it.</div>"
+            f'<b>{t("vision.cloud.titel")}</b>'
+            f'<div class="dim">{t_html("vision.cloud.sendet_satz", ziel=ziel)} '
+            f'{t("vision.cloud.satz")}</div>'
             '<label style="display:block;margin-top:6px"><input type="checkbox" '
             f'id="vis-cloud_ok"{" checked" if vcfg.get("cloud_ok") else ""}> '
-            "I understand and confirm this"
-            + (f' <span class="dim">(confirmed {_zeit(vcfg.get("cloud_ok_ts"))})</span>'
+            + t("vision.cloud.bestaetigung")
+            + (f' <span class="dim">{t("vision.cloud.bestaetigt", zeit=_zeit(vcfg.get("cloud_ok_ts")))}</span>'
                if vcfg.get("cloud_ok") else "") + "</label></div>")
 
 
@@ -619,19 +568,22 @@ def _stufen_zeilen(stufen):
     Werten. Keine Prosa-Glaettung — was gemessen wurde, steht da (Antwortzeit,
     n richtig von gesamt, Token gegen die Referenz)."""
     zeilen = []
+    # Stufe-2-Grenze: Stufen-NAME und -TEXT kommen als Daten aus dem
+    # Testprotokoll (Dienst-Seite, eigene Quelle); "{n} s"/"%" sind
+    # sprachneutrale Einheiten (§8.6).
     for s in stufen or []:
         werte = []
         if s.get("dauer_s") is not None:
             werte.append(f'{s["dauer_s"]} s')
         if s.get("treffer") is not None:
-            werte.append(f'{s["treffer"]}/2 right')
+            werte.append(t("vision.test.treffer", n=s["treffer"]))
         if s.get("ist") is not None:
-            werte.append(f'{s["ist"]} tokens vs {s.get("soll")}')
+            werte.append(t("vision.test.tokens", ist=s["ist"], soll=s.get("soll")))
             if s.get("anteil") is not None:
                 werte.append(f'{int(round(float(s["anteil"]) * 100))}%')
         for l in s.get("laeufe") or []:
             werte.append(f'{l.get("arm")}: {l.get("wahl") or l.get("grund")}'
-                         f'{"" if l.get("wahl") == l.get("soll") else " (wrong)"}')
+                         f'{"" if l.get("wahl") == l.get("soll") else t("vision.test.falsch")}')
         mess = ((' <span class="dim">&middot; '
                  + " &middot; ".join(html.escape(str(w)) for w in werte)
                  + "</span>") if werte else "")
@@ -655,11 +607,12 @@ def _speichern():
       * verlassen oder testen mit ungespeicherten Werten fragt vorher nach
         (der Test benutzt die TIPP-Werte, die Erkennung die GESPEICHERTEN —
         genau diese Verwechslung ist passiert)."""
+    # ZITAT-FOLGE: js.vision.dirty_text aller fuenf Sprachen zitiert "Save"
+    # sinngemaess ("press Save") — beim Uebersetzen dieses Knopfs nachziehen.
     return ('<div class="vs-savebar" id="vision-savebar">'
             '<button class="gtb on vs-savebtn" onclick="visionSpeichern()">'
-            "Save connection</button>"
-            '<span id="vision-dirty" class="vs-dirty" hidden>unsaved changes '
-            "&mdash; recognition still uses the saved connection</span>"
+            f'{t("vision.save.knopf")}</button>'
+            f'<span id="vision-dirty" class="vs-dirty" hidden>{t("vision.save.dirty")}</span>'
             '<span id="vision-status" class="vs-status"></span></div>')
 
 
@@ -672,34 +625,24 @@ def _test(prot):
     dieselben Log-Zeilen, die der Server danach rendert — es gibt nur EIN
     Log-Format, und es ueberlebt den Reload."""
     kopf = (
-        '<div class="card"><b>Test this connection</b>'
-        '<p class="dim">Three steps, because a plain reachability ping is not '
-        "enough: one backend was reachable, had the model and answered quickly "
-        "&mdash; and still got 5 of 12 comparison questions wrong, because it "
-        "shrank the pictures before looking at them.<br>"
-        "<b>1</b> reachability, model and response time, using a test image "
-        "generated on the spot.<br>"
-        "<b>2</b> a forced-choice run on generated shape grids where the right "
-        "answer is known &mdash; this checks the answer format, the parser and "
-        "the thinking switch.<br>"
-        "<b>3</b> a token count against a measured reference, which is how "
-        "image shrinking shows up.<br>"
-        "<b>No picture of a person is used for this</b>, and there is no option "
-        "to do so.</p>"
-        '<button class="gtb on" onclick="visionTest(this)">Run the test</button> '
+        f'<div class="card"><b>{t("vision.test.titel")}</b>'
+        # Stufe 3 (t_html): der Drei-Stufen-Text mit <br>/<b>-Gliederung.
+        f'<p class="dim">{t_html("vision.test.stufen_satz")}</p>'
+        f'<button class="gtb on" onclick="visionTest(this)">{t("vision.test.knopf")}</button> '
         '<span id="vision-test-status" class="dim"></span>')
     if not prot:
         # Die drei Zeilen stehen auch UNGETESTET schon da (als "not run") —
         # dann hat der Live-Fortschritt einen Platz zum Schreiben, und der
         # Leerzustand sagt trotzdem klar, dass noch nichts gelaufen ist.
-        leer = [{"nr": nr, "name": name, "ampel": "grau", "text": "not run"}
-                for nr, name in ((1, "reachability"), (2, "forced choice"),
-                                 (3, "token audit"))]
-        return (kopf + '<div class="dim" style="margin-top:8px">Not tested '
-                "yet.</div>"
+        leer = [{"nr": nr, "name": name, "ampel": "grau",
+                 "text": t("vision.test.nicht_gelaufen")}
+                for nr, name in ((1, t("vision.test.stufe1")),
+                                 (2, t("vision.test.stufe2")),
+                                 (3, t("vision.test.stufe3")))]
+        return (kopf + f'<div class="dim" style="margin-top:8px">{t("vision.test.ungetestet")}</div>'
                 f'<div class="vs-stufen">{_stufen_zeilen(leer)}</div></div>')
-    return (kopf + f'<div style="margin-top:8px">Last run '
-            f'{_zeit(prot.get("ts"))} against '
+    return (kopf + f'<div style="margin-top:8px">'
+            f'{t("vision.test.letzter", zeit=_zeit(prot.get("ts")))} '
             f'<code class="vs-url">{html.escape(prot.get("endpunkt") or "")}</code> &mdash; '
             f'{_ampel_punkt(prot.get("ampel"), str(prot.get("ampel") or "").upper())}'
             "</div>"
@@ -718,38 +661,36 @@ def _galerien(deckung, galerien, vor, rt):
         g = (galerien or {}).get(d["person"])
         pruef = (g or {}).get("pruefung") or {}
         if g and pruef.get("status") == "gut":
-            kl, stand = "fertig", (
-                f'approved {_zeit(g.get("abnahme_ts"))} &middot; '
-                f'{g.get("groesse")} cells')
+            kl, stand = "fertig", t("vision.galerien.stand_gut",
+                                    zeit=_zeit(g.get("abnahme_ts")),
+                                    zellen=g.get("groesse"))
         elif g:
-            kl, stand = "offen", html.escape(pruef.get("text") or "needs a look")
+            kl, stand = "offen", html.escape(pruef.get("text")
+                                             or t("vision.galerien.pruefen"))
         elif d["max_groesse"]:
-            kl, stand = "offen", "no gallery yet"
+            kl, stand = "offen", t("vision.galerien.keine")
         else:
-            kl, stand = "offen", ("not enough approved body images yet "
-                                  f"({d['gesamt']} usable)")
+            kl, stand = "offen", t("vision.galerien.zu_wenig",
+                                   n=d['gesamt'])
+        # Tranche D (Kennung/Anzeige-Trennung 3b): Anzeige-Wort aus dem
+        # Schluessel (bausteine.reihen_wort), die Kennung bleibt Datenwert;
+        # der reihen_text-Parameter bleibt als Daten-Vertrag unveraendert.
         reihen = " &middot; ".join(
-            f"{html.escape(rt.get(r, r))} {d['je_reihe'].get(r, 0)}"
+            f"{html.escape(reihen_wort(r))} {d['je_reihe'].get(r, 0)}"
             for r in ("vorn", "seitlich", "hinten"))
         knopf = ""
         if d["max_groesse"]:
             knopf = ('<div style="margin-top:6px"><a class="gtb" href="/vision/galerie?person='
                      + urllib.parse.quote(d["person"]) + '">'
-                     + ("Refresh it" if g else "Build a gallery") + "</a></div>")
+                     + (t("vision.galerien.knopf_auffrischen") if g
+                        else t("vision.galerien.knopf_bauen")) + "</a></div>")
         karten.append(
             f'<div class="vs-d {kl}"><b>{html.escape(d["person"])}</b>'
             f"<div>{stand}</div>"
-            f'<div class="vs-zahl">{d["gesamt"]} usable images &middot; '
-            f"{reihen}</div>{knopf}</div>")
-    return ('<div class="card" id="galerien"><b>Galleries</b>'
-            f'<div>{n_fertig} galleries ready '
-            f'({vor.get("galerien_min", 2)} required) '
-            "&mdash; vision needs at least two, because it always compares one "
-            "person against another.</div>"
-            '<div class="dim">Only people with a learned body model can get a '
-            "gallery; the images come from the body material you already "
-            "approved. Vision only ever judges people who have one, and it "
-            "says so on the verdict.</div>"
+            f'<div class="vs-zahl">{t("vision.galerien.zahl", n=d["gesamt"], reihen=reihen)}</div>{knopf}</div>')
+    return (f'<div class="card" id="galerien"><b>{t("vision.galerien.titel")}</b>'
+            f'<div>{t("vision.galerien.stand", n=n_fertig, min=vor.get("galerien_min", 2))}</div>'
+            f'<div class="dim">{t("vision.galerien.satz")}</div>'
             f'<div class="vs-deck">{"".join(karten)}</div></div>')
 
 

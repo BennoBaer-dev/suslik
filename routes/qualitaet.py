@@ -14,7 +14,7 @@ Abschnitts-Kommentar in core/texte/en.py (Luecken-Block, filt-Zeile und
 Funde-Ergebnis-Satz bleiben literal — Splicing/Inline-Markup)."""
 import datetime
 import html
-import json  # noqa: F401 (Kontrakt-Naehe zum Bestand; Laden macht der Handler)
+import json  # seit Tranche D auch selbst genutzt (JS-Text-Injektion §8.4)
 import os
 import urllib.parse
 
@@ -61,15 +61,25 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
                           fehler=html.escape(str(lauf["fehler"])[:180]))
                       + '</p>')
     elif lauf and aktiv:
-        # .282 (User: 'Banner springt immer wieder zurueck'): die GALERIE
-        # refresht sich NIE selbst — der 3-s-Reload warf Reiter-Wahl und
-        # gesetzte Haken weg. Nur die Uebersicht (ohne Checkboxen) darf.
-        lauf_zeile = ('<p>&#9203; '
-                      + t("qualitaet.lauf.checking", i=int(lauf.get("i", 0)),
-                          n=int(lauf.get("n", 0))) + ' '
-                      + (t("qualitaet.lauf.reload_person") if person else
-                         t("qualitaet.lauf.reload_auto"))
-                      + '</p>')
+        # .310 (User 21.08.: 'eine kleine Leiste, die hochzaehlt, ohne den
+        # Browser zu aktualisieren' — Lernlauf-Muster): Balken + Zaehler,
+        # nachgefuehrt von qsFortschritt() (app.js, pollt /qualitaet/status);
+        # EIN Reload erst, wenn der Lauf fertig ist — und NUR auf der Uebersicht:
+        # die Personen-Galerie hat Haken/Reiter, die darf sich nie selbst neu
+        # laden (.282-Lehre, Gate-Fang .310); dort zeigt das JS am Ende den
+        # Hinweis 'reload this page afterwards' (data-fertig).
+        _i, _n = int(lauf.get("i", 0)), int(lauf.get("n", 0))
+        _pz = int(100 * _i / _n) if _n else 0
+        lauf_zeile = ('<div id="qs-lauf" data-i="' + str(_i) + '" data-n="' + str(_n) + '" '
+                      'data-reload="' + ("0" if person else "1") + '" '
+                      'data-fertig="' + html.escape(t("qualitaet.lauf.reload_person"), quote=True) + '" '
+                      'style="margin:8px 0 12px;max-width:520px">'
+                      '<div class="dim" id="qs-lauf-text">&#9203; '
+                      + t("qualitaet.lauf.checking", i=_i, n=_n) + '</div>'
+                      '<div style="height:8px;border-radius:4px;background:var(--surface-2);'
+                      'border:1px solid var(--border);overflow:hidden;margin-top:4px">'
+                      '<div id="qs-lauf-balken" style="height:100%;width:' + str(_pz) + '%;'
+                      'background:seagreen;transition:width .6s"></div></div></div>')
     elif lauf:
         lauf_zeile = ('<p style="color:var(--warn)">'
                       + t("qualitaet.lauf.abgebrochen") + '</p>')
@@ -266,6 +276,17 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
                 rand, wort = "seagreen", t("qualitaet.galerie.gut")
             elif f in dup_kept:
                 rand, wort = "seagreen", t("qualitaet.galerie.gut_behalten")
+            # Virtuelle Qualitaetslinie (User 20.08.): die Feature-Norm jeder
+            # messbaren Referenz als Mini-Zusatz auf der Kachel — dieselbe
+            # Skala wie die Katalog-Linie; Vorrats-Referenzen (Beiwert)
+            # tragen ihr Herkunfts-Wort.
+            _nq = (qs.get("normen") or {}).get(person, {}).get(f)
+            if f in set(qs.get("vorrat_refs") or []):
+                zusatz += (f' <span class="dim" style="font-size:11px">'
+                           f'{t("qualitaet.galerie.vorrat")}</span>')
+            if _nq is not None:
+                zusatz += (f' <span class="dim" style="font-size:11px">'
+                           f'{t("qualitaet.galerie.norm", norm="%.1f" % _nq)}</span>')
             markiert = grp != "gut"
             val = html.escape(person + "|" + f, quote=True)
             gruppen_k[grp].append(
@@ -312,15 +333,17 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
         # Der Zaehler neben Remove zaehlt ALLE Haken (auch in gerade
         # verdeckten Reitern) — refBatchLoeschen loescht genau diese Menge,
         # der Knopf darf nie weniger versprechen als er tut.
-        # Stufe-0-Grenze: der JS-Text '" selected"' — window.T existiert
-        # seit Stufe 1, Einzug folgt mit der Stufe-2-Tranche dieser Seite.
+        # Stufe 2 Tranche D (§8.4): der Zaehler-Anhang kommt server-seitig
+        # via json.dumps(t(...)) byte-treu in den Script-Text (§8.10-Split
+        # an der Konkatenationsgrenze, tickende Zahl bleibt Code — §8.20).
         js = ('<script>function qgTab(g){["gut","check","weg"].forEach('
               'function(k){document.getElementById("qg-"+k).style.display='
               '(k===g)?"block":"none";document.getElementById("qgt-"+k)'
               '.className=(k===g)?"gtb on":"gtb";});}\n'
               'function qgZaehl(){var n=document.querySelectorAll('
               '".us-cb:checked").length;document.getElementById("qg-n")'
-              '.textContent=n?n+" selected":"";}\n'
+              '.textContent=n?n+'
+              + json.dumps(t("qualitaet.galerie.js_gewaehlt")) + ':"";}\n'
               'function qgAlle(an){var ks=["gut","check","weg"],i,box=null;'
               'for(i=0;i<ks.length;i++){var el=document.getElementById('
               '"qg-"+ks[i]);if(el.style.display!=="none"){box=el;break;}}'

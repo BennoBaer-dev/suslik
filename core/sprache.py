@@ -178,7 +178,51 @@ def t_n(key, n, **kw):
 # href-tauglich) — Aufrufer geben Rohwerte. Tag-Whitelist + Balance prueft
 # die Gate-Stufe Sprach-Deckung; tools/texte_pruefen.py verlangt je
 # Uebersetzung die IDENTISCHE Tag-Folge wie in en.py.
-HTML_SCHLUESSEL = frozenset({"ui.upd.satz"})
+#
+# Tag-Whitelist (DIE zentrale Quelle — qs.sh/PYSPR liest sie hier, kein
+# Zweit-Literal, QS-Ebenen-Regel): b/i/code/small/br/a seit Stufe 1;
+# "p" seit Stufe 3 — die /hilfe-Anleitungen sind Absatz-Prosa, dort ist
+# der <p>-Absatz selbst die Schluessel-Einheit (ein Absatz = ein
+# Schluessel, B9-Granularitaet) und traegt sein Tag im Wert.
+HTML_TAGS = frozenset({"b", "i", "code", "small", "br", "a", "p"})
+HTML_SCHLUESSEL = frozenset({
+    "ui.upd.satz",
+    # ---- Anleitungen /hilfe (Stufe 3): je Seite die Absatz-Schluessel ----
+    "hilfe.live.satz1", "hilfe.live.satz2", "hilfe.live.satz3",
+    "hilfe.live.satz4", "hilfe.live.satz5",
+    "hilfe.gesicht.satz1", "hilfe.gesicht.satz2", "hilfe.gesicht.satz3",
+    "hilfe.gesicht.satz4", "hilfe.gesicht.satz5", "hilfe.gesicht.satz6",
+    "hilfe.koerper.satz1", "hilfe.koerper.satz2", "hilfe.koerper.satz3",
+    "hilfe.koerper.satz4",
+    "hilfe.vision.satz1", "hilfe.vision.satz2", "hilfe.vision.satz3",
+    "hilfe.vision.satz4",
+    "hilfe.faces_bekannt.satz1", "hilfe.faces_bekannt.satz2",
+    "hilfe.faces_bekannt.satz3",
+    "hilfe.faces_lernen.satz1", "hilfe.faces_lernen.satz2",
+    "hilfe.faces_lernen.satz3",
+    "hilfe.faces_unbekannt.satz1", "hilfe.faces_unbekannt.satz2",
+    "hilfe.faces_qualitaet.satz1", "hilfe.faces_qualitaet.satz2",
+    "hilfe.faces_lernlauf.satz1", "hilfe.faces_lernlauf.satz2",
+    "hilfe.faces_lernlauf.satz3", "hilfe.faces_lernlauf.satz4",
+    # ---- §8.1-Nachzuegler (Stufe 3): Markup-Prosa der Tranchen B/C ----
+    "setupwiz.backend.system_satz", "setupwiz.fertig.wieder_satz",
+    "system.sync.diagnose_satz", "system.sync.diagnose_kurz",
+    "vision.kopf.einleitung", "vision.hinweis.modell_satz",
+    "vision.hinweis.host_satz", "vision.hinweis.mess_satz",
+    "vision.hinweis.kosten_satz", "vision.verb.key_ort",
+    "vision.modell.leer_key", "vision.modell.leer_verbindung",
+    "vision.modell.antwort_satz", "vision.prompt.eigen_satz",
+    "vision.cloud.sendet_satz", "vision.test.stufen_satz",
+    "visiontest.kopf.wege_satz", "visiontest.vision.einrichten_satz",
+    "visionwizard.groesse.satz", "visionwizard.vorschlag.vergessen_satz",
+    "visionwizard.vorschlag.satz",
+    "personwizard.kopf.stark_satz", "personwizard.fertig.training_satz",
+    "personwizard.kontrolle.schalter_satz",
+    "personwizard.kontrolle.leer_satz", "personwizard.bestand.leer_satz",
+    "personwizard.bestand.stark_satz", "personwizard.bestand.fremd_satz",
+    "personwizard.bestand.fremd_erklaerung",
+    "personwizard.modell.leer_satz", "personwizard.modell.material_satz",
+})
 
 
 def t_html(key, **kw):

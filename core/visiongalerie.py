@@ -47,9 +47,14 @@ import time
 # --- Regeln, die auch das Gate und der Beweis lesen (eine Quelle) -------------
 MIN_HOEHE_PX = 350             # crop_px[1], die skalierte Hoehe (§6.4)
 REIHEN = ("vorn", "seitlich", "hinten")
-# Die Oberflaeche ist englisch, die Labels im Store sind deutsch. Die Uebersetzung
-# steht HIER, damit sie nicht in zwei Renderern getrennt driftet (der erste Anlauf
-# zeigte auf der englischen Seite "vorn 28 · seitlich 11 · hinten 25").
+# Die Labels im Store sind deutsche KENNUNGEN. Die englische Anzeige-Tabelle
+# steht HIER als zentrale Quelle, damit sie nicht in zwei Renderern getrennt
+# driftet (der erste Anlauf zeigte auf der englischen Seite "vorn 28 ·
+# seitlich 11 · hinten 25"). Sprach-Stufe 2 Tranche D (Kennung/Anzeige-
+# Trennung): die UI zeigt die Woerter ueber webui/bausteine.reihen_wort()
+# (visiongalerie.reihe.*-Schluessel, EN wortgleich zu dieser Tabelle —
+# Beweis tranche_d_beweis); diese Tabelle bleibt EN-Referenz + Fallback,
+# und reihen_text im wizard_lage()-Vertrag bleibt unveraendert englisch.
 REIHEN_ANZEIGE = {"vorn": "front", "seitlich": "side", "hinten": "back",
                   "unklar": "unclear"}
 # Auffuell-Folge fuer die drei realen Mangelfaelle (§6.4): Reihe leer, Reihe

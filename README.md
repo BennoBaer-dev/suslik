@@ -15,7 +15,7 @@ running (see the roadmap section below).
 
 The `latest-*` image tags follow the newest release, so `docker compose pull` gets you
 what this README describes. To pin a version instead, use its tag explicitly:
-`ghcr.io/bennobaer-dev/suslik:0.1.0.298-gpu`.
+`ghcr.io/bennobaer-dev/suslik:0.1.0.331-gpu`.
 
 ## Why this exists
 
@@ -40,7 +40,7 @@ declines rather than mislabels.
 The Today page answers "who was on the property, when, and where did they go" — one card per
 person, one block per pass, unknowns kept visible instead of buried:
 
-![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.0.298)
+![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.0.321)
 
 *(Screenshot from a live install of v0.1.0.199; names and faces anonymized. The
 "Recognized live" row is the live watchers' preliminary naming, right on the stream.)*
@@ -67,8 +67,8 @@ all stored face images and short look-back videos.
   startup self-check you can read from `docker logs`.
 - **Five languages** — the UI speaks English, German, Spanish, Italian and French. Pick
   yours with the header switch or in step 0 of the setup wizard; one setting for the whole
-  installation, it survives backups. Translation is rolling out page by page — pages not
-  yet translated say so honestly and follow with the next releases.
+  installation, it survives backups. Almost everything is translated; only the Today page
+  still has a few English bits, and it says so.
 - **Optional write-back** to Frigate — `sub_label` correction *and* uploading reference faces
   from the Frigate sync page. Off by default (read-only); in read-only mode the import direction
   (Frigate → suslik) still works, only the transfer out is blocked.
@@ -195,14 +195,20 @@ only needed for the optional push-notification channels.
 
 ## What's being worked on right now
 
-*(updated 2026-08-19 — this section changes with every release)*
+*(updated 2026-08-21 — this section changes with every release)*
 
-- **Multilingual UI (rolling out)** *(started in 0.1.0.298)*: the interface speaks
-  English, German, Spanish, Italian and French. The menu, all dialogs, the main pages
-  and the Today view are translated; the remaining pages (system, vision and person
-  pages, the in-app guides, notification texts) follow release by release, and every
-  page that is not translated yet says so honestly instead of mixing languages
-  silently. All translations are native-speaker reviewed.
+- **Face learning with a quality score** *(shipped in 0.1.0.321)*: the face check
+  after a pass looks at every frame from every camera, measures how good a face really
+  is with a reference-free score and offers more and better pictures, grouped by view.
+  Every reference picture carries that quality value, weak ones are flagged, and group
+  naming in learning runs pre-selects by it. Next: the same measure for the unknown
+  visitor pool.
+
+- **Multilingual UI** *(started in 0.1.0.298, nearly complete in 0.1.0.321)*: the
+  interface speaks English, German, Spanish, Italian and French. The help pages, the
+  setup wizard, all inner pages and dialogs and the notification texts are translated;
+  only the Today page still has a few English bits and says so. All translations are
+  native-speaker reviewed.
 
 - **Vision detect (early working version)** *(shipped in 0.1.0.168)*: a third
   recognition path, independent of the other two. A vision-language model judges the

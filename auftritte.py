@@ -98,16 +98,9 @@ def _lade_rows(log_pfad):
 
 
 def _lade_gtmap(cfg):
-    gtmap = {}                       # eid -> letztes Label (F2)
-    gtp = os.path.join(cfg["data_dir"], "state", "ground_truth.jsonl")
-    if os.path.exists(gtp):
-        with open(gtp) as f:
-            for l in f:
-                try:
-                    d0 = json.loads(l); gtmap[d0["eid"]] = d0["label"]
-                except Exception:
-                    pass
-    return gtmap
+    """eid -> letztes Label (F2); .313: EINE Lese-Quelle (szenarien.gt_labelmap)."""
+    import szenarien as _szen
+    return _szen.gt_labelmap(os.path.join(cfg["data_dir"], "state", "ground_truth.jsonl"))
 
 
 def _eid2uid(cfg):
@@ -317,10 +310,23 @@ def render_unbekannt(cfg, log_pfad, personen_bekannt, params):
             kopf + lauf_karte + js)
 
 
+# .32x (User 22.08.): wie viele Personen eine Durchgangs-Karte gleichwertig
+# zeigt. Drei ist der ausdrueckliche Wunsch ("wenn zwei, maximal drei Personen
+# sind"); was darueber liegt, bleibt die alte Namenszeile — acht Bilder in einer
+# Karte waeren keine Verbesserung.
+PASS_PERSONEN_MAX = 3
+
+
 def render(cfg, log_pfad, personen_bekannt, params):
     """-> (titel, inhalt_html). params = parsed query dict (Listen je Key, wie qs im Handler)."""
     import webui
     person = (params.get("person", [""])[0] or "").strip()
+    # .32x: Gruppen-Sicht. Der Parameter traegt die alphabetisch sortierten
+    # Namen, verbunden mit " & " — genau so, wie /heute den Schluessel baut.
+    gruppe = [q.strip() for q in
+              (params.get("gruppe", [""])[0] or "").split("&") if q.strip()]
+    if gruppe and not person:
+        person = gruppe[0]          # Titel/Referenz-Marker haengen an einer Person
     heute_dt = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     tag_par = params.get("tag", [""])[0]
     tag_dt = heute_dt
@@ -365,7 +371,15 @@ def render(cfg, log_pfad, personen_bekannt, params):
     _km, _ka = _koerper(cfg)
     szen = _szen.szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, nur_kameras=nur,
                                  koerper_map=_km, koerper_ab=_ka)
-    paesse = [s for s in szen if person in s["pers"]]
+    # .32x GRUPPEN-SICHT (User 22.08.): ?gruppe=A &amp; B zeigt die Durchgaenge,
+    # in denen GENAU diese Menge erkannt wurde. Der Schluessel ist alphabetisch
+    # sortiert (verifyd baut ihn so), damit dieselbe Gruppe immer denselben Link
+    # hat. Ohne Treffer bleibt die Seite die normale Personen-Sicht.
+    if gruppe:
+        _soll = set(gruppe)
+        paesse = [s for s in szen if set(s["pers"]) == _soll]
+    else:
+        paesse = [s for s in szen if person in s["pers"]]
     paesse.sort(key=lambda s: s["start"])                     # Pass 1 = fruehester
 
     heute_link = ("/heute" if ist_heute else f"/heute?tag={tag_str}") \
@@ -407,43 +421,97 @@ def render(cfg, log_pfad, personen_bekannt, params):
                 teil = f'{html.escape(e["cam"])} {_hhmm(e["t"])}'
                 folge.append(f'<b>{teil}</b>' if e["cam"] in bestaetigt_kams else teil)
         andere = [p for p in s["pers"] if p != person]
-        dabei = ", ".join(html.escape(p) for p in andere)
-        best_url = _crop_url(cfg, d.get("eid"), person)
-        bild = (f'<a class="pass-bild" href="/event/{urllib.parse.quote(str(d["eid"]))}">'
-                f'<img src="{best_url}" alt=""></a>' if best_url and d.get("eid") else
-                f'<div class="pass-bild pass-bild-leer">{t("auftritte.karte.kein_bild")}</div>')
-        # Thumbnails = NUR Events mit Gesichts-Crop der Person (User 27.07.: Entwicklung
-        # des Gesichts ueber den Durchgang zeigen; Uhrzeit-Kacheln ohne Gesicht raus).
-        # Unbestaetigte Treffer (Crop da, Event nicht bestaetigt) gedimmt + benannt.
-        thumbs, ohne_gesicht = [], 0
-        for e in evs:
-            tu = _crop_url(cfg, e.get("eid"), person)
-            if not tu:
-                ohne_gesicht += 1
+        # .32x (User 22.08.: "wenn zwei, maximal drei Personen sind, dass die
+        # auch sauber genannt werden und es auch drei Bilder reingibt"): ein
+        # Durchgang mit mehreren Menschen zeigt sie GLEICHWERTIG nebeneinander,
+        # statt alle ausser der Seiten-Person zu einer Namenszeile einzudampfen.
+        # Die Daten dafuer liegen laengst vor — szenarien.py fuehrt je Person
+        # ihr eigenes bestes Event, ihren Score und ihre Spanne (s["pers"][p]).
+        # Reihenfolge: die Person DIESER Seite zuerst (es ist ihre Seite),
+        # dahinter die uebrigen nach bestem Treffer. Deckel PASS_PERSONEN_MAX,
+        # was darueber liegt bleibt die alte Namenszeile — eine Karte mit acht
+        # Bildern waere keine Verbesserung.
+        _sonstige = sorted(andere, key=lambda q: -(s["pers"][q].get("best") or 0))
+        _zeigen = ([person] + _sonstige)[:PASS_PERSONEN_MAX]
+        _rest = ([person] + _sonstige)[PASS_PERSONEN_MAX:]
+        dabei = ", ".join(html.escape(q) for q in _rest)
+        def _person_block(q):
+            dq = s["pers"][q]
+            u = _crop_url(cfg, dq.get("eid"), q)
+            bm_q = f'{dq["best"]:.2f}' if dq.get("best") else "&mdash;"
+            innen = (f'<img src="{u}" alt="">' if u else
+                     f'<span class="pass-bild-leer">{t("auftritte.karte.kein_bild")}</span>')
+            kopf = (f'<b>{html.escape(q)}</b>' if q == person else html.escape(q))
+            if u and dq.get("eid"):
+                return (f'<a class="pass-person" href="/event/'
+                        f'{urllib.parse.quote(str(dq["eid"]))}">{innen}'
+                        f'<span class="pass-person-name">{kopf}</span>'
+                        f'<span class="pass-person-wert">{bm_q}</span></a>')
+            return (f'<div class="pass-person">{innen}'
+                    f'<span class="pass-person-name">{kopf}</span>'
+                    f'<span class="pass-person-wert">{bm_q}</span></div>')
+        bild = ('<div class="pass-personen">'
+                + "".join(_person_block(q) for q in _zeigen) + '</div>')
+        # Thumbnails JE PERSON (User 22.08.: "nach Person gruppieren" + "hinter
+        # jeder Person den Button mit dem Check der Bilder"). Bis .32x zeigte die
+        # Reihe nur die Seiten-Person; in einem Durchgang mit mehreren Menschen
+        # blieb der zweite unsichtbar, obwohl seine Crops vorliegen.
+        # Der Pruef-Knopf wandert MIT in die Reihe: er traegt den Personennamen,
+        # und die Bruecke siebt ohnehin je Person gegen deren Referenzen — hinter
+        # Person A werden also A-Bilder geprueft, hinter B die von B. Die
+        # Event-Liste ist fuer alle dieselbe (der ganze Durchgang), das Sieb
+        # macht den Unterschied.
+        # Zeigt eine Person im Durchgang KEIN Gesicht (nur Koerper-/Vision-Weg),
+        # bleibt ihre Reihe weg statt leer dazustehen.
+        _eids_alle = html.escape(json.dumps(
+            [str(e.get("eid")) for e in evs if e.get("eid")]), quote=True)
+        reihen = []
+        for q in _zeigen:
+            q_thumbs, q_ohne = [], 0
+            for e in evs:
+                tu = _crop_url(cfg, e.get("eid"), q)
+                if not tu:
+                    q_ohne += 1
+                    continue
+                schwach = q not in (e.get("conf") or [])
+                kl = "pass-thumb pass-thumb-schwach" if schwach else "pass-thumb"
+                # .227: Referenz-Marker direkt am Bild — gruen umrandet heisst
+                # "dieses Event hat eine aktive Referenz geliefert".
+                ist_ref = e.get("eid") in ref_eids
+                if ist_ref:
+                    kl += " pass-thumb-ref"
+                # Konditionale Annotations-Anhaenge (§8.11): eigene Schluessel.
+                tt = f'{html.escape(e["cam"])} {_hhmm(e["t"])}' \
+                    + (t("auftritte.thumb.zusatz_unbestaetigt") if schwach else "") \
+                    + (t("auftritte.thumb.zusatz_referenz") if ist_ref else "")
+                q_thumbs.append(f'<a class="{kl}" title="{tt}" '
+                                f'href="/event/{urllib.parse.quote(str(e.get("eid") or ""))}">'
+                                f'<img src="{tu}" alt=""><small>{_hhmm(e["t"])}</small></a>')
+            if not q_thumbs:
                 continue
-            schwach = person not in (e.get("conf") or [])
-            kl = "pass-thumb pass-thumb-schwach" if schwach else "pass-thumb"
-            # .227: Referenz-Marker direkt am Bild — gruen umrandet heisst
-            # "dieses Event hat eine aktive Referenz geliefert".
-            ist_ref = e.get("eid") in ref_eids
-            if ist_ref:
-                kl += " pass-thumb-ref"
-            # Konditionale Annotations-Anhaenge (§8.11): eigene Schluessel.
-            tt = f'{html.escape(e["cam"])} {_hhmm(e["t"])}' \
-                + (t("auftritte.thumb.zusatz_unbestaetigt") if schwach else "") \
-                + (t("auftritte.thumb.zusatz_referenz") if ist_ref else "")
-            thumbs.append(f'<a class="{kl}" title="{tt}" '
-                          f'href="/event/{urllib.parse.quote(str(e.get("eid") or ""))}">'
-                          f'<img src="{tu}" alt=""><small>{_hhmm(e["t"])}</small></a>')
-        if ohne_gesicht:
-            thumbs.append(f'<span class="pass-thumbs-rest">'
-                          f'{t_n("auftritte.thumb.ohne_gesicht", ohne_gesicht)}</span>')
-        # .229 (User: "so dass der User weiss, die sind schon uebernommen"):
-        # die Bedeutung des gruenen Rands steht AN der Reihe, nicht nur im
-        # Tooltip — aber nur, wenn die Reihe markierte Bilder traegt.
-        if any(e.get("eid") in ref_eids for e in evs):
-            thumbs.append(f'<span class="pass-thumbs-rest">'
-                          f'{t("auftritte.thumb.hinweis_referenz")}</span>')
+            if q_ohne:
+                q_thumbs.append(f'<span class="pass-thumbs-rest">'
+                                f'{t_n("auftritte.thumb.ohne_gesicht", q_ohne)}</span>')
+            # .229: die Bedeutung des gruenen Rands steht AN der Reihe, aber nur,
+            # wenn die Reihe markierte Bilder traegt — jetzt je Person geprueft.
+            if any(e.get("eid") in ref_eids and _crop_url(cfg, e.get("eid"), q)
+                   for e in evs):
+                q_thumbs.append(f'<span class="pass-thumbs-rest">'
+                                f'{t("auftritte.thumb.hinweis_referenz")}</span>')
+            # Stufe-2-Grenze (§8.17 + §8.4): Toggle-Label — dieselbe Beschriftung
+            # setzt das Inline-JS (lbStart) zur Laufzeit neu; beide Fassungen
+            # muessen aus EINER Quelle kommen. Bleibt samt JS literal.
+            knopf = (f'<button class="gtb pass-knopf" '
+                     f'data-person="{html.escape(q, quote=True)}" '
+                     f'data-eids="{_eids_alle}" onclick="lernBruecke(this)">'
+                     f'<span class="pk-icon">&#128269;</span>'
+                     f'Check this pass for good pictures &#8230;</button>'
+                     '<span class="dim lb-status" style="margin-left:8px"></span>')
+            reihen.append(
+                f'<div class="pass-reihe"><div class="pass-reihe-kopf">'
+                f'<b>{html.escape(q)}</b>{knopf}</div>'
+                f'<div class="pass-thumbs">{"".join(q_thumbs)}</div></div>')
+        thumbs_html = "".join(reihen)
         # best match: Kamera/Zeit des BEST-Events (d["eid"]), nicht der letzten
         # Bestaetigung (Review .50 — das waren zwei verschiedene Events).
         be = next((e for e in evs if e.get("eid") and e.get("eid") == d.get("eid")), None)
@@ -471,17 +539,20 @@ def render(cfg, log_pfad, personen_bekannt, params):
         # Pass-Events: das Identitaets-Sieb prueft jedes Bild einzeln gegen
         # die Referenzen, eine fremde Person kann konstruktionsbedingt nicht
         # uebernommen werden.
-        _eids = html.escape(json.dumps(
-            [str(e.get("eid")) for e in evs if e.get("eid")]), quote=True)
-        # Stufe-2-Grenze (§8.17 + §8.4): Toggle-Label — dieselbe Beschriftung
-        # setzt das Inline-JS (lbStart, \u-escaped Surrogate) zur Laufzeit neu;
-        # beide Fassungen muessen aus EINER Quelle kommen, sonst kippt der
-        # Knopf nach Gebrauch zurueck ins Englische. Bleibt samt JS literal.
-        lern = (f' <button class="gtb pass-knopf" data-person="{html.escape(person, quote=True)}" '
-                f'data-eids="{_eids}" onclick="lernBruecke(this)">'
-                f'<span class="pk-icon">&#128269;</span>'
-                f'Check this pass for good pictures &#8230;</button>'
-                '<span class="dim lb-status" style="margin-left:8px"></span>')
+        # .32x: der Pruef-Knopf steht jetzt JE PERSON in ihrer Thumb-Reihe
+        # (oben gebaut) — hier bleibt nur der Video-Knopf. Traegt der Durchgang
+        # keine einzige Gesichts-Reihe (nur Koerper-/Vision-Weg), gibt es auch
+        # keinen Knopf mehr: dann faellt er hier ERSATZWEISE fuer die
+        # Seiten-Person an, sonst verloere die Karte eine Funktion.
+        lern = ''
+        if not reihen:
+            _eids = html.escape(json.dumps(
+                [str(e.get("eid")) for e in evs if e.get("eid")]), quote=True)
+            lern = (f' <button class="gtb pass-knopf" data-person="{html.escape(person, quote=True)}" '
+                    f'data-eids="{_eids}" onclick="lernBruecke(this)">'
+                    f'<span class="pk-icon">&#128269;</span>'
+                    f'Check this pass for good pictures &#8230;</button>'
+                    '<span class="dim lb-status" style="margin-left:8px"></span>')
         bloecke.append(
             f'<div class="card pass-card"><div class="pass-kopf"><b>{t("auftritte.karte.pass_nr", n=i)}</b>'
             f' · {_hhmm(s["start"])} &ndash; {_hhmm(s["ende"])}'
@@ -494,7 +565,7 @@ def render(cfg, log_pfad, personen_bekannt, params):
             + (f'<div class="dim">{_unbek_zeile(s, e2u)}</div>'
                if s.get("unbek") else '')
             + f'<div class="pass-links">{video}{lern}</div></div></div>'
-            f'<div class="pass-thumbs">{"".join(thumbs)}</div></div>')
+            + thumbs_html + '</div>')
 
     # .226 (User-Feedback am .225-Knopf, dritte Fassung): Pruefen oeffnet ein
     # In-Page-OVERLAY mit genau den Bildern, die uebernommen wuerden — jedes
@@ -572,13 +643,24 @@ def render(cfg, log_pfad, personen_bekannt, params):
           'if(wahl2)wahl2.addEventListener("change",zaehl);zaehl();'
           'ok.onclick=function(){var items=[];'
           'boxenAlle().forEach(function(c){if(c.checked)'
-          'items.push({eid:c._it.eid,datei:c._it.datei});});'
+          'items.push({eid:c._it.eid,datei:c._it.datei,'
+          'lauf_id:c._it.lauf_id,herkunft:c._it.herkunft});});'
           'ov.remove();lbUebernehmen(b,st,items);};'
           'ab.onclick=function(){ov.remove();st.textContent="nothing taken";'
           'lbStart(b);};'
           'dg.appendChild(ok);dg.appendChild(ab);ov.appendChild(dg);'
           'ov.onclick=function(ev){if(ev.target===ov)ab.onclick(ev);};'
           'document.body.appendChild(ov);}'
+          'function lbBalken(st,i,n,z){'
+          'var w=document.createElement("span");'
+          'w.style.cssText="display:inline-block;vertical-align:middle;width:110px;height:6px;'
+          'margin-left:8px;border-radius:3px;background:var(--surface-2);'
+          'border:1px solid var(--border);overflow:hidden";'
+          'var f=document.createElement("span");'
+          'var pz=n?Math.round(100*i/n):0;'
+          'f.style.cssText="display:block;height:100%;width:"+pz+"%;'
+          'background:"+(z==="wartet"?"var(--warn)":"seagreen")+";transition:width .6s";'
+          'w.appendChild(f);st.appendChild(w);}'
           'function lernBruecke(b){'
           'var st=b.parentNode.querySelector(".lb-status");'
           'b.disabled=true;st.textContent="checking the pictures\\u2026";'
@@ -589,6 +671,14 @@ def render(cfg, log_pfad, personen_bekannt, params):
           # .232 (User-Idee): kaltes Modell -> ehrliche Lade-Anzeige und
           # automatisch nachfragen, sobald es steht (max ~1 min).
           'if(d.laden){st.textContent=d.msg;'
+          # .310 (User: 'kleiner Balken neben dem Text, der hochlaeuft'): die
+          # Pass-Ernte meldet i/n/zustand — schmaler Balken im Status-Span,
+          # kein Aufgeben per Zaehler, solange der Dienst Fortschritt meldet
+          # (der Alt-Text 'model did not load' kam nach 60 s Warten hinter
+          # einem anderen Hintergrund-Job). Reines Modell-Laden (ohne n)
+          # behaelt den 60-s-Deckel.
+          'if(d.zustand){lbBalken(st,d.i,d.n,d.zustand);'
+          'b._ladeversuche=0;setTimeout(function(){lernBruecke(b)},2500);return;}'
           'b._ladeversuche=(b._ladeversuche||0)+1;'
           'if(b._ladeversuche>24){st.textContent="model did not load — try again";'
           'b.disabled=false;b._ladeversuche=0;return;}'
@@ -600,7 +690,10 @@ def render(cfg, log_pfad, personen_bekannt, params):
           'lbOverlay(b,st,d);})'
           '.catch(function(e){st.textContent="error: "+e;b.disabled=false;});}'
           '</script>')
-    return (t("auftritte.titel_person", person=person),
+    # .32x: in der Gruppen-Sicht traegt der Titel die GRUPPE, nicht die eine
+    # Person, an der Referenz-Marker und Sortierung technisch haengen.
+    return (t("auftritte.titel_person",
+              person=(" & ".join(gruppe) if gruppe else person)),
             kopf + "".join(bloecke) + js)
 
 

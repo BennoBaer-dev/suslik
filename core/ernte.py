@@ -41,10 +41,26 @@ SCHWELLEN_PFLICHT = ("det_thresh", "fd_front_min", "fd_sharp_min", "fd_det_max",
                      "m_det_min", "m_kante_min", "m_sharp_min",
                      "s_det_min", "s_winkel_max")
 
+# Vorrats-Achsen (Bauplan bauplan_vorrat.md B2, 20.08.2026) — BEWUSST NICHT in
+# SCHWELLEN_PFLICHT: alte Lernlauf-Manifeste ohne diese Keys muessen resumierbar
+# bleiben (Widerleger-Falle 5); fehlen sie, ist das v-Gate aus, deklariert im
+# Zaehler (v_aus). Der Ernte-Anteil braucht genau diese sechs; Konsens-/Katalog-
+# Schwellen gehoeren der Vorrat-Phase (core/vorrat.py) und wandern nur zum
+# Einfrieren mit ins Manifest.
+VORRAT_SCHLUESSEL = ("vorrat_norm_min", "vorrat_norm_min_profil",
+                     "vorrat_front_profil", "vorrat_kante_min",
+                     "vorrat_sharp_min", "vorrat_rand_faktor")
+
 
 def schwellen_pruefen(s):
     """-> Liste fehlender/leerer Schwellen-Keys (leer = vollstaendig)."""
     return [k for k in SCHWELLEN_PFLICHT if s.get(k) is None]
+
+
+def vorrat_schwellen_da(s):
+    """Sind ALLE Vorrats-Schwellen vorhanden? (Teil-Bestueckung zaehlt als AUS —
+    ein halbes Gate waere schlimmer als keins.)"""
+    return all(s.get(k) is not None for k in VORRAT_SCHLUESSEL)
 
 
 def front_aus_pose(pose):
@@ -52,6 +68,34 @@ def front_aus_pose(pose):
     (pose[0]/pose[1] als Betraege), damit die fd-Kalibrierung 1:1 gilt."""
     a, b = abs(float(pose[0])), abs(float(pose[1]))
     return max(0.0, 1.0 - (a + b) / 90.0)
+
+
+def front_aus_kps(kps):
+    """Frontalitaets-Proxy aus den FUENF SCRFD-Keypoints (1.0 frontal, 0.0 Profil)
+    — WORTGLEICH der kps-Zweig von analyze.frontality bzw. dem Vorrats-Prototyp:
+    die Profil-Grenze 0.61 und die Profil-Norm-Schwelle 21.5 sind auf DIESER
+    Skala gemessen (Pose-Schichtung 20.08.). Das pose-basierte `front` der Ernte
+    (front_aus_pose, pitch+yaw) bleibt daneben unveraendert bestehen — zwei
+    deklarierte Skalen, keine Vermischung (Bauplan B2)."""
+    if kps is None or len(kps) < 3:
+        return None
+    le, re, nose = kps[0], kps[1], kps[2]
+    eye_cx = (le[0] + re[0]) / 2.0
+    eye_dx = abs(re[0] - le[0]) or 1.0
+    yaw_off = abs(nose[0] - eye_cx) / eye_dx
+    return float(max(0.0, 1.0 - yaw_off / 0.45))
+
+
+def richtung_aus_kps(kps, front_kps, profil_grenze):
+    """Blickrichtungs-Etikett links/frontal/rechts (Kopfdrehung aus Betrachter-
+    sicht, Vorzeichen des Nasen-Versatzes) — fuer die pose-gruppierte Anzeige
+    des Vorrats (User 20.08.)."""
+    if kps is None or len(kps) < 3 or front_kps is None:
+        return None
+    if front_kps >= profil_grenze:
+        return "frontal"
+    le, re, nose = kps[0], kps[1], kps[2]
+    return "links" if float(nose[0]) < (le[0] + re[0]) / 2.0 else "rechts"
 
 
 def gate_l(fd):
@@ -81,18 +125,48 @@ def gate_s(fd, det, kante, sharp, pose, s):
             and all(abs(w) <= s["s_winkel_max"] for w in winkel))
 
 
+def gate_v_vor(fd, det, kante, sharp, s):
+    """Vorrats-VORPRUEFUNG ohne Inferenz (Bauplan B2, Widerleger W2.7/W2.8):
+    die Norm ist die teuerste Achse (~0,3 s je Gesicht auf CPU) und als
+    Gesicht/Nicht-Gesicht-Trenner nirgends kalibriert — deshalb kommen die
+    billigen Achsen inkl. der DETEKTOR-Pflichtachse zuerst, und nur Passierer
+    bezahlen die Norm-Inferenz."""
+    return (gate_l(fd) and det >= s["m_det_min"]
+            and kante >= s["vorrat_kante_min"] and sharp >= s["vorrat_sharp_min"])
+
+
+def gate_v_norm(norm, front_kps, s):
+    """Vorrats-Norm-Achse: Profil-Zweig unter der kps-Frontalitaets-Grenze
+    (Profile tragen bei gleicher Identitaetsstaerke systematisch ~1 Punkt
+    weniger Norm — Pose-Schichtung 20.08.)."""
+    if norm is None:
+        return False
+    grenze = (s["vorrat_norm_min_profil"]
+              if (front_kps is not None and front_kps < s["vorrat_front_profil"])
+              else s["vorrat_norm_min"])
+    return norm >= grenze
+
+
 def kandidat_zeile(eid, kamera, ts, t, bbox, det, front, sharp, kante, pose,
-                   emb_vec, modell, m, s_flag, datei):
+                   emb_vec, modell, m, s_flag, datei,
+                   norm=None, front_kps=None, richtung=None, v=False, datei_v=None,
+                   struktur=None):
     """Eine Kandidaten-Zeile — die Rundungsregeln sind Teil des Vertrags (V0.5).
     det/front/sharp/pose kommen bereits GERUNDET herein (Gate == Zeile); die
-    round()-Aufrufe hier sind idempotent und sichern den Vertrag am Rand ab."""
+    round()-Aufrufe hier sind idempotent und sichern den Vertrag am Rand ab.
+    Die Vorrats-Felder (Bauplan B2) stehen am SIGNATUR-ENDE mit Defaults:
+    alle bestehenden Aufrufer und Leser (anker, QS-Fixfaelle) bleiben gueltig."""
     return {"eid": eid, "kamera": kamera, "ts": round(float(ts), 1),
             "t": round(float(t), 2), "bbox": [int(v) for v in bbox],
             "kante": int(kante), "det": round(float(det), 3),
             "front": round(float(front), 3), "sharp": round(float(sharp), 1),
             "pose": [round(float(x), 1) for x in pose],
             "emb": [round(float(x), 5) for x in emb_vec], "modell": modell,
-            "m": bool(m), "s": bool(s_flag), "datei": datei}
+            "m": bool(m), "s": bool(s_flag), "datei": datei,
+            "norm": None if norm is None else round(float(norm), 4),
+            "front_kps": None if front_kps is None else round(float(front_kps), 4),
+            "richtung": richtung, "v": bool(v), "datei_v": datei_v,
+            "struktur": None if struktur is None else round(float(struktur), 4)}
 
 
 def zaehler_pruefen(z):
@@ -105,6 +179,10 @@ def zaehler_pruefen(z):
                 f"kandidaten {z.get('kandidaten')}")
     if not (z.get("kandidaten", 0) >= z.get("m", 0) >= z.get("s", 0)):
         return f"gate-schachtelung verletzt: L {z.get('kandidaten')} >= M {z.get('m')} >= S {z.get('s')}"
+    if z.get("v", 0) > z.get("kandidaten", 0):
+        # v ist NICHT in M geschachtelt (eigene Achsen: Kante 40 < m_kante 60),
+        # aber jeder v-Kandidat ist ein L-Passierer.
+        return f"v-schachtelung verletzt: V {z.get('v')} > L {z.get('kandidaten')}"
     return None
 
 
@@ -125,11 +203,16 @@ def event_aufraeumen(lauf_dir, eid):
         os.unlink(kandidaten_pfad(lauf_dir, eid))
     except FileNotFoundError:
         pass
-    for c in glob.glob(os.path.join(lauf_dir, "crops", es + "~*")):
-        try:
-            os.unlink(c)
-        except FileNotFoundError:
-            pass
+    # Schreiber und Raeumer teilen EINE Namensregel je Ablage: crops/<eid>~* fuer
+    # M, vorrat/v_<eid>_* fuer V (Bauplan B2; ohne den zweiten Glob blieben
+    # v-Crops nach Wieder-Ernten als Waisen liegen — Widerleger W1.9).
+    for muster in (os.path.join(lauf_dir, "crops", es + "~*"),
+                   os.path.join(lauf_dir, "vorrat", "v_" + es + "_*")):
+        for c in glob.glob(muster):
+            try:
+                os.unlink(c)
+            except FileNotFoundError:
+                pass
 
 
 def manifest_lesen(lauf_dir):
@@ -160,7 +243,7 @@ def manifest_schreiben(lauf_dir, manifest):
 
 
 def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
-                ist_fd=None):
+                ist_fd=None, norm_mass=None, struktur_mass=None):
     """Frontal-Ernte fuer EIN Event (1 Event je Job — Live-Vorrang, Leitprinzip 5).
 
     Schreibt die Kandidaten (alle L-Passierer) in kandidaten/<eid>.jsonl — die Datei
@@ -169,8 +252,18 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
     crops/. -> Zaehler-Dict; 'unlesbar' True = 0 Frames lesbar; frames_gelesen/
     frames_soll/unvollstaendig immer dabei (Teil-Verlust ist KEIN stiller Erfolg).
 
-    emb/ist_fd sind fuer Tests injizierbar; im Betrieb kommen sie aus face_audit
-    (Worker-Factory haelt den Embedder warm).
+    emb/ist_fd/norm_mass/struktur_mass sind fuer Tests injizierbar; im Betrieb
+    kommen sie aus face_audit (Worker-Factory haelt den Embedder warm).
+
+    STRUKTUR-TEST (.32x, User-Entscheid 22.08.): `struktur_mass` misst je
+    M-/V-Kandidat, OB der Ausschnitt ueberhaupt Gesichtsstruktur zeigt
+    (face_audit.StrukturMass, analysen/06_ist_das_ein_gesicht.md). Liegt der Wert
+    unter `struktur_min`, verliert das Bild M und S und den Vorrats-Weg: es kostet
+    dann keinen Crop, keine Norm-Inferenz und keinen Anker-Platz. Die
+    Kandidaten-ZEILE wird trotzdem geschrieben (Zaehler-Invariante bleibt heil,
+    der Wert steht als `struktur` drin) — der Verlust ist damit protokolliert,
+    nicht still. Ohne Messgrundlage (kein Modell, Messung scheitert) wird NIE
+    gefiltert.
 
     Z6 (konzept_frames.md v2 §4): die Frames kommen als ABNEHMER vom Verteiler
     (core.frames.lauf) statt aus einem eigenen FrameIter — dieselbe Frame-Quelle
@@ -191,12 +284,45 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
         emb = face_audit.Embedder()
     if ist_fd is None:
         from face_audit import ist_fehldetektion as ist_fd
+    # Vorrats-Gate (Bauplan B2): aktiv nur mit VOLLEN vorrat-Schwellen im
+    # (Manifest-)Regime UND funktionierender NormMass. Fehlt eine Haelfte,
+    # laeuft die Ernte unveraendert wie vor dem Einbau — DEKLARIERT im
+    # Zaehler (v_aus), nie still anders.
+    v_aktiv = vorrat_schwellen_da(schwellen) and norm_mass is not None \
+        and getattr(norm_mass, "ok", False)
+    # STRUKTUR-Schwelle: BEWUSST per .get() und NICHT in SCHWELLEN_PFLICHT — die
+    # 27 bestehenden Lernlauf-Manifeste tragen den Schluessel nicht, und die
+    # Schwellen kommen beim Resume IMMER aus dem eingefrorenen Manifest
+    # (verifyd._lernlauf_ernten). Ein Subskript-Zugriff wuerde jeden Alt-Lauf
+    # toeten (Widerleger-Falle 5, dieselbe Klasse wie bei den Vorrats-Achsen).
+    struktur_min = schwellen.get("struktur_min")
+    struktur_aus = None
+    if struktur_min is None:
+        struktur_aus = "no threshold in run regime (old manifest)"
+    elif struktur_mass is None:
+        struktur_aus = "strukturmass: not provided"
+    elif not getattr(struktur_mass, "ok", False):
+        struktur_aus = ("strukturmass: "
+                        + (getattr(struktur_mass, "grund", "") or "not ok"))[:120]
+    if v_aktiv:
+        # LAZY erst hier (Gate-Fund .306: das Pruef-Python der QS-Stufen hat
+        # kein insightface — der Modul-Kopf von ernte_event muss ohne laufen).
+        from insightface.utils import face_align
+    v_aus = None
+    if vorrat_schwellen_da(schwellen) and not v_aktiv:
+        v_aus = ("normmass: " + getattr(norm_mass, "grund", "not provided"))[:120]
     os.makedirs(os.path.join(lauf_dir, "crops"), exist_ok=True)
     os.makedirs(os.path.join(lauf_dir, "kandidaten"), exist_ok=True)
+    if v_aktiv:
+        os.makedirs(os.path.join(lauf_dir, "vorrat"), exist_ok=True)
     event_aufraeumen(lauf_dir, eid)     # Reste eines frueheren (Teil-)Laufs weg
     z = {"detektionen": 0, "fd": 0, "ohne_pose": 0, "kandidaten": 0, "m": 0, "s": 0,
-         "unlesbar": False, "frames_gelesen": 0, "frames_soll": None,
-         "unvollstaendig": False, "letzter_m": None}
+         "v": 0, "unlesbar": False, "frames_gelesen": 0, "frames_soll": None,
+         "unvollstaendig": False, "letzter_m": None, "ohne_struktur": 0,
+         "struktur_aus": None}
+    z["struktur_aus"] = struktur_aus
+    if v_aus:
+        z["v_aus"] = v_aus
     eid_safe = _eid_safe(eid)
     pfad = kandidaten_pfad(lauf_dir, eid)
     modell = getattr(emb, "modell", "?")
@@ -259,6 +385,27 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
                     continue
                 m = gate_m(fd, det, kante, sharp, schwellen)
                 s_flag = gate_s(fd, det, kante, sharp, pose, schwellen)
+                # --- STRUKTUR-TEST (.32x): "ist da ueberhaupt ein Gesicht?"
+                # Gerechnet nur fuer Bilder, die sonst einen Weg gehen wuerden
+                # (M-Crop oder Vorrats-Vorpruefung) — nicht fuer jede Detektion.
+                # V haengt NICHT unter M (gate_v_vor hat eigene, niedrigere
+                # Latten), deshalb steht der Test VOR beiden Zweigen.
+                struktur = None
+                if (struktur_mass is not None and getattr(struktur_mass, "ok", False)
+                        and (m or (v_aktiv and gate_v_vor(fd, det, kante, sharp,
+                                                          schwellen)))):
+                    struktur = struktur_mass.streuung(frame[y1:y2, x1:x2])
+                    if (struktur is not None and struktur_min is not None
+                            and struktur < struktur_min):
+                        # Kein Crop, kein Vorrat, kein Anker — aber die Zeile
+                        # bleibt (Invariante) und traegt den Messwert.
+                        z["ohne_struktur"] += 1
+                        m = s_flag = False
+                        struktur_sperrt = True
+                    else:
+                        struktur_sperrt = False
+                else:
+                    struktur_sperrt = False
                 t = i / clip["fps"]
                 datei = None
                 if m:                       # nur Bildwuerdiges kostet Platte (Konzept §P1)
@@ -268,14 +415,57 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
                         # volle Platte u.ae.: LAUT statt Zeile-mit-totem-Pfad
                         raise OSError(f"crop nicht schreibbar: {datei}")
                     z["letzter_m"] = {"kamera": kamera, "t": round(t, 1)}
+                # ---- Vorrats-Achsen (Bauplan B2): kps-Frontalitaet/Richtung sind
+                # billig und stehen fuer JEDE Zeile im Protokoll; die teure
+                # Norm-Inferenz bezahlen NUR gate_v_vor-Passierer (W2.8 — je
+                # Frame sind das typisch 0-2, Einzel-Inferenz statt Batch haelt
+                # die Schleife wortgleich). Gerundet VOR dem Gate (.75/L3).
+                kps = getattr(fc, "kps", None)
+                front_kps = front_aus_kps(kps)
+                if front_kps is not None:
+                    front_kps = round(front_kps, 4)
+                richtung = None
+                norm = None
+                v_flag = False
+                datei_v = None
+                if v_aktiv and not struktur_sperrt:
+                    richtung = richtung_aus_kps(kps, front_kps,
+                                                schwellen["vorrat_front_profil"])
+                    if gate_v_vor(fd, det, kante, sharp, schwellen):
+                        aligned = face_align.norm_crop(frame, landmark=kps,
+                                                       image_size=112)
+                        norm = round(float(norm_mass.feature_norm([aligned])[0]), 4)
+                        v_flag = gate_v_norm(norm, front_kps, schwellen)
+                    if v_flag:
+                        # v-Crop MIT Umfeld-Rand, an Framegrenzen geklemmt —
+                        # ANZEIGE fuers Auge, nie Embedding-Quelle (A2-Befund:
+                        # 28/40 enge Klein-Crops sind fuer embed() tot, der
+                        # Rand heilt das nicht). Name traegt die eid
+                        # (Kollisions-Fund W2.2), keine Tilde, DATEI_RE-konform.
+                        f = float(schwellen["vorrat_rand_faktor"])
+                        cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+                        hb, hh = (x2 - x1) * f / 2.0, (y2 - y1) * f / 2.0
+                        H, W = frame.shape[:2]
+                        a1, b1 = max(0, int(cx - hb)), max(0, int(cy - hh))
+                        a2, b2 = min(W, int(cx + hb)), min(H, int(cy + hh))
+                        datei_v = os.path.join(
+                            "vorrat", f"v_{eid_safe}_{i}_{z['kandidaten']}.jpg")
+                        rand_crop = frame[b1:b2, a1:a2]
+                        if not (rand_crop.size and cv2.imwrite(
+                                os.path.join(lauf_dir, datei_v), rand_crop.copy())):
+                            raise OSError(f"vorrat-crop nicht schreibbar: {datei_v}")
                 zeile = kandidat_zeile(eid, kamera, ts, t, (x1, y1, x2, y2), det,
                                        front, sharp, kante, pose,
-                                       fc.normed_embedding, modell, m, s_flag, datei)
+                                       fc.normed_embedding, modell, m, s_flag, datei,
+                                       norm=norm, front_kps=front_kps,
+                                       richtung=richtung, v=v_flag, datei_v=datei_v,
+                                       struktur=struktur)
                 out.write(json.dumps(zeile, ensure_ascii=False) + "\n")
                 out.flush()
                 z["kandidaten"] += 1
                 z["m"] += 1 if m else 0
                 z["s"] += 1 if s_flag else 0
+                z["v"] += 1 if v_flag else 0
 
         # Z6: EIN Lauf, EIN Abnehmer — alle sechs Vertragsfelder stehen HIER und
         # keins im Verteiler (§3.2). `frames` traegt danach dieselben Wache-Namen
@@ -322,7 +512,8 @@ def fertig_lesen(lauf_dir):
                 try:
                     d = json.loads(zeile)
                     eids.add(d["eid"])
-                    for k in ("kandidaten", "m", "s", "fd", "ohne_pose", "detektionen"):
+                    for k in ("kandidaten", "m", "s", "v", "fd", "ohne_pose",
+                              "detektionen", "ohne_struktur"):
                         summe[k] = summe.get(k, 0) + int(d.get(k) or 0)
                     for k in ("unlesbar", "ohne_gesicht", "fehler", "unvollstaendig"):
                         summe[k] = summe.get(k, 0) + (1 if d.get(k) else 0)
@@ -377,6 +568,12 @@ def bestand_pruefen(lauf_dir):
                     if d.get("m") and d.get("datei"):
                         if not os.path.exists(os.path.join(lauf_dir, d["datei"])):
                             befunde.append(f"{eid}: crop fehlt ({d['datei']})")
+                    # v-Crops gehoeren zur selben Buecher-gegen-Platte-Wache
+                    # (Widerleger W1.8: ein stilles imwrite-Loch waere sonst
+                    # genau die Fehlerklasse 'stiller Verlust').
+                    if d.get("v") and d.get("datei_v"):
+                        if not os.path.exists(os.path.join(lauf_dir, d["datei_v"])):
+                            befunde.append(f"{eid}: vorrat-crop fehlt ({d['datei_v']})")
         if zeilen != soll:
             befunde.append(f"{eid}: {zeilen} zeilen != {soll} gebucht")
     return befunde

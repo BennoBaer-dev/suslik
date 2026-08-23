@@ -206,6 +206,10 @@ def bilanz_zeile(bilanz, ablehnungen, mit_personen=True):
         teile.append(t("syncauswahl.bilanz.exportiert", n=len(bilanz["api_export"])))
     if bilanz["abgewaehlt"]:
         teile.append(t("syncauswahl.bilanz.abgewaehlt", n=len(bilanz["abgewaehlt"])))
+    if bilanz.get("vorrat_lokal"):
+        # Vorrats-Referenzen (bauplan_vorrat.md B4): Beiwert-basiert, nie
+        # Export-Kandidat — hier sichtbar statt still ausgelassen (K3).
+        teile.append(t("syncauswahl.bilanz.vorrat", n=len(bilanz["vorrat_lokal"])))
     if bilanz["nur_frigate"]:
         teile.append(t("syncauswahl.bilanz.nur_frigate", n=len(bilanz["nur_frigate"])))
     zeilen = ["<div>" + " · ".join(teile) + "</div>"]

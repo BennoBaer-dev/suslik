@@ -239,6 +239,13 @@ nav .live .d { width: 7px; height: 7px; border-radius: 50%; background: var(--ok
 .pk-name { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .pk-meta { font-size: 13px; color: var(--dim); margin-top: 2px; }
 .pk-kam { font-size: 12px; color: var(--faint); margin-top: 2px; }
+/* .32x Gruppen-Kachel (User 22.08.: "wenn zwei Personen erkannt worden sind,
+   muss das als Gruppe angezeigt werden"): mehrere kleine Avatare statt einem
+   grossen, damit die Kachel auf einen Blick als Gruppe lesbar ist. */
+.pk-gruppe { border-left-color: var(--border-strong); }
+.pk-av-klein { width: 38px; height: 38px; font-size: 13px; }
+.pk-gruppe .pk-av-klein + .pk-av-klein { margin-left: -10px;
+    box-shadow: 0 0 0 2px var(--surface); }
 
 /* Nicht zugeordnete Gesichter INNERHALB eines erkannten Durchgangs: Fussnote, keine Warnung —
    das sind dieselben Leute, nur schlecht getroffen. Nur ein Durchgang ganz ohne Bestaetigung
@@ -384,6 +391,20 @@ footer a { color: var(--dim); }
 }
 @media (max-width: 560px) {
   .tabelle-wrap { overflow-x: auto; }
+  /* .313 Events-Tabelle am Handy (Tester-Fund 21.08.): statt seitlich zu scrollen
+     (Crop + GT-Spalte lagen bei x>660 ausserhalb des Schirms) wird jede Zeile eine
+     Karte — gleicher DOM, nur CSS. Der Kopf entfaellt, die Zellen stehen
+     untereinander, die Urteilsknoepfe bekommen 44-px-Tipp-Ziele. */
+  .tabelle-wrap.ereignisse table, .tabelle-wrap.ereignisse tbody,
+  .tabelle-wrap.ereignisse tr, .tabelle-wrap.ereignisse td { display: block; width: 100%; box-sizing: border-box; }
+  .tabelle-wrap.ereignisse thead { display: none; }
+  .tabelle-wrap.ereignisse tr { border-bottom: 2px solid var(--border); padding: 6px 0 10px; }
+  .tabelle-wrap.ereignisse td { border: 0; padding: 3px 4px; }
+  .tabelle-wrap.ereignisse td:first-child { font-weight: 600; }
+  .tabelle-wrap.ereignisse td[data-label]::before { content: attr(data-label) ": "; color: var(--dim); font-size: 12px; }
+  .tabelle-wrap.ereignisse td[data-label]:first-child::before { content: ""; }
+  .gt-opak { opacity: .6; cursor: help; text-decoration: line-through; }
+  .tabelle-wrap.ereignisse .gtl .gtb { min-height: 44px; padding: 8px 12px; font-size: 14px; }
   .pcard { width: 46%; }
   nav .inner { gap: 2px 4px; font-size: 13px; }
   nav a { padding: 4px 8px; }
@@ -576,6 +597,17 @@ a.pchip:hover, a.badge.warn:hover { filter: brightness(1.15); }
 .pass-thumb-schwach{opacity:.5}
 .pass-thumb-schwach:hover{opacity:.9}
 .pass-thumbs-rest{align-self:center;font-size:11px;color:var(--dim);padding:0 6px}
+/* .32x: mehrere Personen je Durchgang gleichwertig (User 22.08.) --------------------- */
+.pass-personen{display:flex;gap:10px;flex-wrap:wrap}
+.pass-person{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:2px;
+  width:110px;font-size:12px;color:inherit;text-decoration:none}
+.pass-person img{width:110px;height:110px;object-fit:cover;border-radius:8px;display:block}
+.pass-person .pass-bild-leer{width:110px;height:110px}
+.pass-person-name{max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pass-person-wert{color:var(--dim);font-size:11px}
+.pass-reihe{margin-top:12px}
+.pass-reihe-kopf{display:flex;align-items:center;gap:10px;font-size:13px;flex-wrap:wrap}
+.pass-reihe .pass-thumbs{margin-top:6px}
 /* --- Areas Stufe 1 v2 (30.07.): Chip-Leiste (reine Links) + Dropdown-Verwaltung ----- */
 .arbar{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
 .arbar .gtb{font-size:13px;padding:4px 10px}

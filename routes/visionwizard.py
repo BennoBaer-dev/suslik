@@ -18,16 +18,32 @@ Der Wizard fuehrt in vier sichtbaren Schritten:
 Kontrakt wie alle routes-Module: reiner Renderer, Daten als Parameter, kein
 Dienst-Import. Die Bilder kommen ueber die BESTEHENDE Crop-Route des
 Person-Learn-Bereichs — dafuer muss kein zweiter Auslieferungsweg entstehen.
+
+Sprach-Stufe 2 (Tranche C, konzept_sprache.md v2): sichtbare Texte aus
+core/sprache.t() — BYTE-TREU (Harnisch tools/harnisch_sprache.py). Die
+§8.1-Saetze (<b>not</b>-Groessensatz, Forget-them-Link, does-not-fit-Absatz)
+sind seit Stufe 3 t_html-Schluessel. Verbleibende Grenzen (Kommentar je
+Fundstelle): Datumsformat %Y-%m-%d (B19), begruendung/auffrischung kommen
+fertig aus core/visiongalerie bzw. vom Handler (zentrale Quellen).
+Wiederverwendet: vision.zeit.nie, vision.galerien.keine,
+vision.galerien.zahl (byte-identische Texte des Vision-Reiters).
 """
 import html
 import json
 import time
 import urllib.parse
 
+from core.sprache import t, t_html
+# Tranche D (Kennung/Anzeige-Trennung 3b): Reihen-ANZEIGE aus Schluesseln;
+# die Kennungen (vorn/seitlich/hinten/unklar) und der reihen_text-Daten-
+# Vertrag der Aufrufer bleiben unveraendert.
+from webui.bausteine import reihen_wort
+
 
 def _zeit(ts):
+    # Datumsformat bleibt in der Route (B19-Stufe); nur das Wort ist Text.
     if not ts:
-        return "never"
+        return t("vision.zeit.nie")
     return time.strftime("%Y-%m-%d %H:%M", time.localtime(float(ts)))
 
 
@@ -73,16 +89,14 @@ STIL = """<style>
 
 
 def _kopf(schritt):
-    schritte = ("pick a person", "pick a size", "check the proposal", "approve")
+    schritte = (t("visionwizard.schritt.person"), t("visionwizard.schritt.groesse"),
+                t("visionwizard.schritt.vorschlag"), t("visionwizard.schritt.abnahme"))
     zeile = " &rarr; ".join(
         (f"<b>{i + 1} {s}</b>" if i == schritt else
          f'<span class="dim">{i + 1} {s}</span>')
         for i, s in enumerate(schritte))
-    return ("<h2>Build a gallery</h2>"
-            '<p class="sub">A gallery is a small grid of pictures of one '
-            "person &mdash; that is what the vision model compares a new "
-            "picture against. It is built from body images you already "
-            "approved; nothing new is recorded and no video is opened.</p>"
+    return (f"<h2>{t('visionwizard.titel')}</h2>"
+            f'<p class="sub">{t("visionwizard.kopf.satz")}</p>'
             f'<div class="card">{zeile}</div>')
 
 
@@ -90,31 +104,29 @@ def _personen(deckung, galerien, gewaehlt, rt):
     karten = []
     for d in deckung:
         g = (galerien or {}).get(d["person"])
-        stand = (f'gallery approved {_zeit(g.get("abnahme_ts"))}' if g
-                 else "no gallery yet")
+        # "no gallery yet" wiederverwendet (byte-identisch zum Vision-Reiter).
+        stand = (t("visionwizard.person.stand_gut",
+                   zeit=_zeit(g.get("abnahme_ts"))) if g
+                 else t("vision.galerien.keine"))
         reihen = " &middot; ".join(
-            f"{html.escape(rt.get(r, r))} {d['je_reihe'].get(r, 0)}"
+            f"{html.escape(reihen_wort(r))} {d['je_reihe'].get(r, 0)}"
             for r in ("vorn", "seitlich", "hinten"))
         if not d["max_groesse"]:
             karten.append(
                 f'<div class="vw-pk" style="opacity:.6"><b>{html.escape(d["person"])}</b>'
-                f'<span class="vw-pz">{d["gesamt"]} usable images &mdash; not '
-                "enough for a gallery yet. Run Person learn on more "
-                f'walk-throughs.<br>{reihen}</span></div>')
+                f'<span class="vw-pz">{t("visionwizard.person.zu_wenig", n=d["gesamt"])}'
+                f'<br>{reihen}</span></div>')
             continue
+        # Zahlen-Zeile wiederverwendet (vision.galerien.zahl, byte-identisch).
         karten.append(
             f'<button class="vw-pk{" on" if d["person"] == gewaehlt else ""}" '
             f'onclick="location.href=\'/vision/galerie?person='
             f'{urllib.parse.quote(d["person"])}\'">'
             f'<b>{html.escape(d["person"])}</b>'
-            f'<span class="vw-pz">{stand}<br>{d["gesamt"]} usable images '
-            f"&middot; {reihen}<br>largest grid this material supports: "
-            f'{d["max_groesse"]}</span></button>')
-    return ('<div class="card"><b>1 &middot; Which person</b>'
-            '<div class="dim">Only people with a learned body model appear '
-            "here, and the counts are the images that pass the size filter "
-            "(at least 350 pixels tall) &mdash; not everything that was ever "
-            "harvested.</div>"
+            f'<span class="vw-pz">{stand}<br>{t("vision.galerien.zahl", n=d["gesamt"], reihen=reihen)}'
+            f'<br>{t("visionwizard.person.max_gitter", n=d["max_groesse"])}</span></button>')
+    return (f'<div class="card"><b>{t("visionwizard.person.titel")}</b>'
+            f'<div class="dim">{t("visionwizard.person.satz")}</div>'
             f'<div class="vw-p">{"".join(karten)}</div></div>')
 
 
@@ -122,39 +134,34 @@ def _groessen(groessen, gewaehlt, empfehlung, person):
     knoepfe = "".join(
         f'<a class="gtb{" on" if g == gewaehlt else ""}" '
         f'href="/vision/galerie?person={urllib.parse.quote(person)}&groesse={g}">'
-        f"{g} cells</a> " for g in groessen)
-    return ('<div class="card"><b>2 &middot; How many pictures</b>'
+        f'{t("visionwizard.groesse.zellen", n=g)}</a> ' for g in groessen)
+    # Stufe 3 (t_html): <b>not</b> mitten im Erklaersatz; {empfehlung}
+    # escapt t_html selbst (Zahl aus dem Kurator).
+    return (f'<div class="card"><b>{t("visionwizard.groesse.titel")}</b>'
             f"<div>{knoepfe}</div>"
-            '<div class="dim">Measured, honestly: the size was <b>not</b> the '
-            "lever in any of the cases we ran &mdash; a bigger grid did not "
-            "make the answers better, and it did not make them worse either. "
-            "Take the larger one if your material carries it "
-            f"(here: {empfehlung}), the smaller one if it does not. Both cost "
-            "about the same, because the canvas is what costs tokens, not the "
-            "number of cells.</div></div>")
+            f'<div class="dim">{t_html("visionwizard.groesse.satz", empfehlung=empfehlung)}</div></div>')
 
 
 def _zelle(z, i, rt):
     if not z:
-        return ('<div class="vw-z leer">no more images for this row &mdash; '
-                "and nothing left to borrow either</div>")
+        return f'<div class="vw-z leer">{t("visionwizard.zelle.leer")}</div>'
     # Die Begruendungszeile kommt FERTIG aus core/visiongalerie (Kurator, .161)
     # und wird hier nur ausgegeben. Sie wird NICHT hier zusammengesetzt: derselbe
     # Satz an zwei Stellen zu bauen (Server und Browser) hat in diesem Projekt
     # schon einmal zwei Fassungen erzeugt. Faellt sie aus, bleibt die alte
     # Kurzfassung als Rueckfallebene.
     meta = html.escape(str(z.get("begruendung") or "")) or " &middot; ".join(
-        html.escape(str(t)) for t in (z.get("tag") or "?",
+        html.escape(str(x)) for x in (z.get("tag") or "?",
                                       z.get("camera") or "?",
                                       f"{z.get('hoehe')} px"))
     geliehen = ""
     if z.get("geliehen_aus"):
-        geliehen = (f'<div class="vw-warn">from the '
-                    f'{html.escape(rt.get(z["geliehen_aus"], z["geliehen_aus"]))}'
-                    " row</div>")
+        geliehen = ('<div class="vw-warn">'
+                    f'{t("visionwizard.zelle.geliehen", reihe=html.escape(reihen_wort(z["geliehen_aus"])))}'
+                    "</div>")
     return (f'<div class="vw-z{" geliehen" if z.get("geliehen_aus") else ""}" '
             f'id="vwz_{i}">'
-            f'<button class="vw-x" onclick="vwWeg({i})">does not fit</button>'
+            f'<button class="vw-x" onclick="vwWeg({i})">{t("visionwizard.zelle.knopf_weg")}</button>'
             f'<div class="vw-b"><img loading="lazy" '
             f'src="{_bild_src(z["lauf_id"], z["datei"])}"></div>'
             f'<div class="vw-m">{meta}{geliehen}</div></div>')
@@ -173,55 +180,38 @@ def _vorschlag(v, person, abgelehnt_n, reihen_text):
         anmerkung = []
         if zl["geliehen"]:
             anmerkung.append(
-                f'<span class="vw-warn">{zl["geliehen"]} filled from another '
-                "view &mdash; there were not enough clean "
-                f'{reihen_text.get(zl["reihe"], zl["reihe"])} images</span>')
+                f'<span class="vw-warn">{t("visionwizard.reihe.geliehen", n=zl["geliehen"], reihe=reihen_wort(zl["reihe"]))}</span>')
         if zl["luecken"]:
-            anmerkung.append(f'<span class="vw-warn">{zl["luecken"]} cell(s) '
-                             "could not be filled at all</span>")
+            anmerkung.append(f'<span class="vw-warn">{t("visionwizard.reihe.luecken", n=zl["luecken"])}</span>')
         # Die Spreizung steht als ZAHL da (Kurator .161): der Nutzer sieht ohne
         # Nachzaehlen, ob die Reihe wirklich verschiedene Tage und Kameras zeigt
         # — das ist die Eigenschaft, die der gemessene Prompt den Modellen
         # zusagt ("taken on different days").
         spreiz = ""
         if zl.get("tage") or zl.get("kameras"):
-            spreiz = (f'<span class="dim">{len(zl.get("tage") or [])} day(s), '
-                      f'{len(zl.get("kameras") or [])} camera(s)</span>')
+            spreiz = (f'<span class="dim">{t("visionwizard.reihe.spreizung", tage=len(zl.get("tage") or []), kameras=len(zl.get("kameras") or []))}</span>')
         stuecke.append(
             f'<div class="vw-reihe"><div class="vw-kopf">'
-            f'<b>{reihen_text.get(zl["reihe"], zl["reihe"])} view</b>'
-            f'<span class="dim">{zl["eigene"]} of {len(zl["zellen"])} from this '
-            f"view</span>{spreiz}{' '.join(anmerkung)}</div>"
+            f'<b>{t("visionwizard.reihe.kopf", reihe=reihen_wort(zl["reihe"]))}</b>'
+            f'<span class="dim">{t("visionwizard.reihe.eigene", eigene=zl["eigene"], gesamt=len(zl["zellen"]))}</span>{spreiz}{" ".join(anmerkung)}</div>'
             f'<div class="vw-raster">{"".join(zellen)}</div></div>')
     gedaechtnis = ""
     if abgelehnt_n:
-        gedaechtnis = ('<div class="dim">' + str(abgelehnt_n) + " image(s) you "
-                       "rejected earlier are remembered and will not come back. "
-                       '<a href="#" onclick="vwVergessen();return false">Forget '
-                       "them</a> if you want to start over.</div>")
-    return ('<div class="card"><b>3 &middot; Does this fit?</b>'
-            '<div class="dim">One row per view: front, side, back. Pictures are '
-            "picked by size and sharpness, how clearly the eyes and nose are "
-            "there, how much light is blown out, how much of the crop is "
-            "actually the person &mdash; and spread over different days, "
-            "events and cameras. The line under each picture says what was "
-            "measured on it. Click <b>does not fit</b> on anything unusable "
-            "&mdash; the next best picture of the SAME view moves up. This "
-            "does not touch your learning material; it only says &bdquo;not as "
-            "a gallery cell&ldquo;.</div>"
-            '<div class="dim">Honest limit: those are measurements of the '
-            "picture, not of the moment. A picture where someone is tying "
-            "their hair or bending down looks fine to every one of them "
-            "&mdash; that is what your eyes are for.</div>"
+        # Stufe 3 (t_html): der Forget-them-Satz mit <a>-Link mitten im
+        # Satz (onclick-Attribut ist Teil der gepinnten Tag-Folge).
+        gedaechtnis = ('<div class="dim">'
+                       + t("visionwizard.vorschlag.abgelehnt", n=abgelehnt_n)
+                       + f' {t_html("visionwizard.vorschlag.vergessen_satz")}</div>')
+    # Stufe 3 (t_html): <b>does not fit</b> mitten im Erklaerabsatz —
+    # zitiert visionwizard.zelle.knopf_weg (Kopplung am Schluessel).
+    return (f'<div class="card"><b>{t("visionwizard.vorschlag.titel")}</b>'
+            f'<div class="dim">{t_html("visionwizard.vorschlag.satz")}</div>'
+            f'<div class="dim">{t("visionwizard.vorschlag.grenze")}</div>'
             + gedaechtnis + "".join(stuecke)
             + '<div style="margin-top:14px">'
-            '<button class="gtb on" onclick="vwAbnehmen(this)">Approve this '
-            "gallery</button> "
+            f'<button class="gtb on" onclick="vwAbnehmen(this)">{t("visionwizard.vorschlag.knopf")}</button> '
             '<span id="vw-status" class="dim"></span></div>'
-            '<div class="dim" style="margin-top:6px">Approving copies these '
-            "pictures into the gallery folder. From then on the gallery is "
-            "fixed: deleting an original later cannot punch holes into it "
-            "&mdash; suslik only asks you to approve it again.</div></div>"
+            f'<div class="dim" style="margin-top:6px">{t("visionwizard.vorschlag.kopie_satz")}</div></div>'
             f'<script>const VW_PERSON = {json.dumps(person)};'
             f'const VW_GROESSE = {v["groesse"]};'
             f'const VW_ZELLEN = {json.dumps(flach)};</script>')
@@ -237,22 +227,19 @@ def _fertig(g, pruef, person, rt):
             f'src="/vision/galerie/bild/{urllib.parse.quote(person)}/'
             f'{urllib.parse.quote(e["datei"])}"></div>'
             f'<div class="vw-m">'
-            f'{html.escape(rt.get(e.get("reihe"), e.get("reihe") or ""))}'
-            f'{" &middot; borrowed" if e.get("geliehen_aus") else ""}</div></div>')
+            f'{html.escape(reihen_wort(e["reihe"]) if e.get("reihe") else "")}'
+            f'{t("visionwizard.fertig.geliehen") if e.get("geliehen_aus") else ""}</div></div>')
     warnung = ""
     if pruef.get("status") != "gut":
         warnung = f'<div class="vw-warn">{html.escape(pruef.get("text") or "")}</div>'
-    return ('<div class="card"><b>Approved gallery</b>'
-            f'<div>{g.get("groesse")} cells, approved '
-            f'{_zeit(g.get("abnahme_ts"))}.</div>' + warnung
-            + '<div class="dim">These are copies inside the gallery folder, '
-            "with the origin of every picture (run, file, checksum) written "
-            "next to them. They travel with your backup.</div>"
+    return (f'<div class="card"><b>{t("visionwizard.fertig.titel")}</b>'
+            f'<div>{t("visionwizard.fertig.stand", zellen=g.get("groesse"), zeit=_zeit(g.get("abnahme_ts")))}</div>' + warnung
+            + f'<div class="dim">{t("visionwizard.fertig.satz")}</div>'
             f'<div class="vw-raster">{"".join(zeilen)}</div>'
             '<div style="margin-top:10px"><a class="gtb" '
             f'href="/vision/galerie?person={urllib.parse.quote(person)}&neu=1">'
-            "Build it again from current material</a> "
-            '<a class="gtb" href="/vision">Back to Vision detect</a></div>'
+            f'{t("visionwizard.fertig.knopf_neu")}</a> '
+            f'<a class="gtb" href="/vision">{t("visionwizard.fertig.knopf_zurueck")}</a></div>'
             "</div>")
 
 
@@ -268,12 +255,11 @@ def seite(deckung, galerien, person="", groesse=None, vorschlag=None,
              _personen(deckung, galerien, person, rt)]
     if auffrischung:
         # Angebot, kein Automatismus (§6.6): neue Lernlaeufe tauschen NIE still
-        # eine abgenommene Galerie aus.
+        # eine abgenommene Galerie aus. Der auffrischung-Text kommt fertig vom
+        # Handler (zentrale Quelle, eigene Tranche).
         teile.append('<div class="card" style="border-left-color:var(--warn)">'
-                     f"<b>New material available</b><div>{auffrischung}</div>"
-                     '<div class="dim">Nothing changes on its own &mdash; the '
-                     "gallery you approved stays exactly as it is until you "
-                     "build and approve a new one.</div></div>")
+                     f"<b>{t('visionwizard.neu.titel')}</b><div>{auffrischung}</div>"
+                     f'<div class="dim">{t("visionwizard.neu.satz")}</div></div>')
     if fertig:
         teile.append(_fertig(fertig, pruefung or {}, person, rt))
         return "".join(teile)

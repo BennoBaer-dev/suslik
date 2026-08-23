@@ -19,10 +19,21 @@ Gesicht, Koerper und Vision nebeneinander:
 Die Seite hat ZWEI Einstiege (Kopfleiste + Vision-Reiter) und ist EINE
 Implementierung. Kontrakt wie alle routes-Module: reiner Renderer, Daten als
 Parameter, kein Dienst-Import.
+
+Sprach-Stufe 2 (Tranche C, konzept_sprache.md v2): sichtbare Texte aus
+core/sprache.t() — BYTE-TREU (Harnisch tools/harnisch_sprache.py). Die
+beiden §8.1-Saetze (<b>face/person/vision</b>-Kopf, Vision-Einrichten-Link)
+sind seit Stufe 3 t_html-Schluessel. Verbleibende Grenzen (Kommentar je
+Fundstelle): Datumsformate %d.%m./%H:%M:%S (B19), Grund-/offen-Texte aus
+core/vision bzw. core/visionurteil (zentrale Quellen). Die frueher modulweite
+KOSTEN-Konstante ist nach §8.12 (t() nie auf Modulebene) in den
+seite()-Aufruf gewandert — Muster "Funktion statt Konstante".
 """
 import html
 import time
 import urllib.parse
+
+from core.sprache import t, t_html
 
 from core import vision as _vis   # nur die Klartext-Tabelle der Gruende (§8):
 #   reine Daten, kein Dienst-Zustand — der routes-Kontrakt bleibt gewahrt.
@@ -122,33 +133,24 @@ STIL = """<style>
 
 
 def _zeit(ts, form="%d.%m. %H:%M"):
+    # Datumsformate bleiben in der Route (B19-Stufe); "—" ist sprachneutral.
     if not ts:
         return "—"
     return time.strftime(form, time.localtime(float(ts)))
 
 
-KOSTEN = ("A test run costs real requests, exactly like normal operation: the "
-          "whole walk-through goes in as one candidate grid, and each compared "
-          "pair of galleries costs two requests, because every question is "
-          "asked again with the galleries swapped. It counts as a manual "
-          "click, so it does not eat your daily limit &mdash; but on a paid "
-          "endpoint it is money, and on a local CPU model it takes minutes.")
-
-
 def _kopf(kosten):
-    return ("<h2>Recognition test</h2>"
-            '<p class="sub">Pick one real walk-through and see what all three '
-            "recognition paths make of it, side by side: <b>face</b>, "
-            "<b>person</b> and <b>vision</b>. Face and person are read from "
-            "what was recorded at the time &mdash; nothing is recomputed. Vision "
-            "runs now, through exactly the same path it uses in normal "
-            f"operation.</p><div class=\"card\">{kosten}</div>")
+    # Stufe 3 (t_html): der erste Satz mit <b>face/person/vision</b>.
+    return (f"<h2>{t('visiontest.titel')}</h2>"
+            f'<p class="sub">{t_html("visiontest.kopf.wege_satz")} '
+            f'{t("visiontest.kopf.satz")}'
+            f"</p><div class=\"card\">{kosten}</div>")
 
 
 def _wer(p):
     """Wer in diesem Durchgang erkannt wurde &mdash; EINE Formulierung fuer die
     Kachel und fuer die Kopfzeile des gewaehlten Durchgangs."""
-    return ", ".join(sorted(p.get("personen") or [])) or "nobody recognized"
+    return ", ".join(sorted(p.get("personen") or [])) or t("visiontest.wer.niemand")
 
 
 def _passliste(passe, gewaehlt):
@@ -169,36 +171,32 @@ def _passliste(passe, gewaehlt):
             f'{urllib.parse.quote(p["pass_key"])}\'">'
             f'<b>{_zeit(p.get("start"))}</b>'
             f'<small>{html.escape(_wer(p))}</small>'
-            f'<small>{p.get("events") or 0} events &middot; '
-            f'{p.get("kameras") or 0} camera(s)'
-            + (" &middot; vision done" if p.get("vision") else "")
+            f'<small>{t("visiontest.wahl.kachel_zahlen", events=p.get("events") or 0, kameras=p.get("kameras") or 0)}'
+            + (t("visiontest.wahl.vision_fertig") if p.get("vision") else "")
             + "</small></button>")
     if not karten:
-        return ('<div class="card"><b>1 &middot; Which walk-through</b>'
-                '<div class="dim">No passes recorded yet. As soon as somebody '
-                "walks across the property, they appear here.</div></div>")
+        return (f'<div class="card"><b>{t("visiontest.wahl.titel")}</b>'
+                f'<div class="dim">{t("visiontest.wahl.leer")}</div></div>')
     gew = next((p for p in passe or [] if p["pass_key"] == gewaehlt), None)
     if gew:
         # Die schmale Kopfzeile des gewaehlten Durchgangs. Genau die Angaben der
         # Kachel, nur in einer Zeile — nichts wird hier neu behauptet.
         kopf = (f'<b>{_zeit(gew.get("start"))} &middot; '
                 f'{html.escape(_wer(gew))}</b>'
-                f'<span class="rt-meta">{gew.get("events") or 0} event(s) '
-                f'&middot; {gew.get("kameras") or 0} camera(s)</span>'
-                '<span class="rt-mehr">choose another walk-through</span>')
+                f'<span class="rt-meta">{t("visiontest.wahl.kopf_zahlen", events=gew.get("events") or 0, kameras=gew.get("kameras") or 0)}</span>'
+                f'<span class="rt-mehr">{t("visiontest.wahl.anderer")}</span>')
     elif gewaehlt:
         # Gewaehlt, aber nicht in der Liste (aelter als die gezeigten Tage):
         # dann behauptet die Kopfzeile nichts ueber ihn.
-        kopf = ('<b>1 &middot; Which walk-through</b>'
-                '<span class="rt-mehr">choose another walk-through</span>')
+        kopf = (f'<b>{t("visiontest.wahl.titel")}</b>'
+                f'<span class="rt-mehr">{t("visiontest.wahl.anderer")}</span>')
     else:
-        kopf = ('<b>1 &middot; Choose a walk-through</b>'
-                f'<span class="rt-meta">{len(karten)} recent pass(es)</span>')
+        kopf = (f'<b>{t("visiontest.wahl.titel_offen")}</b>'
+                f'<span class="rt-meta">{t("visiontest.wahl.anzahl", n=len(karten))}</span>')
     return ('<div class="card">'
             f'<details class="rt-wahl"{"" if gewaehlt else " open"}>'
             f"<summary>{kopf}</summary>"
-            '<div class="dim">The most recent passes, grouped exactly like on '
-            "the Today page.</div>"
+            f'<div class="dim">{t("visiontest.wahl.satz")}</div>'
             f'<div class="rt-p">{"".join(karten)}</div>'
             "</details></div>")
 
@@ -228,20 +226,22 @@ def _gesichtskacheln(g):
         + urllib.parse.quote(str(b.get("eid") or "")) + "/"
         + urllib.parse.quote(str(b.get("datei") or "")) + '" alt="">'
         "<figcaption>"
-        + (html.escape(str(b["person"])) if b.get("person") else "not matched")
+        + (html.escape(str(b["person"])) if b.get("person")
+           else t("visiontest.gesicht.kein_match"))
         + (f' {b["score"]:.2f}' if isinstance(b.get("score"), (int, float))
            else "")
         + "</figcaption></figure>"
         for b in zeigen if b.get("eid") and b.get("datei"))
     hinweise = []
     if len(kacheln) > len(zeigen):
-        hinweise.append(f"showing {len(zeigen)} of {len(kacheln)} picture(s)")
+        hinweise.append(t("visiontest.gesicht.gezeigt",
+                          gezeigt=len(zeigen), gesamt=len(kacheln)))
     if unbek > ohne_name:
         fehlt = unbek - ohne_name
-        hinweise.append(f"{fehlt} of the {unbek} unmatched event(s) kept no "
-                        "picture")
+        hinweise.append(t("visiontest.gesicht.ohne_bild",
+                          fehlt=fehlt, unbek=unbek))
     if not kacheln:
-        hinweise.append("no face picture was kept for this pass")
+        hinweise.append(t("visiontest.gesicht.kein_bild"))
     return ((f'<div class="rt-b">{bilder}</div>' if bilder else "")
             + (f'<div class="rt-q">{" &middot; ".join(hinweise)}</div>'
                if hinweise else ""))
@@ -252,18 +252,18 @@ def _gesicht(g):
         erg = ", ".join(html.escape(p["person"]) for p in g["personen"])
         kl = "ja"
     else:
-        erg, kl = '<span class="dim">no known face</span>', "nein"
+        erg, kl = f'<span class="dim">{t("visiontest.gesicht.keines")}</span>', "nein"
+    # {best} vorformatiert (:.2f) — Formatspezifika nie in Werte (§8.8).
     li = "".join(
-        f'<li>{html.escape(p["person"])} &middot; {p.get("events")} event(s)'
-        + (f' &middot; best {p["best"]:.2f}' if isinstance(p.get("best"), float)
+        f'<li>{t("visiontest.gesicht.zeile", person=html.escape(p["person"]), events=p.get("events"))}'
+        + (t("visiontest.gesicht.best", best=f'{p["best"]:.2f}')
+           if isinstance(p.get("best"), float)
            else "") + "</li>" for p in g.get("personen") or [])
     rest = ""
     if g.get("unbekannt"):
-        rest = (f'<div class="rt-q">{g["unbekannt"]} event(s) with a face that '
-                "was not matched</div>")
-    return (f'<div class="rt-s {kl}"><h3>Face</h3>'
-            '<div class="rt-q">embedding comparison against your reference '
-            "faces &mdash; from the record of this pass</div>"
+        rest = (f'<div class="rt-q">{t("visiontest.gesicht.unbekannt", n=g["unbekannt"])}</div>')
+    return (f'<div class="rt-s {kl}"><h3>{t("visiontest.gesicht.titel")}</h3>'
+            f'<div class="rt-q">{t("visiontest.gesicht.quelle")}</div>'
             f'<div class="rt-erg">{erg}</div>'
             f'<ul class="rt-liste">{li}</ul>{rest}'
             + _gesichtskacheln(g) + "</div>")
@@ -271,21 +271,21 @@ def _gesicht(g):
 
 def _koerper(k, pass_key):
     if k.get("treffer"):
-        namen = sorted({t["person"] for t in k["treffer"]})
+        namen = sorted({tr["person"] for tr in k["treffer"]})
         erg, kl = ", ".join(html.escape(n) for n in namen), "ja"
     elif k.get("personen"):
-        erg = ('<span class="dim">candidates, none above the rule: '
-               + ", ".join(f"{html.escape(n)} ({c})"
-                           for n, c in sorted(k["personen"].items())) + "</span>")
+        erg = ('<span class="dim">'
+               + t("visiontest.koerper.kandidaten",
+                   liste=", ".join(f"{html.escape(n)} ({c})"
+                                   for n, c in sorted(k["personen"].items())))
+               + "</span>")
         kl = "nein"
     else:
-        erg, kl = '<span class="dim">nothing judged</span>', "nein"
+        erg, kl = f'<span class="dim">{t("visiontest.koerper.nichts")}</span>', "nein"
     li = "".join(
-        f'<li>{html.escape(str(b.get("klasse") or "?"))} &middot; '
-        f'score {b.get("score")} of {b.get("schwelle")} &middot; '
-        f'{html.escape(str(b.get("quelle") or ""))}'
-        + ("" if b.get("bild") else ' &middot; <span class="dim">image '
-           "expired</span>") + "</li>"
+        f'<li>{t("visiontest.koerper.zeile", klasse=html.escape(str(b.get("klasse") or "?")), score=b.get("score"), schwelle=b.get("schwelle"), quelle=html.escape(str(b.get("quelle") or "")))}'
+        + ("" if b.get("bild") else
+           f' &middot; <span class="dim">{t("visiontest.koerper.bild_weg")}</span>') + "</li>"
         for b in (k.get("bilder") or [])[:12])
     bilder = "".join(
         '<figure><img loading="lazy" src="/person/kontrolle/bild/'
@@ -296,9 +296,8 @@ def _koerper(k, pass_key):
     # SPALTEN-NAME (User 09.08.: "face, person und vision"). Nur die
     # ANZEIGE heisst so; die Codebezeichner bleiben `_koerper`/`koerper`, damit
     # der Bezug zum Koerper-Modell im Quelltext eindeutig bleibt.
-    return (f'<div class="rt-s {kl}"><h3>Person</h3>'
-            '<div class="rt-q">DINOv2 embedding + classifier on the judged '
-            "images of this pass</div>"
+    return (f'<div class="rt-s {kl}"><h3>{t("visiontest.koerper.titel")}</h3>'
+            f'<div class="rt-q">{t("visiontest.koerper.quelle")}</div>'
             f'<div class="rt-erg">{erg}</div>'
             f'<ul class="rt-liste">{li}</ul>'
             f'<div class="rt-b">{bilder}</div></div>')
@@ -319,9 +318,9 @@ def _log(schritte, offen):
         zeilen.append(f'<li><span class="rt-uhr">{html.escape(uhr)}</span>'
                       f'{html.escape(str(e.get("text") or ""))}</li>')
     warte = ('<li class="rt-warte"><span class="rt-uhr">&middot;&middot;&middot;'
-             "</span>waiting for the model &mdash; this page refreshes itself"
+             f'</span>{t("visiontest.log.warte")}'
              "</li>" if offen else "")
-    return ('<div class="rt-log"><b>What happened</b>'
+    return (f'<div class="rt-log"><b>{t("visiontest.log.titel")}</b>'
             f'<ol class="rt-logl">{"".join(zeilen)}{warte}</ol></div>')
 
 
@@ -349,17 +348,16 @@ def _gitter(z, pass_key):
             '<figure class="rt-gv"><img loading="lazy" '
             'src="/person/kontrolle/bild/'
             + urllib.parse.quote(pass_key) + "/" + urllib.parse.quote(str(gd))
-            + '" alt="the candidate grid of this run">'
-            "<figcaption>the picture the model was actually shown</figcaption>"
+            + f'" alt="{t("visiontest.gitter.alt")}">'
+            f'<figcaption>{t("visiontest.gitter.bildunterschrift")}</figcaption>'
             "</figure>")
     bilder = "".join(
         '<figure><img loading="lazy" src="/person/kontrolle/bild/'
         + urllib.parse.quote(pass_key) + "/" + urllib.parse.quote(b["datei"])
         + f'"><figcaption>{b.get("hoehe")} px</figcaption></figure>'
         for b in zellen[:12] if b.get("datei"))
-    return (f'<div class="rt-q">candidate grid: {n} cell(s) from this '
-            "walk-through, asked as ONE picture"
-            + (f" ({luecken} cell(s) left empty)" if luecken else "")
+    return (f'<div class="rt-q">{t("visiontest.gitter.zeile", n=n)}'
+            + (t("visiontest.gitter.luecken", n=luecken) if luecken else "")
             + f"</div>{voll}"
             + f'<div class="rt-b">{bilder}</div>')
 
@@ -367,14 +365,14 @@ def _gitter(z, pass_key):
 def _runden(z):
     """Die gefahrenen Vergleiche — je Runde ein Paar, zwei Anfragen."""
     zeilen = []
+    # Grund-Klartexte kommen aus core/vision.grund_text (zentrale Quelle).
     for r in z.get("runden") or []:
         wer = {"A": r.get("a"), "B": r.get("b")}.get(r.get("wahl"))
         erg = (html.escape(str(wer)) if wer and not r.get("kein_votum")
-               else "no vote &mdash; "
-               + html.escape(_vis.grund_text(r.get("grund"))))
+               else t("visiontest.runden.kein_votum",
+                      grund=html.escape(_vis.grund_text(r.get("grund")))))
         dauer = f' &middot; {r["dauer_s"]} s' if r.get("dauer_s") else ""
-        zeilen.append(f'<li>{html.escape(str(r.get("a")))} vs '
-                      f'{html.escape(str(r.get("b")))} &middot; {erg}{dauer}'
+        zeilen.append(f'<li>{t("visiontest.runden.paar", a=html.escape(str(r.get("a"))), b=html.escape(str(r.get("b"))))} &middot; {erg}{dauer}'
                       "</li>")
     return f'<ul class="rt-liste">{"".join(zeilen)}</ul>'
 
@@ -406,25 +404,15 @@ def _nachanalyse_kopf(sicht, nachanalyse):
     n = dict(nachanalyse or {})
     if n.get("laeuft"):
         return ('<div class="rt-kopfknopf laeuft">'
-                '<b><span class="rt-lauf"></span>Re-analysing this '
-                "walk-through</b>"
-                f'<div class="rt-q">{n.get("fertig", 0)} of '
-                f'{n.get("gesamt", 0)} events done &mdash; the judged images '
-                "are collected along the way, this takes a few minutes. It is "
-                "quiet: no alerts, no notifications. This page refreshes "
-                "itself.</div></div>")
+                f'<b><span class="rt-lauf"></span>{t("visiontest.nach.laeuft")}</b>'
+                f'<div class="rt-q">{t("visiontest.nach.stand", fertig=n.get("fertig", 0), gesamt=n.get("gesamt", 0))}</div></div>')
     if not _fehlt_material(sicht):
         return ""
     return ('<div class="rt-kopfknopf">'
-            '<b>Nothing was kept for this walk-through</b>'
-            '<div class="rt-q">Analysing it again brings the judged images '
-            "back &mdash; and that fills all three paths, not just vision. It "
-            "runs the ordinary analysis over the events of this pass once "
-            "more: quiet, without alerts, and it waits for live recognition "
-            "instead of pushing it aside.</div>"
+            f'<b>{t("visiontest.nach.titel")}</b>'
+            f'<div class="rt-q">{t("visiontest.nach.satz")}</div>'
             '<div style="margin-top:8px">'
-            '<button class="gtb on" onclick="rtNachanalyse(this)">Analyse this '
-            "walk-through again</button> "
+            f'<button class="gtb on" onclick="rtNachanalyse(this)">{t("visiontest.nach.knopf")}</button> '
             '<span id="rt-nach-status" class="dim"></span></div></div>')
 
 
@@ -456,23 +444,14 @@ def _felder(lf):
     v = max(1, min(v_max, int(lf.get("voten") or 1)))
     dl = " checked" if lf.get("doppellauf", True) else ""
     return (f'<div class="rt-felder">'
-            f'<label>grid cells for this run'
+            f'<label>{t("visiontest.felder.zellen")}'
             f'<input type="number" id="rt-zellen" min="1" max="{z_max}" '
             f'value="{z}"></label>'
-            f'<label>confirmations needed for this run'
+            f'<label>{t("visiontest.felder.voten")}'
             f'<input type="number" id="rt-voten" min="1" max="{v_max}" '
             f'value="{v}"></label>'
-            f'<label><input type="checkbox" id="rt-doppel"{dl}> ask each pair '
-            "twice (swap check)</label></div>"
-            f'<div class="rt-q">All three apply to THIS run only &mdash; nothing is '
-            f"saved and normal operation keeps its own settings. This "
-            f'walk-through has {lf.get("material", 0)} usable picture(s) '
-            "&mdash; asking for more cells than that is fine, the grid just "
-            f'gets smaller. {lf.get("galerien", 0)} approved galleries allow '
-            f"at most {v_max} "
-            "comparison(s). With the swap check on, a comparison costs two "
-            "requests; without it, one &mdash; and it then rests on a single "
-            "answer.</div>")
+            f'<label><input type="checkbox" id="rt-doppel"{dl}> {t("visiontest.felder.doppel")}</label></div>'
+            f'<div class="rt-q">{t("visiontest.felder.satz", material=lf.get("material", 0), galerien=lf.get("galerien", 0), voten_max=v_max)}</div>')
 
 
 def _laeufe(laeufe):
@@ -488,30 +467,30 @@ def _laeufe(laeufe):
         if e.get("person"):
             erg = f'<span class="rt-ja">{html.escape(str(e["person"]))}</span>'
         elif e.get("abgebrochen"):
-            erg = '<span class="rt-nein">aborted (service restarted)</span>'
+            erg = f'<span class="rt-nein">{t("visiontest.laeufe.abgebrochen")}</span>'
         else:
-            erg = ('<span class="rt-nein">no verdict</span>'
+            erg = (f'<span class="rt-nein">{t("visiontest.laeufe.kein_urteil")}</span>'
                    + (f' &middot; {html.escape(str(e.get("grund") or ""))[:60]}'
                       if e.get("grund") else ""))
         zellen = e.get("zellen")
         # Die GEWUENSCHTE Zahl steht daneben, wenn sie gekappt wurde — sonst
         # sieht ein Versuch mit 8 Zellen aus wie einer mit 3.
         if e.get("zellen_gewollt") and e.get("zellen_gewollt") != zellen:
-            zellen = f'{zellen} <span class="dim">of {e["zellen_gewollt"]}</span>'
+            zellen = f'{zellen} <span class="dim">{t("visiontest.laeufe.von", n=e["zellen_gewollt"])}</span>'
         voten_regel = e.get("min_voten_wirksam")
         if e.get("min_voten") and e.get("min_voten") != voten_regel:
-            voten_regel = (f'{voten_regel} <span class="dim">of '
-                           f'{e["min_voten"]}</span>')
+            voten_regel = (f'{voten_regel} <span class="dim">'
+                           f'{t("visiontest.laeufe.von", n=e["min_voten"])}</span>')
         # .165: ohne Tauschlauf gewertet — das gehoert an die Zeile, sonst
         # vergleicht man zwei Laeufe, die nach verschiedenen Regeln entstanden
         # sind, als waeren sie gleich. Alt-Zeilen (None) behaupten nichts.
         if e.get("doppellauf") is False:
-            voten_regel = (f'{voten_regel} <span class="vw-warn">no swap'
+            voten_regel = (f'{voten_regel} <span class="vw-warn">{t("visiontest.laeufe.ohne_tausch")}'
                            "</span>")
         zeilen.append(
             "<tr>"
             f'<td>{_zeit(e.get("ts"), "%d.%m. %H:%M:%S")}'
-            + ("" if e.get("manuell") else ' <span class="dim">auto</span>')
+            + ("" if e.get("manuell") else f' <span class="dim">{t("visiontest.laeufe.auto")}</span>')
             + "</td>"
             f'<td>{zellen if zellen is not None else "&mdash;"}</td>'
             f'<td>{voten_regel if voten_regel is not None else "&mdash;"}</td>'
@@ -520,34 +499,35 @@ def _laeufe(laeufe):
 
             f'<td>{e.get("voten") if e.get("voten") is not None else "&mdash;"}'
             f' / {e.get("vergleiche") if e.get("vergleiche") is not None else "&mdash;"}'
-            + (f' <span class="vw-warn">+{e["offen"]} open</span>'
+            + (f' <span class="vw-warn">{t("visiontest.laeufe.offen", n=e["offen"])}</span>'
                if e.get("offen") else "") + "</td>"
             f'<td>{e.get("anfragen") if e.get("anfragen") is not None else "&mdash;"}</td>'
             f'<td>{e.get("dauer_s") if e.get("dauer_s") is not None else "&mdash;"} s</td>'
             "</tr>")
-    return ('<div class="rt-hist"><b>Runs on this walk-through</b>'
+    return (f'<div class="rt-hist"><b>{t("visiontest.laeufe.titel")}</b>'
             '<div class="rt-htab">'
-            "<table><tr><th>when</th><th>cells</th><th>needed</th>"
-            "<th>backend</th><th>verdict</th><th>votes</th><th>req</th>"
-            "<th>time</th></tr>"
+            f"<table><tr><th>{t('visiontest.laeufe.kopf_wann')}</th>"
+            f"<th>{t('visiontest.laeufe.kopf_zellen')}</th>"
+            f"<th>{t('visiontest.laeufe.kopf_noetig')}</th>"
+            f"<th>{t('visiontest.laeufe.kopf_backend')}</th>"
+            f"<th>{t('visiontest.laeufe.kopf_urteil')}</th>"
+            f"<th>{t('visiontest.laeufe.kopf_voten')}</th>"
+            f"<th>{t('visiontest.laeufe.kopf_anfragen')}</th>"
+            f"<th>{t('visiontest.laeufe.kopf_zeit')}</th></tr>"
             + "".join(zeilen) + "</table></div>"
-            '<div class="rt-q">Newest first. Only what was really run &mdash; '
-            "the list comes from this walk-through's own log and disappears "
-            "with it.</div></div>")
+            f'<div class="rt-q">{t("visiontest.laeufe.satz")}</div></div>')
 
 
 def _vision(v, pass_key, laeuft, fehlt_material=False, lauffeld=None,
             laeufe=()):
     if not v.get("konfiguriert"):
-        return ('<div class="rt-s"><h3>Vision</h3>'
-                '<div class="rt-q">a vision model comparing this pass against '
-                "your galleries</div>"
-                '<div class="rt-erg"><span class="dim">not configured</span>'
+        return (f'<div class="rt-s"><h3>{t("visiontest.vision.titel")}</h3>'
+                f'<div class="rt-q">{t("visiontest.vision.quelle_kurz")}</div>'
+                f'<div class="rt-erg"><span class="dim">{t("visiontest.vision.unkonfiguriert")}</span>'
                 "</div>"
-                '<div class="rt-q">Set it up under <a href="/vision">Vision '
-                "detect</a>: a model, a green connection test and at least two "
-                "approved galleries. The other two columns work without "
-                "it.</div></div>")
+                # Stufe 3 (t_html): <a>-Link mitten im Satz; "Vision detect"
+                # zitiert nav.vision (Kopplung am Schluessel).
+                f'<div class="rt-q">{t_html("visiontest.vision.einrichten_satz")}</div></div>')
     z = v.get("zeile") or {}
     schritte = v.get("schritte") or []
     laeuft = bool(laeuft or v.get("laeuft"))
@@ -557,49 +537,38 @@ def _vision(v, pass_key, laeuft, fehlt_material=False, lauffeld=None,
     # dann der zentrale "analyse again" im Kopf. Sobald Material da ist, ist
     # dieser hier wieder der gruene.
     if fehlt_material:
-        knopf = ('<button class="gtb" disabled title="there is nothing to '
-                 'compare yet">Run vision on this pass</button> '
-                 '<span class="dim">nothing to compare yet &mdash; analyse '
-                 "this walk-through again first (button above)</span>")
+        knopf = (f'<button class="gtb" disabled title="{t("visiontest.vision.attr_nichts")}">{t("visiontest.vision.knopf")}</button> '
+                 f'<span class="dim">{t("visiontest.vision.nichts_satz")}</span>')
     else:
         knopf = (_felder(lauffeld)
-                 + '<button class="gtb on" onclick="rtVision(this)">Run vision '
-                 "on this pass</button> "
+                 + f'<button class="gtb on" onclick="rtVision(this)">{t("visiontest.vision.knopf")}</button> '
                  '<span id="rt-vision-status" class="dim"></span>')
     if laeuft:
-        knopf = ('<span class="dim">a run is going right now &mdash; the log '
-                 "below grows as it works</span>")
+        knopf = f'<span class="dim">{t("visiontest.vision.laeuft_satz")}</span>'
     if laeuft:
         # LAUFEND: kein Urteil behaupten, sondern zeigen, wo der Lauf steht.
         letzte = (schritte[-1].get("text") if schritte else
-                  "starting &mdash; nothing reported yet")
-        return ('<div class="rt-s"><h3>Vision</h3>'
-                '<div class="rt-q">forced choice against your galleries: the '
-                "whole walk-through goes in as ONE candidate grid, and "
-                "every pair is asked twice with the galleries swapped"
-                "</div>"
+                  t("visiontest.vision.startet"))
+        return (f'<div class="rt-s"><h3>{t("visiontest.vision.titel")}</h3>'
+                f'<div class="rt-q">{t("visiontest.vision.quelle")}</div>'
                 '<div class="rt-erg"><span class="rt-lauf"></span>'
                 f'{html.escape(str(letzte))}</div>'
                 + _log(schritte, True)
                 + f'<div style="margin-top:8px">{knopf}</div>'
                 + _laeufe(laeufe) + "</div>")
     if not z:
-        return ('<div class="rt-s"><h3>Vision</h3>'
-                '<div class="rt-q">forced choice against your galleries: the '
-                "whole walk-through goes in as ONE candidate grid, and "
-                "every pair is asked twice with the galleries swapped"
-                "</div>"
-                '<div class="rt-erg"><span class="dim">not run for this '
-                "pass</span></div>"
+        return (f'<div class="rt-s"><h3>{t("visiontest.vision.titel")}</h3>'
+                f'<div class="rt-q">{t("visiontest.vision.quelle")}</div>'
+                f'<div class="rt-erg"><span class="dim">{t("visiontest.vision.nicht_gelaufen")}</span></div>'
                 f'<div style="margin-top:8px">{knopf}</div>'
                 + _laeufe(laeufe) + "</div>")
     gegen = ""
     for r in reversed(z.get("runden") or []):
         if r.get("a"):
-            gegen = ('<div class="rt-q">compared '
-                     + html.escape(str(r["a"])) + " against "
-                     + html.escape(str(r["b"]))
-                     + " &mdash; it says nothing about anyone else</div>")
+            gegen = ('<div class="rt-q">'
+                     + t("visiontest.vision.verglichen",
+                         a=html.escape(str(r["a"])), b=html.escape(str(r["b"])))
+                     + "</div>")
             break
     if z.get("person"):
         erg, kl = html.escape(z["person"]), "ja"
@@ -608,28 +577,24 @@ def _vision(v, pass_key, laeuft, fehlt_material=False, lauffeld=None,
         # KEIN Fehlschlag der Erkennung — er ist gar nicht zu Ende gekommen.
         # Das gehoert als eigener Zustand hin, sonst liest man ein "kein
         # Urteil", das nie eines war.
-        erg = ('<span class="dim">run aborted &mdash; the service '
-               "restarted</span>")
+        erg = f'<span class="dim">{t("visiontest.vision.abgebrochen")}</span>'
         kl = "nein"
     else:
-        erg = ('<span class="dim">no verdict &mdash; '
-               + html.escape(_vis.grund_text(z.get("grund"))) + "</span>")
+        erg = ('<span class="dim">'
+               + t("visiontest.vision.kein_urteil",
+                   grund=html.escape(_vis.grund_text(z.get("grund"))))
+               + "</span>")
         kl = "nein"
     s = z.get("sammlung") or {}
     quelle = z.get("reihenfolge_quelle")
-    return (f'<div class="rt-s {kl}"><h3>Vision</h3>'
-            '<div class="rt-q">forced choice against your galleries: the whole '
-            "walk-through goes in as ONE candidate grid, and every pair is "
-            "asked twice with the galleries swapped</div>"
+    return (f'<div class="rt-s {kl}"><h3>{t("visiontest.vision.titel")}</h3>'
+            f'<div class="rt-q">{t("visiontest.vision.quelle")}</div>'
             f'<div class="rt-erg">{erg}</div>{gegen}'
             + _gitter(z, pass_key)
             + _runden(z)
-            + f'<div class="rt-q">{s.get("voten", 0)} of {s.get("bilder", 0)} '
-            f'comparison(s) gave an answer &middot; {z.get("anfragen", 0)} '
-            f'requests &middot; {z.get("dauer_s")} s &middot; run '
-            f'{_zeit(z.get("ts"))}'
-            + (f' &middot; order: {html.escape(str(quelle))}' if quelle else "")
-            + (" &middot; custom prompt" if z.get("custom_prompt") else "")
+            + f'<div class="rt-q">{t("visiontest.vision.bilanz", voten=s.get("voten", 0), bilder=s.get("bilder", 0), anfragen=z.get("anfragen", 0), dauer=z.get("dauer_s"), zeit=_zeit(z.get("ts")))}'
+            + (t("visiontest.vision.reihenfolge", quelle=html.escape(str(quelle))) if quelle else "")
+            + (t("visiontest.vision.custom_prompt") if z.get("custom_prompt") else "")
             + "</div>"
             + _offen(z)
             + _log(schritte, False)
@@ -651,17 +616,17 @@ def _offen(z):
 
 def seite(passe, pass_key="", sicht=None, laeuft=False, kosten=None,
           nachanalyse=None, lauffeld=None, laeufe=()):
-    """Der Seiten-INHALT. `sicht` = core.visionurteil.dreiwege(...)."""
-    teile = [STIL, _kopf(KOSTEN if kosten is None else kosten),
+    """Der Seiten-INHALT. `sicht` = core.visionurteil.dreiwege(...).
+    Der Kosten-Text kommt seit Tranche C zur Laufzeit aus t() — nie mehr
+    als Modulkonstante (§8.12, Muster "Funktion statt Konstante")."""
+    teile = [STIL,
+             _kopf(t("visiontest.kosten") if kosten is None else kosten),
              _passliste(passe, pass_key)]
     if not pass_key or not sicht:
         return "".join(teile)
     fehlt = _fehlt_material(sicht)
-    teile.append('<div class="card"><b>2 &middot; What the three paths say'
-                 "</b>"
-                 '<div class="dim">Same pass, three independent judgements. '
-                 "They are allowed to disagree &mdash; that is the point of "
-                 "looking at them together.</div>"
+    teile.append(f'<div class="card"><b>{t("visiontest.drei.titel")}</b>'
+                 f'<div class="dim">{t("visiontest.drei.satz")}</div>'
                  # Der zentrale Knopf steht im KOPF des Durchgangs, ueber den
                  # drei Spalten (User 09.08.) — er betrifft alle drei Wege.
                  + _nachanalyse_kopf(sicht, nachanalyse)

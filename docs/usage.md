@@ -52,7 +52,8 @@ class-by-class comparison with Frigate's own face library), **Settings**,
   people after each walk; **"Apply all recommended"** accepts all suggested faces at once.
   Applying stays a manual click (a safeguard against poisoning the library with bad crops).
 - **Quality** — reference-library quality reports (finding no-face, mislabeled, or confusable
-  references so you can clean the master up).
+  references so you can clean the master up). Every reference carries a quality value; weak
+  pictures are flagged, and a progress bar shows the check while it runs.
 
 **Frigate sync**
 
@@ -124,6 +125,10 @@ the day-to-day path; to work through your event history in one guided go, see
 1. Let the person appear on camera normally. After each walk, suslik collects the best faces
    (up to three per event), generates enrollment suggestions (**People → Suggestions**) for
    people it already knows, and clusters faces it doesn't recognize into the **Unknown** tab.
+   For a known person, **Check this pass for good pictures** on their page goes further: it
+   looks at every frame of the pass across all cameras, measures face quality with a
+   reference-free score and offers the best new pictures grouped by view (left, front,
+   right). This harvest runs on its own after each pass, so the check answers instantly.
 2. To add a **new** person, the shortest path is the **Today page**: an *Unknown* card shows a
    sample face and is clickable — the panel that opens lets you pick exactly the faces you want
    (walkthrough faces first) and assign them to a new or existing name. Alternatively, promote a

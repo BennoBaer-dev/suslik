@@ -187,10 +187,16 @@ def lade_master_refs(emb):
     """Referenzen aus dem LEBENDEN Master embedden (det 320!) — fuer den Drift-Waechter
     nach Enrollment: der muss die NEUE Basis pruefen, nicht den eingefrorenen Snapshot."""
     from sync_refs import master_stand, MASTER
+    from core.refbeiwert import beiwerte as _bw   # A2-Vertrag Stelle 4
+    bw, _fremd = _bw(MASTER, emb.modell)
     refs = {}
     for p, dateien in master_stand().items():
         V = []
         for f in dateien:
+            b = bw.get((p, f))
+            if b is not None:
+                V.append(np.asarray(b["emb"], dtype=np.float32))
+                continue
             img = cv2.imread(os.path.join(MASTER, p, f))
             if img is None:
                 continue

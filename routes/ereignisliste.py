@@ -8,20 +8,74 @@ KAT_LABELS/KAT_FARBE kommen aus webui/bausteine (Helfer-Heimat, mit R1 dorthin
 gezogen).
 Sprach-Stufe 0 (konzept_sprache.md v2): sichtbare Texte aus core/sprache.t()
 — BYTE-TREU (Harnisch tools/harnisch_sprache.py). Grenzen dieser Stufe (siehe
-Abschnitts-Kommentar in core/texte/en.py): Produktnamen-Kopfzellen und
-KAT_LABELS bleiben literal; die frueheren Zeitvariablen `t` sind umbenannt,
-damit sie t() nicht verschatten."""
+Abschnitts-Kommentar in core/texte/en.py): Produktnamen-Kopfzellen bleiben
+literal; die Kategorie-ANZEIGE laeuft seit Tranche D ueber
+bausteine.kat_map()/kat_wort() (Kennung/Anzeige-Trennung, EN wortgleich zu
+KAT_LABELS); die frueheren Zeitvariablen `t` sind umbenannt, damit sie t()
+nicht verschatten."""
 import datetime
 import html
 import json
 import os
 import urllib.parse
 
+import szenarien
 import webui
 from core import areas as _areas_mod
 from core.sprache import t, t_n
-from webui.bausteine import KAT_FARBE, KAT_LABELS, gt_leiste
+from webui.bausteine import KAT_FARBE, bild_nn, gt_leiste, kat_map, kat_wort
 
+
+
+def _bild_url(ed, name):
+    return f"/events/{urllib.parse.quote(ed)}/{urllib.parse.quote(name)}"
+
+
+def crop_zellen(cfg, ed, edir, bestaetigt, hinweis_leer):
+    """Crop-Spalte der Events-Liste (.313, Tester-Fund 21.08.: die Zelle zeigte
+    die GROESSTE JPG des Event-Ordners — bei kleinen Gesichtern ist das das
+    Kontextbild (_show_), auf dem eine ganz andere Person im Vordergrund
+    steht; neben dem Haken fuer zwei bestaetigte Namen stand so das Kind von
+    hinten). Jetzt: je BESTAETIGTER Person ihr bestes Gesichts-Crop
+    (_best_<Person>_, hoechster NN-Score), mit Namen darunter, Klick oeffnet
+    das Kontextbild (_show_) oder das Crop selbst; ohne Bestaetigung das
+    Gesichts-Crop mit dem hoechsten Score, sonst das Unbekannt-Gesicht
+    (_enroll_), sonst ein Hinweis statt einer leeren Zelle. Koerper-Crops
+    (koerper_*.png) nie. -> HTML der Zelle."""
+    if not ed or not os.path.isdir(edir):
+        return f'<span class="dim" title="{html.escape(hinweis_leer)}">—</span>'
+    dateien = os.listdir(edir)
+    best = [c for c in dateien if "_best_" in c and c.endswith(".jpg")]
+    show = [c for c in dateien if "_show_" in c and c.endswith(".jpg")]
+
+    def _score(c):
+        return bild_nn(c) if bild_nn(c) is not None else -9.0
+
+    def _kachel(datei, person=None):
+        ziel = datei
+        if person is not None:
+            kand = sorted((c for c in show if f"_show_{person}_" in c), key=_score)
+            if kand:
+                ziel = kand[-1]
+        bild = (f'<a href="{_bild_url(ed, ziel)}"><img src="{_bild_url(ed, datei)}" '
+                f'alt="{html.escape(person or "")}"></a>')
+        if person:
+            bild += f'<div class="dim" style="font-size:11px">{html.escape(person)}</div>'
+        return f'<div style="display:inline-block;text-align:center;margin-right:6px">{bild}</div>'
+    zellen = []
+    for person in bestaetigt[:3]:
+        kand = sorted((c for c in best if f"_best_{person}_" in c), key=_score)
+        if kand:
+            zellen.append(_kachel(kand[-1], person))
+    if not zellen and best:
+        zellen.append(_kachel(sorted(best, key=_score)[-1]))
+    if not zellen:
+        enroll = sorted(c for c in dateien if "_enroll_" in c and c.endswith(".jpg"))
+        if enroll:
+            zellen.append(_kachel(enroll[0]))
+    if not zellen:
+        return f'<span class="dim" title="{html.escape(hinweis_leer)}">—</span>'
+    return "".join(zellen)
 
 def render_offen(cfg, log_path, qs, gt_schnellpersonen, master_persons):
     """-> Seiten-INHALT (layout/banner bleiben beim Handler)."""
@@ -33,15 +87,8 @@ def render_offen(cfg, log_path, qs, gt_schnellpersonen, master_persons):
                     rows.append(json.loads(l))
                 except Exception:
                     pass
-    gtp = os.path.join(cfg["data_dir"], "state", "ground_truth.jsonl")
-    if os.path.exists(gtp):
-        with open(gtp) as f:
-            for l in f:
-                try:
-                    d = json.loads(l)
-                    gtmap[d["eid"]] = d["label"]
-                except Exception:
-                    pass
+    gtmap = szenarien.gt_labelmap(             # .313: EINE Lese-Quelle
+        os.path.join(cfg["data_dir"], "state", "ground_truth.jsonl"))
     gt_schnell = gt_schnellpersonen(rows, cfg)
     andere = [p for p in master_persons(cfg) if p not in gt_schnell]
     by = {}
@@ -112,18 +159,14 @@ def render_offen(cfg, log_path, qs, gt_schnellpersonen, master_persons):
                          sorted((r.get("ours") or {}).items(),
                                 key=lambda x: -(x[1].get("max") or 0))[:3]) or "—"
         edir = os.path.join(cfg["data_dir"], "events", ed)
-        crop = ""
-        if os.path.isdir(edir):
-            jpgs = sorted((c for c in os.listdir(edir) if c.endswith(".jpg")),
-                          key=lambda c: os.path.getsize(os.path.join(edir, c)), reverse=True)
-            if jpgs:
-                u = f"/events/{urllib.parse.quote(ed)}/{urllib.parse.quote(jpgs[0])}"
-                crop = f'<img src="{u}">'
+        # .313: dieselbe Crop-Wahl wie die Events-Tabelle (Gesicht statt groesste Datei)
+        crop = crop_zellen(cfg, ed, edir, r.get("bestaetigt") or [],
+                           t("ereignisliste.tabelle.attr_kein_crop"))
         vid = (f' <a href="/video/{urllib.parse.quote(ed)}">&#9654; '
                f'{t("ereignisliste.offen.link_video")}</a>'
                if any(os.path.isfile(os.path.join(cfg["data_dir"], "clips", ed + s))
                       for s in ("_review.mp4", ".mp4")) else "")
-        gtb = gt_leiste(eid, gt_schnell, andere)
+        gtb = gt_leiste(eid, gt_schnell, andere, [], vorschlag=r.get("bestaetigt") or [])
         ktx = (f' · <span style="color:var(--dim)">'
                f'{t("ereignisliste.offen.kontext_erkannt", wer=html.escape(r["_kontext"]))}</span>'
                if r.get("_kontext") else
@@ -229,7 +272,7 @@ def render_ereignisse(cfg, log_path, qs, gt_schnellpersonen, master_persons):
         + f'<select name="kamera"><option value="">{t("ereignisliste.filter.alle_kameras")}</option>{_opt(kameras, f_kam)}</select> '
         f'<select name="person"><option value="">{t("ereignisliste.filter.alle_personen")}</option>'
         f'{_opt(master_persons(cfg), f_per)}</select> '
-        f'<select name="kategorie"><option value="">{t("ereignisliste.filter.alle_kategorien")}</option>{_opt(kats, f_kat, KAT_LABELS)}</select> '
+        f'<select name="kategorie"><option value="">{t("ereignisliste.filter.alle_kategorien")}</option>{_opt(kats, f_kat, kat_map())}</select> '
         f'<input type="date" name="tag" value="{html.escape(f_tag)}" '
         '> '
         f'<button class="gtb on">{t("ereignisliste.filter.knopf")}</button> '
@@ -245,24 +288,18 @@ def render_ereignisse(cfg, log_path, qs, gt_schnellpersonen, master_persons):
         ([_seitenlink(seite + 1, t("ereignisliste.blaettern.aelter"))] if seite * 50 < gesamt else []))
     gt_schnell = gt_schnellpersonen(list(by.values()), cfg)
     andere = [p for p in master_persons(cfg) if p not in gt_schnell]
-    gtmap = {}                                     # User-Labels: letzte Zeile pro eid gewinnt
-    gtp = os.path.join(cfg["data_dir"], "state", "ground_truth.jsonl")
-    if os.path.exists(gtp):
-        with open(gtp) as f:
-            for l in f:
-                try:
-                    d = json.loads(l)
-                    gtmap[d["eid"]] = d["label"]
-                except Exception:
-                    pass
+    # .313: EINE Lese-Quelle; gt_voll traegt die MENGE je eid fuer die Schalter-Leiste
+    gt_voll = szenarien.gt_laden(os.path.join(cfg["data_dir"], "state", "ground_truth.jsonl"),
+                                 master_persons(cfg))
+    gtmap = {k: v["label"] for k, v in gt_voll.items()}   # Altform (letzte Zeile gewinnt)
     # Kopfzellen "Frigate"/"suslik" sind reine Produktnamen (Stufe-0-Grenze).
     body = [f"<h2>{t('ereignisliste.titel')}</h2>", filterleiste, f"<p>{blaettern}</p>",
-            f'<div class="tabelle-wrap"><table><tr><th>{t("ereignisliste.tabelle.kopf_zeit")}</th>'
+            f'<div class="tabelle-wrap ereignisse"><table><thead><tr><th>{t("ereignisliste.tabelle.kopf_zeit")}</th>'
             f'<th>{t("ereignisliste.tabelle.kopf_kamera")}</th>'
             "<th>Frigate</th><th>suslik</th>",
             f'<th>{t("ereignisliste.tabelle.kopf_kategorie")}</th>'
             f'<th>{t("ereignisliste.tabelle.kopf_crop")}</th>'
-            f'<th>{t("ereignisliste.tabelle.kopf_gt")}</th></tr>']
+            f'<th>{t("ereignisliste.tabelle.kopf_gt")}</th></tr></thead><tbody>']
     for r in rows:   # defensiv: alte/fremde Zeilen ohne heutige Pflichtfelder nicht crashen lassen
         zeit = datetime.datetime.fromtimestamp(r.get("start") or r.get("ts", 0)).strftime("%d.%m %H:%M:%S")
         f = r.get("frigate") or {}
@@ -275,15 +312,10 @@ def render_ereignisse(cfg, log_path, qs, gt_schnellpersonen, master_persons):
                                 key=lambda x: -(x[1].get("max") or 0))[:3]) or "—"
         ed = str(r.get("eid", "")).replace("/", "_")
         edir = os.path.join(cfg["data_dir"], "events", ed)
-        crop = ""
-        if ed and os.path.isdir(edir):
-            jpgs = sorted((c for c in os.listdir(edir) if c.endswith(".jpg")),
-                          key=lambda c: os.path.getsize(os.path.join(edir, c)), reverse=True)
-            if jpgs:
-                u = f"/events/{urllib.parse.quote(ed)}/{urllib.parse.quote(jpgs[0])}"
-                crop = f'<a href="{u}"><img src="{u}"></a>'
         k = str(r.get("kategorie", "?"))
         best = r.get("bestaetigt") or []
+        crop = crop_zellen(cfg, ed, edir, best,
+                           t("ereignisliste.tabelle.attr_kein_crop"))
         lg = (f' <a href="/events/{urllib.parse.quote(ed)}/analyze.log" style="color:var(--accent)">'
               f'{t("ereignisliste.tabelle.link_log")}</a>'
               if ed and os.path.isfile(os.path.join(edir, "analyze.log")) else "")
@@ -292,14 +324,23 @@ def render_ereignisse(cfg, log_path, qs, gt_schnellpersonen, master_persons):
             lg += (f' <a href="/video/{urllib.parse.quote(ed)}" style="color:var(--accent)">'
                    f'{t("ereignisliste.tabelle.link_video")}</a>')
         eid = str(r.get("eid", ""))
-        cur = gtmap.get(eid, "")
-        gtb = gt_leiste(eid, gt_schnell, andere, cur) if eid else ""
+        cur = (gt_voll.get(eid) or {}).get("personen", [])
+        gtb = gt_leiste(eid, gt_schnell, andere, cur, vorschlag=best) if eid else ""
         unv = (f' <span title="{t("ereignisliste.tabelle.attr_unvollstaendig")}">⚠</span>'
                if r.get("frames_fehlen") else "")     # W1-Telemetrie in der Liste
-        body.append(f"<tr><td>{zeit}</td><td>{html.escape(str(r.get('camera', '?')))}</td>"
-                    f"<td>{html.escape(ftxt)}</td><td>{html.escape(ours)}"
+        # .313: data-label je Zelle = derselbe Kopf-Schluessel — das Handy-Kartenlayout
+        # (thead ausgeblendet) stellt ihn per CSS ::before voran (EINE Quelle).
+        dl = {k_: html.escape(t(k_), quote=True) for k_ in (
+            "ereignisliste.tabelle.kopf_zeit", "ereignisliste.tabelle.kopf_kamera",
+            "ereignisliste.tabelle.kopf_kategorie", "ereignisliste.tabelle.kopf_crop",
+            "ereignisliste.tabelle.kopf_gt")}
+        body.append(f'<tr><td data-label="{dl["ereignisliste.tabelle.kopf_zeit"]}">{zeit}</td>'
+                    f'<td data-label="{dl["ereignisliste.tabelle.kopf_kamera"]}">{html.escape(str(r.get("camera", "?")))}</td>'
+                    f'<td data-label="Frigate">{html.escape(ftxt)}</td><td data-label="suslik">{html.escape(ours)}'
                     f"{' ✓' + html.escape(','.join(best)) if best else ''}</td>"
-                    f"<td><span class=k style=background:{KAT_FARBE.get(k, '#666')}>{html.escape(KAT_LABELS.get(k, k))}</span>"
-                    f"{' 📣' if r.get('alerted') else ''}{unv}{lg}</td><td>{crop}</td><td>{gtb}</td></tr>")
-    body.append("</table>")
-    return "".join(body) + "</table></div>"
+                    f'<td data-label="{dl["ereignisliste.tabelle.kopf_kategorie"]}"><span class=k style=background:{KAT_FARBE.get(k, "#666")}>{html.escape(kat_wort(k))}</span>'
+                    f"{' 📣' if r.get('alerted') else ''}{unv}{lg}</td>"
+                    f'<td data-label="{dl["ereignisliste.tabelle.kopf_crop"]}">{crop}</td>'
+                    f'<td data-label="{dl["ereignisliste.tabelle.kopf_gt"]}">{gtb}</td></tr>')
+    body.append("</tbody></table>")
+    return "".join(body) + "</div>"

@@ -12,9 +12,67 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.0.298"   # .298 = Release-Stand (User 19.08. abends): die zwei ABGESTIMMTEN
-                      # Punkte — Absturz-Fix (Wortlaut vom User diktiert, FIX) +
-                      # Mehrsprachigkeit (EN-Wortlaut vom User abgenommen). Seit .298
+STAND = "0.1.0.331"   # .322 = RELEASE-KANDIDAT (.312-.319 gingen nie raus; .319 lief
+                      # auf Prod, wurde aber nie veroeffentlicht — die Box-Aenderung
+                      # vom 22.08. braucht ein eigenes Image, weil ein bereits
+                      # gebauter Tag nie stillschweigend neuen Inhalt bekommt).
+                      # ABSTIMMUNG 22.08. (User): Box bleibt inhaltlich wie sie
+                      # ist, .316-.319 stehen nur im CHANGELOG. GEAENDERT wurde
+                      # allein der Wortlaut des betonten Punktes, woertliche
+                      # Auflagen: kuerzer (die Texte sind immer sehr lang), "mit
+                      # Unterstuetzung gebaut" statt "wurde damit gebaut" (der User
+                      # baut, die KI unterstuetzt — das muss klar sein), und die
+                      # Bitte um Rueckmeldung mit der oeffentlichen Adresse
+                      # suslik_dev@posteo.de (steht so im _PUBLIC_README).
+                      # ZWEI NEUE Punkte gegenueber der .313-Abstimmung, beide vom
+                      # User am 21.08. abends verlangt: (1) GANZ OBEN der Hinweis auf
+                      # das andere Bau-Modell (Opus statt Fable 5) samt Fehler-Vorbehalt
+                      # — woertlicher User-Auftrag; (2) der Sichtbarkeits-Fix des
+                      # Lernlaufs. Die drei Alt-Punkte bleiben unveraendert.
+                      # VEROEFFENTLICHUNG: am 21.08. ausdruecklich NICHT (User:
+                      # "aber wir veroeffenlichen heute kein release") — die Box
+                      # wirkt erst mit dem naechsten echten Release.
+                      # Davor .312 = Release-Kandidat (Box-Eintrag abgestimmt, s. HIGHLIGHTS).
+                      # Davor .311 = interner Stand (User 21.08.): Fortschritts-
+                      # Balken beim refcache-Neuaufbau in der Gruppen-Benennung
+                      # (Sichtung, Benenn-Pruefung, Pass-Check); kein Box-Eintrag.
+                      # Davor .310 = interner Stand (User-Funde 21.08.): Fortschritts-
+                      # Leiste der Bestands-QS ohne Seiten-Reload, Fremd-Pruefung
+                      # der Unbekannt-Vorschlaege, ehrlicher Dauer-Text; kein
+                      # Box-Eintrag.
+                      # Davor .309 = interner Fix: Beiwert-Einpflege in den refcache
+                      # ohne Embedder-Objekt (jede Vorrats-Uebernahme warf sonst
+                      # den Cache weg -> Minuten-Neuaufbau; kein Box-Eintrag).
+                      # Davor .308 = interner Prod-Stand (K3-Inventur des Norm-Regelwerks:
+                      # Pass-Check-Bruecke ueber die neue Kette, Bestands-QS-
+                      # Einstufung, Sichtungs-Vorauswahl/Reihung, Bestands-Suche
+                      # — alle vier Reststellen auf der Norm) — kein Box-Eintrag.
+                      # Davor .307 = interner Prod-Stand (Norm-Weg in der Benennungs-
+                      # Sichtung: bild_stufe qualifiziert alternativ zur
+                      # Pixel-Latte; Zwillings-Zusammenfassung im Vorrats-
+                      # Angebot) — kein Box-Eintrag, nur STAND.
+                      # Davor .306 = interner Prod-Stand (Lernvorrat nach Feature-Norm,
+                      # Schritt 2: Sammel-Achsen in der Ernte, Szenario-Konsens,
+                      # Katalog-Angebote auf /aehnliche, Beiwert-Referenzen;
+                      # bauplan_vorrat.md) — kein neuer Box-Eintrag, nur STAND
+                      # hochgezogen; der Release-Eintrag wird mit dem User
+                      # abgestimmt (Memory whatsnew-inhalt-abstimmen).
+                      # Davor .305 = interner Prod-Stand (Modularisierung ME1: Innenseiten
+                      # event/unbekannte/setup/live_alerts aus verifyd nach routes/,
+                      # -518 Z; /heute ehrlich zurueck in NOCH_ENGLISCH bis zum
+                      # heute.*-Einzug).
+                      # Davor .304 = interner Prod-Stand (/personlauf im Lauf-Design des
+                      # Gesichts-Lernlaufs, CSS zentralisiert als bausteine.
+                      # lauffluss_stil; User-Auftrag 20.08.).
+                      # Davor .303 (Sprach-Stufe 4: Meldetexte
+                      # Pushover/Telegram sprachfaehig, MQTT byte-unveraendert; plus
+                      # Nachlade-Fix D1+D2: ehrliche Pass-Check-Begruendung mit Zahlen
+                      # + PASS-CHECK-Logzeile; davor .302 Stufe 3, .301 Tranche D) —
+                      # kein neuer Box-Eintrag, nur STAND hochgezogen; der naechste
+                      # Release-Eintrag wird mit dem User abgestimmt.
+                      # Davor .298 (Release 19.08. abends): die zwei
+                      # ABGESTIMMTEN Punkte — Absturz-Fix (Wortlaut vom User diktiert)
+                      # + Mehrsprachigkeit (EN-Wortlaut vom User abgenommen). Seit .298
                       # sind Eintraege MEHRSPRACHIG (§6.3): dict {en,de,es,it,fr
                       # [,betont]}, Alt-Eintraege bleiben str (= nur englisch);
                       # webui.whatsnew_block kann beides, das Gate prueft beide Formen.
@@ -254,6 +312,101 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # .313 (als .312 vorbereitet, 21.08.) — MIT USER ABGESTIMMT (21.08. mittags): drei Punkte, deutscher
+    # Wortlaut vom User freigegeben ("das passt, go"), Vorgabe "kürzer, kein
+    # KI-Stil, kurz und knapp" (Humanizer-Durchgang); EN daraus, ES/IT/FR
+    # von Opus-Muttersprachlern (Begriffe nach begriffe_tabellen.md FINAL;
+    # FR bewusst vous, Tabellen-Entscheid). Keine Interim-Zeile (User).
+    # .320 — MIT USER ABGESTIMMT (22.08.): Auflage "weniger im Detail, die Leute
+    # werden erschlagen von den ganzen Informationen — Oberbegriffe statt jedem
+    # einzelnen kleinen Punkt". Aus den fuenf Punkten der .315-Abstimmung wurden
+    # deshalb VIER: die alten 2/3 und der Qualitaetswert aus 4 sind EIN Punkt
+    # (Lernen), der Platten-Rest aus 4 ein eigener. Rausgefallen als Detail:
+    # Fortschrittsbalken, Vorsortierung der Gruppenbenennung, die Ursache der
+    # leeren Gruppen, "angehakt sind sie nicht" — alles steht im CHANGELOG.
+    # 91 statt 186 Woerter. DE ist die Vorlage, EN/ES/IT/FR daraus abgeleitet;
+    # Begriffe nach begriffe_tabellen.md FINAL (IT clip=video, FR clip=sequence,
+    # live = en directo / in diretta / en direct), FR bewusst vous.
+    ("0.1.0.331", (
+        # GANZ OBEN, vom User am 21.08. abends verlangt und am 22.08. neu
+        # formuliert: NICHT "wurde damit gebaut", sondern MIT UNTERSTUETZUNG
+        # gebaut — es muss klar sein, dass der Betreiber baut und die KI
+        # nur unterstuetzt.
+        # Dazu die Bitte um Rueckmeldung mit der oeffentlichen Adresse.
+        {"betont": True,
+         "en": "I built this version with support from a different AI model "
+               "(Claude Opus instead of Claude Fable 5). The quality gate is "
+               "green, but there may still be more mistakes than usual. I'd "
+               "really love to hear from you: suslik_dev@posteo.de",
+         "de": "Diese Version habe ich mit Unterstützung eines anderen "
+               "KI-Modells gebaut (Claude Opus statt Claude Fable 5). Das "
+               "Qualitätsgate ist grün, trotzdem können mehr Fehler drin sein "
+               "als sonst. Über Rückmeldungen freue ich mich sehr: "
+               "suslik_dev@posteo.de",
+         "es": "Esta versión la he creado con el apoyo de otro modelo de IA "
+               "(Claude Opus en lugar de Claude Fable 5). El control de calidad "
+               "está en verde, pero puede contener más errores de lo normal. Me "
+               "alegra mucho recibir comentarios: suslik_dev@posteo.de",
+         "it": "Questa versione l'ho creata con il supporto di un altro modello "
+               "di IA (Claude Opus invece di Claude Fable 5). Il controllo "
+               "qualità è verde, ma potrebbe contenere più errori del solito. "
+               "Mi fa molto piacere ricevere un riscontro: suslik_dev@posteo.de",
+         "fr": "J'ai créé cette version avec l'aide d'un autre modèle d'IA "
+               "(Claude Opus au lieu de Claude Fable 5). Le contrôle qualité "
+               "est au vert, mais elle peut contenir plus d'erreurs que "
+               "d'ordinaire. Vos retours me font très plaisir : "
+               "suslik_dev@posteo.de"},
+        # EIN Punkt fuer den ganzen Lern-Strang (.299-.318).
+        {"en": "Learning faces got better: after every pass suslik looks for "
+               "usable pictures on its own, rates their quality, and no longer "
+               "drops a group without asking you.",
+         "de": "Gesichter lernen geht besser: suslik sucht nach jedem Durchgang "
+               "selbst nach brauchbaren Bildern, bewertet ihre Qualität und "
+               "nimmt dir keine Gruppe mehr von allein weg.",
+         "es": "Aprender rostros funciona mejor: después de cada recorrido por "
+               "la propiedad, suslik busca por su cuenta imágenes utilizables, "
+               "valora su calidad y ya no descarta ningún grupo por sí solo.",
+         "it": "Imparare i volti funziona meglio: dopo ogni passaggio suslik "
+               "cerca da solo le immagini utilizzabili, ne valuta la qualità e "
+               "non scarta più un gruppo di propria iniziativa.",
+         "fr": "L'apprentissage des visages s'est amélioré : après chaque "
+               "passage, suslik cherche tout seul les images utilisables, "
+               "évalue leur qualité et n'écarte plus un groupe de lui-même."},
+        # User 22.08. abends, Wortlaut von ihm gekuerzt ("das reicht"): EIN Satz,
+        # kein Doppelpunkt-Zusatz. Gemeint ist die Vergangenheitsbetrachtung
+        # (Struktur-Test .322), nicht das laufende Lernen aus dem Punkt darueber.
+        # Die Uebersetzungen nehmen den PRODUKTBEGRIFF aus core/texte
+        # (nav.lernlauf), nicht eine freie Neuschoepfung.
+        {"en": "The learning run over past recordings got a lot better.",
+         "de": "Der Lernlauf über vergangene Aufnahmen ist deutlich besser "
+               "geworden.",
+         "es": "El aprendizaje sobre las grabaciones anteriores ha mejorado "
+               "bastante.",
+         "it": "La sessione di apprendimento sulle registrazioni passate è "
+               "migliorata parecchio.",
+         "fr": "La session d'apprentissage sur les enregistrements passés "
+               "s'est nettement améliorée."},
+        # Platten-Hausarbeit: Clip-Cache (.313) + live/-Raeumer (.315).
+        {"en": "suslik keeps the disk clear: it now trims clips and live "
+               "pictures on its own before space gets tight.",
+         "de": "suslik hält die Platte frei: Clips und Live-Bilder räumt es "
+               "jetzt selbst auf, bevor es eng wird.",
+         "es": "suslik mantiene el disco despejado: ahora limpia por su cuenta "
+               "los clips y las imágenes en directo antes de que se quede sin "
+               "sitio.",
+         "it": "suslik tiene libero il disco: ora alleggerisce da solo i video "
+               "e le immagini in diretta prima che lo spazio si riduca.",
+         "fr": "suslik garde de la place sur le disque : il allège maintenant "
+               "tout seul les séquences et les images en direct avant que "
+               "l'espace ne manque."},
+        # User 22.08.: der zweite Satz ("Nur auf der Heute-Seite stehen noch ein
+        # paar englische Reste") kann raus — Oberbegriff statt Detail.
+        {"en": "Almost everything is translated now.",
+         "de": "Fast alles ist übersetzt.",
+         "es": "Ya está casi todo traducido.",
+         "it": "Ormai è tradotto quasi tutto.",
+         "fr": "Presque tout est traduit."},
+    )),
     # .298 — MIT USER ABGESTIMMT (19.08. abends): Punkt 1 Wortlaut vom User
     # diktiert (stand.md What's-new-Kandidaten, "kurz, ohne Frigate-Details");
     # Punkt 2 EN-Wortlaut vom User abgenommen ("Wortlaut ok"). Uebersetzungen

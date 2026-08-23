@@ -277,7 +277,17 @@ def anker_datensaetze(cluster, margen, lauf_id, schwellen, version):
                        "kamera": mm["kamera"], "front": mm["front"], "sharp": mm["sharp"],
                        "det": mm["det"], "kante": mm["kante"], "pose": mm["pose"],
                        "bbox": mm.get("bbox") or [], "ts": mm.get("ts", 0),
-                       "emb": mm.get("emb") or [], "modell": mm.get("modell", "")}
+                       "emb": mm.get("emb") or [], "modell": mm.get("modell", ""),
+                       # .308: Vorrats-Messwerte wandern MIT (Norm-Weg der
+                       # Sichtungs-Vorauswahl/Reihung liest sie hier; Alt-Anker
+                       # ohne norm urteilen weiter ueber die Pixel-Latte).
+                       "norm": mm.get("norm"), "front_kps": mm.get("front_kps"),
+                       "richtung": mm.get("richtung"),
+                       # .32x: der Struktur-Messwert wandert MIT — sonst muesste
+                       # die Sichtung ihn fuer JEDES Mitglied neu messen (Bild-I/O
+                       # plus Inferenz im Dienst-Prozess), nicht nur fuer
+                       # Alt-Mitglieder. Dieselbe Falle wie bei norm in .308.
+                       "struktur": mm.get("struktur")}
                       for v in c for mm in v["mitglieder"]]
         z_ank = zentroid([v["emb"] for v in c])
         dgs = sorted({round(float(v["durchgang_start"]), 1) for v in c})
@@ -362,38 +372,13 @@ def anker_lauf_schreiben(data_dir, saetze, lauf_id):
                         # ueberleben Abbruch und Boot-Resume. GEZAEHLT, nie still.
                         benannt_behalten += 1
                         bleib.append(z)
-        # VERWORFEN-ERBSCHAFT (Dismiss mit Gedaechtnis, User 05.08.): ein neuer
-        # unbenannter Anker, der einen frueher verworfenen wieder-erntet
-        # (gleiche Kriterien wie die Wiederernte-Dedup der Anchors-Seite:
-        # Event-Ueberlapp >=80% des kleineren UND Zentroid-Kosinus >=0.9,
-        # Echtbestand-kalibriert), erbt das Verworfen STILL — der User wird
-        # nicht erneut gefragt; seine Crops fliegen wie beim Hand-Dismiss.
-        verworfene = []
-        for z in bleib:
-            try:
-                d = json.loads(z)
-            except Exception:
-                continue
-            if d.get("status") == "verworfen" and d.get("zentroid"):
-                verworfene.append((d.get("anker_id"),
-                                   {str(m.get("event")) for m in
-                                    (d.get("mitglieder") or []) if m.get("event")},
-                                   np.asarray(d["zentroid"], dtype=np.float32)))
-        for a in saetze:
-            if a.get("status") != "unbenannt" or not a.get("zentroid") or not verworfene:
-                continue
-            za = np.asarray(a["zentroid"], dtype=np.float32)
-            ea = {str(m.get("event")) for m in a["mitglieder"] if m.get("event")}
-            for v_id, ev, zv in verworfene:
-                if not ea or not ev or len(ea & ev) < 0.8 * min(len(ea), len(ev)):
-                    continue
-                na, nv = float(np.linalg.norm(za)), float(np.linalg.norm(zv))
-                if na <= 0 or nv <= 0 or float(np.dot(za, zv)) / (na * nv) < 0.9:
-                    continue
-                a["status"], a["person"] = "verworfen", None
-                a["verworfen_erbe"] = v_id     # Transparenz: woher das Urteil kam
-                _ll.anker_crops_loeschen(data_dir, a)
-                break
+        # .313 (User 21.08., 'nicht automatisch rausnehmen, nur weil ich die
+        # schon mal geprueft habe'): die VERWORFEN-ERBSCHAFT von .105 (ein neuer
+        # Anker, der einen frueher verworfenen wieder-erntet, erbte das
+        # Verworfen still und verlor seine Crops) ist ABGESCHALTET. Jede
+        # geerntete Gruppe bleibt unbenannt stehen, bis der User sie benennt,
+        # ueberspringt oder loescht; verworfene Zeilen frueherer Laeufe bleiben
+        # als Zeile erhalten, urteilen aber nicht mehr ueber neue.
         fd, tmp = tempfile.mkstemp(dir=os.path.dirname(p), prefix=".anker.", suffix=".tmp")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:

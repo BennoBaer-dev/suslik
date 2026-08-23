@@ -169,12 +169,26 @@ NUR_EXPERT_BLAETTER = {"/kameras", "/benachrichtigungen", "/kette", "/konfigurat
 # Die Menge schrumpft je Stufe-2-Tranche und wird beim Einzug der jeweiligen
 # Seite im selben Commit gepflegt.
 # .298 (Tranche A): /heute ist RAUS — auftritte.py (Today/Durchgaenge) ist
-# uebersetzt. Ehrliche Grenze: die Einzel-Event-Seite (/event/<id>, verifyd-
-# inline, noch englisch) teilt aktiv="/heute" und verliert den Hinweis bis
-# zu ihrer Tranche-B-Uebersetzung.
-NOCH_ENGLISCH = {"/setup", "/person", "/person/kontrolle",
-                 "/person/modell", "/personlauf", "/vision", "/erkennungstest",
-                 "/system", "/unbekannte", "/live_alerts", "/hilfe", "/video"}
+# uebersetzt (damit hing auch /event/<id> hinweislos an aktiv="/heute"; seit
+# Tranche B ist die Event-Seite selbst uebersetzt, die Luecke ist zu).
+# .299 (Tranche B): /setup, /unbekannte, /live_alerts und /video sind RAUS —
+# die verifyd-Innenseiten (Wizard, Unbekannte, Live-Alerts, Event, Video,
+# Banner, Leer-Zustaende) liegen auf der Sprachschicht.
+# .300 (Tranche C): /person*, /personlauf, /vision, /erkennungstest und
+# /system sind RAUS — die Routen-Module (system/vision/visiontest/
+# visionwizard/personwizard/bausteine) liegen auf der Sprachschicht
+# (/personlauf rendert seinen Inhalt aus personwizard.wizard()).
+# Sprach-Stufe 3: /hilfe ist RAUS (Anleitungen via t_html). Der Vertrag
+# bleibt bestehen: eine Seite, deren Inhalt (noch) nicht auf der
+# Sprachschicht liegt, traegt ihren AKTIV-Pfad hier ein und bekommt die
+# Hinweiszeile, bis ihr Einzug sie wieder streicht.
+# Schnitt-Inventur 20.08. (ehrlicher Rueckzieher zur Tranche-A-Annahme):
+# der /heute-Handler in verifyd.py rendert ~850 Inline-Zeilen mit
+# sichtbaren EN-Literalen (z.B. 'Alerts sent (Pushover)') — auftritte.py
+# deckt die Seite NICHT komplett. Bis zum heute.*-Einzug (Etappe ME2 der
+# Modularisierung) steht /heute
+# deshalb WIEDER hier: Mischsprache nie ohne Hinweis.
+NOCH_ENGLISCH = {"/heute"}
 
 
 def _noch_englisch(pfad):

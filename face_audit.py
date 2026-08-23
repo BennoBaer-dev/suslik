@@ -272,7 +272,11 @@ class Embedder:
         import onnxruntime as ort
         ort.set_default_logger_severity(3)
         from insightface.app import FaceAnalysis
-        self.app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
+        # .313: nur die drei Modelle, die wir lesen (Detektor liefert kps; landmark_3d_68
+        # liefert pose; recognition wird durch adaface ersetzt) — landmark_2d_106 und
+        # genderage liefen je Gesicht umsonst mit (zwei GPU-Inferenzen je Detektion).
+        self.app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"],
+                                allowed_modules=["detection", "landmark_3d_68", "recognition"])
         self.app.prepare(ctx_id=-1, det_size=(320, 320))
         self.modell = (modell or aktuelles_modell()).lower()
         if self.modell not in MODELLE:
@@ -510,7 +514,344 @@ class Embedder:
         f = max(faces, key=lambda x: (x.bbox[2]-x.bbox[0])*(x.bbox[3]-x.bbox[1]))
         return np.asarray(f.normed_embedding, dtype=np.float64)
 
+# ---------------------------------------------------------------- Feature-Norm (Vorrat)
+class NormMass:
+    """Referenzfreies Guetemass ||f|| — die Laenge des UNNORMIERTEN Feature-Vektors
+    vor der L2-Normierung des adaface-Kopfs (Messreihe 20.08.2026: trennt oberes
+    vom unteren Brauchbarkeits-Quartil mit AUC 0.731, deutlich vor det_score;
+    verify_data/messungen/qualitaetsmass_20260820.json). Traeger des Lernvorrats
+    (Bauplan bauplan_vorrat.md B1).
+
+    STRIKT GETRENNT vom Urteilspfad: eigene Session, IMMER CPUExecutionProvider,
+    exakte Batchgroessen ohne Padding. Gemessen 20.08.: ein Zusatz-Graph-Ausgang
+    laesst 'embedding' auf CPU bit-genau unveraendert (maxdiff exakt 0.0),
+    verschiebt es auf OpenVINO aber um 1.2e-4, und die Norm selbst schwankt dort
+    zwischen Batchgroessen um bis zu 0.047 — deshalb ist CPU hier keine
+    Sparsamkeit, sondern die Messbedingung. Der Embedder und seine Sessions
+    werden von dieser Klasse NIE beruehrt.
+
+    Der Graph entsteht IN-MEMORY aus dem eingebackenen adaface-ONNX (kein
+    zweites Modell-File, kein Netz — self-contained-Regel): der adaface-Kopf
+    endet auf f -> ReduceL2 -> Div, der eine Div-Knoten liefert den Graph-
+    Ausgang 'embedding'; sein erster Input IST f. Aus f/||f|| laesst sich ||f||
+    nicht zurueckrechnen, darum wird f als ZUSATZ-Ausgang deklariert. Nach dem
+    Session-Bau werden ModelProto und Bytes sofort freigegeben (gemessene
+    Bauspitze sonst ~1 GB; der Bau gehoert in den Prozess-START, nie in ein
+    _JobRssWache-Fenster — Bauplan B1/W2.9).
+
+    Jede Abweichung (fremdes Modell, unerwartete Graph-Struktur, Konsistenz-
+    probe schlaegt fehl) setzt ok=False mit LAUTEM stderr-Marker 'NORMMASS' —
+    der Vorrat degradiert dann ab, der Dienst laeuft unveraendert weiter."""
+
+    # .313 GERAETEWAHL (gemessen 21.08., 412 echte Crops, Batch 1): NPU 9 ms je
+    # Gesicht gegen CPU 232 ms bei max. Versatz 0,09 / p99 0,04 auf der 15-30-Skala
+    # (1 Kipper von 412 an der 23,5-Linie, Batch-Drift 0,000 bei fester Batchgroesse 1).
+    # Die CPU war Messbedingung (.306), weil OpenVINO die Norm zwischen BATCHGROESSEN
+    # um bis zu 0,047 verschob — mit Batch 1 (Einzel-Inferenz je Gesicht, wie die Ernte
+    # sie fuehrt) tritt das nicht auf. NACHMESSUNG auf 2052 benannten Lernlauf-
+    # Gesichtern (21.08.): NPU p99 0,05 / max 0,12, Kipper an den Linien 21,5/22/23,5/24
+    # = 0/3/1/1 (<= 0,15 %); iGPU 31 ms, p99 0,36 / max 0,67, Kipper 25/17/5/5 (<= 1,2 %).
+    # Die GPU ist damit zweite Stufe fuer Intel-Systeme OHNE NPU (sonst 232 ms je
+    # Gesicht, ~50-min-Laeufe): ~1 % Kipper am Qualitaetstor sind messbar, aber kein
+    # Urteilsfehler. Kette: NPU -> GPU -> CPU; SUSLIK_NORM_DEVICE=CPU|NPU|GPU erzwingt
+    # (Messungen). Jede OV-Session wird per KREUZPROBE gegen eine CPU-Session geprueft
+    # (2 gepinnte Zufallsbilder, |dNorm| <= NORM_KREUZ_MAX), sonst LAUT naechste Stufe.
+    # CUDA/ROCm sind ungemessen und bleiben auf CPU.
+    NORM_KREUZ_MAX = 0.30
+    NORM_KETTE = ("NPU", "GPU", "CPU")
+
+    def __init__(self, modell=None, device=None):
+        import onnxruntime as ort
+        ort.set_default_logger_severity(3)   # auch OHNE Embedder im Prozess kein ORT-Spam
+        self.ok = False
+        self.grund = ""
+        self.device = "CPU"
+        self.modell = (modell or aktuelles_modell()).lower()
+        spec = MODELLE.get(self.modell) or {}
+        if self.modell != "adaface" or spec.get("art") != "onnx":
+            # Die Norm-Schwellen (22/21.5/23-Linie) sind an adaface gemessen —
+            # auf einem anderen Kopf waeren sie Zahlen ohne Bedeutung.
+            self.grund = (f"feature norm is calibrated for 'adaface' only "
+                          f"(active model: '{self.modell}')")
+            sys.stderr.write(f"[face_audit] NORMMASS: {self.grund} -> disabled\n")
+            return
+        self._spec = spec
+        try:
+            self._sess, self.device = self._session_waehlen(spec["onnx"], device)
+        except Exception as ex:                                # noqa: BLE001
+            self.grund = f"graph variant failed: {type(ex).__name__}: {str(ex)[:200]}"
+            sys.stderr.write(f"[face_audit] NORMMASS: {self.grund} -> disabled\n")
+            return
+        self._in = self._sess.get_inputs()[0].name
+        namen = [o.name for o in self._sess.get_outputs()]
+        if "embedding" not in namen or len(namen) != 2:
+            self.grund = f"unexpected outputs {namen}"
+            sys.stderr.write(f"[face_audit] NORMMASS: {self.grund} -> disabled\n")
+            return
+        self._idx_emb = namen.index("embedding")
+        self._idx_f = 1 - self._idx_emb
+        abw = self._konsistenzprobe()
+        # Toleranz je Geraet: CPU exakt (1e-4); ein Beschleuniger rechnet intern in
+        # fp16 — dort gilt 1e-2 fuer f/||f|| gegen den embedding-Ausgang DERSELBEN
+        # Session (die Norm-Guete selbst sichert die Kreuzprobe gegen CPU).
+        if abw > (1e-4 if self.device == "CPU" else 1e-2):
+            if self.device != "CPU":
+                sys.stderr.write(f"[face_audit] NORMMASS: consistency probe on {self.device} "
+                                 f"off by {abw:.2e} -> CPU\n")
+                try:
+                    self._sess = self._feature_norm_session(spec["onnx"], "CPU")
+                    self.device = "CPU"
+                    self._in = self._sess.get_inputs()[0].name
+                    abw = self._konsistenzprobe()
+                except Exception as ex:                        # noqa: BLE001
+                    abw = float("inf"); self.grund = f"CPU fallback failed: {ex}"
+            if abw > 1e-4:
+                # Falsche Modellvariante wuerde sonst still falsche "Normen" liefern
+                # (der Prototyp-Erstlauf starb genau daran: Werte um 0 statt um 23).
+                self.grund = self.grund or f"consistency probe failed (f/||f|| vs embedding, maxdiff {abw:.2e})"
+                sys.stderr.write(f"[face_audit] NORMMASS: {self.grund} -> disabled\n")
+                return
+        self.ok = True
+
+    @staticmethod
+    def _graph_bytes(pfad):
+        """adaface-ONNX -> Graph-Bytes mit f als Zusatz-Ausgang (in-memory)."""
+        import onnx
+        m = onnx.load(pfad)
+        aus = {o.name for o in m.graph.output}
+        div = [n for n in m.graph.node
+               if n.op_type == "Div" and n.output and n.output[0] in aus]
+        if len(div) != 1:
+            raise ValueError(f"expected exactly ONE Div node feeding a graph "
+                             f"output, found {len(div)}")
+        f_name = div[0].input[0]
+        m.graph.output.append(
+            onnx.helper.make_tensor_value_info(f_name, onnx.TensorProto.FLOAT, None))
+        roh = m.SerializeToString()
+        del m                                    # Bauspitze druecken (W2.9)
+        return roh
+
+    @classmethod
+    def _feature_norm_session(cls, pfad, device="CPU", roh=None):
+        """Session fuer ein Geraet: CPU = CPUExecutionProvider; NPU/GPU = OpenVINO-EP,
+        nur wenn der EP da ist, der Geraeteknoten existiert und der Provider WIRKLICH
+        bindet (sonst ValueError — der Aufrufer geht die Kette weiter)."""
+        import onnxruntime as ort
+        roh = roh if roh is not None else cls._graph_bytes(pfad)
+        dev = str(device or "CPU").upper()
+        if dev == "CPU":
+            return ort.InferenceSession(roh, providers=["CPUExecutionProvider"],
+                                        sess_options=_ort_thread_opts())
+        if "OpenVINOExecutionProvider" not in ort.get_available_providers():
+            raise ValueError(f"{dev}: OpenVINO EP not available")
+        import glob as _glob
+        knoten = geraete_knoten_muster(dev)
+        if knoten and not _glob.glob(knoten):
+            raise ValueError(f"{dev}: no device node ({knoten})")
+        s = ort.InferenceSession(roh, providers=["OpenVINOExecutionProvider"],
+                                 provider_options=[{"device_type": dev}],
+                                 sess_options=_ort_thread_opts())
+        if "OpenVINOExecutionProvider" not in s.get_providers():
+            raise ValueError(f"{dev}: provider did not bind")
+        return s
+
+    @classmethod
+    def _session_waehlen(cls, pfad, device=None):
+        """Kette NPU -> GPU -> CPU (NORM_KETTE; oder erzwungenes Geraet ueber
+        device=/SUSLIK_NORM_DEVICE): OV-Sessions bestehen eine Kreuzprobe gegen
+        CPU (|dNorm| <= NORM_KREUZ_MAX auf 2 gepinnten Bildern), sonst LAUT
+        weiter zur naechsten Stufe. Die GPU-Stufe traegt Intel-Systeme OHNE NPU
+        (Begruendung und Messwerte im GERAETEWAHL-Kommentar oben).
+        -> (session, geraetename)."""
+        roh = cls._graph_bytes(pfad)
+        wunsch = (device or os.environ.get("SUSLIK_NORM_DEVICE") or "").strip().upper()
+        kette = (wunsch,) if wunsch else cls.NORM_KETTE
+        if "CPU" not in kette:
+            kette = tuple(kette) + ("CPU",)
+        cpu = None
+        for dev in kette:
+            if dev == "CPU":
+                return (cpu or cls._feature_norm_session(pfad, "CPU", roh)), "CPU"
+            try:
+                s = cls._feature_norm_session(pfad, dev, roh)
+                cpu = cpu or cls._feature_norm_session(pfad, "CPU", roh)
+                abw = cls._kreuzprobe(s, cpu)
+                if abw > cls.NORM_KREUZ_MAX:
+                    raise ValueError(f"cross-check vs CPU off by {abw:.3f}")
+                sys.stderr.write(f"[face_audit] NORMMASS: feature norm on {dev} "
+                                 f"(cross-check vs CPU max |dNorm| {abw:.3f})\n")
+                return s, dev
+            except Exception as ex:                            # noqa: BLE001
+                sys.stderr.write(f"[face_audit] NORMMASS: {dev} not used "
+                                 f"({type(ex).__name__}: {str(ex)[:120]}) -> next\n")
+        return (cpu or cls._feature_norm_session(pfad, "CPU", roh)), "CPU"
+
+    @staticmethod
+    def _kreuzprobe(sess_a, sess_b):
+        """Groesste Norm-Abweichung zweier Sessions auf 2 gepinnten Zufallsbildern
+        (Batch 1 je Bild — so laeuft die Ernte)."""
+        inp = sess_a.get_inputs()[0].name
+        namen = [o.name for o in sess_a.get_outputs()]
+        idx = 1 - namen.index("embedding") if "embedding" in namen else 1
+        x = np.random.default_rng(11).standard_normal((2, 3, 112, 112)).astype(np.float32)
+        abw = 0.0
+        for i in range(2):
+            fa = np.asarray(sess_a.run(None, {inp: x[i:i + 1]})[idx], np.float32).reshape(1, -1)
+            fb = np.asarray(sess_b.run(None, {sess_b.get_inputs()[0].name: x[i:i + 1]})[idx],
+                            np.float32).reshape(1, -1)
+            abw = max(abw, float(abs(np.linalg.norm(fa) - np.linalg.norm(fb))))
+        return abw
+
+    def _konsistenzprobe(self):
+        """f/||f|| MUSS dem embedding-Ausgang entsprechen -> groesste Abweichung.
+        Gepinnter Zufalls-Input (seed 7) wie die Messwerkbank des Prototyps."""
+        x = np.random.default_rng(7).standard_normal((2, 3, 112, 112)).astype(np.float32)
+        out = self._sess.run(None, {self._in: x})
+        e = np.asarray(out[self._idx_emb], np.float64)
+        f = np.asarray(out[self._idx_f], np.float64).reshape(len(x), -1)
+        n = np.linalg.norm(f, axis=1, keepdims=True)
+        return float(np.abs(f / n - e / np.linalg.norm(e, axis=1, keepdims=True)).max())
+
+    def feature_norm(self, crops_bgr):
+        """norm_crop-112-Crops (BGR) -> np.float32-Array der Feature-Normen ||f||.
+        Preprocessing wortgleich Embedder._rec_infer (BGR, (x-mean)/std, CHW);
+        EXAKTE Batchgroesse ohne Padding — auf CPU gibt es keine Shape-Kompilate,
+        und eine Padding-Zeile darf nie als Messwert durchgehen."""
+        if not self.ok:
+            raise RuntimeError(f"NormMass disabled: {self.grund}")
+        spec = self._spec
+        batch = []
+        for img in crops_bgr:
+            x = img if spec.get("bgr") else cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            x = (x.astype(np.float32) - spec["mean"]) / spec["std"]
+            batch.append(x.transpose(2, 0, 1))
+        X = np.asarray(batch, np.float32)
+        F = np.asarray(self._sess.run(None, {self._in: X})[self._idx_f],
+                       np.float32).reshape(len(X), -1)
+        return np.linalg.norm(F, axis=1)
+
+
 # ---------------------------------------------------------------- Hilfen
+class StrukturMass:
+    """Gesichts-STRUKTUR statt Gesichts-QUALITAET: misst, ob ein Ausschnitt
+    ueberhaupt ein Gesicht zeigt (Untersuchung 22.08.2026,
+    analysen/06_ist_das_ein_gesicht.md).
+
+    ABGRENZUNG ZU NormMass — die beiden beantworten VERSCHIEDENE Fragen:
+    NormMass fragt "wie gut ist dieses Gesicht fuer die Erkennung" (Herkunft
+    AdaFace, CVPR 2022: dort ein graduelles Trainings-GEWICHT, kein Schalter).
+    StrukturMass fragt "ist da ein Gesicht". Die Norm kann das nicht: gemessen
+    hat eine Hecken-Gruppe den HOEHEREN Norm-Spitzenwert (22,58) als eine echte
+    Personengruppe (22,09) — core/ernte.py sagt es selbst, die Norm sei "als
+    Gesicht/Nicht-Gesicht-Trenner nirgends kalibriert".
+
+    VERFAHREN: das 106-Punkt-Landmark-Modell wird auf den GANZEN Ausschnitt
+    gezwungen (bbox = ganzes Bild). Bei einem echten Gesicht verteilen sich die
+    Punkte ueber Kinn, Augen und Mund; ohne Gesichtsstruktur kollabieren sie zur
+    Bildmitte. Gemessen wird ihre mittlere Streuung, normiert auf die Bildkante.
+
+    PREPROCESSING (QS-Auflage 22.08.: ohne diese Angabe ist die Schwelle nicht
+    reproduzierbar): insightface Landmark.get() rechnet intern
+    _scale = 192 / (max(w,h) * 1.5) — der PADDING-FAKTOR 1,5 ist im
+    insightface-Code FEST verdrahtet und damit Teil der Skala. Ein anderer Faktor
+    verschiebt alles: gemessen Median 0,143 (1,0) / 0,156 (1,5) / 0,170 (2,0).
+    Deshalb wird IMMER ueber Landmark.get() gemessen, nie mit eigenem Zuschnitt.
+
+    MODELLWAHL, gemessen: 2d106det (5 MB, 2D) schlaegt das ohnehin geladene
+    1k3d68 (143 MB, 3D) deutlich — AUC 0,820 gegen 0,756 bei 30 ms gegen 219 ms.
+    1k3d68 bleibt unangetastet, es liefert die POSE, die S-Gate, front_aus_pose,
+    Live-Waechter und Blick-Sortierung ueberall brauchen.
+
+    GERAETEWAHL: bewusst CPU, mit gekapptem Thread-Pool (2 intra-op). Anders als
+    bei NormMass ist CPU keine Messbedingung, sondern Sparsamkeit — die
+    Geraetedrift wurde gemessen und ist unkritisch (CPU/NPU max |d| 0,00028,
+    CPU/GPU 0,00098, NULL Kipper an der Linie auf 132 Crops). Kosten gemessen:
+    3,8 ms Wanduhr / 15,4 CPU-ms je Bild (ungekappt waeren es 11,0 / 125,8).
+
+    BAUORT — WICHTIG, und hier gilt das GEGENTEIL der NormMass-Regel: diese
+    Session wird LAZY neben einem schon warmen Prozess gebaut, NIE eager am
+    Prozess-Start. Gemessen: neben einer warmen Session kostet sie 0 MB und
+    0,2 s, in einem nackten Prozess dagegen +464 MB RSS. Der OOM-anfaellige
+    Prozess ist der Main (alle vier Kills vom 15.08.).
+
+    Faellt irgendetwas aus, setzt ok=False mit lautem Marker 'STRUKTURMASS' und
+    streuung() liefert None — der Aufrufer filtert dann NICHT (ein Test ohne
+    Messgrundlage darf nie still Material verlieren)."""
+
+    # Benannte Quelle statt Streu-Literal (K3-Regel): das Modell liegt als Teil
+    # des buffalo_l-Pakets in allen fuenf Images (docker/buffalo_l/2d106det.onnx
+    # -> /root/.insightface/models/buffalo_l/, s. Dockerfile* COPY).
+    MODELL_DATEI = "2d106det.onnx"
+    MODELL_DIR = os.path.join(os.path.expanduser("~"), ".insightface",
+                              "models", "buffalo_l")
+
+    def __init__(self, device="CPU"):
+        self.ok = False
+        self.grund = ""
+        self.device = str(device or "CPU").upper()
+        self._m = None
+        pfad = os.path.join(self.MODELL_DIR, self.MODELL_DATEI)
+        if not os.path.exists(pfad):
+            self.grund = f"model file missing: {pfad}"
+            sys.stderr.write(f"[face_audit] STRUKTURMASS: {self.grund} -> disabled\n")
+            return
+        try:
+            import onnxruntime as ort
+            ort.set_default_logger_severity(3)
+            from insightface.model_zoo import get_model
+            self._m = get_model(pfad, providers=["CPUExecutionProvider"])
+            self._m.prepare(ctx_id=-1)
+            # THREAD-KAPPUNG (QS-Fund 22.08.): get_model() laeuft an
+            # _ort_thread_opts vorbei, die insightface-Session traegt also den
+            # ungekappten Default-Pool. Gemessen im Prod-Container, 15 Laeufe je
+            # Stufe, Ergebnis bitgleich (max |dLandmark| 0,000000):
+            #   default  11,0 ms Wanduhr / 125,8 CPU-ms
+            #   1 Thread  5,1 ms /  13,1 CPU-ms
+            #   2 Threads 3,8 ms /  15,4 CPU-ms   <- genommen
+            #   4 Threads 5,6 ms /  25,1 CPU-ms
+            # Das Modell ist mit 5 MB zu klein fuer breite Parallelitaet: mehr
+            # Threads kosten mehr, als sie bringen. Zwei sind der Kompromiss aus
+            # Wanduhr (der Ernter misst viele Bilder nacheinander) und CPU-Last
+            # (Issue #21: 2C/4T-Maschinen). Ersatz NACH prepare(), nie die
+            # Klasse patchen — Regression 0.1.0.13, s. _ort_thread_opts.
+            _so = ort.SessionOptions()
+            _so.intra_op_num_threads = 2
+            _so.inter_op_num_threads = 1
+            self._m.session = ort.InferenceSession(
+                pfad, sess_options=_so, providers=["CPUExecutionProvider"])
+        except Exception as ex:                                   # noqa: BLE001
+            self.grund = f"load failed: {type(ex).__name__}: {str(ex)[:200]}"
+            sys.stderr.write(f"[face_audit] STRUKTURMASS: {self.grund} -> disabled\n")
+            self._m = None
+            return
+        self.ok = True
+        sys.stderr.write("[face_audit] STRUKTURMASS: face structure on CPU "
+                         "(2d106det, padding 1.5 fixed)\n")
+
+    def streuung(self, crop_bgr):
+        """-> float (Streuung der 106 Punkte / laengste Bildkante) oder None.
+
+        None heisst IMMER 'nicht gemessen', nie 'kein Gesicht' — der Aufrufer
+        darf darauf nicht filtern."""
+        if not self.ok or crop_bgr is None or not getattr(crop_bgr, "size", 0):
+            return None
+        try:
+            from insightface.app.common import Face
+            h, w = crop_bgr.shape[:2]
+            if w < 2 or h < 2:
+                return None
+            f = Face(bbox=np.array([0, 0, w, h], dtype=np.float32),
+                     kps=None, det_score=1.0)
+            self._m.get(crop_bgr, f)
+            P = np.asarray(f.landmark_2d_106, dtype=np.float32)
+            if P.ndim != 2 or len(P) < 3:
+                return None
+            return round(float(np.std(P, axis=0).mean() / max(w, h)), 4)
+        except Exception:                                          # noqa: BLE001
+            return None
+
+
+
 def quality(img):
     h, w = img.shape[:2]
     return {"w": int(w), "h": int(h), "px": int(w*h),

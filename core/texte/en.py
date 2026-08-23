@@ -223,6 +223,14 @@ T = {
     "aehnliche.vorschlaege.hinweis_leer_kriterien":
         "Criteria: unambiguously this person, novel compared to "
         "the stock, sufficiently large and sharp.",
+    "aehnliche.vorrat.titel": "New from the learning stock",
+    "aehnliche.vorrat.hinweis":
+        "High-quality faces the learning run collected, judged by the "
+        "reference-free quality measure and the scenario consensus. They "
+        "stay local and are never exported to Frigate.",
+    "aehnliche.vorrat.kachel_zeile": "{wann} · {kamera} · match {sim} · quality {norm}",
+    "aehnliche.vorrat.auch_anker": "also in a face group",
+    "aehnliche.vorrat.knopf_gewaehlt": "Apply selected to {person}",
     # ------------------------------------------------- routes/frigate ---
     # NICHT eingezogen (bewusst, Stufe-0-Grenzen): die Beweis-Zeilen der
     # Verbindungs-, Kamera- und FR-Kachel (bis auf "state unknown") tragen
@@ -321,6 +329,8 @@ T = {
     "ereignisliste.tabelle.link_video": "video",
     "ereignisliste.tabelle.attr_unvollstaendig":
         "clip incomplete — judged from the readable part",
+    "ereignisliste.tabelle.attr_kein_crop":
+        "no usable face was kept for this event",
     # ------------------------------------------- routes/konfiguration ---
     # NICHT eingezogen (bewusst, Stufe-0-Grenzen): die Status-Zeile
     # 'status: <b>armed</b> — runs by itself' und die drei Absaetze mit
@@ -419,8 +429,7 @@ T = {
     "lernanker.detail.pflege_hinweis":
         "reference upkeep lives on the Quality page",
     "lernanker.detail.verworfen":
-        "dismissed — images removed; the cluster is remembered so "
-        "re-harvests of the same events stay quiet",
+        "deleted by you — the pictures are gone; the group stays listed here as a record only",
     "lernanker.detail.dublette_hinweis":
         "duplicate check unavailable (anchor predates embedding "
         "persistence) — physical duplicates are still filtered",
@@ -457,8 +466,7 @@ T = {
         "Delete a run — permanently removes all its clusters and "
         "harvested images (references you already adopted stay):",
     "lernanker.liste.verworfen":
-        "{n} dismissed cluster(s) remembered — re-harvests of the same "
-        "events stay quiet",
+        "{n} group(s) deleted by you (pictures gone, kept as a record only)",
     "lernanker.titel": "Anchor clusters",
     "lernanker.liste.leer":
         "No anchors yet — a learning run builds them (Preparation → "
@@ -478,13 +486,10 @@ T = {
     "lernanker.liste.knopf_view": "View cluster",
     "lernanker.liste.knopf_benennen": "Name these {n} faces",
     "lernanker.liste.frage_verwerfen":
-        "Dismiss this cluster? Its images are removed; the cluster is "
-        "remembered so re-harvests of the same events stay quiet.",
+        "Delete this group? Its pictures are removed. This cannot be undone.",
     "lernanker.liste.frage_verwerfen_benannt":
-        "Dismiss this cluster? Its images are removed and the pending "
-        "naming is discarded; the cluster is remembered so re-harvests "
-        "of the same events stay quiet.",
-    "lernanker.liste.knopf_verwerfen": "Dismiss",
+        "Delete this group? Its pictures are removed and the pending naming is discarded. This cannot be undone.",
+    "lernanker.liste.knopf_verwerfen": "Delete",
     # ---------------------------------------------- routes/syncauswahl ---
     # NICHT eingezogen (bewusst, Stufe-0-Grenzen): FR_AUS_HINWEIS kommt aus
     # sync_refs (zentrale Quelle, eigene Tranche); die Satzreste mit
@@ -553,6 +558,7 @@ T = {
     "syncauswahl.bilanz.exportiert":
         "{n} sent earlier (Frigate renamed them)",
     "syncauswahl.bilanz.abgewaehlt": "{n} deselected",
+    "syncauswahl.bilanz.vorrat": "{n} stock reference(s) local only (embedding-based, not transferable)",
     "syncauswahl.bilanz.nur_frigate": "{n} only in Frigate",
     "syncauswahl.bilanz.je_person": "In Frigate, per person:",
     # echter Plural schon im Original — t_n loest .eins/.viele auf.
@@ -915,9 +921,9 @@ T = {
     # Original — bewusste Wiederverwendung, kein Duplikat).
     "faces.qualitaet.knopf_check": "Quality-check my pictures",
     "faces.qualitaet.popup_satz":
-        "Re-measures every reference picture and looks for weak ones, "
-        "near-duplicates and mixed-up faces. Takes about a minute and "
-        "runs in the background.",
+        "Re-measures every reference picture (incl. its face quality) and "
+        "looks for weak ones, near-duplicates and mixed-up faces. Takes a few "
+        "minutes depending on the number of pictures and runs in the background.",
     "faces.qualitaet.label_alle": "All people",
     "faces.qualitaet.label_eine": "One person:",
     "faces.qualitaet.knopf_start": "Start check",
@@ -944,7 +950,6 @@ T = {
     "qualitaet.lauf.checking": "checking picture {i} of {n} &hellip;",
     "qualitaet.lauf.reload_person":
         "reload this page afterwards for the fresh result.",
-    "qualitaet.lauf.reload_auto": "the page refreshes on its own.",
     "qualitaet.lauf.abgebrochen":
         "the last check did not finish (service restart or it was "
         "stopped) &mdash; start it again.",
@@ -978,6 +983,8 @@ T = {
     "qualitaet.galerie.doppel": "duplicate — the kept one covers it",
     "qualitaet.galerie.gut": "good",
     "qualitaet.galerie.gut_behalten": "good — kept of its duplicates",
+    "qualitaet.galerie.vorrat": "from stock",
+    "qualitaet.galerie.norm": "quality {norm}",
     "qualitaet.galerie.okay": "okay",
     "qualitaet.galerie.satz_gut": "All {n} pictures look fine.",
     "qualitaet.galerie.satz_funde":
@@ -997,11 +1004,10 @@ T = {
     "qualitaet.leer.titel": "No check computed yet.",
     "qualitaet.leer.hinweis": "Click Re-check now above.",
     # ---------------------------------------------- routes/lernwizard ---
-    # NICHT eingezogen (bewusst, Stufe-0-Grenzen): die drei JS-Bloecke
-    # _ZW_JS/_SICHT_JS/_WIDGET_JS (\\u-Escapes, warten auf window.T,
-    # Stufe 1) samt dem JS-gekoppelten Mehr-Knopf (Show all/Hide the
-    # other — das JS setzt textContent zur Laufzeit, HTML-Label und
-    # JS-Literal muessen wortgleich bleiben); die sicht_zeile samt
+    # NICHT eingezogen (bewusst, Stufe-0-Grenzen; die JS-Bloecke
+    # _zw_js()/_sicht_js() und der Mehr-Knopf sind seit Tranche D
+    # eingezogen — Abschnitt Tranche D unten, _WIDGET_JS traegt keine
+    # Sprache): die sicht_zeile samt
     # pruef_wort "reference check"/"picture check" (Satzteil-Splicing
     # §8.3, zugleich qs.sh-.257-Anker) und "nothing here passes the
     # {pruef_wort} …"; der fps-Erklaertext (<b>3</b>/s-Inseln mitten im
@@ -1069,6 +1075,7 @@ T = {
     "lernwizard.wizard.auswahl_hinweis":
         "The cut is exact at N — completing selections to full passes "
         "arrives with the grouping stage.",
+    "lernwizard.wizard.auswahl_durchsucht": "{k} of these {n} are already searched — with \"skip searched events\" the run takes older events instead (the card shows where it ends up).",
     "lernwizard.wizard.q_teilgemessen":
         "analysis speed measured on THIS machine; download estimate "
         "uses defaults",
@@ -1170,9 +1177,9 @@ T = {
     # .295-Sammelzeile — Anker der qs.sh-PYAD-Stufe (Text wohnt jetzt
     # hier, die Route referenziert den Schluessel).
     "lernwizard.k3.verworfen.eins":
-        "{n} group dismissed (no usable faces or by you) &middot;",
+        "{n} group deleted by you &middot;",
     "lernwizard.k3.verworfen.viele":
-        "{n} groups dismissed (no usable faces or by you) &middot;",
+        "{n} groups deleted by you &middot;",
     "lernwizard.k3.link_einsehen": "view",
     # B9: je Zweig ein GANZER Satz-Schluessel (statt Punkt-Anhaengsel).
     "lernwizard.k3.done_weiter":
@@ -1227,9 +1234,7 @@ T = {
     "lernwizard.zw.knopf_save": "Save name",
     "lernwizard.zw.knopf_skip": "Skip this group",
     "lernwizard.zw.frage_delete":
-        "Delete this group? Its pictures are removed and a pending "
-        "naming is discarded; the group is remembered so re-harvests of "
-        "the same events stay quiet.",
+        "Delete this group? Its pictures are removed and a pending naming is discarded. This cannot be undone.",
     "lernwizard.zw.knopf_delete": "Delete this group",
     "lernwizard.zw.link_detail": "full detail view",
     "lernwizard.zw.detail_zusatz":
@@ -1378,6 +1383,8 @@ T = {
     "js.vorschlag.keine": "No recommended faces.",
     "js.vorschlag.alle_frage": "Add all {n} recommended face(s) to {person}? They become references immediately.",
     "js.vorschlag.frage": "Add {n} face(s) to {person}?",
+    "js.vorrat.frage": "Add {n} stock face(s) to {person}? They become references immediately (kept local, not exported).",
+    "js.qs.fortschritt": "checking picture {i} of {n} …",
     "js.sync.frage": "Synchronize: {richtung}?",
     "js.sync.modell_laedt": "loading model …",
     "js.sync.fortschritt": "{done}/{total} faces ({current}) {pct}%",
@@ -1432,9 +1439,10 @@ T = {
     "js.vision.treffer": "{n}/2 right",
     "js.vision.tokens": "{ist} tokens vs {soll}",
     "js.vision.dirty_titel": "You have not saved this connection",
-    # js.vision.dirty_text: "Save" ist der (noch englische) Knopf der
-    # Vision-Seite — bleibt woertlich, bis die Seite selbst einzieht.
-    "js.vision.dirty_text": "The test would use the values you just typed. Recognition keeps using the SAVED connection until you press Save — a green test alone changes nothing about the verdicts.",
+    # js.vision.dirty_text: zitiert den Vision-Knopf vision.save.knopf
+    # ("Save connection") woertlich — Zitat-Kopplung, bei Knopf-Aenderung
+    # nachziehen (gleiche Kopplung in js.vision.prompt_zurueck).
+    "js.vision.dirty_text": "The test would use the values you just typed. Recognition keeps using the SAVED connection until you press \"Save connection\" — a green test alone changes nothing about the verdicts.",
     "js.vision.dirty_save": "Save first, then test",
     "js.vision.dirty_test": "Test without saving",
     "js.vision.stufe1": "reachability and model",
@@ -1447,7 +1455,7 @@ T = {
     "js.vision.stufe_fehl": "step {nr} could not be run",
     "js.vision.neustart_warte": "the service is not answering right now — this page reloads in a moment",
     "js.vision.prompt_frage": "Reset the question to the default wording?",
-    "js.vision.prompt_zurueck": "default wording restored — press Save to store it",
+    "js.vision.prompt_zurueck": "default wording restored — press \"Save connection\" to store it",
     "js.vision.kachel_frage": "You have unsaved changes. Switching provider discards them. Continue?",
     "js.vision.pick": "— pick one —",
     "js.vision.untested": "untested here",
@@ -1564,4 +1572,1738 @@ T = {
     "auftritte.pass.label_fehler": "Error",
     "auftritte.pass.wer": "Who",
     "auftritte.pass.titel_zeit": "Pass {zeit} — {tag}",
+    # ---- verifyd-Innenseiten (Stufe 2, Tranche B) ----
+    # Inline-Handler in verifyd.py (kein routes/-Modul): _banner, Setup-
+    # Wizard, Today-Leerzustaende, /unbekannte, /live_alerts, /video,
+    # /event/<id>. Stufe-2-Grenzen dort: §8.1 (<b>System…</b>-Saetze im
+    # Wizard-Schritt 3 und im Fertig-Block), §8.6 (Frigate/suslik-Zeilen-
+    # labels der Event-Seite), B19 (%d.%m.-Datumsformate in _tag() und der
+    # Event-Kopfzeit). Wiederverwendet statt dupliziert: kameras.karte.*
+    # (Wizard-Schritt 2 = identische Karten-UI wie routes/kameras) und
+    # auftritte.pass.leer_event* (gleicher Event-404-Text).
+    "banner.schoner":
+        "Frigate is not answering — backing off and probing every few "
+        "seconds until it recovers; the UI keeps serving local data.",
+    "banner.fehler":
+        "Frigate unreachable (last error {zeit}): {fehler} — the UI keeps "
+        "serving local data.",
+    "setupwiz.frigate.status_ok": "✓ Connected — {n} camera(s) found",
+    "setupwiz.frigate.status_fehl": "✗ Could not reach Frigate: {fehler}",
+    "setupwiz.frigate.status_fehl_keine": "no cameras",
+    "setupwiz.frigate.status_fehl_hinweis":
+        "Fix the URL (or set FRIGATE_URL in your .env / docker-compose) "
+        "and test again.",
+    "setupwiz.frigate.status_leer":
+        "Enter your Frigate URL and test the connection.",
+    "setupwiz.frigate.titel": "Connect to Frigate",
+    "setupwiz.frigate.satz":
+        "suslik reads your cameras straight from Frigate's API "
+        "(usually port 5000). No cameras are hard-coded.",
+    "setupwiz.frigate.knopf_test": "Test connection",
+    "setupwiz.kameras.titel": "Pick cameras &amp; conditions",
+    "setupwiz.kameras.satz":
+        "Tick which cameras to watch; tick one or more zones to only "
+        "analyze events that entered them (e.g. person in the garden). "
+        "None ticked = all events.",
+    "setupwiz.kameras.satz_ohne":
+        "Connect to Frigate first — your cameras appear here.",
+    "setupwiz.backend.titel": "Acceleration",
+    "setupwiz.backend.verfuegbar": "Available on this machine:",
+    "setupwiz.backend.satz_wahl": "Pick one — CPU always works.",
+    "setupwiz.import.titel": "Import faces from Frigate",
+    # Zaehler-Split an der <b>-Grenze (§8.10): vor/mitte/nach rahmen die
+    # hervorgehobenen Zahlen, Rand-Leerzeichen gehoeren zum Wert.
+    "setupwiz.import.zahl_vor": "Frigate already has ",
+    "setupwiz.import.zahl_mitte": " reference image(s) of ",
+    "setupwiz.import.zahl_nach": " person(s).",
+    "setupwiz.import.satz":
+        "Import them so suslik recognizes everyone from the start. The "
+        "images are downloaded quickly, then suslik computes its own face "
+        "features on your accelerator (GPU/NPU).",
+    "setupwiz.import.knopf": "Import {n} faces from Frigate",
+    "setupwiz.import.satz_leer":
+        "No faces in Frigate yet. Note: suslik needs at least one "
+        "reference face before it can recognize anyone — import from "
+        "Frigate here, or upload photos later on the Known page.",
+    "setupwiz.import.satz_ohne":
+        "Connect to Frigate first — then you can import its known faces "
+        "here.",
+    "setupwiz.fertig.knopf": "Save &amp; start suslik",
+    "setupwiz.fertig.satz":
+        "Saves your choices and restarts the service once.",
+    "setupwiz.restore.titel": "Already have a configuration?",
+    "setupwiz.restore.satz":
+        "If you exported a suslik configuration before (System → "
+        "Configuration backup), load it here to restore all settings and "
+        "skip the wizard.",
+    "setupwiz.restore.knopf": "Load configuration file…",
+    "setupwiz.write.titel": "Write back to Frigate?",
+    "setupwiz.write.satz":
+        "suslik can write its verdicts back to Frigate (sub_labels) and "
+        "mirror references, for running both in parallel. Read-only is "
+        "the safe default.",
+    "setupwiz.write.opt_ro":
+        "Read-only (recommended) — suslik never writes to Frigate",
+    "setupwiz.write.opt_rw": "Write back to Frigate (parallel operation)",
+    "setupwiz.willkommen.titel": "Welcome to suslik",
+    "setupwiz.willkommen.satz":
+        "A quick guided setup — or load an existing configuration to skip "
+        "it. Everything here is editable later on the normal pages.",
+    # leer.*: Today-Leerzustaende + verstreute webui.leer()-Stellen.
+    # passe_area/band: B9-Ganz-Satz-Umbau (frueher Halbsatz-Splicing
+    # "yet today."/"on this day." — jetzt je Zweig ein voller Satz).
+    "leer.passe_area_heute": "No passes touched {area} yet today.",
+    "leer.passe_area_tag": "No passes touched {area} on this day.",
+    "leer.passe_area_hinweis": "The All chip above shows the whole property.",
+    "leer.passe_heute": "No passes with a face yet today.",
+    "leer.passe_heute_hinweis":
+        "As soon as someone walks across the property, the pass appears "
+        "here.",
+    "leer.tag": "Nothing with a face on this day.",
+    "leer.tag_hinweis":
+        "Use the arrows to look at another day, or open Events for the "
+        "full list.",
+    "leer.frigate": "No Frigate connected yet.",
+    "leer.frigate_hinweis":
+        "Set your Frigate URL in the setup wizard (System page) — then "
+        "passes appear here automatically.",
+    "leer.refs":
+        "Connected — but no reference faces yet, so nobody can be "
+        "recognized.",
+    "leer.refs_hinweis":
+        "Import faces from Frigate or upload photos — both on the Known "
+        "page. suslik then keeps learning from the cameras on its own.",
+    "leer.band_heute": "Nothing with a face yet today.",
+    "leer.band_tag": "Nothing with a face on this day.",
+    "leer.band_hinweis": "People appear here as soon as a pass is analysed.",
+    "leer.person_unbekannt": "Person unknown.",
+    "leer.kamera_unbekannt": "Unknown camera.",
+    "leer.kamera_unbekannt_hinweis":
+        "Tiles come from Frigate's camera list and saved watchers only.",
+    "unbekannte.name": "Unknown {nummer}",
+    "unbekannte.badge_eine": "clearly one person",
+    "unbekannte.badge_aehnlich": "similarity {wert}",
+    "unbekannte.badge_einmal": "seen once",
+    "unbekannte.meta_zeit": " appearances · {zeit}",
+    "unbekannte.knopf_reaktivieren": "reactivate",
+    "unbekannte.attr_name": "Name (new or existing)",
+    "unbekannte.knopf_zuweisen": "Assign person",
+    "unbekannte.knopf_ignorieren": "Ignore",
+    "unbekannte.opt_merge": "merge with…",
+    "unbekannte.knopf_ok": "OK",
+    "unbekannte.badge_gleiche": "same person?",
+    "unbekannte.knopf_merge": "Merge",
+    "unbekannte.knopf_verschieden": "Different",
+    "unbekannte.titel": "Unknown",
+    "unbekannte.kopf_satz":
+        "Faces with no known match, grouped into recurring identities.",
+    # Kopf-Erklaerung an den <b>-Grenzen gesplittet; die Fett-Teile sind
+    # die knopf_*-Schluessel selbst (eine Quelle, kein Drift).
+    "unbekannte.kopf_satz_zuweisen":
+        " links a tile to a person (new or existing, type the name),",
+    "unbekannte.kopf_satz_ignorieren": " mutes a known stranger (no alert).",
+    "unbekannte.kopf_satz_auto":
+        "New faces are collected automatically after each pass.",
+    "unbekannte.knopf_reorg": "Reorganize now",
+    "unbekannte.hinweis_reorg":
+        "re-check the pool and rebuild the clusters — collection itself "
+        "runs automatically (1-2 min)",
+    "unbekannte.h_wieder": "Recurring",
+    "unbekannte.h_einzeln": "{n} single appearances (seen once so far)",
+    "unbekannte.h_besucher": "{n} known visitors (muted)",
+    "unbekannte.h_objekte": "{n} static objects (auto-detected — not people)",
+    "unbekannte.satz_objekte":
+        "Groups whose images are near-identical to each other and unlike "
+        "any person — typically a wheel arch, pavement or light pattern "
+        "the detector keeps mistaking for a face. They are frozen: new "
+        "finds are never added here (they form fresh, visible clusters "
+        "and get re-checked by the same rule) — the groups stay listed so "
+        "nothing is hidden.",
+    "unbekannte.leer": "No unknown faces collected yet.",
+    "unbekannte.leer_hinweis":
+        "Identities appear here after the next unknown visitor.",
+    "livealerts.link_video": "&#9654; video {n}",
+    "livealerts.person_unbekannt": "unknown",
+    "livealerts.trigger.eins": "{n} trigger",
+    "livealerts.trigger.viele": "{n} triggers",
+    "livealerts.kanal_keiner": "not sent (no channel)",
+    "livealerts.keine_bilder": "no stored pictures",
+    "livealerts.titel": "Live watcher alerts",
+    "livealerts.kopf.auftritte.eins": "{n} appearance",
+    "livealerts.kopf.auftritte.viele": "{n} appearances",
+    "livealerts.kopf.satz":
+        " on {tag} — quick check, preliminary; the confirmed verdict "
+        "comes from the normal analysis.",
+    "livealerts.kopf.satz_alt":
+        "Entries from before 0.1.0.190 have no picture or name recorded.",
+    "livealerts.leer": "No live alerts that day.",
+    "video.fehl": "&#9888; Transcode failed — see the service log (/log).",
+    "video.fehl_hinweis":
+        "Reload this page to retry, or open the original clip:",
+    "video.warte": "Preparing browser video (H.264)&nbsp;…",
+    "video.warte_satz":
+        "This page refreshes automatically. The copy is built once and "
+        "then cached.",
+    "event.ours_zeile.eins": "{person} — {stufe} (seen in {n} window)",
+    "event.ours_zeile.viele": "{person} — {stufe} (seen in {n} windows)",
+    "event.ours_keiner": "no match for anyone",
+    "event.ours_rest.eins": " · {n} other: no match",
+    "event.ours_rest.viele": " · {n} others: no match",
+    "event.grenze":
+        "below this line: weak matches (best score &lt; {wert}) — the "
+        "name is a guess, this could be a different person",
+    "event.gruppe_ohne": "Unattributed",
+    "event.badge_unsicher": "unsure",
+    "event.leer_crops": "No face crops stored for this event.",
+    "event.knopf_video": "&#9654; Video",
+    "event.knopf_log": "Analysis log",
+    "event.attr_unvollstaendig":
+        "clip incomplete — read {gelesen}/{soll} frames; judged from the "
+        "readable part",
+    "event.badge_unvollstaendig": "⚠ incomplete clip",
+    "event.pass_zurueck": "&#8592; prev",
+    "event.pass_weiter": "next &#8594;",
+    "event.pass_teil": "Part of a pass",
+    "event.pass_events.eins": "{n} event",
+    "event.pass_events.viele": "{n} events",
+    "event.pass_knopf": "view pass",
+    "event.label_grund": "Error reason",
+    "event.grund_ohne_zeile":
+        "analyze.log holds no reason line — use the log button below",
+    "event.grund_ohne_log":
+        "no analyze.log kept for this event — see the service log "
+        "(System page)",
+    "event.zurueck": "← Today",
+    "event.label_korrektur": "Correct if wrong",
+    "event.label_wer": "Who was it?",
+    "event.h_bilder": "Images",
+    # ---- Routen-Seiten (Stufe 2, Tranche C) ----
+    # routes/system.py, routes/vision.py, routes/visiontest.py,
+    # routes/visionwizard.py, routes/personwizard.py, webui/bausteine.py.
+    # Grenzen dieser Tranche stehen als Kommentar an den Fundstellen:
+    # §8.1 (Inline-<a>/<b>/<code> mitten in Prosa, t_html-Stufe), §8.4
+    # (Inline-JS + JSON-msg, Tranche D), B19 (Datumsformate), §8.6
+    # (Produkt-/Protokollnamen, Endpunkt-Namen), §8.12/§8.13
+    # (KAT_LABELS-Konstante in webui/bausteine.py, eigener Umbau-Zug).
+    # Wiederverwendet statt dupliziert: ereignisliste.tabelle.kopf_kamera +
+    # ereignisliste.titel (QC-Tabellenkopf), ui.fuss.log ("Service log"),
+    # konfiguration.knopf_setup ("Re-run setup wizard").
+    # ZITAT-FOLGE (Uebersetzungsrunde): system.titel + system.backup.titel
+    # ("System"/"Configuration backup") werden von setupwiz.restore.satz
+    # woertlich zitiert, konfiguration.knopf_setup vom Wizard-Fertig-Block
+    # (verifyd.py — seit Stufe 3 der Schluessel setupwiz.fertig.wieder_satz),
+    # vision.save.knopf ("Save connection")
+    # sinngemaess von js.vision.dirty_text ("press Save").
+    # --- routes/system.py ---
+    "system.ampel.service": "Service",
+    "system.ampel.service_info": "processed (total): {n}",
+    "system.ampel.backend": "Backend",
+    "system.ampel.backend_ok": "{backend} — self-check OK",
+    "system.ampel.backend_fail":
+        "{backend} — {n} self-check FAIL(s), see service log",
+    "system.ampel.analyse": "Analysis",
+    "system.ampel.analyse_dauer": "last duration {s} s",
+    "system.ampel.analyse_nie": "no analysis yet",
+    "system.ampel.retry": "Retry queue",
+    "system.ampel.retry_info":
+        "{offen} open / {aufgegeben} given up (window {tage} d)",
+    "system.ampel.frigate_unkonfiguriert":
+        "not configured yet — set the URL in the setup wizard",
+    "system.ampel.frigate_ok": "reachable",
+    # {zeit} kommt vorformatiert (%H:%M) aus der Route (B19-Stufe).
+    "system.ampel.frigate_fehler": "last error {zeit}",
+    # {s} vorformatiert (:.0f) — Formatspezifika nie in Werte (§8.8).
+    "system.ampel.mqtt_hb": "heartbeat {s} s ago",
+    "system.ampel.mqtt_kein_hb": "no heartbeat yet",
+    "system.ampel.mqtt_pub_aus": "configured, publishing off",
+    "system.ampel.mqtt_pub_kaputt":
+        "configured, publisher not started — see service log",
+    "system.ampel.mqtt_unkonfiguriert": "not configured",
+    "system.ampel.disk": "Disk",
+    "system.ampel.disk_info2": "{gb} GB free · clip cache {cache} GB of {max} GB",
+    "system.disk.titel": "Disk space",
+    "system.disk.satz": "Clips are a cache: kept {tage} days, capped at {max} GB, and trimmed whenever less than {min} GB is free (checked every 10 minutes).",
+    "system.disk.knopf": "Clean up now",
+    "system.disk.warnung": "Only {gb} GB free and the clip cache is already empty — free space on the data volume; otherwise new events cannot be saved.",
+    "system.ampel.ok": "OK",
+    "system.ampel.check": "CHECK",
+    "system.drift.banner":
+        "DRIFT GUARD RED after the last reference add:",
+    "system.sync.titel": "Sync with Frigate",
+    "system.sync.knopf": "Open Frigate sync",
+    "system.sync.satz":
+        "The sync page compares both libraries class by class, pre-checks "
+        "every candidate the way Frigate does, sends only what you tick, "
+        "and imports what only Frigate has.",
+    "system.sync.fehlt":
+        "not available yet — needs a reachable Frigate and at least one "
+        "reference face",
+    "system.qc.titel": "QC report",
+    "system.qc.stand": "(as of {stand}, {tage} days)",
+    "system.qc.kopf_gesicht": "with face",
+    "system.qc.kopf_bestaetigt": "confirmed",
+    "system.qc.kopf_quote": "window rate",
+    # WIRD ZITIERT: setupwiz.restore.satz aller Sprachen nennt diesen Titel
+    # woertlich englisch — in der Uebersetzungsrunde nachziehen.
+    "system.backup.titel": "Configuration backup",
+    "system.backup.satz":
+        "Download the settings stored in /data/config as one JSON file, or "
+        "restore them from such a file. Honest scope: today that is the "
+        "CAMERA SHEET (incl. its stored values); thresholds/channels set "
+        "only in verifyd.yaml or via environment are NOT in this file. "
+        "Learned people/references: use the full backup below.",
+    "system.backup.knopf_download": "Download configuration",
+    "system.backup.knopf_restore": "Restore from file…",
+    "system.backup.careful": "Careful:",
+    # {hinweis} = core.registry.VISION_EXPORT_HINWEIS (zentrale Quelle).
+    "system.backup.careful_config":
+        "this file {hinweis} (notification channels and vision detect), so "
+        "that a restore on another machine really works.",
+    "system.backup.restore_satz":
+        "Restore overwrites the current settings (the previous ones are "
+        "kept as a .bak) and restarts the service.",
+    "system.voll.titel": "Full backup",
+    "system.voll.satz":
+        "One portable archive with everything you taught this "
+        "installation: settings, the face reference library, learning-run "
+        "results, the whole person-recognition material (images, your "
+        "review verdicts, trained models) and the event record. Made for "
+        "moving to another machine. Honest scope: the video clip cache and "
+        "per-event analysis artifacts are NOT included — they are rebuilt "
+        "over time.",
+    "system.voll.knopf_download": "Download full backup",
+    "system.voll.knopf_restore": "Restore full backup…",
+    "system.voll.careful": "this archive {hinweis}.",
+    "system.voll.restore_satz":
+        "Restore replaces those parts (each previous one is kept once as "
+        "*.pre-restore-*) and restarts the service. Uploading a few "
+        "hundred MB can take a while — leave the page open.",
+    "system.live.titel": "Live watchers",
+    "system.live.alerts": "Alerts sent today: {kanaele}",
+    "system.live.stoerungen": "Disturbance notices today: {n}",
+    "system.live.knopf": "Open Live watchers",
+    "system.live.quelle":
+        "Counted from the engine's own message log — only messages that "
+        "were really accepted by a channel. Live watcher alerts are "
+        "separate from the event-analysis alert counters on the Today "
+        "page.",
+    "system.write.titel": "Frigate write-back",
+    "system.write.satz":
+        "Does suslik write back to Frigate, or only read? Read-only is the "
+        "safe default; enable writing only for parallel operation "
+        "(Frigate-Face + suslik).",
+    "system.write.aktuell": "Current:",
+    "system.write.zustand_ro": "READ-ONLY — suslik does not write to Frigate",
+    "system.write.zustand_rw": "WRITING to Frigate — sub_labels",
+    "system.write.zustand_rw_sync": " + reference sync",
+    "system.write.knopf_rw": "Enable writing",
+    "system.write.knopf_ro": "Read-only",
+    # WIRD ZITIERT: setupwiz.restore.satz ("System → Configuration backup")
+    # und der Wizard-Fertig-Block nennen die Seite woertlich englisch.
+    "system.titel": "System",
+    "system.tools.titel": "Tools",
+    "system.docs.titel": "Docs",
+    "system.docs.link": "Documentation on GitHub",
+    # --- routes/vision.py ---
+    "vision.zeit.nie": "never",
+    "vision.titel": "Vision detect",
+    "vision.kopf.dirty": "not saved",
+    "vision.hinweis.titel": "What you need for this",
+    "vision.schalter.knopf_aus": "Turn off",
+    "vision.schalter.knopf_an": "Turn on",
+    "vision.schalter.fehlt": "Still missing:",
+    "vision.schalter.titel_an": "Vision detect is on",
+    "vision.schalter.titel_aus": "Vision detect is off",
+    "vision.schalter.aus_satz":
+        "While it is off nothing is sent anywhere and no image leaves this "
+        "machine.",
+    "vision.frage.titel": "How a comparison is asked",
+    "vision.frage.doppel_titel":
+        "Ask each pair twice, with the galleries swapped",
+    "vision.frage.doppel_satz":
+        "This is the position check. A in the first run and B in the "
+        "swapped run mean the SAME gallery, so a contradiction exposes a "
+        "model that simply prefers whatever comes first. Measured here: "
+        "every wrong answer across all our test series was an "
+        "&bdquo;A&ldquo;, never a &bdquo;B&ldquo;. Turning it off halves "
+        "the requests &mdash; and a comparison then rests on a single "
+        "answer, with nothing to check it against.",
+    "vision.meld.titel": "Extra messages",
+    "vision.meld.satz":
+        "Both are off unless you turn them on, and neither changes the "
+        "existing alarms: vision cannot raise one, cancel one, or overrule "
+        "the face and body paths.",
+    "vision.meld.judged_titel":
+        "Tell me when a walk-through has been judged",
+    "vision.meld.judged_satz":
+        "A short note through your usual channels once the verdict is in "
+        "&mdash; with the real vote count. It arrives after the pass is "
+        "over, on a local model that can be minutes later. Information, "
+        "not an alarm.",
+    "vision.meld.alarm_titel":
+        "Alert me when vision contradicts the body recognition",
+    "vision.meld.alarm_satz":
+        "Fires only when a run really happened, the model answered, and it "
+        "still confirmed nobody. It stays quiet when there was simply not "
+        "enough material &mdash; that would be noise. Recognising people "
+        "you taught it is the strong side of this path, so a "
+        "non-confirmation means something; turning strangers away is the "
+        "weak side, so vision never votes in that direction.",
+    "vision.kachel.was_key": "you enter an API key",
+    "vision.kachel.was_host": "you enter host and port",
+    "vision.kachel.was_url": "you enter a URL and an optional key",
+    "vision.kachel.titel": "Where the model runs",
+    "vision.kachel.satz":
+        "Pick a provider. For the three named ones the official API "
+        "address is already built in &mdash; you only enter your key. "
+        "Nothing is sent anywhere until you press a button yourself.",
+    "vision.verb.key_gespeichert":
+        "&bull;&bull;&bull;&bull; stored &mdash; leave blank to keep it",
+    "vision.verb.key_pflicht_ph": "paste your key here",
+    "vision.verb.key_frei_ph": "only if your server asks for one",
+    "vision.verb.host": "Host",
+    "vision.verb.host_ph": "the name or address of that machine",
+    "vision.verb.port": "Port",
+    "vision.verb.host_satz":
+        "Just the machine &mdash; suslik adds the rest of the address "
+        "itself. The example port is the one llama.cpp uses by default; "
+        "use whatever yours listens on.",
+    "vision.verb.endpunkt": "Endpoint URL",
+    "vision.verb.endpunkt_satz":
+        "That is an example of an OpenAI-compatible endpoint &mdash; "
+        "replace it with yours if you use another provider.",
+    "vision.verb.betriebsart": "This endpoint is",
+    "vision.verb.betriebsart_extern": "on the internet",
+    "vision.verb.betriebsart_lokal": "in my own network",
+    "vision.verb.adresse": "API address",
+    "vision.verb.adresse_satz":
+        "Built in &mdash; there is nothing to type wrong here.",
+    "vision.verb.key": "API key",
+    "vision.verb.key_frei_satz":
+        "Optional here &mdash; most local servers do not ask for one. "
+        "Press the button anyway: it also fetches the list of models your "
+        "server has.",
+    "vision.verb.titel": "Connection",
+    "vision.modell.titel": "Model",
+    "vision.modell.verweigert": "the endpoint refused the connection",
+    # {zeit} vorformatiert aus _zeit() — das Format bleibt in der Route (B19).
+    "vision.modell.geprueft": "Checked {zeit} against",
+    "vision.modell.opt_wahl": "&mdash; pick one &mdash;",
+    "vision.modell.ungetestet": "untested here",
+    "vision.modell.opt_verschollen":
+        " — saved earlier, the endpoint does not list it now",
+    "vision.modell.wahl_satz":
+        "Pick one from the list &mdash; the note next to each name is "
+        "ours, the names are the endpoint&rsquo;s.",
+    "vision.modell.verschollen_satz":
+        "This model is saved and still in use, but the endpoint did not "
+        "list it this time. Check the name, or pick one from the list.",
+    "vision.modell.fremde_plattform": "measured on another platform",
+    "vision.modell.kein_rohergebnis": "no raw result archived for this one",
+    "vision.modell.gemessen": "measured {datum} &middot; {quelle}",
+    "vision.modell.ungemessen_satz":
+        "Not measured here &mdash; that is not a verdict, just honesty. "
+        "Run the connection test below before you rely on it.",
+    "vision.modell.manuell": "Model id by hand",
+    "vision.modell.manuell_ph": "exact model id",
+    "vision.modell.manuell_knopf": "Check this id",
+    "vision.modell.manuell_satz":
+        "For endpoints that do not list everything: the id is checked with "
+        "a tiny text request first; nothing unchecked can be saved.",
+    "vision.prompt.standard_satz":
+        "This is the measured default wording. As long as you leave it "
+        "exactly like this, verdicts are not marked as custom.",
+    "vision.prompt.titel": "The question suslik asks",
+    "vision.prompt.satz":
+        "You can change the wording. The last paragraph is fixed: it is "
+        "the one-word instruction the answer parser depends on, and it is "
+        "what was measured.",
+    "vision.prompt.knopf_zurueck": "Reset to default",
+    "vision.zahlen.think": "Turn the model&rsquo;s thinking off",
+    "vision.zahlen.think_satz":
+        "On since 0.1.0.211 by default: on hard comparison grids a "
+        "thinking model can talk itself past the token budget and the run "
+        "ends without a verdict. Strict endpoints reject the switch; "
+        "suslik then repeats the request once without it and says so.",
+    "vision.zahlen.titel": "Limits",
+    "vision.zahlen.max_tokens": "Max tokens per answer",
+    "vision.zahlen.timeout": "Timeout per request (s)",
+    "vision.zahlen.satz":
+        "3000 tokens was measured to be not enough on one run &mdash; the "
+        "answer was cut off and counted as no verdict, and the same "
+        "question was right with 12000. A local model on a CPU machine "
+        "needs minutes per request, an online one seconds.",
+    "vision.cloud.ziel_fallback": "the endpoint you configure above",
+    "vision.cloud.titel": "Sending pictures to an outside service",
+    "vision.cloud.satz":
+        "Those pictures are not only of the people who live here: the "
+        "uncertain cases are mostly strangers &mdash; visitors, delivery "
+        "drivers, neighbours, passers-by. You are the one responsible for "
+        "that, not the operator of the service. Your confirmation is "
+        "written to the audit log with a timestamp; switching back to a "
+        "local model withdraws it.",
+    "vision.cloud.bestaetigung": "I understand and confirm this",
+    "vision.cloud.bestaetigt": "(confirmed {zeit})",
+    "vision.test.treffer": "{n}/2 right",
+    "vision.test.tokens": "{ist} tokens vs {soll}",
+    "vision.test.falsch": " (wrong)",
+    # ZITAT-FOLGE: js.vision.dirty_text UND js.vision.prompt_zurueck
+    # zitieren diesen Knopf woertlich ("Save connection") — beim
+    # Uebersetzen/Aendern beide nachziehen.
+    "vision.save.knopf": "Save connection",
+    "vision.save.dirty":
+        "unsaved changes &mdash; recognition still uses the saved "
+        "connection",
+    "vision.test.titel": "Test this connection",
+    "vision.test.knopf": "Run the test",
+    "vision.test.nicht_gelaufen": "not run",
+    "vision.test.stufe1": "reachability",
+    "vision.test.stufe2": "forced choice",
+    "vision.test.stufe3": "token audit",
+    "vision.test.ungetestet": "Not tested yet.",
+    "vision.test.letzter": "Last run {zeit} against",
+    "vision.galerien.stand_gut": "approved {zeit} &middot; {zellen} cells",
+    "vision.galerien.pruefen": "needs a look",
+    "vision.galerien.keine": "no gallery yet",
+    "vision.galerien.zu_wenig":
+        "not enough approved body images yet ({n} usable)",
+    "vision.galerien.knopf_auffrischen": "Refresh it",
+    "vision.galerien.knopf_bauen": "Build a gallery",
+    "vision.galerien.zahl": "{n} usable images &middot; {reihen}",
+    "vision.galerien.titel": "Galleries",
+    "vision.galerien.stand":
+        "{n} galleries ready ({min} required) &mdash; vision needs at "
+        "least two, because it always compares one person against another.",
+    "vision.galerien.satz":
+        "Only people with a learned body model can get a gallery; the "
+        "images come from the body material you already approved. Vision "
+        "only ever judges people who have one, and it says so on the "
+        "verdict.",
+    # --- routes/visiontest.py ---
+    "visiontest.titel": "Recognition test",
+    "visiontest.kopf.satz":
+        "Face and person are read from what was recorded at the time "
+        "&mdash; nothing is recomputed. Vision runs now, through exactly "
+        "the same path it uses in normal operation.",
+    # Frueher Modulkonstante KOSTEN — §8.12: t() nie auf Modulebene.
+    "visiontest.kosten":
+        "A test run costs real requests, exactly like normal operation: "
+        "the whole walk-through goes in as one candidate grid, and each "
+        "compared pair of galleries costs two requests, because every "
+        "question is asked again with the galleries swapped. It counts as "
+        "a manual click, so it does not eat your daily limit &mdash; but "
+        "on a paid endpoint it is money, and on a local CPU model it "
+        "takes minutes.",
+    "visiontest.wer.niemand": "nobody recognized",
+    # EN-Klammerformen ("camera(s)", "pass(es)") bleiben EINE Form je
+    # Schluessel (§8.18) — echter Plural waere eine bewusste Textaenderung.
+    "visiontest.wahl.kachel_zahlen":
+        "{events} events &middot; {kameras} camera(s)",
+    "visiontest.wahl.vision_fertig": " &middot; vision done",
+    "visiontest.wahl.titel": "1 &middot; Which walk-through",
+    "visiontest.wahl.leer":
+        "No passes recorded yet. As soon as somebody walks across the "
+        "property, they appear here.",
+    "visiontest.wahl.kopf_zahlen":
+        "{events} event(s) &middot; {kameras} camera(s)",
+    "visiontest.wahl.anderer": "choose another walk-through",
+    "visiontest.wahl.titel_offen": "1 &middot; Choose a walk-through",
+    "visiontest.wahl.anzahl": "{n} recent pass(es)",
+    "visiontest.wahl.satz":
+        "The most recent passes, grouped exactly like on the Today page.",
+    "visiontest.gesicht.kein_match": "not matched",
+    "visiontest.gesicht.gezeigt": "showing {gezeigt} of {gesamt} picture(s)",
+    "visiontest.gesicht.ohne_bild":
+        "{fehlt} of the {unbek} unmatched event(s) kept no picture",
+    "visiontest.gesicht.kein_bild":
+        "no face picture was kept for this pass",
+    "visiontest.gesicht.keines": "no known face",
+    "visiontest.gesicht.zeile": "{person} &middot; {events} event(s)",
+    # {best} vorformatiert (:.2f) aus der Route (§8.8).
+    "visiontest.gesicht.best": " &middot; best {best}",
+    "visiontest.gesicht.unbekannt":
+        "{n} event(s) with a face that was not matched",
+    "visiontest.gesicht.titel": "Face",
+    "visiontest.gesicht.quelle":
+        "embedding comparison against your reference faces &mdash; from "
+        "the record of this pass",
+    "visiontest.koerper.kandidaten":
+        "candidates, none above the rule: {liste}",
+    "visiontest.koerper.nichts": "nothing judged",
+    "visiontest.koerper.zeile":
+        "{klasse} &middot; score {score} of {schwelle} &middot; {quelle}",
+    "visiontest.koerper.bild_weg": "image expired",
+    "visiontest.koerper.titel": "Person",
+    "visiontest.koerper.quelle":
+        "DINOv2 embedding + classifier on the judged images of this pass",
+    "visiontest.log.warte":
+        "waiting for the model &mdash; this page refreshes itself",
+    "visiontest.log.titel": "What happened",
+    "visiontest.gitter.alt": "the candidate grid of this run",
+    "visiontest.gitter.bildunterschrift":
+        "the picture the model was actually shown",
+    "visiontest.gitter.zeile":
+        "candidate grid: {n} cell(s) from this walk-through, asked as ONE "
+        "picture",
+    "visiontest.gitter.luecken": " ({n} cell(s) left empty)",
+    "visiontest.runden.kein_votum": "no vote &mdash; {grund}",
+    "visiontest.runden.paar": "{a} vs {b}",
+    "visiontest.nach.laeuft": "Re-analysing this walk-through",
+    "visiontest.nach.stand":
+        "{fertig} of {gesamt} events done &mdash; the judged images are "
+        "collected along the way, this takes a few minutes. It is quiet: "
+        "no alerts, no notifications. This page refreshes itself.",
+    "visiontest.nach.titel": "Nothing was kept for this walk-through",
+    "visiontest.nach.satz":
+        "Analysing it again brings the judged images back &mdash; and that "
+        "fills all three paths, not just vision. It runs the ordinary "
+        "analysis over the events of this pass once more: quiet, without "
+        "alerts, and it waits for live recognition instead of pushing it "
+        "aside.",
+    "visiontest.nach.knopf": "Analyse this walk-through again",
+    "visiontest.felder.zellen": "grid cells for this run",
+    "visiontest.felder.voten": "confirmations needed for this run",
+    "visiontest.felder.doppel": "ask each pair twice (swap check)",
+    "visiontest.felder.satz":
+        "All three apply to THIS run only &mdash; nothing is saved and "
+        "normal operation keeps its own settings. This walk-through has "
+        "{material} usable picture(s) &mdash; asking for more cells than "
+        "that is fine, the grid just gets smaller. {galerien} approved "
+        "galleries allow at most {voten_max} comparison(s). With the swap "
+        "check on, a comparison costs two requests; without it, one "
+        "&mdash; and it then rests on a single answer.",
+    "visiontest.laeufe.abgebrochen": "aborted (service restarted)",
+    "visiontest.laeufe.kein_urteil": "no verdict",
+    "visiontest.laeufe.von": "of {n}",
+    "visiontest.laeufe.ohne_tausch": "no swap",
+    "visiontest.laeufe.auto": "auto",
+    "visiontest.laeufe.offen": "+{n} open",
+    "visiontest.laeufe.titel": "Runs on this walk-through",
+    "visiontest.laeufe.kopf_wann": "when",
+    "visiontest.laeufe.kopf_zellen": "cells",
+    "visiontest.laeufe.kopf_noetig": "needed",
+    "visiontest.laeufe.kopf_backend": "backend",
+    "visiontest.laeufe.kopf_urteil": "verdict",
+    "visiontest.laeufe.kopf_voten": "votes",
+    "visiontest.laeufe.kopf_anfragen": "req",
+    "visiontest.laeufe.kopf_zeit": "time",
+    "visiontest.laeufe.satz":
+        "Newest first. Only what was really run &mdash; the list comes "
+        "from this walk-through's own log and disappears with it.",
+    "visiontest.vision.titel": "Vision",
+    "visiontest.vision.quelle_kurz":
+        "a vision model comparing this pass against your galleries",
+    "visiontest.vision.unkonfiguriert": "not configured",
+    "visiontest.vision.attr_nichts": "there is nothing to compare yet",
+    "visiontest.vision.knopf": "Run vision on this pass",
+    "visiontest.vision.nichts_satz":
+        "nothing to compare yet &mdash; analyse this walk-through again "
+        "first (button above)",
+    "visiontest.vision.laeuft_satz":
+        "a run is going right now &mdash; the log below grows as it works",
+    "visiontest.vision.startet": "starting &mdash; nothing reported yet",
+    "visiontest.vision.quelle":
+        "forced choice against your galleries: the whole walk-through "
+        "goes in as ONE candidate grid, and every pair is asked twice "
+        "with the galleries swapped",
+    "visiontest.vision.nicht_gelaufen": "not run for this pass",
+    "visiontest.vision.verglichen":
+        "compared {a} against {b} &mdash; it says nothing about anyone "
+        "else",
+    "visiontest.vision.abgebrochen":
+        "run aborted &mdash; the service restarted",
+    "visiontest.vision.kein_urteil": "no verdict &mdash; {grund}",
+    "visiontest.vision.bilanz":
+        "{voten} of {bilder} comparison(s) gave an answer &middot; "
+        "{anfragen} requests &middot; {dauer} s &middot; run {zeit}",
+    "visiontest.vision.reihenfolge": " &middot; order: {quelle}",
+    "visiontest.vision.custom_prompt": " &middot; custom prompt",
+    "visiontest.drei.titel": "2 &middot; What the three paths say",
+    "visiontest.drei.satz":
+        "Same pass, three independent judgements. They are allowed to "
+        "disagree &mdash; that is the point of looking at them together.",
+    # --- routes/visionwizard.py ---
+    "visionwizard.schritt.person": "pick a person",
+    "visionwizard.schritt.groesse": "pick a size",
+    "visionwizard.schritt.vorschlag": "check the proposal",
+    "visionwizard.schritt.abnahme": "approve",
+    "visionwizard.titel": "Build a gallery",
+    "visionwizard.kopf.satz":
+        "A gallery is a small grid of pictures of one person &mdash; that "
+        "is what the vision model compares a new picture against. It is "
+        "built from body images you already approved; nothing new is "
+        "recorded and no video is opened.",
+    "visionwizard.person.stand_gut": "gallery approved {zeit}",
+    "visionwizard.person.zu_wenig":
+        "{n} usable images &mdash; not enough for a gallery yet. Run "
+        "Person learn on more walk-throughs.",
+    "visionwizard.person.max_gitter":
+        "largest grid this material supports: {n}",
+    "visionwizard.person.titel": "1 &middot; Which person",
+    "visionwizard.person.satz":
+        "Only people with a learned body model appear here, and the counts "
+        "are the images that pass the size filter (at least 350 pixels "
+        "tall) &mdash; not everything that was ever harvested.",
+    "visionwizard.groesse.zellen": "{n} cells",
+    "visionwizard.groesse.titel": "2 &middot; How many pictures",
+    "visionwizard.zelle.leer":
+        "no more images for this row &mdash; and nothing left to borrow "
+        "either",
+    "visionwizard.zelle.geliehen": "from the {reihe} row",
+    "visionwizard.zelle.knopf_weg": "does not fit",
+    "visionwizard.reihe.geliehen":
+        "{n} filled from another view &mdash; there were not enough clean "
+        "{reihe} images",
+    "visionwizard.reihe.luecken": "{n} cell(s) could not be filled at all",
+    "visionwizard.reihe.spreizung": "{tage} day(s), {kameras} camera(s)",
+    "visionwizard.reihe.kopf": "{reihe} view",
+    "visionwizard.reihe.eigene": "{eigene} of {gesamt} from this view",
+    "visionwizard.vorschlag.abgelehnt":
+        "{n} image(s) you rejected earlier are remembered and will not "
+        "come back.",
+    "visionwizard.vorschlag.titel": "3 &middot; Does this fit?",
+    "visionwizard.vorschlag.grenze":
+        "Honest limit: those are measurements of the picture, not of the "
+        "moment. A picture where someone is tying their hair or bending "
+        "down looks fine to every one of them &mdash; that is what your "
+        "eyes are for.",
+    "visionwizard.vorschlag.knopf": "Approve this gallery",
+    "visionwizard.vorschlag.kopie_satz":
+        "Approving copies these pictures into the gallery folder. From "
+        "then on the gallery is fixed: deleting an original later cannot "
+        "punch holes into it &mdash; suslik only asks you to approve it "
+        "again.",
+    "visionwizard.fertig.geliehen": " &middot; borrowed",
+    "visionwizard.fertig.titel": "Approved gallery",
+    "visionwizard.fertig.stand": "{zellen} cells, approved {zeit}.",
+    "visionwizard.fertig.satz":
+        "These are copies inside the gallery folder, with the origin of "
+        "every picture (run, file, checksum) written next to them. They "
+        "travel with your backup.",
+    "visionwizard.fertig.knopf_neu": "Build it again from current material",
+    "visionwizard.fertig.knopf_zurueck": "Back to Vision detect",
+    "visionwizard.neu.titel": "New material available",
+    "visionwizard.neu.satz":
+        "Nothing changes on its own &mdash; the gallery you approved "
+        "stays exactly as it is until you build and approve a new one.",
+    # --- routes/personwizard.py ---
+    "personwizard.wer.alle": "all known people",
+    "personwizard.wer.fremde": "strangers",
+    "personwizard.titel": "Learn people — body recognition",
+    "personwizard.kopf.satz":
+        "A second, independent recognition path: it learns what a person "
+        "looks like as a WHOLE (build, hair, posture) so it can recognize "
+        "residents even when no face is visible.",
+    "personwizard.kopf.wie_titel": "How this works — you stay in control",
+    "personwizard.kopf.schritt1":
+        "1 · You choose how many events to scan and WHO to learn (one "
+        "person, or all known people).",
+    "personwizard.kopf.schritt2":
+        "2 · The run harvests full-body images from your own recordings. "
+        "A picture is tied to a person only when a face-confirmed "
+        "walk-through proves it — deliberately conservative.",
+    "personwizard.kopf.schritt3":
+        "3 · YOU review every harvested image; one click rejects a wrong "
+        "one. Nothing is learned without your approval.",
+    "personwizard.kopf.schritt4":
+        "4 · Training then runs locally in seconds, and a decision "
+        "threshold is measured so strangers stay below it.",
+    "personwizard.kopf.tempo":
+        "A note on speed: harvesting currently runs on the CPU, so please "
+        "bear with a run taking a little while (roughly 15&ndash;30 s per "
+        "event). Moving this to the GPU/NPU is planned for a later "
+        "version.",
+    "personwizard.kopf.warum":
+        "Why at least one person first: this path can only tell people "
+        "apart after it has learned — and you have reviewed — what at "
+        "least one resident looks like. Until then body recognition stays "
+        "OFF and never sends an alert. When it does alert later "
+        "(Pushover/Telegram), the message is marked as coming from person "
+        "recognition, not from face recognition.",
+    "personwizard.vorb.titel": "Preparing the run &hellip;",
+    "personwizard.vorb.zeile":
+        "tying the last {n} events to {wer} via confirmed walk-throughs",
+    "personwizard.vorb.satz":
+        "This takes a minute or two — the page refreshes on its own, "
+        "harvesting starts right after.",
+    "personwizard.ernte.stand":
+        "{events}/{von} events · {bilder} images harvested",
+    "personwizard.ernte.startet": "starting …",
+    "personwizard.ernte.titel": "A person-learn run is active",
+    "personwizard.ernte.zeile": "learning {wer} · {stand}",
+    "personwizard.ernte.satz":
+        "This page refreshes on its own. A new run can be started once it "
+        "finishes.",
+    "personwizard.ernte.knopf_abbruch": "Abort run",
+    "personwizard.ernte.abbruch_hinweis": "harvested images are kept",
+    "personwizard.unterbrochen.titel": "Last run was interrupted",
+    "personwizard.unterbrochen.satz":
+        "Probably a service restart. Start the same run again below — "
+        "already-harvested events are skipped automatically (resume), "
+        "nothing is lost.",
+    "personwizard.abnahme.titel": "Last run finished — your review is next",
+    "personwizard.abnahme.zeile":
+        "{n} images harvested for {wer} (run {lauf}).",
+    "personwizard.abnahme.knopf": "Review the images now",
+    "personwizard.abnahme.hinweis":
+        "finish the review to unlock the next run",
+    "personwizard.abnahme.knopf_verwerfen": "Discard this run",
+    "personwizard.abnahme.verwerfen_hinweis":
+        "bad result? throw it all away",
+    "personwizard.leer.verwaist":
+        "Skipped on purpose: {liste} — these names were deleted from your "
+        "people; their old confirmed events stay as history but are not "
+        "harvested.",
+    "personwizard.leer.titel":
+        "Run finished without images — here is why",
+    "personwizard.leer.satz":
+        "Nothing was changed; you can start another run below any time.",
+    "personwizard.fertig.verwaist":
+        "Skipped on purpose: {liste} — deleted people; their old confirmed "
+        "events are not harvested.",
+    "personwizard.fertig.fremd":
+        "{n} confirmed stranger images moved into the stranger pool — the "
+        "next training uses them right away.",
+    "personwizard.fertig.titel": "Review finished — material adopted",
+    "personwizard.fertig.zeile":
+        "{abgenommen} images approved as learning material, {verworfen} "
+        "rejected (run {lauf}).",
+    "personwizard.fertig.knopf": "View the learned material",
+    "personwizard.fehler.titel": "Last run failed",
+    "personwizard.auswahl.opt_alle": "All known people",
+    "personwizard.auswahl.opt_fremde":
+        "Strangers — collect stranger images",
+    "personwizard.auswahl.titel": "Who to learn",
+    "personwizard.auswahl.satz":
+        "Pick one person to review in small, focused batches — or all at "
+        "once. People come from your face collection; learning one at a "
+        "time keeps the review short.",
+    "personwizard.auswahl.fremde_satz":
+        "Strangers: harvests walk-throughs where nobody was recognized "
+        "(street-only passes, unconfirmed visitors). You confirm in the "
+        "review which really are strangers — they go into the stranger "
+        "pool and sharpen the decision threshold.",
+    "personwizard.umfang.knopf_letzte": "last {n}",
+    "personwizard.umfang.attr_eigen": "own N",
+    "personwizard.umfang.knopf_go": "go",
+    "personwizard.umfang.titel": "Scope (events, not days)",
+    "personwizard.umfang.satz":
+        "Start small (50) — you will review every harvested image by "
+        "hand.",
+    "personwizard.bilanz.ohne":
+        "last {n} person events for {wer} — the binding balance is "
+        "computed when the run is created",
+    # Zaehler-Split an der <b>-Grenze (§8.10): vor/nach rahmen die
+    # hervorgehobene Zahl, Rand-Leerzeichen gehoeren zum Wert.
+    "personwizard.bilanz.zahl_vor": "last {n} person events · ",
+    "personwizard.bilanz.zahl_nach":
+        " can be tied to {wer} via confirmed walk-throughs",
+    "personwizard.bilanz.fremd": " · {n} stranger candidates",
+    "personwizard.bilanz.erkl_fremd":
+        "Candidates are walk-throughs where nobody was recognized — "
+        "street-only passes and unconfirmed visitors. Everything is a "
+        "SUSPICION until your review; mark anyone who is NOT a stranger "
+        "there.",
+    "personwizard.bilanz.erkl":
+        "Tying is conservative: only walk-throughs with exactly one "
+        "face-confirmed person count. Everything you see afterwards can "
+        "be rejected with one click.",
+    "personwizard.bilanz.titel": "Your selection",
+    "personwizard.bilanz.knopf": "Create this run",
+    "personwizard.review.stempel": "WRONG",
+    "personwizard.review.h_fremde": "Strangers",
+    "personwizard.review.frage_fremd":
+        "click every image that is NOT a stranger (a resident, a known "
+        "visitor) or unusable. A second click takes it back. Everything "
+        "is saved instantly; unmarked images are adopted as confirmed "
+        "strangers and sharpen the decision threshold.",
+    "personwizard.review.frage":
+        "click every image that is WRONG (not this person, or unusable). "
+        "A second click takes it back. Everything is saved instantly; "
+        "unmarked images count as approved.",
+    "personwizard.review.titel": "Review the harvest",
+    "personwizard.review.kopf": "Run {lauf} — {frage}",
+    # Der Zeilenumbruch ist Teil des Originals (Template-Literal) und
+    # bleibt fuer die Byte-Treue im Wert.
+    "personwizard.review.zurueck": "&larr; back to the\nwizard",
+    "personwizard.review.knopf_fertig":
+        "Finish review — adopt approved images",
+    "personwizard.kontrolle.sammeln_titel": "Collect mode is ON",
+    "personwizard.kontrolle.sammeln_rest":
+        " — every judged image is kept for 30 days so you can check the "
+        "decisions later. Expect roughly 20&ndash;40 MB a day.",
+    "personwizard.kontrolle.schlank_titel": "Lean mode (default)",
+    "personwizard.kontrolle.schlank_rest":
+        " — judged images only live while a pass is running; afterwards "
+        "only the winning image and the verdict log below remain. This is "
+        "the privacy-friendly default for a fresh installation.",
+    "personwizard.kontrolle.titel": "Judged images",
+    "personwizard.kontrolle.satz":
+        "What body recognition actually looked at, one block per "
+        "walk-through: the image it judged, the class it came out with, "
+        "the score, and where the picture came from. Useful when a person "
+        "was missed, or someone was recognized who should not have been.",
+    "personwizard.kontrolle.leer_titel": "Nothing recorded yet",
+    "personwizard.kontrolle.tag_fremd": "stranger",
+    "personwizard.kontrolle.tag_drueber": "above threshold",
+    "personwizard.kontrolle.tag_drunter": "below threshold",
+    "personwizard.kontrolle.schwelle": " &middot; thr {schwelle}",
+    "personwizard.kontrolle.kopfzeile.eins":
+        "{wann} — {judged} judged, {n} image kept",
+    "personwizard.kontrolle.kopfzeile.viele":
+        "{wann} — {judged} judged, {n} images kept",
+    "personwizard.tabelle.fremd_zeile": "Strangers (extra class)",
+    "personwizard.tabelle.kein_fremd":
+        "No stranger class yet — recognition works much better with one: "
+        "confirmed stranger images teach the model what does NOT belong "
+        "and calibrate the decision threshold.",
+    "personwizard.tabelle.q_eichung": "measured",
+    "personwizard.tabelle.q_user": "set by you",
+    "personwizard.tabelle.q_standard": "built-in default",
+    "personwizard.tabelle.f_modell": "Active model",
+    "personwizard.tabelle.f_schwelle": "Threshold",
+    "personwizard.tabelle.f_scharf": "Armed",
+    "personwizard.tabelle.scharf_ja": "YES",
+    "personwizard.tabelle.scharf_ja_rest": " — judging live",
+    "personwizard.tabelle.scharf_nein": "no — not armed",
+    "personwizard.tabelle.konf_vor":
+        "Largest cross-group confusion in the calibration: ",
+    "personwizard.tabelle.konf_nach":
+        " — the strongest score any image reached for the WRONG group; "
+        "the closer to 1, the closer two groups are.",
+    "personwizard.tabelle.titel": "Learned groups",
+    "personwizard.karte.scharf": "Armed",
+    "personwizard.karte.unscharf": "Not armed yet",
+    "personwizard.karte.fehler":
+        "Last training attempt FAILED: {fehler} — this card shows the "
+        "previous model.",
+    "personwizard.karte.titel": "Model status",
+    "personwizard.karte.zeile":
+        "trained {wann} in {dauer} s — {bilder} images: {je} · {modell} · ",
+    "personwizard.karte.link": "details",
+    "personwizard.bestand.titel":
+        "Person material — what has been learned",
+    "personwizard.bestand.satz":
+        "Approved full-body images per person. Pick a group below to see "
+        "its images; delete a single image (&times; on the tile) — a new "
+        "run can always re-harvest afterwards. Deletions take effect on "
+        "the next training.",
+    "personwizard.bestand.leer_titel": "No approved material yet",
+    "personwizard.bestand.stark_titel": "What makes this model strong",
+    "personwizard.bestand.chip_fremde": "Strangers ({n})",
+    "personwizard.bestand.zeigen_titel": "Show images of",
+    "personwizard.bestand.zeigen_satz":
+        "Pick a group — its images open below, newest first.",
+    "personwizard.bestand.marker_tage.eins":
+        "only {n} day — recognition improves most with images from more "
+        "days, outfits and light",
+    "personwizard.bestand.marker_tage.viele":
+        "only {n} days — recognition improves most with images from more "
+        "days, outfits and light",
+    "personwizard.bestand.attr_loeschen": "delete this image",
+    "personwizard.bestand.z_bilder": "{n} images",
+    "personwizard.bestand.z_tage.eins": "{n} day",
+    "personwizard.bestand.z_tage.viele": "{n} days",
+    "personwizard.bestand.z_kameras.eins": "{n} camera",
+    "personwizard.bestand.z_kameras.viele": "{n} cameras",
+    "personwizard.modell.titel": "Person model — status",
+    "personwizard.modell.satz":
+        "The body-recognition model, trained from your approved images. "
+        "It retrains automatically after every finished review and after "
+        "deletions.",
+    "personwizard.modell.leer_titel": "No model yet",
+    "personwizard.modell.fremd_keine":
+        "none yet — threshold measured between your people only",
+    "personwizard.modell.fremd_gesammelt":
+        "{n} collected — {min} needed before they are trained and "
+        "calibrate the threshold",
+    "personwizard.modell.fremd_geeicht":
+        "{n} in training · threshold calibrated against real strangers",
+    "personwizard.modell.fremd_ungeeicht":
+        "{n} in training — the threshold calibration did not run (see the "
+        "note below)",
+    "personwizard.modell.f_trainiert": "Trained",
+    "personwizard.modell.f_dauer": "Training time",
+    "personwizard.modell.f_modell": "Model",
+    "personwizard.modell.f_bilder": "Images total",
+    "personwizard.modell.f_personen": "Persons",
+    "personwizard.modell.f_fremd": "Stranger negatives",
+    "personwizard.modell.scharf_ja": "YES — live judging active",
+    "personwizard.modell.scharf_nein": "no — not armed yet",
+    "personwizard.modell.fehler":
+        "Last training attempt FAILED ({zeit}): {fehler} — the model "
+        "shown here is the previous one and does not include your latest "
+        "changes.",
+    "personwizard.modell.aktuell_titel": "Current model",
+    "personwizard.modell.material_titel": "Learning material per person",
+    "personwizard.modell.kopf_person": "person",
+    "personwizard.modell.kopf_bilder": "approved images",
+    "personwizard.modell.kopf_anteil": "share",
+    "personwizard.modell.summe": "total",
+    "personwizard.modell.q_eichung": "measured on your material",
+    # {pct} vorformatiert (round) aus der Route (§8.8).
+    "personwizard.modell.eich_fremd":
+        "Measured by {folds}-fold cross-validation over {n} held-out "
+        "images of your people plus {n_fremd} confirmed strangers: the "
+        "strongest resident confidence any real stranger reached was "
+        "{max} &rarr; threshold {schwelle}; {pct}% of the genuine images "
+        "pass. The other side of the coin: {ueber} of your own images "
+        "would reach that threshold for the WRONG person (strongest "
+        "{vmax}).",
+    "personwizard.modell.eich_intern":
+        "Measured by {folds}-fold cross-validation over {n} held-out "
+        "images: strongest confidence for a WRONG person {max} &rarr; "
+        "threshold {schwelle}; {pct}% of the genuine images pass. Honest "
+        "limit: this calibrates BETWEEN your learned people — real "
+        "strangers are not in the material yet.",
+    "personwizard.modell.regeln_titel": "Judgment settings",
+    "personwizard.modell.schwelle_vor": "Decision threshold: ",
+    "personwizard.modell.r_fenster": "Fire window",
+    "personwizard.modell.r_feuer": "Supporting events to fire",
+    "personwizard.modell.r_karenz": "Cool-down after an alert",
+    "personwizard.modell.regeln_satz":
+        "Leave the threshold empty to follow the measured value "
+        "automatically (it re-measures with every training). The fire "
+        "rule: alert only after this many supporting events inside the "
+        "window, then stay quiet for the cool-down.",
+    "personwizard.modell.knopf_speichern": "Save settings",
+    "personwizard.modell.satz_user":
+        "The decision threshold is set by you ({schwelle})",
+    "personwizard.modell.satz_user_eich":
+        " — the calibration against {n} confirmed strangers would be "
+        "{alt}",
+    "personwizard.modell.satz_geeicht":
+        "The decision threshold is calibrated against {n} confirmed "
+        "stranger images.",
+    "personwizard.modell.satz_ungeeicht":
+        "The decision threshold is not yet calibrated against stranger "
+        "material — treat alerts as a preview and keep an eye on them.",
+    "personwizard.modell.satz_fremd_drop":
+        " A body the model reads as a stranger is dropped before it can "
+        "become a hit.",
+    "personwizard.modell.live_titel": "Live switch",
+    "personwizard.modell.live_an":
+        "ARMED — the body path judges live events and may alert.",
+    "personwizard.modell.live_aus":
+        "Not armed — the body path stays silent.",
+    "personwizard.modell.live_hinweis":
+        "Alerts carry the note &quot;person recognition, not face&quot;.",
+    "personwizard.modell.knopf_disarm": "Disarm",
+    "personwizard.modell.knopf_arm": "Arm body recognition",
+    # --- webui/bausteine.py ---
+    # Nur die gt_leiste-ANZEIGE-Texte; die Speicherwerte (GT_OFFEN_LABELS,
+    # GT_KEIN_MENSCH) und KAT_LABELS/KAT_FARBE bleiben literal (Kommentar
+    # im Modul: §8.12/§8.13, Meldetext-Mitnutzung).
+    "baustein.gt.fremd": "Stranger",
+    "baustein.gt.kein_mensch": "No person",
+    "baustein.gt.add": "add person…",
+    "baustein.gt.uebernehmen": "confirm this suggestion (everyone listed was there)",
+    "baustein.gt.fremd_titel": "a stranger was there (can stand next to names)",
+    "baustein.gt.unklar_titel": "not sure — leave it open",
+    "baustein.gt.kein_mensch_titel": "no person in this event (false trigger)",
+    "baustein.gt.opak_titel": "an old judgement that no longer matches a known person — pick ? or a name to replace it",
+    # ---- Route-JS + Meldungen (Stufe 2, Tranche D) ----
+    # Drei Text-Gattungen: (1) Inline-<script>-Texte der Routen (§8.4) —
+    # server-seitig via json.dumps(t(...)) bzw. bausteine.js_literal()
+    # BYTE-TREU injiziert (json.dumps ensure_ascii=True reproduziert die
+    # \uXXXX-Escapes des Originals; js_literal fuer einfach-quotierte
+    # Kontexte). (2) JSON-msg-Felder der POST-Handler in verifyd.py
+    # (Praefix antwort.*, server-seitiges t() — die Sprache ist je Request
+    # als contextvar aktiv) inkl. der beiden text/plain-Clip-Antworten.
+    # (3) Konstante->Schluessel-Umzuege (Kennung/Anzeige-Trennung):
+    # registry.VISION_EXPORT_HINWEIS, visiongalerie.REIHEN_ANZEIGE,
+    # bausteine.KAT_LABELS, vertrauen.LABELS — NUR die UI-Anzeige wird
+    # sprachfaehig, Speicher-/Log-/Meldewerte bleiben englische Kennungen.
+    # Grenzen dieser Tranche stehen als Stufe-2-Grenze-Marker im Code:
+    # JS-Zaehler mit Laufzeit-Plural (§8.18), Name+Zaehler-Konkatenationen
+    # ohne byte-treue Splitstelle, deutsche Alt-msg (de->en = bewusste
+    # Textaenderung), Fachschicht-msg (anlernen/svc/core-Helfer),
+    # GATE-Protokollwort (§8.16), Log-geteilte msg-Bausteine.
+    # Deklarierte Splits: Zaehler-/Fragment-Splits an Konkatenationsgrenzen
+    # (§8.10-Muster setupwiz.import.zahl_*) — js_zaehl_*, js_gespeichert_*,
+    # koll_*, review.js_frage_*; Rand-Leerzeichen gehoeren zum Wert.
+    # --- routes/lernwizard.py (Zuweisungs-Flaeche + Sichtung) ---
+    "lernwizard.zw.js_zaehl_mitte": " of ",
+    "lernwizard.zw.js_zaehl_nach": " pictures selected",
+    # Wiederverwendet aus lernanker.js.*: fehler, nicht_uebernommen,
+    # nicht_gespeichert (byte-identische Texte beider Routen).
+    "lernanker.js.uebernimmt": "adopting…",
+    "lernanker.js.tag_frage_vor": "Settings changed since naming:\n",
+    "lernanker.js.tag_frage_nach": "\nAdopt anyway with the named selection?",
+    "lernanker.js.weiter": "saved — next group…",
+    "lernanker.js.speichert": "saving…",
+    "lernanker.js.koll_vor": "’",
+    "lernanker.js.koll_mitte": "’ matches existing ’",
+    "lernanker.js.koll_nach": "’ — add to that person instead?",
+    "lernwizard.zw.js_gespeichert_vor": "saved as ",
+    "lernwizard.zw.js_gespeichert_nach": " — checking the pictures …",
+    "lernwizard.sicht.js_fehl": "check failed — reload to retry",
+    "lernwizard.zw.js_verbergen": "Hide the other {n} checked pictures",
+    "lernwizard.zw.js_zeigen": "Show all {n} checked pictures",
+    # --- routes/qualitaet.py ---
+    "qualitaet.galerie.js_gewaehlt": " selected",
+    # --- routes/lernanker.py (nur dort) ---
+    "lernanker.js.alle_fertig":
+        "All groups done — the named pictures now count for recognition.",
+    # --- routes/vision.py (Hand-ID-Script) ---
+    "vision.modell.js_id_fehlt": "enter an id first",
+    "vision.modell.js_prueft": "checking …",
+    "vision.modell.js_fehler": "error",
+    # --- routes/personwizard.py (Review-Script + Schalter) ---
+    "personwizard.review.js_zaehl": " of {n} marked wrong",
+    "personwizard.review.js_frage_vor": "Finish the review? ",
+    "personwizard.review.js_frage_mitte":
+        " images will be adopted as learning material, ",
+    "personwizard.review.js_frage_nach": " rejected.",
+    "personwizard.modell.js_fehler": "error ",
+    # --- verifyd.py POST-Antworten (antwort.*, Nutzungs-Reihenfolge) ---
+    "antwort.person_entfernt":
+        "{person} removed ({n} reference images moved to trash — "
+        "recoverable)",
+    "antwort.person_name_ungueltig": "invalid name",
+    "antwort.person_unbekannt": "unknown person",
+    "antwort.pruefung_gestartet": "check started",
+    "antwort.reorg_los":
+        "Reorganizing (pool re-check + re-cluster, 1-2 min, then reload "
+        "the pages)",
+    "antwort.reorg_laeuft": "Reorganizing already running — please wait",
+    "antwort.paar_notiert": "noted — won't suggest this pair again",
+    # §8.11-Anhang an eine Fachschicht-msg (die Basis bleibt Grenze).
+    "antwort.nachpruefung_anhang":
+        " — re-checking this pass's events in the background",
+    "antwort.sync_wieder": "{n} back on the candidate list",
+    "antwort.sync_auswahl": "{ab} deselected, {zu} restored",
+    "antwort.sync_laeuft": "a sync is already running — wait for it to finish",
+    "antwort.sync_readonly":
+        "read-only mode: writing references to Frigate is disabled (see "
+        "the System page switch)",
+    "antwort.sync_nichts": "nothing selected — tick at least one image",
+    "antwort.frigate_url": "Frigate URL: {fehler}",
+    "antwort.sync_transfer": "transfer running ({n} selected)",
+    "antwort.bruecke_hinzu": "{n} picture(s) added",
+    "antwort.modell_laedt":
+        "loading the recognition model — a few seconds …",
+    "antwort.refcache_baut":
+        "rebuilding the reference library — with a large library this can "
+        "take a minute …",
+    "antwort.refcache_fehler":
+        "rebuilding the reference library failed twice in a row — see the "
+        "service log (/log); the next attempt runs in a few minutes",
+    "antwort.cache_aufgeraeumt": "{n} clip(s) removed, {mb} MB freed — cache {cache} GB, {frei} GB free",
+    "antwort.bruecke_nimmt": "the check picks {n} picture(s)",
+    "antwort.bruecke_grenz_zusatz": " · {n} borderline shown unticked",
+    "antwort.bruecke_nur_grenz":
+        "nothing clearly helpful — {n} borderline picture(s) kept back "
+        "(identity sure, picture quality only fair); you can still take "
+        "them",
+    "antwort.bruecke_nichts":
+        "nothing to take — no helpful new picture in this pass (that is "
+        "fine)",
+    "antwort.bruecke_undo": "{n} picture(s) removed again",
+    "antwort.personlauf_kein_review": "no run awaiting review",
+    "antwort.personlauf_kein_lauf": "no active run",
+    "antwort.events_bereich": "events must be 1..{max}",
+    "antwort.personlauf_aktiv": "a person-learn run is already active",
+    "antwort.lernlauf_tag_ungueltig": "invalid day (YYYY-MM-DD)",
+    # {phase} ist die interne Phasen-Kennung (sprachneutral, §8.19).
+    "antwort.lernlauf_phase":
+        "a run is already in phase '{phase}' — abort it first",
+    "antwort.lernlauf_beschaeftigt":
+        "the previous run is still finishing its current event — try "
+        "again in a moment",
+    "antwort.lernlauf_schreibfehler": "could not write run state: {fehler}",
+    "antwort.lernlauf_angelegt": "run created",
+    "antwort.lernlauf_abgebrochen":
+        "aborted — a running event may still finish in the background",
+    "antwort.live_nichts": "nothing to change",
+    "antwort.live_an": "started {ok}/{alle} watcher(s)",
+    "antwort.live_aus": "stopped {ok}/{alle} watcher(s)",
+    "antwort.vision_modell_ok":
+        "model answered — added to the list as manually checked; pick it "
+        "there and save",
+    "antwort.restore_upload_fehlt": "missing or oversized upload",
+    "antwort.restore_upload_kaputt": "upload truncated",
+    "antwort.backend_unbekannt": "unknown backend '{backend}'",
+    "antwort.kameras_fehlen": "Frigate cameras not available: {fehler}",
+    "antwort.setup_gespeichert": "Setup saved — restarting",
+    "antwort.kameras_gespeichert": "{n} cameras saved — restarting",
+    "antwort.name_ungueltig":
+        "invalid person name (2-40 letters, digits, space, -)",
+    "antwort.anker_unbekannt": "unknown anchor",
+    "antwort.anker_benannt":
+        "named '{name}' — {n} images selected, adopt it with the Adopt "
+        "button",
+    "antwort.anker_nur_unadoptiert":
+        "only groups without adopted pictures can be dismissed",
+    "antwort.anker_verworfen":
+        "deleted — {n} pictures removed",
+    "antwort.lauf_id_ungueltig": "invalid run id",
+    "antwort.lauf_aktiv": "this run is still active — abort it first",
+    "antwort.lauf_nichts": "nothing found for run {lauf} — already deleted?",
+    "antwort.lauf_nur_einer": "nothing to delete — only one run in the store",
+    "antwort.gruppe_unbekannt": "unknown or closed group",
+    "antwort.sichtung_laeuft": "checking pictures — a few seconds …",
+    "antwort.anker_unbenannt": "anchor is not named (or unknown)",
+    "antwort.adopt_nichts":
+        "nothing selected — tick at least one image to adopt",
+    "antwort.adopt_phantom":
+        "dedup matched only references that no longer exist on disk — "
+        "please retry the adoption; if this persists, report it",
+    "antwort.adopt_gedeckt":
+        "already covered — all {n} selected image(s) are near-identical "
+        "to {person}'s existing references; cluster marked as adopted, "
+        "nothing copied",
+    # §8.10-Plural-Split: frueher {'s' if n != 1} im f-String, jetzt t_n.
+    "antwort.adopt_fertig.eins": "adopted {n} reference for '{person}'",
+    "antwort.adopt_fertig.viele": "adopted {n} references for '{person}'",
+    "antwort.adopt_skip": ", {n} skipped as near-identical",
+    "antwort.adopt_watchdog": " — drift watchdog running (System page)",
+    "antwort.areas_gespeichert.eins": "{n} area saved",
+    "antwort.areas_gespeichert.viele": "{n} areas saved",
+    # text/plain-Antwort der /video- und /clip-Routen (Tranche-B-Rest).
+    "antwort.clip_weg": "Clip no longer in cache — retention {tage} days",
+    # --- Konstante->Schluessel (Kennung/Anzeige-Trennung, Paket 3) ---
+    # 3a: EN-Referenz bleibt core/registry.VISION_EXPORT_HINWEIS (Gate
+    # prueft Wortgleichheit en.T == Konstante; Anzeige laeuft ueber t()).
+    "system.backup.hinweis":
+        "contains your API keys — treat this file like a password",
+    # 3b: Anzeige-Woerter der Galerie-Reihen; Kennungen (vorn/seitlich/
+    # hinten/unklar) bleiben Store-/JSON-Werte. EN == REIHEN_ANZEIGE.
+    "visiongalerie.reihe.vorn": "front",
+    "visiongalerie.reihe.seitlich": "side",
+    "visiongalerie.reihe.hinten": "back",
+    "visiongalerie.reihe.unklar": "unclear",
+    # 3c: Kategorie-ANZEIGE (bausteine.kat_wort). EN == KAT_LABELS; seit
+    # Stufe 4 liest auch der Push-Titel hier (meldung.titel.kategorie).
+    "baustein.kat.erkannt": "Recognized",
+    "baustein.kat.fremd_verdacht": "Stranger?",
+    "baustein.kat.unbekannt_schwach": "Unknown (weak)",
+    "baustein.kat.fehler": "Error",
+    "baustein.kat.no_person": "No person found (likely false trigger)",
+    "baustein.kat.deckung": "Match",
+    "baustein.kat.widerspruch": "Conflict",
+    "baustein.kat.frigate_nur": "Frigate only",
+    "baustein.kat.wir_nur": "suslik only",
+    "baustein.kat.beide_unknown": "Both unknown",
+    # 3d: Wortstufen-ANZEIGE (bausteine.stufe_wort) — Meldetexte/Logs
+    # lesen weiter core/vertrauen.label() englisch. EN == vertrauen.LABELS.
+    "baustein.stufe.clear": "clear match",
+    "baustein.stufe.narrow": "just above the bar",
+    "baustein.stufe.below": "below the bar",
+    "baustein.stufe.none": "no match",
+    # ---- Anleitungen /hilfe (Stufe 3) ----
+    # routes/hilfe.py: je Anleitungs-Seite ein Titel (t) + die Absaetze als
+    # t_html-Schluessel (ein <p>-Absatz = ein Schluessel, B9-Granularitaet;
+    # das <p> liegt IM Wert, die Werte tragen die Original-Zeilenumbrueche —
+    # Byte-Treue). Die "mehr"-Bloecke (Easy plus) sind bewusst NICHT
+    # eingezogen: seit .208 nicht gerendert (User-Entscheid 16.08.), als
+    # Schluessel waeren sie im Deckungs-Gate tot — Einzug mit dem
+    # Easy-plus-Bau (routes/hilfe.py MEHR).
+    # ZITAT-KOPPLUNGEN (Uebersetzungsrunde: wortgleich je Sprache setzen):
+    #  - hilfe.live.satz4 zitiert <b>Choose cameras</b>
+    #    == erkennung.live.knopf_kameras (ohne das " …").
+    #  - hilfe.gesicht.satz5 zitiert die Seite "Notifications"
+    #    == benachrichtigungen.titel / nav.benachrichtigungen.
+    #  - hilfe.gesicht.satz3 nennt die "Frigate sync page"
+    #    == nav.sync_auswahl ("Frigate sync").
+    #  - hilfe.gesicht.satz6 zitiert <b>Manage people</b> + <b>Register
+    #    face</b> == erkennung.gesicht.knopf_verwalten /
+    #    erkennung.knopf_register_face (bzw. faces.bekannt.*, wortgleich).
+    #  - hilfe.koerper.satz3 zitiert <b>Register body</b>
+    #    == erkennung.koerper.knopf_register.
+    #  - hilfe.koerper.satz4 + hilfe.vision.satz1/satz4 zitieren die
+    #    Unteroptions-Labels <b>Only if no face</b>/<b>Always</b>/<b>If
+    #    needed</b> — die sind Anzeige==Kennung (§8.2) und noch LITERAL in
+    #    routes/erkennung.py: erst entkoppeln, dann beides wortgleich.
+    #  - hilfe.vision.satz3 nennt die "Vision page" == nav.vision
+    #    ("Vision detect"); "Register vision" auf der Vision-Kachel
+    #    == erkennung.vision.knopf_register (hilfe.vision "mehr"-Block,
+    #    erst mit Easy plus relevant).
+    "hilfe.live.titel": "Live watch, explained",
+    "hilfe.live.satz1": """<p>Live watch looks at your cameras the moment something moves. When a person
+steps onto the property, you get an alert within seconds, and if the system
+already knows the face, the alert carries a name.</p>""",
+    "hilfe.live.satz2": """<p>The name at this stage is a first guess. The thorough check runs right
+after, on the recording, and has the final word.</p>""",
+    "hilfe.live.satz3": """<p>Live watch does not depend on Frigate: it is not triggered by Frigate
+events and runs completely on its own. It watches the video stream directly,
+either Frigate's proxy stream or the camera's own stream; you choose that
+per camera.</p>""",
+    "hilfe.live.satz4": """<p>Use <b>Choose cameras</b> to pick which cameras get a watcher. Every watched
+camera costs computing power around the clock, so start where people actually
+arrive: driveway, front door, gate. You can add more later.</p>""",
+    "hilfe.live.satz5": """<p>Switching a camera off here changes nothing about recording. Frigate keeps
+recording as before; the switch only decides whether suslik looks at the
+picture immediately or waits for the recording.</p>""",
+    "hilfe.gesicht.titel": "Face recognition, explained",
+    "hilfe.gesicht.satz1": """<p>This is the base way suslik recognizes and learns faces. Every recorded
+pass is checked against the faces you have taught the system.</p>""",
+    "hilfe.gesicht.satz2": """<p>Teaching works from your own cameras: suslik collects faces it sees, you
+look at the pictures and tell it who is who. The more different situations
+and poses it has seen of a person, the better it gets: daylight, evening,
+hat on, hat off, from the side.</p>""",
+    "hilfe.gesicht.satz3": """<p>If Frigate already knows faces, you can import them on the Frigate sync
+page. The recommendation is still to learn faces here: suslik's own learning
+collects many different poses and situations per person, and those
+references give better results in suslik than faces taken over from
+Frigate. What you teach here can be handed back to Frigate on the sync page
+if you want.</p>""",
+    "hilfe.gesicht.satz4": """<p>Everything stays on your machine. Nothing is uploaded anywhere, and there
+is no cloud service behind it.</p>""",
+    "hilfe.gesicht.satz5": """<p>When a face is recognized, or an unknown one shows up, suslik can alert you
+directly: Pushover, Telegram, or MQTT for your home automation. You choose on
+the Notifications page what gets sent where. These alerts are suslik's own
+and work completely independent of Frigate; Frigate needs no notification
+setup at all.</p>""",
+    "hilfe.gesicht.satz6": """<p><b>Manage people</b> shows everyone the system knows and lets you clean
+up. <b>Register face</b> starts a learning run for someone new.</p>""",
+    "hilfe.koerper.titel": "Body recognition, explained",
+    "hilfe.koerper.satz1": """<p>Some passes never show a usable face: the person looks away, wears a hood,
+or is too far off. Body recognition covers these cases. It recognizes
+household members by build and posture, using pictures of the whole
+person.</p>""",
+    "hilfe.koerper.satz2": """<p>It is built for exactly this case: no usable face, you still want to know
+who it was, and you do not want to hand the pictures to an AI vision model
+for it.</p>""",
+    "hilfe.koerper.satz3": """<p>It learns from material you approve. <b>Register body</b> starts a short
+learning run for one person: the system collects pictures of them from your
+cameras, you review the result once, and from then on it keeps learning by
+itself.</p>""",
+    "hilfe.koerper.satz4": """<p>With the switch above you choose whether and when it runs. <b>Only if no
+face</b> means it stays quiet unless the face check came up empty.
+<b>Always</b> means it checks every pass. Off means it never runs.</p>""",
+    "hilfe.vision.titel": "AI vision, explained",
+    "hilfe.vision.satz1": """<p>AI vision is a recognition way of its own. It shows the pictures of a
+pass to an image model and asks which registered person they resemble. You
+can use it as a backup for the hard cases, or let it carry recognition
+alone: set to <b>Always</b>, it judges every pass by itself, even if no
+faces are taught at all. It judges at the end of a pass, not live.</p>""",
+    "hilfe.vision.satz2": """<p>What it needs to work: registered people with approved body pictures
+(their galleries), and a connected model. The model can run locally on your
+own hardware or in the cloud. With a cloud model, remember that the
+pictures leave your house: what is fine with a local model is not
+automatically allowed with a cloud one. And do not pick the smallest
+models; a mid-sized model does the job fine.</p>""",
+    "hilfe.vision.satz3": """<p>What we run ourselves: Qwen 3.5 in the 9B size, and it does the job well,
+locally as well as in the cloud. We also tested models from Anthropic
+(Claude), Google (Gemini) and OpenAI (GPT). Take this as tested, not as a
+recommendation; the model list on the Vision page marks the ones we
+measured, right where you choose.</p>""",
+    "hilfe.vision.satz4": """<p>And it does not stop at one comparison: to rule out mix-ups, the pass is
+checked against the galleries of the other people too, both ways round.
+Each compared pair costs two requests, so a single pass can add up. <b>If
+needed</b> keeps that bill small: the model only gets asked when faces
+leave doubt. Without a connected model, vision simply stays out of the
+game, and the card says so.</p>""",
+    "hilfe.faces_bekannt.titel": "Known people & registering, explained",
+    "hilfe.faces_bekannt.satz1": """<p>Here you see every person your system knows &mdash; tap a face and you see
+every picture stored behind it.</p>""",
+    "hilfe.faces_bekannt.satz2": """<p>You do not teach a new person with a photo upload: they are learned from
+normal camera footage. Over the day the system collects pictures from
+different angles, you confirm who it is, and only after that check a picture
+is kept.</p>""",
+    "hilfe.faces_bekannt.satz3": """<p>That way every person gets a small collection of real everyday pictures
+&mdash; exactly what makes recognition strong, even when someone looks away
+or wears a cap.</p>""",
+    "hilfe.faces_lernen.titel": "Learning, explained",
+    "hilfe.faces_lernen.satz1": """<p>While the cameras run, the system keeps collecting new pictures of the
+people it already knows. Here you look through what has come together
+&mdash; every few days is plenty.</p>""",
+    "hilfe.faces_lernen.satz2": """<p>You confirm, correct or dismiss with one click; nothing is kept without
+you.</p>""",
+    "hilfe.faces_lernen.satz3": """<p>The more good pictures a person has, the more reliably they are
+recognized &mdash; so learning never fully stops, it just becomes rarer.</p>""",
+    "hilfe.faces_unbekannt.titel": "Unknown visitors, explained",
+    "hilfe.faces_unbekannt.satz1": """<p>Some people keep showing up without the system having a name for them
+&mdash; the postman, a neighbour, the gardener. Here the system collects
+these recurring unknowns and asks you: who is this?</p>""",
+    "hilfe.faces_unbekannt.satz2": """<p>Give them a name and from then on they are recognized like everyone
+else. Or leave them unknown on purpose &mdash; that is a decision too, and
+the system will not keep asking.</p>""",
+    "hilfe.faces_qualitaet.titel": "Quality check, explained",
+    "hilfe.faces_qualitaet.satz1": """<p>Over time many pictures pile up, and not every one helps recognition
+&mdash; some are blurry, some barely show the person, and in the worst case
+pictures of two different people look so alike that mix-ups loom.</p>""",
+    "hilfe.faces_qualitaet.satz2": """<p>This check finds such weak spots before they cost you a recognition. You
+get concrete pointers which pictures to look at &mdash; nothing is deleted
+unless you decide it yourself.</p>""",
+    "hilfe.faces_lernlauf.titel": "The learning run, explained",
+    "hilfe.faces_lernlauf.satz1": """<p>You start a run; the system re-reads your recent recordings and collects
+faces on its own.</p>""",
+    "hilfe.faces_lernlauf.satz2":
+        "<p>It sorts them into groups. One group should be one person.</p>",
+    "hilfe.faces_lernlauf.satz3": """<p>You name each group, or skip it. That is the only step that needs
+you.</p>""",
+    "hilfe.faces_lernlauf.satz4": """<p>Named pictures become references and count for recognition right away.
+Repeat every few days, or let the day view top up known people in
+between.</p>""",
+    # B9: der Rueck-Link ist je Ziel ein GANZER Satz-Schluessel — "Back to
+    # {ziel}" ist DAS Anti-Beispiel aus konzept_sprache.md §4.0 (Genus/
+    # Praeposition). Kopplung: "Faces" == nav.faces/faces.titel,
+    # "Recognition" == nav.erkennung/erkennung.titel, "the learning run"
+    # nennt die Lauf-Seite (nav.lernlauf "Learning run") im Satz.
+    "hilfe.zurueck.erkennung": "Back to Recognition",
+    "hilfe.zurueck.faces": "Back to Faces",
+    "hilfe.zurueck.lernlauf": "Back to the learning run",
+    # ---- §8.1-Nachzuegler (Stufe 3): Inline-Markup-Prosa der Tranchen ----
+    # Die bei den Stufe-2-Tranchen als "Stufe-2-Grenze (§8.1)" markierten
+    # Prosa-Bloecke mit <b>/<a>/<code>/<br> mitten im Satz — jetzt als
+    # t_html-Schluessel (HTML_SCHLUESSEL in core/sprache.py). Statische
+    # hrefs bleiben IM Wert (die identische Tag-Folge je Uebersetzung pinnt
+    # sie, tools/texte_pruefen.py); dynamische Einsetzungen laufen als
+    # kwargs durch t_html (escapt selbst, quote=True).
+    # verifyd.py Wizard-Schritt 3: zitiert die Seite <b>System</b>
+    # == system.titel / nav.system / nav.bereich.system.
+    "setupwiz.backend.system_satz":
+        "Whether the accelerator really engages is confirmed live on the "
+        "<b>System</b> page after start (suslik never silently falls back "
+        "to CPU without saying so).",
+    # verifyd.py Wizard-Fertig-Block: zitiert <b>System → Re-run setup
+    # wizard</b> — WORTGLEICH zu system.titel + konfiguration.knopf_setup
+    # je Sprache setzen (der Pfeil verbindet die beiden Zitate).
+    "setupwiz.fertig.wieder_satz":
+        "You can re-run this wizard any time from <b>System → Re-run "
+        "setup wizard</b>.",
+    # routes/system.py Sync-Karte (Happy-Path + Fallback-Karte).
+    "system.sync.diagnose_satz":
+        'If a sync reports a problem, <a href="/sync_diagnose" '
+        'target="_blank">open the diagnosis</a> — it bundles the suslik '
+        "report and the Frigate log, ready to copy into an issue.",
+    "system.sync.diagnose_kurz":
+        '<a href="/sync_diagnose" target="_blank">open the diagnosis</a> '
+        "— bundles the suslik report and the Frigate log.",
+    # routes/vision.py Einleitungs-Absatz.
+    "vision.kopf.einleitung":
+        "A third recognition path next to face and body: a vision language "
+        "model looks at one picture from a walk-through and says which of "
+        "your learned people it shows &mdash; by comparing it against a "
+        "small gallery of that person. It is an <b>extra voice</b>, never "
+        "the doorkeeper: the forced choice answers &bdquo;A or B&ldquo;, so "
+        "it can confirm a resident but it cannot turn a stranger away. That "
+        "stays the job of the existing recognition.",
+    # Produktnamen (llama.cpp, Qwen3.5, docker stats) bleiben in jeder
+    # Sprache wortgleich (§8.7).
+    "vision.hinweis.modell_satz":
+        "A vision model that can look at several pictures at once. You can "
+        "use one of the online providers below, or run one yourself &mdash; "
+        "the combination measured here is <b>llama.cpp</b> with a "
+        "<b>Qwen3.5</b> vision model (the 4B is as good as the 9B on this "
+        "task and needs about half the memory). It does <b>not</b> have to "
+        "run on this machine.",
+    "vision.hinweis.host_satz":
+        "<b>This host is usually too small for a local model.</b> The 9B "
+        "needs roughly 12 GB of working set, the 4B about 6.6 GB, and "
+        "suslik plus the analysis worker already live here &mdash; the "
+        "worker is the first thing the kernel kills when memory runs out. "
+        "A second machine, or an online provider, is the sane setup.",
+    "vision.hinweis.mess_satz":
+        "A warning about measuring that memory: <code>docker stats</code> "
+        "shows about 2.7 GiB for the model container because the weights "
+        "are mapped, not copied. The real working set is ~11.6 GiB. If you "
+        "size <code>--memory</code> by what <code>docker stats</code> says, "
+        "the model reloads its weights continuously and everything crawls.",
+    "vision.hinweis.kosten_satz":
+        "Speed and cost, measured, so nothing surprises you later: the "
+        "whole walk-through goes in as <b>one candidate grid</b>, and each "
+        "<b>compared pair of galleries is two requests</b> (the same "
+        "question is asked again with the two galleries swapped, to catch "
+        "a position bias). Usually one pair settles it. On a CPU-class "
+        "machine that is about 7 minutes per pair; on the online endpoints "
+        "measured here, seconds.",
+    # Schluessel-Ort-Warnung der Verbindungskarte.
+    "vision.verb.key_ort":
+        "<b>Put the key in the key field, not in the URL</b>: an endpoint "
+        "that carries credentials in its address &mdash; in front of the "
+        "host name, or as a query parameter &mdash; holds the same secret, "
+        "and it shows up in far more places (status, log, backup).",
+    # Leerzustand der Modellkarte: B9-konform JE pruef_wort ein GANZER
+    # Block (Woerter aus core/vision.pruef_wort: "key"/"connection" —
+    # Deckungs-Vertrag mit dieser Zwei-Wert-Funktion). ZITAT: <b>Check the
+    # key/connection</b> zitiert den Pruef-Knopf, der selbst noch ein
+    # B9-Literal in routes/vision.py:_verbindung ist — sein Schluessel-
+    # Umbau muss VOR/mit der Uebersetzungsrunde landen, sonst laufen
+    # Zitat und Knopf auseinander.
+    "vision.modell.leer_key":
+        "Nothing to choose yet. Enter your key above and press <b>Check "
+        "the key</b>: suslik connects to the endpoint, asks what is there, "
+        "and shows you what it found. You pick from that list.",
+    "vision.modell.leer_verbindung":
+        "Nothing to choose yet. Fill in the fields above and press "
+        "<b>Check the connection</b>: suslik connects to the endpoint, "
+        "asks what is there, and shows you what it found. You pick from "
+        "that list.",
+    # {zeit} = vorformatierte Zeit (_zeit, B19 bleibt Route), {stand} =
+    # Messwerte-Stand — beide escapt t_html selbst.
+    "vision.modell.antwort_satz":
+        "This is what the endpoint answered when suslik asked it, {zeit} "
+        "&mdash; nothing here is a suggestion from us. Where we have "
+        "measured a model, the note sits on that model. Two abilities are "
+        "shown separately, because they fall apart: <b>residents</b> is "
+        "picking the right one of two known people, <b>strangers</b> is "
+        "answering &bdquo;neither&ldquo; for somebody you never taught it. "
+        "A tick means every judgement of that kind in our measurement was "
+        "right; the fraction next to it is the whole story. Models without "
+        "a measurement here say <b>untested here</b> &mdash; that is not a "
+        "verdict, just honesty (measurements from {stand}).",
+    # ZITAT: <b>custom prompt</b> == die Urteils-Marke
+    # visiontest.vision.custom_prompt (" &middot; custom prompt").
+    "vision.prompt.eigen_satz":
+        "This is your own wording &mdash; verdicts made with it are marked "
+        "<b>custom prompt</b>. Reset it to go back to the measured default.",
+    # {ziel} = Endpunkt-Anzeige (escapt t_html); das class-Attribut ist
+    # Teil der gepinnten Tag-Folge.
+    "vision.cloud.sendet_satz":
+        "This sends pictures of people from your cameras to "
+        '<b class="vs-url">{ziel}</b>.',
+    "vision.test.stufen_satz":
+        "Three steps, because a plain reachability ping is not enough: one "
+        "backend was reachable, had the model and answered quickly &mdash; "
+        "and still got 5 of 12 comparison questions wrong, because it "
+        "shrank the pictures before looking at them.<br><b>1</b> "
+        "reachability, model and response time, using a test image "
+        "generated on the spot.<br><b>2</b> a forced-choice run on "
+        "generated shape grids where the right answer is known &mdash; "
+        "this checks the answer format, the parser and the thinking "
+        "switch.<br><b>3</b> a token count against a measured reference, "
+        "which is how image shrinking shows up.<br><b>No picture of a "
+        "person is used for this</b>, and there is no option to do so.",
+    # routes/visiontest.py.
+    "visiontest.kopf.wege_satz":
+        "Pick one real walk-through and see what all three recognition "
+        "paths make of it, side by side: <b>face</b>, <b>person</b> and "
+        "<b>vision</b>.",
+    # ZITAT: "Vision detect" == nav.vision.
+    "visiontest.vision.einrichten_satz":
+        'Set it up under <a href="/vision">Vision detect</a>: a model, a '
+        "green connection test and at least two approved galleries. The "
+        "other two columns work without it.",
+    # routes/visionwizard.py. {empfehlung} escapt t_html selbst.
+    "visionwizard.groesse.satz":
+        "Measured, honestly: the size was <b>not</b> the lever in any of "
+        "the cases we ran &mdash; a bigger grid did not make the answers "
+        "better, and it did not make them worse either. Take the larger "
+        "one if your material carries it (here: {empfehlung}), the smaller "
+        "one if it does not. Both cost about the same, because the canvas "
+        "is what costs tokens, not the number of cells.",
+    "visionwizard.vorschlag.vergessen_satz":
+        '<a href="#" onclick="vwVergessen();return false">Forget them</a> '
+        "if you want to start over.",
+    # ZITAT: <b>does not fit</b> == visionwizard.zelle.knopf_weg.
+    "visionwizard.vorschlag.satz":
+        "One row per view: front, side, back. Pictures are picked by size "
+        "and sharpness, how clearly the eyes and nose are there, how much "
+        "light is blown out, how much of the crop is actually the person "
+        "&mdash; and spread over different days, events and cameras. The "
+        "line under each picture says what was measured on it. Click "
+        "<b>does not fit</b> on anything unusable &mdash; the next best "
+        "picture of the SAME view moves up. This does not touch your "
+        "learning material; it only says &bdquo;not as a gallery "
+        "cell&ldquo;.",
+    # routes/personwizard.py.
+    "personwizard.kopf.stark_satz":
+        "<b>What makes the model strong:</b> variety beats volume. Images "
+        "from <b>many different days</b> (outfits, light, cameras) help "
+        "far more than many images from one walk — run the harvest "
+        "again on new days rather than harvesting one day deeper. "
+        "Confirmed stranger images sharpen the decision threshold the "
+        "same way.",
+    # ZITAT: "Model status" == nav.person_modell (+ erkennung.koerper.
+    # knopf_status "Model status …").
+    "personwizard.fertig.training_satz":
+        "Training on the approved material starts automatically after the "
+        'review — see <a href="/person/modell">Model status</a>. You '
+        "can start another run below any time.",
+    # ZITAT-KOPPLUNG: "Configuration" == nav.bereich.configuration,
+    # "Advanced" == nav.konfiguration. Der alte Wortlaut "Settings" war
+    # GEDRIFTET (Bereich seit .210 "Configuration") — toter Wegweiser,
+    # gleiche faktische Klasse wie der "(Settings)"-Fix vom 20.08.,
+    # deshalb an der Quelle korrigiert (kein Stil-Eingriff).
+    "personwizard.kontrolle.schalter_satz":
+        'Switch it under <a href="/konfiguration">Configuration &rarr; '
+        "Advanced</a>, key <code>diagnostic_collection</code>. Images and "
+        "log expire together with the hit log after 30 days &mdash; "
+        "nothing here is kept longer than the recognition record itself.",
+    # ZITAT: "Model status" == nav.person_modell.
+    "personwizard.kontrolle.leer_satz":
+        "Entries appear once body recognition is armed on "
+        '<a href="/person/modell">Model status</a> and a person walks '
+        "through.",
+    # ZITAT: "Person learn" == nav.personlauf.
+    "personwizard.bestand.leer_satz":
+        'Run <a href="/personlauf">Person learn</a> and finish the review '
+        "— approved images appear here.",
+    "personwizard.bestand.stark_satz":
+        "Variety beats volume: images from <b>many different days</b> "
+        "(outfits, light) help far more than many images from one walk. "
+        "Aim for several days per person and let the harvest cover all "
+        "your cameras.",
+    # {n} = Fremd-Bilderzahl (Route liefert die rohe Zahl).
+    "personwizard.bestand.fremd_satz":
+        "<b>Strangers:</b> {n} confirmed stranger images calibrate the "
+        "decision threshold — the more strangers the model has seen, "
+        "the more reliable that line is. (Collected in "
+        "<code>personlern/fremd/</code>; a page for growing this set from "
+        "your own street traffic is planned.)",
+    "personwizard.bestand.fremd_erklaerung":
+        "Confirmed stranger images — they train the extra class and "
+        "calibrate the decision threshold. Deleting one retrains the model "
+        "right away (files live in <code>personlern/fremd/</code>).",
+    # ZITAT: "Person learn" == nav.personlauf.
+    "personwizard.modell.leer_satz":
+        'Run <a href="/personlauf">Person learn</a> and finish a review '
+        "— training starts automatically afterwards.",
+    # ZITAT: "Body images" == nav.person.
+    "personwizard.modell.material_satz":
+        "Manage the images under "
+        '<a href="/person">Body images</a> — deletions retrain the '
+        "model automatically.",
+    # ---- Meldetexte (Stufe 4) --------------------------------------------
+    # Pushover-/Telegram-TEXTE (konzept_sprache.md §4.4 + §6.4). Sie
+    # entstehen OHNE Request: die Sprache kommt am Meldeweg aus dem
+    # Config-Store (core/melden.sprache_aktivieren, Eintrittspunkte b/c).
+    # NUTZUNGS-REIHENFOLGE unten = Reihenfolge im Meldefluss:
+    # Titel -> Event-Alert -> Personen-Erkennung -> Vision -> Live-Waechter
+    # -> geteilte Bausteine (Video-Rueckfall, Kanal-Test).
+    #
+    # NICHT eingezogen (bewusst, Stufe-4-Grenzen — Sammelmarker in
+    # verifyd.py bei den Kategorie-Tabellen, core/melden.telegram_melden,
+    # core/melden.stoerung_melden und core/livewache.TEXT_URTEIL_*):
+    # (a) DEUTSCHE Alt-Meldetexte (Szenen-Telegram-Captions "… erkannt um
+    #     …"/"Unbekannte Person um …", Anwesenheits-Satz, alle
+    #     "suslik-Stoerung"-Pushes der Wartungsjobs) — de->en waere eine
+    #     bewusste TEXTAENDERUNG, nie Teil des Einzugs.
+    # (b) Stoerungs-DIAGNOSEN, die wortgleich ins Log gehen (Log bleibt
+    #     englisch/maschinenlesbar, B20).
+    # (c) Das Schnell-Urteil des Waechters (TEXT_URTEIL_*): derselbe String
+    #     ist zugleich MQTT-Payload-Wert (Additiv-Invariante: kein
+    #     bestehendes Feld aendert seine Bytes) und Log-Zeile.
+    # (d) MQTT-Felder/Topics/Werte insgesamt — dort steht die Wortstufe als
+    #     KENNUNG (clear|narrow|below|none), nie als Anzeigewort.
+    # Produktnamen (suslik/Frigate/Pushover/Telegram) bleiben in JEDER
+    # Sprache wortgleich (§8.6).
+    #
+    # Push-Titel der Kategorie-Alerts: {wort} kommt aus der Kategorie-
+    # Anzeige (webui.bausteine.kat_wort, Tranche-D-Quelle).
+    "meldung.titel.kategorie": "suslik: {wort}",
+    # Event-Alert (verifyd._maybe_alert): je Urteils-Zweig ein GANZER Satz
+    # (B9); {wort} = Wortstufe aus core/vertrauen (uebersetzt, §6.4).
+    "meldung.alert.bestaetigt":
+        "{name} confirmed ({wort}, seen in {n} window(s))",
+    "meldung.alert.keiner_naechster":
+        "no one confirmed — closest is {name} ({wort})",
+    "meldung.alert.keiner_ohne_gesicht": "no one confirmed — no usable faces",
+    # {kamera} kommt zusammengesetzt aus der Route (Kamera · Area(s)),
+    # {urteil} ist einer der drei Zweige oben, {gesichter} der Plural.
+    "meldung.alert.satz":
+        "{kamera} — {urteil}. Frigate saw: {label}. {gesichter}",
+    # echter Plural schon im Original (face/faces) — t_n loest .eins/.viele.
+    "meldung.alert.gesichter.eins": "{n} face in this event.",
+    "meldung.alert.gesichter.viele": "{n} faces in this event.",
+    # Rohzahlen-Anhang, nur im Stil alert_stil=worte_zahlen. {score}/{cos}
+    # kommen vorformatiert aus dem Dienst (§8.8).
+    "meldung.alert.zahl": "[Frigate {score} (= cos {cos}) | {unsere}]",
+    # Personen-Erkennung ueber den Koerper (verifyd, personlive-Weg).
+    "meldung.person.titel": "suslik person recognition",
+    "meldung.person.satz":
+        "{name} recognized by body (person recognition, not face) — "
+        "{wort}, {n} supporting events",
+    # Ersatzwort, wenn die geeichte Latte nicht lesbar war (Original:
+    # "{_vt_wort or 'match'}").
+    "meldung.person.wort_ersatz": "match",
+    "meldung.person.zahl": "[score {score}]",
+    # Vision-Meldungen (verifyd._vision_melden). "picture(s)"/
+    # "comparison(s)" bleiben EINE Form (§8.18), der Gedankenstrich-Zusatz
+    # ist ein eigener Schluessel (§8.11).
+    "meldung.vision.titel": "suslik vision",
+    "meldung.vision.unbestaetigt":
+        "vision could not confirm anyone on this pass",
+    "meldung.vision.koerper_zusatz": "— the body ranking said {namen}",
+    "meldung.vision.bilder_zusatz": "({n} picture(s) in the grid)",
+    "meldung.vision.einig":
+        "vision: {name} — unanimous, {voten} of {bilder} comparison(s)",
+    "meldung.vision.kein_urteil": "vision: no verdict — {grund}",
+    # Live-Waechter (core/livewache). {wache} ist die KENNUNG des Waechters
+    # (core.livewache.WATCHER_TITEL, EIN Literal, Invariante §6) — sie
+    # bleibt in jeder Sprache wortgleich, uebersetzt wird der Rest.
+    "meldung.wache.titel_person": "{wache} {kamera}: person detected",
+    "meldung.wache.titel_stoerung": "{wache} {kamera}: disturbance",
+    "meldung.wache.caption": "{wache} {kamera}: {text}",
+    "meldung.wache.name_satz":
+        "recognized (live, preliminary): {name} ({wort}, {n} "
+        "consistent looks)",
+    "meldung.wache.name_zahl": "[cosine {cos}]",
+    # echter Plural schon im Original (face/faces) — t_n; {sek}/{score}/{ms}
+    # kommen vorformatiert aus der Engine (§8.8).
+    "meldung.wache.funde.eins": "{n} face in {sek} s",
+    "meldung.wache.funde.viele": "{n} faces in {sek} s",
+    "meldung.wache.funde_zahl": "(score {score}, {ms} ms)",
+    # Geteilte Bausteine beider Straenge (core/melden + verifyd).
+    "meldung.video_ersatz.satz": "(video unavailable — sending image)",
+    "meldung.test.satz": "Test notification from suslik ✓",
+    # ---- D1: ehrliche Begruendung der Pass-Pruefung ----------------------
+    # Anlass (User 20.08.): der Knopf "Check this pass for good pictures"
+    # meldete "nothing to take … (that is fine)", obwohl alle 149 Gesichter
+    # des Durchgangs unter der Groessen-Latte lagen — der Code kannte die
+    # Zahl und verschwieg sie. Die Saetze unten sind SATZTEILE (kleines
+    # Anfangswort): sie haengen entweder hinter "nothing to take — " oder
+    # hinter dem Grenzfall-Satz. Die Kennung->Satz-Wahl trifft
+    # webui.bausteine.bruecke_grund, die Zahlen liefert
+    # anlernen.vorschlaege_person (Schwellen aus core/benennung.REF_LATTE —
+    # hier steht KEINE Schwelle als Literal, nur ihr Platzhalter).
+    # "face(s)"/"event(s)" bleiben EINE Form (§8.18, wie antwort.adopt_skip).
+    "antwort.bruecke_nichts_grund": "nothing to take — {grund}",
+    "antwort.bruecke_grund_zusatz": " · {grund}",
+    "antwort.bruecke_grund_zu_klein":
+        "all {n} face(s) measured in this pass are below the minimum face "
+        "size — largest {kante} px, needs {min_kante} px",
+    "antwort.bruecke_grund_zu_unscharf":
+        "{n} face(s) in this pass are too blurry for a reference — best "
+        "sharpness {sharp}, needs {unscharf_max}",
+    "antwort.bruecke_grund_kein_gesicht":
+        "no measurable face in the {n} picture(s) checked in this pass",
+    "antwort.bruecke_grund_gedeckt":
+        "{n} of the checked face(s) are near-identical to references "
+        "{person} already has",
+    "antwort.bruecke_grund_fremd_naeher":
+        "{n} of the checked face(s) look more like someone else than like "
+        "{person}",
+    "antwort.bruecke_grund_id_unsicher":
+        "{n} of the checked face(s) were not clearly {person}",
+    "antwort.bruecke_grund_beides_schwach":
+        "{n} of the checked face(s) were weak on both counts — picture "
+        "quality and identity",
+    "antwort.bruecke_grund_kein_crop":
+        "none of the {n} event(s) in this pass has a face crop to check",
+    "antwort.bruecke_grund_keine_events":
+        "no event of this pass has {person} confirmed or as its best match",
+    "antwort.bruecke_grund_keine_referenzen":
+        "{person} has no reference pictures yet to compare against",
+    # ---- personlauf-Design (Nachzug) ----
+    # 20.08.: /personlauf traegt jetzt dasselbe Lauf-Design wie der
+    # Gesichts-Lernlauf (Vier-Kachel-Fluss, Saeule, Suchknopf mit Popup).
+    # Alle bisherigen personwizard.*-Texte bleiben unveraendert in Gebrauch —
+    # neu sind nur die Beschriftungen, die es im alten Karten-Layout gar
+    # nicht gab (Kachel-Titel und je ein Klartext-Satz je Kachel-Leerzustand).
+    # Was wortgleich schon existiert, wird wiederverwendet statt verdoppelt:
+    # Kachel 1/4 heissen wie drueben (lernwizard.kachel.lauf/.fertig), die
+    # erste Saeulen-Marke ist lernwizard.seg.vorbereiten, dazu
+    # lernwizard.k1.gestartet/.k1.scope, .such.klein, .knopf_abbrechen,
+    # .knopf_neuer_lauf und erkennung.link_how.
+    # ACHTUNG Uebersetzungsrunde: diese sieben Schluessel fehlen noch in
+    # de/es/it/fr — das ist die bewusst deklarierte Fehlmenge.
+    "personwizard.kachel.sammeln": "Collect images",
+    "personwizard.kachel.pruefen": "Review the pictures",
+    "personwizard.k1.satz":
+        "Choose who to learn and how far back to look &mdash; the run then "
+        "collects the pictures from your own recordings.",
+    "personwizard.k2.satz":
+        "Harvests full-body pictures from your recordings, and only from "
+        "walk-throughs a face already confirmed.",
+    "personwizard.k3.satz":
+        "The step that needs you: every harvested picture gets your yes or "
+        "no before anything is learned.",
+    "personwizard.k4.satz":
+        "Approved pictures train the body model right away &mdash; it can "
+        "then recognize people with no face in sight.",
+    "personwizard.such.titel": "Set up a person-learn run",
 }

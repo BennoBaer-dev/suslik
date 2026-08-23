@@ -241,6 +241,14 @@ T = {
     "aehnliche.vorschlaege.hinweis_leer_kriterien":
         "Criteri: senza dubbio questa persona, nuovo rispetto "
         "all’archivio, abbastanza grande e nitido.",
+    "aehnliche.vorrat.titel": "Novità dal materiale di apprendimento",
+    "aehnliche.vorrat.hinweis":
+        "Volti di alta qualità raccolti dalla sessione di apprendimento, "
+        "valutati con la misura di qualità senza riferimenti e il consenso "
+        "dello scenario. Restano in locale e non vengono mai esportati a Frigate.",
+    "aehnliche.vorrat.kachel_zeile": "{wann} · {kamera} · corrispondenza {sim} · qualità {norm}",
+    "aehnliche.vorrat.auch_anker": "anche in un gruppo di volti",
+    "aehnliche.vorrat.knopf_gewaehlt": "Applica la selezione a {person}",
     # ------------------------------------------------- routes/frigate ---
     # NICHT eingezogen (bewusst, Stufe-0-Grenzen): die Beweis-Zeilen der
     # Verbindungs-, Kamera- und FR-Kachel (bis auf "state unknown") tragen
@@ -345,6 +353,8 @@ T = {
     "ereignisliste.tabelle.link_video": "video",
     "ereignisliste.tabelle.attr_unvollstaendig":
         "video incompleto — giudicato dalla parte leggibile",
+    "ereignisliste.tabelle.attr_kein_crop":
+        "per questo evento non è stato conservato nessun volto utilizzabile",
     # ------------------------------------------- routes/konfiguration ---
     # NICHT eingezogen (bewusst, Stufe-0-Grenzen): die Status-Zeile
     # 'status: <b>armed</b> — runs by itself' und die drei Absaetze mit
@@ -448,8 +458,7 @@ T = {
     "lernanker.detail.pflege_hinweis":
         "la cura dei riferimenti sta nella pagina Qualità",
     "lernanker.detail.verworfen":
-        "scartato — immagini rimosse; il gruppo resta memorizzato, così "
-        "le nuove estrazioni degli stessi eventi restano silenziose",
+        "eliminato da te — le immagini non ci sono più; il gruppo resta solo come voce",
     "lernanker.detail.dublette_hinweis":
         "controllo duplicati non disponibile (l’ancora precede la "
         "persistenza degli embedding) — i duplicati fisici vengono "
@@ -491,8 +500,7 @@ T = {
         "gruppi e le immagini estratte (i riferimenti già acquisiti "
         "restano):",
     "lernanker.liste.verworfen":
-        "{n} gruppi scartati memorizzati — le nuove estrazioni degli "
-        "stessi eventi restano silenziose",
+        "{n} gruppi eliminati da te (immagini rimosse, restano solo come voce)",
     "lernanker.titel": "Gruppi di ancore",
     "lernanker.liste.leer":
         "Non ci sono ancore — le costruisce una sessione di "
@@ -514,15 +522,10 @@ T = {
     "lernanker.liste.knopf_view": "Vedi il gruppo",
     "lernanker.liste.knopf_benennen": "Dai un nome a questi {n} volti",
     "lernanker.liste.frage_verwerfen":
-        "Scartare questo gruppo? Le sue immagini vengono rimosse; il "
-        "gruppo resta memorizzato, così le nuove estrazioni degli stessi "
-        "eventi restano silenziose.",
+        "Eliminare questo gruppo? Le sue immagini vengono rimosse. Non si può annullare.",
     "lernanker.liste.frage_verwerfen_benannt":
-        "Scartare questo gruppo? Le sue immagini vengono rimosse e la "
-        "denominazione in sospeso viene annullata; il gruppo resta "
-        "memorizzato, così le nuove estrazioni degli stessi eventi "
-        "restano silenziose.",
-    "lernanker.liste.knopf_verwerfen": "Scarta",
+        "Eliminare questo gruppo? Le sue immagini vengono rimosse e la denominazione in sospeso viene annullata. Non si può annullare.",
+    "lernanker.liste.knopf_verwerfen": "Elimina",
     # ---------------------------------------------- routes/syncauswahl ---
     # NICHT eingezogen (bewusst, Stufe-0-Grenzen): FR_AUS_HINWEIS kommt aus
     # sync_refs (zentrale Quelle, eigene Tranche); die Satzreste mit
@@ -595,6 +598,7 @@ T = {
     "syncauswahl.bilanz.exportiert":
         "{n} inviate in precedenza (Frigate le ha rinominate)",
     "syncauswahl.bilanz.abgewaehlt": "{n} deselezionate",
+    "syncauswahl.bilanz.vorrat": "{n} riferimento/i del materiale solo in locale (basati su embedding, non trasferibili)",
     "syncauswahl.bilanz.nur_frigate": "{n} solo in Frigate",
     "syncauswahl.bilanz.je_person": "In Frigate, per persona:",
     # echter Plural schon im Original — t_n loest .eins/.viele auf.
@@ -980,9 +984,9 @@ T = {
     # Original — bewusste Wiederverwendung, kein Duplikat).
     "faces.qualitaet.knopf_check": "Controlla la qualità delle mie immagini",
     "faces.qualitaet.popup_satz":
-        "Rimisura ogni immagine di riferimento e cerca quelle deboli, i "
-        "quasi-duplicati e i volti scambiati. Richiede circa un minuto "
-        "e gira in background.",
+        "Rimisura ogni immagine di riferimento (inclusa la qualità del volto) e "
+        "cerca quelle deboli, i quasi-duplicati e i volti scambiati. Richiede "
+        "alcuni minuti a seconda del numero di immagini e gira in background.",
     "faces.qualitaet.label_alle": "Tutte le persone",
     "faces.qualitaet.label_eine": "Una persona:",
     "faces.qualitaet.knopf_start": "Avvia controllo",
@@ -1009,7 +1013,6 @@ T = {
     "qualitaet.lauf.checking": "controllo dell’immagine {i} di {n} &hellip;",
     "qualitaet.lauf.reload_person":
         "poi ricarica questa pagina per il risultato aggiornato.",
-    "qualitaet.lauf.reload_auto": "la pagina si aggiorna da sola.",
     "qualitaet.lauf.abgebrochen":
         "l’ultimo controllo non è arrivato in fondo (riavvio del "
         "servizio o interruzione) &mdash; avvialo di nuovo.",
@@ -1043,6 +1046,8 @@ T = {
     "qualitaet.galerie.doppel": "duplicata — è coperta da quella tenuta",
     "qualitaet.galerie.gut": "buona",
     "qualitaet.galerie.gut_behalten": "buona — tenuta tra i suoi duplicati",
+    "qualitaet.galerie.vorrat": "dal materiale",
+    "qualitaet.galerie.norm": "qualità {norm}",
     "qualitaet.galerie.okay": "discreta",
     "qualitaet.galerie.satz_gut": "Tutte le {n} immagini sembrano a posto.",
     "qualitaet.galerie.satz_funde":
@@ -1137,6 +1142,7 @@ T = {
     "lernwizard.wizard.auswahl_hinweis":
         "Il taglio è esatto a N — il completamento della selezione a "
         "passaggi interi arriva con la fase di raggruppamento.",
+    "lernwizard.wizard.auswahl_durchsucht": "{k} di questi {n} sono già stati esaminati — con \"salta gli eventi già esaminati\" la sessione prende eventi più vecchi (la scheda mostra dove arriva).",
     "lernwizard.wizard.q_teilgemessen":
         "velocità di analisi misurata su QUESTA macchina; la stima dei "
         "download usa valori predefiniti",
@@ -1240,11 +1246,9 @@ T = {
     # .295-Sammelzeile — Anker der qs.sh-PYAD-Stufe (Text wohnt jetzt
     # hier, die Route referenziert den Schluessel).
     "lernwizard.k3.verworfen.eins":
-        "{n} gruppo scartato (nessun volto utilizzabile o per tua "
-        "scelta) &middot;",
+        "{n} gruppo eliminato da te &middot;",
     "lernwizard.k3.verworfen.viele":
-        "{n} gruppi scartati (nessun volto utilizzabile o per tua "
-        "scelta) &middot;",
+        "{n} gruppi eliminati da te &middot;",
     "lernwizard.k3.link_einsehen": "vedi",
     # B9: je Zweig ein GANZER Satz-Schluessel (statt Punkt-Anhaengsel).
     "lernwizard.k3.done_weiter":
@@ -1299,10 +1303,7 @@ T = {
     "lernwizard.zw.knopf_save": "Salva nome",
     "lernwizard.zw.knopf_skip": "Salta questo gruppo",
     "lernwizard.zw.frage_delete":
-        "Eliminare questo gruppo? Le sue immagini vengono rimosse e una "
-        "denominazione in sospeso viene annullata; il gruppo resta "
-        "memorizzato, così le nuove estrazioni degli stessi eventi "
-        "restano silenziose.",
+        "Eliminare questo gruppo? Le sue immagini vengono rimosse e una denominazione in sospeso viene annullata. Non si può annullare.",
     "lernwizard.zw.knopf_delete": "Elimina questo gruppo",
     "lernwizard.zw.link_detail": "vista di dettaglio completa",
     "lernwizard.zw.detail_zusatz":
@@ -1452,6 +1453,8 @@ T = {
     "js.vorschlag.keine": "Nessun volto consigliato.",
     "js.vorschlag.alle_frage": "Aggiungere tutti i {n} volti consigliati a {person}? Diventano subito riferimenti.",
     "js.vorschlag.frage": "Aggiungere {n} volto/i a {person}?",
+    "js.vorrat.frage": "Aggiungere {n} volto/i del materiale a {person}? Diventano subito riferimenti (restano in locale, nessuna esportazione).",
+    "js.qs.fortschritt": "controllo immagine {i} di {n} …",
     "js.sync.frage": "Sincronizzare: {richtung}?",
     "js.sync.modell_laedt": "caricamento del modello …",
     "js.sync.fortschritt": "{done}/{total} volti ({current}) {pct}%",
@@ -1484,7 +1487,7 @@ T = {
     "js.ref.batch_frage": "Eliminare {n} immagine/i?",
     "js.dienst.nicht_erreichbar": "servizio non raggiungibile — riprova tra un momento.",
     "js.unb.tick": "{phase} … {s} s",
-    "js.unb.besucher_frage": "Ignorare come estraneo conosciuto? Non attiverà più avvisi. (Riattivabile in qualsiasi momento qui sotto, in \"known visitors\".)",
+    "js.unb.besucher_frage": "Ignorare come estraneo conosciuto? Non attiverà più avvisi. (Riattivabile in qualsiasi momento qui sotto, in \"visitatori conosciuti\".)",
     "js.unb.ziel_fehlt": "Scegli un’identità di destinazione.",
     "js.unb.merge_frage": "Unire?",
     "js.unb.name_fehlt": "Inserisci un nome (persona nuova o esistente).",
@@ -1506,9 +1509,10 @@ T = {
     "js.vision.treffer": "{n}/2 corrette",
     "js.vision.tokens": "{ist} token contro {soll}",
     "js.vision.dirty_titel": "Questa connessione non è salvata",
-    # js.vision.dirty_text: "Save" ist der (noch englische) Knopf der
-    # Vision-Seite — bleibt woertlich, bis die Seite selbst einzieht.
-    "js.vision.dirty_text": "Il test userebbe i valori appena digitati. Il riconoscimento continua a usare la connessione SALVATA finché non premi Save — un test verde da solo non cambia nulla nei verdetti.",
+    # Zitat-Folge Tranche C: zitiert vision.save.knopf ("Salva
+    # connessione") wortgleich — gleiche Kopplung in
+    # js.vision.prompt_zurueck, bei Knopf-Aenderung BEIDE nachziehen.
+    "js.vision.dirty_text": "Il test userebbe i valori appena digitati. Il riconoscimento continua a usare la connessione SALVATA finché non premi «Salva connessione» — un test verde da solo non cambia nulla negli esiti.",
     "js.vision.dirty_save": "Prima salva, poi testa",
     "js.vision.dirty_test": "Testa senza salvare",
     "js.vision.stufe1": "raggiungibilità e modello",
@@ -1521,7 +1525,7 @@ T = {
     "js.vision.stufe_fehl": "il passo {nr} non è stato eseguito",
     "js.vision.neustart_warte": "il servizio al momento non risponde — la pagina si ricarica a breve",
     "js.vision.prompt_frage": "Riportare la domanda alla formulazione predefinita?",
-    "js.vision.prompt_zurueck": "formulazione predefinita ripristinata — premi Save per salvarla",
+    "js.vision.prompt_zurueck": "formulazione predefinita ripristinata — premi «Salva connessione» per salvarla",
     "js.vision.kachel_frage": "Ci sono modifiche non salvate. Cambiando fornitore vengono scartate. Continuare?",
     "js.vision.pick": "— scegline uno —",
     "js.vision.untested": "non testato qui",
@@ -1649,4 +1653,1866 @@ T = {
     "auftritte.pass.label_fehler": "Errore",
     "auftritte.pass.wer": "Chi",
     "auftritte.pass.titel_zeit": "Passaggio {zeit} — {tag}",
+    # ---- verifyd-Innenseiten (Stufe 2, Tranche B) ----
+    # Inline-Handler in verifyd.py (_banner, Setup-Wizard, Today-Leer-
+    # zustaende, /unbekannte, /live_alerts, /video, /event/<id>);
+    # Stufe-2-Grenzen s. en.py-Abschnittskommentar.
+    "banner.schoner":
+        "Frigate non risponde — nuovi tentativi ogni pochi secondi finché "
+        "non torna disponibile; l’interfaccia continua a mostrare i dati "
+        "locali.",
+    "banner.fehler":
+        "Frigate non raggiungibile (ultimo errore {zeit}): {fehler} — "
+        "l’interfaccia continua a mostrare i dati locali.",
+    "setupwiz.frigate.status_ok":
+        "✓ Connessione riuscita — telecamere trovate: {n}",
+    "setupwiz.frigate.status_fehl":
+        "✗ Impossibile raggiungere Frigate: {fehler}",
+    "setupwiz.frigate.status_fehl_keine": "nessuna telecamera",
+    "setupwiz.frigate.status_fehl_hinweis":
+        "Correggi l’URL (o imposta FRIGATE_URL nel tuo .env / "
+        "docker-compose) e ripeti il test.",
+    "setupwiz.frigate.status_leer":
+        "Inserisci l’URL di Frigate e testa la connessione.",
+    "setupwiz.frigate.titel": "Connessione a Frigate",
+    "setupwiz.frigate.satz":
+        "suslik legge le tue telecamere direttamente dall’API di Frigate "
+        "(di solito sulla porta 5000). Nessuna telecamera è fissata nel "
+        "codice.",
+    "setupwiz.frigate.knopf_test": "Testa la connessione",
+    "setupwiz.kameras.titel": "Scegli telecamere &amp; condizioni",
+    "setupwiz.kameras.satz":
+        "Spunta le telecamere da sorvegliare; spunta una o più zone per "
+        "analizzare solo gli eventi che vi sono entrati (ad es. persona "
+        "in giardino). Nessuna spunta = tutti gli eventi.",
+    "setupwiz.kameras.satz_ohne":
+        "Collegati prima a Frigate — le tue telecamere compariranno qui.",
+    "setupwiz.backend.titel": "Accelerazione",
+    "setupwiz.backend.verfuegbar": "Disponibili su questa macchina:",
+    "setupwiz.backend.satz_wahl": "Scegline uno — la CPU funziona sempre.",
+    "setupwiz.import.titel": "Importa volti da Frigate",
+    # Zaehler-Split an der <b>-Grenze (§8.10): vor/mitte/nach rahmen die
+    # hervorgehobenen Zahlen, Rand-Leerzeichen gehoeren zum Wert.
+    "setupwiz.import.zahl_vor": "Frigate ha già ",
+    "setupwiz.import.zahl_mitte": " immagine/i di riferimento di ",
+    "setupwiz.import.zahl_nach": " persona/e.",
+    "setupwiz.import.satz":
+        "Importale: così suslik riconosce tutti fin dall’inizio. Le "
+        "immagini vengono scaricate rapidamente, poi suslik calcola le "
+        "proprie caratteristiche dei volti sul tuo acceleratore (GPU/NPU).",
+    "setupwiz.import.knopf": "Importa {n} volti da Frigate",
+    "setupwiz.import.satz_leer":
+        "Ancora nessun volto in Frigate. Nota: suslik ha bisogno di "
+        "almeno un volto di riferimento prima di poter riconoscere "
+        "qualcuno — importa qui da Frigate, oppure carica delle foto più "
+        "tardi nella pagina Conosciuti.",
+    "setupwiz.import.satz_ohne":
+        "Collegati prima a Frigate — poi potrai importare qui i suoi "
+        "volti conosciuti.",
+    "setupwiz.fertig.knopf": "Salva &amp; avvia suslik",
+    "setupwiz.fertig.satz":
+        "Salva le tue scelte e riavvia il servizio una sola volta.",
+    "setupwiz.restore.titel": "Hai già una configurazione?",
+    # Zitat-Folge Tranche C: nennt system.titel + system.backup.titel
+    # wortgleich ("Sistema" / "Backup della configurazione").
+    "setupwiz.restore.satz":
+        "Se in passato hai esportato una configurazione di suslik "
+        "(Sistema → Backup della configurazione), caricala qui per "
+        "ripristinare tutte le impostazioni e saltare la procedura "
+        "guidata.",
+    "setupwiz.restore.knopf": "Carica il file di configurazione…",
+    "setupwiz.write.titel": "Scrivere su Frigate?",
+    "setupwiz.write.satz":
+        "suslik può riscrivere i suoi esiti su Frigate (sub_labels) e "
+        "sincronizzare i riferimenti, per farli funzionare in parallelo. "
+        "La sola lettura è l’impostazione predefinita sicura.",
+    "setupwiz.write.opt_ro":
+        "Sola lettura (consigliata) — suslik non scrive mai su Frigate",
+    "setupwiz.write.opt_rw":
+        "Scrittura su Frigate (funzionamento in parallelo)",
+    "setupwiz.willkommen.titel": "Ti diamo il benvenuto in suslik",
+    "setupwiz.willkommen.satz":
+        "Una breve procedura guidata — oppure carica una configurazione "
+        "esistente per saltarla. Tutto ciò che vedi qui si può modificare "
+        "più tardi nelle pagine normali.",
+    # leer.*: Today-Leerzustaende + verstreute webui.leer()-Stellen.
+    # "All" ist Anzeige==Kennung (§8.2, routes/areas) — bleibt woertlich.
+    "leer.passe_area_heute":
+        "Oggi nessun passaggio ha ancora toccato {area}.",
+    "leer.passe_area_tag":
+        "Nessun passaggio ha toccato {area} in questo giorno.",
+    "leer.passe_area_hinweis":
+        "Il chip All qui sopra mostra l’intera proprietà.",
+    "leer.passe_heute": "Oggi ancora nessun passaggio con un volto.",
+    "leer.passe_heute_hinweis":
+        "Appena qualcuno attraversa la proprietà, il passaggio compare "
+        "qui.",
+    "leer.tag": "Niente con un volto in questo giorno.",
+    "leer.tag_hinweis":
+        "Usa le frecce per guardare un altro giorno, oppure apri Eventi "
+        "per l’elenco completo.",
+    "leer.frigate": "Ancora nessun Frigate collegato.",
+    "leer.frigate_hinweis":
+        "Imposta l’URL di Frigate nella procedura guidata "
+        "(pagina Sistema) — poi i passaggi compaiono qui da soli.",
+    "leer.refs":
+        "Collegato — ma ancora nessun volto di riferimento, quindi "
+        "nessuno può essere riconosciuto.",
+    "leer.refs_hinweis":
+        "Importa i volti da Frigate o carica delle foto — entrambe le "
+        "cose nella pagina Conosciuti. Poi suslik continua ad apprendere "
+        "da solo dalle telecamere.",
+    "leer.band_heute": "Oggi ancora niente con un volto.",
+    "leer.band_tag": "Niente con un volto in questo giorno.",
+    "leer.band_hinweis":
+        "Le persone compaiono qui appena un passaggio viene analizzato.",
+    "leer.person_unbekannt": "Persona sconosciuta.",
+    "leer.kamera_unbekannt": "Telecamera sconosciuta.",
+    "leer.kamera_unbekannt_hinweis":
+        "I riquadri provengono solo dall’elenco telecamere di Frigate e "
+        "dalle sentinelle salvate.",
+    "unbekannte.name": "Sconosciuto {nummer}",
+    "unbekannte.badge_eine": "chiaramente una sola persona",
+    "unbekannte.badge_aehnlich": "somiglianza {wert}",
+    "unbekannte.badge_einmal": "visto una volta",
+    "unbekannte.meta_zeit": " apparizioni · {zeit}",
+    "unbekannte.knopf_reaktivieren": "riattiva",
+    "unbekannte.attr_name": "Nome (nuovo o esistente)",
+    "unbekannte.knopf_zuweisen": "Assegna persona",
+    "unbekannte.knopf_ignorieren": "Ignora",
+    "unbekannte.opt_merge": "unisci a…",
+    "unbekannte.knopf_ok": "OK",
+    "unbekannte.badge_gleiche": "stessa persona?",
+    "unbekannte.knopf_merge": "Unisci",
+    "unbekannte.knopf_verschieden": "Persone diverse",
+    "unbekannte.titel": "Sconosciuti",
+    "unbekannte.kopf_satz":
+        "Volti che non corrispondono a nessuna persona conosciuta, "
+        "raggruppati in identità ricorrenti.",
+    # Kopf-Erklaerung an den <b>-Grenzen gesplittet; die Fett-Teile sind
+    # die knopf_*-Schluessel selbst (eine Quelle, kein Drift).
+    "unbekannte.kopf_satz_zuweisen":
+        " collega un riquadro a una persona (nuova o esistente, digita "
+        "il nome),",
+    "unbekannte.kopf_satz_ignorieren":
+        " silenzia un estraneo conosciuto (nessun avviso).",
+    "unbekannte.kopf_satz_auto":
+        "I volti nuovi arrivano qui automaticamente dopo ogni passaggio.",
+    "unbekannte.knopf_reorg": "Riorganizza ora",
+    "unbekannte.hinweis_reorg":
+        "ricontrolla i volti estratti e ricostruisce i gruppi — "
+        "l’estrazione vera e propria avviene automaticamente (1-2 min)",
+    "unbekannte.h_wieder": "Ricorrenti",
+    "unbekannte.h_einzeln":
+        "{n} apparizioni singole (viste una sola volta finora)",
+    "unbekannte.h_besucher": "{n} visitatori conosciuti (silenziati)",
+    "unbekannte.h_objekte":
+        "{n} oggetti statici (rilevati automaticamente — non persone)",
+    "unbekannte.satz_objekte":
+        "Gruppi le cui immagini sono quasi identiche tra loro e non "
+        "somigliano a nessuna persona — in genere un passaruota, la "
+        "pavimentazione o un gioco di luce che il rilevatore continua a "
+        "scambiare per un volto. Sono congelati: i nuovi volti trovati "
+        "non vengono mai aggiunti qui (formano gruppi nuovi e visibili e "
+        "vengono ricontrollati dalla stessa regola) — i gruppi restano "
+        "in elenco, così nulla viene nascosto.",
+    "unbekannte.leer": "Ancora nessun volto sconosciuto.",
+    "unbekannte.leer_hinweis":
+        "Le identità compaiono qui dopo il prossimo visitatore "
+        "sconosciuto.",
+    "livealerts.link_video": "&#9654; video {n}",
+    "livealerts.person_unbekannt": "sconosciuto",
+    # "trigger" ist im IT-Bestand etabliertes Lehnwort (live.zaehler.*),
+    # im Plural unveraendert — beide t_n-Formen identisch.
+    "livealerts.trigger.eins": "{n} trigger",
+    "livealerts.trigger.viele": "{n} trigger",
+    "livealerts.kanal_keiner": "non inviato (nessun canale)",
+    "livealerts.keine_bilder": "nessuna immagine salvata",
+    "livealerts.titel": "Avvisi delle sentinelle live",
+    "livealerts.kopf.auftritte.eins": "{n} apparizione",
+    "livealerts.kopf.auftritte.viele": "{n} apparizioni",
+    "livealerts.kopf.satz":
+        " il {tag} — controllo rapido, preliminare; l’esito confermato "
+        "arriva dall’analisi normale.",
+    "livealerts.kopf.satz_alt":
+        "Le voci precedenti alla 0.1.0.190 non hanno immagine né nome "
+        "registrati.",
+    "livealerts.leer": "Nessun avviso live in quel giorno.",
+    "video.fehl":
+        "&#9888; Transcodifica non riuscita — vedi il log del servizio "
+        "(/log).",
+    "video.fehl_hinweis":
+        "Ricarica questa pagina per riprovare, oppure apri il video "
+        "originale:",
+    "video.warte": "Preparazione del video per il browser (H.264)&nbsp;…",
+    "video.warte_satz":
+        "Questa pagina si aggiorna da sola. La copia viene creata una "
+        "volta e poi resta nella cache.",
+    "event.ours_zeile.eins": "{person} — {stufe} (presente in {n} finestra)",
+    "event.ours_zeile.viele":
+        "{person} — {stufe} (presente in {n} finestre)",
+    "event.ours_keiner": "nessuna corrispondenza con nessuno",
+    "event.ours_rest.eins": " · {n} altra: nessuna corrispondenza",
+    "event.ours_rest.viele": " · {n} altre: nessuna corrispondenza",
+    "event.grenze":
+        "sotto questa linea: corrispondenze deboli (miglior punteggio "
+        "&lt; {wert}) — il nome è solo un’ipotesi, potrebbe trattarsi di "
+        "un’altra persona",
+    "event.gruppe_ohne": "Senza attribuzione",
+    "event.badge_unsicher": "incerto",
+    "event.leer_crops": "Nessun ritaglio di volto salvato per questo evento.",
+    "event.knopf_video": "&#9654; Video",
+    "event.knopf_log": "Log dell’analisi",
+    "event.attr_unvollstaendig":
+        "video incompleto — letti {gelesen}/{soll} fotogrammi; esito "
+        "basato sulla parte leggibile",
+    "event.badge_unvollstaendig": "⚠ video incompleto",
+    "event.pass_zurueck": "&#8592; precedente",
+    "event.pass_weiter": "successivo &#8594;",
+    "event.pass_teil": "Parte di un passaggio",
+    "event.pass_events.eins": "{n} evento",
+    "event.pass_events.viele": "{n} eventi",
+    "event.pass_knopf": "vedi passaggio",
+    "event.label_grund": "Motivo dell’errore",
+    "event.grund_ohne_zeile":
+        "analyze.log non contiene una riga con il motivo — usa il "
+        "pulsante del log qui sotto",
+    "event.grund_ohne_log":
+        "nessun analyze.log conservato per questo evento — vedi il log "
+        "del servizio (pagina Sistema)",
+    "event.zurueck": "← Oggi",
+    "event.label_korrektur": "Correggi se è sbagliato",
+    "event.label_wer": "Chi era?",
+    "event.h_bilder": "Immagini",
+    # ---- Routen-Seiten (Stufe 2, Tranche C) ----
+    # routes/system.py, routes/vision.py, routes/visiontest.py,
+    # routes/visionwizard.py, routes/personwizard.py, webui/bausteine.py.
+    # Grenzen wie en.py-Abschnittskommentar. Terminologie: begriffe_tabellen.md
+    # (IT): passaggio/volto/avviso/estraneo/gruppo/esito/corrispondenza;
+    # Modell-Training -> apprendimento (ML-Sperrwort der Tabelle vermieden);
+    # armed -> inserito/disinserito (Alarmanlagen-Register); Lernlauf-run ->
+    # sessione, Vision-Testlauf -> esecuzione.
+    # --- routes/system.py ---
+    "system.ampel.service": "Servizio",
+    # "(session)" = seit Dienststart — "dall’avvio" statt "sessione"
+    # (Kollision mit sessione = Lernlauf, Muster live.zaehler.kopf).
+    "system.ampel.service_info": "elaborati in totale: {n}",
+    "system.ampel.backend": "Backend",
+    "system.ampel.backend_ok": "{backend} — autotest OK",
+    "system.ampel.backend_fail":
+        "{backend} — autotest FALLITI: {n} (vedi il log del servizio)",
+    "system.ampel.analyse": "Analisi",
+    "system.ampel.analyse_dauer": "ultima durata {s} s",
+    "system.ampel.analyse_nie": "ancora nessuna analisi",
+    "system.ampel.retry": "Coda dei nuovi tentativi",
+    "system.ampel.retry_info":
+        "{offen} aperti / {aufgegeben} abbandonati (finestra {tage} gg)",
+    "system.ampel.frigate_unkonfiguriert":
+        "non ancora configurato — imposta l’URL nella procedura guidata "
+        "iniziale",
+    "system.ampel.frigate_ok": "raggiungibile",
+    # {zeit} kommt vorformatiert (%H:%M) aus der Route (B19-Stufe).
+    "system.ampel.frigate_fehler": "ultimo errore {zeit}",
+    # {s} vorformatiert (:.0f) — Formatspezifika nie in Werte (§8.8).
+    "system.ampel.mqtt_hb": "heartbeat {s} s fa",
+    "system.ampel.mqtt_kein_hb": "ancora nessun heartbeat",
+    "system.ampel.mqtt_pub_aus": "configurato, pubblicazione disattivata",
+    "system.ampel.mqtt_pub_kaputt":
+        "configurato, publisher non avviato — vedi il log del servizio",
+    "system.ampel.mqtt_unkonfiguriert": "non configurato",
+    "system.ampel.disk": "Disco",
+    "system.ampel.disk_info2": "{gb} GB liberi · cache dei clip {cache} GB su {max} GB",
+    "system.disk.titel": "Spazio su disco",
+    "system.disk.satz": "I clip sono una cache: conservati {tage} giorni, con un tetto di {max} GB, e sfoltiti non appena restano meno di {min} GB liberi (controllo ogni 10 minuti).",
+    "system.disk.knopf": "Pulisci ora",
+    "system.disk.warnung": "Restano solo {gb} GB liberi e la cache dei clip è già vuota — libera spazio sul volume dati, altrimenti i nuovi eventi non potranno essere salvati.",
+    "system.ampel.ok": "OK",
+    "system.ampel.check": "CONTROLLA",
+    "system.drift.banner":
+        "CONTROLLO ANTI-DERIVA IN ROSSO dopo l’ultima aggiunta di "
+        "riferimenti:",
+    "system.sync.titel": "Sincronizzazione con Frigate",
+    "system.sync.knopf": "Apri la sincronizzazione Frigate",
+    "system.sync.satz":
+        "La pagina di sincronizzazione confronta i due archivi di volti "
+        "persona per persona, sottopone ogni candidato al controllo "
+        "preliminare proprio come fa Frigate, invia solo ciò che spunti e "
+        "importa ciò che ha solo Frigate.",
+    "system.sync.fehlt":
+        "non ancora disponibile — servono un Frigate raggiungibile e "
+        "almeno un volto di riferimento",
+    "system.qc.titel": "Rapporto controllo qualità",
+    "system.qc.stand": "(aggiornato al {stand}, {tage} giorni)",
+    "system.qc.kopf_gesicht": "con volto",
+    "system.qc.kopf_bestaetigt": "confermati",
+    "system.qc.kopf_quote": "quota finestra",
+    # WIRD ZITIERT: setupwiz.restore.satz nennt diesen Titel wortgleich.
+    "system.backup.titel": "Backup della configurazione",
+    "system.backup.satz":
+        "Scarica le impostazioni salvate in /data/config come un unico "
+        "file JSON, oppure ripristinale da un file di questo tipo. Limite "
+        "onesto: oggi si tratta della SCHEDA TELECAMERE (inclusi i suoi "
+        "valori salvati); le soglie e i canali impostati solo in "
+        "verifyd.yaml o tramite variabili d’ambiente NON sono in questo "
+        "file. Persone apprese/riferimenti: usa il backup completo qui "
+        "sotto.",
+    "system.backup.knopf_download": "Scarica la configurazione",
+    "system.backup.knopf_restore": "Ripristina da file…",
+    "system.backup.careful": "Attenzione:",
+    # {hinweis} = seit Tranche D der Schluessel system.backup.hinweis
+    # (Konstante VISION_EXPORT_HINWEIS ist auf die Sprachschicht umgezogen).
+    "system.backup.careful_config":
+        "questo file {hinweis} (canali di notifica e rilevamento visione), "
+        "in modo che un ripristino su un’altra macchina funzioni davvero.",
+    "system.backup.restore_satz":
+        "Il ripristino sovrascrive le impostazioni attuali (le precedenti "
+        "restano come .bak) e riavvia il servizio.",
+    "system.voll.titel": "Backup completo",
+    "system.voll.satz":
+        "Un unico archivio portabile con tutto ciò che hai insegnato a "
+        "questa installazione: impostazioni, l’archivio dei volti di "
+        "riferimento, i risultati delle sessioni di apprendimento, tutto "
+        "il materiale del riconoscimento della persona (immagini, i tuoi "
+        "giudizi di revisione, i modelli appresi) e il registro degli "
+        "eventi. Pensato per il trasferimento su un’altra macchina. Limite "
+        "onesto: la cache dei video e gli artefatti di analisi per evento "
+        "NON sono inclusi — si ricostruiscono col tempo.",
+    "system.voll.knopf_download": "Scarica il backup completo",
+    "system.voll.knopf_restore": "Ripristina il backup completo…",
+    "system.voll.careful": "questo archivio {hinweis}.",
+    "system.voll.restore_satz":
+        "Il ripristino sostituisce quelle parti (ognuna delle precedenti "
+        "viene conservata una volta come *.pre-restore-*) e riavvia il "
+        "servizio. Caricare qualche centinaio di MB può richiedere un "
+        "po’ — lascia la pagina aperta.",
+    "system.live.titel": "Sentinelle live",
+    "system.live.alerts": "Avvisi inviati oggi: {kanaele}",
+    "system.live.stoerungen": "Segnalazioni di anomalia oggi: {n}",
+    "system.live.knopf": "Apri le sentinelle live",
+    "system.live.quelle":
+        "Contati dal log dei messaggi del motore stesso — solo i "
+        "messaggi realmente accettati da un canale. Gli avvisi delle "
+        "sentinelle live sono separati dai contatori degli avvisi "
+        "dell’analisi eventi nella pagina Oggi.",
+    "system.write.titel": "Scrittura su Frigate",
+    "system.write.satz":
+        "suslik riscrive su Frigate o si limita a leggere? La sola "
+        "lettura è l’impostazione predefinita sicura; attiva la scrittura "
+        "solo per il funzionamento in parallelo (riconoscimento facciale "
+        "di Frigate + suslik).",
+    "system.write.aktuell": "Attuale:",
+    "system.write.zustand_ro":
+        "SOLA LETTURA — suslik non scrive su Frigate",
+    "system.write.zustand_rw": "SCRITTURA su Frigate — sub_labels",
+    "system.write.zustand_rw_sync": " + sincronizzazione dei riferimenti",
+    "system.write.knopf_rw": "Attiva la scrittura",
+    "system.write.knopf_ro": "Sola lettura",
+    # WIRD ZITIERT: setupwiz.restore.satz — wortgleich mit nav.system.
+    "system.titel": "Sistema",
+    "system.tools.titel": "Strumenti",
+    "system.docs.titel": "Documentazione",
+    "system.docs.link": "Documentazione su GitHub",
+    # --- routes/vision.py ---
+    "vision.zeit.nie": "mai",
+    "vision.titel": "Rilevamento visione",
+    "vision.kopf.dirty": "non salvato",
+    "vision.hinweis.titel": "Cosa ti serve per questo",
+    "vision.schalter.knopf_aus": "Disattiva",
+    "vision.schalter.knopf_an": "Attiva",
+    "vision.schalter.fehlt": "Manca ancora:",
+    "vision.schalter.titel_an": "Il rilevamento visione è attivo",
+    "vision.schalter.titel_aus": "Il rilevamento visione è disattivato",
+    "vision.schalter.aus_satz":
+        "Finché è disattivato non viene inviato nulla a nessuno e nessuna "
+        "immagine lascia questa macchina.",
+    "vision.frage.titel": "Come viene posto un confronto",
+    "vision.frage.doppel_titel":
+        "Chiedi ogni coppia due volte, con le gallerie scambiate",
+    "vision.frage.doppel_satz":
+        "È il controllo di posizione. A nella prima esecuzione e B in "
+        "quella scambiata indicano la STESSA galleria, quindi una "
+        "contraddizione smaschera un modello che preferisce semplicemente "
+        "ciò che viene prima. Misurato qui: in tutte le nostre serie di "
+        "test ogni risposta sbagliata è stata una «A», mai una «B». "
+        "Disattivarlo dimezza le richieste &mdash; ma allora un confronto "
+        "si regge su una sola risposta, senza nulla che la verifichi.",
+    "vision.meld.titel": "Messaggi aggiuntivi",
+    "vision.meld.satz":
+        "Entrambi sono disattivati finché non li attivi tu, e nessuno dei "
+        "due cambia gli avvisi esistenti: la visione non può crearne uno, "
+        "annullarne uno o scavalcare i percorsi del volto e del corpo.",
+    "vision.meld.judged_titel":
+        "Fammi sapere quando un passaggio è stato giudicato",
+    "vision.meld.judged_satz":
+        "Una breve nota sui tuoi canali abituali quando l’esito è pronto "
+        "&mdash; con il conteggio reale dei voti. Arriva dopo la fine del "
+        "passaggio; con un modello locale possono passare minuti. "
+        "Un’informazione, non un’emergenza.",
+    "vision.meld.alarm_titel":
+        "Avvisami quando la visione contraddice il riconoscimento del "
+        "corpo",
+    "vision.meld.alarm_satz":
+        "Scatta solo quando un’esecuzione c’è stata davvero, il modello "
+        "ha risposto e comunque non ha confermato nessuno. Resta in "
+        "silenzio quando semplicemente non c’era abbastanza materiale "
+        "&mdash; sarebbe solo rumore. Riconoscere le persone che gli hai "
+        "insegnato è il lato forte di questo percorso, quindi una mancata "
+        "conferma significa qualcosa; respingere gli estranei è il lato "
+        "debole, quindi la visione non vota mai in quella direzione.",
+    "vision.kachel.was_key": "inserisci una chiave API",
+    "vision.kachel.was_host": "inserisci host e porta",
+    "vision.kachel.was_url": "inserisci un URL e una chiave facoltativa",
+    "vision.kachel.titel": "Dove gira il modello",
+    "vision.kachel.satz":
+        "Scegli un fornitore. Per i tre indicati per nome l’indirizzo API "
+        "ufficiale è già integrato &mdash; inserisci solo la tua chiave. "
+        "Non viene inviato nulla a nessuno finché non sei tu a premere un "
+        "pulsante.",
+    "vision.verb.key_gespeichert":
+        "&bull;&bull;&bull;&bull; memorizzata &mdash; lascia vuoto per "
+        "mantenerla",
+    "vision.verb.key_pflicht_ph": "incolla qui la tua chiave",
+    "vision.verb.key_frei_ph": "solo se il tuo server la richiede",
+    "vision.verb.host": "Host",
+    "vision.verb.host_ph": "il nome o l’indirizzo di quella macchina",
+    "vision.verb.port": "Porta",
+    "vision.verb.host_satz":
+        "Solo la macchina &mdash; il resto dell’indirizzo lo aggiunge "
+        "suslik da solo. La porta d’esempio è quella che llama.cpp usa in "
+        "modo predefinito; usa quella su cui il tuo server è in ascolto.",
+    "vision.verb.endpunkt": "URL dell’endpoint",
+    "vision.verb.endpunkt_satz":
+        "Quello è un esempio di endpoint compatibile OpenAI &mdash; "
+        "sostituiscilo con il tuo se usi un altro fornitore.",
+    "vision.verb.betriebsart": "Questo endpoint è",
+    "vision.verb.betriebsart_extern": "su internet",
+    "vision.verb.betriebsart_lokal": "nella mia rete",
+    "vision.verb.adresse": "Indirizzo API",
+    "vision.verb.adresse_satz":
+        "Integrato &mdash; qui non c’è nulla che si possa digitare male.",
+    "vision.verb.key": "Chiave API",
+    "vision.verb.key_frei_satz":
+        "Qui è facoltativa &mdash; la maggior parte dei server locali non "
+        "la richiede. Premi comunque il pulsante: recupera anche l’elenco "
+        "dei modelli del tuo server.",
+    "vision.verb.titel": "Connessione",
+    "vision.modell.titel": "Modello",
+    "vision.modell.verweigert": "l’endpoint ha rifiutato la connessione",
+    # {zeit} vorformatiert aus _zeit() — das Format bleibt in der Route (B19).
+    "vision.modell.geprueft": "Verificato {zeit} su",
+    "vision.modell.opt_wahl": "&mdash; scegline uno &mdash;",
+    "vision.modell.ungetestet": "non testato qui",
+    "vision.modell.opt_verschollen":
+        " — salvato in precedenza, ora l’endpoint non lo elenca",
+    "vision.modell.wahl_satz":
+        "Scegline uno dall’elenco &mdash; la nota accanto a ogni nome è "
+        "nostra, i nomi sono dell’endpoint.",
+    "vision.modell.verschollen_satz":
+        "Questo modello è salvato e ancora in uso, ma stavolta l’endpoint "
+        "non lo ha elencato. Controlla il nome, oppure scegline uno "
+        "dall’elenco.",
+    "vision.modell.fremde_plattform": "misurato su un’altra piattaforma",
+    "vision.modell.kein_rohergebnis":
+        "nessun risultato grezzo archiviato per questo",
+    "vision.modell.gemessen": "misurato {datum} &middot; {quelle}",
+    "vision.modell.ungemessen_satz":
+        "Non misurato qui &mdash; non è un giudizio, solo onestà. Esegui "
+        "il test di connessione qui sotto prima di farci affidamento.",
+    "vision.modell.manuell": "ID del modello a mano",
+    "vision.modell.manuell_ph": "ID esatto del modello",
+    "vision.modell.manuell_knopf": "Verifica questo ID",
+    "vision.modell.manuell_satz":
+        "Per gli endpoint che non elencano tutto: l’ID viene prima "
+        "verificato con una minuscola richiesta di testo; nulla di non "
+        "verificato può essere salvato.",
+    "vision.prompt.standard_satz":
+        "Questa è la formulazione predefinita misurata. Finché la lasci "
+        "esattamente così, gli esiti non vengono contrassegnati come "
+        "personalizzati.",
+    "vision.prompt.titel": "La domanda che suslik pone",
+    "vision.prompt.satz":
+        "Puoi cambiare la formulazione. L’ultimo paragrafo è fisso: è "
+        "l’istruzione di una sola parola da cui dipende il parser delle "
+        "risposte, ed è ciò che è stato misurato.",
+    "vision.prompt.knopf_zurueck": "Ripristina la formulazione predefinita",
+    "vision.zahlen.think": "Disattiva il ragionamento del modello",
+    "vision.zahlen.think_satz":
+        "Attivo per impostazione predefinita dalla 0.1.0.211: sulle "
+        "griglie di confronto difficili un modello che ragiona può "
+        "parlare fino a esaurire il budget di token e l’esecuzione "
+        "finisce senza esito. Gli endpoint rigorosi rifiutano l’opzione; "
+        "suslik allora ripete la richiesta una volta senza di essa e lo "
+        "dichiara.",
+    "vision.zahlen.titel": "Limiti",
+    "vision.zahlen.max_tokens": "Token massimi per risposta",
+    "vision.zahlen.timeout": "Timeout per richiesta (s)",
+    "vision.zahlen.satz":
+        "In un’esecuzione 3000 token si sono rivelati insufficienti "
+        "&mdash; la risposta è stata troncata e contata come «nessun "
+        "esito», e la stessa domanda era corretta con 12000. Un modello "
+        "locale su una macchina CPU richiede minuti per richiesta, uno "
+        "online secondi.",
+    "vision.cloud.ziel_fallback": "l’endpoint che configuri qui sopra",
+    "vision.cloud.titel": "Invio di immagini a un servizio esterno",
+    "vision.cloud.satz":
+        "Quelle immagini non ritraggono solo chi vive qui: i casi incerti "
+        "sono per lo più estranei &mdash; visitatori, corrieri, vicini, "
+        "passanti. Il responsabile sei tu, non il gestore del servizio. "
+        "La tua conferma viene scritta nel log di audit con data e ora; "
+        "il ritorno a un modello locale la revoca.",
+    "vision.cloud.bestaetigung": "Ho capito e confermo",
+    "vision.cloud.bestaetigt": "(confermato {zeit})",
+    "vision.test.treffer": "{n}/2 corrette",
+    "vision.test.tokens": "{ist} token contro {soll}",
+    "vision.test.falsch": " (sbagliata)",
+    # ZITAT-FOLGE: js.vision.dirty_text UND js.vision.prompt_zurueck
+    # zitieren diesen Knopf wortgleich — bei Aenderungen beide nachziehen.
+    "vision.save.knopf": "Salva connessione",
+    "vision.save.dirty":
+        "modifiche non salvate &mdash; il riconoscimento usa ancora la "
+        "connessione salvata",
+    "vision.test.titel": "Testa questa connessione",
+    "vision.test.knopf": "Esegui il test",
+    "vision.test.nicht_gelaufen": "non eseguito",
+    "vision.test.stufe1": "raggiungibilità",
+    "vision.test.stufe2": "scelta obbligata",
+    "vision.test.stufe3": "verifica dei token",
+    "vision.test.ungetestet": "Ancora nessun test.",
+    "vision.test.letzter": "Ultima esecuzione {zeit} su",
+    "vision.galerien.stand_gut": "approvata {zeit} &middot; {zellen} celle",
+    "vision.galerien.pruefen": "merita uno sguardo",
+    "vision.galerien.keine": "ancora nessuna galleria",
+    "vision.galerien.zu_wenig":
+        "ancora troppo poche immagini del corpo approvate ({n} "
+        "utilizzabili)",
+    "vision.galerien.knopf_auffrischen": "Aggiornala",
+    "vision.galerien.knopf_bauen": "Crea una galleria",
+    "vision.galerien.zahl": "{n} immagini utilizzabili &middot; {reihen}",
+    "vision.galerien.titel": "Gallerie",
+    "vision.galerien.stand":
+        "{n} gallerie pronte ({min} richieste) &mdash; alla visione ne "
+        "servono almeno due, perché confronta sempre una persona con "
+        "un’altra.",
+    "vision.galerien.satz":
+        "Una galleria può averla solo chi ha un modello del corpo "
+        "appreso; le immagini vengono dal materiale del corpo che hai già "
+        "approvato. La visione giudica solo le persone che ne hanno una, "
+        "e lo dichiara nell’esito.",
+    # --- routes/visiontest.py ---
+    "visiontest.titel": "Test di riconoscimento",
+    "visiontest.kopf.satz":
+        "Volto e persona vengono letti da ciò che è stato registrato "
+        "allora &mdash; nulla viene ricalcolato. La visione gira adesso, "
+        "esattamente attraverso lo stesso percorso che usa nel "
+        "funzionamento normale.",
+    # Frueher Modulkonstante KOSTEN — §8.12: t() nie auf Modulebene.
+    "visiontest.kosten":
+        "Un’esecuzione di prova costa richieste reali, esattamente come "
+        "il funzionamento normale: l’intero passaggio entra come una sola "
+        "griglia di candidati, e ogni coppia di gallerie confrontata "
+        "costa due richieste, perché ogni domanda viene posta di nuovo "
+        "con le gallerie scambiate. Conta come clic manuale, quindi non "
+        "consuma il tuo limite giornaliero &mdash; ma su un endpoint a "
+        "pagamento sono soldi, e con un modello locale su CPU servono "
+        "minuti.",
+    "visiontest.wer.niemand": "nessuno riconosciuto",
+    # EN-Klammerformen bleiben EINE Form je Schluessel (§8.18) —
+    # IT-Muster "telecamera/e" wie js.syncauswahl/js.vw.
+    "visiontest.wahl.kachel_zahlen":
+        "{events} eventi &middot; {kameras} telecamera/e",
+    "visiontest.wahl.vision_fertig": " &middot; visione completata",
+    "visiontest.wahl.titel": "1 &middot; Quale passaggio",
+    "visiontest.wahl.leer":
+        "Ancora nessun passaggio registrato. Appena qualcuno attraversa "
+        "la proprietà, compare qui.",
+    "visiontest.wahl.kopf_zahlen":
+        "{events} evento/i &middot; {kameras} telecamera/e",
+    "visiontest.wahl.anderer": "scegli un altro passaggio",
+    "visiontest.wahl.titel_offen": "1 &middot; Scegli un passaggio",
+    "visiontest.wahl.anzahl": "passaggi recenti: {n}",
+    "visiontest.wahl.satz":
+        "I passaggi più recenti, raggruppati esattamente come nella "
+        "pagina Oggi.",
+    "visiontest.gesicht.kein_match": "senza corrispondenza",
+    "visiontest.gesicht.gezeigt": "mostrate {gezeigt} di {gesamt} immagini",
+    "visiontest.gesicht.ohne_bild":
+        "nessuna immagine conservata per {fehlt} dei {unbek} eventi senza "
+        "corrispondenza",
+    "visiontest.gesicht.kein_bild":
+        "per questo passaggio non è stata conservata nessuna immagine "
+        "del volto",
+    "visiontest.gesicht.keines": "nessun volto conosciuto",
+    "visiontest.gesicht.zeile": "{person} &middot; {events} evento/i",
+    # {best} vorformatiert (:.2f) aus der Route (§8.8).
+    "visiontest.gesicht.best": " &middot; migliore {best}",
+    "visiontest.gesicht.unbekannt":
+        "{n} evento/i con un volto senza corrispondenza",
+    "visiontest.gesicht.titel": "Volto",
+    "visiontest.gesicht.quelle":
+        "confronto degli embedding con i tuoi volti di riferimento "
+        "&mdash; dai dati registrati di questo passaggio",
+    "visiontest.koerper.kandidaten":
+        "candidati, nessuno sopra la regola: {liste}",
+    "visiontest.koerper.nichts": "nulla valutato",
+    "visiontest.koerper.zeile":
+        "{klasse} &middot; punteggio {score} su {schwelle} &middot; "
+        "{quelle}",
+    "visiontest.koerper.bild_weg": "immagine scaduta",
+    "visiontest.koerper.titel": "Persona",
+    "visiontest.koerper.quelle":
+        "embedding DINOv2 + classificatore sulle immagini valutate di "
+        "questo passaggio",
+    "visiontest.log.warte":
+        "in attesa del modello &mdash; questa pagina si aggiorna da sola",
+    "visiontest.log.titel": "Cosa è successo",
+    "visiontest.gitter.alt": "la griglia dei candidati di questa esecuzione",
+    "visiontest.gitter.bildunterschrift":
+        "l’immagine realmente mostrata al modello",
+    "visiontest.gitter.zeile":
+        "griglia dei candidati: {n} cella/e da questo passaggio, chieste "
+        "come UNA sola immagine",
+    "visiontest.gitter.luecken": " ({n} cella/e lasciate vuote)",
+    "visiontest.runden.kein_votum": "nessun voto &mdash; {grund}",
+    "visiontest.runden.paar": "{a} contro {b}",
+    "visiontest.nach.laeuft": "Nuova analisi di questo passaggio in corso",
+    "visiontest.nach.stand":
+        "{fertig} di {gesamt} eventi completati &mdash; le immagini "
+        "valutate si accumulano strada facendo, servono alcuni minuti. È "
+        "silenziosa: niente avvisi, niente notifiche. Questa pagina si "
+        "aggiorna da sola.",
+    "visiontest.nach.titel":
+        "Nulla è stato conservato per questo passaggio",
+    "visiontest.nach.satz":
+        "Analizzarlo di nuovo riporta le immagini valutate &mdash; e "
+        "questo riempie tutti e tre i percorsi, non solo la visione. "
+        "Esegue di nuovo l’analisi ordinaria sugli eventi di questo "
+        "passaggio: silenziosa, senza avvisi, e aspetta il riconoscimento "
+        "live invece di scavalcarlo.",
+    "visiontest.nach.knopf": "Analizza di nuovo questo passaggio",
+    "visiontest.felder.zellen": "celle della griglia per questa esecuzione",
+    "visiontest.felder.voten": "conferme necessarie per questa esecuzione",
+    "visiontest.felder.doppel":
+        "chiedi ogni coppia due volte (controllo con scambio)",
+    "visiontest.felder.satz":
+        "Tutti e tre valgono solo per QUESTA esecuzione &mdash; nulla "
+        "viene salvato e il funzionamento normale mantiene le proprie "
+        "impostazioni. Questo passaggio ha {material} immagini "
+        "utilizzabili &mdash; chiedere più celle di così va bene, la "
+        "griglia diventa solo più piccola. {galerien} gallerie approvate "
+        "permettono al massimo {voten_max} confronto/i. Con il controllo "
+        "con scambio attivo un confronto costa due richieste; senza, una "
+        "&mdash; e allora si regge su una sola risposta.",
+    "visiontest.laeufe.abgebrochen":
+        "interrotta (il servizio si è riavviato)",
+    "visiontest.laeufe.kein_urteil": "nessun esito",
+    "visiontest.laeufe.von": "di {n}",
+    "visiontest.laeufe.ohne_tausch": "senza scambio",
+    "visiontest.laeufe.auto": "auto",
+    "visiontest.laeufe.offen": "+{n} in sospeso",
+    "visiontest.laeufe.titel": "Esecuzioni su questo passaggio",
+    "visiontest.laeufe.kopf_wann": "quando",
+    "visiontest.laeufe.kopf_zellen": "celle",
+    "visiontest.laeufe.kopf_noetig": "necessari",
+    "visiontest.laeufe.kopf_backend": "backend",
+    "visiontest.laeufe.kopf_urteil": "esito",
+    "visiontest.laeufe.kopf_voten": "voti",
+    "visiontest.laeufe.kopf_anfragen": "rich.",
+    "visiontest.laeufe.kopf_zeit": "tempo",
+    "visiontest.laeufe.satz":
+        "Le più recenti per prime. Solo ciò che è stato eseguito davvero "
+        "&mdash; l’elenco viene dal log di questo passaggio e sparisce "
+        "con lui.",
+    "visiontest.vision.titel": "Visione",
+    "visiontest.vision.quelle_kurz":
+        "un modello di visione che confronta questo passaggio con le tue "
+        "gallerie",
+    "visiontest.vision.unkonfiguriert": "non configurato",
+    "visiontest.vision.attr_nichts": "non c’è ancora nulla da confrontare",
+    "visiontest.vision.knopf": "Esegui la visione su questo passaggio",
+    "visiontest.vision.nichts_satz":
+        "ancora nulla da confrontare &mdash; prima analizza di nuovo "
+        "questo passaggio (pulsante qui sopra)",
+    "visiontest.vision.laeuft_satz":
+        "un’esecuzione è in corso proprio ora &mdash; il log qui sotto "
+        "cresce man mano",
+    "visiontest.vision.startet": "avvio &mdash; ancora nessun dato",
+    "visiontest.vision.quelle":
+        "scelta obbligata contro le tue gallerie: l’intero passaggio "
+        "entra come UNA sola griglia di candidati, e ogni coppia viene "
+        "chiesta due volte con le gallerie scambiate",
+    "visiontest.vision.nicht_gelaufen": "non eseguita per questo passaggio",
+    "visiontest.vision.verglichen":
+        "ha confrontato {a} con {b} &mdash; non dice nulla su nessun "
+        "altro",
+    "visiontest.vision.abgebrochen":
+        "esecuzione interrotta &mdash; il servizio si è riavviato",
+    "visiontest.vision.kein_urteil": "nessun esito &mdash; {grund}",
+    "visiontest.vision.bilanz":
+        "{voten} di {bilder} confronto/i hanno dato una risposta "
+        "&middot; {anfragen} richieste &middot; {dauer} s &middot; "
+        "esecuzione {zeit}",
+    "visiontest.vision.reihenfolge": " &middot; ordine: {quelle}",
+    "visiontest.vision.custom_prompt": " &middot; prompt personalizzato",
+    "visiontest.drei.titel": "2 &middot; Cosa dicono i tre percorsi",
+    "visiontest.drei.satz":
+        "Stesso passaggio, tre giudizi indipendenti. Possono non essere "
+        "d’accordo &mdash; è proprio il senso di guardarli insieme.",
+    # --- routes/visionwizard.py ---
+    "visionwizard.schritt.person": "scegli una persona",
+    "visionwizard.schritt.groesse": "scegli una dimensione",
+    "visionwizard.schritt.vorschlag": "controlla la proposta",
+    "visionwizard.schritt.abnahme": "approva",
+    "visionwizard.titel": "Crea una galleria",
+    "visionwizard.kopf.satz":
+        "Una galleria è una piccola griglia di immagini di una persona "
+        "&mdash; è ciò con cui il modello di visione confronta una nuova "
+        "immagine. Viene costruita dalle immagini del corpo che hai già "
+        "approvato; non viene registrato nulla di nuovo e nessun video "
+        "viene aperto.",
+    "visionwizard.person.stand_gut": "galleria approvata {zeit}",
+    "visionwizard.person.zu_wenig":
+        "{n} immagini utilizzabili &mdash; non bastano ancora per una "
+        "galleria. Esegui l’apprendimento della persona su altri "
+        "passaggi.",
+    "visionwizard.person.max_gitter":
+        "griglia più grande possibile con questo materiale: {n}",
+    "visionwizard.person.titel": "1 &middot; Quale persona",
+    "visionwizard.person.satz":
+        "Qui compaiono solo le persone con un modello del corpo appreso, "
+        "e i conteggi sono le immagini che superano il filtro di "
+        "dimensione (almeno 350 pixel di altezza) &mdash; non tutto ciò "
+        "che è mai stato estratto.",
+    "visionwizard.groesse.zellen": "{n} celle",
+    "visionwizard.groesse.titel": "2 &middot; Quante immagini",
+    "visionwizard.zelle.leer":
+        "niente più immagini per questa riga &mdash; e nemmeno nulla da "
+        "prendere in prestito",
+    "visionwizard.zelle.geliehen": "dalla riga {reihe}",
+    "visionwizard.zelle.knopf_weg": "non va bene",
+    # Tranche D: {reihe} traegt Adjektive im Singular (frontale/laterale/
+    # posteriore/incerta) — Rahmen numerus-neutral gestellt (frueher
+    # "immagini {reihe} pulite", das braeuchte Plural-Adjektive).
+    "visionwizard.reihe.geliehen":
+        "{n} riempite da un’altra vista &mdash; non c’erano abbastanza "
+        "immagini pulite della vista {reihe}",
+    "visionwizard.reihe.luecken":
+        "non è stato possibile riempire {n} cella/e",
+    "visionwizard.reihe.spreizung": "{tage} giorno/i, {kameras} telecamera/e",
+    "visionwizard.reihe.kopf": "vista {reihe}",
+    "visionwizard.reihe.eigene": "{eigene} di {gesamt} da questa vista",
+    "visionwizard.vorschlag.abgelehnt":
+        "{n} immagine/i che avevi rifiutato restano memorizzate e non "
+        "torneranno.",
+    "visionwizard.vorschlag.titel": "3 &middot; Va bene così?",
+    "visionwizard.vorschlag.grenze":
+        "Limite onesto: sono misurazioni dell’immagine, non del momento. "
+        "Un’immagine in cui qualcuno si lega i capelli o si china le "
+        "supera tutte quante &mdash; è per questo che servono i tuoi "
+        "occhi.",
+    "visionwizard.vorschlag.knopf": "Approva questa galleria",
+    "visionwizard.vorschlag.kopie_satz":
+        "Con l’approvazione queste immagini vengono copiate nella "
+        "cartella della galleria. Da quel momento la galleria è fissa: "
+        "eliminare più tardi un originale non può bucarla &mdash; suslik "
+        "ti chiede solo di approvarla di nuovo.",
+    "visionwizard.fertig.geliehen": " &middot; in prestito",
+    "visionwizard.fertig.titel": "Galleria approvata",
+    "visionwizard.fertig.stand": "{zellen} celle, approvata {zeit}.",
+    "visionwizard.fertig.satz":
+        "Sono copie dentro la cartella della galleria, con l’origine di "
+        "ogni immagine (sessione, file, checksum) annotata accanto. "
+        "Viaggiano con il tuo backup.",
+    "visionwizard.fertig.knopf_neu": "Ricostruiscila dal materiale attuale",
+    "visionwizard.fertig.knopf_zurueck": "Torna a Rilevamento visione",
+    "visionwizard.neu.titel": "Nuovo materiale disponibile",
+    "visionwizard.neu.satz":
+        "Non cambia nulla da solo &mdash; la galleria che hai approvato "
+        "resta esattamente com’è finché non ne costruisci e approvi una "
+        "nuova.",
+    # --- routes/personwizard.py ---
+    "personwizard.wer.alle": "tutte le persone conosciute",
+    "personwizard.wer.fremde": "estranei",
+    "personwizard.titel": "Apprendimento persone — riconoscimento del corpo",
+    "personwizard.kopf.satz":
+        "Un secondo percorso di riconoscimento indipendente: apprende "
+        "l’aspetto COMPLESSIVO di una persona (corporatura, capelli, "
+        "postura) per riconoscere chi vive in casa anche quando nessun "
+        "volto è visibile.",
+    "personwizard.kopf.wie_titel":
+        "Come funziona — il controllo resta a te",
+    "personwizard.kopf.schritt1":
+        "1 · Scegli tu quanti eventi esaminare e CHI apprendere (una "
+        "persona, o tutte le persone conosciute).",
+    "personwizard.kopf.schritt2":
+        "2 · La sessione estrae immagini a figura intera dalle tue "
+        "registrazioni. Un’immagine viene collegata a una persona solo "
+        "quando lo dimostra un passaggio confermato dal volto — "
+        "volutamente prudente.",
+    "personwizard.kopf.schritt3":
+        "3 · TU rivedi ogni immagine estratta; un clic rifiuta quella "
+        "sbagliata. Nulla viene appreso senza la tua approvazione.",
+    "personwizard.kopf.schritt4":
+        "4 · L’apprendimento del modello avviene poi in locale in pochi "
+        "secondi, e viene misurata una soglia di decisione così che gli "
+        "estranei restino sotto.",
+    "personwizard.kopf.tempo":
+        "Una nota sulla velocità: l’estrazione per ora gira sulla CPU, "
+        "quindi porta pazienza se una sessione richiede un po’ di tempo "
+        "(circa 15&ndash;30 s per evento). Lo spostamento su GPU/NPU è "
+        "previsto per una versione futura.",
+    "personwizard.kopf.warum":
+        "Perché prima almeno una persona: questo percorso sa distinguere "
+        "le persone solo dopo aver appreso — con la tua revisione — "
+        "l’aspetto di almeno una persona di casa. Fino ad allora il "
+        "riconoscimento del corpo resta SPENTO e non invia mai avvisi. "
+        "Quando più avanti avviserà (Pushover/Telegram), il messaggio "
+        "sarà contrassegnato come proveniente dal riconoscimento della "
+        "persona, non dal riconoscimento facciale.",
+    "personwizard.vorb.titel": "Preparazione della sessione &hellip;",
+    "personwizard.vorb.zeile":
+        "collegamento degli ultimi {n} eventi a {wer} tramite passaggi "
+        "confermati",
+    "personwizard.vorb.satz":
+        "Richiede un minuto o due — la pagina si aggiorna da sola, "
+        "subito dopo parte l’estrazione.",
+    "personwizard.ernte.stand":
+        "{events}/{von} eventi · {bilder} immagini estratte",
+    "personwizard.ernte.startet": "avvio …",
+    "personwizard.ernte.titel":
+        "Una sessione di apprendimento della persona è in corso",
+    "personwizard.ernte.zeile": "in apprendimento: {wer} · {stand}",
+    "personwizard.ernte.satz":
+        "Questa pagina si aggiorna da sola. Una nuova sessione si può "
+        "avviare quando questa è finita.",
+    "personwizard.ernte.knopf_abbruch": "Interrompi la sessione",
+    "personwizard.ernte.abbruch_hinweis": "le immagini estratte restano",
+    "personwizard.unterbrochen.titel":
+        "L’ultima sessione è stata interrotta",
+    "personwizard.unterbrochen.satz":
+        "Probabilmente un riavvio del servizio. Avvia di nuovo la stessa "
+        "sessione qui sotto — gli eventi già estratti vengono saltati "
+        "automaticamente (ripartenza), non si perde nulla.",
+    "personwizard.abnahme.titel":
+        "Ultima sessione completata — ora tocca alla tua revisione",
+    "personwizard.abnahme.zeile":
+        "{n} immagini estratte per {wer} (sessione {lauf}).",
+    "personwizard.abnahme.knopf": "Rivedi subito le immagini",
+    "personwizard.abnahme.hinweis":
+        "completa la revisione per sbloccare la prossima sessione",
+    "personwizard.abnahme.knopf_verwerfen": "Scarta questa sessione",
+    "personwizard.abnahme.verwerfen_hinweis":
+        "risultato scadente? butta via tutto",
+    "personwizard.leer.verwaist":
+        "Saltati di proposito: {liste} — questi nomi sono stati eliminati "
+        "dall’elenco delle tue persone; i loro vecchi eventi confermati "
+        "restano come cronologia ma non vengono estratti.",
+    "personwizard.leer.titel":
+        "Sessione finita senza immagini — ecco perché",
+    "personwizard.leer.satz":
+        "Non è stato cambiato nulla; puoi avviare un’altra sessione qui "
+        "sotto in qualsiasi momento.",
+    "personwizard.fertig.verwaist":
+        "Saltati di proposito: {liste} — persone eliminate; i loro "
+        "vecchi eventi confermati non vengono estratti.",
+    "personwizard.fertig.fremd":
+        "{n} immagini di estranei confermate trasferite nel gruppo degli "
+        "estranei — il prossimo apprendimento le usa subito.",
+    "personwizard.fertig.titel":
+        "Revisione completata — materiale acquisito",
+    "personwizard.fertig.zeile":
+        "{abgenommen} immagini approvate come materiale di "
+        "apprendimento, {verworfen} rifiutate (sessione {lauf}).",
+    "personwizard.fertig.knopf": "Vedi il materiale appreso",
+    "personwizard.fehler.titel": "L’ultima sessione è fallita",
+    "personwizard.auswahl.opt_alle": "Tutte le persone conosciute",
+    "personwizard.auswahl.opt_fremde":
+        "Estranei — estrai immagini di estranei",
+    "personwizard.auswahl.titel": "Chi apprendere",
+    "personwizard.auswahl.satz":
+        "Scegli una sola persona per una revisione in lotti piccoli e "
+        "mirati — oppure tutte insieme. Le persone vengono dal tuo "
+        "archivio dei volti; apprenderne una alla volta tiene corta la "
+        "revisione.",
+    "personwizard.auswahl.fremde_satz":
+        "Estranei: estrae dai passaggi in cui non è stato riconosciuto "
+        "nessuno (passaggi solo in strada, visitatori non confermati). "
+        "Nella revisione confermi tu chi è davvero un estraneo — "
+        "finiscono nel gruppo degli estranei e affinano la soglia di "
+        "decisione.",
+    "personwizard.umfang.knopf_letzte": "ultimi {n}",
+    "personwizard.umfang.attr_eigen": "N personalizzato",
+    "personwizard.umfang.knopf_go": "vai",
+    "personwizard.umfang.titel": "Ambito (eventi, non giorni)",
+    "personwizard.umfang.satz":
+        "Inizia in piccolo (50) — ogni immagine estratta la rivedrai a "
+        "mano.",
+    "personwizard.bilanz.ohne":
+        "ultimi {n} eventi persona per {wer} — il bilancio dei "
+        "collegamenti viene calcolato alla creazione della sessione",
+    # Zaehler-Split an der <b>-Grenze (§8.10): vor/nach rahmen die
+    # hervorgehobene Zahl, Rand-Leerzeichen gehoeren zum Wert.
+    "personwizard.bilanz.zahl_vor": "ultimi {n} eventi persona · ",
+    "personwizard.bilanz.zahl_nach":
+        " collegabili a {wer} tramite passaggi confermati",
+    "personwizard.bilanz.fremd": " · {n} candidati estranei",
+    "personwizard.bilanz.erkl_fremd":
+        "I candidati sono passaggi in cui non è stato riconosciuto "
+        "nessuno — passaggi solo in strada e visitatori non confermati. "
+        "Fino alla tua revisione è tutto un SOSPETTO; lì contrassegna "
+        "chi NON è un estraneo.",
+    "personwizard.bilanz.erkl":
+        "Il collegamento è prudente: contano solo i passaggi con "
+        "esattamente una persona confermata dal volto. Tutto ciò che "
+        "vedrai dopo si può rifiutare con un clic.",
+    "personwizard.bilanz.titel": "La tua selezione",
+    "personwizard.bilanz.knopf": "Crea questa sessione",
+    "personwizard.review.stempel": "SBAGLIATA",
+    "personwizard.review.h_fremde": "Estranei",
+    "personwizard.review.frage_fremd":
+        "fai clic su ogni immagine che NON è un estraneo (una persona di "
+        "casa, un visitatore conosciuto) o che è inutilizzabile. Un "
+        "secondo clic annulla. Tutto viene salvato all’istante; le "
+        "immagini non contrassegnate vengono acquisite come estranei "
+        "confermati e affinano la soglia di decisione.",
+    "personwizard.review.frage":
+        "fai clic su ogni immagine SBAGLIATA (non questa persona, o "
+        "inutilizzabile). Un secondo clic annulla. Tutto viene salvato "
+        "all’istante; le immagini non contrassegnate contano come "
+        "approvate.",
+    "personwizard.review.titel": "Rivedi le immagini estratte",
+    "personwizard.review.kopf": "Sessione {lauf} — {frage}",
+    # Der Zeilenumbruch ist Teil des Originals (Template-Literal) und
+    # bleibt fuer die Byte-Treue im Wert.
+    "personwizard.review.zurueck": "&larr; torna alla\nprocedura guidata",
+    "personwizard.review.knopf_fertig":
+        "Concludi la revisione — acquisisci le immagini approvate",
+    "personwizard.kontrolle.sammeln_titel":
+        "La modalità di conservazione è ATTIVA",
+    "personwizard.kontrolle.sammeln_rest":
+        " — ogni immagine valutata viene conservata per 30 giorni, così "
+        "puoi controllare le decisioni più tardi. Aspettati circa "
+        "20&ndash;40 MB al giorno.",
+    "personwizard.kontrolle.schlank_titel":
+        "Modalità leggera (predefinita)",
+    "personwizard.kontrolle.schlank_rest":
+        " — le immagini valutate vivono solo mentre un passaggio è in "
+        "corso; dopo restano solo l’immagine vincente e il log degli "
+        "esiti qui sotto. È l’impostazione predefinita rispettosa della "
+        "privacy per un’installazione nuova.",
+    "personwizard.kontrolle.titel": "Immagini valutate",
+    "personwizard.kontrolle.satz":
+        "Che cosa ha guardato davvero il riconoscimento del corpo, un "
+        "blocco per passaggio: l’immagine valutata, la classe risultata, "
+        "il punteggio e da dove veniva l’immagine. Utile quando una "
+        "persona è sfuggita, o è stato riconosciuto qualcuno che non "
+        "doveva esserlo.",
+    "personwizard.kontrolle.leer_titel": "Ancora nulla di registrato",
+    "personwizard.kontrolle.tag_fremd": "estraneo",
+    "personwizard.kontrolle.tag_drueber": "sopra soglia",
+    "personwizard.kontrolle.tag_drunter": "sotto soglia",
+    "personwizard.kontrolle.schwelle": " &middot; soglia {schwelle}",
+    "personwizard.kontrolle.kopfzeile.eins":
+        "{wann} — {judged} valutate, {n} immagine conservata",
+    "personwizard.kontrolle.kopfzeile.viele":
+        "{wann} — {judged} valutate, {n} immagini conservate",
+    "personwizard.tabelle.fremd_zeile": "Estranei (classe extra)",
+    "personwizard.tabelle.kein_fremd":
+        "Ancora nessuna classe estranei — con una il riconoscimento "
+        "funziona molto meglio: le immagini di estranei confermate "
+        "insegnano al modello cosa NON appartiene e calibrano la soglia "
+        "di decisione.",
+    "personwizard.tabelle.q_eichung": "misurata",
+    "personwizard.tabelle.q_user": "impostata da te",
+    "personwizard.tabelle.q_standard": "predefinita",
+    "personwizard.tabelle.f_modell": "Modello attivo",
+    "personwizard.tabelle.f_schwelle": "Soglia",
+    "personwizard.tabelle.f_scharf": "Inserito",
+    "personwizard.tabelle.scharf_ja": "SÌ",
+    "personwizard.tabelle.scharf_ja_rest": " — valuta in diretta",
+    "personwizard.tabelle.scharf_nein": "no — non inserito",
+    "personwizard.tabelle.konf_vor":
+        "La confusione più alta tra gruppi nella calibrazione: ",
+    "personwizard.tabelle.konf_nach":
+        " — il punteggio più alto raggiunto da un’immagine per il gruppo "
+        "SBAGLIATO; più è vicino a 1, più due gruppi sono vicini.",
+    "personwizard.tabelle.titel": "Gruppi appresi",
+    "personwizard.karte.scharf": "Inserito",
+    "personwizard.karte.unscharf": "Non ancora inserito",
+    "personwizard.karte.fehler":
+        "L’ultimo tentativo di apprendimento è FALLITO: {fehler} — "
+        "questa scheda mostra il modello precedente.",
+    "personwizard.karte.titel": "Stato del modello",
+    "personwizard.karte.zeile":
+        "appreso {wann} in {dauer} s — {bilder} immagini: {je} · "
+        "{modell} · ",
+    "personwizard.karte.link": "dettagli",
+    "personwizard.bestand.titel":
+        "Materiale della persona — ciò che è stato appreso",
+    "personwizard.bestand.satz":
+        "Immagini a figura intera approvate per persona. Scegli un "
+        "gruppo qui sotto per vederne le immagini; elimina una singola "
+        "immagine (&times; sul riquadro) — una nuova sessione può sempre "
+        "estrarla di nuovo. Le eliminazioni hanno effetto al prossimo "
+        "apprendimento.",
+    "personwizard.bestand.leer_titel": "Ancora nessun materiale approvato",
+    "personwizard.bestand.stark_titel": "Cosa rende forte questo modello",
+    "personwizard.bestand.chip_fremde": "Estranei ({n})",
+    "personwizard.bestand.zeigen_titel": "Mostra le immagini di",
+    "personwizard.bestand.zeigen_satz":
+        "Scegli un gruppo — le sue immagini si aprono qui sotto, le più "
+        "recenti per prime.",
+    "personwizard.bestand.marker_tage.eins":
+        "solo {n} giorno — il riconoscimento migliora soprattutto con "
+        "immagini di giorni, abiti e luci differenti",
+    "personwizard.bestand.marker_tage.viele":
+        "solo {n} giorni — il riconoscimento migliora soprattutto con "
+        "immagini di giorni, abiti e luci differenti",
+    "personwizard.bestand.attr_loeschen": "elimina questa immagine",
+    "personwizard.bestand.z_bilder": "{n} immagini",
+    "personwizard.bestand.z_tage.eins": "{n} giorno",
+    "personwizard.bestand.z_tage.viele": "{n} giorni",
+    "personwizard.bestand.z_kameras.eins": "{n} telecamera",
+    "personwizard.bestand.z_kameras.viele": "{n} telecamere",
+    "personwizard.modell.titel": "Modello persona — stato",
+    "personwizard.modell.satz":
+        "Il modello di riconoscimento del corpo, appreso dalle immagini "
+        "che hai approvato. Viene appreso di nuovo automaticamente dopo "
+        "ogni revisione conclusa e dopo le eliminazioni.",
+    "personwizard.modell.leer_titel": "Ancora nessun modello",
+    "personwizard.modell.fremd_keine":
+        "ancora nessuno — soglia misurata solo tra le tue persone",
+    "personwizard.modell.fremd_gesammelt":
+        "{n} accumulati — ne servono {min} prima che entrino "
+        "nell’apprendimento e calibrino la soglia",
+    "personwizard.modell.fremd_geeicht":
+        "{n} nell’apprendimento · soglia calibrata su estranei reali",
+    "personwizard.modell.fremd_ungeeicht":
+        "{n} nell’apprendimento — la calibrazione della soglia non è "
+        "stata eseguita (vedi la nota qui sotto)",
+    "personwizard.modell.f_trainiert": "Appreso",
+    "personwizard.modell.f_dauer": "Tempo di apprendimento",
+    "personwizard.modell.f_modell": "Modello",
+    "personwizard.modell.f_bilder": "Immagini totali",
+    "personwizard.modell.f_personen": "Persone",
+    "personwizard.modell.f_fremd": "Negativi (estranei)",
+    "personwizard.modell.scharf_ja": "SÌ — valutazione live attiva",
+    "personwizard.modell.scharf_nein": "no — non ancora inserito",
+    "personwizard.modell.fehler":
+        "L’ultimo tentativo di apprendimento è FALLITO ({zeit}): "
+        "{fehler} — il modello mostrato qui è quello precedente e non "
+        "include le tue ultime modifiche.",
+    "personwizard.modell.aktuell_titel": "Modello attuale",
+    "personwizard.modell.material_titel":
+        "Materiale di apprendimento per persona",
+    "personwizard.modell.kopf_person": "persona",
+    "personwizard.modell.kopf_bilder": "immagini approvate",
+    "personwizard.modell.kopf_anteil": "quota",
+    "personwizard.modell.summe": "totale",
+    "personwizard.modell.q_eichung": "misurata sul tuo materiale",
+    # {pct} vorformatiert (round) aus der Route (§8.8).
+    "personwizard.modell.eich_fremd":
+        "Misurata con validazione incrociata a {folds} parti su {n} "
+        "immagini delle tue persone tenute da parte, più {n_fremd} "
+        "estranei confermati: la confidenza più alta come persona di casa "
+        "raggiunta da un estraneo reale è stata {max} &rarr; soglia "
+        "{schwelle}; il {pct}% delle immagini genuine la supera. Il "
+        "rovescio della medaglia: {ueber} delle tue immagini "
+        "raggiungerebbero quella soglia per la persona SBAGLIATA "
+        "(massimo {vmax}).",
+    "personwizard.modell.eich_intern":
+        "Misurata con validazione incrociata a {folds} parti su {n} "
+        "immagini tenute da parte: confidenza più alta per una persona "
+        "SBAGLIATA {max} &rarr; soglia {schwelle}; il {pct}% delle "
+        "immagini genuine la supera. Limite onesto: questa calibrazione "
+        "avviene TRA le tue persone apprese — gli estranei reali non "
+        "sono ancora nel materiale.",
+    "personwizard.modell.regeln_titel": "Impostazioni di giudizio",
+    "personwizard.modell.schwelle_vor": "Soglia di decisione: ",
+    "personwizard.modell.r_fenster": "Finestra di attivazione",
+    "personwizard.modell.r_feuer": "Eventi a supporto per l’avviso",
+    "personwizard.modell.r_karenz": "Pausa dopo un avviso",
+    "personwizard.modell.regeln_satz":
+        "Lascia la soglia vuota per seguire automaticamente il valore "
+        "misurato (viene rimisurato a ogni apprendimento). La regola di "
+        "attivazione: un avviso solo dopo questo numero di eventi a "
+        "supporto dentro la finestra, poi silenzio per la durata della "
+        "pausa.",
+    "personwizard.modell.knopf_speichern": "Salva impostazioni",
+    "personwizard.modell.satz_user":
+        "La soglia di decisione è impostata da te ({schwelle})",
+    "personwizard.modell.satz_user_eich":
+        " — la calibrazione su {n} estranei confermati sarebbe {alt}",
+    "personwizard.modell.satz_geeicht":
+        "La soglia di decisione è calibrata su {n} immagini di estranei "
+        "confermate.",
+    "personwizard.modell.satz_ungeeicht":
+        "La soglia di decisione non è ancora calibrata su materiale di "
+        "estranei — considera gli avvisi un’anteprima e tienili "
+        "d’occhio.",
+    "personwizard.modell.satz_fremd_drop":
+        " Un corpo che il modello legge come estraneo viene escluso "
+        "prima che possa diventare una corrispondenza.",
+    "personwizard.modell.live_titel": "Interruttore live",
+    "personwizard.modell.live_an":
+        "INSERITO — il percorso del corpo valuta gli eventi live e può "
+        "inviare avvisi.",
+    "personwizard.modell.live_aus":
+        "Non inserito — il percorso del corpo resta in silenzio.",
+    "personwizard.modell.live_hinweis":
+        "Gli avvisi portano la nota &quot;riconoscimento della persona, "
+        "non del volto&quot;.",
+    "personwizard.modell.knopf_disarm": "Disinserisci",
+    "personwizard.modell.knopf_arm":
+        "Inserisci il riconoscimento del corpo",
+    # --- webui/bausteine.py ---
+    # Nur die gt_leiste-ANZEIGE-Texte; Speicherwerte und KAT_LABELS/
+    # KAT_FARBE bleiben literal (§8.12/§8.13, s. en.py).
+    "baustein.gt.fremd": "Estraneo",
+    "baustein.gt.kein_mensch": "Nessuna persona",
+    "baustein.gt.add": "aggiungi persona…",
+    "baustein.gt.uebernehmen": "conferma questa proposta (tutte le persone indicate erano presenti)",
+    "baustein.gt.fremd_titel": "c’era uno sconosciuto (può stare accanto ai nomi)",
+    "baustein.gt.unklar_titel": "non sono sicuro — lascia aperto",
+    "baustein.gt.kein_mensch_titel": "nessuna persona in questo evento (falso attivatore)",
+    "baustein.gt.opak_titel": "un giudizio vecchio che non corrisponde più a nessuna persona nota — scegli ? o un nome per sostituirlo",
+    # ---- Route-JS + Meldungen (Stufe 2, Tranche D) ----
+    # Gattungen + Grenzen wie der en.py-Abschnittskommentar. Terminologie
+    # begriffe_tabellen.md (IT): volto/passaggio/avviso/estraneo/esito/
+    # corrispondenza; adopt -> acquisire, Lernlauf-run -> sessione,
+    # trash -> cestino (js.person.loesch_frage), borderline -> al limite,
+    # fair -> discreta (fair/okay-Glaettung wie Tranche C), candidate
+    # list -> lista dei candidati (Sync-Bestand), pool -> volti estratti
+    # (unbekannte.hinweis_reorg). Bar-Metapher der Wortstufen -> soglia
+    # (Bestandston "soglia di decisione"). Teilnehmerlose Erfolgs-Toasts
+    # partizip-zuerst, invariabel maskulin ("rimosso \"{person}\"" — Muster
+    # "Eliminato \"X\"", umgeht die Genus-Falle bei Personennamen).
+    # Muttersprachler-QS: Namen/Kennungen stehen in GERADEN DOPPEL-
+    # Anfuehrungszeichen wie der IT-Bestand (js.unb.benennen_frage
+    # "Assegnare a \"{person}\"?", js.person.loesch_frage) — die
+    # EN-Einfachzeichen '…' und erst recht ’…’ lesen sich im Italienischen
+    # als Apostroph-Tippfehler (’ ist hier ueberall l’ancora/un’immagine);
+    # DE/ES/FR haben die EN-Zeichen ebenso auf ihre Konvention gedreht.
+    # Reihen-Woerter als Singular-Adjektive (frontale/laterale/posteriore/
+    # incerta); der eine Plural-Rahmen visionwizard.reihe.geliehen ist
+    # oben numerus-neutral gestellt. EN-"(s)"-Schluessel behalten ihre
+    # Numerus-Marke als Bestands-Schraegform (immagine/i, wie cella/e in
+    # visionwizard.reihe.luecken) — §8.18 laesst sie offen, und ein blosser
+    # Plural erzeugt bei n=1 echtes Falschitalienisch.
+    # --- routes/lernwizard.py (Zuweisungs-Flaeche + Sichtung) ---
+    "lernwizard.zw.js_zaehl_mitte": " su ",
+    "lernwizard.zw.js_zaehl_nach": " immagini selezionate",
+    "lernanker.js.uebernimmt": "acquisizione…",
+    "lernanker.js.tag_frage_vor":
+        "Impostazioni cambiate dopo la denominazione:\n",
+    "lernanker.js.tag_frage_nach":
+        "\nAcquisire comunque con la selezione denominata?",
+    "lernanker.js.weiter": "salvato — prossimo gruppo…",
+    "lernanker.js.speichert": "salvataggio…",
+    "lernanker.js.koll_vor": "\"",
+    "lernanker.js.koll_mitte": "\" coincide con la persona esistente \"",
+    "lernanker.js.koll_nach": "\" — aggiungerlo invece a quella persona?",
+    "lernwizard.zw.js_gespeichert_vor": "salvato come ",
+    "lernwizard.zw.js_gespeichert_nach": " — controllo delle immagini …",
+    "lernwizard.sicht.js_fehl": "controllo fallito — ricarica per riprovare",
+    "lernwizard.zw.js_verbergen":
+        "Nascondi le altre {n} immagini controllate",
+    "lernwizard.zw.js_zeigen": "Mostra tutte le {n} immagini controllate",
+    # --- routes/qualitaet.py ---
+    "qualitaet.galerie.js_gewaehlt": " selezionate",
+    # --- routes/lernanker.py (nur dort) ---
+    "lernanker.js.alle_fertig":
+        "Tutti i gruppi completati — le immagini denominate ora contano "
+        "per il riconoscimento.",
+    # --- routes/vision.py (Hand-ID-Script; ID/verifica wie Bestand
+    # vision.modell.manuell_knopf "Verifica questo ID") ---
+    "vision.modell.js_id_fehlt": "inserisci prima un ID",
+    "vision.modell.js_prueft": "verifica in corso …",
+    "vision.modell.js_fehler": "errore",
+    # --- routes/personwizard.py (Review-Script + Schalter) ---
+    "personwizard.review.js_zaehl": " su {n} contrassegnate come sbagliate",
+    "personwizard.review.js_frage_vor": "Concludere la revisione? ",
+    "personwizard.review.js_frage_mitte":
+        " immagini saranno acquisite come materiale di apprendimento, ",
+    "personwizard.review.js_frage_nach": " rifiutate.",
+    "personwizard.modell.js_fehler": "errore ",
+    # --- verifyd.py POST-Antworten (antwort.*, Nutzungs-Reihenfolge) ---
+    "antwort.person_entfernt":
+        "rimosso \"{person}\" ({n} immagini di riferimento spostate nel "
+        "cestino — recuperabili)",
+    "antwort.person_name_ungueltig": "nome non valido",
+    "antwort.person_unbekannt": "persona sconosciuta",
+    "antwort.pruefung_gestartet": "controllo avviato",
+    "antwort.reorg_los":
+        "Riorganizzazione in corso (ricontrollo dei volti estratti + "
+        "ricostruzione dei gruppi, 1-2 min, poi ricarica le pagine)",
+    "antwort.reorg_laeuft": "Riorganizzazione già in corso — attendi",
+    "antwort.paar_notiert":
+        "annotato — questa coppia non verrà più proposta",
+    # §8.11-Anhang an eine Fachschicht-msg (die Basis bleibt Grenze).
+    "antwort.nachpruefung_anhang":
+        " — ricontrollo in background degli eventi di questo passaggio",
+    "antwort.sync_wieder": "{n} di nuovo nella lista dei candidati",
+    "antwort.sync_auswahl": "{ab} deselezionate, {zu} ripristinate",
+    "antwort.sync_laeuft":
+        "una sincronizzazione è già in corso — attendi che finisca",
+    "antwort.sync_readonly":
+        "modalità sola lettura: la scrittura dei riferimenti verso "
+        "Frigate è disattivata (vedi l’interruttore nella pagina Sistema)",
+    "antwort.sync_nichts":
+        "nessuna selezione — spunta almeno un’immagine",
+    "antwort.frigate_url": "URL di Frigate: {fehler}",
+    "antwort.sync_transfer": "trasferimento in corso ({n} selezionate)",
+    "antwort.bruecke_hinzu": "{n} immagine/i aggiunta/e",
+    "antwort.modell_laedt":
+        "caricamento del modello di riconoscimento — qualche secondo …",
+    "antwort.refcache_baut":
+        "ricostruzione dell’archivio di riferimento — con un archivio "
+        "grande può volerci un minuto …",
+    "antwort.refcache_fehler":
+        "la ricostruzione dell’archivio di riferimento non è riuscita due volte "
+        "di seguito — vedi il log del servizio (/log); il prossimo tentativo "
+        "partirà tra qualche minuto",
+    "antwort.cache_aufgeraeumt": "{n} clip rimossi, {mb} MB liberati — cache {cache} GB, {frei} GB liberi",
+    "antwort.bruecke_nimmt": "il controllo sceglie {n} immagine/i",
+    "antwort.bruecke_grenz_zusatz": " · {n} al limite mostrate senza spunta",
+    "antwort.bruecke_nur_grenz":
+        "niente di chiaramente utile — {n} immagine/i al limite tenuta/e "
+        "da parte (identità sicura, qualità dell’immagine solo discreta); "
+        "puoi comunque prenderle",
+    "antwort.bruecke_nichts":
+        "niente da prendere — nessuna nuova immagine utile in questo "
+        "passaggio (va bene così)",
+    "antwort.bruecke_undo": "{n} immagine/i rimossa/e di nuovo",
+    "antwort.personlauf_kein_review":
+        "nessuna sessione in attesa di revisione",
+    "antwort.personlauf_kein_lauf": "nessuna sessione attiva",
+    "antwort.events_bereich":
+        "il numero di eventi deve essere compreso tra 1 e {max}",
+    "antwort.personlauf_aktiv":
+        "una sessione di apprendimento della persona è già attiva",
+    "antwort.lernlauf_tag_ungueltig": "giorno non valido (YYYY-MM-DD)",
+    # {phase} ist die interne Phasen-Kennung (sprachneutral, §8.19).
+    "antwort.lernlauf_phase":
+        "una sessione è già nella fase \"{phase}\" — interrompila prima",
+    "antwort.lernlauf_beschaeftigt":
+        "la sessione precedente sta ancora completando l’evento corrente "
+        "— riprova tra un attimo",
+    "antwort.lernlauf_schreibfehler":
+        "impossibile scrivere lo stato della sessione: {fehler}",
+    "antwort.lernlauf_angelegt": "sessione creata",
+    "antwort.lernlauf_abgebrochen":
+        "interrotta — un evento in corso può ancora concludersi in "
+        "background",
+    "antwort.live_nichts": "niente da cambiare",
+    "antwort.live_an": "sentinelle avviate: {ok}/{alle}",
+    "antwort.live_aus": "sentinelle fermate: {ok}/{alle}",
+    "antwort.vision_modell_ok":
+        "il modello ha risposto — aggiunto all’elenco come verificato a "
+        "mano; selezionalo lì e salva",
+    "antwort.restore_upload_fehlt": "caricamento mancante o troppo grande",
+    "antwort.restore_upload_kaputt": "caricamento troncato",
+    "antwort.backend_unbekannt": "backend sconosciuto \"{backend}\"",
+    "antwort.kameras_fehlen":
+        "telecamere di Frigate non disponibili: {fehler}",
+    # Muttersprachler-QS: "Setup" = die Erst-Einrichtung (titel.setup
+    # "Configurazione iniziale"), NICHT die Einstellungen — "Impostazioni
+    # salvate" haette nach der Settings-Seite geklungen (impostazioni ist
+    # das gebundene Wort fuer settings). Linie wie ES/DE/FR.
+    "antwort.setup_gespeichert":
+        "Configurazione iniziale salvata — riavvio in corso",
+    "antwort.kameras_gespeichert":
+        "{n} telecamere salvate — riavvio in corso",
+    "antwort.name_ungueltig":
+        "nome persona non valido (2-40 lettere, cifre, spazio, -)",
+    "antwort.anker_unbekannt": "ancora sconosciuta",
+    "antwort.anker_benannt":
+        "denominato \"{name}\" — {n} immagini selezionate, acquisiscilo "
+        "con il pulsante Acquisisci",
+    "antwort.anker_nur_unadoptiert":
+        "si possono scartare solo i gruppi senza immagini acquisite",
+    "antwort.anker_verworfen":
+        "eliminato — {n} immagini rimosse",
+    "antwort.lauf_id_ungueltig": "ID della sessione non valido",
+    "antwort.lauf_aktiv":
+        "questa sessione è ancora attiva — interrompila prima",
+    "antwort.lauf_nichts":
+        "niente trovato per la sessione {lauf} — già eliminata?",
+    "antwort.lauf_nur_einer":
+        "niente da eliminare — c’è solo una sessione in archivio",
+    "antwort.gruppe_unbekannt": "gruppo sconosciuto o chiuso",
+    "antwort.sichtung_laeuft": "controllo delle immagini — qualche secondo …",
+    "antwort.anker_unbenannt": "l’ancora non è denominata (o è sconosciuta)",
+    "antwort.adopt_nichts":
+        "nessuna selezione — spunta almeno un’immagine da acquisire",
+    "antwort.adopt_phantom":
+        "la deduplicazione ha trovato solo riferimenti che non esistono "
+        "più su disco — riprova l’acquisizione; se il problema persiste, "
+        "segnalalo",
+    "antwort.adopt_gedeckt":
+        "già coperto — tutto ciò che hai selezionato ({n}) è quasi "
+        "identico ai riferimenti esistenti di {person}; gruppo "
+        "contrassegnato come acquisito, niente copiato",
+    # §8.10-Plural-Split: frueher {'s' if n != 1} im f-String, jetzt t_n.
+    "antwort.adopt_fertig.eins": "acquisito {n} riferimento per \"{person}\"",
+    "antwort.adopt_fertig.viele":
+        "acquisiti {n} riferimenti per \"{person}\"",
+    "antwort.adopt_skip": ", {n} saltati perché quasi identici",
+    "antwort.adopt_watchdog":
+        " — controllo anti-deriva in corso (pagina Sistema)",
+    "antwort.areas_gespeichert.eins": "{n} area salvata",
+    "antwort.areas_gespeichert.viele": "{n} aree salvate",
+    # text/plain-Antwort der /video- und /clip-Routen (Tranche-B-Rest).
+    "antwort.clip_weg":
+        "Video non più nella cache — conservazione {tage} giorni",
+    # --- Konstante->Schluessel (Kennung/Anzeige-Trennung, Paket 3) ---
+    # 3a: {hinweis}-Satz — muss in BEIDE Rahmen passen ("questo file …"
+    # und "questo archivio …", danach der Konjunktiv-Rahmen "in modo che
+    # … funzioni"); "trattalo" statt "tratta questo file", damit der
+    # voll.careful-Rahmen (archivio) nicht bricht.
+    "system.backup.hinweis":
+        "contiene le tue chiavi API — trattalo come una password",
+    # 3b: Anzeige-Woerter der Galerie-Reihen; Kennungen (vorn/seitlich/
+    # hinten/unklar) bleiben Store-/JSON-Werte. Singular-Adjektive fuer
+    # die Rahmen "dalla riga {reihe}" / "vista {reihe}".
+    "visiongalerie.reihe.vorn": "frontale",
+    "visiongalerie.reihe.seitlich": "laterale",
+    "visiongalerie.reihe.hinten": "posteriore",
+    "visiongalerie.reihe.unklar": "incerta",
+    # 3c: Kategorie-ANZEIGE (bausteine.kat_wort) — Meldetexte (verifyd
+    # push, Stufe 4) lesen weiter KAT_LABELS englisch. "falso
+    # rilevamento" statt "falso allarme" (allarme laut Tabelle gesperrt).
+    "baustein.kat.erkannt": "Riconosciuto",
+    "baustein.kat.fremd_verdacht": "Estraneo?",
+    "baustein.kat.unbekannt_schwach": "Sconosciuto (debole)",
+    "baustein.kat.fehler": "Errore",
+    "baustein.kat.no_person":
+        "Nessuna persona trovata (probabile falso rilevamento)",
+    "baustein.kat.deckung": "Corrispondenza",
+    "baustein.kat.widerspruch": "Conflitto",
+    "baustein.kat.frigate_nur": "Solo Frigate",
+    "baustein.kat.wir_nur": "Solo suslik",
+    "baustein.kat.beide_unknown": "Entrambi sconosciuti",
+    # 3d: Wortstufen-ANZEIGE (bausteine.stufe_wort), klein im Satzfluss
+    # (event.ours_zeile "{person} — {stufe} (presente in {n} finestre)").
+    "baustein.stufe.clear": "corrispondenza netta",
+    "baustein.stufe.narrow": "appena sopra la soglia",
+    "baustein.stufe.below": "sotto la soglia",
+    "baustein.stufe.none": "nessuna corrispondenza",
+    # ---- Anleitungen /hilfe (Stufe 3) ----
+    # Zitat-Kopplungen wortgleich zum IT-Bestand gesetzt: Scegli le
+    # telecamere (erkennung.live.knopf_kameras ohne " …"), Notifiche
+    # (benachrichtigungen.titel), Sincronizzazione Frigate
+    # (nav.sync_auswahl), Gestisci le persone / Registra volto / Registra
+    # corpo (erkennung.*-Knoepfe), Rilevamento visione (nav.vision),
+    # Stato del modello (nav.person_modell), Apprendimento della persona
+    # (nav.personlauf), Immagini del corpo (nav.person), non va bene
+    # (visionwizard.zelle.knopf_weg), prompt personalizzato
+    # (visiontest.vision.custom_prompt), non testato qui
+    # (vision.modell.ungetestet), Configurazione &rarr; Avanzate
+    # (nav.bereich.configuration + nav.konfiguration), Sistema
+    # (system.titel), Riesegui la procedura guidata iniziale
+    # (konfiguration.knopf_setup). NOCH ENGLISCHE UI-Elemente englisch
+    # zitiert (Anzeige==Kennung §8.2): Always / Only if no face /
+    # If needed (Literale in routes/erkennung.py:152/153/190) sowie
+    # Check the key / Check the connection (Literale ueber
+    # core/vision.pruef_wort, routes/vision.py:_verbindung) und die
+    # Mess-Etiketten residents / strangers in vision.modell.antwort_satz
+    # (Muttersprachler-QS IT 20.08.: der Badge-Text kommt woertlich aus
+    # core/registry.vision_badge und wird in routes/vision.py:401/430
+    # unuebersetzt gerendert — deshalb ENGLISCH zitiert wie in fr.py,
+    # die frueheren „persone di casa"/„estranei" liefen am Bildschirm
+    # vorbei).
+    "hilfe.live.titel": "Le sentinelle live, spiegate",
+    "hilfe.live.satz1": """<p>Le sentinelle live guardano le tue telecamere nel momento in cui qualcosa
+si muove. Quando una persona mette piede nella proprietà, ricevi un avviso
+entro pochi secondi, e se il sistema conosce già il volto, l’avviso porta
+con sé un nome.</p>""",
+    "hilfe.live.satz2": """<p>Il nome in questa fase è una prima ipotesi. Il controllo approfondito
+parte subito dopo, sulla registrazione, e ha l’ultima parola.</p>""",
+    "hilfe.live.satz3": """<p>Le sentinelle live non dipendono da Frigate: non vengono attivate dagli
+eventi di Frigate e funzionano in modo del tutto autonomo. Guardano
+direttamente lo stream video, lo stream proxy di Frigate oppure quello della
+telecamera stessa; lo scegli per ogni telecamera.</p>""",
+    "hilfe.live.satz4": """<p>Con <b>Scegli le telecamere</b> decidi a quali assegnare una sentinella.
+Ogni telecamera sorvegliata costa potenza di calcolo giorno e notte, quindi
+comincia dove le persone arrivano davvero: vialetto, porta d’ingresso,
+cancello. Potrai aggiungerne altre più avanti.</p>""",
+    "hilfe.live.satz5": """<p>Spegnere qui una telecamera non cambia nulla nella registrazione. Frigate
+continua a registrare come prima; l’interruttore decide solo se suslik
+guarda subito l’immagine o aspetta la registrazione.</p>""",
+    "hilfe.gesicht.titel": "Il riconoscimento facciale, spiegato",
+    "hilfe.gesicht.satz1": """<p>È il percorso di base con cui suslik riconosce e apprende i volti. Ogni
+passaggio registrato viene confrontato con i volti che hai insegnato al
+sistema.</p>""",
+    "hilfe.gesicht.satz2": """<p>L’insegnamento parte dalle tue telecamere: suslik accumula i volti che
+vede, tu guardi le immagini e gli dici chi è chi. Più situazioni e pose
+diverse ha visto di una persona, più diventa bravo: luce del giorno, sera,
+con il cappello, senza cappello, di lato.</p>""",
+    "hilfe.gesicht.satz3": """<p>Se Frigate conosce già dei volti, puoi importarli dalla pagina
+Sincronizzazione Frigate. Il consiglio resta comunque di insegnare i volti
+qui: l’apprendimento di suslik mette insieme molte pose e situazioni diverse
+per ogni persona, e quei riferimenti danno risultati migliori in suslik
+rispetto ai volti importati da Frigate. Ciò che insegni qui può tornare a
+Frigate dalla pagina di sincronizzazione, se vuoi.</p>""",
+    "hilfe.gesicht.satz4": """<p>Tutto resta sulla tua macchina. Nulla viene caricato da nessuna parte, e
+dietro non c’è nessun servizio cloud.</p>""",
+    "hilfe.gesicht.satz5": """<p>Quando un volto viene riconosciuto, o ne compare uno sconosciuto, suslik
+può avvisarti direttamente: Pushover, Telegram o MQTT per le tue automazioni
+di casa. Sulla pagina Notifiche scegli che cosa viene inviato e dove. Questi
+avvisi sono propri di suslik e funzionano in modo del tutto indipendente da
+Frigate; Frigate non ha bisogno di alcuna configurazione di notifica.</p>""",
+    "hilfe.gesicht.satz6": """<p><b>Gestisci le persone</b> mostra tutti quelli che il sistema conosce e
+ti permette di fare ordine. <b>Registra volto</b> avvia una sessione di
+apprendimento per qualcuno di nuovo.</p>""",
+    "hilfe.koerper.titel": "Il riconoscimento del corpo, spiegato",
+    "hilfe.koerper.satz1": """<p>Alcuni passaggi non mostrano mai un volto utilizzabile: la persona guarda
+altrove, porta un cappuccio o è troppo lontana. Il riconoscimento del corpo
+copre questi casi. Riconosce le persone di casa dalla corporatura e dalla
+postura, usando immagini della persona intera.</p>""",
+    "hilfe.koerper.satz2": """<p>È fatto esattamente per questo caso: nessun volto utilizzabile, vuoi
+comunque sapere chi era, e non vuoi consegnare le immagini a un modello di
+visione AI per scoprirlo.</p>""",
+    "hilfe.koerper.satz3": """<p>Apprende dal materiale che approvi. <b>Registra corpo</b> avvia una breve
+sessione di apprendimento per una persona: il sistema estrae dalle tue
+telecamere le immagini di quella persona, tu rivedi il risultato una volta,
+e da lì in poi continua ad apprendere da solo.</p>""",
+    "hilfe.koerper.satz4": """<p>Con l’interruttore qui sopra decidi se e quando entra in funzione. <b>Only
+if no face</b> significa che resta fermo a meno che il controllo del volto
+non sia rimasto a mani vuote. <b>Always</b> significa che controlla ogni
+passaggio. Spento significa che non entra mai in funzione.</p>""",
+    "hilfe.vision.titel": "La visione AI, spiegata",
+    "hilfe.vision.satz1": """<p>La visione AI è un percorso di riconoscimento a sé. Mostra le immagini di
+un passaggio a un modello per immagini e gli chiede a quale persona
+registrata somigliano. Puoi usarla come riserva per i casi difficili, oppure
+lasciare che regga da sola il riconoscimento: impostata su <b>Always</b>,
+giudica ogni passaggio da sé, anche se non è stato insegnato nessun volto.
+Giudica alla fine del passaggio, non in diretta.</p>""",
+    "hilfe.vision.satz2": """<p>Cosa le serve per funzionare: persone registrate con immagini del corpo
+approvate (le loro gallerie) e un modello collegato. Il modello può girare
+in locale sul tuo hardware oppure nel cloud. Con un modello cloud, ricorda
+che le immagini escono da casa tua: ciò che va bene con un modello locale
+non è automaticamente lecito con uno nel cloud. E non scegliere i modelli
+più piccoli; un modello di taglia media fa benissimo il suo lavoro.</p>""",
+    "hilfe.vision.satz3": """<p>Quello che facciamo girare noi: Qwen 3.5 nella taglia 9B, e fa bene il
+suo lavoro, in locale come nel cloud. Abbiamo provato anche modelli di
+Anthropic (Claude), Google (Gemini) e OpenAI (GPT). Consideralo un dato
+delle nostre prove, non una raccomandazione; l’elenco dei modelli sulla
+pagina Rilevamento visione contrassegna quelli che abbiamo misurato, proprio
+lì dove scegli.</p>""",
+    "hilfe.vision.satz4": """<p>E non si ferma a un solo confronto: per escludere gli scambi di persona,
+il passaggio viene confrontato anche con le gallerie delle altre persone,
+in entrambe le direzioni. Ogni coppia confrontata costa due richieste,
+quindi un solo passaggio può pesare. <b>If needed</b> tiene basso quel
+conto: il modello viene interpellato solo quando i volti lasciano dubbi.
+Senza un modello collegato, la visione resta semplicemente fuori dal gioco,
+e la scheda lo dice.</p>""",
+    "hilfe.faces_bekannt.titel": "Persone conosciute e registrazione, spiegate",
+    "hilfe.faces_bekannt.satz1": """<p>Qui vedi ogni persona che il tuo sistema conosce &mdash; tocca un volto e
+vedi tutte le immagini che ci sono dietro.</p>""",
+    "hilfe.faces_bekannt.satz2": """<p>Una nuova persona non si insegna caricando una foto: viene appresa dalle
+normali registrazioni delle telecamere. Nel corso della giornata il sistema
+mette insieme immagini da angolazioni diverse, tu confermi chi è, e solo
+dopo quel controllo un’immagine viene conservata.</p>""",
+    "hilfe.faces_bekannt.satz3": """<p>Così ogni persona ottiene un piccolo insieme di immagini vere di tutti i
+giorni &mdash; esattamente ciò che rende forte il riconoscimento, anche
+quando qualcuno guarda altrove o porta un berretto.</p>""",
+    "hilfe.faces_lernen.titel": "L’apprendimento, spiegato",
+    "hilfe.faces_lernen.satz1": """<p>Mentre le telecamere girano, il sistema continua ad accumulare nuove
+immagini delle persone che già conosce. Qui guardi che cosa si è accumulato
+&mdash; basta farlo ogni pochi giorni.</p>""",
+    "hilfe.faces_lernen.satz2": """<p>Confermi, correggi o scarti con un clic; nulla viene conservato senza di
+te.</p>""",
+    "hilfe.faces_lernen.satz3": """<p>Più immagini buone ha una persona, più viene riconosciuta in modo
+affidabile &mdash; per questo l’apprendimento non si ferma mai del tutto,
+diventa solo più raro.</p>""",
+    "hilfe.faces_unbekannt.titel": "I visitatori sconosciuti, spiegati",
+    "hilfe.faces_unbekannt.satz1": """<p>Alcune persone continuano a comparire senza che il sistema abbia un nome
+per loro &mdash; il postino, un vicino, il giardiniere. Qui il sistema
+riunisce questi sconosciuti ricorrenti e ti chiede: chi è?</p>""",
+    "hilfe.faces_unbekannt.satz2": """<p>Dai loro un nome e da quel momento vengono riconosciuti come tutti gli
+altri. Oppure lasciali sconosciuti di proposito &mdash; anche questa è una
+decisione, e il sistema non continuerà a chiedere.</p>""",
+    "hilfe.faces_qualitaet.titel": "Il controllo qualità, spiegato",
+    "hilfe.faces_qualitaet.satz1": """<p>Col tempo si accumulano molte immagini, e non tutte aiutano il
+riconoscimento &mdash; alcune sono sfocate, altre mostrano appena la
+persona, e nel caso peggiore le immagini di due persone diverse si
+somigliano così tanto che gli scambi sono dietro l’angolo.</p>""",
+    "hilfe.faces_qualitaet.satz2": """<p>Questo controllo trova questi punti deboli prima che ti costino un
+riconoscimento. Ricevi indicazioni concrete su quali immagini guardare
+&mdash; nulla viene eliminato se non lo decidi tu.</p>""",
+    "hilfe.faces_lernlauf.titel": "La sessione di apprendimento, spiegata",
+    "hilfe.faces_lernlauf.satz1": """<p>Avvii una sessione; il sistema rilegge le tue registrazioni recenti ed
+estrae i volti da solo.</p>""",
+    "hilfe.faces_lernlauf.satz2":
+        "<p>Li ordina in gruppi. Un gruppo deve essere una sola persona.</p>",
+    "hilfe.faces_lernlauf.satz3": """<p>Dai un nome a ogni gruppo, oppure saltalo. È l’unico passo in cui servi
+tu.</p>""",
+    "hilfe.faces_lernlauf.satz4": """<p>Le immagini nominate diventano riferimenti e contano subito per il
+riconoscimento. Ripeti ogni pochi giorni, oppure lascia che nel frattempo la
+vista del giorno integri le persone conosciute.</p>""",
+    "hilfe.zurueck.erkennung": "Torna a Riconoscimento",
+    "hilfe.zurueck.faces": "Torna a Volti",
+    "hilfe.zurueck.lernlauf": "Torna alla sessione di apprendimento",
+    # ---- §8.1-Nachzuegler (Stufe 3): Inline-Markup-Prosa der Tranchen ----
+    "setupwiz.backend.system_satz":
+        "Se l’acceleratore entra davvero in funzione lo vedi confermato "
+        "sulla pagina <b>Sistema</b> dopo l’avvio (suslik non ripiega mai "
+        "in silenzio sulla CPU senza dirlo).",
+    "setupwiz.fertig.wieder_satz":
+        "Puoi rieseguire questa procedura guidata in qualsiasi momento da "
+        "<b>Sistema → Riesegui la procedura guidata iniziale</b>.",
+    "system.sync.diagnose_satz":
+        'Se una sincronizzazione segnala un problema, <a '
+        'href="/sync_diagnose" target="_blank">apri la diagnosi</a> — '
+        "riunisce il rapporto di suslik e il log di Frigate, pronti da "
+        "copiare in una segnalazione.",
+    "system.sync.diagnose_kurz":
+        '<a href="/sync_diagnose" target="_blank">apri la diagnosi</a> '
+        "— riunisce il rapporto di suslik e il log di Frigate.",
+    "vision.kopf.einleitung":
+        "Un terzo percorso di riconoscimento accanto a volto e corpo: un "
+        "modello linguistico visivo guarda un’immagine di un passaggio e "
+        "dice quale delle tue persone conosciute mostra &mdash; "
+        "confrontandola con una piccola galleria di quella persona. È una "
+        "<b>voce in più</b>, mai il buttafuori: la scelta obbligata "
+        "risponde &bdquo;A o B&ldquo;, quindi può confermare una persona "
+        "di casa ma non può respingere un estraneo. Quello resta il "
+        "compito del riconoscimento esistente.",
+    "vision.hinweis.modell_satz":
+        "Un modello di visione capace di guardare più immagini insieme. "
+        "Puoi usare uno dei fornitori online qui sotto, oppure farne "
+        "girare uno tu stesso &mdash; la combinazione misurata qui è "
+        "<b>llama.cpp</b> con un modello di visione <b>Qwen3.5</b> (il 4B "
+        "è bravo quanto il 9B in questo compito e richiede circa metà "
+        "della memoria). <b>Non</b> deve per forza girare su questa "
+        "macchina.",
+    "vision.hinweis.host_satz":
+        "<b>Questo host di solito è troppo piccolo per un modello "
+        "locale.</b> Il 9B richiede circa 12 GB di working set, il 4B "
+        "circa 6,6 GB, e qui vivono già suslik e il worker di analisi "
+        "&mdash; il worker è la prima cosa che il kernel uccide quando la "
+        "memoria finisce. Una seconda macchina, o un fornitore online, è "
+        "la configurazione sensata.",
+    "vision.hinweis.mess_satz":
+        "Un avvertimento sulla misura di quella memoria: <code>docker "
+        "stats</code> mostra circa 2,7 GiB per il container del modello "
+        "perché i pesi sono mappati, non copiati. Il working set reale è "
+        "~11,6 GiB. Se dimensioni <code>--memory</code> in base a ciò che "
+        "dice <code>docker stats</code>, il modello ricarica i suoi pesi "
+        "in continuazione e tutto rallenta a passo d’uomo.",
+    "vision.hinweis.kosten_satz":
+        "Velocità e costi, misurati, così dopo niente ti sorprende: "
+        "l’intero passaggio entra come <b>una sola griglia di "
+        "candidati</b>, e ogni <b>coppia di gallerie confrontata costa "
+        "due richieste</b> (la stessa domanda viene posta di nuovo con le "
+        "due gallerie scambiate, per intercettare una preferenza di "
+        "posizione). Di solito una coppia decide. Su una macchina di "
+        "classe CPU sono circa 7 minuti per coppia; sugli endpoint online "
+        "misurati qui, secondi.",
+    "vision.verb.key_ort":
+        "<b>Metti la chiave nel campo della chiave, non nell’URL</b>: un "
+        "endpoint che porta le credenziali nel suo indirizzo &mdash; "
+        "davanti al nome host, o come parametro di query &mdash; contiene "
+        "lo stesso segreto, e compare in molti più posti (stato, log, "
+        "backup).",
+    "vision.modell.leer_key":
+        "Ancora nulla da scegliere. Inserisci la tua chiave qui sopra e "
+        "premi <b>Check the key</b>: suslik si collega all’endpoint, "
+        "chiede che cosa c’è e ti mostra ciò che ha trovato. Scegli da "
+        "quell’elenco.",
+    "vision.modell.leer_verbindung":
+        "Ancora nulla da scegliere. Compila i campi qui sopra e premi "
+        "<b>Check the connection</b>: suslik si collega all’endpoint, "
+        "chiede che cosa c’è e ti mostra ciò che ha trovato. Scegli da "
+        "quell’elenco.",
+    "vision.modell.antwort_satz":
+        "Questo è ciò che l’endpoint ha risposto quando suslik gliel’ha "
+        "chiesto, {zeit} &mdash; nulla qui è un suggerimento nostro. Dove "
+        "abbiamo misurato un modello, la nota sta su quel modello. Due "
+        "capacità sono mostrate separatamente, perché non vanno di pari "
+        "passo: <b>residents</b> è scegliere quella giusta tra due persone "
+        "conosciute, <b>strangers</b> è rispondere &bdquo;nessuno dei "
+        "due&ldquo; per qualcuno che non gli hai mai insegnato. Una "
+        "spunta significa che ogni giudizio di quel tipo nella nostra "
+        "misurazione era corretto; la frazione accanto dice tutto. "
+        "I modelli senza una misurazione qui dicono <b>non "
+        "testato qui</b> &mdash; non è un esito, solo onestà (misurazioni "
+        "del {stand}).",
+    "vision.prompt.eigen_satz":
+        "Questa è la tua formulazione &mdash; gli esiti prodotti con essa "
+        "sono contrassegnati <b>prompt personalizzato</b>. Ripristinala "
+        "per tornare alla formulazione predefinita misurata.",
+    "vision.cloud.sendet_satz":
+        "Questo invia immagini di persone dalle tue telecamere a "
+        '<b class="vs-url">{ziel}</b>.',
+    "vision.test.stufen_satz":
+        "Tre passi, perché un semplice ping di raggiungibilità non basta: "
+        "un backend era raggiungibile, aveva il modello e rispondeva in "
+        "fretta &mdash; e ha comunque sbagliato 5 domande di confronto su "
+        "12, perché rimpiccioliva le immagini prima di guardarle."
+        "<br><b>1</b> raggiungibilità, modello e tempo di risposta, con "
+        "un’immagine di prova generata al momento.<br><b>2</b> "
+        "un’esecuzione a scelta obbligata su griglie di forme generate "
+        "dove la risposta giusta è nota &mdash; controlla il formato "
+        "della risposta, il parser e l’interruttore del ragionamento."
+        "<br><b>3</b> un conteggio dei token rispetto a un riferimento "
+        "misurato, che è il modo in cui il rimpicciolimento delle "
+        "immagini si fa vedere.<br><b>Per questo non viene usata nessuna "
+        "immagine di persone</b>, e non esiste alcuna opzione per farlo.",
+    "visiontest.kopf.wege_satz":
+        "Scegli un passaggio reale e guarda che cosa ne fanno i tre "
+        "percorsi di riconoscimento, fianco a fianco: <b>volto</b>, "
+        "<b>persona</b> e <b>visione</b>.",
+    "visiontest.vision.einrichten_satz":
+        'Configurala in <a href="/vision">Rilevamento visione</a>: un '
+        "modello, un test di connessione verde e almeno due gallerie "
+        "approvate. Le altre due colonne funzionano senza.",
+    "visionwizard.groesse.satz":
+        "Misurato, onestamente: la dimensione <b>non</b> è stata la leva "
+        "in nessuno dei casi che abbiamo eseguito &mdash; una griglia più "
+        "grande non ha reso le risposte migliori, e nemmeno peggiori. "
+        "Prendi la più grande se il tuo materiale la regge (qui: "
+        "{empfehlung}), la più piccola se no. Costano più o meno uguale, "
+        "perché a costare token è la superficie dell’immagine, non il "
+        "numero di celle.",
+    "visionwizard.vorschlag.vergessen_satz":
+        '<a href="#" onclick="vwVergessen();return false">Dimenticale</a> '
+        "se vuoi ripartire da zero.",
+    "visionwizard.vorschlag.satz":
+        "Una riga per vista: frontale, laterale, posteriore. Le immagini "
+        "sono scelte per dimensione e nitidezza, per quanto chiaramente "
+        "si vedano occhi e naso, per quanta luce è bruciata, per quanta "
+        "parte del ritaglio è davvero la persona &mdash; e distribuite su "
+        "giorni, eventi e telecamere diversi. La riga sotto ogni immagine "
+        "dice che cosa vi è stato misurato. Fai clic su <b>non va "
+        "bene</b> su tutto ciò che non è utilizzabile &mdash; la migliore "
+        "immagine successiva della STESSA vista sale al suo posto. Questo "
+        "non tocca il tuo materiale di apprendimento; dice solo &bdquo;"
+        "non come cella della galleria&ldquo;.",
+    "personwizard.kopf.stark_satz":
+        "<b>Cosa rende forte il modello:</b> la varietà batte la "
+        "quantità. Immagini di <b>molti giorni diversi</b> (abiti, luce, "
+        "telecamere) aiutano molto più di tante immagini di un solo "
+        "passaggio — riesegui l’estrazione su giorni nuovi invece di "
+        "scavare più a fondo in un solo giorno. Le immagini di estranei "
+        "confermate affinano allo stesso modo la soglia di decisione.",
+    "personwizard.fertig.training_satz":
+        "L’apprendimento del modello sul materiale approvato parte "
+        "automaticamente dopo la revisione — vedi <a "
+        'href="/person/modell">Stato del modello</a>. Qui sotto puoi '
+        "avviare un’altra sessione in qualsiasi momento.",
+    "personwizard.kontrolle.schalter_satz":
+        'Lo attivi e lo disattivi in <a href="/konfiguration">'
+        "Configurazione &rarr; Avanzate</a>, chiave "
+        "<code>diagnostic_collection</code>. Immagini e log scadono "
+        "insieme al log dei riconoscimenti dopo 30 giorni &mdash; nulla "
+        "qui viene conservato più a lungo dei riconoscimenti stessi.",
+    "personwizard.kontrolle.leer_satz":
+        "Le voci compaiono quando il riconoscimento del corpo è inserito "
+        'in <a href="/person/modell">Stato del modello</a> e una persona '
+        "passa.",
+    "personwizard.bestand.leer_satz":
+        'Esegui <a href="/personlauf">Apprendimento della persona</a> e '
+        "completa la revisione — le immagini approvate compaiono qui.",
+    "personwizard.bestand.stark_satz":
+        "La varietà batte la quantità: immagini di <b>molti giorni "
+        "diversi</b> (abiti, luce) aiutano molto più di tante immagini di "
+        "un solo passaggio. Punta a più giorni per persona e lascia che "
+        "l’estrazione copra tutte le tue telecamere.",
+    "personwizard.bestand.fremd_satz":
+        "<b>Estranei:</b> {n} immagini di estranei confermate calibrano "
+        "la soglia di decisione — più estranei ha visto il modello, più "
+        "quella linea è affidabile. (Conservate in "
+        "<code>personlern/fremd/</code>; una pagina per far crescere "
+        "questo insieme dal viavai della tua strada è in programma.)",
+    "personwizard.bestand.fremd_erklaerung":
+        "Immagini di estranei confermate — alimentano la classe "
+        "aggiuntiva e calibrano la soglia di decisione. Eliminarne una fa "
+        "ripartire subito l’apprendimento del modello (i file stanno in "
+        "<code>personlern/fremd/</code>).",
+    "personwizard.modell.leer_satz":
+        'Esegui <a href="/personlauf">Apprendimento della persona</a> e '
+        "completa una revisione — l’apprendimento del modello parte poi "
+        "automaticamente.",
+    "personwizard.modell.material_satz":
+        "Gestisci le immagini in "
+        '<a href="/person">Immagini del corpo</a> — le eliminazioni '
+        "fanno ripartire automaticamente l’apprendimento del modello.",
+    # ---- Meldetexte (Stufe 4) --------------------------------------------
+    # Push-/Telegram-Texte; Reihenfolge, Platzhalter und Abschnitts-Grenzen
+    # exakt wie im en.py-Abschnitt (deutsche Alt-Meldetexte, Stoerungs-
+    # Diagnosen, Schnell-Urteil und MQTT-Felder bleiben dort BEWUSST
+    # draussen). Produktnamen (suslik/Frigate/Pushover/Telegram) und die
+    # Waechter-Kennung {wache} bleiben wortgleich (§8.6 / Invariante §6).
+    #
+    # IT-Entscheide dieses Abschnitts:
+    # - Genus-Falle bei Personennamen (kein Geschlecht bekannt). Die Regel
+    #   "Partizip zuerst, invariabel maskulin" ist nach der
+    #   Muttersprachler-QS GESCHAERFT: sie traegt nur, wo das Partizip ein
+    #   ETIKETT vor dem Doppelpunkt ist ("riconosciuto dal corpo: {name}",
+    #   "riconosciuto (in diretta, preliminare): {name}") — dort liest es
+    #   sich als Schlagzeilen-Rubrik, dasselbe Muster wie die
+    #   Erfolgs-Toasts oben ("rimosso \"{person}\"", s. Abschnitts-
+    #   kommentar Tranche C/D). Steht das Partizip dagegen DIREKT am Namen
+    #   im laufenden Satz, erwartet das Italienische Kongruenz
+    #   ("confermato Anna" ist schlicht falsch) — der eine Fall
+    #   (meldung.alert.bestaetigt) bindet das Genus deshalb an ein
+    #   Substantiv: "persona confermata: {name}", wortgleich zu
+    #   antwort.bruecke_grund_keine_events ("come persona confermata").
+    #   Zweite Substantiv-Bindung: "la corrispondenza più vicina è {name}".
+    # - Keine zwei Lineette in EINER Push-Zeile (Muttersprachler-QS): wo
+    #   der RAHMEN schon eine setzt ("{kamera} — {urteil}", "niente da
+    #   prendere — {grund}"), traegt der eingesetzte Teil einen
+    #   Doppelpunkt statt einer zweiten Lineetta. Gleiche Entscheidung wie
+    #   in es.py; die EN-Bauform bleibt inhaltlich unangetastet, nur die
+    #   Interpunktion folgt dem italienischen Lesefluss.
+    # - Die Wortstufe {wort} kommt uebersetzt aus baustein.stufe.*
+    #   (core/vertrauen.label_sprachig) — hier steht sie nie als Literal.
+    # - Bestands-Kopplungen (Muttersprachler-QS): "presente in {n}
+    #   finestra/e" nach event.ours_zeile · "riconoscimento della persona,
+    #   non del volto" WORTGLEICH zu personwizard.modell.live_hinweis ·
+    #   disturbance -> anomalia (system.live.stoerungen) · verdict ->
+    #   esito · cosine -> coseno · score -> punteggio · test -> prova
+    #   (Knopf "Prova Pushover") · "volto utilizzabile" wie die
+    #   Kategorien-Erklaerungen · niente da prendere wie bruecke_nichts.
+    # - Numerus: EN-"(s)"-Formen bleiben Bestands-Schraegform (volto/i,
+    #   immagine/i, confronto/i, evento/i), echte t_n-Paare bekommen echte
+    #   Formen (volto/volti). EN-Klarplurale bekommen die Schraegform NUR
+    #   dort, wo n=1 im Code wirklich erreichbar ist (win3s/win_min,
+    #   feuer_ab) — "rilevamenti coerenti" bleibt Plural, weil
+    #   core.livewache.NAME_STIMMEN fest 2 ist.
+    "meldung.titel.kategorie": "suslik: {wort}",
+    # "finestra/e": {n} ist win3s und kann 1 sein (win_min ab 1 einstellbar,
+    # verifyd Feld-Grenzen) — Anlehnung an event.ours_zeile, die dort mit
+    # t_n echte Formen hat.
+    "meldung.alert.bestaetigt":
+        "persona confermata: {name} ({wort}, presente in {n} finestra/e)",
+    # Doppelpunkt statt Lineetta: der Rahmen meldung.alert.satz setzt schon
+    # eine ("{kamera} — {urteil}") — s. Abschnittskommentar.
+    "meldung.alert.keiner_naechster":
+        "nessuna conferma: la corrispondenza più vicina è {name} ({wort})",
+    "meldung.alert.keiner_ohne_gesicht":
+        "nessuna conferma: nessun volto utilizzabile",
+    "meldung.alert.satz":
+        "{kamera} — {urteil}. Frigate ha visto: {label}. {gesichter}",
+    "meldung.alert.gesichter.eins": "{n} volto in questo evento.",
+    "meldung.alert.gesichter.viele": "{n} volti in questo evento.",
+    # Reine Zahlenzeile: "cos" ist auch im Italienischen die Kurzform von
+    # coseno — nichts zu uebersetzen.
+    "meldung.alert.zahl": "[Frigate {score} (= cos {cos}) | {unsere}]",
+    # Push-Titel kurz und im Bau der Kategorie-Zeile oben ("suslik: …").
+    # "riconoscimento persona" war eine Substantiv-Reihung nach englischem
+    # Muster (Muttersprachler-QS): das Italienische baut sie nur mit Plural
+    # ("riconoscimento volti/targhe"), im Singular klingt sie wie ein
+    # halbuebersetztes Label. "dal corpo" sagt zugleich, WELCHER Weg
+    # gefeuert hat — derselbe Wortlaut wie im Meldesatz darunter.
+    "meldung.person.titel": "suslik: riconoscimento dal corpo",
+    # Die Klammer-Notiz WORTGLEICH zu personwizard.modell.live_hinweis
+    # ("Gli avvisi portano la nota …") — die UI verspricht genau sie.
+    # "evento/i": feuer_ab ist ein freies Feld und kann 1 sein.
+    "meldung.person.satz":
+        "riconosciuto dal corpo: {name} (riconoscimento della persona, "
+        "non del volto) — {wort}, {n} evento/i a supporto",
+    "meldung.person.wort_ersatz": "corrispondenza",
+    "meldung.person.zahl": "[punteggio {score}]",
+    "meldung.vision.titel": "suslik: visione",
+    "meldung.vision.unbestaetigt":
+        "la visione non ha potuto confermare nessuno in questo passaggio",
+    # "the body ranking" NICHT als "classifica": das Wort gehoert im
+    # Italienischen der Tabelle/Hitparade (Muttersprachler-QS), "la
+    # classifica del corpo" liest sich wie eine Rangliste VON Koerpern.
+    # Gemeint ist, worauf der Koerper-Weg gezeigt hat — genau das sagt
+    # "il riconoscimento dal corpo indicava …" (Wortlaut wie
+    # meldung.person.titel/.satz).
+    "meldung.vision.koerper_zusatz":
+        "— il riconoscimento dal corpo indicava {namen}",
+    "meldung.vision.bilder_zusatz": "({n} immagine/i nella griglia)",
+    "meldung.vision.einig":
+        "visione: {name} — esito unanime, {voten} confronto/i su {bilder}",
+    "meldung.vision.kein_urteil": "visione: nessun esito — {grund}",
+    "meldung.wache.titel_person": "{wache} {kamera}: persona rilevata",
+    "meldung.wache.titel_stoerung": "{wache} {kamera}: anomalia",
+    "meldung.wache.caption": "{wache} {kamera}: {text}",
+    "meldung.wache.name_satz":
+        "riconosciuto (in diretta, preliminare): {name} ({wort}, {n} "
+        "rilevamenti coerenti)",
+    "meldung.wache.name_zahl": "[coseno {cos}]",
+    "meldung.wache.funde.eins": "{n} volto in {sek} s",
+    "meldung.wache.funde.viele": "{n} volti in {sek} s",
+    "meldung.wache.funde_zahl": "(punteggio {score}, {ms} ms)",
+    "meldung.video_ersatz.satz":
+        "(video non disponibile — invio dell’immagine)",
+    "meldung.test.satz": "Notifica di prova da suslik ✓",
+    # ---- D1: ehrliche Begruendung der Pass-Pruefung ----------------------
+    # Satzteile mit kleinem Anfangswort: sie haengen hinter "niente da
+    # prendere — " (bruecke_nichts_grund) oder hinter dem Grenzfall-Satz
+    # (bruecke_grund_zusatz). Zahlen und Schwellen kommen fertig aus der
+    # Diagnose — hier steht KEINE Schwelle als Literal, nur ihr Platzhalter.
+    # zu_klein und kein_crop numerus-fest gebaut ("…, nessuno raggiunge/ha",
+    # Verb im Singular), damit die Aussage auch bei n=1 heil bleibt; die
+    # uebrigen Zweige spiegeln die EN-Bauform samt ihrer n=1-Unschaerfe
+    # ("1 of the checked face(s) ARE …") — Glaettung waere eine bewusste
+    # EN-Textaenderung, nie eine stille Abweichung der Uebersetzung.
+    # Interpunktion: die Zahlen-Nachsaetze haengen an einem DOPPELPUNKT,
+    # nicht an einer zweiten Lineetta — der Rahmen "niente da prendere — "
+    # bringt seine schon mit (Muttersprachler-QS, s. Abschnittskommentar).
+    "antwort.bruecke_nichts_grund": "niente da prendere — {grund}",
+    "antwort.bruecke_grund_zusatz": " · {grund}",
+    "antwort.bruecke_grund_zu_klein":
+        "{n} volto/i misurato/i in questo passaggio, nessuno raggiunge la "
+        "dimensione minima: il più grande {kante} px, ne servono "
+        "{min_kante} px",
+    # "ne serve almeno": das blosse "ne serve {unscharf_max}" liess die
+    # Schwelle in der Luft haengen (Muttersprachler-QS) — "almeno" macht
+    # aus der Zahl eine Untergrenze, wie es "ne servono … px" oben schon
+    # tut.
+    "antwort.bruecke_grund_zu_unscharf":
+        "{n} volto/i in questo passaggio troppo sfocato/i per un "
+        "riferimento: nitidezza migliore {sharp}, ne serve almeno "
+        "{unscharf_max}",
+    "antwort.bruecke_grund_kein_gesicht":
+        "nessun volto misurabile su {n} immagine/i controllata/e in questo "
+        "passaggio",
+    "antwort.bruecke_grund_gedeckt":
+        "{n} dei volti controllati sono quasi identici ai riferimenti che "
+        "{person} ha già",
+    "antwort.bruecke_grund_fremd_naeher":
+        "{n} dei volti controllati somigliano più a qualcun altro che a "
+        "{person}",
+    "antwort.bruecke_grund_id_unsicher":
+        "{n} dei volti controllati non erano chiaramente {person}",
+    "antwort.bruecke_grund_beides_schwach":
+        "{n} dei volti controllati erano deboli su entrambi i fronti: "
+        "qualità dell’immagine e identità",
+    "antwort.bruecke_grund_kein_crop":
+        "{n} evento/i in questo passaggio, nessuno ha un ritaglio di volto "
+        "da controllare",
+    "antwort.bruecke_grund_keine_events":
+        "nessun evento di questo passaggio indica {person} come persona "
+        "confermata o come miglior corrispondenza",
+    "antwort.bruecke_grund_keine_referenzen":
+        "{person} non ha ancora immagini di riferimento per il confronto",
+    # ---- personlauf-Design (Nachzug) ----
+    # Kachel-Titel und Kachel-Saetze des /personlauf-Laufflusses. Kachel 1/4,
+    # die erste Saeulen-Marke und die Nachbar-Beschriftungen kommen wortgleich
+    # aus dem Gesichts-Lernlauf (lernwizard.*) — hier stehen nur die sieben
+    # personwizard-eigenen Neuzugaenge. Kachel 2 traegt zugleich die zweite
+    # Saeulen-Marke neben "Preparazione" und steht darum wie die IT-Phasen
+    # im Substantiv.
+    "personwizard.kachel.sammeln": "Estrazione immagini",
+    "personwizard.kachel.pruefen": "Revisione delle immagini",
+    "personwizard.k1.satz":
+        "Scegli chi apprendere e quanto indietro andare &mdash; poi la "
+        "sessione estrae le immagini dalle tue registrazioni.",
+    "personwizard.k2.satz":
+        "Estrae immagini a figura intera dalle tue registrazioni, e solo "
+        "dai passaggi che un volto ha già confermato.",
+    "personwizard.k3.satz":
+        "Il passo in cui servi tu: ogni immagine estratta riceve il tuo "
+        "sì o il tuo no, e nulla viene appreso prima.",
+    "personwizard.k4.satz":
+        "Con le immagini approvate il modello del corpo viene appreso "
+        "subito &mdash; così riconosce le persone anche senza un volto "
+        "visibile.",
+    "personwizard.such.titel": "Imposta l’apprendimento della persona",
 }
