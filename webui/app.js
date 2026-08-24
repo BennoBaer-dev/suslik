@@ -70,7 +70,10 @@ function konfigSpeichern() {
     .then(function (r) { return r.json(); })
     .then(function (r) {
       s.textContent = r.msg;
-      if (r.ok) _neustartDann(location.href, s);
+      /* B6: eine reine debug-Aenderung wirkt live, der Dienst geht dabei nicht
+         unten durch — dann NICHT auf die Neustart-Grenze warten (die Schleife
+         liefe sonst bis in ihren 120-s-Deckel), sondern sofort neu laden. */
+      if (r.ok) { if (r.neustart === false) { location.reload(); } else { _neustartDann(location.href, s); } }
     })
     .catch(function () { _neustartDann(location.href, s); });
 }

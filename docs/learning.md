@@ -88,3 +88,39 @@ Everything a run produces stays in your data volume: the harvested crops, the an
 a protocol of what was adopted when. Nothing is uploaded anywhere, and Frigate is only ever
 read from — unless you deliberately switch on the reference export, which writes your
 reference images back into Frigate's own face library over its HTTP API.
+
+## Recordings that Frigate no longer has
+
+A learning run normally works through Frigate's events. If your recordings have already
+fallen out of Frigate's retention, or you moved to a new Frigate instance, or the footage
+comes from somewhere else entirely, you can hand suslik the video files directly.
+
+Put the files into the `import` folder of your data volume, then start a run against that
+folder:
+
+```bash
+curl -X POST http://<your-suslik>:8199/lernlauf_start \
+  -H 'Content-Type: application/json' \
+  -d '{"dateien":"/data/import"}'
+```
+
+Everything after that is a normal learning run: the same harvest, the same grouping, the
+same naming, the same adoption into recognition. There is no separate path and no second
+set of rules.
+
+A few things worth knowing:
+
+- **Nothing is uploaded.** Only the path travels to suslik, the video itself never goes
+  through your browser.
+- **The recording time matters.** suslik reads it from the video file and uses it to
+  decide which clips belong to the same pass over your property. If a file carries no
+  creation time, suslik falls back to the file date and says so in the log.
+- **Imported clips are kept.** The normal cache cleanup would remove them after a couple
+  of days, but a file you fed in yourself cannot be fetched again, so it is marked and
+  stays until you delete the run.
+- **The camera name** is taken from the file name. Name your files accordingly if the
+  name should look right in groups and messages.
+- Files that are not readable video are skipped and counted, they do not stop the run.
+
+There is deliberately no button for this in the interface. It is a rare case, and the
+interface is busy enough already.

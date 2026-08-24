@@ -2494,7 +2494,13 @@ def _klemmen(wert, std, lo, hi, log, name, feld):
 def _bool_lesen(wert, std, log, feld):
     """Bool-Riegel (Lens-B M2: `pose_gate: "false"` wurde per bool("false")
     still zu True — der User schaltete AUS und bekam AN). Nur eindeutige
-    Schreibweisen zaehlen, alles andere ist LAUT + Default."""
+    Schreibweisen zaehlen, alles andere ist LAUT + Default.
+    None ist davon AUSGENOMMEN (Log-Sichtung 24.08., .336-Prod): None heisst
+    "Feld nie gesetzt" — der dokumentierte Normalfall jedes Alt-Stores (die
+    Hinten_CAM trug nie ein enabled). Ihn als "ungueltig" zu melden ist
+    falscher Alarm bei jedem Start; ungueltig sind nur ECHTE Fehlwerte."""
+    if wert is None:
+        return std
     if isinstance(wert, bool):
         return wert
     w = str(wert).strip().lower()
@@ -2546,6 +2552,13 @@ GUARD_USER_FELDER = ("enabled", "quelle", "url", "ende_ohne_gesicht_s",
 # der naechste Save raeumt es weg.
 GUARD_QUITTUNG_FELDER = ("test", "test_fehler", "messung")
 GUARD_FELDER = GUARD_USER_FELDER + GUARD_QUITTUNG_FELDER
+
+# Bekannt-abgeschaffte Guard-Felder: standen in frueheren Versionen im Vertrag und
+# liegen deshalb legitim in Alt-Stores. Sie werden beim Lesen als Altlast benannt
+# (nicht wie ein Tippfehler bewarnt) und nie verarbeitet. Eintraege kommen dazu,
+# wenn ein Feld ABGESCHAFFT wird — nie raus (sonst wird dieselbe Altlast wieder
+# zum Dauer-Alarm). schnell_urteil: abgeschafft .197 (Fast-Urteil-Haken).
+GUARD_FELDER_ABGESCHAFFT = ("schnell_urteil",)
 
 
 def _hoehe_lesen(wert, log, name):
@@ -2661,8 +2674,18 @@ def guards_lesen(cfg, log=print):
             w = g.get(feld)
             guards[name][feld] = dict(w) if isinstance(w, dict) else {}
         for fremd in sorted(set(g) - set(GUARD_FELDER)):
-            log(f"live.guards.{name}: unbekanntes Feld {fremd!r} — ignoriert "
-                f"(Vertrag GUARD_FELDER)")
+            if fremd in GUARD_FELDER_ABGESCHAFFT:
+                # Bekannt-abgeschaffte Felder (Log-Sichtung 24.08.): Altlast aus
+                # einer frueheren Version, folgenlos — als solche benennen und den
+                # Ausweg nennen, statt sie bei jedem Start wie einen Tippfehler
+                # zu bewarnen. Keine Store-Bereinigung von hier: dieser Leser ist
+                # bewusst KEIN achter Schreibweg (Store-Governance verifyd.py:96).
+                log(f"live.guards.{name}: field {fremd!r} was removed in an "
+                    f"earlier version — ignored; delete it from config.json to "
+                    f"silence this line")
+            else:
+                log(f"live.guards.{name}: unbekanntes Feld {fremd!r} — ignoriert "
+                    f"(Vertrag GUARD_FELDER)")
     return d, guards
 
 
@@ -2990,6 +3013,16 @@ class Engine:
         self.log(f"live engine up: {len(self.kacheln)} watcher(s), "
                  f"{len(self.verweigert)} refused, heartbeat {HERZSCHLAG_S:g}s, "
                  f"watchdog {self.watchdog_s:g}s")
+        # .338: Summenzeile des stderr-Siebs (livewached.main) statt 30+ roter
+        # Treiber-Zeilen je Engine-Start — Muster wie der Selfcheck-Schritt 7.
+        try:
+            from core import livewached as _lwd
+            if getattr(_lwd, "_STDERR_SIEB", None) is not None and _lwd._STDERR_SIEB.anzahl:
+                self.log(f"suppressed {_lwd._STDERR_SIEB.anzahl} harmless driver "
+                         f"thread-affinity notices during engine start (model "
+                         f"library sets no thread cap; computation is unaffected)")
+        except Exception:
+            pass
         return True
 
     def stop(self, grund="stop"):

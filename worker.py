@@ -22,6 +22,9 @@ serialisiert (self.lock) und haelt Timeout/killpg. stdin-EOF (execv-Waise/Ende) 
   {"typ":"sammle","tage":0.1,"mit_migriere":false,"log":"..."}
   {"typ":"ernte","eid":"...","kamera":"...","ts":0,"fps_sample":3,
    "schwellen":{...},"lauf_dir":"...","log":"..."}   (E2: 1 Event je Job, Live-Vorrang)
+  {"typ":"rechenprobe","zeitbudget_s":60,"backend_geraet_je_task":{...},"log":"..."}
+     (Lieferung C: rechnet jedes Modell auf seinem BETRIEBS-Geraet gegen die CPU —
+      Antwortfeld "rechenprobe" = eine Zeile je Modell; gedruckt wird beim Dienst)
   {"typ":"ping"}
   Jeder Job (ausser ping) darf zusaetzlich "rss_max_mb" tragen: die Politik-Grenze
   der In-Job-RSS-Wache (= worker_rss_max_mb des Dienstes; s. _JobRssWache und
@@ -68,13 +71,11 @@ _strukturmass = None             # die eine warme StrukturMass je Worker-Leben (
 
 def _normmass_holen():
     """Warme NormMass wie der _emb-Cache: EIN Bau je Worker-Leben, Neubau nur
-    bei Modellwechsel. Der Bau gehoert in den PROZESS-START (main(), ENV-
-    Schalter SUSLIK_VORRAT vom Dienst), NIE lazy in ein Job-Fenster: die
-    _JobRssWache misst das Job-WACHSTUM, und die gemessene ~1-GB-Bauspitze
-    obendrauf auf typisch 2,4-2,7 GB Job-Wachstum liesse bei der 4096er-
-    Default-Grenze nur ~10 %% Luft (Bauplan B1/W2.9). Faellt der Bau aus
-    (fremdes Modell, Graph-Fehler), traegt die Instanz ok=False und die Ernte
-    laeuft DEKLARIERT ohne v weiter."""
+    bei Modellwechsel. GEBRAUCHT wird sie ausschliesslich vom Ernte-Job, und
+    nur von dort wird sie geholt — ueber _normmass_fuer_ernte, das Budget und
+    Anmeldung bei der RSS-Wache davorsetzt. Faellt der Bau aus (fremdes
+    Modell, Graph-Fehler), traegt die Instanz ok=False und die Ernte laeuft
+    DEKLARIERT ohne v weiter."""
     global _normmass
     import face_audit
     modell = face_audit.aktuelles_modell()
@@ -83,17 +84,191 @@ def _normmass_holen():
     return _normmass
 
 
+# Bauspitze des NormMass-ERSTBAUS, gemessen 24.08.2026 auf der Projektmaschine
+# (LXC, Intel Core Ultra 9 285H mit NPU; frischer Prozess, VmHWM aus
+# /proc/self/status, Sockel 58 MB nach den Importen):
+#   ERSTBAU mit Kompilat-Cache (der Weg im Dienst)   2675-2690 MB, 9-10 s
+#   Erstbau ohne Cache (nackter CLI-Lauf)            2025-2251 MB
+#   Folgebau aus warmem Cache                        1997 MB, 4,2 s
+#   reiner CPU-Weg (SUSLIK_NORM_DEVICE=CPU)          1069 MB
+# Die Spitze traegt die Geraete-Session, die CPU-Session der Kreuzprobe und beim
+# Erstbau zusaetzlich das zu schreibende Kompilat (2x ~126 MB). Genommen wird
+# der groesste gemessene Wert: beide Verbraucher unten (Budget-Untergrenze,
+# Wachstums-Zugestaendnis) werden falsch, wenn die Zahl zu klein ist.
+_NORMMASS_BAUSPITZE_MB = 2700
+_NORMMASS_MARGE_MB = 256          # dieselbe Marge wie der Budget-Boden in _koerper_budget
+
+
+def _laut(text):
+    """Eine Zeile ungepuffert auf fd 2. WAEHREND eines Jobs liegt fd 2 per dup2
+    auf der Job-Logdatei (_fd_umleitung) — os.write landet dort sofort, ein
+    Kill mitten im Bau laesst die Zeile also stehen. sys.stderr waere derselbe
+    fd, aber mit Python-Puffer davor."""
+    try:
+        os.write(2, (text + "\n").encode())
+    except Exception:
+        pass
+
+
+def _normmass_fuer_ernte(wache=None):
+    """NormMass fuer EINEN Ernte-Job. None = dieser Lauf faehrt ohne Vorrat.
+
+    Zwei Vorbedingungen haengen am ERSTBAU, nicht am Gebrauch (warm ist er
+    gratis, deshalb der fruehe Rueckweg):
+
+    1. BUDGET: die Spitze oben faellt in einem Prozess an, den die cgroup des
+       Containers toetet, wenn sie nicht hineinpasst. Ist die Grenze lesbar
+       und zu knapp, faellt der Vorrat DIESES Laufs laut aus — nachholbar,
+       waehrend ein Kernel-OOM den ganzen Job und den Worker mitnaehme.
+    2. RSS-WACHE: Regel 2 der _JobRssWache misst das WACHSTUM dieses Jobs
+       gegen die Politik-Grenze (worker_rss_max_mb). Der Bau ist Wachstum,
+       das nicht dem Ernte-Job gehoert; ohne Anmeldung riebe er einen
+       unschuldigen Job an der Grenze auf. Angemeldet wird nur bei echtem
+       Erstbau und nur an DIESER Wache, also fuer diesen einen Job.
+
+    Ein Modellwechsel im laufenden Worker laesst _normmass_holen ebenfalls neu
+    bauen (Neubau-Zweig dort); im Ernte-Lauf steht das Modell fest, deshalb
+    zaehlt hier der Erstbau."""
+    if _normmass is not None:
+        return _normmass_holen()
+    frei = _cgroup_frei_mb()
+    noetig = _NORMMASS_BAUSPITZE_MB + _NORMMASS_MARGE_MB
+    if 0 <= frei < noetig:
+        _laut(f"worker: learning stock skipped this run — free memory {frei} MB "
+              f"< build peak {_NORMMASS_BAUSPITZE_MB} MB + {_NORMMASS_MARGE_MB} MB "
+              f"margin (harvest continues without the feature norm)")
+        return None
+    if wache is not None and wache.grenze:   # 0 = Politik unbekannt: dort wacht nur
+        wache.grenze += _NORMMASS_BAUSPITZE_MB   # Regel 3, und die darf nichts erben
+    _laut("worker phase: building feature-norm session")
+    nm = _normmass_holen()
+    if getattr(nm, "ok", False):
+        _laut(f"worker phase: feature-norm ready on {nm.device}")
+    return nm
+
+
+# Bauspitze der RECHENPROBE (Lieferung C, analysen/15 §4), gemessen 24.08.2026 auf der
+# Projektmaschine (LXC, Intel Core Ultra 9 285H mit iGPU + NPU, Backend openvino:MIXED,
+# Norm auf NPU; frischer Prozess je Lauf, VmHWM aus /proc/self/status, voller Lauf ueber
+# alle sechs geprueften Modelle des Vertrags):
+#   OV-Blob-Cache UND Treiber-Cache leer      2434 MB, 42,7 s
+#   OV-Blob-Cache leer, Treiber-Cache warm    2387 MB, 23,6 s
+#   beide warm (Lauf 2 / Lauf 3)              1986 / 1985 MB, 16,9 / 13,2 s
+# Die Spitze traegt IMMER nur EINE Session (die Probe ist strikt seriell — die
+# CPU-Ausgaenge ueberleben als Zahlen, die CPU-Session nicht); den Ausschlag gibt das
+# groesste Modell des Vertrags, der 260-MB-adaface-Kopf samt seiner Graph-Variante.
+# Genommen wird der groesste gemessene Wert, aufgerundet: eine zu kleine Zahl macht die
+# Budget-Pruefung unten wertlos, und genau dieser Fall (unbudgetierte Bauspitze in einem
+# Prozess, den die cgroup toetet) ist die Feld-Regression, die Lieferung A behoben hat.
+_RECHENPROBE_SPITZE_MB = 2500
+_RECHENPROBE_MARGE_MB = 256       # dieselbe Marge wie _NORMMASS_MARGE_MB / _koerper_budget
+
+
+def _rechenprobe_bauer(quelle, geraet, precision=None):
+    """Der ECHTE Session-Bauer der Rechenprobe — die einzige Stelle, an der sie
+    Aussenwelt beruehrt (core/rechenprobe.messen kennt kein onnxruntime).
+
+    quelle    Modell-Pfad ODER Graph-Bytes (ort.InferenceSession nimmt beides; die
+              Feature-Norm ist eine Graph-Variante desselben adaface-Files).
+    geraet    (kind, geraet) — ("cpu", None) fuer die Referenz, sonst das Betriebsgeraet.
+    precision OpenVINO-Rechenpraezision ("FP32") oder None = Voreinstellung (fp16).
+
+    KEIN STILLER CPU-RUECKFALL, und das ist der Kern: face_audit._ort_session taugt fuer
+    eine Diagnose NICHT — es faellt bei Nichtbindung auf CPU zurueck und liefert trotzdem
+    eine Session. Die Probe verglich dann CPU gegen CPU und meldete "maxdiff 0.0 = alles
+    gut" (Begruendung wortgleich in tester/gputest_kommandos_tokn59.md §1). Hier wird
+    deshalb nach JEDEM Bau geprueft, ob der EP wirklich in get_providers() steht, und
+    sonst geworfen — die Messfunktion kann diese Klasse konstruktiv nicht selbst fangen.
+
+    Der Aufbau ist der von face_audit.NormMass._feature_norm_session: Geraeteknoten VOR
+    dem Versuch pruefen (sonst nur Treiber-Spam), Kompilat-Cache aus SCRATCH_DIR (ohne
+    ihn kompiliert OpenVINO bei JEDEM Bau neu), Pseudo-Geraete (GPU_FP32) aus
+    face_audit.NORM_PSEUDO_GERAETE aufloesen statt aus einem zweiten Literal."""
+    import glob as _glob
+    import face_audit
+    import onnxruntime as ort
+    kind, dev = (geraet if isinstance(geraet, (tuple, list)) else ("cpu", None))
+    dev = str(dev or "").upper()
+    if kind == "cpu" or not dev:
+        return ort.InferenceSession(quelle, providers=["CPUExecutionProvider"],
+                                    sess_options=face_audit._ort_thread_opts())
+    from core.registry import ep_von
+    soll = ep_von(kind)
+    if soll not in ort.get_available_providers():
+        raise ValueError(f"{kind}:{dev}: {soll} not available in this image")
+    knoten = face_audit.geraete_knoten_muster(dev if kind == "openvino" else
+                                              ("NVIDIA" if kind == "cuda" else "KFD"))
+    if knoten and not _glob.glob(knoten):
+        raise ValueError(f"{kind}:{dev}: no device node ({knoten})")
+    if kind == "openvino":
+        pseudo = face_audit.NORM_PSEUDO_GERAETE.get(dev)
+        opts = {"device_type": pseudo["ov_device"] if pseudo else dev}
+        if precision or pseudo:
+            opts["precision"] = precision or pseudo["precision"]
+        _scratch = (os.environ.get("SCRATCH_DIR") or "").strip()
+        if _scratch:
+            cache = os.path.join(_scratch, "ov_cache")
+            try:
+                os.makedirs(cache, exist_ok=True)
+                opts["cache_dir"] = cache
+            except OSError:      # read-only Volume: dann ohne Cache bauen — der Ausfall
+                pass             # des Caches ist kein Grund, das Geraet zu verlieren
+        s = ort.InferenceSession(quelle, providers=["OpenVINOExecutionProvider"],
+                                 provider_options=[opts],
+                                 sess_options=face_audit._ort_thread_opts())
+    else:                        # cuda/migraphx: keine Praezisions-Achse (die Option
+        try:                     # existiert dort nicht), Geraetenummer wie _ort_session
+            _did = int(dev)
+        except (TypeError, ValueError):
+            _did = 0
+        # Provider-Liste wortgleich face_audit._ort_session (Beschleuniger PLUS
+        # CPU-Rueckfall): ohne den Rueckfall bricht der Session-Bau, sobald EIN Knoten
+        # des Graphen auf dem EP nicht laeuft. Still wird das trotzdem nicht — die
+        # Bind-Pruefung unten sieht, ob der Beschleuniger ueberhaupt registriert ist,
+        # und genau daran erkennt auch _ort_session den stillen CPU-Rueckfall.
+        s = ort.InferenceSession(quelle, providers=[(soll, {"device_id": _did}),
+                                                    "CPUExecutionProvider"],
+                                 sess_options=face_audit._ort_thread_opts())
+    if soll not in s.get_providers():
+        raise ValueError(f"{kind}:{dev}: provider did not bind")
+    return s
+
+
+def _rechenprobe_fuer_job(job):
+    """Die Rechenprobe EINES Jobs. -> dict fuer die Job-Antwort.
+
+    Budget VOR dem Bauen, exakt das Muster von _normmass_fuer_ernte: die Spitze faellt in
+    einem Prozess an, den die cgroup des Containers toetet, wenn sie nicht hineinpasst.
+    Reicht sie nicht, wird NICHT gemessen und das laut gesagt — ein Kernel-OOM naehme den
+    Boot-Selbstcheck mit."""
+    from core import rechenprobe as _rp
+    frei = _cgroup_frei_mb()
+    noetig = _RECHENPROBE_SPITZE_MB + _RECHENPROBE_MARGE_MB
+    if 0 <= frei < noetig:
+        grund = (f"compute probe skipped — free memory {frei} MB < probe peak "
+                 f"{_RECHENPROBE_SPITZE_MB} MB + {_RECHENPROBE_MARGE_MB} MB margin")
+        _laut("worker: " + grund)
+        return {"rechenprobe": [], "rechenprobe_grund": grund}
+    _laut("worker phase: compute probe")
+    from core.registry import MODELL_VERTRAG
+    zeilen = _rp.messen(MODELL_VERTRAG, _rechenprobe_bauer,
+                        zeitbudget_s=float(job.get("zeitbudget_s") or 60.0),
+                        backend_geraet_je_task=job.get("backend_geraet_je_task") or {})
+    _laut("worker phase: compute probe done")
+    return {"rechenprobe": zeilen}
+
+
 def _strukturmass_holen():
     """Warme StrukturMass — HIER GILT DAS GEGENTEIL DER NormMass-REGEL.
 
-    NormMass wird eager am Prozess-Start gebaut, weil ihre ~1-GB-Bauspitze sonst
-    in ein _JobRssWache-Fenster fiele. StrukturMass ist umgekehrt: ihr 5-MB-Modell
-    kostet NEBEN einer schon warmen Session gemessen 0 MB RSS und 0,2 s — in einem
-    NACKTEN Prozess dagegen +464 MB (nicht das Modell, sondern das Plugin, das
-    dort erst aufgebaut wuerde). Deshalb LAZY beim ersten Ernte-Job,
-    wenn Embedder und NormMass ohnehin stehen. Faellt der Bau aus, traegt die
-    Instanz ok=False und die Ernte laeuft DEKLARIERT ohne Struktur-Test weiter
-    (z["struktur_aus"])."""
+    Der NormMass-Bau braucht Budget-Pruefung und Anmeldung bei der RSS-Wache,
+    weil seine Spitze in GB rechnet (_normmass_fuer_ernte). StrukturMass ist
+    umgekehrt: ihr 5-MB-Modell kostet NEBEN einer schon warmen Session gemessen
+    0 MB RSS und 0,2 s — in einem NACKTEN Prozess dagegen +464 MB (nicht das
+    Modell, sondern das Plugin, das dort erst aufgebaut wuerde). Deshalb LAZY
+    beim ersten Ernte-Job, wenn Embedder und NormMass ohnehin stehen. Faellt
+    der Bau aus, traegt die Instanz ok=False und die Ernte laeuft DEKLARIERT
+    ohne Struktur-Test weiter (z["struktur_aus"])."""
     global _strukturmass
     import face_audit
     if _strukturmass is None:
@@ -471,7 +646,10 @@ def _job_ausfuehren(job, antwort_out=None):
                 try:
                     # Vorrats-Gate nur, wenn das eingefrorene Job-Regime die
                     # vorrat-Keys traegt (alte Manifeste: None -> Alt-Verhalten).
-                    nm = (_normmass_holen()
+                    # Der Bau selbst liegt hinter Budget und Wachen-Anmeldung
+                    # (_normmass_fuer_ernte) — er ist der einzige Grund, aus dem
+                    # dieser Prozess ueberhaupt eine NormMass haelt.
+                    nm = (_normmass_fuer_ernte(wache)
                           if _ernte.vorrat_schwellen_da(job["schwellen"]) else None)
                     zusatz = _ernte.ernte_event(
                         vid, eid, job.get("kamera"), float(job.get("ts") or 0),
@@ -479,9 +657,19 @@ def _job_ausfuehren(job, antwort_out=None):
                         job["lauf_dir"], emb=face_audit.Embedder(), norm_mass=nm,
                         struktur_mass=(_strukturmass_holen()
                                        if job["schwellen"].get("struktur_min")
-                                       else None))
+                                       else None),
+                        # .33x DATEIQUELLE: Herkunft aus dem Job in die
+                        # Kandidaten-Zeile (Bauplan analysen/12). Alt-Jobs ohne
+                        # das Feld liefern None = Frigate, wie bisher.
+                        quelle=job.get("quelle"))
                 finally:
                     clipcache.frei(eid)   # nie eine Pin-Waise (Size-Cap)
+            elif typ == "rechenprobe":
+                # Lieferung C (analysen/15 §4): laeuft im BOOT-EXKLUSIVFENSTER als
+                # eigener WorkerProzess (verifyd.startup_selfcheck, Schritt 8) — dort
+                # ist die GPU frei. Der Prozess LIEFERT nur Daten; gedruckt wird vom
+                # Hauptprozess, sonst stuende das Ergebnis nicht im Docker-Log.
+                zusatz = _rechenprobe_fuer_job(job)
             elif typ == "koerper":
                 # P1 (.202, konzept_speicher.md): das Koerper-URTEIL laeuft im
                 # personwork-Prozess statt als ungedeckelter Thread im Main —
@@ -561,12 +749,6 @@ def _patch_embedder():
 
 def main():
     _patch_embedder()
-    if os.environ.get("SUSLIK_VORRAT") == "1":
-        # Vorrat aktiv (Dienst setzt den Schalter aus seiner Config beim
-        # Worker-Start): NormMass JETZT bauen — die ~1-GB-Bauspitze faellt
-        # damit VOR dem ersten Job an, ausserhalb jedes _JobRssWache-Fensters
-        # (Bauplan B1, W2.9-Vorbedingung). Dauer ~3 s, danach ~300 MB Sockel.
-        _normmass_holen()
     idle_s = int(os.environ.get("WORKER_IDLE_S", "900"))
     fd = int(os.environ["WORKER_ANTWORT_FD"])
     out = os.fdopen(fd, "w", buffering=1)

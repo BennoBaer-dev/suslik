@@ -12,7 +12,9 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.0.331"   # .322 = RELEASE-KANDIDAT (.312-.319 gingen nie raus; .319 lief
+STAND = "0.1.0.339"   # .333-.335 = reine STAND-Bumps ohne Box-Eintrag (UI-Fix
+                      # Anker-Kacheln, Audit-Fixes, det-size-Logfilter; Box-Abstimmung
+                      # kommt mit dem naechsten Release). .322 = RELEASE-KANDIDAT (.312-.319 gingen nie raus; .319 lief
                       # auf Prod, wurde aber nie veroeffentlicht — die Box-Aenderung
                       # vom 22.08. braucht ein eigenes Image, weil ein bereits
                       # gebauter Tag nie stillschweigend neuen Inhalt bekommt).
@@ -312,6 +314,55 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # .339 — MIT USER ABGESTIMMT (24.08. ~23:10, Wortlaut-Freigabe "go" nach zwei
+    # Kuerzungsrunden: Log-Hygiene-Details und der 3-GB-Erststart-Hinweis flogen
+    # raus — "so etwas gehoert doch nicht ins whats new"). ZWEI Punkte: der
+    # Feld-Fix (betont, Tester-Dank ohne Namen) und die Start-Rechenpruefung
+    # samt FP32-Rettung aelterer GPUs. DE ist die Vorlage; EN/ES/IT/FR von
+    # Muttersprachler-Agenten nach begriffe_tabellen.md FINAL.
+    ("0.1.0.339", (
+        {"betont": True,
+         "de": "Auf Maschinen mit wenig Arbeitsspeicher startete der "
+               "Analyse-Prozess immer wieder neu, und die Erkennung stand "
+               "still — behoben. Gefunden hat es ein Tester im Feld, danke "
+               "dafür.",
+         "en": "On machines with little memory the analysis process kept "
+               "restarting and recognition stood still. Fixed. A tester out "
+               "in the field found it, thanks for that.",
+         "es": "En equipos con poca memoria RAM, el proceso de análisis se "
+               "reiniciaba una y otra vez y el reconocimiento se quedaba "
+               "parado. Ya está corregido. Lo encontró un usuario que lo "
+               "estaba probando en su instalación, gracias.",
+         "it": "Su macchine con poca memoria RAM il processo di analisi si "
+               "riavviava di continuo e il riconoscimento restava fermo. Ora "
+               "è risolto. L'ha trovato una persona che lo sta provando sul "
+               "campo, grazie.",
+         "fr": "Sur les machines avec peu de mémoire vive, le processus "
+               "d'analyse redémarrait sans arrêt et la reconnaissance restait "
+               "à l'arrêt. C'est corrigé. C'est un testeur sur le terrain qui "
+               "l'a trouvé, merci à lui."},
+        {"de": "Beim Start prüft suslik jetzt, ob GPU und NPU wirklich "
+               "richtig rechnen, nicht nur ob sie vorhanden sind. Rechnet "
+               "eine ältere GPU ungenau, nutzt suslik sie in einem genaueren "
+               "Modus weiter, statt sie zu verwerfen.",
+         "en": "At startup suslik now checks whether GPU and NPU really "
+               "compute correctly, not just whether they are there. If an "
+               "older GPU computes imprecisely, suslik keeps using it in a "
+               "more precise mode instead of dropping it.",
+         "es": "Al arrancar, suslik ahora comprueba si la GPU y la NPU "
+               "calculan bien de verdad, no solo si están presentes. Si una "
+               "GPU antigua calcula con poca precisión, suslik la sigue "
+               "usando en un modo más preciso en lugar de dejar de usarla.",
+         "it": "All'avvio suslik controlla ora se GPU e NPU calcolano davvero "
+               "in modo corretto, non solo se ci sono. Se una GPU più vecchia "
+               "calcola in modo impreciso, suslik continua a usarla in una "
+               "modalità più precisa invece di rinunciarci.",
+         "fr": "Au démarrage, suslik vérifie maintenant si le GPU et le NPU "
+               "calculent vraiment correctement, et pas seulement s'ils sont "
+               "présents. Si un GPU plus ancien calcule de façon imprécise, "
+               "suslik continue de l'utiliser dans un mode plus précis au "
+               "lieu de l'abandonner."},
+    )),
     # .313 (als .312 vorbereitet, 21.08.) — MIT USER ABGESTIMMT (21.08. mittags): drei Punkte, deutscher
     # Wortlaut vom User freigegeben ("das passt, go"), Vorgabe "kürzer, kein
     # KI-Stil, kurz und knapp" (Humanizer-Durchgang); EN daraus, ES/IT/FR
@@ -328,34 +379,15 @@ HIGHLIGHTS = (
     # Begriffe nach begriffe_tabellen.md FINAL (IT clip=video, FR clip=sequence,
     # live = en directo / in diretta / en direct), FR bewusst vous.
     ("0.1.0.331", (
-        # GANZ OBEN, vom User am 21.08. abends verlangt und am 22.08. neu
-        # formuliert: NICHT "wurde damit gebaut", sondern MIT UNTERSTUETZUNG
-        # gebaut — es muss klar sein, dass der Betreiber baut und die KI
-        # nur unterstuetzt.
-        # Dazu die Bitte um Rueckmeldung mit der oeffentlichen Adresse.
-        {"betont": True,
-         "en": "I built this version with support from a different AI model "
-               "(Claude Opus instead of Claude Fable 5). The quality gate is "
-               "green, but there may still be more mistakes than usual. I'd "
-               "really love to hear from you: suslik_dev@posteo.de",
-         "de": "Diese Version habe ich mit Unterstützung eines anderen "
-               "KI-Modells gebaut (Claude Opus statt Claude Fable 5). Das "
-               "Qualitätsgate ist grün, trotzdem können mehr Fehler drin sein "
-               "als sonst. Über Rückmeldungen freue ich mich sehr: "
-               "suslik_dev@posteo.de",
-         "es": "Esta versión la he creado con el apoyo de otro modelo de IA "
-               "(Claude Opus en lugar de Claude Fable 5). El control de calidad "
-               "está en verde, pero puede contener más errores de lo normal. Me "
-               "alegra mucho recibir comentarios: suslik_dev@posteo.de",
-         "it": "Questa versione l'ho creata con il supporto di un altro modello "
-               "di IA (Claude Opus invece di Claude Fable 5). Il controllo "
-               "qualità è verde, ma potrebbe contenere più errori del solito. "
-               "Mi fa molto piacere ricevere un riscontro: suslik_dev@posteo.de",
-         "fr": "J'ai créé cette version avec l'aide d'un autre modèle d'IA "
-               "(Claude Opus au lieu de Claude Fable 5). Le contrôle qualité "
-               "est au vert, mais elle peut contenir plus d'erreurs que "
-               "d'ordinaire. Vos retours me font très plaisir : "
-               "suslik_dev@posteo.de"},
+        # Der KI-Modell-Hinweis (betonter Kopf-Eintrag der .331-Box: "mit
+        # Unterstuetzung eines anderen KI-Modells gebaut ... mehr Fehler als
+        # sonst") ist seit .336 ENTFERNT — User-Entscheid 24.08. abends
+        # ("whats new nehmen wir den ki hinweis raus"): .336 behebt genau die
+        # Regression jener Phase, gebaut wird wieder mit dem Stamm-Modell,
+        # der Vorbehalt waere irrefuehrend. Das VEROEFFENTLICHTE .331-Image
+        # behaelt seine Box unveraendert (ein gebauter Tag bekommt nie
+        # stillschweigend neuen Inhalt); nur Images ab .336 zeigen die Box
+        # ohne den Eintrag.
         # EIN Punkt fuer den ganzen Lern-Strang (.299-.318).
         {"en": "Learning faces got better: after every pass suslik looks for "
                "usable pictures on its own, rates their quality, and no longer "

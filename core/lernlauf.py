@@ -321,7 +321,9 @@ def lauf_loeschen(data_dir, lauf_id):
     Loeschung wird NACHGEZAEHLT (Review .125: nie eine Loeschung behaupten, die
     nicht stattfand) -> dateien = wirklich entfernt, rest = liegen geblieben,
     ordner = Ordner ist weg.
-    -> {entfernt, benannt, verworfen, kaputt, dateien, rest, ordner}."""
+    -> {entfernt, benannt, verworfen, kaputt, dateien, rest, ordner,
+        marken_frei, marken_geteilt} (.334: Dauermarken-Freigabe der
+        Datei-Importe, s. Block am Ende)."""
     p = _pfad(data_dir, "anker.jsonl")
     zaehl = {"entfernt": 0, "benannt": 0, "verworfen": 0, "kaputt": 0,
              "dateien": 0, "rest": 0, "ordner": True}
@@ -384,6 +386,14 @@ def lauf_loeschen(data_dir, lauf_id):
                          if os.path.isdir(ordner) else 0)
         zaehl["dateien"] = vorher - zaehl["rest"]
         zaehl["ordner"] = not os.path.isdir(ordner)
+    # .334 (Audit-Befund 24.08.): Dauermarken eingespeister Clips DIESES Laufs
+    # freigeben — vorher blieben Datei-Importe fuer immer vom Aufraeumer
+    # ausgenommen (die Marke sperrt Alter- UND Size-Zweig, behalten_loesen
+    # hatte keinen Aufrufer). Refcount: eine Marke, die ein ANDERER Lauf
+    # mittraegt, bleibt stehen (frames.behalten_freigeben_lauf).
+    from core import frames as _fr
+    zaehl["marken_frei"], zaehl["marken_geteilt"] = \
+        _fr.behalten_freigeben_lauf(data_dir, lauf_id)
     return zaehl
 
 
@@ -398,7 +408,8 @@ def alte_laeufe_loeschen(data_dir):
     saetze, _k = anker_lesen(data_dir)
     ids = sorted({str((s.get("lauf") or {}).get("lauf_id") or "") for s in saetze} - {""})
     gesamt = {"entfernt": 0, "benannt": 0, "verworfen": 0, "kaputt": 0,
-              "dateien": 0, "rest": 0, "ordner": True, "laeufe": 0}
+              "dateien": 0, "rest": 0, "ordner": True, "laeufe": 0,
+              "marken_frei": 0, "marken_geteilt": 0}
     if len(ids) < 2:
         return gesamt, [], (ids[-1] if ids else None)
     lauf, _f = lauf_lesen(data_dir)
@@ -409,7 +420,8 @@ def alte_laeufe_loeschen(data_dir):
         if lid == aktiv:
             continue                               # laufenden Lauf NIE anfassen
         z = lauf_loeschen(data_dir, lid)
-        for k in ("entfernt", "benannt", "verworfen", "dateien", "rest"):
+        for k in ("entfernt", "benannt", "verworfen", "dateien", "rest",
+                  "marken_frei", "marken_geteilt"):
             gesamt[k] += z[k]
         gesamt["kaputt"] = z["kaputt"]             # Stand nach letztem Lauf, keine Summe
         gesamt["ordner"] = gesamt["ordner"] and z["ordner"]

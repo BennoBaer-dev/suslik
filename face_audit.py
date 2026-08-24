@@ -136,11 +136,37 @@ def geraete_knoten_muster(dev):
     empfiehlt genau diese Formen) werden wie GPU/NPU behandelt (Widerleger-Fund .66).
     MIXED erreicht _ort_session nie als dev (Aufrufer verteilen auf GPU+NPU); AUTO
     kann bei DIREKTEM CLI-Lauf ankommen — das Mapping liefert dann None und das
-    Verhalten bleibt wie vor Task #15 (verifyd loest AUTO vorher auf)."""
+    Verhalten bleibt wie vor Task #15 (verifyd loest AUTO vorher auf).
+    Pseudo-Geraete der Norm-Kette (GPU_FP32) liefern den Knoten ihres ECHTEN
+    OpenVINO-Geraets — sie sind dasselbe Stueck Silizium, nur anders kompiliert."""
     # P3.1: Zuordnung lebt in core.registry (KNOTEN_BASIS) — Signatur und
     # Basislookup-Verhalten (GPU.1 -> GPU, unbekannt -> None) unveraendert.
     from core.registry import knoten_von
-    return knoten_von(dev)
+    _p = NORM_PSEUDO_GERAETE.get(str(dev or "").upper())
+    return knoten_von(_p["ov_device"] if _p else dev)
+
+
+# Pseudo-Geraete: EIN Name der Norm-Kette, der kein eigenes OpenVINO-Device ist,
+# sondern dasselbe Geraet mit anderer Rechen-Praezision. EINE Quelle fuer Knoten-
+# Lookup UND Session-Bau (K3-Regel: keine zweite verstreute Aufzaehlung).
+# ACHTUNG BEIM AUFRAEUMEN: die Definition steht bewusst UNTER der Knoten-Hilfe und
+# nicht darueber. Das Gate (tools/qs.sh, Stufe S1) schneidet den Quelltext zwischen
+# den Definitionszeilen von geraete_knoten_muster und der naechsten Funktion heraus
+# und fuehrt nur diesen Ausschnitt aus, um den Knoten-Lookup ohne onnxruntime-Import
+# zu pruefen. Wandert die Konstante darueber, faellt sie aus dem Ausschnitt und der
+# Lookup wirft dort NameError. Aus demselben Grund darf in diesem Block auch kein
+# Kommentar die Zeichenfolge der beiden Schnittmarken woertlich enthalten — genau
+# das ist beim ersten Bauversuch am 24.08. passiert, der Schnitt lief in den
+# Kommentar statt in die Funktion.
+NORM_PSEUDO_GERAETE = {
+    # GPU_FP32: die Intel-iGPU, aber mit erzwungener FP32-Rechnung statt der
+    # OpenVINO-Voreinstellung fp16. Gemessen 24.08.2026 (Tabelle bei
+    # NormMass.NORM_KREUZ_MAX): fp16 weicht auf dem Gesichtsreiz bis 0,149 von der
+    # CPU ab, FP32 auf demselben Geraet 0,0000095 — auf Tokn59s Gen8 (keine
+    # fp16-Einheiten) liegt fp16 bei 105,276, dort ist FP32 die einzige Chance,
+    # die GPU ueberhaupt zu nutzen.
+    "GPU_FP32": {"ov_device": "GPU", "precision": "FP32"},
+}
 
 
 def _ort_session(kind, dev, model_file, cache=None):
@@ -382,8 +408,25 @@ class Embedder:
         RESETTETE alle Sessions still — der 16.07.-Bug, und obendrein ~17 CPU-s
         Doppelaufbau je Prozess (zweites prepare + zweites _to_backend, gemessen 26.07.).
         Der Guard darunter macht den Reset-Fall dauerhaft unmoeglich UND ueberwacht.
-        Weiterhin gilt: NIE app.prepare() direkt aufrufen, immer diese Methode."""
-        self.app.prepare(ctx_id=0, det_size=det_size)
+        Weiterhin gilt: NIE app.prepare() direkt aufrufen, immer diese Methode.
+
+        .335 (User-Fund 24.08.): insightface DRUCKT bei jedem prepare eine
+        'set det-size:'-Zeile. Die Live-Engine schaltet bei Waechtern mit
+        verschiedenen Seitenverhaeltnissen das Netz je Frame um (ein geteilter
+        Detektor-Kontext, Ping-Pong ~3/s) — 70k Zeilen in 6 h Prod-Log, echte
+        Meldungen gingen darin unter. Der Bibliotheks-Druck wird deshalb hier
+        GEFILTERT (nicht verschluckt: alles andere aus dem Fenster wird
+        weitergereicht, damit nie eine fremde Logzeile verloren geht). WAS
+        gesetzt ist, zeigen Startup-Selbstcheck und /health; die Wechselkosten
+        selbst bleiben der dokumentierte offene Messpunkt (core/livewached)."""
+        import contextlib
+        import io
+        _buf = io.StringIO()
+        with contextlib.redirect_stdout(_buf):
+            self.app.prepare(ctx_id=0, det_size=det_size)
+        for _z in _buf.getvalue().splitlines():
+            if _z.strip() and not _z.startswith("set det-size"):
+                print(_z)
         self._provider_guard("set_det_size")
 
     def _provider_guard(self, anlass):
@@ -515,6 +558,45 @@ class Embedder:
         return np.asarray(f.normed_embedding, dtype=np.float64)
 
 # ---------------------------------------------------------------- Feature-Norm (Vorrat)
+def gesichtsreiz(n=112, kontrast=1.0):
+    """Deterministischer synthetischer Gesichtsreiz (uint8, HWC, Kanalfolge BGR) —
+    der Mess-Eingang der Norm-Kreuzprobe. Kein Zufall, kein Bild auf Platte, keine
+    Personendaten: dieselbe Zahl kommt auf jeder Maschine heraus.
+
+    HERKUNFT: Rechenweg wortgleich der Funktion `face(n)` aus
+    tester/gputest_kommandos_tokn59.md (Kommando 1 und 3, am echten Fremdsystem
+    erprobt) — heller Gesichtsfleck auf einem Helligkeitsverlauf, sechs Gauss-Marken
+    fuer Augen, Brauen, Nase und Mund, die drei Kanaele leicht gegeneinander
+    verschoben. Bei kontrast=1.0 liefert diese Funktion Pixel fuer Pixel dasselbe
+    Bild wie die Vorlage; die Zahlen aus Tester-Rueckmeldungen bleiben damit direkt
+    vergleichbar.
+
+    WARUM NICHT MEHR RAUSCHEN (Grund der Umstellung, gemessen 24.08.2026): dem
+    adaface-Kopf faellt standard_normal-Rauschen auf Feature-Norm 11,63 / 12,23.
+    Die Betriebsentscheidungen fallen aber bei 21,5 / 22,0 / 23,5 / 24,0. Die alte
+    Kreuzprobe hat also an einem Arbeitspunkt gemessen, an dem gar nichts entschieden
+    wird — und dort ist der Fehler kleiner: dieselbe gesunde iGPU weicht im Rauschen
+    0,099 ab, auf diesem Gesichtsreiz 0,149 und auf echten Crops bis 0,67
+    (Nachmessung 21.08., 2052 benannte Gesichter). Zweiter Grund: SCRFD detektiert
+    Rauschen ueberhaupt nicht, derselbe Reiz traegt deshalb auch Detektions-Proben.
+
+    kontrast skaliert die Amplitude UM DEN BILDMITTELWERT (die Helligkeit bleibt,
+    der Kontrast waechst oder faellt) und verschiebt damit den Arbeitspunkt.
+    Gemessen auf CPU: Norm 24,930 (0,7) / 26,066 (1,0) / 27,048 (1,4) — real
+    gemessene Crops liegen bei 15..30, die Linien bei 21,5..24,0."""
+    y, x = np.mgrid[0:n, 0:n].astype(np.float32) / (n - 1.0)
+    v = 60 + 40 * y + 150 * np.exp(-3 * (((x - .5) / .30) ** 2 + ((y - .52) / .40) ** 2))
+    for cx, cy, rx, ry, a in ((.36, .42, .09, .05, -90), (.64, .42, .09, .05, -90),
+                              (.50, .74, .18, .05, -70), (.36, .30, .11, .03, -45),
+                              (.64, .30, .11, .03, -45), (.50, .58, .05, .10, 25)):
+        v = v + a * np.exp(-2 * (((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2))
+    if kontrast != 1.0:
+        mitte = float(v.mean())
+        v = mitte + (v - mitte) * kontrast
+    return np.stack([np.clip(v * .92, 0, 255), np.clip(v * .97, 0, 255),
+                     np.clip(v * 1.03, 0, 255)], -1).astype(np.uint8)
+
+
 class NormMass:
     """Referenzfreies Guetemass ||f|| — die Laenge des UNNORMIERTEN Feature-Vektors
     vor der L2-Normierung des adaface-Kopfs (Messreihe 20.08.2026: trennt oberes
@@ -522,7 +604,8 @@ class NormMass:
     verify_data/messungen/qualitaetsmass_20260820.json). Traeger des Lernvorrats
     (Bauplan bauplan_vorrat.md B1).
 
-    STRIKT GETRENNT vom Urteilspfad: eigene Session, IMMER CPUExecutionProvider,
+    STRIKT GETRENNT vom Urteilspfad: eigene Session, Geraet aus NORM_KETTE mit
+    Kreuzprobe gegen CPU (seit .313; die aeltere Angabe "IMMER CPU" galt bis dahin),
     exakte Batchgroessen ohne Padding. Gemessen 20.08.: ein Zusatz-Graph-Ausgang
     laesst 'embedding' auf CPU bit-genau unveraendert (maxdiff exakt 0.0),
     verschiebt es auf OpenVINO aber um 1.2e-4, und die Norm selbst schwankt dort
@@ -535,9 +618,11 @@ class NormMass:
     endet auf f -> ReduceL2 -> Div, der eine Div-Knoten liefert den Graph-
     Ausgang 'embedding'; sein erster Input IST f. Aus f/||f|| laesst sich ||f||
     nicht zurueckrechnen, darum wird f als ZUSATZ-Ausgang deklariert. Nach dem
-    Session-Bau werden ModelProto und Bytes sofort freigegeben (gemessene
-    Bauspitze sonst ~1 GB; der Bau gehoert in den Prozess-START, nie in ein
-    _JobRssWache-Fenster — Bauplan B1/W2.9).
+    Session-Bau werden ModelProto und Bytes sofort freigegeben. Der Bau bleibt
+    trotzdem teuer (gemessen 24.08.2026, VmHWM: Erstbau auf der Geraete-Kette
+    2,7 GB, aus warmem Kompilat-Cache 2,0 GB, reiner CPU-Weg 1,1 GB) — wer ihn
+    ausloest, setzt eine Budget-Pruefung davor und meldet ihn seiner
+    Speicherwache an (worker._normmass_fuer_ernte).
 
     Jede Abweichung (fremdes Modell, unerwartete Graph-Struktur, Konsistenz-
     probe schlaegt fehl) setzt ok=False mit LAUTEM stderr-Marker 'NORMMASS' —
@@ -553,12 +638,56 @@ class NormMass:
     # = 0/3/1/1 (<= 0,15 %); iGPU 31 ms, p99 0,36 / max 0,67, Kipper 25/17/5/5 (<= 1,2 %).
     # Die GPU ist damit zweite Stufe fuer Intel-Systeme OHNE NPU (sonst 232 ms je
     # Gesicht, ~50-min-Laeufe): ~1 % Kipper am Qualitaetstor sind messbar, aber kein
-    # Urteilsfehler. Kette: NPU -> GPU -> CPU; SUSLIK_NORM_DEVICE=CPU|NPU|GPU erzwingt
-    # (Messungen). Jede OV-Session wird per KREUZPROBE gegen eine CPU-Session geprueft
-    # (2 gepinnte Zufallsbilder, |dNorm| <= NORM_KREUZ_MAX), sonst LAUT naechste Stufe.
-    # CUDA/ROCm sind ungemessen und bleiben auf CPU.
-    NORM_KREUZ_MAX = 0.30
-    NORM_KETTE = ("NPU", "GPU", "CPU")
+    # Urteilsfehler.
+    #
+    # .336 FP32-STUFE (24.08.2026): zwischen GPU und CPU steht jetzt GPU_FP32 —
+    # dieselbe iGPU, aber mit erzwungener FP32-Rechnung statt der OpenVINO-
+    # Voreinstellung fp16. Anlass ist der Feldfall Tokn59 (Gen8-iGPU, keine
+    # fp16-Einheiten): seine GPU bindet, rechnet 5,9x schneller als seine CPU und
+    # wird von der Kreuzprobe mit 105,276 verworfen — auf CPU laeuft er damit in
+    # ~50-min-Laeufe. Faellt fp16, ist FP32 der letzte Halt vor der CPU, nicht der
+    # Sturz auf sie. Kette: NPU -> GPU -> GPU_FP32 -> CPU;
+    # SUSLIK_NORM_DEVICE=CPU|NPU|GPU|GPU_FP32 erzwingt. CUDA/ROCm sind ungemessen
+    # und bleiben auf CPU (ihre EPs kennen die Praezisions-Achse ohnehin nicht).
+    # Jede OV-Session wird per KREUZPROBE gegen eine CPU-Session geprueft
+    # (|dNorm| <= NORM_KREUZ_MAX auf dem gepinnten Gesichtsreiz), sonst LAUT
+    # naechste Stufe.
+    #
+    # EICHBASIS DER SCHWELLE — gemessen 24.08.2026 auf dieser Maschine (LXC suslik
+    # .168, Core Ultra 9 285H, iGPU + NPU, OpenVINO-EP, adaface_ir101, Batch 1,
+    # je 12 Wiederholungen; Reiz = gesichtsreiz() in drei Kontrast-Skalen):
+    #
+    #   Geraet          Norm 0,7   Norm 1,0   Norm 1,4   |dNorm| max   Streuung/12
+    #   CPU (Referenz)  24,930     26,066     27,048     —             0,000
+    #   NPU             24,932     26,075     27,061     0,013         0,000
+    #   GPU (fp16)      24,874 /   26,096     26,899     0,149         0,050
+    #                   24,923                                         (Skala 0,7)
+    #   GPU_FP32        24,930     26,066     27,048     0,0000095     0,000
+    #
+    # Derselbe Lauf am ALTEN Rausch-Arbeitspunkt (Norm 11,63 / 12,23): NPU 0,007,
+    # GPU fp16 0,099, GPU_FP32 0,0000067 — das Rauschen zeigt den fp16-Fehler nur
+    # zu zwei Dritteln und liegt 10 Norm-Punkte neben jeder Entscheidung.
+    #
+    # HERLEITUNG 0,10 (nicht mehr 0,30, und die 0,30 war nie am Arbeitspunkt geeicht):
+    #  * Decke aus der Entscheidungs-Sicherheit: die engsten Qualitaetslinien liegen
+    #    0,5 auseinander (21,5/22,0 und 23,5/24,0). Ein Geraet, dessen Norm um mehr
+    #    als den halben Abstand (0,25) wandert, kann Entscheidungen kippen — 0,25 ist
+    #    die absolute Obergrenze, 0,10 haelt Faktor 2,5 Abstand dazu.
+    #  * Boden aus der Messung: die NPU, das schnelle Geraet, das bestehen MUSS,
+    #    weicht 0,013 ab — Faktor 8 Luft nach oben.
+    #  * BEWUSST NICHT ERFUELLT ist "deutlich ueber jedem gesunden Geraet": die
+    #    gesunde fp16-iGPU dieser Maschine liegt mit 0,149 UEBER der Schwelle und
+    #    faellt damit auf GPU_FP32. Beides zugleich geht nicht (0,149 < x < 0,25
+    #    waere weder das eine noch das andere "deutlich"), und dann gewinnt die
+    #    Entscheidungs-Sicherheit: dieselbe iGPU wich auf echten Crops bis 0,67 ab
+    #    (Nachmessung 21.08.), der Reiz unterschaetzt das echte Material also um
+    #    Faktor ~4,5. Dazu ist fp16 hier nicht einmal reproduzierbar (0,050
+    #    Streuung zwischen zwoelf Laeufen derselben Session, waehrend NPU und FP32
+    #    bitgenau wiederholen). Der Preis ist Rechenzeit, nicht das Geraet: der
+    #    Rueckfall geht auf GPU_FP32 (0,0000095), nicht auf die CPU.
+    NORM_KREUZ_MAX = 0.10
+    NORM_KREUZ_SKALEN = (0.7, 1.0, 1.4)
+    NORM_KETTE = ("NPU", "GPU", "GPU_FP32", "CPU")
 
     def __init__(self, modell=None, device=None):
         import onnxruntime as ort
@@ -633,9 +762,11 @@ class NormMass:
 
     @classmethod
     def _feature_norm_session(cls, pfad, device="CPU", roh=None):
-        """Session fuer ein Geraet: CPU = CPUExecutionProvider; NPU/GPU = OpenVINO-EP,
-        nur wenn der EP da ist, der Geraeteknoten existiert und der Provider WIRKLICH
-        bindet (sonst ValueError — der Aufrufer geht die Kette weiter)."""
+        """Session fuer ein Geraet: CPU = CPUExecutionProvider; NPU/GPU/GPU_FP32 =
+        OpenVINO-EP, nur wenn der EP da ist, der Geraeteknoten existiert und der
+        Provider WIRKLICH bindet (sonst ValueError — der Aufrufer geht die Kette
+        weiter). GPU_FP32 ist ein Pseudo-Geraet (NORM_PSEUDO_GERAETE): dasselbe
+        device_type GPU, aber mit precision=FP32 statt der Voreinstellung fp16."""
         import onnxruntime as ort
         roh = roh if roh is not None else cls._graph_bytes(pfad)
         dev = str(device or "CPU").upper()
@@ -648,8 +779,33 @@ class NormMass:
         knoten = geraete_knoten_muster(dev)
         if knoten and not _glob.glob(knoten):
             raise ValueError(f"{dev}: no device node ({knoten})")
+        pseudo = NORM_PSEUDO_GERAETE.get(dev)
+        opts = {"device_type": pseudo["ov_device"] if pseudo else dev}
+        if pseudo:
+            opts["precision"] = pseudo["precision"]
+        # Kompilat-Cache ins Volume: ohne cache_dir kompiliert OpenVINO diesen
+        # Graphen bei JEDEM Bau neu. SCRATCH_DIR (<data_dir>/clips) setzt der
+        # Dienst beim Worker-Start; im Dienst-Prozess selbst und im nackten
+        # CLI-Lauf fehlt sie — dann bleibt es beim Kompilieren, denn ein leerer
+        # oder fehlender Wert darf hier NIE landen (als String "None" legte
+        # OpenVINO einen Ordner "None/" im CWD an, s. _ort_session).
+        # GPU und GPU_FP32 teilen sich DIESES Verzeichnis, und das ist geprueft,
+        # nicht angenommen: Probe 24.08.2026 in einem leeren Cache, erst fp16
+        # bauen, dann FP32 im SELBEN Verzeichnis — OpenVINO legte einen ZWEITEN
+        # Blob an (134 MB fp16 gegen 264 MB FP32, exakt die doppelten Gewichte)
+        # und lieferte die saubere FP32-Norm 26,06628 statt der fp16-Zahl
+        # 26,14316. Der Cache-Schluessel enthaelt die Praezision, ein eigenes
+        # Unterverzeichnis waere nur doppelte Ablage.
+        _scratch = (os.environ.get("SCRATCH_DIR") or "").strip()
+        if _scratch:
+            cache = os.path.join(_scratch, "ov_cache")
+            try:
+                os.makedirs(cache, exist_ok=True)
+                opts["cache_dir"] = cache
+            except OSError:      # read-only Volume: dann ohne Cache bauen — der
+                pass             # Ausfall des Caches ist kein Grund, das Geraet zu verlieren
         s = ort.InferenceSession(roh, providers=["OpenVINOExecutionProvider"],
-                                 provider_options=[{"device_type": dev}],
+                                 provider_options=[opts],
                                  sess_options=_ort_thread_opts())
         if "OpenVINOExecutionProvider" not in s.get_providers():
             raise ValueError(f"{dev}: provider did not bind")
@@ -657,10 +813,11 @@ class NormMass:
 
     @classmethod
     def _session_waehlen(cls, pfad, device=None):
-        """Kette NPU -> GPU -> CPU (NORM_KETTE; oder erzwungenes Geraet ueber
-        device=/SUSLIK_NORM_DEVICE): OV-Sessions bestehen eine Kreuzprobe gegen
-        CPU (|dNorm| <= NORM_KREUZ_MAX auf 2 gepinnten Bildern), sonst LAUT
-        weiter zur naechsten Stufe. Die GPU-Stufe traegt Intel-Systeme OHNE NPU
+        """Kette NPU -> GPU -> GPU_FP32 -> CPU (NORM_KETTE; oder erzwungenes Geraet
+        ueber device=/SUSLIK_NORM_DEVICE): OV-Sessions bestehen eine Kreuzprobe gegen
+        CPU (|dNorm| <= NORM_KREUZ_MAX auf dem gepinnten Gesichtsreiz), sonst LAUT
+        weiter zur naechsten Stufe. Die GPU-Stufen tragen Intel-Systeme OHNE NPU,
+        GPU_FP32 faengt Geraete auf, deren fp16-Rechnung die Norm verschiebt
         (Begruendung und Messwerte im GERAETEWAHL-Kommentar oben).
         -> (session, geraetename)."""
         roh = cls._graph_bytes(pfad)
@@ -680,25 +837,61 @@ class NormMass:
                     raise ValueError(f"cross-check vs CPU off by {abw:.3f}")
                 sys.stderr.write(f"[face_audit] NORMMASS: feature norm on {dev} "
                                  f"(cross-check vs CPU max |dNorm| {abw:.3f})\n")
+                # Die CPU-Referenz hat ihren einzigen Zweck erfuellt. Beide
+                # Sessions gleichzeitig zu halten IST die Bauspitze (gemessen
+                # 24.08.2026: 2,7 GB Geraet+CPU gegen 1,1 GB CPU allein). Das
+                # OS bekommt den Speicher damit NICHT zurueck (ORT-Arena,
+                # Soak-Befund 27.07.), aber der Prozess kann ihn wiederverwenden
+                # statt neben der Arena weiterzuwachsen.
+                del cpu
+                import gc
+                gc.collect()
                 return s, dev
             except Exception as ex:                            # noqa: BLE001
                 sys.stderr.write(f"[face_audit] NORMMASS: {dev} not used "
                                  f"({type(ex).__name__}: {str(ex)[:120]}) -> next\n")
         return (cpu or cls._feature_norm_session(pfad, "CPU", roh)), "CPU"
 
-    @staticmethod
-    def _kreuzprobe(sess_a, sess_b):
-        """Groesste Norm-Abweichung zweier Sessions auf 2 gepinnten Zufallsbildern
-        (Batch 1 je Bild — so laeuft die Ernte)."""
+    @classmethod
+    def _kreuz_eingaben(cls):
+        """Die gepinnten Kreuzproben-Eingaenge: der Gesichtsreiz in
+        NORM_KREUZ_SKALEN, vorverarbeitet WORTGLEICH feature_norm (Kanalfolge des
+        Modells, (x-mean)/std, CHW, Batch 1 — so laeuft die Ernte). NormMass ist per
+        Konstruktion auf adaface beschraenkt (Wache in __init__), die spec kommt
+        deshalb aus MODELLE statt aus einem zweiten Literal."""
+        spec = MODELLE["adaface"]
+        aus = []
+        for k in cls.NORM_KREUZ_SKALEN:
+            img = gesichtsreiz(112, k).astype(np.float32)
+            if not spec.get("bgr"):                    # gesichtsreiz liefert BGR
+                img = img[:, :, ::-1]
+            x = (img - spec["mean"]) / spec["std"]
+            aus.append(np.ascontiguousarray(x.transpose(2, 0, 1)[None].astype(np.float32)))
+        return aus
+
+    @classmethod
+    def _kreuzprobe(cls, sess_a, sess_b):
+        """Groesste Norm-Abweichung zweier Sessions auf den gepinnten Gesichtsreizen.
+
+        UMGESTELLT 24.08.2026 — vorher liefen hier zwei standard_normal-Rauschbilder.
+        Der Grund steht bei gesichtsreiz(): Rauschen faellt dem adaface-Kopf auf Norm
+        11,63/12,23, die Entscheidungen fallen bei 21,5..24,0. Die Probe hat also an
+        einem Arbeitspunkt gemessen, an dem nichts entschieden wird, und dort den
+        fp16-Fehler unterschaetzt (gemessen 24.08.: 0,099 im Rauschen gegen 0,149 auf
+        dem Reiz, gegen bis 0,67 auf echten Crops). Drei Kontrast-Skalen statt einer,
+        weil der Fehler mit dem Arbeitspunkt wandert (fp16 hier: 0,007 / 0,030 /
+        0,149 ueber die Skalen 0,7 / 1,0 / 1,4).
+
+        Signatur bewusst unveraendert (sess_a, sess_b) — tester/gputest_kommandos_*.md
+        ruft diese Methode direkt auf, damit Tester-Zahlen vergleichbar bleiben."""
         inp = sess_a.get_inputs()[0].name
         namen = [o.name for o in sess_a.get_outputs()]
         idx = 1 - namen.index("embedding") if "embedding" in namen else 1
-        x = np.random.default_rng(11).standard_normal((2, 3, 112, 112)).astype(np.float32)
+        inp_b = sess_b.get_inputs()[0].name
         abw = 0.0
-        for i in range(2):
-            fa = np.asarray(sess_a.run(None, {inp: x[i:i + 1]})[idx], np.float32).reshape(1, -1)
-            fb = np.asarray(sess_b.run(None, {sess_b.get_inputs()[0].name: x[i:i + 1]})[idx],
-                            np.float32).reshape(1, -1)
+        for x in cls._kreuz_eingaben():
+            fa = np.asarray(sess_a.run(None, {inp: x})[idx], np.float32).reshape(1, -1)
+            fb = np.asarray(sess_b.run(None, {inp_b: x})[idx], np.float32).reshape(1, -1)
             abw = max(abw, float(abs(np.linalg.norm(fa) - np.linalg.norm(fb))))
         return abw
 

@@ -37,11 +37,17 @@ def _thumb(m, lauf_id, dim):
     Gesicht steckt ('Gesicht in Gross UND Video'). Das Roh-Bild haengt am img selbst."""
     name = html.escape(str(m.get("datei", "")).rsplit("/", 1)[-1])
     ev = html.escape(str(m.get("event", "")))
+    bild = (f'<img src="/lernlauf/crop/{html.escape(lauf_id)}/{name}" loading="lazy" '
+            f'class="anker-thumb{" gedimmt" if dim else ""}">')
+    # .33x DATEIQUELLE: eingespeiste Clips haben KEIN Frigate-Event — ein
+    # /video/-Link liefe dort ins Leere. Kein Link ist besser als einer, der
+    # 404 zeigt (Bauplan analysen/12, QS-Einwand B).
+    if m.get("quelle") == "datei":
+        return bild
     return (f'<a href="/video/{ev}" title="'
             + t("lernanker.kachel.attr_clip",
                 kamera=html.escape(m.get("kamera", "?")), det=m.get("det")) + '">'
-            f'<img src="/lernlauf/crop/{html.escape(lauf_id)}/{name}" loading="lazy" '
-            f'class="anker-thumb{" gedimmt" if dim else ""}"></a>')
+            + bild + '</a>')
 
 
 def _thumb_w(m, lauf_id, dim, checked, grund=None):
@@ -55,7 +61,8 @@ def _thumb_w(m, lauf_id, dim, checked, grund=None):
             f'<input type="checkbox" name="sel" value="{name}"{" checked" if checked else ""}>'
             f'<img src="/lernlauf/crop/{html.escape(lauf_id)}/{name}" loading="lazy" '
             f'class="anker-thumb">'
-            f'<a class="anker-clip" href="/video/{ev}" title="{t("lernanker.kachel.attr_klick")}">&#9654;</a>'
+            + ("" if m.get("quelle") == "datei" else      # .33x: s. _thumb
+               f'<a class="anker-clip" href="/video/{ev}" title="{t("lernanker.kachel.attr_klick")}">&#9654;</a>')
             + (f'<span class="anker-grund">{html.escape(grund)}</span>' if grund else "")
             + '</label>')
 
@@ -87,8 +94,8 @@ def anker_detail_seite(s, kaputt=0, benennung=None, fluss=None):
                         key=lambda m: (-(m.get("det") or 0), str(m.get("datei"))))
     tage = q.get("tage_liste") or []
     spanne = f'{tage[0]} … {tage[-1]}' if len(tage) > 1 else (tage[0] if tage else "—")
-    stil = ('<style>.anker-reihe{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}'
-            '.anker-thumb{width:96px;height:96px;object-fit:cover;border-radius:4px}'
+    stil = ('<style>.anker-reihe{display:flex;flex-wrap:wrap;gap:4px;align-items:flex-start;margin-top:6px}'
+            '.anker-thumb{max-width:96px;max-height:96px;border-radius:4px;display:block}'
             '.anker-thumb.gedimmt,.anker-w.gedimmt img{opacity:.45}'
             '.anker-w{position:relative;display:inline-block;cursor:pointer}'
             '.anker-w input{position:absolute;top:4px;left:4px;z-index:2}'
@@ -445,8 +452,8 @@ def anker_seite(saetze, kaputt, vorschlaege=None, dubletten=None):
             + _badge(t("lernanker.badge.tage", n=q.get("tage", 0), spanne=spanne))
             + _badge(", ".join(kams)) + _badge(t("lernanker.badge.marge", marge=q.get("marge")))
             + f'<div class="anker-reihe">{"".join(thumbs)}{mehr}</div>{knopf}</div>')
-    stil = ('<style>.anker-reihe{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}'
-            '.anker-thumb{width:72px;height:72px;object-fit:cover;border-radius:4px}'
+    stil = ('<style>.anker-reihe{display:flex;flex-wrap:wrap;gap:4px;align-items:flex-start;margin-top:6px}'
+            '.anker-thumb{max-width:72px;max-height:72px;border-radius:4px;display:block}'
             '.anker-thumb.gedimmt{opacity:.45}'
             '.pill{display:inline-block;border:1px solid var(--rand,#8884);'
             'border-radius:10px;padding:0 8px;margin:0 4px 2px 0;font-size:.85em}'

@@ -907,3 +907,567 @@ PERSON_RE = r"[\w .\-'()]{1,60}"    # inkl. Apostroph/Klammern: echte Namen (O'N
 # (POST /person_loeschen meldete "0 reference images", waehrend 25 .webp im Papierkorb
 # lagen — Frigate liefert .webp). Aufzaehlung = Vertrag, nie Streu-Literal.
 BILD_ENDUNGEN = (".jpg", ".jpeg", ".png", ".webp")
+
+
+# --- Modell-Vertrag der Erkennungs-Modelle (Konzept 15 §5 "Vorbedingung", 24.08.2026) ---
+# DIE eine Quelle fuer jede fachliche Aufzaehlung der Erkennungs-Modelle: welche Datei,
+# welche Eingangsform, welche Vorverarbeitung, welche Ausgangsskala, welches Geraet im
+# Betrieb, welche Rolle im Urteil. Wer eine Modell-Liste braucht, nimmt DIESE.
+#
+# ANLASS (qs_ebenen.md: "Wer eine fachliche Aufzaehlung braucht, nimmt die zentrale Quelle
+# oder deklariert einen Deckungs-Vertrag — nie ein weiteres verstreutes Literal").
+# Die Aufzaehlung lag VIERFACH verstreut, jede Stelle mit einem anderen Ausschnitt:
+#   1. face_audit.MODELLE                      — nur die zwei Recognition-Koepfe
+#   2. FaceAnalysis(allowed_modules=[...])     — was insightface ueberhaupt laedt
+#      in Embedder.__init__
+#   3. das mixed-Dict in Embedder._to_backend  — Geraet je Task unter openvino:MIXED
+#   4. die Modell-Konstanten der beiden Masse  — StrukturMass.MODELL_DATEI,
+#      NormMass.NORM_KETTE, NormMass._graph_bytes
+# Belegte DRIFT zwischen 2 und 3: seit .313 laedt allowed_modules landmark_2d_106 und
+# genderage nicht mehr, das mixed-Dict verteilt beide aber weiter — eine Zuordnung, die
+# ins Leere laeuft. modellvertrag_deckung() unten FINDET diese Drift und benennt sie;
+# ob sie behoben wird, entscheidet ein eigener Zug, nicht dieser Vertrag.
+#
+# DER VERTRAG BESCHREIBT, ER SCHALTET NICHT. Heute liest ihn nur die Deckungspruefung.
+# Die kommende Hardware-Nutzbarkeitspruefung (Konzept 15 §4: laeuft jedes Modell auf
+# seinem Geraet wirklich richtig, in fp16 und in FP32?) nimmt ihre Modell-Liste von hier,
+# sonst waere sie die fuenfte Streu-Stelle. Aendert sich der Code, meldet die Deckung.
+#
+# FUNDSTELLEN stehen als SYMBOLE (Modul + Klasse/Funktion/Konstante), nie als Zeilennummer:
+# Zeilennummern wandern bei jeder Nachbarschafts-Aenderung — waehrend dieser Vertrag
+# entstand, verschob ein paralleler Umbau an face_audit.py alles unterhalb von NormMass um
+# rund 26 Zeilen. Ein Beleg, der ins Leere zeigt, ist schlimmer als keiner.
+#
+# FELDER je Eintrag (Schluessel = Kurzname der Modell-DATEI, nicht der Task: 'recognition'
+# gibt es zweimal, einmal je Kopf):
+#   datei/pfad_repo/pfad_image  Dateiname und Fundort im Repo bzw. im Image
+#   paket            "buffalo_l" (insightface-Paket) | "eigen" (unser ONNX)
+#   task             insightface-Taskname (app.models-Schluessel) oder None
+#   modell_schluessel  Schluessel in face_audit.MODELLE oder None
+#   abgeleitet_von   Eintrag, aus dessen Datei dieser Graph entsteht (Norm-Variante)
+#   insightface_modul  wird es ueber FaceAnalysis(allowed_modules) geladen?
+#   geladen          laedt der Betrieb es ueberhaupt (auch auf eigenem Weg)?
+#   geladen_wann     unter welcher Bedingung (Config/Weg) — Klartext
+#   eingang          {name, form, kanal, mean, std}: WIE der Tensor auszusehen hat
+#   eingang_notiz    die Fallen dazu (s. PREPROCESSING unten)
+#   ausgang          {namen, form, skala}: was herauskommt und in welcher Einheit
+#   bezug            die Entscheidungslinie, gegen die der Wert im Betrieb faellt —
+#                    daraus leitet die Hardware-Pruefung ihre Schwellen her, nie aus
+#                    einer einzelnen Messung
+#   soll_cpu         die EINGEFRORENEN CPU-Kennzahlen dieses Modells (s. SOLLZAHLEN unten)
+#   geraet           Geraete-Rolle im Betrieb (Klartext)
+#   geraet_mixed     Platz unter openvino:MIXED laut _to_backend ("GPU"/"NPU"/None)
+#   cpu_fest         True = CPU by design (bekommt in der Pruefung keine Geraete-Zahl)
+#   rolle/pruefrang  s. ROLLEN unten
+#   notiz/beleg      Besonderheit bzw. Fundstelle je Angabe
+#
+# ROLLEN (und warum es vier Werte sind statt zwei): "urteil" = das Ergebnis entscheidet
+# direkt, wer/ob jemand erkannt wird (Detektion, Erkennung). "vorrat" = die Feature-Norm;
+# sie entscheidet nicht ueber Identitaet, sondern darueber, WELCHES Material gelernt wird
+# — und sie ist die Pruefung, die auf der Legacy-iGPU die GPU verworfen hat (Konzept 15
+# §1/§4). "ernte" = steuert Material und Anzeige (Pose, Struktur), nie eine Identitaet.
+# "aus" = wird nicht geladen. pruefrang 1/2/3 ist die Reihenfolge fuers Erststart-Budget
+# der Hardware-Pruefung ("Urteilspfad zuerst", Konzept 15 §4), None = nicht zu pruefen.
+#
+# PREPROCESSING-FALLE (Konzept 15 §4 "Messmaterial"; ohne diese Angabe misst man Unsinn):
+# die beiden Landmark-Modelle sind mxnet-Exporte und wollen ROHE 0..255-Werte
+# (input_mean=0, input_std=1 — insightface landmark.Landmark.__init__ erkennt den
+# mxnet-Export daran; hier am Modell nachgemessen). Ein N(0,1)-Rauschinput ist fuer sie
+# voellig off-distribution und erzeugt Scheinabweichungen
+# (tester/gputest_kommandos_tokn59.md §1). Kanal-Ordnung: insightface fuettert alle
+# buffalo_l-Modelle ueber cv2.dnn.blobFromImage(..., swapRB=True), der Tensor ist also
+# RGB; unser adaface-Kopf erwartet dagegen BGR (Embedder._rec_infer).
+#
+# SOLLZAHLEN (`soll_cpu`, Lieferung C / Konzept 15 §4 "Messmaterial": eingefrorene
+# CPU-Sollzahlen je Modell als DRITTER Anker, Zahlen statt Bildern). Sie beantworten die
+# Frage, die ein reiner Geraet-gegen-CPU-Vergleich konstruktionsbedingt NIE beantworten
+# kann: "und was, wenn Geraet UND CPU beide falsch rechnen?" — falsches Modell, falsche
+# Vorverarbeitung, kaputter Runtime-Build. Aufbau je Eintrag:
+#   art       Messgroesse (core.rechenprobe.massart leitet sie aus Rolle/Task ab)
+#   einheit   was die Zahl BEDEUTET (Betriebsgroesse, wo es eine gibt, sonst Pruefsumme)
+#   werte     eine Zahl je Kontrast-Skala des Mess-Reizes, in der Reihenfolge von
+#             face_audit.NormMass.NORM_KREUZ_SKALEN — nie eine eigene Skalen-Liste hier
+#   gemessen  wo und womit (eine Sollzahl ohne Herkunft waere ein geratener Wert)
+# Der Vergleich laeuft relativ mit core.rechenprobe.SOLL_TOLERANZ_REL; die Herleitung
+# dieser Toleranz und ihre ehrliche Grenze stehen dort.
+MODELL_VERTRAG = {
+    "det_10g": {
+        "datei": "det_10g.onnx",
+        "pfad_repo": "docker/buffalo_l/det_10g.onnx",
+        "pfad_image": "/root/.insightface/models/buffalo_l/det_10g.onnx",
+        "paket": "buffalo_l", "task": "detection", "modell_schluessel": None,
+        "abgeleitet_von": None, "insightface_modul": True, "geladen": True,
+        "geladen_wann": "immer (allowed_modules in Embedder.__init__)",
+        "eingang": {"name": "input.1", "form": (1, 3, "H", "W"), "kanal": "RGB",
+                    "mean": 127.5, "std": 128.0},
+        "eingang_notiz": ("H/W sind dynamisch und werden im Betrieb gesetzt: 320x320 beim "
+                          "Embedder-Aufbau (Embedder.__init__), fuer Clips ar_det_size mit "
+                          "Basis 1280 und der /32-Regel (Embedder.ar_det_size)"),
+        "ausgang": {"namen": ("448", "471", "494", "451", "474", "497", "454", "477", "500"),
+                    "form": "3x (N,1) score · 3x (N,4) bbox · 3x (N,10) kps",
+                    "skala": ("score 0..1; bbox/kps sind Distanzen in STRIDE-Einheiten 8/16/32 "
+                              "(insightface scrfd.SCRFD._feat_stride_fpn) — in Pixel erst nach "
+                              "Multiplikation mit dem Stride des jeweiligen Ausgangs")},
+        "bezug": ("det_thresh 0.5 (insightface-Default scrfd.SCRFD.det_thresh; Config-Spanne "
+                  "0.3-0.7, verifyd-Config-Whitelist det_thresh) auf der Score-Achse; auf der "
+                  "Pixel-Achse min_kante 70 px (verifyd.yaml, Schluessel min_kante) als "
+                  "kleinste Gesichtskante, die ueberhaupt zaehlt"),
+        "geraet": ("Backend-Geraet aus resolve_backend (VERIFY_BACKEND/OV_DEVICE); "
+                   "_to_backend ersetzt die prepare()-Session auf JEDEM Backend, auch cpu "
+                   "(Embedder._to_backend)"),
+        "geraet_mixed": "GPU", "cpu_fest": False, "rolle": "urteil", "pruefrang": 1,
+        "soll_cpu": {"art": "score", "einheit": "hoechster Score ueber die drei Score-Koepfe",
+                     "werte": (0.409645, 0.409774, 0.399527),
+                     "gemessen": ("2026-08-24, LXC suslik (Core Ultra 9 285H), "
+                                  "onnxruntime 1.24.1 CPU-EP, Eingang 320 px; zwei "
+                                  "Laeufe derselben Session bitgleich (Abweichung 0.0). "
+                                  "Der 1,0er-Wert deckt sich mit cpu_score_max=0.410 aus "
+                                  "tester/gputest_kommandos_tokn59.md §3d")},
+        "notiz": ("liefert ausser der Box die fuenf Keypoints fuers norm_crop-Alignment — "
+                  "ein Versatz hier verschiebt JEDES Embedding (Embedder._get_mit_rec)"),
+        "beleg": {"eingang": ("eigene Messung am Modell 2026-08-24 (ort get_inputs) "
+                             "+ insightface scrfd.SCRFD"),
+                  "ausgang": "eigene Messung 2026-08-24 + tester/gputest_kommandos_tokn59.md §1/§4",
+                  "geraet": "face_audit.Embedder._to_backend, gelesen 2026-08-24"},
+    },
+    "1k3d68": {
+        "datei": "1k3d68.onnx",
+        "pfad_repo": "docker/buffalo_l/1k3d68.onnx",
+        "pfad_image": "/root/.insightface/models/buffalo_l/1k3d68.onnx",
+        "paket": "buffalo_l", "task": "landmark_3d_68", "modell_schluessel": None,
+        "abgeleitet_von": None, "insightface_modul": True, "geladen": True,
+        "geladen_wann": "immer (allowed_modules in Embedder.__init__)",
+        "eingang": {"name": "data", "form": ("N", 3, 192, 192), "kanal": "RGB",
+                    "mean": 0.0, "std": 1.0},
+        "eingang_notiz": ("ROHE 0..255-Werte (mxnet-Export). Der Zuschnitt kommt IMMER aus "
+                          "Landmark.get() mit dem fest verdrahteten Padding-Faktor 1.5 "
+                          "(insightface landmark.Landmark.get) — ein eigener Zuschnitt "
+                          "verschiebt die Skala"),
+        "ausgang": {"namen": ("fc1",), "form": (1, 3309),
+                    "skala": ("Rohwerte ~ +-1; Landmark.get() rechnet (wert+1) * 96 -> 1.0 "
+                              "entspricht 96 px auf dem 192er Eingang (landmark.Landmark.get). "
+                              "Daraus schaetzt insightface die Pose [pitch, yaw, roll] in Grad")},
+        "bezug": ("die Pose wird zu front = 1 - (|pitch|+|yaw|)/90 (core.ernte.front_aus_pose) "
+                  "und faellt gegen fd_front_min 0.85 (face_audit.ist_fehldetektion) sowie "
+                  "gegen die Perspektiv-Bins der Benennung (core.benennung.perspektiv_bin)"),
+        "geraet": "wie det_10g: Backend-Geraet, _to_backend ersetzt die Session",
+        "geraet_mixed": "GPU", "cpu_fest": False, "rolle": "ernte", "pruefrang": 3,
+        "soll_cpu": {"art": "landmark",
+                     "einheit": ("Pruefsumme: Summe der Betraege aller 3309 Rohwerte, in "
+                                 "px (x 96) — der Kosinus/Versatz braucht zwei Saetze, "
+                                 "taugt also nicht als eingefrorener Einzelwert"),
+                     "werte": (7014.637412, 6928.580982, 7112.183555),
+                     "gemessen": ("2026-08-24, LXC suslik (Core Ultra 9 285H), "
+                                  "onnxruntime 1.24.1 CPU-EP, Eingang 192 px ROH 0..255; "
+                                  "zwei Laeufe derselben Session bitgleich")},
+        "notiz": ("steuert Material und Anzeige, nie eine Identitaet — ABER der Live-Waechter "
+                  "filtert mit derselben Pose seine Phantom-Detektionen weg "
+                  "(core.livewache.echtes_gesicht), ein grober Fehler kostet dort Meldungen"),
+        "beleg": {"eingang": "eigene Messung am Modell 2026-08-24 + insightface landmark.Landmark",
+                  "ausgang": "eigene Messung 2026-08-24 + landmark.Landmark.get + gputest §1/§4",
+                  "rolle": ("core.ernte.ernten (front aus pose) + "
+                            "core.livewache.echtes_gesicht, gelesen 2026-08-24")},
+    },
+    "2d106det": {
+        "datei": "2d106det.onnx",
+        "pfad_repo": "docker/buffalo_l/2d106det.onnx",
+        "pfad_image": "/root/.insightface/models/buffalo_l/2d106det.onnx",
+        "paket": "buffalo_l", "task": "landmark_2d_106", "modell_schluessel": None,
+        "abgeleitet_von": None, "insightface_modul": False, "geladen": True,
+        "geladen_wann": ("NICHT ueber insightface (seit .313 aus allowed_modules raus), sondern "
+                         "LAZY als eigene StrukturMass-Session neben einem warmen Prozess "
+                         "(face_audit.StrukturMass, Aufruf worker._strukturmass_holen)"),
+        "eingang": {"name": "data", "form": ("N", 3, 192, 192), "kanal": "RGB",
+                    "mean": 0.0, "std": 1.0},
+        "eingang_notiz": ("ROHE 0..255-Werte wie 1k3d68; gemessen wird IMMER ueber "
+                          "Landmark.get() (Padding 1.5 fest) — mit anderem Faktor verschiebt "
+                          "sich der Median messbar: 0.143 (1.0) / 0.156 (1.5) / 0.170 (2.0)"),
+        "ausgang": {"namen": ("fc1",), "form": (1, 212),
+                    "skala": ("106 Punkte x 2; dieselbe Rueckrechnung wie 1k3d68 "
+                              "(1.0 ~ 96 px auf dem 192er Eingang). StrukturMass macht daraus "
+                              "die mittlere Punkt-Streuung geteilt durch die laengste Bildkante "
+                              "-> dimensionslos ~0.0..0.3")},
+        "bezug": ("ernte_struktur_min 0.11 filtert VOR dem Crop, sichtung_struktur_min 0.15 "
+                  "urteilt ueber die Anzeige (verifyd-Config-Defaults); Median echter "
+                  "Gesichter 0.156 bei AUC 0.820 (face_audit.StrukturMass, Messung 22.08.)"),
+        "geraet": ("CPU by design, mit gekapptem Pool (2 intra-op / 1 inter-op, "
+                   "face_audit.StrukturMass.__init__). Die Geraetedrift WURDE gemessen und ist "
+                   "unkritisch (CPU/NPU max |d| 0.00028, CPU/GPU 0.00098, null Kipper) — CPU "
+                   "ist hier Sparsamkeit, keine Messbedingung"),
+        "geraet_mixed": None, "cpu_fest": True, "rolle": "ernte", "pruefrang": 3,
+        "soll_cpu": {"art": "landmark",
+                     "einheit": "Pruefsumme: Summe der Betraege aller 212 Rohwerte, in px (x 96)",
+                     "werte": (6328.284957, 6455.996761, 6790.516089),
+                     "gemessen": ("2026-08-24, LXC suslik (Core Ultra 9 285H), "
+                                  "onnxruntime 1.24.1 CPU-EP, Eingang 192 px ROH 0..255; "
+                                  "zwei Laeufe derselben Session bitgleich. Das Modell "
+                                  "laeuft cpu_fest — die Zahl ist der Anker fuer 'rechnet "
+                                  "diese CPU ueberhaupt dasselbe Modell', kein Geraetetest")},
+        "notiz": ("das mixed-Dict in _to_backend fuehrt 'landmark_2d_106' weiterhin auf GPU — "
+                  "diese Zuordnung laeuft seit .313 ins Leere (die Deckungspruefung meldet sie)"),
+        "beleg": {"eingang": ("eigene Messung am Modell 2026-08-24 + insightface "
+                             "landmark.Landmark.__init__"),
+                  "ausgang": "eigene Messung 2026-08-24 + face_audit.StrukturMass.streuung",
+                  "geraet": ("face_audit.StrukturMass (GERAETEWAHL-Absatz + __init__), "
+                             "gelesen 2026-08-24")},
+    },
+    "genderage": {
+        "datei": "genderage.onnx",
+        "pfad_repo": "docker/buffalo_l/genderage.onnx",
+        "pfad_image": "/root/.insightface/models/buffalo_l/genderage.onnx",
+        "paket": "buffalo_l", "task": "genderage", "modell_schluessel": None,
+        "abgeleitet_von": None, "insightface_modul": False, "geladen": False,
+        "geladen_wann": ("gar nicht: seit .313 aus allowed_modules raus (Embedder.__init__), "
+                         "vorher lief es je Gesicht umsonst mit; analyze.py haelt die Felder "
+                         "nur noch formal"),
+        "eingang": {"name": "data", "form": ("N", 3, 96, 96), "kanal": "RGB",
+                    "mean": 0.0, "std": 1.0},
+        "eingang_notiz": ("rohe 0..255-Werte (mxnet-Export, insightface "
+                          "attribute.Attribute.__init__), hier nachgemessen"),
+        "ausgang": {"namen": ("fc1",), "form": (1, 3),
+                    "skala": ("argmax der ersten zwei Werte = Geschlecht, "
+                              "dritter Wert x 100 = Alter")},
+        "bezug": None,
+        "geraet": "keins — das Modell wird nicht geladen",
+        "geraet_mixed": None, "cpu_fest": False, "rolle": "aus", "pruefrang": None,
+        "notiz": ("liegt weiter im Image (Teil des buffalo_l-Pakets) und steht weiter im "
+                  "mixed-Dict (Embedder._to_backend) — Karteileiche, von der Deckungspruefung "
+                  "gemeldet"),
+        "beleg": {"eingang": ("eigene Messung am Modell 2026-08-24 + insightface "
+                             "attribute.Attribute"),
+                  "geladen": "face_audit.Embedder.__init__ (.313), gelesen 2026-08-24"},
+    },
+    "w600k_r50": {
+        "datei": "w600k_r50.onnx",
+        "pfad_repo": "docker/buffalo_l/w600k_r50.onnx",
+        "pfad_image": "/root/.insightface/models/buffalo_l/w600k_r50.onnx",
+        "paket": "buffalo_l", "task": "recognition", "modell_schluessel": "buffalo",
+        "abgeleitet_von": None, "insightface_modul": True, "geladen": True,
+        "geladen_wann": ("Session wird IMMER gebaut (allowed_modules), aber nur bei "
+                         "modell=buffalo genutzt: bei adaface entfernt _init_rec_onnx den "
+                         "Eintrag aus app.models. Default ist adaface (verifyd.yaml, "
+                         "Schluessel modell)"),
+        "eingang": {"name": "input.1", "form": ("N", 3, 112, 112), "kanal": "RGB",
+                    "mean": 127.5, "std": 127.5},
+        "eingang_notiz": ("norm_crop-112-Ausschnitt aus den fuenf Detektor-Keypoints; "
+                          "insightface fuettert ihn per blobFromImages mit swapRB=True, der "
+                          "Tensor ist also RGB (arcface_onnx.ArcFaceONNX.get_feat)"),
+        "ausgang": {"namen": ("683",), "form": (1, 512),
+                    "skala": ("512 Werte, im Graph NICHT normiert — die L2-Normierung macht "
+                              "erst insightface (Face.normed_embedding); danach gilt dieselbe "
+                              "Kosinus-Skala wie bei adaface")},
+        "bezug": "win_thresh 0.38 auf der Kosinus-Skala (verifyd.yaml, Schluessel win_thresh)",
+        "geraet": "Backend-Geraet ueber _ort_session wie die anderen app.models-Sessions",
+        "geraet_mixed": "NPU", "cpu_fest": False, "rolle": "urteil", "pruefrang": 1,
+        "soll_cpu": {"art": "kosinus",
+                     "einheit": ("Pruefsumme: Summe der Betraege der 512 Ausgangswerte "
+                                 "(im Graph UNnormiert, daher die grosse Zahl)"),
+                     "werte": (416.135133, 421.365023, 428.120172),
+                     "gemessen": ("2026-08-24, LXC suslik (Core Ultra 9 285H), "
+                                  "onnxruntime 1.24.1 CPU-EP, Eingang 112 px RGB; zwei "
+                                  "Laeufe derselben Session bitgleich")},
+        "notiz": ("zweiter Recognition-Kopf, im Betrieb hier nicht aktiv — die Schwellen und "
+                  "der refcache haengen am aktiven Modell, ein Wechsel baut den Cache neu auf"),
+        "beleg": {"eingang": ("eigene Messung am Modell 2026-08-24 (mean/std ueber "
+                             "get_model) + insightface arcface_onnx.ArcFaceONNX"),
+                  "ausgang": "eigene Messung 2026-08-24",
+                  "geladen": ("face_audit.Embedder.__init__/_init_rec_onnx + "
+                              "verifyd.yaml (modell), gelesen 2026-08-24")},
+    },
+    "adaface_ir101": {
+        "datei": "adaface_ir101_webface12m.onnx",
+        "pfad_repo": "models/adaface_ir101_webface12m.onnx",
+        "pfad_image": "/app/models/adaface_ir101_webface12m.onnx",
+        "paket": "eigen", "task": "recognition", "modell_schluessel": "adaface",
+        "abgeleitet_von": None, "insightface_modul": False, "geladen": True,
+        "geladen_wann": ("bei modell=adaface (Default, verifyd.yaml Schluessel modell) als "
+                         "EIGENE Session self._rec; app.get wird gekapselt und setzt "
+                         "face.embedding daraus (Embedder._init_rec_onnx/_get_mit_rec)"),
+        "eingang": {"name": "input", "form": ("B", 3, 112, 112), "kanal": "BGR",
+                    "mean": 127.5, "std": 127.5},
+        "eingang_notiz": ("BGR — der Crop geht OHNE Kanaltausch hinein (Embedder._rec_infer, "
+                          "spec['bgr']=True). Auf OpenVINO laeuft er in festen Batch-Stufen "
+                          "1/2/4/8 mit Padding, sonst in exakter Batchgroesse "
+                          "(Embedder.BATCH_STUFEN/_rec_infer)"),
+        "ausgang": {"namen": ("embedding",), "form": ("B", 512),
+                    "skala": ("im Graph L2-normiert (ReduceL2 -> Div), ||e|| = 1; Vergleich "
+                              "per Kosinus")},
+        "bezug": ("win_thresh 0.38 auf der Kosinus-Skala (verifyd.yaml, Schluessel win_thresh) "
+                  "— ein Winkelfehler arccos(cos) uebersetzt sich direkt in eine Verschiebung "
+                  "auf dieser Linie (Herleitung tester/gputest_kommandos_tokn59.md §4)"),
+        "geraet": ("Backend-Geraet, aber mit eigener Fallback-KETTE statt hartem CPU-Absturz: "
+                   "auf OpenVINO NPU -> GPU -> CPU, jeder Rueckfall LAUT als "
+                   "PLACEMENT-FALLBACK (Embedder._session_kette)"),
+        "geraet_mixed": "NPU", "cpu_fest": False, "rolle": "urteil", "pruefrang": 1,
+        "soll_cpu": {"art": "kosinus",
+                     "einheit": ("Pruefsumme: Summe der Betraege der 512 Embedding-Werte "
+                                 "(im Graph L2-normiert, also ||e||=1 — die Summe der "
+                                 "Betraege bleibt trotzdem modell-charakteristisch)"),
+                     "werte": (18.243309, 18.197966, 18.208139),
+                     "gemessen": ("2026-08-24, LXC suslik (Core Ultra 9 285H), "
+                                  "onnxruntime 1.24.1 CPU-EP, Eingang 112 px BGR; zwei "
+                                  "Laeufe derselben Session bitgleich")},
+        "notiz": ("der Kopf, der entscheidet, WER jemand ist — hier zaehlt die Kosinus-"
+                  "Abweichung gegen CPU, nicht die Rohdifferenz"),
+        "beleg": {"eingang": "face_audit.MODELLE + Embedder._rec_infer + eigene Messung 2026-08-24",
+                  "ausgang": ("eigene Messung 2026-08-24 + face_audit.NormMass "
+                              "(Docstring Graph-Struktur)"),
+                  "geraet": "face_audit.Embedder._to_backend/_session_kette, gelesen 2026-08-24"},
+    },
+    "adaface_ir101_norm": {
+        "datei": "adaface_ir101_webface12m.onnx",
+        "pfad_repo": "models/adaface_ir101_webface12m.onnx",
+        "pfad_image": "/app/models/adaface_ir101_webface12m.onnx",
+        "paket": "eigen", "task": None, "modell_schluessel": None,
+        "abgeleitet_von": "adaface_ir101", "insightface_modul": False, "geladen": True,
+        "geladen_wann": ("wenn der Lernvorrat traegt: NormMass wird im Worker gebaut "
+                         "(worker._normmass_holen) und von der Ernte benutzt; nur fuer "
+                         "modell=adaface kalibriert, sonst schaltet sie sich mit Grund ab "
+                         "(NormMass.__init__)"),
+        "eingang": {"name": "input", "form": ("B", 3, 112, 112), "kanal": "BGR",
+                    "mean": 127.5, "std": 127.5},
+        "eingang_notiz": ("wortgleich adaface_ir101 (dieselbe spec, NormMass.feature_norm), "
+                          "aber EXAKTE Batchgroesse ohne Padding — eine Padding-Zeile darf nie "
+                          "als Messwert durchgehen"),
+        "ausgang": {"namen": ("embedding", "f"),
+                    "form": "('B',512) + der Zusatz-Ausgang f",
+                    "skala": ("gemessen wird ||f||, die LAENGE des unnormierten Feature-Vektors "
+                              "vor der L2-Normierung: real ~15..30, auf dem synthetischen "
+                              "Gesichtsreiz 26.07 (gputest §3f). Der Graph entsteht in-memory, "
+                              "f wird als Zusatz-Ausgang deklariert (NormMass._graph_bytes)")},
+        "bezug": ("die Qualitaetslinien des Vorrats: min 22.0 / gut 24.0 "
+                  "(core.benennung.NORM_LATTE), Profil-Zweige 21.5 bzw. 23.5 "
+                  "(verifyd-Config-Defaults vorrat_norm_min_profil / katalog_norm_min_profil). "
+                  "Die Kreuzprobe gegen CPU laesst ein Geraet nur unter NORM_KREUZ_MAX 0.10 "
+                  "durch (NormMass.NORM_KREUZ_MAX, 24.08.2026 aus dem Linienabstand 0.5 neu "
+                  "hergeleitet; die alte 0.30 war an standard_normal-Rauschen bei Norm 11.6 "
+                  "geeicht, also 10 Punkte neben jeder Entscheidung). Gemessen wird seither "
+                  "auf dem synthetischen Gesichtsreiz (face_audit.gesichtsreiz) in den drei "
+                  "Kontrast-Skalen NormMass.NORM_KREUZ_SKALEN"),
+        "geraet": ("eigene Kette NPU -> GPU -> GPU_FP32 -> CPU (NormMass.NORM_KETTE) mit "
+                   "Kreuzprobe gegen CPU je Stufe; SUSLIK_NORM_DEVICE erzwingt ein Geraet. "
+                   "GPU_FP32 ist ein Pseudo-Geraet (face_audit.NORM_PSEUDO_GERAETE): dasselbe "
+                   "device_type GPU, aber precision=FP32 statt der OpenVINO-Voreinstellung "
+                   "fp16 — die Stufe faengt Geraete auf, deren fp16-Rechnung die Norm "
+                   "verschiebt (Feldfall Gen8-iGPU: fp16 105.276), und teilt sich den "
+                   "Kompilat-Cache mit der fp16-Stufe (eigener Blob, Praezision steckt im "
+                   "Cache-Schluessel, gemessen 24.08.2026). Ohne OpenVINO-EP "
+                   "(cpu-/cuda-/rocm-Image) bleibt es by construction CPU, weil "
+                   "NormMass._feature_norm_session nur CPU oder OpenVINO kennt"),
+        "geraet_mixed": None, "cpu_fest": False, "rolle": "vorrat", "pruefrang": 2,
+        "soll_cpu": {"art": "norm",
+                     "einheit": ("||f|| — die BETRIEBSGROESSE selbst (real 15..30, "
+                                 "Entscheidungslinien 21,5 / 22,0 / 23,5 / 24,0)"),
+                     "werte": (24.930459, 26.066286, 27.048271),
+                     "gemessen": ("2026-08-24, LXC suslik (Core Ultra 9 285H), "
+                                  "onnxruntime 1.24.1 CPU-EP, Graph-Variante mit "
+                                  "Zusatz-Ausgang f, Eingang 112 px BGR; zwei Laeufe "
+                                  "derselben Session bitgleich. Deckt sich mit der "
+                                  "Eich-Messtabelle bei NormMass.NORM_KREUZ_MAX "
+                                  "(CPU 24,930 / 26,066 / 27,048) — zwei unabhaengig "
+                                  "gelaufene Messungen derselben Groesse")},
+        "notiz": ("keine zweite Modell-Datei und kein Netz-Zugriff: derselbe Graph mit einem "
+                  "zusaetzlichen Ausgang. Aus f/||f|| laesst sich ||f|| nicht zurueckrechnen, "
+                  "deshalb ueberhaupt die Graph-Variante"),
+        "beleg": {"eingang": "face_audit.NormMass.feature_norm, gelesen 2026-08-24",
+                  "ausgang": ("face_audit.NormMass._graph_bytes + "
+                              "tester/gputest_kommandos_tokn59.md §1/§3f"),
+                  "geraet": ("face_audit.NormMass (GERAETEWAHL-Absatz, NORM_KETTE, "
+                             "_session_waehlen) + face_audit.NORM_PSEUDO_GERAETE, "
+                             "gelesen 2026-08-24 (FP32-Stufe)"),
+                  "bezug": ("core.benennung.NORM_LATTE + verifyd-Config-Defaults + "
+                            "face_audit.NormMass.NORM_KREUZ_MAX (Eich-Messtabelle im "
+                            "Kommentar dort), gelesen 2026-08-24")},
+    },
+}
+
+# Pflichtfelder je Eintrag — ein neues Modell ohne volle Angabe waere wieder eine halbe
+# Quelle (die Klasse, gegen die dieser Vertrag gebaut ist).
+MODELL_VERTRAG_PFLICHT = ("datei", "pfad_repo", "pfad_image", "paket", "task",
+                          "modell_schluessel", "abgeleitet_von", "insightface_modul",
+                          "geladen", "geladen_wann", "eingang", "ausgang", "bezug",
+                          "geraet", "geraet_mixed", "cpu_fest", "rolle", "pruefrang",
+                          "beleg")
+MODELL_ROLLEN = ("urteil", "vorrat", "ernte", "aus")
+
+
+def _vertrag_konstmenge(fn, anker):
+    """Aufzaehlung aus einem Code-Objekt lesen, ohne die Datei zu parsen.
+
+    CPython legt Dict-/Listen-Literale mit lauter konstanten Schluesseln als EINEN
+    Konstanten-Tupel im Code-Objekt ab (co_consts) — sowohl die allowed_modules-Liste
+    als auch die Schluessel des mixed-Dicts. Gelesen wird damit der KOMPILIERTE Stand,
+    nicht ein Text, der zufaellig aehnlich aussieht.
+
+    `anker` ist der Eintrag, den die gesuchte Aufzaehlung enthalten MUSS ('detection' —
+    ohne Detektor gibt es keine Erkennung). Gibt es nicht genau einen Treffer, kommt
+    None zurueck: die Deckungspruefung meldet das dann als 'nicht pruefbar' und faellt
+    NIE still auf gruen (K1: eine Diagnose, die nichts findet, darf nicht wie eine
+    Diagnose ohne Befund aussehen)."""
+    code = getattr(fn, "__code__", None)
+    if code is None:
+        return None
+    treffer = [c for c in code.co_consts
+               if isinstance(c, tuple) and c and anker in c
+               and all(isinstance(x, str) for x in c)]
+    return tuple(treffer[0]) if len(treffer) == 1 else None
+
+
+def modellvertrag_deckung(modelle=None, geladen_ist=None, mixed_ist=None, quelltext=None):
+    """Haelt MODELL_VERTRAG gegen den echten Code -> Liste von Abweichungs-Strings.
+
+    Leere Liste = gedeckt. Jede Zeile ist ein Befund im Klartext, damit ein Gate sie
+    unveraendert ausgeben kann. Geprueft wird gegen drei Stellen:
+      1. face_audit.MODELLE      — Namen, Dateiname und die Vorverarbeitungs-WERTE
+                                   (mean/std/Kanalordnung), nicht nur die Schluessel
+      2. allowed_modules         — welche Tasks insightface wirklich laedt
+      3. das mixed-Dict aus _to_backend — welche Tasks unter openvino:MIXED verteilt
+                                   werden (hier sitzt die bekannte Drift)
+
+    ALLE Fakten sind injizierbar (Konzept 15 §6.2 "injizierbare Messfunktion"): mit
+    Argumenten laeuft die Pruefung ohne jeden Fremd-Import und laesst sich mit
+    gefaelschten Staenden durchspielen. Ohne Argumente holt sie face_audit selbst.
+
+    ZWEI EHRLICHE GRENZEN:
+    - `__import__` statt `import`: core/registry.py ist importfrei (H29), und der
+      Registry-Selbsttest prueft das per AST ueber die GANZE Datei, also auch in
+      Funktionskoerpern. Die Invariante dahinter ist Import-Freiheit beim LADEN des
+      Moduls — die haelt hier: face_audit wird erst beim AUFRUF geholt. Das ist bewusst
+      ein Pruefweg fuer Gate/Diagnose, kein Betriebsweg; die Import-Richtung
+      "alle -> registry, nie zurueck" gilt fuer den Betrieb unveraendert.
+    - Geprueft werden die MENGEN (welche Tasks) exakt und die Geraete-Zuordnung des
+      mixed-Dicts nur als Textprobe am Quelltext — die WERTE eines Dict-Literals sind
+      aus co_consts nicht verlaesslich der Reihe nach rekonstruierbar. Ist der Quelltext
+      nicht lesbar, steht das als Befund in der Liste statt still zu fehlen."""
+    abw = []
+    fa = None
+    if modelle is None or geladen_ist is None or mixed_ist is None or quelltext is None:
+        try:
+            fa = __import__("face_audit")
+        except Exception as ex:                                        # noqa: BLE001
+            return ["face_audit nicht ladbar (%s: %s) — Deckung NICHT geprueft"
+                    % (type(ex).__name__, str(ex)[:120])]
+    embedder = getattr(fa, "Embedder", None)
+    if modelle is None:
+        modelle = getattr(fa, "MODELLE", None) or {}
+    if geladen_ist is None:
+        geladen_ist = _vertrag_konstmenge(getattr(embedder, "__init__", None), "detection")
+    if mixed_ist is None:
+        mixed_ist = _vertrag_konstmenge(getattr(embedder, "_to_backend", None), "detection")
+    if quelltext is None:
+        try:
+            with open(getattr(fa, "__file__", "") or "", encoding="utf-8") as f:
+                quelltext = f.read()
+        except Exception:                                              # noqa: BLE001
+            quelltext = ""
+
+    # --- 0) Vertrag in sich: Pflichtfelder, Rollenwerte, Ableitungen ------------------
+    for name, v in MODELL_VERTRAG.items():
+        fehlt = [f for f in MODELL_VERTRAG_PFLICHT if f not in v]
+        if fehlt:
+            abw.append("%s: Pflichtfelder fehlen: %s" % (name, ", ".join(fehlt)))
+        if v.get("rolle") not in MODELL_ROLLEN:
+            abw.append("%s: unbekannte rolle %r (erlaubt: %s)"
+                       % (name, v.get("rolle"), ", ".join(MODELL_ROLLEN)))
+        eltern = v.get("abgeleitet_von")
+        if eltern:
+            if eltern not in MODELL_VERTRAG:
+                abw.append("%s: abgeleitet_von %r kennt der Vertrag nicht" % (name, eltern))
+            elif MODELL_VERTRAG[eltern].get("eingang") != v.get("eingang"):
+                abw.append("%s: Eingangsform weicht von %s ab, obwohl beide denselben Graphen "
+                           "fuettern" % (name, eltern))
+
+    # --- 1) face_audit.MODELLE: Namen UND Vorverarbeitungs-Werte ---------------------
+    je_schluessel = {}
+    for name, v in MODELL_VERTRAG.items():
+        if v.get("modell_schluessel"):
+            je_schluessel.setdefault(v["modell_schluessel"], []).append(name)
+    for k in modelle:
+        if k not in je_schluessel:
+            abw.append("face_audit.MODELLE fuehrt %r — der Vertrag hat dazu keinen Eintrag" % k)
+    for k, namen in sorted(je_schluessel.items()):
+        if len(namen) > 1:
+            abw.append("Modell-Schluessel %r steht in mehreren Vertrags-Eintraegen (%s) — "
+                       "die Zuordnung waere mehrdeutig" % (k, ", ".join(sorted(namen))))
+        if k not in modelle:
+            abw.append("Vertrag nennt Modell-Schluessel %r (%s) — face_audit.MODELLE kennt ihn "
+                       "nicht (mehr)" % (k, ", ".join(sorted(namen))))
+            continue
+        spec = modelle[k] or {}
+        v = MODELL_VERTRAG[namen[0]]
+        if spec.get("art") != "onnx":
+            continue                       # insightface-eigener Kopf: MODELLE traegt dort
+            #                                weder Datei noch Vorverarbeitung (die kommen aus
+            #                                der Bibliothek und stehen im Vertrag mit Beleg)
+        datei = str(spec.get("onnx") or "").replace("\\", "/").rsplit("/", 1)[-1]
+        if datei and datei != v.get("datei"):
+            abw.append("%s: MODELLE[%r].onnx heisst %r, der Vertrag fuehrt %r"
+                       % (namen[0], k, datei, v.get("datei")))
+        e = v.get("eingang") or {}
+        if spec.get("mean") != e.get("mean") or spec.get("std") != e.get("std"):
+            abw.append("%s: Vorverarbeitung weicht ab — MODELLE mean=%r std=%r, Vertrag "
+                       "mean=%r std=%r" % (namen[0], spec.get("mean"), spec.get("std"),
+                                           e.get("mean"), e.get("std")))
+        kanal = "BGR" if spec.get("bgr") else "RGB"
+        if kanal != e.get("kanal"):
+            abw.append("%s: Kanalordnung weicht ab — MODELLE sagt %s, Vertrag sagt %r"
+                       % (namen[0], kanal, e.get("kanal")))
+
+    # --- 2) allowed_modules: was insightface wirklich laedt ---------------------------
+    je_task = {}
+    for name, v in MODELL_VERTRAG.items():
+        if v.get("task"):
+            je_task.setdefault(v["task"], []).append(name)
+    if geladen_ist is None:
+        abw.append("allowed_modules-Aufzaehlung in Embedder.__init__ nicht eindeutig lesbar "
+                   "(Anker 'detection') — diese Deckung wurde NICHT geprueft")
+    else:
+        for t in geladen_ist:
+            if t not in je_task:
+                abw.append("allowed_modules laedt Task %r — der Vertrag kennt kein Modell dazu" % t)
+            elif not any(MODELL_VERTRAG[n].get("insightface_modul") for n in je_task[t]):
+                abw.append("Task %r steht in allowed_modules, der Vertrag fuehrt %s aber NICHT "
+                           "als insightface-Modul" % (t, ", ".join(sorted(je_task[t]))))
+        for t, namen in sorted(je_task.items()):
+            drin = [n for n in namen if MODELL_VERTRAG[n].get("insightface_modul")]
+            if drin and t not in geladen_ist:
+                abw.append("Vertrag fuehrt %s als insightface-Modul — Task %r steht aber nicht "
+                           "in allowed_modules" % (", ".join(sorted(drin)), t))
+
+    # --- 3) mixed-Dict aus _to_backend: die Geraete-Verteilung unter openvino:MIXED ---
+    if mixed_ist is None:
+        abw.append("mixed-Zuordnung in Embedder._to_backend nicht eindeutig lesbar "
+                   "(Anker 'detection') — diese Deckung wurde NICHT geprueft")
+    else:
+        for t in mixed_ist:
+            if t not in je_task:
+                abw.append("_to_backend verteilt Task %r — der Vertrag kennt kein Modell dazu" % t)
+                continue
+            tot = [n for n in je_task[t] if not MODELL_VERTRAG[n].get("insightface_modul")]
+            if len(tot) == len(je_task[t]):
+                abw.append("DRIFT: _to_backend verteilt Task %r auf ein Geraet, insightface laedt "
+                           "ihn aber gar nicht (%s: insightface_modul=False) — die Zuordnung "
+                           "laeuft ins Leere" % (t, ", ".join(sorted(tot))))
+        for t, namen in sorted(je_task.items()):
+            drin = [n for n in namen if MODELL_VERTRAG[n].get("insightface_modul")]
+            if drin and t not in mixed_ist:
+                abw.append("Vertrag fuehrt %s als insightface-Modul — Task %r fehlt aber im "
+                           "mixed-Dict, MIXED legt es damit undeklariert auf den Default"
+                           % (", ".join(sorted(drin)), t))
+
+    # --- 4) Textprobe: stimmen die Geraete-WERTE des mixed-Dicts? ---------------------
+    if not quelltext:
+        abw.append("face_audit-Quelltext nicht lesbar — die Geraete-Werte des mixed-Dicts "
+                   "wurden NICHT geprueft")
+    else:
+        gesehen = set()
+        for name, v in sorted(MODELL_VERTRAG.items()):
+            t, g = v.get("task"), v.get("geraet_mixed")
+            if not t or not g or (t, g) in gesehen:
+                continue
+            gesehen.add((t, g))
+            paar = '"' + t + '": "' + g + '"'
+            if paar not in quelltext:
+                abw.append("%s: Vertrag legt Task %r unter openvino:MIXED auf %s — in "
+                           "face_audit.py steht kein %s" % (name, t, g, paar))
+    return abw
