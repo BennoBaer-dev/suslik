@@ -355,7 +355,16 @@ def cmd_status():
     return 0 if frisch else 1
 
 
+_STDERR_SIEB = None
+
+
 def main(argv):
+    # stderr-Sieb wie im Dienst (verifyd.main, .338): die Engine ist ein EIGENER
+    # Prozess mit eigenem fd 2 — ohne eigenes Sieb kaeme die Treiber-Flut ihrer
+    # Session-Bauten weiter ungefiltert ins Docker-Log. Summe druckt engine-up.
+    from core import stderr_sieb as _ss
+    global _STDERR_SIEB
+    _STDERR_SIEB = _ss.installieren()
     # umask 022 auch fuer den HANDSTART (der Aufsicht-Spawn erbt sie vom
     # Dienst, verifyd.main setzt sie dort — hier dieselbe Regel fuer den
     # Standalone-Weg; Realfall 13.08.: 600er-root-Dateien im /data-Mount

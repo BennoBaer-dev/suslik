@@ -7,6 +7,72 @@ this file — the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git
 history.
 
+## 0.1.0.339 — 2026-08-24
+
+Release build of 0.1.0.336–0.1.0.338 (which went only to one field tester),
+with the agreed What's-new entries baked in. No code changes beyond the box.
+
+## 0.1.0.338 — 2026-08-24
+
+The startup log is now actually readable: the ~60 identical red
+`pthread_setaffinity_np` driver lines per start are filtered at the file-
+descriptor level (only that exact known-harmless line, everything else passes
+through byte-for-byte) and replaced by one honest summary line with their
+count. No library patching involved.
+
+Note for small machines: the very first start of a `-gpu` image compiles its
+models for the GPU inside the main process and needs about 3 GB of free memory
+headroom; from the second start on the compilation cache carries it (a 2 GB
+container then works). The startup log warns when the memory guard sits above
+the container limit.
+
+## 0.1.0.337 — 2026-08-24
+
+Same fix as 0.1.0.336 (which went only to one field tester), plus log honesty:
+a missing guard `enabled` no longer logs a false "invalid" alarm at every start,
+a config field removed in an older version is named as such (with how to silence
+it) instead of being warned about forever, and the live engine explains the red
+thread-affinity lines of its model library itself.
+
+## 0.1.0.336 — 2026-08-24
+
+Bundles the internal steps 0.1.0.332–0.1.0.335.
+
+- **Fixed: the analysis worker could die on every start on machines with tight
+  memory** (regression introduced in 0.1.0.313, reported in the field on
+  0.1.0.331 — 114 worker deaths in one day, recognition effectively stopped
+  while live watching kept running). The learning-stock quality model was built
+  eagerly at every worker start, outside the memory guard, without a
+  compilation cache, and on the GPU chain even for live jobs that never use
+  it. It is now built only when a harvest job actually needs it, behind a
+  memory-budget check that skips the stock loudly instead of dying, with the
+  compilation cached on disk (build time 10.4 s → 4.2 s, and no more
+  recompile loop that kept the iGPU near 100 %). Measured peak per worker
+  start drops from 1.5 GiB to 0.9 GiB — back to pre-0.1.0.313 level.
+- **Worker deaths now say why**: `worker died mid-job (signal 9 = SIGKILL —
+  most likely the kernel out-of-memory killer)` instead of a bare "died
+  mid-job". The startup log also prints a memory picture (container limit if
+  readable, meminfo with an honest "may show the host" note, and the
+  configured worker guards, with a warning when the guard sits above the
+  container limit).
+- **The startup log no longer prints resident names** — it counts persons and
+  reference images instead. Boot logs get pasted into public issues; names do
+  not belong there.
+- **debug is no longer persistent**: it resets to off at every start and can
+  be toggled at runtime without a service restart. A debug switch someone
+  forgot no longer floods the log forever.
+- **Intel GPU driver cache moved into the data volume** (both Intel images):
+  with a read-only root filesystem the driver silently computed wrong,
+  non-reproducible results because it could not write its kernel cache under
+  `$HOME`. The cache now lives in `/data/clips/neo_cache` (verified against
+  the shipped driver binaries, 1 GiB cap).
+- **The feature-norm device chain gained an FP32 stage** (NPU → GPU →
+  GPU-FP32 → CPU) and its cross-check now measures at the real working point
+  (face-like test input instead of noise, threshold re-derived from the
+  decision lines). On healthy hardware nothing changes; a GPU whose fp16
+  math is off now falls back to FP32 on the same GPU instead of losing the
+  device entirely.
+
 ## 0.1.0.331 — 2026-08-22
 
 Bundles the internal steps 0.1.0.299–0.1.0.330.

@@ -1794,7 +1794,7 @@ T = {
     "system.ampel.disk": "Disco",
     "system.ampel.disk_info2": "{gb} GB libres · caché de clips {cache} GB de {max} GB",
     "system.disk.titel": "Espacio en disco",
-    "system.disk.satz": "Los clips son una caché: se guardan {tage} días, con un tope de {max} GB, y se recortan en cuanto quedan menos de {min} GB libres (se comprueba cada 10 minutos).",
+    "system.disk.satz": "Los clips son una caché: se guardan {tage} días, con un tope de {max} GB, y se recortan en cuanto quedan menos de {min} GB libres (se comprueba tras cada evento y una vez al día con una vigilancia del disco que pasa a cada 10 minutos mientras queda poco espacio).",
     "system.disk.knopf": "Limpiar ahora",
     "system.disk.warnung": "Solo quedan {gb} GB libres y la caché de clips ya está vacía — libera espacio en el volumen de datos; si no, los eventos nuevos no se podrán guardar.",
     "system.ampel.ok": "OK",

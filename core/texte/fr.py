@@ -1830,7 +1830,7 @@ T = {
     "system.ampel.disk": "Disque",
     "system.ampel.disk_info2": "{gb} Go libres · cache des clips {cache} Go sur {max} Go",
     "system.disk.titel": "Espace disque",
-    "system.disk.satz": "Les clips sont un cache : conservés {tage} jours, plafonnés à {max} Go, et allégés dès que moins de {min} Go sont libres (vérification toutes les 10 minutes).",
+    "system.disk.satz": "Les clips sont un cache : conservés {tage} jours, plafonnés à {max} Go, et allégés dès que moins de {min} Go sont libres (vérification après chaque événement, plus une surveillance quotidienne du disque qui passe à toutes les 10 minutes tant que l'espace est faible).",
     "system.disk.knopf": "Nettoyer maintenant",
     "system.disk.warnung": "Il ne reste que {gb} Go libres et le cache des clips est déjà vide — libérez de l'espace sur le volume de données, sinon les nouveaux événements ne pourront pas être enregistrés.",
     "system.ampel.ok": "OK",

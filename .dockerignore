@@ -4,6 +4,7 @@ verify_data
 samples
 backups
 diag
+tester
 __pycache__
 **/__pycache__
 *.tar.gz

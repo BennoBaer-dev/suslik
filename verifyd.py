@@ -280,6 +280,72 @@ def _cpu_quote():
     return None
 
 
+def _cgroup_speicher_grenze(wurzel="/sys/fs/cgroup", hoch_max=4):
+    """S2 (Lieferung B): die Speicher-GRENZE dieses Containers in MB + ihre
+    Herkunft. -> (mb, herkunft); mb=-1 heisst 'keine lesbare Grenze'.
+    herkunft: 'memory.max' | 'memory.limit_in_bytes' | '<datei> (from parent
+    cgroup)' | 'none'. `wurzel`/`hoch_max` sind nur fuer den Testharnisch.
+
+    ANDERE MESSGROESSE als worker._cgroup_frei_mb: das dort ist der FREIE Rest
+    (MemAvailable-artig, Budget-Rechnung je Job), das hier die Decke. Bewusst
+    KEIN Import von worker.py in diesen Prozess — worker.py setzt beim Import
+    prozessweit socket.setdefaulttimeout(120), und der Dienst haelt hier
+    HTTP-Server- und MQTT-Sockets.
+
+    GEMESSEN 24.08. auf unserem eigenen Prod (Docker-Container in der LXC .168):
+    memory.max liefert woertlich 'max', der Eltern-Pfad '..' ist der Rand des
+    cgroup-Namensraums und traegt keine memory.max mehr. Die 16-GiB-Decke der
+    LXC ist von dort schlicht NICHT lesbar — dann meldet diese Funktion ehrlich
+    'none' statt einer geratenen Zahl. Der Hochlauf bleibt trotzdem drin: auf
+    Installationen ohne eigenen cgroup-Namensraum (Bare-Docker mit
+    --cgroupns=host, LXC ohne cgroup-Isolierung) steht die Grenze wirklich eine
+    Ebene hoeher, und genau die soll dann mit Zusatz gemeldet werden."""
+    def _v2(d):
+        with open(os.path.join(d, "memory.max")) as f:
+            roh = f.read().strip()
+        return int(roh) if roh.isdigit() else None       # 'max' -> keine Grenze
+
+    def _v1(d):
+        with open(os.path.join(d, "memory", "memory.limit_in_bytes")) as f:
+            mx = int(f.read())
+        return mx if mx < 1 << 60 else None              # ~2^63 = 'unbegrenzt'
+
+    d = wurzel
+    for stufe in range(hoch_max + 1):
+        for leser, datei in ((_v2, "memory.max"), (_v1, "memory.limit_in_bytes")):
+            try:
+                b = leser(d)
+            except (OSError, ValueError):
+                continue
+            if b:
+                return (b // 1048576,
+                        datei if stufe == 0 else f"{datei} (from parent cgroup)")
+        eltern = os.path.dirname(d.rstrip("/"))
+        if not eltern or eltern == d or eltern == "/":
+            break
+        d = eltern
+    return -1, "none"
+
+
+def _meminfo_mb():
+    """S2: MemTotal/MemAvailable/SwapTotal aus /proc/meminfo in MB (fehlende
+    Felder -> None). ACHTUNG, das ist der Grund fuer den Zusatz an der Logzeile:
+    im Docker-Container zeigt /proc/meminfo den WIRT (Prod gemessen 24.08.:
+    62,3 GiB statt der 16 GiB, die die LXC wirklich hat), in einer LXC mit
+    lxcfs dagegen den Gast. Von innen ist das nicht unterscheidbar — deshalb
+    steht der Vorbehalt IMMER dran, nie nur im Verdachtsfall."""
+    werte = {}
+    try:
+        with open("/proc/meminfo") as f:
+            for z in f:
+                feld, _, rest = z.partition(":")
+                if feld in ("MemTotal", "MemAvailable", "SwapTotal"):
+                    werte[feld] = int(rest.split()[0]) // 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return (werte.get("MemTotal"), werte.get("MemAvailable"), werte.get("SwapTotal"))
+
+
 def _phys_kerne():
     """Physische Kerne unter den ERLAUBTEN CPUs (cgroup/LXC-Maske, Muster
     face_audit._so_mit_threads): SMT-Geschwister zaehlen EINMAL — Hyperthreads sind
@@ -747,6 +813,16 @@ def load_config(path):
                          ("sprache", "en")]:
         cfg.setdefault(key, default)
     os.environ["VERIFY_DATA_DIR"] = cfg["data_dir"]   # Subprozesse (anlernen) erben den Datenpfad
+    # S3-Nachzug (24.08., am Image gemessen): der Intel-NEO-Treiber legt sein
+    # NEO_CACHE_DIR NICHT selbst an — fehlt das Verzeichnis, ist der Kernel-Cache
+    # still aus und die read-only-Fehlerklasse lebt weiter. Die ENV setzen nur
+    # die Intel-Images (Dockerfile.gpu/gpu-legacy); ohne sie passiert hier nichts.
+    _neo = (os.environ.get("NEO_CACHE_DIR") or "").strip()
+    if _neo:
+        try:
+            os.makedirs(_neo, exist_ok=True)
+        except OSError:
+            pass                            # read-only Volume: Treiber faellt auf HOME zurueck
     # #42 Teil B: Fehldetektions-Schwellen fuer anlernen (Sammel-Gate) — gleiches
     # Vererbungs-Muster wie der Datenpfad (Worker + Subprozess erben die Env).
     os.environ["VERIFY_FD_FRONT_MIN"] = str(cfg["fd_front_min"])
@@ -761,6 +837,22 @@ def load_config(path):
         if k in STORE_INFRA_TABU:
             continue
         cfg[k] = v
+    # B6 (User-Entscheid 24.08. abends): debug ist NICHT persistent — "debug wird
+    # bei jedem Start des Systems auf aus gestellt und muss waehrend des Laufes ggf.
+    # angestellt werden". Anlass war die Prod-Log-Sichtung: 40 [dbg]-Zeilen in 24 h,
+    # weil ein Schalter aus einem frueheren Lauf im Store stehengeblieben war.
+    # KLEINSTER EINGRIFF, bewusst: zurueckgesetzt wird nur die LAUFENDE Config, der
+    # Store-Wert bleibt unangetastet (load_config bekommt keinen neuen Schreibweg,
+    # der beim Erststart auf read-only /data scheitern koennte). Die
+    # Konfigurations-Seite liest cfg und zeigt deshalb korrekt "aus"; wer den
+    # Schalter danach anhakt, bekommt ihn zur Laufzeit (config_schreiben wendet eine
+    # reine debug-Aenderung LIVE an, ohne Neustart — ein Neustart liefe sofort
+    # wieder hier hinein). Kein stiller Eingriff: die Zeile sagt, was passiert ist.
+    if cfg.get("debug"):
+        cfg["debug"] = False
+        sys.stderr.write("[suslik] debug was on from a previous run — reset to off; "
+                         "enable it at runtime in the configuration page\n")
+        sys.stderr.flush()
     # ENV-Bruecke Frigate-URL (#18 carlsmith360): personlern-Kette und sync_refs
     # lesen die Frigate-Adresse aus der ENV — normale Installationen setzen sie
     # aber NUR im UI (Store, eben eingemischt). Ohne Export sahen diese Pfade
@@ -1003,6 +1095,29 @@ def master_persons(cfg):
         return []
 
 
+def master_umfang(cfg):
+    """S4 (Lieferung B): Umfang des Referenz-Masters als reine ZAHLEN —
+    (personen, referenzbilder, personen_ohne_bild). KEINE Klarnamen: Tester
+    posten ihr Startlog oeffentlich (Issue-Anhaenge, Foren), Bewohnernamen
+    haben dort nichts zu suchen. Auch Fehler je Personenordner werden
+    geschluckt statt gemeldet — eine Fehlermeldung traegt den Pfad und damit
+    wieder den Namen. Endungen aus core.registry.BILD_ENDUNGEN (Vertrag, nie
+    Streu-Literal; die eine Stelle, die .webp vergass, meldete '0 reference
+    images')."""
+    d = os.path.join(cfg["data_dir"], "faces")
+    personen = master_persons(cfg)
+    bilder = leer = 0
+    for p in personen:
+        try:
+            n = sum(1 for f in os.listdir(os.path.join(d, p))
+                    if f.lower().endswith(_reg.BILD_ENDUNGEN))
+        except OSError:
+            n = 0
+        bilder += n
+        leer += (n == 0)
+    return len(personen), bilder, leer
+
+
 def frigate_to_cos(score):
     """Frigate-Anzeige-Score -> roher Cosinus (Sigmoid invertiert)."""
     if score is None:
@@ -1156,7 +1271,13 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
                              f"(deadline {tmo}s) — one immediate retry on a "
                              f"fresh worker, deadline doubled to {frist}s\n")
                 else:
-                    lf.write(f"\nverifyd: worker died after {dt:.0f}s — one "
+                    # S1: die in job() ermittelte Todesursache reist mit in die
+                    # analyse.log des Events (im Docker-Log steht sie schon).
+                    # getattr, weil dieser Zweig auch fremde worker-Objekte
+                    # (Testharnisch) bedienen koennen muss.
+                    _u = getattr(worker, "letzte_ursache", None)
+                    lf.write(f"\nverifyd: worker died after {dt:.0f}s"
+                             f"{' (' + _u + ')' if _u else ''} — one "
                              f"immediate retry on a fresh worker "
                              f"(deadline {tmo}s)\n")
             t0 = time.monotonic()
@@ -1305,18 +1426,17 @@ class WorkerProzess:
         # einem, konzept_frames.md §3.2). Der Worker meldet SEINEN kumulativen Stand;
         # ein Neustart setzt ihn zurueck, deshalb hier Summe + zuletzt gesehener Wert.
         self.rueckfaelle = {"summe": 0, "letzt": 0}
+        # S1 (Lieferung B): die zuletzt ermittelte Todesursache in Kurzform
+        # ("signal 9 = SIGKILL — ...", "exit code 3", ...) fuer Aufrufer, die
+        # sie in IHRE Logdatei mitnehmen (run_analyze-Retry). None = keine
+        # bekannt; job() setzt sie bei jedem Aufruf zurueck.
+        self.letzte_ursache = None
 
     def _start(self):
         r, w = os.pipe()
         env = dict(os.environ, OV_DEVICE=self.cfg["ov_device"], FRIGATE_URL=self.cfg["frigate_url"],
                    SCRATCH_DIR=os.path.join(self.cfg["data_dir"], "clips"),
                    WORKER_ANTWORT_FD=str(w))
-        if self.cfg.get("vorrat_aktiv"):
-            # Vorrat B1 (W2.9-Vorbedingung): der Worker baut seine NormMass beim
-            # PROZESS-START — die ~1-GB-Bauspitze faellt damit ausserhalb jedes
-            # _JobRssWache-Fensters an (In-Job-Spitzen liegen heute schon bei
-            # 3,7-4,0 GB gegen die 4096er-Default-Grenze).
-            env["SUSLIK_VORRAT"] = "1"
         # start_new_session: killpg muss auch ffmpeg-ENKEL treffen (W1-Lektion). stdin-Pipe ist
         # non-inheritable (CLOEXEC) -> nach einem execv von verifyd bekommt eine Waise EOF und endet.
         self.p = subprocess.Popen([sys.executable, os.path.join(HERE, "worker.py")],
@@ -1370,6 +1490,50 @@ class WorkerProzess:
         with self.lock:
             self._stop()
 
+    def _todesursache(self, wartefrist_s=1.0):
+        """S1 (Lieferung B, konzept_startpruefung §3): WARUM ist der Worker mitten
+        im Job verstummt? -> (art, kurz) fuer die Log-Zeile; kurz='' heisst 'lebt
+        noch'.
+
+        REIHENFOLGE IST DIE FALLE (K1 'die Diagnose luegt'): erst warten, DANN
+        killen. Ruft man diese Methode nach _stop(kill=True), meldet sie das
+        SELBST geschossene SIGKILL als angeblichen Kernel-OOM. Sie gehoert
+        deshalb IMMER vor den _stop(kill=True) der Fundstelle.
+
+        Drei Faelle, keiner geraten:
+          returncode < 0   -> Signal (9 = SIGKILL, in diesem Dienst typisch der
+                              Kernel-OOM-Killer; Giuseppe-Klasse .331)
+          returncode >= 0  -> regulaerer Exit mit Code
+          wait laeuft ab   -> Prozess LEBT, nur die Antwort-Pipe ist zu; hier
+                              KEIN Signal erfinden, sondern genau das sagen.
+
+        Kein doppeltes Ernten: subprocess.Popen.wait() ist idempotent, sobald
+        returncode gesetzt ist — das nachfolgende _stop(kill=True) laeuft dort
+        sofort durch. Sein killpg bleibt trotzdem noetig: die Prozessgruppe kann
+        noch ffmpeg-ENKEL enthalten (W1-Lektion), und der Rueckgabewert des
+        Leiters sagt ueber die nichts."""
+        p = self.p
+        if p is None:                       # schon geerntet/nie gestartet
+            return "died", "exit status unavailable"
+        try:
+            rc = p.wait(timeout=wartefrist_s)
+        except subprocess.TimeoutExpired:
+            return "lebt", ""
+        except Exception:
+            return "died", "exit status unavailable"
+        if rc is None:                      # kann wait() nicht liefern, defensiv
+            return "died", "exit status unavailable"
+        if rc < 0:                          # per Signal beendet
+            n = -rc
+            try:
+                name = signal.Signals(n).name
+            except Exception:               # unbekannte/plattformfremde Nummer
+                name = "unknown signal"
+            zusatz = (" — most likely the kernel out-of-memory killer"
+                      if n == int(signal.SIGKILL) else "")
+            return "died", f"signal {n} = {name}{zusatz}"
+        return "exited", f"exit code {rc}"
+
     def job(self, job, timeout_s, info=None):
         """Job senden, Antwort mit Timeout lesen. None = Timeout/Absturz (Worker wird
         gekillt, der naechste Job startet ihn frisch); sonst die Antwort des Workers.
@@ -1381,6 +1545,7 @@ class WorkerProzess:
         with self.lock:
             if info is not None:
                 info["wartezeit_s"] = round(time.monotonic() - t_warte, 3)
+            self.letzte_ursache = None    # S1: nur DIESER Lauf darf sie setzen
             try:
                 if self.p is None or self.p.poll() is not None:
                     self._stop(kill=True)    # Reste (Pipe/Zombie) wegraeumen
@@ -1405,8 +1570,20 @@ class WorkerProzess:
                     self._stop(kill=True)
                     return None
                 zeile = self.rx.readline()
-                if not zeile:                # Worker gestorben (Absturz/OOM) -> EOF
-                    self.log(f"{self.name} died mid-job — restart on next job")
+                if not zeile:                # Antwort-Pipe zu -> Worker tot ODER stumm
+                    # S1: Ursache VOR dem Kill ermitteln (s. _todesursache) und in
+                    # DIESE Zeile schreiben — sie geht ueber self.log ins Docker-Log,
+                    # nicht nur in die analyze.log des Events. Ohne sie stand bei
+                    # Giuseppes 114 Toden nur "died mid-job" und die Mechanik
+                    # (Kernel-OOM oder Absturz) blieb offen.
+                    art, kurz = self._todesursache()
+                    self.letzte_ursache = kurz or "pipe closed, process still alive"
+                    if art == "lebt":
+                        self.log(f"{self.name} closed its pipe mid-job but is still "
+                                 f"alive — killing it, restart on next job")
+                    else:
+                        self.log(f"{self.name} {art} mid-job ({kurz}) — "
+                                 f"restart on next job")
                     self._stop(kill=True)
                     return None
                 antwort = json.loads(zeile)
@@ -2908,7 +3085,7 @@ class Service:
         "clip_retention_d": (int, 1, 60, "how long downloaded clips are kept as a cache, in days. They are only a cache — suslik fetches a clip from Frigate again whenever it needs one, so a short time costs nothing except a second download. The cache exists because Frigate's clip generation can stall, which is worth avoiding for the last hours, not for the last week: measured on the development system, 1212 of 1542 cached clips were older than two days and none of them was ever read again"),
         "live_verworfen_speichern": (bool, None, None, "keep the pictures the live watchers threw away (no human in frame): off by default — they are pure diagnostics, the interface never shows them, and they were the single largest item under the data folder (61 GB in nine days on the development system). They are still counted, so you can see how often the pose gate rejected something. Turn on only while chasing a bug"),
         "clip_cache_max_gb": (int, 0, 500, "clip cache size cap in GB, oldest evicted first (age eviction stays). 0 = derive it from the disk (15 % of its size), which is the sensible default because disks differ wildly — a fixed cap larger than the disk can never take effect, and that is exactly how one installation filled up (issue #25). Set a number only if you want a fixed cap; keep it well below the size of the disk — a cap larger than the disk can never take effect, and the cache will fill the disk before it is reached (issue #25). suslik warns at startup if the two do not fit together"),
-        "disk_frei_min_gb": (int, 0, 500, "minimum free disk space in GB — below it the oldest clips are evicted regardless of the cap. 0 = derive it from the disk (10 % of its size, at least 2 GB) (checked every 10 min, at startup and after each event; Issue #25)"),
+        "disk_frei_min_gb": (int, 0, 500, "minimum free disk space in GB — below it the oldest clips are evicted regardless of the cap. 0 = derive it from the disk (10 % of its size, at least 2 GB) (checked at startup, after each event, and by the disk watch: daily, or every 10 min while space is tight; Issue #25)"),
         "ernte_struktur_min": (float, 0.0, 0.5, "face structure line for harvesting: crops whose facial landmarks collapse towards the centre — necks, ears, backs of heads, foliage, tarmac — are not saved at all, so they cost no disk and no quality inference. Measured on 2000 random crops from 36 runs; 0.11 drops 12.6 % of harvested material. What is dropped is gone for that run, but a fresh run over the same events brings it back while the clips are still in Frigate (0 = off)"),
         "sichtung_struktur_min": (float, 0.0, 0.5, "face structure line for the group view: pictures below it are not offered for learning, but stay on disk and remain visible under \"show all\" — you can always take them back. Should sit above the harvesting line (0 = off)"),
         "sichtung_norm_veto": (float, 0.0, 40.0, "quality line for learning runs: faces at or below this feature-norm value are dropped from the group view — this is what separates false detections (hedges, wheel arches) from small real faces, because the detector itself is confident about both (0 = off)"),
@@ -3013,26 +3190,31 @@ class Service:
         <data_dir>/config.json schreiben — der EINZIGE Schreibweg fuer Config. Loest den yaml-
         Zeilenersatz ab (kein ${VAR}-Risiko, keine kaputten Kommentare). Die yaml bleibt die Basis,
         der Store ueberlagert sie (s. load_config). Danach sauberer Exit nach laufender Analyse;
-        systemd startet neu (Live-Reload folgt in Phase 4)."""
+        systemd startet neu (Live-Reload folgt in Phase 4).
+
+        -> (ok, msg, neustart_laeuft). Das dritte Feld ist seit B6 noetig: eine reine
+        debug-Aenderung wirkt LIVE, der Dienst geht dabei NICHT unten durch. Die
+        Warteschleife der Seite erkennt einen Neustart an genau diesem 'erst unten,
+        dann wieder oben' und wuerde sonst zwei Minuten in ihren Deckel laufen."""
         angewendet = {}
         for key, wert in aenderungen.items():
             if key not in self.CONFIG_WHITELIST:
-                return False, f"'{key}' ist nicht aenderbar"
+                return False, f"'{key}' ist nicht aenderbar", False
             typ, lo, hi, _ = self.CONFIG_WHITELIST[key]
             if typ is list:                                    # Enum-String (z.B. telegram_modus)
                 w = str(wert).strip()
                 if w not in lo:
-                    return False, f"'{key}': erlaubt {', '.join(lo)}"
+                    return False, f"'{key}': erlaubt {', '.join(lo)}", False
             else:
                 try:
                     w = (str(wert).lower() in ("1", "true", "ja", "on")) if typ is bool else typ(wert)
                 except Exception:
-                    return False, f"'{key}': ungueltiger Wert"
+                    return False, f"'{key}': ungueltiger Wert", False
                 if typ is not bool and not (lo <= w <= hi):
-                    return False, f"'{key}': erlaubt {lo}–{hi}"
+                    return False, f"'{key}': erlaubt {lo}–{hi}", False
             angewendet[key] = w
         if not angewendet:
-            return False, "keine Aenderung"
+            return False, "keine Aenderung", False
         store = _lade_config_store(self.cfg)
         store.update(angewendet)
         p = _config_store_pfad(self.cfg)
@@ -3041,10 +3223,30 @@ class Service:
             f.write(json.dumps({"ts": round(time.time(), 1), "aenderungen": angewendet},
                                ensure_ascii=False) + "\n")
             f.flush()
+        # B6: eine Aenderung, die NUR 'debug' betrifft, wirkt LIVE und loest KEINEN
+        # Neustart aus. Ohne diesen Zweig waere debug unanschaltbar: der Save-Neustart
+        # liefe sofort in den Start-Reset von load_config und loeschte den Schalter,
+        # den der User gerade gesetzt hat.
+        # "Nur debug" heisst: gegenueber der LAUFENDEN Config unterscheidet sich kein
+        # anderer Schluessel. Am Payload allein waere das nie zu erkennen — die Seite
+        # postet IMMER alle ihre cfg-Felder (webui/app.js konfigSpeichern sammelt
+        # [id^=cfg-]), nicht nur die geaenderten.
+        # Live traegt: alle Leser fragen self.cfg['debug'] JE ZEILE (debug(),
+        # _clip_dbg_senke), und beide WorkerProzess-Instanzen halten DASSELBE
+        # cfg-dict als Referenz (WorkerProzess(self.cfg, ...)) — clip_dbg wandert je
+        # Job daraus in den Worker. Der Store wird trotzdem geschrieben (oben,
+        # unveraendert): er bleibt die Quelle dessen, was der User zuletzt gesetzt hat.
+        _fehlt = object()
+        geaendert = {k for k, w in angewendet.items() if self.cfg.get(k, _fehlt) != w}
+        if geaendert == {"debug"}:
+            self.cfg["debug"] = angewendet["debug"]
+            self.log(f"CONFIG changed via UI (JSON store): {angewendet} — "
+                     f"applied live, no restart")
+            return True, f"gespeichert: {angewendet} — applied live, no restart", False
         self.log(f"CONFIG changed via UI (JSON store): {angewendet} — restart after the current analysis")
 
         self.neustart("Konfig")
-        return True, f"gespeichert: {angewendet} — Dienst startet gleich neu"
+        return True, f"gespeichert: {angewendet} — Dienst startet gleich neu", True
 
     # Modulumbau R2: Erst-Boot-Auto-Default + Settings-Hinweis leben in
     # core/kette.py (Injektion pur: die EINEN Store-IO-/Mess-Funktionen dieses
@@ -4999,7 +5201,7 @@ class Service:
                        ignore_errors=True)
 
     def lernlauf_vorbereiten_starten(self, anzahl, alle_modus=False, nur_neue=False,
-                                     tag=None):
+                                     tag=None, dateien=None):
         """E1.72: die Vorbereitungs-Phase ARBEITET sichtbar (User-Wunsch nach dem
         ersten 10er-Lauf: 'dann wuesste man, der arbeitet im Hintergrund') — geht die
         gewaehlten Events einzeln durch, prueft Clip-Verfuegbarkeit, zaehlt im
@@ -5007,22 +5209,30 @@ class Service:
         ohnehin; schliesst zugleich die Widerleger-Luecke 'nur die Zahl gespeichert').
         nur_neue (.262 Fortsetzungs-Suche): schon durchsuchte Events ueberspringen.
         tag (.263 Tages-Modus): 'YYYY-MM-DD' — ALLE person-Events dieses Tages
-        statt der letzten anzahl (anzahl wird dann ignoriert)."""
+        statt der letzten anzahl (anzahl wird dann ignoriert).
+        dateien (.33x DATEIQUELLE, Bauplan analysen/12): Liste eigener Videodateien
+        ODER ein Ordner statt Frigate-Events — fuer Aufnahmen, die nicht (mehr) in
+        Frigates Aufbewahrung liegen. anzahl/alle_modus/nur_neue/tag sind dann
+        wirkungslos; ALLES DAHINTER bleibt unveraendert (kein zweiter
+        Erkennungspfad)."""
         with self._lernlauf_start_lock:               # F2.2: check-then-act atomar
             t = getattr(self, "_lernlauf_prep_thread", None)
             if t and t.is_alive():
                 return False
             t = threading.Thread(target=self._lernlauf_vorbereiten, daemon=True,
                                  name="lernlauf-prep",
-                                 args=(anzahl, alle_modus, nur_neue, tag))
+                                 args=(anzahl, alle_modus, nur_neue, tag, dateien))
             self._lernlauf_prep_thread = t
         t.start()
         return True
 
-    def _lernlauf_vorbereiten(self, anzahl, alle_modus, nur_neue=False, tag=None):
+    def _lernlauf_vorbereiten(self, anzahl, alle_modus, nur_neue=False, tag=None,
+                              dateien=None):
         from core import ereignisse as _evm
         from core import lernlauf as _ll
         dd = self.cfg["data_dir"]
+        if dateien:
+            return self._lernlauf_vorbereiten_dateien(dateien)
         try:
             # .262 Fortsetzungs-Suche: genug NEUERE Events mitholen, damit nach
             # dem Filter noch 'anzahl' UNdurchsuchte uebrig sind (hoechstens
@@ -5091,6 +5301,69 @@ class Service:
         except Exception as e:
             _ll.lauf_fortschreiben(dd, fortschritt={"status": f"preparation failed: {e}"})
             self.log(f"learning run preparation failed ({e})")
+
+    def _lernlauf_vorbereiten_dateien(self, dateien):
+        """.33x DATEIQUELLE (Bauplan analysen/12): die events_liste kommt aus EIGENEN
+        Videodateien statt aus Frigates API. Alles danach ist identisch — die Dateien
+        liegen nach dem Einspeisen im Clip-Cache, und `core.frames.clip_holen` laedt
+        nur, wenn eine Datei FEHLT. Der Rest der Kette merkt den Unterschied nicht.
+
+        `dateien` ist ein Ordner ODER eine Liste von Pfaden. Jede Datei bekommt eine
+        selbst erzeugte eid (aus dem Inhalt, nie aus dem Dateinamen) und eine
+        DAUERMARKE gegen den Aufraeumer — eingespeistes Material ist nicht nachladbar
+        (QS-Einwand A). Fehlerhafte Dateien stoppen den Lauf NIE, sie werden gezaehlt
+        und benannt."""
+        from core import dateiquelle as _dq, lernlauf as _ll
+        dd = self.cfg["data_dir"]
+        # .334 (Audit-Befund 24.08.): der frisch angelegte Lauf ist der
+        # Freigabe-Bezug der Dauermarken — lauf_loeschen gibt sie damit wieder
+        # frei, vorher waren eingespeiste Clips fuer immer unloeschbar.
+        _z0, _f0 = _ll.lauf_lesen(dd)
+        lid = str((_z0 or {}).get("lauf_id") or "") or None
+        try:
+            if isinstance(dateien, str) and os.path.isdir(dateien):
+                events, fehler = _dq.ordner_einspeisen(dateien, dd, log=self.log,
+                                                       lauf_id=lid)
+            else:
+                pfade = [dateien] if isinstance(dateien, str) else list(dateien)
+                events, fehler = [], []
+                for pf in pfade:
+                    kam = re.sub(r"[^A-Za-z0-9_\-]", "_",
+                                  os.path.splitext(os.path.basename(pf))[0])[:64]
+                    try:
+                        events.append(_dq.einspeisen(pf, kam, dd, log=self.log,
+                                                     lauf_id=lid))
+                    except Exception as e:                        # noqa: BLE001
+                        fehler.append((os.path.basename(pf), str(e)))
+                        self.log(f"file source: SKIPPED {os.path.basename(pf)} — {e}")
+            n = len(events)
+            if not n:
+                _ll.lauf_fortschreiben(dd, fortschritt={
+                    "status": "file source: no usable video found — "
+                              f"{len(fehler)} file(s) rejected"})
+                self.log(f"file source: nothing usable ({len(fehler)} rejected)")
+                return
+            z = _ll.lauf_fortschreiben(
+                dd, events=n, events_liste=events,
+                fortschritt={"checking events": f"{n}/{n}", "with clip": n,
+                             "source": "own video files",
+                             "rejected files": len(fehler),
+                             "status": "prepared — starting the harvest"})
+            if z is None:
+                self.log("file source: run was aborted during preparation")
+                return
+            self.log(f"learning run prepared from files: {n} clip(s), "
+                     f"{len(fehler)} rejected")
+            if z.get("erntefreigabe"):
+                self.lernlauf_ernte_starten()
+            else:
+                _ll.lauf_fortschreiben(dd, fortschritt={
+                    "status": "planned under the foundation build — abort and "
+                              "create the run again to harvest"})
+        except Exception as e:                                     # noqa: BLE001
+            _ll.lauf_fortschreiben(dd, fortschritt={
+                "status": f"file source preparation failed: {e}"})
+            self.log(f"file source preparation failed ({e})")
 
     def lernlauf_ernte_starten(self):
         """E2 (S7): Frontal-Ernte-Schleife starten (ein Thread; Doppelstart-Guard
@@ -5762,6 +6035,10 @@ class Service:
                                 {"typ": "ernte", "eid": eid, "kamera": e.get("kamera"),
                                  "ts": e.get("start") or 0, "fps_sample": fps,
                                  "schwellen": schwellen, "lauf_dir": lauf_dir,
+                                 # .33x DATEIQUELLE: Herkunft aus der events_liste
+                                 # in den Job — sie wandert von hier bis in die
+                                 # Anker-Kachel (Bauplan analysen/12).
+                                 "quelle": e.get("quelle"),
                                  # .287 [clipdbg]: Quelle + Event-Alter (jetzt
                                  # minus Ende = start + clip_s) fuer die
                                  # Clip-Debug-Zeilen im Worker (ernte.log).
@@ -6903,7 +7180,8 @@ class Service:
         disk_frei_min_gb — unter der Marke fliegen die aeltesten Clips unabhaengig vom
         Deckel, bis wieder Luft ist. Und: der Lauf haengt nicht mehr NUR am verarbeiteten
         Event (auf voller Platte scheiterte die Verarbeitung und damit das Aufraeumen),
-        sondern laeuft auch beim Start, alle 10 min (start_plattenwache) und per Knopf.
+        sondern laeuft auch beim Start, im Wachen-Takt (start_plattenwache:
+        taeglich, bei Knappheit alle 10 min — .331) und per Knopf.
         Reicht der Clip-Cache nicht, wird es LAUT (disk_warnung -> System-Ampel rot).
         -> dict {geloescht, frei_mb, cache_gb, frei_gb, knapp} fuer den Knopf."""
         import shutil
@@ -6922,10 +7200,15 @@ class Service:
                 # ("cache cleanup: 1 clips older than 7d deleted"): das Gate
                 # verlor sein Pruefmaterial, die Pin-Datei blieb als Waise
                 # liegen. Dasselbe kann einen laufenden Lernlauf treffen.
+                # .33x: eingespeiste Clips (Dateiquelle, Bauplan analysen/12) tragen
+                # eine DAUERMARKE und bleiben in BEIDEN Zweigen stehen. Grund: sie
+                # sind nicht nachladbar — ein geloeschter Frigate-Clip kostet einen
+                # Download, ein geloeschter eingespeister ist endgueltig weg.
                 gone = [fn for fn in os.listdir(cache)
                         if fn.endswith((".mp4", ".part"))
                         and os.path.getmtime(os.path.join(cache, fn)) < cutoff
-                        and not _fr.gepinnt(os.path.join(cache, fn))]
+                        and not _fr.gepinnt(os.path.join(cache, fn))
+                        and not _fr.wird_behalten(os.path.join(cache, fn))]
                 befreit = 0
                 for fn in gone:
                     try:
@@ -6957,7 +7240,7 @@ class Service:
                         # ein Abnehmer (Refcount je Halter) — nie wegraeumen,
                         # sonst reisst der Size-Cap dem zweiten Halter die
                         # Datei unterm Urteil weg (Widerleger-MUSS 4).
-                        if _fr.gepinnt(p):
+                        if _fr.gepinnt(p) or _fr.wird_behalten(p):
                             continue
                         if gesamt <= cap and frei >= boden:
                             break
@@ -7079,9 +7362,10 @@ class Service:
         return (cap or a_cap), (frei or a_frei), f"{quelle} ({ges:.0f} GB disk)"
 
     def start_plattenwache(self):
-        """.313 (Issue #25): Platten-Wache — beim Start und alle 600 s cleanup_cache, damit
-        das Aufraeumen nicht vom naechsten verarbeiteten Event abhaengt (das auf voller
-        Platte gerade nicht mehr kommt)."""
+        """.313 (Issue #25): Platten-Wache — cleanup_cache beim Start und dann im
+        Zwei-Takte-Rhythmus (.331: entspannt taeglich, knapp alle 10 min, s. Block
+        unten), damit das Aufraeumen nicht vom naechsten verarbeiteten Event
+        abhaengt (das auf voller Platte gerade nicht mehr kommt)."""
         def lauf():
             time.sleep(20)                        # Start abwarten (Worker/Engine zuerst)
             # .32x (Issue #25, zweiter Befund): ein Cache-Deckel, der GROESSER ist
@@ -8823,12 +9107,22 @@ def make_handler(svc):
                     # .263 Tages-Modus (Wechselschalter): ein ganzer Tag statt
                     # der letzten N Events (Frigate after/before, live belegt).
                     tag_wahl = str(d.get("tag") or "").strip()
+                    # .33x DATEIQUELLE (Bauplan analysen/12): eigene Videodateien
+                    # statt Frigate-Events — fuer Aufnahmen, die nicht (mehr) in
+                    # Frigates Aufbewahrung liegen. Ein Ordner ODER eine Liste.
+                    # Der Pfad wird NICHT aus einem Dateinamen gebaut: das Modul
+                    # erzeugt die Event-IDs selbst (QS-Einwand E).
+                    _dw = d.get("dateien")
+                    dateien_wahl = (str(_dw).strip() if isinstance(_dw, str)
+                                    else ([str(x) for x in _dw] if isinstance(_dw, list) and _dw
+                                          else ""))
                 except (ValueError, TypeError):
                     ev = 0
                     lauf_fps = 0
                     zielperson = ""
                     nur_neue = False
                     tag_wahl = ""
+                    dateien_wahl = ""
                 if tag_wahl:
                     try:
                         datetime.datetime.strptime(tag_wahl, "%Y-%m-%d")
@@ -8836,6 +9130,8 @@ def make_handler(svc):
                         return self._send(400, json.dumps(
                             {"ok": False, "msg": _sprache.t("antwort.lernlauf_tag_ungueltig")},
                             ensure_ascii=False), "application/json")
+                elif dateien_wahl:
+                    pass                    # .33x: der Umfang kommt aus den Dateien
                 elif ev <= 0 or ev > svc.LERNLAUF_EVENTS_MAX:
                     return self._send(400, json.dumps({"ok": False,
                                       "msg": _sprache.t("antwort.events_bereich",
@@ -8879,6 +9175,10 @@ def make_handler(svc):
                             _ll.lauf_schreiben(cfg["data_dir"], dict({"phase": "vorbereitung",
                                                              "events": ev,
                                                              "alle": bool(d.get("alle")),
+                                                             # .33x DATEIQUELLE
+                                                             **({"quelle": "datei",
+                                                                 "dateien": dateien_wahl}
+                                                                if dateien_wahl else {}),
                                                              "erntefreigabe": True,
                                                              "ts": round(time.time(), 1),
                                                              "fortschritt": {}},
@@ -8902,7 +9202,8 @@ def make_handler(svc):
                             + (", skipping already-searched events" if nur_neue else ""))
                     svc.lernlauf_vorbereiten_starten(ev, alle_modus=bool(d.get("alle")),
                                                      nur_neue=nur_neue,
-                                                     tag=tag_wahl or None)
+                                                     tag=tag_wahl or None,
+                                                     dateien=dateien_wahl or None)
                 return self._send(200, json.dumps({"ok": True,
                                   "msg": _sprache.t("antwort.lernlauf_angelegt")},
                                   ensure_ascii=False), "application/json")
@@ -8954,9 +9255,13 @@ def make_handler(svc):
                 try:
                     n = int(self.headers.get("Content-Length", 0))
                     d = json.loads(self.rfile.read(min(n, 8192)))
-                    ok, msg = svc.config_schreiben(d)
+                    # B6: 'neustart' sagt der Seite, ob sie auf einen Neustart
+                    # warten muss — eine reine debug-Aenderung wirkt live.
+                    ok, msg, neustart = svc.config_schreiben(d)
                     return self._send(200 if ok else 400,
-                                      json.dumps({"ok": ok, "msg": msg}, ensure_ascii=False),
+                                      json.dumps({"ok": ok, "msg": msg,
+                                                  "neustart": neustart},
+                                                 ensure_ascii=False),
                                       "application/json")
                 except Exception as e:
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
@@ -11939,6 +12244,14 @@ def make_handler(svc):
                      # messung vorliegt (uebersprungen auf kleinen Maschinen /
                      # letzter Fehlversuch), statt still zu fehlen.
                      "wanduhr": svc.wanduhr_status(),
+                     # Rechenprobe (Lieferung C): rechnet jedes Modell auf seinem
+                     # Betriebs-Geraet das, was die CPU rechnet? Muster wanduhr —
+                     # das Feld sagt, WOHER die Zahlen stammen (measured/cached/
+                     # failed/given up), statt still zu fehlen (K1). Der Hauptweg
+                     # bleibt das Docker-Log; dieses Feld macht die Zeilen
+                     # maschinenlesbar (Tester schicken /health, nicht 400 Logzeilen).
+                     "rechenprobe": getattr(svc, "rechenprobe", None)
+                                    or {"quelle": "not run yet"},
                      # Live-Reiter (Phase 2): Engine-Herzschlag + Waechter-
                      # Zustaende aus DERSELBEN Ableitung wie die Kacheln
                      # (livewache.ui_zustand + registry.LIVE_ZUSTAENDE — die
@@ -12546,6 +12859,136 @@ def daten_mount_hinweis(data_dir):
             "\"./suslik-data:/data\" to your compose file, then move your data in.")
 
 
+# Urteil der Rechenprobe -> Marke des Selbstcheck-Logs. Nur 'fail' wird zu [FAIL] und
+# zaehlt damit REGULAER in startup_fails (core.selfcheck.schreiben zaehlt die FAIL-Marken)
+# — genau so, wie es der B8-Fang verlangt: Selbstcheck-FAIL und health-ok koennen nie
+# gleichzeitig wahr sein. 'skip' ist kein Mangel (cpu by design, Budget) und bleibt info.
+RECHENPROBE_MARKEN = {"ok": "ok", "warn": "warn", "fail": "FAIL", "skip": "info"}
+RECHENPROBE_VERSUCHE_MAX = 3      # Absturzsicherung, Muster _anker_boot_start
+
+
+def rechenprobe_schluessel(cfg):
+    """Cache-Schluessel der Rechenprobe.
+
+    Der Placement-Schluessel ALLEIN reicht NICHT (Konzept 15 §4, ausdruecklich): er kennt
+    CPU, Geraeteknoten, onnxruntime-Version und suslik-Version — aber nicht, WELCHES
+    Image dieselbe Hardware bedient. gpu und gpu-legacy tragen verschiedene Intel-
+    Runtimes und liefern auf demselben Geraet verschiedene Zahlen (am 24.08. live belegt:
+    die legacy1-Runtime bindet unsere Xe ueberhaupt nicht). Dazu kommen die vier Groessen,
+    die das Ergebnis ebenfalls verschieben: Erkennungs-Modell, Backend-Spec, das Geraet
+    der Norm-Kette und der TREIBERSTAND aus dpkg."""
+    from core import rechenprobe as _rp
+    return "|".join([_placement_hw_key(), str(cfg.get("modell") or ""),
+                     str(cfg.get("backend") or ""), _rp.norm_geraet(),
+                     driver_versions() or "-", os.environ.get("SUSLIK_VARIANT", "")])
+
+
+def _rechenprobe_stand_schreiben(pfad, stand):
+    """state/rechenprobe.json atomar schreiben (Muster core.selfcheck.schreiben)."""
+    os.makedirs(os.path.dirname(pfad), exist_ok=True)
+    with open(pfad + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(stand, f, ensure_ascii=False)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(pfad + ".tmp", pfad)
+
+
+def rechenprobe_schritt(svc, cfg, erg):
+    """Schritt 8 des Selbstchecks: rechnet jedes Modell auf seinem BETRIEBS-Geraet das,
+    was die CPU rechnet? (Lieferung C, analysen/15 §4.)
+
+    WO SIE LAEUFT — im BOOT-EXKLUSIVFENSTER, und das ist im Code nachgeprueft: main()
+    startet nur den Web-Thread (verifyd.py:13358-13359, Stand 24.08.), ruft dann
+    startup_selfcheck (:13362) und erst DANACH Wartung, Live-Aufsicht und den Poll-/
+    MQTT-Loop (:13363-13382). Waehrend dieses Schritts rechnet also nichts anderes auf
+    der GPU — auch der Analyse-Worker nicht, der startet lazy erst mit seinem ersten Job.
+    Das ist keine Bequemlichkeit, sondern Messbedingung: vier gleichzeitig offene Modelle
+    auf einer 24-EU-iGPU haben in einem Probelauf den Erkennungs-Kosinus von 0,999753 auf
+    0,857 gedrueckt (Probelauf 24.08.).
+
+    ALS EIGENER PROZESS der Worker-Maschinerie (dritte WorkerProzess-Instanz nach dem
+    personwork-Muster): er erbt killpg, oom_score_adj, RSS-Wache, fd-Umleitung und den
+    Stopp-vor-execv-Pfad. Er LIEFERT nur Daten — gedruckt wird hier im Hauptprozess,
+    sonst stuende nichts davon im Docker-Log (User-Entscheid). Danach wird er SOFORT
+    gestoppt: ein stehender dritter Prozess hielte seine ORT-Arena fuer immer
+    (Soak-Befund 27.07.: nur ein Prozess-Ende gibt sie zurueck).
+
+    ABSTURZSICHERUNG wie _anker_boot_start: der Versuchszaehler wird VOR dem Start
+    geschrieben, damit auch ein Kill mitten im Lauf zaehlt. Ab
+    RECHENPROBE_VERSUCHE_MAX Fehlversuchen wird dauerhaft uebersprungen, mit Klartext —
+    eine Probe, die die Maschine reproduzierbar umbringt, darf keinen Boot-Loop bauen."""
+    from core import rechenprobe as _rp
+    from core.registry import MODELL_VERTRAG
+    from face_audit import resolve_backend
+    dd = cfg.get("data_dir") or ""
+    pfad = os.path.join(dd, "state", "rechenprobe.json")
+    schluessel = rechenprobe_schluessel(cfg)
+    try:
+        with open(pfad, encoding="utf-8") as f:
+            alt = json.load(f) or {}
+    except Exception:                                 # noqa: BLE001
+        alt = {}
+    passend = alt.get("schluessel") == schluessel
+    # Ein Cache-Treffer gilt nur fuer einen VOLLSTAENDIGEN Lauf. Riss das Zeitbudget,
+    # tragen die fehlenden Modelle die Zeile "continues on a later start" — die waere
+    # eine LUEGE, wenn der naechste Start sie aus dem Cache wiederholte statt sie
+    # nachzuholen. Der Nachhol-Lauf ist billig: die Kompilate der schon gemessenen
+    # Modelle liegen dann warm (gemessen: 42,7 s kalt gegen 13,2 s warm).
+    if passend and alt.get("zeilen") is not None and alt.get("vollstaendig"):
+        for z in alt["zeilen"]:
+            erg(RECHENPROBE_MARKEN.get(z.get("urteil"), "info"),
+                f"{_rp.logzeile(z)} (cached)")
+        svc.rechenprobe = dict(alt, quelle="cached")
+        return
+    versuche = int(alt.get("versuche") or 0) if passend else 0
+    if versuche >= RECHENPROBE_VERSUCHE_MAX:
+        grund = (f"compute probe permanently skipped on this machine — it did not "
+                 f"finish {versuche} times in a row (the service kept booting; delete "
+                 f"state/rechenprobe.json to try again)")
+        erg("warn", grund)
+        svc.rechenprobe = {"quelle": "given up", "versuche": versuche, "grund": grund}
+        return
+    _rechenprobe_stand_schreiben(pfad, {"schluessel": schluessel, "versuche": versuche + 1,
+                                        "ts": round(time.time(), 1)})   # write-ahead
+    kind, dev = resolve_backend(cfg.get("backend") or None)
+    karte = _rp.geraete_karte(MODELL_VERTRAG, kind, dev, _rp.norm_geraet())
+    log = os.path.join(dd, "state", "rechenprobe.log")
+    open(log, "w").close()          # je Versuch frisch (Muster run_analyze): das rohe
+    #                                 Treiber-Gerede sind ~450 Zeilen je Lauf und ist nur
+    #                                 fuer DEN Versuch interessant, der gerade lief
+    erg("info", f"{'probe':<5} raw driver output of this step goes to state/rechenprobe.log")
+    w = WorkerProzess(cfg, log=svc.log, rss_key="worker_rss_max_mb", rss_default=4096,
+                      name="rechenprobe")
+    try:
+        # Frist: das Messbudget selbst ist 60 s (Konzept §7 "Vorschlag 60 s gesamt"), es
+        # wird VOR jedem Modell geprueft — ein Modell, das um 59 s beginnt, darf noch
+        # fertig kompilieren (kalt gemessen: voller Lauf 42,7 s). 240 s decken das plus
+        # den Prozessstart; reisst die Frist, killt job() den Prozess und der Zaehler
+        # oben steht schon.
+        antwort = w.job({"typ": "rechenprobe", "zeitbudget_s": 60,
+                         "backend_geraet_je_task": karte, "log": log}, 240)
+    finally:
+        w.stop()
+    zeilen = (antwort or {}).get("rechenprobe")
+    if zeilen is None:
+        grund = (f"compute probe did not deliver (attempt {versuche + 1}/"
+                 f"{RECHENPROBE_VERSUCHE_MAX}) — see state/rechenprobe.log")
+        erg("warn", grund)
+        svc.rechenprobe = {"quelle": "failed", "versuche": versuche + 1, "grund": grund}
+        return
+    for z in zeilen:
+        erg(RECHENPROBE_MARKEN.get(z.get("urteil"), "info"), _rp.logzeile(z))
+    if antwort.get("rechenprobe_grund"):
+        erg("warn", antwort["rechenprobe_grund"])
+    stand = {"schluessel": schluessel, "versuche": 0, "zeilen": zeilen,
+             "ts": round(time.time(), 1),
+             "vollstaendig": not any("time budget" in (z.get("grund") or "")
+                                     for z in zeilen),
+             "grund": antwort.get("rechenprobe_grund") or ""}
+    _rechenprobe_stand_schreiben(pfad, stand)
+    svc.rechenprobe = dict(stand, quelle="measured")
+
+
 def startup_selfcheck(svc):
     """Lesbarer, nummerierter Startup-Ablauf nach stdout (docker logs -f) + Log-Puffer (/log): je
     Schritt [i/N] WAS getan wird (config/hardware/backend/model/frigate/references) + darunter WAS
@@ -12555,7 +12998,7 @@ def startup_selfcheck(svc):
     from face_audit import resolve_backend, aktuelles_modell, MODELLE, _ort_session   # dort def., nicht verifyd
     cfg, L = svc.cfg, svc.log
 
-    N = 7
+    N = 8
 
     def schritt(i, name, tut):                        # ein nummerierter Schritt: WAS wird getan
         _schritt_ctx.update(nr=i, name=name)
@@ -12622,6 +13065,46 @@ def startup_selfcheck(svc):
     rv = rocm_versions()
     if rv:
         erg("info", f"ROCm: {rv}")
+    # S2 (Lieferung B): Speicherbild mit EHRLICHER HERKUNFT je Zahl. Anlass ist
+    # Giuseppes Worker-Sterben — ohne diese drei Zahlen bleibt jede Ferndiagnose
+    # Raterei ("wieviel Speicher hat die Kiste eigentlich?"). Diagnose darf den
+    # Start nie reissen (try wie die Nachbar-Schritte) und meldet NIE FAIL.
+    try:
+        _gmb, _gq = _cgroup_speicher_grenze()
+        if _gmb > 0:
+            erg("info", f"{'mem':<5} container memory limit: {_gmb} MB ({_gq})")
+        else:
+            erg("info", f"{'mem':<5} no container memory limit set "
+                        f"(none readable in this cgroup or above it)")
+        _mt, _ma, _sw = _meminfo_mb()
+        erg("info", f"{'mem':<5} /proc/meminfo: total {_mt if _mt is not None else '?'} MB, "
+                    f"available {_ma if _ma is not None else '?'} MB, "
+                    f"swap {_sw if _sw is not None else '?'} MB "
+                    f"(may show the host, not this container)")
+        # Die konfigurierten POLITIK-Grenzen der beiden WorkerProzess-Instanzen
+        # (rss_key je Instanz: _worker -> worker_rss_max_mb, _personwork ->
+        # personwork_rss_max_mb, s. Service._personwork).
+        _wr = int(cfg.get("worker_rss_max_mb") or 4096)
+        _pr = int(cfg.get("personwork_rss_max_mb") or 3072)
+        erg("info", f"{'mem':<5} worker memory guards: worker_rss_max_mb={_wr} MB, "
+                    f"personwork_rss_max_mb={_pr} MB")
+        # Bewertung: liegt die Politik-Grenze ueber der Container-Decke, schiesst
+        # der Kernel, BEVOR die Wache greift — dann sieht man im Log nur ein
+        # totes Kind (S1) und nie eine geordnete Neustart-Zeile. Verglichen wird
+        # die GROESSERE der beiden Politik-Grenzen: es reicht, wenn EINE der
+        # beiden Instanzen ueber die Decke laufen darf. +1024 MB Zuschlag fuer
+        # den Dienst selbst, der neben dem Worker in derselben cgroup lebt.
+        _pol = max(_wr, _pr)
+        if _gmb > 0 and _gmb < _pol + 1024:
+            erg("warn", f"{'mem':<5} memory guard ({_pol} MB) sits at/above the "
+                        f"container limit ({_gmb} MB) — the kernel OOM killer "
+                        f"fires before the guard restarts the worker; lower the "
+                        f"guard or raise the container limit")
+        elif _gmb > 0:
+            erg("ok", f"{'mem':<5} guard {_pol} MB + service headroom fits into "
+                      f"the {_gmb} MB container limit")
+    except Exception as e:                            # Diagnose reisst den Start nie
+        erg("info", f"{'mem':<5} memory picture unavailable: {str(e)[:80]}")
     # 3) Backend — ECHTES Device-Binding testen, nicht nur EP-Praesenz (sonst "ok" obwohl real CPU laeuft:
     #    die OpenVINO-EP kann DA sein, das Device 'GPU' aber "not available" -> onnxruntime faellt still
     #    auf CPU zurueck, erkennbar daran, dass der EP aus session.get_providers() rausfaellt).
@@ -12767,15 +13250,34 @@ def startup_selfcheck(svc):
     # 6) Referenzen + Web-UI
     schritt(6, "references", "loading face master, starting web UI")
     try:
-        persons = master_persons(cfg)
-        if persons:
-            erg("ok", f"{len(persons)} person(s): {', '.join(persons[:8])}")
-        else:
+        # S4 (Lieferung B): NUR Zahlen, nie Klarnamen — bis .335 stand hier die
+        # Personenliste, und Tester haengen ihr Startlog oeffentlich an Issues.
+        # Auch der FAIL-Zweig darf str(e) nicht mehr durchreichen: eine OSError
+        # traegt den Pfad und damit den Personennamen.
+        n_pers, n_bild, n_leer = master_umfang(cfg)
+        if not n_pers:
             erg("warn", "0 — empty master; enroll via the setup wizard")
+        elif n_leer:
+            erg("warn", f"{n_pers} persons, {n_bild} reference images, "
+                        f"{n_leer} without any reference image")
+        else:
+            erg("ok", f"{n_pers} persons, {n_bild} reference images, coverage ok")
     except Exception as e:
-        erg("FAIL", str(e))
+        erg("FAIL", f"{type(e).__name__} while reading the face master")
     # 7) Benchmark — Vertrauen: WAS habe ich getestet + wie schnell je Device (zeitbudgetiert -> bounded)
     schritt(7, "benchmark", "timing each usable backend on synthetic input")
+    # B5-Aufklaerung statt Filter (24.08., gemessen): die roten pthread_setaffinity_np-
+    # Zeilen rund um diesen Schritt stammen ZU 100 %% aus der Modell-Bibliothek
+    # (insightface reicht keine SessionOptions durch; eigene Sessions setzen die
+    # Thread-Zahl und erzeugen 0 Zeilen). Abstellen ginge nur per Monkeypatch der
+    # Bibliotheks-Session — genau der Eingriff, vor dem _ort_thread_opts seit der
+    # 0.1.0.13-Regression warnt. Deshalb: erklaeren, nicht verstecken.
+    if _STDERR_SIEB is not None and _STDERR_SIEB.anzahl:
+        # .338: das Sieb (core/stderr_sieb, main()) verwirft die Flutzeile und
+        # zaehlt — hier steht die ehrliche Summe statt 60+ roter Zeilen.
+        erg("info", f"suppressed {_STDERR_SIEB.anzahl} harmless driver "
+                    f"thread-affinity notices so far (model library sets no "
+                    f"thread cap; computation is unaffected)")
     try:
         cache = os.path.join(cfg.get("data_dir") or "", "clips", "ov_cache")   # clips/ ist vom Backup ausgeschlossen (Cache = regenerierbar, NICHT in state/)
         try:
@@ -12786,7 +13288,21 @@ def startup_selfcheck(svc):
             erg(mark, f"{label:<16} {detail}")
     except Exception as e:
         erg("warn", f"benchmark skipped: {str(e)[:80]}")
-    erg("info", f"web UI on http://0.0.0.0:{cfg.get('web_port')}/  "
+    # 8) Rechenprobe — DIREKT nach dem Benchmark, also weiter im Boot-Exklusivfenster:
+    #    der Benchmark misst "wie SCHNELL", diese Stufe "und rechnet es dort auch das
+    #    RICHTIGE?". Bis .335 gab es darauf keine Antwort — der Start prueft Bindung,
+    #    nie Richtigkeit (Feldfall: eine Gen8-iGPU bindet, ist 5,9x schneller als ihre
+    #    CPU und rechnet die Feature-Norm um 105,276 daneben).
+    schritt(8, "compute", "does each model compute on its device what the CPU computes?")
+    try:
+        rechenprobe_schritt(svc, cfg, erg)
+    except Exception as e:                            # Diagnose reisst den Start nie
+        erg("warn", f"compute probe skipped: {type(e).__name__}: {str(e)[:80]}")
+    # .334 (User-Fang 24.08.: "0.0.0.0" liest sich wie eine kaputte Adresse):
+    # die Zeile sagt jetzt, WO man den Dienst erreicht, statt die Bind-Adresse
+    # zu zeigen — 0.0.0.0 ist "alle Schnittstellen", keine surfbare URL.
+    erg("info", f"web UI on port {cfg.get('web_port')}, all interfaces — "
+                f"browse http://<ip-of-this-machine>:{cfg.get('web_port')}/  "
                 f"({'first run -> setup wizard' if not cfg.get('frigate_url') else 'ready'})")
     try:
         from core import selfcheck as _sc
@@ -12809,7 +13325,17 @@ def _sigterm(signum, frame):
     sys.exit(0)
 
 
+_STDERR_SIEB = None   # gesetzt in main(); Selfcheck druckt die Summe
+
+
 def main():
+    # stderr-Sieb ZUERST (User-Auftrag 24.08., .338): die eine bekannte Treiber-Flutzeile
+    # wird verworfen und gezaehlt, alles andere fliesst durch (core/stderr_sieb).
+    # Kinder erben fd 2 und damit das Sieb — Worker-Job-Fenster (dup2 auf die
+    # Job-Logdatei) bleiben bewusst ungefiltert.
+    global _STDERR_SIEB
+    from core import stderr_sieb as _ss
+    _STDERR_SIEB = _ss.installieren()
     # umask 022 fuer den GANZEN Dienst-Baum (Kinder erben: Engine, Worker,
     # Wartung): der Container schreibt als root, und mit der Default-umask
     # entstanden 600er-Dateien, die der Host weder lesen noch sichern konnte
@@ -12863,7 +13389,8 @@ def main():
     svc.start_publisher()
     web = ThreadingHTTPServer(("0.0.0.0", int(cfg["web_port"])), make_handler(svc))
     threading.Thread(target=web.serve_forever, daemon=True).start()
-    svc.log(f"Webview: http://0.0.0.0:{cfg['web_port']}/")
+    svc.log(f"Webview: port {cfg['web_port']} on all interfaces "
+            f"(browse http://<ip-of-this-machine>:{cfg['web_port']}/)")
     startup_selfcheck(svc)                    # strukturierter Selbstcheck nach stdout (Roadmap 4/10)
     svc.start_wartung()
     svc.start_stoerungswaechter()

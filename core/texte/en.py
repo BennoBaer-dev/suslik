@@ -1822,7 +1822,7 @@ T = {
     "system.ampel.disk": "Disk",
     "system.ampel.disk_info2": "{gb} GB free · clip cache {cache} GB of {max} GB",
     "system.disk.titel": "Disk space",
-    "system.disk.satz": "Clips are a cache: kept {tage} days, capped at {max} GB, and trimmed whenever less than {min} GB is free (checked every 10 minutes).",
+    "system.disk.satz": "Clips are a cache: kept {tage} days, capped at {max} GB, and trimmed whenever less than {min} GB is free (checked after every event and by a daily disk watch that tightens to every 10 minutes while space is low).",
     "system.disk.knopf": "Clean up now",
     "system.disk.warnung": "Only {gb} GB free and the clip cache is already empty — free space on the data volume; otherwise new events cannot be saved.",
     "system.ampel.ok": "OK",

@@ -62,6 +62,8 @@ telegram_cooldown: 600   # throttle for unknown-person Telegram messages (second
 # Web + data
 web_port: 8199
 data_dir: ./verify_data
-clip_retention_d: 7      # delete cached record clips after N days (crops/logs stay)
+# clip_retention_d: 2   # optional: cached record clips are kept N days (default 2 — leave
+                         # this line commented out unless you want a different number; a set
+                         # value overrides the default, that is how one install kept 7 days)
 szenario_gap_min: 5      # Today page: events less than N min apart form ONE scenario (one pass over the property)
 besucher_sim: 0.50       # "ignore": above this cosine similarity an unknown event counts as an ignored visitor

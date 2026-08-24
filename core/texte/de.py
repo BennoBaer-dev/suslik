@@ -1788,7 +1788,7 @@ T = {
     "system.ampel.disk": "Speicherplatz",
     "system.ampel.disk_info2": "{gb} GB frei · Clip-Cache {cache} GB von {max} GB",
     "system.disk.titel": "Speicherplatz",
-    "system.disk.satz": "Clips sind ein Cache: {tage} Tage aufbewahrt, gedeckelt auf {max} GB, und ausgedünnt, sobald weniger als {min} GB frei sind (alle 10 Minuten geprüft).",
+    "system.disk.satz": "Clips sind ein Cache: {tage} Tage aufbewahrt, gedeckelt auf {max} GB, und ausgedünnt, sobald weniger als {min} GB frei sind (geprüft nach jedem Event und einmal täglich von einer Speicherplatz-Wache, die bei wenig freiem Platz auf alle 10 Minuten umschaltet).",
     "system.disk.knopf": "Jetzt aufräumen",
     "system.disk.warnung": "Nur noch {gb} GB frei und der Clip-Cache ist schon leer — Platz auf dem Datenvolume schaffen, sonst können neue Events nicht gespeichert werden.",
     "system.ampel.ok": "OK",

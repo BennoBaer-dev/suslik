@@ -150,7 +150,7 @@ def gate_v_norm(norm, front_kps, s):
 def kandidat_zeile(eid, kamera, ts, t, bbox, det, front, sharp, kante, pose,
                    emb_vec, modell, m, s_flag, datei,
                    norm=None, front_kps=None, richtung=None, v=False, datei_v=None,
-                   struktur=None):
+                   struktur=None, quelle=None):
     """Eine Kandidaten-Zeile — die Rundungsregeln sind Teil des Vertrags (V0.5).
     det/front/sharp/pose kommen bereits GERUNDET herein (Gate == Zeile); die
     round()-Aufrufe hier sind idempotent und sichern den Vertrag am Rand ab.
@@ -166,7 +166,13 @@ def kandidat_zeile(eid, kamera, ts, t, bbox, det, front, sharp, kante, pose,
             "norm": None if norm is None else round(float(norm), 4),
             "front_kps": None if front_kps is None else round(float(front_kps), 4),
             "richtung": richtung, "v": bool(v), "datei_v": datei_v,
-            "struktur": None if struktur is None else round(float(struktur), 4)}
+            "struktur": None if struktur is None else round(float(struktur), 4),
+            # .33x DATEIQUELLE: Herkunft des Clips ("datei" oder None=Frigate).
+            # Sie wandert bis in die Anker-Kachel, damit dort kein /video/-Link
+            # auf ein Event angeboten wird, das es bei Frigate nie gab
+            # (Bauplan analysen/12, QS-Einwand B). Am SIGNATUR-ENDE mit Default,
+            # wie die Vorrats-Felder: Alt-Aufrufer und Alt-Leser bleiben gueltig.
+            "quelle": quelle}
 
 
 def zaehler_pruefen(z):
@@ -243,7 +249,7 @@ def manifest_schreiben(lauf_dir, manifest):
 
 
 def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
-                ist_fd=None, norm_mass=None, struktur_mass=None):
+                ist_fd=None, norm_mass=None, struktur_mass=None, quelle=None):
     """Frontal-Ernte fuer EIN Event (1 Event je Job — Live-Vorrang, Leitprinzip 5).
 
     Schreibt die Kandidaten (alle L-Passierer) in kandidaten/<eid>.jsonl — die Datei
@@ -459,7 +465,7 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
                                        fc.normed_embedding, modell, m, s_flag, datei,
                                        norm=norm, front_kps=front_kps,
                                        richtung=richtung, v=v_flag, datei_v=datei_v,
-                                       struktur=struktur)
+                                       struktur=struktur, quelle=quelle)
                 out.write(json.dumps(zeile, ensure_ascii=False) + "\n")
                 out.flush()
                 z["kandidaten"] += 1

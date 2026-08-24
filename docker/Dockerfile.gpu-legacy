@@ -48,6 +48,25 @@ RUN pip install --no-cache-dir -r /app/requirements.txt \
     && pip uninstall -y onnxruntime onnxruntime-openvino \
     && pip install --no-cache-dir --no-deps onnxruntime-openvino==1.24.1
 
+# --- S3: Intel-NEO-Kernel-Cache ins VOLUME, identisch zum Dockerfile.gpu. Muster ist
+#     Dockerfile.rocm (MIOPEN_CUSTOM_CACHE_DIR / AMD_COMGR_CACHE_DIR -> /data/clips/migraphx_cache);
+#     clips/ ist vom Backup ausgeschlossen, weil Kompilate regenerierbar sind.
+#     FEHLERKLASSE: der NEO-Treiber legt seinen OpenCL-Kernel-Cache per Default unter
+#     $HOME/.cache/neo_compiler_cache an (docker diff, 24.08.). Bei read-only Root kann er dort
+#     nicht schreiben, und der Beschleuniger rechnet still FALSCH und nicht reproduzierbar
+#     (gemessen: 2,359/2,359/0,293 statt 0,000, Norm 20,3 statt 26,07).
+#     Belegt am ausgelieferten LEGACY-Treiber: NEO_CACHE_DIR, NEO_CACHE_PERSISTENT und
+#     NEO_CACHE_MAX_SIZE stehen auch in libigdrcl_legacy1.so (24.35) als Strings — die drei
+#     Namen sind in beiden Runtime-Staenden dieselben (nur NEO_CACHE_STATS fehlt hier, wird
+#     nicht gebraucht).
+#     Deckel 1 GiB: zwei Norm-Kompilat-Blobs rund 252 MB plus Embedder-Kompilate.
+#     ACHTUNG: das Verzeichnis muss zur LAUFZEIT existieren. Fehlt es, legt der Treiber es NICHT
+#     an, sondern schaltet den Cache still ab (gemessen 24.08.). /data ist ein Volume-Mount, ein
+#     RUN mkdir hier waere davon verdeckt -> das Anlegen gehoert in den Dienststart. ---
+ENV NEO_CACHE_DIR=/data/clips/neo_cache \
+    NEO_CACHE_PERSISTENT=1 \
+    NEO_CACHE_MAX_SIZE=1073741824
+
 # --- Modelle backen + Code + Container-Config (identisch zum gpu-Image; backend: auto loest
 #     auf Gen9 ohne NPU nach openvino:GPU auf). ---
 COPY NOTICE LICENSE /app/

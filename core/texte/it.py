@@ -1923,7 +1923,7 @@ T = {
     "system.ampel.disk": "Disco",
     "system.ampel.disk_info2": "{gb} GB liberi · cache dei clip {cache} GB su {max} GB",
     "system.disk.titel": "Spazio su disco",
-    "system.disk.satz": "I clip sono una cache: conservati {tage} giorni, con un tetto di {max} GB, e sfoltiti non appena restano meno di {min} GB liberi (controllo ogni 10 minuti).",
+    "system.disk.satz": "I clip sono una cache: conservati {tage} giorni, con un tetto di {max} GB, e sfoltiti non appena restano meno di {min} GB liberi (verifica dopo ogni evento e controllo giornaliero del disco, che passa a ogni 10 minuti finché lo spazio scarseggia).",
     "system.disk.knopf": "Pulisci ora",
     "system.disk.warnung": "Restano solo {gb} GB liberi e la cache dei clip è già vuota — libera spazio sul volume dati, altrimenti i nuovi eventi non potranno essere salvati.",
     "system.ampel.ok": "OK",

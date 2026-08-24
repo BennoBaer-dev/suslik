@@ -104,6 +104,80 @@ def gepinnt(pfad):
     return lebt
 
 
+# .33x DAUERMARKE fuer eingespeiste Clips (Bauplan analysen/12, QS-Einwand A).
+# ABGRENZUNG ZUM PIN — die beiden loesen VERSCHIEDENE Probleme:
+#   pin      = "gerade haelt jemand die Datei"     -> verfaellt nach 30 min,
+#              denn ein toter Halter darf den Size-Cap nie dauerhaft blocken.
+#   behalten = "diese Datei kam nicht von Frigate" -> verfaellt NIE, denn sie
+#              ist nicht nachladbar. Ein geloeschter Frigate-Clip kostet einen
+#              erneuten Download; ein geloeschter eingespeister Clip ist WEG,
+#              mitten in einem Lauf, den jemand ueber Wochen bearbeitet.
+# Ohne diese Marke haette der Aufraeumer eingespeistes Material nach
+# clip_retention_d (seit .328: 2 Tage) still entfernt.
+BEHALTEN_SUFFIX = ".behalten"
+
+
+def behalten(eid, data_dir=None, lauf_id=None):
+    """Dauermarke setzen: dieser Clip ist eingespeist und NICHT nachladbar.
+    Idempotent. Der Aufraeumer laesst markierte Clips in BEIDEN Zweigen stehen
+    (Alter UND Size-Cap). Seit .334 traegt die Marke die einspeisenden
+    LAUF-IDs (eine je Zeile): dieselbe Datei landet inhaltsstabil (eid =
+    Inhalts-Hash) auch in MEHREREN Laeufen — freigegeben wird erst, wenn der
+    LETZTE Lauf geloescht ist (behalten_freigeben_lauf). Ohne lauf_id bleibt
+    das alte Touch-Verhalten (Marke ohne Lauf-Bezug, wird nie automatisch
+    freigegeben — Audit-Befund 24.08.: genau diese Marken waren unloesbar)."""
+    p = cache_pfad(eid, data_dir) + BEHALTEN_SUFFIX
+    if lauf_id and str(lauf_id) not in _behalten_zeilen(p):
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(str(lauf_id) + "\n")
+    elif not os.path.exists(p):
+        open(p, "a").close()
+
+
+def _behalten_zeilen(pfad):
+    try:
+        with open(pfad, encoding="utf-8") as f:
+            return [z.strip() for z in f if z.strip()]
+    except OSError:
+        return []
+
+
+def behalten_freigeben_lauf(data_dir, lauf_id):
+    """ALLE Dauermarken eines geloeschten Datei-Laufs freigeben (Aufrufer:
+    core.lernlauf.lauf_loeschen — ersetzt seit .334 das nie verdrahtete
+    behalten_loesen, Audit-Befund 24.08.). Zeilen-Refcount: die eigene
+    Lauf-ID verschwindet aus jeder Marke; die Marke selbst faellt erst, wenn
+    KEIN Lauf sie mehr traegt. Alt-Marken ohne Lauf-Zeilen bleiben stehen
+    (ehrliche Grenze: ihnen fehlt der Bezug). -> (freigegeben, geteilt)."""
+    import glob
+    frei, geteilt = 0, 0
+    lid = str(lauf_id)
+    for p in glob.glob(os.path.join(cache_dir(data_dir), "*" + BEHALTEN_SUFFIX)):
+        zeilen = _behalten_zeilen(p)
+        if lid not in zeilen:
+            continue
+        rest = [z for z in zeilen if z != lid]
+        try:
+            if rest:
+                tmp = f"{p}.tmp.{os.getpid()}"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    f.write("\n".join(rest) + "\n")
+                os.replace(tmp, p)
+                geteilt += 1
+            else:
+                os.remove(p)
+                frei += 1
+        except OSError:
+            geteilt += 1
+    return frei, geteilt
+
+
+def wird_behalten(pfad):
+    """Auskunft fuer cleanup_cache: traegt diese Clip-Datei die Dauermarke?
+    Bewusst OHNE Verfall (anders als gepinnt) — s. Block oben."""
+    return os.path.exists(pfad + BEHALTEN_SUFFIX)
+
+
 # ================================================= Clip-Debug ([clipdbg]) ==
 # .287 (User-Auftrag 18.08.; Frigate-Haenger-Klasse bewiesen, Task #11,
 # verify_data/messungen/frigate_haenger_20260818_191803): Frigates 40er-API-
