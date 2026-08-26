@@ -27,8 +27,10 @@ from core import registry as _reg                     # Dateinamen-Vertrag (Issu
 from core import kette as _kette                      # Modulumbau R2: die Erkennungskette (Default-Kette)
 from core import melden as _melden                    # Modulumbau R3: die Meldewege (Live-Andock-API)
 from core import frames as _frames                    # .287: Clip-Debug [clipdbg] (Senke + Direkt-Zeilen; leichtgewichtig, kein cv2)
+from core import frigate_auth as _fauth                # 5e: DER eine Frigate-HTTP-Griff (Kennung immer, Login optional)
 from core.schoner import Schoner                      # .264: Frigate-Schoner (Rueckzug statt Retry)
 from core import sprache as _sprache                  # Sprach-Stufe 1: contextvar je Request + Schalter
+from core import systemstat as _systemstat            # .341: Systemzahlen (Sammler, Ringpuffer, /health.system)
 # Oeffentliche Projekt-Doku (GitHub). Lokale Arbeitsnotizen des Autors enthalten interne
 # IPs + Zugaenge und duerfen NICHT ueber das UI ausgeliefert werden -> System-Seite + /doc zeigen aufs Repo.
 DOCS_URL = "https://github.com/BennoBaer-dev/suslik"
@@ -480,12 +482,41 @@ def norm_latte_aus_cfg(cfg):
                          if cfg.get("sichtung_struktur_min") else None)}
 
 
+def luma_grenzen_aus_cfg(cfg):
+    """Belichtungs-Grenzen der Reihung/Empfehlung (bauplan_belichtung.md E6,
+    26.08. — Issue 26: die Empfehlung waehlte sichtbar zu dunkle Bilder).
+
+    LIVE aus der Config gelesen, nach dem Vorbild von norm_latte_aus_cfg —
+    ausdruecklich NICHT ueber ernte_schwellen_aus_cfg und NICHT ins
+    Lernlauf-Manifest eingefroren: eine Nachkalibrierung der beiden Werte muss
+    auf BESTEHENDE Laeufe wirken, nicht erst auf den naechsten.
+
+    Bewusst NICHT an `vorrat_aktiv` gehaengt (die Falle darueber, Z. 466): mit
+    Vorrat=aus liefert norm_latte_aus_cfg None — die Belichtung hat mit der
+    Feature-Norm nichts zu tun und wuerde dort still verschwinden.
+
+    Je Seite gilt 0 = aus (eine untere Grenze 0 bzw. eine obere 0 waere ohne
+    Bedeutung); fehlen BEIDE Werte, ist die Achse komplett aus und alles reiht
+    und urteilt wie vor dem Einbau. -> {min, max} | None
+
+    Die Werte werden NICHT umgeformt: sie stehen so in den Begruendungstexten
+    ("needs 78+"), wie der Betreiber sie im Konfigurationsblatt eingetragen
+    hat — ein float-Cast machte daraus ein '78.0', das er dort nirgends sieht.
+    Der Vergleich selbst rechnet in core.benennung.belichtungs_lage mit float."""
+    lo, hi = cfg.get("reihung_luma_min"), cfg.get("reihung_luma_max")
+    lo = lo if lo else None            # 0 (oder fehlend) = diese Seite aus
+    hi = hi if hi else None
+    if lo is None and hi is None:
+        return None
+    return {"min": lo, "max": hi}
+
+
 def refcache_warte_antwort(anlernen):
     """.311 (User 21.08.): EINE Quelle fuer die Warte-Antwort 'die Referenzen
     werden neu aufgebaut' der drei Handler (Bruecke /auftritt_lernen, Erst-
     Sichtung, Benenn-Pruefung) — laden + Text + i/n/zustand aus
     anlernen.refcache_fortschritt(); das Blatt malt daraus den schmalen
-    Balken (ladeBalken in app.js bzw. lbBalken im Auftritte-Blatt), statt
+    Balken (ladeBalken in app.js bzw. seit .345 lbBlock im Auftritte-Blatt), statt
     nur den Text zu zeigen. Ein Zweig, der den Text ohne i/n zurueckgibt,
     waere K3 (Balken erreicht nicht alle Stellen) — deshalb der Helfer."""
     rf = anlernen.refcache_fortschritt()
@@ -545,6 +576,16 @@ def load_config(path):
                          ("ov_device", "AUTO"), ("backend", ""), ("win_min", 3), ("win_thresh", 0.40), ("alert_cooldown", 300),
                          ("web_port", 8199), ("data_dir", os.path.join(HERE, "verify_data")),
                          ("trigger", "poll"), ("lookback_h", 2),
+                         # .352 (Feld-Fund 26.08. an einer 31-Kamera-Anlage): wie viele
+                         # Events der Nachhol-Sweep je Runde bei Frigate abholt. Der Wert
+                         # war bis hierher hart verdrahtet (200) — auf einem betriebsamen
+                         # Gelaende entstehen aber 773 Person-Events in 2 h, und weil
+                         # Frigate die NEUESTEN zuerst liefert, schrumpfte das eingestellte
+                         # 2-h-Fenster real auf ~30 min. Blaettern waere die richtige
+                         # Loesung (stand.md 5h); bis dahin kann ein Betreiber grosser
+                         # Anlagen den Deckel hier heben. Kostet je Runde eine groessere
+                         # Frigate-Antwort, KEINE zusaetzliche Anfrage.
+                         ("sweep_limit", 200),
                          # .32x (User 22.08. + Issue #25): der Clip-Cache war der
                          # groesste Posten im Datenordner — gemessen 22,6 GB in
                          # 1542 Clips, davon 1212 aelter als zwei Tage. Ein Clip
@@ -555,6 +596,9 @@ def load_config(path):
                          # Clip-Erzeugung — das rechtfertigt Stunden, nicht Tage.
                          # 7 -> 2 Tage senkt den Cache hier von 22,6 auf ~4 GB.
                          ("clip_retention_d", 2),
+                         # .341: Aufbewahrung fuer Lernlaeufe + Deckel fuer die
+                         # OpenVINO-Kompilate (beide wuchsen bisher unbegrenzt).
+                         ("lernlauf_retention_d", 14), ("ov_cache_max_gb", 1.0),
                          # Und der Deckel war MEHR ALS DIE PLATTE: der Melder von
                          # Issue #25 hat 32 GB, der Vorgabewert stand auf 50 —
                          # der Deckel konnte per Konstruktion nie greifen, sein
@@ -596,6 +640,14 @@ def load_config(path):
                          ("alert_kategorien", ["widerspruch", "erkannt", "fremd_verdacht"]),
                          ("sub_label_schreiben", True), ("mqtt_publish", True), ("frigate_read_only", True),
                          ("szene_karenz_s", 90),
+                         # 5e Frigate-Login (optional): LEER ist der Auslieferungs-
+                         # zustand und heisst "kein Login" — dann laeuft jeder
+                         # Frigate-Zug exakt wie bisher (core/frigate_auth). Die
+                         # Zertifikats-Pruefung steht auf AN; sie muss nur aus,
+                         # wenn Frigates Auth-Port mit seinem selbstsignierten
+                         # Werks-Zertifikat laeuft.
+                         ("frigate_user", ""), ("frigate_password", ""),
+                         ("frigate_tls_verify", True),
                          # .200 Whitelist-Paar-Nachzug (Usersicht-Review 14.08.): vier Whitelist-
                          # Schluessel hatten KEIN Default-Paar hier. Folge auf einer frischen
                          # Installation: /konfiguration renderte woertlich "None" in die Felder
@@ -660,6 +712,20 @@ def load_config(path):
                          # 0 = aus. Ohne Messwert wird NIE gefiltert.
                          ("ernte_struktur_min", 0.11),
                          ("sichtung_struktur_min", 0.15),
+                         # BELICHTUNG (bauplan_belichtung.md, 26.08., Issue 26:
+                         # die Empfehlung waehlte sichtbar zu dunkle Bilder).
+                         # Gemessen an 4929 Anker-Crops dieser Anlage: Luma
+                         # p10=57, Median=90, p90=151; 32 % lagen unter 80, und
+                         # KEINE der bestehenden Reihungs-Achsen trennt dunkel
+                         # von hell (norm 21,6/22,5/22,9 ueber die Terzile).
+                         # Die beiden Auslieferungswerte hat der User am
+                         # 26.08. an einer Sichtvorschau kalibriert: 78 unten,
+                         # 182 oben. Sie reihen und begruenden nur — es gibt
+                         # KEIN Belichtungs-Gate, nichts wird verworfen. 0 =
+                         # diese Seite aus; ohne gemessene Luma (Alt-Laeufe)
+                         # urteilt die Achse nie.
+                         ("reihung_luma_min", 78),
+                         ("reihung_luma_max", 182),
                          ("vorrat_aktiv", True),
                          ("vorrat_norm_min", _NL["min"]), ("vorrat_norm_min_profil", 21.5),
                          ("vorrat_front_profil", 0.61), ("vorrat_kante_min", _NL["kante"]),
@@ -677,6 +743,11 @@ def load_config(path):
                          ("nachhol_pause_s", 3600),          # Mindestabstand je Event (x Versuchsnr.)
                          ("nachhol_analyse_timeout_s", 300), # harter Deckel der Retry-Laeufe
                          ("nachhol_start_s", 600),           # Anlauf nach Dienststart
+                         # .340 Nachholen beim Dienststart (Default AN = Verhalten wie bisher).
+                         # AUS heisst NUR: der beim Start bereits aufgelaufene Stapel wird
+                         # uebersprungen statt sequenziell durchanalysiert — der Sweep selbst
+                         # bleibt an (im Poll-Betrieb ist er der einzige Antriebsweg).
+                         ("start_catchup", True),
                          # .264 Frigate-Schoner (Verklemmungs-Vorfall 17.08.):
                          # nach N Netz-Fehlern in Folge pause_s zurueckziehen.
                          ("frigate_schoner_fehler", 3),
@@ -861,6 +932,33 @@ def load_config(path):
     # VERIFY_DATA_DIR oben; Wizard-Save -> svc.neustart -> laeuft hier erneut durch.
     if (cfg.get("frigate_url") or "").strip():
         os.environ["FRIGATE_URL"] = cfg["frigate_url"]
+    # 5e: die Zugangsdaten gehen DENSELBEN Weg wie die URL — sonst haette der
+    # Dienst einen Login und seine Subprozesse (Worker, analyze, sync_refs,
+    # anlernen) keinen, und die Fehlerklasse waere wieder die #18-Klasse:
+    # eine Strecke laeuft, die andere sieht 401 und niemand weiss, warum.
+    # NUR setzen, wenn wirklich etwas konfiguriert ist: ohne Eintrag darf
+    # keine Variable entstehen, an der frigate_auth einen Login erkennen
+    # koennte (Regressions-Vertrag der Vormerkung). Ein Nachtrag im UI wirkt
+    # ueber den Save-Neustart, der genau hier wieder durchlaeuft.
+    # .352 SICHERHEITS-FIX (Fremd-Frigate-Haertetest 26.08., Befund B1): die
+    # Variablen muessen die Config SPIEGELN, nicht nur ergaenzen. os.execv
+    # (svc.neustart) vererbt die Prozessumgebung, und zugang() liest ENV VOR
+    # dem Store — ohne das Loeschen unten meldete sich der Dienst nach dem
+    # Leeren der Felder weiter an, und nach einem Adresswechsel bekam sogar ein
+    # FREMDER Host den Login mit den geloeschten Daten (am Mock nachgestellt).
+    # Es gibt keinen dokumentierten ENV-Weg fuer diese beiden Werte (gesetzt
+    # werden sie nur hier), das Loeschen nimmt also niemandem etwas weg.
+    if (cfg.get("frigate_user") or "").strip():
+        os.environ["FRIGATE_USER"] = cfg["frigate_user"].strip()
+    else:
+        os.environ.pop("FRIGATE_USER", None)
+    if cfg.get("frigate_password"):
+        os.environ["FRIGATE_PASSWORD"] = str(cfg["frigate_password"])
+    else:
+        os.environ.pop("FRIGATE_PASSWORD", None)
+    # tls_verify wandert IMMER mit: es ist kein Geheimnis, und ein AUS muss
+    # auch dann in den Subprozessen ankommen, wenn dort der Store fehlt.
+    os.environ["FRIGATE_TLS_VERIFY"] = "1" if cfg.get("frigate_tls_verify", True) else "0"
     # Recognition-Modell prozessweit setzen: jeder Subprozess-env ist dict(os.environ, ...) und
     # erbt VERIFY_MODELL damit automatisch (analyze/backtest/anlernen/abnahme -> gleiches Modell,
     # kein refcache-Mix). Umschaltbar ueber modell: in verifyd.yaml/Store (buffalo | adaface).
@@ -949,8 +1047,11 @@ class FrigateHttpFehler(urllib.error.HTTPError):
         self.pfad = pfad
 
     def __str__(self):
-        d = f" — Frigate sagt: {self.detail[:200]}" if self.detail else ""
-        return f"HTTP {self.code} {self.msg} bei {self.pfad}{d}"
+        # .352: der Text landet im Banner JEDER Seite und in Testern ihren
+        # Logs — er muss englisch sein wie der Rest der Oberflaeche
+        # (Haertetest-Befund B4: "bei" / "Frigate sagt" standen dort deutsch).
+        d = f" — Frigate says: {self.detail[:200]}" if self.detail else ""
+        return f"HTTP {self.code} {self.msg} at {self.pfad}{d}"
 
 
 def api_post(cfg, path, payload):
@@ -959,7 +1060,7 @@ def api_post(cfg, path, payload):
     req = urllib.request.Request(cfg["frigate_url"] + path, data=json.dumps(payload).encode(),
                                  headers={"Content-Type": "application/json"}, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=15) as r:
+        with _fauth.oeffnen(req, timeout=15) as r:      # 5e: DER eine Frigate-Griff
             return json.load(r)
     except urllib.error.HTTPError as e:
         raise FrigateHttpFehler(e, path) from None
@@ -979,7 +1080,7 @@ def api(cfg, path):
         raise urllib.error.URLError(
             "frigate protector active — backing off after repeated timeouts")
     try:
-        with urllib.request.urlopen(cfg["frigate_url"] + path, timeout=20) as r:
+        with _fauth.oeffnen(cfg["frigate_url"] + path, timeout=20) as r:   # 5e
             daten = json.load(r)
     except urllib.error.HTTPError as e:
         frigate_schoner.ok()          # der Server LEBT — 4xx/5xx ist eine Antwort
@@ -1017,6 +1118,12 @@ def pruefe_url(u):
     return True, u
 
 
+# .341: gemerkter Zustand von Frigates EIGENER Gesichtserkennung (aus /api/config,
+# gefuellt in frigate_cameras). "bekannt" trennt "aus" von "nie gefragt" — ein
+# Hinweis auf Verdacht waere schlimmer als keiner.
+_frigate_fr = {"an": False, "bekannt": False}
+
+
 def frigate_cameras(cfg, force=False):
     """Kameras aus Frigates /api/config lesen (Phase 2, User 21.07.): Namen, Zonen, enabled,
     Detect-Aufloesung, record. Kurz gecacht (60 s), damit die UI Frigate nicht bei jedem Aufruf
@@ -1041,6 +1148,14 @@ def frigate_cameras(cfg, force=False):
         return out, err
     try:
         c = api(cfg, "/api/config")
+        # .341 (User 25.08.): Frigates eigenen Gesichtserkennungs-Schalter aus DERSELBEN
+        # Antwort mitnehmen — kein zweiter API-Weg, keine zusaetzliche Last. Nur merken,
+        # nie danach handeln: suslik erkennt unabhaengig davon (Hinweis auf /heute).
+        try:
+            _frigate_fr["an"] = bool((c.get("face_recognition") or {}).get("enabled"))
+            _frigate_fr["bekannt"] = True
+        except Exception:
+            pass
         for name, cc in (c.get("cameras") or {}).items():
             det = cc.get("detect") or {}
             out[name] = {"enabled": bool(cc.get("enabled", True)),
@@ -1057,19 +1172,27 @@ def frigate_cameras(cfg, force=False):
     # scheitert am selbstsignierten Zertifikat. Ein 401-Zweig allein haette also nie gefeuert.
     except urllib.error.HTTPError as e:
         if e.code in (400, 401, 403) and ":8971" in _u:
-            err = (f"HTTP {e.code} from port 8971 — that is Frigate's authenticated UI port, "
-                   "which suslik cannot use. Point suslik at Frigate's internal port 5000 "
+            # .352: seit dem Frigate-Login ist 8971 KEINE Sackgasse mehr — der
+            # Text riet vorher pauschal zum Port 5000 und verschwieg die neuen
+            # Felder (Haertetest-Befund B3).
+            err = (f"HTTP {e.code} from port 8971 — that is Frigate's authenticated port. "
+                   "Enter your Frigate user and password in the settings, and switch "
+                   "'verify TLS certificate' off if Frigate uses its self signed certificate. "
+                   "Or point suslik at Frigate's internal port 5000 instead "
                    "(http://<frigate-host>:5000).")
         elif e.code in (401, 403):
-            err = (f"HTTP {e.code}: this port requires authentication — suslik needs Frigate's "
-                   "internal, unauthenticated port (default 5000)")
+            err = (f"HTTP {e.code}: this port requires authentication — enter your Frigate "
+                   "user and password in the settings, or use Frigate's internal, "
+                   "unauthenticated port (default 5000)")
         else:
             err = str(e)
     except urllib.error.URLError as e:
         grund = getattr(e, "reason", e)
         if "SSL" in str(grund).upper() or "CERTIFICATE" in str(grund).upper() or ":8971" in _u:
             err = ("TLS/certificate error — this looks like Frigate's authenticated HTTPS port "
-                   "(8971). suslik needs the internal HTTP port 5000 instead.")
+                   "(8971). If that is what you want, switch 'verify TLS certificate' off in "
+                   "the settings (Frigate's certificate there is self signed) and enter your "
+                   "Frigate user and password. Otherwise use the internal HTTP port 5000.")
         else:
             err = (f"cannot connect: {grund} — host or port wrong, Frigate not running, "
                    "or a firewall in between")
@@ -1431,6 +1554,14 @@ class WorkerProzess:
         # sie in IHRE Logdatei mitnehmen (run_analyze-Retry). None = keine
         # bekannt; job() setzt sie bei jedem Aufruf zurueck.
         self.letzte_ursache = None
+        # .341 Systemseite: Zeitstempel der Tode fuer die 24-h-Zahl. Die
+        # Ursache stand bisher nur in der Logzeile — als ein Tester-System
+        # den Worker 114-mal an EINEM Tag verlor, sagte keine Kennzahl, dass
+        # die Erkennung stillstand, waehrend CPU und GPU unauffaellig
+        # aussahen. Reiner Zaehler im Prozessgedaechtnis (ein Neustart faengt
+        # bei 0 an, und das ist richtig: nach einem Neustart ist die
+        # Vorgeschichte nicht mehr die Lage dieses Prozesses).
+        self.tode = collections.deque(maxlen=500)
 
     def _start(self):
         r, w = os.pipe()
@@ -1502,7 +1633,7 @@ class WorkerProzess:
 
         Drei Faelle, keiner geraten:
           returncode < 0   -> Signal (9 = SIGKILL, in diesem Dienst typisch der
-                              Kernel-OOM-Killer; Giuseppe-Klasse .331)
+                              Kernel-OOM-Killer; Feldfall-Klasse .331)
           returncode >= 0  -> regulaerer Exit mit Code
           wait laeuft ab   -> Prozess LEBT, nur die Antwort-Pipe ist zu; hier
                               KEIN Signal erfinden, sondern genau das sagen.
@@ -1533,6 +1664,19 @@ class WorkerProzess:
                       if n == int(signal.SIGKILL) else "")
             return "died", f"signal {n} = {name}{zusatz}"
         return "exited", f"exit code {rc}"
+
+    def zustand(self):
+        """.341 Systemseite, Block Erkennung: laeuft der Worker, wie oft starb er
+        in 24 h, woran zuletzt. Kein Kill, keine Messung. self.p wird EINMAL
+        lokal gegriffen: _stop() nullt es aus einem anderen Thread, und ein
+        Test auf self.p mit nachfolgendem self.p.poll() wuerde dazwischen werfen."""
+        grenze, p = time.time() - 86400, self.p
+        letzte = self.tode[-1] if self.tode else None
+        return {"laeuft": bool(p is not None and p.poll() is None),
+                "tode_24h": sum(1 for ts, _u in self.tode if ts >= grenze),
+                "letzter_tod_ts": letzte[0] if letzte else None,
+                "letzte_ursache": letzte[1] if letzte else None,
+                "grund": None}
 
     def job(self, job, timeout_s, info=None):
         """Job senden, Antwort mit Timeout lesen. None = Timeout/Absturz (Worker wird
@@ -1574,10 +1718,11 @@ class WorkerProzess:
                     # S1: Ursache VOR dem Kill ermitteln (s. _todesursache) und in
                     # DIESE Zeile schreiben — sie geht ueber self.log ins Docker-Log,
                     # nicht nur in die analyze.log des Events. Ohne sie stand bei
-                    # Giuseppes 114 Toden nur "died mid-job" und die Mechanik
-                    # (Kernel-OOM oder Absturz) blieb offen.
+                    # den 114 Toden des Feldfalls .331 nur "died mid-job" und die
+                    # Mechanik (Kernel-OOM oder Absturz) blieb offen.
                     art, kurz = self._todesursache()
                     self.letzte_ursache = kurz or "pipe closed, process still alive"
+                    self.tode.append((time.time(), self.letzte_ursache))
                     if art == "lebt":
                         self.log(f"{self.name} closed its pipe mid-job but is still "
                                  f"alive — killing it, restart on next job")
@@ -1885,6 +2030,16 @@ class Service:
         os.makedirs(os.path.join(cfg["data_dir"], "events"), exist_ok=True)
         os.makedirs(os.path.join(cfg["data_dir"], "clips"), exist_ok=True)
         self.processed = self._load_processed()
+        # .340 Start-Nachholen: der Sweep wusste bisher nicht, der wievielte Lauf er ist.
+        # Die Marke faellt erst NACH dem Frigate-Aufruf (sonst hebelt ein Haenger beim
+        # Start den start_catchup-Schalter aus), der Lock haelt einen MQTT-Reconnect
+        # davon ab, ein zweites Mal "der erste" zu sein.
+        self._start_sweep_offen = True
+        self._start_sweep_lock = threading.Lock()
+        # Fortschritt des laufenden Nachhol-Sweeps — EINE Quelle fuer Banner und /health.
+        # Bewusst NICHT _nachhol_*: so heisst im Modul der stumme Retry-Runner fuer
+        # gescheiterte Analysen, das waere ein Dauer-Missverstaendnis.
+        self._sweep_stand = {"aktiv": False, "gesamt": 0, "fertig": 0, "stunden": 0}
         self.last_alert = 0.0
         self._melde_zustand = {}                  # Drossel-Zeitstempel der Meldewege (tg_unbekannt,
                                                   # ha_warn) — Eigentum des Dienstes, core/melden
@@ -2270,6 +2425,8 @@ class Service:
                         pass
         kameras = {}
         for r in by.values():
+            if r.get("kategorie") == "uebersprungen":
+                continue        # .340: nie analysiert -> keine Kamera-Aussage, kein Nenner
             k = kameras.setdefault(r.get("camera", "?"),
                                    {"events": 0, "mit_gesicht": 0, "bestaetigt": 0,
                                     "unvollstaendig": 0})
@@ -2445,6 +2602,159 @@ class Service:
                 n += 1
         if n:
             self.log(f"crops retention: {n} event folders older than 60 days (no GT) deleted")
+
+    def alt_aufraeumen(self):
+        """Nachtjob-Schritt (User 25.08.): die Stellen raeumen, die bisher NIEMAND
+        anfasste. Gefunden auf der Prod-Maschine, alles drei waechst unbegrenzt:
+
+          lernlauf/   973 MB in 88 Laeufen, aeltester 20 Tage — der Nachtjob kannte
+                      nur events/ und Clips; fuer Lernlaeufe gab es allein den
+                      manuellen Sammel-Knopf.
+          Waisen-Pins 26 von 26 Pins ohne zugehoerigen Clip. Abgestandene Pins raeumt
+                      frames.gepinnt() — aber nur, wenn jemand FUER DIESEN CLIP fragt.
+                      Ist der Clip weg, fragt nie wieder jemand: der Pin bleibt ewig.
+          ov_cache/   2,8 GB OpenVINO-Kompilate ohne Deckel (der neo_cache hat einen).
+                      Loeschen kostet nur einen langsameren naechsten Start.
+
+        Jeder Teil einzeln gekapselt: ein Fehler im ersten darf die anderen nicht
+        verschlucken (dieselbe Lehre wie beim Nachtjob-Rahmen)."""
+        import shutil
+        dd = self.cfg["data_dir"]
+
+        # SCHRANKE (User 25.08.: "was du natuerlich nie loeschen darfst, sind die
+        # gelernten Sicherungen und die gelernten Personendaten"). Dieser Job raeumt
+        # ausschliesslich Wegwerf-Material: Crops eines Lernlaufs, Ernte-Zwischenstaende,
+        # Pin-Marken, kompilierte Modelle. Drei Ordner sind TABU, und das steht hier als
+        # Pruefung statt als guter Vorsatz — jeder Loeschpfad muss sie passieren:
+        #   faces/       die gelernten Gesichter (das eigentliche Kapital)
+        #   personlern/  Personenmodell + abgenommenes Trainingsmaterial
+        #   backups/     Master-Sicherungen
+        tabu = tuple(os.path.join(dd, x) + os.sep for x in ("faces", "personlern", "backups"))
+
+        def _darf_weg(pfad):
+            """True nur, wenn der Pfad NICHT in einem Tabu-Ordner liegt. Im Zweifel False."""
+            try:
+                echt = os.path.realpath(pfad) + os.sep
+            except OSError:
+                return False
+            return not any(echt.startswith(os.path.realpath(t.rstrip(os.sep)) + os.sep)
+                           for t in tabu)
+
+        # --- Lernlaeufe nach Alter
+        try:
+            from core import lernlauf as _ll
+            tage = int(self.cfg.get("lernlauf_retention_d") or 0)
+            bilanz, weg = _ll.laeufe_nach_alter_loeschen(dd, tage)
+            if weg:
+                self.log(f"cleanup: {len(weg)} learning run(s) older than {tage}d deleted "
+                         f"({bilanz['dateien']} files)")
+        except Exception as e:
+            self.log(f"cleanup: learning-run retention failed: {e}")
+
+        # --- Bruecken-Ernten (B<hash>) und der Papierkorb: beides kennt die
+        # Lernlauf-Logik nicht, weil dort keine Anker-Zeilen haengen. Auf Prod
+        # waren das 55 Ordner (135 MB) plus ein nie geleerter trash (76 MB).
+        # B-Laeufe sind ein Cache je Person (werden bei gleichen Events erneut
+        # benutzt) — deshalb nach Alter, nicht pauschal.
+        try:
+            tage = int(self.cfg.get("lernlauf_retention_d") or 0)
+            if tage > 0:
+                wurzel = os.path.join(dd, "state", "lernlauf")
+                grenze = time.time() - tage * 86400
+                nb = mb = 0
+                for name in os.listdir(wurzel) if os.path.isdir(wurzel) else []:
+                    if not (name.startswith("B") or name == "trash"):
+                        continue
+                    p = os.path.join(wurzel, name)
+                    if not os.path.isdir(p):
+                        continue
+                    # trash: die EINZELNEN Alt-Laeufe darin pruefen, nicht den Korb selbst
+                    ziele = ([os.path.join(p, x) for x in os.listdir(p)]
+                             if name == "trash" else [p])
+                    for z in ziele:
+                        try:
+                            if os.path.getmtime(z) >= grenze or not _darf_weg(z):
+                                continue
+                            gr = sum(os.path.getsize(os.path.join(w, f))
+                                     for w, _d, fs in os.walk(z) for f in fs)
+                            shutil.rmtree(z, ignore_errors=True)
+                            nb += 1
+                            mb += gr
+                        except OSError:
+                            pass
+                if nb:
+                    self.log(f"cleanup: {nb} stale harvest/trash folder(s) older than "
+                             f"{tage}d deleted ({mb / 1024 ** 2:.0f} MB freed)")
+        except Exception as e:
+            self.log(f"cleanup: harvest/trash cleanup failed: {e}")
+
+        # --- verwaiste Pin-Marken (Clip laengst geloescht)
+        try:
+            import glob
+            cache = os.path.join(dd, "clips")
+            n = 0
+            for pin in glob.glob(os.path.join(cache, "*.pin")):
+                clip = pin.rsplit(".", 3)[0]          # <clip>.mp4.<pid>.<tid>.pin
+                if not os.path.exists(clip) and _darf_weg(pin):
+                    os.remove(pin)
+                    n += 1
+            if n:
+                self.log(f"cleanup: {n} orphaned pin marker(s) removed")
+        except Exception as e:
+            self.log(f"cleanup: pin cleanup failed: {e}")
+
+        # --- OpenVINO-Kompilat-Caches deckeln (aelteste zuerst)
+        try:
+            deckel = float(self.cfg.get("ov_cache_max_gb") or 0)
+            if deckel > 0:
+                # EIN Deckel fuer BEIDE Ordner: ov_cache und ov_cache_models sind
+                # derselbe Zweck (kompilierte Modelle) und teilen sich die Platte.
+                # Je Ordner zu deckeln haette bei 1 GB in Wahrheit 2 GB erlaubt.
+                dat = []
+                for name in ("ov_cache", "ov_cache_models"):
+                    p = os.path.join(dd, "clips", name)
+                    if not os.path.isdir(p):
+                        continue
+                    for w, _d, fs in os.walk(p):
+                        for f in fs:
+                            fp = os.path.join(w, f)
+                            try:
+                                dat.append((os.path.getmtime(fp), os.path.getsize(fp), fp))
+                            except OSError:
+                                pass
+                ges = sum(d[1] for d in dat)
+                grenze = deckel * 1024 ** 3
+                if ges > grenze:
+                    weg_b, n = 0, 0
+                    for _t, gr, fp in sorted(dat):     # aelteste zuerst
+                        if ges - weg_b <= grenze:
+                            break
+                        if not _darf_weg(fp):
+                            continue
+                        try:
+                            os.remove(fp)
+                            weg_b += gr
+                            n += 1
+                        except OSError:
+                            pass
+                    self.log(f"cleanup: compile cache trimmed to {deckel} GB "
+                             f"({n} files, {weg_b / 1024 ** 2:.0f} MB freed)")
+        except Exception as e:
+            self.log(f"cleanup: compile-cache cap failed: {e}")
+
+        # --- Systemstatistik-Ringpuffer auf 48 h stutzen (.341). Er waechst mit
+        # ~1,4 MB/Tag (GEMESSEN 25.08.: ~1 KB je Zeile; die ~430 KB des Bauplans
+        # waren geschaetzt) und waere sonst eine Datei, die niemand anfasst.
+        # Bewusst HIER und nur hier — ein zweiter Aufraeum-Ort kennte 'alt'
+        # anders. Die Aufbewahrung kennt das Modul, nicht dieser Job.
+        try:
+            from core import systemstat as _ss
+            behalten, weg = _ss.kuerzen(self.cfg)
+            if weg:
+                self.log(f"cleanup: system stats trimmed to {_ss.AUFBEWAHRUNG_H}h "
+                         f"({weg} lines dropped, {behalten} kept)")
+        except Exception as e:
+            self.log(f"cleanup: system-stats trim failed: {e}")
 
     def update_check(self):
         """#53 (User 26.07.): 1x taeglich anonym die neueste Release-Version von GitHub holen
@@ -2659,8 +2969,8 @@ class Service:
         (~0.99), keine Live-Messung — sie steht ehrlich im korrektur-Marker, nie als
         Mess-Score in ours. alerted/presence_push/sublabel/frames bleiben historische
         Wahrheit — sonst faelschte die Korrektur die Alert-Tageszahl. Events mit
-        Basis-Kategorie fehler/no_person werden NICHT gehoben (dort lief nie eine
-        tragende Analyse bzw. war keine Person — eine Bestaetigung wuerde das
+        Basis-Kategorie fehler/no_person/uebersprungen werden NICHT gehoben (dort lief
+        nie eine tragende Analyse bzw. war keine Person — eine Bestaetigung wuerde das
         maskieren). Kein Alarm, kein MQTT, kein sublabel; ground_truth.jsonl
         unberuehrt."""
         with self.lock:
@@ -2668,7 +2978,7 @@ class Service:
             if not basis:
                 self.log(f"{eid}: enroll re-check confirmed, but no deckung record — skipped")
                 return
-            if basis.get("kategorie") in ("fehler", "no_person"):
+            if basis.get("kategorie") in ("fehler", "no_person", "uebersprungen"):
                 self.log(f"{eid}: enroll re-check confirmed, but record says "
                          f"'{basis.get('kategorie')}' — not corrected (no analysis to lift)")
                 return
@@ -2867,6 +3177,9 @@ class Service:
                 jobs = [("QS report", self.qs_bericht_erzeugen),
                         ("master backup", self.master_backup),
                         ("crops retention", self.crops_retention),
+                        # .341 (User 25.08.): Lernlaeufe, Waisen-Pins, Kompilat-Caches —
+                        # die drei Stellen, die bisher unbegrenzt wuchsen.
+                        ("stale data cleanup", self.alt_aufraeumen),
                         ("update check", self.update_check)]
                 if not erst:                             # GPU-Netz nur taeglich, nicht bei jedem Neustart
                     jobs.append(("safety-net collection", self._netz_sammeln))
@@ -3089,6 +3402,8 @@ class Service:
         "ernte_struktur_min": (float, 0.0, 0.5, "face structure line for harvesting: crops whose facial landmarks collapse towards the centre — necks, ears, backs of heads, foliage, tarmac — are not saved at all, so they cost no disk and no quality inference. Measured on 2000 random crops from 36 runs; 0.11 drops 12.6 % of harvested material. What is dropped is gone for that run, but a fresh run over the same events brings it back while the clips are still in Frigate (0 = off)"),
         "sichtung_struktur_min": (float, 0.0, 0.5, "face structure line for the group view: pictures below it are not offered for learning, but stay on disk and remain visible under \"show all\" — you can always take them back. Should sit above the harvesting line (0 = off)"),
         "sichtung_norm_veto": (float, 0.0, 40.0, "quality line for learning runs: faces at or below this feature-norm value are dropped from the group view — this is what separates false detections (hedges, wheel arches) from small real faces, because the detector itself is confident about both (0 = off)"),
+        "reihung_luma_min": (int, 0, 255, "darkest brightness a face crop may have and still be recommended for learning: below it the picture is shown with the reason \"too dark\" and sorted behind the well-lit ones. It is never dropped — you can still pick it by hand. Measured on 4929 crops from this system: median brightness 90, and a third of them below 80, while none of the other sorting axes tells dark from bright (0 = off)"),
+        "reihung_luma_max": (int, 0, 255, "brightest a face crop may be and still be recommended for learning: above it the picture is shown with the reason \"overexposed\" and sorted behind the well-lit ones. Never dropped, same as the lower line (0 = off)"),
         "live_retention_d": (int, 0, 365, "how many days the live watchers' evidence pictures and look-back clips are kept in <data_dir>/live/ (0 = keep forever)"),
         "live_verworfen_retention_d": (int, 0, 365, "how many days the live watchers' rejected frames (pose check, prefix verworfen_) are kept — they are diagnostic material only and are never shown; they are by far the largest part of <data_dir>/live/ (0 = keep forever)"),
         "cpu_threads": (int, 0, 64, "CPU thread cap for inference sessions + transcode (0 = auto: allowed cores)"),
@@ -3122,6 +3437,7 @@ class Service:
         "clip_erzeugung_alter_min": (int, 5, 1440, "harvest: events older than this (minutes) count as ARCHIVED — Frigate has to rebuild their clip from recording segments before a single byte arrives, which takes far longer than a live download. For those the fetch waits patiently (see the cap below) instead of aborting; a measured abort during that rebuild permanently leaks one API thread and one ffmpeg inside Frigate until Frigate is restarted"),
         "clip_erzeugung_deckel_s": (int, 60, 1800, "harvest: absolute cap (seconds) on waiting for Frigate to rebuild an archived event's clip. While waiting, a cheap probe checks every stall that Frigate itself still answers — if it does, the wait continues up to this cap; if not, the fetch stops immediately. Events hitting the cap stay unbooked and are retried in a later run"),
         "clip_vod": (bool, None, None, "harvest: fetch archived events' clips via Frigate's VOD playlist (/vod/event/.../master.m3u8) and merge the segments locally instead of asking Frigate to rebuild the clip server-side. Frigate's clip generation can stall for minutes and leak a worker thread plus an ffmpeg process per request until its whole API freezes (reported upstream); the VOD route bypasses that code path entirely. On any failure (older Frigate without the endpoint, local ffmpeg error) the fetch falls back to the classic clip.mp4 path with all its safeguards"),
+        "start_catchup": (bool, None, None, "catch up on missed events at startup (on by default): after a restart or a broker reconnect suslik fetches the person events of the last lookback_h hours it never analysed and works through them one after another. That is correct, but on a machine that was off for a while it looks like load out of nowhere. Turned off, only the events that had already piled up when the service started are marked as skipped — they keep their place in the record and are never retried as failures. Everything happening after that start is analysed normally, and in poll mode the periodic sweep keeps running because it is the only thing that picks up events there"),
         "nachhol_versuche": (int, 0, 5, "retry attempts for events whose analysis failed (0 = off); retries are silent, they never alert"),
         "nachhol_tage": (int, 1, 3, "how far back the retry looks for failed analyses (days)"),
         "worker": (bool, None, None, "persistent analysis worker: keeps the models loaded between events (large CPU saving); off = one process per event (pre-0.1.0.38 behavior)"),
@@ -3196,6 +3512,22 @@ class Service:
         debug-Aenderung wirkt LIVE, der Dienst geht dabei NICHT unten durch. Die
         Warteschleife der Seite erkennt einen Neustart an genau diesem 'erst unten,
         dann wieder oben' und wuerde sonst zwei Minuten in ihren Deckel laufen."""
+        # 5e: die drei Frigate-Login-Felder VOR der Whitelist abzweigen. Sie
+        # kommen ueber denselben Knopf und denselben POST wie alles andere auf
+        # dem Blatt (konfigSpeichern sammelt alle cfg-*-Felder), koennen aber
+        # nicht durch die generische Whitelist: die kennt keine Strings, und
+        # ein Passwort in ihrer Tabelle stuende als value="…" im HTML — genau
+        # der Key-Austritt, wegen dem der Vision-Key dort auch nicht steht.
+        # Ihre Semantik ist die der Meldekanal-Secrets (leeres Feld behaelt).
+        aenderungen = dict(aenderungen)
+        _fa_roh = {k: aenderungen.pop(k) for k in _fauth.SEKTIONS_SCHLUESSEL
+                   if k in aenderungen}
+        _fa_neu = None
+        if _fa_roh:
+            _ok_fa, _fa_neu = _fauth.werte_uebernehmen(
+                _fa_roh, {k: self.cfg.get(k) for k in _fauth.SEKTIONS_SCHLUESSEL})
+            if not _ok_fa:
+                return False, _fa_neu, False
         angewendet = {}
         for key, wert in aenderungen.items():
             if key not in self.CONFIG_WHITELIST:
@@ -3213,14 +3545,22 @@ class Service:
                 if typ is not bool and not (lo <= w <= hi):
                     return False, f"'{key}': erlaubt {lo}–{hi}", False
             angewendet[key] = w
-        if not angewendet:
+        if not angewendet and _fa_neu is None:
             return False, "keine Aenderung", False
         store = _lade_config_store(self.cfg)
         store.update(angewendet)
+        _fa_audit = {}
+        if _fa_neu is not None:                 # 5e: derselbe Store, dieselbe Zeile
+            store.update(_fa_neu)
+            _fa_audit = {k: (_mask_secret(_fa_neu.get(k))
+                             if k in _fauth.GEHEIME_SCHLUESSEL else _fa_neu.get(k))
+                         for k in _fauth.SEKTIONS_SCHLUESSEL}
         p = _config_store_pfad(self.cfg)
         _store_schreiben(p, store)      # atomar + fsync, unter _cfg_lock (5 Schreibwege)
         with open(os.path.join(self.cfg["data_dir"], "config", "config_audit.jsonl"), "a") as f:
-            f.write(json.dumps({"ts": round(time.time(), 1), "aenderungen": angewendet},
+            _ae = dict(angewendet)
+            _ae.update(_fa_audit)       # Passwort NIE im Klartext ins Audit
+            f.write(json.dumps({"ts": round(time.time(), 1), "aenderungen": _ae},
                                ensure_ascii=False) + "\n")
             f.flush()
         # B6: eine Aenderung, die NUR 'debug' betrifft, wirkt LIVE und loest KEINEN
@@ -3238,12 +3578,24 @@ class Service:
         # unveraendert): er bleibt die Quelle dessen, was der User zuletzt gesetzt hat.
         _fehlt = object()
         geaendert = {k for k, w in angewendet.items() if self.cfg.get(k, _fehlt) != w}
-        if geaendert == {"debug"}:
+        # 5e: eine Aenderung an den Login-Feldern BRAUCHT den Neustart — die
+        # ENV-Bruecke nach load_config ist das, was die Subprozesse erreicht.
+        # Ohne diese Bedingung haette ein Save, der zufaellig nur debug UND die
+        # Zugangsdaten anfasst, den Live-Zweig genommen und die Credentials
+        # waeren erst beim naechsten fremden Neustart wirksam geworden.
+        _fa_geaendert = bool(_fa_neu is not None
+                             and any(self.cfg.get(k, _fehlt) != _fa_neu.get(k)
+                                     for k in _fauth.SEKTIONS_SCHLUESSEL))
+        if geaendert == {"debug"} and not _fa_geaendert:
             self.cfg["debug"] = angewendet["debug"]
             self.log(f"CONFIG changed via UI (JSON store): {angewendet} — "
                      f"applied live, no restart")
             return True, f"gespeichert: {angewendet} — applied live, no restart", False
-        self.log(f"CONFIG changed via UI (JSON store): {angewendet} — restart after the current analysis")
+        # Die Auth-Felder gehen MASKIERT in die Logzeile (_fa_audit) — der
+        # Dienst-Log ist die Datei, die Tester in Diagnose-Buendeln mitschicken.
+        self.log(f"CONFIG changed via UI (JSON store): {angewendet}"
+                 f"{' + frigate auth ' + json.dumps(_fa_audit, ensure_ascii=False) if _fa_audit else ''}"
+                 f" — restart after the current analysis")
 
         self.neustart("Konfig")
         return True, f"gespeichert: {angewendet} — Dienst startet gleich neu", True
@@ -5553,9 +5905,14 @@ class Service:
 
     @staticmethod
     def _bruecke_fortschritt(laeuft):
-        """-> {"msg", "i", "n", "zustand"} fuer den Klick-Handler (laden=True).
-        Texte englisch wie die uebrigen Bruecken-Meldungen dieses Blatts
-        (Overlay-Texte: ME2-Uebersetzungsstrang)."""
+        """-> {"msg", "i", "n", "zustand", "fortschritt"} fuer den Klick-Handler
+        (laden=True). Texte englisch wie die uebrigen Bruecken-Meldungen dieses
+        Blatts (Overlay-Texte: ME2-Uebersetzungsstrang).
+
+        .345 (User 25.08., Konsens: 1 Gesamt- + 3 Unterbalken): `fortschritt`
+        kommt render-fertig aus ernte.fortschritt_rechnen — der EINEN Quelle
+        fuer beide Anzeigen (Pass-Check + Wizard); das Blatt-JS wendet die
+        Werte nur an. Puls-Frische entscheidet zentral ernte.puls_lesen."""
         d = {}
         try:
             with open(laeuft, encoding="utf-8") as f:
@@ -5563,6 +5920,8 @@ class Service:
         except (OSError, ValueError):
             pass
         i, n, z = int(d.get("i") or 0), int(d.get("n") or 0), str(d.get("zustand") or "erntet")
+        from core import ernte as _ern
+        puls = _ern.puls_lesen(os.path.dirname(laeuft))
         if z == "wartet":
             msg = ("waiting for another background job to finish, then preparing "
                    f"the pictures of this pass ({i} of {n} event(s) done) \u2026")
@@ -5570,7 +5929,8 @@ class Service:
             msg = f"rating the pictures of this pass ({n} event(s) harvested) \u2026"
         else:
             msg = f"preparing the pictures of this pass: {i} of {n} event(s) done \u2026"
-        return {"msg": msg, "i": i, "n": n, "zustand": z}
+        return {"msg": msg, "i": i, "n": n, "zustand": z,
+                "fortschritt": _ern.fortschritt_rechnen(i, n, puls)}
 
     def _bruecke_angebote(self, bdir, bid, person):
         """Angebote + Grenzfaelle EINER Person aus der vorrat.jsonl eines
@@ -5672,7 +6032,11 @@ class Service:
                         time.sleep(1)
                 eintrag = {"eid": eid, "ok": bool(antwort and antwort.get("ok"))}
                 if antwort:
-                    for k in ("detektionen", "kandidaten", "m", "s", "v"):
+                    # .346: vorab_verworfen mit — fuer die "warum 0 Kandidaten?"-
+                    # Diagnose eines Passes ist genau dieser Topf die Antwort
+                    # (Distanz-Gesichter scheitern an der Vorschranke).
+                    for k in ("detektionen", "vorab_verworfen", "kandidaten",
+                              "m", "s", "v"):
                         eintrag[k] = antwort.get(k)
                     if not antwort.get("ok"):
                         eintrag["fehler"] = str(antwort.get("fehler"))[:160]
@@ -5779,7 +6143,8 @@ class Service:
         for satz in offen:
             try:
                 _al.gruppen_sichtung(satz, ldir, emb=self.embedder,
-                                     norm_latte=norm_latte_aus_cfg(self.cfg))
+                                     norm_latte=norm_latte_aus_cfg(self.cfg),
+                                     luma_grenzen=luma_grenzen_aus_cfg(self.cfg))
                 fertig += 1
             except Exception as e:
                 fehler += 1
@@ -6088,8 +6453,13 @@ class Service:
                     # Diagnose des Struktur-Tests still raus (QS-Befund 22.08.:
                     # "der neue Zaehler erreicht weder fertig.jsonl noch die
                     # Anzeige"; im Lauf L20260822_201944 live bestaetigt).
-                    for k in ("detektionen", "fd", "ohne_pose", "kandidaten", "m", "s",
-                              "ohne_struktur"):
+                    # .346: vorab_verworfen dazu — DIESELBE Fehlerklasse, vom
+                    # User am Lauf L20260825_215327 gefunden ("pruefe das"):
+                    # die .342-Vorschranke zaehlte, die feste Schluesselliste
+                    # hier liess den vierten Topf fallen — fertig.jsonl-Zeilen
+                    # verletzten ihre eigene Invariante.
+                    for k in ("detektionen", "fd", "ohne_pose", "vorab_verworfen",
+                              "kandidaten", "m", "s", "ohne_struktur"):
                         eintrag[k] = int(antwort.get(k) or 0)
                         summe[k] = summe.get(k, 0) + eintrag[k]
                     for k in ("frames_gelesen", "frames_soll"):
@@ -6209,6 +6579,10 @@ class Service:
                       "without a face": summe.get("ohne_gesicht", 0),
                       "clip not readable": summe.get("unlesbar", 0),
                       "rest": rest_txt}
+                if summe.get("vorab_verworfen"):
+                    # .346: was die Vorschranke VOR Landmarken/Pose aussortiert
+                    # hat (zu klein/zu unscharf). Nur zeigen, wenn es etwas gab.
+                    fs["filtered early (size/sharpness)"] = summe["vorab_verworfen"]
                 if summe.get("ohne_struktur"):
                     # .32x: was der Struktur-Test aussortiert hat — Nacken, Ohren,
                     # Hinterkoepfe, Vegetation. Nur zeigen, wenn es etwas gab.
@@ -7361,6 +7735,38 @@ class Service:
         quelle = ("auto" if not cap and not frei else "part-auto")
         return (cap or a_cap), (frei or a_frei), f"{quelle} ({ges:.0f} GB disk)"
 
+    def systemstat_dienst(self):
+        """.341 Systemseite: das, was NUR der laufende Dienst weiss, fuer
+        core/systemstat.momentaufnahme(). Kein Messen hier — die Zahlen kommen
+        aus denselben Quellen wie System-Ampel und /health (K1: die Seite kann
+        dem Verhalten nicht widersprechen). Jeder Block einzeln gekapselt."""
+        aus = {}
+        try:
+            cap, frei_min, quelle = self.speichergrenzen()
+            aus["platte"] = {"cache_gb": round(self.clip_cache_bytes() / 1024 ** 3, 2),
+                             "cache_max_gb": round(cap, 1),
+                             "frei_min_gb": round(frei_min, 1), "quelle": quelle}
+        except Exception:                                     # noqa: BLE001
+            pass
+        try:                                  # kein Lazy-Start: nur fragen, wenn er lebt
+            aus["worker"] = (self._worker_obj.zustand() if self._worker_obj
+                             else {"laeuft": False, "tode_24h": 0,
+                                   "letzter_tod_ts": None, "letzte_ursache": None,
+                                   "grund": None})
+        except Exception:                                     # noqa: BLE001
+            pass
+        try:
+            st = dict(getattr(self, "_sweep_stand", None) or {})
+            st["grund"] = None
+            aus["rueckstau"] = st
+        except Exception:                                     # noqa: BLE001
+            pass
+        try:
+            aus["live"] = dict(self.live_health(), grund=None)
+        except Exception:                                     # noqa: BLE001
+            pass
+        return aus
+
     def start_plattenwache(self):
         """.313 (Issue #25): Platten-Wache — cleanup_cache beim Start und dann im
         Zwei-Takte-Rhythmus (.331: entspannt taeglich, knapp alle 10 min, s. Block
@@ -7644,7 +8050,12 @@ class Service:
         """Unverarbeitete person-Events der letzten lookback_h nachholen (Poll-Modus,
         MQTT-Start und -Reconnect) — Neustarts/Downtime reissen keine Loecher ins Log."""
         cfg = self.cfg
-        LIMIT = 200
+        # .352: aus der Config statt hart verdrahtet (Boden 1, damit ein Tippfehler
+        # den Sweep nicht stilllegt). Herkunft und Feldzahlen am Default in load_config.
+        try:
+            LIMIT = max(1, int(cfg.get("sweep_limit") or 200))
+        except (TypeError, ValueError):
+            LIMIT = 200
         try:
             after = time.time() - cfg["lookback_h"] * 3600
             evs = api(cfg, f"/api/events?label=person&after={after:.0f}&limit={LIMIT}&include_thumbnails=0")
@@ -7656,11 +8067,58 @@ class Service:
             self.frigate_fehler = None
             self.frigate_fehlerserie = 0
             if len(evs) >= LIMIT:                     # harte Grenze ohne Pagination: aelteste fielen still weg
-                self.log(f"sweep: Frigate returned the limit of {LIMIT} events — older ones may be missing "
-                         f"(consider lowering lookback_h={cfg['lookback_h']})")
+                # .352: der alte Rat "lookback_h senken" war auf grossen Anlagen falsch —
+                # dort kommen 200 Events in unter einer halben Stunde zusammen, ein
+                # kleineres Fenster hilft also nicht und verkleinert nur das Nachhol-Netz.
+                # Frigate liefert die NEUESTEN zuerst; abgeschnitten wird das aeltere Ende.
+                self.log(f"sweep: Frigate returned the limit of {LIMIT} events — older ones in the "
+                         f"last {cfg['lookback_h']}h may be missing. On a busy site raise "
+                         f"sweep_limit (currently {LIMIT})")
             todo = [ev for ev in sorted(evs, key=lambda e: e["start_time"])
                     if ev["id"] not in self.processed and ev.get("end_time")
                     and time.time() - ev["end_time"] >= cfg["clip_delay"]]
+            # .340: erst HIER die Start-Marke ziehen, nicht am Methodenkopf — scheitert der
+            # api()-Aufruf oben, ist der naechste Sweep weiterhin "der erste" und ein
+            # Frigate-Haenger beim Start hebelt start_catchup nicht aus.
+            with self._start_sweep_lock:
+                erster = self._start_sweep_offen
+                self._start_sweep_offen = False
+            # Im MQTT-Betrieb ist JEDER Sweep ein Nachhol-Sweep (Start + Reconnect, sonst
+            # treibt MQTT); im Poll-Betrieb ist er der NORMALE Antrieb — dort meldet nur der
+            # erste Lauf, sonst blinkt der Banner bei jedem einzelnen Event auf. Ehrliche
+            # Grenze: ein spaeterer echter Rueckstau im Poll-Modus bekommt so keinen Banner.
+            nachholend = erster or cfg["trigger"] == "mqtt"
+            # .340 start_catchup=false: NUR der beim Start bereits aufgelaufene Stapel wird
+            # uebersprungen. Vor dem Leer-Master-Guard, weil Ueberspringen keine Referenzen
+            # braucht — eine frische Installation soll den Stapel genauso loswerden.
+            # Die Zeile in der Akte traegt den Skip ueber Neustarts (processed wird aus ihr
+            # gelesen); eigene Kategorie, damit der Nachhol-Lauf sie nicht als 'fehler'
+            # wieder aufgreift. Bewusst hingenommen: solche Events zaehlen auf /heute als
+            # motion-only passes mit — sie sind unter Events auffindbar, das ist ehrlich.
+            if todo and erster and not cfg.get("start_catchup", True):
+                # self.lock wie bei jedem anderen Akte-Schreibweg (process()-Append,
+                # _deckung_korrektur, das Read-Rewrite-Replace weiter oben) — sonst
+                # koennte ein gleichzeitiger Rewrite diese Zeilen verlieren.
+                with self.lock, open(self.log_path, "a") as f:
+                    for ev in todo:
+                        f.write(json.dumps(
+                            {"schema": 3, "ts": round(time.time(), 1), "eid": ev["id"],
+                             "camera": ev.get("camera"), "start": ev.get("start_time"),
+                             "faces": 0, "max_bw": 0, "frames_gelesen": None, "frames_soll": None,
+                             "frigate": {"label": None, "score": None, "cos": None},
+                             "ours": {}, "bestaetigt": [], "kategorie": "uebersprungen",
+                             # v1 bewusst gleich: der Events-Filter zieht BEIDE Achsen, ein
+                             # verdict()-Wert waere hier gelogen (es lief keine Analyse).
+                             "kategorie_v1": "uebersprungen", "dauer_s": 0.0, "alerted": False,
+                             "ende_ts": float(ev["end_time"]),   # todo filtert auf end_time
+                             "uebersprungen": {"grund": "start_catchup=false",
+                                               "stunden": cfg["lookback_h"]}},
+                            ensure_ascii=False) + "\n")
+                        self.processed.add(ev["id"])
+                    f.flush()
+                self.log(f"sweep: start catch-up is off — {len(todo)} events from the last "
+                         f"{cfg['lookback_h']}h marked as skipped (start_catchup)")
+                return
             # Leerer Master: EINMAL pro Sweep melden statt pro Event einen Frigate-GET + Logzeile zu
             # erzeugen. Ohne Referenzen kann keine Analyse gelingen -> der Sweep baute die gleiche
             # todo-Liste im 20s-Takt endlos neu (Dauerlast auf einer frischen Installation).
@@ -7670,8 +8128,26 @@ class Service:
                 return
             if todo:
                 self.log(f"sweep: catching up on {len(todo)} unprocessed events")
-            for ev in todo:
-                self.process_safe(ev["id"])
+            # EIGENE Referenz statt self._sweep_stand: ueberholt ein zweiter Sweep diesen
+            # hier (MQTT-Reconnect mitten im Nachholen), zaehlt der alte Lauf auf SEINEM
+            # Dict weiter und sein finally loescht nicht den Banner des neuen.
+            stand = self._sweep_stand
+            if todo:
+                # int(): t_n waehlt die Plural-Form ueber int(n) — ein lookback_h von 1.5
+                # ergaebe sonst "the last 1.5 hour". Der Rundungsverlust ist die kleinere
+                # Unehrlichkeit. Der Zaehler springt im Meta-Refresh-Takt der Seite (30 s),
+                # nicht sekundengenau — dafuer braucht es keinen zweiten Poller.
+                # aktiv=nachholend: gezaehlt wird immer, den Banner traegt nur ein
+                # echter Nachhol-Lauf.
+                self._sweep_stand = stand = {"aktiv": nachholend, "gesamt": len(todo),
+                                             "fertig": 0, "stunden": int(cfg["lookback_h"])}
+            try:
+                for ev in todo:
+                    self.process_safe(ev["id"])
+                    stand["fertig"] = stand.get("fertig", 0) + 1
+            finally:
+                # Pflicht: ohne finally bliebe der Banner nach einem Abbruch ewig stehen.
+                stand["aktiv"] = False
         except Exception as e:
             # Sichtbar machen: im Poll-Modus (Default der ausgelieferten Container) ist sweep() der
             # EINZIGE Frigate-Pfad. Ohne das blieben UI-Banner, System-Ampel und Stoerungswaechter
@@ -7754,7 +8230,10 @@ class Service:
                     # der Anlern-Zeitpunkt. Als "letzte gute" gezaehlt, taeuschten sie
                     # "Stoerung nachweislich vorbei" vor und gaeben Nachhol-Versuche
                     # mitten in einer laufenden Stoerung frei (Widerleger 11.08.).
-                    if r.get("kategorie") != "fehler" and not r.get("korrektur"):
+                    # .340: uebersprungene Start-Events sind aus demselben Grund keine
+                    # gelaufene Analyse — dort lief ueberhaupt nichts.
+                    if r.get("kategorie") not in ("fehler", "uebersprungen") \
+                            and not r.get("korrektur"):
                         letzte_gute = max(letzte_gute, float(r.get("ts") or 0))
         st = self._nachhol_lesen()
         kand, offen, tot, neu_aus = [], 0, 0, False
@@ -8062,6 +8541,9 @@ def make_handler(svc):
                 pass                              # Client weg — nichts mehr zuzustellen
 
         def _banner(self):
+            # .340: welcher Zweig gezogen hat — nur /heute liest es, um dem
+            # Nachhol-Banner sein Angebot beizustellen (Markup gehoert dem Aufrufer).
+            self._banner_quelle = ""
             # .264: aktive Schoner-Sperre geht vor — sie erklaert, WARUM
             # gerade keine frischen Frigate-Daten kommen.
             if frigate_schoner.gesperrt():
@@ -8086,6 +8568,16 @@ def make_handler(svc):
                 # alte Kappung — genau das Detail, fuer das das Label gebaut wurde,
                 # fiel im Banner wieder weg.
                 return _sprache.t("banner.fehler", zeit=t, fehler=f[1][:220])
+            # .340: der Start-/Reconnect-Sweep arbeitet den aufgelaufenen Stapel ab — von
+            # aussen sieht das wie grundlose Volllast aus. Kurzlebig, deshalb VOR den beiden
+            # Start-Hinweisen darunter (die sind je Start berechnet und stehen nachher noch
+            # da), aber hinter jeder echten Frigate-Stoerung: die erklaert, warum gerade
+            # NICHTS kommt, und wiegt schwerer.
+            st = getattr(svc, "_sweep_stand", None) or {}
+            if st.get("aktiv"):
+                self._banner_quelle = "nachholen"
+                return _sprache.t_n("banner.nachholen", st.get("stunden") or 0,
+                                    fertig=st.get("fertig", 0), gesamt=st.get("gesamt", 0))
             # Issue #13: Daten-ohne-Mount geht vor Varianten-Hinweis — Datenverlust-
             # Risiko schlaegt Performance-Tipp (beide einmal je Start berechnet).
             d = getattr(svc, "daten_hinweis", None)
@@ -8622,7 +9114,11 @@ def make_handler(svc):
                             return self._send(200, json.dumps(
                                 {"ok": True, "laden": True, "msg": _nutz["msg"],
                                  "i": _nutz["i"], "n": _nutz["n"],
-                                 "zustand": _nutz["zustand"]},
+                                 "zustand": _nutz["zustand"],
+                                 # .343-Lehre (Bug-Jagd 25.08.): der Handler pickt
+                                 # Felder einzeln — was _bruecke_fortschritt liefert,
+                                 # MUSS hier explizit mit, sonst faellt es stumm raus.
+                                 "fortschritt": _nutz.get("fortschritt")},
                                 ensure_ascii=False), "application/json")
                         if _zst == "fehler":
                             return self._send(200, json.dumps(
@@ -9571,21 +10067,32 @@ def make_handler(svc):
                     gew = {str(x) for x in (d.get("gewaehlt") or [])}
                     mit = [dict(m, gewaehlt=(str(m.get("datei", "")).rsplit("/", 1)[-1] in gew))
                            for m in (satz.get("mitglieder") or [])]
+                    # .349 (Issue 26): die WIRKLICH zugeordnete Zahl zaehlt —
+                    # len(gew) war die Client-Liste; matchte davon nichts, wurde
+                    # "N selected" gemeldet und die Uebernahme lief spaeter in
+                    # "nothing selected". Eine Client-Auswahl ohne einen einzigen
+                    # Treffer wird jetzt LAUT abgelehnt statt still auf 0 gesetzt.
+                    n_match = sum(1 for m in mit if m["gewaehlt"])
+                    if gew and not n_match:
+                        return self._send(400, json.dumps(
+                            {"ok": False,
+                             "msg": _sprache.t("antwort.benennen_mismatch")},
+                            ensure_ascii=False), "application/json")
                     tag = {"modell": (mit[0].get("modell", "") if mit else ""),
                            "k_je_bin": cfg["benennung_k_je_bin"],
                            "yaw_grenze": cfg["benennung_yaw_grenze"],
                            "dup_sim": cfg["benennung_dup_sim"]}
                     _ll.anker_aktualisieren(
                         cfg["data_dir"], aid, person=name, status="benannt", mitglieder=mit,
-                        auswahl={"ts": round(time.time(), 1), "n": len(gew), "bedingungs_tag": tag})
+                        auswahl={"ts": round(time.time(), 1), "n": n_match, "bedingungs_tag": tag})
                     # .200 (Fix 4): "ships with E4b"/"pending" war seit dem Bau der
                     # Uebernahme (/lernlauf/uebernehmen) falsch — der Adopt-Knopf
                     # erscheint direkt nach dem Benennen.
-                    svc.log(f"anchor {aid} named '{name}' ({len(gew)} of {len(mit)} images "
+                    svc.log(f"anchor {aid} named '{name}' ({n_match} of {len(mit)} images "
                             "selected) — ready to adopt")
                     return self._send(200, json.dumps(
                         {"ok": True, "msg": _sprache.t("antwort.anker_benannt",
-                                                       name=name, n=len(gew))},
+                                                       name=name, n=n_match)},
                         ensure_ascii=False), "application/json")
                 except Exception as e:
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
@@ -9738,7 +10245,8 @@ def make_handler(svc):
                                                "lernlauf", str(lid)),
                             emb=svc.embedder,
                             yaw_grenze=cfg["benennung_yaw_grenze"],
-                            norm_latte=norm_latte_aus_cfg(cfg))
+                            norm_latte=norm_latte_aus_cfg(cfg),
+                            luma_grenzen=luma_grenzen_aus_cfg(cfg))
                     finally:
                         svc._sichtung_aid = None
                     return self._send(200, json.dumps({"ok": True}),
@@ -9791,7 +10299,8 @@ def make_handler(svc):
                         emb=svc.embedder,
                         lauf_dir=os.path.join(cfg["data_dir"], "state",
                                               "lernlauf", lid),
-                        norm_latte=norm_latte_aus_cfg(cfg))
+                        norm_latte=norm_latte_aus_cfg(cfg),
+                        luma_grenzen=luma_grenzen_aus_cfg(cfg))
                     return self._send(200, json.dumps(
                         {"ok": True, "person": person, "bewertung": bew},
                         ensure_ascii=False), "application/json")
@@ -9821,7 +10330,8 @@ def make_handler(svc):
                     if ab and not d.get("bestaetigt"):
                         return self._send(200, json.dumps({"ok": False, "tag_abweichung": ab}), "application/json")
                     plan = _ue.plan_bauen(satz, cfg["benennung_dup_sim"],
-                                          _ue.adoptierte_embs(cfg["data_dir"], person))
+                                          _ue.adoptierte_embs(cfg["data_dir"], person),
+                                          luma_grenzen=luma_grenzen_aus_cfg(cfg))
                     if not plan["aufnehmen"]:
                         if not plan["uebersprungen"]:
                             return self._send(400, json.dumps(
@@ -10976,8 +11486,34 @@ def make_handler(svc):
                           f'{liste}{motiv}</div>{neben}</div>')
                 # Auto-Aktualisierung NUR am heutigen Tag: ein vergangener Tag aendert sich nicht
                 # mehr, ein Reload wuerde nur die Position im Blaettern zerstoeren.
-                return self._send(200, webui.layout(_titel, "/heute", inhalt, self._banner(),
-                                                    refresh=(30 if live_offen else 120) if ist_heute else 0))
+                # .340: den Banner ZUERST holen — erst danach steht fest, ob der
+                # Nachhol-Zweig gezogen hat und sein Angebot danebengehoert. Waehrend des
+                # Nachholens laeuft derselbe 30-s-Takt wie bei einem offenen Durchgang,
+                # damit der Zaehler sich sichtbar bewegt.
+                _bn = self._banner()
+                _bakt = ""
+                if getattr(self, "_banner_quelle", "") == "nachholen":
+                    _bakt = ('<button class="gtb" style="margin-left:10px" '
+                             'onclick="startNachholAus()">'
+                             + html.escape(_sprache.t("banner.nachholen_aus")) + '</button>')
+                # .341 (User 25.08.): dezenter Hinweis, wenn FRIGATES eigene
+                # Gesichtserkennung laeuft — suslik braucht sie nicht. NICHT zeigen,
+                # solange frigate_sync an ist: der Namens-Rueckschrieb BRAUCHT sie,
+                # dort waere die Empfehlung "schalt sie aus" ein Schuss ins Knie.
+                # .348 (Feldtester-Log 26.08., 26 Tracebacks): hier stand
+                # `self.cfg` — die Handler-Klasse H HAT kein cfg-Attribut, die
+                # Config heisst im Handler-Scope `cfg`. Bei uns unsichtbar, weil
+                # die Bedingung vor dem dritten Term abbricht (Frigate-FR aus);
+                # beim Tester (FR an) starb damit JEDE /heute-Anfrage. Gate-
+                # Anker verbietet self.cfg in H seitdem komplett.
+                _hw = None
+                if (_frigate_fr.get("bekannt") and _frigate_fr.get("an")
+                        and not cfg.get("frigate_sync")):
+                    _hw = _sprache.t("hinweis.frigate_fr_an")
+                return self._send(200, webui.layout(
+                    _titel, "/heute", inhalt, _bn,
+                    refresh=(30 if (live_offen or _bakt) else 120) if ist_heute else 0,
+                    banner_aktion=_bakt, hinweis=_hw))
             if path == "/lernlauf/anker":
                 # E3-Ansicht (read-only): Cluster mit Crops — der erste Blick vor
                 # der Benennung. Renderer im Modul (I1), hier nur Daten + Layout.
@@ -11001,7 +11537,8 @@ def make_handler(svc):
                             _ll.person_norm,
                             referenz=_bn.referenz_zentroide(
                                 os.path.join(cfg["data_dir"], "clips",
-                                             "refcache.npz"), cfg["modell"]))
+                                             "refcache.npz"), cfg["modell"]),
+                            luma_grenzen=luma_grenzen_aus_cfg(cfg))
                         # .224: Fluss-Kontext (Group x of y + naechste offene
                         # Gruppe) — dieselbe Reihenfolge wie die Listen-Seite
                         # (Stuetz absteigend), damit Karte und Liste eine
@@ -11071,6 +11608,21 @@ def make_handler(svc):
                 return self._send(200, webui.layout(
                     _sprache.t("nav.anker"), "/lernlauf/anker",
                     _r_ank.anker_seite(saetze, kaputt, vorschlaege, dubletten),
+                    self._banner()))
+            if path == "/lernlauf/belichtung":
+                # Phase 1b (analysen/bauplan_belichtung.md, User 26.08.):
+                # Kalibrierseite der Belichtungs-Grenzen — duenner Mantel wie
+                # /lernlauf/anker (Anker lesen, Renderer, layout). Die Grenzen
+                # kommen LIVE aus der Config (derselbe Helfer wie ueberall),
+                # gespeichert wird ueber POST /konfig — den Weg des
+                # Konfigurationsblatts, hier entsteht KEIN zweiter.
+                import webui
+                from core import lernlauf as _ll
+                from routes import belichtung as _r_bel
+                _bsaetze, _bkaputt = _ll.anker_lesen(cfg["data_dir"])
+                return self._send(200, webui.layout(
+                    _sprache.t("belichtung.titel"), "/lernlauf/belichtung",
+                    _r_bel.seite(_bsaetze, luma_grenzen_aus_cfg(cfg)),
                     self._banner()))
             if path.startswith("/lernlauf/crop/"):
                 # Lauf-Crops (Containment wie /refs/: realpath-Wache gegen Traversal).
@@ -11281,8 +11833,15 @@ def make_handler(svc):
                     zustand, _le = _ll.lauf_lesen(cfg["data_dir"])
                 except Exception:
                     zustand = None
+                # .344/.345: der frische Ernte-Puls des laufenden L-Ordners fuer
+                # die Unterbalken (EIN Weg: lernlauf.lauf_puls, dieselbe
+                # Frische-Regel wie am Pass-Check).
+                try:
+                    _puls = _ll.lauf_puls(cfg["data_dir"], zustand)
+                except Exception:
+                    _puls = None
                 return self._send(200, json.dumps(
-                    dict(_r_wiz.lauf_status(zustand), ok=True),
+                    dict(_r_wiz.lauf_status(zustand, puls=_puls), ok=True),
                     ensure_ascii=False), "application/json")
             if path == "/lernlauf":
                 import webui
@@ -11383,9 +11942,10 @@ def make_handler(svc):
                                            str(zustand.get("lauf_id") or ""))
                         _rfz = _al_leer.refs_matrix_roh(cfg["modell"])
                         _nlz = norm_latte_aus_cfg(cfg)
+                        _lgz = luma_grenzen_aus_cfg(cfg)
                         _wart.sort(key=lambda s: 1 if _al_leer.sichtung_hat_sichtbare(
                             s, _lz, cfg["modell"], _rfz, cfg["benennung_dup_sim"],
-                            norm_latte=_nlz) is False else 0)
+                            norm_latte=_nlz, luma_grenzen=_lgz) is False else 0)
                     except Exception as e:
                         svc.log(f"lernlauf: empty-group ordering failed "
                                 f"({type(e).__name__}: {e})")
@@ -11410,7 +11970,8 @@ def make_handler(svc):
                                 referenz=_bn.referenz_zentroide(
                                     os.path.join(cfg["data_dir"], "clips",
                                                  "refcache.npz"),
-                                    cfg["modell"]))
+                                    cfg["modell"]),
+                                luma_grenzen=luma_grenzen_aus_cfg(cfg))
                         except Exception as e:
                             # Flaeche ist Zusatz-Weg — die Benennungs-Karte
                             # bleibt erreichbar, deshalb laut statt Blocker.
@@ -11454,7 +12015,8 @@ def make_handler(svc):
                                     cfg["benennung_dup_sim"],
                                     _ue3.adoptierte_embs(cfg["data_dir"], _pf)
                                     if _pf else [],
-                                    norm_latte=norm_latte_aus_cfg(cfg))
+                                    norm_latte=norm_latte_aus_cfg(cfg),
+                                    luma_grenzen=luma_grenzen_aus_cfg(cfg))
                                 sichtung_gesamt = _si.get("gesamt", 0)
                         except Exception as e:
                             svc.log(f"lernlauf: sichtung render failed "
@@ -11483,7 +12045,11 @@ def make_handler(svc):
                                                zielperson=_zp,
                                                reihenfolge=([s.get("anker_id")
                                                              for s in _wart]
-                                                            if _zp else None))
+                                                            if _zp else None),
+                                               # .345: tickende Unterbalken
+                                               # schon im Seiten-Render
+                                               ernte_puls=_ll.lauf_puls(
+                                                   cfg["data_dir"], zustand))
                     # .260: kein meta-refresh mehr — das Saeule-Widget der
                     # Seite pollt /lernlauf_status (Tick-Regel lebt als EINE
                     # Quelle in lernwizard.lauf_status) und laedt genau EINMAL
@@ -12114,7 +12680,7 @@ def make_handler(svc):
                 _verb = (None, "no Frigate URL configured")
                 if _furl:                          # Live-Probe wie frigate_fr_status:
                     try:                           #  kurz, nie aus altem Status
-                        with urllib.request.urlopen(
+                        with _fauth.oeffnen(                    # 5e
                                 _furl.rstrip("/") + "/api/version",
                                 timeout=4) as _r:
                             _verb = (True, _r.read(200).decode(
@@ -12221,6 +12787,29 @@ def make_handler(svc):
                 from routes import system as _r_system
                 inhalt = _r_system.render(svc, cfg, frigate_read_only(cfg), DOCS_URL)
                 return self._send(200, webui.layout(_sprache.t("nav.system"), "/system", inhalt, self._banner()))
+            if path == "/systemstat":
+                # .341 Systemseite: gerendert wird AUS DEM RINGPUFFER, nie
+                # frisch gemessen — sonst kostet jeder Reload eine Messrunde
+                # und stiehlt dem Sammler seine Delta-Bezugsgroesse. Die
+                # Auto-Aktualisierung laeuft im Schreibtakt (kein zweiter Takt).
+                import webui
+                from routes import systemstat as _r_sysstat
+                _seit = time.time() - 3600
+                _verlauf = _systemstat.lesen(cfg, _seit)
+                # Direkt nach einem Neustart hat der Sammler noch keine
+                # Momentaufnahme im Gedaechtnis, der Puffer aber sehr wohl
+                # Zeilen — ohne diesen Rueckfall behauptete die Seite bis zu
+                # eine Minute lang "noch keine Messungen", waehrend die Kurve
+                # daneben liegt. Der Zeitstempel unten sagt, wie alt sie ist.
+                inhalt = _r_sysstat.render(_verlauf,
+                                           _systemstat.letzte()
+                                           or (_verlauf[-1] if _verlauf else None),
+                                           _systemstat.TAKT_S,
+                                           _systemstat.AUFBEWAHRUNG_H)
+                return self._send(200, webui.layout(_sprache.t("nav.systemstat"),
+                                                    "/systemstat", inhalt,
+                                                    self._banner(),
+                                                    refresh=_systemstat.TAKT_S))
             if path == "/health":
                 # version zuerst (Task #12, User 28.07.): eingesandte Log-AUSSCHNITTE tragen
                 # die Startup-Banner-Zeile oft nicht, und "latest-gpu" im Issue-Formular ist
@@ -12230,6 +12819,11 @@ def make_handler(svc):
                      "startup_fails": _sf,
                      "version": os.environ.get("SUSLIK_VERSION", "dev"),
                      "processed": len(svc.processed),
+                     # .340: Start-Nachholen — Schalter UND Fortschritt aus DERSELBEN
+                     # Quelle wie der Banner (K1: die Anzeige kann dem Verhalten nicht
+                     # widersprechen). Supportfaelle schicken /health, nicht 400 Logzeilen.
+                     "start_catchup": {"an": cfg.get("start_catchup", True) is not False,
+                                       **(getattr(svc, "_sweep_stand", None) or {})},
                      "backend": cfg.get("backend") or "",
                      # N8b: Cache-Groesse SICHTBAR (Feldbericht: 74-GB-Steady-State erst am
                      # 97 % vollen Host bemerkt) + der wirksame Deckel daneben.
@@ -12256,7 +12850,14 @@ def make_handler(svc):
                      # Zustaende aus DERSELBEN Ableitung wie die Kacheln
                      # (livewache.ui_zustand + registry.LIVE_ZUSTAENDE — die
                      # Anzeige kann den Kacheln nicht widersprechen, K3/K1).
-                     "live": svc.live_health()}
+                     "live": svc.live_health(),
+                     # .341 Systemseite: DIESELBE Momentaufnahme, die der
+                     # 60-s-Sammler in den Ringpuffer schreibt — bewusst die
+                     # zuletzt geschriebene und keine frische. Wuerde /health
+                     # nebenher messen, klaute jeder Abruf den Delta-Zaehlern
+                     # (CPU, NPU, i915) ihre Bezugsgroesse. Ein Tester ohne
+                     # Browser sieht so exakt die Zahlen der Seite.
+                     "system": _systemstat.letzte() or {"grund": "erster_lauf"}}
                 pi = cfg.get("placement_info")
                 if pi:                                     # P4: aufgeloestes Auto-Placement ausweisen
                     h["placement"] = {"backend": pi.get("backend"), "quelle": pi.get("quelle"),
@@ -12326,12 +12927,12 @@ def make_handler(svc):
                 else:
                     try:
                         fbasis = furl.rstrip("/")
-                        with urllib.request.urlopen(f"{fbasis}/api/logs/frigate?start=0&end=1",
-                                                    timeout=6) as r:
+                        with _fauth.oeffnen(f"{fbasis}/api/logs/frigate?start=0&end=1",
+                                            timeout=6) as r:          # 5e
                             gesamt = int(json.load(r).get("totalLines") or 0)
                         lstart = max(0, gesamt - 80)
-                        with urllib.request.urlopen(f"{fbasis}/api/logs/frigate?start={lstart}",
-                                                    timeout=6) as r:
+                        with _fauth.oeffnen(f"{fbasis}/api/logs/frigate?start={lstart}",
+                                            timeout=6) as r:          # 5e
                             d = json.load(r)
                         teile.append(f"(lines {lstart}..{gesamt} of {gesamt})")
                         teile.append("\n".join(d.get("lines") or []) or "(empty)")
@@ -13245,6 +13846,15 @@ def startup_selfcheck(svc):
             erg("FAIL", f"{host} unreachable: {err or 'no cameras'} — set it in the setup wizard")
         else:
             erg("ok", f"{host} — {len(cams)} cameras")
+            # .352 (Haertetest-Befund B6): Frigates EIGENE Gesichtserkennung
+            # gehoert ins Startlog, nicht nur in die Oberflaeche. Genau dieser
+            # Zustand unterscheidet Installationen sichtbar voneinander und war
+            # die Ursache der Absturzserie in .347 — Tester haengen ihr
+            # Startlog an Issues, dort muss die Tatsache stehen.
+            if _frigate_fr.get("bekannt"):
+                erg("info", "frigate own face recognition: "
+                            + ("ON (suslik judges independently)" if _frigate_fr.get("an")
+                               else "off"))
     except Exception as e:
         erg("FAIL", str(e))
     # 6) Referenzen + Web-UI
@@ -13395,6 +14005,7 @@ def main():
     svc.start_wartung()
     svc.start_stoerungswaechter()
     svc.start_plattenwache()                      # .313 Issue #25
+    _systemstat.sammler_starten(cfg, svc.systemstat_dienst, svc.log)   # .341: Systemzahlen alle 60 s
     svc.start_nachhol()                   # gescheiterte Analysen spaeter stumm nachholen
     svc.start_frigate_probe()             # .281: Schoner-Sperre aktiv proben (MQTT-Leerlauf)
     svc.start_live_aufsicht()             # Phase 4: Live-Engine-Supervisor (Autostart, wenn

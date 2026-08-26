@@ -106,9 +106,9 @@ def fenster_bestimmen(timeout=10):
     basis = (os.environ.get("FRIGATE_URL") or "").rstrip("/")
     if basis:
         try:
-            import urllib.request
-            with urllib.request.urlopen(basis + "/api/config",
-                                        timeout=timeout) as r:
+            from core import frigate_auth as _fauth      # 5e: DER eine Griff
+            with _fauth.oeffnen(basis + "/api/config",
+                                timeout=timeout) as r:
                 tage, je_kamera = _fenster_aus_config(json.load(r))
             if tage:
                 return tage, "frigate-config", je_kamera

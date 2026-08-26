@@ -374,6 +374,24 @@ T = {
         "attend la fin d'une analyse en cours).",
     "konfiguration.feld.option_an": "activé",
     "konfiguration.feld.option_aus": "désactivé",
+    "konfiguration.frigate_auth.titel": "Connexion \u00e0 Frigate (facultatif)",
+    "konfiguration.frigate_auth.satz":
+        "N\u00e9cessaire uniquement si votre Frigate demande une connexion \u2014 c'est le cas "
+        "sur son port authentifi\u00e9 (8971), pas sur le port interne (5000). Si vous "
+        "laissez les deux champs vides, rien ne change : suslik parle \u00e0 Frigate "
+        "exactement comme aujourd'hui.",
+    "konfiguration.frigate_auth.erkl_user":
+        "nom d'utilisateur d'un compte Frigate. Vide = aucune connexion ; le vider "
+        "efface aussi le mot de passe enregistr\u00e9",
+    "konfiguration.frigate_auth.erkl_password":
+        "mot de passe de ce compte. Il est enregistr\u00e9 avec vos autres r\u00e9glages dans "
+        "/data et n'est jamais r\u00e9affich\u00e9 \u2014 laissez le champ vide pour le conserver",
+    "konfiguration.frigate_auth.erkl_tls":
+        "v\u00e9rifier le certificat TLS de Frigate. Le port authentifi\u00e9 de Frigate est "
+        "livr\u00e9 avec un certificat auto-sign\u00e9 : d\u00e9sactivez ceci si vous l'atteignez en "
+        "https sans avoir remplac\u00e9 ce certificat",
+    "konfiguration.frigate_auth.pw_gesetzt": "enregistr\u00e9 \u2014 laissez vide pour le conserver",
+    "konfiguration.frigate_auth.pw_leer": "aucun mot de passe enregistr\u00e9",
     "konfiguration.abschnitt_alle": "Tous les paramètres",
     "konfiguration.tabelle.kopf_parameter": "Paramètre",
     "konfiguration.tabelle.kopf_wert": "Valeur",
@@ -1076,6 +1094,17 @@ T = {
     "lernwizard.status.laeuft_seit": "en cours depuis {dauer}",
     "lernwizard.status.rest": "{rest} restant",
     "lernwizard.status.fertig_in": "terminé en {dauer}",
+    "lernwizard.balken.suchen": "Recherche des visages",
+    "lernwizard.balken.pose": "Position de la tête",
+    "lernwizard.balken.erkennen": "Reconnaissance des visages",
+    "lernwizard.balken.z_frames": "image {f} sur {s}",
+    "lernwizard.balken.z_posen.eins": "{n} pose",
+    "lernwizard.balken.z_posen.viele": "{n} poses",
+    "lernwizard.balken.z_erkannt.eins": "{n} reconnu",
+    "lernwizard.balken.z_erkannt.viele": "{n} reconnus",
+    "lernwizard.balken.wartet": "en attente",
+    "lernwizard.balken.clip": "récupération du clip …",
+    "lernwizard.balken.fertig": "terminé",
     "lernwizard.status.aufnahmen": "enregistrements&nbsp;: {n}",
     "lernwizard.status.bilder": "{n} photos collectées jusqu'ici",
     "lernwizard.puls.working": "en cours — mis à jour il y a {s}s",
@@ -1131,6 +1160,7 @@ T = {
     "lernwizard.k1.gestartet": "Session démarrée {wann}",
     "lernwizard.k1.scope": "étendue {n} événements",
     "lernwizard.k1.tag": "jour {tag}",
+    "lernwizard.k1.mini_belichtung": "Contrôle de luminosité",
     "lernwizard.k2.satz":
         "Tourne toute seule &mdash; vous pouvez fermer cette page et "
         "revenir.",
@@ -1230,6 +1260,43 @@ T = {
         "(reprise intégrée)",
     "lernwizard.expert.lauf_bleibt":
         "cette session reste — ses points d'ancrage demeurent disponibles",
+    # -------- Abgleich Helligkeit /lernlauf/belichtung (Phase 1b, 26.08.) --
+    "belichtung.titel": "Contrôle de luminosité",
+    "belichtung.satz":
+        "Réglez les deux limites de luminosité sur vos propres images. Chaque "
+        "ligne est un groupe de visages, trié comme le serveur le trie en ce "
+        "moment : les images hors limites passent en fin de ligne et sont "
+        "marquées en rouge. Rien n'est supprimé, une image reléguée reste "
+        "sélectionnable à la main.",
+    "belichtung.jetzt":
+        "En vigueur actuellement : la plus sombre {von}, la plus claire {bis}.",
+    "belichtung.hinweis_aus":
+        "Les deux limites sont désactivées, rien n'est donc relégué : déplacez "
+        "un curseur pour voir ce que ferait une limite.",
+    "belichtung.aus_wort": "désactivé",
+    "belichtung.regler_min": "la plus sombre admise",
+    "belichtung.regler_max": "la plus claire admise",
+    "belichtung.regler_hinweis":
+        "La luminosité va de 0 (noir) à 255 (blanc) ; 0 désactive ce côté.",
+    "belichtung.bilanz": "{n} images sur {m} sont reléguées",
+    "belichtung.vorschau":
+        "Aperçu seulement : les images sont retriées dans votre navigateur. "
+        "Enregistrez pour que le serveur trie ainsi.",
+    "belichtung.knopf_speichern": "Enregistrer ces limites",
+    "belichtung.reihe_info":
+        "{n} images mesurées sur {gesamt} · luminosité de {von} à {bis}",
+    "belichtung.lage_dunkel": "trop sombre",
+    "belichtung.lage_hell": "surexposée",
+    "belichtung.lage_ok": "dans les limites",
+    "belichtung.zurueck": "retour à la session d'apprentissage",
+    "belichtung.leer_satz":
+        "Aucune image ne porte encore de valeur de luminosité, il n'y a donc "
+        "rien à étalonner.",
+    "belichtung.leer_hinweis":
+        "La luminosité est mesurée lors de la récolte des visages. Elle "
+        "apparaît à partir de la prochaine session d'apprentissage ou du "
+        "prochain contrôle de passage ; les images plus anciennes ne sont "
+        "jamais mesurées après coup.",
     # --------------------------------- Stufe 1: Einhang/Skelett (webui) ---
     "nav.bereich.activity": "Passages",
     "nav.bereich.faces": "Visages",
@@ -1266,6 +1333,7 @@ T = {
     "nav.konfiguration": "Avancé",
     "nav.erkennungstest": "Test de reconnaissance",
     "nav.system": "Système",
+    "nav.systemstat": "Statistiques système",
     "nav.sync_auswahl": "Synchronisation Frigate",
     "nav.frigate": "Frigate",
     "ui.fuss.log": "Journal du service",
@@ -1276,6 +1344,8 @@ T = {
     "ui.modus.tooltip": "Easy affiche les pages essentielles — Expert affiche tout. Rien n'est supprimé, Easy ne fait que masquer.",
     "ui.live.chip": "En direct",
     "ui.theme.knopf": "Thème",
+    "ui.last.knopf": "Statistiques",
+    "ui.last.tooltip": "Charge du système : CPU, RAM, disque, GPU et la reconnaissance",
     "ui.theme.tooltip": "Basculer entre clair et sombre",
     "ui.theme.aria": "Changer de thème de couleur",
     "ui.sprache.tooltip": "Langue de cette installation — s'applique à toutes les pages et aux notifications",
@@ -1290,7 +1360,6 @@ T = {
     "ui.wn.x_aria": "Fermer",
     "ui.wn.mehr": "Tout afficher ({n})",
     "ui.wn.weniger": "En afficher moins",
-    "ui.hinweis.englisch": "Cette page n'est pas encore traduite — son contenu reste pour l'instant en anglais.",
     # --------------------------------- Stufe 1: Seitentitel (verifyd) ---
     "titel.setup": "Assistant d'installation",
     "titel.anker_detail": "Point d'ancrage",
@@ -1342,6 +1411,7 @@ T = {
     "js.notif.frage": "Enregistrer les paramètres de notification et redémarrer le service ?",
     "js.frigate.ro_frage": "Passer en LECTURE SEULE ? suslik cessera d'écrire dans Frigate.",
     "js.frigate.rw_frage": "Activer l'ÉCRITURE dans Frigate (sub_labels + synchronisation des références) ?",
+    "js.catchup.frage": "Ne plus rattraper les événements manqués au démarrage ? Le service redémarre pour appliquer ce choix.",
     "js.restore.frage": "Restaurer la configuration depuis \"{name}\" ? Cela écrase les paramètres actuels et redémarre le service.",
     "js.vollrestore.frage": "Restaurer la sauvegarde COMPLÈTE \"{name}\" ? Cela remplace les paramètres, les références et tout le matériel appris, puis redémarre le service.",
     "js.vollrestore.laeuft": "téléversement + restauration … (les gros fichiers prennent du temps)",
@@ -1568,6 +1638,16 @@ T = {
     "banner.fehler":
         "Frigate injoignable (dernière erreur {zeit}) : {fehler} — "
         "l'interface continue de fonctionner avec les données locales.",
+    "banner.nachholen.eins":
+        "Rattrapage des événements manqués de la dernière heure :"
+        " {fertig} sur {gesamt}",
+    "banner.nachholen.viele":
+        "Rattrapage des événements manqués des {n} dernières heures :"
+        " {fertig} sur {gesamt}",
+    "banner.nachholen_aus": "Ne plus rattraper au démarrage à l'avenir",
+    "hinweis.frigate_fr_an": "La reconnaissance faciale de Frigate est activee. suslik n\u2019en a pas besoin : il reconnait lui-meme et fonctionne dans les deux cas. Vous pouvez la desactiver dans Frigate si vous ne vous en servez pas par ailleurs.",
+    "ui.hinweis.x_tooltip": "Ne plus afficher cet avis",
+    "ui.hinweis.x_aria": "Masquer definitivement cet avis",
     "setupwiz.frigate.status_ok":
         "✓ Connexion établie — {n} caméra(s) trouvée(s)",
     "setupwiz.frigate.status_fehl":
@@ -2847,6 +2927,9 @@ T = {
         "vérification des photos — quelques secondes …",
     "antwort.anker_unbenannt":
         "le point d'ancrage n'est pas nommé (ou inconnu)",
+    "antwort.benennen_mismatch":
+        "votre sélection ne correspond à aucune image de ce groupe — "
+        "rechargez la page et cochez à nouveau les images",
     "antwort.adopt_nichts":
         "aucune sélection — cochez au moins une image à intégrer",
     "antwort.adopt_phantom":
@@ -2894,6 +2977,7 @@ T = {
     "baustein.kat.fehler": "Erreur",
     "baustein.kat.no_person":
         "Aucune personne trouvée (probablement un faux déclenchement)",
+    "baustein.kat.uebersprungen": "Ignoré au démarrage",
     "baustein.kat.deckung": "Correspondance",
     "baustein.kat.widerspruch": "Contradiction",
     "baustein.kat.frigate_nur": "Frigate seul",
@@ -3434,4 +3518,84 @@ connues.</p>""",
         "&mdash; il peut alors reconnaître des personnes même quand aucun "
         "visage n'est visible.",
     "personwizard.such.titel": "Configurer l'apprentissage de la personne",
+    # --------------------------------------------- routes/systemstat ---
+    "systemstat.titel": "Charge du système",
+    "systemstat.sub":
+        "Charge totale de cette machine. Une nouvelle mesure toutes les "
+        "{takt} secondes, conservée pendant {stunden} heures. Il n\u2019y a "
+        "pas de répartition par processus ici : Frigate tourne dans son "
+        "propre conteneur, sa part ne peut pas être nommée depuis ce "
+        "côté-ci. Ce que ce matériel ne sait pas mesurer, il le dit, au "
+        "lieu d\u2019afficher un zéro.",
+    "systemstat.leer.titel": "Pas encore de mesures.",
+    "systemstat.leer.hinweis":
+        "La première ligne est écrite environ {takt} secondes après le "
+        "démarrage du service. Les valeurs qui demandent deux mesures "
+        "(CPU, NPU, GPU) suivent un tour plus tard.",
+    "systemstat.block.hardware": "Matériel",
+    "systemstat.block.erkennung": "Reconnaissance",
+    "systemstat.block.live": "Direct",
+    "systemstat.nicht_verfuegbar": "non disponible",
+    "systemstat.kein_prozent": "pas de pourcentage",
+    "systemstat.ja": "oui",
+    "systemstat.nein": "non",
+    "systemstat.verlauf.leer": "pas encore d\u2019historique",
+    "systemstat.verlauf.aria": "la dernière heure",
+    "systemstat.cpu.anzahl": "Cœurs",
+    "systemstat.cpu.kerne": "par cœur, à l\u2019instant",
+    "systemstat.kachel.platte": "Disque",
+    "systemstat.ram.genutzt": "Utilisé",
+    "systemstat.ram.grafik": "Graphique (RAM partagée)",
+    "systemstat.ram.prozesse": "Processus",
+    "systemstat.ram.limit": "Limite",
+    "systemstat.ram.cache": "Cache récupérable",
+    "systemstat.platte.frei": "Libre",
+    "systemstat.platte.gesamt": "Total",
+    "systemstat.platte.cache": "Cache des clips / plafond",
+    "systemstat.platte.frei_min": "Garder libre",
+    "systemstat.gpu.engine": "Moteur le plus chargé",
+    "systemstat.gpu.speicher": "Mémoire",
+    "systemstat.gpu.temperatur": "Température",
+    "systemstat.gpu_eigen.titel": "GPU (part de suslik)",
+    "systemstat.gpu.gesamt": "Carte entière",
+    "systemstat.gpu_eigen.zeile": "part de suslik",
+    "systemstat.kachel.worker": "Processus d\u2019analyse",
+    "systemstat.worker.laeuft": "en marche",
+    "systemstat.worker.ruht": "au repos, démarre à la demande",
+    "systemstat.worker.tode": "redémarrages en 24 h",
+    "systemstat.worker.zuletzt": "Dernière mort",
+    "systemstat.worker.ursache": "Dernière cause",
+    "systemstat.kachel.durchsatz": "Débit",
+    "systemstat.durchsatz.tag": "Dernières 24 h",
+    "systemstat.durchsatz.dauer": "Durée moyenne",
+    "systemstat.kachel.rueckstau": "Retard à rattraper",
+    "systemstat.rueckstau.laeuft": "Rattrapage en cours",
+    "systemstat.rueckstau.fenster": "Fenêtre rétrospective",
+    "systemstat.kachel.live": "Moteur en direct",
+    "systemstat.live.waechter": "Veilleurs actifs",
+    "systemstat.live.supervisor": "Superviseur",
+    "systemstat.stand":
+        "Mesuré à {zeit}. La page se recharge d\u2019elle-même.",
+    "systemstat.grund.erster_lauf":
+        "en attente de la deuxième mesure \u2014 ce nombre est la "
+        "différence entre deux mesures",
+    "systemstat.grund.kein_geraet":
+        "aucun appareil de ce genre sur cette machine",
+    "systemstat.grund.kein_zaehler":
+        "l\u2019appareil est là, mais son pilote ne publie aucun compteur "
+        "d\u2019utilisation",
+    "systemstat.grund.gesperrt":
+        "le compteur existe, mais ce conteneur n\u2019a pas le droit de le "
+        "lire (les événements de performance du noyau demandent des droits "
+        "supplémentaires)",
+    "systemstat.grund.werkzeug_fehlt":
+        "l\u2019outil d\u2019interrogation de cet appareil n\u2019est pas "
+        "dans cette image",
+    "systemstat.grund.nicht_lesbar":
+        "cette source n\u2019a pas pu être lue",
+    "systemstat.grund.kein_limit":
+        "aucune limite de mémoire n\u2019est fixée pour ce conteneur, il "
+        "n\u2019y a donc pas de pourcentage à afficher",
+    "systemstat.grund.kein_dienst":
+        "ce nombre, seul le service en marche le connaît",
 }

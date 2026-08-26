@@ -743,9 +743,10 @@ nav .sprache .sp-menu { position: absolute; right: 0; top: 34px; z-index: 40;
 .sp-reihe .sp-knopf { border: 1px solid var(--border); background: var(--surface-2); }
 .sp-reihe .sp-knopf.an { border-color: var(--accent); }
 
-/* Mischzustand-Hinweis (Stufe 1): Seiten, deren Inhalt noch englisch ist */
-.sprachhinweis { color: var(--dim); font-size: 12px; margin: 0 0 12px;
-                 padding: 6px 10px; border: 1px dashed var(--border); border-radius: 8px; }
+/* Dezente Hinweiszeile UNTER dem Banner (.341): erklaert etwas, meldet keine
+   Stoerung. Bewusst leiser als .banner — sonst entwertet sie ihn. */
+.hinweis { color: var(--dim); font-size: 12px; margin: 0 0 12px;
+           padding: 6px 10px; border: 1px dashed var(--border); border-radius: 8px; }
 
 /* ---- Vier-Saeulen-Erkennungsseite /erkennung (.205): EINE Seite fuer Easy und
    Expert — Elemente mit .nur-expert blendet der Easy-Modus aus (nie loeschen,
@@ -855,3 +856,71 @@ body:not(.easy) .nur-easy { display: none; }
 .ek-hilfe a:hover { color: var(--text); }
 .hilfe { max-width: 640px; }
 .hilfe p { line-height: 1.55; }
+/* .341 Systemstatistik (routes/systemstat.py). Bewusst EINE Balkenfarbe:
+   die Seite zeigt Zahlen, sie urteilt nicht — Schwellen und Alarme liegen
+   bei den bestehenden Wachen (Bauplan §4). */
+.sst-gitter { display: grid; gap: 12px; margin: 10px 0 18px;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
+.sst-kachel { border-left-color: var(--accent); padding: 12px 14px; }
+.sst-kopf { font-size: 12px; font-weight: 600; letter-spacing: .05em;
+  text-transform: uppercase; color: var(--faint); }
+.sst-wert { margin: 2px 0 6px; line-height: 1.1; }
+.sst-gross { font-size: 30px; font-weight: 600; }
+.sst-mittel { font-size: 19px; font-weight: 600; }
+.sst-einheit { font-size: 15px; color: var(--dim); margin-left: 3px; }
+/* "nicht verfuegbar" ist eine Auskunft, kein Fehler: gedaempft, nie rot. */
+.sst-fehlt { font-size: 12.5px; color: var(--dim); margin-bottom: 6px; }
+.sst-bal { display: block; width: 100%; height: 38px; fill: var(--accent); }
+.sst-kerne { height: 26px; opacity: .8; }
+.sst-kein { font-size: 12px; color: var(--faint); height: 38px;
+  display: flex; align-items: center; }
+.sst-zl { display: flex; justify-content: space-between; gap: 10px;
+  font-size: 12.5px; color: var(--dim); padding: 2px 0;
+  border-top: 1px solid var(--border); }
+.sst-zl b { color: var(--text); font-weight: 500; text-align: right;
+  word-break: break-word; }
+.sst-zl2 { font-size: 11px; color: var(--faint); margin-top: 6px; }
+/* .345 Fortschritts-Block (User-Konsens 25.08.: EIN Gesamtbalken + DREI
+   Unterbalken suchen/Pose/erkennen). EIN Baustein fuer beide Stellen:
+   Pass-Check (auftritte.py, lbBlock baut ihn im JS) und Lernlauf-Wizard
+   (routes/lernwizard.py rendert ihn, das Widget-JS fuehrt Werte nach).
+   Zahlen kommen ausschliesslich aus ernte.fortschritt_rechnen — hier wohnt
+   nur Optik. */
+.fs-block { margin: 8px 0 2px; max-width: 440px; }
+.fs-msg { margin-bottom: 4px; }
+.fs-total { display: block; height: 10px; border: 1px solid var(--border);
+  border-radius: 5px; background: var(--surface-2); overflow: hidden; }
+.fs-fill { display: block; height: 100%; background: seagreen;
+  transition: width .6s; }
+.fs-fill.warte { background: var(--warn); }
+.fs-phasen { display: flex; flex-wrap: wrap; gap: 4px 14px;
+  font-size: 12px; margin: 5px 0 2px; }
+.fs-phasen div { display: flex; gap: 5px; align-items: center;
+  color: var(--dim); }
+.fs-phasen .an { color: var(--text); font-weight: bold; }
+.fs-phasen .ok { color: seagreen; }
+/* Gestapelte Zeilen (.346, User-Screenshot 25.08.: in der schmalen Wizard-
+   Kachel quetschten lange Zaehlertexte die Balken-Spur auf Pixelbreite):
+   Zeile 1 = Beschriftung + Zaehler, Zeile 2 = Balken in voller Breite. */
+.fs-row { margin-top: 6px; font-size: 12px; color: var(--dim); }
+.fs-kopf { display: flex; justify-content: space-between; gap: 8px; }
+.fs-lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fs-z { flex: 0 0 auto; }
+.fs-z.ok { color: seagreen; }
+.fs-bar { display: block; width: 100%; height: 6px; margin-top: 2px;
+  border: 1px solid var(--border); border-radius: 3px;
+  background: var(--surface-2); overflow: hidden; }
+.sst-stand { margin-top: 4px; }
+/* Reihe kleiner Klick-Felder in Kachel 1 der Lern-Karte (User 26.08. am
+   Screenshot: "Platz fuer bis zu drei kleinere Klick-Felder" zwischen
+   Ergebnis-Zeile und dem grossen Such-Knopf; heute EINES belegt, der
+   Belichtungs-Abgleich). Hier statt in webui/bausteine.lauffluss_stil(),
+   weil die Reihe nur in der Lern-Karte steht — /personlauf teilt sich das
+   lauffluss-Blatt und bekaeme sie sonst still mit. Drei Felder passen
+   nebeneinander (flex:1 1 0 + min-width), ab dem vierten bricht die Reihe. */
+.lf-minis { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 0; }
+.lf-minis a { flex: 1 1 0; min-width: 104px; display: block; padding: 7px 8px;
+  border: 1px solid var(--border-strong); border-radius: 8px;
+  background: var(--surface-2); color: var(--text); text-decoration: none;
+  font-size: 12.5px; line-height: 1.25; text-align: center; }
+.lf-minis a:hover { border-color: var(--accent); color: var(--accent); }

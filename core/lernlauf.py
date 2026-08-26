@@ -135,6 +135,17 @@ def lauf_lesen(data_dir):
         return None, f"{type(e).__name__}: {e}"
 
 
+def lauf_puls(data_dir, zustand):
+    """Frischer Ernte-Puls des laufenden Lauf-Ordners, oder None. EIN Weg fuer
+    den /lernlauf-Seiten-Render UND den /lernlauf_status-Poll (.345) — die
+    Frische-Regel wohnt in ernte.puls_lesen, dieselbe wie am Pass-Check."""
+    if not (zustand and zustand.get("lauf_id")):
+        return None
+    from core import ernte
+    return ernte.puls_lesen(os.path.join(data_dir, "state", "lernlauf",
+                                         str(zustand["lauf_id"])))
+
+
 def lauf_schreiben(data_dir, zustand):
     """Atomar (tmp + fsync + rename ins selbe Verzeichnis). zustand MUSS phase
     aus PHASEN tragen; schema wird gesetzt."""
@@ -395,6 +406,56 @@ def lauf_loeschen(data_dir, lauf_id):
     zaehl["marken_frei"], zaehl["marken_geteilt"] = \
         _fr.behalten_freigeben_lauf(data_dir, lauf_id)
     return zaehl
+
+
+def laeufe_nach_alter_loeschen(data_dir, tage):
+    """Laeufe loeschen, die AELTER als `tage` sind (Nachtjob, User 25.08.:
+    "wir sollten wirklich aufraeumen und nicht irgendwelchen alten Muell mit
+    dem System rumschleppen"). Anlass: state/lernlauf war auf der Prod-Maschine
+    auf 973 MB in 88 Laeufen gewachsen, aeltester 20 Tage — der Nachtjob raeumte
+    events/ und Clips, Lernlaeufe standen auf keiner Liste. Es gab nur den
+    manuellen Sammel-Knopf (alte_laeufe_loeschen), und der loescht ALLES ausser
+    dem neuesten; als taeglicher Automatismus waere das zu grob.
+
+    Drei Dinge bleiben deshalb IMMER stehen, unabhaengig vom Alter:
+    der neueste Lauf (wie beim Sammel-Knopf), der gerade laufende, und alles,
+    was juenger als `tage` ist. tage <= 0 schaltet die Regel ab.
+    Alter kommt aus der lauf_id (L<JJJJMMTT_HHMMSS>) — dieselbe Quelle, die
+    auch die Sortierung traegt, kein zweiter Zeitbegriff.
+    -> (bilanz wie alte_laeufe_loeschen, geloeschte_ids)."""
+    import datetime as _dt
+    gesamt = {"entfernt": 0, "benannt": 0, "verworfen": 0, "kaputt": 0,
+              "dateien": 0, "rest": 0, "ordner": True, "laeufe": 0,
+              "marken_frei": 0, "marken_geteilt": 0}
+    if not tage or int(tage) <= 0:
+        return gesamt, []
+    saetze, _k = anker_lesen(data_dir)
+    ids = sorted({str((s.get("lauf") or {}).get("lauf_id") or "") for s in saetze} - {""})
+    if len(ids) < 2:
+        return gesamt, []
+    lauf, _f = lauf_lesen(data_dir)
+    aktiv = (str(lauf.get("lauf_id") or "")
+             if lauf and not lauf_abgeschlossen(lauf) else None)
+    grenze = _dt.datetime.now() - _dt.timedelta(days=int(tage))
+    weg = []
+    for lid in ids[:-1]:                              # der neueste bleibt immer
+        if lid == aktiv:
+            continue
+        try:
+            wann = _dt.datetime.strptime(lid[1:16], "%Y%m%d_%H%M%S")
+        except (ValueError, IndexError):
+            continue                                  # unlesbare id: nie raten, stehen lassen
+        if wann >= grenze:
+            continue
+        z = lauf_loeschen(data_dir, lid)
+        for k in ("entfernt", "benannt", "verworfen", "dateien", "rest",
+                  "marken_frei", "marken_geteilt"):
+            gesamt[k] += z[k]
+        gesamt["kaputt"] = z["kaputt"]
+        gesamt["ordner"] = gesamt["ordner"] and z["ordner"]
+        gesamt["laeufe"] += 1
+        weg.append(lid)
+    return gesamt, weg
 
 
 def alte_laeufe_loeschen(data_dir):

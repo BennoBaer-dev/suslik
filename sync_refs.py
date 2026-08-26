@@ -280,6 +280,7 @@ ERLAUBTE_ENDUNGEN = (".jpg", ".jpeg", ".png", ".webp")
 # "ungueltiger Pfad"). Jetzt gilt derselbe Vertrag wie fuer die Verbraucher; was nicht
 # passt, wird LAUT uebersprungen (Zeile im Import-Log) statt still unbrauchbar angelegt.
 from core.registry import PERSON_RE as _PERSON_RE
+from core import frigate_auth as _fauth      # 5e: DER eine Frigate-HTTP-Griff
 _NAME_OK = re.compile(rf"^{_PERSON_RE}$", re.UNICODE)
 
 
@@ -343,7 +344,7 @@ def master_stand():
 
 
 def frigate_stand():
-    with urllib.request.urlopen(f"{_frigate()}/api/faces", timeout=20) as r:
+    with _fauth.oeffnen(f"{_frigate()}/api/faces", timeout=20) as r:        # 5e
         d = json.load(r)
     return {k: sorted(v) for k, v in d.items() if k != "train"}
 
@@ -359,7 +360,7 @@ def frigate_fr_status(timeout=5):
     if not basis:
         return None, "no Frigate URL configured"
     try:
-        with urllib.request.urlopen(f"{basis}/api/config", timeout=timeout) as r:
+        with _fauth.oeffnen(f"{basis}/api/config", timeout=timeout) as r:   # 5e
             cfg = json.load(r)
     except Exception as e:
         return None, f"{type(e).__name__}: {e}"
@@ -608,8 +609,8 @@ def cmd_import(dry):
             continue
         os.makedirs(os.path.dirname(ziel), exist_ok=True)
         try:
-            with urllib.request.urlopen(f"{_frigate()}/clips/faces/{urllib.parse.quote(p)}/{urllib.parse.quote(datei)}",
-                                        timeout=20) as r:
+            with _fauth.oeffnen(f"{_frigate()}/clips/faces/{urllib.parse.quote(p)}/{urllib.parse.quote(datei)}",
+                                timeout=20) as r:          # 5e
                 data = r.read()
             with open(ziel, "wb") as f:
                 f.write(data)
@@ -631,6 +632,12 @@ def cmd_import(dry):
 
 
 # INVARIANTE: FRIGATE_FACES_API   (Marke: CLAUDE.md "Frigate-Zugriff: NUR ueber die HTTP-API")
+# 5e (26.08.): der HTTP-Griff heisst seither core.frigate_auth.oeffnen statt roh
+# urllib — dieselben Endpunkte, dasselbe Protokoll, kein neuer Weg. Die
+# Invariante wird dadurch nicht geschwaecht, sondern erst tragfaehig: auf einer
+# Frigate mit Anmeldung (authentifizierter Port 8971) beantwortete der rohe
+# API-Weg JEDE Mutation mit 401 — und ein Nutzer, dem der API-Weg nicht
+# funktioniert, sucht sich einen anderen. Genau den soll es nie geben.
 def api_upload(person, datei, quelle, person_existiert=None):
     """Referenzbild ueber die Frigate-HTTP-API hochladen (Frigate 0.18.0, Endpunkte
     aus der OpenAPI der LAUFENDEN Instanz verifiziert, 05.08. — der fruehere
@@ -662,7 +669,7 @@ def api_upload(person, datei, quelle, person_existiert=None):
         # stelle = 'create'|'register' wandert in den Fehler (.138): nur ein
         # register-Fehler ist eine Aussage ueber das Bild (Merker-Entscheid).
         try:
-            with urllib.request.urlopen(req, timeout=60) as r:
+            with _fauth.oeffnen(req, timeout=60) as r:      # 5e
                 return _lesen(r)
         except urllib.error.HTTPError as e:
             detail = ""

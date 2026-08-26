@@ -651,44 +651,104 @@ def render(cfg, log_pfad, personen_bekannt, params):
           'dg.appendChild(ok);dg.appendChild(ab);ov.appendChild(dg);'
           'ov.onclick=function(ev){if(ev.target===ov)ab.onclick(ev);};'
           'document.body.appendChild(ov);}'
-          'function lbBalken(st,i,n,z){'
-          'var w=document.createElement("span");'
-          'w.style.cssText="display:inline-block;vertical-align:middle;width:110px;height:6px;'
-          'margin-left:8px;border-radius:3px;background:var(--surface-2);'
-          'border:1px solid var(--border);overflow:hidden";'
-          'var f=document.createElement("span");'
-          'var pz=n?Math.round(100*i/n):0;'
-          'f.style.cssText="display:block;height:100%;width:"+pz+"%;'
-          'background:"+(z==="wartet"?"var(--warn)":"seagreen")+";transition:width .6s";'
-          'w.appendChild(f);st.appendChild(w);}'
+          # .345 (User-Konsens 25.08., ersetzt die .343-Textzeile): der Block =
+          # EIN Gesamtbalken (Events + Frame-Anteil, fortschritt.gesamt) und DREI
+          # Unterbalken (suchen/Pose/erkennen), die je Event mit dem Frame-
+          # Fortschritt durchlaufen; Zaehler sind echte Werte. Prozente rechnet
+          # allein der Server (ernte.fortschritt_rechnen — kein Zweit-Rechner im
+          # Blatt), hier wird nur angewendet. Kein Puls = Clip-Beschaffung
+          # (puls_da False), 'bewertet' = alle drei fertig. Optik: .fs-*
+          # (style.css). Texte englisch-literal wie das ganze Blatt
+          # (Stufe-2-Grenze oben).
+          # .346b (User: "AJAX wie beim Lernen"): der Block wird EINMAL gebaut
+          # und danach nur noch in place nachgefuehrt (st._fsb haelt die
+          # Referenzen) — kein Abriss je Poll, die Breiten animieren weich wie
+          # in der Wizard-Karte. Die msg-Zeile wohnt mit IM Block (fs-msg).
+          # Gestapelte Zeilen: Kopf (Beschriftung+Zaehler), Balken voll breit.
+          'function lbBlock(st,msg,z,f){'
+          'if(!f){st._fsb=null;st.style.display="";st.textContent=msg;return;}'
+          'var c=st._fsb;'
+          'if(!c){'
+          # .346: der Block braucht die volle Zeilenbreite — der Status-Span
+          # bricht dafuer unter den Knopf (und zurueck, wenn der Lauf endet).
+          'st.textContent="";st.style.display="block";'
+          'var w=document.createElement("div");w.className="fs-block";'
+          'var m=document.createElement("div");m.className="dim fs-msg";'
+          'w.appendChild(m);'
+          'var tb=document.createElement("div");tb.className="fs-total";'
+          'var tf=document.createElement("span");tf.className="fs-fill";'
+          'tb.appendChild(tf);w.appendChild(tb);'
+          'var L={suchen:"searching faces",pose:"head pose",erkennen:"recognizing"};'
+          'c={m:m,tf:tf,rows:[]};'
+          'f.gruppen.forEach(function(g){'
+          'var r=document.createElement("div");r.className="fs-row";'
+          'var kf=document.createElement("div");kf.className="fs-kopf";'
+          'var lb=document.createElement("span");lb.className="fs-lbl";'
+          'lb.textContent=L[g.k]||g.k;'
+          'var zt=document.createElement("span");zt.className="fs-z";'
+          'kf.appendChild(lb);kf.appendChild(zt);'
+          'var b2=document.createElement("span");b2.className="fs-bar";'
+          'var bf=document.createElement("span");bf.className="fs-fill";'
+          'b2.appendChild(bf);'
+          'r.appendChild(kf);r.appendChild(b2);w.appendChild(r);'
+          'c.rows.push({bf:bf,zt:zt});});'
+          'st.appendChild(w);st._fsb=c;}'
+          'c.m.textContent=msg;'
+          'c.tf.className="fs-fill"+(z==="wartet"?" warte":"");'
+          'c.tf.style.width=Math.round(100*f.gesamt)+"%";'
+          'var fertig=(z==="bewertet");'
+          'f.gruppen.forEach(function(g,i){'
+          'var row=c.rows[i];if(!row)return;'
+          'row.bf.style.width=(fertig?100:Math.round(100*g.anteil))+"%";'
+          'var zt=row.zt;zt.className="fs-z"+(fertig?" ok":"");'
+          'if(fertig)zt.textContent="\\u2713 done";'
+          'else if(z==="wartet")zt.textContent="waiting";'
+          'else if(!f.puls_da)zt.textContent='
+          '(g.k==="suchen"?"fetching the clip \\u2026":"waiting");'
+          'else if(g.k==="suchen")zt.textContent="frame "+g.wert+" of "+(g.von||"?");'
+          'else if(!g.wert)zt.textContent="waiting";'
+          'else if(g.k==="pose")zt.textContent=g.wert+" found";'
+          'else zt.textContent=g.wert+" recognized";});}'
           'function lernBruecke(b){'
           'var st=b.parentNode.querySelector(".lb-status");'
-          'b.disabled=true;st.textContent="checking the pictures\\u2026";'
+          # .347 (User: "flackert bei der Aktualisierung"): lernBruecke ist
+          # Klick-Handler UND Poll-Schleife — der Kopf darf den Block nicht je
+          # Tick abraeumen (der Cache-Reset an dieser Stelle machte das
+          # In-Place-Update wirkungslos: je Poll Wartetext + Neubau = das
+          # Flackern; Gate-Anker verbietet ihn hier). Wartetext nur beim
+          # ERSTEN Aufruf, solange noch kein Block steht; geleert wird der
+          # Cache ausschliesslich an den Ausstiegen.
+          'b.disabled=true;'
+          'if(!st._fsb)st.textContent="checking the pictures\\u2026";'
           'fetch("/auftritt_lernen",{method:"POST",headers:{"Content-Type":"application/json"},'
           'body:JSON.stringify({person:b.dataset.person,eids:JSON.parse(b.dataset.eids)})})'
           '.then(function(r){return r.json()}).then(function(d){'
-          'if(!d.ok){st.textContent="error: "+d.msg;b.disabled=false;return;}'
+          'if(!d.ok){st._fsb=null;st.style.display="";'
+          'st.textContent="error: "+d.msg;b.disabled=false;return;}'
           # .232 (User-Idee): kaltes Modell -> ehrliche Lade-Anzeige und
           # automatisch nachfragen, sobald es steht (max ~1 min).
-          'if(d.laden){st.textContent=d.msg;'
+          'if(d.laden){'
           # .310 (User: 'kleiner Balken neben dem Text, der hochlaeuft'): die
-          # Pass-Ernte meldet i/n/zustand — schmaler Balken im Status-Span,
+          # Pass-Ernte meldet i/n/zustand — Fortschritts-Block im Status-Span,
           # kein Aufgeben per Zaehler, solange der Dienst Fortschritt meldet
           # (der Alt-Text 'model did not load' kam nach 60 s Warten hinter
           # einem anderen Hintergrund-Job). Reines Modell-Laden (ohne n)
-          # behaelt den 60-s-Deckel.
-          'if(d.zustand){lbBalken(st,d.i,d.n,d.zustand);'
+          # behaelt den 60-s-Deckel und bleibt schlichte Textzeile.
+          'if(d.zustand){lbBlock(st,d.msg,d.zustand,d.fortschritt);'
           'b._ladeversuche=0;setTimeout(function(){lernBruecke(b)},2500);return;}'
+          'st._fsb=null;st.textContent=d.msg;'
           'b._ladeversuche=(b._ladeversuche||0)+1;'
-          'if(b._ladeversuche>24){st.textContent="model did not load — try again";'
+          'if(b._ladeversuche>24){st._fsb=null;st.style.display="";'
+          'st.textContent="model did not load — try again";'
           'b.disabled=false;b._ladeversuche=0;return;}'
           'setTimeout(function(){lernBruecke(b)},2500);return;}'
           'b._ladeversuche=0;'
-          'st.textContent=d.msg;b.disabled=false;'
+          'st._fsb=null;st.style.display="";st.textContent=d.msg;b.disabled=false;'
           # .231: Overlay auch, wenn NUR Grenzfaelle da sind.
           'if((d.nehmen&&d.nehmen.length)||(d.grenz&&d.grenz.length))'
           'lbOverlay(b,st,d);})'
-          '.catch(function(e){st.textContent="error: "+e;b.disabled=false;});}'
+          '.catch(function(e){st._fsb=null;st.style.display="";'
+          'st.textContent="error: "+e;b.disabled=false;});}'
           '</script>')
     # .32x: in der Gruppen-Sicht traegt der Titel die GRUPPE, nicht die eine
     # Person, an der Referenz-Marker und Sortierung technisch haengen.

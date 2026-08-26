@@ -174,9 +174,10 @@ If something looks wrong, the container log is the fastest diagnosis:
 docker logs -f suslik
 ```
 
-The service prints a 7-step self-check on start: config, hardware (which accelerator was found
-and whether it engaged), backend bind, recognition model, Frigate connection, references, and a
-per-backend benchmark — ending in `========== ready ==========`. It contains no secrets, so it's
+The service prints an 8-step self-check on start: config, hardware (which accelerator was found
+and whether it engaged), backend bind, recognition model, Frigate connection, references, a
+per-backend benchmark, and a compute check that each model produces on its device what the CPU
+produces — ending in `========== ready ==========`. It contains no secrets, so it's
 safe to share when asking for help.
 
 If a **sync** reports a problem, `http://<host>:8199/sync_diagnose` (linked from the Frigate

@@ -34,6 +34,8 @@ import shutil
 import time
 import urllib.request
 
+from core import frigate_auth as _fauth   # 5e: DER eine Frigate-HTTP-Griff
+
 import numpy as np
 
 FENSTER_S = 600
@@ -595,14 +597,14 @@ def _bild_holen(frigate_url, eid, data_dir=None):
         pass
     # Notnagel: Snapshot + Frigate-Box (Alt-Weg bis .147)
     try:
-        with urllib.request.urlopen(
+        with _fauth.oeffnen(                                # 5e
                 f"{frigate_url.rstrip('/')}/api/events/{eid}",
                 timeout=15) as r:
             ev = json.loads(r.read())
         box = (ev.get("data") or {}).get("box")
         if not box:
             return None, "snapshot", {}
-        with urllib.request.urlopen(
+        with _fauth.oeffnen(                                # 5e
                 f"{frigate_url.rstrip('/')}/api/events/{eid}"
                 "/snapshot-clean.webp", timeout=15) as r:
             im = Image.open(io.BytesIO(r.read())).convert("RGB")

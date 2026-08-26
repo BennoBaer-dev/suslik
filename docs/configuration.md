@@ -68,6 +68,16 @@ and per-event artifacts), and the matching restore replaces those parts, keeps o
 
 These are the settings most people touch (all set via the wizard/UI; names shown for reference):
 
+- **`frigate_user` / `frigate_password`** — optional. Leave them empty and suslik talks to
+  Frigate exactly as before, on the internal unauthenticated API (usually port 5000). Fill them in
+  and suslik logs in the way the Frigate UI does (`POST /api/login`, session cookie, renewed by
+  itself when it expires), which is what you need when suslik can only reach Frigate through its
+  authenticated port 8971. The password is stored in the config store and shown masked; leaving
+  the password field empty on save keeps the stored one. **`frigate_tls_verify`** (default on)
+  can be switched off for Frigate's self signed certificate on 8971.
+  Every request suslik sends to Frigate carries `suslik/<version>` as its user agent, with or
+  without login, so you can allow it through a proxy by that name.
+
 - **`backend`** — `auto` (default in the Intel image: a one-time startup
   benchmark decides where recognition runs — Intel NPU (`openvino:MIXED`), GPU or CPU — and
   the choice sticks in `state/placement.json` until hardware, runtime or version change),
@@ -173,9 +183,12 @@ Honest list of what suslik does not do yet:
   to the internet. If you need remote access, put it behind a reverse proxy that adds
   authentication, or reach it over a VPN.
 
-- **No Frigate authentication support.** suslik talks to Frigate's internal, *unauthenticated*
-  API on **port 5000** — it has no support for the JWT/login on the authenticated port 8971. If
-  your Frigate is locked down, keep port 5000 reachable to suslik (same host / Docker network, or
-  a LAN-only exposure). Auth support is a possible future addition.
+- **The catch-up sweep does not page through Frigate's event list.** Each round asks Frigate for
+  the most recent `sweep_limit` person events (default 200) within `lookback_h`. On a busy site
+  that window fills up long before the configured hours are covered: measured on a 31 camera
+  commercial property, 773 person events in two hours, so the effective catch-up reach was about
+  half an hour instead of two. Live operation is unaffected (every event is picked up as it ends);
+  this only limits how far back suslik can catch up after downtime. Raise `sweep_limit` if you run
+  many busy cameras. Real paging is planned.
 
 Next: [usage.md](usage.md) · [hardware-acceleration.md](hardware-acceleration.md)

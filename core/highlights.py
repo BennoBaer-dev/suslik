@@ -12,7 +12,18 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.0.339"   # .333-.335 = reine STAND-Bumps ohne Box-Eintrag (UI-Fix
+STAND = "0.1.0.353"   # .351 = reiner STAND-Bump (Kalibrierseite Phase 1b; Box
+                      # wird beim naechsten Release MIT dem User abgestimmt).
+                      # .350 = reiner STAND-Bump (Belichtungsachse; Box-Eintrag
+                      # wird beim naechsten Release MIT dem User abgestimmt).
+                      # .349 = reiner STAND-Bump (Issue-26-Fix Anker-Uebernahme);
+                      # der .347-Eintrag bleibt der neueste.
+                      # .348 = reiner STAND-Bump ohne Box-Aenderung (Feldtester-Fix
+                      # self.cfg im /heute-Zweig); der .347-Eintrag (User-diktiert)
+                      # bleibt der neueste.
+                      # .340 = reiner STAND-Bump ohne Box-Eintrag (Start-Nachhol-
+                      # Schalter; Box-Abstimmung mit dem naechsten Release).
+                      # .333-.335 = reine STAND-Bumps ohne Box-Eintrag (UI-Fix
                       # Anker-Kacheln, Audit-Fixes, det-size-Logfilter; Box-Abstimmung
                       # kommt mit dem naechsten Release). .322 = RELEASE-KANDIDAT (.312-.319 gingen nie raus; .319 lief
                       # auf Prod, wurde aber nie veroeffentlicht — die Box-Aenderung
@@ -314,6 +325,73 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # .352 — INHALT VOM USER DIKTIERT (26.08. abends: "Nehmen wir auf, dass wir
+    # auf GitHub eine extra Seite erstellt haben, wie man auf einem Proxmox-LXC-
+    # Server am besten die CUDA oder die GPU durchreicht", praezisiert:
+    # "allgemein unter lxc die gut optimal durchreicht an frigate und suslik").
+    # GENAU dieser eine Punkt, nichts selbststaendig ergaenzt (Memory
+    # whatsnew-inhalt-abstimmen). Gedeckt: docs/proxmox.md geht seit .352 zum
+    # ersten Mal mit raus (Export-Whitelist) und belegt beide Verbraucher —
+    # derselbe Render-Knoten kann an mehrere Container gehen, Frigate im einen,
+    # suslik im anderen. DE ist die Vorlage, EN daraus; ES/IT/FR
+    # Opus-Muttersprachler-Agent nach begriffe_tabellen.md FINAL (FR vous).
+    ("0.1.0.353", (
+        {"de": "Neue Anleitung auf GitHub: wie man auf einem Proxmox-Server "
+               "GPU oder CUDA in einen LXC-Container durchreicht, für suslik "
+               "und Frigate.",
+         "en": "New guide on GitHub: how to pass a GPU or CUDA through to an "
+               "LXC container on a Proxmox server, for suslik and Frigate.",
+         "es": "Nueva guía en GitHub: cómo pasar la GPU o CUDA a un contenedor "
+               "LXC en un servidor Proxmox, para suslik y Frigate.",
+         "it": "Nuova guida su GitHub: come passare la GPU o CUDA a un "
+               "container LXC su un server Proxmox, per suslik e Frigate.",
+         "fr": "Nouveau guide sur GitHub : comment donner accès au GPU ou à "
+               "CUDA dans un conteneur LXC sur un serveur Proxmox, pour suslik "
+               "et Frigate."},
+    )),
+    # .347 — INHALT VOM USER DIKTIERT (26.08. nachts: "nimm ins whats new auf,
+    # dass wir jetzt eine systemstatistik haben und die erkennung fuer das
+    # lernen deutlich beschleunigt") — GENAU diese zwei Punkte, nichts
+    # selbststaendig ergaenzt (Memory whatsnew-inhalt-abstimmen). DE ist die
+    # Vorlage, EN daraus; ES/IT/FR Opus-Muttersprachler-Agent nach
+    # begriffe_tabellen.md FINAL (FR vous). Wortlaut-Abnahme beim Release-Halt.
+    # Die Tempo-Zahl "etwa doppelt" ist gemessen (.342: 36-38 s -> 20-24 s).
+    ("0.1.0.347", (
+        {"de": "Neue Seite Systemstatistik: CPU, Arbeitsspeicher, Platte, GPU "
+               "und NPU deiner Maschine auf einen Blick, zu finden oben im "
+               "Menü.",
+         "en": "New system stats page: CPU, memory, disk, GPU and NPU of your "
+               "machine at a glance, found at the top of the menu.",
+         "es": "Nueva página Estadísticas del sistema: CPU, memoria RAM, "
+               "disco, GPU y NPU de tu equipo de un vistazo, la encuentras "
+               "arriba en el menú.",
+         "it": "Nuova pagina Statistiche di sistema: CPU, memoria RAM, disco, "
+               "GPU e NPU della tua macchina a colpo d'occhio, la trovi in "
+               "alto nel menu.",
+         "fr": "Nouvelle page Statistiques système : CPU, mémoire vive, "
+               "disque, GPU et NPU de votre machine d'un coup d'œil, elle se "
+               "trouve en haut du menu."},
+        {"de": "Das Einsammeln der Gesichter fürs Lernen ist deutlich "
+               "schneller geworden, auf unserem System etwa doppelt so "
+               "schnell: Gesichter ohne Chance werden aussortiert, bevor die "
+               "teuren Rechenschritte laufen.",
+         "en": "Collecting faces for learning got a lot faster, about twice "
+               "as fast on our system: faces without a chance are dropped "
+               "before the expensive computing steps run.",
+         "es": "La extracción de rostros para el aprendizaje se ha vuelto "
+               "mucho más rápida, en nuestro sistema aproximadamente el "
+               "doble: los rostros que no tienen ninguna posibilidad se "
+               "descartan antes de que empiecen los pasos de cálculo "
+               "costosos.",
+         "it": "L'estrazione dei volti per l'apprendimento è diventata molto "
+               "più veloce, sul nostro sistema circa il doppio: i volti senza "
+               "possibilità vengono scartati prima delle fasi di calcolo "
+               "costose.",
+         "fr": "La collecte des visages pour l'apprentissage est bien plus "
+               "rapide, environ deux fois plus vite sur notre système : les "
+               "visages qui n'ont aucune chance sont écartés avant les "
+               "étapes de calcul coûteuses."},
+    )),
     # .339 — MIT USER ABGESTIMMT (24.08. ~23:10, Wortlaut-Freigabe "go" nach zwei
     # Kuerzungsrunden: Log-Hygiene-Details und der 3-GB-Erststart-Hinweis flogen
     # raus — "so etwas gehoert doch nicht ins whats new"). ZWEI Punkte: der

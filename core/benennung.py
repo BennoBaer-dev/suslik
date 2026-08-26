@@ -69,15 +69,53 @@ def _lattenklasse(m, norm_latte=None):
     return 2
 
 
-def _reihung(m, norm_latte=None):
+def belichtungs_lage(m, luma_grenzen=None):
+    """DIE eine Belichtungs-Einordnung (bauplan_belichtung.md E4/E5, 26.08.) —
+    beide Oberflaechen (Empfehlung hier, Wizard-Sichtung in anlernen) fragen
+    HIER, damit die Klassifikation nicht als zweites verstreutes Literal
+    entsteht; ihre WORTE bleiben getrennt, weil die Vokabulare verschieden sind.
+    m = Mitglied/Bild-Dict mit optionalem Feld `luma` (mittlere Helligkeit des
+    Ausschnitts, 0..255 aus der Ernte).
+    -> None = in Ordnung ODER unbewertet | "dunkel" | "hell".
+    UNBEWERTET ist ausdruecklich kein Mangel: fehlt die Messung (Alt-Mitglied
+    vor dem Einbau) oder fehlen die Grenzen (Achse aus), aendert sich NICHTS
+    am bisherigen Verhalten — ein Urteil ohne Messgrundlage waere ein stiller
+    Verlust."""
+    g = luma_grenzen or {}
+    wert = m.get("luma") if isinstance(m, dict) else m
+    if wert is None:
+        return None
+    try:
+        wert = float(wert)
+    except (TypeError, ValueError):
+        return None
+    lo, hi = g.get("min"), g.get("max")
+    if lo is not None and wert < float(lo):
+        return "dunkel"
+    if hi is not None and wert > float(hi):
+        return "hell"
+    return None
+
+
+def _belichtungsklasse(m, luma_grenzen=None):
+    """0 = belichtet ODER unbewertet / 1 = ausserhalb [min, max]."""
+    return 1 if belichtungs_lage(m, luma_grenzen) else 0
+
+
+def _reihung(m, norm_latte=None, luma_grenzen=None):
     """Sortier-Schluessel der Empfehlungs-Reihung (bester zuerst via sorted()).
     .265: Latten-Klasse VOR Frontalitaet (User-Fund 18.08.: Gruppe mit 144
     Bildern trug 9 nachgemessen GUTE — die Flaeche zeigte trotzdem 12 kleine
     Frontal-Matsch-Bilder, weil front alles dominierte und die Bildgroesse
     im Schluessel fehlte; Folge: 11 von 12 fielen in der Benenn-Pruefung).
     .308: innerhalb der Klasse reiht die Norm (wenn vorhanden) vor der
-    Frontalitaet — Identitaetsstaerke vor Blickrichtung."""
+    Frontalitaet — Identitaetsstaerke vor Blickrichtung.
+    BELICHTUNG (bauplan_belichtung.md E4, Issue 26 — die Empfehlung waehlte
+    sichtbar zu dunkle Bilder): NACH der Lattenklasse, VOR der Norm reiht die
+    Belichtungsklasse. Ohne Grenzen und ohne gemessene Luma ist sie konstant 0
+    und die Ordnung bleibt Element fuer Element die heutige."""
     return (_lattenklasse(m, norm_latte),
+            _belichtungsklasse(m, luma_grenzen),
             -float(m.get("norm") or 0.0) if norm_latte else 0.0,
             -float(m.get("front") or 0.0), -float(m.get("sharp") or 0.0),
             -float(m.get("det") or 0.0), str(m.get("datei", "")))
@@ -105,11 +143,16 @@ def perspektiv_bin(pose, yaw_grenze):
     return "frontal"
 
 
-def empfehlen(mitglieder, k_je_bin, yaw_grenze, dup_sim):
+def empfehlen(mitglieder, k_je_bin, yaw_grenze, dup_sim, luma_grenzen=None):
     """Empfehlungs-Analyse eines Ankers -> (bewertet, flags).
     bewertet = Liste in Mitglieder-Reihenfolge: {datei, bin, empfohlen, grund}
     (grund nur bei nicht-empfohlen — Nicht-Loeschen-Prinzip: alles bleibt
-    sichtbar, nur begruendet zurueckgestuft). Drei Stufen, deterministisch:
+    sichtbar, nur begruendet zurueckgestuft). Vier Stufen, deterministisch:
+    0. BELICHTUNG (bauplan_belichtung.md E5a, Issue 26): ein Ausschnitt
+       ausserhalb [luma_min, luma_max] wird begruendet zurueckgestuft. Zuerst,
+       weil er dann weder einen Bin-Platz noch den physischen Schluessel
+       belegt — sein besser belichtetes Gegenstueck derselben Box soll den
+       Platz bekommen. Ohne Grenzen/ohne gemessene Luma passiert NICHTS.
     1. PHYSISCHER Schluessel (kamera, bbox) UEBER ALLE Events (stuetz_phys-
        Regel; die realen Dubletten liegen cross-event) — je Gruppe bleibt der
        Reihungs-Beste.
@@ -118,12 +161,23 @@ def empfehlen(mitglieder, k_je_bin, yaw_grenze, dup_sim):
        (Anzeige "duplicate check unavailable ..."), NIE stilles 0.
     3. Perspektiv-Bins (yaw_grenze), je Bin bleiben die besten k_je_bin."""
     flags = {"emb_fehlt": any(not m.get("emb") for m in mitglieder)}
-    geordnet = sorted(mitglieder, key=_reihung)
+    geordnet = sorted(mitglieder,
+                      key=lambda x: _reihung(x, luma_grenzen=luma_grenzen))
     ergebnis = {}                                     # datei -> (empfohlen, grund, bin)
     phys_gesehen, empfohlene, bin_zahl = set(), [], {}
+    _lg = luma_grenzen or {}
     for m in geordnet:
         d = str(m.get("datei", ""))
         b = perspektiv_bin(m.get("pose") or [], yaw_grenze)
+        lage = belichtungs_lage(m, luma_grenzen)
+        if lage == "dunkel":
+            ergebnis[d] = (False, f"too dark (brightness {m.get('luma')} — "
+                                  f"needs {_lg.get('min')}+)", b)
+            continue
+        if lage == "hell":
+            ergebnis[d] = (False, f"overexposed (brightness {m.get('luma')} — "
+                                  f"needs {_lg.get('max')} or less)", b)
+            continue
         schluessel = (str(m.get("kamera", "?")), tuple(m.get("bbox") or ()))
         if schluessel in phys_gesehen and schluessel[1]:
             ergebnis[d] = (False, "duplicate detection (same camera and box)", b)
@@ -252,7 +306,7 @@ def namens_kollision(name, quelle, norm):
 
 
 def benennungs_kontext(satz, alle_saetze, master_personen, werte, norm,
-                       referenz=None):
+                       referenz=None, luma_grenzen=None):
     """Glue fuer die Benennungs-Seite (EIN Aufruf je Detail-GET, rein lesend):
     Empfehlung + Personen-Vereinigung (ohne den eigenen Anker) + Vorschlag.
     werte = {k_je_bin, yaw_grenze, dup_sim, vorschlag_schwelle} aus der
@@ -260,9 +314,15 @@ def benennungs_kontext(satz, alle_saetze, master_personen, werte, norm,
     BENANNTER Anker UND (seit dem Referenz-Ausbau, User-Fund 05.08.) gegen die
     referenz-Zentroide der Master-Personen (referenz_zentroide(), Aufrufer
     laedt) — damit zeigt 'looks like' auch auf Personen, die nur ueber
-    Referenzen im System sind."""
+    Referenzen im System sind.
+    luma_grenzen = {min, max} der Belichtungsachse (bauplan_belichtung.md E4);
+    None = Achse aus, dann urteilt und reiht empfehlen() wie zuvor. Bewusst ein
+    EIGENER Parameter und kein werte-Schluessel: `werte` ist die vier Werte
+    grosse Bedingungs-Tag-Menge der Benennung, ein fuenfter Schluessel dort
+    liesse jeden Alt-Aufrufer mit KeyError sterben."""
     bewertet, flags = empfehlen(satz.get("mitglieder") or [], werte["k_je_bin"],
-                                werte["yaw_grenze"], werte["dup_sim"])
+                                werte["yaw_grenze"], werte["dup_sim"],
+                                luma_grenzen=luma_grenzen)
     quelle = personen_quelle(
         master_personen,
         [a for a in alle_saetze if a.get("anker_id") != satz.get("anker_id")],

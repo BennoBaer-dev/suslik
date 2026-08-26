@@ -47,6 +47,9 @@ for real performance.
   sudo nvidia-ctk runtime configure --runtime=docker
   sudo systemctl restart docker
   ```
+- **Running under Proxmox?** The compose blocks below are unchanged, but the device has to reach
+  your LXC container before Docker can pass it on. That is a step in front of everything here, and
+  it is described in [proxmox.md](proxmox.md).
 
 ## Getting the image
 
@@ -61,7 +64,7 @@ You can either **pull a published image** or **build it yourself**.
 All variants are published on the GitHub Container Registry.
 
 > **Alpha note:** `latest-*` follows the newest published version (currently
-> **0.1.0.199** — see the README status for what's new), so a plain
+> **0.1.0.339** — see the README status for what's new), so a plain
 > `docker compose pull` tracks the alpha. Every `latest-*` tag only
 > moves after that release ran on real test hardware. If you would rather decide yourself when
 > to move, pin the version tag explicitly (see *Staying on a fixed version* below):
@@ -294,10 +297,10 @@ Whatever variant you run, watch the log:
 docker logs -f suslik
 ```
 
-You should see a 7-step startup self-check ending in `========== ready ==========`. It reports
-which accelerator was found and whether it really engaged, connects to Frigate, and benchmarks
-each usable backend on synthetic input. Then open `http://<host>:8199/` and follow the setup
-wizard.
+You should see an 8-step startup self-check ending in `========== ready ==========`. It reports
+which accelerator was found and whether it really engaged, connects to Frigate, benchmarks each
+usable backend on synthetic input, and checks that each model computes the same on its device as
+on the CPU. Then open `http://<host>:8199/` and follow the setup wizard.
 
 ## Updating
 
@@ -342,4 +345,4 @@ including their stored secrets) as a single JSON file, and restores them from th
 settings only, not the learned people. Those are covered by the daily archive suslik writes into
 `<data>/backups/`.
 
-Next: [configuration.md](configuration.md) · [usage.md](usage.md)
+Next: [configuration.md](configuration.md) · [usage.md](usage.md) · [proxmox.md](proxmox.md)

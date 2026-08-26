@@ -14,6 +14,7 @@ froere die Sprachwahl auf den Import-Moment ein)."""
 import html
 import json
 
+from core.frigate_auth import SEKTIONS_SCHLUESSEL as FRIGATE_AUTH_KEYS
 from core.sprache import t
 
 # person_pfad/vision_pfad erscheinen NICHT mehr in der generischen Tabelle —
@@ -117,6 +118,42 @@ def kette_seite(cfg, kette, lage, whitelist, auto_hinweis):
               'live under <a href="/konfiguration">Advanced</a>.</p>')
 
 
+def frigate_auth_sektion(cfg):
+    """-> HTML der Frigate-Login-Sektion (5e). Optional: leer gelassen aendert
+    sich am Verhalten nichts, und genau das sagt der Text auch.
+
+    Das Passwort wird NIE im Klartext gerendert — dasselbe Muster wie die
+    Meldekanal-Secrets (routes/benachrichtigungen._txt): leeres Feld mit
+    einem Platzhalter, der nur sagt, OB etwas gespeichert ist. Gespeichert
+    wird ueber den BESTEHENDEN Weg: die IDs beginnen mit cfg-, damit
+    konfigSpeichern() sie mit allen anderen Feldern des Blatts einsammelt und
+    an POST /konfig schickt — kein zweiter Schreibweg, kein eigener fetch."""
+    gesetzt = bool(cfg.get("frigate_password"))
+    ph = (t("konfiguration.frigate_auth.pw_gesetzt") if gesetzt
+          else t("konfiguration.frigate_auth.pw_leer"))
+    tls = cfg.get("frigate_tls_verify", True)
+    return (
+        f'<h3>{t("konfiguration.frigate_auth.titel")}</h3>'
+        f'<p class="sub">{t("konfiguration.frigate_auth.satz")}</p>'
+        '<div class="tabelle-wrap"><table>'
+        f'<tr><td><b>frigate_user</b></td>'
+        f'<td><input id="cfg-frigate_user" size="24" autocomplete="off" '
+        f'value="{html.escape(str(cfg.get("frigate_user") or ""), quote=True)}"></td>'
+        f'<td>{t("konfiguration.frigate_auth.erkl_user")}</td></tr>'
+        f'<tr><td><b>frigate_password</b></td>'
+        f'<td><input id="cfg-frigate_password" type="password" size="24" '
+        f'autocomplete="new-password" value="" placeholder="{html.escape(ph, quote=True)}"></td>'
+        f'<td>{t("konfiguration.frigate_auth.erkl_password")}</td></tr>'
+        f'<tr><td><b>frigate_tls_verify</b></td>'
+        f'<td><select id="cfg-frigate_tls_verify">'
+        f'<option value="true"{" selected" if tls else ""}>'
+        f'{t("konfiguration.feld.option_an")}</option>'
+        f'<option value="false"{"" if tls else " selected"}>'
+        f'{t("konfiguration.feld.option_aus")}</option></select></td>'
+        f'<td>{t("konfiguration.frigate_auth.erkl_tls")}</td></tr>'
+        '</table></div>')
+
+
 def render(cfg, whitelist, auto_hinweis, kette=None, kette_lage=None):
     """-> Seiten-INHALT des Advanced-Blatts. Die Ketten-Schalter erscheinen
     hier seit .189 GAR NICHT mehr (eigenes Blatt /kette, ein Bedienort);
@@ -132,6 +169,8 @@ def render(cfg, whitelist, auto_hinweis, kette=None, kette_lage=None):
         if key in NOTIF_KEYS:                          # -> eigener Reiter / eigene Karte
             continue
         if key in KETTE_KEYS:                          # -> eigenes Blatt /kette (.189)
+            continue
+        if key in FRIGATE_AUTH_KEYS:                   # 5e -> eigene Sektion darueber
             continue
         wert = cfg.get(key)
         if typ is list:
@@ -170,6 +209,8 @@ def render(cfg, whitelist, auto_hinweis, kette=None, kette_lage=None):
               'recognizers run is on the <a href="/kette">Recognition '
               'chain</a> page.</p>'
               + kette_html
+              + frigate_auth_sektion(cfg)          # 5e: vor der grossen Tabelle,
+                                                   # weil es zur Verbindung gehoert
               + f'<h3>{t("konfiguration.abschnitt_alle")}</h3>'
               f'<div class="tabelle-wrap"><table><tr><th>{t("konfiguration.tabelle.kopf_parameter")}</th>'
               f'<th>{t("konfiguration.tabelle.kopf_wert")}</th>'

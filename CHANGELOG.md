@@ -7,6 +7,188 @@ this file — the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git
 history.
 
+## 0.1.0.353 (2026-08-26)
+
+Bundles the in-house 0.1.0.352, which was never published: the fixes below were
+found by a hardening run against simulated foreign Frigate setups after 0.1.0.352
+was already built, and a rebuilt tag never silently gets new content.
+
+- **Optional Frigate login.** New settings: Frigate user, password (stored in the
+  config store, shown masked) and a TLS-verify switch for Frigate's self-signed
+  authenticated port (8971). Works against Frigate 0.14+ (`POST /api/login`,
+  cookie, exactly one silent re-login when the token expires). Without
+  credentials nothing changes; proven request-identical.
+- **Fixed: clearing the Frigate user and password did not take effect** until the
+  container was restarted from outside. The service passes both to its own
+  subprocesses through the environment and restarts itself in place on save, which
+  inherits that environment; an emptied field was therefore still used, and after a
+  change of the Frigate address the new host received a login with the deleted
+  credentials. The environment now mirrors the configuration in both directions.
+- **The error messages for Frigate's authenticated port were out of date** and told
+  you to switch to the unauthenticated port 5000. They now point at the user,
+  password and TLS settings instead. One error line was also still in German.
+- **The startup log now states whether Frigate's own face recognition is on.** That
+  single fact separates installations from one another and explains a whole class of
+  reports; boot logs get pasted into issues, so it belongs in there.
+- **New setting `sweep_limit`** (default 200, unchanged behaviour): how many person
+  events the catch-up sweep asks Frigate for per round. It used to be hard-wired.
+  On a busy site 200 events can be less than half an hour, which silently shortened
+  the configured lookback window; the log line now says to raise this instead of
+  giving the old advice of shortening the window, which does not help there.
+- **All HTTP calls to Frigate now go through one shared client** (API, clips,
+  thumbnails, faces, including the worker processes), and every request carries
+  an honest `suslik/<version>` user agent. The video fetch via ffmpeg gets the
+  same cookie and user agent passed along.
+
+## 0.1.0.351 (2026-08-26)
+
+- **New button "Brightness check" on the learning run card.** It opens a calibration
+  page that shows your own clusters with each image's measured brightness, ordered
+  exactly as the recommendation orders them. Two sliders preview live which images
+  would fall back; saving writes the two thresholds through the regular configuration
+  path (the service restarts briefly, as with any configuration change). If no image
+  carries a brightness value yet, the page says so — values appear from the next
+  learning run or pass check onwards. The row on the card has room for more quick
+  actions later.
+
+## 0.1.0.350 (2026-08-26)
+
+- **Recommendations now consider exposure.** The harvest measures the brightness of
+  every candidate face (a new per-image value, old data stays valid), and badly
+  exposed images (too dark or blown out) drop to the end of their size class instead
+  of filling the perspective slots before better-lit ones — the issue 26 follow-up,
+  where the recommended picks were visibly too dark while brighter ones only lost to
+  a full slot. Affected images say why ("too dark", "overexposed") and can still be
+  ticked deliberately; nothing is ever dropped automatically. Two new settings,
+  reihung_luma_min (default 78) and reihung_luma_max (default 182), 0 disables a
+  side; changes apply to existing runs immediately. Proven bit-identical apart from
+  the new field: same candidates, same embeddings, same crops.
+
+## 0.1.0.349 (2026-08-26)
+
+- Fixed: adopting an anchor cluster could fail with "nothing selected" although
+  images were visibly ticked (reported in issue 26 — thanks). The adopt button on the
+  cluster detail page only sent the cluster id; the server then used the previously
+  saved selection, while the page showed recommendation ticks the server had never
+  seen. The button now saves the current ticks and the name first, then adopts. Naming
+  also reports the number of images actually matched and refuses loudly when a
+  selection matches nothing instead of silently storing an empty one.
+
+## 0.1.0.348 (2026-08-26)
+
+- Fixed: with Frigate's own face recognition enabled, every request to the today page
+  crashed (found by a field tester on 0.1.0.347 — thanks). The notice introduced in
+  0.1.0.341 read its setting through the wrong object; on setups with Frigate face
+  recognition disabled the broken branch was never reached, which is why our own
+  machines never showed it.
+
+## 0.1.0.347 (2026-08-26)
+
+- Fixed: the pass-check progress block flickered on every refresh. The poll loop
+  cleared the block and showed the "checking" text at the start of each tick before
+  rebuilding it; now the block is built once and only its values change, like the
+  wizard card.
+
+## 0.1.0.346 (2026-08-25)
+
+- Progress block layout: label and counter on one line, the bar below at full width.
+  Long counters used to squeeze the bar track down to a few pixels in the narrow
+  wizard card. On the pass check the block now takes the full row below the button
+  instead of sitting squeezed next to it.
+- Fixed: the pre-check counter (faces dropped before head pose for being too small or
+  blurry, introduced in 0.1.0.342) never reached the run records or the wizard counter
+  line — three transport lists picked counters by name and dropped the new one. Run
+  records were violating their own counter invariant. The wizard now shows
+  "filtered early (size/sharpness)" when the pre-check dropped faces.
+
+## 0.1.0.345 (2026-08-25)
+
+- **The progress display is now a real block of bars, in both places.** While a pass
+  or a learning run is being prepared, the pass-check button and the wizard card show
+  one overall bar for the whole run plus three sub-bars for the current event —
+  searching faces (frame X of Y), head pose, recognizing — running side by side with
+  live counters. Between events the block says it is fetching the next clip instead of
+  freezing; waiting for another background job and the final rating step are covered
+  too. This replaces the thin bar with the text line (0.1.0.343/.344) and the vertical
+  column in the wizard card.
+
+## 0.1.0.344 (2026-08-25)
+
+- The learning-run wizard now shows the same three live counters while collecting faces
+  (frame X of Y, head poses, recognized) — the second of the two places they belong.
+
+## 0.1.0.343 (2026-08-25)
+
+- Fixed: the live counters under the pass-check progress bar never reached the browser.
+  The route handler assembled its reply field by field and silently dropped the new one.
+
+## 0.1.0.342 (2026-08-25)
+
+- **Harvesting got roughly twice as fast on passes with poor yield.** Faces that cannot
+  clear the size and sharpness bar any more are dropped before head pose and embedding
+  are computed, not after. Proven bit-identical on a real pass (same candidates, same
+  embeddings); measured 36-38 s down to 20-24 s on the same event.
+- **The pass-check progress got honest and alive.** The bar now moves smoothly across
+  events and frames, and below it three live counters show what is happening right now:
+  searching faces (frame X of Y), head poses computed, faces recognized.
+- Interim builds of 0.1.0.341 carried today's earlier steps (system load page, cleanup
+  job, Frigate face-recognition notice); this release names the final state.
+
+## 0.1.0.341 (2026-08-25)
+
+- **New page: System stats, under System.** CPU (total and per core), memory, disk,
+  GPU and NPU, each with the current value and the last hour as a bar row. Below that
+  the numbers no other system page has: whether the analysis worker is running, how
+  often it died in the last 24 hours and of what, analyses per hour and their average
+  duration, and how many events are still waiting. That block exists because the worst
+  failures we have seen in the field were recognition standing still while CPU and GPU
+  looked perfectly calm — on one tester's machine the worker died 114 times in a day.
+  A sample is taken every 60 seconds and kept for 48 hours; the nightly cleanup trims
+  it. `/health` reports the same snapshot under `system`, so a diagnosis does not need
+  a browser.
+- **A number this hardware cannot measure says so.** Tiles never show a zero for a
+  missing measurement, they say "not available" and give the reason. Concretely: Intel
+  GPU utilization is not readable from inside a container without extra privileges (the
+  i915 counter exists, `perf_event_open` is denied), so that tile stays honest instead
+  of implying an idle GPU. The Intel NPU, CPU, memory and disk are measured normally,
+  and NVIDIA reports through `nvidia-smi`.
+- **No split per process on that page.** Frigate runs in its own container, so its share
+  cannot be named from this side even with perfect driver numbers. The page shows total
+  load and says why.
+- **The startup notice about untranslated content is gone.** It sat on top of a page
+  whose frame is fully translated and claimed the opposite, which read as a bug rather
+  than as information. Only the evaluations in the content area are still English; that
+  is fixed by translating them, not by a sign in front of them.
+- **The nightly cleanup now actually cleans up.** It only ever touched event crops and
+  the clip cache, so three places grew without limit: finished learning runs (973 MB in
+  86 folders on our own machine, oldest three weeks), pin markers whose clip was deleted
+  long ago (26 of 26 were orphans), and the OpenVINO compile caches (2.65 GB, no cap).
+  All three are now cleared by age, and the run happens at startup as well as at night.
+  Learned faces, the person model and the backups are off limits to it, enforced by a
+  path check rather than by good intentions.
+- **suslik now says when Frigate's own face recognition is running.** A quiet line on the
+  today page points out that suslik does not need it and works either way, so nobody keeps
+  a second recognition running by accident. The switch is read from the same Frigate
+  config call the camera list already uses, and the notice stays away when the optional
+  name write-back to Frigate is on, because that one does need it.
+
+## 0.1.0.340 — 2026-08-25
+
+After a restart or a broker reconnect, suslik fetches the person events it
+missed while it was down and analyses them one after another. From the outside
+that looked like load without a reason. The dashboard now says what is
+happening while it runs, with a count of how far along it is, and offers to
+turn the behaviour off.
+
+New setting `start_catchup` (on by default, i.e. unchanged behaviour). Turned
+off, the events that had already piled up when the service started are marked
+as skipped on the first sweep instead of being analysed; they keep their place
+in the record and are never retried as failures. Everything happening after
+that start is analysed normally. In poll mode the periodic sweep itself keeps
+running, because it is the only thing that picks up events there.
+
+`/health` reports the setting and the progress of a running catch-up.
+
 ## 0.1.0.339 — 2026-08-24
 
 Release build of 0.1.0.336–0.1.0.338 (which went only to one field tester),

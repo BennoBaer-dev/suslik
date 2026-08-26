@@ -263,7 +263,13 @@ def anker_detail_seite(s, kaputt=0, benennung=None, fluss=None):
           'keine.onclick=function(){boxen().forEach(function(b){b.checked=false;});};'
           'var save=document.getElementById("bn-save"),st=document.getElementById("bn-status");'
           'var est=document.getElementById("bn-easy-status");'
-          f'var CHAIN=false,NX={nx_js};'
+          # .349 (Issue 26, Tokn59): ADOPT kettet Uebernehmen HINTER das
+          # Benennen mit den LIVE-Haekchen — der alte bn-adopt-Direktweg
+          # schickte nur die anker_id, die persistierte (ggf. leere) Auswahl
+          # entschied, und die Seite zeigte Empfehlungs-Haekchen, die der
+          # Server nie gesehen hatte ("nothing selected whilst images are
+          # selected"). CHAIN bleibt die Easy-Weiterleitung zur naechsten Gruppe.
+          f'var CHAIN=false,ADOPT=false,NX={nx_js};'
           'function melden(t){st.textContent=t;if(est)est.textContent=t;}'
           # .224: Uebernahme als eigene Funktion — Expert-Knopf UND Easy-Kette
           # nutzen denselben Weg; danach traegt die Kette zur naechsten Gruppe.
@@ -296,14 +302,19 @@ def anker_detail_seite(s, kaputt=0, benennung=None, fluss=None):
           + json.dumps(t("lernanker.js.koll_mitte")) + '+d.kollision+'
           + json.dumps(t("lernanker.js.koll_nach"))
           + '))senden(d.kollision,true);'
-          'else melden("' + t("lernanker.js.nicht_gespeichert") + '");return;}'
-          'if(!d.ok){melden("' + t("lernanker.js.fehler") + ' "+d.msg);return;}'
+          'else{ADOPT=false;melden("' + t("lernanker.js.nicht_gespeichert") + '");}return;}'
+          'if(!d.ok){ADOPT=false;melden("' + t("lernanker.js.fehler") + ' "+d.msg);return;}'
+          'if(ADOPT){ADOPT=false;adoptieren(false);return;}'
           'if(CHAIN){adoptieren(false);return;}'
           'melden(d.msg);setTimeout(function(){location.reload()},600);})'
-          '.catch(function(e){melden("' + t("lernanker.js.fehler") + ' "+e);});}'
-          'save.onclick=function(){senden(document.getElementById("bn-name").value,false);};'
+          '.catch(function(e){ADOPT=false;melden("' + t("lernanker.js.fehler") + ' "+e);});}'
+          'save.onclick=function(){ADOPT=false;'
+          'senden(document.getElementById("bn-name").value,false);};'
           'var ad=document.getElementById("bn-adopt");'
-          'if(ad)ad.onclick=function(){CHAIN=false;adoptieren(false);};'
+          # .349: Uebernehmen laeuft ueber senden() mit den Live-Haekchen und
+          # dem Feldnamen (bei benannten Clustern vorbelegt), nie mehr direkt.
+          'if(ad)ad.onclick=function(){CHAIN=false;ADOPT=true;'
+          'senden(document.getElementById("bn-name").value,false);};'
           'var ja=document.getElementById("bn-easy-ja");'
           'if(ja)ja.onclick=function(){CHAIN=true;senden(ja.dataset.name,false);};'
           'var an=document.getElementById("bn-easy-andere");'

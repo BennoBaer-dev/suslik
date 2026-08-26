@@ -287,7 +287,15 @@ def anker_datensaetze(cluster, margen, lauf_id, schwellen, version):
                        # die Sichtung ihn fuer JEDES Mitglied neu messen (Bild-I/O
                        # plus Inferenz im Dienst-Prozess), nicht nur fuer
                        # Alt-Mitglieder. Dieselbe Falle wie bei norm in .308.
-                       "struktur": mm.get("struktur")}
+                       "struktur": mm.get("struktur"),
+                       # BELICHTUNG (bauplan_belichtung.md E3, 26.08.): die Luma
+                       # des Ernte-Ausschnitts wandert MIT — Reihung und
+                       # Sichtung lesen sie hier, statt jedes Mitglied neu zu
+                       # messen. Alt-Mitglieder ohne das Feld bleiben None und
+                       # gelten als UNBEWERTET (sie werden nie abgewertet).
+                       # Bewusst NICHT in _MITGLIED_PFLICHT: Alt-Zeilen im
+                       # anker.jsonl muessen gueltig bleiben.
+                       "luma": mm.get("luma")}
                       for v in c for mm in v["mitglieder"]]
         z_ank = zentroid([v["emb"] for v in c])
         dgs = sorted({round(float(v["durchgang_start"]), 1) for v in c})

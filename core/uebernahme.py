@@ -88,15 +88,20 @@ def bedingungs_tag_pruefen(anker, aktuelle_werte):
     return ab
 
 
-def plan_bauen(anker, dup_sim, bestands_embs):
+def plan_bauen(anker, dup_sim, bestands_embs, luma_grenzen=None):
     """Verbindlicher Dedup-Plan ueber die PERSISTIERTE Auswahl (nie neu empfehlen —
     Bauplan: E4b uebernimmt GENAU die benannte Menge, prueft sie nur auf Duplikate).
     Reihenfolge deterministisch (front/sharp/det/id wie die Benennungs-Reihung).
+    luma_grenzen (bauplan_belichtung.md E4, 26.08.) reicht die Belichtungsachse
+    der Reihung hier durch — sie entscheidet mit, WELCHES von zwei Beinahe-
+    Duplikaten in den Katalog wandert (das besser belichtete gewinnt). Ohne
+    Grenzen ist die Reihung Element fuer Element die bisherige.
     -> {aufnehmen: [mitglied...], uebersprungen: [{datei, grund}...]}"""
     from core.benennung import _reihung
     gewaehlt = [m for m in (anker.get("mitglieder") or []) if m.get("gewaehlt")]
     aufnehmen, uebersprungen, gesehen = [], [], [list(e) for e in bestands_embs]
-    for m in sorted(gewaehlt, key=_reihung):
+    for m in sorted(gewaehlt,
+                    key=lambda x: _reihung(x, luma_grenzen=luma_grenzen)):
         naher = None
         if m.get("emb"):
             for e in gesehen:

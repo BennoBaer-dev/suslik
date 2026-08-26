@@ -128,7 +128,12 @@ def _nav():
         # Wege (Gesicht/Koerper/Vision) und ist damit kein Vision-Detail. EINE Seite,
         # zwei Einstiege — der Vision-Reiter verlinkt dieselbe Adresse.
         (t("nav.bereich.erkennungstest"), [("/erkennungstest", t("nav.erkennungstest"))]),
-        (t("nav.bereich.system"), [("/system", t("nav.system"))]),
+        # .341: der System-Bereich bekommt einen zweiten Unterreiter — die
+        # Systemstatistik (Bauplan analysen/bauplan_systemstatistik.md). Damit
+        # erscheint hier ueberhaupt zum ersten Mal eine zweite Ebene: layout()
+        # zeigt sie erst ab zwei Kindern.
+        (t("nav.bereich.system"), [("/system", t("nav.system")),
+                                   ("/systemstat", t("nav.systemstat"))]),
     ]
 
 
@@ -146,7 +151,11 @@ BLATT = {"/setup": "/kameras", "/aehnliche": "/gesichter", "/event": "/heute", "
          # /hilfe: eigener aktiv-Pfad seit Stufe 1 (Widerleger P1 — die englischen
          # Anleitungen duerfen den Hinweis der uebersetzten /erkennung nicht erben);
          # Bereichs-Leuchte bleibt Configuration wie zuvor.
-         "/hilfe": "/erkennung"}
+         "/hilfe": "/erkennung",
+         # Phase 1b (26.08.): die Kalibrierseite der Belichtung haengt an der
+         # Lern-Karte (Knopf in Kachel 1) und hat keinen eigenen Reiter —
+         # ohne diesen Eintrag leuchtete oben der erste Bereich statt Learn.
+         "/lernlauf/belichtung": "/lernlauf"}
 
 # .207 (User 16.08.: "wenn der Schalter auf Basis ist, erscheint dieses Bild und
 # nicht mehr die anderen zusaetzlich"): Blaetter, deren UNTERREITER nur im
@@ -182,17 +191,13 @@ NUR_EXPERT_BLAETTER = {"/kameras", "/benachrichtigungen", "/kette", "/konfigurat
 # bleibt bestehen: eine Seite, deren Inhalt (noch) nicht auf der
 # Sprachschicht liegt, traegt ihren AKTIV-Pfad hier ein und bekommt die
 # Hinweiszeile, bis ihr Einzug sie wieder streicht.
-# Schnitt-Inventur 20.08. (ehrlicher Rueckzieher zur Tranche-A-Annahme):
-# der /heute-Handler in verifyd.py rendert ~850 Inline-Zeilen mit
-# sichtbaren EN-Literalen (z.B. 'Alerts sent (Pushover)') — auftritte.py
-# deckt die Seite NICHT komplett. Bis zum heute.*-Einzug (Etappe ME2 der
-# Modularisierung) steht /heute
-# deshalb WIEDER hier: Mischsprache nie ohne Hinweis.
-NOCH_ENGLISCH = {"/heute"}
-
-
-def _noch_englisch(pfad):
-    return pfad in NOCH_ENGLISCH
+# Der Mischsprach-Hinweis auf /heute ist am 25.08. ersatzlos entfernt worden
+# (User-Entscheid: "der irritiert nur"). Grund: der Seitenrahmen IST uebersetzt —
+# Navigation, Reiter, Sprachschalter, Was-ist-neu-Box —, englisch bleiben nur die
+# Auswertungen im Inhaltsbereich. Ein Satz, der oben auf einer sichtbar deutschen
+# Seite behauptet, sie sei nicht uebersetzt, liest sich als Fehler statt als
+# Auskunft. Der ehrliche Weg ist der /heute-Einzug (Etappe ME2), nicht ein Schild
+# davor. Bis dahin bleibt die Mischsprache stumm sichtbar.
 
 
 # Die beiden Galerie-Links ("Review gallery", "Strangers gallery") sind am 25.07. entfernt worden:
@@ -275,9 +280,14 @@ def _sprach_schalter():
             f'<div class="sp-menu">{sprache_knoepfe()}</div></details>')
 
 
-def layout(titel, aktiv, inhalt, banner=None, refresh=None):
+def layout(titel, aktiv, inhalt, banner=None, refresh=None, banner_aktion=None,
+           hinweis=None, hinweis_id=None):
     """Seiten-Huelle: Nav + optionaler Warn-Banner + Inhalt + Fusszeile.
-    refresh=N laedt die Seite alle N Sekunden neu (offener Tab bleibt aktuell)."""
+    refresh=N laedt die Seite alle N Sekunden neu (offener Tab bleibt aktuell).
+
+    hinweis: dezenter Merksatz UNTER dem Banner (User 25.08.). Bewusst eine
+    zweite, leisere Ebene: der Banner meldet Stoerungen, der Hinweis erklaert
+    nur etwas. Wer beides gleich laut macht, entwertet den Banner."""
     # Aktiven Abschnitt aus dem Pfad ableiten — die Seiten uebergeben weiterhin ihren eigenen
     # Pfad, keine Seite muss etwas ueber die Gruppierung wissen.
     nav_liste = _nav()
@@ -315,12 +325,27 @@ def layout(titel, aktiv, inhalt, banner=None, refresh=None):
         upd = (f' <a class="upd" href="{html.escape(UPDATE_INFO.get("url") or "")}" target="_blank" '
                f'rel="noopener noreferrer" title="{html.escape(t("ui.upd.tooltip"))}">'
                f'{html.escape(t("ui.upd.link", tag=UPDATE_INFO["tag"]))}</a>')
-    b = f'<div class="banner">{html.escape(banner)}</div>' if banner else ""
-    # Mischzustand-Hinweis (Stufe 1): nur bei nicht-englischer Sprache und nur
-    # auf Seiten, deren Inhalt noch englisch ist (NOCH_ENGLISCH-Vertrag oben).
-    hin = ""
-    if _sp.aktive() != "en" and _noch_englisch(aktiv or ""):
-        hin = f'<div class="sprachhinweis">{html.escape(t("ui.hinweis.englisch"))}</div>'
+    # banner_aktion: FERTIGES Markup des Aufrufers (heute nur der Nachhol-Knopf auf
+    # /heute). Der Banner-TEXT bleibt escaped — Markup kommt nie aus dem Text.
+    b = (f'<div class="banner">{html.escape(banner)}{banner_aktion or ""}</div>'
+         if banner else "")
+    # .341 (User 25.08.: "gegebenenfalls per Klick noch den Hinweis haben, diesen
+    # Text nicht nochmal zeigen zu lassen"): wegklickbar wie die What's-new-Box —
+    # Merker im localStorage, kein Server-Zustand. Wie dort startet die Zeile
+    # hidden und zeigt sich erst, wenn der Merker NICHT passt; wer sie weggeklickt
+    # hat, sieht sie nie wieder aufblitzen. Der Merker traegt den Schluesselnamen,
+    # damit ein spaeterer zweiter Hinweis nicht denselben Merker erbt.
+    hw = ""
+    if hinweis:
+        _hid = "vd-hinweis-" + (hinweis_id or "allgemein")
+        hw = (f'<div class="hinweis" id="hinweisz" hidden>{html.escape(hinweis)}'
+              f'<button class="hinweis-x" title="{html.escape(t("ui.hinweis.x_tooltip"))}" '
+              f'aria-label="{html.escape(t("ui.hinweis.x_aria"))}">&times;</button></div>'
+              '<script>(function(){var h=document.getElementById("hinweisz");if(!h)return;'
+              f'var k={json.dumps(_hid)};'
+              'try{if(localStorage.getItem(k)==="1"){h.remove();return;}}catch(e){}'
+              'h.hidden=false;h.querySelector(".hinweis-x").onclick=function(){'
+              'try{localStorage.setItem(k,"1")}catch(e){}h.remove();};})();</script>')
     r = f'<meta http-equiv="refresh" content="{int(refresh)}">' if refresh else ""
     mark = ('<svg viewBox="0 0 32 32" fill="none" aria-hidden="true">'
             '<rect x="2.5" y="2.5" width="27" height="27" rx="8" stroke="var(--accent)" stroke-width="2.2"/>'
@@ -344,6 +369,12 @@ def layout(titel, aktiv, inhalt, banner=None, refresh=None):
               f'<button type="button" data-m="easy">{html.escape(t("ui.modus.easy"))}</button>'
               f'<button type="button" data-m="expert">{html.escape(t("ui.modus.expert"))}</button></span>'
               f'<span class="live"><span class="d"></span>{html.escape(t("ui.live.chip"))}</span>'
+              # .341b (User 25.08.): Direktweg zur Auslastung aus JEDER Seite, in der
+              # Kopfleiste neben Live. Der Unterreiter unter System bleibt bestehen und
+              # heisst dort ausgeschrieben — hier oben zaehlt die Kuerze.
+              f'<a class="toggle" href="/systemstat" '
+              f'title="{html.escape(t("ui.last.tooltip"))}">'
+              f'<span class="tg-txt">{html.escape(t("ui.last.knopf"))}</span></a>'
               + _sprach_schalter() +
               '<button class="toggle" id="theme-toggle" '
               f'title="{html.escape(t("ui.theme.tooltip"))}" '
@@ -383,7 +414,7 @@ def layout(titel, aktiv, inhalt, banner=None, refresh=None):
             f'<div class="kopf"><nav><div class="inner"><span class="marke">{mark}suslik'
             f'{f" <small>{html.escape(ver)}</small>" if ver else ""}{upd}</span>{nav}{rechts}</div></nav>'
             f"{unter}</div>"
-            f"<main>{b}{hin}{inhalt}</main>"
+            f"<main>{b}{hw}{inhalt}</main>"
             f"<footer>{_fuss()}</footer></html>")
 
 
