@@ -143,6 +143,7 @@ KAT_LABELS = {
     "erkannt": "Recognized", "fremd_verdacht": "Stranger?",
     "unbekannt_schwach": "Unknown (weak)", "fehler": "Error",
     "no_person": "No person found (likely false trigger)",
+    "uebersprungen": "Skipped at startup",
     "deckung": "Match", "widerspruch": "Conflict", "frigate_nur": "Frigate only",
     "wir_nur": "suslik only", "beide_unknown": "Both unknown",
 }
@@ -177,6 +178,7 @@ KAT_FARBE = {
     "beide_unknown": "#666",       # 5,74  grau
     "unbekannt_schwach": "#666",   # 5,74  grau
     "no_person": "#666",           # 5,74  grau: bewusst KEIN Rot — "hier war wohl niemand"
+    "uebersprungen": "#666",       # 5,74  grau: keine Aussage ueber Personen (nie analysiert)
     "fehler": "#a3a",              # 5,58  lila: Dienstfehler, keine Aussage ueber Personen
 }
 
@@ -196,6 +198,7 @@ def kat_map():
             "unbekannt_schwach": t("baustein.kat.unbekannt_schwach"),
             "fehler": t("baustein.kat.fehler"),
             "no_person": t("baustein.kat.no_person"),
+            "uebersprungen": t("baustein.kat.uebersprungen"),
             "deckung": t("baustein.kat.deckung"),
             "widerspruch": t("baustein.kat.widerspruch"),
             "frigate_nur": t("baustein.kat.frigate_nur"),

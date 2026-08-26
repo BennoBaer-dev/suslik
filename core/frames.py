@@ -33,6 +33,8 @@ import time
 import urllib.error
 import urllib.request
 
+from core import frigate_auth as _fauth   # 5e: DER eine Frigate-HTTP-Griff
+
 
 def cache_dir(data_dir=None):
     """Rangfolge (v2 §3.1, Widerleger-MUSS 5 — SCRATCH_DIR ist im
@@ -317,7 +319,7 @@ def _version_probe(basis):
     dieselbe Regel wie im Schoner (ein 4xx/5xx ist eine Antwort)."""
     def probe():
         try:
-            with urllib.request.urlopen(f"{basis}/api/version", timeout=6) as r:
+            with _fauth.oeffnen(f"{basis}/api/version", timeout=6) as r:   # 5e
                 r.read(64)
             return True
         except urllib.error.HTTPError:
@@ -351,7 +353,7 @@ def _vod_holen(eid, teil, basis, deckel_s):
     gehaerteten clip.mp4-Weg zurueck."""
     url = f"{basis}/vod/event/{eid}/master.m3u8"
     try:
-        with urllib.request.urlopen(url, timeout=10) as r:
+        with _fauth.oeffnen(url, timeout=10) as r:        # 5e
             if r.status != 200:
                 clip_dbg(f"{eid}: vod probe HTTP {r.status} — falling back")
                 return False
@@ -361,9 +363,14 @@ def _vod_holen(eid, teil, basis, deckel_s):
         return False
     t0 = time.monotonic()
     try:
+        # 5e: den m3u8-Zug macht das LOKALE ffmpeg selbst — es ist der EINE
+        # Frigate-HTTP-Weg, den oeffnen() nicht wickeln kann. Kennung und
+        # Cookie kommen deshalb als ffmpeg-Argumente aus derselben Quelle
+        # (frigate_auth.ffmpeg_kopf, dort begruendet), nie als zweiter
+        # Login-Weg.
         lauf = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-y", "-i", url,
-             "-c", "copy", "-f", "mp4", teil],
+            ["ffmpeg", "-hide_banner", "-y"] + _fauth.ffmpeg_kopf(url)
+            + ["-i", url, "-c", "copy", "-f", "mp4", teil],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             timeout=deckel_s)
     except subprocess.TimeoutExpired:
@@ -463,9 +470,11 @@ def clip_holen(eid, data_dir=None, frigate_url=None, timeout=30,
             # den Headern stellt settimeout() das strenge Fenster zurueck.
             _aufbau_to = (warte.deckel_s if (erzeugung and warte is not None)
                           else timeout)
-            with urllib.request.urlopen(f"{basis}/api/events/{eid}/clip.mp4",
-                                        timeout=_aufbau_to) as r, \
-                 open(teil, "wb") as f:
+            with _fauth.oeffnen(f"{basis}/api/events/{eid}/clip.mp4",
+                                timeout=_aufbau_to) as r, \
+                 open(teil, "wb") as f:          # 5e: derselbe Griff, echtes
+                                                 # Antwort-Objekt (r.fp.raw._sock
+                                                 # unten braucht den Socket)
                 if erzeugung:
                     # .290: Griff gehaertet — ein Antwort-Objekt OHNE fp
                     # (Test-Fake, exotischer Opener) liess den nackten

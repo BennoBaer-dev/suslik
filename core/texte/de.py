@@ -369,6 +369,24 @@ T = {
         "bis eine laufende Analyse fertig ist).",
     "konfiguration.feld.option_an": "an",
     "konfiguration.feld.option_aus": "aus",
+    "konfiguration.frigate_auth.titel": "Frigate-Anmeldung (optional)",
+    "konfiguration.frigate_auth.satz":
+        "Nur n\u00f6tig, wenn Ihre Frigate eine Anmeldung verlangt \u2014 das ist am "
+        "authentifizierten Port (8971) so, am internen (5000) nicht. Bleiben beide "
+        "Felder leer, \u00e4ndert sich nichts: suslik spricht mit Frigate genau wie "
+        "bisher.",
+    "konfiguration.frigate_auth.erkl_user":
+        "Benutzername eines Frigate-Kontos. Leer = keine Anmeldung; wird er "
+        "geleert, verf\u00e4llt auch das gespeicherte Passwort",
+    "konfiguration.frigate_auth.erkl_password":
+        "Passwort zu diesem Konto. Es liegt bei den \u00fcbrigen Einstellungen unter "
+        "/data und wird nie wieder angezeigt \u2014 leer lassen beh\u00e4lt es",
+    "konfiguration.frigate_auth.erkl_tls":
+        "TLS-Zertifikat von Frigate pr\u00fcfen. Frigates authentifizierter Port bringt "
+        "ab Werk ein selbstsigniertes Zertifikat mit; schalten Sie das hier aus, wenn "
+        "Sie ihn per https ansprechen und das Zertifikat nicht ersetzt haben",
+    "konfiguration.frigate_auth.pw_gesetzt": "gespeichert \u2014 leer lassen beh\u00e4lt es",
+    "konfiguration.frigate_auth.pw_leer": "kein Passwort gespeichert",
     "konfiguration.abschnitt_alle": "Alle Parameter",
     "konfiguration.tabelle.kopf_parameter": "Parameter",
     "konfiguration.tabelle.kopf_wert": "Wert",
@@ -1064,6 +1082,17 @@ T = {
     "lernwizard.status.laeuft_seit": "läuft seit {dauer}",
     "lernwizard.status.rest": "noch {rest}",
     "lernwizard.status.fertig_in": "fertig nach {dauer}",
+    "lernwizard.balken.suchen": "Gesichter suchen",
+    "lernwizard.balken.pose": "Kopfhaltung",
+    "lernwizard.balken.erkennen": "Gesichter erkennen",
+    "lernwizard.balken.z_frames": "Bild {f} von {s}",
+    "lernwizard.balken.z_posen.eins": "{n} Pose",
+    "lernwizard.balken.z_posen.viele": "{n} Posen",
+    "lernwizard.balken.z_erkannt.eins": "{n} erkannt",
+    "lernwizard.balken.z_erkannt.viele": "{n} erkannt",
+    "lernwizard.balken.wartet": "wartet",
+    "lernwizard.balken.clip": "Clip wird geholt …",
+    "lernwizard.balken.fertig": "fertig",
     "lernwizard.status.aufnahmen": "Aufnahmen: {n}",
     "lernwizard.status.bilder": "bisher {n} Bilder gesammelt",
     "lernwizard.puls.working": "arbeitet — zuletzt aktualisiert vor {s} s",
@@ -1117,6 +1146,7 @@ T = {
     "lernwizard.k1.gestartet": "Lauf gestartet {wann}",
     "lernwizard.k1.scope": "Umfang {n} Events",
     "lernwizard.k1.tag": "Tag {tag}",
+    "lernwizard.k1.mini_belichtung": "Abgleich Helligkeit",
     "lernwizard.k2.satz":
         "Läuft von allein &mdash; du kannst diese Seite "
         "schließen und wiederkommen.",
@@ -1215,6 +1245,42 @@ T = {
         "Neustarts (Fortsetzen eingebaut)",
     "lernwizard.expert.lauf_bleibt":
         "dieser Lauf bleibt — seine Anker bleiben verfügbar",
+    # -------- Abgleich Helligkeit /lernlauf/belichtung (Phase 1b, 26.08.) --
+    "belichtung.titel": "Abgleich Helligkeit",
+    "belichtung.satz":
+        "Stell die beiden Helligkeits-Linien an eigenen Bildern ein. Jede Reihe "
+        "ist ein Gesichts-Cluster, sortiert wie der Server gerade sortiert: "
+        "Bilder außerhalb der Linien fallen ans Ende und sind rot markiert. "
+        "Gelöscht wird nichts — ein zurückgestuftes Bild lässt sich weiter von "
+        "Hand wählen.",
+    "belichtung.jetzt": "Aktuell gültig: dunkelste {von}, hellste {bis}.",
+    "belichtung.hinweis_aus":
+        "Beide Linien sind aus, es fällt nichts zurück — zieh einen Regler, um "
+        "zu sehen, was eine Linie täte.",
+    "belichtung.aus_wort": "aus",
+    "belichtung.regler_min": "dunkelste erlaubte",
+    "belichtung.regler_max": "hellste erlaubte",
+    "belichtung.regler_hinweis":
+        "Helligkeit läuft von 0 (schwarz) bis 255 (weiß); 0 schaltet diese "
+        "Seite aus.",
+    "belichtung.bilanz": "{n} von {m} Bildern fallen zurück",
+    "belichtung.vorschau":
+        "Nur Vorschau — die Bilder werden im Browser umsortiert. Speichern "
+        "lässt den Server so sortieren.",
+    "belichtung.knopf_speichern": "Diese Grenzen speichern",
+    "belichtung.reihe_info":
+        "{n} von {gesamt} gemessenen Bildern · Helligkeit {von} bis {bis}",
+    "belichtung.lage_dunkel": "zu dunkel",
+    "belichtung.lage_hell": "überbelichtet",
+    "belichtung.lage_ok": "innerhalb der Grenzen",
+    "belichtung.zurueck": "zurück zum Lernlauf",
+    "belichtung.leer_satz":
+        "Noch trägt kein Bild einen Helligkeitswert, es gibt also nichts zum "
+        "Abgleichen.",
+    "belichtung.leer_hinweis":
+        "Die Helligkeit wird beim Ernten der Gesichter gemessen. Sie entsteht "
+        "ab dem nächsten Lernlauf oder Durchgangs-Check; ältere Bilder werden "
+        "nie nachgemessen.",
     # --------------------------------- Stufe 1: Einhang/Skelett (webui) ---
     "nav.bereich.activity": "Aktivität",
     "nav.bereich.faces": "Gesichter",
@@ -1251,6 +1317,7 @@ T = {
     "nav.konfiguration": "Erweitert",
     "nav.erkennungstest": "Erkennungstest",
     "nav.system": "System",
+    "nav.systemstat": "Systemstatistik",
     "nav.sync_auswahl": "Frigate-Abgleich",
     "nav.frigate": "Frigate",
     "ui.fuss.log": "Dienst-Log",
@@ -1261,6 +1328,8 @@ T = {
     "ui.modus.tooltip": "Easy zeigt die Kernseiten — Expert zeigt alles. Nichts wird gelöscht, Easy blendet nur aus.",
     "ui.live.chip": "Live",
     "ui.theme.knopf": "Theme",
+    "ui.last.knopf": "Systemstatistik",
+    "ui.last.tooltip": "Auslastung: CPU, RAM, Platte, GPU und die Erkennung",
     "ui.theme.tooltip": "Zwischen Hell und Dunkel wechseln",
     "ui.theme.aria": "Farbschema wechseln",
     "ui.sprache.tooltip": "Sprache dieser Installation — gilt für alle Seiten und Meldungen",
@@ -1275,7 +1344,6 @@ T = {
     "ui.wn.x_aria": "Ausblenden",
     "ui.wn.mehr": "Alle zeigen ({n})",
     "ui.wn.weniger": "Weniger zeigen",
-    "ui.hinweis.englisch": "Diese Seite ist noch nicht übersetzt — ihr Inhalt erscheint vorerst auf Englisch.",
     # --------------------------------- Stufe 1: Seitentitel (verifyd) ---
     "titel.setup": "Einrichtung",
     "titel.anker_detail": "Anker",
@@ -1327,6 +1395,7 @@ T = {
     "js.notif.frage": "Meldeeinstellungen speichern und den Dienst neu starten?",
     "js.frigate.ro_frage": "Auf NUR-LESEN umschalten? suslik schreibt dann nichts mehr nach Frigate.",
     "js.frigate.rw_frage": "SCHREIBEN nach Frigate aktivieren (sub_labels + Referenz-Abgleich)?",
+    "js.catchup.frage": "Verpasste Ereignisse ab sofort beim Start überspringen? Der Dienst startet dafür neu.",
     "js.restore.frage": "Konfiguration aus \"{name}\" wiederherstellen? Das überschreibt die aktuellen Einstellungen und startet den Dienst neu.",
     "js.vollrestore.frage": "Das KOMPLETTE Backup \"{name}\" wiederherstellen? Das ersetzt Einstellungen, Referenzen und alles gelernte Material und startet den Dienst neu.",
     "js.vollrestore.laeuft": "wird hochgeladen und wiederhergestellt … (große Dateien brauchen ihre Zeit)",
@@ -1547,6 +1616,16 @@ T = {
     "banner.fehler":
         "Frigate nicht erreichbar (letzter Fehler {zeit}): {fehler} — die "
         "Oberfläche zeigt weiter lokale Daten.",
+    "banner.nachholen.eins":
+        "Verpasste Ereignisse der letzten Stunde werden nachgeholt: "
+        "{fertig} von {gesamt}",
+    "banner.nachholen.viele":
+        "Verpasste Ereignisse der letzten {n} Stunden werden nachgeholt: "
+        "{fertig} von {gesamt}",
+    "banner.nachholen_aus": "Künftig beim Start nicht mehr nachholen",
+    "hinweis.frigate_fr_an": "Frigates eigene Gesichtserkennung ist eingeschaltet. suslik braucht sie nicht — es erkennt selbst und arbeitet unabhaengig davon. Du kannst sie in Frigate ausschalten, wenn du sie sonst nicht nutzt.",
+    "ui.hinweis.x_tooltip": "Diesen Hinweis nicht mehr anzeigen",
+    "ui.hinweis.x_aria": "Hinweis dauerhaft ausblenden",
     "setupwiz.frigate.status_ok": "✓ Verbunden — {n} Kamera(s) gefunden",
     "setupwiz.frigate.status_fehl": "✗ Frigate nicht erreichbar: {fehler}",
     "setupwiz.frigate.status_fehl_keine": "keine Kameras",
@@ -2785,6 +2864,9 @@ T = {
     "antwort.sichtung_laeuft":
         "die Bilder werden geprüft — ein paar Sekunden …",
     "antwort.anker_unbenannt": "Anker ist nicht benannt (oder unbekannt)",
+    "antwort.benennen_mismatch":
+        "deine Auswahl passte zu keinem Bild dieses Clusters — Seite neu "
+        "laden und erneut anhaken",
     "antwort.adopt_nichts":
         "nichts ausgewählt — hake mindestens ein Bild zum Übernehmen an",
     "antwort.adopt_phantom":
@@ -2832,6 +2914,7 @@ T = {
     "baustein.kat.fehler": "Fehler",
     "baustein.kat.no_person":
         "Keine Person gefunden (vermutlich Fehlauslösung)",
+    "baustein.kat.uebersprungen": "Beim Start übersprungen",
     "baustein.kat.deckung": "Übereinstimmung",
     "baustein.kat.widerspruch": "Widerspruch",
     "baustein.kat.frigate_nur": "Nur Frigate",
@@ -3349,4 +3432,78 @@ Personen zwischendurch auffüllen.</p>""",
         "Abgenommene Bilder trainieren sofort das Körpermodell "
         "&mdash; es erkennt Personen dann auch ohne sichtbares Gesicht.",
     "personwizard.such.titel": "Einen Personen-Lernlauf einrichten",
+    # --------------------------------------------- routes/systemstat ---
+    "systemstat.titel": "Systemauslastung",
+    "systemstat.sub":
+        "Gesamtauslastung dieser Maschine. Alle {takt} Sekunden eine neue "
+        "Messung, aufbewahrt werden {stunden} Stunden. Eine Aufteilung nach "
+        "Prozess gibt es hier nicht: Frigate läuft in einem eigenen "
+        "Container, sein Anteil ist von hier aus nicht benennbar. Was diese "
+        "Hardware nicht messen kann, sagt das \u2014 statt eine Null zu "
+        "zeigen.",
+    "systemstat.leer.titel": "Noch keine Messungen.",
+    "systemstat.leer.hinweis":
+        "Die erste Zeile entsteht rund {takt} Sekunden nach dem Start des "
+        "Dienstes. Werte, die zwei Messungen brauchen (CPU, NPU, GPU), "
+        "folgen eine Runde später.",
+    "systemstat.block.hardware": "Hardware",
+    "systemstat.block.erkennung": "Erkennung",
+    "systemstat.block.live": "Live",
+    "systemstat.nicht_verfuegbar": "nicht verfügbar",
+    "systemstat.kein_prozent": "kein Prozentwert",
+    "systemstat.ja": "ja",
+    "systemstat.nein": "nein",
+    "systemstat.verlauf.leer": "noch kein Verlauf",
+    "systemstat.verlauf.aria": "die letzte Stunde",
+    "systemstat.cpu.anzahl": "Kerne",
+    "systemstat.cpu.kerne": "je Kern, gerade eben",
+    "systemstat.kachel.platte": "Festplatte",
+    "systemstat.ram.genutzt": "Belegt",
+    "systemstat.ram.grafik": "Grafik (geteilter RAM)",
+    "systemstat.ram.prozesse": "Prozesse",
+    "systemstat.ram.limit": "Grenze",
+    "systemstat.ram.cache": "Rückholbarer Cache",
+    "systemstat.platte.frei": "Frei",
+    "systemstat.platte.gesamt": "Gesamt",
+    "systemstat.platte.cache": "Clip-Cache / Deckel",
+    "systemstat.platte.frei_min": "Freihalten",
+    "systemstat.gpu.engine": "Belebteste Engine",
+    "systemstat.gpu.speicher": "Speicher",
+    "systemstat.gpu.temperatur": "Temperatur",
+    "systemstat.gpu_eigen.titel": "GPU (Anteil von suslik)",
+    "systemstat.gpu.gesamt": "Ganze Karte",
+    "systemstat.gpu_eigen.zeile": "Anteil von suslik",
+    "systemstat.kachel.worker": "Analyse-Worker",
+    "systemstat.worker.laeuft": "läuft",
+    "systemstat.worker.ruht": "ruht, startet bei Bedarf",
+    "systemstat.worker.tode": "Neustarts in 24 h",
+    "systemstat.worker.zuletzt": "Letzter Tod",
+    "systemstat.worker.ursache": "Letzte Ursache",
+    "systemstat.kachel.durchsatz": "Durchsatz",
+    "systemstat.durchsatz.tag": "Letzte 24 h",
+    "systemstat.durchsatz.dauer": "Mittlere Dauer",
+    "systemstat.kachel.rueckstau": "Rückstau",
+    "systemstat.rueckstau.laeuft": "Holt gerade nach",
+    "systemstat.rueckstau.fenster": "Rückschau-Fenster",
+    "systemstat.kachel.live": "Live-Engine",
+    "systemstat.live.waechter": "Wächter aktiv",
+    "systemstat.live.supervisor": "Supervisor",
+    "systemstat.stand": "Gemessen um {zeit}. Die Seite lädt sich selbst neu.",
+    "systemstat.grund.erster_lauf":
+        "wartet auf die zweite Messung \u2014 diese Zahl ist die Differenz "
+        "zweier Messungen",
+    "systemstat.grund.kein_geraet": "kein solches Gerät in dieser Maschine",
+    "systemstat.grund.kein_zaehler":
+        "das Gerät ist da, sein Treiber führt aber keinen Auslastungszähler",
+    "systemstat.grund.gesperrt":
+        "den Zähler gibt es, dieser Container darf ihn aber nicht lesen "
+        "(Kernel-Performance-Ereignisse brauchen zusätzliche Rechte)",
+    "systemstat.grund.werkzeug_fehlt":
+        "das Abfrage-Werkzeug für dieses Gerät liegt nicht in diesem Image",
+    "systemstat.grund.nicht_lesbar": "diese Quelle ließ sich nicht lesen",
+    "systemstat.grund.kein_limit":
+        "für diesen Container ist keine Speichergrenze gesetzt, also gibt "
+        "es keinen Prozentwert",
+    "systemstat.grund.kein_dienst":
+        "diese Zahl kennt nur der laufende Dienst",
 }

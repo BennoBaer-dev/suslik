@@ -31,6 +31,7 @@ Dienst-Import; schwere Imports (cv2/core.frames/face_audit) LAZY in ernte_event.
 import glob
 import json
 import os
+import time
 
 # Pflicht-Schwellen, die der Aufrufer aus der Config liefern MUSS (kein Default hier —
 # Allgemeinheits-Wache §2.4b: fehlt einer, ist das ein Verdrahtungsfehler und faellt laut).
@@ -104,9 +105,17 @@ def gate_l(fd):
     return not fd
 
 
-def gate_m(fd, det, kante, sharp, s):
-    return (gate_l(fd) and det >= s["m_det_min"] and kante >= s["m_kante_min"]
+def gate_m_vor(det, kante, sharp, s):
+    """Der fd-FREIE Teil von M. Eigene Funktion, weil ihn die Vorschranke (§1 des
+    Baus 'Ernte beschleunigen') VOR Landmarken/Pose braucht — und weil die drei
+    Schwellen dann genau EINMAL im Code stehen (QS-Ebenen-Regel: nie ein zweites
+    verstreutes Literal). gate_m bleibt Wort fuer Wort dieselbe Konjunktion."""
+    return (det >= s["m_det_min"] and kante >= s["m_kante_min"]
             and sharp >= s["m_sharp_min"])
+
+
+def gate_m(fd, det, kante, sharp, s):
+    return gate_l(fd) and gate_m_vor(det, kante, sharp, s)
 
 
 def gate_s(fd, det, kante, sharp, pose, s):
@@ -131,8 +140,32 @@ def gate_v_vor(fd, det, kante, sharp, s):
     Gesicht/Nicht-Gesicht-Trenner nirgends kalibriert — deshalb kommen die
     billigen Achsen inkl. der DETEKTOR-Pflichtachse zuerst, und nur Passierer
     bezahlen die Norm-Inferenz."""
-    return (gate_l(fd) and det >= s["m_det_min"]
-            and kante >= s["vorrat_kante_min"] and sharp >= s["vorrat_sharp_min"])
+    return gate_l(fd) and gate_v_vor_ohne_fd(det, kante, sharp, s)
+
+
+def gate_v_vor_ohne_fd(det, kante, sharp, s):
+    """Der fd-FREIE Teil von gate_v_vor — dieselbe Rolle wie gate_m_vor fuer M.
+    ACHTUNG, die Latten sind ANDERE als bei M (Kante 40 statt 60, Schaerfe 600
+    statt 60): V haengt nicht unter M, deshalb muss die Vorschranke BEIDE
+    Teilpruefungen kennen und darf nicht die eine fuer die andere nehmen."""
+    return (det >= s["m_det_min"] and kante >= s["vorrat_kante_min"]
+            and sharp >= s["vorrat_sharp_min"])
+
+
+def vorschranke(det, kante, sharp, s, v_aktiv):
+    """Die billige VORPRUEFUNG der Ernte (bauplan_ernte_tempo.md §1, QS-korrigiert).
+
+    Beide Gates sind Konjunktionen mit fd als EINEM Glied: wer an det/kante/sharp
+    scheitert, ist raus — unabhaengig davon, was die Pose spaeter zu fd sagt. Wer
+    also WEDER den fd-freien Teil von M NOCH den von V bestehen kann, ist sicher
+    weder bildwuerdig noch vorratstauglich; fuer ihn lohnt weder Landmarke noch
+    Pose noch Embedding. Ist der Vorrat aus, faellt sein Zweig weg (dann waeren
+    seine Schwellen gar nicht im Regime).
+
+    KEINE neue Schranke: es passiert genau, wer heute auch passieren wuerde —
+    die Reihenfolge wird nur so gedreht, dass die teure Arbeit spaeter kommt."""
+    return (gate_m_vor(det, kante, sharp, s)
+            or (bool(v_aktiv) and gate_v_vor_ohne_fd(det, kante, sharp, s)))
 
 
 def gate_v_norm(norm, front_kps, s):
@@ -150,7 +183,7 @@ def gate_v_norm(norm, front_kps, s):
 def kandidat_zeile(eid, kamera, ts, t, bbox, det, front, sharp, kante, pose,
                    emb_vec, modell, m, s_flag, datei,
                    norm=None, front_kps=None, richtung=None, v=False, datei_v=None,
-                   struktur=None, quelle=None):
+                   struktur=None, quelle=None, luma=None):
     """Eine Kandidaten-Zeile — die Rundungsregeln sind Teil des Vertrags (V0.5).
     det/front/sharp/pose kommen bereits GERUNDET herein (Gate == Zeile); die
     round()-Aufrufe hier sind idempotent und sichern den Vertrag am Rand ab.
@@ -172,16 +205,29 @@ def kandidat_zeile(eid, kamera, ts, t, bbox, det, front, sharp, kante, pose,
             # auf ein Event angeboten wird, das es bei Frigate nie gab
             # (Bauplan analysen/12, QS-Einwand B). Am SIGNATUR-ENDE mit Default,
             # wie die Vorrats-Felder: Alt-Aufrufer und Alt-Leser bleiben gueltig.
-            "quelle": quelle}
+            "quelle": quelle,
+            # BELICHTUNG (analysen/bauplan_belichtung.md E2, 26.08.): mittlere
+            # Helligkeit des Kandidaten-Ausschnitts, int 0..255. Steht am
+            # DICT-ENDE, nicht zwischen den Messwerten — sonst zeigte der
+            # Byte-Beweis-Diff eine Schluessel-Umsortierung statt einer
+            # Ergaenzung. Altzeilen ohne das Feld bleiben gueltig und gelten
+            # ueberall als UNBEWERTET (nie als dunkel), Muster norm/struktur.
+            "luma": luma}
 
 
 def zaehler_pruefen(z):
     """Summen-Invariante (E2-QS): jede Detektion landet in GENAU einer Kategorie.
+    VIERTER Topf seit der Vorschranke: `vorab_verworfen` (an det/kante/sharp
+    gescheitert, bevor Pose und fd ueberhaupt gerechnet wurden — sie koennen
+    per Konstruktion weder fd noch ohne_pose sein). Alt-Zaehler ohne den
+    Schluessel zaehlen mit 0 und bleiben gueltig.
     -> Fehlertext oder None."""
-    soll = z.get("fd", 0) + z.get("ohne_pose", 0) + z.get("kandidaten", 0)
+    soll = (z.get("fd", 0) + z.get("ohne_pose", 0) + z.get("vorab_verworfen", 0)
+            + z.get("kandidaten", 0))
     if z.get("detektionen", 0) != soll:
         return (f"zaehler-invariante verletzt: detektionen {z.get('detektionen')} != "
                 f"fd {z.get('fd')} + ohne_pose {z.get('ohne_pose')} + "
+                f"vorab_verworfen {z.get('vorab_verworfen', 0)} + "
                 f"kandidaten {z.get('kandidaten')}")
     if not (z.get("kandidaten", 0) >= z.get("m", 0) >= z.get("s", 0)):
         return f"gate-schachtelung verletzt: L {z.get('kandidaten')} >= M {z.get('m')} >= S {z.get('s')}"
@@ -198,6 +244,110 @@ def _eid_safe(eid):
 
 def kandidaten_pfad(lauf_dir, eid):
     return os.path.join(lauf_dir, "kandidaten", _eid_safe(eid) + ".jsonl")
+
+
+# ------------------------------------------------------------ Fortschritts-Anzeige
+# Zeitanteile der drei Ernte-Schritte, GEMESSEN 25.08.2026 auf Prod (Profiler ueber
+# EINEN Ernte-Lauf: 1426 gelesene Bilder, 476 untersucht, 160 Gesichter, 29,4 s):
+#   Gesichtssuche SCRFD    19,3 s = 66 %
+#   Landmarken/Pose         9,2 s = 31 %
+#   Rest                            3 %  (Bilder holen, Dekodieren, Farbumrechnung,
+#                                         AdaFace, blobFromImage — die Posten liegen
+#                                         INEINANDER und werden dem Erkennungs-
+#                                         Schritt zugeschlagen statt einzeln gezeigt:
+#                                         einem Betreiber sagen sie nichts.)
+# EINE Quelle fuer Balkenbreiten und Gewichtung (bauplan_ernte_tempo.md §4) — die
+# Anzeige holt sie hier, nie als zweites Literal im Blatt.
+FORTSCHRITT_GEWICHTE = (("suchen", 0.66), ("pose", 0.31), ("erkennen", 0.03))
+
+PULS_TAKT_S = 1.0          # Mindestabstand zweier Puls-Schreibungen
+PULS_ALTER_MAX_S = 20.0    # aelterer Puls = kein laufendes Event mehr
+
+
+def puls_pfad(lauf_dir):
+    return os.path.join(lauf_dir, "ernte_puls.json")
+
+
+def puls_schreiben(lauf_dir, daten):
+    """Zaehlerstand des LAUFENDEN Events fuer die Anzeige — atomar (tmp+replace),
+    damit ein Leser nie eine halbe Datei sieht, und NIE fatal: ein Schreibfehler
+    darf eine Ernte nicht anfassen, er kostet hoechstens einen Balken.
+
+    KEINE zweite Buchfuehrung (Plan §4/Risiko 5): geschrieben werden ausschliesslich
+    Zaehler, die die Schleife ohnehin fuehrt, und das hoechstens im PULS_TAKT_S-Takt.
+    Im heissen Pfad bleibt davon EIN Zeitvergleich je FRAME (nicht je Gesicht)."""
+    p = puls_pfad(lauf_dir)
+    tmp = p + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(daten, f, ensure_ascii=False)
+        os.replace(tmp, p)
+    except OSError:
+        pass
+
+
+def puls_loeschen(lauf_dir):
+    """Nach dem Event weg — ein stehengebliebener Puls waere ein Balken, der
+    Arbeit behauptet, die niemand mehr tut."""
+    try:
+        os.unlink(puls_pfad(lauf_dir))
+    except OSError:
+        pass
+
+
+def puls_lesen(lauf_dir, jetzt=None):
+    """-> Puls-Dict des laufenden Events, oder None (fehlt/unlesbar/zu alt).
+    Der Alters-Deckel faengt den Fall 'Worker gestorben, Datei liegt noch da'."""
+    try:
+        with open(puls_pfad(lauf_dir), encoding="utf-8") as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(d, dict):
+        return None
+    jetzt = time.time() if jetzt is None else jetzt
+    if jetzt - float(d.get("ts") or 0) > PULS_ALTER_MAX_S:
+        return None
+    return d
+
+
+def fortschritt_rechnen(i, n, puls):
+    """Balkenstaende aus dem, was der Lauf ohnehin kennt.
+    i/n = fertige/geplante Events, puls = puls_lesen() des laufenden Events.
+    -> {"gesamt": 0..1, "puls_da": bool, "gruppen": [{k, gewicht, anteil,
+    wert, von}]} | None. puls_da=False heisst: gerade kein tickendes Event
+    (Clip-Beschaffung zwischen zwei Events) — die Anzeige sagt das, statt
+    eingefroren zu wirken (EINE Regel fuer Pass-Check und Wizard).
+
+    Die drei Schritte laufen JE FRAME verschraenkt (suchen -> Pose -> erkennen),
+    nicht nacheinander — ihr Fortschritt ist deshalb derselbe Frame-Anteil. Was die
+    Gewichte tragen, ist die ZEITAUFTEILUNG (66/31/Rest): sie bestimmt die Breite
+    der drei Balken, damit sichtbar wird, wo die Minute hingeht. Ein Schritt, der
+    noch keine Arbeit hatte (kein Gesicht gefunden), bleibt leer und heisst in der
+    Anzeige 'wartet'; er haelt den Gesamtbalken NICHT auf — der folgt allein dem
+    Frame-Anteil, sonst stuende er auf einem gesichtslosen Clip bei 66 % still."""
+    n = int(n or 0)
+    if n <= 0:
+        return None
+    anteil, frames, soll = 0.0, 0, 0
+    posen = erkannt = 0
+    if puls:
+        frames = int(puls.get("frames") or 0)
+        soll = int(puls.get("frames_soll") or 0)
+        if soll > 0:
+            anteil = min(1.0, max(0.0, frames / float(soll)))
+        posen = int(puls.get("posen") or 0)
+        erkannt = int(puls.get("erkannt") or 0)
+    stand = {"suchen": (frames, soll or None, frames > 0),
+             "pose": (posen, None, posen > 0),
+             "erkennen": (erkannt, None, erkannt > 0)}
+    gruppen = []
+    for k, g in FORTSCHRITT_GEWICHTE:
+        wert, von, laeuft = stand[k]
+        gruppen.append({"k": k, "gewicht": g, "wert": wert, "von": von,
+                        "anteil": round(anteil, 4) if laeuft else 0.0})
+    return {"gesamt": round(min(1.0, (int(i or 0) + anteil) / n), 4),
+            "puls_da": bool(puls), "gruppen": gruppen}
 
 
 def event_aufraeumen(lauf_dir, eid):
@@ -248,6 +398,36 @@ def manifest_schreiben(lauf_dir, manifest):
     return p
 
 
+# ------------------------------------------------------------------ Zaehler-Topf
+# Der Rueckgabe-Topf von ernte_event als EINE Quelle. Anlass (.343 einmal, .346
+# dreimal binnen 24 h): Dienst und Routen reichen diese Felder ueber feste
+# Schluessellisten weiter — kommt ein Topf dazu, faellt er an jeder nicht
+# mitgezogenen Liste STILL heraus, und fertig.jsonl-Zeilen verletzen danach ihre
+# eigene Summen-Invariante. tools/deckung_pruefen.py (Regel SK3) entdeckt solche
+# Listen in verifyd/routes und prueft sie gegen ZAEHLER_FELDER.
+#
+# Paar-Form statt zweier Listen, weil die Einfuege-Reihenfolge Aussenwirkung hat:
+# der Topf geht per json.dumps in fertig.jsonl, und die Reihenfolge der Schluessel
+# dort soll sich durch eine Umbau-Massnahme nicht aendern.
+ZAEHLER_START = (("detektionen", 0), ("fd", 0), ("ohne_pose", 0),
+                 ("vorab_verworfen", 0), ("kandidaten", 0), ("m", 0), ("s", 0),
+                 ("v", 0), ("unlesbar", False), ("frames_gelesen", 0),
+                 ("frames_soll", None), ("unvollstaendig", False),
+                 ("letzter_m", None), ("ohne_struktur", 0),
+                 ("struktur_aus", None))
+
+# Die reinen ZAEHLER daraus (int-Startwert; bool ist in Python ein int und wird
+# hier ausdruecklich ausgenommen — unlesbar/unvollstaendig sind Zustands-, keine
+# Zaehlfelder). Das ist die Menge, die eine Transport-Liste decken muss.
+ZAEHLER_FELDER = tuple(k for k, v in ZAEHLER_START
+                       if isinstance(v, int) and not isinstance(v, bool))
+
+
+def zaehler_start():
+    """Frischer Zaehler-Topf mit den Startwerten des Vertrags oben."""
+    return dict(ZAEHLER_START)
+
+
 def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
                 ist_fd=None, norm_mass=None, struktur_mass=None, quelle=None):
     """Frontal-Ernte fuer EIN Event (1 Event je Job — Live-Vorrang, Leitprinzip 5).
@@ -257,6 +437,13 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
     keine Teilzeilen-Leiche). M-Crops (enges Gesicht = Lern-Material fuer E4b) nach
     crops/. -> Zaehler-Dict; 'unlesbar' True = 0 Frames lesbar; frames_gelesen/
     frames_soll/unvollstaendig immer dabei (Teil-Verlust ist KEIN stiller Erfolg).
+
+    VORSCHRANKE (.341): Gesichter, die schon an det/kante/sharp scheitern, bekommen
+    keine Landmarken, keine Pose, kein Embedding und KEINE Zeile — sie zaehlen als
+    `vorab_verworfen`. Die Invariante heisst seitdem
+    detektionen == fd + ohne_pose + vorab_verworfen + kandidaten. Weil solche
+    Gesichter das Landmarken-Modell nie sehen, koennen sie per Konstruktion nicht
+    als `ohne_pose` erscheinen; die Vorschranke hat also Vorrang vor jenem Topf.
 
     emb/ist_fd/norm_mass/struktur_mass sind fuer Tests injizierbar; im Betrieb
     kommen sie aus face_audit (Worker-Factory haelt den Embedder warm).
@@ -322,10 +509,13 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
     if v_aktiv:
         os.makedirs(os.path.join(lauf_dir, "vorrat"), exist_ok=True)
     event_aufraeumen(lauf_dir, eid)     # Reste eines frueheren (Teil-)Laufs weg
-    z = {"detektionen": 0, "fd": 0, "ohne_pose": 0, "kandidaten": 0, "m": 0, "s": 0,
-         "v": 0, "unlesbar": False, "frames_gelesen": 0, "frames_soll": None,
-         "unvollstaendig": False, "letzter_m": None, "ohne_struktur": 0,
-         "struktur_aus": None}
+    z = zaehler_start()      # Schluessel/Startwerte: ZAEHLER_START (EINE Quelle)
+    # .341 Vorschranke: nur eine Kapsel, die eine Auswahl entgegennimmt, kann die
+    # teure Arbeit auf die Ueberlebenden beschraenken (face_audit.Embedder). Fremde
+    # oder injizierte Kapseln ohne diese Tuer laufen unveraendert den Alt-Weg —
+    # dann bleibt vorab_verworfen 0 und die Invariante stimmt genauso.
+    holen = getattr(emb, "faces_mit_vorschranke", None)
+    takt = {"frames": 0, "t": 0.0, "soll": None}   # Puls: Zaehlerstaende der Anzeige
     z["struktur_aus"] = struktur_aus
     if v_aus:
         z["v_aus"] = v_aus
@@ -356,6 +546,9 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
             """EINMAL vor dem ersten Frame — Inhalt UND Reihenfolge unveraendert
             (sie bleiben im Abnehmer, der Verteiler kennt keine Modell-Parameter)."""
             clip["fps"] = info.fps
+            # Erwartete Sample-Zahl, bevor das erste Bild faellt (LaufInfo.soll_samples,
+            # §Z5) — der Nenner des Such-Balkens. Reines Durchreichen, keine Rechnung.
+            takt["soll"] = getattr(info, "soll_samples", None)
             if hasattr(emb, "ar_det_size"):
                 emb.set_det_size(emb.ar_det_size(info.breite, info.hoehe))
             # det_thresh NACH set_det_size neu binden (prepare resettet auf den Library-
@@ -367,9 +560,49 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
         def ernten(i, frame):
             """Abnehmer 'ernte' (Z6): frueher der Rumpf von `for i, frame in frames`.
             Zeile fuer Zeile derselbe Code — nur die Schleifenzeile ist weg, weil
-            jetzt der Verteiler faehrt, und frames.fps heisst clip['fps']."""
-            for fc in emb.app.get(frame):
+            jetzt der Verteiler faehrt, und frames.fps heisst clip['fps'].
+
+            .341 VORSCHRANKE (bauplan_ernte_tempo.md §1): die drei billigen Achsen
+            det/kante/sharp entstehen VOR Landmarken/Pose/Embedding. Wer weder den
+            fd-freien Teil von M noch den von V bestehen kann, ist sicher weder
+            bildwuerdig noch vorratstauglich — fuer ihn faellt die teure Arbeit weg,
+            und er bekommt WIE fd/ohne_pose keine Zeile, sondern den Zaehler
+            `vorab_verworfen`. Der uebrige Rumpf ist unveraendert und rechnet mit
+            DENSELBEN gerundeten Werten wie zuvor (Vertrag V0.5)."""
+            takt["frames"] += 1
+            werte = {}          # je Gesicht EINMAL gemessen, Lebensdauer: dieses Frame
+
+            def _messen(fc):
+                """Die drei billigen Achsen + Box + Crop — WORTGLEICH die Rechnung,
+                die bis .341 im Rumpf stand, nur vorgezogen.
+
+                BELICHTUNG (bauplan_belichtung.md E1): die Graustufen-Umrechnung,
+                die die Schaerfe ohnehin braucht, traegt die Luma gleich mit —
+                EINE Umrechnung je Gesicht, die zweite Messung kostet praktisch
+                nichts. Die crop.size-Leerwache der Schaerfe gilt damit auch fuer
+                die Luma (entartete bbox: Leer-Crop wirft sonst mitten im Lauf)."""
+                x1, y1, x2, y2 = [max(0, int(v)) for v in fc.bbox]
+                crop = frame[y1:y2, x1:x2]
+                grau = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.size else None
+                w = (x1, y1, x2, y2, min(x2 - x1, y2 - y1),
+                     round(float(fc.det_score), 3),
+                     round(float(cv2.Laplacian(grau, cv2.CV_64F).var())
+                           if grau is not None else 0.0, 1),
+                     crop,
+                     None if grau is None else int(round(float(grau.mean()))))
+                werte[id(fc)] = w
+                return w
+
+            def _vorpruefen(fc):
+                w = _messen(fc)
+                return vorschranke(w[5], w[4], w[6], schwellen, v_aktiv)
+
+            for fc in (holen(frame, _vorpruefen) if holen is not None
+                       else emb.app.get(frame)):
                 z["detektionen"] += 1
+                if getattr(fc, "vorab_verworfen", False):
+                    z["vorab_verworfen"] += 1   # nie still: eigener Topf der Invariante
+                    continue
                 pose_roh = getattr(fc, "pose", None)
                 if pose_roh is None or len(pose_roh) < 3:
                     z["ohne_pose"] += 1     # ohne Winkel keine fd-/S-Bewertung — nie still
@@ -377,13 +610,9 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
                 # RUNDEN VOR DEM GATE: Zeile und Entscheidung rechnen mit denselben
                 # Werten (sonst 1/309 nicht reproduzierbar, Widerleger .75/L3).
                 pose = [round(float(w), 1) for w in pose_roh]
-                x1, y1, x2, y2 = [max(0, int(v)) for v in fc.bbox]
-                kante = min(x2 - x1, y2 - y1)
-                det = round(float(fc.det_score), 3)
+                x1, y1, x2, y2, kante, det, sharp, crop, luma = (werte.get(id(fc))
+                                                                 or _messen(fc))
                 front = round(front_aus_pose(pose), 3)
-                crop = frame[y1:y2, x1:x2]
-                sharp = round(float(cv2.Laplacian(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY),
-                                                  cv2.CV_64F).var()) if crop.size else 0.0, 1)
                 fd = bool(ist_fd(front, sharp, det, schwellen["fd_front_min"],
                                  schwellen["fd_sharp_min"], schwellen["fd_det_max"]))
                 if fd:
@@ -465,32 +694,50 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
                                        fc.normed_embedding, modell, m, s_flag, datei,
                                        norm=norm, front_kps=front_kps,
                                        richtung=richtung, v=v_flag, datei_v=datei_v,
-                                       struktur=struktur, quelle=quelle)
+                                       struktur=struktur, quelle=quelle, luma=luma)
                 out.write(json.dumps(zeile, ensure_ascii=False) + "\n")
                 out.flush()
                 z["kandidaten"] += 1
                 z["m"] += 1 if m else 0
                 z["s"] += 1 if s_flag else 0
                 z["v"] += 1 if v_flag else 0
+            # PULS fuer die Anzeige (§4): hoechstens im PULS_TAKT_S-Takt, und nur
+            # Zaehler, die oben ohnehin stehen. Im heissen Pfad bleibt dieser EINE
+            # Zeitvergleich je Frame — die Anzeige loest keine Arbeit aus (Risiko 5).
+            jetzt = time.monotonic()
+            if jetzt - takt["t"] >= PULS_TAKT_S:
+                takt["t"] = jetzt
+                puls_schreiben(lauf_dir, {
+                    "eid": eid, "ts": round(time.time(), 1),
+                    "frames": takt["frames"], "frames_soll": takt["soll"],
+                    "detektionen": z["detektionen"],
+                    # Pose gerechnet = alles, was die Vorschranke passiert hat
+                    "posen": z["detektionen"] - z["vorab_verworfen"],
+                    "erkannt": z["kandidaten"]})
 
         # Z6: EIN Lauf, EIN Abnehmer — alle sechs Vertragsfelder stehen HIER und
         # keins im Verteiler (§3.2). `frames` traegt danach dieselben Wache-Namen
         # wie frueher der FrameIter (gelesen/soll/unvollstaendig), die Auswertung
         # unten bleibt Wort fuer Wort.
-        frames = verteiler.lauf(vid, [verteiler.Abnehmer(
-            name="ernte",
-            fps_sample=fps_sample,     # derselbe Wert wie zuvor -> derselbe step
-            zeitbezug="clip",          # t = i/fps, kein Wanduhr-Anker
-            bedarf="stream",           # haelt nichts: der Crop geht sofort auf Platte
-            hart=False,                # §3.2: die Ernte darf keinen fremden Abnehmer
-                                       # mit sich reissen — laut bleibt sie via _laut()
-            wache_politik="nachrechnen",
-            zeitwache_s=None,          # BEWUSST keins: heute deckelt allein der
-                                       # Worker-Job-Timeout des Aufrufers
-                                       # (verifyd nachhol_analyse_timeout_s). Ein
-                                       # neuer Deckel hier waere eine
-                                       # Verhaltensaenderung, kein Umzug.
-            start=_laut(clip_start), frame=_laut(ernten))])["ernte"]
+        try:
+            frames = verteiler.lauf(vid, [verteiler.Abnehmer(
+                name="ernte",
+                fps_sample=fps_sample,  # derselbe Wert wie zuvor -> derselbe step
+                zeitbezug="clip",       # t = i/fps, kein Wanduhr-Anker
+                bedarf="stream",        # haelt nichts: der Crop geht sofort auf Platte
+                hart=False,             # §3.2: die Ernte darf keinen fremden Abnehmer
+                                        # mit sich reissen — laut bleibt sie via _laut()
+                wache_politik="nachrechnen",
+                zeitwache_s=None,       # BEWUSST keins: heute deckelt allein der
+                                        # Worker-Job-Timeout des Aufrufers
+                                        # (verifyd nachhol_analyse_timeout_s). Ein
+                                        # neuer Deckel hier waere eine
+                                        # Verhaltensaenderung, kein Umzug.
+                start=_laut(clip_start), frame=_laut(ernten))])["ernte"]
+        finally:
+            # Der Puls gehoert dem LAUFENDEN Event. Bleibt er nach Ende (auch nach
+            # einem Abbruch) liegen, behauptet ein Balken Arbeit, die niemand tut.
+            puls_loeschen(lauf_dir)
         if ausfall:
             raise ausfall[0]            # unveraendert: Typ und Text wie bisher
         out.flush()

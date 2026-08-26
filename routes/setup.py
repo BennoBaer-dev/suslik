@@ -107,7 +107,8 @@ def render(qs, cfg, pruefe_url, frigate_cameras, frigate_read_only):
     # --- Schritt 4: Gesichter aus Frigate importieren ---
     if cams and not ferr and url:
         try:
-            with urllib.request.urlopen(f"{url}/api/faces", timeout=15) as r:
+            from core import frigate_auth as _fauth      # 5e: DER eine Griff
+            with _fauth.oeffnen(f"{url}/api/faces", timeout=15) as r:
                 _fi = json.load(r)
             n_pers = len([k for k in _fi if k != "train"])
             n_img = sum(len(v) for k, v in _fi.items() if k != "train")

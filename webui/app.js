@@ -238,6 +238,18 @@ function frigateWrite(readonly) {
     .catch(function () {});
 }
 
+/* .340: Angebot aus dem Nachhol-Banner — EIN Schalter ueber den bestehenden
+   /konfig-Weg (Muster frigateWrite). config_schreiben startet den Dienst dabei
+   neu, deshalb dieselbe Warteschleife wie beim Konfigblatt; der laufende
+   Nachhol-Lauf bricht damit ab, was hier genau der Zweck ist. */
+function startNachholAus() {
+  if (!confirm(TT('js.catchup.frage', 'Skip catching up on missed events at startup from now on? The service restarts to apply this.'))) return;
+  fetch('/konfig', {method: 'POST', body: JSON.stringify({start_catchup: false})})
+    .then(function (r) { return r.json(); })
+    .then(function (d) { if (d.ok) { _neustartDann('/heute', null); } else { alert(d.msg || TT('js.status.fehler', 'error')); } })
+    .catch(function () { _neustartDann('/heute', null); });
+}
+
 function configRestore(input) {
   var f = input.files && input.files[0];
   if (!f) return;
@@ -680,8 +692,9 @@ function ladeBalken(el, i, n, z) {
      hinter einem Warte-Text — fuer Antworten mit laden + i/n/zustand
      (refcache-Neuaufbau, Pass-Ernte). Haengt sich an das Element an; der
      Aufrufer setzt vorher den Text (textContent loescht alte Balken mit).
-     Gleiche Form wie lbBalken im Auftritte-Blatt (dessen JS ist inline und
-     eigenstaendig) und der Bestands-QS-Balken (#qs-lauf-balken). */
+     Das Auftritte-Blatt malt seit .345 stattdessen den grossen
+     Fortschritts-Block (lbBlock, inline und eigenstaendig); hier bleibt der
+     schmale Balken, gleiche Form wie der Bestands-QS-Balken (#qs-lauf-balken). */
   if (!el) return;
   var w = document.createElement('span');
   w.style.cssText = 'display:inline-block;vertical-align:middle;width:110px;height:6px;' +

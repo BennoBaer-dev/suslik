@@ -40,7 +40,7 @@ declines rather than mislabels.
 The Today page answers "who was on the property, when, and where did they go" — one card per
 person, one block per pass, unknowns kept visible instead of buried:
 
-![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.0.339)
+![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.0.353)
 
 *(Screenshot from a live install of v0.1.0.199; names and faces anonymized. The
 "Recognized live" row is the live watchers' preliminary naming, right on the stream.)*
@@ -133,7 +133,9 @@ docker compose logs -f          # watch the startup self-check
 > **NVIDIA** (`latest-cuda`) or **AMD** (`latest-rocm`) variant? Those additionally
 > need device passthrough (`devices:`/`group_add:` for Intel and AMD, `--gpus` for NVIDIA) —
 > without it they silently fall back to CPU. See [installation](docs/installation.md) for the full
-> compose blocks. suslik runs happily **next to Frigate on the same machine** as a second container.
+> compose blocks, and [Proxmox](docs/proxmox.md) if the host is a Proxmox node and suslik runs in
+> an LXC container on it.
+> suslik runs happily **next to Frigate on the same machine** as a second container.
 
 Then open `http://<host>:8199/` and follow the setup wizard (connect Frigate → pick
 cameras/zones → choose backend).
@@ -154,6 +156,9 @@ fixed version instead: [installation.md](docs/installation.md#updating).
   [releases page](https://github.com/BennoBaer-dev/suslik/releases).
 - **[Installation](docs/installation.md)** — the five image variants (CPU / Intel / Intel legacy / NVIDIA / AMD-testing),
   pull from GHCR or build from the source in this repository, `docker run` and `docker compose`.
+- **[Proxmox](docs/proxmox.md)** — running suslik in an LXC container: why LXC rather than a VM
+  when a GPU is involved, passing the device through per hardware variant, and how to check it
+  really arrived.
 - **[Configuration](docs/configuration.md)** — the setup wizard, config keys, environment
   variables, and the `/data` layout.
 - **[Usage](docs/usage.md)** — a tour of the web UI, enrollment, and the scenario view.

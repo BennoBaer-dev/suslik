@@ -259,7 +259,8 @@ def _ort_session(kind, dev, model_file, cache=None):
 
 # ---------------------------------------------------------------- Frigate I/O
 def fetch_index():
-    with urllib.request.urlopen(f"{FRIGATE}/api/faces", timeout=20) as r:
+    from core import frigate_auth as _fauth     # 5e: DER eine Frigate-Griff
+    with _fauth.oeffnen(f"{FRIGATE}/api/faces", timeout=20) as r:
         d = json.load(r)
     return {k: v for k, v in d.items() if k != "train"}
 
@@ -272,7 +273,8 @@ def fdate(fname):
     return datetime.datetime.fromtimestamp(int(m.group(1))).strftime("%d.%m.%y %H:%M")
 
 def fetch_image(person, fname):
-    with urllib.request.urlopen(furl(person, fname), timeout=20) as r:
+    from core import frigate_auth as _fauth     # 5e: DER eine Frigate-Griff
+    with _fauth.oeffnen(furl(person, fname), timeout=20) as r:
         raw = r.read()
     return cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)  # BGR
 
@@ -373,17 +375,78 @@ class Embedder:
         E /= (np.linalg.norm(E, axis=1, keepdims=True) + 1e-9)
         return E
 
-    def _get_mit_rec(self, img, max_num=0):
+    def _get_gestaffelt(self, img, max_num=0, vorschranke=None, det_metric="default"):
+        """Detektion und Nacharbeit GETRENNT — Zwischenstufe fuer die Ernte-Vorschranke
+        (bauplan_ernte_tempo.md §1): erst Boxen + 5 Keypoints, dann die teuren
+        Nach-Modelle (landmark_3d_68 = Pose) NUR fuer die Gesichter, die
+        `vorschranke(face)` durchlaesst. Aussortierte tragen die Marke
+        `face.vorab_verworfen` und bleiben in der Rueckgabe (der Aufrufer zaehlt jede
+        Detektion) — sie haben aber weder pose noch embedding.
+
+        Der Rumpf ist ZEILENGLEICH zu insightface FaceAnalysis.get (face_analysis.py:77-96):
+        dieselbe det_model.detect(max_num, metric)-Vorauswahl (Sortierung und die
+        det_thresh-Filterung sitzen IN detect, get selbst tut nichts weiter), dieselbe
+        Face-Bestueckung aus bboxes[i,0:4] / bboxes[i,4] / kpss[i], dieselbe
+        Reihenfolge der Nach-Modelle je Gesicht. Damit ist die Kandidatenmenge
+        konstruktiv dieselbe wie beim ungeteilten Weg (Plan-Risiko 2), und das
+        Alignment des Embeddings nimmt weiter die 5 Detektor-Keypoints (Risiko 3).
+        -> (alle_faces, ueberlebende)"""
+        from insightface.app.common import Face
+        bboxes, kpss = self.app.det_model.detect(img, max_num=max_num, metric=det_metric)
+        if bboxes.shape[0] == 0:
+            return [], []
+        faces, weiter = [], []
+        for i in range(bboxes.shape[0]):
+            face = Face(bbox=bboxes[i, 0:4], det_score=bboxes[i, 4],
+                        kps=(kpss[i] if kpss is not None else None))
+            faces.append(face)
+            if vorschranke is not None and not vorschranke(face):
+                face.vorab_verworfen = True
+                continue
+            for taskname, model in self.app.models.items():
+                if taskname == "detection":
+                    continue
+                model.get(img, face)
+            weiter.append(face)
+        return faces, weiter
+
+    def _get_mit_rec(self, img, max_num=0, vorschranke=None):
         """Kapsel um insightface app.get: Faces detektieren/ausrichten wie gehabt, dann
-        face.embedding je Gesicht mit dem eigenen Recognition-Modell ueberschreiben."""
+        face.embedding je Gesicht mit dem eigenen Recognition-Modell ueberschreiben.
+
+        `vorschranke` (Default None = Verhalten wie bisher, Zeile fuer Zeile): eine
+        Auswahl-Funktion face->bool. Ist sie gesetzt, laufen Nach-Modelle UND die
+        AdaFace-Inferenz nur fuer die Ueberlebenden — der Batch von _rec_infer wird
+        dann ueber diese Teilmenge gebildet (die Zeilen sind je Crop unabhaengig,
+        Padding auf die festen OV-Stufen bleibt Verschnitt und wird verworfen).
+        Alle bestehenden Aufrufer rufen ohne das Argument und aendern sich nicht."""
         from insightface.utils import face_align
-        faces = self._orig_get(img, max_num=max_num)
-        if faces:
-            crops = [face_align.norm_crop(img, landmark=f.kps, image_size=112) for f in faces]
+        if vorschranke is None:
+            faces = self._orig_get(img, max_num=max_num)
+            if faces:
+                crops = [face_align.norm_crop(img, landmark=f.kps, image_size=112) for f in faces]
+                E = self._rec_infer(crops)
+                for f, e in zip(faces, E):
+                    f.embedding = e
+            return faces
+        faces, weiter = self._get_gestaffelt(img, max_num=max_num, vorschranke=vorschranke)
+        if weiter:
+            crops = [face_align.norm_crop(img, landmark=f.kps, image_size=112) for f in weiter]
             E = self._rec_infer(crops)
-            for f, e in zip(faces, E):
+            for f, e in zip(weiter, E):
                 f.embedding = e
         return faces
+
+    def faces_mit_vorschranke(self, img, vorschranke, max_num=0):
+        """Der EINE Eintritt fuer Aufrufer, die eine Auswahl mitgeben wollen (Ernte).
+        Deckt beide Recognition-Welten ab: mit eigenem ONNX-Kopf (adaface) ueber
+        _get_mit_rec, ohne ihn (buffalo) direkt ueber _get_gestaffelt — dort steckt
+        'recognition' noch in app.models und laeuft in derselben Schleife mit, also
+        ebenfalls nur fuer die Ueberlebenden. Wer die Auswahl nicht braucht, ruft
+        weiter app.get(img) und merkt von alledem nichts."""
+        if self._rec is not None:
+            return self._get_mit_rec(img, max_num=max_num, vorschranke=vorschranke)
+        return self._get_gestaffelt(img, max_num=max_num, vorschranke=vorschranke)[0]
 
     @staticmethod
     def ar_det_size(breite, hoehe, basis=1280):

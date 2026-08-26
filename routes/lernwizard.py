@@ -188,6 +188,7 @@ _PHASEN_KEYS = {
     "vorbereitung": ("checking events", "already searched (skipped)"),
     "ernte": ("event", "analysing", "rest", "with clip", "skipped (no clip)",
               "candidates", "crop-worthy (M)", "anchor-ready (S)",
+              "filtered early (size/sharpness)",
               "objects filtered (fd rule)", "without a face", "clip not readable",
               "clips partly readable", "no pose data", "counter mismatch",
               "worker errors", "last find", "files vs counters"),
@@ -386,7 +387,7 @@ def _sicht_js():
     'los();})();</script>')
 
 
-def lauf_status(zustand):
+def lauf_status(zustand, puls=None):
     """.260 Saeule-Widget: EINE Quelle fuer den Seiten-Render UND den
     /lernlauf_status-Endpunkt — render-fertige Werte (Fuell-Prozent,
     Phasen-Marken, Zeit- und Zaehler-Zeile, tickt). Das Browser-JS wendet
@@ -440,6 +441,45 @@ def lauf_status(zustand):
         elif akt and akt > z["ts"]:
             zeit = t("lernwizard.status.fertig_in",
                      dauer=_dauer(akt - z["ts"]))
+    # .345 (User-Konsens 25.08., ersetzt die .344-Zaehler-TEXTZEILE): die drei
+    # Unterbalken des Fortschritts-Blocks, render-fertig. Die Werte kommen aus
+    # ernte.fortschritt_rechnen — DERSELBEN Quelle wie am Pass-Check; hier
+    # kommen nur Uebersetzung und Zustands-Woerter dazu, das Widget-JS wendet
+    # an und rechnet nichts (kein Zweit-Rechner). Zustaende je Zeile:
+    # 'ok' = Ernte komplett durch (Haken), 'an' = tickt, '' = wartet/Clip.
+    from core.ernte import fortschritt_rechnen
+    fertig_alle = zustand is not None and idx > 1     # anker oder spaeter
+    fs = fortschritt_rechnen(0, 1, puls if ph == "ernte" else None) or {}
+    gr = {g["k"]: g for g in fs.get("gruppen") or []}
+    balken = []
+    for k, lbl in (("suchen", t("lernwizard.balken.suchen")),
+                   ("pose", t("lernwizard.balken.pose")),
+                   ("erkennen", t("lernwizard.balken.erkennen"))):
+        g = gr.get(k) or {}
+        if fertig_alle:
+            b_proz, b_zust, b_zt = 100, "ok", t("lernwizard.balken.fertig")
+        elif ph == "ernte" and fs.get("puls_da"):
+            b_proz = int(round(100 * (g.get("anteil") or 0)))
+            wert = int(g.get("wert") or 0)
+            if k == "suchen":
+                b_zust, b_zt = "an", t("lernwizard.balken.z_frames",
+                                       f=wert, s=g.get("von") or "?")
+            elif not wert:
+                b_zust, b_zt = "", t("lernwizard.balken.wartet")
+            elif k == "pose":
+                b_zust, b_zt = "an", t_n("lernwizard.balken.z_posen", wert)
+            else:
+                b_zust, b_zt = "an", t_n("lernwizard.balken.z_erkannt", wert)
+        elif ph == "ernte":
+            # laufende Ernte ohne frischen Puls = Clip-Beschaffung zwischen
+            # zwei Events (fortschritt_rechnen: puls_da) — sagen, nicht einfrieren.
+            b_proz, b_zust = 0, ""
+            b_zt = (t("lernwizard.balken.clip") if k == "suchen"
+                    else t("lernwizard.balken.wartet"))
+        else:
+            b_proz, b_zust, b_zt = 0, "", t("lernwizard.balken.wartet")
+        balken.append({"label": lbl, "proz": b_proz, "zust": b_zust,
+                       "zaehler": b_zt})
     teile_z = []
     if laeuft:
         if f.get("event"):
@@ -451,7 +491,7 @@ def lauf_status(zustand):
          and (not st or st.startswith(("prepared", "harvesting", "waiting"))))
         or (ph == "anker"
             and not st.startswith(("anchors", "anchor stage failed"))))
-    return {"proz": proz, "seg": seg, "zeit": zeit,
+    return {"proz": proz, "seg": seg, "balken": balken, "zeit": zeit,
             "zaehler": " · ".join(teile_z),
             "laeuft": bool(laeuft), "tickt": bool(tickt)}
 
@@ -461,6 +501,20 @@ def _seg_html(sg):
          ('<span class="lf-puls"></span>' if sg["zust"] == "an" else
           '<span class="dim">&#183;</span>'))
     return f'<div class="{sg["zust"]}">{m} {sg["label"]}</div>'
+
+
+def _balken_html(sb):
+    """.345: EINE Unterbalken-Zeile des Fortschritts-Blocks (Kachel 2) — das
+    Widget-JS fuehrt Breite/Zaehler/Zustand an genau diesem Geruest nach
+    (Spiegel-Paar wie _seg_html/mark; Klassen .fs-* aus style.css)."""
+    ok = sb["zust"] == "ok"
+    return (f'<div class="fs-row"><div class="fs-kopf"><span class="fs-lbl">'
+            f'{html.escape(sb["label"])}</span>'
+            f'<span class="fs-z{" ok" if ok else ""}">'
+            + ('&#10003; ' if ok else '')
+            + f'{html.escape(sb["zaehler"])}</span></div>'
+            f'<span class="fs-bar"><span class="fs-fill" '
+            f'style="width:{sb["proz"]}%"></span></span></div>')
 
 
 # .260: das Saeule-Widget — pollt /lernlauf_status alle 3 s und bewegt NUR
@@ -479,11 +533,20 @@ _WIDGET_JS = (
     'fetch("/lernlauf_status").then(function(r){return r.json()})'
     '.then(function(d){if(!d.ok)return;'
     'if(!d.tickt){clearInterval(t);location.reload();return;}'
-    'var fu=document.querySelector(".lf-saeule .fuell");'
-    'if(fu)fu.style.height=d.proz+"%";'
-    'var seg=document.querySelectorAll(".lf-phasen>div");'
+    # .345: Gesamtbalken (waagerecht) + drei Unterbalken statt der Saeule —
+    # nur Werte anwenden, das Geruest rendert _balken_html (Spiegel-Paar).
+    'var fu=document.querySelector("#lf-fsb>.fs-total>.fs-fill");'
+    'if(fu)fu.style.width=d.proz+"%";'
+    'var seg=document.querySelectorAll("#lf-fsb .fs-phasen>div");'
     'd.seg.forEach(function(s,i){var el=seg[i];if(!el)return;'
     'el.className=s.zust;el.innerHTML=mark(s.zust)+" "+s.label;});'
+    'var rows=document.querySelectorAll("#lf-fsb .fs-row");'
+    '(d.balken||[]).forEach(function(b,i){var el=rows[i];if(!el)return;'
+    'var bf=el.querySelector(".fs-bar>.fs-fill");'
+    'if(bf)bf.style.width=b.proz+"%";'
+    'var zz=el.querySelector(".fs-z");if(zz){'
+    'zz.className="fs-z"+(b.zust=="ok"?" ok":"");'
+    'zz.textContent=(b.zust=="ok"?"\\u2713 ":"")+b.zaehler;}});'
     'var ze=document.getElementById("lf-zeit");'
     'if(ze)ze.textContent=d.zeit;'
     'var zl=document.getElementById("lf-zaehler");'
@@ -496,7 +559,7 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
                benennung=None, aktuelle=None, naechste_id=None,
                easy_events=300, unbekannt_offen=0, max_events=40000,
                personen=None, zielperson="", reihenfolge=None,
-               sichtung=None, sichtung_gesamt=0):
+               sichtung=None, sichtung_gesamt=0, ernte_puls=None):
     """.246 (Lernfluss-Redesign, Mockup b_lernfluss, User-Abnahme 17.08.):
     EINE Fluss-Seite mit vier Kacheln (Start / Saeule / Benennen / Fertig) und
     der Zuweisungs-Flaeche ueber die ganze Zeile. zustand darf None sein
@@ -603,9 +666,12 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
     n_bilder = sum(len(g.get("mitglieder") or []) for g in gruppen)
     n_events = len({str(m.get("event")) for g in gruppen
                     for m in (g.get("mitglieder") or []) if m.get("event")})
-    # .260: Saeule/Zeit/Zaehler kommen aus lauf_status — DERSELBEN Rechnung,
+    # .260: Balken/Zeit/Zaehler kommen aus lauf_status — DERSELBEN Rechnung,
     # die der /lernlauf_status-Endpunkt dem Widget liefert (eine Quelle).
-    s2 = lauf_status(zustand)
+    # ernte_puls reicht der Handler durch (lernlauf.lauf_puls), damit schon der
+    # Seiten-Render die tickenden Unterbalken zeigt, nicht erst der Poll.
+    # (BEWUSST nicht `puls` benannt: so heisst oben schon die working-Zeile.)
+    s2 = lauf_status(zustand, puls=ernte_puls)
     ergebnis = ""
     if ph in ("vorbereitung", "ernte") or (ph == "anker" and not anker_fertig):
         ergebnis = s2["zaehler"]
@@ -709,6 +775,17 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
         + '</button>'
         '<span id="lf-pop-status" class="dim"></span></div></div></div>')
 
+    # --- Reihe kleiner Klick-Felder in Kachel 1 (User 26.08. am Screenshot:
+    # "zwischen Ergebnis-Zeile und dem grossen Such-Knopf, Platz fuer bis zu
+    # DREI kleinere Felder"). Heute EINES belegt: der Abgleich der
+    # Belichtungs-Grenzen (analysen/bauplan_belichtung.md Phase 1b).
+    # ERWEITERBAR by construction: die Reihe ist ein flex-Container
+    # (webui/style.css .lf-minis) — ein weiteres <a> in diese Liste genuegt,
+    # bis drei stehen sie nebeneinander, danach bricht die Reihe um.
+    mini_felder = ['<a href="/lernlauf/belichtung">'
+                   + t("lernwizard.k1.mini_belichtung") + '</a>']
+    mini_reihe = f'<div class="lf-minis">{"".join(mini_felder)}</div>'
+
     # --- Kachel 1: der Lauf ----------------------------------------------
     if zustand is None:
         hinweis_u = ""
@@ -726,6 +803,7 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
         # Stufe-0-Grenze: <b>back</b> mitten im Satz — bleibt literal.
         k1 = ('<p class="lf-satz">Only needed to look <b>back</b> &mdash; '
               'day to day the system learns on its own.</p>' + hinweis_u
+              + mini_reihe
               + '<div class="lf-rest">' + such_knopf + such_deck + '</div>')
     else:
         # .255/.259: der Neustart-Weg gehoert in die Kachel — seit .259 als
@@ -745,21 +823,25 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
               + (' &middot; '
                  + t("lernwizard.k1.tag", tag=html.escape(str(z["tag"])))
                  if z.get("tag") else "") + '</div>'
+              + mini_reihe
               + neu_form)
 
-    # --- Kachel 2: die Saeule --------------------------------------------
-    # Ehrliche Fuellung (Regeln in lauf_status, EINE Quelle mit dem
-    # Widget-Endpunkt): Vorbereitung 0-15 %, Ernte 15-85 % proportional zum
-    # echten Event-Zaehler, Sortierung = 85 % mit Puls, fertig = 100 %.
+    # --- Kachel 2: der Fortschritts-Block --------------------------------
+    # .345 (User 25.08., Bild-Konsens: "der Balken hier muss durch die neuen
+    # ersetzt werden"): Gesamtbalken + Phasen-Zeile + DREI Unterbalken statt
+    # der Saeule. Ehrliche Fuellung wie gehabt (Regeln in lauf_status, EINE
+    # Quelle mit dem Widget-Endpunkt): Vorbereitung 0-15 %, Ernte 15-85 %
+    # proportional zum echten Event-Zaehler, Sortierung = 85 %, fertig = 100 %.
     # .260: Zeit/Zaehler tragen IDs und werden waehrend des Laufs vom
     # Widget-JS in place nachgefuehrt (immer gerendert, ggf. leer).
     k2 = (f'<p class="lf-satz">{t("lernwizard.k2.satz")}</p>'
-          '<div class="lf-saeule-w"><div class="lf-saeule">'
-          '<div class="marke" style="bottom:15%"></div>'
-          '<div class="marke" style="bottom:85%"></div>'
-          f'<div class="fuell" style="height:{s2["proz"]}%"></div></div>'
-          f'<div class="lf-phasen">{"".join(_seg_html(sg) for sg in s2["seg"])}'
-          '</div></div>'
+          '<div class="fs-block" id="lf-fsb">'
+          f'<div class="fs-total"><span class="fs-fill" '
+          f'style="width:{s2["proz"]}%"></span></div>'
+          f'<div class="fs-phasen">{"".join(_seg_html(sg) for sg in s2["seg"])}'
+          '</div>'
+          + "".join(_balken_html(sb) for sb in s2["balken"])
+          + '</div>'
           '<div class="lf-rest">'
           + (f'<div class="lf-satz" id="lf-zeit">{html.escape(s2["zeit"])}'
              '</div>' if s2["zeit"] or laeuft else "")

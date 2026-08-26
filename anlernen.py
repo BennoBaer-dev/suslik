@@ -1740,6 +1740,12 @@ GRUND_TEXT = {
     # .32x: Struktur-Test — der Ausschnitt zeigt keine Gesichtsstruktur (Nacken,
     # Ohr, Hinterkopf, Vegetation). Die Zahl haengt die Flaeche an.
     "keine_struktur": "no face structure in this crop",
+    # BELICHTUNG (bauplan_belichtung.md E5b, Issue 26): der Ausschnitt liegt
+    # ausserhalb der Belichtungsgrenzen. Beides sind GRENZFALL-Gruende, nie
+    # 'raus' — bewusste Zuwahl bleibt moeglich (Memory 'nicht loeschen,
+    # Mehrdeutigkeit aufloesen'). Die Zahlen haengt die Flaeche an.
+    "zu_dunkel":         "too dark for a reference",
+    "ueberbelichtet":    "overexposed for a reference",
     # Die zwei Grade der Stufe 'neutral' (kein Ausschluss) — der
     # Vollstaendigkeit halber hier, damit bild_stufe KEINEN Text
     # ausserhalb dieser Tabelle bildet.
@@ -2381,9 +2387,14 @@ BRUECKE_JE_EVENT = 2   # .32x: wie viele Bilder die Pass-Pruefung je EVENT
 #                        Was der Deckel abschneidet, wird Grenzfall (sichtbar,
 #                        ohne Haken) — nie stiller Verlust.
 SICHTUNG_JE_BLICK = 14   # .271: Pruef-Kandidaten je Blickwinkel-Reihe
-SICHTUNG_WAHL = "blick-rr-ernte-struktur"  # .32x: Cache-Kennung der Sichtung.
+SICHTUNG_WAHL = "blick-rr-ernte-struktur-luma"  # Cache-Kennung der Sichtung.
                                    # Alt-Tags ('blick-rr-norm2' = Crop-Nachmessung bis .313,
-                                   # 'blick-rr-ernte' = ohne Gruppen-Konsens) -> neu sichten
+                                   # 'blick-rr-ernte' = ohne Gruppen-Konsens,
+                                   # 'blick-rr-ernte-struktur' = ohne Belichtung) -> neu sichten.
+                                   # Der Bump gehoert zu JEDER Aenderung am bilder-Dict:
+                                   # sonst liefert der Cache eines bestehenden Laufs Bilder
+                                   # OHNE das neue Feld, und die neue Achse bliebe dort
+                                   # dauerhaft blind (bauplan_belichtung.md E5, Befund 7).
 SICHTUNG_DECKEL = 40   # (Alt-Kommentar) Pruef-Kandidaten je Gruppe;
 #                        haelt die Erst-Sichtung mit warmem Modell bei wenigen
 #                        Sekunden — die Flaeche zeigt ohnehin maximal zwei
@@ -2438,7 +2449,8 @@ def _norm_nachmessen(lauf_dir, rel, emb=None):
         return None                       # Zusatz-Auskunft, nie Blocker
 
 
-def _sichtungs_kandidaten(mitglieder, deckel_je_blick, yaw_grenze, norm_latte=None):
+def _sichtungs_kandidaten(mitglieder, deckel_je_blick, yaw_grenze, norm_latte=None,
+                          luma_grenzen=None):
     """.271 (User-Zielbild: 'eine Reihe links, eine frontal, eine rechts —
     und das sind schon die optimalen'): Kandidaten-Wahl JE BLICKWINKEL-BIN
     (perspektiv_bin) und darin JE EVENT verteilt (Round-Robin, innerhalb
@@ -2454,7 +2466,12 @@ def _sichtungs_kandidaten(mitglieder, deckel_je_blick, yaw_grenze, norm_latte=No
     import functools
     # .308: Reihung UND Tauglichkeits-Schnitt kennen den Norm-Weg (norm_latte
     # aus der Dienst-Config; None = Pixel-Latte allein wie bisher).
-    _rk = functools.partial(_reihung, norm_latte=norm_latte)
+    # bauplan_belichtung.md E4: dieselbe Reihung traegt seit 26.08. die
+    # Belichtungsklasse — gut belichtete Bilder stehen VORNE in den drei
+    # Blickwinkel-Reihen. Der Tauglichkeits-Schnitt (_lk) bleibt unberuehrt:
+    # Belichtung entscheidet ueber die REIHENFOLGE, nie ueber die Menge.
+    _rk = functools.partial(_reihung, norm_latte=norm_latte,
+                            luma_grenzen=luma_grenzen)
     _lk = functools.partial(_lattenklasse, norm_latte=norm_latte)
     kand = []
     for blick in BLICK_REIHEN:
@@ -2505,7 +2522,7 @@ def _sichtungs_kandidaten(mitglieder, deckel_je_blick, yaw_grenze, norm_latte=No
 
 def gruppen_sichtung(satz, lauf_dir, emb=None,
                      deckel_je_blick=SICHTUNG_JE_BLICK, yaw_grenze=15.0,
-                     norm_latte=None):
+                     norm_latte=None, luma_grenzen=None):
     """.266 'Sicht = Pruefergebnis' (User 18.08.: 'erst ein Schnellcheck,
     welche Bilder wirklich gut sind, und DAVON die Anzeige'): die besten
     `deckel` Mitglieder der Gruppe (Reihung `_reihung`) werden gesichtet
@@ -2527,8 +2544,12 @@ def gruppen_sichtung(satz, lauf_dir, emb=None,
     fuer Alt-Mitglieder ohne Ernte-Embedding; der Embedder wird erst dann
     gebaut. kante bleibt Original-Pixel, sharp die Laplace-Varianz des Crops,
     norm die Feature-Norm derselben Detektion — dieselben Skalen wie zuvor.
-    -> {"modell", "gesamt", "bilder": [{datei, kante, sharp, norm, emb|None,
-    grund?}...]} in Reihungs-Ordnung."""
+    -> {"modell", "gesamt", "bilder": [{datei, kante, sharp, norm, luma,
+    emb|None, grund?}...]} in Reihungs-Ordnung.
+    luma (bauplan_belichtung.md E5): DRITTER Kopierschritt der Ernte-Messung
+    (Kandidatenzeile -> Anker-Mitglied -> hier). Ohne ihn saehe
+    sichtung_bewerten die Belichtung nie, weil sie ausschliesslich aus DIESEM
+    Cache rechnet."""
     from core.benennung import _reihung
     aid = str(satz.get("anker_id"))
     pfad = os.path.join(lauf_dir, f"sichtung_{aid}.json")
@@ -2548,7 +2569,8 @@ def gruppen_sichtung(satz, lauf_dir, emb=None,
         pass
     bilder = []
     for x, blick in _sichtungs_kandidaten(m, deckel_je_blick, yaw_grenze,
-                                          norm_latte=norm_latte):
+                                          norm_latte=norm_latte,
+                                          luma_grenzen=luma_grenzen):
         rel = str(x.get("datei", ""))
         v = x.get("emb")
         if v is not None and str(x.get("modell") or modell).lower() == modell:
@@ -2581,6 +2603,11 @@ def gruppen_sichtung(satz, lauf_dir, emb=None,
                            # filtert nicht darauf: ein Urteil ohne Messgrundlage
                            # waere ein stiller Verlust.
                            "struktur": x.get("struktur"),
+                           # bauplan_belichtung.md E5: die Luma kommt aus der
+                           # Ernte mit (core/anker kopiert sie ins Mitglied).
+                           # Fehlt sie — Alt-Anker vor dem Einbau —, bleibt sie
+                           # None und die Belichtungsachse urteilt NICHT.
+                           "luma": x.get("luma"),
                            "emb": [round(float(t), 5) for t in v],
                            "quelle": "ernte" if x.get("norm") is not None
                                      else ("ernte+norm" if _n is not None else "ernte")})
@@ -2596,6 +2623,10 @@ def gruppen_sichtung(satz, lauf_dir, emb=None,
         v, kante, sh, norm = bild_metriken(emb, img, mit_norm=True)
         bilder.append({"datei": rel, "blick": blick, "kante": kante,
                        "sharp": sh, "norm": norm, "struktur": None,
+                       # Auch der Alt-Weg traegt die Luma, falls das Mitglied
+                       # sie hat (die Crop-Nachmessung misst sie NICHT nach —
+                       # ohne Wert bleibt die Belichtungsachse hier still).
+                       "luma": x.get("luma"),
                        "emb": ([round(float(t), 5) for t in v]
                                if v is not None else None),
                        "quelle": "crop"})
@@ -2630,7 +2661,7 @@ def sichtung_lesen(satz, lauf_dir, modell):
 
 
 def sichtung_hat_sichtbare(satz, lauf_dir, modell, refs, dup_sim,
-                           norm_latte=None):
+                           norm_latte=None, luma_grenzen=None):
     """.318 (User 22.08.: "da brauchst du sie auch gar nicht erst als Gruppe
     angezeigt werden beim Aufrufen"): traegt diese Gruppe nach der Bewertung noch
     EIN Bild im Rahmen? Rein lesend — Sichtungs-Cache + Matrix, kein Modell, keine
@@ -2645,12 +2676,12 @@ def sichtung_hat_sichtbare(satz, lauf_dir, modell, refs, dup_sim,
     if si is None:
         return None
     bew = sichtung_bewerten(satz.get("person") or None, si, refs, dup_sim, [],
-                            norm_latte=norm_latte)
+                            norm_latte=norm_latte, luma_grenzen=luma_grenzen)
     return any(b.get("stufe") != "raus" for b in bew)
 
 
 def sichtung_bewerten(person, sichtung, refs, dup_sim, adoptierte,
-                      norm_latte=None):
+                      norm_latte=None, luma_grenzen=None):
     """Matrix-Anwendung auf die GECACHTEN Sichtungs-Messwerte (.266): keine
     Bild-I/O, kein Modell — Identitaets-Achse gegen `refs` (Matrizen je
     Person; person=None oder ohne Referenzen -> Identitaet ist das
@@ -2664,9 +2695,18 @@ def sichtung_bewerten(person, sichtung, refs, dup_sim, adoptierte,
     norm_latte["struktur"] (.32x): gemessene Gesichts-STRUKTUR unter diesem Wert
     schliesst aus — der Ausschnitt zeigt kein Gesicht (Nacken, Ohr, Hinterkopf,
     Vegetation). Ersetzt den .316b-Gruppen-Konsens, der ersatzlos entfaellt.
+    luma_grenzen {min, max} (bauplan_belichtung.md E5b, Issue 26): ein Bild
+    ausserhalb der Belichtungsgrenzen wird GRENZFALL mit Grund — nie 'raus'
+    (Nicht-Loeschen-Prinzip; bewusste Zuwahl bleibt moeglich). Die Achse kann
+    also nur ZURUECKstufen, nie hochstufen und nie ausschliessen. Ohne Grenzen
+    oder ohne gemessene Luma passiert nichts.
     -> Liste in
     Sichtungs-Ordnung: {datei, stufe 'gut'|'grenzfall'|'raus', grund}."""
     from core.uebernahme import _cos
+    # EINE Quelle der Belichtungs-Einordnung (core.benennung) — die Worte
+    # daraus bildet diese Funktion selbst (GRUND_TEXT), weil Wizard-Sichtung
+    # und Anker-Detailseite verschiedene Vokabulare fuehren.
+    from core.benennung import belichtungs_lage as _bn_belichtung
     eigen_refs = refs.get(person) if person else None
     if eigen_refs is not None and not len(eigen_refs):
         eigen_refs = None
@@ -2806,6 +2846,26 @@ def sichtung_bewerten(person, sichtung, refs, dup_sim, adoptierte,
             # Screenshot 18.08.: 19 von 24 Kacheln waren Doubles).
             stufe, dup = "neutral", True
             grund = "near-identical alternative to a picture shown here"
+        # BELICHTUNG (bauplan_belichtung.md E5b, Issue 26: die Empfehlung
+        # waehlte sichtbar zu dunkle Bilder). ZULETZT, damit die Achse nur noch
+        # zurueckstufen kann: aus 'gut' wird 'grenzfall' mit Grund, ein bereits
+        # zurueckgestuftes Bild behaelt seine Stufe und bekommt den Grund dazu,
+        # und ein 'raus'-Urteil der Qualitaets-/Identitaets-Achsen bleibt
+        # unberuehrt. NIE 'raus' aus Belichtung allein — das Bild bleibt im
+        # Rahmen und ist bewusst zuwaehlbar (Memory 'nicht loeschen,
+        # Mehrdeutigkeit aufloesen'). Klassifiziert wird in core.benennung
+        # (EINE Quelle fuer beide Oberflaechen), benannt wird hier.
+        _lage = _bn_belichtung(b, luma_grenzen)
+        if _lage is not None and stufe is not None:
+            _lg = luma_grenzen or {}
+            _bgr = (f"{GRUND_TEXT['zu_dunkel']} "
+                    f"(brightness {b.get('luma')} — needs {_lg.get('min')}+)"
+                    if _lage == "dunkel" else
+                    f"{GRUND_TEXT['ueberbelichtet']} "
+                    f"(brightness {b.get('luma')} — needs {_lg.get('max')} or less)")
+            grund = f"{grund} — {_bgr}" if grund else _bgr
+            if stufe == "empfohlen":
+                stufe = "neutral"
         blick = b.get("blick") or "frontal"
         if stufe is None:
             aus.append({"datei": datei, "stufe": "raus", "grund": grund,
@@ -2826,7 +2886,7 @@ def sichtung_bewerten(person, sichtung, refs, dup_sim, adoptierte,
 
 
 def benennung_bewerten(person, satz, dup_sim, adoptierte, lauf_dir, emb=None,
-                       norm_latte=None):
+                       norm_latte=None, luma_grenzen=None):
     """.257/.266: DIESELBE Pruefung wie die Lern-Bruecke, identisch by
     construction (User-Auflage 17.08.: nie zwei verschiedene Pruefungen fuer
     dasselbe Bild). Seit .266 zehrt sie aus dem Sichtungs-Cache
@@ -2844,14 +2904,15 @@ def benennung_bewerten(person, satz, dup_sim, adoptierte, lauf_dir, emb=None,
     refs = refs_matrix(emb)
     if not len(refs.get(person, [])) and os.path.isdir(os.path.join(MASTER, person)):
         refs = lade_master_refs(emb)               # Cache kennt die Person noch nicht
-    sicht = gruppen_sichtung(satz, lauf_dir, emb=emb, norm_latte=norm_latte)
+    sicht = gruppen_sichtung(satz, lauf_dir, emb=emb, norm_latte=norm_latte,
+                             luma_grenzen=luma_grenzen)
     # .267 (Widerleger-Blocker): beurteilt werden ALLE Sichtungs-Kandidaten —
     # exakt die Menge, aus der die Flaeche rendert. Die frueher persistierte
     # gewaehlt-Auswahl ist fuer die Pruefung bedeutungslos (sie wird beim
     # Take ohnehin mit der SICHTBAREN Auswahl neu geschrieben); sie zu
     # filtern liess Pruefung und Anzeige wieder auseinanderlaufen.
     return sichtung_bewerten(person, sicht, refs, dup_sim, adoptierte,
-                             norm_latte=norm_latte)
+                             norm_latte=norm_latte, luma_grenzen=luma_grenzen)
 
 
 def lernbruecke_uebernehmen(person, items, emb=None):
