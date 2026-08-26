@@ -19,16 +19,16 @@ low-level route, and every chain that needs it carries it as **Route B**.
 
 ## What this page is, and what it is not
 
-This is our own experience, written down so you do not have to repeat it. Everything here was
-built and run on our own machines: the Intel chain on a Core Ultra 9 285H with iGPU and NPU, and
+This is my own experience, written down so you do not have to repeat it. Everything here was
+built and run on my own machines: the Intel chain on a Core Ultra 9 285H with iGPU and NPU, and
 the NVIDIA chain on a Proxmox VE 9.2 node with a GeForce RTX 2060, where it ended in
-`cuda:0 — device engaged`. Where we have not run something ourselves, the chain says so, and the
+`cuda:0 — device engaged`. Where I have not run something myself, the chain says so, and the
 AMD one says it loudly.
 
 What it is not is a guarantee. Your Proxmox, your kernel, your BIOS and your hardware are yours,
-and the commands below change your system's configuration, not ours. Read what a command does
+and the commands below change your system's configuration, not mine. Read what a command does
 before you run it, and keep in mind that a device passed into a container is a device the host
-hands out. We cannot promise that any of this works on your machine, and we cannot be responsible
+hands out. I cannot promise that any of this works on your machine, and I cannot be responsible
 for what it does there.
 
 The purpose is narrow on purpose: to tell you what to set on Proxmox so that a GPU, an NPU or
@@ -204,7 +204,7 @@ An LXC shares the host's kernel, so passing a GPU in means passing a **device no
 (`/dev/dri/renderD128`, `/dev/kfd`, `/dev/nvidia0`) while the card and its driver stay with the
 host. Nothing leaves the host in the process, and the same path can be written into a second
 container's config as well, which is why Frigate in one container and suslik in another on the
-same iGPU is a commonly reported arrangement. We have not measured two containers sharing one
+same iGPU is a commonly reported arrangement. I have not measured two containers sharing one
 iGPU here, so take that part as reported rather than tested. What the device-node route does fit
 is how suslik is built: the image ships the user-space runtime, the kernel driver belongs to the
 host (see [hardware-acceleration.md](hardware-acceleration.md)).
@@ -243,8 +243,8 @@ they can still collide on the device ([known-issues.md](known-issues.md)).
 
 An unprivileged container is Proxmox's default ("This is the default option when creating a new
 container", [Proxmox container chapter](https://pve.proxmox.com/pve-docs/chapter-pct.html)) and it
-is what the Intel chains were run on here. For NVIDIA and AMD we have no own hardware, so treat
-"unprivileged is enough" as reported rather than verified there.
+is what the Intel and the NVIDIA chains were run on here. For AMD I have no hardware of my own, so
+treat "unprivileged is enough" as reported rather than verified there.
 
 Coming from Frigate, you may bring two habits that this page does not need: a **privileged** LXC
 and `privileged: true` in the compose file, or a `chmod 666` on the node's device. The `dev[n]`
@@ -276,7 +276,7 @@ that interactions between fuse and the freezer cgroup can potentially cause I/O 
 rather than a documented requirement. `fuse` is what Frigate's documentation asks for, with its
 own reason ("prevents duplicated files and wasted storage", for the Docker storage driver); note
 that Frigate in turn leaves out `keyctl`. Both recipes are incomplete on their own, so the line
-above carries all three, and the deadlock caveat is Proxmox's own words, not a footnote we added.
+above carries all three, and the deadlock caveat is Proxmox's own words, not a footnote I added.
 
 Proof that it took, from inside the container:
 
@@ -378,7 +378,7 @@ still waiting, and `pct reboot <ctid>` applies it.
 
 ## Chain 1: Intel iGPU and NPU (gpu image)
 
-This is the only chain that was run on our own hardware (Core Ultra 9 285H, iGPU plus NPU).
+This is the only chain that was run on my own hardware (Core Ultra 9 285H, iGPU plus NPU).
 
 Before step 1: the [Common ground](#common-ground) part is done, that is the feature flags plus the
 `pct reboot`, Docker answering inside the container, and enough room on the container volume.
@@ -426,7 +426,7 @@ pct set <ctid> -dev0 path=/dev/dri/renderD128,mode=0660
 pct set <ctid> -dev1 path=/dev/accel/accel0,mode=0660      # only if you have an NPU
 ```
 
-**Route B, installations without `dev[n]`.** This is not a corner case, one of our testers runs
+**Route B, installations without `dev[n]`.** This is not a corner case, one of my testers runs
 suslik this way. Put these lines into `/etc/pve/lxc/<ctid>.conf` on the node:
 
 ```
@@ -628,7 +628,7 @@ can compensate for that. These platforms have no NPU, so there is no `/dev/accel
 pct set <ctid> -dev0 path=/dev/dri/renderD128,mode=0660
 ```
 
-**Route B, installations without `dev[n]`** (this is the route one of our testers runs). Into
+**Route B, installations without `dev[n]`** (this is the route one of my testers runs). Into
 `/etc/pve/lxc/<ctid>.conf`:
 
 ```
@@ -695,7 +695,7 @@ runs as root. If you prefer the group route, set `gid=<render GID inside the con
 `dev[n]` line and put the same number into `group_add`.
 
 `latest-gpu-legacy` follows every release like the other tags, but this variant is not covered by
-our own release test machines, so pin a version tag if that matters to you.
+my own release test machines, so pin a version tag if that matters to you.
 
 ### 6. Start it and read the one line (in the container)
 
@@ -735,12 +735,12 @@ The steps below are the Proxmox side plus NVIDIA's own
 instructions run in the container, assembled from vendor sources used partly outside their
 documented purpose and from community guides that agree with each other.
 
-**Update, 25 August 2026: we have now run this chain ourselves**, on a Proxmox VE 9.2 node
+**Update, 25 August 2026: I have now run this chain myself**, on a Proxmox VE 9.2 node
 (kernel 7.0.2-6-pve) with a GeForce RTX 2060, driver 610.57.04, into an unprivileged LXC
 running Docker. It works: the suslik startup check reports `cuda:0 — device engaged` and
 benchmarks the card at 15.9 ms per inference against 512 ms on the same machine's CPU. The
-steps below are what actually worked, including five obstacles that cost us an afternoon and
-that no guide had warned us about. They are marked **Trap** where they appear.
+steps below are what actually worked, including five obstacles that cost me an afternoon and
+that no guide had warned me about. They are marked **Trap** where they appear.
 
 There is a route that avoids all of it: if the card is already passed through to a **VM**, run
 suslik as a second container in that VM, where the NVIDIA stack sits on the path its vendor
@@ -778,7 +778,7 @@ to watch while you do it. Remove the DKMS module first (`dkms remove nvidia-curr
 --all`), because otherwise a dead entry stays behind. And check afterwards that `dkms` itself is
 still there: purging `nvidia-*` can take it with it as an unused dependency, and then the `.run`
 install fails later with nothing obvious in its output. `apt install dkms build-essential` puts it
-back. We ran into exactly this.
+back. I ran into exactly this.
 
 #### Trap 2: apt on a fresh Proxmox
 
@@ -925,7 +925,7 @@ systemctl daemon-reload
 systemctl enable --now nvidia-nodes.service
 ```
 
-This is what we run ourselves. Verified on our node: right after the driver install only
+This is what I run myself. Verified on my node: right after the driver install only
 `/dev/nvidia-caps/nvidia-cap1` existed, and `/dev/nvidia0`, `/dev/nvidiactl`, `/dev/nvidia-uvm`
 and `/dev/nvidia-uvm-tools` appeared only after `nvidia-modprobe -u -c=0` ran.
 
@@ -985,9 +985,9 @@ pct reboot <ctid>
 ```
 
 Route B carries the same caveats here as in Chain 1: the keys are LXC's, not Proxmox's, and the
-`chmod` is gone after a host reboot unless a udev rule makes it permanent. One caveat is new. We
+`chmod` is gone after a host reboot unless a udev rule makes it permanent. One caveat is new. I
 run Route B on Intel hardware, not on NVIDIA, so the NVIDIA lines above are the mechanism applied
-to this device list, not a setup we have seen work. One difference to Route A is worth knowing
+to this device list, not a setup I have seen work. One difference to Route A is worth knowing
 here: `optional` means a missing node does not stop the container from starting, so the failure
 that step 2 describes (`Device … does not exist` after a host reboot) does not appear on this
 route. The node is simply absent instead, and the check below is what tells you.
@@ -1122,7 +1122,7 @@ nvidia-ctk config --set nvidia-container-cli.no-cgroups --in-place
 systemctl restart docker
 ```
 
-**This is the one step where we knowingly use a vendor option outside its documented purpose, so
+**This is the one step where I knowingly use a vendor option outside its documented purpose, so
 here is the full picture.** NVIDIA documents this setting only under *Rootless Mode*, and an older
 Podman page of theirs warns the other way: "If the user running the containers is a privileged
 user (e.g. root) this change should not be made and will cause containers using the NVIDIA
@@ -1175,7 +1175,7 @@ docker run --rm --runtime=nvidia --gpus all \
 The printed list has to contain `CUDAExecutionProvider`. A list with only
 `CPUExecutionProvider`, or an error while creating the session, means CUDA did not come up, and
 then the compose file below will not fix it either. (This command is built from the image's own
-contents. We have run it ourselves since 25 August 2026, on the RTX 2060 machine described at the
+contents. I have run it myself since 25 August 2026, on the RTX 2060 machine described at the
 top of this chain.)
 
 ### 8. The compose file (in the container)
@@ -1208,11 +1208,11 @@ services:
 **One open point, stated as such.** With `no-cgroups = true` the toolkit no longer writes device
 cgroup rules, and the community sources split on whether `deploy:` alone is then enough: some say
 every GPU device has to be listed explicitly, others report `--gpus all` working with no `--device`
-at all. None of them is documentation, and we did not keep a citation for either side, so treat
+at all. None of them is documentation, and I did not keep a citation for either side, so treat
 the split itself as the finding. A plausible reading is that some nested cgroups carry
 no device filter at all, in which case there is nothing to unblock.
 
-On our own machine the `deploy:` block alone is enough. Checked on 26 August 2026 on the RTX 2060
+On my own machine the `deploy:` block alone is enough. Checked on 26 August 2026 on the RTX 2060
 LXC described at the top of this chain: `no-cgroups = true` is set in
 `/etc/nvidia-container-runtime/config.toml`, the running container has no explicit device list at
 all (only the `deploy:` request), and recognition runs on `cuda:0`. That is one machine, not a
@@ -1261,8 +1261,8 @@ inside the container prints the address) and the setup wizard takes over
 
 The `-rocm` variant is in its testing phase and has no field confirmation on real AMD hardware
 yet, so a CPU fallback is a real possibility here regardless of how well the passthrough goes.
-Reports are genuinely welcome ([supported-hardware.md](supported-hardware.md)). We have no AMD
-hardware here either, so this chain is assembled from AMD's documentation plus the Proxmox
+Reports are genuinely welcome ([supported-hardware.md](supported-hardware.md)). I have no AMD
+hardware here, so this chain is assembled from AMD's documentation plus the Proxmox
 mechanics that the Intel chains proved.
 
 Before step 1: the [Common ground](#common-ground) part is done, that is the feature flags plus the
@@ -1337,8 +1337,8 @@ pct reboot <ctid>
 
 Same caveats as in Chain 1: the keys are LXC's, not Proxmox's, and the `chmod` is gone after a
 host reboot unless a rule makes it permanent, which is what the udev rule below does. And the same
-new one as in Chain 3: we run Route B on Intel hardware, so these lines are the mechanism applied
-to AMD's device list, not a setup we have seen work.
+new one as in Chain 3: I run Route B on Intel hardware, so these lines are the mechanism applied
+to AMD's device list, not a setup I have seen work.
 
 If permissions rather than presence are the obstacle, AMD documents a udev rule that makes them
 persistent instead of re-running `chmod` after every reboot. Into `/etc/udev/rules.d/70-amdgpu.rules`
