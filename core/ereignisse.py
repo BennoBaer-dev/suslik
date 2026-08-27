@@ -3,6 +3,8 @@ der Bestand fragte mit limit=200 ohne Folgeseiten — genau diese Luecke schlies
 dieses Modul). Reine Logik: der HTTP-Zugriff kommt als hole(pfad)-Callable herein
 (im Dienst: api(cfg, pfad)), dadurch ohne Netz testbar."""
 
+import urllib.parse
+
 
 MAX_SEITEN = 200          # Deckel (Widerleger F2.1): 200 Seiten x 200 = 40.000 Events —
 #                           mehr zieht kein Lernlauf; schuetzt Request-Threads + Frigate.
@@ -24,7 +26,16 @@ def person_events(hole, anzahl=None, kameras=None, seite=200, max_seiten=MAX_SEI
     while len(events) < ziel and seiten < max_seiten:
         pfad = f"/api/events?labels=person&limit={limit}"
         if kameras:
-            pfad += "&cameras=" + ",".join(kameras)
+            # .358 (Widerleger-Fund H3): JEDEN Namen kodieren. Der Parameter
+            # gab es schon, war aber tot — kein Aufrufer reichte ihn durch.
+            # Mit dem Lernlauf-Vorfilter wird er scharf, und die Werte kommen
+            # aus einem POST-Body. Ein Name mit '&' haengte sonst eigene
+            # Parameter an Frigates Anfrage (gemessen: ein zweites 'cameras='
+            # ergab eine STILLE Leerernte, ein zweites 'limit=' schnitt die
+            # Ernte ab). Projektstandard ist quote (sync_refs.py:612/661);
+            # nur dieser Pfad hielt ihn nicht ein.
+            pfad += "&cameras=" + ",".join(
+                urllib.parse.quote(str(k), safe="") for k in kameras)
         if fenster:
             pfad += f"&after={fenster[0]}"
         if before is not None:

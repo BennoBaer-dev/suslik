@@ -7,6 +7,139 @@ this file — the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git
 history.
 
+## 0.1.0.360 (2026-08-27)
+
+- **Fixed: after saving the setup wizard, the container log went silent.** The service restarts
+  itself in place on a wizard save, and since .354 the new process kept writing into the dead pipe
+  of the old log tee: proven with a probe, 0 of 3000 lines reached `docker logs`, all of them only
+  reached the log file. The tee is now dismantled before the restart and rebuilt cleanly by the
+  new process; both destinations get everything again. Found by the release gate's data-axis
+  stage, which exercises exactly this restart — it only arms once all five image variants are
+  built, which is why it caught the bug on release day and not earlier.
+
+## 0.1.0.359 (2026-08-27)
+
+- **The stranger rule now also looks at how close the best face came.** Since .356, a pass with a
+  lot of usable face material and no match stays Unknown and the body path may not name it. Amount
+  alone turned out to be too blunt: measured on 258 confirmed passes, a genuinely known person
+  needs a median of 5 usable faces before the first near-match, but one in ten needs more than 22
+  — plenty of material with weak values does not prove a stranger. A pass is therefore only
+  declared a stranger if, on top of the amount, not a single face came near a match (0.40). The
+  original case stays caught: 134 usable faces, best value 0.329. A resident who almost matched
+  (best 0.465) can no longer lose his body-based name, no matter how much material the pass holds.
+
+- **Fixed: a discarded body name could still appear in the vision footnote.** The pass card said
+  Unknown while the vision line below still named the discarded person; the footnote now honours
+  the discard.
+
+## 0.1.0.358 (2026-08-27)
+
+- **A learning run can now be limited to certain cameras.** The run costs time per event, and the
+  cost is linear: on our own site a day has 440 person events across five cameras, 58 of them on
+  the front door camera, so a run limited to that camera does an eighth of the work. On a site
+  with 29 cameras and 12,000 events a working day the difference is larger still. The picker sits
+  in the search dialog and offers the cameras you ticked on the camera page; picking nothing keeps
+  today's behaviour. It combines with both "the last N events" and "one day".
+  The filter is applied by Frigate, not by us: the events are never fetched in the first place
+  rather than fetched and then discarded. Everything after the event list is untouched, there is
+  no second recognition path. The run records which cameras it was limited to and shows it, so a
+  camera run is not mistaken for a full one later, and it says plainly when the selected cameras
+  simply hold fewer events than you asked for.
+
+- **Fixed: a continued search took more events than ordered.** With the "continue" tick set, the
+  run fetches extra events to compensate for those already searched, then filters them out. The
+  cut back to the ordered number had ended up under a condition where it could never apply, so a
+  run ordered for 50 events with 20 already searched processed 70. Found by our own quality pass
+  before release; it affected every continued run, with or without a camera selection.
+
+## 0.1.0.357 (2026-08-27)
+
+- **Unknown visitors have their own section on the day page.** Until now their tiles sat at the
+  end of the "Recognized" band, between the people you know, looking exactly like them. That made
+  the heading untrue and buried the one tile that actually deserves a second look. They now get
+  their own band between "Recognized" and "Passes", with an amber bar instead of a green one, and
+  it only appears when there is something in it. Both kinds go there: a visitor the system has
+  seen before and given a number, and one who is here for the first time. The tiles themselves are
+  unchanged, and clicking one still opens that walk-through with its faces and the box where you
+  can type a name, new or existing.
+  The count says how many *passes* had nobody recognized, not how many visitors — one tile is one
+  pass, and passes cannot honestly be folded into visitors: two tiles can be the same person six
+  minutes apart, and one tile can carry several. The number in the side column counts persons and
+  will differ, sometimes higher and sometimes lower. Two numbers, two questions, each named for
+  what it is.
+
+## 0.1.0.356 (2026-08-27)
+
+- **Fixed: a pass could be given a resident's name when the person was in fact a stranger.**
+  suslik has two ways to put a name on a walk-through: the face, and the body (build, clothing,
+  posture). The body path only runs when the face path confirmed nobody, and until now whatever
+  it said became the name of the whole pass, unchecked. That is wrong when the face path saw the
+  person perfectly well and simply matched nobody, because then the visitor is a stranger and the
+  body path is comparing a stranger's jacket against the people you enrolled. In the case that
+  prompted this, a visitor who is not enrolled at all was labelled with a resident's name at 0.86,
+  across five cameras, while the face path had correctly confirmed no one.
+  From now on, if a pass contains a lot of usable face material and not one of those faces matches
+  anybody, the pass stays unknown and the body path may not name it. "Usable" means a real
+  detection, frontal enough and large enough; size alone is not enough, since a big face in pure
+  profile tells you nothing. The threshold is the new setting `fremd_ab_gesichter` (default 20).
+  Measured on our own data: passes that were named correctly had 2 to 4 usable faces, the one
+  known bad case had 134. Where exactly the line belongs above 4 is not established, which is why
+  it is a setting rather than a constant.
+
+- **A body-based name is now clearly marked as such.** It gets a red bar on the pass row, a red
+  badge next to the judgement, and the picture shown is the one the body recognition actually
+  used, taken from that recording. Before, a body attribution looked exactly like a face match,
+  and the thumbnail could even show a different person entirely. If you see the red marking, the
+  face path did not speak.
+
+- **Fixed: a pass could disappear from the day view entirely.** When the new rule removed the only
+  name and no event in the pass counted as unknown, the pass was classified as plain motion and
+  filtered out — no name, no unknown card, nothing. A pass where somebody was seen and
+  deliberately not named is an unknown, not mere movement.
+
+## 0.1.0.355 (2026-08-27)
+
+- **suslik now keeps its log on disk, so it survives restarts.** Until now the log
+  lived only in a 300 line memory buffer behind `/log` and in `docker logs`. On a busy
+  site that buffer covered under twenty minutes, so the startup block — the part that
+  matters most when something is wrong — was gone by the time anyone looked, and
+  reading `docker logs` needs shell access you may not have. Everything suslik prints
+  now also goes to `<data_dir>/logs/suslik.log`. It is rotated on every start, at
+  midnight and when it passes `log_max_mb` (default 64); older pieces are gzipped and
+  removed after `log_behalten_tage` days (default 14). `/log` reads the file now
+  (5000 lines by default, `?lines=20000` for more), and `/log/suslik-logs.tar.gz`
+  hands you every piece in one download — that is the file to attach when you report
+  a problem. A full service run is around 70 kB, so two weeks cost megabytes. Set
+  `log_datei: false` for the old behaviour.
+
+- **Fixed: a live watcher on a slow machine could drop to software decoding even
+  though its GPU was fine.** The watcher gives the hardware decoder a moment to
+  produce its first frame and falls back to software if nothing arrives. That window
+  was six seconds, which is a local-network number: measured against a local restream
+  the first frame takes about three seconds, and against a remote 4K stream eight to
+  nine. So the watcher threw the GPU away before it had delivered and then decoded
+  4K on the CPU. The window is now 25 seconds for every source. It costs nothing when
+  hardware decoding is genuinely broken, because ffmpeg exits on its own within about
+  two and a half seconds and the fallback happens immediately.
+
+- **Fixed: the watcher's start line could report impossible numbers.** Against a
+  stream without duration metadata, ffprobe reported 989 frames per second and a
+  bitrate of 2.5 gigabits for a single camera, and a different impossible value on
+  every call. Frame rate and bitrate are now checked for plausibility; if the averaged
+  frame rate fails, the stream's nominal rate is used instead, and an implausible
+  value is reported in the log rather than silently displayed.
+
+## 0.1.0.354 (2026-08-26)
+
+- **Live watchers now work against a Frigate that requires a login.** Frigate hands
+  its stream server through the same HTTPS port as its web UI, and until now the
+  watcher's stream fetch was the one path that did not carry the login, so it got a
+  401 while everything else worked. It now sends the same user agent and session
+  cookie as the clip fetch, for `http://` and `https://` sources. The cookie only
+  ever goes to the configured Frigate address: a watcher URL pointing anywhere else
+  (your own camera, for example) receives the user agent and nothing more.
+  Watchers without a login, and all RTSP sources, are unchanged.
+
 ## 0.1.0.353 (2026-08-26)
 
 Bundles the in-house 0.1.0.352, which was never published: the fixes below were

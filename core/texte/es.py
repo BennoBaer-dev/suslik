@@ -1109,6 +1109,8 @@ T = {
     "lernwizard.pop.label_tag": "Un día entero:",
     "lernwizard.pop.hint_tag":
         "todas las grabaciones de ese día, sean cuantas sean",
+    "lernwizard.pop.label_kameras": "solo estas cámaras",
+    "lernwizard.pop.hint_kameras": "nada seleccionado = todas las cámaras; varias con Ctrl/Cmd",
     "lernwizard.pop.wort_fps": "imágenes por segundo",
     "lernwizard.pop.hint_fps":
         "más imágenes encuentran más ángulos, pero la búsqueda tarda más",
@@ -1127,6 +1129,7 @@ T = {
     "lernwizard.k1.unbekannt.viele": "{n} visitantes desconocidos de hoy:",
     "lernwizard.k1.gestartet": "Ejecución iniciada {wann}",
     "lernwizard.k1.scope": "alcance {n} eventos",
+    "lernwizard.k1.kameras": "solo cámaras: {kameras}",
     "lernwizard.k1.tag": "día {tag}",
     "lernwizard.k1.mini_belichtung": "Comprobación de brillo",
     "lernwizard.k2.satz":

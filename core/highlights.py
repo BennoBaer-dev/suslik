@@ -12,7 +12,7 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.0.353"   # .351 = reiner STAND-Bump (Kalibrierseite Phase 1b; Box
+STAND = "0.1.0.360"   # .351 = reiner STAND-Bump (Kalibrierseite Phase 1b; Box
                       # wird beim naechsten Release MIT dem User abgestimmt).
                       # .350 = reiner STAND-Bump (Belichtungsachse; Box-Eintrag
                       # wird beim naechsten Release MIT dem User abgestimmt).
@@ -335,6 +335,37 @@ HIGHLIGHTS = (
     # derselbe Render-Knoten kann an mehrere Container gehen, Frigate im einen,
     # suslik im anderen. DE ist die Vorlage, EN daraus; ES/IT/FR
     # Opus-Muttersprachler-Agent nach begriffe_tabellen.md FINAL (FR vous).
+    # .359 — INHALT VOM USER FREIGEGEBEN (27.08. abends, "viel viel kuerzer,
+    # ein satz pro thema"): genau die zwei abgenommenen Saetze, nichts ergaenzt
+    # (Memory whatsnew-inhalt-abstimmen). Eintrag 2 ist der Anlass-Fall der
+    # Vorrang-Regel (.356) samt Distanz-Zusatz (.359) und roter Kennzeichnung.
+    # DE/EN vom User abgenommen; ES/IT/FR nach den Begriffen der Sprachdateien
+    # (recorrido/passaggio/passage, Desconocido/Sconosciuto/Inconnu).
+    ("0.1.0.359", (
+        {"de": "Im Lernlauf lassen sich jetzt eine oder mehrere Kameras "
+               "auswählen.",
+         "en": "A learning run can now be limited to one or more cameras.",
+         "es": "En la búsqueda de aprendizaje ahora se pueden elegir una o "
+               "varias cámaras.",
+         "it": "Nella ricerca di apprendimento ora si possono scegliere una o "
+               "più telecamere.",
+         "fr": "Lors d'une recherche d'apprentissage, vous pouvez désormais "
+               "choisir une ou plusieurs caméras."},
+        {"de": "Fehler behoben: die Personenerkennung konnte einem Fremden "
+               "einen bekannten Namen geben — solche Durchgänge heißen jetzt "
+               "Unbekannt.",
+         "en": "Fixed: person recognition could give a stranger a known name "
+               "— such passes now stay Unknown.",
+         "es": "Corregido: el reconocimiento de personas podía dar a un "
+               "extraño un nombre conocido; esos recorridos ahora quedan como "
+               "Desconocido.",
+         "it": "Corretto: il riconoscimento delle persone poteva dare a un "
+               "estraneo un nome conosciuto; questi passaggi ora restano "
+               "Sconosciuto.",
+         "fr": "Corrigé : la reconnaissance de personnes pouvait donner à un "
+               "inconnu un nom connu ; ces passages restent désormais "
+               "Inconnu."},
+    )),
     ("0.1.0.353", (
         {"de": "Neue Anleitung auf GitHub: wie man auf einem Proxmox-Server "
                "GPU oder CUDA in einen LXC-Container durchreicht, für suslik "

@@ -299,13 +299,27 @@ def ffmpeg_kopf(url, timeout=20):
     if not aktiv():
         return argumente
     basis = _basis_von(url)
-    if not basis:
+    if not basis or basis != frigate_basis():
+        # .354: NUR an das konfigurierte Frigate. Der VOD-Weg baut seine URL
+        # ohnehin daraus, aber der Live-Waechter nimmt eine vom NUTZER
+        # eingetragene Adresse (meist dessen eigene Kamera) — ohne diese
+        # Fessel gingen Benutzername und Passwort per Login-POST an genau
+        # den fremden Host, den jemand in seinen Waechter schreibt. Gleiche
+        # Fehlerklasse wie B1 (geloeschte Zugangsdaten an fremden Host).
         return argumente
     try:
         tok = _token_fuer(basis, timeout=timeout)
     except Exception:
         return argumente
     return argumente + ["-headers", f"Cookie: {COOKIE_NAME}={tok}\r\n"]
+
+
+def frigate_basis():
+    """scheme://host:port des KONFIGURIERTEN Frigate ('' = nicht gesetzt).
+    Eine Quelle fuer alle, die pruefen muessen, ob eine Adresse ueberhaupt
+    unser Frigate ist (ffmpeg_kopf, Live-Waechter)."""
+    u = (os.environ.get("FRIGATE_URL") or "").strip() or _store_wert("frigate_url")
+    return _basis_von(u.strip())
 
 
 def oeffnen(ziel, data=None, timeout=None, headers=None, method=None):
