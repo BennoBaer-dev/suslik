@@ -586,6 +586,24 @@ def load_config(path):
                          # Anlagen den Deckel hier heben. Kostet je Runde eine groessere
                          # Frigate-Antwort, KEINE zusaetzliche Anfrage.
                          ("sweep_limit", 200),
+                         # .354 (User-Auftrag 27.08., Anlass Feldtester Shaun):
+                         # das Dienst-Log auf die Platte. Bis .353 gab es es nur
+                         # fluechtig — 300-Zeilen-Ringpuffer hinter /log (bei ihm
+                         # 18,6 min Abdeckung, der Startblock war raus) und
+                         # `docker logs`, an das ein Nutzer ohne Shell nicht
+                         # herankommt. Jetzt zusaetzlich <data_dir>/logs/, taeglich
+                         # und bei jedem Neustart gedreht, gepackt, nach
+                         # log_behalten_tage geloescht. GEMESSEN 27.08. an
+                         # suslik-prod: ein kompletter Lauf = 73 kB, 624 Zeilen —
+                         # zwei Wochen kosten also Megabytes, nicht Gigabytes.
+                         ("log_datei", True), ("log_behalten_tage", 14), ("log_max_mb", 64),
+                         # .356: ab wie vielen urteilstauglichen Gesichtern OHNE
+                         # einen einzigen Treffer ein Durchgang als fremd gilt und
+                         # der Koerperweg ihn nicht mehr benennen darf. Gemessen am
+                         # eigenen Bestand: richtig zugeschriebene Durchgaenge hatten
+                         # 2 bis 4 solche Gesichter, der eine belegte Fehlfall 134 —
+                         # der Vorgabewert liegt bewusst weit von beiden Enden.
+                         ("fremd_ab_gesichter", 20),
                          # .32x (User 22.08. + Issue #25): der Clip-Cache war der
                          # groesste Posten im Datenordner — gemessen 22,6 GB in
                          # 1542 Clips, davon 1212 aelter als zwei Tage. Ein Clip
@@ -3342,7 +3360,12 @@ class Service:
             self.log("learning run resumes after restart (preparation from scratch)")
             self.lernlauf_vorbereiten_starten(ev, alle_modus=bool(zustand.get("alle")),
                                               nur_neue=bool(zustand.get("nur_neue")),
-                                              tag=_rtag or None)
+                                              tag=_rtag or None,
+                                              # .358: sonst nimmt die Wiederaufnahme
+                                              # STILL den ganzen Bestand statt der
+                                              # gewaehlten Kameras — ein Lauf waere
+                                              # nach einem Neustart ein anderer.
+                                              kameras=(zustand.get("kameras") or None))
         except Exception as e:
             self.log(f"learning run resume failed ({type(e).__name__}: {e})")
 
@@ -5222,6 +5245,13 @@ class Service:
                 try:
                     # M0/Falle 0: NIE __file__ — nach einer Modul-Verschiebung zeigte das ins
                     # Unterverzeichnis und execv startete das falsche Modul (kein Gate faengt das).
+                    # .360 (Datenachsen-Fund): den Logdatei-Tee VOR dem execv
+                    # abbauen, sonst schreibt der neue Prozess in die tote Pipe
+                    # des alten und das Docker-Log ist ab hier STUMM (bewiesen:
+                    # 0 von 3000 Zeilen kamen an). Stellt zugleich fd 2 aufs
+                    # Original zurueck — deckt damit auch das stderr-Sieb.
+                    if _LOGDATEI is not None:
+                        _LOGDATEI.zuruecksetzen()
                     os.execv(sys.executable, [sys.executable, VERIFYD_PFAD, *sys.argv[1:]])
                 except Exception as e:                 # re-exec scheiterte: Prozess NICHT lebend lassen,
                     self.log(f"re-exec failed ({type(e).__name__}: {e}); os._exit(0), supervisor takes over")
@@ -5553,7 +5583,7 @@ class Service:
                        ignore_errors=True)
 
     def lernlauf_vorbereiten_starten(self, anzahl, alle_modus=False, nur_neue=False,
-                                     tag=None, dateien=None):
+                                     tag=None, dateien=None, kameras=None):
         """E1.72: die Vorbereitungs-Phase ARBEITET sichtbar (User-Wunsch nach dem
         ersten 10er-Lauf: 'dann wuesste man, der arbeitet im Hintergrund') — geht die
         gewaehlten Events einzeln durch, prueft Clip-Verfuegbarkeit, zaehlt im
@@ -5573,13 +5603,14 @@ class Service:
                 return False
             t = threading.Thread(target=self._lernlauf_vorbereiten, daemon=True,
                                  name="lernlauf-prep",
-                                 args=(anzahl, alle_modus, nur_neue, tag, dateien))
+                                 args=(anzahl, alle_modus, nur_neue, tag, dateien,
+                                       kameras))
             self._lernlauf_prep_thread = t
         t.start()
         return True
 
     def _lernlauf_vorbereiten(self, anzahl, alle_modus, nur_neue=False, tag=None,
-                              dateien=None):
+                              dateien=None, kameras=None):
         from core import ereignisse as _evm
         from core import lernlauf as _ll
         dd = self.cfg["data_dir"]
@@ -5594,24 +5625,62 @@ class Service:
             if _gk:
                 self.log(f"learning run: {_gk} unreadable searched-index "
                          "line(s) — affected events may be searched again")
+            # .358: DER Vorfilter. `kameras` geht an person_events und dort als
+            # &cameras= an Frigate — die Events werden also gar nicht erst
+            # geholt, statt hinterher weggeworfen zu werden. Gilt fuer BEIDE
+            # Wege (Tages-Modus und letzte N); wer nur eine Kamera lernt, soll
+            # das auch fuer einen ganzen Tag koennen.
+            if kameras:
+                self.log(f"learning run: source limited to {len(kameras)} "
+                         f"camera(s): {', '.join(kameras)}")
             if tag:
                 # .263 Tages-Modus: das Fenster ist der lokale Kalendertag.
                 _t0 = datetime.datetime.strptime(tag, "%Y-%m-%d")
-                evs, _ = _evm.person_events(
-                    lambda p: api(self.cfg, p), None,
+                evs, _seiten = _evm.person_events(
+                    lambda p: api(self.cfg, p), None, kameras=kameras,
                     fenster=(_t0.timestamp(),
                              (_t0 + datetime.timedelta(days=1)).timestamp()))
             else:
                 hol_n = (None if alle_modus else
                          min(anzahl + len(gesehen), self.LERNLAUF_EVENTS_MAX))
-                evs, _ = _evm.person_events(lambda p: api(self.cfg, p), hol_n)
+                evs, _seiten = _evm.person_events(lambda p: api(self.cfg, p), hol_n,
+                                                  kameras=kameras)
             alt_uebersprungen = 0
             if gesehen:
                 _v = len(evs)
                 evs = [e for e in evs if str(e.get("id")) not in gesehen]
                 alt_uebersprungen = _v - len(evs)
-                if not (alle_modus or tag):
-                    evs = evs[:anzahl]
+            # .358 EHRLICHE ZAHL (Widerleger H2/M6): HIER, nach dem
+            # gesehen-Filter — davor ist `evs` noch die Rohernte der Groesse
+            # anzahl+len(gesehen), und die Pruefung haette im
+            # Fortsetzungs-Betrieb praktisch nie gegriffen. Und die URSACHE
+            # wird unterschieden: die Bloetter-Kappe (dann gibt es MEHR, wir
+            # haben nur nicht weitergeblaettert) ist etwas anderes als eine
+            # Kamera, auf der es schlicht weniger gibt. Die alte Fassung
+            # behauptete pauschal "not truncated" und log damit im ersten Fall.
+            if not alle_modus and anzahl and len(evs) < anzahl:
+                if _seiten >= _evm.MAX_SEITEN:
+                    self.log(f"learning run: stopped at the paging cap after "
+                             f"{_seiten} pages with {len(evs)} of {anzahl} "
+                             f"requested events — there may be MORE, this run "
+                             f"is truncated")
+                elif kameras:
+                    self.log(f"learning run: only {len(evs)} of {anzahl} requested "
+                             f"events exist on the selected camera(s) — the run is "
+                             f"smaller than ordered, not truncated")
+                else:
+                    self.log(f"learning run: only {len(evs)} of {anzahl} requested "
+                             f"events available — the run is smaller than ordered")
+            # .358 (QS-Fund): die Kappung gehoert NICHT in den Ehrlichkeits-Block.
+            # Ich hatte sie beim Einbau mit eingefangen, und dort stand sie unter
+            # der Bedingung len(evs) < anzahl — wo evs[:anzahl] per Definition
+            # nichts tut. Folge im Fortsetzungs-Betrieb: geholt werden
+            # anzahl+len(gesehen) Events, nach dem gesehen-Filter blieben MEHR
+            # als bestellt uebrig und wurden alle verarbeitet (nachgerechnet:
+            # bestellt 50 bei 20 schon durchsuchten -> 70 statt 50). Das traf
+            # JEDEN Lauf mit gesetztem weiter-Haken, auch ohne Kamera-Auswahl.
+            if not (alle_modus or tag):
+                evs = evs[:anzahl]
             n = len(evs)
             # Umfang EHRLICH nachziehen (Tages-Modus startet mit events=0;
             # auch ein weiter-Lauf am Historien-Ende findet weniger als anzahl).
@@ -7136,6 +7205,9 @@ class Service:
                             threading.Thread(target=_sd4_push, daemon=True).start()
                 else:
                     self._fehlerserie = 0
+            import szenarien as _szenarien   # .356: EINE Definition der
+            #                       Gesichtsguete (gesicht_gut_zaehlen) — dieselbe
+            #                       Funktion liest spaeter die Durchgangs-Regel.
             entry = {
                 # Schema 3 (W1): +frames_gelesen/+frames_soll/+frames_fehlen — Leser greifen
                 # ueber .get() zu, Schema-2-Bestandszeilen bleiben unveraendert lesbar.
@@ -7145,6 +7217,19 @@ class Service:
                 # .get("faces_geprueft", .get("faces")) — Bestandszeilen behalten faces).
                 **({"faces_geprueft": res["faces_geprueft"]}
                    if res is not None and "faces_geprueft" in res else {}),
+                # .356: wie viele der Detektionen URTEILSTAUGLICH waren
+                # (nicht Fehldetektion, frontal genug, gross genug). Die
+                # Durchgangs-Regel in szenarien.py braucht diese Zahl, um
+                # "unbekanntes Gesicht" von "gar kein Gesicht" zu trennen —
+                # ohne sie muesste die Seite beim Rendern jede results.jsonl
+                # aufmachen. Gezaehlt wird mit szenarien.gesicht_gut_zaehlen,
+                # DERSELBEN Funktion, die die Regel spaeter liest (eine
+                # Definition, kein zweites Literal). Additiv und nur
+                # vorwaerts: Bestandszeilen ohne das Feld verhalten sich
+                # unveraendert (die Regel laesst sie durch).
+                **({"gesicht_gut": _szenarien.gesicht_gut_zaehlen(
+                        res.get("detektionen"))}
+                   if res is not None and res.get("detektionen") is not None else {}),
                 "max_bw": max_bw,
                 "frames_gelesen": _fg, "frames_soll": _fs,
                 **({"frames_fehlen": True} if (res or {}).get("frames_fehlen") else {}),
@@ -9608,6 +9693,16 @@ def make_handler(svc):
                     # Frigates Aufbewahrung liegen. Ein Ordner ODER eine Liste.
                     # Der Pfad wird NICHT aus einem Dateinamen gebaut: das Modul
                     # erzeugt die Event-IDs selbst (QS-Einwand E).
+                    # .358 (User 27.08.: "praktisch nur der Vorfilter angepasst,
+                    # der entscheidet, was von Frigate geholt wird"): Ernte auf
+                    # eine Auswahl von Kameras einschraenken. Der Filter wirkt
+                    # SERVERSEITIG bei Frigate (&cameras=), die Events kommen
+                    # gar nicht erst zu uns — nichts wird nachtraeglich
+                    # weggeworfen. Alles hinter der Event-Liste bleibt
+                    # unveraendert, es gibt keinen zweiten Erkennungspfad.
+                    _kw = d.get("kameras")
+                    kameras_wahl = ([str(x).strip() for x in _kw if str(x).strip()]
+                                    if isinstance(_kw, list) else [])
                     _dw = d.get("dateien")
                     dateien_wahl = (str(_dw).strip() if isinstance(_dw, str)
                                     else ([str(x) for x in _dw] if isinstance(_dw, list) and _dw
@@ -9618,6 +9713,7 @@ def make_handler(svc):
                     zielperson = ""
                     nur_neue = False
                     tag_wahl = ""
+                    kameras_wahl = []
                     dateien_wahl = ""
                 if tag_wahl:
                     try:
@@ -9633,6 +9729,30 @@ def make_handler(svc):
                                       "msg": _sprache.t("antwort.events_bereich",
                                                         max=svc.LERNLAUF_EVENTS_MAX)},
                                       ensure_ascii=False), "application/json")
+                if kameras_wahl:
+                    # Nie ungeprueft in die Frigate-Anfrage: ein Tippfehler
+                    # laege sonst als leere Ernte vor, ohne Grund. Die Liste
+                    # kommt aus derselben Quelle wie ueberall (kein zweites
+                    # Kamera-Literal).
+                    # .358 (Widerleger H3): gegen den EIGENEN Store pruefen,
+                    # nicht live gegen Frigate. Der Live-Weg liess bei einer
+                    # Frigate-Stoerung JEDEN Wert durch — auch einen mit '&'
+                    # darin, der eigene Parameter an Frigates Anfrage haengte.
+                    # DIESELBE Menge, die das Popup anbietet (QS-Fund: der
+                    # Riegel nahm vorher auch abgewaehlte Kameras an, die die
+                    # Oberflaeche gar nicht zur Wahl stellt).
+                    # EHRLICHE GRENZE: ist der Store leer (frische Installation
+                    # ohne gespeicherte Kamera-Einstellungen), gibt es keine
+                    # Vergleichsmenge und der Riegel kann nicht beissen. Gegen
+                    # Einschleusung schuetzt dann die Kodierung in
+                    # core.ereignisse; schlimmster Fall ist eine leere Ernte.
+                    _bekannt = {k for k, v in ((cfg.get("kameras") or {}).items())
+                                if (v or {}).get("verwenden")}
+                    _fremd = [k for k in kameras_wahl if k not in _bekannt]
+                    if _bekannt and _fremd:
+                        return self._send(400, json.dumps(
+                            {"ok": False, "msg": f"unknown camera(s): {', '.join(_fremd)}"},
+                            ensure_ascii=False), "application/json")
                 if zielperson and zielperson not in master_persons(cfg):
                     return self._send(400, json.dumps(
                         {"ok": False, "msg": _sprache.t("antwort.person_unbekannt")},
@@ -9685,7 +9805,13 @@ def make_handler(svc):
                                                             **({"nur_neue": True}
                                                                if nur_neue else {}),
                                                             **({"tag": tag_wahl}
-                                                               if tag_wahl else {})))
+                                                               if tag_wahl else {}),
+                                                            # .358: Herkunft mitschreiben, sonst
+                                                            # weiss weder die Wiederaufnahme nach
+                                                            # einem Neustart noch der Nutzer
+                                                            # spaeter, woraus der Lauf bestand.
+                                                            **({"kameras": kameras_wahl}
+                                                               if kameras_wahl else {})))
                     except OSError as e:           # F2.7: voller Datentraeger u.ae. LAUT
                         svc.log(f"learning run NOT created: {e}")
                         return self._send(500, json.dumps({"ok": False,
@@ -9699,7 +9825,8 @@ def make_handler(svc):
                     svc.lernlauf_vorbereiten_starten(ev, alle_modus=bool(d.get("alle")),
                                                      nur_neue=nur_neue,
                                                      tag=tag_wahl or None,
-                                                     dateien=dateien_wahl or None)
+                                                     dateien=dateien_wahl or None,
+                                                     kameras=kameras_wahl or None)
                 return self._send(200, json.dumps({"ok": True,
                                   "msg": _sprache.t("antwort.lernlauf_angelegt")},
                                   ensure_ascii=False), "application/json")
@@ -10968,6 +11095,12 @@ def make_handler(svc):
                         _pl = "s" if s["n"] != 1 else ""
                         dauer = (f'{s["n"]} event{_pl}' if kurz
                                  else f'{int((s["ende"] - s["start"]) / 60)} min · {s["n"]} event{_pl}')
+                    # .356: VOR der Verzweigung — die Kartenzeile (kls) liest
+                    # es weiter unten auf DIESER Ebene. Stuende es nur im
+                    # else-Zweig, gaebe ein Live-Durchgang einen NameError
+                    # statt einer Karte (derselbe Fehler ist mir in dieser
+                    # Aenderung schon einmal unterlaufen).
+                    _nur_k = False
                     mitte = "".join(_chip(p, d["eid"], d["count"], d["best"],
                                           koerper=d.get("quelle") == "koerper")
                                     for p, d in sorted(s["pers"].items(), key=lambda x: -x[1]["count"]))
@@ -11010,20 +11143,29 @@ def make_handler(svc):
                         # Erkennungs-QUELLE ausweisen (User 04.08./05.08.): face /
                         # person / beides — Zuschreibung passiert in szenarien
                         # (quelle="koerper"), hier nur noch die Kennzeichnung.
+                        # .356: Namen, die der Vorrang-Riegel verworfen hat,
+                        # gehoeren NICHT mehr auf die Karte. Vorher tauchten
+                        # sie hier weiter als Hinweis auf, mit der sachlich
+                        # falschen Fussnote "below support rule" — die
+                        # Stuetzen-Regel hatte sie ja gar nicht abgelehnt.
+                        _verw = {v.get("name") for v in (s.get("koerper_verworfen") or [])}
                         _kp = sorted({t["person"] for e in s["evs"]
-                                      if (t := _kmap.get(e["eid"]))})
+                                      if (t := _kmap.get(e["eid"]))} - _verw)
                         _nur_k = s["pers"] and all(
                             d.get("quelle") == "koerper" for d in s["pers"].values())
                         if _nur_k:
+                            # .356 (User-Vorgabe): die Koerper-Zuschreibung
+                            # bekommt eine SICHTBARE Plakette in Alarmfarbe,
+                            # nicht mehr nur eine graue Fussnote. Der Text
+                            # bleibt woertlich stehen (core/highlights.py
+                            # zitiert ihn) und wandert in die Plakette.
                             # Fix vision-stimme-2: hat die Vision-Stimme die
-                            # Zuschreibung MITgetragen, weist die Quelle das
-                            # aus; reine Koerper-Zuschreibung bleibt woertlich
-                            # wie bisher (core/highlights.py zitiert den Text).
-                            mitte += ('<span class="fussnote">via person + '
+                            # Zuschreibung MITgetragen, weist die Quelle das aus.
+                            mitte += ('<span class="badge koerper">via person + '
                                       'vision, no face</span>'
                                       if any(d.get("vision_stimme")
                                              for d in s["pers"].values())
-                                      else '<span class="fussnote">via person '
+                                      else '<span class="badge koerper">via person '
                                            'recognition, no face</span>')
                         elif s["pers"] and _kp:
                             mitte += '<span class="fussnote">via face + person</span>'
@@ -11043,6 +11185,18 @@ def make_handler(svc):
                     # Personen sagt sie nichts (§1/§4).
                     _vpk = "%d" % round(s["start"])
                     _vz = _vmap.get(_vpk)
+                    # .358 (Fable-Review, alter Widerleger-Befund 8): nennt die
+                    # Vision-Stimme einen Namen, den der Vorrang-Riegel gerade
+                    # VERWORFEN hat, dann darf die Fussnote ihn nicht weiter
+                    # behaupten — sonst stuende auf einer "Unbekannt"-Karte
+                    # darunter "vision: <Name>", zwei Zeilen im Widerspruch.
+                    # Direkt aus s gelesen (nicht _verw: das lebt nur im
+                    # Nicht-Live-Zweig, die Fussnote rendert auf beiden).
+                    # Ein Urteil OHNE Namen ("no verdict") bleibt unberuehrt.
+                    _vverw = {v.get("name")
+                              for v in (s.get("koerper_verworfen") or [])}
+                    if _vz and _vz.get("person") and _vz["person"] in _vverw:
+                        _vz = None
                     if _vz:
                         # .166 (User 09.08. am Screenshot): auf der KARTE steht
                         # nur das ERGEBNIS. Der Paar-Zusatz "(A vs B)" war ein
@@ -11082,7 +11236,12 @@ def make_handler(svc):
                             f'event{"s" if cl["n"] != 1 else ""}</span>'
                             f'<div class="camdetail">{detail}</div><span class="campx">{px}{vid}</span></div>')
                     nk = len(s["kams"])
-                    kls = "sz k-" + s["kat"] + (" sz-live" if live else "")
+                    # .356: roter Balken links, wenn der Durchgang ALLEIN
+                    # ueber Koerpermerkmale zugeschrieben wurde — dieselbe
+                    # Kennzeichnung wie die Plakette, nur auf einen Blick
+                    # schon in der zusammengeklappten Zeile sichtbar.
+                    kls = ("sz k-" + s["kat"] + (" sz-live" if live else "")
+                           + (" sz-koerper" if _nur_k else ""))
                     karten.append(
                         f'<details class="{kls}"><summary>'
                         f'<div class="sz-zeit"><div class="t num">{zeit}</div><div class="d">{dauer}</div></div>'
@@ -11171,6 +11330,8 @@ def make_handler(svc):
                 # denen eine "People recognized: 3" sagt, sind redundant, sobald drei Personen
                 # dastehen. Die Restzahlen wandern in eine ruhige Randspalte.
                 pkarten = []
+                ukarten = []            # .357: Unbekannt-Kacheln in ein EIGENES Band
+
                 for p, e in sorted(pers_tag.items(), key=lambda x: -x[1]["letzt"]):
                     spanne = (f'since {_hhmm(e["erst_live"] or e["erst"])}' if e["laeuft"] else
                               (_hhmm(e["erst"]) if (e["letzt"] - e["erst"]) < 60
@@ -11305,7 +11466,13 @@ def make_handler(svc):
                     huelle_zu = '</a>'
                     _av_bild = (f'<img src="/anlern/crops/{urllib.parse.quote(str(alle_member[0]))}.jpg" '
                                 f'alt="">' if alle_member else "?")
-                    pkarten.append(
+                    # .357 (User 27.08.: "diese Seite zwischen den Recognized
+                    # und dem Past muss da rein"): Unbekannt-Kacheln stehen
+                    # NICHT mehr am Ende des Recognized-Bandes zwischen den
+                    # bekannten Personen. Die Ueberschrift dort behauptet
+                    # "Recognized", und ausgerechnet die Kachel, die
+                    # Aufmerksamkeit verdient, sah aus wie jede andere.
+                    ukarten.append(
                         f'<div class="pkwrap">'
                         f'{huelle_auf}'
                         f'<div class="pk-av pk-av-unbek">{_av_bild}</div>'
@@ -11318,14 +11485,19 @@ def make_handler(svc):
                 # verschiedene Gruende fuer eine leere Seite, und nur einer davon ist "heute war
                 # niemand da". Ohne Frigate-URL kann nie etwas kommen; ohne Referenzgesichter
                 # wird KEIN Event verarbeitet (der Wizard behauptete frueher das Gegenteil).
-                if not pkarten and not (cfg.get("frigate_url") or "").strip():
+                # .357: der Leerzustand haengt an BEIDEN Baendern — ein Tag mit
+                # ausschliesslich unbekannten Besuchern ist nicht leer.
+                _keine = not pkarten and not ukarten
+                if _keine and not (cfg.get("frigate_url") or "").strip():
                     band = webui.leer(_sprache.t("leer.frigate"),
                                       _sprache.t("leer.frigate_hinweis"))
-                elif not pkarten and not master_persons(cfg):
+                elif _keine and not master_persons(cfg):
                     band = webui.leer(_sprache.t("leer.refs"),
                                       _sprache.t("leer.refs_hinweis"))
                 elif pkarten:
                     band = f'<div class="pband">{"".join(pkarten)}</div>'
+                elif ukarten:
+                    band = ""          # nur Unbekannte: das eigene Band traegt den Tag
                 else:
                     # B9-Ganz-Satz-Umbau wie oben: zwei volle Satz-Schluessel.
                     band = webui.leer(_sprache.t("leer.band_heute") if ist_heute
@@ -11467,7 +11639,18 @@ def make_handler(svc):
                        + '</datalist>')
                 inhalt = (f'{_dl}{nav_tag}'
                           f'<div class="tagraster"><div>'
-                          f'<div class="listhead" id="recognized"><h3>Recognized</h3>'
+                          # .357 (Widerleger-Fund): an einem Tag NUR mit
+                          # Unbekannten stand hier eine Ueberschrift ohne Inhalt,
+                          # und darunter hingen Live-Plakette und Meldekanal-Hinweis
+                          # am falschen Platz. Die Seite begann mit einem toten Kopf.
+                          # ... ABER nur, wenn die Ueberschrift wirklich nichts
+                          # mehr traegt: die Live-Plakette "pass in progress"
+                          # steht INNERHALB dieses Kopfes, und die auszublenden
+                          # waere schlimmer als der leere Kopf — sie sagt, dass
+                          # noch analysiert wird und gleich mehr kommen kann.
+                          f'<div class="listhead'
+                          f'{"" if (pkarten or not ukarten or live_offen) else " leerkopf"}" '
+                          f'id="recognized"><h3>Recognized</h3>'
                           f'<span class="cnt">{len(pers_tag)} '
                           f'{"person" if len(pers_tag) == 1 else "people"}</span>'
                           # .208 (User-Fund 16.08.: Live meldete in Sekunden, der
@@ -11480,8 +11663,36 @@ def make_handler(svc):
                              'finish and show up here</span>'
                              if live_offen else '')
                           + f'</div>{band}'
-                          f'{live_reihe}'
-                          f'<div class="listhead" id="passes"><h3>Passes</h3>'
+                          # .357 (Widerleger-Fund): live_reihe ZUERST — "Recognized
+                          # live" ist ein Erkannt-Abschnitt und gehoert zu seinem
+                          # Band, nicht hinter die Unbekannten.
+                          + f'{live_reihe}'
+                          # .357: das Unbekannt-Band. Erscheint NUR, wenn etwas
+                          # drin ist — ein leerer Abschnitt an einem ruhigen Tag
+                          # stumpft ab, und dann uebersieht man ihn genau an dem
+                          # Tag, an dem er gefuellt ist.
+                          # DIE ZAHL NENNT DURCHGAENGE, NICHT BESUCHER, und das
+                          # ist bewusst: je Durchgang haengt hier genau eine
+                          # Kachel, und die laesst sich NICHT ehrlich zu
+                          # Besuchern entdoppeln. Beides ist am Echtbestand
+                          # belegt — am 24.08. zwei Kacheln derselben Kamera
+                          # 6 min auseinander (knapp ueber szenario_gap_min,
+                          # sehr wahrscheinlich EINE Person: die Zahl uebertriebe),
+                          # am 01.08. eine Kachel "Unknown 188 +1 more", die
+                          # mindestens zwei Pool-Identitaeten traegt (die Zahl
+                          # untertriebe). Sie ist also weder Ober- noch
+                          # Untergrenze fuer Personen — dann darf sie auch nicht
+                          # so heissen. Die Nebenspalte zaehlt weiter PERSONEN
+                          # und liegt deshalb auseinander, mal darueber, mal
+                          # darunter; zwei Zahlen, zwei Fragen, jede richtig
+                          # benannt.
+                          + (f'<div class="listhead" id="unknown"><h3>Unknown</h3>'
+                             f'<span class="cnt">{len(ukarten)} '
+                             f'{"pass" if len(ukarten) == 1 else "passes"} '
+                             f'with nobody recognized</span></div>'
+                             f'<div class="pband">{"".join(ukarten)}</div>'
+                             if ukarten else '')
+                          + f'<div class="listhead" id="passes"><h3>Passes</h3>'
                           f'<span class="cnt">{cnt}</span></div>'
                           f'{liste}{motiv}</div>{neben}</div>')
                 # Auto-Aktualisierung NUR am heutigen Tag: ein vergangener Tag aendert sich nicht
@@ -12041,6 +12252,24 @@ def make_handler(svc):
                                                    int(cfg.get("lernlauf_easy_events") or 300),
                                                    svc.LERNLAUF_EVENTS_MAX),
                                                max_events=svc.LERNLAUF_EVENTS_MAX,
+                                               # .358: Kameraliste fuer das
+                                               # Ernte-Filterfeld. Aus dem
+                                               # EIGENEN Store, nicht live von
+                                               # Frigate (Widerleger M4/M5):
+                                               # (a) ein Live-Aufruf haengte die
+                                               # Fluss-Seite bei einer
+                                               # Frigate-Stoerung bis zu 20 s —
+                                               # vorher fasste sie Frigate gar
+                                               # nicht an; (b) der Store traegt
+                                               # das 'verwenden'-Haekchen des
+                                               # Nutzers, Frigates Rohliste
+                                               # nicht. Eine Kamera, die er
+                                               # abgewaehlt hat, gehoert nicht
+                                               # in die Ernte-Auswahl.
+                                               kameras=sorted(
+                                                   k for k, v in
+                                                   ((cfg.get("kameras") or {}).items())
+                                                   if (v or {}).get("verwenden")),
                                                personen=master_persons(cfg),
                                                zielperson=_zp,
                                                reihenfolge=([s.get("anker_id")
@@ -13048,8 +13277,44 @@ def make_handler(svc):
                 except Exception:
                     return self._send(200, json.dumps({"phase": "idle"}), "application/json")
             if path == "/log":
+                # .354: bevorzugt aus der Logdatei, damit /log nicht mehr nur die
+                # letzten 300 Zeilen seit Dienststart zeigt (beim Feldtester waren
+                # das 18,6 min, der Startblock war da laengst herausgerollt).
+                # Der Ringpuffer bleibt der Rueckfall, wenn log_datei aus ist.
+                try:
+                    n = max(1, min(200000, int(qs.get("lines", ["5000"])[0])))
+                except Exception:
+                    n = 5000
+                from core import logdatei as _ld
+                ordner = os.path.join(cfg["data_dir"], "logs")
+                text = _ld.schwanz(os.path.join(ordner, _ld.DATEI), n)
+                if text:
+                    stuecke = _ld.dateien(ordner)
+                    kopf = (f"# suslik log — last {len(text.splitlines())} lines of "
+                            f"{_ld.DATEI}. {len(stuecke)} piece(s) on disk; "
+                            f"download all: /log/suslik-logs.tar.gz  "
+                            f"(more lines: /log?lines=20000)\n"
+                            f"# {'-' * 70}\n")
+                    return self._send(200, kopf + text, "text/plain; charset=utf-8")
                 return self._send(200, "\n".join(svc.logbuf) or "(no log lines yet since service start)",
                                   "text/plain; charset=utf-8")
+            if path == "/log/suslik-logs.tar.gz":
+                # .354: ALLE Stuecke in einem Griff — der Weg, auf dem ein Nutzer
+                # ohne Shell-Zugang uns sein Log schicken kann. Der Name steckt im
+                # Pfad, damit der Browser die Datei richtig benennt (kein
+                # Content-Disposition noetig, _send kennt keine Zusatz-Kopfzeilen).
+                import io as _io, tarfile as _tf
+                from core import logdatei as _ld
+                ordner = os.path.join(cfg["data_dir"], "logs")
+                puffer = _io.BytesIO()
+                try:
+                    with _tf.open(fileobj=puffer, mode="w:gz") as tar:
+                        for name, _g, _m in _ld.dateien(ordner):
+                            tar.add(os.path.join(ordner, name), arcname=f"logs/{name}")
+                except Exception as e:
+                    return self._send(500, f"log archive failed: {type(e).__name__}",
+                                      "text/plain; charset=utf-8")
+                return self._send(200, puffer.getvalue(), "application/gzip")
             m = re.match(r"^/video/([\w.\-]+)$", path)
             if m:            # W3 Lazy: Browser-Kopie auf Klick bauen, Spinner bis sie liegt (E8)
                 import webui
@@ -13936,6 +14201,7 @@ def _sigterm(signum, frame):
 
 
 _STDERR_SIEB = None   # gesetzt in main(); Selfcheck druckt die Summe
+_LOGDATEI = None      # .354: gesetzt in main(); Tee nach <data_dir>/logs/
 
 
 def main():
@@ -13943,6 +14209,18 @@ def main():
     # wird verworfen und gezaehlt, alles andere fliesst durch (core/stderr_sieb).
     # Kinder erben fd 2 und damit das Sieb — Worker-Job-Fenster (dup2 auf die
     # Job-Logdatei) bleiben bewusst ungefiltert.
+    # Log-Datei NOCH DAVOR (.354, User-Auftrag 27.08.): das Sieb rettet sich beim
+    # Installieren den damaligen fd 2 und schreibt spaeter dorthin — liefe es
+    # zuerst, floesse die gefilterte stderr-Ausgabe an der Logdatei vorbei.
+    # Der Ordner steht erst nach load_config fest, bis dahin puffert das Modul.
+    global _LOGDATEI
+    try:
+        from core import logdatei as _ld
+        _LOGDATEI = _ld.Logdatei().start()
+    except Exception as _e:
+        _LOGDATEI = None
+        print(f"[suslik] log file not available ({type(_e).__name__}) — "
+              f"continuing with docker logs only", flush=True)
     global _STDERR_SIEB
     from core import stderr_sieb as _ss
     _STDERR_SIEB = _ss.installieren()
@@ -13967,6 +14245,12 @@ def main():
                     help="synthetischer Hardware-Benchmark je Backend (CPU/iGPU/NPU/CUDA), dann Ende")
     a = ap.parse_args()
     cfg = load_config(a.config)
+
+    if _LOGDATEI is not None:                     # .354: Ordner nachreichen
+        if cfg.get("log_datei", True):
+            _LOGDATEI.behalten_tage = max(1, int(cfg.get("log_behalten_tage") or 14))
+            _LOGDATEI.max_bytes = max(1, int(cfg.get("log_max_mb") or 64)) * 1024 * 1024
+            _LOGDATEI.ordner_setzen(os.path.join(cfg["data_dir"], "logs"))
 
     if a.benchmark:                               # on-demand: laeuft es wirklich + wie schnell je Device?
         cache = os.path.join(cfg.get("data_dir") or "", "clips", "ov_cache")   # clips/ ist vom Backup ausgeschlossen (Cache = regenerierbar, NICHT in state/)

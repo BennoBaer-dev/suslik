@@ -139,6 +139,14 @@ function lernlaufPopupStart(btn) {
   }
   btn.disabled = true;
   var body = {fps: fps, person: person, weiter: !!(w && w.checked)};
+  /* .358 Ernte-Vorfilter: gewaehlte Kameras mitschicken. Leer = alle, dann
+     faellt das Feld ganz weg und der Lauf verhaelt sich wie bisher. */
+  var kEl = document.getElementById('lf-pop-kams');
+  if (kEl) {
+    var kams = Array.prototype.filter.call(kEl.options, function (o) { return o.selected; })
+                    .map(function (o) { return o.value; });
+    if (kams.length) body.kameras = kams;
+  }
   if (tag) body.tag = tag; else body.events = n;
   fetch('/lernlauf_start', {method: 'POST', body: JSON.stringify(body)})
     .then(function (r) { return r.json(); })

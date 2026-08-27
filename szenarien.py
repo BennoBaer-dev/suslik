@@ -205,6 +205,131 @@ def pass_key(by_h, eid, cfg, gtmap=None, now=None):
     return None
 
 
+# ---------------------------------------------------------------------------
+# Vorrang-Regel Gesicht vor Koerper (.356, User-Entscheid 27.08.2026)
+# ---------------------------------------------------------------------------
+# ANLASS: Ein Durchgang wurde mit dem Namen einer Bewohnerin beschriftet,
+# obwohl dort ein Besucher ging, den wir gar nicht hinterlegt haben. Der
+# Gesichtsweg hatte korrekt NIEMANDEN bestaetigt, aber der Koerperweg feuerte
+# mit 0.86 und sein Name wurde ohne jede Gegenprobe der Name des ganzen
+# Durchgangs. Der Koerperweg vergleicht Silhouette und Kleidung, er kennt kein
+# Geschlecht: weisses Haar plus dunkle Jacke genuegten.
+#
+# DIE REGEL: Hat der Gesichtsweg VIEL urteilstaugliches Material gesehen und
+# trotzdem niemanden bestaetigt, dann ist der Durchgang ein Fremder. Dann darf
+# der Koerperweg ihn NICHT benennen. War wenig oder gar kein brauchbares
+# Gesicht zu sehen, hatte der Gesichtsweg schlicht zu wenig in der Hand, und
+# der Koerper darf sprechen (die Karte MUSS das dann sichtbar als
+# Personenerkennung ausweisen, das ist Sache der Anzeige).
+#
+# WARUM DIE MENGE UND NICHT DER AEHNLICHKEITS-WERT: Die erste Fassung dieser
+# Regel fragte, ob das Aehnlichkeitsfeld einen klaren Spitzenreiter hat. Das
+# faellt an den echten Daten durch. Alle sieben Durchgaenge des Bestandes mit
+# Koerper-Zuschreibung, vom Betreiber selbst beurteilt:
+#
+#   richtig zugeschrieben:  Feld 0.215/0.163 (Abstand 0.052) ·   3 gute Gesichter
+#   richtig zugeschrieben:  Feld 0.465/0.199 (Abstand 0.266) ·   4 gute Gesichter
+#   richtig zugeschrieben:  Feld 0.519/0.338 (Abstand 0.181) ·   2 gute Gesichter
+#   FALSCH zugeschrieben:   Feld 0.329/0.303 (Abstand 0.026) · 134 gute Gesichter
+#
+# Im FALSCHEN Fall ist der Spitzenwert HOEHER als im richtigen; ueber das Feld
+# sind die Faelle nicht trennbar. Die Materialmenge trennt sie dagegen um
+# Faktor dreissig. Das ist auch sachlich das richtige Kriterium: 134 grosse,
+# frontale Gesichtsausschnitte ueber einen Durchgang, und keiner passt zu
+# irgendwem — das ist erdrueckend. Bei zwei bis vier fehlte dem Gesichtsweg
+# einfach das Material.
+#
+# NEBENWIRKUNG, bewusst: die Regel fragt nicht mehr nach Namen. Damit loest
+# sich der Mehr-Personen-Fall mit auf — die alte Fassung haette in einem
+# Durchgang mit zwei Personen die zweite systematisch verschluckt, weil sie das
+# ueber den Durchgang zusammengezogene Feld per Konstruktion nie anfuehren kann.
+#
+# EHRLICHE GRENZE: es gibt genau EINEN belegten Fehlfall. Wo zwischen 4 und 134
+# die Grenze liegt, ist nicht gemessen. Der Vorgabewert 20 liegt weit von
+# beiden Enden entfernt und ist als Config-Schluessel gefuehrt
+# ('fremd_ab_gesichter'), damit er am laufenden System nachgezogen werden kann.
+GESICHT_FRONT_MIN = 0.5      # ab hier gilt ein Gesicht als urteilstauglich ...
+GESICHT_BREITE_MIN = 40      # ... zusammen mit dieser Breite in Pixeln
+FREMD_AB_GESICHTER = 20      # so viele ohne Treffer, und der Durchgang ist fremd
+FREMD_NAEHE_MAX = 0.40       # kam AUCH NUR EIN Wert hierueber, ist es KEIN Fremder
+#                              (User-Zusatz 27.08. abends: "Kombination aus Anzahl
+#                              Bilder und Entfernung zum Match". Die 0.40 ist die
+#                              bestehende Projekt-Marke n_ge40 — dieselbe Naehe-
+#                              Grenze, die die Event-Auswertung ohnehin zaehlt.)
+
+
+def gesicht_gut_zaehlen(detektionen, front_min=GESICHT_FRONT_MIN,
+                        breite_min=GESICHT_BREITE_MIN):
+    """Wie viele URTEILSTAUGLICHE Gesichter stecken in einer Detektionsliste?
+    DIE eine Definition — der Dienst schreibt die Zahl damit in den
+    Urteils-Satz (Feld 'gesicht_gut'), die Durchgangs-Regel liest sie von dort.
+    Kein zweites Literal daneben (K3-Regel des QS-Ebenen-Konzepts); eine
+    Gate-Stufe prueft, dass verifyd wirklich diese Funktion leiht.
+
+    Gross allein reicht NICHT: im Anlass-Durchgang hatte eine Kamera das mit
+    Abstand groesste Gesicht (141x183 Pixel), aber front 0.02 — reines Profil
+    und damit wertlos. Frontalitaet und Groesse muessen zusammen stimmen, und
+    Fehldetektionen (Gras, Laub) zaehlen nie mit."""
+    n = 0
+    for d in (detektionen or []):
+        if d.get("fd"):
+            continue
+        if (d.get("front") or 0) >= front_min and (d.get("bw") or 0) >= breite_min:
+            n += 1
+    return n
+
+
+def fremd_urteil(evs_g, ab=FREMD_AB_GESICHTER):
+    """Ist dieser Durchgang ein FREMDER? -> (bool, grund).
+
+    Gerufen wird das nur, wenn der Gesichtsweg im ganzen Durchgang niemanden
+    bestaetigt hat. Dann entscheidet die Menge des urteilstauglichen Materials:
+    viel davon ohne einen einzigen Treffer heisst Fremder, wenig heisst, dass
+    der Gesichtsweg nichts ausrichten konnte.
+
+    Der Grund wandert in den Durchgang (Feld 'koerper_verworfen'), damit ein
+    verworfener Name spaeter erklaerbar bleibt — angezeigt wird er nicht
+    (User-Entscheid: ein verworfener Durchgang soll aussehen wie jeder andere
+    Unbekannte auch).
+
+    DISTANZ-ZUSATZ (User 27.08. abends): Menge allein reicht nicht. GEMESSEN
+    an 258 bestaetigten Durchgaengen des Bestands: der Median braucht 5 gute
+    Bilder bis zum ersten Wert ueber 0.40, aber jeder Vierte braucht mehr als
+    12 und jeder Zehnte mehr als 22 — eine ECHTE bekannte Person kann also
+    viel gutes Material liefern und trotzdem lange unter der Bestaetigung
+    bleiben. Deshalb die zweite Bedingung: ein Fremder ist nur, wer trotz
+    viel Material NIE auch nur in die Naehe eines Matches kam. Der belegte
+    Gegenfall ist der 17.08. (wirklich der Betreiber, Bestwert 0.465,
+    unbestaetigt): nach der reinen Mengen-Regel waere er bei genuegend
+    Bildern zum Fremden geworden, mit dem Zusatz nie. Der Anlassfall bleibt
+    gefangen: 134 gute Gesichter, Bestwert 0.329 — nie in der Naehe.
+
+    ALTBESTAND: Urteils-Saetze vor .356 tragen kein 'gesicht_gut'. Fuer die ist
+    die Gesichtsqualitaet unbekannt, und Unbekanntes darf nicht ploetzlich
+    Namen loeschen — solche Durchgaenge verhalten sich weiter wie bisher."""
+    bekannt = [x.get("gesicht_gut") for x in evs_g if x.get("gesicht_gut") is not None]
+    if not bekannt:
+        return False, "altbestand_ohne_gesichtsguete"
+    summe = sum(bekannt)
+    if summe < ab:
+        return False, (f"nur {summe} urteilstaugliche Gesichter — zu wenig fuer "
+                       f"ein Fremd-Urteil (Schwelle {ab})")
+    naehe = 0.0
+    for x in evs_g:
+        for r in (x.get("ours") or {}).values():
+            w = r.get("max") or 0
+            if w > naehe:
+                naehe = w
+    if naehe >= FREMD_NAEHE_MAX:
+        return False, (f"{summe} urteilstaugliche Gesichter, aber ein Wert kam "
+                       f"bis {naehe:.3f} an ein Match heran (Naehe-Grenze "
+                       f"{FREMD_NAEHE_MAX}) — kein Fremd-Urteil")
+    return True, (f"{summe} urteilstaugliche Gesichter im Durchgang, keines "
+                  f"auch nur in der Naehe eines Matches (bester Wert "
+                  f"{naehe:.3f}, Naehe-Grenze {FREMD_NAEHE_MAX}, "
+                  f"Mengen-Schwelle {ab})")
+
+
 def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kameras=None,
                         koerper_map=None, koerper_ab=2, vision_map=None):
     """rows-Sicht eines Tages -> Szenarien-Liste (neueste zuerst). by_h = last-wins je eid;
@@ -266,6 +391,9 @@ def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kamera
     szenarien = []
     for g in grp:
         pers, unbek, noface = {}, 0, 0
+        verworfen = []          # .356: vom Vorrang-Riegel abgelehnte Koerper-Namen
+                                # (hier, NICHT im Koerper-Zweig: der laeuft nur, wenn
+                                #  gar kein Gesicht bestaetigt hat — sonst NameError)
         unbek_stark = 0        # Issue #16 Automatik: unerkannte Events MIT
         # ernstzunehmendem Gesicht (fremd_verdacht bzw. User-Fremd-Label);
         # ein Pass, dessen Unbekannte alle nur schwach sind, bekommt die
@@ -394,6 +522,23 @@ def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kamera
                     eigene = {x.get("eid") for x, _ in khits[vp]}
                     if (gitter & pass_eids) - eigene:
                         stimme = vp
+            # .356 Vorrang des Gesichts: EIN Urteil je Durchgang, vor der
+            # Namensschleife. Hat der Gesichtsweg viel urteilstaugliches
+            # Material gesehen und trotzdem niemanden bestaetigt, ist der
+            # Durchgang fremd und KEIN Koerper-Name darf ihn beschriften —
+            # auch nicht der zweite in einem Mehr-Personen-Durchgang.
+            _ab = (cfg or {}).get("fremd_ab_gesichter")
+            # KEIN 'or'-Rueckfall: ein bewusst konfiguriertes 0 (Regel aus)
+            # waere sonst als falsy auf den Vorgabewert zurueckgefallen —
+            # dieselbe Bauform hat im Projekt schon einmal geaergert.
+            _fremd, _grund = fremd_urteil(
+                evs_g, int(_ab) if _ab is not None else FREMD_AB_GESICHTER)
+            if _fremd:
+                for p, hits in khits.items():
+                    if len(hits) + (1 if p == stimme else 0) >= koerper_ab:
+                        verworfen.append({"name": p, "grund": _grund,
+                                          "stuetzen": len(hits)})
+                khits = {}
             for p, hits in khits.items():
                 if len(hits) + (1 if p == stimme else 0) < koerper_ab:
                     continue
@@ -426,8 +571,21 @@ def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kamera
                 unbek_eids, unbek_eid = [], None
         kat = ("gemischt" if pers and unbek else "erkannt" if pers
                else "unbekannt" if unbek else "motion")
+        if verworfen and kat == "motion":
+            # .356 (Widerleger-Fund): Nimmt der Vorrang-Riegel den EINZIGEN
+            # Namen weg und zaehlt kein Event als 'unbekannt' (etwa weil der
+            # Nutzer die Events schon selbst beurteilt hat), faellt der
+            # Durchgang auf 'motion' — und /heute filtert 'motion' heraus.
+            # Der Durchgang waere damit spurlos verschwunden: kein Name, keine
+            # Unbekannt-Karte, gar nichts. Genau die Klasse 'stiller Verlust'.
+            # Ein Durchgang, in dem wir jemanden gesehen und bewusst NICHT
+            # benannt haben, ist ein Unbekannter, keine blosse Bewegung.
+            kat = "unbekannt"
         letzte_akt = max((x.get("start") or x.get("ts") or 0) for x in evs_g)  # Erkennungszeit, NICHT Verarbeitungs-ts: sonst faelscht ein Verarbeitungs-Lag (Neustart-Sweep/Last) beendete Durchgaenge zu "in progress"
         szenarien.append({"start": g["start"], "ende": g["ende"], "n": len(evs_g),
+                          # .356: verworfene Koerper-Namen samt Grund — ein
+                          # Name, der still verschwindet, ist nicht erklaerbar.
+                          "koerper_verworfen": verworfen,
                           "pers": pers, "unbek": unbek, "unbek_stark": unbek_stark,
                           "kat": kat, "kams": kams,
                           "unbek_eid": unbek_eid, "unbek_eids": unbek_eids,

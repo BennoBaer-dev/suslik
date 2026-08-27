@@ -131,6 +131,15 @@ These are the settings most people touch (all set via the wizard/UI; names shown
   source (`proxy` / `direct` / `url`), processing resolution (360p–2160p, default
   1080p), the two times (appearance end, re-arm), and the notification channels per
   watcher. See [live-watchers.md](live-watchers.md).
+- **Service log on disk** (`log_datei`, `log_behalten_tage`, `log_max_mb`) — suslik writes
+  everything it prints to `<data_dir>/logs/suslik.log`, so the log survives restarts and stays
+  readable without shell access to the container. The file is rotated on every service start,
+  at midnight and when it passes `log_max_mb` (default 64); older pieces are gzipped and deleted
+  after `log_behalten_tage` days (default 14). A full service run is roughly 70 kB, so two weeks
+  cost megabytes, not gigabytes. Read it at `/log` (add `?lines=20000` for more than the default
+  5000), or download every piece at once from `/log/suslik-logs.tar.gz` — that archive is the
+  file to attach when you report a problem. Set `log_datei: false` to keep the old behaviour
+  (in-memory ring buffer only).
 
 ## Environment variables
 

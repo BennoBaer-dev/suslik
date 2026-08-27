@@ -304,6 +304,39 @@ def quelle_maskiert(url):
     return _re.sub(r"//[^/]*@", "//***@", url)
 
 
+def auth_argumente(url):
+    """.354: Kennung + Cookie fuer eine http(s)-Quelle — DIE eine Stelle, die
+    alle drei ffmpeg/ffprobe-Aufrufe des Waechters benutzen (leser, masse,
+    steckbrief_ermitteln). Frigate reicht seinen Stream-Server ueber dieselbe
+    HTTPS-Tuer durch wie die Oberflaeche (Feld-Instanz 26.08.:
+    /api/go2rtc/api/stream.mp4?src=<kamera>, ohne Cookie 401).
+
+    Zwei Fesseln, beide bewusst: nur http/https (ffmpeg lehnt '-headers' an
+    RTSP ab), und das Cookie gibt frigate_auth NUR fuer die konfigurierte
+    Frigate-Adresse heraus — eine Kamera-URL im Waechter bekommt die Kennung
+    und sonst nichts. Ohne Login bleibt es bei der Kennung, also unveraendert."""
+    if not url.startswith(("http://", "https://")):
+        return []
+    try:
+        from core import frigate_auth as _fauth
+        return _fauth.ffmpeg_kopf(url)
+    except Exception as e:                          # nie den Waechter kippen
+        print(f"auth_argumente: frigate_auth fuer {quelle_maskiert(url)} nicht "
+              f"nutzbar ({type(e).__name__}) — weiter ohne Anmeldung", flush=True)
+        return []
+
+
+def probe_timeout(url):
+    """.354: Wie lange eine ffprobe-Pruefung dauern darf. RTSP im LAN
+    antwortet in Sekunden; eine http(s)-Quelle an einem entfernten Frigate
+    braucht laenger, weil ffprobe auf genug Daten wartet — GEMESSEN 26.08.
+    an einer Feld-Instanz ueber WAN: 27,6 s fuer den 4K-Hauptstream, also
+    genau an der alten 30-s-Kante, an der der Quellentest scheiterte.
+    Das Limit begrenzt nur den FEHLERFALL, ein gesunder Strom antwortet
+    frueher."""
+    return 90 if url.startswith(("http://", "https://")) else 30
+
+
 def masse(url, versuche=4):
     """Stream-Masse per ffprobe — MIT Wiederholung (11.08.): beim Start mehrerer
     Waechter gleichzeitig lieferte go2rtc transient leere Antworten, und die Wache
@@ -311,10 +344,12 @@ def masse(url, versuche=4):
     Laut + verdoppelnd wie der Reconnect; nach dem letzten Versuch ein klarer Fehler
     statt des nackten ValueError."""
     for i in range(versuche):
-        p = subprocess.run(["ffprobe", "-v", "error", "-rtsp_transport", "tcp",
+        p = subprocess.run(["ffprobe", "-v", "error"] + auth_argumente(url)
+                           + ["-rtsp_transport", "tcp",
                             "-select_streams", "v:0", "-show_entries",
                             "stream=width,height", "-of", "csv=p=0", url],
-                           capture_output=True, text=True, timeout=30)
+                           capture_output=True, text=True,
+                           timeout=probe_timeout(url))
         teile = p.stdout.strip().split(",")
         if len(teile) >= 2 and teile[0].strip().isdigit() and teile[1].strip().isdigit():
             return int(teile[0]), int(teile[1])
@@ -373,6 +408,7 @@ def leser(url, rate=1, skala=None, hw=True):
         # found") — jede Nicht-RTSP-URL der url-Quelle starb damit sofort,
         # inklusive SW-Rueckfall (Realfall CUDA-NB 13.08., Fixpunkt-Clip).
         cmd += ["-rtsp_transport", "tcp"]
+    cmd += auth_argumente(url)              # .354: Anmeldung bei http(s)-Quellen
     if hw == "vaapi":
         cmd += ["-hwaccel", "vaapi", "-hwaccel_device", RENDER_NODE,
                 "-hwaccel_output_format", "vaapi"]
@@ -1124,6 +1160,48 @@ def quelle_aufloesen(cfg, kamera, guard, streng=False, log=print):
     return None, q, f"unknown source type {q!r}"
 
 
+# --- Plausibilitaet der ffprobe-Werte (.354, User-Befund 27.08.) -------------
+# ffprobe liefert an einem Live-Strom ohne Dauer-Metadaten Unsinn, und wir haben
+# ihn ungeprueft in die WACHE-START-Zeile geschrieben. GEMESSEN am 4K-hevc-Strom
+# eines fremden go2rtc (mp4-Restream): avg_frame_rate "90000/91" = 989,01 fps
+# (das ist die Zeitbasis 1/90000 geteilt durch eine Dauer, die der Strom gar
+# nicht kennt) und bit_rate 2480186374, also 2,48 Gbit/s fuer eine Kamera. Beim
+# naechsten Aufruf stand dort ein anderer Unsinnswert — die Zahlen sind Rauschen.
+# Zum Vergleich unsere eigene Kamera ueber den RTSP-Restream: avg_frame_rate und
+# r_frame_rate beide "10/1", bit_rate gar nicht vorhanden.
+# Deshalb: beide Werte durch ein Sieb, und bei der Rate den Rueckfall auf die
+# NENNRATE r_frame_rate, die im Messfall korrekt "25/1" meldete. Ein verworfener
+# Wert wird gemeldet, nicht still geschluckt — sonst waere die Anzeige zwar
+# sauber, der komische Strom aber unsichtbar.
+FPS_MIN, FPS_MAX = 0.1, 240.0        # Kameras laufen 1-60; 240 ist Luft nach oben
+KBPS_MIN, KBPS_MAX = 1, 200_000      # 200 Mbit/s — 4K liegt real bei 3-20
+
+
+def _fps_plausibel(roh):
+    """ffprobe-Bruch ("25/1") -> fps, oder None wenn unglaubwuerdig."""
+    fr = str(roh or "")
+    if "/" not in fr:
+        return None
+    try:
+        z, n = fr.split("/")
+        n = float(n or 0)
+        if not n:
+            return None
+        fps = round(float(z) / n, 2)
+    except Exception:
+        return None
+    return fps if FPS_MIN <= fps <= FPS_MAX else None
+
+
+def _bitrate_plausibel(roh):
+    """ffprobe-bit_rate (bit/s) -> kbit/s, oder None wenn unglaubwuerdig."""
+    try:
+        kbps = round(int(roh) / 1000)
+    except Exception:
+        return None
+    return kbps if KBPS_MIN <= kbps <= KBPS_MAX else None
+
+
 def steckbrief_ermitteln(url, versuche=4, log=print):
     """Stream-Steckbrief per ffprobe: Aufloesung, echte Framerate, Codec,
     Bitrate wo ffprobe sie nennt (RTSP meist nicht — ehrliche Grenze; die
@@ -1131,29 +1209,35 @@ def steckbrief_ermitteln(url, versuche=4, log=print):
     dem Modulumbau, stand.md-Praezisierung 11.08. — die Engine erbt deren
     Steckbriefe dann nur). Retry-Muster wie masse() (transiente leere
     go2rtc-Antworten beim Mehrfach-Start, 11.08.)."""
-    cmd = ["ffprobe", "-v", "error"]
+    cmd = ["ffprobe", "-v", "error"] + auth_argumente(url)
     if url.startswith("rtsp://"):
         cmd += ["-rtsp_transport", "tcp"]
     cmd += ["-select_streams", "v:0", "-show_entries",
-            "stream=width,height,codec_name,avg_frame_rate,bit_rate",
+            "stream=width,height,codec_name,avg_frame_rate,r_frame_rate,bit_rate",
             "-of", "json", url]
     for i in range(versuche):
         try:
-            p = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            p = subprocess.run(cmd, capture_output=True, text=True,
+                               timeout=probe_timeout(url))
             d = json.loads(p.stdout or "{}")
             st = (d.get("streams") or [{}])[0]
             b, h = int(st.get("width") or 0), int(st.get("height") or 0)
             if b and h:
-                fps = None
-                fr = str(st.get("avg_frame_rate") or "")
-                if "/" in fr:
-                    z, n = fr.split("/")
-                    if float(n or 0):
-                        fps = round(float(z) / float(n), 2)
-                brate = st.get("bit_rate")
+                fps = _fps_plausibel(st.get("avg_frame_rate"))
+                if fps is None:                   # .354: Rueckfall auf die
+                    fps = _fps_plausibel(st.get("r_frame_rate"))   # Nennrate
+                    if fps is not None:
+                        log(f"steckbrief: avg_frame_rate "
+                            f"{st.get('avg_frame_rate')!r} unglaubwuerdig fuer "
+                            f"{quelle_maskiert(url)} — nehme r_frame_rate {fps}")
+                kbps = _bitrate_plausibel(st.get("bit_rate"))
+                if kbps is None and st.get("bit_rate"):
+                    log(f"steckbrief: bit_rate {st.get('bit_rate')!r} "
+                        f"unglaubwuerdig fuer {quelle_maskiert(url)} — "
+                        f"wird nicht angezeigt")
                 return {"breite": b, "hoehe": h,
                         "fps": fps, "codec": st.get("codec_name") or "",
-                        "bitrate_kbps": round(int(brate) / 1000) if brate else None}
+                        "bitrate_kbps": kbps}
         except Exception as e:
             log(f"steckbrief: {type(e).__name__} fuer {quelle_maskiert(url)} "
                 f"(Versuch {i + 1}/{versuche})")
@@ -1163,7 +1247,26 @@ def steckbrief_ermitteln(url, versuche=4, log=print):
                        f"nichts fuer {quelle_maskiert(url)}")
 
 
-def leser_mit_rueckfall(url, skala, log=print, probe_s=6.0):
+def hw_probe_frist(url):
+    """.354: Wie lange die HW-Pipe Zeit bekommt, das ERSTE Byte zu liefern.
+    Der alte Wert 6 s war geraten und zu knapp. GEMESSEN 27.08. auf der
+    schnellen Intel-Maschine, VAAPI gegen den eigenen go2rtc-Restream:
+    2,26 / 2,81 / 2,90 / 2,99 / 2,99 / 3,06 s bis zum ersten Bild — 6 s liessen
+    also nur das Doppelte Luft, und auf schwacher Hardware ist das aufgebraucht.
+    Der Waechter warf dann die GPU weg, BEVOR sie ueberhaupt geliefert hatte,
+    und dekodierte dauerhaft auf der CPU. Ueber eine Fernstrecke (fremdes
+    Frigate per http, 4K-hevc) wurde dasselbe mit 8,0 / 8,7 / 8,0 s gemessen.
+
+    Der Wert gilt fuer JEDE Quelle, weil eine laengere Frist im echten
+    Fehlerfall nichts kostet — GEMESSEN am selben Tag: bei kaputter
+    HW-Dekodierung (Geraet nicht vorhanden) beendet sich ffmpeg nach 2,47 s
+    von selbst, bei nicht erreichbarer Quelle nach 0,10 s; die Schleife bricht
+    dann ueber p.poll() sofort ab, ohne die Frist auszusitzen. Ausgesessen wird
+    sie nur von einer HW-Pipe, die STUMM haengt, und dort ist Warten richtig."""
+    return 25.0
+
+
+def leser_mit_rueckfall(url, skala, log=print, probe_s=None):
     """leser() MIT der HW-Wahl nach Verfuegbarkeit (hw_wahl) und lautem
     SW-Rueckfall (Bauplan §5 Stufe 3 — der geerbte leser() kennt keinen: eine
     gescheiterte HW-Pipe liefert dort einfach keine Bilder, stumm). Vorbild
@@ -1179,7 +1282,7 @@ def leser_mit_rueckfall(url, skala, log=print, probe_s=6.0):
         p, b, h = leser(url, rate=1, skala=skala, hw=False)
         return p, b, h, None
     p, b, h = leser(url, rate=1, skala=skala, hw=wahl)
-    frist = time.monotonic() + probe_s
+    frist = time.monotonic() + (hw_probe_frist(url) if probe_s is None else probe_s)
     while time.monotonic() < frist:
         if p.poll() is not None:
             break                                    # ffmpeg schon tot -> Rueckfall

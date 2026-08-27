@@ -227,8 +227,25 @@ nav .live .d { width: 7px; height: 7px; border-radius: 50%; background: var(--ok
    Avatar-Palette der bekannten Person — die fehlt hier, also stand das „?" weiss auf weissem
    Grund (1,00:1, im Hellmodus voellig unsichtbar). Und `.pk` erbte den gruenen linken Balken,
    der „erkannt" bedeutet, auf Karten, die genau das NICHT sind. Unbekannt ist neutral, nicht
-   gruen und nicht rot: es ist eine offene Frage, kein Vorfall. */
-.pk-unbek { border-left-color: var(--border-strong); }
+   gruen und nicht rot: es ist eine offene Frage, kein Vorfall.
+   .357 NACHGEZOGEN: die neutrale Rahmenfarbe war richtig, SOLANGE die Kacheln zwischen den
+   bekannten Personen im selben Band standen — dort waere Farbe zu laut gewesen. Seit sie ein
+   eigenes Band mit eigener Ueberschrift haben, ist das Gegenteil richtig: --warn ist die
+   dokumentierte Farbe fuer „unbekannt/offene Frage" (nicht --crit, das waere ein Vorfall),
+   dieselbe, die die Durchgangs-Liste darunter fuer genau diese Durchgaenge schon traegt
+   (.sz.k-unbekannt). Nebenbei loest das eine Altkollision: .pk-unbek und .pk-gruppe trugen
+   beide --border-strong. Kontrast gegen --surface gemessen: vorher 3,35 dunkel / 3,32 hell,
+   jetzt 7,34 / 5,91. */
+.pk-unbek { border-left-color: var(--warn); }
+.listhead.leerkopf { display: none; }
+/* .357: an einem Tag NUR mit Unbekannten hat das Recognized-Band keinen Inhalt.
+   Eine Ueberschrift ohne alles ist kein Nullwert, sie ist eine falsche Aussage —
+   sie behauptet einen Abschnitt, der nicht existiert. */
+/* .357: Unbekannt-Kacheln stehen jetzt in einem EIGENEN Band unter Recognized.
+   Der Balken traegt --warn (die dokumentierte Farbe fuer UNBEKANNT/VERDACHT,
+   kein Fehler), nicht mehr die neutrale Rahmenfarbe — im gemeinsamen Band
+   waeren sie damit zu laut gewesen, im eigenen Band sind sie genau richtig:
+   die Ueberschrift sagt schon, worum es geht, die Farbe bestaetigt es. */
 .pk-av { width: 54px; height: 54px; border-radius: 6px; display: grid; place-items: center;
          font-weight: 600; font-size: 17px; color: #fff; flex: none; overflow: hidden; }
 /* MUSS nach .pk-av stehen: gleiche Spezifitaet, also gewinnt die spaetere Regel — sonst holt
@@ -452,6 +469,16 @@ footer a { color: var(--dim); }
 .badge.ok { background: var(--ok-bg); color: var(--ok); }
 .badge.q { width: 20px; height: 20px; justify-content: center; padding: 0; border-radius: 50%;
            background: var(--warn-bg); color: var(--warn); }
+.badge.koerper { background: var(--crit-bg); color: var(--crit); }
+/* .356 (User-Vorgabe 27.08.): eine Zuschreibung ueber KOERPERMERKMALE darf nicht
+   aussehen wie eine Gesichtserkennung. Sie leiht sich bewusst die Alarmfarbe
+   --crit, obwohl sie kein Fehler ist — der Nutzer soll auf den ersten Blick
+   sehen, dass hier NICHT das Gesicht gesprochen hat, sondern Silhouette und
+   Kleidung. Anlass: ein Durchgang trug den Namen einer Bewohnerin ueber dem
+   Bild einer anderen Person, und nichts auf der Karte wies darauf hin, dass
+   das Urteil gar nicht vom Gesichtsweg kam. */
+.sz.sz-koerper::before { background: var(--crit); }
+.pass-bild.koerper img, img.koerper { outline: 3px solid var(--crit); outline-offset: -3px; }
 .badge.live { background: var(--accent-weak); color: var(--accent); }
 .badge.live .ldot { width: 7px; height: 7px; border-radius: 50%; background: currentColor;
                     animation: livedot 1.4s ease-in-out infinite; }
@@ -622,7 +649,7 @@ a.pchip:hover, a.badge.warn:hover { filter: brightness(1.15); }
 /* --- .54: F2-Badge + klickbare Kennzahlen ------------------------------------------ */
 .badge-gtfremd{color:var(--warn);font-weight:600}
 .ts-link{color:inherit;text-decoration:none;border-bottom:1px dotted var(--dim)}
-#recognized,#passes,#unidentified{scroll-margin-top:96px}  /* Sprungziele unter der klebenden Leiste freihalten (Review .54) */
+#recognized,#unknown,#passes,#unidentified{scroll-margin-top:96px}  /* Sprungziele unter der klebenden Leiste freihalten (Review .54) */
 .ts-link:hover{border-bottom-color:var(--accent)}
 /* Task #16 What's-new-Box (Startseite): gleiche Card-Familie wie .updblock —
    Surface-Card mit Akzentkante, ruhig, kein Blinken. Eingeklappt 3 Eintraege

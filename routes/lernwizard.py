@@ -559,7 +559,8 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
                benennung=None, aktuelle=None, naechste_id=None,
                easy_events=300, unbekannt_offen=0, max_events=40000,
                personen=None, zielperson="", reihenfolge=None,
-               sichtung=None, sichtung_gesamt=0, ernte_puls=None):
+               sichtung=None, sichtung_gesamt=0, ernte_puls=None,
+               kameras=None):
     """.246 (Lernfluss-Redesign, Mockup b_lernfluss, User-Abnahme 17.08.):
     EINE Fluss-Seite mit vier Kacheln (Start / Saeule / Benennen / Fertig) und
     der Zuweisungs-Flaeche ueber die ganze Zeile. zustand darf None sein
@@ -754,7 +755,21 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
         'var t=document.getElementById("lf-um-tag").checked;'
         'document.getElementById("lf-pop-n").disabled=t;'
         'document.getElementById("lf-pop-tag").disabled=!t;}</script>'
-        '<div class="lf-popz"><input id="lf-pop-fps" type="number" min="1" '
+        # .358 (User 27.08.): Ernte auf Kameras einschraenken. Der Filter geht
+        # als &cameras= an Frigate, die Events kommen also gar nicht erst —
+        # deshalb sinkt die Laufzeit proportional. Mehrfachauswahl, weil "die
+        # zwei Werkstatt-Kameras" der haeufigere Fall ist als genau eine.
+        # Leer = wie bisher, alle Kameras.
+        + (('<div class="lf-popz"><label>'
+            + t("lernwizard.pop.label_kameras")
+            + '</label> <select id="lf-pop-kams" multiple size="4" '
+              'style="min-width:14em">'
+            + "".join(f'<option value="{html.escape(k)}">{html.escape(k)}</option>'
+                      for k in (kameras or []))
+            + '</select><span class="lf-hint">'
+            + t("lernwizard.pop.hint_kameras") + '</span></div>')
+           if kameras else '')
+        + '<div class="lf-popz"><input id="lf-pop-fps" type="number" min="1" '
         'max="30" step="0.5" value="3" style="width:5em"> '
         + t("lernwizard.pop.wort_fps") +
         '<span class="lf-hint">' + t("lernwizard.pop.hint_fps")
@@ -822,7 +837,16 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
               + t("lernwizard.k1.scope", n=z.get("events", "?"))
               + (' &middot; '
                  + t("lernwizard.k1.tag", tag=html.escape(str(z["tag"])))
-                 if z.get("tag") else "") + '</div>'
+                 if z.get("tag") else "")
+              # .358 (Widerleger M7): auf welche Kameras der Lauf eingeschraenkt
+              # war. Der Lauf-Zustand traegt es laengst mit, gerendert wurde es
+              # nicht — ein Kamera-Lauf war in der Oberflaeche von einem
+              # Vollbestands-Lauf nicht zu unterscheiden. Gleiche Bauform wie
+              # der Tages-Modus zwei Zeilen darueber.
+              + (' &middot; '
+                 + t("lernwizard.k1.kameras",
+                     kameras=html.escape(", ".join(str(k) for k in z["kameras"])))
+                 if z.get("kameras") else "") + '</div>'
               + mini_reihe
               + neu_form)
 
