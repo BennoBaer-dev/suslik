@@ -46,17 +46,129 @@ def durchgaenge_bilden(events_liste, gap_min):
 
 
 # ------------------------------------------------------------------ B2: Stufe 1 je Durchgang
-def s_kandidaten_lesen(lauf_dir, eids):
-    """Anker-taugliche Zeilen (s==True) aus den Kandidaten-Dateien der Events.
-    id = Crop-Dateiname ohne .jpg (stabil, kollisionsfrei, ueberlebt Resume).
+def _bildquelle(z):
+    """-> ("crop"|"vorrat", relativer Pfad) oder (None, None).
+    Der enge Crop hat Vorrang, weil die Anzeige ihn ohne Zusatzweg kennt; das
+    Vorratsbild (Rand-Ausschnitt) ist die zweite Quelle und wird NUR genommen,
+    wenn kein Crop da ist. Beides ist im selben Lauf-Ordner hinterlegt
+    (crops/<eid>~i~n.jpg bzw. vorrat/v_<eid>_i_n.jpg, core/ernte.py:645/687)."""
+    if z.get("datei"):
+        return "crop", z["datei"]
+    if z.get("datei_v"):
+        return "vorrat", z["datei_v"]
+    return None, None
+
+
+def _fehldetektion(z):
+    """Die vorhandene Fehldetektions-Signatur (face_audit.ist_fehldetektion,
+    kalibriert an 407 handgelabelten Detektionen) — hier mit dem ZWEITEN
+    Frontalitaets-Mass der Zeile.
+
+    Warum front_kps und nicht front: die Signatur ist auf `front` (aus der
+    Posenschaetzung) kalibriert und faengt damit Radkaesten und Hecken. Ihr
+    Docstring nennt die bekannte Luecke selbst — "Hund/Stoff/Laub-Einzelfaelle
+    passieren". Genau so ein Fall trat am 28.08. auf: ein Hund landete als
+    eigene Gruppe, front 0,783 (knapp unter der Schwelle 0,85), front_kps aber
+    0,8514. Am 300er-Prod-Lauf nachgemessen kostet der Wechsel des Masses
+    1,6 % aller Zeilen (51 von 3217) und trifft im Sieb genau: beide Bilder des
+    Hundes fallen, von den 189 Bildern der groessten echten Gruppe vier.
+
+    Bewusst NUR hier, im Sieb des intelligenten Lernens. Der Urteilspfad
+    (ours/win3s/bestaetigt) bleibt unangetastet — dieselbe Grenze, die der
+    Docstring der Signatur zieht."""
+    from face_audit import ist_fehldetektion
+    f = z.get("front_kps")
+    if f is None:
+        return False
+    try:
+        return bool(ist_fehldetektion(float(f), float(z.get("sharp") or 0),
+                                      float(z.get("det") or 0)))
+    except (TypeError, ValueError):
+        return False
+
+
+def _sieb_besteht(z, sieb):
+    """Qualitaets-Sieb des intelligenten Lernens (Phase 1,
+    analysen/intelligentes_lernen.md). Alle Achsen stehen bereits in der Zeile —
+    kein Nachmessen, keine Bild-I/O, und bestehende Laeufe wirken sofort mit.
+    Die Stufe GUT kommt aus core.benennung (EINE Quelle), das Winkelfenster
+    aus der Config. Pose defensiv wie in ernte.gate_s: fehlt oder ist sie
+    unbrauchbar, faellt die Zeile — ohne Winkel ist 'schaut in die Kamera'
+    nicht entscheidbar."""
+    from core import benennung as _ben
+    # .367 (User-Fund 29.08.): ZUERST die harten Linien, dieselbe Quelle wie die
+    # Anzeige (core.benennung.harte_linie). Ohne sie baute Phase 1 Gruppen aus
+    # Material, das Phase 5 komplett verwarf — gemessen im Lauf L20260829_070157
+    # zwei Gruppen mit 27 bzw. 2 Mitgliedern, bei denen KEIN einziges Bild
+    # anzeigbar war. Der Nutzer sah Gruppen, zu denen er nichts entscheiden kann.
+    if _ben.harte_linie(z, sieb.get("norm_latte")):
+        return False
+    if not _ben.ist_gut(z, sieb.get("norm_latte")):
+        return False
+    try:
+        winkel = [float(w) for w in (z.get("pose") or [])]
+    except (TypeError, ValueError):
+        return False
+    if len(winkel) != 3:
+        return False
+    grenze = float(sieb["winkel_max"])
+    if abs(winkel[0]) > grenze or abs(winkel[1]) > grenze:
+        return False
+    return abs(winkel[2]) <= float(sieb.get("roll_max") or grenze)
+
+
+def _konsens_karte(lauf_dir):
+    """Szenario-Konsens je Vorratsbild aus <lauf_dir>/vorrat.jsonl, falls die
+    Vorrats-Bewertung schon lief. Der Konsens ist das Szenario-Prinzip als
+    Filter (core/vorrat.py, Messbasis 20.08.): echte Gesichter EINES Durchgangs
+    aehneln einander ueber die Kameras, Laub und Rauschen schliessen an
+    niemanden an. Phase 1 liest ihn hier mit, statt ihn zweimal zu rechnen.
+    Fehlt die Datei (Bewertung lief noch nicht), gilt: nicht gemessen, kein
+    Ausschluss — dieselbe Regel wie in vorrat.angebote_bewerten.
+    -> {basisname der Vorratsdatei: konsens|None}"""
+    p = os.path.join(lauf_dir, "vorrat.jsonl")
+    aus = {}
+    if not os.path.exists(p):
+        return aus
+    try:
+        with open(p, encoding="utf-8") as f:
+            for zeile in f:
+                try:
+                    z = json.loads(zeile)
+                except Exception:
+                    continue
+                d = z.get("datei_v")
+                if d:
+                    aus[os.path.basename(d)] = z.get("konsens")
+    except OSError:
+        return {}
+    return aus
+
+
+def s_kandidaten_lesen(lauf_dir, eids, sieb=None):
+    """Anker-taugliche Zeilen aus den Kandidaten-Dateien der Events.
+    id = Bild-Dateiname ohne .jpg (stabil, kollisionsfrei, ueberlebt Resume).
     .83 (Widerleger): fehlende Dateien und unlesbare Zeilen werden GEZAEHLT
     zurueckgegeben, nie still uebersprungen (269 fehlende Dateien waren unsichtbar;
     EINE abgeschnittene Zeile toetete die Phase dauerhaft — Resume lief in denselben
     Fehler). Dateiname ueber core.ernte.kandidaten_pfad: Schreiber und Leser teilen
     EINE Namensregel (_eid_safe).
-    -> (kands, fehlende_dateien, kaputte_zeilen)"""
+
+    sieb=None -> unveraendertes Verhalten: nur s-Zeilen mit Crop.
+    sieb=Dict -> Phase 1 des intelligenten Lernens: der s-Flag entfaellt (er
+    traegt eine eigene, strengere Detektionslatte, die mit Qualitaet nichts zu
+    tun hat), stattdessen zaehlt die Stufe GUT plus Winkelfenster. Und als
+    Bildquelle gilt dann AUCH das Vorratsbild: am frischen Prod-Lauf gemessen
+    haben 255 von 329 Sieb-Treffern (77 %) nur ein Vorratsbild und keinen Crop,
+    ueber den Gesamtbestand 1311 von 3396 — ohne diese zweite Quelle saehe die
+    Gruppenbildung ein Fuenftel des guten Materials.
+    -> (kands, fehlende_dateien, kaputte_zeilen, gesiebte_zeilen,
+        zeilen_ohne_person)"""
     from core import ernte as _ern
-    kands, fehlend, kaputt = [], 0, 0
+    kands, fehlend, kaputt, gesiebt = [], 0, 0, 0
+    keine_person = 0
+    konsens = _konsens_karte(lauf_dir) if sieb else {}
+    k_min = (sieb or {}).get("konsens_min")
     for eid in eids:
         pfad = _ern.kandidaten_pfad(lauf_dir, eid)
         if not os.path.exists(pfad):
@@ -72,10 +184,39 @@ def s_kandidaten_lesen(lauf_dir, eids):
                 except Exception:
                     kaputt += 1
                     continue
-                if z.get("s") and z.get("datei"):
-                    z["id"] = os.path.basename(z["datei"])[:-4]
-                    kands.append(z)
-    return kands, fehlend, kaputt
+                if sieb is None:
+                    if z.get("s") and z.get("datei"):
+                        z["id"] = os.path.basename(z["datei"])[:-4]
+                        z["bildquelle"] = "crop"
+                        kands.append(z)
+                    continue
+                quelle, rel = _bildquelle(z)
+                if quelle is None:
+                    continue        # ohne Bild kann die Gruppe nichts zeigen
+                if sieb.get("fd_wache") and _fehldetektion(z):
+                    # Eigener Topf, NICHT "gesiebt": was die Signatur trifft, ist
+                    # kein schwaches Bild einer Person, sondern eine Hecke, ein
+                    # Radkasten oder ein Tier. Der Unterschied zaehlt fuer einen
+                    # spaeteren Restelauf — und fuer den Nutzer, dem ein Hund in
+                    # SEINER Gesichtserkennung das Vertrauen kostet, egal in
+                    # welchem Topf er steht (User 28.08.).
+                    keine_person += 1
+                    continue
+                if not _sieb_besteht(z, sieb):
+                    gesiebt += 1
+                    continue
+                if k_min and quelle == "vorrat":
+                    kw = konsens.get(os.path.basename(rel))
+                    # None = nicht gemessen (Bewertung lief nicht, oder einziger
+                    # Frame im Durchgang) -> KEIN Ausschluss, wie in core/vorrat.
+                    if kw is not None and float(kw) < float(k_min):
+                        gesiebt += 1
+                        continue
+                z["id"] = os.path.basename(rel)[:-4]
+                z["bildquelle"] = quelle
+                z["datei"] = rel    # EIN Feld traegt den Pfad, bildquelle die Route
+                kands.append(z)
+    return kands, fehlend, kaputt, gesiebt, keine_person
 
 
 def zentroid(embs):
@@ -295,7 +436,14 @@ def anker_datensaetze(cluster, margen, lauf_id, schwellen, version):
                        # gelten als UNBEWERTET (sie werden nie abgewertet).
                        # Bewusst NICHT in _MITGLIED_PFLICHT: Alt-Zeilen im
                        # anker.jsonl muessen gueltig bleiben.
-                       "luma": mm.get("luma")}
+                       "luma": mm.get("luma"),
+                       # Phase 1 des intelligenten Lernens darf auch Vorratsbilder
+                       # aufnehmen (Rand-Ausschnitt statt engem Crop). Die Anzeige
+                       # holt beide ueber VERSCHIEDENE Routen (/lernlauf/crop/ bzw.
+                       # /lernlauf/vorrat/), deshalb muss das Mitglied seinen Topf
+                       # mitfuehren. Fehlt das Feld (Alt-Anker), gilt "crop" —
+                       # genau das, was diese Zeilen frueher immer waren.
+                       "bildquelle": mm.get("bildquelle") or "crop"}
                       for v in c for mm in v["mitglieder"]]
         z_ank = zentroid([v["emb"] for v in c])
         dgs = sorted({round(float(v["durchgang_start"]), 1) for v in c})
@@ -406,11 +554,94 @@ def anker_lauf_schreiben(data_dir, saetze, lauf_id):
     return len(bleib), kaputt, benannt_behalten
 
 
+def zuweisung_pruefen(saetze, refs, sim_min, marge_min, einigkeit_min):
+    """Phase 3 des intelligenten Lernens: gehoert eine fertige Gruppe zu einer
+    BEREITS BENANNTEN Person? (analysen/intelligentes_lernen.md, User-Entwurf
+    28.08.: "immer mit einer hohen Wahrscheinlichkeit, also nicht unsicher
+    sein"). Reine Funktion, kein Store-Zugriff — der Dienst reicht die
+    Referenz-Matrizen herein (anlernen.refs_matrix: Person -> (n, d)-Matrix
+    ihrer EINZELreferenzen, nicht deren Mittel).
+
+    Drei Bedingungen ZUSAMMEN, an 23 Personen und 30 Gruppen gemessen
+    (18 von 18 pruefbaren Zuweisungen richtig, 0 falsch; die 6 Faelle, in denen
+    sich das System geirrt haette, lagen bei sim 0.14-0.38, Vorsprung
+    0.002-0.045 und 33 % Einigkeit und fallen an jeder der drei Huerden):
+      sim       Zentroid der Gruppe gegen die beste Einzelreferenz der Person
+      marge     Vorsprung vor der ZWEITbesten Person — gegen Verwechslung
+      einigkeit Anteil der EINZELbilder, die dieselbe Person sehen — gegen
+                eine Gruppe, die nur im Mittel zufaellig passt
+
+    Der Zentroid wird NEU aus den Mitglieder-Embeddings gebildet, nicht aus
+    satz["zentroid"]: das ist ein Zentroid von Durchgangs-Zentroiden und
+    gewichtet kurze Durchgaenge gleich wie lange.
+    -> Liste von Vorschlaegen (dict je Gruppe, auch die abgelehnten — der
+       Aufrufer entscheidet, was er schreibt und was er nur berichtet)."""
+    aus = []
+    if not refs:
+        return aus
+    personen = sorted(refs)
+    for satz in saetze:
+        embs = [m.get("emb") for m in (satz.get("mitglieder") or []) if m.get("emb")]
+        if not embs:
+            continue
+        M = np.asarray(embs, dtype=np.float32)
+        if not np.all(np.isfinite(M)):
+            continue
+        z = M.mean(axis=0)
+        n = float(np.linalg.norm(z))
+        if n < 1e-9:
+            continue
+        z = z / n
+        je_person = {}
+        for p in personen:
+            R = np.asarray(refs[p], dtype=np.float32)
+            if R.size == 0:
+                continue
+            je_person[p] = float(np.max(R @ z))
+        if len(je_person) < 1:
+            continue
+        rang = sorted(je_person.items(), key=lambda x: -x[1])
+        erst = rang[0]
+        zweit = rang[1] if len(rang) > 1 else (None, 0.0)
+        # Einigkeit: je EINZELbild die beste Person, dann der Anteil des Siegers
+        stimmen = {}
+        for v in M:
+            nv = float(np.linalg.norm(v))
+            if nv < 1e-9:
+                continue
+            e = v / nv
+            best, bw = None, -2.0
+            for p in personen:
+                R = np.asarray(refs[p], dtype=np.float32)
+                if R.size == 0:
+                    continue
+                w = float(np.max(R @ e))
+                if w > bw:
+                    best, bw = p, w
+            if best is not None:
+                stimmen[best] = stimmen.get(best, 0) + 1
+        ges = sum(stimmen.values()) or 1
+        einig_wer = max(stimmen, key=lambda k: stimmen[k]) if stimmen else None
+        einigkeit = stimmen.get(erst[0], 0) / ges
+        marge = erst[1] - zweit[1]
+        sicher = (erst[1] >= sim_min and marge >= marge_min
+                  and einigkeit >= einigkeit_min and einig_wer == erst[0])
+        aus.append({"anker_id": satz.get("anker_id"), "person": erst[0],
+                    "sim": round(erst[1], 3), "zweiter": zweit[0],
+                    "marge": round(marge, 3), "einigkeit": round(einigkeit, 2),
+                    "bilder": int(len(M)), "sicher": bool(sicher)})
+    return aus
+
+
 def anker_phase_fahren(data_dir, lauf_dir, lauf_id, events_liste, schwellen, clusterer,
-                       version, log, fortschreiben):
+                       version, log, fortschreiben, norm_latte=None):
     """Die komplette Anker-Phase, dienst-frei (verifyd reicht Config-Schwellen,
     Clusterer und Callbacks herein). fortschreiben(**updates) -> zustand | None;
     None heisst 'Lauf wurde abgebrochen' => sofort aussteigen (Ernte-Semantik).
+    norm_latte: das {gut,min,kante,sharp}-Dict des Vorrats (Phase 1 des
+    intelligenten Lernens braucht es fuer die Stufe GUT). Bewusst KEIN Eintrag
+    in schwellen: das Dict wandert 1:1 in jede anker.jsonl-Zeile, dort gehoeren
+    nur flache Zahlen hin (dieselbe Begruendung wie fuer luma_grenzen).
     -> Ergebnis-Dict oder None bei Abbruch. Wirft NICHT (Fehler faengt der Aufrufer)."""
     t0 = time.time()
     if int(schwellen["anker_deckel"]) > int(schwellen["anker_deckel_hart"]):
@@ -422,13 +653,42 @@ def anker_phase_fahren(data_dir, lauf_dir, lauf_id, events_liste, schwellen, clu
         return None
     if fortschreiben(phase="anker", fortschritt={"status": "grouping starting"}) is None:
         return None
+    # Das Qualitaets-Sieb ist seit .364 der Standardweg, kein Schalter mehr
+    # (User-Entscheid 28.08.: "beide Schalter raus, das ist der neue Standard
+    # weg"). Es entfaellt nur, wenn ihm die Grundlage fehlt — siehe unten.
+    # Das Qualitaets-Sieb ist seit .364 der STANDARDWEG, kein Schalter
+    # (User-Entscheid 28.08.: "beide Schalter raus, das ist der neue Standard
+    # weg"). Es entfaellt an genau einer Stelle: wenn ihm die Grundlage fehlt.
+    sieb = sieb_aus_grund = None
+    if norm_latte is None:
+        # K2-Fall (Fremd-Profil vorrat_aktiv=aus): ohne Vorrat faellt der
+        # Norm-Weg der Stufe GUT aus, es bliebe die reine Pixel-Latte 112/600.
+        # Am frischen Prod-Lauf gemessen: 327 Treffer mit Norm-Weg gegen 13 ohne.
+        # Das Sieb wuerde also fast alles verwerfen und der Nutzer saehe leere
+        # Laeufe, ohne den Zusammenhang zu kennen. Deshalb NICHT sieben, sondern
+        # es sagen — sichtbar in der Bilanz, nicht nur im Log.
+        sieb_aus_grund = ("quality sieve skipped: it needs the learning stock "
+                          "(vorrat_aktiv) for its quality measure — grouping ran "
+                          "unfiltered")
+        log(f"anchor stage (run {lauf_id}): {sieb_aus_grund}")
+    else:
+        sieb = {"winkel_max": schwellen["anker_qualitaet_winkel_max"],
+                "roll_max": schwellen["anker_qualitaet_winkel_max"],
+                "norm_latte": norm_latte,
+                # Der Szenario-Konsens des Vorrats wirkt mit, wo er gemessen
+                # ist — dieselbe Schwelle, keine zweite Zahl.
+                "konsens_min": schwellen.get("vorrat_konsens_min"),
+                "fd_wache": bool(schwellen.get("anker_qualitaet_fd_wache", True))}
     dg = durchgaenge_bilden(events_liste, schwellen["szenario_gap_min"])
     alle_v, s_ges = [], 0
-    fehlend = kaputt_zeilen = degeneriert = 0
+    fehlend = kaputt_zeilen = degeneriert = gesiebt_ges = keine_person_ges = 0
     dg_mit_material = 0
     for i, d in enumerate(dg):
-        kands, dfehl, dkaputt = s_kandidaten_lesen(lauf_dir, d["eids"])
+        kands, dfehl, dkaputt, dgesiebt, dkeine = s_kandidaten_lesen(
+            lauf_dir, d["eids"], sieb=sieb)
         s_ges += len(kands)
+        gesiebt_ges += dgesiebt
+        keine_person_ges += dkeine
         fehlend += dfehl
         kaputt_zeilen += dkaputt
         if kands:
@@ -441,7 +701,9 @@ def anker_phase_fahren(data_dir, lauf_dir, lauf_id, events_liste, schwellen, clu
         if (i + 1) % 5 == 0:     # .85: 5er-Schritte — bei kleinen Laeufen feuerte der 25er nie
             if fortschreiben(fortschritt={"status": f"grouping pass {i + 1}/{len(dg)}"}) is None:
                 return None
-    if s_ges == 0 and fehlend > 0:
+    roh_ges = s_ges + gesiebt_ges + keine_person_ges          # vor dem Sieb — die Wache unten darf
+    #                                        NIE das Sieb mit fehlendem Material verwechseln
+    if roh_ges == 0 and fehlend > 0:
         # .83 (Widerleger A2): Material WEG ist ein FEHLER, kein 0-Fund — der alte Text
         # schob es auf Kameras/Zonen des Nutzers und ein Neuschreiben haette die
         # bestehenden Anker dieses Laufs geloescht. Alt-Anker bleiben unangetastet.
@@ -459,6 +721,22 @@ def anker_phase_fahren(data_dir, lauf_dir, lauf_id, events_liste, schwellen, clu
     margen = margen_bewerten(cl, zents, hart_schwelle=schwellen["anker_hart"],
                              k_min=schwellen["anker_k_min"])
     saetze = anker_datensaetze(cl, margen, lauf_id, schwellen, version)
+    duenn = 0
+    if sieb is not None:
+        # Eine Gruppe aus EINER einzigen physischen Detektion ist keine Gruppe.
+        # Anlass (Nutzer-Sichtung am 300er-Prod-Lauf, 28.08.): unter sieben
+        # Gruppen waren genau zwei falsch — ein Hund und ein sehr unscharfes
+        # Gesicht — und beide bestanden aus EINEM Fund, der durch zeitlich
+        # ueberlappende Frigate-Events doppelt gezaehlt wurde (stuetz_phys 1 bei
+        # zwei Mitgliedern). Die uebrigen fuenf hatten 4 bis 158 physische
+        # Detektionen. Der Filter kostet also nichts und nimmt beide Fehlgriffe.
+        # Wirkt NUR im gesiebten Weg: ohne Sieb bleibt alles wie bisher.
+        min_phys = int(schwellen.get("anker_qualitaet_min_phys") or 0)
+        if min_phys > 1:
+            behalten = [a for a in saetze
+                        if int((a.get("qualitaet") or {}).get("stuetz_phys") or 0) >= min_phys]
+            duenn = len(saetze) - len(behalten)
+            saetze = behalten
     # .83 (Widerleger B1): Abbruch-Check DIREKT vor dem Schreiben — vorher konnte ein
     # Abort waehrend Stufe 2 noch 74 Zeilen mit Pfaden ins frisch getrashte Material
     # persistieren und 'finished' melden.
@@ -481,15 +759,33 @@ def anker_phase_fahren(data_dir, lauf_dir, lauf_id, events_liste, schwellen, clu
         basis["unreadable candidate lines"] = kaputt_zeilen
     if degeneriert:
         basis["degenerate embeddings skipped"] = degeneriert
+    if sieb is not None:
+        # Verlust NIE still (Fehlerklasse 'stiller Verlust'): ohne diese Zeile
+        # saehe der Nutzer nur weniger Gruppen und suchte die Ursache bei den Kameras.
+        basis["quality sieve"] = f"{s_ges} of {roh_ges} kept"
+        if keine_person_ges:
+            basis["discarded (not a face)"] = keine_person_ges
+        if duenn:
+            basis["groups dropped (single detection)"] = duenn
+    elif sieb_aus_grund:
+        basis["quality sieve"] = sieb_aus_grund
     if ungeclustert:
         basis["leftover single clusters (cap)"] = ungeclustert
     if runden > 1:
         basis["stage-2 rounds (approximation)"] = runden
     if not saetze:
-        grund = ("no events in this run" if not events_liste else
-                 "no anchor-ready faces (S) in the harvest — the events carry no frontal "
-                 "faces that pass the anchor gates (det/edge/sharpness/pose); a camera or "
-                 "zone that sees faces head-on would change that")
+        if sieb is not None and roh_ges > 0 and s_ges == 0:
+            # Haeufigster Null-Fall NACH dem Umbau: nicht die Kameras, das Sieb.
+            # Der Kamera-/Zonen-Rat unten bleibt dem Fall roh_ges == 0 vorbehalten —
+            # er kostet den Nutzer sonst einen Tag Suche an der falschen Stelle.
+            grund = (f"the harvest found {roh_ges} faces, but none passed the quality "
+                     "sieve (large and sharp enough, looking at the camera) — lower "
+                     "the quality sieve in Settings, or run over more events")
+        else:
+            grund = ("no events in this run" if not events_liste else
+                     "no anchor-ready faces in the harvest — the events carry no frontal "
+                     "faces that pass the anchor gates (det/edge/sharpness/pose); a camera "
+                     "or zone that sees faces head-on would change that")
         fortschreiben(fortschritt=dict(basis, status=f"anchors: none — {grund}"))
         log(f"anchor stage finished (run {lauf_id}): 0 clusters ({grund})")
     else:

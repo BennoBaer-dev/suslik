@@ -2707,6 +2707,7 @@ def sichtung_bewerten(person, sichtung, refs, dup_sim, adoptierte,
     # daraus bildet diese Funktion selbst (GRUND_TEXT), weil Wizard-Sichtung
     # und Anker-Detailseite verschiedene Vokabulare fuehren.
     from core.benennung import belichtungs_lage as _bn_belichtung
+    from core.benennung import harte_linie as _bn_harte_linie
     eigen_refs = refs.get(person) if person else None
     if eigen_refs is not None and not len(eigen_refs):
         eigen_refs = None
@@ -2756,20 +2757,22 @@ def sichtung_bewerten(person, sichtung, refs, dup_sim, adoptierte,
         # (0/7 und 0/19), er braucht die Gruppen-Regel also nicht.
         # OHNE gemessene Struktur wird NIE gefiltert (Alt-Mitglieder, gescheiterte
         # Messung) — ein Test ohne Messgrundlage waere ein stiller Verlust.
-        _st_linie = _nl.get("struktur")
-        if (_st_linie is not None and b.get("struktur") is not None
-                and float(b["struktur"]) < float(_st_linie)):
+        # .367: die beiden harten Linien kommen aus core.benennung.harte_linie —
+        # DIESELBE Funktion, die das Sieb der Gruppenbildung fragt. Vorher standen
+        # sie nur hier, und Phase 1 baute deshalb Gruppen aus Material, das hier
+        # komplett durchfiel. Die WORTE bleiben hier: die Wizard-Sichtung und die
+        # Anker-Detailseite fuehren verschiedene Vokabulare.
+        _hart = _bn_harte_linie(b, norm_latte)
+        if _hart == "struktur":
             aus.append({"datei": datei, "stufe": "raus",
                         "grund": f"{GRUND_TEXT['keine_struktur']} "
-                                 f"(structure {b['struktur']} — needs {_st_linie}+)",
+                                 f"(structure {b['struktur']} — needs {_nl.get('struktur')}+)",
                         "blick": b.get("blick") or "frontal"})
             continue
-        _linie = _nl.get("veto")
-        if (_linie is not None and b.get("norm") is not None
-                and float(b["norm"]) <= float(_linie)):
+        if _hart == "norm":
             aus.append({"datei": datei, "stufe": "raus",
                         "grund": f"{GRUND_TEXT['unter_linie']} "
-                                 f"(face quality {b['norm']} — needs more than {_linie})",
+                                 f"(face quality {b['norm']} — needs more than {_nl.get('veto')})",
                         "blick": b.get("blick") or "frontal"})
             continue
         stufe, grund = bild_stufe(eigen, fremd, b.get("kante"), b.get("sharp"),

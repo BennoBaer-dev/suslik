@@ -9,14 +9,19 @@ tools/harnisch_sprache.py). Der Einleitungs-Absatz (sub) traegt Inline-Markup
 mitten im Satz und bleibt deshalb bewusst literal (Stufe-0-Grenze: Plaintext-
 Schluessel ohne HTML; Aufloesung kommt mit dem t_html-Weg spaeterer Stufen)."""
 import html
+import json
 
 import webui
 
 from core.sprache import t
 
 
-def render(cams, err, kam_store, rz_cfg):
-    """-> Seiten-INHALT inkl. Fehlerbanner."""
+def render(cams, err, kam_store, rz_cfg, steckbriefe=None):
+    """-> Seiten-INHALT inkl. Fehlerbanner.
+    steckbriefe (.368, User 29.08.): der Stream-Steckbrief-Cache je Kamera.
+    Der Dienst ermittelt die Aufloesung seit .368 nur noch fuer Kameras OHNE
+    Eintrag; hier steht der Stand und der Knopf, der ihn verwirft. Ohne den
+    Parameter (Alt-Aufrufer) faellt der Block ersatzlos weg."""
     fehlerbanner = (f'<div class="banner">'
                     f'{t("kameras.banner.config_fehler", fehler=html.escape(str(err)))}'
                     f'</div>' if err else "")
@@ -73,5 +78,35 @@ def render(cams, err, kam_store, rz_cfg):
                             t("kameras.leer.hinweis")))
               + (f'<p style="margin-top:1rem"><button class="gtb on" '
                  f'onclick="kamerasSpeichern(this)">{t("kameras.fuss.knopf_speichern")}</button> '
-                 '<span id="kam-status" style="color:var(--dim)"></span></p>' if cams else ""))
+                 '<span id="kam-status" style="color:var(--dim)"></span></p>' if cams else "")
+              + _steckbrief_block(cams, steckbriefe))
     return fehlerbanner + inhalt
+
+
+def _steckbrief_block(cams, steckbriefe):
+    """Stand der Stream-Angaben plus Auffrisch-Knopf (.368). Der Knopf verwirft
+    den Cache; ermittelt wird beim naechsten Dienststart, weil das Proben
+    Minuten dauern kann und nicht in einen Klick gehoert (auf einer Instanz mit
+    unerreichbaren Kameras gemessen: 15 Kameras a ~30 s Timeout)."""
+    if steckbriefe is None or not cams:
+        return ""
+    n_ok = sum(1 for k in cams if (steckbriefe.get(k) or {}).get("breite"))
+    n_fehl = sum(1 for k in cams if (steckbriefe.get(k) or {}).get("fehler"))
+    return ('<p style="margin-top:1.2rem" class="sub">'
+            + t("kameras.steckbrief.hinweis")
+            + f'<br><span class="dim num">'
+            + t("kameras.steckbrief.stand", n=n_ok, ges=len(cams), fehler=n_fehl)
+            + '</span><br><button class="gtb" id="kam-sb" '
+              'onclick="steckbriefeNeu(this)">'
+            + t("kameras.steckbrief.knopf") + '</button> '
+              '<span id="kam-sb-status" style="color:var(--dim)"></span></p>'
+              '<script>function steckbriefeNeu(b){'
+              'b.disabled=true;'
+              'document.getElementById("kam-sb-status").textContent='
+            + json.dumps(t("kameras.steckbrief.laeuft"))
+            + ';fetch("/kameras/steckbriefe_neu",{method:"POST"})'
+              '.then(function(r){return r.json()}).then(function(d){'
+              'document.getElementById("kam-sb-status").textContent='
+              'd.ok?' + json.dumps(t("kameras.steckbrief.fertig")) + ':d.msg;'
+              '}).catch(function(e){b.disabled=false;'
+              'document.getElementById("kam-sb-status").textContent=""+e;});}</script>')

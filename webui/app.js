@@ -252,7 +252,7 @@ function frigateWrite(readonly) {
    Nachhol-Lauf bricht damit ab, was hier genau der Zweck ist. */
 function startNachholAus() {
   if (!confirm(TT('js.catchup.frage', 'Skip catching up on missed events at startup from now on? The service restarts to apply this.'))) return;
-  fetch('/konfig', {method: 'POST', body: JSON.stringify({start_catchup: false})})
+  fetch('/konfig', {method: 'POST', body: JSON.stringify({start_catchup: 'off'})})
     .then(function (r) { return r.json(); })
     .then(function (d) { if (d.ok) { _neustartDann('/heute', null); } else { alert(d.msg || TT('js.status.fehler', 'error')); } })
     .catch(function () { _neustartDann('/heute', null); });
@@ -1887,3 +1887,116 @@ if (window._livePage) (function () {
   try { m = localStorage.getItem('vd-modus'); } catch (e) {}
   setzen(m === 'easy' ? 'easy' : 'expert');
 })();
+
+/* --------------------------------------------------------------- .371 Nachholen auf Knopfdruck
+   User 29.08.: "Wenn unser System startet, passiert nichts. Wenn unverarbeitete Events da sind,
+   dann bieten wir den Knopf an, die Events zu holen. Beim Druecken des Knopfes koennte eine Frage
+   sein, wie weit sollen wir zurueckgehen, wie viele Events sollen wir maximal holen."
+   Der Knopf steht im Markup jeder Seite und ist versteckt, bis /health etwas Wartendes meldet.
+   Spanne und Vorgaben kommen AUS /health (Whitelist ist die einzige Quelle), nicht von hier. */
+var _cuStand = null;
+
+function _cuAnzeigen(d) {
+  var k = document.getElementById('catchup-knopf');
+  if (!k) return;
+  var c = (d && d.start_catchup) || {}, n = c.wartet || 0;
+  _cuStand = c;
+  /* Waehrend ein Nachhol-Lauf laeuft, zeigt der Banner auf /heute den Fortschritt —
+     dann waere ein zweiter Startknopf danebengestellt eine Einladung zum Doppelstart. */
+  if (n > 0 && !c.aktiv) {
+    document.getElementById('catchup-zahl').textContent = n;
+    /* User-Vorgabe 29.08.: ist noch niemand angelernt, kann der Lauf nichts
+       ausrichten (der Sweep steigt vor der Analyse aus). Dann steht der Knopf da,
+       zeigt die wartende Zahl, ist aber ausgegraut und sagt im Tooltip, was fehlt —
+       statt den Nutzer ins Leere klicken zu lassen. */
+    var bereit = c.bereit !== false;
+    k.disabled = !bereit;
+    /* Der normale Tooltip steht serverseitig im Markup und ist dort schon
+       uebersetzt — TT() gilt vertraglich nur fuer js.*-Schluessel. Also einmal
+       merken und zurueckgeben, statt ihn hier ein zweites Mal zu uebersetzen. */
+    if (k.dataset.titel === undefined) k.dataset.titel = k.title;
+    k.title = bereit ? k.dataset.titel
+                     : TT('js.catchup.nicht_bereit',
+                          'Enroll a person first, then these can be checked.');
+    k.hidden = false;
+  } else {
+    k.hidden = true;
+  }
+}
+
+function catchupPruefen() {
+  if (!document.getElementById('catchup-knopf')) return;
+  fetch('/health', {cache: 'no-store'})
+    .then(function (r) { return r.json(); })
+    .then(_cuAnzeigen)
+    .catch(function () { /* Dienst gerade weg: der Knopf bleibt, wie er ist */ });
+}
+
+function catchupStarten() {
+  var dlg = document.getElementById('catchup-dlg'), c = _cuStand || {};
+  if (!dlg) return;
+  var g = c.grenzen || {}, v = c.vorgabe || {},
+      gh = g.stunden, gn = g.limit,
+      h = document.getElementById('cu-h'), n = document.getElementById('cu-n');
+  /* Spannen und Vorgaben kommen AUSSCHLIESSLICH aus /health, das sie aus der
+     CONFIG_WHITELIST liest. Eigene Zahlen hier waeren ein zweites Literal neben
+     der einen Quelle — fehlen sie, wird nicht geraten, sondern nachgeladen. */
+  if (!gh || !gn) { catchupPruefen(); return; }
+  h.min = gh[0]; h.max = gh[1]; h.value = v.stunden || gh[0];
+  n.min = gn[0]; n.max = gn[1]; n.value = v.limit || gn[0];
+  document.getElementById('cu-h-hint').textContent =
+    TT('js.catchup.spanne', '{von} to {bis}', {von: gh[0], bis: gh[1]});
+  document.getElementById('cu-n-hint').textContent =
+    TT('js.catchup.spanne', '{von} to {bis}', {von: gn[0], bis: gn[1]});
+  document.getElementById('catchup-satz').textContent =
+    TT('js.catchup.warten', 'Unprocessed events waiting: {n}', {n: c.wartet || 0});
+  if (dlg.showModal) { dlg.showModal(); } else { dlg.setAttribute('open', ''); }
+}
+
+function catchupSchliessen() {
+  var dlg = document.getElementById('catchup-dlg');
+  if (!dlg) return;
+  if (dlg.close) { dlg.close(); } else { dlg.removeAttribute('open'); }
+}
+
+function catchupLos() {
+  var hf = document.getElementById('cu-h'), nf = document.getElementById('cu-n'),
+      /* Leeres Feld: parseInt liefert NaN, die Rueckfrage zeigte "NaN" und der Lauf
+         nahm danach stillschweigend die Config-Werte. Ein leeres Feld heisst hier
+         "das Vorgeschlagene", also faellt es auf die Vorgabe zurueck. */
+      h = parseInt(hf.value, 10), n = parseInt(nf.value, 10),
+      knopf = document.getElementById('catchup-knopf'),
+      hk = isNaN(h) ? +hf.min : Math.max(+hf.min, Math.min(+hf.max, h)),
+      nk = isNaN(n) ? +nf.min : Math.max(+nf.min, Math.min(+nf.max, n));
+  if (isNaN(h)) h = hk;
+  if (isNaN(n)) n = nk;
+  /* Der Server klemmt an die Whitelist-Spanne. Vorher fragen statt hinterher
+     stillschweigend etwas anderes tun, als eingegeben wurde. */
+  if ((hk !== h || nk !== n) &&
+      !confirm(TT('js.catchup.geklemmt',
+                  'Only {h} h and {n} events are possible. Run it with those?',
+                  {h: hk, n: nk}))) { return; }
+  h = hk; n = nk;
+  catchupSchliessen();
+  if (knopf) knopf.hidden = true;          /* sofort weg, damit niemand zweimal drueckt */
+  fetch('/catchup_start', {method: 'POST', body: JSON.stringify({stunden: h, limit: n})})
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d.ok) { alert(d.msg || TT('js.status.fehler', 'error')); catchupPruefen(); return; }
+      /* Auf /heute zeigt der Banner den Fortschritt — dorthin, sonst sieht der
+         Nutzer von seinem Klick nichts als einen verschwundenen Knopf. */
+      if (location.pathname === '/heute' || location.pathname === '/') { location.reload(); }
+      else { location.href = '/heute'; }
+    })
+    .catch(function () { catchupPruefen(); });
+}
+
+if (document.getElementById('catchup-knopf')) {
+  catchupPruefen();
+  /* Nur fragen, wenn jemand hinsieht: ein Hintergrund-Tab braucht keinen
+     Minutentakt gegen den Dienst (Widerleger-Fund 29.08.). */
+  setInterval(function () { if (!document.hidden) catchupPruefen(); }, 60000);
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden) catchupPruefen();
+  });
+}

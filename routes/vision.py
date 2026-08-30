@@ -165,8 +165,20 @@ def _schalter(vor, aktiv, vcfg):
         rest = ""
     else:
         knopf = f'<button class="gtb" disabled>{t("vision.schalter.knopf_an")}</button>'
+        # .362 (Feld-Fund Giuseppe): uebersetzte fehlt-Zeilen statt der
+        # EN-Literale des Fach-Moduls. Drei LITERALE t()-Aufrufe (kein
+        # dynamischer Key — der Sprach-Checker ist dafuer strukturell blind
+        # und die Tote-Schluessel-Pruefung braucht die Literale; Gate-Fang
+        # beim ersten Anlauf), lazy je Code (nur gebrauchte Keys formatieren).
+        def _fehlt_text(code, params):
+            if code == "galerien":
+                return t("vision.schalter.fehlt_galerien", **params)
+            if code == "test":
+                return t("vision.schalter.fehlt_test")
+            return t("vision.schalter.fehlt_kandidaten")
         rest = (f'<div class="dim" style="margin-top:6px">{t("vision.schalter.fehlt")}<ul>'
-                + "".join(f"<li>{html.escape(f)}</li>" for f in vor["fehlt"])
+                + "".join(f'<li>{html.escape(_fehlt_text(c, p))}</li>'
+                          for c, p in vor["fehlt_codes"])
                 + "</ul></div>")
     # B9: je Zweig ein GANZER Titel-Satz statt "… is " + zustand.
     titel = (t("vision.schalter.titel_an") if aktiv

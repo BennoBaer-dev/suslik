@@ -7,6 +7,289 @@ this file — the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git
 history.
 
+## 0.1.0.374 (2026-08-30)
+
+- **A hand-edited value outside the allowed range no longer locks the whole
+  configuration page.** If a config file carried, say, 100 hours of lookback
+  where the page allows 1 to 72, every save of the page failed, because the save
+  always sends all fields and stopped at the first invalid one — the same trap
+  that once broke saving for everyone via a faulty picker. Such values are now
+  clamped to the allowed range when the program starts, with a log line saying
+  so, and the page stays usable.
+- **Rejection reasons under anchor pictures now speak your language.** They were
+  hard-coded English sentences; now they are translated like everything else, in
+  all five languages, including the tooltip in the naming view.
+- **The "check on startup" choice "ask" is not offered any more** while its
+  button is hidden. Choosing it would have meant events are held back with no
+  way to release them. Existing installations that had it set fall back to
+  processing the backlog right away.
+- **Chapter links in "Read me first" land where they should.** The jump target
+  and the chapter list no longer hide behind the sticky header, the highlighted
+  chapter follows your scrolling, and the header no longer marks Activity as
+  active while you read.
+- Small language fixes: the waiting-events line reads correctly for a single
+  event in all five languages, and French and Italian use the short hour unit.
+
+
+## 0.1.0.373 (2026-08-30)
+
+- **An adopted anchor keeps the order it had while you were naming it.** Before
+  adoption the pictures stand in sections by viewing direction, front, left and
+  right, with the ones the program does not recommend below. Afterwards the same
+  page fell back to a single flat row, so that structure was gone on exactly the
+  view that makes a group readable. Both cases now build their sections from one
+  function. Two things follow. The read-only view groups by what was really
+  adopted back then instead of by a freshly computed recommendation, so changing
+  a threshold later cannot rearrange a finished group after the fact. And
+  pictures marked "not recommended" stay visible in easy mode, where the flat row
+  had always shown them; on one group of 30 crops 18 would have disappeared. The
+  reason under each picture, which the heading promises, was missing on 23 of 24
+  adopted anchors here and is there now.
+
+
+## 0.1.0.372 (2026-08-30)
+
+- **"Read me first" no longer opens by itself.** It came up on its own after
+  every restart, and once it was open there was no way out where you look for
+  one: Escape did nothing, and the page had no close button. You now reach it
+  through the button in the header, which was there anyway, and it has a back
+  button that Escape also triggers.
+- **The catch-up button from 0.1.0.371 is hidden again**, and catch-up goes back
+  to working the events off on its own. Only the button and its dialog are out;
+  the machinery behind them stays, so setting the mode to "ask" still gives the
+  old behaviour. Taking the button away without taking the mode back would have
+  left events held with nothing to release them. 0.1.0.371 was never published,
+  so this affects in-house installations only.
+
+
+## 0.1.0.371 (2026-08-30)
+
+- **Fixed: the settings page could not save anything at all.** The allowed values
+  for the Telegram video height were held as numbers, while the page sends every
+  field as text, so the check compared "720" against 720 and refused it. A save
+  is refused as a whole at the first value the service does not accept, and the
+  page sends all of its settings in one go, so nothing could be saved there any
+  more, no matter what you had changed. The error message then broke on the same
+  mismatch, so not even a reason came back. Both are fixed. The notification
+  settings, which sit on their own tab without that field, were never affected.
+- **New page "Read me first"**, reached from a button in the header, with
+  chapters you can jump between: what the recognition hangs on, how faces get
+  taught, what is being worked on, and a personal note. In this version it also
+  opens by itself once after every restart until you close it. Five languages.
+- **Catch up on missed events on demand.** With catch-up set to "ask", events
+  that piled up while the service was down are held back instead of being worked
+  off unasked, and a button in the header offers them to you: you say how far
+  back to go and how many at most. An event leaves the held stack only after it
+  has really been through, so a run that does not reach it leaves it where it is.
+
+
+## 0.1.0.370 (2026-08-29)
+
+- **The remote support switch now shows its real state.** The check reads
+  `support_zugriff` live from the config store on every request, by design, so
+  turning it on takes effect immediately. The settings page, however, showed the
+  value the service had read at startup. After switching it on and reloading, the
+  page still said "off", which invites you to switch it on again, or worse, to
+  believe access is closed while it is open. On one machine that gap lasted twelve
+  minutes. Settings that are read live are now displayed live.
+
+
+## 0.1.0.369 (2026-08-29)
+
+- **Names with an apostrophe work in learning runs again.** Naming a group
+  "Joy O'Farrell" was rejected as invalid, and where such a name had been set, the
+  group counted as broken and its pictures disappeared from the view. The learning
+  run carried its own, stricter name pattern that allowed neither apostrophes nor
+  brackets, while the rest of the program has always allowed both, because real
+  names arrive that way from Frigate. Both now use the same definition. Reported by
+  a field tester, where it hit exactly one person out of 31: the one with the
+  apostrophe in her name. Path tricks and shell characters stay rejected as before.
+
+
+## 0.1.0.368 (2026-08-29)
+
+- **Stream details are now read once per camera, not on every restart.** The
+  service probed every camera's stream on each start, even though the answer was
+  already cached and a stream resolution hardly ever changes. Cameras it cannot
+  reach cost a full timeout each time: on one test instance that was 15 cameras
+  at roughly 30 seconds each, blocking the connections a parallel learning run
+  needed for its clips. Now it only probes cameras with no entry yet, so a camera
+  you add later is still picked up, and a failure is remembered too instead of
+  being retried forever. The camera page shows the state and has a button to
+  re-check.
+
+
+## 0.1.0.367 (2026-08-29)
+
+- **No more groups you cannot judge.** A learning run could produce a group whose
+  pictures all failed the picture check, so the page showed a group with nothing
+  in it. Cause: the sieve that builds groups did not know the two hard lines
+  (face structure, feature norm) that the display applies. On one run that made
+  two such groups, one of them 27 crops of foliage from a single camera. Both
+  now ask the same function, so those groups are never built. Measured on that
+  run: exactly the two empty groups disappear, the real ones keep their pictures
+  (the largest loses 1 of 246).
+
+
+## 0.1.0.366 (2026-08-28)
+
+- **One yardstick per list of pictures.** Three places judged the same pictures
+  by different rules, and you could see it: the overview tile picked its preview
+  by detector confidence while the panel below it judged by picture quality, so
+  a group could advertise itself with a face the panel throws out. Measured on a
+  real run, that hit all five groups. The tile now uses the same ranking as the
+  panel.
+- **Automatic naming no longer proposes pictures that failed the check.** It
+  ranked by size and sharpness only, blind to the quality line and to the
+  identity check. On one run 3 of 40 proposed pictures had failed the panel's
+  check and would have become references. The check result now goes into the
+  selection; the count of proposals stayed at 40, the three were simply replaced
+  by better ones.
+- **"Group 1 of 5" now counts.** The heading was computed from how many groups
+  you had already adopted, so it read "Group 1" above every group until you
+  adopted one.
+- **Quality line lowered from 22.0 to 21.75** (`sichtung_norm_veto`). Checked
+  against the very group the 22.0 was calibrated on: it still catches 30 of its
+  34 false detections, whose values sit far below both lines. Across the local
+  stock it lets 2.8% more pictures through.
+
+
+## 0.1.0.365 (2026-08-28)
+
+- **Fix: a learning run now takes the last N events by default, even if they
+  were searched before.** The "skip events already searched" box was ticked out
+  of the box, so every second run walked further into the past instead of
+  looking at the same recent recordings. Measured on two runs of 300 events
+  each: they shared **not a single event**, and the second one found three
+  people where the first found five. The box is still there for anyone who
+  wants to work backwards through their archive, it just is not the default
+  any more.
+- **Housekeeping: starting a run now clears out unnamed groups of earlier runs.**
+  They were not reachable any more (the page only ever shows the current run) but
+  kept piling up — on one machine 92 of 163 groups, most of a 30 MB file. Named,
+  adopted and dismissed groups stay: they feed the name suggestions, record what
+  was already learned, and remember what you dismissed.
+
+
+## 0.1.0.364 (2026-08-28)
+
+- **New: smart learning — quality before identity (off by default).** The
+  learning run used to group every face the harvest kept, which on one tester's
+  machine produced groups full of black tiles and blurred fragments. Two new
+  switches change the order: a quality sieve runs *before* the grouping, and
+  clear groups get their name by themselves.
+  - The sieve keeps only faces that pass the same "good" bar the reference
+    check uses, looking roughly at the camera. It also reads the learning
+    stock, which the grouping never saw before — measured on a 300-event run,
+    254 of 327 kept faces exist *only* there.
+  - Three guards keep rubbish out: the false-detection signature (which caught
+    a dog that had slipped through), the scenario consensus against foliage and
+    noise, and the rule that a group built from a single sighting is not a
+    group.
+  - Groups that clearly belong to someone you already named are named
+    automatically, but only when three conditions hold at once: closeness,
+    a clear lead over the second-best person, and agreement among the group's
+    own images. Measured against 23 people and 30 groups: 18 of 18 checkable
+    assignments correct, none wrong. Everything unclear still waits for you.
+  - This is now how the learning run works, there is no switch back. The
+    sieve does take material away — on a stock of 198 runs it keeps roughly a
+    third — so short runs may end up with fewer groups than before, or none.
+    The run's summary always says how many faces the sieve kept, how many were
+    discarded as not-a-face, and how many groups fell to the single-sighting
+    rule. The thresholds behind it stay adjustable in the settings.
+- Step 3 is now called "Name the people", and it tells you how many groups the
+  system named by itself.
+
+## 0.1.0.363 (2026-08-28)
+
+- **New: remote support access (read-only, off by default).** When you ask
+  for help, you can now let the supporter download exactly six named areas
+  (logs, masked config, faces, learning runs, body material, state files)
+  with a dedicated token you create and can revoke any time. Everything is
+  documented in `docs/support-access.md`: every request lands in your
+  service log, secrets are masked by field-name pattern, raw clips and
+  event history are never reachable, archives are streamed (works through
+  reverse proxies — the lesson from a failed full-backup pull today), and
+  the token never appears in logs, config downloads or backups. Built
+  against a 21-point adversarial review before the first line of code.
+- **Fixed: image links of B-runs never resolved** on the crop route (two
+  contradictory run-id patterns; now one central pattern serves both).
+
+## 0.1.0.362 (2026-08-28)
+
+- **The live-watcher self-healing from 0.1.0.361 is now complete.** Concept
+  review found three gaps in the first cut and they are closed: (1) engine
+  test results only reached the config store while the live page was open in
+  a browser — the service supervisor now picks them up itself every few
+  seconds, so a watcher really does come up on its own after a passed check,
+  browser or not; (2) pending source checks are queued automatically (one
+  per tick, two attempts per camera) — enabling several cameras in a row, or
+  enabling while the engine is still starting, no longer strands watchers;
+  a failed check switches the watcher back off with the reason on the tile,
+  no silent "on but never up" state; (3) with the engine down, the automatic
+  check no longer starts a helper process with a second model next to the
+  starting engine (the constellation behind an earlier GPU crash).
+- **New tile state "Checking source".** While the automatic check runs, the
+  tile says so instead of demanding "test required" for a test the system is
+  already running; the Enable button is now also offered on configured but
+  untested cameras (the check runs by itself).
+- **Fixed: the vision prerequisites list ignored the interface language.**
+  On an Italian page the "Still missing" items ("0 of 2 approved galleries…")
+  appeared in English (field report). The three prerequisite lines are now
+  proper language keys in all five languages, on the page and in the
+  switch-on answer.
+- **Job watchdog budget recalculated.** The 420 s emergency stop predated the
+  longer probe timeouts from 0.1.0.354 and could kill a healthy but slow
+  source test on WAN cameras; the budget is now derived from the actual
+  timeouts.
+
+## 0.1.0.361 (2026-08-28)
+
+- **Fixed: Person Learn harvested 0 body images on Frigate 0.17.x**
+  ([#27](https://github.com/BennoBaer-dev/suslik/issues/27), thanks to the
+  excellent report and trace). Frigate 0.17.2 can deliver events with
+  `has_snapshot: true` but without `data.snapshot_frame_time`; the body
+  harvest assumed the field is always present and every event died with
+  `Fehler: 'snapshot_frame_time'` — after the clip had already been fully
+  decoded, and on the live body path the clip was even decoded twice. The
+  harvest now checks this precondition up front (before any snapshot
+  download or clip decode) and records an honest per-event reason instead
+  of a KeyError. Body judgements on such installations keep working via the
+  snapshot path, and the service now logs one clear line per start when it
+  detects a Frigate without the field. We deliberately did not silently
+  substitute `start_time`: that value also calibrates the path clock, and
+  measurements showed the substitute shifts it by up to tens of seconds on
+  long events, which would silently harvest wrong training crops. A real
+  calibration fallback for 0.17 (estimating the snapshot moment from
+  `path_data`) is under evaluation with real 0.17 material.
+- **Fixed: enabling a live watcher after its source changed no longer dead-ends.**
+  A field installation had its most important watcher refused 20 times across
+  three restarts ("enable refused: source changed since last test") — six hours
+  without a watch, with no way out except knowing to press "Run source test".
+  Enabling now accepts the switch, starts the source test automatically, and
+  the watcher comes up on its own once the test passes. Also fixed a
+  fingerprint mismatch (an out-of-range processing height was normalised on
+  one side of the comparison but not the other) that could make this state
+  permanent.
+- **Fixed: one vanished cache file aborted the whole disk-watch pass.** A
+  `.part` file removed concurrently (by the body worker) raised out of the
+  cleanup loop, and size-cap eviction, live cleanup and the low-disk check
+  were skipped for that pass. The removal is now per-file safe.
+- **Fixed: three identical config saves spawned three restart threads.** The
+  restart is now idempotent; duplicates are logged and ignored.
+- **Learning runs and Person Learn are now visible in the service log.** The
+  face harvest logs progress every 25 events (or 10 minutes) with the same
+  numbers the UI shows; Person Learn logs start, end and failure. Both were
+  previously invisible in the log — a five-hour harvest left no trace.
+- **New setting `sweep_limit`** (50–2000, default 200): how many events one
+  Frigate sweep may fetch. On busy multi-camera sites the sweep hit the fixed
+  200 ceiling permanently (196 warnings in six hours on a 31-camera site) and
+  the value could not be changed from the UI.
+- **Fixed: hardware probe claimed "iGPU found" on machines without an Intel
+  iGPU.** The probe now reads the PCI vendor of the render node; an
+  NVIDIA/AMD-only machine reports that honestly instead of warning about a
+  missing OpenVINO runtime.
+
 ## 0.1.0.360 (2026-08-27)
 
 - **Fixed: after saving the setup wizard, the container log went silent.** The service restarts

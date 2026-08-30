@@ -87,7 +87,11 @@ watchers are paused during the measurement so the numbers are honest.
    processing resolution (default 1080p), set the two times (when an
    appearance ends, and the minimum seconds between alerts) and pick the
    notification channels.
-3. **Run source test** — required before enabling. It resolves the source,
+3. **Run source test** — runs by itself if it is missing or outdated when
+   you press Enable (since 0.1.0.362 the switch accepts, shows "Checking
+   source", and the watcher starts on its own once the check passes; if the
+   check fails, the switch turns back off and the tile names the reason).
+   You can still run it manually at any time. It resolves the source,
    probes the stream, pulls real frames, runs one detector pass and measures
    the camera's **true delivery rate** (frames after the initial buffer
    burst, not raw decode throughput). Results from older versions are marked
@@ -96,7 +100,8 @@ watchers are paused during the measurement so the numbers are honest.
    resolution and the test is invalidated.
 4. **Measure load** (recommended) — see above; the result stays on the tile
    as your decision basis.
-5. **Enable.** The tile turns green only once the engine confirms that frames
+5. **Enable** (works with or without a prior test — a missing or outdated
+   check runs automatically). The tile turns green only once the engine confirms that frames
    are actually flowing — never from the saved configuration alone. Nothing
    else to do: the service starts and supervises the live engine itself,
    restarts it if it dies, and tells you on the page when something is wrong.

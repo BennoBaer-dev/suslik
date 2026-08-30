@@ -53,7 +53,18 @@ ANKER_STATUS = ("unbenannt", "benannt", "uebernommen", "verworfen")
 # E4a Namens-Ebene (Widerleger-MUSS): EINZIGE Namensquelle des Projekts —
 # anlernen/verifyd ziehen bei ihrer naechsten Anfassung hierher nach, kein
 # fuenftes Streu-Regex. Normalform: trimmen + Mehrfach-Leerzeichen buendeln.
-PERSON_RE = r"^[\w \-]{2,40}$"
+# .369 (Tester-Fund 29.08., Shaun): DIESES Modul fuehrte ein EIGENES, strengeres
+# Namensmuster — ohne Apostroph und ohne Klammern. Die zentrale Fassung in
+# core.registry erlaubt beides ausdruecklich ("O'Neill", "Anna (Nachbarin)"), weil
+# echte Namen so aus dem Frigate-Import kommen. Folge des Auseinanderlaufens: eine
+# Person namens "Joy O'Farrell" liess sich im Lernlauf nicht benennen
+# (/lernlauf/benennen antwortete "name invalid"), und ein trotzdem gesetzter Name
+# machte den Anker-Satz fuer die Wache ungueltig ("status benannt aber person
+# leer/ungueltig") — die Bilder verschwanden aus der Ansicht. Betroffen war beim
+# Tester genau eine von 31 Personen, naemlich die mit dem Apostroph.
+# Jetzt EINE Quelle. Der Alias bleibt, damit bestehende Aufrufer nichts merken.
+from core.registry import PERSON_RE as _REGISTRY_PERSON_RE
+PERSON_RE = rf"^{_REGISTRY_PERSON_RE}$"
 
 
 def person_norm(s):
@@ -218,7 +229,14 @@ def benannte_zaehlen(data_dir, lauf_id):
                 except Exception:
                     continue
                 if ((d.get("lauf") or {}).get("lauf_id") == lauf_id
-                        and d.get("status") not in (None, "unbenannt")):
+                        and d.get("status") not in (None, "unbenannt")
+                        # Phase 3 des intelligenten Lernens benennt SELBST. Solche
+                        # Zeilen duerfen den E4a-Resume-/Abbruch-Schutz nicht
+                        # ausloesen — er schuetzt Nutzer-ARBEIT, und die steckt
+                        # hier nicht drin. Wer eine Auto-Benennung bestaetigt oder
+                        # korrigiert, laeuft ueber /lernlauf/benennen und setzt
+                        # art auf "nutzer" — ab da zaehlt die Zeile wieder.
+                        and (d.get("zuweisung") or {}).get("art") != "auto"):
                     n += 1
     return n
 
@@ -572,6 +590,64 @@ def anker_anhaengen(data_dir, a):
         f.flush()
         os.fsync(f.fileno())
     return p
+
+
+def alte_anker_aufraeumen(data_dir, aktueller_lauf):
+    """UNBENANNTE Gruppen aelterer Laeufe aus state/anker.jsonl entfernen
+    (User 28.08.: "alte Laeufe koennen immer weg, also beim Start der Ernte
+    aufraeumen"). Laeuft VOR einem neuen Lauf, damit die Akte nicht mit jedem
+    Lauf weiterwaechst — am eigenen Bestand gemessen: 157 Gruppen aus 31
+    Laeufen, 29,7 MB, davon 82 unbenannte aus alten Laeufen mit 2532
+    Mitglieds-Eintraegen.
+
+    NICHT angetastet werden drei Sorten, weil sie im laufenden Betrieb
+    gebraucht werden:
+      benannt      speist laufuebergreifend die Namensvorschlaege
+                   (core.benennung.personen_quelle liest genau diese Zeilen)
+      uebernommen  belegt, welche Bilder schon gelernt wurden
+      verworfen    ist das Gedaechtnis des Dismiss-Knopfes; ohne die Zeile
+                   schlaegt ein spaeterer Lauf dasselbe wieder vor
+
+    Atomar und unter store_lock wie jeder Schreibweg auf diese Datei;
+    unlesbare Zeilen werden ROH weitergefuehrt, nie vernichtet (.83).
+    -> (entfernt, behalten)"""
+    import tempfile
+    p = _pfad(data_dir, "anker.jsonl")
+    if not os.path.exists(p):
+        return 0, 0
+    with store_lock(data_dir):
+        behalten, entfernt = [], 0
+        with open(p, encoding="utf-8") as f:
+            for zeile in f:
+                roh = zeile.strip()
+                if not roh:
+                    continue
+                try:
+                    d = json.loads(roh)
+                except Exception:
+                    behalten.append(roh)      # unlesbar: roh weiterfuehren
+                    continue
+                lid = (d.get("lauf") or {}).get("lauf_id")
+                if (d.get("status") == "unbenannt" and not d.get("person")
+                        and lid and str(lid) != str(aktueller_lauf)):
+                    entfernt += 1
+                    continue
+                behalten.append(roh)
+        if not entfernt:
+            return 0, len(behalten)
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(p), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                for roh in behalten:
+                    f.write(roh + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, p)
+        except Exception:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+            raise
+    return entfernt, len(behalten)
 
 
 def anker_lesen(data_dir):

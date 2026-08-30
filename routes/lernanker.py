@@ -28,17 +28,55 @@ def _eimer_text():
             "hart": t("lernanker.eimer.hart")}
 
 
+# .373 (Widerleger-Fund, gleiche Klasse wie .224): die Rueckstufungs-Gruende
+# kamen als fertige englische Saetze aus core.benennung.empfehlen und standen
+# so auch vor einem deutschen/franzoesischen Nutzer. Seitdem liefert die
+# Rechnung eine sprachneutrale Marke {kennung, …werte} (core.benennung.
+# GRUND_WERTE = die eine Quelle der Kennungen), und ERST HIER wird uebersetzt
+# — Anzeige-Map zur Render-Zeit, genau wie _eimer_text.
+def _grund_text(g):
+    """Grund-Marke -> Satz in der aktiven Sprache. Keine Marke -> None.
+    Eine unbekannte Kennung kommt als Kennung durch (sichtbar kaputt statt
+    leise leer, core/sprache-Regel); ein bereits fertiger Text (Alt-/
+    Fremdform) wandert unveraendert weiter."""
+    if not g:
+        return None
+    if not isinstance(g, dict):
+        return str(g)
+    k = g.get("kennung")
+    return {
+        "bildpruefung": lambda: t("lernanker.grund.bildpruefung"),
+        "zu_dunkel": lambda: t("lernanker.grund.zu_dunkel",
+                               luma=g.get("luma"), min=g.get("min")),
+        "ueberbelichtet": lambda: t("lernanker.grund.ueberbelichtet",
+                                    luma=g.get("luma"), max=g.get("max")),
+        "dublette_phys": lambda: t("lernanker.grund.dublette_phys"),
+        "fast_gleich": lambda: t("lernanker.grund.fast_gleich",
+                                 datei=g.get("datei")),
+        "bin_limit": lambda: t("lernanker.grund.bin_limit", k=g.get("k")),
+    }.get(k, lambda: str(k))()
+
+
 def _badge(txt, dim=False):
     return f'<span class="pill{" dim" if dim else ""}">{html.escape(str(txt))}</span>'
 
 
-def _thumb(m, lauf_id, dim):
+def _thumb(m, lauf_id, dim, grund=None):
     """Crop-Kachel; .83: KLICKBAR — oeffnet den Clip des Events, in dem das
-    Gesicht steckt ('Gesicht in Gross UND Video'). Das Roh-Bild haengt am img selbst."""
+    Gesicht steckt ('Gesicht in Gross UND Video'). Das Roh-Bild haengt am img selbst.
+
+    .372 (Widerleger-Fund): grund optional. Die Ueberschrift der
+    Nicht-empfohlen-Sektion verspricht "Grund an jedem Bild" — im Nur-Lese-Fall
+    (uebernommener Anker) fehlte er, weil diese Kachel ihn nicht tragen konnte.
+    Eine Ueberschrift, die etwas behauptet, das darunter nicht steht, ist genau
+    die Fehlerklasse 'falsche Darstellung'. .373: grund ist ein fertiger
+    Satz — die Marke aus der Rechnung uebersetzt _grund_text VORHER."""
     name = html.escape(str(m.get("datei", "")).rsplit("/", 1)[-1])
     ev = html.escape(str(m.get("event", "")))
     bild = (f'<img src="/lernlauf/crop/{html.escape(lauf_id)}/{name}" loading="lazy" '
             f'class="anker-thumb{" gedimmt" if dim else ""}">')
+    if grund:
+        bild += f'<span class="anker-grund">{html.escape(grund)}</span>'
     # .33x DATEIQUELLE: eingespeiste Clips haben KEIN Frigate-Event — ein
     # /video/-Link liefe dort ins Leere. Kein Link ist besser als einer, der
     # 404 zeigt (Bauplan analysen/12, QS-Einwand B).
@@ -71,6 +109,103 @@ def _bin_titel():
     return {"frontal": t("lernanker.bin.frontal"),
             "links": t("lernanker.bin.links"),
             "rechts": t("lernanker.bin.rechts")}
+
+
+def _sektionen(mitglieder, bew, lauf_id, mit_auswahl, hat_persist=False):
+    """Die Bilder einer Gruppe nach Blickrichtung geordnet: erst die empfohlenen
+    je Bin (frontal/links/rechts), dann die nicht empfohlenen mit ihrem Grund.
+
+    .372 (User 30.08.): Diese Ordnung gab es bisher NUR vor der Uebernahme.
+    Danach zeigte die Seite alle Bilder flach nebeneinander — der Nutzer:
+    „bei dem anderen Bild, wenn ich die noch nicht zugewiesen habe, dann sehe
+    ich auch mehr Bilder und von Frontal- und Seitenansicht. Das ist praktisch
+    weg und das ist ja eigentlich die tolle Ansicht." Deshalb bauen jetzt BEIDE
+    Zustaende dieselbe Ansicht, und nur `mit_auswahl` entscheidet, ob Haken
+    dranhaengen. Die Regel bleibt: uebernommene Anker werden nicht rueckwaerts
+    durch den Lernlauf geaendert, ihre Pflege laeuft ueber die Qualitaetsseite.
+    """
+    sektionen = []
+    # .372 (Widerleger-Fund): Im Nur-Lese-Fall entscheidet NICHT die frisch
+    # gerechnete Empfehlung, welche Bilder oben stehen, sondern was damals
+    # WIRKLICH uebernommen wurde (m["gewaehlt"]). Sonst zeigt die Seite eine
+    # Auswahl, die es so nie gab — und nach einer Aenderung an den Latten
+    # veraendert sich rueckwirkend die Darstellung abgeschlossener Gruppen.
+    # Fehlt die Angabe (aeltere Anker ohne gewaehlt-Feld), bleibt die
+    # Empfehlung der beste verfuegbare Massstab.
+    # .373 (Widerleger-Fund, zweite Haelfte desselben Problems): teilt die
+    # AUSWAHL, dann muss auch die BESCHRIFTUNG aus ihr kommen. Vorher stand
+    # ueber der gewaehlt-Aufteilung die Ueberschrift der frisch gerechneten
+    # EMPFEHLUNG samt deren Gruenden — beides faellt im Feld regelmaessig
+    # auseinander (Smart Naming rechnet mit dem Urteil der Gruppen-Flaeche,
+    # diese Seite ohne), und dann trug ein Bild ein Urteil, das das System
+    # nie gefaellt hat: ein an der Bildpruefung ausgesondertes Bild stand
+    # unter "Nicht empfohlen … Grund an jedem Bild" mit dem Platzhalter
+    # "nicht bewertet", ein bewusst zugewaehltes unter "Empfohlen".
+    # Deshalb: `nach_auswahl` beschriftet, was es aufteilt — was gewaehlt
+    # war und was nicht, ohne Empfehlungs- oder Grund-Behauptung. Der Grund
+    # der damaligen Rueckstufung ist nirgends festgehalten; ihn frisch zu
+    # rechnen hiesse, ihn zu erfinden.
+    nach_auswahl = not mit_auswahl and any("gewaehlt" in m for m in mitglieder)
+    if nach_auswahl:
+        empf = [m for m in mitglieder if m.get("gewaehlt")]
+    else:
+        empf = [m for m in mitglieder
+                if bew.get(str(m.get("datei", "")), {}).get("empfohlen")]
+    nicht = [m for m in mitglieder if m not in empf]
+    # Der Bin ist KEIN Urteil, sondern die Blickrichtung des Bildes selbst
+    # (perspektiv_bin ueber die gespeicherte pose) — er darf frisch kommen.
+    # Ohne Eintrag gilt derselbe Default wie in der Rechnung ("frontal"),
+    # damit ein gewaehltes Bild nie zwischen den Sektionen verschwindet
+    # (Leitprinzip 3).
+    def _bin_von(m):
+        return bew.get(str(m.get("datei", "")), {}).get("bin") or "frontal"
+    for bin_key in ("frontal", "links", "rechts"):
+        ms = [m for m in empf if _bin_von(m) == bin_key]
+        if not ms:
+            continue          # leerer Bin = Normalzustand (Bauplan), keine leere Sektion
+        if mit_auswahl:
+            kacheln = "".join(_thumb_w(
+                m, lauf_id, False,
+                checked=(m.get("gewaehlt", False) if hat_persist else True)) for m in ms)
+        else:
+            kacheln = "".join(_thumb(m, lauf_id, False) for m in ms)
+        kopf = (t("lernanker.detail.gewaehlt", bin=_bin_titel()[bin_key], n=len(ms))
+                if nach_auswahl else
+                t("lernanker.detail.empfohlen", bin=_bin_titel()[bin_key], n=len(ms)))
+        sektionen.append(f'<h3>{kopf}</h3>'
+                         f'<div class="anker-reihe">{kacheln}</div>')
+    if nicht:
+        if mit_auswahl:
+            kacheln = "".join(_thumb_w(
+                m, lauf_id, True,
+                checked=bool(m.get("gewaehlt", False)) if hat_persist else False,
+                grund=_grund_text(bew.get(str(m.get("datei", "")), {}).get("grund"))
+                or t("lernanker.kachel.grund_fehlt"))
+                for m in nicht)
+        elif nach_auswahl:
+            # Kein Grund: die Aufteilung kommt aus der damaligen Auswahl, der
+            # frische Grund gehoerte zu einer anderen Rechnung. Die
+            # Ueberschrift verspricht hier deshalb auch keinen.
+            kacheln = "".join(_thumb(m, lauf_id, True) for m in nicht)
+        else:
+            kacheln = "".join(_thumb(
+                m, lauf_id, True,
+                grund=_grund_text(bew.get(str(m.get("datei", "")), {}).get("grund"))
+                or t("lernanker.kachel.grund_fehlt")) for m in nicht)
+        # .224: die Nicht-empfohlen-Sektion ist Expert-Tiefe — Easy urteilt
+        # ueber die empfohlene Auswahl (dieselben Checkboxen, gleiche Wirkung).
+        # .372 (Widerleger-Fund): Das gilt NUR beim Benennen. Im Nur-Lese-Fall
+        # gibt es nichts zu urteilen, und die Huelle wuerde einem Easy-Nutzer
+        # Bilder wegnehmen, die er vor diesem Umbau sah (die flache Reihe zeigte
+        # allen alles). Bei 30 Crops waeren 18 spurlos verschwunden — stiller
+        # Verlust, und im Grenzfall stuende die Gruppe voellig ohne Bild da.
+        huelle = 'nur-expert' if mit_auswahl else ''
+        kopf = (t("lernanker.detail.nicht_gewaehlt", n=len(nicht)) if nach_auswahl
+                else t("lernanker.detail.nicht_empfohlen", n=len(nicht)))
+        sektionen.append(f'<div class="{huelle}">'
+                         f'<h3>{kopf}</h3>'
+                         f'<div class="anker-reihe">{kacheln}</div></div>')
+    return sektionen
 
 
 def anker_detail_seite(s, kaputt=0, benennung=None, fluss=None):
@@ -154,15 +289,21 @@ def anker_detail_seite(s, kaputt=0, benennung=None, fluss=None):
     if uebernommen:
         # E4b: uebernommene Anker sind abgeschlossen — Bilder bleiben sichtbar,
         # aber keine Auswahl/Umbenennung mehr (Referenz-Hygiene laeuft ueber die
-        # Quality-Werkzeuge, nicht rueckwaerts durch den Lernlauf).
+        # Quality-Werkzeuge, nicht rueckwaerts durch den Lernlauf). Ein zweites
+        # Uebernehmen weist der Server ohnehin mit 400 ab (verifyd.py, Zweig
+        # /anker_uebernehmen), Haken hier waeren also eine Falle.
+        # .372 (User 30.08.): die ORDNUNG bleibt aber erhalten — frontal, links,
+        # rechts und die nicht empfohlenen mit ihrem Grund, genau wie vor der
+        # Uebernahme. Vorher lagen hier alle Bilder flach nebeneinander, und der
+        # Nutzer vermisste die Ansicht: „die ist ja sehr schoen und schluessig".
         # Stufe-0-Grenze: adopted-Pill traegt <b> mitten im Satz — literal.
-        thumbs = "".join(_thumb(m, lauf_id, False) for m in mitglieder)
         return (stil + kopf
                 + f'<div class="pill">adopted as <b>{html.escape(str(s.get("person")))}</b>'
                   ' — these faces feed recognition now</div>' + e_weiter
                 + f'<div class="dim nur-expert"><a href="/lernlauf/anker">{t("lernanker.link_zurueck")}</a> · '
                 + t("lernanker.detail.pflege_hinweis") + '</div>'
-                + f'<div class="anker-reihe">{thumbs}</div></div>')
+                + "".join(_sektionen(mitglieder, bew, lauf_id, mit_auswahl=False))
+                + '</div>')
     if s.get("status") == "verworfen":
         # Dismiss mit Gedaechtnis: Crops sind geloescht, die Zeile traegt nur
         # noch das Erbschafts-Gedaechtnis — Direktaufruf ehrlich beantworten.
@@ -187,31 +328,8 @@ def anker_detail_seite(s, kaputt=0, benennung=None, fluss=None):
                     f'(similarity {v["sim"]}) — {_bek}; suggestion only</div>')
     # gewaehlt-Vorbelegung: persistierte Auswahl (Reload) schlaegt die Empfehlung.
     hat_persist = any("gewaehlt" in m for m in mitglieder)
-    sektionen = []
-    empf = [m for m in mitglieder
-            if bew.get(str(m.get("datei", "")), {}).get("empfohlen")]
-    nicht = [m for m in mitglieder if m not in empf]
-    for bin_key in ("frontal", "links", "rechts"):
-        ms = [m for m in empf if bew.get(str(m.get("datei", "")), {}).get("bin") == bin_key]
-        if not ms:
-            continue          # leerer Bin = Normalzustand (Bauplan), keine leere Sektion
-        kacheln = "".join(_thumb_w(
-            m, lauf_id, False,
-            checked=(m.get("gewaehlt", False) if hat_persist else True)) for m in ms)
-        sektionen.append(f'<h3>{t("lernanker.detail.empfohlen", bin=_bin_titel()[bin_key], n=len(ms))}</h3>'
-                         f'<div class="anker-reihe">{kacheln}</div>')
-    if nicht:
-        kacheln = "".join(_thumb_w(
-            m, lauf_id, True,
-            checked=bool(m.get("gewaehlt", False)) if hat_persist else False,
-            grund=bew.get(str(m.get("datei", "")), {}).get("grund")
-            or t("lernanker.kachel.grund_fehlt"))
-            for m in nicht)
-        # .224: die Nicht-empfohlen-Sektion ist Expert-Tiefe — Easy urteilt
-        # ueber die empfohlene Auswahl (dieselben Checkboxen, gleiche Wirkung).
-        sektionen.append('<div class="nur-expert">'
-                         f'<h3>{t("lernanker.detail.nicht_empfohlen", n=len(nicht))}</h3>'
-                         f'<div class="anker-reihe">{kacheln}</div></div>')
+    sektionen = _sektionen(mitglieder, bew, lauf_id, mit_auswahl=True,
+                           hat_persist=hat_persist)
     personen = benennung.get("personen") or []
     opts = "".join(f'<option value="{html.escape(p)}">' for p in personen)
     # .224: die Easy-Antwortzeile — vorbereitete Antwort aus dem Vorschlag,

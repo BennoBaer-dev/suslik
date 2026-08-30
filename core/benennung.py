@@ -69,6 +69,67 @@ def _lattenklasse(m, norm_latte=None):
     return 2
 
 
+def harte_linie(m, norm_latte=None):
+    """DIE eine Definition der harten Ausschluss-Linien: was hier haengenbleibt,
+    ist kein verwertbares Gesicht. -> Grund-Schluessel ('struktur' | 'norm') oder
+    None. Die Zahlen kommen aus der Config, nie von hier.
+
+    Zwei Achsen, beide gemessen an der Ernte-Zeile:
+      struktur — der Ausschnitt zeigt kein Gesicht (Nacken, Ohr, Hinterkopf,
+                 Vegetation). Ersetzte den .316b-Gruppen-Konsens.
+      norm     — Feature-Norm auf oder unter der Veto-Linie: die einzige Achse,
+                 die SCRFD-Fehldetektionen mit hohem det-Score von echten
+                 Klein-Gesichtern trennt.
+    OHNE gemessenen Wert wird NIE ausgeschlossen (Alt-Anker, gescheiterte
+    Messung) — ein Urteil ohne Messgrundlage waere ein stiller Verlust.
+
+    Anlass fuer die Auslagerung (User-Fund 29.08., Lauf L20260829_070157): das
+    Sieb der Gruppenbildung kannte diese Linien nicht, die Anzeige schon. So
+    entstanden zwei Gruppen, deren Bilder ALLE durchfielen — 27 Laub-Ausschnitte
+    von einer Kamera (Struktur 0,11-0,15, Norm 14,9-21,3) und zwei
+    Carport-Ausschnitte (Struktur 0,13). Der Nutzer sah Gruppen, zu denen die
+    Oberflaeche kein einziges Bild zeigen konnte."""
+    nl = norm_latte or {}
+    st_linie = nl.get("struktur")
+    st = m.get("struktur")
+    if st_linie is not None and st is not None and float(st) < float(st_linie):
+        return "struktur"
+    veto = nl.get("veto")
+    n = m.get("norm")
+    if veto is not None and n is not None and float(n) <= float(veto):
+        return "norm"
+    return None
+
+
+def bestes_zuerst(mitglieder, norm_latte=None, luma_grenzen=None):
+    """DIE eine Reihung einer Mitglieder-/Kandidatenliste, bestes Bild zuerst.
+    Duennschale um _reihung, damit ausserhalb dieses Moduls niemand eine
+    ZWEITE Rangfolge ueber dieselbe Liste legt.
+    Anlass (User-Fund 28.08., Lauf L20260828_220718-A5): die Uebersichts-Kachel
+    des Lernlaufs sortierte ihr Vertreterbild nach dem Detektor-Score (-det),
+    die Detailflaeche darunter nach dieser Reihung. Gemessen an der Gruppe:
+    die Kachel warb mit dem Bild mit dem HOECHSTEN det (0,875), das die
+    Flaeche wegen Feature-Norm 21,94 unter dem Veto 22,0 als 'kein Gesicht
+    nach dem Qualitaetsmass' verwarf — zwei Massstaebe fuer dieselbe Gruppe,
+    sichtbar an EINEM Bild.
+    Grenze, ehrlich: die Reihung kennt die harten Ausschluss-Linien (Veto,
+    Struktur) nicht, die erst anlernen.sichtung_bewerten anlegt. Traegt eine
+    Gruppe NUR Bilder unter diesen Linien, steht auch hier eines vorn — sie
+    hat dann aber ohnehin kein gutes."""
+    return sorted(mitglieder or [],
+                  key=lambda m: _reihung(m, norm_latte, luma_grenzen))
+
+
+def ist_gut(m, norm_latte=None):
+    """DIE eine Definition der Stufe GUT — Phase 1 des intelligenten Lernens
+    fragt HIER, nie mit eigenen Zahlen (analysen/intelligentes_lernen.md).
+    Duennschale um _lattenklasse, damit die Latte an EINER Stelle steht und
+    ein Modul ausserhalb keinen privaten Namen ueber die Grenze zieht.
+    m: eine Kandidaten-Zeile (kante/sharp/norm). norm_latte wie dort — ohne
+    Dict gilt die Pixel-Latte allein, der Norm-Weg faellt dann aus."""
+    return _lattenklasse(m, norm_latte) == 0
+
+
 def belichtungs_lage(m, luma_grenzen=None):
     """DIE eine Belichtungs-Einordnung (bauplan_belichtung.md E4/E5, 26.08.) —
     beide Oberflaechen (Empfehlung hier, Wizard-Sichtung in anlernen) fragen
@@ -143,11 +204,39 @@ def perspektiv_bin(pose, yaw_grenze):
     return "frontal"
 
 
-def empfehlen(mitglieder, k_je_bin, yaw_grenze, dup_sim, luma_grenzen=None):
+# .373 (Widerleger-Fund, Fehlerklasse des .224-Funds "interne Marken roh in
+# der UI"): die Gruende der Rueckstufung standen hier als fertige ENGLISCHE
+# Saetze und erschienen so in jeder Oberflaechen-Sprache. Seitdem legt
+# empfehlen() eine sprachneutrale KENNUNG samt ihren Werten ab; uebersetzt
+# wird erst zur Render-Zeit (routes/lernanker._grund_text, Muster
+# _eimer_text). DIESE Tabelle ist die EINE Quelle der Kennungen
+# (QS-Ebenen-Regel K3, "nie ein weiteres verstreutes Literal"):
+# Kennung -> die Werte, die ihr Text einsetzt. Das Gate haelt Anzeige-Map
+# und core/texte/*.py gegen sie.
+GRUND_WERTE = {
+    "bildpruefung":   (),                 # Urteil der Gruppen-Flaeche: 'raus'
+    "zu_dunkel":      ("luma", "min"),
+    "ueberbelichtet": ("luma", "max"),
+    "dublette_phys":  (),                 # gleiche Kamera + gleiche Box
+    "fast_gleich":    ("datei",),         # Embedding-Nachbar eines Empfohlenen
+    "bin_limit":      ("k",),             # Bin voll (k_je_bin)
+}
+
+
+def _grund(kennung, **werte):
+    """Ein Rueckstufungs-Grund als MARKE, nie als Text: {kennung, …werte}.
+    Uebersetzt wird ausschliesslich in der Anzeige."""
+    return dict(werte, kennung=kennung)
+
+
+def empfehlen(mitglieder, k_je_bin, yaw_grenze, dup_sim, luma_grenzen=None,
+              stufen=None):
     """Empfehlungs-Analyse eines Ankers -> (bewertet, flags).
     bewertet = Liste in Mitglieder-Reihenfolge: {datei, bin, empfohlen, grund}
     (grund nur bei nicht-empfohlen — Nicht-Loeschen-Prinzip: alles bleibt
-    sichtbar, nur begruendet zurueckgestuft). Vier Stufen, deterministisch:
+    sichtbar, nur begruendet zurueckgestuft; grund ist seit .373 die
+    sprachneutrale Marke aus GRUND_WERTE, kein fertiger Satz).
+    Vier Stufen, deterministisch:
     0. BELICHTUNG (bauplan_belichtung.md E5a, Issue 26): ein Ausschnitt
        ausserhalb [luma_min, luma_max] wird begruendet zurueckgestuft. Zuerst,
        weil er dann weder einen Bin-Platz noch den physischen Schluessel
@@ -159,7 +248,17 @@ def empfehlen(mitglieder, k_je_bin, yaw_grenze, dup_sim, luma_grenzen=None):
     2. Embedding-Nachbarn ueber dup_sim: gierig entlang der Reihung, Naehe zu
        einem bereits Empfohlenen stuft zurueck. Ohne emb -> flags['emb_fehlt']
        (Anzeige "duplicate check unavailable ..."), NIE stilles 0.
-    3. Perspektiv-Bins (yaw_grenze), je Bin bleiben die besten k_je_bin."""
+    3. Perspektiv-Bins (yaw_grenze), je Bin bleiben die besten k_je_bin.
+    stufen (.366, User-Fund 28.08.): {dateiname -> 'gut'|'grenzfall'|'raus'},
+    das URTEIL der Gruppen-Flaeche (anlernen.sichtung_bewerten). Ein 'raus'
+    wird begruendet zurueckgestuft, BEVOR es einen Bin-Platz belegt. Grund
+    fuer die Durchreichung statt einer eigenen Pruefung: die Flaeche kennt
+    zwei Achsen, die diese Funktion per Konstruktion nicht hat — die harten
+    Linien (Norm-Veto, Struktur) und die Identitaet gegen die Referenzen.
+    Gemessen am Lauf L20260828_220718: 40 empfohlene Bilder, davon fielen 3
+    in der Flaeche durch (zwei unter der Qualitaetslinie, eines an der
+    Identitaet) und waeren als Referenzen ins System gegangen. Ohne stufen
+    (Aufrufer ohne Sichtung) bleibt alles byte-gleich zum Verhalten davor."""
     flags = {"emb_fehlt": any(not m.get("emb") for m in mitglieder)}
     geordnet = sorted(mitglieder,
                       key=lambda x: _reihung(x, luma_grenzen=luma_grenzen))
@@ -169,18 +268,21 @@ def empfehlen(mitglieder, k_je_bin, yaw_grenze, dup_sim, luma_grenzen=None):
     for m in geordnet:
         d = str(m.get("datei", ""))
         b = perspektiv_bin(m.get("pose") or [], yaw_grenze)
+        if stufen and stufen.get(d.rsplit("/", 1)[-1]) == "raus":
+            ergebnis[d] = (False, _grund("bildpruefung"), b)
+            continue
         lage = belichtungs_lage(m, luma_grenzen)
         if lage == "dunkel":
-            ergebnis[d] = (False, f"too dark (brightness {m.get('luma')} — "
-                                  f"needs {_lg.get('min')}+)", b)
+            ergebnis[d] = (False, _grund("zu_dunkel", luma=m.get("luma"),
+                                         min=_lg.get("min")), b)
             continue
         if lage == "hell":
-            ergebnis[d] = (False, f"overexposed (brightness {m.get('luma')} — "
-                                  f"needs {_lg.get('max')} or less)", b)
+            ergebnis[d] = (False, _grund("ueberbelichtet", luma=m.get("luma"),
+                                         max=_lg.get("max")), b)
             continue
         schluessel = (str(m.get("kamera", "?")), tuple(m.get("bbox") or ()))
         if schluessel in phys_gesehen and schluessel[1]:
-            ergebnis[d] = (False, "duplicate detection (same camera and box)", b)
+            ergebnis[d] = (False, _grund("dublette_phys"), b)
             continue
         phys_gesehen.add(schluessel)
         naher = None
@@ -191,10 +293,12 @@ def empfehlen(mitglieder, k_je_bin, yaw_grenze, dup_sim, luma_grenzen=None):
                     naher = e
                     break
         if naher is not None:
-            ergebnis[d] = (False, f"near-identical to {str(naher.get('datei','')).rsplit('/',1)[-1]}", b)
+            ergebnis[d] = (False, _grund(
+                "fast_gleich",
+                datei=str(naher.get("datei", "")).rsplit("/", 1)[-1]), b)
             continue
         if bin_zahl.get(b, 0) >= int(k_je_bin):
-            ergebnis[d] = (False, f"bin limit reached ({int(k_je_bin)} kept)", b)
+            ergebnis[d] = (False, _grund("bin_limit", k=int(k_je_bin)), b)
             continue
         bin_zahl[b] = bin_zahl.get(b, 0) + 1
         empfohlene.append(m)

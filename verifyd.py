@@ -636,6 +636,29 @@ def load_config(path):
                          ("anker_sim1", 0.25), ("anker_sim2", 0.35),
                          ("anker_marge_warn", 0.15), ("anker_hart", 0.35),
                          ("anker_k_min", 5), ("anker_deckel", 250), ("anker_deckel_hart", 300),
+                         # Phase 1 des intelligenten Lernens (analysen/intelligentes_lernen.md,
+                         # gemessen 28.08.): das Sieb nimmt statt des s-Flags die Stufe GUT
+                         # (core.benennung.ist_gut, EINE Quelle — kein eigener Latten-Key hier)
+                         # plus dieses Winkelfenster. AUS ausgeliefert, weil es Material
+                         # WEGnimmt: am eigenen Bestand 9043 -> 2724 Zeilen, und die Laeufe
+                         # unter anker_k_min steigen von 74 auf 126 von 198. Wer wenige gute
+                         # Gruppen statt vieler schwacher will, schaltet es ein.
+                         ("anker_qualitaet_winkel_max", 25),
+                         # Eine Gruppe aus EINER physischen Detektion ist keine
+                         # Gruppe (Nutzer-Sichtung 28.08.: die beiden einzigen
+                         # Fehlgriffe unter 7 Gruppen waren genau das).
+                         ("anker_qualitaet_min_phys", 2),
+                         # Fehldetektions-Signatur am zweiten Frontalitaets-Mass
+                         # (face_audit.ist_fehldetektion mit front_kps): faengt den
+                         # Hund/Laub-Fall, den die Signatur an `front` bekanntermassen
+                         # durchlaesst. Gemessen 28.08.: 1,6 % aller Zeilen.
+                         ("anker_qualitaet_fd_wache", True),
+                         # Phase 3: Gruppen selbst benennen, wenn die Zuordnung
+                         # sicher ist. Drei Huerden zugleich (gemessen 28.08. an
+                         # 23 Personen / 30 Gruppen: 18 von 18 pruefbaren richtig,
+                         # 0 falsch; alle 6 Irrtums-Faelle lagen unter JEDER Huerde).
+                         ("anker_zuweisung_sim", 0.45),
+                         ("anker_zuweisung_marge", 0.10), ("anker_zuweisung_einigkeit", 80),
                          # Crash-Loop-Wache Boot-Resume der Anker-Phase (#20 gr33nh07n:
                          # ein 1000er-Lauf blieb in phase=anker stecken und wurde nach
                          # jedem OOM-Neustart erneut angefahren — Endlosschleife bis
@@ -708,7 +731,15 @@ def load_config(path):
                          # .316 (User 22.08.): Veto-Linie der Gruppen-Sichtung. Eigener
                          # Wert statt vorrat_norm_min mitzubenutzen, damit der User die
                          # ANZEIGE drehen kann, ohne die Ernte-Achsen zu verstellen.
-                         ("sichtung_norm_veto", 22.0),
+                         # .366 (User-Entscheid 28.08.): 22,0 -> 21,75. GEGENGEPRUEFT an
+                         # genau der Gruppe, an der die 22,0 kalibriert wurde
+                         # (L20260821_230529-A1, die 34 Hecken-Ausschnitte): sie faengt
+                         # bei 21,75 UNVERAENDERT 30 von 34 — deren Norm liegt mit Median
+                         # 18,81 weit unter beiden Linien, das Fenster dazwischen ist bei
+                         # den Fehldetektionen leer. Am eigenen Bestand (1945 Mitglieder
+                         # mit gemessener Norm) laesst die Senkung 54 Bilder mehr zu
+                         # (2,8 %), verteilt auf 17 Gruppen.
+                         ("sichtung_norm_veto", 21.75),
                          # .32x STRUKTUR-TEST (User-Entscheide 22.08.) — er ersetzt den
                          # .316b-Gruppen-Konsens, der ersatzlos entfaellt: gemessen kippte
                          # der neun Gruppen, davon FUENF mit erkannter Person und fast
@@ -761,11 +792,17 @@ def load_config(path):
                          ("nachhol_pause_s", 3600),          # Mindestabstand je Event (x Versuchsnr.)
                          ("nachhol_analyse_timeout_s", 300), # harter Deckel der Retry-Laeufe
                          ("nachhol_start_s", 600),           # Anlauf nach Dienststart
-                         # .340 Nachholen beim Dienststart (Default AN = Verhalten wie bisher).
-                         # AUS heisst NUR: der beim Start bereits aufgelaufene Stapel wird
-                         # uebersprungen statt sequenziell durchanalysiert — der Sweep selbst
-                         # bleibt an (im Poll-Betrieb ist er der einzige Antriebsweg).
-                         ("start_catchup", True),
+                         # .340/.371 Nachholen beim Dienststart. Drei Zustaende, ausgelegt
+                         # in catchup_modus(): "ask" (Default seit .371 — zurueckhalten und
+                         # anbieten), "on" (sofort durcharbeiten), "off" (als uebersprungen
+                         # abhaken). Der Sweep selbst bleibt in allen dreien an; im
+                         # Poll-Betrieb ist er der einzige Antriebsweg.
+                         # .371 (User 30.08.): Default zurueck auf "on", weil der
+                         # Knopf ausgeblendet ist. "ask" ohne Knopf hiesse:
+                         # Ereignisse werden zurueckgehalten und niemand kann
+                         # sie holen. Wenn der Knopf wiederkommt, hier zurueck
+                         # auf "ask" — der Rest der Mechanik bleibt bestehen.
+                         ("start_catchup", "on"),
                          # .264 Frigate-Schoner (Verklemmungs-Vorfall 17.08.):
                          # nach N Netz-Fehlern in Folge pause_s zurueckziehen.
                          ("frigate_schoner_fehler", 3),
@@ -926,6 +963,30 @@ def load_config(path):
         if k in STORE_INFRA_TABU:
             continue
         cfg[k] = v
+    # .374 (User-Entscheid 30.08., Fund am Q4-Umbau des Gates): ein Altwert
+    # ausserhalb der Whitelist-Spanne (gemessen: lookback_h: 100 aus einer
+    # handgepflegten yaml, erlaubt 1-72) machte das GANZE Konfigurations-Blatt
+    # unspeicherbar — dieselbe Klasse wie der telegram_hoehe-Fall (.371): die
+    # Seite rendert den rohen Wert, konfigSpeichern postet ALLE cfg-Felder,
+    # config_schreiben bricht beim ersten ungueltigen ab. Geklemmt wird HIER,
+    # an der einen Stelle, durch die yaml UND Store laufen. Kein stiller
+    # Eingriff: jede Korrektur schreibt eine stderr-Zeile. Enum-Felder (typ
+    # list) klemmen NICHT generisch — ein Rueckfall-Wert waere hier erfunden;
+    # ihre Heilung lebt je Feld dort, wo die Semantik liegt (Muster:
+    # catchup_modus mappt Unbekanntes auf "on").
+    for _k, (_typ, _lo, _hi, _e) in Service.CONFIG_WHITELIST.items():
+        if _k not in cfg or _typ is bool or _typ is list:
+            continue
+        try:
+            _w = _typ(cfg[_k])
+        except Exception:
+            continue                      # kaputter Typ: faengt config_schreiben
+        if _w < _lo or _w > _hi:
+            _neu = min(max(_w, _lo), _hi)
+            sys.stderr.write(f"[suslik] config: {_k}={_w} is outside the allowed "
+                             f"range {_lo}-{_hi} — clamped to {_neu}\n")
+            sys.stderr.flush()
+            cfg[_k] = _neu
     # B6 (User-Entscheid 24.08. abends): debug ist NICHT persistent — "debug wird
     # bei jedem Start des Systems auf aus gestellt und muss waehrend des Laufes ggf.
     # angestellt werden". Anlass war die Prod-Log-Sichtung: 40 [dbg]-Zeilen in 24 h,
@@ -1012,6 +1073,15 @@ def load_config(path):
         cfg["ov_device"] = _bk.split(":", 1)[1] if ":" in _bk else "CPU"
     cfg["backend"] = _bk
     os.environ["VERIFY_BACKEND"] = _bk
+    # .371 Wanderung des Start-Nachholens von Ja/Nein auf drei Werte. Der Wert wird
+    # HIER EINMAL auf den String gezogen, damit im ganzen Dienst nur noch einer
+    # unterwegs ist. Ohne das rendert die Konfigurationsseite ein Auswahlfeld, auf
+    # dessen Werte ein gespeichertes True/False nicht passt: keine Option waere
+    # ausgewaehlt, der Browser nimmt die erste, und das naechste Speichern der Seite
+    # schriebe dem Nutzer stillschweigend "ask" ueber sein "off". Gefunden 29.08. an
+    # einer Feld-Installation, die "off" gespeichert hatte — dieselbe Fehlerklasse
+    # wie die Auswahlliste mit Zahlen statt Strings am selben Tag.
+    cfg["start_catchup"] = catchup_modus(cfg)
     return cfg
 
 
@@ -1225,6 +1295,41 @@ def _setup_done(cfg):
     required_zones aus yaml). Schuetzt bestehende Installationen vor dem First-Run-Redirect in den
     Setup-Wizard; nur ein frisches System (Docker-Erstboot, leerer Store, keine Zonen) landet dort."""
     return bool(cfg.get("setup_done") or cfg.get("kameras") or cfg.get("required_zones"))
+
+
+# --- Nachholen beim Dienststart: die EINE Auslegung des Schalters ------------
+# .371 (User 29.08.): "Beim Start wird nichts abgeholt, aber wenn wir etwas
+# finden, was noch nicht verarbeitet ist, dann geht dieser Schalter an und der
+# Benutzer kann ihn druecken." Damit hat der Schalter drei Zustaende statt zwei,
+# und weil bestehende Installationen ein bool im Store haben, wird hier an EINER
+# Stelle ausgelegt statt an jeder Abfragestelle:
+#   "ask" - beim Start NICHT abarbeiten, den Stapel zurueckhalten und in der
+#           Kopfleiste zum Druecken anbieten. Seit 30.08. NICHT der Default und
+#           ueber die Oberflaeche nur bewusst waehlbar: der Knopf ist auf
+#           User-Wunsch ausgeblendet ("wir bauen das spaeter etwas anders wieder
+#           ein"), und ohne ihn haelt "ask" Ereignisse fest, an die niemand
+#           herankommt.
+#   "on"  (altes True)    - sofort durcharbeiten wie bisher.
+#   "off" (altes False)   - als uebersprungen in die Akte schreiben, nie wieder
+#                           aufgreifen (das ist ENDGUELTIG, anders als "ask").
+# Unbekannte Werte fallen auf "on" zurueck (bis 30.08. auf "ask"): abarbeiten ist
+# ohne Knopf die einzige Wahl, die weder etwas verliert noch etwas festhaelt.
+CATCHUP_MODI = ("ask", "on", "off")
+
+
+def catchup_modus(cfg):
+    """-> "ask" | "on" | "off". Versteht auch die alten bool-Werte im Store."""
+    w = cfg.get("start_catchup", "on")
+    if w is True:
+        return "on"
+    if w is False:
+        return "off"
+    w = str(w or "").strip().lower()
+    # .371 (User 30.08., Knopf ausgeblendet): der Rueckfall ist "on", nicht "ask".
+    # Solange es keinen Knopf gibt, waere "ask" die schlechteste Wahl — es hielte
+    # Ereignisse zurueck, an die niemand herankommt. Kommt der Knopf wieder, gehoert
+    # hier UND im Default von load_config "ask" hin; die Probe deckt beide Wege ab.
+    return w if w in CATCHUP_MODI else "on"
 
 
 def master_persons(cfg):
@@ -2058,6 +2163,22 @@ class Service:
         # Bewusst NICHT _nachhol_*: so heisst im Modul der stumme Retry-Runner fuer
         # gescheiterte Analysen, das waere ein Dauer-Missverstaendnis.
         self._sweep_stand = {"aktiv": False, "gesamt": 0, "fertig": 0, "stunden": 0}
+        # .371 Zurueckgehaltener Start-Stapel (catchup_modus() == "ask"): Event-IDs,
+        # die beim Start schon dalagen und auf einen Klick des Nutzers warten. Sie
+        # sind BEWUSST nicht in self.processed — anders als beim "off"-Weg bleiben
+        # sie damit vollwertig aufgreifbar. Jeder weitere Sweep filtert sie aus
+        # seiner todo-Liste, sonst liefe genau das an, was der Nutzer nicht wollte.
+        # Nach einem Neustart ist das Set leer und der erste Sweep baut es neu auf,
+        # deshalb braucht es keine Persistenz.
+        # WIDERLEGER-FUND 29.08.: hier stand "nach einem Neustart ist das Set leer
+        # und der erste Sweep baut es neu auf, deshalb braucht es keine Persistenz".
+        # Das ist FALSCH fuer alles, was inzwischen aus dem lookback_h-Fenster
+        # gefallen ist — der erste Sweep fragt wieder nur die letzten Stunden ab.
+        # Ein Neustart waehrend des Wartens haette den Stapel spurlos verloren.
+        # Deshalb liegt der Merkzettel auf der Platte, nicht nur im Speicher.
+        self._catchup_pfad = os.path.join(cfg["data_dir"], "state", "catchup_offen.json")
+        self._catchup_zurueck, self._catchup_aeltest, self._catchup_seit = \
+            self._catchup_laden()
         self.last_alert = 0.0
         self._melde_zustand = {}                  # Drossel-Zeitstempel der Meldewege (tg_unbekannt,
                                                   # ha_warn) — Eigentum des Dienstes, core/melden
@@ -3414,10 +3535,22 @@ class Service:
         "anwesenheit_cooldown": (int, 300, 86400, "quiet window for the presence push (sec.)"),
         "anwesenheit_push": (bool, None, None, "presence push on/off"),
         "sub_label_schreiben": (bool, None, None, "write recognized names back to Frigate"),
+        "support_zugriff": (bool, None, None, "remote support access (read-only): named areas — logs, masked config, faces, learning runs, body material, state files — become downloadable for whoever holds the support token (default off; every request is logged; the token is created on the system page and can be rotated any time; note that without TLS the token travels in plain text)"),
         # Ohne diesen Eintrag lehnte config_schreiben() jede Aenderung mit 400 ab -> der
         # Write-back-Schalter auf der System-Seite war wirkungslos (nur ueber den Wizard setzbar).
         "frigate_read_only": (bool, None, None, "read-only mode: never write anything back to Frigate"),
         "mqtt_publish": (bool, None, None, "publish verifyd/erkennung + heartbeat"),
+        # .372 (User-Auftrag 29.08.): bis dahin gar nicht einstellbar, obwohl es
+        # zusammen mit sweep_limit darueber entscheidet, ob Ereignisse durchs
+        # Raster fallen. Die Warnung im Log nennt beide ("older ones in the last
+        # 2h may be missing"), erreichbar war nur eine davon.
+        "lookback_h": (int, 1, 72,
+                       "how many hours back a sweep looks for events it has not "
+                       "analysed yet (default 2). Together with sweep_limit this "
+                       "decides what can be missed: on a busy site the window "
+                       "fills up faster than the ceiling allows. Raising it costs "
+                       "a longer Frigate query per sweep"),
+        "sweep_limit": (int, 50, 2000, "how many events one Frigate sweep may fetch (default 200). On a busy site (many cameras) the last-2-hours sweep hits this ceiling permanently and older events in the window can be missed — one field installation with 31 cameras logged the ceiling warning 196 times in six hours. Raise it there; the cost is one larger Frigate API response per sweep"),
         "clip_retention_d": (int, 1, 60, "how long downloaded clips are kept as a cache, in days. They are only a cache — suslik fetches a clip from Frigate again whenever it needs one, so a short time costs nothing except a second download. The cache exists because Frigate's clip generation can stall, which is worth avoiding for the last hours, not for the last week: measured on the development system, 1212 of 1542 cached clips were older than two days and none of them was ever read again"),
         "live_verworfen_speichern": (bool, None, None, "keep the pictures the live watchers threw away (no human in frame): off by default — they are pure diagnostics, the interface never shows them, and they were the single largest item under the data folder (61 GB in nine days on the development system). They are still counted, so you can see how often the pose gate rejected something. Turn on only while chasing a bug"),
         "clip_cache_max_gb": (int, 0, 500, "clip cache size cap in GB, oldest evicted first (age eviction stays). 0 = derive it from the disk (15 % of its size), which is the sensible default because disks differ wildly — a fixed cap larger than the disk can never take effect, and that is exactly how one installation filled up (issue #25). Set a number only if you want a fixed cap; keep it well below the size of the disk — a cap larger than the disk can never take effect, and the cache will fill the disk before it is reached (issue #25). suslik warns at startup if the two do not fit together"),
@@ -3437,6 +3570,12 @@ class Service:
         "anker_k_min": (int, 2, 50, "minimum faces per anchor cluster (margin uncalibratable below 5)"),
         "anker_deckel": (int, 10, 2000, "stage-2 clustering cap per round (measured 250 for this hw class)"),
         "anker_deckel_hart": (int, 10, 4000, "hard stage-2 bound; runs never start above it (memory guard)"),
+        "anker_qualitaet_winkel_max": (int, 5, 40, "smart learning: how far a face may turn away, in degrees, sideways as well as up or down (measured 25)"),
+        "anker_qualitaet_fd_wache": (bool, None, None, "smart learning: drop faces that carry the signature of a false detection — perfectly frontal, very sharp, but only a mediocre detection score. That pattern fits hedges, wheel arches and animals rather than people"),
+        "anker_qualitaet_min_phys": (int, 1, 20, "smart learning: how many physically distinct sightings a group needs (1 = off). Overlapping Frigate events can report the same face twice, and a group built from a single sighting is not a group"),
+        "anker_zuweisung_sim": (float, 0.30, 0.90, "smart naming: how close the group has to sit to that person (measured 0.45)"),
+        "anker_zuweisung_marge": (float, 0.02, 0.50, "smart naming: how far ahead of the second-best person it has to be (measured 0.10)"),
+        "anker_zuweisung_einigkeit": (int, 50, 100, "smart naming: percent of the group's images that must point at the same person (measured 80)"),
         "anker_resume_max": (int, 0, 10, "automatic restarts of an interrupted anchor stage after a service restart before it halts and waits for you (crash-loop guard; 0 = never auto-resume)"),
         "benennung_k_je_bin": (int, 1, 50, "naming: recommended images kept per perspective bin (starting value, calibrate in the first naming run)"),
         "benennung_yaw_grenze": (float, 5, 40, "naming: yaw beyond this counts as looking left/right (sub-bin INSIDE the harvest gate window; starting value)"),
@@ -3447,7 +3586,13 @@ class Service:
         "alert_stil": (list, ["worte", "worte_zahlen"], None, "alert text style (.249 Kosinus-raus): worte (plain words, default) / worte_zahlen (words plus raw scores)"),
         "telegram_modus": (list, ["aus", "ha", "direkt", "beide"], None, "Telegram sending: aus (off) / ha (HA script) / direkt (direct) / beide (both)"),
         "telegram_inhalt": (list, ["video", "bild"], None, "Telegram attachment: video (short clip, image if unavailable) / bild (image only, no transcoding)"),
-        "telegram_hoehe": (list, [720, 480], None, "Telegram video height: 720 (default) / 480 (smaller files, faster on weak hardware) — applies to face AND person alerts"),
+        # .372 (User-Fund 29.08.): die Werte MUESSEN Strings sein. Als [720, 480]
+        # (Zahlen) verglich config_schreiben "720" gegen 720, das schlug fehl —
+        # und weil dort der erste ungueltige Wert den GANZEN Speichervorgang
+        # abbricht, liess sich ueber die Konfigurations-Seite gar nichts mehr
+        # speichern. Zusaetzlich warf die Fehlermeldung selbst (", ".join)
+        # einen TypeError, sodass nicht einmal ein Grund ankam.
+        "telegram_hoehe": (list, ["720", "480"], None, "Telegram video height: 720 (default) / 480 (smaller files, faster on weak hardware) — applies to face AND person alerts"),
         "telegram_cooldown": (int, 30, 3600, "throttle for the unknown Telegram (sec.)"),
         "frigate_sync": (bool, None, None, "mirror references to Frigate automatically (parallel operation)"),
         "unscharf_max": (int, 100, 2000, "sharpness threshold for the blur list (higher = more images flagged)"),
@@ -3460,7 +3605,17 @@ class Service:
         "clip_erzeugung_alter_min": (int, 5, 1440, "harvest: events older than this (minutes) count as ARCHIVED — Frigate has to rebuild their clip from recording segments before a single byte arrives, which takes far longer than a live download. For those the fetch waits patiently (see the cap below) instead of aborting; a measured abort during that rebuild permanently leaks one API thread and one ffmpeg inside Frigate until Frigate is restarted"),
         "clip_erzeugung_deckel_s": (int, 60, 1800, "harvest: absolute cap (seconds) on waiting for Frigate to rebuild an archived event's clip. While waiting, a cheap probe checks every stall that Frigate itself still answers — if it does, the wait continues up to this cap; if not, the fetch stops immediately. Events hitting the cap stay unbooked and are retried in a later run"),
         "clip_vod": (bool, None, None, "harvest: fetch archived events' clips via Frigate's VOD playlist (/vod/event/.../master.m3u8) and merge the segments locally instead of asking Frigate to rebuild the clip server-side. Frigate's clip generation can stall for minutes and leak a worker thread plus an ffmpeg process per request until its whole API freezes (reported upstream); the VOD route bypasses that code path entirely. On any failure (older Frigate without the endpoint, local ffmpeg error) the fetch falls back to the classic clip.mp4 path with all its safeguards"),
-        "start_catchup": (bool, None, None, "catch up on missed events at startup (on by default): after a restart or a broker reconnect suslik fetches the person events of the last lookback_h hours it never analysed and works through them one after another. That is correct, but on a machine that was off for a while it looks like load out of nowhere. Turned off, only the events that had already piled up when the service started are marked as skipped — they keep their place in the record and are never retried as failures. Everything happening after that start is analysed normally, and in poll mode the periodic sweep keeps running because it is the only thing that picks up events there"),
+        # .374 (Widerleger-Fund 30.08.): "ask" steht hier NICHT mehr zur Wahl,
+        # solange der Nachhol-Knopf ausgehaengt ist (webui/__init__.py). Wer den
+        # Wert waehlte, bekam beim naechsten Start einen zurueckgehaltenen Stapel,
+        # den KEIN Bedienweg mehr holt — und der Hilfetext lud mit "ask (default)"
+        # und "a button appears in the header" auch noch dazu ein, obwohl seit
+        # .372 weder der Default noch der Knopf stimmten. catchup_modus() versteht
+        # "ask" WEITERHIN (Altbestand im Store, alte Sicherungen); es faellt nur
+        # aus der Auswahl und aus dem Text. Kommt der Knopf zurueck, gehoert der
+        # Wert hier wieder in die Liste und der Satz wieder in die Erklaerung.
+        "start_catchup": (list, ["on", "off"], None,
+                          "what happens to the person events that piled up while the service was down. on (default): work through them right away, one after another. off: mark them as skipped in the record — they keep their place and are never retried. In poll mode the periodic sweep keeps running in both, because it is the only thing that picks up new events there"),
         "nachhol_versuche": (int, 0, 5, "retry attempts for events whose analysis failed (0 = off); retries are silent, they never alert"),
         "nachhol_tage": (int, 1, 3, "how far back the retry looks for failed analyses (days)"),
         "worker": (bool, None, None, "persistent analysis worker: keeps the models loaded between events (large CPU saving); off = one process per event (pre-0.1.0.38 behavior)"),
@@ -3559,7 +3714,9 @@ class Service:
             if typ is list:                                    # Enum-String (z.B. telegram_modus)
                 w = str(wert).strip()
                 if w not in lo:
-                    return False, f"'{key}': erlaubt {', '.join(lo)}", False
+                    # str() um jeden Eintrag: eine Liste mit Zahlen darf die
+                    # MELDUNG nicht auch noch zum Absturz bringen (.372).
+                    return False, f"'{key}': erlaubt {', '.join(str(x) for x in lo)}", False
             else:
                 try:
                     w = (str(wert).lower() in ("1", "true", "ja", "on")) if typ is bool else typ(wert)
@@ -3853,12 +4010,27 @@ class Service:
                                "They share the same cores: each additional "
                                "watcher slows all of them and heats the "
                                "machine. Check Measure load per camera.")
+        _rm = {}                           # Feld-Fund 28.08.: Auto-Retest-Merker
         with _cfg_lock:                    # Engine-M5, s. live_speichern
             ok, msg = _lw.live_schalter(self.cfg, kamera, bool(enabled),
                                         log=self.log,
                                         store_pfad=_config_store_pfad,
                                         store_laden=_lade_config_store,
-                                        store_schreiben=_store_schreiben)
+                                        store_schreiben=_store_schreiben,
+                                        retest_merker=_rm)
+        if ok and enabled and _rm.get("grund"):
+            # Anstoss NACH dem Lock (live_test_starten braucht es teils
+            # selbst). Scheitert er, bleibt enabled stehen und der Nutzer
+            # bekommt die EINE Handlung genannt statt einer Sackgasse.
+            t_ok, t_msg = self.live_test_starten(kamera)
+            self.log(f"live {kamera}: stale source test ({_rm['grund']}) — "
+                     f"auto re-test {'started' if t_ok else 'NOT started'}"
+                     f" ({t_msg})")
+            if not t_ok:
+                # Kein Fehler-Ende: der Aufsichts-Takt (_live_nachtesten)
+                # reicht ausstehende Quelltests nach — die Zusage gilt.
+                msg = (f"enabled — {t_msg}. The check is retried "
+                       "automatically; you can also press 'Run source test'")
         # Phase 4: Enable startet die Engine, wenn sie nicht laeuft (Bauplan-
         # Auftrag) — der Anstoss weckt den Supervisor-Takt sofort und hebt
         # Pause/Backoff auf. Disable stoppt BEWUSST NICHT (naechstes Enable
@@ -3898,7 +4070,23 @@ class Service:
                 cams, err = frigate_cameras(self.cfg)
                 if err or not cams:
                     return
-                for name in sorted(cams):
+                # .368 (User 29.08.): NUR proben, was noch keinen Eintrag hat.
+                # Eine Stream-Aufloesung aendert sich praktisch nie, der Cache lag
+                # ungenutzt daneben — der Lauf probte bei JEDEM Dienststart alle
+                # Kameras neu. Auf der Testinstanz mit Fremd-Frigate kostete das
+                # gemessen 15+ Kameras a ~30 s Timeout und belegte waehrenddessen
+                # die Verbindungen, die der parallele Lernlauf fuer seine Clips
+                # brauchte. Kriterium ist BEWUSST der fehlende Eintrag und nicht
+                # "Erstinstallation": so kommt eine spaeter angelegte Kamera von
+                # selbst dazu, ohne dass die uebrigen wieder drankommen.
+                bekannt = _lw.steckbriefe_lesen(self.cfg)
+                offen = [n for n in sorted(cams) if n not in bekannt]
+                if not offen:
+                    return
+                if len(offen) < len(cams):
+                    self.log(f"stream profiles: {len(offen)} of {len(cams)} "
+                             f"camera(s) still unknown — probing only those")
+                for name in offen:
                     url = _lw.proxy_url(self.cfg, name)
                     if not url:
                         return
@@ -3916,6 +4104,17 @@ class Service:
                     except Exception as e:
                         # LAUT je Kamera, aber der Lauf stirbt nie still an
                         # EINER unerreichbaren Quelle.
+                        # .368: das SCHEITERN kommt mit in den Cache. Ohne diese
+                        # Zeilen bekaeme eine dauerhaft unerreichbare Kamera nie
+                        # einen Eintrag und wuerde bei jedem Start erneut ihren
+                        # vollen Timeout kosten — auf der Testinstanz waren das
+                        # alle 15 Kameras, auf Prod zwei von sieben seit Wochen.
+                        # Der Eintrag traegt den Fehler und den Zeitpunkt, damit
+                        # die Kameras-Seite ihn zeigen und der Auffrischen-Knopf
+                        # ihn verwerfen kann.
+                        _lw.steckbrief_schreiben(
+                            self.cfg, name,
+                            {"fehler": type(e).__name__, "ts": round(time.time(), 1)})
                         self.log(f"stream profile {name}: "
                                  f"{type(e).__name__} — skipped")
                     time.sleep(1.0)
@@ -3980,6 +4179,7 @@ class Service:
            test-Block traegt den Enable-/Weiterlauf-Riegel (test_gueltig),
            ein transient roter Re-Test darf einen laufenden Waechter nicht
            stoppen. Ein neuer gruener Test raeumt das Feld."""
+        from core import livewache as _lw
         auftraege = (status or {}).get("auftraege") or {}
         if not auftraege:
             return
@@ -3996,6 +4196,8 @@ class Service:
                         g["test"] = block
                         g.pop("test_fehler", None)
                         geaendert.append(f"{kamera}:test")
+                        getattr(self, "_live_nachtest_zaehler",
+                                {}).pop(kamera, None)   # Erfolg: Budget zurueck
                 elif t and not t.get("ok") and not t.get("vorab"):
                     g = (store.setdefault("live", {})
                          .setdefault("guards", {}).setdefault(kamera, {}))
@@ -4005,6 +4207,21 @@ class Service:
                             "fehler": str(t.get("fehler") or t.get("text")
                                           or "source test failed")[:300]}
                         geaendert.append(f"{kamera}:test_fehler")
+                        # Konzept-QS 28.08. (kein 'an, kommt aber nie hoch'):
+                        # ist der Waechter enabled, hat aber KEINEN gueltigen
+                        # Test (= Selbstheilungs-Fall aus .361), beendet ein
+                        # ROTES Testergebnis den Schwebezustand — enabled
+                        # zurueck, Grund steht sichtbar in test_fehler. Ein
+                        # LAUFENDER Waechter (gueltiger Test) bleibt an: sein
+                        # transienter Fehl-Retest darf ihn nicht stoppen.
+                        _gn = _lw.guard_normalisiert(g, lambda z: None, kamera)
+                        if g.get("enabled") and not _lw.test_gueltig(_gn)[0]:
+                            g["enabled"] = False
+                            geaendert.append(f"{kamera}:enabled_zurueck")
+                            self.log(f"live {kamera}: source check FAILED "
+                                     f"({g['test_fehler']['fehler'][:80]}) — "
+                                     f"switching the watcher back off; fix "
+                                     f"the source and enable it again")
                 m = erg.get("messung") or {}
                 if m and m.get("ts") is not None and not m.get("vorab"):
                     g = (store.setdefault("live", {})
@@ -4018,6 +4235,43 @@ class Service:
                 self.cfg["live"] = store["live"]
                 self.log(f"LIVE: engine job results stored "
                          f"({', '.join(geaendert)})")
+
+    def _live_nachtesten(self, status):
+        """Mini-Heilung (Konzept-QS 28.08., bewusst VOR dem grossen Schritt-4-
+        Baustein): enabled-Waechter OHNE gueltigen Quelltest bekommen ihren
+        Test automatisch nachgereicht — je Takt EINE Kamera, ueber das
+        Engine-Kommando (nie ein Helfer-Zweitmodell). Deckt: Engine war beim
+        Enable noch nicht oben, Mehrkamera-Enable (ein Auftrags-Slot),
+        abgeprallte Klicks. ENDLICH per Zaehler: max 2 Auto-Versuche je
+        Kamera und Dienst-Lauf; danach nimmt der Rot-Fall in
+        live_quittungen_uebernehmen das enabled zurueck (laut). Schreibt NIE
+        den Config-Store und ruft NIE anstossen() (Regression-Auflage:
+        kein selbstfuetternder Zyklus) — nur die Kommando-Datei."""
+        from core import livewache as _lw
+        if (status or {}).get("auftrag"):
+            return                      # Engine arbeitet schon an einem Auftrag
+        if _lw.kommando_unverarbeitet(self.cfg, status) is not None:
+            return                      # ein Kommando haengt bereits
+        try:
+            _d, guards = _lw.guards_lesen(self.cfg, lambda z: None)
+        except Exception:
+            return
+        for kamera, g in sorted(guards.items()):
+            if not g.get("enabled"):
+                continue
+            ok, _grund = _lw.test_gueltig(g)   # guards_lesen liefert normalisiert
+            if ok:
+                continue
+            zaehler = self._live_nachtest_zaehler.get(kamera, 0)
+            if zaehler >= 2:
+                continue                # Rot-Fall raeumt auf, nicht wir
+            self._live_nachtest_zaehler[kamera] = zaehler + 1
+            with self._live_cmd_lock:
+                _lw.kommando_schreiben(self.cfg, "test", kamera)
+            self.log(f"live {kamera}: source test queued automatically "
+                     f"(attempt {zaehler + 1}/2) — watcher starts once it "
+                     f"passes")
+            return                      # EINE Kamera je Takt
 
     def _live_jobs_altern(self):
         """Engine-M6 (unter _live_jobs_lock aufrufen): haengende Helfer-Jobs
@@ -4075,6 +4329,20 @@ class Service:
             return False, ("the live engine process is running but its "
                            "status is stale (busy?) — not starting a second "
                            "model on the same GPU; try again shortly")
+        # Konzept-QS-Blocker 28.08. (§4.1-Klasse, Vier-Waechter-Tod 11.08.):
+        # steht IRGENDEIN Waechter auf enabled, spawnt der Supervisor die
+        # Engine gleich/bald — ein Helfer-Subprozess MIT eigenem Modell
+        # daneben ist genau die verbotene Zweitmodell-Konstellation (der
+        # Supervisor sieht Helfer-Jobs nicht, nur das Engine-flock). Der
+        # Aufsichts-Takt reicht den Test nach, sobald die Engine steht
+        # (_live_nachtesten) — die Zusage ist also wahr, nicht vertroestend.
+        try:
+            _aktiv = _live_guards_aktiv(self.cfg)
+        except Exception:
+            _aktiv = False
+        if _aktiv:
+            return False, ("the live engine is starting — the source check "
+                           "runs inside it automatically as soon as it is up")
         with self._live_jobs_lock:
             self._live_jobs_altern()
             if any(not j.get("fertig") for j in self._live_jobs.values()):
@@ -4254,6 +4522,8 @@ class Service:
                          lock_gehalten_fn=lambda: _lw.engine_lebt(self.cfg),
                          status_frisch_fn=frisch, stoerung_fn=stoerung)
         self._live_aufsicht = a
+        self._live_nachtest_zaehler = {}   # Auto-Test-Budget je Kamera (max 2
+        #                                    je Dienst-Lauf, s. _live_nachtesten)
 
         def lauf():
             while not self._live_aufsicht_stop.is_set():
@@ -4265,6 +4535,22 @@ class Service:
                     a.takt()
                 except Exception as e:
                     self.log(f"!! live supervisor tick failed: "
+                             f"{type(e).__name__}: {e}")
+                # Konzept-QS-Blocker 28.08.: die Quittungs-Uebernahme hing
+                # als EINZIGER Store-Schreibweg an den /live-HTTP-Handlern —
+                # ohne offenen Browser-Tab erreichte ein gruener Auto-Test
+                # den Store nie (kein mtime, kein Engine-Reload, kein
+                # Waechter-Start). Der Takt holt die Ergebnisse jetzt
+                # selbst (idempotent ueber ts-Vergleich, gleicher
+                # _cfg_lock-Schreibweg wie der UI-Poll) und reicht danach
+                # ausstehende Quelltests nach (_live_nachtesten).
+                try:
+                    _st, _fr = _lw.status_lesen(self.cfg)
+                    if _fr and _st:
+                        self.live_quittungen_uebernehmen(_st)
+                        self._live_nachtesten(_st)
+                except Exception as e:
+                    self.log(f"!! live result pickup failed: "
                              f"{type(e).__name__}: {e}")
         threading.Thread(target=lauf, name="live-aufsicht", daemon=True).start()
         # sys.exit (SIGTERM-Handler) laeuft durch atexit — execv NICHT, dort
@@ -4559,7 +4845,19 @@ class Service:
         Galerien, gruener Test, Kandidaten-Quelle). Ausschalten geht immer."""
         block, _prot, vor = self.vision_lage()
         if an and not vor["erfuellt"]:
-            return False, "still missing: " + "; ".join(vor["fehlt"])
+            # .362 (Feld-Fund Giuseppe): uebersetzte Antwort statt EN-Literal.
+            # Drei literale t()-Aufrufe je Code (kein dynamischer Key,
+            # s. routes/vision._fehlt_text — gleicher Gate-Fang).
+            def _fehlt_text(code, params):
+                if code == "galerien":
+                    return _sprache.t("vision.schalter.fehlt_galerien",
+                                      **params)
+                if code == "test":
+                    return _sprache.t("vision.schalter.fehlt_test")
+                return _sprache.t("vision.schalter.fehlt_kandidaten")
+            return False, (_sprache.t("vision.schalter.fehlt") + " "
+                           + "; ".join(_fehlt_text(c, p)
+                                       for c, p in vor["fehlt_codes"]))
         block["aktiv"] = bool(an)
         store = _lade_config_store(self.cfg)
         store["vision"] = block
@@ -5122,7 +5420,14 @@ class Service:
                 typ, lo, hi, _ = self.CONFIG_WHITELIST[key]
                 try:
                     if typ is list:
-                        w = str(wert).strip()
+                        # .371: Schalter, die von Ja/Nein auf mehrere Werte gewandert
+                        # sind, muessen ihre ALTEN Werte in einer Sicherung noch
+                        # verstehen — sonst verwirft ein Restore aus der Zeit davor
+                        # genau die Einstellung, die der Nutzer sichern wollte
+                        # (Widerleger-Fund 29.08.). Die Auslegung steht an EINER
+                        # Stelle, hier wird sie nur angewandt.
+                        w = (catchup_modus({key: wert}) if key == "start_catchup"
+                             else str(wert).strip())
                         if w not in lo:
                             verworfen.append(key); continue
                     elif typ is bool:
@@ -5228,9 +5533,22 @@ class Service:
         zuruecklassen. Faellt bei execv-Fehler auf os._exit(0) zurueck (dann uebernimmt ein evtl.
         vorhandener Supervisor doch noch). cwd ist stabil (kein os.chdir im Code), daher loest die
         relative --config nach dem re-exec wieder korrekt auf."""
+        # Wiedereintritts-Sperre (Feld-Fund 28.08., Shaun: drei identische
+        # Config-Saves in 40 s = drei parallele Neustart-Threads, die sich
+        # denselben lock, worker_stoppen() und execv teilen wollten). Der
+        # ERSTE gewinnt, jeder weitere Aufruf ist ein No-Op mit Logzeile —
+        # inhaltlich aendert sich nichts, der eine execv nimmt den juengsten
+        # Config-Stand ohnehin mit.
+        if getattr(self, "_neustart_laeuft", False):
+            self.log(f"restart already scheduled — ignoring duplicate request"
+                     f"{(' (' + grund + ')') if grund else ''}")
+            return
+        self._neustart_laeuft = True               # E2 unveraendert: Ernte-Schleife startet ab
+        #                                            hier keinen neuen Worker mehr (Waisen-
+        #                                            Fenster, Widerleger .75) — nur frueher
+        #                                            gesetzt als bisher (vor dem Thread)
+
         def _lauf():
-            self._neustart_laeuft = True           # E2: Ernte-Schleife startet keinen neuen
-            #                                        Worker mehr (Waisen-Fenster, Widerleger .75)
             with self.lock:                        # wartet auf Abschluss einer laufenden Analyse
                 self.log(f"restarting now via re-exec{(': ' + grund) if grund else ''}")
                 self.worker_stoppen()              # W2: beenden+wait VOR execv (kein Waisen-Worker
@@ -5835,12 +6153,23 @@ class Service:
                          ("anker_sim1", "anker_sim2", "anker_marge_warn", "anker_hart",
                           "anker_k_min", "anker_deckel", "anker_deckel_hart")}
             schwellen["szenario_gap_min"] = int(self.cfg.get("szenario_gap_min", 5))
+            schwellen["anker_qualitaet_winkel_max"] = int(
+                self.cfg.get("anker_qualitaet_winkel_max", 25))
+            schwellen["anker_qualitaet_min_phys"] = int(
+                self.cfg.get("anker_qualitaet_min_phys", 2))
+            # Der Szenario-Konsens des Vorrats wirkt im Sieb mit — DIESELBE
+            # Schwelle, keine zweite Zahl (core/vorrat.py: gegen Laub, Rauschen
+            # und Fremdgesichter, gemessen Hund 0,15 gegen echte 0,59+).
+            schwellen["vorrat_konsens_min"] = self.cfg.get("vorrat_konsens_min")
+            schwellen["anker_qualitaet_fd_wache"] = bool(
+                self.cfg.get("anker_qualitaet_fd_wache", True))
             self.log(f"anchor stage starting (run {lauf_id})")
             erg = _ank.anker_phase_fahren(
                 dd, os.path.join(dd, "state", "lernlauf", lauf_id), lauf_id,
                 zustand["events_liste"], schwellen, _al.clustere,
                 os.environ.get("SUSLIK_VERSION", "dev"), self.log,
-                lambda **u: _ll.lauf_fortschreiben(dd, **u))
+                lambda **u: _ll.lauf_fortschreiben(dd, **u),
+                norm_latte=norm_latte_aus_cfg(self.cfg))
             if erg is not None:
                 # Crash-Loop-Wache (#20): erfolgreicher Abschluss setzt den
                 # Boot-Resume-Zaehler zurueck — nur ununterbrochene Fehlserien
@@ -5862,6 +6191,13 @@ class Service:
                 # Wizard dauerhaft blockiert). Schreibt nur ZUSATZ-Schluessel
                 # in fortschritt (gemischt), nie den anchors-Status.
                 self._lernlauf_vorrat(lauf_id, zustand["events_liste"])
+                # Phase 3 des intelligenten Lernens (analysen/intelligentes_lernen.md):
+                # fertige Gruppen gegen die BENANNTEN Personen halten und die
+                # eindeutigen selbst benennen. Bewusst HIER, nach Endsichtung und
+                # Vorrat: vorher haengt sie am Resume-Fenster der Anker-Phase, und
+                # ein Boot-Resume koennte auto-benannte Zeilen behalten UND neue
+                # anhaengen (doppelte anker_id). Eigener Schritt, kein Phasenwert.
+                self._lernlauf_zuweisung(lauf_id)
         except Exception as e:
             from core import lernlauf as _ll2
             _ll2.lauf_fortschreiben(dd, fortschritt={"status": f"anchor stage failed: {e}"})
@@ -6185,6 +6521,116 @@ class Service:
                     "stock offers": f"failed: {type(e).__name__}: {e}"[:120]})
             except Exception:
                 pass
+
+    def _lernlauf_zuweisung(self, lauf_id):
+        """Phase 3: unbenannte Gruppen dieses Laufs, die eindeutig zu einer
+        bereits benannten Person gehoeren, selbst benennen. Drei Huerden
+        zugleich (core.anker.zuweisung_pruefen). Was nicht eindeutig ist,
+        bleibt unbenannt und wartet auf den Nutzer — das ist der Normalfall,
+        kein Fehler. Fehler sind LAUT, kippen aber nie den Lauf-Abschluss."""
+        dd = self.cfg["data_dir"]
+        from core import anker as _ank
+        from core import lernlauf as _ll
+        try:
+            saetze, _kaputt = _ll.anker_lesen(dd)
+            offen = [a for a in saetze
+                     if (a.get("lauf") or {}).get("lauf_id") == lauf_id
+                     and a.get("status") == "unbenannt"]
+            if not offen:
+                return
+            import anlernen as _al
+            refs = _al.refs_matrix_roh(self.cfg.get("modell") or "adaface")
+            if not refs:
+                # W2.13-Muster: ohne Referenzen ist nichts zuzuordnen — sagen,
+                # nicht still nichts tun.
+                _ll.lauf_fortschreiben(dd, fortschritt={
+                    "smart naming": "skipped — no named people yet"})
+                self.log(f"smart naming skipped (run {lauf_id}): no references")
+                return
+            vor = _ank.zuweisung_pruefen(
+                offen, refs,
+                sim_min=float(self.cfg.get("anker_zuweisung_sim", 0.45)),
+                marge_min=float(self.cfg.get("anker_zuweisung_marge", 0.10)),
+                einigkeit_min=float(self.cfg.get("anker_zuweisung_einigkeit", 80)) / 100.0)
+            gesetzt = 0
+            _ldir = os.path.join(dd, "state", "lernlauf", str(lauf_id))
+            from core.uebernahme import adoptierte_embs as _ue_ad
+            for v in vor:
+                if not v.get("sicher"):
+                    continue
+                try:
+                    satz = next((a for a in offen if a.get("anker_id") == v["anker_id"]), None)
+                    if satz is None:
+                        continue
+                    # Der Nutzer-Weg schreibt beim Benennen DREI Dinge: person,
+                    # die Auswahl je Mitglied und den Bedingungs-Tag. Ohne die
+                    # letzten beiden laeuft die spaetere Uebernahme in
+                    # "nothing selected" (.349/Issue 26). Die Auswahl trifft
+                    # hier dieselbe Funktion wie die Oberflaeche —
+                    # core.benennung.empfehlen, EINE Quelle, keine zweite Regel.
+                    from core import benennung as _bn
+                    werte = {"k_je_bin": self.cfg["benennung_k_je_bin"],
+                             "yaw_grenze": self.cfg["benennung_yaw_grenze"],
+                             "dup_sim": self.cfg["benennung_dup_sim"]}
+                    # .366 (User-Fund 28.08.): das Urteil der Gruppen-Flaeche
+                    # geht MIT in die Auswahl. Ohne diese Zeilen empfahl die
+                    # Auto-Benennung Bilder, die dieselbe Software auf der
+                    # Flaeche durchfallen laesst — gemessen 3 von 40 im Lauf
+                    # L20260828_220718 (zwei unter der Qualitaetslinie, eines
+                    # an der Identitaet), und sie waeren als Referenzen ins
+                    # System gegangen. Faellt die Sichtung aus, bleibt stufen
+                    # None und die Auswahl ist die alte.
+                    _stufen = None
+                    try:
+                        _si = _al.sichtung_lesen(satz, _ldir, self.cfg["modell"])
+                        if _si:
+                            _stufen = {b["datei"]: b["stufe"]
+                                       for b in _al.sichtung_bewerten(
+                                           v["person"], _si, refs, werte["dup_sim"],
+                                           _ue_ad(dd, v["person"]),
+                                           norm_latte=norm_latte_aus_cfg(self.cfg),
+                                           luma_grenzen=luma_grenzen_aus_cfg(self.cfg))}
+                    except Exception as e:
+                        self.log(f"smart naming: picture check unavailable for "
+                                 f"{v['anker_id']} ({type(e).__name__}: {e}) — "
+                                 "selecting without it")
+                    bewertet, _flags = _bn.empfehlen(
+                        satz.get("mitglieder") or [], werte["k_je_bin"],
+                        werte["yaw_grenze"], werte["dup_sim"],
+                        luma_grenzen=luma_grenzen_aus_cfg(self.cfg),
+                        stufen=_stufen)
+                    gewaehlt = {b["datei"] for b in bewertet if b.get("empfohlen")}
+                    mit = [dict(m, gewaehlt=(str(m.get("datei", "")).rsplit("/", 1)[-1]
+                                             in gewaehlt
+                                             or m.get("datei") in gewaehlt))
+                           for m in (satz.get("mitglieder") or [])]
+                    n_gew = sum(1 for m in mit if m["gewaehlt"])
+                    if not n_gew:
+                        # Keine Empfehlung = keine Uebernahme moeglich. Dann NICHT
+                        # benennen, sonst steht eine Gruppe mit Namen da, deren
+                        # Adopt-Knopf ins Leere laeuft.
+                        self.log(f"smart naming: {v['anker_id']} skipped "
+                                 "(no image passed the naming check)")
+                        continue
+                    tag = {"modell": (mit[0].get("modell", "") if mit else ""),
+                           "k_je_bin": werte["k_je_bin"],
+                           "yaw_grenze": werte["yaw_grenze"],
+                           "dup_sim": werte["dup_sim"]}
+                    _ll.anker_aktualisieren(
+                        dd, v["anker_id"], person=v["person"], status="benannt",
+                        mitglieder=mit,
+                        auswahl={"ts": round(time.time(), 1), "n": n_gew,
+                                 "bedingungs_tag": tag},
+                        zuweisung={"art": "auto", "sim": v["sim"], "marge": v["marge"],
+                                   "einigkeit": v["einigkeit"], "zweiter": v["zweiter"]})
+                    gesetzt += 1
+                except Exception as e:
+                    self.log(f"smart naming: {v['anker_id']} not written ({e})")
+            _ll.lauf_fortschreiben(dd, fortschritt={
+                "smart naming": f"{gesetzt} of {len(vor)} groups named automatically"})
+            self.log(f"smart naming (run {lauf_id}): {gesetzt} of {len(vor)} groups named")
+        except Exception as e:
+            self.log(f"smart naming failed (run {lauf_id}): {e}")
 
     def _lernlauf_endsichtung(self, lauf_id):
         """.294: Sichtung als TEIL des Laufs (Cache je Gruppe vorrechnen, damit
@@ -6641,6 +7087,20 @@ class Service:
                     rest_txt = f"~{int(round(rest_s / 60))} min"
                 except Exception:
                     pass
+                # Feld-Fund 28.08. (Shaun-Log): 5 h 22 min Ernte OHNE eine
+                # einzige Dienst-Log-Zeile — der Fortschritt lebte nur in der
+                # UI-Datei, eine Ferndiagnose per Log war blind. Gedrosselt
+                # (alle 25 Events oder 10 min, was zuerst kommt) EINE Zeile
+                # mit denselben Zahlen, die auch die UI traegt.
+                if (i % 25 == 0 or i == n
+                        or time.time() - getattr(self, "_ernte_logpuls", 0) >= 600):
+                    self._ernte_logpuls = time.time()
+                    self.log(f"harvest progress: {i}/{n} events, "
+                             f"{summe.get('kandidaten', 0)} candidates, "
+                             f"{summe.get('ohne_gesicht', 0)} without face, "
+                             f"{summe.get('unlesbar', 0)} unreadable"
+                             + (f", {rest_txt} remaining"
+                                if rest_txt and rest_txt != "?" else ""))
                 fs = {"event": f"{i}/{n}", "candidates": summe.get("kandidaten", 0),
                       "crop-worthy (M)": summe.get("m", 0),
                       "anchor-ready (S)": summe.get("s", 0),
@@ -7669,15 +8129,24 @@ class Service:
                         and not _fr.gepinnt(os.path.join(cache, fn))
                         and not _fr.wird_behalten(os.path.join(cache, fn))]
                 befreit = 0
+                geloescht = 0
                 for fn in gone:
+                    # Feld-Fund 28.08. (Shaun-Log 09:48:58): eine .part-Datei
+                    # verschwand zwischen listdir und remove (personwork
+                    # raeumte sie selbst weg) — die FileNotFoundError fiel in
+                    # den aeusseren Fang und beendete den GANZEN Durchgang
+                    # (Size-Cap, Live-Aufraeumen und DISK-LOW-Pruefung
+                    # entfielen mit). Der Size-Cap-Zweig unten macht es seit
+                    # jeher richtig; hier dieselbe Absicherung.
                     try:
                         befreit += os.path.getsize(os.path.join(cache, fn))
+                        os.remove(os.path.join(cache, fn))
+                        geloescht += 1
                     except OSError:
-                        pass
-                    os.remove(os.path.join(cache, fn))
-                if gone:
-                    self.log(f"cache cleanup: {len(gone)} clips older than {self.cfg['clip_retention_d']}d deleted")
-                erg["geloescht"] += len(gone)
+                        continue
+                if geloescht:
+                    self.log(f"cache cleanup: {geloescht} clips older than {self.cfg['clip_retention_d']}d deleted")
+                erg["geloescht"] += geloescht
                 _cap_gb, _frei_gb, _quelle = self.speichergrenzen()
                 cap = _cap_gb * 1024**3
                 boden = _frei_gb * 1024**3
@@ -8131,18 +8600,78 @@ class Service:
             return False
 
     # -------------------------------------------------------------- Trigger: poll / Nachhol-Sweep
-    def sweep(self):
+    # ------------------------------------------------- .371 Zurueckgehaltener Stapel
+    def _catchup_laden(self):
+        """-> (ids, aeltestes_start_time, seit). Fehlt oder bricht die Datei, ist
+        der Stapel leer: dann bietet der naechste Sweep neu an, was er findet —
+        schlechter als der echte Stand, aber nie schlechter als gar kein Angebot."""
+        try:
+            with open(self._catchup_pfad) as f:
+                d = json.load(f)
+            _ids = d.get("ids") or ()
+            # Ein String waere iterierbar und wuerde zu einer Menge von BUCHSTABEN —
+            # der Merkzettel enthielte dann Unsinns-IDs, die nie zu einem Ereignis
+            # passen und den Knopf dauerhaft stehen liessen.
+            if not isinstance(_ids, (list, tuple, set)):
+                raise TypeError("ids ist keine Liste")
+            return ({str(i) for i in _ids}, float(d.get("aeltest") or 0.0),
+                    float(d.get("seit") or 0.0))
+        except (OSError, ValueError, TypeError, AttributeError):
+            # AttributeError gehoert dazu: gueltiges JSON in falscher Form (eine
+            # Liste statt eines Objekts) haette sonst den Dienststart gerissen.
+            # Ein unlesbarer Merkzettel darf nie mehr kosten als sich selbst.
+            return set(), 0.0, 0.0
+
+    def _catchup_sichern(self):
+        """Schreibt den Merkzettel atomar. Der Aufrufer haelt _start_sweep_lock."""
+        try:
+            os.makedirs(os.path.dirname(self._catchup_pfad), exist_ok=True)
+            tmp = self._catchup_pfad + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump({"ids": sorted(self._catchup_zurueck),
+                           "aeltest": round(self._catchup_aeltest, 1),
+                           "seit": round(self._catchup_seit, 1)}, f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, self._catchup_pfad)
+        except OSError as e:
+            self.log(f"catch-up: could not save the held stack ({e})")
+
+    def catchup_vorgabe_stunden(self):
+        """Wie weit der Dialog vorschlagen muss, damit der Lauf den Stapel WIRKLICH
+        erreicht. Aus dem aeltesten zurueckgehaltenen Ereignis, aufgerundet und um
+        eine Stunde Reserve, geklemmt an die Whitelist-Spanne. Ohne das stand dort
+        cfg["lookback_h"] — und ein Klick nach dessen Ablauf holte nichts."""
+        lo, hi = (self.CONFIG_WHITELIST["lookback_h"][1],
+                  self.CONFIG_WHITELIST["lookback_h"][2])
+        if not self._catchup_aeltest:
+            return max(lo, min(hi, int(self.cfg["lookback_h"])))
+        alter_h = (time.time() - self._catchup_aeltest) / 3600.0
+        return max(lo, min(hi, int(math.ceil(alter_h)) + 1))
+
+    def sweep(self, stunden=None, limit=None):
         """Unverarbeitete person-Events der letzten lookback_h nachholen (Poll-Modus,
-        MQTT-Start und -Reconnect) — Neustarts/Downtime reissen keine Loecher ins Log."""
+        MQTT-Start und -Reconnect) — Neustarts/Downtime reissen keine Loecher ins Log.
+
+        stunden/limit setzt NUR der vom Nutzer angestossene Nachhol-Lauf (.371,
+        Knopf in der Kopfleiste): er fragt beim Druecken, wie weit zurueck und
+        wie viele hoechstens. Ein solcher Lauf gilt nie als "erster" Sweep, geht
+        also weder in den ask- noch in den off-Zweig — der Nutzer hat ja gerade
+        entschieden, dass geholt werden soll."""
         cfg = self.cfg
+        auf_wunsch = stunden is not None or limit is not None
+        # Nur lesen, nicht ziehen: die Start-Marke faellt erst nach dem api()-Aufruf
+        # (s. .340 weiter unten). Fuer die Modus-Aufloesung genuegt der Blick.
+        erster_kandidat = self._start_sweep_offen and not auf_wunsch
         # .352: aus der Config statt hart verdrahtet (Boden 1, damit ein Tippfehler
         # den Sweep nicht stilllegt). Herkunft und Feldzahlen am Default in load_config.
         try:
-            LIMIT = max(1, int(cfg.get("sweep_limit") or 200))
+            LIMIT = max(1, int(limit if limit is not None else (cfg.get("sweep_limit") or 200)))
         except (TypeError, ValueError):
             LIMIT = 200
         try:
-            after = time.time() - cfg["lookback_h"] * 3600
+            _std = stunden if stunden is not None else cfg["lookback_h"]
+            after = time.time() - float(_std) * 3600
             evs = api(cfg, f"/api/events?label=person&after={after:.0f}&limit={LIMIT}&include_thumbnails=0")
             # after= filtert auf start_time (16.07. gemessen): Events, die VOR lookback_h
             # starteten und erst in einer Downtime endeten, entgehen dem Sweep — bei
@@ -8157,22 +8686,125 @@ class Service:
                 # kleineres Fenster hilft also nicht und verkleinert nur das Nachhol-Netz.
                 # Frigate liefert die NEUESTEN zuerst; abgeschnitten wird das aeltere Ende.
                 self.log(f"sweep: Frigate returned the limit of {LIMIT} events — older ones in the "
-                         f"last {cfg['lookback_h']}h may be missing. On a busy site raise "
+                         f"last {_std}h may be missing. On a busy site raise "
                          f"sweep_limit (currently {LIMIT})")
             todo = [ev for ev in sorted(evs, key=lambda e: e["start_time"])
                     if ev["id"] not in self.processed and ev.get("end_time")
                     and time.time() - ev["end_time"] >= cfg["clip_delay"]]
+            # .371: Was beim Start zurueckgehalten wurde, bleibt draussen, bis der
+            # Nutzer den Knopf drueckt. Ohne diesen Filter holte der ZWEITE Sweep
+            # genau den Stapel nach, den der erste bewusst liegen liess.
+            #
+            # WIDERLEGER-FUND 29.08. (schwer, stiller Verlust): hier stand
+            # `if auf_wunsch: self._catchup_zurueck = set()` — der Merkzettel wurde
+            # geleert, BEVOR feststand, ob dieser Lauf den Stapel ueberhaupt
+            # erreicht. Wer den Knopf spaeter als lookback_h nach dem Start drueckte
+            # (bei Vorgabe 2 h der Normalfall), bekam eine leere todo-Liste UND
+            # einen geleerten Merkzettel: die Events waren endgueltig weg, ohne
+            # Zeile in der Akte und ohne Logeintrag. Und wer im Dialog eine kleine
+            # Obergrenze waehlte, verlor den Rest an den naechsten Poll-Sweep, weil
+            # der Filter danach nichts mehr kannte. Deshalb: beim Nutzer-Lauf wird
+            # NICHT vorab geleert. Freigegeben wird erst NACH dem Lauf, und nur die
+            # IDs, die dieser Lauf wirklich in todo genommen hat.
+            with self._start_sweep_lock:
+                zurueck = set(self._catchup_zurueck)
+            # WIDERLEGER-FUND 29.08. (2. Runde): Der Merkzettel ueberlebt jetzt einen
+            # Neustart — und ein Wechsel des Schalters LOEST einen Neustart aus. Wer
+            # von "fragen" auf "sofort" oder "ueberspringen" stellte, hatte danach
+            # einen Stapel, den niemand mehr aufloest: er filterte jeden Sweep, wurde
+            # aber nie abgearbeitet und nie abgehakt. Der Schalter sagte das eine, das
+            # System tat das andere. Deshalb wird der Merkzettel beim ersten Sweep
+            # unter einem anderen Modus aufgeloest: bei "on" gibt er den Stapel zur
+            # normalen Verarbeitung frei, bei "off" faellt er in den Ueberspringen-
+            # Zweig weiter unten, der ihn ordentlich in die Akte schreibt.
+            if zurueck and erster_kandidat and catchup_modus(cfg) != "ask":
+                _n_alt = len(zurueck)
+                with self._start_sweep_lock:
+                    self._catchup_zurueck = set()
+                    self._catchup_aeltest = 0.0
+                    self._catchup_seit = 0.0
+                    self._catchup_sichern()
+                zurueck = set()
+                self.log(f"catch-up: the switch is set to '{catchup_modus(cfg)}' — "
+                         f"the {_n_alt} events on the list are handled that way now")
+            # WIDERLEGER-FUND 29.08. (2. Runde): gehaltene Ereignisse, die Frigate
+            # nicht mehr kennt (Aufbewahrung abgelaufen, geloescht) oder die jenseits
+            # der Whitelist-Obergrenze von lookback_h gealtert sind, tauchten NIE
+            # wieder in einer Antwort auf. Sie blieben ewig im Merkzettel, der Knopf
+            # trug eine Zahl, die durch keine Bedienhandlung kleiner wurde. Deshalb:
+            # Wenn ein Lauf des Nutzers das gesamte Fenster abgefragt hat, ohne ans
+            # Limit zu stossen — die Antwort also VOLLSTAENDIG war — und ein
+            # gehaltenes Ereignis liegt trotzdem nicht darin, dann gibt es das
+            # Ereignis nicht mehr. Es kommt aus dem Merkzettel und wird gesagt.
+            # Bedingung dafuer, dass ein Fehlen ueberhaupt etwas BEDEUTET: das
+            # abgefragte Fenster muss bis zum aeltesten gehaltenen Ereignis reichen.
+            # Sonst fehlt es nur, weil danach gar nicht gefragt wurde — die Probe
+            # faengt genau diesen Denkfehler (B1: Klick mit zu kleinem Fenster).
+            #
+            # WIDERLEGER-FUND 30.08. (gemessen): diese Bedingung war NICHT
+            # erfuellbar, sobald das aelteste gehaltene Ereignis aelter wurde als
+            # die Whitelist-Obergrenze von lookback_h. Ueber 72 h hinaus kann
+            # NIEMAND fragen (catchup_vorgabe_stunden klemmt dort, /catchup_start
+            # ebenso) — der Vergleich blieb also dauerhaft falsch, und weil er
+            # GLOBAL ueber das aelteste Element geht, fror ein einziges gealtertes
+            # Ereignis die Bereinigung des ganzen Stapels ein: der Zaehler in
+            # /health sank nie wieder, der Merkzettel wuchs nur noch, und die
+            # Empfehlung "press again with a larger range" zeigte auf einen
+            # Bereich, den es nicht gibt. Deshalb die zweite Haelfte: hat der Lauf
+            # das GROESSTE Fenster abgefragt, das ueberhaupt erlaubt ist, dann ist
+            # ein gehaltenes Ereignis, das darin nicht vorkommt, auf keinem Weg
+            # mehr erreichbar — egal ob Frigate es geloescht hat oder ob es aus
+            # der Spanne gealtert ist. Es kommt aus dem Merkzettel und wird gesagt.
+            _max_h = self.CONFIG_WHITELIST["lookback_h"][2]
+            _deckt_ab = (self._catchup_aeltest
+                         and (float(_std) * 3600 >= (time.time() - self._catchup_aeltest)
+                              or float(_std) >= _max_h))
+            if zurueck and auf_wunsch and len(evs) < LIMIT and _deckt_ab:
+                _da = {e["id"] for e in evs}
+                _fort = zurueck - _da
+                if _fort:
+                    with self._start_sweep_lock:
+                        self._catchup_zurueck -= _fort
+                        if not self._catchup_zurueck:
+                            self._catchup_seit = 0.0
+                            self._catchup_aeltest = 0.0
+                        self._catchup_sichern()
+                    zurueck -= _fort
+                    self.log(f"catch-up: {len(_fort)} held events can no longer be "
+                             f"fetched — gone from Frigate (retention), or older than "
+                             f"the largest window that may be asked for ({_max_h}h) — "
+                             f"dropped from the list, {len(zurueck)} left")
+            if zurueck and not auf_wunsch:
+                # Ein normaler Sweep laesst den gehaltenen Stapel liegen. Der vom
+                # Nutzer angestossene Lauf sieht ihn dagegen — er ist ja die Antwort
+                # auf das Angebot.
+                todo = [ev for ev in todo if ev["id"] not in zurueck]
             # .340: erst HIER die Start-Marke ziehen, nicht am Methodenkopf — scheitert der
             # api()-Aufruf oben, ist der naechste Sweep weiterhin "der erste" und ein
             # Frigate-Haenger beim Start hebelt start_catchup nicht aus.
+            # WIDERLEGER-FUND 30.08. (nachgestellt): die Zuweisung lief UNBEDINGT,
+            # also auch auf dem vom Nutzer angestossenen Lauf — entgegen dem
+            # Docstring oben ("gilt nie als 'erster' Sweep"). Scheiterte der echte
+            # erste Sweep an einem Frigate-Timeout und drueckte der Nutzer in dem
+            # Fenster auf Nachholen, verbrauchte SEIN Lauf die Marke: der naechste
+            # regulaere Sweep war nicht mehr "der erste", und der beim Start
+            # aufgelaufene Rest lief bei "off" ungefragt durch die Analyse statt
+            # als uebersprungen in die Akte zu gehen. Auf dem Nutzer-Pfad hat das
+            # Ziehen der Marke keine andere Wirkung (nachholend ist ueber
+            # auf_wunsch ohnehin wahr, die beiden Start-Zweige verlangen
+            # `not auf_wunsch`) — der Guard kostet also nichts.
             with self._start_sweep_lock:
-                erster = self._start_sweep_offen
-                self._start_sweep_offen = False
+                erster = self._start_sweep_offen and not auf_wunsch
+                if not auf_wunsch:
+                    self._start_sweep_offen = False
             # Im MQTT-Betrieb ist JEDER Sweep ein Nachhol-Sweep (Start + Reconnect, sonst
             # treibt MQTT); im Poll-Betrieb ist er der NORMALE Antrieb — dort meldet nur der
             # erste Lauf, sonst blinkt der Banner bei jedem einzelnen Event auf. Ehrliche
             # Grenze: ein spaeterer echter Rueckstau im Poll-Modus bekommt so keinen Banner.
-            nachholend = erster or cfg["trigger"] == "mqtt"
+            # Widerleger-Fund 29.08.: ohne `auf_wunsch` blieb aktiv im Poll-Betrieb
+            # False — der Nutzer klickte, wurde auf /heute geleitet und sah dort
+            # NICHTS, und der 409-Riegel gegen Doppelstarts war toter Code.
+            nachholend = erster or auf_wunsch or cfg["trigger"] == "mqtt"
             # .340 start_catchup=false: NUR der beim Start bereits aufgelaufene Stapel wird
             # uebersprungen. Vor dem Leer-Master-Guard, weil Ueberspringen keine Referenzen
             # braucht — eine frische Installation soll den Stapel genauso loswerden.
@@ -8180,7 +8812,26 @@ class Service:
             # gelesen); eigene Kategorie, damit der Nachhol-Lauf sie nicht als 'fehler'
             # wieder aufgreift. Bewusst hingenommen: solche Events zaehlen auf /heute als
             # motion-only passes mit — sie sind unter Events auffindbar, das ist ehrlich.
-            if todo and erster and not cfg.get("start_catchup", True):
+            # .371 "ask" (Default): den Start-Stapel NICHT anfassen, nur merken —
+            # der Knopf in der Kopfleiste bietet ihn dem Nutzer an. Bewusst vor
+            # jedem Schreibweg: dieser Zweig aendert nichts und ist damit der
+            # einzige, der sich folgenlos rueckgaengig machen laesst.
+            if todo and erster and not auf_wunsch and catchup_modus(cfg) == "ask":
+                with self._start_sweep_lock:
+                    # Vereinigung statt Zuweisung: nach einem Neustart liegt schon
+                    # ein Stapel auf der Platte, den dieser Lauf nicht wegwerfen darf.
+                    self._catchup_zurueck |= {ev["id"] for ev in todo}
+                    _alt = min(float(ev["start_time"]) for ev in todo)
+                    self._catchup_aeltest = (min(self._catchup_aeltest, _alt)
+                                             if self._catchup_aeltest else _alt)
+                    if not self._catchup_seit:
+                        self._catchup_seit = time.time()
+                    self._catchup_sichern()
+                self.log(f"sweep: {len(self._catchup_zurueck)} events from the last "
+                         f"{_std}h are waiting — start catch-up is set to ask, use the "
+                         f"button in the header to work through them")
+                return
+            if todo and erster and not auf_wunsch and catchup_modus(cfg) == "off":
                 # self.lock wie bei jedem anderen Akte-Schreibweg (process()-Append,
                 # _deckung_korrektur, das Read-Rewrite-Replace weiter oben) — sonst
                 # koennte ein gleichzeitiger Rewrite diese Zeilen verlieren.
@@ -8213,10 +8864,31 @@ class Service:
                 return
             if todo:
                 self.log(f"sweep: catching up on {len(todo)} unprocessed events")
+            elif auf_wunsch:
+                # Widerleger-Fund 29.08.: hier war der Lauf stumm. Sagen, dass
+                # nichts zu holen war, und WARUM — sonst sieht der Nutzer nur
+                # einen Klick ohne Wirkung.
+                with self._start_sweep_lock:
+                    _hielt = len(self._catchup_zurueck)
+                self.log(f"catch-up: nothing to fetch in the last {_std}h "
+                         f"(limit {LIMIT})"
+                         + (f" — {_hielt} held events are older than that window, "
+                            f"press again with a larger range" if _hielt else ""))
             # EIGENE Referenz statt self._sweep_stand: ueberholt ein zweiter Sweep diesen
             # hier (MQTT-Reconnect mitten im Nachholen), zaehlt der alte Lauf auf SEINEM
             # Dict weiter und sein finally loescht nicht den Banner des neuen.
-            stand = self._sweep_stand
+            #
+            # WIDERLEGER-FUND 30.08. (gemessen, nicht gelesen): hier stand
+            # `stand = self._sweep_stand`. Bei LEEREM todo blieb das die Referenz auf
+            # das Dict eines FREMDEN, noch laufenden Laufs — der Poll-Takt findet
+            # neben einem Nutzer-Lauf regelmaessig nichts, weil dessen Ereignisse
+            # schon in self.processed stehen. Das finally setzte dann aktiv=False auf
+            # dem fremden Stand: Banner weg, /health.rueckstau.aktiv aus, 409-Riegel
+            # offen, und ein zweiter Lauf verarbeitete denselben Stapel doppelt
+            # (gemessen: 18 von 20 Ereignissen zweimal). Die Wache unten griff nicht,
+            # weil `self._sweep_stand is stand` galt. Deshalb: ein Lauf ohne eigenes
+            # Dict hat NICHTS abzuraeumen — stand bleibt None.
+            stand = None
             if todo:
                 # int(): t_n waehlt die Plural-Form ueber int(n) — ein lookback_h von 1.5
                 # ergaebe sonst "the last 1.5 hour". Der Rundungsverlust ist die kleinere
@@ -8225,14 +8897,51 @@ class Service:
                 # aktiv=nachholend: gezaehlt wird immer, den Banner traegt nur ein
                 # echter Nachhol-Lauf.
                 self._sweep_stand = stand = {"aktiv": nachholend, "gesamt": len(todo),
-                                             "fertig": 0, "stunden": int(cfg["lookback_h"])}
+                                             "fertig": 0, "stunden": int(_std),
+                                             # .371 (Widerleger-Fund, 2. Runde): der
+                                             # Banner bot bisher auch waehrend eines
+                                             # vom NUTZER gestarteten Laufs an, das
+                                             # Nachholen abzuschalten — mitsamt
+                                             # Dienst-Neustart. Wer gerade auf "Holen"
+                                             # geklickt hat, bekommt dieses Angebot
+                                             # nicht mehr; es widerspricht seiner
+                                             # eigenen Entscheidung von vor einer Minute.
+                                             "auf_wunsch": bool(auf_wunsch)}
             try:
                 for ev in todo:
                     self.process_safe(ev["id"])
                     stand["fertig"] = stand.get("fertig", 0) + 1
+                    # WIDERLEGER-FUND 29.08. (zweite Runde, schwer): die Freigabe des
+                    # Merkzettels stand frueher WEIT vor dieser Schleife, direkt hinter
+                    # dem Bau der todo-Liste. Dazwischen liegen mehrere vorzeitige
+                    # return — unter anderem der Leer-Master-Riegel. Auf einer frischen
+                    # Installation, in der noch niemand angelernt ist, strich ein Klick
+                    # damit den ganzen Stapel, ohne ein einziges Ereignis zu pruefen:
+                    # der Knopf verschwand, die Ereignisse wurden nie angeschaut.
+                    # Jetzt wird genau das freigegeben, was WIRKLICH durch war. Damit
+                    # deckt die Freigabe auch jeden kuenftigen Rueckweg ab, und ein
+                    # Abbruch mittendrin (Neustart, Ausnahme) laesst den Rest gehalten.
+                    if auf_wunsch and zurueck:
+                        with self._start_sweep_lock:
+                            self._catchup_zurueck.discard(ev["id"])
+                            if not self._catchup_zurueck:
+                                self._catchup_seit = 0.0
+                                self._catchup_aeltest = 0.0
+                            self._catchup_sichern()
             finally:
                 # Pflicht: ohne finally bliebe der Banner nach einem Abbruch ewig stehen.
-                stand["aktiv"] = False
+                # stand is None = dieser Lauf hatte nichts zu tun und deshalb auch
+                # keinen eigenen Stand — er fasst den fremden nicht an (s. oben).
+                if stand is not None:
+                    stand["aktiv"] = False
+                    # Widerleger-Fund 29.08. (2. Runde): laeuft daneben ein zweiter Sweep
+                    # (der Nutzer-Lauf im eigenen Thread neben dem Poll-Takt), zeigt
+                    # _sweep_stand dessen Dict. Der frueher fertige Lauf setzte dann
+                    # seinen eigenen Stand auf False, waehrend der andere noch arbeitete —
+                    # Banner weg, 409-Riegel offen. Nur wer WIRKLICH der aktuelle Stand
+                    # ist, darf ihn abraeumen.
+                    if self._sweep_stand is not stand and self._sweep_stand.get("aktiv"):
+                        self.log("sweep: another run is still going, leaving its banner up")
         except Exception as e:
             # Sichtbar machen: im Poll-Modus (Default der ausgelieferten Container) ist sweep() der
             # EINZIGE Frigate-Pfad. Ohne das blieben UI-Banner, System-Ampel und Stoerungswaechter
@@ -9628,6 +10337,14 @@ def make_handler(svc):
                                and _z0.get("wunsch_n") == _ev)
 
                 def _pl_lauf():
+                    # Feld-Fund 28.08. (Shaun-Log): diese Route schrieb KEINE
+                    # einzige Dienst-Log-Zeile — ein Person-Lauf war per
+                    # Ferndiagnose unsichtbar (ein nackter 'personwork
+                    # started' um 11:28 liess sich nicht einmal einem Lauf
+                    # zuordnen). Start und Ende je eine Zeile.
+                    svc.log(f"person learn run "
+                            f"{'resumed' if _wieder else 'started'}: "
+                            f"{_ev} events for {_person or '?'}")
                     try:
                         if _wieder:
                             _z = dict(_z0, phase="ernte")
@@ -9651,7 +10368,14 @@ def make_handler(svc):
                             return _a.get("r") if _a else None
                         _pl.fahren(cfg["data_dir"], _z, _fs,
                                    ernte_job=_ernte_job)
+                        _zf = (_pl.zustand_lesen(cfg["data_dir"]) or {})
+                        _ff = _zf.get("fortschritt") or {}
+                        svc.log(f"person learn run finished: "
+                                f"{_ff.get('events', '?')} events, "
+                                f"{_ff.get('bilder', '?')} images harvested")
                     except Exception as e:
+                        svc.log(f"person learn run FAILED: "
+                                f"{type(e).__name__}: {str(e)[:120]}")
                         try:
                             _z2 = _pl.zustand_lesen(cfg["data_dir"]) \
                                 or {"schema": 1}
@@ -9818,6 +10542,23 @@ def make_handler(svc):
                                           "msg": _sprache.t("antwort.lernlauf_schreibfehler",
                                                             fehler=e)},
                                           ensure_ascii=False), "application/json")
+                    # .365 (User 28.08.: "alte Laeufe koennen immer weg, also beim
+                    # Start der Ernte aufraeumen"): unbenannte Gruppen frueherer
+                    # Laeufe raus, bevor der neue anfaengt. Sie sind ueber die
+                    # Oberflaeche nicht mehr erreichbar (die zeigt nur den
+                    # aktuellen Lauf) und wachsen sonst mit jedem Lauf weiter —
+                    # am eigenen Bestand 82 von 157 Gruppen bei 29,7 MB.
+                    # Benannte, uebernommene und verworfene bleiben: sie speisen
+                    # die Namensvorschlaege, belegen Gelerntes und tragen das
+                    # Gedaechtnis des Dismiss-Knopfes.
+                    try:
+                        _weg, _rest = _ll.alte_anker_aufraeumen(cfg["data_dir"], None)
+                        if _weg:
+                            svc.log(f"anchor housekeeping: {_weg} unnamed group(s) "
+                                    f"of earlier runs removed, {_rest} kept")
+                    except Exception as e:
+                        # Aufraeumen darf einen Lauf NIE verhindern.
+                        svc.log(f"anchor housekeeping skipped ({type(e).__name__}: {e})")
                     svc.log("learning run created: scope "
                             + (f"day {tag_wahl}" if tag_wahl else f"{ev} events")
                             + (f", looking for {zielperson}" if zielperson else "")
@@ -9830,6 +10571,31 @@ def make_handler(svc):
                 return self._send(200, json.dumps({"ok": True,
                                   "msg": _sprache.t("antwort.lernlauf_angelegt")},
                                   ensure_ascii=False), "application/json")
+            if pfad == "/readme_gesehen":              # .371: Marke setzen (Seite geschlossen)
+                from core import readmefirst as _rmf
+                ok, msg = _rmf.gesehen_merken(cfg["data_dir"])
+                return self._send(200, json.dumps({"ok": ok, "msg": msg}),
+                                  "application/json")
+            if pfad == "/kameras/steckbriefe_neu":      # .368 (User 29.08.)
+                # Verwirft den Stream-Steckbrief-Cache. Ermittelt wird beim
+                # naechsten Dienststart, NICHT hier: das Proben dauert je Kamera
+                # bis zum ffprobe-Timeout (gemessen ~30 s bei unerreichbaren
+                # Quellen) und wuerde einen Klick minutenlang haengen lassen.
+                from core import livewache as _lw_n
+                try:
+                    _pf = _lw_n._steckbrief_cache_pfad(cfg)
+                    _n = len(_lw_n.steckbriefe_lesen(cfg))
+                    if os.path.exists(_pf):
+                        os.remove(_pf)
+                    svc.log(f"stream profiles: cache cleared on request "
+                            f"({_n} entr{'y' if _n == 1 else 'ies'}) — "
+                            "re-probed on the next restart")
+                    return self._send(200, json.dumps({"ok": True, "geloescht": _n}),
+                                      "application/json")
+                except Exception as e:
+                    return self._send(200, json.dumps(
+                        {"ok": False, "msg": f"{type(e).__name__}: {e}"}),
+                        "application/json")
             if pfad == "/lernlauf_abbruch":
                 # E2: Abbruch = Zustand entfernen + geerntete Artefakte nach
                 # state/lernlauf/trash/ verschieben (§6 Speicher-Reste: gesammelte
@@ -9873,6 +10639,46 @@ def make_handler(svc):
                 svc.log(f"learning run aborted (state removed{verschoben})")
                 return self._send(200, json.dumps(
                     {"ok": True, "msg": _sprache.t("antwort.lernlauf_abgebrochen")},
+                    ensure_ascii=False), "application/json")
+            if pfad == "/catchup_start":                       # .371 Nachholen auf Knopfdruck
+                # User 29.08.: "Wenn unser System startet, passiert nichts. Wenn
+                # unverarbeitete Events da sind, dann bieten wir den Knopf an, die
+                # Events zu holen. Beim Druecken des Knopfes koennte eine Frage sein,
+                # wie weit sollen wir zurueckgehen, wie viele Events sollen wir
+                # maximal holen." Beide Werte kommen deshalb vom Nutzer und gelten
+                # NUR fuer diesen Lauf — die Config bleibt unberuehrt.
+                try:
+                    n = int(self.headers.get("Content-Length", 0))
+                    d = json.loads(self.rfile.read(min(n, 4096))) if n else {}
+                    grenzen = svc.CONFIG_WHITELIST
+                    _lo_h, _hi_h = grenzen["lookback_h"][1], grenzen["lookback_h"][2]
+                    _lo_n, _hi_n = grenzen["sweep_limit"][1], grenzen["sweep_limit"][2]
+                    std = max(_lo_h, min(_hi_h, int(d.get("stunden") or cfg["lookback_h"])))
+                    lim = max(_lo_n, min(_hi_n, int(d.get("limit") or cfg.get("sweep_limit") or 200)))
+                # AttributeError gehoert dazu (Widerleger-Fund 30.08., end-to-end
+                # nachgestellt): gueltiges JSON, das kein Objekt ist — `[]`, `5`,
+                # `"x"`, `null` — laesst json.loads durch, und erst d.get() wirft.
+                # do_POST hat keinen Sammel-Except, die Ausnahme lief also bis in
+                # den socketserver: der Client bekam KEINE HTTP-Antwort (Verbindung
+                # zu statt 400), und im Dienst-Log stand ein voller Traceback —
+                # worauf das Prod-Log-Gate (qs.sh --prod, Release-Stufe 2) rot
+                # geht, ohne dass ein Dienstfehler vorlaege.
+                except (AttributeError, TypeError, ValueError) as e:
+                    return self._send(400, json.dumps(
+                        {"ok": False, "msg": f"bad values: {e}"}), "application/json")
+                if getattr(svc, "_sweep_stand", {}).get("aktiv"):
+                    return self._send(409, json.dumps(
+                        {"ok": False, "msg": _sprache.t("antwort.catchup_laeuft")},
+                        ensure_ascii=False), "application/json")
+                # Im Hintergrund: ein Nachhol-Lauf dauert Minuten bis Stunden, die
+                # Antwort darf darauf nicht warten. Fortschritt liest die Seite aus
+                # /health wie bei jedem anderen Sweep.
+                threading.Thread(target=lambda: svc.sweep(stunden=std, limit=lim),
+                                 daemon=True).start()
+                svc.log(f"catch-up started by user: last {std}h, at most {lim} events")
+                return self._send(200, json.dumps(
+                    {"ok": True, "stunden": std, "limit": lim,
+                     "msg": _sprache.t("antwort.catchup_gestartet", stunden=std, n=lim)},
                     ensure_ascii=False), "application/json")
             if pfad == "/konfig":                              # Konfigblatt speichern (AP5)
                 try:
@@ -9919,12 +10725,26 @@ def make_handler(svc):
                         fehl.append(f"{kam}: {msg}")
                 # Tranche D: je Zweig ein voller Text (B9); die fehl-Liste
                 # ("{kamera}: {fachschicht-msg}") bleibt Grenze (a).
+                # .362 (Konzept-QS: kein 'N von N an' fuer Waechter, die erst
+                # noch getestet werden): ehrlich sagen, wie viele Quelltests
+                # der Aufsichts-Takt jetzt nacheinander nachreicht.
+                _nachtest = 0
+                if an and not fehl:
+                    try:
+                        _d3, _g3 = _lw_s.guards_lesen(cfg, log=lambda z: None)
+                        _nachtest = sum(1 for _gg in _g3.values()
+                                        if _gg.get("enabled")
+                                        and not _lw_s.test_gueltig(_gg)[0])
+                    except Exception:
+                        _nachtest = 0
                 m = (_sprache.t("antwort.live_nichts") if not ziele else
                      (_sprache.t("antwort.live_an",
                                  ok=len(ziele) - len(fehl), alle=len(ziele))
                       if an else
                       _sprache.t("antwort.live_aus",
                                  ok=len(ziele) - len(fehl), alle=len(ziele)))
+                     + (" — " + _sprache.t("antwort.live_nachtests",
+                                           n=_nachtest) if _nachtest else "")
                      + (" — " + "; ".join(fehl)[:300] if fehl else ""))
                 return self._send(200, json.dumps(
                     {"ok": not fehl, "msg": m}), "application/json")
@@ -10211,7 +11031,11 @@ def make_handler(svc):
                            "dup_sim": cfg["benennung_dup_sim"]}
                     _ll.anker_aktualisieren(
                         cfg["data_dir"], aid, person=name, status="benannt", mitglieder=mit,
-                        auswahl={"ts": round(time.time(), 1), "n": n_match, "bedingungs_tag": tag})
+                        auswahl={"ts": round(time.time(), 1), "n": n_match, "bedingungs_tag": tag},
+                        # Sobald der Nutzer benennt oder eine Auto-Benennung
+                        # korrigiert, gehoert die Zeile IHM: sie zaehlt wieder im
+                        # E4a-Resume-Schutz und traegt keine Auto-Pille mehr.
+                        zuweisung={"art": "nutzer", "ts": round(time.time(), 1)})
                     # .200 (Fix 4): "ships with E4b"/"pending" war seit dem Bau der
                     # Uebernahme (/lernlauf/uebernehmen) falsch — der Adopt-Knopf
                     # erscheint direkt nach dem Benennen.
@@ -10557,6 +11381,25 @@ def make_handler(svc):
                                + _sprache.t("antwort.adopt_watchdog")}, ensure_ascii=False), "application/json")
                 except Exception as e:
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
+            if pfad == "/support_token_neu":
+                # Support-Zugriff (.362): Token erzeugen/rotieren. POST wegen
+                # des CSRF-Schutzes oben; Klartext EINMALIG in der Antwort
+                # (no-store via _send/application/json), danach zeigt die UI
+                # nur noch 'gesetzt'. NIE in CONFIG_WHITELIST, NIE im Log
+                # (Widerleger 2/3). Neustartfrei: der /support-Handler liest
+                # den Store je Request.
+                import secrets as _sec
+                _tok = _sec.token_urlsafe(32)
+                with _cfg_lock:
+                    _st = _lade_config_store(cfg)
+                    _st["support_token"] = _tok
+                    _store_schreiben(_config_store_pfad(cfg), _st)
+                svc.log("SUPPORT: access token rotated (old one is invalid "
+                        "from now on)")
+                return self._send(200, json.dumps(
+                    {"ok": True, "token": _tok,
+                     "msg": _sprache.t("antwort.support_token_neu")},
+                    ensure_ascii=False), "application/json")
             if pfad == "/sprache_speichern":       # Sprach-Stufe 1: Schrieb OHNE Neustart (Areas-Muster B12)
                 try:
                     n = int(self.headers.get("Content-Length", 0))
@@ -11703,7 +12546,8 @@ def make_handler(svc):
                 # damit der Zaehler sich sichtbar bewegt.
                 _bn = self._banner()
                 _bakt = ""
-                if getattr(self, "_banner_quelle", "") == "nachholen":
+                if (getattr(self, "_banner_quelle", "") == "nachholen"
+                        and not (getattr(svc, "_sweep_stand", None) or {}).get("auf_wunsch")):
                     _bakt = ('<button class="gtb" style="margin-left:10px" '
                              'onclick="startNachholAus()">'
                              + html.escape(_sprache.t("banner.nachholen_aus")) + '</button>')
@@ -11837,19 +12681,28 @@ def make_handler(svc):
                     self._banner()))
             if path.startswith("/lernlauf/crop/"):
                 # Lauf-Crops (Containment wie /refs/: realpath-Wache gegen Traversal).
-                m = re.match(rf"^/lernlauf/crop/(L[\w]+)/({_reg.DATEI_RE}\.jpg)$", path)
+                m = re.match(rf"^/lernlauf/crop/({_reg.LAUF_ID_RE})/({_reg.DATEI_RE}\.jpg)$", path)   # .362: zentrale Quelle; das alte L-only-Literal liess B-Laeufe bildlos
                 if m:
-                    base = os.path.realpath(os.path.join(
-                        cfg["data_dir"], "state", "lernlauf", m.group(1), "crops"))
-                    p = os.path.realpath(os.path.join(base, m.group(2)))
-                    if p.startswith(base + os.sep) and os.path.isfile(p):
-                        return self._send(200, open(p, "rb").read(), "image/jpeg")
+                    # Phase 1 des intelligenten Lernens nimmt auch Vorratsbilder in
+                    # eine Gruppe auf (analysen/intelligentes_lernen.md: am frischen
+                    # Lauf 254 von 327 Treffern haben NUR eines). Damit die
+                    # Oberflaechen dafuer nicht angefasst werden muessen, faellt
+                    # diese Route auf vorrat/ zurueck. Eindeutig, weil die
+                    # Namensraeume disjunkt sind: Crops heissen <eid>~frame~n.jpg,
+                    # Vorratsbilder v_<eid>_frame_n.jpg (core/ernte.py:645/687).
+                    # Containment wird je Ordner einzeln geprueft, nicht gelockert.
+                    for _unter in ("crops", "vorrat"):
+                        base = os.path.realpath(os.path.join(
+                            cfg["data_dir"], "state", "lernlauf", m.group(1), _unter))
+                        p = os.path.realpath(os.path.join(base, m.group(2)))
+                        if p.startswith(base + os.sep) and os.path.isfile(p):
+                            return self._send(200, open(p, "rb").read(), "image/jpeg")
                 return self._send(404, "not found", "text/plain")
             if path.startswith("/lernlauf/vorrat/"):
                 # Vorrats-Crops (bauplan_vorrat.md B4; ohne diese Route haette
                 # keine Angebots-Kachel ein Bild — Konzept-QS W1.10). Muster
                 # und Containment wie /lernlauf/crop/.
-                m = re.match(rf"^/lernlauf/vorrat/([LB][\w]+)/({_reg.DATEI_RE}\.jpg)$", path)
+                m = re.match(rf"^/lernlauf/vorrat/({_reg.LAUF_ID_RE})/({_reg.DATEI_RE}\.jpg)$", path)
                 if m:
                     base = os.path.realpath(os.path.join(
                         cfg["data_dir"], "state", "lernlauf", m.group(1), "vorrat"))
@@ -12278,7 +13131,13 @@ def make_handler(svc):
                                                # .345: tickende Unterbalken
                                                # schon im Seiten-Render
                                                ernte_puls=_ll.lauf_puls(
-                                                   cfg["data_dir"], zustand))
+                                                   cfg["data_dir"], zustand),
+                                               # .366: die Latten, nach denen
+                                               # die Flaeche urteilt — damit
+                                               # das Vertreterbild der Kachel
+                                               # aus DERSELBEN Reihung kommt.
+                                               norm_latte=norm_latte_aus_cfg(cfg),
+                                               luma_grenzen=luma_grenzen_aus_cfg(cfg))
                     # .260: kein meta-refresh mehr — das Saeule-Widget der
                     # Seite pollt /lernlauf_status (Tick-Regel lebt als EINE
                     # Quelle in lernwizard.lauf_status) und laedt genau EINMAL
@@ -12573,8 +13432,10 @@ def make_handler(svc):
                 # qualitaet/auftritte — Daten als Parameter, kein Dienst-Import).
                 from routes import kameras as _r_kameras
                 cams, err = frigate_cameras(cfg, force=("refresh" in qs))
+                from core import livewache as _lw_k
                 inhalt = _r_kameras.render(cams, err, cfg.get("kameras") or {},
-                                           cfg.get("required_zones") or {})
+                                           cfg.get("required_zones") or {},
+                                           steckbriefe=_lw_k.steckbriefe_lesen(cfg))
                 return self._send(200, webui.layout(_sprache.t("nav.kameras"), "/kameras",
                                                     inhalt, self._banner()))
             if path == "/areas":                  # Areas-Hauptbereich: Sicht + Konfig
@@ -12945,19 +13806,38 @@ def make_handler(svc):
                                              svc._kette_auto_hinweise())
                 return self._send(200, webui.layout(
                     _sprache.t("nav.kette"), "/kette", inhalt, self._banner()))
+            if path == "/readme_noetig":               # .371: Marke fehlt -> Seite zeigen
+                from core import readmefirst as _rmf
+                return self._send(200, json.dumps(
+                    {"zeigen": _rmf.soll_zeigen(cfg["data_dir"])}),
+                    "application/json")
+            if path == "/readme":                      # .371 Read me first (User 29.08.)
+                from routes import readmefirst as _r_rm
+                if "overlay" in qs:                    # Nachladung fuer das Overlay:
+                    return self._send(200, _r_rm.render(als_overlay=True),
+                                      "text/html")     # NUR der Block, keine Huelle
+                import webui
+                return self._send(200, webui.layout(
+                    _sprache.t("readme.titel"), "/readme",
+                    _r_rm.render(), self._banner()))
             if path == "/konfiguration":
                 import webui
                 # Modulumbau R1: Rendern byte-treu in routes/konfiguration.py.
                 # Die Ketten-Schalter leben seit .189 auf /kette.
                 from routes import konfiguration as _r_konf
                 inhalt = _r_konf.render(cfg, svc.CONFIG_WHITELIST,
-                                        svc._kette_auto_hinweise())
+                                        svc._kette_auto_hinweise(),
+                                        store=_lade_config_store(cfg))
                 return self._send(200, webui.layout(_sprache.t("nav.konfiguration"), "/konfiguration", inhalt, self._banner()))
             if path == "/config_sichern":              # Config-Store als Download (UI 'Download configuration')
                 # Store + wirksame Verbindungs-Werte (Vertrag core.registry.EXPORT_VERBINDUNG):
                 # ENV-/yaml-konfigurierte Installationen haben frigate_url/mqtt NICHT im Store,
                 # das Backup waere dort unvollstaendig (User-Fund 02.08., NB-Restore ohne Frigate).
                 d = _reg.export_ergaenzen(_lade_config_store(cfg), cfg)   # Modul-Import oben (kein lokaler Schatten!)
+                # Support-Token NIE exportieren (Widerleger 3: Config-Downloads
+                # haengen an GitHub-Issues) — fehlt er beim Restore, bleibt der
+                # Zugriff schlicht AUS (die sichere Richtung).
+                d.pop("support_token", None)
                 data = (json.dumps(d, ensure_ascii=False, indent=1) + "\n").encode()
                 fn = f"suslik-config-{datetime.datetime.now():%Y%m%d}.json"
                 self.send_response(200)
@@ -12978,6 +13858,7 @@ def make_handler(svc):
                 import tarfile
                 import tempfile
                 d = _reg.export_ergaenzen(_lade_config_store(cfg), cfg)
+                d.pop("support_token", None)   # nie in Backups (Widerleger 3)
                 fn = f"suslik-full-backup-{datetime.datetime.now():%Y%m%d_%H%M}.tar.gz"
                 tmpf = tempfile.NamedTemporaryFile(prefix=".backup-voll-", suffix=".tar.gz",
                                                    dir=cfg["data_dir"], delete=False)
@@ -13051,7 +13932,36 @@ def make_handler(svc):
                      # .340: Start-Nachholen — Schalter UND Fortschritt aus DERSELBEN
                      # Quelle wie der Banner (K1: die Anzeige kann dem Verhalten nicht
                      # widersprechen). Supportfaelle schicken /health, nicht 400 Logzeilen.
-                     "start_catchup": {"an": cfg.get("start_catchup", True) is not False,
+                     # .371: "an" bleibt fuer Bestandsleser erhalten (true, solange
+                     # nicht ausdruecklich "off"), daneben der ausgelegte Modus und
+                     # der zurueckgehaltene Stapel — die EINE Quelle fuer den Knopf
+                     # in der Kopfleiste.
+                     "start_catchup": {"an": catchup_modus(cfg) != "off",
+                                       "modus": catchup_modus(cfg),
+                                       "wartet": len(getattr(svc, "_catchup_zurueck", ()) or ()),
+                                       "wartet_seit": round(getattr(svc, "_catchup_seit", 0.0) or 0.0, 1),
+                                       # Die Spanne des Dialogs kommt aus der Whitelist,
+                                       # nicht als zweites Literal ins JS (Deckungs-Vertrag
+                                       # qs_ebenen.md: fachliche Werte haben EINE Quelle).
+                                       "grenzen": {
+                                           "stunden": [svc.CONFIG_WHITELIST["lookback_h"][1],
+                                                       svc.CONFIG_WHITELIST["lookback_h"][2]],
+                                           "limit": [svc.CONFIG_WHITELIST["sweep_limit"][1],
+                                                     svc.CONFIG_WHITELIST["sweep_limit"][2]]},
+                                       # Widerleger-Fund: hier stand cfg["lookback_h"].
+                                       # Damit war der Dialog auf ein Fenster
+                                       # vorbelegt, in dem der wartende Stapel oft
+                                       # gar nicht mehr liegt.
+                                       "vorgabe": {"stunden": svc.catchup_vorgabe_stunden(),
+                                                   "limit": cfg.get("sweep_limit") or 200},
+                                       # .371 (User 29.08.: "den Knopf einfach
+                                       # ausgrauen, dass er nicht geklickt werden
+                                       # kann"): ohne angelernte Person steigt der
+                                       # Sweep vor der Analyse aus — ein Klick koennte
+                                       # dort nichts ausrichten. Die Oberflaeche sagt
+                                       # das jetzt VOR dem Klick, statt ihn ins Leere
+                                       # laufen zu lassen.
+                                       "bereit": bool(master_persons(cfg)),
                                        **(getattr(svc, "_sweep_stand", None) or {})},
                      "backend": cfg.get("backend") or "",
                      # N8b: Cache-Groesse SICHTBAR (Feldbericht: 74-GB-Steady-State erst am
@@ -13394,6 +14304,66 @@ def make_handler(svc):
                     ct = "image/jpeg" if p.endswith(".jpg") else "text/plain; charset=utf-8"
                     return self._send(200, open(p, "rb").read(), ct)
                 return self._send(404, "not found", "text/plain")
+            if path.startswith("/support/"):
+                # Support-Zugriff (analysen/support_api.md, .362): benannte
+                # Lese-Bereiche fuer den Fern-Support. Schalter+Token werden
+                # LIVE aus dem Store gelesen (Rotation wirkt sofort); jede
+                # Abweisung FAELLT DURCH in den generischen 404 am Block-Ende
+                # (kein eigener Zweig = kein Orakel, Widerleger 5).
+                from core import support as _sup
+                _store = _lade_config_store(cfg)
+                if _sup.zugriff_ok(_store,
+                                   self.headers.get("X-Support-Token")):
+                    _rest = path[len("/support/"):]
+                    if _rest == "inventar":
+                        return self._send(200, json.dumps(
+                            _sup.inventar(cfg["data_dir"],
+                                          os.environ.get("SUSLIK_VERSION",
+                                                         "dev")),
+                            ensure_ascii=False, indent=1),
+                            "application/json")
+                    if _rest == "config":
+                        d = _sup.maskiert(
+                            _reg.export_ergaenzen(_store, cfg))
+                        svc.log("SUPPORT: config (masked) served")
+                        return self._send(200, json.dumps(
+                            d, ensure_ascii=False, indent=1),
+                            "application/json")
+                    _teile = _rest.split("/")
+                    _code = _teile[0]
+                    _lid = _teile[1] if len(_teile) == 2 else None
+                    _b = _sup.SUPPORT_BEREICHE.get(_code)
+                    if (_b and _b["art"] == "tar"
+                            and (len(_teile) == 1
+                                 or (_b.get("je_lauf") and _lid))):
+                        if not _sup.abzug_sperren():
+                            # VOR den Headern (Widerleger 13): nach einer
+                            # gesendeten 200 gaebe es nur leere Archive.
+                            return self._send(429, "one export at a time",
+                                              "text/plain")
+                        try:
+                            fn = f"suslik-support-{_code}" \
+                                 + (f"-{_lid}" if _lid else "") + ".tar.gz"
+                            self.send_response(200)
+                            self.send_header("Content-Type",
+                                             "application/gzip")
+                            self.send_header("Content-Disposition",
+                                             f'attachment; filename="{fn}"')
+                            self.send_header("Cache-Control", "no-store")
+                            self.end_headers()
+                            _sup.tar_streamen(
+                                cfg["data_dir"], _code, self.wfile, svc.log,
+                                lauf_id=_lid)
+                            # Header sind raus — ok oder nicht, die
+                            # Verbindung endet hier (HTTP/1.0). Abbruch
+                            # steht als SUPPORT-Zeile im Dienst-Log.
+                        finally:
+                            _sup.abzug_freigeben()
+                        return
+                    # unbekannter Bereich MIT gueltigem Token: ehrlich.
+                    return self._send(404, "not found", "text/plain")
+                _sup.abweisung_zaehlen(svc.log)
+                # KEIN return: durchfallen zum generischen 404.
             if path == "/offen":                           # Abend-Arbeitsliste: unbestaetigt + Gesicht + ungelabelt
                 import webui
                 # Modulumbau R1: Rendern byte-treu in routes/ereignisliste.py
@@ -13448,8 +14418,34 @@ def hardware_probe(placement_mess=None):
             else ("warn", "found; no OpenVINO runtime")
 
     from core.registry import knoten_von              # P3.1: Knoten-Muster aus der Registry
+
+    def _intel_render(muster):
+        """Feld-Fund 28.08. (Shaun, CUDA-Maschine): renderD128 war die NVIDIA-
+        Karte, die Probe meldete trotzdem 'iGPU found; no OpenVINO runtime'.
+        Ein Render-Node allein belegt keine Intel-iGPU — der PCI-Vendor tut es
+        (dieselbe sysfs-Quelle wie die CUDA-Knoten-Meldung weiter unten).
+        Unlesbares sysfs (haertere Sandbox) wertet wie bisher als gefunden."""
+        intel, fremd = False, []
+        for p in _glob.glob(muster):
+            try:
+                with open(f"/sys/class/drm/{os.path.basename(p)}/device/vendor") as f:
+                    v = f.read().strip()
+            except OSError:
+                intel = True
+                continue
+            if v == "0x8086":
+                intel = True
+            else:
+                fremd.append({"0x10de": "NVIDIA", "0x1002": "AMD"}.get(v, v))
+        return intel, fremd
+
     res = []
-    m, d = stat(bool(_glob.glob(knoten_von("GPU"))), "GPU"); res.append((m, "hw iGPU", d))
+    _gi, _gf = _intel_render(knoten_von("GPU"))
+    if not _gi and _gf:
+        res.append(("--", "hw iGPU",
+                    "no Intel iGPU (render node is " + "/".join(sorted(set(_gf))) + ")"))
+    else:
+        m, d = stat(_gi, "GPU"); res.append((m, "hw iGPU", d))
     m, d = stat(bool(_glob.glob(knoten_von("NPU"))), "NPU"); res.append((m, "hw NPU", d))
     # P4-Nachzieher (0.1.0.44, User 27.07.): das "?"-Urteil aufloesen. Das openvino-Paket
     # fehlt im Image BEWUSST (zweite OV-Runtime neben onnxruntime-openvino = Konfliktrisiko),
@@ -14297,6 +15293,11 @@ def main():
     svc.start_stream_steckbriefe()        # .186: echte Stream-Aufloesung je Kamera proben
     svc.start_backbone_migration()        # .203: Alt-Modell einmalig auf omz0277 heben
     #                                       (Kachel-Kopf ohne Quelltest-Klick, User 13.08.)
+    # .371 (User 29.08.): Read me first zeigt sich nach JEDEM Dienststart einmal.
+    # Die Marke wird hier geloescht; gesetzt wird sie erst, wenn jemand die Seite
+    # schliesst (core/readmefirst.py).
+    from core import readmefirst as _rmf_start
+    _rmf_start.start_zuruecksetzen(cfg["data_dir"], svc.log)
     svc.vision_waisen_start()             # .164: Laeufe schliessen, die der letzte
     #                                       Neustart mitten drin erwischt hat
     if not cfg["frigate_url"]:                 # frisch (Docker-Erstboot): erst der Setup-Wizard,

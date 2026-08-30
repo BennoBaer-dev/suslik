@@ -171,7 +171,22 @@ MESSUNG_MIN_S, MESSUNG_MAX_S = 15.0, 30.0
 # der blockierende Frame-Read — der hat jetzt eine echte Wanduhr-Frist
 # (bilder_yuv_frist, Mess-Queue) und der Not-Aus killt zusaetzlich die
 # registrierte Mess-Verbindung (a["kill"]).
-AUFTRAG_TIMEOUT_S = 420.0
+# .362 (Konzept-QS-Blocker 28.08.): die 420 war mit 30-s-ffprobe-Fristen
+# gerechnet — seit .354 gilt probe_timeout(http)=90 s, und die Strecke kann
+# GESUND ~1015 s brauchen (steckbrief 2x90+5, masse HW 4x90+35, HW-Probe 25,
+# masse SW-Rueckfall 4x90+35, Bildstrom 15). Der Not-Aus feuerte dann mitten
+# in einem langsamen, aber arbeitenden Test — mit drosselfreiem Push. Die
+# Frist rechnet sich jetzt aus den GELTENDEN Fristen (EINE Quelle, kein
+# zweites Literal, QS-Ebenen-Regel) + 60 s Anker-Reserve.
+def _auftrag_timeout_s():
+    p = 90.0                       # probe_timeout-Maximum (http/https)
+    steckbrief = 2 * p + 5
+    masse_hw = 4 * p + 35
+    masse_sw = 4 * p + 35
+    return steckbrief + masse_hw + 25.0 + masse_sw + 15.0 + 60.0
+
+
+AUFTRAG_TIMEOUT_S = _auftrag_timeout_s()
 # Nach dem Not-Aus-Kill: so lange darf der Auftrags-Thread noch brauchen, um
 # WIRKLICH zu enden. Erst danach wird der Slot ZWANGS-geloest (Generation
 # schuetzt den Nachfolger vor dem Zombie-finally) — vorher bleibt der Auftrag
@@ -1312,6 +1327,16 @@ def quelle_fp(guard):
     return hashlib.sha256(roh.encode()).hexdigest()[:16]
 
 
+def guard_normalisiert(guard, log, name):
+    """Guard fuer Fingerprint-Vergleiche NORMALISIEREN (Konzept §4.4, QS-Fund
+    28.08.): Test/Engine rechnen quelle_fp auf dem normalisierten Guard
+    (guards_lesen -> _hoehe_lesen), ein Vergleich auf dem ROHEN Store-Guard
+    erzeugt bei krummer Hoehe ein Fingerprint-Paar, das sich nie trifft —
+    mit Auto-Retest waere das eine Endlos-Testschleife. EINE Funktion fuer
+    alle Vergleichsstellen (live_schalter, Quittungs-Rot-Fall, Nachtest)."""
+    return dict(guard, hoehe=_hoehe_lesen(guard.get("hoehe"), log, name))
+
+
 def test_gueltig(guard):
     """Enable-Riegel, SERVERSEITIG (Bauplan §2.4): (ok, grund). Ein Guard darf
     nur laufen, wenn ein gruener Test fuer GENAU diese Quell-Konfiguration
@@ -2229,6 +2254,14 @@ def ui_zustand(guard, kachel_status, engine_frisch, gesperrt=False,
             return _engine_wahrheit(kachel_status, watchdog_s,
                                     "source changed — waiting for the engine "
                                     "to stop this watcher (test invalidated)")
+        if guard.get("enabled"):
+            # .362 (Konzept-QS 28.08.): das .361-Enable nimmt an und testet
+            # selbst — die Kachel sagte hier weiter 'test required' und
+            # verlangte die Handlung, die das System gerade selbst tut.
+            return "checking", ("the source check runs automatically; the "
+                                "watcher starts by itself once it passes. "
+                                "If it fails, the reason appears here and "
+                                "the switch turns back off")
         return "untested", grund
     if not guard.get("enabled"):
         if laeuft:
@@ -2273,8 +2306,8 @@ QUELLEN_ERLAUBT = ("proxy", "direct", "url")
 # Zustand, den ui_zustand liefern kann, MUSS in der Registry-Enum stehen —
 # ein Modul mit ungebundenem Zustand darf gar nicht erst laden. Der Harnisch
 # haelt zusaetzlich alle realen Rueckgaben gegen die Enum (T10).
-_UI_ZUSTAENDE_GENUTZT = ("unsupported", "unconfigured", "untested", "tested",
-                         "active", "disturbed")
+_UI_ZUSTAENDE_GENUTZT = ("unsupported", "unconfigured", "untested", "checking",
+                         "tested", "active", "disturbed")
 for _z in _UI_ZUSTAENDE_GENUTZT:
     if _z not in _reg.LIVE_ZUSTAENDE:
         raise ImportError(f"core/livewache: ui_zustand-Wert {_z!r} fehlt in "
@@ -2457,7 +2490,7 @@ def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
 
 
 def live_schalter(cfg, kamera, enabled, *, store_pfad, store_laden,
-                  store_schreiben, log):
+                  store_schreiben, log, retest_merker=None):
     """Enable/Disable EINES Waechters — der Enable-Riegel SERVERSEITIG
     (Bauplan §2.4: nicht nur UI-Grau; ein direkter POST kommt hier genauso
     vorbei): Enable nur mit gruenem Quelltest fuer GENAU diese Quell-
@@ -2481,9 +2514,22 @@ def live_schalter(cfg, kamera, enabled, *, store_pfad, store_laden,
     if not isinstance(guard, dict):
         return False, f"no live configuration saved for {kamera!r} yet"
     if enabled:
-        ok, grund = test_gueltig(guard)
+        # Feld-Fund 28.08. (Tester: 20 abgeprallte Enable-Versuche ueber
+        # drei Neustarte, 6 h ohne Wache): (a) der Vergleich lief hier auf
+        # dem ROHEN Guard, waehrend Test/Engine den NORMALISIERTEN nehmen —
+        # eine Hoehe ausserhalb HOEHEN_ERLAUBT erzeugte ein Fingerprint-
+        # Paar, das sich nie mehr trifft (Konzept §4.4, Endlos-Falle);
+        # (b) ein entwerteter Test verweigerte das Enable DAUERHAFT, obwohl
+        # die Selbstheilung (gruener Test -> Store -> Engine-Reload ->
+        # Start) komplett existiert und nur den Test-Anstoss brauchte.
+        # Mit retest_merker nimmt der Schalter das Enable an und meldet dem
+        # Aufrufer, dass er den Quelltest anstossen muss (Callback laeuft
+        # NICHT hier: der Aufrufer haelt das Config-Lock).
+        ok, grund = test_gueltig(guard_normalisiert(guard, log, kamera))
         if not ok:
-            return False, f"enable refused: {grund}"
+            if retest_merker is None:
+                return False, f"enable refused: {grund}"
+            retest_merker["grund"] = grund
         if not guard.get("enabled"):
             status, frisch = status_lesen(cfg)
             slots = (status or {}).get("slots") or {}
@@ -2520,6 +2566,10 @@ def live_schalter(cfg, kamera, enabled, *, store_pfad, store_laden,
     _audit_zeile(cfg, {"live": {kamera: {"enabled": bool(enabled)}}})
     log(f"LIVE guard {kamera} {'enabled' if enabled else 'disabled'} via UI")
     if enabled:
+        if retest_merker and retest_merker.get("grund"):
+            return True, ("enabled — the source changed since the last "
+                          "test, so a fresh source test starts now; the "
+                          "watcher comes up automatically once it passes")
         return True, ("enabled — the engine picks this up within a few "
                       "seconds; the tile turns green only once the engine "
                       "confirms frames are flowing")

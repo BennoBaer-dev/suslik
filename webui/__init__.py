@@ -155,7 +155,15 @@ BLATT = {"/setup": "/kameras", "/aehnliche": "/gesichter", "/event": "/heute", "
          # Phase 1b (26.08.): die Kalibrierseite der Belichtung haengt an der
          # Lern-Karte (Knopf in Kachel 1) und hat keinen eigenen Reiter —
          # ohne diesen Eintrag leuchtete oben der erste Bereich statt Learn.
-         "/lernlauf/belichtung": "/lernlauf"}
+         "/lernlauf/belichtung": "/lernlauf",
+         # .374: /readme gehoert zu KEINEM Bereich — der Knopf steht in jeder
+         # Kopfleiste, die Seite ist kein Blatt eines Reiters. None heisst
+         # deshalb "kein Bereich": nichts leuchtet oben, keine Unterreiterzeile.
+         # Ohne den Eintrag griff der Rueckfall nav_liste[0][0] und markierte
+         # Activity als aktiv, samt dessen Unterreitern (Today/Events/To label)
+         # — eine Zeile, in der kein einziger Reiter aktiv war, und 34 px mehr
+         # klebende Kopfleiste ueber den Sprungzielen.
+         "/readme": None}
 
 # .207 (User 16.08.: "wenn der Schalter auf Basis ist, erscheint dieses Bild und
 # nicht mehr die anderen zusaetzlich"): Blaetter, deren UNTERREITER nur im
@@ -292,8 +300,12 @@ def layout(titel, aktiv, inhalt, banner=None, refresh=None, banner_aktion=None,
     # Pfad, keine Seite muss etwas ueber die Gruppierung wissen.
     nav_liste = _nav()
     a = BLATT.get(aktiv, aktiv)
-    abschnitt = next((ab for ab, kinder in nav_liste
-                      if any(p == a for p, _ in kinder)), nav_liste[0][0])
+    # a is None: Seite ohne Bereich (BLATT-Eintrag "/readme") — dann leuchtet
+    # oben nichts und die zweite Ebene bleibt weg, statt dass der Rueckfall
+    # den ERSTEN Bereich behauptet.
+    abschnitt = None if a is None else next(
+        (ab for ab, kinder in nav_liste
+         if any(p == a for p, _ in kinder)), nav_liste[0][0])
     nav = "".join(
         f'<a href="{kinder[0][0]}"{" class=aktiv" if ab == abschnitt else ""}>{html.escape(ab)}</a>'
         for ab, kinder in nav_liste)
@@ -347,6 +359,24 @@ def layout(titel, aktiv, inhalt, banner=None, refresh=None, banner_aktion=None,
               'h.hidden=false;h.querySelector(".hinweis-x").onclick=function(){'
               'try{localStorage.setItem(k,"1")}catch(e){}h.remove();};})();</script>')
     r = f'<meta http-equiv="refresh" content="{int(refresh)}">' if refresh else ""
+    # .371 (User 29.08.: "muss einmal als Knopf deutlich sichtbar sein, am besten
+    # ueberall"): deshalb hier im Layout und nicht auf einer einzelnen Seite.
+    # Neben der Navigation, mit eigener Farbe — wer zum ersten Mal vor der
+    # Oberflaeche sitzt, soll ihn finden, ohne zu suchen.
+    rmk = (f'<a class="rmk" href="/readme" title="{html.escape(t("readme.titel"))}">'
+           f'{html.escape(t("readme.knopf"))}</a>')
+    # Und das Aufgehen von selbst: die Seite fragt EINMAL nach, ob die Marke
+    # fehlt (also seit dem letzten Dienststart noch niemand geschlossen hat),
+    # und holt sich den Inhalt dann nach. Entkoppelt, damit es auf JEDER Seite
+    # greift — der Nutzer landet nicht zwingend zuerst auf der Startseite.
+    # .371 (User 30.08.): "Wir machen es so, dass das nicht beim Start automatisch
+    # der Text angezeigt wird, sondern einfach der Knopf ist da und jeder kann das
+    # lesen." Das selbsttaetige Overlay ist damit RAUS — der Knopf oben bleibt und
+    # fuehrt auf /readme. Grund war nicht nur der Geschmack: der User kam aus dem
+    # Overlay nicht mehr heraus. Die Marker-Mechanik in core/readmefirst.py bleibt
+    # bestehen (Routen /readme_noetig und /readme_gesehen antworten weiter), damit
+    # ein spaeteres "einmal nach dem Neustart zeigen" nur diese Zeilen braucht.
+    rmjs = ""
     mark = ('<svg viewBox="0 0 32 32" fill="none" aria-hidden="true">'
             '<rect x="2.5" y="2.5" width="27" height="27" rx="8" stroke="var(--accent)" stroke-width="2.2"/>'
             '<circle cx="16" cy="13.5" r="4" stroke="var(--accent)" stroke-width="2.2"/>'
@@ -363,6 +393,58 @@ def layout(titel, aktiv, inhalt, banner=None, refresh=None, banner_aktion=None,
     # Schritt fuer Schritt nach (stand.md Easy-Umbau).
     # Sprach-Stufe 1: der Sprachschalter steht NEBEN dem Theme-Knopf (User-
     # Vorgabe "oben in der Kopfleiste, neben Theme").
+    # .371 (User 29.08.): "Der Schalter sollte am besten oben in der Leiste sein,
+    # wo wir auch Tag und Nacht umschalten. Vielleicht gleich als Erstes, neben dem
+    # Experten-Schalter, dass der Benutzer das auch sieht." Der Knopf steht deshalb
+    # als ERSTES in der rechten Gruppe. Er ist im Markup immer da und wird von
+    # catchupPruefen() (app.js) nur eingeblendet, wenn wirklich etwas wartet — ein
+    # dauerhaft sichtbarer Knopf fuer nichts waere eine Dauerfrage ohne Anlass.
+    catchup = ('<button class="toggle catchup" id="catchup-knopf" hidden '
+               f'title="{html.escape(t("catchup.knopf.tooltip"))}" '
+               'onclick="catchupStarten()">'
+               '<span class="tg-ico" aria-hidden="true">\u21bb</span>'
+               f'<span class="tg-txt">{html.escape(t("catchup.knopf"))}</span>'
+               '<span class="cu-n" id="catchup-zahl"></span></button>')
+    # Der Dialog beim Druecken (User 29.08.: "Beim Druecken des Knopfes koennte eine
+    # Frage sein, wie weit sollen wir zurueckgehen, wie viele Events sollen wir
+    # maximal holen"). Bauform wie die Lernlauf-Frage (Zahlenfeld + Hinweis), damit
+    # die Oberflaeche nicht zwei Sprachen fuer dieselbe Frage spricht. Spanne und
+    # Vorgaben setzt catchupPruefen() aus /health — hier steht keine Zahl.
+    catchup_dlg = (
+        '<dialog id="catchup-dlg" class="cu-dlg">'
+        f'<h3>{html.escape(t("catchup.dlg.titel"))}</h3>'
+        f'<p class="cu-satz" id="catchup-satz"></p>'
+        '<div class="cu-z"><label for="cu-h">'
+        f'{html.escape(t("catchup.dlg.label_stunden"))}</label>'
+        '<input id="cu-h" type="number" step="1"> '
+        f'<span>{html.escape(t("catchup.dlg.wort_stunden"))}</span>'
+        f'<span class="cu-hint" id="cu-h-hint"></span></div>'
+        '<div class="cu-z"><label for="cu-n">'
+        f'{html.escape(t("catchup.dlg.label_limit"))}</label>'
+        '<input id="cu-n" type="number" step="10"> '
+        f'<span>{html.escape(t("catchup.dlg.wort_events"))}</span>'
+        f'<span class="cu-hint" id="cu-n-hint"></span></div>'
+        f'<p class="cu-fuss">{html.escape(t("catchup.dlg.fuss"))}</p>'
+        '<div class="cu-akt">'
+        '<button type="button" class="gtb-l" onclick="catchupSchliessen()">'
+        f'{html.escape(t("catchup.dlg.abbrechen"))}</button>'
+        '<button type="button" class="gtb" onclick="catchupLos()">'
+        f'{html.escape(t("catchup.dlg.los"))}</button></div>'
+        '</dialog>')
+    # .371 (User 30.08.): "lass uns erstmal den neuen Knopf Nachholen der letzten
+    # Events ausblenden, wir bauen das spaeter etwas anders wieder ein." Knopf und
+    # Dialog werden oben weiter GEBAUT, aber in nichts mehr eingesetzt — bewusst
+    # tote Locals, damit der Wiedereinbau ein Einhaengen ist und kein Neubau.
+    # WICHTIG dazu: der Schalter start_catchup steht wieder auf "on" (load_config),
+    # denn ohne Knopf haette der Modus "ask" Ereignisse zurueckgehalten, an die
+    # niemand mehr herankommt — genau der stille Verlust, gegen den die Probe steht.
+    # .374 (Widerleger-Fund 30.08.): der Default allein reichte NICHT. "ask" war
+    # auf dem Advanced-Blatt weiter WAEHLBAR, und der Hilfetext dort beschrieb
+    # diesen Knopf hier als vorhanden ("a button appears in the header") und "ask"
+    # als Default — wer dem folgte, hielt Ereignisse fest, an die kein Bedienweg
+    # mehr fuehrt. Deshalb ist "ask" aus der Auswahlliste der CONFIG_WHITELIST
+    # heraus, solange dieser Block tot ist; beides gehoert beim Wiedereinbau
+    # zusammen zurueck (verifyd.py, Whitelist-Eintrag "start_catchup").
     rechts = ('<span class="rechts">'
               '<span class="modus" id="ui-modus" '
               f'title="{html.escape(t("ui.modus.tooltip"))}">'
@@ -412,10 +494,10 @@ def layout(titel, aktiv, inhalt, banner=None, refresh=None, banner_aktion=None,
             # klebend brauchte die zweite Ebene einen Festwert fuer die Hoehe der ersten, und der
             # wurde falsch, sobald die erste umbrach — s. .kopf in style.css.
             f'<div class="kopf"><nav><div class="inner"><span class="marke">{mark}suslik'
-            f'{f" <small>{html.escape(ver)}</small>" if ver else ""}{upd}</span>{nav}{rechts}</div></nav>'
+            f'{f" <small>{html.escape(ver)}</small>" if ver else ""}{upd}</span>{nav}{rmk}{rechts}</div></nav>'
             f"{unter}</div>"
             f"<main>{b}{hw}{inhalt}</main>"
-            f"<footer>{_fuss()}</footer></html>")
+            f"<footer>{_fuss()}</footer>{rmjs}</html>")
 
 
 def leer(text, hinweis=""):

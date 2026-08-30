@@ -1624,16 +1624,27 @@ def vorbedingungen(data_dir, vcfg, testprotokoll=None):
                                                  "kontrolle")))
     except OSError:
         kontrolle = False
-    fehlt = []
+    # Feld-Fund Giuseppe 28.08.: die fehlt-Texte waren harte EN-Literale und
+    # standen auf der italienischen Seite englisch. Dieses Fach-Modul kennt
+    # den Sprach-Layer bewusst nicht — es liefert CODES (+Parameter), die
+    # Anzeige-Verbraucher (routes/vision, verifyd /vision-Schalter)
+    # uebersetzen mit vision.schalter.fehlt_<code>. Die EN-Strings in
+    # "fehlt" bleiben als Diagnose-/Log-Form erhalten.
+    fehlt, fehlt_codes = [], []
     if len(galerien) < GALERIEN_MIN:
         fehlt.append(f"{len(galerien)} of {GALERIEN_MIN} approved galleries — "
                      "build one under 'Build a gallery'")
+        fehlt_codes.append(("galerien", {"n": len(galerien),
+                                         "soll": GALERIEN_MIN}))
     if not test_gruen:
         fehlt.append("a green connection test")
+        fehlt_codes.append(("test", {}))
     if not kontrolle:
         fehlt.append("judged images to pick a candidate from — they appear "
                      "while a pass is running; turn on 'diagnostic collection' "
                      "under Person if you want them to stay")
+        fehlt_codes.append(("kandidaten", {}))
     return {"galerien": galerien, "galerien_min": GALERIEN_MIN,
             "test_gruen": test_gruen, "kandidatenquelle": kontrolle,
-            "fehlt": fehlt, "erfuellt": not fehlt}
+            "fehlt": fehlt, "fehlt_codes": fehlt_codes,
+            "erfuellt": not fehlt}

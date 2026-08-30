@@ -35,6 +35,28 @@ T = {
         "deleted). Same import as in the setup wizard, now reachable "
         "without re-running it (e.g. after restoring a configuration).",
     # ------------------------------------------------- routes/kameras ---
+    "kameras.steckbrief.knopf": "Re-check stream details",
+    "kameras.steckbrief.hinweis":
+        "Stream resolution is read once per camera and then remembered. Use this if you changed a camera's stream, or if one is listed as unreachable.",
+    "kameras.steckbrief.stand": "{n} of {ges} camera(s) checked, {fehler} unreachable",
+    "kameras.steckbrief.laeuft": "checking \u2026",
+    "kameras.steckbrief.fertig": "will be re-checked on the next restart",
+    "readme.einleitung": 'I wrote this because these questions kept coming up.',
+    "readme.kontakt": 'I am glad to hear from you:',
+    "readme.titel": 'Read me first',
+        "readme.knopf": 'Read me first',
+        "readme.schliessen": 'Close',
+    "readme.zurueck": 'Back',
+        "readme.fuss": 'This text appears once after every restart.',
+        "readme.inhalt": 'Contents',
+        "readme.generell.titel": 'General',
+    "readme.generell.text": "My scenario detection hangs on Frigate's person detection. As soon as Frigate reports a person, I fetch the whole person event. Such an event is sometimes a few seconds long, sometimes several minutes. I go through all of it to find every person in it.\n\nWhether Frigate's own face recognition is switched on makes no difference. It is only needed if you want faces synced with Frigate.\n\nThe check never runs on the detect stream. It runs on the recording, that is the best stream the camera hands to Frigate.\n\nA check starts in one of two ways. Either from a person event in Frigate, which is the scenario path. Or from the live watcher: it pulls the running stream, straight from the camera or through Frigate's proxy, looks for faces and starts from there.\n\nA person is recognised in three ways. By the face. By the person as a whole, from the picture alone, without a face. By a vision model, and that one is still beta.\n\nI run 4K cameras here, with the frame rate as high as it goes, at least 15 frames per second. Same for the bitrate. A low bitrate leaves moving faces blurred.",
+    "readme.aktuell.titel": 'What I am working on',
+    "readme.aktuell.text": 'A calibration button. Camera feeds differ a lot, and with them the sharpness and what gets recognised. Calibration is meant to even that out.\n\nVision recognition through a language model: identifying a person when no face is visible. It runs in beta and needs to get better.\n\nPresence tracking: recording whether a known person is there or not. Other systems can hook into that, an alarm system for instance, or time tracking.',
+    "readme.lernen.titel": 'How do I teach it new faces?',
+    "readme.lernen.text": "This is how I do it on my system:\n\nFace learning run. The first thing on a new system. Depending on the hardware the last 500 events, 1000 if there is room to spare. The program fetches the events with a person, groups them and puts the pictures together. Known ones it assigns on its own. Unknown ones it collects as a group, and I give the group a name. That gives the starting set. Only works on faces that were recognised cleanly.\n\nToday. Once the starting set is there, anything new comes in from here: click an event or a person, adopt the face.\n\nKnown. Pick a person, have it find matching faces.\n\nPerson learning run. There is one next to it, for people whose face is not readable. More on that later.\n\nQuality. I use that tab regularly. It shows how good a person's pictures really are, which ones are too weak and which ones overlap with another person. Anything too similar I take out.\n\nThe Unknown tab is left over from an earlier version. I do not use it.",
+    "readme.persoenlich.titel": 'Personal',
+    "readme.persoenlich.text": 'This is purely a hobby. As a senior IT architect, I enjoy building something with AI. It is built entirely with Claude Code, mostly on Fable 5, with Opus 5 for the agents.\n\nWhat I would like is feedback, and it makes me happy when someone puts the system to use. That is my reward.',
     "kameras.titel": "Cameras",
     "kameras.banner.config_fehler":
         "Could not read the Frigate config: {fehler}",
@@ -376,6 +398,13 @@ T = {
     "konfiguration.kette_blatt.hinweis":
         "Changes are audited (config_audit.jsonl); after saving, the "
         "service restarts cleanly.",
+    "antwort.support_token_neu": "new support token created — the old one is invalid; copy it now, it is shown only this once",
+    "konfiguration.support.titel": "Remote support access",
+    "konfiguration.support.satz": "Read-only download of named areas (logs, masked config, faces, learning runs, body material, state files) for whoever holds the support token. The on/off switch support_zugriff sits in the table below, default off. Every request is written to the service log. The face and body areas contain pictures of real people — hand the token out with care. Without TLS in front of this service the token travels in plain text.",
+    "konfiguration.support.token_gesetzt": "A support token is set.",
+    "konfiguration.support.token_fehlt": "No support token yet.",
+    "konfiguration.support.knopf_token": "Create new token",
+    "konfiguration.support.einmal_hinweis": "The token appears here exactly once after creation — store it; afterwards only ••• is shown.",
     "konfiguration.titel": "Advanced settings",
     "konfiguration.kopf.satz1":
         "Changes are audited (config_audit.jsonl); after saving, the "
@@ -455,6 +484,24 @@ T = {
     "lernanker.detail.empfohlen": "Recommended — {bin} ({n})",
     "lernanker.detail.nicht_empfohlen":
         "Not recommended ({n}) — kept visible, reason on each image",
+    # .373: die uebernommene Gruppe beschriftet, was sie aufteilt — die
+    # DAMALIGE Auswahl. Kein Empfehlungs-Wort (die frische Rechnung kennt das
+    # Urteil der Gruppen-Flaeche nicht) und kein Grund-Versprechen (der Grund
+    # von damals ist nirgends festgehalten).
+    "lernanker.detail.gewaehlt": "Selected — {bin} ({n})",
+    "lernanker.detail.nicht_gewaehlt": "Not selected ({n}) — kept visible",
+    # .373: die Rueckstufungs-Gruende der Empfehlung. Kennungen kommen aus
+    # core.benennung.GRUND_WERTE (die eine Quelle), eingesetzt werden sie in
+    # routes/lernanker._grund_text — vorher standen diese Saetze als englische
+    # Literale in der Rechnung und erschienen in JEDER Oberflaechen-Sprache.
+    "lernanker.grund.bildpruefung": "did not pass the picture check",
+    "lernanker.grund.zu_dunkel": "too dark (brightness {luma} — needs {min}+)",
+    "lernanker.grund.ueberbelichtet":
+        "overexposed (brightness {luma} — needs {max} or less)",
+    "lernanker.grund.dublette_phys":
+        "duplicate detection (same camera and box)",
+    "lernanker.grund.fast_gleich": "near-identical to {datei}",
+    "lernanker.grund.bin_limit": "bin limit reached ({k} kept)",
     "lernanker.detail.skip_weiter": "Skip this group",
     "lernanker.detail.skip_zurueck": "Skip — back to the groups",
     "lernanker.detail.knopf_ja": "Yes, it&rsquo;s {name}",
@@ -1156,7 +1203,7 @@ T = {
     "lernwizard.ergebnis.beiseite": "({n} set aside)",
     "lernwizard.kachel.lauf": "Learning run",
     "lernwizard.kachel.sammeln": "Collect &amp; sort",
-    "lernwizard.kachel.benennen": "Name the groups",
+    "lernwizard.kachel.benennen": "Smart naming",
     "lernwizard.kachel.fertig": "Done &mdash; they count",
     "lernwizard.such.titel": "Search events for faces",
     "lernwizard.such.klein": "looks back through your recordings",
@@ -1197,8 +1244,7 @@ T = {
         "Runs on its own &mdash; you can close this page and come back.",
     "lernwizard.k2.knopf_abort": "Abort run",
     "lernwizard.k3.satz_warten":
-        "The only step that needs you: one group should be one person "
-        "&mdash; say who it is, or skip it.",
+        "Whoever the system recognises for sure gets named by itself. Everything else comes to you &mdash; say who it is, or skip it.",
     "lernwizard.k3.keine_gesichter":
         "No new faces this time &mdash; nothing to name. That is fine: "
         "it just means the recordings held nobody new.",
@@ -1206,6 +1252,8 @@ T = {
     "lernwizard.k3.gruppe_offen":
         "The current group is open below, full width.",
     "lernwizard.k3.alle_erledigt": "All groups are handled.",
+    "lernwizard.k3.altes_verfahren":
+        "These groups come from the older method, before the quality check. Naming them would sort pictures the run no longer accepts. Start a new run.",
     "lernwizard.chip.bilder": "{n} pictures",
     # .295-Sammelzeile — Anker der qs.sh-PYAD-Stufe (Text wohnt jetzt
     # hier, die Route referenziert den Schluessel).
@@ -1220,6 +1268,8 @@ T = {
     "lernwizard.k3.done_punkt": "{erledigt} of {gesamt} done.",
     "lernwizard.k3.wartend.eins": "{n} group is waiting for you.",
     "lernwizard.k3.wartend.viele": "{n} groups are waiting for you.",
+    "lernwizard.k3.auto.eins": "{n} was recognised automatically &mdash; check it if you like.",
+    "lernwizard.k3.auto.viele": "{n} were recognised automatically &mdash; check them if you like.",
     # ZWEI Plurale in einem <b>-Zaehler: zwei t_n-Fragmente (§8.10).
     "lernwizard.k4.adopt_bilder.eins": "{n} picture adopted for",
     "lernwizard.k4.adopt_bilder.viele": "{n} pictures adopted for",
@@ -1248,6 +1298,7 @@ T = {
     "lernwizard.blick.legende":
         "({gut} good, {grenz} borderline of {n} checked)",
     "lernwizard.zw.titel": "Group {pos} of {gesamt} &mdash; who is this?",
+    "lernwizard.zw.titel_auto": "Group {pos} of {gesamt} &mdash; is this {name}?",
     "lernwizard.zw.satz":
         "One group should be one person. Tap a picture to leave it out "
         "&mdash; then say who it is, or skip the group.",
@@ -1341,13 +1392,13 @@ T = {
     "nav.gesichter": "Known",
     "nav.unbekannte": "Unknown",
     "nav.qualitaet": "Quality",
-    "nav.lernlauf": "Learning run",
+    "nav.lernlauf": "Face learning run",
     "nav.anker": "Anchors",
     "nav.lernen": "Suggestions",
     "nav.person": "Body images",
     "nav.person_kontrolle": "Judged images",
     "nav.person_modell": "Model status",
-    "nav.personlauf": "Person learn",
+    "nav.personlauf": "Person learning run",
     "nav.vision": "Vision detect",
     "nav.live": "Live watchers",
     "nav.live_alerts": "Live alerts",
@@ -1438,6 +1489,31 @@ T = {
     "js.frigate.ro_frage": "Switch to READ-ONLY? suslik will stop writing to Frigate.",
     "js.frigate.rw_frage": "Enable WRITING to Frigate (sub_labels + reference sync)?",
     "js.catchup.frage": "Skip catching up on missed events at startup from now on? The service restarts to apply this.",
+    "catchup.knopf": 'Catch up',
+    "catchup.knopf.tooltip": 'Unprocessed events are waiting',
+    "catchup.dlg.titel": 'Fetch unprocessed events',
+    "catchup.dlg.label_stunden": 'Go back',
+    "catchup.dlg.wort_stunden": 'hours',
+    "catchup.dlg.label_limit": 'At most',
+    "catchup.dlg.wort_events": 'events',
+    "catchup.dlg.fuss": 'Only events that were never analysed are fetched. Your settings stay as they are.',
+    "catchup.dlg.abbrechen": 'Cancel',
+    "catchup.dlg.los": 'Fetch',
+    "js.catchup.spanne": '{von} to {bis}',
+    "js.catchup.geklemmt": 'Only {h} h and {n} events are possible. Run it with those?',
+    "js.catchup.nicht_bereit": 'Enroll a person first, then these can be checked.',
+    # .374 (Widerleger-Fund 30.08.): stand als Satz da ("{n} unprocessed events
+    # are waiting.") und las mit n=1 falsch — n ist die Zahl der nie analysierten
+    # Ereignisse im Rueckschau-Fenster, 1 ist ein voellig normaler Wert. Die
+    # Klammerform der uebrigen gezaehlten js.*-Schluessel ("{n} image(s)") traegt
+    # hier nur en und fr; de braeuchte "1 unverarbeitetes Ereignis wartet"
+    # (Adjektiv UND Verb kongruieren), it "1 evento non elaborato è in attesa".
+    # Eine Plural-Mechanik fuer js.*-Schluessel gibt es nicht (t_n in
+    # core/sprache.py loest .eins/.viele nur serverseitig auf). Deshalb die
+    # Zaehl-Beschriftung: in allen fuenf Sprachen fuer JEDES n richtig.
+    "js.catchup.warten": 'Unprocessed events waiting: {n}',
+    "antwort.catchup_gestartet": 'Fetching the last {stunden} h, at most {n} events.',
+    "antwort.catchup_laeuft": 'A catch-up run is already going.',
     "js.restore.frage": "Restore configuration from \"{name}\"? This overwrites the current settings and restarts the service.",
     "js.vollrestore.frage": "Restore the FULL backup \"{name}\"? This replaces settings, references and all learned material, then restarts the service.",
     "js.vollrestore.laeuft": "uploading + restoring … (large files take a while)",
@@ -1991,6 +2067,9 @@ T = {
     "vision.schalter.knopf_aus": "Turn off",
     "vision.schalter.knopf_an": "Turn on",
     "vision.schalter.fehlt": "Still missing:",
+    "vision.schalter.fehlt_galerien": "{n} of {soll} approved galleries — build one under 'Build a gallery'",
+    "vision.schalter.fehlt_test": "a green connection test",
+    "vision.schalter.fehlt_kandidaten": "judged images to pick a candidate from — they appear while a pass is running; turn on 'diagnostic collection' under Person if you want them to stay",
     "vision.schalter.titel_an": "Vision detect is on",
     "vision.schalter.titel_aus": "Vision detect is off",
     "vision.schalter.aus_satz":
@@ -2795,6 +2874,7 @@ T = {
     "antwort.lernlauf_abgebrochen":
         "aborted — a running event may still finish in the background",
     "antwort.live_nichts": "nothing to change",
+    "antwort.live_nachtests": "{n} source check(s) run one after another automatically; each watcher starts once its check passes",
     "antwort.live_an": "started {ok}/{alle} watcher(s)",
     "antwort.live_aus": "stopped {ok}/{alle} watcher(s)",
     "antwort.vision_modell_ok":

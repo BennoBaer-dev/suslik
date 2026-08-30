@@ -154,11 +154,57 @@ def frigate_auth_sektion(cfg):
         '</table></div>')
 
 
-def render(cfg, whitelist, auto_hinweis, kette=None, kette_lage=None):
+def support_sektion(cfg):
+    """Support-Zugriff (.362, analysen/support_api.md): Token-Karte. Der
+    AN/AUS-Schalter (support_zugriff) liegt bewusst in der grossen Tabelle
+    (eine Bedienstelle); hier wohnt nur, was die Tabelle nicht kann: der
+    Token-Knopf (POST-Route, einmalige Klartext-Anzeige) + der Warntext."""
+    gesetzt = bool(cfg.get("support_token"))
+    status = (t("konfiguration.support.token_gesetzt") if gesetzt
+              else t("konfiguration.support.token_fehlt"))
+    js = ("fetch('/support_token_neu',{method:'POST'})"
+          ".then(r=>r.json()).then(d=>{"
+          "var f=document.getElementById('sup-tok');"
+          "f.value=d.token||'';f.hidden=!d.token;"
+          "document.getElementById('sup-status').textContent=d.msg||'';})")
+    return (f'<div class="card"><b>{t("konfiguration.support.titel")}</b>'
+            f'<div class="dim">{t("konfiguration.support.satz")}</div>'
+            f'<p>{status} '
+            f'<button class="gtb" onclick="{js}">'
+            f'{t("konfiguration.support.knopf_token")}</button> '
+            f'<span id="sup-status" class="dim"></span></p>'
+            f'<input id="sup-tok" hidden readonly size="48" '
+            f'onclick="this.select()">'
+            f'<div class="dim">{t("konfiguration.support.einmal_hinweis")}'
+            f"</div></div>")
+
+
+# .370 (User-Fund 29.08.): Schluessel, die zur LAUFZEIT aus dem Store gelesen
+# werden statt aus der beim Start eingefrorenen cfg. Fuer sie muss auch die
+# ANZEIGE aus dem Store kommen, sonst behauptet die Seite etwas anderes als
+# die Wirklichkeit. Anlass: support_zugriff. core.support prueft ihn je Request
+# live aus dem Store ("Rotation wirkt sofort, kein Neustart noetig"), die
+# Tabelle las ihn aus cfg — nach dem Speichern zeigte sie also weiter den
+# Startwert. Gemessen an einer laufenden Installation: 12:27 eingeschaltet,
+# Seite zeigte weiter "aus", 12:39 wieder ausgeschaltet. Zwoelf Minuten stand der
+# Fern-Zugriff offen, waehrend die Oberflaeche das Gegenteil behauptete —
+# fuer einen Sicherheitsschalter die falsche Richtung.
+LIVE_AUS_STORE = {"support_zugriff"}
+
+
+def render(cfg, whitelist, auto_hinweis, kette=None, kette_lage=None, store=None):
     """-> Seiten-INHALT des Advanced-Blatts. Die Ketten-Schalter erscheinen
     hier seit .189 GAR NICHT mehr (eigenes Blatt /kette, ein Bedienort);
     die kette/kette_lage-Parameter bleiben fuer Rueckwaerts-Aufrufer und
-    rendern die Sektion inline, falls uebergeben."""
+    rendern die Sektion inline, falls uebergeben.
+    store (.370): der Config-Store. Fuer die Schluessel in LIVE_AUS_STORE
+    stammt der Anzeigewert von dort, weil sie zur Laufzeit auch von dort
+    gelesen werden. Ohne store faellt alles auf cfg zurueck (Alt-Aufrufer)."""
+
+    def anzeigewert(key):
+        if key in LIVE_AUS_STORE and isinstance(store, dict):
+            return store.get(key)
+        return cfg.get(key)
     NOTIF_KEYS = {"alert_cooldown", "anwesenheit_cooldown", "anwesenheit_push",
                   "mqtt_publish", "telegram_modus", "telegram_inhalt", "telegram_cooldown", "szene_karenz_s",
                   # hat eine eigene, farbig hervorgehobene Karte auf der System-Seite —
@@ -172,7 +218,7 @@ def render(cfg, whitelist, auto_hinweis, kette=None, kette_lage=None):
             continue
         if key in FRIGATE_AUTH_KEYS:                   # 5e -> eigene Sektion darueber
             continue
-        wert = cfg.get(key)
+        wert = anzeigewert(key)
         if typ is list:
             opts = "".join(f'<option{" selected" if wert == o else ""}>{o}</option>' for o in lo)
             feld = f'<select id="cfg-{key}">{opts}</select>'
@@ -196,7 +242,7 @@ def render(cfg, whitelist, auto_hinweis, kette=None, kette_lage=None):
                 "lookback_h", "clip_delay", "web_port"):
         if key in cfg and key not in whitelist:
             nur_lesen.append(f"<tr><td>{key}</td><td colspan=2>"
-                             f"{html.escape(json.dumps(cfg.get(key), ensure_ascii=False))}</td></tr>")
+                             f"{html.escape(json.dumps(anzeigewert(key), ensure_ascii=False))}</td></tr>")
     kette_html = (kette_sektion(cfg, kette, kette_lage, whitelist,
                                 auto_hinweis)
                   if kette is not None else "")
@@ -211,6 +257,8 @@ def render(cfg, whitelist, auto_hinweis, kette=None, kette_lage=None):
               + kette_html
               + frigate_auth_sektion(cfg)          # 5e: vor der grossen Tabelle,
                                                    # weil es zur Verbindung gehoert
+              + support_sektion(cfg)               # .362: Token-Karte (Schalter
+                                                   # selbst steht in der Tabelle)
               + f'<h3>{t("konfiguration.abschnitt_alle")}</h3>'
               f'<div class="tabelle-wrap"><table><tr><th>{t("konfiguration.tabelle.kopf_parameter")}</th>'
               f'<th>{t("konfiguration.tabelle.kopf_wert")}</th>'
