@@ -36,6 +36,28 @@ T = {
         "importación que en el asistente inicial, ahora accesible sin "
         "repetirlo (p. ej. tras restaurar una configuración).",
     # ------------------------------------------------- routes/kameras ---
+    "kameras.steckbrief.knopf": "Volver a comprobar el stream",
+    "kameras.steckbrief.hinweis":
+        "La resoluci\u00f3n del stream se consulta una vez por c\u00e1mara y se guarda. \u00dasalo si has cambiado el stream de una c\u00e1mara o si alguna figura como inaccesible.",
+    "kameras.steckbrief.stand": "{n} de {ges} c\u00e1mara(s) consultadas, {fehler} inaccesibles",
+    "kameras.steckbrief.laeuft": "comprobando \u2026",
+    "kameras.steckbrief.fertig": "se volver\u00e1 a consultar en el pr\u00f3ximo reinicio",
+    "readme.einleitung": 'Escribí esto porque estas preguntas surgían una y otra vez.',
+    "readme.kontakt": 'Me alegra recibir comentarios:',
+    "readme.titel": 'Léeme primero',
+        "readme.knopf": 'Léeme primero',
+        "readme.schliessen": 'Cerrar',
+    "readme.zurueck": 'Volver',
+        "readme.fuss": 'Este texto aparece una vez tras cada reinicio.',
+        "readme.inhalt": 'Contenido',
+        "readme.generell.titel": 'General',
+    "readme.generell.text": 'Mi reconocimiento de recorridos depende de la detección de personas de Frigate. En cuanto Frigate avisa de una persona, me traigo el evento de persona entero. Un evento así dura unas veces pocos segundos y otras varios minutos. Lo reviso de principio a fin para encontrar a todas las personas que aparecen en él.\n\nQue el reconocimiento facial propio de Frigate esté activado no importa. Solo hace falta si quieres sincronizar caras con Frigate.\n\nLa comprobación nunca usa el stream de detección, sino la grabación, es decir el mejor stream que la cámara entrega a Frigate.\n\nUna comprobación arranca por dos vías. O por el evento de persona de Frigate, esa es la vía del recorrido. O por el vigilante en vivo: toma el stream en curso, directo de la cámara o por el proxy de Frigate, busca caras y arranca desde ahí.\n\nUna persona se reconoce por tres vías. Por la cara. Por la persona entera, solo a partir de la imagen, sin cara. Por un modelo de visión, y esa vía sigue en beta.\n\nAquí uso cámaras 4K con la tasa de imagen lo más alta posible, al menos 15 imágenes por segundo. El bitrate igual de alto. Un bitrate bajo deja borrosas las caras en movimiento.',
+    "readme.aktuell.titel": 'En qué estoy trabajando',
+    "readme.aktuell.text": 'Un botón de calibración. Los feeds de las cámaras son muy distintos, y con ellos la nitidez y el reconocimiento. La calibración debe compensarlo.\n\nEl reconocimiento por visión con un modelo de lenguaje: identificar a una persona cuando no se ve la cara. Está en beta y tiene que mejorar.\n\nDetección de presencia: registrar si una persona conocida está o no. Otros sistemas pueden engancharse ahí, por ejemplo una alarma o un control horario.',
+    "readme.lernen.titel": '¿Cómo enseño rostros nuevos?',
+    "readme.lernen.text": 'Así enseño a mi sistema:\n\nAprendizaje de rostros. Lo primero en un sistema nuevo. Según el hardware, los últimos 500 eventos, con margen 1000. El programa recoge los eventos con persona, los agrupa y junta las imágenes. A los conocidos los asigna por su cuenta. A los desconocidos los reúne como grupo, y yo le pongo nombre al grupo. Eso da la base. Solo vale para rostros bien detectados.\n\nHoy. Con la base puesta, lo nuevo entra por aquí: clic en un evento o en una persona, tomar el rostro.\n\nConocidos. Elegir la persona y buscar rostros coincidentes.\n\nAprendizaje de persona. Existe al lado, para personas sin rostro reconocible. Sobre eso escribo más adelante.\n\nCalidad. Esta pestaña la uso con regularidad. Muestra lo buenas que son de verdad las imágenes de una persona, cuáles son demasiado débiles y cuáles se solapan con otra persona. Las demasiado parecidas las saco.\n\nLa pestaña Desconocidos queda de una versión anterior. No la uso.',
+    "readme.persoenlich.titel": 'Personal',
+    "readme.persoenlich.text": 'Esto es puro hobby. Como arquitecto de TI sénior, me divierte desarrollar algo con IA. Está desarrollado por completo con Claude Code, sobre todo con Fable 5, y con Opus 5 para los agentes.\n\nLo que me gustaría son comentarios, y me alegra que alguien use el sistema. Ese es mi pago.',
     "kameras.titel": "Cámaras",
     "kameras.banner.config_fehler":
         "No se pudo leer la configuración de Frigate: {fehler}",
@@ -352,6 +374,13 @@ T = {
     "konfiguration.kette_blatt.hinweis":
         "Los cambios quedan auditados (config_audit.jsonl); tras guardar, "
         "el servicio se reinicia limpiamente.",
+    "antwort.support_token_neu": "nuevo token de soporte creado — el antiguo queda invalido; copialo ahora, se muestra solo esta vez",
+    "konfiguration.support.titel": "Acceso remoto de soporte",
+    "konfiguration.support.satz": "Descarga de solo lectura de areas con nombre (logs, config enmascarada, caras, corridas de aprendizaje, material corporal, archivos de estado) para quien tenga el token de soporte. El interruptor support_zugriff esta en la tabla de abajo, apagado por defecto. Cada peticion queda en el log del servicio. Las areas de caras y cuerpo contienen imagenes de personas reales — entrega el token con cuidado. Sin TLS delante de este servicio el token viaja en texto plano.",
+    "konfiguration.support.token_gesetzt": "Hay un token de soporte establecido.",
+    "konfiguration.support.token_fehlt": "Aun no hay token de soporte.",
+    "konfiguration.support.knopf_token": "Crear token nuevo",
+    "konfiguration.support.einmal_hinweis": "El token aparece aqui exactamente una vez tras crearlo — guardalo; despues solo se muestra •••.",
     "konfiguration.titel": "Ajustes avanzados",
     "konfiguration.kopf.satz1":
         "Los cambios quedan auditados (config_audit.jsonl); tras guardar, "
@@ -424,6 +453,20 @@ T = {
     "lernanker.detail.nicht_empfohlen":
         "No recomendadas ({n}) — siguen visibles, con el motivo en cada "
         "imagen",
+    "lernanker.detail.gewaehlt": "Seleccionadas — {bin} ({n})",
+    "lernanker.detail.nicht_gewaehlt":
+        "No seleccionadas ({n}) — siguen visibles",
+    "lernanker.grund.bildpruefung":
+        "no ha pasado la comprobación de la imagen",
+    "lernanker.grund.zu_dunkel":
+        "demasiado oscura (brillo {luma} — hacen falta {min}+)",
+    "lernanker.grund.ueberbelichtet":
+        "sobreexpuesta (brillo {luma} — como máximo {max})",
+    "lernanker.grund.dublette_phys":
+        "detección duplicada (misma cámara y mismo recuadro)",
+    "lernanker.grund.fast_gleich": "casi idéntica a {datei}",
+    "lernanker.grund.bin_limit":
+        "límite por perspectiva alcanzado ({k} conservadas)",
     "lernanker.detail.skip_weiter": "Omitir este grupo",
     "lernanker.detail.skip_zurueck": "Omitir — volver a los grupos",
     "lernanker.detail.knopf_ja": "Sí, es {name}",
@@ -1095,7 +1138,7 @@ T = {
     "lernwizard.ergebnis.beiseite": "({n} descartadas)",
     "lernwizard.kachel.lauf": "Aprendizaje",
     "lernwizard.kachel.sammeln": "Recoger y ordenar",
-    "lernwizard.kachel.benennen": "Poner nombre a los grupos",
+    "lernwizard.kachel.benennen": "Asignación inteligente",
     "lernwizard.kachel.fertig": "Hecho &mdash; ya cuentan",
     "lernwizard.such.titel": "Buscar rostros en los eventos",
     "lernwizard.such.klein": "repasa tus grabaciones hacia atrás",
@@ -1137,8 +1180,7 @@ T = {
         "tarde.",
     "lernwizard.k2.knopf_abort": "Abortar ejecución",
     "lernwizard.k3.satz_warten":
-        "El único paso que te necesita: un grupo debería ser una persona "
-        "&mdash; di quién es, o sáltalo.",
+        "A quien el sistema reconoce con seguridad lo nombra él mismo. Todo lo demás llega a ti &mdash; di quién es, o sáltatelo.",
     "lernwizard.k3.keine_gesichter":
         "Esta vez no hay rostros nuevos &mdash; nada que nombrar. No pasa "
         "nada: solo significa que en las grabaciones no había nadie "
@@ -1147,6 +1189,8 @@ T = {
     "lernwizard.k3.gruppe_offen":
         "El grupo actual está abierto abajo, a ancho completo.",
     "lernwizard.k3.alle_erledigt": "Todos los grupos están atendidos.",
+    "lernwizard.k3.altes_verfahren":
+        "Estos grupos provienen del método anterior, sin comprobación de calidad. Nombrarlos significaría ordenar imágenes que la ejecución ya no acepta. Inicia una nueva ejecución.",
     "lernwizard.chip.bilder": "{n} imágenes",
     "lernwizard.k3.verworfen.eins":
         "{n} grupo eliminado por ti &middot;",
@@ -1158,6 +1202,8 @@ T = {
     "lernwizard.k3.done_punkt": "{erledigt} de {gesamt} hechos.",
     "lernwizard.k3.wartend.eins": "{n} grupo te espera.",
     "lernwizard.k3.wartend.viele": "{n} grupos te esperan.",
+    "lernwizard.k3.auto.eins": "{n} se reconoció automáticamente &mdash; compruébalo si quieres.",
+    "lernwizard.k3.auto.viele": "{n} se reconocieron automáticamente &mdash; compruébalos si quieres.",
     "lernwizard.k4.adopt_bilder.eins": "{n} imagen incorporada para",
     "lernwizard.k4.adopt_bilder.viele": "{n} imágenes incorporadas para",
     "lernwizard.k4.adopt_personen.eins": "{n} persona",
@@ -1186,6 +1232,7 @@ T = {
     "lernwizard.blick.legende":
         "({gut} buenas, {grenz} al límite de {n} comprobadas)",
     "lernwizard.zw.titel": "Grupo {pos} de {gesamt} &mdash; ¿quién es?",
+    "lernwizard.zw.titel_auto": "Grupo {pos} de {gesamt} &mdash; ¿es {name}?",
     "lernwizard.zw.satz":
         "Un grupo debería ser una persona. Toca una imagen para dejarla "
         "fuera &mdash; luego di quién es, o salta el grupo.",
@@ -1280,7 +1327,7 @@ T = {
     "nav.gesichter": "Conocidos",
     "nav.unbekannte": "Desconocidos",
     "nav.qualitaet": "Calidad",
-    "nav.lernlauf": "Aprendizaje",
+    "nav.lernlauf": "Aprendizaje de rostros",
     "nav.anker": "Anclas",
     "nav.lernen": "Sugerencias",
     "nav.person": "Imágenes de cuerpo entero",
@@ -1377,6 +1424,22 @@ T = {
     "js.frigate.ro_frage": "¿Cambiar a SOLO LECTURA? suslik dejará de escribir en Frigate.",
     "js.frigate.rw_frage": "¿Activar la ESCRITURA en Frigate (sub_labels + sincronización de referencias)?",
     "js.catchup.frage": "¿Omitir a partir de ahora la recuperación de eventos perdidos al iniciar? El servicio se reinicia para aplicarlo.",
+    "catchup.knopf": 'Recuperar',
+    "catchup.knopf.tooltip": 'Hay eventos sin procesar en espera',
+    "catchup.dlg.titel": 'Recuperar eventos sin procesar',
+    "catchup.dlg.label_stunden": 'Retroceder',
+    "catchup.dlg.wort_stunden": 'horas',
+    "catchup.dlg.label_limit": 'Como máximo',
+    "catchup.dlg.wort_events": 'eventos',
+    "catchup.dlg.fuss": 'Solo se recuperan los eventos que nunca se analizaron. Tus ajustes se quedan como están.',
+    "catchup.dlg.abbrechen": 'Cancelar',
+    "catchup.dlg.los": 'Recuperar',
+    "js.catchup.spanne": '{von} a {bis}',
+    "js.catchup.geklemmt": 'Solo son posibles {h} h y {n} eventos. ¿Ejecutar con esos valores?',
+    "js.catchup.nicht_bereit": 'Primero hay que aprender una persona; después se podrán comprobar estos eventos.',
+    "js.catchup.warten": 'Eventos sin procesar en espera: {n}',
+    "antwort.catchup_gestartet": 'Recuperando las últimas {stunden} h, como máximo {n} eventos.',
+    "antwort.catchup_laeuft": 'Ya hay una recuperación en curso.',
     "js.restore.frage": "¿Restaurar la configuración desde \"{name}\"? Esto sobrescribe los ajustes actuales y reinicia el servicio.",
     "js.vollrestore.frage": "¿Restaurar la copia de seguridad COMPLETA \"{name}\"? Esto sustituye los ajustes, las referencias y todo el material aprendido, y luego reinicia el servicio.",
     "js.vollrestore.laeuft": "subiendo + restaurando … (los archivos grandes tardan)",
@@ -1968,6 +2031,9 @@ T = {
     "vision.schalter.knopf_aus": "Desactivar",
     "vision.schalter.knopf_an": "Activar",
     "vision.schalter.fehlt": "Aún pendiente:",
+    "vision.schalter.fehlt_galerien": "{n} de {soll} galerias aprobadas — crea una en 'Crear una galeria'",
+    "vision.schalter.fehlt_test": "una prueba de conexion en verde",
+    "vision.schalter.fehlt_kandidaten": "imagenes juzgadas como fuente de candidatos — aparecen mientras corre un paso; activa la 'recogida de diagnostico' en Persona si quieres que se conserven",
     "vision.schalter.titel_an": "La detección de visión está activada",
     "vision.schalter.titel_aus": "La detección de visión está desactivada",
     "vision.schalter.aus_satz":
@@ -2831,6 +2897,7 @@ T = {
         "abortada — un evento en marcha todavía puede terminar en "
         "segundo plano",
     "antwort.live_nichts": "nada que cambiar",
+    "antwort.live_nachtests": "{n} prueba(s) de fuente se ejecutan automaticamente una tras otra; cada vigilante arranca cuando su prueba pasa",
     "antwort.live_an": "vigilancias iniciadas: {ok}/{alle}",
     "antwort.live_aus": "vigilancias detenidas: {ok}/{alle}",
     "antwort.vision_modell_ok":

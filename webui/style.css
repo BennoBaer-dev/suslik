@@ -951,3 +951,96 @@ body:not(.easy) .nur-easy { display: none; }
   background: var(--surface-2); color: var(--text); text-decoration: none;
   font-size: 12.5px; line-height: 1.25; text-align: center; }
 .lf-minis a:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ── Read me first (.371) ────────────────────────────────────────────────
+   Der Knopf sitzt im Kopf und soll auffallen, ohne zu schreien: Akzentfarbe
+   als Rahmen, gefuellt erst beim Zeigen. Die Seite selbst ist zweispaltig —
+   links die Kapitel, rechts der Text (User 29.08.: "hin- und herklickbar,
+   dass wir mit Ueberschriften arbeiten koennten oder Kapiteln"). Unter 760px
+   stapelt sie: aus der Spalte werden Chips ueber dem Text, damit sie auf dem
+   Handy lesbar bleibt. */
+.rmk{margin-left:14px;padding:3px 11px;border:1px solid var(--accent);
+     border-radius:999px;color:var(--accent);font-size:13px;white-space:nowrap}
+.rmk:hover{background:var(--accent);color:#fff}
+.rm-seite,.rm-karte{max-width:960px;margin:0 auto}
+.rm-kopf{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.rm-kopf h1{font-size:21px;margin:0}
+.rm-einl{color:var(--dim);margin:.4rem 0 1.1rem;font-size:14px}
+.rm-huelle{display:flex;gap:26px;align-items:flex-start}
+/* .374: die klebende Kapitelliste und die Sprungziele rechnen mit --kopf-h,
+   der GEMESSENEN Hoehe der klebenden .kopf (setzt das Inline-JS der Seite,
+   routes/readmefirst.py, per ResizeObserver). Vorher stand hier top:12px und
+   unten scroll-margin-top:14px — beides Werte aus der Overlay-Sicht, in der
+   .rm-text selbst scrollt. Auf der Vollseite (seit .371 die einzige) klebte
+   die Liste damit ~71px HINTER der Kopfleiste und der Kapitelsprung schob
+   Ueberschrift plus erste Absaetze darunter (gemessen 30.08.: .kopf 114,1px
+   mit Unterreiterzeile, 100px des Kapitels verdeckt). Ein neuer Festwert
+   waere dieselbe Falle wie das alte top:41px der zweiten Navigationsebene
+   (s. Kommentar ueber .kopf) — die Leiste ist je nach Umbruch, Sprache und
+   Unterreiterzeile verschieden hoch. Der Rueckfall 120px greift nur ohne JS
+   und liegt bewusst ueber beiden gemessenen Hoehen (77,3 / 114,1). */
+.rm-nav{flex:0 0 190px;position:sticky;top:calc(var(--kopf-h,120px) + 12px)}
+.rm-navtitel{font-size:11px;text-transform:uppercase;letter-spacing:.06em;
+     color:var(--dim);margin-bottom:7px}
+.rm-nav a{display:block;padding:7px 11px;border-radius:6px;font-size:14px;
+     border-left:2px solid transparent;line-height:1.35}
+.rm-nav a:hover{background:var(--surface)}
+.rm-nav a.aktiv{border-left-color:var(--accent);color:var(--accent);
+     background:var(--surface);font-weight:600}
+.rm-text{flex:1;min-width:0}
+.rm-text section{scroll-margin-top:calc(var(--kopf-h,120px) + 12px);margin-bottom:26px}
+.rm-text h2{font-size:16px;margin:0 0 .5rem;padding-bottom:.35rem;
+     border-bottom:1px solid var(--border)}
+.rm-text p{margin:0 0 .75rem;line-height:1.62;max-width:64ch}
+.rm-kontakt{margin-top:1.6rem;padding-top:.9rem;border-top:1px solid var(--border)}
+.rm-fuss{color:var(--dim);font-size:12px;margin-top:.5rem}
+/* Overlay: dunkler Grund, die Karte scrollt in sich, damit der Schliessen-
+   Knopf immer erreichbar bleibt, auch bei langem Text auf kleinem Schirm. */
+.rm-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:60;
+     display:flex;align-items:flex-start;justify-content:center;
+     padding:22px 16px;overflow-y:auto}
+.rm-overlay .rm-karte{background:var(--bg);border:1px solid var(--border);
+     border-radius:12px;padding:22px 26px;width:100%;
+     box-shadow:0 18px 50px var(--shadow-overlay)}
+.rm-overlay .rm-text{max-height:min(62vh,640px);overflow-y:auto;padding-right:6px}
+/* Im Overlay scrollt .rm-text SELBST, ueber ihm klebt keine Leiste — hier
+   bleibt der kleine Rand von 14px richtig (.374, s. oben). */
+.rm-overlay .rm-text section{scroll-margin-top:14px}
+.rm-overlay .rm-nav{position:static}
+@media (max-width:760px){
+  .rm-huelle{flex-direction:column;gap:14px}
+  .rm-nav{flex:none;width:100%;position:static;display:flex;flex-wrap:wrap;gap:6px}
+  .rm-navtitel{width:100%;margin-bottom:2px}
+  .rm-nav a{border-left:none;border:1px solid var(--border);padding:5px 10px;
+       border-radius:999px;font-size:13px}
+  .rm-nav a.aktiv{border-color:var(--accent)}
+  .rm-overlay .rm-text{max-height:none}
+  .rmk{margin-left:8px;padding:2px 9px;font-size:12px}
+}
+
+/* .371 Nachholen auf Knopfdruck — Knopf in der Kopfleiste plus seine Frage.
+   Der Knopf teilt sich .toggle mit Tag/Nacht und Auslastung, hier steht nur,
+   was ihn davon unterscheidet: die Zahl der wartenden Ereignisse. */
+.catchup { position: relative; }
+.catchup .cu-n {
+  margin-left: 6px; padding: 0 6px; border-radius: 9px;
+  background: var(--accent-weak); color: var(--accent);
+  font-size: 11px; font-weight: 600; line-height: 16px; display: inline-block;
+}
+.cu-dlg {
+  border: 1px solid var(--border); border-radius: 10px; padding: 20px 22px;
+  background: var(--surface); color: var(--text); max-width: 27em; width: 92vw;
+  box-shadow: var(--shadow-overlay);
+}
+.cu-dlg::backdrop { background: rgba(0, 0, 0, .45); }
+.cu-dlg h3 { margin: 0 0 6px; font-size: 16px; }
+.cu-satz { margin: 0 0 14px; color: var(--dim); font-size: 13px; }
+.cu-z { display: flex; align-items: center; gap: 7px; margin-bottom: 9px; font-size: 14px; }
+.cu-z label { min-width: 7.5em; }
+.cu-z input { width: 6em; }
+.cu-hint { color: var(--dim); font-size: 12px; margin-left: auto; }
+.cu-fuss { margin: 14px 0 16px; font-size: 12px; color: var(--dim); }
+.cu-akt { display: flex; gap: 8px; justify-content: flex-end; }
+/* Ausgegrauter Nachhol-Knopf: die Zahl bleibt sichtbar (es WARTET ja etwas),
+   nur klicken geht nicht, weil ohne angelernte Person nichts zu holen waere. */
+.catchup:disabled { opacity: .45; cursor: not-allowed; }

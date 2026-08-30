@@ -12,7 +12,31 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.0.360"   # .351 = reiner STAND-Bump (Kalibrierseite Phase 1b; Box
+STAND = "0.1.0.374"   # .372-.374 = reine STAND-Bumps (User 30.08.:
+                      # "whatsnew bleibt wie es ist").
+                      # Davor: .371 = reiner STAND-Bump (User 30.08.:
+                      # "whatsnew bleibt wie es jetzt ist" — die Box
+                      # erscheint dadurch nicht neu). Davor: .370 (Anzeige des
+                      # Fern-Support-Schalters) — kein Box-Eintrag
+                      # .369 = reiner STAND-Bump (Namen mit Apostroph im
+                      # Lernlauf) — Box-Eintrag nach Abstimmung
+                      # .368 = reiner STAND-Bump (Steckbriefe nur einmal je
+                      # Kamera + Auffrisch-Knopf) — Box-Eintrag nach Abstimmung
+                      # .367 = reiner STAND-Bump (harte Linien auch im Sieb) —
+                      # Box-Eintrag erst nach Abstimmung mit dem User
+                      # .366 = reiner STAND-Bump (ein Massstab je Bilderliste,
+                      # Veto-Linie 21,75) — Box-Eintrag erst nach Abstimmung
+                      # mit dem User, wir veroeffentlichen gerade nicht
+                      # .365 = reiner STAND-Bump (Fortsetzungs-Haken
+                      # nicht mehr vorbelegt)
+                      # .364 = reiner STAND-Bump (intelligentes Lernen, beide
+                      # Schalter AUS ausgeliefert — Box-Eintrag erst, wenn der
+                      # User ihn abgestimmt hat und die Schalter an sind)
+                      # .363 = reiner STAND-Bump (Support-Zugriff; Box-Eintrag
+                      # kommt abgestimmt mit dem naechsten Release)
+                      # .362 = reiner STAND-Bump (Waechter-Selbstheilung Nachruestung; Box-Eintrag
+                      # kommt abgestimmt mit dem naechsten Release)
+                      # .351 = reiner STAND-Bump (Kalibrierseite Phase 1b; Box
                       # wird beim naechsten Release MIT dem User abgestimmt).
                       # .350 = reiner STAND-Bump (Belichtungsachse; Box-Eintrag
                       # wird beim naechsten Release MIT dem User abgestimmt).
@@ -341,6 +365,35 @@ HIGHLIGHTS = (
     # Vorrang-Regel (.356) samt Distanz-Zusatz (.359) und roter Kennzeichnung.
     # DE/EN vom User abgenommen; ES/IT/FR nach den Begriffen der Sprachdateien
     # (recorrido/passaggio/passage, Desconocido/Sconosciuto/Inconnu).
+    # .369 — INHALT VOM USER ABGENOMMEN (29.08.: "Lernlauf neu und intelligent
+    # gemacht, kurzer Satz, aber besser ausformuliert"). GENAU dieser eine
+    # Punkt, nichts selbststaendig ergaenzt (Memory whatsnew-inhalt-abstimmen).
+    # Gedeckt sind .364-.369: Qualitaets-Sieb vor der Identitaet, automatische
+    # Benennung sicher erkannter Personen, keine Gruppen mehr ohne anzeigbares
+    # Bild. DE ist die Vorlage, EN daraus; ES/IT/FR mit den etablierten
+    # Begriffen der Sprachdateien (busqueda/ricerca/recherche d'apprentissage).
+    ("0.1.0.369", (
+        {"de": "Der Lernlauf ist neu gebaut: Er sortiert zuerst nach "
+               "Bildqualität, benennt Personen, die er sicher wiedererkennt, "
+               "von selbst, und zeigt dir nur noch Gruppen, in denen wirklich "
+               "etwas Brauchbares steckt.",
+         "en": "The learning run has been rebuilt: it sorts by picture quality "
+               "first, names people it recognises with confidence on its own, "
+               "and only shows you groups that actually contain something "
+               "usable.",
+         "es": "La búsqueda de aprendizaje se ha reconstruido: primero ordena "
+               "por calidad de imagen, nombra por sí misma a las personas que "
+               "reconoce con seguridad y solo te muestra grupos que realmente "
+               "contienen algo aprovechable.",
+         "it": "La ricerca di apprendimento è stata ricostruita: prima ordina "
+               "per qualità dell'immagine, nomina da sola le persone che "
+               "riconosce con certezza e ti mostra solo gruppi che contengono "
+               "davvero qualcosa di utilizzabile.",
+         "fr": "La recherche d'apprentissage a été reconstruite : elle trie "
+               "d'abord par qualité d'image, nomme elle-même les personnes "
+               "qu'elle reconnaît avec certitude et ne vous montre plus que "
+               "des groupes contenant vraiment quelque chose d'exploitable."},
+    )),
     ("0.1.0.359", (
         {"de": "Im Lernlauf lassen sich jetzt eine oder mehrere Kameras "
                "auswählen.",

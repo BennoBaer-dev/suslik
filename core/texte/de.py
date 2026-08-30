@@ -38,6 +38,28 @@ T = {
         "ihn neu zu durchlaufen (z. B. nach dem Wiederherstellen deiner "
         "Einstellungen).",
     # ------------------------------------------------- routes/kameras ---
+    "kameras.steckbrief.knopf": "Stream-Angaben neu pr\u00fcfen",
+    "kameras.steckbrief.hinweis":
+        "Die Stream-Aufl\u00f6sung wird je Kamera einmal ermittelt und dann gemerkt. Nimm das hier, wenn du den Stream einer Kamera ge\u00e4ndert hast oder eine als nicht erreichbar gilt.",
+    "kameras.steckbrief.stand": "{n} von {ges} Kamera(s) ermittelt, {fehler} nicht erreichbar",
+    "kameras.steckbrief.laeuft": "wird gepr\u00fcft \u2026",
+    "kameras.steckbrief.fertig": "wird beim n\u00e4chsten Neustart neu ermittelt",
+    "readme.einleitung": 'Ich habe das hier geschrieben, weil diese Fragen immer wieder kamen.',
+    "readme.kontakt": 'Ich freue mich über Rückmeldung:',
+    "readme.titel": 'Bitte zuerst lesen',
+        "readme.knopf": 'Bitte zuerst lesen',
+        "readme.schliessen": 'Schliessen',
+    "readme.zurueck": 'Zurück',
+        "readme.fuss": 'Dieser Text erscheint nach jedem Neustart einmal.',
+        "readme.inhalt": 'Inhalt',
+        "readme.generell.titel": 'Generelles',
+    "readme.generell.text": 'Meine Szenario-Erkennung hängt an Frigates Personenerkennung. Sobald Frigate eine Person meldet, hole ich das ganze Personen-Ereignis. So ein Ereignis ist mal wenige Sekunden lang, mal mehrere Minuten. Ich schaue es komplett durch, um alle Personen darin zu finden.\n\nOb Frigates eigene Gesichtserkennung an ist, spielt dafür keine Rolle. Sie wird nur gebraucht, wenn Gesichter mit Frigate abgeglichen werden sollen.\n\nGeprüft wird nie der Detect-Stream, sondern die Aufzeichnung, also der beste Stream, den die Kamera an Frigate liefert.\n\nEine Prüfung startet auf zwei Wegen. Entweder über das Personen-Event aus Frigate, das ist der Szenario-Weg. Oder über den Live-Wächter: Der holt den laufenden Stream, direkt von der Kamera oder über Frigates Proxy, sucht darin Gesichter und startet von dort.\n\nEine Person wird auf drei Wegen erkannt. Über das Gesicht. Über die Person als Ganzes, allein aus dem Bild, ohne Gesicht. Über ein Vision-Modell, dieser Weg ist noch Beta.\n\nIch fahre hier 4K-Kameras mit einer möglichst hohen Bildrate, mindestens 15 Bilder je Sekunde. Die Bitrate ebenso hoch wie möglich. Eine niedrige Bitrate macht bewegte Gesichter unscharf.',
+    "readme.aktuell.titel": 'Woran ich gerade arbeite',
+    "readme.aktuell.text": 'Ein Kalibrierungs-Knopf. Kamera-Feeds sind sehr unterschiedlich, damit auch die Schärfe und die Erkennung. Die Kalibrierung soll das ausgleichen.\n\nDie Vision-Erkennung über ein Sprachmodell: eine Person erkennen, wenn kein Gesicht zu sehen ist. Das läuft in der Beta und soll besser werden.\n\nEine Anwesenheits-Erkennung: festhalten, ob eine bekannte Person da ist oder nicht. Daran kann anderes anknüpfen, eine Alarmanlage etwa oder eine Zeiterfassung.',
+    "readme.lernen.titel": 'Wie lerne ich neue Gesichter?',
+    "readme.lernen.text": 'So lerne ich mit meinem System:\n\nGesichts-Lernlauf. Auf einem neuen System das Erste. Je nach Hardware die letzten 500 Ereignisse, mit Reserve 1000. Das Programm holt die Ereignisse mit Person, gruppiert sie und legt Bilder zusammen. Bekannte ordnet es selbst zu. Unbekannte sammelt es als Gruppe, und ich gebe der Gruppe einen Namen. Das gibt den Grundstock. Greift nur bei Gesichtern, die sauber erkannt wurden.\n\nHeute. Steht der Grundstock, kommt Neues von hier dazu: Ereignis oder Person anklicken, Gesicht übernehmen.\n\nBekannte Personen. Person auswählen, passende Gesichter suchen lassen.\n\nPersonen-Lernlauf. Den gibt es daneben, für Personen ohne erkennbares Gesicht. Dazu schreibe ich später mehr.\n\nQualität. Den Reiter nutze ich regelmäßig. Er zeigt, wie gut die Bilder einer Person wirklich sind, welche zu schwach sind und welche sich mit einer anderen Person überschneiden. Zu ähnliche nehme ich raus.\n\nDen Reiter Unbekannte gibt es noch aus einer früheren Fassung. Ich nutze ihn nicht.',
+    "readme.persoenlich.titel": 'Persönliches',
+    "readme.persoenlich.text": 'Das hier ist reines Hobby. Es macht mir Spaß, als Senior IT-Architekt mit KI etwas zu entwickeln. Entwickelt wird komplett mit Claude Code, überwiegend mit Fable 5, für die Agenten mit Opus 5.\n\nWas ich mir wünsche, ist Rückmeldung, und es freut mich, wenn jemand das System einsetzt. Das ist mein Lohn.',
     "kameras.titel": "Kameras",
     "kameras.banner.config_fehler":
         "Die Frigate-Config ließ sich nicht lesen: {fehler}",
@@ -362,6 +384,13 @@ T = {
     "konfiguration.kette_blatt.hinweis":
         "Änderungen werden protokolliert (config_audit.jsonl); "
         "nach dem Speichern startet der Dienst sauber neu.",
+    "antwort.support_token_neu": "neuer Support-Token erzeugt — der alte ist ungueltig; jetzt kopieren, er wird nur dieses eine Mal angezeigt",
+    "konfiguration.support.titel": "Fern-Support-Zugriff",
+    "konfiguration.support.satz": "Nur-Lese-Download benannter Bereiche (Logs, maskierte Config, Gesichter, Lernlaeufe, Koerpermaterial, Zustandsdateien) fuer den Inhaber des Support-Tokens. Der Ein/Aus-Schalter support_zugriff steht in der Tabelle unten, Standard aus. Jede Anfrage steht im Dienst-Log. Die Gesichts- und Koerperbereiche enthalten Bilder echter Personen — den Token mit Bedacht weitergeben. Ohne TLS vor diesem Dienst reist der Token im Klartext.",
+    "konfiguration.support.token_gesetzt": "Ein Support-Token ist gesetzt.",
+    "konfiguration.support.token_fehlt": "Noch kein Support-Token.",
+    "konfiguration.support.knopf_token": "Neuen Token erzeugen",
+    "konfiguration.support.einmal_hinweis": "Der Token erscheint hier genau einmal nach dem Erzeugen — sichern; danach wird nur noch ••• gezeigt.",
     "konfiguration.titel": "Erweiterte Einstellungen",
     "konfiguration.kopf.satz1":
         "Änderungen werden protokolliert (config_audit.jsonl); "
@@ -434,6 +463,19 @@ T = {
     "lernanker.detail.empfohlen": "Empfohlen — {bin} ({n})",
     "lernanker.detail.nicht_empfohlen":
         "Nicht empfohlen ({n}) — bleibt sichtbar, Grund an jedem Bild",
+    "lernanker.detail.gewaehlt": "Gewählt — {bin} ({n})",
+    "lernanker.detail.nicht_gewaehlt":
+        "Nicht gewählt ({n}) — bleibt sichtbar",
+    "lernanker.grund.bildpruefung": "hat die Bildprüfung nicht bestanden",
+    "lernanker.grund.zu_dunkel":
+        "zu dunkel (Helligkeit {luma} — nötig sind {min}+)",
+    "lernanker.grund.ueberbelichtet":
+        "überbelichtet (Helligkeit {luma} — höchstens {max})",
+    "lernanker.grund.dublette_phys":
+        "Doppel-Erkennung (gleiche Kamera, gleicher Rahmen)",
+    "lernanker.grund.fast_gleich": "fast gleich mit {datei}",
+    "lernanker.grund.bin_limit":
+        "Höchstzahl je Blickrichtung erreicht ({k} behalten)",
     "lernanker.detail.skip_weiter": "Diese Gruppe überspringen",
     "lernanker.detail.skip_zurueck": "Überspringen — zurück zu den "
         "Gruppen",
@@ -1110,7 +1152,7 @@ T = {
     "lernwizard.ergebnis.beiseite": "({n} aussortiert)",
     "lernwizard.kachel.lauf": "Lernlauf",
     "lernwizard.kachel.sammeln": "Sammeln &amp; sortieren",
-    "lernwizard.kachel.benennen": "Gruppen benennen",
+    "lernwizard.kachel.benennen": "Intelligente Zuordnung",
     "lernwizard.kachel.fertig": "Fertig &mdash; sie zählen",
     "lernwizard.such.titel": "Events nach Gesichtern durchsuchen",
     "lernwizard.such.klein": "geht rückwärts durch deine Aufnahmen",
@@ -1155,8 +1197,7 @@ T = {
         "schließen und wiederkommen.",
     "lernwizard.k2.knopf_abort": "Lauf abbrechen",
     "lernwizard.k3.satz_warten":
-        "Der einzige Schritt, der dich braucht: Eine Gruppe soll eine "
-        "Person sein &mdash; sag, wer es ist, oder überspringe sie.",
+        "Wen das System sicher wiedererkennt, benennt es selbst. Alles andere kommt zu dir &mdash; sag, wer es ist, oder überspringe es.",
     "lernwizard.k3.keine_gesichter":
         "Diesmal keine neuen Gesichter &mdash; nichts zu benennen. Das "
         "ist in Ordnung: Es heißt nur, dass in den Aufnahmen niemand "
@@ -1165,6 +1206,8 @@ T = {
     "lernwizard.k3.gruppe_offen":
         "Die aktuelle Gruppe ist unten geöffnet, in voller Breite.",
     "lernwizard.k3.alle_erledigt": "Alle Gruppen sind erledigt.",
+    "lernwizard.k3.altes_verfahren":
+        "Diese Gruppen stammen aus dem älteren Verfahren, vor der Qualitätsprüfung. Sie zu benennen hieße, Bilder zu sortieren, die der Lauf heute gar nicht mehr aufnimmt. Starte einen neuen Lauf.",
     "lernwizard.chip.bilder": "{n} Bilder",
     "lernwizard.k3.verworfen.eins":
         "{n} Gruppe von dir gelöscht &middot;",
@@ -1177,6 +1220,8 @@ T = {
     "lernwizard.k3.done_punkt": "{erledigt} von {gesamt} erledigt.",
     "lernwizard.k3.wartend.eins": "{n} Gruppe wartet auf dich.",
     "lernwizard.k3.wartend.viele": "{n} Gruppen warten auf dich.",
+    "lernwizard.k3.auto.eins": "{n} wurde automatisch erkannt &mdash; schau es dir an, wenn du magst.",
+    "lernwizard.k3.auto.viele": "{n} wurden automatisch erkannt &mdash; schau sie dir an, wenn du magst.",
     "lernwizard.k4.adopt_bilder.eins": "{n} Bild übernommen für",
     "lernwizard.k4.adopt_bilder.viele": "{n} Bilder übernommen für",
     "lernwizard.k4.adopt_personen.eins": "{n} Person",
@@ -1205,6 +1250,7 @@ T = {
         "({gut} gut, {grenz} grenzwertig von {n} geprüften)",
     "lernwizard.zw.titel":
         "Gruppe {pos} von {gesamt} &mdash; wer ist das?",
+    "lernwizard.zw.titel_auto": "Gruppe {pos} von {gesamt} &mdash; ist das {name}?",
     "lernwizard.zw.satz":
         "Eine Gruppe soll eine Person sein. Tippe ein Bild an, um es "
         "auszulassen &mdash; dann sag, wer es ist, oder überspringe "
@@ -1302,7 +1348,7 @@ T = {
     "nav.gesichter": "Bekannte Personen",
     "nav.unbekannte": "Unbekannte",
     "nav.qualitaet": "Qualität",
-    "nav.lernlauf": "Lernlauf",
+    "nav.lernlauf": "Gesichts-Lernlauf",
     "nav.anker": "Anker",
     "nav.lernen": "Vorschläge",
     "nav.person": "Körperbilder",
@@ -1399,6 +1445,22 @@ T = {
     "js.frigate.ro_frage": "Auf NUR-LESEN umschalten? suslik schreibt dann nichts mehr nach Frigate.",
     "js.frigate.rw_frage": "SCHREIBEN nach Frigate aktivieren (sub_labels + Referenz-Abgleich)?",
     "js.catchup.frage": "Verpasste Ereignisse ab sofort beim Start überspringen? Der Dienst startet dafür neu.",
+    "catchup.knopf": 'Nachholen',
+    "catchup.knopf.tooltip": 'Unverarbeitete Ereignisse warten',
+    "catchup.dlg.titel": 'Unverarbeitete Ereignisse holen',
+    "catchup.dlg.label_stunden": 'Zurück bis',
+    "catchup.dlg.wort_stunden": 'Stunden',
+    "catchup.dlg.label_limit": 'Höchstens',
+    "catchup.dlg.wort_events": 'Ereignisse',
+    "catchup.dlg.fuss": 'Geholt wird nur, was nie analysiert wurde. Deine Einstellungen bleiben, wie sie sind.',
+    "catchup.dlg.abbrechen": 'Abbrechen',
+    "catchup.dlg.los": 'Holen',
+    "js.catchup.spanne": '{von} bis {bis}',
+    "js.catchup.geklemmt": 'Möglich sind nur {h} h und {n} Ereignisse. Damit laufen lassen?',
+    "js.catchup.nicht_bereit": 'Erst eine Person anlernen, dann können diese geprüft werden.',
+    "js.catchup.warten": 'Unverarbeitete Ereignisse in der Warteschlange: {n}',
+    "antwort.catchup_gestartet": 'Hole die letzten {stunden} h, höchstens {n} Ereignisse.',
+    "antwort.catchup_laeuft": 'Es läuft schon ein Nachhol-Lauf.',
     "js.restore.frage": "Konfiguration aus \"{name}\" wiederherstellen? Das überschreibt die aktuellen Einstellungen und startet den Dienst neu.",
     "js.vollrestore.frage": "Das KOMPLETTE Backup \"{name}\" wiederherstellen? Das ersetzt Einstellungen, Referenzen und alles gelernte Material und startet den Dienst neu.",
     "js.vollrestore.laeuft": "wird hochgeladen und wiederhergestellt … (große Dateien brauchen ihre Zeit)",
@@ -1969,6 +2031,9 @@ T = {
     "vision.schalter.knopf_aus": "Ausschalten",
     "vision.schalter.knopf_an": "Einschalten",
     "vision.schalter.fehlt": "Fehlt noch:",
+    "vision.schalter.fehlt_galerien": "{n} von {soll} freigegebenen Galerien — eine bauen unter 'Galerie bauen'",
+    "vision.schalter.fehlt_test": "ein gruener Verbindungstest",
+    "vision.schalter.fehlt_kandidaten": "beurteilte Bilder als Kandidatenquelle — sie erscheinen, waehrend ein Durchgang laeuft; 'Diagnose-Sammlung' unter Person einschalten, wenn sie bleiben sollen",
     "vision.schalter.titel_an": "Die Vision-Erkennung ist an",
     "vision.schalter.titel_aus": "Die Vision-Erkennung ist aus",
     "vision.schalter.aus_satz":
@@ -2831,6 +2896,7 @@ T = {
         "abgebrochen — ein laufendes Event kann im Hintergrund noch "
         "fertig werden",
     "antwort.live_nichts": "nichts zu ändern",
+    "antwort.live_nachtests": "{n} Quelltest(s) laufen automatisch nacheinander; jeder Waechter startet, sobald sein Test besteht",
     "antwort.live_an": "{ok}/{alle} Wächter gestartet",
     "antwort.live_aus": "{ok}/{alle} Wächter gestoppt",
     "antwort.vision_modell_ok":

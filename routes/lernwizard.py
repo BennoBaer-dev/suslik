@@ -15,6 +15,7 @@ import datetime
 import html
 import json
 
+from core.benennung import bestes_zuerst
 from core.lernlauf import PHASEN
 from core.sprache import t, t_n
 from webui.bausteine import js_literal, lauffluss_stil
@@ -560,7 +561,7 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
                easy_events=300, unbekannt_offen=0, max_events=40000,
                personen=None, zielperson="", reihenfolge=None,
                sichtung=None, sichtung_gesamt=0, ernte_puls=None,
-               kameras=None):
+               kameras=None, norm_latte=None, luma_grenzen=None):
     """.246 (Lernfluss-Redesign, Mockup b_lernfluss, User-Abnahme 17.08.):
     EINE Fluss-Seite mit vier Kacheln (Start / Saeule / Benennen / Fertig) und
     der Zuweisungs-Flaeche ueber die ganze Zeile. zustand darf None sein
@@ -697,6 +698,17 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
         kz = ("fertig", "fertig", "fertig", "dran")
     else:                                  # Gruppen warten / keine Gesichter
         kz = ("fertig", "fertig", "dran", "folgt")
+    # Stammen die offenen Gruppen noch aus dem Verfahren VOR dem Qualitaets-Sieb,
+    # ist Benennen die falsche Einladung: der Nutzer sortierte dann Bilder, die
+    # der Lauf heute gar nicht mehr aufnehmen wuerde (User 28.08.: "Personen
+    # erkennen nur aktiv, wenn es einen aktuellen Lauf gibt, der unsere
+    # Verteilung unterstuetzt"). Marker ist die Schwelle, die nur ein gesiebter
+    # Lauf in seinen Datensatz schreibt — keine Versions-Arithmetik.
+    alt_verfahren = bool(wartend) and not any(
+        "anker_qualitaet_winkel_max" in ((g.get("lauf") or {}).get("schwellen") or {})
+        for g in wartend)
+    if alt_verfahren and kz[2] == "dran":
+        kz = ("fertig", "fertig", "folgt", "folgt")
 
     def _kachel(nr, zust, titel, inhalt):
         mark = "&#10003;" if zust == "fertig" else str(nr)
@@ -777,8 +789,14 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
         # .262 Fortsetzungs-Suche (User: '5 x 100 statt 1 x 500'): Haken an
         # = schon Durchsuchtes ueberspringen, jeder Lauf wandert weiter in
         # die Vergangenheit; Haken ab = die neuesten nochmal.
-        '<div class="lf-popz"><label><input type="checkbox" id="lf-weiter" '
-        'checked> ' + t("lernwizard.pop.label_skip") + '</label>'
+        # .365 (User 28.08.): Haken AB als Vorbelegung. Er war an, und deshalb
+        # nahm jeder zweite Lauf einen ganz anderen Ausschnitt — zwei Laeufe
+        # ueber je 300 Ereignisse hatten am 28.08. KEIN einziges gemeinsam,
+        # und der zweite fand drei Personen statt fuenf. Wer fortsetzen will,
+        # setzt den Haken bewusst; der Normalfall ist "die letzten N, egal ob
+        # schon gesehen".
+        '<div class="lf-popz"><label><input type="checkbox" id="lf-weiter"> '
+        + t("lernwizard.pop.label_skip") + '</label>'
         '<span class="lf-hint">' + t("lernwizard.pop.hint_skip")
         + '</span></div>'
         + _wen +
@@ -891,8 +909,11 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
     for g in reihe:
         aid_g = html.escape(str(g.get("anker_id")))
         lid_g = html.escape(str((g.get("lauf") or {}).get("lauf_id", "")))
-        mg = sorted(g.get("mitglieder") or [],
-                    key=lambda m: (-(m.get("det") or 0), str(m.get("datei"))))
+        # .366 (User-Fund 28.08.): DIESELBE Reihung wie die Flaeche darunter
+        # (core.benennung.bestes_zuerst). Vorher stand hier -det, und die
+        # Kachel warb fuer eine Gruppe mit einem Bild, das die Flaeche als
+        # 'kein Gesicht nach dem Qualitaetsmass' verwarf.
+        mg = bestes_zuerst(g.get("mitglieder"), norm_latte, luma_grenzen)
         bild = ""
         if mg and lid_g:
             fn = html.escape(str(mg[0].get("datei", "")).rsplit("/", 1)[-1])
@@ -917,8 +938,19 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
               '<div class="lf-rest">'
               '<a class="gtb" href="/lernlauf?neu=1">'
               + t("lernwizard.knopf_neuer_lauf") + '</a></div>')
+    elif alt_verfahren:
+        k3 = ('<p class="lf-satz">' + t("lernwizard.k3.altes_verfahren") + '</p>'
+              '<div class="lf-rest">'
+              '<a class="gtb" href="/lernlauf?neu=1">'
+              + t("lernwizard.knopf_neuer_lauf") + '</a></div>')
     else:
         erledigt = len(gruppen_sichtbar) - offen_n
+        # Phase 3 des intelligenten Lernens benennt eindeutige Gruppen selbst
+        # (analysen/intelligentes_lernen.md). Die zaehlen als erledigt — ohne
+        # diese Zeile saehe der Nutzer nur, dass Gruppen "schon fertig" sind,
+        # ohne zu erfahren, wer sie fertig gemacht hat.
+        auto_n = sum(1 for g in gruppen_sichtbar
+                     if (g.get("zuweisung") or {}).get("art") == "auto")
         k3 = ('<p class="lf-satz">'
               + (t("lernwizard.k3.gruppe_offen")
                  if kz[2] == "dran" else t("lernwizard.k3.alle_erledigt"))
@@ -948,7 +980,10 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
               + (' &middot; <b>'
                  + t("lernwizard.zeile.kaputt", n=anker_kaputt) + '</b>'
                  if anker_kaputt else "")
-              + '</div></div>')
+              + '</div>'
+              + (f'<div class="lf-satz dim">{t_n("lernwizard.k3.auto", auto_n)}</div>'
+                 if auto_n else "")
+              + '</div>')
 
     # --- Kachel 4: Bilanz -------------------------------------------------
     if kz[3] == "dran":
@@ -1100,7 +1135,14 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
                 sicht_zeile += ('<p class="lf-satz">nothing here passes the '
                                 f'{pruef_wort} &mdash; skip or delete this '
                                 'group.</p>')
-        pos = len(gruppen_sichtbar) - len(wartend) + 1
+        # .366 (User-Fund 28.08.): die Position der GEOEFFNETEN Gruppe in der
+        # Chip-Reihe — vorher rechnete sie aus den bereits uebernommenen
+        # Gruppen und stand deshalb auf 1, solange keine uebernommen war:
+        # ueber JEDER Gruppe stand "Gruppe 1 von 5", auch ueber der fuenften.
+        _reihe_ids = [str(g.get("anker_id")) for g in reihe]
+        _akt = str(aktuelle.get("anker_id"))
+        pos = (_reihe_ids.index(_akt) + 1 if _akt in _reihe_ids
+               else len(gruppen_sichtbar) - len(wartend) + 1)
         v = benennung.get("vorschlag")
         schon = aktuelle.get("status") == "benannt"
         opts = "".join(f'<option value="{html.escape(p)}">'
@@ -1153,10 +1195,21 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
             # sperren — 'Someone else' haette sonst eine LEERE Auswahl
             # persistiert; Skip und Delete bleiben.
             ja = ""
+        # Hat Phase 3 die Gruppe selbst benannt, ist "wer ist das?" die falsche
+        # Frage — der Nutzer soll bestaetigen, nicht raten
+        # (analysen/intelligentes_lernen.md). ZWEI ganze Satz-Schluessel statt
+        # eines zusammengesetzten: der Sprach-Checker sieht sonst keinen Zweig.
+        if ((aktuelle.get("zuweisung") or {}).get("art") == "auto"
+                and aktuelle.get("person")):
+            _zw_titel = t("lernwizard.zw.titel_auto", pos=pos,
+                          gesamt=len(gruppen_sichtbar),
+                          name=html.escape(str(aktuelle.get("person"))))
+        else:
+            _zw_titel = t("lernwizard.zw.titel", pos=pos,
+                          gesamt=len(gruppen_sichtbar))
         zuweisung = (
             f'<div class="lf-zw" id="lf-zw" data-aid="{aid}">'
-            '<h3>' + t("lernwizard.zw.titel", pos=pos,
-                       gesamt=len(gruppen_sichtbar)) + '</h3>'
+            '<h3>' + _zw_titel + '</h3>'
             f'<p class="lf-satz">{t("lernwizard.zw.satz")}</p>' + hin
             + mitte
             + '<div class="lf-knoepfe" id="lf-knopfzeile-1">' + ja

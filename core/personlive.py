@@ -548,6 +548,17 @@ def _bild_holen(frigate_url, eid, data_dir=None):
                 top, _info = fut.result(timeout=EVENT_ZEITWACHE_S)
             finally:
                 pool.shutdown(wait=False)
+            # Issue #27: Frigate ohne data.snapshot_frame_time (0.17.x) —
+            # die Frame-Kette faellt fuer JEDES Event ehrlich aus, der
+            # Notnagel urteilt vom Snapshot. Das stand bisher in keinem
+            # Dienst-Log; EINE Zeile je Dienststart macht es sichtbar.
+            if (top is None and "snapshot_frame_time" in str(_info or "")
+                    and not _CACHE.get("sft_gemeldet")):
+                _CACHE["sft_gemeldet"] = True
+                print("personlive: this Frigate sends no data.snapshot_frame_time "
+                      f"(first seen on {eid}) — body judgements use the snapshot "
+                      "path; body harvest (Person Learn) cannot run on such "
+                      "events (reported once per service start)", flush=True)
         if top:
             if _CACHE.get("wache") is None:
                 from pose_wache import PoseWache

@@ -233,7 +233,10 @@ def gruppen(kacheln):
     aus = {g: [] for g, _ in GRUPPEN}
     for kd in kacheln:
         z = kd.get("zustand")
-        if z in ("active", "disturbed"):
+        if z in ("active", "disturbed", "checking"):
+            # checking (.362): sichtbar zu den Laufenden — ein Selbstheilungs-
+            # Zustand darf nie im zugeklappten Rest-Abschnitt verschwinden
+            # (Konzept-QS-Blocker 28.08.).
             aus["laufend"].append(kd)
         elif kd.get("versteckt"):
             aus["versteckt"].append(kd)
@@ -291,7 +294,10 @@ def _karte(kd, gesperrt):
             knoepfe.append(f'<button class="gtb" '
                            f'onclick="liveMessung(\'{nid}\',this)">'
                            f'{t("live.knopf_messung")}</button>')
-        if z == "tested":
+        if z in ("tested", "untested"):
+            # untested seit .362 mit Enable-Knopf: das Enable testet selbst
+            # (Selbstheilung .361) — vorher war der neue Pfad im UI gar
+            # nicht erreichbar (Konzept-QS-Einwand).
             knoepfe.append(f'<button class="gtb on" '
                            f'onclick="liveSchalter(\'{nid}\',true,this)">'
                            f'{t("live.knopf_enable")}</button>')
@@ -301,7 +307,7 @@ def _karte(kd, gesperrt):
                            f'{t("live.knopf_disable")}</button>')
     # Hide/Show (User 13.08.) — NICHT an laufenden Kacheln (die Running-
     # Gruppe zeigt immer alles; erst stoppen, dann verstecken).
-    if kd["zustand"] not in ("active", "disturbed"):
+    if kd["zustand"] not in ("active", "disturbed", "checking"):
         if kd.get("versteckt"):
             knoepfe.append(f'<button class="gtb" '
                            f'onclick="liveVerstecken(\'{nid}\',false,this)">'
@@ -493,7 +499,7 @@ def detail(name, guard, kd, gesperrt):
     an = bool(g.get("enabled"))
     schalter = ""
     if not gesperrt:
-        if z == "tested":
+        if z in ("tested", "untested"):
             schalter = (f'<button class="gtb on" '
                         f'onclick="liveSchalter(\'{nid}\',true,this)">'
                         f'{t("live.knopf_enable")}</button>')

@@ -419,11 +419,56 @@ def melde_text(text, herkunft=None):
 LIVE_ZUSTAENDE = {
     "unconfigured": {"farbe": "grau",    "label": "Not configured"},
     "untested":     {"farbe": "gelb",    "label": "Configured — test required"},
+    # .362 (Konzept-QS 28.08.): enabled, aber der Quelltest laeuft noch/neu —
+    # der Selbstheilungs-Zustand des .361-Enables, vorher zeigte die Kachel
+    # hier faelschlich 'test required', waehrend der Test schon lief.
+    "checking":     {"farbe": "gelb",    "label": "Checking source"},
     "tested":       {"farbe": "blau",    "label": "Tested — ready to enable"},
     "active":       {"farbe": "gruen",   "label": "Active"},
     "disturbed":    {"farbe": "rot",     "label": "Disturbed"},
     "unsupported":  {"farbe": "neutral", "label": "Not available on this build"},
 }
+
+
+# --- Support-Zugriff (analysen/support_api.md, 28.08.2026) --------------------------
+# DIE eine Bereichs-Quelle (QS-Ebenen-Regel: kein Streu-Literal): Inventar,
+# Handler (core/support.py), Doku-Deckung und QS-Stufe lesen ALLE von hier.
+# Nur Daten (Registry-Kopfvertrag: importfrei) — Wurzeln als Pfad-Tupel
+# relativ zu data_dir, Regex als String. HARTE Regel (Widerleger 18/36):
+# config/, clips/, events/, live/ duerfen hier NIE als Wurzel auftauchen
+# (config/ traegt unmaskierte Alt-Store-Kopien; der Rest sind Rohdaten-
+# Riesen) — die QS-Stufe prueft das gegen diese Tabelle.
+SUPPORT_BEREICHE = {
+    "inventar":   {"art": "json", "text": "what is available (sizes, runs)"},
+    "config":     {"art": "json",
+                   "text": "masked config export — secrets are replaced by "
+                           "***, plain-text values never leave the machine"},
+    "logs":       {"art": "tar", "wurzel": ("logs",),
+                   "text": "current + rotated service logs"},
+    "faces":      {"art": "tar", "wurzel": ("faces",),
+                   "text": "reference face images of the people you taught "
+                           "this system — personal data, hand out with care"},
+    "lauf":       {"art": "tar", "wurzel": ("state", "lernlauf"),
+                   "je_lauf": True,
+                   "text": "one learning run (crops are face images)"},
+    "personlern": {"art": "tar", "wurzel": ("personlern",),
+                   "ausschluss": ("werkstatt",),
+                   "text": "body-recognition material (body images of "
+                           "known people)"},
+    "state":      {"art": "tar", "wurzel": ("state",),
+                   "dateien": ("deckung.jsonl", "lernlauf.json",
+                               "anker.jsonl", "startup.json",
+                               "rechenprobe.json", "wanduhr.json",
+                               "live_status.json", "systemstat.jsonl"),
+                   "text": "per-event results + service state files "
+                           "(diagnosis core)"},
+}
+# Muster-Maskierung des Config-Exports (Widerleger 1: eine Feldnamen-
+# Heuristik statt einer pflegebeduerftigen Streu-Liste; zu viel maskieren
+# ist die sichere Richtung). Ein Feld wird maskiert, wenn sein Name eines
+# dieser Woerter enthaelt (case-insensitiv).
+SUPPORT_SECRET_MUSTER = ("token", "password", "passwort", "key", "secret",
+                         "webhook", "user")
 
 
 # --- Secret-Vertrag Vision (konzept_vision.md §9 + E8, Zug V1) ----------------------
@@ -892,6 +937,12 @@ def vision_geheimnisse(vcfg):
 # Loeschen .107). Wer prueft, importiert von hier.
 EID_RE = r"[\w.\-]+"            # Event-IDs (ts-id), OHNE Tilde
 DATEI_RE = r"[\w .\-~]+"        # Bild-/Crop-Dateinamen, MIT Tilde + Leerzeichen
+# Lauf-Ordner unter state/lernlauf/: L<stempel> (Gesichts-Lernlauf) und
+# B<stempel> (Bestands-/QS-Laeufe). Bis .362 lagen ZWEI widerspruechliche
+# Literale verstreut (/lernlauf/crop nur L, /lernlauf/vorrat L+B — B-Laeufe
+# bekamen an der einen Route nie ein Bild). ASCII explizit, kein \w
+# (Support-QS 28.08.: \w ist Unicode-aware).
+LAUF_ID_RE = r"[LB][A-Za-z0-9_]+"
 
 # Personen-Namen (Ordnername unter faces/ und Formularwert). Bis 03.08. lagen FUENF
 # leicht verschiedene Literale verstreut (Laengenlimits 1-40/2-40, eines mit "!"-Suffix,
