@@ -12,7 +12,7 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.0.374"   # .372-.374 = reine STAND-Bumps (User 30.08.:
+STAND = "0.1.0.391"   # Eintraege fuer .380 (Unknown-Umbau, Support-Vollzugriff) VOR Release mit User abstimmen (User 30.08.:
                       # "whatsnew bleibt wie es ist").
                       # Davor: .371 = reiner STAND-Bump (User 30.08.:
                       # "whatsnew bleibt wie es jetzt ist" — die Box
@@ -349,6 +349,133 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # .387 — INHALT VOM USER DIKTIERT (31.08. abends: What's new ist der
+    # komplette Umbau der Kernsysteme fuer die Personen-Erkennung, und es soll
+    # "nur noch ein roter Achtung-Beta"-Eintrag rein). EIN Eintrag, betont;
+    # Versions-Key beim Release-Lauf auf die finale Nummer ziehen, falls
+    # bis dahin weitere Builds kommen.
+    ("0.1.0.391", (
+        {"de": "Achtung, Zwischenversion: Diese Version baut das Kernsystem "
+               "der Personen-Erkennung komplett um — Live-Wache, Kamera-"
+               "Kalibrierung und Verarbeitung sind neu. Das ist ein "
+               "Entwicklungsstand.",
+         "en": "Heads-up, interim version: this release completely rebuilds "
+               "the core person recognition system — live watch, camera "
+               "calibration and processing are new. This is a development "
+               "state.",
+         "es": "Atención, versión intermedia: esta versión reconstruye por "
+               "completo el sistema central de reconocimiento de personas — "
+               "la vigilancia en vivo, la calibración de cámaras y el "
+               "procesamiento son nuevos. Es un estado de desarrollo.",
+         "it": "Attenzione, versione intermedia: questa versione ricostruisce "
+               "completamente il sistema centrale di riconoscimento delle "
+               "persone — la sorveglianza live, la calibrazione delle "
+               "telecamere e l'elaborazione sono nuovi. È uno stato di "
+               "sviluppo.",
+         "fr": "Attention, version intermédiaire : cette version reconstruit "
+               "entièrement le système central de reconnaissance des "
+               "personnes — la surveillance en direct, le calibrage des "
+               "caméras et le traitement sont nouveaux. C'est un état de "
+               "développement.",
+         "betont": True},
+        # Zwei Feature-Punkte vom User nachgereicht (31.08.: "neue Kalibrierung
+        # pro Kamera und neue Unbekannt-Seite muessen mit rein").
+        {"de": "Neu: Kalibrierung pro Kamera. Ein eigener Knopf oben in der "
+               "Leiste führt zur Übersicht; je Kamera stellst du an echten "
+               "Bildern ein, welche Qualität für Anzeige, Meldung und Lernen "
+               "zählt. Fehlt Material, sucht die Kamera auf Knopfdruck selbst "
+               "in den letzten Aufnahmen.",
+         "en": "New: per-camera calibration. A dedicated button in the top "
+               "bar opens the overview; for each camera you use real "
+               "pictures to set which quality counts for display, alerts and "
+               "learning. If material is missing, the camera searches its "
+               "recent recordings at the push of a button.",
+         "es": "Nuevo: calibración por cámara. Un botón propio en la barra "
+               "superior abre el resumen; en cada cámara ajustas con "
+               "imágenes reales qué calidad cuenta para la vista, los avisos "
+               "y el aprendizaje. Si faltan imágenes, la cámara busca por sí "
+               "misma en las grabaciones recientes con un botón.",
+         "it": "Novità: calibrazione per telecamera. Un pulsante dedicato "
+               "nella barra superiore apre la panoramica; per ogni "
+               "telecamera imposti con immagini reali quale qualità conta "
+               "per la visualizzazione, gli avvisi e l'apprendimento. Se "
+               "manca materiale, la telecamera cerca da sola nelle "
+               "registrazioni recenti con un pulsante.",
+         "fr": "Nouveau : calibrage par caméra. Un bouton dédié dans la "
+               "barre supérieure ouvre la vue d'ensemble ; pour chaque "
+               "caméra, tu règles sur de vraies images quelle qualité "
+               "compte pour l'affichage, les alertes et l'apprentissage. "
+               "S'il manque des images, la caméra cherche elle-même dans "
+               "les enregistrements récents d'un simple bouton."},
+        {"de": "Die Unbekannt-Seite ist neu gebaut: Sie bleibt auch bei "
+               "großen Beständen schnell, mit Seiten, Filtern und "
+               "Sortierung, und mehrere Unbekannte lassen sich in einem Zug "
+               "zusammenführen.",
+         "en": "The Unknown page is rebuilt: it stays fast even with large "
+               "collections, with paging, filters and sorting, and several "
+               "unknowns can be merged in one go.",
+         "es": "La página de desconocidos está reconstruida: sigue siendo "
+               "rápida incluso con colecciones grandes, con páginas, "
+               "filtros y ordenación, y varios desconocidos se pueden "
+               "fusionar de una vez.",
+         "it": "La pagina degli sconosciuti è ricostruita: resta veloce "
+               "anche con raccolte grandi, con pagine, filtri e "
+               "ordinamento, e più sconosciuti si possono unire in un solo "
+               "passaggio.",
+         "fr": "La page des inconnus est reconstruite : elle reste rapide "
+               "même avec de grandes collections, avec pagination, filtres "
+               "et tri, et plusieurs inconnus peuvent être fusionnés en une "
+               "fois."},
+    )),
+    # .377 — INHALT VOM USER ABGESTIMMT (30.08. abends: "zwei Dinge gehen in
+    # die What's new, die Kalibrierungsfunktion und der Bug, dass die
+    # Personenermittlung bei 17.2 nicht funktioniert hat, sondern erst bei
+    # 18"). GENAU diese zwei Punkte, nichts selbststaendig ergaenzt (Memory
+    # whatsnew-inhalt-abstimmen). DE ist die Vorlage, EN daraus; ES/IT/FR mit
+    # den etablierten Begriffen der Sprachdateien.
+    ("0.1.0.377", (
+        {"de": "Neu: Kalibrierung. Du stellst an den Bildern deines eigenen "
+               "Lernlaufs mit zwei Reglern ein, welche Bildqualität dir zum "
+               "Lernen reicht — der Knopf dafür sitzt an der Benennen-Karte "
+               "des Lernlaufs.",
+         "en": "New: calibration. Using the pictures of your own learning "
+               "run, two sliders let you set which picture quality is good "
+               "enough for learning — the button sits on the naming card of "
+               "the learning run.",
+         "es": "Nuevo: calibración. Con las imágenes de tu propio "
+               "aprendizaje, dos controles te permiten definir qué calidad "
+               "de imagen basta para aprender; el botón está en la tarjeta "
+               "de nombres del aprendizaje.",
+         "it": "Novità: calibrazione. Con le immagini del tuo apprendimento, "
+               "due cursori ti permettono di stabilire quale qualità "
+               "d'immagine basta per imparare; il pulsante si trova sulla "
+               "scheda dei nomi dell'apprendimento.",
+         "fr": "Nouveau : calibrage. À partir des images de votre propre "
+               "apprentissage, deux curseurs vous permettent de définir "
+               "quelle qualité d'image suffit pour apprendre ; le bouton se "
+               "trouve sur la carte de nommage de l'apprentissage."},
+        {"de": "Fehler behoben: das Personen-Lernen (Ganzkörper) lieferte "
+               "mit Frigate bis 0.17 nie Bilder — es brauchte ein Feld, das "
+               "erst Frigate 0.18 kennt. Jetzt lernt es dort aus dem "
+               "Schnappschuss je Ereignis.",
+         "en": "Fixed: person learning (full body) never produced pictures "
+               "with Frigate up to 0.17 — it needed a field only Frigate "
+               "0.18 provides. It now learns from the snapshot per event "
+               "there.",
+         "es": "Corregido: el aprendizaje de personas (cuerpo entero) nunca "
+               "producía imágenes con Frigate hasta 0.17 — necesitaba un "
+               "campo que solo existe desde Frigate 0.18. Ahora aprende allí "
+               "de la instantánea de cada evento.",
+         "it": "Corretto: l'apprendimento delle persone (corpo intero) non "
+               "produceva mai immagini con Frigate fino alla 0.17 — serviva "
+               "un campo che esiste solo da Frigate 0.18. Ora lì impara "
+               "dall'istantanea di ogni evento.",
+         "fr": "Corrigé : l'apprentissage des personnes (corps entier) ne "
+               "produisait jamais d'images avec Frigate jusqu'en 0.17 — il "
+               "lui fallait un champ qui n'existe que depuis Frigate 0.18. "
+               "Il y apprend désormais à partir de l'instantané de chaque "
+               "événement."},
+    )),
     # .352 — INHALT VOM USER DIKTIERT (26.08. abends: "Nehmen wir auf, dass wir
     # auf GitHub eine extra Seite erstellt haben, wie man auf einem Proxmox-LXC-
     # Server am besten die CUDA oder die GPU durchreicht", praezisiert:

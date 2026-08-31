@@ -736,6 +736,9 @@ T = {
     "live.test.provider": "provider {provider}",
     "live.test.sw": "(software decode)",
     "live.test.entwertet": "— INVALIDATED: source changed since this test",
+    "live.test.veraltet_bitte":
+        "This check is {tage} days old — run the source test again so the "
+        "numbers describe what the camera delivers today.",
     "live.test.fehlgeschlagen":
         "last source test FAILED ({wann}): {fehler}",
     "live.messung.zeile": "load measured on {wann}: {text}",
@@ -846,8 +849,10 @@ T = {
     "live.hoehe.h720": "720p — lighter decode, name fires later",
     "live.hoehe.h1080":
         "1080p — sweet spot (measured: name ~2.4 s earlier than 720p)",
-    "live.hoehe.h1440": "1440p — no measured gain over 1080p",
-    "live.hoehe.h2160": "2160p — native 4K, marginal gain, highest decode cost",
+    "live.hoehe.alt_hinweis":
+        "Saved: {alt}p. That step was dropped (measured: no gain over "
+        "{jetzt}p) — this watcher runs at {jetzt}p. The saved value and the "
+        "source test stay valid; pick a new step to change it.",
     "live.abschnitt.alarm": "Alarm chain",
     "live.detail.ende_label": "End after no face (s):",
     "live.detail.ende_hinweis":
@@ -871,6 +876,137 @@ T = {
     "live.detail.messung_hinweis":
         "the load measurement pauses the other watchers while it runs",
     "live.detail.link_zurueck": "back to overview",
+    "live.detail.kein_bild": "No live picture — this watcher is not running.",
+    "live.detail.kein_bild_test":
+        "Last source test saw {aufloesung}, processed as {skala}.",
+    "live.detail.kein_bild_ohne_test":
+        "No source test has run yet, so nothing is known about this feed.",
+    # --- Live-Umbau 31.08.: die Konfigseite eines Waechters traegt jetzt
+    # Kacheln statt einer Kartenspalte, und alles Neue ist JE KAMERA
+    # einstellbar (die Guete-Skalen sind kameraabhaengig — gemessen).
+    "live.abschnitt.erkennung": "Recognition",
+    "live.abschnitt.melden": "Alerting",
+    "live.abschnitt.frigate": "Frigate events",
+    "live.abschnitt.erweitert": "Advanced settings",
+    "live.abschnitt.abtastung": "Sampling",
+    "live.abtastung.schalter": "Only look closely when something moves",
+    "live.abtastung.erklaerung":
+        "Face detection is what costs — a cheap motion check on the "
+        "brightness plane decides whether a frame is worth it. While a "
+        "person is being tracked the watcher always runs at full rate; only "
+        "a quiet scene is sampled less often.",
+    "live.abtastung.ruhe_label": "Look anyway every",
+    "live.abtastung.ruhe_einheit": "s",
+    "live.abtastung.ruhe_hinweis":
+        "Leave empty to use this camera's appearance-end time — someone "
+        "standing perfectly still creates no motion, so the watcher takes a "
+        "look now and then anyway (1–600 s).",
+    "live.abtastung.schwelle_label": "Sensitivity (grey-level change):",
+    "live.abtastung.flaeche_label": "smallest area:",
+    "live.abtastung.eich_hinweis":
+        "Leave both empty for Frigate's shipping values. Lower sensitivity or "
+        "a smaller area makes the watcher look more often; higher values keep "
+        "it quiet on a windy hedge. Every site is different — these belong to "
+        "this camera, not to the whole system.",
+    "live.abschnitt.guete": "Picture quality thresholds",
+    "live.abschnitt.last": "Load measurement",
+    "live.erkennung.det_zeile":
+        "A find counts as a face from a detection score of {wert} up{marke}.",
+    "live.erkennung.det_vorgabe": " (default)",
+    "live.erkennung.regel_vor": "Recognized after",
+    "live.erkennung.regel_mitte": "confirmations within",
+    "live.erkennung.regel_nach": "seconds",
+    "live.erkennung.regel_hinweis":
+        "0 seconds means the whole appearance counts, which is how it worked "
+        "before. A time window helps on cameras where someone stands around "
+        "for minutes and two lucky hits far apart should not count as one "
+        "recognition.",
+    "live.erkennung.vorrat_zeile":
+        "Calibration samples: {n} of {deckel} kept — one picture per "
+        "appearance, the oldest drop out.",
+    "live.erkennung.vorrat_aus":
+        "Sample collection is off, so the calibration page has nothing to "
+        "show (System page, \"live_kalib_max\").",
+    "live.erkennung.latte_e": "picture impression from {wert}",
+    "live.erkennung.latte_t": "recognisability from {wert}",
+    "live.erkennung.latte_aus": "not set",
+    "live.erkennung.latte_hinweis":
+        "These two never decide WHO is recognized — that would cost "
+        "confirmations. They decide which picture goes into the alert and "
+        "which faces are kept as calibration samples. Set them on the "
+        "calibration page, where you can see the pictures.",
+    "live.knopf_kalibrieren": "Calibrate",
+    "live.knopf_vorrat_leeren": "Clear samples",
+    "live.frigate.schalter": "Create a Frigate event when someone is recognized",
+    "live.frigate.erklaerung":
+        "Off by default. When on, this watcher writes its own event into "
+        "Frigate with the name in the sub label \u2014 your own recording, "
+        "independent of Frigate\u2019s detection. Writing runs in the "
+        "background: the watcher never waits for Frigate. Nothing is written "
+        "while read-only mode is on.",
+    "live.frigate.abstand_label": "At most one event per person every (s):",
+    "live.frigate.abstand_hinweis":
+        "Empty means: the same distance you set above for alerts. The limit "
+        "counts per person, so two different people can be written at the "
+        "same time.",
+    "livekalib.titel": "Camera calibration — {name}",
+    "livekalib.erklaerung":
+        "These are real faces this camera collected \u2014 one picture per "
+        "appearance. Drag the sliders until the selection looks right to you, "
+        "then apply. The values are saved for THIS camera only, because the "
+        "quality scales differ from camera to camera.",
+    "livekalib.regler_det": "Detection score",
+    "livekalib.regler_det_prosa":
+        "From here on a find counts as a face at all. This one really does "
+        "steer the recognition: everything below never reaches the name "
+        "check. Lower keeps more material (measured: a high bar threw away "
+        "half of the usable material); higher keeps hedges and light patches "
+        "out.",
+    "livekalib.regler_e": "Picture impression",
+    "livekalib.regler_e_prosa":
+        "How clean and bright the picture looks to the eye. This does NOT "
+        "decide who is recognized \u2014 it decides which picture goes into "
+        "the alert and which faces are kept here as samples.",
+    "livekalib.regler_t": "Recognisability",
+    "livekalib.regler_t_prosa":
+        "How well the person can be made out, half-covered faces included. "
+        "Like the one above: it picks the picture and fills this page, it "
+        "never sorts anybody out of the recognition.",
+    "livekalib.ohne_guete":
+        "The two quality models are missing in this build, so these samples "
+        "carry no quality figures and the two lower sliders have no effect "
+        "here. The detection score works.",
+    "livekalib.standard": "Defaults",
+    "livekalib.tab_erkennen": "Recognition",
+    "livekalib.tab_lernen": "Face catalog",
+    "livekalib.uebernehmen": "Apply",
+    "livekalib.leer": "No samples yet. They arrive on their own — from a running watcher and from every event analysis of this camera, one face each. If you do not want to wait, use \"Look for fresh material\" below.",
+    "livekalib.zurueck": "back to the watcher",
+    "livekalib.js.genutzt": "{n} of {gesamt} samples pass",
+    "livekalib.js.gespeichert": "saved",
+    "livekalib.js.fehler": "error",
+    # --- Kalibrier-Zentralumbau 31.08.: Abschnitte, Katalog-Latte, Material
+    "livekalib.zur_uebersicht": "back to all cameras",
+    "livekalib.abschnitt.anzeige": "Alerts, display and samples",
+    "livekalib.abschnitt.anzeige_prosa": "These three decide which picture of this camera goes into an alert, and which faces are kept here as samples. They do not decide who is recognised.",
+    "livekalib.abschnitt.katalog": "Catalogue bar",
+    "livekalib.abschnitt.material": "Material",
+    "livekalib.katalog.prosa": "A separate, stricter bar: how good a face of this camera has to look before it may become a stored reference. It applies wherever a picture enters the catalogue — naming an unknown group, adopting from a learning run, taking a suggestion.",
+    "livekalib.katalog.grenze": "What it does not do: it never removes references you already have, and it never changes who is recognised. Pictures without quality scores (older material, or a build without the quality models) pass untouched — a bar without a measurement would discard blindly.",
+    "livekalib.katalog.quelle_kamera": "In use: this camera's own values.",
+    "livekalib.katalog.quelle_global": "In use: the global fallback — this camera has no own values yet.",
+    "livekalib.katalog.quelle_aus": "No catalogue bar set: every picture may become a reference.",
+    "livekalib.katalog.regler_e": "Catalogue: picture impression",
+    "livekalib.katalog.regler_e_prosa": "Minimum picture impression for a reference of this camera. Keep it above the slider further up: what is good enough to show is not automatically good enough to learn from.",
+    "livekalib.katalog.regler_t": "Catalogue: recognisability",
+    "livekalib.katalog.regler_t_prosa": "Minimum recognisability for a reference of this camera. This is the one that keeps half-covered faces out of the catalogue.",
+    "livekalib.material.aus": "Sample collection is switched off (Advanced, calibration samples). Without samples this page has nothing to show.",
+    "livekalib.material.stand": "{n} of at most {deckel} samples stored",
+    "livekalib.material.wann": "latest {wann}",
+    "livekalib.material.fuellen_prosa": "Looking for fresh material works through the most recent person events of this camera and keeps the best face of each. It stops at {ziel} pictures or after {events} events, whichever comes first.",
+    "livekalib.material.lauf": "Plus {n} picture(s) of this camera from the latest learning run — shown below and marked as such.",
+    "livekalib.js.katalog": "{n} of {gesamt} would be allowed into the catalogue",
+    "livekalib.js.lauf": "run",
     # ----------------------------------------------- routes/erkennung ---
     # NICHT eingezogen (bewusst, Stufe-0-Grenzen): die ek-satz-Zeile der
     # Live-Kachel (<b>moment</b> mitten im Satz), der Expert-Status
@@ -1203,6 +1339,55 @@ T = {
     "lernwizard.ergebnis.beiseite": "({n} set aside)",
     "lernwizard.kachel.lauf": "Learning run",
     "lernwizard.kachel.sammeln": "Collect &amp; sort",
+    "kalib.titel": "Camera calibration",
+    "kalib.erklaerung": "These two thresholds decide which faces future learning runs keep. Slide until the border feels right — everything greyed out would be dropped. Below are the pictures of the latest run, best picture impression first. Yellow frame = picture picked for adoption.",
+    "kalib.leer": "Nothing to calibrate yet: the latest run carries no quality scores. Start a learning run with this version first.",
+    "kalib.regler_e": "Picture impression",
+    "kalib.regler_e_prosa": "How clean and bright the picture looks to the eye. Lower keeps more, but darker and rougher pictures.",
+    "kalib.regler_t": "Recognisability",
+    "kalib.regler_t_prosa": "How well the person can be identified on the picture. Also sorts out half-covered faces.",
+    "kalib.standard": "Reset to defaults",
+    "kalib.uebernehmen": "Apply thresholds",
+    "kalib.js.genutzt": "Kept: {n} of {gesamt}",
+    "kalib.js.gespeichert": "Saved — the run is re-graded with the new thresholds, taking you back to the learning run …",
+    "kalib.js.fehler": "Saving failed",
+    # --- zentrale Kamera-Uebersicht + globaler Rueckfall (31.08.)
+    "kalib.knopf": "Calibration",
+    "kalib.knopf_tip": "Camera calibration: the bars for alerts, samples and the reference catalogue",
+    "kalib.uebersicht.erklaerung": "One camera, one set of values. The quality scales differ from camera to camera — measured on a single setup, the median recognisability of one camera was more than twice that of another. Pick a camera to set its bars.",
+    "kalib.uebersicht.leer": "No cameras yet",
+    "kalib.uebersicht.leer_hinweis": "As soon as Frigate reports cameras, they show up here.",
+    "kalib.grenze.titel": "What calibration does — and what it does not",
+    "kalib.grenze.satz": "It decides which picture is shown or sent, which faces are kept as samples, and which of them may become a stored reference. It never decides who is recognised: the name check sees every face, unfiltered. That is measured, not assumed — filtering before the vote cost confirmations.",
+    "kalib.kachel.eigene": "own values",
+    "kalib.kachel.vorgabe": "default values",
+    "kalib.kachel.fremd": "not in Frigate",
+    "kalib.kachel.fremd_tip": "This camera has calibration values but Frigate no longer reports it. The values stay, nothing is deleted.",
+    "kalib.kachel.vorrat": "{n} of {deckel} samples",
+    "kalib.kachel.vorrat_aus": "Sample collection is off (Advanced, calibration samples).",
+    "kalib.kachel.stand": "latest {wann}",
+    "kalib.kachel.leer": "No samples yet",
+    "kalib.kachel.leer_hinweis": "Samples come from a running watcher and from event analyses — or fetch some now.",
+    "kalib.kachel.werte": "detection {det} · impression {e} · recognisability {tw}",
+    "kalib.kachel.katalog": "catalogue bar {e} / {tw}",
+    "kalib.quelle.kamera": "own",
+    "kalib.quelle.global": "global fallback",
+    "kalib.quelle.aus": "off",
+    "kalib.knopf_kalibrieren": "Calibrate",
+    "kalib.knopf_fuellen": "Look for fresh material",
+    "kalib.knopf_leeren": "Delete samples",
+    "kalib.global.titel": "Global fallback",
+    "kalib.global.satz": "These apply to cameras without their own values, and they are the bar a learning run uses when it decides which faces to keep.",
+    "kalib.global.werte": "impression {e} · recognisability {tw}",
+    "kalib.global.katalog": "catalogue bar {e} / {tw}",
+    "kalib.global.knopf": "Set on the latest learning run",
+    "kalib.global.kein_lauf": "No learning run with quality scores yet — these can be set once a run has finished.",
+    "kalib.lauf.titel": "Global bars — latest learning run",
+    "kalib.zurueck": "back to all cameras",
+    "js.kalib.start": "looking for material …",
+    "js.kalib.lauf": "{i} of {n} events · {bilder} picture(s)",
+    "js.kalib.fertig": "{bilder} picture(s) from {events} event(s)",
+    "js.kalib.fehler": "could not look for material",
     "lernwizard.kachel.benennen": "Smart naming",
     "lernwizard.kachel.fertig": "Done &mdash; they count",
     "lernwizard.such.titel": "Search events for faces",
@@ -1239,7 +1424,6 @@ T = {
     "lernwizard.k1.scope": "scope {n} events",
     "lernwizard.k1.kameras": "cameras only: {kameras}",
     "lernwizard.k1.tag": "day {tag}",
-    "lernwizard.k1.mini_belichtung": "Brightness check",
     "lernwizard.k2.satz":
         "Runs on its own &mdash; you can close this page and come back.",
     "lernwizard.k2.knopf_abort": "Abort run",
@@ -1340,40 +1524,6 @@ T = {
         "built in)",
     "lernwizard.expert.lauf_bleibt":
         "this run stays — its anchors remain available",
-    # -------- Abgleich Helligkeit /lernlauf/belichtung (Phase 1b, 26.08.) --
-    "belichtung.titel": "Brightness check",
-    "belichtung.satz":
-        "Set the two brightness lines on your own pictures. Each row is one "
-        "face cluster, sorted the way the server sorts it right now: pictures "
-        "outside the lines fall to the end and are marked red. Nothing is "
-        "deleted — a picture pushed back can still be picked by hand.",
-    "belichtung.jetzt": "In effect right now: darkest {von}, brightest {bis}.",
-    "belichtung.hinweis_aus":
-        "Both lines are off, so nothing falls back — move a slider to see what "
-        "a line would do.",
-    "belichtung.aus_wort": "off",
-    "belichtung.regler_min": "darkest allowed",
-    "belichtung.regler_max": "brightest allowed",
-    "belichtung.regler_hinweis":
-        "Brightness runs from 0 (black) to 255 (white); 0 turns that side off.",
-    "belichtung.bilanz": "{n} of {m} pictures fall back",
-    "belichtung.vorschau":
-        "Preview only — the pictures are re-sorted in your browser. Save to let "
-        "the server sort this way.",
-    "belichtung.knopf_speichern": "Save these limits",
-    "belichtung.reihe_info":
-        "{n} of {gesamt} measured pictures · brightness {von} to {bis}",
-    "belichtung.lage_dunkel": "too dark",
-    "belichtung.lage_hell": "overexposed",
-    "belichtung.lage_ok": "within the limits",
-    "belichtung.zurueck": "back to the learning run",
-    "belichtung.leer_satz":
-        "No picture carries a brightness value yet, so there is nothing to "
-        "calibrate against.",
-    "belichtung.leer_hinweis":
-        "Brightness is measured while faces are harvested. It appears from the "
-        "next learning run or pass check onwards; older pictures are never "
-        "measured afterwards.",
     # --------------------------------- Stufe 1: Einhang/Skelett (webui) ---
     "nav.bereich.activity": "Activity",
     "nav.bereich.faces": "Faces",
@@ -1564,10 +1714,11 @@ T = {
     "js.dienst.nicht_erreichbar": "cannot reach the service — try again in a moment.",
     "js.unb.tick": "{phase} … {s} s",
     "js.unb.besucher_frage": "Ignore as a known stranger? It will no longer trigger alerts. (Re-activate any time under \"known visitors\" below.)",
-    "js.unb.ziel_fehlt": "Choose a target identity.",
     "js.unb.merge_frage": "Merge?",
     "js.unb.name_fehlt": "Enter a name (new or existing person).",
     "js.unb.benennen_frage": "Assign to \"{person}\"? The best images become references.",
+    "js.unb.teil_frage": "Assign the {n} ticked pictures to \"{person}\"? The rest of the group stays under Unknown.",
+    "js.unb.objekt_frage": "Mark as \"no person\" (a bush, a reflection, a parked car)? It stops showing up as a visitor; you can undo this under \"not people\".",
     "js.person.loesch_frage": "Delete ALL references and the name \"{person}\"?\nThe images move to the trash folder (recoverable).\n\nType the name to confirm:",
     "js.person.name_falsch": "Name did not match — nothing deleted.",
     "js.areas.fehl": "save failed — is the service reachable?",
@@ -1628,6 +1779,8 @@ T = {
     "js.live.quelltest": "Source test",
     "js.live.pausiert": " — watchers paused for measurement ({liste})",
     "js.live.job_laeuft": "source test running (helper process, up to ~2 minutes) …",
+    "js.live.vorrat_leeren_frage":
+        "Delete the calibration samples of this camera? They cannot be brought back; the watcher starts collecting again from now on.",
     "js.live.job_ok": "source test done: {text}",
     "js.live.job_fehl": "source test FAILED: {text}",
     "js.live.messung_fehl": "load measurement failed: {grund}",
@@ -1836,20 +1989,30 @@ T = {
     "leer.kamera_unbekannt_hinweis":
         "Tiles come from Frigate's camera list and saved watchers only.",
     "unbekannte.name": "Unknown {nummer}",
-    "unbekannte.badge_eine": "clearly one person",
-    "unbekannte.badge_aehnlich": "similarity {wert}",
-    "unbekannte.badge_einmal": "seen once",
     "unbekannte.meta_zeit": " appearances · {zeit}",
+    "unbekannte.mehr_bilder": "+{n} more pictures in this group",
     "unbekannte.knopf_reaktivieren": "reactivate",
     "unbekannte.attr_name": "Name (new or existing)",
+    "unbekannte.attr_wahl": "Pick this group for merging",
     "unbekannte.knopf_zuweisen": "Assign person",
+    "unbekannte.knopf_teil": "Assign the {n} ticked",
     "unbekannte.knopf_ignorieren": "Ignore",
-    "unbekannte.opt_merge": "merge with…",
-    "unbekannte.knopf_ok": "OK",
-    "unbekannte.badge_gleiche": "same person?",
-    "unbekannte.knopf_merge": "Merge",
-    "unbekannte.knopf_verschieden": "Different",
+    "unbekannte.knopf_objekt": "No person",
+    "unbekannte.knopf_person": "Is a person",
+    "unbekannte.knopf_bulkmerge": "Merge the {n} picked groups",
+    "unbekannte.knopf_mehr": "Show {n} more groups",
     "unbekannte.titel": "Unknown",
+    "unbekannte.anker": "{offen} of {gesamt} groups still waiting for you",
+    "unbekannte.sort_label": "Sort",
+    "unbekannte.sort_bilder": "most pictures",
+    "unbekannte.sort_neu": "newest",
+    "unbekannte.filter_label": "Show",
+    "unbekannte.f_offen": "open",
+    "unbekannte.f_wieder": "recurring",
+    "unbekannte.f_heute": "new today",
+    "unbekannte.f_vorschlag": "merge suggested",
+    "unbekannte.f_besucher": "muted",
+    "unbekannte.f_objekt": "not people",
     "unbekannte.kopf_satz":
         "Faces with no known match, grouped into recurring identities.",
     # Kopf-Erklaerung an den <b>-Grenzen gesplittet; die Fett-Teile sind
@@ -1863,20 +2026,20 @@ T = {
     "unbekannte.hinweis_reorg":
         "re-check the pool and rebuild the clusters — collection itself "
         "runs automatically (1-2 min)",
-    "unbekannte.h_wieder": "Recurring",
-    "unbekannte.h_einzeln": "{n} single appearances (seen once so far)",
-    "unbekannte.h_besucher": "{n} known visitors (muted)",
-    "unbekannte.h_objekte": "{n} static objects (auto-detected — not people)",
     "unbekannte.satz_objekte":
         "Groups whose images are near-identical to each other and unlike "
         "any person — typically a wheel arch, pavement or light pattern "
         "the detector keeps mistaking for a face. They are frozen: new "
         "finds are never added here (they form fresh, visible clusters "
         "and get re-checked by the same rule) — the groups stay listed so "
-        "nothing is hidden.",
+        "nothing is hidden. Marked by hand or found automatically; "
+        '"Is a person" puts one back.',
     "unbekannte.leer": "No unknown faces collected yet.",
     "unbekannte.leer_hinweis":
         "Identities appear here after the next unknown visitor.",
+    "unbekannte.leer_filter": "Nothing in this view.",
+    "unbekannte.leer_filter_hinweis":
+        "Other groups are waiting under a different filter above.",
     "livealerts.link_video": "&#9654; video {n}",
     "livealerts.person_unbekannt": "unknown",
     "livealerts.trigger.eins": "{n} trigger",
@@ -2826,6 +2989,9 @@ T = {
         "the pages)",
     "antwort.reorg_laeuft": "Reorganizing already running — please wait",
     "antwort.paar_notiert": "noted — won't suggest this pair again",
+    "antwort.unbek_objekt": "marked as not a person",
+    "antwort.unbek_person": "back among the visitors",
+    "antwort.unbek_gemergt": "{n} groups merged into one",
     # §8.11-Anhang an eine Fachschicht-msg (die Basis bleibt Grenze).
     "antwort.nachpruefung_anhang":
         " — re-checking this pass's events in the background",

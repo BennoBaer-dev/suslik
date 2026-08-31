@@ -779,6 +779,9 @@ T = {
     "live.test.sw": "(decodifica software)",
     "live.test.entwertet":
         "— INVALIDATO: la sorgente è cambiata dopo questo test",
+    "live.test.veraltet_bitte":
+        "Questo controllo ha {tage} giorni — rilancia il test della sorgente "
+        "così i numeri descrivono quello che la telecamera dà oggi.",
     "live.test.fehlgeschlagen":
         "ultimo test sorgente FALLITO ({wann}): {fehler}",
     "live.messung.zeile": "carico misurato il {wann}: {text}",
@@ -898,10 +901,11 @@ T = {
     "live.hoehe.h720": "720p — decodifica più leggera, il nome scatta più tardi",
     "live.hoehe.h1080":
         "1080p — punto ideale (misurato: nome ~2,4 s prima rispetto a 720p)",
-    "live.hoehe.h1440": "1440p — nessun guadagno misurato rispetto a 1080p",
-    "live.hoehe.h2160":
-        "2160p — 4K nativo, guadagno marginale, costo di decodifica "
-        "massimo",
+    "live.hoehe.alt_hinweis":
+        "Salvato: {alt}p. Quel livello non c\u2019è più (misurato: nessun "
+        "guadagno rispetto a {jetzt}p) — questa sentinella lavora a {jetzt}p. "
+        "Il valore salvato e il test della sorgente restano validi; scegli "
+        "uno dei livelli qui sopra per cambiare.",
     "live.abschnitt.alarm": "Catena di avviso",
     "live.detail.ende_label": "Fine dopo assenza di volto (s):",
     "live.detail.ende_hinweis":
@@ -926,6 +930,141 @@ T = {
         "durante la misurazione del carico le altre sentinelle vengono "
         "messe in pausa",
     "live.detail.link_zurueck": "torna alla panoramica",
+    # --- Live-Umbau 31.08. (s. en.py)
+    "live.detail.kein_bild": "Nessuna immagine dal vivo — questa sentinella non è in funzione.",
+    "live.detail.kein_bild_test":
+        "L\u2019ultimo test della sorgente ha visto {aufloesung}, elaborato come {skala}.",
+    "live.detail.kein_bild_ohne_test":
+        "Non è ancora stato fatto nessun test della sorgente, quindi di questo "
+        "flusso non si sa niente.",
+    "live.abschnitt.erkennung": "Riconoscimento",
+    "live.abschnitt.melden": "Avvisi",
+    "live.abschnitt.frigate": "Eventi Frigate",
+    "live.abschnitt.erweitert": "Impostazioni avanzate",
+    "live.abschnitt.abtastung": "Campionamento",
+    "live.abtastung.schalter": "Guardare da vicino solo quando qualcosa si muove",
+    "live.abtastung.erklaerung":
+        "Il riconoscimento dei volti è la parte cara — un controllo di "
+        "movimento economico sul piano di luminanza decide se un fotogramma "
+        "vale la pena. Finché una persona viene seguita, la sentinella va "
+        "sempre a ritmo pieno; solo una scena tranquilla viene campionata "
+        "meno spesso.",
+    "live.abtastung.ruhe_label": "Guardare comunque ogni",
+    "live.abtastung.ruhe_einheit": "s",
+    "live.abtastung.ruhe_hinweis":
+        "Lascia vuoto per usare il tempo di fine comparsa di questa "
+        "telecamera — chi sta fermo non crea movimento, quindi la sentinella "
+        "dà un\u2019occhiata ogni tanto (1–600 s).",
+    "live.abtastung.schwelle_label": "Sensibilità (variazione di grigio):",
+    "live.abtastung.flaeche_label": "area minima:",
+    "live.abtastung.eich_hinweis":
+        "Lascia entrambi vuoti per i valori di fabbrica di Frigate. Numeri "
+        "più bassi fanno guardare la sentinella più spesso; più alti la "
+        "tengono tranquilla davanti a una siepe nel vento. Ogni posto è "
+        "diverso — questi valori sono di QUESTA telecamera, non di tutto il "
+        "sistema.",
+    "live.abschnitt.guete": "Soglie di qualità dell\u2019immagine",
+    "live.abschnitt.last": "Misura del carico",
+    "live.erkennung.det_zeile":
+        "Da un punteggio di rilevamento di {wert} in su una trovata conta "
+        "come volto{marke}.",
+    "live.erkennung.det_vorgabe": " (valore predefinito)",
+    "live.erkennung.regel_vor": "Riconosciuto dopo",
+    "live.erkennung.regel_mitte": "conferme entro",
+    "live.erkennung.regel_nach": "secondi",
+    "live.erkennung.regel_hinweis":
+        "0 secondi significa che conta l\u2019intera comparsa, come finora. "
+        "Una finestra temporale aiuta sulle telecamere dove qualcuno resta "
+        "fermo per minuti e due colpi fortunati molto distanti non dovrebbero "
+        "valere come un riconoscimento.",
+    "live.erkennung.vorrat_zeile":
+        "Campioni di calibrazione: {n} di {deckel} \u2014 un\u2019immagine "
+        "per comparsa, le più vecchie escono.",
+    "live.erkennung.vorrat_aus":
+        "La raccolta è spenta, quindi la pagina di calibrazione non ha nulla "
+        "da mostrare (pagina di sistema, \"live_kalib_max\").",
+    "live.erkennung.latte_e": "impressione dell\u2019immagine da {wert}",
+    "live.erkennung.latte_t": "riconoscibilità da {wert}",
+    "live.erkennung.latte_aus": "non impostato",
+    "live.erkennung.latte_hinweis":
+        "Questi due non decidono mai CHI viene riconosciuto: costerebbe "
+        "conferme. Decidono quale immagine finisce nell\u2019avviso e quali "
+        "volti restano come campioni di calibrazione. Si regolano nella "
+        "pagina di calibrazione, dove le immagini si vedono.",
+    "live.knopf_kalibrieren": "Calibra",
+    "live.knopf_vorrat_leeren": "Cancella campioni",
+    "live.frigate.schalter": "Crea un evento Frigate quando qualcuno viene riconosciuto",
+    "live.frigate.erklaerung":
+        "Spento per impostazione predefinita. Acceso, questo guardiano scrive "
+        "un proprio evento in Frigate con il nome nella sotto-etichetta "
+        "\u2014 una registrazione propria, indipendente dal rilevamento di "
+        "Frigate. La scrittura avviene in background: il guardiano non aspetta "
+        "mai Frigate. In modalità sola lettura non viene scritto nulla.",
+    "live.frigate.abstand_label": "Al massimo un evento per persona ogni (s):",
+    "live.frigate.abstand_hinweis":
+        "Vuoto significa: la stessa distanza impostata sopra per gli avvisi. "
+        "Il limite vale per persona, quindi due persone diverse possono "
+        "essere scritte insieme.",
+    "livekalib.titel": "Calibrazione della telecamera — {name}",
+    "livekalib.erklaerung":
+        "Questi sono volti veri raccolti da questa telecamera \u2014 "
+        "un\u2019immagine per comparsa. Sposta i cursori finché la selezione "
+        "ti convince, poi applica. I valori valgono solo per QUESTA "
+        "telecamera, perché le scale di qualità cambiano da telecamera a "
+        "telecamera.",
+    "livekalib.regler_det": "Punteggio di rilevamento",
+    "livekalib.regler_det_prosa":
+        "Da qui in su una trovata conta come volto. Questo cursore guida "
+        "davvero il riconoscimento: tutto ciò che sta sotto non arriva mai "
+        "alla verifica del nome. Più basso tiene più materiale (misurato: "
+        "un\u2019asticella alta buttava via metà del materiale utile), più "
+        "alto tiene fuori siepi e riflessi.",
+    "livekalib.regler_e": "Impressione dell\u2019immagine",
+    "livekalib.regler_e_prosa":
+        "Quanto l\u2019immagine appare pulita e luminosa all\u2019occhio. "
+        "Questo NON decide chi viene riconosciuto \u2014 decide quale "
+        "immagine finisce nell\u2019avviso e quali volti restano qui come "
+        "campioni.",
+    "livekalib.regler_t": "Riconoscibilità",
+    "livekalib.regler_t_prosa":
+        "Quanto bene si distingue la persona, volti mezzi coperti compresi. "
+        "Come il cursore sopra: sceglie l\u2019immagine e riempie questa "
+        "pagina, non esclude mai nessuno dal riconoscimento.",
+    "livekalib.ohne_guete":
+        "I due modelli di qualità mancano in questa build, quindi i campioni "
+        "non portano cifre di qualità e i due cursori in basso qui non hanno "
+        "effetto. Il punteggio di rilevamento funziona.",
+    "livekalib.standard": "Valori predefiniti",
+    "livekalib.tab_erkennen": "Riconoscere",
+    "livekalib.tab_lernen": "Catalogo dei volti",
+    "livekalib.uebernehmen": "Applica",
+    "livekalib.leer": "Ancora nessun campione. Arrivano da soli — da un guardiano attivo e da ogni analisi degli eventi di questa telecamera, un volto per volta. Se non vuoi aspettare, usa sotto \"Cerca materiale fresco\".",
+    "livekalib.zurueck": "torna al guardiano",
+    "livekalib.js.genutzt": "{n} campioni su {gesamt} passano",
+    "livekalib.js.gespeichert": "salvato",
+    "livekalib.js.fehler": "errore",
+    # --- Kalibrier-Zentralumbau 31.08.: Abschnitte, Katalog-Latte, Material
+    "livekalib.zur_uebersicht": "torna a tutte le telecamere",
+    "livekalib.abschnitt.anzeige": "Avvisi, visualizzazione e campioni",
+    "livekalib.abschnitt.anzeige_prosa": "Questi tre decidono quale immagine di questa telecamera finisce in un avviso e quali volti restano qui come campioni. Non decidono chi viene riconosciuto.",
+    "livekalib.abschnitt.katalog": "Soglia del catalogo",
+    "livekalib.abschnitt.material": "Materiale",
+    "livekalib.katalog.prosa": "Una soglia propria e più severa: quanto deve essere buono un volto di questa telecamera per poter diventare un riferimento. Vale ovunque un'immagine entri nel catalogo — dare un nome a un gruppo sconosciuto, adottare da un ciclo di apprendimento, accettare un suggerimento.",
+    "livekalib.katalog.grenze": "Cosa non fa: non rimuove mai i riferimenti già presenti e non cambia chi viene riconosciuto. Le immagini senza punteggi di qualità (materiale più vecchio o una build senza i modelli di qualità) passano intatte — una soglia senza misura scarterebbe alla cieca.",
+    "livekalib.katalog.quelle_kamera": "In uso: i valori propri di questa telecamera.",
+    "livekalib.katalog.quelle_global": "In uso: il valore globale di riserva — questa telecamera non ha ancora valori propri.",
+    "livekalib.katalog.quelle_aus": "Nessuna soglia di catalogo: ogni immagine può diventare un riferimento.",
+    "livekalib.katalog.regler_e": "Catalogo: impressione dell'immagine",
+    "livekalib.katalog.regler_e_prosa": "Impressione minima per un riferimento di questa telecamera. Tienila sopra il cursore più in alto: ciò che basta per mostrare non basta automaticamente per imparare.",
+    "livekalib.katalog.regler_t": "Catalogo: riconoscibilità",
+    "livekalib.katalog.regler_t_prosa": "Riconoscibilità minima per un riferimento di questa telecamera. È quella che tiene i volti mezzi coperti fuori dal catalogo.",
+    "livekalib.material.aus": "La raccolta dei campioni è disattivata (Advanced, calibration samples). Senza campioni questa pagina non ha nulla da mostrare.",
+    "livekalib.material.stand": "{n} di massimo {deckel} campioni salvati",
+    "livekalib.material.wann": "ultimo {wann}",
+    "livekalib.material.fuellen_prosa": "La ricerca di materiale scorre gli ultimi eventi persona di questa telecamera e tiene il volto migliore di ciascuno. Si ferma a {ziel} immagini oppure dopo {events} eventi, a seconda di cosa arriva prima.",
+    "livekalib.material.lauf": "In più {n} immagine/i di questa telecamera dall'ultimo ciclo di apprendimento — mostrate sotto e contrassegnate.",
+    "livekalib.js.katalog": "{n} di {gesamt} potrebbero entrare nel catalogo",
+    "livekalib.js.lauf": "ciclo",
     # ----------------------------------------------- routes/erkennung ---
     # NICHT eingezogen (bewusst, Stufe-0-Grenzen): die ek-satz-Zeile der
     # Live-Kachel (<b>moment</b> mitten im Satz), der Expert-Status
@@ -1266,6 +1405,55 @@ T = {
     "lernwizard.ergebnis.beiseite": "({n} messe da parte)",
     "lernwizard.kachel.lauf": "Sessione di apprendimento",
     "lernwizard.kachel.sammeln": "Estrai &amp; raggruppa",
+    "kalib.titel": "Calibrazione delle telecamere",
+    "kalib.erklaerung": "Queste due soglie decidono quali volti terranno i prossimi apprendimenti. Sposta finché il limite ti convince — tutto ciò che è attenuato verrebbe scartato. Sotto ci sono le immagini dell'ultimo ciclo, migliore impressione prima. Cornice gialla = immagine scelta per l'adozione.",
+    "kalib.leer": "Ancora niente da calibrare: l'ultimo ciclo non ha valori di qualità. Avvia prima un apprendimento con questa versione.",
+    "kalib.regler_e": "Impressione dell'immagine",
+    "kalib.regler_e_prosa": "Quanto l'immagine appare pulita e luminosa. Più basso conserva di più, ma immagini più scure e grezze.",
+    "kalib.regler_t": "Riconoscibilità",
+    "kalib.regler_t_prosa": "Quanto bene si può identificare la persona. Scarta anche i volti mezzo coperti.",
+    "kalib.standard": "Ripristina predefiniti",
+    "kalib.uebernehmen": "Applica soglie",
+    "kalib.js.genutzt": "Conservate: {n} su {gesamt}",
+    "kalib.js.gespeichert": "Salvato — il ciclo viene rivalutato con le nuove soglie, tra poco torni all'apprendimento …",
+    "kalib.js.fehler": "Salvataggio non riuscito",
+    # --- zentrale Kamera-Uebersicht + globaler Rueckfall (31.08.)
+    "kalib.knopf": "Calibrazione",
+    "kalib.knopf_tip": "Calibrazione delle telecamere: le soglie per avvisi, campioni e catalogo dei riferimenti",
+    "kalib.uebersicht.erklaerung": "Una telecamera, un insieme di valori. Le scale di qualità cambiano da telecamera a telecamera — misurato su un solo impianto, la riconoscibilità mediana di una telecamera era più del doppio di quella di un'altra. Scegli una telecamera per impostarne le soglie.",
+    "kalib.uebersicht.leer": "Ancora nessuna telecamera",
+    "kalib.uebersicht.leer_hinweis": "Appena Frigate segnala delle telecamere, compaiono qui.",
+    "kalib.grenze.titel": "Cosa fa la calibrazione — e cosa no",
+    "kalib.grenze.satz": "Decide quale immagine viene mostrata o inviata, quali volti restano come campioni e quali possono diventare un riferimento. Non decide mai chi viene riconosciuto: il controllo dei nomi vede ogni volto, senza filtri. È misurato, non supposto — filtrare prima del voto è costato conferme.",
+    "kalib.kachel.eigene": "valori propri",
+    "kalib.kachel.vorgabe": "valori predefiniti",
+    "kalib.kachel.fremd": "non in Frigate",
+    "kalib.kachel.fremd_tip": "Questa telecamera ha valori di calibrazione ma Frigate non la segnala più. I valori restano, non viene cancellato nulla.",
+    "kalib.kachel.vorrat": "{n} di {deckel} campioni",
+    "kalib.kachel.vorrat_aus": "La raccolta dei campioni è disattivata (Advanced, calibration samples).",
+    "kalib.kachel.stand": "ultimo {wann}",
+    "kalib.kachel.leer": "Ancora nessun campione",
+    "kalib.kachel.leer_hinweis": "I campioni arrivano da un guardiano attivo e dalle analisi degli eventi — oppure prendine adesso.",
+    "kalib.kachel.werte": "rilevamento {det} · impressione {e} · riconoscibilità {tw}",
+    "kalib.kachel.katalog": "soglia catalogo {e} / {tw}",
+    "kalib.quelle.kamera": "propria",
+    "kalib.quelle.global": "riserva globale",
+    "kalib.quelle.aus": "disattivata",
+    "kalib.knopf_kalibrieren": "Calibra",
+    "kalib.knopf_fuellen": "Cerca materiale fresco",
+    "kalib.knopf_leeren": "Elimina i campioni",
+    "kalib.global.titel": "Riserva globale",
+    "kalib.global.satz": "Valgono per le telecamere senza valori propri e sono la soglia con cui un ciclo di apprendimento decide quali volti tenere.",
+    "kalib.global.werte": "impressione {e} · riconoscibilità {tw}",
+    "kalib.global.katalog": "soglia catalogo {e} / {tw}",
+    "kalib.global.knopf": "Imposta sull'ultimo ciclo di apprendimento",
+    "kalib.global.kein_lauf": "Ancora nessun ciclo di apprendimento con punteggi di qualità — si potranno impostare quando un ciclo sarà finito.",
+    "kalib.lauf.titel": "Soglie globali — ultimo ciclo di apprendimento",
+    "kalib.zurueck": "torna a tutte le telecamere",
+    "js.kalib.start": "cerco materiale …",
+    "js.kalib.lauf": "{i} di {n} eventi · {bilder} immagine/i",
+    "js.kalib.fertig": "{bilder} immagine/i da {events} evento/i",
+    "js.kalib.fehler": "ricerca di materiale non riuscita",
     "lernwizard.kachel.benennen": "Assegnazione intelligente",
     "lernwizard.kachel.fertig": "Fatto &mdash; ora contano",
     "lernwizard.such.titel": "Cerca volti negli eventi",
@@ -1302,7 +1490,6 @@ T = {
     "lernwizard.k1.scope": "ambito {n} eventi",
     "lernwizard.k1.kameras": "solo telecamere: {kameras}",
     "lernwizard.k1.tag": "giorno {tag}",
-    "lernwizard.k1.mini_belichtung": "Controllo luminosità",
     "lernwizard.k2.satz":
         "Procede da sola &mdash; puoi chiudere questa pagina e tornare "
         "più tardi.",
@@ -1406,42 +1593,6 @@ T = {
         "(ripartenza integrata)",
     "lernwizard.expert.lauf_bleibt":
         "questa sessione resta — le sue ancore rimangono disponibili",
-    # -------- Abgleich Helligkeit /lernlauf/belichtung (Phase 1b, 26.08.) --
-    "belichtung.titel": "Controllo luminosità",
-    "belichtung.satz":
-        "Regola i due limiti di luminosità sulle tue immagini. Ogni riga è un "
-        "gruppo di volti, ordinato come lo ordina il server in questo momento: "
-        "le immagini fuori dai limiti finiscono in coda e sono segnate in "
-        "rosso. Non viene cancellato nulla: un'immagine retrocessa resta "
-        "selezionabile a mano.",
-    "belichtung.jetzt": "In vigore ora: più scura {von}, più chiara {bis}.",
-    "belichtung.hinweis_aus":
-        "Entrambi i limiti sono disattivati, quindi nulla finisce in coda: "
-        "muovi un cursore per vedere che cosa farebbe un limite.",
-    "belichtung.aus_wort": "disattivato",
-    "belichtung.regler_min": "più scura ammessa",
-    "belichtung.regler_max": "più chiara ammessa",
-    "belichtung.regler_hinweis":
-        "La luminosità va da 0 (nero) a 255 (bianco); 0 disattiva questo lato.",
-    "belichtung.bilanz": "{n} immagini su {m} finiscono in coda",
-    "belichtung.vorschau":
-        "Solo anteprima: le immagini vengono riordinate nel browser. Salva per "
-        "far ordinare così il server.",
-    "belichtung.knopf_speichern": "Salva questi limiti",
-    "belichtung.reihe_info":
-        "{n} di {gesamt} immagini misurate · luminosità da {von} a {bis}",
-    "belichtung.lage_dunkel": "troppo scura",
-    "belichtung.lage_hell": "sovraesposta",
-    "belichtung.lage_ok": "entro i limiti",
-    "belichtung.zurueck": "torna alla sessione di apprendimento",
-    "belichtung.leer_satz":
-        "Nessuna immagine ha ancora un valore di luminosità, quindi non c'è "
-        "nulla da tarare.",
-    "belichtung.leer_hinweis":
-        "La luminosità viene misurata durante la raccolta dei volti. Compare "
-        "dalla prossima sessione di apprendimento o dal prossimo controllo di "
-        "passaggio; le immagini più vecchie non vengono mai misurate a "
-        "posteriori.",
     # --------------------------------- Stufe 1: Einhang/Skelett (webui) ---
     "nav.bereich.activity": "Attività",
     "nav.bereich.faces": "Volti",
@@ -1623,10 +1774,11 @@ T = {
     "js.dienst.nicht_erreichbar": "servizio non raggiungibile — riprova tra un momento.",
     "js.unb.tick": "{phase} … {s} s",
     "js.unb.besucher_frage": "Ignorare come estraneo conosciuto? Non attiverà più avvisi. (Riattivabile in qualsiasi momento qui sotto, in \"visitatori conosciuti\".)",
-    "js.unb.ziel_fehlt": "Scegli un’identità di destinazione.",
     "js.unb.merge_frage": "Unire?",
     "js.unb.name_fehlt": "Inserisci un nome (persona nuova o esistente).",
     "js.unb.benennen_frage": "Assegnare a \"{person}\"? Le immagini migliori diventano riferimenti.",
+    "js.unb.teil_frage": "Assegnare le {n} immagini selezionate a «{person}»? Il resto del gruppo resta in Sconosciuti.",
+    "js.unb.objekt_frage": "Segnare come «non è una persona» (un cespuglio, un riflesso, un'auto parcheggiata)? Non comparirà più come visitatore; si può annullare in «non persone».",
     "js.person.loesch_frage": "Eliminare TUTTI i riferimenti e il nome \"{person}\"?\nLe immagini finiscono nella cartella cestino (recuperabili).\n\nDigita il nome per confermare:",
     "js.person.name_falsch": "Il nome non corrisponde — nulla è stato eliminato.",
     "js.areas.fehl": "salvataggio non riuscito — il servizio è raggiungibile?",
@@ -1687,6 +1839,8 @@ T = {
     "js.live.quelltest": "Test sorgente",
     "js.live.pausiert": " — sentinelle in pausa per la misurazione ({liste})",
     "js.live.job_laeuft": "test sorgente in corso (processo ausiliario, fino a ~2 minuti) …",
+    "js.live.vorrat_leeren_frage":
+        "Cancellare i campioni di calibrazione di questa telecamera? Non sono recuperabili; il guardiano ricomincia a raccoglierli da adesso.",
     "js.live.job_ok": "test sorgente completato: {text}",
     "js.live.job_fehl": "test sorgente NON RIUSCITO: {text}",
     "js.live.messung_fehl": "misurazione del carico non riuscita: {grund}",
@@ -1916,20 +2070,30 @@ T = {
         "I riquadri provengono solo dall’elenco telecamere di Frigate e "
         "dalle sentinelle salvate.",
     "unbekannte.name": "Sconosciuto {nummer}",
-    "unbekannte.badge_eine": "chiaramente una sola persona",
-    "unbekannte.badge_aehnlich": "somiglianza {wert}",
-    "unbekannte.badge_einmal": "visto una volta",
     "unbekannte.meta_zeit": " apparizioni · {zeit}",
+    "unbekannte.mehr_bilder": "+{n} altre immagini in questo gruppo",
     "unbekannte.knopf_reaktivieren": "riattiva",
     "unbekannte.attr_name": "Nome (nuovo o esistente)",
+    "unbekannte.attr_wahl": "Scegli questo gruppo per l'unione",
     "unbekannte.knopf_zuweisen": "Assegna persona",
+    "unbekannte.knopf_teil": "Assegna le {n} selezionate",
     "unbekannte.knopf_ignorieren": "Ignora",
-    "unbekannte.opt_merge": "unisci a…",
-    "unbekannte.knopf_ok": "OK",
-    "unbekannte.badge_gleiche": "stessa persona?",
-    "unbekannte.knopf_merge": "Unisci",
-    "unbekannte.knopf_verschieden": "Persone diverse",
+    "unbekannte.knopf_objekt": "Non è una persona",
+    "unbekannte.knopf_person": "È una persona",
+    "unbekannte.knopf_bulkmerge": "Unisci i {n} gruppi scelti",
+    "unbekannte.knopf_mehr": "Mostra altri {n} gruppi",
     "unbekannte.titel": "Sconosciuti",
+    "unbekannte.anker": "{offen} gruppi su {gesamt} sono ancora in attesa",
+    "unbekannte.sort_label": "Ordine",
+    "unbekannte.sort_bilder": "più immagini",
+    "unbekannte.sort_neu": "più recenti",
+    "unbekannte.filter_label": "Mostra",
+    "unbekannte.f_offen": "da gestire",
+    "unbekannte.f_wieder": "ricorrenti",
+    "unbekannte.f_heute": "nuovi oggi",
+    "unbekannte.f_vorschlag": "unione suggerita",
+    "unbekannte.f_besucher": "silenziati",
+    "unbekannte.f_objekt": "non persone",
     "unbekannte.kopf_satz":
         "Volti che non corrispondono a nessuna persona conosciuta, "
         "raggruppati in identità ricorrenti.",
@@ -1946,12 +2110,6 @@ T = {
     "unbekannte.hinweis_reorg":
         "ricontrolla i volti estratti e ricostruisce i gruppi — "
         "l’estrazione vera e propria avviene automaticamente (1-2 min)",
-    "unbekannte.h_wieder": "Ricorrenti",
-    "unbekannte.h_einzeln":
-        "{n} apparizioni singole (viste una sola volta finora)",
-    "unbekannte.h_besucher": "{n} visitatori conosciuti (silenziati)",
-    "unbekannte.h_objekte":
-        "{n} oggetti statici (rilevati automaticamente — non persone)",
     "unbekannte.satz_objekte":
         "Gruppi le cui immagini sono quasi identiche tra loro e non "
         "somigliano a nessuna persona — in genere un passaruota, la "
@@ -1959,11 +2117,13 @@ T = {
         "scambiare per un volto. Sono congelati: i nuovi volti trovati "
         "non vengono mai aggiunti qui (formano gruppi nuovi e visibili e "
         "vengono ricontrollati dalla stessa regola) — i gruppi restano "
-        "in elenco, così nulla viene nascosto.",
+        "in elenco, così nulla viene nascosto. Segnati a mano o trovati automaticamente; «È una persona» ne riporta uno indietro.",
     "unbekannte.leer": "Ancora nessun volto sconosciuto.",
     "unbekannte.leer_hinweis":
         "Le identità compaiono qui dopo il prossimo visitatore "
         "sconosciuto.",
+    "unbekannte.leer_filter": "Niente in questa vista.",
+    "unbekannte.leer_filter_hinweis": "Altri gruppi aspettano sopra, sotto un altro filtro.",
     "livealerts.link_video": "&#9654; video {n}",
     "livealerts.person_unbekannt": "sconosciuto",
     # "trigger" ist im IT-Bestand etabliertes Lehnwort (live.zaehler.*),
@@ -2995,6 +3155,9 @@ T = {
     "antwort.reorg_laeuft": "Riorganizzazione già in corso — attendi",
     "antwort.paar_notiert":
         "annotato — questa coppia non verrà più proposta",
+    "antwort.unbek_objekt": "segnato come non persona",
+    "antwort.unbek_person": "di nuovo tra i visitatori",
+    "antwort.unbek_gemergt": "{n} gruppi uniti in uno",
     # §8.11-Anhang an eine Fachschicht-msg (die Basis bleibt Grenze).
     "antwort.nachpruefung_anhang":
         " — ricontrollo in background degli eventi di questo passaggio",

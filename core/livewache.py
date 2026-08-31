@@ -14,8 +14,15 @@ HARTE GRENZEN (Bauplan §1, jede einzeln):
     AUSSERHALB des gepinnten Pixelpfads (decode.py:1-30). Sie werden NIE
     Urteils-Frames. Das Schnell-Urteil ("probably X (preliminary)") ist ein
     Hinweis in der Meldung und sonst nichts: nie ins Kontroll-Protokoll, nie
-    ins Treffer-Buch, nie ins Anlernen, nie nach Frigate, keine Referenz,
-    keine Anwesenheit, kein sub_label-Schreib.
+    ins Treffer-Buch, nie ins Anlernen, keine Referenz, keine Anwesenheit.
+    AUSNAHME SEIT 31.08. (User-Entscheid, stand.md "Design-Vorgabe
+    Manual-Events"): der Waechter darf ein EIGENES Frigate-Event anlegen und
+    den Namen dabei ins sub_label schreiben — als eigenes Ereignis, losgeloest
+    von Frigates Detektion, hinter einem eigenen Schalter je Kamera (Vorgabe
+    AUS) und asynchron ueber core/frigateevents. Was weiterhin NICHT passiert:
+    ein FREMDES Frigate-Event nachtraeglich beschriften (das bleibt der
+    bestaetigte Urteilspfad, verifyd._sub_label) — das vorlaeufige Live-Urteil
+    korrigiert nie ein Ergebnis der Analyse.
  2. KEIN SZENARIO-BILDER. Eine Kachel kennt nur ihre eine Kamera; die
     kameraweite Zusammenfuehrung bleibt Aufgabe des Urteilspfads.
  3. KEIN REKORDER. Telegram bekommt ein kurzes Video aus den ohnehin
@@ -113,19 +120,131 @@ HERZSCHLAG_S = 2.0        # Status-Schreibtakt, ALLE Kacheln in EINEM Schreiber 
 VERBRAUCH_S = 60.0        # RSS-/Verbrauchszeile (Auflage aus dem Vorfall 10.08. 19:17)
 VORSCHAU_S = 2.0          # Kachel-Vorschau-JPEG-Takt (User-Wunsch 13.08.: ~1-5 s,
 #                           "sehen, was der Agent sieht" — Anzeige-Weg, nie Urteil)
-HOEHEN_ERLAUBT = (360, 720, 1080, 1440, 2160)   # je-Kachel-Verarbeitungshoehe
-#                           (.194, User 13.08.: 360-2160). Messbasis 15:31-
+HOEHEN_ERLAUBT = (360, 720, 1080)   # je-Kachel-Verarbeitungshoehe, WAEHLBAR.
+#                           (.194, User 13.08.: 360-2160.) Messbasis 15:31-
 #                           Gang: 1080p = Sweet Spot (Name 2,4 s frueher als
 #                           720p), 1440p flach, det-Netz bleibt ueber alle
 #                           Stufen gleich gross (Basis 1280) — Mehrkosten
-#                           stecken in Decode/Scale, die Last-Messung je
-#                           Kachel liefert die echte Zahl. 360p =
-#                           Schwach-GPU-Option.
+#                           stecken in Decode/Scale. 360p = Schwach-GPU-Option.
+#                           STREICHUNG 1440/2160 (Welle 1, Etappe C, User-Go
+#                           31.08.): die zwei oberen Stufen kosten Decode und
+#                           Skalierung, ohne dass ihnen je ein Gewinn
+#                           GEMESSEN wurde — das Detektor-Netz bleibt ueber
+#                           alle Stufen dieselbe Groesse (Basis 1280, s.
+#                           ar_det_size), das Bild wird also ohnehin wieder
+#                           heruntergerechnet. Die Messmatrix 31.08. sagt
+#                           dazu ausdruecklich: Frequenz sparen, nie
+#                           Aufloesung — und die Frequenz spart Etappe A.
+HOEHEN_ALT = (1440, 2160)   # ALTBESTAND: nicht mehr waehlbar, aber gespeichert
+#                           lesbar. Sie werden BEWUSST NICHT aus dem Store
+#                           umgeschrieben und NICHT aus quelle_fp entfernt —
+#                           sonst aenderte sich der Fingerprint jedes solchen
+#                           Waechters beim Update, sein gruener Quelltest
+#                           verfiele und die Engine stoppte ihn beim naechsten
+#                           Store-Reload mit 'source changed'. Ein Update darf
+#                           keinen laufenden Waechter toeten. Wirksam werden
+#                           sie als WACH_HOEHE_MAX (wach_skala kappt, laut).
+HOEHEN_LESBAR = HOEHEN_ERLAUBT + HOEHEN_ALT
+WACH_HOEHE_MAX = 1080       # Obergrenze der WIRKSAMEN Verarbeitungshoehe.
 NAME_STIMMEN = 2          # kontinuierliches Namens-Voting (User 13.08.: "PersonA,
 #                           unbekannt, PersonA -> feuern"): so viele Funde ueber
 #                           win_thresh fuer DIESELBE Person, dann Namens-Meldung
 #                           (einmal je Auftritt+Person). Entspricht win_min der
 #                           Analyse — Zeitkonsistenz statt Einzelbild-Glueck.
+#                           Seit dem Live-Umbau 31.08. ist das nur noch der
+#                           DEFAULT der je-Kamera-Regel (guard.erkannt_n).
+ERKANNT_N_MIN, ERKANNT_N_MAX = 1, 20
+ERKANNT_T_S = 0           # Zeitfenster der Erkannt-Regel je Kamera: 0 = der
+#                           GANZE Auftritt zaehlt (das ist das Verhalten bis
+#                           31.08., deshalb der Default). > 0 = nur Stimmen aus
+#                           den letzten T Sekunden zaehlen — fuer Kameras, an
+#                           denen jemand lange steht und zwei Zufallstreffer
+#                           ueber Minuten sonst wie eine Bestaetigung wirken.
+ERKANNT_T_MIN, ERKANNT_T_MAX = 0, 3600
+
+# --- det-Grenze des LIVE-Wegs (GEMESSEN 31.08., zweifach an Feldmaterial) ----
+# Die Erkennbarkeit FAELLT mit steigender det-Schwelle: 0,60 warf die HAELFTE
+# des brauchbaren Namensmaterials weg, bevor ueberhaupt jemand abstimmen konnte.
+# Der Live-Weg faehrt deshalb 0,40. Das ist bewusst NICHT dieselbe Zahl wie
+# MIN_SCORE (0,60, oben): die stammt aus der Phantom-Jagd vom 10.08. und schuetzt
+# den TRIGGER (Anwesenheits-Meldung) vor Hecken/Lichtflecken. Hier geht es um das
+# Material des Namens-Votings, und dort ist Wegwerfen teurer als ein Phantom, das
+# im Voting ohnehin keinen Namen ueber win_thresh bekommt.
+DET_MIN_LIVE = 0.40
+DET_MIN_MIN, DET_MIN_MAX = 0.05, 0.95
+
+# --- BEWEGUNGS-GESTEUERTES ABTASTEN (Live-Performance Welle 1, Etappe A) -----
+# Der groesste gemessene Hebel der Placement-Messmatrix vom 31.08.: 95 % der
+# Live-Kosten sind die DETEKTION, und 20 Streams passen auf diese Maschine nur
+# ueber eine bewegungsgesteuerte Abtastung (~2 Bilder/s -> 21 Waechter auf
+# MIXED; bei 10 Bilder/s nur 3-4). Der Decode war NIE der Flaschenhals.
+# Also: die Detektion laeuft mit VOLLEM Takt nur dort, wo sich etwas ruehrt.
+#
+# HERKUNFT DER ZAHLEN — bewusst KEINE eigenen Werte, sondern Frigates
+# AUSLIEFERUNGS-Vorgaben (docs.frigate.video/configuration/reference, Block
+# `motion`, geprueft 31.08.2026; die Motion-Seite der Doku nennt threshold 30,
+# contour_area 10 und lightning_threshold 0.8 noch einmal ausdruecklich als
+# Defaults).
+# WARUM NICHT AUS DER LAUFENDEN ANLAGE (User-Korrektur 31.08., und die Regel
+# gilt allgemein): eine einzelne Installation ist getunt, nicht
+# repraesentativ — die hiesige Frigate-Instanz traegt contour_area 20 statt
+# der ausgelieferten 10. Instanz-Werte taugen NIE als Produkt-Vorgabe. Genau
+# deshalb ist jeder dieser Werte JE KAMERA einstellbar: ein Wohngrundstueck,
+# ein Betriebsgelaende und eine Garageneinfahrt brauchen verschiedene
+# Eichungen, und die Vorgabe ist nur der Startpunkt.
+# Das Verfahren ist ebenfalls Frigates: Y-Ebene auf eine feste Hoehe
+# verkleinern, weichzeichnen, gegen ein gleitendes Hintergrundbild
+# differenzieren, schwellen, dilatieren, Konturen zaehlen. Die Y-Ebene liegt
+# im yuv420p-Strom GRATIS vor (bilder_yuv-Docstring) — bei Ruhe faellt nicht
+# einmal die Farbumrechnung an.
+BEWEG_HOEHE = 100          # Frigate motion.frame_height
+BEWEG_SCHWELLE = 30        # Frigate motion.threshold (1-255, Grauwert-Delta)
+BEWEG_SCHWELLE_MIN, BEWEG_SCHWELLE_MAX = 1, 255
+BEWEG_FLAECHE = 10         # Frigate motion.contour_area (Pixel im 100er-Bild)
+BEWEG_FLAECHE_MIN, BEWEG_FLAECHE_MAX = 1, 10000
+BEWEG_ALPHA = 0.01         # Frigate motion.frame_alpha (Hintergrund-Nachfuehrung)
+BEWEG_BLITZ = 0.8          # Frigate motion.lightning_threshold — so viel bewegte
+#                            Flaeche ist kein Mensch mehr, sondern eine
+#                            Belichtungs-/Licht-Umschaltung; dann NICHT als
+#                            Bewegung werten und das Hintergrundbild neu setzen.
+# BEWUSSTE ABWEICHUNG, gemessen 31.08.: Frigates `improve_contrast` (Grauwert-
+# Umfang auf 0..255 strecken) uebernehmen wir NICHT. Eine Streckung an
+# EINZELBILD-Minimum/-Maximum macht den Bezug instabil — im Versuch verschob
+# ein einzelner heller Fleck (80x60 px) die ganze Abbildung so weit, dass das
+# Bild als Belichtungs-Sprung galt und die ECHTE Bewegung verworfen wurde;
+# umgekehrt blaest die Streckung auf einem flachen Bild das Sensorrauschen zu
+# Vollkontrast auf. Frigate stabilisiert das ueber einen mitgefuehrten
+# Kontrast-Bezug; dessen Mechanik raten wir nicht nach. `improve_contrast: false`
+# ist bei Frigate eine gueltige Einstellung, und die Schwelle 30 gilt dort dann
+# fuer rohe Grauwerte — genau so rechnen wir. Unsere Y-Ebene kommt ohnehin aus
+# dem vollen Kamerastrom, nicht aus einem kontrastarmen Detect-Substream.
+BEWEG_AUFWAERM = 3         # Bilder, bis das Hintergrundbild ueberhaupt steht.
+#                            Solange gilt "bewegt" (nie blind starten).
+# Der KONTROLLBLICK bei Ruhe: Frigate laesst die Detektion ohne Bewegung ganz
+# aus (harter Gate, Faktor unendlich) und haelt ein Objekt danach ueber seinen
+# Tracker am Leben. Wir koennen das nicht 1:1 uebernehmen — wer regungslos vor
+# der Tuer steht, erzeugt keine Bewegung, und unser Auftritt endet nach
+# ende_ohne_gesicht_s. Deshalb bleibt bei Ruhe EIN Bild je ruhe_takt_s. Der
+# Vorgabewert ist bewusst KEINE neue Zahl, sondern das Auftritts-Ende
+# DIESER Kamera (guard.ende_ohne_gesicht_s, Werk 10 s) — der Nutzer hat dort
+# schon beantwortet, ab wann fuer ihn niemand mehr da ist.
+RUHE_TAKT_MIN, RUHE_TAKT_MAX = 1, 600
+
+# --- Kalibrier-Vorrat je Kamera (Live-Umbau 31.08.) --------------------------
+# Ring auf Platte unter <data_dir>/live/<kamera>/kalib/: die Kalibrier-Seite
+# braucht ECHTE Bilder DIESER Kamera, weil die Guete-Skalen kameraabhaengig sind
+# (gemessen 31.08.: Median fiqa_t 0,181 auf der einen, 0,073 auf der anderen
+# Kamera — eine gemeinsame Zahl waere fuer beide falsch).
+KALIB_ORDNER = "kalib"
+KALIB_INDEX = "index.jsonl"
+KALIB_DECKEL = 200        # Bilder JE KAMERA (Config live_kalib_max, 0 = aus)
+KALIB_KANTE_MIN = 24      # Mindest-Kantenlaenge des Crops in px — das MILDE
+#                           Aufnahme-Kriterium; ein 12-px-Fleck traegt keine
+#                           Kalibrier-Entscheidung. KEIN Guete-Sieb: die
+#                           Guete-Masse steuern nur die Auswahl, nie das Voting.
+KALIB_RAND = 0.35         # Crop-Rand um die Box (Anteil der Kantenlaenge) —
+#                           dieselbe Marge, mit der bild_mit_box zeichnet.
+KALIB_NAME_RE = re.compile(r"^[0-9]{8}_[0-9]{6}_[0-9]{3}\.jpg$")
 VORSCHAU_FRISCH_S = 60.0  # Auslieferungs-Frist des Dienst-Endpunkts /live_bild:
 #                           aeltere Vorschau = Waechter aus/gestoert -> 404 statt
 #                           eingefrorenes Bild als "live" servieren
@@ -229,7 +348,14 @@ NORMAL_MAX_WARTE_S = 2.0       # Anti-Verhungern: aeltester Normal-Eintrag geht 
 
 # Selbstvermessung/Slots (stand.md-Auflage 11.08.: Deckel dynamisch aus RAM- und
 # GPU-Budget, hart max 4-5 — hier 5 als harte Wand, die Budgets kappen darunter).
+# Seit 31.08. ist die Wand der DEFAULT und per Config-Store `live.max_slots`
+# uebersteuerbar (User-Go 31.08.: Feld-Systeme mit staerkerer Hardware laufen
+# sonst gegen die 5, obwohl RAM-/Drossel-Notbremsen die echten Wachen sind).
 HART_MAX_SLOTS = 5
+# Obere Klemm-Wand fuer live.max_slots: 20 — aus dem Recherche-Katalog 31.08.
+# (Consumer-GPU-Decode-Grenze ~20 Streams) und dem Zielbild ~20 Waechter
+# je Maschine; darueber ist auf keiner bekannten Feld-Hardware Betrieb belegt.
+MAX_SLOTS_WAND = 20
 # Anteil des GPU-Budgets, den der NORMALTAKT aller Slots belegen darf. Der Rest
 # (40 %) ist Burst-/Pose-Reserve: eine volle Burst-Reserve in der Slot-Rechnung
 # (fps x det_ms, mit den Seeds 15 x 53 = 795 ms/s) wuerde das Budget allein
@@ -393,12 +519,36 @@ def wach_skala(breite, hoehe, ziel_hoehe=None):
     Breite lehnt ffmpeg ab. Unbekannte Quellmasse -> der Bestandswert 1280
     (nie raten), Verhalten wie vor dem Umbau.
     [ERBE-ANPASSUNG] Default der Zielhoehe ist das Modul-Literal WACH_HOEHE
-    statt der Prototyp-ENV LIVE_HOEHE (der Prototyp reicht seine ENV durch)."""
+    statt der Prototyp-ENV LIVE_HOEHE (der Prototyp reicht seine ENV durch).
+
+    DECKEL WACH_HOEHE_MAX (Welle 1, Etappe C, 31.08.): 1440 und 2160 sind
+    gestrichen. Hier — an der EINEN Stelle, an der aus einer Hoehe eine Skala
+    wird — faellt jeder groessere Wert sanft auf 1080. Das deckt alle Wege
+    zugleich (Betrieb, Quelltest, Last-Messung, ein Hand-Edit in
+    live.defaults.hoehe) und laesst den gespeicherten Wert samt Quell-
+    Fingerprint in Ruhe, damit kein laufender Waechter am Update stirbt."""
     zh = int(ziel_hoehe or WACH_HOEHE)
+    if zh > WACH_HOEHE_MAX:
+        print(f"live: Verarbeitungshoehe {zh} gibt es nicht mehr (gemessen "
+              f"ohne Gewinn, Welle 1 Etappe C) — dieser Waechter laeuft mit "
+              f"{WACH_HOEHE_MAX}; der gespeicherte Wert und der Quelltest "
+              f"bleiben unangetastet", flush=True)
+        zh = WACH_HOEHE_MAX
     if not breite or not hoehe:
         return (1280, zh)
     zb = int(round(zh * breite / float(hoehe)))
     return (max(2, zb - (zb % 2)), zh)
+
+
+def quelle_ist_datei(url):
+    """Eine Waechter-Quelle OHNE Schema, die als Datei existiert -> Feed-Test.
+    Eingebaute Test-Funktion (User 31.08.: "einen Feed durch den Watcher
+    schicken, als waere es eine Kamera — als Funktion, nicht ueber ein UI"):
+    der Leser nimmt die Datei mit Echtzeit-Takt in Dauerschleife, der ganze
+    Rest (HW-Decode, Pixelpfad, Trigger, Urteil, Ring) bleibt der einer
+    Kamera. Kein Encoder, kein Stream-Simulator."""
+    u = str(url or "")
+    return "://" not in u and os.path.isfile(u)
 
 
 def leser(url, rate=1, skala=None, hw=True):
@@ -417,6 +567,10 @@ def leser(url, rate=1, skala=None, hw=True):
     elif not hw:
         hw = None
     cmd = ["ffmpeg", "-v", "error"]
+    if quelle_ist_datei(url):
+        # Feed-Test: -re taktet wie eine Kamera, die Schleife haelt den
+        # Waechter am Leben, bis er ausgeschaltet wird.
+        cmd += ["-re", "-stream_loop", "-1"]
     if url.startswith("rtsp://"):
         # Nur fuer RTSP (Muster steckbrief_ermitteln): ffmpeg lehnt das
         # private Demuxer-Flag an file/http-Quellen HART ab ("Option not
@@ -887,6 +1041,100 @@ class Burstwache:
                 self.geprueft_im_burst = 0
             return ("trigger", info)
         return None
+
+
+class Bewegungswache:
+    """Ruehrt sich in diesem Bild etwas? — der billige Vorfilter vor der teuren
+    Detektion (Live-Performance Welle 1, Etappe A).
+
+    VERFAHREN wortgleich Frigates Bewegungserkennung (Werte und Reihenfolge s.
+    BEWEG_*-Block oben, live aus GET /api/config gelesen — kein eigenes
+    Rezept): Y-Ebene auf BEWEG_HOEHE verkleinern (Seitenverhaeltnis-treu),
+    weichzeichnen, Kontrast auf 0..255 strecken (Frigates improve_contrast),
+    Differenz zum gleitenden Hintergrundbild, schwellen, dilatieren, Konturen
+    ueber BEWEG_FLAECHE zaehlen.
+
+    ZWEI EIGENSCHAFTEN, die zaehlen:
+      * BILLIG. Sie arbeitet auf der Y-EBENE des yuv420p-Puffers, die ohnehin da
+        ist (kein cvtColor), und auf ~178x100 px. Die Detektion, die sie
+        einspart, kostet auf dieser Maschine ~53 ms je Bild (DET_MS_SEED).
+      * EHRLICH IM ZWEIFEL. Solange das Hintergrundbild nicht steht
+        (BEWEG_AUFWAERM), bei unbrauchbarer Eingabe und bei einem
+        Belichtungs-Sprung (BEWEG_BLITZ) lautet die Antwort BEWEGT — der
+        Vorfilter darf im Zweifel nie wegsieben, er darf nur sparen.
+
+    Reine Zustandsmaschine ohne Uhr und ohne Stream: der Harnisch/das Gate
+    fuettert sie mit gebauten Bildern (Muster Burstwache)."""
+
+    def __init__(self, hoehe=BEWEG_HOEHE, schwelle=BEWEG_SCHWELLE,
+                 flaeche=BEWEG_FLAECHE, alpha=BEWEG_ALPHA, blitz=BEWEG_BLITZ,
+                 aufwaermen=BEWEG_AUFWAERM):
+        self.hoehe = int(hoehe)
+        self.schwelle = int(schwelle)
+        self.flaeche = int(flaeche)
+        self.alpha = float(alpha)
+        self.blitz = float(blitz)
+        self.aufwaermen = int(aufwaermen)
+        self._hintergrund = None       # gleitendes Mittel (float32)
+        self.gesehen = 0               # gepruefte Bilder
+        self.bewegt_n = 0              # davon mit Bewegung
+        self.blitze = 0                # verworfene Belichtungs-Spruenge
+
+    def _klein(self, y):
+        """Y-Ebene -> vorbereitetes Kleinbild (float-frei, uint8).
+
+        VOR-AUSDUENNUNG (gemessen 31.08. an einer 1080p-Y-Ebene): ein
+        INTER_AREA direkt von 1920x1080 auf 178x100 kostet 2,78 ms, weil es
+        jeden der 2 Mio Pixel liest. Erst jede n-te Zeile/Spalte nehmen (so
+        dass mindestens die doppelte Zielhoehe uebrig bleibt) und DANN
+        INTER_AREA kostet 0,20 ms — Faktor 14, bei gleicher Aussage: das
+        Kleinbild wird anschliessend ohnehin weichgezeichnet und auf eine
+        Grauwert-Schwelle geworfen. Das ist eine Umsetzungs-Abkuerzung zum
+        selben Ziel, KEINE Aenderung an Frigates Parametern."""
+        h, b = y.shape[:2]
+        zb = max(2, int(round(self.hoehe * b / float(h))))
+        schritt = max(1, h // (2 * self.hoehe))
+        if schritt > 1:
+            y = np.ascontiguousarray(y[::schritt, ::schritt])
+        klein = cv2.resize(y, (zb, self.hoehe), interpolation=cv2.INTER_AREA)
+        return cv2.GaussianBlur(klein, (3, 3), 0)
+
+    def bewegt(self, y_ebene):
+        """-> True, wenn sich etwas ruehrt (oder wir es nicht wissen)."""
+        try:
+            if y_ebene is None or getattr(y_ebene, "size", 0) < 4:
+                return True
+            klein = self._klein(y_ebene)
+        except Exception:                                     # noqa: BLE001
+            return True                        # im Zweifel messen, nie sieben
+        self.gesehen += 1
+        if self._hintergrund is None:
+            self._hintergrund = klein.astype(np.float32)
+            self.bewegt_n += 1
+            return True
+        delta = cv2.absdiff(klein, cv2.convertScaleAbs(self._hintergrund))
+        _, maske = cv2.threshold(delta, self.schwelle, 255, cv2.THRESH_BINARY)
+        maske = cv2.dilate(maske, None, iterations=1)
+        anteil = float(np.count_nonzero(maske)) / float(maske.size)
+        if anteil > self.blitz:
+            # Belichtungs-/Lichtwechsel: KEINE Bewegung, aber das Hintergrundbild
+            # ist entwertet — hart neu setzen statt es langsam nachzuziehen
+            # (Frigates lightning_threshold-Gedanke).
+            self._hintergrund = klein.astype(np.float32)
+            self.blitze += 1
+            return False
+        cv2.accumulateWeighted(klein.astype(np.float32), self._hintergrund,
+                               self.alpha)
+        if self.gesehen <= self.aufwaermen:
+            self.bewegt_n += 1
+            return True                        # Hintergrund noch nicht belastbar
+        konturen, _h = cv2.findContours(maske, cv2.RETR_EXTERNAL,
+                                        cv2.CHAIN_APPROX_SIMPLE)
+        for c in konturen:
+            if cv2.contourArea(c) >= self.flaeche:
+                self.bewegt_n += 1
+                return True
+        return False
 
 
 def referenzen_laden(app):
@@ -2358,6 +2606,219 @@ def steckbrief_schreiben(cfg, kamera, brief):
     os.replace(tmp, pfad)
 
 
+# --------------------------------------------- Kalibrier-Vorrat (31.08.)
+# Der Vorrat ist ein RING auf Platte je Kamera: <data_dir>/live/<kam>/kalib/
+# mit den Crops und EINER index.jsonl (je Zeile ein Bild mit seinen Massen).
+# Warum ueberhaupt auf Platte und nicht im Speicher: die Kalibrier-Seite wird
+# Stunden bis Tage nach dem Auftritt geoeffnet, und die Engine startet dazwischen
+# neu. Warum ein Ring: er darf NIE wachsen — <data_dir>/live/ war schon einmal
+# der Datenweg, der in neun Tagen 72,9 GB fraß (.315).
+# Warum je Kamera: die Guete-Skalen sind kameraabhaengig (gemessen 31.08.,
+# Median fiqa_t 0,181 gegen 0,073) — ein gemeinsamer Vorrat kalibrierte beide falsch.
+
+
+def kalib_dir(cfg, kamera):
+    """-> Vorrats-Ordner der Kamera (nur gebaut, nie angelegt) oder None, wenn
+    der Kameraname nicht dem Pfad-Muster genuegt (nie einen Pfad aus einem
+    Fremdnamen bauen — dieselbe Wache wie bei der Vorschau)."""
+    if not VORSCHAU_NAME_RE.match(str(kamera or "")):
+        return None
+    return os.path.join(cfg.get("data_dir") or os.path.join(WURZEL, "verify_data"),
+                        "live", str(kamera), KALIB_ORDNER)
+
+
+def kalib_lesen(cfg, kamera):
+    """Vorrat EINER Kamera -> [{"d","ts","det","e","t"}, ...], neueste zuletzt.
+
+    Fail-safe: kaputte Zeilen und Eintraege ohne Datei fallen still raus (reiner
+    Anzeige-Pfad). Die Datei-Pruefung ist wichtig, weil der Ring die Bilder
+    loescht und ein Index-Rest sonst 404-Kacheln erzeugte, die der Nutzer
+    bewerten soll, ohne sie zu sehen (derselbe Fehler wie bei den verworfenen
+    Anker-Gruppen, Widerleger 30.08.)."""
+    d = kalib_dir(cfg, kamera)
+    if not d:
+        return []
+    aus = []
+    try:
+        f = open(os.path.join(d, KALIB_INDEX), encoding="utf-8")
+    except OSError:
+        return aus
+    with f:
+        for zeile in f:
+            try:
+                e = json.loads(zeile)
+                name = str(e["d"])
+            except Exception:
+                continue
+            if not KALIB_NAME_RE.match(name):
+                continue
+            if not os.path.exists(os.path.join(d, name)):
+                continue
+            aus.append({"d": name, "ts": float(e.get("ts") or 0),
+                        "det": float(e.get("det") or 0),
+                        "e": (None if e.get("e") is None else float(e["e"])),
+                        "t": (None if e.get("t") is None else float(e["t"]))})
+    return aus
+
+
+def kalib_schreiben(cfg, kamera, bild, mass, deckel=KALIB_DECKEL, log=print):
+    """EIN Bild in den Ring legen -> Dateiname oder None.
+
+    `mass` = {"det","e","t"} (e/t duerfen None sein, wenn die Guete-Modelle im
+    Image fehlen — dann kalibriert der Nutzer nur ueber det, ehrlich sichtbar).
+    Der Deckel wird HIER durchgesetzt, nicht vom Aufrufer: es gibt genau einen
+    Schreibweg, also genau eine Stelle, an der der Ring greifen kann.
+    Platten-/IO-Fehler sind eine Log-Zeile, nie ein Waechter-Ende (K-1-Haltung
+    der Beweisbild-Ablage)."""
+    if not deckel or bild is None:
+        return None
+    d = kalib_dir(cfg, kamera)
+    if not d:
+        return None
+    try:
+        os.makedirs(d, exist_ok=True)
+        # Stempel + Millisekunden: zwei Crops derselben Sekunde (zwei Kacheln,
+        # ein Auftritts-Ende) duerfen sich nicht ueberschreiben.
+        jetzt = time.time()
+        name = (time.strftime("%Y%m%d_%H%M%S", time.localtime(jetzt))
+                + f"_{int(jetzt * 1000) % 1000:03d}.jpg")
+        if not cv2.imwrite(os.path.join(d, name), bild,
+                           [cv2.IMWRITE_JPEG_QUALITY, 88]):
+            raise RuntimeError("imwrite=False")
+        with open(os.path.join(d, KALIB_INDEX), "a", encoding="utf-8") as f:
+            f.write(json.dumps({"d": name, "ts": round(jetzt, 1),
+                                "det": round(float(mass.get("det") or 0), 3),
+                                "e": (None if mass.get("e") is None
+                                      else round(float(mass["e"]), 4)),
+                                "t": (None if mass.get("t") is None
+                                      else round(float(mass["t"]), 4))},
+                               ensure_ascii=False) + "\n")
+        _kalib_ring_kappen(d, deckel)
+        return name
+    except Exception as e:                                    # noqa: BLE001
+        log(f"live {kamera}: Kalibrier-Vorrat nicht schreibbar "
+            f"({type(e).__name__}: {e})")
+        return None
+
+
+def _kalib_ring_kappen(d, deckel):
+    """Aelteste fliegen, bis der Deckel haelt — und der Index wird dabei NEU
+    geschrieben (sonst waechst die jsonl unbegrenzt weiter, waehrend die Bilder
+    schrumpfen: der stille Verlust waere hier ein stiller Zuwachs)."""
+    zeilen = []
+    pfad = os.path.join(d, KALIB_INDEX)
+    try:
+        with open(pfad, encoding="utf-8") as f:
+            for z in f:
+                try:
+                    e = json.loads(z)
+                except Exception:
+                    continue
+                if KALIB_NAME_RE.match(str(e.get("d") or "")):
+                    zeilen.append(e)
+    except OSError:
+        return
+    weg = zeilen[:max(0, len(zeilen) - int(deckel))]
+    if not weg:
+        return
+    for e in weg:
+        try:
+            os.remove(os.path.join(d, str(e["d"])))
+        except OSError:
+            pass
+    rest = zeilen[len(weg):]
+    tmp = pfad + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        for e in rest:
+            f.write(json.dumps(e, ensure_ascii=False) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, pfad)
+
+
+def kalib_leeren(cfg, kamera):
+    """Vorrat EINER Kamera wegwerfen -> (ok, msg). Der Weg fuers Nachkalibrieren
+    mit frischem Material (User-Auftrag 31.08.): der Ring baut sich danach von
+    selbst wieder auf, solange der Waechter laeuft. Es wird NUR der kalib-Ordner
+    angefasst — Beweisbilder und Videos daneben bleiben."""
+    d = kalib_dir(cfg, kamera)
+    if not d:
+        return False, "unknown camera"
+    n = 0
+    try:
+        for fn in os.listdir(d):
+            if KALIB_NAME_RE.match(fn) or fn == KALIB_INDEX:
+                try:
+                    os.remove(os.path.join(d, fn))
+                    n += 1
+                except OSError:
+                    pass
+    except FileNotFoundError:
+        return True, "no samples stored yet"
+    except OSError as e:
+        return False, f"could not clear samples: {e}"
+    return True, f"cleared {n} file(s) — the watcher collects new ones from now on"
+
+
+def kalib_crop(frame, box, rand=KALIB_RAND):
+    """Gesichts-Crop MIT Rand aus dem Waechter-Frame -> Bild oder None.
+    Rand, weil ein randloses 30-px-Gesicht auf der Kalibrier-Seite nicht
+    beurteilbar ist; Untergrenze KALIB_KANTE_MIN, weil ein 12-px-Fleck keine
+    Kalibrier-Entscheidung traegt (das MILDE Aufnahme-Kriterium — kein
+    Guete-Sieb, die Guete-Masse waehlen nur aus)."""
+    if frame is None or box is None:
+        return None
+    try:
+        x1, y1, x2, y2 = [int(round(float(v))) for v in box[:4]]
+    except (TypeError, ValueError):
+        return None
+    h, w = frame.shape[:2]
+    kante = max(x2 - x1, y2 - y1)
+    if kante < KALIB_KANTE_MIN:
+        return None
+    r = int(rand * kante)
+    a = frame[max(0, y1 - r):min(h, y2 + r), max(0, x1 - r):min(w, x2 + r)]
+    return a.copy() if a.size else None
+
+
+def guete_messen(crop, aligned112, log=print):
+    """Die zwei Bildguete-Masse EINES Fundes -> (empfinden, fiqa_t), je None,
+    wenn nicht messbar. DERSELBE Griff wie im Lernlauf (core/guete auf dem
+    align112-Warp) — nur so bedeuten die Regler auf der Kalibrier-Seite hier
+    dasselbe wie dort. Fehlen die Modelldateien (Alt-Image), sind beide None
+    und die Seite sagt es ehrlich, statt eine Null als Messwert auszugeben.
+
+    Kosten: gemessen ~4 ms (Empfinden) + ~13 ms (Erkennbarkeit) je Bild auf CPU
+    mit 4 Threads (core/guete-Kopf). Deshalb laeuft das hier NICHT je Bild,
+    sondern hoechstens einmal je Auftritt (Vorrats-Kandidat) bzw. je Trigger
+    (Bildwahl) — und nie im Namens-Voting: die Guete darf nie entscheiden, WER
+    erkannt wird (Messung 31.08.: ohne Siebe +41 % Bestaetigungen)."""
+    try:
+        from core import guete as _guete
+        if not _guete.verfuegbar():
+            return None, None
+        e = _guete.empfinden(crop) if crop is not None else None
+        t = _guete.fiqa_t(aligned112) if aligned112 is not None else None
+        return e, t
+    except Exception as ex:                                   # noqa: BLE001
+        log(f"live: Guete-Messung entfaellt ({type(ex).__name__}: {ex})")
+        return None, None
+
+
+def guete_reicht(guard, e, t):
+    """Genuegt ein Bild der Guete-Latte DIESER Kamera? -> bool.
+    Nicht gesetzte Latte (None) heisst 'alles zaehlt' — der Zustand VOR der
+    Kalibrierung, und der ehrliche: eine Werks-Zahl waere auf der einen Kamera
+    grosszuegig und auf der anderen ein Kahlschlag (Skalen-Messung 31.08.).
+    Ein nicht MESSBARER Wert (None, Modelle fehlen) laesst die Latte ebenfalls
+    passieren — sonst schlucken fehlende Modelldateien den ganzen Vorrat."""
+    for latte, wert in ((guard.get("guete_e_min"), e),
+                        (guard.get("guete_t_min"), t)):
+        if latte is not None and wert is not None and float(wert) < float(latte):
+            return False
+    return True
+
+
 def versteckt_lesen(cfg):
     """Versteck-Liste des Live-Reiters (User 13.08.: Kacheln ausblendbar,
     Ausgeblendete unten eingeklappt) -> [kamera, ...]. Fail-safe leer."""
@@ -2433,13 +2894,26 @@ def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
     # Maskierung unveraendert zurueck, will der User die gespeicherte URL
     # BEHALTEN — nur eine WIRKLICH geaenderte Eingabe schreibt neu. Der
     # Fingerprint bleibt damit stabil (kein falscher Test-Verfall).
+    if url and "://" not in url:
+        # Feed-Test-Pfad: NUR unterhalb des Datenverzeichnisses (realpath-
+        # Wache wie /refs/): ein UI-/API-Aufrufer darf keine beliebige
+        # Container-Datei als "Kamera" lesen.
+        _dd = os.path.realpath(cfg.get("data_dir") or "")
+        _rp = os.path.realpath(url)
+        if not _dd or not (_rp == _dd or _rp.startswith(_dd + os.sep)):
+            return False, "file feed: path must live inside the data directory"
+        if not os.path.isfile(_rp):
+            return False, "file feed: file not found"
     alt_url = str(alt.get("url") or "")
     if url and alt_url and url != alt_url and url == quelle_maskiert(alt_url):
         url = alt_url
     if q == "url" and not url:
         return False, "source 'url' selected but no stream URL given"
-    if url and "://" not in url:
-        return False, "stream URL must be a full URL (e.g. rtsp://...)"
+    if url and "://" not in url and not os.path.isfile(os.path.realpath(url)):
+        # Datei-Pfade sind seit dem Feed-Test (31.08.) erlaubt — die
+        # realpath-Wache weiter oben hat sie bereits auf data_dir begrenzt;
+        # hier faellt nur noch, was weder URL noch existierende Datei ist.
+        return False, "stream URL must be a full URL (e.g. rtsp://...) or an existing file inside the data directory"
     try:
         ende_s = int(_wert("ende_ohne_gesicht_s", ENDE_OHNE_GESICHT_S))
         scharf_s = int(_wert("wieder_scharf_s", WIEDER_SCHARF_S))
@@ -2463,13 +2937,81 @@ def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
             hoehe = int(hoehe)
         except (TypeError, ValueError):
             hoehe = -1
-        if hoehe not in HOEHEN_ERLAUBT:
+        # Welle 1, Etappe C: WAEHLBAR sind nur noch HOEHEN_ERLAUBT — angenommen
+        # wird aber auch der Altbestand (HOEHEN_ALT). Sonst wuerde ein
+        # Formular-Save einer Kamera, die noch 1440 gespeichert hat, mit einem
+        # Fehler abprallen, obwohl der Nutzer die Hoehe gar nicht angefasst hat
+        # (die Halte-Regel _wert reicht den gespeicherten Wert durch).
+        if hoehe not in HOEHEN_LESBAR:
             return False, (f"'resolution': allowed "
                            f"{', '.join(str(h) for h in HOEHEN_ERLAUBT)}")
     else:
         hoehe = None
+    # --- Live-Umbau 31.08.: die je-Kamera-Werte der Erkennung. Alle OPTIONAL
+    # (None = "Vorgabe gilt"), damit ein Formular ohne diese Felder (Alt-UI,
+    # API-Aufrufer) nichts still auf einen Zweit-Default kippt — dieselbe
+    # Halte-Regel wie oben in _wert.
+    def _opt_zahl(feld, lo, hi, ganz=False):
+        w = _wert(feld, None)
+        if w in (None, ""):
+            return None, None
+        try:
+            z = int(w) if ganz else float(w)
+        except (TypeError, ValueError):
+            return None, f"'{feld}': a number between {lo} and {hi} is expected"
+        if z < lo or z > hi:
+            return None, f"'{feld}': allowed {lo}-{hi}"
+        return z, None
+
+    det_min, f_det = _opt_zahl("det_min", DET_MIN_MIN, DET_MIN_MAX)
+    g_e, f_ge = _opt_zahl("guete_e_min", 0.0, 1.0)
+    g_t, f_gt = _opt_zahl("guete_t_min", 0.0, 1.0)
+    # Katalog-Latte je Kamera (Zentral-Umbau 31.08.) — dieselbe Halte-Regel:
+    # ein Formular ohne diese Felder (Live-Detailseite, API-Aufrufer) laesst
+    # sie unangetastet, nur ein mitgesandtes Feld aendert etwas.
+    k_e, f_ke = _opt_zahl("katalog_e_min", 0.0, 1.0)
+    k_t, f_kt = _opt_zahl("katalog_t_min", 0.0, 1.0)
+    for fehler in (f_ke, f_kt):
+        if fehler:
+            return False, fehler
+    fr_ab, f_fa = _opt_zahl("frigate_abstand_s", WIEDER_SCHARF_MIN,
+                            WIEDER_SCHARF_MAX, ganz=True)
+    for fehler in (f_det, f_ge, f_gt, f_fa):
+        if fehler:
+            return False, fehler
+    try:
+        erk_n = int(_wert("erkannt_n", NAME_STIMMEN))
+        erk_t = int(_wert("erkannt_t_s", ERKANNT_T_S))
+    except (TypeError, ValueError):
+        return False, "the 'recognized' rule needs whole numbers"
+    if not (ERKANNT_N_MIN <= erk_n <= ERKANNT_N_MAX):
+        return False, (f"'confirmations': allowed "
+                       f"{ERKANNT_N_MIN}-{ERKANNT_N_MAX}")
+    if not (ERKANNT_T_MIN <= erk_t <= ERKANNT_T_MAX):
+        return False, (f"'within': allowed {ERKANNT_T_MIN}-{ERKANNT_T_MAX} s "
+                       f"(0 = the whole appearance counts)")
+    fr_ev = bool(_wert("frigate_events", False))
+    # Etappe A (Welle 1): bewegungsgesteuertes Abtasten je Kamera. Der Schalter
+    # haelt wie alle anderen (fehlendes Feld = unveraendert, _wert), der
+    # Ruhe-Takt ist optional (None = wie das Auftritts-Ende dieser Kamera).
+    bw_gate = bool(_wert("bewegung_gate", True))
+    ruhe_s, f_ruhe = _opt_zahl("ruhe_takt_s", RUHE_TAKT_MIN, RUHE_TAKT_MAX,
+                               ganz=True)
+    bw_schw, f_bs = _opt_zahl("bewegung_schwelle", BEWEG_SCHWELLE_MIN,
+                              BEWEG_SCHWELLE_MAX, ganz=True)
+    bw_fl, f_bf = _opt_zahl("bewegung_flaeche", BEWEG_FLAECHE_MIN,
+                            BEWEG_FLAECHE_MAX, ganz=True)
+    for fehler in (f_ruhe, f_bs, f_bf):
+        if fehler:
+            return False, fehler
     neu = dict(alt, quelle=q, url=url, ende_ohne_gesicht_s=ende_s,
-               wieder_scharf_s=scharf_s, kanaele=kanaele, hoehe=hoehe)
+               wieder_scharf_s=scharf_s, kanaele=kanaele, hoehe=hoehe,
+               det_min=det_min, guete_e_min=g_e, guete_t_min=g_t,
+               katalog_e_min=k_e, katalog_t_min=k_t,
+               erkannt_n=erk_n, erkannt_t_s=erk_t,
+               frigate_events=fr_ev, frigate_abstand_s=fr_ab,
+               bewegung_gate=bw_gate, ruhe_takt_s=ruhe_s,
+               bewegung_schwelle=bw_schw, bewegung_flaeche=bw_fl)
     neu.pop("schnell_urteil", None)   # .197: Haken abgeschafft (Voting immer)
     blk[kamera] = neu
     store_schreiben(store_pfad(cfg), store)
@@ -2477,7 +3019,13 @@ def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
     _audit_zeile(cfg, {"live": {kamera: {
         "quelle": q, "url": quelle_maskiert(url) if url else "",
         "ende_ohne_gesicht_s": ende_s, "wieder_scharf_s": scharf_s,
-        "kanaele": kanaele, "hoehe": hoehe}}})
+        "kanaele": kanaele, "hoehe": hoehe, "det_min": det_min,
+        "guete_e_min": g_e, "guete_t_min": g_t,
+        "katalog_e_min": k_e, "katalog_t_min": k_t, "erkannt_n": erk_n,
+        "erkannt_t_s": erk_t, "frigate_events": fr_ev,
+        "frigate_abstand_s": fr_ab, "bewegung_gate": bw_gate,
+        "ruhe_takt_s": ruhe_s, "bewegung_schwelle": bw_schw,
+        "bewegung_flaeche": bw_fl}}})
     log(f"LIVE guard {kamera} changed via UI (URL masked)")
     hinweis = ""
     alt_fp = (alt.get("test") or {}).get("quelle_fp")
@@ -2680,6 +3228,30 @@ def _zahl_lesen(wert, std, lo, hi, log, feld):
     return w
 
 
+def _zahl_opt(wert, lo, hi, log, feld, ganz=False):
+    """OPTIONALE Zahl eines Guards -> float/int oder None (Live-Umbau 31.08.).
+
+    Unterschied zu _klemmen/_zahl_lesen, bewusst: hier gibt es KEINEN
+    Zweit-Default. None heisst "nicht gesetzt", und der Verbraucher nimmt die
+    EINE Default-Kette (defaults[...] bzw. das Modul-Literal). Ein Zweit-
+    Default an dieser Stelle waere genau das verstreute Literal, das die
+    qs_ebenen-Regel verbietet — und er wuerde eine spaetere Aenderung des
+    Werks-Werts an den schon gespeicherten Waechtern vorbeilaufen lassen.
+    Ungueltiges faellt LAUT auf None (nie klemmen: eine krumme Schwelle ist
+    ein anderes Rechenverhalten, keine Naeherung)."""
+    if wert in (None, ""):
+        return None
+    try:
+        w = int(wert) if ganz else float(wert)
+    except (TypeError, ValueError):
+        log(f"live: {feld}={wert!r} ungueltig — Vorgabe gilt")
+        return None
+    if w < lo or w > hi:
+        log(f"live: {feld}={w} ausserhalb {lo}-{hi} — Vorgabe gilt")
+        return None
+    return w
+
+
 # Wertebereiche des defaults-Blocks (Riegel, nicht Empfehlung): weit genug fuer
 # jedes sinnvolle Rezept, eng genug gegen Tippfehler-Extreme.
 _DEFAULTS_GRENZEN = {"hoehe": (2, 4320), "det_basis": (32, 4096),
@@ -2697,7 +3269,35 @@ KANAELE_ERLAUBT = ("pushover", "telegram", "mqtt")
 # laut. Der Harnisch haelt den Vertrag: jedes Feld muss die Normalisierung
 # ueberleben (tools/harnisch_live1.py, Render-/Vertrags-Block).
 GUARD_USER_FELDER = ("enabled", "quelle", "url", "ende_ohne_gesicht_s",
-                     "wieder_scharf_s", "kanaele", "hoehe")
+                     "wieder_scharf_s", "kanaele", "hoehe",
+                     # Live-Umbau 31.08. — ALLES je Kamera, weil die Skalen
+                     # kameraabhaengig sind (Guete-Messung 31.08.):
+                     "det_min",          # ab wann zaehlt etwas als Gesicht
+                     "guete_e_min",      # Empfinden-Latte: Bildwahl + Vorrat
+                     "guete_t_min",      # Erkennbarkeits-Latte: dito
+                     # KATALOG-LATTE (Drei-Latten-Semantik, User 31.08.):
+                     # die eigene, strengere Latte fuer die Aufnahme in den
+                     # Referenz-Katalog. Sie liegt HIER und nicht in einem
+                     # zweiten Store-Block, damit es EINEN Ablageort und EINEN
+                     # Schreibweg (live_speichern) fuer alle Kamera-Werte gibt;
+                     # gelesen wird sie ausschliesslich ueber
+                     # core/kamerakalib.py. Ein Guard-Block OHNE enabled ist
+                     # damit legitim: eine Kamera kann kalibriert sein, ohne je
+                     # einen Waechter zu bekommen (der Vorrat wird seit dem
+                     # Zentral-Umbau auch aus dem Event-Weg gespeist).
+                     "katalog_e_min",    # Katalog-Latte Empfinden
+                     "katalog_t_min",    # Katalog-Latte Erkennbarkeit
+                     "erkannt_n",        # N bestaetigte Bilder ...
+                     "erkannt_t_s",      # ... in T s = erkannt (0 = ganzer Auftritt)
+                     "frigate_events",   # manuelles Frigate-Event bei "erkannt"
+                     "frigate_abstand_s",  # Frequenz-Deckel je Kamera+Person
+                     # Live-Performance Welle 1, Etappe A (31.08.) — ALLE
+                     # Bewegungs-Werte je Kamera (User-Auflage: eine Anlage
+                     # ist nie repraesentativ, jede braucht ihre Eichung):
+                     "bewegung_gate",       # bewegungsgesteuertes Abtasten an/aus
+                     "bewegung_schwelle",   # Grauwert-Delta (Frigate threshold)
+                     "bewegung_flaeche",    # Konturflaeche (Frigate contour_area)
+                     "ruhe_takt_s")         # Kontrollblick-Abstand bei Ruhe
 # .197: "schnell_urteil" ist KEIN Guard-Feld mehr — die Namens-Stufe laeuft
 # fuer jeden eingeschalteten Waechter (User: "Enable heisst alles laeuft";
 # der Haken stammte aus der Zeit, als das Urteil extra Rechenzeit kostete).
@@ -2726,10 +3326,30 @@ def _hoehe_lesen(wert, log, name):
         h = int(wert)
     except (TypeError, ValueError):
         h = None
+    if h in HOEHEN_ALT:
+        # Altbestand (Welle 1, Etappe C): DURCHLASSEN, nicht auf None werfen —
+        # der gespeicherte Wert traegt den Quell-Fingerprint des gruenen Tests,
+        # und ein Update darf ihn nie entwerten. Gekappt wird erst dort, wo aus
+        # der Hoehe eine Skala wird (wach_skala -> WACH_HOEHE_MAX).
+        log(f"live.guards.{name}.hoehe: {h} wird nicht mehr angeboten — der "
+            f"Waechter laeuft mit {WACH_HOEHE_MAX}; der gespeicherte Wert und "
+            f"der Quelltest bleiben gueltig")
+        return h
     if h in HOEHEN_ERLAUBT:
         return h
     log(f"live.guards.{name}.hoehe: {wert!r} unbekannt — Default gilt")
     return None
+
+
+def max_slots_lesen(cfg, log=print):
+    """Config-Store `live.max_slots` -> harter Slot-Deckel der Engine.
+    Gleiches Fail-safe-Muster wie guards_lesen: klemmen statt crashen,
+    jeder Eingriff laut. Default bleibt die gemessene Wand HART_MAX_SLOTS."""
+    live = cfg.get("live") or {}
+    if not isinstance(live, dict):
+        return HART_MAX_SLOTS
+    return int(_zahl_lesen(live.get("max_slots", HART_MAX_SLOTS), HART_MAX_SLOTS,
+                           1, MAX_SLOTS_WAND, log, "live.max_slots"))
 
 
 def guards_lesen(cfg, log=print):
@@ -2747,7 +3367,16 @@ def guards_lesen(cfg, log=print):
         log(f"live: Config-Block ist kein Objekt ({type(live).__name__}) — "
             f"ignoriert, Defaults gelten, keine Waechter")
         live = {}
-    d = {"hoehe": WACH_HOEHE, "det_basis": DET_BASIS, "min_score": MIN_SCORE,
+    # min_score = die det-Grenze des Live-Wegs. Seit 31.08. DET_MIN_LIVE (0,40)
+    # statt MIN_SCORE (0,60) — zweifach an Feldmaterial gemessen: die
+    # Erkennbarkeit FAELLT mit der Schwelle, 0,60 warf die Haelfte des
+    # Namensmaterials weg. Die Phantom-Klasse vom 10.08. (Boxen um 30 px,
+    # det ~0,50), fuer die 0,60 einmal eingefuehrt wurde, faengt heute die
+    # Kette danach: 4 raeumlich konsistente Funde + das Pose-Gate ("kein
+    # Mensch im Bild" -> verworfen, kein Alarm). Wer trotzdem Phantome sieht,
+    # zieht die Schwelle FUER DIESE KAMERA auf der Kalibrier-Seite hoch —
+    # deshalb ist der Wert pro Kamera einstellbar und nicht mehr global fest.
+    d = {"hoehe": WACH_HOEHE, "det_basis": DET_BASIS, "min_score": DET_MIN_LIVE,
          "pose_gate": True, "pose_kopf": POSE_KOPF, "burst_anzahl": BURST_ANZAHL,
          "burst_fenster_s": BURST_FENSTER, "rate": PRUEF_RATE}
     roh_defaults = live.get("defaults") or {}
@@ -2818,6 +3447,67 @@ def guards_lesen(cfg, log=print):
                                         log, name, "wieder_scharf_s"),
             "kanaele": kanaele,
             "hoehe": _hoehe_lesen(g.get("hoehe"), log, name),
+            # Live-Umbau 31.08. — je Kamera. KEIN Feld klemmt still auf einen
+            # zweiten Default: fehlt es, gilt None und der Verbraucher nimmt
+            # die EINE Default-Kette (defaults[...] bzw. das Modul-Literal).
+            "det_min": _zahl_opt(g.get("det_min"), DET_MIN_MIN, DET_MIN_MAX,
+                                 log, f"live.guards.{name}.det_min"),
+            "guete_e_min": _zahl_opt(g.get("guete_e_min"), 0.0, 1.0, log,
+                                     f"live.guards.{name}.guete_e_min"),
+            "guete_t_min": _zahl_opt(g.get("guete_t_min"), 0.0, 1.0, log,
+                                     f"live.guards.{name}.guete_t_min"),
+            # Katalog-Latte je Kamera (Zentral-Umbau 31.08.). Gleiche Regel wie
+            # die zwei darueber: None = "nicht gesetzt", dann gilt die globale
+            # Katalog-Latte (core.kamerakalib.katalog_werte) — kein zweiter
+            # Zahlen-Default an dieser Stelle.
+            "katalog_e_min": _zahl_opt(g.get("katalog_e_min"), 0.0, 1.0, log,
+                                       f"live.guards.{name}.katalog_e_min"),
+            "katalog_t_min": _zahl_opt(g.get("katalog_t_min"), 0.0, 1.0, log,
+                                       f"live.guards.{name}.katalog_t_min"),
+            "erkannt_n": _klemmen(g.get("erkannt_n"), NAME_STIMMEN,
+                                  ERKANNT_N_MIN, ERKANNT_N_MAX, log, name,
+                                  "erkannt_n"),
+            "erkannt_t_s": _klemmen(g.get("erkannt_t_s"), ERKANNT_T_S,
+                                    ERKANNT_T_MIN, ERKANNT_T_MAX, log, name,
+                                    "erkannt_t_s"),
+            # Schalter-Prinzip ("Registrieren nach Schaltern"): der
+            # SCHREIBENDE Weg nach Frigate ist per Vorgabe AUS.
+            "frigate_events": _bool_lesen(g.get("frigate_events"), False, log,
+                                          f"live.guards.{name}.frigate_events"),
+            # None = "wie die Melde-Karenz dieser Kamera" (wieder_scharf_s) —
+            # bewusst KEIN zweiter Zahlen-Default (qs_ebenen: keine verstreuten
+            # Literale, der Nutzer hat die Karenz schon einmal entschieden).
+            "frigate_abstand_s": _zahl_opt(g.get("frigate_abstand_s"),
+                                           WIEDER_SCHARF_MIN, WIEDER_SCHARF_MAX,
+                                           log, f"live.guards.{name}.frigate_abstand_s",
+                                           ganz=True),
+            # Etappe A (Welle 1): bewegungsgesteuertes Abtasten. Vorgabe AN —
+            # es ist der gemessene Haupthebel (95 % der Live-Kosten sind
+            # Detektion), und die Sicherungen liegen im Gate selbst: aktive
+            # Tracks und ein laufender Auftritt drosseln NIE, bei Ruhe bleibt
+            # der Kontrollblick. Wer eine Kamera hat, an der das Verfahren
+            # nicht taugt (Dauer-Wind im Bild, extremes Rauschen), schaltet es
+            # HIER aus statt an einer globalen Schraube.
+            "bewegung_gate": _bool_lesen(g.get("bewegung_gate"), True, log,
+                                         f"live.guards.{name}.bewegung_gate"),
+            # None = Frigates Auslieferungs-Vorgabe (BEWEG_SCHWELLE/_FLAECHE).
+            # Kein Zweit-Default hier — der Wert kommt aus genau einer Kette.
+            "bewegung_schwelle": _zahl_opt(g.get("bewegung_schwelle"),
+                                           BEWEG_SCHWELLE_MIN, BEWEG_SCHWELLE_MAX,
+                                           log, f"live.guards.{name}.bewegung_schwelle",
+                                           ganz=True),
+            "bewegung_flaeche": _zahl_opt(g.get("bewegung_flaeche"),
+                                          BEWEG_FLAECHE_MIN, BEWEG_FLAECHE_MAX,
+                                          log, f"live.guards.{name}.bewegung_flaeche",
+                                          ganz=True),
+            # None = "wie das Auftritts-Ende dieser Kamera" (ende_ohne_gesicht_s).
+            # Bewusst KEIN zweiter Zahlen-Default (qs_ebenen: keine verstreuten
+            # Literale) — dieselbe Regel wie bei frigate_abstand_s. Die Wahl der
+            # Bezugsgroesse ist inhaltlich: der Nutzer hat mit dem Auftritts-Ende
+            # bereits gesagt, wie lange fuer IHN "da steht noch jemand" gilt.
+            "ruhe_takt_s": _zahl_opt(g.get("ruhe_takt_s"), RUHE_TAKT_MIN,
+                                     RUHE_TAKT_MAX, log,
+                                     f"live.guards.{name}.ruhe_takt_s", ganz=True),
         }
         # Quittungs-Bloecke (GUARD_QUITTUNG_FELDER) unveraendert durchreichen —
         # UI-B1: `messung` fehlte hier und die Last-Messung war unsichtbar.
@@ -2879,6 +3569,12 @@ class Kachel:
         self.lock = threading.Lock()             # Burstwache + Episode + Rueckblick
         self.burst = Burstwache(rate=defaults["rate"], anzahl=defaults["burst_anzahl"],
                                 fenster=defaults["burst_fenster_s"])
+        # Etappe A (Welle 1): eigenes Bewegungs-Hintergrundbild JE KACHEL — die
+        # Szenen sind verschieden, ein geteiltes waere fuer jede falsch.
+        self.beweg = Bewegungswache()
+        self.beweg_kontrolle_mono = -1e18   # letzter Kontrollblick bei Ruhe
+        self.beweg_ruhig = 0                # Bilder, die die Ruhe wegdrosselte
+        self.beweg_kontrollen = 0           # Kontrollblicke trotz Ruhe
         self.netz = None
         self.steckbrief = {}
         self.hw = None
@@ -2917,6 +3613,16 @@ class Kachel:
         # Auftritt (User-Zeit a, Anker LETZTER Fund — neu gebaut, Bauplan §4a)
         self.auftritt = None                     # {"seit_mono","letzter_fund_mono","funde","trigger"}
         self.auftritte = 0
+        # Live-Umbau 31.08.: bester Crop DIESES Auftritts fuer den Kalibrier-
+        # Vorrat (geschrieben wird EINMAL, am Auftritts-Ende — Schreiben kostet
+        # Zeit, und der Vorrat will Vielfalt ueber Auftritte, nicht 200 Bilder
+        # desselben Menschen aus einer Minute).
+        self.kalib_kand = None                   # {"crop","al","det"}
+        self.kalib_bilder = 0                    # in diesem Lauf abgelegt (Status)
+        # Frigate-Manual-Events je Person: offener Event (fuers PUT /end) und
+        # der Zeitpunkt des letzten create (Frequenz-Deckel je Kamera+Person).
+        self.fr_offen = {}                       # person -> event_id
+        self.fr_letzte = {}                      # person -> mono
 
 
 class Melder:
@@ -3022,22 +3728,175 @@ class Melder:
         return [kanal for kanal, ok in bericht if ok], fehler
 
 
-class _DetektorMitLock:
-    """Huelle um den geteilten Detektor (Engine-M1): erkennen() laeuft NUR
-    unter dem Engine-Detektor-Lock — auch der Quelltest-Pass ist damit gegen
-    den Detektor-Thread serialisiert (zwei Threads auf einer Session = die
-    CL_OUT_OF_RESOURCES-Klasse vom 11.08.)."""
+# --- Inferenz-Kern (Live-Performance Welle 1, Etappe B, 31.08.) --------------
+# Der Sammel-Deckel des Recognition-Batches liegt NICHT als Zahl hier: der
+# Scheduler haelt konstruktionsbedingt hoechstens EINEN Platz je Kachel
+# (latest wins, Scheduler-Docstring), also ist die Zahl der laufenden Waechter
+# selbst der Deckel — und die ist ihrerseits durch HART_MAX_SLOTS begrenzt.
+# Kein zweites Literal (qs_ebenen-Regel).
+SAMMEL_MS_VORGABE = 0.0   # Wartezeit, um den Batch zu FUELLEN. 0 = gar nicht
+#                           warten, nur nehmen was ohnehin schon in der Queue
+#                           liegt. Bewusst als Vorgabe: das DeepStream-Prinzip
+#                           (batched-push-timeout) deckelt, wie lange ein
+#                           Sammler auf Nachschub wartet — es verlangt kein
+#                           Warten. Bei EINEM Waechter gaebe es nichts zu
+#                           sammeln und jede Wartezeit waere reine Latenz; bei
+#                           mehreren fuellt sich die Queue unter Last von
+#                           selbst, und genau dort wirkt der Batch. Wer messen
+#                           will, hebt live_sammel_ms in der Config.
+REC_PARALLEL_NPU = 2      # gleichzeitige EINZEL-Requests auf der NPU. GEMESSEN
+#                           31.08.: 2-4 parallele Requests = 1,9x; wir nehmen
+#                           die UNTERE gemessene Stufe (Config live_rec_parallel
+#                           hebt sie). Auf iGPU/CUDA gilt stattdessen der Batch
+#                           (3,7x / 2,5x), dort bleibt es bei 1.
 
-    def __init__(self, det, lock):
+
+class Inferenzkern:
+    """DER EINE Inferenz-Kern des Dienstes (Architektur-Leitplanke 31.08.:
+    ein Kern je Dienst, alle Waechter haengen sich an; die Waechter selbst
+    bleiben schlanke Zubringer — Decode, Bewegung, Tracking, Voting, Vorrat,
+    Melde-Queue).
+
+    Er ersetzt die frueher hier stehende Huelle _DetektorMitLock und behaelt
+    deren Zusage vollstaendig (Engine-M1): jede erkennen()-Benutzung — Detektor-
+    Thread, Last-Messung, Quelltest — laeuft unter EINEM Lock; zwei Threads auf
+    einer Session waeren die CL_OUT_OF_RESOURCES-Klasse vom 11.08.
+
+    NEU ist der SAMMELBATCH (Etappe B): statt je Bild einen eigenen
+    Recognition-Lauf zu fahren, werden die Crops MEHRERER Waechter zu EINEM
+    Lauf gebuendelt — gemessen 31.08. 3,7x auf der iGPU, 2,5x auf CUDA. Auf der
+    NPU bringt ein Batch nichts, dort sind es 2-4 gleichzeitige Einzel-Requests
+    (1,9x). Detektions-Batching ist unmoeglich (SCRFD-ONNX hat Batch fest 1) —
+    die Detektion laeuft weiter Bild fuer Bild, seriell unter dem Lock, wie es
+    die Messlage fuer die iGPU verlangt.
+
+    INJEKTIONS-VERTRAG: `det` muss .erkennen(frame, netz) und .provider()
+    koennen (das ist der alte Vertrag; Harnisch-Stubs erfuellen genau ihn und
+    laufen deshalb unveraendert weiter, nur ohne Sammelbatch). Kann er
+    ZUSAETZLICH .sammelbatch_moeglich()/.detektieren()/.embeddings(), schaltet
+    der Kern den Batch ein — die Faehigkeit wird GEFRAGT, nie angenommen."""
+
+    def __init__(self, det, lock, log=print, sammel_ms=SAMMEL_MS_VORGABE,
+                 parallel=None, jetzt=time.monotonic):
         self.det = det
         self.lock = lock
+        self.log = log
+        self.jetzt = jetzt
+        self.sammel_ms = max(0.0, float(sammel_ms or 0.0))
+        self.parallel = max(1, int(parallel or 1))
+        self._pool = None
+        # Buchhaltung (der Kern muss ablesbar sein, sonst ist der Umbau eine
+        # Behauptung): Batches, darin verrechnete Bilder und Crops.
+        self.batches = 0
+        self.batch_bilder = 0
+        self.batch_crops = 0
+        self.einzel = 0
 
-    def erkennen(self, frame_bgr, netz):
-        with self.lock:
-            return self.det.erkennen(frame_bgr, netz)
+    # ---- Faehigkeiten -----------------------------------------------------
+    def sammelbatch_moeglich(self):
+        try:
+            return bool(self.det is not None
+                        and callable(getattr(self.det, "detektieren", None))
+                        and callable(getattr(self.det, "embeddings", None))
+                        and self.det.sammelbatch_moeglich())
+        except Exception:                                     # noqa: BLE001
+            return False
 
+    def rec_geraet(self):
+        try:
+            return str(self.det.rec_geraet()).upper()
+        except Exception:                                     # noqa: BLE001
+            return "?"
+
+    def sessions(self):
+        """Wie viele Modell-Kontexte leben in diesem Prozess? -> int|None.
+        Die Zaehl-Wache des Leitsatzes 'EIN Kern je Dienst'; None heisst
+        'nicht ablesbar' (Stub-Detektor im Harnisch), nie stilles 'ok'."""
+        try:
+            from face_audit import Embedder
+            return Embedder.instanzen()
+        except Exception:                                     # noqa: BLE001
+            return None
+
+    # ---- Rechnen ----------------------------------------------------------
     def provider(self):
         return self.det.provider()
+
+    def erkennen(self, frame_bgr, netz):
+        """EIN Bild, der Bestandsweg (Detektion + Embedding in einem Zug)."""
+        with self.lock:
+            self.einzel += 1
+            return self.det.erkennen(frame_bgr, netz)
+
+    def erkennen_viele(self, posten):
+        """MEHRERE Bilder in einem Zug -> Liste der faces, in Reihenfolge.
+
+        posten = [(frame_bgr, netz), …] — je Eintrag EIN Waechter-Bild.
+        Ohne Sammelbatch-Faehigkeit (Stub-Detektor, buffalo-Kopf) faellt das
+        auf den Bestandsweg zurueck, Bild fuer Bild: gleiches Ergebnis, nur
+        ohne die gemessene Ersparnis. Ein Fehler wird nach OBEN gereicht — der
+        Detektor-Tod-Pfad des Aufrufers ist dieselbe Fehlerklasse wie bisher."""
+        if not posten:
+            return []
+        if len(posten) == 1 or not self.sammelbatch_moeglich():
+            return [self.erkennen(f, n) for f, n in posten]
+        alle, crops_gesamt, karte = [], [], []
+        with self.lock:
+            # 1) DETEKTION je Bild, seriell — Batch ist hier unmoeglich
+            #    (ONNX-Batch fest 1) und die Messlage will die iGPU seriell.
+            for frame, netz in posten:
+                faces, crops = self.det.detektieren(frame, netz)
+                alle.append(faces)
+                karte.append(len(crops))
+                crops_gesamt.extend(crops)
+        # 2) EMBEDDING fuer ALLE Waechter in EINEM Zug (ausserhalb des
+        #    Detektions-Locks: in der MIXED-Verteilung rechnet der
+        #    Recognition-Kopf auf der NPU, also auf anderem Silizium als die
+        #    Detektion — es waere die falsche Serialisierung).
+        if crops_gesamt:
+            E = self._embeddings(crops_gesamt)
+            i = 0
+            for faces in alle:
+                for f in faces:
+                    f.embedding = E[i]
+                    i += 1
+        self.batches += 1
+        self.batch_bilder += len(posten)
+        self.batch_crops += len(crops_gesamt)
+        return alle
+
+    def _embeddings(self, crops):
+        """Die Crops rechnen — Batch (iGPU/CUDA) oder parallele Einzel-Requests
+        (NPU). Die Wahl trifft die MESSLAGE, nicht der Zufall: auf der NPU
+        bringt ein Batch nichts, 2-4 gleichzeitige Requests dagegen 1,9x."""
+        if self.parallel > 1 and len(crops) > 1:
+            import concurrent.futures as _cf
+            if self._pool is None:
+                self._pool = _cf.ThreadPoolExecutor(
+                    max_workers=self.parallel, thread_name_prefix="live-rec")
+            teile = list(self._pool.map(lambda c: self.det.embeddings([c])[0],
+                                        crops))
+            return np.asarray(teile, np.float32)
+        return self.det.embeddings(crops)
+
+    def schliessen(self):
+        if self._pool is not None:
+            try:
+                self._pool.shutdown(wait=False)
+            except Exception:
+                pass
+            self._pool = None
+
+    def status(self):
+        return {"sammelbatch": self.sammelbatch_moeglich(),
+                "rec_geraet": self.rec_geraet(),
+                "parallel": self.parallel,
+                "sammel_ms": self.sammel_ms,
+                "batches": self.batches,
+                "batch_bilder": self.batch_bilder,
+                "batch_crops": self.batch_crops,
+                "einzel": self.einzel,
+                "sessions": self.sessions()}
 
 
 class Engine:
@@ -3082,7 +3941,7 @@ class Engine:
         self.watchdog_s = float(watchdog_s)
         self.neubau_warte_s = float(neubau_warte_s)
         self.scheduler = scheduler or Scheduler(jetzt=jetzt)
-        self.vermessung = vermessung or Selbstvermessung()
+        self.vermessung = vermessung or Selbstvermessung(hart_max=max_slots_lesen(cfg, log))
         self.defaults, self.guards = guards_lesen(cfg, log)
         self.kacheln = {}
         self.verweigert = {}          # name -> grund (Slot-/Riegel-Verweigerung)
@@ -3100,6 +3959,9 @@ class Engine:
         self._melde_lock = threading.Lock()
         self._melde_threads = []      # Melde-/Stoerungs-Threads (M5: stop() joint sie)
         self._mess_start_mono = None  # offenes Ein-Stream-RSS-Messfenster
+        self.fr_queue = None          # Frigate-Manual-Events (31.08.), erst in
+        #                               start() gebaut und nur, wenn ein Waechter
+        #                               den Schalter traegt
         # --- Phase 2: Store-Reload + Auftrags-Strecke (Quelltest/Last-Messung)
         self.config_quelle = config_quelle    # callable -> frische cfg (livewached)
         self.store_pfad = store_pfad          # Config-Store-Datei (Mtime-Wache)
@@ -3122,6 +3984,41 @@ class Engine:
         # Thread, Mess-Thread, Quelltest) laeuft unter diesem Lock; das ist
         # auch die einzige Absicherung, die einen Not-Aus ueberlebt.
         self._det_lock = threading.Lock()
+        # DER Inferenz-Kern (Welle 1, Etappe B): EIN Modell-Kontext, an den
+        # sich ALLE Waechter anschliessen. Er haelt das Lock von oben — es gibt
+        # weiterhin genau eine Serialisierung, nur traegt sie jetzt einen Namen
+        # und ist ablesbar (kern.status()).
+        self.kern = Inferenzkern(self.detektor, self._det_lock, log=self.log,
+                                 sammel_ms=self._sammel_ms(),
+                                 parallel=self._rec_parallel(),
+                                 jetzt=jetzt)
+
+    def _sammel_ms(self):
+        """Wartezeit, um den Recognition-Sammelbatch zu fuellen (Config
+        live_sammel_ms, Vorgabe SAMMEL_MS_VORGABE = 0 = nicht warten)."""
+        try:
+            return max(0.0, min(1000.0, float(self.cfg.get("live_sammel_ms")
+                                              or SAMMEL_MS_VORGABE)))
+        except (TypeError, ValueError):
+            return SAMMEL_MS_VORGABE
+
+    def _rec_parallel(self):
+        """Gleichzeitige Recognition-Requests. Die Zahl folgt der MESSLAGE des
+        Geraets, nicht einem Wunsch: NPU = REC_PARALLEL_NPU (gemessen 1,9x mit
+        2-4 Requests), alles andere = 1 (dort traegt der Batch). Config
+        live_rec_parallel ueberschreibt — fuer Messungen auf fremder Hardware."""
+        w = self.cfg.get("live_rec_parallel")
+        if w not in (None, ""):
+            try:
+                return max(1, min(8, int(w)))
+            except (TypeError, ValueError):
+                self.log(f"live: live_rec_parallel={w!r} ungueltig — Vorgabe gilt")
+        try:
+            if str(self.detektor.rec_geraet()).upper() == "NPU":
+                return REC_PARALLEL_NPU
+        except Exception:                                     # noqa: BLE001
+            pass
+        return 1
 
     # ---------------------------------------------------------------- Start/Stop
     def start(self):
@@ -3157,6 +4054,19 @@ class Engine:
         if len(self.kacheln) == 1:
             self.vermessung.stream_messung_start(0)
             self._mess_start_mono = self.jetzt()
+        # Frigate-Manual-Events (31.08.): der Hintergrund-Schreiber laeuft NUR,
+        # wenn ihn wenigstens ein Waechter braucht — Schalter-Prinzip
+        # (Registrieren nach Schaltern: kein Apparat fuer einen ausgeschalteten
+        # Weg). Er startet auch dann, wenn read-only gerade an ist: der Nutzer
+        # kann den Riegel im Betrieb umlegen, und der Schreiber prueft ihn je
+        # Auftrag.
+        if any(g.get("frigate_events") for g in self.guards.values()
+               if g.get("enabled")):
+            from core import frigateevents as _fev
+            self.fr_queue = _fev.Warteschlange(self.cfg, self.log).start()
+            self.log("live: manual Frigate events enabled for at least one "
+                     "watcher — writes go through a background queue (the "
+                     "watchers never wait for Frigate)")
         for ziel, nm in ((self._detektor_lauf, "live-detektor"),
                          (self._status_lauf, "live-status")):
             t = threading.Thread(target=ziel, name=nm, daemon=True)
@@ -3209,6 +4119,16 @@ class Engine:
                 t.join(timeout=10)
             except RuntimeError:
                 pass
+        self.kern.schliessen()          # Welle 1, Etappe B: der Rec-Threadpool
+        if self.fr_queue is not None:
+            # Offene Manual-Events noch schliessen (sonst laufen sie in Frigate
+            # weiter, bis Frigate selbst aufraeumt) — und dann den Schreiber
+            # beenden. KURZE Frist: ein haengendes Frigate darf das
+            # Herunterfahren nicht blockieren, das ist derselbe Grundsatz wie
+            # im Betrieb.
+            for k in list(self.kacheln.values()):
+                self._frigate_auftritt_ende(k)
+            self.fr_queue.stop()
         try:
             self._status_schreiben(self.jetzt())
         except Exception:
@@ -3522,6 +4442,58 @@ class Engine:
             if k.stop_ev.is_set():
                 return True
 
+    @staticmethod
+    def ruhe_takt(guard):
+        """Kontrollblick-Abstand bei Ruhe -> Sekunden (Welle 1, Etappe A).
+        Nicht gesetzt heisst 'wie das Auftritts-Ende dieser Kamera'
+        (ende_ohne_gesicht_s) — kein zweiter Zahlen-Default, dieselbe Regel wie
+        bei frigate_abstand. Als eigene Funktion, damit die Konfigseite exakt
+        die Auslegung anzeigt, die die Engine rechnet (K3: eine Quelle)."""
+        w = guard.get("ruhe_takt_s")
+        if w is None:
+            w = guard.get("ende_ohne_gesicht_s", ENDE_OHNE_GESICHT_S)
+        return float(w or 0)
+
+    def _bewegung_gate(self, k, yuv, mono):
+        """Darf dieses Raster-Bild an den Detektor? -> bool (Welle 1, Etappe A).
+
+        Aufgerufen NUR im Ruhezustand (kein Track, kein Auftritt) — der
+        Aufrufer haelt diese Bedingung, hier wird sie nicht noch einmal
+        geraten. Rueckgabe True heisst 'einreihen', False heisst 'gespart'.
+
+        Die Y-Ebene kommt aus dem yuv420p-Puffer OHNE Kopie: die ersten
+        2/3 der Zeilen sind Y (bilder_yuv), der Rest ist Chroma. Ein
+        BGR-Frame (Stub-Fabriken im Harnisch liefern welche) wird als
+        'kann ich nicht messen' behandelt und passiert — der Vorfilter darf
+        nie sieben, was er nicht beurteilt hat."""
+        if not k.cfg.get("bewegung_gate", True):
+            return True
+        # Die zwei Eich-Werte JE KAMERA (User-Auflage 31.08.: eine Anlage ist
+        # nie repraesentativ). Sie werden hier gesetzt statt beim Kachel-Bau,
+        # weil der Store-Reload den Guard im Betrieb austauscht (k.cfg = g) —
+        # eine im Konstruktor eingefrorene Zahl waere danach eine Luege. Das
+        # Hintergrundbild bleibt dabei gueltig; geaendert wird nur, ab wann ein
+        # Unterschied zaehlt.
+        k.beweg.schwelle = int(k.cfg.get("bewegung_schwelle") or BEWEG_SCHWELLE)
+        k.beweg.flaeche = int(k.cfg.get("bewegung_flaeche") or BEWEG_FLAECHE)
+        y = None
+        try:
+            if getattr(yuv, "ndim", 0) == 2:
+                y = yuv[:(yuv.shape[0] * 2) // 3]
+        except Exception:                                     # noqa: BLE001
+            y = None
+        if y is None or not getattr(y, "size", 0):
+            return True
+        if k.beweg.bewegt(y):
+            return True
+        takt = self.ruhe_takt(k.cfg)
+        if takt <= 0 or mono - k.beweg_kontrolle_mono >= takt:
+            k.beweg_kontrolle_mono = mono
+            k.beweg_kontrollen += 1
+            return True                # Kontrollblick: der regungslose Mensch
+        k.beweg_ruhig += 1
+        return False
+
     def _kachel_lauf(self, k):
         """Leser-Thread einer Kachel: Reconnect-Muster des Prototyps (5 s
         verdoppelnd bis 60 s, Reset erst nach >= 30 s getragener Verbindung),
@@ -3579,6 +4551,7 @@ class Engine:
                         with k.lock:
                             pruefen, enden = k.burst.takt(k.bilder, mono)
                             burst_aktiv = k.burst.aktiv
+                            auftritt_aktiv = k.auftritt is not None
                         for ende in (enden or []):
                             self._ende_loggen(k, ende)
                         if not pruefen:
@@ -3598,9 +4571,25 @@ class Engine:
                         # die ANDEREN Kacheln still — der Leser laeuft weiter
                         # (ffmpeg lebt, Modell bleibt geladen, Zaehler/Watchdog
                         # bleiben ehrlich), nur eingereiht wird nichts.
+                        # VOR dem Bewegungs-Gate (Welle 1): die Pause ist ein
+                        # ausdruecklicher Halt-Befehl und muss ihn ehrlich
+                        # zaehlen — ein Gate davor verschluckte den Zaehler
+                        # (Harnisch-Fund F6 beim Bau der Etappe A).
                         if self._pause_ausser and k.name != self._pause_ausser:
                             k.pausiert += 1
                             continue
+                        # BEWEGUNGS-GATE (Welle 1, Etappe A): der billige
+                        # Vorfilter vor der teuren Detektion. Er greift NUR im
+                        # Ruhezustand — ein laufender Track oder ein laufender
+                        # Auftritt haelt IMMER den vollen Takt (mitten im
+                        # Auftritt zu drosseln waere genau der Moment, in dem
+                        # das Gesicht kommt). Gemessen wird er am Raster-Takt,
+                        # nicht je Bild: dieselbe Kadenz, in der ohnehin
+                        # entschieden wird, und damit rund 3 Pruefungen/s je
+                        # Kachel statt 15.
+                        if not (burst_aktiv or auftritt_aktiv):
+                            if not self._bewegung_gate(k, yuv, mono):
+                                continue
                         # Lens-A M2: hier wird EINGEREIHT, nicht geprueft —
                         # geprueft zaehlt erst die echte Detektion (latest wins
                         # kann Eingereihtes noch ersetzen, gezaehlt im Status).
@@ -3792,8 +4781,7 @@ class Engine:
         Test-Verbindung wird im Auftrag registriert, damit der Not-Aus eine
         haengende Verbindung von aussen beenden kann (B1)."""
         self._auftrag_phase("messen")
-        det = (_DetektorMitLock(self.detektor, self._det_lock)
-               if self.detektor is not None else None)
+        det = self.kern if self.detektor is not None else None
         reg = None
         if a is not None:
             def reg(toeten):
@@ -3897,8 +4885,9 @@ class Engine:
                 frame = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_I420)
                 try:
                     if self.detektor:
-                        with self._det_lock:              # M1: nie 2 erkennen()
-                            self.detektor.erkennen(frame, netz)
+                        # M1 ueber den EINEN Kern: er haelt dasselbe Lock, und
+                        # die Messung sieht damit genau den Weg des Betriebs.
+                        self.kern.erkennen(frame, netz)
                 except Exception as e:
                     return {"ok": False, "fehler": f"detector: "
                                                    f"{type(e).__name__}: {str(e)[:80]}"}
@@ -3986,27 +4975,36 @@ class Engine:
             z = self.scheduler.naechste(timeout=0.5)
             if z is None:
                 continue
-            name, burst, (yuv, mono), _einreih = z
-            k = self.kacheln.get(name)
-            if k is None:
-                continue
             t0 = self.jetzt()
-            try:
-                frame = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_I420)
-            except Exception as e:
-                self._kachel_fehler(k, "frame", f"Frame-Konvertierung: "
-                                                f"{type(e).__name__}: {str(e)[:120]}")
+            # SAMMELN (Welle 1, Etappe B): alles, was ohnehin schon wartet,
+            # kommt in EINEN Zug. Die Konvertierung bleibt je Bild und ihr
+            # Fehler bleibt eine KACHEL-Stoerung (B4) — ein kaputtes Bild darf
+            # nie den Zug der anderen Waechter kosten.
+            arbeit = []
+            for name, burst, (yuv, mono), _einreih in self._sammeln(z):
+                k = self.kacheln.get(name)
+                if k is None:
+                    continue
+                try:
+                    frame = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_I420)
+                except Exception as e:
+                    self._kachel_fehler(k, "frame", f"Frame-Konvertierung: "
+                                                    f"{type(e).__name__}: {str(e)[:120]}")
+                    continue
+                arbeit.append((k, frame, yuv, mono, burst))
+            if not arbeit:
                 continue
             try:
-                # M1: erkennen() NUR unter dem Detektor-Lock — der Auftrags-
-                # Thread (Messung/Quelltest) nimmt dasselbe Lock; zwei Threads
-                # auf einer Session sind damit by construction unmoeglich.
+                # M1: die Inferenz laeuft NUR im Kern und damit nur unter dem
+                # EINEN Detektor-Lock — der Auftrags-Thread (Messung/Quelltest)
+                # nimmt dasselbe Lock ueber denselben Kern; zwei Threads auf
+                # einer Session sind by construction unmoeglich.
                 if self.detektor:
-                    with self._det_lock:
-                        faces = self.detektor.erkennen(frame, k.netz)
+                    alle = self.kern.erkennen_viele(
+                        [(f, k.netz) for k, f, _y, _m, _b in arbeit])
                 else:
-                    faces = []
-                det_dauer = self.jetzt() - t0
+                    alle = [[] for _ in arbeit]
+                det_dauer = (self.jetzt() - t0) / max(1, len(arbeit))
             except Exception as e:
                 import traceback
                 self.log(f"!! live detector failure: {type(e).__name__}: {e}")
@@ -4019,6 +5017,9 @@ class Engine:
                         return
                     try:
                         self.detektor = self.detektor_fabrik()
+                        self.kern.det = self.detektor      # der Kern folgt dem
+                        #                                    Neubau (sonst rechnete
+                        #                                    er weiter auf der Leiche)
                         self.log(f"live detector rebuilt (attempt {neubauten})")
                         continue
                     except Exception as e2:
@@ -4034,17 +5035,21 @@ class Engine:
                     return
                 continue
             neubauten = 0
-            self.vermessung.det_messung(det_dauer * 1000.0)
-            k.geprueft += 1                      # Lens-A M2: WIRKLICH detektiert
             try:
-                self._befund(k, frame, faces or [], mono, burst, yuv=yuv)
-                self._vorschau_schreiben(k, frame, mono)
-            except Exception as e:
-                # B4: IO-/Verarbeitungs-Fehler sind KACHEL-Stoerungen — nie
-                # Engine-Ende, nie Modell-Neubau, nie still.
-                k.verarbeitungs_fehler += 1
-                self._kachel_fehler(k, "verarbeitung",
-                                    f"{type(e).__name__}: {str(e)[:120]}")
+                for (k, frame, yuv, mono, burst), faces in zip(arbeit, alle):
+                    self.vermessung.det_messung(det_dauer * 1000.0)
+                    k.geprueft += 1              # Lens-A M2: WIRKLICH detektiert
+                    try:
+                        self._befund(k, frame, faces or [], mono, burst, yuv=yuv)
+                        self._vorschau_schreiben(k, frame, mono)
+                    except Exception as e:
+                        # B4: IO-/Verarbeitungs-Fehler sind KACHEL-Stoerungen —
+                        # nie Engine-Ende, nie Modell-Neubau, nie still. JE
+                        # Kachel gefangen: ein Posten des Sammelbatches darf
+                        # die anderen nie mitreissen.
+                        k.verarbeitungs_fehler += 1
+                        self._kachel_fehler(k, "verarbeitung",
+                                            f"{type(e).__name__}: {str(e)[:120]}")
             finally:
                 stufe = self.scheduler.arbeit_melden(self.jetzt() - t0, self.jetzt())
                 if stufe is not None:
@@ -4053,12 +5058,51 @@ class Engine:
                              f"utilization {self.scheduler.auslastung():.2f}) — "
                              f"bursts stay at full rate")
 
+    def _sammeln(self, erstes):
+        """Wartende Scheduler-Plaetze zu EINEM Zug buendeln -> Liste (Welle 1,
+        Etappe B).
+
+        Der DECKEL ist die Zahl der laufenden Waechter — mehr kann der
+        Scheduler gar nicht halten (ein Platz je Kachel, latest wins). Kein
+        zweites Literal.
+
+        Die WARTEZEIT ist per Vorgabe null: genommen wird nur, was ohnehin
+        schon in der Queue liegt. Das ist das DeepStream-Prinzip
+        (batched-push-timeout deckelt, wie lange ein Sammler auf Nachschub
+        wartet) mit der Vorgabe 'gar nicht' — bei einem einzelnen Waechter
+        gaebe es nichts zu sammeln und jede Wartezeit waere reine Latenz vor
+        der Erkennung; unter Last fuellt sich die Queue von selbst, und genau
+        dort greift der Batch. live_sammel_ms hebt die Frist fuer Messungen.
+
+        Ohne Sammelbatch-Faehigkeit bleibt es beim EINEN Posten (kein
+        Verhaltens-Unterschied zum Bestand)."""
+        posten = [erstes]
+        if not self.kern.sammelbatch_moeglich():
+            return posten
+        deckel = max(1, len(self.kacheln))
+        frist = self.jetzt() + self.kern.sammel_ms / 1000.0
+        while len(posten) < deckel and not self.stop_ev.is_set():
+            z = self.scheduler.naechste(timeout=0)
+            if z is not None:
+                posten.append(z)
+                continue
+            if self.kern.sammel_ms <= 0 or self.jetzt() >= frist:
+                break
+            if self.stop_ev.wait(0.002):
+                break
+        return posten
+
     def _befund(self, k, frame, faces, mono, burst, yuv=None):
         """Detektions-Befund einer Kachel verarbeiten (Filter, Burstwache,
         Trigger). Laeuft im Detektor-Thread; Burstwache/Episode unter k.lock
         (der Leser-Thread ruft takt() auf demselben Objekt)."""
-        echte = [f for f in faces
-                 if echtes_gesicht(f, frame, self.defaults["min_score"])]
+        # det-Grenze JE KAMERA (Live-Umbau 31.08.): guard.det_min gewinnt, sonst
+        # die eine Default-Kette (live.defaults.min_score -> DET_MIN_LIVE 0,40).
+        # Kein zweiter Default hier — der Wert kommt aus genau einer Kette.
+        _det_min = k.cfg.get("det_min")
+        if _det_min is None:
+            _det_min = self.defaults["min_score"]
+        echte = [f for f in faces if echtes_gesicht(f, frame, _det_min)]
         if not burst:
             with k.lock:
                 # Rueckblick als YUV statt BGR (Lens-B K8: halbiert den
@@ -4087,6 +5131,11 @@ class Engine:
             k.auftritt["funde"] += len(echte)
             ereignisse = k.burst.fund_alle(mono, [
                 (bx, (frame, g, float(g.det_score))) for bx, g in je_box.items()])
+        # Kalibrier-Vorrat: bester Fund DIESES Auftritts merken (nicht schreiben
+        # — das passiert einmal am Auftritts-Ende, s. _status_runde). Hier faellt
+        # nur ein kleiner Crop-Kopie- und Warp-Aufwand an, und der auch nur, wenn
+        # dieser Fund den bisher besten schlaegt.
+        self._kalib_kandidat(k, frame, echte[0])
         for ereignis, info in ereignisse:
             if ereignis == "ende":
                 self._ende_loggen(k, dict(info, grund="verdraengt"))
@@ -4101,9 +5150,35 @@ class Engine:
         # Stufe 2 (.193, User 13.08.): kontinuierliches Namens-Voting ueber
         # den GANZEN Auftritt — nicht nur die 4 Trigger-Ketten-Bilder.
         if self.refs and self.win_thresh is not None:
-            self._namens_stimmen(k, frame, je_box)
+            self._namens_stimmen(k, frame, je_box, mono)
 
-    def _namens_stimmen(self, k, frame, je_box):
+    @staticmethod
+    def erkannt_regel(guard):
+        """Die Erkannt-Regel EINER Kamera -> (n, t_s). N bestaetigte Bilder
+        binnen T Sekunden heissen 'erkannt'. Defaults sind die Werte, die bis
+        zum 31.08. hart im Code standen (NAME_STIMMEN=2, kein Zeitfenster) —
+        die Regel ist seitdem einstellbar, das VERHALTEN bleibt ohne Eingriff
+        unveraendert. Als eigene Funktion, damit die Seite dieselbe Auslegung
+        anzeigt, die die Engine rechnet (K3: eine Quelle)."""
+        n = guard.get("erkannt_n")
+        t = guard.get("erkannt_t_s")
+        return (int(n) if n else NAME_STIMMEN,
+                float(t) if t else float(ERKANNT_T_S))
+
+    @staticmethod
+    def stimmen_zaehlen(zaehler, mono, fenster_s):
+        """Wie viele Stimmen zaehlen JETZT? -> int. fenster_s = 0 heisst 'der
+        ganze Auftritt' (das Verhalten bis 31.08.); sonst zaehlen nur Stimmen
+        aus den letzten fenster_s Sekunden, und die aelteren werden dabei
+        weggeworfen (der Zaehler darf nicht unbegrenzt wachsen)."""
+        if not fenster_s:
+            return int(zaehler[0])
+        stempel = zaehler[3]
+        while stempel and mono - stempel[0] > fenster_s:
+            stempel.popleft()
+        return len(stempel)
+
+    def _namens_stimmen(self, k, frame, je_box, mono):
         """KONTINUIERLICHES Namens-Voting je Auftritt (.193, User: 'PersonA,
         unbekannt, PersonA, PersonA -> feuern'): jedes echte Gesicht traegt sein
         FERTIGES Embedding (der Detektionslauf rechnet Recognition mit, kein
@@ -4136,14 +5211,18 @@ class Engine:
                 return
             st = a.setdefault("stimmen", {})
             for p, (s, box) in treffer.items():
-                zaehler = st.setdefault(p, [0, 0.0, None])
+                # [n, bester_kosinus, box, zeitstempel] — die Stempel traegt
+                # das Zeitfenster der Erkannt-Regel (erkannt_t_s); ohne Fenster
+                # bleiben sie ungenutzt liegen und kosten nichts.
+                zaehler = st.setdefault(p, [0, 0.0, None, collections.deque()])
                 zaehler[0] += 1
+                zaehler[3].append(mono)
                 if s >= zaehler[1]:
                     zaehler[1] = s
                     zaehler[2] = box          # Box des besten Fundes (Beweisbild)
-        self._namens_pending_feuern(k, frame)
+        self._namens_pending_feuern(k, frame, mono)
 
-    def _namens_pending_feuern(self, k, frame):
+    def _namens_pending_feuern(self, k, frame, mono):
         """Namens-Meldungen, deren Stimmenzahl reicht, feuern — aber NUR, wenn
         der Auftritt schon einen pose-bestaetigten Trigger hat (.313: die
         Namens-Stufe lief bis dahin OHNE die Menschen-Pruefung der Stufe 1;
@@ -4159,10 +5238,15 @@ class Engine:
                 return
             st = a.get("stimmen") or {}
             genannt = a.setdefault("genannt", set())
+            # Erkannt-Regel JE KAMERA (Live-Umbau 31.08.): N Bestaetigungen
+            # binnen T s. Ohne Eingriff des Nutzers ist das Bit fuer Bit die
+            # alte Regel (2 Stimmen, ganzer Auftritt).
+            n_noetig, fenster = self.erkannt_regel(k.cfg)
             for p, zaehler in st.items():
-                if zaehler[0] >= NAME_STIMMEN and p not in genannt:
+                n_jetzt = self.stimmen_zaehlen(zaehler, mono, fenster)
+                if n_jetzt >= n_noetig and p not in genannt:
                     genannt.add(p)
-                    feuern.append((p, zaehler[0], zaehler[1], zaehler[2]))
+                    feuern.append((p, n_jetzt, zaehler[1], zaehler[2]))
         for p, n, cos, box in feuern:
             self._namens_meldung(k, p, n, cos, frame, box=box)
 
@@ -4200,6 +5284,13 @@ class Engine:
         _sprache.aktivieren()         # Eintrittspunkt (c), s. melden.sprache_aktivieren()
         self._klog(k, f"NAME [{person}]: {stimmen} Funde >= Schwelle, bester "
                       f"Kosinus {cos:.2f} — Namens-Meldung (preliminary)")
+        # Frigate-Manual-Event (31.08.): eigener Weg mit eigenem Schalter und
+        # eigenem Deckel — bewusst VOR den Melde-Kanaelen und unabhaengig von
+        # ihnen. Eine Installation ohne Pushover/Telegram soll trotzdem ihre
+        # Frigate-Zeitleiste bekommen, und die Push-Karenz ist eine Antwort auf
+        # "wie oft will ich ein Handy-Signal", nicht auf "was gehoert ins
+        # Frigate-Archiv". Der Aufruf reiht nur ein und kehrt sofort zurueck.
+        self._frigate_melden(k, person, cos, self.jetzt())
         # .245 (User-Go 17.08.): OHNE Meldekanal kein frueher Abbruch mehr —
         # das Ergebnis wird trotzdem journalt (kanal 'none', Anzeige ja,
         # Versand nein); vorher sah eine kanal-lose Installation NIE, was
@@ -4322,7 +5413,16 @@ class Engine:
         # und der Alarm zu diesem Trigger ging verloren. Lokal gefangen:
         # ohne Ablage geht die Meldung trotzdem raus, nur ohne Beweisbild.
         ablage = self._ablage_sichern(k)
-        bestes = None
+        bestes, beste_guete = None, None
+        # Guete-WAHL des Melde-/Anzeigebilds (Live-Umbau 31.08.): sie greift nur,
+        # wenn diese Kamera kalibriert ist (eine Latte gesetzt). Zwei Gruende:
+        # (a) vorher weiss niemand, was die Skala AUF DIESER Kamera bedeutet
+        # (Messung 31.08.: Median fiqa_t 0,181 gegen 0,073), (b) die Messung
+        # kostet ~17 ms je Bild im Detektor-Thread — ungefragt wollen wir die
+        # nicht ausgeben. Ohne Kalibrierung bleibt es beim alten Verhalten
+        # (letztes geschriebenes Bild der Kette).
+        _waehlen = (k.cfg.get("guete_e_min") is not None
+                    or k.cfg.get("guete_t_min") is not None)
         for nr, (_t, _bx, nutzlast) in enumerate(info["kette"], 1):
             if ablage is None:
                 break
@@ -4331,8 +5431,21 @@ class Engine:
             pfad = self._bild_schreiben(
                 k, os.path.join(ablage, f"{praefix}{stempel}_T{t_nr}_{nr}.jpg"),
                 bild_mit_box(nutzlast[0], _bx))     # .313: Fundstelle markiert
-            if pfad:
+            if not pfad:
+                continue
+            if not _waehlen:
                 bestes = pfad
+                continue
+            g_face = nutzlast[1] if len(nutzlast) > 1 else None
+            _e, _t2 = self._guete_von(k, nutzlast[0], g_face)
+            # Rang: erst Erkennbarkeit, dann Empfinden (die Erkennbarkeit ist
+            # das Mass, das Verdeckung bestraft — genau das, was ein
+            # Beweisbild unbrauchbar macht). Nicht messbar = Rang 0, dann
+            # gewinnt weiter das letzte Bild.
+            rang = ((_t2 if _t2 is not None else 0.0),
+                    (_e if _e is not None else 0.0))
+            if beste_guete is None or rang >= beste_guete:
+                beste_guete, bestes = rang, pfad
         if not p_ok:
             with k.lock:
                 k.burst.karenz_aufheben(info["track"])
@@ -4349,7 +5462,7 @@ class Engine:
                 k.auftritt["mensch_bestaetigt"] = True
         _kf = next((nl[0] for _t, _bx, nl in reversed(info["kette"]) if nl and nl[0] is not None), None)
         if _kf is not None:
-            self._namens_pending_feuern(k, _kf)
+            self._namens_pending_feuern(k, _kf, mono)
         u_text, u_person = None, None
         if self.refs and self.win_thresh is not None:
             try:
@@ -4407,6 +5520,154 @@ class Engine:
                               os.path.join(self.live_dir, k.name,
                                            f"{stempel}_T{t_nr}.mp4"))
         k.gemeldet += 1
+
+    def frigate_abstand(self, guard):
+        """Frequenz-Deckel je Kamera+Person -> Sekunden. Nicht gesetzt heisst
+        'wie die Melde-Karenz dieser Kamera' (wieder_scharf_s) — der Nutzer hat
+        diese Frage dort schon beantwortet, und ein zweiter Zahlen-Default waere
+        genau das verstreute Literal, das die qs_ebenen-Regel verbietet."""
+        w = guard.get("frigate_abstand_s")
+        if w is None:
+            w = guard.get("wieder_scharf_s", WIEDER_SCHARF_S)
+        return float(w or 0)
+
+    def _frigate_melden(self, k, person, cos, mono):
+        """'Erkannt' -> manuelles Frigate-Event (asynchron, nie wartend).
+
+        Drei Riegel, in dieser Reihenfolge:
+         1. der SCHALTER dieser Kamera (frigate_events, Vorgabe AUS),
+         2. der Frequenz-Deckel je Kamera UND Person — ohne ihn erzeugte
+            derselbe Mensch bei jedem Auftritt ein neues Frigate-Event,
+         3. ein schon OFFENES Event derselben Person: solange der Auftritt
+            laeuft, gehoert der Name zu diesem einen Event.
+        Der Versand selbst liegt in core/frigateevents (eigener Thread)."""
+        if not k.cfg.get("frigate_events") or self.fr_queue is None:
+            return
+        if person in k.fr_offen:
+            return
+        abstand = self.frigate_abstand(k.cfg)
+        letzte = k.fr_letzte.get(person)
+        if abstand and letzte is not None and mono - letzte < abstand:
+            self._klog(k, f"Frigate-Event [{person}] unterdrueckt "
+                          f"(Deckel {abstand:.0f} s, noch "
+                          f"{abstand - (mono - letzte):.0f} s)")
+            return
+        k.fr_letzte[person] = mono
+        # Quittung traegt die Event-Kennung nach — sie kommt aus dem
+        # Queue-Thread, deshalb unter dem Kachel-Lock eintragen.
+        def quittung(eid, _k=k, _p=person):
+            with _k.lock:
+                _k.fr_offen[_p] = eid
+        self.fr_queue.create(k.name, person, score=cos, quittung=quittung)
+        self._klog(k, f"Frigate-Event [{person}] eingereiht (manual event, "
+                      f"sub_label) — der Waechter wartet nicht auf die Antwort")
+
+    def _frigate_auftritt_ende(self, k):
+        """Offene Manual-Events dieser Kamera schliessen (PUT .../end) — der
+        Auftritt ist vorbei, das Event soll genau ihn abdecken."""
+        if self.fr_queue is None:
+            return
+        with k.lock:
+            offen, k.fr_offen = k.fr_offen, {}
+        for person, eid in offen.items():
+            self.fr_queue.end(eid)
+            self._klog(k, f"Frigate-Event [{person}] beendet ({eid})")
+
+    def _guete_von(self, k, frame, face):
+        """Die zwei Guete-Masse EINES Ketten-Bilds -> (empfinden, fiqa_t).
+        Duennes Band zwischen Engine und core/guete: Crop + der EINE 112er-Warp
+        (core.ernte.align112), damit die Zahlen dieselben sind wie im Lernlauf
+        und auf der Kalibrier-Seite. Fehler sind (None, None), nie ein
+        Meldungs-Ausfall."""
+        try:
+            crop = kalib_crop(frame, getattr(face, "bbox", None))
+            kps = getattr(face, "kps", None)
+            al = None
+            if kps is not None:
+                from core import ernte as _ernte
+                al = _ernte.align112(frame, kps)
+            return guete_messen(crop, al, log=lambda z: self._klog(k, z))
+        except Exception:                                     # noqa: BLE001
+            return None, None
+
+    def _kalib_deckel(self):
+        """Ring-Deckel je Kamera aus der Config (live_kalib_max, 0 = Vorrat
+        aus). Bewusst zur Laufzeit gelesen: der Nutzer soll den Vorrat
+        abschalten koennen, ohne die Engine neu zu starten (die Config wird
+        ohnehin auf Store-Mtime nachgezogen)."""
+        try:
+            return max(0, int(self.cfg.get("live_kalib_max") or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def _kalib_kandidat(self, k, frame, face):
+        """Besten Fund des laufenden Auftritts fuer den Vorrat merken.
+
+        Auswahl nach det_score — bewusst NICHT nach Guete: die Guete zu messen
+        kostet ~17 ms je Bild (core/guete-Kopf), das je Frame zu tun waere ein
+        Vielfaches der Detektion selbst. Gemessen wird deshalb genau EINMAL,
+        naemlich am Auftritts-Ende auf dem gemerkten Kandidaten — im
+        Status-Thread, nicht im Detektor-Thread.
+        Das Aufnahme-Kriterium ist MILD und rein baulich (Mindest-Kantenlaenge
+        in kalib_crop): der Vorrat soll zeigen, was die Kamera WIRKLICH liefert,
+        auch das Mittelmaessige — sonst kalibriert der Nutzer an einer
+        geschoenten Auswahl."""
+        if not self._kalib_deckel():
+            return
+        try:
+            det = float(face.det_score)
+            with k.lock:
+                if k.kalib_kand is not None and det <= k.kalib_kand["det"]:
+                    return
+            # Objekt-Signatur-Wache (User 31.08., Baum-Fund im Vorrat): MILD
+            # bleibt mild, aber eine SCRFD-Fehldetektion (Gras/Laub/Baum) ist
+            # kein "Mittelmass", sondern gar kein Gesicht — dieselbe
+            # Bestands-Wache wie im Trigger-Pfad (echtes_gesicht) und im
+            # Anker-Sieb, gerechnet wie dort am engen bbox-Ausschnitt.
+            from face_audit import ist_fehldetektion as _ist_fd
+            H = int(frame.shape[0])
+            x1, y1, x2, y2 = [int(v) for v in face.bbox]
+            pose = getattr(face, "pose", None)
+            winkel = ((float(pose[0]) ** 2 + float(pose[1]) ** 2) ** 0.5
+                      if pose is not None else 90.0)
+            front = float(np.exp(-winkel / 40.0))
+            aus = frame[max(0, y1):max(1, y2), max(0, x1):max(1, x2)]
+            sch = (float(cv2.Laplacian(cv2.cvtColor(aus, cv2.COLOR_BGR2GRAY),
+                                       cv2.CV_64F).var()) if aus.size else 0.0)
+            if _ist_fd(front, sch, det):
+                return
+            crop = kalib_crop(frame, face.bbox)
+            if crop is None:
+                return
+            al = None
+            kps = getattr(face, "kps", None)
+            if kps is not None:
+                from core import ernte as _ernte      # DER eine 112er-Warp
+                al = _ernte.align112(frame, kps)
+            with k.lock:
+                if k.kalib_kand is None or det > k.kalib_kand["det"]:
+                    k.kalib_kand = {"crop": crop, "al": al, "det": det}
+        except Exception as e:                                # noqa: BLE001
+            self._fehler_log(("kalib", k.name),
+                             f"live {k.name}: Kalibrier-Kandidat entfaellt "
+                             f"({type(e).__name__}: {e})")
+
+    def _kalib_ablegen(self, k, kand):
+        """Den Kandidaten EINES Auftritts in den Ring legen (Status-Thread).
+        Hier — und nur hier — laufen die zwei Guete-Modelle; ihr Ergebnis
+        steuert die Aufnahme (Latte der Kamera, guete_reicht) und steht spaeter
+        als Zahl unter jedem Bild der Kalibrier-Seite."""
+        deckel = self._kalib_deckel()
+        if not deckel or not kand:
+            return
+        e, t = guete_messen(kand.get("crop"), kand.get("al"),
+                            log=lambda z: self._klog(k, z))
+        if not guete_reicht(k.cfg, e, t):
+            return
+        if kalib_schreiben(self.cfg, k.name, kand["crop"],
+                           {"det": kand["det"], "e": e, "t": t},
+                           deckel=deckel, log=lambda z: self._klog(k, z)):
+            k.kalib_bilder += 1
 
     def _ablage_sichern(self, k):
         """Beweisbild-Ordner der Kachel anlegen -> Pfad oder None. K-1 (Sched-
@@ -4658,6 +5919,7 @@ class Engine:
             while k.fps_fenster and mono - k.fps_fenster[0][0] > FPS_FENSTER_S:
                 k.fps_fenster.popleft()
             # Auftritts-Ende (User-Zeit a, Anker letzter Fund).
+            kand, beendet = None, False
             with k.lock:
                 a = k.auftritt
                 if a and mono - a["letzter_fund_mono"] > k.cfg["ende_ohne_gesicht_s"]:
@@ -4665,6 +5927,13 @@ class Engine:
                                   f"({a['funde']} Funde, {a['trigger']} Trigger, "
                                   f"{mono - a['seit_mono']:.0f} s)")
                     k.auftritt = None
+                    kand, k.kalib_kand = k.kalib_kand, None
+                    beendet = True
+            if beendet:
+                # NACH dem Lock (die Guete-Messung ~17 ms und der Frigate-Zug
+                # duerfen den Leser-Thread nie warten lassen).
+                self._kalib_ablegen(k, kand)
+                self._frigate_auftritt_ende(k)
             # Stoerungs-Selbstmeldung (§11 Entscheid 2) + Entwarnung — Anker
             # ist LIEFERUNG, nicht Verbindungszustand (B2-Fix, stoerung_takt).
             ereignis = stoerung_takt(k, mono, self.watchdog_s)
@@ -4816,6 +6085,10 @@ class Engine:
              # Ueberschreiben im 2-s-Fenster.
              "kommando_ts": self._kommando_ts,
              "scheduler": self.scheduler.status(),
+             # Welle 1, Etappe B: der Kern muss ABLESBAR sein — wie viele
+             # Modell-Kontexte leben (Leitsatz "EINER je Dienst"), laeuft der
+             # Sammelbatch, und was hat er verrechnet.
+             "kern": self.kern.status(),
              "slots": slots,
              "verweigert": dict(self.verweigert),
              "kacheln": {}}
@@ -4857,10 +6130,30 @@ class Engine:
                 "watchdog_kills": k.watchdog_kills,
                 "gedrosselt": k.gedrosselt,
                 "pausiert": k.pausiert,
+                # Welle 1, Etappe A — die Wirkung des Bewegungs-Gates MUSS
+                # sichtbar sein (messbare Degradation, nie stille): wie viele
+                # Raster-Bilder die Ruhe gespart hat, wie viele Kontrollblicke
+                # trotzdem liefen und wie oft die Wache Bewegung sah.
+                "bewegung_gespart": k.beweg_ruhig,
+                "bewegung_kontrollen": k.beweg_kontrollen,
+                "bewegung_geprueft": k.beweg.gesehen,
+                "bewegung_bewegt": k.beweg.bewegt_n,
+                "bewegung_blitze": k.beweg.blitze,
+                "bewegung_gate": bool(k.cfg.get("bewegung_gate", True)),
+                "bewegung_schwelle": k.beweg.schwelle,
+                "bewegung_flaeche": k.beweg.flaeche,
                 "ueberlast_ersetzt": self.scheduler.ersetzt.get(k.name, 0),
                 "hw": k.hw, "steckbrief": k.steckbrief,
                 "kanaele": k.cfg["kanaele"],
+                # Live-Umbau 31.08.: was der Waechter SEIT DEM START in den
+                # Kalibrier-Vorrat gelegt hat. Der Stand des Rings kommt von
+                # der Platte (kalib_lesen) — diese Zahl beantwortet die andere
+                # Frage: sammelt er ueberhaupt gerade?
+                "kalib_bilder": k.kalib_bilder,
+                "frigate_offen": len(k.fr_offen),
             }
+        if self.fr_queue is not None:
+            d["frigate_events"] = self.fr_queue.status()
         _atomar_schreiben(self.status_pfad, d)
 
     def _verbrauch_zeile(self):

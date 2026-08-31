@@ -183,7 +183,8 @@ def gate_v_norm(norm, front_kps, s):
 def kandidat_zeile(eid, kamera, ts, t, bbox, det, front, sharp, kante, pose,
                    emb_vec, modell, m, s_flag, datei,
                    norm=None, front_kps=None, richtung=None, v=False, datei_v=None,
-                   struktur=None, quelle=None, luma=None):
+                   struktur=None, quelle=None, luma=None,
+                   fiqa_t=None, empf=None):
     """Eine Kandidaten-Zeile — die Rundungsregeln sind Teil des Vertrags (V0.5).
     det/front/sharp/pose kommen bereits GERUNDET herein (Gate == Zeile); die
     round()-Aufrufe hier sind idempotent und sichern den Vertrag am Rand ab.
@@ -196,6 +197,11 @@ def kandidat_zeile(eid, kamera, ts, t, bbox, det, front, sharp, kante, pose,
             "pose": [round(float(x), 1) for x in pose],
             "emb": [round(float(x), 5) for x in emb_vec], "modell": modell,
             "m": bool(m), "s": bool(s_flag), "datei": datei,
+            # Bildguete (.377, Kalibrier-Funktion): additiv am Ende, Alt-Leser
+            # bleiben gueltig. None = nicht gemessen (kein m-Crop, Modell fehlt
+            # im Alt-Image, oder Messfehler — Zaehler guete_fehler).
+            "fiqa_t": None if fiqa_t is None else round(float(fiqa_t), 4),
+            "empf": None if empf is None else round(float(empf), 4),
             "norm": None if norm is None else round(float(norm), 4),
             "front_kps": None if front_kps is None else round(float(front_kps), 4),
             "richtung": richtung, "v": bool(v), "datei_v": datei_v,
@@ -428,8 +434,74 @@ def zaehler_start():
     return dict(ZAEHLER_START)
 
 
+def align112(frame, kps):
+    """DER eine 112er-Warp des Hauses (insightface norm_crop) — Vorrats-Norm UND
+    Bildguete messen damit am SELBEN Ausschnitt (core/guete.py: 'Input: das
+    ALIGNED 112er-Crop, exakt das der Feature-Norm — kein zweites Alignment').
+
+    Seit .380 public und mit einem zweiten Verbraucher: der Unbekannt-Pool misst
+    seinen Zulauf mit denselben Massen wie der Lernlauf (anlernen._zulauf_messen).
+    Ein eigener Zuschnitt dort haette eine eigene Skala — die Regler der
+    Kalibrier-Seite bedeuteten im Pool dann etwas anderes als in der Flaeche.
+
+    LAZY importiert wie im ganzen Haus (anlernen.py, face_audit.py): der
+    Modul-Kopf von ernte_event muss ohne insightface laufen (Gate-Fund .306,
+    das Pruef-Python der QS-Stufen hat es nicht). Als EIN Griff statt zweier
+    Bindungen, weil die zwei Verbraucher an verschiedenen Gates haengen — die
+    Norm am Vorrats-Gate, die Guete an M; eine Bindung im Vorrats-Zweig war
+    genau der NameError-Befund vom 30.08."""
+    from insightface.utils import face_align
+    return face_align.norm_crop(frame, landmark=kps, image_size=112)
+
+
+def kalib_vorrat_speisen(lauf_dir, kamera, best, kalib, log=print):
+    """EIN Bild dieses Events in den Kalibrier-Vorrat SEINER Kamera legen.
+
+    WARUM HIER (User-Entscheid 31.08., Zentral-Umbau der Kalibrierung): der
+    Vorrat soll NICHT nur aus dem Live-Waechter kommen. Wer keine Live-Wache
+    betreibt, haette sonst eine Kalibrierseite ohne ein einziges Bild — der
+    Kaltstart, den der Entscheid ausdruecklich loesen soll. Die Ernte ist die
+    Stelle des Event-/Szenario-Wegs, an der Crops MIT Kamera-Zuordnung und mit
+    den beiden Guete-Massen bereits vorliegen; ein zweiter Messweg entsteht
+    dadurch nicht.
+
+    DROSSEL wie auf dem Live-Weg: EIN Bild je Event (das det-staerkste
+    M-Crop), nie je Frame. Ring, Deckel und Loeschweg sind unveraendert die
+    des Live-Vorrats (core.livewache.kalib_schreiben ist der EINE Schreibweg,
+    dort greift auch der Deckel).
+
+    Das Bild ist der gespeicherte M-Crop (enger Ausschnitt), waehrend der
+    Live-Weg mit Rand schneidet. Das ist bewusst so: die Guete-ZAHLEN der
+    Zeile gehoeren zu genau diesem Ausschnitt, und eine zweite Messung an
+    einem zweiten Zuschnitt haette eine andere Skala (dieselbe Auflage wie
+    beim Pool-Zulauf).
+
+    Ein Fehlschlag ist NIE ein Ernte-Fehler: der Vorrat ist Beiwerk, das Event
+    ist geerntet. -> True, wenn ein Bild abgelegt wurde."""
+    if not kalib or not best or not kamera:
+        return False
+    deckel = int((kalib or {}).get("deckel") or 0)
+    if not deckel:
+        return False                      # Vorrats-Sammlung aus (live_kalib_max 0)
+    try:
+        import cv2
+        from core import livewache as _lw   # lazy: der Modulkopf bleibt billig
+        bild = cv2.imread(os.path.join(lauf_dir, str(best["datei"])))
+        if bild is None:
+            return False
+        return bool(_lw.kalib_schreiben(
+            {"data_dir": kalib.get("data_dir")}, kamera, bild,
+            {"det": best.get("det"), "e": best.get("e"), "t": best.get("t")},
+            deckel=deckel, log=log))
+    except Exception as e:                                    # noqa: BLE001
+        log(f"ernte: Kalibrier-Vorrat nicht beschickt "
+            f"({type(e).__name__}: {e})")
+        return False
+
+
 def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
-                ist_fd=None, norm_mass=None, struktur_mass=None, quelle=None):
+                ist_fd=None, norm_mass=None, struktur_mass=None, quelle=None,
+                kalib=None):
     """Frontal-Ernte fuer EIN Event (1 Event je Job — Live-Vorrang, Leitprinzip 5).
 
     Schreibt die Kandidaten (alle L-Passierer) in kandidaten/<eid>.jsonl — die Datei
@@ -466,7 +538,13 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
     Verteiler aendert nur, WOHER die Frames kommen, nie WIE gerechnet wird).
     NICHT betroffen ist die KOERPER-Ernte (core/personlauf.fahren): sie laeuft in
     einem anderen Prozess ueber eine andere Event-Liste und behaelt nur ihren
-    Clip-Bezug ueber core.frames — eine Zusammenfuehrung schliesst §1 aus."""
+    Clip-Bezug ueber core.frames — eine Zusammenfuehrung schliesst §1 aus.
+
+    kalib={"data_dir","deckel"} (Zentral-Umbau 31.08.): speist den
+    Kalibrier-Vorrat DIESER Kamera mit EINEM Bild je Event
+    (kalib_vorrat_speisen). None = aus, dann laeuft die Ernte wie zuvor.
+    Der Wert kommt aus dem Job und NICHT aus dem eingefrorenen Manifest: der
+    Ring-Deckel ist eine laufende Config-Entscheidung, keine Lauf-Bedingung."""
     fehlt = schwellen_pruefen(schwellen)
     if fehlt:
         raise ValueError("ernte-schwellen unvollstaendig: " + ", ".join(fehlt))
@@ -497,10 +575,18 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
     elif not getattr(struktur_mass, "ok", False):
         struktur_aus = ("strukturmass: "
                         + (getattr(struktur_mass, "grund", "") or "not ok"))[:120]
-    if v_aktiv:
-        # LAZY erst hier (Gate-Fund .306: das Pruef-Python der QS-Stufen hat
-        # kein insightface — der Modul-Kopf von ernte_event muss ohne laufen).
-        from insightface.utils import face_align
+    # BILDGUETE (.377): der Griff steht AUSSERHALB des Vorrats-Zweigs, denn
+    # gemessen wird je BILDWUERDIGEM Kandidaten (unten), nicht je Vorratsbild.
+    # Als Bindung im v_aktiv-Zweig starb die Ernte mit NameError, sobald das
+    # Vorrats-Gate aus war (QS-Befund 30.08.) — und das ist kein Randfall: jedes
+    # Alt-Manifest ohne die vorrat_*-Keys, jede NormMass mit ok=False (etwa ein
+    # anderes Erkennungs-Modell als adaface) und jeder Container ohne Budget fuer
+    # den NormMass-Bau laufen so. Das Modul misst mit onnxruntime/numpy und
+    # braucht kein insightface; den 112er-Warp holt es sich ueber align112 (public, seit .380 auch vom Pool-Zulauf genutzt).
+    # EINMAL gefragt statt je Kandidat: die Antwort gilt fuer den ganzen Lauf
+    # und traegt unten die Aussetzungs-Meldung.
+    from core import guete as _guete
+    guete_da = _guete.verfuegbar()
     v_aus = None
     if vorrat_schwellen_da(schwellen) and not v_aktiv:
         v_aus = ("normmass: " + getattr(norm_mass, "grund", "not provided"))[:120]
@@ -524,6 +610,9 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
     modell = getattr(emb, "modell", "?")
     clip = {"fps": None}    # aus LaufInfo — frueher direkt frames.fps
     ausfall = []            # s. _laut()
+    # Bestes M-Crop des Events fuer den Kalibrier-Vorrat (Zentral-Umbau 31.08.).
+    # Topf statt Variable, weil der Abnehmer `ernten` eine Closure ist.
+    kalib_topf = {"best": None}
     with open(pfad, "w", encoding="utf-8") as out:
 
         def _laut(f):
@@ -667,8 +756,7 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
                     richtung = richtung_aus_kps(kps, front_kps,
                                                 schwellen["vorrat_front_profil"])
                     if gate_v_vor(fd, det, kante, sharp, schwellen):
-                        aligned = face_align.norm_crop(frame, landmark=kps,
-                                                       image_size=112)
+                        aligned = align112(frame, kps)
                         norm = round(float(norm_mass.feature_norm([aligned])[0]), 4)
                         v_flag = gate_v_norm(norm, front_kps, schwellen)
                     if v_flag:
@@ -689,12 +777,44 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
                         if not (rand_crop.size and cv2.imwrite(
                                 os.path.join(lauf_dir, datei_v), rand_crop.copy())):
                             raise OSError(f"vorrat-crop nicht schreibbar: {datei_v}")
+                # ---- Bildguete (.377): beide Masse NUR fuer Bildwuerdige (m) —
+                # dieselbe Sparsamkeit wie der Crop selbst. fiqa_t misst am
+                # aligned 112er (aus dem Vorrats-Zweig, sonst einmal frisch —
+                # norm_crop ist ein billiger Warp), empfinden am gespeicherten
+                # m-Crop (derselbe Bildtyp wie die Messtag-Eichung 30.08.).
+                # Ein Messfehler reisst nie den Lauf: Zeile traegt dann None
+                # und der Zaehler sagt es.
+                fiqa_t_w = empf_w = None
+                if m and kps is not None and guete_da:
+                    try:
+                        _al = (aligned if norm is not None
+                               else align112(frame, kps))
+                        fiqa_t_w = _guete.fiqa_t(_al)
+                        empf_w = _guete.empfinden(crop)
+                    except Exception:
+                        z["guete_fehler"] = z.get("guete_fehler", 0) + 1
+                        fiqa_t_w = empf_w = None
+                # KALIBRIER-VORRAT (Zentral-Umbau 31.08.): das det-staerkste
+                # M-Crop dieses Events merken — EIN Bild je Event, nicht je
+                # Frame (dieselbe Drossel wie der Live-Weg, der je Auftritt
+                # eines ablegt). Gemerkt wird nur der Pfad, geschrieben wird
+                # EINMAL nach dem Lauf: waehrend der Schleife haelt der
+                # Vergleich nichts als drei Zahlen.
+                # (Topf statt Variable: `ernten` ist eine Closure, eine
+                # Zuweisung machte den Namen lokal — dieselbe Bauform wie
+                # `clip` und `takt` darueber.)
+                if m and datei is not None and (
+                        kalib_topf["best"] is None
+                        or det > kalib_topf["best"]["det"]):
+                    kalib_topf["best"] = {"datei": datei, "det": det,
+                                          "e": empf_w, "t": fiqa_t_w}
                 zeile = kandidat_zeile(eid, kamera, ts, t, (x1, y1, x2, y2), det,
                                        front, sharp, kante, pose,
                                        fc.normed_embedding, modell, m, s_flag, datei,
                                        norm=norm, front_kps=front_kps,
                                        richtung=richtung, v=v_flag, datei_v=datei_v,
-                                       struktur=struktur, quelle=quelle, luma=luma)
+                                       struktur=struktur, quelle=quelle, luma=luma,
+                                       fiqa_t=fiqa_t_w, empf=empf_w)
                 out.write(json.dumps(zeile, ensure_ascii=False) + "\n")
                 out.flush()
                 z["kandidaten"] += 1
@@ -747,6 +867,29 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
     z["unvollstaendig"] = bool(frames.unvollstaendig)
     if frames.gelesen == 0:
         z["unlesbar"] = True
+    # GUETE-AUSSETZUNG LAUT (.377, QS-Befund 30.08.): der Zaehler guete_fehler
+    # lebt nur im Rueckgabe-Topf, den keine Transport-Liste traegt, und ein
+    # fehlendes Modell sagte bisher GAR NICHTS — der Lauf meldete ok, alle Zeilen
+    # trugen fiqa_t=None, und die Kalibrier-Seite blieb ohne jede Erklaerung
+    # leer. Also EINE Zeile je Event-Ernte ins Job-Log (nie je Kandidat), und
+    # nur wenn es etwas auszusetzen gab: dieselbe Haltung wie v_aus/
+    # struktur_aus — eine Aussetzung wird deklariert, nie verschwiegen.
+    # BEWUSST kein neuer Zaehler-Topf: ZAEHLER_START bleibt unberuehrt, damit
+    # die festen Transport-Listen (Regel SK3) unveraendert decken.
+    if z.get("guete_fehler") or (not guete_da and z["m"]):
+        grund = (f"{z['guete_fehler']} measurement error(s)"
+                 if z.get("guete_fehler") else
+                 f"models missing ({os.path.basename(_guete.PFAD_T)}, "
+                 f"{os.path.basename(_guete.PFAD_E)})")
+        print(f"ernte {eid}: no image-quality scores for "
+              f"{z.get('guete_fehler') or z['m']} of {z['m']} crop(s) — {grund}; "
+              f"those lines carry no fiqa_t/empf and the calibration page "
+              f"cannot use them", flush=True)
+    # KALIBRIER-VORRAT: nach dem Lauf, EIN Bild. BEWUSST kein neuer Zaehler im
+    # Rueckgabe-Topf — ZAEHLER_START und die festen Transport-Listen (Regel
+    # SK3) bleiben unberuehrt; wer wissen will, wie viele Bilder ankamen,
+    # zaehlt den Ring (der On-demand-Fueller tut genau das).
+    kalib_vorrat_speisen(lauf_dir, kamera, kalib_topf["best"], kalib)
     return z
 
 

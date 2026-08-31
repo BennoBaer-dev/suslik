@@ -434,10 +434,18 @@ LIVE_ZUSTAENDE = {
 # DIE eine Bereichs-Quelle (QS-Ebenen-Regel: kein Streu-Literal): Inventar,
 # Handler (core/support.py), Doku-Deckung und QS-Stufe lesen ALLE von hier.
 # Nur Daten (Registry-Kopfvertrag: importfrei) — Wurzeln als Pfad-Tupel
-# relativ zu data_dir, Regex als String. HARTE Regel (Widerleger 18/36):
-# config/, clips/, events/, live/ duerfen hier NIE als Wurzel auftauchen
-# (config/ traegt unmaskierte Alt-Store-Kopien; der Rest sind Rohdaten-
-# Riesen) — die QS-Stufe prueft das gegen diese Tabelle.
+# relativ zu data_dir, Regex als String. HARTE Regel fuer die BENANNTEN
+# tar-Bereiche (Widerleger 18/36): config/, clips/, events/, live/ duerfen
+# dort NIE als Wurzel auftauchen (config/ traegt unmaskierte Alt-Store-
+# Kopien; der Rest sind Rohdaten-Riesen) — die QS-Stufe prueft das gegen
+# diese Tabelle.
+# .380 (User-Entscheid 31.08.): dazu kommt EIN Bereich der Art "baum" —
+# Vollzugriff auf den ganzen Datenordner, read-only. Anlass war der
+# Feld-Fall vom 31.08.: der Unbekannt-Pool eines Testers lag unter learn/
+# und war per Support-API nicht abziehbar, weil kein Bereich ihn nannte.
+# Ein Vollbaum-Bereich macht jede kuenftige Ablage ohne Tabellen-Pflege
+# erreichbar; die Secrets bleiben trotzdem drin, weil alles unter
+# SUPPORT_MASKE_ORDNER nur MASKIERT ausgeliefert wird (core/support).
 SUPPORT_BEREICHE = {
     "inventar":   {"art": "json", "text": "what is available (sizes, runs)"},
     "config":     {"art": "json",
@@ -462,7 +470,18 @@ SUPPORT_BEREICHE = {
                                "live_status.json", "systemstat.jsonl"),
                    "text": "per-event results + service state files "
                            "(diagnosis core)"},
+    "data":       {"art": "baum", "wurzel": (),
+                   "text": "the whole data folder, read-only: "
+                           "/support/data lists every file (path, size, "
+                           "time — no content), /support/data/<path> "
+                           "fetches one file or one folder (as tar.gz); "
+                           "anything under config/ is served masked only"},
 }
+# Ordner unter data_dir, deren Dateien NUR MASKIERT hinausgehen (der
+# Vollbaum-Bereich erreicht auch config/, und dort liegen neben config.json
+# die Alt-Store-Kopien config.json.vor_* — dieselben Secrets, anderer Name;
+# eine Namensliste waere hier die falsche Wache, deshalb der ganze Ordner).
+SUPPORT_MASKE_ORDNER = ("config",)
 # Muster-Maskierung des Config-Exports (Widerleger 1: eine Feldnamen-
 # Heuristik statt einer pflegebeduerftigen Streu-Liste; zu viel maskieren
 # ist die sichere Richtung). Ein Feld wird maskiert, wenn sein Name eines

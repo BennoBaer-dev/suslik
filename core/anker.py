@@ -103,7 +103,8 @@ def _sieb_besteht(z, sieb):
     # anzeigbar war. Der Nutzer sah Gruppen, zu denen er nichts entscheiden kann.
     if _ben.harte_linie(z, sieb.get("norm_latte")):
         return False
-    if not _ben.ist_gut(z, sieb.get("norm_latte")):
+    if not _ben.ist_gut(z, sieb.get("norm_latte"),
+                        guete_latte=sieb.get("guete_latte")):
         return False
     try:
         winkel = [float(w) for w in (z.get("pose") or [])]
@@ -443,7 +444,20 @@ def anker_datensaetze(cluster, margen, lauf_id, schwellen, version):
                        # /lernlauf/vorrat/), deshalb muss das Mitglied seinen Topf
                        # mitfuehren. Fehlt das Feld (Alt-Anker), gilt "crop" —
                        # genau das, was diese Zeilen frueher immer waren.
-                       "bildquelle": mm.get("bildquelle") or "crop"}
+                       "bildquelle": mm.get("bildquelle") or "crop",
+                       # .377 KALIBRIER-FUNKTION: die beiden Guete-Masse der
+                       # Ernte wandern MIT — dieselbe Falle wie bei norm in
+                       # .308 und struktur in .32x, hier zum dritten Mal
+                       # (QS-Befund 30.08.). Ohne diese Zeile sieht KEIN
+                       # Mitglieder-Leser die Werte: benennung._lattenklasse
+                       # faellt still auf die abgeloeste Laplacian-Schaerfe
+                       # zurueck, waehrend das Sieb der Gruppenbildung schon
+                       # nach der Guete siebt, und die Kalibrier-Seite bleibt
+                       # dauerhaft leer (sie ueberspringt jedes Mitglied ohne
+                       # beide Werte). Am DICT-ENDE und per .get(): Alt-Anker
+                       # ohne die Felder bleiben gueltig und urteilen
+                       # unveraendert den Alt-Weg (Muster luma).
+                       "fiqa_t": mm.get("fiqa_t"), "empf": mm.get("empf")}
                       for v in c for mm in v["mitglieder"]]
         z_ank = zentroid([v["emb"] for v in c])
         dgs = sorted({round(float(v["durchgang_start"]), 1) for v in c})
@@ -634,7 +648,8 @@ def zuweisung_pruefen(saetze, refs, sim_min, marge_min, einigkeit_min):
 
 
 def anker_phase_fahren(data_dir, lauf_dir, lauf_id, events_liste, schwellen, clusterer,
-                       version, log, fortschreiben, norm_latte=None):
+                       version, log, fortschreiben, norm_latte=None,
+                       guete_latte=None):
     """Die komplette Anker-Phase, dienst-frei (verifyd reicht Config-Schwellen,
     Clusterer und Callbacks herein). fortschreiben(**updates) -> zustand | None;
     None heisst 'Lauf wurde abgebrochen' => sofort aussteigen (Ernte-Semantik).
@@ -675,6 +690,10 @@ def anker_phase_fahren(data_dir, lauf_dir, lauf_id, events_liste, schwellen, clu
         sieb = {"winkel_max": schwellen["anker_qualitaet_winkel_max"],
                 "roll_max": schwellen["anker_qualitaet_winkel_max"],
                 "norm_latte": norm_latte,
+                # .377: die kalibrierte Guete-Latte wirkt im Sieb ueber
+                # ist_gut — Zeilen ohne Guete-Felder (Alt-Ernten) urteilen
+                # dort unveraendert nach der Pixel-Latte.
+                "guete_latte": guete_latte,
                 # Der Szenario-Konsens des Vorrats wirkt mit, wo er gemessen
                 # ist — dieselbe Schwelle, keine zweite Zahl.
                 "konsens_min": schwellen.get("vorrat_konsens_min"),

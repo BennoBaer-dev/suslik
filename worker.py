@@ -661,7 +661,13 @@ def _job_ausfuehren(job, antwort_out=None):
                         # .33x DATEIQUELLE: Herkunft aus dem Job in die
                         # Kandidaten-Zeile (Bauplan analysen/12). Alt-Jobs ohne
                         # das Feld liefern None = Frigate, wie bisher.
-                        quelle=job.get("quelle"))
+                        quelle=job.get("quelle"),
+                        # Kalibrier-Vorrat je Kamera (Zentral-Umbau 31.08.):
+                        # {"data_dir","deckel"} kommt aus dem JOB, nicht aus
+                        # dem eingefrorenen Manifest — der Ring-Deckel ist eine
+                        # laufende Config-Entscheidung. Alt-Jobs ohne das Feld
+                        # ernten unveraendert ohne Vorrats-Speisung.
+                        kalib=job.get("kalib"))
                 finally:
                     clipcache.frei(eid)   # nie eine Pin-Waise (Size-Cap)
             elif typ == "rechenprobe":

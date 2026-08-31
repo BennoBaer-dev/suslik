@@ -561,7 +561,8 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
                easy_events=300, unbekannt_offen=0, max_events=40000,
                personen=None, zielperson="", reihenfolge=None,
                sichtung=None, sichtung_gesamt=0, ernte_puls=None,
-               kameras=None, norm_latte=None, luma_grenzen=None):
+               kameras=None, norm_latte=None, luma_grenzen=None,
+               guete_latte=None):
     """.246 (Lernfluss-Redesign, Mockup b_lernfluss, User-Abnahme 17.08.):
     EINE Fluss-Seite mit vier Kacheln (Start / Saeule / Benennen / Fertig) und
     der Zuweisungs-Flaeche ueber die ganze Zeile. zustand darf None sein
@@ -808,16 +809,11 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
         + '</button>'
         '<span id="lf-pop-status" class="dim"></span></div></div></div>')
 
-    # --- Reihe kleiner Klick-Felder in Kachel 1 (User 26.08. am Screenshot:
-    # "zwischen Ergebnis-Zeile und dem grossen Such-Knopf, Platz fuer bis zu
-    # DREI kleinere Felder"). Heute EINES belegt: der Abgleich der
-    # Belichtungs-Grenzen (analysen/bauplan_belichtung.md Phase 1b).
-    # ERWEITERBAR by construction: die Reihe ist ein flex-Container
-    # (webui/style.css .lf-minis) — ein weiteres <a> in diese Liste genuegt,
-    # bis drei stehen sie nebeneinander, danach bricht die Reihe um.
-    mini_felder = ['<a href="/lernlauf/belichtung">'
-                   + t("lernwizard.k1.mini_belichtung") + '</a>']
-    mini_reihe = f'<div class="lf-minis">{"".join(mini_felder)}</div>'
+    # (Die Reihe kleiner Klick-Felder in Kachel 1 trug seit 26.08. genau EINEN
+    # Eintrag, den "Abgleich Helligkeit". Der ist am 31.08. ausgebaut — die
+    # Luma-Grenzen griffen an 714 Feldbildern dreimal, und der Empfinden-Regler
+    # der Guete-Kalibrierung deckt die Funktion ab. Mit dem letzten Eintrag
+    # faellt die Reihe selbst; sie kaeme mit dem naechsten Mini-Feld zurueck.)
 
     # --- Kachel 1: der Lauf ----------------------------------------------
     if zustand is None:
@@ -836,7 +832,6 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
         # Stufe-0-Grenze: <b>back</b> mitten im Satz — bleibt literal.
         k1 = ('<p class="lf-satz">Only needed to look <b>back</b> &mdash; '
               'day to day the system learns on its own.</p>' + hinweis_u
-              + mini_reihe
               + '<div class="lf-rest">' + such_knopf + such_deck + '</div>')
     else:
         # .255/.259: der Neustart-Weg gehoert in die Kachel — seit .259 als
@@ -865,7 +860,6 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
                  + t("lernwizard.k1.kameras",
                      kameras=html.escape(", ".join(str(k) for k in z["kameras"])))
                  if z.get("kameras") else "") + '</div>'
-              + mini_reihe
               + neu_form)
 
     # --- Kachel 2: der Fortschritts-Block --------------------------------
@@ -913,7 +907,8 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
         # (core.benennung.bestes_zuerst). Vorher stand hier -det, und die
         # Kachel warb fuer eine Gruppe mit einem Bild, das die Flaeche als
         # 'kein Gesicht nach dem Qualitaetsmass' verwarf.
-        mg = bestes_zuerst(g.get("mitglieder"), norm_latte, luma_grenzen)
+        mg = bestes_zuerst(g.get("mitglieder"), norm_latte, luma_grenzen,
+                           guete_latte=guete_latte)
         bild = ""
         if mg and lid_g:
             fn = html.escape(str(mg[0].get("datei", "")).rsplit("/", 1)[-1])
@@ -1013,7 +1008,12 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
     fluss = ('<div class="lf-fluss">'
              + _kachel(1, kz[0], t("lernwizard.kachel.lauf"), k1)
              + _kachel(2, kz[1], t("lernwizard.kachel.sammeln"), k2)
-             + _kachel(3, kz[2], t("lernwizard.kachel.benennen"), k3)
+             + _kachel(3, kz[2], t("lernwizard.kachel.benennen") + (
+                 # Kalibrier-Knopf ENTFERNT (User 31.08.: "der Knopf hier
+                 # muss weg") — der EINE Einstieg ist der Leisten-Knopf
+                 # /kalibrierung, ein zweiter auf der Zuordnungs-Karte
+                 # verwirrt nur.
+                 ''), k3)
              + _kachel(4, kz[3], t("lernwizard.kachel.fertig"), k4)
              + "</div>")
 

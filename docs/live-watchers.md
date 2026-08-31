@@ -57,9 +57,11 @@ image). We are working on a CPU option but can't promise it. On the CPU-only
 image the tab shows the tiles as "not available".
 
 **Enabled means running.** There is no computed capacity verdict: only two
-hard brakes can refuse a watcher, and both are plain numbers — a fixed cap of
-**5 watchers**, and a **RAM floor** taken from the real container memory
-limit (one more stream must not push free RAM below the floor). If the
+hard brakes can refuse a watcher, and both are plain numbers — a watcher cap
+(default **5**, raisable up to 20 via `live.max_slots` in the config store for
+machines with stronger hardware), and a **RAM floor** taken from the real
+container memory limit (one more stream must not push free RAM below the
+floor). If the
 machine runs hot, nothing is switched off: the engine **throttles at
 runtime** by sampling frames more thinly and shows the current throttle level
 and utilization on the engine card. The engine's self-measurements (detector
@@ -159,7 +161,7 @@ under a second from the first face.
 ## Honest limits
 
 - **GPU only for now.** A CPU option is being worked on, without a promise.
-- **At most 5 watchers**, and the RAM floor can refuse one more stream.
+- **At most 5 watchers by default** (`live.max_slots` raises the cap, up to 20), and the RAM floor can refuse one more stream.
 - **Per camera only.** A watcher sees one stream; the cross-camera scenario
   view stays with the normal analysis.
 - **The preliminary name is not a verdict.** It is marked as preliminary and

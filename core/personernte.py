@@ -61,6 +61,23 @@ def ernte_event(data_dir, lauf_id, job, wache, extraktor, crops_je_event=2):
         top, info = extraktor(eid)
     except Exception as ex:
         top, info = None, f"Fehler: {str(ex)[:80]}"
+    quelle_bild = "clip"
+    # Todo 8 (User-Entscheid 30.08.): Frigate bis 0.17 liefert kein
+    # data.snapshot_frame_time — die Pfad-Kette kann die Clip-Uhr dort nicht
+    # eichen und fiel fuer JEDES Event aus (Feldfall: 135/136 Manifest-Zeilen
+    # eines Testers, gemessen an dessen Instanz). Statt gar nicht zu ernten,
+    # liefert so ein Event EIN Bild aus dem Snapshot (derselbe Griff wie der
+    # Live-Notnagel in personlive._bild_holen); alle Siebe darunter (Pose-
+    # Wache, Mindesthoehe, Dubletten) laufen unveraendert. Nur fuer GENAU
+    # diesen Ausfall-Grund — jeder andere bleibt ein ehrlicher Ausfall.
+    if not top and "snapshot_frame_time" in str(info or ""):
+        try:
+            from prototyp.ernte_lauf import snapshot_koerper
+            top, info = snapshot_koerper(eid)
+        except Exception as ex:
+            top, info = None, f"0.17-Fallback: {str(ex)[:80]}"
+        if top:
+            quelle_bild = "snapshot"
     if not top:
         zeile_schreiben(data_dir, lauf_id, {
             "eid": eid, "person": job["person"], "ausfall": info})
@@ -109,7 +126,10 @@ def ernte_event(data_dir, lauf_id, job, wache, extraktor, crops_je_event=2):
                       "fuesse": det["fuesse"]},
             "blick": blick, "blick_mess": blick_mess,
             "person_anteil": anteil, "zuschnitt": zbox,
-            "datei": datei, "status": "offen"})
+            "datei": datei, "status": "offen",
+            # Todo 8: woher das Bild stammt — "clip" (Pfad-Kette, bis zu
+            # crops_je_event Bilder) oder "snapshot" (0.17-Fallback, eins).
+            "quelle_bild": quelle_bild})
         genommen += 1
     if not genommen:
         zeile_schreiben(data_dir, lauf_id, {
