@@ -715,6 +715,9 @@ T = {
     "live.test.sw": "(Software-Decode)",
     "live.test.entwertet":
         "— ENTWERTET: Quelle seit diesem Test geändert",
+    "live.test.veraltet_bitte":
+        "Diese Prüfung ist {tage} Tage alt — den Quelltest noch einmal "
+        "fahren, damit die Zahlen beschreiben, was die Kamera heute liefert.",
     "live.test.fehlgeschlagen":
         "letzter Quellentest FEHLGESCHLAGEN ({wann}): {fehler}",
     "live.messung.zeile": "Last gemessen am {wann}: {text}",
@@ -835,10 +838,11 @@ T = {
     "live.hoehe.h1080":
         "1080p — beste Wahl (gemessen: Name ~2,4 s früher als bei "
         "720p)",
-    "live.hoehe.h1440": "1440p — kein gemessener Gewinn gegenüber 1080p",
-    "live.hoehe.h2160":
-        "2160p — natives 4K, marginaler Gewinn, höchste "
-        "Decode-Kosten",
+    "live.hoehe.alt_hinweis":
+        "Gespeichert: {alt}p. Diese Stufe gibt es nicht mehr (gemessen: kein "
+        "Gewinn gegenüber {jetzt}p) — dieser Wächter läuft mit {jetzt}p. Der "
+        "gespeicherte Wert und der Quelltest bleiben gültig; zum Ändern eine "
+        "der Stufen oben wählen.",
     "live.abschnitt.alarm": "Meldekette",
     "live.detail.ende_label": "Ende ohne Gesicht (s):",
     "live.detail.ende_hinweis":
@@ -863,6 +867,139 @@ T = {
         "die Lastmessung pausiert die anderen Wächter, solange sie "
         "läuft",
     "live.detail.link_zurueck": "zurück zur Übersicht",
+    # --- Live-Umbau 31.08.: die Konfigseite eines Waechters traegt jetzt
+    # Kacheln statt einer Kartenspalte, und alles Neue ist JE KAMERA
+    # einstellbar (die Guete-Skalen sind kameraabhaengig — gemessen).
+    "live.detail.kein_bild": "Kein Livebild — dieser Wächter läuft nicht.",
+    "live.detail.kein_bild_test":
+        "Letzter Quelltest sah {aufloesung}, verarbeitet als {skala}.",
+    "live.detail.kein_bild_ohne_test":
+        "Es lief noch kein Quelltest, über diesen Feed ist also nichts bekannt.",
+    "live.abschnitt.erkennung": "Erkennung",
+    "live.abschnitt.melden": "Melden",
+    "live.abschnitt.frigate": "Frigate-Ereignisse",
+    "live.abschnitt.erweitert": "Erweiterte Einstellungen",
+    "live.abschnitt.abtastung": "Abtastung",
+    "live.abtastung.schalter": "Nur genau hinsehen, wenn sich etwas bewegt",
+    "live.abtastung.erklaerung":
+        "Die Gesichtserkennung ist der teure Teil — eine billige "
+        "Bewegungsprüfung auf der Helligkeitsebene entscheidet, ob ein Bild "
+        "sie wert ist. Solange eine Person verfolgt wird, läuft der Wächter "
+        "immer mit vollem Takt; nur eine ruhige Szene wird seltener "
+        "abgetastet.",
+    "live.abtastung.ruhe_label": "Trotzdem hinsehen alle",
+    "live.abtastung.ruhe_einheit": "s",
+    "live.abtastung.ruhe_hinweis":
+        "Leer lassen für die Auftritts-Ende-Zeit dieser Kamera — wer "
+        "regungslos dasteht, erzeugt keine Bewegung, deshalb sieht der "
+        "Wächter trotzdem ab und zu nach (1–600 s).",
+    "live.abtastung.schwelle_label": "Empfindlichkeit (Grauwert-Änderung):",
+    "live.abtastung.flaeche_label": "kleinste Fläche:",
+    "live.abtastung.eich_hinweis":
+        "Beide leer lassen für Frigates Auslieferungswerte. Kleinere Zahlen "
+        "lassen den Wächter öfter hinsehen; größere halten ihn an einer Hecke "
+        "im Wind ruhig. Jeder Ort ist anders — diese Werte gehören zu DIESER "
+        "Kamera, nicht zum ganzen System.",
+    "live.abschnitt.guete": "Bildgüte-Grenzen",
+    "live.abschnitt.last": "Lastmessung",
+    "live.erkennung.det_zeile":
+        "Ab einem Erkennungswert von {wert} zählt ein Fund als Gesicht{marke}.",
+    "live.erkennung.det_vorgabe": " (Vorgabe)",
+    "live.erkennung.regel_vor": "Erkannt nach",
+    "live.erkennung.regel_mitte": "Bestätigungen innerhalb von",
+    "live.erkennung.regel_nach": "Sekunden",
+    "live.erkennung.regel_hinweis":
+        "0 Sekunden heißt: der ganze Auftritt zählt, so lief es bisher. Ein "
+        "Zeitfenster hilft an Kameras, an denen jemand minutenlang steht und "
+        "zwei weit auseinanderliegende Zufallstreffer nicht als eine "
+        "Erkennung gelten sollen.",
+    "live.erkennung.vorrat_zeile":
+        "Kalibrier-Bilder: {n} von {deckel} — ein Bild je Auftritt, die "
+        "ältesten fallen heraus.",
+    "live.erkennung.vorrat_aus":
+        "Das Sammeln ist aus, die Kalibrier-Seite hat deshalb nichts zu "
+        "zeigen (Systemseite, \"live_kalib_max\").",
+    "live.erkennung.latte_e": "Bildeindruck ab {wert}",
+    "live.erkennung.latte_t": "Erkennbarkeit ab {wert}",
+    "live.erkennung.latte_aus": "nicht gesetzt",
+    "live.erkennung.latte_hinweis":
+        "Die beiden entscheiden nie, WER erkannt wird — das würde "
+        "Bestätigungen kosten. Sie entscheiden, welches Bild in die Meldung "
+        "geht und welche Gesichter als Kalibrier-Bilder aufgehoben werden. "
+        "Eingestellt werden sie auf der Kalibrier-Seite, wo man die Bilder "
+        "sieht.",
+    "live.knopf_kalibrieren": "Kalibrieren",
+    "live.knopf_vorrat_leeren": "Bilder verwerfen",
+    "live.frigate.schalter": "Frigate-Ereignis anlegen, wenn jemand erkannt wird",
+    "live.frigate.erklaerung":
+        "Vorgabe: aus. Eingeschaltet legt dieser Wächter ein eigenes Ereignis "
+        "in Frigate an, mit dem Namen im Sub-Label \u2014 eine eigene "
+        "Aufzeichnung, unabhängig von Frigates Erkennung. Geschrieben wird im "
+        "Hintergrund: der Wächter wartet nie auf Frigate. Im Nur-Lesen-Modus "
+        "wird nichts geschrieben.",
+    "live.frigate.abstand_label": "Höchstens ein Ereignis je Person alle (s):",
+    "live.frigate.abstand_hinweis":
+        "Leer heißt: derselbe Abstand wie oben beim Melden. Der Deckel gilt "
+        "je Person, zwei verschiedene Leute können also gleichzeitig "
+        "geschrieben werden.",
+    "livekalib.titel": "Kamera-Kalibrierung — {name}",
+    "livekalib.erklaerung":
+        "Das sind echte Gesichter, die diese Kamera gesammelt hat \u2014 ein "
+        "Bild je Auftritt. Schieb die Regler, bis dir die Auswahl gefällt, "
+        "und übernimm sie. Die Werte gelten nur für DIESE Kamera, weil die "
+        "Güte-Skalen sich von Kamera zu Kamera unterscheiden.",
+    "livekalib.regler_det": "Erkennungswert",
+    "livekalib.regler_det_prosa":
+        "Ab hier zählt ein Fund überhaupt als Gesicht. Dieser Regler steuert "
+        "die Erkennung wirklich: alles darunter erreicht die Namensprüfung "
+        "nie. Niedriger behält mehr Material (gemessen: eine hohe Latte warf "
+        "die Hälfte des brauchbaren Materials weg), höher hält Hecken und "
+        "Lichtflecken draußen.",
+    "livekalib.regler_e": "Bildeindruck",
+    "livekalib.regler_e_prosa":
+        "Wie sauber und hell das Bild fürs Auge wirkt. Das entscheidet NICHT, "
+        "wer erkannt wird \u2014 es entscheidet, welches Bild in die Meldung "
+        "geht und welche Gesichter hier als Kalibrier-Bilder liegen bleiben.",
+    "livekalib.regler_t": "Erkennbarkeit",
+    "livekalib.regler_t_prosa":
+        "Wie gut die Person auszumachen ist, halb verdeckte Gesichter "
+        "eingeschlossen. Wie der Regler darüber: er wählt das Bild und füllt "
+        "diese Seite, er sortiert nie jemanden aus der Erkennung.",
+    "livekalib.ohne_guete":
+        "Die zwei Güte-Modelle fehlen in diesem Build, deshalb tragen die "
+        "Bilder keine Güte-Zahlen und die unteren zwei Regler wirken hier "
+        "nicht. Der Erkennungswert wirkt.",
+    "livekalib.standard": "Vorgaben",
+    "livekalib.tab_erkennen": "Erkennen",
+    "livekalib.tab_lernen": "Gesichterkatalog",
+    "livekalib.uebernehmen": "Übernehmen",
+    "livekalib.leer": "Noch keine Bilder. Sie kommen von selbst — von einem laufenden Wächter und aus jeder Ereignis-Analyse dieser Kamera, je ein Gesicht. Wer nicht warten will, nimmt unten \"Frisches Material suchen\".",
+    "livekalib.zurueck": "zurück zum Wächter",
+    "livekalib.js.genutzt": "{n} von {gesamt} Bildern kommen durch",
+    "livekalib.js.gespeichert": "gespeichert",
+    "livekalib.js.fehler": "Fehler",
+    # --- Kalibrier-Zentralumbau 31.08.: Abschnitte, Katalog-Latte, Material
+    "livekalib.zur_uebersicht": "zurück zu allen Kameras",
+    "livekalib.abschnitt.anzeige": "Melden, Anzeigen und Vorrat",
+    "livekalib.abschnitt.anzeige_prosa": "Diese drei entscheiden, welches Bild dieser Kamera in eine Meldung geht und welche Gesichter hier als Vorrat liegen bleiben. Sie entscheiden nicht, wer erkannt wird.",
+    "livekalib.abschnitt.katalog": "Katalog-Latte",
+    "livekalib.abschnitt.material": "Material",
+    "livekalib.katalog.prosa": "Eine eigene, strengere Latte: wie gut ein Gesicht dieser Kamera sein muss, damit es Referenz werden darf. Sie greift überall dort, wo ein Bild in den Katalog wandert — Unbekannt-Gruppe benennen, Lernlauf übernehmen, Vorschlag annehmen.",
+    "livekalib.katalog.grenze": "Was sie nicht tut: Sie entfernt nie vorhandene Referenzen, und sie ändert nichts daran, wer erkannt wird. Bilder ohne Guete-Messwerte (älteres Material oder ein Image ohne die Guete-Modelle) kommen unangetastet durch — eine Latte ohne Messung würde blind wegwerfen.",
+    "livekalib.katalog.quelle_kamera": "Es gelten die eigenen Werte dieser Kamera.",
+    "livekalib.katalog.quelle_global": "Es gilt der globale Rückfall — diese Kamera hat noch keine eigenen Werte.",
+    "livekalib.katalog.quelle_aus": "Keine Katalog-Latte gesetzt: jedes Bild darf Referenz werden.",
+    "livekalib.katalog.regler_e": "Katalog: Bildeindruck",
+    "livekalib.katalog.regler_e_prosa": "Mindest-Bildeindruck für eine Referenz dieser Kamera. Halte ihn über dem Regler weiter oben: Was zum Anzeigen gut genug ist, ist nicht automatisch gut genug zum Lernen.",
+    "livekalib.katalog.regler_t": "Katalog: Erkennbarkeit",
+    "livekalib.katalog.regler_t_prosa": "Mindest-Erkennbarkeit für eine Referenz dieser Kamera. Dieser Wert hält halb verdeckte Gesichter aus dem Katalog heraus.",
+    "livekalib.material.aus": "Das Sammeln von Vorratsbildern ist ausgeschaltet (Advanced, calibration samples). Ohne Vorrat hat diese Seite nichts zu zeigen.",
+    "livekalib.material.stand": "{n} von höchstens {deckel} Bildern im Vorrat",
+    "livekalib.material.wann": "zuletzt {wann}",
+    "livekalib.material.fuellen_prosa": "Die Materialsuche geht die letzten Person-Ereignisse dieser Kamera durch und behält je Ereignis das beste Gesicht. Sie stoppt bei {ziel} Bildern oder nach {events} Ereignissen — was zuerst eintritt.",
+    "livekalib.material.lauf": "Dazu {n} Bild(er) dieser Kamera aus dem letzten Lernlauf — unten mit dabei und als solche gekennzeichnet.",
+    "livekalib.js.katalog": "{n} von {gesamt} dürften in den Katalog",
+    "livekalib.js.lauf": "Lauf",
     # ----------------------------------------------- routes/erkennung ---
     "erkennung.titel": "Erkennung",
     "erkennung.kopf.satz":
@@ -1152,6 +1289,55 @@ T = {
     "lernwizard.ergebnis.beiseite": "({n} aussortiert)",
     "lernwizard.kachel.lauf": "Lernlauf",
     "lernwizard.kachel.sammeln": "Sammeln &amp; sortieren",
+    "kalib.titel": "Kamera-Kalibrierung",
+    "kalib.erklaerung": "Diese zwei Schwellen entscheiden, welche Gesichter künftige Lernläufe behalten. Schiebe, bis sich die Grenze richtig anfühlt — alles Ausgegraute würde aussortiert. Unten stehen die Bilder des letzten Laufs, bester Bild-Eindruck zuerst. Gelber Rahmen = für die Übernahme ausgewähltes Bild.",
+    "kalib.leer": "Noch nichts zu kalibrieren: der letzte Lauf trägt keine Güte-Werte. Starte zuerst einen Lernlauf mit dieser Version.",
+    "kalib.regler_e": "Bild-Eindruck",
+    "kalib.regler_e_prosa": "Wie sauber und hell das Bild fürs Auge wirkt. Niedriger behält mehr, aber dunklere und gröbere Bilder.",
+    "kalib.regler_t": "Erkennbarkeit",
+    "kalib.regler_t_prosa": "Wie gut die Person auf dem Bild zu identifizieren ist. Sortiert auch halb verdeckte Gesichter aus.",
+    "kalib.standard": "Auf Standard zurück",
+    "kalib.uebernehmen": "Schwellen übernehmen",
+    "kalib.js.genutzt": "Behalten: {n} von {gesamt}",
+    "kalib.js.gespeichert": "Gespeichert — der Lauf wird mit den neuen Grenzen neu bewertet, gleich geht es zurück zum Lernlauf …",
+    "kalib.js.fehler": "Speichern fehlgeschlagen",
+    # --- zentrale Kamera-Uebersicht + globaler Rueckfall (31.08.)
+    "kalib.knopf": "Kalibrierung",
+    "kalib.knopf_tip": "Kamera-Kalibrierung: die Latten für Meldungen, Vorrat und den Referenz-Katalog",
+    "kalib.uebersicht.erklaerung": "Eine Kamera, ein Satz Werte. Die Güte-Skalen sind von Kamera zu Kamera verschieden — an einer einzigen Anlage gemessen lag die mittlere Erkennbarkeit der einen Kamera mehr als doppelt so hoch wie die der anderen. Wähle eine Kamera, um ihre Latten zu setzen.",
+    "kalib.uebersicht.leer": "Noch keine Kameras",
+    "kalib.uebersicht.leer_hinweis": "Sobald Frigate Kameras meldet, erscheinen sie hier.",
+    "kalib.grenze.titel": "Was die Kalibrierung tut — und was nicht",
+    "kalib.grenze.satz": "Sie entscheidet, welches Bild gezeigt oder gesendet wird, welche Gesichter als Vorrat liegen bleiben und welche davon Referenz werden dürfen. Sie entscheidet nie, wer erkannt wird: Die Namensprüfung sieht jedes Gesicht, ungesiebt. Das ist gemessen, nicht angenommen — Sieben vor der Abstimmung hat Bestätigungen gekostet.",
+    "kalib.kachel.eigene": "eigene Werte",
+    "kalib.kachel.vorgabe": "Vorgabewerte",
+    "kalib.kachel.fremd": "nicht in Frigate",
+    "kalib.kachel.fremd_tip": "Diese Kamera hat Kalibrierwerte, aber Frigate meldet sie nicht mehr. Die Werte bleiben, es wird nichts gelöscht.",
+    "kalib.kachel.vorrat": "{n} von {deckel} Bildern",
+    "kalib.kachel.vorrat_aus": "Vorrats-Sammlung ist aus (Advanced, calibration samples).",
+    "kalib.kachel.stand": "zuletzt {wann}",
+    "kalib.kachel.leer": "Noch keine Bilder",
+    "kalib.kachel.leer_hinweis": "Bilder kommen von einem laufenden Wächter und aus den Ereignis-Analysen — oder hole jetzt welche.",
+    "kalib.kachel.werte": "Erkennungswert {det} · Bildeindruck {e} · Erkennbarkeit {tw}",
+    "kalib.kachel.katalog": "Katalog-Latte {e} / {tw}",
+    "kalib.quelle.kamera": "eigen",
+    "kalib.quelle.global": "globaler Rückfall",
+    "kalib.quelle.aus": "aus",
+    "kalib.knopf_kalibrieren": "Kalibrieren",
+    "kalib.knopf_fuellen": "Frisches Material suchen",
+    "kalib.knopf_leeren": "Vorrat löschen",
+    "kalib.global.titel": "Globaler Rückfall",
+    "kalib.global.satz": "Diese Werte gelten für Kameras ohne eigene — und sie sind die Latte, mit der ein Lernlauf entscheidet, welche Gesichter er behält.",
+    "kalib.global.werte": "Bildeindruck {e} · Erkennbarkeit {tw}",
+    "kalib.global.katalog": "Katalog-Latte {e} / {tw}",
+    "kalib.global.knopf": "Am letzten Lernlauf einstellen",
+    "kalib.global.kein_lauf": "Noch kein Lernlauf mit Güte-Messwerten — einstellbar, sobald ein Lauf durch ist.",
+    "kalib.lauf.titel": "Globale Latten — letzter Lernlauf",
+    "kalib.zurueck": "zurück zu allen Kameras",
+    "js.kalib.start": "suche Material …",
+    "js.kalib.lauf": "{i} von {n} Ereignissen · {bilder} Bild(er)",
+    "js.kalib.fertig": "{bilder} Bild(er) aus {events} Ereignis(sen)",
+    "js.kalib.fehler": "Materialsuche nicht möglich",
     "lernwizard.kachel.benennen": "Intelligente Zuordnung",
     "lernwizard.kachel.fertig": "Fertig &mdash; sie zählen",
     "lernwizard.such.titel": "Events nach Gesichtern durchsuchen",
@@ -1191,7 +1377,6 @@ T = {
     "lernwizard.k1.scope": "Umfang {n} Events",
     "lernwizard.k1.kameras": "nur Kameras: {kameras}",
     "lernwizard.k1.tag": "Tag {tag}",
-    "lernwizard.k1.mini_belichtung": "Abgleich Helligkeit",
     "lernwizard.k2.satz":
         "Läuft von allein &mdash; du kannst diese Seite "
         "schließen und wiederkommen.",
@@ -1294,42 +1479,6 @@ T = {
         "Neustarts (Fortsetzen eingebaut)",
     "lernwizard.expert.lauf_bleibt":
         "dieser Lauf bleibt — seine Anker bleiben verfügbar",
-    # -------- Abgleich Helligkeit /lernlauf/belichtung (Phase 1b, 26.08.) --
-    "belichtung.titel": "Abgleich Helligkeit",
-    "belichtung.satz":
-        "Stell die beiden Helligkeits-Linien an eigenen Bildern ein. Jede Reihe "
-        "ist ein Gesichts-Cluster, sortiert wie der Server gerade sortiert: "
-        "Bilder außerhalb der Linien fallen ans Ende und sind rot markiert. "
-        "Gelöscht wird nichts — ein zurückgestuftes Bild lässt sich weiter von "
-        "Hand wählen.",
-    "belichtung.jetzt": "Aktuell gültig: dunkelste {von}, hellste {bis}.",
-    "belichtung.hinweis_aus":
-        "Beide Linien sind aus, es fällt nichts zurück — zieh einen Regler, um "
-        "zu sehen, was eine Linie täte.",
-    "belichtung.aus_wort": "aus",
-    "belichtung.regler_min": "dunkelste erlaubte",
-    "belichtung.regler_max": "hellste erlaubte",
-    "belichtung.regler_hinweis":
-        "Helligkeit läuft von 0 (schwarz) bis 255 (weiß); 0 schaltet diese "
-        "Seite aus.",
-    "belichtung.bilanz": "{n} von {m} Bildern fallen zurück",
-    "belichtung.vorschau":
-        "Nur Vorschau — die Bilder werden im Browser umsortiert. Speichern "
-        "lässt den Server so sortieren.",
-    "belichtung.knopf_speichern": "Diese Grenzen speichern",
-    "belichtung.reihe_info":
-        "{n} von {gesamt} gemessenen Bildern · Helligkeit {von} bis {bis}",
-    "belichtung.lage_dunkel": "zu dunkel",
-    "belichtung.lage_hell": "überbelichtet",
-    "belichtung.lage_ok": "innerhalb der Grenzen",
-    "belichtung.zurueck": "zurück zum Lernlauf",
-    "belichtung.leer_satz":
-        "Noch trägt kein Bild einen Helligkeitswert, es gibt also nichts zum "
-        "Abgleichen.",
-    "belichtung.leer_hinweis":
-        "Die Helligkeit wird beim Ernten der Gesichter gemessen. Sie entsteht "
-        "ab dem nächsten Lernlauf oder Durchgangs-Check; ältere Bilder werden "
-        "nie nachgemessen.",
     # --------------------------------- Stufe 1: Einhang/Skelett (webui) ---
     "nav.bereich.activity": "Aktivität",
     "nav.bereich.faces": "Gesichter",
@@ -1511,10 +1660,11 @@ T = {
     "js.dienst.nicht_erreichbar": "Dienst nicht erreichbar — gleich noch einmal versuchen.",
     "js.unb.tick": "{phase} … {s} s",
     "js.unb.besucher_frage": "Als bekannten Fremden ignorieren? Er löst dann keine Meldungen mehr aus. (Jederzeit unten unter \"bekannte Besucher\" wieder aktivierbar.)",
-    "js.unb.ziel_fehlt": "Zielidentität wählen.",
     "js.unb.merge_frage": "Zusammenführen?",
     "js.unb.name_fehlt": "Namen eingeben (neue oder vorhandene Person).",
     "js.unb.benennen_frage": "Der Person \"{person}\" zuordnen? Die besten Bilder werden Referenzen.",
+    "js.unb.teil_frage": "Die {n} angehakten Bilder \"{person}\" zuweisen? Der Rest der Gruppe bleibt unter Unbekannte.",
+    "js.unb.objekt_frage": "Als \"keine Person\" markieren (Busch, Spiegelung, geparktes Auto)? Sie taucht dann nicht mehr als Besucher auf; unter \"keine Personen\" lässt sich das zurücknehmen.",
     "js.person.loesch_frage": "ALLE Referenzen und den Namen \"{person}\" löschen?\nDie Bilder wandern in den Papierkorb-Ordner (wiederherstellbar).\n\nZur Bestätigung den Namen eintippen:",
     "js.person.name_falsch": "Name stimmte nicht überein — nichts gelöscht.",
     "js.areas.fehl": "Speichern fehlgeschlagen — ist der Dienst erreichbar?",
@@ -1575,6 +1725,8 @@ T = {
     "js.live.quelltest": "Quellentest",
     "js.live.pausiert": " — Wächter für die Messung pausiert ({liste})",
     "js.live.job_laeuft": "Quellentest läuft (Helfer-Prozess, bis ~2 Minuten) …",
+    "js.live.vorrat_leeren_frage":
+        "Die Kalibrier-Bilder dieser Kamera verwerfen? Sie sind nicht wiederherstellbar; der Wächter sammelt ab jetzt neu.",
     "js.live.job_ok": "Quellentest fertig: {text}",
     "js.live.job_fehl": "Quellentest FEHLGESCHLAGEN: {text}",
     "js.live.messung_fehl": "Lastmessung fehlgeschlagen: {grund}",
@@ -1794,20 +1946,30 @@ T = {
         "Kacheln kommen nur aus Frigates Kameraliste und von "
         "gespeicherten Wächtern.",
     "unbekannte.name": "Unbekannt {nummer}",
-    "unbekannte.badge_eine": "eindeutig eine Person",
-    "unbekannte.badge_aehnlich": "Ähnlichkeit {wert}",
-    "unbekannte.badge_einmal": "einmal gesehen",
     "unbekannte.meta_zeit": " Auftritte · {zeit}",
+    "unbekannte.mehr_bilder": "+{n} weitere Bilder in dieser Gruppe",
     "unbekannte.knopf_reaktivieren": "wieder aktivieren",
     "unbekannte.attr_name": "Name (neu oder bestehend)",
+    "unbekannte.attr_wahl": "Diese Gruppe zum Zusammenführen auswählen",
     "unbekannte.knopf_zuweisen": "Person zuweisen",
+    "unbekannte.knopf_teil": "Die {n} angehakten zuweisen",
     "unbekannte.knopf_ignorieren": "Ignorieren",
-    "unbekannte.opt_merge": "zusammenführen mit…",
-    "unbekannte.knopf_ok": "OK",
-    "unbekannte.badge_gleiche": "dieselbe Person?",
-    "unbekannte.knopf_merge": "Zusammenführen",
-    "unbekannte.knopf_verschieden": "Getrennt lassen",
+    "unbekannte.knopf_objekt": "Keine Person",
+    "unbekannte.knopf_person": "Ist eine Person",
+    "unbekannte.knopf_bulkmerge": "Die {n} gewählten Gruppen zusammenführen",
+    "unbekannte.knopf_mehr": "{n} weitere Gruppen zeigen",
     "unbekannte.titel": "Unbekannte",
+    "unbekannte.anker": "{offen} von {gesamt} Gruppen warten noch",
+    "unbekannte.sort_label": "Sortierung",
+    "unbekannte.sort_bilder": "meiste Bilder",
+    "unbekannte.sort_neu": "neueste",
+    "unbekannte.filter_label": "Anzeige",
+    "unbekannte.f_offen": "offen",
+    "unbekannte.f_wieder": "wiederkehrend",
+    "unbekannte.f_heute": "heute neu",
+    "unbekannte.f_vorschlag": "Vorschlag vorhanden",
+    "unbekannte.f_besucher": "stumm",
+    "unbekannte.f_objekt": "keine Personen",
     "unbekannte.kopf_satz":
         "Gesichter ohne bekannten Treffer, gruppiert zu wiederkehrenden "
         "Identitäten.",
@@ -1823,11 +1985,6 @@ T = {
     "unbekannte.hinweis_reorg":
         "prüft die gesammelten Gesichter noch einmal und baut die Gruppen "
         "neu auf — das Sammeln selbst läuft automatisch (1–2 min)",
-    "unbekannte.h_wieder": "Wiederkehrende",
-    "unbekannte.h_einzeln": "{n} einzelne Auftritte (bisher einmal gesehen)",
-    "unbekannte.h_besucher": "{n} bekannte Besucher (stummgeschaltet)",
-    "unbekannte.h_objekte":
-        "{n} statische Objekte (automatisch erkannt — keine Personen)",
     "unbekannte.satz_objekte":
         "Gruppen, deren Bilder untereinander fast identisch sind und "
         "keiner Person ähneln — typischerweise ein Radkasten, ein "
@@ -1835,11 +1992,13 @@ T = {
         "wieder für ein Gesicht hält. Sie sind eingefroren: Neue Funde "
         "landen nie hier (sie bilden frische, sichtbare Gruppen und "
         "werden nach derselben Regel neu geprüft) — die Gruppen bleiben "
-        "gelistet, damit nichts versteckt wird.",
+        "gelistet, damit nichts versteckt wird. Von Hand markiert oder automatisch gefunden; \"Ist eine Person\" holt eine Gruppe zurück.",
     "unbekannte.leer": "Noch keine unbekannten Gesichter gesammelt.",
     "unbekannte.leer_hinweis":
         "Identitäten erscheinen hier nach dem nächsten unbekannten "
         "Besucher.",
+    "unbekannte.leer_filter": "In dieser Ansicht ist nichts.",
+    "unbekannte.leer_filter_hinweis": "Andere Gruppen warten oben unter einem anderen Filter.",
     "livealerts.link_video": "&#9654; Video {n}",
     "livealerts.person_unbekannt": "unbekannt",
     "livealerts.trigger.eins": "{n} Trigger",
@@ -2840,6 +2999,9 @@ T = {
         "Reorganisation läuft bereits — bitte warten",
     "antwort.paar_notiert":
         "gemerkt — dieses Paar wird nicht mehr vorgeschlagen",
+    "antwort.unbek_objekt": "als Nicht-Person markiert",
+    "antwort.unbek_person": "wieder unter den Besuchern",
+    "antwort.unbek_gemergt": "{n} Gruppen zu einer zusammengeführt",
     # §8.11-Anhang an eine Fachschicht-msg (die Basis bleibt Grenze).
     "antwort.nachpruefung_anhang":
         " — die Events dieses Durchgangs werden im Hintergrund "

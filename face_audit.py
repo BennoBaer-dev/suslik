@@ -91,8 +91,202 @@ def resolve_backend(spec=None):
 
 
 _ORT_THREADS = None
-def _ort_thread_opts():
+_THREADS_BENCH = None            # Ergebnis der Selbstmessung (fuer /health, Gate)
+
+
+def _threads_cache_pfad():
+    """Wo die gemessene Threadzahl liegt — im Datenordner, nicht im Image
+    (sie gehoert zur MASCHINE, nicht zum Build). Ohne VERIFY_DATA_DIR (nackter
+    CLI-Lauf) gibt es keinen Cache und der Bench laeuft je Prozess einmal."""
+    dd = (os.environ.get("VERIFY_DATA_DIR") or "").strip()
+    return os.path.join(dd, "state", "cpu_threads.json") if dd else None
+
+
+def _threads_schluessel(kerne):
+    """Was die Messung gueltig macht: erlaubte Kernzahl + CPU-Modell. Aendert
+    sich eines (anderer Wirt, andere cgroup-Maske), wird neu gemessen."""
+    modell = ""
+    try:
+        with open("/proc/cpuinfo") as f:
+            for z in f:
+                if z.startswith("model name"):
+                    modell = z.split(":", 1)[1].strip()
+                    break
+    except OSError:
+        pass
+    return f"{kerne}|{modell}"
+
+
+def _bench_graph(n=256, stufen=4):
+    """Winziger ONNX-Graph fuer die Threadzahl-Messung: eine Kette aus
+    MatMul+Relu. Bewusst KEIN Modell von Platte — der Bench soll nichts laden,
+    nichts cachen und auf jeder Variante gleich aussehen. MatMul ist die
+    Operation, die onnxruntime ueber den Intra-Op-Pool verteilt; genau dort
+    entsteht der gemessene Hybrid-Effekt."""
+    import onnx
+    from onnx import helper, TensorProto
+    W = np.linspace(-0.05, 0.05, n * n, dtype=np.float32).reshape(n, n)
+    init = helper.make_tensor("W", TensorProto.FLOAT, [n, n],
+                              W.tobytes(), raw=True)
+    knoten, ein = [], "X"
+    for i in range(stufen):
+        knoten.append(helper.make_node("MatMul", [ein, "W"], [f"m{i}"]))
+        knoten.append(helper.make_node("Relu", [f"m{i}"],
+                                       ["Y" if i == stufen - 1 else f"r{i}"]))
+        ein = f"r{i}"
+    g = helper.make_graph(
+        knoten, "threadbench",
+        [helper.make_tensor_value_info("X", TensorProto.FLOAT, [n, n])],
+        [helper.make_tensor_value_info("Y", TensorProto.FLOAT, [n, n])],
+        [init])
+    m = helper.make_model(g, opset_imports=[helper.make_opsetid("", 13)])
+    m.ir_version = 8            # konservativ: laeuft auf jeder ORT-Version im Haus
+    return m.SerializeToString(), n
+
+
+def _bench_modell():
+    """Das ECHTE Netz fuer den Bench, wenn es im Image liegt -> Pfad|None.
+
+    2d106det ist Teil des buffalo_l-Pakets und liegt deshalb in ALLEN FUENF
+    Images (StrukturMass nennt genau diese Quelle — kein zweites Literal).
+    Ein echtes Faltungsnetz misst die Threadzahl belastbarer als ein
+    synthetischer Graph: gemessen 31.08. auf dieser Maschine (12 Kerne
+    zugeteilt, im Leerlauf) liegt das Optimum bei 6-8 Threads, 12 Threads
+    kosten 1,2- bis 2-fach mehr — genau der Effekt, um den es geht. Fehlt die
+    Datei (Fremdumgebung, nackter Checkout), faellt der Bench auf den
+    synthetischen Graphen zurueck."""
+    try:
+        p = os.path.join(StrukturMass.MODELL_DIR, StrukturMass.MODELL_DATEI)
+        return p if os.path.exists(p) else None
+    except Exception:                                         # noqa: BLE001
+        return None
+
+
+def _threads_messen(kerne, budget_s=2.0):
+    """Kleiner Startup-Bench: welche Intra-Op-Threadzahl ist auf DIESER CPU
+    wirklich die schnellste? -> (beste, tabelle_ms) oder (None, {}).
+
+    ANLASS (gemessen 31.08. im Prod-Container, Core Ultra 9 285H): 4 Threads
+    rechnen DOPPELT so schnell wie 12. Auf Hybrid-CPUs (P- und E-Kerne) ist
+    die Kernzahl eben keine Leistungszahl — onnxruntime verteilt den Intra-Op-
+    Pool gleichmaessig, und der Lauf endet mit dem langsamsten Kern. Dieselbe
+    Klasse steckte schon im Guete-Deckel (.377: 12 Threads 33+57 ms, 4 Threads
+    4+13 ms) — dort war die Antwort ein fester Deckel fuer die Mini-Netze, hier
+    ist sie eine MESSUNG statt einer Annahme.
+
+    Der Bench kostet einmalig hoechstens budget_s und wird danach im
+    Datenordner gecacht. Er misst NICHT, wenn weniger als vier Kerne erlaubt
+    sind: dort gibt es strukturell nichts zu waehlen (die Kandidaten waeren
+    1 und 2) und der gemessene Hybrid-Effekt kann in so einer Zuteilung gar
+    nicht auftreten."""
+    if kerne < 4:
+        return None, {}
+    import time as _t
+    import onnxruntime as ort
+    # Kandidaten: die kleinen Stufen plus die HALBE Kernzahl (auf Intel-
+    # Hybriden liegt die Zahl der schnellen P-Kerne nahe daran) plus die volle
+    # Zahl als Gegenprobe. Alles abgeleitet, kein gewuerfelter Wert.
+    kandidaten = sorted({1, 2, 4, 8, max(1, kerne // 2), kerne}
+                        & set(range(1, kerne + 1)))
+    modell = _bench_modell()
+    if modell:
+        quelle, laeufe = modell, 6
+        # Diese Session liest NUR die Eingangs-Signatur und rechnet nie — sie
+        # bekommt trotzdem eine explizite Kappung (1 Thread): der Vertrag der
+        # ORT-Kappungs-Deckung kennt keine Ausnahmen, und ein ungekappter Pool
+        # nach Wirt-Kernzahl waere hier genauso falsch wie ueberall sonst.
+        _so0 = ort.SessionOptions()
+        _so0.intra_op_num_threads = 1
+        _so0.inter_op_num_threads = 1
+        _s0 = ort.InferenceSession(modell, sess_options=_so0,
+                                   providers=["CPUExecutionProvider"])
+        _in = _s0.get_inputs()[0]
+        form = [d if isinstance(d, int) and d > 0 else 1 for d in _in.shape]
+        eingabe = np.random.default_rng(11).random(form).astype(np.float32)
+        name_in = _in.name
+        del _s0
+    else:
+        quelle, laeufe = _bench_graph(), 3
+        quelle, n = quelle
+        eingabe = np.ascontiguousarray(
+            np.linspace(-1, 1, n * n, dtype=np.float32).reshape(n, n))
+        name_in = "X"
+    tabelle, ende = {}, _t.perf_counter() + float(budget_s)
+    for th in kandidaten:
+        if _t.perf_counter() > ende and tabelle:
+            break
+        so = ort.SessionOptions()
+        so.intra_op_num_threads = th
+        so.inter_op_num_threads = th
+        s = ort.InferenceSession(quelle, sess_options=so,
+                                 providers=["CPUExecutionProvider"])
+        s.run(None, {name_in: eingabe})               # Warmlauf
+        t0 = _t.perf_counter()
+        for _ in range(laeufe):
+            s.run(None, {name_in: eingabe})
+        tabelle[th] = round((_t.perf_counter() - t0) * 1000.0 / laeufe, 2)
+        del s
+    if not tabelle:
+        return None, {}
+    return min(tabelle, key=tabelle.get), tabelle
+
+
+def _threads_bestimmen(kerne):
+    """Die EINE Ermittlung: Cache -> Bench -> Kernzahl. Jeder Schritt darf
+    scheitern, ohne den Prozess zu kosten (fail-safe auf die Kernzahl, also
+    genau das Verhalten vor Welle 1)."""
+    global _THREADS_BENCH
+    if (os.environ.get("SUSLIK_CPU_THREADS_BENCH") or "").strip() == "0":
+        _THREADS_BENCH = {"quelle": "aus (SUSLIK_CPU_THREADS_BENCH=0)",
+                          "threads": kerne}
+        return kerne
+    schluessel, pfad = _threads_schluessel(kerne), _threads_cache_pfad()
+    if pfad:
+        try:
+            with open(pfad) as f:
+                d = json.load(f)
+            if d.get("schluessel") == schluessel and int(d.get("threads", 0)) > 0:
+                _THREADS_BENCH = {**d, "quelle": "cache"}
+                return int(d["threads"])
+        except Exception:
+            pass
+    try:
+        beste, tabelle = _threads_messen(kerne)
+    except Exception as e:                                    # noqa: BLE001
+        sys.stderr.write(f"[face_audit] thread bench skipped "
+                         f"({type(e).__name__}: {str(e)[:80]}) -> {kerne} threads\n")
+        _THREADS_BENCH = {"quelle": "bench fehlgeschlagen", "threads": kerne}
+        return kerne
+    if not beste:
+        _THREADS_BENCH = {"quelle": "kein Bench (unter 4 Kernen)", "threads": kerne}
+        return kerne
+    import time as _t
+    d = {"schluessel": schluessel, "threads": int(beste),
+         "kerne": int(kerne), "tabelle_ms": tabelle, "ts": round(_t.time(), 1)}
+    sys.stderr.write(
+        f"[face_audit] cpu threads measured: {beste} of {kerne} allowed "
+        f"({', '.join(f'{t}={ms}ms' for t, ms in sorted(tabelle.items()))})\n")
+    if pfad:
+        try:
+            os.makedirs(os.path.dirname(pfad), exist_ok=True)
+            tmp = f"{pfad}.tmp.{os.getpid()}"
+            with open(tmp, "w") as f:
+                json.dump(d, f)
+            os.replace(tmp, pfad)
+        except Exception:
+            pass
+    _THREADS_BENCH = {**d, "quelle": "gemessen"}
+    return int(beste)
+
+
+def _ort_thread_opts(deckel=None):
     """SessionOptions mit EXPLIZIT gesetzter Intra-Op-Thread-Zahl.
+
+    deckel (.377, additiv): fuer MINI-Netze (die Guete-Modelle, zusammen
+    ~3 Mio Parameter) sind viele Threads LANGSAMER als wenige — gemessen im
+    Prod-Container unter Last: 12 Threads 33+57 ms je Bild, 4 Threads
+    4+13 ms. Der Deckel kappt die ermittelte Kernzahl zusaetzlich nach
+    oben; None = unveraendertes Verhalten fuer alle Bestands-Aufrufer.
 
     onnxruntime baut seinen Thread-Pool sonst nach std::thread::hardware_concurrency() (= HOST-Kerne)
     und pinnt Thread i an Kern i. Im Container erlaubt die cgroup-CPU-Maske nur eine Teilmenge ->
@@ -118,15 +312,23 @@ def _ort_thread_opts():
             _ORT_THREADS = int(env)          # N9: cpu_threads-Config (Service setzt ENV, Worker erbt)
         else:
             try:
-                _ORT_THREADS = max(1, len(os.sched_getaffinity(0)))   # erlaubte Kerne (cgroup/LXC-Maske)
-            except AttributeError:                                     # sched_getaffinity nur auf Linux
-                _ORT_THREADS = max(1, os.cpu_count() or 1)
+                _kerne = max(1, len(os.sched_getaffinity(0)))   # erlaubte Kerne (cgroup/LXC-Maske)
+            except AttributeError:                             # sched_getaffinity nur auf Linux
+                _kerne = max(1, os.cpu_count() or 1)
+            # .384 (Welle 1, Etappe C): die Kernzahl ist auf Hybrid-CPUs KEINE
+            # Leistungszahl — gemessen 31.08. an 2d106det auf dieser Maschine
+            # (12 Kerne zugeteilt): 4 Threads 3,63 ms gegen 12 Threads 6,97 ms.
+            # Deshalb wird sie GEMESSEN statt angenommen; scheitert die Messung
+            # oder ist sie ausgeschaltet, gilt wieder die Kernzahl (Verhalten
+            # wie vorher, nie ein stiller Ausfall).
+            _ORT_THREADS = _threads_bestimmen(_kerne)
+    threads = _ORT_THREADS if deckel is None else max(1, min(_ORT_THREADS, int(deckel)))
     so = ort.SessionOptions()
-    so.intra_op_num_threads = _ORT_THREADS
+    so.intra_op_num_threads = threads
     # inter_op mitsetzen (#21): im Default-Modus ORT_SEQUENTIAL baut ORT zwar keinen
     # Inter-Op-Pool, aber der Default-WERT waere wieder hardware_concurrency — sollte je
     # eine Session in den Parallel-Modus geraten, gilt derselbe Deckel statt der Host-Kernzahl.
-    so.inter_op_num_threads = _ORT_THREADS
+    so.inter_op_num_threads = threads
     return so
 
 
@@ -296,6 +498,21 @@ class Embedder:
     _ort_session-Sessions ersetzt: auf Beschleunigern wechselt dabei der EP, auf cpu bleibt
     der EP und es greift die Thread-Kappung aus _ort_thread_opts (Issue #21). Die Embeddings
     bleiben numerisch praktisch identisch (cos > 0.9997 ggue. CPU), Schwellwerte gelten weiter."""
+    # ZAEHL-WACHE (Live-Performance Welle 1, Etappe B, 31.08.): wie viele
+    # Embedder halten in DIESEM Prozess gerade Sessions? Der Leitsatz heisst
+    # "EIN Inferenz-Kern je Dienst" — ein zweiter Embedder ist ein zweites
+    # Modell auf derselben iGPU, und genau diese Konstellation hat am 11.08.
+    # vier Waechter getoetet (CL_OUT_OF_RESOURCES). Die Zahl ist ABLESBAR,
+    # damit eine Wache sie pruefen kann, statt sie zu glauben. WeakSet, nicht
+    # Zaehler: nach einem Detektor-Neubau faellt der alte heraus, sobald er
+    # wirklich weg ist — ein Zaehler wuerde dort dauerhaft falsch stehen.
+    _LEBENDE = __import__("weakref").WeakSet()
+
+    @classmethod
+    def instanzen(cls):
+        """-> Zahl der LEBENDEN Embedder in diesem Prozess."""
+        return len(cls._LEBENDE)
+
     def __init__(self, device=None, modell=None):
         import onnxruntime as ort
         ort.set_default_logger_severity(3)
@@ -315,6 +532,12 @@ class Embedder:
         self._backend = resolve_backend(device)   # (kind, dev): device= gewinnt, sonst VERIFY_BACKEND/OV_DEVICE
         self._to_backend()                        # IMMER — auch cpu ersetzt die prepare()-Sessions (Thread-Kappung, #21)
         self._provider_guard("init")              # P1: Aufbau sofort verifizieren (nie Latenz raten); cpu: sofort True
+        # Zaehl-Wache (s. Klassenkopf). type(self) statt des Modul-Namens
+        # `Embedder`: worker.py bindet den Namen auf eine Singleton-FABRIK um
+        # (Warmstart-Vertrag) — ein Zugriff ueber den globalen Namen liefe dort
+        # gegen eine Funktion (gemessen im Gate: AttributeError im Worker-
+        # Roundtrip, jede Analyse waere tot).
+        type(self)._LEBENDE.add(self)
 
     def _init_rec_onnx(self, spec):
         """Recognition durch eigenes ONNX ersetzen (AdaFace): insightface macht weiter
@@ -437,6 +660,69 @@ class Embedder:
                 f.embedding = e
         return faces
 
+    # ---------------------------------------------------------------- Sammelbatch
+    # Live-Performance Welle 1, Etappe B (31.08.): Detektion und Embedding als
+    # ZWEI Schritte, damit ein Aufrufer die Crops MEHRERER Bilder (bei uns:
+    # mehrerer Waechter) zu EINEM Recognition-Lauf buendeln kann. Gemessen
+    # 31.08. in der Placement-Messmatrix: Embedding-Sammelbatch 3,7x auf der
+    # iGPU, 2,5x auf CUDA. (Detektions-Batching ist NICHT moeglich — die
+    # SCRFD-ONNX hat Batch fest 1; das wurde gemessen und nicht versucht.)
+    #
+    # ZUSAMMEN sind die beiden Methoden ZEILENGLEICH zu _get_mit_rec(img)
+    # ohne vorschranke — dieselbe Detektion, dieselben norm_crop-Crops,
+    # dieselbe _rec_infer-Kette. Der EINZIGE Unterschied ist die
+    # BATCHGROESSE, mit der _rec_infer laeuft. Das ist kein neuer
+    # Effekt: die Batchgroesse schwankt heute schon je Bild mit der Zahl der
+    # Gesichter, und die OpenVINO-Stufen (BATCH_STUFEN) padden ohnehin. Die
+    # dokumentierte Groessenordnung dieser Abhaengigkeit steht bei NormMass
+    # (1,2e-4 auf dem Embedding); die Zeilen des Batches sind je Crop
+    # unabhaengig (kein Kontakt zwischen Batch-Zeilen im Graphen).
+    def sammelbatch_moeglich(self):
+        """Kann dieser Embedder Detektion und Embedding trennen? -> bool.
+
+        NUR mit eigenem Recognition-Kopf (adaface): dort ist 'recognition' aus
+        app.models entfernt und laeuft als eigener, batchfaehiger Lauf. Beim
+        insightface-eigenen Kopf (buffalo) steckt sie als Modell IN der
+        Gesichts-Schleife von app.get — sie herauszuloesen waere ein Umbau der
+        Bibliotheks-Kette, kein Sammelbatch. Dort bleibt es beim Einzellauf."""
+        return self._rec is not None
+
+    def rec_geraet(self):
+        """Auf welchem Geraet rechnet der Recognition-Kopf? -> 'NPU'|'GPU'|
+        'CPU'|'CUDA'|… (Grossbuchstaben). Der Aufrufer entscheidet damit
+        zwischen Sammelbatch (iGPU/CUDA) und parallelen Einzel-Requests (NPU) —
+        gemessen 31.08.: auf der NPU bringen 2-4 gleichzeitige Requests 1,9x,
+        ein Batch dort nichts."""
+        kind, dev = self._backend
+        if kind == "cpu":
+            return "CPU"
+        if kind == "openvino":
+            return "NPU" if str(dev).upper() == "MIXED" else str(dev or "GPU").upper()
+        return str(kind).upper()
+
+    def detektieren(self, img, max_num=0):
+        """Detektion + Nach-Modelle (Pose/Landmarks) OHNE Embedding
+        -> (faces, crops112). Die Gegenstueck-Methode ist embeddings_setzen."""
+        if self._rec is None:
+            raise RuntimeError("detektieren() braucht den eigenen Recognition-"
+                               "Kopf (sammelbatch_moeglich() ist False)")
+        from insightface.utils import face_align
+        faces = self._orig_get(img, max_num=max_num)
+        if not faces:
+            return [], []
+        crops = [face_align.norm_crop(img, landmark=f.kps, image_size=112)
+                 for f in faces]
+        return faces, crops
+
+    def embeddings_batch(self, crops_bgr):
+        """norm_crop-112-Crops -> L2-normierte Embeddings, EIN Lauf.
+        Duenne Huelle um _rec_infer, damit Aufrufer ausserhalb dieses Moduls
+        keine Unterstrich-Methode anfassen muessen."""
+        if self._rec is None:
+            raise RuntimeError("embeddings_batch() braucht den eigenen "
+                               "Recognition-Kopf")
+        return self._rec_infer(list(crops_bgr))
+
     def faces_mit_vorschranke(self, img, vorschranke, max_num=0):
         """Der EINE Eintritt fuer Aufrufer, die eine Auswahl mitgeben wollen (Ernte).
         Deckt beide Recognition-Welten ab: mit eigenem ONNX-Kopf (adaface) ueber
@@ -558,6 +844,15 @@ class Embedder:
                                else os.path.expanduser("~/.cache/ov_face_buffalo_l"))
         if kind == "openvino":
             os.makedirs(cache, exist_ok=True)
+        # MIXED bleibt (Live-Performance Welle 1, Etappe C — MESSBELEG, kein
+        # Umbau): die Placement-Messmatrix vom 31.08. hat die Verteilung auf
+        # der Autor-Maschine (Core Ultra 9 285H, iGPU + NPU) unter Doppellast
+        # gegen die Alternativen gemessen. Det auf der iGPU + Embedding auf der
+        # NPU liefert 42/61 Bilder je Sekunde und ist damit die BESTE
+        # Verteilung — genau diese Zuordnung hier. GPU-only kostet das
+        # 1,4- bis 2,7-fache. Und AUTO:GPU,NPU wird ausdruecklich NICHT
+        # eingefuehrt: es war unter Last schlechter, und seine
+        # load_config-Variante faellt STILL auf die CPU zurueck (K1-Klasse).
         mixed = {"detection": "GPU", "landmark_3d_68": "GPU", "landmark_2d_106": "GPU",
                  "genderage": "GPU", "recognition": "NPU"}
         def _dev(task):                               # MIXED ist ein OpenVINO-Untermodus, kein generisches Backend

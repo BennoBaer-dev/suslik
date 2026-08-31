@@ -24,7 +24,8 @@ import html
 import time
 import urllib.parse
 
-from core.livewache import quelle_fp, quelle_maskiert
+from core.livewache import (HOEHEN_ALT, HOEHEN_ERLAUBT, quelle_fp,
+                            quelle_maskiert)
 from core.registry import LIVE_ZUSTAENDE
 from core.sprache import t, t_n
 
@@ -41,6 +42,12 @@ _PHASEN = {"verbinden": "Connecting", "messen": "Measuring",
 # Zeile ein sichtbares Alter — eine 14 Tage alte Messung las sich sonst wie
 # eine frische.
 _ALT_AB_TAGE = 1.0
+# Ab hier ist der Quelltest nicht mehr nur ALT, sondern eine AUFFORDERUNG
+# (User-Befund 31.08. an der deployten Seite: das Alter stand als graue Zeile
+# da und sagte nicht, was zu tun ist). 7 Tage ist die im Haus schon benutzte
+# Frist fuer "das ist nicht mehr frisch" (verifyd.py, Sichtungs-Fenster des
+# Nachtjobs) — kein neu gewuerfelter Wert.
+_TEST_ALT_TAGE = 7.0
 
 
 def _wann(ts):
@@ -74,9 +81,22 @@ def _fp_veraltet(block, guard):
     return bool(fp) and fp != quelle_fp(guard)
 
 
-def _test_zeile(test, guard=None):
+def _test_tage(test):
+    """Alter des gruenen Quelltests in Tagen -> float|None."""
+    try:
+        return (time.time() - float((test or {}).get("ts"))) / 86400.0
+    except (TypeError, ValueError):
+        return None
+
+
+def _test_zeile(test, guard=None, auffordern=False):
+    """Die Quelltest-Zeile. `auffordern` (Detailseite): ab _TEST_ALT_TAGE wird
+    aus der grauen Alters-Notiz ein sichtbarer Hinweis MIT Handlungssatz —
+    graue Zahlen beantworten nicht, was der Nutzer tun soll."""
     if not test or not test.get("ok"):
         return ""
+    tage = _test_tage(test)
+    alt = auffordern and tage is not None and tage >= _TEST_ALT_TAGE
     txt = (t("live.test.zeile", wann=_wann(test.get("ts")),
              aufloesung=test.get("aufloesung", "?"),
              skala=test.get("skala", "?"),
@@ -90,6 +110,10 @@ def _test_zeile(test, guard=None):
            + _alter_marke(test.get("ts"))
            + (" " + t("live.test.entwertet")
               if _fp_veraltet(test, guard) else ""))
+    if alt:
+        return (f'<div class="lv-zeile lv-hinweis">{html.escape(txt)}<br>'
+                f'{html.escape(t("live.test.veraltet_bitte", tage=f"{tage:.0f}"))}'
+                f'</div>')
     return f'<div class="dim lv-zeile">{html.escape(txt)}</div>'
 
 
@@ -456,8 +480,35 @@ def _save_knopf(gesperrt):
             + t("live.knopf_speichern") + '</button> ')
 
 
-def detail(name, guard, kd, gesperrt):
-    """-> Seiten-INHALT der Konfigurationsansicht /live/<kamera> (§2.4)."""
+def detail(name, guard, kd, gesperrt, vorrat=0, deckel=0, regel=(2, 0),
+           det_default=0.4, beweg_vorgabe=(30, 10)):
+    """-> Seiten-INHALT der Konfigurationsansicht /live/<kamera>.
+
+    UMGEBAUT am 31.08. (User-Befund: "Bandwurmseite"). Die Seite trug sechs
+    gleichrangige Karten untereinander, in denen das Selten-Gebrauchte (Quelle,
+    Aufloesung, Last-Messung) genauso viel Platz und Fliesstext bekam wie das
+    Taegliche. Nichts ist weggefallen — jeder Wert steht noch hier, nur neu
+    geordnet (Streich-Vorschlaege liegen dem User getrennt vor, nichts davon ist
+    ohne sein Wort umgesetzt):
+
+      Ankunft      Kopf mit Kameraname, Zustand, Vorschaubild des laufenden
+                   Waechters ("sieht er ueberhaupt etwas?") — die Frage, mit der
+                   man diese Seite betritt.
+      Erster Blick vier Kacheln nebeneinander statt einer Spalte: Erkennung,
+                   Melden, Frigate-Events, Quelltest.
+      EINE Handlung der Primaer-Knopf oben (Enable, bzw. der Quelltest, solange
+                   es keinen gruenen gibt) — vorher lag er ganz unten hinter
+                   allem.
+      Rest         alles Selten-Gebrauchte unter EINEM Aufklapper "Advanced".
+
+    vorrat/deckel = Stand des Kalibrier-Vorrats dieser Kamera (Bilder / Deckel),
+    regel = (n, t_s) der Erkannt-Regel — beide reicht der Handler herein
+    (Daten als Parameter, Muster dieses Moduls; die Auslegung der Regel selbst
+    kommt aus livewache.Engine.erkannt_regel, nie aus einer zweiten Rechnung).
+    beweg_vorgabe = (schwelle, flaeche) der Bewegungs-Abtastung als
+    Platzhalter-Text — ebenfalls vom Handler aus der EINEN Quelle
+    (livewache.BEWEG_SCHWELLE/BEWEG_FLAECHE), damit die Seite keine zweite
+    Zahl traegt."""
     nid = html.escape(name, quote=True)
     g = guard or {}
     quelle = g.get("quelle") or "proxy"
@@ -477,6 +528,10 @@ def detail(name, guard, kd, gesperrt):
     # Tests bleibt beim blossen Speichern stabil (ein expliziter Wert zaehlt
     # als Quell-Aenderung und entwertet den Test ehrlich).
     hoehe_wert = g.get("hoehe")
+    # Welle 1, Etappe C: 1440/2160 sind gestrichen (gemessen ohne Gewinn) und
+    # stehen deshalb nicht mehr zur Wahl. Eine Kamera, die einen dieser Werte
+    # GESPEICHERT hat, behaelt ihn im Store (sonst verfiele ihr Quelltest) —
+    # die Seite sagt dann ehrlich, mit welcher Hoehe sie wirklich laeuft.
     hoehen = "".join(
         f'<label class="lv-radio"><input type="radio" name="lv-hoehe" '
         f'value="{w}"{" checked" if hoehe_wert == (int(w) if w else None) else ""}>'
@@ -484,9 +539,11 @@ def detail(name, guard, kd, gesperrt):
         for w, beschr in (("", t("live.hoehe.default")),
                           ("360", t("live.hoehe.h360")),
                           ("720", t("live.hoehe.h720")),
-                          ("1080", t("live.hoehe.h1080")),
-                          ("1440", t("live.hoehe.h1440")),
-                          ("2160", t("live.hoehe.h2160"))))
+                          ("1080", t("live.hoehe.h1080"))))
+    if hoehe_wert in HOEHEN_ALT:
+        hoehen += (f'<div class="lv-zeile lv-hinweis">'
+                   f'{html.escape(t("live.hoehe.alt_hinweis", alt=hoehe_wert, jetzt=max(HOEHEN_ERLAUBT)))}'
+                   f'</div>')
     # .200 (Fix 3): kein eigenes Kanal-Literal mehr — gespeicherte Waechter kommen
     # normalisiert aus guards_lesen, NEUE bekommen die Vorbelegung im /live/-Handler
     # aus melden.konfigurierte_kanaele (die eine Quelle). Fehlt beides: nichts vorwaehlen.
@@ -507,16 +564,133 @@ def detail(name, guard, kd, gesperrt):
             schalter = (f'<button class="gtb" '
                         f'onclick="liveSchalter(\'{nid}\',false,this)">'
                         f'{t("live.knopf_disable")}</button>')
-    # Stufe-0-Grenzen hier: der Aufloesungs-Absatz (<b>Measure load</b>) und
-    # die Credentials-Zeile (<a>-Link) bleiben literal; die Kanal-Haekchen
-    # pushover/telegram/mqtt sind Anzeige==Kennung + Produktnamen.
-    return (
-        f'<h2>{t("live.detail.titel", name=html.escape(name))} {_pill(z)}</h2>'
-        + (f'<p class="sub">{html.escape(kd["detail"])}</p>'
-           if kd.get("detail") else "")
-        + f'<p class="sub">{html.escape(t("live.hinweis_gpu"))}</p>'
-        + f'<input type="hidden" id="lv-kamera" value="{nid}">'
-        + f'<div class="card"><b>{t("live.abschnitt.quelle")}</b>'
+    # ANKUNFT (User-Befund 31.08. an der deployten Seite: die Kopfkarte war
+    # fast leer und trug nur zwei Knoepfe): laeuft der Waechter, steht hier
+    # sein Vorschaubild — dasselbe JPEG wie auf der Kachel, aus dem
+    # Detektor-Thread in Waechter-Skala, also WAS DER WAECHTER SIEHT. Laeuft er
+    # nicht, gibt es kein ehrliches Bild: der Vorschau-Endpunkt liefert
+    # aelteres Material bewusst NICHT aus (VORSCHAU_FRISCH_S, sonst haenge ein
+    # eingefrorenes Bild als "live" an der Seite). Statt eines Platzhalter-
+    # Bildes ohne Aussagewert steht dort deshalb ein Feld mit dem ZUSTAND und
+    # dem, was der letzte Quelltest an dieser Kamera gemessen hat.
+    if z == "active":
+        bild = (f'<img class="lv-vorschau" data-kamera="{nid}" alt="" '
+                f'src="/live_bild/{nid}?t=0" '
+                f'onerror="this.style.display=\'none\'" '
+                f'onload="this.style.display=\'\'">')
+    else:
+        _tb = g.get("test") or {}
+        _gemessen = (t("live.detail.kein_bild_test",
+                       aufloesung=_tb.get("aufloesung", "?"),
+                       skala=_tb.get("skala", "?"))
+                     if _tb.get("ok") else t("live.detail.kein_bild_ohne_test"))
+        bild = (f'<div class="lv-kein-bild">'
+                f'<div class="lv-kein-bild-kopf">{t("live.detail.kein_bild")}</div>'
+                f'<div class="dim lv-zeile">{html.escape(_gemessen)}</div></div>')
+    # --- Kachel 1: Erkennung (Live-Umbau 31.08., alles je Kamera) ---------
+    # §8.8: die Zahl kommt vorformatiert aus dem Code, der Schluessel kennt nur
+    # {wert} und {marke} — keine Werks-Zahl im Uebersetzungstext (sie wuerde
+    # beim naechsten Mess-Entscheid in fuenf Sprachen falsch stehen).
+    det_wert = g.get("det_min")
+    det_txt = f"{float(det_wert if det_wert is not None else det_default):.2f}"
+    det_marke = "" if det_wert is not None else t("live.erkennung.det_vorgabe")
+    def _latte(wert):
+        return (f"{float(wert):.3f}" if wert is not None
+                else t("live.erkennung.latte_aus"))
+
+    # Schluessel LITERAL an der Aufrufstelle (nicht ueber eine Schleifen-
+    # Variable): die Sprach-Deckungsstufe liest die Aufrufe statisch und haelt
+    # einen so aufgeloesten Schluessel sonst fuer tot.
+    guete_txt = (t("live.erkennung.latte_e", wert=_latte(g.get("guete_e_min")))
+                 + " · "
+                 + t("live.erkennung.latte_t", wert=_latte(g.get("guete_t_min"))))
+    k_erkennung = (
+        f'<div class="dim lv-zeile">'
+        f'{t("live.erkennung.det_zeile", wert=det_txt, marke=det_marke)}</div>'
+        f'<div class="lv-zeile">{t("live.erkennung.regel_vor")} '
+        f'<input id="lv-erkannt-n" size="3" '
+        f'value="{html.escape(str(g.get("erkannt_n") or regel[0]))}"> '
+        f'{t("live.erkennung.regel_mitte")} '
+        f'<input id="lv-erkannt-t" size="4" '
+        f'value="{html.escape(str(int(g.get("erkannt_t_s") or 0)))}"> '
+        f'{t("live.erkennung.regel_nach")}</div>'
+        f'<div class="dim lv-zeile">{t("live.erkennung.regel_hinweis")}</div>'
+        + (f'<div class="dim lv-zeile">'
+           f'{t("live.erkennung.vorrat_zeile", n=vorrat, deckel=deckel)}</div>'
+           if deckel else
+           f'<div class="dim lv-zeile">{t("live.erkennung.vorrat_aus")}</div>')
+        + f'<div class="lv-knoepfe">'
+          # Zentral-Umbau 31.08.: die Kalibrierseite liegt unter /kalibrierung/
+          # (eigener Menuepunkt). Der Knopf hier bleibt — er ist der kurze Weg
+          # aus dem Waechter heraus —, zeigt aber auf DIE eine Adresse.
+          f'<a class="gtb" href="/kalibrierung/{nid}">'
+          f'{t("live.knopf_kalibrieren")}</a>'
+        + (f'<button class="gtb" onclick="liveVorratLeeren(\'{nid}\',this)">'
+           f'{t("live.knopf_vorrat_leeren")}</button>' if vorrat else "")
+        + '</div>')
+    # --- Kachel 2: Melden -------------------------------------------------
+    k_melden = (
+        # Zwei benannte Gruppen in EINER Kachel (die Ueberschriften sind die
+        # beiden bisherigen Karten-Titel): Zeiten und Kanaele gehoeren zusammen
+        # — man stellt sie in einem Zug ein —, bleiben aber unterscheidbar.
+        f'<div class="dim lv-zeile"><b>{t("live.abschnitt.alarm")}</b></div>'
+        f'<div class="lv-zeile">{t("live.detail.scharf_label")} '
+        f'<input id="lv-scharf" size="5" '
+        f'value="{html.escape(str(g.get("wieder_scharf_s", 120)))}"></div>'
+        f'<div class="dim lv-zeile">{t("live.detail.scharf_hinweis")}</div>'
+        f'<div class="lv-zeile">{t("live.detail.ende_label")} '
+        f'<input id="lv-ende" size="5" '
+        f'value="{html.escape(str(g.get("ende_ohne_gesicht_s", 10)))}"></div>'
+        f'<div class="dim lv-zeile">{t("live.detail.ende_hinweis")}</div>'
+        + f'<div class="dim lv-zeile"><b>{t("live.abschnitt.kanaele")}</b></div>'
+        + kboxen
+        # .197: der "quick verdict"-Haken ist weg (User: Enable heisst alles
+        # laeuft) — die vorlaeufige Namens-Stufe gehoert seit dem Voting zu
+        # jedem eingeschalteten Waechter, sofern Referenzen da sind.
+        + f'<div class="dim lv-zeile">{t("live.detail.namensschaetzung")}</div>')
+    # --- Abtastung (Welle 1, Etappe A): Werte fuer die Advanced-Karte -----
+    bw_an = bool(g.get("bewegung_gate", True))
+    ruhe_wert = g.get("ruhe_takt_s")
+    bw_schwelle = g.get("bewegung_schwelle")
+    bw_flaeche = g.get("bewegung_flaeche")
+    # Die Vorgaben kommen als Parameter herein (Daten als Parameter, Muster
+    # dieses Moduls) — nie als zweite Zahl im Renderer.
+    bw_schwelle_vor, bw_flaeche_vor = beweg_vorgabe
+    # --- Kachel 3: Frigate-Events (eigener Schalter, Vorgabe AUS) ---------
+    fr_an = bool(g.get("frigate_events"))
+    fr_abstand = g.get("frigate_abstand_s")
+    k_frigate = (
+        f'<label class="lv-radio"><input type="checkbox" id="lv-frigate"'
+        f'{" checked" if fr_an else ""}> {t("live.frigate.schalter")}</label>'
+        f'<div class="dim lv-zeile">{t("live.frigate.erklaerung")}</div>'
+        f'<div class="lv-zeile">{t("live.frigate.abstand_label")} '
+        f'<input id="lv-frigate-abstand" size="5" '
+        f'value="{html.escape("" if fr_abstand is None else str(int(fr_abstand)))}" '
+        f'placeholder="{html.escape(str(g.get("wieder_scharf_s", 120)))}"></div>'
+        f'<div class="dim lv-zeile">{t("live.frigate.abstand_hinweis")}</div>')
+    # --- Kachel 4: Quelltest (der Riegel vors Einschalten) ----------------
+    k_test = (
+        _test_zeile(g.get("test"), g, auffordern=True)
+        + _test_fehler_zeile(g.get("test_fehler"))
+        # Issue #24 (Tokn59, 18.08.): im gesperrten Zustand fehlten die
+        # Knoepfe KOMMENTARLOS — die Karte wirkte kaputt ('can not be
+        # clicked or activated in any way'). Jetzt sagt sie, warum.
+        + (f'<div class="dim lv-zeile">{t("live.detail.gesperrt_hinweis")}</div>'
+           if gesperrt else
+           f'<div class="lv-knoepfe"><button class="gtb" '
+           f'onclick="liveTest(\'{nid}\',this)">'
+           f'{t("live.knopf_test")}</button></div>')
+        + f'<div class="dim lv-zeile" id="lv-job-{nid}"></div>')
+
+    def _kachel(titel, inhalt):
+        return f'<div class="card lvk"><h3>{titel}</h3>{inhalt}</div>'
+
+    # --- Advanced: alles Selten-Gebrauchte unter EINEM Aufklapper ---------
+    # Stufe-0-Grenzen hier unveraendert: der Aufloesungs-Absatz (<b>Measure
+    # load</b>) und die Credentials-Zeile (<a>-Link) bleiben literal; die
+    # Kanal-Haekchen pushover/telegram/mqtt sind Anzeige==Kennung.
+    erweitert = (
+        f'<div class="card"><b>{t("live.abschnitt.quelle")}</b>'
         + radios
         + f'<div>{t("live.detail.url_label")} '
           # C4 (Muster Notifications-Secrets): das Feld ist mit der
@@ -536,41 +710,81 @@ def detail(name, guard, kd, gesperrt):
           'on your hardware. Changing this invalidates the source test.</div>'
         + hoehen
         + '</div>'
-        + f'<div class="card"><b>{t("live.abschnitt.alarm")}</b>'
-        + f'<div>{t("live.detail.ende_label")} <input id="lv-ende" size="5" '
-          f'value="{html.escape(str(g.get("ende_ohne_gesicht_s", 10)))}"> '
-          f'<span class="dim">{t("live.detail.ende_hinweis")}</span></div>'
-        + f'<div>{t("live.detail.scharf_label")} <input id="lv-scharf" size="5" '
-          f'value="{html.escape(str(g.get("wieder_scharf_s", 120)))}"> '
-          f'<span class="dim">{t("live.detail.scharf_hinweis")}</span></div></div>'
-        + f'<div class="card"><b>{t("live.abschnitt.kanaele")}</b>'
-        + kboxen
-        # .197: der "quick verdict"-Haken ist weg (User: Enable heisst alles
-        # laeuft) — die vorlaeufige Namens-Stufe gehoert seit dem Voting zu
-        # jedem eingeschalteten Waechter, sofern Referenzen da sind.
-        + f'<div class="dim lv-zeile">{t("live.detail.namensschaetzung")}</div>'
-        + '<div class="dim lv-zeile">Channel credentials live on the '
-          '<a href="/benachrichtigungen">Notifications</a> page — test them '
-          'there.</div></div>'
-        + f'<div class="card"><b>{t("live.abschnitt.test")}</b>'
-        + _test_zeile(g.get("test"), g)
-        + _test_fehler_zeile(g.get("test_fehler"))
+        # --- Abtastung (Live-Performance Welle 1, Etappe A) ---------------
+        # Selten gebraucht, deshalb unter "Advanced" — aber ein echter
+        # Verhaltens-Schalter, deshalb sichtbar und nicht nur im Store.
+        + f'<div class="card"><b>{t("live.abschnitt.abtastung")}</b>'
+        + f'<label class="lv-radio"><input type="checkbox" id="lv-bewegung"'
+        + f'{" checked" if bw_an else ""}> {t("live.abtastung.schalter")}</label>'
+        + f'<div class="dim lv-zeile">{t("live.abtastung.erklaerung")}</div>'
+        + f'<div class="lv-zeile">{t("live.abtastung.ruhe_label")} '
+          f'<input id="lv-ruhe-takt" size="5" '
+          f'value="{html.escape("" if ruhe_wert is None else str(int(ruhe_wert)))}" '
+          f'placeholder="{html.escape(str(g.get("ende_ohne_gesicht_s", 10)))}"> '
+          f'{t("live.abtastung.ruhe_einheit")}</div>'
+        + f'<div class="dim lv-zeile">{t("live.abtastung.ruhe_hinweis")}</div>'
+        # Die zwei Eich-Werte je Kamera: leer = Frigates Auslieferungs-Vorgabe.
+        # Sie stehen HIER und nicht in einer globalen Schraube, weil jede
+        # Anlage anders ist (User-Auflage 31.08.).
+        + f'<div class="lv-zeile">{t("live.abtastung.schwelle_label")} '
+          f'<input id="lv-bewegung-schwelle" size="4" '
+          f'value="{html.escape("" if bw_schwelle is None else str(int(bw_schwelle)))}" '
+          f'placeholder="{bw_schwelle_vor}"> '
+          f'&middot; {t("live.abtastung.flaeche_label")} '
+          f'<input id="lv-bewegung-flaeche" size="4" '
+          f'value="{html.escape("" if bw_flaeche is None else str(int(bw_flaeche)))}" '
+          f'placeholder="{bw_flaeche_vor}"></div>'
+        + f'<div class="dim lv-zeile">{t("live.abtastung.eich_hinweis")}</div></div>'
+        + f'<div class="card"><b>{t("live.abschnitt.guete")}</b>'
+        + f'<div class="dim lv-zeile">{guete_txt}</div>'
+        + f'<div class="dim lv-zeile">{t("live.erkennung.latte_hinweis")}</div></div>'
+        + f'<div class="card"><b>{t("live.abschnitt.last")}</b>'
         + (_messung_zeile(g.get("messung"), g) if not gesperrt else "")
-        # Issue #24 (Tokn59, 18.08.): im gesperrten Zustand fehlten die
-        # Knoepfe KOMMENTARLOS — die Karte wirkte kaputt ('can not be
-        # clicked or activated in any way'). Jetzt sagt sie, warum.
-        + (f'<div class="dim lv-zeile">{t("live.detail.gesperrt_hinweis")}</div>'
-           if gesperrt else
-           f'<button class="gtb" onclick="liveTest(\'{nid}\',this)">'
-           f'{t("live.knopf_test")}</button> '
-           f'<button class="gtb" onclick="liveMessung(\'{nid}\',this)">'
+        + ("" if gesperrt else
+           f'<div class="lv-knoepfe"><button class="gtb" '
+           f'onclick="liveMessung(\'{nid}\',this)">'
            f'{t("live.knopf_messung_lang")}</button> '
-           f'<span class="dim">{t("live.detail.messung_hinweis")}</span>')
-        + f'<div class="dim lv-zeile" id="lv-job-{nid}"></div>'
-        + '<div class="dim lv-zeile" id="lv-auftrag"></div></div>'
-        + '<p>' + _save_knopf(gesperrt) + schalter
-        + ' <span id="lv-status" style="color:var(--dim)"></span> '
-        + f'&nbsp; <a href="/live">{t("live.detail.link_zurueck")}</a></p>'
+           f'<span class="dim">{t("live.detail.messung_hinweis")}</span></div>')
+        + '</div>'
+        + f'<div class="card"><div class="dim lv-zeile">'
+          f'{html.escape(t("live.hinweis_gpu"))}</div>'
+          '<div class="dim lv-zeile">Channel credentials live on the '
+          '<a href="/benachrichtigungen">Notifications</a> page — test them '
+          'there.</div></div>')
+    # KOPFZEILE: Titel, Zustand und der Rueckweg in EINER Zeile. Der Rueckweg
+    # stand bis .383 als nackter Link ganz unten hinter allen Karten — dort
+    # sucht ihn niemand, und auf dem Handy ist er drei Bildschirme entfernt
+    # (User-Befund 31.08.).
+    return (
+        f'<div class="lv-titelzeile">'
+        f'<h2>{t("live.detail.titel", name=html.escape(name))} {_pill(z)}</h2>'
+        f'<a class="gtb" href="/live">{t("live.detail.link_zurueck")}</a>'
+        f'</div>'
+        + f'<input type="hidden" id="lv-kamera" value="{nid}">'
+        # KOPFKARTE, kompakt (User-Befund 31.08.: "fast leer, nur Save/Enable
+        # in einer riesigen Karte"): Bild bzw. Zustands-Feld LINKS, die beiden
+        # Handlungen der Seite mit ihrer Antwort RECHTS daneben — statt
+        # untereinander ueber die halbe Seite.
+        + '<div class="card lv-kopfkarte"><div class="lv-kopfreihe">'
+        + f'<div class="lv-kopfbild">{bild}</div>'
+        + '<div class="lv-kopftext">'
+        + (f'<div class="dim lv-zeile">{html.escape(kd["detail"])}</div>'
+           if kd.get("detail") else "")
+        # Beide Handlungen der Seite an EINER Stelle, oben, mit der Antwort
+        # daneben: vorher stand der Schalter ganz unten hinter sechs Karten,
+        # und die Erfolgsmeldung erschien dort, wo gerade niemand hinsah.
+        + f'<div class="lv-knoepfe">{_save_knopf(gesperrt)}{schalter}'
+        + ' <span id="lv-status" style="color:var(--dim)"></span></div>'
+        + '<div class="dim lv-zeile" id="lv-auftrag"></div>'
+        + '</div></div></div>'
+        + '<div class="lvk-grid">'
+        + _kachel(t("live.abschnitt.erkennung"), k_erkennung)
+        + _kachel(t("live.abschnitt.melden"), k_melden)
+        + _kachel(t("live.abschnitt.frigate"), k_frigate)
+        + _kachel(t("live.abschnitt.test"), k_test)
+        + '</div>'
+        + f'<details class="lv-abschnitt"><summary>'
+          f'{t("live.abschnitt.erweitert")}</summary>{erweitert}</details>'
         + '<script>window._livePage=true;</script>')
 
 

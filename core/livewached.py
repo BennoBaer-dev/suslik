@@ -102,11 +102,35 @@ class Detektor:
         except Exception:
             return "unbekannt"
 
-    def erkennen(self, frame_bgr, netz):
+    def _netz_stellen(self, netz):
         if netz and netz != self._netz:
             self.app.set_det_size(tuple(netz))
             self._netz = tuple(netz)
+
+    def erkennen(self, frame_bgr, netz):
+        self._netz_stellen(netz)
         return self.app.app.get(frame_bgr) or []
+
+    # --- Sammelbatch (Live-Performance Welle 1, Etappe B, 31.08.) -----------
+    # Der Inferenz-Kern (core/livewache.Inferenzkern) FRAGT diese drei
+    # Faehigkeiten ab, statt sie anzunehmen — ein Detektor ohne sie (Stub im
+    # Harnisch, insightface-eigener Recognition-Kopf) laeuft unveraendert auf
+    # dem Einzelweg weiter. Die Trennung selbst liegt in face_audit.Embedder
+    # (dort steht auch, warum sie zeilengleich zum Einzelweg ist).
+    def sammelbatch_moeglich(self):
+        return self.app.sammelbatch_moeglich()
+
+    def rec_geraet(self):
+        return self.app.rec_geraet()
+
+    def detektieren(self, frame_bgr, netz):
+        """-> (faces OHNE Embedding, crops112) — der erste Halbschritt."""
+        self._netz_stellen(netz)
+        return self.app.detektieren(frame_bgr)
+
+    def embeddings(self, crops):
+        """Crops MEHRERER Waechter in EINEM Lauf -> Nx512."""
+        return self.app.embeddings_batch(crops)
 
 
 CPU_EMPFOHLEN = 1     # CPU-Runde 17.08., .252 (User-Entscheid nachmittags):

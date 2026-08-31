@@ -29,6 +29,7 @@ from core import melden as _melden                    # Modulumbau R3: die Melde
 from core import frames as _frames                    # .287: Clip-Debug [clipdbg] (Senke + Direkt-Zeilen; leichtgewichtig, kein cv2)
 from core import frigate_auth as _fauth                # 5e: DER eine Frigate-HTTP-Griff (Kennung immer, Login optional)
 from core.schoner import Schoner                      # .264: Frigate-Schoner (Rueckzug statt Retry)
+from core import kamerakalib as _kk_ue                # Kamera-Kalibrierung: DIE Katalog-Latte je Kamera (31.08.)
 from core import sprache as _sprache                  # Sprach-Stufe 1: contextvar je Request + Schalter
 from core import systemstat as _systemstat            # .341: Systemzahlen (Sammler, Ringpuffer, /health.system)
 # Oeffentliche Projekt-Doku (GitHub). Lokale Arbeitsnotizen des Autors enthalten interne
@@ -458,6 +459,19 @@ def fehler_kern(text, n=220):
     return (zeilen[-1] if zeilen else "")[:n]
 
 
+def guete_latte_aus_cfg(cfg):
+    """Guete-Latte der Kalibrier-Funktion (.377, User-Entscheid 30.08.):
+    die zwei nutzer-kalibrierten Schwellen fuer die Bildguete-Masse aus
+    core/guete.py (empfinden = Bild-Eindruck, fiqa_t = Erkennbarkeit).
+    Defaults sind die am Feldmaterial geeichten Startwerte (Messtag 30.08.,
+    714 Bilder, User-Slider: E 0,200 / T 0,40 — analysen/todos_29_08.md
+    Punkt 9). Immer ein Dict: die Latte urteilt in core/benennung ohnehin
+    nur ueber Zeilen, die BEIDE Masse tragen (Alt-Bestand laeuft den
+    sharp-Weg)."""
+    return {"empfinden_min": cfg.get("guete_empfinden_min"),
+            "t_min": cfg.get("guete_t_min")}
+
+
 def norm_latte_aus_cfg(cfg):
     """Norm-Latte fuer die Sichtungs-/Benenn-Bewertung (.307): dieselben
     Config-Achsen wie Vorrat/Katalog — GUT ab der Qualitaetslinie, Mindest ab
@@ -564,6 +578,7 @@ def ernte_schwellen_aus_cfg(cfg):
 
 def load_config(path):
     from core.benennung import NORM_LATTE as _NL   # .308: EINE Quelle der Norm-Defaults
+    from core.guete import STARTWERTE as _guete_start  # .377: EINE Quelle der Guete-Startwerte
     raw = open(path).read()
     raw = re.sub(r"\$\{(\w+)\}", lambda m: os.environ.get(m.group(1), ""), raw)
     cfg = yaml.safe_load(raw)
@@ -728,6 +743,10 @@ def load_config(path):
                          # Ausschuss ist reine Nachpruef-Diagnose und faellt mit ~15-20 GB
                          # je Tag an, die Beweis-Medien haengen an gemeldeten Auftritten.
                          ("live_retention_d", 7), ("live_verworfen_retention_d", 2),
+                         # Kalibrier-Vorrat je Kamera (31.08.): 200 Bilder sind
+                         # ~4-8 MB je Kamera und decken die Vielfalt mehrerer
+                         # Tage ab (ein Bild je Auftritt, nicht je Bild).
+                         ("live_kalib_max", 200),
                          # .316 (User 22.08.): Veto-Linie der Gruppen-Sichtung. Eigener
                          # Wert statt vorrat_norm_min mitzubenutzen, damit der User die
                          # ANZEIGE drehen kann, ohne die Ernte-Achsen zu verstellen.
@@ -803,6 +822,29 @@ def load_config(path):
                          # sie holen. Wenn der Knopf wiederkommt, hier zurueck
                          # auf "ask" — der Rest der Mechanik bleibt bestehen.
                          ("start_catchup", "on"),
+                         # .377 Kalibrier-Funktion: Startwerte der Guete-Latte,
+                         # am Feldmaterial geeicht (Messtag 30.08., User-Slider).
+                         ("guete_empfinden_min", _guete_start["empfinden"]),
+                         ("guete_t_min", _guete_start["t"]),
+                         # KATALOG-LATTE (Drei-Latten-Semantik, User 31.08.):
+                         # die STRENGERE Latte fuer die Aufnahme in den
+                         # Referenz-Katalog — global als Rueckfall, je Kamera
+                         # ueberschreibbar (core/kamerakalib.py). BEWUSST
+                         # dieselben Werks-Startwerte wie oben: der Katalog
+                         # bleibt auf der NAH-Eichung stehen, waehrend der
+                         # Nutzer die KAMERA-Latte fuer Fernmaterial senkt
+                         # (Feld-Eichpunkte 31.08. 0,120/0,300) — genau daraus
+                         # entsteht "strenger", ohne eine zweite erfundene Zahl.
+                         ("katalog_guete_e_min", _guete_start["empfinden"]),
+                         ("katalog_guete_t_min", _guete_start["t"]),
+                         # On-demand-Fueller der Kalibrier-Seite (Etappe 4):
+                         # ZWEI Stopp-Bedingungen, beide aus Haus-Zahlen —
+                         # Ziel-Bilder 25 (die Testlauf-Groesse des Users, stand.md
+                         # 30.08. "Tests mit 25er-Laeufen"), Event-Deckel
+                         # 50 (Haus-Regel "Erstlauf ~50 Events", CLAUDE.md).
+                         # Der Lauf endet, was zuerst eintritt.
+                         ("kalib_fueller_bilder", 25),
+                         ("kalib_fueller_events", 50),
                          # .264 Frigate-Schoner (Verklemmungs-Vorfall 17.08.):
                          # nach N Netz-Fehlern in Folge pause_s zurueckziehen.
                          ("frigate_schoner_fehler", 3),
@@ -1038,6 +1080,16 @@ def load_config(path):
     # tls_verify wandert IMMER mit: es ist kein Geheimnis, und ein AUS muss
     # auch dann in den Subprozessen ankommen, wenn dort der Store fehlt.
     os.environ["FRIGATE_TLS_VERIFY"] = "1" if cfg.get("frigate_tls_verify", True) else "0"
+    # .380 ZULAUF-LATTEN (Beschluss 31.08.): der Unbekannt-Pool siebt seinen
+    # Zulauf jetzt mit denselben Linien wie der Lernlauf. anlernen laeuft im
+    # Worker ODER als Subprozess und hat keine Dienst-Config — es bekommt die
+    # FERTIGEN Dicts, nicht die Einzelwerte: waehlte es die Config-Schluessel
+    # selbst aus, haette der Pool eine zweite Auswahl und driftete gegen
+    # Gruppen-Flaeche und Sieb (K3-Regel). Steht NACH der Store-Einmischung und
+    # nach dem Klemmen, damit die WIRKSAMEN Werte reisen. Leeres Dict = Achse
+    # aus (Vorrat aus -> norm_latte_aus_cfg None) und damit kein Ausschluss.
+    os.environ["VERIFY_NORM_LATTE"] = json.dumps(norm_latte_aus_cfg(cfg) or {})
+    os.environ["VERIFY_GUETE_LATTE"] = json.dumps(guete_latte_aus_cfg(cfg) or {})
     # Recognition-Modell prozessweit setzen: jeder Subprozess-env ist dict(os.environ, ...) und
     # erbt VERIFY_MODELL damit automatisch (analyze/backtest/anlernen/abnahme -> gleiches Modell,
     # kein refcache-Mix). Umschaltbar ueber modell: in verifyd.yaml/Store (buffalo | adaface).
@@ -3535,7 +3587,7 @@ class Service:
         "anwesenheit_cooldown": (int, 300, 86400, "quiet window for the presence push (sec.)"),
         "anwesenheit_push": (bool, None, None, "presence push on/off"),
         "sub_label_schreiben": (bool, None, None, "write recognized names back to Frigate"),
-        "support_zugriff": (bool, None, None, "remote support access (read-only): named areas — logs, masked config, faces, learning runs, body material, state files — become downloadable for whoever holds the support token (default off; every request is logged; the token is created on the system page and can be rotated any time; note that without TLS the token travels in plain text)"),
+        "support_zugriff": (bool, None, None, "remote support access (read-only): whoever holds the support token can download named areas — logs, masked config, faces, learning runs, body material, state files — and, since 0.1.0.380, list and fetch anything else in your data folder as well. Your configuration is the one exception: it always goes out masked, plain-text secrets never leave the machine. Nothing can be written or changed this way (default off; every request is logged; the token is created on the system page and can be rotated any time; note that without TLS the token travels in plain text)"),
         # Ohne diesen Eintrag lehnte config_schreiben() jede Aenderung mit 400 ab -> der
         # Write-back-Schalter auf der System-Seite war wirkungslos (nur ueber den Wizard setzbar).
         "frigate_read_only": (bool, None, None, "read-only mode: never write anything back to Frigate"),
@@ -3562,6 +3614,10 @@ class Service:
         "reihung_luma_max": (int, 0, 255, "brightest a face crop may be and still be recommended for learning: above it the picture is shown with the reason \"overexposed\" and sorted behind the well-lit ones. Never dropped, same as the lower line (0 = off)"),
         "live_retention_d": (int, 0, 365, "how many days the live watchers' evidence pictures and look-back clips are kept in <data_dir>/live/ (0 = keep forever)"),
         "live_verworfen_retention_d": (int, 0, 365, "how many days the live watchers' rejected frames (pose check, prefix verworfen_) are kept — they are diagnostic material only and are never shown; they are by far the largest part of <data_dir>/live/ (0 = keep forever)"),
+        # Live-Umbau 31.08.: Deckel des Kalibrier-Vorrats JE KAMERA. Er ist der
+        # Grund, warum der Ring nie wachsen kann — <data_dir>/live/ war schon
+        # einmal der Datenweg ohne Bremse (72,9 GB in neun Tagen, .315).
+        "live_kalib_max": (int, 0, 2000, "how many face samples each live watcher keeps on disk for its calibration page (a ring — the oldest drop out, it never grows). 0 turns the collection off; the calibration page then has nothing to show. One picture per appearance, so a busy camera fills it in a few days"),
         "cpu_threads": (int, 0, 64, "CPU thread cap for inference sessions + transcode (0 = auto: allowed cores)"),
         "anker_sim1": (float, 0.05, 0.95, "anchor clustering stage 1 (within a pass; measured 0.25)"),
         "anker_sim2": (float, 0.05, 0.95, "anchor clustering stage 2 (pass centroids; measured 0.35)"),
@@ -3616,6 +3672,12 @@ class Service:
         # Wert hier wieder in die Liste und der Satz wieder in die Erklaerung.
         "start_catchup": (list, ["on", "off"], None,
                           "what happens to the person events that piled up while the service was down. on (default): work through them right away, one after another. off: mark them as skipped in the record — they keep their place and are never retried. In poll mode the periodic sweep keeps running in both, because it is the only thing that picks up new events there"),
+        "guete_empfinden_min": (float, 0.0, 1.0, "calibration: minimum picture-impression score (Efficient-FIQA) a face needs to count as good for learning. Set via the calibration page after a learning run; lower keeps more but darker/rougher pictures"),
+        "guete_t_min": (float, 0.0, 1.0, "calibration: minimum recognisability score (eDifFIQA-T) a face needs to count as good for learning. This one also sorts out half-covered faces; set via the calibration page"),
+        "katalog_guete_e_min": (float, 0.0, 1.0, "catalogue bar (picture impression): how good a face has to look before it may become a stored reference. Stricter than the bar above on purpose — that one decides what a learning run keeps, this one decides what ends up in the catalogue. Cameras can override it on their calibration page; pictures without quality scores are never rejected by it"),
+        "katalog_guete_t_min": (float, 0.0, 1.0, "catalogue bar (recognisability): how recognisable a face has to be before it may become a stored reference. Per-camera values on the calibration page win over this one; existing references are never removed by it"),
+        "kalib_fueller_bilder": (int, 1, 200, "calibration top-up: how many pictures the 'look for fresh material' button aims to collect for a camera before it stops"),
+        "kalib_fueller_events": (int, 1, 500, "calibration top-up: how many recent person events of that camera it may work through at most — whichever limit is reached first ends the run"),
         "nachhol_versuche": (int, 0, 5, "retry attempts for events whose analysis failed (0 = off); retries are silent, they never alert"),
         "nachhol_tage": (int, 1, 3, "how far back the retry looks for failed analyses (days)"),
         "worker": (bool, None, None, "persistent analysis worker: keeps the models loaded between events (large CPU saving); off = one process per event (pre-0.1.0.38 behavior)"),
@@ -3766,8 +3828,23 @@ class Service:
         _fa_geaendert = bool(_fa_neu is not None
                              and any(self.cfg.get(k, _fehlt) != _fa_neu.get(k)
                                      for k in _fauth.SEKTIONS_SCHLUESSEL))
-        if geaendert == {"debug"} and not _fa_geaendert:
-            self.cfg["debug"] = angewendet["debug"]
+        # .378: die zwei Kalibrier-Schwellen wirken ebenfalls LIVE — alle Leser
+        # rechnen guete_latte_aus_cfg(self.cfg) JE AUFRUF (Flaeche, Sichtung,
+        # Auswahl), die Ernte liest je Lauf; ein Neustart braeche zudem die
+        # sofortige Neubewertung des laufenden Bestands, die das Kalibrier-
+        # Uebernehmen direkt anschliesst (User 30.08.).
+        _live_keys = {"debug", "guete_empfinden_min", "guete_t_min"}
+        if not geaendert and not _fa_geaendert:
+            # .378: kein Wert weicht von der laufenden Config ab — ein Neustart
+            # haette nichts zu laden. Wichtig fuer das Kalibrier-Uebernehmen
+            # mit unveraenderten Reglern (zweiter Klick / "nur neu bewerten"):
+            # ok=True laesst die Neubewertung trotzdem laufen.
+            self.log(f"CONFIG saved via UI (JSON store): {angewendet} — "
+                     "no effective change, no restart")
+            return True, "gespeichert — keine wirksame Aenderung, kein Neustart", False
+        if geaendert <= _live_keys and not _fa_geaendert:
+            for k in geaendert:
+                self.cfg[k] = angewendet[k]
             self.log(f"CONFIG changed via UI (JSON store): {angewendet} — "
                      f"applied live, no restart")
             return True, f"gespeichert: {angewendet} — applied live, no restart", False
@@ -6169,7 +6246,8 @@ class Service:
                 zustand["events_liste"], schwellen, _al.clustere,
                 os.environ.get("SUSLIK_VERSION", "dev"), self.log,
                 lambda **u: _ll.lauf_fortschreiben(dd, **u),
-                norm_latte=norm_latte_aus_cfg(self.cfg))
+                norm_latte=norm_latte_aus_cfg(self.cfg),
+                guete_latte=guete_latte_aus_cfg(self.cfg))
             if erg is not None:
                 # Crash-Loop-Wache (#20): erfolgreicher Abschluss setzt den
                 # Boot-Resume-Zaehler zurueck — nur ununterbrochene Fehlserien
@@ -6379,6 +6457,81 @@ class Service:
         except OSError:
             pass
 
+    def kalib_fueller_starten(self, kamera):
+        """Materialsuche fuer die Kalibrierseite EINER Kamera (Etappe 4 des
+        Zentral-Umbaus, User-Entscheid 31.08.).
+
+        Duenner Mantel: die Reihenfolge, die ZWEI Stopp-Bedingungen und die
+        Bilanz liegen in core/kalibfueller. Hier wird nur eingehaengt, was der
+        Dienst allein kann — der Frigate-Abruf (core.ereignisse, EIN
+        Pagination-Weg) und der Worker-Slot unter Live-Vorrang (dasselbe
+        Lock-Muster wie _bruecke_ernte darunter).
+
+        Die Bilder entstehen NICHT hier: die Ernte legt je Event ihr bestes
+        M-Crop selbst in den Ring (core.ernte.kalib_vorrat_speisen) — dieser
+        Lauf beschafft nur die Ereignisse dafuer. Der Ernte-Ordner ist
+        Wegwerf-Ware und wird danach geloescht; er darf nicht wachsen
+        (<data_dir>/live war schon einmal der Datenweg, der in neun Tagen
+        72,9 GB fraß). -> (ok, msg)."""
+        import shutil
+        from core import ereignisse as _erg_kf
+        from core import ernte as _ern_kf
+        from core import kalibfueller as _kf
+        from core import livewache as _lw_kf
+        cfg = self.cfg
+        kamera = str(kamera or "")
+        _d_kf, _g_kf = _lw_kf.guards_lesen(cfg, log=lambda z: None)
+        _cams_kf, _ = frigate_cameras(cfg)
+        if kamera not in _g_kf and kamera not in (_cams_kf or []):
+            return False, "unknown camera"
+        if _lw_kf.kalib_dir(cfg, kamera) is None:
+            # Derselbe Namens-Riegel wie beim Vorrats-Ordner: passt der Name
+            # nicht, koennte die Ernte ihre Bilder ohnehin nirgends ablegen.
+            return False, "camera name not usable for a folder"
+        if not int(cfg.get("live_kalib_max") or 0):
+            return False, ("calibration samples are switched off "
+                           "(Advanced: live_kalib_max)")
+        schwellen = ernte_schwellen_aus_cfg(cfg)
+        if _ern_kf.schwellen_pruefen(schwellen):
+            return False, "harvest thresholds missing in config"
+        deckel_ev = int(cfg.get("kalib_fueller_events") or 0)
+        lauf_dir = os.path.join(cfg["data_dir"], "state", "kalib_ernte", kamera)
+        shutil.rmtree(lauf_dir, ignore_errors=True)     # Reste eines Vorlaufs
+        os.makedirs(lauf_dir, exist_ok=True)
+        timeout_s = int(cfg.get("nachhol_analyse_timeout_s") or 300)
+
+        def _events():
+            evs, _seiten = _erg_kf.person_events(
+                lambda pfad: api(cfg, pfad), anzahl=deckel_ev,
+                kameras=[kamera])
+            return evs
+
+        def _job(eid, ts):
+            while True:
+                # Slot-Regel wie im Pass-Check: Hintergrund-Jobs seriell, die
+                # Live-Wache hat Vorrang. Wartende Runden kosten eine Sekunde.
+                if not (self._gpu_bg_lock.locked() or self.lock.locked()):
+                    with self._gpu_bg_lock:
+                        if not self.lock.locked():
+                            return self._worker().job(
+                                {"typ": "ernte", "eid": eid, "kamera": kamera,
+                                 "ts": ts, "fps_sample": cfg.get("fps_sample"),
+                                 "schwellen": schwellen, "lauf_dir": lauf_dir,
+                                 "clip_quelle": "kalib",
+                                 "clip_vod": cfg.get("clip_vod") is not False,
+                                 "kalib": {"data_dir": cfg["data_dir"],
+                                           "deckel": int(cfg.get(
+                                               "live_kalib_max") or 0)},
+                                 "log": os.path.join(lauf_dir, "ernte.log")},
+                                timeout_s=timeout_s)
+                time.sleep(1)
+
+        return _kf.starten(
+            kamera, int(cfg.get("kalib_fueller_bilder") or 0), deckel_ev,
+            _events, _job, lambda: _lw_kf.kalib_lesen(cfg, kamera),
+            log=self.log,
+            abschluss=lambda: shutil.rmtree(lauf_dir, ignore_errors=True))
+
     def _bruecke_ernte(self, bdir, bid, eids, alle_eids, schwellen):
         """Hintergrund-Ernte eines Passes: 1 Worker-Job je FEHLENDEM Event
         (eids) unter Live-Vorrang (dasselbe Lock-Muster wie _lernlauf_ernte),
@@ -6429,6 +6582,13 @@ class Service:
                                  "ts": start, "fps_sample": fps,
                                  "schwellen": schwellen, "lauf_dir": bdir,
                                  "clip_quelle": "bruecke",
+                                 # Kalibrier-Vorrat je Kamera (31.08.): die
+                                 # Ernte legt EIN Bild je Event in den Ring
+                                 # der Kamera. AUS dem Job, nicht aus dem
+                                 # Manifest — der Deckel ist laufende Config.
+                                 "kalib": {"data_dir": dd,
+                                           "deckel": int(self.cfg.get(
+                                               "live_kalib_max") or 0)},
                                  "clip_vod": self.cfg.get("clip_vod") is not False,
                                  "log": os.path.join(bdir, "ernte.log")},
                                 timeout_s=timeout_s)
@@ -6522,6 +6682,115 @@ class Service:
             except Exception:
                 pass
 
+    def _gruppen_auswahl(self, satz, person, refs):
+        """Die EINE Auswahl-Rechnung fuer eine Gruppe — Auto-Benennung und
+        Kalibrier-Neubewertung (.378) nutzen sie gemeinsam, damit nirgends
+        eine zweite Regel entsteht (.366-Prinzip: dieselbe Software darf auf
+        der Flaeche nichts durchfallen lassen, was sie hier empfiehlt):
+        Sichtungs-Urteil + core.benennung.empfehlen mit den AKTUELLEN
+        cfg-Schwellen (inkl. Guete-Latte — der alte Inline-Block gab sie an
+        sichtung_bewerten nicht mit, das Sichtungs-Urteil lief dort alt).
+        -> (mitglieder mit frischen gewaehlt-Flags, Anzahl gewaehlt, tag)."""
+        dd = self.cfg["data_dir"]
+        _ldir = os.path.join(dd, "state", "lernlauf",
+                             str((satz.get("lauf") or {}).get("lauf_id")))
+        import anlernen as _al
+        from core import benennung as _bn
+        from core.uebernahme import adoptierte_embs as _ue_ad
+        werte = {"k_je_bin": self.cfg["benennung_k_je_bin"],
+                 "yaw_grenze": self.cfg["benennung_yaw_grenze"],
+                 "dup_sim": self.cfg["benennung_dup_sim"]}
+        # Faellt die Sichtung aus, bleibt stufen None und die Auswahl
+        # urteilt ohne das Flaechen-Urteil — laut, nie still.
+        _stufen = None
+        try:
+            _si = _al.sichtung_lesen(satz, _ldir, self.cfg["modell"])
+            if _si:
+                _stufen = {b["datei"]: b["stufe"]
+                           for b in _al.sichtung_bewerten(
+                               person, _si, refs, werte["dup_sim"],
+                               _ue_ad(dd, person),
+                               norm_latte=norm_latte_aus_cfg(self.cfg),
+                               luma_grenzen=luma_grenzen_aus_cfg(self.cfg),
+                               guete_latte=guete_latte_aus_cfg(self.cfg))}
+        except Exception as e:
+            self.log(f"group selection: picture check unavailable for "
+                     f"{satz.get('anker_id')} ({type(e).__name__}: {e}) — "
+                     "selecting without it")
+        bewertet, _flags = _bn.empfehlen(
+            satz.get("mitglieder") or [], werte["k_je_bin"],
+            werte["yaw_grenze"], werte["dup_sim"],
+            luma_grenzen=luma_grenzen_aus_cfg(self.cfg),
+            stufen=_stufen,
+            guete_latte=guete_latte_aus_cfg(self.cfg))
+        gewaehlt = {b["datei"] for b in bewertet if b.get("empfohlen")}
+        mit = [dict(m, gewaehlt=(str(m.get("datei", "")).rsplit("/", 1)[-1]
+                                 in gewaehlt
+                                 or m.get("datei") in gewaehlt))
+               for m in (satz.get("mitglieder") or [])]
+        n_gew = sum(1 for m in mit if m["gewaehlt"])
+        tag = {"modell": (mit[0].get("modell", "") if mit else ""),
+               "k_je_bin": werte["k_je_bin"],
+               "yaw_grenze": werte["yaw_grenze"],
+               "dup_sim": werte["dup_sim"]}
+        return mit, n_gew, tag
+
+    def _lernlauf_kalibrier_neubewertung(self):
+        """.378 (User 30.08., 'wenn ich kalibriere, muesste das Ergebnis des
+        Lernlaufs doch angepasst werden'): das Uebernehmen der Kalibrierung
+        bewertet den LETZTEN Lauf sofort neu, nicht nur kuenftige Laeufe.
+        Zwei Zuege: (1) auto-benannte, noch nicht uebernommene Gruppen
+        bekommen ihre Auswahl mit den neuen Schwellen neu gerechnet;
+        faellt sie auf 0 Bilder, geht die Gruppe zurueck auf unbenannt —
+        dieselbe Regel wie beim Lauf-Ende (keine Empfehlung = keine
+        Benennung). Hand-benannte Gruppen bleiben unberuehrt: dort hat der
+        Nutzer selbst gewaehlt. (2) smart naming laeuft fuer die unbenannten
+        Gruppen des Laufs erneut — eine vorher an der Latte gescheiterte
+        Gruppe kann jetzt durchgehen. Offene (unbenannte) Gruppen brauchen
+        keinen Zug: die Flaeche rechnet ihr Urteil je Aufruf live aus der
+        cfg. -> Anzahl neu bewerteter Gruppen."""
+        dd = self.cfg["data_dir"]
+        from core import lernlauf as _ll
+        import anlernen as _al
+        saetze, _kaputt = _ll.anker_lesen(dd)
+        laeufe = {str((a.get("lauf") or {}).get("lauf_id") or "") for a in saetze}
+        laeufe.discard("")
+        if not laeufe:
+            return 0
+        lauf_id = max(laeufe)          # Hausregel: lexikalisch = chronologisch
+        refs = _al.refs_matrix_roh(self.cfg.get("modell") or "adaface")
+        neu = 0
+        for satz in saetze:
+            if str((satz.get("lauf") or {}).get("lauf_id") or "") != lauf_id:
+                continue
+            if satz.get("status") != "benannt":
+                continue
+            if (satz.get("zuweisung") or {}).get("art") != "auto":
+                continue
+            try:
+                mit, n_gew, tag = self._gruppen_auswahl(
+                    satz, satz.get("person"), refs)
+                if n_gew:
+                    _ll.anker_aktualisieren(
+                        dd, satz["anker_id"], mitglieder=mit,
+                        auswahl={"ts": round(time.time(), 1), "n": n_gew,
+                                 "bedingungs_tag": tag})
+                else:
+                    # Rest-Felder auswahl/zuweisung bleiben stehen (kein
+                    # Pflichtfeld, Uebernahme laeuft nur bei status benannt);
+                    # _lernlauf_zuweisung prueft die Gruppe gleich neu.
+                    _ll.anker_aktualisieren(
+                        dd, satz["anker_id"], person=None,
+                        status="unbenannt", mitglieder=mit)
+                neu += 1
+            except Exception as e:
+                self.log(f"calibration: regrade failed for "
+                         f"{satz.get('anker_id')} ({type(e).__name__}: {e})")
+        self._lernlauf_zuweisung(lauf_id)
+        self.log(f"calibration: {neu} auto-named group(s) of run {lauf_id} "
+                 "re-graded with the new thresholds")
+        return neu
+
     def _lernlauf_zuweisung(self, lauf_id):
         """Phase 3: unbenannte Gruppen dieses Laufs, die eindeutig zu einer
         bereits benannten Person gehoeren, selbst benennen. Drei Huerden
@@ -6553,8 +6822,6 @@ class Service:
                 marge_min=float(self.cfg.get("anker_zuweisung_marge", 0.10)),
                 einigkeit_min=float(self.cfg.get("anker_zuweisung_einigkeit", 80)) / 100.0)
             gesetzt = 0
-            _ldir = os.path.join(dd, "state", "lernlauf", str(lauf_id))
-            from core.uebernahme import adoptierte_embs as _ue_ad
             for v in vor:
                 if not v.get("sicher"):
                     continue
@@ -6565,46 +6832,10 @@ class Service:
                     # Der Nutzer-Weg schreibt beim Benennen DREI Dinge: person,
                     # die Auswahl je Mitglied und den Bedingungs-Tag. Ohne die
                     # letzten beiden laeuft die spaetere Uebernahme in
-                    # "nothing selected" (.349/Issue 26). Die Auswahl trifft
-                    # hier dieselbe Funktion wie die Oberflaeche —
-                    # core.benennung.empfehlen, EINE Quelle, keine zweite Regel.
-                    from core import benennung as _bn
-                    werte = {"k_je_bin": self.cfg["benennung_k_je_bin"],
-                             "yaw_grenze": self.cfg["benennung_yaw_grenze"],
-                             "dup_sim": self.cfg["benennung_dup_sim"]}
-                    # .366 (User-Fund 28.08.): das Urteil der Gruppen-Flaeche
-                    # geht MIT in die Auswahl. Ohne diese Zeilen empfahl die
-                    # Auto-Benennung Bilder, die dieselbe Software auf der
-                    # Flaeche durchfallen laesst — gemessen 3 von 40 im Lauf
-                    # L20260828_220718 (zwei unter der Qualitaetslinie, eines
-                    # an der Identitaet), und sie waeren als Referenzen ins
-                    # System gegangen. Faellt die Sichtung aus, bleibt stufen
-                    # None und die Auswahl ist die alte.
-                    _stufen = None
-                    try:
-                        _si = _al.sichtung_lesen(satz, _ldir, self.cfg["modell"])
-                        if _si:
-                            _stufen = {b["datei"]: b["stufe"]
-                                       for b in _al.sichtung_bewerten(
-                                           v["person"], _si, refs, werte["dup_sim"],
-                                           _ue_ad(dd, v["person"]),
-                                           norm_latte=norm_latte_aus_cfg(self.cfg),
-                                           luma_grenzen=luma_grenzen_aus_cfg(self.cfg))}
-                    except Exception as e:
-                        self.log(f"smart naming: picture check unavailable for "
-                                 f"{v['anker_id']} ({type(e).__name__}: {e}) — "
-                                 "selecting without it")
-                    bewertet, _flags = _bn.empfehlen(
-                        satz.get("mitglieder") or [], werte["k_je_bin"],
-                        werte["yaw_grenze"], werte["dup_sim"],
-                        luma_grenzen=luma_grenzen_aus_cfg(self.cfg),
-                        stufen=_stufen)
-                    gewaehlt = {b["datei"] for b in bewertet if b.get("empfohlen")}
-                    mit = [dict(m, gewaehlt=(str(m.get("datei", "")).rsplit("/", 1)[-1]
-                                             in gewaehlt
-                                             or m.get("datei") in gewaehlt))
-                           for m in (satz.get("mitglieder") or [])]
-                    n_gew = sum(1 for m in mit if m["gewaehlt"])
+                    # "nothing selected" (.349/Issue 26). Die Rechnung liegt
+                    # seit .378 in _gruppen_auswahl (EINE Quelle — auch die
+                    # Kalibrier-Neubewertung nutzt sie).
+                    mit, n_gew, tag = self._gruppen_auswahl(satz, v["person"], refs)
                     if not n_gew:
                         # Keine Empfehlung = keine Uebernahme moeglich. Dann NICHT
                         # benennen, sonst steht eine Gruppe mit Namen da, deren
@@ -6612,10 +6843,6 @@ class Service:
                         self.log(f"smart naming: {v['anker_id']} skipped "
                                  "(no image passed the naming check)")
                         continue
-                    tag = {"modell": (mit[0].get("modell", "") if mit else ""),
-                           "k_je_bin": werte["k_je_bin"],
-                           "yaw_grenze": werte["yaw_grenze"],
-                           "dup_sim": werte["dup_sim"]}
                     _ll.anker_aktualisieren(
                         dd, v["anker_id"], person=v["person"], status="benannt",
                         mitglieder=mit,
@@ -6659,7 +6886,8 @@ class Service:
             try:
                 _al.gruppen_sichtung(satz, ldir, emb=self.embedder,
                                      norm_latte=norm_latte_aus_cfg(self.cfg),
-                                     luma_grenzen=luma_grenzen_aus_cfg(self.cfg))
+                                     luma_grenzen=luma_grenzen_aus_cfg(self.cfg),
+                                     guete_latte=guete_latte_aus_cfg(self.cfg))
                 fertig += 1
             except Exception as e:
                 fehler += 1
@@ -6919,6 +7147,14 @@ class Service:
                                  # in den Job — sie wandert von hier bis in die
                                  # Anker-Kachel (Bauplan analysen/12).
                                  "quelle": e.get("quelle"),
+                                 # Kalibrier-Vorrat je Kamera (31.08.): EIN
+                                 # Bild je Event in den Ring seiner Kamera —
+                                 # damit fuellt auch ein reiner Lernlauf die
+                                 # Kalibrierseite. Aus dem Job, nicht aus dem
+                                 # Manifest (der Deckel ist laufende Config).
+                                 "kalib": {"data_dir": dd,
+                                           "deckel": int(self.cfg.get(
+                                               "live_kalib_max") or 0)},
                                  # .287 [clipdbg]: Quelle + Event-Alter (jetzt
                                  # minus Ende = start + clip_s) fuer die
                                  # Clip-Debug-Zeilen im Worker (ernte.log).
@@ -7272,6 +7508,18 @@ class Service:
         quelle = os.path.join(self.cfg["data_dir"], "events", d["eid"].replace("/", "_"), d["datei"])
         if not os.path.isfile(quelle):
             return False, "Kandidaten-Crop nicht mehr vorhanden"
+        # KATALOG-LATTE je Kamera (Zentral-Umbau 31.08.) — dieselbe EINE
+        # Funktion wie an den anderen Uebernahme-Stellen. `label` IST der
+        # Kameraname (analyze.py bekommt ihn als --labels, verifyd.py:1499).
+        # EHRLICHE GRENZE: die Enrollment-Zeile traegt heute keine Guete-Masse,
+        # die Latte laesst sie deshalb durch; gefragt wird sie trotzdem, damit
+        # sie ohne weitere Aenderung greift, sobald die Zeile gemessen ist.
+        from core import kamerakalib as _kk_en
+        _kok, _kgrund = _kk_en.katalog_ok(_kk_en.katalog_latten(self.cfg),
+                                          d.get("label"), d.get("empf"),
+                                          d.get("fiqa_t"))
+        if not _kok:
+            return False, _kgrund
         ziel_dir = os.path.join(self.cfg["data_dir"], "faces", ziel_person)
         os.makedirs(ziel_dir, exist_ok=True)
         ziel_name = f"enroll_{int(time.time())}_{re.sub(r'[^\w.-]', '_', d['datei'])[-40:]}"
@@ -9587,30 +9835,112 @@ def make_handler(svc):
                 return self._send(200, json.dumps({"ok": bool(gestartet), "msg": msg},
                                   ensure_ascii=False), "application/json")
             if pfad in ("/unbekannt_reconcile", "/unbekannt_besucher", "/unbekannt_verwerfen",
-                        "/unbekannt_merge", "/unbekannt_benennen"):   # Unbekannt-Reiter (20.07.)
+                        "/unbekannt_merge", "/unbekannt_benennen", "/unbekannt_merge_viele",
+                        "/unbekannt_objekt", "/unbekannt_seite"):   # Unbekannt-Reiter (20.07., .380)
                 try:
                     import anlernen
+                    from routes import unbekannte as _r_unbek
                     n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 8192))) if n else {}
+                    d = json.loads(self.rfile.read(min(n, 65536))) if n else {}
+                    # .380 Rueckweg fuer die Seite ohne Reload: JEDE Aktion liefert
+                    # den neuen Stand der betroffenen Kachel(n) mit — gerendert von
+                    # DERSELBEN routes.unbekannte.kachel(), die die Seite baut (eine
+                    # zweite Bauart waere sofort auseinandergelaufen). Ist die Gruppe
+                    # weg ODER passt sie nicht mehr in den gerade gezeigten Filter,
+                    # sagt der Server das ("weg"), statt die Seite raten zu lassen.
+                    _sort_a = str(d.get("sort") or _r_unbek.SORT[0])
+                    _filt_a = str(d.get("f") or _r_unbek.FILTER[0])
+
+                    def _unb_stand(uids):
+                        alle = _r_unbek.infos(anlernen.lade_unbekannte(),
+                                              anlernen.lade_gesichter())
+                        vs_ = anlernen.lade_unbekannt_vorschlaege()
+                        sicht = {i["id"]: i for i in
+                                 _r_unbek.auswahl(alle, vs_, _sort_a, _filt_a)}
+                        offen, gesamt = _r_unbek.zaehler(alle)
+                        kach, weg = {}, []
+                        for u_ in uids:
+                            if u_ in sicht:
+                                kach[u_] = _r_unbek.kachel(sicht[u_])
+                            else:
+                                weg.append(u_)
+                        return {"kachel": kach, "weg": weg,
+                                "offen": offen, "gesamt": gesamt}
+                    if pfad == "/unbekannt_seite":
+                        # Nachladen (B1): der Server schneidet die Seite zu, der
+                        # Browser bekommt NUR die naechsten Kacheln.
+                        alle = _r_unbek.infos(anlernen.lade_unbekannte(),
+                                              anlernen.lade_gesichter())
+                        liste = _r_unbek.auswahl(alle, anlernen.lade_unbekannt_vorschlaege(),
+                                                 _sort_a, _filt_a)
+                        try:
+                            off = max(0, int(d.get("offset") or 0))
+                        except (TypeError, ValueError):
+                            off = 0
+                        teil = liste[off:off + _r_unbek.SEITE_N]
+                        offen, gesamt = _r_unbek.zaehler(alle)
+                        rest = max(0, len(liste) - (off + len(teil)))
+                        return self._send(200, json.dumps(
+                            {"ok": True, "html": _r_unbek.kacheln(teil),
+                             "offset": off + len(teil), "rest": rest,
+                             "n_naechste": min(_r_unbek.SEITE_N, rest),
+                             "offen": offen, "gesamt": gesamt},
+                            ensure_ascii=False), "application/json")
+                    if pfad == "/unbekannt_objekt":
+                        _uid = str(d.get("uid", ""))
+                        _an = bool(d.get("an", True))
+                        ok = anlernen.unbekannt_objekt(_uid, _an)
+                        if ok:
+                            svc.log(f"unknown marked as {'object' if _an else 'person'}: {_uid}")
+                        _msg = ((_sprache.t("antwort.unbek_objekt") if _an
+                                 else _sprache.t("antwort.unbek_person"))
+                                if ok else "nicht gefunden")
+                        _a = {"ok": ok, "msg": _msg}
+                        _a.update(_unb_stand([_uid] if ok else []))
+                        return self._send(200, json.dumps(_a, ensure_ascii=False),
+                                          "application/json")
+                    if pfad == "/unbekannt_merge_viele":
+                        _uids = [str(x) for x in (d.get("uids") or []) if str(x)]
+                        ziel, _n_m = anlernen.unbekannt_merge_viele(_uids)
+                        if ziel:
+                            svc.log(f"unknown merge (bulk): {_n_m} group(s) -> {ziel}")
+                        _a = {"ok": bool(ziel),
+                              "msg": (_sprache.t("antwort.unbek_gemergt", n=_n_m + 1)
+                                      if ziel else "Fehler"),
+                              "ziel": ziel}
+                        _a.update(_unb_stand(_uids if ziel else []))
+                        return self._send(200, json.dumps(_a, ensure_ascii=False),
+                                          "application/json")
                     if pfad == "/unbekannt_reconcile":
                         idents, vs = anlernen.reconcile_unbekannte()
                         svc.log(f"unknown reconcile (manual): {len(idents)} identities, {len(vs)} suggestions")
                         res = (True, f"{len(idents)} Unbekannte, {len(vs)} Vorschläge")
+                        _betr = []
                     elif pfad == "/unbekannt_besucher":
                         an = bool(d.get("an", True))
                         ok = anlernen.unbekannt_besucher(d.get("uid", ""), an)
                         res = (ok, ("ignoriert" if an else "wieder aktiv") if ok else "nicht gefunden")
+                        _betr = [str(d.get("uid", ""))]
                     elif pfad == "/unbekannt_merge":
                         ok = anlernen.unbekannt_merge(d.get("a", ""), d.get("b", ""))
                         res = (ok, "zusammengelegt" if ok else "Fehler")
+                        _betr = [str(d.get("a", "")), str(d.get("b", ""))]
                     elif pfad == "/unbekannt_verwerfen":       # 'Different' persistent (25.07.)
                         ok = anlernen.verwerfe_vorschlag(d.get("a", ""), d.get("b", ""))
                         res = (ok, _sprache.t("antwort.paar_notiert") if ok else "Fehler")
+                        _betr = []
                     else:                                        # /unbekannt_benennen
                         _person = (d.get("person") or "").strip()
-                        ok, msg, betroffen = anlernen.unbekannt_benennen(d.get("uid", ""), _person, emb=svc._emb)
+                        # .380 Teil-Zuweisung (B4): sind Stuetzen angetickt, gehen NUR
+                        # diese in die Referenzen und aus dem Pool — der Rest bleibt
+                        # stehen. Ohne Haken bleibt der alte Weg (ganze Gruppe).
+                        _ids = [str(x) for x in (d.get("ids") or []) if str(x)] or None
+                        ok, msg, betroffen = anlernen.unbekannt_benennen(
+                            d.get("uid", ""), _person, emb=svc._emb, ids=_ids,
+                            kat_latten=_kk_ue.katalog_latten(cfg))
                         if ok:
-                            svc.log(f"UNKNOWN NAMED: {d.get('uid')} -> {d.get('person')} ({msg})")
+                            svc.log(f"UNKNOWN NAMED: {d.get('uid')} -> {d.get('person')} ({msg})"
+                                    + (f" [{len(_ids)} of group ticked]" if _ids else ""))
                             svc.qs_neu_starten()
                             # Issue #19: Events der uebernommenen Gesichter nachpruefen,
                             # damit die Unknown-Karten des Durchgangs verschwinden.
@@ -9619,7 +9949,10 @@ def make_handler(svc):
                             # der Fachschicht (Grenze a).
                             msg += _sprache.t("antwort.nachpruefung_anhang")
                         res = (ok, msg)
-                    return self._send(200, json.dumps({"ok": res[0], "msg": res[1]},
+                        _betr = [str(d.get("uid", ""))]
+                    _antw = {"ok": res[0], "msg": res[1]}
+                    _antw.update(_unb_stand(_betr if res[0] else []))
+                    return self._send(200, json.dumps(_antw,
                                       ensure_ascii=False), "application/json")
                 except Exception as e:
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
@@ -9854,7 +10187,8 @@ def make_handler(svc):
                             _ok, _ziel = anlernen.vorrat_aufnehmen(
                                 person, str(it.get("lauf_id") or ""),
                                 str(it.get("datei") or ""), str(it.get("eid") or ""),
-                                data_dir=cfg["data_dir"])
+                                data_dir=cfg["data_dir"],
+                                kat_latten=_kk_ue.katalog_latten(cfg))
                             if _ok:
                                 dateien.append(_ziel)
                         if _ev:
@@ -10016,7 +10350,8 @@ def make_handler(svc):
                     n_ok = 0
                     for it in (d.get("items") or []):
                         ok, _ = anlernen.vorschlag_aufnehmen(person, (it.get("eid") or "").strip(),
-                                                             (it.get("datei") or "").strip())
+                                                             (it.get("datei") or "").strip(),
+                                                             kat_latten=_kk_ue.katalog_latten(cfg))
                         if ok:
                             n_ok += 1
                     if n_ok:
@@ -10043,7 +10378,8 @@ def make_handler(svc):
                             person, (it.get("lauf_id") or "").strip(),
                             (it.get("datei") or "").strip(),
                             (it.get("eid") or "").strip(),
-                            data_dir=cfg["data_dir"])
+                            data_dir=cfg["data_dir"],
+                            kat_latten=_kk_ue.katalog_latten(cfg))
                         if ok:
                             n_ok += 1
                         else:
@@ -10070,7 +10406,9 @@ def make_handler(svc):
                     # Issue #19: benenne_mit_abzug statt benenne — die Today-Karte lief
                     # ueber diesen Weg und liess die Gesichter im Unbekannt-Pool zurueck
                     # (Karte blieb stehen, Event-Akte blieb "unknown").
-                    ok, msg, betroffen = anlernen.benenne_mit_abzug(ids, person, emb=svc._emb)
+                    ok, msg, betroffen = anlernen.benenne_mit_abzug(
+                        ids, person, emb=svc._emb,
+                        kat_latten=_kk_ue.katalog_latten(cfg))
                     if ok:
                         svc.log(f"ENROLL: {msg}")
                         svc.qs_neu_starten()               # nach Anlernen automatisch gegenpruefen
@@ -10680,6 +11018,38 @@ def make_handler(svc):
                     {"ok": True, "stunden": std, "limit": lim,
                      "msg": _sprache.t("antwort.catchup_gestartet", stunden=std, n=lim)},
                     ensure_ascii=False), "application/json")
+            if pfad == "/kalibrierung_setzen":
+                # .377: die zwei kalibrierten Schwellen — DERSELBE Weg wie
+                # jede Config-Aenderung (Whitelist, Audit); seit .378 wirken
+                # sie live (kein Neustart), und der letzte Lauf wird im
+                # selben Zug neu bewertet (User 30.08.: "wenn ich kalibriere,
+                # muesste das Ergebnis des Lernlaufs doch angepasst werden").
+                try:
+                    n = int(self.headers.get("Content-Length", 0))
+                    d = json.loads(self.rfile.read(min(n, 1024)))
+                    ok, msg, neustart = svc.config_schreiben(
+                        {"guete_empfinden_min": d.get("empfinden"),
+                         "guete_t_min": d.get("t")})
+                    neu_bewertet = 0
+                    if ok:
+                        # synchron: die Antwort kommt erst, wenn der Bestand
+                        # neu urteilt — der Sprung zur Lernseite zeigt dann
+                        # sofort den neuen Stand. Scheitert die Neubewertung,
+                        # bleibt der Save trotzdem gueltig (laut im Log).
+                        try:
+                            neu_bewertet = svc._lernlauf_kalibrier_neubewertung()
+                        except Exception as e:
+                            svc.log(f"calibration: regrade of the last run "
+                                    f"failed ({type(e).__name__}: {e})")
+                    return self._send(200 if ok else 400,
+                                      json.dumps({"ok": ok, "msg": msg,
+                                                  "neustart": neustart,
+                                                  "neu_bewertet": neu_bewertet},
+                                                 ensure_ascii=False),
+                                      "application/json")
+                except Exception as e:      # Sammel-Fang wie der Zwilling /konfig: config_schreiben schreibt Store + Audit, das wirft OSError (volles/read-only Volume), und do_POST hat keinen Sammel-Except
+                    return self._send(400, json.dumps(
+                        {"ok": False, "msg": str(e)}), "application/json")
             if pfad == "/konfig":                              # Konfigblatt speichern (AP5)
                 try:
                     n = int(self.headers.get("Content-Length", 0))
@@ -10749,7 +11119,8 @@ def make_handler(svc):
                 return self._send(200, json.dumps(
                     {"ok": not fehl, "msg": m}), "application/json")
             if pfad in ("/live_speichern", "/live_schalter", "/live_test",
-                        "/live_messung", "/live_verstecken"):
+                        "/live_messung", "/live_verstecken",
+                        "/live_kalib_leeren", "/kalibrierung_fuellen"):
                 # Live-Reiter (Phase 2): duenne Maentel, Logik/Riegel in
                 # core/livewache (live_speichern/live_schalter serverseitig —
                 # ein direkter POST kommt hier am UI-Grau vorbei und MUSS am
@@ -10770,6 +11141,18 @@ def make_handler(svc):
                 elif pfad == "/live_verstecken":
                     ok, msg = svc.live_verstecken(kamera,
                                                   bool(d.get("versteckt")))
+                elif pfad == "/live_kalib_leeren":
+                    # Reine Datei-Handlung im Vorrats-Ring — kein Store-Schreib,
+                    # deshalb ohne Dienst-Methode und ohne _cfg_lock. Die Logik
+                    # (Pfad-Wache, was geloescht wird) liegt in core/livewache.
+                    from core import livewache as _lwl
+                    ok, msg = _lwl.kalib_leeren(cfg, kamera)
+                elif pfad == "/kalibrierung_fuellen":
+                    # On-demand-Fueller (Etappe 4): duenner Mantel. Reihenfolge,
+                    # die zwei Stopp-Bedingungen und die Bilanz liegen in
+                    # core/kalibfueller; hier wird nur eingehaengt, was der
+                    # Dienst allein kann — Frigate-Abruf und Worker-Slot.
+                    ok, msg = svc.kalib_fueller_starten(kamera)
                 else:
                     ok, msg = svc.live_messung_starten(kamera)
                 return self._send(200 if ok else 400,
@@ -11197,7 +11580,8 @@ def make_handler(svc):
                             emb=svc.embedder,
                             yaw_grenze=cfg["benennung_yaw_grenze"],
                             norm_latte=norm_latte_aus_cfg(cfg),
-                            luma_grenzen=luma_grenzen_aus_cfg(cfg))
+                            luma_grenzen=luma_grenzen_aus_cfg(cfg),
+                            guete_latte=guete_latte_aus_cfg(cfg))
                     finally:
                         svc._sichtung_aid = None
                     return self._send(200, json.dumps({"ok": True}),
@@ -11251,7 +11635,8 @@ def make_handler(svc):
                         lauf_dir=os.path.join(cfg["data_dir"], "state",
                                               "lernlauf", lid),
                         norm_latte=norm_latte_aus_cfg(cfg),
-                        luma_grenzen=luma_grenzen_aus_cfg(cfg))
+                        luma_grenzen=luma_grenzen_aus_cfg(cfg),
+                        guete_latte=guete_latte_aus_cfg(cfg))
                     return self._send(200, json.dumps(
                         {"ok": True, "person": person, "bewertung": bew},
                         ensure_ascii=False), "application/json")
@@ -11280,9 +11665,16 @@ def make_handler(svc):
                     ab = _ue.bedingungs_tag_pruefen(satz, werte)
                     if ab and not d.get("bestaetigt"):
                         return self._send(200, json.dumps({"ok": False, "tag_abweichung": ab}), "application/json")
+                    # Katalog-Latte je Kamera (Zentral-Umbau 31.08.): JE
+                    # AUFRUF frisch aus der Config gelesen — sie wird auf der
+                    # Kalibrierseite geaendert und muss sofort gelten (dieselbe
+                    # Zusage wie bei den zwei .378-Schwellen).
+                    from core import kamerakalib as _kk_ad
                     plan = _ue.plan_bauen(satz, cfg["benennung_dup_sim"],
                                           _ue.adoptierte_embs(cfg["data_dir"], person),
-                                          luma_grenzen=luma_grenzen_aus_cfg(cfg))
+                                          luma_grenzen=luma_grenzen_aus_cfg(cfg),
+                                          guete_latte=guete_latte_aus_cfg(cfg),
+                                          kat_latten=_kk_ad.katalog_latten(cfg))
                     if not plan["aufnehmen"]:
                         if not plan["uebersprungen"]:
                             return self._send(400, json.dumps(
@@ -12593,7 +12985,8 @@ def make_handler(svc):
                             referenz=_bn.referenz_zentroide(
                                 os.path.join(cfg["data_dir"], "clips",
                                              "refcache.npz"), cfg["modell"]),
-                            luma_grenzen=luma_grenzen_aus_cfg(cfg))
+                            luma_grenzen=luma_grenzen_aus_cfg(cfg),
+                            guete_latte=guete_latte_aus_cfg(cfg))
                         # .224: Fluss-Kontext (Group x of y + naechste offene
                         # Gruppe) — dieselbe Reihenfolge wie die Listen-Seite
                         # (Stuetz absteigend), damit Karte und Liste eine
@@ -12664,21 +13057,107 @@ def make_handler(svc):
                     _sprache.t("nav.anker"), "/lernlauf/anker",
                     _r_ank.anker_seite(saetze, kaputt, vorschlaege, dubletten),
                     self._banner()))
-            if path == "/lernlauf/belichtung":
-                # Phase 1b (analysen/bauplan_belichtung.md, User 26.08.):
-                # Kalibrierseite der Belichtungs-Grenzen — duenner Mantel wie
-                # /lernlauf/anker (Anker lesen, Renderer, layout). Die Grenzen
-                # kommen LIVE aus der Config (derselbe Helfer wie ueberall),
-                # gespeichert wird ueber POST /konfig — den Weg des
-                # Konfigurationsblatts, hier entsteht KEIN zweiter.
-                import webui
-                from core import lernlauf as _ll
-                from routes import belichtung as _r_bel
-                _bsaetze, _bkaputt = _ll.anker_lesen(cfg["data_dir"])
+            # /lernlauf/belichtung (Phase-1b-Kalibrierseite) ist am 31.08.
+            # AUSGEBAUT — Messung ueber 714 Feldbilder: die Luma-Grenzen
+            # griffen dreimal, und der Empfinden-Regler der Guete-Kalibrierung
+            # deckt dieselbe Wirkung ab. Die MECHANIK bleibt (luma-Messung der
+            # Ernte, reihung_luma_min/max, benennung.belichtungs_lage, die
+            # stille Grenzfall-Rueckstufung); nur der Bedienweg faellt.
+            if path == "/kalibrierung":
+                # ZENTRALE Kamera-Kalibrierung (User-Entscheid 31.08., eigener
+                # Knopf in der Hauptleiste). Zwei Ansichten an EINER Adresse:
+                # ohne Parameter die Kamera-Uebersicht, mit ?lauf=1 die
+                # GLOBALEN Guete-Werte am Material des letzten Lernlaufs (die
+                # .377-Seite — sie stellt die Latte des Lernlauf-Siebs und den
+                # Rueckfall fuer Kameras ohne eigene Werte).
+                from core import guete as _gt_k
+                from core import kamerakalib as _kk
+                from core import lernlauf as _ll_k
+                from routes import kalibrierung as _r_kal
+                try:
+                    _saetze_k, _ = _ll_k.anker_lesen(cfg["data_dir"])
+                except OSError as _e_ank:
+                    # Der Anker-Store ist NICHT die Aufgabe dieser Seite — er
+                    # liefert nur das Lernlauf-Material. Ist er unlesbar (im
+                    # Feld gesehen: root-eigene Datei aus einem Container-Lauf),
+                    # darf der MENUEPUNKT trotzdem nicht sterben: die
+                    # Kamera-Kalibrierung funktioniert ohne ihn vollstaendig.
+                    # Laut ins Log, leer in die Seite — nie ein stilles Nichts.
+                    svc.log(f"calibration page: learning-run material "
+                            f"unreadable ({type(_e_ank).__name__}: {_e_ank})")
+                    _saetze_k = []
+                if (qs.get("lauf") or [""])[0]:
+                    _inh_k = _r_kal.lauf(
+                        _saetze_k, cfg, {"e": _gt_k.STARTWERTE["empfinden"],
+                                         "t": _gt_k.STARTWERTE["t"]})
+                else:
+                    _cams_k, _cfehl_k = frigate_cameras(cfg)
+                    _inh_k = _r_kal.uebersicht(
+                        _kk.uebersicht_daten(cfg, _cams_k),
+                        _kk.global_latte(cfg),
+                        (_kk.katalog_latten(cfg) or {}).get("global") or {},
+                        int(cfg.get("live_kalib_max") or 0),
+                        bool(_r_kal.mitglieder_mit_guete(_saetze_k)),
+                        (int(cfg.get("kalib_fueller_bilder") or 0),
+                         int(cfg.get("kalib_fueller_events") or 0)),
+                        banner_leer=str(_cfehl_k or ""))
+                import webui   # lokal wie in den Nachbar-Zweigen — spaetere
+                                   # lokale Imports machen den Namen funktionslokal
+                                   # (UnboundLocalError beim ersten Prod-Aufruf, 31.08.)
                 return self._send(200, webui.layout(
-                    _sprache.t("belichtung.titel"), "/lernlauf/belichtung",
-                    _r_bel.seite(_bsaetze, luma_grenzen_aus_cfg(cfg)),
+                    _sprache.t("kalib.titel"), "/kalibrierung", _inh_k,
                     self._banner()))
+            if path == "/kalibrierung_fuellstand":
+                # Fortschritt der Materialsuche (Etappe 4) — reiner
+                # Lese-Endpunkt fuer den Poll der Seite. Der Stand lebt im
+                # Prozess (core/kalibfueller), nicht auf der Platte: er ist
+                # Anzeige, kein Zustand, den ein Neustart erben muesste.
+                from core import kalibfueller as _kf_g
+                _st_kf = _kf_g.stand((qs.get("k") or [""])[0]) or {}
+                return self._send(200, json.dumps(_st_kf, ensure_ascii=False),
+                                  "application/json")
+            if path.startswith("/kalibrierung/"):
+                import webui   # dieselbe Namens-Falle wie im Uebersichts-Zweig
+                # Kalibrierseite EINER Kamera — DIE Adresse (der alte Pfad
+                # /live_kalibrierung/<kamera> leitet hierher um). Anders als
+                # frueher braucht sie KEINEN Waechter: kalibriert wird jede
+                # Kamera, die Frigate kennt oder die schon Werte im Store hat.
+                from core import kamerakalib as _kk
+                from core import livewache as _lwk
+                from core import lernlauf as _ll_k
+                from routes import kalibrierung as _r_kal
+                from routes import livekalib as _r_lk
+                kamera = urllib.parse.unquote(path[len("/kalibrierung/"):])
+                _d_lk, _g_lk = _lwk.guards_lesen(cfg, lambda z: None)
+                _cams_lk, _ = frigate_cameras(cfg)
+                if kamera not in _g_lk and kamera not in (_cams_lk or []):
+                    # Den Namen nie aus der URL uebernehmen (keine zweite
+                    # Kamera-Quelle) — unbekannt heisst 404.
+                    return self._send(404, webui.layout(
+                        _sprache.t("kalib.titel"), "/kalibrierung",
+                        webui.leer(_sprache.t("leer.kamera_unbekannt"),
+                                   _sprache.t("leer.kamera_unbekannt_hinweis")),
+                        self._banner()))
+                try:
+                    _saetze_lk, _ = _ll_k.anker_lesen(cfg["data_dir"])
+                except OSError as _e_ank2:
+                    svc.log(f"calibration page {kamera}: learning-run material "
+                            f"unreadable ({type(_e_ank2).__name__}: {_e_ank2})")
+                    _saetze_lk = []
+                _kat_lk = _kk.katalog_werte(_kk.katalog_latten(cfg), kamera)
+                inhalt = _r_lk.render(
+                    kamera, _lwk.kalib_lesen(cfg, kamera), _g_lk.get(kamera),
+                    {"det": _d_lk["min_score"],
+                     "e": _kk.anzeige_start()["e"], "t": _kk.anzeige_start()["t"]},
+                    {"akt": _kat_lk, "std": _kk.katalog_start()},
+                    lauf_bilder=_r_kal.mitglieder_mit_guete(_saetze_lk, kamera),
+                    deckel=int(cfg.get("live_kalib_max") or 0),
+                    fueller=(int(cfg.get("kalib_fueller_bilder") or 0),
+                             int(cfg.get("kalib_fueller_events") or 0)),
+                    hat_waechter=kamera in _g_lk)
+                return self._send(200, webui.layout(
+                    _sprache.t("livekalib.titel", name=kamera),
+                    "/kalibrierung", inhalt, self._banner()))
             if path.startswith("/lernlauf/crop/"):
                 # Lauf-Crops (Containment wie /refs/: realpath-Wache gegen Traversal).
                 m = re.match(rf"^/lernlauf/crop/({_reg.LAUF_ID_RE})/({_reg.DATEI_RE}\.jpg)$", path)   # .362: zentrale Quelle; das alte L-only-Literal liess B-Laeufe bildlos
@@ -13007,9 +13486,11 @@ def make_handler(svc):
                         _rfz = _al_leer.refs_matrix_roh(cfg["modell"])
                         _nlz = norm_latte_aus_cfg(cfg)
                         _lgz = luma_grenzen_aus_cfg(cfg)
+                        _glz = guete_latte_aus_cfg(cfg)
                         _wart.sort(key=lambda s: 1 if _al_leer.sichtung_hat_sichtbare(
                             s, _lz, cfg["modell"], _rfz, cfg["benennung_dup_sim"],
-                            norm_latte=_nlz, luma_grenzen=_lgz) is False else 0)
+                            norm_latte=_nlz, luma_grenzen=_lgz,
+                            guete_latte=_glz) is False else 0)
                     except Exception as e:
                         svc.log(f"lernlauf: empty-group ordering failed "
                                 f"({type(e).__name__}: {e})")
@@ -13035,7 +13516,8 @@ def make_handler(svc):
                                     os.path.join(cfg["data_dir"], "clips",
                                                  "refcache.npz"),
                                     cfg["modell"]),
-                                luma_grenzen=luma_grenzen_aus_cfg(cfg))
+                                luma_grenzen=luma_grenzen_aus_cfg(cfg),
+                                guete_latte=guete_latte_aus_cfg(cfg))
                         except Exception as e:
                             # Flaeche ist Zusatz-Weg — die Benennungs-Karte
                             # bleibt erreichbar, deshalb laut statt Blocker.
@@ -13080,7 +13562,8 @@ def make_handler(svc):
                                     _ue3.adoptierte_embs(cfg["data_dir"], _pf)
                                     if _pf else [],
                                     norm_latte=norm_latte_aus_cfg(cfg),
-                                    luma_grenzen=luma_grenzen_aus_cfg(cfg))
+                                    luma_grenzen=luma_grenzen_aus_cfg(cfg),
+                                    guete_latte=guete_latte_aus_cfg(cfg))
                                 sichtung_gesamt = _si.get("gesamt", 0)
                         except Exception as e:
                             svc.log(f"lernlauf: sichtung render failed "
@@ -13137,7 +13620,8 @@ def make_handler(svc):
                                                # das Vertreterbild der Kachel
                                                # aus DERSELBEN Reihung kommt.
                                                norm_latte=norm_latte_aus_cfg(cfg),
-                                               luma_grenzen=luma_grenzen_aus_cfg(cfg))
+                                               luma_grenzen=luma_grenzen_aus_cfg(cfg),
+                                               guete_latte=guete_latte_aus_cfg(cfg))
                     # .260: kein meta-refresh mehr — das Saeule-Widget der
                     # Seite pollt /lernlauf_status (Tick-Regel lebt als EINE
                     # Quelle in lernwizard.lauf_status) und laedt genau EINMAL
@@ -13278,11 +13762,18 @@ def make_handler(svc):
                 # ME1: Seite byte-treu in routes/unbekannte.py (Schnappschuss-
                 # Beweis scratchpad/me1_schnappschuss.py); Pool-Staende + Personen
                 # als Parameter — kein Pool-/Store-Zugriff im Renderer.
+                # .380: Sortierung/Filter kommen als Query und werden GEGEN DIE
+                # LISTEN DES RENDERERS geprueft (SORT/FILTER dort sind die eine
+                # Quelle) — der Handler kennt keine eigenen Werte.
                 from routes import unbekannte as _r_unbek
+                _qu = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                _so = (_qu.get("sort") or [_r_unbek.SORT[0]])[0]
+                _fi = (_qu.get("f") or [_r_unbek.FILTER[0]])[0]
                 inhalt = _r_unbek.render(anlernen.lade_unbekannte(),
                                          anlernen.lade_gesichter(),
                                          anlernen.lade_unbekannt_vorschlaege(),
-                                         master_persons(cfg))
+                                         master_persons(cfg),
+                                         sortierung=_so, filter_=_fi)
                 return self._send(200, webui.layout(_sprache.t("nav.unbekannte"), "/unbekannte", inhalt, self._banner()))
             if path == "/gesichter":                     # zentrale Personen-/Referenzverwaltung (19.07.)
                 import webui
@@ -13558,6 +14049,36 @@ def make_handler(svc):
                 except OSError:
                     return self._send(404, "not found", "text/plain")
                 return self._send(200, roh_jpg, "image/jpeg")
+            if path == "/live_kalib_bild":         # EIN Bild des Kalibrier-Vorrats
+                # Eigener Endpunkt statt /live_alarmbild: dessen Vertrag
+                # (ALARMBILD_RE) kennt bewusst keinen Unterordner, und ihn
+                # aufzuweichen waere der falsche Weg — hier gilt ein eigenes,
+                # engeres Muster (Kameraname + Datei je eigene Wache, kein
+                # Traversal moeglich, weil beide Teile Positiv-Muster sind).
+                from core import livewache as _lwk
+                _kam = (qs.get("k") or [""])[0]
+                _dat = (qs.get("d") or [""])[0]
+                _ord = _lwk.kalib_dir(cfg, _kam)
+                if not _ord or not _lwk.KALIB_NAME_RE.match(_dat):
+                    return self._send(404, "not found", "text/plain")
+                try:
+                    roh_kal = open(os.path.join(_ord, _dat), "rb").read()
+                except OSError:
+                    return self._send(404, "not found", "text/plain")
+                return self._send(200, roh_kal, "image/jpeg")
+            if path.startswith("/live_kalibrierung/"):
+                # ALT-ADRESSE (.383). Seit dem Zentral-Umbau gibt es EINEN Weg
+                # zur Kalibrierseite: /kalibrierung/<kamera>. Der alte Pfad
+                # bleibt als Umleitung stehen — Lesezeichen und der Knopf einer
+                # noch offenen Seite duerfen nicht ins Leere laufen (dieselbe
+                # Zusage wie beim Navigations-Umbau: Adressen brechen nicht).
+                # Der Rest des Pfades wird UNVERAENDERT uebernommen: er ist
+                # bereits URL-kodiert, ein zweites quote() wuerde ihn
+                # doppelt kodieren (aus %20 wird %2520 und die Kamera ist
+                # unbekannt).
+                return self._send(302, "", "text/plain",
+                                  location="/kalibrierung/"
+                                  + path[len("/live_kalibrierung/"):])
             if path.startswith("/live/"):          # Detailseite /live/<kamera>
                 import webui
                 from routes import live as _r_live
@@ -13582,7 +14103,22 @@ def make_handler(svc):
                     # und tragen kanaele immer selbst).
                     _g = dict(_g or {},
                               kanaele=_melden.konfigurierte_kanaele(cfg))
-                inhalt = _r_live.detail(kamera, _g, kd, gesperrt)
+                # Kalibrier-Vorrat + Erkannt-Regel als DATEN herein (Muster des
+                # Moduls): der Stand des Rings kommt von der Platte, die
+                # Auslegung der Regel aus der EINEN Rechnung der Engine.
+                from core import livewache as _lwk
+                _vor = _lwk.kalib_lesen(cfg, kamera)
+                inhalt = _r_live.detail(
+                    kamera, _g, kd, gesperrt, vorrat=len(_vor),
+                    deckel=int(cfg.get("live_kalib_max") or 0),
+                    regel=_lwk.Engine.erkannt_regel(_g),
+                    det_default=_lwk.guards_lesen(
+                        cfg, lambda z: None)[0]["min_score"],
+                    # Welle 1, Etappe A: die Bewegungs-Vorgaben aus der EINEN
+                    # Quelle (Frigates Auslieferungswerte im Engine-Modul) —
+                    # die Seite zeigt sie als Platzhalter, traegt sie aber nie
+                    # selbst.
+                    beweg_vorgabe=(_lwk.BEWEG_SCHWELLE, _lwk.BEWEG_FLAECHE))
                 return self._send(200, webui.layout(
                     _sprache.t("titel.live_kamera", kamera=kamera), "/live", inhalt, self._banner()))
             if path == "/vision":                  # Vision detect (Reiter)
@@ -14329,6 +14865,71 @@ def make_handler(svc):
                         return self._send(200, json.dumps(
                             d, ensure_ascii=False, indent=1),
                             "application/json")
+                    if (_rest == _sup.BAUM_CODE
+                            or _rest.startswith(_sup.BAUM_CODE + "/")):
+                        # .380 Vollbaum (User-Entscheid 31.08.): der GANZE
+                        # Datenordner read-only — ohne Relativpfad das
+                        # Metadaten-Listing, mit Relativpfad EINE Datei
+                        # oder EIN Ordner als tar.gz. Kuenftige Ablagen
+                        # (learn/ …) sind damit ohne Bereichs-Pflege
+                        # erreichbar. Alle Wachen sitzen im Modul: Pfad-
+                        # Anker auf data_dir und Maskierung der
+                        # Maskier-Ordner (config/) — hier steht nur HTTP.
+                        _rel = _rest[len(_sup.BAUM_CODE):].lstrip("/")
+                        if not _rel:
+                            _l = _sup.baum_listen(cfg["data_dir"])
+                            _l["version"] = os.environ.get("SUSLIK_VERSION",
+                                                           "dev")
+                            svc.log(f"SUPPORT: {_sup.BAUM_CODE} listing "
+                                    f"served — {_l['n']} file(s), "
+                                    f"{_l['bytes']} byte(s)")
+                            return self._send(200, json.dumps(
+                                _l, ensure_ascii=False, indent=1),
+                                "application/json")
+                        _art, _ziel = _sup.baum_aufloesen(cfg["data_dir"],
+                                                          _rel)
+                        if _art == "datei":
+                            try:
+                                _inh, _gr, _ct, _msk = _sup.datei_vorbereiten(
+                                    cfg["data_dir"], _ziel)
+                            except OSError:
+                                # verschwunden/gesperrt: derselbe 404 wie
+                                # fuer "gibt es nicht", nie ein Traceback.
+                                return self._send(404, "not found",
+                                                  "text/plain")
+                            self.send_response(200)
+                            self.send_header("Content-Type", _ct)
+                            self.send_header("Content-Length", str(_gr))
+                            self.send_header(
+                                "Content-Disposition", 'attachment; '
+                                f'filename="{_sup.download_name(_rel)}"')
+                            self.send_header("Cache-Control", "no-store")
+                            self.end_headers()
+                            _sup.datei_streamen(
+                                _ziel, self.wfile, svc.log,
+                                f"{_sup.BAUM_CODE}/{_rel}", inhalt=_inh)
+                            return
+                        if _art == "ordner":
+                            if not _sup.abzug_sperren():
+                                return self._send(429, "one export at a time",
+                                                  "text/plain")
+                            try:
+                                self.send_response(200)
+                                self.send_header("Content-Type",
+                                                 "application/gzip")
+                                self.send_header(
+                                    "Content-Disposition", 'attachment; '
+                                    f'filename="{_sup.download_name(_rel, ".tar.gz")}"')
+                                self.send_header("Cache-Control", "no-store")
+                                self.end_headers()
+                                _sup.baum_tar_streamen(cfg["data_dir"], _ziel,
+                                                       self.wfile, svc.log)
+                            finally:
+                                _sup.abzug_freigeben()
+                            return
+                        # Ausbruchsversuch (../, absoluter Pfad, Symlink
+                        # nach draussen) und "gibt es nicht" enden gleich.
+                        return self._send(404, "not found", "text/plain")
                     _teile = _rest.split("/")
                     _code = _teile[0]
                     _lid = _teile[1] if len(_teile) == 2 else None
@@ -14977,6 +15578,37 @@ def startup_selfcheck(svc):
         from core.registry import ep_von              # P3.1: EP-Soll aus der Registry —
         want = ep_von(kind)                           # ein neues kind kann hier nie mehr fehlen
         spec = f"{kind}{':' + dev if dev else ''}"
+        # TRT-LUEGE (Live-Performance Welle 1, Etappe C; Nebenfund der
+        # Placement-Messmatrix 31.08.): im cuda-Image steht der
+        # TensorrtExecutionProvider in get_available_providers(), aber
+        # libnvinfer liegt nicht im Image. Eine Session auf ihm bindet nie,
+        # und onnxruntime rechnet STILL auf CUDA weiter — wer die Liste liest,
+        # glaubt an ein TensorRT, das es hier nicht gibt. Wir FORDERN TRT
+        # nirgends an (_ort_session baut cuda-Sessions auf dem CUDA-EP), aber
+        # die Liste darf nicht luegen.
+        # Geprueft wird die BIBLIOTHEK, nicht per Session-Bau: ein echter
+        # TRT-Session-Bau kompiliert eine Engine und kostet Minuten — das
+        # gehoert nicht in einen Startup-Check.
+        if "TensorrtExecutionProvider" in avail:
+            import ctypes as _ct
+            _trt = None
+            for _so in ("libnvinfer.so", "libnvinfer.so.10",
+                        "libnvinfer.so.9", "libnvinfer.so.8"):
+                try:
+                    _ct.CDLL(_so)
+                    _trt = _so
+                    break
+                except OSError:
+                    continue
+            if _trt is None:
+                erg("warn", "TensorrtExecutionProvider is LISTED but libnvinfer "
+                            "is not loadable in this image — a TensorRT session "
+                            "could never bind, onnxruntime would fall back to "
+                            "CUDA without saying so. suslik does not request "
+                            "TensorRT; the listing is misleading, not a fault")
+            else:
+                erg("info", f"TensorrtExecutionProvider listed, {_trt} loadable "
+                            f"— suslik still runs recognition on the CUDA EP")
         if kind == "cpu":
             erg("ok", f"{spec} — providers: {', '.join(avail)}")
         elif not (want and want in avail):

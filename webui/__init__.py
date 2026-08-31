@@ -152,10 +152,16 @@ BLATT = {"/setup": "/kameras", "/aehnliche": "/gesichter", "/event": "/heute", "
          # Anleitungen duerfen den Hinweis der uebersetzten /erkennung nicht erben);
          # Bereichs-Leuchte bleibt Configuration wie zuvor.
          "/hilfe": "/erkennung",
-         # Phase 1b (26.08.): die Kalibrierseite der Belichtung haengt an der
-         # Lern-Karte (Knopf in Kachel 1) und hat keinen eigenen Reiter —
-         # ohne diesen Eintrag leuchtete oben der erste Bereich statt Learn.
-         "/lernlauf/belichtung": "/lernlauf",
+         # /kalibrierung gehoert seit dem Zentral-Umbau (31.08.) zu KEINEM
+         # Bereich mehr: die Kamera-Kalibrierung hat einen eigenen Knopf in der
+         # Kopfleiste (neben "Read me first"), sie ist kein Blatt des
+         # Lernlaufs. None = kein Bereich (dieselbe Semantik wie /readme):
+         # oben leuchtet nichts, es gibt keine fremde Unterreiterzeile.
+         # Vorher stand hier "/lernlauf" — damals war die Seite der
+         # Kalibrier-Knopf der Smart-naming-Kachel. (Der zweite Eintrag dieser
+         # Art, /lernlauf/belichtung, ist am 31.08. mit der
+         # Belichtungs-Kalibrierseite ausgebaut worden.)
+         "/kalibrierung": None,
          # .374: /readme gehoert zu KEINEM Bereich — der Knopf steht in jeder
          # Kopfleiste, die Seite ist kein Blatt eines Reiters. None heisst
          # deshalb "kein Bereich": nichts leuchtet oben, keine Unterreiterzeile.
@@ -365,6 +371,19 @@ def layout(titel, aktiv, inhalt, banner=None, refresh=None, banner_aktion=None,
     # Oberflaeche sitzt, soll ihn finden, ohne zu suchen.
     rmk = (f'<a class="rmk" href="/readme" title="{html.escape(t("readme.titel"))}">'
            f'{html.escape(t("readme.knopf"))}</a>')
+    # Kamera-Kalibrierung als EIGENER Knopf (User 31.08.: "eigener Knopf oben
+    # in der Hauptleiste — vor dem Easy/Expert-Umschalter, neben Read me
+    # first"). Hier im Layout und nicht in _nav(), weil die Seite kein Reiter
+    # mit Unterreitern ist, sondern EIN Einstieg: sie fuehrt auf die
+    # Kamera-Uebersicht, von dort je Kamera weiter. Eigene Klasse neben .rmk,
+    # damit beide Knoepfe gleich aussehen und nebeneinander stehen; der
+    # aktiv-Zustand kommt aus dem BLATT-Eintrag (kein Bereich).
+    # aktiv (nicht a): BLATT bildet /kalibrierung bewusst auf None ab —
+    # gegen den gemappten Wert verglichen leuchtete der Knopf nie.
+    kalk = (f'<a class="rmk kalk{" an" if aktiv == "/kalibrierung" else ""}" '
+            f'href="/kalibrierung" '
+            f'title="{html.escape(t("kalib.knopf_tip"))}">'
+            f'{html.escape(t("kalib.knopf"))}</a>')
     # Und das Aufgehen von selbst: die Seite fragt EINMAL nach, ob die Marke
     # fehlt (also seit dem letzten Dienststart noch niemand geschlossen hat),
     # und holt sich den Inhalt dann nach. Entkoppelt, damit es auf JEDER Seite
@@ -494,7 +513,7 @@ def layout(titel, aktiv, inhalt, banner=None, refresh=None, banner_aktion=None,
             # klebend brauchte die zweite Ebene einen Festwert fuer die Hoehe der ersten, und der
             # wurde falsch, sobald die erste umbrach — s. .kopf in style.css.
             f'<div class="kopf"><nav><div class="inner"><span class="marke">{mark}suslik'
-            f'{f" <small>{html.escape(ver)}</small>" if ver else ""}{upd}</span>{nav}{rmk}{rechts}</div></nav>'
+            f'{f" <small>{html.escape(ver)}</small>" if ver else ""}{upd}</span>{nav}{rmk}{kalk}{rechts}</div></nav>'
             f"{unter}</div>"
             f"<main>{b}{hw}{inhalt}</main>"
             f"<footer>{_fuss()}</footer>{rmjs}</html>")

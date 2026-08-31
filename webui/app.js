@@ -940,47 +940,155 @@ function unbReconcile(btn) {
     })
     .catch(function () { clearInterval(tick); btn.textContent = TT('js.status.fehler', 'error'); btn.disabled = false; });
 }
+/* .380 Unknown-Seite ohne Reload: die Aktions-Antworten tragen die betroffene
+   Kachel fertig gerendert mit (kachel: {uid: html}) bzw. sagen, dass sie aus der
+   Sicht faellt (weg: [uid]) — dazu den Stand des Fortschrittsankers. Frueher lud
+   JEDE Aktion die ganze Seite neu; bei 95 Gruppen hiess das nach jeder Zuweisung
+   alle Gruppen und alle Crops noch einmal. Die Texte mit Zahl kommen als Rahmen
+   mit {…}-Platzhalter aus data-txt (Server-Schluessel), hier wird nur die Zahl
+   eingesetzt. */
+function unbTxt(el, kw) {
+  var r = el && el.getAttribute('data-txt'); if (!r) return '';
+  Object.keys(kw).forEach(function (k) { r = r.split('{' + k + '}').join(String(kw[k])); });
+  return r;
+}
+function unbListe() { return document.getElementById('ukliste'); }
+function unbZustand() {
+  var l = unbListe();
+  return {sort: (l && l.dataset.sort) || '', f: (l && l.dataset.filter) || ''};
+}
+function unbAnwenden(d) {
+  if (d.kachel) {
+    Object.keys(d.kachel).forEach(function (u) {
+      var alt = document.getElementById('uk-' + u);
+      if (alt) { alt.outerHTML = d.kachel[u]; }
+    });
+  }
+  (d.weg || []).forEach(function (u) {
+    var alt = document.getElementById('uk-' + u);
+    if (alt) alt.parentNode.removeChild(alt);
+  });
+  var a = document.getElementById('uk-anker');
+  if (a && typeof d.offen === 'number') {
+    a.textContent = unbTxt(a, {offen: d.offen, gesamt: d.gesamt});
+  }
+  unbSel();
+}
+function unbSenden(pfad, daten, btn, dann) {
+  var z = unbZustand();
+  daten.sort = z.sort; daten.f = z.f;
+  if (btn) btn.disabled = true;
+  return fetch(pfad, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                      body: JSON.stringify(daten)})
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (dann) dann(d);
+      unbAnwenden(d);
+      return d;
+    })
+    .catch(function () {
+      if (btn) { btn.disabled = false; btn.textContent = TT('js.status.fehler', 'error'); }
+    });
+}
+function unbMeldung(uid, text) {
+  var c = document.getElementById('uk-' + uid), m = c && c.querySelector('.uk-msg');
+  if (m) m.textContent = text || '';
+}
 function unbBesucher(uid, an, btn) {
   if (an && !confirm(TT('js.unb.besucher_frage', 'Ignore as a known stranger? It will no longer trigger alerts. (Re-activate any time under "known visitors" below.)'))) return;
-  fetch('/unbekannt_besucher', {method: 'POST', body: JSON.stringify({uid: uid, an: an})})
-    .then(function (r) { return r.json(); })
-    .then(function (d) {
-      btn.textContent = d.msg;
-      if (d.ok) setTimeout(function () { location.reload(); }, 700);
-    });
+  unbSenden('/unbekannt_besucher', {uid: uid, an: an}, btn, function (d) {
+    if (!d.ok && btn) { btn.disabled = false; btn.textContent = d.msg; }
+    else unbMeldung(uid, d.msg);
+  });
 }
-function unbMerge(uid, btn) {
-  var sel = document.getElementById('mg-' + uid), b = sel && sel.value;
-  if (!b) { alert(TT('js.unb.ziel_fehlt', 'Choose a target identity.')); return; }
-  unbMergePaar(uid, b, btn);
+function unbObjekt(uid, an, btn) {
+  if (an && !confirm(TT('js.unb.objekt_frage', 'Mark as "no person" (a bush, a reflection, a parked car)? It stops showing up as a visitor; you can undo this under "not people".'))) return;
+  unbSenden('/unbekannt_objekt', {uid: uid, an: an}, btn, function (d) {
+    if (!d.ok && btn) { btn.disabled = false; btn.textContent = d.msg; }
+    else unbMeldung(uid, d.msg);
+  });
 }
-function unbMergePaar(a, b, btn) {
+/* Gruppen-Auswahl fuer das n:1-Zusammenlegen (ersetzt die Merge-Auswahllisten
+   je Kachel: die trugen bei 95 Gruppen 9056 <option>-Elemente). */
+function unbGewaehlt() {
+  return Array.prototype.map.call(
+    document.querySelectorAll('.uk-sel:checked'), function (c) { return c.value; });
+}
+function unbSel() {
+  var b = document.getElementById('uk-bulk'); if (!b) return;
+  var n = unbGewaehlt().length;
+  b.hidden = n < 2;
+  b.disabled = false;
+  b.textContent = unbTxt(b, {n: n});
+}
+function unbBulkMerge(btn) {
+  var uids = unbGewaehlt();
+  if (uids.length < 2) return;
   if (!confirm(TT('js.unb.merge_frage', 'Merge?'))) return;
-  btn.disabled = true;
-  fetch('/unbekannt_merge', {method: 'POST', body: JSON.stringify({a: a, b: b})})
-    .then(function (r) { return r.json(); })
-    .then(function (d) { btn.textContent = d.msg; if (d.ok) setTimeout(function () { location.reload(); }, 800); });
+  unbSenden('/unbekannt_merge_viele', {uids: uids}, btn, function (d) {
+    var m = document.getElementById('uk-bulk-msg');
+    if (m) m.textContent = d.msg;
+  });
 }
-function unbVerwerfen(a, b, btn) {
-  // 'Different' persistent (25.07.): vorher nur display:none — nach Reload/Reconcile
-  // stand dieselbe Frage wieder da. Der Server merkt sich das Paar dauerhaft.
-  var m = btn.closest('.merge'); if (m) m.style.display = 'none';
-  fetch('/unbekannt_verwerfen', {method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({a: a, b: b})}).catch(function () {});
+/* Teil-Zuweisung (B4): Haken am Crop-Streifen. Ohne Haken bleibt es beim
+   Zuweisen der ganzen Gruppe; mit Haken gehen NUR die angetickten Bilder an die
+   Person, alle anderen bleiben im Pool (eine Gruppe ist nicht immer eine
+   Person). */
+function unbHaken(uid) {
+  var c = document.getElementById('uk-' + uid);
+  return c ? Array.prototype.map.call(c.querySelectorAll('.uk-m:checked'),
+                                      function (x) { return x.value; }) : [];
 }
-function unbBenennen(uid, btn) {
+function unbTick(el) {
+  var c = el.closest('.uk'); if (!c) return;
+  var uid = c.dataset.uid, b = document.getElementById('teil-' + uid);
+  if (!b) return;
+  var n = unbHaken(uid).length;
+  b.hidden = n < 1;
+  b.textContent = unbTxt(b, {n: n});
+}
+function unbBenennenSenden(uid, btn, ids) {
   var nm = document.getElementById('nm-' + uid), p = nm && nm.value.trim();
   if (!p) { alert(TT('js.unb.name_fehlt', 'Enter a name (new or existing person).')); return; }
-  if (!confirm(TT('js.unb.benennen_frage', 'Assign to "{person}"? The best images become references.', {person: p}))) return;
-  btn.disabled = true; btn.textContent = TT('js.status.lernen', 'learning …');
-  fetch('/unbekannt_benennen', {method: 'POST', body: JSON.stringify({uid: uid, person: p})})
+  var frage = ids
+    ? TT('js.unb.teil_frage', 'Assign the {n} ticked pictures to "{person}"? The rest of the group stays under Unknown.', {n: ids.length, person: p})
+    : TT('js.unb.benennen_frage', 'Assign to "{person}"? The best images become references.', {person: p});
+  if (!confirm(frage)) return;
+  btn.textContent = TT('js.status.lernen', 'learning …');
+  var daten = {uid: uid, person: p};
+  if (ids) daten.ids = ids;
+  unbSenden('/unbekannt_benennen', daten, btn, function (d) {
+    if (d.ok) unbMeldung(uid, d.msg);
+    else { btn.disabled = false; btn.textContent = d.msg; }
+  });
+}
+function unbBenennen(uid, btn) { unbBenennenSenden(uid, btn, null); }
+function unbTeil(uid, btn) {
+  var ids = unbHaken(uid);
+  if (!ids.length) return;
+  unbBenennenSenden(uid, btn, ids);
+}
+/* Nachladen (B1): der Server liefert die naechsten Kacheln als HTML-Stueck; die
+   Seite haengt sie an, statt beim Aufbau alles auf einmal zu bauen. */
+function unbMehr(btn) {
+  var l = unbListe(); if (!l) return;
+  var z = unbZustand();
+  btn.disabled = true;
+  btn.textContent = TT('js.status.laeuft_wort', 'running');
+  fetch('/unbekannt_seite', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({sort: z.sort, f: z.f, offset: parseInt(btn.dataset.offset, 10) || 0})})
     .then(function (r) { return r.json(); })
     .then(function (d) {
-      btn.textContent = d.msg;
-      var c = document.getElementById('uk-' + uid);
-      if (d.ok && c) { c.style.opacity = 0.4; setTimeout(function () { location.reload(); }, 1200); }
-      else { btn.disabled = false; }
-    });
+      l.insertAdjacentHTML('beforeend', d.html || '');
+      btn.dataset.offset = d.offset;
+      if (d.rest > 0) {
+        btn.textContent = unbTxt(btn, {n: d.n_naechste});
+        btn.disabled = false;
+      } else {
+        btn.parentNode.removeChild(btn);
+      }
+    })
+    .catch(function () { btn.disabled = false; btn.textContent = TT('js.status.fehler', 'error'); });
 }
 
 /* Cameras sheet (Phase 2b, 21.07.): collect per-camera use + zones, save, restart */
@@ -1701,7 +1809,103 @@ function _liveFelder() {
           ende_ohne_gesicht_s: (document.getElementById('lv-ende') || {}).value,
           wieder_scharf_s: (document.getElementById('lv-scharf') || {}).value,
           kanaele: kan,
-          hoehe: (document.querySelector('input[name="lv-hoehe"]:checked') || {}).value || null};
+          hoehe: (document.querySelector('input[name="lv-hoehe"]:checked') || {}).value || null,
+          /* Live-Umbau 31.08. — die je-Kamera-Werte der neuen Kacheln. Fehlt
+             ein Feld im DOM (gesperrter Build), bleibt der Wert `undefined`,
+             JSON.stringify laesst ihn weg und der Server BEHAELT den
+             gespeicherten Wert (live_speichern._wert). Genau deshalb stehen
+             hier keine Ersatz-Defaults: ein `|| 2` wuerde eine 3 des Nutzers
+             still auf 2 zuruecksetzen, sobald das Feld einmal fehlt. */
+          erkannt_n: (document.getElementById('lv-erkannt-n') || {}).value,
+          erkannt_t_s: (document.getElementById('lv-erkannt-t') || {}).value,
+          frigate_events: (document.getElementById('lv-frigate') || {}).checked,
+          frigate_abstand_s: (document.getElementById('lv-frigate-abstand') || {}).value,
+          /* Live-Performance Welle 1, Etappe A: bewegungsgesteuertes Abtasten.
+             Dieselbe Halte-Regel wie oben — fehlt das Feld im DOM, geht es
+             nicht mit und der Server behaelt den gespeicherten Wert. */
+          bewegung_gate: (document.getElementById('lv-bewegung') || {}).checked,
+          ruhe_takt_s: (document.getElementById('lv-ruhe-takt') || {}).value,
+          bewegung_schwelle: (document.getElementById('lv-bewegung-schwelle') || {}).value,
+          bewegung_flaeche: (document.getElementById('lv-bewegung-flaeche') || {}).value};
+}
+
+/* Kalibrier-Vorrat EINER Kamera wegwerfen (User-Auftrag 31.08.: nachkalibrieren
+   mit frischem Material). Mit Rueckfrage, weil der Ring danach von vorn
+   anfaengt — die Bilder sind nicht wiederherstellbar. */
+function liveVorratLeeren(kamera, btn) {
+  /* Der Fallback ist BYTE-GLEICH zum en.py-Wert (Gate-Vertrag js.*): ein
+     abweichender Fallback wuerde ohne geladene Sprachtabelle etwas anderes
+     versprechen als die uebersetzte Fassung. */
+  if (!confirm(TT('js.live.vorrat_leeren_frage',
+                  'Delete the calibration samples of this camera? They cannot '
+                  + 'be brought back; the watcher starts collecting again from '
+                  + 'now on.'))) return;
+  btn.disabled = true;
+  fetch('/live_kalib_leeren', {method: 'POST',
+                               body: JSON.stringify({kamera: kamera})})
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      var s = document.getElementById('lk-msg') || document.getElementById('lv-status');
+      if (s) s.textContent = d.msg;
+      if (d.ok) setTimeout(function () { location.reload(); }, 800);
+      else btn.disabled = false;
+    })
+    .catch(function () { btn.disabled = false; });
+}
+
+/* ── Materialsuche der Kalibrier-Seite (Etappe 4 des Zentral-Umbaus 31.08.):
+   Knopf startet den Mini-Ernte-Lauf ueber die letzten Person-Events DIESER
+   Kamera, danach pollt die Seite den Stand. Der Knopf bleibt gesperrt, solange
+   der Lauf laeuft — ein zweiter Start waere nur eine Absage (der Server laesst
+   ohnehin nur einen Lauf zu). Die Bilanz bleibt am Ende STEHEN, auch wenn sie
+   mager ist: "aus N Ereignissen kamen M Bilder" ist die Diagnose der Kamera.
+   Die Fallbacks sind BYTE-GLEICH zu en.py (Gate-Vertrag js.*). */
+function kalibFuellen(kamera, btn) {
+  var z = document.getElementById('kf-' + kamera);
+  btn.disabled = true;
+  if (z) z.textContent = TT('js.kalib.start', 'looking for material …');
+  fetch('/kalibrierung_fuellen', {method: 'POST',
+                                  body: JSON.stringify({kamera: kamera})})
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d.ok) {
+        if (z) z.textContent = d.msg || TT('js.kalib.fehler',
+                                           'could not look for material');
+        btn.disabled = false;
+        return;
+      }
+      kalibFuellstand(kamera, btn);
+    })
+    .catch(function () {
+      if (z) z.textContent = TT('js.kalib.fehler', 'could not look for material');
+      btn.disabled = false;
+    });
+}
+
+function kalibFuellstand(kamera, btn) {
+  var z = document.getElementById('kf-' + kamera);
+  fetch('/kalibrierung_fuellstand?k=' + encodeURIComponent(kamera))
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d || d.kamera === undefined) { btn.disabled = false; return; }
+      if (d.laeuft) {
+        if (z) z.textContent = TT('js.kalib.lauf',
+                                  '{i} of {n} events · {bilder} picture(s)',
+                                  {i: d.i, n: d.n, bilder: d.bilder});
+        setTimeout(function () { kalibFuellstand(kamera, btn); }, 2000);
+        return;
+      }
+      if (z) z.textContent = TT('js.kalib.fertig',
+                                '{bilder} picture(s) from {events} event(s)',
+                                {bilder: d.bilder, events: d.i})
+                             + (d.fehler ? ' — ' + d.fehler : '');
+      btn.disabled = false;
+      /* Neue Bilder aendern Vorrats-Stand und Galerie — die Seite holt sie
+         sich, sobald wirklich etwas dazugekommen ist. Bei leerer Ausbeute
+         bleibt sie stehen, sonst waere die Bilanz nach dem Reload weg. */
+      if (d.bilder > 0) setTimeout(function () { location.reload(); }, 2500);
+    })
+    .catch(function () { btn.disabled = false; });
 }
 
 function liveSpeichern(btn) {

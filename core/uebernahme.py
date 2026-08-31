@@ -88,7 +88,8 @@ def bedingungs_tag_pruefen(anker, aktuelle_werte):
     return ab
 
 
-def plan_bauen(anker, dup_sim, bestands_embs, luma_grenzen=None):
+def plan_bauen(anker, dup_sim, bestands_embs, luma_grenzen=None,
+               guete_latte=None, kat_latten=None):
     """Verbindlicher Dedup-Plan ueber die PERSISTIERTE Auswahl (nie neu empfehlen —
     Bauplan: E4b uebernimmt GENAU die benannte Menge, prueft sie nur auf Duplikate).
     Reihenfolge deterministisch (front/sharp/det/id wie die Benennungs-Reihung).
@@ -96,12 +97,28 @@ def plan_bauen(anker, dup_sim, bestands_embs, luma_grenzen=None):
     der Reihung hier durch — sie entscheidet mit, WELCHES von zwei Beinahe-
     Duplikaten in den Katalog wandert (das besser belichtete gewinnt). Ohne
     Grenzen ist die Reihung Element fuer Element die bisherige.
+    kat_latten (Zentral-Umbau 31.08.): die KATALOG-Latte je Kamera
+    (core.kamerakalib). Sie sitzt HIER und nicht in uebernehmen(), weil dies
+    die Stelle ist, an der ein Bild mit GRUND aussortiert werden kann, bevor
+    Dateien angefasst werden — der Nutzer sieht den Grund in derselben Liste
+    wie das Dedup-Ergebnis. Das Mitglied traegt kamera + fiqa_t/empf (seit
+    .377 wandern die Guete-Masse mit), die Latte beisst hier also real.
+    Ungemessene Mitglieder (Alt-Anker) kommen durch — Bestandsschutz.
     -> {aufnehmen: [mitglied...], uebersprungen: [{datei, grund}...]}"""
     from core.benennung import _reihung
+    from core.kamerakalib import katalog_ok
     gewaehlt = [m for m in (anker.get("mitglieder") or []) if m.get("gewaehlt")]
     aufnehmen, uebersprungen, gesehen = [], [], [list(e) for e in bestands_embs]
     for m in sorted(gewaehlt,
-                    key=lambda x: _reihung(x, luma_grenzen=luma_grenzen)):
+                    key=lambda x: _reihung(x, luma_grenzen=luma_grenzen, guete_latte=guete_latte)):
+        kat_ok, kat_grund = katalog_ok(kat_latten, m.get("kamera"),
+                                       m.get("empf"), m.get("fiqa_t"))
+        if not kat_ok:
+            # Vor dem Dedup: ein Bild, das gar nicht in den Katalog darf, soll
+            # auch keinen Platz im Aehnlichkeits-Vergleich belegen.
+            uebersprungen.append({"datei": str(m.get("datei", "")),
+                                  "grund": kat_grund})
+            continue
         naher = None
         if m.get("emb"):
             for e in gesehen:

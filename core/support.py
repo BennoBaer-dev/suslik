@@ -22,19 +22,42 @@ support_api.md):
    tarfile reicht BrokenPipe/FileNotFoundError sonst ungefangen hoch, und
    das Prod-Log-Gate wuerde rot).
 Store-IO wird injiziert (kein verifyd-Rueckimport, Muster core/melden.py).
+
+.380 (User-Entscheid 31.08.) — VOLLBAUM `data`: der Support erreicht den
+GANZEN Datenordner read-only, nicht nur die benannten Bereiche. Anlass:
+der Unbekannt-Pool eines Testers lag unter learn/ und war nicht abziehbar,
+weil kein Bereich ihn nannte; jede kuenftige Ablage soll ohne Tabellen-
+Pflege erreichbar sein. Der Sicherheits-Vertrag bleibt derselbe und
+bekommt zwei Zusagen dazu:
+ - Pfad-Wache: jeder Kandidat wird gegen den realpath von data_dir
+   geankert (`..`, absoluter Pfad, hinausfuehrender Symlink -> nichts,
+   der Aufrufer antwortet mit demselben generischen 404).
+ - Maskier-Ordner: alles unter SUPPORT_MASKE_ORDNER (config/) geht NUR
+   maskiert hinaus — einzeln UND im Verzeichnis-tar, denn dort liegen
+   neben config.json die unmaskierten Alt-Store-Kopien config.json.vor_*.
+   Was sich dort nicht als JSON deuten laesst, wird gar nicht roh
+   ausgeliefert, sondern durch die Maske ersetzt (zu viel maskieren ist
+   die sichere Richtung).
 """
 import hashlib
 import hmac
+import io
 import json
+import mimetypes
 import os
 import re
 import tarfile
 import threading
 import time
 
-from core.registry import SUPPORT_BEREICHE, SUPPORT_SECRET_MUSTER, LAUF_ID_RE
+from core.registry import (SUPPORT_BEREICHE, SUPPORT_MASKE_ORDNER,
+                           SUPPORT_SECRET_MUSTER, LAUF_ID_RE)
 
 MASKE = "***"
+# Bereichs-Code des Vollbaums — EINE Quelle fuer Handler, Route und Gate
+# (K3: kein zweites Literal in verifyd). Die Registry deckt ihn als
+# Bereich der Art "baum"; das Gate prueft genau diese Zuordnung.
+BAUM_CODE = "data"
 _ABZUG = threading.Semaphore(1)          # ein Bereichs-Abzug zur Zeit
 _ABWEIS_DROSSEL = {"bis": 0.0, "zaehler": 0}   # Audit: Abweisungen gedrosselt
 
@@ -90,6 +113,166 @@ def _wurzel(data_dir, bereich):
     return os.path.realpath(os.path.join(data_dir, *bereich["wurzel"]))
 
 
+# ---------------------------------------------------------------- Vollbaum
+def _drin(pfad, basis):
+    """Liegt ein REALPATH innerhalb der Basis (oder ist sie selbst)?
+    DIE eine Containment-Frage des Moduls — Listing, Einzeldatei und
+    tar-Mitglied stellen sie alle hier."""
+    return pfad == basis or pfad.startswith(basis + os.sep)
+
+
+def maske_noetig(rel):
+    """Muss diese Datei (Pfad RELATIV zu data_dir) maskiert ausgeliefert
+    werden? Entscheidend ist der ORDNER (SUPPORT_MASKE_ORDNER), nicht der
+    Dateiname: unter config/ liegen neben config.json auch Alt-Store-
+    Kopien mit denselben Secrets unter anderem Namen."""
+    teile = [t for t in str(rel or "").replace("\\", "/").split("/") if t]
+    return bool(teile) and teile[0] in SUPPORT_MASKE_ORDNER
+
+
+def maskierte_bytes(roh):
+    """Inhalt einer Maskier-Datei -> die Bytes, die hinausgehen duerfen.
+    Ganzes JSON (config.json) und JSON-Lines (config_audit.jsonl) werden
+    feldweise ueber dieselbe Heuristik maskiert wie der config-Bereich.
+    Was sich NICHT deuten laesst, geht NICHT roh hinaus, sondern als
+    Maske — die Datei bleibt damit sichtbar (kein stiller Verlust), ihr
+    Inhalt bleibt drin."""
+    txt = roh.decode("utf-8", "replace")
+    try:
+        return (json.dumps(maskiert(json.loads(txt)), ensure_ascii=False,
+                           indent=1) + "\n").encode()
+    except ValueError:
+        pass
+    zeilen = []
+    for z in txt.splitlines():
+        s = z.strip()
+        if not s:
+            continue
+        try:
+            zeilen.append(json.dumps(maskiert(json.loads(s)),
+                                     ensure_ascii=False))
+        except ValueError:
+            return (MASKE + "\n").encode()
+    if not zeilen:
+        return (MASKE + "\n").encode()
+    return ("\n".join(zeilen) + "\n").encode()
+
+
+def baum_listen(data_dir):
+    """Vollstaendiges Metadaten-Listing des Datenordners: je Datei Pfad,
+    Bytes, mtime — NIE Inhalte. Bewusst ohne Kappung (auch grosse Baeume
+    werden ganz gelistet, es sind nur Metadaten).
+    Zwei Wachen: Symlinks, die aus data_dir hinausfuehren, kommen nicht
+    ins Listing (sie sind auch nicht holbar), und Ordner werden ueber
+    ihren realpath entdoppelt — ein Symlink auf einen Vorfahren wuerde
+    den Lauf sonst nie beenden."""
+    basis = os.path.realpath(data_dir)
+    dateien, summe, uebersprungen = [], 0, 0
+    gesehen, stapel = {basis}, [basis]
+    while stapel:
+        try:
+            eintraege = list(os.scandir(stapel.pop()))
+        except OSError:
+            uebersprungen += 1
+            continue
+        for e in eintraege:
+            try:
+                if e.is_symlink() and not _drin(os.path.realpath(e.path),
+                                                basis):
+                    uebersprungen += 1
+                    continue
+                if e.is_dir(follow_symlinks=True):
+                    rp = os.path.realpath(e.path)
+                    if rp not in gesehen:
+                        gesehen.add(rp)
+                        stapel.append(e.path)
+                    continue
+                if not e.is_file(follow_symlinks=True):
+                    continue
+                st = e.stat(follow_symlinks=True)
+            except OSError:
+                uebersprungen += 1
+                continue
+            dateien.append({"pfad": os.path.relpath(e.path, basis),
+                            "bytes": st.st_size,
+                            "mtime": int(st.st_mtime)})
+            summe += st.st_size
+    dateien.sort(key=lambda d: d["pfad"])
+    return {"n": len(dateien), "bytes": summe,
+            "uebersprungen": uebersprungen, "dateien": dateien}
+
+
+def baum_aufloesen(data_dir, relpfad):
+    """Einen /support/data/<relpfad> auf eine echte Stelle abbilden.
+    -> ("datei"|"ordner", abspfad) oder (None, grund). JEDER Ausbruch
+    (fuehrender /, ../, Symlink nach draussen) endet als None; der
+    Aufrufer antwortet darauf mit dem generischen 404 — dieselbe
+    Semantik wie bei einem unbekannten Bereich, kein Orakel."""
+    basis = os.path.realpath(data_dir)
+    rel = str(relpfad or "")
+    if not rel or rel.startswith("/") or "\x00" in rel:
+        return None, "bad path"
+    p = os.path.realpath(os.path.join(basis, rel))
+    if not _drin(p, basis):
+        return None, "outside data dir"
+    if os.path.isdir(p):
+        return "ordner", p
+    if os.path.isfile(p):
+        return "datei", p
+    return None, "not found"
+
+
+def datei_vorbereiten(data_dir, pfad):
+    """Was der Aufrufer VOR den HTTP-Headern wissen muss:
+    -> (inhalt|None, bytes, content-type, maskiert?). Maskier-Dateien
+    werden hier fertig maskiert (Config-Groessen, unkritisch im
+    Speicher); alles andere wird spaeter gestreamt, damit auch grosse
+    Dateien nicht in den RAM gehen. OSError faellt zum Aufrufer durch
+    (verschwundene/gesperrte Datei -> 404, nie ein Traceback)."""
+    rel = os.path.relpath(os.path.realpath(pfad), os.path.realpath(data_dir))
+    if maske_noetig(rel):
+        with open(pfad, "rb") as f:
+            b = maskierte_bytes(f.read())
+        return b, len(b), "text/plain; charset=utf-8", True
+    ct = mimetypes.guess_type(pfad)[0] or "application/octet-stream"
+    return None, os.path.getsize(pfad), ct, False
+
+
+def datei_streamen(pfad, wfile, log, kennung, inhalt=None):
+    """EINE Datei in den offenen Response-Stream (1-MB-Haeppchen).
+    Fehlerregel wie bei tar_streamen: ab hier ist der Status raus, also
+    endet ein Abbruch als EINE Log-Zeile, nie als Traceback-Serie."""
+    t0, n = time.monotonic(), 0
+    try:
+        if inhalt is not None:
+            wfile.write(inhalt)
+            n = len(inhalt)
+        else:
+            with open(pfad, "rb") as f:
+                while True:
+                    stueck = f.read(1 << 20)
+                    if not stueck:
+                        break
+                    wfile.write(stueck)
+                    n += len(stueck)
+    except (BrokenPipeError, ConnectionResetError, OSError) as e:
+        log(f"SUPPORT: {kennung} stream aborted after {n} byte(s) "
+            f"({type(e).__name__})")
+        return False, "aborted"
+    log(f"SUPPORT: {kennung} served — {n} byte(s)"
+        + (", masked" if inhalt is not None else "")
+        + f", {time.monotonic() - t0:.1f}s")
+    return True, ""
+
+
+def download_name(rel, endung=""):
+    """Content-Disposition-Name aus einem FREIEN Relativpfad. Anders als
+    die Bereichs-Codes ist er nicht vorvalidiert — ein Anfuehrungszeichen
+    darin wuerde den Header aufbrechen, deshalb bleibt nur Harmloses."""
+    s = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(rel or "")).strip("._")
+    return f"suslik-support-{s or BAUM_CODE}{endung}"
+
+
 def inventar(data_dir, version):
     """JSON-Einstieg: was ist holbar, wie gross. Liest NUR die Registry-
     Tabelle (Deckungs-Vertrag)."""
@@ -119,6 +302,11 @@ def inventar(data_dir, version):
                                 pass
             e["dateien"] = n
             e["bytes"] = groesse
+        if b["art"] == "baum":
+            # BEWUSST ohne Zaehlung: im Datenordner liegen clips/ und
+            # events/, ein Walk wuerde den Einstieg zaeh machen. Wer
+            # Zahlen braucht, holt das Listing (reine Metadaten).
+            e["listing"] = f"/support/{code}"
         if b.get("je_lauf"):
             wurz = _wurzel(data_dir, b)
             try:
@@ -157,18 +345,43 @@ def tar_streamen(data_dir, code, wfile, log, lauf_id=None):
     # Die Ein-Abzug-Sperre haelt der AUFRUFER (abzug_sperren/-freigeben,
     # Widerleger 13): er muss VOR den HTTP-Headern 429 sagen koennen —
     # nach gesendeten 200-Headern gaebe es nur noch leere Archive.
-    t0, gepackt, uebersprungen = time.monotonic(), 0, 0
+    return _tar_schreiben(data_dir, start, arc0,
+                          f"{code}/{lauf_id}" if lauf_id else code,
+                          wfile, log, dateien=b.get("dateien"),
+                          ausschluss=b.get("ausschluss", ()))
+
+
+def baum_tar_streamen(data_dir, pfad, wfile, log):
+    """EINEN Ordner aus dem Datenbaum als tar.gz streamen — derselbe
+    Schreiber wie die benannten Bereiche (kein Parallelweg: Maskierung,
+    Symlink-Wache und Fehler-Ebenen gelten damit hier automatisch mit).
+    `pfad` ist bereits durch baum_aufloesen gegangen."""
+    basis = os.path.realpath(data_dir)
+    rel = os.path.relpath(pfad, basis)
+    arc0 = os.path.basename(pfad.rstrip(os.sep)) or BAUM_CODE
+    return _tar_schreiben(data_dir, pfad, arc0, f"{BAUM_CODE}/{rel}",
+                          wfile, log)
+
+
+def _tar_schreiben(data_dir, start, arc0, kennung, wfile, log,
+                   dateien=None, ausschluss=()):
+    """DER eine tar-Schreiber (Bereiche wie Vollbaum). Zwei Wachen je
+    Mitglied, beide auf dem realpath: was aus data_dir hinausfuehrt,
+    kommt nicht mit, und was in einem Maskier-Ordner liegt, kommt nur
+    maskiert mit (sonst waere der Vollbaum-tar der Umweg um die
+    Maskierung des Einzelabrufs)."""
+    basis = os.path.realpath(data_dir)
+    t0, gepackt, uebersprungen, maskiert_n = time.monotonic(), 0, 0, 0
     try:
         with tarfile.open(fileobj=wfile, mode="w|gz",
                           bufsize=512 * 1024) as tar:
-            dateien = b.get("dateien")
             if dateien:
                 kandidaten = [(os.path.join(start, d),
                                f"{arc0}/{d}") for d in dateien]
             else:
                 kandidaten = []
                 for w, _dirs, fs in os.walk(start):
-                    if any(a in w for a in b.get("ausschluss", ())):
+                    if any(a in w for a in ausschluss):
                         continue
                     for f in sorted(fs):
                         p = os.path.join(w, f)
@@ -179,16 +392,30 @@ def tar_streamen(data_dir, code, wfile, log, lauf_id=None):
                 # Listing und add verschwindet (Log-Drehung!), kostet
                 # nie den ganzen Abzug.
                 try:
-                    tar.add(p, arcname=arc, recursive=False)
+                    rp = os.path.realpath(p)
+                    if not _drin(rp, basis):
+                        uebersprungen += 1
+                        continue
+                    if maske_noetig(os.path.relpath(rp, basis)):
+                        with open(p, "rb") as fh:
+                            roh = maskierte_bytes(fh.read())
+                        ti = tarfile.TarInfo(arc)
+                        ti.size = len(roh)
+                        ti.mtime = int(os.path.getmtime(p))
+                        ti.mode = 0o600
+                        tar.addfile(ti, io.BytesIO(roh))
+                        maskiert_n += 1
+                    else:
+                        tar.add(p, arcname=arc, recursive=False)
                     gepackt += 1
                 except (FileNotFoundError, PermissionError, OSError):
                     uebersprungen += 1
     except (BrokenPipeError, ConnectionResetError, OSError) as e:
-        log(f"SUPPORT: {code} stream aborted by client after "
+        log(f"SUPPORT: {kennung} stream aborted by client after "
             f"{gepackt} file(s) ({type(e).__name__})")
         return False, "aborted"
-    log(f"SUPPORT: {code}{('/' + lauf_id) if lauf_id else ''} served — "
-        f"{gepackt} file(s)"
+    log(f"SUPPORT: {kennung} served — {gepackt} file(s)"
+        + (f", {maskiert_n} masked" if maskiert_n else "")
         + (f", {uebersprungen} skipped" if uebersprungen else "")
         + f", {time.monotonic() - t0:.1f}s")
     return True, ""

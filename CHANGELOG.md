@@ -7,6 +7,105 @@ this file — the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git
 history.
 
+## 0.1.0.381 (2026-08-31)
+
+- **The Brightness check is gone from the learning card.** It was a page of its
+  own where you could set the two brightness lines on your own pictures. Across
+  714 pictures from a live installation those lines changed the outcome three
+  times, and the picture-impression slider on the Calibrate page already covers
+  what they were meant for. Two places to tune one effect mostly made it harder
+  to tell which of them had done anything. The measurement behind it is
+  untouched: brightness is still measured while faces are harvested, a badly lit
+  cut-out still sorts behind the well-lit ones and still carries the reason "too
+  dark" or "overexposed", and nothing was ever dropped over it. The two limits
+  remain yours to change, now in Configuration (`reihung_luma_min` /
+  `reihung_luma_max`; 0 switches a side off).
+
+
+## 0.1.0.380 (2026-08-31)
+
+- **The unknown-person pool now applies the same quality bar as a learning
+  run.** It used to collect on face size and detector score alone; whether a
+  cut-out showed a face at all, and whether it was good enough to learn from,
+  was only checked much later, when you looked at it. On a business site that
+  produced unknown groups made of foliage — groups you cannot do anything with.
+  Collecting now sieves first and groups afterwards, through the very same two
+  gates the learning run uses: the structure and feature-norm lines, and your
+  calibration sliders. A candidate that fails does not take up one of the three
+  slots per event either, so a real face behind it moves up and reaches the pool
+  instead of the leaves. Faces already in the pool are never re-judged and never
+  removed retroactively — they were collected without these measurements, and a
+  verdict without a measurement would be a silent loss. Cost: three small
+  measurements per candidate that would enter the pool (roughly 25 ms, CPU, at
+  most a handful per event), never during live recognition.
+
+- **Remote support access reaches your whole data folder now.** Until now it
+  handed out a fixed set of named areas — logs, faces, learning runs, state
+  files. Whatever we had not named in advance was simply out of reach: when a
+  tester's unknown-person pool lived in a folder the list did not mention, the
+  supporter could not fetch it at all, and only a new release would have changed
+  that. With the switch on, the token now also opens a listing of the complete
+  data folder (every file with its path, size and time — no content) and fetches
+  any single file from it, or a whole folder as one `tar.gz` stream. Everything
+  else stays as it was: read-only, off by default, and every request lands in
+  your service log. Your configuration keeps its protection wherever it is
+  fetched — under `config/` no secret leaves the machine in plain text, on its
+  own or inside an archive, and that now includes the older `config.json.vor_*`
+  copies that a named area never covered. Paths that try to leave the data
+  folder answer `404`, like anything that does not exist. The flip side is worth
+  knowing: raw clips and event history are reachable for whoever holds the token
+  now, so keep the switch off except while a support session is running.
+
+
+## 0.1.0.377 (2026-08-30)
+
+- **New: calibration.** Which faces a learning run keeps was governed by a fixed
+  sharpness number — and measured against real judgements it turned out to
+  measure almost nothing: on one field installation it threw away 661 of 662
+  pictures a human called usable, and what it kept was no better. It is replaced
+  by two learned quality measures: picture impression (how clean the image
+  looks) and recognisability (how well the person can be identified — this one
+  also sorts out half-covered faces). Both run on CPU in milliseconds, only
+  during learning runs. The thresholds are yours to set: the Smart-naming card
+  now carries a Calibrate button (active once a run is finished) that opens all
+  the run's pictures with two sliders — slide until the border feels right,
+  apply, and future runs use your thresholds. Factory defaults were calibrated
+  on real field material. For measured pictures the two sliders have the
+  final say on quality (no side door: the old feature-norm rescue applies
+  only to pictures without quality scores). Applying new thresholds
+  re-grades the finished run
+  right away (auto-named groups get a fresh selection, groups that previously
+  failed the bar are retried; hand-named groups stay untouched) and takes you
+  back to the learning run. Old runs keep their judgements;
+  the feature norm and minimum face size stay as before. Learning runs take a
+  few percent longer, because every candidate face is scored by both models
+  (CPU only, milliseconds per face, never during live recognition).
+
+
+## 0.1.0.376 (2026-08-30)
+
+- **Person learning now works when Frigate sits behind an authenticated
+  reverse proxy.** The harvest chain called Frigate directly and without the
+  program's identification, so a proxy that filters unknown clients answered
+  403 and the run failed before fetching a single event. Those calls now go
+  through the same authenticated channel as everything else. Found on a live
+  run against a remote Frigate; local installations never noticed.
+
+
+## 0.1.0.375 (2026-08-30)
+
+- **Person learning now works on Frigate up to 0.17.** The body harvest needs to
+  know where the clip's clock stands, and only Frigate 0.18 provides the field
+  for that; on older versions every event failed with "0 images harvested" and
+  no visible reason. On a field installation that was 135 of 136 attempts since
+  mid-August. On such versions the harvest now takes the one snapshot picture
+  Frigate stores per event instead of the best three from the clip: fewer
+  pictures per event, but the run produces material at all, and every quality
+  check still applies. Each harvested picture records whether it came from the
+  clip or the snapshot. Measured on a 30-event run: 3 events with pictures
+  before, 15 after. With Frigate 0.18 nothing changes.
+
+
 ## 0.1.0.374 (2026-08-30)
 
 - **A hand-edited value outside the allowed range no longer locks the whole

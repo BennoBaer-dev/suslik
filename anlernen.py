@@ -102,6 +102,30 @@ MIN_KANTE, MIN_DET = 70, 0.6
 FD_FRONT_MIN = float(os.environ.get("VERIFY_FD_FRONT_MIN", 0.85))
 FD_SHARP_MIN = float(os.environ.get("VERIFY_FD_SHARP_MIN", 1500))
 FD_DET_MAX = float(os.environ.get("VERIFY_FD_DET_MAX", 0.70))
+
+
+def _latte_aus_env(name):
+    """Eine Latte (Dict) aus der Prozess-Umgebung -> Dict, im Zweifel leer.
+    LEER heisst 'Achse aus' und damit KEIN Ausschluss — dieselbe Regel, die
+    core.benennung.harte_linie fuer fehlende Messwerte fuehrt. Kaputtes JSON
+    darf den Sammler nie toeten, kostet aber die Achse."""
+    try:
+        d = json.loads(os.environ.get(name) or "{}")
+    except Exception:                                   # noqa: BLE001
+        d = None
+    return d if isinstance(d, dict) else {}
+
+
+# .380 (Beschluss 31.08. "Gruppenbildungs-Vereinheitlichung"): die Latten des
+# POOL-ZULAUFS. verifyd reicht die FERTIGEN Dicts als JSON durch die Env
+# (norm_latte_aus_cfg / guete_latte_aus_cfg) — hier wird bewusst KEIN
+# Config-Schluessel ein zweites Mal ausgewaehlt, sonst haette der Pool seine
+# eigene Auswahl und driftete gegen Lernlauf und Anzeige (K3-Regel).
+# Vererbungs-Muster wie VERIFY_DATA_DIR/VERIFY_FD_*: Worker und Subprozess
+# erben die Umgebung des Dienstes. Ohne Dienst (CLI, Gate-Fixtures) bleiben
+# beide leer und der Zulauf verhaelt sich wie vor .380.
+NORM_LATTE_ZULAUF = _latte_aus_env("VERIFY_NORM_LATTE")
+GUETE_LATTE_ZULAUF = _latte_aus_env("VERIFY_GUETE_LATTE")
 # Cluster-Schwelle: ab dieser Cosinus-Aehnlichkeit zaehlen zwei Gesichter als dieselbe Person.
 # Hebel 2 (21.07.): auf den modell-konsistenten Daten (nach Hebel 1) rekalibriert 0.45->0.50 —
 # echte Cluster liegen >=0.55, Fehl-Merges verschiedener Personen bei 0.45-0.48; 0.50 trennt sie,
@@ -253,7 +277,16 @@ def _schon_gesammelt():
 def _pruef_tag():
     """Pruef-Kontext: Modell + Sammel-Schwellen. Aendert er sich, gelten alte Abhak-Vermerke
     nicht mehr -> die Events werden nach einem Modell-/Schwellen-Wechsel automatisch neu geprueft."""
-    return f"{aktuelles_modell()}|k{MIN_KANTE}|d{MIN_DET}|ff{FD_FRONT_MIN}|fs{FD_SHARP_MIN}|fx{FD_DET_MAX}"   # FD-Schwellen im Tag (Review .52: sonst wirkt eine Schwellenaenderung nie auf abgehakte Events)
+    # .380: die vier Zulauf-Linien gehoeren MIT in den Tag — sie entscheiden
+    # jetzt ueber den Pool-Eintritt, also gilt fuer sie derselbe Satz wie fuer
+    # die FD-Schwellen (Review .52: sonst wirkt eine Schwellenaenderung nie auf
+    # abgehakte Events). Preis, bewusst: nach diesem Update laeuft das Fenster
+    # einmal neu durch — genau das soll es, denn die Zeilen bekommen dabei ihre
+    # Messwerte.
+    _z = "/".join(str(x) for x in
+                  (NORM_LATTE_ZULAUF.get("struktur"), NORM_LATTE_ZULAUF.get("veto"),
+                   GUETE_LATTE_ZULAUF.get("empfinden_min"), GUETE_LATTE_ZULAUF.get("t_min")))
+    return f"{aktuelles_modell()}|k{MIN_KANTE}|d{MIN_DET}|ff{FD_FRONT_MIN}|fs{FD_SHARP_MIN}|fx{FD_DET_MAX}|z{_z}"   # FD-Schwellen im Tag (Review .52: sonst wirkt eine Schwellenaenderung nie auf abgehakte Events)
 
 
 def _schon_geprueft(tag):
@@ -270,6 +303,66 @@ def _schon_geprueft(tag):
             except Exception:
                 pass
     return done
+
+
+_STRUKTURMASS = None
+
+
+def _strukturmass_geteilt():
+    """Die eine StrukturMass dieses Prozesses (.380) — lazy und bewusst NEBEN dem
+    schon warmen Embedder gebaut: dort kostet sie gemessen 0 MB RSS und 0,2 s,
+    in einem nackten Prozess dagegen +464 MB (Bauort-Regel im Docstring von
+    face_audit.StrukturMass). ok=False -> None; die Struktur-Achse ist dann
+    nicht gemessen, und nicht gemessen heisst nie 'schlecht'."""
+    global _STRUKTURMASS
+    if _STRUKTURMASS is None:
+        from face_audit import StrukturMass
+        _STRUKTURMASS = StrukturMass()
+    return _STRUKTURMASS if _STRUKTURMASS.ok else None
+
+
+def _zulauf_messen(k, sm):
+    """Die Zulauf-Masse EINES Pool-Kandidaten in seine Zeile schreiben:
+    `struktur` (StrukturMass am engen Crop) sowie `fiqa_t`/`empf` (core.guete).
+    -> vergangene Sekunden (der Sammler bilanziert sie am Ende, nichts still).
+
+    NUR HIER gemessen, und nur fuer Kandidaten, die tatsaechlich in den Pool
+    eintreten wuerden — nicht fuer jede Detektion des Clips: der Sammler sieht
+    je Event Hunderte, und die drei Netze gehoeren nicht in den heissen
+    Analyse-Pfad (User-Auflage 31.08.).
+
+    AUSSCHNITTE WORTGLEICH ZUR ERNTE (core/ernte.py): Struktur und Empfinden am
+    ENGEN Gesichts-Crop, fiqa_t am ALIGNED 112er DERSELBEN Detektion. Ein
+    zweiter Zuschnitt haette eine eigene Skala — die Regler der Kalibrier-Seite
+    wuerden im Pool etwas anderes bedeuten als in der Gruppen-Flaeche.
+
+    Drei Felder werden IMMER gesetzt, notfalls auf None: eine Pool-Zeile sagt
+    damit selbst, ob sie gemessen ist. Ein Messfehler kostet nur den Wert, nie
+    den Lauf; halb gemessen zaehlt als nicht gemessen (die Guete-Latte urteilt
+    nur ueber Zeilen mit BEIDEN Massen)."""
+    t0 = time.time()
+    k["struktur"] = k["fiqa_t"] = k["empf"] = None
+    crop, al = k.get("_crop"), k.get("_al")
+    hat_crop = crop is not None and getattr(crop, "size", 0)
+    if sm is not None and hat_crop:
+        k["struktur"] = sm.streuung(crop)
+    if hat_crop and al is not None:
+        from core import guete as _guete
+        if _guete.verfuegbar():
+            try:
+                k["fiqa_t"] = round(float(_guete.fiqa_t(al)), 4)
+                k["empf"] = round(float(_guete.empfinden(crop)), 4)
+            except Exception:                                  # noqa: BLE001
+                k["fiqa_t"] = k["empf"] = None
+    return time.time() - t0
+
+
+def _zulauf_urteil(k):
+    """core.benennung.pool_zulauf mit den Latten DIESES Prozesses — ein Griff,
+    damit die beiden Env-Latten nicht an mehreren Stellen ausgepackt werden.
+    Leeres Dict -> None weitergereicht: 'Achse aus', kein Ausschluss."""
+    from core.benennung import pool_zulauf
+    return pool_zulauf(k, NORM_LATTE_ZULAUF or None, GUETE_LATTE_ZULAUF or None)
 
 
 def sammle(tage=5.0, fps_sample=2, mit_migriere=True):
@@ -295,7 +388,11 @@ def _sammle_intern(tage, fps_sample, mit_migriere):
     evs = [e for e in _unbekannt_eids(tage) if e[0] not in geprueft]
     print(f"{len(evs)} events to check ({len(schon)} in the pool, "
           f"{len(geprueft) - len(schon)} already checked off without a face) [tag {tag}]", flush=True)
+    # .380: DER eine 112er-Warp des Hauses, nicht ein zweiter hier (core/ernte).
+    # Lazy wie ueberall — der Modul-Kopf soll ohne insightface tragen.
+    from core.ernte import align112 as _align112
     neu = 0
+    mess_ges, mess_n = 0.0, 0                             # Bilanz des Zulauf-Siebs
     with open(GES_PATH, "a") as out, open(GEPRUEFT_PATH, "a") as gpr:
         for eid, camera, ts in evs:
             clip = os.path.join(CLIPS, eid.replace("/", "_") + ".mp4")
@@ -338,20 +435,58 @@ def _sammle_intern(tage, fps_sample, mit_migriere):
                                  "guete": guete, "nn_person": p, "nn_score": round(s, 3),
                                  "emb": [round(float(x), 5) for x in fc.normed_embedding],
                                  "modell": aktuelles_modell(),
-                                 "ctx": ctx_crop(frame, x1, y1, x2, y2)})
+                                 "ctx": ctx_crop(frame, x1, y1, x2, y2),
+                                 # .380: die beiden Ausschnitte, an denen der
+                                 # Zulauf gleich MISST — enger Crop und der
+                                 # aligned 112er DIESER Detektion. Sie muessen
+                                 # hier entstehen (das Frame lebt nur in dieser
+                                 # Schleife) und werden vor dem Schreiben wieder
+                                 # entfernt; gemessen wird erst unten, fuer die
+                                 # wenigen Kandidaten, die in den Pool wollen.
+                                 "_crop": crop.copy(),
+                                 "_al": (_align112(frame, fc.kps)
+                                         if getattr(fc, "kps", None) is not None else None)})
                     kand.sort(key=lambda k: -k["guete"])
                     del kand[8:]                          # Speicher-Deckel
-            gewaehlt = []
+            # .380 ZULAUF-SIEB (Beschluss 31.08.): erst sieben, dann gruppieren —
+            # dieselbe Reihenfolge wie im Lernlauf, und mit derselben Quelle
+            # (core.benennung.pool_zulauf). Bis .379 entschied ueber den Pool
+            # allein kante/det/Fehldetektions-Signatur; die Qualitaets-Linien
+            # kannte erst die Anzeige. Ein Tester bekam so auf seinem
+            # Betriebsgelaende Unbekannt-Gruppen aus Laub angeboten.
+            # Gemessen wird JE KANDIDAT, nicht je Detektion, und erst hier: nur
+            # wer den Dublettentest ueberlebt hat, wuerde ueberhaupt eintreten.
+            # Ein Durchgefallener belegt KEINEN der drei Plaetze — der naechste
+            # aus der guete-Reihe rueckt nach (max. 8, der Speicher-Deckel oben).
+            # Genau das holt die echten Gesichter zurueck, die frueher hinter
+            # einem Laub-Ausschnitt auf Platz 1 unsichtbar blieben.
+            gewaehlt, verworfen, mess_s = [], {}, 0.0
+            sm = _strukturmass_geteilt()
             for k in kand:                               # guete-Reihenfolge, Duplikate raus
                 v = np.asarray(k["emb"], np.float32)
                 if any(float(v @ np.asarray(g["emb"], np.float32)) > 0.90 for g in gewaehlt):
                     continue
+                mess_s += _zulauf_messen(k, sm)
+                grund = _zulauf_urteil(k)
+                if grund:
+                    verworfen[grund] = verworfen.get(grund, 0) + 1
+                    continue
                 gewaehlt.append(k)
                 if len(gewaehlt) >= 3:
                     break
+            if verworfen:
+                # Nie still: was der Pool abweist, steht mit Grund im Log
+                # (dieselbe Zusage wie die Ernte-Zaehler ohne_struktur/fd).
+                print(f"  sieved {eid} ({camera}): "
+                      + ", ".join(f"{n}x {g}" for g, n in sorted(verworfen.items())),
+                      flush=True)
+            mess_ges += mess_s
+            mess_n += sum(verworfen.values()) + len(gewaehlt)
             for lauf, best in enumerate(gewaehlt):
                 gid = eid.replace("/", "_") + ("" if lauf == 0 else f"~{lauf + 1}")
                 cv2.imwrite(os.path.join(CROPS, gid + ".jpg"), best.pop("ctx"))
+                best.pop("_crop", None)                   # Arbeits-Ausschnitte gehoeren
+                best.pop("_al", None)                     # nicht in die Pool-Zeile
                 best["id"] = gid
                 out.write(json.dumps(best, ensure_ascii=False) + "\n")
                 out.flush()
@@ -363,6 +498,11 @@ def _sammle_intern(tage, fps_sample, mit_migriere):
                                  ensure_ascii=False) + "\n")   # jedes Event genau einmal abhaken (auch ohne Gesicht)
             gpr.flush()
     print(f"\n{neu} faces collected, {len(evs)} events checked -> {GES_PATH}", flush=True)
+    if mess_n:
+        # Der Preis des Siebs, beziffert statt behauptet (Haus-Regel: Posten
+        # ehrlich nennen). ms JE POOL-KANDIDAT, nicht je Detektion.
+        print(f"inflow measurement: {mess_n} candidate(s), "
+              f"{mess_ges * 1000 / mess_n:.1f} ms each ({mess_ges:.1f} s total)", flush=True)
     return neu
 
 
@@ -389,7 +529,16 @@ def migriere_und_pruefe_pool(emb=None, refs=None):
         wurden seit dem Sammeln besser), sind keine Unbekannten mehr -> raus.
     (c) tote Crops (kein Gesicht mehr detektierbar) -> raus.
     Laeuft im 06:00-Job aus sammle (mit dessen Embedder + Referenzen, det 320 vor dem 1280-Umschalten).
-    Rueckgabe: Statistik-Dict."""
+    Rueckgabe: Statistik-Dict.
+
+    BESTANDSSCHUTZ (.380, Beschluss 31.08. Punkt 3): das Zulauf-Sieb von
+    _sammle_intern wirkt hier bewusst NICHT nach. Gesichter, die vor .380 in den
+    Pool kamen, tragen keine struktur-/fiqa_t-/empf-Werte; sie nachtraeglich an
+    einer Latte zu messen, die sie nie gesehen haben, waere ein rueckwirkender
+    stiller Verlust — und ein Urteil ohne Messgrundlage ist im ganzen Haus
+    verboten. Alt-Zeilen urteilen also weiter alt. Wer sie wirklich neu bewerten
+    will, hat dafuer den Weg ueber die Oberflaeche (Objekt-Flag, Zusammenlegen,
+    Loeschen von Hand)."""
     if emb is None:
         emb = Embedder()
     if refs is None:
@@ -523,19 +672,55 @@ def _clustere_referenz(gesichter=None, sim=SIM_DEFAULT):
 
 
 # ---------------------------------------------------------------- Benennen (Cluster -> Referenzen)
-def benenne(gesicht_ids, person, beste_n=5, emb=None):
+def katalog_sieb(zeilen, kat_latten):
+    """DIE Katalog-Latte auf Pool-Zeilen (Drei-Latten-Semantik, User 31.08.).
+
+    Gefragt wird die EINE Funktion core.kamerakalib.katalog_ok — hier steht
+    kein zweiter Schwellenvergleich (Deckungs-Vertrag; die Stellenliste
+    fuehrt kamerakalib.UEBERNAHME_STELLEN). Die Pool-Zeile traegt seit .380
+    `camera`, `empf` und `fiqa_t`, die Latte kann hier also wirklich beissen;
+    ungemessene Zeilen kommen durch (Bestandsschutz).
+
+    -> (durch, abgelehnt) mit abgelehnt = [(zeile, grund)]."""
+    from core import kamerakalib as _kk
+    durch, abgelehnt = [], []
+    for z in zeilen:
+        ok, grund = _kk.katalog_ok(kat_latten, z.get("camera"),
+                                   z.get("empf"), z.get("fiqa_t"))
+        if ok:
+            durch.append(z)
+        else:
+            abgelehnt.append((z, grund))
+    return durch, abgelehnt
+
+
+def benenne(gesicht_ids, person, beste_n=5, emb=None, kat_latten=None):
     """Die besten Gesichter eines Clusters als Referenzen fuer <person> in den Master legen.
     Legt refs/<person>/ an (neue Person moeglich), schreibt refs_meta; mit emb wird
-    der refcache EINGEPFLEGT (.313), ohne emb verworfen wie bisher."""
+    der refcache EINGEPFLEGT (.313), ohne emb verworfen wie bisher.
+
+    kat_latten (Zentral-Umbau 31.08.): die Katalog-Latten je Kamera
+    (core.kamerakalib.katalog_latten). Gesiebt wird VOR dem beste_n-Schnitt —
+    sonst belegte ein zu schwaches Bild einen Platz, den ein besseres haette
+    haben koennen. None = keine Latte, dann verhaelt sich diese Funktion wie
+    vor dem Umbau."""
     import re, shutil
     from core.registry import PERSON_RE
     if not re.fullmatch(PERSON_RE, person or ""):
         return False, "ungueltiger Personenname"
     G = {g["id"]: g for g in lade_gesichter()}
     gewaehlt = [G[i] for i in gesicht_ids if i in G]
+    gewaehlt, kat_raus = katalog_sieb(gewaehlt, kat_latten)
     gewaehlt.sort(key=lambda g: -g["guete"])
     gewaehlt = gewaehlt[:beste_n]
     if not gewaehlt:
+        if kat_raus:
+            # NIE still: wenn die Latte alles genommen hat, muss der Satz das
+            # sagen — sonst sieht der Nutzer "keine gueltigen Gesichter" und
+            # sucht den Fehler bei sich.
+            return False, (f"keine Referenz angelegt — {len(kat_raus)} Bild(er) "
+                           f"unter der Katalog-Latte dieser Kamera "
+                           f"({kat_raus[0][1]})")
         return False, "keine gueltigen Gesichter"
     zdir = os.path.join(MASTER, person)
     os.makedirs(zdir, exist_ok=True)
@@ -560,7 +745,9 @@ def benenne(gesicht_ids, person, beste_n=5, emb=None):
             os.remove(os.path.join(CLIPS, "refcache.npz"))
         except FileNotFoundError:
             pass
-    return True, f"{n} Referenzen fuer '{person}' angelegt"
+    return True, (f"{n} Referenzen fuer '{person}' angelegt"
+                  + (f" — {len(kat_raus)} Bild(er) unter der Katalog-Latte "
+                     f"dieser Kamera" if kat_raus else ""))
 
 
 # ---------------------------------------------------------------- Unbekannt-Identitaeten (persistent)
@@ -964,10 +1151,64 @@ def _unbekannt_besucher_intern(uid, an=True):
     return ok
 
 
+def unbekannt_objekt(uid, an=True):
+    """Gelockter Wrapper (Handknopf 'no person', .380)."""
+    with pool_lock():
+        return _unbekannt_objekt_intern(uid, an)
+
+
+def _unbekannt_objekt_intern(uid, an=True):
+    """Identitaet von Hand als statisches Objekt markieren bzw. zurueck auf Person.
+
+    Bisher setzte NUR der Reconcile das objekt-Flag (Objekt-Regel 25.07.); was er
+    uebersah — der Radkasten, der Lichtfleck, das Laub — blieb dauerhaft im
+    Personen-Eimer und musste bei jedem Durchgang wieder weggeschaut werden. Der
+    Handknopf schreibt DASSELBE Flag, das der Reconcile schreibt (kein zweiter
+    Begriff): der Cluster friert damit ein (nimmt keine neuen Members mehr an) und
+    wird ueber den Filter ausgeblendet. Umkehrbar (an=False) — nichts wird
+    geloescht, die Stuetzen bleiben im Pool (User-Grundsatz: nicht loeschen,
+    Mehrdeutigkeit aufloesen)."""
+    U = lade_unbekannte()
+    ok = False
+    for u in U:
+        if u.get("id") == uid:
+            if an:
+                u["objekt"] = True
+            else:
+                u.pop("objekt", None)
+            ok = True
+    if ok:
+        _speichere_unbekannte(U)
+    return ok
+
+
 def unbekannt_merge(uid_a, uid_b):
     """Gelockter Wrapper (Review 21.07.)."""
     with pool_lock():
         return _unbekannt_merge_intern(uid_a, uid_b)
+
+
+def unbekannt_merge_viele(uids):
+    """n:1-Zusammenlegen (.380): alle angetickten Identitaeten in EINEM gelockten
+    Zug auf die kleinste ID ziehen. Ersetzt das Reihum-Klicken der frueheren
+    Merge-Dropdowns (je Kachel eine Auswahlliste ALLER anderen Gruppen — bei 95
+    Gruppen 9056 <option>-Elemente in einer Seite).
+
+    Reihenfolge ist bewusst 'kleinste ID zuerst': _unbekannt_merge_intern behaelt
+    immer die kleinere Nummer, damit wandern alle Paare auf dasselbe Ziel. Jeder
+    Schritt liest den Pool frisch, ein Fehlschlag (ID inzwischen weg) kostet nur
+    diesen einen Partner. Rueckgabe (ziel, n_gemergt) bzw. (None, 0)."""
+    ids = [str(u) for u in (uids or []) if str(u)]
+    ids = list(dict.fromkeys(ids))
+    if len(ids) < 2:
+        return None, 0
+    ids.sort(key=lambda k: int(k[1:]) if k[1:].isdigit() else 0)
+    ziel, n = ids[0], 0
+    with pool_lock():
+        for weiterer in ids[1:]:
+            if _unbekannt_merge_intern(ziel, weiterer):
+                n += 1
+    return (ziel, n) if n else (None, 0)
 
 
 def _unbekannt_merge_intern(uid_a, uid_b):
@@ -1024,7 +1265,8 @@ def _pool_sicherung(mids):
             for m in mids if m in G]
 
 
-def benenne_mit_abzug(gesicht_ids, person, beste_n=None, emb=None):
+def benenne_mit_abzug(gesicht_ids, person, beste_n=None, emb=None,
+                      kat_latten=None):
     """Anlern-Weg der Today-Karte und des Cluster-Anlernens (/anlernen_benennen,
     Issue #19): benenne() + Pool-Abzug in EINEM gelockten Zug, damit angelernte
     Gesichter nicht wieder als unbekannt clustern und die Unknown-Karte verschwindet.
@@ -1045,15 +1287,34 @@ def benenne_mit_abzug(gesicht_ids, person, beste_n=None, emb=None):
                     if os.path.isfile(os.path.join(CROPS, str(i) + ".jpg"))]
         if not mit_crop:
             return False, "keine Crop-Dateien zu den gewaehlten Gesichtern — nichts angelernt", []
+        # KATALOG-LATTE (31.08.) VOR dem Abzug, nicht erst in benenne(): was
+        # nicht Referenz wird, darf auch nicht aus dem Pool verschwinden.
+        # Genau diese Reihenfolge war der Widerleger-Fund vom 11.08. (drei
+        # angetickte Gesichter wurden abgezogen UND vernichtet, ohne je
+        # Referenz zu werden) — die neue Latte darf ihn nicht wiederholen.
+        # Die Abgelehnten bleiben liegen statt geloescht zu werden: der
+        # Nutzer sieht sie beim naechsten Mal wieder, und das ist die
+        # harmlosere Haelfte (nicht-loeschen-Prinzip).
+        G_kat = {g["id"]: g for g in lade_gesichter()}
+        durch, kat_raus = katalog_sieb([G_kat[i] for i in mit_crop if i in G_kat],
+                                       kat_latten)
+        mit_crop = [g["id"] for g in durch]
+        if not mit_crop:
+            return False, (f"nichts angelernt — {len(kat_raus)} Bild(er) unter "
+                           f"der Katalog-Latte ihrer Kamera "
+                           f"({kat_raus[0][1] if kat_raus else ''})"), []
         betroffen = _pool_sicherung(mit_crop)
-        ok, msg = benenne(mit_crop, person, emb=emb,
+        ok, msg = benenne(mit_crop, person, emb=emb, kat_latten=kat_latten,
                           beste_n=beste_n if beste_n else max(1, len(mit_crop)))
         if not ok:
             return False, msg, []
         _pool_abzug_intern(mit_crop)
-        if len(mit_crop) < len(gesicht_ids):
-            msg += (f" — {len(gesicht_ids) - len(mit_crop)} von {len(gesicht_ids)} ohne "
-                    f"Crop-Datei, bleiben im Pool")
+        if kat_raus:
+            msg += (f" — {len(kat_raus)} unter der Katalog-Latte, bleiben "
+                    f"im Pool")
+        if len(mit_crop) + len(kat_raus) < len(gesicht_ids):
+            msg += (f" — {len(gesicht_ids) - len(mit_crop) - len(kat_raus)} von "
+                    f"{len(gesicht_ids)} ohne Crop-Datei, bleiben im Pool")
     return True, msg, betroffen
 
 
@@ -1112,28 +1373,80 @@ def nachpruefe_events(person, faces):
     return out
 
 
-def unbekannt_benennen(uid, person, beste_n=6, emb=None):
+def unbekannt_benennen(uid, person, beste_n=6, emb=None, ids=None,
+                       kat_latten=None):
     """Gelockter Wrapper (Review 21.07.: serialisiert gegen das kontinuierliche Sammeln, das
     dieselbe gesichter.jsonl schreibt)."""
     with pool_lock():
-        return _unbekannt_benennen_intern(uid, person, beste_n, emb=emb)
+        return _unbekannt_benennen_intern(uid, person, beste_n, emb=emb,
+                                          ids=ids, kat_latten=kat_latten)
 
 
-def _unbekannt_benennen_intern(uid, person, beste_n=6, emb=None):
+def _unbekannt_benennen_intern(uid, person, beste_n=6, emb=None, ids=None,
+                               kat_latten=None):
     """Eine Unbekannt-Identitaet zu einer bekannten Person machen: beste Gesichter als Referenzen
     anlegen, die Gesichter aus dem Unbekannt-Pool entfernen (Crops + gesichter.jsonl), Identitaet
     entfernen. Ab dem naechsten Event wird die Person erkannt und taucht nicht mehr als unbekannt
     auf. Rueckgabe (ok, msg, betroffen) — betroffen wie benenne_mit_abzug fuer die
-    Event-Nachpruefung (Issue #19: auch dieser Weg liess die Event-Akten alt)."""
+    Event-Nachpruefung (Issue #19: auch dieser Weg liess die Event-Akten alt).
+
+    ids = TEILMENGE der Mitglieder (.380, Klasse stiller Verlust): ein Unbekannt-Cluster
+    ist nicht immer eine Person. Der Weg ohne ids zieht die GANZE Gruppe aus dem Pool und
+    loescht ihre Crops — wer sie fuer die eine erkannte Person zuwies, vernichtete damit
+    still die Stuetzen der ZWEITEN Person, die im selben Cluster lag; sie tauchte danach
+    weder unter Unknown noch sonstwo wieder auf. Mit ids gilt strikt: nur die angetickten
+    Stuetzen werden Referenz UND abgezogen, jede nicht gewaehlte bleibt im Pool und damit
+    in ihrer (jetzt kleineren) Identitaet stehen — der naechste Reconcile clustert den Rest
+    neu. beste_n gilt dann nicht: der Nutzer hat jedes Bild einzeln angehakt (dieselbe
+    Lehre wie benenne_mit_abzug, Widerleger 11.08.), eine zweite Auswahl darueber wuerde
+    Angehaktes wieder wegwerfen. Crop-Guard wie dort: abgezogen wird nur, was real als
+    Crop-Datei existiert."""
     U = {u["id"]: u for u in lade_unbekannte()}
     if uid not in U:
         return False, "Identitaet nicht gefunden", []
     mids = U[uid].get("members", [])
-    betroffen = _pool_sicherung(mids)
-    ok, msg = benenne(mids, person, beste_n=beste_n, emb=emb)
+    if ids is None:
+        # GANZE Gruppe: der Abzug umfasst wie bisher ALLE Mitglieder (auch die,
+        # die beste_n nicht erreichen) — daran aendert die Katalog-Latte
+        # nichts, sie entscheidet nur, welche davon Referenz werden. benenne()
+        # siebt und sagt es in seiner Meldung.
+        betroffen = _pool_sicherung(mids)
+        ok, msg = benenne(mids, person, beste_n=beste_n, emb=emb,
+                          kat_latten=kat_latten)
+        if not ok:
+            return False, msg, []
+        _pool_abzug_intern(mids)                            # Pool + Crops + Identitaet(en)
+        return True, msg, betroffen
+    gewuenscht = {str(i) for i in ids}
+    gewaehlt = [m for m in mids if m in gewuenscht]
+    mit_crop = [m for m in gewaehlt
+                if os.path.isfile(os.path.join(CROPS, str(m) + ".jpg"))]
+    if not mit_crop:
+        return False, "keine Crop-Dateien zu den gewaehlten Gesichtern — nichts angelernt", []
+    # TEILAUSWAHL: hier hat der Nutzer jedes Bild einzeln angetickt. Was die
+    # Katalog-Latte ablehnt, wird deshalb NICHT abgezogen (und damit nicht
+    # geloescht) — es bleibt in seiner Gruppe stehen. Der Preis ist, dass es
+    # beim naechsten Mal wieder auftaucht; die Alternative waere, ein Bild zu
+    # vernichten, das nie Referenz wurde (Widerleger-Fehlerklasse 11.08.).
+    G_kat = {g["id"]: g for g in lade_gesichter()}
+    durch, kat_raus = katalog_sieb([G_kat[m] for m in mit_crop if m in G_kat],
+                                   kat_latten)
+    mit_crop = [g["id"] for g in durch]
+    if not mit_crop:
+        return False, (f"nichts angelernt — {len(kat_raus)} Bild(er) unter der "
+                       f"Katalog-Latte ihrer Kamera "
+                       f"({kat_raus[0][1] if kat_raus else ''})"), []
+    betroffen = _pool_sicherung(mit_crop)
+    ok, msg = benenne(mit_crop, person, beste_n=max(1, len(mit_crop)), emb=emb,
+                      kat_latten=kat_latten)
     if not ok:
         return False, msg, []
-    _pool_abzug_intern(mids)                                # Pool + Crops + Identitaet(en)
+    _pool_abzug_intern(mit_crop)                            # NUR die gewaehlten
+    if kat_raus:
+        msg += (f" — {len(kat_raus)} unter der Katalog-Latte, bleiben im Pool")
+    bleibt = len(mids) - len(mit_crop)
+    if bleibt > 0:
+        msg += f" — {bleibt} weitere Stuetze(n) bleiben im Pool"
     return True, msg, betroffen
 
 
@@ -1740,6 +2053,12 @@ GRUND_TEXT = {
     # .32x: Struktur-Test — der Ausschnitt zeigt keine Gesichtsstruktur (Nacken,
     # Ohr, Hinterkopf, Vegetation). Die Zahl haengt die Flaeche an.
     "keine_struktur": "no face structure in this crop",
+    # .377 (Kalibrier-Funktion): die vom Nutzer kalibrierte Guete-Latte hat das
+    # Bild verworfen. EIGENER Grund statt 'zu_klein_unscharf', weil der alte
+    # Text von Groesse und Schaerfe spricht — beides ist auf diesem Weg gerade
+    # NICHT das Kriterium (Messtag 30.08.: r=-0,06). Die Zahlen haengt die
+    # Flaeche an, wie bei 'zu_klein_unscharf'.
+    "guete_zu_schwach": "image quality too low for a reference",
     # BELICHTUNG (bauplan_belichtung.md E5b, Issue 26): der Ausschnitt liegt
     # ausserhalb der Belichtungsgrenzen. Beides sind GRENZFALL-Gruende, nie
     # 'raus' — bewusste Zuwahl bleibt moeglich (Memory 'nicht loeschen,
@@ -1762,7 +2081,9 @@ def bild_stufe(eigen, fremd, kante, sh, *,
                kante_gut=REF_LATTE["kante_gut"],
                sharp_gut=REF_LATTE["sharp_gut"],
                norm=None, norm_gut=None, norm_min=None,
-               norm_kante_min=None, norm_sharp_min=None):
+               norm_kante_min=None, norm_sharp_min=None,
+               fiqa_t=None, empf=None,
+               guete_t_min=None, guete_empfinden_min=None):
     """.257: die Zwei-Achsen-Bewertung der Bruecke als EINE QUELLE (QS-Ebenen-
     Regel; Anlass: die Benenn-Pruefung der Zuweisungs-Flaeche hatte nur den
     Dedup und liess 12 matschige Bilder als 'neu' durch — User-Fang am
@@ -1778,13 +2099,40 @@ def bild_stufe(eigen, fremd, kante, sh, *,
     norm >= norm_min als Mindest-Gate, norm >= norm_gut als GUT-Stufe,
     jeweils mit den Vorrats-Boeden norm_kante_min/norm_sharp_min. Ohne die
     Parameter (Default) urteilt die Funktion UNVERAENDERT (.257-Gate-Vektoren).
+    GUETE-WEG (.377, User-Entscheid 30.08.): traegt das Bild beide Ernte-Masse
+    (fiqa_t/empf) UND sind beide Schwellen gesetzt, urteilt die kalibrierte
+    Guete-Latte statt der Laplacian-Schaerfe — siehe unten.
     -> (stufe 'empfohlen'|'neutral'|None, grund_englisch fuer die UI)."""
     _norm_ok = (norm is not None and norm_min is not None
                 and kante is not None and sh is not None
                 and norm >= norm_min
                 and kante >= (norm_kante_min or 0)
                 and sh >= (norm_sharp_min or 0))
-    if ((kante is None or sh is None or kante < min_kante or sh < unscharf_max)
+    # .377 GUETE-WEG — DIESELBE Staffelung wie core.benennung._lattenklasse
+    # (Vorauswahl): GUT ab Kante/Empfinden/Erkennbarkeit, darunter bleibt der
+    # Norm-Alternativweg, dessen sharp-Boden hier bewusst entfaellt (das Mass
+    # ist abgeloest), waehrend der Kanten-Boden bleibt. Anlass (QS-Befund
+    # 30.08.): das Sieb der Gruppenbildung urteilte seit .377 nach der Guete,
+    # die Flaeche und diese LETZTE Instanz vor der Uebernahme weiter nach der
+    # Schaerfe — am Feldmaterial fielen 540 von 541 neu zugelassenen Bildern
+    # hier wieder durch, der Nutzer bekam Gruppen ohne ein einziges
+    # ankreuzbares Bild (die .367-Fehlerklasse).
+    # Fehlt eines der vier Stuecke (Alt-Laeufe, Alt-Images ohne die Modelle,
+    # Lern-Bruecke am frisch gemessenen Crop), urteilt der Alt-Weg darunter
+    # Zeile fuer Zeile unveraendert weiter (.257-Gate-Vektoren).
+    _g_da = (fiqa_t is not None and empf is not None
+             and guete_t_min is not None and guete_empfinden_min is not None)
+    _g_gut = False
+    if _g_da:
+        # .379 (User-Entscheid 30.08.): allein die kalibrierte Latte — die
+        # Norm-Rettung nach oben ist raus (Begruendung: core.benennung.
+        # _lattenklasse, dieselbe Aenderung im selben Zug).
+        _g_gut = (kante is not None and kante >= min_kante
+                  and float(empf) >= float(guete_empfinden_min)
+                  and float(fiqa_t) >= float(guete_t_min))
+        if not _g_gut:
+            return None, GRUND_TEXT["guete_zu_schwach"]
+    elif ((kante is None or sh is None or kante < min_kante or sh < unscharf_max)
             and not _norm_ok):
         return None, GRUND_TEXT["zu_klein_unscharf"]
     if eigen is not None:
@@ -1801,9 +2149,14 @@ def bild_stufe(eigen, fremd, kante, sh, *,
             return None, GRUND_TEXT["id_unsicher"]
     else:
         id_sicher = True
-    qual_gut = (kante >= kante_gut and sh >= sharp_gut) or (
-        norm is not None and norm_gut is not None and norm >= norm_gut
-        and kante >= (norm_kante_min or 0) and sh >= (norm_sharp_min or 0))
+    if _g_da:
+        # GUT im Guete-Weg = Klasse 0 von _lattenklasse: die kalibrierte
+        # Latte, sonst nichts (.379) — wer bis hier kommt, hat sie bestanden.
+        qual_gut = _g_gut
+    else:
+        qual_gut = (kante >= kante_gut and sh >= sharp_gut) or (
+            norm is not None and norm_gut is not None and norm >= norm_gut
+            and kante >= (norm_kante_min or 0) and sh >= (norm_sharp_min or 0))
     if id_sicher and qual_gut:
         return "empfohlen", ""
     if id_sicher or qual_gut:
@@ -2228,13 +2581,29 @@ def refcache_aufbauen(emb):
         _REFCACHE_BAU.release()
 
 
-def vorschlag_aufnehmen(person, eid, datei, emb=None):
+def vorschlag_aufnehmen(person, eid, datei, emb=None, kat_latten=None):
     """Einen Bestands-Vorschlag als Referenz uebernehmen: Event-Crop -> Master (Containment),
-    refs_meta, refcache-Invalidierung; Vorschlags-JSON um den Eintrag bereinigen."""
+    refs_meta, refcache-Invalidierung; Vorschlags-JSON um den Eintrag bereinigen.
+
+    kat_latten: die Katalog-Latte der Kamera (Zentral-Umbau 31.08.). EHRLICHE
+    GRENZE dieses Wegs: die Vorschlags-Zeile traegt `camera`, aber KEINE
+    Guete-Masse — dieser Pfad misst kante/sharp/norm am Event-Crop, nicht
+    fiqa_t/empf. Die Latte wird trotzdem gefragt (Deckungs-Vertrag: jede
+    Uebernahme-Stelle fragt dieselbe Funktion) und laesst ungemessene Bilder
+    durch. Sobald diese Zeilen die zwei Masse tragen, beisst sie hier ohne
+    weitere Aenderung."""
     import re, shutil
+    from core import kamerakalib as _kk
     from core.registry import DATEI_RE, PERSON_RE   # Vertrag statt Streu-Literal (Sweep 03.08.)
     if not re.fullmatch(PERSON_RE, person or "") or not re.fullmatch(rf"{DATEI_RE}\.jpg", datei or "", re.I):
         return False, "ungueltige Angaben"
+    v = lade_vorschlaege(person)
+    _kand = next((k for k in (v or {}).get("kandidaten", [])
+                  if k.get("eid") == eid and k.get("datei") == datei), {})
+    _kok, _kgrund = _kk.katalog_ok(kat_latten, _kand.get("camera"),
+                                   _kand.get("empf"), _kand.get("fiqa_t"))
+    if not _kok:
+        return False, _kgrund
     ed = str(eid).replace("/", "_")
     basis = os.path.realpath(os.path.join(DATA, "events"))
     quelle = os.path.realpath(os.path.join(basis, ed, datei))
@@ -2249,7 +2618,6 @@ def vorschlag_aufnehmen(person, eid, datei, emb=None):
                             "herkunft": "bestands-suche", "eid": eid, "aktiv": True},
                            ensure_ascii=False) + "\n")
         f.flush()
-    v = lade_vorschlaege(person)
     if v:
         v["kandidaten"] = [k for k in v.get("kandidaten", [])
                            if not (k.get("eid") == eid and k.get("datei") == datei)]
@@ -2266,7 +2634,8 @@ def vorschlag_aufnehmen(person, eid, datei, emb=None):
     return True, ziel
 
 
-def vorrat_aufnehmen(person, lauf_id, datei, eid, data_dir=None):
+def vorrat_aufnehmen(person, lauf_id, datei, eid, data_dir=None,
+                     kat_latten=None):
     """Ein Vorrats-Angebot als Referenz uebernehmen (bauplan_vorrat.md B4;
     EIGENER Zweig neben vorschlag_aufnehmen — der Event-Crop-Draht kann den
     Vorrats-Pfad nicht transportieren, Konzept-QS W1.13):
@@ -2296,6 +2665,17 @@ def vorrat_aufnehmen(person, lauf_id, datei, eid, data_dir=None):
         return False, "kein Embedding-Beiwert im Lauf (vorrat.jsonl fehlt/alt)"
     if str(zeile.get("eid") or "") != str(eid or ""):
         return False, "Angebot passt nicht zum Event"
+    # KATALOG-LATTE (Zentral-Umbau 31.08.), dieselbe EINE Funktion wie an den
+    # anderen Uebernahme-Stellen. Die Vorrats-Zeile traegt `kamera`, aber
+    # keine Guete-Masse (der v-Zweig misst Norm, nicht fiqa_t/empf) — die
+    # Latte laesst sie deshalb heute durch und beisst hier, sobald die Zeile
+    # gemessen ist. Gefragt wird sie trotzdem: der Deckungs-Vertrag kennt
+    # keine Ausnahme "hat gerade keine Werte".
+    from core import kamerakalib as _kk
+    _kok, _kgrund = _kk.katalog_ok(kat_latten, zeile.get("kamera"),
+                                   zeile.get("empf"), zeile.get("fiqa_t"))
+    if not _kok:
+        return False, _kgrund
     zdir = os.path.join(MASTER, person)
     os.makedirs(zdir, exist_ok=True)
     ed = str(eid).replace("/", "_")
@@ -2387,10 +2767,11 @@ BRUECKE_JE_EVENT = 2   # .32x: wie viele Bilder die Pass-Pruefung je EVENT
 #                        Was der Deckel abschneidet, wird Grenzfall (sichtbar,
 #                        ohne Haken) — nie stiller Verlust.
 SICHTUNG_JE_BLICK = 14   # .271: Pruef-Kandidaten je Blickwinkel-Reihe
-SICHTUNG_WAHL = "blick-rr-ernte-struktur-luma"  # Cache-Kennung der Sichtung.
+SICHTUNG_WAHL = "blick-rr-ernte-struktur-luma-guete"  # Cache-Kennung der Sichtung.
                                    # Alt-Tags ('blick-rr-norm2' = Crop-Nachmessung bis .313,
                                    # 'blick-rr-ernte' = ohne Gruppen-Konsens,
-                                   # 'blick-rr-ernte-struktur' = ohne Belichtung) -> neu sichten.
+                                   # 'blick-rr-ernte-struktur' = ohne Belichtung,
+                                   # 'blick-rr-ernte-struktur-luma' = ohne Bildguete) -> neu sichten.
                                    # Der Bump gehoert zu JEDER Aenderung am bilder-Dict:
                                    # sonst liefert der Cache eines bestehenden Laufs Bilder
                                    # OHNE das neue Feld, und die neue Achse bliebe dort
@@ -2450,7 +2831,7 @@ def _norm_nachmessen(lauf_dir, rel, emb=None):
 
 
 def _sichtungs_kandidaten(mitglieder, deckel_je_blick, yaw_grenze, norm_latte=None,
-                          luma_grenzen=None):
+                          luma_grenzen=None, guete_latte=None):
     """.271 (User-Zielbild: 'eine Reihe links, eine frontal, eine rechts —
     und das sind schon die optimalen'): Kandidaten-Wahl JE BLICKWINKEL-BIN
     (perspektiv_bin) und darin JE EVENT verteilt (Round-Robin, innerhalb
@@ -2471,8 +2852,11 @@ def _sichtungs_kandidaten(mitglieder, deckel_je_blick, yaw_grenze, norm_latte=No
     # Blickwinkel-Reihen. Der Tauglichkeits-Schnitt (_lk) bleibt unberuehrt:
     # Belichtung entscheidet ueber die REIHENFOLGE, nie ueber die Menge.
     _rk = functools.partial(_reihung, norm_latte=norm_latte,
-                            luma_grenzen=luma_grenzen)
-    _lk = functools.partial(_lattenklasse, norm_latte=norm_latte)
+                            luma_grenzen=luma_grenzen, guete_latte=guete_latte)
+    # .377: derselbe Guete-Weg im Tauglichkeits-Schnitt — Zeilen ohne die
+    # Guete-Felder (Alt-Laeufe) urteilen unveraendert nach der Pixel-Latte.
+    _lk = functools.partial(_lattenklasse, norm_latte=norm_latte,
+                            guete_latte=guete_latte)
     kand = []
     for blick in BLICK_REIHEN:
         im_bin = [x for x in sorted(mitglieder, key=_rk)
@@ -2522,7 +2906,7 @@ def _sichtungs_kandidaten(mitglieder, deckel_je_blick, yaw_grenze, norm_latte=No
 
 def gruppen_sichtung(satz, lauf_dir, emb=None,
                      deckel_je_blick=SICHTUNG_JE_BLICK, yaw_grenze=15.0,
-                     norm_latte=None, luma_grenzen=None):
+                     norm_latte=None, luma_grenzen=None, guete_latte=None):
     """.266 'Sicht = Pruefergebnis' (User 18.08.: 'erst ein Schnellcheck,
     welche Bilder wirklich gut sind, und DAVON die Anzeige'): die besten
     `deckel` Mitglieder der Gruppe (Reihung `_reihung`) werden gesichtet
@@ -2545,7 +2929,7 @@ def gruppen_sichtung(satz, lauf_dir, emb=None,
     gebaut. kante bleibt Original-Pixel, sharp die Laplace-Varianz des Crops,
     norm die Feature-Norm derselben Detektion — dieselben Skalen wie zuvor.
     -> {"modell", "gesamt", "bilder": [{datei, kante, sharp, norm, luma,
-    emb|None, grund?}...]} in Reihungs-Ordnung.
+    fiqa_t, empf, emb|None, grund?}...]} in Reihungs-Ordnung.
     luma (bauplan_belichtung.md E5): DRITTER Kopierschritt der Ernte-Messung
     (Kandidatenzeile -> Anker-Mitglied -> hier). Ohne ihn saehe
     sichtung_bewerten die Belichtung nie, weil sie ausschliesslich aus DIESEM
@@ -2570,7 +2954,8 @@ def gruppen_sichtung(satz, lauf_dir, emb=None,
     bilder = []
     for x, blick in _sichtungs_kandidaten(m, deckel_je_blick, yaw_grenze,
                                           norm_latte=norm_latte,
-                                          luma_grenzen=luma_grenzen):
+                                          luma_grenzen=luma_grenzen,
+                                          guete_latte=guete_latte):
         rel = str(x.get("datei", ""))
         v = x.get("emb")
         if v is not None and str(x.get("modell") or modell).lower() == modell:
@@ -2608,6 +2993,17 @@ def gruppen_sichtung(satz, lauf_dir, emb=None,
                            # Fehlt sie — Alt-Anker vor dem Einbau —, bleibt sie
                            # None und die Belichtungsachse urteilt NICHT.
                            "luma": x.get("luma"),
+                           # .377: VIERTER Kopierschritt derselben Kette
+                           # (Kandidatenzeile -> Anker-Mitglied -> hier) fuer
+                           # die zwei Guete-Masse. Ohne ihn urteilte
+                           # sichtung_bewerten weiter nach der abgeloesten
+                           # Laplacian-Schaerfe, waehrend das Sieb der
+                           # Gruppenbildung schon nach der Guete siebt — die
+                           # Bewertung rechnet ausschliesslich aus DIESEM
+                           # Cache. Fehlen sie (Alt-Anker, Alt-Images ohne die
+                           # Modelle), bleiben sie None und die Guete-Achse
+                           # urteilt NICHT.
+                           "fiqa_t": x.get("fiqa_t"), "empf": x.get("empf"),
                            "emb": [round(float(t), 5) for t in v],
                            "quelle": "ernte" if x.get("norm") is not None
                                      else ("ernte+norm" if _n is not None else "ernte")})
@@ -2627,6 +3023,10 @@ def gruppen_sichtung(satz, lauf_dir, emb=None,
                        # sie hat (die Crop-Nachmessung misst sie NICHT nach —
                        # ohne Wert bleibt die Belichtungsachse hier still).
                        "luma": x.get("luma"),
+                       # dasselbe fuer die Guete-Masse: durchgereicht, wenn das
+                       # Mitglied sie traegt, sonst None (die Crop-Nachmessung
+                       # misst sie nicht nach — Alt-Weg bleibt Alt-Weg).
+                       "fiqa_t": x.get("fiqa_t"), "empf": x.get("empf"),
                        "emb": ([round(float(t), 5) for t in v]
                                if v is not None else None),
                        "quelle": "crop"})
@@ -2661,7 +3061,7 @@ def sichtung_lesen(satz, lauf_dir, modell):
 
 
 def sichtung_hat_sichtbare(satz, lauf_dir, modell, refs, dup_sim,
-                           norm_latte=None, luma_grenzen=None):
+                           norm_latte=None, luma_grenzen=None, guete_latte=None):
     """.318 (User 22.08.: "da brauchst du sie auch gar nicht erst als Gruppe
     angezeigt werden beim Aufrufen"): traegt diese Gruppe nach der Bewertung noch
     EIN Bild im Rahmen? Rein lesend — Sichtungs-Cache + Matrix, kein Modell, keine
@@ -2676,12 +3076,13 @@ def sichtung_hat_sichtbare(satz, lauf_dir, modell, refs, dup_sim,
     if si is None:
         return None
     bew = sichtung_bewerten(satz.get("person") or None, si, refs, dup_sim, [],
-                            norm_latte=norm_latte, luma_grenzen=luma_grenzen)
+                            norm_latte=norm_latte, luma_grenzen=luma_grenzen,
+                            guete_latte=guete_latte)
     return any(b.get("stufe") != "raus" for b in bew)
 
 
 def sichtung_bewerten(person, sichtung, refs, dup_sim, adoptierte,
-                      norm_latte=None, luma_grenzen=None):
+                      norm_latte=None, luma_grenzen=None, guete_latte=None):
     """Matrix-Anwendung auf die GECACHTEN Sichtungs-Messwerte (.266): keine
     Bild-I/O, kein Modell — Identitaets-Achse gegen `refs` (Matrizen je
     Person; person=None oder ohne Referenzen -> Identitaet ist das
@@ -2695,6 +3096,11 @@ def sichtung_bewerten(person, sichtung, refs, dup_sim, adoptierte,
     norm_latte["struktur"] (.32x): gemessene Gesichts-STRUKTUR unter diesem Wert
     schliesst aus — der Ausschnitt zeigt kein Gesicht (Nacken, Ohr, Hinterkopf,
     Vegetation). Ersetzt den .316b-Gruppen-Konsens, der ersatzlos entfaellt.
+    guete_latte {empfinden_min, t_min} (.377): traegt das Sichtungsbild beide
+    Guete-Masse der Ernte, urteilt die vom Nutzer kalibrierte Latte ueber die
+    Qualitaets-Achse statt der Laplacian-Schaerfe (bild_stufe, DIESELBE
+    Staffelung wie core.benennung._lattenklasse in der Vorauswahl). Ohne die
+    Masse oder ohne die Schwellen urteilt der Alt-Weg unveraendert.
     luma_grenzen {min, max} (bauplan_belichtung.md E5b, Issue 26): ein Bild
     ausserhalb der Belichtungsgrenzen wird GRENZFALL mit Grund — nie 'raus'
     (Nicht-Loeschen-Prinzip; bewusste Zuwahl bleibt moeglich). Die Achse kann
@@ -2775,11 +3181,19 @@ def sichtung_bewerten(person, sichtung, refs, dup_sim, adoptierte,
                                  f"(face quality {b['norm']} — needs more than {_nl.get('veto')})",
                         "blick": b.get("blick") or "frontal"})
             continue
+        # .377: die Guete-Masse des Sichtungsbildes UND die kalibrierten
+        # Schwellen gehen mit in die EINE Bewertung — sonst siebt die
+        # Gruppenbildung nach der Guete und die Flaeche verwirft nach der
+        # Schaerfe (QS-Befund 30.08., .367-Fehlerklasse).
+        _gl = guete_latte or {}
         stufe, grund = bild_stufe(eigen, fremd, b.get("kante"), b.get("sharp"),
                                   norm=b.get("norm"),
                                   norm_gut=_nl.get("gut"), norm_min=_nl.get("min"),
                                   norm_kante_min=_nl.get("kante"),
-                                  norm_sharp_min=_nl.get("sharp"))
+                                  norm_sharp_min=_nl.get("sharp"),
+                                  fiqa_t=b.get("fiqa_t"), empf=b.get("empf"),
+                                  guete_t_min=_gl.get("t_min"),
+                                  guete_empfinden_min=_gl.get("empfinden_min"))
         # .313b (User 21.08.): 'gedeckt' (eigen >= sim_neu, Bestands-Duplikat)
         # ist fuer die Bruecke ein Nicht-Vorschlag, fuer die Gruppen-Flaeche
         # aber ein SICHTBARER Grenzfall — schon zugewiesene Bilder bleiben im
@@ -2802,6 +3216,17 @@ def sichtung_bewerten(person, sichtung, refs, dup_sim, adoptierte,
                      f"sharpness {int(b.get('sharp') or 0)} — needs "
                      f"{REF_LATTE['min_kante']} px / {REF_LATTE['unscharf_max']}"
                      f"{_n_txt})")
+        # .377: dieselbe Regel fuer den Guete-Weg — der Grund nennt die zwei
+        # gemessenen Werte und die zwei kalibrierten Linien. Ohne die Zahlen
+        # saehe der Nutzer nur "image quality too low" und wuesste nicht, an
+        # welchem der beiden Regler er drehen muss.
+        if stufe is None and grund == GRUND_TEXT["guete_zu_schwach"]:
+            grund = (f"{GRUND_TEXT['guete_zu_schwach']} "
+                     f"(quality {b.get('empf')} / recognisability "
+                     f"{b.get('fiqa_t')} — needs {_gl.get('empfinden_min')} / "
+                     f"{_gl.get('t_min')}; "
+                     f"{b.get('kante') if b.get('kante') is not None else '?'} px "
+                     f"— needs {REF_LATTE['min_kante']} px)")
         # .313b (User 21.08., 'bei einem Lauf immer die Bilder sehen, egal ob
         # ich die schon mal zugewiesen habe'): SCHON GELERNT versteckt nicht
         # mehr. Bis .313 nahm die .267-Regel ein Double einer adoptierten
@@ -2889,7 +3314,7 @@ def sichtung_bewerten(person, sichtung, refs, dup_sim, adoptierte,
 
 
 def benennung_bewerten(person, satz, dup_sim, adoptierte, lauf_dir, emb=None,
-                       norm_latte=None, luma_grenzen=None):
+                       norm_latte=None, luma_grenzen=None, guete_latte=None):
     """.257/.266: DIESELBE Pruefung wie die Lern-Bruecke, identisch by
     construction (User-Auflage 17.08.: nie zwei verschiedene Pruefungen fuer
     dasselbe Bild). Seit .266 zehrt sie aus dem Sichtungs-Cache
@@ -2908,14 +3333,21 @@ def benennung_bewerten(person, satz, dup_sim, adoptierte, lauf_dir, emb=None,
     if not len(refs.get(person, [])) and os.path.isdir(os.path.join(MASTER, person)):
         refs = lade_master_refs(emb)               # Cache kennt die Person noch nicht
     sicht = gruppen_sichtung(satz, lauf_dir, emb=emb, norm_latte=norm_latte,
+                             guete_latte=guete_latte,
                              luma_grenzen=luma_grenzen)
     # .267 (Widerleger-Blocker): beurteilt werden ALLE Sichtungs-Kandidaten —
     # exakt die Menge, aus der die Flaeche rendert. Die frueher persistierte
     # gewaehlt-Auswahl ist fuer die Pruefung bedeutungslos (sie wird beim
     # Take ohnehin mit der SICHTBAREN Auswahl neu geschrieben); sie zu
     # filtern liess Pruefung und Anzeige wieder auseinanderlaufen.
+    # .377: guete_latte MIT durchreichen — diese Pruefung ist die LETZTE Instanz
+    # vor der Uebernahme. Ohne sie urteilte sie als einzige Stelle noch nach der
+    # abgeloesten Schaerfe, waehrend Sichtung und Anzeige daneben schon die
+    # kalibrierte Latte nahmen (QS-Befund 30.08.: 'nie zwei verschiedene
+    # Pruefungen fuer dasselbe Bild', User-Auflage 17.08.).
     return sichtung_bewerten(person, sicht, refs, dup_sim, adoptierte,
-                             norm_latte=norm_latte, luma_grenzen=luma_grenzen)
+                             norm_latte=norm_latte, luma_grenzen=luma_grenzen,
+                             guete_latte=guete_latte)
 
 
 def lernbruecke_uebernehmen(person, items, emb=None):

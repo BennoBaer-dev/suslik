@@ -719,6 +719,9 @@ T = {
     "live.test.sw": "(décodage logiciel)",
     "live.test.entwertet":
         "— INVALIDÉ&nbsp;: la source a changé depuis ce test",
+    "live.test.veraltet_bitte":
+        "Ce contrôle a {tage} jours — relance le test de source pour que les "
+        "chiffres décrivent ce que la caméra livre aujourd\u2019hui.",
     "live.test.fehlgeschlagen":
         "dernier test de source ÉCHOUÉ ({wann})&nbsp;: {fehler}",
     "live.messung.zeile": "charge mesurée le {wann}&nbsp;: {text}",
@@ -843,9 +846,11 @@ T = {
     "live.hoehe.h1080":
         "1080p — point idéal (mesuré&nbsp;: nom ~2,4 s plus tôt qu'en "
         "720p)",
-    "live.hoehe.h1440": "1440p — aucun gain mesuré par rapport au 1080p",
-    "live.hoehe.h2160":
-        "2160p — 4K natif, gain marginal, coût de décodage le plus élevé",
+    "live.hoehe.alt_hinweis":
+        "Enregistré : {alt}p. Ce palier n\u2019existe plus (mesuré : aucun "
+        "gain par rapport au {jetzt}p) — cette surveillance tourne en "
+        "{jetzt}p. La valeur enregistrée et le test de source restent "
+        "valables ; choisis un palier ci-dessus pour changer.",
     "live.abschnitt.alarm": "Chaîne d'alerte",
     "live.detail.ende_label": "Fin après absence de visage (s)&nbsp;:",
     "live.detail.ende_hinweis":
@@ -872,6 +877,143 @@ T = {
         "la mesure de charge met en pause les autres surveillances "
         "pendant son exécution",
     "live.detail.link_zurueck": "retour à la vue d'ensemble",
+    # --- Live-Umbau 31.08. (s. en.py)
+    "live.detail.kein_bild": "Pas d\u2019image en direct — cette surveillance ne tourne pas.",
+    "live.detail.kein_bild_test":
+        "Le dernier test de source a vu {aufloesung}, traité en {skala}.",
+    "live.detail.kein_bild_ohne_test":
+        "Aucun test de source n\u2019a encore tourné, on ne sait donc rien de "
+        "ce flux.",
+    "live.abschnitt.erkennung": "Reconnaissance",
+    "live.abschnitt.melden": "Alertes",
+    "live.abschnitt.frigate": "Événements Frigate",
+    "live.abschnitt.erweitert": "Réglages avancés",
+    "live.abschnitt.abtastung": "Échantillonnage",
+    "live.abtastung.schalter": "Regarder de près seulement quand ça bouge",
+    "live.abtastung.erklaerung":
+        "La détection de visages est la partie coûteuse — un contrôle de "
+        "mouvement bon marché sur le plan de luminance décide si une image en "
+        "vaut la peine. Tant qu\u2019une personne est suivie, la surveillance "
+        "tourne toujours à plein régime ; seule une scène calme est "
+        "échantillonnée moins souvent.",
+    "live.abtastung.ruhe_label": "Regarder quand même toutes les",
+    "live.abtastung.ruhe_einheit": "s",
+    "live.abtastung.ruhe_hinweis":
+        "Laisse vide pour reprendre le délai de fin d\u2019apparition de cette "
+        "caméra — quelqu\u2019un d\u2019immobile ne crée aucun mouvement, la "
+        "surveillance jette donc un œil de temps en temps (1–600 s).",
+    "live.abtastung.schwelle_label": "Sensibilité (variation de gris)\u00a0:",
+    "live.abtastung.flaeche_label": "surface minimale\u00a0:",
+    "live.abtastung.eich_hinweis":
+        "Laisse les deux vides pour les valeurs d\u2019origine de Frigate. Des "
+        "chiffres plus bas font regarder la surveillance plus souvent\u00a0; "
+        "plus haut, elle reste calme devant une haie dans le vent. Chaque "
+        "site est différent — ces valeurs appartiennent à CETTE caméra, pas "
+        "au système entier.",
+    "live.abschnitt.guete": "Seuils de qualité d\u2019image",
+    "live.abschnitt.last": "Mesure de charge",
+    "live.erkennung.det_zeile":
+        "À partir d\u2019un score de détection de {wert}, une trouvaille "
+        "compte comme un visage{marke}.",
+    "live.erkennung.det_vorgabe": " (par défaut)",
+    "live.erkennung.regel_vor": "Reconnu après",
+    "live.erkennung.regel_mitte": "confirmations en",
+    "live.erkennung.regel_nach": "secondes",
+    "live.erkennung.regel_hinweis":
+        "0 seconde signifie que tout le passage compte, comme jusqu\u2019ici. "
+        "Une fenêtre de temps aide sur les caméras où quelqu\u2019un reste "
+        "planté plusieurs minutes et où deux coups de chance très espacés ne "
+        "devraient pas valoir une reconnaissance.",
+    "live.erkennung.vorrat_zeile":
+        "Échantillons de calibrage : {n} sur {deckel} \u2014 une image par "
+        "passage, les plus anciennes disparaissent.",
+    "live.erkennung.vorrat_aus":
+        "La collecte est désactivée, la page de calibrage n\u2019a donc rien "
+        "à montrer (page Système, \"live_kalib_max\").",
+    "live.erkennung.latte_e": "impression d\u2019image à partir de {wert}",
+    "live.erkennung.latte_t": "lisibilité du visage à partir de {wert}",
+    "live.erkennung.latte_aus": "non défini",
+    "live.erkennung.latte_hinweis":
+        "Ces deux-là ne décident jamais QUI est reconnu, cela coûterait des "
+        "confirmations. Ils décident quelle image part dans l\u2019alerte et "
+        "quels visages sont gardés comme échantillons. On les règle sur la "
+        "page de calibrage, où l\u2019on voit les images.",
+    "live.knopf_kalibrieren": "Calibrer",
+    "live.knopf_vorrat_leeren": "Effacer les échantillons",
+    "live.frigate.schalter": "Créer un événement Frigate quand quelqu\u2019un est reconnu",
+    "live.frigate.erklaerung":
+        "Désactivé par défaut. Activé, ce veilleur écrit son propre événement "
+        "dans Frigate, le nom dans le sous-libellé \u2014 un enregistrement "
+        "à lui, indépendant de la détection de Frigate. L\u2019écriture se "
+        "fait en arrière-plan : le veilleur n\u2019attend jamais Frigate. En "
+        "mode lecture seule, rien n\u2019est écrit.",
+    "live.frigate.abstand_label": "Au plus un événement par personne toutes les (s) :",
+    "live.frigate.abstand_hinweis":
+        "Vide signifie : le même écart que ci-dessus pour les alertes. La "
+        "limite compte par personne, deux personnes différentes peuvent donc "
+        "être écrites en même temps.",
+    "livekalib.titel": "Calibrage de la caméra — {name}",
+    "livekalib.erklaerung":
+        "Ce sont de vrais visages que cette caméra a collectés \u2014 une "
+        "image par passage. Déplace les curseurs jusqu\u2019à ce que la "
+        "sélection te convienne, puis applique. Les valeurs ne valent que "
+        "pour CETTE caméra, car les échelles de qualité diffèrent d\u2019une "
+        "caméra à l\u2019autre.",
+    "livekalib.regler_det": "Score de détection",
+    "livekalib.regler_det_prosa":
+        "À partir d\u2019ici, une trouvaille compte comme visage. Celui-ci "
+        "pilote vraiment la reconnaissance : tout ce qui est en dessous "
+        "n\u2019atteint jamais la vérification du nom. Plus bas garde plus "
+        "de matière (mesuré : une barre haute jetait la moitié de la matière "
+        "utilisable) ; plus haut laisse dehors les haies et les taches de "
+        "lumière.",
+    "livekalib.regler_e": "Impression d\u2019image",
+    "livekalib.regler_e_prosa":
+        "À quel point l\u2019image paraît nette et claire à l\u2019œil. Cela "
+        "ne décide PAS qui est reconnu \u2014 cela décide quelle image part "
+        "dans l\u2019alerte et quels visages restent ici comme échantillons.",
+    "livekalib.regler_t": "Lisibilité du visage",
+    "livekalib.regler_t_prosa":
+        "À quel point la personne se distingue, visages à moitié couverts "
+        "compris. Comme le curseur du dessus : il choisit l\u2019image et "
+        "remplit cette page, il n\u2019écarte jamais personne de la "
+        "reconnaissance.",
+    "livekalib.ohne_guete":
+        "Les deux modèles de qualité manquent dans cette version : les "
+        "échantillons ne portent donc pas de chiffres de qualité et les deux "
+        "curseurs du bas n\u2019ont aucun effet ici. Le score de détection "
+        "fonctionne.",
+    "livekalib.standard": "Valeurs par défaut",
+    "livekalib.tab_erkennen": "Reconnaître",
+    "livekalib.tab_lernen": "Catalogue des visages",
+    "livekalib.uebernehmen": "Appliquer",
+    "livekalib.leer": "Pas encore d'échantillons. Ils arrivent d'eux-mêmes — d'un veilleur en marche et de chaque analyse d'événement de cette caméra, un visage à chaque fois. Si vous ne voulez pas attendre, utilisez ci-dessous « Chercher du matériel frais ».",
+    "livekalib.zurueck": "retour au veilleur",
+    "livekalib.js.genutzt": "{n} échantillons sur {gesamt} passent",
+    "livekalib.js.gespeichert": "enregistré",
+    "livekalib.js.fehler": "erreur",
+    # --- Kalibrier-Zentralumbau 31.08.: Abschnitte, Katalog-Latte, Material
+    "livekalib.zur_uebersicht": "retour à toutes les caméras",
+    "livekalib.abschnitt.anzeige": "Alertes, affichage et échantillons",
+    "livekalib.abschnitt.anzeige_prosa": "Ces trois-là décident quelle image de cette caméra part dans une alerte et quels visages restent ici comme échantillons. Ils ne décident pas qui est reconnu.",
+    "livekalib.abschnitt.katalog": "Seuil du catalogue",
+    "livekalib.abschnitt.material": "Matériel",
+    "livekalib.katalog.prosa": "Un seuil propre et plus strict : à quel point un visage de cette caméra doit être bon pour devenir une référence. Il s'applique partout où une image entre au catalogue — nommer un groupe inconnu, adopter depuis un passage d'apprentissage, accepter une suggestion.",
+    "livekalib.katalog.grenze": "Ce qu'il ne fait pas : il ne supprime jamais les références existantes et ne change pas qui est reconnu. Les images sans scores de qualité (matériel ancien ou build sans les modèles de qualité) passent intactes — un seuil sans mesure jetterait à l'aveugle.",
+    "livekalib.katalog.quelle_kamera": "Actif : les valeurs propres de cette caméra.",
+    "livekalib.katalog.quelle_global": "Actif : la valeur globale de repli — cette caméra n'a pas encore de valeurs propres.",
+    "livekalib.katalog.quelle_aus": "Aucun seuil de catalogue : toute image peut devenir une référence.",
+    "livekalib.katalog.regler_e": "Catalogue : impression de l'image",
+    "livekalib.katalog.regler_e_prosa": "Impression minimale pour une référence de cette caméra. Gardez-la au-dessus du curseur plus haut : ce qui suffit à montrer ne suffit pas automatiquement à apprendre.",
+    "livekalib.katalog.regler_t": "Catalogue : reconnaissabilité",
+    "livekalib.katalog.regler_t_prosa": "Reconnaissabilité minimale pour une référence de cette caméra. C'est elle qui garde les visages à moitié couverts hors du catalogue.",
+    "livekalib.material.aus": "La collecte d'échantillons est désactivée (Advanced, calibration samples). Sans échantillons cette page n'a rien à montrer.",
+    "livekalib.material.stand": "{n} sur {deckel} échantillons au maximum",
+    "livekalib.material.wann": "dernier {wann}",
+    "livekalib.material.fuellen_prosa": "La recherche de matériel parcourt les derniers événements personne de cette caméra et garde le meilleur visage de chacun. Elle s'arrête à {ziel} images ou après {events} événements, au premier des deux.",
+    "livekalib.material.lauf": "Plus {n} image(s) de cette caméra issues du dernier passage d'apprentissage — affichées ci-dessous et marquées.",
+    "livekalib.js.katalog": "{n} sur {gesamt} pourraient entrer au catalogue",
+    "livekalib.js.lauf": "passage",
     # ----------------------------------------------- routes/erkennung ---
     "erkennung.titel": "Reconnaissance",
     "erkennung.kopf.satz":
@@ -1165,6 +1307,55 @@ T = {
     "lernwizard.ergebnis.beiseite": "({n} écartées)",
     "lernwizard.kachel.lauf": "Session d'apprentissage",
     "lernwizard.kachel.sammeln": "Collecter &amp; trier",
+    "kalib.titel": "Calibrage des caméras",
+    "kalib.erklaerung": "Ces deux seuils décident quels visages les prochains apprentissages conservent. Faites glisser jusqu'à ce que la limite vous convienne — tout ce qui est grisé serait écarté. Ci-dessous, les images du dernier passage, meilleure impression d'abord. Cadre jaune = image retenue pour l'adoption.",
+    "kalib.leer": "Rien à calibrer pour l'instant : le dernier passage ne porte pas de valeurs de qualité. Lancez d'abord un apprentissage avec cette version.",
+    "kalib.regler_e": "Impression d'image",
+    "kalib.regler_e_prosa": "À quel point l'image paraît nette et lumineuse. Plus bas garde davantage, mais des images plus sombres et plus grossières.",
+    "kalib.regler_t": "Reconnaissabilité",
+    "kalib.regler_t_prosa": "À quel point la personne est identifiable. Écarte aussi les visages à moitié masqués.",
+    "kalib.standard": "Rétablir les valeurs par défaut",
+    "kalib.uebernehmen": "Appliquer les seuils",
+    "kalib.js.genutzt": "Conservées : {n} sur {gesamt}",
+    "kalib.js.gespeichert": "Enregistré — le passage est réévalué avec les nouvelles limites, retour à l'apprentissage dans un instant …",
+    "kalib.js.fehler": "Échec de l'enregistrement",
+    # --- zentrale Kamera-Uebersicht + globaler Rueckfall (31.08.)
+    "kalib.knopf": "Calibrage",
+    "kalib.knopf_tip": "Calibrage des caméras : les seuils pour les alertes, les échantillons et le catalogue de références",
+    "kalib.uebersicht.erklaerung": "Une caméra, un jeu de valeurs. Les échelles de qualité diffèrent d'une caméra à l'autre — mesuré sur une seule installation, la reconnaissabilité médiane d'une caméra était plus du double de celle d'une autre. Choisissez une caméra pour régler ses seuils.",
+    "kalib.uebersicht.leer": "Pas encore de caméras",
+    "kalib.uebersicht.leer_hinweis": "Dès que Frigate signale des caméras, elles apparaissent ici.",
+    "kalib.grenze.titel": "Ce que le calibrage fait — et ce qu'il ne fait pas",
+    "kalib.grenze.satz": "Il décide quelle image est montrée ou envoyée, quels visages restent comme échantillons et lesquels peuvent devenir une référence. Il ne décide jamais qui est reconnu : la vérification des noms voit tous les visages, sans filtre. C'est mesuré, pas supposé — filtrer avant le vote a coûté des confirmations.",
+    "kalib.kachel.eigene": "valeurs propres",
+    "kalib.kachel.vorgabe": "valeurs par défaut",
+    "kalib.kachel.fremd": "absente de Frigate",
+    "kalib.kachel.fremd_tip": "Cette caméra a des valeurs de calibrage mais Frigate ne la signale plus. Les valeurs restent, rien n'est supprimé.",
+    "kalib.kachel.vorrat": "{n} sur {deckel} échantillons",
+    "kalib.kachel.vorrat_aus": "La collecte d'échantillons est désactivée (Advanced, calibration samples).",
+    "kalib.kachel.stand": "dernier {wann}",
+    "kalib.kachel.leer": "Pas encore d'échantillons",
+    "kalib.kachel.leer_hinweis": "Les échantillons viennent d'un veilleur en marche et des analyses d'événements — ou allez en chercher maintenant.",
+    "kalib.kachel.werte": "détection {det} · impression {e} · reconnaissabilité {tw}",
+    "kalib.kachel.katalog": "seuil du catalogue {e} / {tw}",
+    "kalib.quelle.kamera": "propre",
+    "kalib.quelle.global": "repli global",
+    "kalib.quelle.aus": "désactivé",
+    "kalib.knopf_kalibrieren": "Calibrer",
+    "kalib.knopf_fuellen": "Chercher du matériel frais",
+    "kalib.knopf_leeren": "Supprimer les échantillons",
+    "kalib.global.titel": "Repli global",
+    "kalib.global.satz": "Elles valent pour les caméras sans valeurs propres et servent de seuil quand un passage d'apprentissage décide quels visages garder.",
+    "kalib.global.werte": "impression {e} · reconnaissabilité {tw}",
+    "kalib.global.katalog": "seuil du catalogue {e} / {tw}",
+    "kalib.global.knopf": "Régler sur le dernier passage d'apprentissage",
+    "kalib.global.kein_lauf": "Pas encore de passage d'apprentissage avec des scores de qualité — réglable dès qu'un passage est terminé.",
+    "kalib.lauf.titel": "Seuils globaux — dernier passage d'apprentissage",
+    "kalib.zurueck": "retour à toutes les caméras",
+    "js.kalib.start": "recherche de matériel …",
+    "js.kalib.lauf": "{i} sur {n} événements · {bilder} image(s)",
+    "js.kalib.fertig": "{bilder} image(s) de {events} événement(s)",
+    "js.kalib.fehler": "recherche de matériel impossible",
     "lernwizard.kachel.benennen": "Attribution intelligente",
     "lernwizard.kachel.fertig": "Terminé &mdash; elles comptent",
     "lernwizard.such.titel": "Chercher des visages dans les événements",
@@ -1205,7 +1396,6 @@ T = {
     "lernwizard.k1.scope": "étendue {n} événements",
     "lernwizard.k1.kameras": "caméras uniquement : {kameras}",
     "lernwizard.k1.tag": "jour {tag}",
-    "lernwizard.k1.mini_belichtung": "Contrôle de luminosité",
     "lernwizard.k2.satz":
         "Tourne toute seule &mdash; vous pouvez fermer cette page et "
         "revenir.",
@@ -1309,43 +1499,6 @@ T = {
         "(reprise intégrée)",
     "lernwizard.expert.lauf_bleibt":
         "cette session reste — ses points d'ancrage demeurent disponibles",
-    # -------- Abgleich Helligkeit /lernlauf/belichtung (Phase 1b, 26.08.) --
-    "belichtung.titel": "Contrôle de luminosité",
-    "belichtung.satz":
-        "Réglez les deux limites de luminosité sur vos propres images. Chaque "
-        "ligne est un groupe de visages, trié comme le serveur le trie en ce "
-        "moment : les images hors limites passent en fin de ligne et sont "
-        "marquées en rouge. Rien n'est supprimé, une image reléguée reste "
-        "sélectionnable à la main.",
-    "belichtung.jetzt":
-        "En vigueur actuellement : la plus sombre {von}, la plus claire {bis}.",
-    "belichtung.hinweis_aus":
-        "Les deux limites sont désactivées, rien n'est donc relégué : déplacez "
-        "un curseur pour voir ce que ferait une limite.",
-    "belichtung.aus_wort": "désactivé",
-    "belichtung.regler_min": "la plus sombre admise",
-    "belichtung.regler_max": "la plus claire admise",
-    "belichtung.regler_hinweis":
-        "La luminosité va de 0 (noir) à 255 (blanc) ; 0 désactive ce côté.",
-    "belichtung.bilanz": "{n} images sur {m} sont reléguées",
-    "belichtung.vorschau":
-        "Aperçu seulement : les images sont retriées dans votre navigateur. "
-        "Enregistrez pour que le serveur trie ainsi.",
-    "belichtung.knopf_speichern": "Enregistrer ces limites",
-    "belichtung.reihe_info":
-        "{n} images mesurées sur {gesamt} · luminosité de {von} à {bis}",
-    "belichtung.lage_dunkel": "trop sombre",
-    "belichtung.lage_hell": "surexposée",
-    "belichtung.lage_ok": "dans les limites",
-    "belichtung.zurueck": "retour à la session d'apprentissage",
-    "belichtung.leer_satz":
-        "Aucune image ne porte encore de valeur de luminosité, il n'y a donc "
-        "rien à étalonner.",
-    "belichtung.leer_hinweis":
-        "La luminosité est mesurée lors de la récolte des visages. Elle "
-        "apparaît à partir de la prochaine session d'apprentissage ou du "
-        "prochain contrôle de passage ; les images plus anciennes ne sont "
-        "jamais mesurées après coup.",
     # --------------------------------- Stufe 1: Einhang/Skelett (webui) ---
     "nav.bereich.activity": "Passages",
     "nav.bereich.faces": "Visages",
@@ -1527,10 +1680,11 @@ T = {
     "js.dienst.nicht_erreichbar": "service injoignable — réessayer dans un instant.",
     "js.unb.tick": "{phase} … {s} s",
     "js.unb.besucher_frage": "Ignorer comme visiteur inconnu habituel ? Il ne déclenchera plus d'alertes. (Réactivable à tout moment ci-dessous, dans \"visiteurs habituels\".)",
-    "js.unb.ziel_fehlt": "Choisir une identité cible.",
     "js.unb.merge_frage": "Fusionner ?",
     "js.unb.name_fehlt": "Saisir un nom (personne nouvelle ou existante).",
     "js.unb.benennen_frage": "Attribuer à \"{person}\" ? Les meilleures images deviennent des références.",
+    "js.unb.teil_frage": "Attribuer les {n} images cochées à « {person} » ? Le reste du groupe reste dans Inconnus.",
+    "js.unb.objekt_frage": "Marquer comme « pas une personne » (un buisson, un reflet, une voiture garée) ? Ce groupe n'apparaîtra plus comme visiteur ; annulation possible sous « pas des personnes ».",
     "js.person.loesch_frage": "Supprimer TOUTES les références et le nom \"{person}\" ?\nLes images vont dans le dossier corbeille (récupérables).\n\nSaisir le nom pour confirmer :",
     "js.person.name_falsch": "Le nom ne correspond pas — rien n'a été supprimé.",
     "js.areas.fehl": "échec de l'enregistrement — le service est-il joignable ?",
@@ -1590,6 +1744,8 @@ T = {
     "js.live.quelltest": "Test de la source",
     "js.live.pausiert": " — surveillances en pause pour la mesure ({liste})",
     "js.live.job_laeuft": "test de la source en cours (processus auxiliaire, jusqu'à ~2 minutes) …",
+    "js.live.vorrat_leeren_frage":
+        "Effacer les échantillons de calibrage de cette caméra ? Ils sont irrécupérables ; le veilleur en collecte de nouveaux à partir de maintenant.",
     "js.live.job_ok": "test de la source terminé : {text}",
     "js.live.job_fehl": "test de la source EN ÉCHEC : {text}",
     "js.live.messung_fehl": "échec de la mesure de charge : {grund}",
@@ -1821,20 +1977,30 @@ T = {
         "Les tuiles proviennent uniquement de la liste des caméras de "
         "Frigate et des surveillances enregistrées.",
     "unbekannte.name": "Inconnu {nummer}",
-    "unbekannte.badge_eine": "clairement une seule personne",
-    "unbekannte.badge_aehnlich": "similarité {wert}",
-    "unbekannte.badge_einmal": "vu une seule fois",
     "unbekannte.meta_zeit": " apparitions · {zeit}",
+    "unbekannte.mehr_bilder": "+{n} autres images dans ce groupe",
     "unbekannte.knopf_reaktivieren": "réactiver",
     "unbekannte.attr_name": "Nom (nouveau ou existant)",
+    "unbekannte.attr_wahl": "Choisir ce groupe pour la fusion",
     "unbekannte.knopf_zuweisen": "Attribuer",
+    "unbekannte.knopf_teil": "Attribuer les {n} cochées",
     "unbekannte.knopf_ignorieren": "Ignorer",
-    "unbekannte.opt_merge": "fusionner avec…",
-    "unbekannte.knopf_ok": "OK",
-    "unbekannte.badge_gleiche": "même personne ?",
-    "unbekannte.knopf_merge": "Fusionner",
-    "unbekannte.knopf_verschieden": "Différentes",
+    "unbekannte.knopf_objekt": "Pas une personne",
+    "unbekannte.knopf_person": "C'est une personne",
+    "unbekannte.knopf_bulkmerge": "Fusionner les {n} groupes choisis",
+    "unbekannte.knopf_mehr": "Afficher {n} groupes de plus",
     "unbekannte.titel": "Inconnus",
+    "unbekannte.anker": "{offen} groupes sur {gesamt} attendent encore",
+    "unbekannte.sort_label": "Tri",
+    "unbekannte.sort_bilder": "le plus d'images",
+    "unbekannte.sort_neu": "les plus récents",
+    "unbekannte.filter_label": "Afficher",
+    "unbekannte.f_offen": "à traiter",
+    "unbekannte.f_wieder": "récurrents",
+    "unbekannte.f_heute": "nouveaux aujourd'hui",
+    "unbekannte.f_vorschlag": "fusion suggérée",
+    "unbekannte.f_besucher": "en sourdine",
+    "unbekannte.f_objekt": "pas des personnes",
     "unbekannte.kopf_satz":
         "Visages sans correspondance connue, regroupés en identités "
         "récurrentes.",
@@ -1852,13 +2018,6 @@ T = {
     "unbekannte.hinweis_reorg":
         "revérifie les visages collectés et reconstruit les groupes — "
         "la collecte elle-même s'exécute automatiquement (1-2 min)",
-    "unbekannte.h_wieder": "Récurrents",
-    "unbekannte.h_einzeln":
-        "{n} apparitions isolées (vues une seule fois pour l'instant)",
-    "unbekannte.h_besucher": "{n} visiteurs habituels (en sourdine)",
-    "unbekannte.h_objekte":
-        "{n} objets statiques (détectés automatiquement — pas des "
-        "personnes)",
     "unbekannte.satz_objekte":
         "Des groupes dont les images sont quasi identiques entre elles "
         "et ne ressemblent à aucune personne — typiquement une aile de "
@@ -1867,11 +2026,13 @@ T = {
         "les nouvelles découvertes ne sont jamais ajoutées ici (elles "
         "forment de nouveaux groupes visibles, revérifiés par la même "
         "règle) — les groupes restent listés pour que rien ne soit "
-        "caché.",
+        "caché. Marqués à la main ou trouvés automatiquement ; « C'est une personne » en ramène un.",
     "unbekannte.leer": "Aucun visage inconnu collecté pour l'instant.",
     "unbekannte.leer_hinweis":
         "Les identités apparaissent ici après le prochain visiteur "
         "inconnu.",
+    "unbekannte.leer_filter": "Rien dans cette vue.",
+    "unbekannte.leer_filter_hinweis": "D'autres groupes attendent sous un autre filtre ci-dessus.",
     "livealerts.link_video": "&#9654; vidéo {n}",
     "livealerts.person_unbekannt": "inconnu",
     "livealerts.trigger.eins": "{n} déclenchement",
@@ -2902,6 +3063,9 @@ T = {
     "antwort.reorg_laeuft":
         "Une réorganisation est déjà en cours — patientez",
     "antwort.paar_notiert": "noté — cette paire ne sera plus proposée",
+    "antwort.unbek_objekt": "marqué comme n'étant pas une personne",
+    "antwort.unbek_person": "de nouveau parmi les visiteurs",
+    "antwort.unbek_gemergt": "{n} groupes fusionnés en un seul",
     # §8.11-Anhang an eine Fachschicht-msg (die Basis bleibt Grenze).
     "antwort.nachpruefung_anhang":
         " — revérification des événements de ce passage en arrière-plan",
