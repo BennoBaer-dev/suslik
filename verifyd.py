@@ -29,6 +29,7 @@ from core import melden as _melden                    # Modulumbau R3: die Melde
 from core import frames as _frames                    # .287: Clip-Debug [clipdbg] (Senke + Direkt-Zeilen; leichtgewichtig, kein cv2)
 from core import frigate_auth as _fauth                # 5e: DER eine Frigate-HTTP-Griff (Kennung immer, Login optional)
 from core.schoner import Schoner                      # .264: Frigate-Schoner (Rueckzug statt Retry)
+from core.livewache import DET_MIN_LIVE               # .402: DER det-Werkswert (ein Wert fuer Live und Szenario)
 from core import kamerakalib as _kk_ue                # Kamera-Kalibrierung: DIE Katalog-Latte je Kamera (31.08.)
 from core import sprache as _sprache                  # Sprach-Stufe 1: contextvar je Request + Schalter
 from core import systemstat as _systemstat            # .341: Systemzahlen (Sammler, Ringpuffer, /health.system)
@@ -601,7 +602,7 @@ def load_config(path):
                          # Anlagen den Deckel hier heben. Kostet je Runde eine groessere
                          # Frigate-Antwort, KEINE zusaetzliche Anfrage.
                          ("sweep_limit", 200),
-                         # .354 (User-Auftrag 27.08., Anlass Feldtester Shaun):
+                         # .354 (User-Auftrag 27.08., Anlass Feldtester A):
                          # das Dienst-Log auf die Platte. Bis .353 gab es es nur
                          # fluechtig — 300-Zeilen-Ringpuffer hinter /log (bei ihm
                          # 18,6 min Abdeckung, der Startblock war raus) und
@@ -720,10 +721,12 @@ def load_config(path):
                          ("frigate_sync", False), ("unscharf_max", 350), ("min_kante", 70),
                          ("modell", "buffalo"),
                          # #42 Teil B: Fehldetektions-Signatur (kalibriert 24./25.07., s.
-                         # face_audit.ist_fehldetektion) + sichtbarer SCRFD-det_thresh
-                         # (war unsichtbarer insightface-Default 0.5; kein Hochdreh-Rat).
+                         # face_audit.ist_fehldetektion) + sichtbarer SCRFD-det_thresh.
+                         # Werkswert seit .402 = DET_MIN_LIVE (User-Entscheid 01.09.:
+                         # EIN det-Werkswert fuer Live UND Szenario/Worker; die
+                         # Begruendung der 0,40 steht an der Quelle livewache).
                          ("fd_front_min", 0.85), ("fd_sharp_min", 1500), ("fd_det_max", 0.70),
-                         ("det_thresh", 0.5),
+                         ("det_thresh", DET_MIN_LIVE),
                          # E2 Ernte-Gates (V0.5 GEMESSEN, Auslieferungs-Defaults der
                          # Autor-Anlage — §2.4b: Werte hier, nie im Code; Gate L hat
                          # keine eigenen Zahlen, seine Stellschrauben SIND fd_*).
@@ -845,6 +848,14 @@ def load_config(path):
                          # Der Lauf endet, was zuerst eintritt.
                          ("kalib_fueller_bilder", 25),
                          ("kalib_fueller_events", 50),
+                         # B4 Hunger-Bremse (01.09.): 0 = aus. 60 s liegt
+                         # unter den Job-Timeouts (300 s) und weit ueber der
+                         # typischen Einzel-Analyse — kein Messwert, ein
+                         # Startwert; justierbar wie alles hier.
+                         ("hunger_bremse_s", 60),
+        ("selbstwache", True),
+        ("urteil_marge", 0.05),
+        ("urteil_kante", 25),
                          # .264 Frigate-Schoner (Verklemmungs-Vorfall 17.08.):
                          # nach N Netz-Fehlern in Folge pause_s zurueckziehen.
                          ("frigate_schoner_fehler", 3),
@@ -1501,7 +1512,41 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
             "--dir", event_dir, "--fps-sample", str(cfg["fps_sample"]),
             "--win-thresh", str(cfg["win_thresh"]),
             "--fd-front-min", str(cfg["fd_front_min"]), "--fd-sharp-min", str(cfg["fd_sharp_min"]),
-            "--fd-det-max", str(cfg["fd_det_max"]), "--det-thresh", str(cfg["det_thresh"])]
+            "--fd-det-max", str(cfg["fd_det_max"]),
+            # .402 (User-Linie 01.09.: EIN Kernmodell, EINE Erkennen-
+            # Kalibrierung fuer Szenario+Worker+Live): die det-Schwelle der
+            # Event-Analyse kommt aus dem Erkennen-Register der KAMERA
+            # (guard.det_min wie im Live-Watcher, "ab wann zaehlt etwas als
+            # Gesicht"), Rueckfall global det_thresh. Vorher galt hier NUR
+            # der globale Wert — die Kamera-Kalibrierung erreichte die
+            # Szenario-Analyse nie (Asymmetrie-Befund 01.09.).
+            "--det-thresh", str((((cfg.get("live") or {}).get(camera) or {}).get("det_min"))
+                                or cfg["det_thresh"]),
+            # .400 Urteils-Kante: EIGENER Wert, Default 40 px — GEMESSEN
+            # (Trennschaerfe-Test 01.09., 14 falsche/7 korrekte Feld-Faelle:
+            # 70 px kippte ALLE korrekten mit [Tester-Kameras liefern auch
+            # richtig erkannte Stimmen nur mit 36-58 px], 40 px ist der am
+            # wenigsten schlechte Punkt: 8/14 falsche gekippt, 4/7 korrekte
+            # ueberleben). BEWUSST nicht an min_kante(70) gebunden:
+            # Anlern-Qualitaet und Urteils-Minimum sind verschiedene
+            # Groessen.
+            "--urteil-kante", str(cfg.get("urteil_kante", 25))]
+    # .404 KALIBRIER-VORFILTER (User-Entscheid 01.09., fest in Watcher UND
+    # Worker: "es sollte doch immer durch die Kalibrierung vorgefiltert
+    # werden"): die Erkennen-Guete-Latten der KAMERA gehen als Stimm-Sieb
+    # mit; ohne Kalibrierung laesst analyze seinen Werks-Boden
+    # (guete.KELLER_BODEN) greifen — deshalb wird hier NUR uebergeben,
+    # was der Nutzer wirklich kalibriert hat (analyze klemmt auf den
+    # Boden). Der fruehere "Guete-Latten bleiben draussen"-Satz galt der
+    # GLOBALEN Latte (Kamera-Bias Faktor 5); die Kamera-Latte ist genau
+    # die Antwort darauf.
+    _reg = (cfg.get("live") or {}).get(camera) or {}
+    if _reg.get("guete_e_min") is not None:
+        argv += ["--urteil-guete-e", str(_reg["guete_e_min"])]
+    if _reg.get("guete_t_min") is not None:
+        argv += ["--urteil-guete-t", str(_reg["guete_t_min"])]
+    if cfg.get("debug"):
+        argv += ["--urteil-debug"]
     if koerper and worker is not None:
         # Z5 (konzept_frames v2 §4): der Koerper-Abnehmer faehrt im selben
         # Frame-Lauf mit — EIN Decode statt zwei. Scharf-Zustand kommt als
@@ -1949,6 +1994,23 @@ def verdict_v2(cfg, ours, max_bw, confirmed=None):
     confirmed additiv wie bei verdict (Issue #19, deckung-Korrektur)."""
     if confirmed is None:
         confirmed = sorted(p for p, r in ours.items() if r.get("win3s", 0) >= cfg["win_min"])
+        # .400 MARGE (User-Go 01.09., "lieber kein Name als der naechstbeste";
+        # Fall-Analyse an 15 Feld-Fehlurteilen: falsche Namen gewannen mit
+        # 0,001-0,047 Abstand, der saubere Vergleichsfall fuehrte mit 0,112;
+        # 57 % der Mehrfach-Events beim Tester lagen unter 0,08): stehen
+        # MEHRERE Kandidaten ueber der Latte und liegt der max-Abstand von
+        # Platz 1 zu Platz 2 unter urteil_marge, wird NIEMAND bestaetigt —
+        # das Event ist ehrlich unbekannt und landet nachbenennbar im Pool.
+        # Bewusst ALLE statt "Platz 1 gewinnt": ohne Fundstellen-Trennung im
+        # Event ist ein knapper Zweiter nicht vom echten zweiten Menschen
+        # unterscheidbar; Duo-Faelle werden unsicher statt halb-falsch
+        # (derselbe Grundsatz). 0 = aus.
+        _marge = float(cfg.get("urteil_marge") or 0)
+        if _marge and len(confirmed) > 1:
+            _mx = sorted((float((ours.get(p) or {}).get("max") or 0)
+                          for p in confirmed), reverse=True)
+            if _mx[0] - _mx[1] < _marge:
+                confirmed = []
     if confirmed:
         return "erkannt", confirmed
     if (max_bw or 0) >= 100:
@@ -2363,18 +2425,25 @@ class Service:
             return None
         self._writes_append(eid=eid, label=top, score=score, cos=cos)
         self.own_writes.add(eid)
-        try:
+
+        # W3 Stufe 1 (.399): POST + Gegenpruefung (2+6 s SCHLAF!) liefen bis
+        # .398 unter dem Analyse-Lock — je bestaetigtem Event bis zu ~10 s
+        # Blockade der naechsten Analyse. Beschluss + writes-Protokoll stehen
+        # (oben, unveraendert unterm Lock); der Versand laeuft in der Spur.
+        # Semantik-Delta, deklariert: die Akte traegt den BESCHLOSSENEN
+        # sub_label auch dann, wenn der POST spaeter scheitert — der
+        # Fehlschlag steht laut im Log (bis .398 stand dann None in der
+        # Akte, der writes-Protokoll-Eintrag existierte aber genauso).
+        def _senden():
             api_post(cfg, f"/api/events/{eid}/sub_label", {"subLabel": top, "subLabelScore": score})
             for wartezeit in (2, 6):
                 time.sleep(wartezeit)
                 if api(cfg, f"/api/events/{eid}").get("sub_label") == top:
                     self.log(f"{eid}: sub_label -> '{top}' ({score}) written + verified")
-                    return top
+                    return
             self.log(f"{eid}: sub_label write without GET echo (async? check later)")
-            return top
-        except Exception as e:
-            self.log(f"{eid}: sub_label write failed: {e}")
-            return None
+        self._spur(f"sub_label {eid}", _senden)
+        return top
 
     # Modulumbau R3: MQTT-Publisher lebt in core/melden.py (Docstrings/
     # Begruendungen dort). Hier nur Einhaenge: der Dienst bleibt Halter von
@@ -3295,7 +3364,12 @@ class Service:
             open(lp, "w").close()
             with self._gpu_bg_lock:              # gegen vorschlaege/qs serialisieren (Review 21.07.)
                 antwort = w.job({"typ": "sammle", "tage": tage,
-                                 "mit_migriere": mit_migriere, "log": lp}, timeout)
+                                 "mit_migriere": mit_migriere, "log": lp,
+                                 # .398 Ring-Zulauf: der Szenario-Weg speist
+                                 # die Kalibrier-Ringe (Deckel aus der Config,
+                                 # 0 = aus wie ueberall)
+                                 "kalib_deckel": int(self.cfg.get("live_kalib_max") or 0)},
+                                timeout)
             try:
                 out = open(lp).read()
             except Exception:
@@ -3305,7 +3379,10 @@ class Service:
             if not antwort.get("ok"):
                 return out, str(antwort.get("fehler") or "unbekannt")
             return out, None
-        env = dict(os.environ, OV_DEVICE=self.cfg["ov_device"])
+        env = dict(os.environ, OV_DEVICE=self.cfg["ov_device"],
+                   # .398: Ring-Deckel auch auf dem Subprozess-Fallback-Weg
+                   # (K3: die Erweiterung muss BEIDE sammle-Wege erreichen)
+                   VERIFY_KALIB_DECKEL=str(int(self.cfg.get("live_kalib_max") or 0)))
         cmd = [sys.executable, os.path.join(HERE, "anlernen.py"), "sammle", "--tage", str(tage)]
         if not mit_migriere:
             cmd.append("--kein-migriere")
@@ -3410,6 +3487,156 @@ class Service:
         if alter_h > 48:
             melde("backup", f"Juengstes Master-Backup ist {alter_h:.0f} h alt (>48 h) — "
                             f"der 06:00-Job laeuft nicht durch. Log auf 'maintenance job' pruefen.")
+
+    def start_melde_spur(self):
+        """W3 Stufe 1 (.399): die EINE serielle Nachwehen-Spur fuer externe
+        Melde-Traeger (Pushover/Telegram-HTTP, Frigate-sub_label-POST samt
+        Gegenpruefungs-Schlaf). Bis .398 liefen sie UNTER dem Analyse-Lock —
+        ein haengender 20-s-Push oder die 2+6-s-sub_label-Gegenpruefung
+        blockierte die NAECHSTE Analyse (Feldbeleg: 20-min-Rueckstands-
+        Plateau bei freier GPU). Der BESCHLUSS (Kategorie, Cooldown, Text,
+        Beweisbild, writes-Protokoll) faellt weiter unter dem Lock in
+        heutiger Reihenfolge; nur der VERSAND laeuft hier, seriell und in
+        Einreihungs-Reihenfolge (keine neuen Races an Cooldown/Zustand).
+        Zaehler fuer den Systemstatus: laenge/gesendet/fehler."""
+        import collections as _coll
+        self._spur_q = _coll.deque()
+        self._spur_wecker = threading.Condition()
+        self._spur_stat = {"gesendet": 0, "fehler": 0}
+
+        def lauf():
+            while True:
+                with self._spur_wecker:
+                    while not self._spur_q:
+                        self._spur_wecker.wait(timeout=30)
+                    beschreibung, fn = self._spur_q.popleft()
+                try:
+                    fn()
+                    self._spur_stat["gesendet"] += 1
+                except Exception as e:                      # noqa: BLE001
+                    self._spur_stat["fehler"] += 1
+                    self.log(f"delivery lane: {beschreibung} failed "
+                             f"({type(e).__name__}: {e})")
+        threading.Thread(target=lauf, daemon=True, name="melde-spur").start()
+
+    def start_event_queue(self):
+        """W3 Stufe 1 (.399): geordnete MQTT-Event-Warteschlange statt der
+        Timer-Herde. Bis .398 startete on_msg je Event einen threading.Timer,
+        alle Timer-Threads stauten sich UNFAIR und UNSICHTBAR am Analyse-Lock
+        (kein Deckel, keine Reihenfolge — CPython-Locks sind nicht FIFO).
+        Jetzt: EIN Abarbeiter, FIFO nach Faelligkeit (clip_delay ab
+        Event-Ende), Deckel EV_QUEUE_MAX mit LAUTEM Verwerfen des aeltesten
+        (das Nachhol-Netz holt Verworfene spaeter stumm nach — kein stiller
+        Verlust), Laenge und Alter sichtbar im Systemstatus."""
+        import collections as _coll
+        self._ev_q = _coll.deque()
+        self._ev_wecker = threading.Condition()
+        self._ev_gesehen = set()
+
+        def lauf():
+            while True:
+                with self._ev_wecker:
+                    while not self._ev_q:
+                        self._ev_wecker.wait(timeout=30)
+                    faellig, eid, _einge = self._ev_q[0]
+                    rest = faellig - time.time()
+                    if rest > 0:
+                        self._ev_wecker.wait(timeout=min(rest, 5.0))
+                        continue
+                    self._ev_q.popleft()
+                    self._ev_gesehen.discard(eid)
+                self.process_safe(eid)
+        threading.Thread(target=lauf, daemon=True, name="event-queue").start()
+
+    EV_QUEUE_MAX = 500
+
+    def event_einreihen(self, eid):
+        """Ein MQTT-Event faellig in clip_delay Sekunden einreihen (Dedup je
+        eid, Deckel mit lautem Verwerfen). Ohne gestartete Queue (Alt-Tests)
+        Rueckfall auf den alten Timer-Weg."""
+        if not hasattr(self, "_ev_q"):
+            threading.Timer(self.cfg["clip_delay"], self.process_safe,
+                            args=(eid,)).start()
+            return
+        with self._ev_wecker:
+            if eid in self._ev_gesehen:
+                return
+            self._ev_gesehen.add(eid)
+            self._ev_q.append((time.time() + float(self.cfg["clip_delay"]),
+                               eid, time.time()))
+            if len(self._ev_q) > self.EV_QUEUE_MAX:
+                _f, alt_eid, _e = self._ev_q.popleft()
+                self._ev_gesehen.discard(alt_eid)
+                self.log(f"event queue full ({self.EV_QUEUE_MAX}) — dropped "
+                         f"oldest {alt_eid} (the catch-up sweep will pick "
+                         f"it up later)")
+            self._ev_wecker.notify()
+
+    def _spur(self, beschreibung, fn):
+        """Einen Versand in die Nachwehen-Spur legen (nie blockierend)."""
+        if not hasattr(self, "_spur_q"):
+            # Spur nicht gestartet (Alt-Tests, Attrappen): synchron wie bisher
+            # — LAUT waere falsch, das Verhalten ist dann schlicht das alte.
+            fn()
+            return
+        with self._spur_wecker:
+            self._spur_q.append((beschreibung, fn))
+            self._spur_wecker.notify()
+
+    def start_selbstwache(self):
+        """R(b) Fern-Reset-Paket (01.09., User-Go): Selbstwache gegen den
+        Voll-Haenger. Zwei Tester-Haenger brauchten einen Hand-Neustart vor
+        Ort; haengt der HTTP-Server selbst, erreicht auch der Fern-Reset
+        (/support/restart) das System nicht mehr. Deshalb prueft ein Thread
+        das EIGENE /health auf 127.0.0.1: erst scharf nach der ersten
+        erfolgreichen Antwort (Anlauf-Schutz — ein langsam startender Dienst
+        wird nie erschossen), dann alle 15 s mit 30 s Antwort-Frist; nach
+        4 Fehlversuchen IN FOLGE (rund 3 min tot) lauter os._exit(1). Die
+        Frist ist bewusst grosszuegig (Fremd-Augen 01.09.): auf sehr
+        langsamen Systemen (USB-Platte, /health listet den Clip-Cache)
+        darf ein traeger, aber lebender Server nie als tot gelten.
+        BEWUSST os._exit statt Service.neustart(): neustart() wartet auf
+        self.lock — bei einem Voll-Haenger klemmt genau der, die Wache
+        wuerde selbst haengen. Der harte Exit beendet im Container PID 1,
+        die restart-Policy (unless-stopped in allen Vorlagen) holt ihn
+        frisch hoch; bare metal ohne Supervisor bleibt der Dienst unten —
+        er war aber ohnehin unbenutzbar, und die Logzeile sagt warum.
+        Ehrliche Grenze: steht der GANZE Prozess (GIL-Block, Kernel), laeuft
+        auch dieser Thread nicht mehr — die Wache deckt tote/erschoepfte
+        HTTP-Threads und einen toten serve_forever, nicht den toten Prozess.
+        Schalter: Config 'selbstwache' (Default an)."""
+        if not self.cfg.get("selbstwache"):
+            self.log("self-watch disabled via config")
+            return
+        url = f"http://127.0.0.1:{int(self.cfg['web_port'])}/health"
+
+        def lauf():
+            import urllib.request
+            scharf, fehler = False, 0
+            while True:
+                time.sleep(15)
+                try:
+                    with urllib.request.urlopen(url, timeout=30) as r:
+                        r.read(64)
+                    if not scharf:
+                        self.log("self-watch armed (own /health answers)")
+                    scharf, fehler = True, 0
+                except Exception as e:
+                    if not scharf:
+                        continue               # Anlauf: nie scharf vor der ersten Antwort
+                    fehler += 1
+                    self.log(f"self-watch: own /health not answering "
+                             f"({fehler}/4, {type(e).__name__})")
+                    if fehler >= 4:
+                        self.log("SELF-WATCH: web server dead for ~3 min — "
+                                 "exiting hard so the supervisor restarts the "
+                                 "service (restart policy required)")
+                        try:
+                            sys.stdout.flush(); sys.stderr.flush()
+                        except Exception:
+                            pass
+                        os._exit(1)
+        threading.Thread(target=lauf, daemon=True, name="selbstwache").start()
 
     def start_stoerungswaechter(self):
         """AP7: dienstinterner Watchdog — Pushover bei stillem Ausfall (Plan-Kriterien).
@@ -3676,6 +3903,10 @@ class Service:
         "guete_t_min": (float, 0.0, 1.0, "calibration: minimum recognisability score (eDifFIQA-T) a face needs to count as good for learning. This one also sorts out half-covered faces; set via the calibration page"),
         "katalog_guete_e_min": (float, 0.0, 1.0, "catalogue bar (picture impression): how good a face has to look before it may become a stored reference. Stricter than the bar above on purpose — that one decides what a learning run keeps, this one decides what ends up in the catalogue. Cameras can override it on their calibration page; pictures without quality scores are never rejected by it"),
         "katalog_guete_t_min": (float, 0.0, 1.0, "catalogue bar (recognisability): how recognisable a face has to be before it may become a stored reference. Per-camera values on the calibration page win over this one; existing references are never removed by it"),
+        "hunger_bremse_s": (int, 0, 600, "background harvest jobs (pass check, learning run, calibration top-up) that wait longer than this many seconds for the worker get the next slot before the event stream continues; 0 disables the brake"),
+        "selbstwache": (bool, None, None, "watchdog thread probes this service's own /health every 15 s; after 4 consecutive failures it exits hard so the container restart policy brings the service back (covers full web-server hangs that even the remote restart endpoint cannot reach)"),
+        "urteil_marge": (float, 0.0, 0.5, "when several names pass the recognition rule in one event, none is confirmed unless the best cosine leads the runner-up by at least this margin (measured on field data: wrong names won by 0.001-0.047, a clean case led by 0.112); 0 disables the rule"),
+        "urteil_kante": (int, 0, 400, "minimum face edge in pixels for a frame to count as a recognition vote; a floor against absurd votes, not a separator (measured on field data: correct votes live at 30-49 px on overview cameras, the nonsense cases at 11-19 px; 70 would kill correct ones, 25 costs none); 0 disables"),
         "kalib_fueller_bilder": (int, 1, 200, "calibration top-up: how many pictures the 'look for fresh material' button aims to collect for a camera before it stops"),
         "kalib_fueller_events": (int, 1, 500, "calibration top-up: how many recent person events of that camera it may work through at most — whichever limit is reached first ends the run"),
         "nachhol_versuche": (int, 0, 5, "retry attempts for events whose analysis failed (0 = off); retries are silent, they never alert"),
@@ -3719,7 +3950,7 @@ class Service:
         "fd_front_min": (float, 0.5, 1.0, "false-detection rule: frontality at/above which a detection looks like a static object (calibrated 0.85)"),
         "fd_sharp_min": (int, 200, 5000, "false-detection rule: sharpness (Laplacian var.) at/above which a crop is edge-rich like vegetation/spokes (calibrated 1500)"),
         "fd_det_max": (float, 0.5, 0.9, "false-detection rule: only detections BELOW this detector score can be discarded (calibrated 0.70)"),
-        "det_thresh": (float, 0.3, 0.7, "SCRFD detector threshold (insightface default 0.5); raising it costs real faces — visible here, not a tuning hint"),
+        "det_thresh": (float, 0.3, 0.7, "SCRFD detector threshold (factory 0.40, same as the live path); raising it costs real faces — visible here, not a tuning hint"),
         # E2 harvest gates (measured V0.5; gate L's knobs are the fd_* rule above)
         "ernte_m_det_min": (float, 0.4, 0.9, "harvest gate M: min. detector score for a crop-worthy face (calibrated 0.60)"),
         "ernte_m_kante_min": (int, 20, 200, "harvest gate M: min. face edge in px (calibrated 60)"),
@@ -4922,7 +5153,7 @@ class Service:
         Galerien, gruener Test, Kandidaten-Quelle). Ausschalten geht immer."""
         block, _prot, vor = self.vision_lage()
         if an and not vor["erfuellt"]:
-            # .362 (Feld-Fund Giuseppe): uebersetzte Antwort statt EN-Literal.
+            # .362 (Feld-Fund Tester B): uebersetzte Antwort statt EN-Literal.
             # Drei literale t()-Aufrufe je Code (kein dynamischer Key,
             # s. routes/vision._fehlt_text — gleicher Gate-Fang).
             def _fehlt_text(code, params):
@@ -5610,7 +5841,7 @@ class Service:
         zuruecklassen. Faellt bei execv-Fehler auf os._exit(0) zurueck (dann uebernimmt ein evtl.
         vorhandener Supervisor doch noch). cwd ist stabil (kein os.chdir im Code), daher loest die
         relative --config nach dem re-exec wieder korrekt auf."""
-        # Wiedereintritts-Sperre (Feld-Fund 28.08., Shaun: drei identische
+        # Wiedereintritts-Sperre (Feld-Fund 28.08., Tester A: drei identische
         # Config-Saves in 40 s = drei parallele Neustart-Threads, die sich
         # denselben lock, worker_stoppen() und execv teilen wollten). Der
         # ERSTE gewinnt, jeder weitere Aufruf ist ein No-Op mit Logzeile —
@@ -5721,7 +5952,25 @@ class Service:
 
     # ------------------------------------------------- Lern-Lauf (E1): Selbstmessung
     _wanduhr_start_lock = threading.Lock()        # Klassen-Lock: Doppelstart-Rennen (F2.2)
-    _lernlauf_start_lock = threading.RLock()      # E2: check-then-act der Lauf-Starter atomar
+    _lernlauf_start_lock = threading.RLock()
+    _bruecke_anlage_lock = threading.RLock()      # S2: Ueberlapp-Suche + Manifest + Alt-Raeumen atomar
+    # B4 Hunger-Bremse (User-Go 01.09., Vorschlag 31.08.): wartet ein
+    # Hintergrund-Job (Pass-/Lernlauf-/Fueller-Ernte) laenger als
+    # hunger_bremse_s auf den Worker, laesst der Event-Strom VOR dem
+    # naechsten Event eine Luecke, bis der Job den Slot hat. Nur
+    # Zeitstempel, kein Lock (Zuweisung atomar genug fuer eine Vorrangs-
+    # Heuristik); der PULS haelt die Bremse ehrlich — ein toter Warter
+    # bremst nach 10 s nicht mehr.
+    _bg_hunger_seit = None
+    _bg_hunger_puls = 0.0
+
+    def _bg_hungert(self):
+        if self._bg_hunger_seit is None:
+            self._bg_hunger_seit = time.monotonic()
+        self._bg_hunger_puls = time.monotonic()
+
+    def _bg_satt(self):
+        self._bg_hunger_seit = None      # E2: check-then-act der Lauf-Starter atomar
     #                                               (ThreadingHTTPServer; RLock, weil der
     #                                               POST-Handler Starter UNTER dem Lock ruft)
     LERNLAUF_EVENTS_MAX = 40000                   # EIN Eingabe-Deckel fuer POST/GET/Wizard
@@ -6305,74 +6554,83 @@ class Service:
         eids = sorted({str(e) for e in eids if e})
         if not eids:
             return "fehler", "no events in this pass"
-        wurzel = os.path.join(dd, "state", "lernlauf")
-        bdir, bid, bekannt = None, None, set()
-        # Ueberlapp-Suche: ein Bruecken-Lauf derselben Person, der mindestens
-        # ein Event dieses Passes traegt (Hook kennt nur die bestaetigten
-        # Events, der Klick den ganzen Durchgang — beide meinen denselben Pass).
-        best = 0
-        try:
-            for d in os.listdir(wurzel):
-                if not d.startswith("B"):
-                    continue
-                m = _ern.manifest_lesen(os.path.join(wurzel, d)) or {}
-                if m.get("person") != person:
-                    continue
-                ue = len(set(m.get("eids") or []) & set(eids))
-                if ue > best:
-                    best, bdir, bid, bekannt = ue, os.path.join(wurzel, d), d, set(m.get("eids") or [])
-        except OSError:
-            pass
-        if bdir is None:
-            bid = "B" + hashlib.sha1("\n".join(eids).encode()).hexdigest()[:10]
-            bdir = os.path.join(wurzel, bid)
-        laeuft = os.path.join(bdir, "laeuft.json")
-        fehler = os.path.join(bdir, "fehler.json")
-        if os.path.isfile(fehler):
+        # S2 (01.09.): Suche+Anlage+Auswertung atomar — Doppel-Anlage
+        # derselben Person (Timer+Klick) und rmtree-Kollisionen (siehe
+        # _bruecke_alt_raeumen, gleiches Lock) ausgeschlossen; die Ernte
+        # selbst laeuft im Thread AUSSERHALB der Sperre.
+        with self._bruecke_anlage_lock:
+            wurzel = os.path.join(dd, "state", "lernlauf")
+            bdir, bid, bekannt = None, None, set()
+            # Ueberlapp-Suche: ein Bruecken-Lauf derselben Person, der mindestens
+            # ein Event dieses Passes traegt (Hook kennt nur die bestaetigten
+            # Events, der Klick den ganzen Durchgang — beide meinen denselben Pass).
+            best = 0
             try:
-                with open(fehler, encoding="utf-8") as f:
-                    txt = json.load(f).get("fehler", "")
-            except Exception:
-                txt = "harvest failed"
-            try:
-                os.unlink(fehler)          # naechster Anstoss versucht es neu
+                for d in os.listdir(wurzel):
+                    if not d.startswith("B"):
+                        continue
+                    m = _ern.manifest_lesen(os.path.join(wurzel, d)) or {}
+                    if m.get("person") != person:
+                        continue
+                    ue = len(set(m.get("eids") or []) & set(eids))
+                    if ue > best:
+                        best, bdir, bid, bekannt = ue, os.path.join(wurzel, d), d, set(m.get("eids") or [])
             except OSError:
                 pass
-            return "fehler", txt
-        if os.path.isfile(laeuft):
-            try:
-                alter = time.time() - os.path.getmtime(laeuft)
-            except OSError:
-                alter = 0
-            if alter < 900:
-                # .310 (User-Fund: 'model did not load' nach 60 s Warten hinter
-                # der Bestands-QS): die Ernte schreibt i/n/zustand in
-                # laeuft.json — der Klick-Handler reicht es durch, das Blatt
-                # zeigt einen kleinen Balken und gibt nicht per Zaehler auf.
-                return "laeuft", self._bruecke_fortschritt(laeuft)
-        geerntet, _summe = _ern.fertig_lesen(bdir) if os.path.isdir(bdir) else (set(), {})
-        fehlend = [e for e in eids if e not in geerntet]
-        if not fehlend and os.path.isfile(os.path.join(bdir, "vorrat.jsonl")):
-            return "fertig", self._bruecke_angebote(bdir, bid, person)
-        # Start (oder Nachernte der fehlenden Events): Regime einfrieren,
-        # Event-Menge im Manifest vereinigen, Hintergrund-Ernte
-        os.makedirs(bdir, exist_ok=True)
-        schwellen = ernte_schwellen_aus_cfg(self.cfg)
-        if _ern.schwellen_pruefen(schwellen):
-            return "fehler", "harvest thresholds missing in config"
-        alle = sorted(bekannt | set(eids))
-        _ern.manifest_schreiben(bdir, {"schema": 2, "bruecke": True, "person": person,
-                                       "version": os.environ.get("SUSLIK_VERSION", "dev"),
-                                       "modell": self.cfg.get("modell"),
-                                       "fps_sample": self.cfg.get("fps_sample"),
-                                       "schwellen": schwellen, "eids": alle,
-                                       "angelegt": round(time.time(), 1)})
-        self._bruecke_puls(laeuft, 0, len(fehlend), "wartet")
-        self._bruecke_alt_raeumen(dd)
-        threading.Thread(target=self._bruecke_ernte,
-                         args=(bdir, bid, fehlend, alle, schwellen),
-                         daemon=True, name="bruecke-ernte").start()
-        return "laeuft", self._bruecke_fortschritt(laeuft)
+            if bdir is None:
+                # S2-Fix 01.09.: die ID trug NUR die Events — zwei Personen
+                # desselben Durchgangs (Bulk-Benennung) bekamen denselben Ordner
+                # (199x FileNotFoundError beim Feldtester). Person gehoert in die
+                # Identitaet; Alt-Ordner findet die Ueberlapp-Suche weiter.
+                bid = "B" + hashlib.sha1((person + "\n" + "\n".join(eids)).encode()).hexdigest()[:10]
+                bdir = os.path.join(wurzel, bid)
+            laeuft = os.path.join(bdir, "laeuft.json")
+            fehler = os.path.join(bdir, "fehler.json")
+            if os.path.isfile(fehler):
+                try:
+                    with open(fehler, encoding="utf-8") as f:
+                        txt = json.load(f).get("fehler", "")
+                except Exception:
+                    txt = "harvest failed"
+                try:
+                    os.unlink(fehler)          # naechster Anstoss versucht es neu
+                except OSError:
+                    pass
+                return "fehler", txt
+            if os.path.isfile(laeuft):
+                try:
+                    alter = time.time() - os.path.getmtime(laeuft)
+                except OSError:
+                    alter = 0
+                if alter < 900:
+                    # .310 (User-Fund: 'model did not load' nach 60 s Warten hinter
+                    # der Bestands-QS): die Ernte schreibt i/n/zustand in
+                    # laeuft.json — der Klick-Handler reicht es durch, das Blatt
+                    # zeigt einen kleinen Balken und gibt nicht per Zaehler auf.
+                    return "laeuft", self._bruecke_fortschritt(laeuft)
+            geerntet, _summe = _ern.fertig_lesen(bdir) if os.path.isdir(bdir) else (set(), {})
+            fehlend = [e for e in eids if e not in geerntet]
+            if not fehlend and os.path.isfile(os.path.join(bdir, "vorrat.jsonl")):
+                return "fertig", self._bruecke_angebote(bdir, bid, person)
+            # Start (oder Nachernte der fehlenden Events): Regime einfrieren,
+            # Event-Menge im Manifest vereinigen, Hintergrund-Ernte
+            os.makedirs(bdir, exist_ok=True)
+            schwellen = ernte_schwellen_aus_cfg(self.cfg)
+            if _ern.schwellen_pruefen(schwellen):
+                return "fehler", "harvest thresholds missing in config"
+            alle = sorted(bekannt | set(eids))
+            _ern.manifest_schreiben(bdir, {"schema": 2, "bruecke": True, "person": person,
+                                           "version": os.environ.get("SUSLIK_VERSION", "dev"),
+                                           "modell": self.cfg.get("modell"),
+                                           "fps_sample": self.cfg.get("fps_sample"),
+                                           "schwellen": schwellen, "eids": alle,
+                                           "angelegt": round(time.time(), 1)})
+            self._bruecke_puls(laeuft, 0, len(fehlend), "wartet")
+            self._bruecke_alt_raeumen(dd)
+            threading.Thread(target=self._bruecke_ernte,
+                             args=(bdir, bid, fehlend, alle, schwellen),
+                             daemon=True, name="bruecke-ernte").start()
+            return "laeuft", self._bruecke_fortschritt(laeuft)
 
     @staticmethod
     def _bruecke_puls(laeuft, i, n, zustand):
@@ -6449,13 +6707,16 @@ class Service:
         import shutil
         wurzel = os.path.join(dd, "state", "lernlauf")
         grenze = time.time() - tage * 86400
-        try:
-            for d in os.listdir(wurzel):
-                p = os.path.join(wurzel, d)
-                if d.startswith("B") and os.path.isdir(p) and os.path.getmtime(p) < grenze:
-                    shutil.rmtree(p, ignore_errors=True)
-        except OSError:
-            pass
+        # S2 [QS15]: rmtree nie neben einer laufenden Anlage — dasselbe
+        # RLock wie bruecke_vorrat (reentrant fuer den heutigen Aufruf).
+        with self._bruecke_anlage_lock:
+            try:
+                for d in os.listdir(wurzel):
+                    p = os.path.join(wurzel, d)
+                    if d.startswith("B") and os.path.isdir(p) and os.path.getmtime(p) < grenze:
+                        shutil.rmtree(p, ignore_errors=True)
+            except OSError:
+                pass
 
     def kalib_fueller_starten(self, kamera):
         """Materialsuche fuer die Kalibrierseite EINER Kamera (Etappe 4 des
@@ -6496,9 +6757,14 @@ class Service:
             return False, "harvest thresholds missing in config"
         deckel_ev = int(cfg.get("kalib_fueller_events") or 0)
         lauf_dir = os.path.join(cfg["data_dir"], "state", "kalib_ernte", kamera)
-        shutil.rmtree(lauf_dir, ignore_errors=True)     # Reste eines Vorlaufs
-        os.makedirs(lauf_dir, exist_ok=True)
         timeout_s = int(cfg.get("nachhol_analyse_timeout_s") or 300)
+
+        def _vorbereiten():
+            # K1: laeuft UNTER der Ein-Lauf-Sperre des Fuellers — ein
+            # Doppelklick kann dem laufenden Lauf den Ordner nicht mehr
+            # wegziehen (Feldtester-Fund 01.09.).
+            shutil.rmtree(lauf_dir, ignore_errors=True)
+            os.makedirs(lauf_dir, exist_ok=True)
 
         def _events():
             evs, _seiten = _erg_kf.person_events(
@@ -6507,11 +6773,18 @@ class Service:
             return evs
 
         def _job(eid, ts):
+            _warte_seit = time.monotonic()
             while True:
                 # Slot-Regel wie im Pass-Check: Hintergrund-Jobs seriell, die
                 # Live-Wache hat Vorrang. Wartende Runden kosten eine Sekunde.
+                if time.monotonic() - _warte_seit > 5:
+                    _kf.notiz(kamera, "waiting for a free worker slot")
+                self._bg_hungert()                        # B4
                 if not (self._gpu_bg_lock.locked() or self.lock.locked()):
+                    _kf.notiz(kamera, "")
+                    self._bg_satt()
                     with self._gpu_bg_lock:
+                        self._bg_satt()               # B4
                         if not self.lock.locked():
                             return self._worker().job(
                                 {"typ": "ernte", "eid": eid, "kamera": kamera,
@@ -6526,11 +6799,45 @@ class Service:
                                 timeout_s=timeout_s)
                 time.sleep(1)
 
+        def _abschluss():
+            # K6 (01.09., A4-Befund: 27 von 31 Tester-Kameras ohne Vorrat,
+            # niemand sagte WARUM): die Ernte-Zaehler des Laufs werden VOR
+            # dem Wegraeumen als Bilanz je Kamera gesichert — die
+            # Uebersichts-Kachel erklaert einen leeren Vorrat damit ehrlich
+            # (kein Gesicht / zu klein / Vorrats-Guete nicht erreicht),
+            # statt nur "leer" zu sagen. Ohne neue Messung: es sind exakt
+            # die Zaehler, die fertig.jsonl ohnehin traegt.
+            try:
+                _eids_b, _sum_b = _ern_kf.fertig_lesen(lauf_dir)
+                _bp = os.path.join(cfg["data_dir"], "state", "kalib_bilanz.json")
+                try:
+                    with open(_bp, encoding="utf-8") as _f_b:
+                        _alle_b = json.load(_f_b)
+                    if not isinstance(_alle_b, dict):
+                        _alle_b = {}
+                except Exception:
+                    _alle_b = {}
+                _alle_b[kamera] = {
+                    "ts": round(time.time(), 1),
+                    "events": len(_eids_b),
+                    "detektionen": int(_sum_b.get("detektionen") or 0),
+                    "m": int(_sum_b.get("m") or 0),
+                    "v": int(_sum_b.get("v") or 0),
+                    "ohne_gesicht": int(_sum_b.get("ohne_gesicht") or 0)}
+                _tmp_b = _bp + ".tmp"
+                with open(_tmp_b, "w", encoding="utf-8") as _f_b:
+                    json.dump(_alle_b, _f_b, ensure_ascii=False)
+                os.replace(_tmp_b, _bp)
+            except Exception as _e_b:                       # noqa: BLE001
+                self.log(f"calibration top-up {kamera}: balance not saved "
+                         f"({type(_e_b).__name__}: {_e_b})")
+            shutil.rmtree(lauf_dir, ignore_errors=True)
+
         return _kf.starten(
             kamera, int(cfg.get("kalib_fueller_bilder") or 0), deckel_ev,
             _events, _job, lambda: _lw_kf.kalib_lesen(cfg, kamera),
-            log=self.log,
-            abschluss=lambda: shutil.rmtree(lauf_dir, ignore_errors=True))
+            log=self.log, vorbereitung=_vorbereiten,
+            abschluss=_abschluss)
 
     def _bruecke_ernte(self, bdir, bid, eids, alle_eids, schwellen):
         """Hintergrund-Ernte eines Passes: 1 Worker-Job je FEHLENDEM Event
@@ -6570,11 +6877,13 @@ class Service:
                 start = float(d.get("start") or d.get("ts") or 0)
                 abgesendet, antwort = False, None
                 while not abgesendet:
+                    self._bg_hungert()            # B4
                     # Slot belegt (anderer GPU-Hintergrund-Job oder Live) ->
                     # EHRLICH 'wartet' melden statt still zu stehen (.310)
                     if self._gpu_bg_lock.locked() or self.lock.locked():
                         self._bruecke_puls(laeuft, i_fertig, n_ges, "wartet")
                     with self._gpu_bg_lock:
+                        self._bg_satt()               # B4
                         if not self.lock.locked():
                             self._bruecke_puls(laeuft, i_fertig, n_ges, "erntet")
                             antwort = self._worker().job(
@@ -7137,6 +7446,7 @@ class Service:
                     return
                 antwort, abgesendet = None, False
                 while not abgesendet:
+                    self._bg_hungert()            # B4
                     with self._gpu_bg_lock:         # BG-Jobs seriell; Live-Wache HIER,
                         if not self.lock.locked():  # nicht davor (sonst veraltet sie)
                             antwort = self._worker().job(
@@ -7323,7 +7633,7 @@ class Service:
                     rest_txt = f"~{int(round(rest_s / 60))} min"
                 except Exception:
                     pass
-                # Feld-Fund 28.08. (Shaun-Log): 5 h 22 min Ernte OHNE eine
+                # Feld-Fund 28.08. (Tester-A-Log): 5 h 22 min Ernte OHNE eine
                 # einzige Dienst-Log-Zeile — der Fortschritt lebte nur in der
                 # UI-Datei, eine Ferndiagnose per Log war blind. Gedrosselt
                 # (alle 25 Events oder 10 min, was zuerst kommt) EINE Zeile
@@ -7528,7 +7838,10 @@ class Service:
         with open(os.path.join(self.cfg["data_dir"], "faces", "refs_meta.jsonl"), "a") as f:
             f.write(json.dumps({"ts": round(time.time(), 1), "person": ziel_person,
                                 "datei": ziel_name, "herkunft": "enrollment",
-                                "eid": d["eid"], "aktiv": True}, ensure_ascii=False) + "\n")
+                                "eid": d["eid"], "aktiv": True,
+                                "camera": d.get("camera"),
+                                "fiqa_t": d.get("fiqa_t"),
+                                "empf": d.get("empf")}, ensure_ascii=False) + "\n")
             f.flush()
         import anlernen as _al                    # .313: einpflegen statt verwerfen
         if not _al.refcache_ergaenzen_viele(ziel_person, [(os.path.join(ziel_dir, ziel_name),
@@ -7737,6 +8050,17 @@ class Service:
         koerper=True (nur .161-Nachanalyse): derselbe stumme Weg, aber der Koerper-Strang
         laeuft mit, weil NUR er die beurteilten Bilder in den Kontroll-Speicher legt."""
         cfg = self.cfg
+        _hb = int(cfg.get("hunger_bremse_s") or 0)
+        if _hb and self._bg_hunger_seit is not None:
+            # B4: dem hungernden Hintergrund-Job die Luecke lassen — mit
+            # Deckel (120 s) und Lebens-Puls, damit ein gestorbener Warter
+            # den Event-Strom nie festhaelt.
+            _hb_deckel = time.monotonic() + 120
+            while (self._bg_hunger_seit is not None
+                   and time.monotonic() - self._bg_hunger_seit > _hb
+                   and time.monotonic() - self._bg_hunger_puls < 10
+                   and time.monotonic() < _hb_deckel):
+                time.sleep(0.5)
         with self.lock:                                   # ein Event nach dem anderen (GPU)
             if eid in self.processed and not nachhol:     # Nachhol darf den Guard passieren, OHNE
                 return None                               # self.processed zu manipulieren (kein Race
@@ -8188,20 +8512,25 @@ class Service:
         if self.dry_alert:
             self.log(f"DRY-PRESENCE: {msg}")
             return False
-        try:
-            # push() liefert False, wenn Pushover die Nachricht ABLEHNT (status != 1, z.B.
-            # falsches token/user). Ohne diese Pruefung stand "PRESENCE-PUSH" im Log und die
-            # UI zeigte "gepusht", waehrend nie ein Push ankam.
-            if not push(cfg, _sprache.t("meldung.titel.kategorie",
-                                        wort=_kat_wort("erkannt")),
-                        msg, self._best_crop(event_dir, entry, neu)):
-                self.log(f"presence push REJECTED by Pushover (status!=1) — check token/user: {msg}")
-                return False
-            self.log(f"PRESENCE-PUSH: {msg}")
-            return True
-        except Exception as e:
-            self.log(f"presence push failed: {e}")
-            return False
+        # W3 Stufe 1 (.399): der HTTP-Push wandert in die Spur (Beschluss,
+        # Ruhefenster-Zustand und Text sind oben schon gefallen/gepflegt).
+        # Der presence_push-Marker heisst ab jetzt "beschlossen und
+        # eingereiht"; eine Ablehnung/Fehlschlag steht laut im Log (die
+        # push()-False-Pruefung bleibt — Lehre: nie "gepusht" zeigen,
+        # waehrend nie ein Push ankam; das Log traegt jetzt die Wahrheit).
+        titel = _sprache.t("meldung.titel.kategorie", wort=_kat_wort("erkannt"))
+        anhang = self._best_crop(event_dir, entry, neu)
+
+        def _senden():
+            try:
+                if not push(cfg, titel, msg, anhang):
+                    self.log(f"presence push REJECTED by Pushover (status!=1) — check token/user: {msg}")
+                    return
+                self.log(f"PRESENCE-PUSH: {msg}")
+            except Exception as e:                          # noqa: BLE001
+                self.log(f"presence push failed: {e}")
+        self._spur(f"presence {entry['eid']}", _senden)
+        return True
 
     def process_safe(self, eid, nachhol=0, koerper=False):
         """process() fuer Timer-/Sweep-Threads: Exception darf nie einen Thread still toeten."""
@@ -8379,7 +8708,7 @@ class Service:
                 befreit = 0
                 geloescht = 0
                 for fn in gone:
-                    # Feld-Fund 28.08. (Shaun-Log 09:48:58): eine .part-Datei
+                    # Feld-Fund 28.08. (Tester-A-Log 09:48:58): eine .part-Datei
                     # verschwand zwischen listdir und remove (personwork
                     # raeumte sie selbst weg) — die FileNotFoundError fiel in
                     # den aeusseren Fang und beendete den GANZEN Durchgang
@@ -8560,6 +8889,21 @@ class Service:
         try:
             st = dict(getattr(self, "_sweep_stand", None) or {})
             st["grund"] = None
+            # W3 Stufe 1 (.399): Lebenszeichen der neuen Fliessbaender —
+            # MQTT-Event-Warteschlange und Melde-Spur, fuer Kachel + Verlauf.
+            try:
+                q = getattr(self, "_ev_q", None)
+                st["queue_n"] = len(q) if q is not None else 0
+                st["queue_aeltester_s"] = (round(time.time() - q[0][2], 1)
+                                           if q else 0.0)
+            except Exception:                                 # noqa: BLE001
+                pass
+            try:
+                st["spur_n"] = len(getattr(self, "_spur_q", ()) or ())
+                st.update({f"spur_{k}": v for k, v in
+                           (getattr(self, "_spur_stat", None) or {}).items()})
+            except Exception:                                 # noqa: BLE001
+                pass
             aus["rueckstau"] = st
         except Exception:                                     # noqa: BLE001
             pass
@@ -8834,18 +9178,28 @@ class Service:
         if self.dry_alert:
             self.log(f"DRY-ALERT: {msg}")
             return False
-        try:
-            ok = push(self.cfg, _sprache.t("meldung.titel.kategorie",
-                                           wort=_kat_wort(entry["kategorie"])),
-                      msg, anhang)
-            if ok:
-                self.last_alert = now
-            else:
+        # W3 Stufe 1 (.399): der 20-s-HTTP-Push wandert in die Spur; der
+        # Cooldown gilt ab BESCHLUSS (sonst koennten zwei Events im selben
+        # Fenster beide beschliessen, waehrend der erste noch sendet).
+        # Scheitert der Versand, setzt die Spur den Cooldown zurueck und
+        # loggt — der naechste Alarm darf dann sofort (alte Semantik im
+        # Fehlerfall). Der alerted-Marker heisst ab jetzt "beschlossen und
+        # eingereiht"; der Fehlschlag steht laut im Log.
+        self.last_alert = now
+        titel = _sprache.t("meldung.titel.kategorie",
+                           wort=_kat_wort(entry["kategorie"]))
+
+        def _senden():
+            try:
+                ok = push(self.cfg, titel, msg, anhang)
+            except Exception as e:                          # noqa: BLE001
+                self.log(f"Pushover error: {e}")
+                ok = False
+            if not ok:
                 self.log("alert REJECTED by Pushover (status!=1) — check token/user")
-            return ok
-        except Exception as e:
-            self.log(f"Pushover error: {e}")
-            return False
+                self.last_alert = 0.0
+        self._spur(f"alert {entry['eid']}", _senden)
+        return True
 
     # -------------------------------------------------------------- Trigger: poll / Nachhol-Sweep
     # ------------------------------------------------- .371 Zurueckgehaltener Stapel
@@ -9494,7 +9848,7 @@ class Service:
                 after = d.get("after", {})
                 if d.get("type") == "end" and after.get("label") == "person":
                     eid = after.get("id")
-                    threading.Timer(self.cfg["clip_delay"], self.process_safe, args=(eid,)).start()
+                    self.event_einreihen(eid)
             except Exception as e:
                 self.log(f"MQTT payload error: {e}")
 
@@ -9553,7 +9907,16 @@ def make_handler(svc):
             # laeuft VOR dem blockierenden readline() in super(); der
             # Store-Reader ist mtime-gecacht (B2), im Normalfall eine stat().
             _sprache.aktivieren()
-            super().handle_one_request()
+            # K4 (01.09., Tester-Log): ein Reverse-Proxy davor resettet Verbindungen
+            # (Health-Checks, abgebrochene Clients) VOR oder MITTEN im Request —
+            # der Reset schlaegt dann im readline()/Parsen von super() auf, wo
+            # der _send-Fang (Fund 25.07.) nicht greift, und socketserver
+            # druckt je Reset einen vollen Traceback (100+ Bloecke am Morgen).
+            # Getrennte Verbindungen sind Normalbetrieb, kein Dienstfehler.
+            try:
+                super().handle_one_request()
+            except (ConnectionResetError, BrokenPipeError, TimeoutError):
+                self.close_connection = True
 
         def log_message(self, *a):
             pass
@@ -9894,9 +10257,17 @@ def make_handler(svc):
                             svc.log(f"unknown marked as {'object' if _an else 'person'}: {_uid}")
                         _msg = ((_sprache.t("antwort.unbek_objekt") if _an
                                  else _sprache.t("antwort.unbek_person"))
-                                if ok else "nicht gefunden")
+                                if ok else _sprache.t("antwort.unbek_weg"))
                         _a = {"ok": ok, "msg": _msg}
-                        _a.update(_unb_stand([_uid] if ok else []))
+                        # S3-Fix (Feldtester 01.09., "nothing happens"): nach
+                        # Massen-Merges zeigen offene Seiten VERALTETE Gruppen;
+                        # der Klick lief auf "nicht gefunden" (deutsches Hard-
+                        # Literal) und die Kachel blieb stehen — wirkte tot.
+                        # Jetzt: uebersetzte Ansage UND die Alt-Kachel raeumt
+                        # sich sichtbar weg (weg-Liste auch im ok=False-Fall).
+                        _a.update(_unb_stand([_uid]))
+                        if not ok and _uid not in (_a.get("weg") or []):
+                            _a.setdefault("weg", []).append(_uid)
                         return self._send(200, json.dumps(_a, ensure_ascii=False),
                                           "application/json")
                     if pfad == "/unbekannt_merge_viele":
@@ -9936,8 +10307,7 @@ def make_handler(svc):
                         # stehen. Ohne Haken bleibt der alte Weg (ganze Gruppe).
                         _ids = [str(x) for x in (d.get("ids") or []) if str(x)] or None
                         ok, msg, betroffen = anlernen.unbekannt_benennen(
-                            d.get("uid", ""), _person, emb=svc._emb, ids=_ids,
-                            kat_latten=_kk_ue.katalog_latten(cfg))
+                            d.get("uid", ""), _person, emb=svc._emb, ids=_ids)
                         if ok:
                             svc.log(f"UNKNOWN NAMED: {d.get('uid')} -> {d.get('person')} ({msg})"
                                     + (f" [{len(_ids)} of group ticked]" if _ids else ""))
@@ -10407,8 +10777,7 @@ def make_handler(svc):
                     # ueber diesen Weg und liess die Gesichter im Unbekannt-Pool zurueck
                     # (Karte blieb stehen, Event-Akte blieb "unknown").
                     ok, msg, betroffen = anlernen.benenne_mit_abzug(
-                        ids, person, emb=svc._emb,
-                        kat_latten=_kk_ue.katalog_latten(cfg))
+                        ids, person, emb=svc._emb)
                     if ok:
                         svc.log(f"ENROLL: {msg}")
                         svc.qs_neu_starten()               # nach Anlernen automatisch gegenpruefen
@@ -10675,14 +11044,14 @@ def make_handler(svc):
                                and _z0.get("wunsch_n") == _ev)
 
                 def _pl_lauf():
-                    # Feld-Fund 28.08. (Shaun-Log): diese Route schrieb KEINE
+                    # Feld-Fund 28.08. (Tester-A-Log): diese Route schrieb KEINE
                     # einzige Dienst-Log-Zeile — ein Person-Lauf war per
                     # Ferndiagnose unsichtbar (ein nackter 'personwork
                     # started' um 11:28 liess sich nicht einmal einem Lauf
                     # zuordnen). Start und Ende je eine Zeile.
                     svc.log(f"person learn run "
                             f"{'resumed' if _wieder else 'started'}: "
-                            f"{_ev} events for {_person or '?'}")
+                            f"{_ev} events for {_person or 'all named'}")
                     try:
                         if _wieder:
                             _z = dict(_z0, phase="ernte")
@@ -10708,9 +11077,15 @@ def make_handler(svc):
                                    ernte_job=_ernte_job)
                         _zf = (_pl.zustand_lesen(cfg["data_dir"]) or {})
                         _ff = _zf.get("fortschritt") or {}
+                        _evn = _ff.get('events', '?')
                         svc.log(f"person learn run finished: "
-                                f"{_ff.get('events', '?')} events, "
-                                f"{_ff.get('bilder', '?')} images harvested")
+                                f"{_evn} events, "
+                                f"{_ff.get('bilder', '?')} images harvested"
+                                + (f" — only {_evn} CONFIRMED passes exist in "
+                                   f"the window; the run learns from events "
+                                   f"where a face was already recognized, so "
+                                   f"name faces first and re-run later"
+                                   if isinstance(_evn, int) and _evn < 20 else ""))
                     except Exception as e:
                         svc.log(f"person learn run FAILED: "
                                 f"{type(e).__name__}: {str(e)[:120]}")
@@ -11726,6 +12101,8 @@ def make_handler(svc):
                             if m.get("emb"):
                                 zeile.update({"emb": [round(float(t), 5) for t in m["emb"]],
                                               "emb_modell": m.get("modell") or cfg["modell"],
+                                              "camera": m.get("kamera") or m.get("camera"),
+                                              "fiqa_t": m.get("fiqa_t"), "empf": m.get("empf"),
                                               "kante": m.get("kante"), "sharp": m.get("sharp"),
                                               "norm": m.get("norm"), "lauf_id": lid,
                                               # .314b (Widerleger): OHNE pose zaehlt die
@@ -11792,6 +12169,38 @@ def make_handler(svc):
                     {"ok": True, "token": _tok,
                      "msg": _sprache.t("antwort.support_token_neu")},
                     ensure_ascii=False), "application/json")
+            if pfad == "/neustart":
+                # Fern-Reset R(a) (01.09., User-Go nach zwei Tester-Haengern
+                # mit Hand-Neustart): der EINE Neustart-Weg ist
+                # Service.neustart() (re-exec, supervisor-unabhaengig).
+                # Antwort ZUERST raus, der Timer entkoppelt den execv vom
+                # Antwort-Socket — sonst gewinnt der execv das Rennen gegen
+                # das write und der Klicker sieht einen Netzwerkfehler.
+                self._send(200, json.dumps(
+                    {"ok": True, "msg": _sprache.t("antwort.neustart")},
+                    ensure_ascii=False), "application/json")
+                threading.Timer(0.5, svc.neustart,
+                                kwargs={"grund": "user request (settings page)"}).start()
+                return
+            if pfad == "/support/restart":
+                # Erster AKTIVER Support-Endpunkt (der uebrige /support/-Baum
+                # ist bewusst read-only GET). Gleicher Torwaechter wie dort:
+                # Schalter support_zugriff + Token live aus dem Store,
+                # Abweisung = generisches 404 (kein Orakel). Zweck: ein
+                # klemmendes Fern-System wieder erreichbar machen, ohne dass
+                # der Betreiber vor Ort sein muss. Grenze ehrlich: haengt der
+                # HTTP-Server selbst, erreicht dieser POST ihn nicht mehr —
+                # dafuer gibt es die Selbstwache (start_selbstwache).
+                from core import support as _sup2
+                _st = _lade_config_store(cfg)
+                if not _sup2.zugriff_ok(_st, self.headers.get("X-Support-Token")):
+                    _sup2.abweisung_zaehlen(svc.log)
+                    return self._send(404, "not found", "text/plain")
+                svc.log("SUPPORT: restart requested via support API")
+                self._send(200, json.dumps({"ok": True}), "application/json")
+                threading.Timer(0.5, svc.neustart,
+                                kwargs={"grund": "support API request"}).start()
+                return
             if pfad == "/sprache_speichern":       # Sprach-Stufe 1: Schrieb OHNE Neustart (Areas-Muster B12)
                 try:
                     n = int(self.headers.get("Content-Length", 0))
@@ -13092,6 +13501,15 @@ def make_handler(svc):
                                          "t": _gt_k.STARTWERTE["t"]})
                 else:
                     _cams_k, _cfehl_k = frigate_cameras(cfg)
+                    try:
+                        with open(os.path.join(cfg["data_dir"], "state",
+                                               "kalib_bilanz.json"),
+                                  encoding="utf-8") as _f_kb:
+                            _bilanzen_k = json.load(_f_kb)
+                        if not isinstance(_bilanzen_k, dict):
+                            _bilanzen_k = {}
+                    except Exception:
+                        _bilanzen_k = {}
                     _inh_k = _r_kal.uebersicht(
                         _kk.uebersicht_daten(cfg, _cams_k),
                         _kk.global_latte(cfg),
@@ -13100,7 +13518,8 @@ def make_handler(svc):
                         bool(_r_kal.mitglieder_mit_guete(_saetze_k)),
                         (int(cfg.get("kalib_fueller_bilder") or 0),
                          int(cfg.get("kalib_fueller_events") or 0)),
-                        banner_leer=str(_cfehl_k or ""))
+                        banner_leer=str(_cfehl_k or ""),
+                        bilanzen=_bilanzen_k)
                 import webui   # lokal wie in den Nachbar-Zweigen — spaetere
                                    # lokale Imports machen den Namen funktionslokal
                                    # (UnboundLocalError beim ersten Prod-Aufruf, 31.08.)
@@ -13154,7 +13573,8 @@ def make_handler(svc):
                     deckel=int(cfg.get("live_kalib_max") or 0),
                     fueller=(int(cfg.get("kalib_fueller_bilder") or 0),
                              int(cfg.get("kalib_fueller_events") or 0)),
-                    hat_waechter=kamera in _g_lk)
+                    hat_waechter=kamera in _g_lk,
+                    fueller_stand=__import__("core.kalibfueller", fromlist=["stand"]).stand(kamera))
                 return self._send(200, webui.layout(
                     _sprache.t("livekalib.titel", name=kamera),
                     "/kalibrierung", inhalt, self._banner()))
@@ -15021,7 +15441,7 @@ def hardware_probe(placement_mess=None):
     from core.registry import knoten_von              # P3.1: Knoten-Muster aus der Registry
 
     def _intel_render(muster):
-        """Feld-Fund 28.08. (Shaun, CUDA-Maschine): renderD128 war die NVIDIA-
+        """Feld-Fund 28.08. (Tester A, CUDA-Maschine): renderD128 war die NVIDIA-
         Karte, die Probe meldete trotzdem 'iGPU found; no OpenVINO runtime'.
         Ein Render-Node allein belegt keine Intel-iGPU — der PCI-Vendor tut es
         (dieselbe sysfs-Quelle wie die CUDA-Knoten-Meldung weiter unten).
@@ -15529,7 +15949,7 @@ def startup_selfcheck(svc):
     if rv:
         erg("info", f"ROCm: {rv}")
     # S2 (Lieferung B): Speicherbild mit EHRLICHER HERKUNFT je Zahl. Anlass ist
-    # Giuseppes Worker-Sterben — ohne diese drei Zahlen bleibt jede Ferndiagnose
+    # das Worker-Sterben bei Tester B — ohne diese drei Zahlen bleibt jede Ferndiagnose
     # Raterei ("wieviel Speicher hat die Kiste eigentlich?"). Diagnose darf den
     # Start nie reissen (try wie die Nachbar-Schritte) und meldet NIE FAIL.
     try:
@@ -15917,6 +16337,9 @@ def main():
     svc.start_wartung()
     svc.start_stoerungswaechter()
     svc.start_plattenwache()                      # .313 Issue #25
+    svc.start_selbstwache()                       # R(b) 01.09.: eigener /health-Puls, harter Exit bei Voll-Haenger
+    svc.start_melde_spur()                        # W3 Stufe 1 (.399): Versand-Nachwehen raus aus dem Analyse-Lock
+    svc.start_event_queue()                       # W3 Stufe 1 (.399): geordnete Event-Queue statt Timer-Herde
     _systemstat.sammler_starten(cfg, svc.systemstat_dienst, svc.log)   # .341: Systemzahlen alle 60 s
     svc.start_nachhol()                   # gescheiterte Analysen spaeter stumm nachholen
     svc.start_frigate_probe()             # .281: Schoner-Sperre aktiv proben (MQTT-Leerlauf)

@@ -53,11 +53,11 @@ ANKER_STATUS = ("unbenannt", "benannt", "uebernommen", "verworfen")
 # E4a Namens-Ebene (Widerleger-MUSS): EINZIGE Namensquelle des Projekts —
 # anlernen/verifyd ziehen bei ihrer naechsten Anfassung hierher nach, kein
 # fuenftes Streu-Regex. Normalform: trimmen + Mehrfach-Leerzeichen buendeln.
-# .369 (Tester-Fund 29.08., Shaun): DIESES Modul fuehrte ein EIGENES, strengeres
+# .369 (Tester-Fund 29.08., Feldtester A): DIESES Modul fuehrte ein EIGENES, strengeres
 # Namensmuster — ohne Apostroph und ohne Klammern. Die zentrale Fassung in
 # core.registry erlaubt beides ausdruecklich ("O'Neill", "Anna (Nachbarin)"), weil
 # echte Namen so aus dem Frigate-Import kommen. Folge des Auseinanderlaufens: eine
-# Person namens "Joy O'Farrell" liess sich im Lernlauf nicht benennen
+# Person mit Apostroph im Nachnamen liess sich im Lernlauf nicht benennen
 # (/lernlauf/benennen antwortete "name invalid"), und ein trotzdem gesetzter Name
 # machte den Anker-Satz fuer die Wache ungueltig ("status benannt aber person
 # leer/ungueltig") — die Bilder verschwanden aus der Ansicht. Betroffen war beim

@@ -1,7 +1,7 @@
 """Dienst-Log auf die Platte (.354, User-Auftrag 27.08.).
 
 WARUM: Bis .353 gab es das Log nur zweimal fluechtig — als 300-Zeilen-Ringpuffer
-hinter /log und im `docker logs`-Puffer. Beim Feldtester Shaun deckte /log
+hinter /log und im `docker logs`-Puffer. Bei einem Feldtester deckte /log
 dadurch nur 18,6 Minuten ab, der interessante Startblock war laengst
 herausgerollt, und an `docker logs` kommt ein Nutzer ohne Shell-Zugang nicht
 heran. Ein Fehler, der nach einer Stunde auffaellt, war damit nicht mehr

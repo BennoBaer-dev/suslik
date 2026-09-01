@@ -59,7 +59,7 @@ def _quelle_wort(quelle):
 
 
 # ------------------------------------------------------------- Uebersicht
-def _kachel(k, deckel):
+def _kachel(k, deckel, bilanz=None):
     """EINE Kamera-Kachel. Sie beantwortet in dieser Reihenfolge: habe ich hier
     Material, wie alt ist es, welche Werte gelten — und dann erst die
     Knoepfe. Ein Kalibrier-Knopf ohne Material waere ein Weg ins Leere,
@@ -80,8 +80,22 @@ def _kachel(k, deckel):
                  f'<div class="dim lv-zeile">'
                  f'{t("kalib.kachel.stand", wann=html.escape(_wann(k["vorrat_ts"])))}</div>')
     else:
+        # K6 (01.09., A4-Befund beim Feldtester: 27 von 31 Kameras ohne
+        # Vorrat, die Kachel sagte nur "leer"): liegt eine Fueller-Bilanz
+        # vor, erklaert die Kachel den leeren Vorrat ehrlich — kein Gesicht
+        # gefunden (Uebersichts-/Distanz-Kamera), Gesichter zu klein/zu
+        # schwach, oder Material da, aber die Vorrats-Guete nicht erreicht.
+        hinweis = t("kalib.kachel.leer_hinweis")
+        if isinstance(bilanz, dict) and int(bilanz.get("events") or 0) > 0:
+            _ev = int(bilanz.get("events") or 0)
+            if int(bilanz.get("detektionen") or 0) == 0:
+                hinweis = t("kalib.kachel.bilanz_keine", ev=_ev)
+            elif int(bilanz.get("m") or 0) == 0:
+                hinweis = t("kalib.kachel.bilanz_klein", ev=_ev)
+            else:
+                hinweis = t("kalib.kachel.bilanz_zulauf", ev=_ev)
         stand = (f'<div class="lv-zeile">{t("kalib.kachel.leer")}</div>'
-                 f'<div class="dim lv-zeile">{t("kalib.kachel.leer_hinweis")}</div>')
+                 f'<div class="dim lv-zeile">{html.escape(hinweis)}</div>')
     werte = (f'<div class="dim lv-zeile">'
              f'{t("kalib.kachel.werte", det=_zahl(k["det"], 2), e=_zahl(k["e"]), tw=_zahl(k["t"]))}'
              f'</div>'
@@ -108,7 +122,7 @@ def _kachel(k, deckel):
 
 
 def uebersicht(daten, global_werte, kat_global, deckel, lauf_da,
-               fueller=(0, 0), banner_leer=""):
+               fueller=(0, 0), banner_leer="", bilanzen=None):
     """-> Seiten-INHALT der zentralen Uebersicht.
 
     daten        = core.kamerakalib.uebersicht_daten(...)
@@ -135,7 +149,8 @@ def uebersicht(daten, global_werte, kat_global, deckel, lauf_da,
                   f'<small>{html.escape(banner_leer or t("kalib.uebersicht.leer_hinweis"))}'
                   f'</small></div>')
     kacheln = '<div class="lv-grid">' + "".join(
-        _kachel(k, deckel) for k in daten) + '</div>'
+        _kachel(k, deckel, (bilanzen or {}).get(k["name"]))
+        for k in daten) + '</div>'
     glob = (f'<div class="card"><b>{t("kalib.global.titel")}</b>'
             f'<div class="dim lv-zeile">{t("kalib.global.satz")}</div>'
             f'<div class="lv-zeile">'
@@ -223,11 +238,11 @@ def lauf(saetze, cfg, defaults):
 <div class="kal-regler">
  <div class="kal-zeile"><b>{t("kalib.regler_e")}</b>
   <div class="kal-prosa">{t("kalib.regler_e_prosa")}</div>
-  <input type="range" id="kal-e" min="0" max="1" step="0.001" value="0">
+  <input type="range" id="kal-e" min="0.175" max="1" step="0.001" value="0.175">
   <span id="kal-e-wert"></span></div>
  <div class="kal-zeile"><b>{t("kalib.regler_t")}</b>
   <div class="kal-prosa">{t("kalib.regler_t_prosa")}</div>
-  <input type="range" id="kal-t" min="0" max="1" step="0.001" value="0">
+  <input type="range" id="kal-t" min="0.375" max="1" step="0.001" value="0.375">
   <span id="kal-t-wert"></span></div>
  <div id="kal-stand"></div>
  <button id="kal-std" class="gtb">{t("kalib.standard")}</button>

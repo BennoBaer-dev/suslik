@@ -415,7 +415,7 @@ def wizard(personen, auswahl_n, person_wahl, bilanz=None, lauf=None,
                      "for <b>" + wer + "</b> are already part of your learning "
                      "material — there was nothing new to harvest. New "
                      "walk-throughs become harvestable automatically.")
-        # Verwaiste Labels ausweisen (Issue #18 Carl/Rose): Bestaetigungen
+        # Verwaiste Labels ausweisen (Issue #18, Zwei-Namen-Fall): Bestaetigungen
         # geloeschter Personen werden bewusst NICHT geerntet — sagen, nie still.
         vw = dg.get("verwaiste_labels") or {}
         vw_zeile = ""

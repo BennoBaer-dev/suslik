@@ -623,7 +623,8 @@ def _job_ausfuehren(job, antwort_out=None):
             elif typ == "sammle":
                 import anlernen
                 anlernen.sammle(float(job.get("tage", 0.1)),
-                                mit_migriere=bool(job.get("mit_migriere", False)))
+                                mit_migriere=bool(job.get("mit_migriere", False)),
+                                kalib_deckel=job.get("kalib_deckel"))
             elif typ == "ernte":
                 # E2 Frontal-Ernte, EIN Event je Job (Leitprinzip 5). Z2
                 # (konzept_frames v2): Clip ueber core.frames statt eigener

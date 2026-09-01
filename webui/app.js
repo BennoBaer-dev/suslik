@@ -1818,6 +1818,7 @@ function _liveFelder() {
              still auf 2 zuruecksetzen, sobald das Feld einmal fehlt. */
           erkannt_n: (document.getElementById('lv-erkannt-n') || {}).value,
           erkannt_t_s: (document.getElementById('lv-erkannt-t') || {}).value,
+          erkannt_fenster_s: (document.getElementById('lv-erkannt-fenster') || {}).value,
           frigate_events: (document.getElementById('lv-frigate') || {}).checked,
           frigate_abstand_s: (document.getElementById('lv-frigate-abstand') || {}).value,
           /* Live-Performance Welle 1, Etappe A: bewegungsgesteuertes Abtasten.

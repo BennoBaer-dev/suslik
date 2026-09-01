@@ -196,7 +196,7 @@ history.
 ## 0.1.0.369 (2026-08-29)
 
 - **Names with an apostrophe work in learning runs again.** Naming a group
-  "Joy O'Farrell" was rejected as invalid, and where such a name had been set, the
+  with an apostrophe (like "O'Brien") was rejected as invalid, and where such a name had been set, the
   group counted as broken and its pictures disappeared from the view. The learning
   run carried its own, stricter name pattern that allowed neither apostrophes nor
   brackets, while the rest of the program has always allowed both, because real

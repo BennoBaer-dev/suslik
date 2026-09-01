@@ -1624,7 +1624,7 @@ def vorbedingungen(data_dir, vcfg, testprotokoll=None):
                                                  "kontrolle")))
     except OSError:
         kontrolle = False
-    # Feld-Fund Giuseppe 28.08.: die fehlt-Texte waren harte EN-Literale und
+    # Feld-Fund Tester B 28.08.: die fehlt-Texte waren harte EN-Literale und
     # standen auf der italienischen Seite englisch. Dieses Fach-Modul kennt
     # den Sprach-Layer bewusst nicht — es liefert CODES (+Parameter), die
     # Anzeige-Verbraucher (routes/vision, verifyd /vision-Schalter)

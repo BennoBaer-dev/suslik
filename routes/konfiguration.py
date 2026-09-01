@@ -154,6 +154,30 @@ def frigate_auth_sektion(cfg):
         '</table></div>')
 
 
+def wartung_sektion():
+    """R(a) Fern-Reset-Paket (01.09.): Neustart-Knopf fuer den Betreiber.
+    Kein Save-Umweg — der Klick fragt nach und ruft POST /neustart, der
+    Dienst re-exec't sich (Service.neustart, supervisor-unabhaengig)."""
+    frage = _js_str(t("konfiguration.neustart.frage"))
+    js = (f"if(confirm({frage}))"
+          "{fetch('/neustart',{method:'POST'})"
+          ".then(r=>r.json()).then(d=>{"
+          "document.getElementById('nr-status').textContent=d.msg||'';})"
+          ".catch(()=>{});}")
+    return (f'<div class="card"><b>{t("konfiguration.neustart.titel")}</b>'
+            f'<div class="dim">{t("konfiguration.neustart.satz")}</div>'
+            f'<p><button class="gtb" onclick="{js}">'
+            f'{t("konfiguration.neustart.knopf")}</button> '
+            f'<span id="nr-status" class="dim"></span></p></div>')
+
+
+def _js_str(text):
+    """Serverseitiger Text als JS-String-Literal (Quote-/Umlaut-sicher) —
+    zusaetzlich HTML-Attribut-sicher, weil das onclick im Attribut lebt."""
+    import json as _json
+    return _json.dumps(str(text), ensure_ascii=True).replace('"', "&quot;")
+
+
 def support_sektion(cfg):
     """Support-Zugriff (.362, analysen/support_api.md): Token-Karte. Der
     AN/AUS-Schalter (support_zugriff) liegt bewusst in der grossen Tabelle
@@ -257,6 +281,7 @@ def render(cfg, whitelist, auto_hinweis, kette=None, kette_lage=None, store=None
               + kette_html
               + frigate_auth_sektion(cfg)          # 5e: vor der grossen Tabelle,
                                                    # weil es zur Verbindung gehoert
+              + wartung_sektion()                  # R(a) 01.09.: Neustart-Knopf
               + support_sektion(cfg)               # .362: Token-Karte (Schalter
                                                    # selbst steht in der Tabelle)
               + f'<h3>{t("konfiguration.abschnitt_alle")}</h3>'

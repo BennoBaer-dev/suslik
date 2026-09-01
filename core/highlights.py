@@ -12,7 +12,7 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.0.391"   # Eintraege fuer .380 (Unknown-Umbau, Support-Vollzugriff) VOR Release mit User abstimmen (User 30.08.:
+STAND = "0.1.0.406"   # Eintraege fuer .380 (Unknown-Umbau, Support-Vollzugriff) VOR Release mit User abstimmen (User 30.08.:
                       # "whatsnew bleibt wie es ist").
                       # Davor: .371 = reiner STAND-Bump (User 30.08.:
                       # "whatsnew bleibt wie es jetzt ist" — die Box
@@ -349,35 +349,11 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
-    # .387 — INHALT VOM USER DIKTIERT (31.08. abends: What's new ist der
-    # komplette Umbau der Kernsysteme fuer die Personen-Erkennung, und es soll
-    # "nur noch ein roter Achtung-Beta"-Eintrag rein). EIN Eintrag, betont;
-    # Versions-Key beim Release-Lauf auf die finale Nummer ziehen, falls
-    # bis dahin weitere Builds kommen.
-    ("0.1.0.391", (
-        {"de": "Achtung, Zwischenversion: Diese Version baut das Kernsystem "
-               "der Personen-Erkennung komplett um — Live-Wache, Kamera-"
-               "Kalibrierung und Verarbeitung sind neu. Das ist ein "
-               "Entwicklungsstand.",
-         "en": "Heads-up, interim version: this release completely rebuilds "
-               "the core person recognition system — live watch, camera "
-               "calibration and processing are new. This is a development "
-               "state.",
-         "es": "Atención, versión intermedia: esta versión reconstruye por "
-               "completo el sistema central de reconocimiento de personas — "
-               "la vigilancia en vivo, la calibración de cámaras y el "
-               "procesamiento son nuevos. Es un estado de desarrollo.",
-         "it": "Attenzione, versione intermedia: questa versione ricostruisce "
-               "completamente il sistema centrale di riconoscimento delle "
-               "persone — la sorveglianza live, la calibrazione delle "
-               "telecamere e l'elaborazione sono nuovi. È uno stato di "
-               "sviluppo.",
-         "fr": "Attention, version intermédiaire : cette version reconstruit "
-               "entièrement le système central de reconnaissance des "
-               "personnes — la surveillance en direct, le calibrage des "
-               "caméras et le traitement sont nouveaux. C'est un état de "
-               "développement.",
-         "betont": True},
+    # .387/.402 — Inhalt vom User abgestimmt (31.08. diktiert; 01.09.: der
+    # rote Zwischenversions-Hinweis fliegt wieder raus, "Rest kann alles so
+    # bleiben"). Versions-Key beim Release-Lauf auf die finale Nummer ziehen,
+    # falls bis dahin weitere Builds kommen.
+    ("0.1.0.406", (
         # Zwei Feature-Punkte vom User nachgereicht (31.08.: "neue Kalibrierung
         # pro Kamera und neue Unbekannt-Seite muessen mit rein").
         {"de": "Neu: Kalibrierung pro Kamera. Ein eigener Knopf oben in der "

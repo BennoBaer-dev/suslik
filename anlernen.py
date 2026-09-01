@@ -365,15 +365,21 @@ def _zulauf_urteil(k):
     return pool_zulauf(k, NORM_LATTE_ZULAUF or None, GUETE_LATTE_ZULAUF or None)
 
 
-def sammle(tage=5.0, fps_sample=2, mit_migriere=True):
+def sammle(tage=5.0, fps_sample=2, mit_migriere=True, kalib_deckel=None):
     """Gelockter Wrapper ums Sammeln (serialisiert gegen andere Pool-Schreiber, Review 21.07.).
     mit_migriere=False fuer das szenario-getriggerte Sofort-Sammeln (nur neue Gesichter, OHNE die
-    teure Pool-Neupruefung/Referenz-Neueinbettung — die macht der Reorganisieren-Button)."""
+    teure Pool-Neupruefung/Referenz-Neueinbettung — die macht der Reorganisieren-Button).
+    kalib_deckel (.398, User-Fund 01.09. an einer leeren Kalibrier-Kachel:
+    "eigentlich haette hier ein Szenario auswerten stattfinden muessen"):
+    Ring-Deckel je Kamera (live_kalib_max). Ist er gesetzt (> 0), legt das
+    Sammeln je Event sein BESTES Bild zusaetzlich in den Kalibrier-Ring der
+    Kamera — dieselbe Nebenprodukt-Oekonomie wie die Ernte, kein eigener
+    Rechenlauf. None/0 = aus (CLI-Altverhalten ohne den Wert)."""
     with pool_lock():
-        return _sammle_intern(tage, fps_sample, mit_migriere)
+        return _sammle_intern(tage, fps_sample, mit_migriere, kalib_deckel)
 
 
-def _sammle_intern(tage, fps_sample, mit_migriere):
+def _sammle_intern(tage, fps_sample, mit_migriere, kalib_deckel=None):
     os.makedirs(CROPS, exist_ok=True)
     emb = Embedder()
     refs = lade_master_refs(emb)
@@ -482,6 +488,28 @@ def _sammle_intern(tage, fps_sample, mit_migriere):
                       flush=True)
             mess_ges += mess_s
             mess_n += sum(verworfen.values()) + len(gewaehlt)
+            if gewaehlt and kalib_deckel:
+                # .398 Ring-Zulauf: das beste Bild des Events speist den
+                # Kalibrier-Ring der Kamera — der Kachel-Satz "Bilder kommen
+                # ... aus den Ereignis-Analysen" stimmt damit auch fuer den
+                # Szenario-Weg (K3-Loch: der Zentral-Umbau 31.08. erreichte
+                # nur Ernte-Jobs). mensch_ok=True als deklarierte Grenze wie
+                # beim Ernte-Zulauf: hier siebt das Zulauf-Urteil
+                # (Fehldetektions-Signatur + pool_zulauf), ein
+                # Pose-Skelett-Urteil gibt es auf diesem Weg nicht.
+                try:
+                    from core import livewache as _lw_ring
+                    _b0 = gewaehlt[0]
+                    _lw_ring.kalib_schreiben(
+                        {"data_dir": DATA}, _b0.get("camera") or "",
+                        _b0["ctx"], {"det": _b0.get("det"),
+                                     "e": _b0.get("empf"),
+                                     "t": _b0.get("fiqa_t")},
+                        deckel=int(kalib_deckel),
+                        log=lambda z: print("  " + z, flush=True))
+                except Exception as _e_ring:              # noqa: BLE001
+                    print(f"  calibration ring feed failed "
+                          f"({type(_e_ring).__name__}: {_e_ring})", flush=True)
             for lauf, best in enumerate(gewaehlt):
                 gid = eid.replace("/", "_") + ("" if lauf == 0 else f"~{lauf + 1}")
                 cv2.imwrite(os.path.join(CROPS, gid + ".jpg"), best.pop("ctx"))
@@ -672,55 +700,28 @@ def _clustere_referenz(gesichter=None, sim=SIM_DEFAULT):
 
 
 # ---------------------------------------------------------------- Benennen (Cluster -> Referenzen)
-def katalog_sieb(zeilen, kat_latten):
-    """DIE Katalog-Latte auf Pool-Zeilen (Drei-Latten-Semantik, User 31.08.).
-
-    Gefragt wird die EINE Funktion core.kamerakalib.katalog_ok — hier steht
-    kein zweiter Schwellenvergleich (Deckungs-Vertrag; die Stellenliste
-    fuehrt kamerakalib.UEBERNAHME_STELLEN). Die Pool-Zeile traegt seit .380
-    `camera`, `empf` und `fiqa_t`, die Latte kann hier also wirklich beissen;
-    ungemessene Zeilen kommen durch (Bestandsschutz).
-
-    -> (durch, abgelehnt) mit abgelehnt = [(zeile, grund)]."""
-    from core import kamerakalib as _kk
-    durch, abgelehnt = [], []
-    for z in zeilen:
-        ok, grund = _kk.katalog_ok(kat_latten, z.get("camera"),
-                                   z.get("empf"), z.get("fiqa_t"))
-        if ok:
-            durch.append(z)
-        else:
-            abgelehnt.append((z, grund))
-    return durch, abgelehnt
-
-
-def benenne(gesicht_ids, person, beste_n=5, emb=None, kat_latten=None):
+def benenne(gesicht_ids, person, beste_n=5, emb=None):
     """Die besten Gesichter eines Clusters als Referenzen fuer <person> in den Master legen.
     Legt refs/<person>/ an (neue Person moeglich), schreibt refs_meta; mit emb wird
     der refcache EINGEPFLEGT (.313), ohne emb verworfen wie bisher.
 
-    kat_latten (Zentral-Umbau 31.08.): die Katalog-Latten je Kamera
-    (core.kamerakalib.katalog_latten). Gesiebt wird VOR dem beste_n-Schnitt —
-    sonst belegte ein zu schwaches Bild einen Platz, den ein besseres haette
-    haben koennen. None = keine Latte, dann verhaelt sich diese Funktion wie
-    vor dem Umbau."""
+    KEINE Katalog-Latte auf diesem Weg (User-Entscheid 01.09., Screenshot
+    'Wer ist das?': "Wenn ich sage hinzufuegen, dann hinzufuegen"): jeder
+    Aufrufer dieser Funktion ist eine HAND-Auswahl je Bild (Today-Karte,
+    Cluster, Unbekannt-Benennung, Lern-Bruecke) — der bewusste Klick ist die
+    Pruefung, Aussieben danach kann der Quality-Check. Die Latte gilt weiter
+    auf den Automatik-Wegen (Lernlauf plan_bauen, Pool-Zulauf); Inventar in
+    core.kamerakalib.AUSNAHMEN. Von .385 bis .396 siebte auch dieser Weg
+    (kat_latten-Parameter) — bewusst zurueckgebaut."""
     import re, shutil
     from core.registry import PERSON_RE
     if not re.fullmatch(PERSON_RE, person or ""):
         return False, "ungueltiger Personenname"
     G = {g["id"]: g for g in lade_gesichter()}
     gewaehlt = [G[i] for i in gesicht_ids if i in G]
-    gewaehlt, kat_raus = katalog_sieb(gewaehlt, kat_latten)
     gewaehlt.sort(key=lambda g: -g["guete"])
     gewaehlt = gewaehlt[:beste_n]
     if not gewaehlt:
-        if kat_raus:
-            # NIE still: wenn die Latte alles genommen hat, muss der Satz das
-            # sagen — sonst sieht der Nutzer "keine gueltigen Gesichter" und
-            # sucht den Fehler bei sich.
-            return False, (f"keine Referenz angelegt — {len(kat_raus)} Bild(er) "
-                           f"unter der Katalog-Latte dieser Kamera "
-                           f"({kat_raus[0][1]})")
         return False, "keine gueltigen Gesichter"
     zdir = os.path.join(MASTER, person)
     os.makedirs(zdir, exist_ok=True)
@@ -734,8 +735,18 @@ def benenne(gesicht_ids, person, beste_n=5, emb=None, kat_latten=None):
                 continue
             ziel = f"anlern_{int(time.time())}_{g['id'][-24:]}.jpg"
             shutil.copyfile(quelle, os.path.join(zdir, ziel))
+            # .401 Messwerte-Durchreichung (User-Linie 01.09.: "die
+            # Kalibrierung laeuft immer"): Kamera + Guete-Masse der
+            # Pool-Zeile wandern MIT in die Katalog-Zeile — ohne sie war
+            # der Bestand fuer jede spaetere Latte/QS blind (Feldbefund:
+            # 1505 Nach-Update-Referenzen ohne Messwerte). Fehlt ein Mass
+            # (Alt-Pool), steht None — ehrlich ungemessen, Nachmessung
+            # holt es nach.
             mf.write(json.dumps({"ts": round(time.time(), 1), "person": person, "datei": ziel,
-                                 "herkunft": "anlernen", "eid": g["eid"], "aktiv": True},
+                                 "herkunft": "anlernen", "eid": g["eid"], "aktiv": True,
+                                 "camera": g.get("camera"),
+                                 "fiqa_t": g.get("fiqa_t"), "empf": g.get("empf"),
+                                 "kante": g.get("kante")},
                                 ensure_ascii=False) + "\n")
             neue.append((os.path.join(zdir, ziel), ziel))
             n += 1
@@ -745,9 +756,7 @@ def benenne(gesicht_ids, person, beste_n=5, emb=None, kat_latten=None):
             os.remove(os.path.join(CLIPS, "refcache.npz"))
         except FileNotFoundError:
             pass
-    return True, (f"{n} Referenzen fuer '{person}' angelegt"
-                  + (f" — {len(kat_raus)} Bild(er) unter der Katalog-Latte "
-                     f"dieser Kamera" if kat_raus else ""))
+    return True, f"{n} Referenzen fuer '{person}' angelegt"
 
 
 # ---------------------------------------------------------------- Unbekannt-Identitaeten (persistent)
@@ -1265,8 +1274,7 @@ def _pool_sicherung(mids):
             for m in mids if m in G]
 
 
-def benenne_mit_abzug(gesicht_ids, person, beste_n=None, emb=None,
-                      kat_latten=None):
+def benenne_mit_abzug(gesicht_ids, person, beste_n=None, emb=None):
     """Anlern-Weg der Today-Karte und des Cluster-Anlernens (/anlernen_benennen,
     Issue #19): benenne() + Pool-Abzug in EINEM gelockten Zug, damit angelernte
     Gesichter nicht wieder als unbekannt clustern und die Unknown-Karte verschwindet.
@@ -1287,33 +1295,17 @@ def benenne_mit_abzug(gesicht_ids, person, beste_n=None, emb=None,
                     if os.path.isfile(os.path.join(CROPS, str(i) + ".jpg"))]
         if not mit_crop:
             return False, "keine Crop-Dateien zu den gewaehlten Gesichtern — nichts angelernt", []
-        # KATALOG-LATTE (31.08.) VOR dem Abzug, nicht erst in benenne(): was
-        # nicht Referenz wird, darf auch nicht aus dem Pool verschwinden.
-        # Genau diese Reihenfolge war der Widerleger-Fund vom 11.08. (drei
-        # angetickte Gesichter wurden abgezogen UND vernichtet, ohne je
-        # Referenz zu werden) — die neue Latte darf ihn nicht wiederholen.
-        # Die Abgelehnten bleiben liegen statt geloescht zu werden: der
-        # Nutzer sieht sie beim naechsten Mal wieder, und das ist die
-        # harmlosere Haelfte (nicht-loeschen-Prinzip).
-        G_kat = {g["id"]: g for g in lade_gesichter()}
-        durch, kat_raus = katalog_sieb([G_kat[i] for i in mit_crop if i in G_kat],
-                                       kat_latten)
-        mit_crop = [g["id"] for g in durch]
-        if not mit_crop:
-            return False, (f"nichts angelernt — {len(kat_raus)} Bild(er) unter "
-                           f"der Katalog-Latte ihrer Kamera "
-                           f"({kat_raus[0][1] if kat_raus else ''})"), []
+        # Katalog-Latte hier ZURUECKGEBAUT (User-Entscheid 01.09.): der
+        # Nutzer hat jedes Bild einzeln angekreuzt — Hand schlaegt Latte,
+        # Begruendung im benenne()-Docstring.
         betroffen = _pool_sicherung(mit_crop)
-        ok, msg = benenne(mit_crop, person, emb=emb, kat_latten=kat_latten,
+        ok, msg = benenne(mit_crop, person, emb=emb,
                           beste_n=beste_n if beste_n else max(1, len(mit_crop)))
         if not ok:
             return False, msg, []
         _pool_abzug_intern(mit_crop)
-        if kat_raus:
-            msg += (f" — {len(kat_raus)} unter der Katalog-Latte, bleiben "
-                    f"im Pool")
-        if len(mit_crop) + len(kat_raus) < len(gesicht_ids):
-            msg += (f" — {len(gesicht_ids) - len(mit_crop) - len(kat_raus)} von "
+        if len(mit_crop) < len(gesicht_ids):
+            msg += (f" — {len(gesicht_ids) - len(mit_crop)} von "
                     f"{len(gesicht_ids)} ohne Crop-Datei, bleiben im Pool")
     return True, msg, betroffen
 
@@ -1373,17 +1365,15 @@ def nachpruefe_events(person, faces):
     return out
 
 
-def unbekannt_benennen(uid, person, beste_n=6, emb=None, ids=None,
-                       kat_latten=None):
+def unbekannt_benennen(uid, person, beste_n=6, emb=None, ids=None):
     """Gelockter Wrapper (Review 21.07.: serialisiert gegen das kontinuierliche Sammeln, das
     dieselbe gesichter.jsonl schreibt)."""
     with pool_lock():
         return _unbekannt_benennen_intern(uid, person, beste_n, emb=emb,
-                                          ids=ids, kat_latten=kat_latten)
+                                          ids=ids)
 
 
-def _unbekannt_benennen_intern(uid, person, beste_n=6, emb=None, ids=None,
-                               kat_latten=None):
+def _unbekannt_benennen_intern(uid, person, beste_n=6, emb=None, ids=None):
     """Eine Unbekannt-Identitaet zu einer bekannten Person machen: beste Gesichter als Referenzen
     anlegen, die Gesichter aus dem Unbekannt-Pool entfernen (Crops + gesichter.jsonl), Identitaet
     entfernen. Ab dem naechsten Event wird die Person erkannt und taucht nicht mehr als unbekannt
@@ -1411,8 +1401,7 @@ def _unbekannt_benennen_intern(uid, person, beste_n=6, emb=None, ids=None,
         # nichts, sie entscheidet nur, welche davon Referenz werden. benenne()
         # siebt und sagt es in seiner Meldung.
         betroffen = _pool_sicherung(mids)
-        ok, msg = benenne(mids, person, beste_n=beste_n, emb=emb,
-                          kat_latten=kat_latten)
+        ok, msg = benenne(mids, person, beste_n=beste_n, emb=emb)
         if not ok:
             return False, msg, []
         _pool_abzug_intern(mids)                            # Pool + Crops + Identitaet(en)
@@ -1428,22 +1417,13 @@ def _unbekannt_benennen_intern(uid, person, beste_n=6, emb=None, ids=None,
     # geloescht) — es bleibt in seiner Gruppe stehen. Der Preis ist, dass es
     # beim naechsten Mal wieder auftaucht; die Alternative waere, ein Bild zu
     # vernichten, das nie Referenz wurde (Widerleger-Fehlerklasse 11.08.).
-    G_kat = {g["id"]: g for g in lade_gesichter()}
-    durch, kat_raus = katalog_sieb([G_kat[m] for m in mit_crop if m in G_kat],
-                                   kat_latten)
-    mit_crop = [g["id"] for g in durch]
-    if not mit_crop:
-        return False, (f"nichts angelernt — {len(kat_raus)} Bild(er) unter der "
-                       f"Katalog-Latte ihrer Kamera "
-                       f"({kat_raus[0][1] if kat_raus else ''})"), []
+    # Katalog-Latte ZURUECKGEBAUT (User-Entscheid 01.09.): jedes Bild ist
+    # einzeln angetickt — Hand schlaegt Latte (Begruendung: benenne()).
     betroffen = _pool_sicherung(mit_crop)
-    ok, msg = benenne(mit_crop, person, beste_n=max(1, len(mit_crop)), emb=emb,
-                      kat_latten=kat_latten)
+    ok, msg = benenne(mit_crop, person, beste_n=max(1, len(mit_crop)), emb=emb)
     if not ok:
         return False, msg, []
     _pool_abzug_intern(mit_crop)                            # NUR die gewaehlten
-    if kat_raus:
-        msg += (f" — {len(kat_raus)} unter der Katalog-Latte, bleiben im Pool")
     bleibt = len(mids) - len(mit_crop)
     if bleibt > 0:
         msg += f" — {bleibt} weitere Stuetze(n) bleiben im Pool"
@@ -2614,8 +2594,11 @@ def vorschlag_aufnehmen(person, eid, datei, emb=None, kat_latten=None):
     ziel = f"bestand_{int(time.time())}_{ed[-10:]}_{re.sub(r'[^\w.-]', '_', datei)[-30:]}"
     shutil.copyfile(quelle, os.path.join(zdir, ziel))
     with open(os.path.join(MASTER, "refs_meta.jsonl"), "a") as f:
+        # .401: camera durchreichen (Guete-Masse hat dieser Weg nicht —
+        # die Nachmessung des Bestands holt sie nach)
         f.write(json.dumps({"ts": round(time.time(), 1), "person": person, "datei": ziel,
-                            "herkunft": "bestands-suche", "eid": eid, "aktiv": True},
+                            "herkunft": "bestands-suche", "eid": eid, "aktiv": True,
+                            "camera": (_kand.get("camera") if isinstance(_kand, dict) else None)},
                            ensure_ascii=False) + "\n")
         f.flush()
     if v:
@@ -2689,6 +2672,9 @@ def vorrat_aufnehmen(person, lauf_id, datei, eid, data_dir=None,
                             "kante": zeile.get("kante"),
                             "sharp": zeile.get("sharp"),
                             "norm": zeile.get("norm"),
+                            "camera": zeile.get("kamera"),
+                            "fiqa_t": zeile.get("fiqa_t"),
+                            "empf": zeile.get("empf"),
                             "lauf_id": lauf_id, "datei_v": zeile.get("datei_v")},
                            ensure_ascii=False) + "\n")
         f.flush()
@@ -3400,7 +3386,10 @@ if __name__ == "__main__":
     vo.add_argument("--norm-sharp", type=int, default=None)
     a = ap.parse_args()
     if a.cmd == "sammle":
-        sammle(a.tage, mit_migriere=not a.kein_migriere)
+        # Ring-Deckel im CLI-/Subprozess-Weg via Env (verifyd setzt ihn im
+        # Fallback-Aufruf mit) — ohne den Wert sammelt die CLI wie bisher.
+        sammle(a.tage, mit_migriere=not a.kein_migriere,
+               kalib_deckel=int(os.environ.get("VERIFY_KALIB_DECKEL") or 0) or None)
     elif a.cmd == "reorganisieren":
         reorganisieren()
     elif a.cmd == "fd-nachpruefung":

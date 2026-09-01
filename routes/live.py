@@ -24,7 +24,7 @@ import html
 import time
 import urllib.parse
 
-from core.livewache import (HOEHEN_ALT, HOEHEN_ERLAUBT, quelle_fp,
+from core.livewache import (URTEIL_T_S, HOEHEN_ALT, HOEHEN_ERLAUBT, quelle_fp,
                             quelle_maskiert)
 from core.registry import LIVE_ZUSTAENDE
 from core.sprache import t, t_n
@@ -49,6 +49,13 @@ _ALT_AB_TAGE = 1.0
 # Nachtjobs) — kein neu gewuerfelter Wert.
 _TEST_ALT_TAGE = 7.0
 
+
+
+def _fmt_fenster(wert):
+    """Anzeige des W0-Urteils-Fensters: gespeicherter Wert oder der Default
+    aus der EINEN Quelle (core.livewache.URTEIL_T_S) — ganzzahlig, wenn glatt."""
+    z = float(URTEIL_T_S if wert is None else wert)
+    return str(int(z)) if z == int(z) else str(z)
 
 def _wann(ts):
     if not ts:
@@ -615,6 +622,11 @@ def detail(name, guard, kd, gesperrt, vorrat=0, deckel=0, regel=(2, 0),
         f'value="{html.escape(str(int(g.get("erkannt_t_s") or 0)))}"> '
         f'{t("live.erkennung.regel_nach")}</div>'
         f'<div class="dim lv-zeile">{t("live.erkennung.regel_hinweis")}</div>'
+        f'<div class="lv-zeile">{t("live.erkennung.fenster_vor")} '
+        f'<input id="lv-erkannt-fenster" size="4" '
+        f'value="{html.escape(_fmt_fenster(g.get("erkannt_fenster_s")))}"> '
+        f'{t("live.erkennung.fenster_nach")}</div>'
+        f'<div class="dim lv-zeile">{t("live.erkennung.fenster_hinweis")}</div>'
         + (f'<div class="dim lv-zeile">'
            f'{t("live.erkennung.vorrat_zeile", n=vorrat, deckel=deckel)}</div>'
            if deckel else

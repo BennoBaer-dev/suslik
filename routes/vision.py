@@ -165,7 +165,7 @@ def _schalter(vor, aktiv, vcfg):
         rest = ""
     else:
         knopf = f'<button class="gtb" disabled>{t("vision.schalter.knopf_an")}</button>'
-        # .362 (Feld-Fund Giuseppe): uebersetzte fehlt-Zeilen statt der
+        # .362 (Feld-Fund Tester B): uebersetzte fehlt-Zeilen statt der
         # EN-Literale des Fach-Moduls. Drei LITERALE t()-Aufrufe (kein
         # dynamischer Key — der Sprach-Checker ist dafuer strukturell blind
         # und die Tote-Schluessel-Pruefung braucht die Literale; Gate-Fang

@@ -155,7 +155,7 @@ def anlegen(data_dir, n_events, person="", tage=None):
                 belegt.add(f.split("_", 1)[-1].split("~")[0])
         except FileNotFoundError:
             pass
-    # Verwaiste Labels (Issue #18, Carl/Rose-Fall): Bestaetigungen GELOESCHTER
+    # Verwaiste Labels (Issue #18, Zwei-Namen-Fall): Bestaetigungen GELOESCHTER
     # Personen bleiben als Historie in der Akte — die Alle-Ernte bietet sie
     # aber NICHT mehr an. Personen-Universum = Referenz-Master (faces/), die-
     # selbe Quelle wie die Wizard-Auswahl (master_persons). Uebersprungenes

@@ -154,7 +154,7 @@ def gt_labelmap(pfad):
 def gt_segmente(label):
     """Segmente eines GT-Labels (.313): das abgeleitete Label ist '+'-verkettet
     (gt_label_aus_personen); Personennamen enthalten nie '+' (PERSON_RE). So sieht
-    jeder Leser 'Fremd' auch NEBEN einem Namen ('Fremd+Rose') — ohne Master-Liste."""
+    jeder Leser 'Fremd' auch NEBEN einem Namen ('Fremd+Kara') — ohne Master-Liste."""
     lbl = str(label or "")
     return [t for t in lbl.split("+") if t] if lbl else []
 
@@ -167,7 +167,7 @@ def gt_hat_fremd(gtmap, eid):
 def _gt_offen(gtmap, eid):
     """F2: zaehlt dieses gelabelte Event weiter als offen/unbekannt? Kein Label -> ja.
     'Fremd'/'unklar' -> ja (Fremder bleibt Fremder, unklar bleibt offen), auch als
-    MITGLIED neben Namen (.313: 'Fremd+Rose' heisst 'Rose UND ein Fremder' — der
+    MITGLIED neben Namen (.313: 'Fremd+Kara' heisst 'Kara UND ein Fremder' — der
     Fremde bleibt sichtbar). Reines Personen-Label -> nein (beurteilt). Set-Aufrufer
     behalten das alte Verhalten (Label = raus)."""
     if isinstance(gtmap, dict):

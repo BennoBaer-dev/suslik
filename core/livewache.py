@@ -95,7 +95,12 @@ PRUEF_RATE = 5            # Normaltakt: jedes 5. Bild
 BURST_ANZAHL = 4          # 4 raeumlich konsistente Funde ...
 BURST_FENSTER = 2.0       # ... binnen 2 s
 BURST_TIMEOUT = 10.0      # INTERN (Deckel auf die Burst-Dauer je Track, ab Track-Start)
-TRIGGER_KARENZ = 10.0     # INTERN (Ruhe der Burstwache je Track nach Trigger, §4)
+TRIGGER_KARENZ = 10.0
+POSE_SERIE_S = 60.0       # W2a: zwei Pose-Verwuerfe derselben Stelle binnen
+#                           dieser Spanne = Serie (Faesser/Tonnen) — die Karenz
+#                           bleibt dann stehen. 60 s deckt die gemessenen
+#                           Feld-Serien (Trigger im Sekunden- bis
+#                           Zehn-Sekunden-Takt) mit Rand.     # INTERN (Ruhe der Burstwache je Track nach Trigger, §4)
 BURST_IOU = 0.2           # Ueberlappung reicht ...
 BURST_ABSTAND = 1.5       # ... oder Naehe in Boxbreiten
 MAX_TRACKS = 8            # harter Track-Deckel (Multi-Track-Kontrolle 11.08.)
@@ -161,6 +166,22 @@ ERKANNT_T_S = 0           # Zeitfenster der Erkannt-Regel je Kamera: 0 = der
 #                           denen jemand lange steht und zwei Zufallstreffer
 #                           ueber Minuten sonst wie eine Bestaetigung wirken.
 ERKANNT_T_MIN, ERKANNT_T_MAX = 0, 3600
+URTEIL_T_S = 5.0          # W0 Urteils-Fenster (01.09., Design 31.08. final,
+#                           T-Sweep 31.08. an 26 Auftritten: Erstbester wich in
+#                           4/26 vom End-Urteil ab, Konvergenz bei 5 s praktisch
+#                           vollstaendig): ab der ERSTEN Namens-Stimme wartet
+#                           die Entscheidung T Sekunden — gleitend gezaehlt wird
+#                           weiter ueber erkannt_t_s, entschieden wird ERST nach
+#                           Ablauf, und es gewinnt der Kandidat mit den meisten
+#                           Stimmen (bei Gleichstand der bessere Kosinus), nicht
+#                           der erste ueber der Latte. KEIN Early-Exit (User
+#                           final: Konsistenz vor Latenz — jede Erkennung nimmt
+#                           exakt denselben Weg). 0 = aus (sofort feuern, das
+#                           Verhalten bis .395). Endet der Auftritt vor Ablauf,
+#                           faellt die Entscheidung am Auftritts-Ende mit der
+#                           vorhandenen Evidenz — sonst verloere ein kurzer
+#                           Durchgang seine Namens-Meldung komplett.
+URTEIL_T_MIN, URTEIL_T_MAX = 0, 60
 
 # --- det-Grenze des LIVE-Wegs (GEMESSEN 31.08., zweifach an Feldmaterial) ----
 # Die Erkennbarkeit FAELLT mit steigender det-Schwelle: 0,60 warf die HAELFTE
@@ -818,6 +839,30 @@ class Burstwache:
 
     def _passt(self, a, b):
         return raeumlich_konsistent(a, b, self.iou_min, self.abstand_faktor)
+
+    def karenz_nach_verwurf(self, track, zeit):
+        """W2a (.398, Faesser-Serien beim Feldtester: 22 VERWORFENE Trigger
+        derselben Stelle verbrannten Burst-Budget): beim Pose-Verwurf wird
+        die Karenz wie bisher aufgehoben — AUSSER dieselbe Stelle hat binnen
+        POSE_SERIE_S schon einmal verworfen (raeumlich_konsistent auf der
+        Karenz-Box): dann bleibt die Karenz STEHEN und die Serie endet.
+        Ein echter Mensch an neuer Stelle bleibt ungebremst; verwirft er
+        wirklich zweimal am selben Fleck, wartet er schlimmstenfalls die
+        normale Trigger-Karenz ab. -> True, wenn die Karenz stehen bleibt."""
+        kar = next((x for x in self.karenzen if x["nr"] == track), None)
+        box = kar["box"] if kar else None
+        merk = getattr(self, "_verwurf_merk", None)
+        serie = False
+        if box is not None and merk is not None:
+            m_zeit, m_box = merk
+            if zeit - m_zeit <= POSE_SERIE_S and m_box is not None:
+                serie = bool(raeumlich_konsistent(box, m_box)[0])
+        self._verwurf_merk = (zeit, box if box is not None
+                              else (merk[1] if merk else None))
+        if serie:
+            return True
+        self.karenz_aufheben(track)
+        return False
 
     def karenz_aufheben(self, track=None):
         """Ein Trigger wurde NACHTRAEGLICH verworfen (Pose-Gate) — die Ruhezeit
@@ -2314,7 +2359,7 @@ def auftritts_gruppen(gruppen, luecke=30.0):
             # .313: Name und Bild kommen aus DERSELBEN Meldung — vorher
             # 'erster nicht-leerer gewinnt' je Feld, die Karte zeigte den Namen
             # der einen und das Bild einer anderen Meldung (bis 30 s auseinander,
-            # Tester-Fund: 'Carl' auf leerem Garten).
+            # Tester-Fund: ein Name auf leerem Garten).
             if g.get("person") and not a.get("person"):
                 a["person"] = g["person"]
                 if g.get("zusatz"):
@@ -2661,7 +2706,8 @@ def kalib_lesen(cfg, kamera):
     return aus
 
 
-def kalib_schreiben(cfg, kamera, bild, mass, deckel=KALIB_DECKEL, log=print):
+def kalib_schreiben(cfg, kamera, bild, mass, deckel=KALIB_DECKEL, log=print,
+                    mensch_ok=True, latte=None):
     """EIN Bild in den Ring legen -> Dateiname oder None.
 
     `mass` = {"det","e","t"} (e/t duerfen None sein, wenn die Guete-Modelle im
@@ -2672,6 +2718,32 @@ def kalib_schreiben(cfg, kamera, bild, mass, deckel=KALIB_DECKEL, log=print):
     der Beweisbild-Ablage)."""
     if not deckel or bild is None:
         return None
+    if not mensch_ok:
+        # S5 (01.09., Tonnen-Fund beim Feldtester): das Pose-Urteil des
+        # Erzeugers gilt am EINEN Schreibweg — was "kein Mensch im Bild"
+        # war, wird kein Kalibrier-Bild. Laut, damit die Klasse im Log
+        # sichtbar bleibt (die Faesser standen sonst still im Ring).
+        log(f"live {kamera}: Kalibrier-Bild verworfen (Pose-Urteil: kein "
+            f"Mensch an der Fundstelle)")
+        return None
+    # .401 RING-EINLASS-LATTE (User-Linie 01.09.: "die Kalibrierung laeuft
+    # immer; bei unkalibrierter Kamera greifen die Werkswerte"): gemessene
+    # Bilder unter der Latte kommen nicht in den Ring — Feldbefund: alle
+    # 111 Ring-Bilder einer Tester-Kamera lagen unter der Erkennbarkeits-
+    # Latte, der Vorrat sammelte guete-blind. latte=(e_min, t_min) reicht
+    # der Aufrufer (Live-Weg: Kamera-Werte); ohne Angabe gilt der
+    # Werks-Boden aus der EINEN Quelle core.guete.STARTWERTE. UNGEMESSENE
+    # Masse (None — Guete-Modelle fehlen im Image) laufen ehrlich durch:
+    # eine Latte ohne Messung wuerde blind wegwerfen.
+    _e, _t = mass.get("e"), mass.get("t")
+    if _e is not None and _t is not None:
+        if latte is None:
+            from core.guete import STARTWERTE as _SW
+            latte = (_SW["empfinden"], _SW["t"])
+        if _e < latte[0] or _t < latte[1]:
+            log(f"live {kamera}: Kalibrier-Bild verworfen (unter der "
+                f"Latte: e {_e:.3f}/{latte[0]:.3f}, t {_t:.3f}/{latte[1]:.3f})")
+            return None
     d = kalib_dir(cfg, kamera)
     if not d:
         return None
@@ -2790,9 +2862,11 @@ def guete_messen(crop, aligned112, log=print):
 
     Kosten: gemessen ~4 ms (Empfinden) + ~13 ms (Erkennbarkeit) je Bild auf CPU
     mit 4 Threads (core/guete-Kopf). Deshalb laeuft das hier NICHT je Bild,
-    sondern hoechstens einmal je Auftritt (Vorrats-Kandidat) bzw. je Trigger
-    (Bildwahl) — und nie im Namens-Voting: die Guete darf nie entscheiden, WER
-    erkannt wird (Messung 31.08.: ohne Siebe +41 % Bestaetigungen)."""
+    sondern je AUSGEWAEHLTEM Fund: Vorrats-Kandidat, Bildwahl-Bestmarke und
+    seit 01.09. jede NN-Stimme im Namens-Voting (Kalibrier-Vorfilter,
+    User-Entscheid; Boden = guete.KELLER_BODEN — die 31.08.-Messung "+41 %
+    Bestaetigungen ohne hohe Siebe" bleibt der Grund, warum der Boden die
+    Keller-Grenze ist und nicht die Anzeige-Latte)."""
     try:
         from core import guete as _guete
         if not _guete.verfuegbar():
@@ -2990,6 +3064,13 @@ def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
     if not (ERKANNT_T_MIN <= erk_t <= ERKANNT_T_MAX):
         return False, (f"'within': allowed {ERKANNT_T_MIN}-{ERKANNT_T_MAX} s "
                        f"(0 = the whole appearance counts)")
+    try:
+        erk_f = float(_wert("erkannt_fenster_s", URTEIL_T_S))
+    except (TypeError, ValueError):
+        return False, "'decision window': a number of seconds is expected"
+    if not (URTEIL_T_MIN <= erk_f <= URTEIL_T_MAX):
+        return False, (f"'decision window': allowed {URTEIL_T_MIN}-"
+                       f"{URTEIL_T_MAX} s (0 = announce immediately)")
     fr_ev = bool(_wert("frigate_events", False))
     # Etappe A (Welle 1): bewegungsgesteuertes Abtasten je Kamera. Der Schalter
     # haelt wie alle anderen (fehlendes Feld = unveraendert, _wert), der
@@ -3008,7 +3089,7 @@ def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
                wieder_scharf_s=scharf_s, kanaele=kanaele, hoehe=hoehe,
                det_min=det_min, guete_e_min=g_e, guete_t_min=g_t,
                katalog_e_min=k_e, katalog_t_min=k_t,
-               erkannt_n=erk_n, erkannt_t_s=erk_t,
+               erkannt_n=erk_n, erkannt_t_s=erk_t, erkannt_fenster_s=erk_f,
                frigate_events=fr_ev, frigate_abstand_s=fr_ab,
                bewegung_gate=bw_gate, ruhe_takt_s=ruhe_s,
                bewegung_schwelle=bw_schw, bewegung_flaeche=bw_fl)
@@ -3022,7 +3103,8 @@ def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
         "kanaele": kanaele, "hoehe": hoehe, "det_min": det_min,
         "guete_e_min": g_e, "guete_t_min": g_t,
         "katalog_e_min": k_e, "katalog_t_min": k_t, "erkannt_n": erk_n,
-        "erkannt_t_s": erk_t, "frigate_events": fr_ev,
+        "erkannt_t_s": erk_t, "erkannt_fenster_s": erk_f,
+        "frigate_events": fr_ev,
         "frigate_abstand_s": fr_ab, "bewegung_gate": bw_gate,
         "ruhe_takt_s": ruhe_s, "bewegung_schwelle": bw_schw,
         "bewegung_flaeche": bw_fl}}})
@@ -3198,7 +3280,7 @@ def _bool_lesen(wert, std, log, feld):
     Schreibweisen zaehlen, alles andere ist LAUT + Default.
     None ist davon AUSGENOMMEN (Log-Sichtung 24.08., .336-Prod): None heisst
     "Feld nie gesetzt" — der dokumentierte Normalfall jedes Alt-Stores (die
-    Hinten_CAM trug nie ein enabled). Ihn als "ungueltig" zu melden ist
+    Hof_CAM trug nie ein enabled). Ihn als "ungueltig" zu melden ist
     falscher Alarm bei jedem Start; ungueltig sind nur ECHTE Fehlwerte."""
     if wert is None:
         return std
@@ -3289,6 +3371,7 @@ GUARD_USER_FELDER = ("enabled", "quelle", "url", "ende_ohne_gesicht_s",
                      "katalog_t_min",    # Katalog-Latte Erkennbarkeit
                      "erkannt_n",        # N bestaetigte Bilder ...
                      "erkannt_t_s",      # ... in T s = erkannt (0 = ganzer Auftritt)
+                     "erkannt_fenster_s",  # W0: Urteils-Fenster (0 = sofort)
                      "frigate_events",   # manuelles Frigate-Event bei "erkannt"
                      "frigate_abstand_s",  # Frequenz-Deckel je Kamera+Person
                      # Live-Performance Welle 1, Etappe A (31.08.) — ALLE
@@ -3470,6 +3553,10 @@ def guards_lesen(cfg, log=print):
             "erkannt_t_s": _klemmen(g.get("erkannt_t_s"), ERKANNT_T_S,
                                     ERKANNT_T_MIN, ERKANNT_T_MAX, log, name,
                                     "erkannt_t_s"),
+            "erkannt_fenster_s": _klemmen(g.get("erkannt_fenster_s"),
+                                          URTEIL_T_S, URTEIL_T_MIN,
+                                          URTEIL_T_MAX, log, name,
+                                          "erkannt_fenster_s"),
             # Schalter-Prinzip ("Registrieren nach Schaltern"): der
             # SCHREIBENDE Weg nach Frigate ist per Vorgabe AUS.
             "frigate_events": _bool_lesen(g.get("frigate_events"), False, log,
@@ -5166,6 +5253,14 @@ class Engine:
                 float(t) if t else float(ERKANNT_T_S))
 
     @staticmethod
+    def urteils_fenster(guard):
+        """Das W0-Urteils-Fenster EINER Kamera -> Sekunden (0 = aus). Eigene
+        Funktion aus demselben Grund wie erkannt_regel: die Seite zeigt
+        dieselbe Auslegung, die die Engine rechnet (K3: eine Quelle)."""
+        f = guard.get("erkannt_fenster_s")
+        return float(f) if f is not None else float(URTEIL_T_S)
+
+    @staticmethod
     def stimmen_zaehlen(zaehler, mono, fenster_s):
         """Wie viele Stimmen zaehlen JETZT? -> int. fenster_s = 0 heisst 'der
         ganze Auftritt' (das Verhalten bis 31.08.); sonst zaehlen nur Stimmen
@@ -5188,7 +5283,7 @@ class Engine:
         Der Anwesenheits-Trigger (Stufe 1) bleibt unberuehrt — er meldet
         weiterhin sofort JEDEN Menschen, auch Fremde."""
         import anlernen
-        # .313 (Tester-Fund 21.08., 8x 'Carl' auf leerem Garten): EINE Stimme je
+        # .313 (Tester-Fund 21.08., 8x derselbe Name auf leerem Garten): EINE Stimme je
         # Person je Frame — vorher zaehlten zwei Boxen desselben Bildes doppelt,
         # NAME_STIMMEN=2 war damit aus einem einzigen Frame erreichbar.
         treffer = {}
@@ -5201,15 +5296,36 @@ class Engine:
                 continue
             p, s = anlernen.nn(self.refs, v)
             if p is not None and s >= self.win_thresh:
+                # URTEILS-VORFILTER (User-Entscheid 01.09., "es sollte doch
+                # immer durch die Kalibrierung vorgefiltert werden"): JEDE
+                # Stimme erst durch die Erkennen-Latten der Kamera —
+                # kalibrierter Regler-Wert, geklemmt auf guete.KELLER_BODEN,
+                # unkalibriert der Boden selbst. Kosten nur je NN-TREFFER
+                # (~17 ms, selten), nicht je Frame; Messfehler passieren
+                # fail-open (guete_messen loggt laut). Die alte Wache
+                # "Guete entscheidet nie" ist damit GEDREHT — der Boden ist
+                # bewusst die Keller-Grenze, nicht die Anzeige-Latte
+                # (31.08. gemessen: hohe Siebe kosten 41 % echte Treffer).
+                from core import guete as _gm
+                e_g, t_g = self._guete_von(k, frame, g)
+                _le, _lt = _gm.stimm_latten(k.cfg)
+                if not _gm.stimme_ok(_le, _lt, e_g, t_g):
+                    k.stimm_siebe = getattr(k, "stimm_siebe", 0) + 1
+                    continue
+                if self.cfg.get("debug"):
+                    self._stimm_debug_bild(k, frame, g, p, float(s), e_g, t_g)
                 if p not in treffer or float(s) > treffer[p][0]:
                     treffer[p] = (float(s), tuple(float(x) for x in g.bbox))
         if not treffer:
             return
+        bestmarken = []
         with k.lock:
             a = k.auftritt
             if a is None:
                 return
             st = a.setdefault("stimmen", {})
+            # W0: die erste Stimme oeffnet das Urteils-Fenster des Auftritts.
+            a.setdefault("urteil_start", mono)
             for p, (s, box) in treffer.items():
                 # [n, bester_kosinus, box, zeitstempel] — die Stempel traegt
                 # das Zeitfenster der Erkannt-Regel (erkannt_t_s); ohne Fenster
@@ -5220,7 +5336,44 @@ class Engine:
                 if s >= zaehler[1]:
                     zaehler[1] = s
                     zaehler[2] = box          # Box des besten Fundes (Beweisbild)
+                    bestmarken.append((p, s, box))
+        # W0-Bildkandidaten: eigene Methode — die Bild-WAHL ist Anzeige und
+        # lebt getrennt von der Stimmen-Logik (das Stimm-Sieb oben ist der
+        # Kalibrier-Vorfilter, User-Entscheid 01.09.).
+        self._bild_kandidat_pflegen(k, frame, je_box, bestmarken, mono)
         self._namens_pending_feuern(k, frame, mono)
+
+    def _bild_kandidat_pflegen(self, k, frame, je_box, bestmarken, mono):
+        """W0-Beweisbild-Pflege AUSSERHALB des Locks (die Guete-Messung
+        ~17 ms darf den Leser nie warten lassen): je Person haelt der
+        Auftritt EIN Vollbild — das der Kosinus-Bestmarke. Bei kalibrierter
+        Kamera entscheidet der Regler-Rang, ob die neue Bestmarke das
+        gehaltene Bild ERSETZT (Messung nur bei Bestmarken-Wechsel, monoton
+        selten); ohne Kalibrierung ersetzt sie immer (= bester Kosinus,
+        Verhalten wie bisher). Deckel: 3 Kandidaten je Auftritt, aeltester
+        fliegt. NUR Bild-Wahl — das Stimmen-Urteil siebt selbst (Kalibrier-
+        Vorfilter in _namens_stimmen, User-Entscheid 01.09.)."""
+        for p, s_neu, box in bestmarken:
+            _waehlen = (k.cfg.get("guete_e_min") is not None
+                        or k.cfg.get("guete_t_min") is not None)
+            rang = (s_neu,)
+            if _waehlen:
+                g_obj = next((g for g in je_box.values()
+                              if tuple(float(x) for x in g.bbox) == box), None)
+                _e, _t2 = self._guete_von(k, frame, g_obj)
+                rang = ((_t2 if _t2 is not None else 0.0),
+                        (_e if _e is not None else 0.0))
+            with k.lock:
+                a = k.auftritt
+                if a is None or "stimmen" not in a:
+                    break
+                bk = a.setdefault("bild_kand", {})
+                alt_k = bk.get(p)
+                if alt_k is None or rang >= alt_k[0]:
+                    bk[p] = (rang, frame.copy(), box, mono)
+                while len(bk) > 3:
+                    aeltester = min(bk, key=lambda q: bk[q][3])
+                    bk.pop(aeltester)
 
     def _namens_pending_feuern(self, k, frame, mono):
         """Namens-Meldungen, deren Stimmenzahl reicht, feuern — aber NUR, wenn
@@ -5229,26 +5382,82 @@ class Engine:
         docs/live-watchers.md versprach sie vor jeder Meldung). Ohne Pose-Gate
         (Config aus) gilt die Stimmenzahl allein. Aufgerufen je Frame aus
         _namens_stimmen und aus _trigger, sobald der Mensch bestaetigt ist."""
-        feuern = []
         with k.lock:
             a = k.auftritt
             if a is None:
                 return
             if self.defaults.get("pose_gate") and not a.get("mensch_bestaetigt"):
                 return
-            st = a.get("stimmen") or {}
-            genannt = a.setdefault("genannt", set())
-            # Erkannt-Regel JE KAMERA (Live-Umbau 31.08.): N Bestaetigungen
-            # binnen T s. Ohne Eingriff des Nutzers ist das Bit fuer Bit die
-            # alte Regel (2 Stimmen, ganzer Auftritt).
-            n_noetig, fenster = self.erkannt_regel(k.cfg)
-            for p, zaehler in st.items():
-                n_jetzt = self.stimmen_zaehlen(zaehler, mono, fenster)
-                if n_jetzt >= n_noetig and p not in genannt:
-                    genannt.add(p)
-                    feuern.append((p, n_jetzt, zaehler[1], zaehler[2]))
-        for p, n, cos, box in feuern:
-            self._namens_meldung(k, p, n, cos, frame, box=box)
+            feuern = self._namens_faellige(a, k.cfg, mono)
+        self._namens_feuer_liste(k, feuern, frame, mono)
+
+    @classmethod
+    def _namens_faellige(cls, a, guard_cfg, mono, final=False):
+        """W0-Entscheidungskern (lock-frei — der Aufrufer haelt k.lock, und
+        genau deshalb ist die Logik hier pur und im Gate direkt pruefbar):
+        -> Liste (person, n, cos, box, bild_kand|None), bester zuerst.
+
+        Erkannt-Regel JE KAMERA (31.08.): N Bestaetigungen binnen T s. W0
+        (01.09.): steht ein Urteils-Fenster (> 0), wird ab der ERSTEN Stimme
+        dessen Ablauf abgewartet (kein Early-Exit, User final: Konsistenz vor
+        Latenz) — erst dann faellt die Entscheidung, und die faelligen
+        Kandidaten sind nach (Stimmen, Kosinus) geordnet: der BESTE gewinnt
+        die Erst-Meldung, nicht der erste ueber der Latte (T-Sweep 31.08.:
+        Erstbester wich in 4/26 Auftritten vom End-Urteil ab). final=True
+        (Auftritts-Ende) entscheidet sofort mit vorhandener Evidenz. Weitere
+        echte Personen ueber der Latte verlieren nichts: sie feuern in
+        derselben Entscheidung, nur nach dem Gewinner."""
+        st = a.get("stimmen") or {}
+        genannt = a.setdefault("genannt", set())
+        n_noetig, fenster = cls.erkannt_regel(guard_cfg)
+        u_fenster = cls.urteils_fenster(guard_cfg)
+        if u_fenster and not final:
+            start = a.get("urteil_start")
+            if start is None or mono - start < u_fenster:
+                return []
+        kandidaten = []
+        for p, zaehler in st.items():
+            n_jetzt = cls.stimmen_zaehlen(zaehler, mono, fenster)
+            if n_jetzt >= n_noetig and p not in genannt:
+                kandidaten.append((n_jetzt, float(zaehler[1]), p, zaehler[2]))
+        kandidaten.sort(reverse=True)
+        feuern = []
+        bk = a.get("bild_kand") or {}
+        for n_jetzt, cos, p, box in kandidaten:
+            genannt.add(p)
+            feuern.append((p, n_jetzt, cos, box, bk.get(p)))
+        return feuern
+
+    def _namens_feuer_liste(self, k, feuern, frame, mono):
+        """Faellige Meldungen absetzen (ausserhalb k.lock). Das Beweisbild
+        kommt bevorzugt aus dem W0-Bildkandidaten der Person (Vollbild der
+        Bestmarke, bei kalibrierter Kamera nach Regler-Rang gewaehlt) —
+        Rueckfall ist das aktuelle Frame (Verhalten bis .395). Am
+        Auftritts-Ende kann frame None sein: dann meldet die Person mit dem
+        Kandidaten-Bild oder notfalls ohne Bild, nie gar nicht."""
+        if not feuern:
+            return
+        for p, n, cos, box, kand in feuern:
+            b_frame, b_box = frame, box
+            if kand is not None:
+                b_frame, b_box = kand[1], kand[2]
+            if b_frame is None:
+                b_frame, b_box = frame, box
+            self._namens_meldung(k, p, n, cos, b_frame, box=b_box)
+        if self.urteils_fenster(k.cfg):
+            spanne = None
+            with k.lock:
+                a = k.auftritt
+                if a is not None and a.get("urteil_start") is not None:
+                    spanne = mono - a["urteil_start"]
+            # EINE kompakte Zeile je finaler Entscheidung (User 31.08.:
+            # keine Buchhaltung je Bild/Fenster auf Platte — das Log traegt
+            # sie, nie je Frame).
+            self._klog(k, "URTEIL-FENSTER entschieden: "
+                       + ", ".join(f"{p} ({n} Stimmen, max {cos:.2f})"
+                                   for p, n, cos, _bx, _kd in feuern)
+                       + (f" — Spanne {spanne:.1f} s" if spanne is not None
+                          else " — Spanne: Auftritts-Ende"))
 
     def _namens_meldung(self, k, person, stimmen, cos, frame, box=None):
         """Die Namens-Meldung der zweiten Stufe: eigene Nachricht NEBEN der
@@ -5311,7 +5520,7 @@ class Engine:
                                      cos=f"{cos:.2f}")
         bild = None
         ablage = self._ablage_sichern(k)
-        if ablage:
+        if ablage and frame is not None:   # W0: Ende-Feuern ohne Frame-Rueckfall meldet ohne Bild
             stempel = time.strftime("%Y%m%d_%H%M%S",
                                     time.localtime(self.wanduhr()))
             sauber = re.sub(r"[^A-Za-z0-9._-]", "_", person)[:40]
@@ -5401,10 +5610,14 @@ class Engine:
         # live_verworfen_speichern wieder an.
         if not p_ok and not self.cfg.get("live_verworfen_speichern"):
             with k.lock:
-                k.burst.karenz_aufheben(info["track"])
+                _serie = k.burst.karenz_nach_verwurf(info["track"], mono)
             k.verworfen_pose += 1
-            self._klog(k, f"TRIGGER #{t_nr} [T{info['track']}] VERWORFEN (kein "
-                          f"Mensch im Bild): Pose-Kopf hoechstens "
+            if _serie:
+                self._klog(k, f"TRIGGER #{t_nr} [T{info['track']}]: "
+                              f"Wiederholungs-Verwurf an derselben Stelle — "
+                              f"Karenz bleibt stehen (Serie gebrochen)")
+            self._klog(k, f"TRIGGER #{t_nr} [T{info['track']}] VERWORFEN (kein Mensch an "
+                          f"der Fundstelle bestaetigt): Pose-Kopf hoechstens "
                           f"{(p_det or {}).get('kopf_max')} — keine Meldung, keine "
                           f"Karenz, kein Bild (live_verworfen_speichern=off)")
             return
@@ -5448,10 +5661,14 @@ class Engine:
                 beste_guete, bestes = rang, pfad
         if not p_ok:
             with k.lock:
-                k.burst.karenz_aufheben(info["track"])
+                _serie = k.burst.karenz_nach_verwurf(info["track"], mono)
             k.verworfen_pose += 1
-            self._klog(k, f"TRIGGER #{t_nr} [T{info['track']}] VERWORFEN (kein "
-                          f"Mensch im Bild): Pose-Kopf hoechstens "
+            if _serie:
+                self._klog(k, f"TRIGGER #{t_nr} [T{info['track']}]: "
+                              f"Wiederholungs-Verwurf an derselben Stelle — "
+                              f"Karenz bleibt stehen (Serie gebrochen)")
+            self._klog(k, f"TRIGGER #{t_nr} [T{info['track']}] VERWORFEN (kein Mensch an "
+                          f"der Fundstelle bestaetigt): Pose-Kopf hoechstens "
                           f"{(p_det or {}).get('kopf_max')} — keine Meldung, keine Karenz")
             return
         # .313: ab hier ist ein Mensch bestaetigt (Pose-Gate bestanden oder aus) —
@@ -5590,6 +5807,36 @@ class Engine:
         except Exception:                                     # noqa: BLE001
             return None, None
 
+    def _stimm_debug_bild(self, k, frame, face, person, s, e_g, t_g):
+        """Debug-Schalter (Config "debug", User-Wunsch 01.09.): jedes Gesicht,
+        das den Kalibrier-Vorfilter PASSIERT und als Stimme zaehlt, landet
+        strukturiert auf Platte — <data_dir>/debug/urteil/<JJJJMMTT>/<kamera>/
+        mit Messwerten im Namen. Deckel je Kamera und Tag, damit eine
+        Hinterkopf-Serie nie die Platte flutet; Fehler stoeren den Waechter
+        nie."""
+        try:
+            tag = time.strftime("%Y%m%d")
+            n = getattr(k, "stimm_debug", None)
+            if n is None or n[0] != tag:
+                n = [tag, 0]
+            if n[1] >= 2000:
+                return
+            crop = kalib_crop(frame, getattr(face, "bbox", None))
+            if crop is None or getattr(crop, "size", 0) == 0:
+                return
+            basis = os.path.join(self.cfg.get("data_dir")
+                                 or os.path.join(WURZEL, "verify_data"),
+                                 "debug", "urteil", tag, k.name)
+            os.makedirs(basis, exist_ok=True)
+            fn = (f"live_{time.strftime('%H%M%S')}_{n[1]:04d}_{person}"
+                  f"_nn{s:.2f}_e{-1 if e_g is None else round(e_g, 3)}"
+                  f"_t{-1 if t_g is None else round(t_g, 3)}.jpg")
+            cv2.imwrite(os.path.join(basis, fn), crop)
+            n[1] += 1
+            k.stimm_debug = n
+        except Exception:                                     # noqa: BLE001
+            pass
+
     def _kalib_deckel(self):
         """Ring-Deckel je Kamera aus der Config (live_kalib_max, 0 = Vorrat
         aus). Bewusst zur Laufzeit gelesen: der Nutzer soll den Vorrat
@@ -5652,7 +5899,7 @@ class Engine:
                              f"live {k.name}: Kalibrier-Kandidat entfaellt "
                              f"({type(e).__name__}: {e})")
 
-    def _kalib_ablegen(self, k, kand):
+    def _kalib_ablegen(self, k, kand, mensch_ok=True):
         """Den Kandidaten EINES Auftritts in den Ring legen (Status-Thread).
         Hier — und nur hier — laufen die zwei Guete-Modelle; ihr Ergebnis
         steuert die Aufnahme (Latte der Kamera, guete_reicht) und steht spaeter
@@ -5666,7 +5913,8 @@ class Engine:
             return
         if kalib_schreiben(self.cfg, k.name, kand["crop"],
                            {"det": kand["det"], "e": e, "t": t},
-                           deckel=deckel, log=lambda z: self._klog(k, z)):
+                           deckel=deckel, log=lambda z: self._klog(k, z),
+                           mensch_ok=mensch_ok):
             k.kalib_bilder += 1
 
     def _ablage_sichern(self, k):
@@ -5926,13 +6174,30 @@ class Engine:
                     self._klog(k, f"Auftritt #{k.auftritte} beendet "
                                   f"({a['funde']} Funde, {a['trigger']} Trigger, "
                                   f"{mono - a['seit_mono']:.0f} s)")
+                    # S5 (01.09., Tonnen-Fund): das Pose-Urteil des Auftritts
+                    # wandert mit zum Ring — hatte der Auftritt Trigger und
+                    # KEIN einziger bestand das Pose-Gate, war die Fundstelle
+                    # kein Mensch (exakt die Faesser-Serie). Ohne jedes
+                    # Urteil (0 Trigger) bleibt die Aufnahme mild wie bisher.
+                    kand_mensch = (bool(a.get("mensch_bestaetigt"))
+                                   or int(a.get("trigger") or 0) == 0
+                                   or not self.defaults.get("pose_gate"))
+                    # W0: endet der Auftritt VOR Ablauf des Urteils-Fensters,
+                    # faellt die Entscheidung JETZT mit der vorhandenen
+                    # Evidenz — sonst verloere ein kurzer Durchgang seine
+                    # Namens-Meldung. Pose-Gate gilt unveraendert.
+                    faellige = []
+                    if not self.defaults.get("pose_gate") or a.get("mensch_bestaetigt"):
+                        faellige = self._namens_faellige(a, k.cfg, mono,
+                                                         final=True)
                     k.auftritt = None
                     kand, k.kalib_kand = k.kalib_kand, None
                     beendet = True
             if beendet:
+                self._namens_feuer_liste(k, faellige, None, mono)
                 # NACH dem Lock (die Guete-Messung ~17 ms und der Frigate-Zug
                 # duerfen den Leser-Thread nie warten lassen).
-                self._kalib_ablegen(k, kand)
+                self._kalib_ablegen(k, kand, mensch_ok=kand_mensch)
                 self._frigate_auftritt_ende(k)
             # Stoerungs-Selbstmeldung (§11 Entscheid 2) + Entwarnung — Anker
             # ist LIEFERUNG, nicht Verbindungszustand (B2-Fix, stoerung_takt).
