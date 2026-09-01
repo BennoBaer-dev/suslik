@@ -31,6 +31,7 @@ Dienst-Import; schwere Imports (cv2/core.frames/face_audit) LAZY in ernte_event.
 import glob
 import json
 import os
+import tempfile
 import time
 
 # Pflicht-Schwellen, die der Aufrufer aus der Config liefern MUSS (kein Default hier —
@@ -395,8 +396,13 @@ def manifest_schreiben(lauf_dir, manifest):
     unterscheidbar). Resume nutzt IMMER das Manifest, nie die aktuelle Config."""
     os.makedirs(lauf_dir, exist_ok=True)
     p = os.path.join(lauf_dir, "manifest.json")
-    tmp = p + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
+    # S2-Fix 01.09. (199x FileNotFoundError beim Feldtester): ein FESTER
+    # tmp-Name kollidiert, wenn zwei Aufrufer denselben lauf_dir beschreiben
+    # (Bulk-Benennung: mehrere Personen desselben Durchgangs) — der zweite
+    # os.replace fand die tmp des ersten nicht mehr. mkstemp macht den
+    # Zwischennamen einzigartig; os.replace bleibt atomar.
+    fd, tmp = tempfile.mkstemp(prefix="manifest.", suffix=".tmp", dir=lauf_dir)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False, indent=1)
         f.flush()
         os.fsync(f.fileno())
@@ -492,7 +498,11 @@ def kalib_vorrat_speisen(lauf_dir, kamera, best, kalib, log=print):
         return bool(_lw.kalib_schreiben(
             {"data_dir": kalib.get("data_dir")}, kamera, bild,
             {"det": best.get("det"), "e": best.get("e"), "t": best.get("t")},
-            deckel=deckel, log=log))
+            deckel=deckel, log=log,
+            # S5: der Ernte-Einlass (Formel L) hat ist_fehldetektion bereits
+            # gesiebt — ein Pose-Skelett-Urteil gibt es auf diesem Weg nicht;
+            # das mensch_ok=True ist die deklarierte Grenze dieses Zulaufs.
+            mensch_ok=True))
     except Exception as e:                                    # noqa: BLE001
         log(f"ernte: Kalibrier-Vorrat nicht beschickt "
             f"({type(e).__name__}: {e})")

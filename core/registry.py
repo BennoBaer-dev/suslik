@@ -955,7 +955,12 @@ def vision_geheimnisse(vcfg):
 # verstreute Regex-Literale haben zweimal dieselbe Fehlklasse erzeugt (Anzeige .103,
 # Loeschen .107). Wer prueft, importiert von hier.
 EID_RE = r"[\w.\-]+"            # Event-IDs (ts-id), OHNE Tilde
-DATEI_RE = r"[\w .\-~]+"        # Bild-/Crop-Dateinamen, MIT Tilde + Leerzeichen
+DATEI_RE = r"[\w .\-~']+"       # Bild-/Crop-Dateinamen, MIT Tilde + Leerzeichen + Apostroph
+# (S4-Fix 01.09., Feldtester: Alt-WebP-Referenzen tragen den PERSONENNAMEN im
+# DATEINAMEN — "<Name mit Apostroph>-<ts>.webp" aus Frigate-Importzeiten. Der
+# .369-Fix erweiterte nur PERSON_RE; solche Dateien blieben unsichtbar (404)
+# und unloeschbar ("ungueltiger Pfad"). Traversal verhindert weiterhin die
+# realpath-Containment-Wache jedes Verbrauchers, nicht dieses Muster.)
 # Lauf-Ordner unter state/lernlauf/: L<stempel> (Gesichts-Lernlauf) und
 # B<stempel> (Bestands-/QS-Laeufe). Bis .362 lagen ZWEI widerspruechliche
 # Literale verstreut (/lernlauf/crop nur L, /lernlauf/vorrat L+B — B-Laeufe

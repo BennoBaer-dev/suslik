@@ -46,6 +46,54 @@ STARTWERTE = {"empfinden": 0.200, "t": 0.400}
 # automatisch zum Lernen. EINE Quelle, der Kalibrier-Handler liest von hier.
 ANZEIGE_STARTWERTE = {"empfinden": 0.175, "t": 0.200}
 
+# URTEILS-VORFILTER (User-Entscheide 01.09., nach den Tester-Fehlbenennungen:
+# "es sollte doch immer durch die Kalibrierung vorgefiltert werden"): JEDE
+# Namens-Stimme — Live-Watcher UND Szenario/Worker — muss die Erkennen-Latten
+# der Kamera bestehen, bevor sie zaehlt.
+# HOEHE (User-Entscheide 01.09. abends, verbindlich, an den Bildern der
+# Drei-Clip-Belege entschieden): ERKENNBARKEIT "nie unter 0,2 — weder der
+# User noch sonst was geht darunter", Default unkalibriert 0,225;
+# BILDEINDRUCK Default 0,175, Boden 0,10 (User-Nachtrag: kalibrierte
+# Kameras duerfen bis 0,10 runter) — der Default ist
+# der Wert, der die dunklen Anschnitt-Gesichter aus dem Voting haelt,
+# die die Erkennbarkeits-Latte zu Recht passieren laesst). Messbelege:
+# die 0,10-Erstfassung liess 213 Muell-Stimmen durch (Kabel t 0,30,
+# Hinterkoepfe t 0,16); t-only 0,25 holte eine echte Fehlbenennung zurueck
+# (3 Anschnitt-Gesichter, e 0,14-0,18); das Paar killt alle drei.
+# Dokumentierter Preis (vorgelegt, bewusst getragen): auf schwach messenden
+# Kameras liegen auch KORREKTE Gesichter unter den Latten (4/7 Feld-Faelle)
+# — dort wird ehrlich NICHT benannt statt falsch.
+STIMM_BODEN = {"empfinden": 0.10, "t": 0.200}     # absolute Minima (klemmen alles)
+STIMM_DEFAULT = {"empfinden": 0.175, "t": 0.225}  # Werkswerte ohne Kalibrierung
+
+
+def stimm_latten(guard):
+    """Die zwei Stimm-Latten (e_min, t_min) einer Kamera: der kalibrierte
+    Regler-Wert, nach unten auf STIMM_BODEN geklemmt (darunter geht niemand
+    — User-Entscheid); ohne Kalibrierung STIMM_DEFAULT. guard ist das
+    Kamera-Cfg-Dict (guete_e_min/guete_t_min) oder None."""
+    g = guard or {}
+    out = []
+    for key, mass in (("guete_e_min", "empfinden"), ("guete_t_min", "t")):
+        w = g.get(key)
+        try:
+            w = float(w) if w is not None else None
+        except (TypeError, ValueError):
+            w = None
+        out.append(STIMM_DEFAULT[mass] if w is None else max(w, STIMM_BODEN[mass]))
+    return out[0], out[1]
+
+
+def stimme_ok(latte_e, latte_t, e, t):
+    """Besteht ein Fund die Stimm-Latten? Ein NICHT MESSBARER Wert (None,
+    Modelle fehlen/Messfehler) passiert — fail-open, denn ein Modell-Ausfall
+    darf nie die ganze Erkennung stumm schalten (guete_messen loggt ihn laut).
+    Latte <= 0 heisst: dieser Anteil ist bewusst aus (Diagnose-Laeufe)."""
+    for latte, wert in ((latte_e, e), (latte_t, t)):
+        if latte and latte > 0 and wert is not None and float(wert) < float(latte):
+            return False
+    return True
+
 _lock = threading.Lock()
 _sess = {}
 

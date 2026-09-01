@@ -40,6 +40,19 @@ ap.add_argument("--labels", nargs="+", default=None, help="Anzeigename je eid (z
 ap.add_argument("--fps-sample", type=float, default=2.0)
 ap.add_argument("--win-thresh", type=float, default=0.40,
                 help="Frame-Schwelle fuer das 3s-Fenster (Default 0.40; 16.07. per Backtest auf 0.38 kalibriert)")
+ap.add_argument("--urteil-kante", dest="urteil_kante", type=float, default=0.0,
+                help="Mindest-Gesichtskante (px) fuer STIMMEN im Urteil (win3s); 0 = aus (.400)")
+# URTEILS-VORFILTER (.404, User-Entscheid 01.09.: "es sollte doch immer durch
+# die Kalibrierung vorgefiltert werden" — fest in Watcher UND Worker): STIMMEN
+# muessen zusaetzlich die Erkennen-Guete-Latten bestehen. -1 = Werks-Boden
+# guete.KELLER_BODEN (der feste Normalfall; run_analyze ersetzt ihn durch die
+# kalibrierten Kamera-Regler), 0 = aus (nur Diagnose-/Altvergleichs-Laeufe),
+# >0 = expliziter Wert, nach unten auf den Boden geklemmt.
+ap.add_argument("--urteil-guete-e", dest="urteil_guete_e", type=float, default=-1.0)
+ap.add_argument("--urteil-guete-t", dest="urteil_guete_t", type=float, default=-1.0)
+ap.add_argument("--urteil-debug", dest="urteil_debug", action="store_true",
+                help="jedes Gesicht, das den Vorfilter passiert und als Stimme"
+                     " zaehlt, strukturiert unter <dir>/urteil_debug/ ablegen")
 ap.add_argument("--timeline", action="store_true", help="Score-Zeitreihe je Gesicht-Frame ausgeben")
 # #42 Teil B: Fehldetektions-Signatur (kalibriert, s. face_audit.ist_fehldetektion) + der
 # bislang unsichtbare insightface-Default det_thresh=0.5 als sichtbarer Parameter (KEINE
@@ -62,6 +75,24 @@ ap.add_argument("--koerper-rss-max-mb", type=float, default=0.0,
                      "Der Koerper-Puffer darf nur in den Kopfraum darunter "
                      "(0 = unbekannt -> es wird NICHT gepuffert; §5 'RAM')")
 a = ap.parse_args()
+
+# Stimm-Latten aufloesen (EINE Quelle core/guete): nicht gesetzt (<0) ->
+# STIMM_DEFAULT 0,250; jeder gesetzte Wert klemmt auf STIMM_BODEN 0,200 —
+# KEINE Hintertuer darunter ("weder der User noch sonst was geht darunter",
+# User-Entscheid 01.09.). Fehlen die Guete-Modelle, wird der Filter LAUT
+# deaktiviert statt still alles zu verwerfen (fail-open wie im Watcher).
+from core import guete as guete_mod
+def _latte_aufloesen(w, mass):
+    if w < 0: return guete_mod.STIMM_DEFAULT[mass]
+    return max(float(w), guete_mod.STIMM_BODEN[mass])
+URT_G_E = _latte_aufloesen(a.urteil_guete_e, "empfinden")
+URT_G_T = _latte_aufloesen(a.urteil_guete_t, "t")
+URT_G_AUS = ""
+if (URT_G_E > 0 or URT_G_T > 0) and not guete_mod.verfuegbar():
+    URT_G_AUS = "guete-modelle nicht verfuegbar"
+    print(f"URTEILS-VORFILTER AUS: {URT_G_AUS}")
+    URT_G_E = URT_G_T = 0.0
+URT_G_STAT = {"gemessen": 0, "fehler": 0}
 
 emb = Embedder()
 # #42 Teil B, KORRIGIERT (Review .52, kritisch): det_thresh wird NICHT hier gesetzt.
@@ -419,7 +450,41 @@ for k, eid in enumerate(a.eids):
                 # NICHT das Urteil: sc/summary rechnen weiter ueber ALLE Detektionen).
                 fd = ist_fehldetektion(front, schaerfe0, float(fc.det_score),
                                        a.fd_front_min, a.fd_sharp_min, a.fd_det_max)
+                # URTEILS-VORFILTER (.404): Guete nur fuer STIMM-KANDIDATEN
+                # messen (Kante ueber der Urteils-Kante UND irgendein
+                # Personen-Score ueber win-thresh) — alles andere wird nie
+                # eine Stimme, die Messung waere reine Rechenzeit. Messfehler
+                # -> None, Stimme passiert fail-open (Zaehler sagt es laut).
+                fiqa_v = empf_v = None
+                if ((URT_G_E > 0 or URT_G_T > 0)
+                        and (a.urteil_kante <= 0
+                             or min(x2 - x1, y2 - y1) >= a.urteil_kante)
+                        and sc and max(sc.values()) >= a.win_thresh):
+                    try:
+                        from core.ernte import align112 as _al112
+                        _al = _al112(frame, fc.kps) if fc.kps is not None else None
+                        fiqa_v = guete_mod.fiqa_t(_al) if _al is not None else None
+                        empf_v = guete_mod.empfinden(crop) if crop.size else None
+                        URT_G_STAT["gemessen"] += 1
+                    except Exception:                          # noqa: BLE001
+                        URT_G_STAT["fehler"] += 1
+                        fiqa_v = empf_v = None
+                    if (a.urteil_debug
+                            and guete_mod.stimme_ok(URT_G_E, URT_G_T, empf_v, fiqa_v)):
+                        try:
+                            _dbg = os.path.join(outdir, "urteil_debug")
+                            os.makedirs(_dbg, exist_ok=True)
+                            _p0 = max(sc, key=sc.get)
+                            cv2.imwrite(os.path.join(
+                                _dbg, f"{i:06d}_{i/fps:05.1f}s_{min(x2-x1, y2-y1)}px"
+                                      f"_det{float(fc.det_score):.2f}"
+                                      f"_e{-1 if empf_v is None else round(empf_v, 3)}"
+                                      f"_t{-1 if fiqa_v is None else round(fiqa_v, 3)}"
+                                      f"_{_p0}_nn{sc[_p0]:.2f}.jpg"), crop)
+                        except Exception:                      # noqa: BLE001
+                            pass
                 faces.append({"t": i/fps, "bw": x2-x1, "bh": y2-y1, "front": front, "fd": fd,
+                              "fiqa_t": fiqa_v, "empf": empf_v,
                               "yaw": yaw, "det": float(fc.det_score), "sharp": schaerfe0,
                               # .313: genderage laeuft nicht mehr mit (ungenutzt) — Felder bleiben
                               # im Bestandsformat, jetzt '?'/-1 statt eines Modellwerts.
@@ -559,7 +624,21 @@ for k, eid in enumerate(a.eids):
         n40 = int(sum(s >= 0.40 for s in sc_list)); n50 = int(sum(s >= 0.50 for s in sc_list))
         # bestes 3s-Fenster: max Anzahl Frames >= win-thresh in einem gleitenden 3-Sekunden-Fenster.
         # Zeitliche Konsistenz statt Event-median -> robust gg. lange Events mit nur kurzer Sicht.
-        ts = sorted((f["t"], f["sc"][person]) for f in faces)
+        # URTEILS-KANTE (.400, Fall-Analyse 01.09. an 15 Feld-Fehlurteilen):
+        # STIMMEN zaehlen nur Gesichter >= urteil_kante px (dieselbe Latte wie
+        # das Anlernen, cfg min_kante — keine zweite Zahl). 81 % der
+        # Feld-Bestaetigungen liefen auf <70-px-Gesichtern, ein Fall
+        # bestaetigte 10 Namen auf 11-16 px: unter der Kante ist keine
+        # Identitaet im Bild, nur Rauschen, das die Referenzmasse belohnt.
+        # max/median bleiben UNGEFILTERT (Diagnose-Anzeige) — nur das Urteil
+        # (win3s -> confirmed) verlangt die Kante. 0 = aus (Alt-Aufrufer).
+        _uk = float(getattr(a, "urteil_kante", 0) or 0)
+        # .404: Stimme nur, wenn der Fund auch die Erkennen-Guete-Latten
+        # bestand (None = nicht gemessen/Messfehler -> passiert, fail-open).
+        ts = sorted((f["t"], f["sc"][person]) for f in faces
+                    if (_uk <= 0 or min(f["bw"], f["bh"]) >= _uk)
+                    and guete_mod.stimme_ok(URT_G_E, URT_G_T,
+                                            f.get("empf"), f.get("fiqa_t")))
         win = max((sum(1 for (t, s) in ts if t0 <= t <= t0 + 3.0 and s >= a.win_thresh) for t0, _ in ts), default=0)
         summary[label][person] = {"max": round(mx, 3), "median": round(med, 3), "n": ntot,
             "n_ge40": n40, "n_ge50": n50, "win3s": win, "best_wh": f"{best['bw']}x{best['bh']}",
@@ -612,6 +691,9 @@ for k, eid in enumerate(a.eids):
                                  if getattr(frames, "hwdec_fallback", False) else {}),
                               **({"decoder_fehler": frames.decoder_fehler}
                                  if getattr(frames, "decoder_fehler", 0) else {}),
+                              "urteil_guete": {"e": URT_G_E, "t": URT_G_T,
+                                               **URT_G_STAT,
+                                               **({"aus": URT_G_AUS} if URT_G_AUS else {})},
                               "persons": summary.get(label, {})}, default=float, ensure_ascii=False) + "\n")
         _rf.flush()
     # Enrollment-Kandidaten persistieren (AP4): enger Crop (wird ggf. Referenz) +

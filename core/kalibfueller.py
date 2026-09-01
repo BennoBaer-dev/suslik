@@ -71,8 +71,18 @@ def _zaehlen(vorrat_lesen, t0):
         return 0
 
 
+def notiz(kamera, text):
+    """Kurzer Zustands-Text fuer die Anzeige (z.B. 'waiting for a free
+    worker slot') — K1 01.09.: der Fueller wirkte wie abgestuerzt, wenn der
+    Worker belegt war, weil NICHTS sichtbar wurde. Nur Anzeige, nie Logik."""
+    with _LOCK:
+        st = _STAND.get(str(kamera))
+        if st is not None:
+            st["notiz"] = str(text or "")
+
+
 def starten(kamera, ziel, deckel_events, events_holen, ernte_job,
-            vorrat_lesen, log=print, abschluss=None):
+            vorrat_lesen, log=print, abschluss=None, vorbereitung=None):
     """Fueller starten -> (ok, msg). Laeuft im Hintergrund; der Fortschritt
     kommt ueber stand().
 
@@ -101,6 +111,18 @@ def starten(kamera, ziel, deckel_events, events_holen, ernte_job,
                            f"going — one camera at a time")
         _AKTIV["kamera"] = kamera
         _STAND[kamera] = _neuer_stand(kamera, 0, ziel)
+        # K1 (01.09., Doppelklick-Race beim Feldtester): die VORBEREITUNG
+        # (der Aufrufer raeumt/legt seinen Ernte-Ordner an) laeuft UNTER der
+        # Sperre — vorher zog ein zweiter Klick dem laufenden Lauf per
+        # rmtree den Ordner weg, weil das Aufraeumen VOR der Sperre lag.
+        if vorbereitung is not None:
+            try:
+                vorbereitung()
+            except Exception as e:                            # noqa: BLE001
+                _AKTIV["kamera"] = ""
+                return False, f"preparation failed: {type(e).__name__}: {e}"
+    log(f"calibration top-up {kamera}: started (target {ziel} picture(s), "
+        f"up to {deckel_events} event(s))")
     threading.Thread(
         target=_lauf, name="kalib-fueller", daemon=True,
         args=(kamera, ziel, deckel_events, events_holen, ernte_job,

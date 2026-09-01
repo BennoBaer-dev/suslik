@@ -45,6 +45,14 @@ import urllib.parse
 from core.sprache import t
 
 
+# Regler-Untergrenzen der zwei Erkennen-Guete-Regler = absolute Stimm-Boeden
+# (EINE Quelle, core/guete.STIMM_BODEN): darunter geht niemand
+# (User-Entscheide 01.09. abends: t nie unter 0,2; e-Boden = Default 0,175).
+from core.guete import STIMM_BODEN as _KB
+_BODEN_E = f"{_KB['empfinden']:.3f}"
+_BODEN_T = f"{_KB['t']:.3f}"
+
+
 def _wann(ts):
     if not ts:
         return ""
@@ -103,7 +111,7 @@ def _regler(kennung, titel, prosa, lo, hi, schritt, wert):
 
 
 def render(kamera, vorrat, guard, standard, kat, lauf_bilder=(), deckel=0,
-           fueller=(0, 0), hat_waechter=False):
+           fueller=(0, 0), hat_waechter=False, fueller_stand=None):
     """-> Seiten-INHALT.
 
     vorrat  = [{"d","ts","det","e","t"}, ...] aus livewache.kalib_lesen
@@ -184,8 +192,25 @@ def render(kamera, vorrat, guard, standard, kat, lauf_bilder=(), deckel=0,
     # Zaehlern und Uebernehmen: der erste Entwurf hatte die Regler in drei
     # Karten und den Zaehler darunter — man schob oben und die Wirkung stand
     # ausserhalb des Blicks. Die Galerie steht darunter und dimmt mit.
+    # K1 (01.09.): laufender/letzter Fueller-Stand sichtbar — vorher wirkte
+    # der Knopf wie tot, wenn der Worker belegt war (Feldtester-Klick ohne
+    # jede Reaktion). Reine Anzeige aus kalibfueller.stand().
+    fs = fueller_stand or {}
+    fs_zeile = ""
+    if fs:
+        if fs.get("laeuft"):
+            fs_zeile = (f'<div class="dim">{t("livekalib.fueller.laeuft")}: '
+                        f'{int(fs.get("i") or 0)}/{int(fs.get("n") or 0)} · '
+                        f'{int(fs.get("bilder") or 0)}/{int(fs.get("ziel") or 0)}'
+                        + (f' — {html.escape(str(fs.get("notiz")))}'
+                           if fs.get("notiz") else "") + "</div>")
+        elif fs.get("grund") or fs.get("fehler"):
+            fs_zeile = (f'<div class="dim">{t("livekalib.fueller.bilanz")}: '
+                        f'{html.escape(str(fs.get("fehler") or fs.get("grund")))}'
+                        f' · {int(fs.get("bilder") or 0)} '
+                        f'{t("livekalib.fueller.bilder")}</div>')
     material_karte = (f'<div class="card"><b>{t("livekalib.abschnitt.material")}'
-                      f'</b>' + material + '</div>')
+                      f'</b>' + material + fs_zeile + '</div>')
     regler = (
         # Zwei Register statt Dopplung (User 31.08.: "lieber zwei Register,
         # einmal fuer Erkennen und einmal fuer Lernen, und zwischen den
@@ -202,9 +227,9 @@ def render(kamera, vorrat, guard, standard, kat, lauf_bilder=(), deckel=0,
         + _regler("lk-det", t("livekalib.regler_det"),
                   t("livekalib.regler_det_prosa"), "0.40", "0.60", "0.01", "0.4")
         + _regler("lk-e", t("livekalib.regler_e"),
-                  t("livekalib.regler_e_prosa"), "0", "1", "0.001", "0")
+                  t("livekalib.regler_e_prosa"), _BODEN_E, "1", "0.001", _BODEN_E)
         + _regler("lk-t", t("livekalib.regler_t"),
-                  t("livekalib.regler_t_prosa"), "0", "1", "0.001", "0")
+                  t("livekalib.regler_t_prosa"), _BODEN_T, "1", "0.001", _BODEN_T)
         + ('<div class="kal-prosa">' + t("livekalib.ohne_guete") + "</div>"
            if ohne_guete else "")
         + f'<div id="lk-stand"></div></div>'

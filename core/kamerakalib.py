@@ -72,10 +72,6 @@ ANZ_FELDER = ("det_min", "guete_e_min", "guete_t_min")
 # hier noch in AUSNAHMEN steht, ebenfalls (K3: erreicht die Erweiterung ALLE
 # Stellen?).
 UEBERNAHME_STELLEN = (
-    "anlernen:benenne",                 # Pool -> Katalog (Today-Karte, Cluster-
-    #                                     Anlernen, Unbekannt-Benennung; die
-    #                                     Pool-Zeile traegt seit .380 camera +
-    #                                     fiqa_t/empf, die Latte beisst hier real)
     "core.uebernahme:plan_bauen",       # Lernlauf-Anker -> Katalog (Mitglieder
     #                                     tragen kamera + fiqa_t/empf; der Plan
     #                                     ist die Stelle, an der ein Bild
@@ -89,6 +85,14 @@ UEBERNAHME_STELLEN = (
 # Schreibwege auf refs_meta.jsonl, die KEINE Uebernahme sind (Begruendung je
 # Zeile — eine Ausnahme ohne Grund waere ein Schlupfloch):
 AUSNAHMEN = {
+    "anlernen:benenne":
+        "Hand-Auswahl je Bild (Today-Karte, Cluster, Unbekannt-Benennung, "
+        "Lern-Bruecke): der Nutzer hat jedes Gesicht einzeln angekreuzt — "
+        "User-Entscheid 01.09. ('Wenn ich sage hinzufuegen, dann "
+        "hinzufuegen'): der bewusste Klick ist die Pruefung, Aussieben "
+        "danach macht der Quality-Check. Von .385 bis .396 siebte auch "
+        "dieser Weg — bewusst zurueckgebaut, die Latte gilt weiter auf den "
+        "Automatik-Wegen",
     "anlernen:entferne_referenz":
         "Tombstone: entfernt eine Referenz, nimmt keine auf",
     "verifyd:upload_referenz":

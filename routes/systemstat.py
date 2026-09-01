@@ -300,6 +300,26 @@ def render(verlauf, jetzt, takt_s, aufbewahrung_h):
         (t("systemstat.rueckstau.fenster"), (f'{rs.get("stunden")} h'
                                              if rs.get("stunden") else ""))))
 
+    # W3 Stufe 1 (.399, User-Wunsch: "sehen, dass das System lebt"): die
+    # Event-Warteschlange als eigene Kachel — aktuelle Laenge gross, Verlauf
+    # als Balkenreihe aus dem 60-s-Ring, dazu Alter des aeltesten Wartenden
+    # und die Melde-Spur (offen/gesendet/Fehler).
+    q_n = rs.get("queue_n")
+    k_queue = _kachel(t("systemstat.kachel.queue"), rs,
+                      (f'<span class="sst-gross">{int(q_n)}</span>'
+                       if q_n is not None and not rs.get("grund")
+                       else '<span class="sst-gross dim">—</span>'),
+                      _balken(_reihe("rueckstau", "queue_n"),
+                              max(1.0, max(((z.get("rueckstau") or {}).get("queue_n") or 0)
+                                           for z in verlauf) if verlauf else 1.0)), (
+        (t("systemstat.queue.aeltester"),
+         _zahl(rs.get("queue_aeltester_s"), " s", 0)
+         if rs.get("queue_aeltester_s") else ""),
+        (t("systemstat.queue.spur"),
+         (f'{rs.get("spur_n", 0)} · {rs.get("spur_gesendet", 0)} ✓ · '
+          f'{rs.get("spur_fehler", 0)} ✗')
+         if rs.get("spur_gesendet") is not None else "")))
+
     # ---------------------------------------------------------- Block C
     lv = jetzt.get("live") or {}
     wa = lv.get("watchers") or {}
@@ -320,7 +340,7 @@ def render(verlauf, jetzt, takt_s, aufbewahrung_h):
             + f'<div class="ek-abschnitt">{html.escape(t("systemstat.block.hardware"))}</div>'
             + f'<div class="sst-gitter">{k_cpu}{k_ram}{k_platte}{k_gpu}{k_npu}</div>'
             + f'<div class="ek-abschnitt">{html.escape(t("systemstat.block.erkennung"))}</div>'
-            + f'<div class="sst-gitter">{k_worker}{k_durchsatz}{k_stau}</div>'
+            + f'<div class="sst-gitter">{k_worker}{k_durchsatz}{k_stau}{k_queue}</div>'
             + f'<div class="ek-abschnitt">{html.escape(t("systemstat.block.live"))}</div>'
             + f'<div class="sst-gitter">{k_live}</div>'
             + f'<p class="sub sst-stand">{html.escape(t("systemstat.stand", zeit=stand))}</p>')
