@@ -77,6 +77,7 @@ GRUENDE = (
     "nicht_lesbar",       # Quelle da, Lesen/Auswerten scheiterte
     "kein_limit",         # kein Limit gesetzt, also kein Prozentsatz bildbar
     "kein_dienst",        # Kennzahl kennt nur der laufende Dienst
+    "keine_anfragen",     # .407: dieser Prozess hat Frigate noch nie gerufen
 )
 
 _LOCK = threading.Lock()
@@ -234,6 +235,11 @@ def ram_messen():
         aus["prozesse_mb"] = int(teile.get("anon", 0) / 1024 ** 2)
         aus["grafik_mb"] = int(teile.get("shmem", 0) / 1024 ** 2)
         aus["dateicache_mb"] = int(max(0, teile.get("file", 0) - teile.get("shmem", 0)) / 1024 ** 2)
+        # .410 (Tester-Screenshot 02.09.: "In use 30 GB" bei 8 GB Prozessen —
+        # der Rest war Datei-Cache, den der Kernel dem Container zurechnet):
+        # das, was suslik WIRKLICH belegt, sind Prozesse + Grafik. Additiv,
+        # genutzt_mb (die docker-stats-Rechnung) bleibt fuer /health-Abnehmer.
+        aus["belegt_mb"] = aus["prozesse_mb"] + aus["grafik_mb"]
     try:
         w = _text("/sys/fs/cgroup/memory.max").strip()
         if w != "max":
@@ -646,9 +652,14 @@ def momentaufnahme(cfg, dienst=None):
     die anderen nie verschlucken (dieselbe Lehre wie beim Nachtjob-Rahmen).
 
     dienst: optionales dict mit dem, was NUR der laufende Dienst weiss —
-    {"platte": {...}, "worker": {...}, "rueckstau": {...}, "live": {...}}.
-    Fehlt es (Aufruf ohne Dienst, z. B. im Gate), tragen diese Bloecke den
-    Grund kein_dienst und behaupten nichts."""
+    {"platte": {...}, "worker": {...}, "rueckstau": {...}, "live": {...},
+     "frigate": {...}}. Fehlt es (Aufruf ohne Dienst, z. B. im Gate), tragen
+    diese Bloecke den Grund kein_dienst und behaupten nichts.
+
+    Die Namensliste unten ist der DURCHREICHE-VERTRAG: ein Block, der dort
+    nicht steht, faellt still aus der Momentaufnahme heraus, egal wie
+    fleissig der Dienst ihn fuellt (K3-Klasse). Wer systemstat_dienst um ein
+    Feld erweitert, erweitert sie mit."""
     dienst = dienst or {}
     dd = (cfg or {}).get("data_dir") or ""
     snap = {"ts": round(time.time(), 3)}
@@ -669,7 +680,7 @@ def momentaufnahme(cfg, dienst=None):
             snap[name] = fn()
         except Exception as e:                               # noqa: BLE001
             snap[name] = _fehlt("nicht_lesbar", fehler=type(e).__name__)
-    for name in ("worker", "rueckstau", "live"):
+    for name in ("worker", "rueckstau", "live", "frigate"):
         snap[name] = dienst.get(name) or {"grund": "kein_dienst"}
     with _LOCK:
         _STAND["snap"] = snap
@@ -776,8 +787,102 @@ def kuerzen(cfg, stunden=AUFBEWAHRUNG_H):
     return (len(behalten), weg)
 
 
+# ------------------------------------------------------------------ Live-Takt (.410)
+# User 02.09.: ein kleiner Schalter "Live" auf der Seite — dann alle ~5 s frisch,
+# aber NUR fuer begrenzte Zeit, von selbst auslaufend, weg beim Verlassen der
+# Seite, und ohne das System runterzureissen. Bauform ohne JS: die Seite fordert
+# bei jedem Abruf im Live-Betrieb LIVE_HALTEN_S Sekunden Live an; solange die
+# Anforderung in der Zukunft liegt, misst der Sammler im LIVE_TAKT_S statt im
+# TAKT_S und aktualisiert letzte(). Der Ring bekommt weiterhin nur je TAKT_S eine
+# Zeile (Aufloesung und Groesse unveraendert). Es bleibt EIN Messer: die
+# Delta-Zaehler (CPU, NPU, i915) haben weiter genau einen Vorstand, ihr Delta
+# laeuft dann ueber 5 s statt 60 — sauber, nur kuerzer gemittelt.
+# Wer die Seite verlaesst, fordert nichts mehr an: nach LIVE_HALTEN_S ist der
+# Sammler von selbst wieder im TAKT_S. Der Deckel LIVE_DECKEL_S sitzt in der
+# Seite (live_auswerten): laenger als 5 min laeuft kein Live-Betrieb, auch bei
+# einem offen gelassenen Tab. Kosten: eine Messung je 5 s (Millisekunden).
+LIVE_TAKT_S = 5
+LIVE_HALTEN_S = 15
+LIVE_DECKEL_S = 300
+_LIVE = {"bis": 0.0}                  # monotonic; 0 = nie angefordert
+# Wecker fuer den Sammler-Thread: schlaeft er gerade seine 60 s, soll die ERSTE
+# Live-Anforderung ihn sofort holen — sonst saehe der Nutzer bis zu eine Minute
+# lang dieselbe Probe, obwohl er auf "Live" geklickt hat.
+_WECKER = threading.Event()
+
+
+def live_aktiv(jetzt=None):
+    """True, solange eine Live-Anforderung in der Zukunft liegt (monotonic)."""
+    jetzt = time.monotonic() if jetzt is None else jetzt
+    with _LOCK:
+        return jetzt < _LIVE["bis"]
+
+
+def live_anfordern(sekunden=LIVE_HALTEN_S, jetzt=None):
+    """Live fuer `sekunden` anfordern (jeder Seitenabruf im Live-Betrieb).
+    -> Ablauf (monotonic). Weckt den Sammler NUR beim Uebergang aus -> an:
+    im laufenden Live-Betrieb kommt ohnehin alle LIVE_TAKT_S eine Messung, ein
+    Wecken je Seitenabruf verdoppelte die Messrate ohne Nutzen."""
+    jetzt = time.monotonic() if jetzt is None else jetzt
+    with _LOCK:
+        war_an = jetzt < _LIVE["bis"]
+        _LIVE["bis"] = jetzt + max(0.0, float(sekunden))
+        bis = _LIVE["bis"]
+    if not war_an:
+        _WECKER.set()
+    return bis
+
+
+def live_auswerten(live, seit, jetzt=None):
+    """Query-Parameter der Seite (?live=1&seit=<epoch>) -> (an, seit, rest_s).
+
+    Geparst und GEKLEMMT, Unsinn = aus: live muss genau '1' sein, seit eine
+    Epoch-Sekunde, die weder in der Zukunft liegt (5 s Uhr-Toleranz) noch
+    aelter als LIVE_DECKEL_S ist. rest_s = was vom Deckel noch bleibt."""
+    jetzt = time.time() if jetzt is None else jetzt
+    if str(live or "") != "1":
+        return False, None, 0
+    try:
+        s = int(float(seit))
+    except (TypeError, ValueError, OverflowError):      # "abc", "", "nan", "1e999"
+        return False, None, 0
+    alter = jetzt - s
+    if alter < -5 or alter > LIVE_DECKEL_S:
+        return False, None, 0
+    return True, s, int(LIVE_DECKEL_S - alter)
+
+
+def sammler_schritt(cfg, dienst_fn, zustand, jetzt=None):
+    """EIN Schritt des Sammlers: messen (aktualisiert letzte()), in den Ring
+    aber nur, wenn seit der letzten Ring-Zeile >= TAKT_S vergangen sind — oder
+    noch nie geschrieben wurde (erste Runde sofort, wie bisher).
+    zustand: {"ring_ts": monotonic der letzten Ring-Zeile}. -> (snap, geschrieben).
+    Als eigene Funktion, damit das Gate die Ring-Kadenz ohne Schlafen prueft
+    (12 Messungen in 60 s -> genau eine Ring-Zeile)."""
+    jetzt = time.monotonic() if jetzt is None else jetzt
+    snap = momentaufnahme(cfg, dienst_fn() if dienst_fn else None)
+    if "ring_ts" not in zustand or jetzt - zustand["ring_ts"] >= TAKT_S:
+        schreiben(cfg, snap)
+        zustand["ring_ts"] = jetzt
+        return snap, True
+    return snap, False
+
+
+def sammler_schlaf(zustand, jetzt=None):
+    """Wie lange der Sammler bis zur naechsten Messung wartet: LIVE_TAKT_S im
+    Live-Betrieb, sonst der Rest bis zur naechsten Ring-Zeile (nach einem
+    ausgelaufenen Live-Betrieb also KEIN voller Takt obendrauf — der Ring
+    behaelt seine Kadenz, statt eine Luecke zu bekommen)."""
+    jetzt = time.monotonic() if jetzt is None else jetzt
+    if live_aktiv(jetzt):
+        return float(LIVE_TAKT_S)
+    rest = TAKT_S - (jetzt - zustand.get("ring_ts", jetzt))
+    return max(1.0, min(float(TAKT_S), rest))
+
+
 def sammler_starten(cfg, dienst_fn=None, log=None):
-    """Schreib-Thread: alle TAKT_S Sekunden eine Zeile.
+    """Mess-Thread: je TAKT_S eine Ring-Zeile, im Live-Betrieb Messungen je
+    LIVE_TAKT_S (Block "Live-Takt" oben).
 
     Der Puffer wird beim Start NICHT geleert — ein Neustart soll die Kurve nicht
     abschneiden (Bauplan §3.2). Die erste Runde laeuft sofort und setzt nur die
@@ -785,12 +890,17 @@ def sammler_starten(cfg, dienst_fn=None, log=None):
     melde = log or (lambda m: None)
 
     def lauf():
+        zustand = {}
         while True:
+            jetzt = time.monotonic()
             try:
-                snap = momentaufnahme(cfg, dienst_fn() if dienst_fn else None)
-                schreiben(cfg, snap)
+                sammler_schritt(cfg, dienst_fn, zustand, jetzt)
             except Exception as e:                           # noqa: BLE001
                 melde(f"systemstat sampler: {type(e).__name__}: {e}")
-            time.sleep(TAKT_S)
+            # Event.wait statt sleep: die erste Live-Anforderung weckt sofort.
+            # Ein verlorenes set() (Wecker zwischen Timeout und clear) kostet
+            # nichts — die Runde misst ohnehin gerade und sieht live_aktiv().
+            _WECKER.wait(timeout=sammler_schlaf(zustand, jetzt))
+            _WECKER.clear()
 
     threading.Thread(target=lauf, daemon=True).start()

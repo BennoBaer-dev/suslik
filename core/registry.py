@@ -429,6 +429,15 @@ LIVE_ZUSTAENDE = {
     "unsupported":  {"farbe": "neutral", "label": "Not available on this build"},
 }
 
+# DER eine Kachel-Zustand, der "dieser Waechter laeuft gerade" bedeutet.
+# Er steht hier bei den Zustaenden selbst, weil ihn inzwischen ZWEI Stellen
+# brauchen: die Systemseite zaehlt damit die aktiven Waechter, und seit .407
+# entscheidet verifyd.process() daran, ob der Live-Waechter einer Kamera die
+# Ereignis-Analyse wirklich ersetzen darf. Ein zweites Literal an einer der
+# beiden Stellen waere die K3-Klasse (eine Umbenennung hier wuerde dort still
+# zu "nie aktiv" und damit zu einem stummen Ausfall des Schalters).
+LIVE_AKTIV = "active"
+
 
 # --- Support-Zugriff (analysen/support_api.md, 28.08.2026) --------------------------
 # DIE eine Bereichs-Quelle (QS-Ebenen-Regel: kein Streu-Literal): Inventar,
@@ -470,6 +479,13 @@ SUPPORT_BEREICHE = {
                                "live_status.json", "systemstat.jsonl"),
                    "text": "per-event results + service state files "
                            "(diagnosis core)"},
+    # .408 (Anwesenheits-Marken, M2): der "state"-Bereich ist eine DATEI-
+    # Whitelist — ein Ordner darin ergaebe einen leeren Abzug. Deshalb ein
+    # eigener Bereich mit Ordner-Walk (kein "dateien"). Text im Wortlaut des
+    # faces-Eintrags: die Marken sind ein Bewegungsprofil (wer wann wo war).
+    "anwesenheit": {"art": "tar", "wurzel": ("state", "anwesenheit"),
+                    "text": "presence marks (who was confirmed where, per "
+                            "quarter hour) — personal data, hand out with care"},
     "data":       {"art": "baum", "wurzel": (),
                    "text": "the whole data folder, read-only: "
                            "/support/data lists every file (path, size, "

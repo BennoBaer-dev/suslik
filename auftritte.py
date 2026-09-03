@@ -221,7 +221,7 @@ def render_unbekannt(cfg, log_pfad, personen_bekannt, params):
     held = (f'<a class="pass-bild" href="/event/'
             f'{urllib.parse.quote(_best.split("~")[0])}">'
             f'<img src="/anlern/crops/{urllib.parse.quote(_best)}.jpg" '
-            f'alt=""></a>')
+            f'loading="lazy" alt=""></a>')
     video = (f' <a class="gtb pass-knopf" href="/video/'
              f'{urllib.parse.quote(str(evs[0].get("eid")))}">'
              f'<span class="pk-icon">&#9654;</span>{t("auftritte.knopf.video")}</a>'
@@ -229,7 +229,7 @@ def render_unbekannt(cfg, log_pfad, personen_bekannt, params):
     thumbs = "".join(
         f'<a class="pass-thumb" href="/event/'
         f'{urllib.parse.quote(str(m.split("~")[0]))}">'
-        f'<img src="/anlern/crops/{urllib.parse.quote(m)}.jpg" alt="">'
+        f'<img src="/anlern/crops/{urllib.parse.quote(m)}.jpg" loading="lazy" alt="">'
         f'<small>{_hhmm(float(m.split(".")[0]))}</small></a>'
         for m in sorted(member))
     lauf_karte = (
@@ -247,7 +247,7 @@ def render_unbekannt(cfg, log_pfad, personen_bekannt, params):
     wahl = "".join(
         f'<label class="ubw"><input type="checkbox" name="ub-sel" '
         f'value="{html.escape(m)}">'
-        f'<img src="/anlern/crops/{urllib.parse.quote(m)}.jpg" alt=""></label>'
+        f'<img src="/anlern/crops/{urllib.parse.quote(m)}.jpg" loading="lazy" alt=""></label>'
         for m in sorted(member))
     kopf = (
         zurueck
@@ -439,7 +439,7 @@ def render(cfg, log_pfad, personen_bekannt, params):
             dq = s["pers"][q]
             u = _crop_url(cfg, dq.get("eid"), q)
             bm_q = f'{dq["best"]:.2f}' if dq.get("best") else "&mdash;"
-            innen = (f'<img src="{u}" alt="">' if u else
+            innen = (f'<img src="{u}" loading="lazy" alt="">' if u else
                      f'<span class="pass-bild-leer">{t("auftritte.karte.kein_bild")}</span>')
             kopf = (f'<b>{html.escape(q)}</b>' if q == person else html.escape(q))
             if u and dq.get("eid"):
@@ -486,7 +486,7 @@ def render(cfg, log_pfad, personen_bekannt, params):
                     + (t("auftritte.thumb.zusatz_referenz") if ist_ref else "")
                 q_thumbs.append(f'<a class="{kl}" title="{tt}" '
                                 f'href="/event/{urllib.parse.quote(str(e.get("eid") or ""))}">'
-                                f'<img src="{tu}" alt=""><small>{_hhmm(e["t"])}</small></a>')
+                                f'<img src="{tu}" loading="lazy" alt=""><small>{_hhmm(e["t"])}</small></a>')
             if not q_thumbs:
                 continue
             if q_ohne:
@@ -884,7 +884,7 @@ def render_pass(cfg, log_pfad, personen_bekannt, eid):
             tu = _crop_url(cfg, e.get("eid"), p)
             if tu:
                 break
-        inner = (f'<img src="{tu}" alt="">' if tu
+        inner = (f'<img src="{tu}" loading="lazy" alt="">' if tu
                  else f'<span>{html.escape(e["cam"][:6])}</span>')
         thumbs.append(f'<a class="pass-thumb" title="{html.escape(e["cam"])} {_hhmm(e["t"])}" '
                       f'href="/event/{urllib.parse.quote(str(e.get("eid") or ""))}">{inner}'

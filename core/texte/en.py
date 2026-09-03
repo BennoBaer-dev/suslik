@@ -52,7 +52,7 @@ T = {
         "readme.generell.titel": 'General',
     "readme.generell.text": "My scenario detection hangs on Frigate's person detection. As soon as Frigate reports a person, I fetch the whole person event. Such an event is sometimes a few seconds long, sometimes several minutes. I go through all of it to find every person in it.\n\nWhether Frigate's own face recognition is switched on makes no difference. It is only needed if you want faces synced with Frigate.\n\nThe check never runs on the detect stream. It runs on the recording, that is the best stream the camera hands to Frigate.\n\nA check starts in one of two ways. Either from a person event in Frigate, which is the scenario path. Or from the live watcher: it pulls the running stream, straight from the camera or through Frigate's proxy, looks for faces and starts from there.\n\nA person is recognised in three ways. By the face. By the person as a whole, from the picture alone, without a face. By a vision model, and that one is still beta.\n\nI run 4K cameras here, with the frame rate as high as it goes, at least 15 frames per second. Same for the bitrate. A low bitrate leaves moving faces blurred.",
     "readme.aktuell.titel": 'What I am working on',
-    "readme.aktuell.text": 'A calibration button. Camera feeds differ a lot, and with them the sharpness and what gets recognised. Calibration is meant to even that out.\n\nVision recognition through a language model: identifying a person when no face is visible. It runs in beta and needs to get better.\n\nPresence tracking: recording whether a known person is there or not. Other systems can hook into that, an alarm system for instance, or time tracking.',
+    "readme.aktuell.text": 'Recognition when several people are in one event. The system should work out where each person is in the picture and run face recognition separately for each person’s area — so two people close together no longer blur into a single verdict.',
     "readme.lernen.titel": 'How do I teach it new faces?',
     "readme.lernen.text": "This is how I do it on my system:\n\nFace learning run. The first thing on a new system. Depending on the hardware the last 500 events, 1000 if there is room to spare. The program fetches the events with a person, groups them and puts the pictures together. Known ones it assigns on its own. Unknown ones it collects as a group, and I give the group a name. That gives the starting set. Only works on faces that were recognised cleanly.\n\nToday. Once the starting set is there, anything new comes in from here: click an event or a person, adopt the face.\n\nKnown. Pick a person, have it find matching faces.\n\nPerson learning run. There is one next to it, for people whose face is not readable. More on that later.\n\nQuality. I use that tab regularly. It shows how good a person's pictures really are, which ones are too weak and which ones overlap with another person. Anything too similar I take out.\n\nThe Unknown tab is left over from an earlier version. I do not use it.",
     "readme.persoenlich.titel": 'Personal',
@@ -186,6 +186,13 @@ T = {
     "benachrichtigungen.pushover.label_token": "Token:",
     "benachrichtigungen.pushover.label_user": "User key:",
     "benachrichtigungen.pushover.knopf_test": "Test Pushover",
+    # .411 Kanal-Zustand (aus / pausiert / aktiv) unter der Pushover-Karte
+    "benachrichtigungen.pushover.zustand_an": "Active — token and user key are set.",
+    "benachrichtigungen.pushover.zustand_aus":
+        "Off — token or user key is missing, nothing is sent on this channel.",
+    "benachrichtigungen.pushover.zustand_pause":
+        "Paused — Pushover rejected {n} messages in a row. Save the settings or run a "
+        "successful test to resume.",
     "benachrichtigungen.telegram.label_modus": "Mode:",
     "benachrichtigungen.telegram.hinweis_modus":
         "aus=off · ha=via Home Assistant · direkt=direct bot · beide=both",
@@ -945,6 +952,16 @@ T = {
         "calibration page, where you can see the pictures.",
     "live.knopf_kalibrieren": "Calibrate",
     "live.knopf_vorrat_leeren": "Clear samples",
+    "live.workeraus.schalter":
+        "Let this watcher replace the event analysis for this camera",
+    "live.workeraus.erklaerung":
+        "Off by default. When on, Frigate events from this camera are no "
+        "longer analysed a second time — the watcher is already "
+        "looking at the same feed, so the work would be done twice. This "
+        "only takes effect while the watcher is enabled AND actually "
+        "running: if the engine stops or the watcher fails, the events are "
+        "analysed normally again. A name that Frigate itself claims is "
+        "always checked, whatever this setting says.",
     "live.frigate.schalter": "Create a Frigate event when someone is recognized",
     "live.frigate.erklaerung":
         "Off by default. When on, this watcher writes its own event into "
@@ -980,10 +997,23 @@ T = {
         "How well the person can be made out, half-covered faces included. "
         "Like the one above: it picks the picture and fills this page, it "
         "never sorts anybody out of the recognition.",
+    "livekalib.regler_p": "Head pose",
+    "livekalib.regler_p_prosa":
+        "How clearly a head can be made out at the find. It is the same score "
+        "the pose check uses to keep bins, hedges and car fronts out of the "
+        "alerts. Samples from before this measurement carry no value and "
+        "always pass. What you set here is saved for this camera and takes "
+        "effect on this page; in the service it does not sort anything out "
+        "yet.",
     "livekalib.ohne_guete":
         "The two quality models are missing in this build, so these samples "
         "carry no quality figures and the two lower sliders have no effect "
         "here. The detection score works.",
+    "livekalib.ohne_pose":
+        "None of these samples carries a head-pose value yet (older material, "
+        "or pictures that came in through another path), so this slider "
+        "changes nothing here. New samples from the event analysis bring the "
+        "value with them.",
     "livekalib.standard": "Defaults",
     "livekalib.fueller.laeuft": "material search running",
     "livekalib.fueller.bilanz": "last material search",
@@ -1382,7 +1412,7 @@ T = {
     "kalib.kachel.bilanz_keine": "Material search checked {ev} event(s): no face was found on this camera — a wide overview view like this cannot feed calibration.",
     "kalib.kachel.bilanz_klein": "Material search checked {ev} event(s): faces were found, but all were too small or too weak for the stock (below the harvest bar).",
     "kalib.kachel.bilanz_zulauf": "Material search checked {ev} event(s) and found usable material, but nothing reached the stock quality — run the search again or report this.",
-    "kalib.kachel.werte": "detection {det} · impression {e} · recognisability {tw}",
+    "kalib.kachel.werte": "detection {det} · impression {e} · recognisability {tw} · pose {p}",
     "kalib.kachel.katalog": "catalogue bar {e} / {tw}",
     "kalib.quelle.kamera": "own",
     "kalib.quelle.global": "global fallback",
@@ -3572,6 +3602,42 @@ between.</p>""",
     "meldung.wache.titel_person": "{wache} {kamera}: person detected",
     "meldung.wache.titel_stoerung": "{wache} {kamera}: disturbance",
     "meldung.wache.caption": "{wache} {kamera}: {text}",
+    # .412 (User 02.09.): Stil 'worte' meldet nur noch "erkannt oder nicht" —
+    # Stufe-2-Titel und der Stufe-1-Text ohne Name. Keine Zahlen, kein
+    # "preliminary", kein Kandidat (Gate prueft den Wortlaut je Sprache).
+    "meldung.wache.titel_erkannt": "{wache} {kamera}: recognized",
+    "meldung.wache.nicht_erkannt": "not recognized",
+    # ---- Today .412 (T1): Personenkarten, Miniatur, Deckel, Randspalten-Tooltips.
+    # Erst-Uebersetzung des Today-Bandes = Teilzug T1b; hier nur die neuen/
+    # geaenderten Texte (Konzept §6.7).
+    "heute.block.personen": "People",
+    "heute.block.personen_cnt.eins": "{n} recognized · sorted by last seen",
+    "heute.block.personen_cnt.viele": "{n} recognized · sorted by last seen",
+    "heute.person.bestaetigt": "first–last confirmed {von}–{bis}",
+    "heute.person.bestaetigt_einmal": "confirmed {zeit}",
+    "heute.person.seit": "confirmed since {zeit}",
+    "heute.person.passes.eins": "{n} pass",
+    "heute.person.passes.viele": "{n} passes",
+    "heute.person.auftritte.eins": "{n} appearance",
+    "heute.person.auftritte.viele": "{n} appearances",
+    "heute.person.zuletzt": "last seen {kamera} {zeit}",
+    "heute.person.live": "live",
+    "heute.person.live_title": "named by a live watcher only (name alert after several matches) — no confirmed pass yet",
+    "heute.person.live_link": "go to the live alert {zeit} · {kamera}",
+    "heute.person.mehr": "all {n} people ({m} more)",
+    "heute.anw.dauer": "present about {h} h",
+    "heute.anw.title": "presence by hour, all cameras — red: confirmed present, green: system running, nobody seen",
+    "heute.anw.title_gesamt": "presence by hour — all cameras, not filtered by the area view",
+    "heute.pass.mehr_kameras": "all {n} cameras ({m} more)",
+    "heute.pass.live": "live",
+    "heute.pass.live_title": "a live watcher reported a name during this pass",
+    "heute.rand.personen": "People",
+    "heute.rand.personen_title": "people with at least one confirmation on this day — worker judgments and live-watcher names",
+    "heute.rand.passes_title": "passes: events grouped by time and place; motion-only passes are not counted",
+    "heute.rand.events_title": "events analysed on this day, cameras of the current view",
+    "heute.rand.unmatched": "not matched inside passes",
+    "heute.rand.unmatched_title": "events with a face that matched no known person, inside passes where someone was recognized — normally the same people",
+    "heute.rand.unbek_title": "unknown identities of the pool with support on this day; without pool data: passes with nobody recognized",
     "meldung.wache.name_satz":
         "recognized (live, preliminary): {name} ({wort}, {n} "
         "consistent looks)",
@@ -3658,6 +3724,13 @@ between.</p>""",
         "runs in its own container, so its share cannot be named from this "
         "side. Anything this hardware cannot measure says so instead of "
         "showing a zero.",
+    # .411: derselbe Satz im Live-Betrieb — nennt den Live-Takt, nicht den Ring-Takt
+    "systemstat.sub_live":
+        "Total load of this machine. Live: a new sample every {takt} seconds; "
+        "the history keeps one sample every {ring} seconds for {stunden} "
+        "hours. There is no split per process here: Frigate runs in its own "
+        "container, so its share cannot be named from this side. Anything "
+        "this hardware cannot measure says so instead of showing a zero.",
     "systemstat.leer.titel": "No samples yet.",
     "systemstat.leer.hinweis":
         "The first line is written about {takt} seconds after the service "
@@ -3679,7 +3752,14 @@ between.</p>""",
     "systemstat.ram.grafik": "Graphics (shared RAM)",
     "systemstat.ram.prozesse": "Processes",
     "systemstat.ram.limit": "Limit",
-    "systemstat.ram.cache": "Reclaimable cache",
+    "systemstat.ram.dateicache": "File cache",
+    "systemstat.ram.dateicache_hinweis":
+        "held by the kernel for faster clip access and released the moment "
+        "memory is needed — not a leak, not an error",
+    "systemstat.ram.belegt": "processes + graphics, without file cache",
+    "systemstat.ram.anteil": "Of the limit, incl. cache",
+    "systemstat.ram.anteil_hinweis":
+        "the docker stats view: processes + graphics + file cache against the limit",
     "systemstat.platte.frei": "Free",
     "systemstat.platte.gesamt": "Total",
     "systemstat.platte.cache": "Clip cache / cap",
@@ -3702,6 +3782,13 @@ between.</p>""",
     "systemstat.kachel.queue": "Event queue",
     "systemstat.queue.aeltester": "oldest waiting",
     "systemstat.queue.spur": "delivery lane (open · sent · failed)",
+    "systemstat.queue.poll": "poll mode",
+    "systemstat.queue.poll_hinweis":
+        "events come straight from the sweep, nothing waits here — see Backlog",
+    "systemstat.kachel.frigate": "Frigate response time",
+    "systemstat.frigate.mittel": "average last minute",
+    "systemstat.frigate.max": "slowest last minute",
+    "systemstat.frigate.anfragen": "requests last minute",
     "systemstat.kachel.rueckstau": "Backlog",
     "systemstat.rueckstau.laeuft": "Catching up",
     "systemstat.rueckstau.fenster": "Look-back window",
@@ -3709,6 +3796,14 @@ between.</p>""",
     "systemstat.live.waechter": "Watchers active",
     "systemstat.live.supervisor": "Supervisor",
     "systemstat.stand": "Measured at {zeit}. The page refreshes itself.",
+    "systemstat.stand_live": "Measured at {zeit}. Live: a new sample every {takt} seconds.",
+    "systemstat.live_knopf": "Live",
+    "systemstat.live_knopf.an": "Live · {rest} min",
+    "systemstat.live_knopf.tip_aus":
+        "Refresh every {takt} seconds for up to {minuten} minutes, then back to "
+        "the normal pace. Leaving the page ends it as well.",
+    "systemstat.live_knopf.tip_an":
+        "Live for about {rest} more minutes. Click to stop now.",
     "systemstat.grund.erster_lauf":
         "waiting for the second measurement \u2014 this number is the "
         "difference between two samples",
@@ -3726,4 +3821,48 @@ between.</p>""",
         "percentage to show",
     "systemstat.grund.kein_dienst":
         "only the running service knows this number",
+    "systemstat.grund.keine_anfragen":
+        "no request has gone to Frigate yet since this service started",
+    # --- routes/anwesenheit.py (.409, Anwesenheitsseite) ---
+    "anwesenheit.titel": "Presence",
+    "anwesenheit.knopf": "Presence",
+    "anwesenheit.knopf_tip": "Presence: who was confirmed on the property, quarter hour by quarter hour",
+    "anwesenheit.kopf_satz": "One row per person, the day in quarter-hour cells. Red = confirmed present in that quarter hour (event analysis or live watcher, shown once). With cautious recognition only a few cells turn red — that is normal, not an error.",
+    "anwesenheit.seit": "Recording since {datum}.",
+    "anwesenheit.fenster_auto": "Day window {von}–{bis} h, set automatically from the sightings of the last {tage} days; the hours outside it are one cell per hour.",
+    "anwesenheit.fenster_werk": "Day window {von}–{bis} h (factory default until at least {n} sightings exist); the hours outside it are one cell per hour.",
+    "anwesenheit.fenster_fest": "Day window {von}–{bis} h, fixed in Settings; the hours outside it are one cell per hour.",
+    "anwesenheit.sicht_label": "View",
+    "anwesenheit.sicht_alle": "All",
+    "anwesenheit.sicht_kamera": "Camera",
+    "anwesenheit.sicht_area": "Area",
+    "anwesenheit.sicht_kamera_leer": "No camera has been analysed yet",
+    "anwesenheit.sicht_area_leer": "No areas defined — create them under Areas",
+    "anwesenheit.nacht": "night",
+    "anwesenheit.legende_da": "confirmed present",
+    "anwesenheit.legende_weg": "system running, nobody confirmed",
+    "anwesenheit.legende_leer": "system not running or did not look",
+    "anwesenheit.legende_jetzt": "now",
+    "anwesenheit.zaehler": "{zeilen} marks read, {kaputt} broken lines skipped.",
+    "anwesenheit.gekappt": "The day file is larger than the reading limit; only its end was read.",
+    "anwesenheit.nie": "Not seen in this view: {namen}",
+    "anwesenheit.alle_leisten": "show all people as rows",
+    "anwesenheit.leer_personen": "No known people yet",
+    "anwesenheit.leer_personen_hinweis": "Rows appear as soon as people are learned (People → Known).",
+    "anwesenheit.keine_aufzeichnung": "No recording for this day.",
+    "anwesenheit.tip_da": "{zeit} · {kameras} · {quelle}",
+    "anwesenheit.tip_weg": "{zeit} · system running, nobody confirmed",
+    "anwesenheit.tip_leer": "{zeit} · no statement (system not running or did not look)",
+    "anwesenheit.tip_zukunft": "{zeit} · not yet",
+    "anwesenheit.quelle_worker": "event analysis",
+    "anwesenheit.quelle_live": "live watcher",
+    "anwesenheit.quelle_beide": "live watcher and event analysis",
+    "anwesenheit.nav.heute": "Today",
+    "anwesenheit.nav.gestern": "yesterday",
+    "anwesenheit.nav.attr_vortag": "previous day",
+    "anwesenheit.nav.attr_folgetag": "next day",
+    "anwesenheit.nav.attr_kein_morgen": "no future days",
+    "anwesenheit.nav.attr_kein_frueher": "no earlier recording",
+    "anwesenheit.nav.zurueck_heute": "back to today",
+    "anwesenheit.zeile_niemand": "nobody",
 }

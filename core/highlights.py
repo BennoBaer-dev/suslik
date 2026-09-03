@@ -12,7 +12,34 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.0.406"   # Eintraege fuer .380 (Unknown-Umbau, Support-Vollzugriff) VOR Release mit User abstimmen (User 30.08.:
+STAND = "0.1.0.501"   # .501 = Release-Nummer (.500 lief nur intern auf den Testsystemen; der Support-Re-Analyse-Fix 62346ee kam danach — ein Image, ein Commit). Box-Inhalt User 03.09. ~23:55: ein Punkt "deutlich
+                      # verbesserte Gesichtserkennung" + die zwei .414-Punkte
+                      # (Anwesenheit, Today) unter DIESER Nummer — .414 ist
+                      # zurueckgezogen und taucht nirgends mehr auf.
+                      # Davor: .416 = reiner STAND-Bump (Haus-Stand Testbett-Einspielung:
+                      # POST /support/einspielen schickt ein Szenario gezielt durch
+                      # die Erkennung EINER Kamera — Werkzeug fuer die Nachstellung
+                      # fremder Systeme, kein Box-Eintrag).
+                      # Davor: .415 = reiner STAND-Bump (Hotfix: Deadlock im live_only-Uebersprung,
+                      # Tester-Realfall 02.09. abends — kein Box-Eintrag, Bugfix).
+                      # Davor: .414 Box-Inhalt User 02.09. 18:45 — RELEASE-Version: GENAU zwei
+                      # Eintraege, "Einbau einer Anwesenheitserkennung" und "Neubau der
+                      # Today-Seite". Sonst nichts (kein Systemstatus, keine Live-Texte,
+                      # keine Bugfixes) — der Wortlaut ist so abgestimmt und wird nicht
+                      # ohne neue Abstimmung ergaenzt.
+                      # Davor: .413 = reiner STAND-Bump (Today: Live-Namen nur noch aus Stufe-2-
+                      # Namensmeldungen, nur-live-Karte fuehrt auf den Live-Auftritt) —
+                      # Box-Inhalt unveraendert, vor einem Release mit dem User abstimmen.
+                      # Davor: .412 = reiner STAND-Bump (Today neu: Personenkarten mit Anwesenheits-
+                      # Miniatur, gedeckelte Durchgaenge, keine Gruppenkachel/kein Live-Block;
+                      # Live-Meldetexte kurz; Bilder lazy).
+                      # Davor: .411 = reiner STAND-Bump (Marge im Live-Urteil T0c, Pushover-Leerlauf,
+                      # tmp-Kollision core/atomar, Live-Einleitungssatz).
+                      # Davor: .410 = reiner STAND-Bump (Systemstatus: RAM-Kachel Cache-Trennung, Queue nach
+                      # Betriebsart, Backlog-Verlauf, Live-Schalter).
+                      # Davor: .409 = reiner STAND-Bump (Anwesenheitsseite /anwesenheit, Z4).
+                      # Davor: .408 = reiner STAND-Bump (Anwesenheits-Marken, unsichtbarer Vorlauf).
+                      # Davor: Eintraege fuer .380 (Unknown-Umbau, Support-Vollzugriff) VOR Release mit User abstimmen (User 30.08.:
                       # "whatsnew bleibt wie es ist").
                       # Davor: .371 = reiner STAND-Bump (User 30.08.:
                       # "whatsnew bleibt wie es jetzt ist" — die Box
@@ -349,11 +376,92 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # .414 — Inhalt vom User festgelegt (02.09. 18:45): GENAU zwei Eintraege,
+    # "Einbau einer Anwesenheitserkennung" und "Neubau der Today-Seite". Alles
+    # andere aus .407-.413 (Systemstatus, kurze Live-Meldetexte, Marge, lazy)
+    # bleibt BEWUSST draussen — nicht ohne neue Abstimmung ergaenzen.
+    # EN ist die Quelle, DE/ES/IT/FR wortgleich uebersetzt.
+    # 0.1.0.500 — Box-Inhalt User 03.09. ~23:55: EIN neuer Punkt ("bessere
+    # Gesichtserkennung, deutlich verbessert, mehr nicht") PLUS die zwei
+    # abgestimmten .414-Punkte hierher gezogen — die Zwischenversion .414
+    # wurde zurueckgezogen (von GitHub/GHCR entfernt) und darf NIRGENDS mehr
+    # auftauchen (User: "alles in dieser Version").
+    ("0.1.0.501", (
+        {"de": "Deutlich verbesserte Gesichtserkennung.",
+         "en": "Greatly improved face recognition.",
+         "es": "Reconocimiento facial muy mejorado.",
+         "it": "Riconoscimento facciale nettamente migliorato.",
+         "fr": "Reconnaissance faciale nettement améliorée."},
+        # Betonter Hinweis (User 04.09. frueh, Wortlaut "nur begrenzt funktioniert"):
+        # Mehr-Personen-Erkennung im Bild ist in Arbeit (Blockraster/Logbuch, s. stand.md).
+        # Mehrsprachige Eintraege tragen die Marke als Feld "betont" (Renderer
+        # webui: dict -> txt.get("betont")); das BETONT-Praefix gilt nur fuer
+        # englische Alt-Strings.
+        {"betont": True,
+         "de": "Die Erkennung mehrerer Personen in einem Bild funktioniert derzeit nur "
+               "begrenzt — daran arbeite ich.",
+         "en": "Recognising several people in one picture works only to a limited extent "
+               "for now — I am working on it.",
+         "es": "El reconocimiento de varias personas en una misma imagen funciona por "
+               "ahora solo de forma limitada — estoy trabajando en ello.",
+         "it": "Il riconoscimento di più persone nella stessa immagine per ora funziona "
+               "solo in modo limitato — ci sto lavorando.",
+         "fr": "La reconnaissance de plusieurs personnes sur une même image ne fonctionne "
+               "pour l'instant que de façon limitée — j'y travaille."},
+        {"de": "Neu: Anwesenheitserkennung. Die Seite Anwesenheit zeigt je Person den "
+               "Tag in Viertelstunden — rot war da, grün nicht da, leer heißt das "
+               "System lief nicht. Umschaltbar nach Kamera oder Bereich, 30 Tage "
+               "zurückblätterbar. Die Marken kommen aus der Ereignis-Analyse und "
+               "vom Live-Wächter gleichermaßen.",
+         "en": "New: presence detection. The Presence page shows each person's day "
+               "in quarter hours — red was there, green was not, empty means the "
+               "system was not running. Switch between all cameras, one camera or "
+               "an area, page back 30 days. Marks come from event analysis and the "
+               "live watcher alike.",
+         "es": "Nuevo: detección de presencia. La página Presencia muestra el día de "
+               "cada persona en cuartos de hora: rojo estuvo, verde no estuvo, vacío "
+               "significa que el sistema no estaba en marcha. Conmutable por cámara "
+               "o zona, con 30 días hacia atrás. Las marcas vienen tanto del análisis "
+               "de eventos como del vigilante en vivo.",
+         "it": "Novità: rilevamento della presenza. La pagina Presenza mostra la "
+               "giornata di ogni persona in quarti d'ora: rosso era presente, verde "
+               "no, vuoto significa che il sistema non era in funzione. Selezionabile "
+               "per telecamera o area, con 30 giorni indietro. I segni arrivano sia "
+               "dall'analisi degli eventi sia dal guardiano live.",
+         "fr": "Nouveau : détection de présence. La page Présence montre la journée "
+               "de chaque personne par quart d'heure : rouge présent, vert absent, "
+               "vide signifie que le système ne tournait pas. Bascule par caméra ou "
+               "par zone, 30 jours en arrière. Les marques viennent aussi bien de "
+               "l'analyse des événements que du gardien en direct."},
+        {"de": "Die Today-Seite ist neu gebaut: eine Karte je erkannter Person mit "
+               "Anwesenheits-Miniatur, keine Gruppen-Kacheln mehr, kompakte "
+               "Durchgangszeilen, Bilder laden erst beim Scrollen. Live erkannte "
+               "Personen stehen als normale Karte mit dem Vermerk „live“.",
+         "en": "The Today page is rebuilt: one card per recognized person with a "
+               "presence mini-bar, no more group tiles, compact pass rows, images "
+               "load as you scroll. People recognized live appear as normal cards "
+               "with a “live” badge.",
+         "es": "La página Hoy está reconstruida: una tarjeta por persona reconocida "
+               "con una mini barra de presencia, sin mosaicos de grupo, filas de "
+               "paso compactas, las imágenes se cargan al desplazarse. Las personas "
+               "reconocidas en vivo aparecen como tarjetas normales con la marca "
+               "“live”.",
+         "it": "La pagina Oggi è stata ricostruita: una scheda per persona "
+               "riconosciuta con una mini barra di presenza, niente più riquadri di "
+               "gruppo, righe dei passaggi compatte, le immagini si caricano "
+               "scorrendo. Le persone riconosciute live compaiono come schede "
+               "normali con l'etichetta “live”.",
+         "fr": "La page Aujourd'hui est reconstruite : une carte par personne "
+               "reconnue avec une mini-barre de présence, plus de tuiles de groupe, "
+               "des lignes de passage compactes, les images se chargent au "
+               "défilement. Les personnes reconnues en direct apparaissent comme "
+               "des cartes normales avec la mention “live”."},
+    )),
     # .387/.402 — Inhalt vom User abgestimmt (31.08. diktiert; 01.09.: der
     # rote Zwischenversions-Hinweis fliegt wieder raus, "Rest kann alles so
     # bleiben"). Versions-Key beim Release-Lauf auf die finale Nummer ziehen,
     # falls bis dahin weitere Builds kommen.
-    ("0.1.0.406", (
+    ("0.1.0.408", (
         # Zwei Feature-Punkte vom User nachgereicht (31.08.: "neue Kalibrierung
         # pro Kamera und neue Unbekannt-Seite muessen mit rein").
         {"de": "Neu: Kalibrierung pro Kamera. Ein eigener Knopf oben in der "

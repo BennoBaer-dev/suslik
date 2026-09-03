@@ -55,7 +55,7 @@ T = {
         "readme.generell.titel": 'Generelles',
     "readme.generell.text": 'Meine Szenario-Erkennung hängt an Frigates Personenerkennung. Sobald Frigate eine Person meldet, hole ich das ganze Personen-Ereignis. So ein Ereignis ist mal wenige Sekunden lang, mal mehrere Minuten. Ich schaue es komplett durch, um alle Personen darin zu finden.\n\nOb Frigates eigene Gesichtserkennung an ist, spielt dafür keine Rolle. Sie wird nur gebraucht, wenn Gesichter mit Frigate abgeglichen werden sollen.\n\nGeprüft wird nie der Detect-Stream, sondern die Aufzeichnung, also der beste Stream, den die Kamera an Frigate liefert.\n\nEine Prüfung startet auf zwei Wegen. Entweder über das Personen-Event aus Frigate, das ist der Szenario-Weg. Oder über den Live-Wächter: Der holt den laufenden Stream, direkt von der Kamera oder über Frigates Proxy, sucht darin Gesichter und startet von dort.\n\nEine Person wird auf drei Wegen erkannt. Über das Gesicht. Über die Person als Ganzes, allein aus dem Bild, ohne Gesicht. Über ein Vision-Modell, dieser Weg ist noch Beta.\n\nIch fahre hier 4K-Kameras mit einer möglichst hohen Bildrate, mindestens 15 Bilder je Sekunde. Die Bitrate ebenso hoch wie möglich. Eine niedrige Bitrate macht bewegte Gesichter unscharf.',
     "readme.aktuell.titel": 'Woran ich gerade arbeite',
-    "readme.aktuell.text": 'Ein Kalibrierungs-Knopf. Kamera-Feeds sind sehr unterschiedlich, damit auch die Schärfe und die Erkennung. Die Kalibrierung soll das ausgleichen.\n\nDie Vision-Erkennung über ein Sprachmodell: eine Person erkennen, wenn kein Gesicht zu sehen ist. Das läuft in der Beta und soll besser werden.\n\nEine Anwesenheits-Erkennung: festhalten, ob eine bekannte Person da ist oder nicht. Daran kann anderes anknüpfen, eine Alarmanlage etwa oder eine Zeiterfassung.',
+    "readme.aktuell.text": 'Erkennung, wenn mehrere Personen in einem Event sind. Das System soll erkennen, wo jede Person im Bild ist, und die Gesichtserkennung getrennt je Personen-Bereich fahren — damit zwei Personen nahe beieinander nicht mehr zu einem einzigen Urteil verschwimmen.',
     "readme.lernen.titel": 'Wie lerne ich neue Gesichter?',
     "readme.lernen.text": 'So lerne ich mit meinem System:\n\nGesichts-Lernlauf. Auf einem neuen System das Erste. Je nach Hardware die letzten 500 Ereignisse, mit Reserve 1000. Das Programm holt die Ereignisse mit Person, gruppiert sie und legt Bilder zusammen. Bekannte ordnet es selbst zu. Unbekannte sammelt es als Gruppe, und ich gebe der Gruppe einen Namen. Das gibt den Grundstock. Greift nur bei Gesichtern, die sauber erkannt wurden.\n\nHeute. Steht der Grundstock, kommt Neues von hier dazu: Ereignis oder Person anklicken, Gesicht übernehmen.\n\nBekannte Personen. Person auswählen, passende Gesichter suchen lassen.\n\nPersonen-Lernlauf. Den gibt es daneben, für Personen ohne erkennbares Gesicht. Dazu schreibe ich später mehr.\n\nQualität. Den Reiter nutze ich regelmäßig. Er zeigt, wie gut die Bilder einer Person wirklich sind, welche zu schwach sind und welche sich mit einer anderen Person überschneiden. Zu ähnliche nehme ich raus.\n\nDen Reiter Unbekannte gibt es noch aus einer früheren Fassung. Ich nutze ihn nicht.',
     "readme.persoenlich.titel": 'Persönliches',
@@ -177,6 +177,12 @@ T = {
     "benachrichtigungen.pushover.label_token": "Token:",
     "benachrichtigungen.pushover.label_user": "User-Key:",
     "benachrichtigungen.pushover.knopf_test": "Pushover testen",
+    "benachrichtigungen.pushover.zustand_an": "Aktiv — Token und User-Key sind gesetzt.",
+    "benachrichtigungen.pushover.zustand_aus":
+        "Aus — Token oder User-Key fehlt, über diesen Kanal wird nichts gesendet.",
+    "benachrichtigungen.pushover.zustand_pause":
+        "Pausiert — Pushover hat {n} Meldungen in Folge abgelehnt. Einstellungen speichern "
+        "oder einen erfolgreichen Test schicken, dann geht es weiter.",
     "benachrichtigungen.telegram.label_modus": "Modus:",
     "benachrichtigungen.telegram.hinweis_modus":
         "aus=abgeschaltet · ha=über Home Assistant · direkt=direkter "
@@ -938,6 +944,16 @@ T = {
         "sieht.",
     "live.knopf_kalibrieren": "Kalibrieren",
     "live.knopf_vorrat_leeren": "Bilder verwerfen",
+    "live.workeraus.schalter":
+        "Dieser Wächter ersetzt die Ereignis-Analyse dieser Kamera",
+    "live.workeraus.erklaerung":
+        "Vorgabe: aus. Eingeschaltet werden Frigate-Ereignisse dieser Kamera "
+        "nicht noch einmal analysiert — der Wächter schaut ohnehin auf "
+        "denselben Strom, die Arbeit liefe sonst doppelt. Das greift nur, "
+        "solange der Wächter eingeschaltet ist UND wirklich läuft: steht die "
+        "Engine oder fällt der Wächter aus, werden die Ereignisse wieder "
+        "normal analysiert. Einen Namen, den Frigate selbst behauptet, prüfen "
+        "wir immer, unabhängig von dieser Einstellung.",
     "live.frigate.schalter": "Frigate-Ereignis anlegen, wenn jemand erkannt wird",
     "live.frigate.erklaerung":
         "Vorgabe: aus. Eingeschaltet legt dieser Wächter ein eigenes Ereignis "
@@ -973,10 +989,23 @@ T = {
         "Wie gut die Person auszumachen ist, halb verdeckte Gesichter "
         "eingeschlossen. Wie der Regler darüber: er wählt das Bild und füllt "
         "diese Seite, er sortiert nie jemanden aus der Erkennung.",
+    "livekalib.regler_p": "Kopfhaltung",
+    "livekalib.regler_p_prosa":
+        "Wie klar an der Fundstelle ein Kopf auszumachen ist. Es ist derselbe "
+        "Wert, mit dem die Pose-Prüfung Tonnen, Hecken und Kühlergrills aus "
+        "den Meldungen hält. Bilder aus der Zeit vor dieser Messung tragen "
+        "keinen Wert und passieren immer. Was hier eingestellt wird, gilt "
+        "gespeichert für diese Kamera und wirkt auf dieser Seite; im Dienst "
+        "sortiert es noch nichts aus.",
     "livekalib.ohne_guete":
         "Die zwei Güte-Modelle fehlen in diesem Build, deshalb tragen die "
         "Bilder keine Güte-Zahlen und die unteren zwei Regler wirken hier "
         "nicht. Der Erkennungswert wirkt.",
+    "livekalib.ohne_pose":
+        "Keines dieser Bilder trägt bisher einen Kopfhaltungs-Wert "
+        "(Altbestand, oder Bilder, die über einen anderen Weg hereinkamen), "
+        "deshalb ändert dieser Regler hier nichts. Neue Bilder aus der "
+        "Ereignis-Analyse bringen den Wert mit.",
     "livekalib.standard": "Vorgaben",
     "livekalib.fueller.laeuft": "Materialsuche läuft",
     "livekalib.fueller.bilanz": "Letzte Materialsuche",
@@ -1332,7 +1361,7 @@ T = {
     "kalib.kachel.bilanz_keine": "Materialsuche hat {ev} Event(s) geprueft: kein Gesicht auf dieser Kamera gefunden — eine weite Uebersichts-Ansicht kann die Kalibrierung nicht speisen.",
     "kalib.kachel.bilanz_klein": "Materialsuche hat {ev} Event(s) geprueft: Gesichter gefunden, aber alle zu klein oder zu schwach fuer den Vorrat (unter der Ernte-Latte).",
     "kalib.kachel.bilanz_zulauf": "Materialsuche hat {ev} Event(s) geprueft und brauchbares Material gefunden, aber nichts erreichte die Vorrats-Guete — Suche erneut starten oder melden.",
-    "kalib.kachel.werte": "Erkennungswert {det} · Bildeindruck {e} · Erkennbarkeit {tw}",
+    "kalib.kachel.werte": "Erkennungswert {det} · Bildeindruck {e} · Erkennbarkeit {tw} · Pose {p}",
     "kalib.kachel.katalog": "Katalog-Latte {e} / {tw}",
     "kalib.quelle.kamera": "eigen",
     "kalib.quelle.global": "globaler Rückfall",
@@ -3605,6 +3634,38 @@ Personen zwischendurch auffüllen.</p>""",
     "meldung.wache.titel_person": "{wache} {kamera}: Person entdeckt",
     "meldung.wache.titel_stoerung": "{wache} {kamera}: Störung",
     "meldung.wache.caption": "{wache} {kamera}: {text}",
+    # .412: User- Wortlaut ("Live-Waechter <Kamera>: erkannt" / "nicht erkannt").
+    "meldung.wache.titel_erkannt": "{wache} {kamera}: erkannt",
+    "meldung.wache.nicht_erkannt": "nicht erkannt",
+    # ---- Today .412 (T1) ----
+    "heute.block.personen": "Personen",
+    "heute.block.personen_cnt.eins": "{n} erkannt · nach letzter Sichtung sortiert",
+    "heute.block.personen_cnt.viele": "{n} erkannt · nach letzter Sichtung sortiert",
+    "heute.person.bestaetigt": "erste–letzte Bestätigung {von}–{bis}",
+    "heute.person.bestaetigt_einmal": "bestätigt {zeit}",
+    "heute.person.seit": "bestätigt seit {zeit}",
+    "heute.person.passes.eins": "{n} Durchgang",
+    "heute.person.passes.viele": "{n} Durchgänge",
+    "heute.person.auftritte.eins": "{n} Auftritt",
+    "heute.person.auftritte.viele": "{n} Auftritte",
+    "heute.person.zuletzt": "zuletzt {kamera} {zeit}",
+    "heute.person.live": "live",
+    "heute.person.live_title": "nur vom Live-Wächter benannt (Namensmeldung nach mehreren Funden) — noch kein bestätigter Durchgang",
+    "heute.person.live_link": "zur Live-Meldung {zeit} · {kamera}",
+    "heute.person.mehr": "alle {n} Personen ({m} weitere)",
+    "heute.anw.dauer": "anwesend rund {h} h",
+    "heute.anw.title": "Anwesenheit je Stunde, alle Kameras — rot: bestätigt anwesend, grün: System lief, niemand gesehen",
+    "heute.anw.title_gesamt": "Anwesenheit je Stunde — alle Kameras, nicht nach der Bereichs-Sicht gefiltert",
+    "heute.pass.mehr_kameras": "alle {n} Kameras ({m} weitere)",
+    "heute.pass.live": "live",
+    "heute.pass.live_title": "ein Live-Wächter hat während dieses Durchgangs einen Namen gemeldet",
+    "heute.rand.personen": "Personen",
+    "heute.rand.personen_title": "Personen mit mindestens einer Bestätigung an diesem Tag — Worker-Urteile und Live-Wächter-Namen",
+    "heute.rand.passes_title": "Durchgänge: Events nach Zeit und Ort gruppiert; reine Bewegungs-Durchgänge zählen nicht",
+    "heute.rand.events_title": "an diesem Tag analysierte Events, Kameras der aktuellen Sicht",
+    "heute.rand.unmatched": "nicht zugeordnet in Durchgängen",
+    "heute.rand.unmatched_title": "Events mit Gesicht ohne Treffer auf eine bekannte Person, innerhalb von Durchgängen mit Erkennung — meist dieselben Leute",
+    "heute.rand.unbek_title": "Unbekannt-Identitäten des Pools mit Stütze an diesem Tag; ohne Pool-Daten: Durchgänge ohne jede Erkennung",
     # "{n}× übereinstimmend" statt Zahl+Nomen: {n} kann 1 sein und hat hier
     # kein t_n-Paar — eine Fuegung wie "{n} übereinstimmende Treffer" waere
     # im Singular falsch dekliniert. Wortfamilie wie live.erklaer.satz1.
@@ -3687,6 +3748,13 @@ Personen zwischendurch auffüllen.</p>""",
         "Container, sein Anteil ist von hier aus nicht benennbar. Was diese "
         "Hardware nicht messen kann, sagt das \u2014 statt eine Null zu "
         "zeigen.",
+    "systemstat.sub_live":
+        "Gesamtauslastung dieser Maschine. Live: alle {takt} Sekunden eine "
+        "neue Messung; der Verlauf beh\u00e4lt eine Messung je {ring} Sekunden "
+        "\u00fcber {stunden} Stunden. Eine Aufteilung nach Prozess gibt es hier "
+        "nicht: Frigate l\u00e4uft in einem eigenen Container, sein Anteil ist "
+        "von hier aus nicht benennbar. Was diese Hardware nicht messen kann, "
+        "sagt das \u2014 statt eine Null zu zeigen.",
     "systemstat.leer.titel": "Noch keine Messungen.",
     "systemstat.leer.hinweis":
         "Die erste Zeile entsteht rund {takt} Sekunden nach dem Start des "
@@ -3708,7 +3776,14 @@ Personen zwischendurch auffüllen.</p>""",
     "systemstat.ram.grafik": "Grafik (geteilter RAM)",
     "systemstat.ram.prozesse": "Prozesse",
     "systemstat.ram.limit": "Grenze",
-    "systemstat.ram.cache": "Rückholbarer Cache",
+    "systemstat.ram.dateicache": "Datei-Cache",
+    "systemstat.ram.dateicache_hinweis":
+        "vom Kernel für schnelleren Clip-Zugriff gehalten, wird bei Bedarf "
+        "sofort freigegeben — kein Leck, kein Fehler",
+    "systemstat.ram.belegt": "Prozesse + Grafik, ohne Datei-Cache",
+    "systemstat.ram.anteil": "Von der Grenze, inkl. Cache",
+    "systemstat.ram.anteil_hinweis":
+        "die docker-stats-Sicht: Prozesse + Grafik + Datei-Cache gegen die Grenze",
     "systemstat.platte.frei": "Frei",
     "systemstat.platte.gesamt": "Gesamt",
     "systemstat.platte.cache": "Clip-Cache / Deckel",
@@ -3731,6 +3806,13 @@ Personen zwischendurch auffüllen.</p>""",
     "systemstat.kachel.queue": "Ereignis-Warteschlange",
     "systemstat.queue.aeltester": "aeltestes wartet",
     "systemstat.queue.spur": "Melde-Spur (offen · gesendet · Fehler)",
+    "systemstat.queue.poll": "Poll-Betrieb",
+    "systemstat.queue.poll_hinweis":
+        "Events kommen direkt aus dem Sweep, hier wartet nichts — siehe Rückstau",
+    "systemstat.kachel.frigate": "Frigate-Antwortzeit",
+    "systemstat.frigate.mittel": "Mittel letzte Minute",
+    "systemstat.frigate.max": "langsamste letzte Minute",
+    "systemstat.frigate.anfragen": "Anfragen letzte Minute",
     "systemstat.kachel.rueckstau": "Rückstau",
     "systemstat.rueckstau.laeuft": "Holt gerade nach",
     "systemstat.rueckstau.fenster": "Rückschau-Fenster",
@@ -3738,6 +3820,14 @@ Personen zwischendurch auffüllen.</p>""",
     "systemstat.live.waechter": "Wächter aktiv",
     "systemstat.live.supervisor": "Supervisor",
     "systemstat.stand": "Gemessen um {zeit}. Die Seite lädt sich selbst neu.",
+    "systemstat.stand_live": "Gemessen um {zeit}. Live: alle {takt} Sekunden eine neue Messung.",
+    "systemstat.live_knopf": "Live",
+    "systemstat.live_knopf.an": "Live · {rest} min",
+    "systemstat.live_knopf.tip_aus":
+        "Alle {takt} Sekunden neu laden, höchstens {minuten} Minuten lang, dann "
+        "wieder der normale Takt. Die Seite zu verlassen beendet es ebenfalls.",
+    "systemstat.live_knopf.tip_an":
+        "Noch etwa {rest} Minuten live. Ein Klick beendet es sofort.",
     "systemstat.grund.erster_lauf":
         "wartet auf die zweite Messung \u2014 diese Zahl ist die Differenz "
         "zweier Messungen",
@@ -3755,4 +3845,48 @@ Personen zwischendurch auffüllen.</p>""",
         "es keinen Prozentwert",
     "systemstat.grund.kein_dienst":
         "diese Zahl kennt nur der laufende Dienst",
+    "systemstat.grund.keine_anfragen":
+        "seit dem Start dieses Dienstes ging noch keine Anfrage an Frigate",
+    # --- routes/anwesenheit.py (.409, Anwesenheitsseite) ---
+    "anwesenheit.titel": "Anwesenheit",
+    "anwesenheit.knopf": "Anwesenheit",
+    "anwesenheit.knopf_tip": "Anwesenheit: wer wann bestätigt auf dem Grundstück war, Viertelstunde für Viertelstunde",
+    "anwesenheit.kopf_satz": "Eine Zeile je Person, der Tag in Viertelstunden-Zellen. Rot = in dieser Viertelstunde bestätigt da (Ereignis-Analyse oder Live-Wächter, einmal gezeigt). Bei zurückhaltender Erkennung werden nur wenige Zellen rot — das ist normal, kein Fehler.",
+    "anwesenheit.seit": "Aufzeichnung seit {datum}.",
+    "anwesenheit.fenster_auto": "Tagesfenster {von}–{bis} Uhr, automatisch aus den Sichtungen der letzten {tage} Tage; die Stunden außerhalb sind je eine Zelle je Stunde.",
+    "anwesenheit.fenster_werk": "Tagesfenster {von}–{bis} Uhr (Werkswert, bis mindestens {n} Sichtungen vorliegen); die Stunden außerhalb sind je eine Zelle je Stunde.",
+    "anwesenheit.fenster_fest": "Tagesfenster {von}–{bis} Uhr, fest eingestellt; die Stunden außerhalb sind je eine Zelle je Stunde.",
+    "anwesenheit.sicht_label": "Sicht",
+    "anwesenheit.sicht_alle": "Alle",
+    "anwesenheit.sicht_kamera": "Kamera",
+    "anwesenheit.sicht_area": "Bereich",
+    "anwesenheit.sicht_kamera_leer": "Noch keine Kamera analysiert",
+    "anwesenheit.sicht_area_leer": "Keine Bereiche angelegt — unter „Bereiche“ anlegen",
+    "anwesenheit.nacht": "Nacht",
+    "anwesenheit.legende_da": "bestätigt da",
+    "anwesenheit.legende_weg": "System lief, niemand bestätigt",
+    "anwesenheit.legende_leer": "System lief nicht oder hat nicht hingesehen",
+    "anwesenheit.legende_jetzt": "jetzt",
+    "anwesenheit.zaehler": "{zeilen} Marken gelesen, {kaputt} kaputte Zeilen übersprungen.",
+    "anwesenheit.gekappt": "Die Tagesdatei ist größer als die Lesegrenze; nur ihr Ende wurde gelesen.",
+    "anwesenheit.nie": "In dieser Sicht nicht gesehen: {namen}",
+    "anwesenheit.alle_leisten": "alle Personen als Leisten zeigen",
+    "anwesenheit.leer_personen": "Noch keine bekannten Personen",
+    "anwesenheit.leer_personen_hinweis": "Zeilen erscheinen, sobald Personen gelernt sind (unter „Bekannte Personen“).",
+    "anwesenheit.keine_aufzeichnung": "Für diesen Tag liegt keine Aufzeichnung vor.",
+    "anwesenheit.tip_da": "{zeit} · {kameras} · {quelle}",
+    "anwesenheit.tip_weg": "{zeit} · System lief, niemand bestätigt",
+    "anwesenheit.tip_leer": "{zeit} · keine Aussage (System lief nicht oder hat nicht hingesehen)",
+    "anwesenheit.tip_zukunft": "{zeit} · noch nicht",
+    "anwesenheit.quelle_worker": "Ereignis-Analyse",
+    "anwesenheit.quelle_live": "Live-Wächter",
+    "anwesenheit.quelle_beide": "Live-Wächter und Ereignis-Analyse",
+    "anwesenheit.nav.heute": "Heute",
+    "anwesenheit.nav.gestern": "gestern",
+    "anwesenheit.nav.attr_vortag": "Vortag",
+    "anwesenheit.nav.attr_folgetag": "Folgetag",
+    "anwesenheit.nav.attr_kein_morgen": "keine zukünftigen Tage",
+    "anwesenheit.nav.attr_kein_frueher": "keine frühere Aufzeichnung",
+    "anwesenheit.nav.zurueck_heute": "zurück zu heute",
+    "anwesenheit.zeile_niemand": "niemand",
 }

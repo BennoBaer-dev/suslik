@@ -25,6 +25,7 @@ import numpy as np
 from face_audit import Embedder, aktuelles_modell, ist_fehldetektion
 from core.unbekanntpool import ARCHIV_TAGE   # EINE Quelle: Archiv-/Reaktivierungs-Fenster (auch Today-Kachel)
 from core.benennung import REF_LATTE         # .265 EINE Quelle: Referenz-Latte (auch _reihung/empfehlen)
+from core import atomar as _atomar           # .411: eindeutige tmp beim atomaren Schreiben (refcache.npz)
 
 DATA = os.environ.get("VERIFY_DATA_DIR") or os.path.join(HERE, "verify_data")  # von verifyd prozessweit gesetzt
 MASTER = os.path.join(DATA, "faces")
@@ -1802,21 +1803,15 @@ def pruefe_referenzen(flag_sim=0.30, top=40,
         # erwischen (BadZipFile -> Event "fehler"). Meta unter '§meta' statt dem Keyword meta=:
         # eine Person namens "meta" haette sonst mit np.savez kollidiert (TypeError bei JEDEM Lauf).
         ziel = os.path.join(CLIPS, "refcache.npz")
-        tmp = f"{ziel}.tmp-{os.getpid()}"
-        try:
-            with open(tmp, "wb") as f:
-                np.savez(f, **{"§meta": json.dumps({**want, "§modell": emb.modell})},
-                         **{p: (np.asarray(v, np.float32) if v else np.zeros((0, 512), np.float32))
-                            for p, v in refs.items()})
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp, ziel)
-        except Exception:
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
-            raise
+        # .411: eindeutige tmp ueber core.atomar (mkstemp im Zielordner) — vier
+        # Schreiber dieser Datei teilten sich `refcache.npz.tmp-<pid>`
+        # (Tester-Log 02.09.: FileNotFoundError beim replace, 2x).
+        _atomar.schreiben(
+            ziel,
+            lambda f: np.savez(f, **{"§meta": json.dumps({**want, "§modell": emb.modell})},
+                               **{p: (np.asarray(v, np.float32) if v else np.zeros((0, 512), np.float32))
+                                  for p, v in refs.items()}),
+            suffix=".npz", binaer=True)
     except Exception as e:
         print(f"refcache not written: {e}", flush=True)   # Cache ist Beschleunigung, kein Muss —
                                                                 # aber nicht mehr STILL scheitern
@@ -2371,7 +2366,6 @@ def refcache_ergaenzen(person, bild_pfad, datei, emb, emb_vec=None, emb_modell=N
     atomar (tmp+fsync+replace wie pruefe_referenzen). False = Aufrufer
     verwirft wie bisher (kein Cache, Modell-Mismatch, Lesefehler)."""
     ziel = os.path.join(CLIPS, "refcache.npz")
-    tmp = f"{ziel}.tmp-{os.getpid()}"
     try:
         if not os.path.exists(ziel):
             return False
@@ -2398,22 +2392,18 @@ def refcache_ergaenzen(person, bild_pfad, datei, emb, emb_vec=None, emb_modell=N
         want = {k: list(w) for k, w in meta.items() if not str(k).startswith("§")}
         want.setdefault(person, []).append(datei)
         want[person] = sorted(set(want[person]))
-        with open(tmp, "wb") as f:
-            # .309: im Beiwert-Zweig gibt es kein emb — das Modell kommt aus dem
-            # (bereits geprueften) Meta-Block; emb.modell warf hier einen
-            # AttributeError -> False -> Cache verworfen -> Voll-Neuaufbau je
-            # Uebernahme (User-Fund 21.08. 'Referenzen werden neu aufgebaut').
-            np.savez(f, **{"§meta": json.dumps({**want, "§modell": str(meta.get("§modell", ""))})},
-                     **refs)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, ziel)
+        # .309: im Beiwert-Zweig gibt es kein emb — das Modell kommt aus dem
+        # (bereits geprueften) Meta-Block; emb.modell warf hier einen
+        # AttributeError -> False -> Cache verworfen -> Voll-Neuaufbau je
+        # Uebernahme (User-Fund 21.08. 'Referenzen werden neu aufgebaut').
+        # .411: eindeutige tmp ueber core.atomar (Kollision refcache.npz.tmp-<pid>).
+        _atomar.schreiben(
+            ziel,
+            lambda f: np.savez(f, **{"§meta": json.dumps({**want, "§modell": str(meta.get("§modell", ""))})},
+                               **refs),
+            suffix=".npz", binaer=True)
         return True
     except Exception:
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
         return False
 
 
@@ -2437,7 +2427,6 @@ def refcache_ergaenzen_viele(person, bilder, emb, modell=None):
     Dateien ohne Nach-Detektion (embed -> None) werden uebersprungen — der
     Neuaufbau liesse sie genauso aus (lade_master_refs: 'if v is not None')."""
     ziel = os.path.join(CLIPS, "refcache.npz")
-    tmp = f"{ziel}.tmp-{os.getpid()}"
     try:
         if not os.path.exists(ziel):
             return True
@@ -2471,18 +2460,16 @@ def refcache_ergaenzen_viele(person, bilder, emb, modell=None):
         # Dateilisten, nicht Vektoren.
         want.setdefault(person, []).extend(b[1] for b in eintraege)
         want[person] = sorted(set(want[person]))
-        with open(tmp, "wb") as f:
-            np.savez(f, **{"§meta": json.dumps({**want, "§modell": modell})}, **refs)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, ziel)
+        # .411: eindeutige tmp ueber core.atomar — genau DIESE Stelle warf beim
+        # Tester (02.09.) 2x FileNotFoundError 'refcache.npz.tmp-1' -> refcache.npz
+        # (zwei Laeufe im selben Prozess, gleicher tmp-Name).
+        _atomar.schreiben(
+            ziel,
+            lambda f: np.savez(f, **{"§meta": json.dumps({**want, "§modell": modell})}, **refs),
+            suffix=".npz", binaer=True)
         return True
     except Exception as e:
         print(f"refcache_ergaenzen_viele failed: {type(e).__name__}: {e}", flush=True)
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
         return False
 
 
@@ -2540,14 +2527,12 @@ def refcache_aufbauen(emb):
             want[p] = sorted(f for f in os.listdir(pd)
                              if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp")))
         ziel = os.path.join(CLIPS, "refcache.npz")
-        os.makedirs(CLIPS, exist_ok=True)
-        tmp = f"{ziel}.tmp-{os.getpid()}"
-        with open(tmp, "wb") as f:
-            np.savez(f, **{"§meta": json.dumps({**want, "§modell": emb.modell})},
-                     **refs)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, ziel)
+        # .411: eindeutige tmp ueber core.atomar (Kollision refcache.npz.tmp-<pid>).
+        _atomar.schreiben(
+            ziel,
+            lambda f: np.savez(f, **{"§meta": json.dumps({**want, "§modell": emb.modell})},
+                               **refs),
+            suffix=".npz", binaer=True)
         _REFCACHE_STAND["fehler"] = 0
         return True
     except Exception as e:

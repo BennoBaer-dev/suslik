@@ -35,7 +35,16 @@ Rein lesend bis auf den Uebernehmen-POST — und der geht ueber /live_speichern,
 also denselben Weg (mit denselben Riegeln und demselben Audit) wie jede andere
 Aenderung an einem Waechter. Kein eigener Schreibweg hier. Weil ein FEHLENDES
 Feld dort "behalten" heisst (live_speichern._wert), schickt diese Seite genau
-ihre fuenf Werte und laesst alles andere unangetastet.
+ihre sechs Werte und laesst alles andere unangetastet.
+
+POSE-REGLER (03.09., Stufe 1): der vierte Regler im Register "Erkennen"
+arbeitet auf dem Kopf-Score p, den der Worker-Zulauf je Ring-Bild mitmisst.
+Er wirkt HIER sofort (die Galerie dimmt mit, der Zaehler rechnet ihn mit) und
+wird als `pose_min` je Kamera gespeichert. Was er NICHT tut: sieben. Weder
+Worker noch Live-Weg fragen den gespeicherten Wert bisher — Stufe 2 folgt
+nach User-Entscheid. Genau das sagt auch die Prosa am Regler; dieselbe
+Auflage wie bei den zwei Guete-Reglern (nichts versprechen, was der Code
+nicht tut).
 """
 import html
 import json
@@ -49,8 +58,16 @@ from core.sprache import t
 # (EINE Quelle, core/guete.STIMM_BODEN): darunter geht niemand
 # (User-Entscheide 01.09. abends: t nie unter 0,2; e-Boden = Default 0,175).
 from core.guete import STIMM_BODEN as _KB
+from core.guete import POSE_BODEN as _PB
 _BODEN_E = f"{_KB['empfinden']:.3f}"
 _BODEN_T = f"{_KB['t']:.3f}"
+
+# Skala des Pose-Reglers — fest wie bei den Nachbarn (Lehre der Lernlauf-Seite,
+# s. JS-Kommentar unten). Gemessene Lage des Kopf-Scores: Mensch 0,77-1,04 am
+# Klon-Material, das Live-Gate steht bei 0,70; die Skala laesst darueber Luft,
+# ohne die Server-Spanne (livewache.POSE_MIN_MIN/MAX = 0-2) zu verlassen.
+# 0 = AUS: unter dieser Stellung fehlt keinem Bild etwas.
+_POSE_LO, _POSE_HI, _POSE_SCHRITT = f"{_PB:.2f}", "1.20", "0.01"   # Minimum = Werks-Boden (User 03.09.)
 
 
 def _wann(ts):
@@ -79,6 +96,7 @@ def _bilder(kamera, vorrat, lauf_bilder):
                     "det": float(e.get("det") or 0),
                     "e": (-1.0 if e.get("e") is None else float(e["e"])),
                     "t": (-1.0 if e.get("t") is None else float(e["t"])),
+                    "p": (-1.0 if e.get("p") is None else float(e["p"])),
                     "q": "ring"})
     for b in lauf_bilder or []:
         aus.append({"src": f"/lernlauf/crop/{urllib.parse.quote(str(b['lid']), safe='')}/"
@@ -142,13 +160,24 @@ def render(kamera, vorrat, guard, standard, kat, lauf_bilder=(), deckel=0,
     akt = {"det": (g.get("det_min") if g.get("det_min") is not None
                    else standard["det"]),
            "e": (g.get("guete_e_min") or 0.0),
-           "t": (g.get("guete_t_min") or 0.0)}
+           "t": (g.get("guete_t_min") or 0.0),
+           # Pose: der gespeicherte Kamera-Wert oder 0 = aus. Kein Werks-Wert
+           # dahinter — solange die Latte nichts siebt, waere jeder Startwert
+           # ausser "aus" eine Behauptung.
+           # unkalibriert zeigt der Regler den Werks-Boden (= was wirklich
+           # siebt, User 03.09. "durchgaengig"), nicht mehr 0.
+           "p": (g.get("pose_min") if g.get("pose_min") is not None else _PB)}
     kat_akt = kat.get("akt") or {}
     kat_std = kat.get("std") or {}
     # Fehlen die Guete-Modelle im Image, tragen ALLE Zeilen -1 — dann sind die
     # zwei Guete-Regler wirkungslos, und die Seite sagt das, statt sie
     # anzubieten und den Nutzer raten zu lassen.
     ohne_guete = bool(bilder) and all(b["e"] < 0 and b["t"] < 0 for b in bilder)
+    # Dieselbe Ehrlichkeit fuer die Pose: traegt KEIN Bild einen Kopf-Score
+    # (Bestands-Ring von vor der Messung, Bilder aus dem Live-/Ernte-Weg, ein
+    # Image ohne ladbares Pose-Modell), dann bewegt der Regler hier nichts —
+    # das sagt die Seite, statt ihn wortlos anzubieten.
+    ohne_pose = bool(bilder) and all(b.get("p", -1.0) < 0 for b in bilder)
 
     # --- Abschnitt 3 zuerst gebaut (er wird unten eingehaengt) -------------
     if not deckel:
@@ -232,6 +261,13 @@ def render(kamera, vorrat, guard, standard, kat, lauf_bilder=(), deckel=0,
                   t("livekalib.regler_t_prosa"), _BODEN_T, "1", "0.001", _BODEN_T)
         + ('<div class="kal-prosa">' + t("livekalib.ohne_guete") + "</div>"
            if ohne_guete else "")
+        # Der Pose-Regler steht NACH dem ohne_guete-Satz: der spricht von "den
+        # unteren zwei Reglern" und meint die zwei Guete-Regler ueber ihm.
+        + _regler("lk-p", t("livekalib.regler_p"),
+                  t("livekalib.regler_p_prosa"), _POSE_LO, _POSE_HI,
+                  _POSE_SCHRITT, _POSE_LO)
+        + ('<div class="kal-prosa">' + t("livekalib.ohne_pose") + "</div>"
+           if ohne_pose else "")
         + f'<div id="lk-stand"></div></div>'
         f'<div class="kal-gruppe" id="lk-reg-l" style="display:none">'
         f'<b>{t("livekalib.abschnitt.katalog")}</b>'
@@ -276,8 +312,9 @@ for (const z of B) {{
   const gw = (z.e < 0 && z.t < 0) ? ""
     : `${{z.e < 0 ? "?" : z.e.toFixed(2)}} / ${{z.t < 0 ? "?" : z.t.toFixed(2)}}`;
   const dw = (z.det < 0) ? T_TXT.lauf : z.det.toFixed(2);
+  const pw = (z.p === undefined || z.p < 0) ? "" : ` &middot; p${{z.p.toFixed(2)}}`;
   k.innerHTML = `<img loading="lazy" src="${{z.src}}">`
-    + `<div class="kal-w">${{dw}}${{gw ? " &middot; " + gw : ""}}</div>`;
+    + `<div class="kal-w">${{dw}}${{gw ? " &middot; " + gw : ""}}${{pw}}</div>`;
   g.appendChild(k); karten.push([z, k]);
 }}
 /* Reglerskalen FEST (Lehre der Lernlauf-Kalibrierseite, Widerleger 30.08.):
@@ -296,10 +333,11 @@ function setz(id, v, lo, hi) {{
 }}
 function malen() {{
   const d = wert("lk-det", 2), e = wert("lk-e", 3), tt = wert("lk-t", 3);
-  const ke = wert("lk-ke", 3), kt = wert("lk-kt", 3);
+  const ke = wert("lk-ke", 3), kt = wert("lk-kt", 3), pp = wert("lk-p", 2);
   document.getElementById("lk-det-wert").textContent = d.toFixed(2);
   document.getElementById("lk-e-wert").textContent = e.toFixed(3);
   document.getElementById("lk-t-wert").textContent = tt.toFixed(3);
+  document.getElementById("lk-p-wert").textContent = pp.toFixed(2);
   document.getElementById("lk-ke-wert").textContent = ke.toFixed(3);
   document.getElementById("lk-kt-wert").textContent = kt.toFixed(3);
   let drin = 0, kdrin = 0;
@@ -308,8 +346,13 @@ function malen() {{
        laesst seine Latte passieren — sonst blendete ein fehlendes Guete-Modell
        (oder das fehlende det der Lernlauf-Bilder) den ganzen Vorrat aus und
        der Nutzer saehe eine leere Wand. */
+    /* Die Pose-Latte urteilt nach DERSELBEN Regel: ein Bild ohne Kopf-Score
+       (Feld fehlt = Bestand/Live-Weg, oder -1 = nicht gemessen) passiert sie.
+       Sonst blendete der erste Zug am Regler den gesamten Alt-Bestand aus,
+       ohne dass an ihm je etwas gemessen wurde. */
     const ok = (z.det < 0 || z.det >= d) && (z.e < 0 || z.e >= e)
-               && (z.t < 0 || z.t >= tt);
+               && (z.t < 0 || z.t >= tt)
+               && (z.p === undefined || z.p < 0 || z.p >= pp);
     /* Die KATALOG-Latte urteilt getrennt und wird getrennt gezeigt: ein Bild
        kann fuer Anzeige/Vorrat taugen und trotzdem keine Referenz werden
        duerfen. Beides in einer Farbe waere eine Luege ueber zwei Latten. */
@@ -324,7 +367,7 @@ function malen() {{
   document.getElementById("lk-kstand").textContent =
     T_TXT.katalog.replace("{{n}}", kdrin).replace("{{gesamt}}", B.length);
 }}
-for (const id of ["lk-det", "lk-e", "lk-t", "lk-ke", "lk-kt"])
+for (const id of ["lk-det", "lk-e", "lk-t", "lk-p", "lk-ke", "lk-kt"])
   document.getElementById(id).oninput = malen;
 function registerZeigen(lernen) {{
   document.getElementById("lk-reg-e").style.display = lernen ? "none" : "";
@@ -337,6 +380,9 @@ document.getElementById("lk-tab-l").onclick = () => registerZeigen(true);
 document.getElementById("lk-std").onclick = () => {{
   setz("lk-det", STD.det, 0.40, 0.60); setz("lk-e", STD.e, 0, 1);
   setz("lk-t", STD.t, 0, 1);
+  /* Pose-Vorgabe = AUS. Es gibt keinen Werks-Wert dafuer, solange die Latte
+     nichts siebt — "Vorgaben" heisst hier also: der Regler stoert nicht. */
+  setz("lk-p", {_POSE_LO}, {_POSE_LO}, {_POSE_HI});
   setz("lk-ke", KSTD.e === null ? 0.175 : KSTD.e, 0.175, 1);
   setz("lk-kt", KSTD.t === null ? 0.375 : KSTD.t, 0.375, 1); malen();
 }};
@@ -344,7 +390,7 @@ document.getElementById("lk-save").onclick = async () => {{
   const m = document.getElementById("lk-msg");
   try {{
     /* Derselbe Schreibweg wie jede andere Waechter-Aenderung (/live_speichern,
-       Riegel + Audit dort). Nur diese fuenf Felder gehen mit — alles andere
+       Riegel + Audit dort). Nur diese sechs Felder gehen mit — alles andere
        behaelt der Server (live_speichern: fehlendes Feld heisst behalten). */
     const r = await fetch("/live_speichern", {{method: "POST",
       headers: {{"Content-Type": "application/json"}},
@@ -352,7 +398,8 @@ document.getElementById("lk-save").onclick = async () => {{
                             guete_e_min: wert("lk-e", 3),
                             guete_t_min: wert("lk-t", 3),
                             katalog_e_min: wert("lk-ke", 3),
-                            katalog_t_min: wert("lk-kt", 3)}})}});
+                            katalog_t_min: wert("lk-kt", 3),
+                            pose_min: wert("lk-p", 2)}})}});
     const d = await r.json().catch(() => ({{}}));
     m.textContent = r.ok ? T_TXT.gespeichert : (d.msg || T_TXT.fehler);
   }} catch (e) {{
@@ -361,6 +408,7 @@ document.getElementById("lk-save").onclick = async () => {{
 }};
 setz("lk-det", AKT.det, 0.40, 0.60); setz("lk-e", AKT.e, 0, 1);
 setz("lk-t", AKT.t, 0, 1);
+setz("lk-p", AKT.p, {_POSE_LO}, {_POSE_HI});
 setz("lk-ke", KAKT.e === null ? 0.175 : KAKT.e, 0.175, 1);
 setz("lk-kt", KAKT.t === null ? 0.375 : KAKT.t, 0.375, 1);
 malen();

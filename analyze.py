@@ -53,7 +53,36 @@ ap.add_argument("--urteil-guete-t", dest="urteil_guete_t", type=float, default=-
 ap.add_argument("--urteil-debug", dest="urteil_debug", action="store_true",
                 help="jedes Gesicht, das den Vorfilter passiert und als Stimme"
                      " zaehlt, strukturiert unter <dir>/urteil_debug/ ablegen")
+# BLICKFENSTER (User-Entscheid 03.09. abends, Eichung an den vier Testbett-
+# Clips): statt des festen 3-s-Fensters wandert EIN Blickfenster durchs Event;
+# innerhalb EINES Fensters muessen Anker (eine Stimme >= urteil_anker) UND
+# Unterstuetzung (win_min Stimmen >= win_thresh, Entscheid in verifyd) liegen.
+# 45 s ist die KLEINSTE gemessene Breite, die alle vier Clips richtig trennt
+# (der Referenz-Anker 0,53 lag 41 s nach der dichten Stimmen-Phase; mit Anker
+# 0,48 truegen auch 10-20 s — bewusst NICHT gewaehlt, 0,50 ist der Entscheid).
+# Werte kommen im Betrieb IMMER aus der Config (blick_fenster_s/urteil_anker);
+# die Defaults hier dienen Standalone-Laeufen. 0 = alter 3-s-Weg.
+ap.add_argument("--blick-fenster", dest="blick_fenster", type=float, default=45.0)
+ap.add_argument("--urteil-anker", dest="urteil_anker", type=float, default=0.50)
 ap.add_argument("--timeline", action="store_true", help="Score-Zeitreihe je Gesicht-Frame ausgeben")
+# KALIBRIER-VORRAT AUS DER EVENT-ANALYSE (User 03.09., beauftragt seit 31.08.;
+# personenunabhaengig nachgeschaerft am selben Tag: "die Kalibrierung ist nur
+# dafuer da, zu erkennen, ob wir ein gutes Bild haben — voellig losgeloest von
+# der Person"): JEDES Nicht-Fehldetektions-Gesicht der Analyse wandert mit
+# seiner gemessenen Guete in den Ring seiner Kamera — derselbe eine Schreibweg
+# wie Live/Ernte (core.livewache.kalib_schreiben: Ring, Deckel, Einlass-Boden
+# dort). deckel 0 = aus.
+ap.add_argument("--kalib-deckel", dest="kalib_deckel", type=int, default=0)
+ap.add_argument("--kalib-data-dir", dest="kalib_data_dir", default="")
+ap.add_argument("--kalib-kamera", dest="kalib_kamera", default="")
+# POSE-SIEB (Stufe 2, User 03.09. "wie kriegen wir die Tonne raus"): der je
+# Kamera kalibrierte pose_min-Regler wirkt als viertes Stimm-Sieb UND als
+# Ring-/Anzeige-Einlass — Reihenfolge wie beauftragt: erst die Grundwert-
+# Boeden, dann die Pose. 0 = aus (Default; Feld-Nutzer ohne Regler unveraendert).
+# Bilder OHNE p-Messung (Live-/Ernte-Zulauf, Modell nicht ladbar) passieren
+# fail-open — eine Latte, die nur einen Teil des Materials misst, darf den
+# Rest nicht blind wegwerfen (Widerleger-Befund 3 zum Regler-Bau).
+ap.add_argument("--urteil-pose", dest="urteil_pose", type=float, default=0.0)
 # #42 Teil B: Fehldetektions-Signatur (kalibriert, s. face_audit.ist_fehldetektion) + der
 # bislang unsichtbare insightface-Default det_thresh=0.5 als sichtbarer Parameter (KEINE
 # Empfehlung zum Hochdrehen: det>=0.60 kostete 15,9 % echter Gesichter — nur steuerbar machen).
@@ -77,7 +106,7 @@ ap.add_argument("--koerper-rss-max-mb", type=float, default=0.0,
 a = ap.parse_args()
 
 # Stimm-Latten aufloesen (EINE Quelle core/guete): nicht gesetzt (<0) ->
-# STIMM_DEFAULT 0,250; jeder gesetzte Wert klemmt auf STIMM_BODEN 0,200 —
+# STIMM_DEFAULT (= STIMM_BODEN seit 03.09.); jeder gesetzte Wert klemmt auf den Boden —
 # KEINE Hintertuer darunter ("weder der User noch sonst was geht darunter",
 # User-Entscheid 01.09.). Fehlen die Guete-Modelle, wird der Filter LAUT
 # deaktiviert statt still alles zu verwerfen (fail-open wie im Watcher).
@@ -93,6 +122,11 @@ if (URT_G_E > 0 or URT_G_T > 0) and not guete_mod.verfuegbar():
     print(f"URTEILS-VORFILTER AUS: {URT_G_AUS}")
     URT_G_E = URT_G_T = 0.0
 URT_G_STAT = {"gemessen": 0, "fehler": 0}
+URT_POSE = max(0.0, float(a.urteil_pose or 0.0))   # Pose-Sieb, 0 = aus
+# Kalibrier-Vorrat aus der Analyse (User 03.09.): Traeger des det-staerksten
+# echten Gesichts je Lauf (analyze arbeitet 1 Event je Prozess/Job).
+KALIB_BEST = {"det": 0.0, "crop": None, "al": None, "stimmen": 0,
+              "pose_verworfen": 0}
 
 emb = Embedder()
 # #42 Teil B, KORRIGIERT (Review .52, kritisch): det_thresh wird NICHT hier gesetzt.
@@ -450,41 +484,96 @@ for k, eid in enumerate(a.eids):
                 # NICHT das Urteil: sc/summary rechnen weiter ueber ALLE Detektionen).
                 fd = ist_fehldetektion(front, schaerfe0, float(fc.det_score),
                                        a.fd_front_min, a.fd_sharp_min, a.fd_det_max)
-                # URTEILS-VORFILTER (.404): Guete nur fuer STIMM-KANDIDATEN
-                # messen (Kante ueber der Urteils-Kante UND irgendein
-                # Personen-Score ueber win-thresh) — alles andere wird nie
-                # eine Stimme, die Messung waere reine Rechenzeit. Messfehler
+                # URTEILS-VORFILTER (.404): Guete fuer STIMM-KANDIDATEN messen
+                # (Kante ueber der Urteils-Kante UND irgendein Personen-Score
+                # ueber win-thresh). Seit 03.09. (User, Klon-Testbett) wird
+                # ZUSAETZLICH fuer jedes echte Gesicht gemessen, wenn der
+                # Kalibrier-Vorrat aktiv ist — der Ring ist PERSONENUNABHAENGIG
+                # ("nur dafuer da, zu erkennen, ob wir ein gutes Bild haben"),
+                # jedes nicht-fd-Gesicht wandert mit seiner Guete hinein
+                # (Einlass-Boden + Deckel in kalib_schreiben). Messfehler
                 # -> None, Stimme passiert fail-open (Zaehler sagt es laut).
                 fiqa_v = empf_v = None
-                if ((URT_G_E > 0 or URT_G_T > 0)
-                        and (a.urteil_kante <= 0
-                             or min(x2 - x1, y2 - y1) >= a.urteil_kante)
-                        and sc and max(sc.values()) >= a.win_thresh):
+                _kandidat = ((URT_G_E > 0 or URT_G_T > 0)
+                             and (a.urteil_kante <= 0
+                                  or min(x2 - x1, y2 - y1) >= a.urteil_kante)
+                             and sc and max(sc.values()) >= a.win_thresh)
+                _vorrat = bool(a.kalib_deckel and a.kalib_data_dir
+                               and not fd and crop.size)
+                if _kandidat or _vorrat:
                     try:
                         from core.ernte import align112 as _al112
                         _al = _al112(frame, fc.kps) if fc.kps is not None else None
                         fiqa_v = guete_mod.fiqa_t(_al) if _al is not None else None
                         empf_v = guete_mod.empfinden(crop) if crop.size else None
-                        URT_G_STAT["gemessen"] += 1
+                        if _kandidat:
+                            URT_G_STAT["gemessen"] += 1
                     except Exception:                          # noqa: BLE001
-                        URT_G_STAT["fehler"] += 1
+                        if _kandidat:
+                            URT_G_STAT["fehler"] += 1
                         fiqa_v = empf_v = None
-                    if (a.urteil_debug
-                            and guete_mod.stimme_ok(URT_G_E, URT_G_T, empf_v, fiqa_v)):
-                        try:
-                            _dbg = os.path.join(outdir, "urteil_debug")
-                            os.makedirs(_dbg, exist_ok=True)
-                            _p0 = max(sc, key=sc.get)
-                            cv2.imwrite(os.path.join(
-                                _dbg, f"{i:06d}_{i/fps:05.1f}s_{min(x2-x1, y2-y1)}px"
-                                      f"_det{float(fc.det_score):.2f}"
-                                      f"_e{-1 if empf_v is None else round(empf_v, 3)}"
-                                      f"_t{-1 if fiqa_v is None else round(fiqa_v, 3)}"
-                                      f"_{_p0}_nn{sc[_p0]:.2f}.jpg"), crop)
-                        except Exception:                      # noqa: BLE001
-                            pass
+                # POSE-MESSUNG (User 03.09., Reihenfolge ausdruecklich: ERST
+                # die Grundwerte-Boeden, DANACH die Pose): gemessen wird fuer
+                # Bilder, die der Ring-Einlass nimmt, UND — bei aktivem
+                # Pose-Sieb — fuer jeden Stimm-Kandidaten, der die Guete-
+                # Latten bestanden hat.
+                p_v = None
+                _boden_ok = ((empf_v is None or empf_v >= guete_mod.RING_BODEN["empfinden"])
+                             and (fiqa_v is None or fiqa_v >= guete_mod.RING_BODEN["t"]))
+                _p_noetig = ((_vorrat and _boden_ok)
+                             or (URT_POSE > 0 and _kandidat
+                                 and guete_mod.stimme_ok(URT_G_E, URT_G_T,
+                                                         empf_v, fiqa_v)))
+                if _p_noetig:
+                    try:
+                        from core.livewache import (pose_wache as _pw,
+                                                    person_region as _pr)
+                        _w = _pw()
+                        if _w is not None:
+                            from pose_wache import KOPF_IDX as _KIDX
+                            _h, _b = frame.shape[:2]
+                            _pts, _sc = _w.skelett(
+                                frame, bbox=_pr(fc.bbox, _b, _h))
+                            p_v = float(max(_sc[j] for j in _KIDX))
+                    except Exception:                          # noqa: BLE001
+                        p_v = None
+                if _vorrat:
+                    try:
+                        from core.livewache import kalib_schreiben as _ks
+                        # POSE-SIEB Stufe 2 am Ring-/Anzeige-Einlass: gemessene
+                        # Bilder unter dem Kamera-Regler kommen nicht in den
+                        # Vorrat; ungemessene passieren (fail-open, s. Argparse).
+                        if URT_POSE > 0 and p_v is not None and p_v < URT_POSE:
+                            KALIB_BEST["pose_verworfen"] += 1
+                        elif _ks({"data_dir": a.kalib_data_dir},
+                                 a.kalib_kamera or label, crop,
+                                 {"det": float(fc.det_score),
+                                  "e": empf_v, "t": fiqa_v, "p": p_v},
+                                 deckel=a.kalib_deckel, log=print,
+                                 mensch_ok=True):
+                            KALIB_BEST["stimmen"] += 1
+                    except Exception:                          # noqa: BLE001
+                        pass
+                if (_kandidat and a.urteil_debug
+                        and guete_mod.stimme_ok(URT_G_E, URT_G_T, empf_v, fiqa_v)):
+                    try:
+                        _dbg = os.path.join(outdir, "urteil_debug")
+                        os.makedirs(_dbg, exist_ok=True)
+                        _p0 = max(sc, key=sc.get)
+                        cv2.imwrite(os.path.join(
+                            _dbg, f"{i:06d}_{i/fps:05.1f}s_{min(x2-x1, y2-y1)}px"
+                                  f"_det{float(fc.det_score):.2f}"
+                                  f"_e{-1 if empf_v is None else round(empf_v, 3)}"
+                                  f"_t{-1 if fiqa_v is None else round(fiqa_v, 3)}"
+                                  f"_{_p0}_nn{sc[_p0]:.2f}.jpg"), crop)
+                    except Exception:                      # noqa: BLE001
+                        pass
+                # ACHTUNG Schluessel: "p" in faces ist der beste PERSONEN-Name
+                # (Bestand, s. "sc": sc, "p": p am Ende) — der Pose-Kopf-Wert
+                # heisst deshalb "pkopf" (Kollision 03.09. real getreten:
+                # float('<Name>') im Stimm-Sieb).
                 faces.append({"t": i/fps, "bw": x2-x1, "bh": y2-y1, "front": front, "fd": fd,
-                              "fiqa_t": fiqa_v, "empf": empf_v,
+                              "fiqa_t": fiqa_v, "empf": empf_v, "pkopf": p_v,
                               "yaw": yaw, "det": float(fc.det_score), "sharp": schaerfe0,
                               # .313: genderage laeuft nicht mehr mit (ungenutzt) — Felder bleiben
                               # im Bestandsformat, jetzt '?'/-1 statt eines Modellwerts.
@@ -635,18 +724,53 @@ for k, eid in enumerate(a.eids):
         _uk = float(getattr(a, "urteil_kante", 0) or 0)
         # .404: Stimme nur, wenn der Fund auch die Erkennen-Guete-Latten
         # bestand (None = nicht gemessen/Messfehler -> passiert, fail-open).
-        ts = sorted((f["t"], f["sc"][person]) for f in faces
+        # POSE-SIEB Stufe 2 (03.09.): nach den Guete-Latten prueft die Stimme
+        # den Kamera-Regler pose_min — ungemessene Frames passieren (fail-open).
+        # FUNDSTELLEN (03.09. spaet, User-Go "Familien-Duo"): jede Stimme
+        # traegt den INDEX ihrer Detektion in faces — die Marge kann damit
+        # unterscheiden, ob zwei Kandidaten DASSELBE Gesicht deuten
+        # (Verwechslung) oder aus getrennten Detektionen leben (zwei
+        # Menschen). Der Index ist die Position in der Akte-detektionen-
+        # Liste, also auch rueckwirkend nachvollziehbar.
+        ts = sorted((f["t"], f["sc"][person], _fi) for _fi, f in enumerate(faces)
                     if (_uk <= 0 or min(f["bw"], f["bh"]) >= _uk)
                     and guete_mod.stimme_ok(URT_G_E, URT_G_T,
-                                            f.get("empf"), f.get("fiqa_t")))
-        win = max((sum(1 for (t, s) in ts if t0 <= t <= t0 + 3.0 and s >= a.win_thresh) for t0, _ in ts), default=0)
+                                            f.get("empf"), f.get("fiqa_t"))
+                    and (URT_POSE <= 0 or f.get("pkopf") is None
+                         or float(f["pkopf"]) >= URT_POSE))
+        win = max((sum(1 for (t, s, _i) in ts if t0 <= t <= t0 + 3.0 and s >= a.win_thresh) for t0, _s0, _i0 in ts), default=0)
+        stimm_idx = sorted(_i for (_t, _s, _i) in ts if _s >= a.win_thresh)
+        # BLICKFENSTER (User 03.09. abends, s. Argparse-Kommentar): bestes
+        # gleitendes Fenster, das den ANKER traegt — blick_n = Stimmenzahl
+        # (>= win_thresh) im stimmenstaerksten Fenster, in dem mindestens
+        # eine Stimme >= urteil_anker liegt; 0 = kein Anker-Fenster. Die
+        # Mindest-Stimmenzahl (win_min) prueft verifyd im verdict — hier
+        # werden nur KENNWERTE gemessen, nicht entschieden.
+        _bw_s = float(getattr(a, "blick_fenster", 0) or 0)
+        _ank = float(getattr(a, "urteil_anker", 0) or 0)
+        blick_n, blick_max, blick_t0 = 0, 0.0, None
+        if _bw_s > 0:
+            _st = [(t, s) for (t, s, _i) in ts if s >= a.win_thresh]
+            for (_t0, _s0) in _st:
+                _fen = [s for (t, s) in _st if _t0 <= t < _t0 + _bw_s]
+                if _ank > 0 and max(_fen, default=0.0) < _ank:
+                    continue
+                if len(_fen) > blick_n:
+                    blick_n, blick_max, blick_t0 = len(_fen), max(_fen), _t0
         summary[label][person] = {"max": round(mx, 3), "median": round(med, 3), "n": ntot,
             "n_ge40": n40, "n_ge50": n50, "win3s": win, "best_wh": f"{best['bw']}x{best['bh']}",
+            **({"blick_n": blick_n, "blick_max": round(blick_max, 3),
+                "blick_t0": round(blick_t0, 1) if blick_t0 is not None else None}
+               if _bw_s > 0 else {}),
+            **({"stimm_idx": stimm_idx} if stimm_idx else {}),
             "best_front": round(best["front"], 2), "best_det": round(best["det"], 2),
             "best_t": round(best["t"], 1), "best_pose": best["pose"]}
         pv = f" pose{best['pose']}" if best['pose'] else ""
+        _bl = (f"  Blick {blick_n}×≥{a.win_thresh:.2f}/Anker≥{_ank:.2f}"
+               + (f" ab {blick_t0:.0f}s" if blick_t0 is not None else "")
+               if _bw_s > 0 else "")
         print(f"  {person:<6} max {mx:+.2f}  median {med:+.2f}  n≥.4 {n40}/{ntot}  "
-              f"bestes 3s-Fenster {win}×≥{a.win_thresh:.2f}   (bestes {best['bw']}x{best['bh']}{pv} t={best['t']:.0f}s)")
+              f"bestes 3s-Fenster {win}×≥{a.win_thresh:.2f}{_bl}   (bestes {best['bw']}x{best['bh']}{pv} t={best['t']:.0f}s)")
         # Bilder nur fuer Personen, die die Analyse selbst stuetzt: erreicht KEIN Frame
         # win-thresh, behauptet ein Bild mit Personennamen etwas, das die Zahlen nicht
         # hergeben. Vorher schrieb die Schleife 2 Bilder je MASTER-Person ohne jede
@@ -696,6 +820,10 @@ for k, eid in enumerate(a.eids):
                                                **({"aus": URT_G_AUS} if URT_G_AUS else {})},
                               "persons": summary.get(label, {})}, default=float, ensure_ascii=False) + "\n")
         _rf.flush()
+    # Kalibrier-Vorrat: Bilanzzeile (der Zulauf selbst laeuft jetzt je Gesicht
+    # im Frame-Abnehmer — personenunabhaengig, User 03.09.).
+    if a.kalib_deckel and a.kalib_data_dir and KALIB_BEST["stimmen"]:
+        print(f"kalib-vorrat: {KALIB_BEST['stimmen']} Bild(er) -> {a.kalib_kamera or 'kamera'}")
     # Enrollment-Kandidaten persistieren (AP4): enger Crop (wird ggf. Referenz) +
     # Metriken + Embedding (fuer Fremd-Wiedervorlage) -> Dienst uebernimmt in die Queue.
     kand_liste = []

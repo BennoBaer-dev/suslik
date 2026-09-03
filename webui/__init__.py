@@ -162,6 +162,12 @@ BLATT = {"/setup": "/kameras", "/aehnliche": "/gesichter", "/event": "/heute", "
          # Art, /lernlauf/belichtung, ist am 31.08. mit der
          # Belichtungs-Kalibrierseite ausgebaut worden.)
          "/kalibrierung": None,
+         # .409: /anwesenheit — eigener Leisten-Knopf neben der Kalibrierung
+         # (User 02.09.: "im Menue links auf der Hoehe oder daneben, wo die
+         # Kalibrierung ist"), kein Blatt eines Reiters. None wie
+         # /kalibrierung — ohne den Eintrag leuchtete der Knopf nie und der
+         # Rueckfall behauptete Activity als aktiv (Falle unten, 381-382).
+         "/anwesenheit": None,
          # .374: /readme gehoert zu KEINEM Bereich — der Knopf steht in jeder
          # Kopfleiste, die Seite ist kein Blatt eines Reiters. None heisst
          # deshalb "kein Bereich": nichts leuchtet oben, keine Unterreiterzeile.
@@ -384,6 +390,15 @@ def layout(titel, aktiv, inhalt, banner=None, refresh=None, banner_aktion=None,
             f'href="/kalibrierung" '
             f'title="{html.escape(t("kalib.knopf_tip"))}">'
             f'{html.escape(t("kalib.knopf"))}</a>')
+    # .409 Anwesenheit (User 02.09.: "im Menue links auf der Hoehe oder
+    # daneben, wo die Kalibrierung ist, ein neuer Button Anwesenheit"):
+    # dieselbe Bauform wie der Kalibrier-Knopf, direkt daneben; aktiv ueber
+    # den BLATT-Eintrag (None) und den ECHTEN Pfad (aktiv, nicht a) — s. die
+    # dokumentierte Falle beim kalk-Knopf.
+    anwk = (f'<a class="rmk anwk{" an" if aktiv == "/anwesenheit" else ""}" '
+            f'href="/anwesenheit" '
+            f'title="{html.escape(t("anwesenheit.knopf_tip"))}">'
+            f'{html.escape(t("anwesenheit.knopf"))}</a>')
     # Und das Aufgehen von selbst: die Seite fragt EINMAL nach, ob die Marke
     # fehlt (also seit dem letzten Dienststart noch niemand geschlossen hat),
     # und holt sich den Inhalt dann nach. Entkoppelt, damit es auf JEDER Seite
@@ -513,7 +528,7 @@ def layout(titel, aktiv, inhalt, banner=None, refresh=None, banner_aktion=None,
             # klebend brauchte die zweite Ebene einen Festwert fuer die Hoehe der ersten, und der
             # wurde falsch, sobald die erste umbrach — s. .kopf in style.css.
             f'<div class="kopf"><nav><div class="inner"><span class="marke">{mark}suslik'
-            f'{f" <small>{html.escape(ver)}</small>" if ver else ""}{upd}</span>{nav}{rmk}{kalk}{rechts}</div></nav>'
+            f'{f" <small>{html.escape(ver)}</small>" if ver else ""}{upd}</span>{nav}{rmk}{kalk}{anwk}{rechts}</div></nav>'
             f"{unter}</div>"
             f"<main>{b}{hw}{inhalt}</main>"
             f"<footer>{_fuss()}</footer>{rmjs}</html>")

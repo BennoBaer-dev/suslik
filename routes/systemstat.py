@@ -26,9 +26,11 @@ bleiben in der Route (B19); „CPU", „RAM", „GPU", „NPU" sind Abkuerzungen
 bleiben literal (§8.6)."""
 import datetime
 import html
+import time
 
 import webui
 
+from core import registry as _reg
 from core.sprache import t
 
 # Balkenreihe: feste Zeichenflaeche, damit alle Kacheln dieselbe Zeitachse
@@ -42,7 +44,10 @@ _HOEHE = 34
 # Konstante mit Deckungs-Vertrag statt als Literal mitten im Zaehlausdruck: das
 # Gate prueft, dass der Wert in registry.LIVE_ZUSTAENDE vorkommt — benennt die
 # Registry ihre Zustaende um, faellt das hier auf, statt still 0 zu zaehlen.
-LIVE_AKTIV = "active"
+# .407: der Wert kommt jetzt AUS der Registry statt als eigenes Literal — seit
+# verifyd.process() dieselbe Frage stellt ("laeuft der Waechter dieser Kamera
+# wirklich?"), waeren es sonst zwei getrennt gepflegte Zeichenketten.
+LIVE_AKTIV = _reg.LIVE_AKTIV
 
 
 def _zahl(w, einheit="", stellen=0):
@@ -80,10 +85,10 @@ def _balken(werte, max_wert=100.0):
 def _grund_satz(code):
     """Grund-Code -> Satz.
 
-    BEWUSST acht literale Schluessel statt eines zur Laufzeit aus Praefix und
+    BEWUSST literale Schluessel statt eines zur Laufzeit aus Praefix und
     Code zusammengesetzten: die Sprach-Deckung des Gates liest die
     Schluessel STATISCH aus dem Quelltext. Ein zusammengesetzter Schluessel
-    ist fuer sie unbekannt, und alle acht Saetze gaelten zugleich als tot —
+    ist fuer sie unbekannt, und alle Saetze gaelten zugleich als tot —
     ein Tippfehler in einem davon fiele dann nirgends auf. Dass die Liste
     vollstaendig ist, sichert der Deckungs-Vertrag im Gate
     (systemstat.GRUENDE <-> die Schluessel hier), nicht die Bauform.
@@ -98,6 +103,7 @@ def _grund_satz(code):
         "nicht_lesbar": t("systemstat.grund.nicht_lesbar"),
         "kein_limit": t("systemstat.grund.kein_limit"),
         "kein_dienst": t("systemstat.grund.kein_dienst"),
+        "keine_anfragen": t("systemstat.grund.keine_anfragen"),
     }.get(code, code)
 
 
@@ -117,13 +123,59 @@ def _grund(block, marke=None):
             f' <span class="dim">{html.escape(_grund_satz(g))}</span></div>')
 
 
-def _kachel(titel, block, wert_html, verlauf, zeilen=(), marke=None):
-    unten = "".join(f'<div class="sst-zl"><span>{html.escape(k)}</span>'
-                    f'<b>{html.escape(v)}</b></div>' for k, v in zeilen if v)
+def _kachel(titel, block, wert_html, verlauf, zeilen=(), marke=None, unter=""):
+    """zeilen: (Beschriftung, Wert) oder (Beschriftung, Wert, Hinweis). Der
+    Hinweis steht als Tooltip UND als kleine Zeile darunter (.410: ein Tooltip
+    allein ist auf dem Handy unsichtbar, und genau dort wurde der Datei-Cache
+    fuer ein Leck gehalten). unter: kleine Unterschrift direkt unter der Zahl,
+    die sagt, WAS die Zahl ist."""
+    st = []
+    for z in zeilen:
+        k, v = z[0], z[1]
+        hinweis = z[2] if len(z) > 2 else ""
+        if not v:
+            continue
+        tip = f' title="{html.escape(hinweis)}"' if hinweis else ""
+        st.append(f'<div class="sst-zl"{tip}><span>{html.escape(k)}</span>'
+                  f'<b>{html.escape(v)}</b></div>')
+        if hinweis:
+            st.append(f'<div class="sst-zl3">{html.escape(hinweis)}</div>')
+    u = f'<div class="sst-cap">{html.escape(unter)}</div>' if unter else ""
     return (f'<div class="card sst-kachel"><div class="sst-kopf">'
             f'{html.escape(titel)}</div>'
-            f'<div class="sst-wert">{wert_html}</div>'
-            f'{_grund(block, marke)}{verlauf}{unten}</div>')
+            f'<div class="sst-wert">{wert_html}</div>{u}'
+            f'{_grund(block, marke)}{verlauf}{"".join(st)}</div>')
+
+
+def _ram_belegt(block):
+    """Prozesse + Grafik in MB — was suslik wirklich belegt (.410). belegt_mb,
+    wo der Sammler es traegt; sonst aus den Teilen, denn der Ring haelt 48 h
+    Zeilen aus der Zeit VOR dem Feld, und die Kurve soll dort nicht abreissen."""
+    b = block or {}
+    if b.get("belegt_mb") is not None:
+        return b["belegt_mb"]
+    p, g = b.get("prozesse_mb"), b.get("grafik_mb")
+    if p is None or g is None:
+        return None
+    return p + g
+
+
+def _live_knopf(schalter):
+    """Der Live-Schalter im Kopf (.410, User: "kleiner Schalter, laeuft von
+    selbst aus"). Aus: der Klick fuehrt auf ?live=1&seit=<jetzt>; an: der Klick
+    fuehrt auf die Seite ohne Parameter, also aus. Die Restzeit steht grob in
+    Minuten (aufgerundet) im Knopf, die Regeln (Takt, Deckel) im Tooltip."""
+    if not schalter:
+        return ""
+    minuten = max(1, int(schalter.get("deckel_s") or 0) // 60)
+    if schalter.get("an"):
+        rest = max(1, -(-int(schalter.get("rest_s") or 0) // 60))
+        return (f'<a class="sst-live an" href="/systemstat" '
+                f'title="{html.escape(t("systemstat.live_knopf.tip_an", rest=rest))}">'
+                f'{html.escape(t("systemstat.live_knopf.an", rest=rest))}</a>')
+    return (f'<a class="sst-live" href="/systemstat?live=1&amp;seit={int(time.time())}" '
+            f'title="{html.escape(t("systemstat.live_knopf.tip_aus", takt=schalter.get("takt_s"), minuten=minuten))}">'
+            f'{html.escape(t("systemstat.live_knopf"))}</a>')
 
 
 def _prozent_kachel(titel, block, reihe, zeilen=()):
@@ -134,15 +186,27 @@ def _prozent_kachel(titel, block, reihe, zeilen=()):
     return _kachel(titel, block, wert, _balken(reihe), zeilen)
 
 
-def render(verlauf, jetzt, takt_s, aufbewahrung_h):
+def render(verlauf, jetzt, takt_s, aufbewahrung_h, live=None):
     """-> Seiten-INHALT /systemstat.
 
     verlauf: Liste der Momentaufnahmen der letzten Stunde (aelteste zuerst).
     jetzt:   die zuletzt geschriebene Momentaufnahme (dieselbe, die /health
              ausgibt) oder None, solange der Sammler noch keine hat.
+    live:    Zustand des Live-Schalters (.410) aus dem Handler —
+             {"an", "seit", "rest_s", "takt_s", "deckel_s"}; None = kein Knopf.
     """
-    kopf = (f'<h2>{html.escape(t("systemstat.titel"))}</h2>'
-            f'<p class="sub">{html.escape(t("systemstat.sub", takt=takt_s, stunden=aufbewahrung_h))}</p>')
+    schalter = live or {}
+    # .411: im Live-Betrieb nennt der Einleitungssatz den LIVE-Takt (Kontrolle
+    # .410: "Alle 60 Sekunden eine neue Messung" blieb stehen), der Ring-Takt
+    # steht dann als Verlaufs-Kadenz daneben.
+    if schalter.get("an"):
+        sub = t("systemstat.sub_live", takt=schalter.get("takt_s"), ring=takt_s,
+                stunden=aufbewahrung_h)
+    else:
+        sub = t("systemstat.sub", takt=takt_s, stunden=aufbewahrung_h)
+    kopf = (f'<div class="sst-kopfzeile"><h2>{html.escape(t("systemstat.titel"))}</h2>'
+            f'{_live_knopf(schalter)}</div>'
+            f'<p class="sub">{html.escape(sub)}</p>')
     if not jetzt:
         return kopf + webui.leer(t("systemstat.leer.titel"),
                                  t("systemstat.leer.hinweis", takt=takt_s))
@@ -179,33 +243,47 @@ def render(verlauf, jetzt, takt_s, aufbewahrung_h):
                     ((t("systemstat.cpu.anzahl"), str(cpu.get("n")) if cpu.get("n") else ""),))
 
     ram = jetzt.get("ram") or {}
+    # .410 (Tester-Screenshot 02.09.: "In use 30 GB" bei 8 GB Prozessen, der
+    # Rest Datei-Cache, den der Kernel dem Container zurechnet — der Nutzer
+    # suchte ein Leck): gross steht, was suslik WIRKLICH belegt (Prozesse +
+    # Grafik), und der Verlauf zeichnet dasselbe. Der Datei-Cache ist eine
+    # eigene Zeile MIT dem Satz, was er ist. Der Prozentsatz (nur mit Limit)
+    # bleibt die docker-stats-Rechnung inkl. Cache und sagt das in seiner
+    # Beschriftung, statt als grosse Zahl eine andere Groesse zu behaupten.
+    belegt = _ram_belegt(ram)
     ram_zeilen = (
-        (t("systemstat.ram.genutzt"), _zahl(ram.get("genutzt_mb"), " MB")
-         if ram.get("genutzt_mb") is not None else ""),
         (t("systemstat.ram.prozesse"), _zahl(ram.get("prozesse_mb"), " MB")
          if ram.get("prozesse_mb") is not None else ""),
         (t("systemstat.ram.grafik"), _zahl(ram.get("grafik_mb"), " MB")
          if ram.get("grafik_mb") else ""),
+        (t("systemstat.ram.dateicache"), _zahl(ram.get("dateicache_mb"), " MB")
+         if ram.get("dateicache_mb") is not None else "",
+         t("systemstat.ram.dateicache_hinweis")),
+        # Rueckfall ohne Aufschluesselung (memory.stat nicht lesbar): dann ist
+        # die docker-stats-Zahl das Einzige, was es gibt, und steht als Zeile.
+        (t("systemstat.ram.genutzt"), _zahl(ram.get("genutzt_mb"), " MB")
+         if belegt is None and ram.get("genutzt_mb") is not None else ""),
         (t("systemstat.ram.limit"), _zahl(ram.get("limit_mb"), " MB")
          if ram.get("limit_mb") else ""),
-        (t("systemstat.ram.cache"), _zahl(ram.get("cache_mb"), " MB")
-         if ram.get("cache_mb") is not None else ""))
-    if ram.get("prozent") is None and ram.get("genutzt_mb") is not None:
-        # Ohne Container-Speichergrenze gibt es keinen Prozentsatz, aber sehr
-        # wohl eine gemessene Belegung. Die grosse Zahl zeigt sie dann in GB;
-        # ein „—" waere hier falsch, es gibt ja eine Messung.
-        # Der Verlauf zeichnet dann die BELEGUNG, skaliert auf ihren eigenen
-        # Hoechstwert im Fenster: eine Prozentreihe gibt es hier nicht, und
-        # eine leere Reihe waere eine verschenkte Aussage.
-        mb = _reihe("ram", "genutzt_mb")
-        k_ram = _kachel("RAM", ram,
-                        f'<span class="sst-gross">{ram["genutzt_mb"] / 1024:.1f}</span>'
-                        f'<span class="sst-einheit">GB</span>',
-                        _balken(mb, max(1.0, max((w for w in mb if w is not None),
-                                                 default=1.0))),
-                        ram_zeilen, marke=t("systemstat.kein_prozent"))
-    else:
-        k_ram = _prozent_kachel("RAM", ram, _reihe("ram"), ram_zeilen)
+        (t("systemstat.ram.anteil"), _zahl(ram.get("prozent"), " %", 1)
+         if ram.get("prozent") is not None else "",
+         t("systemstat.ram.anteil_hinweis")))
+    reihe_belegt = [_ram_belegt(z.get("ram")) for z in verlauf]
+    # Skala: das Limit, wenn eines gesetzt ist (der Balken zeigt dann den Anteil
+    # daran), sonst der Hoechstwert im Fenster. Eine Prozentreihe gibt es hier
+    # nicht mehr — die grosse Zahl ist in beiden Faellen die Belegung in GB.
+    skala = float(ram.get("limit_mb") or 0) or max(
+        1.0, max((w for w in reihe_belegt if w is not None), default=1.0))
+    k_ram = _kachel("RAM", ram,
+                    (f'<span class="sst-gross">{belegt / 1024:.1f}</span>'
+                     f'<span class="sst-einheit">GB</span>' if belegt is not None
+                     else '<span class="sst-gross dim">—</span>'),
+                    _balken(reihe_belegt, skala), ram_zeilen,
+                    # Ohne Speichergrenze gibt es keinen Prozentsatz, aber sehr
+                    # wohl eine Messung — die kleinere Marke, nicht "nicht verfuegbar".
+                    marke=(t("systemstat.kein_prozent")
+                           if ram.get("prozent") is None and belegt is not None else None),
+                    unter=t("systemstat.ram.belegt") if belegt is not None else "")
 
     pl = jetzt.get("platte") or {}
     k_platte = _prozent_kachel(t("systemstat.kachel.platte"), pl, _reihe("platte"), (
@@ -289,12 +367,20 @@ def render(verlauf, jetzt, takt_s, aufbewahrung_h):
                                          if du.get("analysen_24h") is not None else "")),
         (t("systemstat.durchsatz.dauer"), _zahl(du.get("dauer_mittel_s"), " s", 1)
          if du.get("dauer_mittel_s") is not None else "")))
-    offen = None
-    if not rs.get("grund"):
-        offen = max(0, int(rs.get("gesamt") or 0) - int(rs.get("fertig") or 0))
+    def _offen(r):
+        # .410 (User: "damit man sehen kann, ob das Backlog sich abarbeitet"):
+        # offen = gesamt − fertig je Probe, als Verlauf wie beim Durchsatz.
+        # Proben mit Grund (kein Dienst) sind Luecken, keine Nullen.
+        if not r or r.get("grund"):
+            return None
+        return max(0, int(r.get("gesamt") or 0) - int(r.get("fertig") or 0))
+    offen = _offen(rs)
+    stau_reihe = [_offen(z.get("rueckstau")) for z in verlauf]
     k_stau = _kachel(t("systemstat.kachel.rueckstau"), rs,
                      (f'<span class="sst-gross">{offen}</span>' if offen is not None
-                      else '<span class="sst-gross dim">—</span>'), "", (
+                      else '<span class="sst-gross dim">—</span>'),
+                     _balken(stau_reihe, max(1.0, max((w for w in stau_reihe if w is not None),
+                                                      default=1.0))), (
         (t("systemstat.rueckstau.laeuft"),
          t("systemstat.ja") if rs.get("aktiv") else t("systemstat.nein")),
         (t("systemstat.rueckstau.fenster"), (f'{rs.get("stunden")} h'
@@ -305,20 +391,60 @@ def render(verlauf, jetzt, takt_s, aufbewahrung_h):
     # als Balkenreihe aus dem 60-s-Ring, dazu Alter des aeltesten Wartenden
     # und die Melde-Spur (offen/gesendet/Fehler).
     q_n = rs.get("queue_n")
-    k_queue = _kachel(t("systemstat.kachel.queue"), rs,
-                      (f'<span class="sst-gross">{int(q_n)}</span>'
-                       if q_n is not None and not rs.get("grund")
-                       else '<span class="sst-gross dim">—</span>'),
-                      _balken(_reihe("rueckstau", "queue_n"),
-                              max(1.0, max(((z.get("rueckstau") or {}).get("queue_n") or 0)
-                                           for z in verlauf) if verlauf else 1.0)), (
-        (t("systemstat.queue.aeltester"),
-         _zahl(rs.get("queue_aeltester_s"), " s", 0)
-         if rs.get("queue_aeltester_s") else ""),
-        (t("systemstat.queue.spur"),
-         (f'{rs.get("spur_n", 0)} · {rs.get("spur_gesendet", 0)} ✓ · '
-          f'{rs.get("spur_fehler", 0)} ✗')
-         if rs.get("spur_gesendet") is not None else "")))
+    spur_zeile = (t("systemstat.queue.spur"),
+                  (f'{rs.get("spur_n", 0)} · {rs.get("spur_gesendet", 0)} ✓ · '
+                   f'{rs.get("spur_fehler", 0)} ✗')
+                  if rs.get("spur_gesendet") is not None else "")
+    # .410 betriebsart-bewusst (Tester-Screenshot 02.09.: "ist die ganze Zeit
+    # null"): im Poll-Betrieb verarbeitet sweep() direkt, diese Warteschlange
+    # bleibt PER BAU leer — statt der grossen 0 steht dann der Satz, der
+    # Verlauf entfaellt, die Melde-Spur bleibt. Verzweigt wird wie in main():
+    # "mqtt" oder eben nicht; ein FEHLENDER Wert (Ring-Zeilen von vor .410,
+    # kein Dienst) zeigt wie bisher, statt eine Betriebsart zu raten.
+    tr = rs.get("trigger")
+    if tr is not None and tr != "mqtt":
+        k_queue = _kachel(t("systemstat.kachel.queue"), rs,
+                          f'<span class="sst-mittel">{html.escape(t("systemstat.queue.poll"))}</span>',
+                          "", (spur_zeile,), unter=t("systemstat.queue.poll_hinweis"))
+    else:
+        k_queue = _kachel(t("systemstat.kachel.queue"), rs,
+                          (f'<span class="sst-gross">{int(q_n)}</span>'
+                           if q_n is not None and not rs.get("grund")
+                           else '<span class="sst-gross dim">—</span>'),
+                          _balken(_reihe("rueckstau", "queue_n"),
+                                  max(1.0, max(((z.get("rueckstau") or {}).get("queue_n") or 0)
+                                               for z in verlauf) if verlauf else 1.0)), (
+            (t("systemstat.queue.aeltester"),
+             _zahl(rs.get("queue_aeltester_s"), " s", 0)
+             if rs.get("queue_aeltester_s") else ""),
+            spur_zeile))
+
+    # .407 Zeitschiene (User-Wunsch nach dem Feldbefund: die Event-API eines
+    # Testers antwortete 35 min lang mit ~120 s je Anfrage, und niemand konnte
+    # es sehen): wie lange wartet der Dienst auf Frigate? Gross die zuletzt
+    # gemessene Antwortzeit, als Verlauf das MAXIMUM je Takt — nicht der
+    # Mittelwert: ein einzelner 120-s-Zug zwischen schnellen verschwindet im
+    # Mittel, und genau der ist die Nachricht. KEINE eigene Warnschwelle
+    # (Seiten-Regel §4): der Balken zeigt den Ausreisser von allein.
+    fg = jetzt.get("frigate") or {}
+    fg_max = _reihe("frigate", "max_s")
+    k_frigate = _kachel(
+        t("systemstat.kachel.frigate"), fg,
+        (f'<span class="sst-gross">{fg["letzte_s"]:.1f}</span>'
+         f'<span class="sst-einheit">s</span>'
+         if fg.get("letzte_s") is not None and not fg.get("grund")
+         else '<span class="sst-gross dim">—</span>'),
+        _balken(fg_max, max(1.0, max((w for w in fg_max if w is not None),
+                                     default=1.0))), (
+        (t("systemstat.frigate.mittel"), _zahl(fg.get("mittel_s"), " s", 1)
+         if fg.get("mittel_s") is not None else ""),
+        (t("systemstat.frigate.max"), _zahl(fg.get("max_s"), " s", 1)
+         if fg.get("max_s") is not None else ""),
+        # Die Anzahl steht auch dann da, wenn sie 0 ist: eine leere Minute ist
+        # eine Aussage (der Dienst hat gerade nichts von Frigate gewollt) und
+        # erklaert, warum Mittel und Maximum darueber fehlen.
+        (t("systemstat.frigate.anfragen"), (str(fg.get("n"))
+                                            if fg.get("n") is not None else ""))))
 
     # ---------------------------------------------------------- Block C
     lv = jetzt.get("live") or {}
@@ -336,11 +462,13 @@ def render(verlauf, jetzt, takt_s, aufbewahrung_h):
         (t("systemstat.live.supervisor"), str(sup or ""))))
 
     stand = f'{datetime.datetime.fromtimestamp(jetzt.get("ts") or 0):%H:%M:%S}'
+    stand_satz = (t("systemstat.stand_live", zeit=stand, takt=schalter.get("takt_s"))
+                  if schalter.get("an") else t("systemstat.stand", zeit=stand))
     return (kopf
             + f'<div class="ek-abschnitt">{html.escape(t("systemstat.block.hardware"))}</div>'
             + f'<div class="sst-gitter">{k_cpu}{k_ram}{k_platte}{k_gpu}{k_npu}</div>'
             + f'<div class="ek-abschnitt">{html.escape(t("systemstat.block.erkennung"))}</div>'
-            + f'<div class="sst-gitter">{k_worker}{k_durchsatz}{k_stau}{k_queue}</div>'
+            + f'<div class="sst-gitter">{k_worker}{k_durchsatz}{k_stau}{k_queue}{k_frigate}</div>'
             + f'<div class="ek-abschnitt">{html.escape(t("systemstat.block.live"))}</div>'
             + f'<div class="sst-gitter">{k_live}</div>'
-            + f'<p class="sub sst-stand">{html.escape(t("systemstat.stand", zeit=stand))}</p>')
+            + f'<p class="sub sst-stand">{html.escape(stand_satz)}</p>')

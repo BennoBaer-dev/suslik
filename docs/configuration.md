@@ -44,7 +44,7 @@ Everything persistent is under the `/data` volume you mounted:
 | `config/config.json` | the settings the wizard writes (Frigate URL, backend, zones, alert options …) |
 | `faces/` | your reference face library (the "master") |
 | `learn/` | enrollment data and the persistent unknown pool |
-| `state/` | judgments, ground-truth labels, write-back log |
+| `state/` | judgments, ground-truth labels, write-back log; `state/anwesenheit/` holds the presence marks (one file per day: who was confirmed where, per quarter hour — personal data) |
 | `live/` | live watchers: per-camera evidence pictures of triggers and name messages, the recap videos of the live day view, and the alert log |
 | `personlern/` | the person-recognition path: harvest runs with crops and your review verdicts, confirmed stranger images (`fremd/`), the trained model (`modell/`), judged live crops (`treffer/`, 30-day trim) and the fire-window state |
 | `clips/`, `events/` | cached recorded clips (auto-pruned) and per-event crops/logs |
@@ -120,7 +120,11 @@ These are the settings most people touch (all set via the wizard/UI; names shown
 - **Alerts** — which judgment categories trigger an alert, and the global cooldown. Delivery
   channels are Pushover, Telegram (direct, or via Home Assistant: the `ha` mode calls the HA script `frigate_telegram_video` — create a script of that name in your HA instance, a configurable name is planned), and MQTT topics. The
   channels and their secrets are configured in the dedicated **Notifications** tab, which has a
-  **Test** button per channel (see [usage.md](usage.md)).
+  **Test** button per channel (see [usage.md](usage.md)). Pushover counts as **off** while the
+  token or the user key is missing (one line in the startup log, nothing is sent). If Pushover
+  rejects 5 messages in a row (wrong token/user), the channel **pauses** until you save the
+  Notifications tab or a Test succeeds; the tab shows the state, `/health` carries it under
+  `system.rueckstau.pushover_*`. Network errors never pause the channel.
 - **Recognition threshold** — the time-window criterion (how many consistent frames within the
   window count as "recognized"). The defaults are calibrated; change only if you know why.
   The same similarity threshold also drives the live watchers' preliminary name stage.

@@ -14,22 +14,43 @@ learned material and model status), **Vision** (vision detect), **Live**
 class-by-class comparison with Frigate's own face library), **Settings**,
 **Recognition test** and **System**.
 
+Two buttons sit in the top bar next to the sections: **Calibration** (per-camera bars) and
+**Presence** (route `/anwesenheit`) — the day, person by person, in quarter-hour cells. Red =
+that person was confirmed present in that quarter hour (by the event analysis or a live
+watcher, shown once), green = the system was running and confirmed nobody, an empty cell =
+the system was not running or did not look at that slot (no statement, not "absent"). The
+hours outside the day window are one cell per hour; the window is derived from your
+sightings (or fixed in Advanced settings). Arrows page day by day back to the first recorded
+day; the three switches **All / Camera / Area** narrow the view. Clicking a red cell opens
+the pass (or the person's day view for live-only sightings). Recording starts with the
+version that introduced the page — earlier days stay empty.
+
 **Activity**
 
-- **Today** — the scenario view. Each entry is one *walk* (a person moving across your property),
-  grouped from the individual events across cameras and time. Recognized people lead the page;
-  passes where nobody was recognized appear as "Unknown N" cards once the unknown pool has
-  grouped them, and each card names the pool identity with how often it was seen before.
-  Below the recognized passes, a **Recognized live** row shows cards for appearances a live
-  watcher already put a name to (marked "quick check, preliminary"): evidence picture, name,
-  time and camera. Clicking a card opens the live day view with all face images and recap
-  videos of that appearance.
-  Passes whose whole clip contains no serious face are the exception: those get a quiet
-  "no usable face in this pass" note instead of a warning and never become unknown-visitor
-  cards. Clicking a person card opens their **Appearances** day view (route `/auftritte`):
-  every pass of that person with camera route and best shots; body-attributed passes are
-  counted there too. A scenario still in progress is shown live and finalizes once the
-  walk ends.
+- **Today** — the day at one glance: who was here, from when to when, and whether there
+  were strangers. **People** leads the page, one card per person with at least one
+  confirmation that day (from the normal analysis or from a live watcher), newest sighting
+  first: best picture, "first–last confirmed HH:MM–HH:MM · N passes · last seen CAMERA
+  HH:MM", and — once the presence journal has that day — a small hour bar (red: confirmed
+  present, green: system running, nobody seen; always over all cameras, even in an area
+  view) with "present about N h". A person only a live watcher has named carries a small
+  "live" mark (preliminary, no confirmed pass yet). Twelve cards are shown, the rest folds
+  behind "all N people". There are no combined "A & B" cards any more: the person is the
+  unit. Clicking a card opens their **Appearances** day view (route `/auftritte`).
+  **Unknown** follows: passes where nobody was recognized appear as "Unknown N" cards once
+  the unknown pool has grouped them, each naming the pool identity and how often it was
+  seen before. Passes whose whole clip contains no serious face get a quiet "no usable
+  face in this pass" note instead and never become unknown-visitor cards.
+  **Passes** lists every walk (events grouped across cameras and time), newest first, one
+  collapsed row each: time, duration, up to three avatars plus "+N", the "+N not matched"
+  footnote, the source tag (via face / via person / live), the red body bar for
+  body-only attributions and the vision line. A row starts open only when it needs a
+  look: nobody recognized with a serious face, or an alert went out (at most three). Inside,
+  each camera line shows at most three names plus "+N", eight camera lines are visible and
+  the rest folds behind "all N cameras". The side column counts People, Passes, Events
+  analysed, "not matched inside passes" and Unidentified — every number explains in its
+  tooltip what it counts. Live-watcher statistics live on the Live tab and in System stats.
+  A scenario still in progress is shown live and finalizes once the walk ends.
 - **Events** — the flat event list with filters and paging, category badges, ground-truth
   buttons, and video links. Useful for drilling into a single event.
 - **To label** — the work list of unconfirmed events (route `/offen`, 50 per page): events that
@@ -99,6 +120,9 @@ class-by-class comparison with Frigate's own face library), **Settings**,
   judgment categories raise an alert. For Telegram you can choose the attachment: a short
   **video** clip (falls back to an image and says so) or **image only** (no transcoding —
   lighter on weak hardware). Each channel has a **Test** button; stored secrets are shown masked.
+  The Pushover card shows the channel state: **off** while token or user key is missing (nothing
+  is sent, one startup log line), **paused** after 5 rejections in a row (save the tab or run a
+  successful Test to resume), otherwise active.
   Live watchers use the same channels but pick them **per watcher** on the Live tab.
 - **Recognition chain** — its own page: the order and conditions of the recognition
   paths (face → person → vision), each step with a plain-language condition. It used to
@@ -115,6 +139,19 @@ class-by-class comparison with Frigate's own face library), **Settings**,
   whole person-recognition material and models — plus a restore that replaces those parts
   and keeps one `.pre-restore` copy of each), the **Frigate write-back** control (read-only
   is the safe default), **Re-run setup wizard**, and a link to this documentation.
+- **System stats** (also the **System stats** button in the top bar) — the load of the machine
+  and the state of recognition, one sample per minute, kept for 48 hours. Anything this
+  hardware cannot measure says so instead of showing a zero. The **RAM** card shows what the
+  program really occupies (processes + graphics memory) as the big number; the **file cache**
+  is a separate line: the kernel keeps recently read clips in memory and hands it back the
+  moment something else needs it, so a large file cache is neither a leak nor an error. A
+  percentage appears only if the container has a memory limit, and then it is the docker
+  stats view (cache included, labelled as such). **Event queue** shows the MQTT waiting line;
+  in poll mode nothing waits there (events come straight from the sweep), so the card says so
+  instead of a zero. **Backlog** shows how many events of the current catch-up are still open,
+  with a history bar so you can see it drain. The **Live** button next to the title refreshes
+  the page every 5 seconds with fresh samples for up to 5 minutes, then it switches back on
+  its own; leaving the page ends it as well.
 
 ## Enrollment (teaching suslik a person)
 
@@ -162,9 +199,12 @@ Alerts fire only for the categories you enable (disagreement by default), with a
 so continuous presence doesn't spam you.
 
 Live watchers alert on a separate path these categories do not govern: the presence
-trigger reports every person immediately, and the preliminary name stage adds its own
-"recognized (live, preliminary)" message per appearance and person — both on the channels
-picked per watcher, with their own per-watcher re-arm time.
+trigger reports every person immediately ("<watcher> <camera>: person detected" with
+just the name of the quick check, or "not recognized"), and the name stage adds its own
+message per appearance and person ("<watcher> <camera>: recognized" with just the name)
+— both on the channels picked per watcher, with their own per-watcher re-arm time. The
+alert style `worte_zahlen` keeps the detailed texts with scores, seconds and the
+"preliminary" wording; the MQTT payload is unchanged either way.
 
 ## Reading the startup self-check
 

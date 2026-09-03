@@ -40,11 +40,11 @@ _IN_STD = np.array([0.229, 0.224, 0.225], np.float32)
 # EINE Quelle: load_config-Defaults UND der Standard-Knopf der
 # Kalibrier-Seite lesen von HIER (K3-Regel gegen Zweit-Literale).
 STARTWERTE = {"empfinden": 0.200, "t": 0.400}
-# Anzeige-/Melde-Vorgaben der Kamera-Kalibrierseite (User-Vorgabe 31.08.:
-# "Bildeindruck 0,175, Erkennbarkeit 0,200") — bewusst MILDER als die
-# Katalog-STARTWERTE darueber: was zum Anzeigen reicht, reicht nicht
-# automatisch zum Lernen. EINE Quelle, der Kalibrier-Handler liest von hier.
-ANZEIGE_STARTWERTE = {"empfinden": 0.175, "t": 0.200}
+# ANZEIGE_STARTWERTE (Vorgaben-Knopf der Kalibrierseite) ist seit 03.09. eine
+# ABLEITUNG der Werks-Boeden und steht deshalb unten HINTER STIMM_DEFAULT —
+# die eigenstaendigen 0,175/0,200 vom 31.08. sind mit dem Sync-Entscheid
+# "Werkswert = Boden = Regler-Minimum" ueberholt (User 03.09.: "bei Default
+# setzt er noch die alten Werte, da muesst ihr die neuen minimalen setzen").
 
 # URTEILS-VORFILTER (User-Entscheide 01.09., nach den Tester-Fehlbenennungen:
 # "es sollte doch immer durch die Kalibrierung vorgefiltert werden"): JEDE
@@ -63,8 +63,47 @@ ANZEIGE_STARTWERTE = {"empfinden": 0.175, "t": 0.200}
 # Dokumentierter Preis (vorgelegt, bewusst getragen): auf schwach messenden
 # Kameras liegen auch KORREKTE Gesichter unter den Latten (4/7 Feld-Faelle)
 # — dort wird ehrlich NICHT benannt statt falsch.
-STIMM_BODEN = {"empfinden": 0.10, "t": 0.200}     # absolute Minima (klemmen alles)
-STIMM_DEFAULT = {"empfinden": 0.175, "t": 0.225}  # Werkswerte ohne Kalibrierung
+# GEMESSENE BOEDEN (03.09., ZWEI Eichungen am Testbett): Die Sicht-Eichung an
+# 441 einzeln beurteilten Detektionen (vier Clips) ergab zunaechst e 0,120 /
+# t 0,100. Die Ring-Sichtung der Fern-Kamera am selben Abend (54 Ring-Bilder
+# einzeln beurteilt) WIDERLEGTE den e-Teil: auf Fern-Kameras misst e INVERS
+# zur Gesichtsqualitaet (scharfe unbewegte Objekte e-Median 0,126 UEBER den
+# klein-verwischten klaren Gesichtern 0,116) — der 0,12er-Boden graute 8 von
+# 9 A-Bildern aus, darunter das einzige frisch erkennbare Material der Kamera
+# (sim bis 0,60 auf eine Bestands-Person), und liess 5 von 6 Objekten durch.
+# User-Entscheid 03.09. abends deshalb: e-Boden zurueck auf 0,10 — Objekte
+# trennt NICHT e, sondern der Pose-Kopf. t 0,100 bestaetigt (der alte
+# 0,200er-Boden warf 71 echte Gesichter weg, tiefstes klares Gesicht t 0,181).
+# Belege: Testbett-Belege unter labor_frigate (gitignored): boedenmessung/ + Ring-Sichtung.
+STIMM_BODEN = {"empfinden": 0.10, "t": 0.100}     # absolute Minima (klemmen alles)
+# Pose-Kopf-Boden (User-Entscheid 03.09. abends, zweite Stufe nach der Ring-
+# Sichtung): 0,60 liess das eine Objekt im Ring (p 0,612) durch; die Sichtung
+# zeigte die saubere Luecke 0,612 (einziges Nicht-Gesicht unterhalb) / 0,722
+# (naechstes echtes Bild). 0,65 wirft genau dieses Objekt raus und kostet
+# dort null Gesichter. Rest-Risiko benannt: die 441er-Eichung sah D-Bilder
+# bis 0,654 — Einzelobjekte im Band 0,650-0,654 passieren weiterhin (bewusst
+# getragen, B-Untergrenze 0,701). Werkswert unkalibrierter Kameras, Regler-
+# Minimum der Kalibrier-Seite UND Klemm-Untergrenze gesetzter pose_min-Werte.
+# Feld-Folge unveraendert: Kameras, deren echte Menschen nur Kopf-Scores
+# 0,2-0,3 liefern (ferne Deckensicht), sieben damit auch ohne Regler.
+POSE_BODEN = 0.65
+# SYNC-FIX (User 03.09., Klon-Testbett-Befund am Referenz-Event): der Werkswert
+# ohne Kalibrierung IST der Boden — vorher galt still 0,175/0,225, waehrend die
+# Kalibrier-Seite einer unkalibrierten Kamera 0,100/0,200 zeigte (Anzeige und
+# Urteil waren asynchron; 38 von 39 gueltigen Referenz-Stimmen starben am
+# unsichtbaren 0,175er-e-Sieb). Wer schaerfer sieben will, kalibriert die Kamera.
+STIMM_DEFAULT = dict(STIMM_BODEN)                 # Werkswerte ohne Kalibrierung = Boden
+ANZEIGE_STARTWERTE = dict(STIMM_DEFAULT)          # Vorgaben-Knopf setzt die Werks-Boeden
+
+# RING-EINLASS (Kalibrier-Vorrat) — FIX 02.09. nach dem Tester-Befund: der
+# Einlass nahm STARTWERTE (t 0,400 = KATALOG-Latte auf der Datei-Skala) und
+# verwarf beim Tester 73/73 Kandidaten eines Tages (e 0,16-0,20 / t 0,26-0,43)
+# — der Vorrat blieb leer, kalibrieren war unmoeglich. Der Ring soll zeigen,
+# was die Kamera WIRKLICH liefert (auch Mittelmaessiges, sonst gibt es nichts,
+# woran der Nutzer die Latte setzen koennte); nur Totes bleibt draussen. Werks-
+# Boden deshalb die gemessene Keller-Grenze (01.09.: unter 0,10 nur Kopf-
+# gesenkt/Augen-weg/Hinterkopf). Menschen-Urteil liefert das Pose-Gate.
+RING_BODEN = {"empfinden": 0.10, "t": 0.10}
 
 
 def stimm_latten(guard):

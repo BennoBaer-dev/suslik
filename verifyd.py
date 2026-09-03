@@ -33,6 +33,8 @@ from core.livewache import DET_MIN_LIVE               # .402: DER det-Werkswert 
 from core import kamerakalib as _kk_ue                # Kamera-Kalibrierung: DIE Katalog-Latte je Kamera (31.08.)
 from core import sprache as _sprache                  # Sprach-Stufe 1: contextvar je Request + Schalter
 from core import systemstat as _systemstat            # .341: Systemzahlen (Sammler, Ringpuffer, /health.system)
+from core import anwesenheit as _anw                  # .408: Anwesenheits-Marken (der eine Worker-Griff + Marge-Regel)
+from core import einspielen as _einspiel              # .416: Testbett-Einspielung (Praefix-Konvention + Injektor-Ablage)
 # Oeffentliche Projekt-Doku (GitHub). Lokale Arbeitsnotizen des Autors enthalten interne
 # IPs + Zugaenge und duerfen NICHT ueber das UI ausgeliefert werden -> System-Seite + /doc zeigen aufs Repo.
 DOCS_URL = "https://github.com/BennoBaer-dev/suslik"
@@ -856,6 +858,28 @@ def load_config(path):
         ("selbstwache", True),
         ("urteil_marge", 0.05),
         ("urteil_kante", 25),
+                         # BLICKFENSTER (User-Entscheid 03.09. abends, geeicht
+                         # an den vier Testbett-Clips): Anker + Unterstuetzung
+                         # muessen in EINEM gleitenden Fenster liegen; 45 s ist
+                         # die kleinste Breite, die alle vier richtig trennt.
+                         # blick_fenster_s 0 = alter fester 3-s-Fenster-Weg.
+        ("blick_fenster_s", 45.0),
+        ("urteil_anker", 0.50),
+                         # FUNDSTELLEN-TRENNUNG (03.09. spaet): Ueberlapp-
+                         # Anteil, ab dem zwei Kandidaten als Deutungen
+                         # DESSELBEN Gesichts konkurrieren. 0 = aus (altes
+                         # Verhalten). Der Werkswert wird an den sieben
+                         # Referenz-Clips geeicht (s. Commit).
+        ("urteil_trennung", 0.5),
+                         # .408 Anwesenheits-Marken: Aufbewahrung in Tagen (User-
+                         # Entscheid 02.09.: 30, keine Vergangenheitsbetrachtung —
+                         # die Historie beginnt mit dieser Version) und das
+                         # Tagesfenster der Seite als Override (-1 = Automatik,
+                         # Perzentil ueber 14 Tage in core/anwesenheit.fenster).
+                         # PAAR-Bauart: Default hier, Whitelist-Eintrag dort.
+                         ("anwesenheit_tage", 30),
+                         ("anwesenheit_tag_von", -1),
+                         ("anwesenheit_tag_bis", -1),
                          # .264 Frigate-Schoner (Verklemmungs-Vorfall 17.08.):
                          # nach N Netz-Fehlern in Folge pause_s zurueckziehen.
                          ("frigate_schoner_fehler", 3),
@@ -1162,6 +1186,12 @@ FRIGATE_READONLY_FORCED = False
 # konfigurierbare nachhol_tage (max 3): wuerde man gegen nachhol_tage prunen, koennte eine
 # UI-Aenderung Zaehler wegwerfen und damit aufgegebene Events wiederbeleben.
 NACHHOL_PRUNE_TAGE = 4
+# .408 Takt der Anwesenheits-Lauf-Marke (start_anwesenheit_takt): deutlich
+# unter dem 15-min-Slot (core/anwesenheit.SLOT_S), damit kein Slot ohne
+# Marke bleibt, solange der Dienst lebt; das Dedup je Slot lebt im Modul,
+# ein Takt kostet also hoechstens einen Stat-Aufruf. Kein Messwert, ein
+# Strukturwert (Gate: 0 < Takt < SLOT_S).
+ANWESENHEIT_TAKT_S = 60
 
 # Live-Reiter (Engine-M6): Frist, nach der ein Helfer-Quelltest-Job als tot
 # gilt und seinen Riegel freigibt — der Subprozess hat timeout=180 s, der
@@ -1520,7 +1550,11 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
             # Gesicht"), Rueckfall global det_thresh. Vorher galt hier NUR
             # der globale Wert — die Kamera-Kalibrierung erreichte die
             # Szenario-Analyse nie (Asymmetrie-Befund 01.09.).
-            "--det-thresh", str((((cfg.get("live") or {}).get(camera) or {}).get("det_min"))
+            # LOOKUP-FIX (User 03.09., Klon-Testbett): die Kamera-Regler leben
+            # unter live.guards.<kamera> — der alte Griff cfg["live"][camera]
+            # fand NIE etwas, det_min und die Guete-Latten der Kamera
+            # erreichten den Worker seit .402/.404 nicht (stille Werkswerte).
+            "--det-thresh", str(((((cfg.get("live") or {}).get("guards") or {}).get(camera) or {}).get("det_min"))
                                 or cfg["det_thresh"]),
             # .400 Urteils-Kante: EIGENER Wert, Default 40 px — GEMESSEN
             # (Trennschaerfe-Test 01.09., 14 falsche/7 korrekte Feld-Faelle:
@@ -1530,7 +1564,11 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
             # ueberleben). BEWUSST nicht an min_kante(70) gebunden:
             # Anlern-Qualitaet und Urteils-Minimum sind verschiedene
             # Groessen.
-            "--urteil-kante", str(cfg.get("urteil_kante", 25))]
+            "--urteil-kante", str(cfg.get("urteil_kante", 25)),
+            # BLICKFENSTER (User 03.09. abends): analyze misst je Person das
+            # beste Anker-Fenster (blick_n/blick_max), verdict prueft win_min.
+            "--blick-fenster", str(cfg.get("blick_fenster_s", 45.0)),
+            "--urteil-anker", str(cfg.get("urteil_anker", 0.50))]
     # .404 KALIBRIER-VORFILTER (User-Entscheid 01.09., fest in Watcher UND
     # Worker: "es sollte doch immer durch die Kalibrierung vorgefiltert
     # werden"): die Erkennen-Guete-Latten der KAMERA gehen als Stimm-Sieb
@@ -1540,11 +1578,27 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
     # Boden). Der fruehere "Guete-Latten bleiben draussen"-Satz galt der
     # GLOBALEN Latte (Kamera-Bias Faktor 5); die Kamera-Latte ist genau
     # die Antwort darauf.
-    _reg = (cfg.get("live") or {}).get(camera) or {}
+    _reg = ((cfg.get("live") or {}).get("guards") or {}).get(camera) or {}   # LOOKUP-FIX 03.09. (s. o.)
     if _reg.get("guete_e_min") is not None:
         argv += ["--urteil-guete-e", str(_reg["guete_e_min"])]
     if _reg.get("guete_t_min") is not None:
         argv += ["--urteil-guete-t", str(_reg["guete_t_min"])]
+    # POSE-SIEB Stufe 2 (User 03.09.): der Kalibrier-Regler der Kamera wirkt
+    # im Worker als viertes Stimm-Sieb + Ring-Einlass. Unkalibriert gilt der
+    # gemessene Werks-Boden (core.guete.POSE_BODEN) — dieselbe Politik wie bei
+    # den zwei Guete-Boeden ("Werkswert = Boden", User-Entscheid).
+    from core.guete import POSE_BODEN as _pb
+    argv += ["--urteil-pose", str(_reg["pose_min"]
+                                  if _reg.get("pose_min") is not None else _pb)]
+    # KALIBRIER-VORRAT AUS DER ANALYSE (User 03.09., beauftragt seit 31.08.):
+    # jede Event-Analyse darf den Ring ihrer Kamera speisen — Deckel ist
+    # derselbe wie beim Live-Vorrat (live_kalib_max, 0 = aus), der Schreibweg
+    # samt Einlass-Boden liegt in core.livewache.kalib_schreiben.
+    _kd = int(cfg.get("live_kalib_max") or 0)
+    if _kd:
+        argv += ["--kalib-deckel", str(_kd),
+                 "--kalib-data-dir", cfg["data_dir"],
+                 "--kalib-kamera", camera]
     if cfg.get("debug"):
         argv += ["--urteil-debug"]
     if koerper and worker is not None:
@@ -1970,13 +2024,26 @@ class WorkerProzess:
 
 
 # ------------------------------------------------------------------ Deckungs-Logik (§6 Konzept)
+def _bestaetigt_aus(cfg, ours):
+    """DIE eine Bestaetigungs-Ableitung fuer verdict UND verdict_v2.
+    BLICKFENSTER (User-Entscheid 03.09. abends): traegt die Analyse
+    blick_n-Kennwerte (gleitendes Anker-Fenster, s. analyze.py), zaehlt
+    blick_n gegen win_min — Anker und Unterstuetzung muessen in EINEM
+    Fenster liegen. Alt-Akten ohne die Felder urteilen unveraendert ueber
+    das feste 3-s-Fenster (win3s) — Bestandsdaten kippen nicht rueckwirkend."""
+    key = ("blick_n" if any(isinstance(r, dict) and "blick_n" in r
+                            for r in ours.values()) else "win3s")
+    return sorted(p for p, r in ours.items()
+                  if (r or {}).get(key, 0) >= cfg["win_min"])
+
+
 def verdict(cfg, frigate_label, ours, confirmed=None):
     """ours: {person: {win3s, max, ...}} -> (kategorie, bestaetigte_personen).
     confirmed additiv (Issue #19): die deckung-Korrektur nach dem Anlernen liefert die
     Bestaetigung selbst (Embedding-Nachpruefung statt win3s) — die Kategorie-Ableitung
     bleibt trotzdem in DIESER einen Quelle statt als Kopie an der Korrektur-Stelle."""
     if confirmed is None:
-        confirmed = sorted(p for p, r in ours.items() if r.get("win3s", 0) >= cfg["win_min"])
+        confirmed = _bestaetigt_aus(cfg, ours)
     if frigate_label and confirmed:
         return ("deckung" if frigate_label in confirmed else "widerspruch"), confirmed
     if frigate_label and not confirmed:
@@ -1986,14 +2053,14 @@ def verdict(cfg, frigate_label, ours, confirmed=None):
     return "beide_unknown", confirmed
 
 
-def verdict_v2(cfg, ours, max_bw, confirmed=None):
+def verdict_v2(cfg, ours, max_bw, confirmed=None, det_t=None):
     """Schema v2 (Plan AP2, Frigate-unabhaengig): erkannt / fremd_verdacht /
     unbekannt_schwach. fremd_verdacht = brauchbares Gesicht (>=100 px), aber niemand
     bestaetigt. HINWEIS: Trockenlauf 18.07. ergab 10-17x/Tag -> vorerst NICHT in
     alert_kategorien (Nachschaerfung in der Parallelphase mit GT-Labels).
     confirmed additiv wie bei verdict (Issue #19, deckung-Korrektur)."""
     if confirmed is None:
-        confirmed = sorted(p for p, r in ours.items() if r.get("win3s", 0) >= cfg["win_min"])
+        confirmed = _bestaetigt_aus(cfg, ours)
         # .400 MARGE (User-Go 01.09., "lieber kein Name als der naechstbeste";
         # Fall-Analyse an 15 Feld-Fehlurteilen: falsche Namen gewannen mit
         # 0,001-0,047 Abstand, der saubere Vergleichsfall fuehrte mit 0,112;
@@ -2005,12 +2072,34 @@ def verdict_v2(cfg, ours, max_bw, confirmed=None):
         # Event ist ein knapper Zweiter nicht vom echten zweiten Menschen
         # unterscheidbar; Duo-Faelle werden unsicher statt halb-falsch
         # (derselbe Grundsatz). 0 = aus.
-        _marge = float(cfg.get("urteil_marge") or 0)
-        if _marge and len(confirmed) > 1:
-            _mx = sorted((float((ours.get(p) or {}).get("max") or 0)
-                          for p in confirmed), reverse=True)
-            if _mx[0] - _mx[1] < _marge:
-                confirmed = []
+        # .408: die REGEL lebt in core/anwesenheit.marge_sperrt — dieselbe
+        # Funktion wendet die Live-Engine auf die Kandidaten eines Auftritts
+        # an (K4, User-Entscheid §9.2); der WERT kommt hier wie dort aus
+        # cfg['urteil_marge'], ein zweites Literal gibt es nicht.
+        # DESIGN-LUECKE GESCHLOSSEN (User-Go 03.09. abends, Gruppen-Clip-Fall (Testbett 08:15))
+        # + FUNDSTELLEN-TRENNUNG (User-Go 03.09. spaet, Familien-Fall: zwei
+        # ECHTE Menschen in einem Event benannten sich gegenseitig weg, und
+        # ein einziges nahes Paar leerte bei 3+ Personen ALLE Namen): die
+        # Marge laeuft jetzt PAARWEISE und fundstellen-bewusst ueber die
+        # Stimm-Detektions-Indices (analyze stimm_idx) — Regel und Semantik
+        # in core/anwesenheit.marge_urteil (EINE Quelle, spaeter auch Live).
+        # Alt-Akten ohne stimm_idx verhalten sich exakt wie bisher.
+        if confirmed:
+            _wt = float(cfg.get("win_thresh") or 0.40)
+            _kand = []
+            for _p, _r in ours.items():
+                _mx = float((_r or {}).get("max") or 0)
+                if _p in confirmed or _mx >= _wt:
+                    _si = (_r or {}).get("stimm_idx")
+                    _fund = None
+                    if _si and det_t:
+                        _fund = [(int(_i2), float(det_t[int(_i2)]))
+                                 for _i2 in _si if 0 <= int(_i2) < len(det_t)]
+                    _kand.append({"p": _p, "max": _mx, "fund": _fund or None,
+                                  "bestaetigt": _p in confirmed})
+            _ok, _sperren = _anw.marge_urteil(_kand, cfg.get("urteil_marge"),
+                                              cfg.get("urteil_trennung"))
+            confirmed = sorted(_ok)
     if confirmed:
         return "erkannt", confirmed
     if (max_bw or 0) >= 100:
@@ -2455,6 +2544,14 @@ class Service:
 
     _mqtt_herkunft = staticmethod(_melden.mqtt_herkunft)
 
+    def kanaele_startzeile(self):
+        """.411: Pushover ohne Token ODER User gilt als AUS — EINE Startzeile
+        statt einer "REJECTED"-Zeile je Alarm (Tester-Log 02.09.). Telegram/
+        MQTT melden ihren Zustand an ihren eigenen Startstellen."""
+        if not _melden.pushover_konfiguriert(self.cfg):
+            self.log("Pushover not configured (token or user key missing) — "
+                     "nothing is sent on this channel")
+
     def start_publisher(self):
         def pub_setzen(client):
             self.pub = client
@@ -2736,9 +2833,12 @@ class Service:
         # (Unbekannt-Identitaeten, gesichter/geprueft/crops/vorschlaege; gesichert war nur der stale
         # learn/enroll). Jetzt ganzes learn/ statt Einzeldateien, damit kuenftige Pool-Dateien
         # automatisch mitkommen; die Laufzeit-Lock (pool.lock) wird ausgefiltert.
+        # .408: state/anwesenheit (Anwesenheits-Marken, S2/User-Entscheid §9.5) —
+        # es gibt KEINE Migration aus der Akte, nach einem Restore ohne diesen
+        # Ordner waere die Historie weg.
         QUELLEN = ("faces", "config/config.json", "config/config_audit.jsonl",
                    "state/ground_truth.jsonl", "state/sublabel_writes.jsonl",
-                   "state/deckung.jsonl", "learn")
+                   "state/deckung.jsonl", "state/anwesenheit", "learn")
         gefunden, fehlend = [], []
         # ATOMAR (tmp + fsync + os.replace): frueher schrieb tarfile DIREKT auf `ziel`. Brach der
         # Lauf mittendrin ab (Stromausfall, OOM — bis 0.1.0.21 auch jedes `docker stop` per SIGKILL),
@@ -3016,6 +3116,22 @@ class Service:
         except Exception as e:
             self.log(f"cleanup: system-stats trim failed: {e}")
 
+        # --- Anwesenheits-Marken (.408): Tagesdateien aelter als anwesenheit_tage
+        # kuerzen (nur <datum>.jsonl; fenster.json bleibt) und das Tagesfenster
+        # fuer heute EINMAL rechnen (M6), damit die Seite es spaeter nur liest.
+        # Die Aufbewahrung kommt aus der Config (Whitelist-Paar), nie von hier.
+        try:
+            _tage = int(self.cfg["anwesenheit_tage"])
+            behalten, weg = _anw.kuerzen(self.cfg, _tage, log=self.log)
+            if weg:
+                self.log(f"cleanup: presence marks trimmed to {_tage}d "
+                         f"({weg} day file(s) dropped, {behalten} kept)")
+            _fz = _anw.fenster(self.cfg, log=self.log)
+            self.log(f"presence window today: {_fz['von']:02d}-{_fz['bis']:02d} h "
+                     f"({_fz['quelle']}, {_fz.get('marken')} marks)")
+        except Exception as e:
+            self.log(f"cleanup: presence-mark trim failed: {e}")
+
     def update_check(self):
         """#53 (User 26.07.): 1x taeglich anonym die neueste Release-Version von GitHub holen
         und als dezente Kopfzeilen-Marke anzeigen — Installationen draussen erfahren sonst NIE
@@ -3257,6 +3373,10 @@ class Service:
             with open(self.log_path, "a") as f:
                 f.write(json.dumps(z, ensure_ascii=False) + "\n")
                 f.flush()
+            # .408 Anwesenheits-Marke (Deckungs-Vertrag K5: JEDE Stelle, die
+            # `bestaetigt` setzt oder erweitert, markiert — dieser Weg betritt
+            # process() nie und ist der haeufigste Nutzerweg nach dem Anlernen).
+            _anw.akte_zeile_markieren(self.cfg, z, log=self.log)
         self.log(f"{eid}: record corrected after enrolling — now '{kategorie}' "
                  f"({person}, sim {sim})")
 
@@ -3571,6 +3691,40 @@ class Service:
                          f"oldest {alt_eid} (the catch-up sweep will pick "
                          f"it up later)")
             self._ev_wecker.notify()
+
+    def event_neu_einreihen(self, eid):
+        """Support-Einspielung heisst 'JETZT (erneut) analysieren': die
+        processed-Merkung und der Queue-Dedup werden geloest, dann laeuft der
+        normale Weg. Ohne das griffe der Guard in process() — ein Event, das
+        der Dienst schon verarbeitet oder beim Start als uebersprungen
+        markiert hat (start_catchup-off), endete still als None (Testbett-
+        Befund 03.09.: Fenster-Einspielung traf den Start-Sweep, 3/3 Events
+        kamen nie zur Analyse). Die Akte wird regulaer ueberschrieben."""
+        with self.lock:
+            self.processed.discard(eid)
+        if hasattr(self, "_ev_wecker"):
+            with self._ev_wecker:
+                self._ev_gesehen.discard(eid)
+        # RE-ANALYSE HEISST RECHNEN (Prod-Befund 03.09. spaet, erster Fern-Test
+        # nach dem .500-Rollout): analyze.py setzt bei vorhandener
+        # results.jsonl im Event-Ordner auf RESUME und ueberspringt das Label
+        # — die Support-Einspielung lieferte in 0,0 s die ALTE Akte zurueck
+        # (ohne Blick-Kennwerte, Urteil ueber den win3s-Fallback), also genau
+        # nicht das neue Urteil, fuer das der Weg gebaut ist. Die Alt-Akte
+        # wird beiseitegelegt (nicht geloescht: results.vor_reanalyse_<ts>),
+        # der Worker rechnet frisch.
+        try:
+            _ed = os.path.join(self.cfg["data_dir"], "events", str(eid))
+            _rp = os.path.join(_ed, "results.jsonl")
+            if os.path.exists(_rp):
+                os.replace(_rp, os.path.join(
+                    _ed, f"results.vor_reanalyse_{int(time.time())}.jsonl"))
+                self.log(f"{eid}: previous results set aside — re-analysis "
+                         f"computes fresh (support request)")
+        except OSError as _e:
+            self.log(f"{eid}: could not set previous results aside "
+                     f"({type(_e).__name__}: {_e}) — analyze may resume the old file")
+        self.event_einreihen(eid)
 
     def _spur(self, beschreibung, fn):
         """Einen Versand in die Nachwehen-Spur legen (nie blockierend)."""
@@ -3906,7 +4060,14 @@ class Service:
         "hunger_bremse_s": (int, 0, 600, "background harvest jobs (pass check, learning run, calibration top-up) that wait longer than this many seconds for the worker get the next slot before the event stream continues; 0 disables the brake"),
         "selbstwache": (bool, None, None, "watchdog thread probes this service's own /health every 15 s; after 4 consecutive failures it exits hard so the container restart policy brings the service back (covers full web-server hangs that even the remote restart endpoint cannot reach)"),
         "urteil_marge": (float, 0.0, 0.5, "when several names pass the recognition rule in one event, none is confirmed unless the best cosine leads the runner-up by at least this margin (measured on field data: wrong names won by 0.001-0.047, a clean case led by 0.112); 0 disables the rule"),
+        "blick_fenster_s": (float, 0.0, 600.0, "judgement: width of the sliding view window in seconds — anchor and support votes must fall inside ONE window (calibrated on four test clips: 45 s is the smallest width that judges all four correctly); 0 = legacy fixed 3-second window"),
+        "urteil_anker": (float, 0.0, 1.0, "judgement: anchor — at least one vote inside the view window must reach this cosine before the window counts; support votes only need win_thresh; 0 disables the anchor"),
+        "urteil_trennung": (float, 0.0, 1.0, "judgement: margin becomes source-aware — two candidates only compete when at least this share of their votes comes from the SAME face detections (share of the smaller set); separated vote sets are two real people and both get named; 0 = old behaviour (everything competes)"),
         "urteil_kante": (int, 0, 400, "minimum face edge in pixels for a frame to count as a recognition vote; a floor against absurd votes, not a separator (measured on field data: correct votes live at 30-49 px on overview cameras, the nonsense cases at 11-19 px; 70 would kill correct ones, 25 costs none); 0 disables"),
+        # .408 Anwesenheits-Marken (Vorlauf der Anwesenheitsseite): drei Paare.
+        "anwesenheit_tage": (int, 1, 365, "presence marks: how many days of quarter-hour presence history are kept (default 30). Every analysed event and every live appearance writes marks, the nightly job trims older days. History starts with the version that introduced it — there is no back-fill from older records"),
+        "anwesenheit_tag_von": (int, -1, 23, "presence view: first hour of the day window shown in quarter-hour cells, e.g. 7. -1 (default) = automatic: derived once a day from where your marks actually fall (2nd to 98th percentile of the last 14 days, whole hours, 8 to 16 h wide; factory 07-20 while fewer than 20 marks exist). Both hours must be set for the override to apply"),
+        "anwesenheit_tag_bis": (int, -1, 24, "presence view: hour at which the day window ends, e.g. 20 (must be later than the start hour). -1 (default) = automatic, see the start hour"),
         "kalib_fueller_bilder": (int, 1, 200, "calibration top-up: how many pictures the 'look for fresh material' button aims to collect for a camera before it stops"),
         "kalib_fueller_events": (int, 1, 500, "calibration top-up: how many recent person events of that camera it may work through at most — whichever limit is reached first ends the run"),
         "nachhol_versuche": (int, 0, 5, "retry attempts for events whose analysis failed (0 = off); retries are silent, they never alert"),
@@ -7479,7 +7640,7 @@ class Service:
                                  # .292: VOD-Weg-Schalter (clip_vod, Default
                                  # AN) — Alt-Clips kommen zuerst ueber
                                  # Frigates nginx-vod + lokalen Remux, der
-                                 # kranke Erzeugungspfad (frigate#24029)
+                                 # kranke Erzeugungspfad (frigateUser24029)
                                  # wird nur noch als Fallback betreten.
                                  "clip_vod": self.cfg.get("clip_vod")
                                  is not False,
@@ -8067,10 +8228,28 @@ class Service:
             if not nachhol:                               # mit Sweep/MQTT-Redelivery)
                 self.letzte_aktivitaet = time.time()      # Retry beruhigt den Stoerungswaechter NICHT
             try:
-                ev = api(cfg, f"/api/events/{eid}")
-                if not nachhol:                           # ein 404 auf ein 3 Tage altes Event ist kein
-                    self.frigate_fehler = None            # Frigate-Ausfall, und ein geglueckter Retry
-                    self.frigate_fehlerserie = 0          # darf keine echte Fehlerserie loeschen
+                if _einspiel.ist_einspiel(eid):
+                    # .416 HAKEN A der Testbett-Einspielung (User-Go 03.09.,
+                    # Modul core/einspielen): eine `einspiel-`-ID hat drueben
+                    # KEINE Entsprechung — ihre Metadaten liegen als Datei
+                    # unter <data_dir>/einspielen/. Nur die HERKUNFT der
+                    # Metadaten ist eine andere; ab hier laeuft alles
+                    # unveraendert weiter (Kamera-/Zonen-Filter, live_only,
+                    # Analyse, Akte). meta_lesen() wirft nie: eine fehlende
+                    # oder handeditiert-kaputte Datei endet als LAUTE Zeile
+                    # und 'nichts zu tun', nie als Frigate-Fehlerserie.
+                    ev = _einspiel.meta_lesen(cfg["data_dir"], eid)
+                    if ev is None:
+                        self.log(f"{eid}: injected event metadata missing or "
+                                 f"unusable (needs a JSON object with a "
+                                 f"camera name under the data folder) — "
+                                 f"nothing to process")
+                        return None
+                else:
+                    ev = api(cfg, f"/api/events/{eid}")
+                    if not nachhol:                       # ein 404 auf ein 3 Tage altes Event ist kein
+                        self.frigate_fehler = None        # Frigate-Ausfall, und ein geglueckter Retry
+                        self.frigate_fehlerserie = 0      # darf keine echte Fehlerserie loeschen
             except Exception as e:
                 # .312 (User-Screenshot 21.08. 13:4x): ein 404 auf EIN Event heisst
                 # 'Frigate antwortet, das Event gibt es dort nicht (mehr)' — z. B.
@@ -8117,6 +8296,93 @@ class Service:
                     self.processed.add(eid)  # nur in-memory, kein deckung-Eintrag; nach Neustart
                     self.log(f"{eid} ({camera}): skipped (no required_zone, no sub_label)")
                     return None              # prueft der Sweep das billig erneut (nur API-Call)
+            # .407 LIVE ERSETZT DIE EREIGNIS-ANALYSE (User-Spezifikation):
+            # Sieht der Live-Waechter dieser Kamera ohnehin zu, ist die
+            # Event-Analyse desselben Feeds Doppelarbeit — dieselbe Person
+            # zweimal gerechnet. DREI Bedingungen muessen zusammenkommen, und
+            # zwar alle drei zur LAUFZEIT geprueft:
+            #   1. der Nutzer hat es fuer diese Kamera gewollt (worker_aus)
+            #      UND ihr Waechter ist eingeschaltet (enabled) — der Wunsch
+            #      allein reicht nie;
+            #   2. der Waechter LAEUFT wirklich. Der Zustand kommt aus
+            #      live_health(), also aus der Engine-QUITTUNG (K1) und nicht
+            #      aus dem Config-Wunsch: faellt die Engine aus oder ist der
+            #      Waechter gestoert, wird sofort wieder normal analysiert.
+            #      Genau das ist der Sinn — der Schalter darf nie zu einem
+            #      stillen Loch werden, in dem gar nichts mehr schaut;
+            #   3. `not f_label` — Frigates EIGENE Behauptung ueber die Person
+            #      wird IMMER geprueft, dieselbe Sicherheitslogik wie beim
+            #      Zonen-Filter und beim Kamera-Aus darueber (Review 21.07.:
+            #      ohne dieses Netz wird ein Fremder->Bekannt-Fehlmatch nie
+            #      widerlegt).
+            # Die Akte bekommt eine ehrliche Zeile (kategorie uebersprungen,
+            # Grund live_only) statt eines stillen Verschwindens: der Event
+            # taucht in der Ereignis-Liste auf und sagt, warum hier nichts
+            # gerechnet wurde.
+            if not f_label:
+                try:
+                    from core import livewache as _lw_wa
+                    _lg = ((cfg.get("live") or {}).get("guards") or {}).get(camera) or {}
+                    # _bool_lesen statt roher bool()-Wahrheit: ein
+                    # hand-editiertes "worker_aus": "false" ist als String
+                    # truthy und haette die Analyse dieser Kamera still
+                    # abgeschaltet — genau der Fehler, den _live_guards_aktiv
+                    # schon einmal hatte (Widerleger phase34 MUSS-1). Log
+                    # stumm: die LAUTE Meldung gehoert guards_lesen beim
+                    # Start, hier laeuft es je Event.
+                    _still = lambda _z: None                  # noqa: E731
+                    _will = (isinstance(_lg, dict)
+                             and _lw_wa._bool_lesen(_lg.get("worker_aus"), False,
+                                                    _still, "worker_aus")
+                             and _lw_wa._bool_lesen(_lg.get("enabled"), False,
+                                                    _still, "enabled"))
+                except Exception:                             # noqa: BLE001
+                    _will = False
+                if _will:
+                    _wz = ((self.live_health().get("watchers") or {})
+                           .get(camera) or {}).get("state")
+                    if _wz == _reg.LIVE_AKTIV:
+                        # .415 DEADLOCK-FIX (Tester-Realfall 02.09.: erster
+                        # Live-only-Event fror den Verarbeitungs-Thread fuer
+                        # immer ein): process() HAELT self.lock bereits (Zeile
+                        # "with self.lock:" am Anfang), threading.Lock ist NICHT
+                        # reentrant — ein zweites `with self.lock` hier blockiert
+                        # gegen sich selbst, ohne Logzeile, /health bleibt ok.
+                        # Der Akte-Schreibweg ist durch den aeusseren Lock
+                        # bereits serialisiert. Gate: QS-Laufprobe LIVEONLY-RUN.
+                        with open(self.log_path, "a") as f:
+                            f.write(json.dumps(
+                                {"schema": 3, "ts": round(time.time(), 1), "eid": eid,
+                                 "camera": camera, "start": ev.get("start_time"),
+                                 "faces": 0, "max_bw": 0, "frames_gelesen": None,
+                                 "frames_soll": None,
+                                 "frigate": {"label": None, "score": None, "cos": None},
+                                 "ours": {}, "bestaetigt": [],
+                                 "kategorie": "uebersprungen",
+                                 # v1 gleich: es lief keine Analyse, ein
+                                 # verdict()-Wert waere hier gelogen (Muster
+                                 # der start_catchup-Zeile im Sweep).
+                                 "kategorie_v1": "uebersprungen", "dauer_s": 0.0,
+                                 "alerted": False,
+                                 "ende_ts": ev.get("end_time"),
+                                 "uebersprungen": {"grund": "live_only"}},
+                                ensure_ascii=False) + "\n")
+                            f.flush()
+                        self.processed.add(eid)
+                        # .409 (F1, Kontrolle 02.09.): hier BEWUSST KEINE
+                        # Luecken-Marke. .408 schrieb eine — semantisch
+                        # falsch: der Uebersprung passiert NUR, wenn der
+                        # Live-Waechter dieser Kamera laeuft (state active,
+                        # oben geprueft), und der schaut hin. Das ist
+                        # "betrachtet, niemand benannt" (gruen), nicht
+                        # "nicht hingesehen" (leer). Mit Luecke waere jede
+                        # Live-only-Kamera ohne benannte Person dauernd
+                        # leer gewesen. Die Luecken bei start_catchup=off und
+                        # kategorie fehler bleiben richtig — dort lief
+                        # wirklich nichts. PYANW sichert das zu.
+                        self.log(f"{eid} ({camera}): skipped (live watcher "
+                                 f"covers this camera)")
+                        return None
             persons = master_persons(cfg)    # AP1: aus dem Master, nicht mehr /api/faces
             if not persons:
                 self.log(f"{eid}: reference master empty — sync_refs.py import needed (no processed entry)")
@@ -8194,7 +8460,10 @@ class Service:
                 kategorie = kategorie_v1 = "fehler"
                 confirmed = []
             else:
-                kategorie, confirmed = verdict_v2(cfg, ours, max_bw)
+                kategorie, confirmed = verdict_v2(
+                    cfg, ours, max_bw,
+                    det_t=[float(_d.get("t") or 0)
+                           for _d in (res.get("detektionen") or [])])
                 kategorie_v1, _ = verdict(cfg, f_label, ours)
                 if kategorie in ("fremd_verdacht", "unbekannt_schwach"):
                     # S2 no_person (deklarierte I1-Ausnahme, Masterbauplan §5.2): EIN
@@ -8270,7 +8539,19 @@ class Service:
                             # Altzeilen ohne das Feld sind un-klassifizierbar (Sicherheits-Semantik)
                             **({"obj_score": obj_score} if obj_score is not None else {}),
                             **({"eigen": True} if eigen else {})},
-                "ours": {p: {"max": r.get("max"), "win3s": r.get("win3s")} for p, r in ours.items()},
+                "ours": {p: {"max": r.get("max"), "win3s": r.get("win3s"),
+                             # BLICKFENSTER (03.09.): Kennwerte in die Akte, sonst
+                             # urteilt jede Re-Kategorisierung (Alt-Akten-Weg in
+                             # kategorie_neu) still wieder ueber das 3-s-Fenster.
+                             **({"blick_n": r.get("blick_n"),
+                                 "blick_max": r.get("blick_max")}
+                                if "blick_n" in (r or {}) else {}),
+                             # FUNDSTELLEN (03.09. spaet): Stimm-Indices in die
+                             # Akte, damit die Re-Kategorisierung die paarweise
+                             # Marge genauso rechnet wie das Erst-Urteil.
+                             **({"stimm_idx": r.get("stimm_idx")}
+                                if r.get("stimm_idx") else {})}
+                         for p, r in ours.items()},
                 "bestaetigt": confirmed, "kategorie": kategorie, "kategorie_v1": kategorie_v1,
                 # W7: reine Analysezeit — die Wartezeit am Analyse-Slot ist abgezogen
                 # und steht (wenn nennenswert) separat als warte_s daneben, additiv.
@@ -8349,6 +8630,14 @@ class Service:
                     self._szenario_nachsammeln()  # Gesichter in den Unbekannt-Pool, aber KEIN Alarm
                 else:
                     self._szene_unbekannt_pruefen(entry)
+            # .408 Anwesenheits-Marke (Konzept §3, Quelle A): zwischen fertigem
+            # entry und dem Akte-Append, UNABHAENGIG von nachhol — der
+            # Nachhol-Lauf repariert die Akte, und die Marke gehoert zur Akte
+            # (M1: _maybe_presence ist nachhol-gesperrt und deshalb der falsche
+            # Anker). Zeit = Ereigniszeit (start, ende_ts bzw. dauer_s);
+            # kategorie fehler -> Luecken-Marke; ein Schreibfehler kostet nie
+            # die Analyse (Zaehler + Log-Zeile im Modul).
+            _anw.akte_zeile_markieren(cfg, entry, log=self.log)
             with open(self.log_path, "a") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
                 f.flush()
@@ -8518,12 +8807,16 @@ class Service:
         # eingereiht"; eine Ablehnung/Fehlschlag steht laut im Log (die
         # push()-False-Pruefung bleibt — Lehre: nie "gepusht" zeigen,
         # waehrend nie ein Push ankam; das Log traegt jetzt die Wahrheit).
+        # .411: Pushover AUS (kein Token/User) oder pausiert -> kein Versuch,
+        # keine Zeile je Erscheinen (Begruendung an _maybe_alert).
+        if not _melden.pushover_bereit(cfg)[0]:
+            return False
         titel = _sprache.t("meldung.titel.kategorie", wort=_kat_wort("erkannt"))
         anhang = self._best_crop(event_dir, entry, neu)
 
         def _senden():
             try:
-                if not push(cfg, titel, msg, anhang):
+                if not push(cfg, titel, msg, anhang, log=self.log):
                     self.log(f"presence push REJECTED by Pushover (status!=1) — check token/user: {msg}")
                     return
                 self.log(f"PRESENCE-PUSH: {msg}")
@@ -8904,11 +9197,42 @@ class Service:
                            (getattr(self, "_spur_stat", None) or {}).items()})
             except Exception:                                 # noqa: BLE001
                 pass
+            # .410 Betriebsart fuer die Queue-Kachel (Tester-Screenshot 02.09.:
+            # "Event queue ist die ganze Zeit null"): im Poll-Betrieb verarbeitet
+            # sweep() direkt, die MQTT-Warteschlange bleibt PER BAU leer — eine
+            # grosse 0 waere dort eine Fehlaussage. Derselbe Schluessel, an dem
+            # main() verzweigt; keine zweite Werteliste.
+            st["trigger"] = self.cfg.get("trigger")
+            try:
+                # .408 Anwesenheits-Marken dieses Prozesses (M3: kein stiller
+                # Verlust — Feld, keine Kachel): anwesenheit_marken/-luecken/
+                # -fehler. Die Live-Engine zaehlt ihre eigenen im Status.
+                st.update({f"anwesenheit_{k}": v for k, v in _anw.zaehler().items()})
+            except Exception:                                 # noqa: BLE001
+                pass
+            try:
+                # .411 Pushover-Zustand (Feld, keine Kachel): pushover_konfiguriert /
+                # _pausiert / _ablehnungen — eine Pause waere sonst nur im Log.
+                _po = _melden.pushover_zustand(self.cfg)
+                st.update({f"pushover_{k}": _po[k]
+                           for k in ("konfiguriert", "pausiert", "ablehnungen")})
+            except Exception:                                 # noqa: BLE001
+                pass
             aus["rueckstau"] = st
         except Exception:                                     # noqa: BLE001
             pass
         try:
             aus["live"] = dict(self.live_health(), grund=None)
+        except Exception:                                     # noqa: BLE001
+            pass
+        try:
+            # .407 Zeitschiene (User-Wunsch nach dem Feldbefund: die Event-API
+            # eines Testers antwortete 35 min lang mit ~120 s je Anfrage, ohne
+            # dass es irgendwo zu sehen war). Quelle ist der EINE Frigate-Griff,
+            # der jeden HTTP-Zug dieses Prozesses misst. Das Fenster ist der
+            # Sammel-Takt dieser Seite — eine Zeile im Ring = ein Takt, also
+            # ist "letzte Minute" genau der Balken, den die Seite zeichnet.
+            aus["frigate"] = _fauth.antwortzeiten(fenster_s=_systemstat.TAKT_S)
         except Exception:                                     # noqa: BLE001
             pass
         return aus
@@ -9178,6 +9502,12 @@ class Service:
         if self.dry_alert:
             self.log(f"DRY-ALERT: {msg}")
             return False
+        # .411: Kanal ohne Zugangsdaten oder pausiert (N Ablehnungen in Folge)
+        # -> kein Versuch, KEINE Zeile je Event (Tester-Log 02.09.: 3723x
+        # "REJECTED" in 10 h). Die Startzeile bzw. die Pause-Zeile sagen es
+        # einmal; Benachrichtigungs-Seite und /health.system.rueckstau zeigen es.
+        if not _melden.pushover_bereit(self.cfg)[0]:
+            return False
         # W3 Stufe 1 (.399): der 20-s-HTTP-Push wandert in die Spur; der
         # Cooldown gilt ab BESCHLUSS (sonst koennten zwei Events im selben
         # Fenster beide beschliessen, waehrend der erste noch sendet).
@@ -9191,7 +9521,7 @@ class Service:
 
         def _senden():
             try:
-                ok = push(self.cfg, titel, msg, anhang)
+                ok = push(self.cfg, titel, msg, anhang, log=self.log)
             except Exception as e:                          # noqa: BLE001
                 self.log(f"Pushover error: {e}")
                 ok = False
@@ -9453,6 +9783,11 @@ class Service:
                                                "stunden": cfg["lookback_h"]}},
                             ensure_ascii=False) + "\n")
                         self.processed.add(ev["id"])
+                        # .408 Luecken-Marke (K1): beim Tester 1378 Stueck nach
+                        # einem Neustart — ohne Marke saehe die Anwesenheits-
+                        # seite dort "nicht da" statt "nicht hingesehen".
+                        _anw.luecke(cfg, ev.get("start_time"), ev.get("end_time"),
+                                    ev.get("camera"), ev["id"], log=self.log)
                     f.flush()
                 self.log(f"sweep: start catch-up is off — {len(todo)} events from the last "
                          f"{cfg['lookback_h']}h marked as skipped (start_catchup)")
@@ -9812,6 +10147,32 @@ class Service:
                 except Exception:
                     pass          # Drossel/Fehler bucht api() selbst
         threading.Thread(target=lauf, daemon=True).start()
+
+    def start_anwesenheit_takt(self):
+        """.408 LAUF-Marke der Anwesenheit (User 02.09.): eine Zeile je 15-min-
+        Slot, in dem der Dienst lief. Ohne Lauf-Marke bleibt die Zelle der
+        Anwesenheitsseite spaeter LEER — kein Gruen, kein Rot: "das System
+        lief ja nicht" (vor der Installation, Ausfall, Nachhol-Fenster).
+
+        Der Vorschlag lautete "Schreiber ist die Sweep-Schleife". Die ist aber
+        nur im POLL-Betrieb ein regelmaessiger Takt; im MQTT-Betrieb laeuft
+        sweep() allein beim Connect (Catch-up) und auf Knopfdruck — eine
+        MQTT-Anlage haette ausser dem Start-Slot nie eine Lauf-Marke bekommen,
+        die Seite bliebe dort leer. Deshalb EIN eigener Takt fuer beide
+        Betriebsarten: sofort beim Start, dann jede Minute (der Slot ist
+        15 min, das Dedup je Slot lebt im Modul, es wird nie je Takt gelesen).
+        Ein Schreibfehler wird im Modul gezaehlt + gedrosselt geloggt und
+        kostet nie den Takt."""
+        takt_s = ANWESENHEIT_TAKT_S
+
+        def lauf():
+            while True:
+                try:
+                    _anw.lauf_marke(self.cfg, log=self.log)
+                except Exception as e:                        # noqa: BLE001
+                    self.log(f"presence run mark failed: {type(e).__name__}: {e}")
+                time.sleep(takt_s)
+        threading.Thread(target=lauf, name="anwesenheit-takt", daemon=True).start()
 
     def poll_loop(self):
         cfg = self.cfg
@@ -12201,6 +12562,190 @@ def make_handler(svc):
                 threading.Timer(0.5, svc.neustart,
                                 kwargs={"grund": "support API request"}).start()
                 return
+            if pfad == "/support/einspielen":
+                # .416 TESTBETT-EINSPIELUNG (User-Go 03.09.): ZWEITE
+                # deklarierte Aktions-Ausnahme im Support-Baum neben
+                # /support/restart. Zweck: ein Szenario gezielt durch die
+                # Erkennung EINER Kamera schicken — Quelle ist entweder ein
+                # echtes Event der VERBUNDENEN Frigate (auf Zuruf statt
+                # Dauer-Poll, das schont die Leitung) oder ein Clip, der
+                # schon unter data_dir liegt. Danach laeuft der NORMALE Weg
+                # (event_einreihen -> process -> Akte/Today unter der
+                # Kamera); die Injektor-Mechanik steht in core/einspielen.
+                # Was dieser Weg SCHREIBT, liegt ausschliesslich unter
+                # data_dir — Richtung Frigate ist er lesend.
+                # Gleicher Torwaechter wie der Lese-Baum: Schalter
+                # support_zugriff + Token LIVE aus dem Store, Abweisung =
+                # generisches 404 (kein Orakel).
+                from core import support as _sup3
+                _st = _lade_config_store(cfg)
+                if not _sup3.zugriff_ok(_st, self.headers.get("X-Support-Token")):
+                    _sup3.abweisung_zaehlen(svc.log)
+                    return self._send(404, "not found", "text/plain")
+                try:
+                    _n = int(self.headers.get("Content-Length", 0))
+                    _b = json.loads(self.rfile.read(min(_n, 8192)) or b"{}")
+                    if not isinstance(_b, dict):
+                        raise ValueError("object expected")
+                except Exception:
+                    return self._send(400, json.dumps({"ok": False, "msg": "bad json"}),
+                                      "application/json")
+                _dd = cfg["data_dir"]
+                _kam = _b.get("kamera")
+                if _kam is not None and not _einspiel.KAMERA_RE.match(str(_kam)):
+                    return self._send(400, json.dumps(
+                        {"ok": False, "msg": "bad camera name"}), "application/json")
+                _q_ev = str(_b.get("event") or "").strip()
+                _q_clip = _b.get("clip")
+                try:
+                    if _b.get("start") is not None and not _q_ev and not _q_clip:
+                        # FENSTER-WEG (User 03.09. abends): "ab einem Zeit-
+                        # punkt die naechsten N Personen-Events dieser Kamera"
+                        # — fuer Ferntests nach einem Release (Events des
+                        # ZIELSYSTEMS selbst, keine Kamera-Umbenennung, kein
+                        # Clip-Upload). Frigate liefert die Kandidaten
+                        # (labels/cameras/after/before/has_clip aus der
+                        # OpenAPI der laufenden 0.18 verifiziert, 03.09.),
+                        # sortiert wird HIER aufsteigend nach start_time:
+                        # "die naechsten ab start", nicht "die neuesten".
+                        # Deckel in core/einspielen (FENSTER_*), damit ein
+                        # Aufruf nie einen ganzen Tag in die Queue kippt.
+                        if not _kam:
+                            return self._send(400, json.dumps(
+                                {"ok": False, "msg": "window needs a camera"}),
+                                "application/json")
+                        try:
+                            _t0 = float(_b["start"])
+                            _t1 = _b.get("ende")
+                            _t1 = None if _t1 is None else float(_t1)
+                            _nmax = max(1, min(
+                                int(_b.get("max") or _einspiel.FENSTER_MAX_DEFAULT),
+                                _einspiel.FENSTER_DECKEL))
+                        except (TypeError, ValueError):
+                            return self._send(400, json.dumps(
+                                {"ok": False,
+                                 "msg": "bad window (start/ende/max numeric)"}),
+                                "application/json")
+                        _q = (f"/api/events?labels=person&cameras={_kam}"
+                              f"&after={_t0:.0f}&has_clip=1"
+                              f"&limit={_einspiel.FENSTER_SUCHLIMIT}"
+                              f"&include_thumbnails=0"
+                              + (f"&before={_t1:.0f}" if _t1 is not None else ""))
+                        # Kamera-Filter zusaetzlich HIER (nicht nur im Query):
+                        # eine Instanz, die den cameras-Parameter ignoriert,
+                        # darf keine fremden Kameras in die Queue spuelen.
+                        _evs = [e for e in (api(cfg, _q) or [])
+                                if isinstance(e, dict) and e.get("id")
+                                and str(e.get("camera")) == str(_kam)]
+                        _gef = len(_evs)
+                        _evs.sort(key=lambda e: float(e.get("start_time") or 0))
+                        _evs = _evs[:_nmax]
+                        _ids = [str(e["id"]) for e in _evs]
+                        for _eid2 in _ids:
+                            svc.event_neu_einreihen(_eid2)
+                        svc.log(f"SUPPORT: einspielen source=fenster "
+                                f"camera={_kam} after={_t0:.0f}"
+                                + (f" before={_t1:.0f}" if _t1 is not None else "")
+                                + f" found={_gef} queued={len(_ids)} "
+                                f"ids={','.join(_ids)[:300]}")
+                        return self._send(200, json.dumps(
+                            {"ok": True, "weg": "fenster", "gefunden": _gef,
+                             "events": _ids}), "application/json")
+                    if _q_ev and not _kam:
+                        # Ohne Kamera-Wunsch ist es schlicht ein Event mehr in
+                        # der Queue: Metadaten UND Clip kommen wie immer von
+                        # der konfigurierten frigate_url, es wird nichts
+                        # hinterlegt. Der einfachste Weg zuerst.
+                        svc.log(f"SUPPORT: einspielen source=frigate eid={_q_ev} "
+                                f"(no camera override — plain event queue entry)")
+                        svc.event_neu_einreihen(_q_ev)
+                        return self._send(200, json.dumps(
+                            {"ok": True, "eid": _q_ev, "weg": "frigate"}),
+                            "application/json")
+                    if _q_ev and _kam:
+                        # Kamera-Wechsel: Metadaten des Originals holen, unter
+                        # neuer ID mit der Ziel-Kamera hinterlegen, den
+                        # Original-Clip als Vorlage danebenlegen. Der Clip-Zug
+                        # laeuft ueber DIESELBE Beschaffung wie sonst
+                        # (VOD-Weg, Erzeugungs-Warte bei Alt-Events, Pin) —
+                        # kein zweiter Download-Pfad.
+                        _ev0 = api(cfg, f"/api/events/{_q_ev}")
+                        _neu = _einspiel.neue_eid()
+                        _meta = _einspiel.meta_aus_event(_ev0, _neu, _kam)
+                        _alter = _clip_alter_min(_ev0.get("end_time"),
+                                                 _ev0.get("start_time"))
+                        _erz = (_alter is not None and _alter >= float(
+                            cfg.get("clip_erzeugung_alter_min") or 30))
+                        _frames.CLIP_VOD = (cfg.get("clip_vod") is not False)
+                        try:
+                            _vid = _frames.clip_holen(
+                                _q_ev, data_dir=_dd,
+                                frigate_url=cfg.get("frigate_url"),
+                                quelle="einspiel", alter_min=_alter,
+                                erzeugung=_erz,
+                                erzeugung_deckel_s=int(
+                                    cfg.get("clip_erzeugung_deckel_s") or 300))
+                            _einspiel.ablegen(_dd, _neu, _meta, _vid)
+                        finally:
+                            _frames.frei(_q_ev, data_dir=_dd)
+                        _bn, _bb = _einspiel.bestand(_dd)
+                        # Jede Annahme laut: umgesetzte Kamera, verworfenes
+                        # sub_label, uebernommene Zonen (die Ziel-Kamera kann
+                        # sie filtern) und der wachsende Vorlagen-Ordner.
+                        svc.log(f"SUPPORT: einspielen source=frigate eid={_neu} "
+                                f"camera={_kam} from={_q_ev} zones="
+                                f"{len(_ev0.get('zones') or [])} sub_label=dropped "
+                                f"age_min={'?' if _alter is None else int(_alter)} "
+                                f"(templates: {_bn} file(s), {_bb} byte(s) — "
+                                f"never auto-purged)")
+                        svc.event_einreihen(_neu)
+                        return self._send(200, json.dumps(
+                            {"ok": True, "eid": _neu, "weg": "kamera-override"}),
+                            "application/json")
+                    if _q_clip:
+                        # Pfad-Anker wie im Lese-Baum: nur eine echte Datei
+                        # UNTER data_dir, jeder Ausbruch endet als generisches
+                        # 404 (kein Existenz-Orakel fuers Dateisystem).
+                        if not _kam:
+                            return self._send(400, json.dumps(
+                                {"ok": False, "msg": "clip needs a camera"}),
+                                "application/json")
+                        _p = _einspiel.pfad_anker(_dd, _q_clip)
+                        if not _p:
+                            return self._send(404, "not found", "text/plain")
+                        _dauer = _einspiel.dauer_s(_p)
+                        _neu = _einspiel.neue_eid()
+                        _einspiel.ablegen(_dd, _neu, _einspiel.meta_aus_clip(
+                            _neu, _kam, _dauer), _p)
+                        _bn, _bb = _einspiel.bestand(_dd)
+                        _dtxt = (f"{round(_dauer, 1)}" if _dauer else
+                                 f"unreadable, assuming "
+                                 f"{_einspiel.DAUER_FALLBACK_S:.0f}")
+                        svc.log(f"SUPPORT: einspielen source=clip eid={_neu} "
+                                f"camera={_kam} duration_s={_dtxt} "
+                                f"label={_einspiel.LABEL} "
+                                f"score={_einspiel.TOP_SCORE} zones=[] "
+                                f"sub_label=none (templates: {_bn} file(s), "
+                                f"{_bb} byte(s) — never auto-purged)")
+                        svc.event_einreihen(_neu)
+                        return self._send(200, json.dumps(
+                            {"ok": True, "eid": _neu, "weg": "clip"}),
+                            "application/json")
+                except Exception as e:
+                    # Die Fehlerzeile geht ins Dienst-Log und damit in jedes
+                    # Support-Paket: die Frigate-Adresse wird daraus ersetzt
+                    # (sie steht sonst als Klartext-URL im Diagnose-Material),
+                    # und der Text ist gedeckelt.
+                    _msg = f"{type(e).__name__}: {e}"[:200]
+                    _fu = str(cfg.get("frigate_url") or "")
+                    if _fu:
+                        _msg = _msg.replace(_fu, "<frigate>")
+                    svc.log(f"SUPPORT: einspielen failed ({_msg})")
+                    return self._send(400, json.dumps(
+                        {"ok": False, "msg": _msg},
+                        ensure_ascii=False), "application/json")
+                return self._send(400, json.dumps(
+                    {"ok": False, "msg": "need event or clip"}), "application/json")
             if pfad == "/sprache_speichern":       # Sprach-Stufe 1: Schrieb OHNE Neustart (Areas-Muster B12)
                 try:
                     n = int(self.headers.get("Content-Length", 0))
@@ -12405,7 +12950,7 @@ def make_handler(svc):
                     heute0 = tag_dt.timestamp()
                     tag_ende = (tag_dt + datetime.timedelta(days=1)).timestamp()
                 ist_heute = tag_dt.date() == _heute_dt.date()
-                z_events = z_alerts = z_presence = 0
+                z_events = 0
                 # by_h (last-wins je eid) MUSS vor die KPI: nach einem Nachhol-Lauf gibt es zwei
                 # Zeilen fuer dasselbe Event. Zaehlte die KPI wie frueher die ERSTE, stuende die
                 # Szenario-Karte auf der korrigierten Kategorie und der Zaehler darueber weiter
@@ -12428,62 +12973,41 @@ def make_handler(svc):
                         continue
                     if heute0 <= (r.get("start") or r.get("ts", 0)) < tag_ende:
                         z_events += 1
-                        if r.get("alerted"):
-                            z_alerts += 1
-                        # Anwesenheits-Push GETRENNT zaehlen (Fund 25.07.): gezaehlt wurde nur
-                        # `alerted`, also der Vorfall-Alarm. Heute stand deshalb "Alerts sent 0"
-                        # auf der Seite, waehrend vier Anwesenheitsmeldungen rausgegangen waren.
-                        # Woertlich richtig, in der Sache irreführend — der Betreiber sieht eine
-                        # Null und hat vier Meldungen auf dem Telefon. Beide Arten sind
-                        # Benachrichtigungen, aber nicht dasselbe, also zwei Zeilen statt einer
-                        # gemischten Summe.
-                        if r.get("presence_push"):
-                            z_presence += 1
-                # Live-Waechter-Meldungen (Phase 4 Baustein B, Sichtkontrolle
-                # .177 Befund 3: real rausgegangene Engine-Pushes tauchten in
-                # KEINEM Zaehler auf). EINE Quelle: das Melde-Protokoll der
-                # Engine (<data_dir>/live/meldungen.jsonl) — der Dienst liest
-                # nur, nichts wird doppelt gezaehlt. Zeile erscheint, sobald
-                # Live benutzt wird (Guards oder Historie), sonst gar nicht.
+                # Live-Waechter-Namen des Tages (.412 T1, Konzept §6.10/§9.9,
+                # User-Nachtrag 9.5: KEIN Live-Zaehler mehr auf Today — die
+                # Melde-Leistung steht auf /live und in der Systemstatistik).
+                # EINE Quelle: das Melde-Protokoll der Engine (<data_dir>/live/
+                # meldungen.jsonl), EIN Aufrufer: melde_liste -> namens_auftritte;
+                # die Personen daraus bekommen unten dieselbe Karte wie Worker-
+                # Bestaetigte (Vermerk "live" nur ohne Worker-Bestaetigung), und
+                # ein Durchgang mit Live-Namen in seiner Spanne traegt die Plakette.
+                # .191-Sicht bleibt: breit lesen, auf person-Auftritte gefiltert.
                 from core import livewache as _lwz
-                z_live = 0
-                z_live_kanaele = {}
-                z_live_liste, z_live_gruppen = [], 0
-                _live_zeile = False
+                from routes import heute as _r_heute
+                import auftritte as _auf        # PASS_PERSONEN_MAX: EIN Deckel fuer Zeile + Personenseite
+                z_live_liste = []
                 try:
-                    _live_zeile = (bool((cfg.get("live") or {}).get("guards"))
-                                   or _lwz.melde_protokoll_vorhanden(cfg))
-                    if _live_zeile:
-                        # KANN-7 (Widerleger phase34): kanalNEUTRAL zaehlen —
-                        # die Zeile zeigte nur ("alert","pushover"), eine
-                        # Telegram-only-Installation sah dauerhaft "Pushover 0"
-                        # als einzige Wahrheit. Summe + Aufschluesselung je
-                        # real benutztem Kanal (Reihenfolge = KANAELE_ERLAUBT,
-                        # zentrale Quelle).
-                        _zk = _lwz.melde_zaehler(cfg, heute0, tag_ende,
-                                                 kameras=_nk)
-                        # .245: 'none' = journalte, nicht versendete Ergebnisse
-                        # (kanal-lose Installation) — zaehlen mit, Label unten
-                        # sagt ehrlich 'not sent'.
-                        z_live_kanaele = {
-                            k: _zk.get(("alert", k), 0)
-                            for k in (*_lwz.KANAELE_ERLAUBT, "none")
-                            if _zk.get(("alert", k), 0)}
-                        z_live = sum(z_live_kanaele.values())
-                        # .188 (User 13.08.): Today zeigt SEPARAT, was live
-                        # erkannt wurde — die Liste je Trigger (gebuendelte
-                        # Kanaele, Meldetext), dieselbe Quelle+Sicht wie der
-                        # Zaehler.
-                        # .191 (User: 'nur zeigen, was wirklich erkannt
-                        # wurde'): breit lesen, unten auf person-Gruppen
-                        # gefiltert — unknown-Trigger erschlagen die Reihe
-                        # nicht mehr, sie bleiben im Zaehler + Live-Reiter.
-                        z_live_liste, z_live_gruppen = _lwz.melde_liste(
+                    if (bool((cfg.get("live") or {}).get("guards"))
+                            or _lwz.melde_protokoll_vorhanden(cfg)):
+                        z_live_liste, _zlg = _lwz.melde_liste(
                             cfg, heute0, tag_ende, kameras=_nk,
                             max_gruppen=200)
                 except Exception as e:
-                    svc.log(f"!! live alert counter failed: "
+                    svc.log(f"!! live name list failed: "
                             f"{type(e).__name__}: {e}")
+                # .413 (Fix-Forward, Prod-Befund 02.09.): NUR Stufe-2-Namens-
+                # meldungen zaehlen als Live-Name — die Regel steht EINMAL in
+                # core.livewache (ist_namensmeldung, angewandt VOR der
+                # Buendelung in namens_auftritte). Vorher fuellte auch das
+                # Stufe-1-Schnellurteil dasselbe Feld `person`: ein Passant
+                # weit hinten am Gehweg ("probably X, just above the bar")
+                # bekam eine Personenkarte, und 12 von 14 Durchgangszeilen
+                # trugen die Plakette "live". _alle_live bleibt die
+                # UNGEFILTERTE Sicht — sie dient allein der Sprungmarke, weil
+                # /live_alerts seine Karten daraus baut.
+                _erkannt = _lwz.namens_auftritte(z_live_liste) if z_live_liste else []
+                _alle_live = (_lwz.auftritts_gruppen(z_live_liste)
+                              if z_live_liste else [])
                 for r in rows:                       # Personen-Historie ueber ALLE Zeilen
                     t = r.get("start") or r.get("ts", 0)
                     for p in r.get("bestaetigt") or []:
@@ -12517,10 +13041,12 @@ def make_handler(svc):
                             return f"/events/{urllib.parse.quote(ed)}/{urllib.parse.quote(js[0])}"
                     return None
 
-                def _av(person, eid=None, cls="av"):
-                    u = _crop_url(eid or (letzte[person][1].get("eid") if person in letzte else None), person)
+                def _av(person, eid=None, cls="av", url=None):
+                    # url (.412): fertige Bild-URL fuer Live-benannte Personen
+                    # ohne Worker-Event (Beweisbild der Waechter-Meldung).
+                    u = url or _crop_url(eid or (letzte[person][1].get("eid") if person in letzte else None), person)
                     if u:
-                        return f'<div class="{cls}"><img src="{u}" alt=""></div>'
+                        return f'<div class="{cls}"><img src="{u}" loading="lazy" alt=""></div>'
                     return f'<div class="{cls}" style="background:{_av_farbe(person)}">{html.escape(person[:1].upper())}</div>'
 
                 import szenarien as _szen
@@ -12619,37 +13145,30 @@ def make_handler(svc):
                         if d.get("quelle") != "koerper" and d["best"] >= e["best"]:
                             e["best"], e["eid"] = d["best"], d["eid"]
                         e["laeuft"] = e["laeuft"] or bool(s.get("laeuft"))
-
-                # .32x GRUPPEN-KACHEL (User 22.08.): "wenn in dem Szenario drei
-                # oder zwei Personen erkannt worden sind, dann muss das als
-                # Gruppe gebildet werden". Ein gemeinsamer Durchgang ist ein
-                # eigener Sachverhalt — wer mit wem unterwegs war —, und der geht
-                # verloren, wenn jede Person nur einzeln gezaehlt wird.
-                # Der Name ist ALPHABETISCH sortiert (User-Auflage 22.08.: eine
-                # Gruppe darf nicht mal in der einen, mal in der anderen
-                # Reihenfolge heissen), damit dieselbe Gruppe immer gleich heisst
-                # — unabhaengig davon, wer zuerst erkannt wurde oder wessen
-                # Treffer besser war.
-                gruppen_tag = {}
-                for s in interessant:
-                    if len(s["pers"]) < 2:
+                # .412 (§9.9, User 02.09.): Live-benannte Personen in DIESELBE
+                # Karte — "first–last confirmed" rechnet ueber beide Quellen;
+                # wer NUR live benannt wurde, bekommt den Vermerk "live"
+                # (vorlaeufig, bis die Urteilswege angeglichen sind).
+                # Die Gruppen-Kachel (.327, "A & B") ist mit demselben Entscheid
+                # (§9.1) entfallen: die Person ist die Einheit, nicht die Kombi.
+                for p, lv in _r_heute.live_personen(_erkannt).items():
+                    e = pers_tag.get(p)
+                    if e is None:
+                        pers_tag[p] = {"durchgaenge": 0, "erst": lv["erst"],
+                                       "letzt": lv["letzt"], "eid": None,
+                                       "erst_live": 0, "best": -1.0,
+                                       "kam": lv["kam"], "laeuft": False,
+                                       "nur_live": True, "auftritte": lv["n"],
+                                       "bild": lv["bild"],
+                                       # .413: Sprungmarke auf die Karte des
+                                       # Auftritts in /live_alerts (dort
+                                       # ungefiltert gebuendelt).
+                                       "anker": _r_heute.anker_ts(
+                                           _alle_live, lv["kam"], lv["anker"])}
                         continue
-                    schl = " & ".join(sorted(s["pers"]))
-                    g = gruppen_tag.setdefault(schl, {
-                        "durchgaenge": 0, "erst": None, "letzt": 0, "eid": None,
-                        "best": -1.0, "kam": None, "laeuft": False,
-                        "namen": sorted(s["pers"])})
-                    g["durchgaenge"] += 1
-                    for p, d in s["pers"].items():
-                        g["erst"] = (d["erst_t"] if g["erst"] is None
-                                     else min(g["erst"], d["erst_t"]))
-                        if d["letzt_t"] >= g["letzt"]:
-                            g["letzt"], g["kam"] = d["letzt_t"], d["letzt_cam"]
-                        # Karten-Foto wie bei den Personen-Karten: nur Gesichts-
-                        # Quellen, sonst faellt die Kachel auf den Buchstaben zurueck.
-                        if d.get("quelle") != "koerper" and d["best"] >= g["best"]:
-                            g["best"], g["eid"] = d["best"], d["eid"]
-                    g["laeuft"] = g["laeuft"] or bool(s.get("laeuft"))
+                    e["erst"] = min(e["erst"], lv["erst"])
+                    if lv["letzt"] >= e["letzt"]:
+                        e["letzt"], e["kam"] = lv["letzt"], lv["kam"]
 
                 # Unbekannte KONTEXTABHAENGIG trennen (User-Entscheid 25.07., Kernpunkt): Gesichter, die in
                 # einem Durchgang MIT bestaetigter Person nicht zugeordnet wurden, sind harmlos —
@@ -12686,8 +13205,13 @@ def make_handler(svc):
                 # Ersetzt durch das Personen-Band + die ruhige Randspalte weiter unten.
 
                 # --- Personen-Chip (echter Crop, Fallback Initiale) ---
-                def _chip(name, eid, count=1, best=0.0, koerper=False):
-                    u = _crop_url(eid, name)
+                def _chip(name, eid, count=1, best=0.0, koerper=False, bild=True):
+                    # bild=False (.412, §7 Pruefstein "Today-DOM < 150 <img>"):
+                    # die Chips der KAMERAZEILEN tragen die Initiale statt des
+                    # Crops — der Avatar steht schon in der Durchgangszeile,
+                    # die Zeile sagt WER auf WELCHER Kamera; beim Tester lagen
+                    # 317 der 441 Bilder genau in diesen Zeilen.
+                    u = _crop_url(eid, name) if bild else None
                     if not u and koerper and eid:
                         # koerper-zugeschriebener Pass: statt Buchstabe das
                         # BESTE Koerper-Bild des Durchgangs zeigen (User
@@ -12699,7 +13223,7 @@ def make_handler(svc):
                                 ed + ".jpg")):
                             u = ("/person/treffer/"
                                  + urllib.parse.quote(ed) + ".jpg")
-                    av = (f'<span class="avs"><img src="{u}" alt=""></span>' if u
+                    av = (f'<span class="avs"><img src="{u}" loading="lazy" alt=""></span>' if u
                           else f'<span class="avs" style="background:{_av_farbe(name)}">'
                                f'{html.escape(name[:1].upper())}</span>')
                     cnt = f' <span class="sc">×{count}</span>' if count > 1 else ''
@@ -12727,9 +13251,14 @@ def make_handler(svc):
                         'stroke-linejoin="round"/></svg>')
                 karten = []
                 live_offen = False
+                n_offen = 0           # .412: Oeffnungsregel, hoechstens PASS_OFFEN_MAX
                 for s in interessant:
                     live = s.get("laeuft")
                     live_offen = live_offen or live
+                    # .412: Alarm dieses Durchgangs (Oeffnungskriterium §3/M3) aus
+                    # der Akte — szenarien kennt nur die eid je Event.
+                    alarm = any((by_h.get(e.get("eid")) or {}).get("alerted")
+                                for e in s["evs"])
                     if live:
                         zeit = f'since {_hhmm(s["start"])}'
                         dauer = f'{s["n"]} event{"s" if s["n"] != 1 else ""} so far'
@@ -12745,9 +13274,15 @@ def make_handler(svc):
                     # statt einer Karte (derselbe Fehler ist mir in dieser
                     # Aenderung schon einmal unterlaufen).
                     _nur_k = False
-                    mitte = "".join(_chip(p, d["eid"], d["count"], d["best"],
-                                          koerper=d.get("quelle") == "koerper")
-                                    for p, d in sorted(s["pers"].items(), key=lambda x: -x[1]["count"]))
+                    # .412 (§3): Avatare der Zeile gedeckelt auf PASS_PERSONEN_MAX
+                    # (dieselbe Zahl wie die Personenseite) + "+N" mit den Namen
+                    # im Tooltip; Reihenfolge nach bestem Treffer.
+                    _pz, _prest = _r_heute.deckel(_r_heute.personen_reihenfolge(s["pers"]),
+                                                  _auf.PASS_PERSONEN_MAX)
+                    mitte = ("".join(_chip(p, d["eid"], d["count"], d["best"],
+                                           koerper=d.get("quelle") == "koerper")
+                                     for p, d in _pz)
+                             + _r_heute.plus_html([p for p, _d in _prest]))
                     if live:
                         # Durchgang laeuft noch (letztes Event < Karenz her): nur Fakten (erkannte
                         # Personen), noch KEIN abschliessendes Urteil, es koennen Kameras dazukommen
@@ -12822,6 +13357,13 @@ def make_handler(svc):
                                               for p in _kp)
                                       + '<span class="fussnote">person recognition hint '
                                         '(below support rule)</span>')
+                    # .412 (§3.5): Quellen-Plakette "live" neben via face/person,
+                    # wenn ein Live-Waechter in der Spanne dieses Durchgangs
+                    # jemanden benannt hat (Zeitueberdeckung, kameraunabhaengig).
+                    if _r_heute.live_im_pass(_erkannt, s["start"], s["ende"]):
+                        mitte += (f'<span class="badge hk-live" title="'
+                                  f'{html.escape(_sprache.t("heute.pass.live_title"), quote=True)}">'
+                                  f'{html.escape(_sprache.t("heute.pass.live"))}</span>')
                     # V4: die Vision-Zeile steht auf der KARTE (nicht in der
                     # Live-Meldung — der Alarm geht synchron raus, Vision
                     # braucht Sekunden bis Minuten). Sie nennt die beiden
@@ -12865,7 +13407,14 @@ def make_handler(svc):
                                   "</span>")
                     crows = []
                     for cam, cl in s["kams"].items():
-                        chips = "".join(_chip(p, cl["eid"].get(p), k) for p, k in cl["erk"].items())
+                        # .412 (§3, M2): je Kamerazeile hoechstens CHIPS_JE_ZEILE
+                        # Chips + "+N" — die ungedeckelte Chip-Wand trug beim
+                        # Tester 317 der 441 Bilder. Reihenfolge nach Stuetzen.
+                        _cz, _crest = _r_heute.deckel(
+                            sorted(cl["erk"].items(), key=lambda x: (-x[1], x[0])),
+                            _r_heute.CHIPS_JE_ZEILE)
+                        chips = ("".join(_chip(p, cl["eid"].get(p), k, bild=False) for p, k in _cz)
+                                 + _r_heute.plus_html([p for p, _k in _crest]))
                         ub = (f'<a class="badge warn" href="/event/{urllib.parse.quote(str(cl["unbek_eid"]))}">'
                               f'{cl["unbek"]} unmatched</a>' if cl["unbek"] and cl.get("unbek_eid")
                               else (f'<span class="badge warn">{cl["unbek"]} unmatched</span>' if cl["unbek"] else ''))
@@ -12880,6 +13429,22 @@ def make_handler(svc):
                             f'event{"s" if cl["n"] != 1 else ""}</span>'
                             f'<div class="camdetail">{detail}</div><span class="campx">{px}{vid}</span></div>')
                     nk = len(s["kams"])
+                    # .412 (§3, M2): hoechstens KAMERAZEILEN_SICHTBAR Zeilen im
+                    # Body, der Rest hinter "alle N Kameras" — im HTML, kein
+                    # Nachladen; Bilder darin lazy.
+                    _cr_zeig, _cr_rest = _r_heute.deckel(crows, _r_heute.KAMERAZEILEN_SICHTBAR)
+                    body = "".join(_cr_zeig)
+                    if _cr_rest:
+                        body += (f'<details class="hk-mehr hk-kams"><summary>'
+                                 f'{html.escape(_sprache.t("heute.pass.mehr_kameras", n=nk, m=len(_cr_rest)))}'
+                                 f'</summary>{"".join(_cr_rest)}</details>')
+                    # .412 Oeffnungsregel (§3, M3): hoechstens PASS_OFFEN_MAX Zeilen
+                    # starten offen, und nur die ohne jede Bestaetigung mit ernst-
+                    # zunehmendem Gesicht oder mit ausgeloestem Alarm.
+                    offen = ""
+                    if (not live and n_offen < _r_heute.PASS_OFFEN_MAX
+                            and _r_heute.pass_offen(s, alarm)):
+                        offen, n_offen = " open", n_offen + 1
                     # .356: roter Balken links, wenn der Durchgang ALLEIN
                     # ueber Koerpermerkmale zugeschrieben wurde — dieselbe
                     # Kennzeichnung wie die Plakette, nur auf einen Blick
@@ -12887,11 +13452,11 @@ def make_handler(svc):
                     kls = ("sz k-" + s["kat"] + (" sz-live" if live else "")
                            + (" sz-koerper" if _nur_k else ""))
                     karten.append(
-                        f'<details class="{kls}"><summary>'
+                        f'<details class="{kls}"{offen}><summary>'
                         f'<div class="sz-zeit"><div class="t num">{zeit}</div><div class="d">{dauer}</div></div>'
                         f'<div class="sz-mitte">{mitte}</div>'
                         f'<div class="sz-rechts"><span>{nk} camera{"s" if nk > 1 else ""}</span>{chev}</div>'
-                        f'</summary><div class="sz-body">{"".join(crows)}</div></details>')
+                        f'</summary><div class="sz-body">{body}</div></details>')
                 if karten:
                     liste = f'<div class="szlist">{"".join(karten)}</div>'
                 elif _nk is not None:
@@ -12975,46 +13540,74 @@ def make_handler(svc):
                 # dastehen. Die Restzahlen wandern in eine ruhige Randspalte.
                 pkarten = []
                 ukarten = []            # .357: Unbekannt-Kacheln in ein EIGENES Band
-
+                # .412 (§3/§6.6, K1): die Anwesenheits-Tagesdatei GENAU EINMAL je
+                # Aufruf und NUR, wenn sie fuer diesen Tag existiert (Tage vor
+                # .408, aelter als anwesenheit_tage, Tester bis zum Rollout:
+                # keine Datei -> keine Miniatur, kein Platzhalter). Ungefiltert
+                # ueber alle Kameras auch unter ?area= (K8, Tooltip sagt es);
+                # Fenster = das geltende Tagesfenster (wie /anwesenheit).
+                _tag_s = tag_dt.strftime("%Y-%m-%d")
+                anw_tag, anw_fenster = None, None
+                try:
+                    if _tag_s in _anw.tage_vorhanden(cfg):
+                        anw_tag = _anw.tag_lesen(cfg, _tag_s, None)
+                        anw_fenster = _anw.fenster(cfg, log=svc.log)
+                except Exception as e:
+                    svc.log(f"!! presence day file failed: {type(e).__name__}: {e}")
                 for p, e in sorted(pers_tag.items(), key=lambda x: -x[1]["letzt"]):
-                    spanne = (f'since {_hhmm(e["erst_live"] or e["erst"])}' if e["laeuft"] else
-                              (_hhmm(e["erst"]) if (e["letzt"] - e["erst"]) < 60
-                               else f'{_hhmm(e["erst"])}–{_hhmm(e["letzt"])}'))
-                    dg = (f'{e["durchgaenge"]} passes' if e["durchgaenge"] != 1 else '1 pass')
-                    kam = (f'<div class="pk-kam">last seen {html.escape(str(e["kam"]))}, '
-                           f'{_hhmm(e["letzt"])}</div>' if e["kam"] else '')
+                    # Hauptzeile (§3, K1, Wortliste M5): "first–last confirmed
+                    # HH:MM–HH:MM · N passes · last seen KAMERA HH:MM" — Text,
+                    # tragend auch ohne Miniatur. Laufender Durchgang: "confirmed
+                    # since" mit der ersten Bestaetigung DIESES Durchgangs (s. o.).
+                    if e["laeuft"]:
+                        spanne = _sprache.t("heute.person.seit",
+                                            zeit=_hhmm(e["erst_live"] or e["erst"]))
+                    elif (e["letzt"] - e["erst"]) < 60:
+                        spanne = _sprache.t("heute.person.bestaetigt_einmal", zeit=_hhmm(e["erst"]))
+                    else:
+                        spanne = _sprache.t("heute.person.bestaetigt",
+                                            von=_hhmm(e["erst"]), bis=_hhmm(e["letzt"]))
+                    teile = [spanne]
+                    if e["durchgaenge"]:
+                        teile.append(_sprache.t_n("heute.person.passes", e["durchgaenge"]))
+                    if e.get("nur_live"):
+                        teile.append(_sprache.t_n("heute.person.auftritte", e.get("auftritte", 1)))
+                    if e["kam"]:
+                        teile.append(_sprache.t("heute.person.zuletzt",
+                                                kamera=str(e["kam"]), zeit=_hhmm(e["letzt"])))
                     live = ('<span class="badge live"><span class="ldot"></span>in progress</span>'
                             if e["laeuft"] else '')
+                    if e.get("nur_live"):
+                        live += (f' <span class="badge hk-live" title="'
+                                 f'{html.escape(_sprache.t("heute.person.live_title"), quote=True)}">'
+                                 f'{html.escape(_sprache.t("heute.person.live"))}</span>')
+                    mini = ""
+                    if anw_tag and p in anw_tag["personen"]:
+                        mini = _r_heute.anw_balken_html(anw_tag["personen"][p],
+                                                        anw_tag["zellen"], anw_fenster,
+                                                        gesamt=_nk is not None)
+                    _lb = (f'/live_alarmbild?p={urllib.parse.quote(e["bild"])}'
+                           if e.get("nur_live") and e.get("bild") else None)
                     # Paket B (.50): Personen-Karte -> Personen-Tagessicht (nicht mehr Einzel-Event)
                     ziel = (f'/auftritte?person={urllib.parse.quote(p)}'
                             + ('' if ist_heute else f'&tag={tag_dt.strftime("%Y-%m-%d")}')
                             + (f'&area={urllib.parse.quote(_ar_aktiv)}' if _nk is not None else ''))
+                    _titel = ""
+                    if e.get("nur_live"):
+                        # .413: Wer NUR live benannt ist, hat keinen Worker-
+                        # Durchgang — /auftritte?person= zeigte ihm "0
+                        # Durchgaenge" (Sackgasse bis T2). Bis dahin fuehrt die
+                        # Karte auf den Live-Auftritt selbst (Muster .195).
+                        ziel = f'/live_alerts?tag={_tag_s}#a{int(e.get("anker") or 0)}'
+                        _titel = (' title="' + html.escape(_sprache.t(
+                            "heute.person.live_link", zeit=_hhmm(e["letzt"]),
+                            kamera=str(e["kam"] or "")), quote=True) + '"')
                     pkarten.append(
-                        f'<a class="pk{" pk-live" if e["laeuft"] else ""}" href="{ziel}">'
-                        f'{_av(p, e["eid"], cls="pk-av")}'
+                        f'<a class="pk hk-pk{" pk-live" if e["laeuft"] else ""}"'
+                        f' href="{ziel}"{_titel}>'
+                        f'{_av(p, e["eid"], cls="pk-av", url=_lb)}'
                         f'<div class="pk-txt"><div class="pk-name">{html.escape(p)} {live}</div>'
-                        f'<div class="pk-meta">{dg} · {spanne}</div>{kam}</div></a>')
-                # .32x: die Gruppen-Kacheln stehen NACH den Einzelpersonen —
-                # sie ergaenzen sie, sie ersetzen sie nicht (wer zu zweit kam,
-                # war auch einzeln da). Optisch als Gruppe erkennbar (pk-gruppe).
-                for gs, g in sorted(gruppen_tag.items(), key=lambda x: -x[1]["letzt"]):
-                    g_spanne = (_hhmm(g["erst"]) if (g["letzt"] - g["erst"]) < 60
-                                else f'{_hhmm(g["erst"])}\u2013{_hhmm(g["letzt"])}')
-                    g_dg = (f'{g["durchgaenge"]} passes together'
-                            if g["durchgaenge"] != 1 else '1 pass together')
-                    g_kam = (f'<div class="pk-kam">last seen {html.escape(str(g["kam"]))}, '
-                             f'{_hhmm(g["letzt"])}</div>' if g["kam"] else '')
-                    g_live = ('<span class="badge live"><span class="ldot"></span>in progress</span>'
-                              if g["laeuft"] else '')
-                    g_ziel = (f'/auftritte?gruppe={urllib.parse.quote(gs)}'
-                              + ('' if ist_heute else f'&tag={tag_dt.strftime("%Y-%m-%d")}')
-                              + (f'&area={urllib.parse.quote(_ar_aktiv)}' if _nk is not None else ''))
-                    pkarten.append(
-                        f'<a class="pk pk-gruppe{" pk-live" if g["laeuft"] else ""}" href="{g_ziel}">'
-                        + "".join(_av(n, g["eid"] if n == g["namen"][0] else None, cls="pk-av pk-av-klein")
-                                  for n in g["namen"][:3])
-                        + f'<div class="pk-txt"><div class="pk-name">{html.escape(gs)} {g_live}</div>'
-                        f'<div class="pk-meta">{g_dg} · {g_spanne}</div>{g_kam}</div></a>')
+                        f'<div class="pk-meta">{html.escape(" · ".join(teile))}</div>{mini}</div></a>')
                 # --- Unerkannte Durchgaenge GEHOEREN INS BAND (User 25.07.) ---
                 # "Ich habe oben zwei gesehen, heute waren aber mehr Events." Wer nicht erkannt
                 # wurde, war trotzdem da. Optisch abgesetzt (bernstein statt gruen), und wo unser
@@ -13109,7 +13702,7 @@ def make_handler(svc):
                         huelle_auf = f'<a{_uk_anker} class="pk pk-unbek" href="{ziel}">'
                     huelle_zu = '</a>'
                     _av_bild = (f'<img src="/anlern/crops/{urllib.parse.quote(str(alle_member[0]))}.jpg" '
-                                f'alt="">' if alle_member else "?")
+                                f'loading="lazy" alt="">' if alle_member else "?")
                     # .357 (User 27.08.: "diese Seite zwischen den Recognized
                     # und dem Past muss da rein"): Unbekannt-Kacheln stehen
                     # NICHT mehr am Ende des Recognized-Bandes zwischen den
@@ -13139,7 +13732,14 @@ def make_handler(svc):
                     band = webui.leer(_sprache.t("leer.refs"),
                                       _sprache.t("leer.refs_hinweis"))
                 elif pkarten:
-                    band = f'<div class="pband">{"".join(pkarten)}</div>'
+                    # .412 (§9.7): zwoelf Karten sichtbar, der Rest hinter
+                    # "alle N Personen" — im HTML, Bilder darin lazy.
+                    _pk_zeig, _pk_rest = _r_heute.deckel(pkarten, _r_heute.PERSONEN_SICHTBAR)
+                    band = f'<div class="pband">{"".join(_pk_zeig)}</div>'
+                    if _pk_rest:
+                        band += (f'<details class="hk-mehr hk-personen"><summary>'
+                                 f'{html.escape(_sprache.t("heute.person.mehr", n=len(pkarten), m=len(_pk_rest)))}'
+                                 f'</summary><div class="pband">{"".join(_pk_rest)}</div></details>')
                 elif ukarten:
                     band = ""          # nur Unbekannte: das eigene Band traegt den Tag
                 else:
@@ -13178,13 +13778,20 @@ def make_handler(svc):
                     # "today"/"on this day" folgt der Tagesnavigation (Widerleger MUSS-3:
                     # das Fenster war schon der ANGEZEIGTE Tag, nur das Wort log). Ohne
                     # Pool-Stuetzen im Tag bleibt die alte Anzeige unveraendert.
-                    + (f'<div class="ts-val">{pool_unbek_n}</div>'
+                    # .412 (§3 Randspalte, M4): je Kopfzahl ein Tooltip, der sagt,
+                    # was gezaehlt wird — Unidentified = Pool-Identitaeten mit
+                    # Stuetze im Tag, ohne Pool-Stuetzen Durchgaenge ohne jede
+                    # Bestaetigung.
+                    + (f'<div class="ts-val" title="{html.escape(_sprache.t("heute.rand.unbek_title"), quote=True)}">'
+                       f'{pool_unbek_n}</div>'
                        f'<div class="ts-meta"><a class="ts-link" href="/unbekannte">'
                        f'{pool_unbek_n} unknown person{"s" if pool_unbek_n != 1 else ""} '
                        f'{"today" if ist_heute else "on this day"} '
                        f'({pool_auftritte} appearance{"s" if pool_auftritte != 1 else ""}) '
                        f'— see Unknown</a></div>'
-                       if pool_unbek_n else f'<div class="ts-val">{len(unbek_echt)}</div>')
+                       if pool_unbek_n else
+                       f'<div class="ts-val" title="{html.escape(_sprache.t("heute.rand.unbek_title"), quote=True)}">'
+                       f'{len(unbek_echt)}</div>')
                     # EINE widerspruchsfreie Kachel (Widerleger MUSS-1, Realfall 12.08.:
                     # "none unidentified" stand direkt unter "16 unknown persons today"):
                     # neben der Pool-Zeile erscheint die Pass-Zeile nur, wenn sie selbst
@@ -13211,73 +13818,25 @@ def make_handler(svc):
                         f'recognized passes — normally the same people</div>'
                         if unbek_nebenbei else ''))
                     + '</div>'
-                    '<div class="ts-block"><div class="ts-zeile"><span><a href="#passes" class="ts-link">Passes</a></span>'
+                    # .412 (§3 Randspalte, §9.5 Nachtrag): Personen / Durchgaenge /
+                    # Events analysed / not matched — je Zahl ein Tooltip mit dem
+                    # Zaehl-Bezug. KEIN Live-Zaehler mehr, keine Pushover-Zeilen
+                    # (Mockup 02.09., von User abgenommen): Melde-Leistung steht
+                    # auf /live, /benachrichtigungen und in der Systemstatistik.
+                    f'<div class="ts-block"><div class="ts-zeile" title="{html.escape(_sprache.t("heute.rand.personen_title"), quote=True)}">'
+                    f'<span><a href="#recognized" class="ts-link">{html.escape(_sprache.t("heute.rand.personen"))}</a></span>'
+                    f'<span class="num">{len(pers_tag)}</span></div>'
+                    f'<div class="ts-zeile" title="{html.escape(_sprache.t("heute.rand.passes_title"), quote=True)}">'
+                    f'<span><a href="#passes" class="ts-link">Passes</a></span>'
                     f'<span class="num">{len(interessant)}</span></div>'
-                    f'<div class="ts-zeile"><span><a class="ts-link" '
+                    f'<div class="ts-zeile" title="{html.escape(_sprache.t("heute.rand.events_title"), quote=True)}">'
+                    f'<span><a class="ts-link" '
                     f'href="/ereignisse?tag={tag_dt.strftime("%Y-%m-%d")}{_aq}">Events analysed</a></span>'
                     f'<span class="num">{z_events}</span></div>'
-                    f'<div class="ts-zeile"><span>Alerts sent (Pushover)</span><span class="num">{z_alerts}</span></div>'
-                    f'<div class="ts-zeile"><span>Presence pushes (Pushover)</span><span class="num">{z_presence}</span></div>'
-                    # Baustein B: eigene Zeile NEBEN den Event-Zaehlern — Live-
-                    # Meldungen kommen aus der Engine, nicht aus der Event-
-                    # Analyse, und wuerden in "Alerts sent" die Summen luegen.
-                    # KANN-7: kanalneutral (Summe), Aufschluesselung je real
-                    # benutztem Kanal darunter — nie "Pushover 0" als einzige
-                    # Wahrheit einer Telegram-only-Installation.
-                    + ((f'<div class="ts-zeile"><span><a class="ts-link" '
-                        f'href="/live_alerts?tag={tag_dt.strftime("%Y-%m-%d")}">'
-                        f'Live watcher alerts</a></span>'
-                        f'<span class="num">{z_live}</span></div>'
-                        + (f'<div class="ts-meta">'
-                           + " · ".join(
-                               f'{"not sent" if k == "none" else k} {n}'
-                               for k, n in z_live_kanaele.items())
-                           + '</div>' if z_live_kanaele else ''))
-                       if _live_zeile else '')
-                    + '</div></aside>')
-                # .190 (User 13.08., ersetzt die .188-Sidebar-Liste): die
-                # Live-Trigger als KARTENREIHE unter Recognized — Beweisbild
-                # (Protokoll-Feld bild, ALARMBILD_RE-Vertrag), Schnell-
-                # Urteils-Name oder "unknown", Zeit + Kamera. Das Label sagt
-                # die VORLAEUFIGKEIT laut (Trigger != Urteil).
-                live_reihe = ""
-                # .195 (User: "nicht konsequent"): Karten sind jetzt
-                # AUFTRITTE (auftritts_gruppen), der Klick fuehrt zur
-                # Auftrittskarte der Tagesansicht mit ALLEN Gesichts-Crops —
-                # analog der Pass-Ansicht, nicht mehr nur ein Einzelbild.
-                _erkannt = [a for a in _lwz.auftritts_gruppen(z_live_liste)
-                            if a.get("person")] if z_live_liste else []
-                if _erkannt:
-                    _lk = []
-                    for g in _erkannt[:8]:
-                        _bu = (f'/live_alarmbild?p='
-                               f'{urllib.parse.quote(g["bild"])}'
-                               if g.get("bild") else "")
-                        _au = (f'/live_alerts?tag='
-                               f'{time.strftime("%Y-%m-%d", time.localtime(g["ts"]))}'
-                               f'#a{int(g["ts"])}')
-                        _lk.append(
-                            '<div class="card lv-alarmkarte">'
-                            + (f'<a href="{_au}">'
-                               f'<img class="lv-alarmbild" '
-                               f'loading="lazy" src="{_bu}" alt=""></a>'
-                               if _bu else '')
-                            + f'<div><b>{html.escape(g["person"])}</b>'
-                            + f'<div class="dim">'
-                              f'{time.strftime("%H:%M", time.localtime(g["ts"]))}'
-                              f' · {html.escape(g["kamera"])}</div></div></div>')
-                    live_reihe = (
-                        '<div class="listhead"><h3>Recognized live</h3>'
-                        '<span class="cnt">quick check, preliminary — '
-                        f'{len(_erkannt)} appearance'
-                        f'{"" if len(_erkannt) == 1 else "s"}, '
-                        f'{z_live_gruppen} trigger'
-                        f'{"" if z_live_gruppen == 1 else "s"}</span></div>'
-                        '<div class="lv-alarmreihe">' + "".join(_lk)
-                        + (f'<div class="dim lv-alarmmehr">… '
-                           f'{len(_erkannt) - 8} more</div>'
-                           if len(_erkannt) > 8 else '')
-                        + '</div>')
+                    f'<div class="ts-zeile" title="{html.escape(_sprache.t("heute.rand.unmatched_title"), quote=True)}">'
+                    f'<span>{html.escape(_sprache.t("heute.rand.unmatched"))}</span>'
+                    f'<span class="num">{unbek_nebenbei}</span></div>'
+                    '</div></aside>')
                 _dl = ('<datalist id="personen-liste">'
                        + "".join(f'<option value="{html.escape(p)}">' for p in master_persons(cfg))
                        + '</datalist>')
@@ -13294,9 +13853,11 @@ def make_handler(svc):
                           # noch analysiert wird und gleich mehr kommen kann.
                           f'<div class="listhead'
                           f'{"" if (pkarten or not ukarten or live_offen) else " leerkopf"}" '
-                          f'id="recognized"><h3>Recognized</h3>'
-                          f'<span class="cnt">{len(pers_tag)} '
-                          f'{"person" if len(pers_tag) == 1 else "people"}</span>'
+                          # .412 (§3): Block "People — N recognized · sorted by
+                          # last seen" (Worker UND Live-Namen); Anker bleibt.
+                          f'id="recognized"><h3>{html.escape(_sprache.t("heute.block.personen"))}</h3>'
+                          f'<span class="cnt">'
+                          f'{html.escape(_sprache.t_n("heute.block.personen_cnt", len(pers_tag)))}</span>'
                           # .208 (User-Fund 16.08.: Live meldete in Sekunden, der
                           # normale Weg brauchte 76 s — wer frueh schaute, sah
                           # hier nichts): laeuft noch ein Durchgang, sagt die Zeile
@@ -13307,10 +13868,9 @@ def make_handler(svc):
                              'finish and show up here</span>'
                              if live_offen else '')
                           + f'</div>{band}'
-                          # .357 (Widerleger-Fund): live_reihe ZUERST — "Recognized
-                          # live" ist ein Erkannt-Abschnitt und gehoert zu seinem
-                          # Band, nicht hinter die Unbekannten.
-                          + f'{live_reihe}'
+                          # .412 (§9.9/§9.5): die Live-Kartenreihe (.190/.195) ist
+                          # entfallen — Live-Namen sind Personenkarten (Vermerk
+                          # "live"), Reihenfolge Personen · Unbekannt · Durchgaenge.
                           # .357: das Unbekannt-Band. Erscheint NUR, wenn etwas
                           # drin ist — ein leerer Abschnitt an einem ruhigen Tag
                           # stumpft ab, und dann uebersieht man ihn genau an dem
@@ -14195,6 +14755,44 @@ def make_handler(svc):
                                          master_persons(cfg),
                                          sortierung=_so, filter_=_fi)
                 return self._send(200, webui.layout(_sprache.t("nav.unbekannte"), "/unbekannte", inhalt, self._banner()))
+            if path == "/anwesenheit":                   # Anwesenheitsseite (Z4, .409; User 02.09.)
+                import webui
+                # ME1: Renderer in routes/anwesenheit.py, Daten als Parameter —
+                # kein Store-/Dateizugriff dort. Der Handler loest die Sicht
+                # (Alle/Kamera/Area) in EINE Kameramenge auf und liest den
+                # Tag genau einmal damit (tag_lesen filtert Personen-/Luecken-
+                # Marken, Lauf-Marken zaehlen immer). Kameraliste = dieselbe
+                # wie der Ereignisliste-Filter (die Kameras der Akte), damit
+                # beide Filter dieselben Namen anbieten. Unbekannte Werte
+                # (tag, kamera, area) fallen im Renderer still auf heute/Alle.
+                from routes import anwesenheit as _r_anw
+                _heute_a = _anw.tag_von_ts(time.time())
+                _datum_a = _r_anw.tag_waehlen(qs.get("tag", [""])[0], _heute_a)
+                _cams_a = set()
+                if os.path.exists(svc.log_path):
+                    with open(svc.log_path) as f:
+                        for l in f:
+                            try:
+                                _c = json.loads(l).get("camera")
+                            except Exception:
+                                continue
+                            if _c:
+                                _cams_a.add(str(_c))
+                _cams_a = sorted(_cams_a)
+                _areas_a = _areas_mod.normalisieren(cfg.get("areas"))
+                _sicht_a = _r_anw.sicht_waehlen(_cams_a, _areas_a,
+                                                qs.get("kamera", [""])[0],
+                                                qs.get("area", [""])[0])
+                # svc.log, NICHT self.log: `self` ist hier der HTTP-Handler (H),
+                # der keinen Logger traegt — der erste Container-Abruf riss mit
+                # AttributeError ab (Testbett .409, 02.09.; offline unsichtbar,
+                # weil der Mantel nur im Dienst laeuft).
+                inhalt = _r_anw.render(_anw.tag_lesen(cfg, _datum_a, _sicht_a[2]),
+                                       _datum_a, _heute_a,
+                                       _anw.fenster(cfg, log=svc.log),
+                                       master_persons(cfg), _cams_a, _areas_a, _sicht_a,
+                                       _anw.tage_vorhanden(cfg))
+                return self._send(200, webui.layout(_sprache.t("anwesenheit.titel"), "/anwesenheit", inhalt, self._banner()))
             if path == "/gesichter":                     # zentrale Personen-/Referenzverwaltung (19.07.)
                 import webui
                 # M1b (S5): Rendern byte-treu in routes/gesichter.py.
@@ -14366,7 +14964,9 @@ def make_handler(svc):
                 # Tranche D (3c): uebersetzte Kategorie-Labels (bausteine.
                 # kat_map, EN wortgleich zu KAT_LABELS); seit Stufe 4 liest
                 # auch der Push-Titel ueber kat_wort (meldung.titel.*).
-                inhalt = _r_benach.render(cfg, _kat_map())
+                # .411: Pushover-Zustand (aus / pausiert / aktiv) auf die Seite.
+                inhalt = _r_benach.render(cfg, _kat_map(),
+                                          pushover=_melden.pushover_zustand(cfg))
                 return self._send(200, webui.layout(_sprache.t("nav.benachrichtigungen"), "/benachrichtigungen", inhalt, self._banner()))
             if path == "/live":                    # Live-Reiter (Phase 2)
                 import webui
@@ -14867,15 +15467,30 @@ def make_handler(svc):
                 # Zeilen — ohne diesen Rueckfall behauptete die Seite bis zu
                 # eine Minute lang "noch keine Messungen", waehrend die Kurve
                 # daneben liegt. Der Zeitstempel unten sagt, wie alt sie ist.
+                # .410 Live-Schalter (?live=1&seit=<epoch>, User 02.09.): geparst
+                # und geklemmt in core/systemstat.live_auswerten (Deckel 5 min,
+                # Unsinn = aus). Im Live-Betrieb fordert jeder Abruf 15 s Live an,
+                # der Sammler misst dann alle 5 s (Ring bleibt im 60-s-Takt), und
+                # die Seite laedt sich im Live-Takt neu — die URL traegt live+seit
+                # von selbst weiter. Seite verlassen = keine Anforderung mehr.
+                _lv_an, _lv_seit, _lv_rest = _systemstat.live_auswerten(
+                    qs.get("live", [""])[0], qs.get("seit", [""])[0])
+                if _lv_an:
+                    _systemstat.live_anfordern()
                 inhalt = _r_sysstat.render(_verlauf,
                                            _systemstat.letzte()
                                            or (_verlauf[-1] if _verlauf else None),
                                            _systemstat.TAKT_S,
-                                           _systemstat.AUFBEWAHRUNG_H)
+                                           _systemstat.AUFBEWAHRUNG_H,
+                                           live={"an": _lv_an, "seit": _lv_seit,
+                                                 "rest_s": _lv_rest,
+                                                 "takt_s": _systemstat.LIVE_TAKT_S,
+                                                 "deckel_s": _systemstat.LIVE_DECKEL_S})
                 return self._send(200, webui.layout(_sprache.t("nav.systemstat"),
                                                     "/systemstat", inhalt,
                                                     self._banner(),
-                                                    refresh=_systemstat.TAKT_S))
+                                                    refresh=(_systemstat.LIVE_TAKT_S if _lv_an
+                                                             else _systemstat.TAKT_S)))
             if path == "/health":
                 # version zuerst (Task #12, User 28.07.): eingesandte Log-AUSSCHNITTE tragen
                 # die Startup-Banner-Zeile oft nicht, und "latest-gpu" im Issue-Formular ist
@@ -16329,11 +16944,120 @@ def main():
     # CHECK "publisher not started", obwohl nichts kaputt ist. start_publisher haengt
     # nur an cfg und verbindet asynchron — es gibt keinen Grund, damit zu warten.
     svc.start_publisher()
+    svc.kanaele_startzeile()              # .411: "Pushover not configured" EINMAL statt je Alarm
     web = ThreadingHTTPServer(("0.0.0.0", int(cfg["web_port"])), make_handler(svc))
     threading.Thread(target=web.serve_forever, daemon=True).start()
     svc.log(f"Webview: port {cfg['web_port']} on all interfaces "
             f"(browse http://<ip-of-this-machine>:{cfg['web_port']}/)")
     startup_selfcheck(svc)                    # strukturierter Selbstcheck nach stdout (Roadmap 4/10)
+    # EINMALIGER KALIBRIER-RING-RESET (User 03.09., Boeden-Neueichung): die
+    # Bestands-Ringe wurden mit den ALTEN Boeden und teils ohne Pose-Wert
+    # gefuellt und taugen nicht als Kalibrier-Grundlage. Beim ERSTEN Start
+    # dieser Version werden alle <data>/live/*/kalib/-Ordner geleert; die
+    # Marker-Datei state/kalib_reset.json (Version + Zeit) sorgt dafuer, dass
+    # das genau EINMAL je Installation passiert — nie wieder automatisch.
+    try:
+        _kr_marker = os.path.join(cfg["data_dir"], "state", "kalib_reset.json")
+        _kr_meta = None                       # None = Marker fehlt (frische Installation/Version)
+        if os.path.exists(_kr_marker):
+            try:
+                with open(_kr_marker) as _kf:
+                    _kr_meta = json.load(_kf)
+                if not isinstance(_kr_meta, dict):
+                    _kr_meta = {}
+            except Exception:                                  # noqa: BLE001
+                _kr_meta = {}                 # unlesbar: Ring NICHT erneut leeren, nur fehlende Teile
+        if _kr_meta is None:
+            import glob as _glob
+            import shutil as _shutil
+            _kr_n = _kr_bilder = 0
+            for _kd in _glob.glob(os.path.join(cfg["data_dir"], "live", "*", "kalib")):
+                try:
+                    _kr_bilder += sum(1 for _f in os.listdir(_kd)
+                                      if _f.endswith(".jpg"))
+                    _shutil.rmtree(_kd)
+                    _kr_n += 1
+                except Exception as _ke:                       # noqa: BLE001
+                    svc.log(f"calibration ring reset: {_kd} not removable "
+                            f"({type(_ke).__name__}: {_ke}) — retry next start")
+                    raise
+            _kr_meta = {
+                "version": os.environ.get("SUSLIK_VERSION", "dev"),
+                "ts": round(time.time(), 1), "ordner": _kr_n,
+                "bilder": _kr_bilder,
+                "grund": "one-time reset after ground-value recalibration"}
+            svc.log(f"calibration ring reset ONCE for this install: {_kr_n} "
+                    f"camera ring(s), {_kr_bilder} picture(s) removed — new "
+                    f"ground values apply from here (marker state/kalib_reset.json)")
+        if not _kr_meta.get("regler"):
+            # EINMALIGER REGLER-RESET (User 03.09. abends, zweiter Teil des
+            # Markers — Installationen mit dem aelteren Ring-Marker holen ihn
+            # hier nach): gesetzte Kamera-Werte der DREI Stimm-Siebe
+            # (guete_e_min/guete_t_min/pose_min) sind Altwerte aus der Zeit
+            # vor der Boeden-Eichung und werden EINMAL auf 'unkalibriert'
+            # geraeumt — ab dann gelten die Werks-Boeden, bis jemand die
+            # Kamera bewusst neu kalibriert. det_min und die Katalog-Latten
+            # bleiben unberuehrt (nicht Teil des User-Entscheids).
+            _kr_felder = ("guete_e_min", "guete_t_min", "pose_min")
+            _kr_kam = 0
+            with _cfg_lock:
+                _kr_store = _lade_config_store(cfg)
+                _kr_gd = ((_kr_store.get("live") or {}).get("guards") or {})
+                for _kr_gv in _kr_gd.values():
+                    if isinstance(_kr_gv, dict) and any(
+                            _kr_gv.get(_kf2) is not None for _kf2 in _kr_felder):
+                        for _kf2 in _kr_felder:
+                            _kr_gv.pop(_kf2, None)
+                        _kr_kam += 1
+                if _kr_kam:
+                    _store_schreiben(_config_store_pfad(cfg), _kr_store)
+            # Auch die LAUFENDE Instanz raeumen — cfg traegt die Guards schon
+            # im Speicher; ohne diesen Zug gaelten die Altwerte bis zum
+            # naechsten Neustart weiter.
+            for _kr_gv in ((cfg.get("live") or {}).get("guards") or {}).values():
+                if isinstance(_kr_gv, dict):
+                    for _kf2 in _kr_felder:
+                        _kr_gv.pop(_kf2, None)
+            _kr_meta["regler"] = {"ts": round(time.time(), 1),
+                                  "kameras": _kr_kam}
+            svc.log(f"calibration slider reset ONCE for this install: cleared "
+                    f"e/t/pose on {_kr_kam} camera(s) — factory ground values "
+                    f"apply until recalibrated (marker updated)")
+        if not _kr_meta.get("live_regeln"):
+            # EINMALIGER LIVE-REGEL-RESET (User-Go 03.09. spaet, dritter
+            # Marker-Teil): gesetzte Live-Urteils-Regler (erkannt_n /
+            # erkannt_t_s / erkannt_fenster_s) stammen aus der Zeit VOR der
+            # 1:1-Regel und dem gemessenen 10-s-Stimm-Fenster — sie werden
+            # EINMAL auf 'Werk' geraeumt (n=2, Fenster 10 s, Urteil 5 s aus
+            # den livewache-Konstanten), damit ueberall derselbe Stand gilt.
+            _kr_lfelder = ("erkannt_n", "erkannt_t_s", "erkannt_fenster_s")
+            _kr_lkam = 0
+            with _cfg_lock:
+                _kr_store = _lade_config_store(cfg)
+                _kr_gd = ((_kr_store.get("live") or {}).get("guards") or {})
+                for _kr_gv in _kr_gd.values():
+                    if isinstance(_kr_gv, dict) and any(
+                            _kr_gv.get(_kf2) is not None for _kf2 in _kr_lfelder):
+                        for _kf2 in _kr_lfelder:
+                            _kr_gv.pop(_kf2, None)
+                        _kr_lkam += 1
+                if _kr_lkam:
+                    _store_schreiben(_config_store_pfad(cfg), _kr_store)
+            for _kr_gv in ((cfg.get("live") or {}).get("guards") or {}).values():
+                if isinstance(_kr_gv, dict):
+                    for _kf2 in _kr_lfelder:
+                        _kr_gv.pop(_kf2, None)
+            _kr_meta["live_regeln"] = {"ts": round(time.time(), 1),
+                                       "kameras": _kr_lkam}
+            svc.log(f"live rule reset ONCE for this install: cleared "
+                    f"erkannt_n/erkannt_t_s/erkannt_fenster_s on {_kr_lkam} "
+                    f"camera(s) — factory judgement defaults apply "
+                    f"(marker updated)")
+            from core import atomar as _kr_atomar
+            _kr_atomar.json_schreiben(_kr_marker, _kr_meta)
+    except Exception as _kre:                                  # noqa: BLE001
+        svc.log(f"calibration reset failed ({type(_kre).__name__}: "
+                f"{_kre}) — will retry on next start, marker not advanced")
     svc.start_wartung()
     svc.start_stoerungswaechter()
     svc.start_plattenwache()                      # .313 Issue #25
@@ -16343,6 +17067,7 @@ def main():
     _systemstat.sammler_starten(cfg, svc.systemstat_dienst, svc.log)   # .341: Systemzahlen alle 60 s
     svc.start_nachhol()                   # gescheiterte Analysen spaeter stumm nachholen
     svc.start_frigate_probe()             # .281: Schoner-Sperre aktiv proben (MQTT-Leerlauf)
+    svc.start_anwesenheit_takt()          # .408: Lauf-Marke je 15-min-Slot (Poll UND MQTT)
     svc.start_live_aufsicht()             # Phase 4: Live-Engine-Supervisor (Autostart, wenn
     #                                       ein Waechter enabled ist; Standalone-Erkennung)
     svc.start_stream_steckbriefe()        # .186: echte Stream-Aufloesung je Kamera proben

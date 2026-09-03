@@ -53,7 +53,7 @@ T = {
         "readme.generell.titel": 'General',
     "readme.generell.text": 'Mi reconocimiento de recorridos depende de la detección de personas de Frigate. En cuanto Frigate avisa de una persona, me traigo el evento de persona entero. Un evento así dura unas veces pocos segundos y otras varios minutos. Lo reviso de principio a fin para encontrar a todas las personas que aparecen en él.\n\nQue el reconocimiento facial propio de Frigate esté activado no importa. Solo hace falta si quieres sincronizar caras con Frigate.\n\nLa comprobación nunca usa el stream de detección, sino la grabación, es decir el mejor stream que la cámara entrega a Frigate.\n\nUna comprobación arranca por dos vías. O por el evento de persona de Frigate, esa es la vía del recorrido. O por el vigilante en vivo: toma el stream en curso, directo de la cámara o por el proxy de Frigate, busca caras y arranca desde ahí.\n\nUna persona se reconoce por tres vías. Por la cara. Por la persona entera, solo a partir de la imagen, sin cara. Por un modelo de visión, y esa vía sigue en beta.\n\nAquí uso cámaras 4K con la tasa de imagen lo más alta posible, al menos 15 imágenes por segundo. El bitrate igual de alto. Un bitrate bajo deja borrosas las caras en movimiento.',
     "readme.aktuell.titel": 'En qué estoy trabajando',
-    "readme.aktuell.text": 'Un botón de calibración. Los feeds de las cámaras son muy distintos, y con ellos la nitidez y el reconocimiento. La calibración debe compensarlo.\n\nEl reconocimiento por visión con un modelo de lenguaje: identificar a una persona cuando no se ve la cara. Está en beta y tiene que mejorar.\n\nDetección de presencia: registrar si una persona conocida está o no. Otros sistemas pueden engancharse ahí, por ejemplo una alarma o un control horario.',
+    "readme.aktuell.text": 'Reconocimiento cuando hay varias personas en un evento. El sistema debe determinar dónde está cada persona en la imagen y ejecutar el reconocimiento facial por separado para la zona de cada persona — así dos personas juntas ya no se funden en un solo veredicto.',
     "readme.lernen.titel": '¿Cómo enseño rostros nuevos?',
     "readme.lernen.text": 'Así enseño a mi sistema:\n\nAprendizaje de rostros. Lo primero en un sistema nuevo. Según el hardware, los últimos 500 eventos, con margen 1000. El programa recoge los eventos con persona, los agrupa y junta las imágenes. A los conocidos los asigna por su cuenta. A los desconocidos los reúne como grupo, y yo le pongo nombre al grupo. Eso da la base. Solo vale para rostros bien detectados.\n\nHoy. Con la base puesta, lo nuevo entra por aquí: clic en un evento o en una persona, tomar el rostro.\n\nConocidos. Elegir la persona y buscar rostros coincidentes.\n\nAprendizaje de persona. Existe al lado, para personas sin rostro reconocible. Sobre eso escribo más adelante.\n\nCalidad. Esta pestaña la uso con regularidad. Muestra lo buenas que son de verdad las imágenes de una persona, cuáles son demasiado débiles y cuáles se solapan con otra persona. Las demasiado parecidas las saco.\n\nLa pestaña Desconocidos queda de una versión anterior. No la uso.',
     "readme.persoenlich.titel": 'Personal',
@@ -174,6 +174,12 @@ T = {
     "benachrichtigungen.pushover.label_token": "Token:",
     "benachrichtigungen.pushover.label_user": "Clave de usuario:",
     "benachrichtigungen.pushover.knopf_test": "Probar Pushover",
+    "benachrichtigungen.pushover.zustand_an": "Activo: token y clave de usuario configurados.",
+    "benachrichtigungen.pushover.zustand_aus":
+        "Apagado: falta el token o la clave de usuario, por este canal no se envía nada.",
+    "benachrichtigungen.pushover.zustand_pause":
+        "En pausa: Pushover rechazó {n} mensajes seguidos. Guarda la configuración o envía "
+        "una prueba con éxito para reanudar.",
     "benachrichtigungen.telegram.label_modus": "Modo:",
     "benachrichtigungen.telegram.hinweis_modus":
         "aus=apagado · ha=vía Home Assistant · direkt=bot directo · "
@@ -924,6 +930,16 @@ T = {
         "calibración, donde se ven las imágenes.",
     "live.knopf_kalibrieren": "Calibrar",
     "live.knopf_vorrat_leeren": "Borrar muestras",
+    "live.workeraus.schalter":
+        "Que este vigilante sustituya el análisis de eventos de esta cámara",
+    "live.workeraus.erklaerung":
+        "Desactivado por defecto. Activado, los eventos de Frigate de esta "
+        "cámara ya no se analizan una segunda vez: el vigilante mira de todos "
+        "modos el mismo flujo y el trabajo se haría dos veces. Solo surte "
+        "efecto mientras el vigilante esté activado Y realmente en marcha; si "
+        "el motor se para o el vigilante falla, los eventos vuelven a "
+        "analizarse con normalidad. Un nombre que afirme el propio Frigate se "
+        "comprueba siempre, diga lo que diga este ajuste.",
     "live.frigate.schalter": "Crear un evento de Frigate cuando se reconozca a alguien",
     "live.frigate.erklaerung":
         "Desactivado por defecto. Activado, este vigilante escribe su propio "
@@ -959,11 +975,24 @@ T = {
         "Lo bien que se distingue a la persona, caras medio tapadas "
         "incluidas. Como el de arriba: elige la imagen y llena esta página, "
         "nunca aparta a nadie del reconocimiento.",
+    "livekalib.regler_p": "Postura de la cabeza",
+    "livekalib.regler_p_prosa":
+        "Lo claramente que se distingue una cabeza en el hallazgo. Es el "
+        "mismo valor con el que la comprobación de postura mantiene "
+        "contenedores, setos y frontales de coche fuera de los avisos. Las "
+        "muestras anteriores a esta medición no llevan valor y siempre pasan. "
+        "Lo que ajustes aquí se guarda para esta cámara y actúa en esta "
+        "página; en el servicio todavía no aparta nada.",
     "livekalib.ohne_guete":
         "Los dos modelos de calidad faltan en esta versión, así que las "
         "muestras no llevan cifras de calidad y los dos deslizadores "
         "inferiores no tienen efecto aquí. La puntuación de detección sí "
         "funciona.",
+    "livekalib.ohne_pose":
+        "Ninguna de estas muestras lleva todavía un valor de postura de la "
+        "cabeza (material antiguo, o imágenes que llegaron por otra vía), así "
+        "que este deslizador no cambia nada aquí. Las muestras nuevas del "
+        "análisis de eventos traen el valor consigo.",
     "livekalib.standard": "Valores por defecto",
     "livekalib.fueller.laeuft": "búsqueda de material en curso",
     "livekalib.fueller.bilanz": "última búsqueda de material",
@@ -1318,7 +1347,7 @@ T = {
     "kalib.kachel.bilanz_keine": "La busqueda de material reviso {ev} evento(s): no se encontro ninguna cara en esta camara — una vista panoramica asi no puede alimentar la calibracion.",
     "kalib.kachel.bilanz_klein": "La busqueda de material reviso {ev} evento(s): se encontraron caras, pero todas demasiado pequenas o debiles para la reserva (por debajo del liston de cosecha).",
     "kalib.kachel.bilanz_zulauf": "La busqueda de material reviso {ev} evento(s) y encontro material util, pero nada alcanzo la calidad de la reserva — vuelve a lanzar la busqueda o informa de ello.",
-    "kalib.kachel.werte": "detección {det} · impresión {e} · reconocibilidad {tw}",
+    "kalib.kachel.werte": "detección {det} · impresión {e} · reconocibilidad {tw} · pose {p}",
     "kalib.kachel.katalog": "umbral del catálogo {e} / {tw}",
     "kalib.quelle.kamera": "propio",
     "kalib.quelle.global": "reserva global",
@@ -3596,6 +3625,38 @@ del día vaya completando a las personas conocidas entre medias.</p>""",
     "meldung.wache.titel_person": "{wache} {kamera}: persona detectada",
     "meldung.wache.titel_stoerung": "{wache} {kamera}: incidencia",
     "meldung.wache.caption": "{wache} {kamera}: {text}",
+    # .412: Kongruenz mit "persona" aus dem Trigger-Titel (feminin).
+    "meldung.wache.titel_erkannt": "{wache} {kamera}: persona reconocida",
+    "meldung.wache.nicht_erkannt": "no reconocida",
+    # ---- Today .412 (T1) ----
+    "heute.block.personen": "Personas",
+    "heute.block.personen_cnt.eins": "{n} reconocida · ordenadas por última vez vista",
+    "heute.block.personen_cnt.viele": "{n} reconocidas · ordenadas por última vez vista",
+    "heute.person.bestaetigt": "primera–última confirmación {von}–{bis}",
+    "heute.person.bestaetigt_einmal": "confirmada {zeit}",
+    "heute.person.seit": "confirmada desde {zeit}",
+    "heute.person.passes.eins": "{n} paso",
+    "heute.person.passes.viele": "{n} pasos",
+    "heute.person.auftritte.eins": "{n} aparición",
+    "heute.person.auftritte.viele": "{n} apariciones",
+    "heute.person.zuletzt": "última vez {kamera} {zeit}",
+    "heute.person.live": "en directo",
+    "heute.person.live_title": "solo nombrada por un vigilante en directo (aviso de nombre tras varias coincidencias) — aún sin paso confirmado",
+    "heute.person.live_link": "ir al aviso en directo {zeit} · {kamera}",
+    "heute.person.mehr": "todas las {n} personas ({m} más)",
+    "heute.anw.dauer": "presente unas {h} h",
+    "heute.anw.title": "presencia por hora, todas las cámaras — rojo: presencia confirmada, verde: sistema en marcha, nadie visto",
+    "heute.anw.title_gesamt": "presencia por hora — todas las cámaras, sin filtrar por la vista de zona",
+    "heute.pass.mehr_kameras": "todas las {n} cámaras ({m} más)",
+    "heute.pass.live": "en directo",
+    "heute.pass.live_title": "un vigilante en directo comunicó un nombre durante este paso",
+    "heute.rand.personen": "Personas",
+    "heute.rand.personen_title": "personas con al menos una confirmación este día — veredictos del worker y nombres del vigilante en directo",
+    "heute.rand.passes_title": "pasos: eventos agrupados por tiempo y lugar; los pasos solo de movimiento no cuentan",
+    "heute.rand.events_title": "eventos analizados este día, cámaras de la vista actual",
+    "heute.rand.unmatched": "sin asignar dentro de pasos",
+    "heute.rand.unmatched_title": "eventos con rostro sin coincidencia con una persona conocida, dentro de pasos con reconocimiento — normalmente las mismas personas",
+    "heute.rand.unbek_title": "identidades desconocidas del pool con apoyo este día; sin datos del pool: pasos sin nadie reconocido",
     "meldung.wache.name_satz":
         "reconocimiento (en directo, provisional): {name} ({wort}, {n} "
         "hallazgos consistentes)",
@@ -3679,6 +3740,13 @@ del día vaya completando a las personas conocidas entre medias.</p>""",
         "proceso: Frigate corre en su propio contenedor y desde este lado "
         "no se puede nombrar su parte. Lo que este hardware no puede medir "
         "lo dice, en vez de mostrar un cero.",
+    "systemstat.sub_live":
+        "Carga total de esta máquina. En directo: una medición nueva cada "
+        "{takt} segundos; el historial conserva una medición cada {ring} "
+        "segundos durante {stunden} horas. Aquí no hay reparto por proceso: "
+        "Frigate corre en su propio contenedor y desde este lado no se "
+        "puede nombrar su parte. Lo que este hardware no puede medir lo "
+        "dice, en vez de mostrar un cero.",
     "systemstat.leer.titel": "Todavía no hay mediciones.",
     "systemstat.leer.hinweis":
         "La primera línea se escribe unos {takt} segundos después de "
@@ -3700,7 +3768,14 @@ del día vaya completando a las personas conocidas entre medias.</p>""",
     "systemstat.ram.grafik": "Gráficos (RAM compartida)",
     "systemstat.ram.prozesse": "Procesos",
     "systemstat.ram.limit": "Límite",
-    "systemstat.ram.cache": "Caché recuperable",
+    "systemstat.ram.dateicache": "Caché de archivos",
+    "systemstat.ram.dateicache_hinweis":
+        "retenida por el kernel para acceder más rápido a los clips y liberada "
+        "en cuanto hace falta memoria — no es una fuga ni un error",
+    "systemstat.ram.belegt": "procesos + gráficos, sin caché de archivos",
+    "systemstat.ram.anteil": "Del límite, caché incl.",
+    "systemstat.ram.anteil_hinweis":
+        "la vista de docker stats: procesos + gráficos + caché de archivos frente al límite",
     "systemstat.platte.frei": "Libre",
     "systemstat.platte.gesamt": "Total",
     "systemstat.platte.cache": "Caché de clips / tope",
@@ -3723,6 +3798,13 @@ del día vaya completando a las personas conocidas entre medias.</p>""",
     "systemstat.kachel.queue": "Cola de eventos",
     "systemstat.queue.aeltester": "mas antiguo esperando",
     "systemstat.queue.spur": "via de envio (abiertos · enviados · fallos)",
+    "systemstat.queue.poll": "modo sondeo",
+    "systemstat.queue.poll_hinweis":
+        "los eventos vienen directamente del barrido, aquí no espera nada — véase Cola pendiente",
+    "systemstat.kachel.frigate": "Tiempo de respuesta de Frigate",
+    "systemstat.frigate.mittel": "media del último minuto",
+    "systemstat.frigate.max": "más lento del último minuto",
+    "systemstat.frigate.anfragen": "peticiones del último minuto",
     "systemstat.kachel.rueckstau": "Cola pendiente",
     "systemstat.rueckstau.laeuft": "Recuperando",
     "systemstat.rueckstau.fenster": "Ventana hacia atrás",
@@ -3730,6 +3812,14 @@ del día vaya completando a las personas conocidas entre medias.</p>""",
     "systemstat.live.waechter": "Vigilantes activos",
     "systemstat.live.supervisor": "Supervisor",
     "systemstat.stand": "Medido a las {zeit}. La página se recarga sola.",
+    "systemstat.stand_live": "Medido a las {zeit}. En directo: una medición nueva cada {takt} segundos.",
+    "systemstat.live_knopf": "En directo",
+    "systemstat.live_knopf.an": "En directo · {rest} min",
+    "systemstat.live_knopf.tip_aus":
+        "Recarga cada {takt} segundos durante {minuten} minutos como máximo y "
+        "luego vuelve al ritmo normal. Salir de la página también lo termina.",
+    "systemstat.live_knopf.tip_an":
+        "Unos {rest} minutos más en directo. Un clic lo detiene ahora.",
     "systemstat.grund.erster_lauf":
         "esperando la segunda medición \u2014 esta cifra es la diferencia "
         "entre dos mediciones",
@@ -3750,4 +3840,49 @@ del día vaya completando a las personas conocidas entre medias.</p>""",
         "no hay porcentaje que mostrar",
     "systemstat.grund.kein_dienst":
         "esta cifra solo la conoce el servicio en marcha",
+    "systemstat.grund.keine_anfragen":
+        "desde el arranque de este servicio aún no ha salido ninguna "
+        "petición hacia Frigate",
+    # --- routes/anwesenheit.py (.409, Anwesenheitsseite) ---
+    "anwesenheit.titel": "Presencia",
+    "anwesenheit.knopf": "Presencia",
+    "anwesenheit.knopf_tip": "Presencia: quién estuvo confirmado en la propiedad, cuarto de hora a cuarto de hora",
+    "anwesenheit.kopf_satz": "Una fila por persona, el día en celdas de un cuarto de hora. Rojo = presencia confirmada en ese cuarto de hora (análisis de eventos o vigilante en vivo, mostrado una sola vez). Con un reconocimiento prudente solo unas pocas celdas se ponen rojas: es normal, no un error.",
+    "anwesenheit.seit": "Registro desde {datum}.",
+    "anwesenheit.fenster_auto": "Ventana diurna {von}–{bis} h, calculada automáticamente a partir de los avistamientos de los últimos {tage} días; las horas fuera de ella son una celda por hora.",
+    "anwesenheit.fenster_werk": "Ventana diurna {von}–{bis} h (valor de fábrica hasta que haya al menos {n} avistamientos); las horas fuera de ella son una celda por hora.",
+    "anwesenheit.fenster_fest": "Ventana diurna {von}–{bis} h, fijada en Ajustes; las horas fuera de ella son una celda por hora.",
+    "anwesenheit.sicht_label": "Vista",
+    "anwesenheit.sicht_alle": "Todas",
+    "anwesenheit.sicht_kamera": "Cámara",
+    "anwesenheit.sicht_area": "Área",
+    "anwesenheit.sicht_kamera_leer": "Todavía no se ha analizado ninguna cámara",
+    "anwesenheit.sicht_area_leer": "No hay áreas definidas: créalas en «Áreas»",
+    "anwesenheit.nacht": "noche",
+    "anwesenheit.legende_da": "presencia confirmada",
+    "anwesenheit.legende_weg": "sistema en marcha, nadie confirmado",
+    "anwesenheit.legende_leer": "sistema parado o sin mirar",
+    "anwesenheit.legende_jetzt": "ahora",
+    "anwesenheit.zaehler": "{zeilen} marcas leídas, {kaputt} líneas dañadas omitidas.",
+    "anwesenheit.gekappt": "El archivo del día supera el límite de lectura; solo se ha leído su final.",
+    "anwesenheit.nie": "No vistos en esta vista: {namen}",
+    "anwesenheit.alle_leisten": "mostrar todas las personas como filas",
+    "anwesenheit.leer_personen": "Todavía no hay personas conocidas",
+    "anwesenheit.leer_personen_hinweis": "Las filas aparecen en cuanto se aprenden personas (en «Conocidos»).",
+    "anwesenheit.keine_aufzeichnung": "No hay registro para este día.",
+    "anwesenheit.tip_da": "{zeit} · {kameras} · {quelle}",
+    "anwesenheit.tip_weg": "{zeit} · sistema en marcha, nadie confirmado",
+    "anwesenheit.tip_leer": "{zeit} · sin datos (sistema parado o sin mirar)",
+    "anwesenheit.tip_zukunft": "{zeit} · todavía no",
+    "anwesenheit.quelle_worker": "análisis de eventos",
+    "anwesenheit.quelle_live": "vigilante en vivo",
+    "anwesenheit.quelle_beide": "vigilante en vivo y análisis de eventos",
+    "anwesenheit.nav.heute": "Hoy",
+    "anwesenheit.nav.gestern": "ayer",
+    "anwesenheit.nav.attr_vortag": "día anterior",
+    "anwesenheit.nav.attr_folgetag": "día siguiente",
+    "anwesenheit.nav.attr_kein_morgen": "no hay días futuros",
+    "anwesenheit.nav.attr_kein_frueher": "no hay registro anterior",
+    "anwesenheit.nav.zurueck_heute": "volver a hoy",
+    "anwesenheit.zeile_niemand": "nadie",
 }

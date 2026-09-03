@@ -497,7 +497,8 @@ def kalib_vorrat_speisen(lauf_dir, kamera, best, kalib, log=print):
             return False
         return bool(_lw.kalib_schreiben(
             {"data_dir": kalib.get("data_dir")}, kamera, bild,
-            {"det": best.get("det"), "e": best.get("e"), "t": best.get("t")},
+            {"det": best.get("det"), "e": best.get("e"), "t": best.get("t"),
+             "p": best.get("p")},
             deckel=deckel, log=log,
             # S5: der Ernte-Einlass (Formel L) hat ist_fehldetektion bereits
             # gesiebt — ein Pose-Skelett-Urteil gibt es auf diesem Weg nicht;
@@ -816,8 +817,28 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
                 if m and datei is not None and (
                         kalib_topf["best"] is None
                         or det > kalib_topf["best"]["det"]):
+                    # POSE-KOPF fuer den Kalibrier-Vorrat mitmessen (03.09.,
+                    # Widerleger-Befund 3 am Regler-Bau: p-lose Ernte-Bilder
+                    # machten den Pose-Regler an genau den Stoerer-Karten
+                    # blind). Gleiche Messung/Skala wie der Worker-Zulauf
+                    # (rtmpose auf der Personenregion des VOLLBILDS); nicht
+                    # ladbares Modell -> None, fail-open wie ueberall.
+                    _p_w = None
+                    try:
+                        from core.livewache import (pose_wache as _pw,
+                                                    person_region as _pr)
+                        _w = _pw()
+                        if _w is not None:
+                            from pose_wache import KOPF_IDX as _KIDX
+                            _h_, _b_ = frame.shape[:2]
+                            _pts_, _sc_ = _w.skelett(
+                                frame, bbox=_pr(fc.bbox, _b_, _h_))
+                            _p_w = float(max(_sc_[j] for j in _KIDX))
+                    except Exception:                          # noqa: BLE001
+                        _p_w = None
                     kalib_topf["best"] = {"datei": datei, "det": det,
-                                          "e": empf_w, "t": fiqa_t_w}
+                                          "e": empf_w, "t": fiqa_t_w,
+                                          "p": _p_w}
                 zeile = kandidat_zeile(eid, kamera, ts, t, (x1, y1, x2, y2), det,
                                        front, sharp, kante, pose,
                                        fc.normed_embedding, modell, m, s_flag, datei,

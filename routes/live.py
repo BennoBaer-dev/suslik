@@ -631,6 +631,15 @@ def detail(name, guard, kd, gesperrt, vorrat=0, deckel=0, regel=(2, 0),
            f'{t("live.erkennung.vorrat_zeile", n=vorrat, deckel=deckel)}</div>'
            if deckel else
            f'<div class="dim lv-zeile">{t("live.erkennung.vorrat_aus")}</div>')
+        # .407 (User-Spezifikation): der Schalter gegen die Doppelanalyse.
+        # Er steht HIER, direkt neben dem Wächter-Verhalten dieser Kamera,
+        # weil er nur zusammen mit einem LAUFENDEN Wächter etwas tut — die
+        # Prosa darunter sagt genau das, damit niemand ihn für einen
+        # Ausschalter der Erkennung hält.
+        + f'<label class="lv-radio"><input type="checkbox" id="lv-worker-aus"'
+        + f'{" checked" if bool(g.get("worker_aus")) else ""}> '
+        + f'{t("live.workeraus.schalter")}</label>'
+        + f'<div class="dim lv-zeile">{t("live.workeraus.erklaerung")}</div>'
         + f'<div class="lv-knoepfe">'
           # Zentral-Umbau 31.08.: die Kalibrierseite liegt unter /kalibrierung/
           # (eigener Menuepunkt). Der Knopf hier bleibt — er ist der kurze Weg

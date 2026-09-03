@@ -11,12 +11,29 @@ import html
 from core.sprache import t
 
 
-def render(cfg, kat_labels):
-    """Liefert den Seiten-INHALT (ohne layout/banner — die bleiben beim Handler)."""
+def render(cfg, kat_labels, pushover=None):
+    """Liefert den Seiten-INHALT (ohne layout/banner — die bleiben beim Handler).
+    pushover (.411, additiv): Kanal-Zustand aus melden.pushover_zustand(cfg)
+    — {"konfiguriert", "pausiert", "ablehnungen", ...}; None = keine Zeile
+    (Altaufrufer/Harnisch byte-treu)."""
     tg = cfg.get("telegram") or {}
     po = cfg.get("pushover") or {}
     mq = cfg.get("mqtt") or {}
     _st = "margin:2px 0"
+    # .411: Zustand des Pushover-Kanals — AUS (Token oder User fehlt), PAUSIERT
+    # (N Ablehnungen in Folge, Speichern oder gelungener Test hebt auf), aktiv.
+    _pz = pushover or {}
+    if _pz.get("konfiguriert") is False:
+        po_zustand = t("benachrichtigungen.pushover.zustand_aus")
+    elif _pz.get("pausiert"):
+        po_zustand = t("benachrichtigungen.pushover.zustand_pause",
+                       n=int(_pz.get("ablehnungen") or 0))
+    elif _pz:
+        po_zustand = t("benachrichtigungen.pushover.zustand_an")
+    else:
+        po_zustand = ""
+    po_zeile = (f'<div class="dim" id="pushover-zustand" style="margin:4px 0">'
+                f'{html.escape(po_zustand)}</div>' if po_zustand else "")
 
     def _selbool(id_, val):
         return (f'<select id="{id_}" style="{_st}"><option value="true"{" selected" if val else ""}>'
@@ -77,7 +94,7 @@ def render(cfg, kat_labels):
         + _num("n-anwesenheit_cooldown", cfg.get("anwesenheit_cooldown")) +
         f' &nbsp; {t("benachrichtigungen.alerts.label_szene_karenz")} '
         + _num("n-szene_karenz_s", cfg.get("szene_karenz_s")) + '</div></div>'
-        '<div class="card"><b>Pushover</b>'
+        '<div class="card"><b>Pushover</b>' + po_zeile +
         f'<div>{t("benachrichtigungen.pushover.label_token")} '
         + _txt("n-pushover_token", po.get("token"), secret=True) + '</div>'
         f'<div>{t("benachrichtigungen.pushover.label_user")} '

@@ -73,6 +73,8 @@ import numpy as np
 
 from core import registry as _reg      # MELDE_HERKUNFT-Bindung (stdlib-only, kein Zyklus)
 from core import sprache as _sprache   # Sprach-Stufe 4: Waechter-Meldetexte (stdlib-only)
+from core import anwesenheit as _anw   # .408: Anwesenheits-Marken der Live-Auftritte (stdlib-only)
+from core import atomar as _atomar     # .411: eindeutige tmp beim atomaren Schreiben (stdlib-only)
 
 WURZEL = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -159,12 +161,16 @@ NAME_STIMMEN = 2          # kontinuierliches Namens-Voting (User 13.08.: "Person
 #                           Seit dem Live-Umbau 31.08. ist das nur noch der
 #                           DEFAULT der je-Kamera-Regel (guard.erkannt_n).
 ERKANNT_N_MIN, ERKANNT_N_MAX = 1, 20
-ERKANNT_T_S = 0           # Zeitfenster der Erkannt-Regel je Kamera: 0 = der
-#                           GANZE Auftritt zaehlt (das ist das Verhalten bis
-#                           31.08., deshalb der Default). > 0 = nur Stimmen aus
-#                           den letzten T Sekunden zaehlen — fuer Kameras, an
-#                           denen jemand lange steht und zwei Zufallstreffer
-#                           ueber Minuten sonst wie eine Bestaetigung wirken.
+ERKANNT_T_S = 10.0        # Zeitfenster der Erkannt-Regel je Kamera (gleitendes
+#                           Stimm-Fenster). Bis 03.09. war der Default 0 = der
+#                           ganze Auftritt — zwei Zufallstreffer ueber Minuten
+#                           wirkten so wie eine Bestaetigung. 10 s ist der
+#                           MESSWERT der 10-fps-Reihe vom 03.09. abends
+#                           (Testbett-Referenzclip, alle Siebe): 12 Anker-
+#                           Stimmen >= 0,50, um die erste liegen ~50 gueltige
+#                           Stimmen in +/-5 s, kleinste feuernde Breite 0,5 s
+#                           — 10 s traegt also ueppige Reserve und deckelt
+#                           trotzdem die Minuten-Summen (User-Go 03.09. spaet).
 ERKANNT_T_MIN, ERKANNT_T_MAX = 0, 3600
 URTEIL_T_S = 5.0          # W0 Urteils-Fenster (01.09., Design 31.08. final,
 #                           T-Sweep 31.08. an 26 Auftritten: Erstbester wich in
@@ -282,6 +288,16 @@ VORSCHAU_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 # 'live/../x.jpg' durch — ein Punkt-Segment ist Traversal.
 ALARMBILD_RE = re.compile(
     r"^live/[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*\.(jpg|mp4)$")
+# Bildname der STUFE-2-Namensmeldung (.413): <stempel>_NAME_<person>.jpg.
+# Beide Melde-Stufen schreiben dieselbe Protokoll-Zeile mit demselben Feld
+# `person` — die Stufe-1-Kurzmeldung traegt dort den Namen des SCHNELL-
+# URTEILS ("probably X, just above the bar"), die Stufe-2-Meldung den nach
+# mehreren Stimmen gefundenen. Getrennt werden sie nur am Bildnamen; deshalb
+# ist die Konvention ein VERTRAG zwischen Schreiber (namensbild_datei) und
+# Leser (ist_namensmeldung) und keine verstreute Zeichenkette (K3).
+NAMENSBILD_MARKE = "_NAME_"
+NAMENSBILD_RE = re.compile(
+    r"^[0-9]{8}_[0-9]{6}" + NAMENSBILD_MARKE + r"[A-Za-z0-9._-]*\.jpg$")
 # Gleitendes Liefer-fps-Fenster (KANN-Rest M-D Gegenrichtung, Widerleger 12.08.
 # gemessen: eine 3600 s verbundene Kachel mit nur 600 s Lieferung stand nach der
 # ERHOLUNG noch lange bei 2,5 statt 15 fps — der Schnitt "seit dem Verbinden"
@@ -547,8 +563,18 @@ def wach_skala(breite, hoehe, ziel_hoehe=None):
     wird — faellt jeder groessere Wert sanft auf 1080. Das deckt alle Wege
     zugleich (Betrieb, Quelltest, Last-Messung, ein Hand-Edit in
     live.defaults.hoehe) und laesst den gespeicherten Wert samt Quell-
-    Fingerprint in Ruhe, damit kein laufender Waechter am Update stirbt."""
-    zh = int(ziel_hoehe or WACH_HOEHE)
+    Fingerprint in Ruhe, damit kein laufender Waechter am Update stirbt.
+
+    NATIV-DEFAULT (User-Entscheid 03.09. abends, revidiert .194/31.08.:
+    'live muss auch 4K — immer das groesstmoegliche; nicht messen, umbauen,
+    der Echttest zeigt es'): OHNE gesetzte Hoehe (None/0) wird NICHT mehr
+    skaliert — Rueckgabe None heisst 'nativ', der Leser laeuft auf den
+    Quellmassen und Crops (Embedding/Guete/Pose) kommen aus dem Vollbild wie
+    beim Worker. Eine BEWUSST gesetzte Kamera-Hoehe (360/720/1080) wirkt
+    unveraendert (Schwach-GPU-Option)."""
+    if not ziel_hoehe:
+        return None                       # nativ: keine Skalierung (s. o.)
+    zh = int(ziel_hoehe)
     if zh > WACH_HOEHE_MAX:
         print(f"live: Verarbeitungshoehe {zh} gibt es nicht mehr (gemessen "
               f"ohne Gewinn, Welle 1 Etappe C) — dieser Waechter laeuft mit "
@@ -1226,11 +1252,13 @@ def referenzen_laden(app):
 #     kein bestehendes MQTT-Feld aendert seine Bytes;
 # (2) er steht in der Kachel-Log-Zeile (_klog) — Log bleibt englisch (B20);
 # (3) er haengt am Push-/Telegram-Text (dort waere er sprachfaehig).
-# Eine Trennung braucht eine zweite Rueckgabe aus schnell_urteil(), also
-# einen Bruch des [ERBE-ANPASSUNG]-Kontrakts mit prototyp/live_wache.py
-# (drei Aufrufstellen mit Tupel-Entpackung). Das ist ein eigener Zug mit
-# User-Entscheid, nicht Teil des Einzugs — bis dahin bleibt der Text
-# englisch, und mit ihm die Wortstufe darin (vertrauen.wort, Zeile ~891).
+# .412 (User 02.09., "nur: Person erkannt oder nicht erkannt"): die
+# Trennung ist gebaut — schnell_urteil() liefert als VIERTES Element ein
+# strukturiertes Urteil (person/cos/wort/treffer), aus dem der Push-Text im
+# Stil 'worte' gebaut wird (meldetext_trigger). Der englische `text` bleibt
+# byte-gleich fuer MQTT-Payload und Kachel-Log; der [ERBE-ANPASSUNG]-Kontrakt
+# mit prototyp/live_wache.py ist an den drei Aufrufstellen nachgezogen
+# (4-Tupel-Entpackung, Prototyp-Verhalten unveraendert).
 TEXT_URTEIL_TREFFER = "probably {name} (preliminary quick check — {wort})"
 TEXT_URTEIL_UNSICHER = ("unknown/uncertain (preliminary — best candidate "
                         "{name} is {wort})")
@@ -1247,11 +1275,16 @@ def schnell_urteil(refs, kandidaten, schwelle, max_bilder=None,
     mit anlernen.nn() — derselbe Nearest-Neighbour ueber alle Referenzvektoren
     einer Person wie im Bestand, kein eigener Vergleich.
 
-    -> (text, person_oder_None, cos). text ist IMMER als vorlaeufig markiert.
+    -> (text, person_oder_None, cos, urteil). text ist IMMER als vorlaeufig
+    markiert (englisch, Bytes unveraendert seit .249 — MQTT-Feld). urteil
+    (.412, additiv) ist None ohne Vergleich, sonst {"person": bester Name,
+    "cos": Kosinus, "wort": Wortstufe, "treffer": bool} — die Quelle des
+    kurzen Push-Textes (meldetext_trigger), nie des Payloads.
     [ERBE-ANPASSUNG] max_bilder ist Parameter (statt ENV LIVE_URTEIL_BILDER),
-    die Texte sind Format-Parameter (Engine englisch, Prototyp deutsch)."""
+    die Texte sind Format-Parameter (Engine englisch, Prototyp deutsch); der
+    Prototyp entpackt das 4-Tupel und nutzt das vierte Element nicht."""
     if not refs or schwelle is None:
-        return None, None, None
+        return None, None, None, None
     import anlernen
     mb = URTEIL_BILDER if max_bilder is None else int(max_bilder)
     bester_name, bester_cos = None, -1.0
@@ -1266,16 +1299,65 @@ def schnell_urteil(refs, kandidaten, schwelle, max_bilder=None,
         if s > bester_cos:
             bester_name, bester_cos = p, s
     if bester_name is None:
-        return None, None, None
+        return None, None, None, None
     from core import vertrauen as _vt
     _wort = _vt.wort(bester_cos, schwelle)
-    if bester_cos >= schwelle:
+    treffer = bester_cos >= schwelle
+    urteil = {"person": bester_name, "cos": bester_cos, "wort": _wort,
+              "treffer": bool(treffer)}
+    if treffer:
         return (text_treffer.format(name=bester_name, cos=bester_cos,
                                     wort=_wort),
-                bester_name, bester_cos)
+                bester_name, bester_cos, urteil)
     return (text_unsicher.format(cos=bester_cos, name=bester_name,
                                  schwelle=schwelle, wort=_wort),
-            None, bester_cos)
+            None, bester_cos, urteil)
+
+
+# .412 Meldetexte des Live-Waechters (User 02.09. ~16:05: "Bei Pushover/
+# Telegram interessiert mich NICHT, wer der beste Kandidat ist — nur: Person
+# erkannt oder nicht erkannt", Texte abgenommen 16:40). Zwei reine Funktionen,
+# damit das Gate den Wortlaut je Stil und Sprache OHNE Engine prueft:
+#   Stil 'worte' (Default): Stufe 1 = NUR der Name (Schnell-Urteil ueber der
+#     Latte) oder "nicht erkannt"; Stufe 2 = Titel "…: erkannt", Text NUR der
+#     Name. Keine Zahlen, keine Sekunden, kein "vorlaeufig", kein Kandidat.
+#   Stil 'worte_zahlen': die Detailtexte von .249/.251 unveraendert.
+# Der Aufrufer aktiviert die Sprache (Eintrittspunkt (c)); MQTT-Payload und
+# Kachel-Log haengen NICHT an diesen Texten (Additiv-Invariante).
+STIL_WORTE_ZAHLEN = "worte_zahlen"
+TITEL_ERKANNT = "meldung.wache.titel_erkannt"     # Stufe 2, Stil worte
+TITEL_PERSON = "meldung.wache.titel_person"       # Trigger-Titel (Default)
+
+
+def alert_stil(cfg):
+    """Der eingestellte Meldestil (Notifications-Option, Default 'worte')."""
+    return str((cfg or {}).get("alert_stil") or "worte")
+
+
+def meldetext_trigger(cfg, n_funde, spanne_s, score, latenz_ms, u_text, u_urteil):
+    """Push-/Telegram-Text der Stufe 1 (Trigger). -> str"""
+    if alert_stil(cfg) == STIL_WORTE_ZAHLEN:
+        # .251: Technik-Zahlen nur in diesem Stil; §8.8: vorformatiert.
+        text = (_sprache.t_n("meldung.wache.funde", n_funde, sek=f"{spanne_s:.1f}")
+                + " " + _sprache.t("meldung.wache.funde_zahl",
+                                   score=f"{score:.2f}", ms=f"{latenz_ms:.0f}"))
+        if u_text:
+            text += f" — {u_text}"       # englisch, derselbe String wie im Payload
+        return text
+    if u_urteil and u_urteil.get("treffer") and u_urteil.get("person"):
+        return str(u_urteil["person"])
+    return _sprache.t("meldung.wache.nicht_erkannt")
+
+
+def meldetext_name(cfg, person, cos, stimmen, win_thresh):
+    """Titel-Schluessel + Text der Stufe 2 (Namens-Meldung). -> (key, str)"""
+    if alert_stil(cfg) == STIL_WORTE_ZAHLEN:
+        from core import vertrauen as _vt
+        text = _sprache.t("meldung.wache.name_satz", name=person,
+                          wort=_vt.wort_sprachig(cos, win_thresh), n=stimmen)
+        text += " " + _sprache.t("meldung.wache.name_zahl", cos=f"{cos:.2f}")
+        return TITEL_PERSON, text
+    return TITEL_ERKANNT, str(person)
 
 
 _POSE = {"wache": None, "fehler": None}
@@ -1673,7 +1755,9 @@ def quelle_testen(cfg, kamera, guard, detektor, log=print, det_basis=None,
         return False, (f"step 2/4 (probe): {type(e).__name__}: {str(e)[:120]}"), None
     skala = wach_skala(steck["breite"], steck["hoehe"], hoehe)
     from face_audit import Embedder
-    netz = Embedder.ar_det_size(skala[0], skala[1], basis=det_basis)
+    _nb, _nh = skala if skala else (steck["breite"] or 1280,
+                                    steck["hoehe"] or WACH_HOEHE)
+    netz = Embedder.ar_det_size(_nb, _nh, basis=det_basis)
     # 3) Bildstrom — mindestens soll_frames Bilder in hoechstens frist_s;
     #    HW-Rueckfall LAUT, Ergebnis traegt hw:false (Test besteht, aber sichtbar).
     #    FRIST ECHT (Engine-B1): bilder_yuv_frist statt bilder_yuv — eine
@@ -2382,6 +2466,53 @@ def auftritts_gruppen(gruppen, luecke=30.0):
     return aus
 
 
+def namensbild_datei(stempel, person):
+    """Dateiname des Beweisbilds einer STUFE-2-Namensmeldung (Schreiber-Seite
+    des Vertrags NAMENSBILD_RE). Der Personenname wird auf die erlaubten
+    Zeichen gezogen und gekappt — er kommt aus Config/Referenzen und geht in
+    einen Pfad."""
+    sauber = re.sub(r"[^A-Za-z0-9._-]", "_", str(person))[:40]
+    return f"{stempel}{NAMENSBILD_MARKE}{sauber}.jpg"
+
+
+def ist_namensmeldung(zeile):
+    """Ist diese Melde-Zeile (bzw. Auftritts-Gruppe) eine STUFE-2-
+    Namensmeldung? -> bool.
+
+    DIE EINE REGEL (.413, Konzept today_umbau §6.10, Befund M8): Live-Namen
+    fuer die Anzeige duerfen NUR aus Namensmeldungen kommen. Das Feld
+    `person` im Melde-Protokoll allein taugt nicht — der Stufe-1-Trigger
+    schreibt dort den Namen seines SCHNELL-URTEILS ("probably X, just above
+    the bar"). Real gemessen am 02.09. (Prod, ein Tag): 137 Alert-Zeilen,
+    130 aus Stufe 1 (davon 50 MIT person), 7 aus Stufe 2 — Today zeigte
+    deshalb einen Passanten als anwesende Person.
+
+    Unterschieden wird am Bildnamen, weil das Protokoll sonst kein Merkmal
+    traegt, das ALTE Zeilen mitbringen (`art` ist bei beiden Stufen 'alert';
+    ein neues Feld waere erst ab Einbau da und haette die Historie blind
+    gemacht). GRENZE, bewusst in die sichere Richtung: eine Namens-Meldung
+    ohne Beweisbild (keine Ablage schreibbar, oder Ende-Feuern ohne Frame)
+    gilt hier als nicht benannt — dann fehlt eine Karte, statt dass eine
+    falsche steht."""
+    datei = os.path.basename(str((zeile or {}).get("bild") or ""))
+    return bool(NAMENSBILD_RE.match(datei))
+
+
+def namens_auftritte(gruppen, luecke=30.0):
+    """Die live BENANNTEN Auftritte eines Fensters: Stufe-2-Zeilen aus
+    melde_liste, danach wie gehabt je Kamera gebuendelt (auftritts_gruppen).
+
+    Gefiltert wird VOR der Buendelung, und das ist der Punkt: in
+    auftritts_gruppen gewinnt 'erster nicht-leerer person' — ein Stufe-1-
+    Schnellurteil legt sich sonst mitsamt seinem Bild ueber die spaetere
+    echte Namensmeldung desselben Auftritts (am 02.09. real: 1 von 4
+    Namensmeldungen lag so). So bleibt je Auftritt die ZEIT der
+    Namensmeldung stehen."""
+    return [a for a in auftritts_gruppen(
+        [g for g in (gruppen or []) if ist_namensmeldung(g)], luecke)
+        if a.get("person")]
+
+
 def auftritt_medien(cfg, kamera, von, bis, rand=6.0):
     """Alle gespeicherten Beweis-Medien eines Auftritts von der Platte
     (.195): Ketten-Crops, Namens-Bilder UND die Rueckblick-Videos aus
@@ -2673,7 +2804,7 @@ def kalib_dir(cfg, kamera):
 
 
 def kalib_lesen(cfg, kamera):
-    """Vorrat EINER Kamera -> [{"d","ts","det","e","t"}, ...], neueste zuletzt.
+    """Vorrat EINER Kamera -> [{"d","ts","det","e","t","p"}, ...], neueste zuletzt.
 
     Fail-safe: kaputte Zeilen und Eintraege ohne Datei fallen still raus (reiner
     Anzeige-Pfad). Die Datei-Pruefung ist wichtig, weil der Ring die Bilder
@@ -2702,7 +2833,13 @@ def kalib_lesen(cfg, kamera):
             aus.append({"d": name, "ts": float(e.get("ts") or 0),
                         "det": float(e.get("det") or 0),
                         "e": (None if e.get("e") is None else float(e["e"])),
-                        "t": (None if e.get("t") is None else float(e["t"]))})
+                        "t": (None if e.get("t") is None else float(e["t"])),
+                        # Pose-Kopf-Wert (03.09.). Bestands-Zeilen und jeder
+                        # Weg ohne Pose-Messung tragen das Feld NICHT — dann
+                        # None = "nicht gemessen", nie eine geratene Zahl
+                        # (die Seite laesst so eine Kachel jede Pose-Latte
+                        # passieren, statt sie blind auszublenden).
+                        "p": (None if e.get("p") is None else float(e["p"]))})
     return aus
 
 
@@ -2728,18 +2865,18 @@ def kalib_schreiben(cfg, kamera, bild, mass, deckel=KALIB_DECKEL, log=print,
         return None
     # .401 RING-EINLASS-LATTE (User-Linie 01.09.: "die Kalibrierung laeuft
     # immer; bei unkalibrierter Kamera greifen die Werkswerte"): gemessene
-    # Bilder unter der Latte kommen nicht in den Ring — Feldbefund: alle
-    # 111 Ring-Bilder einer Tester-Kamera lagen unter der Erkennbarkeits-
-    # Latte, der Vorrat sammelte guete-blind. latte=(e_min, t_min) reicht
-    # der Aufrufer (Live-Weg: Kamera-Werte); ohne Angabe gilt der
-    # Werks-Boden aus der EINEN Quelle core.guete.STARTWERTE. UNGEMESSENE
-    # Masse (None — Guete-Modelle fehlen im Image) laufen ehrlich durch:
-    # eine Latte ohne Messung wuerde blind wegwerfen.
+    # Bilder unter der Latte kommen nicht in den Ring. latte=(e_min, t_min)
+    # reicht der Aufrufer (Live-Weg: Kamera-Werte); ohne Angabe gilt der
+    # Werks-Boden core.guete.RING_BODEN — die Keller-Grenze, NICHT die
+    # Katalog-STARTWERTE: die hatten hier bis .406 gestanden und beim Tester
+    # 73/73 Kandidaten eines Tages verworfen (Fix 02.09., Begruendung an der
+    # Quelle). UNGEMESSENE Masse (None — Guete-Modelle fehlen im Image)
+    # laufen ehrlich durch: eine Latte ohne Messung wuerde blind wegwerfen.
     _e, _t = mass.get("e"), mass.get("t")
     if _e is not None and _t is not None:
         if latte is None:
-            from core.guete import STARTWERTE as _SW
-            latte = (_SW["empfinden"], _SW["t"])
+            from core.guete import RING_BODEN as _RB
+            latte = (_RB["empfinden"], _RB["t"])
         if _e < latte[0] or _t < latte[1]:
             log(f"live {kamera}: Kalibrier-Bild verworfen (unter der "
                 f"Latte: e {_e:.3f}/{latte[0]:.3f}, t {_t:.3f}/{latte[1]:.3f})")
@@ -2763,7 +2900,12 @@ def kalib_schreiben(cfg, kamera, bild, mass, deckel=KALIB_DECKEL, log=print,
                                 "e": (None if mass.get("e") is None
                                       else round(float(mass["e"]), 4)),
                                 "t": (None if mass.get("t") is None
-                                      else round(float(mass["t"]), 4))},
+                                      else round(float(mass["t"]), 4)),
+                                # Pose-Kopf-Wert (03.09., Worker-Zulauf misst
+                                # ihn fuer die Kalibrier-Anzeige mit; Wege ohne
+                                # Messung lassen das Feld weg -> None).
+                                **({"p": round(float(mass["p"]), 3)}
+                                   if mass.get("p") is not None else {})},
                                ensure_ascii=False) + "\n")
         _kalib_ring_kappen(d, deckel)
         return name
@@ -3045,7 +3187,11 @@ def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
     # sie unangetastet, nur ein mitgesandtes Feld aendert etwas.
     k_e, f_ke = _opt_zahl("katalog_e_min", 0.0, 1.0)
     k_t, f_kt = _opt_zahl("katalog_t_min", 0.0, 1.0)
-    for fehler in (f_ke, f_kt):
+    # Pose-Latte je Kamera (03.09.) — dieselbe Halte-Regel: ein Formular ohne
+    # das Feld (Live-Detailseite, Alt-UI, API-Aufrufer) laesst den Wert
+    # unangetastet. Spanne = die des Vorgabe-Werts pose_kopf.
+    p_min, f_pm = _opt_zahl("pose_min", POSE_MIN_MIN, POSE_MIN_MAX)
+    for fehler in (f_ke, f_kt, f_pm):
         if fehler:
             return False, fehler
     fr_ab, f_fa = _opt_zahl("frigate_abstand_s", WIEDER_SCHARF_MIN,
@@ -3072,6 +3218,11 @@ def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
         return False, (f"'decision window': allowed {URTEIL_T_MIN}-"
                        f"{URTEIL_T_MAX} s (0 = announce immediately)")
     fr_ev = bool(_wert("frigate_events", False))
+    # .407: "Live ersetzt die Ereignis-Analyse dieser Kamera". Dieselbe
+    # Halte-Regel wie bei allen Schaltern hier (_wert: fehlendes Feld =
+    # unveraendert) — ein Alt-UI oder API-Aufrufer ohne dieses Feld darf den
+    # Wunsch des Nutzers nicht still zuruecksetzen.
+    wk_aus = bool(_wert("worker_aus", False))
     # Etappe A (Welle 1): bewegungsgesteuertes Abtasten je Kamera. Der Schalter
     # haelt wie alle anderen (fehlendes Feld = unveraendert, _wert), der
     # Ruhe-Takt ist optional (None = wie das Auftritts-Ende dieser Kamera).
@@ -3088,11 +3239,12 @@ def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
     neu = dict(alt, quelle=q, url=url, ende_ohne_gesicht_s=ende_s,
                wieder_scharf_s=scharf_s, kanaele=kanaele, hoehe=hoehe,
                det_min=det_min, guete_e_min=g_e, guete_t_min=g_t,
-               katalog_e_min=k_e, katalog_t_min=k_t,
+               katalog_e_min=k_e, katalog_t_min=k_t, pose_min=p_min,
                erkannt_n=erk_n, erkannt_t_s=erk_t, erkannt_fenster_s=erk_f,
                frigate_events=fr_ev, frigate_abstand_s=fr_ab,
                bewegung_gate=bw_gate, ruhe_takt_s=ruhe_s,
-               bewegung_schwelle=bw_schw, bewegung_flaeche=bw_fl)
+               bewegung_schwelle=bw_schw, bewegung_flaeche=bw_fl,
+               worker_aus=wk_aus)
     neu.pop("schnell_urteil", None)   # .197: Haken abgeschafft (Voting immer)
     blk[kamera] = neu
     store_schreiben(store_pfad(cfg), store)
@@ -3102,12 +3254,13 @@ def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
         "ende_ohne_gesicht_s": ende_s, "wieder_scharf_s": scharf_s,
         "kanaele": kanaele, "hoehe": hoehe, "det_min": det_min,
         "guete_e_min": g_e, "guete_t_min": g_t,
-        "katalog_e_min": k_e, "katalog_t_min": k_t, "erkannt_n": erk_n,
+        "katalog_e_min": k_e, "katalog_t_min": k_t, "pose_min": p_min,
+        "erkannt_n": erk_n,
         "erkannt_t_s": erk_t, "erkannt_fenster_s": erk_f,
         "frigate_events": fr_ev,
         "frigate_abstand_s": fr_ab, "bewegung_gate": bw_gate,
         "ruhe_takt_s": ruhe_s, "bewegung_schwelle": bw_schw,
-        "bewegung_flaeche": bw_fl}}})
+        "bewegung_flaeche": bw_fl, "worker_aus": wk_aus}}})
     log(f"LIVE guard {kamera} changed via UI (URL masked)")
     hinweis = ""
     alt_fp = (alt.get("test") or {}).get("quelle_fp")
@@ -3342,6 +3495,15 @@ _DEFAULTS_GRENZEN = {"hoehe": (2, 4320), "det_basis": (32, 4096),
                      "rate": (1, 60)}
 KANAELE_ERLAUBT = ("pushover", "telegram", "mqtt")
 
+# Spanne der Kamera-Pose-Latte = die Spanne des Vorgabe-Werts `pose_kopf`
+# (EINE Quelle statt eines zweiten Literals, qs_ebenen-Regel): beides ist
+# derselbe Kopf-Score der Pose-Wache, nur einmal global und einmal je Kamera.
+# pose_min-Klemme: Untergrenze ist seit 03.09. der gemessene Pose-Boden
+# (core.guete.POSE_BODEN, User-Entscheid) — ein gesetzter Kamera-Wert darf
+# nicht darunter; die Obergrenze bleibt die pose_kopf-Spanne.
+from core.guete import POSE_BODEN as _POSE_BODEN
+POSE_MIN_MIN, POSE_MIN_MAX = _POSE_BODEN, _DEFAULTS_GRENZEN["pose_kopf"][1]
+
 # DECKUNGS-VERTRAG Guard-Felder (UI-B1, Fix-Zyklus 12.08. — gemessen: die
 # Streu-Feldliste in guards_lesen liess `messung` FALLEN, die Last-Messung
 # wurde deshalb NIE angezeigt). DIE eine Quelle fuer die Struktur eines
@@ -3369,6 +3531,12 @@ GUARD_USER_FELDER = ("enabled", "quelle", "url", "ende_ohne_gesicht_s",
                      # Zentral-Umbau auch aus dem Event-Weg gespeist).
                      "katalog_e_min",    # Katalog-Latte Empfinden
                      "katalog_t_min",    # Katalog-Latte Erkennbarkeit
+                     # POSE-LATTE je Kamera (03.09.): Kopf-Score-Sieb. Seit
+                     # Stufe 2 siebt der Wert im WORKER (Stimm-Sieb URT_POSE,
+                     # Ring-/Anzeige-Einlass) und seit dem Abend-Angleich auch
+                     # LIVE je Namens-Stimme (_namens_stimmen, 1:1-Regel);
+                     # unkalibriert gilt der Werks-Boden core.guete.POSE_BODEN.
+                     "pose_min",
                      "erkannt_n",        # N bestaetigte Bilder ...
                      "erkannt_t_s",      # ... in T s = erkannt (0 = ganzer Auftritt)
                      "erkannt_fenster_s",  # W0: Urteils-Fenster (0 = sofort)
@@ -3380,7 +3548,16 @@ GUARD_USER_FELDER = ("enabled", "quelle", "url", "ende_ohne_gesicht_s",
                      "bewegung_gate",       # bewegungsgesteuertes Abtasten an/aus
                      "bewegung_schwelle",   # Grauwert-Delta (Frigate threshold)
                      "bewegung_flaeche",    # Konturflaeche (Frigate contour_area)
-                     "ruhe_takt_s")         # Kontrollblick-Abstand bei Ruhe
+                     "ruhe_takt_s",         # Kontrollblick-Abstand bei Ruhe
+                     # .407 (User-Spezifikation): laeuft der Waechter DIESER
+                     # Kamera wirklich, soll der Worker ihre Frigate-Events
+                     # nicht noch einmal analysieren — dieselbe Person zweimal
+                     # zu rechnen kostet nur Last. Der Schalter ist eine
+                     # ABSICHT, kein Zustand: die Wirkung haengt zusaetzlich
+                     # daran, dass Live eingeschaltet ist UND der Watcher
+                     # dieser Kamera laeuft (verifyd.process prueft beides).
+                     # Faellt der Waechter aus, wird wieder normal analysiert.
+                     "worker_aus")
 # .197: "schnell_urteil" ist KEIN Guard-Feld mehr — die Namens-Stufe laeuft
 # fuer jeden eingeschalteten Waechter (User: "Enable heisst alles laeuft";
 # der Haken stammte aus der Zeit, als das Urteil extra Rechenzeit kostete).
@@ -3459,7 +3636,10 @@ def guards_lesen(cfg, log=print):
     # Mensch im Bild" -> verworfen, kein Alarm). Wer trotzdem Phantome sieht,
     # zieht die Schwelle FUER DIESE KAMERA auf der Kalibrier-Seite hoch —
     # deshalb ist der Wert pro Kamera einstellbar und nicht mehr global fest.
-    d = {"hoehe": WACH_HOEHE, "det_basis": DET_BASIS, "min_score": DET_MIN_LIVE,
+    # hoehe-Default None = NATIV seit 03.09. (User: "immer das groesst-
+    # moegliche") — wach_skala liefert dann keine Skalierung; eine bewusst
+    # gesetzte Kamera-/Default-Hoehe (360/720/1080) wirkt unveraendert.
+    d = {"hoehe": None, "det_basis": DET_BASIS, "min_score": DET_MIN_LIVE,
          "pose_gate": True, "pose_kopf": POSE_KOPF, "burst_anzahl": BURST_ANZAHL,
          "burst_fenster_s": BURST_FENSTER, "rate": PRUEF_RATE}
     roh_defaults = live.get("defaults") or {}
@@ -3547,6 +3727,16 @@ def guards_lesen(cfg, log=print):
                                        f"live.guards.{name}.katalog_e_min"),
             "katalog_t_min": _zahl_opt(g.get("katalog_t_min"), 0.0, 1.0, log,
                                        f"live.guards.{name}.katalog_t_min"),
+            # POSE-LATTE je Kamera (03.09., Stufe 1 = speichern + anzeigen).
+            # Gleiche None-Politik wie die vier Latten darueber: None heisst
+            # "nicht gesetzt", es gibt hier keinen zweiten Zahlen-Default.
+            # EHRLICHE GRENZE: dieser Wert SIEBT NOCH NICHTS. Weder der
+            # Worker-Zulauf noch der Live-Weg fragen ihn; er wird auf der
+            # Kalibrierseite eingestellt, gespeichert und dort gegen die
+            # gemessenen p-Werte gezeigt. Stufe 2 (wirken lassen) folgt nach
+            # User-Entscheid — wer sie baut, traegt die Leser hier nach.
+            "pose_min": _zahl_opt(g.get("pose_min"), POSE_MIN_MIN, POSE_MIN_MAX,
+                                  log, f"live.guards.{name}.pose_min"),
             "erkannt_n": _klemmen(g.get("erkannt_n"), NAME_STIMMEN,
                                   ERKANNT_N_MIN, ERKANNT_N_MAX, log, name,
                                   "erkannt_n"),
@@ -3595,6 +3785,12 @@ def guards_lesen(cfg, log=print):
             "ruhe_takt_s": _zahl_opt(g.get("ruhe_takt_s"), RUHE_TAKT_MIN,
                                      RUHE_TAKT_MAX, log,
                                      f"live.guards.{name}.ruhe_takt_s", ganz=True),
+            # .407: Vorgabe AUS. Der Schalter nimmt dem Worker Arbeit weg —
+            # so etwas wird nie stillschweigend fuer jemanden entschieden
+            # (Schalter-Prinzip, wie bei frigate_events). Wer ihn setzt, sagt
+            # bewusst: fuer diese Kamera reicht mir der Live-Waechter.
+            "worker_aus": _bool_lesen(g.get("worker_aus"), False, log,
+                                      f"live.guards.{name}.worker_aus"),
         }
         # Quittungs-Bloecke (GUARD_QUITTUNG_FELDER) unveraendert durchreichen —
         # UI-B1: `messung` fehlte hier und die Last-Messung war unsichtbar.
@@ -3621,21 +3817,11 @@ def guards_lesen(cfg, log=print):
 
 def _atomar_schreiben(pfad, daten):
     """Status-Datei atomar (tmp + fsync + os.replace) — der _store_schreiben-
-    Griff, hier ohne verifyd-Import nachgezogen (Injektionsreinheit)."""
-    os.makedirs(os.path.dirname(pfad), exist_ok=True)
-    tmp = f"{pfad}.tmp-{os.getpid()}"
-    try:
-        with open(tmp, "w") as f:
-            json.dump(daten, f, ensure_ascii=False, indent=1)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, pfad)
-    except Exception:
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
-        raise
+    Griff, hier ohne verifyd-Import nachgezogen (Injektionsreinheit).
+    .411: ueber core.atomar (mkstemp im Zielordner) — der alte tmp-Name
+    `<pfad>.tmp-<pid>` kollidierte zwischen zwei Threads desselben Prozesses
+    (Tester-Log 02.09.: Status-Runde FileNotFoundError beim replace)."""
+    _atomar.json_schreiben(pfad, daten)
 
 
 class Kachel:
@@ -3698,7 +3884,8 @@ class Kachel:
         self.stoer_unterdrueckt = 0              # seither zurueckgehaltene Ereignisse
         self.stoer_letzter_text = None           # juengstes zurueckgehaltenes Ereignis
         # Auftritt (User-Zeit a, Anker LETZTER Fund — neu gebaut, Bauplan §4a)
-        self.auftritt = None                     # {"seit_mono","letzter_fund_mono","funde","trigger"}
+        self.auftritt = None                     # {"seit_mono","letzter_fund_mono","funde","trigger",
+        #                                          "start_ts","letzter_fund_ts" (Wanduhr, .408 Anwesenheit)}
         self.auftritte = 0
         # Live-Umbau 31.08.: bester Crop DIESES Auftritts fuer den Kalibrier-
         # Vorrat (geschrieben wird EINMAL, am Auftritts-Ende — Schreiben kostet
@@ -3735,13 +3922,22 @@ class Melder:
         self.log = log
         self.pub = pub                            # paho-Client des Startwegs (oder None)
 
-    def push(self, kamera, text, bild=None):
+    def push(self, kamera, text, bild=None, titel_schluessel=None):
         from core import melden
         _sprache.aktivieren()                     # Eintrittspunkt (c)
-        return melden.push(self.cfg,
-                           _sprache.t("meldung.wache.titel_person",
-                                      wache=WATCHER_TITEL, kamera=kamera),
-                           text, attachment=bild, herkunft=HERKUNFT)
+        # .412: die Namens-Meldung (Stufe 2, Stil 'worte') bringt ihren
+        # eigenen Titel-Schluessel mit ("…: erkannt"); ohne bleibt es der
+        # Trigger-Titel "…: Person entdeckt".
+        # Beide Titel als sichtbare t()-Literale (Sprach-Deckungs-Scan des Gates
+        # liest nur die Form t("…")); ein fremder Schluessel faellt auf den
+        # Trigger-Titel zurueck — nie ein dritter Titel.
+        if titel_schluessel == TITEL_ERKANNT:
+            titel = _sprache.t("meldung.wache.titel_erkannt",
+                               wache=WATCHER_TITEL, kamera=kamera)
+        else:
+            titel = _sprache.t("meldung.wache.titel_person",
+                               wache=WATCHER_TITEL, kamera=kamera)
+        return melden.push(self.cfg, titel, text, attachment=bild, herkunft=HERKUNFT)
 
     def telegram(self, kamera, video, text, bild=None):
         from core import melden
@@ -4032,6 +4228,10 @@ class Engine:
         self.defaults, self.guards = guards_lesen(cfg, log)
         self.kacheln = {}
         self.verweigert = {}          # name -> grund (Slot-/Riegel-Verweigerung)
+        # .411 (T0c): Auftritte, in denen die Marge die Namens-Meldung
+        # gesperrt hat — je Auftritt EINMAL gezaehlt, im Live-Status neben
+        # den Anwesenheits-Zaehlern ablesbar (nie stiller Verlust).
+        self.marge_gesperrt = 0
         self.stop_ev = threading.Event()
         self.threads = []
         self.engine_fehler = ""
@@ -4605,8 +4805,8 @@ class Engine:
                 k.steckbrief = steck
                 k.hw = steck.get("hw")
                 from face_audit import Embedder
-                k.netz = Embedder.ar_det_size(steck.get("skala_b") or 1280,
-                                              steck.get("skala_h") or WACH_HOEHE,
+                k.netz = Embedder.ar_det_size(steck.get("skala_b") or steck.get("breite") or 1280,
+                                              steck.get("skala_h") or steck.get("hoehe") or WACH_HOEHE,
                                               basis=self.defaults["det_basis"])
                 k.verbunden_mono = self.jetzt()
                 k.verbunden_bilder = k.bilder    # M-D: Basis der realen Liefer-fps
@@ -4937,8 +5137,8 @@ class Engine:
                               name=f"live-mess-zulieferer-{kamera}", daemon=True)
         try:
             from face_audit import Embedder
-            netz = Embedder.ar_det_size(steck.get("skala_b") or 1280,
-                                        steck.get("skala_h") or WACH_HOEHE,
+            netz = Embedder.ar_det_size(steck.get("skala_b") or steck.get("breite") or 1280,
+                                        steck.get("skala_h") or steck.get("hoehe") or WACH_HOEHE,
                                         basis=self.defaults["det_basis"])
             kind_pid = steck.get("pid")
             self._auftrag_pause_setzen(kamera, "messung")
@@ -5211,10 +5411,17 @@ class Engine:
             # neu gebaut; der Prototyp kannte diese Stelle nicht).
             if k.auftritt is None:
                 k.auftritte += 1
+                # .408: WANDUHR mitschreiben (K2, Muster der Auftrags-Strecke
+                # start_mono UND start_ts): die Anwesenheits-Marke braucht
+                # Ereigniszeit; aus mono liesse sie sich nur ungenau
+                # rekonstruieren (Statustakt + ende_ohne_gesicht_s bis 120 s).
+                _wand = round(self.wanduhr(), 1)
                 k.auftritt = {"seit_mono": mono, "letzter_fund_mono": mono,
-                              "funde": 0, "trigger": 0}
+                              "funde": 0, "trigger": 0,
+                              "start_ts": _wand, "letzter_fund_ts": _wand}
                 self._klog(k, f"Auftritt #{k.auftritte} beginnt")
             k.auftritt["letzter_fund_mono"] = mono
+            k.auftritt["letzter_fund_ts"] = round(self.wanduhr(), 1)
             k.auftritt["funde"] += len(echte)
             ereignisse = k.burst.fund_alle(mono, [
                 (bx, (frame, g, float(g.det_score))) for bx, g in je_box.items()])
@@ -5249,8 +5456,12 @@ class Engine:
         anzeigt, die die Engine rechnet (K3: eine Quelle)."""
         n = guard.get("erkannt_n")
         t = guard.get("erkannt_t_s")
+        # t: 0 ist ein GESETZTER Wert ("ganzer Auftritt") und faellt NICHT auf
+        # den Werkswert — seit der Werkswert 10 s ist (03.09.), waere ein
+        # 'if t' hier ein stiller Umschwenk fuer jede bewusst-0-Kamera
+        # (Gate-Fixfall .411 'gewachsener Abstand' fing genau das).
         return (int(n) if n else NAME_STIMMEN,
-                float(t) if t else float(ERKANNT_T_S))
+                float(t) if t is not None else float(ERKANNT_T_S))
 
     @staticmethod
     def urteils_fenster(guard):
@@ -5269,7 +5480,10 @@ class Engine:
         if not fenster_s:
             return int(zaehler[0])
         stempel = zaehler[3]
-        while stempel and mono - stempel[0] > fenster_s:
+        # Stempel sind seit 03.09. (mono, kosinus)-Tupel (Anker der 1:1-Regel);
+        # nackte mono-Floats aelterer Zaehler verfallen weiter korrekt.
+        while stempel and mono - (stempel[0][0] if isinstance(stempel[0], tuple)
+                                  else stempel[0]) > fenster_s:
             stempel.popleft()
         return len(stempel)
 
@@ -5296,6 +5510,17 @@ class Engine:
                 continue
             p, s = anlernen.nn(self.refs, v)
             if p is not None and s >= self.win_thresh:
+                # 1:1-ANGLEICHUNG AN DEN WORKER (User 03.09. abends: "beide
+                # muessen voellig identisch sein" — nur das Zeitfenster bleibt
+                # live-eigen). Sieb-Reihenfolge nach Kosten: Kante (gratis)
+                # vor Guete (~17 ms) vor Pose (teuerste Messung).
+                _bx = getattr(g, "bbox", None)
+                _kante = float(self.cfg.get("urteil_kante") or 0)
+                if (_kante > 0 and _bx is not None
+                        and min(float(_bx[2]) - float(_bx[0]),
+                                float(_bx[3]) - float(_bx[1])) < _kante):
+                    k.stimm_siebe = getattr(k, "stimm_siebe", 0) + 1
+                    continue
                 # URTEILS-VORFILTER (User-Entscheid 01.09., "es sollte doch
                 # immer durch die Kalibrierung vorgefiltert werden"): JEDE
                 # Stimme erst durch die Erkennen-Latten der Kamera —
@@ -5312,6 +5537,26 @@ class Engine:
                 if not _gm.stimme_ok(_le, _lt, e_g, t_g):
                     k.stimm_siebe = getattr(k, "stimm_siebe", 0) + 1
                     continue
+                # POSE-STIMM-SIEB (1:1 zum Worker-URT_POSE, User 03.09.):
+                # Kopf-Score der Stimme gegen den Kamera-Regler pose_min,
+                # unkalibriert der Werks-Boden. Messfehler/fehlendes Modell
+                # passieren fail-open (wie im Worker: ungemessen != gesiebt);
+                # gemessen wird nur je NN-Treffer, nie je Frame.
+                _pmin = k.cfg.get("pose_min")
+                _pmin = float(_pmin) if _pmin is not None else _POSE_BODEN
+                if _pmin > 0:
+                    try:
+                        _pw = pose_wache()
+                        if _pw is not None and _bx is not None:
+                            _h2, _b2 = frame.shape[:2]
+                            _pts, _psc = _pw.skelett(
+                                frame, bbox=person_region(_bx, _b2, _h2))
+                            from pose_wache import KOPF_IDX as _KI
+                            if float(max(_psc[j] for j in _KI)) < _pmin:
+                                k.stimm_siebe = getattr(k, "stimm_siebe", 0) + 1
+                                continue
+                    except Exception:                      # noqa: BLE001
+                        pass
                 if self.cfg.get("debug"):
                     self._stimm_debug_bild(k, frame, g, p, float(s), e_g, t_g)
                 if p not in treffer or float(s) > treffer[p][0]:
@@ -5332,7 +5577,10 @@ class Engine:
                 # bleiben sie ungenutzt liegen und kosten nichts.
                 zaehler = st.setdefault(p, [0, 0.0, None, collections.deque()])
                 zaehler[0] += 1
-                zaehler[3].append(mono)
+                # Stempel tragen seit 03.09. (mono, kosinus) — der Anker der
+                # 1:1-Regel braucht die beste Stimme IM Zaehlfenster, nicht
+                # nur die beste des Auftritts.
+                zaehler[3].append((mono, float(s)))
                 if s >= zaehler[1]:
                     zaehler[1] = s
                     zaehler[2] = box          # Box des besten Fundes (Beweisbild)
@@ -5388,14 +5636,66 @@ class Engine:
                 return
             if self.defaults.get("pose_gate") and not a.get("mensch_bestaetigt"):
                 return
-            feuern = self._namens_faellige(a, k.cfg, mono)
-        self._namens_feuer_liste(k, feuern, frame, mono)
+            feuern = self._namens_faellige(a, k.cfg, mono,
+                                           marge=self.cfg.get("urteil_marge"),
+                                           anker=self.cfg.get("urteil_anker"))
+            # .411 (T0c): hat die Marge gesperrt, wird das EINMAL je
+            # Auftritt gemeldet — unter dem Lock nur gemerkt, geloggt unten.
+            sperre = self._marge_sperre_holen(a)
+            # .408: Marken-Auftrag noch UNTER dem Lock lesen (start_ts +
+            # Marge-Urteil ueber die Kandidaten) — geschrieben wird spaeter
+            # im Job-Thread, nie hier im Bild-Lese-Thread (M3).
+            anw = self._anw_auftrag(a, k.cfg) if feuern else None
+        self._marge_sperre_melden(k, sperre)
+        self._namens_feuer_liste(k, feuern, frame, mono, anw=anw)
 
     @classmethod
-    def _namens_faellige(cls, a, guard_cfg, mono, final=False):
+    def _marge_kandidaten(cls, a, guard_cfg):
+        """Die Kandidaten der Marge-Regel EINES Auftritts -> [(cos, person)],
+        bester zuerst: alle Personen, die im Auftritt je die Erkannt-Latte
+        (N Stimmen der je-Kamera-Regel) erreicht haben, mit ihrem besten
+        Kosinus. EINE Kandidatenmenge fuer beide Live-Anwendungen der Regel
+        (Anwesenheits-Marke .408, Namens-Meldung .411/T0c) — die Regel selbst
+        steht in core/anwesenheit.marge_sperrt, der Wert in cfg['urteil_marge']."""
+        st = a.get("stimmen") or {}
+        n_noetig, _t = cls.erkannt_regel(guard_cfg)
+        return sorted(((float(z[1]), p) for p, z in st.items()
+                       if int(z[0]) >= n_noetig), reverse=True)
+
+    @staticmethod
+    def _marge_sperre_holen(a):
+        """Unter k.lock: die Sperre des Auftritts EINMAL abholen -> dict oder
+        None (jeder weitere Aufruf liefert None, bis der Auftritt endet)."""
+        if a is None or not a.get("marge_sperre") or a.get("marge_gemeldet"):
+            return None
+        a["marge_gemeldet"] = True
+        return dict(a["marge_sperre"])
+
+    def _marge_sperre_melden(self, k, sperre):
+        """Ausserhalb des Locks: EINE Log-Zeile je Auftritt + Zaehler."""
+        if not sperre:
+            return
+        self.marge_gesperrt += 1
+        self._klog(k, f"Marge sperrt: {sperre['a']} {sperre['ca']:.2f} gegen "
+                      f"{sperre['b']} {sperre['cb']:.2f} (< {sperre['marge']:.2f})"
+                      " — keine Namens-Meldung, Auftritt unsicher")
+
+    @classmethod
+    def _namens_faellige(cls, a, guard_cfg, mono, final=False, marge=None,
+                         anker=None):
         """W0-Entscheidungskern (lock-frei — der Aufrufer haelt k.lock, und
         genau deshalb ist die Logik hier pur und im Gate direkt pruefbar):
         -> Liste (person, n, cos, box, bild_kand|None), bester zuerst.
+
+        MARGE (.411, T0c, User 02.09. "im Live fehlte das ja noch"): dieselbe
+        Zweitbesten-Regel wie verdict_v2 im Worker — stehen MEHRERE Kandidaten
+        des Auftritts ueber der Erkannt-Latte und liegt der Abstand ihrer
+        besten Kosinus unter `marge` (cfg['urteil_marge'], 0 = aus), feuert
+        NIEMAND: der Auftritt bleibt unsicher, niemand kommt in `genannt`
+        (waechst der Abstand spaeter, faellt die Entscheidung dann). Die
+        Sperre wird im Auftritt vermerkt (marge_sperre), der Aufrufer loggt
+        sie einmal. Kandidatenmenge = _marge_kandidaten (dieselbe wie bei der
+        Anwesenheits-Marke), Regel = core/anwesenheit.marge_sperrt.
 
         Erkannt-Regel JE KAMERA (31.08.): N Bestaetigungen binnen T s. W0
         (01.09.): steht ein Urteils-Fenster (> 0), wird ab der ERSTEN Stimme
@@ -5419,8 +5719,49 @@ class Engine:
         for p, zaehler in st.items():
             n_jetzt = cls.stimmen_zaehlen(zaehler, mono, fenster)
             if n_jetzt >= n_noetig and p not in genannt:
+                # ANKER (1:1-Regel, User 03.09.): mindestens EINE Stimme im
+                # Zaehlfenster muss urteil_anker erreichen (Fenster 0 = der
+                # ganze Auftritt -> bester Kosinus). Zwei 0,41er-Stimmen
+                # benennen nicht mehr — wie im Worker seit dem Blickfenster.
+                if anker and float(anker) > 0:
+                    # Bester Kosinus IM Zaehlfenster (Stempel sind (mono, kos)-
+                    # Tupel); Rueckfall = beste Stimme des Auftritts — kein
+                    # Zahlen-Literal hier (Marge-Literal-Wache, EINE Quelle cfg).
+                    _fmax = (max((float(x[1]) for x in zaehler[3]
+                                  if isinstance(x, tuple)),
+                                 default=float(zaehler[1]))
+                             if fenster else float(zaehler[1]))
+                    if _fmax < float(anker):
+                        continue
                 kandidaten.append((n_jetzt, float(zaehler[1]), p, zaehler[2]))
         kandidaten.sort(reverse=True)
+        if kandidaten:
+            mk = cls._marge_kandidaten(a, guard_cfg)
+            # MARGE-VERSCHAERFUNG LIVE (User-Go 03.09., bewusst nur der
+            # EINDEUTIGE Teil): FUEHRT der staerkste NICHT-faellige Kandidat
+            # (Stimmen vorhanden, aber unter der Erkannt-Latte) mit seinem
+            # Kosinus vor dem Besten, feuert niemand — ein Unbestaetigter,
+            # der besser matcht als der Benannte, macht den Namen
+            # unglaubwuerdig (Gruppen-Clip-Klasse (Testbett 08:15)). Liegt er nur KNAPP darunter,
+            # gilt live weiter der .411-Vertrag "Single ueber der Latte
+            # feuert" (Gate-Fixfall): ohne Fundstellen ist ein knapper
+            # Unter-Latte-Zweiter nicht von einem zweiten Menschen mit zu
+            # wenig Stimmen unterscheidbar — der Worker entscheidet das seit
+            # 03.09. ueber marge_urteil (Detektions-/Zeit-Fundstellen), Live
+            # bekommt dieselbe Faehigkeit mit dem Track-Umbau (stand.md).
+            _mk_p = {p for _c, p in mk}
+            _rest = max(((float(z[1]), p) for p, z in st.items()
+                         if p not in _mk_p), default=None)
+            if _rest and mk and _rest[0] >= mk[0][0]:
+                a["marge_sperre"] = {"a": mk[0][1], "ca": mk[0][0],
+                                     "b": _rest[1], "cb": _rest[0],
+                                     "marge": float(marge or 0)}
+                return []
+            if _anw.marge_sperrt([c for c, _p in mk], marge):
+                a["marge_sperre"] = {"a": mk[0][1], "ca": mk[0][0],
+                                     "b": mk[1][1], "cb": mk[1][0],
+                                     "marge": float(marge or 0)}
+                return []
         feuern = []
         bk = a.get("bild_kand") or {}
         for n_jetzt, cos, p, box in kandidaten:
@@ -5428,13 +5769,20 @@ class Engine:
             feuern.append((p, n_jetzt, cos, box, bk.get(p)))
         return feuern
 
-    def _namens_feuer_liste(self, k, feuern, frame, mono):
+    def _namens_feuer_liste(self, k, feuern, frame, mono, anw=None):
         """Faellige Meldungen absetzen (ausserhalb k.lock). Das Beweisbild
         kommt bevorzugt aus dem W0-Bildkandidaten der Person (Vollbild der
         Bestmarke, bei kalibrierter Kamera nach Regler-Rang gewaehlt) —
         Rueckfall ist das aktuelle Frame (Verhalten bis .395). Am
         Auftritts-Ende kann frame None sein: dann meldet die Person mit dem
-        Kandidaten-Bild oder notfalls ohne Bild, nie gar nicht."""
+        Kandidaten-Bild oder notfalls ohne Bild, nie gar nicht.
+
+        anw (.408): der Marken-Auftrag des Auftritts aus _anw_auftrag (unter
+        dem Lock gelesen) — die SOFORT-Marke beim ersten Feuern je Person
+        (Konzept §3 Quelle B), damit der laufende Tag live rot wird. None
+        heisst: nichts markieren (Marge sperrt, oder Aufruf vom Auftritts-
+        Ende, wo die Spannen-Marke den Start-Slot mit abdeckt). Geschrieben
+        wird im Job-Thread (M3: nie im Bild-Lese-Thread)."""
         if not feuern:
             return
         for p, n, cos, box, kand in feuern:
@@ -5444,6 +5792,11 @@ class Engine:
             if b_frame is None:
                 b_frame, b_box = frame, box
             self._namens_meldung(k, p, n, cos, b_frame, box=b_box)
+        if anw:
+            _personen = [p for p, _n, _c, _b, _k in feuern]
+            _von, _bis = anw["von"], anw["bis"]
+            self._thread_starten(f"live-anw-{k.name}",
+                                 lambda: self._anw_schreiben(k, _personen, _von, _bis))
         if self.urteils_fenster(k.cfg):
             spanne = None
             with k.lock:
@@ -5458,6 +5811,36 @@ class Engine:
                                    for p, n, cos, _bx, _kd in feuern)
                        + (f" — Spanne {spanne:.1f} s" if spanne is not None
                           else " — Spanne: Auftritts-Ende"))
+
+    def _anw_auftrag(self, a, guard_cfg):
+        """.408 Anwesenheits-Marke: der Marken-Auftrag EINES Auftritts, unter
+        k.lock gelesen -> {"von", "bis"} oder None.
+
+        MARGE GLEICHZIEHEN (K4, User-Entscheid §9.2, gilt ohne Antwort):
+        dieselbe Regel wie verdict_v2 im Worker, angewandt auf die Kandidaten
+        DIESES Auftritts — alle Personen, die im Auftritt je die Erkannt-Latte
+        (N Stimmen der je-Kamera-Regel) erreicht haben. Stehen mehrere ueber
+        der Latte und liegt der Abstand ihrer besten Kosinus unter der Marge,
+        gibt es KEINE Live-Marke: auf Live-only-Kameras (.407-Schalter) gibt
+        es keine zweite Quelle, die eine falsche Zeile korrigiert. Die Regel
+        lebt in core/anwesenheit.marge_sperrt, der Wert kommt aus
+        cfg['urteil_marge'] — EINE Quelle, kein zweites Literal. Die
+        Kandidatenmenge kommt seit .411 aus _marge_kandidaten (dieselbe wie
+        bei der Namens-Meldung, T0c)."""
+        kandidaten = [c for c, _p in self._marge_kandidaten(a, guard_cfg)]
+        if _anw.marge_sperrt(kandidaten, self.cfg.get("urteil_marge")):
+            return None
+        von = a.get("start_ts") or self.wanduhr()
+        return {"von": von, "bis": a.get("letzter_fund_ts") or von}
+
+    def _anw_schreiben(self, k, personen, von, bis):
+        """.408: die Marken eines Auftritts schreiben — AUSSERHALB des
+        Bild-Lese-Threads (Job-Thread bei der Sofort-Marke, Status-Thread bei
+        der Spannen-Marke). Ein Fehlschlag wird gezaehlt (Modul-Zaehler, im
+        Live-Status ablesbar) und gedrosselt geloggt, nie verschluckt."""
+        for p in personen:
+            _anw.markieren(self.cfg, p, von, bis, k.name, "live",
+                           log=lambda z: self._klog(k, z))
 
     def _namens_meldung(self, k, person, stimmen, cos, frame, box=None):
         """Die Namens-Meldung der zweiten Stufe: eigene Nachricht NEBEN der
@@ -5507,28 +5890,27 @@ class Engine:
         # alten Verhalten.
         if not self.melder and k.cfg["kanaele"]:
             return
-        # .249 (Kosinus-raus): Worte aus der einen Quelle; Rohzahl nur im
-        # Stil 'worte_zahlen' (alert_stil, Notifications-Option).
+        # .412 (User 02.09.): Stil 'worte' = Titel "…: erkannt" + NUR der
+        # Name; Stil 'worte_zahlen' = .249-Satz mit Wortstufe/Stimmen + Rohzahl
+        # (meldetext_name, im Gate je Sprache geprueft). Der Titel-Schluessel
+        # wandert ueber _kanal_senden an den Pushover-Weg; Telegram-Caption
+        # traegt denselben Text, MQTT-Payload unten unveraendert.
         from core import vertrauen as _vt
-        text = _sprache.t("meldung.wache.name_satz", name=person,
-                          wort=_vt.wort_sprachig(cos, self.win_thresh),
-                          n=stimmen)
-        if str(self.cfg.get("alert_stil") or "worte") == "worte_zahlen":
-            # §8.8: Format-Spezifika (:.2f) NIE in den Textwert — hier
-            # vorformatieren, der Schluessel kennt nur {cos}.
-            text += " " + _sprache.t("meldung.wache.name_zahl",
-                                     cos=f"{cos:.2f}")
+        _titel_key, text = meldetext_name(self.cfg, person, cos, stimmen,
+                                          self.win_thresh)
         bild = None
         ablage = self._ablage_sichern(k)
         if ablage and frame is not None:   # W0: Ende-Feuern ohne Frame-Rueckfall meldet ohne Bild
             stempel = time.strftime("%Y%m%d_%H%M%S",
                                     time.localtime(self.wanduhr()))
-            sauber = re.sub(r"[^A-Za-z0-9._-]", "_", person)[:40]
             # .313: die Fundstelle sichtbar machen — Rechteck um die Box des
             # besten Fundes (vorher: unmarkiertes Vollbild, bei 20-px-Gesichtern
             # sah der Nutzer einen leeren Garten).
+            # .413: Dateiname aus namensbild_datei — DIESER Name ist das
+            # einzige Merkmal, an dem die Anzeige Stufe 2 von Stufe 1 trennt
+            # (ist_namensmeldung liest denselben Vertrag).
             bild = self._bild_schreiben(
-                k, os.path.join(ablage, f"{stempel}_NAME_{sauber}.jpg"),
+                k, os.path.join(ablage, namensbild_datei(stempel, person)),
                 bild_mit_box(frame, box))
         payload = {"ts": round(self.wanduhr(), 1), "kamera": k.name,
                    "art": "name",
@@ -5564,7 +5946,8 @@ class Engine:
                 if kanal != "mqtt" and not push_offen:
                     continue                  # gedrosselt: nur der Versand
                 try:
-                    if self._kanal_senden(k, kanal, text, bild, None, payload):
+                    if self._kanal_senden(k, kanal, text, bild, None, payload,
+                                          titel_schluessel=_titel_key):
                         self._melde_protokoll(k.name, "alert", kanal,
                                               zusatz=text, person=person,
                                               bild=self._bild_rel(bild))
@@ -5680,11 +6063,11 @@ class Engine:
         _kf = next((nl[0] for _t, _bx, nl in reversed(info["kette"]) if nl and nl[0] is not None), None)
         if _kf is not None:
             self._namens_pending_feuern(k, _kf, mono)
-        u_text, u_person = None, None
+        u_text, u_person, u_urteil = None, None, None
         if self.refs and self.win_thresh is not None:
             try:
-                u_text, u_person, _c = schnell_urteil(self.refs, kandidaten,
-                                                      self.win_thresh)
+                u_text, u_person, _c, u_urteil = schnell_urteil(
+                    self.refs, kandidaten, self.win_thresh)
             except Exception as e:
                 self._klog(k, f"Schnell-Urteil entfaellt: {type(e).__name__}: {e}")
         beste_score = kandidaten[0][0] if kandidaten else 0.0
@@ -5705,23 +6088,14 @@ class Engine:
                           f"{k.melde_bis_mono - mono:.0f} s)")
             return
         k.melde_bis_mono = mono + k.cfg["wieder_scharf_s"]
-        # .251 (Kosinus-raus M6, User-Screenshot 17.08.): Detektions-Score +
-        # Latenz sind Technik-Zahlen — im Worte-Stil raus aus dem Push, im
-        # Stil 'worte_zahlen' bleiben sie dran (Payload traegt sie IMMER).
-        # Sprach-Stufe 4 (Eintrittspunkt (c)): der PUSH-Text ist sprachfaehig;
-        # {n} war schon im Original ein echter Plural (face/faces) -> t_n.
-        # §8.8: Sekunden/Score/Latenz kommen vorformatiert aus dem Code.
+        # .412 (User 02.09.): der Push-Text kommt aus meldetext_trigger —
+        # Stil 'worte' NUR Name oder "nicht erkannt", Stil 'worte_zahlen' die
+        # .249/.251-Detailtexte (Funde/Sekunden/Score/Latenz + Schnell-Urteil).
+        # Sprach-Stufe 4 (Eintrittspunkt (c)): der PUSH-Text ist sprachfaehig.
+        # u_text (englisch) bleibt der MQTT-Payload-Wert unten — byte-gleich.
         _sprache.aktivieren()
-        text = _sprache.t_n("meldung.wache.funde", len(info["kette"]),
-                            sek=f"{info['spanne']:.1f}")
-        if str(self.cfg.get("alert_stil") or "worte") == "worte_zahlen":
-            text += " " + _sprache.t("meldung.wache.funde_zahl",
-                                     score=f"{beste_score:.2f}",
-                                     ms=f"{info['latenz_ms']:.0f}")
-        if u_text:
-            # u_text bleibt ENGLISCH (Schnell-Urteil, s. TEXT_URTEIL_*-
-            # Grenz-Marker: derselbe String ist MQTT-Payload-Wert).
-            text += f" — {u_text}"
+        text = meldetext_trigger(self.cfg, len(info["kette"]), info["spanne"],
+                                 beste_score, info["latenz_ms"], u_text, u_urteil)
         payload = {"ts": round(self.wanduhr(), 1), "kamera": k.name,
                    "score": round(beste_score, 3), "bild_anzahl": len(info["kette"])}
         if u_text:
@@ -6040,12 +6414,19 @@ class Engine:
                                      f"{k.name}: {kanal} failed: {type(e).__name__}: {e}")
         self._thread_starten(f"live-melde-{k.name}", job)
 
-    def _kanal_senden(self, k, kanal, text, bild, vid, payload):
+    def _kanal_senden(self, k, kanal, text, bild, vid, payload,
+                      titel_schluessel=None):
         """EINEN Kanal einer Personen-Meldung senden -> True NUR, wenn der
         Kanal sie ANGENOMMEN hat (Sender-Rueckgabe; False auch bei fehlender
         Konfiguration). Eigener Baustein, damit der Mutations-Selbsttest die
-        ok-Wahrheit fassen kann (Baustein B: kein Zaehlen von Fehlversand)."""
+        ok-Wahrheit fassen kann (Baustein B: kein Zaehlen von Fehlversand).
+        titel_schluessel (.412, Stufe-2-Titel "…: erkannt"): nur gesetzt
+        weitergereicht — Harnisch-Stubs mit der alten push()-Signatur bleiben
+        gueltig; None = Trigger-Titel wie bisher."""
         if kanal == "pushover":
+            if titel_schluessel:
+                return bool(self.melder.push(k.name, text, bild,
+                                             titel_schluessel=titel_schluessel))
             return bool(self.melder.push(k.name, text, bild))
         if kanal == "telegram":
             return bool(self.melder.telegram(k.name, vid, text, bild))
@@ -6167,7 +6548,8 @@ class Engine:
             while k.fps_fenster and mono - k.fps_fenster[0][0] > FPS_FENSTER_S:
                 k.fps_fenster.popleft()
             # Auftritts-Ende (User-Zeit a, Anker letzter Fund).
-            kand, beendet = None, False
+            kand, beendet, sperre = None, False, None
+            anw_personen, anw_spanne = [], None
             with k.lock:
                 a = k.auftritt
                 if a and mono - a["letzter_fund_mono"] > k.cfg["ende_ohne_gesicht_s"]:
@@ -6189,12 +6571,33 @@ class Engine:
                     faellige = []
                     if not self.defaults.get("pose_gate") or a.get("mensch_bestaetigt"):
                         faellige = self._namens_faellige(a, k.cfg, mono,
-                                                         final=True)
+                                                         final=True,
+                                                         marge=self.cfg.get("urteil_marge"),
+                                                         anker=self.cfg.get("urteil_anker"))
+                    # .411 (T0c): Marge-Sperre des Auftritts EINMAL abholen
+                    # (vor k.auftritt = None, sonst ist sie weg); geloggt
+                    # unten ausserhalb des Locks.
+                    sperre = self._marge_sperre_holen(a)
+                    # .408 SPANNEN-Marke (K2/K3): fuer jede im Auftritt
+                    # genannte Person start_ts .. letzter_fund_ts — 40 min
+                    # Live-Anwesenheit faerben 40 min, und nur bis zum
+                    # letzten Fund, nicht bis zum Feuern des Endes. Gelesen
+                    # HIER, vor k.auftritt = None (danach ist der Auftritt
+                    # weg); geschrieben unten nach dem Lock im Status-Thread.
+                    # `genannt` NACH _namens_faellige(final=True) lesen: das
+                    # traegt die letzten Faelligen erst ein.
+                    anw_personen = sorted(a.get("genannt") or ())
+                    anw_spanne = (self._anw_auftrag(a, k.cfg)
+                                  if anw_personen else None)
                     k.auftritt = None
                     kand, k.kalib_kand = k.kalib_kand, None
                     beendet = True
             if beendet:
+                self._marge_sperre_melden(k, sperre)
                 self._namens_feuer_liste(k, faellige, None, mono)
+                if anw_spanne and anw_personen:
+                    self._anw_schreiben(k, anw_personen, anw_spanne["von"],
+                                        anw_spanne["bis"])
                 # NACH dem Lock (die Guete-Messung ~17 ms und der Frigate-Zug
                 # duerfen den Leser-Thread nie warten lassen).
                 self._kalib_ablegen(k, kand, mensch_ok=kand_mensch)
@@ -6356,6 +6759,13 @@ class Engine:
              "kern": self.kern.status(),
              "slots": slots,
              "verweigert": dict(self.verweigert),
+             # .408: Anwesenheits-Marken DIESES Prozesses (marken/luecken/
+             # fehler) — additiv, der Dienst zaehlt seine eigenen im
+             # Systemstatus; ein Fehlschlag wird sichtbar, nie verschluckt.
+             "anwesenheit": _anw.zaehler(),
+             # .411 (T0c): Auftritte, in denen die Marge die Namens-Meldung
+             # gesperrt hat (je Auftritt einmal) — neben den Marken-Zaehlern.
+             "marge_gesperrt": self.marge_gesperrt,
              "kacheln": {}}
         # Laufender Auftrag (Quelltest/Last-Messung): Phase + Restsekunden
         # fuer den UI-Countdown (User-Auflage: der User sieht jederzeit, WAS

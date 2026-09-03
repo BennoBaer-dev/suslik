@@ -1827,7 +1827,11 @@ function _liveFelder() {
           bewegung_gate: (document.getElementById('lv-bewegung') || {}).checked,
           ruhe_takt_s: (document.getElementById('lv-ruhe-takt') || {}).value,
           bewegung_schwelle: (document.getElementById('lv-bewegung-schwelle') || {}).value,
-          bewegung_flaeche: (document.getElementById('lv-bewegung-flaeche') || {}).value};
+          bewegung_flaeche: (document.getElementById('lv-bewegung-flaeche') || {}).value,
+          /* .407: "Live ersetzt die Ereignis-Analyse dieser Kamera".
+             Dieselbe Halte-Regel — fehlt die Checkbox im DOM, geht das Feld
+             nicht mit und der Server behaelt den gespeicherten Wunsch. */
+          worker_aus: (document.getElementById('lv-worker-aus') || {}).checked};
 }
 
 /* Kalibrier-Vorrat EINER Kamera wegwerfen (User-Auftrag 31.08.: nachkalibrieren

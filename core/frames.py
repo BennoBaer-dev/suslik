@@ -390,6 +390,24 @@ def _vod_holen(eid, teil, basis, deckel_s):
     return True
 
 
+def _einspiel_ist(eid):
+    """.416: DIE Praefix-Frage stellt core/einspielen (eine Quelle, kein
+    zweites startswith irgendwo). Der Import ist bewusst LOKAL — die
+    Einspielung zieht core.dateiquelle nach, und die importiert dieses
+    Modul; auf Modulebene waere das ein Zirkel."""
+    from core import einspielen as _e
+    return _e.ist_einspiel(eid)
+
+
+def _einspiel_dd(data_dir):
+    """Wo die Injektor-Vorlagen liegen: explizites data_dir, sonst
+    VERIFY_DATA_DIR. Das ENV ist im Dienst gesetzt (verifyd.py) und wird an
+    JEDES Kind vererbt (Worker, Legacy-Subprozess) — mehr Rangfolge braucht
+    es hier nicht. Ohne beides gibt es keine Vorlage, und der Aufrufer
+    meldet das laut, statt still auf Frigate auszuweichen."""
+    return data_dir or os.environ.get("VERIFY_DATA_DIR") or None
+
+
 def clip_holen(eid, data_dir=None, frigate_url=None, timeout=30,
                quelle=None, alter_min=None,
                erzeugung=None, erzeugung_deckel_s=None, warte=None):
@@ -433,6 +451,31 @@ def clip_holen(eid, data_dir=None, frigate_url=None, timeout=30,
     t0 = time.monotonic()
     geladen = 0
     try:
+        if _einspiel_ist(eid):
+            # .416 HAKEN B der Testbett-Einspielung (User-Go 03.09., Modul
+            # core/einspielen): fuer eine `einspiel-`-ID gibt es drueben
+            # NICHTS zu holen — hier wird deshalb NIE ein Frigate-GET
+            # versucht. Die hinterlegte Vorlage wandert EINMAL in den
+            # normalen Cache-Zielpfad (Hardlink, sonst Kopie, immer ueber
+            # tmp+replace); danach greift die bestehende Cache- und
+            # Pin-Mechanik unveraendert. Fehlt die Vorlage, ist das ein
+            # LAUTER Fehler wie ein fehlgeschlagener Download — der
+            # except-Zweig unten raeumt .part und Pin und wirft weiter.
+            from core import einspielen as _einspiel
+            if os.path.exists(pfad):
+                clip_dbg(f"{eid}: clip cache hit src={q} "
+                         f"bytes={os.path.getsize(pfad)} — injected event, "
+                         "no Frigate request")
+                return pfad
+            _vorlage = _einspiel.clip_pfad(_einspiel_dd(data_dir), eid)
+            if not _vorlage or not os.path.exists(_vorlage):
+                raise FileNotFoundError(
+                    f"injected clip for {eid} not found under the data "
+                    "folder (einspielen/) — nothing to analyse")
+            _einspiel.bereitstellen(_vorlage, pfad)
+            clip_dbg(f"{eid}: injected clip staged src={q} "
+                     f"bytes={os.path.getsize(pfad)} — no Frigate request")
+            return pfad
         if not os.path.exists(pfad):
             clip_dbg(f"{eid}: GET clip.mp4 start src={q} "
                      f"age_min={alter if alter is not None else '?'}"

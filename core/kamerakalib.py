@@ -147,7 +147,10 @@ def anzeige_latte(cfg, kamera, guard=None):
     g = guard if guard is not None else (guards(cfg).get(kamera) or {})
     return {"det": _zahl(g.get("det_min")),
             "e": _zahl(g.get("guete_e_min")),
-            "t": _zahl(g.get("guete_t_min"))}
+            "t": _zahl(g.get("guete_t_min")),
+            # Pose-Sieb (03.09.): gleiche Semantik wie e/t — der GESETZTE
+            # Kamera-Wert oder None (dann wirkt der Werks-Boden).
+            "p": _zahl(g.get("pose_min"))}
 
 
 def global_latte(cfg):
@@ -263,12 +266,12 @@ def uebersicht_daten(cfg, kameras):
             # Daten gerechnet, nicht aus einer Datei-mtime: der Ring wird beim
             # Kappen neu geschrieben, die mtime waere dann eine Luege.
             "vorrat_ts": max((e["ts"] for e in vorrat), default=0.0),
-            "det": anz["det"], "e": anz["e"], "t": anz["t"],
+            "det": anz["det"], "e": anz["e"], "t": anz["t"], "p": anz["p"],
             # "eigene": traegt diese Kamera ueberhaupt einen eigenen Wert?
             # Genau die Frage, die die Kachel beantworten muss — sonst sieht
             # der Nutzer drei Zahlen und weiss nicht, ob sie IHM gehoeren.
             "eigene": any(v is not None for v in
-                          (anz["det"], anz["e"], anz["t"])),
+                          (anz["det"], anz["e"], anz["t"], anz["p"])),
             "kat_e": kat["e"], "kat_t": kat["t"], "kat_quelle": kat["quelle"]})
     return aus
 
