@@ -256,13 +256,32 @@ nav .live .d { width: 7px; height: 7px; border-radius: 50%; background: var(--ok
 .pk-name { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .pk-meta { font-size: 13px; color: var(--dim); margin-top: 2px; }
 .pk-kam { font-size: 12px; color: var(--faint); margin-top: 2px; }
-/* .32x Gruppen-Kachel (User 22.08.: "wenn zwei Personen erkannt worden sind,
-   muss das als Gruppe angezeigt werden"): mehrere kleine Avatare statt einem
-   grossen, damit die Kachel auf einen Blick als Gruppe lesbar ist. */
-.pk-gruppe { border-left-color: var(--border-strong); }
-.pk-av-klein { width: 38px; height: 38px; font-size: 13px; }
-.pk-gruppe .pk-av-klein + .pk-av-klein { margin-left: -10px;
-    box-shadow: 0 0 0 2px var(--surface); }
+/* .412 Today-Umbau (analysen/today_umbau_konzept.md Fassung 2 §3, User-Entscheide
+   02.09.): die Gruppen-Kachel (.32x, "A & B") ist entfallen — die Person ist die
+   Einheit. Alle neuen Klassen tragen das Praefix hk- (ein nacktes .leer o. ae.
+   traefe den Leerzustand). Die Anwesenheits-Miniatur hat ihre EIGENE Geometrie
+   (24 Stundenzellen, flex, 8 px hoch) und nutzt bewusst NICHT --anw-pitch der
+   grossen Leiste (K2): dieselbe Zustandsregel, andere Darstellung. */
+.pk.hk-pk { align-items: flex-start; }
+.pk.hk-pk .pk-txt { flex: 1; }
+.badge.hk-live { background: var(--accent-weak); color: var(--accent); font-weight: 500; }
+.hk-anw { display: flex; gap: 1px; margin: 6px 0 2px; height: 8px; }
+.hk-anw .hk-anw-z { flex: 1; min-width: 0; border-radius: 1px; background: var(--surface-2); }
+.hk-anw .hk-anw-weg { background: var(--ok); opacity: .55; }
+.hk-anw .hk-anw-da { background: var(--crit); }
+.hk-anw .hk-anw-n { opacity: .35; }
+.hk-anw .hk-anw-da.hk-anw-n { opacity: .8; }
+.hk-anw-t { font-size: 11px; color: var(--faint); margin-top: 2px; }
+.hk-mehr { margin: -12px 0 24px; }
+.hk-mehr > summary { cursor: pointer; color: var(--accent); font-size: 13px; list-style: none;
+                     margin: 0 4px 12px; }
+.hk-mehr > summary::-webkit-details-marker { display: none; }
+.hk-mehr > summary::before { content: "\25B8  "; }
+.hk-mehr[open] > summary::before { content: "\25BE  "; }
+.hk-kams { margin: 0; padding: 4px 16px 8px; }
+.hk-kams > summary { margin: 0 0 4px; }
+.hk-kams .camrow { padding-left: 0; padding-right: 0; }
+.hk-plus { font-size: 12px; color: var(--dim); white-space: nowrap; }
 
 /* Nicht zugeordnete Gesichter INNERHALB eines erkannten Durchgangs: Fussnote, keine Warnung —
    das sind dieselben Leute, nur schlecht getroffen. Nur ein Durchgang ganz ohne Bestaetigung
@@ -984,6 +1003,15 @@ body:not(.easy) .nur-easy { display: none; }
   border: 1px solid var(--border); border-radius: 3px;
   background: var(--surface-2); overflow: hidden; }
 .sst-stand { margin-top: 4px; }
+/* .410 Live-Schalter im Kopf + Zusatzzeilen der Kacheln: Unterschrift unter
+   der Zahl (sagt, WAS die Zahl ist) und Hinweiszeile unter einer Detailzeile
+   (der Datei-Cache-Satz muss auch auf dem Handy ohne Tooltip lesbar sein). */
+.sst-kopfzeile { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.sst-live { padding: 2px 11px; border: 1px solid var(--accent); border-radius: 999px;
+  color: var(--accent); font-size: 12.5px; white-space: nowrap; text-decoration: none; }
+.sst-live:hover, .sst-live.an { background: var(--accent); color: #fff; }
+.sst-cap { font-size: 11.5px; color: var(--faint); margin: -3px 0 6px; }
+.sst-zl3 { font-size: 11px; color: var(--faint); line-height: 1.35; padding: 0 0 4px; }
 /* (.lf-minis, die Reihe kleiner Klick-Felder in Kachel 1 der Lern-Karte, ist
    am 31.08. mit ihrem einzigen Eintrag "Abgleich Helligkeit" ausgebaut — die
    Regeln sind mitgegangen, statt als tote Optik stehen zu bleiben.) */
@@ -1141,3 +1169,48 @@ body:not(.easy) .nur-easy { display: none; }
 /* Fortschritts-/Ergebniszeile der Materialsuche (leer, bis etwas laeuft) */
 .kal-fuell:empty{display:none}
 .kal-fuell{margin-top:6px}
+
+/* ---- .409 Anwesenheitsseite (/anwesenheit; Konzept analysen/anwesenheit_konzept.md §1/§4,
+   User-Entscheid Variante A: rot = da, gruen = nicht da, LEER = keine Aussage). Farben NUR
+   ueber die Token --crit/--ok (M9: keine sechste Farbe); die Aussage traegt zusaetzlich die
+   Form — rot gefuellt und hoeher, gruen gefuellt und gedaempft, leer nur ein Rahmen — plus
+   title/aria-label je Zelle. Der Knopf oben ist die Bauform des Kalibrier-Knopfs. Alle
+   Zell-Klassen tragen das anw-Praefix: ein nacktes .leer traefe den Leerzustand (oben). ---- */
+.anwk{margin-left:6px}
+.anwk.an{background:var(--accent);color:#fff}
+.anw-filter .uk-f.aus{opacity:.45;cursor:default}
+.anw-sep{margin-left:2px}
+.anw-fenster{font-size:12px;margin:-4px 0 8px}
+/* Die Leiste scrollt in ihrem eigenen Container (M5), die Seite selbst nie; der Name klebt
+   links. width:max-content, damit der Container die volle Zeilenbreite kennt. */
+.anw-wrap{overflow-x:auto;margin:10px 0 6px;padding-bottom:4px}
+.anw-kopf,.anw-r{display:flex;align-items:center;margin:2px 0;width:max-content}
+.anw-nm{flex:none;width:120px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  padding-right:8px;font-size:13px;position:sticky;left:0;background:var(--bg);z-index:1;line-height:20px}
+.anw-l{display:flex;flex:none;align-items:center}
+/* Pitch je Zelle: Tag 10 px + 1 px Rand = 11 px, Nacht 6 + 1 = 7 px. Der Stundenkopf rechnet
+   mit DENSELBEN Zahlen (44 = 4 x 11; Nachtlabel = --n x 7) — die Pixel stehen nur hier. */
+.anw-z{display:block;flex:none;width:10px;height:16px;margin-right:1px;border-radius:1px;box-sizing:border-box;
+  border:1px solid var(--border);background:transparent}
+.anw-z.anw-n{width:6px;height:12px;opacity:.75}
+.anw-z.anw-weg{background:var(--ok);border-color:var(--ok);opacity:.55}
+.anw-z.anw-weg.anw-n{opacity:.4}
+.anw-z.anw-da{background:var(--crit);border-color:var(--crit);height:20px;opacity:1}
+.anw-z.anw-da.anw-n{height:16px}
+.anw-z.anw-zukunft{border-style:dotted;opacity:.5}
+.anw-z.anw-jetzt{outline:2px solid var(--accent);outline-offset:0;position:relative;z-index:1}
+.anw-datum{white-space:nowrap}
+a.anw-z:hover{outline:2px solid var(--accent);outline-offset:1px}
+.anw-h{display:inline-block;flex:none;width:44px;font-size:10px;color:var(--faint);font-family:var(--mono);line-height:14px}
+.anw-hn{display:inline-block;flex:none;width:calc(var(--n) * 7px);overflow:hidden;font-size:10px;color:var(--faint);
+  white-space:nowrap;text-overflow:clip;line-height:14px}
+.anw-legende{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--dim);margin:6px 0 4px}
+.anw-legende>span{display:inline-flex;align-items:center;gap:5px}
+.anw-legende .anw-z{display:inline-block;height:14px}
+.anw-legende .anw-z.anw-da{height:14px}
+.anw-zaehler{font-size:12px}
+.anw-nie{font-size:13px;color:var(--dim);margin:10px 0 4px}
+.anw-alle summary{cursor:pointer;font-size:13px;color:var(--accent)}
+@media (max-width:600px){
+  .anw-nm{width:88px;max-width:88px;font-size:12px}
+}

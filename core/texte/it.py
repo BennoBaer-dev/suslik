@@ -59,7 +59,7 @@ T = {
         "readme.generell.titel": 'Generale',
     "readme.generell.text": "Il mio riconoscimento dei passaggi dipende dal rilevamento persone di Frigate. Appena Frigate segnala una persona, recupero l'intero evento persona. Un evento del genere dura a volte pochi secondi, a volte diversi minuti. Lo esamino dall'inizio alla fine, per trovare tutte le persone che contiene.\n\nChe il riconoscimento facciale di Frigate sia attivo non ha importanza. Serve solo se vuoi sincronizzare i volti con Frigate.\n\nIl controllo non usa mai lo stream di rilevamento, ma la registrazione, cioè il miglior stream che la telecamera consegna a Frigate.\n\nUn controllo parte in due modi. Dall'evento persona di Frigate, cioè la via del passaggio. Oppure dal guardiano live: prende lo stream in corso, direttamente dalla telecamera o tramite il proxy di Frigate, ci cerca volti e parte da lì.\n\nUna persona viene riconosciuta in tre modi. Dal volto. Dalla persona intera, solo dall'immagine, senza volto. Da un modello di visione, e questa via è ancora in beta.\n\nQui uso telecamere 4K con il frame rate più alto possibile, almeno 15 fotogrammi al secondo. Il bitrate altrettanto alto. Un bitrate basso lascia sfocati i volti in movimento.",
     "readme.aktuell.titel": 'A cosa sto lavorando',
-    "readme.aktuell.text": 'Un pulsante di calibrazione. I feed delle telecamere sono molto diversi, e con essi la nitidezza e il riconoscimento. La calibrazione deve compensarlo.\n\nIl riconoscimento tramite modello di visione: identificare una persona quando il volto non si vede. È in beta e deve migliorare.\n\nRilevamento presenza: registrare se una persona nota è presente o no. Altri sistemi possono agganciarsi, per esempio un allarme o una rilevazione delle presenze.',
+    "readme.aktuell.text": 'Riconoscimento quando in un evento ci sono più persone. Il sistema deve capire dove si trova ogni persona nell’immagine ed eseguire il riconoscimento facciale separatamente per l’area di ciascuna — così due persone vicine non si fondono più in un unico verdetto.',
     "readme.lernen.titel": 'Come gli insegno volti nuovi?',
     "readme.lernen.text": "Al mio sistema insegno i volti così:\n\nApprendimento dei volti. Su un sistema nuovo è la prima cosa. A seconda dell'hardware gli ultimi 500 eventi, con margine 1000. Il programma prende gli eventi persona, li raggruppa e mette insieme le immagini. I conosciuti li assegna da solo. Gli sconosciuti li raccoglie come gruppo, e al gruppo do un nome. Questo dà la base. Vale solo per i volti rilevati in modo pulito.\n\nOggi. Con la base pronta, il nuovo si aggiunge da qui: cliccare sull'evento o sulla persona, acquisire il volto.\n\nConosciuti. Scegliere la persona, poi trova volti corrispondenti.\n\nApprendimento della persona. Esiste anche questo, per le persone senza un volto leggibile. Ne scriverò più avanti.\n\nQualità. Questa scheda la uso regolarmente. Mostra quanto sono buone davvero le immagini di una persona, quali sono troppo deboli e quali si sovrappongono a un'altra persona. Quelle troppo simili le tolgo.\n\nLa scheda Sconosciuti è rimasta da una versione precedente. Io non la uso.",
     "readme.persoenlich.titel": 'Personale',
@@ -200,6 +200,12 @@ T = {
     "benachrichtigungen.pushover.label_token": "Token:",
     "benachrichtigungen.pushover.label_user": "Chiave utente:",
     "benachrichtigungen.pushover.knopf_test": "Prova Pushover",
+    "benachrichtigungen.pushover.zustand_an": "Attivo: token e chiave utente impostati.",
+    "benachrichtigungen.pushover.zustand_aus":
+        "Spento: manca il token o la chiave utente, su questo canale non viene inviato nulla.",
+    "benachrichtigungen.pushover.zustand_pause":
+        "In pausa: Pushover ha rifiutato {n} messaggi di seguito. Salva le impostazioni o "
+        "invia un test riuscito per riprendere.",
     "benachrichtigungen.telegram.label_modus": "Modalità:",
     "benachrichtigungen.telegram.hinweis_modus":
         "aus=disattivato · ha=tramite Home Assistant · direkt=bot "
@@ -1001,6 +1007,16 @@ T = {
         "pagina di calibrazione, dove le immagini si vedono.",
     "live.knopf_kalibrieren": "Calibra",
     "live.knopf_vorrat_leeren": "Cancella campioni",
+    "live.workeraus.schalter":
+        "Questo guardiano sostituisce l'analisi degli eventi di questa telecamera",
+    "live.workeraus.erklaerung":
+        "Spento per impostazione predefinita. Acceso, gli eventi Frigate di "
+        "questa telecamera non vengono più analizzati una seconda volta: il "
+        "guardiano guarda comunque lo stesso flusso e il lavoro si farebbe due "
+        "volte. Vale solo finché il guardiano è acceso E davvero in funzione; "
+        "se il motore si ferma o il guardiano cade, gli eventi tornano a "
+        "essere analizzati normalmente. Un nome che Frigate stessa afferma "
+        "viene sempre verificato, qualunque cosa dica questa impostazione.",
     "live.frigate.schalter": "Crea un evento Frigate quando qualcuno viene riconosciuto",
     "live.frigate.erklaerung":
         "Spento per impostazione predefinita. Acceso, questo guardiano scrive "
@@ -1038,10 +1054,23 @@ T = {
         "Quanto bene si distingue la persona, volti mezzi coperti compresi. "
         "Come il cursore sopra: sceglie l\u2019immagine e riempie questa "
         "pagina, non esclude mai nessuno dal riconoscimento.",
+    "livekalib.regler_p": "Postura della testa",
+    "livekalib.regler_p_prosa":
+        "Quanto chiaramente si distingue una testa nel punto della trovata. "
+        "È lo stesso valore con cui il controllo della postura tiene "
+        "bidoni, siepi e frontali di automobili fuori dagli avvisi. I campioni "
+        "raccolti prima di questa misura non portano un valore e passano "
+        "sempre. Quello che imposti qui viene salvato per questa telecamera e "
+        "agisce su questa pagina; nel servizio non esclude ancora nulla.",
     "livekalib.ohne_guete":
         "I due modelli di qualità mancano in questa build, quindi i campioni "
         "non portano cifre di qualità e i due cursori in basso qui non hanno "
         "effetto. Il punteggio di rilevamento funziona.",
+    "livekalib.ohne_pose":
+        "Nessuno di questi campioni porta ancora un valore di postura della "
+        "testa (materiale vecchio, o immagini arrivate per un’altra via), "
+        "quindi qui questo cursore non cambia nulla. I campioni nuovi "
+        "dall’analisi degli eventi portano il valore con sé.",
     "livekalib.standard": "Valori predefiniti",
     "livekalib.fueller.laeuft": "ricerca materiale in corso",
     "livekalib.fueller.bilanz": "ultima ricerca materiale",
@@ -1448,7 +1477,7 @@ T = {
     "kalib.kachel.bilanz_keine": "La ricerca materiale ha controllato {ev} evento/i: nessun volto trovato su questa telecamera — una vista panoramica cosi non puo alimentare la calibrazione.",
     "kalib.kachel.bilanz_klein": "La ricerca materiale ha controllato {ev} evento/i: volti trovati, ma tutti troppo piccoli o deboli per la scorta (sotto l'asticella di raccolta).",
     "kalib.kachel.bilanz_zulauf": "La ricerca materiale ha controllato {ev} evento/i e trovato materiale utile, ma nulla ha raggiunto la qualita della scorta — riavvia la ricerca o segnalalo.",
-    "kalib.kachel.werte": "rilevamento {det} · impressione {e} · riconoscibilità {tw}",
+    "kalib.kachel.werte": "rilevamento {det} · impressione {e} · riconoscibilità {tw} · posa {p}",
     "kalib.kachel.katalog": "soglia catalogo {e} / {tw}",
     "kalib.quelle.kamera": "propria",
     "kalib.quelle.global": "riserva globale",
@@ -3763,6 +3792,38 @@ vista del giorno integri le persone conosciute.</p>""",
     "meldung.wache.titel_person": "{wache} {kamera}: persona rilevata",
     "meldung.wache.titel_stoerung": "{wache} {kamera}: anomalia",
     "meldung.wache.caption": "{wache} {kamera}: {text}",
+    # .412: Kongruenz mit "persona" aus dem Trigger-Titel (feminin).
+    "meldung.wache.titel_erkannt": "{wache} {kamera}: persona riconosciuta",
+    "meldung.wache.nicht_erkannt": "non riconosciuta",
+    # ---- Today .412 (T1) ----
+    "heute.block.personen": "Persone",
+    "heute.block.personen_cnt.eins": "{n} riconosciuta · ordinate per ultimo avvistamento",
+    "heute.block.personen_cnt.viele": "{n} riconosciute · ordinate per ultimo avvistamento",
+    "heute.person.bestaetigt": "prima–ultima conferma {von}–{bis}",
+    "heute.person.bestaetigt_einmal": "confermata {zeit}",
+    "heute.person.seit": "confermata dalle {zeit}",
+    "heute.person.passes.eins": "{n} passaggio",
+    "heute.person.passes.viele": "{n} passaggi",
+    "heute.person.auftritte.eins": "{n} comparsa",
+    "heute.person.auftritte.viele": "{n} comparse",
+    "heute.person.zuletzt": "vista l'ultima volta {kamera} {zeit}",
+    "heute.person.live": "in diretta",
+    "heute.person.live_title": "nominata solo da un osservatore in diretta (avviso con nome dopo più riscontri) — nessun passaggio confermato",
+    "heute.person.live_link": "vai all'avviso in diretta {zeit} · {kamera}",
+    "heute.person.mehr": "tutte le {n} persone ({m} in più)",
+    "heute.anw.dauer": "presente circa {h} h",
+    "heute.anw.title": "presenza per ora, tutte le telecamere — rosso: presenza confermata, verde: sistema attivo, nessuno visto",
+    "heute.anw.title_gesamt": "presenza per ora — tutte le telecamere, senza il filtro della vista per area",
+    "heute.pass.mehr_kameras": "tutte le {n} telecamere ({m} in più)",
+    "heute.pass.live": "in diretta",
+    "heute.pass.live_title": "un osservatore in diretta ha segnalato un nome durante questo passaggio",
+    "heute.rand.personen": "Persone",
+    "heute.rand.personen_title": "persone con almeno una conferma in questo giorno — giudizi del worker e nomi dell'osservatore in diretta",
+    "heute.rand.passes_title": "passaggi: eventi raggruppati per tempo e luogo; i passaggi di solo movimento non contano",
+    "heute.rand.events_title": "eventi analizzati in questo giorno, telecamere della vista attuale",
+    "heute.rand.unmatched": "non assegnati nei passaggi",
+    "heute.rand.unmatched_title": "eventi con un volto senza corrispondenza a una persona nota, dentro passaggi con riconoscimento — di solito le stesse persone",
+    "heute.rand.unbek_title": "identità sconosciute del pool con supporto in questo giorno; senza dati del pool: passaggi senza nessun riconoscimento",
     "meldung.wache.name_satz":
         "riconosciuto (in diretta, preliminare): {name} ({wort}, {n} "
         "rilevamenti coerenti)",
@@ -3854,6 +3915,13 @@ vista del giorno integri le persone conosciute.</p>""",
         "da questa parte la sua quota non è nominabile. Ciò che questo "
         "hardware non riesce a misurare lo dice, invece di mostrare uno "
         "zero.",
+    "systemstat.sub_live":
+        "Carico complessivo di questa macchina. Live: una nuova misura ogni "
+        "{takt} secondi; lo storico conserva una misura ogni {ring} secondi "
+        "per {stunden} ore. Qui non c’è una ripartizione per processo: "
+        "Frigate gira in un container proprio e da questa parte la sua "
+        "quota non è nominabile. Ciò che questo hardware non riesce a "
+        "misurare lo dice, invece di mostrare uno zero.",
     "systemstat.leer.titel": "Ancora nessuna misura.",
     "systemstat.leer.hinweis":
         "La prima riga viene scritta circa {takt} secondi dopo l\u2019avvio "
@@ -3875,7 +3943,14 @@ vista del giorno integri le persone conosciute.</p>""",
     "systemstat.ram.grafik": "Grafica (RAM condivisa)",
     "systemstat.ram.prozesse": "Processi",
     "systemstat.ram.limit": "Limite",
-    "systemstat.ram.cache": "Cache recuperabile",
+    "systemstat.ram.dateicache": "Cache dei file",
+    "systemstat.ram.dateicache_hinweis":
+        "trattenuta dal kernel per accedere più in fretta ai clip e rilasciata "
+        "appena serve memoria — non è una perdita né un errore",
+    "systemstat.ram.belegt": "processi + grafica, senza cache dei file",
+    "systemstat.ram.anteil": "Del limite, cache inclusa",
+    "systemstat.ram.anteil_hinweis":
+        "la vista di docker stats: processi + grafica + cache dei file rispetto al limite",
     "systemstat.platte.frei": "Libero",
     "systemstat.platte.gesamt": "Totale",
     "systemstat.platte.cache": "Cache dei clip / tetto",
@@ -3898,6 +3973,13 @@ vista del giorno integri le persone conosciute.</p>""",
     "systemstat.kachel.queue": "Coda eventi",
     "systemstat.queue.aeltester": "piu vecchio in attesa",
     "systemstat.queue.spur": "corsia di invio (aperti · inviati · errori)",
+    "systemstat.queue.poll": "modalità polling",
+    "systemstat.queue.poll_hinweis":
+        "gli eventi arrivano direttamente dalla scansione, qui non attende nulla — vedi Arretrato",
+    "systemstat.kachel.frigate": "Tempo di risposta di Frigate",
+    "systemstat.frigate.mittel": "media ultimo minuto",
+    "systemstat.frigate.max": "il più lento nell'ultimo minuto",
+    "systemstat.frigate.anfragen": "richieste ultimo minuto",
     "systemstat.kachel.rueckstau": "Arretrato",
     "systemstat.rueckstau.laeuft": "Sta recuperando",
     "systemstat.rueckstau.fenster": "Finestra retrospettiva",
@@ -3906,6 +3988,14 @@ vista del giorno integri le persone conosciute.</p>""",
     "systemstat.live.supervisor": "Supervisore",
     "systemstat.stand":
         "Misurato alle {zeit}. La pagina si ricarica da sola.",
+    "systemstat.stand_live": "Misurato alle {zeit}. Live: una nuova misura ogni {takt} secondi.",
+    "systemstat.live_knopf": "Live",
+    "systemstat.live_knopf.an": "Live · {rest} min",
+    "systemstat.live_knopf.tip_aus":
+        "Ricarica ogni {takt} secondi per al massimo {minuten} minuti, poi torna "
+        "al ritmo normale. Anche lasciare la pagina lo termina.",
+    "systemstat.live_knopf.tip_an":
+        "Ancora circa {rest} minuti in live. Un clic lo ferma subito.",
     "systemstat.grund.erster_lauf":
         "in attesa della seconda misura \u2014 questo numero è la "
         "differenza fra due misure",
@@ -3926,4 +4016,49 @@ vista del giorno integri le persone conosciute.</p>""",
         "quindi non c\u2019è una percentuale da mostrare",
     "systemstat.grund.kein_dienst":
         "questo numero lo conosce solo il servizio in esecuzione",
+    "systemstat.grund.keine_anfragen":
+        "dall'avvio di questo servizio non è ancora partita nessuna "
+        "richiesta verso Frigate",
+    # --- routes/anwesenheit.py (.409, Anwesenheitsseite) ---
+    "anwesenheit.titel": "Presenza",
+    "anwesenheit.knopf": "Presenza",
+    "anwesenheit.knopf_tip": "Presenza: chi era confermato sulla proprietà, quarto d'ora per quarto d'ora",
+    "anwesenheit.kopf_satz": "Una riga per persona, la giornata in celle da un quarto d'ora. Rosso = presenza confermata in quel quarto d'ora (analisi degli eventi o sorvegliante live, mostrata una sola volta). Con un riconoscimento prudente solo poche celle diventano rosse: è normale, non un errore.",
+    "anwesenheit.seit": "Registrazione dal {datum}.",
+    "anwesenheit.fenster_auto": "Finestra diurna {von}–{bis}, calcolata automaticamente dagli avvistamenti degli ultimi {tage} giorni; le ore esterne sono una cella per ora.",
+    "anwesenheit.fenster_werk": "Finestra diurna {von}–{bis} (valore di fabbrica finché non ci sono almeno {n} avvistamenti); le ore esterne sono una cella per ora.",
+    "anwesenheit.fenster_fest": "Finestra diurna {von}–{bis}, impostata fissa nelle Impostazioni; le ore esterne sono una cella per ora.",
+    "anwesenheit.sicht_label": "Vista",
+    "anwesenheit.sicht_alle": "Tutte",
+    "anwesenheit.sicht_kamera": "Telecamera",
+    "anwesenheit.sicht_area": "Area",
+    "anwesenheit.sicht_kamera_leer": "Nessuna telecamera è ancora stata analizzata",
+    "anwesenheit.sicht_area_leer": "Nessuna area definita: creale in «Aree»",
+    "anwesenheit.nacht": "notte",
+    "anwesenheit.legende_da": "presenza confermata",
+    "anwesenheit.legende_weg": "sistema in funzione, nessuno confermato",
+    "anwesenheit.legende_leer": "sistema fermo o senza osservazione",
+    "anwesenheit.legende_jetzt": "adesso",
+    "anwesenheit.zaehler": "{zeilen} marcature lette, {kaputt} righe danneggiate saltate.",
+    "anwesenheit.gekappt": "Il file del giorno supera il limite di lettura; è stata letta solo la parte finale.",
+    "anwesenheit.nie": "Non visti in questa vista: {namen}",
+    "anwesenheit.alle_leisten": "mostra tutte le persone come righe",
+    "anwesenheit.leer_personen": "Ancora nessuna persona conosciuta",
+    "anwesenheit.leer_personen_hinweis": "Le righe compaiono appena vengono apprese delle persone (in «Conosciuti»).",
+    "anwesenheit.keine_aufzeichnung": "Nessuna registrazione per questo giorno.",
+    "anwesenheit.tip_da": "{zeit} · {kameras} · {quelle}",
+    "anwesenheit.tip_weg": "{zeit} · sistema in funzione, nessuno confermato",
+    "anwesenheit.tip_leer": "{zeit} · nessuna informazione (sistema fermo o senza osservazione)",
+    "anwesenheit.tip_zukunft": "{zeit} · non ancora",
+    "anwesenheit.quelle_worker": "analisi degli eventi",
+    "anwesenheit.quelle_live": "sorvegliante live",
+    "anwesenheit.quelle_beide": "sorvegliante live e analisi degli eventi",
+    "anwesenheit.nav.heute": "Oggi",
+    "anwesenheit.nav.gestern": "ieri",
+    "anwesenheit.nav.attr_vortag": "giorno precedente",
+    "anwesenheit.nav.attr_folgetag": "giorno successivo",
+    "anwesenheit.nav.attr_kein_morgen": "nessun giorno futuro",
+    "anwesenheit.nav.attr_kein_frueher": "nessuna registrazione precedente",
+    "anwesenheit.nav.zurueck_heute": "torna a oggi",
+    "anwesenheit.zeile_niemand": "nessuno",
 }

@@ -46,11 +46,13 @@ Grenze, deklariert: `data` muss bytes sein (oder None). Ein Datei-artiges
 `data` ueberlebte die EINE Wiederholung nach 401 nicht, weil der Strom dann
 schon gelesen waere. Alle Aufrufer dieses Projekts reichen bytes.
 """
+import collections
 import http.cookies
 import json
 import os
 import ssl
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -93,6 +95,111 @@ def zuruecksetzen():
     """Token vergessen (Tests, Config-Wechsel). Kein Netzverkehr."""
     with _sperre:
         _token["wert"], _token["basis"] = "", ""
+
+
+# ------------------------------------------------- Antwortzeit (Zeitschiene)
+# ANLASS (Feldbefund 02.09., User-Wunsch "eine Zeitschiene, wie lange wir auf
+# Frigate warten, dass man sieht, wenn das zu lange dauert"): die Event-API
+# eines Testers antwortete 35 Minuten lang mit rund 120 s je Anfrage. Fuer den
+# Nutzer war das UNSICHTBAR — der Dienst sah beschaeftigt aus, und nirgends
+# stand, worauf er wartet. Deshalb misst der EINE Griff jetzt mit.
+#
+# KEINE eigene Schwelle, kein Alarm: die Zahl wird nur sichtbar gemacht (der
+# Balkenverlauf zeigt Ausreisser von allein). Zwei Stellen mit eigenen
+# Schwellen driften auseinander — dieselbe Regel wie auf der Systemseite.
+#
+# WAS gemessen wird: die Zeit, bis Frigate ANTWORTET (Verbindungsaufbau +
+# erste Kopfzeilen), nicht die Uebertragung des Rumpfes — urlopen kehrt mit
+# den Koepfen zurueck, den Rumpf liest der Aufrufer selbst. Genau das ist die
+# Wartezeit, um die es geht: ein langsamer Clip-DOWNLOAD ist etwas anderes als
+# ein haengender Server. Fehlversuche zaehlen MIT — ein Zug, der nach 20 s im
+# Timeout endet, hat 20 s gewartet, und das ist die interessanteste Messung
+# ueberhaupt.
+#
+# GRENZE, deklariert: der Ring ist PROZESSWEIT. Der Dienst sieht damit seine
+# eigenen Zuege (Sweep, Event-Poll, Konfig, Snapshots) — NICHT die des
+# Worker-Subprozesses und nicht die ffmpeg-Zuege des VOD-Weges (ffmpeg_kopf
+# reicht nur Kopfzeilen weiter, den HTTP-Zug macht ffmpeg selbst). Der
+# Feldfall lag im Dienst-Prozess, dort schaut die Seite hin.
+ANTWORT_RING_MAX = 600        # ~10 min Historie bei einem Zug je Sekunde
+ANTWORT_FENSTER_S = 60.0      # Rueckfall; der Dienst reicht core.systemstat.TAKT_S
+_zeit_sperre = threading.Lock()
+_zeiten = collections.deque(maxlen=ANTWORT_RING_MAX)   # (ts, dauer_s, klasse)
+
+
+def zeiten_zuruecksetzen():
+    """Ring leeren (Tests). Kein Netzverkehr."""
+    with _zeit_sperre:
+        _zeiten.clear()
+
+
+def pfadklasse(url):
+    """Grobe Herkunft eines Zuges -> ein Stueck aus FRIGATE_PFADE oder
+    "andere".
+
+    Der Wortschatz kommt aus der ZENTRALEN Menge, nie aus einer zweiten
+    Pfad-Liste (K3-Regel). Das LAENGSTE passende Stueck gewinnt, damit
+    /api/events/<id>/clip.mp4 als "/api/events" zaehlt und nicht am kuerzeren
+    "/clip.mp4" haengenbleibt.
+
+    Gespeichert wird ausschliesslich diese Klasse, nie die URL: die traegt
+    Host, Port und Event-IDs, und der Ring geht ueber die Systemseite in eine
+    Datei, die 48 h liegen bleibt."""
+    u = str(url or "")
+    treffer = [p for p in FRIGATE_PFADE if p in u]
+    return max(treffer, key=len) if treffer else "andere"
+
+
+def _zeit_merken(url, dauer_s):
+    """Eine Messung in den Ring. Wirft nie: die Messung ist Beiwerk, der
+    HTTP-Zug ist die Aufgabe (dieselbe K-1-Haltung wie bei der
+    Beweisbild-Ablage)."""
+    try:
+        with _zeit_sperre:
+            _zeiten.append((time.time(), float(dauer_s), pfadklasse(url)))
+    except Exception:                                       # noqa: BLE001
+        pass
+
+
+def antwortzeiten(fenster_s=ANTWORT_FENSTER_S):
+    """Die Zeitschiene fuer die Systemseite -> dict.
+
+    n / mittel_s / max_s beziehen sich auf das FENSTER (Vorgabe: der
+    Sammel-Takt der Systemseite, damit "letzte Minute" genau der Balken ist,
+    den die Seite zeichnet). `klassen` schluesselt dasselbe Fenster nach
+    Pfadklasse auf — ein Durchlauf, also billig.
+
+    letzte_s ist die zuletzt gemessene Antwortzeit UEBERHAUPT, mit ihrem
+    Alter daneben: auf einer ruhigen Anlage liegt der letzte Zug oft laenger
+    zurueck als ein Takt, und ein "—" waere dort weniger ehrlich als die
+    letzte bekannte Zahl mit Altersangabe.
+
+    Leerer Ring (dieser Prozess hat noch nie mit Frigate gesprochen) ->
+    grund "keine_anfragen". Keine erfundene Null (Ehrlichkeits-Regel der
+    Systemseite: ein fehlender Wert ist kein Ruhewert)."""
+    jetzt = time.time()
+    with _zeit_sperre:
+        alle = list(_zeiten)
+    fenster_s = float(fenster_s)
+    if not alle:
+        return {"grund": "keine_anfragen", "fenster_s": round(fenster_s, 1)}
+    grenze = jetzt - fenster_s
+    fenster = [(ts, d, k) for ts, d, k in alle if ts >= grenze]
+    dauern = [d for _ts, d, _k in fenster]
+    klassen = {}
+    for _ts, d, k in fenster:
+        e = klassen.setdefault(k, {"n": 0, "max_s": 0.0})
+        e["n"] += 1
+        e["max_s"] = round(max(e["max_s"], d), 2)
+    letzte_ts, letzte_d, _lk = alle[-1]
+    return {"grund": None,
+            "fenster_s": round(fenster_s, 1),
+            "n": len(dauern),
+            "mittel_s": (round(sum(dauern) / len(dauern), 2) if dauern else None),
+            "max_s": (round(max(dauern), 2) if dauern else None),
+            "letzte_s": round(letzte_d, 2),
+            "letzte_alter_s": round(max(0.0, jetzt - letzte_ts), 1),
+            "klassen": klassen}
 
 
 # ------------------------------------------------------------------ Konfig
@@ -166,11 +273,23 @@ def _urlopen(req, timeout):
     'context' in der .288-Stufe); der Fix gehoert hierher, nicht in die Stufe.
     Geprueft: der urlopen-Riegel in tools/koerper_fixpunkt.py war schon robust
     (*a, **kw), und tools/harnisch_r3.py fakt ein injiziertes Modul-Objekt der
-    MELDEwege, nicht diesen Weg — betroffen war nur die eine Gate-Stufe."""
+    MELDEwege, nicht diesen Weg — betroffen war nur die eine Gate-Stufe.
+
+    MESSPUNKT der Antwortzeit (.407): hier, und nur hier. JEDER Zug dieses
+    Moduls geht durch diese Funktion — auch der Login und die eine
+    Wiederholung nach 401, beide echte Zuege, beide einzeln gezaehlt. Der
+    Messcode liegt UM den Ruf herum, nie darin: der Aufruf selbst bleibt
+    Argument fuer Argument derselbe (Regressions-Vertrag oben), und ein
+    Fehlversuch wird mit seiner gewarteten Zeit verbucht, bevor die Ausnahme
+    weiterfliegt (finally)."""
     k = _ssl_kontext()
-    if k is None:
-        return urllib.request.urlopen(req, timeout=timeout)
-    return urllib.request.urlopen(req, timeout=timeout, context=k)
+    _t0 = time.monotonic()
+    try:
+        if k is None:
+            return urllib.request.urlopen(req, timeout=timeout)
+        return urllib.request.urlopen(req, timeout=timeout, context=k)
+    finally:
+        _zeit_merken(getattr(req, "full_url", ""), time.monotonic() - _t0)
 
 
 # ------------------------------------------------------------------ Login

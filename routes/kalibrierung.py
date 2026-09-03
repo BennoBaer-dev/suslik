@@ -97,7 +97,7 @@ def _kachel(k, deckel, bilanz=None):
         stand = (f'<div class="lv-zeile">{t("kalib.kachel.leer")}</div>'
                  f'<div class="dim lv-zeile">{html.escape(hinweis)}</div>')
     werte = (f'<div class="dim lv-zeile">'
-             f'{t("kalib.kachel.werte", det=_zahl(k["det"], 2), e=_zahl(k["e"]), tw=_zahl(k["t"]))}'
+             f'{t("kalib.kachel.werte", det=_zahl(k["det"], 2), e=_zahl(k["e"]), tw=_zahl(k["t"]), p=_zahl(k.get("p"), 2))}'
              f'</div>'
              f'<div class="dim lv-zeile">'
              f'{t("kalib.kachel.katalog", e=_zahl(k["kat_e"]), tw=_zahl(k["kat_t"]))} '

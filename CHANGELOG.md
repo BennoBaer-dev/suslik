@@ -7,6 +7,35 @@ this file — the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git
 history.
 
+## 0.1.0.501 (2026-09-04)
+
+Bundles the internal steps 0.1.0.382 – 0.1.0.500 (the 0.1.0.414/0.1.0.415 builds
+were withdrawn; everything below ships for the first time in this release).
+
+- **Face recognition is greatly improved.** Judgement now works in a sliding
+  view window: a person needs one strong moment (an anchor vote) plus supporting
+  votes inside that window, instead of a fixed three-second burst. Far-away
+  people on wide cameras are recognised where they used to stay unknown, and a
+  single lucky frame can no longer name someone. Two people in the same event
+  are told apart from one ambiguous face — both get named, while a face that
+  merely matches two references almost equally stays honestly unknown. Every
+  vote passes the same four sieves in the live watcher and in the event worker
+  (face size, two picture-quality bars, head pose), the live watcher processes
+  the camera stream at native resolution, and the factory bars were
+  re-calibrated on measured material. On first start the calibration rings,
+  the per-camera sliders and the live judgement rules are reset once to these
+  new factory values, so every installation starts from the same measured
+  ground.
+- **Presence detection.** The Presence page shows each person's day in quarter
+  hours — red was there, green was not, empty means the system was not running.
+  Switch between all cameras, one camera or an area, page back 30 days. Marks
+  come from event analysis and the live watcher alike.
+- **The Today page is rebuilt.** One card per recognised person with a presence
+  mini-bar, no more group tiles, compact pass rows, images load as you scroll.
+  People recognised live appear as normal cards with a "live" badge.
+- Support API: a single event or a time window of a camera can be (re-)analysed
+  on demand (`POST /support/einspielen`), for remote testing after an update.
+
 ## 0.1.0.381 (2026-08-31)
 
 - **The Brightness check is gone from the learning card.** It was a page of its

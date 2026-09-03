@@ -23,6 +23,13 @@ bzw. Callables vom Aufrufer. Es definiert KEINE eigenen Locks und haelt KEINEN
 eigenen Zustand — die Drossel-Zeitstempel (`zustand`: tg_unbekannt, ha_warn)
 und die Transcode-Registry (lock, procs) bleiben Eigentum des Dienstes
 (eine Lock-Quelle, modulplan §9-Regel).
+
+EINE bewusste Ausnahme seit .411 (Tester-Log 02.09.: 3723x "alert REJECTED by
+Pushover" in 10 h): der PUSHOVER-ABLEHNUNGSZAEHLER (`_PO`, eigener Lock) ist
+Prozess-Zustand des KANALS, nicht des Dienstes — er muss jeden push()-Aufrufer
+(Alert, Presence, Stoerung, Personen-Live, Kanal-Test) gleich treffen, ohne
+dass jeder ihn durchreicht. Muster core/anwesenheit._ZAEHLER. Die Live-Engine
+im eigenen Prozess fuehrt ihren eigenen (sie drosselt ohnehin je Kanal).
 """
 import datetime
 import json
@@ -32,6 +39,7 @@ import signal
 import subprocess
 import threading
 import time
+import urllib.error
 import urllib.request
 import uuid
 
@@ -118,7 +126,7 @@ def konfigurierte_kanaele(cfg):
     Pushover nie eingerichtet war: der Waechter triggerte und meldete NIRGENDWO.
     Reihenfolge = KANAELE_ERLAUBT der Live-Engine (pushover, telegram, mqtt)."""
     k = []
-    if (cfg.get("pushover") or {}).get("token"):
+    if pushover_konfiguriert(cfg):          # .411: Token UND User, sonst ist der Kanal AUS
         k.append("pushover")
     if cfg.get("telegram_modus", "aus") != "aus":
         k.append("telegram")
@@ -128,18 +136,99 @@ def konfigurierte_kanaele(cfg):
 
 
 # ------------------------------------------------------------------ Pushover
-def push(cfg, title, message, attachment=None, herkunft=None):
+# .411 PUSHOVER-LEERLAUF (Tester-Log 02.09.: 3723x "alert REJECTED by Pushover
+# (status!=1)" in 10 h — Store mit pushover-Block, aber Pushover nahm nichts an):
+# (a) ein Kanal ohne Token ODER ohne User gilt als AUS — kein Versuch, EINE
+#     Startzeile (Dienst), die Benachrichtigungs-Seite sagt es;
+# (b) lehnt Pushover PUSHOVER_ABLEHNUNGEN_MAX-mal IN FOLGE ab (status != 1 oder
+#     HTTP 4xx), ist der Kanal PAUSIERT: kein Versuch mehr, EINE Log-Zeile, bis
+#     die Notifications-Seite gespeichert wird (notif_speichern) oder ein
+#     Kanal-Test gelingt (notif_test). Netzfehler (Timeout, DNS, 5xx) zaehlen
+#     NICHT — sie sind kein Urteil ueber Token/User.
+# Warum 5: eine einzelne Ablehnung kann ein Pushover-Wackler sein (Rate-Limit,
+# Wartung), fuenf in Folge sind bei einem Kanal, der sonst jede Meldung
+# annimmt, ein Konfigurationsfehler — und fuenf Zeilen im Log reichen, um ihn
+# zu finden, 3723 nicht.
+PUSHOVER_ABLEHNUNGEN_MAX = 5
+_PO_LOCK = threading.Lock()
+_PO = {"ablehnungen": 0, "pausiert": False, "seit": 0.0, "grund": ""}
+
+
+def _stdout_log(zeile):
+    print(zeile, flush=True)
+
+
+def pushover_konfiguriert(cfg):
+    """Token UND User gesetzt? Sonst gilt der Kanal als AUS (.411 a)."""
+    po = cfg.get("pushover") or {}
+    return bool(po.get("token") and po.get("user"))
+
+
+def pushover_zustand(cfg=None):
+    """-> {"konfiguriert": bool|None, "pausiert", "ablehnungen", "seit", "grund"}
+    — fuer Notifications-Seite, /health.system.rueckstau und die Kanal-Tests.
+    konfiguriert nur mit cfg (sonst None)."""
+    with _PO_LOCK:
+        z = dict(_PO)
+    z["konfiguriert"] = pushover_konfiguriert(cfg) if cfg is not None else None
+    return z
+
+
+def pushover_bereit(cfg):
+    """-> (True, "") wenn ein Versand ueberhaupt sinnvoll ist, sonst
+    (False, "not configured" | "paused"). Die Erzeuger (Alert/Presence im
+    Dienst) fragen HIER, bevor sie Text bauen und eine Zeile je Event loggen."""
+    if not pushover_konfiguriert(cfg):
+        return False, "not configured"
+    with _PO_LOCK:
+        if _PO["pausiert"]:
+            return False, "paused"
+    return True, ""
+
+
+def pushover_pause_aufheben(grund):
+    """Zaehler auf 0, Pause weg -> True, wenn der Kanal pausiert WAR
+    (Aufrufer: notif_speichern, gelungener Kanal-Test, erfolgreicher Versand)."""
+    with _PO_LOCK:
+        war = _PO["pausiert"]
+        _PO.update(ablehnungen=0, pausiert=False, seit=0.0, grund="")
+    return war
+
+
+def _pushover_ablehnung(log, grund):
+    """Eine Ablehnung zaehlen; ab PUSHOVER_ABLEHNUNGEN_MAX in Folge pausieren
+    und das EINMAL loggen."""
+    with _PO_LOCK:
+        _PO["ablehnungen"] += 1
+        n = _PO["ablehnungen"]
+        if _PO["pausiert"] or n < PUSHOVER_ABLEHNUNGEN_MAX:
+            return
+        _PO.update(pausiert=True, seit=time.time(), grund=grund)
+    (log or _stdout_log)(
+        f"Pushover rejected {n} times in a row ({grund}) — channel paused until the "
+        f"notification settings are saved again or a channel test succeeds")
+
+
+def push(cfg, title, message, attachment=None, herkunft=None, log=None,
+         pause_ignorieren=False):
     """`herkunft` (.163): woher die Meldung kommt — Werte und Praefixe in
     core.registry.MELDE_HERKUNFT, Vorgabe live (keine Markierung). Alles, was
     NICHT aus dem Live-Betrieb kommt, sagt es im Text; sonst liest sich eine
     Test-Meldung am Handy wie ein Vorfall.
     Ein url/url_title-Link in den Payload (.200) wurde mit .201 wieder
     ENTFERNT (User-Entscheid 14.08.: erdachtes Personas-Beduerfnis, kein realer
-    Nutzerwunsch; suslik ist nicht aus dem Internet erreichbar)."""
+    Nutzerwunsch; suslik ist nicht aus dem Internet erreichbar).
+    .411: `log` fuer die eine Pause-Zeile (sonst stdout); `pause_ignorieren`
+    nur fuer den Kanal-Test (er darf die Pause durchbrechen und hebt sie bei
+    Erfolg auf). Rueckgabe False auch bei AUS/pausiert — ohne Netzversuch."""
     po = cfg.get("pushover") or {}                 # fehlender Block darf keinen KeyError werfen
     token, user = po.get("token"), po.get("user")  # (telegram_video() faengt das laengst ab)
     if not (token and user):
         return False
+    if not pause_ignorieren:
+        with _PO_LOCK:
+            if _PO["pausiert"]:
+                return False
     message = _reg.melde_text(message, herkunft)
     boundary = uuid.uuid4().hex
     parts = []
@@ -152,8 +241,20 @@ def push(cfg, title, message, attachment=None, herkunft=None):
     body = b"".join(parts) + f"--{boundary}--\r\n".encode()
     req = urllib.request.Request("https://api.pushover.net/1/messages.json", data=body,
                                  headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
-    with urllib.request.urlopen(req, timeout=20) as r:
-        return json.load(r).get("status") == 1
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            ok = json.load(r).get("status") == 1
+    except urllib.error.HTTPError as e:
+        # 4xx = Pushover URTEILT (Token/User/Payload falsch) -> zaehlt; 5xx/
+        # Netz = kein Urteil. Der Fehler geht wie bisher an den Aufrufer.
+        if 400 <= int(getattr(e, "code", 0) or 0) < 500:
+            _pushover_ablehnung(log, f"HTTP {e.code}")
+        raise
+    if ok:
+        pushover_pause_aufheben("accepted")
+    else:
+        _pushover_ablehnung(log, "status!=1")
+    return ok
 
 
 def stoerung_melden(cfg, text, herkunft=None, bericht=None):
@@ -669,6 +770,10 @@ def notif_speichern(cfg, d, *, log, whitelist, store_pfad, store_laden,
         f.write(json.dumps({"ts": round(time.time(), 1), "notif": audit}, ensure_ascii=False) + "\n")
         f.flush()
     log("NOTIFICATIONS changed via UI (secrets masked) — restart after the current analysis")
+    # .411: Speichern hebt eine Pushover-Pause auf (der Neustart taete es auch —
+    # hier steht es ausdruecklich, damit die Zusicherung nicht am Neustart haengt).
+    if pushover_pause_aufheben("settings saved"):
+        log("Pushover channel resumed (notification settings saved)")
     neustart("Notifications")
     return True, "gespeichert — Dienst startet gleich neu"
 
@@ -694,9 +799,14 @@ def notif_test(cfg, kanal, d):
             tok, usr = keep(d.get("pushover_token"), a.get("token")), keep(d.get("pushover_user"), a.get("user"))
             if not tok or not usr:
                 return False, "token/user missing"
+            # .411: der Test darf eine Pause durchbrechen; gelingt er, ist der
+            # Kanal wieder frei (push() hebt bei Erfolg auf, hier sichtbar gemacht).
+            war_pausiert = pushover_zustand()["pausiert"]
             ok = push({"pushover": {"token": tok, "user": usr}}, "suslik",
                       _sprache.t("meldung.test.satz"),
-                      herkunft="manuell")
+                      herkunft="manuell", pause_ignorieren=True)
+            if ok and war_pausiert:
+                return True, "Pushover: sent ✓ — channel resumed"
             return (True, "Pushover: sent ✓") if ok else (False, "Pushover rejected it (check token/user)")
         if kanal == "telegram":
             a = cfg.get("telegram") or {}

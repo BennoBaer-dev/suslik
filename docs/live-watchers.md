@@ -38,9 +38,12 @@ frame (the embedding is computed during detection anyway, so this costs
 microseconds). A person collects at most one vote per frame. Once the same
 person is hit in two different frames at or above the recognition threshold,
 and the appearance has passed the pose confirmation of stage 1, the watcher
-sends one extra message for that person:
-`recognized (live, preliminary): <name> (cosine 0.47, 2 consistent hits)` —
-with a proof picture in which the face that carried the vote is framed. It
+sends one extra message for that person: title `<watcher> <camera>: recognized`,
+text just `<name>` (alert style `worte`, the default; the style `worte_zahlen`
+keeps the long form `recognized (live, preliminary): <name> (clear match, 2
+consistent looks) [cosine 0.47]`). Stage 1 in the default style likewise says
+only the quick-check name or `not recognized` under its "person detected" title.
+Both come with a proof picture in which the face that carried the vote is framed. It
 fires once per appearance and per person, so two people walking through
 together produce two name messages. Stage 1 keeps alerting for everyone
 regardless. Proof pictures of stage 1 frame the triggering detection as well.
@@ -164,7 +167,9 @@ under a second from the first face.
 - **At most 5 watchers by default** (`live.max_slots` raises the cap, up to 20), and the RAM floor can refuse one more stream.
 - **Per camera only.** A watcher sees one stream; the cross-camera scenario
   view stays with the normal analysis.
-- **The preliminary name is not a verdict.** It is marked as preliminary and
+- **The preliminary name is not a verdict.** The short default texts no
+  longer say "preliminary", but the MQTT payload still carries
+  `preliminary: true`, Today marks live-only names with "live", and the name is
   never used for learning; the confirmed verdict comes from the normal
   analysis of the full pass.
 - **Watchers pause during a load measurement** (15–30 s, shown live with a
