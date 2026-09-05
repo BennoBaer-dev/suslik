@@ -7,6 +7,58 @@ this file — the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git
 history.
 
+## 0.1.0.506 (2026-09-05)
+
+Bundles the internal steps 0.1.0.502 – 0.1.0.505 (0.1.0.504 went out as a CUDA-only
+test build for one field installation, 0.1.0.505 ran only on the maintainer's
+machines; everything below ships for all variants for the first time in this release).
+
+- Events page: the table no longer pushes the page sideways on tablet-wide screens;
+  wide tables scroll inside their own frame.
+
+- **Parallel analysis on both paths.** The number of analysis slots is a setting
+  (`analyse_plaetze`, default 2; the GPU page proposes a value from the measured
+  memory of your card). Until now only the MQTT path used several slots; the poll
+  path (the factory default, and the only path without a broker) analysed one event
+  after the other. Both paths now feed one event queue, so several events are
+  analysed at the same time on either trigger.
+- **One allocator for all GPU work, fair between classes.** Event analysis, the
+  learning run and the background jobs (collection, wall clock) take their slots
+  from the same allocator. No class may hold every slot while another is waiting
+  (N−1 rule); with a single slot this is the old behaviour: analysis first. The
+  learning run itself now harvests on several slots at once and gives one back as
+  soon as events are waiting.
+- **No more false reclaims.** A slot watchdog only reclaims an analysis that has
+  really stopped sending its pulse (the pulse starts the moment the slot is taken,
+  also while the worker is still busy with the previous job) and grants a grace
+  period before it kills. A dead analysis is re-queued once; the reported cause of
+  death names the shooter.
+- **Honest backlog.** The header shows how many events are waiting and how many are
+  being analysed, live. A full queue refuses new events instead of silently dropping
+  the oldest, the catch-up bookmark is only released once an event has really been
+  analysed (a restart in the middle keeps the rest), and `sweep_limit` /
+  `einspiel_deckel` go up to 5000.
+- **Support API: re-analyse a time window.** `POST /support/einspielen` takes a
+  camera, a time window and a direction (oldest first or newest first, `start` is
+  optional when going backwards), pages through Frigate instead of cutting off at
+  100, reports what was really queued, marks incomplete windows, and refuses
+  unknown fields, nonsense values and oversized bodies (413) instead of guessing.
+- **Faster start on CPU-limited hosts.** The face model initialisation respects the
+  container's CPU quota and allowed cores; the affinity warnings that flooded the
+  logs of some installations are gone, and the cold start got noticeably faster
+  where cores are restricted.
+- **Much faster learning run on NVIDIA systems.** The feature-norm gate of the
+  harvest, which decides which faces are good enough to learn from, used to run on
+  the CPU on every machine and took by far the most time of a harvest. On CUDA it
+  now runs on the graphics card, checked against the CPU before it is used. The
+  device chain now follows the configured backend: on an Intel image with the
+  backend explicitly set to `cpu`, the norm stays on the CPU (it used the NPU
+  before); `SUSLIK_NORM_DEVICE` overrides this per installation.
+  Measured on an RTX 2060: 64.9 s down to 11.8 s per event, with identical results.
+  The OpenVINO/Intel chain is unchanged, ROCm stays on the CPU.
+- GPU page: the slot list shows what each slot is doing (analysis, learning run,
+  background). Systemstatus tile: "Backlog present" instead of "Catching up".
+
 ## 0.1.0.501 (2026-09-04)
 
 Bundles the internal steps 0.1.0.382 – 0.1.0.500 (the 0.1.0.414/0.1.0.415 builds

@@ -154,7 +154,12 @@ def _messung_zeile(messung, guard=None):
 def _zaehler_zeile(live):
     if not live:
         return ""
+    # .502 (User 04.09.): Reihenfolge = Verarbeitungskette. Erst der Auftritt,
+    # dann die darin gefundenen Gesichter, daraus die Trigger, daraus die
+    # Meldungen. Ein Stand ohne die Fund-Zahl liess offen, ob eine Kamera
+    # nichts SIEHT oder nur nichts MELDET.
     teile = [t("live.zaehler.auftritte", n=live.get("auftritte", 0)),
+             t("live.zaehler.funde", n=live.get("funde", 0)),
              t("live.zaehler.trigger", n=live.get("trigger", 0)),
              t("live.zaehler.alerts", n=live.get("gemeldet", 0))]
     lt = live.get("letzter_trigger_ts")

@@ -175,6 +175,11 @@ BLATT = {"/setup": "/kameras", "/aehnliche": "/gesichter", "/event": "/heute", "
          # Activity als aktiv, samt dessen Unterreitern (Today/Events/To label)
          # — eine Zeile, in der kein einziger Reiter aktiv war, und 34 px mehr
          # klebende Kopfleiste ueber den Sprungzielen.
+         # P5 (.503, User 04.09.: "einen GPU-Knopf, rechts neben Praesenz oder
+         # links neben Easy"): eigener Leisten-Knopf, kein Blatt eines Reiters.
+         # None wie /anwesenheit — ohne den Eintrag leuchtete der Knopf nie und
+         # der Rueckfall behauptete Activity als aktiv (Falle unten, 381-382).
+         "/gpu": None,
          "/readme": None}
 
 # .207 (User 16.08.: "wenn der Schalter auf Basis ist, erscheint dieses Bild und
@@ -399,6 +404,15 @@ def layout(titel, aktiv, inhalt, banner=None, refresh=None, banner_aktion=None,
             f'href="/anwesenheit" '
             f'title="{html.escape(t("anwesenheit.knopf_tip"))}">'
             f'{html.escape(t("anwesenheit.knopf"))}</a>')
+    # P5 GPU-Knopf (User 04.09.): dieselbe Bauform wie Kalibrierung und
+    # Anwesenheit, rechts daneben. Er fuehrt auf die einzige Seite, die sagt, was
+    # die Karte traegt — vorher war `analyse_plaetze` ein nackter Config-Wert und
+    # der Nutzer konnte weder sehen, wie viel Speicher er hat, noch was ein
+    # Waechter oder ein Analyse-Platz davon kostet.
+    gpuk = (f'<a class="rmk gpuk{" an" if aktiv == "/gpu" else ""}" '
+            f'href="/gpu" '
+            f'title="{html.escape(t("gpu.knopf_tip"))}">'
+            f'{html.escape(t("gpu.knopf"))}</a>')
     # Und das Aufgehen von selbst: die Seite fragt EINMAL nach, ob die Marke
     # fehlt (also seit dem letzten Dienststart noch niemand geschlossen hat),
     # und holt sich den Inhalt dann nach. Entkoppelt, damit es auf JEDER Seite
@@ -528,7 +542,7 @@ def layout(titel, aktiv, inhalt, banner=None, refresh=None, banner_aktion=None,
             # klebend brauchte die zweite Ebene einen Festwert fuer die Hoehe der ersten, und der
             # wurde falsch, sobald die erste umbrach — s. .kopf in style.css.
             f'<div class="kopf"><nav><div class="inner"><span class="marke">{mark}suslik'
-            f'{f" <small>{html.escape(ver)}</small>" if ver else ""}{upd}</span>{nav}{rmk}{kalk}{anwk}{rechts}</div></nav>'
+            f'{f" <small>{html.escape(ver)}</small>" if ver else ""}{upd}</span>{nav}{rmk}{kalk}{anwk}{gpuk}{rechts}</div></nav>'
             f"{unter}</div>"
             f"<main>{b}{hw}{inhalt}</main>"
             f"<footer>{_fuss()}</footer>{rmjs}</html>")

@@ -778,13 +778,51 @@ def _gesicht_pruefen(pfad):
             import onnxruntime as ort
             ort.set_default_logger_severity(3)
             from insightface.app import FaceAnalysis
-            app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"],
-                               allowed_modules=["detection"])
-            app.prepare(ctx_id=-1, det_size=(320, 320))
+            # .505 (E3c, 05.09.2026, Widerleger W-E3 SCHWER 1): derselbe
+            # Init-Griff wie in face_audit.Embedder — FaceAnalysis UND prepare
+            # in die zentrale Kappungs-Klammer. insightface baut seine
+            # Modell-Sessions ohne SessionOptions, onnxruntime nimmt dann
+            # hardware_concurrency() des WIRTS statt der erlaubten Kerne und
+            # pinnt Thread i an Kern i (pthread_setaffinity-EINVAL je fremdem
+            # Kern). allowed_modules hilft dagegen NICHT: FaceAnalysis ruft
+            # get_model fuer JEDE der fuenf ONNX-Dateien und wirft die nicht
+            # erlaubten Modelle erst NACH dem Session-Bau weg — hier entstehen
+            # also fuenf Pools, von denen vier sofort sterben. Der Ersatz nach
+            # prepare() (unten, _ort_session) bleibt unveraendert; neu ist nur,
+            # dass die zu grossen Pools gar nicht erst gebaut werden.
+            # Import lokal an der Stelle: face_audit importiert sync_refs NICHT
+            # (kein Zirkel, geprueft), und sync_refs holt sich face_audit ohnehin
+            # schon lazy fuer _ort_session ein paar Zeilen weiter unten — ein
+            # Modul-Import auf Dateiebene wuerde dem CLI-Start dieses Werkzeugs
+            # numpy/cv2/insightface aufladen, auch wenn nur exportiert wird.
+            #
+            # EIGENER try (.505 E4, 05.09.2026, Widerleger W-E3c Notiz 3): dieselbe
+            # Regel wie beim Session-Ersatz unten, und aus demselben Grund. Die
+            # Kappung ist KOMFORT (kein zu grosser Thread-Pool im Init), der
+            # Vorpruefer ist FUNKTION (er spart Frigate-Ablehnungen). Lag der
+            # Import im umgebenden try — so kam er aus E3c heraus —, dann schaltete
+            # ein gescheiterter Import (Image-Variante ohne diese Abhaengigkeit,
+            # Zirkel in einer fremden Umgebung) den Vorpruefer GANZ ab
+            # (_VORPRUEFER = "aus") statt ihn ungekappt laufen zu lassen. Genau
+            # diese Regression hatte der Widerleger vom 11.08. schon einmal
+            # geschlossen. Rueckfall ist die leere Klammer.
+            try:
+                from face_audit import _insightface_sessions_gekappt
+            except Exception as _ke:                      # noqa: BLE001
+                import contextlib as _ctx
+                print(f"  (Vorpruefung ungekappt — Kappungs-Klammer nicht "
+                      f"ladbar: {type(_ke).__name__}: {_ke})", file=sys.stderr)
+
+                def _insightface_sessions_gekappt():
+                    return _ctx.nullcontext()
+            with _insightface_sessions_gekappt():
+                app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"],
+                                   allowed_modules=["detection"])
+                app.prepare(ctx_id=-1, det_size=(320, 320))
             # Thread-Kappung (#21) wie Embedder._to_backend auf cpu: die prepare()-Session
             # kaeme sonst mit ungekapptem Default-Pool (hardware_concurrency des Wirts).
             # Ersatz NACH prepare() aus der zentralen Quelle. EIGENER try (Widerleger
-            # 11.08.): die Kappung ist Optimierung — scheitert sie, laeuft der Vorpruefer
+            # 11.08.): der Ersatz ist Optimierung — scheitert er, laeuft der Vorpruefer
             # UNGEKAPPT weiter statt sich ganz abzuschalten (das umgebende except wuerde
             # sonst jede Vorpruefung opfern und unnoetige Frigate-Ablehnungen einkaufen).
             try:

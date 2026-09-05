@@ -680,7 +680,11 @@ def momentaufnahme(cfg, dienst=None):
             snap[name] = fn()
         except Exception as e:                               # noqa: BLE001
             snap[name] = _fehlt("nicht_lesbar", fehler=type(e).__name__)
-    for name in ("worker", "rueckstau", "live", "frigate"):
+    # P2 (04.09.): `worker_plaetze` MUSS hier stehen, sonst sind die Worker der
+    # Analyse-Plaetze 2..N unsichtbar — genau die K3-Falle, vor der der Docstring
+    # oben warnt. Beim Bau von E2 gefuellt, aber nicht eingetragen: /health zeigte
+    # nur Worker 1, ein Dauertod von Worker 2 haette wie "alles gruen" ausgesehen.
+    for name in ("worker", "worker_plaetze", "rueckstau", "live", "frigate"):
         snap[name] = dienst.get(name) or {"grund": "kein_dienst"}
     with _LOCK:
         _STAND["snap"] = snap

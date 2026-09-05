@@ -404,6 +404,11 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 .pcard img { width: 100%; max-height: 210px; object-fit: cover; border-radius: 6px; }
 .pcard .name { font-weight: 600; margin-top: 4px; } .pcard .wann { color: var(--dim); font-size: 12px; }
 table { border-collapse: collapse; width: 100%; }
+/* .506 (Prod-Funktionstest 05.09., S9 Geometrie): die Ereignis-Tabelle lief bei 900 px um 54 px
+   in den Body (GT-Spalte mit den Namensknoepfen bricht nicht um) — die Scroll-Huelle galt nur
+   im Handy-Block (<= 560 px). Breite Inhalte scrollen IMMER in ihrer eigenen Huelle, der Body
+   nie waagerecht (Gate-Regel); die Karten-Darstellung ab 560 px bleibt unveraendert. */
+.tabelle-wrap { overflow-x: auto; }
 td, th { padding: 8px 8px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
 th { color: var(--dim); font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; }
 td img { height: 52px; border-radius: 6px; }
@@ -426,7 +431,6 @@ footer a { color: var(--dim); }
   .kpis { grid-template-columns: repeat(2,1fr); }
 }
 @media (max-width: 560px) {
-  .tabelle-wrap { overflow-x: auto; }
   /* .313 Events-Tabelle am Handy (Tester-Fund 21.08.): statt seitlich zu scrollen
      (Crop + GT-Spalte lagen bei x>660 ausserhalb des Schirms) wird jede Zeile eine
      Karte — gleicher DOM, nur CSS. Der Kopf entfaellt, die Zellen stehen
@@ -1177,6 +1181,7 @@ body:not(.easy) .nur-easy { display: none; }
    title/aria-label je Zelle. Der Knopf oben ist die Bauform des Kalibrier-Knopfs. Alle
    Zell-Klassen tragen das anw-Praefix: ein nacktes .leer traefe den Leerzustand (oben). ---- */
 .anwk{margin-left:6px}
+.gpuk{margin-left:6px}
 .anwk.an{background:var(--accent);color:#fff}
 .anw-filter .uk-f.aus{opacity:.45;cursor:default}
 .anw-sep{margin-left:2px}
@@ -1214,3 +1219,50 @@ a.anw-z:hover{outline:2px solid var(--accent);outline-offset:1px}
 @media (max-width:600px){
   .anw-nm{width:88px;max-width:88px;font-size:12px}
 }
+
+/* ---- P5 (.503): GPU-Seite — zwei Balken (Speicher, Rechenzeit) ---------
+   Zwei Groessen, nicht eine: Speicher verbrauchen Analyse-Plaetze UND
+   Live-Waechter, Rechenzeit praktisch nur die Waechter (Begruendung im Kopf
+   von core/gpubudget.py). Die Abschnitte sind bewusst gleich aufgebaut,
+   damit man beide Balken ohne Umdenken liest. */
+.gpubar{display:flex;height:22px;border-radius:6px;overflow:hidden;
+        background:var(--flaeche,#222);margin:6px 0 4px}
+.gpubar.leer{opacity:.4}
+.gpuseg{display:block;height:100%}
+.gpuseg.w{background:var(--accent,#4a9)}          /* Analyse-Plaetze */
+.gpuseg.g{background:#5b8dd6}                      /* Live-Waechter */
+.gpuseg.gh{background:#5b8dd6;opacity:.45}         /* Waechter-Spitze */
+.gpuseg.d{background:#888}                         /* Dienst */
+.gpuseg.f{background:transparent}                  /* frei */
+.gpuseg.r{background:repeating-linear-gradient(45deg,#a55,#a55 5px,#933 5px,#933 10px)}
+.gpuzeile{font-size:.9em;opacity:.85;margin:2px 0}
+.gpuzeile.klein{font-size:.82em;opacity:.65}
+.gpukarte{font-size:1.05em;margin:.2em 0 .8em}
+.lg{display:inline-block;width:11px;height:11px;border-radius:3px;
+    margin-right:4px;vertical-align:baseline}
+.lg.w{background:var(--accent,#4a9)} .lg.g{background:#5b8dd6}
+.lg.gh{background:#5b8dd6;opacity:.45} .lg.f{background:#555}
+.lg.r{background:repeating-linear-gradient(45deg,#a55,#a55 4px,#933 4px,#933 8px)}
+
+/* P5-Layout (User 04.09.): das Bedienbare oben und ohne Scrollen erreichbar,
+   die Grafiken darunter NEBENEINANDER statt langgezogen untereinander. Unter
+   900 px klappt alles auf eine Spalte — auf dem Handy ist Nebeneinander schlechter
+   als Untereinander. */
+.gpu-oben{display:flex;gap:22px;flex-wrap:wrap;align-items:flex-start;margin:.4em 0 1em}
+.gpu-links{flex:1 1 320px;min-width:280px}
+.gpu-rechts{flex:1 1 320px;min-width:280px}
+.gpu-rechts h3{margin-top:0}
+.gpu-zwei{display:flex;gap:22px;flex-wrap:wrap}
+.gpu-sp{flex:1 1 340px;min-width:300px}
+.gpu-sp h3{margin-top:.2em}
+@media (max-width:900px){.gpu-oben,.gpu-zwei{display:block}
+  .gpu-rechts{margin-top:1em}}
+/* die Verlaufs-Kacheln kompakter als auf der Systemlast-Seite: hier sind sie
+   Beiwerk, nicht Hauptsache */
+.kachel .sst-grid{display:flex;gap:12px;flex-wrap:wrap}
+.kachel .sst-kachel{flex:1 1 190px;min-width:170px}
+
+/* P5: gesperrter Speichern-Knopf (Ueberbuchung) — sichtbar unbedienbar, nicht nur
+   technisch. Ein Knopf, der aussieht wie immer und nichts tut, ist schlimmer als
+   ein sichtbar gesperrter. */
+.gtb:disabled { opacity: .45; cursor: not-allowed; }

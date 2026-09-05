@@ -369,11 +369,20 @@ def render(verlauf, jetzt, takt_s, aufbewahrung_h, live=None):
          if du.get("dauer_mittel_s") is not None else "")))
     def _offen(r):
         # .410 (User: "damit man sehen kann, ob das Backlog sich abarbeitet"):
-        # offen = gesamt − fertig je Probe, als Verlauf wie beim Durchsatz.
-        # Proben mit Grund (kein Dienst) sind Luecken, keine Nullen.
+        # offen als Verlauf wie beim Durchsatz. Proben mit Grund (kein Dienst)
+        # sind Luecken, keine Nullen.
+        #
+        # B1 (.505, 05.09.2026): offen = Warteschlange + laufende Analysen. Bis
+        # .504 stand hier `gesamt − fertig` aus dem Sweep-Zaehler; seit B1 reiht
+        # der Sweep nur noch ein und zaehlt nichts mehr mit, `fertig` gaebe es
+        # gar nicht mehr und die Kachel zeigte dauerhaft `gesamt`. Die beiden
+        # neuen Zahlen sind ausserdem die EHRLICHEREN: sie gelten auch fuer
+        # Ereignisse, die nie in einem Nachhol-Lauf waren (MQTT, Support-
+        # Einspielung), und sie sind auf beiden Triggern gefuellt — im
+        # Poll-Betrieb war `queue_n` bis .504 per Bau immer 0.
         if not r or r.get("grund"):
             return None
-        return max(0, int(r.get("gesamt") or 0) - int(r.get("fertig") or 0))
+        return max(0, int(r.get("queue_n") or 0) + int(r.get("in_arbeit") or 0))
     offen = _offen(rs)
     stau_reihe = [_offen(z.get("rueckstau")) for z in verlauf]
     k_stau = _kachel(t("systemstat.kachel.rueckstau"), rs,
@@ -383,6 +392,12 @@ def render(verlauf, jetzt, takt_s, aufbewahrung_h, live=None):
                                                       default=1.0))), (
         (t("systemstat.rueckstau.laeuft"),
          t("systemstat.ja") if rs.get("aktiv") else t("systemstat.nein")),
+        # B1 (.505): die drei Zahlen, aus denen die grosse oben entsteht —
+        # eingereiht hat der letzte Nachhol-Lauf, der Rest ist live.
+        (t("systemstat.rueckstau.stand"),
+         t("systemstat.rueckstau.stand_wert", gesamt=int(rs.get("gesamt") or 0),
+           schlange=int(rs.get("queue_n") or 0),
+           arbeit=int(rs.get("in_arbeit") or 0)) if not rs.get("grund") else ""),
         (t("systemstat.rueckstau.fenster"), (f'{rs.get("stunden")} h'
                                              if rs.get("stunden") else ""))))
 

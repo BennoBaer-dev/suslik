@@ -12,7 +12,22 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.0.501"   # .501 = Release-Nummer (.500 lief nur intern auf den Testsystemen; der Support-Re-Analyse-Fix 62346ee kam danach — ein Image, ein Commit). Box-Inhalt User 03.09. ~23:55: ein Punkt "deutlich
+STAND = "0.1.0.506"   # .506 = .505 + Fix aus dem Prod-Funktionstest (Ereignis-Tabelle lief bei
+                      # 900 px in den Body; Gate S9 rot -> fix-forward, Version hoch, Box-Inhalt
+                      # UNVERAENDERT: der .505-Eintrag traegt jetzt die Nummer .506, weil .505 nie
+                      # veroeffentlicht wurde).
+                      # Davor: "0.1.0.505"   # .505 Box-Inhalt User 05.09. ~14:00: EIN Punkt (parallele Analyse
+                      # auf beiden Wegen + Lernlauf nutzt freie Plaetze fair mit), OHNE
+                      # den "Testversion"-Punkt (User: "bleibt wie es ist nur ohne test").
+                      # .505 laeuft zunaechst nur auf den eigenen Maschinen (Haus-Bauzug
+                      # bauplan_0505.md), Box-Inhalt trotzdem abgestimmt, weil ins Image gebacken.
+                      # Davor: "0.1.0.504"   # .504 = reiner STAND-Bump: Box-Inhalt UNVERAENDERT gegenueber
+                      # .503 (der GPU-Schalter-Punkt + "Testversion", User-Wortlaut
+                      # 04.09.). .504 traegt nur die drei Oberflaechen-Korrekturen an
+                      # der GPU-Seite — Interna, kein Box-Eintrag.
+                      # Davor: "0.1.0.503"   # .503 Box-Inhalt User 04.09.: EIN Punkt, der GPU-Schalter fuer
+                      # Parallelverarbitung (Wortlaut vom User vorgegeben, s. Eintrag unten).
+                      # Davor: "0.1.0.501"   # .501 = Release-Nummer (.500 lief nur intern auf den Testsystemen; der Support-Re-Analyse-Fix 62346ee kam danach — ein Image, ein Commit). Box-Inhalt User 03.09. ~23:55: ein Punkt "deutlich
                       # verbesserte Gesichtserkennung" + die zwei .414-Punkte
                       # (Anwesenheit, Today) unter DIESER Nummer — .414 ist
                       # zurueckgezogen und taucht nirgends mehr auf.
@@ -376,6 +391,54 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # 0.1.0.505 — Box-Inhalt User 05.09.2026 ("whats new bleibt wie es ist nur ohne
+    # test"): GENAU EIN Eintrag, kein "Testversion"-Punkt mehr. Alles andere aus dem
+    # Bauzug (Vergabestelle, Wächter-Marke/Puls, Rückstau-Fixes, Support-Fensterweg,
+    # Thread-Kappung, Gate-Stufe S11) bleibt BEWUSST draussen — Interna.
+    ("0.1.0.506", (
+        {"de": "Parallele Analyse jetzt auf beiden Wegen (Poll und MQTT). Der Lernlauf "
+               "nutzt freie Plätze mit, ohne die laufende Erkennung zu verdrängen.",
+         "en": "Parallel analysis now on both paths (poll and MQTT). The learning run "
+               "uses free slots without pushing the running recognition aside.",
+         "es": "Análisis en paralelo ahora en ambas vías (sondeo y MQTT). El aprendizaje "
+               "aprovecha las plazas libres sin desplazar el reconocimiento en curso.",
+         "it": "Analisi in parallelo ora su entrambe le vie (polling e MQTT). "
+               "L'apprendimento usa i posti liberi senza scalzare il riconoscimento in corso.",
+         "fr": "Analyse en parallèle désormais sur les deux voies (interrogation et MQTT). "
+               "L'apprentissage utilise les places libres sans écarter la reconnaissance "
+               "en cours."},
+    )),
+    # 0.1.0.503 — Box-Inhalt User 04.09.2026, Wortlaut vom User vorgegeben:
+    # "Umstellung oder Einbau eines GPU-Schalters, damit Parallelverarbeitung von
+    # mehreren Workern und Live moeglich ist, fuer groessere Kamerasysteme."
+    # GENAU EIN Eintrag. Alles andere aus diesem Zug (Waechter ueber die Plaetze,
+    # Haertung der Broker-Worker-Kommunikation, Lernlauf am Broker) bleibt BEWUSST
+    # draussen — Interna, keine Key-Features.
+    ("0.1.0.503", (
+        # User 04.09.: "Testversion" hervorgehoben voran, danach der normale Text.
+        # `betont` faerbt den Punkt rot und fett (webui: li.wn-betont) — dieselbe
+        # Marke wie beim Mehr-Personen-Hinweis in .501, keine zweite Mechanik.
+        {"betont": True,
+         "de": "Testversion.",
+         "en": "Test version.",
+         "es": "Versión de prueba.",
+         "it": "Versione di prova.",
+         "fr": "Version de test."},
+        {"de": "Neu: ein GPU-Schalter. Damit lassen sich mehrere Worker und die "
+               "Live-Wächter parallel auf der Grafikkarte betreiben — gedacht für "
+               "größere Kamerasysteme.",
+         "en": "New: a GPU switch. It lets several workers and the live watchers run "
+               "in parallel on the graphics card — meant for larger camera systems.",
+         "es": "Nuevo: un interruptor de GPU. Permite ejecutar varios trabajadores y "
+               "los vigilantes en vivo en paralelo en la tarjeta gráfica, pensado para "
+               "sistemas de cámaras más grandes.",
+         "it": "Novità: un interruttore GPU. Consente di eseguire più worker e le "
+               "sentinelle live in parallelo sulla scheda grafica, pensato per impianti "
+               "di telecamere più grandi.",
+         "fr": "Nouveau : un commutateur GPU. Il permet de faire tourner plusieurs "
+               "workers et les veilleurs directs en parallèle sur la carte graphique, "
+               "pensé pour les installations de caméras plus grandes."},
+    )),
     # .414 — Inhalt vom User festgelegt (02.09. 18:45): GENAU zwei Eintraege,
     # "Einbau einer Anwesenheitserkennung" und "Neubau der Today-Seite". Alles
     # andere aus .407-.413 (Systemstatus, kurze Live-Meldetexte, Marge, lazy)

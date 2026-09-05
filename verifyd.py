@@ -15,7 +15,7 @@ Aufruf:
   verifyd.py --config verifyd.yaml --once EID # ein Event verarbeiten (Test), dann Ende
   Optionen: --dry-alert (Alert nur loggen, nicht senden)
 """
-import argparse, collections, datetime, html, json, math, os, re, select, signal, subprocess, sys, threading, time
+import argparse, collections, contextlib, datetime, html, json, math, os, re, select, signal, subprocess, sys, threading, time
 import urllib.request, urllib.parse, urllib.error, uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -752,6 +752,27 @@ def load_config(path):
                          # ~4-8 MB je Kamera und decken die Vielfalt mehrerer
                          # Tage ab (ein Bild je Auftritt, nicht je Bild).
                          ("live_kalib_max", 200),
+                         # .502 (User 04.09.): Slot-Deckel der Live-Engine als
+                         # NORMALER Config-Wert. Er existierte seit 31.08. nur
+                         # als verschachteltes live.max_slots — lesbar, geklemmt,
+                         # aber ohne jeden Bedienweg: kein Feld, keine Route, nur
+                         # Hand-Edit der Store-Datei. Beim Feldtester lief das auf
+                         # eine Wand hinaus, die niemand verschieben konnte, obwohl
+                         # seine Maschine (46 GB frei, kein Container-Limit) mehr
+                         # traegt. Die echten Notbremsen bleiben unveraendert das
+                         # RAM-Budget und die Drossel; dieser Wert ist nur die
+                         # obere Wand davor. Rueckfall auf live.max_slots bleibt
+                         # fuer Bestands-Installationen erhalten (livewache.
+                         # max_slots_lesen).
+                         ("live_max_slots", 5),
+                         # E2 (Konzept Parallel-Analyse): Zahl der gleichzeitigen
+                         # Ereignis-Analysen. Werk 1 = das bisherige Verhalten, exakt.
+                         # Bestands-Installationen aendern sich dadurch nicht.
+                         ("analyse_plaetze", 1),
+                         # .503 (User 04.09.): Obergrenze eines Einspiel-Aufrufs.
+                         # Werk 20 = bisheriges Verhalten; hoeher stellen, wer einen
+                         # Nachlauf ueber eine Stunde oder einen Tag fahren will.
+                         ("einspiel_deckel", 20),
                          # .316 (User 22.08.): Veto-Linie der Gruppen-Sichtung. Eigener
                          # Wert statt vorrat_norm_min mitzubenutzen, damit der User die
                          # ANZEIGE drehen kann, ohne die Ernte-Achsen zu verstellen.
@@ -1199,6 +1220,31 @@ ANWESENHEIT_TAKT_S = 60
 # sonst bis zum Dienst-Neustart.
 _LIVE_HELFER_FRIST_S = 240.0
 
+# Neustart-Fristen (.502, Feldfall beim Tester 04.09.2026): Service.neustart nahm die
+# Analyse-Sperre bedingungslos und wartete damit auf eine Analyse, die ihrerseits
+# am Job-Lock des Workers hing. Der Fern-Reset kam 27 min NICHT durch, obwohl er
+# genau fuer den Klemmfall gebaut ist — erst ein Container-Neustart half. Erst
+# hoeflich warten (eine normale Analyse darf zu Ende laufen; langsamster
+# gemessener Normallauf auf Prod 257,9 s, deshalb nicht knapper als eine Minute),
+# dann den Worker hart schiessen, dann notfalls OHNE Sperre durchziehen.
+# P1 (Konzept Phase 2): Takt des Platz-Lebenszeichens und die Frist, nach der ein
+# stummer Platz eingezogen wird. User-Entscheid 04.09.: 120 s — der Job-Weg pulst
+# mehrfach je Analyse, eine gesunde Analyse ist nie zwei Minuten stumm. Kuerzer waere
+# riskant, laenger traege (der Feldstillstand am 04.09. dauerte 28 min).
+PULS_TAKT_S = 10.0
+PLATZ_STUMM_FRIST_S = 120.0
+# C2 (05.09.2026, bauplan_0505.md §1): das Fairness-VENTIL der Ernte
+# (`ERNTE_MAX_WARTE_S`, 300 s) ist ERSATZLOS entfallen. An seine Stelle tritt die
+# Regel N-1 in der Vergabestelle (`Analyseplaetze.platz`): von N Plaetzen haelt eine
+# Klasse hoechstens N-1, solange eine andere wartet. Ein Ventil braucht es damit
+# nicht mehr — bei N >= 2 laesst die Regel per Bau immer einen Platz fuer die andere
+# Seite, bei N = 1 ist sie exakt das alte BG-Gate (Auftrag des Betreibers 05.09.:
+# „nicht ein Weg nimmt alles, jeder mal dran"). Die Wartescheibe: so lange schlaeft ein
+# zurueckgetretener Kunde, bevor er erneut fragt.
+FAIRNESS_SCHEIBE_S = 0.5
+NEUSTART_LOCK_FRIST_S = 60.0
+NEUSTART_LOCK_NOTFRIST_S = 15.0
+
 
 def frigate_read_only(cfg):
     return FRIGATE_READONLY_FORCED or bool(cfg.get("frigate_read_only", True))
@@ -1253,15 +1299,23 @@ _frigate_ok = {"ts": 0.0}   # Wanduhr der letzten ECHTEN Frigate-Antwort
 #                             Vergleich mit dem Fehler-Zeitstempel)
 
 
-def api(cfg, path):
+def api(cfg, path, timeout=20):
     # .264 Frigate-Schoner: EIN Drosselpunkt fuer alle API-GETs — waehrend
     # einer Sperre kommt nur der Probe-Slot durch (core/schoner, Anlass:
     # API-Verklemmung 17.08., drei Instanzen hielten den Stau mit Retries).
+    #
+    # `timeout` (.505 E4, 05.09.2026, Widerleger E1+E2 Notiz 6): die 20 s waren
+    # bis .505 fest verdrahtet und gelten weiter fuer JEDEN Aufrufer, der nichts
+    # sagt. Wer eine grosse Antwort bestellt, hebt sie: an der Frigate im LAN
+    # kamen 5000 Ereignisse als 4,53 MB in 0,42-0,50 s an, aber ein Timeout ist
+    # hier nicht nur ein verlorener Aufruf — `frigate_schoner.fehler()` sperrt
+    # nach Wiederholung ALLE GETs. Die Skalierung beim Sweep ist damit Vorsorge
+    # fuer eine langsame Anbindung, keine Messung.
     if not frigate_schoner.erlaubt():
         raise urllib.error.URLError(
             "frigate protector active — backing off after repeated timeouts")
     try:
-        with _fauth.oeffnen(cfg["frigate_url"] + path, timeout=20) as r:   # 5e
+        with _fauth.oeffnen(cfg["frigate_url"] + path, timeout=timeout) as r:  # 5e
             daten = json.load(r)
     except urllib.error.HTTPError as e:
         frigate_schoner.ok()          # der Server LEBT — 4xx/5xx ist eine Antwort
@@ -1520,7 +1574,8 @@ def _clip_alter_min(ende_ts, start_ts=None):
 
 
 def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=None,
-                koerper=False, info=None, clip_quelle="live", clip_alter_min=None):
+                koerper=False, info=None, clip_quelle="live", clip_alter_min=None,
+                puls=None):
     # Watchdog der Live-Analyse aus der Config (analyse_timeout_s, messbasiert —
     # s. Default-Block; vorher fest 1800 s: am 10.08. hing der Worker exakt diese
     # 1800 s im Swap-Thrashing und blockierte den Pass 34 min). Nachhol-Laeufe
@@ -1632,7 +1687,7 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
                               "clip_erzeugung": erz,
                               "clip_erzeugung_deckel_s": erz_deckel,
                               "clip_vod": cfg.get("clip_vod") is not False},
-                             tmo, info=w1)
+                             tmo, info=w1, puls=puls)      # P1: Lebenszeichen des Platzes
         dt = time.monotonic() - t0 - float(w1.get("wartezeit_s") or 0.0)
         frist = tmo
         if antwort is None and timeout_s is None:
@@ -1663,7 +1718,20 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
             watchdog = dt >= tmo
             frist = tmo * 2 if watchdog else tmo
             with open(logpfad, "a") as lf:
-                if watchdog:
+                if w1.get("lock_timeout"):
+                    # C3 (05.09.2026, Widerleger C1 Punkt 2): job() kam die ganze
+                    # Frist nicht ans Job-Lock — der Worker LEBT, er war fremd
+                    # belegt (Sammeln/Wanduhr/Ernte auf demselben Worker). Diese
+                    # Frage steht VOR beiden anderen, weil sie die einzige ist,
+                    # die der Rueckweg sicher beantwortet: `dt` ist hier rund 0
+                    # (die Wartezeit wird herausgerechnet), also faellt der Fall
+                    # sonst in den „worker died"-Zweig und zieht dort eine ALTE,
+                    # fremde `letzte_ursache` mit.
+                    lf.write(f"\nverifyd: worker busy — its job lock was held by "
+                             f"another job for the full {tmo}s (worker alive, "
+                             f"nothing analysed) — one immediate retry "
+                             f"(deadline {frist}s)\n")
+                elif watchdog:
                     lf.write(f"\nverifyd: analyze watchdog fired after {dt:.0f}s "
                              f"(deadline {tmo}s) — one immediate retry on a "
                              f"fresh worker, deadline doubled to {frist}s\n")
@@ -1685,7 +1753,7 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
                                   "clip_erzeugung_deckel_s": erz_deckel,
                                   "clip_vod": cfg.get("clip_vod")
                                   is not False},
-                                 frist, info=w2)
+                                 frist, info=w2, puls=puls)   # P1: auch im Retry
             dt = time.monotonic() - t0 - float(w2.get("wartezeit_s") or 0.0)
         warte = float(w1.get("wartezeit_s") or 0.0) + float(w2.get("wartezeit_s") or 0.0)
         if info is not None:
@@ -1696,7 +1764,13 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
                          f"(another analysis/measurement held it) — not counted "
                          f"as analysis time\n")
             if antwort is None:
-                art = ("watchdog" if dt >= frist else "worker died")
+                # C3 (05.09.2026, Widerleger C1 Punkt 2): dieselbe Frage wie oben,
+                # fuer den LETZTEN job()-Aufruf. `w2` ist nur gefuellt, wenn der
+                # Sofort-Retry ueberhaupt lief (job() schreibt in jedes info
+                # mindestens `wartezeit_s`), sonst gilt `w1`.
+                _letzt = w2 if w2 else w1
+                art = ("worker busy (job lock)" if _letzt.get("lock_timeout")
+                       else "watchdog" if dt >= frist else "worker died")
                 lf.write(f"\nverifyd: analyze aborted ({art} after {dt:.0f}s, "
                          f"deadline {frist}s)\n")
                 return None
@@ -1836,6 +1910,17 @@ class WorkerProzess:
         # bei 0 an, und das ist richtig: nach einem Neustart ist die
         # Vorgeschichte nicht mehr die Lage dieses Prozesses).
         self.tode = collections.deque(maxlen=500)
+        # A4 (05.09.2026, Widerleger-Befund B5 zu A1): der Grund des zuletzt von
+        # `kill_hart` abgesetzten Schusses — None, solange niemand geschossen hat.
+        # `_todesursache` liest und LEERT ihn; ohne ihn schreibt sie ein SIGKILL des
+        # Platzwaechters dem Kernel-OOM zu (s. dort). `_geschossen_quelle` sagt
+        # dazu, WER geschossen hat — Platzwaechter oder Neustart-Klemmfall.
+        # C0/W4-1 (05.09.2026, Widerleger A4): `_geschossen_pid` bindet den Schuss an
+        # den GETROFFENEN Prozess. Ohne die Bindung erbte der naechste Prozess den
+        # Grund (s. _todesursache/kill_hart).
+        self._geschossen_grund = None
+        self._geschossen_quelle = None
+        self._geschossen_pid = None
 
     def _start(self):
         r, w = os.pipe()
@@ -1895,6 +1980,54 @@ class WorkerProzess:
         with self.lock:
             self._stop()
 
+    def kill_hart(self, grund="restart deadlock", quelle="verifyd"):
+        """Den laufenden Job-Prozess SOFORT schiessen, OHNE auf self.lock zu
+        warten. -> True, wenn ein Signal ging.
+
+        Genau fuer den Klemmfall des Neustarts (.502): job() haelt self.lock
+        ueber die GANZE Job-Dauer, stop() wuerde sich also hinter dem
+        haengenden Job anstellen und waere wirkungslos. Geschossen wird
+        bewusst NUR die Prozessgruppe; die Antwort-Pipe bleibt offen, damit
+        der wartende select() in job() sein EOF bekommt und der Job-Thread
+        selbst aufraeumt (self.p/_stop dort) statt hier nebenlaeufig — sonst
+        laege ein zweiter Aufraeumer auf denselben Deskriptoren.
+
+        `grund` steht in der Logzeile: seit A1 (05.09.2026) schiesst auch der
+        Platzwaechter — eine Zeile, die dann „restart deadlock" behauptete,
+        waere die K1-Klasse (die Diagnose luegt).
+
+        A4 (05.09.2026, Widerleger-Befund B5): `grund` wird zusaetzlich am Objekt
+        gemerkt, damit `_todesursache` den eigenen Schuss als solchen ausweist und
+        nicht als Kernel-OOM. Gesetzt wird er NUR, wenn wirklich ein Signal ging —
+        ein gemerkter Grund ohne Schuss waere dieselbe Luege in Gruen.
+
+        `quelle` sagt, WER geschossen hat, und steht so in der Todesursache. Es gibt
+        zwei Schuetzen: den Platzwaechter (seit A1) und den Klemmfall des Neustarts
+        (`worker_hart_stoppen`, .502) — und zwischen dessen Schuss und dem execv
+        liegen bis zu NEUSTART_LOCK_NOTFRIST_S, in denen der getroffene Job-Thread
+        seine Ursache noch schreibt. Ein fest verdrahtetes „slot watchdog" waere dort
+        wieder eine luegende Diagnose, nur mit anderem Vorzeichen.
+
+        C0/W4-1 (05.09.2026, Widerleger A4, LEERSCHUSS): gemerkt wird zusaetzlich die
+        PID des Getroffenen. Der Waechter schiesst auch dann, wenn gerade KEIN
+        Job-Thread im select sitzt (der Halter haengt ausserhalb von `job()`, z. B. am
+        Job-Lock bei Kapazitaet 1) — dann holt niemand den Grund ab, und der NAECHSTE
+        Job erbte ihn: er sah seinen frisch gestarteten, aus anderem Grund gestorbenen
+        Prozess und meldete „killed by the slot watchdog". Die PID entscheidet, ob der
+        gemerkte Schuss ueberhaupt DIESEN Prozess betrifft."""
+        p = self.p
+        if p is None:
+            return False
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+            self._geschossen_grund = grund
+            self._geschossen_quelle = quelle
+            self._geschossen_pid = p.pid
+            self.log(f"{self.name} killed hard (pid {p.pid}) — {grund}")
+            return True
+        except Exception:
+            return False
+
     def _todesursache(self, wartefrist_s=1.0):
         """S1 (Lieferung B, konzept_startpruefung §3): WARUM ist der Worker mitten
         im Job verstummt? -> (art, kurz) fuer die Log-Zeile; kurz='' heisst 'lebt
@@ -1904,6 +2037,27 @@ class WorkerProzess:
         killen. Ruft man diese Methode nach _stop(kill=True), meldet sie das
         SELBST geschossene SIGKILL als angeblichen Kernel-OOM. Sie gehoert
         deshalb IMMER vor den _stop(kill=True) der Fundstelle.
+
+        A4 (05.09.2026, Widerleger-Befund B5 zu A1): genau diese Verwechslung ist
+        seit A1 auch OHNE Reihenfolgefehler moeglich — der Platzwaechter schiesst
+        per `kill_hart`, der Job-Thread sieht danach das EOF seiner Pipe und fragte
+        hier nach der Ursache. Antwort bis A4: „signal 9 = SIGKILL — most likely the
+        kernel out-of-memory killer". Am echten Prozess belegt, und der Satz reist
+        weiter in `letzte_ursache`, `tode`/`tode_24h`, /health, die Systemseite und
+        die analyze.log des Ereignisses: ein Nutzer sucht dann nach Speichermangel,
+        waehrend in Wahrheit der eigene Waechter geschossen hat. Deshalb wird ZUERST
+        der gemerkte Schuss-Grund geprueft; er gilt genau einmal und wird dabei
+        geleert (der naechste Tod ist eine neue Frage). Kein `wait()` in diesem
+        Zweig: der Aufrufer raeumt unmittelbar danach mit `_stop(kill=True)` auf und
+        erntet den Prozess dort.
+
+        C0/W4-1 (05.09.2026, Widerleger A4): der gemerkte Schuss zaehlt NUR fuer den
+        Prozess, der ihn abbekommen hat (`_geschossen_pid`). Ein LEERSCHUSS des
+        Waechters — geschossen wurde, aber kein Job-Thread wartete auf die Antwort —
+        blieb sonst am Objekt haengen und wurde dem naechsten, voellig anderen Tod
+        angehaengt: dieselbe luegende Diagnose (K1), nur mit vertauschten Rollen. Mit
+        der Bindung braucht `job()` seinen Reset nicht mehr, der ein knapp anderes
+        Rennen hatte (er lag VOR der `poll()`-Pruefung des neuen Laufs).
 
         Drei Faelle, keiner geraten:
           returncode < 0   -> Signal (9 = SIGKILL, in diesem Dienst typisch der
@@ -1917,7 +2071,16 @@ class WorkerProzess:
         sofort durch. Sein killpg bleibt trotzdem noetig: die Prozessgruppe kann
         noch ffmpeg-ENKEL enthalten (W1-Lektion), und der Rueckgabewert des
         Leiters sagt ueber die nichts."""
+        grund = getattr(self, "_geschossen_grund", None)
         p = self.p
+        # W4-1: Schuss UND getroffener Prozess muessen zusammenpassen. Ist `self.p`
+        # ein anderer (oder keiner), war es ein Leerschuss auf einen Vorgaenger —
+        # dann gilt hier dieselbe Diagnose wie ohne jeden Schuss.
+        if grund and p is not None and p.pid == getattr(self, "_geschossen_pid", None):
+            wer = getattr(self, "_geschossen_quelle", None) or "verifyd"
+            self._geschossen_grund = self._geschossen_quelle = None
+            self._geschossen_pid = None
+            return "died", f"killed by {wer} ({grund})"
         if p is None:                       # schon geerntet/nie gestartet
             return "died", "exit status unavailable"
         try:
@@ -1952,22 +2115,125 @@ class WorkerProzess:
                 "letzte_ursache": letzte[1] if letzte else None,
                 "grund": None}
 
-    def job(self, job, timeout_s, info=None):
+    def job(self, job, timeout_s, info=None, puls=None):
         """Job senden, Antwort mit Timeout lesen. None = Timeout/Absturz (Worker wird
         gekillt, der naechste Job startet ihn frisch); sonst die Antwort des Workers.
         `info` (optional, dict): bekommt `wartezeit_s` — wie lange DIESER Aufruf am
         Job-Lock hing (Nachbesserung W7: Ernte/Sammle/Wanduhr-Roundtrip halten das
         Lock teils minutenlang; die Wartezeit ist keine Analysezeit und darf weder
-        in dauer_s noch in die watchdog/worker-died-Einstufung fallen)."""
+        in dauer_s noch in die watchdog/worker-died-Einstufung fallen).
+
+        `puls` (optional, callable): P1-Lebenszeichen. Wird waehrend des Wartens
+        regelmaessig gerufen, damit der Platz-Waechter einen LEBENDEN Warter von einem
+        haengenden Thread unterscheiden kann. Nötig, weil der Worker genau EINE
+        Antwortzeile am Ende schickt — zwischen Absenden und Ergebnis ist Funkstille,
+        die legal bis zu 3x `analyse_timeout_s` dauern darf. Ohne Puls waere jede Frist
+        entweder zu kurz (gibt einen belegten Platz frei) oder zu lang (fängt nichts)."""
         t_warte = time.monotonic()
-        with self.lock:
+
+        def _puls():
+            """A2: ein Lebenszeichen darf NIE einen Job kosten — dieselbe Regel
+            wie in der select-Schleife unten (deshalb blind gefangen)."""
+            if puls is None:
+                return
+            try:
+                puls()
+            except Exception:                    # noqa: BLE001
+                pass
+
+        # .502 FRIST AUF DEN JOB-LOCK (Feldfall beim Tester 04.09.2026): vorher stand
+        # hier ein `with self.lock:` OHNE Deckel. Der 06:00-Wartungslauf
+        # (Auffangnetz-Sammeln, eigener Deckel 1800 s) hielt das Lock, die
+        # Analyse des Sweeps stellte sich dahinter — und weil sie dabei die
+        # Analyse-Sperre des Dienstes haelt, stand der ganze Dienst 28 min:
+        # keine Verarbeitung, kein Fern-Reset. Der Job-Watchdog griff nicht,
+        # denn er beginnt erst NACH dem Lock (select). Ein Anstehen darf nie
+        # laenger dauern als der Job selbst duerfte, deshalb dieselbe Frist;
+        # None ist fuer jeden Aufrufer der bekannte Fall (Retry/Nachhol).
+        #
+        # A2 (05.09.2026, bauplan_0505.md §0): das Anstehen laeuft jetzt in
+        # SCHEIBEN von PULS_TAKT_S, mit einem Lebenszeichen dazwischen. Der Puls
+        # begann bis .504 erst in der select-Schleife weiter unten; alles davor
+        # war stumm — genau hier stand der Feldbefund vom 05.09.: 23 Einzuege
+        # LEBENDER Analysen (alle Platz 1, 125-138 s), die hinter Sammle bzw.
+        # dem Wanduhr-Roundtrip am Job-Lock warteten. Der Platzwaechter konnte
+        # sie von einem haengenden Thread nicht unterscheiden und zog sie ein,
+        # waehrend der alte Thread weiterlief (Doppel-Urteile, Kapazitaet
+        # N + Zombies). Die GESAMTFRIST bleibt exakt `timeout_s`, das Verhalten
+        # bei Ablauf unveraendert — neu ist allein, dass der Warter sichtbar ist.
+        _lock_frist = time.monotonic() + float(timeout_s)
+        _habe_lock = False
+        while True:
+            _rest_lock = _lock_frist - time.monotonic()
+            # A5 (05.09.2026, Widerleger-Befund W-A2-4b): das `max(0.0, …)` stand
+            # hier als Sonderfall „auch bei timeout_s = 0 mindestens EIN Versuch"
+            # — das trifft es nicht. Es traegt den NORMALEN Ablaufpfad: die letzte
+            # Runde beginnt mit einem knapp NEGATIVEN `_rest_lock` (die Schleife
+            # bricht erst danach ab), und `acquire` wirft bei negativem Timeout
+            # ValueError. Ohne das `max` waere also JEDER Fristablauf am Job-Lock
+            # ein Traceback statt eines geordneten None (Widerleger-Mutation M5).
+            # Der nicht-blockierende Griff bei timeout_s = 0 faellt als
+            # Nebenwirkung mit ab.
+            # A5 (W-A2-6): `max(0.01, PULS_TAKT_S)` als BODEN unter der Scheibe.
+            # PULS_TAKT_S ist ein Modulwert; auf 0 gesetzt (Probe, Fehlpatch)
+            # wuerde diese Schleife zur Leerlaufschleife — gemessen 2,3 Mio
+            # Runden/s, ein Kern voll, ohne dass die Frist frueher ablaeuft.
+            _habe_lock = self.lock.acquire(
+                timeout=max(0.0, min(max(0.01, PULS_TAKT_S), _rest_lock)))
+            if _habe_lock or _rest_lock <= 0:
+                break
+            _puls()
+        if not _habe_lock:
+            if info is not None:
+                info["wartezeit_s"] = round(time.monotonic() - t_warte, 3)
+                # C3 (05.09.2026, Widerleger C1 Punkt 2, Nachzug N1): DIESER
+                # Rueckweg gibt None zurueck, OHNE dass der Worker gestorben
+                # waere — er war nur die ganze Frist mit einem fremden Job
+                # beschaeftigt. Die Aufrufer lasen bis .505 stattdessen
+                # `letzte_ursache` und meldeten „worker died (<alte Ursache>)"
+                # in Log UND Pushover, obwohl der Worker lebt (K1: die Diagnose
+                # luegt). `letzte_ursache` hier zurueckzusetzen waere ein Rennen
+                # mit dem Halter, der sie gerade unter dem Lock setzen darf —
+                # deshalb geht die Auskunft ueber den AUFRUFER-EIGENEN Rueckweg
+                # `info`. Der ist je Aufruf frisch (run_analyze: w1/w2), also
+                # rennfrei by construction; ein Attribut am Worker waere es
+                # nicht (zwei Threads, ein Objekt).
+                info["lock_timeout"] = True
+            self.log(f"{self.name} job lock held by another job for "
+                     f"{timeout_s}s — giving this job up (caller retries)")
+            return None
+        try:
             if info is not None:
                 info["wartezeit_s"] = round(time.monotonic() - t_warte, 3)
             self.letzte_ursache = None    # S1: nur DIESER Lauf darf sie setzen
+            # C0/W4-1 (05.09.2026, Widerleger A4): hier stand bis .504 ein Reset von
+            # `_geschossen_grund`/`_geschossen_quelle` — gegen genau den Leerschuss,
+            # den kein Job-Thread abgeholt hat. Er lag aber VOR der `poll()`-Pruefung
+            # gleich darunter: war die Leiche des geschossenen Prozesses noch nicht
+            # geerntet (killpg -> poll() != None dauert im Median 0,95 ms), loeschte
+            # dieser Lauf den Grund und diagnostizierte danach am KADAVER des
+            # Geschossenen „signal 9 ... most likely the kernel out-of-memory killer".
+            # Der Reset entfaellt ersatzlos: seit W4-1 haengt der Schuss an der PID des
+            # Getroffenen (`_geschossen_pid`), ein Grund ohne passenden Prozess wird in
+            # `_todesursache` gar nicht erst gelesen. Eine Runde spaeter kann er
+            # niemandem mehr angehaengt werden, also muss ihn auch niemand loeschen.
             try:
                 if self.p is None or self.p.poll() is not None:
                     self._stop(kill=True)    # Reste (Pipe/Zombie) wegraeumen
+                    # A2 (05.09.2026): Puls VOR und NACH dem Start.
+                    # A5 (05.09.2026, Widerleger-Befund W-A2-4a): hier stand als
+                    # Begruendung „der Neustart laedt die Modelle, auf CUDA 30-60 s
+                    # stumm" — das ist FALSCH. `_start()` ist os.pipe + Popen +
+                    # fdopen + oom_score_adj und dauert GEMESSEN 4,5-7,9 ms; die
+                    # Modelle laedt das KIND, waehrend dieser Thread laengst in der
+                    # pulsenden select-Schleife weiter unten sitzt. Die beiden Pulse
+                    # bleiben trotzdem: sie kosten nichts und decken den Fall, dass
+                    # `_start()` doch einmal blockiert (fork unter Speicherdruck,
+                    # haengendes /proc). Die Marge fuer den Platzwaechter kommt aus
+                    # der select-Schleife, nicht von hier.
+                    _puls()
                     self._start()
+                    _puls()
                 # Issue #20/#21: die In-Job-RSS-Wache bekommt ihre Politik-Grenze
                 # als Job-Feld (Protokoll im worker.py-Kopf, Rangfolge _job_rss_grenze).
                 # Deckungs-Vertrag: DIESELBE Config-Zahl wie die Neustart-Schwelle
@@ -1980,9 +2246,33 @@ class WorkerProzess:
                     # Deckungs-Vertrag wie rss_max_mb, keine zweite Quelle.
                     # worker.py armiert damit core.frames je Job.
                     job.setdefault("clip_dbg", bool(self.cfg.get("debug")))
+                _puls()                  # A2: letztes Zeichen vor dem Absenden
                 self.p.stdin.write(json.dumps(job) + "\n")
                 self.p.stdin.flush()
-                r, _, _ = select.select([self.rx], [], [], timeout_s)
+                # P1: dasselbe Warten wie vorher, nur in Scheiben. Der Gesamt-Deckel
+                # bleibt exakt `timeout_s`; neu ist allein, dass dieser Thread dabei
+                # sein Lebenszeichen setzt. Ohne die Scheiben haenge der Thread bis zu
+                # 1800 s stumm im select und waere von einem toten nicht zu unterscheiden.
+                _frist = time.monotonic() + float(timeout_s)
+                r = []
+                while True:
+                    _rest = _frist - time.monotonic()
+                    if _rest <= 0:
+                        break
+                    # B1/T0 (05.09.2026, gleiche Klasse wie der Boden beim
+                    # Job-Lock oben): PULS_TAKT_S ist ein Modulwert. Steht er auf 0
+                    # (Probe, Fehlpatch), waere select() ein nicht-blockierender
+                    # Aufruf und diese Schleife eine Leerlaufschleife, die einen
+                    # Kern verbrennt, ohne dass die Frist frueher ablaeuft.
+                    r, _, _ = select.select([self.rx], [], [],
+                                            min(max(0.01, PULS_TAKT_S), _rest))
+                    if r:
+                        break
+                    if puls is not None:
+                        try:
+                            puls()
+                        except Exception:            # noqa: BLE001 — ein Puls darf nie einen Job kosten
+                            pass
                 if not r:
                     self.log(f"{self.name} job timeout ({timeout_s}s) — killing {self.name}")
                     self._stop(kill=True)
@@ -2021,6 +2311,8 @@ class WorkerProzess:
                 self.log(f"{self.name} error: {type(e).__name__}: {e} — killing {self.name}")
                 self._stop(kill=True)
                 return None
+        finally:
+            self.lock.release()
 
 
 # ------------------------------------------------------------------ Deckungs-Logik (§6 Konzept)
@@ -2332,6 +2624,518 @@ def transcode_kommandos(src, ziel, hoehe, q_hw, q_cpu, dauer_s=None, q_vaapi=Non
 KETTE_STUFEN = _kette.KETTE_STUFEN
 
 
+# ------------------------------------------------------------------ Analyse-Plaetze (Vergabestelle)
+class Analyseplaetze:
+    """Vergabestelle fuer Analyse-Plaetze — Etappe E0 aus `konzept_parallel_analyse.md`.
+
+    ROLLENTRENNUNG, der ganze Zweck dieser Klasse (Konzept §3, Widerleger-Befund B1):
+    `Service.lock` traegt heute FUENF Rollen gleichzeitig — Analyse-Serialisierung,
+    Akte-Mutex fuer Rewrite (`deckung_rotieren`) und Append (`_deckung_korrektur`,
+    Sweep), `processed`-Konsistenz, Zustandssonde `.locked()` an sechs Stellen und
+    den Klemmfall-Neustart aus .502. Wer ihn durch eine Platz-Vergabe ERSETZT, bricht
+    eins von beiden: entweder den Akte-Schutz (die Rotation verliert Zeilen), oder
+    `.locked()` bedeutet danach nur noch "gerade schreibt jemand die Akte" statt "eine
+    Analyse laeuft" — dann oeffnet das BG-Gate dauernd und Ernte/Pass-Check/Lernlauf
+    rechnen wieder parallel zur Analyse, also genau die Doppellast, die Issue #21, W5
+    und .502 beseitigt haben.
+
+    Deshalb ERSETZT diese Klasse den Lock NICHT, sie liegt DAVOR: sie regelt, wie viele
+    Analysen gleichzeitig laufen duerfen; der Lock bleibt darunter als Akte- und
+    Zustands-Mutex. Bei `kapazitaet=1` (Werk) ist das Verhalten bitgleich zu vorher —
+    ein Platz, ein Lock, eine Analyse.
+
+    ZWEI FRAGEN, NICHT EINE: bei Kapazitaet > 1 zerfaellt das alte Literal
+    `self.lock.locked()` in zwei verschiedene Fragen. `_live_aktiv` will wissen
+    "ist MINDESTENS EIN Platz belegt" (rechnet der Dienst gerade?), das BG-Gate will
+    wissen "sind ALLE Plaetze frei" (darf ein Hintergrund-Job starten?). Heute ist
+    beides dasselbe Literal; hier sind es `belegt()` und `alle_frei()`.
+
+    KLASSEN (A1, 05.09.2026, bauplan_0505.md §1): jede Belegung traegt eine `art` —
+    `analyse` (Ereignis-Analyse aus der Warteschlange), `ernte` (Lernlauf, Bruecke,
+    Kalibrier-Auffueller) oder `bg` (Sammle, Wanduhr — Kunden ab C1). Vorher stand die
+    Information im Etikett-TEXT (`"ernte:<eid>"`), und der Platzwaechter reihte jedes
+    eingezogene Etikett als Ereignis neu ein: `process()` fragte Frigate nach
+    `/api/events/ernte:<eid>` und drehte eine 404-Schleife. Die Klasse ist die eine
+    Quelle dafuer, WER einen Platz haelt; das Etikett sagt nur noch, WORAN.
+    """
+
+    # Die EINE Aufzaehlung der Klassen (qs_ebenen.md: kein verstreutes Literal).
+    # C1 bringt `bg`, C2 rechnet die Fairness N-1 je Klasse auf genau dieser Liste.
+    ARTEN = ("analyse", "ernte", "bg")
+
+    def __init__(self, kapazitaet=1, log=None, vorschlag=None):
+        self.kapazitaet = max(1, int(kapazitaet or 1))
+        # P4: was auf DIESER Hardware gemessen am schnellsten war. Nur Auskunft —
+        # die Oberflaeche (P5) belegt damit ihren Regler vor, der Dienst regelt nichts
+        # von selbst nach.
+        self.vorschlag = int(vorschlag or self.kapazitaet)
+        self._sem = threading.BoundedSemaphore(self.kapazitaet)
+        self._mutex = threading.Lock()
+        self._belegt = {}          # platz_nr -> {"art", "etikett", "seit", "puls", "marke"}
+        self._frei_nummern = list(range(1, self.kapazitaet + 1))
+        self._marke = 0            # P1: laufende Nummer JE BELEGUNG (nicht je Platz)
+        self.log = log or (lambda *_a, **_k: None)
+        # C2 (05.09.2026): die Warte-Anmeldung je Klasse. `art -> [Marken]`, die
+        # Marke ist die ANMELDE-Reihenfolge (FIFO zwischen `ernte` und `bg`).
+        self._wartend = {a: [] for a in self.ARTEN}
+        self._warte_zaehler = 0
+        # Wer sich anmeldet, ruft `platz()` im SELBEN Thread — die Marke reist
+        # deshalb thread-lokal mit, statt durch jede Signatur gefaedelt zu werden.
+        self._warte_tls = threading.local()
+        self._fair_log_ts = 0.0
+        # Die Analyse meldet sich NICHT an: ihre Nachfrage steht in der
+        # Ereignis-Warteschlange, nicht in einem Thread, der auf einen Platz wartet
+        # (der Abholer hat sein Ereignis schon gezogen, wenn er hier ankommt). Der
+        # Dienst setzt hier `lambda: rueckstau_zahlen()[0] > 0`; ohne gesetzte
+        # Funktion (Proben, Alt-Fixtures) wartet die Analyse nie.
+        self.wartend_fn_analyse = None
+
+    @staticmethod
+    def _label(d):
+        """Lesbares Etikett fuer Log, /health und GPU-Seite: `analyse` zeigt die
+        nackte Ereignis-ID (wie bisher), jede andere Klasse `art:etikett` — das ist
+        exakt die Anzeige, die vor A1 im Etikett-Text stand (`ernte:<eid>`)."""
+        return d["etikett"] if d["art"] == "analyse" else f'{d["art"]}:{d["etikett"]}'
+
+    # -- die zwei benannten Fragen ------------------------------------------
+    def belegt(self):
+        """Mindestens ein Platz ist belegt (Frage von `_live_aktiv`)."""
+        with self._mutex:
+            return bool(self._belegt)
+
+    def alle_frei(self):
+        """Kein Platz belegt (Frage des BG-Gates von Ernte/Bruecke/Lernlauf)."""
+        with self._mutex:
+            return not self._belegt
+
+    def anzahl_belegt(self):
+        with self._mutex:
+            return len(self._belegt)
+
+    def belegt_je_art(self):
+        """Belegte Plaetze je Klasse -> {art: anzahl}, ALLE Klassen aus ARTEN mit
+        (auch 0), damit die Fairness-Regel (C2) ohne .get-Rueckfall rechnen kann."""
+        with self._mutex:
+            aus = {a: 0 for a in self.ARTEN}
+            for d in self._belegt.values():
+                aus[d["art"]] = aus.get(d["art"], 0) + 1
+            return aus
+
+    # -- Fairness N-1 (C2, 05.09.2026, bauplan_0505.md §1) -------------------
+    # Auftrag des Betreibers: „nicht ein Weg nimmt alles, jeder mal dran, weder Lernlauf
+    # noch Szenario". Die Regel dazu: von N Plaetzen haelt eine Klasse hoechstens
+    # N-1, SOLANGE eine andere Klasse wartet. Wartet niemand sonst, darf sie alle.
+    #
+    # Warum das eine ANMELDUNG braucht: „wartet" ist sonst nicht beobachtbar. Bis
+    # .504 las das alte Gate `len(_ev_q)` — die Ereignis-Warteschlange — und sah
+    # damit NUR die Analyse. Sammle und Wanduhr (Klasse `bg`) warteten unsichtbar;
+    # bei N >= 2 konnte die Ernte die N-1-Regel gegen die Analyse ausspielen,
+    # waehrend das 06:00-Netz danebenstand, und bei N = 1 verhungerte es ganz.
+    # Deshalb meldet sich JEDER Kunde an, der warten koennte (Ernte, Sammle,
+    # Wanduhr); nur die Analyse nicht — ihre Nachfrage steht in der Warteschlange.
+    def wartend_anmelden(self, art):
+        """„Ich haette gern einen Platz der Klasse `art`" -> Anmelde-Marke.
+        IMMER paarweise mit `wartend_abmelden` (dafuer gibt es `wartend()`)."""
+        if art not in self.ARTEN:
+            raise ValueError(f"unknown slot class {art!r} (allowed: {self.ARTEN})")
+        with self._mutex:
+            self._warte_zaehler += 1
+            marke = self._warte_zaehler
+            self._wartend[art].append(marke)
+        stapel = getattr(self._warte_tls, "stapel", None)
+        if stapel is None:
+            stapel = []
+            self._warte_tls.stapel = stapel
+        stapel.append((art, marke))
+        return marke
+
+    def wartend_abmelden(self, art, marke):
+        """Anmeldung zuruecknehmen. Fehlt sie schon (doppeltes Abmelden), passiert
+        nichts — eine Warte-Buchhaltung darf nie selbst zur Sperre werden."""
+        with self._mutex:
+            try:
+                self._wartend[art].remove(marke)
+            except (KeyError, ValueError):
+                pass
+        stapel = getattr(self._warte_tls, "stapel", None)
+        if stapel:
+            for i in range(len(stapel) - 1, -1, -1):
+                if stapel[i] == (art, marke):
+                    stapel.pop(i)
+                    break
+
+    @contextlib.contextmanager
+    def wartend(self, art):
+        """Die Klammer um einen Platz-Wunsch: `with plaetze.wartend("ernte"),
+        plaetze.platz(eid, art="ernte", timeout_s=1.0) as nr:`.
+
+        BEWUSST NUR um den `platz()`-Aufruf, nicht um laengere Wartezeiten davor
+        (z. B. das Zuruecktreten der Ernte vor einem laufenden Subprozess-Job):
+        wer angemeldet ist, BREMST die anderen Klassen. Waere die Ernte auch
+        angemeldet, waehrend sie auf `_gpu_bg_lock` wartet, blockierte ihre
+        Anmeldung genau den Sammel-Job, dessen Lock sie abwartet — beide kaemen
+        nicht weiter. Ehrliche Folge: zwischen zwei Anlaeufen ist die Ernte kurz
+        nicht angemeldet, die Analyse darf dort alle N Plaetze nehmen. Das ist die
+        Lage von vor .505, also kein Rueckschritt, nur keine Verbesserung."""
+        marke = self.wartend_anmelden(art)
+        try:
+            yield marke
+        finally:
+            self.wartend_abmelden(art, marke)
+
+    def _meine_wartemarke(self, art):
+        """Anmelde-Marke DIESES Threads fuer `art` (die juengste, falls
+        verschachtelt), sonst None = nicht angemeldet."""
+        stapel = getattr(self._warte_tls, "stapel", None) or ()
+        for a, m in reversed(stapel):
+            if a == art:
+                return m
+        return None
+
+    def _analyse_wartet(self):
+        """Liegt Ereignis-Arbeit in der Warteschlange? NIE unter `self._mutex`
+        rufen: die Funktion des Dienstes greift auf dessen Locks zu."""
+        fn = self.wartend_fn_analyse
+        if fn is None:
+            return False
+        try:
+            return bool(fn())
+        except Exception:                       # noqa: BLE001 — eine Auskunft
+            return False                        #   darf nie eine Vergabe kippen
+
+    def wartende_andere(self, art, marke=None):
+        """Wartet eine ANDERE Klasse als `art`?
+
+        `marke` ist die eigene Anmeldung und macht die Reihenfolge fair: eine
+        andere Klasse zaehlt nur, wenn sie sich FRUEHER angemeldet hat. Ohne
+        diesen Vergleich blockierten sich `ernte` und `bg` bei einem Platz
+        gegenseitig (jede sieht die andere warten, keine nimmt) — mit ihm kommt
+        der Erstangemeldete zuerst und der andere direkt danach.
+
+        Die Analyse hat keine Anmeldung und damit keine Marke: sie zaehlt fuer
+        jede andere Klasse IMMER als wartend. Das ist die Rangfolge „Analyse vor
+        Ernte/bg" aus dem alten BG-Gate, jetzt an einer Stelle statt an dreien."""
+        with self._mutex:
+            for a, marken in self._wartend.items():
+                if a == art or not marken:
+                    continue
+                if marke is None or min(marken) < marke:
+                    return True
+        return art != "analyse" and self._analyse_wartet()
+
+    def _ueber_der_latte(self, art, gehalten):
+        """Die ZAHL der Regel: waere ein weiterer Platz fuer `art` einer zu viel?
+
+        `gehalten >= kapazitaet - 1`. Bei N = 1 ist das `>= 0`, also immer wahr —
+        dort heisst die Regel „nimm nur, wenn keine andere Klasse wartet", und das
+        ist Wort fuer Wort das alte BG-Gate. Die EINE Ausnahme: die Analyse wird
+        bei N = 1 nie zurueckgehalten. Sonst kehrte sich die Rangfolge um (eine
+        wartende Ernte haette den einen Platz vor der Analyse), und ein
+        Lernlauf-Abholer, der im Sekundentakt fragt, brachte den Ereignis-Strom
+        zum Stehen. Ab N = 2 gilt die Regel symmetrisch fuer alle Klassen: die
+        Analyse laesst der Ernte einen Platz und umgekehrt."""
+        if self.kapazitaet <= 1 and art == "analyse":
+            return False
+        return gehalten >= self.kapazitaet - 1
+
+    def _fairness_blockiert(self, art, marke):
+        """Muss `art` jetzt zurueckstehen? (Regel + Anmeldungen zusammen.)"""
+        if not self._ueber_der_latte(art, self.belegt_je_art()[art]):
+            return False
+        return self.wartende_andere(art, marke)
+
+    def _fair_melden(self, art, gehalten):
+        """EINE Logzeile je Minute, wenn eine Klasse zurueckgetreten ist. Der
+        Griff gehoert zur Abnahme (.505 Gruppe G: „Analyse kommt durch, Fairness-
+        Zeile im Log"); ungedrosselt waere er eine Zeile je Sekunde und Abholer."""
+        jetzt = time.monotonic()
+        if jetzt - self._fair_log_ts < 60:
+            return
+        self._fair_log_ts = jetzt
+        self.log(f"slot fairness: {art} stands back (holds {gehalten} of "
+                 f"{self.kapazitaet}, another class is waiting)")
+
+    def marke_von(self, nr):
+        """Marke der aktuellen Belegung von Platz `nr`, None wenn frei. Der
+        Platzwaechter merkt sie sich VOR dem Kill und vergleicht nach der
+        Gnadenfrist: gleiche Marke = derselbe Halter haelt noch, andere/keine
+        Marke = er ist zurueckgekehrt (und der Platz womoeglich schon neu vergeben —
+        den neuen Halter darf der Waechter nicht anfassen)."""
+        with self._mutex:
+            d = self._belegt.get(nr)
+            return d["marke"] if d else None
+
+    @contextlib.contextmanager
+    def platz(self, etikett, art="analyse", timeout_s=None):
+        """Einen Platz nehmen und IMMER zurueckgeben, auch bei Ausnahme.
+
+        Die Rueckgabe im `finally` ist der heikle Punkt des ganzen Umbaus: ein Platz,
+        der nach einem Fehler nicht zurueckkommt, ist die naechste Sperre — und genau
+        diese Klasse hat am 04.09.2026 das Feldsystem 28 Minuten angehalten. Wer hier
+        etwas aendert, laesst das `finally` in Ruhe.
+
+        `etikett` sagt, WORAN gerechnet wird (Ereignis-ID), `art` (aus ARTEN) sagt,
+        WER rechnet — A1 (05.09.2026): vorher trug das Etikett beides als Text
+        (`"ernte:<eid>"`), und der Waechter reihte es blind als Ereignis neu ein.
+        Eine unbekannte `art` ist ein Programmierfehler des Aufrufers und faellt hier
+        laut, nicht erst in der Fairness-Rechnung.
+
+        `timeout_s=None` wartet unbegrenzt, wie der heutige `with self.lock:` es tut.
+
+        FAIRNESS N-1 (C2, 05.09.2026, bauplan_0505.md §1): vor dem Semaphor steht
+        seit .505 die Frage, ob DIESE Klasse ueberhaupt noch nehmen darf. Hielte
+        eine Klasse schon `kapazitaet - 1` Plaetze und wartete eine andere, tritt
+        sie in Scheiben von `FAIRNESS_SCHEIBE_S` zurueck — `timeout_s` gilt fuer
+        das GANZE Warten (Zuruecktreten + Semaphor), nicht je Teil.
+
+        Die Gegenpruefung NACH dem Semaphor ist kein Zierrat: zwei Threads
+        derselben Klasse koennen die Vorpruefung gleichzeitig bestehen (Ernte hat
+        seit P6 K Abholer). Ohne die zweite, unter dem Mutex gezaehlte Pruefung
+        haetten beide genommen und die Klasse haelt N — genau der Zustand, den die
+        Regel verbietet. Wer dabei zu viel ist, gibt das Semaphor sofort zurueck
+        und stellt sich neu an.
+        """
+        if art not in self.ARTEN:
+            raise ValueError(f"unknown slot class {art!r} (allowed: {self.ARTEN})")
+        marke_w = self._meine_wartemarke(art)
+        # C3 (05.09.2026, Widerleger C1 Notiz 10, Nachzug N1): `is not None` statt
+        # der Wahrheitspruefung. `timeout_s=0` heisst „gar nicht warten"; mit dem
+        # alten `if timeout_s` fiel genau diese Null auf `None` = UNBEGRENZT
+        # warten zurueck — die groesstmoegliche Verwechslung, und still. Kein
+        # heutiger Aufrufer uebergibt 0, der Rueckfall war also nie sichtbar; er
+        # bleibt trotzdem eine Falle fuer den naechsten (Proben, Kurz-Versuche).
+        frist_ende = (time.monotonic() + timeout_s) if timeout_s is not None else None
+        while True:
+            while self._fairness_blockiert(art, marke_w):
+                self._fair_melden(art, self.belegt_je_art()[art])
+                if frist_ende is None:
+                    time.sleep(FAIRNESS_SCHEIBE_S)
+                    continue
+                rest = frist_ende - time.monotonic()
+                if rest <= 0:
+                    yield None
+                    return
+                time.sleep(min(FAIRNESS_SCHEIBE_S, max(0.01, rest)))
+            if frist_ende is None:
+                erworben = self._sem.acquire()
+            else:
+                rest = frist_ende - time.monotonic()
+                erworben = rest > 0 and self._sem.acquire(timeout=rest)
+            if not erworben:
+                yield None
+                return
+            # Gegenpruefung (s. Docstring): `wartende_andere` VOR dem Mutex, weil
+            # es die Warteschlangen-Frage des Dienstes stellt und damit dessen
+            # Locks anfasst; unter dem Mutex wird nur noch gezaehlt und belegt.
+            andere = self.wartende_andere(art, marke_w)
+            with self._mutex:
+                gehalten = sum(1 for d in self._belegt.values() if d["art"] == art)
+                zu_viel = andere and self._ueber_der_latte(art, gehalten)
+                if not zu_viel:
+                    # Der `else 0`-Zweig ist unerreichbar: das BoundedSemaphore
+                    # laesst hoechstens `kapazitaet` Halter gleichzeitig herein,
+                    # und so viele Nummern liegen in `_frei_nummern`. Er bleibt
+                    # als Notnagel stehen (nie ohne Nummer weiterlaufen), ist aber
+                    # KEIN gueltiger Betriebszustand: zwei gleichzeitige Halter
+                    # bekaemen beide die 0 und ueberschrieben einander in
+                    # `_belegt` — s. die Warnung in `_worker()` (C3, 05.09.2026,
+                    # Widerleger C1 Notiz 10).
+                    nr = self._frei_nummern.pop(0) if self._frei_nummern else 0
+                    self._marke += 1
+                    marke = self._marke
+                    self._belegt[nr] = {"art": art, "etikett": etikett,
+                                        "seit": time.time(),
+                                        "puls": time.monotonic(), "marke": marke}
+            if not zu_viel:
+                break
+            self._sem.release()
+            self._fair_melden(art, gehalten)
+        try:
+            yield nr
+        finally:
+            # P1, Identitaet der Belegung: die PLATZNUMMER allein taugt hier nicht.
+            # Wird ein stummer Platz eingezogen und sofort neu vergeben, kehrt der alte
+            # Halter womoeglich spaeter doch zurueck — sein `finally` wuerde dann den
+            # Eintrag des NEUEN Halters loeschen und das Semaphor ein zweites Mal
+            # freigeben (Kapazitaet zu gross, BoundedSemaphore-ValueError). Deshalb
+            # raeumt hier nur auf, wer die Belegung wirklich noch haelt. Im Selbsttest
+            # nachgestellt, bevor es gebaut wurde.
+            with self._mutex:
+                _meins = self._belegt.get(nr, {}).get("marke") == marke
+                if _meins:
+                    self._belegt.pop(nr, None)
+                    if nr and nr not in self._frei_nummern:
+                        self._frei_nummern.append(nr)
+                        self._frei_nummern.sort()
+            if _meins:
+                self._sem.release()
+
+    def puls(self, nr):
+        """Lebenszeichen eines Platzes (Konzept §5.1: die Freigabe haengt spaeter am
+        Puls, NICHT an einer Frist — eine legale Analyse darf bis 3x
+        `analyse_timeout_s` Wanduhr brauchen, eine Frist darunter gaebe einen
+        zusaetzlichen Platz aus, waehrend noch gerechnet wird).
+
+        UNGEBUNDEN: dieser Griff pulst den Platz, egal WER ruft. Aufrufer, die einen
+        Platz halten, nehmen deshalb `puls_fuer(nr)` — die an ihre Belegung gebundene
+        Fassung (A3, Begruendung dort). `puls()` bleibt fuer Proben und als schlichter
+        Zustands-Griff bestehen."""
+        with self._mutex:
+            if nr in self._belegt:
+                self._belegt[nr]["puls"] = time.monotonic()
+
+    def puls_fuer(self, nr):
+        """Lebenszeichen-Griff, GEBUNDEN an die Belegung, die jetzt auf Platz `nr`
+        sitzt -> aufrufbare Closure ohne Argumente.
+
+        A3 (05.09.2026, Befund des A2-Bauers zu bauplan_0505.md §0): `puls(nr)`
+        frischt den Puls des PLATZES auf, ohne zu fragen, wer da pulst. Ein
+        eingezogener Zombie-Thread pulst aber weiter — sein `job()` laeuft ja im
+        select-Takt weiter — und haelt damit den NACHFOLGER auf demselben Platz
+        kuenstlich am Leben: der Waechter saehe einen wirklich haengenden Halter als
+        gesund und zoege ihn nie ein. Genau die Maskierung, die den Waechter still
+        entwaffnet. Diese Fassung merkt sich die Belegungs-MARKE (dieselbe Identitaet,
+        an der `platz()` sein `finally` festmacht) und setzt den Puls nur, solange sie
+        gilt; danach tut sie nichts. STILL und ohne Logzeile: der Griff wird je
+        PULS_TAKT_S gerufen, eine Zeile daraus wuerde das Dienst-Log fluten.
+
+        MUSS innerhalb der `platz()`-Klammer gebaut werden. Davor gibt es keine Marke,
+        und die Closure bliebe dauerhaft wirkungslos (ein freier Platz hat gar keine,
+        ein fremder eine andere)."""
+        with self._mutex:
+            d = self._belegt.get(nr)
+            marke = d["marke"] if d else None
+
+        def _puls():
+            with self._mutex:
+                d = self._belegt.get(nr)
+                # `marke is None` (Closure auf einem freien Platz gebaut) trifft nie
+                # zu: Marken sind fortlaufende Zahlen ab 1.
+                if d is not None and d["marke"] == marke:
+                    d["puls"] = time.monotonic()
+
+        return _puls
+
+    def stumme_plaetze(self, frist_s):
+        """Plaetze, deren Lebenszeichen aelter ist als `frist_s` -> [(nr, etikett, alter_s)].
+
+        NUR eine Auskunft, kein Eingriff: wer einzieht, entscheidet der Waechter im
+        Dienst, weil nur er den zugehoerigen Worker-Prozess kennt."""
+        with self._mutex:
+            jetzt = time.monotonic()
+            return [(nr, d["etikett"], round(jetzt - d["puls"], 1))
+                    for nr, d in sorted(self._belegt.items())
+                    if jetzt - d["puls"] > frist_s]
+
+    def stumm_mit_marke(self, nr, frist_s):
+        """Ist Platz `nr` JETZT noch stumm? -> (marke, puls_alter_s).
+
+        `marke` ist die Marke der Belegung, wenn der Platz stumm ist, sonst None;
+        `puls_alter_s` das Alter des letzten Lebenszeichens (None, wenn der Platz
+        frei ist). Also drei unterscheidbare Antworten in EINEM Griff: (marke, alter)
+        = stumm, (None, alter) = pulst wieder, (None, None) = frei.
+
+        A4 (05.09.2026, Widerleger-Befund B4 zu A1): der Waechter arbeitet die Liste
+        aus `stumme_plaetze()` ab und schiesst je Eintrag den Worker des Platzes. Die
+        Liste ist beim zweiten Eintrag aber schon bis zu einer Gnadenfrist alt (20 s),
+        beim dritten laenger — in der Zwischenzeit kann der Halter laengst wieder
+        pulsen. Er wurde dann auf eine VERALTETE Auskunft hin erschossen, und die
+        Logzeile behauptete dabei Stille: die K1-Klasse (die Diagnose luegt).
+
+        Deshalb ist diese Frage ATOMAR: belegt UND Puls aelter als `frist_s`, unter
+        demselben Mutex, in einem Zug mit der Marke, die der Waechter danach fuer die
+        Gnadenfrist braucht. Zwei Einzelgriffe (`stumme_plaetze` + `marke_von`) waeren
+        genau das Fenster wieder. `>` wie in `stumme_plaetze` — dieselbe Kante, damit
+        Auskunft und Kill-Kriterium nicht um Sekundenbruchteile auseinanderlaufen.
+
+        C0/W4-3 (05.09.2026, Widerleger A4): das Puls-ALTER kommt seitdem mit zurueck.
+        Der Waechter brauchte es fuer seine Skip-Logzeile („pulst wieder") und las es
+        vorher ueber ein zweites `zustand()` — eine nicht-atomare Nachlese, die bei
+        einem inzwischen NEU vergebenen Platz den Puls des NEUEN Halters mit dem
+        Etikett des ALTEN in eine Zeile schrieb (K1-Klasse, dieselbe wie B4). Ein
+        Griff, eine Wahrheit."""
+        with self._mutex:
+            d = self._belegt.get(nr)
+            if d is None:                          # inzwischen ordentlich zurueck
+                return None, None
+            # EINE Zeitnahme fuer Urteil und Auskunft: zwei `monotonic()`-Aufrufe
+            # koennten eine Zeile begruenden, die das Urteil nicht traegt.
+            alter = time.monotonic() - d["puls"]
+            if alter <= frist_s:
+                return None, round(alter, 1)       # pulst wieder: kein Kill
+            return d["marke"], round(alter, 1)
+
+    def einziehen(self, nr, grund, marke=None):
+        """Einen stummen Platz gewaltsam zurueckgeben (P1) -> (art, etikett) der
+        eingezogenen Belegung, None wenn der Platz schon frei war ODER `marke`
+        angegeben ist und eine ANDERE Belegung auf dem Platz sitzt.
+
+        Der Normalweg ist und bleibt das `finally` in `platz()`. Dieser Weg ist der
+        Notausgang fuer den Fall, dass der haltende Thread nie zurueckkehrt — dann
+        gaebe es kein `finally`, und die Kapazitaet saenke schleichend bis auf null.
+
+        A1 (05.09.2026, bauplan_0505.md §0): OB eingezogen wird, entscheidet der
+        Aufrufer VORHER (Kill des Platz-Workers + Gnadenfrist, s. Platzwaechter) —
+        diese Methode prueft nichts mehr selbst und reiht nichts neu ein. Vorher
+        zog der Waechter jeden stummen Platz sofort ein und reihte das Etikett als
+        Ereignis neu ein: 23 Einzuege LEBENDER Analysen an einem Vormittag beim
+        Feldtester (alle Platz 1, 125-138 s, blockiert am Job-Lock hinter einem
+        Hintergrund-Job), 57 Ereignisse mit Doppel-Urteil, und jedes eingezogene
+        `ernte:`-Etikett lief als 404-Schleife durch `process()`. Was mit `(art,
+        etikett)` geschieht, weiss nur der Aufrufer — deshalb die Rueckgabe.
+
+        WICHTIG: das Semaphor wird hier freigegeben, OHNE dass der alte Halter davon
+        weiss. Kehrt er wider Erwarten doch zurueck, erkennt sein `finally` an der
+        Belegungs-MARKE, dass die Belegung nicht mehr seine ist, und raeumt nichts auf.
+        Ohne diese Marke loeschte er den Eintrag des inzwischen neu vergebenen Platzes
+        und gaebe das Semaphor ein zweites Mal frei.
+
+        A4 (05.09.2026, Widerleger-Befund B7 zu A1): `marke` schliesst die andere
+        Haelfte derselben Luecke. Zwischen dem Urteil „tot" des Waechters und diesem
+        Einzug liegt keine Sperre — kehrt der Halter genau dort zurueck und nimmt ein
+        NEUER Kunde die Nummer, zog der Waechter bisher den Neuen ein (der rechnet
+        weiter, sein Ereignis wird ein zweites Mal eingereiht: die .504-Doppelurteil-
+        Klasse mit Umweg). Wer `marke` mitgibt, zieht nur seine eigene Belegung ein;
+        stimmt sie nicht, passiert NICHTS: kein Einzug, keine Semaphor-Freigabe (die
+        gehoert dem neuen Halter, ein Release hier gaebe die Kapazitaet doppelt aus).
+        `marke=None` bleibt der ungepruefte Griff fuer Proben und Zustands-Werkzeuge."""
+        fremd = None
+        with self._mutex:
+            if nr not in self._belegt:
+                return None
+            if marke is not None and self._belegt[nr]["marke"] != marke:
+                fremd = self._label(self._belegt[nr])
+            else:
+                d = self._belegt.pop(nr)
+                if nr and nr not in self._frei_nummern:
+                    self._frei_nummern.append(nr)
+                    self._frei_nummern.sort()
+        if fremd is not None:                     # Logzeile bewusst ohne den Mutex
+            self.log(f"slot {nr}: holder changed since the verdict — not reclaimed "
+                     f"(now {fremd})")
+            return None
+        self._sem.release()
+        self.log(f"analysis slot {nr} ({self._label(d)}) reclaimed after going "
+                 f"silent ({grund})")
+        return d["art"], d["etikett"]
+
+    def zustand(self):
+        """Fuer /health und die Systemseite: wer rechnet gerade woran.
+
+        `eid` bleibt das lesbare Etikett wie bisher (Bestandsleser: /health,
+        Support-Faelle; Nicht-Analyse-Klassen zeigen weiter `art:etikett`), `art`
+        kommt daneben — die GPU-Seite kann damit „analysis / harvest / background"
+        ausweisen, ohne den Text zu parsen."""
+        with self._mutex:
+            jetzt = time.monotonic()
+            return {"kapazitaet": self.kapazitaet, "belegt": len(self._belegt),
+                    "vorschlag": self.vorschlag,
+                    "plaetze": [{"nr": nr, "eid": self._label(d), "art": d["art"],
+                                 "seit_s": round(time.time() - d["seit"], 1),
+                                 "puls_alter_s": round(jetzt - d["puls"], 1)}
+                                for nr, d in sorted(self._belegt.items())]}
+
+
 # ------------------------------------------------------------------ Kern: ein Event verarbeiten
 class Service:
     def __init__(self, cfg, dry_alert=False):
@@ -2365,7 +3169,29 @@ class Service:
         # Fortschritt des laufenden Nachhol-Sweeps — EINE Quelle fuer Banner und /health.
         # Bewusst NICHT _nachhol_*: so heisst im Modul der stumme Retry-Runner fuer
         # gescheiterte Analysen, das waere ein Dauer-Missverstaendnis.
-        self._sweep_stand = {"aktiv": False, "gesamt": 0, "fertig": 0, "stunden": 0}
+        #
+        # B1 (05.09.2026, bauplan_0505.md): der Sweep RECHNET nicht mehr, er reiht ein
+        # (s. sweep()). Damit gibt es kein "fertig je Lauf" mehr — was noch aussteht,
+        # steht in der Warteschlange und auf den Plaetzen, also LIVE in
+        # `rueckstau_zahlen()`. Hier bleibt nur, was ein Lauf ueber sich selbst weiss:
+        # wie viele er eingereiht hat, aus welchem Fenster, ob er auf Nutzer-Wunsch
+        # lief und ob er ueberhaupt ein Nachhol-Lauf war (nur der traegt einen Banner —
+        # im Poll-Betrieb ist JEDER Sweep der normale Antrieb, ein Banner je Ereignis
+        # waere Dauerblinken).
+        self._sweep_stand = {"gesamt": 0, "stunden": 0,
+                             "auf_wunsch": False, "nachholend": False}
+        # B1: die Ereignisse des LETZTEN Nutzer-Laufs ("Holen"-Knopf). Sein Banner und
+        # der 409-Riegel haengen daran, ob davon noch etwas in Schlange oder Analyse
+        # steckt — nicht mehr daran, ob ein Thread noch in einer Schleife sitzt.
+        self._sweep_eids = set()
+        # B2 (05.09.2026, Widerleger-Befund B1 N-6): der Riegel gegen den ZWEITEN
+        # Klick greift ab dem Klick, nicht erst ab `_sweep_eids`. Dazwischen liegt
+        # der Frigate-GET des Laufs (bei sweep_limit 5000 mehrere Sekunden) — in
+        # diesem Fenster bekam ein zweiter Klick HTTP 200 und die Antwort
+        # "nothing to fetch", waehrend der erste Lauf gerade 50 Ereignisse holte.
+        # `sweep()` setzt die Marke vor dem GET und loest sie in seinem `finally`;
+        # ab da traegt `_sweep_eids` die Frage weiter.
+        self._catchup_klick_offen = False
         # .371 Zurueckgehaltener Start-Stapel (catchup_modus() == "ask"): Event-IDs,
         # die beim Start schon dalagen und auf einen Klick des Nutzers warten. Sie
         # sind BEWUSST nicht in self.processed — anders als beim "off"-Weg bleiben
@@ -2402,7 +3228,24 @@ class Service:
         self._nachlern_lock = threading.Lock()    # schuetzt _nachlern_timer
         self._nachlern_timer = {}                 # person -> Debounce-Timer: Bestands-Suche erst nach Durchgangs-Ende (User 21.07.)
         self._nachlern_eids = {}                  # person -> Events des laufenden Durchgangs (.308 Auto-Vorrat)
-        self._gpu_bg_lock = threading.Lock()      # serialisiert schwere GPU-Hintergrund-Subprozesse (Review 21.07.): hoechstens EINER gleichzeitig, Live-run_analyze bleibt frei — AUSSER die Wanduhr-Messung: die serialisiert sich zusaetzlich ueber den Analyse-Slot gegen Live (_roundtrip_seriell, Issue #21: auf 2C/4T war "frei" = Minuten Doppellast) und nimmt DIESES Lock nur je Roundtrip, nie waehrend sie auf Live wartet (Nachbesserung W5, Regel wie start_nachhol)
+        # HALTER dieses Locks (Stand C2, 05.09.2026): qs_neu_starten,
+        # vorschlaege_starten, anlern_nachpruefung_starten, _sammle_fahren und der
+        # Wanduhr-Roundtrip. Die ERNTE ist seit C2 KEIN Halter mehr (Lernlauf,
+        # Bruecke, Kalibrier-Auffueller): sie ist Kunde der Vergabestelle, und mit
+        # diesem EINEN Mutex um den Job waeren ihre K Abholer (P6) wieder auf einen
+        # serialisiert. Sie blickt nur noch lesend her (`.locked()`) und tritt vor
+        # einem laufenden Subprozess-Job zurueck. Zweck des Locks bleibt: hoechstens
+        # EIN schwerer GPU-Hintergrund-SUBPROZESS gleichzeitig (Review 21.07.) —
+        # die drei Starter oben machen einen eigenen GPU-Kontext auf und halten
+        # keinen Platz (bekannte Luecke, bewusst nicht in .505, bauplan_0505 §1).
+        # Live-run_analyze bleibt frei — AUSSER die Wanduhr-Messung: die
+        # serialisiert sich zusaetzlich ueber den Analyse-Platz gegen Live
+        # (_roundtrip_seriell, Issue #21: auf 2C/4T war "frei" = Minuten
+        # Doppellast) und nimmt DIESES Lock nur je Roundtrip, nie waehrend sie auf
+        # Live wartet (Nachbesserung W5, Regel wie start_nachhol).
+        # LOCK-ORDNUNG unveraendert: _gpu_bg_lock -> Platz -> Job-Lock des
+        # Platz-Workers. Kein Platz-Halter fordert dieses Lock an.
+        self._gpu_bg_lock = threading.Lock()
         self._vision_lock = threading.Lock()      # V4: schuetzt Single-Flight + Debounce-Timer des Vision-Urteils
         self._vision_flug = None                  # core.visionurteil.Einfachlauf (lazy): 1 laufend + 1 wartend, Rest verworfen+gezaehlt
         self._vision_timer = {}                   # pass_key -> Debounce-Timer (Muster _nachlern_timer): Urteil erst nach Durchgangs-Ende
@@ -2423,7 +3266,11 @@ class Service:
         frigate_schoner.log = self.log
         self._emb = None                          # Lazy-Embedder (Upload-Gate + Lern-Bruecke seit .235)
         self._emb_lock = threading.Lock()         # .235: Vorwaerm-Thread + Klick duerfen nicht doppelt bauen
-        self._worker_obj = None                   # W2: persistenter Analyse-Worker (lazy, s. _worker)
+        # C1 (05.09.2026): EIN Pool fuer ALLE Plaetze — Platz 1 ist kein Sonderling
+        # mehr (frueher stand er als `_worker_obj` daneben und wurde von allen
+        # Hintergrund-Jobs mitbenutzt, s. `_worker`). `_worker_obj` ist seitdem eine
+        # lesende Eigenschaft auf `_worker_pool[1]`.
+        self._worker_pool = {}                    # Platz 1..N -> eigener WorkerProzess (lazy)
         self._personwork_obj = None               # P1 (.202): Koerper-Prozess (lazy, s. _personwork)
         self._pw_prio_lock = threading.Lock()     # P1: Vorrang-Zaehler der Live-Spur
         self._pw_live_offen = 0
@@ -2437,7 +3284,74 @@ class Service:
                                                   # (Waisen-ffmpeg schrieb sonst nach re-exec weiter)
         self.enroll_warnung = None                # letzte Drift-Waechter-Warnung (UI/System)
         os.makedirs(os.path.join(cfg["data_dir"], "learn", "enroll"), exist_ok=True)
-        self.lock = threading.Lock()
+        # E2: RLock statt Lock. Grund ist der Wiedereintritt, nicht die Nebenläufigkeit:
+        # bei EINEM Platz umklammert `_analyse_klammer()` weiterhin die ganze Analyse
+        # (bitgleich zu vorher), und die neuen inneren Klammern um Akte-Append und
+        # `processed` liegen dann INNERHALB dieser Klammer — mit einem einfachen Lock
+        # wuerde sich der Thread dabei selbst blockieren. Fuer andere Threads verhaelt
+        # sich ein RLock unveraendert. `.locked()` wird auf diesem Lock nirgends mehr
+        # aufgerufen (die sechs Sonden fragen seit E0 die Platz-Vergabe) — das ist die
+        # Bedingung dafuer, dass der Tausch ueberhaupt geht.
+        self.lock = threading.RLock()
+        # E0 (Konzept Parallel-Analyse §3): die Platz-Vergabe liegt VOR self.lock,
+        # ersetzt ihn NICHT — self.lock bleibt Akte- und Zustands-Mutex (fuenf Rollen,
+        # s. Analyseplaetze-Docstring). Werk 1 = bitgleich zum Verhalten davor.
+        # ACHTUNG Reihenfolge: `self.logbuf` entsteht erst weiter unten, `self.log`
+        # ist bis dahin NICHT benutzbar. Die Kapazitaets-Ermittlung meldet aber
+        # (Klemmung bzw. aufgehobene Klemmung) — deshalb wird die Meldung hier nur
+        # GEMERKT und nach der logbuf-Zeile ausgegeben. Realfall 04.09.2026: ein
+        # `self.log(...)` an dieser Stelle killte den Dienst beim Start mit
+        # `AttributeError: 'Service' object has no attribute 'logbuf'` — und zwar
+        # NUR auf OpenVINO, weil nur dort ueberhaupt gemeldet wird. Auf CUDA lief es
+        # durch, der Fehler waere also erst beim Intel-Nutzer im Feld aufgeschlagen.
+        self._plaetze_meldung = None
+        self._plaetze_vorschlag = None
+        _kap = self._plaetze_kapazitaet(cfg)          # setzt auch _plaetze_vorschlag
+        self._plaetze = Analyseplaetze(kapazitaet=_kap, log=self.log,
+                                       vorschlag=self._plaetze_vorschlag)
+        # C2 (05.09.2026, bauplan_0505.md §1): so sieht die Vergabestelle, dass die
+        # ANALYSE wartet. Sie meldet sich nicht selbst an — ihre Nachfrage steht in
+        # der Ereignis-Warteschlange (der Abholer hat sein Ereignis bereits gezogen,
+        # wenn er einen Platz will). Seit B1 ist diese Schlange der EINE Weg, also
+        # auch im Poll-Betrieb die richtige Frage; bis .504 war sie dort per Bau
+        # leer und die Ernte bekam den Platz fast immer, waehrend der Rueckstand
+        # wuchs. `rueckstau_zahlen` ist die eine Quelle dafuer (Banner, Kachel,
+        # /health, 409-Riegel lesen dasselbe).
+        self._plaetze.wartend_fn_analyse = lambda: self.rueckstau_zahlen()[0] > 0
+        # A3 (05.09.2026, bauplan_0505.md §0): die IN-ARBEIT-MARKE. `processed` wird
+        # erst am ENDE einer Analyse gesetzt, der Guard prueft sie am Anfang — ab
+        # zwei Plaetzen steht dieses Fenster offen, und zwei Wege auf dasselbe
+        # Ereignis (MQTT-Redelivery, Sweep, Support-Einspielung, Waechter-Requeue)
+        # rechnen es gleichzeitig. Beim Feldtester am 05.09.: 57 Ereignisse mit 2+
+        # Urteilen, 59 ueberzaehlige Rechnungen von 1032, 19 doppelte
+        # Anwesenheitsmarken — und beide Laeufe truncaten dasselbe analyze.log.
+        # Gelesen und geschrieben IMMER unter `self.lock`, in derselben Klammer wie
+        # `processed`: ein Guard, eine Atomaritaet (s. `_analyse_beginnen`).
+        #
+        # A4 (05.09.2026, Befund am A3-Bau): eid -> TOKEN statt einer blossen Menge.
+        # Mit der Menge loeschte ein zurueckkehrender Zombie die Marke des NEU
+        # gestarteten Laufs derselben eid: der Waechter zieht den stummen Halter ein
+        # und reiht neu ein, der neue Lauf setzt die Marke, der alte Thread kommt
+        # doch noch zurueck und sein `finally` nimmt sie weg — ab da ist das Ereignis
+        # wieder ungeschuetzt, ein dritter Weg (Sweep/MQTT-Redelivery) darf parallel
+        # rechnen. Dieselbe Identitaets-Frage wie bei der Belegungs-Marke der
+        # Vergabestelle, dieselbe Antwort: eine fortlaufende Nummer je Lauf, und
+        # zurueckgeben darf nur, wer sie traegt.
+        self._laufend = {}
+        self._laufend_zaehler = 0
+        # E0b: Mutex fuer den GETEILTEN Dienst-Zustand (Konzept §4.3). Heute liegt
+        # self.lock um die ganze Analyse und schuetzt diese Read-Modify-Write-Paare
+        # nebenbei mit; ab Kapazitaet > 1 faellt dieser Schutz weg, weil zwei Plaetze
+        # fast IMMER zwei Ereignisse DESSELBEN Durchgangs tragen (die Warteschlange ist
+        # FIFO nach Faelligkeit, Szenario-Prinzip). Ungeschuetzt braechen dann genau die
+        # Zusagen, die den Tester treffen: "EIN Push pro Person und Erscheinen"
+        # (last_seen), der Alarm-Cooldown (last_alert) und der Stoerungsmelder
+        # "3 Analysen in Folge" (die beiden Fehlerserien-Zaehler).
+        self._zustand_lock = threading.RLock()
+        # (C2, 05.09.2026: `_ernte_wartet_seit` — der Beginn der Wartezeit fuers
+        # Fairness-Ventil — ist entfallen. Die Wartezeit muss niemand mehr messen:
+        # die Regel N-1 in der Vergabestelle laesst per Bau immer einen Platz frei,
+        # solange eine andere Klasse wartet. Wer wartet, meldet sich dort an.)
         # Nachbesserung W1b: der Koerper-Strang (_person_live) laeuft in einem
         # daemon-Thread, der self.lock UEBERLEBT (voller Decode + Pose + DINOv2 +
         # SVM in-Prozess). 'Live laeuft' ist deshalb self.lock ODER dieser
@@ -2446,6 +3360,8 @@ class Service:
         self._personlive_lock = threading.Lock()
         self._personlive_aktiv = 0
         self.logbuf = collections.deque(maxlen=300)   # Dienst-Log fuer Webview /log
+        if self._plaetze_meldung:      # gemerkt im Konstruktor, s. dort (logbuf gab es noch nicht)
+            self.log(self._plaetze_meldung)
         # .173 Auto-Default (User-Go 10.08.): Erst-Boot-Entscheid HIER im __init__ —
         # vor Publisher/Trigger/Web, es kann noch kein Event verarbeitet worden sein.
         self._kette_auto_default()
@@ -3477,25 +4393,95 @@ class Service:
     def _sammle_fahren(self, tage, mit_migriere, timeout):
         """anlernen-sammle fahren — durch den W2-Worker (worker=an, Kontext-Buendelung) oder
         als Subprozess (Fallback worker=aus). Rueckgabe (stdout_text, fehler|None); der
-        Subprozess-Weg wirft bei Timeout weiter subprocess.TimeoutExpired (alter Kontrakt)."""
-        w = self._worker()
-        if w is not None:
+        Subprozess-Weg wirft bei Timeout weiter subprocess.TimeoutExpired (alter Kontrakt).
+
+        C1 (05.09.2026, bauplan_0505.md §1): der Worker-Weg ist jetzt KUNDE der
+        Vergabestelle — er nimmt einen Platz der Klasse `bg`, statt sich unsichtbar am
+        Job-Lock von Worker 1 anzustellen. Das war der Feldbefund vom 05.09.: 23
+        eingezogene LEBENDE Analysen an einem Vormittag, alle auf Platz 1, weil Platz 1
+        seinen Worker mit Sammle und Wanduhr teilte. Die Analyse stand dort stumm hinter
+        dem Sammel-Job (der Puls beginnt erst im Job), der Waechter hielt sie fuer tot.
+        Jetzt sieht der Broker den Sammel-Job: bei `analyse_plaetze = 1` ist der eine
+        Platz entweder Analyse ODER Sammeln — exakt das alte BG-Gate, nur sichtbar.
+
+        `_gpu_bg_lock` bleibt darum: es serialisiert weiter gegen die SUBPROZESS-Jobs
+        (qs_neu_starten, vorschlaege_starten, anlern_nachpruefung), die einen eigenen
+        GPU-Kontext aufmachen und keinen Platz halten (bekannte Luecke, bauplan §1).
+        Lock-Ordnung wie bei Ernte und Wanduhr: erst `_gpu_bg_lock`, dann Platz."""
+        if self.cfg.get("worker", True):
             lp = os.path.join(self.cfg["data_dir"], "state", "sammle.log")
             open(lp, "w").close()
             with self._gpu_bg_lock:              # gegen vorschlaege/qs serialisieren (Review 21.07.)
-                antwort = w.job({"typ": "sammle", "tage": tage,
-                                 "mit_migriere": mit_migriere, "log": lp,
-                                 # .398 Ring-Zulauf: der Szenario-Weg speist
-                                 # die Kalibrier-Ringe (Deckel aus der Config,
-                                 # 0 = aus wie ueberall)
-                                 "kalib_deckel": int(self.cfg.get("live_kalib_max") or 0)},
-                                timeout)
+                # FRIST = die des Jobs. Eine kuerzere Frist waere eine echte
+                # Verhaltensaenderung: auf einem Rueckstands-System kaeme das
+                # 06:00-Netz dann nie mehr dran.
+                # C3 (05.09.2026, Widerleger C1 Notiz 3, Nachzug N1): hier stand
+                # „die Wartestelle wandert nur vom Lock in die Vergabestelle" —
+                # das ist zu freundlich. Die Platz-Wartezeit kommt VOR den
+                # unveraenderten Job-Lock-Deckel (`.502`, ebenfalls `timeout`),
+                # sie ersetzt ihn nicht. Damit haelt dieser Zweig `_gpu_bg_lock`
+                # im schlimmsten Fall 3 x `timeout` (Platz + Job-Lock + Antwort)
+                # statt der 2 x vor .505 — beim 06:00-Netz also bis zu 90 statt
+                # 60 min. Blockiert werden dabei nur die Subprozess-Jobs
+                # (qs_neu_starten, vorschlaege_starten, anlern_nachpruefung), die
+                # sich beim Anstehen mit einem `.locked()`-Blick begnuegen.
+                # C2 (05.09.2026): als wartend ANMELDEN, sonst ist dieser Kunde
+                # fuer die Fairness-Regel unsichtbar — die Ernte duerfte dann bei
+                # N >= 2 die N-1-Regel gegen die Analyse ausspielen, waehrend das
+                # 06:00-Netz danebensteht, und bei N = 1 kaeme es nie dran.
+                with self._plaetze.wartend("bg"), \
+                        self._plaetze.platz("sammle", art="bg",
+                                            timeout_s=timeout) as nr:
+                    if nr is None:
+                        # Kein Platz binnen der Frist — derselbe Rueckweg wie bisher bei
+                        # „Worker die ganze Frist beschaeftigt": (out, fehler). Die
+                        # Aufrufer loggen ihn und melden ihn (Netz-Sammeln zusaetzlich
+                        # per Push); genau das soll ein System auch sagen, das eine
+                        # halbe Stunde lang keinen freien Platz hatte.
+                        self.log(f"collection: no free analysis slot within "
+                                 f"{timeout}s — postponed")
+                        return "", (f"no free analysis slot within {timeout}s — "
+                                    f"collection postponed")
+                    w = self._worker(nr)
+                    # C3 (05.09.2026, Widerleger C1 Punkt 2): eigener Rueckweg je
+                    # Aufruf — daran haengt unten die Unterscheidung „Worker tot"
+                    # gegen „Job-Lock die ganze Frist fremd belegt".
+                    _wi = {}
+                    antwort = w.job({"typ": "sammle", "tage": tage,
+                                     "mit_migriere": mit_migriere, "log": lp,
+                                     # .398 Ring-Zulauf: der Szenario-Weg speist
+                                     # die Kalibrier-Ringe (Deckel aus der Config,
+                                     # 0 = aus wie ueberall)
+                                     "kalib_deckel": int(self.cfg.get("live_kalib_max") or 0)},
+                                    timeout, info=_wi,
+                                    # C1: Lebenszeichen des Platzes (A2/A3-Muster der
+                                    # Ernte). Ohne es zoege der Platzwaechter jeden
+                                    # Sammel-Job ueber 120 s ein — der Job liefe weiter
+                                    # und der Platz waere doppelt vergeben.
+                                    puls=self._plaetze.puls_fuer(nr))
             try:
                 out = open(lp).read()
             except Exception:
                 out = ""
             if antwort is None:
-                return out, f"worker timeout ({timeout}s) or died"
+                # C3 (05.09.2026, Widerleger C1 Punkt 2, Nachzug N1): zuerst die
+                # Frage, die der Rueckweg dieses Aufrufs sicher beantwortet. Blieb
+                # das Job-Lock die ganze Frist fremd belegt, LEBT der Worker — die
+                # Meldung „worker died (…)" darunter haette dann eine beliebig
+                # alte, FREMDE Todesursache genannt (sie wird nur unter dem Lock
+                # gesetzt, dieser Aufruf hat das Lock nie bekommen). Beim
+                # Netz-Sammeln geht dieser Text per Pushover an den Nutzer.
+                if _wi.get("lock_timeout"):
+                    return out, (f"worker busy: its job lock was held by another "
+                                 f"job for the full {timeout}s — collection "
+                                 f"postponed")
+                # C0/W4-2 (05.09.2026, Widerleger A4): die WIRKLICHE Ursache statt der
+                # Sammel-Vermutung „timeout or died" — Muster `run_analyze`. Sie steht
+                # im Docker-Log schon; ohne sie reiste in Log und Pushover-Meldung des
+                # Netz-Sammelns nur ein Entweder-oder.
+                _u = getattr(w, "letzte_ursache", None)
+                return out, (f"worker died ({_u})" if _u
+                             else f"worker timeout ({timeout}s) or died")
             if not antwort.get("ok"):
                 return out, str(antwort.get("fehler") or "unbekannt")
             return out, None
@@ -3645,9 +4631,15 @@ class Service:
         alle Timer-Threads stauten sich UNFAIR und UNSICHTBAR am Analyse-Lock
         (kein Deckel, keine Reihenfolge — CPython-Locks sind nicht FIFO).
         Jetzt: EIN Abarbeiter, FIFO nach Faelligkeit (clip_delay ab
-        Event-Ende), Deckel EV_QUEUE_MAX mit LAUTEM Verwerfen des aeltesten
-        (das Nachhol-Netz holt Verworfene spaeter stumm nach — kein stiller
-        Verlust), Laenge und Alter sichtbar im Systemstatus."""
+        Event-Ende), Deckel EV_QUEUE_MAX (seit B2 wird bei voller Schlange das
+        NEUE abgewiesen statt das aelteste verdraengt — s. `event_einreihen`;
+        das Nachhol-Netz holt Abgewiesene spaeter nach, jenseits des
+        lookback-Fensters haelt sie der Merkzettel), Laenge und Alter sichtbar
+        im Systemstatus.
+
+        Bewusst eine `deque` OHNE `maxlen`: mit `maxlen` waere das Verdraengen
+        des aeltesten wieder da, und zwar unsichtbar im Datentyp statt sichtbar
+        im Code (Widerleger-Befund B1 B-4)."""
         import collections as _coll
         self._ev_q = _coll.deque()
         self._ev_wecker = threading.Condition()
@@ -3658,61 +4650,259 @@ class Service:
                 with self._ev_wecker:
                     while not self._ev_q:
                         self._ev_wecker.wait(timeout=30)
-                    faellig, eid, _einge = self._ev_q[0]
-                    rest = faellig - time.time()
-                    if rest > 0:
-                        self._ev_wecker.wait(timeout=min(rest, 5.0))
+                    # C2-T0 (05.09.2026, bauplan_0505.md §2 Gruppe C, Befund aus
+                    # B1): das ERSTE FAELLIGE Element, nicht der Kopf. Alle Abholer
+                    # warteten bisher auf `_ev_q[0]`; ein Eintrag mit noch offener
+                    # clip_delay-Faelligkeit hielt damit ALLE `sofort`-Eintraege
+                    # hinter sich auf — bis zu einem vollen clip_delay, obwohl
+                    # Plaetze frei waren. Auftreten kann das, sobald beide Wege
+                    # einreihen (MQTT-Ereignis mit Frist vor einem Reconnect-Sweep
+                    # mit `sofort=True`); es loest sich von selbst, kostet aber
+                    # genau die Latenz, gegen die .505 gebaut ist. Die Suche ist
+                    # linear und laeuft unter `_ev_wecker`: bei EV_QUEUE_MAX = 5000
+                    # sind das im schlimmsten Fall 5000 Zahlenvergleiche, also
+                    # Mikrosekunden, und nur dann, wenn wirklich nichts faellig ist.
+                    jetzt = time.time()
+                    treffer, frueheste = None, None
+                    for _k, (_f, _e, _i) in enumerate(self._ev_q):
+                        if _f <= jetzt:
+                            treffer = _k
+                            break
+                        if frueheste is None or _f < frueheste:
+                            frueheste = _f
+                    if treffer is None:
+                        # Schlafen bis zum FRUEHESTEN faelligen Eintrag, nicht bis
+                        # zum Kopf: der Kopf kann der spaeteste von allen sein.
+                        self._ev_wecker.wait(
+                            timeout=min(max(frueheste - jetzt, 0.05), 5.0))
                         continue
-                    self._ev_q.popleft()
-                    self._ev_gesehen.discard(eid)
-                self.process_safe(eid)
-        threading.Thread(target=lauf, daemon=True, name="event-queue").start()
+                    if treffer == 0:
+                        _faellig, eid, _einge = self._ev_q.popleft()
+                    else:
+                        _faellig, eid, _einge = self._ev_q[treffer]
+                        del self._ev_q[treffer]
+                try:
+                    self.process_safe(eid)
+                finally:
+                    # B1/T2 (05.09.2026, Widerleger-Befund W-A3 "Queue-Fenster"):
+                    # der Vermerk faellt ERST HIER, nicht schon beim popleft.
+                    # Dazwischen liegen Hunger-Bremse (bis 120 s) und das Warten
+                    # auf einen Analyse-Platz (ohne Frist) — in diesem Fenster lag
+                    # die eid frueher in KEINER Menge. Solange der Sweep synchron
+                    # rechnete, fiel das nicht auf; ab B1 ist er Kunde derselben
+                    # Warteschlange und haette im 20-s-Takt jedes wartende Ereignis
+                    # ein zweites Mal eingereiht: verbrannte Platz-Belegungen und
+                    # "already being analysed" als Dauergast. Der Platzwaechter
+                    # loescht den Vermerk vor seiner Neu-Einreihung ausdruecklich
+                    # (sein Halter ist tot, sein `finally` kommt nie).
+                    # E6/N1 (05.09.2026): `event_neu_einreihen` tat das bis .505
+                    # ebenfalls — genau das machte den Vermerk fuer den Support-Weg
+                    # blind und erzeugte Doppel-Eintraege. Es fragt ihn jetzt, statt
+                    # ihn zu loeschen (Begruendung dort).
+                    with self._ev_wecker:
+                        self._ev_gesehen.discard(eid)
+        # E2b (gemessen 04.09.): EIN Abarbeiter je Analyse-Platz, nicht einer insgesamt.
+        # Ohne das ist die Platz-Vergabe wirkungslos — der eine Thread ruft process_safe
+        # SYNCHRON auf und holt das naechste Ereignis erst, wenn die Analyse fertig ist.
+        # Es gibt dann nie zwei Anfragen gleichzeitig, also auch nie zwei belegte Plaetze.
+        # Im Messlauf mit Kapazitaet 2 war die Folge "gleichzeitig 0": zwei Plaetze
+        # eingerichtet, kein einziger Ueberlapp, Rechenanteil unveraendert bei 31 %.
+        # Die Warteschlange selbst ist bereits mehrläufer-fest (popleft unter
+        # `_ev_wecker`), es fehlten nur die Abholer. Bei Kapazitaet 1 bleibt es bei
+        # genau einem Thread, also bitgleich zum Verhalten davor.
+        for _i in range(max(1, self._plaetze.kapazitaet)):
+            threading.Thread(target=lauf, daemon=True,
+                             name=f"event-queue-{_i + 1}").start()
 
-    EV_QUEUE_MAX = 500
+    def rueckstau_zahlen(self):
+        """(wartend, in_arbeit) — die EINE Quelle fuer Banner, Kachel, /health
+        und den Doppelstart-Riegel.
 
-    def event_einreihen(self, eid):
-        """Ein MQTT-Event faellig in clip_delay Sekunden einreihen (Dedup je
-        eid, Deckel mit lautem Verwerfen). Ohne gestartete Queue (Alt-Tests)
-        Rueckfall auf den alten Timer-Weg."""
+        B1 (05.09.2026, bauplan_0505.md): bis .504 zaehlte der Sweep selbst mit
+        (`_sweep_stand["fertig"]`), weil er seine todo-Liste synchron abarbeitete.
+        Ab B1 reiht er ein und ist damit fertig — der Rueckstand steht danach in
+        der Warteschlange und auf den Analyse-Plaetzen, nirgends sonst. Deshalb
+        wird er hier LIVE gelesen statt gezaehlt; ein abgebrochener Lauf kann so
+        auch keinen Banner mehr stehen lassen.
+
+        `_laufend` (die In-Arbeit-Marken aus A3/A4) wird bei Kapazitaet 1 BEWUSST
+        OHNE `self.lock` gelesen (Widerleger-Befund W-A3 E2): dort ist der Lock die
+        Analyse-Klammer und wird ueber die ganze Analyse gehalten — /health und der
+        Banner haetten daran fuer Minuten gehangen, also genau in dem Moment, in dem
+        der Nutzer wissen will, was los ist. `bool(dict)`/`len(dict)` sind in CPython
+        atomar (C-Ebene unter dem GIL), die Antwort ist damit ein gueltiger
+        Momentwert. Ab Kapazitaet 2 ist die Klammer `nullcontext`, der Lock also nur
+        noch kurzer Akte-Mutex — dort wird gesperrt wie bei jedem anderen Leser.
+        """
+        wartend = 0
+        try:
+            q = getattr(self, "_ev_q", None)
+            if q is not None:
+                with self._ev_wecker:
+                    wartend = len(q)
+        except Exception:                                 # noqa: BLE001
+            pass
+        arbeit = 0
+        try:
+            _l = getattr(self, "_laufend", None)
+            if _l is not None:
+                if getattr(self, "_plaetze", None) is not None \
+                        and self._plaetze.kapazitaet > 1:
+                    with self.lock:
+                        arbeit = len(_l)
+                else:
+                    arbeit = len(_l)
+        except Exception:                                 # noqa: BLE001
+            pass
+        return wartend, arbeit
+
+    def rueckstau_aktiv(self, zahlen=None):
+        """Steht ueberhaupt noch Analyse-Arbeit aus? (Schlange oder Platz belegt)
+
+        `zahlen` nimmt ein bereits gelesenes Paar aus `rueckstau_zahlen()`
+        entgegen: wer beides anzeigt, soll die Ableitung nicht auf einem ZWEITEN
+        Lesevorgang machen — sonst stuende auf der Kachel „laeuft: ja" neben
+        „0 in der Schlange, 0 in Arbeit" (K1: die Anzeige widerspricht sich
+        selbst)."""
+        wartend, arbeit = zahlen if zahlen is not None else self.rueckstau_zahlen()
+        return bool(wartend or arbeit)
+
+    def rueckstau_lauf_offen(self):
+        """Steht von dem Nachhol-Lauf, dem `_sweep_stand` gehoert, noch etwas aus?
+
+        B1: „laeuft" heisst seit dem Umbau nicht mehr „ein Thread sitzt in einer
+        Schleife" — der Sweep-Thread ist nach dem Einreihen weg. Die ehrliche Frage
+        ist, ob von SEINEN Ereignissen noch etwas in der Schlange oder in Arbeit
+        ist. Daran haengen der Banner und der 409-Riegel gegen den zweiten Klick.
+
+        Warum nicht einfach `rueckstau_aktiv()`: unter MQTT ist JEDER Sweep ein
+        Nachhol-Lauf (Start/Reconnect), und die Warteschlange fuellt sich danach
+        im Normalbetrieb dauernd weiter. Ein Banner am blossen Rueckstand waere
+        dort nach dem naechsten Ereignis wieder da und behauptete ein Nachholen,
+        das laengst durch ist. Deshalb zaehlen nur die Ereignisse DIESES Laufs.
+        B2 (05.09.2026): was am vollen Deckel abgewiesen wurde, steht gar nicht
+        erst in `_sweep_eids` (`event_einreihen` sagt False, der Sweep nimmt nur
+        die eingereihten) — ein Ereignis, das nirgends liegt, haelt hier keinen
+        Banner offen."""
+        eids = getattr(self, "_sweep_eids", None)
+        if not eids:
+            return False
+        try:
+            q = getattr(self, "_ev_q", None)
+            if q is not None:
+                with self._ev_wecker:
+                    if any(e[1] in eids for e in q):
+                        return True
+        except Exception:                                 # noqa: BLE001
+            pass
+        try:
+            # Gleiche Lock-Regel wie in rueckstau_zahlen (W-A3 E2).
+            _l = getattr(self, "_laufend", None) or {}
+            if getattr(self, "_plaetze", None) is not None \
+                    and self._plaetze.kapazitaet > 1:
+                with self.lock:
+                    return bool(eids & set(_l))
+            return bool(eids & set(_l))
+        except Exception:                                 # noqa: BLE001
+            return False
+
+    def rueckstau_aktiv_nutzerlauf(self):
+        """Laeuft der vom NUTZER angestossene Nachhol-Lauf („Holen"-Knopf) noch?
+        Das ist die Frage des 409-Riegels gegen den zweiten Klick und die Frage,
+        ob ein Poll-Sweep den Steckbrief ueberschreiben darf.
+
+        B2 (05.09.2026, Widerleger-Befund B1 N-6): ZWEI Quellen, und die erste ist
+        die wichtigere. `_catchup_klick_offen` steht ab dem Klick, also VOR dem
+        Frigate-GET des Laufs; `_sweep_eids` steht erst danach. Ohne die erste
+        Quelle klaffte genau der GET breite Spalt: ein zweiter Klick in diesem
+        Fenster lief am Riegel vorbei, bekam HTTP 200 und die Meldung „nothing to
+        fetch in the last 2h", waehrend der erste Lauf gerade 50 Ereignisse holte
+        (und beide Laeufe teilten sich die Menge, was `_sweep_eids` auf die
+        kleinere Haelfte gesetzt und den Banner zu frueh beendet haette)."""
+        if getattr(self, "_catchup_klick_offen", False):
+            return True
+        return bool((getattr(self, "_sweep_stand", None) or {}).get("auf_wunsch")
+                    and self.rueckstau_lauf_offen())
+
+    # B1 (05.09.2026, bauplan_0505.md): folgt dem Whitelist-Maximum von
+    # `sweep_limit` (seit .505 5000 statt 2000). Ab B1 ist der Sweep Kunde dieser
+    # Warteschlange — ein Lauf mit 5000 Treffern haette bei einem Deckel von 500
+    # 4500 davon wieder verloren, Ereignis fuer Ereignis eine Logzeile, und der
+    # naechste Sweep haette dasselbe getan. Bewusst eine KLASSENKONSTANTE und
+    # nicht aus der Config gelesen: die Gate-Proben bauen `Service.__new__` ohne
+    # cfg, und ein Deckel, den man erst mit Config kennt, waere dort blind.
+    EV_QUEUE_MAX = 5000
+
+    def event_einreihen(self, eid, sofort=False):
+        """Ein Event faellig in clip_delay Sekunden einreihen (Dedup je eid,
+        Deckel mit lautem Verwerfen). Ohne gestartete Queue (Alt-Tests)
+        Rueckfall auf den alten Timer-Weg.
+
+        `sofort=True` setzt die Faelligkeit auf JETZT. Das nimmt, wer den
+        clip_delay schon geprueft hat: der Sweep (seine todo-Liste filtert auf
+        `time.time() - end_time >= clip_delay`, B1) und der Platzwaechter (eine
+        tote Analyse hat ihr clip_delay laengst hinter sich). Ohne das kostete
+        jedes eingereihte Sweep-Ereignis den vollen clip_delay ein zweites Mal.
+
+        -> True = liegt jetzt in der Warteschlange, False = nicht eingereiht
+        (schon vermerkt, oder die Schlange ist voll). Der Sweep nimmt nur die
+        True-Faelle in seinen Steckbrief (`_sweep_eids`) — ein Ereignis, das
+        nirgends liegt, darf keinen Banner offenhalten.
+
+        E4 (05.09.2026, Widerleger E1+E2 B2): der Support-Fensterweg meldete
+        `eingereiht` aus "war nicht laufend" statt aus dem, was wirklich in der
+        Schlange landete — bei einem Queue-Deckel unter der Fenstergroesse war
+        die Zahl damit schlicht falsch. Die BESTEHENDEN Aufrufer (Sweep,
+        Platzwaechter, Kamera-/Clip-Weg) werten den Wert nicht aus; fuer sie
+        aendert sich nichts.
+
+        B2 (05.09.2026, Widerleger-Befund B1 B-4): bei voller Schlange wird das
+        NEUE abgewiesen, nicht mehr das AELTESTE verdraengt. Der alte Weg war
+        das Verhalten eines `deque(maxlen=)` von Hand: das laengst wartende
+        Ereignis fiel aus Schlange UND Vermerk, und beim Sweep fiel es damals
+        zugleich vom Merkzettel — gemessen (EV_QUEUE_MAX 5, 30 Ereignisse):
+        25 waren aus beidem raus, und der naechste Sweep holt nur zurueck, was
+        noch im `lookback_h`-Fenster liegt. Genau fuer das JENSEITS dieses
+        Fensters ist der Merkzettel da. Jetzt bleibt, wer schon drin ist; das
+        Neue kommt beim naechsten Sweep wieder (innerhalb `lookback_h`) bzw.
+        haelt es der Merkzettel (darueber hinaus, seit B-4).
+
+        Warum hier KEINE Logzeile mehr: sie stand je Ereignis, und ein Sweep am
+        Anschlag haette 4500 davon geschrieben. Der Sweep zaehlt seine
+        Abweisungen und schreibt EINE Zeile mit der Zahl. Ehrliche Grenze: eine
+        Abweisung auf einem anderen Weg (MQTT-Zulauf, Platzwaechter) sagt hier
+        nichts — sie steht als `queue_abgewiesen` im Systemstatus, und die
+        Warteschlange steht dann ohnehin sichtbar am Anschlag.
+        """
         if not hasattr(self, "_ev_q"):
-            threading.Timer(self.cfg["clip_delay"], self.process_safe,
-                            args=(eid,)).start()
-            return
+            threading.Timer(0 if sofort else self.cfg["clip_delay"],
+                            self.process_safe, args=(eid,)).start()
+            return True
         with self._ev_wecker:
             if eid in self._ev_gesehen:
-                return
+                return False
+            if len(self._ev_q) >= self.EV_QUEUE_MAX:
+                self._ev_abgewiesen = getattr(self, "_ev_abgewiesen", 0) + 1
+                return False
             self._ev_gesehen.add(eid)
-            self._ev_q.append((time.time() + float(self.cfg["clip_delay"]),
-                               eid, time.time()))
-            if len(self._ev_q) > self.EV_QUEUE_MAX:
-                _f, alt_eid, _e = self._ev_q.popleft()
-                self._ev_gesehen.discard(alt_eid)
-                self.log(f"event queue full ({self.EV_QUEUE_MAX}) — dropped "
-                         f"oldest {alt_eid} (the catch-up sweep will pick "
-                         f"it up later)")
+            _jetzt = time.time()
+            self._ev_q.append((_jetzt if sofort
+                               else _jetzt + float(self.cfg["clip_delay"]),
+                               eid, _jetzt))
             self._ev_wecker.notify()
+            return True
 
-    def event_neu_einreihen(self, eid):
-        """Support-Einspielung heisst 'JETZT (erneut) analysieren': die
-        processed-Merkung und der Queue-Dedup werden geloest, dann laeuft der
-        normale Weg. Ohne das griffe der Guard in process() — ein Event, das
-        der Dienst schon verarbeitet oder beim Start als uebersprungen
-        markiert hat (start_catchup-off), endete still als None (Testbett-
-        Befund 03.09.: Fenster-Einspielung traf den Start-Sweep, 3/3 Events
-        kamen nie zur Analyse). Die Akte wird regulaer ueberschrieben."""
-        with self.lock:
-            self.processed.discard(eid)
-        if hasattr(self, "_ev_wecker"):
-            with self._ev_wecker:
-                self._ev_gesehen.discard(eid)
-        # RE-ANALYSE HEISST RECHNEN (Prod-Befund 03.09. spaet, erster Fern-Test
-        # nach dem .500-Rollout): analyze.py setzt bei vorhandener
-        # results.jsonl im Event-Ordner auf RESUME und ueberspringt das Label
-        # — die Support-Einspielung lieferte in 0,0 s die ALTE Akte zurueck
-        # (ohne Blick-Kennwerte, Urteil ueber den win3s-Fallback), also genau
-        # nicht das neue Urteil, fuer das der Weg gebaut ist. Die Alt-Akte
-        # wird beiseitegelegt (nicht geloescht: results.vor_reanalyse_<ts>),
-        # der Worker rechnet frisch.
+    def _alt_akte_beiseite(self, eid):
+        """Die results.jsonl eines Ereignisses beiseitelegen (nie loeschen).
+        WIRFT NIE — sie laeuft ab zwei Plaetzen unter `self.lock` (N2), und ein
+        Traceback in dieser Klammer waere teurer als eine alte Akte.
+
+        RE-ANALYSE HEISST RECHNEN (Prod-Befund 03.09. spaet, erster Fern-Test
+        nach dem .500-Rollout): analyze.py setzt bei vorhandener results.jsonl
+        im Event-Ordner auf RESUME und ueberspringt das Label — die
+        Support-Einspielung lieferte in 0,0 s die ALTE Akte zurueck (ohne
+        Blick-Kennwerte, Urteil ueber den win3s-Fallback), also genau nicht das
+        neue Urteil, fuer das der Weg gebaut ist."""
         try:
             _ed = os.path.join(self.cfg["data_dir"], "events", str(eid))
             _rp = os.path.join(_ed, "results.jsonl")
@@ -3724,7 +4914,128 @@ class Service:
         except OSError as _e:
             self.log(f"{eid}: could not set previous results aside "
                      f"({type(_e).__name__}: {_e}) — analyze may resume the old file")
-        self.event_einreihen(eid)
+
+    def event_neu_einreihen(self, eid):
+        """Support-Einspielung heisst 'JETZT (erneut) analysieren': die
+        processed-Merkung und der Queue-Dedup werden geloest, dann laeuft der
+        normale Weg. Ohne das griffe der Guard in process() — ein Event, das
+        der Dienst schon verarbeitet oder beim Start als uebersprungen
+        markiert hat (start_catchup-off), endete still als None (Testbett-
+        Befund 03.09.: Fenster-Einspielung traf den Start-Sweep, 3/3 Events
+        kamen nie zur Analyse). Die Akte wird regulaer ueberschrieben.
+
+        -> True = eingereiht, False = NICHT eingereiht (laeuft gerade, dann ist
+        nichts angefasst — oder die Warteschlange ist am Deckel), None =
+        angenommen, aber ein anderer Weg (Sweep, MQTT, zweiter Support-Aufruf)
+        hatte die eid schon in der Schlange. Der dritte Fall ist ein ERFOLG (das
+        Ereignis wird analysiert, die Alt-Akte liegt beiseite), nur eben nicht
+        durch DIESEN Aufruf — er darf deshalb weder als 409 noch als `eingereiht`
+        gezaehlt werden (E4, 05.09.2026: `eingereiht` soll zaehlen, was wirklich
+        angehaengt wurde).
+
+        E6/N1 (05.09.2026, Widerleger E4 Befund 5 + B2 „Offene Punkte"): der
+        None-Fall war im ECHTEN Pfad UNERREICHBAR, und der False-Fall log bei
+        voller Schlange. Hier stand
+            `self._ev_gesehen.discard(eid)` … `return True if
+            self.event_einreihen(eid) else None`
+        — der discard loeschte genau den Zustand, an dem `event_einreihen` „steht
+        schon in der Schlange" erkennt, also haengte es IMMER ein zweites Mal an
+        (gemessen an den echten Methoden: Queue [EV1] -> Aufruf -> True, Queue
+        ['EV1','EV1']). Folgen: `schon_in_schlange` in `analysen/support_api.md`
+        und `core/registry.py` beschrieb Nicht-Verhalten, `eingereiht` zaehlte
+        eine wartende eid als neu, und die Doppel-Eintraege blaehten
+        `rueckstau_zahlen()`/`/health` und frassen Plaetze am 5000er-Deckel
+        (Sweep 5000 + Support-Fenster ist real erreichbar). Jetzt wird VOR dem
+        Einreihen unter `_ev_wecker` gefragt, ob die eid schon vermerkt ist; ist
+        sie es, passiert nichts weiter. Der discard ist damit ersatzlos weg — er
+        traf nur noch Faelle, die jetzt oben abbiegen. Aus demselben Grund gibt
+        der Rueckweg das Ergebnis von `event_einreihen` ehrlich weiter: seit B2
+        weist eine volle Schlange das NEUE ab, ein unbedingtes True waere die
+        Meldung „eingereiht" fuer ein Ereignis, das nirgends liegt.
+
+        Ehrliche Grenze: False sagt nicht, WELCHER der beiden Gruende vorlag.
+        „Laeuft gerade" ist der haeufige und steht als eigene Logzeile darueber;
+        die volle Schlange bekommt hier ihre eigene Zeile, und die Schlange steht
+        dann ohnehin sichtbar am Anschlag (`rueckstau.queue_abgewiesen`).
+
+        W-A3-BEFUND E3 (05.09.2026, bauplan_0505 E1): laeuft fuer diese eid
+        schon eine Analyse, weist der Eintritts-Guard (`_analyse_beginnen`) die
+        zweite ab — der Bediener hatte aber laengst HTTP 200, die Alt-Akte war
+        beiseitegelegt und es lief NICHTS. Deshalb wird die In-Arbeit-Marke
+        HIER zuerst geprueft, in DERSELBEN `self.lock`-Klammer wie das
+        processed-Loesen (zwei Klammern waeren genau das Fenster, das A3
+        schliesst), und bei einem Treffer passiert gar nichts: keine Alt-Akte
+        beiseite, kein processed.discard, kein event_einreihen. Der Aufrufer
+        antwortet darauf mit 409 (Einzel-Event) bzw. nennt die eid als
+        uebersprungen (Fensterweg).
+
+        `getattr`: die Gate-Proben bauen `Service.__new__(Service)` ohne
+        `__init__` — dort gibt es `_laufend` nicht, dann laeuft der Weg wie
+        vorher (leeres Tupel enthaelt nie eine eid).
+
+        N1 (05.09.2026, Widerleger E1+E2 BEFUND 3, an den echten Methoden
+        gemessen): bei `analyse_plaetze = 1` — dem WERKSWERT und damit dem
+        Normalfall jeder fremden Installation — ist `self.lock` die Klammer der
+        laufenden Analyse und wird ueber deren ganze Dauer gehalten. Ein
+        Support-Aufruf blockierte hier 0,75 s von 1,0 s Analyse und sah die
+        Marke NIE: 409 und `uebersprungen_laufend` waren beim Werkswert
+        unerreichbar. Deshalb wird `_laufend` bei Kapazitaet <= 1 OHNE den Lock
+        gelesen (ein `in` auf ein dict ist atomar, ebenso `set.discard`) und
+        erst ab zwei Plaetzen unter dem Lock — dieselbe Klasse und dieselbe
+        Antwort wie bei W-A3 E2 (Sweep-Schnappschuss) und B1
+        (`rueckstau_zahlen`). Verloren geht nichts: bei einem Platz ist die
+        Marke unter dieser Klammer ohnehin nie beobachtbar, und der Guard in
+        `process()` haelt das Doppel weiterhin.
+
+        N2 (derselbe Widerleger, Notiz 2): das Beiseitelegen der Alt-Akte
+        (`os.replace`) liegt ab zwei Plaetzen MIT in der Lock-Klammer. Stand es
+        draussen, konnte dazwischen eine Analyse starten, aus der ALTEN
+        results.jsonl resuemieren, erledigte Labels ueberspringen und eine
+        unvollstaendige neue Akte hinterlassen. Ein Rename ist schnell genug,
+        um in der Klammer zu stehen."""
+        _kap1 = getattr(getattr(self, "_plaetze", None), "kapazitaet", 0) <= 1
+        if _kap1:
+            laeuft = eid in getattr(self, "_laufend", ())
+            if not laeuft:
+                self.processed.discard(eid)
+                self._alt_akte_beiseite(eid)
+        else:
+            with self.lock:
+                laeuft = eid in getattr(self, "_laufend", ())
+                if not laeuft:
+                    self.processed.discard(eid)
+                    self._alt_akte_beiseite(eid)
+        if laeuft:
+            self.log(f"{eid}: re-analysis refused — this event is being analysed "
+                     f"right now; nothing was changed (support request)")
+            return False
+        # `_ev_gesehen` haengt am `_ev_wecker`, nicht an `self.lock` — bewusst
+        # NACH der Klammer, damit nie zwei Schloesser ineinander liegen.
+        # E6/N1: hier faellt die Entscheidung fuer den None-Fall (s. Docstring).
+        # `_laufend` wird NICHT noch einmal gefragt: das ist oben unter `self.lock`
+        # geschehen, und wer zwischen beiden Klammern in die Analyse gestartet ist,
+        # hat seine Alt-Akte schon beiseite — „steht schon an" ist dafuer die
+        # richtigere Auskunft als „nichts angefasst".
+        if hasattr(self, "_ev_wecker"):
+            with self._ev_wecker:
+                if eid in self._ev_gesehen:
+                    self.log(f"{eid}: re-analysis accepted, but the event is "
+                             f"already queued — no second queue entry (previous "
+                             f"results were set aside, it will be computed fresh)")
+                    return None
+        # `sofort=True` (E5/N1, 05.09.2026, Widerleger B1 B-2): eine
+        # Support-Einspielung meint ALTE Ereignisse, deren Clip laengst bei
+        # Frigate liegt — `clip_delay` waere hier reine Latenz. Schlimmer noch:
+        # bis .505 stand ein solcher, noch nicht faelliger Kopf VOR allen
+        # Abholern (gemessen 15,00 s Stillstand fuer 4 Abholer bei 20 faelligen
+        # Ereignissen). C2-T0 hat den Kopf-Riegel entschaerft, die unnoetige
+        # Frist selbst gehoert trotzdem weg.
+        if self.event_einreihen(eid, sofort=True):
+            return True
+        self.log(f"{eid}: re-analysis could NOT be queued — the event queue is "
+                 f"at its limit ({self.EV_QUEUE_MAX}); nothing is waiting for "
+                 f"this event, please retry later")
+        return False
 
     def _spur(self, beschreibung, fn):
         """Einen Versand in die Nachwehen-Spur legen (nie blockierend)."""
@@ -3791,6 +5102,244 @@ class Service:
                             pass
                         os._exit(1)
         threading.Thread(target=lauf, daemon=True, name="selbstwache").start()
+
+    def start_platzwaechter(self):
+        """P1: Waechter ueber die Analyse-Plaetze (Konzept Phase 2).
+
+        Was er fangen soll, ist NICHT der langsame Lauf und nicht der tote Worker —
+        beides ist bereits gedeckt (`analyse_timeout_s` bzw. das EOF der Antwort-Pipe,
+        beides endet im `finally` von `platz()`). Er fangt die Luecke dazwischen: einen
+        Dienst-Thread, der NIE ZURUECKKEHRT. Der haelt seinen Platz fuer immer, es gibt
+        keine Ausnahme, keine Logzeile, `/health` bleibt gruen — die .415-Klasse
+        (Selbst-Deadlock, dokumentiert an 8473-8480). Bei einem Platz fiel das nicht auf,
+        weil dann ohnehin alles stand; bei N Plaetzen sinkt die Kapazitaet schleichend.
+
+        Kriterium ist das Lebenszeichen, NICHT eine Frist auf die Analysedauer: ein
+        wartender Thread pulst alle PULS_TAKT_S (s. WorkerProzess.job), ein haengender
+        nicht. Deshalb darf eine legale Analyse beliebig lange dauern, ohne dass hier
+        etwas passiert. **Bewusst KEINE zweite Frist auf die Laufzeit** — zwei Waechter
+        auf dieselbe Frage waeren ein Fehler, kein doppelter Schutz.
+
+        A1 (05.09.2026, bauplan_0505.md §0): „stumm" hiess bis .504 sofort „tot" —
+        einziehen, `processed` loesen, neu einreihen. Beim Feldtester traf das an einem
+        Vormittag 23 LEBENDE Analysen (alle Platz 1, 125-138 s stumm, weil sie hinter
+        einem Hintergrund-Job am Job-Lock des Workers standen, wo noch kein Puls
+        laeuft): der alte Thread rechnete weiter, der neue dazu — 57 Ereignisse mit
+        zwei Urteilen, effektive Kapazitaet N + Zombies. Und jedes eingezogene
+        `ernte:`-Etikett lief als Ereignis in die Queue und durch `process()` in eine
+        404-Schleife. Deshalb je stummem Platz jetzt drei Schritte: den Worker des
+        Platzes hart schiessen (loest einen lebendig-blockierten Halter aus seinem
+        Warten), eine Gnadenfrist, dann der Entscheid (`_platzwaechter_entscheid`).
+        Eingezogen und neu eingereiht wird nur, was wirklich tot ist UND eine Analyse
+        war; die Ernte retried ueber ihren eigenen `antwort is None`-Weg.
+
+        A4 (05.09.2026, Widerleger-Befund B9): im LEGACY-Modus (`worker: false`,
+        ein Subprozess je Ereignis) laeuft dieser Waechter gar nicht erst an. Der
+        Subprozess-Zweig von `run_analyze` ruft NIE `puls` — er wartet in
+        `p.wait(timeout=frist)`, ohne ein Lebenszeichen zu setzen. Jede Analyse ueber
+        PLATZ_STUMM_FRIST_S waere dort also „stumm" und damit tot: Kill (ins Leere,
+        `_worker(nr)` liefert in diesem Modus None), Einzug, Neu-Einreihung — bei
+        weiterlaufendem Subprozess. Genau die .504-Doppelurteil-Klasse, nur mit dem
+        Waechter als Ursache. Den Legacy-Pfad auf Puls umzubauen ist nicht Teil von
+        .505 (Entscheid Hauptsession); dort deckt weiterhin `analyse_timeout_s` den
+        Fall ab, den ein Waechter faengt — und der Selbst-Deadlock eines
+        Dienst-Threads bleibt dort ungedeckt, so wie vor P1 ueberall."""
+        if not self.cfg.get("worker", True):
+            self.log("slot watchdog inactive: legacy subprocess mode has no "
+                     "heartbeat — analyse_timeout_s remains the guard")
+            return
+
+        def lauf():
+            while True:
+                time.sleep(PULS_TAKT_S * 2)
+                try:
+                    for nr, etikett, alter in self._plaetze.stumme_plaetze(PLATZ_STUMM_FRIST_S):
+                        try:
+                            self._platzwaechter_platz(nr, etikett, alter)
+                        except Exception as e:            # noqa: BLE001
+                            self.log(f"slot {nr}: watchdog step failed: "
+                                     f"{type(e).__name__}: {e}")
+                except Exception as e:                    # noqa: BLE001
+                    self.log(f"slot watchdog error: {type(e).__name__}: {e}")
+        threading.Thread(target=lauf, daemon=True, name="platzwache").start()
+
+    def _platzwaechter_platz(self, nr, etikett, alter_s, gnadenfrist_s=None):
+        """Die drei Schritte des Platzwaechters fuer EINEN stummen Platz (A1, s.
+        `start_platzwaechter`). `gnadenfrist_s` nur fuer Proben; Werk 2 x PULS_TAKT_S.
+
+        A4 (05.09.2026, Widerleger-Befund B4): die Liste aus `stumme_plaetze()` ist
+        nur noch ein KANDIDATEN-Vorschlag. Der Waechter arbeitet sie nacheinander ab
+        und haelt je Eintrag eine Gnadenfrist von 20 s — der zweite Kandidat wird
+        also auf eine 20 s alte, der dritte auf eine 40 s alte Auskunft hin
+        geschossen, obwohl er laengst wieder pulsen kann. Deshalb wird die Stille
+        hier unmittelbar vor dem Kill NEU und atomar gefragt."""
+        # C0/W4-3 (05.09.2026, Widerleger A4): Marke UND Puls-Alter kommen aus DIESEM
+        # einen Griff. Das Alter stammte vorher aus einem zweiten `zustand()`-Aufruf;
+        # war der Platz dazwischen neu vergeben, nannte die Zeile den Puls des neuen
+        # Halters zum Etikett des alten.
+        marke_vorher, _alter = self._plaetze.stumm_mit_marke(nr, PLATZ_STUMM_FRIST_S)
+        if marke_vorher is None:
+            # Zwei Faelle, beide ein Grund NICHT zu schiessen. Frei (Halter ordentlich
+            # zurueck) ist Routine und bleibt stumm wie vor A4; „pulst wieder" ist der
+            # B4-Fall und bekommt seine Zeile, sonst bliebe die Nachbesserung im Feld
+            # unbeweisbar (der Kandidat verschwaende einfach).
+            if _alter is None:                   # zwischen Auskunft und jetzt schon frei
+                return None
+            self.log(f"slot {nr}: no longer silent (pulsed {_alter}s ago) — "
+                     f"skipped, no kill ({etikett})")
+            return None
+        # (b) Der Worker DIESES Platzes — `_worker(nr)` ist die eine Quelle. Der Kill
+        # trifft, was auf diesem Worker gerade rechnet: den haengenden Job des Halters
+        # ODER den fremden Job, hinter dem der Halter am Job-Lock steht (Platz 1 teilt
+        # seinen Worker bis C1 mit den Hintergrund-Jobs). In beiden Faellen kommt der
+        # Halter wieder in Bewegung — oder er ist wirklich tot, und dann bewegt er
+        # sich auch jetzt nicht.
+        w = self._worker(nr)
+        geschossen = bool(w.kill_hart(grund=f"slot {nr} silent for {alter_s}s",
+                                      quelle="the slot watchdog")) \
+            if w is not None else False
+        urteil = self._platzwaechter_entscheid(nr, marke_vorher, gnadenfrist_s)
+        if urteil == "zurueckgekehrt":
+            # (d) Sein `finally` lief: er war blockiert, nicht tot. Was aus seiner
+            # Analyse wird, hat run_analyze/process schon entschieden (Retry ueber
+            # `antwort is None` oder Fehler in der Akte). KEINE Neu-Einreihung —
+            # das war die Quelle der Doppel-Urteile.
+            self.log(f"slot {nr}: holder returned after worker kill (was blocked, "
+                     f"not hung) — no requeue ({etikett})")
+            return urteil
+        if urteil == "lebt":
+            self.log(f"slot {nr}: holder pulsing again after worker kill (was "
+                     f"blocked, now working) — slot kept, no requeue ({etikett})")
+            return urteil
+        # (e) Tot: einziehen. Erst jetzt wird das Semaphor frei.
+        # A4 (B7): MIT der Marke von vorhin. Kehrt der Halter genau zwischen Urteil
+        # und Einzug doch zurueck und nimmt ein Neuer die Nummer, zieht `einziehen`
+        # nichts ein und sagt es — sonst traefe der Einzug den Unschuldigen.
+        ergebnis = self._plaetze.einziehen(
+            nr, f"no heartbeat for {alter_s}s, worker "
+                f"{'killed' if geschossen else 'not running'}, holder did not "
+                f"return within grace period", marke=marke_vorher)
+        if ergebnis is None:
+            return urteil
+        art, eid = ergebnis
+        # `_laufend` ist seit A3 die In-Arbeit-Marke (s. Service.__init__), seit A4
+        # eid -> Token. `getattr`, weil die Gate-Proben Service ohne __init__ bauen.
+        _laufend = getattr(self, "_laufend", None)
+        if art != "analyse":
+            # Ernte/Hintergrund: NIE einreihen — das Etikett ist kein Ereignis der
+            # Warteschlange (404-Schleife, §0). Der Aufrufer dort bucht seinen Job
+            # als gescheitert und macht mit dem naechsten weiter.
+            #
+            # A5 (05.09.2026, Widerleger-Befund W-A3 E1, BLOCKER): und `_laufend`
+            # bleibt hier UNANGETASTET. Eine Ernte-/Hintergrund-Belegung traegt nie
+            # eine In-Arbeit-Marke — die setzt einzig `_analyse_beginnen`, und der
+            # wird nur aus `process()` gerufen. Ein Griff an dieser Stelle koennte
+            # also gar nicht die eigene Marke loesen, sondern ausschliesslich eine
+            # FREMDE: die einer gerade LAUFENDEN Analyse desselben Ereignisses (das
+            # Ernte-Etikett ist die echte eid). Genau das stand bis A4 hier und riss
+            # die Doppelanalyse wieder auf — Analyse haelt die Marke von E, die
+            # Ernte auf E wird eingezogen, Marke weg, eine zweite Analyse auf E
+            # kommt durch den Guard. Der `pop` gehoert einzig in den Analyse-Zweig
+            # unten, wo der Waechter den Halter der Marke wirklich fuer tot erklaert
+            # hat.
+            self.log(f"slot {nr}: dead {art} job {eid} reclaimed — not an event, "
+                     f"not re-queued (its caller books the miss itself)")
+            return urteil
+        # Das Ereignis NICHT verlorengeben: `processed` freigeben und neu
+        # einreihen, damit es der naechste freie Platz holt. Die In-Arbeit-Marke
+        # MUSS dabei fallen: der eingezogene Zombie gibt sie nie zurueck, und die
+        # Neu-Einreihung liefe sonst in den eigenen Guard („already being
+        # analysed") — das Ereignis waere still verloren.
+        #
+        # A4 (05.09.2026): `pop(eid, None)` statt eines Vergleichs mit dem Token.
+        # Hier ist der Waechter die EINE Stelle, die UNBEDINGT loeschen darf und
+        # muss: er hat gerade festgestellt, dass der Halter DIESES Platzes tot ist,
+        # und er hat dessen Token nie gesehen. Wer hier auf ein passendes Token
+        # wartete, liesse die Marke des Zombies fuer immer stehen — das Ereignis
+        # kaeme nie wieder durch den Guard.
+        try:
+            # B10 (Widerleger A1, nur dokumentiert): bei `analyse_plaetze = 1` ist
+            # `_analyse_klammer()` genau DIESER Lock — ein haengender Halter haelt ihn
+            # dann ueber seine ganze Analyse, und der Waechter bleibt hier stehen,
+            # womoeglich fuer immer. Der Requeue-Zweig ist bei einem Platz also
+            # unerreichbar. Das ist inherent (N=1 + Lock als Analyse-Klammer) und
+            # KEIN Fall fuer eine Frist auf diesen Lock: bei einem Platz stuende der
+            # Dienst ohnehin. Der Weg dort heisst Selbstwache/Neustart
+            # (`start_selbstwache`), nicht Waechter.
+            with self.lock:
+                self.processed.discard(eid)
+                if _laufend is not None:
+                    _laufend.pop(eid, None)
+            # B1/T2 (05.09.2026): der Queue-Vermerk faellt seit B1 erst NACH
+            # `process_safe`. Der eingezogene Halter steckt aber genau dort noch
+            # fest — sein `finally` kommt nie oder erst spaeter. Ohne diesen
+            # ausdruecklichen Griff liefe die Neu-Einreihung in den eigenen Dedup
+            # und das Ereignis waere STILL verloren (derselbe Weg, den auch
+            # `event_neu_einreihen` fuer die Support-Einspielung nimmt).
+            if hasattr(self, "_ev_wecker"):
+                with self._ev_wecker:
+                    self._ev_gesehen.discard(eid)
+            # `sofort=True`: eine tote Analyse hat ihr clip_delay laengst hinter
+            # sich, ein zweites Warten waere reine Verzoegerung.
+            #
+            # C3 (05.09.2026, B2-Bericht „Offene Punkte", Nachzug N1): den
+            # Rueckgabewert PRUEFEN. Seit B2 weist `event_einreihen` bei voller
+            # Schlange ab (statt das aelteste zu verdraengen) — die Zeile „dead
+            # analysis X re-queued" war dann eine Unwahrheit, und das eingezogene
+            # Ereignis lag nirgends mehr: nicht in der Schlange, nicht in
+            # `processed`, nicht in `_laufend`. Genau der stille Verlust, den der
+            # Waechter verhindern soll. Er kann ihn hier nicht heilen (die
+            # Schlange ist voll), aber er muss ihn SAGEN — der naechste Sweep holt
+            # es innerhalb `lookback_h` zurueck, darueber hinaus der Merkzettel.
+            if self.event_einreihen(eid, sofort=True):
+                self.log(f"slot {nr}: dead analysis {eid} re-queued")
+            else:
+                self.log(f"slot {nr}: dead analysis {eid} could NOT be re-queued "
+                         f"(queue full or already queued) — the next sweep has to "
+                         f"pick it up")
+        except Exception as e:                            # noqa: BLE001
+            self.log(f"slot {nr}: re-queue of {eid} failed: "
+                     f"{type(e).__name__}: {e}")
+        return urteil
+
+    def _platzwaechter_entscheid(self, nr, marke_vorher, gnadenfrist_s=None):
+        """Nach dem Kill des Platz-Workers: Gnadenfrist abwarten und am Platz ablesen,
+        was aus dem Halter wurde -> "zurueckgekehrt" | "lebt" | "tot".
+
+        Die MARKE ist der Ausweis der Belegung (P1): ist sie weg oder eine andere,
+        lief das `finally` des Halters — er ist zurueckgekehrt, und der Platz gehoert
+        jetzt niemandem oder schon dem NAECHSTEN, den der Waechter nicht anfassen darf
+        (Fremd-Augen bauplan_0505.md A1: Marke am Anfang merken, am Ende vergleichen).
+
+        „lebt" ist der dritte Fall, den der Plan nicht ausbuchstabiert hat: der Kill
+        loest den Halter aus seinem Warten, aber er KEHRT NICHT ZURUECK, sondern
+        arbeitet weiter — sein `job()` bekommt None, `run_analyze` faehrt den
+        Sofort-Retry auf frischem Worker, und das alles INNERHALB derselben
+        `platz()`-Klammer. Die Marke bleibt, der Puls kommt wieder (A2: ab
+        Lock-Erwerb und um `_start()`; im select-Takt ohnehin). Wer hier nur die Marke
+        prueft, zieht genau diesen lebenden Halter ein — Doppel-Urteil, Kapazitaet
+        N+1, die .504-Klasse mit Umweg. Deshalb zaehlt nach der Gnadenfrist ein
+        frisches Lebenszeichen wie eine Rueckkehr: kein Einzug. Die Gnadenfrist ist
+        2 x PULS_TAKT_S, weil ein lebender Halter in zwei Puls-Perioden mindestens
+        einmal pulst; ein haengender Thread pulst nie.
+
+        Wartet aktiv in halben Sekunden: die Rueckkehr wird sofort erkannt, das
+        „tot"-Urteil faellt erst nach der vollen Frist."""
+        frist = 2 * PULS_TAKT_S if gnadenfrist_s is None else float(gnadenfrist_s)
+        ende = time.monotonic() + frist
+        while True:
+            if self._plaetze.marke_von(nr) != marke_vorher:
+                return "zurueckgekehrt"
+            rest = ende - time.monotonic()
+            if rest <= 0:
+                break
+            time.sleep(min(0.5, rest))
+        # Marke unveraendert. Stumm war der Platz vor dem Kill laenger als
+        # PLATZ_STUMM_FRIST_S — steht er jetzt nicht mehr in der Stumm-Liste, kam
+        # seit dem Kill ein Puls: der Halter arbeitet.
+        if all(_n != nr for _n, _e, _a in self._plaetze.stumme_plaetze(PLATZ_STUMM_FRIST_S)):
+            return "lebt"
+        return "tot"
 
     def start_stoerungswaechter(self):
         """AP7: dienstinterner Watchdog — Pushover bei stillem Ausfall (Plan-Kriterien).
@@ -3983,7 +5532,10 @@ class Service:
                        "decides what can be missed: on a busy site the window "
                        "fills up faster than the ceiling allows. Raising it costs "
                        "a longer Frigate query per sweep"),
-        "sweep_limit": (int, 50, 2000, "how many events one Frigate sweep may fetch (default 200). On a busy site (many cameras) the last-2-hours sweep hits this ceiling permanently and older events in the window can be missed — one field installation with 31 cameras logged the ceiling warning 196 times in six hours. Raise it there; the cost is one larger Frigate API response per sweep"),
+        # .505 (05.09.2026): Obergrenze 2000 -> 5000. Ein Nachlauf ueber einen
+        # halben Tag auf einer Anlage mit vielen Kameras passt sonst nicht in
+        # einen Sweep. Der Werkswert bleibt 200.
+        "sweep_limit": (int, 50, 5000, "how many events one Frigate sweep may fetch (default 200, up to 5000). On a busy site (many cameras) the last-2-hours sweep hits this ceiling permanently and older events in the window can be missed — one field installation with 31 cameras logged the ceiling warning 196 times in six hours. Raise it there; the cost is one larger Frigate API response per sweep"),
         "clip_retention_d": (int, 1, 60, "how long downloaded clips are kept as a cache, in days. They are only a cache — suslik fetches a clip from Frigate again whenever it needs one, so a short time costs nothing except a second download. The cache exists because Frigate's clip generation can stall, which is worth avoiding for the last hours, not for the last week: measured on the development system, 1212 of 1542 cached clips were older than two days and none of them was ever read again"),
         "live_verworfen_speichern": (bool, None, None, "keep the pictures the live watchers threw away (no human in frame): off by default — they are pure diagnostics, the interface never shows them, and they were the single largest item under the data folder (61 GB in nine days on the development system). They are still counted, so you can see how often the pose gate rejected something. Turn on only while chasing a bug"),
         "clip_cache_max_gb": (int, 0, 500, "clip cache size cap in GB, oldest evicted first (age eviction stays). 0 = derive it from the disk (15 % of its size), which is the sensible default because disks differ wildly — a fixed cap larger than the disk can never take effect, and that is exactly how one installation filled up (issue #25). Set a number only if you want a fixed cap; keep it well below the size of the disk — a cap larger than the disk can never take effect, and the cache will fill the disk before it is reached (issue #25). suslik warns at startup if the two do not fit together"),
@@ -3999,7 +5551,15 @@ class Service:
         # Grund, warum der Ring nie wachsen kann — <data_dir>/live/ war schon
         # einmal der Datenweg ohne Bremse (72,9 GB in neun Tagen, .315).
         "live_kalib_max": (int, 0, 2000, "how many face samples each live watcher keeps on disk for its calibration page (a ring — the oldest drop out, it never grows). 0 turns the collection off; the calibration page then has nothing to show. One picture per appearance, so a busy camera fills it in a few days"),
-        "cpu_threads": (int, 0, 64, "CPU thread cap for inference sessions + transcode (0 = auto: allowed cores)"),
+        "live_max_slots": (int, 1, 20, "hard upper bound on how many live watchers may run at the same time. This is a wall, not a budget: the engine still refuses a slot earlier when RAM runs short, and the overload rule still thins the inspection rate under load. Raise it only if the machine has headroom — each watcher decodes its stream continuously, whether anyone is there or not. Measured ceiling for consumer GPUs is around 20 streams. 5 is the default that held on every field machine so far"),
+        # .505 (05.09.2026): Obergrenze 2000 -> 5000, Zwilling von
+        # core.einspielen.FENSTER_DECKEL_MAX (beide Zahlen gehoeren zusammen).
+        "einspiel_deckel": (int, 1, 5000, "upper limit for a single support replay call (POST /support/einspielen), up to 5000. 20 is the default and enough for a spot check. Raise it to replay a whole hour or day through the full path — analysis, records, alerts and the label written back to Frigate. This limit caps how many events are queued, not how far the call looks: it always pages through the whole window and then takes the oldest events (\"richtung\": \"vor\") or the newest ones (\"zurueck\"); if you ask for more than this limit, the answer says so in \"geklemmt_auf\". On an installation that is already behind, a large replay competes with catching up, so watch the backlog (/health) while it runs"),
+        "analyse_plaetze": (int, 0, 4, "how many event analyses may run at the same time. 1 is the default and means exactly what the service has always done: one event after another. 0 means automatic: the value measured fastest on your accelerator (3 on Nvidia, 2 on Intel, 1 on CPU). Raising it lets the accelerator work on a second event while the first one is fetching or decoding its clip, which is where most of the idle time sits. Each slot brings its own worker process and its own model session, so memory grows with it: measured 1.2 to 1.4 GB of graphics memory per slot. Going above the measured value did not get faster in our tests"),
+        # N1 (05.09.2026, Widerleger E3c Punkt 11): „allowed cores" beschrieb den
+        # Mechanismus vor .384 — seither wird der Wert beim Start GEMESSEN
+        # (cgroup-Quote gegen die Affinitaets-Maske, das Kleinere gewinnt).
+        "cpu_threads": (int, 0, 64, "CPU thread cap for inference sessions + transcode (0 = auto, measured at startup)"),
         "anker_sim1": (float, 0.05, 0.95, "anchor clustering stage 1 (within a pass; measured 0.25)"),
         "anker_sim2": (float, 0.05, 0.95, "anchor clustering stage 2 (pass centroids; measured 0.35)"),
         "anker_marge_warn": (float, 0.01, 0.9, "anchor margin below which a cluster goes to review (measured 0.15)"),
@@ -6018,9 +7578,36 @@ class Service:
         #                                            gesetzt als bisher (vor dem Thread)
 
         def _lauf():
-            with self.lock:                        # wartet auf Abschluss einer laufenden Analyse
+            # .502 (Feldfall beim Tester 04.09.2026): hier stand ein bedingungsloses
+            # `with self.lock`. Eine Analyse, die selbst am Job-Lock des Workers
+            # hing, hielt diese Sperre 28 min — der Fern-Reset stellte sich
+            # dahinter an und kam nie durch, obwohl er genau fuer diesen
+            # Klemmfall gebaut ist (nur ein Container-Neustart half). Drei
+            # Stufen statt einer: hoeflich warten, dann den Worker hart
+            # schiessen (das loest die wartende Analyse ueber ihr EOF), dann
+            # notfalls OHNE Sperre durchziehen. Der Fall "ohne Sperre" schneidet
+            # eine laufende Analyse ab — genau wie ein Container-Neustart, und
+            # der naechste Lauf setzt ueber results.jsonl fort. Ein Reset, der
+            # nicht durchgreift, ist keiner.
+            gehalten = self.lock.acquire(timeout=NEUSTART_LOCK_FRIST_S)
+            if not gehalten:
+                self.log(f"restart: analysis still holds the lock after "
+                         f"{NEUSTART_LOCK_FRIST_S:.0f}s — killing the worker "
+                         f"to break the jam")
+                self.worker_hart_stoppen()
+                gehalten = self.lock.acquire(timeout=NEUSTART_LOCK_NOTFRIST_S)
+                if not gehalten:
+                    self.log("restart: going ahead WITHOUT the analysis lock — "
+                             "a stuck analysis must never block a restart")
+            try:
                 self.log(f"restarting now via re-exec{(': ' + grund) if grund else ''}")
-                self.worker_stoppen()              # W2: beenden+wait VOR execv (kein Waisen-Worker
+                # .502: im Klemmfall waere stop() die naechste Falle — es geht
+                # ueber genau das Job-Lock, das der haengende Job haelt. Ohne
+                # Sperre also hart schiessen, mit Sperre geordnet beenden.
+                if gehalten:
+                    self.worker_stoppen()          # W2: beenden+wait VOR execv (kein Waisen-Worker
+                else:
+                    self.worker_hart_stoppen()
                 self.live_aufsicht_stoppen()       # Phase 4: Engine sauber beenden (execv laeuft
                 #                                    NICHT durch atexit) — der neue Prozess zieht
                 #                                    sie via Supervisor wieder hoch (Bauplan §8)
@@ -6043,28 +7630,127 @@ class Service:
                 except Exception as e:                 # re-exec scheiterte: Prozess NICHT lebend lassen,
                     self.log(f"re-exec failed ({type(e).__name__}: {e}); os._exit(0), supervisor takes over")
                     os._exit(0)                        # ein evtl. Supervisor holt ihn dann doch hoch
+            finally:
+                # execv kommt hier nie an; der Zweig deckt nur einen Fehler VOR
+                # dem Wechsel, damit die Sperre dann nicht verwaist liegen bleibt.
+                if gehalten:
+                    try:
+                        self.lock.release()
+                    except RuntimeError:
+                        pass
         threading.Thread(target=_lauf, daemon=True).start()
 
     # ---------------------------------------------------------- W2: persistenter Worker
-    def _worker(self):
-        """Worker-Objekt bei worker=an (Default), sonst None -> alter Subprozess-Weg
-        (der Fallback bleibt vollstaendig im Code, Config-Schalter 'worker')."""
+    def _worker(self, platz_nr):
+        """Worker-Objekt des Platzes `platz_nr` bei worker=an (Default), sonst None ->
+        alter Subprozess-Weg (der Fallback bleibt vollstaendig im Code, Config-Schalter
+        'worker').
+
+        E2: JE PLATZ ein eigener Prozess. Ohne das waere die Platz-Vergabe wirkungslos —
+        `WorkerProzess.lock` haelt seinen Job ueber die volle Dauer, zwei Plaetze wuerden
+        sich also am selben Worker wieder aufreihen. Ein Prozess traegt ausserdem genau
+        EINE Modell-Sitzung; zwei Jobs darin waeren kein zweiter Rechenstrang.
+
+        C1 (05.09.2026, bauplan_0505.md §1): die Fassung OHNE Platznummer ist weg. Sie
+        war der Weg der Hintergrund-Jobs (Sammle, Wanduhr) auf den Worker von Platz 1 —
+        und damit die Ursache des Feldbefunds vom 05.09.: 23 eingezogene LEBENDE
+        Analysen an einem Vormittag, alle Platz 1, alle 125-138 s, weil sie hinter einem
+        Hintergrund-Job am Job-Lock standen, wo noch kein Puls laeuft. Seit C1 haelt
+        JEDER Worker-Nutzer einen Platz, und die Platznummer sagt, welcher Prozess es
+        ist. Ein Aufruf ohne Nummer ist deshalb ein Programmierfehler und faellt laut —
+        er koennte nur wieder an der Vergabestelle vorbeirechnen. Eine Gate-Wache prueft
+        zusaetzlich, dass es im Auslieferungscode keinen `_worker()` mehr gibt.
+
+        Platz 1 ist damit kein Sonderling mehr: er wohnt im selben Pool wie 2..N und
+        heisst `worker-1`. `_worker_obj` bleibt als Eigenschaft auf Platz 1 bestehen —
+        `/health.worker` und die Rueckfall-Statistik lesen unveraendert weiter.
+
+        Platznummer 0 (der defensive Zweig in `platz()`: belegt, aber ohne freie
+        Nummer — eine Buchhaltungs-Ungereimtheit, die nicht vorkommen sollte) bekommt
+        genau wie jeder andere Platz einen EIGENEN Prozess `worker-0`. Ihn auf Platz 1
+        zu legen hiesse, zwei Halter wieder an denselben Job-Lock zu haengen; so steht
+        er stattdessen sichtbar in `/health.worker_plaetze` und verraet den Zustand."""
+        if platz_nr is None:
+            raise RuntimeError("worker without slot — every GPU job holds an "
+                               "Analyseplaetze slot since .505")
         if not self.cfg.get("worker", True):
             return None
-        if self._worker_obj is None:
-            self._worker_obj = WorkerProzess(self.cfg, log=self.log)
-        return self._worker_obj
+        with self._zustand_lock:
+            w = self._worker_pool.get(platz_nr)
+            if w is None:
+                # P2: eigener NAME je Platz. Ohne ihn heissen alle Worker "worker",
+                # und eine Zeile wie "worker died mid-job" laesst offen, WELCHER
+                # gestorben ist — bei drei Prozessen ist das der Unterschied zwischen
+                # einem Einzelfall und einem Dauertod auf genau einem Platz.
+                w = WorkerProzess(self.cfg, log=self.log, name=f"worker-{platz_nr}")
+                self._worker_pool[platz_nr] = w
+                if platz_nr:
+                    self.log(f"analysis slot {platz_nr}: own worker process started")
+                else:
+                    # C3 (05.09.2026, Widerleger C1 Notiz 8, Nachzug N1): Platz 0
+                    # ist der defensive Zweig, den es nicht geben sollte — und er
+                    # startet einen Worker-Prozess, den die VRAM-Rechnung in
+                    # `core/gpubudget.py` NICHT kennt (sie rechnet mit
+                    # `analyse_plaetze` Workern). Bei vier Plaetzen liefe hier
+                    # also ein fuenfter Modellprozess ausserhalb des Budgets.
+                    # Deshalb ist diese Zeile eine WARNUNG, keine Betriebsmeldung:
+                    # wer sie im Feld sieht, hat eine Buchhaltungs-Ungereimtheit
+                    # in der Vergabestelle gefunden, nicht einen normalen Start.
+                    self.log(f"WARNING: analysis slot 0 (bookkeeping fallback — "
+                             f"should never happen): started an extra worker "
+                             f"process worker-0 that the VRAM budget "
+                             f"(core/gpubudget.py, sized for analyse_plaetze "
+                             f"workers) does not account for")
+            return w
+
+    @property
+    def _worker_obj(self):
+        """Der Worker von Platz 1 — oder None, solange ihn niemand gebraucht hat.
+
+        C1 (05.09.2026): frueher ein eigenes Feld neben dem Pool, weil Platz 1 und alle
+        Hintergrund-Jobs sich diesen einen Prozess teilten. Seit C1 wohnt Platz 1 im
+        Pool; die Eigenschaft bleibt als LESENDER Griff fuer die Bestandsleser
+        (`/health.worker` ueber `systemstat_dienst`, die Rueckfall-Zahlen der
+        Oberflaeche, `_alle_worker` gab es hier). Kein Setter: wer einen Worker will,
+        nimmt `_worker(nr)` — es gibt keinen Worker mehr ohne Platz. `getattr`, damit
+        auch die Gate-Fixtures (Service ohne `__init__`) ihn lesen duerfen."""
+        return (getattr(self, "_worker_pool", None) or {}).get(1)
+
+    def _alle_worker(self):
+        """Alle Worker-Instanzen: die Plaetze 1..N und personwork.
+        EINE Quelle — Stoppwege, Statistik und /health duerfen sich hier nicht
+        unterscheiden, sonst ist ein zweiter Worker unsichtbar oder ueberlebt einen
+        Neustart als Waise (das ist die Exit-139-Bootfenster-Klasse)."""
+        return [o for o in ([self._worker_pool[k] for k in sorted(self._worker_pool)]
+                            + [self._personwork_obj]) if o is not None]
 
     def worker_stoppen(self):
         """Worker beenden+wait — VOR execv (neustart) und am --once-Ende. Sonst liefe eine
         Waise parallel zum frischen Boot in dessen Startup-Benchmark (Exit-139-Bootfenster).
         P1: personwork wird im selben Zug gestoppt (gleiche Waisen-Klasse)."""
-        for obj in (self._worker_obj, self._personwork_obj):
-            if obj is not None:
-                try:
-                    obj.stop()
-                except Exception:
-                    pass
+        for obj in self._alle_worker():               # E2: auch die Plaetze 2..N
+            try:
+                obj.stop()
+            except Exception:
+                pass
+
+    def worker_hart_stoppen(self):
+        """Beide Worker SOFORT schiessen, ohne auf ihren Job-Lock zu warten
+        (.502) -> Anzahl der geschossenen Prozesse. Nur fuer den Klemmfall
+        des Neustarts: worker_stoppen() geht ueber stop() und damit ueber
+        genau das Lock, das ein haengender Job haelt."""
+        n = 0
+        for obj in self._alle_worker():               # E2: auch die Plaetze 2..N
+            try:
+                # A4/B5: die Todesursache muss den richtigen Schuetzen nennen —
+                # zwischen hier und dem execv liegen bis zu 15 s, in denen der
+                # getroffene Job-Thread seine Ursache noch in die analyze.log des
+                # Ereignisses schreibt.
+                if obj.kill_hart(quelle="the restart clamp"):
+                    n += 1
+            except Exception:
+                pass
+        return n
 
     # ------------------------------------------- P1 (.202): personwork-Prozess
     def _personwork(self):
@@ -6252,7 +7938,106 @@ class Service:
         also den CPU-schwersten Installationen der Issue-#21-Klasse. Vision zaehlt
         bewusst NICHT: dessen Urteil rechnet nicht im Dienstprozess (eigener/
         externer Endpunkt-Prozess), nur der Anstoss laeuft hier."""
-        return self.lock.locked() or self._personlive_aktiv > 0
+        # E0: fragt die Platz-Vergabe statt den Lock. Das ist die Frage
+        # "MINDESTENS EIN Platz belegt" — nicht zu verwechseln mit der Frage des
+        # BG-Gates ("ALLE Plaetze frei", `_alle_plaetze_frei`). Bei Kapazitaet 1
+        # sind beide Fragen komplementaer und das Verhalten ist unveraendert.
+        return self._plaetze.belegt() or self._personlive_aktiv > 0
+
+    # P4 (Konzept Phase 2, gemessen 04.09.): der sinnvolle Wert haengt an der Hardware,
+    # nicht am Geschmack. Ein einziger Werkswert waere auf mindestens zwei der drei Wege
+    # falsch. Gemessen wurde je Weg dieselbe Ereignismenge, Urteile immer identisch:
+    #   CUDA (RTX 2060)   235 s / 99 s / 74 s bei 1/2/3 Plaetzen -> 3,18x, skaliert durch
+    #   Intel iGPU+NPU    410 s / 161 s / 176 s / 184 s          -> SAETTIGT bei ZWEI;
+    #                     ab drei wieder langsamer (die EINE NPU traegt die Erkennung)
+    #   CPU (12 Kerne)    94 s / 93 s bei 1/2                    -> kein Gewinn, und die
+    #                     Einzelanalyse wird 39 % langsamer (ONNX nutzt schon alle Kerne)
+    PLAETZE_VORSCHLAG = {"cuda": 3, "openvino": 2, "cpu": 1}
+
+    def _plaetze_kapazitaet(self, cfg):
+        """Wie viele Analysen gleichzeitig laufen duerfen.
+
+        Ohne eigenen Config-Wert gilt der HARDWARE-VORSCHLAG (s. PLAETZE_VORSCHLAG) —
+        die Zahl, die auf diesem Beschleuniger gemessen am schnellsten war. Setzt der
+        Nutzer `analyse_plaetze` selbst, gilt seine Zahl; wir klemmen sie nicht mehr,
+        sondern sagen im Log, was gemessen wurde, wenn er darueber geht.
+
+        DIE OPENVINO-KLEMMUNG IST ERSATZLOS ENTFALLEN (04.09.). Sie beruhte auf einem
+        einzelnen alten Messfall — zwei suslik-Instanzen auf einer iGPU toeteten einander
+        mit Exit 139 (docs/known-issues.md). Am 04.09. nachgemessen: zwei, drei und vier
+        Plaetze liefen auf der iGPU ohne Absturz, Urteile in allen Laeufen identisch. Der
+        eine Absturz, der dabei auftrat, war ein Fehler in DIESER Methode (ein self.log
+        vor der logbuf-Initialisierung), nicht OpenVINO. Projektregel: alte Pruef-Urteile
+        sind Pruefauftraege, keine Grundlagen — hier hat die Pruefung das Urteil kassiert.
+
+        Der Werkswert `analyse_plaetze` bleibt bei 1 (Default-Block), damit eine
+        Bestands-Installation sich beim Update NICHT von selbst aendert. Der Vorschlag
+        greift nur, wo der Nutzer nichts gesetzt hat."""
+        try:
+            from face_audit import resolve_backend
+            kind, _dev = resolve_backend()
+        except Exception:                                 # noqa: BLE001
+            kind = "cpu"
+        vorschlag = self.PLAETZE_VORSCHLAG.get(kind, 1)
+        self._plaetze_vorschlag = vorschlag       # fuer /health und die Oberflaeche (P5)
+        # ACHTUNG `or`: `cfg.get(...) or 1` machte aus der gewollten 0 eine 1 und die
+        # Automatik war tot (04.09. im Test gefangen). 0 ist hier ein BEDEUTENDER Wert,
+        # kein "leer".
+        _roh = cfg.get("analyse_plaetze")
+        try:
+            roh = 1 if _roh is None or _roh == "" else int(_roh)
+        except (TypeError, ValueError):
+            roh = 1
+        # 0 = AUSDRUECKLICH automatisch. Der Werkswert bleibt 1, damit eine
+        # Bestands-Installation sich beim Update nicht von selbst aendert (des Users
+        # Vorgabe 1 aus konzept_parallel_analyse.md: der Aus-Zustand ist das heutige
+        # Verhalten). Wer die Automatik will, waehlt sie — der GPU-Knopf (P5) wird
+        # genau das anbieten und den Vorschlag als Vorbelegung zeigen.
+        if roh <= 0:
+            self._plaetze_meldung = (f"analyse_plaetze=auto — using the measured value "
+                                     f"for {kind}: {vorschlag}")
+            return vorschlag
+        kap = max(1, roh)
+        if kap > vorschlag:
+            # Kein Eingriff, nur eine ehrliche Zeile: der Nutzer darf ueber den
+            # gemessenen Punkt hinaus, soll aber wissen, dass es dort langsamer wurde.
+            self._plaetze_meldung = (
+                f"analyse_plaetze={kap} is above the measured sweet spot for "
+                f"{kind} ({vorschlag}) — more slots did not get faster in our tests; "
+                f"watch total time and memory")
+        return kap
+
+    def _analyse_klammer(self):
+        """Die Klammer um die Analyse — E2, der eigentliche Eingriff.
+
+        Bei EINEM Platz ist das `self.lock`, also exakt die alte Serialisierung: eine
+        Analyse, ein Lock, nichts aendert sich. Ab zwei Plaetzen faellt die Klammer weg,
+        und der Lock schuetzt nur noch, wofuer er wirklich zustaendig ist — die Akte und
+        `processed`, jeweils in einer eigenen, kurzen Klammer im Rumpf.
+
+        Damit wandert die Serialisierung von "die ganze Analyse" auf "die Schreibwege",
+        und genau das ist der Sinn der Uebung: waehrend Platz A seinen Clip holt und
+        dekodiert, darf Platz B rechnen. Was NICHT frei wird, ist das Schreiben in
+        `state/deckung.jsonl` — dort bleibt es bei einem Schreiber zur Zeit, sonst
+        verliert die Rotation (`deckung_rotieren`, Read-Rewrite-Replace) Zeilen."""
+        return self.lock if self._plaetze.kapazitaet <= 1 else contextlib.nullcontext()
+
+    def _alle_plaetze_frei(self):
+        """Kein Analyse-Platz belegt.
+
+        Historie: Bis E0 stand an jeder der Gate-Stellen (Kalibrier-Auffueller,
+        Bruecke, Lernlauf-Ernte) das Literal `not self.lock.locked()`. Ab Kapazitaet > 1
+        war das die falsche Frage — der Lock ist dann nur noch der Akte-Mutex und meldet
+        'frei', waehrend zwei Analysen rechnen. E0 machte daraus diese eine Quelle.
+
+        C2 (05.09.2026, bauplan_0505.md §1): seitdem fragt NIEMAND mehr danach. Die
+        Rangfolge zwischen den Klassen (erst P3 als Methode `_ernte_darf` mit
+        Fairness-Ventil, davor „alles frei") wohnt jetzt vollstaendig in der
+        Vergabestelle — wer einen Platz will, ruft `platz()` und bekommt ihn oder
+        nicht. Die Methode bleibt als die eine benannte Antwort auf genau diese
+        Frage stehen (Gegenstueck zu `_live_aktiv`, s. dort): wer sie kuenftig
+        braucht, findet sie hier, statt sich ein neues Literal zu bauen."""
+        return self._plaetze.alle_frei()
 
     def _roundtrip_seriell(self, eid, person, out):
         """Issue #21 (Tokn59, 2C/4T): der Mess-Roundtrip ist ein ZWEITER voller
@@ -6267,14 +8052,42 @@ class Service:
               _sammle_fahren und _szenario_nachsammeln — die start_nachhol-Regel
               gilt auch hier).
           (2) Live pruefen (_live_aktiv: Gesichts-Pass ODER Koerper-Strang, W1b)
-              und den Analyse-Slot NICHT-BLOCKIEREND nehmen (wk.lock; bei
-              worker=aus dasselbe _ANALYSE_SERIELL, das der Legacy-run_analyze
-              nimmt — Nachbesserung W8, vorher reines check-then-act mit
-              nachgewiesenem Parallel-Fenster).
-          (3) Live UNTER dem Slot erneut pruefen (TOCTOU: zwischen Pruefung und
-              acquire kann ein Pass self.lock genommen haben; der haengt dann
-              gleich am Slot — wir geben ihn zurueck statt neben ihm zu starten).
-          (4) Erst wenn alles haelt: Roundtrip fahren, Locks am Ende freigeben.
+              und einen PLATZ der Vergabestelle nehmen (Klasse `bg`, kurze Frist
+              wie bei der Ernte), dazu den Job-Lock des Platz-Workers
+              NICHT-BLOCKIEREND (bei worker=aus dasselbe _ANALYSE_SERIELL, das der
+              Legacy-run_analyze nimmt — Nachbesserung W8, vorher reines
+              check-then-act mit nachgewiesenem Parallel-Fenster).
+          (3) Live UNTER dem Platz erneut pruefen (TOCTOU: zwischen Pruefung und
+              Platznahme kann ein Pass angefangen haben; der haengt dann gleich am
+              Platz — wir geben ihn zurueck statt neben ihm zu starten).
+          (4) Erst wenn alles haelt: Roundtrip fahren, alles am Ende freigeben.
+
+        C1 (05.09.2026, bauplan_0505.md §1): der Roundtrip ist KUNDE der
+        Vergabestelle. Bis .504 serialisierte er sich ueber den Job-Lock von Worker 1
+        — unsichtbar fuer den Broker und teuer fuer Platz 1, dessen Analysen sich
+        hinter der Messung am Job-Lock anstellten und dort stumm blieben, bis der
+        Platzwaechter sie fuer tot hielt (23 Einzuege lebender Analysen an einem
+        Vormittag, §0). Jetzt haelt die Messung einen eigenen Platz: bei
+        `analyse_plaetze = 1` ist der eine Platz entweder Messung ODER Analyse (wie
+        bisher, nur sichtbar), ab zwei Plaetzen laeuft die Analyse auf einem anderen
+        Platz weiter, statt sich anzustellen.
+
+        Der Job-Lock des Platz-Workers wird TROTZDEM genommen, und zwar aus einem
+        anderen Grund als frueher: `worker_stoppen()` (Neustart, --once-Ende) geht
+        ueber genau dieses Lock. Nur so wartet ein Neustart das Ende des laufenden
+        Roundtrips ab, statt ihn als Vollast-Waise ins frische Boot-Fenster zu
+        entlassen. Gegen ANDERE Rechner schuetzt seit C1 der Platz, nicht mehr das
+        Lock — dieses Lock kann waehrend unseres Platzes ohnehin nur noch ein
+        eingezogener Zombie desselben Platzes halten, deshalb bleibt der Griff
+        nicht-blockierend.
+
+        PULS (C1): der Roundtrip laeuft als EIGENER Subprozess (`_roundtrip_fahren`),
+        nicht ueber `WorkerProzess.job()` — es gibt hier also keinen Puls, der von
+        selbst mitlaeuft. Ohne einen zoege der Platzwaechter jede Messung nach 120 s
+        ein, waehrend der Subprozess weiterrechnet (die Ernte-Falle aus §0). Der Takt
+        laeuft deshalb als eigener Thread neben dem Roundtrip und ist ueber
+        `puls_fuer` an DIESE Belegung gebunden (A3: ein Zombie darf den Nachfolger
+        nicht kuenstlich am Leben halten).
 
         EHRLICHE GRENZEN (Nachbesserung W6, kein Vorrang-Ueberclaim): Vorrang hat
         Live nur fuer den START der Messung. Laeuft der Roundtrip erst, wartet
@@ -6289,28 +8102,63 @@ class Service:
         doppellastig" gilt gegen Gesichts-Pass, Koerper-Strang und Analyse-Slot,
         s. _live_aktiv — Anzeige-Transcodes und der Vision-Anstoss bleiben
         aussen vor, die rechnen im Dienstprozess nicht schwer).
-        Lock-Ordnung wie Ernte/_sammle_fahren: _gpu_bg_lock ->
-        Slot; niemand nimmt sie andersherum, der Slot wird nur nicht-blockierend
-        genommen, und kein self.lock-Halter blockiert auf _gpu_bg_lock (die
-        BG-Starter unter self.lock spawnen nur Threads) — deadlockfrei. Ein
-        Neustart (neustart -> worker_stoppen -> wk.lock) wartet das Ende des
-        laufenden Roundtrips ab, statt ihn als Vollast-Waise ins frische
-        Boot-Fenster zu entlassen."""
-        wk = self._worker()
-        slot = wk.lock if wk is not None else _ANALYSE_SERIELL
+        LOCK-ORDNUNG (unveraendert, nur mit dem Platz an der Stelle des alten
+        Slot-Begriffs): _gpu_bg_lock -> Platz -> Job-Lock des Platz-Workers. Genau
+        diese Reihenfolge nehmen auch Ernte und `_sammle_fahren`; niemand nimmt sie
+        andersherum. Ein Platz-Halter fordert NIE `_gpu_bg_lock` an (die Ernte nimmt
+        es VOR ihrem Platz, die Analyse gar nicht), und kein self.lock-Halter
+        blockiert auf `_gpu_bg_lock` (die BG-Starter unter self.lock spawnen nur
+        Threads) — deadlockfrei. Gewartet wird weiterhin IMMER lockfrei: der Platz
+        wird mit kurzer Frist genommen (Ernte-Muster), nicht mit der Messdauer."""
         gemeldet = False
         # Warten ist nicht Messen (Pflichtpunkt der .172-Kontrolle): die Schleife
         # kann Minuten stehen, wanduhr_status zeigt die Phase getrennt an.
         self._wanduhr_phase = "waiting"
+
+        def _mit_puls(nr):
+            """Roundtrip fahren und dabei den Platz pulsen (s. Docstring, PULS)."""
+            stopp = threading.Event()
+            _puls = self._plaetze.puls_fuer(nr)     # MUSS in der platz()-Klammer entstehen
+
+            def _takt():
+                while not stopp.wait(max(0.01, PULS_TAKT_S)):
+                    try:
+                        _puls()
+                    except Exception:               # noqa: BLE001 — ein Puls darf nie die Messung kosten
+                        pass
+            threading.Thread(target=_takt, daemon=True, name="wanduhr-puls").start()
+            try:
+                return self._roundtrip_fahren(eid, person, out)
+            finally:
+                stopp.set()
+
         while True:
             with self._gpu_bg_lock:
-                if not self._live_aktiv() and slot.acquire(blocking=False):
-                    try:
-                        if not self._live_aktiv():          # Schritt (3), s. Docstring
-                            self._wanduhr_phase = "measuring"
-                            return self._roundtrip_fahren(eid, person, out)
-                    finally:
-                        slot.release()
+                if not self._live_aktiv():
+                    # Kurze Frist wie bei der Ernte: `_gpu_bg_lock` darf nie ueber ein
+                    # langes Warten gehalten werden (Nachbesserung W5).
+                    # C2 (05.09.2026): anmelden, damit die Fairness-Regel diesen
+                    # Warter sieht (s. `_sammle_fahren`). Bewusst NUR um den
+                    # `platz()`-Aufruf und nicht um die ganze Warteschleife: eine
+                    # Anmeldung bremst die anderen Klassen, und die Messung wartet
+                    # hier notfalls minutenlang auf Live-Ruhe.
+                    with self._plaetze.wartend("bg"), \
+                            self._plaetze.platz("wanduhr", art="bg",
+                                                timeout_s=1.0) as nr:
+                        # `_live_aktiv()` zaehlt seit C1 UNSEREN eigenen Platz mit —
+                        # die TOCTOU-Nachpruefung (3) fragt deshalb nach FREMDER
+                        # Belegung. Ohne diese Unterscheidung waere die Bedingung ab
+                        # C1 immer wahr und die Messung liefe nie an.
+                        if nr is not None and self._plaetze.anzahl_belegt() <= 1 \
+                                and self._personlive_aktiv <= 0:
+                            wk = self._worker(nr)
+                            slot = wk.lock if wk is not None else _ANALYSE_SERIELL
+                            if slot.acquire(blocking=False):
+                                try:
+                                    self._wanduhr_phase = "measuring"
+                                    return _mit_puls(nr)
+                                finally:
+                                    slot.release()
             if not gemeldet:
                 gemeldet = True
                 self.log("wanduhr: waiting for live activity (face pass / person "
@@ -6886,8 +8734,9 @@ class Service:
         Duenner Mantel: die Reihenfolge, die ZWEI Stopp-Bedingungen und die
         Bilanz liegen in core/kalibfueller. Hier wird nur eingehaengt, was der
         Dienst allein kann — der Frigate-Abruf (core.ereignisse, EIN
-        Pagination-Weg) und der Worker-Slot unter Live-Vorrang (dasselbe
-        Lock-Muster wie _bruecke_ernte darunter).
+        Pagination-Weg) und der Ernte-Platz aus der Vergabestelle (seit C2
+        dasselbe Muster wie _bruecke_ernte und _lernlauf_ernte: anmelden,
+        Platz nehmen, dessen Worker nutzen — kein _gpu_bg_lock mehr).
 
         Die Bilder entstehen NICHT hier: die Ernte legt je Event ihr bestes
         M-Crop selbst in den Ring (core.ernte.kalib_vorrat_speisen) — dieser
@@ -6941,23 +8790,49 @@ class Service:
                 if time.monotonic() - _warte_seit > 5:
                     _kf.notiz(kamera, "waiting for a free worker slot")
                 self._bg_hungert()                        # B4
-                if not (self._gpu_bg_lock.locked() or self.lock.locked()):
+                # C2 (05.09.2026, bauplan_0505.md §1): die Ernte NIMMT
+                # `_gpu_bg_lock` nicht mehr — sie ist Kunde der Vergabestelle, und
+                # das Lock schuetzt seit .505 nur noch die SUBPROZESS-Jobs
+                # (qs_neu_starten, vorschlaege_starten, anlern_nachpruefung), die
+                # keinen Platz halten. Genommen werden darf es hier auch gar nicht
+                # mehr: es ist EIN Mutex, und mit ihm um den Job waeren die K
+                # Ernte-Abholer aus P6 wieder auf einen einzigen serialisiert.
+                # Der LESENDE Blick bleibt als Hoeflichkeit (unveraendert zum
+                # Bestand): laeuft gerade ein Subprozess-Job, tritt die Ernte
+                # zurueck, statt eine zweite GPU-Last danebenzustellen.
+                if not self._gpu_bg_lock.locked():
                     _kf.notiz(kamera, "")
-                    self._bg_satt()
-                    with self._gpu_bg_lock:
-                        self._bg_satt()               # B4
-                        if not self.lock.locked():
-                            return self._worker().job(
-                                {"typ": "ernte", "eid": eid, "kamera": kamera,
-                                 "ts": ts, "fps_sample": cfg.get("fps_sample"),
-                                 "schwellen": schwellen, "lauf_dir": lauf_dir,
-                                 "clip_quelle": "kalib",
-                                 "clip_vod": cfg.get("clip_vod") is not False,
-                                 "kalib": {"data_dir": cfg["data_dir"],
-                                           "deckel": int(cfg.get(
-                                               "live_kalib_max") or 0)},
-                                 "log": os.path.join(lauf_dir, "ernte.log")},
-                                timeout_s=timeout_s)
+                    # .502: satt ist dieser Auffueller erst MIT dem Platz, nicht
+                    # schon beim Betreten. Wird der Platz zwischen Pruefung und
+                    # Nahme wieder belegt, blieb der Hunger-Zaehler sonst
+                    # geloescht zurueck und die Bremse konnte ihn nie vorlassen.
+                    # P3: der Ernte-Job BELEGT einen Platz, statt nur zu pruefen —
+                    # nur so weiss der Broker von ihm.
+                    _auftrag = {
+                        "typ": "ernte", "eid": eid, "kamera": kamera,
+                        "ts": ts, "fps_sample": cfg.get("fps_sample"),
+                        "schwellen": schwellen, "lauf_dir": lauf_dir,
+                        "clip_quelle": "kalib",
+                        "clip_vod": cfg.get("clip_vod") is not False,
+                        "kalib": {"data_dir": cfg["data_dir"],
+                                  "deckel": int(cfg.get("live_kalib_max") or 0)},
+                        "log": os.path.join(lauf_dir, "ernte.log")}
+                    # A1 (05.09.): Klasse statt Text-Etikett — der Waechter reiht
+                    # eine eingezogene Ernte nie mehr als Ereignis ein (404-Schleife).
+                    # C2: die Anmeldung DAVOR macht das Warten sichtbar — sonst
+                    # zaehlt die Fairness-Regel diesen Auffueller nicht mit.
+                    with self._plaetze.wartend("ernte"), \
+                            self._plaetze.platz(eid, art="ernte",
+                                                timeout_s=1.0) as _enr:
+                        if _enr is not None:
+                            self._bg_satt()               # B4
+                            # A2 (05.09.): Lebenszeichen des Platzes — ohne
+                            # das zog der Waechter jede Ernte > 120 s ein.
+                            # A3: an die Belegung GEBUNDEN (puls_fuer), damit
+                            # ein Zombie nicht den Nachfolger lebendig haelt.
+                            return self._worker(_enr).job(
+                                _auftrag, timeout_s=timeout_s,
+                                puls=self._plaetze.puls_fuer(_enr))
                 time.sleep(1)
 
         def _abschluss():
@@ -7002,8 +8877,9 @@ class Service:
 
     def _bruecke_ernte(self, bdir, bid, eids, alle_eids, schwellen):
         """Hintergrund-Ernte eines Passes: 1 Worker-Job je FEHLENDEM Event
-        (eids) unter Live-Vorrang (dasselbe Lock-Muster wie _lernlauf_ernte),
-        danach Vorrat-Bewertung ueber ALLE Events des Laufs (alle_eids).
+        (eids) mit einem Ernte-Platz aus der Vergabestelle (seit C2 dasselbe
+        Muster wie _lernlauf_ernte, ohne _gpu_bg_lock), danach
+        Vorrat-Bewertung ueber ALLE Events des Laufs (alle_eids).
         Fehler landen LAUT in fehler.json + Log."""
         from core import ernte as _ern, vorrat as _vor
         import anlernen as _al
@@ -7039,30 +8915,60 @@ class Service:
                 abgesendet, antwort = False, None
                 while not abgesendet:
                     self._bg_hungert()            # B4
-                    # Slot belegt (anderer GPU-Hintergrund-Job oder Live) ->
-                    # EHRLICH 'wartet' melden statt still zu stehen (.310)
-                    if self._gpu_bg_lock.locked() or self.lock.locked():
+                    # C2 (05.09.2026, bauplan_0505.md §1): `_gpu_bg_lock` wird
+                    # nicht mehr GENOMMEN (Begruendung ausfuehrlich am
+                    # Kalibrier-Auffueller); der lesende Blick bleibt und meldet
+                    # EHRLICH 'wartet', statt still zu stehen (.310).
+                    if self._gpu_bg_lock.locked():
                         self._bruecke_puls(laeuft, i_fertig, n_ges, "wartet")
-                    with self._gpu_bg_lock:
-                        self._bg_satt()               # B4
-                        if not self.lock.locked():
-                            self._bruecke_puls(laeuft, i_fertig, n_ges, "erntet")
-                            antwort = self._worker().job(
-                                {"typ": "ernte", "eid": eid, "kamera": d.get("camera"),
-                                 "ts": start, "fps_sample": fps,
-                                 "schwellen": schwellen, "lauf_dir": bdir,
-                                 "clip_quelle": "bruecke",
-                                 # Kalibrier-Vorrat je Kamera (31.08.): die
-                                 # Ernte legt EIN Bild je Event in den Ring
-                                 # der Kamera. AUS dem Job, nicht aus dem
-                                 # Manifest — der Deckel ist laufende Config.
-                                 "kalib": {"data_dir": dd,
-                                           "deckel": int(self.cfg.get(
-                                               "live_kalib_max") or 0)},
-                                 "clip_vod": self.cfg.get("clip_vod") is not False,
-                                 "log": os.path.join(bdir, "ernte.log")},
-                                timeout_s=timeout_s)
-                            abgesendet = True
+                    else:
+                        # .502 (Feldfall beim Tester 04.09.2026): _bg_satt() stand
+                        # frueher VOR der Slot-Pruefung. Damit loeschte
+                        # jede Warterunde den eigenen Hunger-Zaehler, bevor er
+                        # die Bremse (hunger_bremse_s, Werk 60 s) erreichen
+                        # konnte: die Schleife dreht im Sekundentakt, der
+                        # Zaehler wurde nie aelter als eine Sekunde, und der
+                        # Event-Strom liess die Ernte NIE vor. Sichtbar wurde
+                        # das beim Stau-Abbau (Analyse an Analyse): der
+                        # Pass-Check stand bei "0 of 200 event(s) done" und
+                        # kam nicht los. Satt ist die Ernte erst, wenn sie
+                        # den Slot wirklich bekommt.
+                        # P3: Platz BELEGEN statt nur "alle frei" pruefen — der Broker
+                        # muss von diesem Job wissen, sonst laeuft eine Analyse daneben.
+                        _auftrag = {
+                            "typ": "ernte", "eid": eid, "kamera": d.get("camera"),
+                            "ts": start, "fps_sample": fps,
+                            "schwellen": schwellen, "lauf_dir": bdir,
+                            "clip_quelle": "bruecke",
+                            # Kalibrier-Vorrat je Kamera (31.08.): die Ernte legt EIN
+                            # Bild je Event in den Ring der Kamera. AUS dem Job, nicht
+                            # aus dem Manifest — der Deckel ist laufende Config.
+                            "kalib": {"data_dir": dd,
+                                      "deckel": int(self.cfg.get("live_kalib_max") or 0)},
+                            "clip_vod": self.cfg.get("clip_vod") is not False,
+                            "log": os.path.join(bdir, "ernte.log")}
+                        # A1 (05.09.): Klasse statt Text-Etikett (s. Kalibrier-Auffueller).
+                        # C2: Anmeldung DAVOR, damit die Fairness-Regel diesen
+                        # Warter mitzaehlt.
+                        with self._plaetze.wartend("ernte"), \
+                                self._plaetze.platz(eid, art="ernte",
+                                                    timeout_s=1.0) as _enr:
+                            if _enr is not None:
+                                self._bg_satt()           # B4
+                                self._bruecke_puls(laeuft, i_fertig, n_ges, "erntet")
+                                # A2 (05.09.): Puls des PLATZES (nicht zu
+                                # verwechseln mit _bruecke_puls darueber — das
+                                # ist der Fortschritts-Marker der Bruecken-UI).
+                                # A3: an die Belegung gebunden (puls_fuer).
+                                antwort = self._worker(_enr).job(
+                                    _auftrag, timeout_s=timeout_s,
+                                    puls=self._plaetze.puls_fuer(_enr))
+                                abgesendet = True
+                        if not abgesendet:
+                            # Kein Platz binnen der Frist: dieselbe ehrliche
+                            # Meldung wie oben, sonst stuende die Bruecken-UI
+                            # waehrend des Wartens auf dem letzten Stand.
+                            self._bruecke_puls(laeuft, i_fertig, n_ges, "wartet")
                     if not abgesendet:
                         time.sleep(1)
                 eintrag = {"eid": eid, "ok": bool(antwort and antwort.get("ok"))}
@@ -7369,13 +9275,22 @@ class Service:
                  + " — nothing is set aside automatically")
 
     def _lernlauf_ernte(self):
-        """Frontal-Ernte (Konzept §P1): 1 Event je Worker-Job; die Live-Wache wird
-        UNTER dem _gpu_bg_lock geprueft (Widerleger .75/L2: davor konnte sie beim
-        Absenden beliebig veraltet sein); das Regime (Schwellen/fps) friert das
-        Lauf-Manifest ein — Resume nutzt IMMER das Manifest, nie die aktuelle
-        Config; Koexistenz-Pause uebers _sammel_laeuft/_nachhol-Muster; Resume
-        idempotent (fertig.jsonl + Kandidaten-Datei je Event); ehrliche Zaehler
-        inkl. fd/ohne_pose/teilweise-lesbar; am Ende Buecher-gegen-Platte-Wache."""
+        """Frontal-Ernte (Konzept §P1): 1 Event je Worker-Job; das Regime
+        (Schwellen/fps) friert das Lauf-Manifest ein — Resume nutzt IMMER das
+        Manifest, nie die aktuelle Config; Koexistenz-Pause uebers
+        _sammel_laeuft/_nachhol-Muster; Resume idempotent (fertig.jsonl +
+        Kandidaten-Datei je Event); ehrliche Zaehler inkl.
+        fd/ohne_pose/teilweise-lesbar; am Ende Buecher-gegen-Platte-Wache.
+
+        C2/P6 (05.09.2026, bauplan_0505.md §2 Gruppe C): geerntet wird mit K
+        ABHOLERN (K = Zahl der Analyse-Plaetze) ueber eine gemeinsame
+        Ereignis-Warteschlange, nicht mehr streng nacheinander. Der Vorrang
+        gegenueber der Ereignis-Analyse liegt seitdem GANZ in der Vergabestelle
+        (Fairness-Regel N-1) — die alte Live-Wache unter `_gpu_bg_lock` ist
+        entfallen, weil dieses eine Lock die K Abholer wieder auf einen
+        serialisiert haette; genommen wird es hier nicht mehr, nur gelesen
+        (Ausweichen vor den Subprozess-Jobs). Details am Aufbau der Abholer
+        weiter unten."""
         from core import ernte as _ern
         from core import lernlauf as _ll
         from core import wanduhr as _wu
@@ -7502,11 +9417,263 @@ class Service:
             _rate_hw, _rate_ver = _placement_hw_key(), os.environ.get("SUSLIK_VERSION", "dev")
             rate_alt = _wu.ernte_rate_lesen(dd, _rate_hw, _rate_ver)
             proben = []
-            for i, e in enumerate(mit_clip, 1):
+            # ---------------------------------------------------------------
+            # P6 / C2 (05.09.2026, bauplan_0505.md §2 Gruppe C, Entscheid 04./05.09.):
+            # der Lernlauf erntet mit K ABHOLERN statt streng nacheinander. K ist
+            # die Zahl der Analyse-Plaetze — mehr Abholer waeren nur eine zweite
+            # Warteschlange vor der Vergabestelle. Anlass ist das Feldbild vom
+            # 05.09.: rund 90 Ernte-Laeufe am Tag zu je 60-100 s, seriell, waehrend
+            # drei von vier Plaetzen leer standen. Die Fairness haelt die
+            # Vergabestelle (Regel N-1): die Ernte bekommt hoechstens kapazitaet-1
+            # Plaetze, solange Ereignisse warten — und bei EINEM Platz gar keinen,
+            # dort laeuft sie weiter genau zwischen den Analysen wie vor .503.
+            #
+            # Was geteilt wird und wie es geschuetzt ist:
+            #   `offen`  — die noch nicht vergebenen Ereignisse, unter `q_lock`.
+            #   BUECHER (`fertig`, `summe`, `proben`, `erledigt`, `laufende`) —
+            #              unter `buch_lock`, und `fertig.jsonl` wird in DERSELBEN
+            #              Klammer angehaengt: die Datei schreibt zwar jeder fuer
+            #              sich atomar (O_APPEND), die Zaehler-Summe daneben ist
+            #              aber ein Read-Modify-Write und ginge sonst verloren —
+            #              genau die Invariante, die `bestand_pruefen` am Ende
+            #              nachrechnet.
+            #   `stopp`/`ende` — der Abbruch: EIN Grund, EINE Logzeile, alle
+            #              Abholer verlassen ihre Schleife.
+            # Resume bleibt idempotent: `fertig` wird EINMAL beim Start gelesen,
+            # die Warteschlange traegt nur die noch offenen Ereignisse, und jeder
+            # Abholer schreibt ausschliesslich AN (nie um).
+            # Ehrliche Grenze: alle Abholer schreiben ihre Worker-Ausgabe in
+            # dasselbe `ernte.log` (Anhaengen, kein Ueberschreiben) — die Zeilen
+            # mehrerer Ereignisse stehen dort ab jetzt verschraenkt.
+            offen = collections.deque(e for e in mit_clip
+                                      if e.get("eid") not in fertig)
+            q_lock, buch_lock = threading.Lock(), threading.Lock()
+            vor_lock = threading.Lock()      # .262: EIN Vorlade-Slot fuer alle
+            stopp = threading.Event()
+            ende = {"grund": None}
+            laufende = {}                    # eid -> Anzeigetext (fuer die UI-Zeile)
+            erledigt = {"n": n - len(offen)}  # Resume: schon Gebuchtes zaehlt mit
+
+            def _stopp(grund):
+                """Den ganzen Lauf beenden — EIN Grund, EINE Logzeile, egal wie
+                viele Abholer den Abbruch gleichzeitig bemerken."""
+                with buch_lock:
+                    erster = ende["grund"] is None
+                    if erster:
+                        ende["grund"] = grund
+                stopp.set()
+                if erster:
+                    self.log(grund)
+
+            def _lauf_lebt(grund_wenn_abgebrochen):
+                """Steht der Lauf noch? (`lauf_lesen` liefert None = abgebrochen
+                oder unlesbar.) Sonst: alle Abholer beenden."""
+                z, ferr = _ll.lauf_lesen(dd)
+                if z is not None:
+                    return True
+                _stopp(f"harvest stopped: run state unreadable ({ferr})"
+                       if ferr else grund_wenn_abgebrochen)
+                return False
+
+            def _vorladen_anstossen(worker_erzeugt):
+                """.262 Hebel 2 (gemessen 17.08.: Download 0,4-0,6 s je Clip bei
+                ~2,5 s Analyse): waehrend gerechnet wird, holt EIN Thread den
+                naechsten Clip in den Cache (clip_holen: eindeutige .part-Datei,
+                atomar; der Vorlader gibt seinen Pin sofort frei, die Datei bleibt
+                im Cache und der Worker trifft sie).
+
+                C2: EIN Slot fuer den ganzen Lauf, unter `vor_lock`. Vorher war
+                das dasselbe, weil es nur einen Erntenden gab; mit K Abholern
+                wuerden sonst K Vorlader nebeneinander ziehen und die
+                Erzeugungs-Serialisierung von .288 verlieren."""
+                if frigate_schoner.gesperrt():
+                    # .264: waehrend einer Schoner-Sperre KEIN Vorladen — der
+                    # Vorlader waere sonst genau der Hammer, den der Schoner
+                    # verhindern soll.
+                    return
+                with vor_lock:
+                    vor = getattr(self, "_lernlauf_vorlader", None)
+                    if vor is not None and vor[0].is_alive():
+                        return
+                    with q_lock:
+                        naechste = list(offen)
+                    # Die Warteschlange traegt nur noch nicht vergebene Ereignisse
+                    # (Gebuchtes ist nie darin) — gesucht ist das naechste, dessen
+                    # Clip noch nicht im Cache liegt.
+                    _nx = next((x for x in naechste
+                                if not os.path.isfile(os.path.join(
+                                    clips_dir,
+                                    str(x.get("eid")).replace("/", "_") + ".mp4"))),
+                               None)
+                    if _nx is None:
+                        return
+                    # .287 [clipdbg]/.288 Weiche: Alter = jetzt minus Event-ENDE
+                    # (start + clip_s).
+                    _nx_alter = _clip_alter_min(
+                        (float(_nx.get("start") or 0)
+                         + float(_nx.get("clip_s") or 0)) or None, _nx.get("start"))
+                    _nx_alt = (_nx_alter is not None
+                               and _nx_alter >= erz_alter_min)
+                    if worker_erzeugt and _nx_alt:
+                        return       # .288 Serialisierung: der Worker-Zug erzeugt
+                        #              schon drueben — kein zweiter Alt-Zug daneben
+
+                    def _vorladen(_ne=_nx.get("eid"), _alter=_nx_alter,
+                                  _erz=_nx_alt):
+                        from core import frames as _fr
+                        # .292: VOD-Schalter fuer den DIENST-Prozess je Zug frisch
+                        # aus der Config armieren (Worker-Jobs bekommen ihn als
+                        # Job-Feld).
+                        _fr.CLIP_VOD = (self.cfg.get("clip_vod") is not False)
+                        try:
+                            _fr.clip_holen(
+                                _ne, data_dir=dd,
+                                frigate_url=self.cfg.get("frigate_url"),
+                                quelle="vorlader", alter_min=_alter,
+                                erzeugung=_erz,
+                                erzeugung_deckel_s=erz_deckel_s)
+                        except Exception:
+                            pass   # der Ernte-Job meldet Fehler selbst
+                        finally:
+                            _fr.frei(_ne, data_dir=dd)
+
+                    _vt = threading.Thread(target=_vorladen, daemon=True,
+                                           name="lernlauf-vorlader")
+                    self._lernlauf_vorlader = (_vt, _nx.get("eid"))
+                    _vt.start()
+
+            def _fehler_buchbar(eid, antwort):
+                """Darf ein gescheiterter Job als 'fehler' gebucht werden?
+                -> False = UNGEBUCHT lassen (ein spaeterer Lauf/Resume holt das
+                Ereignis nach). Laeuft bewusst OHNE `buch_lock`: der Infra-Zweig
+                wartet hier moeglicherweise minutenlang."""
+                # .264 Frigate-Schoner: VOR der Fehler-Buchung pruefen, ob
+                # Frigate ueberhaupt noch antwortet — ein Infrastruktur-
+                # Ausfall darf das Event weder als 'fehler' verbuchen noch
+                # in den durchsucht-Vermerk schreiben (es war nie dran
+                # schuld). Stattdessen sichtbar warten, bis die Sperre
+                # faellt, und das Event UNGEBUCHT lassen.
+                infra = False
+                try:
+                    api(self.cfg, "/api/version")
+                except FrigateHttpFehler:
+                    pass                       # Antwort = Frigate lebt
+                except Exception:
+                    infra = True
+                if infra:
+                    self.log(f"harvest {eid}: Frigate not answering — "
+                             "event NOT booked, waiting for recovery")
+                    while frigate_schoner.gesperrt() and not stopp.is_set():
+                        if _ll.lauf_fortschreiben(dd, fortschritt={
+                                "status": "waiting for Frigate to recover "
+                                          "(protector active)"}) is None:
+                            _stopp("harvest stopped while waiting for "
+                                   "Frigate (run aborted)")
+                            return False
+                        if frigate_schoner.erlaubt():
+                            try:            # aktive Probe haelt die Sperre
+                                api(self.cfg, "/api/version")   # ehrlich
+                            except FrigateHttpFehler:
+                                pass        # Antwort = lebt, ok() lief
+                            except Exception:
+                                pass        # fehler() lief, Sperre verlaengert
+                        time.sleep(10)
+                    if not stopp.is_set():
+                        if _ll.lauf_fortschreiben(dd, fortschritt={
+                                "status": "harvesting"}) is None:
+                            _stopp("harvest stopped (run aborted)")
+                    return False
+                # .288: Erzeugungs-Abbrueche (Deckel erreicht ODER Probe
+                # tot, Frigate inzwischen aber wieder da) NIE als
+                # 'fehler' buchen und NIE sofort neu ziehen — das Event
+                # bleibt ungebucht (kein fertig-, kein durchsucht-
+                # Vermerk), ein spaeterer Lauf/Resume holt es nach
+                # (derselbe Nicht-gebucht-Weg wie beim Infra-Ausfall).
+                _ftxt = str((antwort or {}).get("fehler") or "")
+                if "frigate_stoerung" in _ftxt or "erzeugung_deckel" in _ftxt:
+                    self.log(f"harvest {eid}: clip generation aborted "
+                             f"({_ftxt[:120]}) — event NOT booked, "
+                             "a later run retries it")
+                    return False
+                return True
+
+            def _buchen(e, eid, antwort, dauer_s):
+                """Das Ergebnis EINES Ereignisses in die Buecher — komplett unter
+                `buch_lock` (s. Kopf: Datei und Zaehler gehoeren zusammen)."""
+                with buch_lock:
+                    eintrag = {"eid": eid, "ok": bool(antwort and antwort.get("ok"))}
+                    if antwort and antwort.get("ok"):
+                        # .32x: ohne_struktur MIT transportieren — sonst faellt die
+                        # Diagnose des Struktur-Tests still raus (QS-Befund 22.08.:
+                        # "der neue Zaehler erreicht weder fertig.jsonl noch die
+                        # Anzeige"; im Lauf L20260822_201944 live bestaetigt).
+                        # .346: vorab_verworfen dazu — DIESELBE Fehlerklasse, vom
+                        # User am Lauf L20260825_215327 gefunden ("pruefe das"):
+                        # die .342-Vorschranke zaehlte, die feste Schluesselliste
+                        # hier liess den vierten Topf fallen — fertig.jsonl-Zeilen
+                        # verletzten ihre eigene Invariante.
+                        # .505 (05.09.2026, Gate-Vorlauf SK3): die feste Liste hier
+                        # war als Ausnahme „8 von 10 Feldern" deklariert mit dem
+                        # Auftrag, beim naechsten Anfassen auf die EINE Quelle zu
+                        # wechseln — C2 hat sie angefasst. ZAEHLER_FELDER traegt
+                        # zusaetzlich `v` und `frames_gelesen` (dort int, wie
+                        # ernte_event sie liefert); frames_soll bleibt roh (None
+                        # erlaubt, kein Zaehler).
+                        for k in _ern.ZAEHLER_FELDER:
+                            eintrag[k] = int(antwort.get(k) or 0)
+                            summe[k] = summe.get(k, 0) + eintrag[k]
+                        eintrag["frames_soll"] = antwort.get("frames_soll")
+                        if antwort.get("frames_soll"):
+                            # .287 [clipdbg] (c): Clip-Qualitaet der Ernte-Analyse
+                            # im DIENST-Log (die Download-Zeilen stehen im
+                            # ernte.log des Worker-Jobs).
+                            _frames.clip_dbg(
+                                f"{eid}: harvest clip quality frames "
+                                f"{antwort.get('frames_gelesen')}/"
+                                f"{antwort.get('frames_soll')} readable"
+                                + (" INCOMPLETE" if antwort.get("unvollstaendig")
+                                   else ""))
+                        inv = _ern.zaehler_pruefen(antwort)
+                        if inv:
+                            summe["invariante"] = summe.get("invariante", 0) + 1
+                            self.log(f"harvest {eid}: {inv}")
+                        if antwort.get("unvollstaendig"):
+                            eintrag["unvollstaendig"] = True   # Teil-Verlust NIE still (§2.3)
+                            summe["unvollstaendig"] = summe.get("unvollstaendig", 0) + 1
+                        if antwort.get("unlesbar"):
+                            eintrag["unlesbar"] = True
+                            summe["unlesbar"] = summe.get("unlesbar", 0) + 1
+                        elif not antwort.get("kandidaten"):
+                            eintrag["ohne_gesicht"] = True
+                            summe["ohne_gesicht"] = summe.get("ohne_gesicht", 0) + 1
+                        if antwort.get("letzter_m"):
+                            summe["letzter_fund"] = antwort["letzter_m"]
+                    else:
+                        eintrag["fehler"] = ((antwort or {}).get("fehler")
+                                             or "worker timeout/crash")
+                        summe["fehler"] = summe.get("fehler", 0) + 1
+                        self.log(f"harvest {eid} FAILED: {eintrag['fehler']}")
+                        _ern.event_aufraeumen(lauf_dir, eid)   # keine Teilzeilen-Leichen
+                    _ern.fertig_anhaengen(lauf_dir, eintrag)
+                    # .262 Fortsetzungs-Suche: Vermerk ok UND fehler (ein heute
+                    # toter Clip ist im naechsten Lauf erst recht weg); ein
+                    # Schreibfehler stoppt NIE die Ernte, nur den Vermerk.
+                    try:
+                        _ll.durchsucht_merken(dd, eid,
+                                              "ok" if eintrag.get("ok") else "fehler")
+                    except OSError as _de:
+                        self.log(f"searched-index write failed ({_de}) — the event "
+                                 "may be searched again in a later run")
+                    fertig.add(eid)
+                    erledigt["n"] += 1
+                    proben.append((float(e.get("clip_s") or 0.0), dauer_s))
+
+            def _ernten(e):
+                """EIN Anlauf fuer EIN Ereignis.
+                -> "weiter" (durch, gebucht oder bewusst ungebucht) |
+                   "nochmal" (kein Platz — das Ereignis geht zurueck in die
+                   Warteschlange) | "ende" (der Lauf ist abgebrochen)."""
                 eid = e.get("eid")
-                if eid in fertig:
-                    continue
-                _t_ev = time.perf_counter()
                 # .288 Alt-Event-Weiche: Alter = jetzt minus Event-ENDE
                 # (start + clip_s). Ab erz_alter_min muss Frigate den Clip
                 # erst aus Segmenten ERZEUGEN — der Zug laeuft dann im
@@ -7517,328 +9684,287 @@ class Service:
                     (float(e.get("start") or 0)
                      + float(e.get("clip_s") or 0)) or None, e.get("start"))
                 alt_ev = _am is not None and _am >= erz_alter_min
-                # .86: das AKTUELLE Event sichtbar machen — bei hoher fps dauert
-                # ein Event Minuten, und ohne diese Zeile sah 'event: 11/50' wie ein
-                # Haenger aus, obwohl Event 12 mitten in der Analyse steckte.
-                _ll.lauf_fortschreiben(dd, fortschritt={
-                    "analysing": f"{e.get('kamera', '?')} clip {round(e.get('clip_s') or 0)}s"})
-                # .262 Hebel 2 (gemessen 17.08.: Download 0.4-0.6 s je Clip bei
-                # ~2.5 s Analyse): EIN Vorlade-Slot — waehrend der Worker dieses
-                # Event rechnet, holt ein Thread den NAECHSTEN Clip in den
-                # Cache (clip_holen: eindeutige .part-Datei, atomar; der
-                # Vorlader gibt seinen Pin sofort frei, die Datei bleibt im
-                # Cache und der Worker trifft sie). Laeuft der Vorlader noch
-                # am AKTUELLEN Event, kurz warten statt doppelt zu laden.
+                # .262: haengt der Vorlader gerade an genau diesem Ereignis,
+                # warten wir auf ihn, statt denselben Clip ein zweites Mal zu
+                # ziehen. .288: bei einem Alt-Event bis zu dessen Deckel — nach
+                # 45 s aufzugeben hiess, dieselbe Erzeugung PARALLEL noch einmal
+                # anzustossen (die Doppellast, die Serie E beim Vorlader+Worker mass).
                 vor = getattr(self, "_lernlauf_vorlader", None)
                 if vor and vor[1] == eid and vor[0].is_alive():
-                    # .288: haengt der Vorlader gerade an der ERZEUGUNG
-                    # genau dieses Alt-Events, warten wir bis zu dessen
-                    # Deckel mit — nach 45 s aufzugeben hiess, denselben
-                    # Clip PARALLEL als ZWEITE Erzeugung zu ziehen (die
-                    # Doppellast, die Serie E beim Vorlader+Worker mass).
                     vor[0].join(timeout=(erz_deckel_s + 60) if alt_ev else 45)
-                # .264: waehrend einer Schoner-Sperre KEIN Vorladen — der
-                # Vorlader waere sonst genau der Hammer, den der Schoner
-                # verhindern soll.
-                # .288 Serialisierung der teuren Erzeugungen: erzeugt der
-                # WORKER diesen Clip gleich selbst frisch (Alt-Event, kein
-                # Cache-Treffer), startet der Vorlader KEINEN eigenen
-                # Alt-Clip-Zug daneben — je Zeitpunkt hoechstens EINE
-                # Clip-Erzeugung drueben (Flag am Cache-Stand, kein
-                # Busy-Wait; junge Clips laden weiter parallel vor).
-                worker_erzeugt = alt_ev and not os.path.isfile(os.path.join(
-                    clips_dir, str(eid).replace("/", "_") + ".mp4"))
-                if frigate_schoner.gesperrt():
-                    pass
-                elif vor is None or not vor[0].is_alive():
-                    _nx = next(
-                        (x for x in mit_clip[i:]
-                         if x.get("eid") not in fertig
-                         and not os.path.isfile(os.path.join(
-                             clips_dir,
-                             str(x.get("eid")).replace("/", "_") + ".mp4"))),
-                        None)
-                    if _nx is not None:
-                        # .287 [clipdbg]/.288 Weiche: Alter = jetzt minus
-                        # Event-ENDE (start + clip_s).
-                        _nx_alter = _clip_alter_min(
-                            (float(_nx.get("start") or 0)
-                             + float(_nx.get("clip_s") or 0))
-                            or None, _nx.get("start"))
-                        _nx_alt = (_nx_alter is not None
-                                   and _nx_alter >= erz_alter_min)
-                        if worker_erzeugt and _nx_alt:
-                            pass   # Serialisierung (s.o.): der Worker-Zug
-                            #        erzeugt schon — kein zweiter Alt-Zug
-                        else:
-                            def _vorladen(_ne=_nx.get("eid"),
-                                          _alter=_nx_alter, _erz=_nx_alt):
-                                from core import frames as _fr
-                                # .292: VOD-Schalter fuer den DIENST-Prozess
-                                # je Zug frisch aus der Config armieren
-                                # (Worker-Jobs bekommen ihn als Job-Feld).
-                                _fr.CLIP_VOD = (self.cfg.get("clip_vod")
-                                                is not False)
-                                try:
-                                    _fr.clip_holen(
-                                        _ne, data_dir=dd,
-                                        frigate_url=self.cfg.get("frigate_url"),
-                                        quelle="vorlader", alter_min=_alter,
-                                        erzeugung=_erz,
-                                        erzeugung_deckel_s=erz_deckel_s)
-                                except Exception:
-                                    pass   # der Ernte-Job meldet Fehler selbst
-                                finally:
-                                    _fr.frei(_ne, data_dir=dd)
-                            _vt = threading.Thread(target=_vorladen,
-                                                   daemon=True,
-                                                   name="lernlauf-vorlader")
-                            self._lernlauf_vorlader = (_vt, _nx.get("eid"))
-                            _vt.start()
-                z, ferr = _ll.lauf_lesen(dd)
-                if z is None:
-                    self.log(f"harvest stopped: run state unreadable ({ferr})"
-                             if ferr else "harvest stopped (run aborted)")
-                    return
+                # .288: erzeugt der WORKER diesen Clip gleich selbst frisch
+                # (Alt-Event, kein Cache-Treffer), startet der Vorlader keinen
+                # zweiten Alt-Zug daneben.
+                _vorladen_anstossen(alt_ev and not os.path.isfile(os.path.join(
+                    clips_dir, str(eid).replace("/", "_") + ".mp4")))
+                if not _lauf_lebt("harvest stopped (run aborted)"):
+                    return "ende"
                 if getattr(self, "_neustart_laeuft", False):
                     # execv im Anflug: keinen neuen Worker starten (Waisen-Fenster,
                     # Widerleger .75/L2) — der Boot-Resume setzt den Lauf fort.
-                    self.log("harvest paused for service restart — resumes after boot")
-                    return
-                antwort, abgesendet = None, False
-                while not abgesendet:
-                    self._bg_hungert()            # B4
-                    with self._gpu_bg_lock:         # BG-Jobs seriell; Live-Wache HIER,
-                        if not self.lock.locked():  # nicht davor (sonst veraltet sie)
-                            antwort = self._worker().job(
-                                {"typ": "ernte", "eid": eid, "kamera": e.get("kamera"),
-                                 "ts": e.get("start") or 0, "fps_sample": fps,
-                                 "schwellen": schwellen, "lauf_dir": lauf_dir,
-                                 # .33x DATEIQUELLE: Herkunft aus der events_liste
-                                 # in den Job — sie wandert von hier bis in die
-                                 # Anker-Kachel (Bauplan analysen/12).
-                                 "quelle": e.get("quelle"),
-                                 # Kalibrier-Vorrat je Kamera (31.08.): EIN
-                                 # Bild je Event in den Ring seiner Kamera —
-                                 # damit fuellt auch ein reiner Lernlauf die
-                                 # Kalibrierseite. Aus dem Job, nicht aus dem
-                                 # Manifest (der Deckel ist laufende Config).
-                                 "kalib": {"data_dir": dd,
-                                           "deckel": int(self.cfg.get(
-                                               "live_kalib_max") or 0)},
-                                 # .287 [clipdbg]: Quelle + Event-Alter (jetzt
-                                 # minus Ende = start + clip_s) fuer die
-                                 # Clip-Debug-Zeilen im Worker (ernte.log).
-                                 "clip_quelle": "ernte",
-                                 "clip_alter_min": _am,
-                                 # .288: Erzeugungs-Modus-Weiche + Deckel als
-                                 # Job-Felder (Deckungs-Vertrag wie rss_max_mb
-                                 # — EINE Config-Quelle, der Worker rechnet
-                                 # nichts selbst).
-                                 "clip_erzeugung": alt_ev,
-                                 "clip_erzeugung_deckel_s": erz_deckel_s,
-                                 # .292: VOD-Weg-Schalter (clip_vod, Default
-                                 # AN) — Alt-Clips kommen zuerst ueber
-                                 # Frigates nginx-vod + lokalen Remux, der
-                                 # kranke Erzeugungspfad (frigateUser24029)
-                                 # wird nur noch als Fallback betreten.
-                                 "clip_vod": self.cfg.get("clip_vod")
-                                 is not False,
-                                 "log": os.path.join(lauf_dir, "ernte.log")},
-                                # .288: der Job-Timeout traegt die moegliche
-                                # Erzeugungs-Wartezeit MIT — sonst killte der
-                                # Dienst den Worker mitten im Erzeugungs-
-                                # Warten und der Kill waere selbst wieder der
+                    _stopp("harvest paused for service restart — resumes after boot")
+                    return "ende"
+                self._bg_hungert()                # B4
+                # C2 (05.09.2026, bauplan_0505.md §1): die Ernte NIMMT
+                # `_gpu_bg_lock` nicht mehr. Sie ist Kunde der Vergabestelle; das
+                # Lock schuetzt seit .505 nur noch die SUBPROZESS-Jobs
+                # (qs_neu_starten, vorschlaege_starten, anlern_nachpruefung), die
+                # keinen Platz halten. Nehmen DARF sie es auch gar nicht mehr: es
+                # ist EIN Mutex, mit ihm um den Job waeren die K Abholer wieder
+                # auf einen einzigen serialisiert. Der lesende Blick bleibt als
+                # Hoeflichkeit — laeuft so ein Subprozess-Job, tritt die Ernte
+                # zurueck, statt eine zweite GPU-Last danebenzustellen.
+                # LOCK-ORDNUNG bleibt damit gewahrt (_gpu_bg_lock -> Platz ->
+                # Job-Lock des Platz-Workers): ein Platz-Halter fordert
+                # `_gpu_bg_lock` nirgends mehr an.
+                if self._gpu_bg_lock.locked():
+                    return "nochmal"
+                _auftrag = {"typ": "ernte", "eid": eid, "kamera": e.get("kamera"),
+                            "ts": e.get("start") or 0, "fps_sample": fps,
+                            "schwellen": schwellen, "lauf_dir": lauf_dir,
+                            # .33x DATEIQUELLE: Herkunft aus der events_liste
+                            # in den Job — sie wandert von hier bis in die
+                            # Anker-Kachel (Bauplan analysen/12).
+                            "quelle": e.get("quelle"),
+                            # Kalibrier-Vorrat je Kamera (31.08.): EIN
+                            # Bild je Event in den Ring seiner Kamera —
+                            # damit fuellt auch ein reiner Lernlauf die
+                            # Kalibrierseite. Aus dem Job, nicht aus dem
+                            # Manifest (der Deckel ist laufende Config).
+                            "kalib": {"data_dir": dd,
+                                      "deckel": int(self.cfg.get(
+                                          "live_kalib_max") or 0)},
+                            # .287 [clipdbg]: Quelle + Event-Alter (jetzt
+                            # minus Ende = start + clip_s) fuer die
+                            # Clip-Debug-Zeilen im Worker (ernte.log).
+                            "clip_quelle": "ernte",
+                            "clip_alter_min": _am,
+                            # .288: Erzeugungs-Modus-Weiche + Deckel als
+                            # Job-Felder (Deckungs-Vertrag wie rss_max_mb
+                            # — EINE Config-Quelle, der Worker rechnet
+                            # nichts selbst).
+                            "clip_erzeugung": alt_ev,
+                            "clip_erzeugung_deckel_s": erz_deckel_s,
+                            # .292: VOD-Weg-Schalter (clip_vod, Default
+                            # AN) — Alt-Clips kommen zuerst ueber
+                            # Frigates nginx-vod + lokalen Remux, der
+                            # kranke Erzeugungspfad (frigateUser24029)
+                            # wird nur noch als Fallback betreten.
+                            "clip_vod": self.cfg.get("clip_vod") is not False,
+                            "log": os.path.join(lauf_dir, "ernte.log")}
+                antwort, abgesendet, _t_ev = None, False, None
+                # A1 (05.09.): Klasse statt Text-Etikett — der Waechter reiht eine
+                # eingezogene Ernte nie mehr als Ereignis ein (404-Schleife).
+                # C2: die Anmeldung DAVOR macht das Warten fuer die Fairness-Regel
+                # sichtbar; ohne sie zaehlte die Ernte als „niemand wartet" und die
+                # Analyse duerfte alle Plaetze nehmen.
+                with self._plaetze.wartend("ernte"), \
+                        self._plaetze.platz(eid, art="ernte", timeout_s=1.0) as _enr:
+                    if _enr is not None:
+                        # .86: das AKTUELLE Event sichtbar machen — bei hoher fps
+                        # dauert ein Event Minuten, und ohne diese Zeile sieht die
+                        # Seite wie ein Haenger aus. Seit C2 stehen dort bis zu K
+                        # Ereignisse nebeneinander (der Koordinator setzt sie).
+                        with buch_lock:
+                            laufende[eid] = (f"{e.get('kamera', '?')} clip "
+                                             f"{round(e.get('clip_s') or 0)}s")
+                        _t_ev = time.perf_counter()
+                        try:
+                            antwort = self._worker(_enr).job(
+                                _auftrag,
+                                # .288: der Job-Timeout traegt die moegliche Erzeugungs-
+                                # Wartezeit MIT — sonst killte der Dienst den Worker mitten
+                                # im Erzeugungs-Warten und der Kill waere selbst wieder der
                                 # Leak-Abbruch aus Serie E.
                                 timeout_s=timeout_s
-                                + (erz_deckel_s if alt_ev else 0))
+                                + (erz_deckel_s if alt_ev else 0),
+                                # A2 (05.09.): Lebenszeichen des Platzes,
+                                # sonst zieht der Waechter jede Ernte
+                                # > 120 s ein (404-Schleife des Etiketts).
+                                # A3: gebunden an die Belegung.
+                                puls=self._plaetze.puls_fuer(_enr))
                             abgesendet = True
-                    if not abgesendet:
-                        time.sleep(1)
-                        zz, zf = _ll.lauf_lesen(dd)
-                        if zz is None:
-                            self.log(f"harvest stopped: run state unreadable ({zf})"
-                                     if zf else "harvest stopped while waiting for "
-                                                "the live path (run aborted)")
-                            return
+                        finally:
+                            with buch_lock:
+                                laufende.pop(eid, None)
+                if not abgesendet:
+                    return "nochmal"
                 # Abbruch WAEHREND des Jobs: nichts mehr buchen — fertig_anhaengen
                 # wuerde das eben nach trash verschobene Lauf-Verzeichnis neu anlegen.
-                z, ferr = _ll.lauf_lesen(dd)
-                if z is None:
-                    self.log(f"harvest stopped: run state unreadable ({ferr})"
-                             if ferr else "harvest stopped after the running event "
-                                          "(run aborted)")
-                    return
-                eintrag = {"eid": eid, "ok": bool(antwort and antwort.get("ok"))}
+                if not _lauf_lebt("harvest stopped after the running event "
+                                  "(run aborted)"):
+                    return "ende"
                 if antwort and antwort.get("ok"):
-                    # .32x: ohne_struktur MIT transportieren — sonst faellt die
-                    # Diagnose des Struktur-Tests still raus (QS-Befund 22.08.:
-                    # "der neue Zaehler erreicht weder fertig.jsonl noch die
-                    # Anzeige"; im Lauf L20260822_201944 live bestaetigt).
-                    # .346: vorab_verworfen dazu — DIESELBE Fehlerklasse, vom
-                    # User am Lauf L20260825_215327 gefunden ("pruefe das"):
-                    # die .342-Vorschranke zaehlte, die feste Schluesselliste
-                    # hier liess den vierten Topf fallen — fertig.jsonl-Zeilen
-                    # verletzten ihre eigene Invariante.
-                    for k in ("detektionen", "fd", "ohne_pose", "vorab_verworfen",
-                              "kandidaten", "m", "s", "ohne_struktur"):
-                        eintrag[k] = int(antwort.get(k) or 0)
-                        summe[k] = summe.get(k, 0) + eintrag[k]
-                    for k in ("frames_gelesen", "frames_soll"):
-                        eintrag[k] = antwort.get(k)
-                    if antwort.get("frames_soll"):
-                        # .287 [clipdbg] (c): Clip-Qualitaet der Ernte-Analyse
-                        # im DIENST-Log (die Download-Zeilen stehen im
-                        # ernte.log des Worker-Jobs).
-                        _frames.clip_dbg(
-                            f"{eid}: harvest clip quality frames "
-                            f"{antwort.get('frames_gelesen')}/"
-                            f"{antwort.get('frames_soll')} readable"
-                            + (" INCOMPLETE" if antwort.get("unvollstaendig")
-                               else ""))
-                    inv = _ern.zaehler_pruefen(antwort)
-                    if inv:
-                        summe["invariante"] = summe.get("invariante", 0) + 1
-                        self.log(f"harvest {eid}: {inv}")
-                    if antwort.get("unvollstaendig"):
-                        eintrag["unvollstaendig"] = True   # Teil-Verlust NIE still (§2.3)
-                        summe["unvollstaendig"] = summe.get("unvollstaendig", 0) + 1
-                    if antwort.get("unlesbar"):
-                        eintrag["unlesbar"] = True
-                        summe["unlesbar"] = summe.get("unlesbar", 0) + 1
-                    elif not antwort.get("kandidaten"):
-                        eintrag["ohne_gesicht"] = True
-                        summe["ohne_gesicht"] = summe.get("ohne_gesicht", 0) + 1
-                    if antwort.get("letzter_m"):
-                        summe["letzter_fund"] = antwort["letzter_m"]
-                else:
-                    # .264 Frigate-Schoner: VOR der Fehler-Buchung pruefen, ob
-                    # Frigate ueberhaupt noch antwortet — ein Infrastruktur-
-                    # Ausfall darf das Event weder als 'fehler' verbuchen noch
-                    # in den durchsucht-Vermerk schreiben (es war nie dran
-                    # schuld). Stattdessen sichtbar warten, bis die Sperre
-                    # faellt, und das Event UNGEBUCHT lassen (naechster
-                    # Lauf/Resume holt es nach).
-                    infra = False
-                    try:
-                        api(self.cfg, "/api/version")
-                    except FrigateHttpFehler:
-                        pass                       # Antwort = Frigate lebt
-                    except Exception:
-                        infra = True
-                    if infra:
-                        self.log(f"harvest {eid}: Frigate not answering — "
-                                 "event NOT booked, waiting for recovery")
-                        while frigate_schoner.gesperrt():
-                            if _ll.lauf_fortschreiben(dd, fortschritt={
-                                    "status": "waiting for Frigate to recover "
-                                              "(protector active)"}) is None:
-                                self.log("harvest stopped while waiting for "
-                                         "Frigate (run aborted)")
-                                return
-                            if frigate_schoner.erlaubt():
-                                try:            # aktive Probe haelt die Sperre
-                                    api(self.cfg, "/api/version")   # ehrlich
-                                except FrigateHttpFehler:
-                                    pass        # Antwort = lebt, ok() lief
-                                except Exception:
-                                    pass        # fehler() lief, Sperre verlaengert
-                            time.sleep(10)
-                        if _ll.lauf_fortschreiben(dd, fortschritt={
-                                "status": "harvesting"}) is None:
+                    _buchen(e, eid, antwort, time.perf_counter() - _t_ev)
+                elif _fehler_buchbar(eid, antwort):
+                    _buchen(e, eid, antwort, time.perf_counter() - _t_ev)
+                return "weiter"
+
+            def _abholer():
+                """EIN Abholer: naechstes Ereignis nehmen, ernten, weiter."""
+                while not stopp.is_set():
+                    with q_lock:
+                        if not offen:
                             return
+                        e = offen.popleft()
+                    urteil = _ernten(e)
+                    if urteil == "weiter":
                         continue
-                    # .288: Erzeugungs-Abbrueche (Deckel erreicht ODER Probe
-                    # tot, Frigate inzwischen aber wieder da) NIE als
-                    # 'fehler' buchen und NIE sofort neu ziehen — das Event
-                    # bleibt ungebucht (kein fertig-, kein durchsucht-
-                    # Vermerk), ein spaeterer Lauf/Resume holt es nach
-                    # (derselbe Nicht-gebucht-Weg wie beim Infra-Ausfall).
-                    _ftxt = str((antwort or {}).get("fehler") or "")
-                    if ("frigate_stoerung" in _ftxt
-                            or "erzeugung_deckel" in _ftxt):
-                        self.log(f"harvest {eid}: clip generation aborted "
-                                 f"({_ftxt[:120]}) — event NOT booked, "
-                                 "a later run retries it")
-                        continue
-                    eintrag["fehler"] = ((antwort or {}).get("fehler")
-                                         or "worker timeout/crash")
-                    summe["fehler"] = summe.get("fehler", 0) + 1
-                    self.log(f"harvest {eid} FAILED: {eintrag['fehler']}")
-                    _ern.event_aufraeumen(lauf_dir, eid)   # keine Teilzeilen-Leichen
-                _ern.fertig_anhaengen(lauf_dir, eintrag)
-                # .262 Fortsetzungs-Suche: Vermerk ok UND fehler (ein heute
-                # toter Clip ist im naechsten Lauf erst recht weg); ein
-                # Schreibfehler stoppt NIE die Ernte, nur den Vermerk.
+                    # Weder gebucht noch verworfen: zurueck an den ANFANG der
+                    # Warteschlange, damit die Reihenfolge (aelteste zuerst)
+                    # erhalten bleibt und kein Ereignis verloren geht.
+                    with q_lock:
+                        offen.appendleft(e)
+                    if urteil == "ende":
+                        return
+                    stopp.wait(1.0)          # kein Platz: kurz warten, dann weiter
+
+            def _rest_text():
+                """Restzeit-Schaetzung fuer die Seite (.313). Die Rate kommt aus
+                den EIGENEN Proben dieses Laufs, bis dahin aus der gespeicherten
+                Rate des letzten Laufs dieser Maschine, erst ganz ohne beides aus
+                den Analyse-Konstanten der Wanduhr (altes Verhalten).
+
+                Seit C2 geteilt durch die Zahl der Abholer: K Ereignisse laufen
+                gleichzeitig. Die Annahme dahinter ist ehrlich zu nennen — bekommt
+                die Ernte wegen der Fairness-Regel nur K-1 Plaetze (Rueckstand),
+                ist die Anzeige zu optimistisch; ohne die Teilung waere sie um den
+                Faktor K zu pessimistisch."""
                 try:
-                    _ll.durchsucht_merken(dd, eid,
-                                          "ok" if eintrag.get("ok") else "fehler")
-                except OSError as _de:
-                    self.log(f"searched-index write failed ({_de}) — the event "
-                             "may be searched again in a later run")
-                fertig.add(eid)
-                proben.append((float(e.get("clip_s") or 0.0),
-                               time.perf_counter() - _t_ev))
-                rest_txt = "?"
-                try:
-                    offen = [{"clip_s": x.get("clip_s") or 0.0,
-                              "im_cache": os.path.isfile(os.path.join(
-                                  clips_dir, str(x.get("eid")).replace("/", "_") + ".mp4"))}
-                             for x in mit_clip[i:] if x.get("eid") not in fertig]
-                    rate = _wu.ernte_rate_fit(proben) or rate_alt
+                    with q_lock:
+                        rest_liste = list(offen)
+                    with buch_lock:
+                        proben_kopie = list(proben)
+                    offen_ev = [{"clip_s": x.get("clip_s") or 0.0,
+                                 "im_cache": os.path.isfile(os.path.join(
+                                     clips_dir,
+                                     str(x.get("eid")).replace("/", "_") + ".mp4"))}
+                                for x in rest_liste]
+                    rate = _wu.ernte_rate_fit(proben_kopie) or rate_alt
                     if rate:
-                        rest_s = _wu.ernte_prognose_s(rate, offen)
+                        rest_s = _wu.ernte_prognose_s(rate, offen_ev)
                     else:
-                        p = _wu.lauf_prognose(werte, offen, live_last=True)
+                        p = _wu.lauf_prognose(werte, offen_ev, live_last=True)
                         rest_s = p['gesamt_s'] - p['kalt_s']
-                    rest_txt = f"~{int(round(rest_s / 60))} min"
+                    return f"~{int(round(rest_s / max(1, k_abholer) / 60))} min"
                 except Exception:
-                    pass
-                # Feld-Fund 28.08. (Tester-A-Log): 5 h 22 min Ernte OHNE eine
-                # einzige Dienst-Log-Zeile — der Fortschritt lebte nur in der
-                # UI-Datei, eine Ferndiagnose per Log war blind. Gedrosselt
-                # (alle 25 Events oder 10 min, was zuerst kommt) EINE Zeile
-                # mit denselben Zahlen, die auch die UI traegt.
-                if (i % 25 == 0 or i == n
-                        or time.time() - getattr(self, "_ernte_logpuls", 0) >= 600):
-                    self._ernte_logpuls = time.time()
-                    self.log(f"harvest progress: {i}/{n} events, "
-                             f"{summe.get('kandidaten', 0)} candidates, "
-                             f"{summe.get('ohne_gesicht', 0)} without face, "
-                             f"{summe.get('unlesbar', 0)} unreadable"
-                             + (f", {rest_txt} remaining"
-                                if rest_txt and rest_txt != "?" else ""))
-                fs = {"event": f"{i}/{n}", "candidates": summe.get("kandidaten", 0),
-                      "crop-worthy (M)": summe.get("m", 0),
-                      "anchor-ready (S)": summe.get("s", 0),
-                      "objects filtered (fd rule)": summe.get("fd", 0),
-                      "without a face": summe.get("ohne_gesicht", 0),
-                      "clip not readable": summe.get("unlesbar", 0),
-                      "rest": rest_txt}
-                if summe.get("vorab_verworfen"):
+                    return "?"
+
+            letzter_schrieb = {"ts": 0.0, "sig": None}
+
+            def _fortschritt_schreiben(rest_txt):
+                """Die Fortschritts-Zeile der Seite — EIN Schreiber (s. Koordinator).
+
+                Geschrieben wird nur, wenn sich etwas geaendert hat, sonst
+                hoechstens alle 15 s: der Schrieb ist ein atomarer Datei-Tausch
+                mit fsync, und der Koordinator taktet im Sekundenrhythmus. Die 15 s
+                halten zugleich den 'working'-Puls der Seite frisch (der gilt bis
+                60 s, .86) — im seriellen Bau kam er nur je Ereignis, also beim
+                Feldtester alle 60-100 s und damit oft schon als „stumm"."""
+                with buch_lock:
+                    i = erledigt["n"]
+                    s = dict(summe)
+                    aktuell = " · ".join(laufende.values())
+                sig = (i, aktuell, rest_txt, s.get("fehler"), s.get("kandidaten"))
+                if (sig == letzter_schrieb["sig"]
+                        and time.monotonic() - letzter_schrieb["ts"] < 15):
+                    return i, s
+                letzter_schrieb["sig"] = sig
+                letzter_schrieb["ts"] = time.monotonic()
+                fs = {"event": f"{i}/{n}", "candidates": s.get("kandidaten", 0),
+                      "crop-worthy (M)": s.get("m", 0),
+                      "anchor-ready (S)": s.get("s", 0),
+                      "objects filtered (fd rule)": s.get("fd", 0),
+                      "without a face": s.get("ohne_gesicht", 0),
+                      "clip not readable": s.get("unlesbar", 0),
+                      "rest": rest_txt,
+                      # .87: die aktuelles-Event-Zeile verschwindet, wenn nichts
+                      # mehr laeuft (ein None LOESCHT den Schluessel).
+                      "analysing": aktuell or None}
+                if s.get("vorab_verworfen"):
                     # .346: was die Vorschranke VOR Landmarken/Pose aussortiert
                     # hat (zu klein/zu unscharf). Nur zeigen, wenn es etwas gab.
-                    fs["filtered early (size/sharpness)"] = summe["vorab_verworfen"]
-                if summe.get("ohne_struktur"):
+                    fs["filtered early (size/sharpness)"] = s["vorab_verworfen"]
+                if s.get("ohne_struktur"):
                     # .32x: was der Struktur-Test aussortiert hat — Nacken, Ohren,
                     # Hinterkoepfe, Vegetation. Nur zeigen, wenn es etwas gab.
-                    fs["no face structure"] = summe["ohne_struktur"]
-                if summe.get("ohne_pose"):
-                    fs["no pose data"] = summe["ohne_pose"]
-                if summe.get("unvollstaendig"):
-                    fs["clips partly readable"] = summe["unvollstaendig"]
-                if summe.get("invariante"):
-                    fs["counter mismatch"] = summe["invariante"]
-                if summe.get("fehler"):
-                    fs["worker errors"] = summe["fehler"]
+                    fs["no face structure"] = s["ohne_struktur"]
+                if s.get("ohne_pose"):
+                    fs["no pose data"] = s["ohne_pose"]
+                if s.get("unvollstaendig"):
+                    fs["clips partly readable"] = s["unvollstaendig"]
+                if s.get("invariante"):
+                    fs["counter mismatch"] = s["invariante"]
+                if s.get("fehler"):
+                    fs["worker errors"] = s["fehler"]
                 if ohne_clip:
                     fs["skipped (no clip)"] = ohne_clip
-                lf = summe.get("letzter_fund")
+                lf = s.get("letzter_fund")
                 if lf:
                     fs["last find"] = f"{lf.get('kamera')} @ {lf.get('t')} s"
                 if _ll.lauf_fortschreiben(dd, fortschritt=fs) is None:
-                    self.log("harvest stopped (run aborted)")
-                    return
+                    _stopp("harvest stopped (run aborted)")
+                return i, s
+
+            # C2: der Fortschritt wird von GENAU EINEM Thread geschrieben — dem
+            # hier laufenden Koordinator. Wuerde jeder Abholer schreiben, mischten
+            # sich K Teil-Staende in dieselbe Datei und jeder laese die
+            # Abbruch-Antwort ein weiteres Mal.
+            k_abholer = max(1, int(self._plaetze.kapazitaet))
+            abholer = [threading.Thread(target=_abholer, daemon=True,
+                                        name=f"lernlauf-ernte-{j + 1}")
+                       for j in range(k_abholer)]
+            for t in abholer:
+                t.start()
+            letzte_zahl, letzter_log, rest_txt = -1, -1, "?"
+            try:
+                while True:
+                    lebt = any(t.is_alive() for t in abholer)
+                    with buch_lock:
+                        jetzt_fertig = erledigt["n"]
+                    if jetzt_fertig != letzte_zahl:
+                        # Die Restzeit kostet einen stat je offenem Ereignis —
+                        # deshalb nur, wenn wirklich etwas fertig geworden ist
+                        # (im seriellen Bau war das genau der Takt: je Ereignis einmal).
+                        rest_txt = _rest_text()
+                        letzte_zahl = jetzt_fertig
+                    i, s = _fortschritt_schreiben(rest_txt)
+                    # Feld-Fund 28.08. (Tester-A-Log): 5 h 22 min Ernte OHNE eine
+                    # einzige Dienst-Log-Zeile — der Fortschritt lebte nur in der
+                    # UI-Datei, eine Ferndiagnose per Log war blind. Gedrosselt
+                    # (alle 25 Events oder 10 min oder am Ende) EINE Zeile mit
+                    # denselben Zahlen, die auch die UI traegt.
+                    if (i >= letzter_log + 25 or not lebt
+                            or time.time() - getattr(self, "_ernte_logpuls", 0) >= 600):
+                        self._ernte_logpuls = time.time()
+                        letzter_log = i
+                        self.log(f"harvest progress: {i}/{n} events, "
+                                 f"{s.get('kandidaten', 0)} candidates, "
+                                 f"{s.get('ohne_gesicht', 0)} without face, "
+                                 f"{s.get('unlesbar', 0)} unreadable"
+                                 + (f", {rest_txt} remaining"
+                                    if rest_txt and rest_txt != "?" else ""))
+                    if not lebt:
+                        break
+                    time.sleep(1.0)
+            finally:
+                # Faellt der Koordinator selbst aus (Ausnahme im Fortschritts-
+                # Schrieb, Platte voll), duerfen die Abholer nicht als Waisen
+                # weiterrechnen: sie halten Ernte-Plaetze und buchen in einen
+                # Lauf, den niemand mehr begleitet. Im Normalfall sind sie hier
+                # laengst zurueck und beide Zeilen kosten nichts.
+                stopp.set()
+                for t in abholer:
+                    t.join(30)
+                _waisen = [t.name for t in abholer if t.is_alive()]
+                if _waisen:
+                    self.log(f"harvest: {len(_waisen)} collector thread(s) still "
+                             f"running after 30s ({', '.join(_waisen)}) — they "
+                             f"finish their job and stop, no new event is taken")
+            if ende["grund"]:
+                # Abbruch/Neustart: der Lauf ist NICHT durch — kein Abschluss,
+                # keine Anker-Kette. Die Logzeile stand schon in `_stopp`.
+                return
             # Buecher-gegen-Platte (Widerleger .75/L3: zaehler_pruefen prueft nur
             # das Dict gegen sich selbst — HIER stehen Datei und Zaehler gegeneinander).
             befunde = _ern.bestand_pruefen(lauf_dir)
@@ -8204,6 +10330,109 @@ class Service:
         if self.cfg.get("debug"):
             self.log(zeile)
 
+    def _analyse_beginnen(self, eid, nachhol=0):
+        """Darf dieser Aufrufer `eid` jetzt analysieren? -> TOKEN (ab 1) wenn ja,
+        sonst None; mit dem Token traegt er ab sofort die In-Arbeit-Marke (A3,
+        s. `self._laufend` in __init__).
+
+        A4 (05.09.2026): die Rueckgabe war bis dahin True/False. Das Token ist der
+        AUSWEIS dieses einen Laufs — `_analyse_beendet` gibt die Marke nur her, wenn
+        es passt. Ohne ihn loescht ein zurueckkehrender Zombie die Marke seines
+        Nachfolgers (derselben eid) und macht den Guard fuer das Ereignis wirkungslos.
+        Wahrheitswert bleibt brauchbar (Token sind >= 1, None ist falsch), die
+        Aufrufer pruefen trotzdem explizit gegen None.
+
+        DIE EINE QUELLE des Eintritts-Guards: Fertig-Pruefung (`processed`),
+        In-Arbeit-Pruefung (`_laufend`), Marke setzen und die Aktivitaetsmarke —
+        alles in EINER `self.lock`-Klammer. Zerfaellt das in zwei Klammern, ist genau
+        das Fenster wieder da, das A3 schliesst.
+
+        Zwei Absagen mit verschiedenem Klang, absichtlich:
+        - `processed` und kein Nachhol -> STUMM wie bisher. Das ist der Normalfall
+          (Sweep sieht ein laengst erledigtes Ereignis), eine Zeile je Sweep-Element
+          waere Rauschen.
+        - `_laufend` -> EINE Zeile. Dieser Fall ist keine Routine, sondern sagt, dass
+          zwei Wege dasselbe Ereignis gleichzeitig wollten; wer die 57 Doppel-Urteile
+          vom 05.09. sucht, findet hier die Gegenprobe, dass der Riegel greift.
+
+        `nachhol` passiert den `processed`-Guard weiterhin (das ist sein Zweck: eine
+        mit 'fehler' geendete Akte-Zeile reparieren), setzt und PRUEFT aber die
+        In-Arbeit-Marke — zwei Nachhol-Laeufe desselben Ereignisses sind genauso
+        Doppelarbeit wie zwei Live-Laeufe.
+
+        `getattr`: die Gate-Proben bauen `Service.__new__(Service)` ohne `__init__`
+        (tools/qs.sh), dort gibt es `_laufend` nicht — dann laeuft der Guard wie vor
+        A3, statt mit AttributeError zu sterben. Ein Token bekommt der Aufrufer auch
+        dann, sonst kaeme keine Analyse mehr durch."""
+        with self.lock:                       # Guard + Marke + Aktivitaetsmarke atomar
+            laufend = getattr(self, "_laufend", None)
+            if eid in self.processed and not nachhol:
+                return None                   # Nachhol darf hier vorbei, OHNE processed
+            doppelt = laufend is not None and eid in laufend   # zu manipulieren (kein
+            if not doppelt:                                    # Race mit Sweep/MQTT)
+                token = getattr(self, "_laufend_zaehler", 0) + 1
+                self._laufend_zaehler = token
+                if laufend is not None:
+                    laufend[eid] = token
+                if not nachhol:               # Retry beruhigt den Stoerungswaechter NICHT
+                    self.letzte_aktivitaet = time.time()
+        if doppelt:                           # Logzeile bewusst OHNE den Lock
+            self.log(f"{eid}: already being analysed by another slot — skipped")
+            return None
+        return token
+
+    def _analyse_beendet(self, eid, token):
+        """Die In-Arbeit-Marke zurueckgeben (A3) — aber NUR die eigene (A4).
+
+        `token` ist der Ausweis aus `_analyse_beginnen`. Steht auf `eid` inzwischen
+        ein anderes Token, gehoert die Marke einem NEUEN Lauf desselben Ereignisses
+        (der Waechter hat den alten Halter eingezogen und neu eingereiht) — dann
+        raeumt hier niemand mehr auf, genauso wie das `finally` von `platz()` einen
+        fremden Platz in Ruhe laesst. Idempotent bleibt es: zweimal loesen tut beim
+        zweiten Mal nichts.
+
+        Der Platzwaechter geht bewusst NICHT ueber diesen Griff, sondern loescht
+        unbedingt (`_laufend.pop`) — er hat gerade festgestellt, dass der Halter tot
+        ist, und kennt dessen Token nicht."""
+        with self.lock:
+            laufend = getattr(self, "_laufend", None)
+            # `eid in laufend` zuerst: ein `get(eid) == token` wuerde bei token=None
+            # (fehlender Ausweis) auf einer FEHLENDEN Marke wahr und dann werfen.
+            if laufend is not None and eid in laufend and laufend[eid] == token:
+                del laufend[eid]
+        # B2 (05.09.2026, Widerleger-Befund B1 B-4): HIER faellt der Merkzettel,
+        # nicht mehr beim Einreihen. Warum an dieser Stelle und nicht im naechsten
+        # `sweep()`-Takt: sweep() laeuft NUR im Poll-Betrieb regelmaessig
+        # (`poll_loop`); unter MQTT laeuft er allein beim Connect/Reconnect und auf
+        # Knopfdruck (`mqtt_loop.on_connect`, `/catchup_start`). Eine MQTT-Anlage
+        # haette ihren Merkzettel also erst beim naechsten Neustart aufgeloest —
+        # der Knopf truege tagelang eine Zahl, die laengst abgearbeitet ist.
+        # Diese Klammer dagegen schliesst sich auf BEIDEN Triggern hinter jeder
+        # einzelnen Analyse. Sie kostet nichts, solange nichts gehalten wird
+        # (erste Zeile von `_catchup_freigeben`: leerer Merkzettel -> zurueck).
+        self._catchup_freigeben(eid)
+
+    @contextlib.contextmanager
+    def _analyse_marke(self, eid, nachhol=0):
+        """`_analyse_beginnen`/`_analyse_beendet` als Klammer -> liefert das TOKEN,
+        wenn gerechnet werden darf (dann faellt die Marke am Ende garantiert), sonst
+        None. A4: das Token reist durch die Klammer, damit die Rueckgabe am Ende die
+        EIGENE Marke trifft und nicht die eines Nachfolgers derselben eid.
+
+        WARUM als Klammer und nicht als `try/finally` im Rumpf von `process()`: der
+        Rumpf ist ~450 Zeilen mit einem Dutzend `return None`-Zweigen. Als drittes
+        Element des BESTEHENDEN `with`-Kopfes deckt die Klammer jeden dieser Rueckwege
+        ab, ohne 450 Zeilen umzuruecken (ein Umbau, den niemand mehr im Diff pruefen
+        kann). Die Reihenfolge im Kopf ist die Zusicherung: Platz zuerst, Marke
+        zuletzt — also faellt die Marke VOR der Platz-Rueckgabe. Andersherum saehe ein
+        Nachfolger den Platz frei, waehrend die Marke noch steht."""
+        token = self._analyse_beginnen(eid, nachhol)
+        try:
+            yield token
+        finally:
+            if token is not None:
+                self._analyse_beendet(eid, token)
+
     def process(self, eid, nachhol=0, koerper=False):
         """nachhol=N (N>=1): Wiederholung einer frueher mit 'fehler' geendeten Analyse.
         Ein Nachhol-Lauf ist STUMM (kein Alert/Push/Telegram/MQTT, s. _nachhol_runde) und
@@ -8222,11 +10451,19 @@ class Service:
                    and time.monotonic() - self._bg_hunger_puls < 10
                    and time.monotonic() < _hb_deckel):
                 time.sleep(0.5)
-        with self.lock:                                   # ein Event nach dem anderen (GPU)
-            if eid in self.processed and not nachhol:     # Nachhol darf den Guard passieren, OHNE
-                return None                               # self.processed zu manipulieren (kein Race
-            if not nachhol:                               # mit Sweep/MQTT-Redelivery)
-                self.letzte_aktivitaet = time.time()      # Retry beruhigt den Stoerungswaechter NICHT
+        # E0 (Konzept §3): Platz-Vergabe DAVOR, self.lock bleibt darunter. Bei
+        # Kapazitaet 1 ist das genau die alte Serialisierung — ein Platz, ein Lock.
+        # Ab Kapazitaet > 1 wandert der Lock spaeter (E2) von der ganzen Analyse auf
+        # die Akte-Zugriffe; die Platzzahl bestimmt dann, wie viele parallel rechnen.
+        with self._plaetze.platz(eid, art="analyse") as _platz_nr, self._analyse_klammer(), \
+                self._analyse_marke(eid, nachhol) as _darf:  # E2: bei 1 Platz = self.lock
+            # A3 (05.09.2026): der Eintritts-Guard liegt in `_analyse_beginnen` —
+            # `processed` UND die In-Arbeit-Marke, atomar unter self.lock. Die
+            # Klammer gibt die Marke auf JEDEM Rueckweg wieder her, und zwar noch
+            # innerhalb der Platz-Klammer. A4: `_darf` ist das Token dieses Laufs
+            # (>= 1) bzw. None — auf None geprueft, nicht auf Wahrheitswert.
+            if _darf is None:
+                return None
             try:
                 if _einspiel.ist_einspiel(eid):
                     # .416 HAKEN A der Testbett-Einspielung (User-Go 03.09.,
@@ -8259,8 +10496,9 @@ class Service:
                 # MQTT-Betrieb stundenlang; der Kommentar oben sagte das seit je,
                 # der Code tat es nicht).
                 if not nachhol and getattr(e, "code", None) != 404:
-                    self.frigate_fehler = (time.time(), f"event fetch: {e}")
-                    self.frigate_fehlerserie = getattr(self, "frigate_fehlerserie", 0) + 1
+                    with self._zustand_lock:     # E0b: Zaehler-Inkrement atomar
+                        self.frigate_fehler = (time.time(), f"event fetch: {e}")
+                        self.frigate_fehlerserie = getattr(self, "frigate_fehlerserie", 0) + 1
                 self.log(f"{eid}: Frigate fetch failed: {e} ("
                          + ("event not found — Frigate discarded it; no banner"
                             if getattr(e, "code", None) == 404
@@ -8281,19 +10519,19 @@ class Service:
                 # Behauptung (sub_label) wird IMMER geprueft (Fremder->Bekannt-Fehlmatch, wie beim Zonen-
                 # Filter). Review 21.07.: ohne "and not f_label" verlor "aus" dieses Sicherheitsnetz.
                 if not kc.get("verwenden", True) and not f_label:
-                    self.processed.add(eid)
+                    with self.lock: self.processed.add(eid)
                     self.log(f"{eid} ({camera}): skipped (camera off, no sub_label)")
                     return None
                 z = kc.get("zonen")                          # gegen handeditierte String-Zonen haerten
                 zonen = z if isinstance(z, list) else ([z] if isinstance(z, str) and z else [])
                 if zonen and not f_label and not set(ev.get("zones") or []) & set(zonen):
-                    self.processed.add(eid)
+                    with self.lock: self.processed.add(eid)
                     self.log(f"{eid} ({camera}): skipped (not in a selected zone, no sub_label)")
                     return None
             else:                                           # Fallback: altes required_zones-Verhalten
                 rz = (cfg.get("required_zones") or {}).get(camera)
                 if rz and not f_label and not set(ev.get("zones") or []) & set(rz):
-                    self.processed.add(eid)  # nur in-memory, kein deckung-Eintrag; nach Neustart
+                    with self.lock: self.processed.add(eid)  # nur in-memory, kein deckung-Eintrag; nach Neustart
                     self.log(f"{eid} ({camera}): skipped (no required_zone, no sub_label)")
                     return None              # prueft der Sweep das billig erneut (nur API-Call)
             # .407 LIVE ERSETZT DIE EREIGNIS-ANALYSE (User-Spezifikation):
@@ -8350,7 +10588,7 @@ class Service:
                         # gegen sich selbst, ohne Logzeile, /health bleibt ok.
                         # Der Akte-Schreibweg ist durch den aeusseren Lock
                         # bereits serialisiert. Gate: QS-Laufprobe LIVEONLY-RUN.
-                        with open(self.log_path, "a") as f:
+                        with self.lock, open(self.log_path, "a") as f:
                             f.write(json.dumps(
                                 {"schema": 3, "ts": round(time.time(), 1), "eid": eid,
                                  "camera": camera, "start": ev.get("start_time"),
@@ -8368,7 +10606,7 @@ class Service:
                                  "uebersprungen": {"grund": "live_only"}},
                                 ensure_ascii=False) + "\n")
                             f.flush()
-                        self.processed.add(eid)
+                        with self.lock: self.processed.add(eid)
                         # .409 (F1, Kontrolle 02.09.): hier BEWUSST KEINE
                         # Luecken-Marke. .408 schrieb eine — semantisch
                         # falsch: der Uebersprung passiert NUR, wenn der
@@ -8410,7 +10648,17 @@ class Service:
             _ainfo = {}
             res = run_analyze(cfg, eid, camera, persons, event_dir,
                               timeout_s=(int(cfg["nachhol_analyse_timeout_s"]) if nachhol else None),
-                              worker=self._worker(),
+                              worker=self._worker(_platz_nr),   # E2: Worker dieses Platzes
+                              # P1: solange dieser Thread lebendig wartet, setzt er das
+                              # Lebenszeichen seines Platzes. Der Waechter unten kann
+                              # damit einen langen, gesunden Lauf von einem haengenden
+                              # Thread unterscheiden — genau die .415-Klasse, die heute
+                              # niemand bemerkt (keine Logzeile, /health gruen).
+                              # A3: an die BELEGUNG gebunden, nicht an die
+                              # Platznummer — ein eingezogener Zombie darf den
+                              # Nachfolger auf demselben Platz nicht kuenstlich
+                              # lebendig pulsen (Maskierung des Waechters).
+                              puls=self._plaetze.puls_fuer(_platz_nr),
                               # Z5: EINMAL vor dem Job entschieden — waehrend
                               # der Analyse ist der Scharf-Zustand nicht mehr
                               # abfragbar (anderer Prozess). Nur Live-Laeufe:
@@ -8485,11 +10733,18 @@ class Service:
             if not nachhol:
                 if kategorie == "fehler":
                     jetzt_ts = time.time()
-                    if jetzt_ts - getattr(self, "_fehlerserie_start", 0) > 3600:
-                        self._fehlerserie = 0                  # alte Serie verjaehrt
-                    if getattr(self, "_fehlerserie", 0) == 0:
-                        self._fehlerserie_start = jetzt_ts
-                    self._fehlerserie = getattr(self, "_fehlerserie", 0) + 1
+                    # E0b: Verjaehrung, Hochzaehlen und Schwellenpruefung sind EIN
+                    # Read-Modify-Write. Ungeschuetzt zaehlten zwei gleichzeitig
+                    # fehlgeschlagene Analysen als eine, und der Stoerungsmelder
+                    # "3 in Folge" (gebaut nach dem 9-h-Ausfall vom 22.07.) meldete zu
+                    # spaet oder gar nicht — die Klasse, die er fangen soll, ist gerade
+                    # die, in der viele Analysen gleichzeitig scheitern.
+                    with self._zustand_lock:
+                        if jetzt_ts - getattr(self, "_fehlerserie_start", 0) > 3600:
+                            self._fehlerserie = 0              # alte Serie verjaehrt
+                        if getattr(self, "_fehlerserie", 0) == 0:
+                            self._fehlerserie_start = jetzt_ts
+                        self._fehlerserie = getattr(self, "_fehlerserie", 0) + 1
                     if self._fehlerserie >= 3 and \
                             jetzt_ts - getattr(self, "_fehlerserie_gemeldet", 0) > 6 * 3600:
                         self._fehlerserie_gemeldet = jetzt_ts
@@ -8638,10 +10893,10 @@ class Service:
             # kategorie fehler -> Luecken-Marke; ein Schreibfehler kostet nie
             # die Analyse (Zaehler + Log-Zeile im Modul).
             _anw.akte_zeile_markieren(cfg, entry, log=self.log)
-            with open(self.log_path, "a") as f:
+            with self.lock, open(self.log_path, "a") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
                 f.flush()
-            self.processed.add(eid)
+            with self.lock: self.processed.add(eid)
             self.log(f"{eid}: {kategorie} [v1:{kategorie_v1}] (Frigate={f_label}, "
                      f"ours={confirmed or 'unknown'}, {entry['faces']} faces, {entry['dauer_s']}s)" +
                      (" -> ALERT" if entry["alerted"] else "") +
@@ -8755,11 +11010,20 @@ class Service:
         # neues Auftauchen und pushte doppelt, und _nachlern_anstossen lief fuer den ganzen
         # nachgeholten Durchgang nie.
         alt = now - (entry.get("start") or entry["ts"]) > 900
-        neu = [p for p in entry["bestaetigt"] if now - self.last_seen.get(p, 0) > cfg["anwesenheit_cooldown"]]
+        # E0b: "wer ist neu" LESEN und last_seen SCHREIBEN gehoeren zusammen. Zwei
+        # Plaetze tragen fast immer zwei Ereignisse desselben Durchgangs mit derselben
+        # Person; ohne diese Klammer laesen beide "noch nicht gesehen" und meldeten
+        # beide, und die Zusage aus dem Docstring ("genau EIN Publish pro Auftauchen")
+        # faellt. _nachlern_anstossen bleibt BEWUSST draussen: es nimmt sein eigenes
+        # Lock (_nachlern_lock) und haengt nicht an last_seen — ein fremdes Lock unter
+        # diesem zu halten waere eine Deadlock-Kante ohne Gegenwert.
+        with self._zustand_lock:
+            neu = [p for p in entry["bestaetigt"] if now - self.last_seen.get(p, 0) > cfg["anwesenheit_cooldown"]]
+            for p in entry["bestaetigt"]:
+                # EVENT-Zeit statt Verarbeitungszeit (Szenen-Fenster rechnet in Event-Zeit;
+                # Sweep-Nachverarbeitung bleibt damit zeitlich konsistent)
+                self.last_seen[p] = max(self.last_seen.get(p, 0), entry.get("start") or now)
         for p in entry["bestaetigt"]:
-            # EVENT-Zeit statt Verarbeitungszeit (Szenen-Fenster rechnet in Event-Zeit;
-            # Sweep-Nachverarbeitung bleibt damit zeitlich konsistent)
-            self.last_seen[p] = max(self.last_seen.get(p, 0), entry.get("start") or now)
             self._nachlern_anstossen(p, entry.get("eid"))   # Bestands-Suche + Auto-Vorrat nach Durchgangs-Ende (Debounce, User 21.07./.308)
         if alt or not neu:
             return False
@@ -9173,22 +11437,58 @@ class Service:
         except Exception:                                     # noqa: BLE001
             pass
         try:                                  # kein Lazy-Start: nur fragen, wenn er lebt
+            # C1 (05.09.2026): `worker` bleibt der Zustand von Worker 1 — die
+            # Eigenschaft `_worker_obj` liest ihn jetzt aus `_worker_pool[1]` statt aus
+            # einem eigenen Feld. Fuer die Systemseite aendert sich damit nichts; was
+            # sich aendert, ist die Rolle: Worker 1 ist seit C1 kein Sonderling mehr
+            # (kein geteilter Hintergrund-Worker), sondern der Prozess von Platz 1.
             aus["worker"] = (self._worker_obj.zustand() if self._worker_obj
                              else {"laeuft": False, "tode_24h": 0,
                                    "letzter_tod_ts": None, "letzte_ursache": None,
                                    "grund": None})
+            # E2: die Worker der Plaetze daneben, je Platznummer. `worker` bleibt
+            # Worker 1, damit Bestandsleser (Systemseite, Support-Faelle) unveraendert
+            # weiterlesen; ohne diesen Zusatz waeren Zustand und Tode-Zahl des zweiten
+            # Prozesses nirgends sichtbar, und ein stiller Dauertod saehe aus wie
+            # "alles gruen". Seit C1 steht Platz 1 hier mit drin (er wohnt im selben
+            # Pool) — dieselbe Auskunft wie in `worker`, nur an ihrem Platz.
+            # IMMER setzen, auch leer: der Durchreiche-Vertrag in
+            # core/systemstat.momentaufnahme traegt sonst "kein_dienst" ein und
+            # behauptet damit einen Ausfall, wo nur ein Platz konfiguriert ist.
+            aus["worker_plaetze"] = {str(nr): self._worker_pool[nr].zustand()
+                                     for nr in sorted(self._worker_pool)}
         except Exception:                                     # noqa: BLE001
             pass
         try:
             st = dict(getattr(self, "_sweep_stand", None) or {})
             st["grund"] = None
             # W3 Stufe 1 (.399): Lebenszeichen der neuen Fliessbaender —
-            # MQTT-Event-Warteschlange und Melde-Spur, fuer Kachel + Verlauf.
+            # Event-Warteschlange und Melde-Spur, fuer Kachel + Verlauf.
+            # B1 (05.09.2026): `aktiv` und `in_arbeit` kommen LIVE aus
+            # `rueckstau_zahlen()` — dieselbe Quelle wie Banner und 409-Riegel, kein
+            # mitgezaehlter `fertig`-Stand mehr (den gibt es nicht mehr, s. sweep()).
+            # `gesamt` bleibt daneben stehen: wie viele der letzte Nachhol-Lauf
+            # eingereiht hat. Damit liest die Kachel „N eingereiht · K in der
+            # Schlange · M in Arbeit" aus EINEM Datensatz.
             try:
                 q = getattr(self, "_ev_q", None)
-                st["queue_n"] = len(q) if q is not None else 0
-                st["queue_aeltester_s"] = (round(time.time() - q[0][2], 1)
-                                           if q else 0.0)
+                st["queue_n"], st["in_arbeit"] = self.rueckstau_zahlen()
+                st["aktiv"] = self.rueckstau_aktiv((st["queue_n"], st["in_arbeit"]))
+                # B2 (05.09.2026, Widerleger-Befund B1 N-7): der Griff auf q[0]
+                # lief OHNE `_ev_wecker` — zwischen der Wahrheitspruefung und dem
+                # Zugriff kann ein Abholer `popleft` machen, der IndexError landet
+                # im except und die Kachel verliert das Feld still. Jetzt unter
+                # demselben Lock wie jeder andere Queue-Zugriff.
+                if q is not None:
+                    with self._ev_wecker:
+                        st["queue_aeltester_s"] = (round(time.time() - q[0][2], 1)
+                                                   if q else 0.0)
+                else:
+                    st["queue_aeltester_s"] = 0.0
+                # B2 (B-4): abgewiesene Einreihungen. Der Sweep meldet seine
+                # eigenen mit einer Zeile; eine Abweisung auf einem anderen Weg
+                # (MQTT-Zulauf, Platzwaechter) waere sonst nirgends sichtbar.
+                st["queue_abgewiesen"] = int(getattr(self, "_ev_abgewiesen", 0))
             except Exception:                                 # noqa: BLE001
                 pass
             try:
@@ -9443,6 +11743,31 @@ class Service:
         except Exception as e:
             print(f"[personlive] Fehler: {e}", flush=True)
 
+    def _alarm_slot_nehmen(self, now):
+        """Cooldown pruefen UND belegen, in einem Schritt (E0b).
+
+        Der Kommentar weiter unten sagt schon, was gelten soll: "der Cooldown gilt ab
+        BESCHLUSS (sonst koennten zwei Events im selben Fenster beide beschliessen,
+        waehrend der erste noch sendet)". Die Umsetzung war aber nicht atomar —
+        gepruefte und gesetzte Stelle lagen sechzig Zeilen auseinander, und nur weil
+        self.lock um die ganze Analyse liegt, kam bisher nie ein zweiter Thread
+        dazwischen. Ab Kapazitaet > 1 kaeme er. Deshalb hier beides unter einem Riegel.
+
+        Gibt True zurueck, wenn dieser Aufruf den Alarm-Slot bekommen hat."""
+        with self._zustand_lock:
+            if now - self.last_alert < self.cfg["alert_cooldown"]:
+                return False
+            self._alarm_slot_vorher = self.last_alert
+            self.last_alert = now
+            return True
+
+    def _alarm_slot_zurueck(self):
+        """Belegung zuruecknehmen, wenn der Alarm doch nicht rausgeht (Trockenlauf,
+        Kanal ohne Zugangsdaten). Ohne das haette ein nie gesendeter Alarm den
+        naechsten echten fuer die Cooldown-Dauer verschluckt."""
+        with self._zustand_lock:
+            self.last_alert = getattr(self, "_alarm_slot_vorher", 0.0)
+
     def _maybe_alert(self, entry, event_dir):
         # matcht v2-Kategorie ODER v1-Vergleichskategorie (Parallelphase: "widerspruch" lebt in v1).
         # .200: "erkannt" zaehlt hier NICHT — seit der Default die Kategorie ab Werk
@@ -9454,7 +11779,7 @@ class Service:
                 & (set(self.cfg["alert_kategorien"]) - {"erkannt"})):
             return False
         now = time.time()
-        if now - self.last_alert < self.cfg["alert_cooldown"]:
+        if not self._alarm_slot_nehmen(now):     # E0b: pruefen und belegen atomar
             self.log(f"{entry['eid']}: alert suppressed (cooldown)")
             return False
         f = entry["frigate"]
@@ -9501,12 +11826,14 @@ class Service:
         anhang = self._best_crop(event_dir, entry, entry["bestaetigt"] or list(entry["ours"]))
         if self.dry_alert:
             self.log(f"DRY-ALERT: {msg}")
+            self._alarm_slot_zurueck()           # E0b: nichts gesendet, Slot freigeben
             return False
         # .411: Kanal ohne Zugangsdaten oder pausiert (N Ablehnungen in Folge)
         # -> kein Versuch, KEINE Zeile je Event (Tester-Log 02.09.: 3723x
         # "REJECTED" in 10 h). Die Startzeile bzw. die Pause-Zeile sagen es
         # einmal; Benachrichtigungs-Seite und /health.system.rueckstau zeigen es.
         if not _melden.pushover_bereit(self.cfg)[0]:
+            self._alarm_slot_zurueck()           # E0b: nichts gesendet, Slot freigeben
             return False
         # W3 Stufe 1 (.399): der 20-s-HTTP-Push wandert in die Spur; der
         # Cooldown gilt ab BESCHLUSS (sonst koennten zwei Events im selben
@@ -9515,7 +11842,9 @@ class Service:
         # loggt — der naechste Alarm darf dann sofort (alte Semantik im
         # Fehlerfall). Der alerted-Marker heisst ab jetzt "beschlossen und
         # eingereiht"; der Fehlschlag steht laut im Log.
-        self.last_alert = now
+        # E0b: die Belegung steht jetzt oben in `_alarm_slot_nehmen`, zusammen mit der
+        # Pruefung — hier stand sie sechzig Zeilen von ihr entfernt und war deshalb
+        # nicht atomar. Semantik unveraendert: der Cooldown gilt ab Beschluss.
         titel = _sprache.t("meldung.titel.kategorie",
                            wort=_kat_wort(entry["kategorie"]))
 
@@ -9569,6 +11898,73 @@ class Service:
         except OSError as e:
             self.log(f"catch-up: could not save the held stack ({e})")
 
+    def _catchup_freigeben(self, eid=None):
+        """Abgearbeitete Ereignisse vom Merkzettel nehmen. -> Zahl der Freigaben.
+
+        `eid` = nur dieses eine pruefen (der Weg aus `_analyse_beendet`, also
+        nach JEDER Analyse); ohne Argument der ganze Merkzettel (der Weg aus
+        `sweep()`).
+
+        B2 (05.09.2026, Widerleger-Befund B1 B-4): die Freigabe stand bis .504
+        in der EINREIHUNGS-Schleife des Sweeps — „eingereiht ist uebernommen".
+        Das galt, solange der Sweep selbst rechnete; seit B1 liegt die Schlange
+        im Speicher und der Merkzettel auf der Platte, und die alte Zeile leerte
+        die Platte VOR der Arbeit. Gemessen (20 Ereignisse, 10 h alt,
+        lookback 2 h): Klick -> Schlange 20, Merkzettel 0; Neustart mittendrin
+        -> Merkzettel 0, Schlange 0, Knopf `wartet` 0 — der Nutzer hatte keinen
+        Hinweis mehr, dass 20 Ereignisse fehlen, und sie lagen jenseits des
+        Fensters, das der naechste Sweep abfragt. Genau dafuer gibt es den
+        Merkzettel.
+
+        DIE INVARIANTE lautet deshalb: ein gehaltenes Ereignis faellt erst vom
+        Merkzettel, wenn es in `processed` steht — also wirklich analysiert (oder
+        als uebersprungen/gescheitert in der Akte vermerkt) ist. Bewusst JE
+        EREIGNIS und nicht erst, wenn der ganze Lauf durch ist: nach einem
+        Neustart mitten im Nachholen zeigt der Knopf dann genau die Zahl, die
+        noch wirklich fehlt (5 von 20 gerechnet -> `wartet` 15). Die 5 stehen
+        ueber die Akte auch nach dem Neustart in `processed`, kaemen also nie
+        wieder in eine todo-Liste — sie im Merkzettel zu lassen hiesse, dem
+        Nutzer eine Zahl anzubieten, die durch keine Bedienhandlung mehr
+        kleiner wird (derselbe Fehler wie der 30.08.-Befund zu gealterten
+        Ereignissen).
+
+        Was NICHT freigegeben wird, bleibt bewusst liegen: ein Ereignis, dessen
+        Analyse mit einer Ausnahme starb (`process_safe` faengt sie und laesst
+        `processed` unberuehrt) oder das am vollen Deckel abgewiesen wurde, ist
+        nicht erledigt. Es steht beim naechsten Klick wieder im Angebot.
+
+        Lock-Reihenfolge: erst `self.lock` (Frage an `processed`), danach
+        `_start_sweep_lock` (Merkzettel schreiben). Kein anderer Weg nimmt die
+        beiden andersherum; `_catchup_sichern` faengt seine OSError selbst."""
+        zurueck = getattr(self, "_catchup_zurueck", None)
+        if not zurueck:
+            return 0
+        try:
+            kandidaten = ({eid} & zurueck) if eid is not None else set(zurueck)
+            if not kandidaten:
+                return 0
+            with self.lock:
+                fertig = {e for e in kandidaten if e in self.processed}
+            if not fertig:
+                return 0
+            with self._start_sweep_lock:
+                fertig &= self._catchup_zurueck          # inzwischen schon weg?
+                if not fertig:
+                    return 0
+                self._catchup_zurueck -= fertig
+                if not self._catchup_zurueck:
+                    self._catchup_seit = 0.0
+                    self._catchup_aeltest = 0.0
+                self._catchup_sichern()
+            return len(fertig)
+        except Exception as e:                            # noqa: BLE001
+            # Eigener Fang: der Aufruf haengt am Ende JEDER Analyse und im
+            # Sweep. Ohne ihn faende sich ein Defekt hier als „sweep error"
+            # wieder — ein Frigate-Ausfall, den es nicht gibt (K1).
+            self.log(f"catch-up: releasing finished events from the held list "
+                     f"failed ({type(e).__name__}: {e})")
+            return 0
+
     def catchup_vorgabe_stunden(self):
         """Wie weit der Dialog vorschlagen muss, damit der Lauf den Stapel WIRKLICH
         erreicht. Aus dem aeltesten zurueckgehaltenen Ereignis, aufgerundet und um
@@ -9589,9 +11985,39 @@ class Service:
         Knopf in der Kopfleiste): er fragt beim Druecken, wie weit zurueck und
         wie viele hoechstens. Ein solcher Lauf gilt nie als "erster" Sweep, geht
         also weder in den ask- noch in den off-Zweig — der Nutzer hat ja gerade
-        entschieden, dass geholt werden soll."""
+        entschieden, dass geholt werden soll.
+
+        B1 (05.09.2026, bauplan_0505.md): dieser Lauf RECHNET NICHT MEHR. Er stellt
+        seine todo-Liste zusammen und REIHT SIE EIN; gerechnet wird von den Abholern
+        der Warteschlange (`start_event_queue`, ein Thread je Analyse-Platz). Grund
+        ist der Feldbefund vom 05.09.: der .503-Umbau hat nur den MQTT-Weg
+        parallelisiert. Der Poll-Betrieb — Werkswert und damit der Normalfall jeder
+        fremden Installation — rief `process_safe` synchron und seriell in EINEM
+        Thread; bei vier eingestellten Plaetzen liefen 515 Analysen eines Vormittags
+        in 0 % der Zeit zu zweit, waehrend der Rueckstand im Median bei 185 s lag.
+        Die Plaetze waren nicht zu klein, sie wurden nie gefragt. Seit B1 ist die
+        Warteschlange der EINE Weg in die Analyse, auf beiden Triggern."""
         cfg = self.cfg
         auf_wunsch = stunden is not None or limit is not None
+        # B2 (05.09.2026, Widerleger-Befund B1 N-6): der Riegel gegen den zweiten
+        # Klick steht ab HIER, also vor dem Frigate-GET. Vorher trug ihn allein
+        # `_sweep_eids`, und das wird erst nach dem GET gesetzt — ein zweiter
+        # Klick in diesem Fenster bekam HTTP 200 statt 409. Geloest wird die
+        # Marke im `finally` weiter unten, also auch dann, wenn der GET wirft;
+        # ab da traegt `_sweep_eids` die Frage weiter (luecklos, weil die Marke
+        # erst faellt, wenn der Steckbrief steht).
+        if auf_wunsch:
+            with self._start_sweep_lock:
+                self._catchup_klick_offen = True
+        # B2 (B-4): abgearbeitete Ereignisse vom Merkzettel nehmen, BEVOR die
+        # todo-Liste steht — sonst filtert der `zurueck`-Filter weiter unten
+        # gegen Karteileichen, und `catchup_vorgabe_stunden` schlaegt ein zu
+        # grosses Fenster vor. Der Normalweg der Freigabe ist `_analyse_beendet`
+        # (laeuft auf beiden Triggern); dieser Vollscan faengt die Faelle, die
+        # dort nie ankommen — etwa ein Ereignis, das zwischen todo-Bau und
+        # Abholung schon von einem anderen Weg erledigt wurde (der Eintritts-
+        # Guard weist es dann ab, ohne dass eine Analyse endet).
+        self._catchup_freigeben()
         # Nur lesen, nicht ziehen: die Start-Marke faellt erst nach dem api()-Aufruf
         # (s. .340 weiter unten). Fuer die Modus-Aufloesung genuegt der Blick.
         erster_kandidat = self._start_sweep_offen and not auf_wunsch
@@ -9604,7 +12030,9 @@ class Service:
         try:
             _std = stunden if stunden is not None else cfg["lookback_h"]
             after = time.time() - float(_std) * 3600
-            evs = api(cfg, f"/api/events?label=person&after={after:.0f}&limit={LIMIT}&include_thumbnails=0")
+            # N6 (.505 E4): Timeout waechst mit der bestellten Menge (5000 -> 40 s).
+            evs = api(cfg, f"/api/events?label=person&after={after:.0f}&limit={LIMIT}&include_thumbnails=0",
+                      timeout=20 + LIMIT // 250)
             # after= filtert auf start_time (16.07. gemessen): Events, die VOR lookback_h
             # starteten und erst in einer Downtime endeten, entgehen dem Sweep — bei
             # lookback 2h vs. Eventdauern <2min real irrelevant.
@@ -9620,8 +12048,51 @@ class Service:
                 self.log(f"sweep: Frigate returned the limit of {LIMIT} events — older ones in the "
                          f"last {_std}h may be missing. On a busy site raise "
                          f"sweep_limit (currently {LIMIT})")
+            # A3 (05.09.2026): was GERADE auf einem Platz gerechnet wird, gehoert
+            # nicht in die todo-Liste. `processed` faellt erst am Ende einer Analyse;
+            # der naechste Poll-Sweep (20 s Takt) baut seine Liste also mitten in
+            # laufende Analysen hinein und schickte dasselbe Ereignis ein zweites Mal
+            # durch process(). Der Guard dort faengt es zwar jetzt ab, aber erst
+            # NACHDEM es einen Platz belegt hat — hier kostet es nichts. EIN
+            # Schnappschuss unter dem Lock statt einer Abfrage je Element: die
+            # Comprehension liefe sonst unter fremdem Lock, und ein `set(...)` ueber
+            # eine nebenher mutierte Menge wirft (der Sweep meldete das als
+            # Frigate-Ausfall — falscher Banner).
+            # A4: `_laufend` ist seit dem Token-Umbau ein dict — `set(...)` darueber
+            # liefert die SCHLUESSEL, also unveraendert die Ereignis-IDs.
+            #
+            # B1/T3 (05.09.2026, Widerleger-Befund W-A3 E2): bei Kapazitaet 1 wird
+            # der Schnappschuss UEBERSPRUNGEN. Dort ist `self.lock` die
+            # Analyse-Klammer und wird ueber die volle Analysedauer gehalten — der
+            # Sweep haette hier gewartet, und zwar VOR dem todo-Bau, vor den
+            # catch-up-Zweigen und vor `_sweep_stand`. Der A3-Kommentar dazu ("das
+            # kostet nichts") war falsch: er stimmt fuer den Poll-Takt, nicht fuer
+            # den Nutzer-Thread des „Holen"-Knopfes, der so minutenlang haengt, ohne
+            # dass der 409-Riegel je gesetzt wird (zwei Klicks = zwei Laeufe).
+            # Verloren geht nichts: bei einem Platz ist die Marke unter dieser
+            # Klammer ohnehin nie beobachtbar (gemessen: Kap 1 sah sie 0x, Kap 4
+            # 400/400), und der Guard in `process()` faengt das Doppel weiterhin —
+            # der Filter hier spart nur den Weg dorthin. Ab 2 wie gebaut.
+            if self._plaetze.kapazitaet <= 1:
+                _in_arbeit = set()
+            else:
+                with self.lock:
+                    _in_arbeit = set(getattr(self, "_laufend", ()))
+            # B1/T2 (05.09.2026): dazu, was schon in der Warteschlange liegt oder
+            # gerade von einem Abholer bearbeitet wird — seit T2 haelt `_ev_gesehen`
+            # beides (Einreihung bis Ende der Analyse). `event_einreihen` dedupt
+            # zwar selbst, aber erst NACH dem Bau dieser Liste: ohne den Filter
+            # meldete jeder 20-s-Sweep „catching up on 300 unprocessed events",
+            # waehrend 300 laengst warteten. Ein Schnappschuss statt einer Abfrage
+            # je Element, aus demselben Grund wie beim `_laufend`-Schnappschuss.
+            _wartet = set()
+            if hasattr(self, "_ev_wecker"):
+                with self._ev_wecker:
+                    _wartet = set(getattr(self, "_ev_gesehen", ()))
             todo = [ev for ev in sorted(evs, key=lambda e: e["start_time"])
-                    if ev["id"] not in self.processed and ev.get("end_time")
+                    if ev["id"] not in self.processed and ev["id"] not in _in_arbeit
+                    and ev["id"] not in _wartet
+                    and ev.get("end_time")
                     and time.time() - ev["end_time"] >= cfg["clip_delay"]]
             # .371: Was beim Start zurueckgehalten wurde, bleibt draussen, bis der
             # Nutzer den Knopf drueckt. Ohne diesen Filter holte der ZWEITE Sweep
@@ -9800,7 +12271,11 @@ class Service:
                          f"enroll people first (setup wizard / enroll), then analysis will start")
                 return
             if todo:
-                self.log(f"sweep: catching up on {len(todo)} unprocessed events")
+                # B1: "queueing", nicht "catching up" — dieser Lauf reiht ein,
+                # gerechnet wird von den Abholern (einer je Analyse-Platz). Die Zahl
+                # ist damit die der NEUEN, noch nirgends vermerkten Ereignisse: was
+                # schon wartet oder rechnet, hat der todo-Filter ausgelassen.
+                self.log(f"sweep: queueing {len(todo)} unprocessed events for analysis")
             elif auf_wunsch:
                 # Widerleger-Fund 29.08.: hier war der Lauf stumm. Sagen, dass
                 # nichts zu holen war, und WARUM — sonst sieht der Nutzer nur
@@ -9811,74 +12286,100 @@ class Service:
                          f"(limit {LIMIT})"
                          + (f" — {_hielt} held events are older than that window, "
                             f"press again with a larger range" if _hielt else ""))
-            # EIGENE Referenz statt self._sweep_stand: ueberholt ein zweiter Sweep diesen
-            # hier (MQTT-Reconnect mitten im Nachholen), zaehlt der alte Lauf auf SEINEM
-            # Dict weiter und sein finally loescht nicht den Banner des neuen.
+            # B1 (05.09.2026): der Stand ist kein Fortschritts-ZAEHLER mehr, sondern
+            # der Steckbrief DIESES Laufs — wie viele er eingereiht hat, aus welchem
+            # Fenster, auf wessen Wunsch, und ob er ueberhaupt einen Banner
+            # rechtfertigt. Wie viel davon noch aussteht, sagt `rueckstau_zahlen()`
+            # live aus Warteschlange und Plaetzen.
             #
-            # WIDERLEGER-FUND 30.08. (gemessen, nicht gelesen): hier stand
-            # `stand = self._sweep_stand`. Bei LEEREM todo blieb das die Referenz auf
-            # das Dict eines FREMDEN, noch laufenden Laufs — der Poll-Takt findet
-            # neben einem Nutzer-Lauf regelmaessig nichts, weil dessen Ereignisse
-            # schon in self.processed stehen. Das finally setzte dann aktiv=False auf
-            # dem fremden Stand: Banner weg, /health.rueckstau.aktiv aus, 409-Riegel
-            # offen, und ein zweiter Lauf verarbeitete denselben Stapel doppelt
-            # (gemessen: 18 von 20 Ereignissen zweimal). Die Wache unten griff nicht,
-            # weil `self._sweep_stand is stand` galt. Deshalb: ein Lauf ohne eigenes
-            # Dict hat NICHTS abzuraeumen — stand bleibt None.
-            stand = None
+            # Damit faellt die ganze Klasse der Stand-Wechselwirkungen weg, die den
+            # 30.08. gekostet hat (fremdes Dict abgeraeumt, Banner weg, 409-Riegel
+            # offen, 18 von 20 Ereignissen doppelt): kein Lauf setzt mehr irgendwo
+            # `aktiv = False`, es gibt kein `finally`, das etwas abraeumen koennte,
+            # und ein abgebrochener Lauf hinterlaesst hoechstens eine Zahl, die
+            # niemand mehr als „laeuft" liest.
+            #
+            # EINE Vorfahrt bleibt (Fremd-Augen: der Nutzer klickt „Holen", waehrend
+            # der Poll-Takt weiterlaeuft — beide reihen ein): der Nutzer-Lauf
+            # ueberschreibt den Steckbrief immer, der Poll-Lauf nur, solange kein
+            # Nutzer-Lauf mehr in der Schlange steht. Sonst risse der naechste
+            # 20-s-Takt dem Nutzer seinen Banner mitten im Nachholen weg.
+            #
+            # B1: EINREIHEN statt rechnen. Alles Weitere macht der Abholer der
+            # Warteschlange — es gibt K davon, einen je Analyse-Platz.
+            # `sofort=True`, weil der todo-Filter oben clip_delay schon geprueft
+            # hat; ohne das kostete jedes Ereignis die Wartezeit ein zweites Mal.
+            #
+            # B2 (05.09.2026, Widerleger-Befund B1 B-4): die Schleife steht jetzt
+            # VOR dem Steckbrief, weil in ihn nur gehoert, was WIRKLICH eingereiht
+            # wurde. `event_einreihen` weist bei voller Schlange ab (False) — ein
+            # abgewiesenes Ereignis liegt nirgends und darf weder den Banner
+            # offenhalten (`_sweep_eids`) noch als eingereiht gezaehlt werden.
+            # Die Freigabe des Merkzettels ist HIER RAUS (sie stand in dieser
+            # Schleife): sie haengt seit B2 an `processed`, s. `_catchup_freigeben`.
+            eingereiht = []
+            for ev in todo:
+                if self.event_einreihen(ev["id"], sofort=True):
+                    eingereiht.append(ev["id"])
+            _abgewiesen = len(todo) - len(eingereiht)
+            if _abgewiesen:
+                # EINE Zeile mit der Zahl, nicht eine je Ereignis (ein Sweep am
+                # Anschlag haette 4500 geschrieben). Was hier abgewiesen wurde,
+                # ist NICHT verloren: innerhalb `lookback_h` findet es der
+                # naechste Sweep wieder, darueber hinaus haelt es der Merkzettel
+                # (seit B2 faellt der erst nach der Abarbeitung).
+                self.log(f"sweep: the event queue is full "
+                         f"({self.EV_QUEUE_MAX}) — {_abgewiesen} of {len(todo)} "
+                         f"events were not queued; they stay on the list and "
+                         f"the next sweep picks them up")
             if todo:
                 # int(): t_n waehlt die Plural-Form ueber int(n) — ein lookback_h von 1.5
                 # ergaebe sonst "the last 1.5 hour". Der Rundungsverlust ist die kleinere
-                # Unehrlichkeit. Der Zaehler springt im Meta-Refresh-Takt der Seite (30 s),
-                # nicht sekundengenau — dafuer braucht es keinen zweiten Poller.
-                # aktiv=nachholend: gezaehlt wird immer, den Banner traegt nur ein
-                # echter Nachhol-Lauf.
-                self._sweep_stand = stand = {"aktiv": nachholend, "gesamt": len(todo),
-                                             "fertig": 0, "stunden": int(_std),
-                                             # .371 (Widerleger-Fund, 2. Runde): der
-                                             # Banner bot bisher auch waehrend eines
-                                             # vom NUTZER gestarteten Laufs an, das
-                                             # Nachholen abzuschalten — mitsamt
-                                             # Dienst-Neustart. Wer gerade auf "Holen"
-                                             # geklickt hat, bekommt dieses Angebot
-                                             # nicht mehr; es widerspricht seiner
-                                             # eigenen Entscheidung von vor einer Minute.
-                                             "auf_wunsch": bool(auf_wunsch)}
-            try:
-                for ev in todo:
-                    self.process_safe(ev["id"])
-                    stand["fertig"] = stand.get("fertig", 0) + 1
-                    # WIDERLEGER-FUND 29.08. (zweite Runde, schwer): die Freigabe des
-                    # Merkzettels stand frueher WEIT vor dieser Schleife, direkt hinter
-                    # dem Bau der todo-Liste. Dazwischen liegen mehrere vorzeitige
-                    # return — unter anderem der Leer-Master-Riegel. Auf einer frischen
-                    # Installation, in der noch niemand angelernt ist, strich ein Klick
-                    # damit den ganzen Stapel, ohne ein einziges Ereignis zu pruefen:
-                    # der Knopf verschwand, die Ereignisse wurden nie angeschaut.
-                    # Jetzt wird genau das freigegeben, was WIRKLICH durch war. Damit
-                    # deckt die Freigabe auch jeden kuenftigen Rueckweg ab, und ein
-                    # Abbruch mittendrin (Neustart, Ausnahme) laesst den Rest gehalten.
-                    if auf_wunsch and zurueck:
-                        with self._start_sweep_lock:
-                            self._catchup_zurueck.discard(ev["id"])
-                            if not self._catchup_zurueck:
-                                self._catchup_seit = 0.0
-                                self._catchup_aeltest = 0.0
-                            self._catchup_sichern()
-            finally:
-                # Pflicht: ohne finally bliebe der Banner nach einem Abbruch ewig stehen.
-                # stand is None = dieser Lauf hatte nichts zu tun und deshalb auch
-                # keinen eigenen Stand — er fasst den fremden nicht an (s. oben).
-                if stand is not None:
-                    stand["aktiv"] = False
-                    # Widerleger-Fund 29.08. (2. Runde): laeuft daneben ein zweiter Sweep
-                    # (der Nutzer-Lauf im eigenen Thread neben dem Poll-Takt), zeigt
-                    # _sweep_stand dessen Dict. Der frueher fertige Lauf setzte dann
-                    # seinen eigenen Stand auf False, waehrend der andere noch arbeitete —
-                    # Banner weg, 409-Riegel offen. Nur wer WIRKLICH der aktuelle Stand
-                    # ist, darf ihn abraeumen.
-                    if self._sweep_stand is not stand and self._sweep_stand.get("aktiv"):
-                        self.log("sweep: another run is still going, leaving its banner up")
+                # Unehrlichkeit.
+                # nachholend: gezaehlt wird immer, den Banner traegt nur ein echter
+                # Nachhol-Lauf. Im Poll-Betrieb ist JEDER Sweep der normale Antrieb —
+                # ein Banner je Ereignis waere Dauerblinken, deshalb steht die
+                # Berechtigung im Stand und nicht in der Live-Frage.
+                _neu = {"gesamt": len(eingereiht), "stunden": int(_std),
+                        "nachholend": bool(nachholend),
+                        # .371 (Widerleger-Fund, 2. Runde): der Banner bot bisher
+                        # auch waehrend eines vom NUTZER gestarteten Laufs an, das
+                        # Nachholen abzuschalten — mitsamt Dienst-Neustart. Wer
+                        # gerade auf "Holen" geklickt hat, bekommt dieses Angebot
+                        # nicht mehr; es widerspricht seiner eigenen Entscheidung
+                        # von vor einer Minute.
+                        "auf_wunsch": bool(auf_wunsch)}
+                if auf_wunsch or not self.rueckstau_aktiv_nutzerlauf():
+                    # Die eids gehoeren zum Steckbrief: an ihnen haengt, wie lange
+                    # der Banner dieses Laufs steht (rueckstau_lauf_offen). Beides
+                    # zusammen setzen, sonst zeigte der Banner des einen Laufs die
+                    # Restmenge des anderen.
+                    #
+                    # B2 (05.09.2026, Widerleger-Befund B1 B-3): ERGAENZEN statt
+                    # ersetzen, solange der gebuchte Nachhol-Lauf noch offene
+                    # Ereignisse hat. Gemessen im Poll-Betrieb: 1. Sweep
+                    # nachholend mit 300, zweiter Takt 20 s spaeter mit EINEM
+                    # neuen Ereignis — und der Steckbrief stand auf
+                    # „gesamt 1, nachholend False", der 300er-Banner war weg,
+                    # waehrend 301 in der Schlange lagen. Vor B1 konnte das nicht
+                    # passieren (der Sweep rechnete synchron, „laeuft" hiess „ein
+                    # Thread sitzt in der Schleife"). Unter MQTT dieselbe Klasse.
+                    # Also: eids vereinigen, `gesamt` addieren, `nachholend` und
+                    # `auf_wunsch` bleiben gesetzt, bis alles durch ist. `stunden`
+                    # nimmt das groessere Fenster — es ist das, das beide
+                    # Mengen deckt.
+                    _alt = getattr(self, "_sweep_stand", None) or {}
+                    if _alt.get("nachholend") and self.rueckstau_lauf_offen():
+                        self._sweep_eids = set(
+                            getattr(self, "_sweep_eids", None) or ()) | set(eingereiht)
+                        _alt["gesamt"] = int(_alt.get("gesamt") or 0) + len(eingereiht)
+                        _alt["stunden"] = max(int(_alt.get("stunden") or 0), int(_std))
+                        _alt["nachholend"] = True
+                        _alt["auf_wunsch"] = bool(_alt.get("auf_wunsch")) or bool(auf_wunsch)
+                        self._sweep_stand = _alt
+                    else:
+                        self._sweep_eids = set(eingereiht)
+                        self._sweep_stand = _neu
         except Exception as e:
             # Sichtbar machen: im Poll-Modus (Default der ausgelieferten Container) ist sweep() der
             # EINZIGE Frigate-Pfad. Ohne das blieben UI-Banner, System-Ampel und Stoerungswaechter
@@ -9886,6 +12387,15 @@ class Service:
             self.log(f"sweep error: {e}")
             self.frigate_fehler = (time.time(), f"event poll: {e}")
             self.frigate_fehlerserie = getattr(self, "frigate_fehlerserie", 0) + 1
+        finally:
+            # B2 (N-6): der Klick-Riegel faellt auf JEDEM Rueckweg — auch auf den
+            # vorzeitigen `return` (ask/off/Leer-Master) und wenn der Frigate-GET
+            # geworfen hat. Bliebe er stehen, waere der „Holen"-Knopf fuer immer
+            # weg (409 auf jeden weiteren Klick) und der Poll-Takt duerfte den
+            # Steckbrief nie wieder schreiben.
+            if auf_wunsch:
+                with self._start_sweep_lock:
+                    self._catchup_klick_offen = False
 
     # ------------------------------------------------ Nachhol-Lauf (Vorfall 22./23.07.)
     # 9 h lang scheiterte JEDE Analyse (kategorie="fehler"); die Events galten danach als
@@ -10245,6 +12755,30 @@ class Service:
         cl.loop_forever(retry_first_connection=True)
 
 
+class _Abgewiesen:
+    """Rueckgabe der Body-Leser, wenn die ANTWORT SCHON RAUS ist (413 zu gross,
+    400 kaputtes JSON). Bewusst ein eigener Typ und nicht None/{}: ein Aufrufer,
+    der die Pruefung vergisst, faellt sofort auf (`.get` gibt es hier nicht),
+    statt still mit einem leeren Body weiterzurechnen."""
+    __slots__ = ()
+
+    def __repr__(self):
+        return "<abgewiesen — Antwort ist bereits gesendet>"
+
+
+_ABGEWIESEN = _Abgewiesen()
+# .505 (E2): Deckel fuer die Routen, ueber die BILDLISTEN gehen — Lern-Bruecke,
+# Vorschlaege, Vorrat, Enrollment, Batch-Loeschung. 16 Pass-Bilder ergaben am
+# 04.09. einen Body von 65.526 Zeichen; der alte 64-KiB-Deckel (65.536) lag
+# genau darueber und schnitt schon bei 17 Bildern ab. 1 MiB ist die Groessen-
+# ordnung, die der Sync-Weg (/sync_auswahl_start, 1.000.000) fuer dieselbe
+# Bauart — eine lange Liste aus der Seite — schon lange nutzt.
+_BODY_BILDER = 1024 * 1024
+# Eigener Fehl-Wert fuer "der Aufrufer hat gar keinen Default genannt": None ist
+# als Default zu wenig unterscheidbar, weil `null` ein gueltiger JSON-Body ist.
+_KEIN_DEFAULT = object()
+
+
 # ------------------------------------------------------------------ Mini-Webview (read-only, §1 Konzept)
 def make_handler(svc):
     cfg = svc.cfg
@@ -10306,6 +12840,86 @@ def make_handler(svc):
             except (BrokenPipeError, ConnectionResetError):
                 pass                              # Client weg — nichts mehr zuzustellen
 
+        # ---- Body-Leser (E2, .505 — 05.09.2026, bauplan_0505) --------------
+        # ANLASS (Feldfall 04.09., Screenshot der Lern-Bruecke): jede POST-Route
+        # las ihren Body als `read(min(n, <Deckel>))`. Ein Body ueber dem Deckel
+        # wurde damit STILL ABGESCHNITTEN, json.loads warf einen rohen
+        # JSONDecodeError, und die Seite zeigte "Unterminated string starting at
+        # char 65526" — bei 16 Pass-Bildern an /auftritt_lernen (65.526 Zeichen
+        # gegen einen 65.536er Deckel) war das reproduzierbar. Ein zu grosser
+        # Body ist eine ANTWORT wert (413 mit beiden Zahlen), kein halber Body.
+        # Deshalb liest ab hier JEDE Route durch diese beiden Griffe: ein
+        # Deckel-Vergleich, eine Meldung, eine Stelle zum Nachziehen.
+        def _body_bytes(self, max_bytes):
+            """Body roh lesen -> bytes (leer bei fehlendem Body) oder
+            _ABGEWIESEN; im Abweisungsfall ist die 413-Antwort BEREITS
+            gesendet und der Aufrufer muss sofort zurueckkehren.
+
+            Wirft nicht: ein unbrauchbares Content-Length gilt als "kein Body"
+            (der Aufrufer landet dann in seinem eigenen Leer-Zweig), nie als
+            Traceback im Log."""
+            try:
+                n = int(self.headers.get("Content-Length", 0) or 0)
+            except (TypeError, ValueError):
+                n = 0
+            if n > int(max_bytes):
+                self._send(413, json.dumps(
+                    {"ok": False, "msg": f"request body {n} bytes exceeds the "
+                                         f"limit of {int(max_bytes)} bytes"}),
+                    "application/json")
+                return _ABGEWIESEN
+            if n <= 0:
+                return b""
+            return self.rfile.read(n)       # n ist hier bewiesen <= max_bytes
+
+        def _body_json(self, max_bytes, default=_KEIN_DEFAULT, erwartet=None):
+            """Body als JSON lesen -> geparstes JSON, `default` (nur wenn einer
+            genannt wurde UND der Body leer ist) oder _ABGEWIESEN (413/400 ist
+            dann schon gesendet — der Aufrufer kehrt SOFORT zurueck, sonst geht
+            eine zweite Antwort auf dieselbe Verbindung).
+
+            Ohne `default` wird auch ein leerer Body geparst und scheitert wie
+            bisher — die Routen, die einen leeren Body als `{}` gelten liessen
+            (`... or b"{}"`, `... if n else {}`), reichen ihren Default herein
+            und behalten damit ihr Verhalten.
+
+            `erwartet` (E4, .505 — 05.09.2026, Widerleger E1+E2 Notiz 8): der
+            erwartete Python-Typ des geparsten Bodys, praktisch immer `dict`.
+            Gueltiges JSON, das KEIN Objekt ist (`5`, `[]`, `"x"`, `null`),
+            laeuft durch `json.loads` und schlaegt erst am ersten `d.get(...)`
+            als `AttributeError` auf. `do_POST` hat keinen Sammel-Except: die
+            Ausnahme lief bis in den socketserver, der Client bekam KEINE
+            HTTP-Antwort (Verbindung zu), und im Dienst-Log stand ein voller
+            Traceback — worauf das Prod-Log-Gate (qs.sh --prod, Release-Stufe 2)
+            rot geht, ohne dass ein Dienstfehler vorlaege. Belegt an
+            `/person/schalter` (dessen `except (ValueError, TypeError)` faengt
+            den AttributeError nicht). Der Default wird NICHT geprueft — er
+            kommt aus dem Code, nicht aus dem Netz."""
+            roh = self._body_bytes(max_bytes)
+            if roh is _ABGEWIESEN:
+                return _ABGEWIESEN
+            if not roh and default is not _KEIN_DEFAULT:
+                return default
+            try:
+                wert = json.loads(roh)
+            except ValueError:
+                self._send(400, json.dumps({"ok": False, "msg": "bad json"}),
+                           "application/json")
+                return _ABGEWIESEN
+            if erwartet is not None and not isinstance(wert, erwartet):
+                self._send(400, json.dumps({"ok": False, "msg": "object expected"}),
+                           "application/json")
+                return _ABGEWIESEN
+            return wert
+
+        def _body_stueck(self, rest, stueck=512 * 1024):
+            """EIN Stueck eines gestreamten Bodys (Voll-Restore: Archive von
+            100+ MB werden nie am Stueck in den Speicher gelesen). Eigener
+            Griff, damit die stille min()-Kappung am Leser, gegen die E2
+            gebaut ist, im ganzen Dienst nirgends mehr vorkommt — die Probe
+            prueft genau das als Wache."""
+            return self.rfile.read(rest if rest < stueck else stueck)
+
         def _banner(self):
             # .340: welcher Zweig gezogen hat — nur /heute liest es, um dem
             # Nachhol-Banner sein Angebot beizustellen (Markup gehoert dem Aufrufer).
@@ -10339,11 +12953,25 @@ def make_handler(svc):
             # Start-Hinweisen darunter (die sind je Start berechnet und stehen nachher noch
             # da), aber hinter jeder echten Frigate-Stoerung: die erklaert, warum gerade
             # NICHTS kommt, und wiegt schwerer.
+            # B1 (05.09.2026): ZWEI Fragen statt einer gespeicherten. „Darf dieser
+            # Lauf ueberhaupt einen Banner tragen" steht im Stand (`nachholend`) —
+            # im Poll-Betrieb ist jeder Sweep der normale Antrieb, ein Banner je
+            # Ereignis waere Dauerblinken. „Ist von SEINEN Ereignissen noch etwas
+            # offen" wird LIVE gefragt. Damit endet der Banner, wenn die Arbeit
+            # endet, und nicht, wenn irgendein Thread aus einer Schleife faellt —
+            # und er kommt nicht wieder, wenn danach neue Ereignisse eintreffen
+            # (unter MQTT sonst der Dauerzustand, s. rueckstau_lauf_offen).
+            # Ehrliche Grenze im TEXT: `gesamt` ist die Zahl DIESES Laufs, die
+            # beiden anderen sind die des ganzen Dienstes — was gerade wartet und
+            # rechnet, kann auch von einem Live-Ereignis stammen. Genau so ist es
+            # gemeint: der Nutzer will wissen, was das System jetzt vor sich hat.
             st = getattr(svc, "_sweep_stand", None) or {}
-            if st.get("aktiv"):
+            _wartet, _arbeit = svc.rueckstau_zahlen()
+            if st.get("nachholend") and svc.rueckstau_lauf_offen():
                 self._banner_quelle = "nachholen"
                 return _sprache.t_n("banner.nachholen", st.get("stunden") or 0,
-                                    fertig=st.get("fertig", 0), gesamt=st.get("gesamt", 0))
+                                    gesamt=st.get("gesamt", 0),
+                                    schlange=_wartet, arbeit=_arbeit)
             # Issue #13: Daten-ohne-Mount geht vor Varianten-Hinweis — Datenverlust-
             # Risiko schlaegt Performance-Tipp (beide einmal je Start berechnet).
             d = getattr(svc, "daten_hinweis", None)
@@ -10436,8 +13064,9 @@ def make_handler(svc):
             #     Trennung des upload_referenz-Weges (Fachschicht, a+b).
             if pfad == "/enroll":                              # Lern-Entscheidung (AP4)
                 try:
-                    n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 65536)))
+                    d = self._body_json(_BODY_BILDER, erwartet=dict)          # E2: 64 KiB -> 1 MiB
+                    if d is _ABGEWIESEN:
+                        return
                     ok, msg = svc.enroll_entscheiden(str(d["id"]), str(d["aktion"]),
                                                      (str(d["person"]).strip() or None) if d.get("person") else None)
                     return self._send(200 if ok else 400,
@@ -10448,8 +13077,9 @@ def make_handler(svc):
             if pfad == "/ref_entfernen_batch":                 # mehrere Referenzbilder auf einmal loeschen
                 try:
                     import anlernen
-                    n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 65536)))
+                    d = self._body_json(_BODY_BILDER, erwartet=dict)          # E2: 64 KiB -> 1 MiB
+                    if d is _ABGEWIESEN:
+                        return
                     weg, geloescht = 0, []
                     for it in (d.get("items") or []):
                         person = (it.get("person") or "").strip()
@@ -10473,8 +13103,9 @@ def make_handler(svc):
                 # Referenzdaten gaebe es sonst nicht wieder her. refcache wird invalidiert,
                 # damit Suche/Vorschlaege die Person sofort vergessen.
                 try:
-                    n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 8192))) if n else {}
+                    d = self._body_json(8192, default={}, erwartet=dict)
+                    if d is _ABGEWIESEN:
+                        return
                     p = (d.get("person") or "").strip()
                     if not p or p not in master_persons(cfg):
                         return self._send(200, json.dumps({"ok": False, "msg": _sprache.t("antwort.person_unbekannt")},
@@ -10506,8 +13137,9 @@ def make_handler(svc):
             if pfad == "/ref_entfernen":                       # Referenzbild loeschen (Fehllabel)
                 try:
                     import anlernen
-                    n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 8192)))
+                    d = self._body_json(8192, erwartet=dict)
+                    if d is _ABGEWIESEN:
+                        return
                     person = (d.get("person") or "").strip()
                     datei = (d.get("datei") or "").strip()
                     ok, msg = anlernen.entferne_referenz(person, datei)
@@ -10538,8 +13170,9 @@ def make_handler(svc):
                 # Nachholen). Der Lauf ist IMMER ungefiltert; die gewaehlte
                 # Person ist reine ANZEIGE (?person auf der Ergebnis-Seite).
                 try:
-                    n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 4096)) or b"{}")
+                    d = self._body_json(4096, default={}, erwartet=dict)
+                    if d is _ABGEWIESEN:
+                        return
                     pers = str(d.get("person") or "").strip()
                     if pers and pers not in master_persons(cfg):
                         return self._send(400, json.dumps(
@@ -10564,8 +13197,9 @@ def make_handler(svc):
                 try:
                     import anlernen
                     from routes import unbekannte as _r_unbek
-                    n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 65536))) if n else {}
+                    d = self._body_json(65536, default={}, erwartet=dict)
+                    if d is _ABGEWIESEN:
+                        return
                     # .380 Rueckweg fuer die Seite ohne Reload: JEDE Aktion liefert
                     # den neuen Stand der betroffenen Kachel(n) mit — gerendert von
                     # DERSELBEN routes.unbekannte.kachel(), die die Seite baut (eine
@@ -10693,11 +13327,11 @@ def make_handler(svc):
                 # in sync_refs.cmd_export). Eigener Merker, NICHT die refs_meta-
                 # Tombstones: die bedeuten "Bild geloescht" und sperren den Import.
                 import sync_refs as _sr
-                try:
-                    _n = int(self.headers.get("Content-Length", 0))
-                    _d = json.loads(self.rfile.read(min(_n, 1000000)) or "{}")
-                except Exception:
-                    _d = {}
+                # E2 (.505): kaputtes JSON endet jetzt als 400 statt still als
+                # leerer Merker — der Aufrufer erfaehrt, dass nichts gemerkt wurde.
+                _d = self._body_json(1000000, default={}, erwartet=dict)
+                if _d is _ABGEWIESEN:
+                    return
 
                 # .134 Hinweis-Fix: Namen gegen die Registry-Muster pruefen (Gate
                 # PYDATEI-Regel) — der Merker nimmt sonst beliebige Fremdeingabe an.
@@ -10752,14 +13386,13 @@ def make_handler(svc):
                     return self._send(403, json.dumps({"ok": False,
                         "msg": _sprache.t("antwort.sync_readonly")},
                         ensure_ascii=False), "application/json")
-                try:
-                    _n = int(self.headers.get("Content-Length", 0))
-                    # Die Auswahl kann hunderte Namen tragen — dafuer ein groesserer
-                    # Deckel, fuer die beiden Alt-Routen bleibt es bei 4 KB.
-                    _body = json.loads(self.rfile.read(
-                        min(_n, 1000000 if pfad == "/sync_auswahl_start" else 4096)) or "{}")
-                except Exception:
-                    _body = {}
+                # Die Auswahl kann hunderte Namen tragen — dafuer ein groesserer
+                # Deckel, fuer die beiden Alt-Routen bleibt es bei 4 KB.
+                _body = self._body_json(
+                    1000000 if pfad == "/sync_auswahl_start" else 4096,
+                    default={}, erwartet=dict)
+                if _body is _ABGEWIESEN:
+                    return
                 auswahl_pfad = ""
                 if pfad == "/sync_auswahl_start":
                     _paare = [[str(x[0]), str(x[1])] for x in (_body.get("auswahl") or [])
@@ -10877,8 +13510,9 @@ def make_handler(svc):
                                   ensure_ascii=False), "application/json")
             if pfad == "/vorschlaege_neu":                     # Bestands-Suche neu anstossen
                 try:
-                    n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 8192)))
+                    d = self._body_json(8192, erwartet=dict)
+                    if d is _ABGEWIESEN:
+                        return
                     person = (d.get("person") or "").strip()
                     if person not in master_persons(cfg):
                         return self._send(400, json.dumps({"ok": False, "msg": "Person unbekannt"}),
@@ -10897,8 +13531,12 @@ def make_handler(svc):
             if pfad == "/auftritt_lernen":                     # Lern-Bruecke (.225/.226): pruefen -> uebernehmen
                 try:
                     import anlernen
-                    n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 65536)))
+                    # E2 (.505): DAS war der Feldfall vom 04.09. — 16 Pass-Bilder
+                    # ergaben 65.526 Zeichen, der 64-KiB-Deckel schnitt ab, die
+                    # Seite zeigte "Unterminated string" statt einer Antwort.
+                    d = self._body_json(_BODY_BILDER, erwartet=dict)
+                    if d is _ABGEWIESEN:
+                        return
                     person = (d.get("person") or "").strip()
                     if person not in master_persons(cfg):
                         return self._send(400, json.dumps(
@@ -11052,8 +13690,9 @@ def make_handler(svc):
             if pfad == "/auftritt_lernen_undo":                # Lern-Bruecke: Undo statt Dialog
                 try:
                     import anlernen
-                    n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 65536)))
+                    d = self._body_json(_BODY_BILDER, erwartet=dict)          # E2: 64 KiB -> 1 MiB
+                    if d is _ABGEWIESEN:
+                        return
                     person = (d.get("person") or "").strip()
                     n_weg = 0
                     for datei in (d.get("dateien") or [])[:50]:
@@ -11072,8 +13711,9 @@ def make_handler(svc):
             if pfad == "/vorschlag_aufnehmen":                 # Bestands-Vorschlaege uebernehmen
                 try:
                     import anlernen
-                    n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 65536)))
+                    d = self._body_json(_BODY_BILDER, erwartet=dict)          # E2: 64 KiB -> 1 MiB
+                    if d is _ABGEWIESEN:
+                        return
                     person = (d.get("person") or "").strip()
                     if person not in master_persons(cfg):
                         return self._send(400, json.dumps({"ok": False, "msg": "Person unbekannt"}),
@@ -11097,8 +13737,9 @@ def make_handler(svc):
             if pfad == "/vorrat_aufnehmen":                    # Vorrats-Angebote uebernehmen (B4)
                 try:
                     import anlernen
-                    n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 65536)))
+                    d = self._body_json(_BODY_BILDER, erwartet=dict)          # E2: 64 KiB -> 1 MiB
+                    if d is _ABGEWIESEN:
+                        return
                     person = (d.get("person") or "").strip()
                     if person not in master_persons(cfg):
                         return self._send(400, json.dumps({"ok": False, "msg": "Person unbekannt"}),
@@ -11130,8 +13771,9 @@ def make_handler(svc):
             if pfad == "/anlernen_benennen":                   # Cluster als Person anlernen (19.07.)
                 try:
                     import anlernen
-                    n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 65536)))
+                    d = self._body_json(65536, erwartet=dict)
+                    if d is _ABGEWIESEN:
+                        return
                     ids = [i for i in (d.get("ids") or "").split(",") if i]
                     person = (d.get("person") or "").strip()
                     # Issue #19: benenne_mit_abzug statt benenne — die Today-Karte lief
@@ -11156,8 +13798,9 @@ def make_handler(svc):
                 # bewusst — flush reicht, Muster Klick-Server.
                 from core import personernte as _pe
                 try:
-                    _n1 = int(self.headers.get("Content-Length", 0))
-                    _d1 = json.loads(self.rfile.read(min(_n1, 4096)) or b"{}")
+                    _d1 = self._body_json(4096, default={}, erwartet=dict)
+                    if _d1 is _ABGEWIESEN:
+                        return
                     _lid = str(_d1.get("lauf_id") or "")
                     _dat = str(_d1.get("datei") or "")
                     _urt = _d1.get("urteil")
@@ -11184,12 +13827,9 @@ def make_handler(svc):
                 # .114: Schwelle + Feuer-Regel aus der Model-status-Seite —
                 # Validierung (Grenzen) liegt in personmodell.einstellungen_setzen.
                 from core import personmodell as _pm
-                try:
-                    _n6 = int(self.headers.get("Content-Length", 0))
-                    _d6 = json.loads(self.rfile.read(min(_n6, 4096)) or b"{}")
-                except (ValueError, TypeError):
-                    return self._send(400, json.dumps({"ok": False, "msg": "bad json"}),
-                                      "application/json")
+                _d6 = self._body_json(4096, default={}, erwartet=dict)
+                if _d6 is _ABGEWIESEN:
+                    return
                 _ok6, _erg6 = _pm.einstellungen_setzen(cfg["data_dir"], _d6)
                 return self._send(200 if _ok6 else 400, json.dumps(
                     {"ok": _ok6, "msg": _erg6 if isinstance(_erg6, str) else "saved"},
@@ -11197,9 +13837,10 @@ def make_handler(svc):
             if pfad == "/person/schalter":
                 # PE4 Aktivierungs-Gate: Arm/Disarm nur mit Modell.
                 from core import personmodell as _pm
+                _d5 = self._body_json(1024, default={}, erwartet=dict)
+                if _d5 is _ABGEWIESEN:
+                    return
                 try:
-                    _n5 = int(self.headers.get("Content-Length", 0))
-                    _d5 = json.loads(self.rfile.read(min(_n5, 1024)) or b"{}")
                     _an = bool(_d5.get("scharf"))
                 except (ValueError, TypeError):
                     return self._send(400, json.dumps({"ok": False}),
@@ -11222,8 +13863,9 @@ def make_handler(svc):
                 # greift von selbst, faellt der Pool unter 5).
                 from core import personernte as _pe
                 try:
-                    _n2 = int(self.headers.get("Content-Length", 0))
-                    _d2 = json.loads(self.rfile.read(min(_n2, 4096)) or b"{}")
+                    _d2 = self._body_json(4096, default={}, erwartet=dict)
+                    if _d2 is _ABGEWIESEN:
+                        return
                     _lid = str(_d2.get("lauf_id") or "")
                     _dat = _d2.get("datei")
                     _frd = _d2.get("fremd")
@@ -11363,8 +14005,9 @@ def make_handler(svc):
                 # Worker-Job-Umbau folgt mit dem Einback-Port (PE1 B5).
                 from core import personlauf as _pl
                 try:
-                    _n0 = int(self.headers.get("Content-Length", 0))
-                    _d = json.loads(self.rfile.read(min(_n0, 4096)) or b"{}")
+                    _d = self._body_json(4096, default={}, erwartet=dict)
+                    if _d is _ABGEWIESEN:
+                        return
                     _ev = int(_d.get("events") or 0)
                     _person = str(_d.get("person") or "").strip()
                 except (ValueError, TypeError):
@@ -11470,8 +14113,9 @@ def make_handler(svc):
                 # (Abgrenzung zu E1-Shadow-Altzustaenden beim Boot-Resume).
                 from core import lernlauf as _ll
                 try:
-                    n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 4096)) or b"{}")
+                    d = self._body_json(4096, default={}, erwartet=dict)
+                    if d is _ABGEWIESEN:
+                        return
                     ev = int(d.get("events") or 0)
                     # .83 (Task #10): Abtastrate JE LAUF waehlbar; nur der
                     # Whitelist-Bereich zaehlt, sonst gilt der Config-Default.
@@ -11722,8 +14366,9 @@ def make_handler(svc):
                 # maximal holen." Beide Werte kommen deshalb vom Nutzer und gelten
                 # NUR fuer diesen Lauf — die Config bleibt unberuehrt.
                 try:
-                    n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 4096))) if n else {}
+                    d = self._body_json(4096, default={}, erwartet=dict)
+                    if d is _ABGEWIESEN:
+                        return
                     grenzen = svc.CONFIG_WHITELIST
                     _lo_h, _hi_h = grenzen["lookback_h"][1], grenzen["lookback_h"][2]
                     _lo_n, _hi_n = grenzen["sweep_limit"][1], grenzen["sweep_limit"][2]
@@ -11740,7 +14385,17 @@ def make_handler(svc):
                 except (AttributeError, TypeError, ValueError) as e:
                     return self._send(400, json.dumps(
                         {"ok": False, "msg": f"bad values: {e}"}), "application/json")
-                if getattr(svc, "_sweep_stand", {}).get("aktiv"):
+                # B1 (05.09.2026): „laeuft noch" heisst seit dem Queue-Umbau nicht
+                # mehr „ein Sweep-Thread sitzt in seiner Schleife" — der ist nach dem
+                # Einreihen weg. Gefragt wird, ob von den Ereignissen DIESES Knopfes
+                # noch etwas in Schlange oder Analyse steht.
+                # Ehrliche Grenze (wie vorher): zwischen dem Klick und dem Setzen von
+                # `_sweep_eids` liegt der Frigate-GET des Laufs; zwei Klicks in diesem
+                # Fenster ergeben zwei Laeufe. Der Schaden daraus ist seit B1 aber
+                # keiner mehr — beide reihen dieselben IDs ein, `event_einreihen`
+                # dedupt, und `process()` haelt seinen In-Arbeit-Guard davor. Vor B1
+                # bedeutete derselbe Fall doppelte Analysen (30.08.: 18 von 20).
+                if svc.rueckstau_aktiv_nutzerlauf():
                     return self._send(409, json.dumps(
                         {"ok": False, "msg": _sprache.t("antwort.catchup_laeuft")},
                         ensure_ascii=False), "application/json")
@@ -11761,8 +14416,9 @@ def make_handler(svc):
                 # selben Zug neu bewertet (User 30.08.: "wenn ich kalibriere,
                 # muesste das Ergebnis des Lernlaufs doch angepasst werden").
                 try:
-                    n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 1024)))
+                    d = self._body_json(1024, erwartet=dict)
+                    if d is _ABGEWIESEN:
+                        return
                     ok, msg, neustart = svc.config_schreiben(
                         {"guete_empfinden_min": d.get("empfinden"),
                          "guete_t_min": d.get("t")})
@@ -11788,8 +14444,9 @@ def make_handler(svc):
                         {"ok": False, "msg": str(e)}), "application/json")
             if pfad == "/konfig":                              # Konfigblatt speichern (AP5)
                 try:
-                    n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 8192)))
+                    d = self._body_json(8192, erwartet=dict)
+                    if d is _ABGEWIESEN:
+                        return
                     # B6: 'neustart' sagt der Seite, ob sie auf einen Neustart
                     # warten muss — eine reine debug-Aenderung wirkt live.
                     ok, msg, neustart = svc.config_schreiben(d)
@@ -11800,10 +14457,32 @@ def make_handler(svc):
                                       "application/json")
                 except Exception as e:
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
+            if pfad == "/gpu_speichern":                       # Analyse-Plaetze von der GPU-Seite (P5)
+                try:
+                    d = self._body_json(512, erwartet=dict)
+                    if d is _ABGEWIESEN:
+                        return
+                    # Genau EIN Wert, und er geht durch denselben Schreibweg wie
+                    # jede andere Config-Aenderung (config_schreiben prueft die
+                    # Whitelist, klemmt und schreibt den Store). Kein eigener
+                    # Pfad in die Datei — sonst haetten wir zwei Wahrheiten.
+                    _w = int(d.get("analyse_plaetze") or 0)
+                    ok, msg, _neu = svc.config_schreiben({"analyse_plaetze": _w})
+                    return self._send(200 if ok else 400,
+                                      json.dumps({"ok": ok,
+                                                  "msg": (_sprache.t("gpu.gespeichert")
+                                                          if ok else msg),
+                                                  "fehler": None if ok else msg},
+                                                 ensure_ascii=False),
+                                      "application/json")
+                except Exception as e:                         # noqa: BLE001
+                    return self._send(400, json.dumps({"ok": False, "fehler": str(e)}),
+                                      "application/json")
             if pfad == "/benachrichtigung_speichern":          # Notifications-Reiter committen (Kanaele + Secrets)
                 try:
-                    n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 16384)))
+                    d = self._body_json(16384, erwartet=dict)
+                    if d is _ABGEWIESEN:
+                        return
                     ok, msg = svc.notif_speichern(d)
                     return self._send(200 if ok else 400,
                                       json.dumps({"ok": ok, "msg": msg}, ensure_ascii=False), "application/json")
@@ -11813,12 +14492,9 @@ def make_handler(svc):
                 # .205 Sammel-Schalter der Vier-Saeulen-Seite: aus = alle
                 # LAUFENDEN Waechter aus, ein = alle EINGERICHTETEN an — je
                 # Kamera durch DENSELBEN Server-Riegel wie /live_schalter.
-                try:
-                    n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 4096)) or b"{}")
-                except Exception:
-                    return self._send(400, json.dumps(
-                        {"ok": False, "msg": "bad json"}), "application/json")
+                d = self._body_json(4096, default={}, erwartet=dict)
+                if d is _ABGEWIESEN:
+                    return
                 an = bool(d.get("an"))
                 from core import livewache as _lw_s
                 _dflt, _g = _lw_s.guards_lesen(cfg, log=lambda z: None)
@@ -11861,12 +14537,9 @@ def make_handler(svc):
                 # core/livewache (live_speichern/live_schalter serverseitig —
                 # ein direkter POST kommt hier am UI-Grau vorbei und MUSS am
                 # selben Riegel scheitern, Bauplan §2.4).
-                try:
-                    n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 16384)) or b"{}")
-                except Exception:
-                    return self._send(400, json.dumps(
-                        {"ok": False, "msg": "bad json"}), "application/json")
+                d = self._body_json(16384, default={}, erwartet=dict)
+                if d is _ABGEWIESEN:
+                    return
                 kamera = str(d.get("kamera") or "")
                 if pfad == "/live_speichern":
                     ok, msg = svc.live_speichern(kamera, d)
@@ -11896,11 +14569,10 @@ def make_handler(svc):
                                              ensure_ascii=False),
                                   "application/json")
             if pfad.startswith("/vision/"):
-                try:                                           # Vision detect: duenne Maentel, Logik in core/
-                    n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 262144)) or b"{}")
-                except Exception:
-                    return self._send(400, json.dumps({"ok": False, "msg": "bad json"}), "application/json")
+                # Vision detect: duenne Maentel, Logik in core/
+                d = self._body_json(262144, default={}, erwartet=dict)
+                if d is _ABGEWIESEN:
+                    return
                 if pfad == "/vision/schalter":                  # E4-Gate: 409 + Klartext, was fehlt
                     ok, msg = svc.vision_schalter(bool(d.get("aktiv")))
                     return self._send(200 if ok else 409,
@@ -11966,8 +14638,9 @@ def make_handler(svc):
                                   json.dumps({"ok": ok, "msg": msg}, ensure_ascii=False), "application/json")
             if pfad == "/config_wiederherstellen":             # Config-Store aus Upload zurueckspielen (UI-Restore)
                 try:
-                    n = int(self.headers.get("Content-Length", 0))
-                    raw = self.rfile.read(min(n, 1000000))     # 1 MB Deckel
+                    raw = self._body_bytes(1000000)            # 1 MB Deckel
+                    if raw is _ABGEWIESEN:
+                        return
                     ok, msg = svc.config_wiederherstellen(raw)
                     return self._send(200 if ok else 400,
                                       json.dumps({"ok": ok, "msg": msg}, ensure_ascii=False), "application/json")
@@ -11985,7 +14658,7 @@ def make_handler(svc):
                                                      dir=svc.cfg["data_dir"], delete=False) as f:
                         tmp, rest = f.name, n
                         while rest > 0:                    # stueckweise: 100+-MB-Archive
-                            buf = self.rfile.read(min(rest, 512 * 1024))
+                            buf = self._body_stueck(rest)
                             if not buf:
                                 break
                             f.write(buf)
@@ -12008,18 +14681,17 @@ def make_handler(svc):
                 except Exception as e:
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad in ("/test_pushover", "/test_telegram", "/test_mqtt"):   # Test-Versand je Kanal
-                try:
-                    n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 8192))) if n else {}
-                except Exception:
-                    d = {}
+                d = self._body_json(8192, default={}, erwartet=dict)
+                if d is _ABGEWIESEN:
+                    return
                 ok, msg = svc.notif_test(pfad.split("_", 1)[1], d)
                 return self._send(200 if ok else 400,
                                   json.dumps({"ok": ok, "msg": msg}, ensure_ascii=False), "application/json")
             if pfad == "/setup_speichern":                     # Setup-Wizard committen (User 22.07.)
                 try:
-                    n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 65536)))
+                    d = self._body_json(65536, erwartet=dict)
+                    if d is _ABGEWIESEN:
+                        return
                     updates = {}
                     url = (d.get("frigate_url") or "").strip()
                     if url:
@@ -12072,8 +14744,9 @@ def make_handler(svc):
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False), "application/json")
             if pfad == "/kameras_speichern":                   # Kamera-Blatt speichern (Phase 2b)
                 try:
-                    n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 65536)))
+                    d = self._body_json(65536, erwartet=dict)
+                    if d is _ABGEWIESEN:
+                        return
                     kams, err = frigate_cameras(cfg)
                     if err or not kams:
                         return self._send(400, json.dumps({"ok": False,
@@ -12110,8 +14783,9 @@ def make_handler(svc):
                 # Duenner Mantel (I1): Namens-/Kollisions-Logik im Modul, Schreibweg
                 # AUSSCHLIESSLICH core/lernlauf.anker_aktualisieren (Lock+atomar+Wache).
                 try:
-                    n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 262144)))
+                    d = self._body_json(262144, erwartet=dict)
+                    if d is _ABGEWIESEN:
+                        return
                     from core import lernlauf as _ll, benennung as _bn
                     aid = str(d.get("anker_id") or "")
                     name = _ll.person_norm(d.get("person"))
@@ -12170,8 +14844,9 @@ def make_handler(svc):
                 # Duenner Mantel: Status+Crop-Loeschung in core/lernlauf.anker_verwerfen;
                 # Zeile+Zentroid bleiben, damit Wiederernten still erben (core/anker).
                 try:
-                    n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 65536)))
+                    d = self._body_json(65536, erwartet=dict)
+                    if d is _ABGEWIESEN:
+                        return
                     from core import lernlauf as _ll
                     aid = str(d.get("anker_id") or "")
                     saetze, _k = _ll.anker_lesen(cfg["data_dir"])
@@ -12195,8 +14870,9 @@ def make_handler(svc):
                 # core/lernlauf.lauf_loeschen (ALLE Zeilen des Laufs + Ordner hart
                 # weg, kein trash; uebernommene Referenzen sind Kopien in faces/).
                 try:
-                    n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 65536)))
+                    d = self._body_json(65536, erwartet=dict)
+                    if d is _ABGEWIESEN:
+                        return
                     from core import lernlauf as _ll
                     lid = str(d.get("lauf_id") or "")
                     if not re.match(r"^L[\w]+$", lid):
@@ -12268,8 +14944,9 @@ def make_handler(svc):
                 # Bruecke; READ-ONLY bis auf den Cache im Lauf-Ordner.
                 try:
                     import anlernen
-                    n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 65536)))
+                    d = self._body_json(65536, erwartet=dict)
+                    if d is _ABGEWIESEN:
+                        return
                     from core import lernlauf as _ll
                     aid = str(d.get("anker_id") or "")
                     saetze, _k = _ll.anker_lesen(cfg["data_dir"])
@@ -12334,8 +15011,9 @@ def make_handler(svc):
                 # sichtbar schlechte Bilder bekamen gruene Rahmen.
                 try:
                     import anlernen
-                    n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 65536)))
+                    d = self._body_json(65536, erwartet=dict)
+                    if d is _ABGEWIESEN:
+                        return
                     from core import lernlauf as _ll, uebernahme as _ue
                     aid = str(d.get("anker_id") or "")
                     saetze, _k = _ll.anker_lesen(cfg["data_dir"])
@@ -12385,8 +15063,9 @@ def make_handler(svc):
                 # Duenner Mantel: Plan/Dedup/Tag-Pruefung/Alles-oder-nichts im Modul
                 # (core/uebernahme), Nacharbeit = derselbe Weg wie Pool-Enrollment.
                 try:
-                    n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 65536)))
+                    d = self._body_json(65536, erwartet=dict)
+                    if d is _ABGEWIESEN:
+                        return
                     from core import lernlauf as _ll, uebernahme as _ue
                     aid = str(d.get("anker_id") or "")
                     saetze, _k = _ll.anker_lesen(cfg["data_dir"])
@@ -12582,14 +15261,21 @@ def make_handler(svc):
                 if not _sup3.zugriff_ok(_st, self.headers.get("X-Support-Token")):
                     _sup3.abweisung_zaehlen(svc.log)
                     return self._send(404, "not found", "text/plain")
-                try:
-                    _n = int(self.headers.get("Content-Length", 0))
-                    _b = json.loads(self.rfile.read(min(_n, 8192)) or b"{}")
-                    if not isinstance(_b, dict):
-                        raise ValueError("object expected")
-                except Exception:
-                    return self._send(400, json.dumps({"ok": False, "msg": "bad json"}),
-                                      "application/json")
+                # erwartet=dict (.505 E4): ein Body wie `5` oder `[]` ist
+                # gueltiges JSON und waere frueher erst am ersten `.get()`
+                # aufgeschlagen — der Leser antwortet jetzt selbst mit 400.
+                _b = self._body_json(8192, default={}, erwartet=dict)
+                if _b is _ABGEWIESEN:
+                    return
+                # .505 (05.09.2026): FREMDE FELDER SIND EIN FEHLER. Am 04.09.
+                # trug ein Nachlauf-Aufruf `anzahl` statt `max`; das Feld wurde
+                # still verworfen, der Werkswert 5 griff, und die Antwort sagte
+                # trotzdem ok:true. Die Liste der erlaubten Felder steht in
+                # core/einspielen (EINE Quelle, kein Streu-Literal).
+                _feldfehler = _einspiel.felder_pruefen(_b)
+                if _feldfehler:
+                    return self._send(400, json.dumps(
+                        {"ok": False, "msg": _feldfehler}), "application/json")
                 _dd = cfg["data_dir"]
                 _kam = _b.get("kamera")
                 if _kam is not None and not _einspiel.KAMERA_RE.match(str(_kam)):
@@ -12597,71 +15283,189 @@ def make_handler(svc):
                         {"ok": False, "msg": "bad camera name"}), "application/json")
                 _q_ev = str(_b.get("event") or "").strip()
                 _q_clip = _b.get("clip")
+                # .505 E4 (05.09.2026, Widerleger E1+E2 Notiz 7): der Fensterweg
+                # gilt, sobald EIN Fensterfeld da ist — nicht mehr nur bei
+                # `start`. Grund ist der Entscheid zu N7: bei
+                # `richtung: "zurueck"` ist `start` OPTIONAL (User-Wortlaut
+                # "rueckwaerts ab X bis Y oder Anzahl"), und `{"ende": …}` allein
+                # landete vorher im generischen "need event or clip" statt bei
+                # einer Meldung, die sagt, was fehlt.
+                _fensterfelder = [k for k in ("start", "ende", "max", "richtung")
+                                  if _b.get(k) is not None]
                 try:
-                    if _b.get("start") is not None and not _q_ev and not _q_clip:
-                        # FENSTER-WEG (User 03.09. abends): "ab einem Zeit-
-                        # punkt die naechsten N Personen-Events dieser Kamera"
-                        # — fuer Ferntests nach einem Release (Events des
-                        # ZIELSYSTEMS selbst, keine Kamera-Umbenennung, kein
-                        # Clip-Upload). Frigate liefert die Kandidaten
-                        # (labels/cameras/after/before/has_clip aus der
-                        # OpenAPI der laufenden 0.18 verifiziert, 03.09.),
-                        # sortiert wird HIER aufsteigend nach start_time:
-                        # "die naechsten ab start", nicht "die neuesten".
-                        # Deckel in core/einspielen (FENSTER_*), damit ein
-                        # Aufruf nie einen ganzen Tag in die Queue kippt.
-                        if not _kam:
+                    if _fensterfelder and not _q_ev and not _q_clip:
+                        # FENSTER-WEG als NACHLAUF-WERKZEUG (.505, 05.09.2026 —
+                        # User: "alle Ereignisse ab Zeitpunkt X einer Kamera;
+                        # oder rueckwaerts ab X bis Y oder Anzahl; das
+                        # Kamerazeitfenster 8-9 Uhr neu analysieren").
+                        # Drei Aenderungen gegen die .416-Fassung, alle aus dem
+                        # Feldfall vom 04.09.:
+                        #  1. GEBLAETTERT statt abgeschnitten. Frigate liefert
+                        #     die NEUESTEN zuerst; die alte Fassung holte eine
+                        #     100er-Seite und sortierte DANACH aufsteigend —
+                        #     "ab 09:00" lieferte deshalb Ereignisse ab 16:33.
+                        #     Das Blaettern steckt in core.einspielen.
+                        #  2. RICHTUNG waehlbar: "vor" = die aeltesten ab start
+                        #     (Werkswert, der Nachlauf), "zurueck" = die
+                        #     juengsten vor ende.
+                        #  3. KAMERA OPTIONAL: ohne sie gilt das Fenster fuer
+                        #     alle Kameras, und die Antwort sagt mit je_kamera,
+                        #     was daraus wurde.
+                        # Der Deckel bleibt (core/einspielen FENSTER_*), damit
+                        # ein Aufruf nie unbemerkt einen ganzen Tag in die Queue
+                        # kippt — er wird jetzt nur ehrlich BENANNT.
+                        _richtung, _rfehler = _einspiel.richtung_pruefen(
+                            _b.get("richtung"))
+                        if _rfehler:
                             return self._send(400, json.dumps(
-                                {"ok": False, "msg": "window needs a camera"}),
-                                "application/json")
+                                {"ok": False, "msg": _rfehler}), "application/json")
                         try:
-                            _t0 = float(_b["start"])
+                            _t0 = _b.get("start")
+                            _t0 = None if _t0 is None else float(_t0)
                             _t1 = _b.get("ende")
                             _t1 = None if _t1 is None else float(_t1)
-                            _nmax = max(1, min(
-                                int(_b.get("max") or _einspiel.FENSTER_MAX_DEFAULT),
-                                _einspiel.FENSTER_DECKEL))
                         except (TypeError, ValueError):
                             return self._send(400, json.dumps(
                                 {"ok": False,
                                  "msg": "bad window (start/ende/max numeric)"}),
                                 "application/json")
-                        _q = (f"/api/events?labels=person&cameras={_kam}"
-                              f"&after={_t0:.0f}&has_clip=1"
-                              f"&limit={_einspiel.FENSTER_SUCHLIMIT}"
-                              f"&include_thumbnails=0"
-                              + (f"&before={_t1:.0f}" if _t1 is not None else ""))
-                        # Kamera-Filter zusaetzlich HIER (nicht nur im Query):
-                        # eine Instanz, die den cameras-Parameter ignoriert,
-                        # darf keine fremden Kameras in die Queue spuelen.
-                        _evs = [e for e in (api(cfg, _q) or [])
-                                if isinstance(e, dict) and e.get("id")
-                                and str(e.get("camera")) == str(_kam)]
+                        # N7 (.505 E4): `start` ist bei "vor" Pflicht — ohne
+                        # Anfang gibt es keinen Nachlauf "ab X". Bei "zurueck"
+                        # ist es optional; die Untergrenze ist dann allein der
+                        # Seiten-Deckel, und die Antwort sagt mit
+                        # `fenster_unvollstaendig`, wenn der gegriffen hat.
+                        if _t0 is None and _richtung != "zurueck":
+                            return self._send(400, json.dumps(
+                                {"ok": False,
+                                 "msg": "'start' is required (only richtung "
+                                        "'zurueck' may omit it)"}),
+                                "application/json")
+                        # N8: `max` explizit statt `or` — 0 fiel sonst still auf
+                        # den Werkswert 5, -5 auf 1 (Widerleger E1+E2 Notiz 8).
+                        _wunsch, _mfehler = _einspiel.max_pruefen(_b.get("max"))
+                        if _mfehler:
+                            return self._send(400, json.dumps(
+                                {"ok": False, "msg": _mfehler}), "application/json")
+                        _deckel = _einspiel.deckel_aus_config(cfg)
+                        _nmax, _geklemmt = _einspiel.deckel_klemmen(_wunsch, _deckel)
+                        # B1 (.505 E4): der Seiten-Deckel haengt an der
+                        # FENSTERGROESSE (hart 51 Seiten), NICHT am
+                        # einspiel_deckel — der klemmt nur noch die Auswahl.
+                        # Beim Werkswert 20 blaetterte der Aufruf sonst 2 Seiten
+                        # und kappte das Fenster still auf die 200 neuesten
+                        # (gemessen: "ab 24.08." lieferte den 04.09. 16:56).
+                        _evs, _seiten, _unvoll = _einspiel.fenster_sammeln(
+                            lambda _p: api(cfg, _p), _kam, _t0, _t1,
+                            max_seiten=_einspiel.SEITEN_DECKEL,
+                            genug=(_nmax if _richtung == "zurueck" else None),
+                            log=svc.log)
                         _gef = len(_evs)
-                        _evs.sort(key=lambda e: float(e.get("start_time") or 0))
-                        _evs = _evs[:_nmax]
-                        _ids = [str(e["id"]) for e in _evs]
-                        for _eid2 in _ids:
-                            svc.event_neu_einreihen(_eid2)
+                        _wahl = _einspiel.auswahl(_evs, _nmax, _richtung)
+                        _je_kam = _einspiel.je_kamera(_wahl)
+                        # W-A3 E3: eine eid, die GERADE analysiert wird, wird
+                        # nicht angefasst (event_neu_einreihen -> False) und
+                        # steht als uebersprungen in der Antwort — vorher lief
+                        # dafuer entweder eine zweite Analyse (falsch) oder gar
+                        # keine bei HTTP 200 (falscher Erfolg).
+                        # B2-Rest (.505 E4, Widerleger E1+E2): `eingereiht` zaehlt
+                        # nur noch ECHTE Einreihungen. `event_neu_einreihen`
+                        # antwortet dreiwertig — True = angehaengt, False = laeuft
+                        # gerade (unberuehrt), None = jemand anderes hatte es in
+                        # derselben Sekunde schon in der Schlange. Vorher hiess
+                        # jedes "nicht laufend" eingereiht; bei vollem Deckel war
+                        # `eingereiht: 5000` schlicht gelogen.
+                        _ids, _laufend_weg, _schon = [], [], []
+                        for _e2 in _wahl:
+                            _eid2 = str(_e2["id"])
+                            _erg2 = svc.event_neu_einreihen(_eid2)
+                            if _erg2 is True:
+                                _ids.append(_eid2)
+                            elif _erg2 is False:
+                                _laufend_weg.append(_eid2)
+                            else:
+                                _schon.append(_eid2)
                         svc.log(f"SUPPORT: einspielen source=fenster "
-                                f"camera={_kam} after={_t0:.0f}"
+                                f"camera={_kam or '<all>'} "
+                                + (f"after={_t0:.0f}" if _t0 is not None
+                                   else "after=<page limit>")
                                 + (f" before={_t1:.0f}" if _t1 is not None else "")
-                                + f" found={_gef} queued={len(_ids)} "
+                                + f" richtung={_richtung} max={_nmax}"
+                                + (f" (clamped from {_wunsch})" if _geklemmt else "")
+                                + f" pages={_seiten} found={_gef} "
+                                f"queued={len(_ids)} "
+                                f"busy={len(_laufend_weg)} "
+                                f"already_queued={len(_schon)} "
+                                + ("window_incomplete=yes " if _unvoll else "")
+                                + f"cameras={_je_kam} "
                                 f"ids={','.join(_ids)[:300]}")
-                        return self._send(200, json.dumps(
-                            {"ok": True, "weg": "fenster", "gefunden": _gef,
-                             "events": _ids}), "application/json")
+                        _ant = {"ok": True, "weg": "fenster", "gefunden": _gef,
+                                "eingereiht": len(_ids), "seiten": _seiten,
+                                "je_kamera": _je_kam, "events": _ids,
+                                "rueckstau_url": "/health"}
+                        if _geklemmt is not None:
+                            _ant["geklemmt_auf"] = _geklemmt
+                        if _laufend_weg:
+                            _ant["uebersprungen_laufend"] = _laufend_weg
+                        if _schon:
+                            _ant["schon_in_schlange"] = _schon
+                        if _unvoll:
+                            # Ehrlichkeit vor Bequemlichkeit: das Fenster hat
+                            # mehr hergegeben, als hier geholt wurde.
+                            _ant["fenster_unvollstaendig"] = True
+                            # N1 (05.09.2026, Widerleger E4 Notiz 6): bei
+                            # `richtung=vor` reicht „das Fenster enthaelt mehr"
+                            # nicht. Die Auswahl nimmt dort die AELTESTEN des
+                            # Geholten — ist das Blaettern vorher abgebrochen,
+                            # sind das nicht die aeltesten des FENSTERS (bei
+                            # einem Fenster ueber ~5050 Ereignissen kamen e950…
+                            # statt e0…). Genau der Feldfall „ab 24.08.". Der
+                            # Satz muss also sagen, dass die Auswahl selbst
+                            # falsch liegt, nicht nur unvollstaendig ist.
+                            if _richtung == "vor":
+                                _ant["msg"] = (
+                                    "the window was not paged to its end — these "
+                                    "are NOT the oldest events of the window. "
+                                    "Narrow the window (later 'start' / earlier "
+                                    "'ende') or use richtung=zurueck.")
+                        return self._send(200, json.dumps(_ant),
+                                          "application/json")
                     if _q_ev and not _kam:
                         # Ohne Kamera-Wunsch ist es schlicht ein Event mehr in
                         # der Queue: Metadaten UND Clip kommen wie immer von
                         # der konfigurierten frigate_url, es wird nichts
                         # hinterlegt. Der einfachste Weg zuerst.
+                        _erg1 = svc.event_neu_einreihen(_q_ev)
+                        if _erg1 is False:
+                            # W-A3 E3: laeuft gerade — nichts wurde angefasst.
+                            # 409 statt 200, damit der Bediener es nochmal
+                            # schickt, statt auf eine Analyse zu warten, die
+                            # nie eingereiht wurde. Ausdruecklich `is False`:
+                            # None heisst "steht schon in der Schlange" und ist
+                            # ein Erfolg, kein Riegel (.505 E4).
+                            # N1 (05.09.2026): False traegt seit dem Nachzug
+                            # ZWEI Gruende — der zweite ist die volle
+                            # Warteschlange (vorher log der Weg dort „ok"). Die
+                            # Handlung ist dieselbe (spaeter nochmal), also
+                            # bleibt es EIN Riegel; die Meldung nennt beide,
+                            # statt einen davon zu behaupten. Welcher es war,
+                            # steht je Ereignis im Dienst-Log.
+                            return self._send(409, json.dumps(
+                                {"ok": False,
+                                 "msg": f"{_q_ev} was not queued — it is being "
+                                        f"analysed right now, or the event queue "
+                                        f"is at its limit; retry in a moment "
+                                        f"(the service log says which)"}),
+                                "application/json")
                         svc.log(f"SUPPORT: einspielen source=frigate eid={_q_ev} "
-                                f"(no camera override — plain event queue entry)")
-                        svc.event_neu_einreihen(_q_ev)
-                        return self._send(200, json.dumps(
-                            {"ok": True, "eid": _q_ev, "weg": "frigate"}),
-                            "application/json")
+                                f"(no camera override — plain event queue entry"
+                                + ("" if _erg1 is True else ", was already queued")
+                                + ")")
+                        _ant1 = {"ok": True, "eid": _q_ev, "weg": "frigate",
+                                 "rueckstau_url": "/health"}
+                        if _erg1 is not True:
+                            _ant1["schon_in_schlange"] = True
+                        return self._send(200, json.dumps(_ant1),
+                                          "application/json")
                     if _q_ev and _kam:
                         # Kamera-Wechsel: Metadaten des Originals holen, unter
                         # neuer ID mit der Ziel-Kamera hinterlegen, den
@@ -12698,7 +15502,14 @@ def make_handler(svc):
                                 f"age_min={'?' if _alter is None else int(_alter)} "
                                 f"(templates: {_bn} file(s), {_bb} byte(s) — "
                                 f"never auto-purged)")
-                        svc.event_einreihen(_neu)
+                        # `sofort=True` (E5/N1, 05.09.2026, Widerleger B1 B-2):
+                        # der Clip liegt hier schon auf der Platte (`ablegen`
+                        # ein paar Zeilen darueber) — `clip_delay` waere reine
+                        # Wartezeit auf etwas, das nicht mehr kommen muss, und
+                        # ein unfaelliger Kopf hielt bis .505 ALLE Abholer auf
+                        # (gemessen 15,00 s). Betrifft auch reine
+                        # Poll-Installationen, nicht nur MQTT.
+                        svc.event_einreihen(_neu, sofort=True)
                         return self._send(200, json.dumps(
                             {"ok": True, "eid": _neu, "weg": "kamera-override"}),
                             "application/json")
@@ -12727,7 +15538,11 @@ def make_handler(svc):
                                 f"score={_einspiel.TOP_SCORE} zones=[] "
                                 f"sub_label=none (templates: {_bn} file(s), "
                                 f"{_bb} byte(s) — never auto-purged)")
-                        svc.event_einreihen(_neu)
+                        # `sofort=True` (E5/N1): derselbe Grund wie beim
+                        # Kamera-Weg darueber — die Vorlage liegt bereits als
+                        # Datei vor, es gibt nichts, worauf clip_delay warten
+                        # koennte.
+                        svc.event_einreihen(_neu, sofort=True)
                         return self._send(200, json.dumps(
                             {"ok": True, "eid": _neu, "weg": "clip"}),
                             "application/json")
@@ -12744,12 +15559,22 @@ def make_handler(svc):
                     return self._send(400, json.dumps(
                         {"ok": False, "msg": _msg},
                         ensure_ascii=False), "application/json")
+                # .505: der Satz nennt jetzt auch den Fensterweg. Hierher kommt
+                # seit E4 nur noch ein Aufruf OHNE jedes Fensterfeld (ein
+                # Aufruf mit "ende" allein bekommt seine eigene, genauere
+                # Meldung im Fensterzweig).
                 return self._send(400, json.dumps(
-                    {"ok": False, "msg": "need event or clip"}), "application/json")
+                    {"ok": False, "msg": "need 'event', 'clip' or a window "
+                                         "('start', plus optional 'ende', "
+                                         "'max', 'richtung', 'kamera'; with "
+                                         "\"richtung\": \"zurueck\" 'start' may "
+                                         "be omitted)"}),
+                    "application/json")
             if pfad == "/sprache_speichern":       # Sprach-Stufe 1: Schrieb OHNE Neustart (Areas-Muster B12)
                 try:
-                    n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 4096)))
+                    d = self._body_json(4096, erwartet=dict)
+                    if d is _ABGEWIESEN:
+                        return
                     ok, erg = _sprache.validieren(d.get("sprache"))
                     if not ok:
                         return self._send(400, json.dumps({"ok": False, "msg": erg},
@@ -12774,8 +15599,9 @@ def make_handler(svc):
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad == "/areas_speichern":                     # Areas Stufe 1: Schrieb OHNE Neustart
                 try:
-                    n = int(self.headers.get("Content-Length", 0))
-                    d = json.loads(self.rfile.read(min(n, 65536)))
+                    d = self._body_json(65536, erwartet=dict)
+                    if d is _ABGEWIESEN:
+                        return
                     ok, erg = _areas_mod.validieren(d.get("areas"))
                     if not ok:
                         return self._send(400, json.dumps({"ok": False, "msg": erg},
@@ -12828,8 +15654,9 @@ def make_handler(svc):
                 return self._send(404, "not found", "text/plain")
             try:
                 import szenarien as _szen
-                n = int(self.headers.get("Content-Length", 0))
-                d = json.loads(self.rfile.read(min(n, 4096)))
+                d = self._body_json(4096, erwartet=dict)
+                if d is _ABGEWIESEN:
+                    return
                 eid = str(d["eid"])
                 if not re.match(r"^[\w.\-]+$", eid):
                     return self._send(400, '{"ok": false}', "application/json")
@@ -14793,6 +17620,61 @@ def make_handler(svc):
                                        master_persons(cfg), _cams_a, _areas_a, _sicht_a,
                                        _anw.tage_vorhanden(cfg))
                 return self._send(200, webui.layout(_sprache.t("anwesenheit.titel"), "/anwesenheit", inhalt, self._banner()))
+            if path == "/gpu":                           # Beschleuniger-Aufteilung (P5, .503)
+                import webui
+                # ME1: Renderer in routes/gpu.py, Daten als Parameter. Der Handler
+                # holt hier zusammen, was die Seite braucht — Karte, laufende Worker,
+                # laufende Waechter, Vorschlag — und rechnet NICHTS selbst; die
+                # Budget-Arithmetik liegt in core/gpubudget.py (eine Quelle, damit
+                # Support-Antworten und Seite nie auseinanderlaufen).
+                from routes import gpu as _r_gpu
+                _sys = _systemstat.letzte() or {}
+                _gpu = dict(_sys.get("gpu") or {})
+                # Der Kartenname steht nicht in der Momentaufnahme (die misst nur
+                # Zahlen) — hier einmal nachfragen, damit die Seite sagen kann, WELCHE
+                # Karte gefunden wurde. Schlaegt es fehl, bleibt es beim Kind.
+                try:
+                    _n = subprocess.run(["nvidia-smi", "--query-gpu=name",
+                                         "--format=csv,noheader"],
+                                        capture_output=True, text=True, timeout=4)
+                    if _n.returncode == 0 and _n.stdout.strip():
+                        _gpu["name"] = _n.stdout.strip().splitlines()[0]
+                except Exception:                        # noqa: BLE001
+                    pass
+                _nw = svc._plaetze.kapazitaet
+                try:
+                    # `cfg` ist die LAUFENDE Config des Handlers (nicht svc.cfg vom
+                    # Start) — der Nutzer kann Waechter zur Laufzeit zuschalten, und
+                    # die Seite soll den Jetzt-Zustand zeigen.
+                    _lw = len([1 for _k, _v in ((cfg.get("live") or {}).get("guards")
+                                                or {}).items() if (_v or {}).get("enabled")])
+                except Exception:                        # noqa: BLE001
+                    _lw = 0
+                _roh = cfg.get("analyse_plaetze")
+                _roh = 1 if _roh is None or _roh == "" else int(_roh)
+                # Verlauf aus DEMSELBEN Ringpuffer wie die Systemlast-Seite (nie
+                # frisch messen — sonst kostet jeder Reload eine Messrunde und
+                # stiehlt dem Sammler seine Delta-Bezugsgroesse, .341).
+                _verl = _systemstat.lesen(cfg, time.time() - 3600) or []
+                # C1 (05.09.2026): Belegung UND Klassen aus EINEM `zustand()` — zwei
+                # Griffe (anzahl_belegt + zustand) waeren zwei Zeitpunkte, und die
+                # Zeile behauptete dann eine Aufteilung, die zur Gesamtzahl nicht
+                # passt (dieselbe Klasse wie W4-3 beim Platzwaechter). Die Reihenfolge
+                # der Klassen kommt aus `Analyseplaetze.ARTEN`, der einen Aufzaehlung.
+                _pz = svc._plaetze.zustand()
+                _pk = [(_a, sum(1 for _p in _pz["plaetze"] if _p["art"] == _a))
+                       for _a in svc._plaetze.ARTEN]
+                inhalt = _r_gpu.seite(_gpu, _nw, _lw,
+                                      getattr(svc._plaetze, "vorschlag", _nw),
+                                      _nw if _roh <= 0 else _roh,
+                                      auto=(_roh <= 0),
+                                      belegt=_pz["belegt"], klassen=_pk,
+                                      npu=_sys.get("npu"),
+                                      gpu_eigen=_sys.get("gpu_eigen"),
+                                      ram=_sys.get("ram"), cpu=_sys.get("cpu"),
+                                      verlauf=_verl)
+                return self._send(200, webui.layout(_sprache.t("gpu.titel"), "/gpu",
+                                                    inhalt, self._banner()))
             if path == "/gesichter":                     # zentrale Personen-/Referenzverwaltung (19.07.)
                 import webui
                 # M1b (S5): Rendern byte-treu in routes/gesichter.py.
@@ -15500,6 +18382,11 @@ def make_handler(svc):
                      "startup_fails": _sf,
                      "version": os.environ.get("SUSLIK_VERSION", "dev"),
                      "processed": len(svc.processed),
+                     # E0: die Platz-Vergabe sichtbar machen. Ohne diese Zeile waere ein
+                     # zweiter Analyse-Platz nirgends beobachtbar — /health zeigt sonst
+                     # nur `_worker_obj`, also Worker 1 (Widerleger-Befund B8: Zustand,
+                     # Tode-Zahl und Rueckfall-Statistik des zweiten Prozesses blind).
+                     "analyse_plaetze": svc._plaetze.zustand(),
                      # .340: Start-Nachholen — Schalter UND Fortschritt aus DERSELBEN
                      # Quelle wie der Banner (K1: die Anzeige kann dem Verhalten nicht
                      # widersprechen). Supportfaelle schicken /health, nicht 400 Logzeilen.
@@ -15533,7 +18420,26 @@ def make_handler(svc):
                                        # das jetzt VOR dem Klick, statt ihn ins Leere
                                        # laufen zu lassen.
                                        "bereit": bool(master_persons(cfg)),
-                                       **(getattr(svc, "_sweep_stand", None) or {})},
+                                       **(getattr(svc, "_sweep_stand", None) or {}),
+                                       # B2 (05.09.2026, Widerleger-Befund B1 B-1):
+                                       # `aktiv` ist der EINZIGE Grund, aus dem
+                                       # `_cuAnzeigen` (webui/app.js) den „Holen"-
+                                       # Knopf waehrend eines Laufs versteckt. B1
+                                       # strich das Feld aus `_sweep_stand` — zu
+                                       # Recht, es war ein Zaehlwerk des rechnenden
+                                       # Sweeps — und damit war `c.aktiv` im JS
+                                       # dauerhaft undefined: der Knopf stand auch
+                                       # mitten im Nachholen da, also genau die
+                                       # Doppelstart-Einladung, die der Widerleger
+                                       # am 29.08. geschlossen hatte.
+                                       #
+                                       # Deshalb LIVE aus derselben Quelle wie der
+                                       # 409-Riegel (`rueckstau_aktiv_nutzerlauf`):
+                                       # der Knopf ist genau dann sichtbar, wenn ein
+                                       # Klick auch etwas ausloesen wuerde. NACH dem
+                                       # Spread, damit ein Alt-Feld gleichen Namens
+                                       # im Steckbrief ihn nie ueberschreiben kann.
+                                       "aktiv": svc.rueckstau_aktiv_nutzerlauf()},
                      "backend": cfg.get("backend") or "",
                      # N8b: Cache-Groesse SICHTBAR (Feldbericht: 74-GB-Steady-State erst am
                      # 97 % vollen Host bemerkt) + der wirksame Deckel daneben.
@@ -16592,7 +19498,20 @@ def startup_selfcheck(svc):
         # die GROESSERE der beiden Politik-Grenzen: es reicht, wenn EINE der
         # beiden Instanzen ueber die Decke laufen darf. +1024 MB Zuschlag fuer
         # den Dienst selbst, der neben dem Worker in derselben cgroup lebt.
-        _pol = max(_wr, _pr)
+        # Konzept Parallel-Analyse §5.2: die Politik-Grenze muss mit der Platzzahl
+        # wachsen — N Analyse-Worker duerfen JEDER bis _wr belegen. Ohne das `_np *`
+        # meldete die Wache bei zwei Plaetzen weiter "passt", waehrend der Kernel
+        # laengst schoss (K1: die Diagnose luegt). Bei einem Platz ist die Rechnung
+        # bitgleich zu vorher. Die zweite, aeltere Frage — ob statt `max()` nicht
+        # `worker + personwork` zu addieren waere — bleibt bewusst offen: sie ist eine
+        # Politik-Entscheidung des Bestands und gehoert nicht in diesen Umbau.
+        # Quelle ist die LAUFENDE Vergabestelle, nicht der Config-Wert: eine
+        # backend-bedingte Klemmung (OpenVINO hart auf 1) waere sonst nicht abgebildet.
+        _np = max(1, getattr(getattr(svc, "_plaetze", None), "kapazitaet", 1) or 1)
+        _pol = max(_np * _wr, _pr)
+        if _np > 1:
+            erg("info", f"{'mem':<5} {_np} analysis slots — guard scales to "
+                        f"{_np} x {_wr} = {_np * _wr} MB")
         if _gmb > 0 and _gmb < _pol + 1024:
             erg("warn", f"{'mem':<5} memory guard ({_pol} MB) sits at/above the "
                         f"container limit ({_gmb} MB) — the kernel OOM killer "
@@ -17064,6 +19983,7 @@ def main():
     svc.start_selbstwache()                       # R(b) 01.09.: eigener /health-Puls, harter Exit bei Voll-Haenger
     svc.start_melde_spur()                        # W3 Stufe 1 (.399): Versand-Nachwehen raus aus dem Analyse-Lock
     svc.start_event_queue()                       # W3 Stufe 1 (.399): geordnete Event-Queue statt Timer-Herde
+    svc.start_platzwaechter()                     # P1: zieht Plaetze ein, deren Thread nie zurueckkehrt
     _systemstat.sammler_starten(cfg, svc.systemstat_dienst, svc.log)   # .341: Systemzahlen alle 60 s
     svc.start_nachhol()                   # gescheiterte Analysen spaeter stumm nachholen
     svc.start_frigate_probe()             # .281: Schoner-Sperre aktiv proben (MQTT-Leerlauf)
