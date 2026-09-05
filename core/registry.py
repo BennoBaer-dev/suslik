@@ -700,7 +700,9 @@ VISION_MESSWERTE = {
     },
     "Qwen/Qwen3.5-9B|lokal": {
         "erkennen": (12, 12), "abweisen": None, "datum": "2026-08-07",
-        "quelle": ("scratchpad/llamacpp_hm91_test.json, "
+        # Belegpfad ohne Rechnernamen (05.09.2026, Kontroll-Agent .506 Befund A: der
+        # Hostname-Fragment stand seit .168 klein geschrieben im public Export).
+        "quelle": ("scratchpad/llamacpp_<messrechner>_test.json, "
                    "scratchpad/llamacpp_tempo_test.json"),
         "roh_archiviert": True,
         "methodik": METHODIK_EINZELBILD,
