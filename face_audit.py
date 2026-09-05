@@ -19,7 +19,9 @@ Erzeugt zusaetzlich eine HTML-Galerie (Bilder via Frigate-URL eingebunden).
 Greift NUR lesend auf Frigate zu. Aendert NICHTS. Loeschen bleibt separate,
 bestaetigte Aktion.
 """
+import contextlib as _contextlib
 import glob as _glob
+import threading as _threading      # E3c: Schloss der Init-Kappung, s. _IF_KAPPUNG_SCHLOSS
 import os, sys, json, argparse, urllib.request, urllib.parse, re, datetime, html
 import numpy as np
 import cv2
@@ -92,6 +94,18 @@ def resolve_backend(spec=None):
 
 _ORT_THREADS = None
 _THREADS_BENCH = None            # Ergebnis der Selbstmessung (fuer /health, Gate)
+# .505 E4 (05.09.2026, Widerleger W-E3c Notiz 7): Schloss um Cache-Pruefung UND
+# Messung in _ort_thread_opts. Ohne es sahen drei parallele Kaltaufrufe alle
+# `_ORT_THREADS is None`, massen alle (je ~1,3 s) und kamen dabei auf
+# ABWEICHENDE Ergebnisse — gemessen 6 gegen 1 Thread, der letzte Schreiber
+# gewann. Das ist beides falsch: die Messung wird verdreifacht (und misst dabei
+# sich selbst, weil drei Benches um dieselben Kerne konkurrieren), und welche
+# Threadzahl am Ende steht, entscheidet der Zufall. Lock statt RLock: hier laeuft
+# kein Weg aus dem gesperrten Abschnitt in sich selbst zurueck (`_threads_messen`
+# baut ueber `ort.InferenceSession` mit eigenen Optionen, nie ueber
+# `_ort_thread_opts`), und die Kappungs-Klammer haelt ihr eigenes Schloss zu
+# diesem Zeitpunkt nicht mehr (s. _insightface_sessions_gekappt).
+_ORT_THREADS_SCHLOSS = _threading.Lock()
 
 
 def _threads_cache_pfad():
@@ -103,8 +117,16 @@ def _threads_cache_pfad():
 
 
 def _threads_schluessel(kerne):
-    """Was die Messung gueltig macht: erlaubte Kernzahl + CPU-Modell. Aendert
-    sich eines (anderer Wirt, andere cgroup-Maske), wird neu gemessen."""
+    """Was die Messung gueltig macht: erlaubte Kernzahl + CPU-Modell + Platzzahl.
+    Aendert sich eines (anderer Wirt, andere cgroup-Maske, mehr Analyse-Plaetze),
+    wird neu gemessen.
+
+    Die Platzzahl gehoert hier hinein, seit die Analyse mehrere Plaetze haben kann
+    (Konzept Parallel-Analyse §5.3): der Bench misst die beste Threadzahl fuer EINEN
+    Prozess und legt sie ab. Ohne die Platzzahl im Schluessel forderten zwei Worker
+    denselben gecachten Wert an, also gemeinsam die doppelte Threadzahl — auf
+    Maschinen, wo der Bench `kerne` oder `kerne//2` gewaehlt hat, ist das
+    Ueberbuchung, und der Cache haette sie still konserviert."""
     modell = ""
     try:
         with open("/proc/cpuinfo") as f:
@@ -114,7 +136,13 @@ def _threads_schluessel(kerne):
                     break
     except OSError:
         pass
-    return f"{kerne}|{modell}"
+    try:
+        plaetze = max(1, int(os.environ.get("SUSLIK_ANALYSE_PLAETZE") or 1))
+    except ValueError:
+        plaetze = 1
+    # Bei einem Platz bleibt der Schluessel bitgleich zu vorher — bestehende
+    # Cache-Dateien behalten ihre Gueltigkeit und werden nicht neu vermessen.
+    return f"{kerne}|{modell}" if plaetze == 1 else f"{kerne}|{modell}|p{plaetze}"
 
 
 def _bench_graph(n=256, stufen=4):
@@ -279,6 +307,101 @@ def _threads_bestimmen(kerne):
     return int(beste)
 
 
+def _cgroup_quote(wurzel="/sys/fs/cgroup"):
+    """Nutzbare GANZE CPUs laut cgroup-CPU-Quote (docker --cpus, LXC cpulimit)
+    -> int oder None, wenn keine Quote gesetzt/lesbar ist.
+
+    E3 (.505, 05.09.2026): die Affinitaets-Maske sieht diese Grenze NICHT — ein
+    Container mit `--cpus 2` auf einem 12-Kern-Wirt traegt die volle Maske, darf
+    aber nur 2 CPU-Sekunden je Sekunde verbrauchen. Abgerundet, mindestens 1
+    (konservativ: es geht um eine Thread-ZAHL, nicht um eine Abrechnung).
+    cgroup v2 (`cpu.max`: '<quota> <period>' oder 'max ...'), v1 als Rueckfall.
+
+    `wurzel` ist NUR fuer den Testharnisch da (wie `verifyd._cgroup_speicher_grenze`
+    es haelt): tools/proben/s11_e3c_pfaddeckung.py legt Attrappen-Dateien in ein
+    tmpdir und prueft damit den v1-Rueckfall und die Abrundung. E3c (05.09.2026,
+    Widerleger W-E3 LEICHT): beide waren bis hierher nur ARGUMENTIERT, nie
+    gelaufen — der v1-Zweig hatte auf dieser Maschine (cgroup v2) noch nie eine
+    Datei gesehen.
+
+    EHRLICHE GRENZE, bewusst so: dieser Leser klettert NICHT in Eltern-cgroups.
+    Eine Quote, die eine Ebene hoeher steht (systemd-CPUQuota ueber dem
+    Container, Docker mit --cgroupns=host), sieht er nicht und meldet dann None
+    statt einer geratenen Zahl — es bleibt bei der Affinitaets-Maske. Der
+    Zwilling `verifyd._cgroup_speicher_grenze` klettert sehr wohl, weil dort eine
+    fehlende Decke die Budget-Rechnung kippt; hier waere die Folge nur ein etwas
+    zu grosser Thread-Pool, und dafuer ist das Risiko zu hoch, die Quote eines
+    FREMDEN Eltern-cgroups als die eigene zu lesen.
+
+    ZWILLING: `verifyd._cpu_quote` liest dasselbe fuer die Wanduhr-Frage
+    ('passen zwei Analyse-Akteure nebeneinander?'). Zwei Leser sind einer zu
+    viel; face_audit darf verifyd aber nicht importieren (verifyd importiert
+    face_audit, Zirkel), und der Worker-Subprozess laedt verifyd gar nicht.
+    Zusammenlegen kann nur ein Zug, der beide Dateien anfasst."""
+    try:
+        with open(os.path.join(wurzel, "cpu.max")) as f:
+            teile = f.read().split()
+        if teile and teile[0] != "max":
+            periode = int(teile[1]) if len(teile) > 1 else 100000
+            return max(1, int(teile[0]) // max(1, periode))
+    except (OSError, ValueError, IndexError):
+        pass
+    try:                                                   # cgroup v1
+        with open(os.path.join(wurzel, "cpu", "cpu.cfs_quota_us")) as f:
+            q = int(f.read())
+        with open(os.path.join(wurzel, "cpu", "cpu.cfs_period_us")) as f:
+            p = int(f.read())
+        if q > 0 and p > 0:
+            return max(1, q // p)
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def _cpuset_erlaubt():
+    """Anzahl der Kerne, auf denen dieser Prozess laufen DARF (cgroup-/LXC-cpuset)
+    -> int oder None, wenn die Plattform das nicht kennt (sched_getaffinity gibt
+    es nur auf Linux; None heisst 'unbekannt', nicht '0')."""
+    try:
+        return max(1, len(os.sched_getaffinity(0)))
+    except (AttributeError, OSError):
+        return None
+
+
+def _threads_ableiten(quote, cpuset_n, vorgabe):
+    """Die EINE Ableitung der erlaubten Kernzahl -> int >= 1. Rein: keine Datei,
+    keine Umgebung, nur Rechnen — damit sie ohne Maschine pruefbar ist
+    (tools/proben/s11_e3_threads.py).
+
+    vorgabe  = SUSLIK_CPU_THREADS bzw. Config `cpu_threads` (None/0 = nicht
+               gesetzt). Behaelt Vorrang wie bisher: wer die Zahl ausdruecklich
+               setzt, bekommt genau sie.
+    quote    = ganze CPUs laut cgroup-Quote (_cgroup_quote) oder None.
+    cpuset_n = erlaubte Kerne laut Affinitaets-Maske (_cpuset_erlaubt) oder None.
+
+    ANLASS (.505 E3, 05.09.2026): bis hierher zaehlte allein die Affinitaets-
+    Maske, die Quote blieb unbeachtet. Beide Grenzen sind aber echt und
+    unabhaengig — wer die kleinere ignoriert, baut zu grosse Thread-Pools:
+    onnxruntime verteilt den Intra-Op-Pool gleichmaessig und pinnt bei
+    ungenannter Threadzahl Thread i an Kern i; passt der Pool nicht in die
+    wirklich verfuegbare CPU-Zeit, kostet er Umschaltungen statt Tempo, und auf
+    Maschinen mit cpuset < Quote saeumen pthread_setaffinity-EINVAL-Zeilen das
+    analyze.log (Feldbefund Test-LXC: Quote 12, nproc 8). Also das MINIMUM
+    beider Grenzen; faellt eine weg (kein cgroup-Zugriff, Nicht-Linux), gilt die
+    andere, und fehlen beide, bleibt es beim alten Rueckfall os.cpu_count()."""
+    if vorgabe:
+        try:
+            v = int(vorgabe)
+        except (TypeError, ValueError):
+            v = 0
+        if v > 0:
+            return v
+    grenzen = [int(g) for g in (quote, cpuset_n) if isinstance(g, int) and g > 0]
+    if grenzen:
+        return max(1, min(grenzen))
+    return max(1, os.cpu_count() or 1)
+
+
 def _ort_thread_opts(deckel=None):
     """SessionOptions mit EXPLIZIT gesetzter Intra-Op-Thread-Zahl.
 
@@ -306,22 +429,32 @@ def _ort_thread_opts(deckel=None):
     eigene Recognition-Session (Issue #21: 2C/4T-NUC, zwei Worker a ~160 %)."""
     import onnxruntime as ort
     global _ORT_THREADS
+    # Double-checked (.505 E4, W-E3c Notiz 7): der haeufige Fall — die Zahl steht
+    # schon — laeuft weiter ohne Schloss; nur der EINE Kaltaufruf nimmt es, und
+    # wer waehrenddessen ankommt, wartet auf das Ergebnis, statt ein zweites Mal
+    # zu messen (drei Kaltaufrufe ergaben sonst drei Benches mit abweichenden
+    # Ergebnissen, letzter Schreiber gewinnt).
     if _ORT_THREADS is None:
-        env = os.environ.get("SUSLIK_CPU_THREADS", "")
-        if env.isdigit() and int(env) > 0:
-            _ORT_THREADS = int(env)          # N9: cpu_threads-Config (Service setzt ENV, Worker erbt)
-        else:
-            try:
-                _kerne = max(1, len(os.sched_getaffinity(0)))   # erlaubte Kerne (cgroup/LXC-Maske)
-            except AttributeError:                             # sched_getaffinity nur auf Linux
-                _kerne = max(1, os.cpu_count() or 1)
-            # .384 (Welle 1, Etappe C): die Kernzahl ist auf Hybrid-CPUs KEINE
-            # Leistungszahl — gemessen 31.08. an 2d106det auf dieser Maschine
-            # (12 Kerne zugeteilt): 4 Threads 3,63 ms gegen 12 Threads 6,97 ms.
-            # Deshalb wird sie GEMESSEN statt angenommen; scheitert die Messung
-            # oder ist sie ausgeschaltet, gilt wieder die Kernzahl (Verhalten
-            # wie vorher, nie ein stiller Ausfall).
-            _ORT_THREADS = _threads_bestimmen(_kerne)
+        with _ORT_THREADS_SCHLOSS:
+            if _ORT_THREADS is None:
+                env = os.environ.get("SUSLIK_CPU_THREADS", "")
+                vorgabe = int(env) if env.isdigit() and int(env) > 0 else None
+                # .505 (E3, 05.09.2026): erlaubte Kernzahl = MINIMUM aus cgroup-Quote
+                # und Affinitaets-Maske. Bis hierher zaehlte nur die Maske; auf
+                # Maschinen, deren cpuset kleiner ist als die Quote (Feldbefund
+                # Test-LXC: Quote 12, nproc 8), bzw. bei `docker --cpus` mit voller
+                # Maske entstanden so zu grosse Pools und pthread_setaffinity-Zeilen
+                # im analyze.log. Die ausdrueckliche Vorgabe (N9: cpu_threads-Config,
+                # Service setzt ENV, Worker erbt) behaelt Vorrang und ueberspringt
+                # wie bisher den Bench.
+                _kerne = _threads_ableiten(_cgroup_quote(), _cpuset_erlaubt(), vorgabe)
+                # .384 (Welle 1, Etappe C): die Kernzahl ist auf Hybrid-CPUs KEINE
+                # Leistungszahl — gemessen 31.08. an 2d106det auf dieser Maschine
+                # (12 Kerne zugeteilt): 4 Threads 3,63 ms gegen 12 Threads 6,97 ms.
+                # Deshalb wird sie GEMESSEN statt angenommen; scheitert die Messung
+                # oder ist sie ausgeschaltet, gilt wieder die Kernzahl (Verhalten
+                # wie vorher, nie ein stiller Ausfall).
+                _ORT_THREADS = _kerne if vorgabe else _threads_bestimmen(_kerne)
     threads = _ORT_THREADS if deckel is None else max(1, min(_ORT_THREADS, int(deckel)))
     so = ort.SessionOptions()
     so.intra_op_num_threads = threads
@@ -330,6 +463,212 @@ def _ort_thread_opts(deckel=None):
     # eine Session in den Parallel-Modus geraten, gilt derselbe Deckel statt der Host-Kernzahl.
     so.inter_op_num_threads = threads
     return so
+
+
+# Reentranz-Tiefe der Init-Kappung: ein zweiter (verschachtelter) Aufruf darf die
+# gemerkten Originale NICHT ueberschreiben, sonst stellt der innere finally-Zweig
+# den WRAPPER als "Original" wieder her und der Patch bliebe fuer immer stehen.
+#
+# .505 (E3c, 05.09.2026, Widerleger W-E3 MITTEL 1): Tiefe UND Originale sind
+# prozessweit GETEILTER Zustand. Ohne Schloss konnten zwei Threads beide die
+# Tiefe 0 sehen, beide patchen — und der erste Aussteiger stellte das Original
+# zurueck, waehrend der zweite noch in der Klammer sass; dessen naechste
+# insightface-Session lief dann wieder ungekappt (der Widerleger hat das mit
+# geweitetem Fenster nachgestellt). Deshalb liegen Ermittlung, Patch und
+# Rueckstellung unter diesem Schloss, und die Originale stehen nicht mehr in
+# einer lokalen Variablen des ERSTEN Aufrufs, sondern hier im Modul: die Tiefe
+# ist damit ein echter Referenzzaehler, und nur der LETZTE Aussteiger raeumt ab.
+# RLock statt Lock, bewusst: der Init darf an der Kappung nie sterben — ein
+# uebersehener Weg, der aus dem gesperrten Abschnitt heraus noch einmal hier
+# hereinliefe, waere mit einem einfachen Lock ein Deadlock im Modell-Laden.
+_IF_KAPPUNG_SCHLOSS = _threading.RLock()
+_IF_KAPPUNG_TIEFE = 0
+_IF_KAPPUNG_STAND = None           # (modul, {name: originalklasse}) des ERSTEN Eintritts
+_IF_KAPPUNG_GEMELDET = False       # der "baut anders"-Hinweis nur EINMAL je Prozess
+_IF_KAPPUNG_TREFFER = 0            # Session-Baeute DURCH den gepatchten Namen
+_IF_KAPPUNG_LEER_GEMELDET = False  # der "0 Treffer"-Hinweis nur EINMAL je Prozess
+# .505 E4 (05.09.2026, W-E3c Notiz 4): Trefferstand beim Beginn der KETTE, also
+# beim Patchen (Tiefe 0 -> 1). Die "0 Treffer"-Notiz wird nur beim AEUSSERSTEN
+# Austritt (Tiefe 1 -> 0) gegen diesen Stand bewertet. Vorher merkte sich JEDER
+# Eintritt seinen eigenen Stand und der patchende bewertete beim EIGENEN
+# Austritt — bei ueberlappender Verschachtelung (die aeussere Klammer geht,
+# bevor die innere baut) feuerte die Notiz deshalb faelschlich und verbrauchte
+# dabei die Einmal-je-Prozess-Sperre.
+_IF_KAPPUNG_KETTE_TREFFER = 0
+
+
+def _insightface_session_ziele():
+    """Die Namen im insightface-Modul `model_zoo`, ueber die dessen Sessions
+    entstehen -> {name: klasse} (leer = dieser insightface-Bau baut anders).
+
+    In insightface 1.0.1 (hier ausgeliefert) ruft `ModelRouter.get_model` die
+    MODUL-GLOBALE `PickableInferenceSession` — eine UNTERKLASSE von
+    onnxruntime.InferenceSession, die beim Modul-Import gebunden wird. Genau
+    dieser Modul-Name ist das Patch-Ziel: `onnxruntime.InferenceSession` selbst
+    zu ersetzen wuerde hier NICHTS bewirken (die Unterklasse haelt ihre Basis
+    schon) und ist ausserdem ausdruecklich verboten — Regression 0.1.0.13,
+    s. Kopf von _ort_thread_opts. `InferenceSession` steht zusaetzlich in der
+    Liste fuer insightface-Baeume, die den Namen direkt ins Modul importieren
+    (`from onnxruntime import InferenceSession`); das ist ebenfalls ein
+    MODUL-lokaler Name, kein Eingriff ins onnxruntime-Paket."""
+    try:
+        from insightface.model_zoo import model_zoo as _mz
+    except Exception:                                  # noqa: BLE001
+        return None, {}
+    ziele = {}
+    for name in ("PickableInferenceSession", "InferenceSession"):
+        obj = getattr(_mz, name, None)
+        if isinstance(obj, type):                      # nur echte Klassen, nie ein Fremd-Wrapper
+            ziele[name] = obj
+    return _mz, ziele
+
+
+@_contextlib.contextmanager
+def _insightface_sessions_gekappt():
+    """Klammer um den insightface-Init: dessen eigene Modell-Sessions bekommen
+    unsere Thread-Optionen (_ort_thread_opts), solange die Klammer offen ist.
+    Danach steht das Original wieder — auch bei Ausnahme.
+
+    ANLASS (.505 E3b, 05.09.2026, bauplan_0505 §2 Gruppe E). Gemessen auf der
+    CPU-Testmaschine .165 (Wirt 16 Kerne, 8 erlaubt): je Analyse standen 64
+    `pthread_setaffinity_np failed`-Zeilen im analyze.log, ALLE VOR den fuenf
+    "Applied providers"-Zeilen — also nicht in unseren Sessions (die sind seit
+    #21/E3 gekappt und erzeugen null Zeilen), sondern im insightface-Init:
+    `FaceAnalysis(...)` baut je ONNX-Datei eine Session ueber
+    `PickableInferenceSession(file, providers=..., provider_options=...)` OHNE
+    sess_options; onnxruntime nimmt dann hardware_concurrency() des WIRTS und
+    pinnt Thread i an Kern i -> EINVAL fuer jeden nicht erlaubten Kern. Die
+    Sessions leben nur bis `_to_backend()` sie ersetzt, der zu grosse Pool wird
+    aber trotzdem jedes Mal gebaut (Spam + Kaltstart-Zeit).
+
+    WAS THREAD-SICHER GARANTIERT IST (.505 E3c, 05.09.2026, Widerleger W-E3
+    MITTEL 1): solange IRGENDEIN Thread in der Klammer steht, ist der gepatchte
+    Name gesetzt; erst der LETZTE Aussteiger stellt das Original zurueck. Unter
+    dem Schloss liegen nur EINTRITT (Ermittlung + Patch + Zaehler) und AUSTRITT
+    (Zaehler + Rueckstellung), NICHT der Rumpf — sonst wuerde die Klammer den
+    Modellbau aller Threads hintereinander zwingen, und genau dieser Bau ist das
+    Teure. NICHT garantiert ist der umgekehrte Fall: ein Thread OHNE Klammer
+    baut weiter ungekappt, der Patch haengt am Modul-Namen, nicht am Thread.
+
+    Ehrliche Grenzen:
+    - Gepatcht wird NUR der Modul-Name in insightface.model_zoo.model_zoo,
+      nie `onnxruntime.InferenceSession` (s. _insightface_session_ziele).
+    - Kennt dieser insightface-Bau keinen der Namen (andere Version, anderer
+      Aufrufpfad), wird NICHTS gepatcht: die Klammer reicht durch und meldet das
+      einmal auf stderr. Erkennbar bleibt der Fall an den wiederkehrenden
+      pthread_setaffinity-Zeilen vor "Applied providers" (Gate-Stufe
+      ORT-Thread-Kappung misst sie je Session).
+    - Wird in der Klammer KEINE Session ueber den gepatchten Namen gebaut,
+      obwohl gepatcht wurde, sagt die Klammer das einmal je Prozess auf stderr
+      (E3c/T4, W-E3 MITTEL 3): "richtiger Name gepatcht, Sessions entstehen
+      woanders" war vorher ein STILLER Teil-Fehlschlag — der Patch sass, die
+      Kappung wirkte nicht, und niemand erfuhr es. Bewertet wird die GANZE
+      Klammer-Kette, und zwar erst bei ihrem AEUSSERSTEN Austritt (Tiefe 1 -> 0;
+      .505 E4, W-E3c Notiz 4). Vorher urteilte der patchende Aufruf bei seinem
+      EIGENEN Austritt ueber seinen EIGENEN Trefferstand — verlaesst die aeussere
+      Klammer die Buehne, bevor die innere baut (ueberlappend statt sauber
+      verschachtelt, erreichbar z. B. wenn FaceAnalysis() vor dem ersten Bau
+      wirft), meldete sie faelschlich "0 Treffer" und verbrauchte damit die
+      Einmal-je-Prozess-Sperre fuer den echten Fall.
+    - Scheitert ein `setattr` mitten im Patchen (zweiter Zielname), wird das
+      bereits Gesetzte sofort zurueckgestellt und die Klammer als NICHT AKTIV
+      betreten (Durchreichen + Notiz). Ohne das blieb der erste Name dauerhaft
+      gepatcht: `_IF_KAPPUNG_STAND` war noch None, also stellte auch niemand
+      zurueck, und der Vertrag "nach der Klammer ist alles Original" galt nicht
+      mehr (.505 E4, W-E3c Notiz 6; real kaum erreichbar, aber ein Vertrag mit
+      Ausnahme ist keiner).
+    - Beide Notizen tragen die feste Kennung `[ortkappung]` am Anfang, damit das
+      Gate sie im Startlog greppen kann (D1).
+    - Der Wrapper ergaenzt sess_options NUR, wenn der Aufrufer keine mitgibt
+      (weder als Schluesselwort noch als zweites Positionsargument) — eine
+      fremde Signatur reicht damit unveraendert durch.
+    - Scheitert _ort_thread_opts selbst, wird ebenfalls unveraendert
+      durchgereicht: der Init darf an der Kappung nie sterben."""
+    global _IF_KAPPUNG_TIEFE, _IF_KAPPUNG_GEMELDET, _IF_KAPPUNG_STAND
+    global _IF_KAPPUNG_TREFFER, _IF_KAPPUNG_LEER_GEMELDET
+    global _IF_KAPPUNG_KETTE_TREFFER
+
+    def _gekappt(orig):
+        def bauen(*args, **kwargs):
+            global _IF_KAPPUNG_TREFFER
+            with _IF_KAPPUNG_SCHLOSS:
+                # E3c/T4: der BEWEIS, dass insightface wirklich ueber den
+                # gepatchten Namen baut. Gezaehlt wird jeder Durchgang, auch
+                # einer mit eigenen Optionen — die Frage ist "laeuft der Bau
+                # hier durch?", nicht "haben wir ergaenzt?".
+                _IF_KAPPUNG_TREFFER += 1
+            # sess_options ist im ORT-Konstruktor das ZWEITE Positionsargument
+            # (path_or_bytes, sess_options, providers, provider_options) — wer es
+            # so uebergibt, hat schon eigene Optionen.
+            if "sess_options" not in kwargs and len(args) < 2:
+                try:
+                    kwargs["sess_options"] = _ort_thread_opts()
+                except Exception as e:                 # noqa: BLE001
+                    sys.stderr.write(f"[ortkappung] WARN: init thread capping "
+                                     f"skipped ({type(e).__name__}: {str(e)[:80]})\n")
+            return orig(*args, **kwargs)
+        bauen._suslik_original = orig                  # ablesbar fuer Proben/Wachen
+        return bauen
+
+    gezaehlt = False
+    patch_fehler = None
+    with _IF_KAPPUNG_SCHLOSS:
+        if _IF_KAPPUNG_TIEFE > 0:                      # schon geklammert -> nur mitzaehlen
+            _IF_KAPPUNG_TIEFE += 1
+            gezaehlt = True
+        else:
+            mz, ziele = _insightface_session_ziele()
+            if ziele:
+                # ERST alle Wrapper bauen, DANN setzen (.505 E4, W-E3c Notiz 6):
+                # wirft ein setattr mitten in der Schleife, wird das bereits
+                # Gesetzte hier zurueckgestellt und die Klammer gilt als nicht
+                # aktiv — sonst bliebe der erste Name fuer immer gepatcht.
+                neu = {name: _gekappt(orig) for name, orig in ziele.items()}
+                gesetzt = []
+                try:
+                    for name, wrapper in neu.items():
+                        setattr(mz, name, wrapper)
+                        gesetzt.append(name)
+                except Exception as e:                 # noqa: BLE001
+                    patch_fehler = f"{type(e).__name__}: {str(e)[:80]}"
+                    for name in gesetzt:
+                        try:
+                            setattr(mz, name, ziele[name])
+                        except Exception:              # noqa: BLE001
+                            pass                       # mehr als versuchen geht nicht
+                else:
+                    _IF_KAPPUNG_STAND = (mz, ziele)    # NUR der erste merkt die Originale
+                    _IF_KAPPUNG_TIEFE = 1
+                    _IF_KAPPUNG_KETTE_TREFFER = _IF_KAPPUNG_TREFFER
+                    gezaehlt = True
+            elif not _IF_KAPPUNG_GEMELDET:
+                _IF_KAPPUNG_GEMELDET = True
+                sys.stderr.write("[ortkappung] note: insightface builds its sessions "
+                                 "elsewhere (no PickableInferenceSession/InferenceSession "
+                                 "in model_zoo) -> init thread capping skipped\n")
+    if patch_fehler:                                   # Schreiben ohne Schloss
+        sys.stderr.write(f"[ortkappung] WARN: could not patch insightface session "
+                         f"names ({patch_fehler}) — originals restored, init thread "
+                         f"capping skipped\n")
+    try:
+        yield
+    finally:
+        melden = False
+        with _IF_KAPPUNG_SCHLOSS:
+            if gezaehlt:
+                _IF_KAPPUNG_TIEFE = max(0, _IF_KAPPUNG_TIEFE - 1)
+                if _IF_KAPPUNG_TIEFE == 0 and _IF_KAPPUNG_STAND is not None:
+                    _mz, _ziele = _IF_KAPPUNG_STAND
+                    for name, orig in _ziele.items():
+                        setattr(_mz, name, orig)
+                    _IF_KAPPUNG_STAND = None
+                    # DIE Bewertung der ganzen Kette, genau hier und nur hier.
+                    if (_IF_KAPPUNG_TREFFER == _IF_KAPPUNG_KETTE_TREFFER
+                            and not _IF_KAPPUNG_LEER_GEMELDET):
+                        _IF_KAPPUNG_LEER_GEMELDET = melden = True
+        if melden:                                     # Schreiben ohne Schloss
+            sys.stderr.write("[ortkappung] note: insightface built no session through "
+                             "the patched name — thread cap may not apply\n")
 
 
 def geraete_knoten_muster(dev):
@@ -520,9 +859,33 @@ class Embedder:
         # .313: nur die drei Modelle, die wir lesen (Detektor liefert kps; landmark_3d_68
         # liefert pose; recognition wird durch adaface ersetzt) — landmark_2d_106 und
         # genderage liefen je Gesicht umsonst mit (zwei GPU-Inferenzen je Detektion).
-        self.app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"],
-                                allowed_modules=["detection", "landmark_3d_68", "recognition"])
-        self.app.prepare(ctx_id=-1, det_size=(320, 320))
+        # .505 (E3b, 05.09.2026): FaceAnalysis UND prepare in die Init-Kappung
+        # klammern. insightface baut seine Modell-Sessions ohne SessionOptions,
+        # onnxruntime nimmt dort hardware_concurrency() des WIRTS statt der
+        # erlaubten Kerne — gemessen auf der CPU-Testmaschine .165 (Wirt 16,
+        # erlaubt 8): 64 pthread_setaffinity-Zeilen je Analyse, ALLE vor den
+        # fuenf "Applied providers"-Zeilen, also genau hier. prepare() ist
+        # mitgeklammert, weil es je Modell set_providers() ruft und damit die
+        # native Session neu aufbaut. GEMESSEN an den AUSGELIEFERTEN IMAGES
+        # (05.09.2026, W-E3c: onnxruntime 1.24.1 im gpu-Image — das faehrt auch
+        # suslik-prod —, 1.26.0 im cuda-Image, 1.27.0 im cpu-Image; insightface
+        # 1.0.1). Die Herkunft gehoert dazu: auf dem WIRT meldet `pip list`
+        # 1.29.0, importiert wird im venv trotzdem 1.24.1
+        # (onnxruntime-openvino verdeckt das nackte Paket) — eine Wirt-Zahl
+        # taugt hier also nicht, die eine Quelle ist die Versionszeile im
+        # Startlog des jeweiligen Images. In allen drei Images gilt dieselbe
+        # Sachaussage: set_providers() geht ueber _reset_session, und das
+        # behaelt _sess_options_initial — unsere Optionen ueberleben, die
+        # Klammer um prepare() ist HIER also eine tote Zeile (null zusaetzliche
+        # Konstruktor-Aufrufe gemessen). Sie bleibt trotzdem stehen: sie ist die
+        # Versicherung fuer fremde Baeume, in denen an dieser Stelle ein echter
+        # Neubau ueber den Konstruktor sitzt. Die
+        # Sessions leben ohnehin nur bis _to_backend() sie ersetzt — gespart
+        # wird der zu grosse Pool je Init-Session (Spam + Kaltstart-Zeit).
+        with _insightface_sessions_gekappt():
+            self.app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"],
+                                    allowed_modules=["detection", "landmark_3d_68", "recognition"])
+            self.app.prepare(ctx_id=-1, det_size=(320, 320))
         self.modell = (modell or aktuelles_modell()).lower()
         if self.modell not in MODELLE:
             raise SystemExit(f"Unbekanntes Recognition-Modell '{self.modell}' (erlaubt: {list(MODELLE)})")
@@ -962,7 +1325,8 @@ class NormMass:
     verify_data/messungen/qualitaetsmass_20260820.json). Traeger des Lernvorrats
     (Bauplan bauplan_vorrat.md B1).
 
-    STRIKT GETRENNT vom Urteilspfad: eigene Session, Geraet aus NORM_KETTE mit
+    STRIKT GETRENNT vom Urteilspfad: eigene Session, Geraet aus der Kette dieses
+    Backends (kette_fuer_backend, seit .506 — davor die feste NORM_KETTE) mit
     Kreuzprobe gegen CPU (seit .313; die aeltere Angabe "IMMER CPU" galt bis dahin),
     exakte Batchgroessen ohne Padding. Gemessen 20.08.: ein Zusatz-Graph-Ausgang
     laesst 'embedding' auf CPU bit-genau unveraendert (maxdiff exakt 0.0),
@@ -1005,11 +1369,30 @@ class NormMass:
     # wird von der Kreuzprobe mit 105,276 verworfen — auf CPU laeuft er damit in
     # ~50-min-Laeufe. Faellt fp16, ist FP32 der letzte Halt vor der CPU, nicht der
     # Sturz auf sie. Kette: NPU -> GPU -> GPU_FP32 -> CPU;
-    # SUSLIK_NORM_DEVICE=CPU|NPU|GPU|GPU_FP32 erzwingt. CUDA/ROCm sind ungemessen
-    # und bleiben auf CPU (ihre EPs kennen die Praezisions-Achse ohnehin nicht).
-    # Jede OV-Session wird per KREUZPROBE gegen eine CPU-Session geprueft
-    # (|dNorm| <= NORM_KREUZ_MAX auf dem gepinnten Gesichtsreiz), sonst LAUT
-    # naechste Stufe.
+    # SUSLIK_NORM_DEVICE=CPU|NPU|GPU|GPU_FP32|CUDA erzwingt. Jede Nicht-CPU-Session
+    # wird per KREUZPROBE gegen eine CPU-Session geprueft (|dNorm| <=
+    # NORM_KREUZ_MAX auf dem gepinnten Gesichtsreiz), sonst LAUT naechste Stufe.
+    #
+    # .506 CUDA-STUFE (05.09.2026, User-Entscheid nach der Ernte-Messung —
+    # ersetzt den bisherigen Satz "CUDA/ROCm sind ungemessen und bleiben auf CPU"):
+    # NVIDIA ist jetzt GEMESSEN und bekommt eine eigene Kette CUDA -> CPU.
+    # Anlass war der Zeitanteil: auf dem CUDA-Testnotebook (RTX 2060, i7-10750H,
+    # onnxruntime-gpu 1.26.0, Image 0.1.0.505-cuda) steckten 51,13 von 64,85 s je
+    # ERNTE-EREIGNIS = 78,8 % allein in dieser einen CPU-Stufe, waehrend Detektion,
+    # Pose und Embedding desselben Laufs nachweislich auf cuda:0 liefen und die
+    # Karte sich bei 7 % Median-Auslastung langweilte. Gemessen am selben Tag:
+    #   Norm je Bild, Batch 1, echte 112er-Crops   CPU 0,554 s   CUDA 0,0159 s (x34,8)
+    #   Kreuzprobe am Gesichtsreiz (3 Skalen)      max |dNorm| 0,00000
+    #   64 echte Crops, Norm-Spanne 16,80..26,01   max |dNorm| 0,00002
+    # 0,00002 liegt Faktor 5000 unter NORM_KREUZ_MAX und weit unter dem Versatz der
+    # NPU (0,013), die die Kette schon traegt — die CUDA-Session rechnet fp32 und
+    # hat das fp16-Problem der iGPU nicht, deshalb braucht diese Stufe auch keine
+    # Praezisions-Achse (der CUDA-EP kennt sie ohnehin nicht). End-to-End gefahren
+    # faellt ein Ernte-Ereignis von 64,85 auf 11,78 s bei Zeile fuer Zeile
+    # identischen Zaehlern (144 Detektionen / 124 Kandidaten / 91 M / 27 S / 74 V).
+    # Belegt in backups/bau_0505/analyse_ernte_gpu/bericht.md, Abschnitte 1a/2/5.
+    # ROCm/MIGraphX bleibt UNGEMESSEN (kein Geraet hier) und damit auf CPU — das
+    # ist keine Aussage ueber AMD, sondern das Fehlen einer Messung.
     #
     # EICHBASIS DER SCHWELLE — gemessen 24.08.2026 auf dieser Maschine (LXC suslik
     # .168, Core Ultra 9 285H, iGPU + NPU, OpenVINO-EP, adaface_ir101, Batch 1,
@@ -1045,7 +1428,39 @@ class NormMass:
     #    Rueckfall geht auf GPU_FP32 (0,0000095), nicht auf die CPU.
     NORM_KREUZ_MAX = 0.10
     NORM_KREUZ_SKALEN = (0.7, 1.0, 1.4)
+    # Die Intel-Kette. Seit .506 ist sie NICHT mehr die Kette schlechthin, sondern
+    # die des openvino-Backends — gefragt wird ueber kette_fuer_backend(). Sie bleibt
+    # als eigene Konstante stehen, weil sie die gemessene Reihenfolge TRAEGT (die
+    # Eich-Tabelle oben gehoert zu genau diesen vier Stufen) und weil Gate und
+    # Modell-Vertrag sie namentlich zitieren.
     NORM_KETTE = ("NPU", "GPU", "GPU_FP32", "CPU")
+
+    @classmethod
+    def kette_fuer_backend(cls, kind):
+        """Die Geraete-Kette der Feature-Norm fuer EIN ML-Backend (kind aus
+        resolve_backend) — DIE eine Quelle dafuer, welche Stufen die Norm auf dieser
+        Maschine ueberhaupt probiert (qs_ebenen-Regel: keine zweite verstreute
+        Aufzaehlung; core.rechenprobe.norm_geraet fragt genau hier).
+
+          openvino  NORM_KETTE, unveraendert seit .336 (NPU -> GPU -> GPU_FP32 -> CPU)
+          cuda      CUDA -> CPU (.506, gemessen 05.09.2026, s. GERAETEWAHL oben)
+          sonst     nur CPU — migraphx/ROCm ist ungemessen, und ein cpu-Backend hat
+                    per Definition keinen Beschleuniger, den die Norm nehmen darf.
+
+        BEWUSSTE VERHALTENSAENDERUNG .506, damit sie niemanden ueberrascht: bis .505
+        lief diese Kette fuer JEDES Backend, die Norm griff also auch dann nach NPU
+        und iGPU, wenn der Nutzer als Backend ausdruecklich `cpu` gewaehlt hatte.
+        Auf dem cpu-Image war das folgenlos (ohne OpenVINO-EP endete die Kette
+        ohnehin auf CPU); auf dem gpu-Image mit Backend `cpu` rechnete die Norm
+        seither auf der NPU. Jetzt folgt sie der Backend-Wahl. Wer die alte Stufe
+        dort weiter will, setzt SUSLIK_NORM_DEVICE (das erzwingt weiterhin JEDES
+        Geraet, auch quer zum Backend)."""
+        k = str(kind or "").strip().lower()
+        if k == "openvino":
+            return cls.NORM_KETTE
+        if k == "cuda":
+            return ("CUDA", "CPU")
+        return ("CPU",)
 
     def __init__(self, modell=None, device=None):
         import onnxruntime as ort
@@ -1120,17 +1535,47 @@ class NormMass:
 
     @classmethod
     def _feature_norm_session(cls, pfad, device="CPU", roh=None):
-        """Session fuer ein Geraet: CPU = CPUExecutionProvider; NPU/GPU/GPU_FP32 =
-        OpenVINO-EP, nur wenn der EP da ist, der Geraeteknoten existiert und der
-        Provider WIRKLICH bindet (sonst ValueError — der Aufrufer geht die Kette
-        weiter). GPU_FP32 ist ein Pseudo-Geraet (NORM_PSEUDO_GERAETE): dasselbe
-        device_type GPU, aber mit precision=FP32 statt der Voreinstellung fp16."""
+        """Session fuer ein Geraet: CPU = CPUExecutionProvider; CUDA = CUDA-EP mit
+        CPU-Rueckfall in der Provider-Liste; NPU/GPU/GPU_FP32 = OpenVINO-EP, nur wenn
+        der EP da ist, der Geraeteknoten existiert und der Provider WIRKLICH bindet
+        (sonst ValueError — der Aufrufer geht die Kette weiter). GPU_FP32 ist ein
+        Pseudo-Geraet (NORM_PSEUDO_GERAETE): dasselbe device_type GPU, aber mit
+        precision=FP32 statt der Voreinstellung fp16."""
         import onnxruntime as ort
         roh = roh if roh is not None else cls._graph_bytes(pfad)
         dev = str(device or "CPU").upper()
         if dev == "CPU":
             return ort.InferenceSession(roh, providers=["CPUExecutionProvider"],
                                         sess_options=_ort_thread_opts())
+        if dev == "CUDA":
+            # .506 (05.09.2026): der CUDA-Zweig. BEWUSST OHNE zwei OpenVINO-Zutaten,
+            # die hier nichts zu suchen haetten: kein Geraeteknoten-Vorcheck (der
+            # faengt bei OpenVINO den Treiber-Spam eines chancenlosen Versuchs ab —
+            # CUDA bindet oder bindet nicht, und genau das prueft die Wache unten)
+            # und kein cache_dir (Kompilat-Cache ist eine OpenVINO-Sache).
+            # Provider-Liste wortgleich _ort_session: Beschleuniger PLUS CPU-
+            # Rueckfall, sonst bricht der Bau, sobald EIN Graph-Knoten nicht auf dem
+            # EP laeuft. Still wird der Rueckfall dadurch nicht — er faellt der
+            # Bind-Pruefung auf.
+            if "CUDAExecutionProvider" not in ort.get_available_providers():
+                raise ValueError(f"{dev}: CUDA EP not available")
+            # Die GERAETENUMMER steht nicht im Namen der Norm-Stufe (die heisst nur
+            # "CUDA"), sondern im Backend des Prozesses — dieselbe Quelle, aus der
+            # sich der Embedder bedient (_ort_session, cuda-Zweig). Quer zum
+            # Backend erzwungen (SUSLIK_NORM_DEVICE=CUDA auf einer OV-Maschine)
+            # gibt es keine Nummer, dann gilt Geraet 0 wie dort.
+            _kind, _dev = resolve_backend(None)
+            try:
+                _did = int(_dev) if _kind == "cuda" else 0
+            except (TypeError, ValueError):
+                _did = 0
+            s = ort.InferenceSession(
+                roh, providers=[("CUDAExecutionProvider", {"device_id": _did}),
+                                "CPUExecutionProvider"],
+                sess_options=_ort_thread_opts())
+            if "CUDAExecutionProvider" not in s.get_providers():
+                raise ValueError(f"{dev}: provider did not bind")
+            return s
         if "OpenVINOExecutionProvider" not in ort.get_available_providers():
             raise ValueError(f"{dev}: OpenVINO EP not available")
         import glob as _glob
@@ -1171,16 +1616,19 @@ class NormMass:
 
     @classmethod
     def _session_waehlen(cls, pfad, device=None):
-        """Kette NPU -> GPU -> GPU_FP32 -> CPU (NORM_KETTE; oder erzwungenes Geraet
-        ueber device=/SUSLIK_NORM_DEVICE): OV-Sessions bestehen eine Kreuzprobe gegen
-        CPU (|dNorm| <= NORM_KREUZ_MAX auf dem gepinnten Gesichtsreiz), sonst LAUT
-        weiter zur naechsten Stufe. Die GPU-Stufen tragen Intel-Systeme OHNE NPU,
-        GPU_FP32 faengt Geraete auf, deren fp16-Rechnung die Norm verschiebt
-        (Begruendung und Messwerte im GERAETEWAHL-Kommentar oben).
+        """Die Kette DIESES Backends (kette_fuer_backend: Intel NPU -> GPU ->
+        GPU_FP32 -> CPU, NVIDIA CUDA -> CPU, sonst CPU; oder ein erzwungenes Geraet
+        ueber device=/SUSLIK_NORM_DEVICE): JEDE Nicht-CPU-Session besteht eine
+        Kreuzprobe gegen CPU (|dNorm| <= NORM_KREUZ_MAX auf dem gepinnten
+        Gesichtsreiz), sonst LAUT weiter zur naechsten Stufe. Die GPU-Stufen tragen
+        Intel-Systeme OHNE NPU, GPU_FP32 faengt Geraete auf, deren fp16-Rechnung die
+        Norm verschiebt (Begruendung und Messwerte im GERAETEWAHL-Kommentar oben).
         -> (session, geraetename)."""
         roh = cls._graph_bytes(pfad)
         wunsch = (device or os.environ.get("SUSLIK_NORM_DEVICE") or "").strip().upper()
-        kette = (wunsch,) if wunsch else cls.NORM_KETTE
+        # Ohne Zwang entscheidet das ML-Backend des Prozesses, welche Stufen es
+        # ueberhaupt gibt (.506) — nicht mehr eine feste Klassenkonstante fuer alle.
+        kette = (wunsch,) if wunsch else cls.kette_fuer_backend(resolve_backend(None)[0])
         if "CPU" not in kette:
             kette = tuple(kette) + ("CPU",)
         cpu = None
@@ -1350,11 +1798,26 @@ class StrukturMass:
             import onnxruntime as ort
             ort.set_default_logger_severity(3)
             from insightface.model_zoo import get_model
-            self._m = get_model(pfad, providers=["CPUExecutionProvider"])
-            self._m.prepare(ctx_id=-1)
-            # THREAD-KAPPUNG (QS-Fund 22.08.): get_model() laeuft an
-            # _ort_thread_opts vorbei, die insightface-Session traegt also den
-            # ungekappten Default-Pool. Gemessen im Prod-Container, 15 Laeufe je
+            # .505 (E3c, 05.09.2026, Widerleger W-E3 SCHWER 1): auch DIESER
+            # Init laeuft in die Kappungs-Klammer, wie Embedder.__init__ seit
+            # E3b. Bis hierher deckte die Klammer nur den Embedder, und die
+            # Session hier blieb nackt — sie entsteht in JEDEM Worker
+            # (worker.py) und beim Sammeln (anlernen.py); gemessen 8
+            # pthread_setaffinity-Zeilen allein aus diesem Konstruktor, unter
+            # taskset auf 3 Kernen. prepare() ist mitgeklammert, gleiche
+            # Begruendung wie im Embedder (set_providers baut die native
+            # Session neu; hier tote Zeile, in fremden Baeumen Versicherung).
+            with _insightface_sessions_gekappt():
+                self._m = get_model(pfad, providers=["CPUExecutionProvider"])
+                self._m.prepare(ctx_id=-1)
+            # THREAD-KAPPUNG (QS-Fund 22.08.): der Ersatz NACH dem Bau bleibt —
+            # die Klammer oben gibt der insightface-Session die ALLGEMEINE
+            # Ableitung (erlaubte Kerne), fuer dieses 5-MB-Modell ist aber 2 die
+            # gemessen beste Stufe. Neu seit E3c ist nur, dass der zu grosse
+            # Pool gar nicht mehr ENTSTEHT: vorher baute insightface hier eine
+            # Session nach hardware_concurrency() des WIRTS, die eine
+            # Affinitaets-Zeile je nicht erlaubtem Kern kostete und gleich
+            # darauf verworfen wurde. Gemessen im Prod-Container, 15 Laeufe je
             # Stufe, Ergebnis bitgleich (max |dLandmark| 0,000000):
             #   default  11,0 ms Wanduhr / 125,8 CPU-ms
             #   1 Thread  5,1 ms /  13,1 CPU-ms

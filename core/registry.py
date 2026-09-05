@@ -493,6 +493,42 @@ SUPPORT_BEREICHE = {
                            "fetches one file or one folder (as tar.gz); "
                            "anything under config/ is served masked only"},
 }
+# DIE ZWEI AKTIONS-ENDPUNKTE stehen ABSICHTLICH NICHT in dieser Tabelle: sie
+# holen nichts, also haben sie weder Wurzel noch Groesse, und der Deckungs-
+# Vertrag (Inventar == Handler == QS-Liste, tools/qs.sh) gilt fuer BEREICHE.
+# Sie sind hier trotzdem benannt, damit wer die Support-API liest, sie findet:
+#
+#   POST /support/restart      — Fern-Neustart des Dienstes.
+#   POST /support/einspielen   — Ereignisse (erneut) durch die Erkennung
+#       schicken. Drei Wege, alle mit demselben Torwaechter:
+#         {"event": <id>}                  ein Ereignis der verbundenen Frigate,
+#         {"clip": <pfad>, "kamera": …}    ein Clip unter data_dir,
+#         {"start": …}                     ein ZEITFENSTER (der Nachlauf).
+#       Fenster (.505, 05.09.2026): "ende" begrenzt nach oben, "max" begrenzt
+#       die Zahl (>= 1, gegen einspiel_deckel geklemmt, die Antwort sagt es dann
+#       in "geklemmt_auf"), "richtung" waehlt das Ende des Fensters — "vor" die
+#       aeltesten ab start (Werkswert), "zurueck" die juengsten vor ende. Bei
+#       "zurueck" ist "start" OPTIONAL (Untergrenze ist dann der Seiten-Deckel),
+#       bei "vor" Pflicht. Beide Zeitgrenzen sind bei Frigate exklusiv; der
+#       Endpunkt rechnet das heraus, damit ein Ereignis exakt auf "start"
+#       dabei ist und kein Zeitstempel-Zwilling an einer Seitengrenze verloren
+#       geht. Geblaettert wird bis zum Ende des Fensters, hoechstens 51 Seiten —
+#       greift dieser Deckel, sagt die Antwort "fenster_unvollstaendig"; seit
+#       dem .505-Nachzug sagt sie es auch, wenn eine Seite keine einzige neue
+#       ID mehr bringt (identische Zeitstempel, oder die Instanz ignoriert
+#       "before"), und bei "richtung": "vor" steht dann zusaetzlich in "msg",
+#       dass die gelieferten NICHT die aeltesten des Fensters sind.
+#       "kamera" ist OPTIONAL; ohne sie gilt das Fenster fuer alle Kameras und
+#       die Antwort teilt die AUSWAHL in "je_kamera" auf. Ein Feld, das der
+#       Endpunkt nicht kennt, ist ein Fehler (400, ALLE Fremdfelder benannt) —
+#       nichts wird still verworfen. Ereignisse, die GERADE analysiert werden,
+#       bleiben unberuehrt und stehen in "uebersprungen_laufend" (einzeln: 409;
+#       dieselbe Antwort, wenn die Warteschlange am Deckel steht);
+#       "eingereiht" zaehlt nur, was wirklich in die Warteschlange kam. Lag ein
+#       Ereignis dort schon, steht es in "schon_in_schlange" — ein Erfolg ohne
+#       zweiten Eintrag (bis zum .505-Nachzug unerreichbar, s. support_api.md).
+#       Der Fortschritt steht danach unter /health ("rueckstau_url").
+#       Feldsemantik ausfuehrlich: analysen/support_api.md.
 # Ordner unter data_dir, deren Dateien NUR MASKIERT hinausgehen (der
 # Vollbaum-Bereich erreicht auch config/, und dort liegen neben config.json
 # die Alt-Store-Kopien config.json.vor_* — dieselben Secrets, anderer Name;
@@ -1335,16 +1371,19 @@ MODELL_VERTRAG = {
                   "geeicht, also 10 Punkte neben jeder Entscheidung). Gemessen wird seither "
                   "auf dem synthetischen Gesichtsreiz (face_audit.gesichtsreiz) in den drei "
                   "Kontrast-Skalen NormMass.NORM_KREUZ_SKALEN"),
-        "geraet": ("eigene Kette NPU -> GPU -> GPU_FP32 -> CPU (NormMass.NORM_KETTE) mit "
-                   "Kreuzprobe gegen CPU je Stufe; SUSLIK_NORM_DEVICE erzwingt ein Geraet. "
+        "geraet": ("eigene Kette JE BACKEND (NormMass.kette_fuer_backend, seit .506): "
+                   "openvino NPU -> GPU -> GPU_FP32 -> CPU (NormMass.NORM_KETTE), cuda "
+                   "CUDA -> CPU, sonst nur CPU — mit Kreuzprobe gegen CPU je Nicht-CPU-"
+                   "Stufe; SUSLIK_NORM_DEVICE erzwingt ein Geraet auch quer zum Backend. "
                    "GPU_FP32 ist ein Pseudo-Geraet (face_audit.NORM_PSEUDO_GERAETE): dasselbe "
                    "device_type GPU, aber precision=FP32 statt der OpenVINO-Voreinstellung "
                    "fp16 — die Stufe faengt Geraete auf, deren fp16-Rechnung die Norm "
                    "verschiebt (Feldfall Gen8-iGPU: fp16 105.276), und teilt sich den "
                    "Kompilat-Cache mit der fp16-Stufe (eigener Blob, Praezision steckt im "
-                   "Cache-Schluessel, gemessen 24.08.2026). Ohne OpenVINO-EP "
-                   "(cpu-/cuda-/rocm-Image) bleibt es by construction CPU, weil "
-                   "NormMass._feature_norm_session nur CPU oder OpenVINO kennt"),
+                   "Cache-Schluessel, gemessen 24.08.2026). Die CUDA-Stufe rechnet fp32 und "
+                   "hat keine Praezisions-Achse (gemessen 05.09.2026 auf RTX 2060: 0,0159 s "
+                   "je Bild gegen CPU 0,554 s, max |dNorm| 0,00002 auf 64 echten Crops). "
+                   "ROCm/MIGraphX bleibt ungemessen und damit auf CPU"),
         "geraet_mixed": None, "cpu_fest": False, "rolle": "vorrat", "pruefrang": 2,
         "soll_cpu": {"art": "norm",
                      "einheit": ("||f|| — die BETRIEBSGROESSE selbst (real 15..30, "
@@ -1364,8 +1403,10 @@ MODELL_VERTRAG = {
                   "ausgang": ("face_audit.NormMass._graph_bytes + "
                               "tester/gputest_kommandos_tokn59.md §1/§3f"),
                   "geraet": ("face_audit.NormMass (GERAETEWAHL-Absatz, NORM_KETTE, "
-                             "_session_waehlen) + face_audit.NORM_PSEUDO_GERAETE, "
-                             "gelesen 2026-08-24 (FP32-Stufe)"),
+                             "kette_fuer_backend, _session_waehlen) + "
+                             "face_audit.NORM_PSEUDO_GERAETE, gelesen 2026-08-24 "
+                             "(FP32-Stufe) / 2026-09-05 (CUDA-Stufe, Messbericht "
+                             "backups/bau_0505/analyse_ernte_gpu/bericht.md §5)"),
                   "bezug": ("core.benennung.NORM_LATTE + verifyd-Config-Defaults + "
                             "face_audit.NormMass.NORM_KREUZ_MAX (Eich-Messtabelle im "
                             "Kommentar dort), gelesen 2026-08-24")},

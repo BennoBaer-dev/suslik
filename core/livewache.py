@@ -3602,9 +3602,22 @@ def _hoehe_lesen(wert, log, name):
 
 
 def max_slots_lesen(cfg, log=print):
-    """Config-Store `live.max_slots` -> harter Slot-Deckel der Engine.
+    """Harter Slot-Deckel der Engine -> int, geklemmt auf 1..MAX_SLOTS_WAND.
     Gleiches Fail-safe-Muster wie guards_lesen: klemmen statt crashen,
-    jeder Eingriff laut. Default bleibt die gemessene Wand HART_MAX_SLOTS."""
+    jeder Eingriff laut. Default bleibt die gemessene Wand HART_MAX_SLOTS.
+
+    ZWEI Quellen, in dieser Rangfolge (.502, User 04.09.):
+      1. `live_max_slots` — der NORMALE Config-Wert (Whitelist, Advanced-Seite).
+         Seit .502 der Bedienweg: bis dahin gab es fuer den Deckel ueberhaupt
+         keinen, nur Hand-Edit der Store-Datei. Genau daran stand ein Feldsystem
+         mit reichlich Reserve auf fuenf Waechtern fest.
+      2. `live.max_slots` — die alte verschachtelte Fassung. Bleibt gueltig,
+         damit eine Bestands-Installation ihren gesetzten Wert behaelt; sie
+         gewinnt NICHT gegen eine ausdrueckliche neue Angabe."""
+    flach = cfg.get("live_max_slots")
+    if flach is not None:
+        return int(_zahl_lesen(flach, HART_MAX_SLOTS, 1, MAX_SLOTS_WAND,
+                               log, "live_max_slots"))
     live = cfg.get("live") or {}
     if not isinstance(live, dict):
         return HART_MAX_SLOTS
@@ -6797,6 +6810,12 @@ class Engine:
                 "letzter_trigger_ts": k.letzter_trigger_wand,
                 "bilder": k.bilder, "eingereiht": k.eingereiht,
                 "geprueft": k.geprueft,          # WIRKLICH detektiert (Lens-A M2)
+                # .502 (User 04.09.): die Zahl der wirklich gefundenen Gesichter
+                # gehoert neben Auftritte/Trigger/Meldungen in die Kachel — sie
+                # ist die Basis, auf der die drei anderen ueberhaupt entstehen.
+                # k.funde zaehlt bereits die ECHTEN Funde je Bild (nach dem
+                # Fehldetektions-Sieb), sie wurde bisher nur nicht ausgeliefert.
+                "funde": k.funde,
                 "trigger": k.burst.treffer, "gemeldet": k.gemeldet,
                 "verworfen_pose": k.verworfen_pose,
                 "verarbeitungs_fehler": k.verarbeitungs_fehler,

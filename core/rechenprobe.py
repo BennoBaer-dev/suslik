@@ -223,16 +223,27 @@ def geraete_karte(vertrag, kind, dev, norm_geraet=None):
     `geraet_mixed`, welches Teil-Geraet es traegt (Deckung gegen das mixed-Dict in
     face_audit.Embedder._to_backend prueft registry.modellvertrag_deckung).
 
-    norm_geraet: das Geraet, das die Norm-KETTE als erstes versucht (NORM_KETTE bzw.
-    SUSLIK_NORM_DEVICE). Die Kette entscheidet zur Laufzeit selbst per Kreuzprobe; die
-    Probe misst genau die Stufe, an der sie das tut. None = CPU."""
+    norm_geraet: das Geraet, das die Norm-KETTE als erstes versucht
+    (NormMass.kette_fuer_backend bzw. SUSLIK_NORM_DEVICE). Die Kette entscheidet zur
+    Laufzeit selbst per Kreuzprobe; die Probe misst genau die Stufe, an der sie das
+    tut. None = CPU."""
     karte = {}
     for name, v in (vertrag or {}).items():
         if v.get("cpu_fest"):
             karte[name] = ("cpu", None)
         elif v.get("rolle") == "vorrat":
             g = str(norm_geraet or "CPU").upper()
-            karte[name] = ("cpu", None) if g == "CPU" else ("openvino", g)
+            if g == "CPU":
+                karte[name] = ("cpu", None)
+            elif g == "CUDA":
+                # .506 (05.09.2026): die Norm-Kette kennt seit heute auch NVIDIA. Der
+                # Stufenname der Kette ist die EP-FAMILIE ("CUDA"), die Geraetenummer
+                # steht im Backend — genau die Form (kind, nummer), die der echte
+                # Session-Bauer erwartet (worker._rechenprobe_bauer). Quer zum
+                # Backend erzwungen gilt Geraet 0, wie in NormMass selbst.
+                karte[name] = ("cuda", dev if kind == "cuda" else "0")
+            else:
+                karte[name] = ("openvino", g)
         elif kind == "openvino" and str(dev).upper() == "MIXED":
             karte[name] = ("openvino", v.get("geraet_mixed") or "GPU")
         else:
@@ -244,14 +255,15 @@ def geraete_karte(vertrag, kind, dev, norm_geraet=None):
 def norm_geraet(knoten_da=None):
     """Die Stufe der Norm-KETTE, die auf DIESER Maschine als erste versucht wird.
 
-    Die Kette (NormMass.NORM_KETTE: NPU -> GPU -> GPU_FP32 -> CPU) entscheidet zur
-    Laufzeit selbst per Kreuzprobe, welche Stufe sie nimmt. Die Probe sagt NICHT voraus,
-    wie das ausgeht — sie misst die Stufe, an der die Kette es entscheiden wird, und
-    liefert damit genau die Zahl, die dort ueber "Geraet oder CPU" befindet.
-    SUSLIK_NORM_DEVICE erzwingt eine Stufe und gewinnt deshalb auch hier.
+    Die Kette dieses Backends (NormMass.kette_fuer_backend — Intel NPU -> GPU ->
+    GPU_FP32 -> CPU, NVIDIA CUDA -> CPU, sonst CPU) entscheidet zur Laufzeit selbst per
+    Kreuzprobe, welche Stufe sie nimmt. Die Probe sagt NICHT voraus, wie das ausgeht —
+    sie misst die Stufe, an der die Kette es entscheiden wird, und liefert damit genau
+    die Zahl, die dort ueber "Geraet oder CPU" befindet. SUSLIK_NORM_DEVICE erzwingt
+    eine Stufe und gewinnt deshalb auch hier.
 
     knoten_da(dev) -> bool ist injizierbar (Gate/Test); Default fragt die echten
-    Geraeteknoten ueber face_audit.geraete_knoten_muster ab UND ob der OpenVINO-EP
+    Geraeteknoten ueber face_audit.geraete_knoten_muster ab UND ob der EP der Familie
     ueberhaupt im Image steckt. Beides gehoert zusammen: das cpu-Image sieht auf einer
     Intel-Maschine dieselben Geraeteknoten wie das gpu-Image, kann sie aber nicht
     benutzen — die Kette faellt dort by construction auf CPU, und die Probe darf das
@@ -266,13 +278,25 @@ def norm_geraet(knoten_da=None):
         def knoten_da(dev):
             try:
                 import onnxruntime as ort
-                if "OpenVINOExecutionProvider" not in ort.get_available_providers():
-                    return False
+                vorhanden = ort.get_available_providers()
             except Exception:                                # noqa: BLE001
+                return False
+            if dev == "CUDA":
+                # .506: die CUDA-Stufe der Norm-Kette. Der EP allein genuegt nicht —
+                # das cuda-Image bringt ihn auf JEDER Maschine mit, auch ohne Karte.
+                # Gefragt wird deshalb zusaetzlich nach dem Geraeteknoten der
+                # NVIDIA-Familie, genau wie der echte Session-Bauer der Probe es tut
+                # (worker._rechenprobe_bauer). Ohne Knoten meldet die Probe CPU — und
+                # das ist auch, was die Kette dort real tut (der Bau bindet nicht).
+                if "CUDAExecutionProvider" not in vorhanden:
+                    return False
+                muster = fa.geraete_knoten_muster("NVIDIA")
+                return bool(muster) and bool(_glob.glob(muster))
+            if "OpenVINOExecutionProvider" not in vorhanden:
                 return False
             muster = fa.geraete_knoten_muster(dev)
             return bool(muster) and bool(_glob.glob(muster))
-    for dev in fa.NormMass.NORM_KETTE:
+    for dev in fa.NormMass.kette_fuer_backend(fa.resolve_backend(None)[0]):
         if dev == "CPU" or knoten_da(dev):
             return dev
     return "CPU"
