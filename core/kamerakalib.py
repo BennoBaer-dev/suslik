@@ -243,8 +243,8 @@ def uebersicht_daten(cfg, kameras):
     und sind als solche markiert: ihre Werte still verschwinden zu lassen
     waere ein Verlust ohne Ansage.
 
-    -> [{name, in_frigate, vorrat_n, vorrat_ts, det, e, t, eigene,
-         kat_e, kat_t, kat_quelle}]"""
+    -> [{name, in_frigate, vorrat_n, vorrat_ts, vorrat_ts_min, det, e, t,
+         eigene, kat_e, kat_t, kat_quelle}]"""
     from core import livewache as _lw
     g_alle = guards(cfg)
     latten = katalog_latten(cfg)
@@ -258,6 +258,11 @@ def uebersicht_daten(cfg, kameras):
         anz = anzeige_latte(cfg, name, guard=g)
         kat = katalog_werte(latten, name)
         vorrat = _lw.kalib_lesen(cfg, name)
+        # Nur GESTEMPELTE Eintraege: ts 0 heisst "kein Zeitstempel" (Alt-Zeile,
+        # kaputter Wert) und ist kein Zeitpunkt von 1970. Fuer das Maximum
+        # aendert das nichts, fuer das Minimum alles — eine einzige 0 machte
+        # den Ring sonst "seit 1970 gefuellt".
+        _ts = [z for z in (float(e.get("ts") or 0) for e in vorrat) if z > 0]
         aus.append({
             "name": name,
             "in_frigate": name in bekannt,
@@ -265,7 +270,12 @@ def uebersicht_daten(cfg, kameras):
             # Der juengste Eintrag des Rings = "zuletzt aktualisiert". Aus den
             # Daten gerechnet, nicht aus einer Datei-mtime: der Ring wird beim
             # Kappen neu geschrieben, die mtime waere dann eine Luege.
-            "vorrat_ts": max((e["ts"] for e in vorrat), default=0.0),
+            "vorrat_ts": max(_ts, default=0.0),
+            # .507: der AELTESTE Eintrag — mit dem juengsten zusammen der
+            # Zeitraum, ueber den der Ring reicht. min/max statt "erste/letzte
+            # Zeile", weil der Index nach Schreib-Reihenfolge sortiert ist und
+            # eine Uhr-Korrektur diese Reihenfolge brechen kann.
+            "vorrat_ts_min": min(_ts, default=0.0),
             "det": anz["det"], "e": anz["e"], "t": anz["t"], "p": anz["p"],
             # "eigene": traegt diese Kamera ueberhaupt einen eigenen Wert?
             # Genau die Frage, die die Kachel beantworten muss — sonst sieht

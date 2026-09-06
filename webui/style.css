@@ -661,6 +661,16 @@ a.pchip:hover, a.badge.warn:hover { filter: brightness(1.15); }
 .pass-thumb-schwach{opacity:.5}
 .pass-thumb-schwach:hover{opacity:.9}
 .pass-thumbs-rest{align-self:center;font-size:11px;color:var(--dim);padding:0 6px}
+/* .507 B3: Kachel = Bild + Pruef-Knopf + eigenes Status-Feld (der Knopf meint
+   GENAU dieses Ereignis; ein gemeinsames Statusfeld je Reihe haette bei zwoelf
+   Kacheln zwoelf Poll-Schleifen in dieselbe Zeile schreiben lassen). Die
+   Kamerafolge klappt ihre Mitte hinter ein "+N" auf. */
+.pass-kachel{display:flex;flex-direction:column;align-items:center;gap:2px}
+.pass-kachel .lb-status{font-size:11px;max-width:140px;text-align:center}
+.pass-knopf-klein{padding:1px 7px;font-size:11px;font-weight:400;gap:0}
+.folge-mehr{display:inline}
+.folge-mehr summary{display:inline;cursor:pointer;list-style:none}
+.folge-mehr summary::-webkit-details-marker{display:none}
 /* .32x: mehrere Personen je Durchgang gleichwertig (User 22.08.) --------------------- */
 .pass-personen{display:flex;gap:10px;flex-wrap:wrap}
 .pass-person{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:2px;
@@ -930,12 +940,19 @@ body:not(.easy) .nur-easy { display: none; }
    Gesicht als Icon, Klick zeigt alle dahinter) + Schritt-Zeilen. */
 .fc-avatare { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0; }
 .fc-avatar { display:block; text-align:center; text-decoration:none;
-  color:var(--text); font-size:11px; width:56px; }
+  color:var(--text); font-size:11px; width:72px; }
 .fc-avatar img { width:52px; height:52px; border-radius:50%;
   object-fit:cover; object-position:top; border:2px solid var(--border); }
 .fc-avatar:hover img { border-color:var(--accent); }
-.fc-avatar span { display:block; overflow:hidden; text-overflow:ellipsis;
-  white-space:nowrap; }
+/* .507 B4/F4: der Name endete bis .506 in einer Ellipse ("Alexand…") — im
+   Gitter stand damit oft nur ein Namensanfang, und der volle Name nur im
+   title. Jetzt bricht er um (zwei Zeilen tragen die meisten Namen), ein
+   langes Einzelwort notfalls im Wort. Die Kachel ist 72 px breit; auch bei
+   360 px Fensterbreite passen drei nebeneinander in die schmalste Karte
+   (294 px Innenmass), es entsteht kein Quer-Scroll. */
+.fc-avatar span { display:block; line-height:1.25;
+  overflow-wrap:break-word;   /* Rueckfall aelterer Mobil-Browser */
+  overflow-wrap:anywhere; }
 .fc-schritt { display:flex; gap:10px; margin:7px 0; font-size:13.5px; }
 .fc-schritt b { background:var(--accent); color:var(--on-ink);
   border-radius:50%; width:22px; height:22px; flex:0 0 22px;
@@ -984,6 +1001,8 @@ body:not(.easy) .nur-easy { display: none; }
    nur Optik. */
 .fs-block { margin: 8px 0 2px; max-width: 440px; }
 .fs-msg { margin-bottom: 4px; }
+/* .507 B3: Start + Dauer des Laufs (nur wenn der Dienst sie kennt). */
+.fs-meta { font-size: 11px; margin-bottom: 4px; }
 .fs-total { display: block; height: 10px; border: 1px solid var(--border);
   border-radius: 5px; background: var(--surface-2); overflow: hidden; }
 .fs-fill { display: block; height: 100%; background: seagreen;

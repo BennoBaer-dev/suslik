@@ -10,9 +10,20 @@ import urllib.parse
 from core.sprache import t
 
 
-def render(personen, data_dir):
-    """-> Seiten-INHALT (layout/banner bleiben beim Handler). personen = master_persons(cfg)."""
-    opts = "".join(f"<option>{html.escape(p)}</option>" for p in personen)
+def render(personen, data_dir, gefiltert=False, alle=None):
+    """-> Seiten-INHALT (layout/banner bleiben beim Handler). personen = master_persons(cfg).
+
+    .507 B4 (Faces -> Klick fuehrte ins Leere): bei ?person= reicht der Handler
+    die geprueft Ein-Element-Liste herein und setzt gefiltert=True — dann steht
+    der Weg zurueck ("show all faces") ganz oben und die Galerie VOR den
+    personenunabhaengigen Karten (Upload/Import bleiben sichtbar, E-P11: wer
+    aus dem Avatar-Gitter kommt, will zuerst die Bilder DIESER Person sehen).
+    alle = volle Personenliste fuer das Auswahlfeld der Upload-Karte (None =
+    wie personen). Die Karte ist personenunabhaengig; schruempfte ihr Feld
+    still auf die gefilterte Person, verloere die Seite eine Faehigkeit, ohne
+    es zu sagen (Fehlerklasse "stiller Verlust")."""
+    opts = "".join(f"<option>{html.escape(p)}</option>"
+                   for p in (personen if alle is None else alle))
 
     def _js(s):        # JS-String-Kontext in onclick (s. Qualitaet-Route)
         return html.escape(s.replace("\\", "\\\\").replace("'", "\\'"), quote=True)
@@ -27,12 +38,18 @@ def render(personen, data_dir):
         thumbs = "".join(
             f'<span style="display:inline-block;text-align:center;margin:3px;vertical-align:top">'
             f'<img src="/refs/{urllib.parse.quote(pp)}/{urllib.parse.quote(b)}" '
-            f'style="height:82px;border-radius:4px;display:block">'
+            # .507 B4/F3: eine Person kann dutzende Referenzen haben, die
+            # volle Liste hunderte — bis .506 luden sie alle sofort (Hoehe
+            # steht im style, der Umbruch bleibt also gleich).
+            f'style="height:82px;border-radius:4px;display:block" loading="lazy">'
             f'<button class="gtb" style="font-size:10px;padding:0 6px;margin-top:2px" '
             f'onclick="refEntfernen(\'{_js(pp)}\',\'{_js(b)}\',this)">'
             f'{t("gesichter.galerie.knopf_entfernen")}</button></span>' for b in bil)
         gal.append(
-            f'<div class="card"><b>{html.escape(pp)}</b> — '
+            # .507 B4: id= je Personenkarte — bis .506 hatte die Galerie keine
+            # Sprungmarke, das #-Fragment von /faces lief deshalb ins Leere.
+            f'<div class="card" id="p-{urllib.parse.quote(pp, safe="")}">'
+            f'<b>{html.escape(pp)}</b> — '
             f'{t("gesichter.galerie.bildzahl", n=len(bil))} &nbsp; '
             f'<a class="gtb" href="/aehnliche?person={urllib.parse.quote(pp)}">'
             f'{t("gesichter.galerie.knopf_aehnliche")}</a> '
@@ -61,9 +78,16 @@ def render(personen, data_dir):
         f"{t('gesichter.import.knopf')}</button> "
         "<span id='ges-import-status' style='color:var(--dim)'></span><br>"
         f"<small>{t('gesichter.import.hinweis')}</small></div>")
-    return (f"<h2>{t('gesichter.titel')}</h2>"
-            f'<p><a class="gtb on" href="/lernlauf">'
+    titel = f"<h2>{t('gesichter.titel')}</h2>"
+    kopf = (f'<p><a class="gtb on" href="/lernlauf">'
             f'{t("gesichter.kopf.knopf_lernen")}</a> '
             f'<span class="dim">{t("gesichter.kopf.hinweis_lernen")}</span></p>'
-            f"<p>{t('gesichter.kopf.satz')}</p>"
-            + upload + frigate_import + "".join(gal))
+            f"<p>{t('gesichter.kopf.satz')}</p>")
+    if gefiltert:
+        # .507 B4: der Weg zurueck steht VOR der Galerie — sonst sieht der
+        # Nutzer einen Ausschnitt, ohne zu erkennen, dass es einer ist.
+        return (titel
+                + f'<p><a class="gtb" href="/gesichter">'
+                  f'{t("gesichter.alle_zeigen")}</a></p>'
+                + "".join(gal) + kopf + upload + frigate_import)
+    return titel + kopf + upload + frigate_import + "".join(gal)

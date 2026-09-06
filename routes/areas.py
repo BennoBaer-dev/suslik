@@ -16,6 +16,7 @@ Sicht-Kennung zugleich und bleiben literal; zwei Markup-Saetze ebenso."""
 import html
 import urllib.parse
 
+from core import areas as _areas          # EINE Quelle der Modus-Aufzaehlung
 from core.sprache import t, t_n
 
 
@@ -89,18 +90,73 @@ def verwaltung(areas, live_cams):
             + tabelle +
             '<p style="margin-top:.6rem">'
             f'<button class="gtb on" onclick="areasSpeichern(this)">{t("areas.verwaltung.knopf_speichern")}</button> '
-            '<span id="ar-status" style="color:var(--dim)"></span></p>')
+            # class zusaetzlich zur id (.507 B3b): der Kettungs-Block hat einen
+            # eigenen Speichern-Knopf mit eigenem Statusfeld, und das JS nimmt
+            # das Feld NEBEN dem gedrueckten Knopf. Zwei Elemente mit derselben
+            # id waeren kaputtes HTML.
+            '<span id="ar-status" class="ar-status" style="color:var(--dim)"></span></p>')
 
 
-def uebersicht(areas, live_cams):
+def kettung(areas, modi):
+    """Kettungs-Modus je Area (.507 B3b): je Bereich EIN Auswahlfeld mit den
+    drei Stufen aus core.areas.KETTUNG_MODI. Die Default-Area steht mit dabei —
+    sie ist das Komplement und hat trotzdem Kameras, die gekettet werden.
+
+    Eigener Block statt einer weiteren Spalte in `verwaltung`: die Zuweisung
+    beantwortet „welche Kamera gehoert wohin", die Kettung „wie weit reicht ein
+    Durchgang". Zwei Fragen, zwei Bloecke, und die Kamera-Tabelle behaelt genau
+    ein Auswahlfeld je Zeile.
+
+    Das Wort "Default" ist zugleich Anzeige UND Sicht-Kennung (§8.2) und bleibt
+    deshalb wie ueberall auf dieser Seite literal."""
+    namen = [(_areas.KETTUNG_DEFAULT_SCHLUESSEL, "Default")] + \
+            [(n, n) for n in sorted(areas)]
+    zeilen = []
+    for wert, anzeige in namen:
+        akt = _areas.kettung_modus(modi, None if wert ==
+                                   _areas.KETTUNG_DEFAULT_SCHLUESSEL else wert)
+        # Der Sprachschluessel wird aus der EINEN Modus-Aufzaehlung
+        # zusammengesetzt (Muster core/readmefirst.KAPITEL) — drei Literale
+        # daneben waeren das verstreute Zweit-Verzeichnis, das qs_ebenen.md
+        # verbietet. Der Deckungs-Scan des Gates liest die Aufzaehlung dafuer
+        # selbst; deshalb steht der Schluessel hier in einer Variablen und nicht
+        # als halbes Literal im t()-Aufruf (der Scan liest nur ganze Literale).
+        opts = []
+        for m in _areas.KETTUNG_MODI:
+            schluessel = "areas.kettung." + m
+            opts.append(f'<option value="{m}"'
+                        f'{" selected" if m == akt else ""}>'
+                        f'{t(schluessel)}</option>')
+        opts = "".join(opts)
+        zeilen.append(
+            f'<div class="camrow ar-zeile"><div class="camname">'
+            f'{html.escape(anzeige)}</div>'
+            f'<select class="ar-kettung" data-area="{html.escape(wert, quote=True)}">'
+            f'{opts}</select></div>')
+    # Eigener Speichern-Knopf: der Knopf der Zuweisung steht ueber diesem Block,
+    # und eine Einstellung, deren Speichern-Knopf ausserhalb des Blickfelds
+    # liegt, wird nicht gespeichert. Es ist DERSELBE Weg (ein POST fuer
+    # Zuweisung UND Modi) — nur ein zweiter Auslöser an der zweiten Stelle.
+    return (f'<h3 style="margin-top:1rem">{t("areas.kettung.titel")}</h3>'
+            f'<p class="sub">{t("areas.kettung.satz")}</p>'
+            '<div class="card">' + "".join(zeilen) + '</div>'
+            '<p style="margin-top:.6rem">'
+            f'<button class="gtb on" onclick="areasSpeichern(this)">'
+            f'{t("areas.verwaltung.knopf_speichern")}</button> '
+            '<span class="ar-status" style="color:var(--dim)"></span></p>')
+
+
+def uebersicht(areas, live_cams, modi=None):
     """/areas — eigener Hauptbereich (eigener Nav-Bereich zwischen People und Learn):
-    oben der Sprung in die Sichten, darunter die Konfiguration."""
+    oben der Sprung in die Sichten, darunter die Konfiguration.
+    modi = normalisierte Kettungs-Karte (core.areas.kettung_normalisieren)."""
     kopf = (f'<h2>{t("areas.titel")}</h2>'
             '<p class="sub">Group cameras into parts of your property (driveway, '
-            'backyard, …). An area is a <b>view</b>: passes are always grouped and '
-            'judged across the whole property — an area picks the passes that '
-            'touched it. The same chips sit on Today, Appearances and Events'
+            'backyard, …). An area is a <b>view</b>: it picks the passes that '
+            'touched it, and the verdict of a pass always covers all of its '
+            'cameras. Below you can also choose per area how far a pass may '
+            'reach. The same chips sit on Today, Appearances and Events'
             + (', and alerts name the area of the camera' if areas else '') + '.</p>')
     sprung = ((f'<p class="sub" style="margin-top:.4rem">{t("areas.kopf.sprung")}</p>'
                + chips(areas, "", "/heute")) if areas else '')
-    return kopf + sprung + verwaltung(areas, live_cams)
+    return kopf + sprung + verwaltung(areas, live_cams) + kettung(areas, modi or {})

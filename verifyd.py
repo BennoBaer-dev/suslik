@@ -24,6 +24,12 @@ import yaml
 from core.pfade import WURZEL as HERE, VERIFYD_PFAD   # M0-Anker (Falle 0): eine Pfad-Quelle
 from core import areas as _areas_mod                  # Areas Stufe 1 (Sicht + Meldetext, 30.07.)
 from core import registry as _reg                     # Dateinamen-Vertrag (Issues #11/#12)
+# ZWEITER Name fuer DIESELBE Registry, ausschliesslich fuer `run_analyze`:
+# dort ist `_reg` seit .402 eine LOKALE Variable (das Erkennen-Register der
+# Kamera, `cfg["live"]["guards"][camera]`) und verdeckt den Modul-Namen. Ohne
+# den zweiten Namen wuerde `_reg.VERWURF_*` dort auf ein dict greifen — die
+# Klasse „Schatten-Import", die .186 schon einmal gekostet hat.
+from core import registry as _registry                # noqa: F401 (s. oben)
 from core import kette as _kette                      # Modulumbau R2: die Erkennungskette (Default-Kette)
 from core import melden as _melden                    # Modulumbau R3: die Meldewege (Live-Andock-API)
 from core import frames as _frames                    # .287: Clip-Debug [clipdbg] (Senke + Direkt-Zeilen; leichtgewichtig, kein cv2)
@@ -685,6 +691,11 @@ def load_config(path):
                          ("benennung_k_je_bin", 4), ("benennung_yaw_grenze", 15.0),
                          ("benennung_dup_sim", 0.75), ("benennung_vorschlag_schwelle", 0.45),
                          ("required_zones", {}), ("areas", {}),
+                         # .507 B3b: Kettungs-Modus je Area ({} = Werk, also die
+                         # eine grundstuecksweite Kette wie bis .506). Eigener
+                         # Store-Schluessel, weil die Default-Area als Komplement
+                         # nie in `areas` steht und ihren Modus trotzdem braucht.
+                         ("areas_kettung", {}),
                          # .200: Default um "erkannt"+"fremd_verdacht" erweitert. Die Kategorien
                          # steuern seither ALLE Kanaele (Pushover-Event-Alert wie bisher, NEU die
                          # Szenen-Meldungen Telegram + MQTT szene_erkannt/szene_unbekannt) — die
@@ -1573,6 +1584,16 @@ def _clip_alter_min(ende_ts, start_ts=None):
         return None
 
 
+def _verwurf_melden(info, code):
+    """E-P7 (.507): den Verwurfsgrund an den Aufrufer zurueckgeben — ueber
+    DASSELBE `info`-dict, das schon die Wartezeit traegt (W7). Ein eigener
+    Rueckgabewert haette jeden Aufrufer von `run_analyze` anfassen muessen,
+    ein Modul-Zustand waere bei mehreren Analyse-Plaetzen falsch.
+    `info=None` (Aufrufer ohne Interesse) ist erlaubt und tut nichts."""
+    if info is not None:
+        info["verwurf_grund"] = code
+
+
 def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=None,
                 koerper=False, info=None, clip_quelle="live", clip_alter_min=None,
                 puls=None):
@@ -1773,9 +1794,16 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
                        else "watchdog" if dt >= frist else "worker died")
                 lf.write(f"\nverifyd: analyze aborted ({art} after {dt:.0f}s, "
                          f"deadline {frist}s)\n")
+                _verwurf_melden(info, _registry.VERWURF_ANALYSE_NONE)
                 return None
             if not antwort.get("ok"):
                 lf.write(f"\nverifyd: analyze failed in worker: {antwort.get('fehler')}\n")
+                # E-P7 (.507): der Worker hat die Ausnahme gesehen und, wo sie
+                # eindeutig war, eingeordnet (core.frames.verwurf_grund) — ohne
+                # dieses Feld war der Feldfall H4 nicht von einem Watchdog-Riss
+                # zu unterscheiden.
+                _verwurf_melden(info, antwort.get("verwurf_grund")
+                                or _registry.VERWURF_ANALYSE_NONE)
                 return None
             # Telemetrie fuer den W2-Soak (CPU/Event, Peak-RSS) — greifbar per grep.
             # Z5: vmhwm_mb ist die SPITZE im Job (die rss_mb-Schwelle sieht nur den
@@ -1855,9 +1883,11 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
                             lf.flush()
                             continue
                         lf.write(f"\nverifyd: analyze timeout ({frist}s), aborted (process group killed)\n")
+                        _verwurf_melden(info, _registry.VERWURF_ANALYSE_NONE)
                         return None
     rp = os.path.join(event_dir, "results.jsonl")
     if not os.path.exists(rp):
+        _verwurf_melden(info, _registry.VERWURF_ANALYSE_NONE)
         return None
     with open(rp) as f:
         for line in f:
@@ -1865,6 +1895,7 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
                 return json.loads(line)
             except Exception:
                 continue      # halb geschriebene Zeile (Kill mid-write); naechste vollstaendige zaehlt
+    _verwurf_melden(info, _registry.VERWURF_ANALYSE_NONE)
     return None
 
 
@@ -2652,7 +2683,8 @@ class Analyseplaetze:
 
     KLASSEN (A1, 05.09.2026, bauplan_0505.md §1): jede Belegung traegt eine `art` —
     `analyse` (Ereignis-Analyse aus der Warteschlange), `ernte` (Lernlauf, Bruecke,
-    Kalibrier-Auffueller) oder `bg` (Sammle, Wanduhr — Kunden ab C1). Vorher stand die
+    Kalibrier-Auffueller), `bg` (Sammle, Wanduhr — Kunden ab C1) oder `interaktiv`
+    (B1 .507: der Klick, auf den ein Mensch gerade wartet). Vorher stand die
     Information im Etikett-TEXT (`"ernte:<eid>"`), und der Platzwaechter reihte jedes
     eingezogene Etikett als Ereignis neu ein: `process()` fragte Frigate nach
     `/api/events/ernte:<eid>` und drehte eine 404-Schleife. Die Klasse ist die eine
@@ -2661,7 +2693,10 @@ class Analyseplaetze:
 
     # Die EINE Aufzaehlung der Klassen (qs_ebenen.md: kein verstreutes Literal).
     # C1 bringt `bg`, C2 rechnet die Fairness N-1 je Klasse auf genau dieser Liste.
-    ARTEN = ("analyse", "ernte", "bg")
+    # B1 (.507) bringt `interaktiv`: alles, worauf ein Mensch gerade sichtbar
+    # wartet. Sie ist die einzige Klasse mit Vorrang (E-P1) — die zwei Regeln
+    # dazu stehen in `_ueber_der_latte` und `wartende_andere`, mehr nicht.
+    ARTEN = ("analyse", "ernte", "bg", "interaktiv")
 
     def __init__(self, kapazitaet=1, log=None, vorschlag=None):
         self.kapazitaet = max(1, int(kapazitaet or 1))
@@ -2814,12 +2849,22 @@ class Analyseplaetze:
 
         Die Analyse hat keine Anmeldung und damit keine Marke: sie zaehlt fuer
         jede andere Klasse IMMER als wartend. Das ist die Rangfolge „Analyse vor
-        Ernte/bg" aus dem alten BG-Gate, jetzt an einer Stelle statt an dreien."""
+        Ernte/bg" aus dem alten BG-Gate, jetzt an einer Stelle statt an dreien.
+
+        B1 (.507, E-P1): `interaktiv` zaehlt fuer jede andere Klasse EBENFALLS
+        immer — ohne den Marken-Vergleich. Sonst entschiede bei N = 4 nicht der
+        Vorrang, sondern die Anmeldereihenfolge: der Lernlauf meldet seine K
+        Abholer im Sekundentakt an, der Nutzer klickt Sekunden spaeter, seine
+        Marke ist damit die juengere, und `min(marken) < marke` haelt ihn hinter
+        einem Abholer, der laengst wartet. Genau diese Falle steht als L3 in der
+        Lueckenkritik zu .507; sie greift ausgerechnet auf der Maschine mit den
+        meisten Plaetzen, wo der Vorrang an der Latte (unten) praktisch nie
+        anschlaegt."""
         with self._mutex:
             for a, marken in self._wartend.items():
                 if a == art or not marken:
                     continue
-                if marke is None or min(marken) < marke:
+                if a == "interaktiv" or marke is None or min(marken) < marke:
                     return True
         return art != "analyse" and self._analyse_wartet()
 
@@ -2833,8 +2878,22 @@ class Analyseplaetze:
         wartende Ernte haette den einen Platz vor der Analyse), und ein
         Lernlauf-Abholer, der im Sekundentakt fragt, brachte den Ereignis-Strom
         zum Stehen. Ab N = 2 gilt die Regel symmetrisch fuer alle Klassen: die
-        Analyse laesst der Ernte einen Platz und umgekehrt."""
+        Analyse laesst der Ernte einen Platz und umgekehrt.
+
+        Die ZWEITE Ausnahme kommt mit B1 (.507, E-P1) und ist das Spiegelbild
+        der ersten: `interaktiv` wird NIE zurueckgehalten, auf keiner Kapazitaet.
+        Dahinter wartet ein Mensch vor einem Fortschrittsbalken; jede Zahl, die
+        ihn zurueckstellt, ist fuer ihn eine Sekunde ohne Erklaerung. Was der
+        Vorrang NICHT tut: verdraengen. Ein laufender Job wird nie geschossen —
+        das kostete der Lernlauf-Ernte dauerhaft ein Ereignis (`fehler`-Buchung)
+        und der Pass-Ernte ebenso (`ok:false` gilt als geerntet). Der Klick
+        bekommt den naechsten FREI WERDENDEN Platz, nicht den belegten.
+        Ehrliche Folge, die der Betreiber kennen muss: bei N = 1 haelt ein Klick
+        den Ereignis-Strom fuer die Dauer seines Jobs an, ab N = 2 faellt der
+        garantierte Analyse-Platz fuer diese Dauer auf 0."""
         if self.kapazitaet <= 1 and art == "analyse":
+            return False
+        if art == "interaktiv":
             return False
         return gehalten >= self.kapazitaet - 1
 
@@ -3124,8 +3183,9 @@ class Analyseplaetze:
 
         `eid` bleibt das lesbare Etikett wie bisher (Bestandsleser: /health,
         Support-Faelle; Nicht-Analyse-Klassen zeigen weiter `art:etikett`), `art`
-        kommt daneben — die GPU-Seite kann damit „analysis / harvest / background"
-        ausweisen, ohne den Text zu parsen."""
+        kommt daneben — die GPU-Seite kann damit die Klasse ausweisen (analysis /
+        harvest / background / interactive, Beschriftung in `routes/gpu.py`), ohne
+        den Text zu parsen."""
         with self._mutex:
             jetzt = time.monotonic()
             return {"kapazitaet": self.kapazitaet, "belegt": len(self._belegt),
@@ -3227,7 +3287,12 @@ class Service:
         self._vs_laeuft = set()                   # Personen mit laufender Bestands-Suche
         self._nachlern_lock = threading.Lock()    # schuetzt _nachlern_timer
         self._nachlern_timer = {}                 # person -> Debounce-Timer: Bestands-Suche erst nach Durchgangs-Ende (User 21.07.)
-        self._nachlern_eids = {}                  # person -> Events des laufenden Durchgangs (.308 Auto-Vorrat)
+        # .507 B2 (E-B1): `_nachlern_eids` ist ERSATZLOS entfallen. Es sammelte die
+        # bestaetigten Events eines Durchgangs je Person, allein damit die
+        # AUTOMATISCHE Pass-Ernte sie bekam. Die Automatik ist weg (Begruendung in
+        # _nachlern_lauf); den Durchgang rechnet der Klick seither serverseitig aus
+        # der Akte (`_bruecke_durchgang`), nicht aus einem Prozess-Zustand, der
+        # einen Neustart nicht ueberlebt.
         # HALTER dieses Locks (Stand C2, 05.09.2026): qs_neu_starten,
         # vorschlaege_starten, anlern_nachpruefung_starten, _sammle_fahren und der
         # Wanduhr-Roundtrip. Die ERNTE ist seit C2 KEIN Halter mehr (Lernlauf,
@@ -3613,18 +3678,19 @@ class Service:
                 self._sammel_laeuft = False
             self.log(f"scenario collection thread start error: {e}")
 
-    def _nachlern_anstossen(self, person, eid=None):
+    def _nachlern_anstossen(self, person):
         """Nach einem abgeschlossenen Durchgang mit einer erkannten BEKANNTEN Person die
         Nachlern-Vorschlaege (vorschlaege_person) automatisch aktualisieren — 'am Ende des
         Durchgangs, ohne Klick' (User 21.07.). Debounce pro Person: jeder neue Treffer setzt
         den szene_karenz_s-Timer zurueck, sodass die Suche GENAU EINMAL laeuft, wenn seit dem
         letzten Auftritt der Person die Karenz vorbei ist. Das ANWENDEN bleibt manuell (ein
         falsch zugeordnetes Gesicht wuerde die Person vergiften) — nur das Bereitstellen
-        laeuft automatisch."""
+        laeuft automatisch.
+
+        .507 B2: die Event-ID braucht dieser Anstoss nicht mehr (sie ging frueher in
+        `_nachlern_eids` fuer die automatische Pass-Ernte, s. `_nachlern_lauf`)."""
         karenz = int(self.cfg.get("szene_karenz_s", 90))
         with self._nachlern_lock:
-            if eid:
-                self._nachlern_eids.setdefault(person, set()).add(str(eid))
             alt = self._nachlern_timer.get(person)
             if alt:
                 alt.cancel()
@@ -3635,22 +3701,20 @@ class Service:
             t.start()
 
     def _nachlern_lauf(self, person, mein_timer):
+        """Der EINE Zug nach Durchgangs-Ende: die Bestands-Suche der Person.
+
+        .507 B2 (E-B1, Betreiber-Entscheid 05.09.): die AUTOMATISCHE Pass-Ernte
+        (`bruecke_vorrat`) stand bis .506 hier — sie war der einzige automatische
+        Ernte-Anlass des Dienstes und kostete auf Prod 46 Bruecken-Laeufe an einem
+        Tag (138 Ordner / 1,2 GB), fuer Bilder, die niemand angesehen hatte. Geerntet
+        wird seither NUR auf Klick, dafuer mit Vorrang (Klasse `interaktiv`) und
+        einem ehrlichen Balken. `vorschlaege_starten` bleibt: das ist die
+        Bestands-Suche ueber vorhandene Bilder, kein Clip-Job und kein Analyseplatz."""
         with self._nachlern_lock:
             if self._nachlern_timer.get(person) is not mein_timer:
                 return                                       # ein neuerer Timer hat uebernommen -> No-op (kein Doppellauf)
             self._nachlern_timer.pop(person, None)
-            eids = sorted(self._nachlern_eids.pop(person, set()))
         self.vorschlaege_starten(person)                     # async, hat eigenen _vs_laeuft-Guard
-        if eids and self.cfg.get("vorrat_aktiv"):
-            # .308 AUTO-VORRAT (runde Loesung, User 21.08.): die Pass-Ernte
-            # laeuft JETZT, nach Durchgangs-Ende — wer spaeter auf 'Check this
-            # pass' klickt, findet fertige Angebote statt zu warten.
-            try:
-                zst, txt = self.bruecke_vorrat(person, eids)
-                self.log(f"pass stock for {person}: {zst} ({len(eids)} confirmed event(s))"
-                         + (f" — {txt}" if zst == "fehler" else ""))
-            except Exception as e:
-                self.log(f"pass stock for {person} failed to start: {type(e).__name__}: {e}")
 
     # Modulumbau R3: Szenen-Telegram + Transcode-Lauf leben in core/melden.py
     # (Docstrings/Begruendungen dort). Hier nur Einhaenge: Drossel-Zustand
@@ -3927,42 +3991,49 @@ class Service:
         except Exception as e:
             self.log(f"cleanup: learning-run retention failed: {e}")
 
-        # --- Bruecken-Ernten (B<hash>) und der Papierkorb: beides kennt die
-        # Lernlauf-Logik nicht, weil dort keine Anker-Zeilen haengen. Auf Prod
-        # waren das 55 Ordner (135 MB) plus ein nie geleerter trash (76 MB).
-        # B-Laeufe sind ein Cache je Person (werden bei gleichen Events erneut
-        # benutzt) — deshalb nach Alter, nicht pauschal.
+        # --- Bruecken-Ernten (B<hash>): der Pass-Check legt je Person und
+        # Durchgang einen Ordner an; die Lernlauf-Logik kennt ihn nicht, weil
+        # dort keine Anker-Zeilen haengen. Auf Prod waren das 138 Ordner
+        # (1,2 GB). Bis .506 raeumte NUR der Klick sie auf (aus bruecke_vorrat
+        # heraus, mit einer eigenen 7-Tage-Frist neben der konfigurierten) —
+        # ohne die Automatik waere das immer seltener passiert. Seit .507 (E-P4)
+        # ist der Nachtjob die EINE Stelle und `lernlauf_retention_d` die EINE
+        # Frist; die Loeschregel selbst steht weiter in _bruecke_alt_raeumen.
+        try:
+            nb, mb = self._bruecke_alt_raeumen(dd)
+            if nb:
+                self.log(f"cleanup: {nb} stale pass-check folder(s) older than "
+                         f"{int(self.cfg.get('lernlauf_retention_d') or 0)}d deleted "
+                         f"({mb / 1024 ** 2:.0f} MB freed)")
+        except Exception as e:
+            self.log(f"cleanup: pass-check folder cleanup failed: {e}")
+
+        # --- der Papierkorb der Lernlaeufe (state/lernlauf/trash): auch er
+        # kennt keine Anker-Zeilen; auf Prod ein nie geleerter Korb (76 MB).
         try:
             tage = int(self.cfg.get("lernlauf_retention_d") or 0)
-            if tage > 0:
-                wurzel = os.path.join(dd, "state", "lernlauf")
+            korb = os.path.join(dd, "state", "lernlauf", "trash")
+            if tage > 0 and os.path.isdir(korb):
                 grenze = time.time() - tage * 86400
                 nb = mb = 0
-                for name in os.listdir(wurzel) if os.path.isdir(wurzel) else []:
-                    if not (name.startswith("B") or name == "trash"):
-                        continue
-                    p = os.path.join(wurzel, name)
-                    if not os.path.isdir(p):
-                        continue
-                    # trash: die EINZELNEN Alt-Laeufe darin pruefen, nicht den Korb selbst
-                    ziele = ([os.path.join(p, x) for x in os.listdir(p)]
-                             if name == "trash" else [p])
-                    for z in ziele:
-                        try:
-                            if os.path.getmtime(z) >= grenze or not _darf_weg(z):
-                                continue
-                            gr = sum(os.path.getsize(os.path.join(w, f))
-                                     for w, _d, fs in os.walk(z) for f in fs)
-                            shutil.rmtree(z, ignore_errors=True)
-                            nb += 1
-                            mb += gr
-                        except OSError:
-                            pass
+                # die EINZELNEN Alt-Laeufe darin pruefen, nicht den Korb selbst
+                for x in os.listdir(korb):
+                    z = os.path.join(korb, x)
+                    try:
+                        if os.path.getmtime(z) >= grenze or not _darf_weg(z):
+                            continue
+                        gr = sum(os.path.getsize(os.path.join(w, f))
+                                 for w, _d, fs in os.walk(z) for f in fs)
+                        shutil.rmtree(z, ignore_errors=True)
+                        nb += 1
+                        mb += gr
+                    except OSError:
+                        pass
                 if nb:
-                    self.log(f"cleanup: {nb} stale harvest/trash folder(s) older than "
+                    self.log(f"cleanup: {nb} trashed run(s) older than "
                              f"{tage}d deleted ({mb / 1024 ** 2:.0f} MB freed)")
         except Exception as e:
-            self.log(f"cleanup: harvest/trash cleanup failed: {e}")
+            self.log(f"cleanup: trash cleanup failed: {e}")
 
         # --- verwaiste Pin-Marken (Clip laengst geloescht)
         try:
@@ -4644,6 +4715,14 @@ class Service:
         self._ev_q = _coll.deque()
         self._ev_wecker = threading.Condition()
         self._ev_gesehen = set()
+        # H1 (.507): Marken je wartendem Eintrag (heute nur die
+        # Support-Re-Analyse, s. `event_einreihen`). Eigene Ablage statt eines
+        # vierten Tupel-Felds: die Drei-Tupel-Form der Schlange steht in vier
+        # Proben (s11_b1/b2/c2/e1) und in `rueckstau_zahlen` — ein viertes Feld
+        # haette dort ueberall gleichzeitig nachgezogen werden muessen, ohne
+        # dass die Marke davon irgendwo gebraucht wuerde. Lebt unter DEMSELBEN
+        # `_ev_wecker` und faellt in derselben Klammer wieder weg.
+        self._ev_marken = {}
 
         def lauf():
             while True:
@@ -4681,8 +4760,12 @@ class Service:
                     else:
                         _faellig, eid, _einge = self._ev_q[treffer]
                         del self._ev_q[treffer]
+                    # H1 (.507): die Marke reist MIT diesem Eintrag und wird
+                    # hier mit ihm herausgenommen — unter derselben Klammer
+                    # wie das popleft, damit kein zweiter Abholer sie erbt.
+                    _marke = self._ev_marken.pop(eid, None)
                 try:
-                    self.process_safe(eid)
+                    self.process_safe(eid, marke=_marke)
                 finally:
                     # B1/T2 (05.09.2026, Widerleger-Befund W-A3 "Queue-Fenster"):
                     # der Vermerk faellt ERST HIER, nicht schon beim popleft.
@@ -4833,10 +4916,27 @@ class Service:
     # cfg, und ein Deckel, den man erst mit Config kennt, waere dort blind.
     EV_QUEUE_MAX = 5000
 
-    def event_einreihen(self, eid, sofort=False):
+    def event_einreihen(self, eid, sofort=False, marke=None):
         """Ein Event faellig in clip_delay Sekunden einreihen (Dedup je eid,
         Deckel mit lautem Verwerfen). Ohne gestartete Queue (Alt-Tests)
         Rueckfall auf den alten Timer-Weg.
+
+        `marke` (H1/.507, Feldbefund 05.09.): ein kleines dict, das MIT DIESEM
+        EINTRAG reist und beim Abholen an `process()` weitergereicht wird —
+        heute genau `core.einspielen.reanalyse_marke()`, damit eine
+        Support-Einspielung den Live-only-Uebersprung bewusst umgeht (E-P9).
+        BEWUSST kein Zustand am Dienst: ein globales Flag haette das naechste,
+        ganz normale Live-Ereignis derselben Kamera mit umgangen. Der Vermerk
+        lebt in `_ev_marken` unter demselben `_ev_wecker` wie `_ev_gesehen`
+        und faellt an derselben Stelle wieder weg (der Dedup garantiert
+        hoechstens EINEN Eintrag je eid, also ist die eid hier der
+        Eintrags-Schluessel). Ohne Marke ist alles bitgleich zu .506.
+
+        Ehrliche Grenze der Marke: der Platzwaechter reiht eine TOTE Analyse
+        OHNE sie neu ein (sie ist beim Abholen aus `_ev_marken` genommen
+        worden). Ein Support-Lauf, dessen Analyse stirbt, faellt beim
+        Wiederholen also erneut unter den Live-only-Uebersprung — dann aber
+        mit der ehrlichen Akte-Zeile `uebersprungen/live_only`, nicht still.
 
         `sofort=True` setzt die Faelligkeit auf JETZT. Das nimmt, wer den
         clip_delay schon geprueft hat: der Sweep (seine todo-Liste filtert auf
@@ -4876,7 +4976,8 @@ class Service:
         """
         if not hasattr(self, "_ev_q"):
             threading.Timer(0 if sofort else self.cfg["clip_delay"],
-                            self.process_safe, args=(eid,)).start()
+                            self.process_safe, args=(eid,),
+                            kwargs={"marke": marke}).start()
             return True
         with self._ev_wecker:
             if eid in self._ev_gesehen:
@@ -4885,6 +4986,8 @@ class Service:
                 self._ev_abgewiesen = getattr(self, "_ev_abgewiesen", 0) + 1
                 return False
             self._ev_gesehen.add(eid)
+            if marke:
+                self._ev_marken[eid] = marke
             _jetzt = time.time()
             self._ev_q.append((_jetzt if sofort
                                else _jetzt + float(self.cfg["clip_delay"]),
@@ -4915,7 +5018,7 @@ class Service:
             self.log(f"{eid}: could not set previous results aside "
                      f"({type(_e).__name__}: {_e}) — analyze may resume the old file")
 
-    def event_neu_einreihen(self, eid):
+    def event_neu_einreihen(self, eid, marke=None):
         """Support-Einspielung heisst 'JETZT (erneut) analysieren': die
         processed-Merkung und der Queue-Dedup werden geloest, dann laeuft der
         normale Weg. Ohne das griffe der Guard in process() — ein Event, das
@@ -4923,6 +5026,11 @@ class Service:
         markiert hat (start_catchup-off), endete still als None (Testbett-
         Befund 03.09.: Fenster-Einspielung traf den Start-Sweep, 3/3 Events
         kamen nie zur Analyse). Die Akte wird regulaer ueberschrieben.
+
+        `marke` (H1/.507): reicht die Queue-Marke durch (s. `event_einreihen`).
+        Der Fenster- und der Einzel-Event-Weg der Support-API geben hier
+        `core.einspielen.reanalyse_marke()` mit, damit der Worker das Ereignis
+        auch dann rechnet, wenn ein Live-Waechter seine Kamera deckt.
 
         -> True = eingereiht, False = NICHT eingereiht (laeuft gerade, dann ist
         nichts angefasst — oder die Warteschlange ist am Deckel), None =
@@ -5019,6 +5127,13 @@ class Service:
         if hasattr(self, "_ev_wecker"):
             with self._ev_wecker:
                 if eid in self._ev_gesehen:
+                    # H1 (.507): der fremde Eintrag bekommt die Marke
+                    # NACHTRAEGLICH. Er wird ohnehin frisch gerechnet (die
+                    # Alt-Akte liegt oben schon beiseite) — ohne die Marke
+                    # liefe er aber weiter in den Live-only-Uebersprung, und
+                    # der Bediener saehe wieder ok:true bei nichts.
+                    if marke:
+                        self._ev_marken[eid] = marke
                     self.log(f"{eid}: re-analysis accepted, but the event is "
                              f"already queued — no second queue entry (previous "
                              f"results were set aside, it will be computed fresh)")
@@ -5030,7 +5145,7 @@ class Service:
         # Abholern (gemessen 15,00 s Stillstand fuer 4 Abholer bei 20 faelligen
         # Ereignissen). C2-T0 hat den Kopf-Riegel entschaerft, die unnoetige
         # Frist selbst gehoert trotzdem weg.
-        if self.event_einreihen(eid, sofort=True):
+        if self.event_einreihen(eid, sofort=True, marke=marke):
             return True
         self.log(f"{eid}: re-analysis could NOT be queued — the event queue is "
                  f"at its limit ({self.EV_QUEUE_MAX}); nothing is waiting for "
@@ -5392,7 +5507,8 @@ class Service:
                 except Exception:
                     pass
         threading.Thread(target=lauf, daemon=True).start()
-        self.wanduhr_messen_starten()  # E1: Selbstmessung EINMAL vom Boot (nie von Seitenbesuchen — Widerleger F2.3)
+        self.wanduhr_messen_starten()  # E1: Selbstmessung vom Boot (nie von Seitenbesuchen — Widerleger F2.3);
+        #                                weitere Versuche startet nur der Wiederholer (H3/.507)
         self.lernlauf_wiederaufnehmen()  # E2: unterbrochener Lauf ueberlebt Neustarts (Konzept §4)
 
     def lernlauf_wiederaufnehmen(self):
@@ -7314,10 +7430,14 @@ class Service:
             t0 = (datetime.datetime.now().replace(hour=0, minute=0, second=0,
                                                   microsecond=0)
                   - datetime.timedelta(days=tag))
-            for s in _sz.szenarien_des_tages(
+            # .507 B3b: die Quelle liefert chronologisch; die Passliste zeigt die
+            # JUENGSTEN zuerst (sie wird unten auf 24 gekappt — ohne diese
+            # Umkehr stuenden dort die aeltesten Durchgaenge des Tages).
+            for s in sorted(_sz.szenarien_des_tages(
                     by_eid, t0.timestamp(),
                     (t0 + datetime.timedelta(days=1)).timestamp(), self.cfg,
-                    {}, koerper_map=kmap, koerper_ab=kab, vision_map=vmap):
+                    {}, koerper_map=kmap, koerper_ab=kab, vision_map=vmap),
+                    key=lambda s: -s["start"]):
                 pk = "%d" % round(s["start"])
                 passe.append({"pass_key": pk, "start": s["start"],
                               "events": s["n"], "kameras": len(s["kams"]),
@@ -7703,6 +7823,36 @@ class Service:
                              f"workers) does not account for")
             return w
 
+    def _worker_warm(self):
+        """Steht ueberhaupt ein WARMER Modell-Prozess bereit? (J1, .508)
+
+        Anlass: der erste Pass-Check nach einem Dienst-Neustart schaetzte 4,5 s
+        und brauchte ~24 s — die Ernte-Rate misst warme Ereignisse, der Worker
+        lud aber erst sein Modell (~85 % der kalten Kosten, s. WorkerProzess).
+        Wer eine Dauer nennt, muss den Posten also kennen.
+
+        Welchen PLATZ der Lauf bekommt, entscheidet erst `_ernte_eines` an der
+        Vergabestelle — die Prognose weiss es nicht. Die ehrliche Sicht des
+        Dienstes ist deshalb: laeuft irgendein Worker-Prozess? Laeuft keiner
+        (frischer Start, alle gestorben oder gestoppt), startet der Job SICHER
+        kalt. Laeuft einer und der Lauf bekommt trotzdem einen anderen, noch
+        leeren Platz (je Platz ein eigener Prozess, s. `_worker`), ist die
+        Schaetzung zu optimistisch — dieselbe bewusste Grenze wie beim
+        k_abholer-Teiler, und der harmlosere der beiden Fehler: dauerhaft einen
+        Aufschlag zu zeigen, den es nicht gibt, waere die schlechtere Luege.
+
+        `zustand()["laeuft"]` ist die EINE Quelle dafuer, ob ein Worker lebt
+        (auch /health.worker_plaetze liest sie). `getattr`, damit die
+        Gate-Fixturen (Service ohne `__init__`) hier nicht stolpern: sie haben
+        keinen Pool und gelten damit als kalt."""
+        for w in (getattr(self, "_worker_pool", None) or {}).values():
+            try:
+                if w.zustand()["laeuft"]:
+                    return True
+            except Exception:                 # ein Leser darf nie den Klick werfen
+                pass
+        return False
+
     @property
     def _worker_obj(self):
         """Der Worker von Platz 1 — oder None, solange ihn niemand gebraucht hat.
@@ -7799,8 +7949,34 @@ class Service:
 
     # ------------------------------------------------- Lern-Lauf (E1): Selbstmessung
     _wanduhr_start_lock = threading.Lock()        # Klassen-Lock: Doppelstart-Rennen (F2.2)
+    # --- H3 (.507, Feldbefund 05.09. im Startlog des Feldtesters) ------------
+    # Die Zeile „next attempt in 1 h (or on restart)" stand seit .71 im Log und
+    # war UNWAHR: einziger Aufrufer von `wanduhr_messen_starten` war der Boot,
+    # `_wanduhr_versucht` wurde nie zurueckgesetzt, und die 3600-s-Sperre auf
+    # `state/wanduhr_fehl.json` wirkte erst beim naechsten Prozess-Start. Beim
+    # Feldtester schlug die Messung um 04:26:49 fehl (Reality-Check +62 %),
+    # waehrend 04:24:44 die Live-Engine mit fuenf 4K-Waechtern hochfuhr — die
+    # Kontrollmessung mass die Engine-Startlast mit. Danach blieb es fuer immer
+    # bei den Rueckfallwerten.
+    # Alle vier Zahlen kommen aus dem Bauplan-Entscheid E-B5/B6 bzw. aus dem
+    # Code selbst, keine ist hier erfunden:
+    WANDUHR_WIEDERHOLUNG_S = 3600.0   # exakt die Frist, die die persistierte
+    #                                   Sperre (wanduhr_fehl.json) und der
+    #                                   Logtext seit .71 schon nennen — sie wird
+    #                                   jetzt eingehalten statt nur behauptet
+    WANDUHR_VERSUCHE_MAX = 3          # Bauplan B6: „hoechstens 3 Versuche je Prozess"
+    WANDUHR_ENGINE_RUHE_S = 300.0     # Bauplan B6: „Live-Engine laeuft >= 5 min".
+    #                                   ZWEITE Verwendung (Boot): so lange wird am
+    #                                   Boot hoechstens darauf GEWARTET, dass sie
+    #                                   sich meldet — kommt sie nicht, gibt es auch
+    #                                   keine Engine-Last, und es wird laut trotzdem
+    #                                   gemessen (sonst bekaeme eine Anlage mit
+    #                                   gesperrter Live-Engine NIE eine Messung,
+    #                                   die sie bis .506 nach 90 s bekam)
+    WANDUHR_BOOT_RUHE_S = 60.0        # Bauplan B6: „+ 60 s" nach der Engine-Meldung
+    #                                   (ersetzt die fixen 90 s Boot-Ruhe)
     _lernlauf_start_lock = threading.RLock()
-    _bruecke_anlage_lock = threading.RLock()      # S2: Ueberlapp-Suche + Manifest + Alt-Raeumen atomar
+    _bruecke_anlage_lock = threading.RLock()      # S2: Ordner-Anlage + Manifest + Alt-Raeumen + Takt-Proben atomar (.507)
     # B4 Hunger-Bremse (User-Go 01.09., Vorschlag 31.08.): wartet ein
     # Hintergrund-Job (Pass-/Lernlauf-/Fueller-Ernte) laenger als
     # hunger_bremse_s auf den Worker, laesst der Event-Strom VOR dem
@@ -7824,9 +8000,12 @@ class Service:
     #                                               (stand vierfach hartkodiert, Widerleger .75)
 
     def wanduhr_messen_starten(self):
-        """E1 3b (Fassung .71): Selbstmessung EINMAL je Prozess-Leben, gestartet vom
-        BOOT (nie von Seitenbesuchen — der QS-Sweep loeste sonst Fremdlast im Gate aus,
-        F2.3). Lock gegen Doppelstart (F2.2); nach Scheitern 1 h persistierte Sperre.
+        """E1 3b (Fassung .71, H3-Nachzug .507): Selbstmessung, gestartet vom BOOT und
+        — nach einem Fehlversuch — vom Wiederholer (`_wanduhr_wiederholung`), NIE von
+        Seitenbesuchen (der QS-Sweep loeste sonst Fremdlast im Gate aus, F2.3).
+        Hoechstens `WANDUHR_VERSUCHE_MAX` Versuche je Prozess-Leben; Lock gegen
+        Doppelstart (F2.2); nach Scheitern `WANDUHR_WIEDERHOLUNG_S` persistierte Sperre
+        (die auch den Neustart deckt).
         Issue #21: auf Maschinen unter `wanduhr_min_kerne` physischen Kernen
         (Config-Paar, Default WANDUHR_MIN_KERNE — ein Struktur-Axiom, s. dessen
         Kopf) wird GAR NICHT gemessen — LAUT + /health-Vermerk (K1), Prognosen
@@ -7849,21 +8028,195 @@ class Service:
             t = getattr(self, "_wanduhr_thread", None)
             if t and t.is_alive():
                 return True
-            if getattr(self, "_wanduhr_versucht", False):
+            # `_wanduhr_versucht` ist seit .507 ein ZAEHLER, kein Ja/Nein
+            # (H3): bis .506 war er ein Riegel fuer genau EINEN Versuch je
+            # Prozess-Leben und machte damit den Satz „next attempt in 1 h"
+            # zur Unwahrheit. Der Name bleibt, weil er in /health und im
+            # Fehlversuchs-Vermerk gelesen wird; die Bedeutung ist jetzt
+            # „wie viele Versuche dieser Prozess schon gefahren hat".
+            _n = int(getattr(self, "_wanduhr_versucht", 0) or 0)
+            if _n >= self.WANDUHR_VERSUCHE_MAX:
                 return False
-            sp = os.path.join(self.cfg["data_dir"], "state", "wanduhr_fehl.json")
-            try:
-                letzte = json.load(open(sp)).get("ts", 0)
-            except Exception:
-                letzte = 0
-            if time.time() - letzte < 3600:
+            # DIESELBE Frist wie die Wiederholung, und dieselbe LESESTELLE
+            # (`_wanduhr_sperre_rest`): die Datei traegt die Sperre ueber den
+            # Neustart, der Wiederholer im laufenden Prozess.
+            if self._wanduhr_sperre_rest() > 0:
                 return False
-            self._wanduhr_versucht = True
+            self._wanduhr_versucht = _n + 1
+            self._wanduhr_naechster_ts = None
             t = threading.Thread(target=self._wanduhr_messen, daemon=True,
                                  name="wanduhr-mess")
             self._wanduhr_thread = t
             t.start()
             return True
+
+    def _wanduhr_sperre_rest(self):
+        """Wie viele Sekunden laeuft die persistierte Fehlversuchs-Sperre
+        (`state/wanduhr_fehl.json`) noch? <= 0 heisst „frei".
+
+        DIE eine Lesestelle dieser Datei-Frist. Der Wiederholer wartet gegen
+        genau diesen Rest, statt eine gleich lange Frist DANEBEN zu legen: der
+        Vermerk wird auf 0,1 s gerundet geschrieben, eine parallele Frist kaeme
+        um Millisekunden zu frueh, `wanduhr_messen_starten` wiese den Versuch
+        ab — und der Wiederholer waere wieder eine Behauptung ohne Wirkung,
+        also genau der Befund, gegen den H3 gebaut ist."""
+        sp = os.path.join(self.cfg["data_dir"], "state", "wanduhr_fehl.json")
+        try:
+            letzte = float(json.load(open(sp)).get("ts", 0) or 0)
+        except Exception:                                 # noqa: BLE001
+            letzte = 0.0
+        return self.WANDUHR_WIEDERHOLUNG_S - (time.time() - letzte)
+
+    def _wanduhr_engine_bereit(self, seit_s):
+        """Hat die Live-Engine seit mindestens `seit_s` Sekunden ununterbrochen
+        „engine up" quittiert — oder ist gar kein Waechter konfiguriert?
+        -> (bool, Grund im Klartext fuers Log).
+
+        Der STREAK wird hier gefuehrt: die Engine-Quittung
+        (`state/live_status.json`) traegt nur ihren letzten Herzschlag, keinen
+        Startzeitpunkt. Jeder Aufruf ist eine Stichprobe, und ein „nicht ok"
+        setzt die Strecke zurueck — die Aufrufer fragen deshalb in Schleifen.
+        Quelle ist wie beim Live-only-Uebersprung die QUITTUNG (`live_health`),
+        nicht der Config-Wunsch.
+
+        Ohne konfigurierten Waechter gibt es nichts abzuwarten: dort ist die
+        Antwort sofort ja (und der Streak bleibt leer)."""
+        lh = self.live_health()
+        if not (lh.get("watchers") or {}):
+            self._wanduhr_engine_seit = None
+            return True, ""
+        if lh.get("engine") != "ok":
+            self._wanduhr_engine_seit = None
+            return False, f"live engine is '{lh.get('engine')}'"
+        if getattr(self, "_wanduhr_engine_seit", None) is None:
+            self._wanduhr_engine_seit = time.monotonic()
+        _dt = time.monotonic() - self._wanduhr_engine_seit
+        if _dt < float(seit_s):
+            return False, (f"live engine has only been up for {_dt:.0f}s "
+                           f"(needs {float(seit_s):.0f}s)")
+        return True, ""
+
+    def _wanduhr_ruhe(self):
+        """Ist die Maschine ruhig genug fuer eine WIEDERHOLUNG der Messung?
+        -> (True, "") oder (False, Grund im Klartext).
+
+        Drei Bedingungen (Bauplan B6): kein Platz belegt, Live-Engine laeuft
+        seit `WANDUHR_ENGINE_RUHE_S`, kein Lernlauf aktiv. Der Feldfall war
+        genau das Gegenteil — die Kontrollmessung lief in die hochfahrende
+        Engine hinein.
+
+        Fuer „belegt" wird die EINE vorhandene Frage benutzt (`_live_aktiv`,
+        Plaetze + Koerper-Strang), fuer „Lernlauf laeuft" das zentrale
+        Abschluss-Kriterium `core.lernlauf.lauf_abgeschlossen` — kein zweites
+        Literal, keine zweite Phasenliste. Eine unlesbare `lernlauf.json`
+        gilt als „kein Lauf": sie wird beim Lesen ohnehin laut gemeldet, und
+        eine kaputte Datei darf die Messung nicht fuer immer sperren.
+
+        KEIN Schutz gegen Fremdlast WAEHREND des Roundtrips (Betreiber-Entscheid
+        E-O4, 05.09.: „nur Text" + Wiederholung bei Ruhe) — geschuetzt ist
+        weiterhin nur der START."""
+        if self._live_aktiv():
+            return False, (f"the machine is busy "
+                           f"({self._plaetze.anzahl_belegt()} analysis slot(s) "
+                           f"taken)")
+        ok, grund = self._wanduhr_engine_bereit(self.WANDUHR_ENGINE_RUHE_S)
+        if not ok:
+            return False, grund
+        try:
+            from core import lernlauf as _ll_ruhe
+            lauf, _lfehler = _ll_ruhe.lauf_lesen(self.cfg["data_dir"])
+            if lauf and not _ll_ruhe.lauf_abgeschlossen(lauf):
+                return False, (f"a learning run is active "
+                               f"(phase {lauf.get('phase')})")
+        except Exception:                                 # noqa: BLE001
+            pass
+        return True, ""
+
+    def _wanduhr_wiederholung(self):
+        """H3 (.507): DER Wiederholer, der den Logtext wahr macht.
+
+        Wartet, bis die persistierte Sperre abgelaufen ist (`_wanduhr_sperre_rest`
+        — nicht eine gleich lange Frist daneben, s. dort), dann auf eine ruhige
+        Maschine, dann startet er den naechsten Versuch. `wanduhr_messen_starten`
+        deckelt die Zahl der Versuche und prueft die Sperre erneut — dieser Faden
+        entscheidet nichts, er weckt nur.
+
+        EHRLICHE GRENZE, bewusst ohne Deckel: wird die Maschine nie ruhig,
+        wartet er weiter statt unter Last zu messen. Genau die Messung unter
+        fremder Last hat den Feldfall erzeugt. Was passiert, steht in
+        `wanduhr_status()` (/health) und einmalig im Log — nicht still."""
+        try:
+            while True:
+                offen = self._wanduhr_sperre_rest()
+                if offen <= 0:
+                    break
+                time.sleep(min(offen, 30.0))
+            gemeldet = False
+            while True:
+                ok, grund = self._wanduhr_ruhe()
+                if ok:
+                    break
+                if not gemeldet:
+                    gemeldet = True
+                    self._wanduhr_warte_grund = grund
+                    self.log(f"wanduhr: retry is due but the machine is not "
+                             f"quiet ({grund}) — waiting, the measurement is "
+                             f"worthless under foreign load")
+                time.sleep(5)
+            self._wanduhr_warte_grund = None
+            self._wanduhr_naechster_ts = None
+            if not self.wanduhr_messen_starten():
+                self.log("wanduhr: retry not started (attempt budget spent or "
+                         "the persisted 1 h lock is still running)")
+        except Exception as ex:                           # noqa: BLE001
+            self.log(f"wanduhr: retry thread died ({type(ex).__name__}: {ex}) "
+                     f"— fallback values stay until the next restart")
+
+    def _wanduhr_boot_ruhe(self):
+        """Schritt (1) des Messablaufs: warten, bis die Live-Engine „engine up"
+        quittiert hat (oder gar kein Waechter konfiguriert ist), danach noch
+        `WANDUHR_BOOT_RUHE_S`.
+
+        Bis .506 standen hier fixe 90 s „Boot-Warmup/Backfill nicht stoeren".
+        Die Zahl hatte keine Beziehung zu dem, worauf sie warten sollte: beim
+        Feldtester war sie um 04:26:14 abgelaufen, die Engine mit fuenf
+        4K-Waechtern seit 04:24:44 am Hochfahren, und die Kontrollmessung
+        (04:26:49) fing genau diese Last ein (+62 % gegen die Prognose).
+
+        DECKEL `WANDUHR_ENGINE_RUHE_S`: meldet sich die Engine so lange nicht,
+        wird trotzdem gemessen — LAUT. Ohne Deckel bekaeme eine Anlage mit
+        gesperrter oder abgeschalteter Engine (cpu-Variante, `_live_gesperrt`)
+        NIE mehr eine Messung, obwohl sie bis .506 nach 90 s eine bekam; und
+        wo die Engine nicht laeuft, gibt es auch keine Engine-Last."""
+        self._wanduhr_phase = "waiting for the live engine"
+        _deckel = time.monotonic() + self.WANDUHR_ENGINE_RUHE_S
+        _grund = ""
+        while time.monotonic() < _deckel:
+            ok, _grund = self._wanduhr_engine_bereit(0)
+            if ok:
+                break
+            time.sleep(2)
+        else:
+            self.log(f"wanduhr: the live engine did not report up within "
+                     f"{self.WANDUHR_ENGINE_RUHE_S:.0f}s ({_grund}) — measuring "
+                     f"anyway; without a running engine there is no engine load "
+                     f"to wait for")
+        time.sleep(self.WANDUHR_BOOT_RUHE_S)
+
+    def _wanduhr_wiederholung_planen(self):
+        """Naechsten Versuch vormerken und den Wiederholer starten — oder
+        ehrlich sagen, dass es keinen mehr gibt. EINE Stelle, damit Logtext,
+        /health-Anzeige und tatsaechliches Verhalten nicht auseinanderlaufen
+        koennen (genau das war der Befund: der Text versprach mehr als der
+        Code tat)."""
+        _n = int(getattr(self, "_wanduhr_versucht", 1) or 1)
+        if _n >= self.WANDUHR_VERSUCHE_MAX:
+            self._wanduhr_naechster_ts = None
+            return False
+        self._wanduhr_naechster_ts = time.time() + self.WANDUHR_WIEDERHOLUNG_S
+        threading.Thread(target=self._wanduhr_wiederholung, daemon=True,
+                         name="wanduhr-wiederholung").start()
+        return True
 
     def wanduhr_laeuft(self):
         t = getattr(self, "_wanduhr_thread", None)
@@ -7884,6 +8237,19 @@ class Service:
             # "waiting" = Schleife wartet lockfrei auf Live-Ende, "measuring" =
             # Roundtrip rechnet wirklich — "laeuft" allein verschmolz beides.
             st["phase"] = getattr(self, "_wanduhr_phase", None) or "starting"
+        # H3 (.507): Versuchszahl und der naechste geplante Zeitpunkt gehoeren
+        # in /health — bis .506 war „next attempt in 1 h" eine Behauptung im
+        # Log, die aus der Ferne nicht pruefbar war.
+        st["versuche"] = {"gefahren": int(getattr(self, "_wanduhr_versucht", 0) or 0),
+                          "max": self.WANDUHR_VERSUCHE_MAX}
+        _nx = getattr(self, "_wanduhr_naechster_ts", None)
+        if _nx:
+            st["naechster_versuch_ts"] = round(float(_nx), 1)
+        _wg = getattr(self, "_wanduhr_warte_grund", None)
+        if _wg:
+            # Faelliger Wiederholer, der auf eine ruhige Maschine wartet —
+            # sonst saehe die Ferndiagnose nur „naechster Versuch ueberfaellig".
+            st["wartet_auf_ruhe"] = _wg
         grund = getattr(self, "_wanduhr_skip", None)
         if grund:
             st["uebersprungen"] = grund
@@ -8166,7 +8532,7 @@ class Service:
             time.sleep(2)
 
     def _wanduhr_messen(self):
-        """Messablauf .71: (1) 90 s Boot-Ruhe, (2) jeder Roundtrip einzeln gegen
+        """Messablauf .71: (1) Boot-Ruhe, (2) jeder Roundtrip einzeln gegen
         Live serialisiert UND nur fuer seine Dauer unter _gpu_bg_lock
         (_roundtrip_seriell; Nachbesserung W5: das Lock lag frueher um die GANZE
         Messung und wurde damit unbegrenzt lange gehalten, waehrend auf Live
@@ -8176,9 +8542,15 @@ class Service:
         hier sind API-Reads), (3) Mess-Event mit MINDESTLAENGE via
         core.wanduhr.kontroll_event (F2.5), (4) Konstanten ableiten, (5) REALITAETS-
         KOPPLUNG an einem ZWEITEN Event (F1.5) — erst bei Bestehen wird gespeichert,
-        mit ehrlicher Liste der wirklich gemessenen Felder (F3.1)."""
+        mit ehrlicher Liste der wirklich gemessenen Felder (F3.1).
+
+        H3 (.507): Schritt (1) sind nicht mehr fix 90 s. Gewartet wird, BIS die
+        Live-Engine „engine up" quittiert hat (oder gar kein Waechter
+        konfiguriert ist), danach noch `WANDUHR_BOOT_RUHE_S`. Der Feldfall:
+        die Engine fuhr um 04:24:44 mit fuenf 4K-Waechtern hoch, die Messung
+        lief um 04:26:49 — die 90 s waren laengst um, die Startlast nicht."""
         try:
-            time.sleep(90)                        # Boot-Warmup/Backfill nicht stoeren
+            self._wanduhr_boot_ruhe()
             import shutil as _sh
             from core import ereignisse as _evm
             from core import wanduhr as _wu
@@ -8222,14 +8594,29 @@ class Service:
                      + (f"; reality check on 2nd event passed ({kopp['abweichung']:+.0%})"
                         if kopp else ""))
         except Exception as ex:
-            self.log(f"wanduhr: measurement failed ({ex}) — keeping fallback values; "
-                     f"next attempt in 1 h (or on restart)")
+            # H3 (.507): der Text sagt jetzt, was WIRKLICH passiert — Versuch
+            # n von m, und ob es ueberhaupt noch einen naechsten gibt. Der
+            # Vermerk wird VOR der Planung geschrieben, damit die
+            # 1-h-Sperre des naechsten Starts auf einem gesetzten Zeitstempel
+            # steht (der Wiederholer wartet dieselbe Frist und kaeme sonst um
+            # Millisekunden zu frueh).
             try:
                 sp = os.path.join(self.cfg["data_dir"], "state", "wanduhr_fehl.json")
                 with open(sp, "w", encoding="utf-8") as f:
                     json.dump({"ts": round(time.time(), 1), "grund": str(ex)[:300]}, f)
             except Exception:
                 pass
+            _n = int(getattr(self, "_wanduhr_versucht", 1) or 1)
+            _m = self.WANDUHR_VERSUCHE_MAX
+            if self._wanduhr_wiederholung_planen():
+                self.log(f"wanduhr: measurement attempt {_n}/{_m} failed ({ex}) "
+                         f"— keeping fallback values; next attempt in "
+                         f"{self.WANDUHR_WIEDERHOLUNG_S / 60:.0f} min, and only "
+                         f"once the machine is quiet (or on restart)")
+            else:
+                self.log(f"wanduhr: measurement attempt {_n}/{_m} failed ({ex}) "
+                         f"— keeping fallback values; no further attempt in this "
+                         f"process (a restart tries again)")
         finally:
             import shutil as _sh
             _sh.rmtree(os.path.join(self.cfg["data_dir"], "state", "wanduhr_mess"),
@@ -8539,60 +8926,113 @@ class Service:
             _ll2.lauf_fortschreiben(dd, fortschritt={"status": f"anchor stage failed: {e}"})
             self.log(f"anchor stage failed ({type(e).__name__}: {e})")
 
-    def bruecke_vorrat(self, person, eids):
-        """Pass-Check ueber die NEUE Kette (.308, User 21.08.: 'Check this pass'
+    def _bruecke_durchgang(self, eid, akte=None):
+        """Der DURCHGANG, zu dem `eid` gehoert -> eids in Zeitreihenfolge, oder
+        None, wenn das Ereignis keine Akten-Zeile mit Start hat. `akte` ist die
+        schon gelesene Akten-Karte (eid -> Zeile), damit ein Aufrufer, der sie
+        ohnehin braucht, die Datei nicht zweimal liest.
+
+        .507 B2 (E-P2): der Klick sendet EIN Ereignis; die Kettung leistet der
+        Dienst (Szenario-Prinzip: 'die App muss die Szenario-Bildung SELBST
+        leisten'). Quelle ist szenarien.szenarien_des_tages — DIESELBE
+        Gruppierung wie /heute, /auftritte und der Ketten-Schalter, nie eine
+        zweite Kettung: sonst haette der Ordner-Name eine andere Vorstellung
+        vom Durchgang als die Seite, auf der geklickt wurde.
+
+        Akte fehlt (nie analysiert, `deckung.jsonl` rotiert) -> None. Der
+        Aufrufer meldet das EHRLICH: core.anker.durchgaenge_bilden wirft
+        Ereignisse ohne `start` still weg (anker.py:30), und bei EINEM Ereignis
+        waere dieser stille Wurf das ganze Ergebnis.
+
+        KOSTEN, ehrlich benannt: ein Lesen der ganzen `deckung.jsonl` plus die
+        Tages-Kettung, und der Klick-Handler fragt das bei JEDEM Poll (2,5 s).
+        Das ist derselbe Griff, den auch der Ketten-Schalter je Analyse tut. Der
+        Weg bis .506 war an dieser Stelle teurer: er listete den Lauf-Ordner und
+        las das Manifest JEDES B*-Ordners (auf Prod 138 Dateien je Poll)."""
+        import datetime as _dt
+        import szenarien as _sz
+        eid = str(eid)
+        by_eid = self._deckung_by_eid() if akte is None else akte
+        r = by_eid.get(eid) or {}
+        t0 = r.get("start") or r.get("ts") or 0
+        if not t0:
+            return None
+        tag = _dt.datetime.fromtimestamp(t0).replace(hour=0, minute=0, second=0,
+                                                     microsecond=0)
+        for s in _sz.szenarien_des_tages(by_eid, tag.timestamp(),
+                                         (tag + _dt.timedelta(days=1)).timestamp(),
+                                         self.cfg, {}):
+            evs = [str(e.get("eid")) for e in (s.get("evs") or []) if e.get("eid")]
+            if eid in evs:
+                return evs
+        return [eid]          # Akte da, aber keinem Durchgang zugeordnet: eigener Pass
+
+    def bruecke_vorrat(self, person, eid, ganzer_pass=False):
+        """Pass-Check ueber die Vorrats-Kette (.308, User 21.08.: 'Check this pass'
         lieferte aus 13 Events/5 Kameras EIN Bild — die alte Bruecke misst je
-        Event nur den gespeicherten Crop an der Pixel-Latte). Hier: die Events
-        des Durchgangs werden wie im Lernlauf GEERNTET (alle Frames, Worker-Job
-        je Event unter Live-Vorrang, Norm inklusive), dann Konsens + Linie
-        (core.vorrat.angebote_bewerten) — Ergebnis in einem Bruecken-Laufordner
+        Event nur den gespeicherten Crop an der Pixel-Latte). Geerntet wird wie im
+        Lernlauf (alle Frames, Worker-Job je Event, Norm inklusive), danach Konsens
+        + Linie (core.vorrat.angebote_bewerten) — Ergebnis in einem Bruecken-Laufordner
         state/lernlauf/B<hash>/ (gleiche Ablage wie Lernlaeufe: Bild-Route,
         vorrat_aufnehmen und /aehnliche kennen ihn damit automatisch).
 
-        RUNDE LOESUNG (User 21.08.: kein Browser-Pflaster fuer selbst erzeugtes
-        Warten): dieselbe Routine laeuft AUTOMATISCH nach jedem abgeschlossenen
-        Durchgang (Nachlern-Anstoss) UND beim Klick — beide treffen per
-        Event-Ueberlapp denselben Ordner; der Klick erntet hoechstens noch
-        fehlende Events nach (idempotent je Event) und wertet die Vereinigung
-        neu aus. Im Normalfall ist der Vorrat fertig, bevor jemand klickt.
-        -> ("fertig", {nehmen, grenz, v_gesamt}) | ("laeuft", fortschritt_text)
+        .507 B2 — ZUSCHNITT (E-P2/E-B3, Betreiber-Entscheid 05.09.): der Klick meint
+        GENAU DAS EINE Ereignis, das der Nutzer sieht, fuer genau diese Person.
+        `ganzer_pass=True` (zweiter Knopf, E-O1) meint den ganzen Durchgang.
+
+          Ordner-Identitaet = Person + Durchgang: `B<sha1(person + erste_eid)>`.
+          Die erste eid des Durchgangs ist fuer JEDES Ereignis desselben Passes
+          dieselbe — Einzelklick und zweiter Knopf treffen damit denselben Ordner,
+          und kein Clip wird zweimal gerechnet. Die alte Ueberlapp-Suche ueber alle
+          B*-Ordner ist damit ERSATZLOS weg: sie war noetig, solange die ID die
+          ganze eid-Liste trug (zwei Klicks auf denselben Pass ergaben sonst zwei
+          Ordner, die nie verschmelzen — Kritik W1).
+          `fehlend` = nur das geklickte Ereignis (bzw. alle offenen des Durchgangs).
+          Der Zuschnitt der ANGEBOTE ist ein Filter, keine kuerzere Liste:
+          `_bruecke_angebote(..., nur_eids)` — ohne ihn saehe der Nutzer wieder
+          Bilder der Nachbar-Ereignisse (Risiko 1 der Zuschnitt-Inventur).
+          Das Manifest traegt weiter ALLE Durchgangs-eids: die Bewertung braucht
+          die Durchgangs-Kette (Konsens ueber mehrere Kameras, core/vorrat.py:10-19).
+
+        -> ("fertig", {nehmen, grenz, v_gesamt}) | ("laeuft", fortschritt_dict)
            | ("fehler", text)."""
         import hashlib
         from core import ernte as _ern
+        from core import wanduhr as _wu
         dd = self.cfg["data_dir"]
-        eids = sorted({str(e) for e in eids if e})
-        if not eids:
-            return "fehler", "no events in this pass"
-        # S2 (01.09.): Suche+Anlage+Auswertung atomar — Doppel-Anlage
-        # derselben Person (Timer+Klick) und rmtree-Kollisionen (siehe
-        # _bruecke_alt_raeumen, gleiches Lock) ausgeschlossen; die Ernte
-        # selbst laeuft im Thread AUSSERHALB der Sperre.
+        eid = str(eid or "").strip()
+        if not eid:
+            return "fehler", "no event given"
+        if not self.cfg.get("worker", True):
+            # .508 Nachfix (Randbefund des .508-Zuges): im Legacy-Modus laeuft
+            # die Pass-Ernte nicht — sie besteht aus Worker-Jobs (1 Ereignis je
+            # Job), und den Worker gibt es hier nicht. Der Fall ist schon HIER
+            # entscheidbar, vor Akte, Ordner und Thread: so entsteht gar kein
+            # Lauf, den jemand abholen muesste, und der Klick bekommt den Grund
+            # sofort statt erst ueber die fehler.json des naechsten Pulses.
+            self.log("pass check not started: the persistent worker is "
+                     "disabled (config 'worker')")
+            return "fehler", self.BRUECKE_WORKER_AUS
+        akte = self._deckung_by_eid()          # EINE Leseart, EIN Lesen je Aufruf
+        pass_eids = self._bruecke_durchgang(eid, akte)
+        if pass_eids is None:
+            # Ehrlicher Fehlerfall (.507 B2): ohne Akten-Start ist das Ereignis
+            # fuer die Durchgangs-Kette unsichtbar — geerntet wuerde, bewertet
+            # nichts, und die Antwort hiesse frueher "nothing to take".
+            return "fehler", "no record for this event yet — was it analysed?"
+        eids = pass_eids if ganzer_pass else [eid]
+        # S2 (01.09.): Anlage+Auswertung atomar — Doppel-Anlage derselben Person
+        # (zwei Klicks) und rmtree-Kollisionen (siehe _bruecke_alt_raeumen,
+        # gleiches Lock) ausgeschlossen; die Ernte selbst laeuft im Thread
+        # AUSSERHALB der Sperre.
         with self._bruecke_anlage_lock:
             wurzel = os.path.join(dd, "state", "lernlauf")
-            bdir, bid, bekannt = None, None, set()
-            # Ueberlapp-Suche: ein Bruecken-Lauf derselben Person, der mindestens
-            # ein Event dieses Passes traegt (Hook kennt nur die bestaetigten
-            # Events, der Klick den ganzen Durchgang — beide meinen denselben Pass).
-            best = 0
-            try:
-                for d in os.listdir(wurzel):
-                    if not d.startswith("B"):
-                        continue
-                    m = _ern.manifest_lesen(os.path.join(wurzel, d)) or {}
-                    if m.get("person") != person:
-                        continue
-                    ue = len(set(m.get("eids") or []) & set(eids))
-                    if ue > best:
-                        best, bdir, bid, bekannt = ue, os.path.join(wurzel, d), d, set(m.get("eids") or [])
-            except OSError:
-                pass
-            if bdir is None:
-                # S2-Fix 01.09.: die ID trug NUR die Events — zwei Personen
-                # desselben Durchgangs (Bulk-Benennung) bekamen denselben Ordner
-                # (199x FileNotFoundError beim Feldtester). Person gehoert in die
-                # Identitaet; Alt-Ordner findet die Ueberlapp-Suche weiter.
-                bid = "B" + hashlib.sha1((person + "\n" + "\n".join(eids)).encode()).hexdigest()[:10]
-                bdir = os.path.join(wurzel, bid)
+            # S2-Fix 01.09.: die Person gehoert in die Identitaet — zwei Personen
+            # desselben Durchgangs (Bulk-Benennung) bekamen sonst denselben Ordner
+            # (199x FileNotFoundError beim Feldtester).
+            bid = "B" + hashlib.sha1(
+                (person + "\n" + pass_eids[0]).encode()).hexdigest()[:10]
+            bdir = os.path.join(wurzel, bid)
             laeuft = os.path.join(bdir, "laeuft.json")
             fehler = os.path.join(bdir, "fehler.json")
             if os.path.isfile(fehler):
@@ -8606,85 +9046,247 @@ class Service:
                 except OSError:
                     pass
                 return "fehler", txt
+            # Frische-Fenster: laeuft.json wird bei jedem Schritt neu geschrieben
+            # (auch WAEHREND des Wartens auf einen Platz, im Sekundentakt) — still
+            # ist die Datei nur, solange ein Worker-Job laeuft, und der ist durch
+            # `nachhol_analyse_timeout_s` gedeckelt. Zwei Timeouts sind also
+            # reichlich; die alten 900 s bleiben als Obergrenze stehen, damit ein
+            # sehr grosszuegig gesetzter Timeout nicht zum Blindflug nach einem
+            # Kill wird (.507 B2, Config lesen statt Zahl setzen).
+            _to = int(self.cfg.get("nachhol_analyse_timeout_s") or 300)
+            frische_s = min(900.0, 2.0 * _to)
             if os.path.isfile(laeuft):
                 try:
                     alter = time.time() - os.path.getmtime(laeuft)
                 except OSError:
                     alter = 0
-                if alter < 900:
+                if alter < frische_s:
                     # .310 (User-Fund: 'model did not load' nach 60 s Warten hinter
                     # der Bestands-QS): die Ernte schreibt i/n/zustand in
                     # laeuft.json — der Klick-Handler reicht es durch, das Blatt
                     # zeigt einen kleinen Balken und gibt nicht per Zaehler auf.
-                    return "laeuft", self._bruecke_fortschritt(laeuft)
+                    return "laeuft", self._bruecke_fortschritt(laeuft, self._plaetze)
             geerntet, _summe = _ern.fertig_lesen(bdir) if os.path.isdir(bdir) else (set(), {})
             fehlend = [e for e in eids if e not in geerntet]
             if not fehlend and os.path.isfile(os.path.join(bdir, "vorrat.jsonl")):
-                return "fertig", self._bruecke_angebote(bdir, bid, person)
+                return "fertig", self._bruecke_angebote(
+                    bdir, bid, person, None if ganzer_pass else {eid})
             # Start (oder Nachernte der fehlenden Events): Regime einfrieren,
-            # Event-Menge im Manifest vereinigen, Hintergrund-Ernte
+            # Event-Menge im Manifest fuehren, Hintergrund-Ernte
             os.makedirs(bdir, exist_ok=True)
             schwellen = ernte_schwellen_aus_cfg(self.cfg)
             if _ern.schwellen_pruefen(schwellen):
                 return "fehler", "harvest thresholds missing in config"
-            alle = sorted(bekannt | set(eids))
             _ern.manifest_schreiben(bdir, {"schema": 2, "bruecke": True, "person": person,
                                            "version": os.environ.get("SUSLIK_VERSION", "dev"),
                                            "modell": self.cfg.get("modell"),
                                            "fps_sample": self.cfg.get("fps_sample"),
-                                           "schwellen": schwellen, "eids": alle,
+                                           "schwellen": schwellen, "eids": list(pass_eids),
                                            "angelegt": round(time.time(), 1)})
-            self._bruecke_puls(laeuft, 0, len(fehlend), "wartet")
-            self._bruecke_alt_raeumen(dd)
+            # E-P3: Start UND geschaetzte Dauer stehen ab dem ersten Puls in
+            # laeuft.json. Die Rate ist an Maschine UND Version gebunden
+            # (core/wanduhr.ernte_rate_lesen) — nach jedem Update ist sie einmal
+            # leer, und dann sagt der Balken "Dauer unbekannt" statt einer
+            # geratenen Zahl ([[keine-eigenen-schwellen]]).
+            k_abholer = (max(1, int(self._plaetze.kapazitaet)) if ganzer_pass else 1)
+            kopf = {"start_ts": round(time.time(), 1)}
+            _rate = _wu.ernte_rate_lesen(dd, _placement_hw_key(),
+                                         os.environ.get("SUSLIK_VERSION", "dev"))
+            if _rate:
+                _clips = [{"clip_s": (akte.get(e) or {}).get("clip_s")
+                           or (akte.get(e) or {}).get("dauer_s") or 0.0}
+                          for e in fehlend]
+                # Geteilt durch die Zahl der Abholer, wie beim Lernlauf: K
+                # Ereignisse laufen gleichzeitig. Ehrliche Grenze (dieselbe wie
+                # dort): bekommt die Ernte weniger Plaetze, ist die Anzeige zu
+                # optimistisch — beim Einzelklick ist K = 1, also exakt.
+                kopf["dauer_s"] = round(_wu.ernte_prognose_s(_rate, _clips)
+                                        / k_abholer, 1)
+            else:
+                kopf["dauer_unbekannt"] = True
+            # J1 (.508, Befund aus dem .507-Deploy-Zug): der erste Klick nach
+            # einem Dienst-Neustart nannte 4,5 s und brauchte real ~24 s. Die
+            # Ernte-Rate ist an WARMEN Ereignissen gemessen — sie kennt das
+            # Modell-Laden nicht, das ein kalt startender Worker davor legt.
+            # Aufgeschlagen wird deshalb der Kaltaufschlag der Wanduhr, aber NUR
+            # als Messung DIESER Maschine+Version: die Autorwerte in
+            # core.wanduhr.RUECKFALL sind Anzeige-Ersatz, keine Messung dieser
+            # Anlage ([[keine-eigenen-schwellen]]). Ohne Messung steht deshalb
+            # keine Zahl mehr im Balken, sondern die ehrliche Ansage, dass ein
+            # Warmlauf dazukommt (warm_up).
+            if not self._worker_warm():
+                _wwerte, _wquelle, _wgemessen = _wu.lesen(
+                    dd, _placement_hw_key(),
+                    os.environ.get("SUSLIK_VERSION", "dev"))
+                _kalt = (_wwerte.get("kaltaufschlag_s")
+                         if _wquelle == "gemessen"
+                         and "kaltaufschlag_s" in _wgemessen else None)
+                if _kalt is not None and "dauer_s" in kopf:
+                    # EINMAL je Lauf — nicht je Ereignis und NICHT durch die Zahl
+                    # der Abholer geteilt: die K Worker laden ihre Modelle
+                    # gleichzeitig, und die Wanduhr fuehrt den Posten selbst als
+                    # Konstante des Laufs (core/wanduhr Kopfmodell, lauf_prognose).
+                    kopf["dauer_s"] = round(kopf["dauer_s"] + float(_kalt), 1)
+                else:
+                    kopf["warm_up"] = True
+            self._bruecke_puls(laeuft, 0, len(fehlend), "startet", kopf)
             threading.Thread(target=self._bruecke_ernte,
-                             args=(bdir, bid, fehlend, alle, schwellen),
+                             args=(bdir, bid, fehlend, list(pass_eids), schwellen,
+                                   kopf, k_abholer),
                              daemon=True, name="bruecke-ernte").start()
-            return "laeuft", self._bruecke_fortschritt(laeuft)
+            return "laeuft", self._bruecke_fortschritt(laeuft, self._plaetze)
+
+    # E-P5 (.507 B2): die EINE Aufzaehlung der Bruecken-Gruende — WARUM gerade
+    # nichts vorangeht — und der grobe Zustand, den sie bedeuten. Der Zustand
+    # bleibt der alte Dreiklang (Blatt-JS, tools/tick_check.py und der
+    # Gate-Vertrag lesen ihn); der Grund ist die feinere Wahrheit darunter.
+    # Bis .506 stand an der Anlage-Stelle 'wartet', obwohl noch gar nichts
+    # wartete, und der Wartetext nannte pauschal einen fremden 'background job'
+    # — auch dann, wenn in Wahrheit alle Analyseplaetze belegt waren
+    # (Auftragszettel §F: der Satz war irrefuehrend).
+    BRUECKE_GRUENDE = {"startet": "wartet", "bg_lock": "wartet",
+                       "kein_platz": "wartet", "erntet": "erntet",
+                       "bewertet": "bewertet"}
+    # Englische Woerter der Platz-Klassen fuer den Wartetext. DECKUNGS-VERTRAG
+    # (qs_ebenen.md): jede Klasse aus Analyseplaetze.ARTEN steht hier — die
+    # Probe s11_f2 sichert das zu, eine neue Klasse faellt dort auf. Eine
+    # unbekannte Klasse zeigt ihren Rohnamen, sie verschwindet nie still.
+    # (Die uebersetzte Beschriftung der GPU-Seite wohnt in routes/gpu.py; der
+    # Satz hier ist ein Bruecken-Literal wie alle uebrigen Overlay-Texte,
+    # ME2-Uebersetzungsstrang.)
+    BRUECKE_ART_WORT = {"analyse": "analysis", "ernte": "harvest",
+                        "bg": "background", "interaktiv": "interactive"}
+    # Legacy-Modus (`worker: false`, ein Subprozess je Ereignis statt des
+    # stehenden Worker-Prozesses): der Klick-Weg kann dort NICHT ernten.
+    # `_worker(nr)` liefert in diesem Modus None (Zweig in `_worker`), und die
+    # Ernte ruft `.job(...)` darauf — bis .508 also ein AttributeError mitten im
+    # Ernte-Thread. Der Lernlauf stoppt fuer denselben Fall seit je EHRLICH
+    # ("harvest failed: the persistent worker is disabled", `_lernlauf_ernte`);
+    # der Satz hier ist dasselbe Muster fuer den Klick. Er steht EINMAL, weil ihn
+    # zwei Wachen brauchen (Anlage in `bruecke_vorrat`, Ernte in
+    # `_bruecke_ernte`) — zwei Literale liefen beim naechsten Umbau
+    # auseinander. Englisches Literal wie die uebrigen Bruecken-Meldungen dieses
+    # Blatts (ME2-Uebersetzungsstrang), und er nennt den SCHALTER, nicht nur die
+    # Lage: wer ihn liest, soll wissen, was zu tun ist.
+    BRUECKE_WORKER_AUS = ("the picture check needs worker mode "
+                          "(worker: true in the config)")
+    # Deckel der Takt-Proben-Datei (E-P3): so viele (clip_s, wall_s)-Paare
+    # bleiben stehen, aelteste fallen. 50 ist reichlich fuer einen Fit ueber
+    # ERNTE_RATE_MIN_PROBEN und haelt die Datei unter ein paar KB.
+    BRUECKE_TAKT_MAX = 50
 
     @staticmethod
-    def _bruecke_puls(laeuft, i, n, zustand):
+    def _bruecke_puls(laeuft, i, n, grund, kopf=None):
         """laeuft.json der Pass-Ernte: Frische-Puls (mtime) + Fortschritt.
-        zustand: 'wartet' (Slot belegt: anderer Hintergrund-Job oder Live) |
-        'erntet' | 'bewertet'. Schreibfehler sind nie fatal (nur Anzeige)."""
+        `grund` aus BRUECKE_GRUENDE (startet | bg_lock | kein_platz | erntet |
+        bewertet); der grobe `zustand` wird daraus ABGELEITET — eine Quelle
+        statt eines Paares, das auseinanderlaufen kann. `kopf` sind die Felder,
+        die ueber den ganzen Lauf gleich bleiben (start_ts, dauer_s |
+        dauer_unbekannt, warm_up): sie muessen bei JEDEM Puls mitgeschrieben
+        werden, weil die Datei jedes Mal neu entsteht. Schreibfehler sind nie
+        fatal (nur Anzeige)."""
         try:
+            d = {"ts": round(time.time(), 1), "i": int(i), "n": int(n),
+                 "zustand": Service.BRUECKE_GRUENDE.get(grund, "erntet"),
+                 "grund": grund}
+            d.update(kopf or {})
             with open(laeuft, "w", encoding="utf-8") as f:
-                json.dump({"ts": round(time.time(), 1), "i": int(i), "n": int(n),
-                           "zustand": zustand}, f)
+                json.dump(d, f)
         except OSError:
             pass
 
     @staticmethod
-    def _bruecke_fortschritt(laeuft):
-        """-> {"msg", "i", "n", "zustand", "fortschritt"} fuer den Klick-Handler
+    def _bruecke_fortschritt(laeuft, plaetze=None):
+        """-> {"msg", "i", "n", "zustand", "grund", "fortschritt", "start_ts",
+        "dauer_s" | "dauer_unbekannt", "warm_up"?, "plaetze"?} fuer den Klick-Handler
         (laden=True). Texte englisch wie die uebrigen Bruecken-Meldungen dieses
         Blatts (Overlay-Texte: ME2-Uebersetzungsstrang).
 
         .345 (User 25.08., Konsens: 1 Gesamt- + 3 Unterbalken): `fortschritt`
         kommt render-fertig aus ernte.fortschritt_rechnen — der EINEN Quelle
         fuer beide Anzeigen (Pass-Check + Wizard); das Blatt-JS wendet die
-        Werte nur an. Puls-Frische entscheidet zentral ernte.puls_lesen."""
+        Werte nur an. Puls-Frische entscheidet zentral ernte.puls_lesen.
+
+        .507 B2 (E-P5): `plaetze` ist die Vergabestelle (Service._plaetze) —
+        beim Grund `kein_platz` nennt der Satz die LAGE, statt einen fremden
+        Hintergrund-Job zu behaupten, den es gar nicht gibt. Ohne sie (Gate und
+        Probe rufen die Funktion an der Klasse auf) bleibt der Satz allgemein.
+        Die Dauer wird hier NICHT gerechnet: sie steht seit dem ersten Puls in
+        der Datei (bruecke_vorrat, E-P3) — ohne gemessene Rate fuer DIESE
+        Maschine und Version traegt sie `dauer_unbekannt`, nie eine Ersatzzahl
+        ([[keine-eigenen-schwellen]]).
+
+        .508 J1: `warm_up` sagt, dass der Lauf ohne warmen Worker angefangen hat
+        und der Modell-Load in KEINER Zahl steckt (weil der Kaltaufschlag dieser
+        Maschine+Version nie gemessen wurde) — dann haengt der Satz es an.
+        Steckt er in `dauer_s`, kommt das Feld gar nicht erst mit."""
         d = {}
         try:
             with open(laeuft, encoding="utf-8") as f:
                 d = json.load(f) or {}
         except (OSError, ValueError):
             pass
-        i, n, z = int(d.get("i") or 0), int(d.get("n") or 0), str(d.get("zustand") or "erntet")
+        i, n = int(d.get("i") or 0), int(d.get("n") or 0)
+        grund = str(d.get("grund") or "")
+        if grund not in Service.BRUECKE_GRUENDE:
+            # Datei eines Laufs, der VOR dem Update gestartet ist (oder ein
+            # Lesefehler): aus dem groben Zustand den engsten passenden Grund
+            # ableiten statt zu raten. 'wartet' hiess dort immer 'kein Platz
+            # oder fremder Job' — der ehrlichste Ersatz ist kein_platz.
+            z_alt = str(d.get("zustand") or "erntet")
+            grund = {"wartet": "kein_platz", "bewertet": "bewertet"}.get(z_alt, "erntet")
+        z = Service.BRUECKE_GRUENDE[grund]
         from core import ernte as _ern
         puls = _ern.puls_lesen(os.path.dirname(laeuft))
-        if z == "wartet":
+        aus = {"i": i, "n": n, "zustand": z, "grund": grund,
+               "fortschritt": _ern.fortschritt_rechnen(i, n, puls)}
+        for k in ("start_ts", "dauer_s", "dauer_unbekannt", "warm_up"):
+            if d.get(k) is not None:
+                aus[k] = d[k]
+        lage = ""
+        if grund == "kein_platz" and plaetze is not None:
+            try:
+                zst = plaetze.zustand()
+                je_art = plaetze.belegt_je_art()
+                aus["plaetze"] = {"belegt": zst["belegt"],
+                                  "kapazitaet": zst["kapazitaet"],
+                                  "je_art": je_art}
+                teile = [f"{c} {Service.BRUECKE_ART_WORT.get(a, a)}"
+                         for a, c in sorted(je_art.items()) if c]
+                lage = (f" \u2014 {zst['belegt']} of {zst['kapazitaet']} busy"
+                        + (": " + ", ".join(teile) if teile else ""))
+            except Exception:
+                lage = ""
+        if grund == "startet":
+            msg = f"starting the check ({n} event(s) to prepare) \u2026"
+        elif grund == "bg_lock":
             msg = ("waiting for another background job to finish, then preparing "
-                   f"the pictures of this pass ({i} of {n} event(s) done) \u2026")
-        elif z == "bewertet":
-            msg = f"rating the pictures of this pass ({n} event(s) harvested) \u2026"
+                   f"the pictures ({i} of {n} event(s) done) \u2026")
+        elif grund == "kein_platz":
+            msg = (f"waiting for a free analysis slot{lage} "
+                   f"({i} of {n} event(s) done) \u2026")
+        elif grund == "bewertet":
+            msg = f"rating the pictures ({n} event(s) harvested) \u2026"
         else:
-            msg = f"preparing the pictures of this pass: {i} of {n} event(s) done \u2026"
-        return {"msg": msg, "i": i, "n": n, "zustand": z,
-                "fortschritt": _ern.fortschritt_rechnen(i, n, puls)}
+            msg = f"preparing the pictures: {i} of {n} event(s) done \u2026"
+        if aus.get("warm_up"):
+            # J1 (.508): der Lauf startete ohne warmen Worker, und der
+            # Kaltaufschlag ist auf DIESER Maschine+Version noch nie gemessen
+            # worden \u2014 dann steht er in keiner Zahl, also sagt es der Satz.
+            # (Mit Messung wandert er in dauer_s, und dieser Zusatz entfaellt:
+            # zweimal dasselbe zu sagen macht die Anzeige nicht ehrlicher.)
+            msg += " \u2014 plus warm-up after a restart"
+        aus["msg"] = msg
+        return aus
 
-    def _bruecke_angebote(self, bdir, bid, person):
+    def _bruecke_angebote(self, bdir, bid, person, nur_eids=None):
         """Angebote + Grenzfaelle EINER Person aus der vorrat.jsonl eines
-        Bruecken-Laufs, in der Item-Form des Overlays."""
+        Bruecken-Laufs, in der Item-Form des Overlays.
+
+        `nur_eids` (.507 B2, E-P2): der ZUSCHNITT auf das geklickte Ereignis.
+        Ohne diesen Filter waere er Schein — der Ordner traegt den ganzen
+        Durchgang, und der Nutzer saehe wieder die Bilder der Nachbar-Ereignisse
+        (Risiko 1 der Zuschnitt-Inventur). None = ganzer Durchgang."""
         zeilen = []
         with open(os.path.join(bdir, "vorrat.jsonl"), encoding="utf-8") as f:
             for l in f:
@@ -8700,6 +9302,9 @@ class Service:
                     "herkunft": "vorrat", "sim": z.get("sim"), "norm": z.get("norm"),
                     "richtung": z.get("richtung"),
                     "url": f"/lernlauf/vorrat/{bid}/{urllib.parse.quote(basis)}"}
+        def _dabei(z):
+            return nur_eids is None or str(z.get("eid")) in nur_eids
+        zeilen = [z for z in zeilen if _dabei(z)]
         nehmen = [_item(z) for z in zeilen
                   if z.get("angebot") and z.get("person") == person]
         # Grenzfaelle = Identitaet sicher, Norm unter der Linie aber ueber der
@@ -8710,22 +9315,45 @@ class Service:
                  and (z.get("fremd") is None or z["fremd"] < z["sim"])]
         return {"nehmen": nehmen, "grenz": grenz, "v_gesamt": len(zeilen)}
 
-    def _bruecke_alt_raeumen(self, dd, tage=7):
-        """Bruecken-Ordner aelter als `tage` entfernen (sie sind klein und
-        nur Angebots-Zwischenstand; Uebernahmen sind Kopien in faces/)."""
+    def _bruecke_alt_raeumen(self, dd, tage=None):
+        """Bruecken-Ordner aelter als `tage` Tage entfernen (sie sind klein und
+        nur Angebots-Zwischenstand; Uebernahmen sind Kopien in faces/).
+        -> (Anzahl, Bytes) des Geloeschten.
+
+        .507 B2 (E-P4): die Frist kommt aus `lernlauf_retention_d` — DERSELBEN
+        Config, nach der der Nachtjob die Lernlaeufe raeumt. Bis .506 standen
+        hier 7 harte Tage neben den konfigurierten 14 des Nachtjobs; wer die
+        Aufbewahrung hochsetzte, verlor seine Bruecken-Ordner trotzdem nach
+        einer Woche. 0 (oder unlesbar) heisst AUS, wie im Nachtjob.
+        Der Aufrufer ist seit .507 der Nachtjob `alt_aufraeumen`, nicht mehr
+        jeder Klick: die Automatik ist weg, ein Klick soll nicht nebenbei den
+        ganzen Lauf-Ordner durchgehen, waehrend ein Mensch auf den Balken sieht.
+        Kein Tabu-Test noetig: geloescht wird ausschliesslich unterhalb von
+        state/lernlauf/B*, nie faces/ personlern/ backups/."""
         import shutil
+        tage = int(self.cfg.get("lernlauf_retention_d") or 0) if tage is None else int(tage)
+        if tage <= 0:
+            return 0, 0
         wurzel = os.path.join(dd, "state", "lernlauf")
         grenze = time.time() - tage * 86400
+        n = groesse = 0
         # S2 [QS15]: rmtree nie neben einer laufenden Anlage — dasselbe
-        # RLock wie bruecke_vorrat (reentrant fuer den heutigen Aufruf).
+        # RLock wie bruecke_vorrat (reentrant fuer einen Aufruf von dort).
         with self._bruecke_anlage_lock:
             try:
                 for d in os.listdir(wurzel):
                     p = os.path.join(wurzel, d)
                     if d.startswith("B") and os.path.isdir(p) and os.path.getmtime(p) < grenze:
+                        try:
+                            groesse += sum(os.path.getsize(os.path.join(w, f))
+                                           for w, _d, fs in os.walk(p) for f in fs)
+                        except OSError:
+                            pass
                         shutil.rmtree(p, ignore_errors=True)
+                        n += 1
             except OSError:
                 pass
+        return n, groesse
 
     def kalib_fueller_starten(self, kamera):
         """Materialsuche fuer die Kalibrierseite EINER Kamera (Etappe 4 des
@@ -8875,12 +9503,60 @@ class Service:
             log=self.log, vorbereitung=_vorbereiten,
             abschluss=_abschluss)
 
-    def _bruecke_ernte(self, bdir, bid, eids, alle_eids, schwellen):
-        """Hintergrund-Ernte eines Passes: 1 Worker-Job je FEHLENDEM Event
-        (eids) mit einem Ernte-Platz aus der Vergabestelle (seit C2 dasselbe
-        Muster wie _lernlauf_ernte, ohne _gpu_bg_lock), danach
-        Vorrat-Bewertung ueber ALLE Events des Laufs (alle_eids).
-        Fehler landen LAUT in fehler.json + Log."""
+    def _bruecke_ernte(self, bdir, bid, eids, alle_eids, schwellen,
+                       kopf=None, k_abholer=1):
+        """Ernte des Pass-Checks: 1 Worker-Job je FEHLENDEM Event (eids) auf
+        einem Platz der Klasse `interaktiv`, danach Vorrat-Bewertung ueber ALLE
+        Events des Durchgangs (alle_eids). Fehler landen LAUT in fehler.json + Log.
+
+        .507 B2 (E-B2/E-P1): die Klasse ist `interaktiv`, nicht mehr `ernte` —
+        hinter diesem Job steht ein Mensch, der auf einen Balken sieht, und die
+        Fairness-Regel N-1 wirkt nur ZWISCHEN Klassen (in `ernte` konkurrierte
+        der Klick gleichberechtigt mit den K Lernlauf-Abholern um dasselbe
+        Semaphor). Die Puls-Pflicht bleibt: ohne Puls zieht der Platzwaechter
+        die Belegung nach 120 s ein, und weil er nur Analysen neu einreiht,
+        stuerbe die Arbeit still (S11b-Wache).
+
+        `k_abholer` (E-O1): beim Einzelklick 1 — ein Ereignis, ein Abholer. Beim
+        zweiten Knopf (ganzer Durchgang) K = Platzzahl, dasselbe Muster wie der
+        Lernlauf seit C2 (Warteschlange + K Abholer + EIN Koordinator, hier der
+        aufrufende Thread). Geteilt wird unter `q_lock` die Warteschlange, unter
+        `buch_lock` die Buecher (i_fertig, fertig.jsonl, Takt-Proben, Puls) —
+        die Datei schreibt zwar jeder atomar an, der Zaehler daneben waere sonst
+        ein verlorenes Read-Modify-Write.
+
+        `kopf` sind die Lauf-Felder des Balkens (start_ts, dauer_s |
+        dauer_unbekannt); sie reisen bei jedem Puls mit, weil laeuft.json jedes
+        Mal neu geschrieben wird.
+
+        .508 Nachfix: ohne Worker (Legacy-Modus) endet der Lauf hier EHRLICH,
+        bevor ein Platz genommen wird — s. den Wach-Block gleich unten."""
+        if not self.cfg.get("worker", True):
+            # Randbefund des .508-Zuges: `_worker(nr)` liefert im Legacy-Modus
+            # None, und unten steht `self._worker(_enr).job(...)` — das war ein
+            # AttributeError MITTEN im Ernte-Thread, also ein stiller Absturz
+            # hinter einem Balken, der bis zum Ablauf des Frische-Fensters
+            # weiterlief. Ehrlich beenden ist dasselbe Muster wie im Lernlauf
+            # (`_lernlauf_ernte`): Grund ins Log UND in die Datei, die der
+            # naechste Klick abholt (fehler.json -> bruecke_vorrat ->
+            # {ok:false,msg} im Handler), kein Platz genommen, kein Traceback.
+            # Der Regelweg kommt hier nicht mehr an — `bruecke_vorrat` prueft
+            # schon vor der Anlage. Diese zweite Wache traegt den Fall, wenn der
+            # Schalter zwischen Anlage und Ernte umgelegt wurde (die Config ist
+            # zur Laufzeit stellbar) oder die Ernte direkt angestossen wird.
+            self.log(f"PASS CHECK (stock chain, {bid}) not started: the "
+                     f"persistent worker is disabled (config 'worker')")
+            try:
+                with open(os.path.join(bdir, "fehler.json"), "w",
+                          encoding="utf-8") as f:
+                    json.dump({"fehler": self.BRUECKE_WORKER_AUS}, f)
+            except OSError:
+                pass
+            try:
+                os.unlink(os.path.join(bdir, "laeuft.json"))
+            except OSError:
+                pass
+            return
         from core import ernte as _ern, vorrat as _vor
         import anlernen as _al
         dd = self.cfg["data_dir"]
@@ -8908,19 +9584,32 @@ class Service:
                                      "clip_s": float(d.get("clip_s") or d.get("dauer_s") or 0)})
             timeout_s = int(self.cfg.get("nachhol_analyse_timeout_s") or 300)
             fps = self.cfg.get("fps_sample")
-            n_ges, i_fertig = len(eids), 0
-            for eid in eids:
+            n_ges = len(eids)
+            offen = collections.deque(eids)
+            q_lock, buch_lock = threading.Lock(), threading.Lock()
+            buch = {"i": 0}
+            proben = []                      # (clip_s, wall_s) je fertigem Event (E-P3)
+            panne = {"e": None}
+
+            def _puls(grund):
+                """EIN Schreiber je Zeitpunkt: laeuft.json entsteht bei jedem
+                Puls neu, und bei K Abholern schrieben sonst mehrere Threads
+                gleichzeitig in dieselbe Datei."""
+                with buch_lock:
+                    self._bruecke_puls(laeuft, buch["i"], n_ges, grund, kopf)
+
+            def _ernte_eines(eid):
                 d = akte.get(eid) or {}
                 start = float(d.get("start") or d.get("ts") or 0)
-                abgesendet, antwort = False, None
+                abgesendet, antwort, wall_s = False, None, 0.0
                 while not abgesendet:
                     self._bg_hungert()            # B4
                     # C2 (05.09.2026, bauplan_0505.md §1): `_gpu_bg_lock` wird
                     # nicht mehr GENOMMEN (Begruendung ausfuehrlich am
                     # Kalibrier-Auffueller); der lesende Blick bleibt und meldet
-                    # EHRLICH 'wartet', statt still zu stehen (.310).
+                    # EHRLICH, worauf gewartet wird (.310/.507).
                     if self._gpu_bg_lock.locked():
-                        self._bruecke_puls(laeuft, i_fertig, n_ges, "wartet")
+                        _puls("bg_lock")
                     else:
                         # .502 (Feldfall beim Tester 04.09.2026): _bg_satt() stand
                         # frueher VOR der Slot-Pruefung. Damit loeschte
@@ -8949,13 +9638,18 @@ class Service:
                             "log": os.path.join(bdir, "ernte.log")}
                         # A1 (05.09.): Klasse statt Text-Etikett (s. Kalibrier-Auffueller).
                         # C2: Anmeldung DAVOR, damit die Fairness-Regel diesen
-                        # Warter mitzaehlt.
-                        with self._plaetze.wartend("ernte"), \
-                                self._plaetze.platz(eid, art="ernte",
+                        # Warter mitzaehlt. B1/.507: Klasse `interaktiv` — sie
+                        # wird von der N-1-Latte nie zurueckgehalten.
+                        with self._plaetze.wartend("interaktiv"), \
+                                self._plaetze.platz(eid, art="interaktiv",
                                                     timeout_s=1.0) as _enr:
                             if _enr is not None:
                                 self._bg_satt()           # B4
-                                self._bruecke_puls(laeuft, i_fertig, n_ges, "erntet")
+                                _puls("erntet")
+                                # E-P3: die Wanduhr des Jobs — ohne das Warten auf
+                                # den Platz (Muster _lernlauf_ernte), sonst maesse
+                                # die Rate die Warteschlange statt der Arbeit.
+                                _t_ev = time.perf_counter()
                                 # A2 (05.09.): Puls des PLATZES (nicht zu
                                 # verwechseln mit _bruecke_puls darueber — das
                                 # ist der Fortschritts-Marker der Bruecken-UI).
@@ -8963,29 +9657,73 @@ class Service:
                                 antwort = self._worker(_enr).job(
                                     _auftrag, timeout_s=timeout_s,
                                     puls=self._plaetze.puls_fuer(_enr))
+                                wall_s = time.perf_counter() - _t_ev
                                 abgesendet = True
                         if not abgesendet:
-                            # Kein Platz binnen der Frist: dieselbe ehrliche
-                            # Meldung wie oben, sonst stuende die Bruecken-UI
-                            # waehrend des Wartens auf dem letzten Stand.
-                            self._bruecke_puls(laeuft, i_fertig, n_ges, "wartet")
+                            # Kein Platz binnen der Frist: EHRLICH sagen, dass
+                            # die Plaetze belegt sind (E-P5) — sonst stuende die
+                            # Bruecken-UI waehrend des Wartens auf dem letzten
+                            # Stand, und der fruehere Satz behauptete einen
+                            # fremden Hintergrund-Job, den es gar nicht gibt.
+                            _puls("kein_platz")
                     if not abgesendet:
                         time.sleep(1)
                 eintrag = {"eid": eid, "ok": bool(antwort and antwort.get("ok"))}
                 if antwort:
-                    # .346: vorab_verworfen mit — fuer die "warum 0 Kandidaten?"-
-                    # Diagnose eines Passes ist genau dieser Topf die Antwort
-                    # (Distanz-Gesichter scheitern an der Vorschranke).
-                    for k in ("detektionen", "vorab_verworfen", "kandidaten",
-                              "m", "s", "v"):
-                        eintrag[k] = antwort.get(k)
+                    # .346/.505: die Zaehler-Felder kommen aus der EINEN Quelle
+                    # core.ernte.ZAEHLER_FELDER (die feste Sechser-Liste hier war
+                    # die dritte Instanz derselben Falle: der Vorschranken-Topf
+                    # `vorab_verworfen` fiel still aus dem Transport). Damit
+                    # traegt die Bruecken-fertig.jsonl dieselben Toepfe wie die
+                    # des Lernlaufs.
+                    for k in _ern.ZAEHLER_FELDER:
+                        eintrag[k] = int(antwort.get(k) or 0)
                     if not antwort.get("ok"):
                         eintrag["fehler"] = str(antwort.get("fehler"))[:160]
-                _ern.fertig_anhaengen(bdir, eintrag)
-                i_fertig += 1
+                with buch_lock:
+                    _ern.fertig_anhaengen(bdir, eintrag)
+                    buch["i"] += 1
+                    if eintrag["ok"]:
+                        # Nur gelungene Ernten taugen als Takt-Probe: ein
+                        # abgebrochener Job misst den Abbruch, nicht die Arbeit.
+                        proben.append((float((akte.get(eid) or {}).get("clip_s")
+                                             or (akte.get(eid) or {}).get("dauer_s")
+                                             or 0.0), wall_s))
                 # Puls fuer die Frische-Pruefung des Klick-Handlers + Fortschritt
-                self._bruecke_puls(laeuft, i_fertig, n_ges, "erntet")
-            self._bruecke_puls(laeuft, n_ges, n_ges, "bewertet")
+                _puls("erntet")
+
+            def _abholer():
+                """EIN Abholer: naechstes Ereignis nehmen, ernten, weiter.
+                Eine Ausnahme beendet den ganzen Lauf LAUT (fehler.json des
+                Koordinators), statt diesen Abholer still sterben zu lassen."""
+                while True:
+                    with q_lock:
+                        if not offen or panne["e"] is not None:
+                            return
+                        eid = offen.popleft()
+                    try:
+                        _ernte_eines(eid)
+                    except Exception as e:              # noqa: BLE001 — Grund reist mit
+                        with q_lock:
+                            if panne["e"] is None:
+                                panne["e"] = e
+                        return
+
+            _abholer_threads = [threading.Thread(target=_abholer, daemon=True,
+                                                 name=f"bruecke-abholer-{j + 1}")
+                                for j in range(max(1, int(k_abholer)))]
+            for t in _abholer_threads:
+                t.start()
+            for t in _abholer_threads:
+                t.join()
+            if panne["e"] is not None:
+                raise panne["e"]
+            _puls("bewertet")
+            # E-P3 (Ernte-Takt): die Bruecke misst ab jetzt MIT und schreibt
+            # ueber DIESELBE Funktion wie der Lernlauf (core.wanduhr). Ohne das
+            # haette eine Installation ohne je gelaufenen Lernlauf nie eine
+            # Rate — und der Balken sagte fuer immer "Dauer unbekannt".
+            self._bruecke_takt_buchen(proben)
             refs = _al.refs_matrix_roh(self.cfg.get("modell"))
             if not any(len(M) for M in refs.values()):
                 raise RuntimeError("reference cache empty — open the person page "
@@ -8993,7 +9731,7 @@ class Service:
             s = dict(schwellen)
             s["szenario_gap_min"] = int(self.cfg.get("szenario_gap_min", 5))
             erg = _vor.angebote_bewerten(bdir, events_liste, s, refs)
-            self.log(f"PASS STOCK ({bid}): {len(eids)} event(s) harvested "
+            self.log(f"PASS STOCK ({bid}): {n_ges} event(s) harvested "
                      f"({len(alle_eids)} in the pass) -> {erg['angebote']} offer(s) "
                      f"from {erg['v_gesamt']} stock faces"
                      + (f"; rejected {erg['gruende']}" if erg["gruende"] else ""))
@@ -9009,6 +9747,61 @@ class Service:
                 os.unlink(laeuft)
             except OSError:
                 pass
+
+    def _bruecke_takt_buchen(self, proben):
+        """Ernte-Takt aus den Proben DIESES Laufs fortschreiben (E-P3).
+
+        Der Lernlauf misst je Ereignis (clip_s, wall_s) und schreibt am Lauf-Ende
+        eine Rate (core.wanduhr.ernte_rate_fit/-schreiben). Ein Klick-Lauf hat
+        aber oft nur EIN Ereignis, und `ernte_rate_fit` braucht mindestens
+        ERNTE_RATE_MIN_PROBEN — deshalb sammeln die Klick-Laeufe ihre Proben in
+        einer kleinen Datei unter state/ (Deckel BRUECKE_TAKT_MAX, aelteste
+        fallen) und fitten daraus. Geschrieben wird ueber DIESELBE Funktion wie
+        der Lernlauf, in DIESELBE Datei: es gibt genau eine Rate je Maschine und
+        Version.
+
+        Nur Proben DIESER Maschine und DIESER Version bleiben stehen — die Rate
+        gilt ohnehin nur fuer dieses Paar (core/wanduhr.ernte_rate_lesen), und
+        ein Update setzt die Messung damit bewusst zurueck.
+
+        Fehler sind nie fatal: eine fehlende Rate kostet die Dauerschaetzung,
+        nicht die Ernte."""
+        from core import wanduhr as _wu
+        dd = self.cfg["data_dir"]
+        hw, ver = _placement_hw_key(), os.environ.get("SUSLIK_VERSION", "dev")
+        pfad = os.path.join(dd, "state", "bruecke_takt.jsonl")
+        try:
+            alt = []
+            if os.path.exists(pfad):
+                with open(pfad, encoding="utf-8") as f:
+                    for l in f:
+                        try:
+                            z = json.loads(l)
+                        except Exception:
+                            continue
+                        if z.get("hw") == hw and z.get("ver") == ver:
+                            alt.append(z)
+            neu = alt + [{"hw": hw, "ver": ver, "clip_s": round(c, 2),
+                          "wall_s": round(w, 2), "ts": round(time.time(), 1)}
+                         for c, w in proben]
+            neu = neu[-self.BRUECKE_TAKT_MAX:]
+            # Lesen+Schreiben unter derselben Sperre wie die Ordner-Anlage: zwei
+            # gleichzeitige Klick-Laeufe wuerden sich sonst gegenseitig Proben
+            # ueberschreiben (Read-Modify-Write).
+            with self._bruecke_anlage_lock:
+                os.makedirs(os.path.dirname(pfad), exist_ok=True)
+                with open(pfad, "w", encoding="utf-8") as f:
+                    for z in neu:
+                        f.write(json.dumps(z, ensure_ascii=False) + "\n")
+            rate = _wu.ernte_rate_fit([(z["clip_s"], z["wall_s"]) for z in neu])
+            if rate:
+                _wu.ernte_rate_schreiben(dd, hw, ver, rate)
+                self.log(f"harvest rate measured (pass check): {rate['k']} s per "
+                         f"clip-second + {rate['fix_s']} s per event over "
+                         f"{rate['n']} events — the next check estimates with it")
+        except OSError as e:
+            self.log(f"harvest rate not saved ({e}) — the progress bar keeps "
+                     "saying the duration is unknown")
 
     def _lernlauf_vorrat(self, lauf_id, events_liste):
         """Vorrat-Bewertung (core/vorrat.angebote_bewerten) fuer EINEN Lauf.
@@ -10433,12 +11226,15 @@ class Service:
             if token is not None:
                 self._analyse_beendet(eid, token)
 
-    def process(self, eid, nachhol=0, koerper=False):
+    def process(self, eid, nachhol=0, koerper=False, marke=None):
         """nachhol=N (N>=1): Wiederholung einer frueher mit 'fehler' geendeten Analyse.
         Ein Nachhol-Lauf ist STUMM (kein Alert/Push/Telegram/MQTT, s. _nachhol_runde) und
         fasst die Live-Gesundheitssignale nicht an — er repariert nur die Akte.
         koerper=True (nur .161-Nachanalyse): derselbe stumme Weg, aber der Koerper-Strang
-        laeuft mit, weil NUR er die beurteilten Bilder in den Kontroll-Speicher legt."""
+        laeuft mit, weil NUR er die beurteilten Bilder in den Kontroll-Speicher legt.
+        marke (H1/.507): die Marke des Queue-Eintrags — heute genau
+        `core.einspielen.reanalyse_marke()`, die den Live-only-Uebersprung
+        bewusst umgeht (E-P9). Kein Aufrufer ohne Marke aendert sein Verhalten."""
         cfg = self.cfg
         _hb = int(cfg.get("hunger_bremse_s") or 0)
         if _hb and self._bg_hunger_seit is not None:
@@ -10579,7 +11375,17 @@ class Service:
                 if _will:
                     _wz = ((self.live_health().get("watchers") or {})
                            .get(camera) or {}).get("state")
-                    if _wz == _reg.LIVE_AKTIV:
+                    # H1 / E-P9 (.507, Feldbefund 05.09.): der letzte Schritt
+                    # der Entscheidung steht als REINE Funktion in
+                    # core/einspielen — sie kennt zusaetzlich die Marke des
+                    # Queue-Eintrags. Eine Support-Einspielung umgeht den
+                    # Uebersprung BEWUSST (ihr Zweck IST die Re-Analyse
+                    # dieses Ereignisses); bis .506 antwortete die API
+                    # "eingereiht 7" und der Worker uebersprang alle sieben
+                    # still. Normalbetrieb (Poll/MQTT) reicht keine Marke
+                    # herein und verhaelt sich damit bitgleich zu .506.
+                    if _einspiel.live_only_ueberspringen(
+                            _wz == _reg.LIVE_AKTIV, marke):
                         # .415 DEADLOCK-FIX (Tester-Realfall 02.09.: erster
                         # Live-only-Event fror den Verarbeitungs-Thread fuer
                         # immer ein): process() HAELT self.lock bereits (Zeile
@@ -10692,6 +11498,18 @@ class Service:
             # seinem Versuchsbudget erneut). Darueber: Teilurteil MIT sichtbarem Flag.
             _fg = (res or {}).get("frames_gelesen")
             _fs = (res or {}).get("frames_soll")
+            # E-P7 (.507): DIESELBE Sicherung wie fuer _fg/_fs, aus demselben
+            # Grund. Bis .506 las die Akte `frames_fehlen` erst UNTEN aus
+            # `(res or {})` — im Verwurfsfall ist `res` dann None, und
+            # ausgerechnet die schlimmsten Ereignisse trugen die
+            # Unvollstaendigkeits-Marke NICHT (die Ereignis-Liste zeigte fuer
+            # sie kein ⚠, obwohl frames_gelesen/frames_soll sie belegen).
+            # `hwdec_fallback` reist aus demselben Zug mit: der Rueckfall auf
+            # Software-Decode stand bisher nur in results.jsonl und war in der
+            # Dienst-Akte unsichtbar (Decode-Leser §5.1).
+            _ffehlen = bool((res or {}).get("frames_fehlen"))
+            _hwfb = bool((res or {}).get("hwdec_fallback"))
+            _verwurf = _ainfo.get("verwurf_grund")
             if _fs:
                 # .287 [clipdbg] (c): Clip-Qualitaet nach der Analyse — die
                 # '1/210'-Klasse des Haenger-Befunds wird hier je Event belegt.
@@ -10702,6 +11520,7 @@ class Service:
                 self.log(f"{eid}: clip only {_fg}/{_fs} frames readable (<50%) — "
                          f"treated as analysis failure")
                 res = None
+                _verwurf = _reg.VERWURF_LESBARKEIT
             ours = (res or {}).get("persons", {})
             max_bw = (res or {}).get("max_bw", 0)
             if res is None:      # analyze gescheitert -> nicht als "unknown" fehlwerten/alerten
@@ -10788,7 +11607,21 @@ class Service:
                    if res is not None and res.get("detektionen") is not None else {}),
                 "max_bw": max_bw,
                 "frames_gelesen": _fg, "frames_soll": _fs,
-                **({"frames_fehlen": True} if (res or {}).get("frames_fehlen") else {}),
+                # E-P7: aus den VOR dem Verwurf gesicherten Werten, nicht aus
+                # `(res or {})` — sonst faellt die Marke genau dort weg, wo sie
+                # am meisten sagt.
+                **({"frames_fehlen": True} if _ffehlen else {}),
+                **({"hwdec_fallback": True} if _hwfb else {}),
+                # Warum diese Zeile `fehler` heisst. Additiv und nur auf
+                # Fehler-Zeilen; die Codes stehen in registry.VERWURF_GRUENDE
+                # (EINE Aufzaehlung, Leser: Ereignisseite und Catch-up-Log).
+                # Der `or`-Zweig ist kein Raten, sondern die ehrliche
+                # Restklasse: run_analyze meldet fuer JEDEN seiner
+                # None-Rueckwege einen Code, und ein Aufrufer, der eines Tages
+                # einen neuen Weg baut, bekommt hier den allgemeinen statt
+                # einer leeren Zeile.
+                **({"verwurf_grund": _verwurf or _reg.VERWURF_ANALYSE_NONE}
+                   if kategorie == "fehler" else {}),
                 "frigate": {"label": f_label, "score": f_score, "cos": frigate_to_cos(f_score),
                             # additiv, nur vorwaerts (S2-Fund): Objekt-Score fuer no_person —
                             # Altzeilen ohne das Feld sind un-klassifizierbar (Sicherheits-Semantik)
@@ -11024,7 +11857,7 @@ class Service:
                 # Sweep-Nachverarbeitung bleibt damit zeitlich konsistent)
                 self.last_seen[p] = max(self.last_seen.get(p, 0), entry.get("start") or now)
         for p in entry["bestaetigt"]:
-            self._nachlern_anstossen(p, entry.get("eid"))   # Bestands-Suche + Auto-Vorrat nach Durchgangs-Ende (Debounce, User 21.07./.308)
+            self._nachlern_anstossen(p)                     # Bestands-Suche nach Durchgangs-Ende (Debounce, User 21.07.; .507: keine Auto-Ernte mehr)
         if alt or not neu:
             return False
         # SZENEN-Ereignis (User 18.07. "szenenorientiert"): genau EIN Publish pro
@@ -11089,10 +11922,11 @@ class Service:
         self._spur(f"presence {entry['eid']}", _senden)
         return True
 
-    def process_safe(self, eid, nachhol=0, koerper=False):
-        """process() fuer Timer-/Sweep-Threads: Exception darf nie einen Thread still toeten."""
+    def process_safe(self, eid, nachhol=0, koerper=False, marke=None):
+        """process() fuer Timer-/Sweep-Threads: Exception darf nie einen Thread still toeten.
+        `marke` reicht die Queue-Marke dieses Eintrags durch (H1/.507)."""
         try:
-            self.process(eid, nachhol=nachhol, koerper=koerper)
+            self.process(eid, nachhol=nachhol, koerper=koerper, marke=marke)
         except Exception as e:
             self.log(f"{eid}: unexpected error in the processing thread: {e}")
 
@@ -12598,7 +13432,14 @@ class Service:
             return
         if entry.get("kategorie") == "fehler":
             self._nachhol_sperre = min(6, self._nachhol_sperre * 2 + 1)   # 1, 3, 6 Runden Pause
-            self.log(f"{eid}: catch-up attempt {n} again 'fehler' — pausing {self._nachhol_sperre} "
+            # E-P7 (.507): den GRUND mitnennen. Beim Feldtester endeten am
+            # 05.09. zwei Ereignisse nach drei Versuchen als `fehler` (0,6 s /
+            # 4,7 s, 0 Gesichter) — im Log stand nur, DASS es wieder fehlschlug.
+            # Der Code kommt aus der eben geschriebenen Akte-Zeile, es wird
+            # nichts zweites gerechnet.
+            self.log(f"{eid}: catch-up attempt {n} again 'fehler' "
+                     f"({entry.get('verwurf_grund') or 'reason not recorded'}) "
+                     f"— pausing {self._nachhol_sperre} "
                      f"rounds (malfunction may still be active)")
             return
         self._nachhol_sperre = 0
@@ -13597,26 +14438,58 @@ def make_handler(svc):
                             args=(svc.embedder,), daemon=True).start()
                         return self._send(200, refcache_warte_antwort(anlernen),
                                           "application/json")
-                    eids = [str(e) for e in (d.get("eids") or [])][:200]
+                    # .507 B2 (E-B3/E-P2): der Klick meint EIN Ereignis
+                    # (`eid`) fuer diese Person; `ganzer_pass` ist der zweite
+                    # Knopf (E-O1, alle Ereignisse des Durchgangs). Den
+                    # Durchgang rechnet der Dienst selbst aus der Akte — das
+                    # Blatt traegt keine eid-Liste mehr.
+                    eid = str(d.get("eid") or "").strip()
+                    ganzer_pass = bool(d.get("ganzer_pass"))
+                    # .507 B3: die Uebergangsregel fuer den Alt-Body
+                    # {person, eids:[…]} ist ENTFALLEN — die Personenseite
+                    # (auftritte.py) und tools/tick_check.py senden beide das
+                    # eine Ereignis. Ein Klick ohne Ereignis ist damit ein
+                    # ehrlicher Fehler statt einer stillen Ganz-Pass-Ernte
+                    # (ein alter, noch offener Browser-Tab trifft genau das —
+                    # eine Seiten-Aktualisierung loest es).
+                    if not eid:
+                        return self._send(400, json.dumps(
+                            {"ok": False, "msg": "no event given — reload the page"},
+                            ensure_ascii=False), "application/json")
                     if cfg.get("vorrat_aktiv"):
-                        # .308: Pass-Check ueber die NEUE Kette — alle Frames
-                        # des Durchgangs geerntet, Konsens + Linie; der Alt-Weg
-                        # (ein Event-Crop je Event) bleibt bei Vorrat=aus.
-                        _zst, _nutz = svc.bruecke_vorrat(person, eids)
+                        # .308: Pass-Check ueber die Vorrats-Kette — Frames
+                        # geerntet, Konsens + Linie; der Alt-Weg (ein
+                        # Event-Crop je Event) bleibt bei Vorrat=aus.
+                        _zst, _nutz = svc.bruecke_vorrat(person, eid, ganzer_pass)
                         if _zst == "laeuft":
-                            # Im Normalfall ist der Pass schon geerntet (Auto-
-                            # Vorrat nach Durchgangs-Ende); nur ein Klick
-                            # WAEHREND der Karenz/Ernte trifft dieses Warten —
-                            # der Browser fragt wie beim Modell-Laden nach.
+                            # .507: der Regelfall. Bis .506 war der Vorrat meist
+                            # schon da (Auto-Ernte nach Durchgangs-Ende); die
+                            # Automatik ist weg, geerntet wird auf Klick — also
+                            # ist der Balken Pflicht, nicht Ausnahme. Der
+                            # Browser fragt wie beim Modell-Laden nach.
+                            _antw = {"ok": True, "laden": True,
+                                     "msg": _nutz["msg"],
+                                     "i": _nutz["i"], "n": _nutz["n"],
+                                     "zustand": _nutz["zustand"],
+                                     # .343-Lehre (Bug-Jagd 25.08.): der Handler
+                                     # pickt Felder EINZELN — was
+                                     # _bruecke_fortschritt liefert, MUSS hier
+                                     # explizit mit, sonst faellt es stumm raus.
+                                     # Genau deshalb stehen die .507-Felder
+                                     # (Grund, Start, Dauer, Platz-Lage) hier
+                                     # namentlich und nicht als Rest-Dict.
+                                     "grund": _nutz.get("grund"),
+                                     "start_ts": _nutz.get("start_ts"),
+                                     "dauer_s": _nutz.get("dauer_s"),
+                                     "dauer_unbekannt": _nutz.get("dauer_unbekannt"),
+                                     # .508 J1: kalter Worker ohne gemessenen
+                                     # Kaltaufschlag — das Blatt haengt "+ warm-up"
+                                     # an die Dauer-Zeile.
+                                     "warm_up": _nutz.get("warm_up"),
+                                     "plaetze": _nutz.get("plaetze"),
+                                     "fortschritt": _nutz.get("fortschritt")}
                             return self._send(200, json.dumps(
-                                {"ok": True, "laden": True, "msg": _nutz["msg"],
-                                 "i": _nutz["i"], "n": _nutz["n"],
-                                 "zustand": _nutz["zustand"],
-                                 # .343-Lehre (Bug-Jagd 25.08.): der Handler pickt
-                                 # Felder einzeln — was _bruecke_fortschritt liefert,
-                                 # MUSS hier explizit mit, sonst faellt es stumm raus.
-                                 "fortschritt": _nutz.get("fortschritt")},
-                                ensure_ascii=False), "application/json")
+                                _antw, ensure_ascii=False), "application/json")
                         if _zst == "fehler":
                             return self._send(200, json.dumps(
                                 {"ok": False, "msg": str(_nutz)[:160]},
@@ -13630,12 +14503,26 @@ def make_handler(svc):
                             msg = _sprache.t("antwort.bruecke_nur_grenz", n=len(grenz))
                         else:
                             msg = _sprache.t("antwort.bruecke_nichts")
-                        svc.log(f"PASS CHECK: {person} — {len(eids)} event(s) via stock "
+                        # .507: der Umfang steht in der Zeile, nicht mehr eine
+                        # Event-Zahl, die der Browser geschickt hat.
+                        _pass = svc._bruecke_durchgang(eid) or [eid]
+                        _umfang = (f"{len(_pass)} event(s) of this pass" if ganzer_pass
+                                   else f"1 event of {len(_pass)} in this pass")
+                        svc.log(f"PASS CHECK: {person} — {_umfang} via stock "
                                 f"chain -> {len(nehmen)} to take / {len(grenz)} borderline "
                                 f"({_nutz.get('v_gesamt', 0)} stock faces)")
                         return self._send(200, json.dumps(
                             {"ok": True, "nehmen": nehmen, "grenz": grenz,
                              "msg": msg}, ensure_ascii=False), "application/json")
+                    # Alt-Weg (vorrat_aktiv=aus): DERSELBE Zuschnitt, sonst
+                    # verhielte sich dieselbe Oberflaeche je nach Schalter
+                    # anders. Ohne Akte bleibt es beim geklickten Ereignis —
+                    # dieser Weg misst gespeicherte Event-Crops und braucht die
+                    # Durchgangs-Kette nicht. .507 B3: der 200er-Deckel schuetzt
+                    # jetzt genau diesen Weg (der Durchgang kommt aus der Akte,
+                    # nicht mehr aus dem Browser).
+                    eids = ((svc._bruecke_durchgang(eid) or [eid])[:200]
+                            if ganzer_pass else [eid])
                     dg = {}          # D1: Diagnose-Satz der Pruefung (Zahlen)
                     nehmen, grenz = anlernen.lernbruecke_pruefen(
                         person, eids, emb=svc.embedder, diagnose=dg,
@@ -15292,6 +16179,33 @@ def make_handler(svc):
                 # einer Meldung, die sagt, was fehlt.
                 _fensterfelder = [k for k in ("start", "ende", "max", "richtung")
                                   if _b.get(k) is not None]
+                # E-P8 (.507, Befund am Klon-Testbett 05.09.): VOR dem ersten
+                # api()-Aufruf pruefen, ob diese Anlage ueberhaupt eine Frigate
+                # hat. Ohne die Vorpruefung baute `api()` `"" + "/api/events?…"`
+                # zusammen, die stdlib warf `ValueError: unknown url type`, und
+                # der Sammel-except unten machte daraus HTTP 400 mit dem
+                # INTERNEN Ausnahmenamen (Beleg stress_nb.log:7). Der Bediener
+                # las einen Python-Fehler statt einer Auskunft.
+                #
+                # EINE Stelle statt drei: die Frage „braucht dieser Aufruf
+                # Frigate" ist an den Zweigen unten ablesbar — Fensterweg,
+                # Einzel-Event (mit und ohne Kamera-Wunsch) ja, der CLIP-Weg
+                # nein (seine Vorlage liegt schon unter data_dir, er muss auf
+                # einer Anlage ohne Frigate weiter laufen). Drei Kopien
+                # derselben Pruefung waeren genau das Streu-Literal, an dem ein
+                # spaeterer vierter Zweig still vorbeiliefe.
+                # 503 statt 400: der AUFRUF ist richtig gestellt, die ANLAGE
+                # ist dafuer nicht eingerichtet.
+                _frigate_weg = bool(_q_ev) or (bool(_fensterfelder)
+                                               and not _q_clip)
+                if _frigate_weg:
+                    _fb = _einspiel.frigate_bereit(cfg)
+                    if _fb:
+                        svc.log(f"SUPPORT: einspielen refused — {_fb}")
+                        return self._send(503, json.dumps(
+                            {"ok": False,
+                             "msg": _sprache.t("antwort.einspielen.frigate_fehlt")},
+                            ensure_ascii=False), "application/json")
                 try:
                     if _fensterfelder and not _q_ev and not _q_clip:
                         # FENSTER-WEG als NACHLAUF-WERKZEUG (.505, 05.09.2026 —
@@ -15374,16 +16288,39 @@ def make_handler(svc):
                         # derselben Sekunde schon in der Schlange. Vorher hiess
                         # jedes "nicht laufend" eingereiht; bei vollem Deckel war
                         # `eingereiht: 5000` schlicht gelogen.
+                        # H1 / E-P9 (.507): jedes eingereihte Ereignis traegt
+                        # die Re-Analyse-Marke — sonst uebersprang der Worker
+                        # alle Ereignisse einer live-gedeckten Kamera still,
+                        # waehrend die Antwort „eingereiht 7" sagte
+                        # (Feldbefund 05.09., auftraege_nach_0505.md H1).
                         _ids, _laufend_weg, _schon = [], [], []
                         for _e2 in _wahl:
                             _eid2 = str(_e2["id"])
-                            _erg2 = svc.event_neu_einreihen(_eid2)
+                            _erg2 = svc.event_neu_einreihen(
+                                _eid2, marke=_einspiel.reanalyse_marke())
                             if _erg2 is True:
                                 _ids.append(_eid2)
                             elif _erg2 is False:
                                 _laufend_weg.append(_eid2)
                             else:
                                 _schon.append(_eid2)
+                        # E-P9 zweiter Teil: die Antwort SAGT, welche der
+                        # eingereihten Ereignisse auf einer Kamera liegen, der
+                        # ein laufender Live-Waechter zusieht. Die Analyse
+                        # laeuft dort jetzt (Marke oben) — die Auskunft sagt
+                        # dem Bediener, dass er dieselbe Szene doppelt rechnen
+                        # laesst. Quelle ist die ENGINE-QUITTUNG (live_health),
+                        # nicht der Config-Wunsch; es ist bewusst die
+                        # schwaechere Frage „Waechter laeuft" und nicht „waere
+                        # uebersprungen worden" (dafuer braeuchte es zusaetzlich
+                        # den worker_aus-Schalter der Kamera, und der wird in
+                        # process() gelesen — hier waere er ein zweites Literal).
+                        _wa = svc.live_health().get("watchers") or {}
+                        _gedeckt = sorted({
+                            str(_e3.get("camera") or "?") for _e3 in _wahl
+                            if str(_e3["id"]) in set(_ids)
+                            and (_wa.get(str(_e3.get("camera") or "?"))
+                                 or {}).get("state") == _reg.LIVE_AKTIV})
                         svc.log(f"SUPPORT: einspielen source=fenster "
                                 f"camera={_kam or '<all>'} "
                                 + (f"after={_t0:.0f}" if _t0 is not None
@@ -15396,11 +16333,18 @@ def make_handler(svc):
                                 f"busy={len(_laufend_weg)} "
                                 f"already_queued={len(_schon)} "
                                 + ("window_incomplete=yes " if _unvoll else "")
+                                + (f"live_covered={','.join(_gedeckt)} "
+                                   if _gedeckt else "")
                                 + f"cameras={_je_kam} "
                                 f"ids={','.join(_ids)[:300]}")
                         _ant = {"ok": True, "weg": "fenster", "gefunden": _gef,
                                 "eingereiht": len(_ids), "seiten": _seiten,
                                 "je_kamera": _je_kam, "events": _ids,
+                                # E-P9: leer, wenn kein Waechter eine der
+                                # eingereihten Kameras deckt — das Feld ist
+                                # IMMER da, damit ein Aufrufer nicht raten muss,
+                                # ob es fehlt oder nichts gefunden wurde.
+                                "live_gedeckt": _gedeckt,
                                 "rueckstau_url": "/health"}
                         if _geklemmt is not None:
                             _ant["geklemmt_auf"] = _geklemmt
@@ -15434,7 +16378,11 @@ def make_handler(svc):
                         # der Queue: Metadaten UND Clip kommen wie immer von
                         # der konfigurierten frigate_url, es wird nichts
                         # hinterlegt. Der einfachste Weg zuerst.
-                        _erg1 = svc.event_neu_einreihen(_q_ev)
+                        # H1 / E-P9 (.507): mit Re-Analyse-Marke — auch dieses
+                        # eine Ereignis darf nicht am Live-only-Uebersprung
+                        # verschwinden, wenn seine Kamera live gedeckt ist.
+                        _erg1 = svc.event_neu_einreihen(
+                            _q_ev, marke=_einspiel.reanalyse_marke())
                         if _erg1 is False:
                             # W-A3 E3: laeuft gerade — nichts wurde angefasst.
                             # 409 statt 200, damit der Bediener es nochmal
@@ -15606,9 +16554,24 @@ def make_handler(svc):
                     if not ok:
                         return self._send(400, json.dumps({"ok": False, "msg": erg},
                                                           ensure_ascii=False), "application/json")
+                    # .507 B3b: der Kettungs-Modus je Area reist im SELBEN Body
+                    # und wird unter DEMSELBEN Lock geschrieben — Zuordnung und
+                    # Modus duerfen nie halb gespeichert sein. Ein alter Browser-
+                    # Tab ohne das Feld laesst die eingestellten Modi stehen
+                    # (None = nicht mitgeschickt), er loescht sie nicht.
+                    _kett_roh = d.get("kettung")
+                    if _kett_roh is None:
+                        _kett = None
+                    else:
+                        ok_k, _kett = _areas_mod.kettung_validieren(_kett_roh, erg)
+                        if not ok_k:
+                            return self._send(400, json.dumps({"ok": False, "msg": _kett},
+                                                              ensure_ascii=False), "application/json")
                     with _cfg_lock:                       # Lesen+Aendern+Schreiben unter EINEM Lock
                         store = _lade_config_store(cfg)   # (Widerleger .91: sonst verliert ein
                         store["areas"] = erg              # paralleler Kamera-Schrieb still)
+                        if _kett is not None:
+                            store["areas_kettung"] = _kett
                         _store_schreiben(_config_store_pfad(cfg), store)
                     # KEIN svc.neustart(): Areas sind reine Sicht/Meldetext — FRISCHES Objekt
                     # zuweisen statt in-place mutieren (alle Threads teilen svc.cfg; Leser sehen
@@ -15617,9 +16580,12 @@ def make_handler(svc):
                     # VOR dem Audit (Widerleger .91): scheitert der Audit-Append, sind Platte und
                     # laufende Instanz trotzdem schon einig — kein geteilter Zustand.
                     cfg["areas"] = erg
+                    if _kett is not None:
+                        cfg["areas_kettung"] = _kett
                     try:
                         with open(os.path.join(cfg["data_dir"], "config", "config_audit.jsonl"), "a") as f:
-                            f.write(json.dumps({"ts": round(time.time(), 1), "areas": erg},
+                            f.write(json.dumps({"ts": round(time.time(), 1), "areas": erg,
+                                                "areas_kettung": cfg.get("areas_kettung") or {}},
                                                ensure_ascii=False) + "\n")
                             f.flush()
                     except OSError as e:
@@ -15894,11 +16860,17 @@ def make_handler(svc):
                     _vis_grund = _visx.grund_text  # (vision_stimme, szenarien.py);
                 except Exception:                  # nie Alarm-Ausloeser, nie Veto
                     _vmap, _vis_grund = {}, str
-                szenarien = _szen.szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap_h,
-                                                      nur_kameras=_nk,
-                                                      koerper_map=_kmap,
-                                                      koerper_ab=_kab,
-                                                      vision_map=_vmap)
+                # .507 B3b: szenarien_des_tages liefert seit dem Kettungs-Umbau
+                # CHRONOLOGISCH (eine Reihenfolge fuer alle Leser, Begruendung
+                # dort). Today zeigt weiter neueste oben — das ist eine Frage
+                # der Darstellung und wird hier entschieden, nicht im Modell.
+                szenarien = sorted(
+                    _szen.szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap_h,
+                                              nur_kameras=_nk,
+                                              koerper_map=_kmap,
+                                              koerper_ab=_kab,
+                                              vision_map=_vmap),
+                    key=lambda s: -s["start"])
                 interessant = [s for s in szenarien if s["kat"] != "motion"]
                 motion_n = len(szenarien) - len(interessant)
 
@@ -17679,7 +18651,26 @@ def make_handler(svc):
                 import webui
                 # M1b (S5): Rendern byte-treu in routes/gesichter.py.
                 from routes import gesichter as _r_gesichter
-                inhalt = _r_gesichter.render(master_persons(cfg), cfg["data_dir"])
+                # .507 B4: /faces verlinkt jeden Avatar hierher (?person=) —
+                # bis .506 war das ein #-Anker ins Leere und die Seite zeigte
+                # IMMER alle Personen mit allen Bildern. Geprueft wird gegen
+                # master_persons und NICHT gegen die /faces-Liste: die wirft
+                # Personen OHNE Bild raus (Zweig "if not _bl: continue"), eine
+                # frisch angelegte Person waere ueber ihre eigene Adresse sonst
+                # unerreichbar. Unbekannter Name faellt STILL auf die volle
+                # Liste zurueck (Muster routes/anwesenheit.sicht_waehlen) — ein
+                # Tippfehler in der Adresse darf die Seite nicht wegnehmen.
+                # parse_qs dekodiert bereits (%20, +); ein zweites unquote wie
+                # im /aehnliche-Handler loeste ein "%41" IM Namen ein zweites
+                # Mal auf und traefe die Person dann nicht mehr.
+                _alle_p = master_persons(cfg)
+                _wer_p = (urllib.parse.parse_qs(
+                    urllib.parse.urlparse(self.path).query)
+                    .get("person", [""])[0] or "").strip()
+                _eine_p = _wer_p in _alle_p
+                inhalt = _r_gesichter.render(
+                    [_wer_p] if _eine_p else _alle_p, cfg["data_dir"],
+                    gefiltert=_eine_p, alle=_alle_p)
                 return self._send(200, webui.layout(_sprache.t("nav.gesichter"), "/gesichter", inhalt, self._banner()))
             if path == "/reconcile_status":            # Fortschritt des Pool-Umbaus (User 25.07.:
                 # "ich kann nicht sehen, was er macht")
@@ -17835,7 +18826,9 @@ def make_handler(svc):
                 cams, err = frigate_cameras(cfg)
                 fehlerbanner = (f'<div class="banner">Could not read the Frigate config: '
                                 f'{html.escape(str(err))}</div>' if err else "")
-                inhalt = _r_areas.uebersicht(_areas_mod.normalisieren(cfg.get("areas")), set(cams))
+                inhalt = _r_areas.uebersicht(
+                    _areas_mod.normalisieren(cfg.get("areas")), set(cams),
+                    _areas_mod.kettung_normalisieren(cfg.get("areas_kettung")))
                 return self._send(200, webui.layout(_sprache.t("nav.areas"), "/areas",
                                                     fehlerbanner + inhalt, self._banner()))
             if path == "/benachrichtigungen":

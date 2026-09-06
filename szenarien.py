@@ -6,7 +6,11 @@ nach der E6c-Regel (Neu-Code nicht in den Monolithen). Verhalten unveraendert; B
 normalisierter HTML-Diff der /heute-Seite eines ABGESCHLOSSENEN Tages vor/nach dem
 Schnitt (identisch) + synthetische qs-S2-Stufe (Gruppen-Schnitt inkl. ende_ts-Praeferenz).
 """
+import hashlib
 import time
+
+from core import areas as _areas          # .507 B3b: Kettungs-Modus je Area —
+# reines Datenmodul (nur `re`), kein Dienst-Import; der Modul-Kontrakt bleibt.
 
 
 # GESPEICHERTE Label-Werte (gt_leiste schreibt 'Fremd'/'unklar'; die Buttons ZEIGEN
@@ -26,13 +30,42 @@ GT_MAX_PERSONEN = 10
 # schliesst das Event (nicht in GT_OFFEN_LABELS), Anzeige-Text lebt in gt_leiste
 
 
-def _pass_schluessel(start):
-    """DIE eine Schreibweise des Pass-/Render-Schluessels (Startzeit des
-    Durchgangs in ganzen Sekunden, "%d") — dieselbe Formel, die die Lern-Kette
-    (core/personlauf.py) und die Render-Stellen in verifyd fuehren. Hier
-    zentral, damit die Vision-Stimme kein weiteres Streu-Literal anlegt
-    (qs_ebenen-Regel: Aufzaehlungen/Formeln aus der einen Quelle)."""
-    return "%d" % round(start)
+def _pass_schluessel(start, kette=None):
+    """DIE eine Schreibweise des Pass-/Render-Schluessels — dieselbe Formel,
+    die die Lern-Kette (prototyp/ernte_lauf ueber core/personlauf.py) und die
+    Render-Stellen in verifyd fuehren. Hier zentral, damit die Vision-Stimme
+    kein weiteres Streu-Literal anlegt (qs_ebenen-Regel: Aufzaehlungen/Formeln
+    aus der einen Quelle).
+
+    OHNE Kette (bzw. im Werk-Modus `grundstueck`): die Startzeit des
+    Durchgangs in ganzen Sekunden, `"%d"` — BYTE-GLEICH zu allem bis .506.
+    Auf einer Anlage ohne Kettungs-Modus aendert sich damit kein einziger
+    Schluessel, es gibt nichts zu migrieren (Betreiber-Entscheid zu B3b).
+
+    MIT Kette (Modus `area`/`kamera`, seit B3b): plus eine kurze Kennung der
+    Kette. Grund (B3b-Bericht §9.3): bis .506 konnten zwei Durchgaenge
+    desselben Tages nie dieselbe Startsekunde haben, es gab ja genau EINE
+    Kette. Mit mehreren Ketten ist das moeglich — beim Feldtester entstehen im
+    Kamera-Modus 232 Durchgaenge am Tag —, und dann teilten sich zwei
+    verschiedene Durchgaenge ihren Vision-Kontrollordner
+    (`core/visionurteil` ueber `personlive.kontrolle_dir`), ihre
+    Pass-Bestaetigung und ihre Lern-Kette.
+
+    WARUM EIN KUERZEL statt des Ketten-Namens: der Schluessel wird ein
+    ORDNERNAME. `personlive.kontrolle_dir` laesst nur
+    `[0-9A-Za-z][0-9A-Za-z_.-]{0,63}` durch und gibt sonst None zurueck — die
+    Ablage fiele also STILL aus. Kameranamen duerfen aber Zeichen tragen, die
+    dort nicht erlaubt sind (der Ketten-Schluessel selbst traegt schon einen
+    Doppelpunkt), und ein Area-Name darf Leerzeichen haben. Deshalb: erstes
+    Zeichen des Modus (lesbar: `k` = Kamera, `a` = Area) plus acht Hexstellen
+    sha1 ueber den vollen Ketten-Schluessel. Das ist kurz, kollisionsfest
+    genug fuer die Ketten EINER Anlage und per Konstruktion ordnernamen-
+    tauglich."""
+    basis = "%d" % round(start)
+    k = str(kette or "")
+    if not k or k == _areas.KETTUNG_WERK:
+        return basis
+    return f"{basis}-{k[:1]}{hashlib.sha1(k.encode('utf-8')).hexdigest()[:8]}"
 
 
 def vision_stimme_gilt(zeile):
@@ -201,7 +234,7 @@ def pass_key(by_h, eid, cfg, gtmap=None, now=None):
                                  (tag + datetime.timedelta(days=1)).timestamp(),
                                  cfg, {} if gtmap is None else gtmap, now=now):
         if any(e.get("eid") == eid for e in s.get("evs") or []):
-            return _pass_schluessel(s["start"])
+            return _pass_schluessel(s["start"], s.get("kette"))
     return None
 
 
@@ -332,7 +365,10 @@ def fremd_urteil(evs_g, ab=FREMD_AB_GESICHTER):
 
 def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kameras=None,
                         koerper_map=None, koerper_ab=2, vision_map=None):
-    """rows-Sicht eines Tages -> Szenarien-Liste (neueste zuerst). by_h = last-wins je eid;
+    """rows-Sicht eines Tages -> Szenarien-Liste (CHRONOLOGISCH, aelteste zuerst
+    — seit .507 B3b die eine Reihenfolge, Begruendung am sort-Aufruf unten;
+    Anzeige-Seiten mit "neueste oben" sortieren an ihrer Ausgabestelle).
+    by_h = last-wins je eid;
     gtmap = Label-Map eid->letztes Label (F2, .54): Personen-Label = beurteilt/raus,
     'Fremd'/'unklar' (Speicherwerte!) = bleibt sichtbar unbekannt. Ein SET wird akzeptiert
     (Alt-Aufrufer: Mitgliedschaft = altes Raus-Verhalten).
@@ -377,17 +413,37 @@ def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kamera
     heute_evs = sorted((r for r in by_h.values()
                         if heute0 <= (r.get("start") or r.get("ts") or 0) < tag_ende),
                        key=lambda r: (r.get("start") or r.get("ts") or 0))
-    grp, cur = [], None
+    # .507 B3b — KETTUNGS-MODUS je Area (Betreiber-Entscheid 05.09.): die Luecke
+    # gilt je KETTE, nicht mehr zwangslaeufig grundstuecksweit. Der Schluessel
+    # kommt aus core.areas.ketten_schluessel (die EINE Stelle, Modi-Aufzaehlung
+    # dort); die Einstellung reist in DERSELBEN cfg mit, in der auch
+    # szenario_gap_min und vision_stimme stehen — kein Aufrufer muss etwas
+    # zusaetzlich hereinreichen. Das ist Absicht: saehe eine Seite die Modi und
+    # eine andere nicht, waeren die Durchgaenge auf zwei Seiten verschieden
+    # geschnitten — genau der Szenario-Fehler, den CLAUDE.md als wiederkehrend
+    # fuehrt. Ohne Einstellung (Werk) liefert der Schluessel fuer jede Kamera
+    # denselben Wert, und die Schleife ist Zeile fuer Zeile die bis .506.
+    _kett = _areas.kettung_normalisieren(cfg.get("areas_kettung"))
+    _ar = _areas.normalisieren(cfg.get("areas")) if _kett else {}
+    grp, offen = [], {}                 # offen: Ketten-Schluessel -> laufender Durchgang
     for e in heute_evs:
         t = e.get("start") or e.get("ts") or 0
         # Paket A: echtes Frigate-Event-Ende bevorzugen (maschinenunabhaengiger
         # Schnitt); dauer_s (Analyse-Wanduhr) nur noch als Fallback fuer
         # Bestands-Zeilen von vor 0.1.0.48.
         ende = e.get("ende_ts") or (t + (e.get("dauer_s") or 0))
+        k = _areas.ketten_schluessel(_ar, _kett, str(e.get("camera", "?")))
+        cur = offen.get(k)
         if cur and t - cur["ende"] <= gap:
             cur["evs"].append(e); cur["ende"] = max(cur["ende"], ende)
         else:
-            cur = {"start": t, "ende": ende, "evs": [e]}; grp.append(cur)
+            # `kette` reist am Durchgang mit (B6/.507): der Pass-Schluessel
+            # braucht sie, und sie hier NICHT mitzufuehren hiesse, sie an der
+            # Lesestelle aus den Ereignissen neu abzuleiten — eine zweite
+            # Kettungs-Rechnung, also genau das Streu-Literal, das die
+            # Ein-Quellen-Regel verbietet.
+            cur = {"start": t, "ende": ende, "evs": [e], "kette": k}
+            grp.append(cur); offen[k] = cur
     szenarien = []
     for g in grp:
         pers, unbek, noface = {}, 0, 0
@@ -511,7 +567,7 @@ def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kamera
             # aenderte an 74 Echt-Passen ueber 4 Tage exakt nichts).
             stimme = None
             if khits and vision_map and cfg.get("vision_stimme", True):
-                vz = vision_map.get(_pass_schluessel(g["start"])) or {}
+                vz = vision_map.get(_pass_schluessel(g["start"], g.get("kette"))) or {}
                 vp = vision_stimme_gilt(vz)
                 if vp and vp in khits and all(
                         len(khits[vp]) > len(h)
@@ -583,6 +639,11 @@ def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kamera
             kat = "unbekannt"
         letzte_akt = max((x.get("start") or x.get("ts") or 0) for x in evs_g)  # Erkennungszeit, NICHT Verarbeitungs-ts: sonst faelscht ein Verarbeitungs-Lag (Neustart-Sweep/Last) beendete Durchgaenge zu "in progress"
         szenarien.append({"start": g["start"], "ende": g["ende"], "n": len(evs_g),
+                          # B6/.507: die Kette des Durchgangs reist mit, damit
+                          # `pass_key` denselben Schluessel bildet wie hier —
+                          # ohne sie muesste die Lesestelle die Kettung neu
+                          # rechnen (zweite Quelle).
+                          "kette": g.get("kette"),
                           # .356: verworfene Koerper-Namen samt Grund — ein
                           # Name, der still verschwindet, ist nicht erklaerbar.
                           "koerper_verworfen": verworfen,
@@ -591,5 +652,16 @@ def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kamera
                           "unbek_eid": unbek_eid, "unbek_eids": unbek_eids,
                           "evs": ev_liste, "gt_fremd": gt_fremd,
                           "laeuft": (now - letzte_akt) < karenz})
-    szenarien.sort(key=lambda s: -s["start"])              # neueste oben
+    # .507 B3b — EINE Reihenfolge: CHRONOLOGISCH, aelteste zuerst. Bis .506 gab
+    # diese Funktion die Durchgaenge absteigend zurueck, waehrend /auftritte und
+    # /pass sie sofort wieder aufsteigend sortierten (auftritte.py: "Pass 1 =
+    # fruehester"). "Pass 1" meinte damit an zwei Stellen zwei verschiedene
+    # Durchgaenge — beim Feldtester-Abzug mit fuenf Durchgaengen am Tag zeigte
+    # die Personenseite unter "Pass 1" den ersten des Morgens, die Zaehlung
+    # daneben den letzten des Abends. Chronologisch gewinnt, weil eine Nummer,
+    # die mit der Uhr laeuft, ohne Erklaerung verstaendlich ist.
+    # Die ANZEIGE-Reihenfolge ist davon unberuehrt: wer neueste oben braucht
+    # (Today-Liste, Passliste des Erkennungs-Tests), sortiert an seiner
+    # Ausgabestelle — das ist eine Darstellungsfrage, keine Modell-Frage.
+    szenarien.sort(key=lambda s: s["start"])               # aelteste zuerst
     return szenarien

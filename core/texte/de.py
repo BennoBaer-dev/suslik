@@ -37,6 +37,9 @@ T = {
         "Import wie im Einrichtungsassistenten, jetzt erreichbar, ohne "
         "ihn neu zu durchlaufen (z. B. nach dem Wiederherstellen deiner "
         "Einstellungen).",
+    # .507 B4: Weg zurueck aus der gefilterten Sicht (/gesichter?person=),
+    # die der Klick im Avatar-Gitter von /faces oeffnet.
+    "gesichter.alle_zeigen": "alle Gesichter zeigen",
     # ------------------------------------------------- routes/kameras ---
     "kameras.steckbrief.knopf": "Stream-Angaben neu pr\u00fcfen",
     "kameras.steckbrief.hinweis":
@@ -131,6 +134,17 @@ T = {
         "Noch keine Kameras bekannt — verbinde zuerst Frigate "
         "(Einstellungen).",
     "areas.verwaltung.knopf_speichern": "Bereiche speichern",
+    # .507 B3b — Kettungs-Modus je Area (Werte aus core/areas.KETTUNG_MODI).
+    "areas.kettung.titel": "Wie weit ein Durchgang reicht",
+    "areas.kettung.satz":
+        "Ein Durchgang ist ein Weg über das Grundstück: Ereignisse hängen "
+        "aneinander, solange die Lücke dazwischen unter der Szenen-Lücke "
+        "bleibt. Lege je Bereich fest, wie weit diese Kette reichen darf. Das "
+        "ändert nur die Gruppierung — die Analyse betrachtet immer jede Kamera "
+        "einzeln, und die Anzeige bleibt je Bereich gebündelt.",
+    "areas.kettung.grundstueck": "ein Durchgang für das ganze Grundstück",
+    "areas.kettung.area": "ein Durchgang je Bereich",
+    "areas.kettung.kamera": "jede Kamera für sich",
     # -------------------------------------- routes/benachrichtigungen ---
     "benachrichtigungen.titel": "Meldungen",
     "benachrichtigungen.felder.secret_gesetzt":
@@ -1037,6 +1051,11 @@ T = {
     "livekalib.material.aus": "Das Sammeln von Vorratsbildern ist ausgeschaltet (Advanced, calibration samples). Ohne Vorrat hat diese Seite nichts zu zeigen.",
     "livekalib.material.stand": "{n} von höchstens {deckel} Bildern im Vorrat",
     "livekalib.material.wann": "zuletzt {wann}",
+    # .507 B5: der Zeitraum, ueber den der Ring reicht — er steht auf der
+    # Kamera-Seite UND auf der Uebersichts-Kachel (derselbe Satz, eine
+    # Quelle). Reicht der Ring ueber genau einen Zeitpunkt, zeigen beide
+    # weiter nur "wann"/"stand".
+    "livekalib.material.zeitraum": "Bilder von {von} bis {bis}",
     "livekalib.material.fuellen_prosa": "Die Materialsuche geht die letzten Person-Ereignisse dieser Kamera durch und behält je Ereignis das beste Gesicht. Sie stoppt bei {ziel} Bildern oder nach {events} Ereignissen — was zuerst eintritt.",
     "livekalib.material.lauf": "Dazu {n} Bild(er) dieser Kamera aus dem letzten Lernlauf — unten mit dabei und als solche gekennzeichnet.",
     "livekalib.js.katalog": "{n} von {gesamt} dürften in den Katalog",
@@ -1834,6 +1853,17 @@ T = {
     "auftritte.thumb.zusatz_referenz": " — in den Referenzen",
     "auftritte.thumb.ohne_gesicht.eins": "+{n} Event ohne Gesicht",
     "auftritte.thumb.ohne_gesicht.viele": "+{n} Events ohne Gesicht",
+    # .507 B3 (UX-E1/E2/E4 + E-O1): der Pruef-Knopf sitzt an der Bild-Kachel
+    # (ein Ereignis, eine Person), der zweite an der Durchgangs-Karte; die
+    # Bilderzeile ist auf THUMBS_JE_REIHE gedeckelt und nennt den Rest als
+    # EREIGNISSE (nicht als Bilder — dort hat niemand nachgesehen); die
+    # anderen Personen des Durchgangs stehen als verlinkte Zeile.
+    "auftritte.knopf.ereignis":
+        "passende Gesichter in diesem Bild suchen",
+    "auftritte.knopf.durchgang":
+        "auch die anderen {n} Ereignisse dieses Durchgangs prüfen",
+    "auftritte.thumb.mehr_ereignisse": "+{n} weitere Ereignisse",
+    "auftritte.auch_dabei": "auch dabei: {namen}",
     "auftritte.thumb.hinweis_referenz":
         "grüner Rand = schon in den Referenzen",
     "auftritte.karte.best_punkt": "bestätigt um {zeit}",
@@ -2086,6 +2116,12 @@ T = {
         "Clip unvollständig — {gelesen}/{soll} Frames gelesen; aus dem "
         "lesbaren Teil beurteilt",
     "event.badge_unvollstaendig": "⚠ Clip unvollständig",
+    "event.verwurf_grund.analyse_none":
+        "Die Analyse lieferte kein Ergebnis — sie brach ab oder stürzte ab",
+    "event.verwurf_grund.lesbarkeit_riegel":
+        "Weniger als die Hälfte der Bilder des Clips waren lesbar",
+    "event.verwurf_grund.clip_fehlt":
+        "Der Clip liegt nicht mehr in Frigate (Aufbewahrung abgelaufen oder Ereignis gelöscht)",
     "event.pass_zurueck": "&#8592; voriges",
     "event.pass_weiter": "nächstes &#8594;",
     "event.pass_teil": "Teil eines Durchgangs",
@@ -3719,6 +3755,8 @@ Personen zwischendurch auffüllen.</p>""",
         "bester Treffer",
     "antwort.bruecke_grund_keine_referenzen":
         "{person} hat noch keine Referenzbilder zum Vergleichen",
+    "antwort.einspielen.frigate_fehlt":
+        "In dieser Installation ist keine frigate_url eingetragen",
     # ---- personlauf-Design (Nachzug) ----
     # Kachel-Titel und Kachel-Saetze des /personlauf-Laufflusses. Kachel 1/4,
     # die erste Saeulen-Marke und die Nachbar-Beschriftungen kommen wortgleich
@@ -3943,8 +3981,9 @@ Personen zwischendurch auffüllen.</p>""",
     "gpu.laeuft.titel": 'Läuft gerade:',
     "gpu.laeuft.zeile": '{plaetze} Analyse-Plätze, davon {belegt} belegt{klassen} · {waechter} Live-Wächter',
     "gpu.klasse.analyse": 'Analyse',
-    "gpu.klasse.ernte": 'Lernlauf',
+    "gpu.klasse.ernte": 'Ernte (Lernlauf, Auffüllen)',
     "gpu.klasse.bg": 'Hintergrund',
+    "gpu.klasse.interaktiv": 'interaktiv (dein Klick)',
     "gpu.zu_live": 'Zu den Live-Wächtern →',
     "gpu.noch_alt": 'Der Dienst läuft noch mit {laeuft} Plätzen; eingestellt sind {gesetzt}, wirksam ab dem nächsten Neustart.',
     "gpu.passt_hoechstens": 'Mit den aktuellen Wächtern passen höchstens {n} Plätze in den Speicher.',

@@ -41,7 +41,8 @@ version that introduced the page — earlier days stay empty.
   the unknown pool has grouped them, each naming the pool identity and how often it was
   seen before. Passes whose whole clip contains no serious face get a quiet "no usable
   face in this pass" note instead and never become unknown-visitor cards.
-  **Passes** lists every walk (events grouped across cameras and time), newest first, one
+  **Passes** lists every walk (events grouped by time, across all cameras unless you set a
+  narrower reach per area under Areas), newest first, one
   collapsed row each: time, duration, up to three avatars plus "+N", the "+N not matched"
   footnote, the source tag (via face / via person / live), the red body bar for
   body-only attributions and the vision line. A row starts open only when it needs a
@@ -162,10 +163,13 @@ the day-to-day path; to work through your event history in one guided go, see
 1. Let the person appear on camera normally. After each walk, suslik collects the best faces
    (up to three per event), generates enrollment suggestions (**People → Suggestions**) for
    people it already knows, and clusters faces it doesn't recognize into the **Unknown** tab.
-   For a known person, **Check this pass for good pictures** on their page goes further: it
-   looks at every frame of the pass across all cameras, measures face quality with a
-   reference-free score and offers the best new pictures grouped by view (left, front,
-   right). This harvest runs on its own after each pass, so the check answers instantly.
+   For a known person, the check button next to an event picture on their page goes further:
+   it looks at every frame of that event, measures face quality with a reference-free score
+   and offers the best new pictures grouped by view (left, front, right). A second button on
+   the pass card does the same for the other events of that walk — several cameras give the
+   better angle. The pictures are prepared when you ask for them, not in the background: the
+   check takes priority over other jobs and shows a progress bar with the elapsed time and,
+   once suslik has measured its own speed on your machine, an estimate.
 2. To add a **new** person, the shortest path is the **Today page**: an *Unknown* card shows a
    sample face and is clickable — the panel that opens lets you pick exactly the faces you want
    (walkthrough faces first) and assign them to a new or existing name. Alternatively, promote a

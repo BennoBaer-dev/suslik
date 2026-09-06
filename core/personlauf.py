@@ -17,6 +17,35 @@ import time
 WURZEL = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def pass_schluessel(pk):
+    """B6/.507: der Pass-Schluessel der Lern-Kette geht durch DIESELBE Formel
+    wie jeder andere im Projekt — `szenarien._pass_schluessel`.
+
+    Warum das noetig wurde: seit B3b kann eine Anlage mehrere Ketten je Tag
+    haben (Modus `area`/`kamera`), und `_pass_schluessel` traegt dann eine
+    Ketten-Kennung. Solange jede Stelle ihre eigene Schreibweise fuehrt, faellt
+    so eine Erweiterung an genau den Stellen auseinander, die sie nicht
+    mitbekommen haben.
+
+    WO DIE ABLEITUNG WIRKLICH ENTSTEHT: `prototyp/ernte_lauf.arbeit_bestimmen`
+    baut den Schluessel aus dem ersten Ereignis eines Durchgangs
+    (`f"{evs[0]['start']:.0f}"`) und reicht ihn hier als `pk` herein. Diese
+    Kette kettet GRUNDSTUECKSWEIT — der Lernpfad ist area-frei (Betreiber-
+    Entscheid 30.07., eigene Gate-Wache) —, ihr Schluessel ist also immer die
+    Werk-Form. Deshalb wird hier OHNE Kette normiert: das Ergebnis ist
+    byte-gleich zu vorher, und der Schreibweg haengt trotzdem an der einen
+    Formel statt an einer zweiten Schreibweise.
+
+    Lazy-Import wie `core/kette.py` (dieselbe Richtung core -> szenarien).
+    Ein nicht-numerischer Wert bleibt unveraendert: einen Schluessel zu
+    verlieren waere teurer als eine ungewohnte Schreibweise."""
+    try:
+        import szenarien as _szen
+        return _szen._pass_schluessel(float(pk))
+    except (TypeError, ValueError, ImportError):
+        return str(pk)
+
+
 def _proto():
     # Container-Bruecke: die gestagte Kette liest die Werkstatt aus ENV
     # (SUSLIK_WERKSTATT, Volume-Pfad) — Verzeichnis anlegen, bevor die
@@ -203,7 +232,10 @@ def anlegen(data_dir, n_events, person="", tage=None):
                       # die Quelle steht in bindung.
                       "person": "FREMD" if fremd_lauf else p,
                       "bindung": bindung,
-                      "pass_key": pk, "kamera": ev["camera"],
+                      # B6/.507: EINE Formel fuer den Pass-Schluessel
+                      # (s. pass_schluessel oben) statt der Schreibweise des
+                      # Prototyps.
+                      "pass_key": pass_schluessel(pk), "kamera": ev["camera"],
                       "start": ev["start"],
                       "zones": (api.get(eid) or {}).get("zones"),
                       "lichtphase": phase, "sonnenhoehe": hoehe})

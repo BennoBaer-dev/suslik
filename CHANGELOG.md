@@ -7,6 +7,86 @@ this file — the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git
 history.
 
+## 0.1.0.508 (2026-09-06)
+
+Bundles 0.1.0.507, which was never published — everything listed there is in
+this release.
+
+- **What's new shows the unchanged line once.** The box lists the last ten
+  entries, and the same sentence carried two version numbers, so it appeared
+  twice in a row. It is one entry again.
+- **The duration estimate accounts for a cold worker after a restart.** The
+  first check after a restart estimated 4.5 seconds and then ran for about 24,
+  because the estimate is built from events analysed with the models already
+  loaded. It now adds the warm-up your machine has actually measured for this
+  version — and where that measurement does not exist yet, it says
+  "plus warm-up after a restart" instead of quietly guessing a number.
+- **Release gate: the poll-block check (S9b) had been skipping since
+  0.1.0.412**, because it looked for a link shape the Today page stopped using
+  when the day parameter was added. It measures again.
+
+## 0.1.0.507 (2026-09-06)
+
+Checking a person's pictures used to run by itself after every pass and then take
+whatever it found across the whole walk. This release turns that around: nothing is
+harvested until you ask for it, and when you ask, your click goes first.
+
+- **Your click has priority.** A picture check is now its own class of job in the
+  analysis allocator, next to event analysis, the learning run and background work.
+  It is never held back, and the other classes step aside while it waits — but it
+  never kills a running job either. With a single analysis slot this means the event
+  stream pauses for the duration of your check; the progress text says so.
+- **No more automatic harvesting after a pass.** Until now every finished pass
+  triggered a background harvest over all its events. That work now happens only on
+  a button press. The enrollment suggestions from your existing material still run
+  automatically as before.
+- **The check looks at the picture you clicked.** Each thumbnail on a person's page
+  has its own button ("find matching faces in this picture") for exactly that event.
+  A second button on the pass card covers the other events of the same walk, which
+  is where several cameras give you the better angle. The browser no longer sends
+  the event list at all — the server works out the pass itself.
+- **An honest progress bar.** It shows when the run started, and how long it will
+  take once suslik has measured its own harvesting speed on your machine and for
+  this version. The first check after an update says "duration not measured yet"
+  instead of guessing. If all analysis slots are busy, the text says what is
+  occupying them.
+- **An event that was never analysed says so.** The check used to answer "nothing
+  found"; it now says that there is no record for this event.
+- **A person's page shows that person.** Opening a pass card from a person shows
+  their pictures, with the other people of the same pass named and linked in one
+  line. Long passes are capped at twelve pictures per row with "+N further events",
+  and the full pass stays reachable through its own page. On a pass with 3423 events
+  (measured offline against a field installation's data, 06.09.) the HTML of one
+  card drops from 88 to 15.5 KB.
+- **Clicking a face on the Known people page opens that person**, with a "show all
+  faces" button back to the full list. A person without any picture yet is reachable
+  through the same address; the avatars are larger and no longer cut their names.
+- **How far a pass reaches, per area.** Passes are still grouped across cameras and
+  time; new is a setting per area on the Areas page: keep the whole property in one
+  chain (the default, unchanged behaviour), chain only inside the area, or give
+  every camera its own chain. On a field installation with 28 cameras this splits a
+  9-hour, 2100-event pass into pass-per-area or pass-per-camera walks (measured on a
+  mirror of that installation's records, 06.09.). Judgement and the learning run are
+  untouched: a pass is always judged across all its cameras.
+- **Calibration page: which period the stored samples come from** ("pictures from …
+  to …"), next to the existing count. Emptying the sample ring now also drops the
+  stored search result, which otherwise kept explaining an empty ring.
+- **Support API.** Re-analysis of events on a camera that a live watcher covers is
+  no longer silently skipped — an explicitly injected re-analysis is the opposite of
+  a duplicate. The answer names the cameras that a running watcher covers
+  (`live_gedeckt`). Without a configured Frigate URL the endpoint answers 503 with a
+  clear message instead of failing with an internal error.
+- **The event record says why an analysis failed** (no result, fewer than half the
+  frames readable, or the clip is no longer in Frigate); the event page shows the
+  reason in the tooltip of the existing badge.
+- **The wall-clock measurement keeps its promise.** Its log line has said "next
+  attempt in 1 h (or on restart)" since 0.1.0.71 while in fact only a restart ever
+  tried again. It now really retries, at most three times, and only while the
+  machine is quiet.
+- Release gates: the image privacy audit gained a stage for host/machine names of
+  the build environment (the source export gate had it, the image gate did not), and
+  the version check now covers all compose files instead of only the production one.
+
 ## 0.1.0.506 (2026-09-05)
 
 Bundles the internal steps 0.1.0.502 – 0.1.0.505 (0.1.0.504 went out as a CUDA-only

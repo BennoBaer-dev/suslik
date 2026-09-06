@@ -439,6 +439,36 @@ LIVE_ZUSTAENDE = {
 LIVE_AKTIV = "active"
 
 
+# --- Verwurfsgrund einer Analyse (E-P7, bauplan_0507.md B6, 06.09.2026) -------------
+# ANLASS (auftraege_nach_0505.md H4): beim Feldtester endeten zwei Ereignisse
+# nach drei Versuchen als `fehler` (0,6 s und 4,7 s, 0 Gesichter) — WARUM stand
+# nirgends. Die Akte (`state/deckung.jsonl`) trug bis .506 nur `kategorie:
+# "fehler"`, und genau eine Stelle in verifyd.process setzt sie, aus drei
+# unterscheidbaren Ursachen. Wer den Fall aus der Ferne beurteilen soll, muss
+# raten.
+#
+# DIE eine Aufzaehlung: Schreiber (verifyd), Leser (routes/event.py,
+# Catch-up-Logzeile), Sprachschluessel-Deckung im Gate und die Probe lesen ALLE
+# von hier — ein weiteres Literal irgendwo waere die K3-Klasse (eine
+# Umbenennung hier wuerde dort still zu "kein Grund").
+# Nur Daten (Registry-Kopfvertrag: importfrei); die Zuordnung Ausnahme -> Code
+# steht in core/frames.verwurf_grund, weil dort die Ausnahme-KLASSEN der
+# Clip-Beschaffung leben.
+VERWURF_ANALYSE_NONE = "analyse_none"      # run_analyze lieferte gar nichts:
+#                                            Watchdog, toter Worker, belegtes
+#                                            Job-Lock, kein results-Eintrag
+VERWURF_LESBARKEIT = "lesbarkeit_riegel"   # < 50 % der Frames lesbar (E1-Entscheid
+#                                            26.07., verifyd: res wird verworfen)
+VERWURF_CLIP_FEHLT = "clip_fehlt"          # Frigate hat den Clip nicht (mehr):
+#                                            404 / Retention / Erzeugung gescheitert
+VERWURF_GRUENDE = (VERWURF_ANALYSE_NONE, VERWURF_LESBARKEIT, VERWURF_CLIP_FEHLT)
+# Praefix der fuenf Sprachdateien (`event.verwurf_grund.<code>`). Steht HIER,
+# damit Renderer und Gate-Deckung dieselbe Zeichenkette benutzen; im
+# `t()`-Aufruf selbst darf sie nicht als Literal stehen, sonst liest der
+# Deckungs-Scan das halbe Literal als eigenen Schluessel (B3b-Befund).
+VERWURF_TEXT_PRAEFIX = "event.verwurf_grund."
+
+
 # --- Support-Zugriff (analysen/support_api.md, 28.08.2026) --------------------------
 # DIE eine Bereichs-Quelle (QS-Ebenen-Regel: kein Streu-Literal): Inventar,
 # Handler (core/support.py), Doku-Deckung und QS-Stufe lesen ALLE von hier.

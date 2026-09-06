@@ -34,6 +34,9 @@ T = {
         "yet \u2014 incremental, safe to run any time (nothing local is "
         "deleted). Same import as in the setup wizard, now reachable "
         "without re-running it (e.g. after restoring a configuration).",
+    # .507 B4: Weg zurueck aus der gefilterten Sicht (/gesichter?person=),
+    # die der Klick im Avatar-Gitter von /faces oeffnet.
+    "gesichter.alle_zeigen": "show all faces",
     # ------------------------------------------------- routes/kameras ---
     "kameras.steckbrief.knopf": "Re-check stream details",
     "kameras.steckbrief.hinweis":
@@ -138,6 +141,20 @@ T = {
     "areas.verwaltung.hinweis_keine_kameras":
         "No cameras known yet — connect Frigate first (Settings).",
     "areas.verwaltung.knopf_speichern": "Save areas",
+    # .507 B3b — Kettungs-Modus je Area. Die drei Optionswerte sind die
+    # Aufzaehlung aus core/areas.KETTUNG_MODI (der Renderer setzt den Schluessel
+    # aus ihr zusammen: "areas.kettung." + modus) — wer dort einen Modus
+    # ergaenzt, braucht hier denselben Namen.
+    "areas.kettung.titel": "How far a pass reaches",
+    "areas.kettung.satz":
+        "A pass is one run across your property: events chain together as long "
+        "as the gap between them stays under your scene gap. Choose per area "
+        "how far that chain may reach. This only changes the grouping — the "
+        "analysis always looks at each camera on its own, and the display "
+        "stays grouped per area.",
+    "areas.kettung.grundstueck": "one pass for the whole property",
+    "areas.kettung.area": "one pass per area",
+    "areas.kettung.kamera": "every camera on its own",
     # -------------------------------------- routes/benachrichtigungen ---
     # NICHT eingezogen (bewusst): der Einleitungs-Absatz (<b>/data</b>,
     # <b>Test</b>) und der Topic-Praefix-Hinweis (<b>verifyd</b>) tragen
@@ -1045,6 +1062,11 @@ T = {
     "livekalib.material.aus": "Sample collection is switched off (Advanced, calibration samples). Without samples this page has nothing to show.",
     "livekalib.material.stand": "{n} of at most {deckel} samples stored",
     "livekalib.material.wann": "latest {wann}",
+    # .507 B5: der Zeitraum, ueber den der Ring reicht — er steht auf der
+    # Kamera-Seite UND auf der Uebersichts-Kachel (derselbe Satz, eine
+    # Quelle). Reicht der Ring ueber genau einen Zeitpunkt, zeigen beide
+    # weiter nur "wann"/"stand".
+    "livekalib.material.zeitraum": "pictures from {von} to {bis}",
     "livekalib.material.fuellen_prosa": "Looking for fresh material works through the most recent person events of this camera and keeps the best face of each. It stops at {ziel} pictures or after {events} events, whichever comes first.",
     "livekalib.material.lauf": "Plus {n} picture(s) of this camera from the latest learning run — shown below and marked as such.",
     "livekalib.js.katalog": "{n} of {gesamt} would be allowed into the catalogue",
@@ -1887,6 +1909,16 @@ T = {
     "auftritte.thumb.zusatz_referenz": " — in the references",
     "auftritte.thumb.ohne_gesicht.eins": "+{n} event without a face",
     "auftritte.thumb.ohne_gesicht.viele": "+{n} events without a face",
+    # .507 B3 (UX-E1/E2/E4 + E-O1): der Pruef-Knopf sitzt an der Bild-Kachel
+    # (ein Ereignis, eine Person), der zweite an der Durchgangs-Karte; die
+    # Bilderzeile ist auf THUMBS_JE_REIHE gedeckelt und nennt den Rest als
+    # EREIGNISSE (nicht als Bilder — dort hat niemand nachgesehen); die
+    # anderen Personen des Durchgangs stehen als verlinkte Zeile.
+    "auftritte.knopf.ereignis": "find matching faces in this picture",
+    "auftritte.knopf.durchgang":
+        "also check the other {n} events of this pass",
+    "auftritte.thumb.mehr_ereignisse": "+{n} further events",
+    "auftritte.auch_dabei": "also present: {namen}",
     "auftritte.thumb.hinweis_referenz":
         "green border = already in the references",
     "auftritte.karte.best_punkt": "confirmed at {zeit}",
@@ -2125,6 +2157,15 @@ T = {
         "clip incomplete — read {gelesen}/{soll} frames; judged from the "
         "readable part",
     "event.badge_unvollstaendig": "⚠ incomplete clip",
+    # E-P7 (.507): WARUM diese Zeile "fehler" heisst — Tooltip an der
+    # Kategorie-Plakette. Die Codes stehen in registry.VERWURF_GRUENDE;
+    # der Schluessel wird daraus zusammengesetzt (routes/event.verwurf_text).
+    "event.verwurf_grund.analyse_none":
+        "analysis produced no result — it was aborted or crashed",
+    "event.verwurf_grund.lesbarkeit_riegel":
+        "fewer than half the frames of the clip were readable",
+    "event.verwurf_grund.clip_fehlt":
+        "the clip is no longer in Frigate (retention or deleted event)",
     "event.pass_zurueck": "&#8592; prev",
     "event.pass_weiter": "next &#8594;",
     "event.pass_teil": "Part of a pass",
@@ -3690,6 +3731,11 @@ between.</p>""",
         "no event of this pass has {person} confirmed or as its best match",
     "antwort.bruecke_grund_keine_referenzen":
         "{person} has no reference pictures yet to compare against",
+    # E-P8 (.507): eine Anlage OHNE frigate_url bekam bis .506 den
+    # internen Ausnahmenamen ("ValueError: unknown url type") als
+    # Antwort der Support-Einspielung. Jetzt 503 mit diesem Satz.
+    "antwort.einspielen.frigate_fehlt":
+        "frigate_url is not configured on this installation",
     # ---- personlauf-Design (Nachzug) ----
     # 20.08.: /personlauf traegt jetzt dasselbe Lauf-Design wie der
     # Gesichts-Lernlauf (Vier-Kachel-Fluss, Saeule, Suchknopf mit Popup).
@@ -3920,8 +3966,9 @@ between.</p>""",
     "gpu.laeuft.titel": 'Running:',
     "gpu.laeuft.zeile": '{plaetze} analysis slot(s), {belegt} of them busy{klassen} · {waechter} live watcher(s)',
     "gpu.klasse.analyse": 'analysis',
-    "gpu.klasse.ernte": 'harvest',
+    "gpu.klasse.ernte": 'harvest (learning run, fill-up)',
     "gpu.klasse.bg": 'background',
+    "gpu.klasse.interaktiv": 'interactive (your click)',
     "gpu.zu_live": 'Live watchers →',
     "gpu.noch_alt": 'The service is still running with {laeuft} slot(s); {gesetzt} is set and takes effect after the next restart.',
     "gpu.passt_hoechstens": 'With the current watchers, at most {n} slot(s) fit into the memory.',

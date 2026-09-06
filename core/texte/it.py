@@ -41,6 +41,9 @@ T = {
         "eliminato). La stessa importazione della procedura guidata "
         "iniziale, ora raggiungibile senza doverla rifare (ad es. dopo "
         "il ripristino delle impostazioni).",
+    # .507 B4: Weg zurueck aus der gefilterten Sicht (/gesichter?person=),
+    # die der Klick im Avatar-Gitter von /faces oeffnet.
+    "gesichter.alle_zeigen": "mostra tutti i volti",
     # ------------------------------------------------- routes/kameras ---
     "kameras.steckbrief.knopf": "Ricontrolla lo stream",
     "kameras.steckbrief.hinweis":
@@ -149,6 +152,17 @@ T = {
     "areas.verwaltung.hinweis_keine_kameras":
         "Nessuna telecamera nota — collega prima Frigate (Impostazioni).",
     "areas.verwaltung.knopf_speichern": "Salva aree",
+    # .507 B3b — Kettungs-Modus je Area (Werte aus core/areas.KETTUNG_MODI).
+    "areas.kettung.titel": "Fin dove arriva un passaggio",
+    "areas.kettung.satz":
+        "Un passaggio è un percorso attraverso la proprietà: gli eventi si "
+        "concatenano finché l'intervallo tra loro resta sotto il tuo "
+        "intervallo di scena. Scegli per ogni area fin dove può arrivare "
+        "questa catena. Cambia solo il raggruppamento — l'analisi guarda "
+        "sempre ogni telecamera per sé e la vista resta raggruppata per area.",
+    "areas.kettung.grundstueck": "un passaggio per tutta la proprietà",
+    "areas.kettung.area": "un passaggio per area",
+    "areas.kettung.kamera": "ogni telecamera per sé",
     # -------------------------------------- routes/benachrichtigungen ---
     # NICHT eingezogen (bewusst): der Einleitungs-Absatz (<b>/data</b>,
     # <b>Test</b>) und der Topic-Praefix-Hinweis (<b>verifyd</b>) tragen
@@ -1102,6 +1116,11 @@ T = {
     "livekalib.material.aus": "La raccolta dei campioni è disattivata (Advanced, calibration samples). Senza campioni questa pagina non ha nulla da mostrare.",
     "livekalib.material.stand": "{n} di massimo {deckel} campioni salvati",
     "livekalib.material.wann": "ultimo {wann}",
+    # .507 B5: der Zeitraum, ueber den der Ring reicht — er steht auf der
+    # Kamera-Seite UND auf der Uebersichts-Kachel (derselbe Satz, eine
+    # Quelle). Reicht der Ring ueber genau einen Zeitpunkt, zeigen beide
+    # weiter nur "wann"/"stand".
+    "livekalib.material.zeitraum": "immagini dal {von} al {bis}",
     "livekalib.material.fuellen_prosa": "La ricerca di materiale scorre gli ultimi eventi persona di questa telecamera e tiene il volto migliore di ciascuno. Si ferma a {ziel} immagini oppure dopo {events} eventi, a seconda di cosa arriva prima.",
     "livekalib.material.lauf": "In più {n} immagine/i di questa telecamera dall'ultimo ciclo di apprendimento — mostrate sotto e contrassegnate.",
     "livekalib.js.katalog": "{n} di {gesamt} potrebbero entrare nel catalogo",
@@ -1952,6 +1971,17 @@ T = {
     "auftritte.thumb.zusatz_referenz": " — tra i riferimenti",
     "auftritte.thumb.ohne_gesicht.eins": "+{n} evento senza volto",
     "auftritte.thumb.ohne_gesicht.viele": "+{n} eventi senza volto",
+    # .507 B3 (UX-E1/E2/E4 + E-O1): der Pruef-Knopf sitzt an der Bild-Kachel
+    # (ein Ereignis, eine Person), der zweite an der Durchgangs-Karte; die
+    # Bilderzeile ist auf THUMBS_JE_REIHE gedeckelt und nennt den Rest als
+    # EREIGNISSE (nicht als Bilder — dort hat niemand nachgesehen); die
+    # anderen Personen des Durchgangs stehen als verlinkte Zeile.
+    "auftritte.knopf.ereignis":
+        "cerca volti corrispondenti in questa immagine",
+    "auftritte.knopf.durchgang":
+        "controlla anche gli altri {n} eventi di questo passaggio",
+    "auftritte.thumb.mehr_ereignisse": "+{n} altri eventi",
+    "auftritte.auch_dabei": "presenti anche: {namen}",
     "auftritte.thumb.hinweis_referenz":
         "bordo verde = già tra i riferimenti",
     "auftritte.karte.best_punkt": "presenza confermata alle {zeit}",
@@ -2216,6 +2246,12 @@ T = {
         "video incompleto — letti {gelesen}/{soll} fotogrammi; esito "
         "basato sulla parte leggibile",
     "event.badge_unvollstaendig": "⚠ video incompleto",
+    "event.verwurf_grund.analyse_none":
+        "L'analisi non ha prodotto alcun risultato: si è interrotta o è andata in errore",
+    "event.verwurf_grund.lesbarkeit_riegel":
+        "Meno della metà dei fotogrammi del video era leggibile",
+    "event.verwurf_grund.clip_fehlt":
+        "Il video non è più in Frigate (conservazione scaduta o evento eliminato)",
     "event.pass_zurueck": "&#8592; precedente",
     "event.pass_weiter": "successivo &#8594;",
     "event.pass_teil": "Parte di un passaggio",
@@ -3885,6 +3921,8 @@ vista del giorno integri le persone conosciute.</p>""",
         "confermata o come miglior corrispondenza",
     "antwort.bruecke_grund_keine_referenzen":
         "{person} non ha ancora immagini di riferimento per il confronto",
+    "antwort.einspielen.frigate_fehlt":
+        "In questa installazione non è configurato nessun frigate_url",
     # ---- personlauf-Design (Nachzug) ----
     # Kachel-Titel und Kachel-Saetze des /personlauf-Laufflusses. Kachel 1/4,
     # die erste Saeulen-Marke und die Nachbar-Beschriftungen kommen wortgleich
@@ -4116,8 +4154,9 @@ vista del giorno integri le persone conosciute.</p>""",
     "gpu.laeuft.titel": 'In esecuzione:',
     "gpu.laeuft.zeile": '{plaetze} posti di analisi, {belegt} occupati{klassen} · {waechter} sentinelle live',
     "gpu.klasse.analyse": 'analisi',
-    "gpu.klasse.ernte": 'apprendimento',
+    "gpu.klasse.ernte": 'raccolta (apprendimento, riempimento)',
     "gpu.klasse.bg": 'secondo piano',
+    "gpu.klasse.interaktiv": 'interattivo (il tuo clic)',
     "gpu.zu_live": 'Sentinelle live →',
     "gpu.noch_alt": 'Il servizio gira ancora con {laeuft} posti; ne sono impostati {gesetzt}, attivi dal prossimo riavvio.',
     "gpu.passt_hoechstens": 'Con le sentinelle attuali entrano al massimo {n} posti nella memoria.',

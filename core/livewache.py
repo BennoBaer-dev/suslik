@@ -2950,15 +2950,78 @@ def _kalib_ring_kappen(d, deckel):
     os.replace(tmp, pfad)
 
 
+# Die Fueller-Bilanz je Kamera. Sie liegt NICHT im Ring, sondern unter
+# <data_dir>/state/kalib_bilanz.json, und sie beantwortet auf der Uebersicht
+# die Frage, warum ein Ring LEER ist ("aus N Ereignissen kam kein Gesicht" /
+# "zu klein" / "Vorrats-Guete nicht erreicht"). Geschrieben wird sie vom
+# Abschluss des On-demand-Fuellers, gelesen von der Kalibrier-Uebersicht
+# (beide in verifyd.py). Der LOESCHWEG steht hier, weil das Wegwerfen des
+# Rings und das Wegwerfen seiner Bilanz dieselbe Handlung sind — eine Bilanz
+# ueber Material, das es nicht mehr gibt, ist eine falsche Auskunft.
+KALIB_BILANZ = "kalib_bilanz.json"
+
+
+def kalib_bilanz_pfad(cfg):
+    """-> Pfad der Fueller-Bilanz (nur gebaut, nie angelegt)."""
+    return os.path.join(cfg.get("data_dir") or os.path.join(WURZEL, "verify_data"),
+                        "state", KALIB_BILANZ)
+
+
+def kalib_bilanz_vergessen(cfg, kamera):
+    """Den Eintrag EINER Kamera aus der Fueller-Bilanz nehmen -> True, wenn
+    einer drin war.
+
+    K9 (.507): ohne diesen Schritt erklaert nach dem Leeren eine Bilanz von
+    gestern den frisch geleerten Ring — der Nutzer liest "aus 50 Ereignissen
+    kam kein Gesicht", obwohl er gerade selbst geraeumt hat.
+
+    Fail-safe wie der ganze Anzeige-Pfad: fehlende Datei, kaputtes JSON und
+    ein fehlender Eintrag sind kein Fehler, sondern False. Geschrieben wird
+    wie vom Schreiber (tmp + os.replace), damit ein Abbruch nie eine halbe
+    Datei hinterlaesst. EHRLICHE GRENZE: ist die Datei nicht schreibbar (im
+    Feld gesehen: root-eigene Datei aus einem Container-Lauf), bleibt die alte
+    Bilanz stehen — das Leeren des Rings gilt trotzdem, die Kachel zeigt dann
+    bis zum naechsten Fueller-Lauf eine ueberholte Auskunft."""
+    pfad = kalib_bilanz_pfad(cfg)
+    try:
+        with open(pfad, encoding="utf-8") as f:
+            alle = json.load(f)
+        if not isinstance(alle, dict) or str(kamera) not in alle:
+            return False
+        alle.pop(str(kamera), None)
+        tmp = pfad + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(alle, f, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, pfad)
+        return True
+    except Exception:                                       # noqa: BLE001
+        return False
+
+
 def kalib_leeren(cfg, kamera):
     """Vorrat EINER Kamera wegwerfen -> (ok, msg). Der Weg fuers Nachkalibrieren
     mit frischem Material (User-Auftrag 31.08.): der Ring baut sich danach von
     selbst wieder auf, solange der Waechter laeuft. Es wird NUR der kalib-Ordner
-    angefasst — Beweisbilder und Videos daneben bleiben."""
+    angefasst — Beweisbilder und Videos daneben bleiben. Mit dem Ring faellt
+    seine Fueller-Bilanz (K9, s. kalib_bilanz_vergessen).
+
+    BEWUSSTE GRENZE (.507, nach vollstaendiger Lesung von kalib_schreiben /
+    _kalib_ring_kappen / kalib_leeren): zwischen diesen drei Wegen gibt es
+    KEINE Sperre, und es kommt auch keine dazu. Die Schreiber sitzen in
+    ANDEREN Prozessen (Worker-Subprozess, anlernen-Subprozess) — ein
+    Thread-Lock traege dort nichts, es waere ein flock noetig. Der Ist-Zustand
+    ist harmlos abgefangen: raeumt das Leeren waehrend eines Schreibens, bleibt
+    hoechstens eine Index-Zeile ohne Datei (kalib_lesen wirft sie still raus,
+    s. dort) oder eine Datei ohne Zeile (sie faellt beim naechsten Leeren
+    mit, weil das ueber KALIB_NAME_RE geht und nicht ueber den Index). Kein
+    Wachstum, kein falsches Bild — deshalb kein neues flock."""
     d = kalib_dir(cfg, kamera)
     if not d:
         return False, "unknown camera"
     n = 0
+    leer_msg = None
     try:
         for fn in os.listdir(d):
             if KALIB_NAME_RE.match(fn) or fn == KALIB_INDEX:
@@ -2968,10 +3031,15 @@ def kalib_leeren(cfg, kamera):
                 except OSError:
                     pass
     except FileNotFoundError:
-        return True, "no samples stored yet"
+        # Kein Ordner = nichts zu loeschen. Die Bilanz faellt trotzdem: sie
+        # kann von einem Fueller-Lauf stammen, der nichts gefunden hat — genau
+        # der Fall, in dem sie den leeren Ring erklaert.
+        leer_msg = "no samples stored yet"
     except OSError as e:
         return False, f"could not clear samples: {e}"
-    return True, f"cleared {n} file(s) — the watcher collects new ones from now on"
+    kalib_bilanz_vergessen(cfg, kamera)
+    return True, (leer_msg or
+                  f"cleared {n} file(s) — the watcher collects new ones from now on")
 
 
 def kalib_crop(frame, box, rand=KALIB_RAND):

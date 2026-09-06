@@ -36,7 +36,8 @@ def render(personen, n_bilder, n_unbekannt, lern_offen, qs_stand=None):
     n_unbekannt = Zahl persistenter Unbekannt-Identitaeten
     lern_offen  = Zahl offener Lern-Vorschlaege (0 = nichts zu tun)"""
     avatare = "".join(
-        f'<a class="fc-avatar" href="/gesichter#{_q(p)}" title="{html.escape(p)}">'
+        # .507 B4: ?person= statt #-Anker (der fand nie eine Sprungmarke).
+        f'<a class="fc-avatar" href="/gesichter?person={_q(p)}" title="{html.escape(p)}">'
         f'<img src="/refs/{_q(p)}/{_q(d)}" alt="" loading="lazy">'
         f'<span>{html.escape(p)}</span></a>'
         for p, d in personen)

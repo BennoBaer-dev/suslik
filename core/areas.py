@@ -25,6 +25,33 @@ RESERVIERT = ("all", "default", "unassigned")
 # Browser-Sammelobjekt keine eigene Eigenschaft an -> stiller Verlust).
 NAME_RE = re.compile(r"^[\w \-]{1,32}$")
 
+# ---------------------------------------------------------------------------
+# KETTUNGS-MODUS je Area (.507 B3b, Betreiber-Idee 05.09.2026: "Area buendelt
+# fuer die Anzeige, betrachtet bei der Analyse aber jede Kamera einzeln")
+# ---------------------------------------------------------------------------
+# Die Durchgangs-Kettung war bis .506 rein zeitlich und grundstuecksweit: jedes
+# Ereignis haengt an, solange sein Start hoechstens `szenario_gap_min` nach dem
+# bisherigen Durchgangs-ENDE liegt — Kamera und Ort spielten keine Rolle. Auf
+# einer Anlage im Dauerbetrieb reisst diese Kette praktisch nie (Feldbefund
+# 05.09.: EIN Durchgang ueber neun Stunden mit 3423 Ereignissen). Der Modus
+# waehlt deshalb, WORUEBER die Luecke gerechnet wird:
+#
+#   grundstueck  Werk — ALLE Kameras dieser Area teilen die EINE Kette des
+#                Grundstuecks (byte-gleich das Verhalten bis .506).
+#   area         die Kameras dieser Area ketten nur untereinander (richtig
+#                dort, wo jemand durch eine Halle/einen Hof wirklich zieht).
+#   kamera       jede Kamera dieser Area bildet ihre eigene Kette.
+#
+# Das ist EINE Aufzaehlung (qs_ebenen-Regel K3): Renderer, Validierung, Probe
+# und die Kettung selbst lesen sie hier, nie ein zweites Streu-Literal.
+KETTUNG_MODI = ("grundstueck", "area", "kamera")
+KETTUNG_WERK, KETTUNG_AREA, KETTUNG_KAMERA = KETTUNG_MODI
+# Die Default-Area ist das KOMPLEMENT und wird nie gespeichert (s. Kopf) — ihr
+# Modus braucht deshalb einen eigenen Eintrag in derselben Karte. "default" ist
+# als Area-Name gesperrt (RESERVIERT), eine Kollision mit einem echten Namen
+# ist damit ausgeschlossen.
+KETTUNG_DEFAULT_SCHLUESSEL = "default"
+
 
 def normalisieren(roh):
     """Store-Rohwert -> {name: [kameras]} — fail-safe, wirft nie. Akzeptiert die
@@ -97,6 +124,96 @@ def melde_zusatz(roh, cam):
     einer. Kameras ohne Area melden bewusst OHNE 'Default'-Zusatz — wer keine
     Areas nutzt, bekommt exakt die Meldungen von vorher."""
     return kamera_area(normalisieren(roh), cam) or ""
+
+
+def kettung_normalisieren(roh):
+    """Store-Rohwert (`areas_kettung`) -> {area_name|'default': modus} —
+    fail-safe wie normalisieren, wirft NIE (der Restore-Pfad laesst den Wert
+    unvalidiert in den Store). Unbekannte Modi, kaputte Typen und Namen, die
+    keine Area sein KOENNEN (Namensmuster), fallen still raus; ein ausdrueckliches
+    'grundstueck' faellt ebenfalls raus, weil es das Werk IST — eine Anlage ohne
+    Eintrag und eine Anlage mit lauter Werk-Eintraegen verhalten sich damit
+    identisch. Der Name behaelt seine Schreibweise (der Store bleibt lesbar), die
+    Aufloesung ist case-insensitiv (kettung_modus)."""
+    if not isinstance(roh, dict):
+        return {}
+    out = {}
+    for name, modus in roh.items():
+        if not isinstance(name, str) or not isinstance(modus, str):
+            continue
+        name, modus = name.strip(), modus.strip()
+        if modus not in KETTUNG_MODI or modus == KETTUNG_WERK:
+            continue
+        if name.casefold() == KETTUNG_DEFAULT_SCHLUESSEL:
+            out[KETTUNG_DEFAULT_SCHLUESSEL] = modus
+        elif name and not name.startswith("_") and NAME_RE.match(name):
+            out[name] = modus
+    return out
+
+
+def kettung_modus(modi, area_name):
+    """Modus EINER Area (modi = normalisierte Karte). area_name None/'' meint
+    die Default-Area (das Komplement). Alles Unbekannte faellt auf das Werk —
+    eine geloeschte Area, ein Tippfehler oder ein Restore-Rest darf die Kettung
+    nie in einen Zustand bringen, den niemand eingestellt hat."""
+    if not modi:
+        return KETTUNG_WERK
+    gesucht = (area_name or KETTUNG_DEFAULT_SCHLUESSEL).strip().casefold()
+    for name, modus in modi.items():
+        if name.casefold() == gesucht and modus in KETTUNG_MODI:
+            return modus
+    return KETTUNG_WERK
+
+
+def ketten_schluessel(areas, modi, cam):
+    """DER Ketten-Schluessel einer Kamera fuer die Durchgangs-Bildung
+    (szenarien.szenarien_des_tages) — die EINE Stelle, an der aus Area-Modus und
+    Kameraname eine Kette wird. Gleicher Schluessel = die beiden Ereignisse
+    koennen zu EINEM Durchgang zusammenwachsen (wenn die Luecke stimmt),
+    verschiedener Schluessel = nie.
+
+    Ohne eingestellte Modi ist die Antwort fuer JEDE Kamera dieselbe — genau die
+    eine grundstuecksweite Kette bis .506, ohne dass die Areas ueberhaupt
+    aufgeloest werden muessen."""
+    if not modi:
+        return KETTUNG_WERK
+    area = kamera_area(areas, cam)                  # None = Default-Area
+    modus = kettung_modus(modi, area)
+    if modus == KETTUNG_KAMERA:
+        return KETTUNG_KAMERA + ":" + str(cam)
+    if modus == KETTUNG_AREA:
+        return KETTUNG_AREA + ":" + (area or KETTUNG_DEFAULT_SCHLUESSEL)
+    return KETTUNG_WERK
+
+
+def kettung_validieren(roh, area_namen=()):
+    """POST-Body-Pruefung fuer den Kettungs-Teil von /areas_speichern ->
+    (True, store_form) | (False, msg). Lehnt LAUT ab (anders als
+    kettung_normalisieren): Nicht-Objekt, Nicht-String, unbekannter Modus.
+
+    ZWEI bewusst STILLE Faelle, beide keine Verluste:
+      * ein Eintrag fuer eine Area, die es nach diesem Speichern nicht mehr gibt
+        (der Browser schickt die Auswahl der geloeschten Area noch mit) —
+        eine Einstellung ohne Gegenstand wird weggelassen, nicht beklagt;
+      * ein Werk-Eintrag ('grundstueck') — er wird nicht gespeichert, damit eine
+        unberuehrte Anlage weiter GAR KEINEN Store-Eintrag traegt."""
+    if not isinstance(roh, dict):
+        return False, "chaining must be an object {area: mode}"
+    erlaubt = {str(n).strip().casefold() for n in (area_namen or ())}
+    erlaubt.add(KETTUNG_DEFAULT_SCHLUESSEL)
+    out = {}
+    for name, modus in roh.items():
+        if not isinstance(name, str) or not isinstance(modus, str):
+            return False, "chaining: area name and mode must be strings"
+        name, modus = name.strip(), modus.strip()
+        if modus not in KETTUNG_MODI:
+            return False, (f"chaining for '{name}': unknown mode '{modus}' — "
+                           f"allowed: {', '.join(KETTUNG_MODI)}")
+        if name.casefold() not in erlaubt or modus == KETTUNG_WERK:
+            continue
+        out[KETTUNG_DEFAULT_SCHLUESSEL
+            if name.casefold() == KETTUNG_DEFAULT_SCHLUESSEL else name] = modus
+    return True, out
 
 
 def validieren(roh):
