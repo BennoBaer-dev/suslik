@@ -12,7 +12,21 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.0.506"   # .506 = .505 + Fix aus dem Prod-Funktionstest (Ereignis-Tabelle lief bei
+STAND = "0.1.0.508"   # .508 Box-Inhalt User 06.09. frueh: der Satz steht EINMAL. Bis .507 lag
+                      # derselbe Wortlaut zweimal in der Liste (Eintrag .506 UND .507), und die
+                      # Box zeigt die letzten zehn Eintraege — der Nutzer sah die Zeile also
+                      # doppelt untereinander (Befund J3 des .507-Deploy-Zugs). Beide Eintraege
+                      # sind zu EINEM ("0.1.0.508") verschmolzen, Text unveraendert in allen
+                      # fuenf Sprachen (E-O3 gilt weiter: „What's-new-Text aendern wir nicht.").
+                      # .507 wurde nie veroeffentlicht und wandert deshalb mit — genau das
+                      # Muster, mit dem .506 den .505-Eintrag uebernommen hat.
+                      # Davor: "0.1.0.507"   # .507 Box-Inhalt User 05.09. 23:30 (Entscheid E-O3, bauplan_0507.md §1.3):
+                      # „What's-new-Text aendern wir nicht." Der .507-Eintrag traegt WOERTLICH
+                      # denselben Text wie der .506-Eintrag in allen fuenf Sprachen, nur die
+                      # Nummer wandert. Der Zug selbst (Klick hat Vorfahrt, keine automatische
+                      # Pass-Ernte, Personenseite, Kettungs-Modus) bekommt also KEINEN eigenen
+                      # Satz in der Box — abgestimmt ist er trotzdem, deshalb STAND hoch.
+                      # Davor: "0.1.0.506"   # .506 = .505 + Fix aus dem Prod-Funktionstest (Ereignis-Tabelle lief bei
                       # 900 px in den Body; Gate S9 rot -> fix-forward, Version hoch, Box-Inhalt
                       # UNVERAENDERT: der .505-Eintrag traegt jetzt die Nummer .506, weil .505 nie
                       # veroeffentlicht wurde).
@@ -391,11 +405,19 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
-    # 0.1.0.505 — Box-Inhalt User 05.09.2026 ("whats new bleibt wie es ist nur ohne
-    # test"): GENAU EIN Eintrag, kein "Testversion"-Punkt mehr. Alles andere aus dem
-    # Bauzug (Vergabestelle, Wächter-Marke/Puls, Rückstau-Fixes, Support-Fensterweg,
-    # Thread-Kappung, Gate-Stufe S11) bleibt BEWUSST draussen — Interna.
-    ("0.1.0.506", (
+    # 0.1.0.508 — EIN Eintrag fuer .505/.506/.507/.508. Der Wortlaut ist der des
+    # .505-Zugs ("whats new bleibt wie es ist nur ohne test", User 05.09.2026) und
+    # bleibt unveraendert (E-O3, User 05.09. 23:30: "What's-new-Text aendern wir
+    # nicht.") — nur die Nummer wandert, wie schon von .505 auf .506.
+    # Warum EIN Eintrag statt zweier gleichlautender: bis .507 standen .506 UND .507
+    # mit demselben Satz in der Liste, und die Box zeigt die letzten zehn Eintraege
+    # (webui/__init__.whatsnew_block) — der Nutzer sah die Zeile also zweimal
+    # untereinander (Befund J3 des .507-Deploy-Zugs, B7-Bericht Punkt 1). .507 war nie
+    # veroeffentlicht; verschmolzen verliert also niemand einen Hinweis, den er schon
+    # gesehen hat. Der .507-Zug selbst (Klick hat Vorfahrt, keine automatische
+    # Pass-Ernte, Personenseite, Kettungs-Modus je Area) bekommt weiterhin KEINEN
+    # eigenen Satz in der Box — er steht im CHANGELOG.
+    ("0.1.0.508", (
         {"de": "Parallele Analyse jetzt auf beiden Wegen (Poll und MQTT). Der Lernlauf "
                "nutzt freie Plätze mit, ohne die laufende Erkennung zu verdrängen.",
          "en": "Parallel analysis now on both paths (poll and MQTT). The learning run "

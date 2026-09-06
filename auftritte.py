@@ -27,6 +27,10 @@ from core.sprache import t, t_n
 import szenarien as _szen
 from core import areas as _areas_mod        # Areas Stufe 1: Sicht-Aufloesung (30.07.)
 from routes import areas as _r_areas        # Chip-Leiste (reine Links)
+# .507 B3: die Deckel-Werkzeuge von Today (deckel/plus_html) — EIN Werkzeug
+# fuer beide Seiten statt einer zweiten Kappungs-Rechnung hier. routes/heute
+# fasst weder Netz noch Dateisystem an und kennt auftritte nicht (kein Kreis).
+from routes import heute as _r_heute
 
 
 
@@ -316,6 +320,31 @@ def render_unbekannt(cfg, log_pfad, personen_bekannt, params):
 # Karte waeren keine Verbesserung.
 PASS_PERSONEN_MAX = 3
 
+# .507 B3 (E-P11, UX-E1/E3): wie viele Bild-Kacheln eine Reihe zeigt, bevor der
+# Rest nur noch als Zahl steht — zwoelf wie PERSONEN_SICHTBAR auf Today
+# (routes/heute.py:26, User-Entscheid 02.09.). Der Deckel ist zugleich der
+# ABBRUCH der Crop-Suche: beim Feldtester haengen an EINEM Durchgang 3423
+# Ereignisse, und _crop_url kostet je Aufruf bis zu zwei listdir. Deshalb
+# nennt die Rest-Zeile nach einem Abbruch ehrlich EREIGNISSE ("+N further
+# events") und nicht Bilder — ob dort ueberhaupt ein Gesicht liegt, hat
+# niemand nachgesehen.
+THUMBS_JE_REIHE = 12
+
+
+def _folge_html(folge, klar):
+    """Kamerafolge einer Karte (UX-E5): erste + letzte Kamera, alles dazwischen
+    hinter einem '+N'-Aufklapper (Muster der Today-Deckel: plus_html traegt die
+    Namen im Tooltip, ein <details> haelt den Rest bereit). Bis drei Kameras
+    bleibt die Folge unveraendert — dort waere der Aufklapper teurer als der
+    Text. `folge` traegt fertiges HTML (Bestaetigte fett), `klar` dieselben
+    Eintraege als Klartext fuer den Tooltip."""
+    if len(folge) <= 3:
+        return " &rarr; ".join(folge)
+    return (f'{folge[0]} &rarr; <details class="folge-mehr">'
+            f'<summary>{_r_heute.plus_html(klar[1:-1])}</summary>'
+            f'{" &rarr; ".join(folge[1:-1])}</details>'
+            f' &rarr; {folge[-1]}')
+
 
 def render(cfg, log_pfad, personen_bekannt, params):
     """-> (titel, inhalt_html). params = parsed query dict (Listen je Key, wie qs im Handler)."""
@@ -414,12 +443,13 @@ def render(cfg, log_pfad, personen_bekannt, params):
         # DURCHGANGS; Kameras mit Bestaetigung DIESER Person fett (Review .50: sonst las
         # sich die Folge als Personenweg ueber Kameras, auf denen sie nie bestaetigt war).
         bestaetigt_kams = {e["cam"] for e in evs if person in (e.get("conf") or [])}
-        folge, gesehen = [], set()
+        folge, folge_klar, gesehen = [], [], set()
         for e in evs:
             if e["cam"] not in gesehen:
                 gesehen.add(e["cam"])
                 teil = f'{html.escape(e["cam"])} {_hhmm(e["t"])}'
                 folge.append(f'<b>{teil}</b>' if e["cam"] in bestaetigt_kams else teil)
+                folge_klar.append(f'{e["cam"]} {_hhmm(e["t"])}')
         andere = [p for p in s["pers"] if p != person]
         # .32x (User 22.08.: "wenn zwei, maximal drei Personen sind, dass die
         # auch sauber genannt werden und es auch drei Bilder reingibt"): ein
@@ -432,9 +462,24 @@ def render(cfg, log_pfad, personen_bekannt, params):
         # was darueber liegt bleibt die alte Namenszeile — eine Karte mit acht
         # Bildern waere keine Verbesserung.
         _sonstige = sorted(andere, key=lambda q: -(s["pers"][q].get("best") or 0))
-        _zeigen = ([person] + _sonstige)[:PASS_PERSONEN_MAX]
-        _rest = ([person] + _sonstige)[PASS_PERSONEN_MAX:]
+        # .507 B3 (UX-E2): auf der Seite EINER Person zeigt die Karte auch nur
+        # deren Bilder. Die anderen des Durchgangs verschwinden nicht — sie
+        # stehen als Zeile mit Link auf ihre eigene Seite (Szenario bleibt
+        # sichtbar: Kopfzeile, Kamerafolge, Durchgangs-Knopf, /pass/<eid>).
+        # Nebeneffekt, der den Ausschlag gab: _crop_url lief bisher je Ereignis
+        # MAL drei Personen. Die Gruppen-Sicht (?gruppe=) behaelt ihr Verhalten
+        # — dort ist die Mehrpersonen-Karte der Zweck der Seite.
+        nur_person = not gruppe
+        if nur_person:
+            _zeigen, _rest = [person], []
+        else:
+            _zeigen = ([person] + _sonstige)[:PASS_PERSONEN_MAX]
+            _rest = ([person] + _sonstige)[PASS_PERSONEN_MAX:]
         dabei = ", ".join(html.escape(q) for q in _rest)
+        auch_da = " · ".join(
+            f'<a href="/auftritte?person={urllib.parse.quote(q)}'
+            f'&amp;tag={tag_str}{aq}">{html.escape(q)}</a>'
+            for q in _sonstige) if nur_person else ""
         def _person_block(q):
             dq = s["pers"][q]
             u = _crop_url(cfg, dq.get("eid"), q)
@@ -456,23 +501,31 @@ def render(cfg, log_pfad, personen_bekannt, params):
         # jeder Person den Button mit dem Check der Bilder"). Bis .32x zeigte die
         # Reihe nur die Seiten-Person; in einem Durchgang mit mehreren Menschen
         # blieb der zweite unsichtbar, obwohl seine Crops vorliegen.
-        # Der Pruef-Knopf wandert MIT in die Reihe: er traegt den Personennamen,
-        # und die Bruecke siebt ohnehin je Person gegen deren Referenzen — hinter
-        # Person A werden also A-Bilder geprueft, hinter B die von B. Die
-        # Event-Liste ist fuer alle dieselbe (der ganze Durchgang), das Sieb
-        # macht den Unterschied.
         # Zeigt eine Person im Durchgang KEIN Gesicht (nur Koerper-/Vision-Weg),
         # bleibt ihre Reihe weg statt leer dazustehen.
-        _eids_alle = html.escape(json.dumps(
-            [str(e.get("eid")) for e in evs if e.get("eid")]), quote=True)
+        # .507 B3 (UX-E4): der Pruef-Knopf sitzt jetzt AN DER KACHEL und meint
+        # genau dieses eine Ereignis fuer genau diese Person (E-B3). Die
+        # eid-Liste des Durchgangs im HTML (`data-eids`, beim Feldtester 140 KB
+        # je Knopf) ist ersatzlos weg — der Dienst rechnet den Durchgang selbst
+        # aus der Akte (E-P2). Der Weg ueber den ganzen Durchgang steht als
+        # ZWEITER Knopf an der Karte (E-O1, unten).
         reihen = []
+        _lbl_ereignis = t("auftritte.knopf.ereignis")
         for q in _zeigen:
-            q_thumbs, q_ohne = [], 0
+            q_thumbs, q_ohne, q_kand, q_ref = [], 0, [], False
             for e in evs:
+                # Abbruch nach einem Treffer MEHR als der Deckel (E3): dann
+                # steht fest, dass die Reihe gedeckelt ist, und die teure
+                # Crop-Suche endet hier statt nach 3423 Ereignissen.
+                if len(q_kand) > THUMBS_JE_REIHE:
+                    break
                 tu = _crop_url(cfg, e.get("eid"), q)
                 if not tu:
                     q_ohne += 1
                     continue
+                q_kand.append((e, tu))
+            sichtbar, ueber = _r_heute.deckel(q_kand, THUMBS_JE_REIHE)
+            for e, tu in sichtbar:
                 schwach = q not in (e.get("conf") or [])
                 kl = "pass-thumb pass-thumb-schwach" if schwach else "pass-thumb"
                 # .227: Referenz-Marker direkt am Bild — gruen umrandet heisst
@@ -480,36 +533,49 @@ def render(cfg, log_pfad, personen_bekannt, params):
                 ist_ref = e.get("eid") in ref_eids
                 if ist_ref:
                     kl += " pass-thumb-ref"
+                    q_ref = True
                 # Konditionale Annotations-Anhaenge (§8.11): eigene Schluessel.
                 tt = f'{html.escape(e["cam"])} {_hhmm(e["t"])}' \
                     + (t("auftritte.thumb.zusatz_unbestaetigt") if schwach else "") \
                     + (t("auftritte.thumb.zusatz_referenz") if ist_ref else "")
-                q_thumbs.append(f'<a class="{kl}" title="{tt}" '
-                                f'href="/event/{urllib.parse.quote(str(e.get("eid") or ""))}">'
-                                f'<img src="{tu}" loading="lazy" alt=""><small>{_hhmm(e["t"])}</small></a>')
+                _eid = str(e.get("eid") or "")
+                # Knopf UND Status-Feld je Kachel: lernBruecke greift das
+                # Status-Feld ueber b.parentNode — mit einem gemeinsamen Feld
+                # schrieben zwoelf Poll-Schleifen in dieselbe Zeile.
+                q_thumbs.append(
+                    f'<div class="pass-kachel">'
+                    f'<a class="{kl}" title="{tt}" '
+                    f'href="/event/{urllib.parse.quote(_eid)}">'
+                    f'<img src="{tu}" loading="lazy" alt="">'
+                    f'<small>{_hhmm(e["t"])}</small></a>'
+                    f'<button class="gtb pass-knopf pass-knopf-klein" '
+                    f'title="{html.escape(_lbl_ereignis, quote=True)}" '
+                    f'aria-label="{html.escape(_lbl_ereignis, quote=True)}" '
+                    f'data-person="{html.escape(q, quote=True)}" '
+                    f'data-eid="{html.escape(_eid, quote=True)}" '
+                    f'onclick="lernBruecke(this)">'
+                    f'<span class="pk-icon">&#128269;</span></button>'
+                    f'<span class="dim lb-status"></span></div>')
             if not q_thumbs:
                 continue
-            if q_ohne:
+            if ueber:
+                # Gedeckelt: gezaehlt werden EREIGNISSE, nicht Bilder — die
+                # uebrigen hat die Suche nicht mehr angesehen (E3).
+                q_thumbs.append(f'<span class="pass-thumbs-rest">'
+                                f'{t("auftritte.thumb.mehr_ereignisse", n=len(evs) - len(sichtbar))}</span>')
+            elif q_ohne:
                 q_thumbs.append(f'<span class="pass-thumbs-rest">'
                                 f'{t_n("auftritte.thumb.ohne_gesicht", q_ohne)}</span>')
             # .229: die Bedeutung des gruenen Rands steht AN der Reihe, aber nur,
-            # wenn die Reihe markierte Bilder traegt — jetzt je Person geprueft.
-            if any(e.get("eid") in ref_eids and _crop_url(cfg, e.get("eid"), q)
-                   for e in evs):
+            # wenn die Reihe markierte Bilder traegt. .507: gepruefte Quelle sind
+            # die GEZEIGTEN Kacheln (der zweite Voll-Lauf ueber evs mit _crop_url
+            # ist damit weg — er kostete dasselbe wie die Reihe selbst).
+            if q_ref:
                 q_thumbs.append(f'<span class="pass-thumbs-rest">'
                                 f'{t("auftritte.thumb.hinweis_referenz")}</span>')
-            # Stufe-2-Grenze (§8.17 + §8.4): Toggle-Label — dieselbe Beschriftung
-            # setzt das Inline-JS (lbStart) zur Laufzeit neu; beide Fassungen
-            # muessen aus EINER Quelle kommen. Bleibt samt JS literal.
-            knopf = (f'<button class="gtb pass-knopf" '
-                     f'data-person="{html.escape(q, quote=True)}" '
-                     f'data-eids="{_eids_alle}" onclick="lernBruecke(this)">'
-                     f'<span class="pk-icon">&#128269;</span>'
-                     f'Check this pass for good pictures &#8230;</button>'
-                     '<span class="dim lb-status" style="margin-left:8px"></span>')
             reihen.append(
                 f'<div class="pass-reihe"><div class="pass-reihe-kopf">'
-                f'<b>{html.escape(q)}</b>{knopf}</div>'
+                f'<b>{html.escape(q)}</b></div>'
                 f'<div class="pass-thumbs">{"".join(q_thumbs)}</div></div>')
         thumbs_html = "".join(reihen)
         # best match: Kamera/Zeit des BEST-Events (d["eid"]), nicht der letzten
@@ -539,19 +605,35 @@ def render(cfg, log_pfad, personen_bekannt, params):
         # Pass-Events: das Identitaets-Sieb prueft jedes Bild einzeln gegen
         # die Referenzen, eine fremde Person kann konstruktionsbedingt nicht
         # uebernommen werden.
-        # .32x: der Pruef-Knopf steht jetzt JE PERSON in ihrer Thumb-Reihe
-        # (oben gebaut) — hier bleibt nur der Video-Knopf. Traegt der Durchgang
-        # keine einzige Gesichts-Reihe (nur Koerper-/Vision-Weg), gibt es auch
-        # keinen Knopf mehr: dann faellt er hier ERSATZWEISE fuer die
-        # Seiten-Person an, sonst verloere die Karte eine Funktion.
+        # .507 B3 (E-O1): der ZWEITE Knopf gehoert an die KARTE, nicht an die
+        # Kachel — er meint den ganzen Durchgang und holt damit den
+        # Szenario-Vorteil zurueck, den der Ein-Ereignis-Zuschnitt aufgibt
+        # (Konsens ueber mehrere Kameras, bester Winkel; core/vorrat). Er ist
+        # ein FLAG auf demselben Weg (`ganzer_pass`), kein zweites Verfahren:
+        # das Ereignis im `data-eid` dient dem Dienst nur als Einstieg, den
+        # Durchgang kettet er selbst (E-P2). `data-n` traegt die Ereigniszahl
+        # maschinenlesbar — die Gate-Stufe S9b sucht den groessten Durchgang
+        # und darf das nicht aus einem uebersetzten Text lesen muessen.
+        # Ein Durchgang aus EINEM Ereignis bekommt keinen zweiten Knopf (die
+        # Kachel deckt ihn schon ab); hat er zusaetzlich keine Gesichts-Reihe,
+        # steht hier ersatzweise der Ereignis-Knopf, sonst verloere die Karte
+        # ihre Funktion.
+        _alle_eids = [str(e.get("eid")) for e in evs if e.get("eid")]
+        _n_andere = max(len(_alle_eids) - 1, 0)
         lern = ''
-        if not reihen:
-            _eids = html.escape(json.dumps(
-                [str(e.get("eid")) for e in evs if e.get("eid")]), quote=True)
-            lern = (f' <button class="gtb pass-knopf" data-person="{html.escape(person, quote=True)}" '
-                    f'data-eids="{_eids}" onclick="lernBruecke(this)">'
+        if _alle_eids and (_n_andere or not reihen):
+            _ganz = bool(_n_andere)
+            _lbl = (t("auftritte.knopf.durchgang", n=_n_andere) if _ganz
+                    else _lbl_ereignis)
+            lern = (f' <button class="gtb pass-knopf" '
+                    f'data-person="{html.escape(person, quote=True)}" '
+                    f'data-eid="{html.escape(_alle_eids[0], quote=True)}" '
+                    + (f'data-ganzer-pass="1" data-n="{len(_alle_eids)}" '
+                       if _ganz else '')
+                    + f'data-lbl="{html.escape(_lbl, quote=True)}" '
+                    f'onclick="lernBruecke(this)">'
                     f'<span class="pk-icon">&#128269;</span>'
-                    f'Check this pass for good pictures &#8230;</button>'
+                    f'{html.escape(_lbl)}</button>'
                     '<span class="dim lb-status" style="margin-left:8px"></span>')
         bloecke.append(
             f'<div class="card pass-card"><div class="pass-kopf"><b>{t("auftritte.karte.pass_nr", n=i)}</b>'
@@ -559,9 +641,14 @@ def render(cfg, log_pfad, personen_bekannt, params):
             f' · {t_n("auftritte.karte.events", s["n"])}'
             f' · {t_n("auftritte.karte.kameras", len(s["kams"]))}{live}</div>'
             f'<div class="pass-body">{bild}<div class="pass-info">'
-            f'<div class="pass-folge">{" &rarr; ".join(folge)}</div>'
+            f'<div class="pass-folge">{_folge_html(folge, folge_klar)}</div>'
             f'<div class="dim">{bestz} · {t("auftritte.karte.best_match", wert=bm)}{best_ort}</div>'
             + (f'<div class="dim">{t("auftritte.karte.auch_dabei", namen=dabei)}</div>' if dabei else '')
+            # .507 B3 (UX-E2): die anderen des Durchgangs als Einzeiler MIT Link
+            # auf ihre eigene Seite — sie verschwinden nicht, sie bekommen nur
+            # keine zweite Bilderwand auf dieser Seite.
+            + (f'<div class="dim">{t("auftritte.auch_dabei", namen=auch_da)}</div>'
+               if auch_da else '')
             + (f'<div class="dim">{_unbek_zeile(s, e2u)}</div>'
                if s.get("unbek") else '')
             + f'<div class="pass-links">{video}{lern}</div></div></div>'
@@ -576,9 +663,23 @@ def render(cfg, log_pfad, personen_bekannt, params):
     # \\"-Escapes, Laufzeit-Konkatenation) — JS-Texte bleiben literal, bis
     # window.T diese Seite versorgt (beide Toggle-Fassungen, §8.17).
     js = ('<script>'
+          # .507 B3: es gibt zwei Beschriftungen (Kachel = dieses eine
+          # Ereignis, Karte = der ganze Durchgang mit seiner Ereigniszahl),
+          # und beide kommen aus der Sprachtabelle. lbStart baut deshalb aus
+          # data-lbl zurueck statt aus einem zweiten literalen Text — sonst
+          # truege ein Kachel-Knopf nach dem Abbruch die Karten-Beschriftung.
+          # Kachel-Knoepfe haben kein data-lbl: sie bleiben die Lupe.
           'function lbStart(b){b.disabled=false;'
-          'b.innerHTML="<span class=\\"pk-icon\\">\\uD83D\\uDD0D</span>'
-          'Check this pass for good pictures \\u2026";}'
+          'b.innerHTML="<span class=\\"pk-icon\\">\\uD83D\\uDD0D</span>";'
+          'if(b.dataset.lbl)b.appendChild(document.createTextNode(b.dataset.lbl));}'
+          # .507 B3: Riegel je Karte und Person. Ein zweiter Klick auf eine
+          # andere Kachel DERSELBEN Person waehrend eines Laufs traefe im
+          # Dienst denselben Ordner und bekaeme "laeuft" fuer einen fremden
+          # Lauf gemeldet — hier bleibt es bei einem Hinweis, ohne zweite
+          # Poll-Schleife. lbFrei gibt die Karte an jedem Ausstieg frei.
+          'function lbFrei(b){var k=b.closest(".pass-card");'
+          'if(k&&k._lbLauf&&k._lbLauf[b.dataset.person]===b)'
+          'delete k._lbLauf[b.dataset.person];}'
           'function lbUebernehmen(b,st,items){'
           'st.textContent="adopting\\u2026";b.disabled=true;'
           'fetch("/auftritt_lernen",{method:"POST",'
@@ -675,11 +776,14 @@ def render(cfg, log_pfad, personen_bekannt, params):
           'var w=document.createElement("div");w.className="fs-block";'
           'var m=document.createElement("div");m.className="dim fs-msg";'
           'w.appendChild(m);'
+          # .507 B3: eigene Zeile fuer Startzeit + Dauer (unten gefuellt).
+          'var mt=document.createElement("div");mt.className="dim fs-meta";'
+          'w.appendChild(mt);'
           'var tb=document.createElement("div");tb.className="fs-total";'
           'var tf=document.createElement("span");tf.className="fs-fill";'
           'tb.appendChild(tf);w.appendChild(tb);'
           'var L={suchen:"searching faces",pose:"head pose",erkennen:"recognizing"};'
-          'c={m:m,tf:tf,rows:[]};'
+          'c={m:m,mt:mt,tf:tf,rows:[]};'
           'f.gruppen.forEach(function(g){'
           'var r=document.createElement("div");r.className="fs-row";'
           'var kf=document.createElement("div");kf.className="fs-kopf";'
@@ -694,7 +798,29 @@ def render(cfg, log_pfad, personen_bekannt, params):
           'c.rows.push({bf:bf,zt:zt});});'
           'st.appendChild(w);st._fsb=c;}'
           'c.m.textContent=msg;'
-          'c.tf.className="fs-fill"+(z==="wartet"?" warte":"");'
+          # .507 B3 (E-B2/E-P3/E-P5): Startzeit und — NUR wenn der Dienst eine
+          # eigene Messung hat — die geschaetzte Dauer. Ohne Messung steht dort
+          # ehrlich "duration not measured yet"; eine Rueckfallzahl gaebe es
+          # hier nie (die Rate haengt an Maschine UND Version, nach jedem
+          # Update ist sie einmal leer). Der Grund steuert den Warte-Ton des
+          # Gesamtbalkens; ohne Grund (Alt-Antwort) bleibt es beim Zustand.
+          'var db=st._lbd||{},mt2="";'
+          'if(db.start_ts)mt2="started "'
+          '+new Date(db.start_ts*1000).toLocaleTimeString();'
+          'if(db.dauer_s)mt2+=(mt2?" \\u00b7 ":"")+"about "'
+          '+Math.round(db.dauer_s)+" s in total";'
+          'else if(db.dauer_unbekannt)mt2+=(mt2?" \\u00b7 ":"")'
+          '+"duration not measured yet";'
+          # .508 J1: der Lauf hat ohne warmen Worker angefangen (Dienst frisch
+          # gestartet), und der Kaltaufschlag ist auf dieser Maschine+Version nie
+          # gemessen worden — dann steckt das Modell-Laden in KEINER Zahl. Steckt
+          # es in dauer_s, schickt der Dienst das Feld gar nicht erst mit.
+          'if(db.warm_up)mt2+=(mt2?" ":"")+"+ warm-up";'
+          'c.mt.textContent=mt2;'
+          'var gr=db.grund||"";'
+          'var wa=gr?(gr==="startet"||gr==="bg_lock"||gr==="kein_platz")'
+          ':(z==="wartet");'
+          'c.tf.className="fs-fill"+(wa?" warte":"");'
           'c.tf.style.width=Math.round(100*f.gesamt)+"%";'
           'var fertig=(z==="bewertet");'
           'f.gruppen.forEach(function(g,i){'
@@ -711,6 +837,13 @@ def render(cfg, log_pfad, personen_bekannt, params):
           'else zt.textContent=g.wert+" recognized";});}'
           'function lernBruecke(b){'
           'var st=b.parentNode.querySelector(".lb-status");'
+          'var kk0=b.closest(".pass-card"),pn=b.dataset.person;'
+          'if(kk0){kk0._lbLauf=kk0._lbLauf||{};'
+          'if(kk0._lbLauf[pn]&&kk0._lbLauf[pn]!==b){'
+          'st.style.display="";'
+          'st.textContent="a check for "+pn+" is already running on this pass";'
+          'return;}'
+          'kk0._lbLauf[pn]=b;}'
           # .347 (User: "flackert bei der Aktualisierung"): lernBruecke ist
           # Klick-Handler UND Poll-Schleife — der Kopf darf den Block nicht je
           # Tick abraeumen (der Cache-Reset an dieser Stelle machte das
@@ -720,11 +853,19 @@ def render(cfg, log_pfad, personen_bekannt, params):
           # Cache ausschliesslich an den Ausstiegen.
           'b.disabled=true;'
           'if(!st._fsb)st.textContent="checking the pictures\\u2026";'
+          # .507 B3 (E-B3/E-P2): der Klick sendet GENAU das Ereignis der Kachel;
+          # `ganzer_pass` ist der zweite Knopf an der Karte. Die eid-Liste des
+          # Durchgangs im HTML gibt es nicht mehr — der Dienst kettet selbst.
           'fetch("/auftritt_lernen",{method:"POST",headers:{"Content-Type":"application/json"},'
-          'body:JSON.stringify({person:b.dataset.person,eids:JSON.parse(b.dataset.eids)})})'
+          'body:JSON.stringify({person:pn,eid:b.dataset.eid,'
+          'ganzer_pass:!!b.dataset.ganzerPass})})'
           '.then(function(r){return r.json()}).then(function(d){'
+          # Die Antwort selbst haengt am Status-Feld: lbBlock liest daraus
+          # Grund, Startzeit und Dauer. Der Aufruf von lbBlock bleibt dabei
+          # woertlich wie im .345-Vertrag (qs.sh) — kein fuenftes Argument.
+          'st._lbd=d;'
           'if(!d.ok){st._fsb=null;st.style.display="";'
-          'st.textContent="error: "+d.msg;b.disabled=false;return;}'
+          'st.textContent="error: "+d.msg;b.disabled=false;lbFrei(b);return;}'
           # .232 (User-Idee): kaltes Modell -> ehrliche Lade-Anzeige und
           # automatisch nachfragen, sobald es steht (max ~1 min).
           'if(d.laden){'
@@ -740,15 +881,16 @@ def render(cfg, log_pfad, personen_bekannt, params):
           'b._ladeversuche=(b._ladeversuche||0)+1;'
           'if(b._ladeversuche>24){st._fsb=null;st.style.display="";'
           'st.textContent="model did not load — try again";'
-          'b.disabled=false;b._ladeversuche=0;return;}'
+          'b.disabled=false;b._ladeversuche=0;lbFrei(b);return;}'
           'setTimeout(function(){lernBruecke(b)},2500);return;}'
           'b._ladeversuche=0;'
           'st._fsb=null;st.style.display="";st.textContent=d.msg;b.disabled=false;'
+          'lbFrei(b);'
           # .231: Overlay auch, wenn NUR Grenzfaelle da sind.
           'if((d.nehmen&&d.nehmen.length)||(d.grenz&&d.grenz.length))'
           'lbOverlay(b,st,d);})'
           '.catch(function(e){st._fsb=null;st.style.display="";'
-          'st.textContent="error: "+e;b.disabled=false;});}'
+          'st.textContent="error: "+e;b.disabled=false;lbFrei(b);});}'
           '</script>')
     # .32x: in der Gruppen-Sicht traegt der Titel die GRUPPE, nicht die eine
     # Person, an der Referenz-Marker und Sortierung technisch haengen.
@@ -874,11 +1016,15 @@ def render_pass(cfg, log_pfad, personen_bekannt, eid):
             teil = f'{html.escape(e["cam"])} {_hhmm(e["t"])}'
             folge.append(f'<b>{teil}</b>' if e["cam"] in conf_kams else teil)
 
-    # Beleg-Streifen: ALLE Events des Durchgangs (das hier ist die Beweis-Sicht, anders
+    # Beleg-Streifen: die Events des Durchgangs (das hier ist die Beweis-Sicht, anders
     # als die Personen-Sicht) — Bild wenn eine der Durchgangs-Personen dort einen Crop
     # hat, sonst Kamera+Zeit-Kachel; alles verlinkt aufs Event.
+    # .507 B3 (UX-E1): derselbe Deckel wie die Personen-Reihe. Hier ist die
+    # volle Liste bekannt, die Rest-Zahl also exakt — beim Feldtester haengen
+    # an einem Durchgang 3423 Ereignisse mit je bis zu drei listdir-Aufrufen.
+    _sicht, _rest_ev = _r_heute.deckel(evs, THUMBS_JE_REIHE)
     thumbs = []
-    for e in evs:
+    for e in _sicht:
         tu = None
         for p in list(e.get("conf") or []) + list(s["pers"].keys()):
             tu = _crop_url(cfg, e.get("eid"), p)
@@ -889,6 +1035,9 @@ def render_pass(cfg, log_pfad, personen_bekannt, eid):
         thumbs.append(f'<a class="pass-thumb" title="{html.escape(e["cam"])} {_hhmm(e["t"])}" '
                       f'href="/event/{urllib.parse.quote(str(e.get("eid") or ""))}">{inner}'
                       f'<small>{_hhmm(e["t"])}</small></a>')
+    if _rest_ev:
+        thumbs.append(f'<span class="pass-thumbs-rest">'
+                      f'{t("auftritte.thumb.mehr_ereignisse", n=len(_rest_ev))}</span>')
 
     live = (f' <span class="badge live"><span class="ldot"></span>{t("auftritte.karte.badge_laeuft")}</span>'
             if s.get("laeuft") else '')

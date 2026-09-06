@@ -35,6 +35,9 @@ T = {
         "cualquier momento (no se borra nada local). Es la misma "
         "importación que en el asistente inicial, ahora accesible sin "
         "repetirlo (p. ej. tras restaurar una configuración).",
+    # .507 B4: Weg zurueck aus der gefilterten Sicht (/gesichter?person=),
+    # die der Klick im Avatar-Gitter von /faces oeffnet.
+    "gesichter.alle_zeigen": "mostrar todos los rostros",
     # ------------------------------------------------- routes/kameras ---
     "kameras.steckbrief.knopf": "Volver a comprobar el stream",
     "kameras.steckbrief.hinweis":
@@ -128,6 +131,17 @@ T = {
     "areas.verwaltung.hinweis_keine_kameras":
         "Aún no se conocen cámaras — conecta primero Frigate (Ajustes).",
     "areas.verwaltung.knopf_speichern": "Guardar áreas",
+    # .507 B3b — Kettungs-Modus je Area (Werte aus core/areas.KETTUNG_MODI).
+    "areas.kettung.titel": "Hasta dónde llega un recorrido",
+    "areas.kettung.satz":
+        "Un recorrido es un paso por la propiedad: los eventos se encadenan "
+        "mientras el intervalo entre ellos se mantenga por debajo de tu "
+        "intervalo de escena. Elige por área hasta dónde puede llegar esa "
+        "cadena. Esto solo cambia la agrupación — el análisis siempre mira "
+        "cada cámara por separado y la vista sigue agrupada por área.",
+    "areas.kettung.grundstueck": "un recorrido para toda la propiedad",
+    "areas.kettung.area": "un recorrido por área",
+    "areas.kettung.kamera": "cada cámara por separado",
     # -------------------------------------- routes/benachrichtigungen ---
     "benachrichtigungen.titel": "Notificaciones",
     "benachrichtigungen.felder.secret_gesetzt":
@@ -1024,6 +1038,11 @@ T = {
     "livekalib.material.aus": "La recogida de muestras está desactivada (Advanced, calibration samples). Sin muestras esta página no tiene nada que mostrar.",
     "livekalib.material.stand": "{n} de un máximo de {deckel} muestras guardadas",
     "livekalib.material.wann": "última {wann}",
+    # .507 B5: der Zeitraum, ueber den der Ring reicht — er steht auf der
+    # Kamera-Seite UND auf der Uebersichts-Kachel (derselbe Satz, eine
+    # Quelle). Reicht der Ring ueber genau einen Zeitpunkt, zeigen beide
+    # weiter nur "wann"/"stand".
+    "livekalib.material.zeitraum": "imágenes del {von} al {bis}",
     "livekalib.material.fuellen_prosa": "La búsqueda de material recorre los últimos eventos de persona de esta cámara y guarda la mejor cara de cada uno. Se detiene con {ziel} imágenes o tras {events} eventos, lo que ocurra primero.",
     "livekalib.material.lauf": "Además {n} imagen(es) de esta cámara del último proceso de aprendizaje — aparecen abajo y están marcadas.",
     "livekalib.js.katalog": "{n} de {gesamt} podrían entrar en el catálogo",
@@ -1818,6 +1837,17 @@ T = {
     "auftritte.thumb.zusatz_referenz": " — en las referencias",
     "auftritte.thumb.ohne_gesicht.eins": "+{n} evento sin rostro",
     "auftritte.thumb.ohne_gesicht.viele": "+{n} eventos sin rostro",
+    # .507 B3 (UX-E1/E2/E4 + E-O1): der Pruef-Knopf sitzt an der Bild-Kachel
+    # (ein Ereignis, eine Person), der zweite an der Durchgangs-Karte; die
+    # Bilderzeile ist auf THUMBS_JE_REIHE gedeckelt und nennt den Rest als
+    # EREIGNISSE (nicht als Bilder — dort hat niemand nachgesehen); die
+    # anderen Personen des Durchgangs stehen als verlinkte Zeile.
+    "auftritte.knopf.ereignis":
+        "buscar rostros coincidentes en esta imagen",
+    "auftritte.knopf.durchgang":
+        "comprobar también los otros {n} eventos de este recorrido",
+    "auftritte.thumb.mehr_ereignisse": "+{n} eventos más",
+    "auftritte.auch_dabei": "también presentes: {namen}",
     "auftritte.thumb.hinweis_referenz":
         "borde verde = ya en las referencias",
     "auftritte.karte.best_punkt": "se confirmó a las {zeit}",
@@ -2084,6 +2114,12 @@ T = {
         "clip incompleto — leídos {gelesen}/{soll} fotogramas; juzgado a "
         "partir de la parte legible",
     "event.badge_unvollstaendig": "⚠ clip incompleto",
+    "event.verwurf_grund.analyse_none":
+        "El análisis no dio ningún resultado: se interrumpió o falló",
+    "event.verwurf_grund.lesbarkeit_riegel":
+        "Menos de la mitad de los fotogramas del clip eran legibles",
+    "event.verwurf_grund.clip_fehlt":
+        "El clip ya no está en Frigate (retención vencida o evento borrado)",
     "event.pass_zurueck": "&#8592; anterior",
     "event.pass_weiter": "siguiente &#8594;",
     "event.pass_teil": "Parte de un recorrido",
@@ -3711,6 +3747,8 @@ del día vaya completando a las personas conocidas entre medias.</p>""",
         "confirmada ni como mejor coincidencia",
     "antwort.bruecke_grund_keine_referenzen":
         "{person} aún no tiene imágenes de referencia con las que comparar",
+    "antwort.einspielen.frigate_fehlt":
+        "En esta instalación no hay ninguna frigate_url configurada",
     # ---- personlauf-Design (Nachzug) ----
     # Kachel-Titel und Kachel-Saetze des /personlauf-Laufflusses. Kachel 1/4,
     # die erste Saeulen-Marke und die Nachbar-Beschriftungen kommen wortgleich
@@ -3939,8 +3977,9 @@ del día vaya completando a las personas conocidas entre medias.</p>""",
     "gpu.laeuft.titel": 'En marcha:',
     "gpu.laeuft.zeile": '{plaetze} plaza(s) de análisis, {belegt} ocupada(s){klassen} · {waechter} vigilante(s) en vivo',
     "gpu.klasse.analyse": 'análisis',
-    "gpu.klasse.ernte": 'aprendizaje',
+    "gpu.klasse.ernte": 'recolección (aprendizaje, relleno)',
     "gpu.klasse.bg": 'segundo plano',
+    "gpu.klasse.interaktiv": 'interactivo (tu clic)',
     "gpu.zu_live": 'Vigilantes en vivo →',
     "gpu.noch_alt": 'El servicio sigue con {laeuft} plaza(s); están configuradas {gesetzt}, efectivas tras el próximo reinicio.',
     "gpu.passt_hoechstens": 'Con los vigilantes actuales caben como máximo {n} plaza(s) en la memoria.',

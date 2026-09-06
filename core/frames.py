@@ -250,6 +250,41 @@ def _fehler_art(e, geladen):
     return "error"
 
 
+def verwurf_grund(ausnahme):
+    """E-P7 (.507): Welcher Verwurfsgrund der Akte gehoert zu dieser Ausnahme
+    eines analyze-Jobs? -> ein Code aus `registry.VERWURF_GRUENDE` oder None
+    („nicht die Clip-Beschaffung, also kein besonderer Grund").
+
+    HIER, weil hier die Ausnahme-KLASSEN der Clip-Beschaffung leben: der
+    Analyse-Job holt seinen Clip ueber `clip_holen` (analyze.py), und ein
+    Fehlschlag dort faellt als Ausnahme durch `worker._job_ausfuehren` bis in
+    die Job-Antwort. Bis .506 landete er dort als `{"ok": false, "fehler":
+    "<Klassenname>: <Text>"}` — der Dienst sah nur „run_analyze lieferte
+    nichts", und die Akte trug `fehler` ohne Grund (Feldfall H4).
+
+    TYP-Pruefung, KEIN Textvergleich: eine Meldung wird beim naechsten Umbau
+    umformuliert, die Ausnahme-Klasse nicht. Geprueft werden genau die drei
+    Wege, auf denen „Frigate hat den Clip nicht (mehr)" ankommt:
+      * HTTP 404 auf den Clip (Retention abgelaufen, Event drueben verworfen);
+      * FileNotFoundError — die Vorlage einer eingespielten `einspiel-`-ID
+        fehlt unter data_dir (`clip_holen` wirft sie ausdruecklich);
+      * ClipErzeugungAbbruch — Frigate haette den Clip erst erzeugen muessen
+        und hat es innerhalb des Deckels nicht getan bzw. antwortet gar nicht.
+
+    Alles andere (Timeout mitten im Strom, Decode-Fehler, OOM-Abbruch der
+    RSS-Wache) ist NICHT „Clip fehlt" und bekommt hier bewusst kein Urteil —
+    der Aufrufer traegt dann den allgemeinen Grund ein."""
+    from core import registry as _reg_vg
+    if isinstance(ausnahme, ClipErzeugungAbbruch):
+        return _reg_vg.VERWURF_CLIP_FEHLT
+    if isinstance(ausnahme, FileNotFoundError):
+        return _reg_vg.VERWURF_CLIP_FEHLT
+    if (isinstance(ausnahme, urllib.error.HTTPError)
+            and getattr(ausnahme, "code", None) == 404):
+        return _reg_vg.VERWURF_CLIP_FEHLT
+    return None
+
+
 # ==================================== Erzeugungs-Modus (.288, Task #11) ====
 # GEMESSENE Grundlage (prototyp/frigate_leak_probe.py Serie E, 18.08. +
 # Header-Messung .288): fordert man den Clip eines ALTEN Events an, muss

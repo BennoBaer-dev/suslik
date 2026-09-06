@@ -109,6 +109,84 @@ def deckel_aus_config(cfg):
     return max(1, min(w, FENSTER_DECKEL_MAX))
 
 
+def frigate_bereit(cfg):
+    """Kann dieser Aufruf ueberhaupt Frigate fragen? -> Fehlertext oder None.
+
+    E-P8 (.507, Feldbefund 05.09. am CUDA-Klon): auf einer Anlage OHNE
+    `frigate_url` lief die Einspielung bis .506 bis zum ersten `api()`-Aufruf
+    durch. Dort baut verifyd `cfg["frigate_url"] + path`, die stdlib bekommt
+    also `"/api/events?..."` ohne Schema und wirft `ValueError: unknown url
+    type` — der Sammel-except des Handlers machte daraus HTTP 400 mit dem
+    INTERNEN Ausnahmenamen (Beleg `backups/bau_0505/belege/stress_nb.log:7`:
+    `ist=400 {"ok": false, "msg": "ValueError: unknown url type: ..."}`).
+    Der Bediener las einen Python-Fehler statt „diese Anlage ist dafuer nicht
+    eingerichtet".
+
+    Werkswert ist der LEERE String (verifyd `cfg.setdefault("frigate_url",
+    os.environ.get("FRIGATE_URL", ""))`), nicht ein fehlender Schluessel —
+    deshalb wird auf leer/nur-Leerzeichen geprueft, nicht auf `in cfg`.
+
+    Reine Funktion und ohne `t()`: der Aufrufer uebersetzt (der Text lebt als
+    `antwort.einspielen.frigate_fehlt` in den fuenf Sprachdateien), und
+    `tools/proben/s11_e1_fenster.py` kann die Zusicherung ohne HTTP fahren —
+    dieselbe Bauform wie der uebrige Fensterweg darunter."""
+    if not str((cfg or {}).get("frigate_url") or "").strip():
+        return "frigate_url is not configured on this installation"
+    return None
+
+
+# --- H1 / E-P9: Support-Re-Analyse gegen den Live-only-Uebersprung -----------
+# FELDBEFUND 05.09.2026 (Startlog des Feldtesters, `auftraege_nach_0505.md` H1):
+# eine Einspielung ueber den Fensterweg antwortete „eingereiht 7" — und der
+# Worker uebersprang alle sieben still, weil ein Live-Waechter diese Kamera
+# deckt (`skipped (live watcher covers this camera)`). Der Bediener bekam
+# ok:true und es lief NICHTS.
+#
+# ENTSCHEID E-P9 (Betreiber, 05.09. 22:55): die Support-Einspielung umgeht den
+# Uebersprung BEWUSST — der Zweck des Aufrufs IST die Re-Analyse dieses
+# Ereignisses. Der Normalbetrieb (Poll/MQTT) behaelt den Uebersprung
+# unveraendert; sonst waere die .407-Ersparnis (dieselbe Person nicht zweimal
+# rechnen) wieder weg.
+#
+# Die Marke REIST MIT DEM QUEUE-EINTRAG (verifyd `event_einreihen(..., marke=)`),
+# nicht als Zustand am Dienst: ein globales Flag haette das naechste, ganz
+# normale Live-Ereignis derselben Kamera mit umgangen.
+MARKE_REANALYSE = "support_reanalyse"
+
+
+def reanalyse_marke():
+    """Die Marke, die eine Support-Einspielung an ihren Queue-Eintrag haengt.
+    EIN Bauplatz fuer den Schluessel — kein zweites Literal im Handler."""
+    return {MARKE_REANALYSE: True}
+
+
+def ist_reanalyse(marke):
+    """Traegt dieser Queue-Eintrag die Support-Marke? Faellt fuer alles, was
+    keine Marke ist (None, kaputter Typ), auf False zurueck — ein defekter
+    Eintrag darf nie versehentlich mehr duerfen als ein normales Ereignis."""
+    return bool(isinstance(marke, dict) and marke.get(MARKE_REANALYSE))
+
+
+def live_only_ueberspringen(waechter_aktiv, marke=None):
+    """DIE Entscheidung des Live-only-Uebersprungs -> True = ueberspringen.
+
+    `waechter_aktiv` ist die schon aufgeloeste Antwort des Aufrufers auf
+    „will der Nutzer das fuer diese Kamera UND laeuft ihr Waechter wirklich"
+    (verifyd.process prueft `worker_aus` + `enabled` aus der Config und den
+    Zustand aus der ENGINE-QUITTUNG `live_health()`, nicht aus dem Wunsch).
+    Hier steht nur der letzte Schritt — als reine Funktion, damit
+    `tools/proben/s11_e1_fenster.py` beide Faelle ohne Dienst und ohne HTTP
+    fahren kann.
+
+    Ehrliche Grenze: diese Funktion sieht die drei Vorbedingungen NICHT. Wer
+    `waechter_aktiv=True` hereinreicht, ohne sie geprueft zu haben, schaltet
+    die Analyse einer Kamera ab — die Pruefung bleibt beim Aufrufer, und die
+    Gate-Stufe `.407 LIVE ERSETZT` pinnt sie dort."""
+    if ist_reanalyse(marke):
+        return False
+    return bool(waechter_aktiv)
+
+
 # --- Fensterweg (.505, 05.09.2026 — bauplan_0505 E1) -------------------------
 # Die Zuege des Fensterwegs stehen hier als REINE Funktionen, damit die
 # Probe (tools/proben/s11_e1_fenster.py) sie ohne HTTP-Server und ohne Frigate

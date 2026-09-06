@@ -179,17 +179,23 @@ def _regler(vorschlag, kapazitaet_jetzt, auto, kind, laeuft_mit=None,
 def _klasse_name(art):
     """Anzeigename einer Platz-Klasse (`Analyseplaetze.ARTEN`).
 
-    Die drei Schluessel stehen hier WOERTLICH in `t()`-Aufrufen — der Modul-Kopf sagt
+    Die vier Schluessel stehen hier WOERTLICH in `t()`-Aufrufen — der Modul-Kopf sagt
     es, und die Gate-Stufe „Sprach-Deckung" liest genau diese Literale; ein
     zusammengesetzter Schluessel (Praefix plus Klassenname) waere dort blind und die
     Texte gaelten als tot. Eine unbekannte Klasse bekommt ihren ROHEN Namen statt einer
-    falschen Beschriftung (K1: die Anzeige darf nicht behaupten, was sie nicht weiss)."""
+    falschen Beschriftung (K1: die Anzeige darf nicht behaupten, was sie nicht weiss).
+
+    B1 (.507): `interaktiv` kommt dazu. Und `ernte` wird umbenannt statt neu
+    beschriftet — unter dieser Klasse laufen Lernlauf UND Kalibrier-Auffueller,
+    „Lernlauf" war also schon vorher nur die halbe Wahrheit (L9)."""
     if art == "analyse":
         return t("gpu.klasse.analyse")
     if art == "ernte":
         return t("gpu.klasse.ernte")
     if art == "bg":
         return t("gpu.klasse.bg")
+    if art == "interaktiv":
+        return t("gpu.klasse.interaktiv")
     return art
 
 

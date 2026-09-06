@@ -18,10 +18,31 @@ import re
 import urllib.parse
 
 import webui
+from core import registry as _reg
 from core.sprache import t, t_n
 from webui.bausteine import KAT_FARBE, bild_nn, gt_leiste
 from webui.bausteine import fehler_grund as _fehler_grund
 from webui.bausteine import kat_wort as _kat_wort, stufe_wort as _stufe_wort
+
+
+def verwurf_text(row):
+    """E-P7 (.507): der Klartext zum `verwurf_grund` einer Fehler-Zeile, oder
+    "" — Anlass H4 (Feldtester 05.09.: zwei Ereignisse endeten nach drei
+    Versuchen als `fehler`, WARUM stand nirgends).
+
+    Ein unbekannter Code (Bestandszeile einer aelteren/neueren Fassung) gibt
+    "" statt eines Rohtexts oder eines Schluessel-Namens: die Aufzaehlung ist
+    `registry.VERWURF_GRUENDE`, alles daneben ist keine Auskunft.
+
+    Der Sprachschluessel wird aus dem Praefix der Registry ZUSAMMENGESETZT und
+    nicht als Literal in den `t()`-Aufruf geschrieben — der Deckungs-Scan des
+    Gates liest sonst das halbe Literal als eigenen Schluessel (B3b-Befund,
+    dieselbe Bauform wie `areas.kettung.*`)."""
+    code = str((row or {}).get("verwurf_grund") or "")
+    if code not in _reg.VERWURF_GRUENDE:
+        return ""
+    schluessel = _reg.VERWURF_TEXT_PRAEFIX + code
+    return t(schluessel)
 
 
 def render(cfg, log_path, eid, gt_schnellpersonen, master_persons):
@@ -154,8 +175,12 @@ def render(cfg, log_path, eid, gt_schnellpersonen, master_persons):
     andere = [p for p in master_persons(cfg) if p not in gt_schnell]
     gtb = gt_leiste(eid, gt_schnell, andere, (gt_voll.get(eid) or {}).get("personen", []),
                     vorschlag=row.get("bestaetigt") or [])
-    kbadge = (f'<span class=k style=background:{KAT_FARBE.get(kat, "#666")}>'
-              f'{html.escape(_kat_wort(kat))}</span>')
+    # E-P7 (.507): KEIN neues Badge — der Grund haengt als Tooltip an der
+    # Kategorie-Plakette, genau wie die Unvollstaendigkeits-Marke darunter.
+    _vt = verwurf_text(row)
+    kbadge = (f'<span class=k style=background:{KAT_FARBE.get(kat, "#666")}'
+              + (f' title="{html.escape(_vt, quote=True)}"' if _vt else "")
+              + f'>{html.escape(_kat_wort(kat))}</span>')
     if row.get("frames_fehlen"):   # W1: unvollstaendig gelesener Clip sichtbar machen
         kbadge += (' <span class=k style="background:#8a6d1a" '
                    f'title="{t("event.attr_unvollstaendig", gelesen=row.get("frames_gelesen"), soll=row.get("frames_soll"))}"'

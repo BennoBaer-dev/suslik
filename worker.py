@@ -30,8 +30,11 @@ serialisiert (self.lock) und haelt Timeout/killpg. stdin-EOF (execv-Waise/Ende) 
   der In-Job-RSS-Wache (= worker_rss_max_mb des Dienstes; s. _JobRssWache und
   _job_rss_grenze — ohne den Wert wacht nur die cgroup-Regel).
 Antwort: {"ok":bool,"cpu_s":float,"wall_s":float,"rss_mb":int,"vmhwm_mb":int,
-          "rss_spitze_mb":int,("fehler":str)}
+          "rss_spitze_mb":int,("fehler":str),("verwurf_grund":str)}
          (ernte zusaetzlich: die Zaehler aus core.ernte.ernte_event)
+         `verwurf_grund` (E-P7, .507): ein Code aus registry.VERWURF_GRUENDE,
+         wenn die Ausnahme EINDEUTIG einzuordnen war (heute: Clip fehlt) —
+         sonst fehlt das Feld und der Dienst traegt den allgemeinen Grund ein.
 
 Idle-EXIT nach WORKER_IDLE_S (Default 900 s): der Worker beendet sich selbst, verifyd
 startet ihn beim naechsten Job neu. Urspruenglich war hier eine Embedder-Entladung im
@@ -718,10 +721,23 @@ def _job_ausfuehren(job, antwort_out=None):
             else:
                 return {"ok": False, "fehler": f"unbekannter typ '{typ}'"}
         ok, fehler = True, None
+        verwurf = None
     except SystemExit as e:                      # analyze bricht kontrolliert ab
-        ok, fehler = (e.code in (0, None)), f"exit {e.code}"
+        ok, fehler, verwurf = (e.code in (0, None)), f"exit {e.code}", None
     except Exception as e:
         ok, fehler = False, f"{type(e).__name__}: {e}"
+        # E-P7 (.507): WELCHE Ausnahme es war, weiss nur diese Klammer — der
+        # Dienst sieht danach bloss `ok: false` mit einem Text. Die Zuordnung
+        # steht in core.frames (dort leben die Ausnahme-Klassen der
+        # Clip-Beschaffung), damit die Akte den Fall „Frigate hat den Clip
+        # nicht (mehr)" vom allgemeinen Analyse-Abbruch trennen kann.
+        # Additiv: ein Leser ohne das Feld verhaelt sich wie vorher.
+        try:
+            from core import frames as _fr_vg
+            verwurf = _fr_vg.verwurf_grund(e)
+        except Exception:                        # noqa: BLE001
+            verwurf = None                       # eine Einordnung darf nie
+    #                                              die Antwort selbst kosten
     t1 = os.times()
     antwort = {"ok": ok,
                "cpu_s": round(t1.user - t0.user + t1.system - t0.system, 1),
@@ -743,6 +759,8 @@ def _job_ausfuehren(job, antwort_out=None):
         antwort.update(zusatz)
     if fehler:
         antwort["fehler"] = fehler
+    if verwurf:
+        antwort["verwurf_grund"] = verwurf     # E-P7, additiv (.get())
     return antwort
 
 

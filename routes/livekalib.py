@@ -183,11 +183,29 @@ def render(kamera, vorrat, guard, standard, kat, lauf_bilder=(), deckel=0,
     if not deckel:
         material = f'<div class="dim lv-zeile">{t("livekalib.material.aus")}</div>'
     else:
-        letzte = max((float(e.get("ts") or 0) for e in vorrat or []), default=0.0)
+        # ZEITRAUM statt nur "zuletzt" (.507): "200 von hoechstens 200" sagt
+        # nichts darueber, ob der Ring einen Tagesquerschnitt traegt oder in
+        # drei Minuten an einer belebten Kamera vollgelaufen ist (Feldmessung
+        # 04.09.). Beide Zeitpunkte kommen aus DERSELBEN Vorrats-Liste, kein
+        # zweiter Lesegriff. min/max statt "erste/letzte Zeile": der Index ist
+        # nach Schreib-Reihenfolge sortiert, eine Uhr-Korrektur bricht sie.
+        # ts 0 = kein Zeitstempel und deshalb kein Zeitpunkt (s. _wann).
+        _ts = [z for z in (float(e.get("ts") or 0) for e in vorrat or []) if z > 0]
+        # Verglichen werden die ANGEZEIGTEN Zeitpunkte, nicht die rohen
+        # Sekunden: _wann() rundet auf Minuten, und zwei Bilder derselben
+        # Minute ergaeben sonst "von X bis X" — eine Spanne, die der Nutzer
+        # nicht sieht. Steht nur ein Zeitpunkt da, bleibt es beim "zuletzt ...".
+        von_txt, bis_txt = _wann(min(_ts, default=0.0)), _wann(max(_ts, default=0.0))
+        if von_txt and bis_txt != von_txt:
+            spanne = t("livekalib.material.zeitraum",
+                       von=html.escape(von_txt), bis=html.escape(bis_txt))
+        elif bis_txt:
+            spanne = t("livekalib.material.wann", wann=html.escape(bis_txt))
+        else:
+            spanne = ""
         material = (f'<div class="lv-zeile">'
                     f'{t("livekalib.material.stand", n=len(vorrat or []), deckel=deckel)}'
-                    + (f' &middot; {t("livekalib.material.wann", wann=html.escape(_wann(letzte)))}'
-                       if letzte else "") + '</div>')
+                    + (f' &middot; {spanne}' if spanne else "") + '</div>')
     material += (f'<div class="dim lv-zeile">'
                  f'{t("livekalib.material.fuellen_prosa", ziel=int(fueller[0]), events=int(fueller[1]))}'
                  f'</div>'

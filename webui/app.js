@@ -1243,13 +1243,31 @@ function _areasSammeln() {
 function _areasPaareObjekt(paare) {
   return Object.fromEntries(paare.map(function (p) { return [p[0], {cameras: p[1]}]; }));
 }
+/* .507 B3b: der Kettungs-Modus je Bereich reist im SELBEN POST wie die
+   Zuweisung — Zuordnung und Modus duerfen nie halb gespeichert sein. Gesammelt
+   wieder als PAAR-LISTE (gleicher '__proto__'-Grund wie oben). Ein gerade
+   geloeschter Bereich steht noch als Auswahlfeld im Blatt; sein Eintrag faellt
+   auf der Server-Seite weg (core/areas.kettung_validieren). */
+function _kettungObjekt() {
+  var paare = [], w = document.querySelectorAll('.ar-kettung'), i;
+  for (i = 0; i < w.length; i++) paare.push([w[i].dataset.area, w[i].value]);
+  return Object.fromEntries(paare);
+}
+/* Zwei Speichern-Knoepfe (Zuweisung oben, Kettung unten) teilen sich diesen
+   einen Weg. Die Rueckmeldung gehoert an den gedrueckten Knopf — sonst steht
+   die Fehlermeldung am oberen Blockende, waehrend der Nutzer unten steht. */
+function _arStatusFeld(btn) {
+  var s = btn && btn.parentNode ? btn.parentNode.querySelector('.ar-status') : null;
+  return s || document.getElementById('ar-status');
+}
 function areasSpeichern(btn, paare) {
   paare = paare || _areasSammeln();
-  var s = document.getElementById('ar-status');
+  var s = _arStatusFeld(btn);
   if (btn) btn.disabled = true;
   if (s) s.textContent = TT('js.status.speichern', 'saving …');
   fetch('/areas_speichern', {method: 'POST',
-    body: JSON.stringify({areas: _areasPaareObjekt(paare)})})
+    body: JSON.stringify({areas: _areasPaareObjekt(paare),
+                          kettung: _kettungObjekt()})})
     .then(function (r) { return r.json(); })
     .then(function (d) {
       if (s) s.textContent = d.msg;

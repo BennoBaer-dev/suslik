@@ -75,10 +75,20 @@ def _kachel(k, deckel, bilanz=None):
     if not deckel:
         stand = f'<div class="dim lv-zeile">{t("kalib.kachel.vorrat_aus")}</div>'
     elif k["vorrat_n"]:
+        # ZEITRAUM statt nur "zuletzt" (.507, derselbe Satz wie auf der
+        # Kamera-Seite): erst er sagt, ob die Kachel einen Tagesquerschnitt
+        # meint oder drei Minuten an einer belebten Kamera. Verglichen werden
+        # die ANGEZEIGTEN Zeitpunkte (_wann rundet auf Minuten) — steht nur
+        # einer da, bleibt es beim alten "zuletzt ...".
+        von_txt = _wann(k.get("vorrat_ts_min"))
+        bis_txt = _wann(k.get("vorrat_ts"))
+        zeile = (t("livekalib.material.zeitraum",
+                   von=html.escape(von_txt), bis=html.escape(bis_txt))
+                 if von_txt and bis_txt != von_txt else
+                 t("kalib.kachel.stand", wann=html.escape(bis_txt)))
         stand = (f'<div class="lv-zeile">'
                  f'{t("kalib.kachel.vorrat", n=k["vorrat_n"], deckel=deckel)}</div>'
-                 f'<div class="dim lv-zeile">'
-                 f'{t("kalib.kachel.stand", wann=html.escape(_wann(k["vorrat_ts"])))}</div>')
+                 f'<div class="dim lv-zeile">{zeile}</div>')
     else:
         # K6 (01.09., A4-Befund beim Feldtester: 27 von 31 Kameras ohne
         # Vorrat, die Kachel sagte nur "leer"): liegt eine Fueller-Bilanz
