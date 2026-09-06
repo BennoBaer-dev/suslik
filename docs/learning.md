@@ -77,10 +77,61 @@ values; if a run does not feel right, this is where you tune it, one value at a 
 | `benennung_dup_sim` | similarity at or above which two crops count as near-identical |
 | `benennung_vorschlag_schwelle` | threshold for the "looks like X" suggestion — used during naming AND for the badge on the anchor overview |
 | `anker_k_min` | minimum number of faces before a cluster becomes an anchor |
+| `clip_download_parallel` | how many event clips are fetched from Frigate at the same time (default 2) |
+
+**If a run stalls with "Frigate not answering":** that message is honest — the events are
+*not* booked as failed, a later run picks them up. What usually causes it is not suslik
+losing the connection but Frigate itself going quiet while several clips are streaming out
+of it at once. That is why the downloads are capped (`clip_download_parallel`, default 2)
+while the analysis keeps running on all of its slots: once a clip is here, Frigate is out of
+the picture. On a fast local link with small clips you can raise the cap; behind a slow line,
+with 4K recordings or with several live streams running, leave it at 1-2. While a run is
+waiting, the progress block says so (`waiting for: clip download (2 in flight)` or
+`waiting for: Frigate to recover`) instead of just standing still. Waiting has a cap of its
+own (the same number of seconds as `clip_erzeugung_deckel_s`): an event that does not get a
+download slot within it stays **unbooked** and a later run fetches it — it is never recorded
+as a failure, and the log says so (`waited at the clip download gate up to the cap (300s) —
+event NOT booked, a later run retries it`).
 
 If a run produced anchors that mix two people, or split one person into three clusters,
 that is a threshold question rather than a bug — the anchor page shows the margin for each
 cluster, and clusters with a weak margin are flagged for review.
+
+## Aborting, and runs that stop by themselves
+
+**Abort run** ends a run for good: the state is removed and the material harvested so far
+moves to the trash folder inside the run directory. That is the only way a run counts as
+aborted — suslik writes an explicit abort mark before it clears anything, so nothing else
+can be mistaken for your click.
+
+A run can also stop *without* you: the harvest thread hits an error, Frigate stays quiet for
+too long, or the run state file becomes unreachable. In that case the run does not silently
+keep claiming to be running. It stops visibly and the run page says
+**interrupted after 29 of 672: <reason>**, with a **Resume run** button next to Abort. The
+same holds while a run is still *preparing* its event list — an interruption there is
+visible too, and resuming continues from it.
+Resuming picks up where it left off — events that were already harvested are skipped, so
+nothing is done twice, and the counters shown next to the reason are the ones from this
+stop, not from an earlier one. If the cause looked like infrastructure rather than a real
+failure, suslik retries once on its own after a minute; after that it waits for you. That
+one automatic retry survives a service restart in between, and it becomes available again
+once the run has made real progress — so a long night run is not stranded by two unrelated
+hiccups hours apart.
+
+If Abort cannot read the run state at that moment, it says so and changes nothing, rather
+than reporting a removal that did not happen.
+
+One case is worth naming, because it is a property of your storage rather than of suslik:
+on some file systems renaming a file is not atomic, so a file can briefly appear to be
+missing even though nothing deleted it. suslik re-checks three times before it believes it
+and writes one line into the log:
+`run state file missing for a moment (1/3) — continuing (non-atomic rename on this
+filesystem?)`. The first three incidents are logged one by one, after that only every
+hundredth with a running total, and the run ends with a single line naming how often it
+happened — otherwise that one message would push everything else out of the log you need
+for support. If you see it at all, your data volume is on such a file system — the startup
+log names it in the first step (`data_dir=/data (writable, ext4)`). Runs still work; a local
+disk or a bind mount is simply the quieter place for the data volume.
 
 ## Where the data lives
 

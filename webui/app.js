@@ -211,7 +211,27 @@ function lernlaufAbbruch(btn) {
   btn.disabled = true;
   fetch('/lernlauf_abbruch', {method: 'POST', body: '{}'})
     .then(function (r) { return r.json(); })
-    .then(function () { location.href = '/lernlauf'; })
+    /* .509 Review: der Server kann den Abbruch ehrlich ABLEHNEN (kein
+       lesbarer Lauf-Zustand). Vorher lud die Seite trotzdem neu und der
+       Nutzer sah einen weiterlaufenden Lauf ohne jede Erklaerung. */
+    .then(function (d) {
+      if (d && d.ok === false) { alert(d.msg || TT('js.status.fehler', 'error')); btn.disabled = false; return; }
+      location.href = '/lernlauf';
+    })
+    .catch(function () { btn.disabled = false; });
+}
+
+function lernlaufFortsetzen(btn) {
+  /* .509 J13: einen angehaltenen Lernlauf wieder aufnehmen. Ohne Rueckfrage —
+     Fortsetzen nimmt nichts weg (schon geerntete Ereignisse werden
+     uebersprungen), im Gegensatz zum Abbruch. */
+  btn.disabled = true;
+  fetch('/lernlauf_fortsetzen', {method: 'POST', body: '{}'})
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (d.ok) location.href = '/lernlauf';
+      else { alert(d.msg || TT('js.status.fehler', 'error')); btn.disabled = false; }
+    })
     .catch(function () { btn.disabled = false; });
 }
 

@@ -1386,6 +1386,9 @@ T = {
     "lernwizard.balken.fertig": "done",
     "lernwizard.status.aufnahmen": "recordings: {n}",
     "lernwizard.status.bilder": "{n} pictures collected so far",
+    "lernwizard.status.wartet": "waiting for {was}",
+    "lernwizard.status.unterbrochen":
+        "interrupted after {n} of {m}: {grund}",
     "lernwizard.puls.working": "working — updated {s}s ago",
     "lernwizard.puls.stumm":
         "no update for {s}s — a long clip can take minutes; if this "
@@ -1494,6 +1497,7 @@ T = {
     "lernwizard.k2.satz":
         "Runs on its own &mdash; you can close this page and come back.",
     "lernwizard.k2.knopf_abort": "Abort run",
+    "lernwizard.k2.knopf_resume": "Resume run",
     "lernwizard.k3.satz_warten":
         "Whoever the system recognises for sure gets named by itself. Everything else comes to you &mdash; say who it is, or skip it.",
     "lernwizard.k3.keine_gesichter":
@@ -3120,6 +3124,8 @@ T = {
     # {phase} ist die interne Phasen-Kennung (sprachneutral, §8.19).
     "antwort.lernlauf_phase":
         "a run is already in phase '{phase}' — abort it first",
+    "antwort.lernlauf_unterbrochen":
+        "the previous run was interrupted — resume or abort it on the run page first",
     "antwort.lernlauf_beschaeftigt":
         "the previous run is still finishing its current event — try "
         "again in a moment",
@@ -3127,6 +3133,27 @@ T = {
     "antwort.lernlauf_angelegt": "run created",
     "antwort.lernlauf_abgebrochen":
         "aborted — a running event may still finish in the background",
+    # .509 Review: abort clicked while no run state is readable (never write a
+    # marker with an empty run id, never claim "removed").
+    "antwort.lernlauf_abbruch_leer":
+        "no run state is readable right now — nothing was aborted; reload the "
+        "page and try again",
+    # .509 Review: the answers of the Resume button. They go straight into an
+    # alert box, so they never carry an internal phase keyword.
+    "antwort.lernlauf_resume_unlesbar":
+        "could not read the run state: {fehler}",
+    "antwort.lernlauf_resume_keiner": "there is no run to resume",
+    "antwort.lernlauf_resume_laeuft":
+        "this run is not interrupted — nothing to resume",
+    "antwort.lernlauf_resume_fremd":
+        "the interrupted run is a different one by now",
+    "antwort.lernlauf_resume_aktiv":
+        "a stage of this run is still running",
+    "antwort.lernlauf_resume_etappe":
+        "this run cannot be resumed from where it stopped",
+    "antwort.lernlauf_resume_weg":
+        "the run state vanished while resuming",
+    "antwort.lernlauf_resume_ok": "resuming",
     "antwort.live_nichts": "nothing to change",
     "antwort.live_nachtests": "{n} source check(s) run one after another automatically; each watcher starts once its check passes",
     "antwort.live_an": "started {ok}/{alle} watcher(s)",

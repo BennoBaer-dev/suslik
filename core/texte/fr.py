@@ -1351,6 +1351,9 @@ T = {
     "lernwizard.balken.fertig": "terminé",
     "lernwizard.status.aufnahmen": "enregistrements&nbsp;: {n}",
     "lernwizard.status.bilder": "{n} photos collectées jusqu'ici",
+    "lernwizard.status.wartet": "en attente de {was}",
+    "lernwizard.status.unterbrochen":
+        "interrompu après {n} sur {m} : {grund}",
     "lernwizard.puls.working": "en cours — mis à jour il y a {s}s",
     "lernwizard.puls.stumm":
         "aucune mise à jour depuis {s}s — une longue séquence peut "
@@ -1463,6 +1466,7 @@ T = {
         "Tourne toute seule &mdash; vous pouvez fermer cette page et "
         "revenir.",
     "lernwizard.k2.knopf_abort": "Interrompre la session",
+    "lernwizard.k2.knopf_resume": "Reprendre la session",
     "lernwizard.k3.satz_warten":
         "Le système nomme lui-même les personnes qu'il reconnaît avec certitude. Le reste vous revient &mdash; dites qui c'est, ou passez.",
     "lernwizard.k3.keine_gesichter":
@@ -3194,6 +3198,8 @@ T = {
     "antwort.lernlauf_phase":
         "une session est déjà en phase « {phase} » — "
         "interrompez-la d'abord",
+    "antwort.lernlauf_unterbrochen":
+        "la session précédente a été interrompue : reprenez-la ou interrompez-la d'abord sur la page de session",
     "antwort.lernlauf_beschaeftigt":
         "la session précédente termine encore son événement en cours — "
         "réessayez dans un instant",
@@ -3203,6 +3209,26 @@ T = {
     "antwort.lernlauf_abgebrochen":
         "interrompue — un événement en cours peut encore se terminer en "
         "arrière-plan",
+    # .509 Review: bouton d'annulation sans état de série lisible.
+    "antwort.lernlauf_abbruch_leer":
+        "aucun état de série n'est lisible pour l'instant — rien n'a été "
+        "interrompu ; rechargez la page et réessayez",
+    # .509 Review: réponses du bouton Reprendre (affichées telles quelles).
+    "antwort.lernlauf_resume_unlesbar":
+        "état de la série illisible : {fehler}",
+    "antwort.lernlauf_resume_keiner": "aucune série à reprendre",
+    "antwort.lernlauf_resume_laeuft":
+        "cette série n'est pas interrompue — rien à reprendre",
+    "antwort.lernlauf_resume_fremd":
+        "la série interrompue est désormais une autre",
+    "antwort.lernlauf_resume_aktiv":
+        "une étape de cette série est encore en cours",
+    "antwort.lernlauf_resume_etappe":
+        "cette série ne peut pas reprendre depuis l'endroit où elle s'est "
+        "arrêtée",
+    "antwort.lernlauf_resume_weg":
+        "l'état de la série a disparu pendant la reprise",
+    "antwort.lernlauf_resume_ok": "reprise en cours",
     "antwort.live_nichts": "rien à modifier",
     "antwort.live_nachtests": "{n} test(s) de source s'executent automatiquement l'un apres l'autre ; chaque surveillant demarre des que son test reussit",
     "antwort.live_an": "{ok}/{alle} surveillance(s) démarrée(s)",

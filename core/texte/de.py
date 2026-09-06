@@ -1334,6 +1334,9 @@ T = {
     "lernwizard.balken.fertig": "fertig",
     "lernwizard.status.aufnahmen": "Aufnahmen: {n}",
     "lernwizard.status.bilder": "bisher {n} Bilder gesammelt",
+    "lernwizard.status.wartet": "wartet auf {was}",
+    "lernwizard.status.unterbrochen":
+        "angehalten nach {n} von {m}: {grund}",
     "lernwizard.puls.working": "arbeitet — zuletzt aktualisiert vor {s} s",
     "lernwizard.puls.stumm":
         "seit {s} s keine Aktualisierung — ein langer Clip kann "
@@ -1444,6 +1447,7 @@ T = {
         "Läuft von allein &mdash; du kannst diese Seite "
         "schließen und wiederkommen.",
     "lernwizard.k2.knopf_abort": "Lauf abbrechen",
+    "lernwizard.k2.knopf_resume": "Lauf fortsetzen",
     "lernwizard.k3.satz_warten":
         "Wen das System sicher wiedererkennt, benennt es selbst. Alles andere kommt zu dir &mdash; sag, wer es ist, oder überspringe es.",
     "lernwizard.k3.keine_gesichter":
@@ -3129,6 +3133,8 @@ T = {
     # {phase} ist die interne Phasen-Kennung (sprachneutral, §8.19).
     "antwort.lernlauf_phase":
         "ein Lauf ist bereits in Phase \"{phase}\" — brich ihn zuerst ab",
+    "antwort.lernlauf_unterbrochen":
+        "der vorige Lauf wurde unterbrochen — setz ihn auf der Lauf-Seite fort oder brich ihn zuerst ab",
     "antwort.lernlauf_beschaeftigt":
         "der vorige Lauf beendet noch sein aktuelles Event — "
         "versuch es gleich noch einmal",
@@ -3138,6 +3144,28 @@ T = {
     "antwort.lernlauf_abgebrochen":
         "abgebrochen — ein laufendes Event kann im Hintergrund noch "
         "fertig werden",
+    # .509 Review: der Abbruch-Knopf ohne lesbaren Lauf-Zustand (nie eine
+    # Marke mit leerer Lauf-ID setzen, nie „entfernt" behaupten).
+    "antwort.lernlauf_abbruch_leer":
+        "gerade ist kein Lauf-Zustand lesbar — es wurde nichts abgebrochen; "
+        "Seite neu laden und noch einmal versuchen",
+    # .509 Review: die Antworten des Resume-Knopfes. Sie landen wörtlich in
+    # einem Hinweisfenster, tragen also nie eine interne Phasen-Kennung.
+    "antwort.lernlauf_resume_unlesbar":
+        "Lauf-Zustand nicht lesbar: {fehler}",
+    "antwort.lernlauf_resume_keiner": "es gibt keinen Lauf zum Fortsetzen",
+    "antwort.lernlauf_resume_laeuft":
+        "dieser Lauf ist nicht angehalten — es gibt nichts fortzusetzen",
+    "antwort.lernlauf_resume_fremd":
+        "der angehaltene Lauf ist inzwischen ein anderer",
+    "antwort.lernlauf_resume_aktiv":
+        "eine Etappe dieses Laufs rechnet noch",
+    "antwort.lernlauf_resume_etappe":
+        "dieser Lauf lässt sich von der Stelle, an der er stehen blieb, nicht "
+        "fortsetzen",
+    "antwort.lernlauf_resume_weg":
+        "der Lauf-Zustand ist während des Fortsetzens verschwunden",
+    "antwort.lernlauf_resume_ok": "wird fortgesetzt",
     "antwort.live_nichts": "nichts zu ändern",
     "antwort.live_nachtests": "{n} Quelltest(s) laufen automatisch nacheinander; jeder Waechter startet, sobald sein Test besteht",
     "antwort.live_an": "{ok}/{alle} Wächter gestartet",
