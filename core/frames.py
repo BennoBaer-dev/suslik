@@ -220,6 +220,23 @@ CLIP_ERZEUGUNG_DECKEL_S = (
 # betreten). Das Zusammenfuegen macht das LOKALE ffmpeg als reines
 # Stream-Copy (bitgleiche Pakete, Pixelpfad-Invariante unberuehrt).
 CLIP_VOD = os.environ.get("SUSLIK_CLIP_VOD", "1") != "0"
+# .509 CLIP-DOWNLOAD-TOR (Feldbefund 06.09.2026, s. Abschnitt „Das Tor" unten):
+# wie viele Clips DIESER Prozess gleichzeitig von Frigate ziehen darf, wenn der
+# Aufrufer nichts anderes sagt. 0/None = kein Tor (Live-, Melde- und
+# Nachhol-Wege bleiben so ungebremst). Dasselbe Muster wie CLIP_ERZEUGUNG:
+# VERHALTEN, je Job armiert (worker.py aus dem Job-Feld `clip_tor`), im
+# Legacy-Subprozess aus der ENV; ein explizites `tor_n` an clip_holen gewinnt.
+CLIP_TOR_N = (int(os.environ["SUSLIK_CLIP_TOR_N"])
+              if os.environ.get("SUSLIK_CLIP_TOR_N") else 0)
+# .509 Review-MUSS (06.09.2026): der WARTE-DECKEL am Tor — wie lange dieser
+# Prozess hoechstens auf einen Slot wartet, bevor er den Zug ABBRICHT (Klasse
+# `clip_tor_deckel`, Ereignis bleibt ungebucht und wird spaeter geholt). Ohne
+# ihn lief die Wartezeit in die JOB-FRIST des Ernte-Jobs, der Dienst killte den
+# Worker und buchte das Ereignis ENDGUELTIG als „worker timeout/crash" —
+# nachgestellt: Tor 1, 4 Abholer, Alt-Events -> 7 von 8 Ereignissen so
+# verloren. None/0 = kein Deckel (altes Verhalten fuer Wege ohne Tor).
+CLIP_TOR_DECKEL_S = (float(os.environ["SUSLIK_CLIP_TOR_DECKEL_S"])
+                     if os.environ.get("SUSLIK_CLIP_TOR_DECKEL_S") else None)
 
 
 def clip_dbg(msg):
@@ -276,6 +293,11 @@ def verwurf_grund(ausnahme):
     der Aufrufer traegt dann den allgemeinen Grund ein."""
     from core import registry as _reg_vg
     if isinstance(ausnahme, ClipErzeugungAbbruch):
+        # .509: der TOR-Deckel ist kein „Frigate hat den Clip nicht" — er ist
+        # unsere eigene Bremse. Das Ereignis bleibt ungebucht und wird geholt;
+        # ein Verwurfs-Grund in der Akte waere eine falsche Aussage.
+        if getattr(ausnahme, "klasse", "") == "clip_tor_deckel":
+            return None
         return _reg_vg.VERWURF_CLIP_FEHLT
     if isinstance(ausnahme, FileNotFoundError):
         return _reg_vg.VERWURF_CLIP_FEHLT
@@ -303,14 +325,24 @@ def verwurf_grund(ausnahme):
 # unveraendert die strenge Zwischen-Byte-Stall-Logik (gemessen sauber).
 
 class ClipErzeugungAbbruch(RuntimeError):
-    """Abbruch der Clip-Beschaffung im Erzeugungs-Modus. klasse:
+    """Abbruch der Clip-Beschaffung. klasse:
     'frigate_stoerung' (Version-Probe tot — echte tote Verbindung) |
     'erzeugung_deckel' (Ober-Deckel erreicht, Frigate antwortete zwar,
-    lieferte aber nie ein Byte). Der Ernte-Pfad bucht solche Events NICHT
-    als 'fehler' — sie bleiben ungebucht und ein spaeterer Lauf holt sie."""
+    lieferte aber nie ein Byte) | 'clip_tor_deckel' (.509: der eigene
+    Warte-Deckel am Clip-Tor). Der Ernte-Pfad bucht solche Events NICHT
+    als 'fehler' — sie bleiben ungebucht und ein spaeterer Lauf holt sie.
+
+    .509 Review-MUSS: die KLASSE steht seitdem VORNE IM TEXT. Grund ist ein
+    gemessener Blindgaenger (Widerleger 06.09.): der Dienst erkennt den
+    Nicht-buchen-Fall an `"erzeugung_deckel" in antwort["fehler"]`
+    (verifyd.py `_fehler_buchbar`), der Text der Antwort entsteht aber in
+    worker.py als `f"{type(e).__name__}: {e}"` — und keine der Meldungen
+    trug ihre Klasse. Der Zweig war seit .288 tot, JEDER Erzeugungs-Abbruch
+    wurde endgueltig als Fehler gebucht. Ein Klassenname ist stabil, ein
+    Meldungstext nicht: deshalb reist er im Text mit."""
 
     def __init__(self, klasse, msg):
-        super().__init__(msg)
+        super().__init__(f"{klasse}: {msg}")
         self.klasse = klasse
 
 
@@ -443,9 +475,249 @@ def _einspiel_dd(data_dir):
     return data_dir or os.environ.get("VERIFY_DATA_DIR") or None
 
 
+# ==================================================== Das Tor (.509) =======
+# ANLASS (Feldbefund 06.09.2026, belegt am nginx-Log des Feldtesters): sein
+# Lernlauf startete mit VIER Abholern, jeder zog seinen 4K-Clip (~75 MB bei
+# ~3 MB/s = 23,7 s je Zug) — waehrenddessen brauchte die triviale
+# Ereignis-Abfrage 13,4 s statt 0,01 s, und die uebrigen Abrufe erreichten
+# seinen nginx gar nicht mehr. suslik meldete daraufhin korrekt „Frigate not
+# answering", liess die Ereignisse ungebucht und der Lauf endete bei 19 von
+# 672. Kein 4xx/5xx, kein Fehler auf der Frigate-Seite: gleichzeitiges
+# Clip-Streaming legt dessen API lahm (Threadpool-Klasse, hier 0.17.2).
+#
+# DAS TOR ist deshalb ein Deckel auf die GLEICHZEITIGEN DOWNLOADS, nicht auf
+# die Analyse: nach dem Download braucht ein Ernte-Job Frigate nicht mehr, die
+# Analyse-Plaetze bleiben also voll nutzbar (das Tor greift NICHT in die
+# Vergabestelle ein). Beides zusammenzulegen waere der falsche Schnitt gewesen.
+#
+# PROZESSUEBERGREIFEND, und das ist der Kern: der Download passiert NICHT im
+# Dienst, sondern in den Worker-Subprozessen (worker.py, Job `ernte` ->
+# clip_holen) — je Analyse-Platz einer — und daneben im Vorlade-Thread des
+# Dienstes. Ein threading.Semaphore haette also genau nichts gedeckelt.
+# Getragen wird das Tor deshalb von DATEISPERREN (flock) auf N Slot-Dateien:
+# sie wirken ueber Prozessgrenzen und sind crash-sicher (stirbt ein Worker,
+# gibt der Kernel seinen Slot frei — eine Zaehler-Datei bliebe verklemmt).
+#
+# WO die Slots liegen, ist keine freie Wahl: neben dem Clip-Cache
+# (`cache_dir()/.cliptor`). Wer denselben Cache benutzt, teilt damit
+# zwangslaeufig dasselbe Tor — im Dienst ueber `data_dir`, im Worker ueber
+# SCRATCH_DIR, beides `<data_dir>/clips`. cleanup_cache raeumt nur
+# .mp4/.part und laesst den Ordner in Ruhe.
+#
+# EHRLICHE GRENZEN:
+#  - Die Vergabe ist ein Poll ueber die Slots, kein FIFO. Bei wenigen
+#    Wartenden reicht das; eine Warteschlange ueber Prozessgrenzen waere
+#    deutlich mehr Maschinerie fuer einen Feldfall, den es nicht gibt.
+#  - Der WARTE-DECKEL (`max_warte_s`, .509 Review-MUSS) ist der Preis dafuer,
+#    dass das Tor unter Last NICHT geoeffnet wird: wer ihn erreicht, bricht mit
+#    `ClipErzeugungAbbruch("clip_tor_deckel")` ab, das Ereignis bleibt
+#    UNGEBUCHT und ein spaeterer Lauf holt es. Die urspruengliche Fassung hatte
+#    hier gar keinen Deckel und versprach dasselbe Ergebnis — das war FALSCH
+#    und ist nachgestellt: die Wartezeit lief in die Job-Frist, der Dienst
+#    killte den Worker, und `_fehler_buchbar` sah eine leere Antwort und buchte
+#    das Ereignis ENDGUELTIG als „worker timeout/crash" (Tor 1, 4 Abholer,
+#    Alt-Events: 7 von 8 so verloren; bei `clip_download_parallel = 1` — dem
+#    Wert, den der Hilfetext bei langsamer Leitung empfiehlt — sicher).
+#    Der Deckel kommt vom Aufrufer (Job-Feld `clip_tor_deckel_s`), und der
+#    Koordinator schlaegt ihn zugleich auf die Job-Frist auf: das Warten kann
+#    das Analyse-Budget dadurch nicht mehr aufessen.
+#  - Live-, Melde- und Nachhol-Wege nehmen das Tor NICHT (sie armieren kein
+#    `clip_tor`): hinter ihnen steht ein wartender Mensch bzw. eine Meldung,
+#    und sie ziehen einzeln, nicht in Serie.
+TOR_ORDNER = ".cliptor"
+TOR_POLL_S = 0.25            # Runde ueber die Slots; Downloads dauern Sekunden
+#                              bis Minuten, feiner braucht es das nicht.
+
+
+def tor_dir(data_dir=None):
+    """Ablage der Slot- und Warte-Marken — neben dem Clip-Cache (s.o.)."""
+    d = os.path.join(cache_dir(data_dir), TOR_ORDNER)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _tor_slots(n, data_dir=None):
+    d = tor_dir(data_dir)
+    return [os.path.join(d, f"slot_{i:02d}.lock") for i in range(int(n))]
+
+
+def _warte_marke(data_dir=None):
+    return os.path.join(tor_dir(data_dir),
+                        f"warte.{os.getpid()}.{threading.get_native_id()}")
+
+
+def _marke_lebt(pfad):
+    """Traegt diese Warte-Marke einen Prozess, den es noch gibt? Eine Waise
+    (Worker gekillt, waehrend er wartete) darf die Anzeige nie dauerhaft auf
+    „es wartet jemand" stellen — sie wird im selben Zug geraeumt."""
+    try:
+        pid = int(os.path.basename(pfad).split(".")[1])
+    except (IndexError, ValueError):
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        try:
+            os.remove(pfad)
+        except OSError:
+            pass
+        return False
+    except OSError:
+        return True          # im Zweifel als lebend zaehlen, nie wegraeumen
+
+
+def tor_nehmen(n, data_dir=None, eid=None, poll_s=TOR_POLL_S,
+               max_warte_s=None):
+    """Einen Download-Slot belegen und den Halter zurueckgeben (an
+    `tor_geben`). n <= 0 -> None = kein Tor, sofort durch.
+
+    Blockiert, bis ein Slot frei ist — hoechstens aber `max_warte_s`
+    Sekunden (None/0 = ohne Deckel). Beim Deckel fliegt
+    `ClipErzeugungAbbruch("clip_tor_deckel", …)`: der Aufrufer bucht das
+    Ereignis dann NICHT als Fehler, es bleibt ungebucht und ein spaeterer
+    Lauf holt es (s. „ehrliche Grenzen" oben)."""
+    try:
+        n = int(n or 0)
+    except (TypeError, ValueError):
+        n = 0
+    if n <= 0:
+        return None
+    import fcntl
+    try:
+        slots = _tor_slots(n, data_dir)
+    except OSError as e:
+        # Der Ordner laesst sich nicht anlegen (Rechte, volle Platte). Dann
+        # LAUT ohne Tor weiterladen: die Beschaffung ist die Kernaufgabe, das
+        # Tor ist der Schutz davor — ein unerreichbarer Schutz darf nie die
+        # Aufgabe verhindern (Muster hwdec_fallback).
+        clip_dbg(f"{eid}: WARN clip gate unusable ({type(e).__name__}: "
+                 f"{str(e)[:80]}) — fetching WITHOUT the gate")
+        return None
+    try:
+        deckel_s = float(max_warte_s or 0)
+    except (TypeError, ValueError):
+        deckel_s = 0.0
+    marke, t0, gemeldet = None, time.monotonic(), False
+    try:
+        while True:
+            for p in slots:
+                try:
+                    fd = os.open(p, os.O_CREAT | os.O_RDWR, 0o600)
+                except OSError as e:
+                    clip_dbg(f"{eid}: WARN clip gate slot unusable "
+                             f"({type(e).__name__}) — fetching WITHOUT the gate")
+                    return None
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    # DAS ist „Slot belegt" — und nur das (EWOULDBLOCK/EAGAIN).
+                    os.close(fd)
+                    continue
+                except OSError as e:
+                    # .509 Review-MUSS: jeder ANDERE Sperr-Fehler (ENOLCK auf
+                    # einer Ablage ohne flock, EINVAL) hiess bis eben ebenfalls
+                    # „belegt" — die Schleife drehte dann ENDLOS, kein Ereignis
+                    # kam durch, und die Anzeige meldete Downloads, die es nicht
+                    # gab. Wer nicht sperren KANN, faellt laut auf den bereits
+                    # gebauten Weg ohne Tor zurueck (Muster hwdec_fallback,
+                    # gleiche Entscheidung wie beim unbenutzbaren Ordner oben).
+                    os.close(fd)
+                    clip_dbg(f"{eid}: WARN clip gate lock unusable "
+                             f"({type(e).__name__}/{e.errno}) — fetching "
+                             "WITHOUT the gate")
+                    return None
+                if gemeldet:
+                    clip_dbg(f"{eid}: clip gate acquired after "
+                             f"{time.monotonic() - t0:.1f}s (limit {n})")
+                return fd
+            if not gemeldet:
+                gemeldet = True
+                marke = _warte_marke(data_dir)
+                try:
+                    open(marke, "a").close()
+                except OSError:
+                    marke = None
+                clip_dbg(f"{eid}: waiting at the clip gate "
+                         f"({n} download(s) already running)"
+                         + (f", cap {deckel_s:.0f}s" if deckel_s > 0 else ""))
+            if deckel_s > 0 and time.monotonic() - t0 >= deckel_s:
+                raise ClipErzeugungAbbruch(
+                    "clip_tor_deckel",
+                    f"waited {time.monotonic() - t0:.0f}s at the clip "
+                    f"download gate (cap {deckel_s:.0f}s, limit {n} "
+                    "concurrent) — aborted, the event stays unbooked for a "
+                    "later run")
+            time.sleep(poll_s)
+    finally:
+        if marke:
+            try:
+                os.remove(marke)
+            except OSError:
+                pass
+
+
+def tor_geben(halter):
+    """Den Slot zurueckgeben (None = es war keiner genommen). Das Schliessen
+    des fd loest die Sperre; explizit entsperrt wird trotzdem, damit die
+    Freigabe nicht am Garbage-Collector haengt."""
+    if halter is None:
+        return
+    import fcntl
+    try:
+        fcntl.flock(halter, fcntl.LOCK_UN)
+    except OSError:
+        pass
+    try:
+        os.close(halter)
+    except OSError:
+        pass
+
+
+def tor_zustand(n, data_dir=None):
+    """Auskunft fuer die Fortschritts-Anzeige: (laufende Downloads, Wartende).
+
+    Gemessen, nicht gezaehlt: belegt ist ein Slot, dessen Sperre gerade
+    NICHT zu bekommen ist (der Test nimmt sie nur, wenn sie frei ist, und
+    gibt sie sofort zurueck); Wartende sind die Marken lebender Prozesse.
+    Ohne Tor (n <= 0) ist die Auskunft (0, 0).
+
+    .509 Review-MUSS: „belegt" ist NUR BlockingIOError. Ein Sperr-Fehler
+    anderer Art (ENOLCK auf einer Ablage ohne flock) heisst „nicht messbar"
+    und darf keine Zahl erfinden — vorher meldete die Seite dort dauerhaft
+    laufende Downloads, obwohl nichts lief."""
+    import glob
+    try:
+        n = int(n or 0)
+    except (TypeError, ValueError):
+        n = 0
+    if n <= 0:
+        return 0, 0
+    import fcntl
+    belegt = 0
+    for p in _tor_slots(n, data_dir):
+        try:
+            fd = os.open(p, os.O_CREAT | os.O_RDWR, 0o600)
+        except OSError:
+            continue
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except BlockingIOError:
+            belegt += 1
+        except OSError:
+            pass                 # nicht messbar — nie eine Zahl erfinden
+        finally:
+            os.close(fd)
+    wartend = sum(1 for p in glob.glob(os.path.join(tor_dir(data_dir), "warte.*"))
+                  if _marke_lebt(p))
+    return belegt, wartend
+
+
 def clip_holen(eid, data_dir=None, frigate_url=None, timeout=30,
                quelle=None, alter_min=None,
-               erzeugung=None, erzeugung_deckel_s=None, warte=None):
+               erzeugung=None, erzeugung_deckel_s=None, warte=None,
+               tor_n=None, tor_deckel_s=None):
     """Clip beschaffen: Cache-Treffer ODER atomarer Download (.part wie
     analyze.py — ein abgerissener Download darf nie als halbes Video
     durchgehen). Der PIN dieses Halters wird IM SELBEN ZUG gesetzt
@@ -472,11 +744,22 @@ def clip_holen(eid, data_dir=None, frigate_url=None, timeout=30,
     .290: erzeugung=None (Default) uebernimmt die Prozess-/Job-Defaults
     CLIP_ERZEUGUNG/CLIP_ERZEUGUNG_DECKEL_S (Analyze-Weg: worker.py armiert
     je Job, Legacy-Subprozess via ENV) — explizite Argumente gewinnen.
-    warte: injizierbare ErzeugungsWarte (Tests); None = echte Uhr + Probe."""
+    warte: injizierbare ErzeugungsWarte (Tests); None = echte Uhr + Probe.
+    tor_n (.509, Abschnitt „Das Tor" oben): wie viele Clips gleichzeitig von
+    Frigate gezogen werden duerfen — 0/None nimmt den Prozess-/Job-Default
+    CLIP_TOR_N (0 = kein Tor). Der Slot wird NUR fuer den echten Frigate-Zug
+    gehalten: ein Cache-Treffer und eine eingespeiste Vorlage warten nie.
+    tor_deckel_s (.509 Review-MUSS): wie lange am Tor hoechstens gewartet
+    wird — danach `ClipErzeugungAbbruch('clip_tor_deckel')`, das Ereignis
+    bleibt ungebucht. None nimmt den Prozess-/Job-Default CLIP_TOR_DECKEL_S."""
     if erzeugung is None:
         erzeugung = CLIP_ERZEUGUNG
     if erzeugung_deckel_s is None:
         erzeugung_deckel_s = CLIP_ERZEUGUNG_DECKEL_S
+    if tor_n is None:
+        tor_n = CLIP_TOR_N
+    if tor_deckel_s is None:
+        tor_deckel_s = CLIP_TOR_DECKEL_S
     erzeugung = bool(erzeugung)
     pfad = cache_pfad(eid, data_dir)
     pin(eid, data_dir)
@@ -485,6 +768,7 @@ def clip_holen(eid, data_dir=None, frigate_url=None, timeout=30,
     alter = alter_min if alter_min is not None else CLIP_ALTER_MIN
     t0 = time.monotonic()
     geladen = 0
+    tor = None                      # .509: gehaltener Download-Slot | None
     try:
         if _einspiel_ist(eid):
             # .416 HAKEN B der Testbett-Einspielung (User-Go 03.09., Modul
@@ -512,6 +796,11 @@ def clip_holen(eid, data_dir=None, frigate_url=None, timeout=30,
                      f"bytes={os.path.getsize(pfad)} — no Frigate request")
             return pfad
         if not os.path.exists(pfad):
+            # .509: HIER faengt der Frigate-Zug an — und nur er geht durchs
+            # Tor. Der Slot wird vor der ersten Anfrage genommen (die
+            # VOD-Probe unten ist bereits eine) und im finally zurueckgegeben.
+            tor = tor_nehmen(tor_n, data_dir, eid=eid,
+                             max_warte_s=tor_deckel_s)
             clip_dbg(f"{eid}: GET clip.mp4 start src={q} "
                      f"age_min={alter if alter is not None else '?'}"
                      + (" erzeugung=1" if erzeugung else ""))
@@ -629,6 +918,9 @@ def clip_holen(eid, data_dir=None, frigate_url=None, timeout=30,
             pass
         frei(eid, data_dir)
         raise
+    finally:
+        tor_geben(tor)          # .509: der Slot gehoert dem Download, nicht
+        #                         dem Aufrufer — auch auf jedem Fehlerweg
 
 
 # ======================================================= B: Verteiler ======

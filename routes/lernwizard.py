@@ -16,9 +16,20 @@ import html
 import json
 
 from core.benennung import bestes_zuerst
-from core.lernlauf import PHASEN
+from core.lernlauf import PHASEN, UNTERBROCHEN
 from core.sprache import t, t_n
 from webui.bausteine import js_literal, lauffluss_stil
+
+
+def _kette_idx(z):
+    """Wo in der Etappen-Kette steht dieser Lauf? .509 J13: `unterbrochen` ist
+    keine Etappe, sondern ein HALT in einer — gezaehlt wird die Etappe, in der
+    es passierte (`unterbrochen_in`, Rueckfall `ernte`). EIN Rechner fuer die
+    Saeule UND die Phasenliste, kein zweiter Index daneben."""
+    ph = (z or {}).get("phase")
+    if ph == UNTERBROCHEN:
+        ph = (z or {}).get("unterbrochen_in") or "ernte"
+    return (PHASEN.index(ph) if ph in PHASEN else 0), ph
 
 
 def _phasen_text():
@@ -187,7 +198,11 @@ def wizard(personen_zahl, auswahl, bilanz, prognose, quelle, schwellen,
 # (Kennungen, vom Ernte-Thread geschrieben) — keine Anzeige-Schluessel.
 _PHASEN_KEYS = {
     "vorbereitung": ("checking events", "already searched (skipped)"),
-    "ernte": ("event", "analysing", "rest", "with clip", "skipped (no clip)",
+    # .509: "waiting for" traegt den Grund einer stehenden Ernte (Frigate-
+    # Schoner oder Clip-Download-Tor) — ohne den Eintrag stuende er in der
+    # Rest-Zeile statt bei seiner Phase.
+    "ernte": ("event", "analysing", "waiting for", "rest", "with clip",
+              "skipped (no clip)",
               "candidates", "crop-worthy (M)", "anchor-ready (S)",
               "filtered early (size/sharpness)",
               "objects filtered (fd rule)", "without a face", "clip not readable",
@@ -400,20 +415,25 @@ def lauf_status(zustand, puls=None):
     ph = z.get("phase")
     f = z.get("fortschritt") or {}
     st = str(f.get("status", ""))
-    idx = PHASEN.index(ph) if ph in PHASEN else 0
+    # .509 J13: `ph_k` ist die ETAPPE (bei einem angehaltenen Lauf die, in der
+    # er anhielt), `ph` bleibt der gespeicherte Phasenwert. Fuell-Stand und
+    # Haken haengen an der Etappe, „laeuft/tickt" am Phasenwert.
+    idx, ph_k = _kette_idx(z)
+    unterbrochen = ph == UNTERBROCHEN
     anker_fertig = ph == "anker" and st.startswith(("anchors ready",
                                                     "anchors: none"))
-    laeuft = (ph in ("vorbereitung", "ernte")
-              or (ph == "anker" and not anker_fertig))
+    laeuft = (not unterbrochen
+              and (ph in ("vorbereitung", "ernte")
+                   or (ph == "anker" and not anker_fertig)))
     proz = 0
     if zustand is not None:
-        if ph == "vorbereitung":
+        if ph_k == "vorbereitung":
             fr = _frac(f.get("checking events"))
             proz = int(15 * fr[0] / fr[1]) if fr else 5
-        elif ph == "ernte":
+        elif ph_k == "ernte":
             fr = _frac(f.get("event"))
             proz = (15 + int(70 * fr[0] / fr[1])) if fr else 15
-        elif ph == "anker" and not anker_fertig:
+        elif ph_k == "anker" and not anker_fertig:
             proz = 85
         else:
             proz = 100
@@ -432,7 +452,16 @@ def lauf_status(zustand, puls=None):
                     "zust": "ok" if done else ("an" if aktiv else "")})
     akt = z.get("aktualisiert")
     zeit = ""
-    if zustand is not None and z.get("ts"):
+    if unterbrochen:
+        # .509 J13 (b): statt „running for 4 min" der ehrliche Halt mit Stand
+        # und Grund. Der Grund ist ein GESPEICHERTER englischer Kurztext
+        # (Kennung wie die Zaehler-Schluessel, Stufe-0-Grenze §8.2) — der
+        # Rahmen darum ist uebersetzt.
+        _sd = z.get("stand") or {}
+        zeit = t("lernwizard.status.unterbrochen",
+                 n=_sd.get("n", "?"), m=_sd.get("m", "?"),
+                 grund=str(z.get("grund") or "?"))
+    elif zustand is not None and z.get("ts"):
         if laeuft:
             zeit = t("lernwizard.status.laeuft_seit",
                      dauer=_dauer(max(0, datetime.datetime.now().timestamp()
@@ -482,12 +511,23 @@ def lauf_status(zustand, puls=None):
         balken.append({"label": lbl, "proz": b_proz, "zust": b_zust,
                        "zaehler": b_zt})
     teile_z = []
-    if laeuft:
+    if laeuft or unterbrochen:
+        # .509 J13: der angehaltene Lauf zeigt seine Zaehler weiter — sie sagen,
+        # wie weit er kam, und genau daran haengt die Entscheidung Resume/Abbruch.
         if f.get("event"):
             teile_z.append(t("lernwizard.status.aufnahmen", n=f["event"]))
         if f.get("candidates") is not None:
             teile_z.append(t("lernwizard.status.bilder", n=f["candidates"]))
-    tickt = zustand is not None and (
+        # .509 (Feldbefund 06.09.): steht die Ernte, sagt das Widget WARUM.
+        # Bis .508 kannte den Grund nur der `status`-Text — und den zeigt
+        # allein die Expert-Sicht, die der Poll nie nachfuehrt: eine wartende
+        # Ernte sah im Widget aus wie eine haengende. Der Grund selbst ist
+        # eine gespeicherte Kennung (Stufe-0-Grenze wie die Zaehler-Keys),
+        # der Rahmen darum ist uebersetzt.
+        if f.get("waiting for"):
+            teile_z.append(t("lernwizard.status.wartet",
+                             was=f["waiting for"]))
+    tickt = zustand is not None and not unterbrochen and (
         (ph in ("vorbereitung", "ernte")
          and (not st or st.startswith(("prepared", "harvesting", "waiting"))))
         or (ph == "anker"
@@ -530,10 +570,19 @@ _WIDGET_JS = (
     'function mark(z){return z=="ok"?\'<span class="phok">\\u2713</span>\':'
     '(z=="an"?\'<span class="lf-puls"></span>\':'
     '\'<span class="dim">\\u00b7</span>\');}'
+    # .509 Review-SOLL: erst ZWEI tickt=false in Folge laden neu. Ein
+    # einzelnes false kann ein leerer Moment der Zustandsdatei sein (der
+    # Feldfall) — der Vollreload landete dann auf der leeren „kein Lauf"-Seite
+    # samt Start-Knopf, waehrend der Lauf weiterlief. Der Endpunkt liest
+    # zusaetzlich geduldig; beide Haelften zusammen decken auch ein Blinken,
+    # das laenger dauert als die Nachpruefungen.
+    'var still=0;'
     'var t=setInterval(function(){'
     'fetch("/lernlauf_status").then(function(r){return r.json()})'
     '.then(function(d){if(!d.ok)return;'
-    'if(!d.tickt){clearInterval(t);location.reload();return;}'
+    'if(!d.tickt){still++;if(still<2)return;'
+    'clearInterval(t);location.reload();return;}'
+    'still=0;'
     # .345: Gesamtbalken (waagerecht) + drei Unterbalken statt der Saeule —
     # nur Werte anwenden, das Geruest rendert _balken_html (Spiegel-Paar).
     'var fu=document.querySelector("#lf-fsb>.fs-total>.fs-fill");'
@@ -597,13 +646,16 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
     # .88 / V3: Zaehler JE PHASE gruppiert unter ihrer Phasen-Zeile — jede
     # Phase zaehlt ihre eigenen Zahlen hoch und bekommt beim Abschluss den gruenen
     # Haken; die alte Misch-Kette ("anchors" hinter 13 Ernte-Zaehlern) entfaellt.
-    idx = PHASEN.index(ph) if ph in PHASEN else 0
+    idx, ph_k = _kette_idx(z)
+    unterbrochen = ph == UNTERBROCHEN
     anker_fertig = ph == "anker" and st.startswith(("anchors ready", "anchors: none"))
     zeilen = []
     ptxt = _phasen_text()
     for p in PHASEN:
         pi = PHASEN.index(p)
         fertig = pi < idx or (p == "anker" and anker_fertig)
+        # .509 J13: bei einem angehaltenen Lauf ist KEINE Etappe „(current)" —
+        # sein Halt steht als eigene Zeile im Fortschritts-Block.
         aktiv = p == ph and not fertig
         mark = ('<span class="phok">&#10003;</span>' if fertig
                 else ("&#9654;" if aktiv else '<span class="dim">&#183;</span>'))
@@ -676,7 +728,8 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
     # (BEWUSST nicht `puls` benannt: so heisst oben schon die working-Zeile.)
     s2 = lauf_status(zustand, puls=ernte_puls)
     ergebnis = ""
-    if ph in ("vorbereitung", "ernte") or (ph == "anker" and not anker_fertig):
+    if (ph in ("vorbereitung", "ernte") or unterbrochen
+            or (ph == "anker" and not anker_fertig)):
         ergebnis = s2["zaehler"]
     elif gruppen:
         # DREI echte Plurale in EINEM Zaehler-Satz: je Plural ein
@@ -688,11 +741,16 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
                     + (" " + t("lernwizard.ergebnis.beiseite", n=weg_n)
                        if weg_n else ""))
     fertig_alle = bool(anker_fertig and anker_zahl and gruppen and not wartend)
-    laeuft = (ph in ("vorbereitung", "ernte")
-              or (ph == "anker" and not anker_fertig))
+    laeuft = (not unterbrochen
+              and (ph in ("vorbereitung", "ernte")
+                   or (ph == "anker" and not anker_fertig)))
     # --- Kachel-Zustaende (dran | fertig | folgt) -------------------------
     if zustand is None:
         kz = ("dran", "folgt", "folgt", "folgt")
+    elif unterbrochen:
+        # .509 J13: der Lauf steht in seiner Etappe — die Kachel bleibt „dran",
+        # nur eben mit Halt statt mit Puls (Kachel 2 zeigt Grund + Resume).
+        kz = ("fertig", "dran", "folgt", "folgt")
     elif laeuft:
         kz = ("fertig", "dran", "folgt", "folgt")
     elif fertig_alle or ph in ("uebernahme", "fertig"):
@@ -844,8 +902,11 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
         k1 = ('<div><span class="phok">&#10003;</span> '
               + t("lernwizard.k1.gestartet", wann=_dt(z.get("ts")))
               + '</div>'
+              # .509 Review-KANN: im Halt zeigt Kachel 2 dieselbe Zaehlerzeile
+              # (unten, `laeuft or unterbrochen`) — ohne diesen Zusatz stand sie
+              # zweimal auf der Seite, und nur im neuen Halt-Zustand.
               + (f'<div class="lf-satz">{html.escape(ergebnis)}</div>'
-                 if ergebnis and not laeuft else "")
+                 if ergebnis and not laeuft and not unterbrochen else "")
               + '<div class="lf-satz nur-expert">'
               + t("lernwizard.k1.scope", n=z.get("events", "?"))
               + (' &middot; '
@@ -882,14 +943,22 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
           + (f'<div class="lf-satz" id="lf-zeit">{html.escape(s2["zeit"])}'
              '</div>' if s2["zeit"] or laeuft else "")
           + (f'<div class="lf-satz nur-expert" id="lf-zaehler">'
-             f'{html.escape(ergebnis)}</div>' if laeuft else "")
+             f'{html.escape(ergebnis)}</div>' if laeuft or unterbrochen else "")
           # .261 (User: 'ein Abbruch-Button waere auch nicht schlecht'):
           # direkt an der Saeule statt am Seitenende — derselbe
           # lernlaufAbbruch-Weg (app.js, mit Confirm).
-          + ('<div style="margin-top:6px"><button class="gtb" '
-             'onclick="lernlaufAbbruch(this)">'
+          # .509 J13 (b): ein angehaltener Lauf bekommt BEIDE Knoepfe — Resume
+          # nimmt den vorhandenen Wiederaufnahme-Weg (fertig.jsonl: schon
+          # geerntete Ereignisse werden uebersprungen), Abort den bisherigen.
+          + ('<div style="margin-top:6px">'
+             + ('<button class="gtb on" '
+                'onclick="lernlaufFortsetzen(this)">'
+                + t("lernwizard.k2.knopf_resume") + '</button> '
+                if unterbrochen else "")
+             + '<button class="gtb" '
+               'onclick="lernlaufAbbruch(this)">'
              + t("lernwizard.k2.knopf_abort") + '</button></div>'
-             if laeuft else "")
+             if laeuft or unterbrochen else "")
           + "</div>")
 
     # --- Kachel 3: die Gruppen-Queue -------------------------------------
@@ -926,7 +995,9 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
         qchips.append(f'<a class="{cls}" href="{ziel_g}" '
                       f'title="{titel_g}">{bild}</a>')
     offen_n = len(wartend)
-    if zustand is None or laeuft:
+    if zustand is None or laeuft or unterbrochen:
+        # .509 J13: ein angehaltener Lauf hat seine Gruppen noch nicht — die
+        # Benennungs-Kachel wartet weiter, statt eine leere Auswahl anzubieten.
         k3 = f'<p class="lf-satz">{t("lernwizard.k3.satz_warten")}</p>'
     elif anker_fertig and not anker_zahl:
         k3 = (f'<p class="lf-satz">{t("lernwizard.k3.keine_gesichter")}</p>'

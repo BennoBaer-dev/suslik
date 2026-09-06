@@ -1320,6 +1320,9 @@ T = {
     "lernwizard.balken.fertig": "listo",
     "lernwizard.status.aufnahmen": "grabaciones: {n}",
     "lernwizard.status.bilder": "{n} imágenes recogidas hasta ahora",
+    "lernwizard.status.wartet": "esperando a {was}",
+    "lernwizard.status.unterbrochen":
+        "interrumpido tras {n} de {m}: {grund}",
     "lernwizard.puls.working": "trabajando — actualizado hace {s}s",
     "lernwizard.puls.stumm":
         "sin novedades desde hace {s}s — un clip largo puede tardar "
@@ -1427,6 +1430,7 @@ T = {
         "Se ejecuta solo &mdash; puedes cerrar esta página y volver más "
         "tarde.",
     "lernwizard.k2.knopf_abort": "Abortar ejecución",
+    "lernwizard.k2.knopf_resume": "Reanudar ejecución",
     "lernwizard.k3.satz_warten":
         "A quien el sistema reconoce con seguridad lo nombra él mismo. Todo lo demás llega a ti &mdash; di quién es, o sáltatelo.",
     "lernwizard.k3.keine_gesichter":
@@ -3130,6 +3134,8 @@ T = {
     # {phase} ist die interne Phasen-Kennung (sprachneutral, §8.19).
     "antwort.lernlauf_phase":
         "ya hay una ejecución en la fase «{phase}» — abórtala primero",
+    "antwort.lernlauf_unterbrochen":
+        "la ejecución anterior se interrumpió: reanúdala o abórtala primero en la página de la ejecución",
     "antwort.lernlauf_beschaeftigt":
         "la ejecución anterior aún está terminando su evento actual — "
         "inténtalo de nuevo en un momento",
@@ -3139,6 +3145,25 @@ T = {
     "antwort.lernlauf_abgebrochen":
         "abortada — un evento en marcha todavía puede terminar en "
         "segundo plano",
+    # .509 Review: botón de cancelar sin estado de serie legible.
+    "antwort.lernlauf_abbruch_leer":
+        "ahora mismo no hay ningún estado de serie legible — no se canceló "
+        "nada; recarga la página e inténtalo de nuevo",
+    # .509 Review: respuestas del botón Reanudar (se muestran tal cual).
+    "antwort.lernlauf_resume_unlesbar":
+        "no se pudo leer el estado de la serie: {fehler}",
+    "antwort.lernlauf_resume_keiner": "no hay ninguna serie que reanudar",
+    "antwort.lernlauf_resume_laeuft":
+        "esta serie no está detenida — no hay nada que reanudar",
+    "antwort.lernlauf_resume_fremd":
+        "la serie detenida ya es otra",
+    "antwort.lernlauf_resume_aktiv":
+        "una etapa de esta serie todavía está en marcha",
+    "antwort.lernlauf_resume_etappe":
+        "esta serie no puede reanudarse desde donde se detuvo",
+    "antwort.lernlauf_resume_weg":
+        "el estado de la serie desapareció durante la reanudación",
+    "antwort.lernlauf_resume_ok": "reanudando",
     "antwort.live_nichts": "nada que cambiar",
     "antwort.live_nachtests": "{n} prueba(s) de fuente se ejecutan automaticamente una tras otra; cada vigilante arranca cuando su prueba pasa",
     "antwort.live_an": "vigilancias iniciadas: {ok}/{alle}",

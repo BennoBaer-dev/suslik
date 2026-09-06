@@ -1448,6 +1448,9 @@ T = {
     "lernwizard.balken.fertig": "fatto",
     "lernwizard.status.aufnahmen": "registrazioni: {n}",
     "lernwizard.status.bilder": "{n} immagini estratte finora",
+    "lernwizard.status.wartet": "in attesa di {was}",
+    "lernwizard.status.unterbrochen":
+        "interrotto dopo {n} di {m}: {grund}",
     "lernwizard.puls.working": "al lavoro — aggiornato {s}s fa",
     "lernwizard.puls.stumm":
         "nessun aggiornamento da {s}s — un video lungo può richiedere "
@@ -1557,6 +1560,7 @@ T = {
         "Procede da sola &mdash; puoi chiudere questa pagina e tornare "
         "più tardi.",
     "lernwizard.k2.knopf_abort": "Interrompi sessione",
+    "lernwizard.k2.knopf_resume": "Riprendi sessione",
     "lernwizard.k3.satz_warten":
         "Chi il sistema riconosce con certezza viene nominato da solo. Tutto il resto arriva a te &mdash; dici chi è, oppure saltalo.",
     "lernwizard.k3.keine_gesichter":
@@ -3286,6 +3290,8 @@ T = {
     # {phase} ist die interne Phasen-Kennung (sprachneutral, §8.19).
     "antwort.lernlauf_phase":
         "una sessione è già nella fase \"{phase}\" — interrompila prima",
+    "antwort.lernlauf_unterbrochen":
+        "la sessione precedente è stata interrotta: riprendila o interrompila prima nella pagina della sessione",
     "antwort.lernlauf_beschaeftigt":
         "la sessione precedente sta ancora completando l’evento corrente "
         "— riprova tra un attimo",
@@ -3295,6 +3301,25 @@ T = {
     "antwort.lernlauf_abgebrochen":
         "interrotta — un evento in corso può ancora concludersi in "
         "background",
+    # .509 Review: pulsante di annullamento senza stato della serie leggibile.
+    "antwort.lernlauf_abbruch_leer":
+        "al momento non è leggibile nessuno stato della serie — non è stato "
+        "interrotto nulla; ricarica la pagina e riprova",
+    # .509 Review: risposte del pulsante Riprendi (mostrate così come sono).
+    "antwort.lernlauf_resume_unlesbar":
+        "stato della serie illeggibile: {fehler}",
+    "antwort.lernlauf_resume_keiner": "non c'è nessuna serie da riprendere",
+    "antwort.lernlauf_resume_laeuft":
+        "questa serie non è interrotta — non c'è nulla da riprendere",
+    "antwort.lernlauf_resume_fremd":
+        "la serie interrotta ormai è un'altra",
+    "antwort.lernlauf_resume_aktiv":
+        "una tappa di questa serie è ancora in corso",
+    "antwort.lernlauf_resume_etappe":
+        "questa serie non può riprendere dal punto in cui si è fermata",
+    "antwort.lernlauf_resume_weg":
+        "lo stato della serie è sparito durante la ripresa",
+    "antwort.lernlauf_resume_ok": "ripresa in corso",
     "antwort.live_nichts": "niente da cambiare",
     "antwort.live_nachtests": "{n} test della sorgente vengono eseguiti automaticamente uno dopo l'altro; ogni sorvegliante parte appena il suo test riesce",
     "antwort.live_an": "sentinelle avviate: {ok}/{alle}",

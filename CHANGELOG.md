@@ -7,6 +7,37 @@ this file — the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git
 history.
 
+## 0.1.0.509 (2026-09-06)
+
+Bundles 0.1.0.508, which was never published — everything listed there is in
+this release. This one is about learning runs on storage that is slower or less
+predictable than a local disk.
+
+- **A learning run no longer downloads four clips from Frigate at once.** Four
+  collectors pulling 4K clips in parallel can saturate Frigate's API to the
+  point where a trivial event query takes 13 seconds instead of 0.01 — suslik
+  then correctly reported "Frigate not answering" and the run stalled after a
+  few events. Clip downloads now pass a gate: at most `clip_download_parallel`
+  of them run at the same time (factory setting 2, adjustable 1–8 on the
+  configuration page). The analysis slots are untouched — once a clip is
+  downloaded, Frigate is out of the picture.
+- **The run page says what it is waiting for.** While the harvest waits for a
+  download slot or for Frigate to recover, the progress line names it instead
+  of looking like a hang. An event that waits too long stays unbooked and a
+  later run picks it up — it is never recorded as a failure.
+- **A run that stops now says why, and can be resumed.** On some filesystems
+  the run's state file disappears for a moment even though nobody deleted it
+  (a rename that is not atomic — network shares, FUSE mounts). suslik read that
+  as "the user aborted the run": three runs ended 39, 72 and 39 seconds after
+  they started, and the wizard kept showing "running" with nothing behind it. A
+  missing moment is now checked before it is judged, an abort is an explicit
+  marker rather than a missing file, and a run that really stops shows its
+  reason with a Resume button. Infrastructure interruptions retry themselves
+  once, and that retry survives a service restart.
+- **The startup line names the filesystem of the data folder**
+  (`data_dir=/data (writable, ext4)`), so a support log shows what suslik is
+  writing onto.
+
 ## 0.1.0.508 (2026-09-06)
 
 Bundles 0.1.0.507, which was never published — everything listed there is in

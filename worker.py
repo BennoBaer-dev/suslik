@@ -610,6 +610,19 @@ def _job_ausfuehren(job, antwort_out=None):
     # .292: VOD-Weg-Schalter je Job (Default AN — nur explizites False der
     # Dienst-Config schaltet ab); wirkt nur im Erzeugungs-Fall (Alt-Events).
     _clipdbg_fr.CLIP_VOD = job.get("clip_vod") is not False
+    # .509 Clip-Download-Tor (core/frames, Abschnitt „Das Tor"): wie viele
+    # Clips gleichzeitig von Frigate gezogen werden duerfen. Der Download
+    # passiert HIER, in diesem Subprozess — je Analyse-Platz einer; das Tor
+    # traegt deshalb ueber Prozessgrenzen (flock-Slots neben dem Clip-Cache).
+    # Armiert wird JE JOB aus dem Job-Feld, dasselbe Muster wie
+    # CLIP_ERZEUGUNG: die Ernte-Jobs des Lernlaufs und des Pass-Checks tragen
+    # es, Live-/Melde-Jobs nicht (0 = kein Tor, wie bisher).
+    _clipdbg_fr.CLIP_TOR_N = int(job.get("clip_tor") or 0)
+    # .509 Review-MUSS: der WARTE-DECKEL am Tor, ebenfalls je Job aus der
+    # Dienst-Config. Ohne ihn lief die Wartezeit in die Job-Frist des Dienstes,
+    # der Worker wurde gekillt und das Ereignis ENDGUELTIG als Fehler gebucht;
+    # mit ihm bricht der Zug als `clip_tor_deckel` ab und bleibt ungebucht.
+    _clipdbg_fr.CLIP_TOR_DECKEL_S = job.get("clip_tor_deckel_s")
     wache = _JobRssWache(_job_rss_grenze(job), antwort_out)
     t0 = os.times()
     t0w = time.monotonic()   # E1/V0.4: WANDUHR je Job — cpu_s allein hatte die v1-Hochrechnung

@@ -12,7 +12,12 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.0.508"   # .508 Box-Inhalt User 06.09. frueh: der Satz steht EINMAL. Bis .507 lag
+STAND = "0.1.0.509"   # .509 = .508 + Clip-Download-Tor, Lernlauf-Haertung (J13) und die
+                      # Review-Fixes. Box-Inhalt UNVERAENDERT (E-O3, User 06.09.: „What's-new-Text
+                      # aendern wir nicht.") — der .508-Eintrag traegt jetzt die Nummer .509, wie
+                      # schon von .505 auf .506 und von .507 auf .508. .508 wurde nie
+                      # veroeffentlicht, verschmolzen verliert also niemand einen Hinweis.
+                      # Davor: "0.1.0.508"   # .508 Box-Inhalt User 06.09. frueh: der Satz steht EINMAL. Bis .507 lag
                       # derselbe Wortlaut zweimal in der Liste (Eintrag .506 UND .507), und die
                       # Box zeigt die letzten zehn Eintraege — der Nutzer sah die Zeile also
                       # doppelt untereinander (Befund J3 des .507-Deploy-Zugs). Beide Eintraege
@@ -405,7 +410,7 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
-    # 0.1.0.508 — EIN Eintrag fuer .505/.506/.507/.508. Der Wortlaut ist der des
+    # 0.1.0.509 — EIN Eintrag fuer .505 bis .509. Der Wortlaut ist der des
     # .505-Zugs ("whats new bleibt wie es ist nur ohne test", User 05.09.2026) und
     # bleibt unveraendert (E-O3, User 05.09. 23:30: "What's-new-Text aendern wir
     # nicht.") — nur die Nummer wandert, wie schon von .505 auf .506.
@@ -416,8 +421,10 @@ HIGHLIGHTS = (
     # veroeffentlicht; verschmolzen verliert also niemand einen Hinweis, den er schon
     # gesehen hat. Der .507-Zug selbst (Klick hat Vorfahrt, keine automatische
     # Pass-Ernte, Personenseite, Kettungs-Modus je Area) bekommt weiterhin KEINEN
-    # eigenen Satz in der Box — er steht im CHANGELOG.
-    ("0.1.0.508", (
+    # eigenen Satz in der Box — er steht im CHANGELOG. Dasselbe gilt fuer .509
+    # (Clip-Download-Tor, Lernlauf-Haertung, Review-Fixes): Interna und
+    # Fehlerbehebungen, keine Key-Features.
+    ("0.1.0.509", (
         {"de": "Parallele Analyse jetzt auf beiden Wegen (Poll und MQTT). Der Lernlauf "
                "nutzt freie Plätze mit, ohne die laufende Erkennung zu verdrängen.",
          "en": "Parallel analysis now on both paths (poll and MQTT). The learning run "

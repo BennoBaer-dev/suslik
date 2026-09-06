@@ -17,6 +17,7 @@ Kontrakt wie auftritte.py: reine Funktionen, Pfade/Daten als Parameter, kein
 Dienst-Import. KEINE anlagenspezifischen Konstanten (Allgemeinheits-Wache §2.4b) —
 Schwellen/Benchmarks kommen vom Aufrufer aus Config/Messung.
 """
+import errno
 import json
 import time
 import os
@@ -28,6 +29,41 @@ SCHEMA_VERSION = 1
 # Konzept §3: die Phasen-Kette des Laufs (P2b/Anzeige haengt sich hieran).
 PHASEN = ("vorbereitung", "ernte", "anker", "benennung", "neben_ansichten",
           "ganzkoerper", "uebernahme", "fertig")
+
+# .509 (Feldbefund 06.09.): der HALT. Endet der Ernte-Thread aus einem anderen
+# Grund als regulaerem Abschluss oder Nutzer-Abbruch, schreibt er als letzte
+# Handlung diesen Phasenwert mit Grund und Stand — vorher blieb „ernte" stehen
+# und der Wizard zeigte „running" ohne dass noch jemand rechnete.
+#
+# WARUM ER NICHT IN `PHASEN` STEHT (bewusster Entscheid, nicht Vergesslichkeit):
+# `PHASEN` ist die ETAPPEN-KETTE — Reihenfolge, Fortschritts-Anteil, Haken je
+# Zeile haengen daran (routes/lernwizard). `unterbrochen` ist keine neunte
+# Etappe, sondern ein Halt IN einer; in der Kette wuerde er eine Zeile
+# „Interrupted" hinter „Done" erzeugen und jeden Lauf, der ihn erreicht, als
+# „alle Etappen durch" ausweisen. Die Etappe, in der es passierte, steht
+# stattdessen im Zustand (`unterbrochen_in`).
+# Geprueft wird deshalb gegen `PHASEN_ALLE` (Kette + Halt) — EINE Quelle, aus
+# der Kette abgeleitet, kein zweites Phasen-Literal (K3-Regel). Wer die Kette
+# durchlaeuft, nimmt `PHASEN`; wer einen GESPEICHERTEN Wert prueft,
+# `PHASEN_ALLE`.
+UNTERBROCHEN = "unterbrochen"
+PHASEN_ALLE = PHASEN + (UNTERBROCHEN,)
+
+# .509 Blink-Wache (Feldbefund 06.09.): auf manchen Dateisystemen ist das
+# Umbenennen der Zustandsdatei NICHT atomar — sie fehlt fuer einen Moment,
+# obwohl niemand sie geloescht hat. Drei Feld-Laeufe endeten deshalb 39/72/39 s
+# nach Erntestart als vermeintlicher Nutzer-Abbruch. Wer die Datei nicht findet,
+# prueft deshalb `BLINK_VERSUCHE` mal im Abstand `BLINK_PAUSE_S` nach, bevor er
+# ein Urteil faellt. Mechanik-Konstanten, keine Anlagen-Schwellen (Modul-
+# Kontrakt §2.4b): der Aufrufer darf sie ueberschreiben.
+BLINK_VERSUCHE = 3
+BLINK_PAUSE_S = 0.3
+
+# .509: die EXPLIZITE Abbruch-Marke. Ein Nutzer-Abbruch ist ab jetzt nicht mehr
+# „die Datei ist weg" (das kann auch ein Blink oder ein Infrastruktur-Fehler
+# sein), sondern diese Marke — `/lernlauf_abbruch` legt sie an, BEVOR es die
+# Zustandsdatei entfernt.
+ABBRUCH_MARKE = "lernlauf.abbruch"
 
 # Konzept §5: Pflichtfelder des Anker-Datensatzes (Typ-Skelett; None = beliebiger Typ).
 _ANKER_PFLICHT = {
@@ -118,7 +154,11 @@ def lauf_abgeschlossen(lauf):
     abgeschlossen heisst real: Anker-Phase durch (Status 'anchors ready …' oder
     'anchors: none …'). Zweit-Nutzer desselben Kriteriums (verifyd-Neustart-Gate
     ~4883, lernwizard-Phasenleiste :158) ziehen bei ihrer naechsten Anfassung
-    hierher nach — nie lokal nachbauen (QS-Ebenen-Regel: kein Streu-Literal)."""
+    hierher nach — nie lokal nachbauen (QS-Ebenen-Regel: kein Streu-Literal).
+
+    .509: ein `unterbrochen`-Lauf ist ausdruecklich NICHT abgeschlossen — er
+    wartet auf „Resume" oder auf den Abbruch-Knopf und blockt bis dahin
+    (gewollt) einen neuen Lauf."""
     if not lauf:
         return False
     if lauf.get("phase") == "fertig":
@@ -130,7 +170,11 @@ def lauf_abgeschlossen(lauf):
 
 def lauf_lesen(data_dir):
     """Lauf-Zustand oder None (kein Lauf). Kaputte Datei -> None + Fehlertext
-    (der Aufrufer entscheidet laut; NIE stilles Weiterlaufen auf halbem Zustand)."""
+    (der Aufrufer entscheidet laut; NIE stilles Weiterlaufen auf halbem Zustand).
+
+    WER AUS DEM `None` AUF „ABGEBROCHEN" SCHLIESST, nimmt seit .509
+    `lauf_lesen_geduldig` — auf manchen Dateisystemen fehlt die Datei fuer
+    einen Moment, ohne dass jemand sie geloescht hat (s. Kopf BLINK_VERSUCHE)."""
     p = _pfad(data_dir, "lernlauf.json")
     if not os.path.exists(p):
         return None, None
@@ -139,11 +183,235 @@ def lauf_lesen(data_dir):
             d = json.load(f)
         if d.get("schema") != SCHEMA_VERSION:
             return None, f"lernlauf.json schema {d.get('schema')!r} != {SCHEMA_VERSION}"
-        if d.get("phase") not in PHASEN:
+        if d.get("phase") not in PHASEN_ALLE:
             return None, f"unbekannte phase {d.get('phase')!r}"
         return d, None
+    except OSError as e:
+        # .509 Review-MUSS (gemessen 06.09.): zwischen `os.path.exists` und
+        # `open` liegt ein zweiter Syscall. Faellt das Blink-Fenster GENAU
+        # dazwischen, wirft `open` ENOENT — und das ist „Datei fehlt", nicht
+        # „Datei kaputt". Als FEHLERTEXT kippte es jede Geduld: die geduldigen
+        # Leser kehren bei einem Fehler sofort zurueck, der Ernte-Koordinator
+        # stoppte mit `art="fehler"`, und weil das kein `infra` ist, fuhr auch
+        # der Auto-Resume nicht an. Gemessen: 75 solche Treffer auf 1,9 Mio
+        # Leseversuche, mit Dauerblinker 1013 „unlesbar" gegen 120 „fehlt" —
+        # ein harter Fehl-Stopp pro langem Lauf.
+        if isinstance(e, FileNotFoundError) or e.errno == errno.ENOENT:
+            return None, None
+        return None, f"{type(e).__name__}: {e}"
     except Exception as e:
         return None, f"{type(e).__name__}: {e}"
+
+
+def lauf_lesen_geduldig(data_dir, versuche=BLINK_VERSUCHE,
+                        pause_s=BLINK_PAUSE_S, melde=None, mit_lock=False):
+    """Wie `lauf_lesen`, aber ein einzelner leerer MOMENT ist kein Urteil
+    (.509, Feldbefund 06.09.): fehlt die Datei, wird bis zu `versuche` mal im
+    Abstand `pause_s` nachgeprueft. `melde(versuch, versuche)` wird GENAU
+    EINMAL je Vorfall gerufen (beim ersten Nachschlag) — daraus entsteht die
+    Log-Zeile, an der ein Nutzer-Log spaeter die Haeufigkeit zeigt.
+
+    Ein UNLESBARER Inhalt wird nicht wiederholt: der ist ein echter Befund und
+    kommt sofort als Fehlertext zurueck. Wiederholt wird nur das FEHLEN.
+    -> (zustand, fehler) wie lauf_lesen; (None, None) heisst: die Datei fehlt
+    auch nach allen Nachpruefungen.
+
+    `mit_lock=True` (.509 Review-MUSS, der ROBUSTE Weg): unter `store_lock`
+    lesen. ALLE produktiven Schreiber halten es waehrend ihres
+    tmp+fsync+rename, und der Abbruch loescht darunter — ein Leser mit Lock
+    kann das Blink-Fenster eines fremden Renames damit by construction nicht
+    mehr beobachten; die Nachpruefungen bleiben als Rueckfall fuer echte
+    Fremd-Effekte. VORSICHT, deshalb NICHT der Default: `store_lock` nimmt je
+    Aufruf einen frischen fd, ein zweites LOCK_EX aus demselben Thread waere
+    ein Deadlock. Nur aus Wegen setzen, die das Lock nachweislich nicht schon
+    halten (heute: der Ernte-Koordinator und seine Lebensprobe)."""
+    import contextlib as _cl
+    with (store_lock(data_dir) if mit_lock else _cl.nullcontext()):
+        for i in range(int(versuche) + 1):
+            zustand, fehler = lauf_lesen(data_dir)
+            if zustand is not None or fehler:
+                return zustand, fehler
+            if i >= int(versuche):
+                break
+            if i == 0 and melde:
+                melde(1, int(versuche))
+            time.sleep(float(pause_s))
+    return None, None
+
+
+def lauf_fortschreiben_geduldig(data_dir, updates, versuche=BLINK_VERSUCHE,
+                                pause_s=BLINK_PAUSE_S, melde=None,
+                                abbruch=None):
+    """`lauf_fortschreiben` mit der Blink-Wache aus `lauf_lesen_geduldig` —
+    fuer die Schreiber im Ernte-Weg, die aus einem `None` bisher „abgebrochen"
+    schlossen. Die Nachpruefung laeuft INNERHALB von store_lock: wer wirklich
+    abbricht, haelt dasselbe Lock und kommt danach dran, nie mittendrin.
+
+    `abbruch` ist die (g)-Wache: eine Funktion, die True sagt, sobald der Lauf
+    gestoppt wurde. Sie wird VOR jedem Versuch UND unmittelbar vor dem Schrieb
+    gefragt — sonst schriebe ein Aufruf, der beim Wegblinken der Datei ins
+    Warten geriet, hinterher doch noch „laeuft" in eine inzwischen
+    zurueckgekehrte Datei. Genau das war der Wizard-Zombie.
+    -> neuer Zustand oder None (Datei fehlt dauerhaft oder Lauf gestoppt)."""
+    with store_lock(data_dir):
+        for i in range(int(versuche) + 1):
+            if abbruch and abbruch():
+                return None
+            zustand, fehler = lauf_lesen(data_dir)
+            if zustand is not None or fehler:
+                if abbruch and abbruch():
+                    return None
+                return _fortschreiben_ungeschuetzt(data_dir, updates)
+            if i >= int(versuche):
+                return None
+            if i == 0 and melde:
+                melde(1, int(versuche))
+            time.sleep(float(pause_s))
+    return None
+
+
+def abbruch_marke_setzen(data_dir, lauf_id):
+    """Nutzer-Abbruch EXPLIZIT machen (.509): die Marke wird geschrieben, BEVOR
+    `/lernlauf_abbruch` die Zustandsdatei entfernt. Der Ernte-Koordinator
+    unterscheidet daran „der Nutzer wollte das" von „die Datei ist weg,
+    obwohl niemand sie geloescht hat". Atomar wie jeder Zustands-Schrieb."""
+    p = _pfad(data_dir, ABBRUCH_MARKE)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(p), prefix=".abbruch-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump({"ts": round(time.time(), 1),
+                       "lauf_id": str(lauf_id or "")}, f, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, p)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    return p
+
+
+def abbruch_marke_lesen(data_dir, lauf_id=None):
+    """Die Marke dieses Laufs oder None. Eine Marke OHNE lauf_id gilt fuer
+    jeden Lauf (sie entstand, als der Zustand nicht mehr lesbar war); eine
+    Marke mit fremder lauf_id gilt NICHT — sonst risse der Abbruch von gestern
+    den Lauf von heute mit. Unlesbar = keine Marke: der Zweifelsfall darf nie
+    als Nutzer-Abbruch durchgehen, dann lieber `unterbrochen` mit Grund."""
+    p = _pfad(data_dir, ABBRUCH_MARKE)
+    if not os.path.exists(p):
+        return None
+    try:
+        with open(p, encoding="utf-8") as f:
+            d = json.load(f)
+    except Exception:
+        return None
+    m_id = str((d or {}).get("lauf_id") or "")
+    if lauf_id is not None and m_id and m_id != str(lauf_id):
+        return None
+    return d
+
+
+def abbruch_marke_raeumen(data_dir):
+    """Alte Marke wegnehmen (neuer Lauf, Koordinator-Start, Wiederaufnahme) —
+    idempotent. -> True, wenn wirklich eine lag."""
+    p = _pfad(data_dir, ABBRUCH_MARKE)
+    try:
+        os.remove(p)
+        return True
+    except OSError:
+        return False
+
+
+def _stand_aus_fortschritt(f):
+    """„12/672" aus der Fortschritts-Zeile -> {"n": 12, "m": 672} | None.
+    .509 Review-SOLL: der HALT soll den Stand von JETZT nennen. Bis eben gab
+    ihn nur EINE der sieben Aufrufstellen mit, und `unterbrochen_schreiben`
+    liess ohne ihn den alten stehen — nach einem Resume behauptete die
+    Kopfzeile „interrupted after 29 of 672", waehrend die Zaehlerzeile
+    darunter 312/672 zeigte (und genau an dieser Zahl haengt die Entscheidung
+    Resume/Abbruch)."""
+    try:
+        n, m = str((f or {}).get("event") or "").split("/", 1)
+        return {"n": int(n.strip()), "m": int(m.strip())}
+    except (ValueError, AttributeError):
+        return None
+
+
+def unterbrochen_schreiben(data_dir, grund, stand=None, rueckfall=None,
+                           versuche=BLINK_VERSUCHE, pause_s=BLINK_PAUSE_S,
+                           melde=None, lauf_id=None, auto_resume_faehig=None):
+    """Der Lauf haelt an, ohne fertig zu sein und ohne dass der Nutzer
+    abgebrochen hat (.509 (b), Zombie-Riegel): phase -> `unterbrochen`, mit
+    `grund` (englischer Kurztext) und `stand` (dict {n, m}). Vorher blieb in
+    genau diesem Fall `phase: ernte` stehen und der Wizard zeigte „running"
+    ohne dass noch ein Thread rechnete.
+
+    Fehlt die Datei dauerhaft (der Infrastruktur-Fall), wird sie aus
+    `rueckfall` NEU angelegt — das ist der EINZIGE Weg, auf dem der
+    Ernte-Thread nach einem Stopp noch schreibt (Auftrag (g)); ohne ihn
+    haette der Lauf gar keinen Zustand mehr, den ein Nutzer fortsetzen kann.
+
+    `lauf_id` (.509 Review-SOLL) ist die ID, DEREN Halt geschrieben werden
+    soll. Steht in der Datei inzwischen ein ANDERER Lauf, wird nichts
+    geschrieben (-> None): der Aufrufer ist u. a. der Zweig „die
+    Zustandsdatei gehoert jetzt einem anderen Lauf" — der haette den neuen,
+    gesunden Lauf angehalten. None = kein Abgleich (Alt-Verhalten).
+    -> der geschriebene Zustand oder None (kein Zustand und kein Rueckfall,
+    unlesbar, oder fremder Lauf)."""
+    with store_lock(data_dir):
+        zustand = None
+        for i in range(int(versuche) + 1):
+            zustand, fehler = lauf_lesen(data_dir)
+            if zustand is not None:
+                break
+            if fehler:                 # unlesbar: nie ueberschreiben, nur melden
+                return None
+            if i >= int(versuche):
+                break
+            if i == 0 and melde:
+                melde(1, int(versuche))
+            time.sleep(float(pause_s))
+        if zustand is not None and lauf_id is not None:
+            _da = str(zustand.get("lauf_id") or "")
+            if _da and _da != str(lauf_id):
+                return None            # fremder Lauf: nie stempeln
+        if zustand is None:
+            if not rueckfall:
+                return None
+            zustand = dict(rueckfall)
+        if not stand:
+            # Ohne mitgegebenen Stand den aus der Fortschritts-Zeile nehmen —
+            # sonst bliebe der (womoeglich vor-Resume-alte) alte stehen.
+            stand = _stand_aus_fortschritt(zustand.get("fortschritt"))
+        vorher = zustand.get("phase")
+        zustand["phase"] = UNTERBROCHEN
+        # In WELCHER Etappe es passierte — die Anzeige-Kette braucht das
+        # (`unterbrochen` ist keine Etappe, sondern ein Halt in einer).
+        zustand["unterbrochen_in"] = (vorher if vorher in PHASEN
+                                      else zustand.get("unterbrochen_in") or "ernte")
+        zustand["grund"] = str(grund)
+        zustand["unterbrochen_ts"] = round(time.time(), 1)
+        if auto_resume_faehig is not None:
+            # .509 Review-SOLL: „darf dieser Halt automatisch fortgesetzt
+            # werden?" gehoert in den ZUSTAND. Vorher lebte der eine zugesagte
+            # Versuch nur als Prozess-Faden (time.sleep(60)) — ein
+            # Container-Neustart in diesen 60 s verschluckte ihn, und der
+            # Nachtlauf stand bis zum naechsten Seitenbesuch.
+            zustand["auto_resume_faehig"] = bool(auto_resume_faehig)
+        f = dict(zustand.get("fortschritt") or {})
+        if stand:
+            zustand["stand"] = {"n": int(stand.get("n") or 0),
+                                "m": int(stand.get("m") or 0)}
+            # Musste die Datei neu angelegt werden, ist der Fortschritt darin
+            # der von vorhin — der Stand ist die frischere Wahrheit.
+            f["event"] = f"{zustand['stand']['n']}/{zustand['stand']['m']}"
+        f["status"] = f"interrupted: {grund}"
+        f.pop("analysing", None)       # .87: die aktuelles-Event-Zeile raeumen
+        f.pop("waiting for", None)     # .509: kein klebender Warte-Text
+        zustand["fortschritt"] = f
+        zustand["aktualisiert"] = round(time.time(), 1)
+        lauf_schreiben(data_dir, zustand)
+        return zustand
 
 
 def lauf_puls(data_dir, zustand):
@@ -159,9 +427,9 @@ def lauf_puls(data_dir, zustand):
 
 def lauf_schreiben(data_dir, zustand):
     """Atomar (tmp + fsync + rename ins selbe Verzeichnis). zustand MUSS phase
-    aus PHASEN tragen; schema wird gesetzt."""
-    if zustand.get("phase") not in PHASEN:
-        raise ValueError(f"phase {zustand.get('phase')!r} nicht in {PHASEN}")
+    aus PHASEN_ALLE tragen; schema wird gesetzt."""
+    if zustand.get("phase") not in PHASEN_ALLE:
+        raise ValueError(f"phase {zustand.get('phase')!r} nicht in {PHASEN_ALLE}")
     zustand = dict(zustand, schema=SCHEMA_VERSION)
     p = _pfad(data_dir, "lernlauf.json")
     os.makedirs(os.path.dirname(p), exist_ok=True)

@@ -265,6 +265,16 @@ WANDUHR_AKTEURE = 2                # Live-Analyse + Mess-Roundtrip
 WANDUHR_BAUSTEINE_JE_AKTEUR = 2    # ffmpeg-Decode + Inferenz je Akteur nebenlaeufig
 WANDUHR_MIN_KERNE = WANDUHR_AKTEURE * WANDUHR_BAUSTEINE_JE_AKTEUR
 
+# .509 CLIP-DOWNLOAD-TOR (Feldbefund 06.09.2026, Herkunft ausfuehrlich in
+# core/frames.py, Abschnitt „Das Tor"): wie viele Clips die Ernte gleichzeitig
+# von Frigate ziehen darf. Vier gleichzeitige 4K-Zuege legten die API des
+# Feldtesters lahm (triviale Ereignis-Abfrage 13,4 s statt 0,01 s, die
+# uebrigen Abrufe erreichten seinen nginx gar nicht mehr) — der Lauf endete
+# bei 19 von 672 Ereignissen. Der Werkswert steht HIER und wird vom
+# Default-Block referenziert (Muster WANDUHR_MIN_KERNE): EINE Zahl, kein
+# zweites Literal neben der Whitelist-Spanne. Stellbar ist er wie alles hier.
+CLIP_TOR_WERK = 2                  # Betreiber-Entscheid 06.09.: „ein bis zwei"
+
 
 def _cpu_quote():
     """cgroup-CPU-Quote (docker --cpus / LXC cpulimit): os.sched_getaffinity sieht
@@ -924,6 +934,11 @@ def load_config(path):
                          # liess); deckel_s ist die absolute Wartegrenze.
                          ("clip_erzeugung_alter_min", 30),
                          ("clip_erzeugung_deckel_s", 300),
+                         # .509 Clip-Download-Tor (Feldbefund 06.09.): hoechstens
+                         # so viele Clips gleichzeitig von Frigate holen — die
+                         # ANALYSE bleibt davon unberuehrt und laeuft weiter auf
+                         # allen Plaetzen. Werkswert an der Konstante oben.
+                         ("clip_download_parallel", CLIP_TOR_WERK),
                          # Watchdog der LIVE-Analyse (Fix 10.08.; vorher fest 1800 s).
                          # MESSBASIS deckung.jsonl 27.07.-10.08. (n=1394 Live-Analysen
                          # auf der Prod-Maschine): Median 5,8 s, p90 20,2 s, p99 52,2 s,
@@ -1582,6 +1597,37 @@ def _clip_alter_min(ende_ts, start_ts=None):
         return round((time.time() - t) / 60, 1) if t else None
     except Exception:
         return None
+
+
+def clip_tor_aus_cfg(cfg):
+    """.509: Wie viele Clips darf die Ernte gleichzeitig von Frigate ziehen?
+
+    DIE eine Lesestelle des Wertes (Deckungs-Vertrag, CLAUDE.md: nie ein
+    weiteres verstreutes Literal) — die drei Ernte-Wege (Lernlauf-Job,
+    Pass-Check-Job, Vorlade-Thread) und die Fortschritts-Anzeige holen ihn
+    hier. Fehlt der Schluessel (Bestands-Config vor .509, Werkbank-cfg einer
+    Probe), gilt der Werkswert der Konstante, nicht „kein Tor": eine
+    Installation, die nichts einstellt, soll GESCHUETZT sein."""
+    try:
+        n = int(cfg.get("clip_download_parallel") or 0)
+    except (TypeError, ValueError):
+        n = 0
+    return n if n > 0 else CLIP_TOR_WERK
+
+
+def clip_tor_deckel_s_aus_cfg(cfg):
+    """.509 Review-MUSS: Wie lange darf ein Ernte-Job HOECHSTENS am Tor
+    warten? DIE eine Lesestelle (Lernlauf-Job, Pass-Check-Job, Vorlader).
+
+    KEIN eigener Config-Schluessel, bewusst: es ist dieselbe Groessenordnung
+    und dieselbe Zusage wie beim Warten auf Frigates Clip-Erzeugung
+    (`clip_erzeugung_deckel_s`, Hilfetext: „Events hitting the cap stay
+    unbooked and are retried in a later run") — nur ist die Bremse hier die
+    eigene. Ein zweiter Schalter, den niemand drehen soll, waere ein
+    Streu-Literal mehr; die Zahl kommt aus der Config, nicht aus dem Code.
+    Der Koordinator schlaegt denselben Wert auf die JOB-FRIST auf: das
+    Warten kann das Analyse-Budget dadurch nicht aufzehren."""
+    return int(cfg.get("clip_erzeugung_deckel_s") or 300)
 
 
 def _verwurf_melden(info, code):
@@ -5520,13 +5566,38 @@ class Service:
         Zustaende werden laut gemeldet, nie geraten."""
         from core import lernlauf as _ll
         try:
-            zustand, fehler = _ll.lauf_lesen(self.cfg["data_dir"])
+            zustand, fehler = _ll.lauf_lesen_geduldig(self.cfg["data_dir"])
             if zustand is None:
                 if fehler:
                     self.log(f"learning run state unreadable — not resuming ({fehler})")
                 return
             ph = zustand.get("phase")
             f = zustand.get("fortschritt") or {}
+            if ph == _ll.UNTERBROCHEN:
+                # .509 J13 (b): ein angehaltener Lauf faehrt NICHT von selbst
+                # wieder an — er traegt seinen Grund, und der Nutzer entscheidet
+                # (Resume-Knopf oder Abbruch). Genau das unterscheidet ihn von
+                # der Neustart-Pause, die weiter in `ernte` steht und unten
+                # regulaer wiederaufgenommen wird.
+                _st = zustand.get("stand") or {}
+                self.log(f"learning run was INTERRUPTED after "
+                         f"{_st.get('n', '?')}/{_st.get('m', '?')} "
+                         f"({zustand.get('grund') or 'no reason recorded'})")
+                # .509 Review-SOLL: der EINE zugesagte Automatik-Versuch lebte
+                # nur als Prozess-Faden (time.sleep(60)). Startete der
+                # Container in diesen 60 s neu (Update, OOM-Kill, Host-Reboot),
+                # war er still verloren und ein unbeaufsichtigter Nachtlauf
+                # stand bis zum naechsten Seitenbesuch — obwohl das Log ihn
+                # versprochen hatte. Deshalb steht die FAEHIGKEIT jetzt im
+                # Zustand (`auto_resume_faehig`, gesetzt aus dem infra-Grund)
+                # und der Boot armiert ihn erneut; der Zaehler (`auto_resume`)
+                # begrenzt ihn weiterhin.
+                if zustand.get("auto_resume_faehig"):
+                    self._lernlauf_autoresume_armieren(self.cfg["data_dir"],
+                                                       zustand)
+                else:
+                    self.log("waiting for Resume on the run page")
+                return
             if ph == "ernte":
                 if str(f.get("status", "")).startswith("harvest finished"):
                     self._anker_boot_start(zustand,
@@ -5717,6 +5788,7 @@ class Service:
         "debug": (bool, None, None, "verbose debug logging: per-person scores/windows, MQTT payloads, timing, plus a [clipdbg] trace of every Frigate clip interaction (fetch start/end with bytes+duration, clip-generation waits, per-clip frame quality) (INFO stays the default; turn on to validate the system in depth)"),
         "clip_erzeugung_alter_min": (int, 5, 1440, "harvest: events older than this (minutes) count as ARCHIVED — Frigate has to rebuild their clip from recording segments before a single byte arrives, which takes far longer than a live download. For those the fetch waits patiently (see the cap below) instead of aborting; a measured abort during that rebuild permanently leaks one API thread and one ffmpeg inside Frigate until Frigate is restarted"),
         "clip_erzeugung_deckel_s": (int, 60, 1800, "harvest: absolute cap (seconds) on waiting for Frigate to rebuild an archived event's clip. While waiting, a cheap probe checks every stall that Frigate itself still answers — if it does, the wait continues up to this cap; if not, the fetch stops immediately. Events hitting the cap stay unbooked and are retried in a later run"),
+        "clip_download_parallel": (int, 1, 8, "harvest: how many event clips may be downloaded from Frigate at the same time. This is a limit on the DOWNLOADS only — the analysis keeps using all of its slots, because once a clip is here Frigate is out of the picture. Raise it on a fast local link with small clips; leave it low (1-2) if Frigate sits behind a slow line, records 4K, or serves several live streams: parallel clip streaming is what makes a Frigate API stall (measured at a user's site, where four parallel 4K fetches pushed a trivial event query from 0.01 s to 13.4 s and the harvest stopped after 19 of 672 events)"),
         "clip_vod": (bool, None, None, "harvest: fetch archived events' clips via Frigate's VOD playlist (/vod/event/.../master.m3u8) and merge the segments locally instead of asking Frigate to rebuild the clip server-side. Frigate's clip generation can stall for minutes and leak a worker thread plus an ffmpeg process per request until its whole API freezes (reported upstream); the VOD route bypasses that code path entirely. On any failure (older Frigate without the endpoint, local ffmpeg error) the fetch falls back to the classic clip.mp4 path with all its safeguards"),
         # .374 (Widerleger-Fund 30.08.): "ask" steht hier NICHT mehr zur Wahl,
         # solange der Nachhol-Knopf ausgehaengt ist (webui/__init__.py). Wer den
@@ -8656,6 +8728,34 @@ class Service:
         dd = self.cfg["data_dir"]
         if dateien:
             return self._lernlauf_vorbereiten_dateien(dateien)
+        # .509 Review-MUSS: die VORBEREITUNG hatte dieselbe Blink-Krankheit wie
+        # die Ernte — und sie schreibt dichter (alle zwei Ereignisse, bei 672
+        # Ereignissen also ~336 Renames in gut zwei Minuten). Ein einziger
+        # Blink beendete sie als vermeintlichen Nutzer-Abbruch: der Zustand
+        # blieb auf „vorbereitung / checking events 412/672" stehen, laeuft=True
+        # UND tickt=True, kein Resume-Knopf, kein Grund — ein haerterer Zombie
+        # als der in der Ernte geheilte. Dieselben drei Griffe wie dort:
+        # geduldig schreiben, bei None erst die Marke fragen, ohne Marke den
+        # sichtbaren Halt schreiben.
+        _z_vor, _f_vor = _ll.lauf_lesen_geduldig(dd)
+        vor_id = str((_z_vor or {}).get("lauf_id") or "") or None
+
+        def _vor_blink(versuch, von):
+            self.log(f"run state file missing for a moment ({versuch}/{von}) — "
+                     "continuing (non-atomic rename on this filesystem?)")
+
+        def _vor_halt(was):
+            """None beim Fortschreiben: Abbruch oder Infrastruktur? -> True,
+            wenn die Vorbereitung enden muss (immer)."""
+            if _ll.abbruch_marke_lesen(dd, vor_id):
+                self.log(f"learning run preparation stopped (run aborted, {was})")
+            else:
+                self._lernlauf_unterbrochen(
+                    dd, f"preparation stopped: run state file gone ({was}, no "
+                        "abort marker — infrastructure, not a user abort)",
+                    _z_vor, infra=True, lauf_id=vor_id)
+            return True
+
         try:
             # .262 Fortsetzungs-Suche: genug NEUERE Events mitholen, damit nach
             # dem Filter noch 'anzahl' UNdurchsuchte uebrig sind (hoechstens
@@ -8724,10 +8824,10 @@ class Service:
             n = len(evs)
             # Umfang EHRLICH nachziehen (Tages-Modus startet mit events=0;
             # auch ein weiter-Lauf am Historien-Ende findet weniger als anzahl).
-            _ll.lauf_fortschreiben(dd, events=n, fortschritt=dict(
+            _ll.lauf_fortschreiben_geduldig(dd, {"events": n, "fortschritt": dict(
                 {"checking events": f"0/{n}"},
                 **({"already searched (skipped)": alt_uebersprungen}
-                   if nur_neue else {})))
+                   if nur_neue else {}))}, melde=_vor_blink)
             liste, mit_clip = [], 0
             for i, e in enumerate(evs, 1):
                 hat_clip = e.get("has_clip") is True
@@ -8738,29 +8838,45 @@ class Service:
                               if (t0 and t1) else None, "hat_clip": hat_clip})
                 # jede Handvoll persistieren: sichtbares Ticken + absturzfest
                 if i % 2 == 0 or i == n:
-                    if _ll.lauf_fortschreiben(dd, fortschritt={
-                            "checking events": f"{i}/{n}"}) is None:
-                        self.log("learning run preparation stopped (run aborted)")
+                    if _ll.lauf_fortschreiben_geduldig(
+                            dd, {"fortschritt": {"checking events": f"{i}/{n}"}},
+                            melde=_vor_blink) is None:
+                        _vor_halt(f"checking events {i}/{n}")
                         return
                 time.sleep(0.2)                   # UI-sichtbar, nicht Frigate-fluten
-            z = _ll.lauf_fortschreiben(dd, events_liste=liste,
-                                       fortschritt={"checking events": f"{n}/{n}",
-                                                    "with clip": mit_clip,
-                                                    "skipped (no clip)": n - mit_clip,
-                                                    "status": "prepared — starting "
-                                                              "the harvest"})
-            if z is not None:
-                self.log(f"learning run prepared: {n} events checked, {mit_clip} with clip")
-                if z.get("erntefreigabe"):
-                    self.lernlauf_ernte_starten()  # E2: die Kette laeuft von selbst weiter
-                else:
-                    # Alt-Zustand aus dem Fundament-Build (E1-Shadow): NIE ungefragt
-                    # ernten (Widerleger .75/L1) — der Nutzer legt den Lauf neu an.
-                    _ll.lauf_fortschreiben(dd, fortschritt={
-                        "status": "planned under the foundation build — abort and "
-                                  "create the run again to harvest"})
+            z = _ll.lauf_fortschreiben_geduldig(
+                dd, {"events_liste": liste,
+                     "fortschritt": {"checking events": f"{n}/{n}",
+                                     "with clip": mit_clip,
+                                     "skipped (no clip)": n - mit_clip,
+                                     "status": "prepared — starting "
+                                               "the harvest"}},
+                melde=_vor_blink)
+            if z is None:
+                # .509 Review-MUSS: DIESER Schrieb hatte keinen else-Zweig —
+                # ein Blink genau hier warf die fertig gepruefte events_liste
+                # weg, die Ernte wurde nie gestartet, der Lauf stand auf
+                # „vorbereitung, checking events n/n" und es stand NICHT EINE
+                # Zeile im Log (Klasse C, stiller Verlust). Jetzt laut, und der
+                # Halt macht die Arbeit ueber Resume wieder erreichbar.
+                self.log(f"learning run: the prepared list of {n} event(s) "
+                         "could not be persisted — run state file gone")
+                _vor_halt(f"persisting the prepared list of {n} event(s)")
+                return
+            self.log(f"learning run prepared: {n} events checked, {mit_clip} with clip")
+            if z.get("erntefreigabe"):
+                self.lernlauf_ernte_starten()  # E2: die Kette laeuft von selbst weiter
+            else:
+                # Alt-Zustand aus dem Fundament-Build (E1-Shadow): NIE ungefragt
+                # ernten (Widerleger .75/L1) — der Nutzer legt den Lauf neu an.
+                _ll.lauf_fortschreiben_geduldig(dd, {"fortschritt": {
+                    "status": "planned under the foundation build — abort and "
+                              "create the run again to harvest"}},
+                    melde=_vor_blink)
         except Exception as e:
-            _ll.lauf_fortschreiben(dd, fortschritt={"status": f"preparation failed: {e}"})
+            _ll.lauf_fortschreiben_geduldig(
+                dd, {"fortschritt": {"status": f"preparation failed: {e}"}},
+                melde=_vor_blink)
             self.log(f"learning run preparation failed ({e})")
 
     def _lernlauf_vorbereiten_dateien(self, dateien):
@@ -8779,8 +8895,27 @@ class Service:
         # .334 (Audit-Befund 24.08.): der frisch angelegte Lauf ist der
         # Freigabe-Bezug der Dauermarken — lauf_loeschen gibt sie damit wieder
         # frei, vorher waren eingespeiste Clips fuer immer unloeschbar.
-        _z0, _f0 = _ll.lauf_lesen(dd)
+        # .509 Review-MUSS: geduldig lesen, wie in der Frigate-Variante — auf
+        # einem Dateisystem mit nicht-atomarem Rename verlor der rohe Blick
+        # hier still den Freigabe-Bezug der Dauermarken (lid=None).
+        _z0, _f0 = _ll.lauf_lesen_geduldig(dd)
         lid = str((_z0 or {}).get("lauf_id") or "") or None
+
+        def _dq_blink(versuch, von):
+            self.log(f"run state file missing for a moment ({versuch}/{von}) — "
+                     "continuing (non-atomic rename on this filesystem?)")
+
+        def _dq_halt(was):
+            """Wie `_vor_halt` in der Frigate-Variante: `None` heisst nicht
+            mehr automatisch Abbruch (Review-MUSS)."""
+            if _ll.abbruch_marke_lesen(dd, lid):
+                self.log(f"file source: run was aborted during preparation ({was})")
+            else:
+                self._lernlauf_unterbrochen(
+                    dd, f"preparation stopped: run state file gone ({was}, no "
+                        "abort marker — infrastructure, not a user abort)",
+                    _z0, infra=True, lauf_id=lid)
+
         try:
             if isinstance(dateien, str) and os.path.isdir(dateien):
                 events, fehler = _dq.ordner_einspeisen(dateien, dd, log=self.log,
@@ -8799,31 +8934,37 @@ class Service:
                         self.log(f"file source: SKIPPED {os.path.basename(pf)} — {e}")
             n = len(events)
             if not n:
-                _ll.lauf_fortschreiben(dd, fortschritt={
+                _ll.lauf_fortschreiben_geduldig(dd, {"fortschritt": {
                     "status": "file source: no usable video found — "
-                              f"{len(fehler)} file(s) rejected"})
+                              f"{len(fehler)} file(s) rejected"}},
+                    melde=_dq_blink)
                 self.log(f"file source: nothing usable ({len(fehler)} rejected)")
                 return
-            z = _ll.lauf_fortschreiben(
-                dd, events=n, events_liste=events,
-                fortschritt={"checking events": f"{n}/{n}", "with clip": n,
-                             "source": "own video files",
-                             "rejected files": len(fehler),
-                             "status": "prepared — starting the harvest"})
+            z = _ll.lauf_fortschreiben_geduldig(
+                dd, {"events": n, "events_liste": events,
+                     "fortschritt": {"checking events": f"{n}/{n}", "with clip": n,
+                                     "source": "own video files",
+                                     "rejected files": len(fehler),
+                                     "status": "prepared — starting the harvest"}},
+                melde=_dq_blink)
             if z is None:
-                self.log("file source: run was aborted during preparation")
+                self.log(f"file source: the prepared list of {n} clip(s) could "
+                         "not be persisted — run state file gone")
+                _dq_halt(f"persisting the prepared list of {n} clip(s)")
                 return
             self.log(f"learning run prepared from files: {n} clip(s), "
                      f"{len(fehler)} rejected")
             if z.get("erntefreigabe"):
                 self.lernlauf_ernte_starten()
             else:
-                _ll.lauf_fortschreiben(dd, fortschritt={
+                _ll.lauf_fortschreiben_geduldig(dd, {"fortschritt": {
                     "status": "planned under the foundation build — abort and "
-                              "create the run again to harvest"})
+                              "create the run again to harvest"}},
+                    melde=_dq_blink)
         except Exception as e:                                     # noqa: BLE001
-            _ll.lauf_fortschreiben(dd, fortschritt={
-                "status": f"file source preparation failed: {e}"})
+            _ll.lauf_fortschreiben_geduldig(dd, {"fortschritt": {
+                "status": f"file source preparation failed: {e}"}},
+                melde=_dq_blink)
             self.log(f"file source preparation failed ({e})")
 
     def lernlauf_ernte_starten(self):
@@ -8862,7 +9003,10 @@ class Service:
         import anlernen as _al
         dd = self.cfg["data_dir"]
         try:
-            zustand, fehler = _ll.lauf_lesen(dd)
+            # .509 J13 (a): geduldig lesen — die Anker-Phase startet direkt nach
+            # dem letzten Ernte-Schrieb, also genau im Blink-Fenster eines
+            # Dateisystems mit nicht-atomarem Rename.
+            zustand, fehler = _ll.lauf_lesen_geduldig(dd)
             if zustand is None:
                 self.log(f"anchor stage: no learning run to work on ({fehler or 'no state'})")
                 return
@@ -9442,6 +9586,16 @@ class Service:
                         "schwellen": schwellen, "lauf_dir": lauf_dir,
                         "clip_quelle": "kalib",
                         "clip_vod": cfg.get("clip_vod") is not False,
+                        # .509: auch dieser Auffueller zieht echte Clips von
+                        # Frigate. Ohne das Tor waere er der Zug, der neben
+                        # dem Deckel des Lernlaufs herlaeuft — die Zusage
+                        # „hoechstens N gleichzeitig" gilt fuer ALLE
+                        # Ernte-Wege, sonst gilt sie gar nicht.
+                        "clip_tor": clip_tor_aus_cfg(cfg),
+                        # .509 Review-MUSS: mit dem Tor kommt der Warte-Deckel
+                        # — sonst wartet dieser Auffueller ohne Grenze, und
+                        # seine Job-Frist reisst waehrend des Wartens.
+                        "clip_tor_deckel_s": clip_tor_deckel_s_aus_cfg(cfg),
                         "kalib": {"data_dir": cfg["data_dir"],
                                   "deckel": int(cfg.get("live_kalib_max") or 0)},
                         "log": os.path.join(lauf_dir, "ernte.log")}
@@ -9459,7 +9613,11 @@ class Service:
                             # A3: an die Belegung GEBUNDEN (puls_fuer), damit
                             # ein Zombie nicht den Nachfolger lebendig haelt.
                             return self._worker(_enr).job(
-                                _auftrag, timeout_s=timeout_s,
+                                _auftrag,
+                                # .509 Review-MUSS: Frist = Warten am Tor +
+                                # Analyse (s. Lernlauf/Bruecke).
+                                timeout_s=(timeout_s
+                                           + clip_tor_deckel_s_aus_cfg(cfg)),
                                 puls=self._plaetze.puls_fuer(_enr))
                 time.sleep(1)
 
@@ -9584,6 +9742,18 @@ class Service:
                                      "clip_s": float(d.get("clip_s") or d.get("dauer_s") or 0)})
             timeout_s = int(self.cfg.get("nachhol_analyse_timeout_s") or 300)
             fps = self.cfg.get("fps_sample")
+            # .509: DASSELBE Clip-Download-Tor wie der Lernlauf (eine Lesestelle,
+            # dieselben Slot-Dateien) — beim „ganzen Durchgang" laufen hier K
+            # Abholer, und ein Pass-Check waehrend eines Lernlaufs zoege sonst
+            # zusaetzliche Clips neben dessen Deckel. Der Klick wartet dafuer
+            # gegebenenfalls kurz am Tor; das ist der bewusste Preis dafuer,
+            # dass Frigate ueberhaupt antwortet (Feldbefund 06.09.).
+            tor_n = clip_tor_aus_cfg(self.cfg)
+            # .509 Review-SOLL: derselbe Warte-Deckel wie im Lernlauf — sonst
+            # kann der Klick des Nutzers hinter dessen Downloads verhungern,
+            # und seine Frist ist die knappste der drei Ernte-Wege (sie traegt
+            # den Erzeugungs-Aufschlag nicht).
+            tor_deckel_s = clip_tor_deckel_s_aus_cfg(self.cfg)
             n_ges = len(eids)
             offen = collections.deque(eids)
             q_lock, buch_lock = threading.Lock(), threading.Lock()
@@ -9635,6 +9805,8 @@ class Service:
                             "kalib": {"data_dir": dd,
                                       "deckel": int(self.cfg.get("live_kalib_max") or 0)},
                             "clip_vod": self.cfg.get("clip_vod") is not False,
+                            "clip_tor": tor_n,          # .509, s. oben
+                            "clip_tor_deckel_s": tor_deckel_s,
                             "log": os.path.join(bdir, "ernte.log")}
                         # A1 (05.09.): Klasse statt Text-Etikett (s. Kalibrier-Auffueller).
                         # C2: Anmeldung DAVOR, damit die Fairness-Regel diesen
@@ -9655,7 +9827,12 @@ class Service:
                                 # ist der Fortschritts-Marker der Bruecken-UI).
                                 # A3: an die Belegung gebunden (puls_fuer).
                                 antwort = self._worker(_enr).job(
-                                    _auftrag, timeout_s=timeout_s,
+                                    # .509 Review-MUSS: das Warten am Tor
+                                    # zaehlt zum Budget, sonst reisst die Frist
+                                    # waehrend eines legitimen Wartens (s. der
+                                    # gleiche Aufschlag im Lernlauf).
+                                    _auftrag,
+                                    timeout_s=timeout_s + tor_deckel_s,
                                     puls=self._plaetze.puls_fuer(_enr))
                                 wall_s = time.perf_counter() - _t_ev
                                 abgesendet = True
@@ -9669,6 +9846,15 @@ class Service:
                     if not abgesendet:
                         time.sleep(1)
                 eintrag = {"eid": eid, "ok": bool(antwort and antwort.get("ok"))}
+                if antwort is None:
+                    # .509 Review-SOLL: eine ausgebliebene Antwort (Frist
+                    # gerissen, Worker gestorben) landete bis eben als
+                    # {"eid": …, "ok": false} OHNE Grund in der fertig.jsonl
+                    # der Bruecke — von einem regulaer geernteten Ereignis
+                    # ohne Gesicht nicht zu unterscheiden, und die Bewertung
+                    # rechnete auf einer stillschweigend unvollstaendigen
+                    # Grundlage. Derselbe Text wie im Lernlauf.
+                    eintrag["fehler"] = "worker timeout/crash"
                 if antwort:
                     # .346/.505: die Zaehler-Felder kommen aus der EINEN Quelle
                     # core.ernte.ZAEHLER_FELDER (die feste Sechser-Liste hier war
@@ -10088,25 +10274,65 @@ class Service:
         from core import lernlauf as _ll
         from core import wanduhr as _wu
         dd = self.cfg["data_dir"]
-        zustand, fehler = _ll.lauf_lesen(dd)
+        # .509 J13 (a)/(h): EIN Melder fuer den Blink der Zustandsdatei — genau
+        # eine Zeile je Vorfall, damit ein Nutzer-Log die Haeufigkeit zeigt.
+        blink = {"n": 0}
+
+        def _blink_melden(versuch, von):
+            """.509 Review-SOLL — GEDROSSELT. Der Melder haengt an zehn
+            geduldigen Griffen; auf dem Dateisystem des Feldfalls sind das
+            20-70 Zeilen je Stunde, und der 300-Zeilen-Ringpuffer des Dienstes
+            bestand nach ein paar Stunden nur noch aus dieser einen Meldung —
+            Worker-Fehler und Buchhaltungs-Befunde waren aus /log gedraengt,
+            die Ferndiagnose so blind wie vor der Haertung. Jetzt: die ersten
+            drei Vorfaelle einzeln, danach jeder hundertste mit laufender
+            Summe, am Lauf-Ende eine Bilanzzeile."""
+            blink["n"] += 1
+            n = blink["n"]
+            if n <= self.LERNLAUF_BLINK_EINZELN:
+                self.log(f"run state file missing for a moment ({versuch}/{von}) "
+                         "— continuing (non-atomic rename on this filesystem?)")
+            elif n % self.LERNLAUF_BLINK_SAMMEL == 0:
+                self.log(f"run state file missing for a moment — {n} times so "
+                         "far in this run (non-atomic rename on this "
+                         "filesystem?), still continuing")
+
+        # .509 Review-MUSS: die Leser des Ernte-Weges lesen UNTER store_lock
+        # (mit_lock) — alle Schreiber halten es waehrend ihres Renames, ein
+        # Leser mit Lock sieht das Blink-Fenster damit gar nicht erst; die
+        # Nachpruefungen bleiben der Rueckfall fuer echte Fremd-Effekte.
+        zustand, fehler = _ll.lauf_lesen_geduldig(dd, melde=_blink_melden,
+                                                  mit_lock=True)
         if zustand is None:
             if fehler:
+                # .509 Review-MUSS: bis eben endete der Eintritt hier mit einer
+                # blossen Logzeile — der Zustand blieb auf „ernte/harvesting"
+                # ohne Thread stehen (der Wizard-Zombie, den J13 abschaffen
+                # sollte). Der Halt wird jetzt geschrieben, sobald die Datei
+                # wieder lesbar ist; ist sie es nicht, sagt das die Meldung.
                 self.log(f"harvest not started: run state unreadable ({fehler})")
+                self._lernlauf_unterbrochen(
+                    dd, f"harvest not started: run state unreadable ({fehler})",
+                    infra=True)
             return
         if zustand.get("phase") not in ("vorbereitung", "ernte"):
             return
+        # .509 J13 (a): eine Marke von gestern darf den Lauf von heute nicht
+        # als „abgebrochen" lesen lassen — der Koordinator-Start raeumt sie weg
+        # (der zweite Raeumer sitzt an der Lauf-Anlage).
+        _ll.abbruch_marke_raeumen(dd)
         liste = zustand.get("events_liste")
         if not liste:
-            _ll.lauf_fortschreiben(dd, fortschritt={
-                "status": "harvest failed: no prepared event list"})
+            self._lernlauf_unterbrochen(
+                dd, "run state carries no prepared event list", zustand)
             self.log("harvest failed: run state carries no events_liste")
             return
         if not self.cfg.get("worker", True):
             # Die Ernte laeuft AUSSCHLIESSLICH ueber den Worker (1 Event je Job =
             # der Live-Vorrang-Mechanismus selbst) — ohne ihn ehrlich stoppen.
-            _ll.lauf_fortschreiben(dd, fortschritt={
-                "status": "harvest failed: the persistent worker is disabled "
-                          "(config 'worker'), the harvest needs it"})
+            self._lernlauf_unterbrochen(
+                dd, "the persistent worker is disabled (config 'worker'), "
+                    "the harvest needs it", zustand)
             self.log("harvest failed: worker disabled")
             return
         lauf_id = zustand.get("lauf_id") or ("L" + time.strftime("%Y%m%d_%H%M%S"))
@@ -10123,8 +10349,8 @@ class Service:
             schwellen = ernte_schwellen_aus_cfg(self.cfg)
             fehlend = _ern.schwellen_pruefen(schwellen)
             if fehlend:
-                _ll.lauf_fortschreiben(dd, fortschritt={
-                    "status": f"harvest failed: thresholds missing ({', '.join(fehlend)})"})
+                self._lernlauf_unterbrochen(
+                    dd, f"thresholds missing ({', '.join(fehlend)})", zustand)
                 self.log(f"harvest failed: thresholds missing ({fehlend})")
                 return
             starts = [e.get("start") for e in liste if e.get("start")]
@@ -10152,9 +10378,25 @@ class Service:
         fps = manifest.get("fps_sample") or self.cfg.get("fps_sample")
         # Phasen-Uebergang ABBRUCHSICHER: fortschreiben liefert None, wenn der
         # Nutzer eben abgebrochen hat (lauf_schreiben haette den Lauf wiederbelebt).
-        if _ll.lauf_fortschreiben(dd, phase="ernte", lauf_id=lauf_id,
-                                  fortschritt={"status": "harvesting"}) is None:
-            self.log("harvest not started (run aborted)")
+        # .509 J13 (a): „None" heisst seit dem Feldbefund NICHT mehr automatisch
+        # Abbruch — erst nach den Nachpruefungen und nur MIT Abbruch-Marke.
+        _z1 = _ll.lauf_fortschreiben_geduldig(
+            dd, {"phase": "ernte", "lauf_id": lauf_id,
+                 "fortschritt": {"status": "harvesting"}},
+            melde=_blink_melden)
+        if _z1 is not None:
+            # .509 J13: den Rueckfall frisch halten — muss die Zustandsdatei
+            # spaeter aus ihm NEU angelegt werden (b), soll sie den Stand von
+            # jetzt tragen und nicht den von vor dem Phasenwechsel.
+            zustand = _z1
+        else:
+            if _ll.abbruch_marke_lesen(dd, lauf_id):
+                self.log("harvest not started (run aborted)")
+            else:
+                self._lernlauf_unterbrochen(
+                    dd, "run state file gone before the harvest started "
+                        "(no abort marker — infrastructure, not a user abort)",
+                    zustand, infra=True)
             return
         erworben = False
         try:
@@ -10162,10 +10404,21 @@ class Service:
             # ist; danach pausiert das Auto-Sammeln fuer die Lauf-Dauer.
             gewartet = False
             while True:
-                z0, f0 = _ll.lauf_lesen(dd)
+                z0, f0 = _ll.lauf_lesen_geduldig(dd, melde=_blink_melden,
+                                                 mit_lock=True)
                 if z0 is None:
-                    self.log(f"harvest stopped: run state unreadable ({f0})"
-                             if f0 else "harvest stopped while waiting (run aborted)")
+                    if f0:
+                        self.log(f"harvest stopped: run state unreadable ({f0})")
+                        self._lernlauf_unterbrochen(
+                            dd, f"harvest stopped: run state unreadable ({f0})",
+                            zustand, lauf_id=lauf_id)
+                    elif _ll.abbruch_marke_lesen(dd, lauf_id):
+                        self.log("harvest stopped while waiting (run aborted)")
+                    else:
+                        self._lernlauf_unterbrochen(
+                            dd, "run state file gone while waiting for the "
+                                "auto-collection (no abort marker)",
+                            zustand, infra=True)
                     return
                 with self._sammel_lock:
                     if not self._sammel_laeuft:
@@ -10175,13 +10428,27 @@ class Service:
                 if not gewartet:
                     gewartet = True
                     self.log("harvest waiting for a running collection to finish")
-                    _ll.lauf_fortschreiben(dd, fortschritt={
-                        "status": "waiting for the auto-collection to finish"})
+                    _ll.lauf_fortschreiben_geduldig(dd, {"fortschritt": {
+                        "status": "waiting for the auto-collection to finish"}},
+                        melde=_blink_melden)
                 time.sleep(5)
             if gewartet:
-                if _ll.lauf_fortschreiben(dd,
-                                          fortschritt={"status": "harvesting"}) is None:
-                    self.log("harvest stopped (run aborted)")
+                if _ll.lauf_fortschreiben_geduldig(
+                        dd, {"fortschritt": {"status": "harvesting"}},
+                        melde=_blink_melden) is None:
+                    # .509 Review-SOLL: das war der EINZIGE Ausgang des
+                    # Koordinators ohne Marken-Frage und ohne `unterbrochen` —
+                    # der Lauf verschwand still aus dem Wizard, das Log meldete
+                    # faelschlich „run aborted", das geerntete Material blieb
+                    # ungenutzt liegen. Jetzt derselbe Block wie im Zweig 25
+                    # Zeilen darueber.
+                    if _ll.abbruch_marke_lesen(dd, lauf_id):
+                        self.log("harvest stopped (run aborted)")
+                    else:
+                        self._lernlauf_unterbrochen(
+                            dd, "run state file gone while starting the "
+                                "harvest (no abort marker)",
+                            zustand, infra=True, lauf_id=lauf_id)
                     return
             self.log(f"harvest starting (run {lauf_id}): auto-collection paused until done")
             fertig, summe = _ern.fertig_lesen(lauf_dir)
@@ -10202,6 +10469,20 @@ class Service:
             # aus der Config (Default-Paar in load_config, kein Hardcode).
             erz_alter_min = float(self.cfg.get("clip_erzeugung_alter_min") or 30)
             erz_deckel_s = int(self.cfg.get("clip_erzeugung_deckel_s") or 300)
+            # .509 Clip-Download-Tor: EINMAL gelesen (clip_tor_aus_cfg), dann als
+            # Job-Feld an jeden Ernte-Job und an den Vorlade-Thread. Es deckelt
+            # die gleichzeitigen FRIGATE-ZUEGE — die K Abholer und ihre Plaetze
+            # bleiben unveraendert, sie stehen nur kurz am Tor an, wenn schon
+            # genug Clips unterwegs sind.
+            tor_n = clip_tor_aus_cfg(self.cfg)
+            # .509 Review-MUSS: der WARTE-DECKEL am Tor. Er wird dem Job
+            # mitgegeben UND auf dessen Frist aufgeschlagen — beides gehoert
+            # zusammen: der Deckel sorgt dafuer, dass das Warten als eigene
+            # Klasse endet (`clip_tor_deckel` -> ungebucht, spaeter geholt),
+            # der Aufschlag dafuer, dass die Frist waehrend eines LEGITIMEN
+            # Wartens nicht reisst. Ohne beides wurde das Warten am Tor zum
+            # endgueltigen „worker timeout/crash" (nachgestellt: 7 von 8).
+            tor_deckel_s = clip_tor_deckel_s_aus_cfg(self.cfg)
             # .313 Ernte-Rate (User-Fund 21.08.: '~5 min' geschaetzt, 11 min real):
             # die Restzeit kommt aus den EIGENEN Proben dieses Laufs (clip_s,
             # wall_s je fertigem Event), bis dahin aus der gespeicherten Rate des
@@ -10243,29 +10524,83 @@ class Service:
             q_lock, buch_lock = threading.Lock(), threading.Lock()
             vor_lock = threading.Lock()      # .262: EIN Vorlade-Slot fuer alle
             stopp = threading.Event()
-            ende = {"grund": None}
+            # .509 J13: `art` sagt, WIE der Lauf endete — davon haengt ab, ob
+            # danach noch geschrieben wird. "abbruch"/"neustart" hinterlassen
+            # NICHTS (der Nutzer bzw. der Boot-Resume weiss, was zu tun ist),
+            # alles andere hinterlaesst den `unterbrochen`-Zustand (b).
+            ende = {"grund": None, "art": None}
             laufende = {}                    # eid -> Anzeigetext (fuer die UI-Zeile)
             erledigt = {"n": n - len(offen)}  # Resume: schon Gebuchtes zaehlt mit
+            # .509 Review-SOLL: der Auto-Resume-Zaehler gilt je STOERUNG, nicht
+            # je Lauf. Sobald DIESER Koordinator ein Ereignis gebucht hat, ist
+            # die vorige Stoerung ueberstanden und die Automatik steht wieder
+            # zur Verfuegung (Vorbild: die Anker-Crash-Wache setzt
+            # `anker_neuanlaeufe` bei Erfolg auf 0). Ohne das endete ein
+            # 40.000er-Nachtlauf beim zweiten, voellig unabhaengigen Vorfall
+            # sicher als Steher. Eine echte Crash-Schleife (Fehler SOFORT nach
+            # dem Resume, ohne ein einziges gebuchtes Ereignis) bleibt gefangen.
+            fortschritt_start = {"n": erledigt["n"], "zurueckgesetzt": False}
 
-            def _stopp(grund):
+            def _stopp(grund, art="infra"):
                 """Den ganzen Lauf beenden — EIN Grund, EINE Logzeile, egal wie
-                viele Abholer den Abbruch gleichzeitig bemerken."""
+                viele Abholer den Abbruch gleichzeitig bemerken. `art` traegt
+                die Folge (s. `ende`)."""
                 with buch_lock:
                     erster = ende["grund"] is None
                     if erster:
-                        ende["grund"] = grund
+                        ende["grund"], ende["art"] = grund, art
                 stopp.set()
                 if erster:
                     self.log(grund)
 
             def _lauf_lebt(grund_wenn_abgebrochen):
-                """Steht der Lauf noch? (`lauf_lesen` liefert None = abgebrochen
-                oder unlesbar.) Sonst: alle Abholer beenden."""
+                """Steht der Lauf noch? Sonst: alle Abholer beenden.
+
+                .509 J13 (a) — der Feldbefund vom 06.09.: drei Laeufe endeten
+                39/72/39 s nach dem Start als „run aborted", ohne dass jemand
+                abgebrochen hatte. Die Zustandsdatei war VOR und NACH dem
+                Moment da; sie BLINKT (nicht-atomares Rename auf dem
+                Dateisystem des Nutzers). Ein einzelner leerer Moment ist
+                seitdem KEIN Urteil:
+                  * fehlt sie, entscheidet zuerst die EXPLIZITE Abbruch-Marke:
+                    liegt sie, war es der Nutzer und der Lauf endet SOFORT
+                    (der Abbruch-Knopf darf nicht auf Nachpruefungen warten —
+                    er schreibt die Marke, BEVOR er die Datei entfernt),
+                  * ohne Marke wird nachgeprueft (lauf_lesen_geduldig),
+                  * ist sie danach wieder da, muss die Lauf-ID stimmen —
+                    eine fremde ID heisst: ein ANDERER Lauf hat uebernommen,
+                  * ist sie dann immer noch weg, ist das eine
+                    Infrastruktur-Stoerung, kein Abbruch."""
                 z, ferr = _ll.lauf_lesen(dd)
+                if z is None and not ferr:
+                    if _ll.abbruch_marke_lesen(dd, lauf_id):
+                        _stopp(grund_wenn_abgebrochen, art="abbruch")
+                        return False
+                    # (h): der leere Moment wird BELEGT, bevor nachgeprueft
+                    # wird — daran zeigt ein Nutzer-Log spaeter die
+                    # Haeufigkeit. Gemeldet wird hier statt in
+                    # `lauf_lesen_geduldig`, weil der erste (erfolglose) Blick
+                    # schon gefallen ist; die Nachpruefung meldet dann nicht
+                    # noch einmal.
+                    _blink_melden(1, _ll.BLINK_VERSUCHE)
+                    z, ferr = _ll.lauf_lesen_geduldig(dd, mit_lock=True)
                 if z is not None:
-                    return True
-                _stopp(f"harvest stopped: run state unreadable ({ferr})"
-                       if ferr else grund_wenn_abgebrochen)
+                    if str(z.get("lauf_id") or "") in ("", lauf_id):
+                        return True
+                    _stopp(f"harvest stopped: the run state now belongs to "
+                           f"{z.get('lauf_id')}, not to {lauf_id} — this run "
+                           f"was replaced", art="fremd")
+                    return False
+                if ferr:
+                    _stopp(f"harvest stopped: run state unreadable ({ferr})",
+                           art="fehler")
+                elif _ll.abbruch_marke_lesen(dd, lauf_id):
+                    # Der Nutzer hat waehrend der Nachpruefungen abgebrochen.
+                    _stopp(grund_wenn_abgebrochen, art="abbruch")
+                else:
+                    _stopp("harvest stopped: run state file gone and no abort "
+                           "marker — infrastructure, not a user abort",
+                           art="infra")
                 return False
 
             def _vorladen_anstossen(worker_erzeugt):
@@ -10324,7 +10659,13 @@ class Service:
                                 frigate_url=self.cfg.get("frigate_url"),
                                 quelle="vorlader", alter_min=_alter,
                                 erzeugung=_erz,
-                                erzeugung_deckel_s=erz_deckel_s)
+                                erzeugung_deckel_s=erz_deckel_s,
+                                # .509: der Vorlader ist ein Frigate-Zug wie
+                                # jeder andere und zaehlt am selben Tor mit —
+                                # sonst waeren es N+1 gleichzeitige Downloads.
+                                # Und er wartet nicht endlos: derselbe Deckel
+                                # wie die Ernte-Jobs (Review-MUSS).
+                                tor_n=tor_n, tor_deckel_s=tor_deckel_s)
                         except Exception:
                             pass   # der Ernte-Job meldet Fehler selbst
                         finally:
@@ -10357,11 +10698,27 @@ class Service:
                     self.log(f"harvest {eid}: Frigate not answering — "
                              "event NOT booked, waiting for recovery")
                     while frigate_schoner.gesperrt() and not stopp.is_set():
-                        if _ll.lauf_fortschreiben(dd, fortschritt={
-                                "status": "waiting for Frigate to recover "
-                                          "(protector active)"}) is None:
-                            _stopp("harvest stopped while waiting for "
-                                   "Frigate (run aborted)")
+                        if _ll.lauf_fortschreiben_geduldig(
+                                dd, {"fortschritt": {
+                                    "status": "waiting for Frigate to recover "
+                                              "(protector active)"}},
+                                melde=_blink_melden,
+                                # .509 Review-SOLL (g): auch DIESER Schrieb
+                                # laeuft im Abholer-Thread und muss nach dem
+                                # Stopp schweigen — sonst legt er die Zeile
+                                # „waiting for Frigate…" in einen laengst
+                                # angehaltenen Zustand (Statuszeile gegen
+                                # Halt). Dasselbe Praedikat wie beim
+                                # Fortschritts-Schrieb des Koordinators.
+                                abbruch=lambda: ende["grund"] is not None) is None:
+                            # .509 J13 (a): erst die Marke fragen, dann urteilen.
+                            if _ll.abbruch_marke_lesen(dd, lauf_id):
+                                _stopp("harvest stopped while waiting for "
+                                       "Frigate (run aborted)", art="abbruch")
+                            else:
+                                _stopp("harvest stopped: run state file gone "
+                                       "while waiting for Frigate (no abort "
+                                       "marker)", art="infra")
                             return False
                         if frigate_schoner.erlaubt():
                             try:            # aktive Probe haelt die Sperre
@@ -10372,9 +10729,25 @@ class Service:
                                 pass        # fehler() lief, Sperre verlaengert
                         time.sleep(10)
                     if not stopp.is_set():
-                        if _ll.lauf_fortschreiben(dd, fortschritt={
-                                "status": "harvesting"}) is None:
-                            _stopp("harvest stopped (run aborted)")
+                        if _ll.lauf_fortschreiben_geduldig(
+                                dd, {"fortschritt": {"status": "harvesting"}},
+                                melde=_blink_melden,
+                                abbruch=lambda: ende["grund"] is not None) is None:
+                            # .509 Review-MUSS: der GRUNDTEXT haengt an der
+                            # `art`, nicht nur die Klasse. Vorher hiess dieser
+                            # Halt auch ohne Abbruch „harvest stopped (run
+                            # aborted)" — und genau dieser Satz landet
+                            # woertlich in der Halt-Zeile der Lauf-Seite und im
+                            # Support-Log. Er ist der Satz, wegen dem J13
+                            # ueberhaupt gebaut wurde.
+                            if _ll.abbruch_marke_lesen(dd, lauf_id):
+                                _stopp("harvest stopped while waiting for "
+                                       "Frigate (run aborted)", art="abbruch")
+                            else:
+                                _stopp("harvest stopped: run state file gone "
+                                       "while waiting for Frigate (no abort "
+                                       "marker) — infrastructure, not a user "
+                                       "abort", art="infra")
                     return False
                 # .288: Erzeugungs-Abbrueche (Deckel erreicht ODER Probe
                 # tot, Frigate inzwischen aber wieder da) NIE als
@@ -10383,6 +10756,17 @@ class Service:
                 # Vermerk), ein spaeterer Lauf/Resume holt es nach
                 # (derselbe Nicht-gebucht-Weg wie beim Infra-Ausfall).
                 _ftxt = str((antwort or {}).get("fehler") or "")
+                # .509 Review-MUSS: das WARTEN AM TOR ist unsere eigene Bremse
+                # und darf nie als Fehler des Ereignisses enden. Eigene
+                # Logzeile, kein fertig.jsonl-Eintrag, kein durchsucht-Vermerk
+                # — der naechste Lauf holt es. (Die Klasse steht seit .509 im
+                # Text der Ausnahme; vorher matchte diese Pruefung NIE, der
+                # ganze Nicht-buchen-Zweig war tot.)
+                if "clip_tor_deckel" in _ftxt:
+                    self.log(f"harvest {eid}: waited at the clip download gate "
+                             f"up to the cap ({tor_deckel_s}s) — event NOT "
+                             "booked, a later run retries it")
+                    return False
                 if "frigate_stoerung" in _ftxt or "erzeugung_deckel" in _ftxt:
                     self.log(f"harvest {eid}: clip generation aborted "
                              f"({_ftxt[:120]}) — event NOT booked, "
@@ -10495,7 +10879,10 @@ class Service:
                 if getattr(self, "_neustart_laeuft", False):
                     # execv im Anflug: keinen neuen Worker starten (Waisen-Fenster,
                     # Widerleger .75/L2) — der Boot-Resume setzt den Lauf fort.
-                    _stopp("harvest paused for service restart — resumes after boot")
+                    # .509 J13 (b): BEWUSST kein `unterbrochen` — der Zustand
+                    # bleibt in `ernte`, genau daran erkennt ihn der Boot-Resume.
+                    _stopp("harvest paused for service restart — resumes after boot",
+                           art="neustart")
                     return "ende"
                 self._bg_hungert()                # B4
                 # C2 (05.09.2026, bauplan_0505.md §1): die Ernte NIMMT
@@ -10544,6 +10931,15 @@ class Service:
                             # kranke Erzeugungspfad (frigateUser24029)
                             # wird nur noch als Fallback betreten.
                             "clip_vod": self.cfg.get("clip_vod") is not False,
+                            # .509: das Clip-Download-Tor reist als Job-Feld
+                            # mit (Muster clip_erzeugung_deckel_s) — der
+                            # Download passiert im Worker-Subprozess, das Tor
+                            # traegt deshalb ueber Dateisperren.
+                            "clip_tor": tor_n,
+                            # .509 Review-MUSS: der Warte-Deckel reist mit —
+                            # der Worker wartet am Tor, also muss er dort auch
+                            # aufhoeren duerfen (Klasse `clip_tor_deckel`).
+                            "clip_tor_deckel_s": tor_deckel_s,
                             "log": os.path.join(lauf_dir, "ernte.log")}
                 antwort, abgesendet, _t_ev = None, False, None
                 # A1 (05.09.): Klasse statt Text-Etikett — der Waechter reiht eine
@@ -10569,7 +10965,18 @@ class Service:
                                 # Wartezeit MIT — sonst killte der Dienst den Worker mitten
                                 # im Erzeugungs-Warten und der Kill waere selbst wieder der
                                 # Leak-Abbruch aus Serie E.
-                                timeout_s=timeout_s
+                                # .509 Review-MUSS: die Frist traegt AUCH die
+                                # moegliche Wartezeit am Clip-Tor. Sie lief
+                                # sonst waehrend des Wartens ab, der Dienst
+                                # killte den Worker, und `_fehler_buchbar` sah
+                                # eine leere Antwort und buchte das Ereignis
+                                # ENDGUELTIG als „worker timeout/crash" —
+                                # gemessen 7 von 8 bei Tor 1 und 4 Abholern.
+                                # Budget = Warten + (Erzeugung) + Analyse,
+                                # jeder Posten mit eigenem Deckel; die
+                                # Haenger-Erkennung bleibt, nur mit dem
+                                # ehrlichen Budget.
+                                timeout_s=timeout_s + tor_deckel_s
                                 + (erz_deckel_s if alt_ev else 0),
                                 # A2 (05.09.): Lebenszeichen des Platzes,
                                 # sonst zieht der Waechter jede Ernte
@@ -10645,6 +11052,27 @@ class Service:
 
             letzter_schrieb = {"ts": 0.0, "sig": None}
 
+            def _warte_zustand():
+                """.509 EHRLICHER ZUSTAND: worauf wartet die Ernte gerade? ->
+                Kennung fuer die Seite oder None.
+
+                Zwei Wartegruende, die dem Nutzer bis .508 wie ein Haenger
+                aussahen: der Frigate-Schoner (Sperre nach Netz-Fehlern —
+                sein Text stand nur im `status`, den ausschliesslich die
+                Expert-Sicht zeigt, und den das Poll-Widget nie nachfuehrt)
+                und seit .509 das Clip-Download-Tor. EIN Schreiber, deshalb
+                hier beim Koordinator und nicht in den Abholern; der Tor-Stand
+                wird gemessen (core.frames.tor_zustand), nicht geraten."""
+                if frigate_schoner.gesperrt():
+                    return "Frigate to recover (protector active)"
+                try:
+                    belegt, wartend = _frames.tor_zustand(tor_n, dd)
+                except OSError:
+                    return None
+                if wartend:
+                    return f"clip download ({belegt} in flight)"
+                return None
+
             def _fortschritt_schreiben(rest_txt):
                 """Die Fortschritts-Zeile der Seite — EIN Schreiber (s. Koordinator).
 
@@ -10658,7 +11086,20 @@ class Service:
                     i = erledigt["n"]
                     s = dict(summe)
                     aktuell = " · ".join(laufende.values())
-                sig = (i, aktuell, rest_txt, s.get("fehler"), s.get("kandidaten"))
+                    gestoppt = ende["grund"] is not None
+                if gestoppt:
+                    # .509 J13 (g) — DIE Zombie-Quelle des Feldbefunds: nach dem
+                    # Stopp schrieb genau diese Zeile den Zustand noch einmal,
+                    # legte die (blinkende) Datei damit NEU an und der Wizard
+                    # zeigte „running" ohne einen Thread dahinter. Nach einem
+                    # Stopp schreibt nur noch der `unterbrochen`-Zustand aus (b).
+                    # Zweite Haelfte derselben Wache: `abbruch=` unten — sie
+                    # fasst den Aufruf, der beim Wegblinken ins Warten geriet
+                    # und erst NACH dem Stopp zum Schreiben kaeme.
+                    return i, s
+                wartet = _warte_zustand()          # .509
+                sig = (i, aktuell, rest_txt, s.get("fehler"), s.get("kandidaten"),
+                       wartet)
                 if (sig == letzter_schrieb["sig"]
                         and time.monotonic() - letzter_schrieb["ts"] < 15):
                     return i, s
@@ -10673,7 +11114,11 @@ class Service:
                       "rest": rest_txt,
                       # .87: die aktuelles-Event-Zeile verschwindet, wenn nichts
                       # mehr laeuft (ein None LOESCHT den Schluessel).
-                      "analysing": aktuell or None}
+                      "analysing": aktuell or None,
+                      # .509: worauf gewartet wird — None LOESCHT den
+                      # Schluessel, sobald es wieder laeuft (kein klebender
+                      # Warte-Text wie beim `analysing` vor .87).
+                      "waiting for": wartet}
                 if s.get("vorab_verworfen"):
                     # .346: was die Vorschranke VOR Landmarken/Pose aussortiert
                     # hat (zu klein/zu unscharf). Nur zeigen, wenn es etwas gab.
@@ -10695,8 +11140,22 @@ class Service:
                 lf = s.get("letzter_fund")
                 if lf:
                     fs["last find"] = f"{lf.get('kamera')} @ {lf.get('t')} s"
-                if _ll.lauf_fortschreiben(dd, fortschritt=fs) is None:
-                    _stopp("harvest stopped (run aborted)")
+                updates = {"fortschritt": fs}
+                if (not fortschritt_start["zurueckgesetzt"]
+                        and i > fortschritt_start["n"]):
+                    # s. `fortschritt_start`: echter Fortschritt = die Stoerung
+                    # ist ueberstanden, die Automatik steht wieder bereit.
+                    fortschritt_start["zurueckgesetzt"] = True
+                    updates["auto_resume"] = 0
+                if _ll.lauf_fortschreiben_geduldig(
+                        dd, updates, melde=_blink_melden,
+                        abbruch=lambda: ende["grund"] is not None) is None:
+                    if _ll.abbruch_marke_lesen(dd, lauf_id):
+                        _stopp("harvest stopped (run aborted)", art="abbruch")
+                    else:
+                        _stopp("harvest stopped: run state file gone (no abort "
+                               "marker) — infrastructure, not a user abort",
+                               art="infra")
                 return i, s
 
             # C2: der Fortschritt wird von GENAU EINEM Thread geschrieben — dem
@@ -10754,9 +11213,27 @@ class Service:
                     self.log(f"harvest: {len(_waisen)} collector thread(s) still "
                              f"running after 30s ({', '.join(_waisen)}) — they "
                              f"finish their job and stop, no new event is taken")
+                # .509 Review-SOLL: die BILANZ des Blinkens — die Einzelzeilen
+                # sind gedrosselt, die Gesamtzahl darf trotzdem nicht verloren
+                # gehen. Sie ist die Zahl, an der ein Nutzer-Log zeigt, wie
+                # unruhig sein Dateisystem wirklich ist.
+                if blink["n"]:
+                    self.log(f"run state file was missing for a moment "
+                             f"{blink['n']} time(s) during this run — the run "
+                             "continued each time (non-atomic rename on this "
+                             "filesystem?)")
             if ende["grund"]:
                 # Abbruch/Neustart: der Lauf ist NICHT durch — kein Abschluss,
                 # keine Anker-Kette. Die Logzeile stand schon in `_stopp`.
+                # .509 J13 (b): jedes ANDERE Ende hinterlaesst den
+                # `unterbrochen`-Zustand mit Grund und Stand — sonst bliebe
+                # „ernte/harvesting" ohne Thread stehen (der Wizard-Zombie).
+                if ende["art"] not in ("abbruch", "neustart"):
+                    with buch_lock:
+                        _i = erledigt["n"]
+                    self._lernlauf_unterbrochen(
+                        dd, ende["grund"], zustand, stand={"n": _i, "m": n},
+                        infra=(ende["art"] == "infra"), lauf_id=lauf_id)
                 return
             # Buecher-gegen-Platte (Widerleger .75/L3: zaehler_pruefen prueft nur
             # das Dict gegen sich selbst — HIER stehen Datei und Zaehler gegeneinander).
@@ -10768,7 +11245,10 @@ class Service:
                        "analysing": None}      # .87: aktuelles-Event-Zeile raeumen (Forensik-Fund 7)
             if befunde:
                 schluss["files vs counters"] = f"{len(befunde)} mismatches (see log)"
-            _ll.lauf_fortschreiben(dd, fortschritt=schluss)
+            # .509 J13 (g): DIES ist der regulaere Abschluss — der einzige
+            # Schrieb nach dem Ende der Abholer, der KEIN `unterbrochen` ist.
+            _ll.lauf_fortschreiben_geduldig(dd, {"fortschritt": schluss},
+                                            melde=_blink_melden)
             _rate = _wu.ernte_rate_fit(proben)
             if _rate:
                 try:
@@ -10788,8 +11268,12 @@ class Service:
                      f"{summe.get('fehler', 0)} errors")
             self.lernlauf_anker_starten()      # E3: Auto-Kette Ernte -> Anker (wie Vorbereitung -> Ernte)
         except Exception as e:
-            from core import lernlauf as _ll2
-            _ll2.lauf_fortschreiben(dd, fortschritt={"status": f"harvest failed: {e}"})
+            # .509 J13 (b): ein gestorbener Ernte-Thread hinterliess bis .508
+            # `phase: ernte` mit einem Fehler-Status — und die Wizard-Regel
+            # „ernte heisst laeuft" machte daraus ein ewiges „running" ohne
+            # Thread. Jetzt haelt der Lauf sichtbar an und traegt den Grund.
+            self._lernlauf_unterbrochen(dd, f"harvest failed: {e}", zustand,
+                                        lauf_id=lauf_id)
             self.log(f"harvest failed ({type(e).__name__}: {e})")
         finally:
             if erworben:
@@ -10800,6 +11284,161 @@ class Service:
                 self.log("harvest done: auto-collection resumed")
                 if nachhol:
                     self._szenario_nachsammeln()
+
+    # -------------------------------------------- Unterbrechung + Fortsetzen (J13)
+    # .509, Feldbefund 06.09.2026: drei Lernlaeufe eines Nutzers endeten 39/72/39 s
+    # nach dem Erntestart mit „run aborted", ohne dass jemand abgebrochen hatte —
+    # seine Zustandsdatei fehlte fuer einen Moment (nicht-atomares Rename auf
+    # seinem Dateisystem), und danach schrieb der Ernte-Thread sie als Zombie neu.
+    # Die Haertung hat drei Teile: die geduldige Lebensprobe (im Koordinator), der
+    # sichtbare Halt hier — und der Weg zurueck.
+    LERNLAUF_AUTORESUME_S = 60.0     # (c): EIN automatischer Versuch, nach 60 s
+    LERNLAUF_AUTORESUME_MAX = 1      #      danach nur noch der Resume-Knopf
+    # .509 Review-SOLL: Drossel der Blink-Meldung (s. `_blink_melden`) —
+    # Mechanik-Konstanten wie BLINK_VERSUCHE/BLINK_PAUSE_S in core.lernlauf,
+    # keine Anlagen-Schwellen: die ersten N Vorfaelle einzeln, danach jeder
+    # M-te mit Summe. Ueberschreibbar (Proben), aber kein Config-Schluessel.
+    LERNLAUF_BLINK_EINZELN = 3
+    LERNLAUF_BLINK_SAMMEL = 100
+
+    def _lernlauf_unterbrochen(self, dd, grund, zustand=None, stand=None,
+                               infra=False, lauf_id=None):
+        """Den Lauf sichtbar ANHALTEN statt ihn still stehen zu lassen (b):
+        phase -> `unterbrochen`, mit englischem Kurz-Grund und Stand (n/m).
+        `zustand` ist der Rueckfall, falls die Datei dauerhaft fehlt — dann
+        wird sie daraus neu angelegt, damit ein Resume ueberhaupt etwas
+        vorfindet. `infra=True` (Datei-Moment dauerhaft, Frigate-Schoner)
+        armiert zusaetzlich den EINEN Auto-Resume-Versuch (c) und merkt die
+        Faehigkeit dazu IM ZUSTAND (Review-SOLL: ein Neustart in den 60 s
+        darf den zugesagten Versuch nicht verschlucken).
+        `lauf_id` ist der Lauf, DESSEN Halt gemeint ist — steht inzwischen ein
+        anderer in der Datei, wird nichts geschrieben.
+        -> der geschriebene Zustand oder None. Wirft nie: der Aufrufer ist in
+        aller Regel selbst schon ein Fehlerpfad."""
+        from core import lernlauf as _ll_u
+        # .509 Review-SOLL: der NUTZER-ABBRUCH gewinnt immer. Zwischen dem
+        # Stopp und diesem Aufruf liegt der Abholer-Join von bis zu 30 s — in
+        # dieser Zeit kann der Nutzer abgebrochen haben (Zustandsdatei weg,
+        # Lauf-Ordner im Trash). Ohne diese Frage legte der Halt die Datei aus
+        # dem Rueckfall NEU an und der Auto-Resume fuhr den abgebrochenen Lauf
+        # 60 s spaeter gegen einen Ordner im Trash wieder an.
+        if _ll_u.abbruch_marke_lesen(dd, lauf_id):
+            self.log(f"learning run interrupted ({grund}) — but the user "
+                     "aborted meanwhile, so nothing is recorded")
+            return None
+        try:
+            z = _ll_u.unterbrochen_schreiben(
+                dd, grund, stand=stand, lauf_id=lauf_id,
+                auto_resume_faehig=bool(infra),
+                rueckfall=dict(zustand, fortschritt=dict(
+                    (zustand or {}).get("fortschritt") or {})) if zustand else None,
+                melde=lambda v, n: self.log(
+                    f"run state file missing for a moment ({v}/{n}) — "
+                    "continuing (non-atomic rename on this filesystem?)"))
+        except Exception as e:                                    # noqa: BLE001
+            self.log(f"learning run: could not record the interruption "
+                     f"({type(e).__name__}: {e})")
+            return None
+        if z is None:
+            self.log(f"learning run interrupted ({grund}) — no run state of "
+                     "this run left to record it in")
+            return None
+        st = z.get("stand") or {}
+        self.log(f"learning run INTERRUPTED after {st.get('n', '?')}/"
+                 f"{st.get('m', '?')}: {grund} — resume it on the run page")
+        if infra:
+            self._lernlauf_autoresume_armieren(dd, z)
+        return z
+
+    def _lernlauf_autoresume_armieren(self, dd, zustand):
+        """(c) Infrastruktur-Grund: EINMAL automatisch fortsetzen, nach
+        `LERNLAUF_AUTORESUME_S`. Der Zaehler steht im Lauf-Zustand
+        (`auto_resume`), nicht im Prozess — ein Neustart dazwischen darf die
+        Versuche nicht zuruecksetzen. Danach entscheidet der Nutzer."""
+        n = int((zustand or {}).get("auto_resume") or 0)
+        lid = str((zustand or {}).get("lauf_id") or "")
+        if n >= self.LERNLAUF_AUTORESUME_MAX:
+            self.log(f"learning run {lid}: automatic resume already used "
+                     f"({n}/{self.LERNLAUF_AUTORESUME_MAX}) — waiting for the "
+                     "Resume button")
+            return False
+
+        def _spaeter():
+            time.sleep(self.LERNLAUF_AUTORESUME_S)
+            self.log(f"learning run {lid}: automatic resume attempt "
+                     f"{n + 1}/{self.LERNLAUF_AUTORESUME_MAX} after the "
+                     f"interruption")
+            ok, msg = self.lernlauf_fortsetzen(lauf_id=lid, auto=True)
+            if not ok:
+                self.log(f"learning run {lid}: automatic resume did not start "
+                         f"({msg})")
+
+        threading.Thread(target=_spaeter, daemon=True,
+                         name="lernlauf-autoresume").start()
+        self.log(f"learning run {lid}: resuming automatically in "
+                 f"{int(self.LERNLAUF_AUTORESUME_S)}s "
+                 f"(attempt {n + 1}/{self.LERNLAUF_AUTORESUME_MAX})")
+        return True
+
+    def lernlauf_fortsetzen(self, lauf_id=None, auto=False):
+        """Einen `unterbrochen`-Lauf wieder aufnehmen — der Weg des
+        Resume-Knopfes UND des Auto-Resume. Fortgesetzt wird ueber den
+        VORHANDENEN Wiederaufnahme-Weg: die Phase geht zurueck auf die Etappe,
+        in der es passierte, und der Ernte-Koordinator ueberspringt alles,
+        was in fertig.jsonl steht (harvest resume). -> (ok, meldung)."""
+        from core import lernlauf as _ll_f
+        dd = self.cfg["data_dir"]
+        with self._lernlauf_start_lock:
+            z, fehler = _ll_f.lauf_lesen_geduldig(dd)
+            if z is None:
+                # .509 Review-SOLL: alle Rueckgaben dieser Methode landen
+                # woertlich im alert() der Oberflaeche — also uebersetzt. Der
+                # technische Grund bleibt roh im Platzhalter (Stufe-0-Grenze,
+                # Muster antwort.lernlauf_schreibfehler).
+                return False, (_sprache.t("antwort.lernlauf_resume_unlesbar",
+                                          fehler=fehler) if fehler
+                               else _sprache.t("antwort.lernlauf_resume_keiner"))
+            if z.get("phase") != _ll_f.UNTERBROCHEN:
+                # .509 Review-SOLL: OHNE den Rohwert. `phase` traegt deutsche
+                # Kennungen (vorbereitung, ernte, anker …) und die Antwort geht
+                # woertlich in ein alert() der englischen (bzw. fr/es/it)
+                # Oberflaeche — der Fall ist alltaeglich: der Auto-Resume ist
+                # 60 s nach dem Halt von selbst angefahren, die stehende
+                # Halt-Seite weiss davon nichts, der Nutzer drueckt Resume.
+                return False, _sprache.t("antwort.lernlauf_resume_laeuft")
+            if lauf_id and str(z.get("lauf_id") or "") != str(lauf_id):
+                return False, _sprache.t("antwort.lernlauf_resume_fremd")
+            for tn in ("_lernlauf_prep_thread", "_lernlauf_ernte_thread",
+                       "_lernlauf_anker_thread"):
+                t = getattr(self, tn, None)
+                if t and t.is_alive():
+                    return False, _sprache.t("antwort.lernlauf_resume_aktiv")
+            ziel = z.get("unterbrochen_in") or "ernte"
+            if ziel not in ("vorbereitung", "ernte"):
+                return False, _sprache.t("antwort.lernlauf_resume_etappe")
+            _ll_f.abbruch_marke_raeumen(dd)
+            # .509 Review-SOLL: die Halt-Merkmale beim Fortsetzen RAEUMEN.
+            # Blieben sie stehen, nannte ein spaeterer zweiter Halt den Stand
+            # des ERSTEN („interrupted after 29 of 672") direkt neben der
+            # frischen Zaehlerzeile (312/672) — und genau an dieser Zahl haengt
+            # die Entscheidung Resume/Abbruch. Beim naechsten Halt werden sie
+            # frisch gesetzt (unterbrochen_schreiben zieht den Stand notfalls
+            # aus der Fortschritts-Zeile nach).
+            neu = {"phase": ziel, "grund": None, "stand": None,
+                   "unterbrochen_in": None, "unterbrochen_ts": None,
+                   "auto_resume_faehig": None,
+                   "fortschritt": {"status": "harvesting"}}
+            if auto:
+                # Write-ahead wie die Anker-Crash-Wache: der Versuch zaehlt,
+                # BEVOR er laeuft — sonst zaehlte ein Absturz mitten drin nie.
+                neu["auto_resume"] = int(z.get("auto_resume") or 0) + 1
+            if _ll_f.lauf_fortschreiben_geduldig(dd, neu) is None:
+                return False, _sprache.t("antwort.lernlauf_resume_weg")
+            self.log(f"learning run {z.get('lauf_id')} resumes "
+                     + ("automatically" if auto else "on request")
+                     + " (harvest resume — already harvested events are skipped)")
+        self.lernlauf_ernte_starten()
+        return True, _sprache.t("antwort.lernlauf_resume_ok")
 
     # ---------------------------------------------------------- Enrollment (Plan AP4)
     @property
@@ -15090,6 +15729,15 @@ def make_handler(svc):
                     # Phasen-Wache (F5.3): ein alter Browser-Tab darf einen
                     # fortgeschrittenen Lauf nicht still zuruecksetzen.
                     bestand, _le = _ll.lauf_lesen(cfg["data_dir"])
+                    if bestand and bestand.get("phase") == _ll.UNTERBROCHEN:
+                        # .509 J13: eigener Satz statt der Phasen-Meldung — die
+                        # haette hier den gespeicherten deutschen Phasenwert in
+                        # die englische Oberflaeche getragen UND nur zum Abbruch
+                        # geraten, obwohl Fortsetzen der bessere Weg ist.
+                        return self._send(409, json.dumps(
+                            {"ok": False,
+                             "msg": _sprache.t("antwort.lernlauf_unterbrochen")},
+                            ensure_ascii=False), "application/json")
                     if bestand and bestand.get("phase") not in (None, "vorbereitung"):
                         # .83 (Widerleger): ein FERTIGER Anker-Lauf blockiert den naechsten
                         # nicht mehr (vorher war Abbruch+Trash der einzige Weg zum neuen
@@ -15115,6 +15763,11 @@ def make_handler(svc):
                             return self._send(409, json.dumps({"ok": False,
                                               "msg": _sprache.t("antwort.lernlauf_beschaeftigt")},
                                               ensure_ascii=False), "application/json")
+                    # .509 J13 (a): ein neuer Lauf startet ohne die Abbruch-Marke
+                    # des vorigen — sonst laese seine erste Lebensprobe den
+                    # Abbruch von gestern (der zweite Raeumer sitzt am
+                    # Koordinator-Start).
+                    _ll.abbruch_marke_raeumen(cfg["data_dir"])
                     try:
                         with _ll.store_lock(cfg["data_dir"]):     # .87: Anlage unter dem Store-Lock
                             _ll.lauf_schreiben(cfg["data_dir"], dict({"phase": "vorbereitung",
@@ -15213,10 +15866,48 @@ def make_handler(svc):
                 # remove ins fortschreiben-Fenster eines Arbeits-Threads fallen und
                 # der abgebrochene Lauf kam als Zombie zurueck.
                 with _ll.store_lock(cfg["data_dir"]):
-                    z, _le = _ll.lauf_lesen(cfg["data_dir"])
+                    # .509 Review-MUSS: GEDULDIG lesen. Dieser Handler war der
+                    # einzige Marken-Weg ohne Blink-Geduld — traf der Klick
+                    # einen leeren Moment, bekam die Marke eine LEERE lauf_id
+                    # (die gilt laut core.lernlauf fuer JEDEN Lauf), die
+                    # Zustandsdatei blieb liegen (exists() war False), der
+                    # Lauf-Ordner wanderte nicht in den Trash — und die Antwort
+                    # behauptete trotzdem „state removed". Der Nutzer kam nur
+                    # durch ein zweites Druecken heraus.
+                    # `mit_lock` bleibt AUS: wir halten store_lock bereits,
+                    # ein zweites LOCK_EX waere ein Deadlock.
+                    z, _le = _ll.lauf_lesen_geduldig(cfg["data_dir"])
+                    if z is None:
+                        # Ohne bekannten Lauf wird NICHTS behauptet und nichts
+                        # angefasst — lieber ehrlich abweisen als eine Marke
+                        # setzen, die jeden kuenftigen Lauf abbricht.
+                        svc.log("learning run abort: no readable run state "
+                                + (f"({_le})" if _le else "(none present)")
+                                + " — nothing aborted")
+                        return self._send(200, json.dumps(
+                            {"ok": False,
+                             "msg": _sprache.t("antwort.lernlauf_abbruch_leer")},
+                            ensure_ascii=False), "application/json")
+                    # .509 J13 (a): die Marke VOR dem Entfernen — sie ist ab
+                    # jetzt das EINZIGE Zeichen fuer „der Nutzer wollte das".
+                    # Ohne sie liest der Ernte-Koordinator eine fehlende Datei
+                    # als Infrastruktur-Stoerung und haelt den Lauf sichtbar an,
+                    # statt ihn als Abbruch zu verbuchen.
+                    _ll.abbruch_marke_setzen(cfg["data_dir"], z.get("lauf_id"))
                     p = os.path.join(cfg["data_dir"], "state", "lernlauf.json")
-                    if os.path.exists(p):
-                        os.remove(p)
+                    for _versuch in range(2):
+                        try:
+                            os.remove(p)
+                            break
+                        except FileNotFoundError:
+                            # Kann ein Blink sein: einmal nachfassen, bevor
+                            # „removed" behauptet wird.
+                            if _versuch == 0:
+                                time.sleep(_ll.BLINK_PAUSE_S)
+                        except OSError as _re:
+                            svc.log(f"learning run abort: could not remove the "
+                                    f"run state ({_re})")
+                            break
                 verschoben = ""
                 lid = (z or {}).get("lauf_id")
                 if lid:
@@ -15245,6 +15936,16 @@ def make_handler(svc):
                 return self._send(200, json.dumps(
                     {"ok": True, "msg": _sprache.t("antwort.lernlauf_abgebrochen")},
                     ensure_ascii=False), "application/json")
+            if pfad == "/lernlauf_fortsetzen":
+                # .509 J13 (b): der Resume-Knopf eines angehaltenen Laufs.
+                # Duenner Mantel — die Regel (Phase, laufende Threads, Marke,
+                # Phasen-Ruecksetzung) wohnt in svc.lernlauf_fortsetzen, damit
+                # der Auto-Resume DENSELBEN Weg nimmt und nicht einen zweiten.
+                ok, msg = svc.lernlauf_fortsetzen()
+                return self._send(200 if ok else 409,
+                                  json.dumps({"ok": ok, "msg": msg},
+                                             ensure_ascii=False),
+                                  "application/json")
             if pfad == "/catchup_start":                       # .371 Nachholen auf Knopfdruck
                 # User 29.08.: "Wenn unser System startet, passiert nichts. Wenn
                 # unverarbeitete Events da sind, dann bieten wir den Knopf an, die
@@ -18152,7 +18853,13 @@ def make_handler(svc):
                 from core import lernlauf as _ll
                 from routes import lernwizard as _r_wiz
                 try:
-                    zustand, _le = _ll.lauf_lesen(cfg["data_dir"])
+                    # .509 Review-SOLL: GEDULDIG. Traf einer der 3-s-Polls den
+                    # leeren Moment, meldete lauf_status tickt=False, das
+                    # Widget-JS beendete sein Intervall und lud die Seite neu —
+                    # fiel auch der Reload hinein, stand der Tab dauerhaft auf
+                    # der leeren „kein Lauf"-Kachel MIT Start-Knopf, waehrend
+                    # der Lauf weiterlief. Worst case 0,9 s bei 3 s Takt.
+                    zustand, _le = _ll.lauf_lesen_geduldig(cfg["data_dir"])
                 except Exception:
                     zustand = None
                 # .344/.345: der frische Ernte-Puls des laufenden L-Ordners fuer
@@ -20420,7 +21127,13 @@ def startup_selfcheck(svc):
         with open(_t, "w") as f:
             f.write("x")
         os.remove(_t)
-        erg("ok", f"data_dir={dd} (writable), model={aktuelles_modell()}")
+        # .509 J13 (f): der Dateisystem-Typ gehoert in DIESE Zeile. Der
+        # Feldbefund vom 06.09. (Zustandsdatei verschwindet fuer Momente
+        # trotz atomarem Rename) liess sich aus der Ferne nicht zuordnen,
+        # weil nirgends stand, worauf /data liegt.
+        from core.selfcheck import dateisystem_typ as _fstyp
+        erg("ok", f"data_dir={dd} (writable, {_fstyp(dd)}), "
+                  f"model={aktuelles_modell()}")
     except Exception as e:
         erg("FAIL", f"data_dir={dd} NOT writable: {e}")
     # Issue #13: /data ohne Mount = Datenverlust beim naechsten Recreate — laut
