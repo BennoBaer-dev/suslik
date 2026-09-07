@@ -26,7 +26,7 @@ RUN mkdir -p /opt/rocm-dist/opt/rocm-$ROCM/lib/migraphx/lib \
              /opt/rocm-dist/opt/rocm-$ROCM/bin /opt/rocm-dist/etc/ld.so.conf.d \
     && cd /opt/rocm-$ROCM/lib \
     && cp -dpr libMIOpen*.so* libamd*.so* libhip*.so* libhsa*.so* libmigraphx*.so* \
-               librocm*.so* librocblas*.so* librocprofiler*.so* /opt/rocm-dist/opt/rocm-$ROCM/lib/ 2>/dev/null; \
+               librocm*.so* librocblas*.so* librocroller*.so librocprofiler*.so* /opt/rocm-dist/opt/rocm-$ROCM/lib/ 2>/dev/null; \
     # Add librocprofiler links
     ln -sf librocprofiler-register.so /opt/rocm-dist/opt/rocm-$ROCM/lib/librocprofiler-register.so.0 && \
     ln -sf librocprofiler-sdk-roctx.so /opt/rocm-dist/opt/rocm-$ROCM/lib/libroctx64.so.4 && \
