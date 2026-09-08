@@ -75,6 +75,7 @@ from core import registry as _reg      # MELDE_HERKUNFT-Bindung (stdlib-only, ke
 from core import sprache as _sprache   # Sprach-Stufe 4: Waechter-Meldetexte (stdlib-only)
 from core import anwesenheit as _anw   # .408: Anwesenheits-Marken der Live-Auftritte (stdlib-only)
 from core import atomar as _atomar     # .411: eindeutige tmp beim atomaren Schreiben (stdlib-only)
+from core import logdatei as _logdatei  # .511: debug-Flagge des Dienstes (stdlib-only, kein Zyklus)
 
 WURZEL = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -112,6 +113,9 @@ RECONNECT_WARTE = 5.0     # Reconnect: erster Versuch ...
 RECONNECT_MAX = 60.0      # ... verdoppelnd bis Deckel
 RECONNECT_STABIL = 30.0   # Backoff-Reset erst nach so lange getragener Verbindung
 LOG_MAX_MB = 20.0         # Kachel-Log-Deckel, eine .1-Stufe (Prototyp-Muster)
+DEBUG_FLAGGE_TTL_S = 2.0  # .511: so lange gilt ein gelesener debug-Stand (die
+#                           Flaggendatei liest sonst jede Kachelzeile neu — bei
+#                           ~9.700 Zeilen/h waeren das ebenso viele stat()-Zuege)
 
 # Die zwei User-Zeiten je Waechter (Bauplan §4) — Defaults + Plausibilitaets-Riegel.
 ENDE_OHNE_GESICHT_S = 10       # (a) Inaktivitaets-Ende des Auftritts, Anker LETZTER Fund
@@ -477,9 +481,17 @@ def quelle_maskiert(url):
     [ERBE-ANPASSUNG] Muster [^/]* statt [^@/]* (Lens-B K4): ein Passwort MIT
     eigenem '@' (rtsp://u:p@ss@host) blieb sonst teilweise stehen — greedy bis
     zum LETZTEN '@' vor dem Pfad maskiert beides; URLs ohne Zugangsdaten
-    bleiben unveraendert (kein '@' in der Authority -> kein Treffer)."""
-    import re as _re
-    return _re.sub(r"//[^/]*@", "//***@", url)
+    bleiben unveraendert (kein '@' in der Authority -> kein Treffer).
+
+    B7 (07.09.2026): der Rumpf ist die eigene Regex LOS und ruft
+    core.registry.endpunkt_anzeige — DIE eine Maskier-Funktion, die seit
+    B7 auch der Support-Export nimmt (core.support.url_maskiert). Die
+    Eigenschaft oben traegt sie weiter (rfind('@') statt greedy-Regex,
+    Ergebnis Zeichen fuer Zeichen dasselbe); dazu kann sie, was die Regex
+    hier nie konnte: geheime Query-Parameter maskieren. Zwei Fassungen
+    derselben Zusage waren die K3-Falle, die den F1-Fund erst moeglich
+    machte."""
+    return _reg.endpunkt_anzeige(url)
 
 
 def auth_argumente(url):
@@ -1394,6 +1406,41 @@ def pose_wache():
         except Exception as e:
             _POSE["fehler"] = f"{type(e).__name__}: {str(e)[:80]}"
     return _POSE["wache"]
+
+
+def pose_verfuegbar():
+    """Ist die Pose-Wache ueberhaupt ladbar? -> bool. Das GEGENSTUECK zu
+    core.guete.verfuegbar() (.510, Bauplan B1 / Gegenpruefung W1 BL-1).
+
+    Warum es das braucht: seit .510 verwirft ein nicht messbarer Wert die
+    Stimme dieses Funds (fail-closed je FUND). Der Unterschied "dieses eine
+    Bild liess sich nicht messen" gegen "es gibt gar kein Modell" muss VOR
+    dem Urteil entscheidbar sein — sonst schaltet ein fehlendes RTMPose die
+    gesamte Erkennung still ab. pose_wache() taugt dafuer nicht: sie gibt
+    bei Ladefehler None zurueck, OHNE zu werfen, und der Aufrufer kann
+    beides nicht auseinanderhalten.
+
+    Geprueft wird OHNE Laden — das Modell bleibt lazy (146 MB ONNX,
+    Speicher-Vorfall 10.08. 19:17): ein bereits gemerkter Ladefehler bzw.
+    die Modelldatei-Liste des Prototyps (pose_wache.MODELL_STD, DIE eine
+    Quelle des Pfads — hier steht bewusst kein zweites Pfad-Literal).
+
+    EHRLICHE GRENZE: die Datei-Probe sagt "Modell da", nicht "Session
+    baut". Scheitert der Aufbau erst beim Laden, faellt das der Aufrufer
+    ueber pose_wache() is None auf (analyze.py schaltet dort ebenfalls
+    laut ab)."""
+    if _POSE["wache"] is not None:
+        return True
+    if _POSE["fehler"]:
+        return False
+    try:
+        proto = os.path.join(WURZEL, "prototyp")
+        if proto not in sys.path:
+            sys.path.insert(0, proto)
+        import pose_wache as _pwm
+        return bool(_pwm.MODELL_STD) and os.path.exists(_pwm.MODELL_STD[0])
+    except Exception:                                          # noqa: BLE001
+        return False
 
 
 def person_region(bbox, breite, hoehe):
@@ -2843,6 +2890,34 @@ def kalib_lesen(cfg, kamera):
     return aus
 
 
+def kalib_kameras(cfg):
+    """Kameras, die einen Kalibrier-Vorrat auf Platte haben -> sortierte Liste.
+
+    Das Gegenstueck zu kalib_lesen: es beantwortet "welche Kameras kennt der
+    Store", OHNE dass Frigate erreichbar sein muss. Gebraucht wird es von der
+    Kalibrierung (core.kamerakalib.store_kameras): eine frische Installation
+    ohne Frigate-Verbindung und ohne Live-Waechter hatte sonst Material auf
+    der Platte, aber keinen Weg dorthin (Fund 08.09.).
+
+    Den Ordnernamen baut NIE diese Funktion, sondern kalib_dir — damit bleibt
+    es bei EINEM Ordner-Begriff (K3: kein zweites Pfad-Literal). Nur Ordner
+    MIT Index zaehlen: ein leerer Rest-Ordner ist kein Material. Fail-safe wie
+    kalib_lesen: ein unlesbares live/ liefert eine leere Liste, nie eine
+    Exception — dieser Leser sitzt auf einem reinen Anzeige-Pfad."""
+    wurzel = os.path.join(cfg.get("data_dir")
+                          or os.path.join(WURZEL, "verify_data"), "live")
+    aus = []
+    try:
+        namen = os.listdir(wurzel)
+    except OSError:
+        return aus
+    for name in namen:
+        d = kalib_dir(cfg, name)          # None = Name genuegt dem Muster nicht
+        if d and os.path.isfile(os.path.join(d, KALIB_INDEX)):
+            aus.append(str(name))
+    return sorted(aus)
+
+
 def kalib_schreiben(cfg, kamera, bild, mass, deckel=KALIB_DECKEL, log=print,
                     mensch_ok=True, latte=None):
     """EIN Bild in den Ring legen -> Dateiname oder None.
@@ -3255,11 +3330,15 @@ def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
     # sie unangetastet, nur ein mitgesandtes Feld aendert etwas.
     k_e, f_ke = _opt_zahl("katalog_e_min", 0.0, 1.0)
     k_t, f_kt = _opt_zahl("katalog_t_min", 0.0, 1.0)
+    # Pruefer-Latte je Kamera (.511 Stufe C) — dieselbe Halte-Regel: ein
+    # Formular ohne dieses Feld (Live-Detailseite, Alt-UI, API) laesst den
+    # Wert unangetastet.
+    pr_t, f_pt = _opt_zahl("pruef_t_min", 0.0, 1.0)
     # Pose-Latte je Kamera (03.09.) — dieselbe Halte-Regel: ein Formular ohne
     # das Feld (Live-Detailseite, Alt-UI, API-Aufrufer) laesst den Wert
     # unangetastet. Spanne = die des Vorgabe-Werts pose_kopf.
     p_min, f_pm = _opt_zahl("pose_min", POSE_MIN_MIN, POSE_MIN_MAX)
-    for fehler in (f_ke, f_kt, f_pm):
+    for fehler in (f_ke, f_kt, f_pm, f_pt):
         if fehler:
             return False, fehler
     fr_ab, f_fa = _opt_zahl("frigate_abstand_s", WIEDER_SCHARF_MIN,
@@ -3307,7 +3386,8 @@ def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
     neu = dict(alt, quelle=q, url=url, ende_ohne_gesicht_s=ende_s,
                wieder_scharf_s=scharf_s, kanaele=kanaele, hoehe=hoehe,
                det_min=det_min, guete_e_min=g_e, guete_t_min=g_t,
-               katalog_e_min=k_e, katalog_t_min=k_t, pose_min=p_min,
+               katalog_e_min=k_e, katalog_t_min=k_t, pruef_t_min=pr_t,
+               pose_min=p_min,
                erkannt_n=erk_n, erkannt_t_s=erk_t, erkannt_fenster_s=erk_f,
                frigate_events=fr_ev, frigate_abstand_s=fr_ab,
                bewegung_gate=bw_gate, ruhe_takt_s=ruhe_s,
@@ -3322,7 +3402,8 @@ def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
         "ende_ohne_gesicht_s": ende_s, "wieder_scharf_s": scharf_s,
         "kanaele": kanaele, "hoehe": hoehe, "det_min": det_min,
         "guete_e_min": g_e, "guete_t_min": g_t,
-        "katalog_e_min": k_e, "katalog_t_min": k_t, "pose_min": p_min,
+        "katalog_e_min": k_e, "katalog_t_min": k_t, "pruef_t_min": pr_t,
+        "pose_min": p_min,
         "erkannt_n": erk_n,
         "erkannt_t_s": erk_t, "erkannt_fenster_s": erk_f,
         "frigate_events": fr_ev,
@@ -3599,6 +3680,11 @@ GUARD_USER_FELDER = ("enabled", "quelle", "url", "ende_ohne_gesicht_s",
                      # Zentral-Umbau auch aus dem Event-Weg gespeist).
                      "katalog_e_min",    # Katalog-Latte Empfinden
                      "katalog_t_min",    # Katalog-Latte Erkennbarkeit
+                     # PRUEFER-LATTE (.511 Stufe C): die eigene Latte des
+                     # BESTANDS-Pruefers ueber schon vorhandene Katalogbilder.
+                     # Getrennt von katalog_t_min mit Absicht — Aufnahme und
+                     # Nachpruefung sind zwei Fragen (core/refurteil.py).
+                     "pruef_t_min",
                      # POSE-LATTE je Kamera (03.09.): Kopf-Score-Sieb. Seit
                      # Stufe 2 siebt der Wert im WORKER (Stimm-Sieb URT_POSE,
                      # Ring-/Anzeige-Einlass) und seit dem Abend-Angleich auch
@@ -3808,6 +3894,16 @@ def guards_lesen(cfg, log=print):
                                        f"live.guards.{name}.katalog_e_min"),
             "katalog_t_min": _zahl_opt(g.get("katalog_t_min"), 0.0, 1.0, log,
                                        f"live.guards.{name}.katalog_t_min"),
+            # PRUEFER-LATTE je Kamera (.511 Stufe C): die EIGENE Latte des
+            # BESTANDS-Pruefers — sie urteilt ueber schon vorhandene
+            # Katalogbilder und nimmt nie eines auf. Bewusst nicht dieselbe
+            # Zahl wie katalog_t_min darueber: ein Zug am Aufnahme-Regler
+            # duerfte den Bestands-Befund nicht still verschieben (Rollen-
+            # Zuschnitt des Users 08.09.: QS = Bestands-Pruefer, kein
+            # Aufnahme-Gate). None = nicht gesetzt, dann gilt der globale
+            # Rueckfall pruef_guete_t_min (core.refurteil.pruef_werte).
+            "pruef_t_min": _zahl_opt(g.get("pruef_t_min"), 0.0, 1.0, log,
+                                     f"live.guards.{name}.pruef_t_min"),
             # POSE-LATTE je Kamera (03.09., Stufe 1 = speichern + anzeigen).
             # Gleiche None-Politik wie die vier Latten darueber: None heisst
             # "nicht gesetzt", es gibt hier keinen zweiten Zahlen-Default.
@@ -4319,6 +4415,16 @@ class Engine:
         self._lock_handle = None
         self._fehler_drossel = {}     # (quelle) -> letzter Log mono
         self._stoer_global_mono = -1e18
+        # .511 Log-Bereinigung: der debug-Schalter des DIENSTES, gespiegelt in
+        # <data_dir>/state/debug_an (core.logdatei — dort steht, warum der
+        # Config-Store diesen Weg nicht kann). Gelesen mit TTL, weil die
+        # Kachelzeilen die haeufigsten Zeilen der ganzen Anlage sind.
+        # DERSELBE aufgeloeste data_dir wie oben (nicht cfg.get je Aufruf):
+        # sonst liest eine Config ohne data_dir einen relativen Pfad, waehrend
+        # Status und live_dir laengst im Rueckfall-Ordner liegen.
+        self._dbg_datadir = data_dir
+        self._dbg_stand = False
+        self._dbg_bis = -1e18
         self._start_mono = None
         self._start_wand = None
         self._gestoppt = False        # stop()-Idempotenz UNABHAENGIG von stop_ev
@@ -4587,8 +4693,10 @@ class Engine:
             g = self.guards.get(name)
             zu = ("watcher enabled" if g and g["enabled"]
                   else ("configured, disabled" if g else "no watcher configured"))
-            self.log(f"live feed: {name} detect {info.get('width')}x{info.get('height')}"
-                     f" — {zu}")
+            # .511: Feed-Inventar je Engine-Start — Buchhaltung. Was wirklich
+            # laeuft, sagt die WACHE-START-Zeile je Kachel (bleibt sichtbar).
+            self._dbg(f"live feed: {name} detect {info.get('width')}x{info.get('height')}"
+                      f" — {zu}")
         for name in self.guards:
             if name not in self.kameras:
                 self.log(f"live feed: {name} — configured but NOT in Frigate "
@@ -5500,7 +5608,8 @@ class Engine:
                 k.auftritt = {"seit_mono": mono, "letzter_fund_mono": mono,
                               "funde": 0, "trigger": 0,
                               "start_ts": _wand, "letzter_fund_ts": _wand}
-                self._klog(k, f"Auftritt #{k.auftritte} beginnt")
+                # .511: Auftritts-Buchhaltung (4.209 Zeilen in zwei Tagen)
+                self._klog(k, f"Auftritt #{k.auftritte} beginnt", dbg=True)
             k.auftritt["letzter_fund_mono"] = mono
             k.auftritt["letzter_fund_ts"] = round(self.wanduhr(), 1)
             k.auftritt["funde"] += len(echte)
@@ -5517,9 +5626,12 @@ class Engine:
             elif ereignis == "start":
                 g = je_box.get(info.get("box"))
                 s_ = float(g.det_score) if g is not None else float(echte[0].det_score)
+                # .511: 31.579 Zeilen in zwei Tagen — die groesste Vorlage
+                # ueberhaupt. In der wache.log der Kamera bleibt sie stehen.
                 self._klog(k, f"Track T{info['track']} START (Score {s_:.2f})"
                               + (f" — neben {info['neben']} Track(s)"
-                                 if info["neben"] else " — ab jetzt jedes Bild"))
+                                 if info["neben"] else " — ab jetzt jedes Bild"),
+                           dbg=True)
             elif ereignis == "trigger":
                 self._trigger(k, info, mono)
         # Stufe 2 (.193, User 13.08.): kontinuierliches Namens-Voting ueber
@@ -5607,14 +5719,30 @@ class Engine:
                 # Stimme erst durch die Erkennen-Latten der Kamera —
                 # kalibrierter Regler-Wert, geklemmt auf guete.KELLER_BODEN,
                 # unkalibriert der Boden selbst. Kosten nur je NN-TREFFER
-                # (~17 ms, selten), nicht je Frame; Messfehler passieren
-                # fail-open (guete_messen loggt laut). Die alte Wache
+                # (~17 ms, selten), nicht je Frame. Die alte Wache
                 # "Guete entscheidet nie" ist damit GEDREHT — der Boden ist
                 # bewusst die Keller-Grenze, nicht die Anzeige-Latte
                 # (31.08. gemessen: hohe Siebe kosten 41 % echte Treffer).
+                # .510 (Bauplan B1): stimme_ok ist FAIL-CLOSED JE FUND — ein
+                # nicht messbarer Wert verwirft die Stimme. Der Waechter erbt
+                # das ueber dieselbe Funktion; was er selbst mitbringen muss,
+                # ist das Gegenstueck FAIL-OPEN JE MODELL. Ohne die drei
+                # Zeilen darunter waere ein Image ohne die Guete-ONNX (oder
+                # eine ausgefallene Messung) das stille Ende jeder
+                # Namens-Meldung: _guete_von liefert dann IMMER (None, None),
+                # und die Latten stehen ueber stimm_latten nie auf 0.
+                # Gleiches Muster wie im Worker (analyze.py URT_G_AUS):
+                # Latten auf 0 = Sieb aus, gemeldet, Stimmen laufen weiter.
                 from core import guete as _gm
                 e_g, t_g = self._guete_von(k, frame, g)
                 _le, _lt = _gm.stimm_latten(k.cfg)
+                if not _gm.verfuegbar():
+                    if not getattr(k, "guete_modelle_aus", False):
+                        k.guete_modelle_aus = True
+                        self._klog(k, "STIMM-VORFILTER AUS: Guete-Modelle nicht "
+                                      "vorhanden — Stimmen laufen ohne die "
+                                      "Erkennen-Latten weiter (fail-open je Modell)")
+                    _le = _lt = 0.0
                 if not _gm.stimme_ok(_le, _lt, e_g, t_g):
                     k.stimm_siebe = getattr(k, "stimm_siebe", 0) + 1
                     continue
@@ -6079,11 +6207,13 @@ class Engine:
             if _serie:
                 self._klog(k, f"TRIGGER #{t_nr} [T{info['track']}]: "
                               f"Wiederholungs-Verwurf an derselben Stelle — "
-                              f"Karenz bleibt stehen (Serie gebrochen)")
+                              f"Karenz bleibt stehen (Serie gebrochen)", dbg=True)
+            # .511: Verwurfs-Buchhaltung (9.427 Zeilen in zwei Tagen mit dem
+            # Zweig darunter). Gezaehlt wird weiter (k.verworfen_pose, /live).
             self._klog(k, f"TRIGGER #{t_nr} [T{info['track']}] VERWORFEN (kein Mensch an "
                           f"der Fundstelle bestaetigt): Pose-Kopf hoechstens "
                           f"{(p_det or {}).get('kopf_max')} — keine Meldung, keine "
-                          f"Karenz, kein Bild (live_verworfen_speichern=off)")
+                          f"Karenz, kein Bild (live_verworfen_speichern=off)", dbg=True)
             return
         # K-1 (Sched-R4): die Beweisbild-Ablage darf die MELDUNG nie kosten —
         # volle Platte (ENOSPC-Klasse) schlug hier VOR _meldung_starten zu,
@@ -6130,10 +6260,11 @@ class Engine:
             if _serie:
                 self._klog(k, f"TRIGGER #{t_nr} [T{info['track']}]: "
                               f"Wiederholungs-Verwurf an derselben Stelle — "
-                              f"Karenz bleibt stehen (Serie gebrochen)")
+                              f"Karenz bleibt stehen (Serie gebrochen)", dbg=True)
             self._klog(k, f"TRIGGER #{t_nr} [T{info['track']}] VERWORFEN (kein Mensch an "
                           f"der Fundstelle bestaetigt): Pose-Kopf hoechstens "
-                          f"{(p_det or {}).get('kopf_max')} — keine Meldung, keine Karenz")
+                          f"{(p_det or {}).get('kopf_max')} — keine Meldung, keine Karenz",
+                       dbg=True)
             return
         # .313: ab hier ist ein Mensch bestaetigt (Pose-Gate bestanden oder aus) —
         # die Namens-Stufe darf fuer diesen Auftritt feuern (aufgelaufene
@@ -6158,15 +6289,18 @@ class Engine:
                 pose_zusatz = f" [Pose-Kopf {p_det['kopf_max']}]"
             else:
                 pose_zusatz = f" [Pose-Gate AUS: {p_det.get('grund')}]"
+        # .511: Trigger-Bilanz (10.084 Zeilen in zwei Tagen). Das ENDGUELTIGE
+        # Namens-Urteil steht in der NAME- und der URTEIL-FENSTER-Zeile, und
+        # die bleiben immer sichtbar; das hier ist der Vorabtreffer.
         self._klog(k, f"TRIGGER #{t_nr} [T{info['track']}]: {len(info['kette'])} "
                       f"konsistente Funde in {info['spanne']:.2f} s, Latenz "
                       f"{info['latenz_ms']:.0f} ms, bester Score {beste_score:.2f}"
                       + pose_zusatz
-                      + (f" — {u_text}" if u_text else ""))
+                      + (f" — {u_text}" if u_text else ""), dbg=True)
         k.letzter_trigger_wand = self.wanduhr()
         if not melde_erlaubt(k, mono):
             self._klog(k, f"Meldung unterdrueckt (min interval, noch "
-                          f"{k.melde_bis_mono - mono:.0f} s)")
+                          f"{k.melde_bis_mono - mono:.0f} s)", dbg=True)
             return
         k.melde_bis_mono = mono + k.cfg["wieder_scharf_s"]
         # .412 (User 02.09.): der Push-Text kommt aus meldetext_trigger —
@@ -6366,9 +6500,13 @@ class Engine:
                             log=lambda z: self._klog(k, z))
         if not guete_reicht(k.cfg, e, t):
             return
+        # .511: die Kalibrier-Zeilen bringen ihren Kamera-Namen selbst mit
+        # (kalib_schreiben) — praefix=False raeumt das doppelte
+        # `live X: live X:` weg, das 2.180 Zeilen entstellt hat.
         if kalib_schreiben(self.cfg, k.name, kand["crop"],
                            {"det": kand["det"], "e": e, "t": t},
-                           deckel=deckel, log=lambda z: self._klog(k, z),
+                           deckel=deckel,
+                           log=lambda z: self._klog(k, z, dbg=True, praefix=False),
                            mensch_ok=mensch_ok):
             k.kalib_bilder += 1
 
@@ -6634,9 +6772,11 @@ class Engine:
             with k.lock:
                 a = k.auftritt
                 if a and mono - a["letzter_fund_mono"] > k.cfg["ende_ohne_gesicht_s"]:
+                    # .511: Auftritts-Bilanz (4.200 Zeilen in zwei Tagen).
+                    # Was der Auftritt ERGAB, steht in NAME/URTEIL-FENSTER.
                     self._klog(k, f"Auftritt #{k.auftritte} beendet "
                                   f"({a['funde']} Funde, {a['trigger']} Trigger, "
-                                  f"{mono - a['seit_mono']:.0f} s)")
+                                  f"{mono - a['seit_mono']:.0f} s)", dbg=True)
                     # S5 (01.09., Tonnen-Fund): das Pose-Urteil des Auftritts
                     # wandert mit zum Ring — hatte der Auftritt Trigger und
                     # KEIN einziger bestand das Pose-Gate, war die Fundstelle
@@ -7041,14 +7181,41 @@ class Engine:
         self.log(f"!! {zeile}")
 
     def _ende_loggen(self, k, ende):
+        # .511: verwaiste Tracks sind der Normalfall an einer belebten
+        # Kamera (16.586 Zeilen in zwei Tagen) — reine Buchhaltung.
         self._klog(k, f"Track T{ende['track']} ENDE ohne Trigger ({ende['grund']}) "
                       f"nach {ende['dauer']:.1f} s (laengste Kette "
-                      f"{ende['max_kette']}/{k.burst.anzahl})")
+                      f"{ende['max_kette']}/{k.burst.anzahl})", dbg=True)
 
-    def _klog(self, k, zeile):
+    def _dbg_an(self):
+        """Steht der debug-Schalter des Dienstes? (TTL-gepuffert, s.
+        DEBUG_FLAGGE_TTL_S.) Der Waechter laeuft als eigener Prozess und sieht
+        die laufende Dienst-Config nicht — deshalb die Flaggendatei."""
+        jetzt = self.jetzt()
+        if jetzt >= self._dbg_bis:
+            self._dbg_stand = _logdatei.debug_flagge_an(self._dbg_datadir)
+            self._dbg_bis = jetzt + DEBUG_FLAGGE_TTL_S
+        return self._dbg_stand
+
+    def _dbg(self, zeile):
+        """Engine-Log NUR bei gesetztem debug — [dbg]-Praefix wie im Dienst."""
+        if self._dbg_an():
+            self.log(f"[dbg] {zeile}")
+
+    def _klog(self, k, zeile, dbg=False, praefix=True):
         """Kachel-Log: Engine-Log UND je Kachel eine wache.log im Datenordner
-        (rotiert am Deckel, Prototyp-Muster — Zaehler laufen im Prozess weiter)."""
-        self.log(f"live {k.name}: {zeile}")
+        (rotiert am Deckel, Prototyp-Muster — Zaehler laufen im Prozess weiter).
+
+        .511 Log-Bereinigung (User-Auftrag 08.09.): `dbg=True` schickt NUR die
+        Doppelung ins DIENST-Log hinter den debug-Schalter. Die `wache.log` der
+        Kachel schreibt IMMER weiter — sie ist das Kamera-Diagnose-Werkzeug,
+        liegt je Kamera getrennt und stoert niemanden. Gemessen war die
+        Kachel-Spur die Haelfte aller Dienst-Log-Zeilen (87.967 von 173.608).
+
+        `praefix=False` fuer Zeilen, die ihren Kamera-Namen SCHON mitbringen
+        (kalib_schreiben) — genau daher kam das doppelte `live X: live X:`."""
+        (self._dbg if dbg else self.log)(
+            f"live {k.name}: {zeile}" if praefix else zeile)
         try:
             ablage = os.path.join(self.live_dir, k.name)
             os.makedirs(ablage, exist_ok=True)

@@ -14,11 +14,16 @@ DREI LATTEN, DREI ZWECKE (die Semantik, gegen die dieses Modul geschrieben ist):
       guete_t_min). Sie entscheiden, WELCHES Bild in Meldung/Anzeige geht und
       WAS in den Kalibrier-Vorrat kommt — existierte schon (.383), liegt im
       Guard-Block des Config-Stores und wird hier nur ZUSAMMENGEFASST gelesen.
-  (3) KATALOG-AUFNAHME: eine eigene, strengere Latte je Kamera
+  (3) KATALOG-AUFNAHME: eine eigene Latte je Kamera
       (katalog_e_min/katalog_t_min). Sie greift an ALLEN Uebernahme-Stellen in
       den Referenz-Katalog und ist der Grund, warum es dieses Modul gibt:
       der Deckungs-Vertrag braucht EINE Funktion (katalog_ok), nicht fuenf
       verstreute Vergleiche (QS-Ebenen-Regel K3).
+      SEIT .511 ist sie ausdruecklich LIBERAL (Werkswert 0,125/0,125 statt
+      0,200/0,400, User-Entscheid 08.09.): aufgenommen wird grosszuegig,
+      gesiebt wird DANACH vom Bestands-Pruefer (core/refurteil.py). Das Wort
+      "strenger" aus der Fassung von .383 ist damit hinfaellig — die zwei
+      Latten beantworten zwei Fragen, sie sind keine Rangfolge.
 
 ABLAGEORT (bewusst KEIN zweiter): alle Kamera-Werte liegen im schon
 vorhandenen Guard-Block `live.guards.<kamera>` des Config-Stores. Damit gibt es
@@ -49,7 +54,8 @@ MIGRATIONS-SEMANTIK (Bestandsschutz, ausdruecklich):
 
 Dieses Modul rechnet nicht und misst nicht — es LIEST Werte und beantwortet
 genau eine Frage (katalog_ok). Zahlen kommen aus der Config bzw. aus
-core.guete.STARTWERTE, nie von hier (Haus-Regel, Muster norm_latte/REF_LATTE).
+core.guete.KATALOG_STARTWERTE, nie von hier (Haus-Regel, Muster
+norm_latte/REF_LATTE).
 """
 
 # ---------------------------------------------------------------- Ablageort
@@ -95,6 +101,13 @@ AUSNAHMEN = {
         "Automatik-Wegen",
     "anlernen:entferne_referenz":
         "Tombstone: entfernt eine Referenz, nimmt keine auf",
+    "anlernen:_ref_datei_weg":
+        "Tombstone-Griff der Stufe A (.511): die gemeinsame Datei-Seite hinter "
+        "entferne_referenz UND entferne_referenzen — Datei loeschen, Zeile mit "
+        "aktiv:false anhaengen. Er nimmt nie eine Referenz auf; die Zeile ist "
+        "die Loeschmarke, ohne die sync_refs das in Frigate noch vorhandene "
+        "Bild als 'neu' re-importieren wuerde. Gleiche Begruendung wie beim "
+        "Aufrufer darueber (Entscheid 08.09.)",
     "verifyd:upload_referenz":
         "Foto-Upload durch den Nutzer: kein Kameramaterial, keine Kamera und "
         "keine Guete-Messung — eine Kamera-Latte hat hier keine Bedeutung "
@@ -164,17 +177,22 @@ def global_latte(cfg):
 def katalog_start():
     """Werks-Vorgabe der KATALOG-Latte -> {"e", "t"}.
 
-    BEWUSST KEINE neue Zahl: es sind die Werks-Startwerte der Guete-Eichung
-    (core.guete.STARTWERTE, am Feldmaterial geeicht, Messtag 30.08.) — die
-    NAH-/Lernlauf-Eichung. Genau daraus wird die "strengere" Latte: die
-    KAMERA-Latte senkt der Nutzer, wenn seine Kamera Fernmaterial liefert
-    (Feld-Eichpunkte 31.08.: 0,120/0,300 gegen Werk 0,200/0,400) — der Katalog
-    macht diese Senkung NICHT mit. Wer eine Kamera-Latte ueber die Werks-Werte
-    hebt, bekommt keinen strengeren Katalog geschenkt; die Seite sagt das
-    ausdruecklich, statt heimlich das Maximum zu bilden."""
+    EINE Quelle, seit .511 die EIGENE: core.guete.KATALOG_STARTWERTE
+    (0,125/0,125, User-Entscheid 08.09.2026). Bis .510 lieh sich diese Latte
+    die Lernlauf-Startwerte (core.guete.STARTWERTE, 0,200/0,400) — das war
+    die NAH-Eichung, und sie war als AUFNAHME-Latte zu streng: am
+    Feldtester-Spiegel kamen 34 von 200 Kalibrier-Samples durch, die
+    Automatik-Wege liefen damit praktisch leer.
+
+    Der Rollen-Zuschnitt vom 08.09. dreht die Richtung um: AUFNEHMEN ist
+    liberal, gesiebt wird danach vom BESTANDS-Pruefer (core/refurteil.py).
+    Die Katalog-Latte ist damit kein Guetesieb mehr, sondern der Boden gegen
+    totes Material. Wer strenger aufnehmen will, hebt die Kamera-Latte auf
+    dieser Seite; wer strenger AUSSORTIEREN will, hebt die Pruefer-Latte im
+    dritten Register — zwei Fragen, zwei Regler."""
     from core import guete as _guete
-    return {"e": float(_guete.STARTWERTE["empfinden"]),
-            "t": float(_guete.STARTWERTE["t"])}
+    return {"e": float(_guete.KATALOG_STARTWERTE["empfinden"]),
+            "t": float(_guete.KATALOG_STARTWERTE["t"])}
 
 
 def katalog_latten(cfg):
@@ -224,6 +242,47 @@ def anzeige_start():
             "t": float(_guete.ANZEIGE_STARTWERTE["t"])}
 
 
+def store_kameras(cfg):
+    """Kameras, die der STORE kennt -> Menge von Namen.
+
+    Zwei Datenlagen, EINE Frage: ein Guard-Block `live.guards.<kamera>`
+    (dort liegen ALLE Kamera-Latten — Anzeige, Katalog, Pruefer) und/oder ein
+    Kalibrier-Vorrat auf Platte (core.livewache.kalib_kameras). Beide werden
+    ueber ihren jeweils schon vorhandenen Leser geholt, nie ueber einen
+    zweiten Config- oder Pfad-Griff.
+
+    WOZU (Fund 08.09.): bis dahin war die Frigate-Kameraliste die einzige
+    Quelle der Uebersichts-Kacheln und der Erreichbarkeit von
+    /kalibrierung/<kamera>. Eine frische Installation ohne Frigate-Verbindung
+    und ohne Live-Waechter kam damit an keine Kalibrierseite — obwohl sie
+    Material und Werte im Store hatte. Der Modulkopf und der Kommentar am
+    Handler versprechen genau das Gegenteil ("jede Kamera, die Frigate kennt
+    ODER die schon Werte im Store hat"); diese Funktion loest das Versprechen
+    ein.
+
+    NICHT gefiltert wird hier auf Sub-Kameras: die Uebersicht blendet sie aus
+    (ist_subkamera), ihre Direkt-Adresse bleibt erreichbar — dieselbe Regel
+    wie vorher, nur an EINER Stelle."""
+    from core import livewache as _lw          # lazy: dieses Modul bleibt leicht
+    aus = {str(n) for n in (guards(cfg) or {})}
+    try:
+        aus |= {str(n) for n in _lw.kalib_kameras(cfg)}
+    except Exception:                                       # noqa: BLE001
+        pass                    # Anzeige-Pfad: eine unlesbare Platte darf die
+                                # Guard-Kameras nicht mitreissen
+    return aus
+
+
+def bekannt(cfg, kameras):
+    """DIE eine Antwort auf "kennt die Kalibrierung diese Kamera?" -> Menge.
+
+    Frigates Liste (vom Aufrufer hereingereicht — hier wird NIE eine zweite
+    Kameraliste gebaut) plus die Store-Kameras. Uebersicht und
+    404-Wache des Handlers fragen dieselbe Funktion; ein Name, der hier nicht
+    steht, bleibt unbekannt (der Name kommt nie aus der URL)."""
+    return {str(k) for k in (kameras or [])} | store_kameras(cfg)
+
+
 def ist_subkamera(name):
     """Sub-/Zweitstrom-Kameras gehoeren nicht auf die Kalibrier-Uebersicht
     (User 31.08.: "cams die als sub sind ... gar nicht erst anzeigen").
@@ -239,9 +298,13 @@ def uebersicht_daten(cfg, kameras):
 
     `kameras` kommt vom Aufrufer (verifyd.frigate_cameras) — hier wird NIE
     eine zweite Kameraliste gebaut (Deckungs-Regel). Kameras, die nur noch im
-    Store stehen (aus Frigate entfernt, aber kalibriert), kommen HINTEN dazu
-    und sind als solche markiert: ihre Werte still verschwinden zu lassen
-    waere ein Verlust ohne Ansage.
+    Store stehen (aus Frigate entfernt, aber kalibriert) ODER die Frigate
+    gerade nicht meldet (keine Verbindung, keine URL), kommen HINTEN dazu und
+    sind als solche markiert: ihre Werte still verschwinden zu lassen waere
+    ein Verlust ohne Ansage. Die Store-Seite kommt seit 08.09. aus
+    store_kameras() — Guard-Block ODER Kalibrier-Vorrat, nicht mehr nur der
+    Guard-Block (Fund: Vorrat auf der Platte, aber keine Kachel und 404 auf
+    der Kameraseite).
 
     -> [{name, in_frigate, vorrat_n, vorrat_ts, vorrat_ts_min, det, e, t,
          eigene, kat_e, kat_t, kat_quelle}]"""
@@ -250,7 +313,7 @@ def uebersicht_daten(cfg, kameras):
     latten = katalog_latten(cfg)
     namen = [str(k) for k in (kameras or []) if not ist_subkamera(k)]
     bekannt = set(namen)
-    extra = sorted(n for n in g_alle
+    extra = sorted(n for n in store_kameras(cfg)
                    if n not in bekannt and not ist_subkamera(n))
     aus = []
     for name in namen + extra:

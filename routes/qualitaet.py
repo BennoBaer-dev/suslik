@@ -103,10 +103,11 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
         # Easy sieht je Person EINE Klartext-Zeile, Funde zuerst.
         easy_zeilen = []
         for p, e in sorted(_pers_map.items(),
-                           key=lambda kv: -(kv[1].get("kritisch", 0)
-                                            + kv[1].get("redundant", 0)
-                                            + kv[1].get("unter", 0)
-                                            + kv[1].get("unmessbar", 0))):
+                           key=lambda kv: (not kv[1].get("gemischt"),
+                                           -(kv[1].get("kritisch", 0)
+                                             + kv[1].get("redundant", 0)
+                                             + kv[1].get("unter", 0)
+                                             + kv[1].get("unmessbar", 0)))):
             funde_p = (e.get("kritisch", 0) + e.get("redundant", 0)
                        + e.get("unter", 0) + e.get("unmessbar", 0))
             if funde_p:
@@ -117,6 +118,14 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
             else:
                 status = ('<span style="color:seagreen">&#10003; '
                           + t("qualitaet.person.alles_gut") + '</span>')
+            # Stufe C (.511): die PERSONEN-Warnung der Identitaets-Achse. Sie
+            # steht hier und nicht als Bild-Marke, weil die Marge genau so
+            # gemessen wurde: als Einzelbild-Signal lieferte sie fast nur, was
+            # die Guete-Latte ohnehin liefert (63 von 65 Faellen), als
+            # Personen-Muster den einzigen sauberen Fremdbild-Treffer.
+            if e.get("gemischt"):
+                status += (' &middot; <span style="color:var(--crit)">&#9888; '
+                           + t("qualitaet.person.gemischt") + '</span>')
             easy_zeilen.append(
                 f'<a href="/qualitaet?person={urllib.parse.quote(p)}" '
                 'style="display:block;padding:9px 12px;margin:4px 0;'
@@ -175,7 +184,15 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
     # was ist zu tun. Zahlen kommen aus dem Bericht, nichts wird erfunden.
     ergebnis_satz = ""
     if qs.get("ts"):
-        _funde = len(krit) + len(ug) + len(doppel)
+        # Stufe C (.511): die Guete-VORSCHLAEGE zaehlen mit. Sie stecken in
+        # keiner der drei alten Klassen — ein Bild kann tadellos scharf und
+        # gross und einzigartig sein und trotzdem unter beiden Guete-Achsen
+        # liegen. Stuende es nicht im Satz, verschwiege die Uebersicht genau
+        # die Gruppe, die dieser Umbau neu findet.
+        _vor = sum(int((e or {}).get("vorschlag") or 0)
+                   for p_, e in (qs.get("personen") or {}).items()
+                   if not person or p_ == person)
+        _funde = len(krit) + len(ug) + len(doppel) + _vor
         _np = len(qs.get("personen") or {}) or "?"
         if _funde == 0:
             # Die <b>-Grenze trennt zwei VOLLSTAENDIGE Saetze — B9-sicherer
@@ -195,7 +212,17 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
             if ug:
                 teile.append(f'<b>{len(ug)}</b> weak')
             if doppel:
-                teile.append(f'<b>{len(doppel)}</b> near-duplicate')
+                # .511 (Live-Kontrolle 08.09.): das Wort sagt jetzt, WAS
+                # gezaehlt wird. "near-duplicate" hier und "Identical copies"
+                # im Reiter waren zwei Zahlen mit demselben Klang und
+                # verschiedener Bedeutung — die Uebersicht meint qs["doppel"]
+                # (AEHNLICHKEIT: Cosinus >= dup_sim je Person, und nur Bilder
+                # MIT Vektor), der Reiter qs["dubletten"] (BYTE-gleich, md5,
+                # auch Bilder ohne Vektor). Sie ueberschneiden sich, keine ist
+                # Teilmenge der anderen. Die Reiter-Logik bleibt unberuehrt.
+                teile.append(f'<b>{len(doppel)}</b> look-alike')
+            if _vor:
+                teile.append(f'<b>{_vor}</b> below the check bar')
             ergebnis_satz = (
                 f'<p style="font-size:15px">&#128269; Checked '
                 f'{qs.get("ref_count", "?")} pictures of {_np} people '
@@ -246,11 +273,59 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
         # Zuordnung folgt der bestehenden Befund-Semantik: Verwechslung =
         # Mensch muss draufschauen (check), Eignung/Doppel = Loesch-
         # VORSCHLAG (weg, nie vorgehakt), Rest = gut.
-        gruppen_k = {"gut": [], "check": [], "weg": []}
-        for f in alle:
+        # Stufe C (.511) haengt ZWEI Reiter an, beide nach dem Zuschnitt des Users
+        # eigene Gruppen statt Marken in der Bandwurmliste:
+        #   dubl   = BYTE-gleiche Dateien, als Satz gezeigt (der erste bleibt,
+        #            die Kopien sind vorgewaehlt-faehig)
+        #   noface = Bilder, in denen keine Detektion ein Gesicht fand — sie
+        #            tragen keine einzige Messung und sind deshalb kein
+        #            Guete-Fall, sondern ein Durchsicht-Fall.
+        # Zuordnung ist EXKLUSIV (ein Bild steht in genau einem Reiter): sonst
+        # zaehlte der Remove-Zaehler dieselbe Datei zweimal.
+        pruefung = (qs.get("pruefung") or {}).get(person, {})
+        dubl_gruppen = [g for g in (qs.get("dubletten") or [])
+                        if g.get("person") == person
+                        and _da(person, g.get("behalten"))]
+        dubl_alle, dubl_extra = set(), set()
+        for g in dubl_gruppen:
+            g["weg"] = [d for d in (g.get("weg") or []) if _da(person, d)]
+            dubl_alle.add(g["behalten"])
+            dubl_alle.update(g["weg"])
+            dubl_extra.update(g["weg"])
+        dubl_gruppen = [g for g in dubl_gruppen if g["weg"]]
+        noface = {d for d, u in gruende.items()
+                  if u.get("hauptgrund") == "kein_gesicht"}
+        gruppen_k = {"gut": [], "check": [], "weg": [], "dubl": [], "noface": []}
+        dubl_kacheln = {}
+
+        def _kachel(f, rand, wort, zusatz, markiert, behalten=False):
             src = f'/refs/{urllib.parse.quote(person)}/{urllib.parse.quote(f)}'
+            val = html.escape(person + "|" + f, quote=True)
+            return (
+                f'<label style="display:inline-block;text-align:center;'
+                f'margin:5px;vertical-align:top;max-width:120px">'
+                f'<img src="{src}" style="height:110px;border-radius:6px;'
+                f'display:block;margin:0 auto 3px;border:3px solid {rand}">'
+                f'<input type="checkbox" class="us-cb g-person" '
+                + ('data-behalten="1" ' if behalten else "")
+                + f'value="{val}"> <span class="{"dim" if not markiert else ""}"'
+                f' style="font-size:12px">{wort or t("qualitaet.galerie.okay")}'
+                f'{zusatz}'
+                '</span></label>')
+
+        for f in alle:
             rand, wort, grp, zusatz = "var(--border)", "", "gut", ""
-            if f in verwechselt:
+            pz = pruefung.get(f) or {}
+            if f in noface:
+                rand, grp = "var(--warn)", "noface"
+                wort = t("qualitaet.wort.kein_gesicht")
+            elif f in dubl_alle:
+                grp = "dubl"
+                if f in dubl_extra:
+                    rand, wort = "var(--dim)", t("qualitaet.galerie.dubl_weg")
+                else:
+                    rand, wort = "seagreen", t("qualitaet.galerie.dubl_behalten")
+            elif f in verwechselt:
                 vp, vd = verwechselt[f]
                 rand = "var(--crit)"
                 # {name} kommt escaped (Muster lernanker {kamera}).
@@ -272,9 +347,29 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
                 rand, grp = "var(--warn)", "weg"
                 wort = WORT.get(gruende[f]["hauptgrund"],
                                 t("qualitaet.wort.schwach"))
-            elif stufen.get(f) == "gut":
+            # Stufe C (.511): das zweistufige URTEIL auf den gemessenen Achsen.
+            # Es ordnet nur ein, was nicht schon einen staerkeren Befund traegt
+            # — ein verwechseltes oder doppeltes Bild bleibt in seinem Reiter,
+            # die Guete-Marke steht dann als Wort daneben.
+            _u, _g = pz.get("u"), pz.get("g") or ""
+            _uwort = ""
+            if _u == "raus":
+                _uwort = t("qualitaet.galerie.unter_beide")
+            elif _u == "auffaellig":
+                _uwort = (t("qualitaet.galerie.unter_norm") if _g == "norm"
+                          else t("qualitaet.galerie.unter_guete"))
+            if grp == "gut" and _uwort:
+                grp = "weg" if _u == "raus" else "check"
+                rand = "var(--warn)" if _u == "raus" else "var(--dim)"
+                wort = _uwort
+            elif _uwort and not wort:
+                wort = _uwort
+            elif _uwort:
+                zusatz += (f' <span class="dim" style="font-size:11px">'
+                           f'&middot; {_uwort}</span>')
+            if not wort and stufen.get(f) == "gut":
                 rand, wort = "seagreen", t("qualitaet.galerie.gut")
-            elif f in dup_kept:
+            elif not wort and f in dup_kept:
                 rand, wort = "seagreen", t("qualitaet.galerie.gut_behalten")
             # Virtuelle Qualitaetslinie (User 20.08.): die Feature-Norm jeder
             # messbaren Referenz als Mini-Zusatz auf der Kachel — dieselbe
@@ -287,31 +382,46 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
             if _nq is not None:
                 zusatz += (f' <span class="dim" style="font-size:11px">'
                            f'{t("qualitaet.galerie.norm", norm="%.1f" % _nq)}</span>')
+            # Basispaket-Rang (ANZEIGE, nie eine Latte) und — nur in der
+            # Expert-Sicht — die Identitaets-Marge als Info-Zahl sowie der
+            # Hinweis, dass die Guete einer Vorrats-Referenz an ihrem
+            # gespeicherten Ausschnitt gemessen wurde und nicht bei der Ernte.
+            if pz.get("r") is not None:
+                zusatz += (f' <span class="dim" style="font-size:11px">'
+                           f'{t("qualitaet.galerie.rang", rang=int(pz["r"]))}</span>')
+            if pz.get("m") is not None:
+                zusatz += (f' <span class="dim nur-expert" style="font-size:11px">'
+                           f'{t("qualitaet.galerie.marge", marge="%.2f" % pz["m"])}'
+                           f'</span>')
+            if pz.get("q") == "datei":
+                zusatz += (f' <span class="dim nur-expert" style="font-size:11px">'
+                           f'{t("qualitaet.galerie.guete_datei")}</span>')
             markiert = grp != "gut"
-            val = html.escape(person + "|" + f, quote=True)
-            gruppen_k[grp].append(
-                f'<label style="display:inline-block;text-align:center;'
-                f'margin:5px;vertical-align:top;max-width:120px">'
-                f'<img src="{src}" style="height:110px;border-radius:6px;'
-                f'display:block;margin:0 auto 3px;border:3px solid {rand}">'
-                f'<input type="checkbox" class="us-cb g-person" '
-                f'value="{val}"> <span class="{"dim" if not markiert else ""}"'
-                f' style="font-size:12px">{wort or t("qualitaet.galerie.okay")}'
-                f'{zusatz}'
-                '</span></label>')
-        funde_n = len(gruppen_k["check"]) + len(gruppen_k["weg"])
+            _k = _kachel(f, rand, wort, zusatz, markiert,
+                         behalten=(grp == "dubl" and f not in dubl_extra))
+            gruppen_k[grp].append(_k)
+            if grp == "dubl":
+                dubl_kacheln[f] = _k
+        funde_n = (len(gruppen_k["check"]) + len(gruppen_k["weg"])
+                   + len(dubl_extra) + len(gruppen_k["noface"]))
         satz = (t("qualitaet.galerie.satz_gut", n=len(alle))
                 if funde_n == 0 else
                 t("qualitaet.galerie.satz_funde", funde=funde_n,
                   n=len(alle)))
         start = ("check" if gruppen_k["check"] else
-                 "weg" if gruppen_k["weg"] else "gut")
+                 "weg" if gruppen_k["weg"] else
+                 "dubl" if gruppen_k["dubl"] else
+                 "noface" if gruppen_k["noface"] else "gut")
         REITER = [("gut", t("qualitaet.reiter.gut",
                             n=len(gruppen_k['gut']))),
                   ("check", t("qualitaet.reiter.check",
                               n=len(gruppen_k['check']))),
                   ("weg", t("qualitaet.reiter.weg",
-                            n=len(gruppen_k['weg'])))]
+                            n=len(gruppen_k['weg']))),
+                  ("dubl", t("qualitaet.reiter.dubl",
+                             n=len(dubl_extra))),
+                  ("noface", t("qualitaet.reiter.noface",
+                               n=len(gruppen_k['noface'])))]
         leiste = ("".join(
             f'<button class="gtb{" on" if g == start else ""}" id="qgt-{g}" '
             f'onclick="qgTab(\'{g}\')">{txt}</button> '
@@ -324,19 +434,50 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
             '<button class="gtb on" onclick="refBatchLoeschen(this)">'
             + t("qualitaet.galerie.knopf_entfernen")
             + '</button> <span id="qg-n" class="dim"></span>')
+        # Stufe C: die zwei neuen Reiter tragen einen eigenen Erklaersatz —
+        # "identische Kopien" und "kein Gesicht gefunden" sind Befunde, die
+        # ohne einen Satz Erklaerung wie ein Vorwurf aussehen.
+        _kopfsatz = {"dubl": t("qualitaet.galerie.dubl_hinweis"),
+                     "noface": t("qualitaet.galerie.noface_hinweis")}
+        # Der Dubletten-Reiter zeigt SAETZE, nicht eine Bandwurmliste: je
+        # md5-Gruppe der Behalten-Kandidat zuerst, die Kopien dahinter. Sonst
+        # saehe der Nutzer 135 gleich aussehende Kacheln, ohne zu erkennen,
+        # welche zu welcher gehoert.
+        _dubl_html = "".join(
+            '<div style="border:1px solid var(--border);border-radius:8px;'
+            'padding:4px 6px;margin:6px 0;display:inline-block;'
+            'vertical-align:top">'
+            + "".join(dubl_kacheln.get(d, "")
+                      for d in [g["behalten"]] + list(g["weg"]))
+            + '</div>' for g in dubl_gruppen)
+
+        def _box(g, ks):
+            inhalt = (_dubl_html if g == "dubl" else "".join(ks))
+            if not inhalt:
+                return f'<p class="dim">{t("qualitaet.galerie.leer_gruppe")}</p>'
+            satz_g = _kopfsatz.get(g)
+            return ((f'<p class="dim" style="max-width:640px">{satz_g}</p>'
+                     if satz_g else "") + inhalt)
         boxen = "".join(
             f'<div id="qg-{g}" style="margin-top:8px;'
             f'display:{"block" if g == start else "none"}">'
-            + ("".join(ks)
-               or f'<p class="dim">{t("qualitaet.galerie.leer_gruppe")}</p>')
-            + '</div>' for g, ks in gruppen_k.items())
+            + _box(g, ks) + '</div>' for g, ks in gruppen_k.items())
         # Der Zaehler neben Remove zaehlt ALLE Haken (auch in gerade
         # verdeckten Reitern) — refBatchLoeschen loescht genau diese Menge,
         # der Knopf darf nie weniger versprechen als er tut.
         # Stufe 2 Tranche D (§8.4): der Zaehler-Anhang kommt server-seitig
         # via json.dumps(t(...)) byte-treu in den Script-Text (§8.10-Split
         # an der Konkatenationsgrenze, tickende Zahl bleibt Code — §8.20).
-        js = ('<script>function qgTab(g){["gut","check","weg"].forEach('
+        # Stufe C: die Reiter-Namen stehen an ZWEI Stellen im JS — deshalb als
+        # EINE Konstante hinein (K3: ein Reiter, den nur qgTab kennt, waere fuer
+        # 'Select all' unsichtbar). Der Schutz `data-behalten` ist die Sperre
+        # gegen den einen Klick, der einen ganzen Dubletten-Satz leeren wuerde:
+        # 'Alle auswaehlen' laesst im Kopien-Reiter genau den Behalten-
+        # Kandidaten jeder Gruppe stehen — das ist der 'alle bis auf eines'-
+        # Klick des Bauplans.
+        _ks_js = json.dumps([g for g, _txt in REITER])
+        js = ('<script>var QG_KS=' + _ks_js + ';\n'
+              'function qgTab(g){QG_KS.forEach('
               'function(k){document.getElementById("qg-"+k).style.display='
               '(k===g)?"block":"none";document.getElementById("qgt-"+k)'
               '.className=(k===g)?"gtb on":"gtb";});}\n'
@@ -344,18 +485,32 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
               '".us-cb:checked").length;document.getElementById("qg-n")'
               '.textContent=n?n+'
               + json.dumps(t("qualitaet.galerie.js_gewaehlt")) + ':"";}\n'
-              'function qgAlle(an){var ks=["gut","check","weg"],i,box=null;'
+              'function qgAlle(an){var ks=QG_KS,i,box=null;'
               'for(i=0;i<ks.length;i++){var el=document.getElementById('
               '"qg-"+ks[i]);if(el.style.display!=="none"){box=el;break;}}'
               'if(!box)return;var cbs=box.querySelectorAll(".us-cb");'
-              'for(i=0;i<cbs.length;i++)cbs[i].checked=an;qgZaehl();}\n'
+              'for(i=0;i<cbs.length;i++){if(an&&cbs[i].getAttribute('
+              '"data-behalten")==="1")continue;cbs[i].checked=an;}qgZaehl();}\n'
               'document.addEventListener("change",function(e){if(e.target'
               '&&e.target.classList&&e.target.classList.contains("us-cb"))'
               'qgZaehl();});</script>')
+        # Stufe C: die PERSONEN-Warnung der Identitaets-Achse steht ueber der
+        # Galerie und nennt ihre Zahlen — "wirkt gemischt" ohne {neg} von {n}
+        # waere ein Verdacht ohne Beleg. Sie schlaegt NICHTS zum Loeschen vor.
+        _pe = (qs.get("personen") or {}).get(person) or {}
+        gemischt_zeile = ""
+        if _pe.get("gemischt"):
+            gemischt_zeile = (
+                '<p style="color:var(--crit);max-width:640px">&#9888; '
+                + t("qualitaet.galerie.gemischt",
+                    neg=int(_pe.get("marge_neg") or 0),
+                    n=int(_pe.get("marge_n") or 0),
+                    fremd=html.escape(str(_pe.get("fremd") or "?")))
+                + '</p>')
         koerper = (
             f'<h2>{t("qualitaet.galerie.titel", name=html.escape(person))}</h2>'
             f'<p><a href="/qualitaet">{t("qualitaet.galerie.link_zurueck")}</a></p>'
-            + lauf_zeile
+            + lauf_zeile + gemischt_zeile
             + f'<p style="font-size:15px">{satz}</p>'
             + (f'<div style="margin:2px 0 4px">{leiste}</div>' + boxen + js
                if alle else

@@ -63,7 +63,11 @@ ap.add_argument("--urteil-debug", dest="urteil_debug", action="store_true",
 # Werte kommen im Betrieb IMMER aus der Config (blick_fenster_s/urteil_anker);
 # die Defaults hier dienen Standalone-Laeufen. 0 = alter 3-s-Weg.
 ap.add_argument("--blick-fenster", dest="blick_fenster", type=float, default=45.0)
-ap.add_argument("--urteil-anker", dest="urteil_anker", type=float, default=0.50)
+# Anker-Default 0,45 seit .510 (User-Entscheid 07.09.2026, Bandmessung an 173
+# Feld-Faellen; vorher 0,50). Im Betrieb reicht verifyd den Config-Wert durch —
+# dieses Literal gilt Standalone-Laeufen und muss deshalb mit dem Werkswert
+# dort (verifyd.py Default-Block) uebereinstimmen.
+ap.add_argument("--urteil-anker", dest="urteil_anker", type=float, default=0.45)
 ap.add_argument("--timeline", action="store_true", help="Score-Zeitreihe je Gesicht-Frame ausgeben")
 # KALIBRIER-VORRAT AUS DER EVENT-ANALYSE (User 03.09., beauftragt seit 31.08.;
 # personenunabhaengig nachgeschaerft am selben Tag: "die Kalibrierung ist nur
@@ -121,8 +125,87 @@ if (URT_G_E > 0 or URT_G_T > 0) and not guete_mod.verfuegbar():
     URT_G_AUS = "guete-modelle nicht verfuegbar"
     print(f"URTEILS-VORFILTER AUS: {URT_G_AUS}")
     URT_G_E = URT_G_T = 0.0
-URT_G_STAT = {"gemessen": 0, "fehler": 0}
+URT_G_STAT = {"gemessen": 0, "fehler": 0, "stimmen_verworfen_unmessbar": 0}
+# EINE Quelle der Urteils-Kante fuer Stimm-Sieb UND Akte (kein zweites Literal).
+URT_KANTE = float(getattr(a, "urteil_kante", 0) or 0)
 URT_POSE = max(0.0, float(a.urteil_pose or 0.0))   # Pose-Sieb, 0 = aus
+URT_POSE_AUS = ""
+
+
+def _pose_sieb_aus(grund):
+    """Das Pose-Stimm-Sieb LAUT abschalten (einmal je Lauf) — das
+    Modell-Gegenstueck zu URT_G_AUS oben (Bauplan .510 B1, W1-Blocker BL-1).
+
+    Fail-closed gilt je FUND, nie je MODELL: liegt kein RTMPose-Modell vor
+    (Quell-/Dev-Installation, Image mit leerem MODELL_STD-Glob), misst
+    niemand einen Kopf-Score — ein wortwoertliches "pkopf None => keine
+    Stimme" wuerde dann die GESAMTE Erkennung still abschalten. Beim
+    Feldtester steht pose_min auf allen Waechtern auf null, das Sieb laeuft
+    also ueber POSE_BODEN auf JEDEM Ereignis (verifyd.py reicht den Boden
+    immer durch). Deshalb hier: Latte auf 0, Stimmen laufen ohne Pose-Sieb
+    weiter, und die Akte traegt den Grund (urteil_guete.pose_aus)."""
+    global URT_POSE, URT_POSE_AUS
+    if not URT_POSE_AUS:
+        URT_POSE_AUS = grund
+        print(f"POSE-STIMM-SIEB AUS: {grund}")
+    URT_POSE = 0.0
+
+
+def _stimme_zaehlt(e, t, pkopf):
+    """DER eine Stimm-Test dieses Laufs (Guete-Latten + Pose-Sieb) — von der
+    Fenster-Bildung UND vom Verwurfs-Zaehler gerufen, damit beide dieselbe
+    Regel lesen und kein zweites Literal daneben entsteht.
+
+    FAIL-CLOSED JE FUND (.510 B1): core.guete.stimme_ok verwirft einen nicht
+    messbaren Guete-Wert bei aktiver Latte; die Pose folgt derselben Regel.
+    Die LATTEN dagegen sind fail-open je MODELL — fehlt ein Messmodell,
+    stehen sie schon vor dem ersten Frame auf 0 (URT_G_AUS bzw.
+    _pose_sieb_aus) und dieser Test laesst dann alles durch. Die Werte werden
+    bei jedem Aufruf frisch aus den Modul-Globalen gelesen: ein waehrend des
+    Laufs erkannter Modell-Ausfall wirkt sofort."""
+    return (guete_mod.stimme_ok(URT_G_E, URT_G_T, e, t)
+            and (URT_POSE <= 0
+                 or (pkopf is not None and float(pkopf) >= URT_POSE)))
+
+
+def _unmessbar_verworfen(e, t, pkopf):
+    """Verliert dieser STIMM-KANDIDAT seine Stimme, WEIL ein Wert nicht
+    messbar war? -> bool. Zaehlregel von `stimmen_verworfen_unmessbar`
+    (.510 B1); gezaehlt wird je Detektion, nie je Person.
+
+    Die Pose-Klammer ist der Kern (Feldprobe 07.09. an einem Clip mit 210
+    Stimm-Kandidaten): ein Fund, der schon an einer GEMESSENEN Guete-Latte
+    faellt, bekommt gar keine Pose-Messung mehr (`_p_noetig` verlangt
+    stimme_ok) und traegt deshalb IMMER pkopf=None. Zaehlte der Pose-Anteil
+    unbedingt mit, haette der Zaehler jeden an der Guete gescheiterten Fund
+    eingerechnet und auf schwach messenden Kameras vor allem sich selbst
+    gemessen — genau diese Ueberzaehlung hat die Feldprobe gezeigt (1 statt
+    0). Der Pose-Anteil zaehlt deshalb nur, wenn die Guete-Seite bestand.
+
+    REST-UNSCHAERFE, benannt: ein Fund mit einem None auf der einen und einem
+    Wert UNTER der Latte auf der anderen Guete-Achse waere auch fail-open
+    gefallen und zaehlt hier mit. Die Zahl ist damit knapp obenlastig, nicht
+    beliebig obenlastig."""
+    if (URT_G_E > 0 and e is None) or (URT_G_T > 0 and t is None):
+        return True
+    return (guete_mod.stimme_ok(URT_G_E, URT_G_T, e, t)
+            and URT_POSE > 0 and pkopf is None)
+
+
+if URT_POSE > 0 and URT_G_E <= 0 and URT_G_T <= 0:
+    # Ohne aktive Guete-Latte gibt es keinen _kandidat (s. u.) und damit
+    # KEINE Pose-Messung — ein Sieb ohne Messwerte darf nicht sieben.
+    _pose_sieb_aus("guete-latten aus — es entstehen keine stimm-kandidaten "
+                   "und damit keine pose-messung")
+if URT_POSE > 0:
+    try:
+        from core.livewache import pose_verfuegbar as _pose_verfuegbar
+        _pose_da = _pose_verfuegbar()
+    except Exception as _pex:                                  # noqa: BLE001
+        _pose_da = False
+        print(f"   (pose-verfuegbarkeit nicht pruefbar: {type(_pex).__name__})")
+    if not _pose_da:
+        _pose_sieb_aus("pose-modell nicht verfuegbar")
 # Kalibrier-Vorrat aus der Analyse (User 03.09.): Traeger des det-staerksten
 # echten Gesichts je Lauf (analyze arbeitet 1 Event je Prozess/Job).
 KALIB_BEST = {"det": 0.0, "crop": None, "al": None, "stimmen": 0,
@@ -205,20 +288,25 @@ def load_refs():
     if _fremd:
         print(f"   ({_fremd} Vorrats-Referenz(en) mit fremdem Modell-Beiwert — unbrauchbar)")
     refs = {}
+    zeilen = {}                                    # §rows: Datei je Matrix-ZEILE
     for p in alle:
-        V = []
+        V, N = [], []
         for f in want[p]:
             b = bw.get((p, f))
             if b is not None:
-                V.append(np.asarray(b["emb"], np.float32)); continue
+                V.append(np.asarray(b["emb"], np.float32)); N.append(f); continue
             img = cv2.imread(os.path.join(MASTER, p, f))
             if img is None: continue
             v = emb.embed(img)
-            if v is not None: V.append(v.astype(np.float32))
+            if v is not None: V.append(v.astype(np.float32)); N.append(f)
         refs[p] = np.asarray(V, dtype=np.float32)
+        zeilen[p] = N
         print(f"   {p}: {len(V)} Vektoren")
     try:
-        _refcache_schreiben(cache, {**want, "§modell": emb.modell}, refs)
+        # §rows (Stufe A .511): die Zeilen der Matrix tragen ihren Dateinamen, damit
+        # anlernen.refcache_entfernen eine geloeschte Referenz punktuell herausnehmen
+        # kann, statt den ganzen Cache zu verwerfen. Leser ignorieren '§'-Schluessel.
+        _refcache_schreiben(cache, {**want, "§modell": emb.modell, "§rows": zeilen}, refs)
     except Exception as e:                         # Cache ist regenerierbar -> Lauf nicht abbrechen,
         print(f"   (refcache nicht schreibbar: {e} — wird beim naechsten Lauf neu berechnet)")
     refs = {p: refs.get(p, np.zeros((0, 512), np.float32)) for p in a.persons}
@@ -529,7 +617,14 @@ for k, eid in enumerate(a.eids):
                         from core.livewache import (pose_wache as _pw,
                                                     person_region as _pr)
                         _w = _pw()
-                        if _w is not None:
+                        if _w is None:
+                            # MODELL-Ausfall, nicht Fund-Ausfall (.510 B1):
+                            # das Modell liegt zwar da (Startprobe war gruen),
+                            # laesst sich aber nicht laden. Das Sieb geht LAUT
+                            # aus und die Stimmen laufen weiter — fail-closed
+                            # gilt nur fuer die einzelne Messung.
+                            _pose_sieb_aus("pose-modell nicht ladbar")
+                        else:
                             from pose_wache import KOPF_IDX as _KIDX
                             _h, _b = frame.shape[:2]
                             _pts, _sc = _w.skelett(
@@ -568,12 +663,19 @@ for k, eid in enumerate(a.eids):
                                   f"_{_p0}_nn{sc[_p0]:.2f}.jpg"), crop)
                     except Exception:                      # noqa: BLE001
                         pass
+                # B1-ZAEHLER (.510), Regel in _unmessbar_verworfen (oben).
+                if _kandidat and _unmessbar_verworfen(empf_v, fiqa_v, p_v):
+                    URT_G_STAT["stimmen_verworfen_unmessbar"] += 1
                 # ACHTUNG Schluessel: "p" in faces ist der beste PERSONEN-Name
                 # (Bestand, s. "sc": sc, "p": p am Ende) — der Pose-Kopf-Wert
                 # heisst deshalb "pkopf" (Kollision 03.09. real getreten:
                 # float('<Name>') im Stimm-Sieb).
                 faces.append({"t": i/fps, "bw": x2-x1, "bh": y2-y1, "front": front, "fd": fd,
                               "fiqa_t": fiqa_v, "empf": empf_v, "pkopf": p_v,
+                              # B6 (.510): war dieser Fund ein STIMM-Kandidat?
+                              # Nur fuer die (und nicht fuer die Ring-Bilder)
+                              # wandern e/t/pkopf unten in die Akte.
+                              "kand": bool(_kandidat),
                               "yaw": yaw, "det": float(fc.det_score), "sharp": schaerfe0,
                               # .313: genderage laeuft nicht mehr mit (ungenutzt) — Felder bleiben
                               # im Bestandsformat, jetzt '?'/-1 statt eines Modellwerts.
@@ -721,11 +823,24 @@ for k, eid in enumerate(a.eids):
         # Identitaet im Bild, nur Rauschen, das die Referenzmasse belohnt.
         # max/median bleiben UNGEFILTERT (Diagnose-Anzeige) — nur das Urteil
         # (win3s -> confirmed) verlangt die Kante. 0 = aus (Alt-Aufrufer).
-        _uk = float(getattr(a, "urteil_kante", 0) or 0)
-        # .404: Stimme nur, wenn der Fund auch die Erkennen-Guete-Latten
-        # bestand (None = nicht gemessen/Messfehler -> passiert, fail-open).
-        # POSE-SIEB Stufe 2 (03.09.): nach den Guete-Latten prueft die Stimme
-        # den Kamera-Regler pose_min — ungemessene Frames passieren (fail-open).
+        _uk = URT_KANTE
+        # .510 FAIL-CLOSED JE FUND (User-Entscheid 07.09., "nicht messbar =
+        # raus"): Stimme nur, wenn der Fund die Erkennen-Guete-Latten UND das
+        # Pose-Sieb bestand — ein bei AKTIVER Latte nicht gemessener Wert
+        # verwirft die Stimme jetzt, statt wie bis .509 zu passieren. Beide
+        # Siebe stecken in _stimme_zaehlt (eine Regel, ein Ort); der
+        # Modell-Ausfall setzt die Latten vorher auf 0 und ist damit hier
+        # nicht mehr sichtbar.
+        # NEBENWIRKUNG, gewollt und bekannt (Bauplan .510 B1 / W1 M-12):
+        # `ts` ist zugleich die Menge der FENSTER-STARTPUNKTE, und sie
+        # enthaelt auch Funde UNTER win_thresh, fuer die nie eine Guete
+        # gemessen wurde (_kandidat verlangt max(sc) >= win_thresh) — die
+        # fallen unter fail-closed alle heraus. Auf die gemessenen Kennwerte
+        # wirkt das nicht: `blick_n` rechnet ohnehin nur auf Stimmen
+        # (>= win_thresh, s. `_st` unten), und fuer `win` gilt, dass jedes
+        # optimale 3-s-Fenster auch bei seiner ERSTEN Stimme beginnen kann —
+        # und die ist selbst ein Startpunkt. Was `win` also veraendert, sind
+        # allein die verlorenen STIMMEN, nicht die verlorenen Startpunkte.
         # FUNDSTELLEN (03.09. spaet, User-Go "Familien-Duo"): jede Stimme
         # traegt den INDEX ihrer Detektion in faces — die Marge kann damit
         # unterscheiden, ob zwei Kandidaten DASSELBE Gesicht deuten
@@ -734,10 +849,8 @@ for k, eid in enumerate(a.eids):
         # Liste, also auch rueckwirkend nachvollziehbar.
         ts = sorted((f["t"], f["sc"][person], _fi) for _fi, f in enumerate(faces)
                     if (_uk <= 0 or min(f["bw"], f["bh"]) >= _uk)
-                    and guete_mod.stimme_ok(URT_G_E, URT_G_T,
-                                            f.get("empf"), f.get("fiqa_t"))
-                    and (URT_POSE <= 0 or f.get("pkopf") is None
-                         or float(f["pkopf"]) >= URT_POSE))
+                    and _stimme_zaehlt(f.get("empf"), f.get("fiqa_t"),
+                                       f.get("pkopf")))
         win = max((sum(1 for (t, s, _i) in ts if t0 <= t <= t0 + 3.0 and s >= a.win_thresh) for t0, _s0, _i0 in ts), default=0)
         stimm_idx = sorted(_i for (_t, _s, _i) in ts if _s >= a.win_thresh)
         # BLICKFENSTER (User 03.09. abends, s. Argparse-Kommentar): bestes
@@ -798,12 +911,26 @@ for k, eid in enumerate(a.eids):
         # (im Messsatz sank es in den Fehldetektions-Events von 90/91/92 auf 0/59/47).
         # detektionen = Kennwerte je Detektion (ohne Embedding/Crop, ~35 kB/Event):
         # macht kuenftige Schwellenaenderungen an Bestandsdaten simulierbar statt neu rechnen.
+        # B6 (.510): dazu die GEMESSENEN Guete-/Pose-Werte — aber NUR fuer
+        # Stimm-Kandidaten ("kand"), sonst waechst die Akte um jede Grasnarbe.
+        # Ein ausdrueckliches null heisst "war nicht messbar" und ist der
+        # sichtbare Beleg fuer jede fail-closed-Verwerfung (B1). Schluessel
+        # bewusst guete_e/guete_t/pkopf: "t" ist in dieser Zeile die ZEIT, ein
+        # zweites "t" waere die naechste Namenskollision (vgl. "p" 03.09.).
+        # Werte auf 3 Nachkommastellen — die Skalen liegen zwischen 0 und 1.
         _rf.write(json.dumps({"label": label, "source": eid, "faces": len(faces),
                               "faces_geprueft": len(faces) - fd_n,
                               "max_bw": max((f["bw"] for f in faces if not f.get("fd")), default=0),
                               "detektionen": [{"t": round(f["t"], 1), "bw": f["bw"], "bh": f["bh"],
                                                "front": round(f["front"], 2), "det": round(f["det"], 2),
-                                               "sharp": round(f["sharp"], 0), "fd": f["fd"]}
+                                               "sharp": round(f["sharp"], 0), "fd": f["fd"],
+                                               **({"guete_e": None if f["empf"] is None
+                                                   else round(float(f["empf"]), 3),
+                                                   "guete_t": None if f["fiqa_t"] is None
+                                                   else round(float(f["fiqa_t"]), 3),
+                                                   "pkopf": None if f["pkopf"] is None
+                                                   else round(float(f["pkopf"]), 3)}
+                                                  if f.get("kand") else {})}
                                               for f in faces],
                               # W1-Telemetrie: Vollstaendigkeit in die Akte (Schema 3) —
                               # verifyd uebernimmt die Felder in deckung.jsonl und wertet
@@ -815,9 +942,22 @@ for k, eid in enumerate(a.eids):
                                  if getattr(frames, "hwdec_fallback", False) else {}),
                               **({"decoder_fehler": frames.decoder_fehler}
                                  if getattr(frames, "decoder_fehler", 0) else {}),
+                              # B6 (.510): die ANGEWANDTEN Latten dieses Laufs in
+                              # den Kopf der Akte. Ohne sie ist am Feldmaterial
+                              # nicht entscheidbar, ob ein Fund an der Latte oder
+                              # an der Unmessbarkeit fiel — und jede spaetere
+                              # Nachrechnung raet ueber die damaligen Regler.
+                              # e/t standen schon da; pose/kante/anker/win_thresh
+                              # kommen dazu, alle aus DEN Variablen, die auch
+                              # gesiebt haben (kein zweites Literal).
                               "urteil_guete": {"e": URT_G_E, "t": URT_G_T,
+                                               "pose": URT_POSE, "kante": URT_KANTE,
+                                               "anker": float(getattr(a, "urteil_anker", 0) or 0),
+                                               "win_thresh": float(a.win_thresh),
                                                **URT_G_STAT,
-                                               **({"aus": URT_G_AUS} if URT_G_AUS else {})},
+                                               **({"aus": URT_G_AUS} if URT_G_AUS else {}),
+                                               **({"pose_aus": URT_POSE_AUS}
+                                                  if URT_POSE_AUS else {})},
                               "persons": summary.get(label, {})}, default=float, ensure_ascii=False) + "\n")
         _rf.flush()
     # Kalibrier-Vorrat: Bilanzzeile (der Zulauf selbst laeuft jetzt je Gesicht

@@ -12,9 +12,11 @@ DREI ABSCHNITTE — die Drei-Latten-Semantik (User 31.08.):
   1. ANZEIGE / MELDEN / VORRAT — det, Empfinden, Erkennbarkeit. Sie
      entscheiden, WELCHES Bild in Meldung und Anzeige geht und WAS in den
      Kalibrier-Vorrat kommt. Nicht mehr.
-  2. KATALOG-AUFNAHME — eine EIGENE, strengere Latte: welches Bild dieser
-     Kamera ueberhaupt Referenz werden darf. Sie greift an allen
-     Uebernahme-Wegen (core/kamerakalib.py), niemals rueckwirkend.
+  2. KATALOG-AUFNAHME — eine EIGENE Latte: welches Bild dieser Kamera
+     ueberhaupt Referenz werden darf. Sie greift an allen Uebernahme-Wegen
+     (core/kamerakalib.py), niemals rueckwirkend. Seit .511 ist sie
+     ausdruecklich LIBERAL (Werkswert 0,125/0,125, Regler-Skala ab 0,100):
+     aufnehmen ist die weite Tuer, gesiebt wird im dritten Register.
   3. MATERIAL — der Vorrat dieser Kamera: Stand, Nachschub auf Knopfdruck,
      Loeschweg.
 
@@ -61,6 +63,16 @@ from core.guete import STIMM_BODEN as _KB
 from core.guete import POSE_BODEN as _PB
 _BODEN_E = f"{_KB['empfinden']:.3f}"
 _BODEN_T = f"{_KB['t']:.3f}"
+
+# Untergrenzen der zwei KATALOG-Regler — dieselbe Bauform, eigene Quelle
+# (core.guete.KATALOG_BODEN, .511). Bis .510 standen hier 0,175 und 0,375 als
+# Literale in HTML *und* JavaScript: der damalige Werkswert minus 0,025, also
+# vier Zweit-Zahlen, die beim Senken der Latte haetten mitwandern muessen.
+# Der Werkswert selbst (KSTD) kommt weiterhin vom Server durch — die Grenzen
+# hier begrenzen nur, was der Regler ueberhaupt einstellen kann.
+from core.guete import KATALOG_BODEN as _KATB
+_KAT_LO_E = f"{_KATB['empfinden']:.3f}"
+_KAT_LO_T = f"{_KATB['t']:.3f}"
 
 # Skala des Pose-Reglers — fest wie bei den Nachbarn (Lehre der Lernlauf-Seite,
 # s. JS-Kommentar unten). Gemessene Lage des Kopf-Scores: Mensch 0,77-1,04 am
@@ -117,6 +129,15 @@ def _quelle_wort(quelle):
             "aus": t("livekalib.katalog.quelle_aus")}.get(str(quelle), "")
 
 
+def _pruef_quelle_wort(quelle):
+    """Dasselbe fuer die PRUEFER-Latte (.511 Stufe C) — eigene Schluessel, weil
+    sie eine andere Frage beantwortet als die Katalog-Latte darueber und ein
+    gemeinsamer Text beide Rollen verwischen wuerde."""
+    return {"kamera": t("livekalib.pruefen.quelle_kamera"),
+            "global": t("livekalib.pruefen.quelle_global"),
+            "aus": t("livekalib.pruefen.quelle_aus")}.get(str(quelle), "")
+
+
 def _regler(kennung, titel, prosa, lo, hi, schritt, wert):
     # Prosa als Hover-Titel statt Textblock (User 31.08.: drei Schieber in
     # EINER Reihe, damit die Galerie mehr Bilder zeigt — der Platz gehoert
@@ -128,7 +149,7 @@ def _regler(kennung, titel, prosa, lo, hi, schritt, wert):
             f'<span id="{kennung}-wert"></span></div>')
 
 
-def render(kamera, vorrat, guard, standard, kat, lauf_bilder=(), deckel=0,
+def render(kamera, vorrat, guard, standard, kat, pruef=None, lauf_bilder=(), deckel=0,
            fueller=(0, 0), hat_waechter=False, fueller_stand=None):
     """-> Seiten-INHALT.
 
@@ -137,6 +158,10 @@ def render(kamera, vorrat, guard, standard, kat, lauf_bilder=(), deckel=0,
     standard= {"det","e","t"} die Werks-Startwerte (aus dem Code, nie hier)
     kat     = {"akt": {"e","t","quelle"}, "std": {"e","t"}} — geltende und
               Werks-Katalog-Latte (core.kamerakalib)
+    pruef   = {"akt": {"t","quelle"}, "std": {"t"}} — geltende und Werks-Latte
+              der BESTANDS-PRUEFUNG (core.refurteil, .511 Stufe C). Drittes
+              Register: es urteilt ueber schon vorhandene Katalogbilder und
+              nimmt keines auf. None = wie vor Stufe C (Register faellt weg)
     lauf_bilder = Lernlauf-Bilder DIESER Kamera (kann leer sein)
     deckel  = live_kalib_max (0 = Vorrats-Sammlung aus)
     fueller = (ziel_bilder, deckel_events) des On-demand-Fuellers
@@ -169,6 +194,8 @@ def render(kamera, vorrat, guard, standard, kat, lauf_bilder=(), deckel=0,
            "p": (g.get("pose_min") if g.get("pose_min") is not None else _PB)}
     kat_akt = kat.get("akt") or {}
     kat_std = kat.get("std") or {}
+    pruef_akt = (pruef or {}).get("akt") or {}
+    pruef_std = (pruef or {}).get("std") or {}
     # Fehlen die Guete-Modelle im Image, tragen ALLE Zeilen -1 — dann sind die
     # zwei Guete-Regler wirkungslos, und die Seite sagt das, statt sie
     # anzubieten und den Nutzer raten zu lassen.
@@ -268,7 +295,9 @@ def render(kamera, vorrat, guard, standard, kat, lauf_bilder=(), deckel=0,
         f'<button type="button" id="lk-tab-e" class="gtb on">'
         f'{t("livekalib.tab_erkennen")}</button>'
         f'<button type="button" id="lk-tab-l" class="gtb">'
-        f'{t("livekalib.tab_lernen")}</button></div>'
+        f'{t("livekalib.tab_lernen")}</button>'
+        f'<button type="button" id="lk-tab-p" class="gtb">'
+        f'{t("livekalib.tab_pruefen")}</button></div>'
         f'<div class="kal-gruppe" id="lk-reg-e"><b>{t("livekalib.abschnitt.anzeige")}</b>'
         f'<div class="kal-prosa">{t("livekalib.abschnitt.anzeige_prosa")}</div>'
         + _regler("lk-det", t("livekalib.regler_det"),
@@ -294,10 +323,29 @@ def render(kamera, vorrat, guard, standard, kat, lauf_bilder=(), deckel=0,
         f'<div class="dim lv-zeile">'
         f'{_quelle_wort(kat_akt.get("quelle") or "aus")}</div>'
         + _regler("lk-ke", t("livekalib.katalog.regler_e"),
-                  t("livekalib.katalog.regler_e_prosa"), "0.175", "1", "0.001", "0.175")
+                  t("livekalib.katalog.regler_e_prosa"), _KAT_LO_E, "1",
+                  "0.001", _KAT_LO_E)
         + _regler("lk-kt", t("livekalib.katalog.regler_t"),
-                  t("livekalib.katalog.regler_t_prosa"), "0.375", "1", "0.001", "0.375")
-        + '<div class="dim" id="lk-kstand"></div></div>')
+                  t("livekalib.katalog.regler_t_prosa"), _KAT_LO_T, "1",
+                  "0.001", _KAT_LO_T)
+        + '<div class="dim" id="lk-kstand"></div></div>'
+        # DRITTES Register (.511 Stufe C): die Latte des BESTANDS-Pruefers.
+        # Sie steht bewusst hier — dieselbe Seite, dieselbe Galerie, dieselbe
+        # Skala — und trotzdem als eigener Regler: Aufnehmen und Nachpruefen
+        # sind zwei Fragen, und ein Zug am einen darf den anderen nicht still
+        # mitziehen (der Rollen-Zuschnitt des Users 08.09.). Nur EIN Regler: die
+        # Guete-Achse des Pruefers ist fiqa_t, die zweite Achse ist der
+        # bestehende Norm-Boden des Lernvorrats aus der Konfigurationsseite.
+        f'<div class="kal-gruppe" id="lk-reg-p" style="display:none">'
+        f'<b>{t("livekalib.abschnitt.pruefen")}</b>'
+        f'<div class="kal-prosa">{t("livekalib.pruefen.prosa")}</div>'
+        f'<div class="kal-prosa">{t("livekalib.pruefen.grenze")}</div>'
+        f'<div class="dim lv-zeile">'
+        f'{_pruef_quelle_wort(pruef_akt.get("quelle") or "aus")}</div>'
+        + _regler("lk-pt", t("livekalib.pruefen.regler_t"),
+                  t("livekalib.pruefen.regler_t_prosa"), "0", "1", "0.001",
+                  f'{float(pruef_std.get("t") or 0.0):.3f}')
+        + '<div class="dim" id="lk-pstand"></div></div>')
     return kopf + material_karte + f"""
 <div class="kal-regler">
 {regler}
@@ -316,8 +364,11 @@ const AKT = {json.dumps(akt)};
 const STD = {json.dumps(standard)};
 const KAKT = {json.dumps({"e": kat_akt.get("e"), "t": kat_akt.get("t")})};
 const KSTD = {json.dumps({"e": kat_std.get("e"), "t": kat_std.get("t")})};
+const PAKT = {json.dumps({"t": pruef_akt.get("t")})};
+const PSTD = {json.dumps({"t": pruef_std.get("t")})};
 const T_TXT = {json.dumps({"genutzt": t("livekalib.js.genutzt"),
                            "katalog": t("livekalib.js.katalog"),
+                           "pruefen": t("livekalib.js.pruefen"),
                            "gespeichert": t("livekalib.js.gespeichert"),
                            "fehler": t("livekalib.js.fehler"),
                            "lauf": t("livekalib.js.lauf")},
@@ -352,13 +403,15 @@ function setz(id, v, lo, hi) {{
 function malen() {{
   const d = wert("lk-det", 2), e = wert("lk-e", 3), tt = wert("lk-t", 3);
   const ke = wert("lk-ke", 3), kt = wert("lk-kt", 3), pp = wert("lk-p", 2);
+  const pt = wert("lk-pt", 3);
   document.getElementById("lk-det-wert").textContent = d.toFixed(2);
   document.getElementById("lk-e-wert").textContent = e.toFixed(3);
   document.getElementById("lk-t-wert").textContent = tt.toFixed(3);
   document.getElementById("lk-p-wert").textContent = pp.toFixed(2);
   document.getElementById("lk-ke-wert").textContent = ke.toFixed(3);
   document.getElementById("lk-kt-wert").textContent = kt.toFixed(3);
-  let drin = 0, kdrin = 0;
+  document.getElementById("lk-pt-wert").textContent = pt.toFixed(3);
+  let drin = 0, kdrin = 0, pdrin = 0;
   for (const [z, k] of karten) {{
     /* UND-Logik wie auf der Lernlauf-Seite. Ein NICHT gemessener Wert (-1)
        laesst seine Latte passieren — sonst blendete ein fehlendes Guete-Modell
@@ -375,40 +428,51 @@ function malen() {{
        kann fuer Anzeige/Vorrat taugen und trotzdem keine Referenz werden
        duerfen. Beides in einer Farbe waere eine Luege ueber zwei Latten. */
     const kok = (z.e < 0 || z.e >= ke) && (z.t < 0 || z.t >= kt);
+    /* Die PRUEFER-Latte zaehlt, was sie MARKIEREN wuerde — nicht, was
+       durchkaeme. Das ist die Frage, die hier zaehlt: der Nutzer stellt eine
+       Latte ein, an der Bilder AUFFALLEN sollen, nicht eine, die sie
+       durchlaesst. Ungemessenes (-1) faellt nie auf (fail-open wie ueberall). */
+    const praus = (pt > 0 && z.t >= 0 && z.t < pt);
     k.classList.toggle("raus", !ok);
     k.classList.toggle("katraus", ok && !kok);
     if (ok) drin++;
     if (kok) kdrin++;
+    if (praus) pdrin++;
   }}
   document.getElementById("lk-stand").textContent =
     T_TXT.genutzt.replace("{{n}}", drin).replace("{{gesamt}}", B.length);
   document.getElementById("lk-kstand").textContent =
     T_TXT.katalog.replace("{{n}}", kdrin).replace("{{gesamt}}", B.length);
+  document.getElementById("lk-pstand").textContent =
+    T_TXT.pruefen.replace("{{n}}", pdrin).replace("{{gesamt}}", B.length);
 }}
-for (const id of ["lk-det", "lk-e", "lk-t", "lk-p", "lk-ke", "lk-kt"])
+for (const id of ["lk-det", "lk-e", "lk-t", "lk-p", "lk-ke", "lk-kt", "lk-pt"])
   document.getElementById(id).oninput = malen;
-function registerZeigen(lernen) {{
-  document.getElementById("lk-reg-e").style.display = lernen ? "none" : "";
-  document.getElementById("lk-reg-l").style.display = lernen ? "" : "none";
-  document.getElementById("lk-tab-e").classList.toggle("on", !lernen);
-  document.getElementById("lk-tab-l").classList.toggle("on", lernen);
+function registerZeigen(welches) {{
+  const G = {{e: "lk-reg-e", l: "lk-reg-l", p: "lk-reg-p"}};
+  for (const k in G) {{
+    document.getElementById(G[k]).style.display = (k === welches) ? "" : "none";
+    document.getElementById("lk-tab-" + k).classList.toggle("on", k === welches);
+  }}
 }}
-document.getElementById("lk-tab-e").onclick = () => registerZeigen(false);
-document.getElementById("lk-tab-l").onclick = () => registerZeigen(true);
+document.getElementById("lk-tab-e").onclick = () => registerZeigen("e");
+document.getElementById("lk-tab-l").onclick = () => registerZeigen("l");
+document.getElementById("lk-tab-p").onclick = () => registerZeigen("p");
 document.getElementById("lk-std").onclick = () => {{
   setz("lk-det", STD.det, 0.40, 0.60); setz("lk-e", STD.e, 0, 1);
   setz("lk-t", STD.t, 0, 1);
   /* Pose-Vorgabe = AUS. Es gibt keinen Werks-Wert dafuer, solange die Latte
      nichts siebt — "Vorgaben" heisst hier also: der Regler stoert nicht. */
   setz("lk-p", {_POSE_LO}, {_POSE_LO}, {_POSE_HI});
-  setz("lk-ke", KSTD.e === null ? 0.175 : KSTD.e, 0.175, 1);
-  setz("lk-kt", KSTD.t === null ? 0.375 : KSTD.t, 0.375, 1); malen();
+  setz("lk-ke", KSTD.e === null ? {_KAT_LO_E} : KSTD.e, {_KAT_LO_E}, 1);
+  setz("lk-kt", KSTD.t === null ? {_KAT_LO_T} : KSTD.t, {_KAT_LO_T}, 1);
+  setz("lk-pt", PSTD.t === null ? 0 : PSTD.t, 0, 1); malen();
 }};
 document.getElementById("lk-save").onclick = async () => {{
   const m = document.getElementById("lk-msg");
   try {{
     /* Derselbe Schreibweg wie jede andere Waechter-Aenderung (/live_speichern,
-       Riegel + Audit dort). Nur diese sechs Felder gehen mit — alles andere
+       Riegel + Audit dort). Nur diese sieben Felder gehen mit — alles andere
        behaelt der Server (live_speichern: fehlendes Feld heisst behalten). */
     const r = await fetch("/live_speichern", {{method: "POST",
       headers: {{"Content-Type": "application/json"}},
@@ -417,6 +481,7 @@ document.getElementById("lk-save").onclick = async () => {{
                             guete_t_min: wert("lk-t", 3),
                             katalog_e_min: wert("lk-ke", 3),
                             katalog_t_min: wert("lk-kt", 3),
+                            pruef_t_min: wert("lk-pt", 3),
                             pose_min: wert("lk-p", 2)}})}});
     const d = await r.json().catch(() => ({{}}));
     m.textContent = r.ok ? T_TXT.gespeichert : (d.msg || T_TXT.fehler);
@@ -427,7 +492,10 @@ document.getElementById("lk-save").onclick = async () => {{
 setz("lk-det", AKT.det, 0.40, 0.60); setz("lk-e", AKT.e, 0, 1);
 setz("lk-t", AKT.t, 0, 1);
 setz("lk-p", AKT.p, {_POSE_LO}, {_POSE_HI});
-setz("lk-ke", KAKT.e === null ? 0.175 : KAKT.e, 0.175, 1);
-setz("lk-kt", KAKT.t === null ? 0.375 : KAKT.t, 0.375, 1);
+setz("lk-ke", KAKT.e === null ? {_KAT_LO_E} : KAKT.e, {_KAT_LO_E}, 1);
+setz("lk-kt", KAKT.t === null ? {_KAT_LO_T} : KAKT.t, {_KAT_LO_T}, 1);
+/* Die geltende Pruefer-Latte (Kamera-Wert oder globaler Rueckfall) steht am
+   Regler; ist gar keine gesetzt, zeigt er 0 = "diese Achse urteilt nicht". */
+setz("lk-pt", PAKT.t === null ? 0 : PAKT.t, 0, 1);
 malen();
 </script>"""

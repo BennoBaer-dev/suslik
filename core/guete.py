@@ -39,7 +39,27 @@ _IN_STD = np.array([0.229, 0.224, 0.225], np.float32)
 # 30.08., 714 Bilder, User-Slider; analysen/todos_29_08.md Punkt 9).
 # EINE Quelle: load_config-Defaults UND der Standard-Knopf der
 # Kalibrier-Seite lesen von HIER (K3-Regel gegen Zweit-Literale).
+# SEIT .511 gilt das nur noch fuer die GLOBALE Guete-Latte (Lernlauf-Sieb,
+# Gruppen-Flaeche, Pool-Zulauf) — die KATALOG-Latte hat mit dem Rollen-
+# Zuschnitt vom 08.09. ihre eigenen Werkswerte darunter bekommen. Die
+# Neu-Eichung des Lernlaufs auf die Kalibrier-Skala steht noch aus (sie ist
+# als naechster Schritt angekuendigt); bis dahin bleibt DIESE Zahl, wie sie
+# gemessen wurde. Wer sie anfasst, verschiebt den Lernlauf, nicht den Katalog.
 STARTWERTE = {"empfinden": 0.200, "t": 0.400}
+# ---- KATALOG-Latte (Aufnahme in den Referenz-Katalog) ---------------------
+# EIGENE Quelle seit .511 (User-Entscheid 08.09.2026 ~17:0x: "0,125 passt,
+# bau es so"). Bis .510 lieh sich die Katalog-Latte die STARTWERTE oben —
+# 0,200/0,400 auf der NAH-Eichung des Lernlaufs. Am Feldtester-Spiegel liess
+# diese Latte 34 von 200 Kalibrier-Samples durch und wuergte damit genau die
+# Automatik-Wege ab, die den Katalog fuellen sollen (Lernlauf-Uebernahme,
+# Bestands-Vorschlag, Vorrat, Enrollment — core.kamerakalib.UEBERNAHME_STELLEN).
+# ROLLEN-ZUSCHNITT, aus dem die neue Zahl folgt (User 08.09.): AUFNEHMEN ist
+# liberal, gesiebt wird DANACH vom Bestands-Pruefer (core/refurteil.py, eigene
+# Latte PRUEF_STARTWERTE). Eine strenge Aufnahme-Latte kostet Material, das
+# der Pruefer spaeter ohnehin einzeln beurteilt — deshalb runter, nicht rauf.
+# Die zwei Achsen bekommen bewusst DIESELBE Zahl: die Trennschaerfe steckt im
+# Pruefer, hier steht nur noch der Boden gegen totes Material.
+KATALOG_STARTWERTE = {"empfinden": 0.125, "t": 0.125}
 # ANZEIGE_STARTWERTE (Vorgaben-Knopf der Kalibrierseite) ist seit 03.09. eine
 # ABLEITUNG der Werks-Boeden und steht deshalb unten HINTER STIMM_DEFAULT —
 # die eigenstaendigen 0,175/0,200 vom 31.08. sind mit dem Sync-Entscheid
@@ -94,6 +114,13 @@ POSE_BODEN = 0.65
 # unsichtbaren 0,175er-e-Sieb). Wer schaerfer sieben will, kalibriert die Kamera.
 STIMM_DEFAULT = dict(STIMM_BODEN)                 # Werkswerte ohne Kalibrierung = Boden
 ANZEIGE_STARTWERTE = dict(STIMM_DEFAULT)          # Vorgaben-Knopf setzt die Werks-Boeden
+# Regler-Untergrenze der KATALOG-Latte (.511): dieselbe gemessene Keller-Grenze
+# wie bei den Stimm-Latten — unter 0,10 liegen nur noch Kopf-gesenkt/Augen-weg/
+# Hinterkopf (Messung 01.09.), da ist nichts mehr, was ein Katalog braucht.
+# ABLEITUNG statt eigener Zahl (K3): die Skala ist dieselbe, also ist es auch
+# ihr Boden. Bis .510 stand die Regler-Skala bei 0,175/0,375 — das war der
+# alte Werkswert minus 0,025 und damit ein Zweit-Literal in der Seite.
+KATALOG_BODEN = dict(STIMM_BODEN)
 
 # RING-EINLASS (Kalibrier-Vorrat) — FIX 02.09. nach dem Tester-Befund: der
 # Einlass nahm STARTWERTE (t 0,400 = KATALOG-Latte auf der Datei-Skala) und
@@ -123,15 +150,33 @@ def stimm_latten(guard):
     return out[0], out[1]
 
 
+# INVARIANTE: STIMME_FAIL_CLOSED   (Marke: CLAUDE.md "Messbarkeit vor Stimme")
 def stimme_ok(latte_e, latte_t, e, t):
-    """Besteht ein Fund die Stimm-Latten? Ein NICHT MESSBARER Wert (None,
-    Modelle fehlen/Messfehler) passiert — fail-open, denn ein Modell-Ausfall
-    darf nie die ganze Erkennung stumm schalten (guete_messen loggt ihn laut).
-    Latte <= 0 heisst: dieser Anteil ist bewusst aus (Diagnose-Laeufe)."""
+    """Besteht ein Fund die Stimm-Latten? FAIL-CLOSED JE FUND — bei AKTIVER
+    Latte (> 0) verwirft ein NICHT MESSBARER Wert (None) die Stimme DIESES
+    Funds. Eine Stimme, deren Qualitaet niemand messen konnte, ist keine
+    gemessene Stimme (User-Entscheid 07.09.2026: "nicht messbar = raus";
+    Bauplan 0.1.0.510 B1, gebaut in .510).
+
+    Latte <= 0 heisst UNVERAENDERT: dieser Anteil ist bewusst aus
+    (Diagnose-/Altvergleichs-Laeufe) — dort passiert jeder Wert wie bisher.
+
+    Der MODELL-Ausfall laeuft ausdruecklich NICHT ueber diese Funktion
+    (Gegenpruefung W1, Befund M-1): fehlen die Messmodelle, setzen die
+    VERBRAUCHER ihre Latten LAUT auf 0 (analyze.py URT_G_AUS;
+    core/livewache._namens_stimmen) und landen damit im Latte-<=-0-Zweig.
+    Kurzform der Regel: fail-closed je FUND, fail-open je MODELL. Wer diese
+    Funktion einmal ohne das Modell-Gegenstueck ruft, schaltet bei fehlenden
+    Modelldateien die ganze Erkennung still ab.
+
+    Preis, beziffert und bewusst getragen (W1 BL-3, 173 Band-Faelle vom
+    07.09.): t war bei 9 Faellen nicht messbar, davon 7 mit Richterurteil
+    "richtig" — die fallen jetzt mit."""
     for latte, wert in ((latte_e, e), (latte_t, t)):
-        if latte and latte > 0 and wert is not None and float(wert) < float(latte):
+        if latte and latte > 0 and (wert is None or float(wert) < float(latte)):
             return False
     return True
+# INVARIANTE-ENDE: STIMME_FAIL_CLOSED
 
 _lock = threading.Lock()
 _sess = {}

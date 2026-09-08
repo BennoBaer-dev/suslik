@@ -16,6 +16,8 @@ T = {
         "téléverser une photo ci-dessous, y compris pour une personne "
         "entièrement nouvelle.",
     "gesichter.galerie.bildzahl": "{n} images",
+    "gesichter.galerie.gemischt": "catalogue qui semble mélangé",
+    "gesichter.galerie.vorschlag": "{n} suggestion(s) de retrait",
     "gesichter.galerie.knopf_entfernen": "retirer",
     "gesichter.galerie.knopf_aehnliche": "trouver les visages correspondants",
     "gesichter.galerie.knopf_qs": "Vérifier la qualité",
@@ -238,7 +240,12 @@ T = {
     "aehnliche.unbekannt.titel": "Depuis les visages inconnus",
     "aehnliche.unbekannt.suche_titel":
         "Recherche en cours — les références sont relues.",
-    "aehnliche.unbekannt.suche_hinweis": "La page s'actualise d'elle-même.",
+    "aehnliche.unbekannt.kein_cache":
+        "Les références ne sont pas encore lues.",
+    "aehnliche.unbekannt.kein_cache_hinweis":
+        "Cette liste a besoin de l'index des références. La vérification "
+        "des références l'écrit&nbsp;; un résultat apparaîtra ensuite ici.",
+    "aehnliche.unbekannt.knopf_pruefen": "vérifier les références",
     "aehnliche.unbekannt.hinweis_leer":
         "Aucun visage inconnu similaire dans la bibliothèque.",
     "aehnliche.unbekannt.aehnlichkeit": "similarité {sim}",
@@ -247,9 +254,19 @@ T = {
         "Nouveaux visages issus d'événements reconnus (7 jours)",
     "aehnliche.vorschlaege.suche_titel":
         "Recherche en cours — les événements reconnus sont parcourus.",
-    "aehnliche.vorschlaege.suche_hinweis":
-        "La page s'actualise d'elle-même&nbsp;; résultat dans une à deux "
-        "minutes.",
+    "aehnliche.vorschlaege.nie_gesucht":
+        "Pas encore recherché.",
+    "aehnliche.vorschlaege.nie_gesucht_hinweis":
+        "La recherche dans les événements reconnus se lance sur clic, pas "
+        "en arrière-plan.",
+    "aehnliche.vorschlaege.stand_leer": "dernière recherche {stand}",
+    "aehnliche.suche.rechnet":
+        "La recherche est en cours&nbsp;; la page se recharge d'elle-même "
+        "dès que le résultat est là.",
+    "aehnliche.suche.wartet_platz":
+        "En attente d'un emplacement d'analyse libre ({belegt} sur "
+        "{plaetze} occupés)&nbsp;; la page se recharge d'elle-même dès que "
+        "le résultat est là.",
     "aehnliche.vorschlaege.kachel_zeile": "{wann} · {kamera} · sim {sim}",
     "aehnliche.vorschlaege.titel_empfohlen": "Recommandés",
     "aehnliche.vorschlaege.titel_neutral":
@@ -1041,6 +1058,7 @@ T = {
     "livekalib.fueller.bilder": "image(s)",
     "livekalib.tab_erkennen": "Reconnaître",
     "livekalib.tab_lernen": "Catalogue des visages",
+    "livekalib.tab_pruefen": "Contrôle du catalogue",
     "livekalib.uebernehmen": "Appliquer",
     "livekalib.leer": "Pas encore d'échantillons. Ils arrivent d'eux-mêmes — d'un veilleur en marche et de chaque analyse d'événement de cette caméra, un visage à chaque fois. Si vous ne voulez pas attendre, utilisez ci-dessous « Chercher du matériel frais ».",
     "livekalib.zurueck": "retour au veilleur",
@@ -1052,16 +1070,24 @@ T = {
     "livekalib.abschnitt.anzeige": "Alertes, affichage et échantillons",
     "livekalib.abschnitt.anzeige_prosa": "Ces trois-là décident quelle image de cette caméra part dans une alerte et quels visages restent ici comme échantillons. Ils ne décident pas qui est reconnu.",
     "livekalib.abschnitt.katalog": "Seuil du catalogue",
+    "livekalib.abschnitt.pruefen": "Seuil du contrôle du catalogue",
     "livekalib.abschnitt.material": "Matériel",
-    "livekalib.katalog.prosa": "Une barre propre et plus stricte : la qualite qu'un visage de cette camera doit avoir pour devenir reference par les voies AUTOMATIQUES (reprise du cycle d'apprentissage, acceptation de propositions/reserves). Ce que tu coches et nommes toi-meme la contourne volontairement : ce qui est coche est appris, et le controle qualite peut trier ensuite.",
+    "livekalib.katalog.prosa": "Un plancher, pas un filtre : la qualité qu'un visage de cette caméra doit avoir pour devenir référence par les voies AUTOMATIQUES (reprise du cycle d'apprentissage, acceptation de propositions/réserves). Elle est généreuse à dessein : accueillir est la porte large, trier est le travail du contrôle du catalogue dans l'onglet suivant. Ce que vous cochez et nommez vous-même la contourne entièrement.",
     "livekalib.katalog.grenze": "Ce qu'il ne fait pas : il ne supprime jamais les références existantes et ne change pas qui est reconnu. Les images sans scores de qualité (matériel ancien ou build sans les modèles de qualité) passent intactes — un seuil sans mesure jetterait à l'aveugle.",
     "livekalib.katalog.quelle_kamera": "Actif : les valeurs propres de cette caméra.",
     "livekalib.katalog.quelle_global": "Actif : la valeur globale de repli — cette caméra n'a pas encore de valeurs propres.",
     "livekalib.katalog.quelle_aus": "Aucun seuil de catalogue : toute image peut devenir une référence.",
     "livekalib.katalog.regler_e": "Catalogue : impression de l'image",
-    "livekalib.katalog.regler_e_prosa": "Impression minimale pour une référence de cette caméra. Gardez-la au-dessus du curseur plus haut : ce qui suffit à montrer ne suffit pas automatiquement à apprendre.",
+    "livekalib.katalog.regler_e_prosa": "Impression minimale pour une référence de cette caméra. Basse à dessein : même une image moyenne apporte quelque chose à apprendre, et le contrôle du catalogue la reverra plus tard.",
     "livekalib.katalog.regler_t": "Catalogue : reconnaissabilité",
     "livekalib.katalog.regler_t_prosa": "Reconnaissabilité minimale pour une référence de cette caméra. C'est elle qui garde les visages à moitié couverts hors du catalogue.",
+    "livekalib.pruefen.prosa": "Ce seuil juge les images que vous avez DÉJÀ. En dessous, le contrôle du catalogue signale une image enregistrée de cette caméra ; avec une norme de traits faible, elle devient une suggestion de retrait sur laquelle vous pouvez cliquer. Il n'accepte jamais une image et n'en retire jamais une tout seul.",
+    "livekalib.pruefen.grenze": "Il est volontairement séparé du seuil ci-dessus : accepter une image et la contrôler plus tard sont deux questions, et bouger un curseur ne doit pas bouger l'autre en silence. Les images sans note de qualité ne sont jamais signalées.",
+    "livekalib.pruefen.quelle_kamera": "En vigueur : la valeur propre de cette caméra.",
+    "livekalib.pruefen.quelle_global": "En vigueur : la valeur globale de repli — cette caméra n'a pas encore de valeur propre.",
+    "livekalib.pruefen.quelle_aus": "Aucun seuil de contrôle défini : le contrôle du catalogue ne juge pas la qualité des images.",
+    "livekalib.pruefen.regler_t": "Contrôle : lisibilité du visage",
+    "livekalib.pruefen.regler_t_prosa": "En dessous de cette note de lisibilité, une image enregistrée de cette caméra est signalée. La valeur par défaut vient d'un jeu d'images de catalogue notées à la main, pas d'une estimation.",
     "livekalib.material.aus": "La collecte d'échantillons est désactivée (Advanced, calibration samples). Sans échantillons cette page n'a rien à montrer.",
     "livekalib.material.stand": "{n} sur {deckel} échantillons au maximum",
     "livekalib.material.wann": "dernier {wann}",
@@ -1073,6 +1099,7 @@ T = {
     "livekalib.material.fuellen_prosa": "La recherche de matériel parcourt les derniers événements personne de cette caméra et garde le meilleur visage de chacun. Elle s'arrête à {ziel} images ou après {events} événements, au premier des deux.",
     "livekalib.material.lauf": "Plus {n} image(s) de cette caméra issues du dernier passage d'apprentissage — affichées ci-dessous et marquées.",
     "livekalib.js.katalog": "{n} sur {gesamt} pourraient entrer au catalogue",
+    "livekalib.js.pruefen": "le contrôle signalerait {n} sur {gesamt}",
     "livekalib.js.lauf": "passage",
     # ----------------------------------------------- routes/erkennung ---
     "erkennung.titel": "Reconnaissance",
@@ -1210,11 +1237,12 @@ T = {
     "qualitaet.tabelle.kopf_links": "&larr; gauche",
     "qualitaet.tabelle.kopf_front": "de face",
     "qualitaet.tabelle.kopf_rechts": "droite &rarr;",
-    "qualitaet.tabelle.kopf_doppel": "doublons",
+    "qualitaet.tabelle.kopf_doppel": "similaires",
     "qualitaet.tabelle.kopf_verwechslung": "confusion",
     "qualitaet.person.funde": "{n} photo(s) à regarder de près",
     "qualitaet.person.verwechselt": "confusion possible",
     "qualitaet.person.alles_gut": "tout va bien",
+    "qualitaet.person.gemischt": "catalogue qui semble mélangé",
     "qualitaet.ergebnis.alles_gut": "Tout va bien.",
     "qualitaet.ergebnis.alles_gut_satz":
         "{n} photos de {np} personnes vérifiées &mdash; rien ne réclame "
@@ -1231,6 +1259,17 @@ T = {
     "qualitaet.galerie.vorrat": "du stock",
     "qualitaet.galerie.norm": "qualité {norm}",
     "qualitaet.galerie.okay": "correcte",
+    "qualitaet.galerie.unter_beide": "sous le seuil de contrôle et le plancher de norme",
+    "qualitaet.galerie.unter_guete": "sous le seuil de contrôle",
+    "qualitaet.galerie.unter_norm": "sous le plancher de norme",
+    "qualitaet.galerie.guete_datei": "valeur mesurée sur la vignette enregistrée",
+    "qualitaet.galerie.rang": "#{rang} de cette personne",
+    "qualitaet.galerie.marge": "marge d'identité {marge}",
+    "qualitaet.galerie.dubl_behalten": "garder celle-ci",
+    "qualitaet.galerie.dubl_weg": "copie identique",
+    "qualitaet.galerie.dubl_hinweis": "Ces fichiers sont identiques octet pour octet. Ici, « Tout sélectionner » coche toutes les copies sauf la première de chaque groupe — regardez-les et retirez ce dont vous n'avez pas besoin.",
+    "qualitaet.galerie.noface_hinweis": "Aucun visage n'a été trouvé dans ces images, rien n'a donc pu y être mesuré. Elles méritent un coup d'œil : certaines contiennent un visage manqué par le détecteur, d'autres aucun.",
+    "qualitaet.galerie.gemischt": "Ce catalogue semble mélangé : {neg} images sur {n} sont plus proches de {fremd} que de cette personne. Regardez-les avant d'apprendre dessus — rien n'est retiré sans votre clic.",
     "qualitaet.galerie.satz_gut": "Les {n} photos semblent toutes bonnes.",
     "qualitaet.galerie.satz_funde":
         "{funde} des {n} photos méritent un coup d'œil — les deux "
@@ -1239,6 +1278,8 @@ T = {
     "qualitaet.reiter.gut": "Bonnes ({n})",
     "qualitaet.reiter.check": "À vérifier ({n})",
     "qualitaet.reiter.weg": "Suppression proposée ({n})",
+    "qualitaet.reiter.dubl": "Copies identiques ({n})",
+    "qualitaet.reiter.noface": "Aucun visage ({n})",
     "qualitaet.galerie.knopf_alle": "Tout sélectionner",
     "qualitaet.galerie.knopf_keine": "Tout désélectionner",
     "qualitaet.galerie.knopf_entfernen": "Retirer la sélection",
@@ -1394,6 +1435,8 @@ T = {
     "kalib.kachel.vorgabe": "valeurs par défaut",
     "kalib.kachel.fremd": "absente de Frigate",
     "kalib.kachel.fremd_tip": "Cette caméra a des valeurs de calibrage mais Frigate ne la signale plus. Les valeurs restent, rien n'est supprimé.",
+    "kalib.kachel.offline": "Frigate non connecté",
+    "kalib.kachel.offline_tip": "Cette caméra est connue par ce qui est enregistré ici : ses valeurs et ses échantillons. Frigate ne répond pas pour l'instant, on ignore donc si elle y existe encore. Le calibrage fonctionne quand même.",
     "kalib.kachel.vorrat": "{n} sur {deckel} échantillons",
     "kalib.kachel.vorrat_aus": "La collecte d'échantillons est désactivée (Advanced, calibration samples).",
     "kalib.kachel.stand": "dernier {wann}",
@@ -3141,6 +3184,9 @@ T = {
     "antwort.person_name_ungueltig": "nom invalide",
     "antwort.person_unbekannt": "personne inconnue",
     "antwort.pruefung_gestartet": "vérification lancée",
+    "antwort.pruefung_laeuft":
+        "vérification en cours : rechargez cette page dans une minute environ",
+    "antwort.ref_batch_weg": "{n} image(s) retirée(s)",
     "antwort.reorg_los":
         "Réorganisation en cours (revérification de la collecte + "
         "reconstruction des groupes, 1-2 min, puis rechargez les pages)",

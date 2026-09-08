@@ -10,7 +10,7 @@ import urllib.parse
 from core.sprache import t
 
 
-def render(personen, data_dir, gefiltert=False, alle=None):
+def render(personen, data_dir, gefiltert=False, alle=None, pruefung=None):
     """-> Seiten-INHALT (layout/banner bleiben beim Handler). personen = master_persons(cfg).
 
     .507 B4 (Faces -> Klick fuehrte ins Leere): bei ?person= reicht der Handler
@@ -21,7 +21,16 @@ def render(personen, data_dir, gefiltert=False, alle=None):
     alle = volle Personenliste fuer das Auswahlfeld der Upload-Karte (None =
     wie personen). Die Karte ist personenunabhaengig; schruempfte ihr Feld
     still auf die gefilterte Person, verloere die Seite eine Faehigkeit, ohne
-    es zu sagen (Fehlerklasse "stiller Verlust")."""
+    es zu sagen (Fehlerklasse "stiller Verlust").
+
+    .511 Stufe C: `pruefung` ist die Kopf-Tabelle des Bestands-Pruefers
+    (refs_qs.json -> personen). Daraus stehen auf der Personen-Karte zwei
+    Dinge: die Zahl der Entfernen-VORSCHLAEGE (mit Weg zum Check) und die
+    Warnung "catalogue looks mixed", wenn mehr als die Haelfte der Bilder
+    dieser Person naeher an einer fremden Person liegt als an ihr selbst.
+    Beides ist Anzeige — auf DIESER Seite wird nichts vorgeschlagen und nichts
+    angehakt, der Weg dahin ist der Quality-check-Knopf, den es schon gibt.
+    Fehlt der Bericht (noch kein Lauf), bleibt die Karte wie bisher."""
     opts = "".join(f"<option>{html.escape(p)}</option>"
                    for p in (personen if alle is None else alle))
 
@@ -45,12 +54,24 @@ def render(personen, data_dir, gefiltert=False, alle=None):
             f'<button class="gtb" style="font-size:10px;padding:0 6px;margin-top:2px" '
             f'onclick="refEntfernen(\'{_js(pp)}\',\'{_js(b)}\',this)">'
             f'{t("gesichter.galerie.knopf_entfernen")}</button></span>' for b in bil)
+        _pe = (pruefung or {}).get(pp) or {}
+        _marken = ""
+        if _pe.get("vorschlag"):
+            _marken += (
+                f' &middot; <a class="dim" style="font-size:12px" '
+                f'href="/qualitaet?person={urllib.parse.quote(pp)}">'
+                f'{t("gesichter.galerie.vorschlag", n=int(_pe["vorschlag"]))}'
+                f'</a>')
+        if _pe.get("gemischt"):
+            _marken += (' &middot; <span style="color:var(--crit);'
+                        'font-size:12px">&#9888; '
+                        + t("gesichter.galerie.gemischt") + '</span>')
         gal.append(
             # .507 B4: id= je Personenkarte — bis .506 hatte die Galerie keine
             # Sprungmarke, das #-Fragment von /faces lief deshalb ins Leere.
             f'<div class="card" id="p-{urllib.parse.quote(pp, safe="")}">'
             f'<b>{html.escape(pp)}</b> — '
-            f'{t("gesichter.galerie.bildzahl", n=len(bil))} &nbsp; '
+            f'{t("gesichter.galerie.bildzahl", n=len(bil))}{_marken} &nbsp; '
             f'<a class="gtb" href="/aehnliche?person={urllib.parse.quote(pp)}">'
             f'{t("gesichter.galerie.knopf_aehnliche")}</a> '
             # .273c (User: Aufruf an mehreren Stellen, kontext-vorausgewaehlt):

@@ -15,6 +15,8 @@ T = {
         "Bilder aus den unbekannten Gesichtern zuordnen oder unten ein "
         "Foto hochladen, auch für eine ganz neue Person.",
     "gesichter.galerie.bildzahl": "{n} Bilder",
+    "gesichter.galerie.gemischt": "Katalog wirkt gemischt",
+    "gesichter.galerie.vorschlag": "{n} Vorschläge zum Entfernen",
     "gesichter.galerie.knopf_entfernen": "entfernen",
     "gesichter.galerie.knopf_aehnliche": "passende Gesichter suchen",
     "gesichter.galerie.knopf_qs": "Qualitätscheck",
@@ -227,8 +229,12 @@ T = {
     "aehnliche.unbekannt.titel": "Aus unbekannten Gesichtern",
     "aehnliche.unbekannt.suche_titel":
         "Suche läuft — die Referenzen werden neu eingelesen.",
-    "aehnliche.unbekannt.suche_hinweis":
-        "Die Seite aktualisiert sich von selbst.",
+    "aehnliche.unbekannt.kein_cache":
+        "Die Referenzen sind noch nicht eingelesen.",
+    "aehnliche.unbekannt.kein_cache_hinweis":
+        "Diese Liste braucht den Referenz-Index. Die Referenz-Prüfung "
+        "schreibt ihn mit — danach steht hier ein Ergebnis.",
+    "aehnliche.unbekannt.knopf_pruefen": "Referenzen prüfen",
     "aehnliche.unbekannt.hinweis_leer":
         "Keine ähnlichen unbekannten Gesichter vorhanden.",
     "aehnliche.unbekannt.aehnlichkeit": "Ähnlichkeit {sim}",
@@ -238,9 +244,18 @@ T = {
         "Neue Gesichter aus erkannten Events (7 Tage)",
     "aehnliche.vorschlaege.suche_titel":
         "Suche läuft — erkannte Events werden durchsucht.",
-    "aehnliche.vorschlaege.suche_hinweis":
-        "Die Seite aktualisiert sich von selbst; Ergebnis in ein bis "
-        "zwei Minuten.",
+    "aehnliche.vorschlaege.nie_gesucht":
+        "Noch nicht gesucht.",
+    "aehnliche.vorschlaege.nie_gesucht_hinweis":
+        "Die Suche über die erkannten Ereignisse läuft auf Klick, nicht "
+        "im Hintergrund.",
+    "aehnliche.vorschlaege.stand_leer": "zuletzt gesucht {stand}",
+    "aehnliche.suche.rechnet":
+        "Die Suche rechnet; die Seite lädt von selbst neu, sobald das "
+        "Ergebnis da ist.",
+    "aehnliche.suche.wartet_platz":
+        "Wartet auf einen freien Analyse-Platz ({belegt} von {plaetze} "
+        "belegt); die Seite lädt von selbst neu, sobald das Ergebnis da ist.",
     "aehnliche.vorschlaege.kachel_zeile":
         "{wann} · {kamera} · Ähnl. {sim}",
     "aehnliche.vorschlaege.titel_empfohlen": "Empfohlen",
@@ -1027,6 +1042,7 @@ T = {
     "livekalib.fueller.bilder": "Bild(er)",
     "livekalib.tab_erkennen": "Erkennen",
     "livekalib.tab_lernen": "Gesichterkatalog",
+    "livekalib.tab_pruefen": "Bestands-Prüfung",
     "livekalib.uebernehmen": "Übernehmen",
     "livekalib.leer": "Noch keine Bilder. Sie kommen von selbst — von einem laufenden Wächter und aus jeder Ereignis-Analyse dieser Kamera, je ein Gesicht. Wer nicht warten will, nimmt unten \"Frisches Material suchen\".",
     "livekalib.zurueck": "zurück zum Wächter",
@@ -1038,16 +1054,24 @@ T = {
     "livekalib.abschnitt.anzeige": "Melden, Anzeigen und Vorrat",
     "livekalib.abschnitt.anzeige_prosa": "Diese drei entscheiden, welches Bild dieser Kamera in eine Meldung geht und welche Gesichter hier als Vorrat liegen bleiben. Sie entscheiden nicht, wer erkannt wird.",
     "livekalib.abschnitt.katalog": "Katalog-Latte",
+    "livekalib.abschnitt.pruefen": "Latte der Bestands-Prüfung",
     "livekalib.abschnitt.material": "Material",
-    "livekalib.katalog.prosa": "Eine eigene, strengere Latte: wie gut ein Gesicht dieser Kamera sein muss, damit es auf den AUTOMATIK-Wegen Referenz werden darf (Lernlauf übernehmen, Vorschlag/Vorrat annehmen). Was du selbst einzeln ankreuzt und benennst, geht bewusst daran vorbei — angekreuzt wird angelernt, aussieben kann danach der Quality-Check.",
+    "livekalib.katalog.prosa": "Ein Boden, kein Sieb: wie gut ein Gesicht dieser Kamera sein muss, damit es auf den AUTOMATIK-Wegen Referenz werden darf (Lernlauf übernehmen, Vorschlag/Vorrat annehmen). Sie ist mit Absicht großzügig — aufnehmen ist die weite Tür, aussortiert wird danach von der Bestands-Prüfung im nächsten Register. Was du selbst ankreuzt und benennst, geht ganz daran vorbei.",
     "livekalib.katalog.grenze": "Was sie nicht tut: Sie entfernt nie vorhandene Referenzen, und sie ändert nichts daran, wer erkannt wird. Bilder ohne Guete-Messwerte (älteres Material oder ein Image ohne die Guete-Modelle) kommen unangetastet durch — eine Latte ohne Messung würde blind wegwerfen.",
     "livekalib.katalog.quelle_kamera": "Es gelten die eigenen Werte dieser Kamera.",
     "livekalib.katalog.quelle_global": "Es gilt der globale Rückfall — diese Kamera hat noch keine eigenen Werte.",
     "livekalib.katalog.quelle_aus": "Keine Katalog-Latte gesetzt: jedes Bild darf Referenz werden.",
     "livekalib.katalog.regler_e": "Katalog: Bildeindruck",
-    "livekalib.katalog.regler_e_prosa": "Mindest-Bildeindruck für eine Referenz dieser Kamera. Halte ihn über dem Regler weiter oben: Was zum Anzeigen gut genug ist, ist nicht automatisch gut genug zum Lernen.",
+    "livekalib.katalog.regler_e_prosa": "Mindest-Bildeindruck für eine Referenz dieser Kamera. Bewusst niedrig: Auch ein mittelmäßiges Bild trägt noch etwas zum Lernen bei, und die Bestands-Prüfung schaut es sich später noch einmal an.",
     "livekalib.katalog.regler_t": "Katalog: Erkennbarkeit",
     "livekalib.katalog.regler_t_prosa": "Mindest-Erkennbarkeit für eine Referenz dieser Kamera. Dieser Wert hält halb verdeckte Gesichter aus dem Katalog heraus.",
+    "livekalib.pruefen.prosa": "Diese Latte urteilt über Bilder, die du BEREITS hast. Darunter markiert die Bestands-Prüfung ein gespeichertes Bild dieser Kamera; zusammen mit einer schwachen Feature-Norm wird daraus ein Entfernen-Vorschlag zum Anklicken. Sie nimmt nie ein Bild auf und entfernt nie eines von selbst.",
+    "livekalib.pruefen.grenze": "Sie ist mit Absicht von der Latte darüber getrennt: ein Bild aufnehmen und es später prüfen sind zwei Fragen, und ein Zug am einen Regler darf den anderen nicht still mitziehen. Bilder ohne Güte-Messung werden nie markiert.",
+    "livekalib.pruefen.quelle_kamera": "In Kraft: der eigene Wert dieser Kamera.",
+    "livekalib.pruefen.quelle_global": "In Kraft: der globale Rückfall — diese Kamera hat noch keinen eigenen Wert.",
+    "livekalib.pruefen.quelle_aus": "Keine Prüf-Latte gesetzt: die Bestands-Prüfung urteilt nicht über die Bildgüte.",
+    "livekalib.pruefen.regler_t": "Prüfung: Erkennbarkeit",
+    "livekalib.pruefen.regler_t_prosa": "Unter diesem Erkennbarkeits-Wert wird ein gespeichertes Bild dieser Kamera markiert. Die Vorgabe stammt aus einem von Hand bewerteten Satz Katalogbilder, nicht aus einer Schätzung.",
     "livekalib.material.aus": "Das Sammeln von Vorratsbildern ist ausgeschaltet (Advanced, calibration samples). Ohne Vorrat hat diese Seite nichts zu zeigen.",
     "livekalib.material.stand": "{n} von höchstens {deckel} Bildern im Vorrat",
     "livekalib.material.wann": "zuletzt {wann}",
@@ -1059,6 +1083,7 @@ T = {
     "livekalib.material.fuellen_prosa": "Die Materialsuche geht die letzten Person-Ereignisse dieser Kamera durch und behält je Ereignis das beste Gesicht. Sie stoppt bei {ziel} Bildern oder nach {events} Ereignissen — was zuerst eintritt.",
     "livekalib.material.lauf": "Dazu {n} Bild(er) dieser Kamera aus dem letzten Lernlauf — unten mit dabei und als solche gekennzeichnet.",
     "livekalib.js.katalog": "{n} von {gesamt} dürften in den Katalog",
+    "livekalib.js.pruefen": "{n} von {gesamt} würde die Prüfung markieren",
     "livekalib.js.lauf": "Lauf",
     # ----------------------------------------------- routes/erkennung ---
     "erkennung.titel": "Erkennung",
@@ -1193,11 +1218,12 @@ T = {
     "qualitaet.tabelle.kopf_links": "&larr; links",
     "qualitaet.tabelle.kopf_front": "frontal",
     "qualitaet.tabelle.kopf_rechts": "rechts &rarr;",
-    "qualitaet.tabelle.kopf_doppel": "Dubletten",
+    "qualitaet.tabelle.kopf_doppel": "Ähnliche",
     "qualitaet.tabelle.kopf_verwechslung": "Verwechslung",
     "qualitaet.person.funde": "{n} Bild(er) einen Blick wert",
     "qualitaet.person.verwechselt": "womöglich verwechselt",
     "qualitaet.person.alles_gut": "alles gut",
+    "qualitaet.person.gemischt": "Katalog wirkt gemischt",
     "qualitaet.ergebnis.alles_gut": "Alles gut.",
     "qualitaet.ergebnis.alles_gut_satz":
         "{n} Bilder von {np} Personen geprüft &mdash; nichts braucht "
@@ -1216,6 +1242,17 @@ T = {
     "qualitaet.galerie.vorrat": "aus dem Vorrat",
     "qualitaet.galerie.norm": "Qualität {norm}",
     "qualitaet.galerie.okay": "okay",
+    "qualitaet.galerie.unter_beide": "unter Prüf-Latte und Norm-Boden",
+    "qualitaet.galerie.unter_guete": "unter der Prüf-Latte",
+    "qualitaet.galerie.unter_norm": "unter dem Norm-Boden",
+    "qualitaet.galerie.guete_datei": "Wert am gespeicherten Ausschnitt gemessen",
+    "qualitaet.galerie.rang": "#{rang} bei dieser Person",
+    "qualitaet.galerie.marge": "Identitäts-Marge {marge}",
+    "qualitaet.galerie.dubl_behalten": "dieses behalten",
+    "qualitaet.galerie.dubl_weg": "identische Kopie",
+    "qualitaet.galerie.dubl_hinweis": "Diese Dateien sind Byte für Byte gleich. „Alle auswählen“ hakt hier jede Kopie außer der ersten je Satz an — sieh sie dir an und entferne, was du nicht brauchst.",
+    "qualitaet.galerie.noface_hinweis": "In diesen Bildern wurde kein Gesicht gefunden, deshalb konnte an ihnen nichts gemessen werden. Ein Blick lohnt sich: manche zeigen ein Gesicht, das die Erkennung übersehen hat, andere gar keines.",
+    "qualitaet.galerie.gemischt": "Dieser Katalog wirkt gemischt: {neg} von {n} Bildern liegen näher an {fremd} als an dieser Person. Schau hin, bevor du davon lernst — entfernt wird nichts ohne deinen Klick.",
     "qualitaet.galerie.satz_gut": "Alle {n} Bilder sehen gut aus.",
     "qualitaet.galerie.satz_funde":
         "{funde} von {n} Bildern sind einen Blick wert — sie stehen in "
@@ -1224,6 +1261,8 @@ T = {
     "qualitaet.reiter.gut": "Gut ({n})",
     "qualitaet.reiter.check": "Ansehen ({n})",
     "qualitaet.reiter.weg": "Vorschlag: entfernen ({n})",
+    "qualitaet.reiter.dubl": "Identische Kopien ({n})",
+    "qualitaet.reiter.noface": "Kein Gesicht gefunden ({n})",
     "qualitaet.galerie.knopf_alle": "Alle auswählen",
     "qualitaet.galerie.knopf_keine": "Alle abwählen",
     "qualitaet.galerie.knopf_entfernen": "Ausgewählte entfernen",
@@ -1376,6 +1415,8 @@ T = {
     "kalib.kachel.vorgabe": "Vorgabewerte",
     "kalib.kachel.fremd": "nicht in Frigate",
     "kalib.kachel.fremd_tip": "Diese Kamera hat Kalibrierwerte, aber Frigate meldet sie nicht mehr. Die Werte bleiben, es wird nichts gelöscht.",
+    "kalib.kachel.offline": "Frigate nicht verbunden",
+    "kalib.kachel.offline_tip": "Diese Kamera ist aus dem bekannt, was hier gespeichert ist — ihre Werte und ihre Bilder. Frigate antwortet gerade nicht, ob es sie dort noch gibt, ist deshalb offen. Kalibrieren geht trotzdem.",
     "kalib.kachel.vorrat": "{n} von {deckel} Bildern",
     "kalib.kachel.vorrat_aus": "Vorrats-Sammlung ist aus (Advanced, calibration samples).",
     "kalib.kachel.stand": "zuletzt {wann}",
@@ -3076,6 +3117,9 @@ T = {
     "antwort.person_name_ungueltig": "ungültiger Name",
     "antwort.person_unbekannt": "unbekannte Person",
     "antwort.pruefung_gestartet": "Prüfung gestartet",
+    "antwort.pruefung_laeuft":
+        "Prüfung läuft — Seite in etwa einer Minute neu laden",
+    "antwort.ref_batch_weg": "{n} Bild(er) entfernt",
     "antwort.reorg_los":
         "Reorganisation läuft (Pool-Nachprüfung + Neugruppierung, "
         "1–2 min, danach die Seiten neu laden)",

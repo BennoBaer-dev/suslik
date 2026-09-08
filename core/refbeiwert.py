@@ -21,12 +21,27 @@ Datei-Re-Embedder baut, traegt ihn hier ein:
                                        vollwertige Messzeilen der Klasse
                                        'vorrat', nie 'kein_gesicht'-Loeschware)
   6. anlernen.refcache_ergaenzen      (Sofort-Einpflege bei der Uebernahme)
+
+DIE ZWEITE BILLIGE QUELLE (Stufe B, .511) — wer hier liest, muss sie kennen:
+`core/refmess.py`, der MESS-SIDECAR des Katalogs (`faces/refs_mess.json`). Der
+Beiwert deckt nur die Referenzen aus Ernte/Vorrat ab (im Feldtester-Bestand
+602 von 1229);
+fuer alle uebrigen haelt der Sidecar die Datei-Messwerte (kante/sharp/norm/pose/
+fiqa_t/empf/wh/camera) samt Frische-Anker fest, und das zugehoerige EMBEDDING
+kommt aus `clips/refcache.npz` ueber dessen `§rows`-Karte. Die Rangfolge in
+`anlernen.lade_master_bilder` (Stelle 5) lautet seit .511:
+    A2-Beiwert  ->  Sidecar + refcache-Vektor  ->  volle Datei-Messung
+Regel fuer neue Datei-Re-Embedder: der Beiwert bleibt Pflicht (sonst stirbt die
+Vorrats-Referenz still, s. oben); der Sidecar ist eine reine Beschleunigung und
+darf ausfallen — aber ein Vektor aus dem refcache darf NIE zu einer Sidecar-
+Zeile genommen werden, die der Datei-Anker nicht mehr deckt (die npz fuehrt
+keinen eigenen Anker; sonst liefe eine ausgetauschte Datei mit altem Vektor).
 """
 import json
 import os
 
 
-def beiwerte(master_dir, modell):
+def beiwerte(master_dir, modell, alle=None):
     """refs_meta.jsonl -> ({(person, datei): meta_zeile}, fremdmodell_n).
 
     Die meta_zeile ist der VOLLE refs_meta-Eintrag (traegt neben "emb" auch die
@@ -36,8 +51,20 @@ def beiwerte(master_dir, modell):
     mit Beiwert zaehlen. Eintraege, deren Beiwert zu einem ANDEREN Recognition-
     Modell gehoert, kommen NICHT in die Karte, werden aber GEZAEHLT
     zurueckgegeben — der Aufrufer meldet sie laut (nie still mit falschem
-    Vektor weiterleben, nie still verschwinden)."""
+    Vektor weiterleben, nie still verschwinden).
+
+    `alle` (Stufe B, .511): ein Dict, das nebenbei mit dem VOLLEN last-wins-Stand
+    JEDER aktiven Referenz gefuellt wird — auch der ohne Beiwert. Anlass, ein
+    Fehler aus dem Bau selbst: der Kamera-Nachtrag las zuerst `karte` und fand
+    dort natuerlich nur die 602 Beiwert-Referenzen; `eid` und `camera` stehen
+    aber in JEDER Meta-Zeile (Feldtester-Bestand: 1155 bzw. 692 von 1229).
+    Ein zweiter
+    Journal-Leser waere die naheliegende, falsche Antwort gewesen: Tombstones
+    und die `wieder_anbieten`-Ausnahme unten muessten dort noch einmal richtig
+    stehen (K3). Deshalb EIN Leser, zwei Ausgaben."""
     karte, fremd = {}, {}
+    if alle is None:
+        alle = {}
     p = os.path.join(master_dir, "refs_meta.jsonl")
     if not os.path.exists(p):
         return karte, 0
@@ -65,7 +92,9 @@ def beiwerte(master_dir, modell):
                     continue                  # Beiwert der Zeile davor bleibt gueltig
                 karte.pop(key, None)
                 fremd.pop(key, None)
+                alle.pop(key, None)
                 continue
+            alle[key] = d
             if not d.get("emb"):
                 continue
             if str(d.get("emb_modell") or "") == str(modell):

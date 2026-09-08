@@ -224,6 +224,256 @@ def _migrate_layout(dd):
         os.makedirs(os.path.join(dd, sub), exist_ok=True)  # 6) Basisordner sicherstellen (frisch)
 
 
+ANKER_MIGRATION_MARKE = "migration_anker_045.json"   # state/, Muster kalib_reset.json
+ANKER_ALT, ANKER_NEU = 0.50, 0.45
+
+
+def _migration_anker_045(cfg):
+    """EINMALIGE Anhebung des Urteils-Ankers 0,50 -> 0,45 (.510, User-Entscheid
+    07.09.2026: "automatisch mit dieser Version einmalig ... wenn der User
+    danach aendert, nicht wieder ueberschreiben").
+
+    WARUM ueberhaupt: der Config-Store ueberlagert den Default-Block, und die
+    Konfigurationsseite postet beim Sichern IMMER alle cfg-Felder. Jede
+    Installation, auf der je "Speichern" gedrueckt wurde, hat den alten
+    Werkswert 0,50 festgenagelt und saehe den neuen Default nie (Gegenpruefung
+    W1, Befund M-6; beim Feldtester belegt).
+
+    GENAU EINMAL, und der Marker haelt auch den NICHT-Eingriff fest (Muster
+    core/kette.kette_auto und state/kalib_reset.json): steht die Marke, wird
+    hier nie wieder etwas angefasst — auch dann nicht, wenn der Nutzer den
+    Anker spaeter selbst auf 0,50 zurueckstellt. Marke im state/-Ordner statt
+    im Store, weil ein Zurueckspielen einer alten Config-Sicherung die Marke
+    sonst mitloeschen und die Migration ein zweites Mal ausloesen wuerde —
+    dann ueber einen bewusst gesetzten Nutzerwert.
+
+    Fallunterscheidung (alles andere ist Nutzerwille und bleibt):
+      Store traegt exakt 0,50  -> auf 0,45, Audit-Zeile, Marke
+      Store traegt anderen Wert -> unveraendert, nur Marke
+      Store ohne den Schluessel -> unveraendert, nur Marke (Default greift)
+      Store vorhanden, aber unlesbar -> NICHTS, auch keine Marke (naechster
+        Start entscheidet ehrlich neu; sonst schriebe ein kaputter Store
+        die ganze Config platt, s. dieselbe Wache in core/kette).
+
+    Laeuft in load_config direkt nach der Store-Ueberlagerung, also VOR dem
+    ersten Lesen des Ankers (run_analyze je Ereignis, Live-Engine beim Start).
+    Meldung geht auf stderr — an dieser Stelle gibt es noch kein svc.log(),
+    genau wie bei der Store-Warnung und der Whitelist-Klemmung daneben."""
+    try:
+        _migration_anker_045_innen(cfg)
+    except Exception as e:                                     # noqa: BLE001
+        # Eine gescheiterte Migration darf den Dienst NIE am Start hindern:
+        # der Anker bleibt dann, wie er im Store steht, und der naechste Start
+        # entscheidet neu (die Marke wird in diesem Fall nicht gesetzt).
+        sys.stderr.write(f"[suslik] anchor migration failed "
+                         f"({type(e).__name__}: {e}) — anchor unchanged, "
+                         f"retried next start\n")
+
+
+def _migration_anker_045_innen(cfg):
+    """Der Rumpf von _migration_anker_045 (dort steht die Begruendung)."""
+    marke = os.path.join(cfg["data_dir"], "state", ANKER_MIGRATION_MARKE)
+    if os.path.exists(marke):
+        return
+    store_datei = _config_store_pfad(cfg)
+    with _cfg_lock:
+        store = _lade_config_store(cfg)
+        if not store and os.path.exists(store_datei):
+            sys.stderr.write("[suslik] anchor migration skipped: config store "
+                             "exists but reads empty/unreadable — not touching "
+                             "it (no marker; retried next start)\n")
+            return
+        alt = store.get("urteil_anker")
+        try:
+            trifft = alt is not None and abs(float(alt) - ANKER_ALT) < 1e-9
+        except (TypeError, ValueError):
+            trifft = False               # kaputter Typ ist kein Werkswert
+        if trifft:
+            store["urteil_anker"] = ANKER_NEU
+            _store_schreiben(store_datei, store)
+            cfg["urteil_anker"] = ANKER_NEU      # sofort wirksam, kein Neustart noetig
+    info = {"ts": round(time.time(), 1),
+            "version": os.environ.get("SUSLIK_VERSION", "dev"),
+            "vorher": alt, "nachher": ANKER_NEU if trifft else alt,
+            "angewendet": bool(trifft),
+            "grund": "one-time factory-value change 0.50 -> 0.45 (2026-09-07)"}
+    if trifft:
+        # AUDIT VOR der Marke (Muster core/kette): die Marke ist aus der
+        # Audit-Zeile rekonstruierbar, umgekehrt nicht — scheitert der
+        # Markerschreiber, findet der naechste Start wenigstens die Herkunft.
+        try:
+            audit = os.path.join(cfg["data_dir"], "config", "config_audit.jsonl")
+            os.makedirs(os.path.dirname(audit), exist_ok=True)
+            with open(audit, "a") as f:
+                f.write(json.dumps({"ts": info["ts"],
+                                    "aenderungen": {"urteil_anker": ANKER_NEU},
+                                    "auto": "one-time anchor migration 0.50 -> 0.45",
+                                    "vorher": ANKER_ALT}, ensure_ascii=False) + "\n")
+                f.flush()
+        except Exception as e:                                 # noqa: BLE001
+            sys.stderr.write(f"[suslik] anchor migration: audit line not written "
+                             f"({type(e).__name__}: {e}) — value is in place\n")
+        sys.stderr.write(f"[suslik] judgement anchor lifted ONCE for this install: "
+                         f"{ANKER_ALT} -> {ANKER_NEU} (old factory value found in "
+                         f"the config store; measured on 173 field cases 2026-09-07). "
+                         f"Change it in Settings anytime — it will never be "
+                         f"migrated again (marker state/{ANKER_MIGRATION_MARKE})\n")
+    try:
+        from core import atomar as _at
+        _at.json_schreiben(marke, info)
+    except Exception as e:                                     # noqa: BLE001
+        sys.stderr.write(f"[suslik] anchor migration: marker not written "
+                         f"({type(e).__name__}: {e}) — decision is retried next start\n")
+
+
+KATALOG_MIGRATION_MARKE = "migration_katalog_0125.json"   # state/, Muster oben
+
+
+def _migration_katalog_0125(cfg):
+    """EINMALIGE Ruecksetzung der KATALOG-Latte auf die neuen Werkswerte
+    0,125/0,125 (.511, User-Entscheid 08.09.2026 ~17:0x: "0,125 passt, bau es
+    so" — inkl. der ausdruecklichen Ansage "auch wenn der User das schon
+    kalibriert hatte").
+
+    WARUM: die alte Katalog-Latte lieh sich die NAH-Eichung des Lernlaufs
+    (0,200/0,400) und wuergte damit die Automatik-Wege ab, die den Katalog
+    ueberhaupt fuellen — am Feldtester-Spiegel kamen 34 von 200 Kalibrier-
+    Samples durch. Mit dem Rollen-Zuschnitt vom 08.09. (aufnehmen liberal,
+    sieben macht der Bestands-Pruefer) ist jeder gespeicherte Wert auf der
+    ALTEN Skala gesetzt worden, egal ob Werkswert oder von Hand kalibriert.
+    Deshalb setzt diese Migration BEIDE zurueck — anders als die Anker-
+    Migration (.510), die einen selbst gesetzten Wert bewusst stehen liess.
+    Der Unterschied ist gewollt und vom User so entschieden: hier wechselt
+    nicht eine Zahl, hier wechselt die Bedeutung der Skala.
+
+    WAS NICHT ANGEFASST WIRD: der Reiter "Erkennen" (det_min, guete_e_min,
+    guete_t_min, pose_min) und die Pruefer-Latte. Wer seine Kameras fuer
+    Anzeige/Meldung kalibriert hat, behaelt das vollstaendig.
+
+    GENAU EINMAL, Marke im state/-Ordner (Muster _migration_anker_045): steht
+    sie, wird hier nie wieder etwas angefasst — auch dann nicht, wenn der
+    Nutzer die Katalog-Latte danach selbst wieder hochstellt. Sie liegt
+    bewusst nicht im Store, weil ein zurueckgespieltes Config-Backup sie sonst
+    mitloeschen und die Migration ein zweites Mal ausloesen wuerde.
+
+    Store vorhanden, aber unlesbar -> NICHTS, auch keine Marke (der naechste
+    Start entscheidet ehrlich neu; dieselbe Wache wie beim Anker)."""
+    try:
+        _migration_katalog_0125_innen(cfg)
+    except Exception as e:                                     # noqa: BLE001
+        sys.stderr.write(f"[suslik] catalogue-bar migration failed "
+                         f"({type(e).__name__}: {e}) — bars unchanged, "
+                         f"retried next start\n")
+
+
+def _kat_gleich(alt, neu):
+    """Traegt der Store schon den neuen Wert? Krumme/kaputte Werte gelten als
+    UNGLEICH — die sollen erst recht auf den Werkswert."""
+    try:
+        return alt is not None and abs(float(alt) - float(neu)) < 1e-9
+    except (TypeError, ValueError):
+        return False
+
+
+def _migration_katalog_0125_innen(cfg):
+    """Der Rumpf von _migration_katalog_0125 (dort steht die Begruendung)."""
+    from core.guete import KATALOG_STARTWERTE as _ks
+    from core.kamerakalib import KAT_FELDER as _KATF
+    marke = os.path.join(cfg["data_dir"], "state", KATALOG_MIGRATION_MARKE)
+    if os.path.exists(marke):
+        return
+    neu_e, neu_t = float(_ks["empfinden"]), float(_ks["t"])
+    # Feldnamen aus der EINEN Quelle (K3-Regel), Reihenfolge (e, t) wie dort.
+    # Waechst KAT_FELDER, faellt das hier auf, statt still ein Feld auszulassen.
+    kam_neu = dict(zip(_KATF, (neu_e, neu_t)))
+    if len(kam_neu) != len(_KATF):
+        sys.stderr.write(f"[suslik] catalogue-bar migration: kamerakalib."
+                         f"KAT_FELDER has {len(_KATF)} fields, this migration "
+                         f"knows {len(kam_neu)} — the rest is left untouched\n")
+    glob_neu = {"katalog_guete_e_min": neu_e, "katalog_guete_t_min": neu_t}
+    # [(bereich, {feld: alt}, {feld: neu})] — Bereich ist None fuer global,
+    # sonst der Kameraname. Je Eintrag wird spaeter EINE Audit-Zeile geschrieben.
+    aenderungen = []
+    with _cfg_lock:
+        store_datei = _config_store_pfad(cfg)
+        store = _lade_config_store(cfg)
+        if not store and os.path.exists(store_datei):
+            sys.stderr.write("[suslik] catalogue-bar migration skipped: config "
+                             "store exists but reads empty/unreadable — not "
+                             "touching it (no marker; retried next start)\n")
+            return
+        vorher_g, nachher_g = {}, {}
+        for feld, neu in glob_neu.items():
+            alt = store.get(feld)
+            # Nicht gesetzt = der (neue) Default greift ohnehin: nichts tun.
+            if alt is None or _kat_gleich(alt, neu):
+                continue
+            store[feld] = neu
+            cfg[feld] = neu                  # sofort wirksam, kein Neustart
+            vorher_g[feld], nachher_g[feld] = alt, neu
+        if vorher_g:
+            aenderungen.append((None, vorher_g, nachher_g))
+        guards = ((store.get("live") or {}).get("guards") or {})
+        if isinstance(guards, dict):
+            for name, blk in guards.items():
+                if not isinstance(blk, dict):
+                    continue                 # kaputter Block: guards_lesen meldet ihn
+                vorher_k, nachher_k = {}, {}
+                for feld, neu in kam_neu.items():
+                    alt = blk.get(feld)
+                    if alt is None or _kat_gleich(alt, neu):
+                        continue
+                    blk[feld] = neu
+                    vorher_k[feld], nachher_k[feld] = alt, neu
+                if vorher_k:
+                    aenderungen.append((str(name), vorher_k, nachher_k))
+        if aenderungen:
+            _store_schreiben(store_datei, store)
+            if "live" in store:
+                cfg["live"] = store["live"]  # Prozess-Sicht sofort aktuell
+    info = {"ts": round(time.time(), 1),
+            "version": os.environ.get("SUSLIK_VERSION", "dev"),
+            "neu": {"e": neu_e, "t": neu_t},
+            "kameras": [n for n, _v, _n in aenderungen if n],
+            "global": bool(aenderungen and aenderungen[0][0] is None),
+            "angewendet": bool(aenderungen),
+            "grund": "one-time catalogue-bar reset to the new factory values "
+                     "0.125/0.125 (2026-09-08)"}
+    # AUDIT VOR der Marke (Muster Anker-Migration): je geaenderter Stelle EINE
+    # Zeile mit altem und neuem Wert — genau das, was ein Betreiber sucht, der
+    # sich ueber die zurueckgesetzte Latte wundert.
+    for name, vorher, nachher in aenderungen:
+        try:
+            audit = os.path.join(cfg["data_dir"], "config", "config_audit.jsonl")
+            os.makedirs(os.path.dirname(audit), exist_ok=True)
+            with open(audit, "a") as f:
+                f.write(json.dumps(
+                    {"ts": info["ts"],
+                     "aenderungen": (nachher if name is None
+                                     else {"live": {name: nachher}}),
+                     "auto": "one-time catalogue-bar reset -> 0.125/0.125",
+                     "vorher": vorher}, ensure_ascii=False) + "\n")
+                f.flush()
+        except Exception as e:                                 # noqa: BLE001
+            sys.stderr.write(f"[suslik] catalogue-bar migration: audit line for "
+                             f"{name or 'global'} not written "
+                             f"({type(e).__name__}: {e}) — value is in place\n")
+        wo = "global" if name is None else f"camera {name}"
+        alt_txt = ", ".join(f"{k}={v}" for k, v in sorted(vorher.items()))
+        sys.stderr.write(f"[suslik] catalogue bar reset ONCE for this install "
+                         f"({wo}): {alt_txt} -> {neu_e}/{neu_t}. The old bar was "
+                         f"far too strict for taking pictures in; the recognition "
+                         f"tab is untouched. Re-calibrate it any time on the "
+                         f"camera calibration page — it will never be migrated "
+                         f"again (marker state/{KATALOG_MIGRATION_MARKE})\n")
+    try:
+        from core import atomar as _at
+        _at.json_schreiben(marke, info)
+    except Exception as e:                                     # noqa: BLE001
+        sys.stderr.write(f"[suslik] catalogue-bar migration: marker not written "
+                         f"({type(e).__name__}: {e}) — decision is retried next start\n")
+
+
 def _placement_hw_key():
     """Fingerabdruck der Rechen-Hardware+Runtime fuers klebrige Placement: aendert sich
     CPU, Geraetesatz, onnxruntime oder die suslik-Version, wird neu gebenchmarkt."""
@@ -598,6 +848,8 @@ def ernte_schwellen_aus_cfg(cfg):
 def load_config(path):
     from core.benennung import NORM_LATTE as _NL   # .308: EINE Quelle der Norm-Defaults
     from core.guete import STARTWERTE as _guete_start  # .377: EINE Quelle der Guete-Startwerte
+    from core.guete import KATALOG_STARTWERTE as _kat_start  # .511: dito Katalog-Latte
+    from core.refurteil import PRUEF_STARTWERTE as _pruef_start  # .511 C: dito Pruefer-Latte
     raw = open(path).read()
     raw = re.sub(r"\$\{(\w+)\}", lambda m: os.environ.get(m.group(1), ""), raw)
     cfg = yaml.safe_load(raw)
@@ -874,16 +1126,30 @@ def load_config(path):
                          ("guete_empfinden_min", _guete_start["empfinden"]),
                          ("guete_t_min", _guete_start["t"]),
                          # KATALOG-LATTE (Drei-Latten-Semantik, User 31.08.):
-                         # die STRENGERE Latte fuer die Aufnahme in den
-                         # Referenz-Katalog — global als Rueckfall, je Kamera
-                         # ueberschreibbar (core/kamerakalib.py). BEWUSST
-                         # dieselben Werks-Startwerte wie oben: der Katalog
-                         # bleibt auf der NAH-Eichung stehen, waehrend der
-                         # Nutzer die KAMERA-Latte fuer Fernmaterial senkt
-                         # (Feld-Eichpunkte 31.08. 0,120/0,300) — genau daraus
-                         # entsteht "strenger", ohne eine zweite erfundene Zahl.
-                         ("katalog_guete_e_min", _guete_start["empfinden"]),
-                         ("katalog_guete_t_min", _guete_start["t"]),
+                         # die Latte fuer die Aufnahme in den Referenz-Katalog
+                         # — global als Rueckfall, je Kamera ueberschreibbar
+                         # (core/kamerakalib.py). Sie hat seit .511 ihre EIGENE
+                         # Werks-Quelle (core.guete.KATALOG_STARTWERTE,
+                         # 0,125/0,125): bis .510 lieh sie sich die Zeile
+                         # darueber, also die NAH-Eichung des Lernlaufs, und
+                         # war damit als Aufnahme-Latte zu streng (34 von 200
+                         # Kalibrier-Samples kamen beim Feldtester durch). Der
+                         # Rollen-Zuschnitt vom 08.09. dreht die Richtung:
+                         # liberal aufnehmen, danach der Bestands-Pruefer.
+                         # Gespeicherte Alt-Werte hebt die Einmal-Migration
+                         # _migration_katalog_0125 auf diese Werte.
+                         ("katalog_guete_e_min", _kat_start["empfinden"]),
+                         ("katalog_guete_t_min", _kat_start["t"]),
+                         # PRUEFER-LATTE (.511 Stufe C): die EIGENE Latte des
+                         # Bestands-Pruefers — global als Rueckfall, je Kamera
+                         # ueberschreibbar (live.guards.<kam>.pruef_t_min).
+                         # Sie urteilt ueber VORHANDENE Katalogbilder und nimmt
+                         # nie eines auf; deshalb eine eigene Zahl statt der
+                         # Aufnahme-Latte darueber (der Rollen-Zuschnitt des Users
+                         # 08.09.). GEMESSEN, nicht gesetzt: 0,3425 ist die
+                         # Youden-beste fiqa_t-Schwelle am 78er-Eichsatz —
+                         # EINE Quelle in core.refurteil.PRUEF_STARTWERTE.
+                         ("pruef_guete_t_min", _pruef_start["t"]),
                          # On-demand-Fueller der Kalibrier-Seite (Etappe 4):
                          # ZWEI Stopp-Bedingungen, beide aus Haus-Zahlen —
                          # Ziel-Bilder 25 (die Testlauf-Groesse des Users, stand.md
@@ -906,7 +1172,14 @@ def load_config(path):
                          # die kleinste Breite, die alle vier richtig trennt.
                          # blick_fenster_s 0 = alter fester 3-s-Fenster-Weg.
         ("blick_fenster_s", 45.0),
-        ("urteil_anker", 0.50),
+                         # ANKER 0,45 (.510, User-Entscheid 07.09.2026 —
+                         # ersetzt die 0,50 vom 03.09.): das Band 0,45-0,50
+                         # wurde am 07.09. an 173 Feld-Faellen ausgewertet
+                         # (Zweit-Beurteilung 149/173 "richtige Person",
+                         # dazu die 24 bestrittenen vom User selbst gesichtet
+                         # und als richtig befunden). Bestandsinstallationen
+                         # hebt die Einmal-Migration _migration_anker_045.
+        ("urteil_anker", 0.45),
                          # FUNDSTELLEN-TRENNUNG (03.09. spaet): Ueberlapp-
                          # Anteil, ab dem zwei Kandidaten als Deutungen
                          # DESSELBEN Gesichts konkurrieren. 0 = aus (altes
@@ -935,9 +1208,11 @@ def load_config(path):
                          ("clip_erzeugung_alter_min", 30),
                          ("clip_erzeugung_deckel_s", 300),
                          # .509 Clip-Download-Tor (Feldbefund 06.09.): hoechstens
-                         # so viele Clips gleichzeitig von Frigate holen — die
-                         # ANALYSE bleibt davon unberuehrt und laeuft weiter auf
-                         # allen Plaetzen. Werkswert an der Konstante oben.
+                         # so viele Clips gleichzeitig von Frigate holen. Die
+                         # ANALYSE selbst bleibt unberuehrt (alle Plaetze bleiben
+                         # nutzbar) — gedeckelt ist nur das HOLEN. .510/J15: das
+                         # gilt seitdem auch fuer die Ereignis-Analyse, nicht mehr
+                         # nur fuer die Ernte. Werkswert an der Konstante oben.
                          ("clip_download_parallel", CLIP_TOR_WERK),
                          # Watchdog der LIVE-Analyse (Fix 10.08.; vorher fest 1800 s).
                          # MESSBASIS deckung.jsonl 27.07.-10.08. (n=1394 Live-Analysen
@@ -1087,6 +1362,15 @@ def load_config(path):
         if k in STORE_INFRA_TABU:
             continue
         cfg[k] = v
+    # .510: die EINMALIGE Anker-Migration steht HIER, unmittelbar hinter der
+    # Store-Ueberlagerung und damit vor jedem Leser des Ankers (run_analyze je
+    # Ereignis, Live-Engine beim Start). Sie schreibt Store UND cfg, wirkt also
+    # ohne Neustart; steht die Marke, tut sie nichts.
+    _migration_anker_045(cfg)
+    # .511: dieselbe Bauform, dieselbe Stelle — die Katalog-Latte wird EINMAL
+    # auf die neuen Werkswerte zurueckgesetzt (auch von Hand kalibrierte
+    # Kameras, User-Ansage 08.09.), bevor der erste Leser sie sieht.
+    _migration_katalog_0125(cfg)
     # .374 (User-Entscheid 30.08., Fund am Q4-Umbau des Gates): ein Altwert
     # ausserhalb der Whitelist-Spanne (gemessen: lookback_h: 100 aus einer
     # handgepflegten yaml, erlaubt 1-72) machte das GANZE Konfigurations-Blatt
@@ -1270,6 +1554,21 @@ PLATZ_STUMM_FRIST_S = 120.0
 FAIRNESS_SCHEIBE_S = 0.5
 NEUSTART_LOCK_FRIST_S = 60.0
 NEUSTART_LOCK_NOTFRIST_S = 15.0
+
+# Stufe A (.511): SAMMELFENSTER der Referenz-QS (qs_neu_starten). Bis .510 startete
+# jeder Auslöser sofort einen Volllauf; ein laufender Lauf haengte genau EINEN
+# Nachlauf an — bei Serien-Aktionen wurde daraus eine Kette von Vollaeufen
+# (Feldtester 01.09.: 69 Ausloeser in 45 min, Laufdauern 647-1423 s).
+# Zahlen, nicht geschaetzt (Auszaehlung der 11 Feldtage in
+# backups/gesichtskatalog_qs_0908/): 1861 Ausloeser, Median-Abstand 22 s,
+# p70 69 s, p75 96 s. Ein Fenster von 90 s faengt damit rund drei Viertel der
+# aufeinanderfolgenden Ausloeser in denselben Lauf, ohne den Bericht spuerbar
+# altern zu lassen; der Deckel begrenzt, wie lange ein DAUERSTROM von Aenderungen
+# den Lauf hinausschieben kann (ohne ihn liefe bei ununterbrochenem Anlernen nie
+# einer). Ein KNOPFDRUCK des Nutzers ('Prüfung neu', 'Quality-check my pictures')
+# geht am Fenster vorbei (sofort=True) — wer klickt, will jetzt ein Ergebnis.
+QS_FENSTER_S = 90.0
+QS_DECKEL_S = 600.0
 
 
 def frigate_read_only(cfg):
@@ -1600,11 +1899,12 @@ def _clip_alter_min(ende_ts, start_ts=None):
 
 
 def clip_tor_aus_cfg(cfg):
-    """.509: Wie viele Clips darf die Ernte gleichzeitig von Frigate ziehen?
+    """.509: Wie viele Clips duerfen gleichzeitig von Frigate gezogen werden?
 
     DIE eine Lesestelle des Wertes (Deckungs-Vertrag, CLAUDE.md: nie ein
     weiteres verstreutes Literal) — die drei Ernte-Wege (Lernlauf-Job,
-    Pass-Check-Job, Vorlade-Thread) und die Fortschritts-Anzeige holen ihn
+    Pass-Check-Job, Vorlade-Thread), seit .510/J15 auch der EREIGNIS-Weg
+    (`run_analyze`, Live und Nachhol) und die Fortschritts-Anzeige holen ihn
     hier. Fehlt der Schluessel (Bestands-Config vor .509, Werkbank-cfg einer
     Probe), gilt der Werkswert der Konstante, nicht „kein Tor": eine
     Installation, die nichts einstellt, soll GESCHUETZT sein."""
@@ -1616,8 +1916,9 @@ def clip_tor_aus_cfg(cfg):
 
 
 def clip_tor_deckel_s_aus_cfg(cfg):
-    """.509 Review-MUSS: Wie lange darf ein Ernte-Job HOECHSTENS am Tor
-    warten? DIE eine Lesestelle (Lernlauf-Job, Pass-Check-Job, Vorlader).
+    """.509 Review-MUSS: Wie lange darf ein Job HOECHSTENS am Tor warten?
+    DIE eine Lesestelle (Lernlauf-Job, Pass-Check-Job, Vorlader; seit .510/J15
+    auch der Ereignis-Weg).
 
     KEIN eigener Config-Schluessel, bewusst: es ist dieselbe Groessenordnung
     und dieselbe Zusage wie beim Warten auf Frigates Clip-Erzeugung
@@ -1660,6 +1961,22 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
     erz_deckel = int(cfg.get("clip_erzeugung_deckel_s") or 300)
     if erz:
         tmo += erz_deckel
+    # .510/J15 CLIP-TOR AUCH FUER DEN EREIGNIS-WEG (Befund 06.09. 23:20 an der
+    # .509 des Feldtesters): das Tor haengt seit .509 nur an den ERNTE-Jobs
+    # (Lernlauf, Pass-Check, Vorlader). Der regulaere Analyse-Job trug es nicht —
+    # mit vier Plaetzen zogen bis zu vier bis fuenf clip.mp4 gleichzeitig gegen
+    # sein Frigate (nginx: max 5 parallel). Der Morgen-Stall kam mit vier
+    # parallelen 75-MB-Clips. Dieselbe EINE Lesestelle wie ueberall
+    # (`clip_tor_aus_cfg`), dasselbe Job-Feld wie bei der Ernte, derselbe
+    # Warte-Deckel — und wie dort wird er auf die Job-Frist aufgeschlagen, sonst
+    # frisst legitimes Warten das Analyse-Budget.
+    # GILT FUER LIVE UND NACHHOL: beide gehen durch diese eine Funktion, und der
+    # Zettel J15 nennt ausdruecklich „Poll/MQTT/Nachhol". Ohne Tor bleiben die
+    # Wege, die KEINEN analyze-Job fahren: der Melde-Weg (core/melden, ein
+    # Video fuer eine Meldung), die Einspiel-Uebernahme und der Live-Waechter.
+    tor_n = clip_tor_aus_cfg(cfg)
+    tor_deckel_s = clip_tor_deckel_s_aus_cfg(cfg)
+    tmo += tor_deckel_s
     argv = [eid, "--labels", camera, "--persons", *persons,
             "--dir", event_dir, "--fps-sample", str(cfg["fps_sample"]),
             "--win-thresh", str(cfg["win_thresh"]),
@@ -1690,7 +2007,9 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
             # BLICKFENSTER (User 03.09. abends): analyze misst je Person das
             # beste Anker-Fenster (blick_n/blick_max), verdict prueft win_min.
             "--blick-fenster", str(cfg.get("blick_fenster_s", 45.0)),
-            "--urteil-anker", str(cfg.get("urteil_anker", 0.50))]
+            # Rueckfall-Literal: dieselbe 0,45 wie im Default-Block oben
+            # (.510). Es greift nur, wenn cfg den Schluessel gar nicht kennt.
+            "--urteil-anker", str(cfg.get("urteil_anker", 0.45))]
     # .404 KALIBRIER-VORFILTER (User-Entscheid 01.09., fest in Watcher UND
     # Worker: "es sollte doch immer durch die Kalibrierung vorgefiltert
     # werden"): die Erkennen-Guete-Latten der KAMERA gehen als Stimm-Sieb
@@ -1753,6 +2072,10 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
                               "clip_alter_min": clip_alter_min,
                               "clip_erzeugung": erz,
                               "clip_erzeugung_deckel_s": erz_deckel,
+                              # .510/J15: dasselbe Job-Feld wie bei der Ernte —
+                              # armiert wird im Worker (core.frames.CLIP_TOR_N).
+                              "clip_tor": tor_n,
+                              "clip_tor_deckel_s": tor_deckel_s,
                               "clip_vod": cfg.get("clip_vod") is not False},
                              tmo, info=w1, puls=puls)      # P1: Lebenszeichen des Platzes
         dt = time.monotonic() - t0 - float(w1.get("wartezeit_s") or 0.0)
@@ -1818,6 +2141,8 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
                                   "clip_alter_min": clip_alter_min,
                                   "clip_erzeugung": erz,
                                   "clip_erzeugung_deckel_s": erz_deckel,
+                                  "clip_tor": tor_n,          # .510/J15, auch im Retry
+                                  "clip_tor_deckel_s": tor_deckel_s,
                                   "clip_vod": cfg.get("clip_vod")
                                   is not False},
                                  frist, info=w2, puls=puls)   # P1: auch im Retry
@@ -1844,6 +2169,22 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
                 return None
             if not antwort.get("ok"):
                 lf.write(f"\nverifyd: analyze failed in worker: {antwort.get('fehler')}\n")
+                # .510/J15: der eigene TOR-Deckel ist KEIN Analysefehler, sondern
+                # unsere eigene Bremse. Er darf das Ereignis deshalb nicht als
+                # `fehler` in die Akte schreiben — sonst waere der Schutz teurer
+                # als der Schaden (genau die Falle, die .509 fuer die Ernte
+                # nachgestellt hat: 7 von 8 Alt-Events endgueltig verloren). Der
+                # Aufrufer laesst es UNGEBUCHT, der Sweep holt es spaeter.
+                # Erkannt an der KLASSE im Text (`ClipErzeugungAbbruch` traegt
+                # sie seit .509 vorne im Text, weil worker.py nur
+                # `f"{type(e).__name__}: {e}"` liefert) — dieselbe Frage stellt
+                # `_fehler_buchbar` im Lernlauf.
+                if "clip_tor_deckel" in str(antwort.get("fehler") or ""):
+                    lf.write("verifyd: clip gate cap reached — event left "
+                             "unbooked, a later run will fetch it\n")
+                    if info is not None:
+                        info["nicht_buchen"] = "clip_tor_deckel"
+                    return None
                 # E-P7 (.507): der Worker hat die Ausnahme gesehen und, wo sie
                 # eindeutig war, eingeordnet (core.frames.verwurf_grund) — ohne
                 # dieses Feld war der Feldfall H4 nicht von einem Watchdog-Riss
@@ -2738,10 +3079,11 @@ class Analyseplaetze:
     """
 
     # Die EINE Aufzaehlung der Klassen (qs_ebenen.md: kein verstreutes Literal).
-    # C1 bringt `bg`, C2 rechnet die Fairness N-1 je Klasse auf genau dieser Liste.
+    # C1 bringt `bg`, C2 rechnet die Fairness je Klasse auf genau dieser Liste.
     # B1 (.507) bringt `interaktiv`: alles, worauf ein Mensch gerade sichtbar
-    # wartet. Sie ist die einzige Klasse mit Vorrang (E-P1) — die zwei Regeln
-    # dazu stehen in `_ueber_der_latte` und `wartende_andere`, mehr nicht.
+    # wartet. Die RANGFOLGE seit .510/J18 lautet `interaktiv` > `analyse` > `bg`,
+    # `ernte` haelt hoechstens N-1 — die Regeln dazu stehen in
+    # `_ueber_der_latte` und `wartende_andere`, mehr nicht.
     ARTEN = ("analyse", "ernte", "bg", "interaktiv")
 
     def __init__(self, kapazitaet=1, log=None, vorschlag=None):
@@ -2802,10 +3144,14 @@ class Analyseplaetze:
                 aus[d["art"]] = aus.get(d["art"], 0) + 1
             return aus
 
-    # -- Fairness N-1 (C2, 05.09.2026, bauplan_0505.md §1) -------------------
-    # Auftrag des Betreibers: „nicht ein Weg nimmt alles, jeder mal dran, weder Lernlauf
-    # noch Szenario". Die Regel dazu: von N Plaetzen haelt eine Klasse hoechstens
-    # N-1, SOLANGE eine andere Klasse wartet. Wartet niemand sonst, darf sie alle.
+    # -- Fairness: Rangfolge statt Reserve (.510/J18; Basis C2, bauplan_0505.md §1) --
+    # Auftrag des Betreibers 05.09.: „nicht ein Weg nimmt alles, jeder mal dran, weder
+    # Lernlauf noch Szenario". Die Regel dazu war die N-1-Latte: von N Plaetzen haelt
+    # eine Klasse hoechstens N-1, SOLANGE eine andere wartet.
+    # NACHGESCHAERFT 07.09. (J18, Betreiber-Entscheid): keine STEHENDE RESERVE mehr. Die Latte gilt
+    # nur noch fuer `ernte` (K Abholer); `interaktiv` und `analyse` duerfen alle
+    # Plaetze nehmen, und `bg` bekommt einen nur bei Leerlauf. Die Zahlen dahinter
+    # stehen in `_ueber_der_latte`, die Messung in J17.
     #
     # Warum das eine ANMELDUNG braucht: „wartet" ist sonst nicht beobachtbar. Bis
     # .504 las das alte Gate `len(_ev_q)` — die Ereignis-Warteschlange — und sah
@@ -2917,30 +3263,53 @@ class Analyseplaetze:
     def _ueber_der_latte(self, art, gehalten):
         """Die ZAHL der Regel: waere ein weiterer Platz fuer `art` einer zu viel?
 
-        `gehalten >= kapazitaet - 1`. Bei N = 1 ist das `>= 0`, also immer wahr —
-        dort heisst die Regel „nimm nur, wenn keine andere Klasse wartet", und das
-        ist Wort fuer Wort das alte BG-Gate. Die EINE Ausnahme: die Analyse wird
-        bei N = 1 nie zurueckgehalten. Sonst kehrte sich die Rangfolge um (eine
-        wartende Ernte haette den einen Platz vor der Analyse), und ein
-        Lernlauf-Abholer, der im Sekundentakt fragt, brachte den Ereignis-Strom
-        zum Stehen. Ab N = 2 gilt die Regel symmetrisch fuer alle Klassen: die
-        Analyse laesst der Ernte einen Platz und umgekehrt.
+        RANGFOLGE seit .510/J18 (Betreiber-Entscheid 07.09.): `interaktiv` vor
+        `analyse` vor `bg`. Kein Weg haelt mehr eine stehende Reserve vor —
+        „Alle Plaetze koennen immer voll genutzt werden; im Worker wird bei jedem
+        Neuen geguckt, wer ihn bekommt."
 
-        Die ZWEITE Ausnahme kommt mit B1 (.507, E-P1) und ist das Spiegelbild
-        der ersten: `interaktiv` wird NIE zurueckgehalten, auf keiner Kapazitaet.
-        Dahinter wartet ein Mensch vor einem Fortschrittsbalken; jede Zahl, die
-        ihn zurueckstellt, ist fuer ihn eine Sekunde ohne Erklaerung. Was der
-        Vorrang NICHT tut: verdraengen. Ein laufender Job wird nie geschossen —
-        das kostete der Lernlauf-Ernte dauerhaft ein Ereignis (`fehler`-Buchung)
-        und der Pass-Ernte ebenso (`ok:false` gilt als geerntet). Der Klick
-        bekommt den naechsten FREI WERDENDEN Platz, nicht den belegten.
+          interaktiv  NIE zurueckgehalten (B1 .507, E-P1). Dahinter wartet ein
+                      Mensch. Was der Vorrang NICHT tut: verdraengen. Ein
+                      laufender Job wird nie geschossen — das kostete der
+                      Lernlauf-Ernte dauerhaft ein Ereignis (`fehler`-Buchung)
+                      und der Pass-Ernte ebenso (`ok:false` gilt als geerntet).
+                      Der Klick bekommt den naechsten FREI WERDENDEN Platz.
+          analyse     NIE zurueckgehalten (NEU in .510). Bis .509 galt fuer sie
+                      dieselbe N-1-Regel wie fuer alle: sie hielt hoechstens
+                      N-1 Plaetze, solange irgendeine andere Klasse wartete.
+                      GEMESSEN beim Feldtester (J17, 07.09.): in 89 von 120
+                      Minutenproben liefen bei 4 Plaetzen nur DREI Analysen —
+                      der vierte Platz gehoerte per Regel der bg-Klasse, bei
+                      2 815 wartenden Ereignissen und 89 min aeltestem Eintrag.
+                      Das war die falsche Prioritaet, und sie ist weg.
+          bg          bekommt einen Platz NUR bei LEERLAUF: die Latte ist fuer
+                      sie immer erreicht, `_fairness_blockiert` fragt danach nur
+                      noch, ob sonst jemand wartet. Sammeln und Wanduhr sind
+                      Auffangnetze ohne Frist; sie duerfen keinem Ereignis und
+                      keinem Klick im Weg stehen. GENAU GENOMMEN heisst „sonst
+                      jemand" das, was `wartende_andere` zurueckgibt: eine
+                      wartende Analyse und jedes `interaktiv` zaehlen IMMER, eine
+                      wartende `ernte` nur, wenn sie sich FRUEHER angemeldet hat
+                      (FIFO, C2). Das ist Absicht und keine Aufweichung: gegen
+                      eine dauerangemeldete Lernlauf-Ernte (K Abholer) kaeme das
+                      06:00-Netz sonst nie mehr dran — verhungern statt
+                      zuruecktreten. Der gemessene J17-Fall (bg nahm den vierten
+                      Platz bei 2 815 wartenden Ereignissen) liegt auf der
+                      Analyse-Achse und faellt damit.
+          ernte       behaelt die N-1-Regel aus C2 (.505). Sie ist die einzige
+                      Klasse mit K parallelen Abholern (P6) und wuerde sonst bei
+                      Rueckstand alle Plaetze belegen — genau das, was der
+                      Betreiber-Auftrag „nicht ein Weg nimmt alles, weder
+                      Lernlauf noch Szenario" verbietet. Bei N = 1 heisst die
+                      Regel fuer sie „nimm nur, wenn niemand sonst wartet".
+
         Ehrliche Folge, die der Betreiber kennen muss: bei N = 1 haelt ein Klick
         den Ereignis-Strom fuer die Dauer seines Jobs an, ab N = 2 faellt der
         garantierte Analyse-Platz fuer diese Dauer auf 0."""
-        if self.kapazitaet <= 1 and art == "analyse":
+        if art in ("interaktiv", "analyse"):
             return False
-        if art == "interaktiv":
-            return False
+        if art == "bg":
+            return True                       # bg nimmt nur bei Leerlauf
         return gehalten >= self.kapazitaet - 1
 
     def _fairness_blockiert(self, art, marke):
@@ -2952,13 +3321,22 @@ class Analyseplaetze:
     def _fair_melden(self, art, gehalten):
         """EINE Logzeile je Minute, wenn eine Klasse zurueckgetreten ist. Der
         Griff gehoert zur Abnahme (.505 Gruppe G: „Analyse kommt durch, Fairness-
-        Zeile im Log"); ungedrosselt waere er eine Zeile je Sekunde und Abholer."""
+        Zeile im Log"); ungedrosselt waere er eine Zeile je Sekunde und Abholer.
+
+        .510: der GRUND steht jetzt drin. Die alte Zeile sagte fuer JEDE Klasse
+        „holds X of N" — fuer `bg` war das seit .510 irrefuehrend: sie tritt
+        zurueck, weil jemand wartet, nicht weil sie zu viele Plaetze haelt."""
         jetzt = time.monotonic()
         if jetzt - self._fair_log_ts < 60:
             return
         self._fair_log_ts = jetzt
-        self.log(f"slot fairness: {art} stands back (holds {gehalten} of "
-                 f"{self.kapazitaet}, another class is waiting)")
+        if art == "bg":
+            self.log(f"slot fairness: bg stands back (background class yields "
+                     f"whenever anyone else waits; holds {gehalten} of "
+                     f"{self.kapazitaet})")
+        else:
+            self.log(f"slot fairness: {art} stands back (holds {gehalten} of "
+                     f"{self.kapazitaet}, another class is waiting)")
 
     def marke_von(self, nr):
         """Marke der aktuellen Belegung von Platz `nr`, None wenn frei. Der
@@ -2987,11 +3365,12 @@ class Analyseplaetze:
 
         `timeout_s=None` wartet unbegrenzt, wie der heutige `with self.lock:` es tut.
 
-        FAIRNESS N-1 (C2, 05.09.2026, bauplan_0505.md §1): vor dem Semaphor steht
-        seit .505 die Frage, ob DIESE Klasse ueberhaupt noch nehmen darf. Hielte
-        eine Klasse schon `kapazitaet - 1` Plaetze und wartete eine andere, tritt
-        sie in Scheiben von `FAIRNESS_SCHEIBE_S` zurueck — `timeout_s` gilt fuer
-        das GANZE Warten (Zuruecktreten + Semaphor), nicht je Teil.
+        FAIRNESS (C2 .505, Rangfolge .510/J18): vor dem Semaphor steht die Frage,
+        ob DIESE Klasse ueberhaupt noch nehmen darf (`_ueber_der_latte`: `ernte`
+        hoechstens N-1, `bg` nur bei Leerlauf, `interaktiv`/`analyse` immer). Muss
+        sie zurueckstehen, tut sie das in Scheiben von `FAIRNESS_SCHEIBE_S` —
+        `timeout_s` gilt fuer das GANZE Warten (Zuruecktreten + Semaphor), nicht
+        je Teil.
 
         Die Gegenpruefung NACH dem Semaphor ist kein Zierrat: zwei Threads
         derselben Klasse koennen die Vorpruefung gleichzeitig bestehen (Ernte hat
@@ -3265,6 +3644,10 @@ class Service:
         self.log_path = os.path.join(cfg["data_dir"], "state", "deckung.jsonl")
         os.makedirs(os.path.join(cfg["data_dir"], "events"), exist_ok=True)
         os.makedirs(os.path.join(cfg["data_dir"], "clips"), exist_ok=True)
+        # .511: den debug-Stand fuer den Live-Engine-PROZESS spiegeln. Beim
+        # Start ist er nach dem B6-Reset immer aus — die Zeile raeumt also
+        # eine Flagge weg, die ein frueherer Lauf stehengelassen hat.
+        self._debug_spiegeln()
         self.processed = self._load_processed()
         # .340 Start-Nachholen: der Sweep wusste bisher nicht, der wievielte Lauf er ist.
         # Die Marke faellt erst NACH dem Frigate-Aufruf (sonst hebelt ein Haenger beim
@@ -3325,30 +3708,51 @@ class Service:
         self._qs_lock = threading.Lock()          # Guard-Zugriff (ThreadingHTTPServer-Threads)
         self._qs_laeuft = False
         self._qs_nochmal = False
+        self._qs_timer = None                     # Stufe A (.511): Sammelfenster-Timer
+        self._qs_erst = None                      # ts des ersten Ausloesers im Fenster (Deckel)
         self._live_jobs_lock = threading.Lock()   # Live-Reiter: Helfer-Quelltests
         self._live_jobs = {}                      # kamera -> {art, weg, fertig, ...}
         self._live_cmd_lock = threading.Lock()    # Engine-M3: Kommando-Slot pruefen+schreiben atomar (2 Klicks im 2-s-Fenster)
         self._live_aufsicht = None                # Phase 4: Engine-Supervisor (core/liveaufsicht),
         self._live_aufsicht_stop = threading.Event()   # gebaut in start_live_aufsicht()
-        self._vs_laeuft = set()                   # Personen mit laufender Bestands-Suche
-        self._nachlern_lock = threading.Lock()    # schuetzt _nachlern_timer
-        self._nachlern_timer = {}                 # person -> Debounce-Timer: Bestands-Suche erst nach Durchgangs-Ende (User 21.07.)
+        self._vs_laeuft = {}                      # .510/J18: Person -> Stand der Bestands-Suche
+        #                                           {"seit": mono, "phase": "wartet"|"rechnet"}.
+        #                                           Bis .509 eine Menge; die Seite braucht seit
+        #                                           J18(d) den EHRLICHEN Zustand (wartet auf einen
+        #                                           Platz / rechnet gerade), nicht nur "irgendwas
+        #                                           laeuft". Guard-Semantik unveraendert:
+        #                                           `person in self._vs_laeuft` = ein Lauf ist
+        #                                           schon unterwegs.
+        # .510/J18 (Betreiber-Entscheid 07.09.): die AUTOMATISCHE Bestands-Suche nach jedem
+        # Durchgang ist ERSATZLOS entfallen — mit ihr `_nachlern_anstossen`,
+        # `_nachlern_lauf`, `_nachlern_lock` und `_nachlern_timer`. Sie kostete beim
+        # Feldtester 45 Subprozess-Laeufe in 2 h 22 min (je Lauf ein frischer Embedder,
+        # 11-13 s, plus NormMass 4-10 s, ~2 GB RSS ohne Budget-Pruefung), fuer ein
+        # Ergebnis, das erwartbar zwei- bis dreimal am Tag jemand ansieht. Gesucht wird
+        # seitdem NUR auf Klick (`/vorschlaege_neu`) oder per CLI
+        # (`anlernen.py vorschlaege`) — dafuer im WARMEN Worker mit Vorrang.
         # .507 B2 (E-B1): `_nachlern_eids` ist ERSATZLOS entfallen. Es sammelte die
         # bestaetigten Events eines Durchgangs je Person, allein damit die
-        # AUTOMATISCHE Pass-Ernte sie bekam. Die Automatik ist weg (Begruendung in
-        # _nachlern_lauf); den Durchgang rechnet der Klick seither serverseitig aus
-        # der Akte (`_bruecke_durchgang`), nicht aus einem Prozess-Zustand, der
-        # einen Neustart nicht ueberlebt.
-        # HALTER dieses Locks (Stand C2, 05.09.2026): qs_neu_starten,
-        # vorschlaege_starten, anlern_nachpruefung_starten, _sammle_fahren und der
-        # Wanduhr-Roundtrip. Die ERNTE ist seit C2 KEIN Halter mehr (Lernlauf,
+        # AUTOMATISCHE Pass-Ernte sie bekam. Die Automatik ist weg; den Durchgang
+        # rechnet der Klick seither serverseitig aus der Akte
+        # (`_bruecke_durchgang`), nicht aus einem Prozess-Zustand, der einen
+        # Neustart nicht ueberlebt.
+        # HALTER dieses Locks (Stand .511): anlern_nachpruefung_starten,
+        # _sammle_fahren und der Wanduhr-Roundtrip.
+        # `vorschlaege_starten` ist seit .510/J18 KEIN Halter mehr, `qs_neu_starten`
+        # seit .511/Stufe B ebenfalls nicht (beide rechnen im Worker auf einem Platz
+        # der Klasse `interaktiv`, nicht als Subprozess).
+        # Die ERNTE ist seit C2 KEIN Halter (Lernlauf,
         # Bruecke, Kalibrier-Auffueller): sie ist Kunde der Vergabestelle, und mit
         # diesem EINEN Mutex um den Job waeren ihre K Abholer (P6) wieder auf einen
         # serialisiert. Sie blickt nur noch lesend her (`.locked()`) und tritt vor
         # einem laufenden Subprozess-Job zurueck. Zweck des Locks bleibt: hoechstens
         # EIN schwerer GPU-Hintergrund-SUBPROZESS gleichzeitig (Review 21.07.) —
-        # die drei Starter oben machen einen eigenen GPU-Kontext auf und halten
-        # keinen Platz (bekannte Luecke, bewusst nicht in .505, bauplan_0505 §1).
+        # die verbliebenen Starter oben machen einen eigenen GPU-Kontext auf und
+        # halten keinen Platz (bekannte Luecke, bewusst nicht in .505/.510,
+        # bauplan_0505 §1; J18 nennt sie als eigenen offenen Punkt. Mit .511/Stufe B
+        # ist der SCHWERSTE dieser Faelle weg: die Referenz-QS lief 145-mal in
+        # 11 Tagen und riss beim Feldtester viermal einen CUDA-OOM).
         # Live-run_analyze bleibt frei — AUSSER die Wanduhr-Messung: die
         # serialisiert sich zusaetzlich ueber den Analyse-Platz gegen Live
         # (_roundtrip_seriell, Issue #21: auf 2C/4T war "frei" = Minuten
@@ -3359,7 +3763,7 @@ class Service:
         self._gpu_bg_lock = threading.Lock()
         self._vision_lock = threading.Lock()      # V4: schuetzt Single-Flight + Debounce-Timer des Vision-Urteils
         self._vision_flug = None                  # core.visionurteil.Einfachlauf (lazy): 1 laufend + 1 wartend, Rest verworfen+gezaehlt
-        self._vision_timer = {}                   # pass_key -> Debounce-Timer (Muster _nachlern_timer): Urteil erst nach Durchgangs-Ende
+        self._vision_timer = {}                   # pass_key -> Debounce-Timer (Timer-Token-Muster, s. _vision_anstossen): Urteil erst nach Durchgangs-Ende
         self._kette_stumm = {}                    # Ketten-Schalter: pass_key -> ts der EINEN "vision_pfad=aus"-Zeile (eine je Durchgang, nicht je Event)
         self._nachanalyse = {"laeuft": False, "pass_key": "", "gesamt": 0, "fertig": 0}  # .161: erneute Analyse EINES Durchgangs (Sammel-Modus an, Material fehlt)
         self._vision_lebt = set()                 # .164: pass_keys mit WIRKLICH laufendem Vision-Thread (Waisen-Zweitsicherung)
@@ -3724,43 +4128,16 @@ class Service:
                 self._sammel_laeuft = False
             self.log(f"scenario collection thread start error: {e}")
 
-    def _nachlern_anstossen(self, person):
-        """Nach einem abgeschlossenen Durchgang mit einer erkannten BEKANNTEN Person die
-        Nachlern-Vorschlaege (vorschlaege_person) automatisch aktualisieren — 'am Ende des
-        Durchgangs, ohne Klick' (User 21.07.). Debounce pro Person: jeder neue Treffer setzt
-        den szene_karenz_s-Timer zurueck, sodass die Suche GENAU EINMAL laeuft, wenn seit dem
-        letzten Auftritt der Person die Karenz vorbei ist. Das ANWENDEN bleibt manuell (ein
-        falsch zugeordnetes Gesicht wuerde die Person vergiften) — nur das Bereitstellen
-        laeuft automatisch.
-
-        .507 B2: die Event-ID braucht dieser Anstoss nicht mehr (sie ging frueher in
-        `_nachlern_eids` fuer die automatische Pass-Ernte, s. `_nachlern_lauf`)."""
-        karenz = int(self.cfg.get("szene_karenz_s", 90))
-        with self._nachlern_lock:
-            alt = self._nachlern_timer.get(person)
-            if alt:
-                alt.cancel()
-            t = threading.Timer(karenz, self._nachlern_lauf)
-            t.args = (person, t)                             # Timer-Token: nur GENAU dieser Timer darf sich austragen (Review 21.07.)
-            t.daemon = True
-            self._nachlern_timer[person] = t
-            t.start()
-
-    def _nachlern_lauf(self, person, mein_timer):
-        """Der EINE Zug nach Durchgangs-Ende: die Bestands-Suche der Person.
-
-        .507 B2 (E-B1, Betreiber-Entscheid 05.09.): die AUTOMATISCHE Pass-Ernte
-        (`bruecke_vorrat`) stand bis .506 hier — sie war der einzige automatische
-        Ernte-Anlass des Dienstes und kostete auf Prod 46 Bruecken-Laeufe an einem
-        Tag (138 Ordner / 1,2 GB), fuer Bilder, die niemand angesehen hatte. Geerntet
-        wird seither NUR auf Klick, dafuer mit Vorrang (Klasse `interaktiv`) und
-        einem ehrlichen Balken. `vorschlaege_starten` bleibt: das ist die
-        Bestands-Suche ueber vorhandene Bilder, kein Clip-Job und kein Analyseplatz."""
-        with self._nachlern_lock:
-            if self._nachlern_timer.get(person) is not mein_timer:
-                return                                       # ein neuerer Timer hat uebernommen -> No-op (kein Doppellauf)
-            self._nachlern_timer.pop(person, None)
-        self.vorschlaege_starten(person)                     # async, hat eigenen _vs_laeuft-Guard
+    # .510/J18: `_nachlern_anstossen` und `_nachlern_lauf` sind hier ERSATZLOS
+    # entfallen (Betreiber-Entscheid 07.09., Akte `backups/analyse_0907/b1_bestandssuche_bericht.md`).
+    # Sie starteten die Bestands-Suche einer Person automatisch `szene_karenz_s`
+    # nach ihrem Durchgang. Der Grund fuer den Ausbau sind die FIXKOSTEN, nicht die
+    # Rechenzeit der Suche selbst: jeder Lauf war ein frischer Subprozess mit eigenem
+    # Embedder (11-13 s) und eigener NormMass (4-10 s), ~2 GB RSS ohne Budget-Pruefung,
+    # und er hielt `_gpu_bg_lock` — beim Feldtester 45 Laeufe in 2 h 22 min, waehrend
+    # 2 815 Ereignisse warteten. Gesucht wird seit .510 nur noch auf Klick
+    # (`/vorschlaege_neu` -> `vorschlaege_starten`) oder per CLI
+    # (`anlernen.py vorschlaege`), dafuer im warmen Worker mit Vorrang.
 
     # Modulumbau R3: Szenen-Telegram + Transcode-Lauf leben in core/melden.py
     # (Docstrings/Begruendungen dort). Hier nur Einhaenge: Drossel-Zustand
@@ -4211,13 +4588,67 @@ class Service:
             self.log(f"update check: {d['tag']} is available on GitHub "
                      f"(running {os.environ.get('SUSLIK_VERSION', 'dev')})")
 
-    def qs_neu_starten(self):
-        """Referenz-QS im Hintergrund (separater Prozess) neu berechnen — nach jedem Anlernen/
-        Entfernen und auf Knopfdruck (.273 Bestands-QS-Knopf: der Lauf ist
-        IMMER ungefiltert — der Personen-Filter ist reine Anzeige, Widerleger-
-        Blocker 'gefilterter Lauf loescht den Gesamtbericht'). Doppelstart-
-        Guard: parallele Laeufe wuerden sich GPU und das JSON-Schreiben
-        streiten (Einzel-Loeschungen kommen sonst im Sekundentakt)."""
+    def qs_neu_starten(self, sofort=False):
+        """Referenz-QS im Hintergrund neu berechnen — nach jedem Anlernen und auf
+        Knopfdruck (.273 Bestands-QS-Knopf: der Lauf ist IMMER ungefiltert — der
+        Personen-Filter ist reine Anzeige, Widerleger-Blocker 'gefilterter Lauf
+        loescht den Gesamtbericht'). Doppelstart-Guard: parallele Laeufe wuerden
+        sich GPU und das JSON-Schreiben streiten.
+
+        Stufe B (.511) — WARMER WORKER STATT FRISCHEM SUBPROZESS, exakt das
+        J18-Muster von `vorschlaege_starten` (.510) eine Etage hoeher:
+        Bis .510 war das ein `subprocess.run([python, anlernen.py, "pruefe", …])`
+        unter `_gpu_bg_lock`. Gemessen auf der Werkbank (08.09., 1229
+        Referenzen): 144 s des 872-s-Laufs waren reiner ANLAUF — Prozessstart,
+        Importe, Embedder, NormMass —, und zwar bei JEDEM der 145 Laeufe, die
+        der Feldtester in 11 Tagen fuhr. Dazu drei Folgen, alle belegt:
+        (a) `_gpu_bg_lock` war ueber die volle Laufzeit gehalten, also standen
+            Lernlauf-, Bruecken- und Kalibrier-Ernte still;
+        (b) der Subprozess machte einen EIGENEN GPU-Kontext neben den
+            Analyse-Workern auf, ohne einen Platz zu nehmen — beim Feldtester
+            viermal „the resource allocation failed ; GPU=0" (CUDA-OOM);
+        (c) er lief an der Vergabestelle vorbei, war also fuer Fairness,
+            Platz-Waechter und `/health` unsichtbar.
+        Jetzt ist er ein JOB der Vergabestelle (Klasse `interaktiv`, typ `refqs`)
+        im Analyse-Worker: Embedder und NormMass sind warm, der Job haelt einen
+        regulaeren Platz, `_gpu_bg_lock` fasst dieser Weg nicht mehr an.
+        EHRLICHE GRENZE: der CUDA-OOM ist damit STRUKTURELL beseitigt (kein
+        zweiter Kontext mehr) — nachgewiesen ist das hier nur am Bau, nicht am
+        Geraet; der Feldbeweis kommt vom Feldtester.
+        WARTEN IST MOEGLICH und wird angezeigt wie bei der Bestands-Suche:
+        `interaktiv` haelt die Fairness nie zurueck, aber bei einem einzigen
+        Analyse-Platz wartet der Lauf auf ihn.
+
+        Stufe A (.511) hat zwei Dinge geaendert:
+        (1) LOESCHUNGEN rufen hier gar nicht mehr an — sie fuehren den Bericht
+            punktuell nach (anlernen.qs_bericht_bereinigen/refcache_entfernen).
+        (2) Die verbliebenen Ausloeser (Benennen, Anlernen, Uebernahmen, Import,
+            Reorganisieren) laufen durch ein SAMMELFENSTER: der Lauf startet erst,
+            wenn QS_FENSTER_S lang nichts Neues kam, spaetestens nach QS_DECKEL_S.
+            Ohne das Fenster erzeugte eine Serie eine Kette von Vollaeufen, weil
+            der Nachlauf (_qs_nochmal) sofort den naechsten anhaengte.
+        sofort=True geht am Fenster vorbei — fuer die zwei Knoepfe, hinter denen
+        ein Nutzer auf ein Ergebnis wartet, und fuer den faellig gewordenen Timer
+        selbst. Der Nachlauf _qs_nochmal bleibt in seiner Funktion erhalten
+        (er wird nur ebenfalls entprellt)."""
+        if not sofort and QS_FENSTER_S > 0:
+            # Timer-Token-Muster wie _vision_anstossen: jeder neue Ausloeser
+            # verschiebt die Faelligkeit nach hinten, gedeckelt auf
+            # erster Ausloeser + QS_DECKEL_S; nur DER Timer feuert, der zuletzt
+            # gesetzt wurde.
+            with self._qs_lock:
+                jetzt = time.time()
+                if self._qs_erst is None:
+                    self._qs_erst = jetzt
+                faellig = min(jetzt + QS_FENSTER_S, self._qs_erst + QS_DECKEL_S)
+                if self._qs_timer is not None:
+                    self._qs_timer.cancel()
+                t = threading.Timer(max(0.0, faellig - jetzt), self._qs_faellig)
+                t.args = (t,)
+                t.daemon = True
+                self._qs_timer = t
+                t.start()
+            return
         with self._qs_lock:
             if self._qs_laeuft:
                 self._qs_nochmal = True            # nicht still verwerfen: nach dem Lauf nachholen
@@ -4244,40 +4675,92 @@ class Service:
                 except OSError:
                     pass
                 deckel_s = max(600, 3 * _n_bilder + 120)
-                env = dict(os.environ, OV_DEVICE=self.cfg["ov_device"])
+                # Stufe B: der ERSTLAUF eines Bestands ohne Mess-Speicher misst
+                # jedes Bild einmal und kann Minuten dauern. Das ist erwuenscht
+                # (danach ist es gratis) — es muss nur LAUT gesagt werden, statt
+                # den Nutzer raten zu lassen, warum die Seite lange rechnet.
+                from core import refmess as _rm
+                from core import refurteil as _refurteil
+                if not os.path.exists(_rm.pfad(_fd)):
+                    self.log(f"reference QS: no measurement store yet — this "
+                             f"first run measures all {_n_bilder} catalog "
+                             f"image(s) once and saves the values; later runs "
+                             f"read them and take seconds")
                 fehler = None
-                with self._gpu_bg_lock:                       # gegen die anderen GPU-Hintergrund-Jobs serialisieren (Review 21.07.)
-                    try:
-                        r = subprocess.run([sys.executable,
-                                        os.path.join(HERE, "anlernen.py"), "pruefe",
-                                        "--unscharf", str(self.cfg.get("unscharf_max", 350)),
-                                        "--minkante", str(self.cfg.get("min_kante", 70)),
-                                        "--dupsim", str(self.cfg["benennung_dup_sim"])]
-                                       # .308: Norm-Weg der Einstufung — EINE Quelle
-                                       # (norm_latte_aus_cfg), None bei Vorrat aus
-                                       + (lambda _nl: ([] if not _nl else [
-                                           "--norm-gut", str(_nl["gut"]), "--norm-min", str(_nl["min"]),
-                                           "--norm-kante", str(_nl["kante"]), "--norm-sharp", str(_nl["sharp"])]))
-                                         (norm_latte_aus_cfg(self.cfg)),
-                                       capture_output=True, timeout=deckel_s, check=False, env=env,
-                                       preexec_fn=_analyse_nice)   # Issue #21, s. ANALYSE_NICE
-                        if r.returncode != 0:
-                            fehler = (f"check exited with {r.returncode}: "
-                                      + (r.stderr or b"")[-200:].decode("utf-8", "replace"))
-                    except subprocess.TimeoutExpired:
-                        fehler = (f"check did not finish within {deckel_s}s "
+                _dg = {}
+                # Job der Vergabestelle (Klasse `interaktiv`) statt Subprozess —
+                # KEIN _gpu_bg_lock mehr auf diesem Weg. Gewartet wird hoechstens
+                # die Analyse-Frist der Config (dieselbe Zusage wie bei der
+                # Bestands-Suche: „so lange darf ein Platz legitim belegt sein"),
+                # gerechnet wird bis zum Bildzahl-Deckel oben.
+                _warte = int(self.cfg.get("analyse_timeout_s") or 600)
+                _lp = os.path.join(self.cfg["data_dir"], "state", "refqs.log")
+                _auftrag = {"typ": "refqs",
+                            "unscharf": self.cfg.get("unscharf_max", 350),
+                            "minkante": self.cfg.get("min_kante", 70),
+                            "dupsim": self.cfg["benennung_dup_sim"],
+                            # .308: Norm-Weg der Einstufung — EINE Quelle
+                            # (norm_latte_aus_cfg), None bei Vorrat aus
+                            "norm_latte": norm_latte_aus_cfg(self.cfg),
+                            # .511 Stufe C: die EIGENEN Latten des Bestands-
+                            # Pruefers (je Kamera + globaler Rueckfall). Sie
+                            # reisen als fertiges Dict wie norm_latte daneben —
+                            # der Worker waehlt nie selbst Config-Schluessel
+                            # aus, und die Aufnahme-Latten bleiben unberuehrt.
+                            "pruef_latten": _refurteil.pruef_latten(self.cfg),
+                            "log": _lp}
+                t0, warte_s = time.monotonic(), 0.0
+                with self._plaetze.wartend("interaktiv"), \
+                        self._plaetze.platz("reference QS", art="interaktiv",
+                                            timeout_s=_warte) as nr:
+                    if nr is None:
+                        fehler = (f"no free analysis slot within {_warte}s "
                                   "— start it again")
+                    else:
+                        warte_s = time.monotonic() - t0
+                        w = self._worker(nr)
+                        antwort = w.job(_auftrag, deckel_s,
+                                        puls=self._plaetze.puls_fuer(nr))
+                        if antwort is None:
+                            _u = getattr(w, "letzte_ursache", None)
+                            fehler = (f"worker died ({_u})" if _u else
+                                      f"worker timeout ({deckel_s}s) or died")
+                        elif not antwort.get("ok"):
+                            fehler = str(antwort.get("fehler") or "unbekannt")
+                        else:
+                            _dg = antwort.get("refqs") or {}
                 if fehler:
                     self.log(f"reference QS FAILED: {fehler}")
                     try:
                         import anlernen as _al
                         _al._schreibe_json_atomar(
-                            os.path.join(_al.ANLERN, "refs_qs_lauf.json"),
+                            _al.QS_LAUF_PATH,
                             {"fehler": fehler, "ts": round(time.time(), 1)})
                     except Exception:
                         pass
                 else:
-                    self.log("reference QS recalculated")
+                    self.log(
+                        f"reference QS recalculated: {_dg.get('gesamt', 0)} "
+                        f"image(s) — {_dg.get('gemessen', 0)} measured, "
+                        f"{_dg.get('aus_speicher', 0)} from the measurement "
+                        f"store, {_dg.get('beiwert', 0)} from stock embeddings"
+                        # Stufe C: die einmalige Guete-Nachmessung der
+                        # Vorrats-Referenzen ist der einzige Posten, der einen
+                        # sonst warmen Lauf wieder Minuten kosten kann — sie
+                        # gehoert in dieselbe Bilanz-Zeile, sonst sieht der
+                        # Nutzer nur "0 measured" und eine lange Wartezeit.
+                        + (f"; {_dg.get('guete_nachgemessen')} stock "
+                           f"reference(s) measured once for quality"
+                           if _dg.get("guete_nachgemessen") else "")
+                        + (f"; quality known for {_dg.get('guete_deckung')} of "
+                           f"{_dg.get('gesamt', 0)}"
+                           if _dg.get("guete_deckung") is not None else "")
+                        + (f"; camera resolved for {_dg.get('kamera_gefunden', 0)}"
+                           f" of {_dg.get('kamera_gesucht', 0)} looked up"
+                           if _dg.get("kamera_gesucht") else "")
+                        + (" (image-quality models missing — fiqa/impression "
+                           "not measured)" if _dg and not _dg.get("guete_da") else "")
+                        + f" (waited {warte_s:.1f}s for a slot)")
             finally:
                 with self._qs_lock:
                     self._qs_laeuft = False
@@ -4285,35 +4768,141 @@ class Service:
                 if nochmal:                        # waehrend des Laufs kam eine Aenderung
                     self.qs_neu_starten()          # Widerleger: nie mehr hinter
                     #                                einem stillen Thread-Tod verfallen
+                    #                                (.511: ebenfalls entprellt — genau
+                    #                                hier entstand die Volllauf-Kette)
         threading.Thread(target=job, daemon=True).start()
 
+    def _qs_faellig(self, mein_timer):
+        """Das Sammelfenster ist abgelaufen (Stufe A, .511) — jetzt EIN Lauf fuer
+        alles, was sich seither angesammelt hat. Token-Pruefung wie
+        _vision_faellig: ein neuerer Timer hat Vorrang, dieser hier schweigt dann.
+        EHRLICHE GRENZE: der Timer ist ein daemon-Thread. Endet der Dienst
+        innerhalb des Fensters (Neustart nach Config-Aenderung, Container-Stop),
+        faellt der angesammelte Lauf aus; der Bericht ist dann bis zum naechsten
+        Ausloeser oder Knopfdruck einen Zug alt. Fuer LOESCHUNGEN kann das nicht
+        passieren — die brauchen den Lauf seit .511 gar nicht mehr."""
+        with self._qs_lock:
+            if self._qs_timer is not mein_timer:
+                return
+            self._qs_timer = None
+            self._qs_erst = None
+        self.qs_neu_starten(sofort=True)
+
     def vorschlaege_starten(self, person):
-        """Bestands-Suche fuer eine Person im Hintergrund (separater Prozess, GPU);
-        je Person nur ein Lauf gleichzeitig."""
+        """Bestands-Suche fuer eine Person — .510/J18 (b), Betreiber-Entscheid 07.09.
+
+        NUR AUF KLICK: die automatische Suche nach jedem Durchgang ist mit .510
+        entfallen (s. `_maybe_presence`). Aufrufer sind noch `/vorschlaege_neu`
+        (Knopf „search again") und die CLI `anlernen.py vorschlaege`.
+
+        WAS SICH GEAENDERT HAT: bis .509 war das ein eigener Subprozess unter
+        `_gpu_bg_lock` — je Lauf ein frischer Embedder (11-13 s), eine frische
+        NormMass (4-10 s, ~2 GB RSS ohne Budget-Pruefung), ein eigener
+        GPU-Kontext, und er blockierte die anderen Hintergrund-Jobs. Jetzt ist er
+        ein JOB DER VERGABESTELLE in der Klasse `interaktiv` und rechnet in einem
+        Analyse-Worker, der Embedder und NormMass schon warm haelt: kein
+        Subprozess, kein `_gpu_bg_lock` auf diesem Weg. Die Begruendung des Betreibers
+        sinngemaess: „Wenn der User ‚Search Again' drueckt, sollten wir alles tun,
+        den Prozess zu beschleunigen" — und keine stehende Reserve dafuer halten.
+
+        WARTEN IST MOEGLICH und wird ehrlich angezeigt: `interaktiv` wird von der
+        Fairness-Regel nie zurueckgehalten, aber ein LAUFENDER Job wird nie
+        geschossen. Bei `analyse_plaetze = 1` wartet der Klick also auf DEN einen
+        Platz (Median einer Analyse 7 s, gemessene Ausreisser bis 708 s). Der
+        Stand steht in `self._vs_laeuft` und geht als „wartet"/„rechnet" an die
+        Seite (`such_stand`).
+
+        Je Person nur ein Lauf gleichzeitig (unveraenderter Guard)."""
         with self._qs_lock:
             if person in self._vs_laeuft:
                 return
-            self._vs_laeuft.add(person)
+            self._vs_laeuft[person] = {"seit": time.time(), "phase": "wartet"}
 
         def job():
             try:
-                env = dict(os.environ, OV_DEVICE=self.cfg["ov_device"])
-                with self._gpu_bg_lock:                       # nicht K Personen parallel auf die GPU (Review 21.07.)
-                    subprocess.run([sys.executable,
-                                    os.path.join(HERE, "anlernen.py"), "vorschlaege", person,
-                                    "--unscharf", str(self.cfg.get("unscharf_max", 350)),
-                                    "--minkante", str(self.cfg.get("min_kante", 70))]
-                                   + (lambda _nl: ([] if not _nl else [
-                                       "--norm-gut", str(_nl["gut"]), "--norm-min", str(_nl["min"]),
-                                       "--norm-kante", str(_nl["kante"]), "--norm-sharp", str(_nl["sharp"])]))
-                                     (norm_latte_aus_cfg(self.cfg)),
-                                   capture_output=True, timeout=900, check=False, env=env,
-                                   preexec_fn=_analyse_nice)   # Issue #21, s. ANALYSE_NICE
-                self.log(f"reference search for {person} finished")
+                # Frist des Wartens UND des Jobs: die Analyse-Frist der Config.
+                # Kein eigener Schalter — es ist dieselbe Zusage („so lange darf
+                # ein Platz legitim belegt sein"), und ein zweiter Wert, den
+                # niemand dreht, waere ein Streu-Literal mehr.
+                frist = int(self.cfg.get("analyse_timeout_s") or 600)
+                lp = os.path.join(self.cfg["data_dir"], "state", "vorschlaege.log")
+                _auftrag = {"typ": "vorschlaege", "person": person,
+                            "unscharf": self.cfg.get("unscharf_max", 350),
+                            "minkante": self.cfg.get("min_kante", 70),
+                            "norm_latte": norm_latte_aus_cfg(self.cfg),
+                            "log": lp}
+                t0 = time.monotonic()
+                with self._plaetze.wartend("interaktiv"), \
+                        self._plaetze.platz(person, art="interaktiv",
+                                            timeout_s=frist) as nr:
+                    if nr is None:
+                        # Ehrlich statt still: der Nutzer hat geklickt, und es
+                        # gab die ganze Frist lang keinen Platz.
+                        self.log(f"reference search for {person}: no free analysis "
+                                 f"slot within {frist}s — not run, please try again")
+                        return
+                    with self._qs_lock:
+                        if person in self._vs_laeuft:
+                            self._vs_laeuft[person]["phase"] = "rechnet"
+                    warte_s = time.monotonic() - t0
+                    w = self._worker(nr)
+                    antwort = w.job(_auftrag, frist,
+                                    puls=self._plaetze.puls_fuer(nr))
+                if antwort is None:
+                    _u = getattr(w, "letzte_ursache", None)
+                    self.log(f"reference search for {person} FAILED: "
+                             + (f"worker died ({_u})" if _u
+                                else f"worker timeout ({frist}s) or died"))
+                    return
+                if not antwort.get("ok"):
+                    self.log(f"reference search for {person} FAILED: "
+                             f"{antwort.get('fehler') or 'unbekannt'}")
+                    return
+                z = antwort.get("vorschlaege") or {}
+                self.log(f"reference search for {person} finished: "
+                         f"{z.get('empfohlen', 0)} recommended / "
+                         f"{z.get('neutral', 0)} neutral from {z.get('geprueft', 0)} "
+                         f"image(s) of {z.get('events', 0)} event(s) "
+                         f"({z.get('cache_treffer', 0)} cached, "
+                         f"{z.get('cache_neu', 0)} measured; waited {warte_s:.1f}s "
+                         f"for a slot, computed {antwort.get('wall_s', 0)}s)"
+                         + (" — measurement cap reached, older events unchecked"
+                            if z.get("gedeckelt") else ""))
+            except Exception as e:                            # noqa: BLE001
+                self.log(f"reference search for {person} FAILED: "
+                         f"{type(e).__name__}: {e}")
             finally:
                 with self._qs_lock:
-                    self._vs_laeuft.discard(person)
+                    self._vs_laeuft.pop(person, None)
         threading.Thread(target=job, daemon=True).start()
+
+    def such_stand(self, person):
+        """.510/J18 (d): der EHRLICHE Zustand der zwei Suchen einer Person fuer
+        die Seite `/aehnliche` — sie startet seit .510 nichts mehr von selbst.
+
+        -> {"vorschlaege": {"laeuft", "phase", "seit_s"},
+            "unbekannt":   {"laeuft"},
+            "plaetze": N, "belegt": M}
+        `phase` ist „wartet" (angemeldet, aber noch kein Platz) oder „rechnet".
+        Die Platzzahlen stehen dabei, weil genau sie die Wartezeit erklaeren —
+        bei einem Platz haelt der Ereignisstrom den Klick auf."""
+        with self._qs_lock:
+            st = dict(self._vs_laeuft.get(person) or {})
+            qs_laeuft = bool(self._qs_laeuft)
+        return {"vorschlaege": {"laeuft": bool(st),
+                                "phase": st.get("phase") or "",
+                                "seit_s": (round(time.time() - st["seit"], 1)
+                                           if st.get("seit") else 0.0)},
+                # Quelle 1 haengt am refcache. Bis .510 schrieb ihn die
+                # Referenz-QS mit, deshalb steht ihr Lauf-Flag hier. Seit
+                # .511/Stufe B baut sie ihn NICHT mehr (analyze.load_refs und
+                # refcache_aufbauen tun das) — das Flag bleibt trotzdem stehen:
+                # ein laufender Katalog-Lauf ist weiter der Zustand, in dem die
+                # Unbekannt-Suche gleich andere Zahlen sehen kann. Es meldet
+                # seither eher zu viel als zu wenig, nie zu wenig.
+                "unbekannt": {"laeuft": qs_laeuft},
+                "plaetze": int(self._plaetze.kapazitaet),
+                "belegt": int(self._plaetze.anzahl_belegt())}
 
     def anlern_nachpruefung_starten(self, person, betroffen):
         """Issue #19 Teil 2: nach dem Anlernen die EVENTS der uebernommenen Gesichter im
@@ -4321,7 +4910,8 @@ class Service:
         Embedding-Vergleich, keine Video-Neuanalyse) und je bestaetigtem Event die
         deckung-Akte korrigieren — vorher blieben die Karten der gerade angelernten
         Person als "Unknown" stehen (Repro: 4/4 angelernte eids weiter bestaetigt=[]).
-        Subprozess-Muster wie vorschlaege_starten, MIT _gpu_bg_lock (Widerleger 11.08.:
+        Subprozess-Muster wie qs_neu_starten (die Bestands-Suche ist seit .510
+        KEIN Subprozess mehr, s. vorschlaege_starten), MIT _gpu_bg_lock (Widerleger 11.08.:
         die fruehere Fassung lud die KOMPLETTE Referenzbibliothek — 674 s auf CPU bei
         260 Bildern — und kollidierte ungelockt mit dem qs_neu_starten desselben
         Klicks; seitdem laedt anlernen.nachpruefe_events nur noch die Referenzen der
@@ -4339,7 +4929,7 @@ class Service:
                 with open(pfad, "w") as f:
                     json.dump(faces, f)
                 env = dict(os.environ, OV_DEVICE=self.cfg["ov_device"])
-                with self._gpu_bg_lock:               # gegen qs_neu_starten/vorschlaege desselben Klicks (Widerleger 11.08.)
+                with self._gpu_bg_lock:               # gegen qs_neu_starten desselben Klicks (Widerleger 11.08.)
                     r = subprocess.run([sys.executable, os.path.join(HERE, "anlernen.py"),
                                         "nachpruefen", person, pfad],
                                        capture_output=True, timeout=900, check=False, env=env,
@@ -4522,13 +5112,13 @@ class Service:
         Platz entweder Analyse ODER Sammeln — exakt das alte BG-Gate, nur sichtbar.
 
         `_gpu_bg_lock` bleibt darum: es serialisiert weiter gegen die SUBPROZESS-Jobs
-        (qs_neu_starten, vorschlaege_starten, anlern_nachpruefung), die einen eigenen
+        (anlern_nachpruefung; .510: vorschlaege, .511: Referenz-QS NICHT mehr), die einen eigenen
         GPU-Kontext aufmachen und keinen Platz halten (bekannte Luecke, bauplan §1).
         Lock-Ordnung wie bei Ernte und Wanduhr: erst `_gpu_bg_lock`, dann Platz."""
         if self.cfg.get("worker", True):
             lp = os.path.join(self.cfg["data_dir"], "state", "sammle.log")
             open(lp, "w").close()
-            with self._gpu_bg_lock:              # gegen vorschlaege/qs serialisieren (Review 21.07.)
+            with self._gpu_bg_lock:              # gegen die QS-/Nachpruef-Subprozesse serialisieren (Review 21.07.)
                 # FRIST = die des Jobs. Eine kuerzere Frist waere eine echte
                 # Verhaltensaenderung: auf einem Rueckstands-System kaeme das
                 # 06:00-Netz dann nie mehr dran.
@@ -4540,7 +5130,7 @@ class Service:
                 # im schlimmsten Fall 3 x `timeout` (Platz + Job-Lock + Antwort)
                 # statt der 2 x vor .505 — beim 06:00-Netz also bis zu 90 statt
                 # 60 min. Blockiert werden dabei nur die Subprozess-Jobs
-                # (qs_neu_starten, vorschlaege_starten, anlern_nachpruefung), die
+                # (anlern_nachpruefung; .510: vorschlaege, .511: Referenz-QS NICHT mehr), die
                 # sich beim Anstehen mit einem `.locked()`-Blick begnuegen.
                 # C2 (05.09.2026): als wartend ANMELDEN, sonst ist dieser Kunde
                 # fuer die Fairness-Regel unsichtbar — die Ernte duerfte dann bei
@@ -4769,6 +5359,10 @@ class Service:
         # dass die Marke davon irgendwo gebraucht wuerde. Lebt unter DEMSELBEN
         # `_ev_wecker` und faellt in derselben Klammer wieder weg.
         self._ev_marken = {}
+        # .510/J16: laeuft die Schlange gerade im HALT (Frigate unten)? Dient nur
+        # der EINEN Sammelzeile je Ausfall — der Halt selbst wird jede Runde neu
+        # aus Protector und Fehlerserie beantwortet, nie aus diesem Merker.
+        self._frigate_halt = False
 
         def lauf():
             while True:
@@ -4787,14 +5381,59 @@ class Service:
                     # linear und laeuft unter `_ev_wecker`: bei EV_QUEUE_MAX = 5000
                     # sind das im schlimmsten Fall 5000 Zahlenvergleiche, also
                     # Mikrosekunden, und nur dann, wenn wirklich nichts faellig ist.
+                    # .510/J16 SCHLANGE HALTEN, WENN FRIGATE UNTEN IST
+                    # (Feldbefund 06.09. 23:50 an der .509 des Feldtesters):
+                    # sein Frigate startete um 07:49 neu, der Protector ging an
+                    # — und ALLE 594 wartenden Ereignisse scheiterten in EINER
+                    # Sekunde, weil `api()` waehrend der Sperre sofort wirft.
+                    # Backlog 600 -> 0, 594 Logzeilen auf einen Schlag; erst der
+                    # Sweep 1:47 min spaeter reihte 620 wieder ein. Verloren ging
+                    # nichts, aber die Anzeige log, die Reihenfolge und das Alter
+                    # der Eintraege waren weg, und das Log war unlesbar.
+                    # Jetzt bleiben die Eintraege LIEGEN: `queue_n` und
+                    # `queue_aeltester_s` (q[0][2]) bleiben damit ehrlich, und die
+                    # normale Abarbeitung laeuft ohne Sweep-Umweg weiter, sobald
+                    # Frigate wieder antwortet.
+                    # EINE Sammelzeile je Ausfall, nicht 594.
+                    # WANN gehalten wird — zwei Lagen, EINE Schwelle
+                    # (`frigate_schoner.schwelle` aus der Config, kein neues
+                    # Literal): (1) der Protector ist gesperrt (der gemessene
+                    # Fall: Netz weg/Neustart); (2) die Ereignis-Abrufe scheitern
+                    # in Serie, ohne dass der Protector anspringt — HTTP-Antworten
+                    # (auch 500) gelten ihm als „Server lebt". Beide Lagen loest
+                    # `start_frigate_probe` (alle 15 s /api/version) wieder auf;
+                    # sie setzt Fehler UND Serie zurueck, sobald Frigate antwortet.
+                    _halt = frigate_schoner.gesperrt() or (
+                        getattr(self, "frigate_fehlerserie", 0)
+                        >= max(1, int(frigate_schoner.schwelle)))
                     jetzt = time.time()
                     treffer, frueheste = None, None
                     for _k, (_f, _e, _i) in enumerate(self._ev_q):
+                        # Eingespielte Ereignisse brauchen Frigate nicht (ihre
+                        # Metadaten und ihr Clip liegen lokal) — sie laufen auch
+                        # waehrend eines Ausfalls weiter.
+                        if _halt and not _einspiel.ist_einspiel(_e):
+                            continue
                         if _f <= jetzt:
                             treffer = _k
                             break
                         if frueheste is None or _f < frueheste:
                             frueheste = _f
+                    if treffer is None and _halt and frueheste is None:
+                        # Nichts zu tun, solange Frigate unten ist. EINE Zeile je
+                        # Ausfall (der Zustand steht am Dienst, nicht am Thread —
+                        # es gibt einen Abholer je Platz).
+                        if not getattr(self, "_frigate_halt", False):
+                            self._frigate_halt = True
+                            self.log(f"Frigate down — {len(self._ev_q)} queued "
+                                     f"events on hold (queue kept, order and age "
+                                     f"preserved; resuming automatically)")
+                        self._ev_wecker.wait(timeout=2.0)
+                        continue
+                    if not _halt and getattr(self, "_frigate_halt", False):
+                        self._frigate_halt = False
+                        self.log(f"Frigate answers again — resuming "
+                                 f"{len(self._ev_q)} queued events")
                     if treffer is None:
                         # Schlafen bis zum FRUEHESTEN faelligen Eintrag, nicht bis
                         # zum Kopf: der Kopf kann der spaeteste von allen sein.
@@ -5704,7 +6343,7 @@ class Service:
         "anwesenheit_cooldown": (int, 300, 86400, "quiet window for the presence push (sec.)"),
         "anwesenheit_push": (bool, None, None, "presence push on/off"),
         "sub_label_schreiben": (bool, None, None, "write recognized names back to Frigate"),
-        "support_zugriff": (bool, None, None, "remote support access (read-only): whoever holds the support token can download named areas — logs, masked config, faces, learning runs, body material, state files — and, since 0.1.0.380, list and fetch anything else in your data folder as well. Your configuration is the one exception: it always goes out masked, plain-text secrets never leave the machine. Nothing can be written or changed this way (default off; every request is logged; the token is created on the system page and can be rotated any time; note that without TLS the token travels in plain text)"),
+        "support_zugriff": (bool, None, None, "remote support access (read-only): whoever holds the support token can download named areas — logs, masked config, faces, learning runs, body material, state files — and, since 0.1.0.380, list and fetch anything else in your data folder as well. Your configuration is the one exception: it always goes out masked, plain-text secrets never leave the machine — including access data that sits inside a value, so a camera stream URL leaves as rtsp://***@camera:554/path with host and path still readable. Nothing can be written or changed this way (default off; every request is logged; the token is created on the system page and can be rotated any time; note that without TLS the token travels in plain text)"),
         # Ohne diesen Eintrag lehnte config_schreiben() jede Aenderung mit 400 ab -> der
         # Write-back-Schalter auf der System-Seite war wirkungslos (nur ueber den Wizard setzbar).
         "frigate_read_only": (bool, None, None, "read-only mode: never write anything back to Frigate"),
@@ -5788,7 +6427,7 @@ class Service:
         "debug": (bool, None, None, "verbose debug logging: per-person scores/windows, MQTT payloads, timing, plus a [clipdbg] trace of every Frigate clip interaction (fetch start/end with bytes+duration, clip-generation waits, per-clip frame quality) (INFO stays the default; turn on to validate the system in depth)"),
         "clip_erzeugung_alter_min": (int, 5, 1440, "harvest: events older than this (minutes) count as ARCHIVED — Frigate has to rebuild their clip from recording segments before a single byte arrives, which takes far longer than a live download. For those the fetch waits patiently (see the cap below) instead of aborting; a measured abort during that rebuild permanently leaks one API thread and one ffmpeg inside Frigate until Frigate is restarted"),
         "clip_erzeugung_deckel_s": (int, 60, 1800, "harvest: absolute cap (seconds) on waiting for Frigate to rebuild an archived event's clip. While waiting, a cheap probe checks every stall that Frigate itself still answers — if it does, the wait continues up to this cap; if not, the fetch stops immediately. Events hitting the cap stay unbooked and are retried in a later run"),
-        "clip_download_parallel": (int, 1, 8, "harvest: how many event clips may be downloaded from Frigate at the same time. This is a limit on the DOWNLOADS only — the analysis keeps using all of its slots, because once a clip is here Frigate is out of the picture. Raise it on a fast local link with small clips; leave it low (1-2) if Frigate sits behind a slow line, records 4K, or serves several live streams: parallel clip streaming is what makes a Frigate API stall (measured at a user's site, where four parallel 4K fetches pushed a trivial event query from 0.01 s to 13.4 s and the harvest stopped after 19 of 672 events)"),
+        "clip_download_parallel": (int, 1, 8, "how many event clips may be downloaded from Frigate at the same time — for the learning run, the pass check AND the regular event analysis. This is a limit on the DOWNLOADS only: all analysis slots stay in use, they just take turns fetching, because once a clip is here Frigate is out of the picture. Raise it on a fast local link with small clips; leave it low (1-2) if Frigate sits behind a slow line, records 4K, or serves several live streams: parallel clip streaming is what makes a Frigate API stall (measured at a user's site, where four parallel 4K fetches pushed a trivial event query from 0.01 s to 13.4 s and the harvest stopped after 19 of 672 events)"),
         "clip_vod": (bool, None, None, "harvest: fetch archived events' clips via Frigate's VOD playlist (/vod/event/.../master.m3u8) and merge the segments locally instead of asking Frigate to rebuild the clip server-side. Frigate's clip generation can stall for minutes and leak a worker thread plus an ffmpeg process per request until its whole API freezes (reported upstream); the VOD route bypasses that code path entirely. On any failure (older Frigate without the endpoint, local ffmpeg error) the fetch falls back to the classic clip.mp4 path with all its safeguards"),
         # .374 (Widerleger-Fund 30.08.): "ask" steht hier NICHT mehr zur Wahl,
         # solange der Nachhol-Knopf ausgehaengt ist (webui/__init__.py). Wer den
@@ -5805,11 +6444,12 @@ class Service:
         "guete_t_min": (float, 0.0, 1.0, "calibration: minimum recognisability score (eDifFIQA-T) a face needs to count as good for learning. This one also sorts out half-covered faces; set via the calibration page"),
         "katalog_guete_e_min": (float, 0.0, 1.0, "catalogue bar (picture impression): how good a face has to look before it may become a stored reference. Stricter than the bar above on purpose — that one decides what a learning run keeps, this one decides what ends up in the catalogue. Cameras can override it on their calibration page; pictures without quality scores are never rejected by it"),
         "katalog_guete_t_min": (float, 0.0, 1.0, "catalogue bar (recognisability): how recognisable a face has to be before it may become a stored reference. Per-camera values on the calibration page win over this one; existing references are never removed by it"),
+        "pruef_guete_t_min": (float, 0.0, 1.0, "catalogue check bar (recognisability): below this, the catalogue check flags a stored picture — together with a feature norm below the learning-stock floor it becomes a removal suggestion. It only looks at pictures you already have and never removes anything by itself; per-camera values on the calibration page win over this one, and pictures without a quality score are never flagged"),
         "hunger_bremse_s": (int, 0, 600, "background harvest jobs (pass check, learning run, calibration top-up) that wait longer than this many seconds for the worker get the next slot before the event stream continues; 0 disables the brake"),
         "selbstwache": (bool, None, None, "watchdog thread probes this service's own /health every 15 s; after 4 consecutive failures it exits hard so the container restart policy brings the service back (covers full web-server hangs that even the remote restart endpoint cannot reach)"),
         "urteil_marge": (float, 0.0, 0.5, "when several names pass the recognition rule in one event, none is confirmed unless the best cosine leads the runner-up by at least this margin (measured on field data: wrong names won by 0.001-0.047, a clean case led by 0.112); 0 disables the rule"),
         "blick_fenster_s": (float, 0.0, 600.0, "judgement: width of the sliding view window in seconds — anchor and support votes must fall inside ONE window (calibrated on four test clips: 45 s is the smallest width that judges all four correctly); 0 = legacy fixed 3-second window"),
-        "urteil_anker": (float, 0.0, 1.0, "judgement: anchor — at least one vote inside the view window must reach this cosine before the window counts; support votes only need win_thresh; 0 disables the anchor"),
+        "urteil_anker": (float, 0.0, 1.0, "judgement: anchor — at least one vote inside the view window must reach this cosine before the window counts; support votes only need win_thresh; 0 disables the anchor. The factory value moved from 0.50 down to 0.45 on 2026-09-07: all 173 field cases sitting in the 0.45-0.50 band were re-read case by case (a second opinion read 149 of them as the right person; the 24 it disputed were then looked at by hand and read as right as well). That is a review of 173 cases, not a proof — raise the value again if your cameras start putting the wrong name on an event. Installations that had 0.50 stored were lifted to 0.45 once, with an audit line; a value you set yourself is never touched"),
         "urteil_trennung": (float, 0.0, 1.0, "judgement: margin becomes source-aware — two candidates only compete when at least this share of their votes comes from the SAME face detections (share of the smaller set); separated vote sets are two real people and both get named; 0 = old behaviour (everything competes)"),
         "urteil_kante": (int, 0, 400, "minimum face edge in pixels for a frame to count as a recognition vote; a floor against absurd votes, not a separator (measured on field data: correct votes live at 30-49 px on overview cameras, the nonsense cases at 11-19 px; 70 would kill correct ones, 25 costs none); 0 disables"),
         # .408 Anwesenheits-Marken (Vorlauf der Anwesenheitsseite): drei Paare.
@@ -5985,6 +6625,12 @@ class Service:
         if geaendert <= _live_keys and not _fa_geaendert:
             for k in geaendert:
                 self.cfg[k] = angewendet[k]
+            # .511: der Live-Waechter ist ein EIGENER Prozess und sieht self.cfg
+            # nicht — sein Schalter kommt ueber die Flaggendatei (s.
+            # _debug_spiegeln). Ohne diese Zeile bliebe die Haelfte des Logs
+            # (die Waechter-Spur) taub gegen das Umschalten.
+            if "debug" in geaendert:
+                self._debug_spiegeln()
             self.log(f"CONFIG changed via UI (JSON store): {angewendet} — "
                      f"applied live, no restart")
             return True, f"gespeichert: {angewendet} — applied live, no restart", False
@@ -7162,7 +7808,8 @@ class Service:
                 if _vg.pruefen(dd, n).get("status") == "gut"}
 
     def _vision_anstossen(self, eid, entry=None):
-        """Debounce am Durchgangs-ENDE (Muster _nachlern_anstossen): jedes neue
+        """Debounce am Durchgangs-ENDE (Timer-Token-Muster, .510: der frueher hier
+        genannte Zwilling `_nachlern_anstossen` ist mit J18 entfallen): jedes neue
         Event desselben Durchgangs setzt den szene_karenz_s-Timer zurueck, das
         Urteil laeuft GENAU EINMAL, wenn der Durchgang wirklich vorbei ist.
         Frueher zu urteilen hiesse, ueber einen halben Durchgang zu urteilen —
@@ -9565,7 +10212,7 @@ class Service:
                 # C2 (05.09.2026, bauplan_0505.md §1): die Ernte NIMMT
                 # `_gpu_bg_lock` nicht mehr — sie ist Kunde der Vergabestelle, und
                 # das Lock schuetzt seit .505 nur noch die SUBPROZESS-Jobs
-                # (qs_neu_starten, vorschlaege_starten, anlern_nachpruefung), die
+                # (anlern_nachpruefung; .510: vorschlaege, .511: Referenz-QS NICHT mehr), die
                 # keinen Platz halten. Genommen werden darf es hier auch gar nicht
                 # mehr: es ist EIN Mutex, und mit ihm um den Job waeren die K
                 # Ernte-Abholer aus P6 wieder auf einen einzigen serialisiert.
@@ -10888,7 +11535,7 @@ class Service:
                 # C2 (05.09.2026, bauplan_0505.md §1): die Ernte NIMMT
                 # `_gpu_bg_lock` nicht mehr. Sie ist Kunde der Vergabestelle; das
                 # Lock schuetzt seit .505 nur noch die SUBPROZESS-Jobs
-                # (qs_neu_starten, vorschlaege_starten, anlern_nachpruefung), die
+                # (anlern_nachpruefung; .510: vorschlaege, .511: Referenz-QS NICHT mehr), die
                 # keinen Platz halten. Nehmen DARF sie es auch gar nicht mehr: es
                 # ist EIN Mutex, mit ihm um den Job waeren die K Abholer wieder
                 # auf einen einzigen serialisiert. Der lesende Blick bleibt als
@@ -11750,9 +12397,28 @@ class Service:
     def debug(self, msg):
         """DEBUG-Log: nur wenn cfg['debug'] gesetzt. Geht ueber log() (stdout + /log-Ringpuffer)
         mit [dbg]-Prefix, damit man die Tiefe zur Laufzeit ein-/ausschalten kann, ohne INFO
-        zuzumuellen. Aktiviert wird ueber Settings (Whitelist-Key 'debug') oder die yaml."""
+        zuzumuellen. Aktiviert wird ueber Settings (Whitelist-Key 'debug') oder die yaml.
+
+        .511 (User-Auftrag 08.09., Log-Bereinigung): DAS ist der EINE Griff fuer
+        alles Wiederkehrende. Hinter ihm liegt seither die Routine-Buchhaltung
+        des Dienstes (Analyse-Anfangsmarke, Ketten-Konstante je Lauf, Waechter-
+        Uebersprung, Sweep-Einreihung, Aufraeum-Bilanzen, Support-Leseabrufe) —
+        gemessen 80,8 % aller Zeilen eines Feldtesters. Was IMMER bleibt:
+        Fehler, Entscheide, Zustandswechsel, Start/Stop und die Urteilszeile."""
         if self.cfg.get("debug"):
             self.log(f"[dbg] {msg}")
+
+    def _debug_spiegeln(self):
+        """Den laufenden debug-Stand in die Flaggendatei spiegeln, damit der
+        Live-Engine-PROZESS ihn sieht (core/logdatei.debug_flagge_setzen — die
+        Begruendung, warum der Config-Store das nicht kann, steht dort).
+        Nie laut scheitern: der Diagnose-Schalter darf den Dienst nicht kosten."""
+        try:
+            from core import logdatei as _ld       # lazy wie die anderen Griffe
+            _ld.debug_flagge_setzen(self.cfg.get("data_dir"),
+                                    bool(self.cfg.get("debug")))
+        except Exception:
+            pass
 
     def _clip_dbg_senke(self, zeile):
         """[clipdbg]-Senke (core.frames.clip_dbg, .287, User-Auftrag 18.08.):
@@ -12063,8 +12729,13 @@ class Service:
                         # leer gewesen. Die Luecken bei start_catchup=off und
                         # kategorie fehler bleiben richtig — dort lief
                         # wirklich nichts. PYANW sichert das zu.
-                        self.log(f"{eid} ({camera}): skipped (live watcher "
-                                 f"covers this camera)")
+                        # .511: Routine-Buchhaltung — bei einer Anlage mit
+                        # Live-Waechtern faellt diese Zeile je Ereignis an
+                        # (12.755 in zwei Tagen beim Feldtester). Der Uebersprung
+                        # selbst steht als 'uebersprungen'-Zeile in der Akte,
+                        # geht also nicht verloren, wenn debug aus ist.
+                        self.debug(f"{eid} ({camera}): skipped (live watcher "
+                                   f"covers this camera)")
                         return None
             persons = master_persons(cfg)    # AP1: aus dem Master, nicht mehr /api/faces
             if not persons:
@@ -12072,7 +12743,14 @@ class Service:
                 return None
             event_dir = os.path.join(cfg["data_dir"], "events", eid.replace("/", "_"))
             os.makedirs(event_dir, exist_ok=True)
-            self.log(f"{eid} ({camera}, Frigate={f_label} {f_score}): analysis running ...")
+            # .511: Anfangsmarke der Analyse — reine Buchhaltung, das Ergebnis
+            # kommt als eigene (immer sichtbare) Urteilszeile mit derselben eid
+            # und der Rechenzeit. Die zwei Messwerkzeuge, die frueher Anfang und
+            # Urteil paarten (tools/stress_support_api.py,
+            # tools/proben/mess_gleichzeitigkeit.py), rechnen den Anfang seither
+            # aus der Urteilszeile zurueck (Urteilszeit minus dauer_s) und
+            # brauchen diese Zeile nicht mehr.
+            self.debug(f"{eid} ({camera}, Frigate={f_label} {f_score}): analysis running ...")
             # Ketten-Schalter (Issue #21): Stufe EINMAL je Lauf lesen. "aus"
             # ueberspringt den Koerper-Strang an der QUELLE (kein --koerper im
             # Job -> analyze sammelt keine Crops, unten startet kein Urteil).
@@ -12081,8 +12759,13 @@ class Service:
             kette_person = self.kette_stufe("person")
             _koerper_will = (not nachhol and self._koerper_scharf())
             if _koerper_will and kette_person == "aus":
-                self.log(f"{eid}: person path off (person_pfad=aus) — no body "
-                         f"crops collected, no person judgment started")
+                # .511: die Absicht ("eine laute Zeile je Lauf") war richtig,
+                # der Feldfall nicht bedacht: wer person_pfad dauerhaft auf aus
+                # stehen hat, bekommt dieselbe Konstante je Ereignis — 18.071
+                # Mal in zwei Tagen. Der Stufen-Stand steht im Startblock und
+                # auf der Ketten-Seite, die Zeile ist nur die Wiederholung.
+                self.debug(f"{eid}: person path off (person_pfad=aus) — no body "
+                           f"crops collected, no person judgment started")
             t0 = time.time()
             # Nachbesserung W7: run_analyze meldet ueber `info`, wie lange der
             # Job am Analyse-Slot WARTETE (Ernte/Sammle/Wanduhr-Roundtrip halten
@@ -12116,6 +12799,18 @@ class Service:
                               clip_alter_min=_clip_alter_min(
                                   ev.get("end_time"), ev.get("start_time")))
             _warte_s = float(_ainfo.get("wartezeit_s") or 0.0)
+            # .510/J15: der eigene Clip-Tor-Deckel laesst das Ereignis UNGEBUCHT.
+            # Hier — und nur hier — endet der Lauf ohne Akte-Zeile und ohne
+            # `processed`-Vermerk; der Sweep reiht es spaeter wieder ein. Der
+            # Platz und die In-Arbeit-Marke fallen dabei ueber die `with`-Klammer
+            # oben, wie auf jedem anderen Rueckweg auch. Eine `fehler`-Zeile waere
+            # hier eine falsche Aussage: nicht die Analyse ist gescheitert,
+            # sondern wir haben sie selbst gebremst.
+            if _ainfo.get("nicht_buchen"):
+                self.log(f"{eid} ({camera}): clip download gate busy for the "
+                         f"full cap — event NOT booked, a later run will fetch "
+                         f"it ({_ainfo['nicht_buchen']})")
+                return None
             # P1: Provider-Guard-Vorfaelle aus dem Subprozess ins DIENST-Log heben —
             # analyze.log liest sonst niemand, und ein degradierter Lauf bliebe unsichtbar
             # (Plan-QS Lens3-8). qs S4 warnt auf den Marker.
@@ -12251,6 +12946,20 @@ class Service:
                 # am meisten sagt.
                 **({"frames_fehlen": True} if _ffehlen else {}),
                 **({"hwdec_fallback": True} if _hwfb else {}),
+                # .510 B1: wie viele STIMM-KANDIDATEN dieses Ereignisses daran
+                # scheiterten, dass ihre Guete/Pose nicht messbar war
+                # (fail-closed je Fund). Additiv und nur vorwaerts: die Zahl
+                # steht nur auf Zeilen, deren Analyse sie geliefert hat —
+                # Alt-Akten und Fehler-Zeilen (res is None) bleiben ohne das
+                # Feld, Leser greifen per .get() zu. Die 0 wird bewusst MIT
+                # geschrieben: "gemessen, nichts verworfen" ist eine andere
+                # Aussage als "diese Version kannte den Zaehler nicht".
+                **({"stimmen_verworfen_unmessbar":
+                    int(((res or {}).get("urteil_guete") or {})
+                        .get("stimmen_verworfen_unmessbar") or 0)}
+                   if res is not None
+                   and "stimmen_verworfen_unmessbar" in ((res.get("urteil_guete")) or {})
+                   else {}),
                 # Warum diese Zeile `fehler` heisst. Additiv und nur auf
                 # Fehler-Zeilen; die Codes stehen in registry.VERWURF_GRUENDE
                 # (EINE Aufzaehlung, Leser: Ereignisseite und Catch-up-Log).
@@ -12479,24 +13188,25 @@ class Service:
         # (AP2-Fix). Der Guard unterdrueckt aber NUR den Push — der Zustand wird trotzdem
         # nachgefuehrt. Vorher stand das return davor, dadurch blieb nach jeder Downtime
         # last_seen auf dem Stand VOR dem Ausfall: das erste Live-Event danach galt als
-        # neues Auftauchen und pushte doppelt, und _nachlern_anstossen lief fuer den ganzen
-        # nachgeholten Durchgang nie.
+        # neues Auftauchen und pushte doppelt.
         alt = now - (entry.get("start") or entry["ts"]) > 900
         # E0b: "wer ist neu" LESEN und last_seen SCHREIBEN gehoeren zusammen. Zwei
         # Plaetze tragen fast immer zwei Ereignisse desselben Durchgangs mit derselben
         # Person; ohne diese Klammer laesen beide "noch nicht gesehen" und meldeten
         # beide, und die Zusage aus dem Docstring ("genau EIN Publish pro Auftauchen")
-        # faellt. _nachlern_anstossen bleibt BEWUSST draussen: es nimmt sein eigenes
-        # Lock (_nachlern_lock) und haengt nicht an last_seen — ein fremdes Lock unter
-        # diesem zu halten waere eine Deadlock-Kante ohne Gegenwert.
+        # faellt.
         with self._zustand_lock:
             neu = [p for p in entry["bestaetigt"] if now - self.last_seen.get(p, 0) > cfg["anwesenheit_cooldown"]]
             for p in entry["bestaetigt"]:
                 # EVENT-Zeit statt Verarbeitungszeit (Szenen-Fenster rechnet in Event-Zeit;
                 # Sweep-Nachverarbeitung bleibt damit zeitlich konsistent)
                 self.last_seen[p] = max(self.last_seen.get(p, 0), entry.get("start") or now)
-        for p in entry["bestaetigt"]:
-            self._nachlern_anstossen(p)                     # Bestands-Suche nach Durchgangs-Ende (Debounce, User 21.07.; .507: keine Auto-Ernte mehr)
+        # .510/J18: HIER stand bis .509 der einzige automatische Anstoss der
+        # Bestands-Suche (`_nachlern_anstossen` je bestaetigter Person, Debounce
+        # ueber `szene_karenz_s`). Er ist ersatzlos entfallen — die Suche laeuft
+        # nur noch auf Klick bzw. per CLI (Begruendung an `vorschlaege_starten`).
+        # Die Zustandspflege oben (last_seen) bleibt unveraendert: sie ist keine
+        # Meldung und kein Suchlauf.
         if alt or not neu:
             return False
         # SZENEN-Ereignis (User 18.07. "szenenorientiert"): genau EIN Publish pro
@@ -12508,7 +13218,7 @@ class Service:
         # wer "erkannt" abhakt, stellt Telegram + szene_erkannt hiermit wirklich ab
         # (die Seite behauptete das schon immer). Der Anwesenheits-PUSHOVER unten
         # behaelt seinen eigenen Schalter (anwesenheit_push) — die Zustandspflege
-        # (last_seen/Nachlernen) laeuft oben IMMER, sie ist keine Meldung.
+        # (last_seen) laeuft oben IMMER, sie ist keine Meldung.
         _ar = _areas_mod.kamera_areas(_areas_mod.normalisieren(cfg.get("areas")), entry["camera"])
         if "erkannt" in cfg["alert_kategorien"]:
             if self._mqtt_pub(_melden.topic(self.cfg, "szene_erkannt"), json.dumps(
@@ -12752,7 +13462,10 @@ class Service:
                     except OSError:
                         continue
                 if geloescht:
-                    self.log(f"cache cleanup: {geloescht} clips older than {self.cfg['clip_retention_d']}d deleted")
+                    # .511: Aufraeum-Buchhaltung. Was WIRKLICH knapp wird, sagt
+                    # weiter laut die DISK-LOW-Zeile und der Size-Cap-Zweig
+                    # darunter — die bleiben unabhaengig vom Schalter.
+                    self.debug(f"cache cleanup: {geloescht} clips older than {self.cfg['clip_retention_d']}d deleted")
                 erg["geloescht"] += geloescht
                 _cap_gb, _frei_gb, _quelle = self.speichergrenzen()
                 cap = _cap_gb * 1024**3
@@ -12799,8 +13512,8 @@ class Service:
                 if lv_n:
                     befreit += lv_b
                     erg["geloescht"] += lv_n
-                    self.log(f"live cleanup ({grund}): {lv_n} files deleted, "
-                             f"{lv_b / 1024**3:.1f} GB freed")
+                    self.debug(f"live cleanup ({grund}): {lv_n} files deleted, "
+                               f"{lv_b / 1024**3:.1f} GB freed")   # .511: Buchhaltung
                 frei = shutil.disk_usage(self.cfg["data_dir"]).free
                 erg.update(frei_mb=befreit / 1024**2, cache_gb=gesamt / 1024**3, frei_gb=frei / 1024**3,
                            knapp=bool(boden and frei < boden))
@@ -13748,7 +14461,10 @@ class Service:
                 # gerechnet wird von den Abholern (einer je Analyse-Platz). Die Zahl
                 # ist damit die der NEUEN, noch nirgends vermerkten Ereignisse: was
                 # schon wartet oder rechnet, hat der todo-Filter ausgelassen.
-                self.log(f"sweep: queueing {len(todo)} unprocessed events for analysis")
+                # .511: Takt-Buchhaltung, im Poll-Betrieb alle 20 s. Was aus der
+                # Einreihung wird, steht je Ereignis in der Urteilszeile; die
+                # Warteschlange selbst zeigt /health (rueckstau_zahlen) live.
+                self.debug(f"sweep: queueing {len(todo)} unprocessed events for analysis")
             elif auf_wunsch:
                 # Widerleger-Fund 29.08.: hier war der Lauf stumm. Sagen, dass
                 # nichts zu holen war, und WARUM — sonst sieht der Nutzer nur
@@ -14528,11 +15244,17 @@ def make_handler(svc):
             #     notif_*, live_*, vision_*, personmodell, upload_referenz,
             #     sync_refs-Status): die msg entsteht ausserhalb des
             #     Handlers, ihr Einzug ist ein eigener Zug je Modul.
-            # (b) Deutsche Alt-msg ("… Bild(er) entfernt", "Person
-            #     unbekannt", "Sync läuft …", "… übernommen", "Prüfung
-            #     läuft …", "Suche läuft …", "Person fehlt/ungueltig",
+            # (b) Deutsche Alt-msg ("Person unbekannt", "Sync läuft …",
+            #     "… übernommen", "Suche läuft …", "Person fehlt/ungueltig",
             #     "Datei > 15 MB", unbekannt_*-Kurzworte): de->en waere
             #     eine bewusste TEXTAENDERUNG, nie Teil des Einzugs.
+            #     ZWEI sind seit .511 raus aus dieser Liste, als bewusste
+            #     Textaenderung mit User-Go (Live-Kontrolle 08.09.: die
+            #     Qualitaets-Seite antwortete einem englischen UI deutsch):
+            #     /ref_entfernen_batch ("… Bild(er) entfernt" ->
+            #     antwort.ref_batch_weg) und /ref_pruef_neu ("Prüfung läuft …"
+            #     -> antwort.pruefung_laeuft). Beide setzt app.js ROH als
+            #     Knopfbeschriftung — sie sind sichtbarer UI-Text, kein Log.
             # (c) msg-Bausteine, die zugleich ins LOG gehen (lauf_loeschen/
             #     alte_loeschen: detail/warn) — Log bleibt englisch, die
             #     Trennung UI/Log ist ein eigener Umbau.
@@ -14560,19 +15282,23 @@ def make_handler(svc):
                     d = self._body_json(_BODY_BILDER, erwartet=dict)          # E2: 64 KiB -> 1 MiB
                     if d is _ABGEWIESEN:
                         return
-                    weg, geloescht = 0, []
-                    for it in (d.get("items") or []):
-                        person = (it.get("person") or "").strip()
-                        datei = (it.get("datei") or "").strip()
-                        ok, _ = anlernen.entferne_referenz(person, datei)
-                        if ok:
-                            weg += 1
-                            geloescht.append((person, datei))
+                    # Stufe A (.511): EIN Zug statt Bild fuer Bild — die Buchhaltung
+                    # (QS-Bericht, refcache) laeuft je Person einmal, und es startet
+                    # KEIN Bestands-QS-Lauf mehr. Der Feldtester hat 160 Batches bis
+                    # 317 Bilder gefahren; jeder kostete bis dahin einen Volllauf.
+                    weg, _geloescht = anlernen.entferne_referenzen(
+                        [((it.get("person") or "").strip(), (it.get("datei") or "").strip())
+                         for it in (d.get("items") or [])])
                     if weg:
                         svc.log(f"REFERENCES REMOVED (batch): {weg} (Frigate untouched by design)")
-                        svc.qs_neu_starten()
+                    # Der Text landet ROH im UI (app.js refBatchLoeschen setzt
+                    # d.msg als Knopfbeschriftung) — deshalb seit .511 ueber
+                    # core/sprache statt hart deutsch. Bauform wie die
+                    # Nachbar-Antworten derselben Familie (antwort.bruecke_hinzu/
+                    # -undo): EIN Schluessel mit "(s)", keine Plural-Formen.
                     return self._send(200, json.dumps({"ok": weg > 0,
-                                      "msg": f"{weg} Bild(er) entfernt"}, ensure_ascii=False),
+                                      "msg": _sprache.t("antwort.ref_batch_weg", n=weg)},
+                                      ensure_ascii=False),
                                       "application/json")
                 except Exception as e:
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
@@ -14601,10 +15327,19 @@ def make_handler(svc):
                     n_bilder = len([f for f in os.listdir(quelle)      # .webp NICHT vergessen: Frigate liefert webp
                                     if f.lower().endswith(_reg.BILD_ENDUNGEN)])
                     os.rename(quelle, ziel)
-                    try:
-                        os.remove(os.path.join(cfg["data_dir"], "clips", "refcache.npz"))
-                    except OSError:
-                        pass
+                    # Stufe A (.511): dieselbe punktuelle Bereinigung wie beim Einzel-
+                    # Bild — bis .510 loeste dieser Weg NICHTS aus (Inventur §1: die
+                    # Person blieb mit allen Zaehlern, Paaren und Doppel-Vorschlaegen
+                    # im QS-Bericht stehen, obwohl sich der Bestand maximal aendert),
+                    # und der refcache wurde komplett weggeworfen. Jetzt faellt die
+                    # Person aus Bericht UND Cache, der Rest bleibt gueltig.
+                    import anlernen as _al_pl
+                    _al_pl.qs_bericht_bereinigen(p)
+                    if not _al_pl.refcache_entfernen(p):
+                        try:
+                            os.remove(os.path.join(cfg["data_dir"], "clips", "refcache.npz"))
+                        except OSError:
+                            pass
                     svc.log(f"PERSON DELETED: {p} ({n_bilder} reference image(s)) -> trash/"
                             f"{os.path.basename(ziel)} — recoverable by moving back")
                     return self._send(200, json.dumps(
@@ -14624,8 +15359,12 @@ def make_handler(svc):
                     datei = (d.get("datei") or "").strip()
                     ok, msg = anlernen.entferne_referenz(person, datei)
                     if ok:
+                        # Stufe A (.511): KEIN Bestands-QS-Lauf mehr. Der Bericht wird
+                        # punktuell nachgefuehrt und der refcache-Eintrag entfernt
+                        # (anlernen.entferne_referenz) — bis .510 kostete genau dieser
+                        # Klick einen Volllauf ueber ALLE Referenzen (Werkbank-Messung
+                        # 08.09.: 872,7 s fuer ein Bild bei 1228 Referenzen).
                         svc.log(f"REFERENCE REMOVED: {msg} (Frigate untouched by design)")
-                        svc.qs_neu_starten()               # nach Entfernen automatisch gegenpruefen
                     return self._send(200 if ok else 400,
                                       json.dumps({"ok": ok, "msg": msg}, ensure_ascii=False),
                                       "application/json")
@@ -14640,15 +15379,17 @@ def make_handler(svc):
                                        frei=f"{erg['frei_gb']:.0f}")},
                     ensure_ascii=False), "application/json")
             if pfad == "/ref_pruef_neu":                       # Referenz-QS neu berechnen (Hintergrund)
-                svc.qs_neu_starten()
+                svc.qs_neu_starten(sofort=True)                # Knopf: kein Sammelfenster (.511)
                 return self._send(200, json.dumps({"ok": True,
-                                  "msg": "Prüfung läuft, Seite in ~1 min neu laden"}, ensure_ascii=False),
+                                  "msg": _sprache.t("antwort.pruefung_laeuft")},
+                                  ensure_ascii=False),
                                   "application/json")
             if pfad == "/qualitaet/start":                     # .273 Bestands-QS-Knopf
                 # Derselbe bewaehrte Hintergrund-Runner wie nach jedem
-                # Anlernen (qs_neu_starten: Doppelstart-Guard, GPU-Lock,
-                # Nachholen). Der Lauf ist IMMER ungefiltert; die gewaehlte
-                # Person ist reine ANZEIGE (?person auf der Ergebnis-Seite).
+                # Anlernen (qs_neu_starten: Doppelstart-Guard, Platz der
+                # Vergabestelle seit .511/Stufe B, Nachholen). Der Lauf ist
+                # IMMER ungefiltert; die gewaehlte Person ist reine ANZEIGE
+                # (?person auf der Ergebnis-Seite).
                 try:
                     d = self._body_json(4096, default={}, erwartet=dict)
                     if d is _ABGEWIESEN:
@@ -14658,7 +15399,7 @@ def make_handler(svc):
                         return self._send(400, json.dumps(
                             {"ok": False, "msg": _sprache.t("antwort.person_unbekannt")},
                             ensure_ascii=False), "application/json")
-                    svc.qs_neu_starten()
+                    svc.qs_neu_starten(sofort=True)            # Knopf: kein Sammelfenster (.511)
                     return self._send(200, json.dumps(
                         {"ok": True, "msg": _sprache.t("antwort.pruefung_gestartet"),
                          "person": pers}, ensure_ascii=False), "application/json")
@@ -14968,6 +15709,17 @@ def make_handler(svc):
                         except FileNotFoundError:
                             pass
                         svc.log("sync import finished -> recomputing embeddings on GPU (refcache) …")
+                        # .511 Stufe B: der Cache-Neubau haengt NICHT mehr am
+                        # QS-Lauf (der schreibt die npz seit .511 nicht mehr,
+                        # s. anlernen.pruefe_referenzen). Der Neubau laeuft
+                        # ueber den Haus-Griff `refcache_aufbauen` — dasselbe
+                        # Muster wie an den drei anderen Stellen, die einen
+                        # fehlenden Cache im Hintergrund nachziehen. Der
+                        # QS-Lauf bleibt zusaetzlich (der Import aendert den
+                        # Bestand, also gehoert der Bericht nachgezogen).
+                        threading.Thread(
+                            target=anlernen.refcache_aufbauen,
+                            args=(svc.embedder,), daemon=True).start()
                         svc.qs_neu_starten()
                     svc.log(f"reference sync {modus}: finished")
                 # .134 Lauf-Riegel: Flag VOR dem Start setzen (nicht im Thread —
@@ -15220,14 +15972,12 @@ def make_handler(svc):
                     if d is _ABGEWIESEN:
                         return
                     person = (d.get("person") or "").strip()
-                    n_weg = 0
-                    for datei in (d.get("dateien") or [])[:50]:
-                        ok, _m = anlernen.entferne_referenz(person, str(datei))
-                        if ok:
-                            n_weg += 1
+                    # Stufe A (.511): das Undo ist eine LOESCHUNG wie jede andere —
+                    # ein Zug, punktuelle Bereinigung, kein Bestands-QS-Lauf.
+                    n_weg, _weg = anlernen.entferne_referenzen(
+                        [(person, str(datei)) for datei in (d.get("dateien") or [])[:50]])
                     if n_weg:
                         svc.log(f"PASS LEARN UNDO: {n_weg} reference(s) removed for {person}")
-                        svc.qs_neu_starten()
                     return self._send(200, json.dumps(
                         {"ok": True, "msg": _sprache.t("antwort.bruecke_undo", n=n_weg)},
                         ensure_ascii=False), "application/json")
@@ -18609,9 +19359,15 @@ def make_handler(svc):
                 kamera = urllib.parse.unquote(path[len("/kalibrierung/"):])
                 _d_lk, _g_lk = _lwk.guards_lesen(cfg, lambda z: None)
                 _cams_lk, _ = frigate_cameras(cfg)
-                if kamera not in _g_lk and kamera not in (_cams_lk or []):
+                if kamera not in _kk.bekannt(cfg, _cams_lk):
                     # Den Namen nie aus der URL uebernehmen (keine zweite
-                    # Kamera-Quelle) — unbekannt heisst 404.
+                    # Kamera-Quelle) — unbekannt heisst 404. Die Frage
+                    # beantwortet seit 08.09. core.kamerakalib.bekannt: DIESELBE
+                    # Funktion, die auch die Uebersicht fuellt. Vorher stand
+                    # hier ein eigenes "guards oder Frigate" — und eine Kamera
+                    # mit Kalibrier-Vorrat, aber ohne Waechter und ohne
+                    # Frigate-Verbindung bekam 404, obwohl der Kommentar
+                    # darueber das Gegenteil verspricht.
                     return self._send(404, webui.layout(
                         _sprache.t("kalib.titel"), "/kalibrierung",
                         webui.leer(_sprache.t("leer.kamera_unbekannt"),
@@ -18624,11 +19380,17 @@ def make_handler(svc):
                             f"unreadable ({type(_e_ank2).__name__}: {_e_ank2})")
                     _saetze_lk = []
                 _kat_lk = _kk.katalog_werte(_kk.katalog_latten(cfg), kamera)
+                # .511 Stufe C: das dritte Register (Bestands-Pruefung). Werte
+                # kommen aus DEM einen Leser core.refurteil, nie aus einem
+                # zweiten Config-Griff auf dieser Seite.
+                from core import refurteil as _ru_lk
+                _pru_lk = _ru_lk.pruef_werte(_ru_lk.pruef_latten(cfg), kamera)
                 inhalt = _r_lk.render(
                     kamera, _lwk.kalib_lesen(cfg, kamera), _g_lk.get(kamera),
                     {"det": _d_lk["min_score"],
                      "e": _kk.anzeige_start()["e"], "t": _kk.anzeige_start()["t"]},
                     {"akt": _kat_lk, "std": _kk.katalog_start()},
+                    pruef={"akt": _pru_lk, "std": dict(_ru_lk.PRUEF_STARTWERTE)},
                     lauf_bilder=_r_kal.mitglieder_mit_guete(_saetze_lk, kamera),
                     deckel=int(cfg.get("live_kalib_max") or 0),
                     fueller=(int(cfg.get("kalib_fueller_bilder") or 0),
@@ -19375,9 +20137,22 @@ def make_handler(svc):
                     urllib.parse.urlparse(self.path).query)
                     .get("person", [""])[0] or "").strip()
                 _eine_p = _wer_p in _alle_p
+                # .511 Stufe C: die Kopf-Tabelle des Bestands-Pruefers reist
+                # mit, damit die Personen-Karte die Warnung "catalogue looks
+                # mixed" und die Zahl der Entfernen-Vorschlaege zeigen kann.
+                # Gelesen wird derselbe Bericht wie auf /qualitaet (KEIN
+                # zweiter Lauf, kein zweiter Speicher); fehlt er, bleibt die
+                # Karte wie bisher.
+                _qs_p = {}
+                try:
+                    import anlernen as _al_g
+                    with open(_al_g.QS_PATH) as _fq:
+                        _qs_p = (json.load(_fq) or {}).get("personen") or {}
+                except Exception:                        # noqa: BLE001
+                    _qs_p = {}
                 inhalt = _r_gesichter.render(
                     [_wer_p] if _eine_p else _alle_p, cfg["data_dir"],
-                    gefiltert=_eine_p, alle=_alle_p)
+                    gefiltert=_eine_p, alle=_alle_p, pruefung=_qs_p)
                 return self._send(200, webui.layout(_sprache.t("nav.gesichter"), "/gesichter", inhalt, self._banner()))
             if path == "/reconcile_status":            # Fortschritt des Pool-Umbaus (User 25.07.:
                 # "ich kann nicht sehen, was er macht")
@@ -19415,19 +20190,40 @@ def make_handler(svc):
                      "fehler": (lauf or {}).get("fehler"),
                      "fertig_ts": round(fertig_ts, 1)}), "application/json")
             if path == "/aehnliche_status":            # Poll der Wartezustaende (Hochzaehlen, 25.07.)
-                import anlernen
                 qp = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
                 p = (qp.get("person", [""])[0] or "").strip()
+                # .510/J18 (d): „fertig" heisst LAUFT NICHT MEHR, nicht „Daten
+                # sind da". Bis .509 fragte diese Antwort, ob refcache-Eintrag
+                # UND Vorschlagsdatei existieren — solange der Seitenaufruf
+                # beides selbst anstiess, war das dasselbe. Ohne die Automatik
+                # waere es ein Poll, der nie fertig wird: eine Person ohne
+                # Vorschlagsdatei haette den Browser fuer immer alle 3 s fragen
+                # lassen. Gefragt wird jetzt der LAUF-Zustand des Dienstes.
                 try:
-                    fertig = (anlernen.aehnliche_unbekannte(p) is not None
-                              and anlernen.lade_vorschlaege(p) is not None)
+                    _st = svc.such_stand(p)
+                    fertig = not (_st["vorschlaege"]["laeuft"]
+                                  or _st["unbekannt"]["laeuft"])
                 except Exception:
-                    fertig = False
-                return self._send(200, json.dumps({"fertig": bool(fertig)}), "application/json")
+                    _st = {}
+                    fertig = True     # im Zweifel neu laden: die Seite zeigt
+                    #                   dann den ehrlichen Stand, statt ewig zu pollen
+                return self._send(200, json.dumps(
+                    {"fertig": bool(fertig),
+                     # additiv (die Seite liest heute nur `fertig`): der
+                     # Zwischenstand, den der Kasten schon serverseitig zeigt.
+                     "phase": ((_st.get("vorschlaege") or {}).get("phase") or ""),
+                     "plaetze": _st.get("plaetze"), "belegt": _st.get("belegt")}),
+                    "application/json")
             if path == "/aehnliche":                     # umgedrehter Weg: passende Unbekannte zu Person
                 import webui, anlernen
-                # M1a (S4): Rendern byte-treu in routes/aehnliche.py; die SEITENEFFEKTE
-                # (Suchlaeufe anstossen, wenn eine Quelle noch rechnet) bleiben HIER.
+                # M1a (S4): Rendern in routes/aehnliche.py.
+                # .510/J18(a): der Seitenaufruf loest KEINEN Suchlauf mehr aus —
+                # weder den Referenz-Neulauf (`qs_neu_starten`, frueher hier bei
+                # `kand is None`) noch die Bestands-Suche (`vorschlaege_starten`,
+                # frueher bei `vs is None`). Beide waren Subprozesse mit eigenem
+                # GPU-Kontext, die ein blosser Seitenaufruf startete. Die Seite
+                # zeigt stattdessen den EHRLICHEN Zustand (`svc.such_stand`) und
+                # je einen Knopf; gesucht wird auf Klick.
                 from routes import aehnliche as _r_aehnliche
                 qd = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
                 person = urllib.parse.unquote(qd.get("person", [""])[0]).strip()
@@ -19436,11 +20232,7 @@ def make_handler(svc):
                     return self._send(200, webui.layout("?", "/gesichter",
                                       webui.leer(_sprache.t("leer.person_unbekannt")), self._banner()))
                 kand = anlernen.aehnliche_unbekannte(person)
-                if kand is None:
-                    svc.qs_neu_starten()           # rechnet Embeddings UND schreibt den refcache
                 vs = anlernen.lade_vorschlaege(person)
-                if vs is None:
-                    svc.vorschlaege_starten(person)
                 # Vorrat B4: Quelle 3 direkt aus den vorrat.jsonl der EXISTIE-
                 # RENDEN Laeufe (kein Misch-File — Konzept-QS W1.14/W2.4/W2.10);
                 # bereits uebernommene Angebote via refs_meta ausgeblendet.
@@ -19456,7 +20248,11 @@ def make_handler(svc):
                 except Exception as _e:
                     svc.log(f"stock offers unavailable ({type(_e).__name__}: {_e})")
                 inhalt, refresh = _r_aehnliche.render(person, kand, vs, cfg["data_dir"],
-                                                      va=va)
+                                                      va=va,
+                                                      # .510/J18 (d): laeuft gerade
+                                                      # eine Suche — und wartet sie
+                                                      # auf einen Platz?
+                                                      stand=svc.such_stand(person))
                 return self._send(200, webui.layout(_sprache.t("titel.aehnliche"), "/gesichter", inhalt,
                                                     self._banner(), refresh=refresh))
             if path.startswith("/anlern/crops/"):        # Anlern-Crops (read-only, Containment)
@@ -20204,7 +21000,11 @@ def make_handler(svc):
                          "NOTE: this bundle contains your person names, camera names and "
                          "local addresses — review before posting it publicly."]
                 furl = (cfg.get("frigate_url") or "").strip()
-                furl_anzeige = re.sub(r"//[^/@]*@", "//***@", furl)   # etwaige Zugangsdaten maskieren
+                # B7 (07.09.2026): DIE eine Maskier-Funktion statt der dritten
+                # eigenen Regex. Die alte `//[^/@]*@` brach am ERSTEN '@' ab —
+                # ein Passwort mit eigenem '@' (u:p@ss@host) blieb halb stehen,
+                # und dieses Buendel ist ausdruecklich zum Weitergeben gedacht.
+                furl_anzeige = _reg.endpunkt_anzeige(furl)
                 teile.append(f"frigate: {furl_anzeige or '(not configured)'}")
 
                 def _alter(pfad):
@@ -20502,7 +21302,7 @@ def make_handler(svc):
                     if _rest == "config":
                         d = _sup.maskiert(
                             _reg.export_ergaenzen(_store, cfg))
-                        svc.log("SUPPORT: config (masked) served")
+                        svc.debug("SUPPORT: config (masked) served")   # .511: Leseabruf
                         return self._send(200, json.dumps(
                             d, ensure_ascii=False, indent=1),
                             "application/json")
@@ -20521,9 +21321,9 @@ def make_handler(svc):
                             _l = _sup.baum_listen(cfg["data_dir"])
                             _l["version"] = os.environ.get("SUSLIK_VERSION",
                                                            "dev")
-                            svc.log(f"SUPPORT: {_sup.BAUM_CODE} listing "
-                                    f"served — {_l['n']} file(s), "
-                                    f"{_l['bytes']} byte(s)")
+                            svc.debug(f"SUPPORT: {_sup.BAUM_CODE} listing "
+                                      f"served — {_l['n']} file(s), "
+                                      f"{_l['bytes']} byte(s)")
                             return self._send(200, json.dumps(
                                 _l, ensure_ascii=False, indent=1),
                                 "application/json")
@@ -20548,7 +21348,8 @@ def make_handler(svc):
                             self.end_headers()
                             _sup.datei_streamen(
                                 _ziel, self.wfile, svc.log,
-                                f"{_sup.BAUM_CODE}/{_rel}", inhalt=_inh)
+                                f"{_sup.BAUM_CODE}/{_rel}", inhalt=_inh,
+                                dbg=svc.debug)
                             return
                         if _art == "ordner":
                             if not _sup.abzug_sperren():
@@ -20564,7 +21365,8 @@ def make_handler(svc):
                                 self.send_header("Cache-Control", "no-store")
                                 self.end_headers()
                                 _sup.baum_tar_streamen(cfg["data_dir"], _ziel,
-                                                       self.wfile, svc.log)
+                                                       self.wfile, svc.log,
+                                                       dbg=svc.debug)
                             finally:
                                 _sup.abzug_freigeben()
                             return
@@ -20595,7 +21397,7 @@ def make_handler(svc):
                             self.end_headers()
                             _sup.tar_streamen(
                                 cfg["data_dir"], _code, self.wfile, svc.log,
-                                lauf_id=_lid)
+                                lauf_id=_lid, dbg=svc.debug)
                             # Header sind raus — ok oder nicht, die
                             # Verbindung endet hier (HTTP/1.0). Abbruch
                             # steht als SUPPORT-Zeile im Dienst-Log.
@@ -20938,6 +21740,32 @@ def varianten_hinweis(variante, probe):
     return None
 
 
+def beschleuniger_ungenutzt_hinweis(kind, probe):
+    """Feldfall 08.09. auf der eigenen Werkbank: der Startup-Check meldete
+    '[ ok ] iGPU  found & usable' und '[ ok ] NPU   found & usable', drei Zeilen
+    spaeter '[ ok ] cpu — providers: ...' — und zog die Verbindung NICHT. Ursache
+    war ein laengst vergessenes explizites backend: cpu im Store; die Anlage lief
+    tagelang unbemerkt auf der CPU. Das Produktverhalten (AUTO -> Placement) ist
+    richtig, aber der ZUSTAND "Beschleuniger nutzbar, Backend cpu" muss laut werden.
+
+    Quelle sind AUSSCHLIESSLICH die Befunde des Hardware-Schritts (hardware_probe,
+    marker 'ok' = gefunden UND nutzbar; das deckt iGPU/NPU wie CUDA/AMD ab) — hier
+    wird nichts nachgeprobt, nichts umgestellt, die Nutzerwahl bleibt unangetastet.
+    None = kein Hinweis: Backend ist nicht cpu, ODER cpu ist die einzige
+    Moeglichkeit (cpu-Image, kein Geraet gefunden, Geraet nicht nutzbar)."""
+    if kind != "cpu":
+        return None
+    nutzbar = [str(name).replace("hw ", "").strip()
+               for mark, name, _detail in (probe or [])
+               if str(mark).strip() == "ok"]
+    if not nutzbar:
+        return None
+    return (f"{', '.join(nutzbar)} usable, but the effective backend is cpu — "
+            f"recognition does NOT use the accelerator on this machine. If that "
+            f"is not intended, check 'backend' (or the older 'ov_device') in the "
+            f"config store, and VERIFY_BACKEND/OV_DEVICE in the environment")
+
+
 def daten_mount_hinweis(data_dir):
     """Issue #13 (Tokn59, 03.08.): sein Compose hatte keinen volumes:-Eintrag, /data
     lag im Container — das Update ersetzte den Container und alle Daten waren weg.
@@ -21271,6 +22099,13 @@ def startup_selfcheck(svc):
                             f"— suslik still runs recognition on the CUDA EP")
         if kind == "cpu":
             erg("ok", f"{spec} — providers: {', '.join(avail)}")
+            # Feldfall 08.09.: darueber standen zwei gruene Haken fuer iGPU und NPU,
+            # hier ein gruenes cpu — und niemand zog die Verbindung. Die Befunde des
+            # Hardware-Schritts liegen vor, also wird der Zustand benannt (keine
+            # Automatik, kein Override: der Nutzer entscheidet weiter).
+            _ungenutzt = beschleuniger_ungenutzt_hinweis(kind, probe)
+            if _ungenutzt:
+                erg("warn", _ungenutzt)
         elif not (want and want in avail):
             # EP fehlt ganz -> haeufigster Fehler: plain onnxruntime verdeckt onnxruntime-openvino.
             erg("warn", f"requested {spec} but {want} unavailable ({', '.join(avail)}) — CPU fallback")
@@ -21461,6 +22296,12 @@ def startup_selfcheck(svc):
         rechenprobe_schritt(svc, cfg, erg)
     except Exception as e:                            # Diagnose reisst den Start nie
         erg("warn", f"compute probe skipped: {type(e).__name__}: {str(e)[:80]}")
+    # .511 (offener Punkt der Log-Bereinigung d92e3165: 84,9 % der Zeilen liegen
+    # seither hinter dem debug-Schalter, aber KEINE Zeile wies auf ihn hin — wer
+    # ein stilles Log sieht, soll wissen, wo das volle wieder herkommt).
+    if not cfg.get("debug"):
+        erg("info", "routine chatter is hidden — enable 'debug' in settings for "
+                    "full logging")
     # .334 (User-Fang 24.08.: "0.0.0.0" liest sich wie eine kaputte Adresse):
     # die Zeile sagt jetzt, WO man den Dienst erreicht, statt die Bind-Adresse
     # zu zeigen — 0.0.0.0 ist "alle Schnittstellen", keine surfbare URL.

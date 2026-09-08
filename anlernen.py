@@ -173,7 +173,7 @@ def ctx_crop(frame, x1, y1, x2, y2, faktor=2.5, max_kante=560):
 
 
 # ---------------------------------------------------------------- Referenz-Embeddings (det 320!)
-def lade_master_refs(emb, puls=None):
+def lade_master_refs(emb, puls=None, namen=None):
     """Embeddings aller bekannten Personen aus dem Master — MIT det 320 (kleine Ref-Crops),
     VOR dem Umschalten auf 1280 fuers Video (Memory-Regel: sonst brechen die Embeddings ein).
     Vorrats-Referenzen (A2, core/refbeiwert-Vertrag Stelle 1): ihr Vektor kommt
@@ -182,7 +182,11 @@ def lade_master_refs(emb, puls=None):
     puls(i, n) (.311, optional): Fortschritt je Referenzbild — n wird VORAB
     gezaehlt, i laeuft ueber alle Bilddateien (Beiwert-Referenzen zaehlen mit,
     sie sind nur schneller). Reihenfolge und Ergebnis bleiben ohne Puls
-    byte-gleich; der einzige Verbraucher ist refcache_aufbauen (Balken)."""
+    byte-gleich; der einzige Verbraucher ist refcache_aufbauen (Balken).
+    namen (Stufe A .511, optional): leeres dict herein -> es kommt mit
+    {person: [datei je ZEILE der Matrix]} zurueck. Das ist die Zuordnung, die
+    der refcache als '§rows' braucht, damit eine einzelne Referenz spaeter
+    wieder herausgenommen werden kann (refcache_entfernen)."""
     from core import refbeiwert as _rb
     refs = {}
     if not os.path.isdir(MASTER):
@@ -203,7 +207,7 @@ def lade_master_refs(emb, puls=None):
         pd = os.path.join(MASTER, p)
         if not os.path.isdir(pd):
             continue
-        V = []
+        V, N = [], []
         for f in os.listdir(pd):
             if not f.lower().endswith(endungen):
                 continue
@@ -213,6 +217,7 @@ def lade_master_refs(emb, puls=None):
             b = bw.get((p, f))
             if b is not None:
                 V.append(np.asarray(b["emb"], dtype=np.float32))
+                N.append(f)
                 continue
             img = cv2.imread(os.path.join(pd, f))
             if img is None:
@@ -220,8 +225,11 @@ def lade_master_refs(emb, puls=None):
             v = emb.embed(img)
             if v is not None:
                 V.append(v.astype(np.float32))
+                N.append(f)
         if V:
             refs[p] = np.asarray(V, dtype=np.float32)
+            if namen is not None:
+                namen[p] = N
     return refs
 
 
@@ -1434,6 +1442,39 @@ def _unbekannt_benennen_intern(uid, person, beste_n=6, emb=None, ids=None):
 # ---------------------------------------------------------------- Referenz-QS (Verwechslungs-Check)
 QS_PATH = os.path.join(ANLERN, "refs_qs.json")
 
+# DECKUNGS-VERTRAG des QS-Berichts (Stufe A, .511) — die EINE Aufzaehlung seiner
+# Felder, gegen die das Gate den SCHREIBER (pruefe_referenzen) und den punktuellen
+# BEREINIGER (qs_bericht_bereinigen) haelt. Anlass: seit .511 laeuft nach einer
+# Loeschung kein Volllauf mehr, der den Bericht ohnehin neu schreibt — ein neu
+# hinzugefuegtes Feld, das niemand bereinigt, bliebe damit fuer immer falsch
+# (Blindheitsklasse K3 aus qs_ebenen.md: die Erweiterung erreicht nicht alle
+# Stellen). Wer ein Feld ergaenzt, traegt es hier ein UND behandelt es unten;
+# sonst ist das Gate rot.
+#   kopf       = Lauf-Kopfzeile (Zeitpunkt, Latten, Modell) — von einer Loeschung
+#                unberuehrt, sie bleibt stehen wie sie ist
+#   zaehler    = Gesamtzahl der Referenzen, wird heruntergezaehlt
+#   summe      = Kopf-Tabelle je Person, wird heruntergezaehlt/entfernt
+#   je_datei   = Liste mit (person, datei)-Eintraegen, wird gefiltert
+#   je_datei_map = {person: {datei: wert}}, Eintrag wird entfernt
+#   je_name    = flache Dateinamen-Liste (ohne Person), wird gefiltert
+#   gruppe     = Liste von Byte-Dubletten-Gruppen ({person, behalten, weg}):
+#                faellt ein `weg`-Mitglied, schrumpft die Gruppe; faellt der
+#                Vertreter, ruecken die uebrigen nach; unter zwei Mitgliedern
+#                faellt die Gruppe ganz (Stufe C, .511)
+QS_BERICHT_FELDER = {
+    "ts": "kopf", "ref_count": "zaehler", "flag_sim": "kopf",
+    "unscharf_max": "kopf", "min_kante": "kopf", "kante_gut": "kopf",
+    "sharp_gut": "kopf", "dup_sim": "kopf", "modell": "kopf",
+    "norm_latte": "kopf",
+    "personen": "summe",
+    "stufen": "je_datei_map", "normen": "je_datei_map", "blick": "je_datei_map",
+    "pruefung": "je_datei_map",
+    "doppel": "je_datei", "paare": "je_datei", "ungeeignet": "je_datei",
+    "vorrat_refs": "je_name", "norm_traegt": "je_name",
+    "dubletten": "gruppe",
+    "pruef_latten": "kopf",
+}
+
 
 _NORMMASS = None
 
@@ -1451,16 +1492,28 @@ def _normmass_geteilt():
     return _NORMMASS if _NORMMASS.ok else None
 
 
-def bild_metriken(emb, img, mit_pose=False, mit_norm=False):
+def bild_metriken(emb, img, mit_pose=False, mit_norm=False, mit_guete=False):
     """QS-Metriken eines Einzelbilds (det 320): (embedding|None, gesichts_kante_orig|None,
-    sharp[, pose|None][, norm|None]). kante = Gesichtsgroesse in ORIGINAL-Pixeln (Upscaling wie
-    Embedder.embed herausgerechnet). Eine Quelle fuer Eignungspruefung UND Bestands-
-    Suche — was die Suche vorschlaegt, besteht damit garantiert auch die Pruefung.
+    sharp[, pose|None][, norm|None][, (fiqa_t|None, empf|None)]). kante = Gesichtsgroesse
+    in ORIGINAL-Pixeln (Upscaling wie Embedder.embed herausgerechnet). Eine Quelle fuer
+    Eignungspruefung UND Bestands-Suche — was die Suche vorschlaegt, besteht damit
+    garantiert auch die Pruefung.
     mit_pose (.273c, Blick-Statistik): liefert zusaetzlich fc.pose (Widerleger-
     Befund: die Pose wurde bisher weggeworfen) — als 4. Wert, damit die drei
     Bestands-Aufrufer unveraendert bleiben. mit_norm (User 20.08.: virtuelle
     Qualitaetslinie auch in der Bestands-QS): Feature-Norm DERSELBEN Detektion
-    als weiterer Wert, None wenn NormMass nicht traegt (fremdes Modell)."""
+    als weiterer Wert, None wenn NormMass nicht traegt (fremdes Modell).
+    mit_guete (Stufe B, .511): die zwei KALIBRIER-Masse `fiqa_t`/`empfinden`
+    (core.guete) als PAAR am Ende — bis .510 kannte der QS-Pfad sie nicht, und
+    genau sie tragen die Katalog-Latte der Kalibrier-Seite (Inventur §2.3).
+    AUSSCHNITTE WIE UEBERALL IM HAUS (core/ernte.align112, anlernen._zulauf_messen):
+    `fiqa_t` am aligned 112er DERSELBEN Detektion — demselben Warp, den die
+    Feature-Norm nutzt, kein zweites Alignment —, `empfinden` am engen
+    Gesichts-Crop. Ein eigener Zuschnitt haette eine eigene Skala, und die Regler
+    der Kalibrier-Seite bedeuteten in der QS dann etwas anderes als im Lernlauf.
+    Sind die Guete-Modelle nicht da (Alt-Image ohne die ONNX-Dateien), kommt
+    (None, None) zurueck — der Aufrufer sieht das an `guete.verfuegbar()` und
+    schreibt „nicht messbar" statt „gemessen: nichts"."""
     h, w = img.shape[:2]
     sh = float(cv2.Laplacian(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY), cv2.CV_64F).var())
     scale = max(1.0, 224.0 / min(h, w))
@@ -1473,6 +1526,8 @@ def bild_metriken(emb, img, mit_pose=False, mit_norm=False):
             leer.append(None)
         if mit_norm:
             leer.append(None)
+        if mit_guete:
+            leer.append((None, None))
         return tuple(leer)
     fc = max(faces, key=lambda x: (x.bbox[2] - x.bbox[0]) * (x.bbox[3] - x.bbox[1]))
     x1, y1, x2, y2 = fc.bbox
@@ -1482,28 +1537,153 @@ def bild_metriken(emb, img, mit_pose=False, mit_norm=False):
     if mit_pose:
         pose = getattr(fc, "pose", None)
         aus.append([round(float(x), 1) for x in pose] if pose is not None else None)
+    c112 = None
+    if mit_norm or mit_guete:
+        # DER eine 112er-Warp des Hauses (core.ernte.align112) — EINMAL fuer
+        # beide Verbraucher: Feature-Norm und fiqa_t messen am selben Ausschnitt
+        # derselben Detektion (core/guete.py: "Input: das ALIGNED 112er-Crop,
+        # exakt das der Feature-Norm — kein zweites Alignment").
+        try:
+            from core.ernte import align112
+            c112 = align112(gross, fc.kps)
+        except Exception:                     # noqa: BLE001
+            c112 = None                       # Zusatz-Auskunft, nie Blocker
     if mit_norm:
         # KEINE zweite Detektion: dieselbe fc, dasselbe Alignment wie der
         # Urteilspfad; nm=None (fremdes Modell) -> None, deklariert.
         norm = None
         nm = _normmass_geteilt()
-        if nm is not None:
+        if nm is not None and c112 is not None:
             try:
-                from insightface.utils import face_align
-                c112 = face_align.norm_crop(gross, landmark=fc.kps, image_size=112)
                 norm = round(float(nm.feature_norm([c112])[0]), 2)
             except Exception:
                 pass                          # Zusatz-Auskunft, nie Blocker
         aus.append(norm)
+    if mit_guete:
+        fiqa_v = empf_v = None
+        from core import guete as _guete
+        if _guete.verfuegbar():
+            try:
+                if c112 is not None:
+                    fiqa_v = round(float(_guete.fiqa_t(c112)), 4)
+                _x1, _y1 = max(0, int(x1)), max(0, int(y1))
+                _crop = gross[_y1:max(_y1 + 1, int(y2)), _x1:max(_x1 + 1, int(x2))]
+                if getattr(_crop, "size", 0):
+                    empf_v = round(float(_guete.empfinden(_crop)), 4)
+            except Exception:                 # noqa: BLE001
+                fiqa_v = empf_v = None        # halb gemessen zaehlt als nicht gemessen
+        aus.append((fiqa_v, empf_v))
     return tuple(aus)
 
 
-def lade_master_bilder(emb, fortschritt=None):
+def _beiwert_guete(emb, pfad_bild):
+    """Die zwei KALIBRIER-Masse einer Beiwert-/Vorrats-Referenz an ihrer DATEI
+    nachmessen -> (fiqa_t|None, empf|None). Stufe C (.511), User-Go 08.09.
+
+    ANLASS, gemessen: nach dem Stufe-B-Lauf trugen nur 554 von 1229
+    Katalogbildern eine Guete-Zahl. Die 604 Beiwert-Referenzen bekommen ihre
+    Werte aus der ERNTE-Zeile — und in diesem Bestand steht dort in 0 von 604
+    Faellen ein `fiqa_t` (die Ernte hat sie damals nicht gemessen). Damit war
+    die halbe Bibliothek fuer den Bestands-Pruefer unsichtbar.
+
+    W1.16/W2.6 BLEIBEN GUELTIG, und zwar buchstaeblich: die Vorrats-DATEI wird
+    nur GELESEN. Sie ist und bleibt Anzeige-Artefakt, das Urteils-Embedding
+    kommt weiterhin aus dem A2-Beiwert (Ernte-Vollbild), die Pixel-Latte gilt
+    fuer sie weiterhin nicht, und kein Byte an ihr wird angefasst — es waechst
+    allein der Sidecar.
+
+    EHRLICHE GRENZE, benannt statt versteckt: das ist eine Messung an einem
+    ANDEREN Ausschnitt als dem, an dem die Ernte gemessen haette
+    ([[ersatzmessungen-sind-hypothesen]]). Der 28/40-Befund ("die
+    Nach-Detektion ist tot") trifft hier nicht flaechendeckend zu — im
+    82er-Eichsatz lieferten ALLE 29 Beiwert-Referenzen eine Detektion (Stufe B
+    §5.4) —, aber wo sie doch tot ist, kommt (None, None) zurueck und das Bild
+    bleibt beim Pruefer `ungemessen`, also unmarkiert. Der Versatz der beiden
+    Messbasen ist an den 9 Bildern mit BEIDEN Werten beziffert: fiqa_t +0,001
+    bis +0,043, empfinden -0,011 bis +0,034 (Stufe B §3b, Querprobe).
+    Die Herkunft steht im Sidecar-Feld `quelle` ('beiwert+guete') und im
+    QS-Bericht, damit niemand die Zahl fuer eine Ernte-Messung haelt."""
+    img = cv2.imread(pfad_bild)
+    if img is None:
+        return None, None
+    try:
+        _v, _k, _s, (fq, ef) = bild_metriken(emb, img, mit_guete=True)
+    except Exception:                                    # noqa: BLE001
+        return None, None                 # Zusatz-Auskunft, nie ein Blocker
+    return fq, ef
+
+
+def _refcache_vektoren(modell):
+    """{(person, datei): vektor} aus dem Urteils-Cache — die ZWEITE billige
+    Embedding-Quelle neben dem A2-Beiwert (Stufe B, .511).
+
+    Moeglich wurde das mit `§rows` (Stufe A): bis .510 trug die npz je Person nur
+    eine namenlose Matrix, ein Vektor war also keiner Datei zuzuordnen. Genommen
+    wird nur eine Karte, die `_rows_pruefen` als stimmig durchlaesst (je Person
+    genauso viele Namen wie Zeilen) und die zum LAUFENDEN Modell gehoert —
+    ein Vektor aus einer anderen Modellwelt waere der teuerste stille Fehler.
+    Faellt irgendetwas davon aus, kommt eine LEERE Karte zurueck und der Lauf
+    misst wie bisher; nie ein Ratespiel."""
+    ziel = os.path.join(CLIPS, "refcache.npz")
+    try:
+        if not os.path.exists(ziel):
+            return {}
+        z = np.load(ziel, allow_pickle=True)
+        meta = _cache_meta(z)
+        if str(meta.get("§modell", "")).lower() != str(modell).lower():
+            return {}
+        refs = {p: np.asarray(z[p], np.float32) for p in z.files
+                if p not in ("meta", "§meta")}
+        rows = _rows_pruefen(meta, refs)
+        if rows is None:
+            return {}
+        aus = {}
+        for p, namen in rows.items():
+            M = refs.get(p)
+            if M is None:
+                continue
+            for i, d in enumerate(namen):
+                aus[(p, d)] = M[i]
+        return aus
+    except Exception as e:                                # noqa: BLE001
+        print(f"reference cache not usable as measurement source: "
+              f"{type(e).__name__}: {e}", flush=True)
+        return {}
+
+
+def lade_master_bilder(emb, fortschritt=None, sidecar=True, diagnose=None):
     """Alle Referenzbilder EINZELN mit Eignungs-Metriken (det 320, Ref-Crops). Liefert AUCH
     Bilder ohne detektierbares Gesicht (emb None) und defekte Dateien — genau die gehoeren
     in die Eignungspruefung, nicht stillschweigend uebersprungen.
     fortschritt (.273 Bestands-QS): Callback (i, n) je gemessenem Bild —
-    die Dateiliste steht vorab, damit n von Anfang an stimmt."""
+    die Dateiliste steht vorab, damit n von Anfang an stimmt.
+
+    STUFE B (.511) — GEMESSEN WIRD NUR NOCH, WAS NEU ODER GEAENDERT IST.
+    Bis .510 kostete jeder Lauf eine volle Neumessung jeder Datei ohne A2-Beiwert
+    (1,10 s je Bild; 674 s von 872 s Gesamtlauf, Inventur §4.2) — obwohl dieselbe
+    Datei mit demselben Modell immer dasselbe Ergebnis liefert. Jetzt:
+
+      1. A2-BEIWERT (`refs_meta.jsonl`, Vertrag Stelle 5) — unveraendert die
+         erste Quelle. Diese Dateien werden NIE gemessen.
+      2. MESS-SIDECAR (`core.refmess`, im A2-Vertrag als zweite billige Quelle
+         deklariert) — kante/sharp/norm/
+         pose/fiqa_t/empf/wh/camera je Bild, gueltig solange Dateigroesse,
+         mtime und Modell passen.
+      3. REFCACHE (`clips/refcache.npz`, `§rows`) — das Embedding zur
+         Sidecar-Zeile. Ohne Vektor nuetzt die schnellste Messzeile nichts, denn
+         die Verwechslungs-Achse braucht ihn.
+      4. sonst: volle Messung wie bisher — und danach steht sie im Sidecar.
+
+    WICHTIG (Frische): der Vektor aus dem refcache wird NUR zu einer Sidecar-
+    Zeile genommen, die der Datei-Anker noch deckt. Der refcache selbst fuehrt
+    keinen Anker; ist die Datei ausgetauscht worden, ist die Sidecar-Zeile
+    ungueltig, das Bild wird gemessen und bekommt DABEI seinen frischen Vektor.
+    So kann eine ausgetauschte Datei nie mit einem alten Vektor weiterlaufen.
+
+    `sidecar=False` erzwingt die Messung jedes Bildes (Diagnose/Gegenprobe).
+    `diagnose` (dict) bekommt die Zaehler des Laufs — der Dienst loggt daraus
+    EINE Zeile, sonst waere nicht sichtbar, warum ein Lauf lange dauert."""
+    dg = diagnose if isinstance(diagnose, dict) else {}
     if not os.path.isdir(MASTER):
         return []
     dateien = []
@@ -1514,14 +1694,84 @@ def lade_master_bilder(emb, fortschritt=None):
         dateien += [(p, f) for f in sorted(os.listdir(pd))
                     if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))]
     from core import refbeiwert as _rb
-    bw, _fremd = _rb.beiwerte(MASTER, emb.modell)   # A2-Vertrag Stelle 5
+    from core import refmess as _rm
+    meta_alle = {}                                  # last-wins-Stand JEDER Referenz
+    bw, _fremd = _rb.beiwerte(MASTER, emb.modell, alle=meta_alle)   # A2-Vertrag Stelle 5
     if _fremd:
         print(f"lade_master_bilder: {_fremd} stock reference(s) with foreign-model "
               f"embedding — measured from file instead (will show as unusable)",
               flush=True)
+    alt, kopf = (_rm.lesen(MASTER) if sidecar else ({}, {}))
+    vek = _refcache_vektoren(emb.modell) if sidecar else {}
+    neu = {}                                   # der Sidecar, wie er danach aussieht
+    akt_akte = _rm.akten_anker(DATA)
+    from core import guete as _guete
+    guete_da = _guete.verfuegbar()
+    # --- Kamera-Nachtrag (User-Entscheid Q2): welche Bilder brauchen eine
+    # Aufloesung ueber das eid-Feld? Nur wenn mindestens EINES sie braucht, wird
+    # die Karte gebaut (0,1 s ueber 64 568 Aktenzeilen, gemessen) — und ein Bild,
+    # dessen Kamera schon einmal erfolglos gesucht wurde, loest den Bau erst
+    # wieder aus, wenn die Akte gewachsen ist.
+    such_eids = set()
+    for p, f in dateien:
+        meta = meta_alle.get((p, f)) or {}
+        if meta.get("camera"):
+            continue
+        z = (alt.get(p) or {}).get(f) or {}
+        if z.get("camera"):
+            continue
+        eid = meta.get("eid") or z.get("eid")
+        if not eid:
+            continue
+        if z.get("kam_stand") and akt_akte and list(z["kam_stand"]) == list(akt_akte):
+            continue                            # schon gesucht, Akte unveraendert
+        such_eids.add(eid)
+    kam = _rm.kamera_karte(DATA, such_eids) if such_eids else {}
+    dg["kamera_gesucht"] = len(such_eids)
+    dg["kamera_gefunden"] = len(kam)
+    # --- Erstlauf-Ansage: ein Bestand ohne Sidecar KOSTET, und der Nutzer soll
+    # wissen warum (Fremd-Augen-Frage: Riesen-Altbestand beim ersten Start nach
+    # dem Update). Der Lauf laeuft trotzdem weiter, er sagt nur an.
+    dg["gesamt"] = len(dateien)
+    _ohne = sum(1 for p, f in dateien
+                if not bw.get((p, f)) and not (alt.get(p) or {}).get(f))
+    if _ohne:
+        print(f"reference QS: {_ohne} of {len(dateien)} catalog image(s) have no "
+              f"stored measurement yet — measuring them once (about 1 s each) and "
+              f"saving the values; later runs read them and take seconds.",
+              flush=True)
+    # .511 Stufe C: wie viele Beiwert-Referenzen brauchen die einmalige
+    # Guete-Nachmessung? Der Erstlauf soll auch DAS laut sagen — es sind hier
+    # 604 Bilder, die vorher nie eine Datei-Messung kosteten.
+    _ohne_guete = sum(
+        1 for p, f in dateien
+        if bw.get((p, f)) is not None
+        and (bw[(p, f)].get("fiqa_t") is None and bw[(p, f)].get("empf") is None)
+        and str(((alt.get(p) or {}).get(f) or {}).get("quelle") or "")
+        != "beiwert+guete")
+    if _ohne_guete and guete_da:
+        print(f"reference QS: {_ohne_guete} stock reference(s) have no quality "
+              f"score yet — measuring them once from the stored crop (read "
+              f"only) so the catalogue check can judge them too.", flush=True)
     out = []
+    n_neu = n_cache = n_beiwert = n_guete_nach = seit_flush = 0
     for i, (p, f) in enumerate(dateien, 1):
+        pfad_bild = os.path.join(MASTER, p, f)
+        ank = _rm.anker(pfad_bild)
+        z_alt = (alt.get(p) or {}).get(f) or {}
         b = bw.get((p, f))
+        # Kamera: Meta-Zeile schlaegt Sidecar schlaegt eid-Aufloesung. Gelesen
+        # wird die VOLLE Meta-Zeile, nicht die Beiwert-Zeile — `eid`/`camera`
+        # stehen in jeder, `emb` nur in der Haelfte (Bau-Fehler des Erstlaufs
+        # 13:57: nur 2 statt 311 eids kamen ueberhaupt in die Suche).
+        meta = meta_alle.get((p, f)) or {}
+        eid = meta.get("eid") or z_alt.get("eid")
+        cam = meta.get("camera") or z_alt.get("camera") or (kam.get(eid) if eid else None)
+        z_neu = {"anker": ank, "camera": cam}
+        if eid:
+            z_neu["eid"] = eid
+        if cam is None and eid and akt_akte:
+            z_neu["kam_stand"] = akt_akte       # erfolglos gesucht, Aktenstand gemerkt
         if b is not None:
             # Beiwert-Referenz: VOLLWERTIGE Messzeile aus den Lauf-Messwerten
             # (Konzept-QS W2.6 — vorher waere sie mit emb=None aus Verwechs-
@@ -1532,34 +1782,126 @@ def lade_master_bilder(emb, fortschritt=None):
             # vorrat-Flag (eigene Achsen, nie Loesch-Kandidat); eine Lernlauf-
             # Referenz laeuft mit ihren Ernte-Werten (kante/sharp/norm, gleiche
             # Skalen) an der regulaeren Latte wie eine gemessene Datei.
-            img = cv2.imread(os.path.join(MASTER, p, f))
+            # .511: das einzige, was hier die DATEI kostete, war `wh` fuers
+            # Anzeige-Format (610 Beiwert-Bilder = 51 s je Lauf, Inventur §4.2).
+            # Es haengt an der Datei, nicht am Modell — der Sidecar traegt es.
+            wh = z_alt.get("wh") if _rm.frisch(z_alt, ank) else None
+            if wh is None:
+                img = cv2.imread(pfad_bild)
+                wh = f"{img.shape[1]}x{img.shape[0]}" if img is not None else "?"
+                seit_flush += 1
+            z_neu["wh"] = wh
+            z_neu["quelle"] = "beiwert"
+            # Guete-Masse der Vorrats-/Lernlauf-Referenz kommen zuerst aus ihrer
+            # ERNTE-Zeile, wenn der Lauf sie gemessen hat.
+            fq_b, ef_b = b.get("fiqa_t"), b.get("empf")
+            if fq_b is None and ef_b is None:
+                # .511 Stufe C (User-Go 08.09., Entscheid 5): traegt die
+                # Ernte-Zeile KEINE Guete (in diesem Bestand 604 von 604), wird
+                # sie EINMAL an der Datei nachgemessen und liegt danach im
+                # Sidecar. Sonst bliebe die halbe Bibliothek fuer den
+                # Bestands-Pruefer unsichtbar. Herkunft/Grenzen: _beiwert_guete.
+                # `quelle` merkt sich den VERSUCH — auch eine tote
+                # Nach-Detektion wird so nie zweimal bezahlt.
+                if _rm.frisch(z_alt, ank, emb.modell) \
+                        and str(z_alt.get("quelle") or "") == "beiwert+guete":
+                    fq_b, ef_b = z_alt.get("fiqa_t"), z_alt.get("empf")
+                    z_neu["quelle"] = "beiwert+guete"
+                elif guete_da:
+                    fq_b, ef_b = _beiwert_guete(emb, pfad_bild)
+                    z_neu["quelle"] = "beiwert+guete"
+                    n_guete_nach += 1
+                    seit_flush += 1
+            z_neu["fiqa_t"], z_neu["empf"] = fq_b, ef_b
+            z_neu["guete_da"] = guete_da
+            z_neu["modell"] = emb.modell      # die Nachmessung haengt am Modell
+            n_beiwert += 1
             out.append({"person": p, "datei": f,
                         "emb": np.asarray(b["emb"], np.float32),
                         "sharp": float(b.get("sharp") or 0.0),
                         "kante": b.get("kante"), "pose": b.get("pose"),
-                        "wh": (f"{img.shape[1]}x{img.shape[0]}"
-                               if img is not None else "?"),
+                        "wh": wh, "camera": cam,
                         "defekt": False,
                         "vorrat": str(b.get("herkunft") or "vorrat") == "vorrat",
-                        "norm": b.get("norm")})
-        else:
-            img = cv2.imread(os.path.join(MASTER, p, f))
-            if img is None:
+                        "norm": b.get("norm"),
+                        "guete_quelle": ("datei" if z_neu["quelle"]
+                                         == "beiwert+guete" else "ernte"),
+                        "fiqa_t": fq_b, "empf": ef_b})
+        elif _rm.frisch(z_alt, ank, emb.modell) and (
+                z_alt.get("defekt") or not z_alt.get("gesicht")
+                or (p, f) in vek):
+            # Gespeicherte Messung + (falls es ein Gesicht gab) der Vektor aus
+            # dem refcache. Bilder OHNE Gesicht und defekte brauchen keinen
+            # Vektor — genau sie waren bisher jedes Mal wieder 1 s Detektion
+            # fuer ein bekanntes 'kein_gesicht'.
+            n_cache += 1
+            z_neu.update({k: z_alt.get(k) for k in _rm.MESSFELDER})   # Deckungs-Vertrag
+            if z_alt.get("defekt"):
                 out.append({"person": p, "datei": f, "emb": None, "sharp": 0.0,
-                            "kante": None, "wh": "?", "defekt": True})
+                            "kante": None, "wh": "?", "camera": cam, "defekt": True})
+            else:
+                out.append({"person": p, "datei": f,
+                            "emb": (vek.get((p, f)) if z_alt.get("gesicht") else None),
+                            "sharp": float(z_alt.get("sharp") or 0.0),
+                            "kante": z_alt.get("kante"), "pose": z_alt.get("pose"),
+                            "norm": z_alt.get("norm"),
+                            "fiqa_t": z_alt.get("fiqa_t"), "empf": z_alt.get("empf"),
+                            "wh": z_alt.get("wh") or "?", "camera": cam,
+                            "defekt": False})
+        else:
+            img = cv2.imread(pfad_bild)
+            n_neu += 1
+            seit_flush += 1
+            if img is None:
+                # Auch die DEFEKT-Zeile traegt alle Vertragsfelder (mit None),
+                # damit Schreiber und Leser genau eine Feldmenge kennen.
+                z_neu.update({"defekt": True, "gesicht": False, "wh": "?",
+                              "kante": None, "sharp": 0.0, "pose": None,
+                              "norm": None, "fiqa_t": None, "empf": None,
+                              "guete_da": guete_da,
+                              "modell": emb.modell, "quelle": "datei",
+                              "ts": round(time.time(), 1)})
+                out.append({"person": p, "datei": f, "emb": None, "sharp": 0.0,
+                            "kante": None, "wh": "?", "camera": cam, "defekt": True})
             else:
                 # Virtuelle Qualitaetslinie AUCH fuer den Alt-Bestand (User
                 # 20.08.): jede messbare Referenz bekommt ihre Feature-Norm —
                 # dieselbe Skala wie Vorrat/Katalog-Linie, aus DERSELBEN
-                # Detektion (mit_norm, keine Doppelmessung).
-                v, kante, sh, pose, norm = bild_metriken(emb, img, mit_pose=True,
-                                                         mit_norm=True)
+                # Detektion (mit_norm, keine Doppelmessung). .511: dazu die
+                # zwei Kalibrier-Masse aus demselben einen Warp.
+                v, kante, sh, pose, norm, (fq, ef) = bild_metriken(
+                    emb, img, mit_pose=True, mit_norm=True, mit_guete=True)
+                wh = f"{img.shape[1]}x{img.shape[0]}"
+                z_neu.update({"defekt": False, "gesicht": v is not None, "wh": wh,
+                              "kante": kante, "sharp": sh, "pose": pose,
+                              "norm": norm, "fiqa_t": fq, "empf": ef,
+                              "guete_da": guete_da, "modell": emb.modell,
+                              "quelle": "datei", "ts": round(time.time(), 1)})
                 out.append({"person": p, "datei": f, "emb": v, "sharp": sh,
                             "kante": kante, "pose": pose, "norm": norm,
-                            "wh": f"{img.shape[1]}x{img.shape[0]}",
-                            "defekt": False})
+                            "fiqa_t": fq, "empf": ef,
+                            "wh": wh, "camera": cam, "defekt": False})
+        neu.setdefault(p, {})[f] = z_neu
+        if sidecar and seit_flush >= _rm.FLUSH_JE:
+            # Zwischenstand: ein Abbruch nach 20 Minuten Erstlauf darf nicht
+            # 20 Minuten kosten (Absturzsicherheit langer Laeufe). NICHT
+            # aufgeraeumt — geloeschte Bilder fliegen erst beim Schlussschrieb.
+            seit_flush = 0
+            _rm.schreiben(MASTER, {**alt, **{p_: {**(alt.get(p_) or {}), **m}
+                                             for p_, m in neu.items()}}, kopf)
         if fortschritt:
             fortschritt(i, len(dateien))
+    if sidecar:
+        # Schlussschrieb: NUR die Bilder, die es noch gibt — der Sidecar ist
+        # damit selbstraeumend (das refs_meta.jsonl des Feldtesters traegt 9235 Zeilen fuer
+        # 1229 Dateien; ein mitwachsender Cache waere derselbe Fehler).
+        _rm.schreiben(MASTER, neu, {"ts": round(time.time(), 1),
+                                    "modell": emb.modell})
+    dg.update({"gemessen": n_neu, "aus_speicher": n_cache, "beiwert": n_beiwert,
+               "guete_nachgemessen": n_guete_nach,
+               "guete_deckung": sum(1 for b in out
+                                    if b.get("fiqa_t") is not None),
+               "guete_da": guete_da})
     return out
 
 
@@ -1569,7 +1911,7 @@ def pruefe_referenzen(flag_sim=0.30, top=40,
                       kante_gut=REF_LATTE["kante_gut"],
                       sharp_gut=REF_LATTE["sharp_gut"],
                       dup_sim=0.75, person=None, emb=None, fortschritt=None,
-                      norm_latte=None):
+                      norm_latte=None, pruef_latten=None, diagnose=None):
     """Referenz-QS (.273 zum Bestands-QS-Knopf ausgebaut, Konzept
     konzept_bestandsqs.md) in VIER Teilen: (1) EIGNUNG jedes einzelnen
     Bildes — defekt / kein Gesicht / zu klein / unscharf (Loesch-Kandidaten,
@@ -1583,9 +1925,36 @@ def pruefe_referenzen(flag_sim=0.30, top=40,
     person: filtert NUR den Bericht — gemessen und verglichen wird IMMER
     der Gesamtbestand (die Verwechslungs-Achse braucht alle als Gegenseite).
     emb: warmer Dienst-Embedder (det 320) statt Neubau; fortschritt(i, n)
-    fuer die Anzeige. Ergebnis -> refs_qs.json fuer die Qualitaets-Seite."""
+    fuer die Anzeige. Ergebnis -> refs_qs.json fuer die Qualitaets-Seite.
+
+    STUFE B (.511) — DIESER LAUF BAUT DEN REFCACHE NICHT MEHR.
+    Bis .510 schrieb er `clips/refcache.npz` gleich mit; genau das machte ihn zum
+    Pflichtlauf nach jeder Loeschung (Inventur §3.2 Grund 3). Seit Stufe A hat der
+    Cache seine eigenen Wege — `refcache_ergaenzen`/`_viele` beim Aufnehmen,
+    `refcache_entfernen` beim Loeschen, `refcache_aufbauen` als Hintergrund-Neubau
+    und `analyze.load_refs` im Urteilspfad, der ihn ohnehin neu rechnet, sobald die
+    Dateiliste nicht mehr passt. Ein FUENFTER Schreiber waere hier nicht nur
+    ueberfluessig, er waere gefaehrlich: der Lauf kennt die Dateiliste von seinem
+    ANFANG, und eine waehrend der Messung uebernommene Referenz wuerde er beim
+    Schreiben wieder aus dem Cache werfen. Umgekehrt LIEST er ihn jetzt (als
+    Embedding-Quelle, s. `lade_master_bilder`) — das ist die Richtung, die traegt.
+    EHRLICHE FOLGE, benannt: fehlt der Cache ganz (frische Installation,
+    Modellwechsel), misst dieser Lauf alle Embeddings selbst und wirft sie danach
+    weg; der naechste Urteilslauf rechnet sie ein zweites Mal. Einmalige Doppelt-
+    Arbeit in einem seltenen Fall gegen einen dauerhaft riskanten Schreiber.
+
+    STUFE C (.511) — DAS URTEIL LIEGT AUF DEN GEMESSENEN ACHSEN.
+    `pruef_latten` (core.refurteil.pruef_latten, aus der Config gelesen und vom
+    Dienst hereingereicht) traegt die EIGENE Latte des Bestands-Pruefers; der
+    Norm-Boden ist derselbe `norm_latte["min"]` wie oben, kein zweiter. Daraus
+    entstehen im Bericht: das zweistufige Bild-Urteil (`pruefung[p][d]["u"]`:
+    unter beiden Achsen = Vorschlag 'raus', unter genau einer = 'auffaellig'),
+    die Byte-Dubletten-Gruppen (`dubletten`, VOR den Achsen gebildet), die
+    Personen-Warnung `gemischt` aus der Margen-Quote und der Basispaket-Rang.
+    NICHTS davon loescht je etwas — der Bericht traegt Vorschlaege, die
+    Handlung bleibt beim Nutzer ([[nicht-loeschen-mehrdeutigkeit-aufloesen]])."""
     emb = emb or Embedder()                       # det 320 default — genau richtig fuer Ref-Crops
-    B = lade_master_bilder(emb, fortschritt=fortschritt)
+    B = lade_master_bilder(emb, fortschritt=fortschritt, diagnose=diagnose)
     # .273 Qualitaets-Stufe je Bild (REF_LATTE = eine Quelle mit Bruecke/
     # Sichtung): unmessbar / unter / mindest / gut.
     # .308 (User-Go 21.08. — 'auch der QS-Knopf aufs neue Regelwerk'):
@@ -1662,10 +2031,19 @@ def pruefe_referenzen(flag_sim=0.30, top=40,
                                "sharp": b["sharp"], "kante": b["kante"], "wh": b["wh"]})
     ungeeignet.sort(key=lambda u: (PRIO.index(u["hauptgrund"]), u["kante"] or 0, u["sharp"]))
     BE = [b for b in B if b["emb"] is not None]
-    paare = []
+    # Die EINE Aehnlichkeits-Matrix des Laufs. Bis .510 lebte sie im
+    # Verwechslungs-Block; seit Stufe C rechnet die Identitaets-Achse
+    # (core.refurteil.achsen) aus DERSELBEN Matrix — eine zweite waere
+    # dieselben 5 MB und dieselbe Rechnung ein zweites Mal. Die Vektoren sind
+    # L2-normiert (bild_metriken liefert normed_embedding, der A2-Beiwert und
+    # der refcache tragen dieselbe Normierung — gemessen 1,000000 +- 7e-6),
+    # dot == Cosinus.
+    S = None
     if len(BE) >= 2:
         M = np.asarray([b["emb"] for b in BE], np.float32)
         S = M @ M.T
+    paare = []
+    if S is not None:
         pers = [b["person"] for b in BE]
         roh = []
         for i in range(len(BE)):
@@ -1718,6 +2096,24 @@ def pruefe_referenzen(flag_sim=0.30, top=40,
             doppel.append({"person": _p, "datei": b["datei"],
                            "behalten": naher["datei"],
                            "sim": round(nsim, 3), "stufe": b["stufe"]})
+    # --- Stufe C (.511): das URTEIL auf den GEMESSENEN Achsen ---------------
+    # Reihenfolge ist Absicht (Bauplan-Punkt): ENTDOPPELUNG zuerst, dann die
+    # Achsen. Der Kern einer Person und ihre Negativ-Quote duerfen nicht davon
+    # abhaengen, wie oft dasselbe Byte-gleiche Bild im Ordner liegt — auf dem
+    # Feldtester-Bestand sind das 96 Gruppen mit 135 ueberzaehligen Dateien.
+    from core import refurteil as _ru
+    dubletten = _ru.md5_gruppen(MASTER, [(b["person"], b["datei"]) for b in B])
+    _ueber = _ru.ueberzaehlig(dubletten)
+    _je_bild, _je_pers = _ru.achsen(BE, S, _ueber, np=np)
+    _rang = _ru.basispaket_rang(B)
+    _pl = pruef_latten or {}
+    for b in B:
+        # Die Guete-Achse urteilt je KAMERA, wo die Kamera bekannt ist, sonst
+        # am globalen Rueckfall (User-Entscheid Q2 — 133 Referenzen dieses
+        # Bestands tragen auch nach dem Nachtrag keine Kamera).
+        u, gr = _ru.bild_urteil(_pl, b.get("camera"), b.get("fiqa_t"),
+                                b.get("norm"), _nl.get("min"))
+        b["urteil"], b["urteil_grund"] = u, ("+".join(gr) if gr else None)
     # .273 Achse 4: Zusammenfassung je Person (Kopf-Tabelle der Seite)
     from core.benennung import perspektiv_bin as _pb273
     personen = {}
@@ -1738,9 +2134,23 @@ def pruefe_referenzen(flag_sim=0.30, top=40,
         if pr.get("kritisch"):
             _krit[pr["a_person"]] += 1
             _krit[pr["b_person"]] += 1
+    _dubl_je_p = collections.Counter()
+    for _g in dubletten:
+        _dubl_je_p[_g["person"]] += len(_g["weg"])
     for _p, e in personen.items():
         e["redundant"] = _red.get(_p, 0)
         e["kritisch"] = _krit.get(_p, 0)
+        # Stufe C: die drei Zahlen der Vorschlagsgruppen + die Personen-Warnung.
+        e["dubletten"] = _dubl_je_p.get(_p, 0)
+        e["vorschlag"] = sum(1 for b in B if b["person"] == _p
+                             and b.get("urteil") == "raus")
+        e["auffaellig"] = sum(1 for b in B if b["person"] == _p
+                              and b.get("urteil") == "auffaellig")
+        _mp = _je_pers.get(_p) or {}
+        e["marge_n"] = _mp.get("marge_n", 0)
+        e["marge_neg"] = _mp.get("marge_neg", 0)
+        e["gemischt"] = bool(_mp.get("gemischt"))
+        e["fremd"] = _mp.get("fremd")
     # Widerleger-Blocker (Konzept-QS 18.08.): der Personen-Filter wird NIE
     # persistiert — ein Ein-Person-Lauf haette sonst den Bericht ALLER
     # anderen geloescht. refs_qs.json traegt IMMER den vollen Befund; der
@@ -1764,67 +2174,315 @@ def pruefe_referenzen(flag_sim=0.30, top=40,
                                                for b in B if b["person"] == p_
                                                and b.get("norm") is not None}
                                                for p_ in personen},
+                                    # Stufe A (.511): Blick-Bin je messbarer
+                                    # Referenz — dieselbe Bin-Regel wie die
+                                    # Kopf-Zaehler oben (_pb273, 15 Grad).
+                                    # Grund ist die punktuelle Bereinigung beim
+                                    # Loeschen (qs_bericht_bereinigen): sie muss
+                                    # wissen, WELCHEN der drei Blick-Zaehler sie
+                                    # herunterzaehlen darf. Ohne diese Karte
+                                    # bliebe die Kopf-Tabelle nach jeder
+                                    # Loeschung um eins zu hoch — und der
+                                    # Bericht waere genau das, was er nie sein
+                                    # darf: still falsch.
+                                    "blick": {p_: {b["datei"]: _pb273(b.get("pose") or [], 15.0)
+                                              for b in B if b["person"] == p_
+                                              and b.get("emb") is not None}
+                                              for p_ in personen},
                                     "vorrat_refs": sorted(
                                         b["datei"] for b in B if b.get("vorrat")),
                                     "norm_latte": _nl or None,
                                     "norm_traegt": sorted(
                                         b["datei"] for b in B if b.get("norm_traegt")),
+                                    # Stufe C (.511): EINE Karte je Bild statt
+                                    # fuenf Einzelkarten — ein Feld, eine
+                                    # Behandlungsart im Bereiniger, eine
+                                    # K3-Flaeche. Kurze Schluessel, weil die
+                                    # Karte 1229 Eintraege traegt:
+                                    #   u = Urteil (core.refurteil.URTEILE)
+                                    #   g = welche Achse(n) darunter liegen
+                                    #   m = Marge (Info-Zahl, nie ein Vorschlag)
+                                    #   n = Abstand zum naechsten EIGENEN Bild
+                                    #       (EXPERIMENT, s. refurteil.achsen)
+                                    #   r = Basispaket-Rang je Person
+                                    #   q = woher die Guete kommt (ernte/datei)
+                                    #   f = naechster FREMDER Kern, nur bei
+                                    #       negativer Marge (sonst waere die
+                                    #       Karte 1229 Namen schwerer, ohne
+                                    #       dass sie jemand liest)
+                                    "pruefung": {p_: {
+                                        b["datei"]: {
+                                            k: v for k, v in (
+                                                ("u", b.get("urteil")),
+                                                ("g", b.get("urteil_grund")),
+                                                ("m", (_je_bild.get((p_, b["datei"])) or {}).get("marge")),
+                                                ("n", (_je_bild.get((p_, b["datei"])) or {}).get("nn_eigen")),
+                                                ("r", _rang.get((p_, b["datei"]))),
+                                                ("q", b.get("guete_quelle")),
+                                                ("f", ((_je_bild.get((p_, b["datei"])) or {}).get("fremd")
+                                                       if ((_je_bild.get((p_, b["datei"])) or {}).get("marge") or 0) < 0
+                                                       else None)))
+                                            if v is not None}
+                                        for b in B if b["person"] == p_}
+                                        for p_ in personen},
+                                    "dubletten": dubletten,
+                                    "pruef_latten": _pl or None,
                                     "paare": paare, "ungeeignet": ungeeignet})
+    # WETTLAUF mit dem Loeschweg (Stufe A, .511): waehrend der Messung (Minuten!)
+    # kann der Nutzer Referenzen geloescht haben. Bis .510 hat der Doppelstart-
+    # Guard das geheilt — die Loeschung setzte `_qs_nochmal` und ein ZWEITER
+    # Volllauf schrieb den Bericht richtig. Seit .511 loest eine Loeschung keinen
+    # Lauf mehr aus, also muss dieser Lauf selbst nachraeumen; sonst stuende das
+    # geloeschte Bild bis zum naechsten Anlernen wieder im frisch geschriebenen
+    # Bericht. Derselbe EINE Griff wie im Loeschweg — keine zweite
+    # Bereinigungs-Bauart.
+    _tot = {}
+    for b in B:
+        if not os.path.isfile(os.path.join(MASTER, b["person"], b["datei"])):
+            _tot.setdefault(b["person"], []).append(b["datei"])
+    for _p2, _ds2 in _tot.items():
+        qs_bericht_bereinigen(_p2, _ds2)
     if person:
         ungeeignet = [u for u in ungeeignet if u["person"] == person]
         doppel = [d for d in doppel if d["person"] == person]
         paare = [pr for pr in paare
                  if person in (pr["a_person"], pr["b_person"])]
         personen = {p_: e for p_, e in personen.items() if p_ == person}
-    # refcache im analyze-Format gleich mitschreiben (identische det-320-Embeddings, meta =
-    # sortierte Dateilisten wie sync_refs.master_stand): /aehnliche und analyze funktionieren
-    # damit SOFORT nach Loeschungen/Anlernen, ohne auf das naechste Kamera-Event zu warten
-    # (User-Befund 19.07.: "Referenz-Cache wird gerade neu aufgebaut" nach dem Aufraeumen)
-    try:
-        # Widerleger-Blocker (Konzept-QS 18.08.): waehrend der Messung kann
-        # der User Referenzen GELOESCHT haben — der Cache darf sie nicht
-        # wiederbeleben (Sichtungs-/Vorschlags-Geister). Existenz frisch
-        # pruefen, unmittelbar vor dem Schreiben.
-        def _lebt(b):
-            return os.path.isfile(os.path.join(MASTER, b["person"], b["datei"]))
-        want = {}
-        refs = {}
-        for b in B:
-            if not _lebt(b):
-                continue
-            want.setdefault(b["person"], []).append(b["datei"])
-            refs.setdefault(b["person"], [])
-        for b in BE:
-            if _lebt(b):
-                refs[b["person"]].append(b["emb"])
-        os.makedirs(CLIPS, exist_ok=True)
-        # Atomar (tmp + fsync + os.replace) wie in analyze.py: analyze LIEST diesen Cache, waehrend
-        # dieser Lauf ihn schreibt — direkt aufs Ziel geschrieben, konnte der Leser eine halbe npz
-        # erwischen (BadZipFile -> Event "fehler"). Meta unter '§meta' statt dem Keyword meta=:
-        # eine Person namens "meta" haette sonst mit np.savez kollidiert (TypeError bei JEDEM Lauf).
-        ziel = os.path.join(CLIPS, "refcache.npz")
-        # .411: eindeutige tmp ueber core.atomar (mkstemp im Zielordner) — vier
-        # Schreiber dieser Datei teilten sich `refcache.npz.tmp-<pid>`
-        # (Tester-Log 02.09.: FileNotFoundError beim replace, 2x).
-        _atomar.schreiben(
-            ziel,
-            lambda f: np.savez(f, **{"§meta": json.dumps({**want, "§modell": emb.modell})},
-                               **{p: (np.asarray(v, np.float32) if v else np.zeros((0, 512), np.float32))
-                                  for p, v in refs.items()}),
-            suffix=".npz", binaer=True)
-    except Exception as e:
-        print(f"refcache not written: {e}", flush=True)   # Cache ist Beschleunigung, kein Muss —
-                                                                # aber nicht mehr STILL scheitern
+    # REFCACHE-ENTKOPPLUNG (Stufe B, .511): hier stand bis .510 der komplette
+    # Neubau von `clips/refcache.npz`. Er ist WEG — Begruendung im Docstring.
+    # Wer den Cache baut: `analyze.load_refs` (Urteilspfad),
+    # `anlernen.refcache_aufbauen` (Hintergrund-Neubau des Dienstes),
+    # `refcache_ergaenzen`/`_viele` (Aufnahme) und `refcache_entfernen`
+    # (Loeschung). Dieser Lauf ist seitdem nur noch LESER (s. lade_master_bilder).
     return {"paare": paare, "ungeeignet": ungeeignet,
             "doppel": doppel, "personen": personen}
 
 
-def entferne_referenz(person, datei):
-    """Ein einzelnes Referenzbild aus dem Master loeschen — Datei weg, TOMBSTONE in refs_meta
-    (aktiv:false; NICHT die Zeile entfernen: ohne Tombstone wuerde sync_refs das in Frigate
-    noch vorhandene Bild als 'neu' re-importieren), QS-Liste sofort bereinigen (die Seite
-    zeigte sonst tote Bild-Links, bis der Hintergrund-Neulauf fertig ist), refcache verworfen.
-    Nur innerhalb refs/ (Containment)."""
+QS_LAUF_PATH = os.path.join(ANLERN, "refs_qs_lauf.json")
+
+
+def pruefe_referenzen_lauf(person=None, **kw):
+    """`pruefe_referenzen` MIT der Lauf-Datei fuer die Seite — der EINE Einstieg
+    fuer jeden Betriebs-Lauf (Stufe B, .511).
+
+    Bis .510 stand diese Mechanik nur im CLI-Zweig `anlernen.py pruefe`, weil der
+    Dienst den Lauf ausschliesslich als Subprozess startete. Seit Stufe B laeuft er
+    als Job im warmen Analyse-Worker (`worker.py`, typ `refqs`) — dieselbe
+    Fortschritts- und Fehleranzeige muss dort gelten, sonst zeigte `/qualitaet`
+    nach dem Umbau ewiges „checking". Ein zweiter Nachbau waere die
+    K3-Blindheit; deshalb EINE Funktion, zwei Aufrufer.
+
+    `refs_qs_lauf.json` existiert nur WAEHREND des Laufs (Fortschritt i/n) bzw.
+    nach einem Fehlschlag (`fehler`); ein Erfolg raeumt sie weg."""
+    os.makedirs(ANLERN, exist_ok=True)
+
+    def _fs(i, n):
+        if i == 1 or i % 5 == 0 or i == n:
+            _schreibe_json_atomar(QS_LAUF_PATH, {"i": i, "n": n,
+                                                 "ts": round(time.time(), 1),
+                                                 "person": person})
+    try:
+        erg = pruefe_referenzen(person=person, fortschritt=_fs, **kw)
+    except Exception as e:
+        _schreibe_json_atomar(QS_LAUF_PATH, {"fehler": f"{type(e).__name__}: {e}",
+                                             "ts": round(time.time(), 1)})
+        raise
+    try:
+        os.unlink(QS_LAUF_PATH)
+    except FileNotFoundError:
+        pass
+    return erg
+
+
+def qs_bericht_bereinigen(person, dateien=None):
+    """Den QS-Bericht (refs_qs.json) PUNKTUELL um geloeschte Referenzen bereinigen,
+    statt den Bestands-Lauf neu zu fahren (Stufe A, .511).
+
+    ANLASS, gemessen: bis .510 startete JEDE Loeschung `qs_neu_starten` und damit
+    einen Volllauf ueber den ganzen Bestand — auf der Werkbank 872,7 s fuer EIN
+    geloeschtes Bild bei 1228 Referenzen (Messung 08.09., 94 % davon Prozess-Anlauf
+    und Neumessung von Dateien, die mit dem geloeschten Bild nichts zu tun haben);
+    beim Feldtester p90 1482 s und bei Serien-Aktionen Ketten von Vollaeufen.
+
+    FACHLICHE DECKUNG: Wegnehmen kann kein VERBLIEBENES Bild schlechter machen.
+    Alle Achsen sind entweder je-Bild (Eignung, Stufe, Norm, Blick) oder PAARIG
+    (Verwechslung, Doppelte) — eine Loeschung entfernt Eintraege und zaehlt
+    herunter, sie hebt keinen Wert und macht aus keinem guten Bild ein schlechtes.
+
+    EHRLICHE GRENZE (Befund des Umbaus, bewusst getragen): drei Achsen koennen
+    einen BEFUND VERLIEREN, den erst der naechste Volllauf wiederfindet.
+    (a) Verwechslung: `paare` fuehrt je Bild nur den BESTEN fremden Partner. War
+        das geloeschte Bild dieser Partner, faellt das Paar — der naechstbeste
+        Partner des verbliebenen Bildes steht nicht im Bericht.
+    (b) Eigen-Kohaerenz: `fehllabel_verdacht` vergleicht gegen den Mittelwert der
+        EIGENEN Bilder. Faellt ein starkes eigenes Bild weg, sinkt der Mittelwert,
+        und ein bisher unauffaelliges Paar koennte kippen.
+    (c) Doppelte: faellt der Vertreter ('behalten'), faellt der Vorschlag mit —
+        zwei verbliebene Doppel sehen einander erst im naechsten Lauf wieder.
+    In allen drei Faellen fehlt ein VORSCHLAG; keiner erzeugt einen falschen
+    Loesch-Vorschlag. Das passt zum Nicht-Loeschen-Prinzip (Befunde sind Angebote,
+    nie Automatik) — und der Knopf 'Quality-check my pictures' faehrt jederzeit
+    den vollen Lauf.
+
+    person: die betroffene Person. dateien=None heisst GANZE PERSON (Weg
+    /person_loeschen, der bis .510 gar nichts bereinigte — Loch der Inventur §1).
+    -> True = Bericht bereinigt und geschrieben, False = kein/unlesbarer Bericht."""
+    try:
+        with open(QS_PATH) as f:
+            qs = json.load(f)
+    except Exception:
+        return False                       # kein Bericht da -> nichts zu bereinigen
+    if not isinstance(qs, dict):
+        return False
+    ganz = dateien is None
+    weg = set(dateien or ())
+
+    def _betroffen(p, d):
+        return p == person and (ganz or d in weg)
+
+    # --- Achsen mit (person, datei)-Eintraegen: Eintrag faellt ------------------
+    qs["paare"] = [pr for pr in (qs.get("paare") or [])
+                   if not (_betroffen(pr.get("a_person"), pr.get("a_datei"))
+                           or _betroffen(pr.get("b_person"), pr.get("b_datei")))]
+    qs["ungeeignet"] = [u for u in (qs.get("ungeeignet") or [])
+                        if not _betroffen(u.get("person"), u.get("datei"))]
+    qs["doppel"] = [d for d in (qs.get("doppel") or [])
+                    if not (_betroffen(d.get("person"), d.get("datei"))
+                            or _betroffen(d.get("person"), d.get("behalten")))]
+    # --- Kopf-Tabelle je Person: nur herunterzaehlen, was der Bericht kennt ----
+    stufen_p = ((qs.get("stufen") or {}).get(person) or {})
+    hat_blick = isinstance(qs.get("blick"), dict)     # Berichte vor .511 haben keine
+    blick_p = ((qs.get("blick") or {}).get(person) or {})
+    gezaehlt = set(stufen_p) if ganz else {d for d in weg if d in stufen_p}
+    personen = qs.get("personen")
+    if isinstance(personen, dict) and person in personen:
+        e = personen[person]
+        for d in gezaehlt:
+            st = stufen_p.get(d)
+            if st in e:
+                e[st] = max(0, int(e[st]) - 1)
+            bi = blick_p.get(d)      # fehlt bei Bildern ohne Embedding — die haben
+            if bi in e:              # auch nie einen Blick-Zaehler erhoeht
+                e[bi] = max(0, int(e[bi]) - 1)
+        if gezaehlt and not hat_blick:
+            # ALT-BERICHT (vor .511, ohne blick-Karte): welcher der drei
+            # Blick-Zaehler zum geloeschten Bild gehoerte, ist nicht mehr
+            # feststellbar. Dann lieber KEINE Zahl als eine falsche — die
+            # Kopf-Tabelle zeigt fuer die drei Spalten "—" (routes/qualitaet.py
+            # rendert fehlende Schluessel genau so), bis der naechste Volllauf
+            # sie neu zaehlt.
+            for _b in ("links", "frontal", "rechts"):
+                e.pop(_b, None)
+        e["n"] = max(0, int(e.get("n", 0)) - len(gezaehlt))
+        if ganz or not e["n"]:
+            personen.pop(person, None)
+    # --- Byte-Dubletten-Gruppen (Stufe C): schrumpfen statt verschwinden ------
+    # Faellt ein `weg`-Mitglied, wird die Gruppe kleiner; faellt der Vertreter,
+    # rueckt das naechste Mitglied nach (die Gruppe bleibt ein Vorschlag, sonst
+    # verloere der Nutzer die uebrigen Zwillinge aus dem Blick). Unter zwei
+    # verbliebenen Dateien gibt es nichts mehr zu entdoppeln.
+    _neu_d = []
+    for g in (qs.get("dubletten") or []):
+        if not isinstance(g, dict):
+            continue
+        p_ = g.get("person")
+        rest = [d for d in ([g.get("behalten")] + list(g.get("weg") or []))
+                if d and not _betroffen(p_, d)]
+        if len(rest) < 2:
+            continue
+        _neu_d.append({"md5": g.get("md5"), "person": p_,
+                       "behalten": rest[0], "weg": rest[1:]})
+    qs["dubletten"] = _neu_d
+    # --- je-Datei-Karten: Eintrag raus (Person raus, wenn sie leer laeuft) -----
+    for feld in ("stufen", "normen", "blick", "pruefung"):
+        karte = qs.get(feld)
+        if not isinstance(karte, dict):
+            continue
+        if ganz:
+            karte.pop(person, None)
+            continue
+        je_p = karte.get(person)
+        if isinstance(je_p, dict):
+            for d in weg:
+                je_p.pop(d, None)
+            if not je_p:
+                karte.pop(person, None)
+    # --- flache Namens-Listen: nur behalten, was der Bericht noch fuehrt -------
+    # (vorrat_refs/norm_traegt tragen KEINE Person — so werden sie auch gelesen,
+    # routes/qualitaet.py:284. Deshalb wird hier gegen die verbliebenen Dateien
+    # ALLER Personen gefiltert und nicht blind der Name entfernt: ein zweites
+    # Bild gleichen Namens bei einer anderen Person verloere sonst seine Marke.)
+    # Ohne stufen-Karte (Bericht einer Fassung vor .273) waere `noch` leer und
+    # die Marken fielen ALLE — dann bleibt die Liste lieber, wie sie ist.
+    if isinstance(qs.get("stufen"), dict):
+        noch = {d for m in qs["stufen"].values() if isinstance(m, dict) for d in m}
+        for feld in ("vorrat_refs", "norm_traegt"):
+            liste = qs.get(feld)
+            if isinstance(liste, list):
+                qs[feld] = [f_ for f_ in liste if f_ in noch]
+    # --- Zaehler + Kreuz-Summen der Kopf-Tabelle neu aus den Listen ------------
+    if "ref_count" in qs:
+        try:
+            qs["ref_count"] = max(0, int(qs["ref_count"]) - len(gezaehlt))
+        except (TypeError, ValueError):
+            pass
+    if isinstance(personen, dict):
+        _red = collections.Counter(d.get("person") for d in qs["doppel"])
+        _krit = collections.Counter()
+        for pr in qs["paare"]:
+            if pr.get("kritisch"):
+                _krit[pr.get("a_person")] += 1
+                _krit[pr.get("b_person")] += 1
+        # Stufe C: die Vorschlags-Zahlen und die Personen-Warnung werden aus den
+        # VERBLIEBENEN Karten neu gerechnet, nicht heruntergezaehlt. Grund: die
+        # Margen-Quote ist ein ANTEIL — sie kann durch eine Loeschung steigen
+        # (wer sein bestes Bild entfernt, dessen Katalog wird gemischter) und
+        # ist damit die einzige Groesse hier, die ein blosses Dekrement falsch
+        # machen wuerde. Gezaehlt werden wie im Lauf nur die VERTRETER: die
+        # ueberzaehligen Byte-Dubletten bleiben aussen vor.
+        from core import refurteil as _ru_b     # EINE Quelle der zwei Grenzen
+        _dubl_n = collections.Counter()
+        _weg_je_p = collections.defaultdict(set)
+        for g in (qs.get("dubletten") or []):
+            _dubl_n[g.get("person")] += len(g.get("weg") or ())
+            _weg_je_p[g.get("person")].update(g.get("weg") or ())
+        _prue = qs.get("pruefung") if isinstance(qs.get("pruefung"), dict) else {}
+        for p_, e in personen.items():
+            e["redundant"] = _red.get(p_, 0)
+            e["kritisch"] = _krit.get(p_, 0)
+            karte = _prue.get(p_)
+            if not isinstance(karte, dict):
+                continue
+            e["dubletten"] = _dubl_n.get(p_, 0)
+            e["vorschlag"] = sum(1 for z in karte.values()
+                                 if isinstance(z, dict) and z.get("u") == "raus")
+            e["auffaellig"] = sum(1 for z in karte.values()
+                                  if isinstance(z, dict)
+                                  and z.get("u") == "auffaellig")
+            vertreter = [z for d, z in karte.items()
+                         if isinstance(z, dict) and z.get("m") is not None
+                         and d not in _weg_je_p.get(p_, ())]
+            e["marge_n"] = len(vertreter)
+            e["marge_neg"] = sum(1 for z in vertreter if z["m"] < 0)
+            e["gemischt"] = bool(
+                e["marge_n"] >= _ru_b.GEMISCHT_MIN_N
+                and e["marge_neg"] > _ru_b.GEMISCHT_ANTEIL * e["marge_n"])
+            _f = collections.Counter(z.get("f") for z in vertreter
+                                     if z["m"] < 0 and z.get("f"))
+            e["fremd"] = (_f.most_common(1)[0][0] if _f else None)
+    qs.pop("unscharf", None)               # Altfeld frueherer Fassungen
+    _schreibe_json_atomar(QS_PATH, qs)     # 2. Schreiber (Dienst); der 1. ist der pruefe-Subprozess
+    return True
+
+
+def _ref_datei_weg(person, datei):
+    """Die Datei-Seite einer Loeschung: Pfad pruefen, Datei entfernen, TOMBSTONE in
+    refs_meta anhaengen (aktiv:false; NICHT die Zeile entfernen — ohne Tombstone
+    wuerde sync_refs das in Frigate noch vorhandene Bild als 'neu' re-importieren).
+    Nur innerhalb refs/ (Containment). Die Buchhaltung (QS-Bericht, refcache)
+    machen die Aufrufer GEMEINSAM fuer alle Bilder eines Zuges — sie ist der
+    teure Teil, und je Bild einmal waere bei einer 317er-Batch-Loeschung
+    (Feldtester-Maximum) 317-mal dieselbe npz."""
     import re
     from core.registry import DATEI_RE, PERSON_RE   # Vertrag (Issue #12 + Sweep 03.08.)
     if not re.fullmatch(PERSON_RE, person or "") or not re.fullmatch(DATEI_RE, datei or ""):
@@ -1838,22 +2496,53 @@ def entferne_referenz(person, datei):
         f.write(json.dumps({"ts": round(time.time(), 1), "person": person, "datei": datei,
                             "aktiv": False, "grund": "ui-entfernt"}, ensure_ascii=False) + "\n")
         f.flush()
-    try:
-        qs = json.load(open(QS_PATH))
-        qs["paare"] = [p for p in qs.get("paare", [])
-                       if not ((p["a_person"] == person and p["a_datei"] == datei) or
-                               (p["b_person"] == person and p["b_datei"] == datei))]
-        qs["ungeeignet"] = [u for u in qs.get("ungeeignet", [])
-                            if not (u["person"] == person and u["datei"] == datei)]
-        qs.pop("unscharf", None)
-        _schreibe_json_atomar(QS_PATH, qs)     # 2. Schreiber (Dienst); der 1. ist der pruefe-Subprozess
-    except Exception:
-        pass
-    try:
-        os.remove(os.path.join(CLIPS, "refcache.npz"))
-    except FileNotFoundError:
-        pass
     return True, f"{person}/{datei} entfernt"
+
+
+def _nach_loeschung(je_person):
+    """Buchhaltung nach einer Loeschung, je Person EINMAL: QS-Bericht punktuell
+    bereinigen und die Zeilen aus dem Urteils-Cache nehmen. Nur wenn der Cache
+    die Zeile nicht sicher findet, wird er wie frueher verworfen — dann baut ihn
+    der naechste Urteilslauf neu (analyze.load_refs), nie ein Ratespiel."""
+    for p, ds in je_person.items():
+        qs_bericht_bereinigen(p, ds)
+        if not refcache_entfernen(p, ds):
+            try:
+                os.remove(os.path.join(CLIPS, "refcache.npz"))
+            except FileNotFoundError:
+                pass
+
+
+def entferne_referenz(person, datei):
+    """Ein einzelnes Referenzbild aus dem Master loeschen — Datei weg, Tombstone,
+    QS-Bericht punktuell bereinigt, Zeile aus dem refcache genommen.
+    Seit .511 (Stufe A) startet das KEINEN Bestands-QS-Lauf mehr; der Bericht
+    bleibt trotzdem stimmig (qs_bericht_bereinigen), und der Urteils-Cache lebt
+    weiter (refcache_entfernen) statt bei jeder Loeschung zu sterben.
+    Vertrag unveraendert: (True, msg) / (False, grund)."""
+    ok, msg = _ref_datei_weg(person, datei)
+    if not ok:
+        return False, msg
+    _nach_loeschung({person: [datei]})
+    return True, msg
+
+
+def entferne_referenzen(items):
+    """Mehrere Referenzbilder in EINEM Zug (Batch-Loeschung der Qualitaets-Galerie,
+    Undo der Lern-Bruecke). items: [(person, datei), ...].
+    Die Buchhaltung laeuft je Person EINMAL statt je Bild — das Feldtester-Log
+    zeigt Batches bis 317 Bilder, und je Bild waeren das 317 Rundgaenge durch
+    refs_qs.json und refcache.npz.
+    -> (n_ok, [(person, datei), ...] der wirklich entfernten Bilder)."""
+    je_person = {}
+    n_ok = 0
+    for person, datei in items:
+        ok, _msg = _ref_datei_weg(person, datei)
+        if ok:
+            n_ok += 1
+            je_person.setdefault(person, []).append(datei)
+    _nach_loeschung(je_person)
+    return n_ok, [(p, d) for p, ds in je_person.items() for d in ds]
 
 
 def _cache_meta(z):
@@ -2186,6 +2875,108 @@ def diagnose_dominant(dg):
     return max(sorted(klassen), key=lambda k: klassen[k])
 
 
+# ------------------------------------------------------- Crop-Messwert-Cache (.510/J18 b)
+# WARUM (Akte B1 §1.4, 07.09.2026): die Bestands-Suche misst je Lauf bis zu
+# `max_pruef` Event-Crops mit `bild_metriken` — ~0,3 s Embedding je Bild. Der
+# Deckel wird bei Personen mit vielen Auftritten JEDES MAL erreicht, und zwar
+# ueber weitgehend DIESELBEN Bilder desselben 7-Tage-Fensters. Ein zweiter Klick
+# auf „search again" rechnete bis .509 alles neu. Gecacht wird deshalb die EINE
+# teure Messung, nichts sonst — die Entscheidungen (Latten, Identitaets-Regel)
+# laufen unveraendert auf den Messwerten.
+#
+# ORT und MECHANIK sind vom refcache uebernommen, nicht neu erfunden: dieselbe
+# Ablage (`CLIPS`), dasselbe `§meta` mit `§modell`, dasselbe atomare Schreiben
+# (`core.atomar`, .411). Ein fremdes Recognition-Modell verwirft den GANZEN
+# Cache, wie bei `refs_matrix_roh` — Embeddings verschiedener Modelle sind
+# unvergleichbar.
+#
+# INVALIDIERUNG je Zeile, weil ein Crop ueberschrieben werden kann (erneute
+# Analyse desselben Ereignisses): mtime UND Groesse der Datei stehen in der
+# Zeile; weicht eines ab, wird neu gemessen. Dazu die Frage, ob die Feature-Norm
+# beim Messen ueberhaupt VERFUEGBAR war (`norm_da`): ohne dieses Feld haette ein
+# Lauf ohne NormMass (fremdes Modell, RAM-Budget) sein `norm=None` fuer immer
+# festgeschrieben.
+#
+# EHRLICHE GRENZEN: (1) zwei gleichzeitige Suchen (zwei Personen, zwei Plaetze)
+# schreiben nacheinander atomar — die spaetere Schreibung kann Zeilen der
+# frueheren verlieren. Kosten: eine erneute Messung, kein falsches Ergebnis.
+# (2) Der Cache waechst mit den Ereignissen; geraeumt wird beim Schreiben ueber
+# das Vorhandensein der Crop-Datei (geloeschte Ereignisse fallen heraus).
+CROPCACHE = "cropcache.npz"
+_CC_LEN = 7 + 512          # flag, kante, sh, norm, mtime, size, norm_da + Embedding
+
+
+def _cropcache_pfad():
+    return os.path.join(CLIPS, CROPCACHE)
+
+
+def cropcache_lesen(modell):
+    """-> dict `"<eid>|<datei>" -> np.ndarray(_CC_LEN)`; leeres dict bei
+    fehlendem/fremdem/kaputtem Cache (er ist Beschleunigung, nie Wahrheit)."""
+    p = _cropcache_pfad()
+    if not os.path.exists(p):
+        return {}
+    try:
+        z = np.load(p, allow_pickle=True)
+        if str(_cache_meta(z).get("§modell", "")) != str(modell):
+            return {}
+        return {k: np.asarray(z[k], np.float64) for k in z.files
+                if k not in ("meta", "§meta")}
+    except Exception:
+        return {}
+
+
+def cropcache_schreiben(modell, zeilen):
+    """`zeilen` atomar ablegen (Muster refcache). Fehler werden LAUT gemeldet
+    und geschluckt: ein nicht schreibbarer Cache darf eine Suche nie kosten."""
+    try:
+        os.makedirs(CLIPS, exist_ok=True)
+        _atomar.schreiben(
+            _cropcache_pfad(),
+            lambda f: np.savez(f, **{"§meta": json.dumps({"§modell": str(modell)})},
+                               **{k: np.asarray(v, np.float64) for k, v in zeilen.items()}),
+            suffix=".npz", binaer=True)
+    except Exception as e:                      # noqa: BLE001
+        print(f"crop cache not written: {e}", flush=True)
+
+
+def _cc_schluessel(eid, datei):
+    return f"{eid}|{datei}"
+
+
+def _cc_zeile(v, kante, sh, norm, mt, sz, norm_da):
+    """Messwerte -> eine Cache-Zeile. `v is None` (kein Gesicht) ist ein
+    GUELTIGES Ergebnis und wird mitgecacht — genau diese Bilder sind sonst
+    jedes Mal wieder 0,3 s Detektion fuer ein „kein_gesicht"."""
+    z = np.zeros(_CC_LEN, np.float64)
+    z[0] = 1.0 if v is not None else 0.0
+    z[1] = float(kante) if kante is not None else np.nan
+    z[2] = float(sh)
+    z[3] = float(norm) if norm is not None else np.nan
+    z[4] = float(mt)
+    z[5] = float(sz)
+    z[6] = 1.0 if norm_da else 0.0
+    if v is not None:
+        z[7:] = np.asarray(v, np.float64).ravel()[:512]
+    return z
+
+
+def _cc_werte(z):
+    """Cache-Zeile -> (v|None, kante|None, sh, norm|None) wie `bild_metriken`."""
+    v = np.asarray(z[7:], np.float32) if z[0] >= 0.5 else None
+    kante = None if np.isnan(z[1]) else int(z[1])
+    norm = None if np.isnan(z[3]) else float(z[3])
+    return v, kante, float(z[2]), norm
+
+
+def _cc_passt(z, mt, sz):
+    """Passt die Zeile noch zu DIESER Datei (mtime + Groesse)? Eine erneute
+    Analyse desselben Ereignisses ueberschreibt Crops unter gleichem Namen —
+    ohne diese Frage wuerde der Cache alte Messwerte weiterreichen."""
+    return (z is not None and len(z) == _CC_LEN
+            and abs(float(z[4]) - float(mt)) <= 0.001 and int(z[5]) == int(sz))
+
+
 def vorschlaege_person(person, tage=7.0, max_n=16,
                        min_kante=REF_LATTE["min_kante"],
                        unscharf_max=REF_LATTE["unscharf_max"],
@@ -2193,7 +2984,7 @@ def vorschlaege_person(person, tage=7.0, max_n=16,
                        kante_gut=REF_LATTE["kante_gut"],
                        sharp_gut=REF_LATTE["sharp_gut"], max_pruef=80,
                        nur_eids=None, schreiben=True, emb=None,
-                       diagnose=None, norm_latte=None):
+                       diagnose=None, norm_latte=None, crop_cache=True):
     """Bestands-Suche (User 19.07.): durchsucht die Events der Person aus den letzten Tagen
     nach referenz-tauglichen NEUEN Gesichtern. Quelle sind Events, in denen die Person
     bestaetigt ist ODER (User 21.07.) ihr bestes Match ist — so tauchen auch SCHWACH
@@ -2210,7 +3001,12 @@ def vorschlaege_person(person, tage=7.0, max_n=16,
     je Ausschlussklasse ein Zaehler plus die Bestwerte (kante_max/sharp_max) und
     die geltenden Schwellen. Reine Berichts-Erweiterung: die Entscheidung, wer
     durchkommt, ist unveraendert; gezaehlt wird nur, WORAN es lag. Ohne dict
-    kostet sie ein paar Additionen und sonst nichts."""
+    kostet sie ein paar Additionen und sonst nichts.
+    crop_cache (.510/J18 b): die teure Bild-Messung je Crop aus dem
+    `cropcache.npz` wiederverwenden, statt bei jedem Klick dieselben Bilder des
+    7-Tage-Fensters neu einzubetten (Abschnitt oben). False = jedes Bild frisch
+    messen (Proben, Vergleichslaeufe); die ENTSCHEIDUNGEN sind in beiden Faellen
+    dieselben, nur die Rechenzeit unterscheidet sich."""
     # .235: uebergebene Instanz (svc.embedder, OV-schnell) hat Vorrang —
     # die Bruecke lief sonst auf einer zweiten CPU-Instanz (~2 s je Bild).
     emb = emb or _embedder_geteilt()
@@ -2224,10 +3020,25 @@ def vorschlaege_person(person, tage=7.0, max_n=16,
           "kante_max": None, "sharp_max": None,
           "min_kante": int(min_kante), "unscharf_max": int(unscharf_max),
           "keine_referenzen": not len(refs.get(person, [])),
-          "gedeckelt": False, "empfohlen": 0, "neutral": 0}
+          "gedeckelt": False, "empfohlen": 0, "neutral": 0,
+          # .510/J18 b: was der Crop-Cache gespart hat (Diagnose, keine Entscheidung)
+          "cache_treffer": 0, "cache_neu": 0}
 
     def _zaehl(klasse):
         dg["klassen"][klasse] = dg["klassen"].get(klasse, 0) + 1
+
+    # .510/J18 b: der Cache DIESES Laufs. Gelesen wird einmal (ein np.load), am
+    # Ende einmal geschrieben. `_norm_da` wird LAZY beantwortet: nur wenn eine
+    # Zeile fehlt oder ohne Feature-Norm gemessen wurde, muss ueberhaupt eine
+    # NormMass existieren — genau dann kostet der Klick den Bau, sonst nie.
+    _cc = cropcache_lesen(emb.modell) if crop_cache else {}
+    _cc_neu = {}
+    _nm_stand = {}
+
+    def _norm_da():
+        if "wert" not in _nm_stand:
+            _nm_stand["wert"] = _normmass_geteilt() is not None
+        return _nm_stand["wert"]
 
     if len(refs.get(person, [])):
         grenze = time.time() - tage * 86400
@@ -2286,15 +3097,41 @@ def vorschlaege_person(person, tage=7.0, max_n=16,
                 dg["gedeckelt"] = True
                 break
             datei = js[-1]
-            img = cv2.imread(os.path.join(ed, datei))
-            if img is None:
+            _pfad = os.path.join(ed, datei)
+            # .510/J18 b: Cache-Frage VOR dem Lesen des Bildes — ein Treffer
+            # spart imread UND Einbettung. Ist die Datei weg, faellt der
+            # Kandidat wie bisher als "kein_crop" (stat wirft OSError).
+            try:
+                _st = os.stat(_pfad)
+                _mt, _sz = _st.st_mtime, _st.st_size
+            except OSError:
                 _zaehl("kein_crop")
                 continue
-            geprueft += 1
-            dg["geprueft"] = geprueft
-            # .308: Norm aus DERSELBEN Detektion — der Norm-Weg qualifiziert
-            # alternativ zur Pixel-Latte (norm_latte aus der Dienst-Config).
-            v, kante, sh, norm = bild_metriken(emb, img, mit_norm=True)
+            _k = _cc_schluessel(d["eid"], datei)
+            _z = _cc.get(_k) if crop_cache else None
+            _treffer = (_cc_passt(_z, _mt, _sz)
+                        # `norm_da == 0` heisst „damals ohne Feature-Norm gemessen":
+                        # nur brauchbar, solange es auch JETZT keine gibt.
+                        and (_z[6] >= 0.5 or not _norm_da()))
+            if _treffer:
+                v, kante, sh, norm = _cc_werte(_z)
+                geprueft += 1
+                dg["geprueft"] = geprueft
+                dg["cache_treffer"] += 1
+                _cc_neu[_k] = _z
+            else:
+                img = cv2.imread(_pfad)
+                if img is None:
+                    _zaehl("kein_crop")
+                    continue
+                geprueft += 1
+                dg["geprueft"] = geprueft
+                # .308: Norm aus DERSELBEN Detektion — der Norm-Weg qualifiziert
+                # alternativ zur Pixel-Latte (norm_latte aus der Dienst-Config).
+                v, kante, sh, norm = bild_metriken(emb, img, mit_norm=True)
+                if crop_cache:
+                    dg["cache_neu"] += 1
+                    _cc_neu[_k] = _cc_zeile(v, kante, sh, norm, _mt, _sz, _norm_da())
             _nl = norm_latte or {}
             _norm_ok = (norm is not None and _nl.get("min") is not None
                         and kante is not None and norm >= _nl["min"]
@@ -2349,6 +3186,28 @@ def vorschlaege_person(person, tage=7.0, max_n=16,
     dg["dominant"] = diagnose_dominant(dg)
     if diagnose is not None:
         diagnose.update(dg)
+    # .510/J18 b: Cache fortschreiben. Behalten wird, was DIESER Lauf angefasst
+    # hat, plus jede Alt-Zeile, deren Crop-Datei es noch gibt — so raeumt die
+    # Retention den Cache mit, ohne dass er die Zeilen anderer Personen verliert.
+    # Geschrieben wird nur, wenn sich etwas geaendert hat: ein reiner
+    # Cache-Treffer-Lauf fasst die Datei nicht an.
+    if crop_cache and _cc_neu:
+        _behalten = dict(_cc_neu)
+        for _k2, _z2 in _cc.items():
+            if _k2 in _behalten:
+                continue
+            try:
+                _eid2, _dat2 = _k2.split("|", 1)
+            except ValueError:
+                continue
+            if os.path.isfile(os.path.join(DATA, "events",
+                                           _eid2.replace("/", "_"), _dat2)):
+                _behalten[_k2] = _z2
+        # Geschrieben wird bei NEUEN Messungen oder wenn Zeilen weggeraeumt
+        # wurden. Kein `dict != dict`-Vergleich: die Werte sind numpy-Arrays,
+        # deren Wahrheitswert eine Ausnahme waere.
+        if dg["cache_neu"] or set(_behalten) != set(_cc):
+            cropcache_schreiben(emb.modell, _behalten)
     if schreiben:
         os.makedirs(ANLERN, exist_ok=True)
         _schreibe_json_atomar(_vorschlaege_pfad(person),
@@ -2386,9 +3245,17 @@ def refcache_ergaenzen(person, bild_pfad, datei, emb, emb_vec=None, emb_modell=N
                 return False
         refs = {p: np.asarray(z[p], np.float32) for p in z.files
                 if p not in ("meta", "§meta")}
+        # §rows (Stufe A .511) mitfuehren: die neue Zeile haengt HINTEN an, also
+        # haengt auch ihr Dateiname hinten an. Passt die Laenge vorher nicht
+        # (Cache einer aelteren Fassung, fremder Schreiber), wird §rows NICHT
+        # erfunden, sondern weggelassen — refcache_entfernen faellt dann auf den
+        # alten Weg zurueck und verwirft, statt eine falsche Zeile zu treffen.
+        rows = _rows_pruefen(meta, refs)
         alt = refs.get(person)
         neu = v.astype(np.float32)[None, :]
         refs[person] = np.vstack([alt, neu]) if alt is not None and len(alt) else neu
+        if rows is not None:
+            rows.setdefault(person, []).append(datei)
         want = {k: list(w) for k, w in meta.items() if not str(k).startswith("§")}
         want.setdefault(person, []).append(datei)
         want[person] = sorted(set(want[person]))
@@ -2397,10 +3264,12 @@ def refcache_ergaenzen(person, bild_pfad, datei, emb, emb_vec=None, emb_modell=N
         # AttributeError -> False -> Cache verworfen -> Voll-Neuaufbau je
         # Uebernahme (User-Fund 21.08. 'Referenzen werden neu aufgebaut').
         # .411: eindeutige tmp ueber core.atomar (Kollision refcache.npz.tmp-<pid>).
+        _neu = {**want, "§modell": str(meta.get("§modell", ""))}
+        if rows is not None:
+            _neu["§rows"] = rows
         _atomar.schreiben(
             ziel,
-            lambda f: np.savez(f, **{"§meta": json.dumps({**want, "§modell": str(meta.get("§modell", ""))})},
-                               **refs),
+            lambda f: np.savez(f, **{"§meta": json.dumps(_neu)}, **refs),
             suffix=".npz", binaer=True)
         return True
     except Exception:
@@ -2450,11 +3319,14 @@ def refcache_ergaenzen_viele(person, bilder, emb, modell=None):
                 neue.append((datei, v.astype(np.float32)))
         refs = {p: np.asarray(z[p], np.float32) for p in z.files
                 if p not in ("meta", "§meta")}
+        rows = _rows_pruefen(meta, refs)        # §rows, s. refcache_ergaenzen
         want = {k: list(w) for k, w in meta.items() if not str(k).startswith("§")}
         if neue:
             alt = refs.get(person)
             M = np.vstack([v[None, :] for _, v in neue])
             refs[person] = np.vstack([alt, M]) if alt is not None and len(alt) else M
+            if rows is not None:
+                rows.setdefault(person, []).extend(d for d, _v in neue)
         # Datei-Liste traegt ALLE neuen Dateien (auch ohne Vektor) — wie want in
         # lade_master_refs/refcache_aufbauen: sync_refs.master_stand vergleicht
         # Dateilisten, nicht Vektoren.
@@ -2463,13 +3335,102 @@ def refcache_ergaenzen_viele(person, bilder, emb, modell=None):
         # .411: eindeutige tmp ueber core.atomar — genau DIESE Stelle warf beim
         # Tester (02.09.) 2x FileNotFoundError 'refcache.npz.tmp-1' -> refcache.npz
         # (zwei Laeufe im selben Prozess, gleicher tmp-Name).
+        _neu = {**want, "§modell": modell}
+        if rows is not None:
+            _neu["§rows"] = rows
         _atomar.schreiben(
             ziel,
-            lambda f: np.savez(f, **{"§meta": json.dumps({**want, "§modell": modell})}, **refs),
+            lambda f: np.savez(f, **{"§meta": json.dumps(_neu)}, **refs),
             suffix=".npz", binaer=True)
         return True
     except Exception as e:
         print(f"refcache_ergaenzen_viele failed: {type(e).__name__}: {e}", flush=True)
+        return False
+
+
+def _rows_pruefen(meta, refs):
+    """'§rows' aus dem Meta-Block holen — aber NUR, wenn es zur Matrix passt:
+    je Person genauso viele Dateinamen wie Zeilen. Sonst None.
+
+    Warum so streng: §rows ist die einzige Zuordnung Zeile -> Datei, und
+    refcache_entfernen loescht danach eine ZEILE. Eine schiefe Karte wuerde die
+    falsche Referenz aus dem Urteil nehmen — der teuerste denkbare stille
+    Fehler. Fehlt oder wackelt sie, faellt der Lösch-Weg auf 'Cache verwerfen'
+    zurueck (das Verhalten bis .510) und der naechste Urteilslauf baut ihn neu."""
+    rows = meta.get("§rows") if isinstance(meta, dict) else None
+    if not isinstance(rows, dict):
+        return None
+    for p, M in refs.items():
+        if len(rows.get(p, [])) != len(M):
+            return None
+    return {p: list(v) for p, v in rows.items() if p in refs}
+
+
+def refcache_entfernen(person, dateien=None):
+    """Gegenstueck zu refcache_ergaenzen (Stufe A, .511): geloeschte Referenzen aus
+    dem Urteils-Cache NEHMEN, statt ihn wegzuwerfen.
+
+    ANLASS (Inventur §3.3): `refcache_ergaenzen`/`_viele` pflegen seit .236/.313
+    neue Bilder EIN, damit nach jeder Uebernahme kein Voll-Neuaufbau ueber
+    hunderte Referenzen faellig wird. Fuers LOESCHEN gab es kein Gegenstueck —
+    `entferne_referenz` warf die npz weg, und der naechste Urteilslauf zahlte den
+    Neuaufbau.
+
+    dateien=None entfernt die GANZE Person (Weg /person_loeschen); dafuer braucht
+    es keine Zeilen-Zuordnung. Fuer einzelne Bilder braucht es sie: die npz haelt
+    je Person eine Matrix, deren Zeilen erst seit .511 ueber '§rows' einen
+    Dateinamen tragen.
+
+    -> True  = Cache ist konsistent (Zeile(n) entfernt, oder es gab keinen Cache)
+       False = der Aufrufer verwirft ihn wie bisher (kein/schiefes §rows, Person
+               ohne Matrix, Lese-/Schreibfehler) — nie still falsch."""
+    ziel = os.path.join(CLIPS, "refcache.npz")
+    try:
+        if not os.path.exists(ziel):
+            return True                    # kein Cache = nichts Inkonsistentes
+        z = np.load(ziel, allow_pickle=True)
+        meta = _cache_meta(z)
+        refs = {p: np.asarray(z[p], np.float32) for p in z.files
+                if p not in ("meta", "§meta")}
+        want = {k: list(w) for k, w in meta.items() if not str(k).startswith("§")}
+        rows = _rows_pruefen(meta, refs)
+        if dateien is None:
+            # Ganze Person: Matrix, Dateiliste und Zeilen-Karte fallen zusammen.
+            # Der Ordner ist weg (Papierkorb), also darf die Person auch in der
+            # Dateiliste NICHT stehenbleiben — analyze.load_refs vergleicht sie
+            # gegen sync_refs.master_stand und verwuerfe sonst den ganzen Cache.
+            refs.pop(person, None)
+            want.pop(person, None)
+            if rows is not None:
+                rows.pop(person, None)
+        else:
+            if rows is None:
+                return False
+            weg = set(dateien)
+            zeilen = rows.get(person, [])
+            M = refs.get(person)
+            if M is None:
+                return False
+            behalten = [i for i, d in enumerate(zeilen) if d not in weg]
+            spalten = M.shape[1] if getattr(M, "ndim", 0) == 2 else 512
+            refs[person] = (M[behalten] if behalten
+                            else np.zeros((0, spalten), np.float32))
+            rows[person] = [zeilen[i] for i in behalten]
+            # Die Dateiliste behaelt den (evtl. leeren) Eintrag: der Personen-
+            # ORDNER existiert weiter, und master_stand() fuehrt ihn dann mit
+            # leerer Liste — ein fehlender Schluessel waere ein Unterschied und
+            # wuerde den ganzen Cache ungueltig machen.
+            want[person] = [d for d in want.get(person, []) if d not in weg]
+        _neu = {**want, "§modell": str(meta.get("§modell", ""))}
+        if rows is not None:
+            _neu["§rows"] = rows
+        _atomar.schreiben(
+            ziel,
+            lambda f: np.savez(f, **{"§meta": json.dumps(_neu)}, **refs),
+            suffix=".npz", binaer=True)
+        return True
+    except Exception as e:
+        print(f"refcache_entfernen failed: {type(e).__name__}: {e}", flush=True)
         return False
 
 
@@ -2520,7 +3481,8 @@ def refcache_aufbauen(emb):
         return False
     _REFCACHE_STAND.update(laeuft=True, i=0, n=0)
     try:
-        refs = lade_master_refs(emb, puls=_refcache_puls)
+        zeilen = {}                    # §rows (Stufe A .511), s. refcache_entfernen
+        refs = lade_master_refs(emb, puls=_refcache_puls, namen=zeilen)
         want = {}
         for p in sorted(refs):
             pd = os.path.join(MASTER, p)
@@ -2530,7 +3492,8 @@ def refcache_aufbauen(emb):
         # .411: eindeutige tmp ueber core.atomar (Kollision refcache.npz.tmp-<pid>).
         _atomar.schreiben(
             ziel,
-            lambda f: np.savez(f, **{"§meta": json.dumps({**want, "§modell": emb.modell})},
+            lambda f: np.savez(f, **{"§meta": json.dumps({**want, "§modell": emb.modell,
+                                                          "§rows": zeilen})},
                                **refs),
             suffix=".npz", binaer=True)
         _REFCACHE_STAND["fehler"] = 0
@@ -3361,6 +4324,11 @@ if __name__ == "__main__":
     pr.add_argument("--norm-min", type=float, default=None)
     pr.add_argument("--norm-kante", type=int, default=None)
     pr.add_argument("--norm-sharp", type=int, default=None)
+    # .511 Stufe C: die Pruefer-Latte (fiqa_t) fuer CLI-Laeufe. Ohne Angabe
+    # urteilt die Guete-Achse NICHT (quelle 'aus') — der Dienst reicht die
+    # Latten aus der Config durch, die CLI ist ein Diagnose-Weg und erfindet
+    # keine Zahl.
+    pr.add_argument("--pruef-t", type=float, default=None)
     vo = sub.add_parser("vorschlaege"); vo.add_argument("person")
     vo.add_argument("--tage", type=float, default=7.0)
     vo.add_argument("--unscharf", type=int, default=350)
@@ -3416,31 +4384,25 @@ if __name__ == "__main__":
     elif a.cmd == "pruefe":
         # .273 Bestands-QS: Fortschritt fuer die Seite (refs_qs_lauf.json —
         # existiert nur waehrend des Laufs bzw. nach einem Fehlschlag mit
-        # 'fehler'; Erfolg raeumt sie weg).
-        _lp = os.path.join(ANLERN, "refs_qs_lauf.json")
-        os.makedirs(ANLERN, exist_ok=True)
-
-        def _fs(i, n):
-            if i == 1 or i % 5 == 0 or i == n:
-                _schreibe_json_atomar(_lp, {"i": i, "n": n,
-                                            "ts": round(time.time(), 1),
-                                            "person": a.person})
-        try:
-            _nl_cli = ({"gut": a.norm_gut, "min": a.norm_min,
-                        "kante": a.norm_kante, "sharp": a.norm_sharp}
-                       if a.norm_min is not None else None)
-            erg = pruefe_referenzen(a.sim, unscharf_max=a.unscharf,
-                                    min_kante=a.minkante, person=a.person,
-                                    dup_sim=a.dupsim, fortschritt=_fs,
-                                    norm_latte=_nl_cli)
-            try:
-                os.unlink(_lp)
-            except FileNotFoundError:
-                pass
-        except Exception as e:
-            _schreibe_json_atomar(_lp, {"fehler": f"{type(e).__name__}: {e}",
-                                        "ts": round(time.time(), 1)})
-            raise
+        # 'fehler'; Erfolg raeumt sie weg). .511 Stufe B: die Mechanik steht in
+        # pruefe_referenzen_lauf, damit CLI und warmer Worker DENSELBEN
+        # Einstieg nehmen.
+        _nl_cli = ({"gut": a.norm_gut, "min": a.norm_min,
+                    "kante": a.norm_kante, "sharp": a.norm_sharp}
+                   if a.norm_min is not None else None)
+        _dg_cli = {}
+        _pl_cli = ({"global": {"t": a.pruef_t}, "kameras": {}}
+                   if a.pruef_t is not None else None)
+        erg = pruefe_referenzen_lauf(person=a.person, flag_sim=a.sim,
+                                     unscharf_max=a.unscharf,
+                                     min_kante=a.minkante, dup_sim=a.dupsim,
+                                     norm_latte=_nl_cli, pruef_latten=_pl_cli,
+                                     diagnose=_dg_cli)
+        print(f"\nSTORE: {_dg_cli.get('gemessen', 0)} image(s) measured, "
+              f"{_dg_cli.get('aus_speicher', 0)} read from the measurement store, "
+              f"{_dg_cli.get('beiwert', 0)} from stock embeddings; camera resolved "
+              f"for {_dg_cli.get('kamera_gefunden', 0)} of "
+              f"{_dg_cli.get('kamera_gesucht', 0)} looked up")
         paare, ug = erg["paare"], erg["ungeeignet"]
         import collections
         print(f"\nSUITABILITY: {len(ug)} images flagged:",
