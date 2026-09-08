@@ -487,9 +487,16 @@ VERWURF_TEXT_PRAEFIX = "event.verwurf_grund."
 # SUPPORT_MASKE_ORDNER nur MASKIERT ausgeliefert wird (core/support).
 SUPPORT_BEREICHE = {
     "inventar":   {"art": "json", "text": "what is available (sizes, runs)"},
+    # B7 (07.09.2026): der Zusatz "including access data inside a value" ist
+    # nicht Kosmetik — der Text sagte "secrets are replaced by ***" zu,
+    # waehrend live.guards.<Kamera>.url die RTSP-Zugangsdaten im Klartext
+    # trug (F1-Fund). Erst core/support.url_maskiert macht die Zusage wahr;
+    # der Text sagt seither auch, WAS lesbar bleibt (Host/Pfad).
     "config":     {"art": "json",
                    "text": "masked config export — secrets are replaced by "
-                           "***, plain-text values never leave the machine"},
+                           "***, including access data inside a value (a "
+                           "camera URL leaves as rtsp://***@host/path); "
+                           "plain-text values never leave the machine"},
     "logs":       {"art": "tar", "wurzel": ("logs",),
                    "text": "current + rotated service logs"},
     "faces":      {"art": "tar", "wurzel": ("faces",),

@@ -14,6 +14,8 @@ T = {
         "con el botón de cada persona o subir una foto abajo, también para "
         "una persona completamente nueva.",
     "gesichter.galerie.bildzahl": "{n} imágenes",
+    "gesichter.galerie.gemischt": "el catálogo parece mezclado",
+    "gesichter.galerie.vorschlag": "{n} sugerencia(s) para quitar",
     "gesichter.galerie.knopf_entfernen": "quitar",
     "gesichter.galerie.knopf_aehnliche": "buscar rostros coincidentes",
     "gesichter.galerie.knopf_qs": "Comprobar calidad",
@@ -226,7 +228,12 @@ T = {
     "aehnliche.unbekannt.titel": "De rostros desconocidos",
     "aehnliche.unbekannt.suche_titel":
         "Búsqueda en curso — se están releyendo las referencias.",
-    "aehnliche.unbekannt.suche_hinweis": "La página se actualiza sola.",
+    "aehnliche.unbekannt.kein_cache":
+        "Las referencias aún no se han leído.",
+    "aehnliche.unbekannt.kein_cache_hinweis":
+        "Esta lista necesita el índice de referencias. La comprobación de "
+        "referencias lo escribe; después aparecerá aquí un resultado.",
+    "aehnliche.unbekannt.knopf_pruefen": "comprobar referencias",
     "aehnliche.unbekannt.hinweis_leer":
         "No hay rostros desconocidos parecidos guardados.",
     "aehnliche.unbekannt.aehnlichkeit": "similitud {sim}",
@@ -235,8 +242,19 @@ T = {
         "Rostros nuevos de eventos reconocidos (7 días)",
     "aehnliche.vorschlaege.suche_titel":
         "Búsqueda en curso — se están repasando los eventos reconocidos.",
-    "aehnliche.vorschlaege.suche_hinweis":
-        "La página se actualiza sola; resultado en uno o dos minutos.",
+    "aehnliche.vorschlaege.nie_gesucht":
+        "Todavía no se ha buscado.",
+    "aehnliche.vorschlaege.nie_gesucht_hinweis":
+        "La búsqueda en los eventos reconocidos se lanza al pulsar, no en "
+        "segundo plano.",
+    "aehnliche.vorschlaege.stand_leer": "última búsqueda {stand}",
+    "aehnliche.suche.rechnet":
+        "La búsqueda está en marcha; la página se recarga sola en cuanto "
+        "el resultado está listo.",
+    "aehnliche.suche.wartet_platz":
+        "Esperando un puesto de análisis libre ({belegt} de {plaetze} "
+        "ocupados); la página se recarga sola en cuanto el resultado está "
+        "listo.",
     "aehnliche.vorschlaege.kachel_zeile": "{wann} · {kamera} · sim {sim}",
     "aehnliche.vorschlaege.titel_empfohlen": "Recomendados",
     "aehnliche.vorschlaege.titel_neutral":
@@ -1014,6 +1032,7 @@ T = {
     "livekalib.fueller.bilder": "imagen(es)",
     "livekalib.tab_erkennen": "Reconocer",
     "livekalib.tab_lernen": "Catálogo de rostros",
+    "livekalib.tab_pruefen": "Revisión del catálogo",
     "livekalib.uebernehmen": "Aplicar",
     "livekalib.leer": "Aún no hay muestras. Llegan solas — de un vigilante en marcha y de cada análisis de eventos de esta cámara, una cara cada vez. Si no quiere esperar, use abajo \"Buscar material nuevo\".",
     "livekalib.zurueck": "volver al vigilante",
@@ -1025,16 +1044,24 @@ T = {
     "livekalib.abschnitt.anzeige": "Avisos, visualización y muestras",
     "livekalib.abschnitt.anzeige_prosa": "Estos tres deciden qué imagen de esta cámara entra en un aviso y qué caras se guardan aquí como muestras. No deciden a quién se reconoce.",
     "livekalib.abschnitt.katalog": "Umbral del catálogo",
+    "livekalib.abschnitt.pruefen": "Listón de revisión del catálogo",
     "livekalib.abschnitt.material": "Material",
-    "livekalib.katalog.prosa": "Un liston propio y mas estricto: lo bueno que debe ser una cara de esta camara para convertirse en referencia por las vias AUTOMATICAS (adopcion del ciclo de aprendizaje, aceptar propuestas/reservas). Lo que marcas y nombras tu mismo pasa deliberadamente de largo: lo marcado se aprende, y el control de calidad puede descartar despues.",
+    "livekalib.katalog.prosa": "Un suelo, no un filtro: lo bueno que debe ser una cara de esta cámara para convertirse en referencia por las vías AUTOMÁTICAS (adopción del ciclo de aprendizaje, aceptar propuestas/reservas). Es generosa a propósito: admitir es la puerta ancha, descartar es tarea de la revisión del catálogo en la pestaña siguiente. Lo que marcas y nombras tú mismo pasa de largo por completo.",
     "livekalib.katalog.grenze": "Lo que no hace: nunca elimina referencias existentes y nunca cambia a quién se reconoce. Las imágenes sin puntuaciones de calidad (material antiguo o una versión sin los modelos de calidad) pasan intactas — un umbral sin medición descartaría a ciegas.",
     "livekalib.katalog.quelle_kamera": "En uso: los valores propios de esta cámara.",
     "livekalib.katalog.quelle_global": "En uso: el valor global de reserva — esta cámara aún no tiene valores propios.",
     "livekalib.katalog.quelle_aus": "Sin umbral de catálogo: cualquier imagen puede convertirse en referencia.",
     "livekalib.katalog.regler_e": "Catálogo: impresión de la imagen",
-    "livekalib.katalog.regler_e_prosa": "Impresión mínima para una referencia de esta cámara. Manténla por encima del control de arriba: lo que basta para mostrar no basta automáticamente para aprender.",
+    "livekalib.katalog.regler_e_prosa": "Impresión mínima para una referencia de esta cámara. Baja a propósito: incluso una imagen mediocre aporta algo que aprender, y la revisión del catálogo vuelve a mirarla más tarde.",
     "livekalib.katalog.regler_t": "Catálogo: reconocibilidad",
     "livekalib.katalog.regler_t_prosa": "Reconocibilidad mínima para una referencia de esta cámara. Es la que mantiene las caras medio tapadas fuera del catálogo.",
+    "livekalib.pruefen.prosa": "Este listón juzga imágenes que YA tienes. Por debajo de él, la revisión del catálogo marca una imagen guardada de esta cámara; junto con una norma de rasgos débil se convierte en una sugerencia de retirada que puedes pulsar. Nunca admite una imagen ni quita ninguna por su cuenta.",
+    "livekalib.pruefen.grenze": "Está separado a propósito del listón de arriba: admitir una imagen y revisarla más tarde son dos preguntas, y mover un control no debe mover el otro en silencio. Las imágenes sin puntuación de calidad nunca se marcan.",
+    "livekalib.pruefen.quelle_kamera": "En uso: el valor propio de esta cámara.",
+    "livekalib.pruefen.quelle_global": "En uso: el valor global de reserva — esta cámara aún no tiene valor propio.",
+    "livekalib.pruefen.quelle_aus": "Sin listón de revisión: la revisión del catálogo no juzga la calidad de imagen.",
+    "livekalib.pruefen.regler_t": "Revisión: reconocibilidad",
+    "livekalib.pruefen.regler_t_prosa": "Por debajo de esta puntuación de reconocibilidad se marca una imagen guardada de esta cámara. El valor por defecto viene de un conjunto de imágenes de catálogo puntuadas a mano, no de una suposición.",
     "livekalib.material.aus": "La recogida de muestras está desactivada (Advanced, calibration samples). Sin muestras esta página no tiene nada que mostrar.",
     "livekalib.material.stand": "{n} de un máximo de {deckel} muestras guardadas",
     "livekalib.material.wann": "última {wann}",
@@ -1046,6 +1073,7 @@ T = {
     "livekalib.material.fuellen_prosa": "La búsqueda de material recorre los últimos eventos de persona de esta cámara y guarda la mejor cara de cada uno. Se detiene con {ziel} imágenes o tras {events} eventos, lo que ocurra primero.",
     "livekalib.material.lauf": "Además {n} imagen(es) de esta cámara del último proceso de aprendizaje — aparecen abajo y están marcadas.",
     "livekalib.js.katalog": "{n} de {gesamt} podrían entrar en el catálogo",
+    "livekalib.js.pruefen": "la revisión marcaría {n} de {gesamt}",
     "livekalib.js.lauf": "proceso",
     # ----------------------------------------------- routes/erkennung ---
     "erkennung.titel": "Reconocimiento",
@@ -1181,11 +1209,12 @@ T = {
     "qualitaet.tabelle.kopf_links": "&larr; izquierda",
     "qualitaet.tabelle.kopf_front": "frontal",
     "qualitaet.tabelle.kopf_rechts": "derecha &rarr;",
-    "qualitaet.tabelle.kopf_doppel": "duplicadas",
+    "qualitaet.tabelle.kopf_doppel": "parecidas",
     "qualitaet.tabelle.kopf_verwechslung": "confusión",
     "qualitaet.person.funde": "{n} imagen(es) que merecen un vistazo",
     "qualitaet.person.verwechselt": "posible confusión",
     "qualitaet.person.alles_gut": "todo bien",
+    "qualitaet.person.gemischt": "el catálogo parece mezclado",
     "qualitaet.ergebnis.alles_gut": "Todo bien.",
     "qualitaet.ergebnis.alles_gut_satz":
         "Comprobadas {n} imágenes de {np} personas &mdash; nada requiere "
@@ -1203,6 +1232,17 @@ T = {
     "qualitaet.galerie.vorrat": "del material",
     "qualitaet.galerie.norm": "calidad {norm}",
     "qualitaet.galerie.okay": "aceptable",
+    "qualitaet.galerie.unter_beide": "por debajo del listón de revisión y del suelo de norma",
+    "qualitaet.galerie.unter_guete": "por debajo del listón de revisión",
+    "qualitaet.galerie.unter_norm": "por debajo del suelo de norma",
+    "qualitaet.galerie.guete_datei": "valor medido en el recorte guardado",
+    "qualitaet.galerie.rang": "#{rang} de esta persona",
+    "qualitaet.galerie.marge": "margen de identidad {marge}",
+    "qualitaet.galerie.dubl_behalten": "conservar esta",
+    "qualitaet.galerie.dubl_weg": "copia idéntica",
+    "qualitaet.galerie.dubl_hinweis": "Estos archivos son idénticos byte a byte. Aquí “Seleccionar todo” marca todas las copias salvo la primera de cada grupo — revísalas y quita lo que no necesites.",
+    "qualitaet.galerie.noface_hinweis": "En estas imágenes no se encontró ninguna cara, así que no se pudo medir nada en ellas. Merece la pena mirarlas: algunas tienen una cara que el detector pasó por alto, otras no tienen ninguna.",
+    "qualitaet.galerie.gemischt": "Este catálogo parece mezclado: {neg} de {n} imágenes están más cerca de {fremd} que de esta persona. Míralas antes de aprender de ellas — no se quita nada sin tu clic.",
     "qualitaet.galerie.satz_gut": "Las {n} imágenes se ven bien.",
     "qualitaet.galerie.satz_funde":
         "{funde} de {n} imágenes merecen un vistazo — las dos pestañas de "
@@ -1211,6 +1251,8 @@ T = {
     "qualitaet.reiter.gut": "Buenas ({n})",
     "qualitaet.reiter.check": "Revisar estas ({n})",
     "qualitaet.reiter.weg": "Se sugiere quitar ({n})",
+    "qualitaet.reiter.dubl": "Copias idénticas ({n})",
+    "qualitaet.reiter.noface": "Sin cara ({n})",
     "qualitaet.galerie.knopf_alle": "Seleccionar todo",
     "qualitaet.galerie.knopf_keine": "Quitar toda la selección",
     "qualitaet.galerie.knopf_entfernen": "Quitar seleccionadas",
@@ -1362,6 +1404,8 @@ T = {
     "kalib.kachel.vorgabe": "valores por defecto",
     "kalib.kachel.fremd": "no está en Frigate",
     "kalib.kachel.fremd_tip": "Esta cámara tiene valores de calibración pero Frigate ya no la informa. Los valores se conservan, no se borra nada.",
+    "kalib.kachel.offline": "Frigate no conectado",
+    "kalib.kachel.offline_tip": "Esta cámara se conoce por lo que hay guardado aquí: sus valores y sus muestras. Frigate no responde ahora mismo, así que no se sabe si sigue existiendo allí. Calibrarla funciona igualmente.",
     "kalib.kachel.vorrat": "{n} de {deckel} muestras",
     "kalib.kachel.vorrat_aus": "La recogida de muestras está desactivada (Advanced, calibration samples).",
     "kalib.kachel.stand": "última {wann}",
@@ -3073,6 +3117,9 @@ T = {
     "antwort.person_name_ungueltig": "nombre no válido",
     "antwort.person_unbekannt": "persona desconocida",
     "antwort.pruefung_gestartet": "comprobación iniciada",
+    "antwort.pruefung_laeuft":
+        "comprobación en curso: recarga esta página dentro de un minuto",
+    "antwort.ref_batch_weg": "{n} imagen(es) eliminada(s)",
     "antwort.reorg_los":
         "Reorganizando (se vuelven a comprobar los rostros recogidos y se "
         "reagrupan; 1-2 min, después recarga las páginas)",

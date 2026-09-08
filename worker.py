@@ -20,6 +20,14 @@ WORKER_ANTWORT_FD (eigene Pipe — stdout gehoert den Skripten!). Ein Job at a t
 serialisiert (self.lock) und haelt Timeout/killpg. stdin-EOF (execv-Waise/Ende) -> Exit.
   {"typ":"analyze","argv":[...],"log":"/pfad/analyze.log"}
   {"typ":"sammle","tage":0.1,"mit_migriere":false,"log":"..."}
+  {"typ":"vorschlaege","person":"...","tage":7.0,"minkante":70,"unscharf":350,
+   "norm_latte":{...}|null,"log":"..."}   (.510/J18: die Bestands-Suche auf Klick,
+      im warmen Prozess statt als Subprozess; Antwortfeld "vorschlaege" = Zaehler)
+  {"typ":"refqs","unscharf":350,"minkante":70,"dupsim":0.75,
+   "norm_latte":{...}|null,"log":"..."}   (.511/Stufe B: die Bestands-QS des
+      Gesichtskatalogs im warmen Prozess statt als Subprozess `anlernen.py
+      pruefe`; Antwortfeld "refqs" = Zaehler des Laufs. IMMER ungefiltert —
+      der Personen-Filter ist reine Anzeige, Widerleger-Blocker .273)
   {"typ":"ernte","eid":"...","kamera":"...","ts":0,"fps_sample":3,
    "schwellen":{...},"lauf_dir":"...","log":"..."}   (E2: 1 Event je Job, Live-Vorrang)
   {"typ":"rechenprobe","zeitbudget_s":60,"backend_geraet_je_task":{...},"log":"..."}
@@ -147,6 +155,36 @@ def _normmass_fuer_ernte(wache=None):
     nm = _normmass_holen()
     if getattr(nm, "ok", False):
         _laut(f"worker phase: feature-norm ready on {nm.device}")
+    return nm
+
+
+class _NormAus:
+    """Platzhalter „in diesem Prozess laeuft KEINE Feature-Norm" (.510/J18 b).
+
+    `anlernen.bild_metriken` holt seine NormMass ueber das Modul-Global
+    `anlernen._NORMMASS` (`_normmass_geteilt`) und BAUT sie beim ersten Zugriff
+    selbst — ohne Budget-Pruefung und ohne Anmeldung bei der RSS-Wache. Genau das
+    ist im Worker nicht erlaubt: hier gibt es die EINE budgetierte Quelle
+    (`_normmass_fuer_ernte`). Liefert die None (Budget zu knapp, fremdes Modell),
+    muss `anlernen` das AUCH sehen — sonst baut es sich seine eigene daneben.
+    Dieses Objekt beantwortet die zwei Fragen, die `_normmass_geteilt` stellt
+    (`.modell`, `.ok`), und nichts weiter."""
+
+    ok = False
+
+    def __init__(self, modell):
+        self.modell = modell
+
+
+def _normmass_an_anlernen(wache=None):
+    """Die EINE warme NormMass des Workers auch fuer `anlernen` sichtbar machen
+    (.510/J18 b: die Bestands-Suche laeuft seitdem hier statt im Subprozess).
+    -> die Instanz oder None; `anlernen._NORMMASS` traegt danach in beiden
+    Faellen einen Wert, es baut also nie selbst."""
+    import anlernen
+    import face_audit
+    nm = _normmass_fuer_ernte(wache)
+    anlernen._NORMMASS = nm if nm is not None else _NormAus(face_audit.aktuelles_modell())
     return nm
 
 
@@ -616,7 +654,9 @@ def _job_ausfuehren(job, antwort_out=None):
     # traegt deshalb ueber Prozessgrenzen (flock-Slots neben dem Clip-Cache).
     # Armiert wird JE JOB aus dem Job-Feld, dasselbe Muster wie
     # CLIP_ERZEUGUNG: die Ernte-Jobs des Lernlaufs und des Pass-Checks tragen
-    # es, Live-/Melde-Jobs nicht (0 = kein Tor, wie bisher).
+    # es, seit .510/J15 auch die ANALYSE-Jobs (Live wie Nachhol — J15: mit vier
+    # Plaetzen zogen sonst vier bis fuenf clip.mp4 gleichzeitig); die
+    # Melde-Jobs nicht (0 = kein Tor, wie bisher).
     _clipdbg_fr.CLIP_TOR_N = int(job.get("clip_tor") or 0)
     # .509 Review-MUSS: der WARTE-DECKEL am Tor, ebenfalls je Job aus der
     # Dienst-Config. Ohne ihn lief die Wartezeit in die Job-Frist des Dienstes,
@@ -641,6 +681,87 @@ def _job_ausfuehren(job, antwort_out=None):
                 anlernen.sammle(float(job.get("tage", 0.1)),
                                 mit_migriere=bool(job.get("mit_migriere", False)),
                                 kalib_deckel=job.get("kalib_deckel"))
+            elif typ == "vorschlaege":
+                # .510/J18 (b): die BESTANDS-SUCHE einer Person laeuft seit .510
+                # HIER statt als eigener Subprozess. Der Grund sind die
+                # Fixkosten: der alte Weg baute je Klick einen frischen Embedder
+                # (11-13 s) und eine frische NormMass (4-10 s, ~2 GB RSS ohne
+                # Budget-Pruefung) und hielt dafuer `_gpu_bg_lock`. Hier sind
+                # beide warm; die Rechnung selbst dauert Sekunden. Der Dienst
+                # gibt dem Job einen Platz der Klasse `interaktiv` — hinter ihm
+                # wartet ein Mensch auf sein Ergebnis.
+                import anlernen
+                import face_audit
+                _normmass_an_anlernen(wache)     # EINE budgetierte Quelle, s. dort
+                _kw = {}
+                if job.get("minkante") is not None:
+                    _kw["min_kante"] = int(job["minkante"])
+                if job.get("unscharf") is not None:
+                    _kw["unscharf_max"] = int(job["unscharf"])
+                if job.get("tage") is not None:
+                    _kw["tage"] = float(job["tage"])
+                _dg = {}
+                anlernen.vorschlaege_person(
+                    job["person"], norm_latte=job.get("norm_latte"),
+                    emb=face_audit.Embedder(), diagnose=_dg, **_kw)
+                # Die Zaehler reisen in der Antwort mit (Muster ernte): der
+                # Dienst loggt daraus EINE Zeile je Suche — sonst stuende ueber
+                # den Lauf nur "finished", wie bis .509.
+                zusatz = {"vorschlaege": {
+                    "person": job["person"],
+                    "events": int(_dg.get("events") or 0),
+                    "geprueft": int(_dg.get("geprueft") or 0),
+                    "cache_treffer": int(_dg.get("cache_treffer") or 0),
+                    "cache_neu": int(_dg.get("cache_neu") or 0),
+                    "empfohlen": int(_dg.get("empfohlen") or 0),
+                    "neutral": int(_dg.get("neutral") or 0),
+                    "gedeckelt": bool(_dg.get("gedeckelt")),
+                    "dominant": _dg.get("dominant")}}
+            elif typ == "refqs":
+                # Stufe B (.511): die BESTANDS-QS des Gesichtskatalogs laeuft
+                # seitdem HIER statt als frischer Subprozess `anlernen.py pruefe`.
+                # Dieselbe Rechnung wie beim Bestands-Suche-Umbau (.510/J18, s.
+                # `vorschlaege` oben), nur teurer: der Subprozess kostete auf der
+                # Werkbank 144 s reinen ANLAUF je Lauf (Embedder + NormMass), er
+                # hielt `_gpu_bg_lock` ueber die ganze Laufzeit und damit auch
+                # Lernlauf-, Bruecken- und Kalibrier-Ernte auf, und er machte
+                # einen EIGENEN GPU-Kontext neben den Analyse-Workern auf —
+                # beim Feldtester viermal „the resource allocation failed"
+                # (CUDA-OOM, 06./08.09.). Hier sind Embedder und NormMass warm,
+                # der Job haelt einen regulaeren Analyse-Platz der Klasse
+                # `interaktiv`, und es gibt keinen zweiten Kontext.
+                import anlernen
+                import face_audit
+                _normmass_an_anlernen(wache)     # EINE budgetierte Quelle, s. dort
+                _dg = {}
+                _kw = {}
+                if job.get("minkante") is not None:
+                    _kw["min_kante"] = int(job["minkante"])
+                if job.get("unscharf") is not None:
+                    _kw["unscharf_max"] = int(job["unscharf"])
+                if job.get("dupsim") is not None:
+                    _kw["dup_sim"] = float(job["dupsim"])
+                anlernen.pruefe_referenzen_lauf(
+                    person=None,                 # der Lauf ist IMMER ungefiltert
+                    norm_latte=job.get("norm_latte"),
+                    # Stufe C (.511): die Pruefer-Latten reisen fertig mit
+                    # (core.refurteil.pruef_latten im Dienst gelesen) — der
+                    # Worker greift nie selbst in die Config.
+                    pruef_latten=job.get("pruef_latten"),
+                    emb=face_audit.Embedder(), diagnose=_dg, **_kw)
+                zusatz = {"refqs": {
+                    "gesamt": int(_dg.get("gesamt") or 0),
+                    "gemessen": int(_dg.get("gemessen") or 0),
+                    # Stufe C (.511): die einmalige Guete-Nachmessung der
+                    # Vorrats-Referenzen und die erreichte Guete-Deckung —
+                    # beide gehoeren in die Bilanz-Zeile des Dienstes.
+                    "guete_nachgemessen": int(_dg.get("guete_nachgemessen") or 0),
+                    "guete_deckung": int(_dg.get("guete_deckung") or 0),
+                    "aus_speicher": int(_dg.get("aus_speicher") or 0),
+                    "beiwert": int(_dg.get("beiwert") or 0),
+                    "kamera_gesucht": int(_dg.get("kamera_gesucht") or 0),
+                    "kamera_gefunden": int(_dg.get("kamera_gefunden") or 0),
+                    "guete_da": bool(_dg.get("guete_da"))}}
             elif typ == "ernte":
                 # E2 Frontal-Ernte, EIN Event je Job (Leitprinzip 5). Z2
                 # (konzept_frames v2): Clip ueber core.frames statt eigener

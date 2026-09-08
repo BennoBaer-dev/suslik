@@ -38,6 +38,19 @@ bekommt zwei Zusagen dazu:
    Was sich dort nicht als JSON deuten laesst, wird gar nicht roh
    ausgeliefert, sondern durch die Maske ersetzt (zu viel maskieren ist
    die sichere Richtung).
+
+B7 (Bauplan 0.1.0.510, F1-Fund 07.09.2026) — ZWEITE Maskier-Achse: bis
+hierher entschied ueber ein Secret allein der FELDNAME (SUPPORT_SECRET_
+MUSTER). Am Feld `live.guards.<Kamera>.url` ging das schief: der Name sagt
+"url", der Wert trug `rtsp://user:pass@host/...`, und /support/config lieferte
+ihn im Klartext aus — obwohl der Bereichstext "secrets are replaced by ***"
+zusagt. Seither maskiert `maskiert()` zusaetzlich am WERT (url_maskiert):
+jeder Zeichenketten-Blattwert verliert seinen userinfo-Teil und seine
+geheimen Query-Parameter, Host und Pfad bleiben lesbar. Kein Feldnamen-
+Verzeichnis (K3: eine frei benannte Kamera stuende nie darin), und keine
+zweite Maskier-Regex — die EINE Funktion ist core.registry.endpunkt_anzeige,
+dieselbe, die der Live-Waechter fuer seine Logzeilen und der Vision-Block
+fuer Anzeige/Status nimmt.
 """
 import hashlib
 import hmac
@@ -51,7 +64,8 @@ import threading
 import time
 
 from core.registry import (SUPPORT_BEREICHE, SUPPORT_MASKE_ORDNER,
-                           SUPPORT_SECRET_MUSTER, LAUF_ID_RE)
+                           SUPPORT_SECRET_MUSTER, LAUF_ID_RE,
+                           endpunkt_anzeige)
 
 MASKE = "***"
 # Bereichs-Code des Vollbaums — EINE Quelle fuer Handler, Route und Gate
@@ -90,14 +104,66 @@ def abweisung_zaehlen(log):
 def maskiert(wert, name=""):
     """Config-Export-Maskierung (Widerleger 1): rekursiv; ein Feld ist
     Secret, wenn sein Name eines der SUPPORT_SECRET_MUSTER enthaelt.
-    Zu viel maskieren ist die sichere Richtung."""
+    Zu viel maskieren ist die sichere Richtung.
+
+    B7: dazu die WERT-Achse — jeder Zeichenketten-Blattwert laeuft durch
+    url_maskiert. Der Feldname allein reichte nicht (F1-Fund am
+    live.guards.<Kamera>.url, Kopfkommentar); beide Achsen zusammen sind
+    die Zusage des Bereichstexts."""
     if isinstance(wert, dict):
         return {k: (MASKE if _geheim(k) and isinstance(v, (str, int, float))
                     and v not in ("", None)
                     else maskiert(v, k)) for k, v in wert.items()}
     if isinstance(wert, list):
         return [maskiert(v, name) for v in wert]
-    return wert
+    return url_maskiert(wert)
+
+
+def url_maskiert(wert):
+    """Zugangsdaten aus EINEM Wert nehmen — die Wert-Achse der Maskierung
+    (B7, F1-Fund 07.09.2026). Sie greift nicht am Feldnamen, sondern am
+    Inhalt: was eine Authority mit '@' traegt, verliert den userinfo-Teil,
+    Host und Pfad bleiben stehen (ein Export ohne lesbare Adresse waere als
+    Diagnose wertlos); ein geheimer Query-Parameter (?token=…) faellt
+    genauso — derselbe Leck-Fall, nur der zweite Traeger. Angesehen werden
+    nur Zeichenketten mit '@' oder '://'; alles andere (Zahlen, Namen,
+    Freitext) geht unberuehrt durch, und ein Wert, an dem nichts zu
+    maskieren ist, kommt WOERTLICH heraus (auch der Leerstring eines
+    Guards mit quelle 'proxy' bleibt "").
+
+    DIE eine Maskier-Funktion ist core.registry.endpunkt_anzeige: sie
+    maskiert beide Traeger (userinfo UND geheime Query-Parameter) mit
+    reinen String-Griffen. Ihre Eigenschaften, auf die sich diese Stelle
+    verlaesst — rfind('@') in der Authority, also faellt auch ein Passwort
+    MIT eigenem '@' ganz; die Authority endet am ersten '/', '?' oder '#',
+    also bleibt ein IPv6-Host in Klammern heil; ein percent-kodiertes %40
+    ist kein Trennzeichen und stoert nicht; 'nur Benutzer, kein Passwort'
+    (user@host) faellt genauso.
+
+    Fail-safe (Auflage B7: im Zweifel MEHR maskieren, nie weniger): ein
+    Wert, der wie 'user:pass@host' aussieht, aber KEINE Authority hat
+    (kein '//' — z. B. eine Adresse ohne Schema), ist fuer den Parser
+    unsichtbar. Er geht als ganze Maske hinaus statt halb maskiert."""
+    if not isinstance(wert, str) or ("@" not in wert and "://" not in wert):
+        return wert
+    aus = endpunkt_anzeige(wert)
+    if aus != wert.strip():
+        return aus                       # userinfo/Query maskiert
+    if _zugang_unparsbar(wert):
+        return MASKE                     # Verdacht ohne Authority
+    return wert                          # nichts zu maskieren -> woertlich
+
+
+def _zugang_unparsbar(s):
+    """Traegt dieser Wert einen userinfo-VERDACHT, den endpunkt_anzeige
+    nicht aufloesen kann? Genau dann, wenn ein '@' da ist, aber keine
+    Authority ('//'), UND das Wort direkt vor dem letzten '@' einen
+    Doppelpunkt traegt ('user:pass@host'). Eine blosse Mailadresse
+    (kein Doppelpunkt im Wort davor) bleibt damit lesbar."""
+    if "//" in s or "@" not in s:
+        return False
+    kopf = s[:s.rfind("@")].split()
+    return bool(kopf) and ":" in kopf[-1]
 
 
 def _geheim(name):
@@ -238,10 +304,15 @@ def datei_vorbereiten(data_dir, pfad):
     return None, os.path.getsize(pfad), ct, False
 
 
-def datei_streamen(pfad, wfile, log, kennung, inhalt=None):
+def datei_streamen(pfad, wfile, log, kennung, inhalt=None, dbg=None):
     """EINE Datei in den offenen Response-Stream (1-MB-Haeppchen).
     Fehlerregel wie bei tar_streamen: ab hier ist der Status raus, also
-    endet ein Abbruch als EINE Log-Zeile, nie als Traceback-Serie."""
+    endet ein Abbruch als EINE Log-Zeile, nie als Traceback-Serie.
+
+    `dbg` (.511): Senke fuer die ERFOLGS-Zeile. Ein Leseabruf ist Routine —
+    beim Feldtester 1.501 Zeilen, und zwar unsere eigenen Abrufe. Der Aufrufer
+    reicht hier seinen debug-Griff herein; ohne `dbg` bleibt es beim alten
+    Verhalten (`log`). Der ABBRUCH geht immer ueber `log`."""
     t0, n = time.monotonic(), 0
     try:
         if inhalt is not None:
@@ -259,9 +330,9 @@ def datei_streamen(pfad, wfile, log, kennung, inhalt=None):
         log(f"SUPPORT: {kennung} stream aborted after {n} byte(s) "
             f"({type(e).__name__})")
         return False, "aborted"
-    log(f"SUPPORT: {kennung} served — {n} byte(s)"
-        + (", masked" if inhalt is not None else "")
-        + f", {time.monotonic() - t0:.1f}s")
+    (dbg or log)(f"SUPPORT: {kennung} served — {n} byte(s)"
+                 + (", masked" if inhalt is not None else "")
+                 + f", {time.monotonic() - t0:.1f}s")
     return True, ""
 
 
@@ -320,7 +391,7 @@ def inventar(data_dir, version):
     return aus
 
 
-def tar_streamen(data_dir, code, wfile, log, lauf_id=None):
+def tar_streamen(data_dir, code, wfile, log, lauf_id=None, dbg=None):
     """EINEN Bereich als tar.gz in den offenen Response-Stream schreiben.
     -> (ok, grund). Der Aufrufer hat die Header schon gesendet; Fehler ab
     hier koennen nur noch den Stream beenden, nie den Status aendern —
@@ -348,10 +419,10 @@ def tar_streamen(data_dir, code, wfile, log, lauf_id=None):
     return _tar_schreiben(data_dir, start, arc0,
                           f"{code}/{lauf_id}" if lauf_id else code,
                           wfile, log, dateien=b.get("dateien"),
-                          ausschluss=b.get("ausschluss", ()))
+                          ausschluss=b.get("ausschluss", ()), dbg=dbg)
 
 
-def baum_tar_streamen(data_dir, pfad, wfile, log):
+def baum_tar_streamen(data_dir, pfad, wfile, log, dbg=None):
     """EINEN Ordner aus dem Datenbaum als tar.gz streamen — derselbe
     Schreiber wie die benannten Bereiche (kein Parallelweg: Maskierung,
     Symlink-Wache und Fehler-Ebenen gelten damit hier automatisch mit).
@@ -360,11 +431,11 @@ def baum_tar_streamen(data_dir, pfad, wfile, log):
     rel = os.path.relpath(pfad, basis)
     arc0 = os.path.basename(pfad.rstrip(os.sep)) or BAUM_CODE
     return _tar_schreiben(data_dir, pfad, arc0, f"{BAUM_CODE}/{rel}",
-                          wfile, log)
+                          wfile, log, dbg=dbg)
 
 
 def _tar_schreiben(data_dir, start, arc0, kennung, wfile, log,
-                   dateien=None, ausschluss=()):
+                   dateien=None, ausschluss=(), dbg=None):
     """DER eine tar-Schreiber (Bereiche wie Vollbaum). Zwei Wachen je
     Mitglied, beide auf dem realpath: was aus data_dir hinausfuehrt,
     kommt nicht mit, und was in einem Maskier-Ordner liegt, kommt nur
@@ -414,10 +485,10 @@ def _tar_schreiben(data_dir, start, arc0, kennung, wfile, log,
         log(f"SUPPORT: {kennung} stream aborted by client after "
             f"{gepackt} file(s) ({type(e).__name__})")
         return False, "aborted"
-    log(f"SUPPORT: {kennung} served — {gepackt} file(s)"
-        + (f", {maskiert_n} masked" if maskiert_n else "")
-        + (f", {uebersprungen} skipped" if uebersprungen else "")
-        + f", {time.monotonic() - t0:.1f}s")
+    (dbg or log)(f"SUPPORT: {kennung} served — {gepackt} file(s)"
+                 + (f", {maskiert_n} masked" if maskiert_n else "")
+                 + (f", {uebersprungen} skipped" if uebersprungen else "")
+                 + f", {time.monotonic() - t0:.1f}s")
     return True, ""
 
 

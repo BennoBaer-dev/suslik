@@ -222,8 +222,9 @@ CLIP_ERZEUGUNG_DECKEL_S = (
 CLIP_VOD = os.environ.get("SUSLIK_CLIP_VOD", "1") != "0"
 # .509 CLIP-DOWNLOAD-TOR (Feldbefund 06.09.2026, s. Abschnitt „Das Tor" unten):
 # wie viele Clips DIESER Prozess gleichzeitig von Frigate ziehen darf, wenn der
-# Aufrufer nichts anderes sagt. 0/None = kein Tor (Live-, Melde- und
-# Nachhol-Wege bleiben so ungebremst). Dasselbe Muster wie CLIP_ERZEUGUNG:
+# Aufrufer nichts anderes sagt. 0/None = kein Tor (Melde-Weg, Einspielung und
+# Live-Waechter bleiben so ungebremst; der Ereignis-Weg traegt es seit .510).
+# Dasselbe Muster wie CLIP_ERZEUGUNG:
 # VERHALTEN, je Job armiert (worker.py aus dem Job-Feld `clip_tor`), im
 # Legacy-Subprozess aus der ENV; ein explizites `tor_n` an clip_holen gewinnt.
 CLIP_TOR_N = (int(os.environ["SUSLIK_CLIP_TOR_N"])
@@ -521,9 +522,17 @@ def _einspiel_dd(data_dir):
 #    Der Deckel kommt vom Aufrufer (Job-Feld `clip_tor_deckel_s`), und der
 #    Koordinator schlaegt ihn zugleich auf die Job-Frist auf: das Warten kann
 #    das Analyse-Budget dadurch nicht mehr aufessen.
-#  - Live-, Melde- und Nachhol-Wege nehmen das Tor NICHT (sie armieren kein
-#    `clip_tor`): hinter ihnen steht ein wartender Mensch bzw. eine Meldung,
-#    und sie ziehen einzeln, nicht in Serie.
+#  - .510/J15: seit dieser Version armiert AUCH der Ereignis-Weg das Tor
+#    (`verifyd.run_analyze`, Live wie Nachhol). Bis .509 hing es nur an den
+#    Ernte-Jobs — mit vier Analyse-Plaetzen zogen dadurch bis zu vier bis fuenf
+#    clip.mp4 gleichzeitig gegen ein Frigate, das (nginx) fuenf parallele
+#    Streams zulaesst; der Morgen-Stall beim Feldtester kam mit vier parallelen
+#    75-MB-Clips. Reisst dort der Warte-Deckel, bleibt das Ereignis UNGEBUCHT
+#    (kein `fehler` in der Akte) und der Sweep holt es spaeter.
+#  - OHNE Tor bleiben die Wege, die keinen Analyse-Job fahren: der Melde-Weg
+#    (`core/melden`, ein Video fuer eine Meldung), die Einspiel-Uebernahme und
+#    der Live-Waechter. Hinter ihnen steht ein wartender Mensch bzw. eine
+#    Meldung, und sie ziehen einzeln, nicht in Serie.
 TOR_ORDNER = ".cliptor"
 TOR_POLL_S = 0.25            # Runde ueber die Slots; Downloads dauern Sekunden
 #                              bis Minuten, feiner braucht es das nicht.

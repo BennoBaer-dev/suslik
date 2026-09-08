@@ -19,6 +19,8 @@ T = {
     # Plural-Feinschliff (eins/viele via t_n) ist eine BEWUSSTE spaetere
     # Verhaltensaenderung, nie Teil des Einzugs.
     "gesichter.galerie.bildzahl": "{n} immagini",
+    "gesichter.galerie.gemischt": "il catalogo sembra misto",
+    "gesichter.galerie.vorschlag": "{n} proposta/e di rimozione",
     "gesichter.galerie.knopf_entfernen": "rimuovi",
     "gesichter.galerie.knopf_aehnliche": "trova volti corrispondenti",
     "gesichter.galerie.knopf_qs": "Controlla la qualità",
@@ -253,7 +255,12 @@ T = {
     "aehnliche.unbekannt.titel": "Dai volti sconosciuti",
     "aehnliche.unbekannt.suche_titel":
         "Ricerca in corso — i riferimenti vengono riletti.",
-    "aehnliche.unbekannt.suche_hinweis": "La pagina si aggiorna da sola.",
+    "aehnliche.unbekannt.kein_cache":
+        "I riferimenti non sono ancora stati letti.",
+    "aehnliche.unbekannt.kein_cache_hinweis":
+        "Questo elenco ha bisogno dell’indice dei riferimenti. Il controllo "
+        "dei riferimenti lo scrive; poi qui compare un risultato.",
+    "aehnliche.unbekannt.knopf_pruefen": "controlla i riferimenti",
     "aehnliche.unbekannt.hinweis_leer":
         "Nessun volto sconosciuto simile in archivio.",
     "aehnliche.unbekannt.aehnlichkeit": "somiglianza {sim}",
@@ -262,8 +269,19 @@ T = {
         "Volti nuovi da eventi riconosciuti (7 giorni)",
     "aehnliche.vorschlaege.suche_titel":
         "Ricerca in corso — scansione degli eventi riconosciuti.",
-    "aehnliche.vorschlaege.suche_hinweis":
-        "La pagina si aggiorna da sola; risultato in uno o due minuti.",
+    "aehnliche.vorschlaege.nie_gesucht":
+        "Non ancora cercato.",
+    "aehnliche.vorschlaege.nie_gesucht_hinweis":
+        "La ricerca negli eventi riconosciuti parte con un clic, non in "
+        "sottofondo.",
+    "aehnliche.vorschlaege.stand_leer": "ultima ricerca {stand}",
+    "aehnliche.suche.rechnet":
+        "La ricerca è in corso; la pagina si ricarica da sola appena il "
+        "risultato è pronto.",
+    "aehnliche.suche.wartet_platz":
+        "In attesa di un posto di analisi libero ({belegt} di {plaetze} "
+        "occupati); la pagina si ricarica da sola appena il risultato è "
+        "pronto.",
     "aehnliche.vorschlaege.kachel_zeile": "{wann} · {kamera} · sim {sim}",
     "aehnliche.vorschlaege.titel_empfohlen": "Consigliati",
     "aehnliche.vorschlaege.titel_neutral":
@@ -1092,6 +1110,7 @@ T = {
     "livekalib.fueller.bilder": "immagine/i",
     "livekalib.tab_erkennen": "Riconoscere",
     "livekalib.tab_lernen": "Catalogo dei volti",
+    "livekalib.tab_pruefen": "Controllo del catalogo",
     "livekalib.uebernehmen": "Applica",
     "livekalib.leer": "Ancora nessun campione. Arrivano da soli — da un guardiano attivo e da ogni analisi degli eventi di questa telecamera, un volto per volta. Se non vuoi aspettare, usa sotto \"Cerca materiale fresco\".",
     "livekalib.zurueck": "torna al guardiano",
@@ -1103,16 +1122,24 @@ T = {
     "livekalib.abschnitt.anzeige": "Avvisi, visualizzazione e campioni",
     "livekalib.abschnitt.anzeige_prosa": "Questi tre decidono quale immagine di questa telecamera finisce in un avviso e quali volti restano qui come campioni. Non decidono chi viene riconosciuto.",
     "livekalib.abschnitt.katalog": "Soglia del catalogo",
+    "livekalib.abschnitt.pruefen": "Asticella del controllo catalogo",
     "livekalib.abschnitt.material": "Materiale",
-    "livekalib.katalog.prosa": "Un'asticella propria e piu severa: quanto deve essere buono un volto di questa telecamera per diventare riferimento sulle vie AUTOMATICHE (adozione del ciclo di apprendimento, accettare proposte/scorte). Cio che spunti e nomini tu stesso la aggira di proposito: cio che spunti viene appreso, e il controllo qualita puo scartare dopo.",
+    "livekalib.katalog.prosa": "Una soglia, non un filtro: quanto deve essere buono un volto di questa telecamera per diventare riferimento sulle vie AUTOMATICHE (adozione del ciclo di apprendimento, accettare proposte/scorte). È generosa di proposito: accogliere è la porta larga, scartare è compito del controllo del catalogo nella scheda successiva. Ciò che spunti e nomini tu stesso la aggira del tutto.",
     "livekalib.katalog.grenze": "Cosa non fa: non rimuove mai i riferimenti già presenti e non cambia chi viene riconosciuto. Le immagini senza punteggi di qualità (materiale più vecchio o una build senza i modelli di qualità) passano intatte — una soglia senza misura scarterebbe alla cieca.",
     "livekalib.katalog.quelle_kamera": "In uso: i valori propri di questa telecamera.",
     "livekalib.katalog.quelle_global": "In uso: il valore globale di riserva — questa telecamera non ha ancora valori propri.",
     "livekalib.katalog.quelle_aus": "Nessuna soglia di catalogo: ogni immagine può diventare un riferimento.",
     "livekalib.katalog.regler_e": "Catalogo: impressione dell'immagine",
-    "livekalib.katalog.regler_e_prosa": "Impressione minima per un riferimento di questa telecamera. Tienila sopra il cursore più in alto: ciò che basta per mostrare non basta automaticamente per imparare.",
+    "livekalib.katalog.regler_e_prosa": "Impressione minima per un riferimento di questa telecamera. Bassa di proposito: anche un'immagine mediocre porta qualcosa da imparare, e il controllo del catalogo la riguarda più tardi.",
     "livekalib.katalog.regler_t": "Catalogo: riconoscibilità",
     "livekalib.katalog.regler_t_prosa": "Riconoscibilità minima per un riferimento di questa telecamera. È quella che tiene i volti mezzi coperti fuori dal catalogo.",
+    "livekalib.pruefen.prosa": "Questa asticella giudica immagini che hai GIÀ. Sotto di essa il controllo del catalogo segnala un'immagine salvata di questa telecamera; insieme a una norma dei tratti debole diventa una proposta di rimozione da cliccare. Non accetta mai un'immagine e non ne toglie mai una da sola.",
+    "livekalib.pruefen.grenze": "È separata di proposito dall'asticella qui sopra: accettare un'immagine e controllarla più tardi sono due domande, e spostare un cursore non deve spostare l'altro in silenzio. Le immagini senza punteggio di qualità non vengono mai segnalate.",
+    "livekalib.pruefen.quelle_kamera": "In uso: il valore proprio di questa telecamera.",
+    "livekalib.pruefen.quelle_global": "In uso: il valore globale di riserva — questa telecamera non ha ancora un valore proprio.",
+    "livekalib.pruefen.quelle_aus": "Nessuna asticella di controllo impostata: il controllo del catalogo non giudica la qualità delle immagini.",
+    "livekalib.pruefen.regler_t": "Controllo: riconoscibilità",
+    "livekalib.pruefen.regler_t_prosa": "Sotto questo punteggio di riconoscibilità un'immagine salvata di questa telecamera viene segnalata. Il valore predefinito viene da un insieme di immagini di catalogo valutate a mano, non da una stima.",
     "livekalib.material.aus": "La raccolta dei campioni è disattivata (Advanced, calibration samples). Senza campioni questa pagina non ha nulla da mostrare.",
     "livekalib.material.stand": "{n} di massimo {deckel} campioni salvati",
     "livekalib.material.wann": "ultimo {wann}",
@@ -1124,6 +1151,7 @@ T = {
     "livekalib.material.fuellen_prosa": "La ricerca di materiale scorre gli ultimi eventi persona di questa telecamera e tiene il volto migliore di ciascuno. Si ferma a {ziel} immagini oppure dopo {events} eventi, a seconda di cosa arriva prima.",
     "livekalib.material.lauf": "In più {n} immagine/i di questa telecamera dall'ultimo ciclo di apprendimento — mostrate sotto e contrassegnate.",
     "livekalib.js.katalog": "{n} di {gesamt} potrebbero entrare nel catalogo",
+    "livekalib.js.pruefen": "il controllo segnalerebbe {n} su {gesamt}",
     "livekalib.js.lauf": "ciclo",
     # ----------------------------------------------- routes/erkennung ---
     # NICHT eingezogen (bewusst, Stufe-0-Grenzen): die ek-satz-Zeile der
@@ -1284,11 +1312,12 @@ T = {
     "qualitaet.tabelle.kopf_links": "&larr; sinistra",
     "qualitaet.tabelle.kopf_front": "frontale",
     "qualitaet.tabelle.kopf_rechts": "destra &rarr;",
-    "qualitaet.tabelle.kopf_doppel": "duplicati",
+    "qualitaet.tabelle.kopf_doppel": "simili",
     "qualitaet.tabelle.kopf_verwechslung": "scambi",
     "qualitaet.person.funde": "{n} immagini che meritano uno sguardo",
     "qualitaet.person.verwechselt": "forse scambiata",
     "qualitaet.person.alles_gut": "tutto a posto",
+    "qualitaet.person.gemischt": "il catalogo sembra misto",
     # Ergebnis-Satz "alles gut": die <b>-Grenze trennt zwei VOLLSTAENDIGE
     # Saetze — B9-sicherer Split (der Funde-Zweig dagegen bleibt literal,
     # s. Abschnittskommentar).
@@ -1309,6 +1338,17 @@ T = {
     "qualitaet.galerie.vorrat": "dal materiale",
     "qualitaet.galerie.norm": "qualità {norm}",
     "qualitaet.galerie.okay": "discreta",
+    "qualitaet.galerie.unter_beide": "sotto l'asticella di controllo e il minimo di norma",
+    "qualitaet.galerie.unter_guete": "sotto l'asticella di controllo",
+    "qualitaet.galerie.unter_norm": "sotto il minimo di norma",
+    "qualitaet.galerie.guete_datei": "valore misurato sul ritaglio salvato",
+    "qualitaet.galerie.rang": "#{rang} di questa persona",
+    "qualitaet.galerie.marge": "margine di identità {marge}",
+    "qualitaet.galerie.dubl_behalten": "tieni questa",
+    "qualitaet.galerie.dubl_weg": "copia identica",
+    "qualitaet.galerie.dubl_hinweis": "Questi file sono identici byte per byte. Qui “Seleziona tutto” spunta ogni copia tranne la prima di ogni gruppo — guardale e togli quello che non ti serve.",
+    "qualitaet.galerie.noface_hinweis": "In queste immagini non è stato trovato alcun volto, quindi non è stato possibile misurare nulla. Vale la pena guardarle: alcune contengono un volto sfuggito al rilevatore, altre nessuno.",
+    "qualitaet.galerie.gemischt": "Questo catalogo sembra misto: {neg} immagini su {n} sono più vicine a {fremd} che a questa persona. Dai un'occhiata prima di impararci sopra — non viene tolto nulla senza il tuo clic.",
     "qualitaet.galerie.satz_gut": "Tutte le {n} immagini sembrano a posto.",
     "qualitaet.galerie.satz_funde":
         "{funde} immagini su {n} meritano uno sguardo — stanno nelle "
@@ -1317,6 +1357,8 @@ T = {
     "qualitaet.reiter.gut": "Buone ({n})",
     "qualitaet.reiter.check": "Da controllare ({n})",
     "qualitaet.reiter.weg": "Rimozione consigliata ({n})",
+    "qualitaet.reiter.dubl": "Copie identiche ({n})",
+    "qualitaet.reiter.noface": "Nessun volto ({n})",
     "qualitaet.galerie.knopf_alle": "Seleziona tutto",
     "qualitaet.galerie.knopf_keine": "Deseleziona tutto",
     "qualitaet.galerie.knopf_entfernen": "Rimuovi le selezionate",
@@ -1492,6 +1534,8 @@ T = {
     "kalib.kachel.vorgabe": "valori predefiniti",
     "kalib.kachel.fremd": "non in Frigate",
     "kalib.kachel.fremd_tip": "Questa telecamera ha valori di calibrazione ma Frigate non la segnala più. I valori restano, non viene cancellato nulla.",
+    "kalib.kachel.offline": "Frigate non collegato",
+    "kalib.kachel.offline_tip": "Questa telecamera è nota da ciò che è salvato qui: i suoi valori e i suoi campioni. Frigate al momento non risponde, quindi non si sa se esista ancora là. Calibrarla funziona comunque.",
     "kalib.kachel.vorrat": "{n} di {deckel} campioni",
     "kalib.kachel.vorrat_aus": "La raccolta dei campioni è disattivata (Advanced, calibration samples).",
     "kalib.kachel.stand": "ultimo {wann}",
@@ -3234,6 +3278,9 @@ T = {
     "antwort.person_name_ungueltig": "nome non valido",
     "antwort.person_unbekannt": "persona sconosciuta",
     "antwort.pruefung_gestartet": "controllo avviato",
+    "antwort.pruefung_laeuft":
+        "controllo in corso: ricarica questa pagina tra circa un minuto",
+    "antwort.ref_batch_weg": "{n} immagine/i rimossa/e",
     "antwort.reorg_los":
         "Riorganizzazione in corso (ricontrollo dei volti estratti + "
         "ricostruzione dei gruppi, 1-2 min, poi ricarica le pagine)",

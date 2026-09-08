@@ -12,7 +12,19 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.0.509"   # .509 = .508 + Clip-Download-Tor, Lernlauf-Haertung (J13) und die
+STAND = "0.1.0.511"   # .511 Box-Inhalt MIT dem User abgestimmt (08.09.2026, EN-Wortlaut vom
+                      # User vorgegeben): DREI Eintraege — ROCm-Fix samt neuer Ladeprobe im
+                      # Gate, die neu gebaute Katalog-Pruefung samt einmaliger Ruecksetzung
+                      # der Katalog-Latte, und der Ausblick auf die Neu-Eichung des
+                      # Lernlaufs. Der Ruecksetz-Satz steht ausdruecklich MIT drin: er
+                      # ueberschreibt gesetzte Kalibrierwerte, das darf niemand erst am
+                      # Verhalten merken.
+                      # Davor: "0.1.0.510"   # .510 Box-Inhalt MIT dem User abgestimmt (07.09.2026 20:0x, Fassung in
+                      # backups/bau_0510/whatsnew_0510.txt): EIN Eintrag, EN woertlich wie
+                      # abgestimmt. Die Interna des Zugs (fail-closed Guete je Fund, Clip-Tor
+                      # am Ereignis-Weg, haltende Schlange bei Frigate-Ausfall, Masken im
+                      # Support-Export) bleiben BEWUSST draussen — sie stehen im CHANGELOG.
+                      # Davor: "0.1.0.509"   # .509 = .508 + Clip-Download-Tor, Lernlauf-Haertung (J13) und die
                       # Review-Fixes. Box-Inhalt UNVERAENDERT (E-O3, User 06.09.: „What's-new-Text
                       # aendern wir nicht.") — der .508-Eintrag traegt jetzt die Nummer .509, wie
                       # schon von .505 auf .506 und von .507 auf .508. .508 wurde nie
@@ -410,6 +422,125 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # 0.1.0.511 — INHALT MIT DEM USER ABGESTIMMT (08.09.2026, Wortlaut vom User
+    # vorgegeben). DREI Eintraege, der englische Text steht WOERTLICH so, wie er
+    # abgestimmt wurde; DE/ES/IT/FR sind die Uebersetzung davon, Begriffe wie in
+    # den bisherigen Eintraegen (Katalog-Latte / listón / asticella / barre).
+    # Der dritte Eintrag ist bewusst ein AUSBLICK — der Lernlauf ist auf die
+    # neue Guete-Skala noch nicht neu geeicht, und das steht in der Box statt
+    # dass es jemand aus dem Verhalten erraten muss.
+    # Nichts selbststaendig ergaenzt (Memory whatsnew-inhalt-abstimmen): die
+    # Interna des Zugs — punktuelle Bericht-/refcache-Pflege, Mess-Sidecar,
+    # warmer Worker, Store-Kameras auf der Kalibrier-Uebersicht — stehen im
+    # CHANGELOG, nicht hier.
+    ("0.1.0.511", (
+        {"de": "Das AMD/ROCm-Image nutzt jetzt wirklich die GPU. Zwei fehlende "
+               "Bibliotheken verhinderten, dass der Erkennungs-Provider lud — "
+               "AMD-Systeme rechneten still auf der CPU. Behoben; und jedes Image "
+               "muss vor der Freigabe nachweisen, dass es laden kann, was es "
+               "mitbringt.",
+         "en": "AMD/ROCm image actually uses the GPU now. Two missing libraries "
+               "kept the recognition provider from loading, so AMD systems "
+               "silently computed on the CPU. Fixed — and every image now has to "
+               "prove it can load what it ships before it leaves the gate.",
+         "es": "La imagen AMD/ROCm ya usa la GPU de verdad. Dos bibliotecas "
+               "ausentes impedían que se cargara el proveedor de reconocimiento, "
+               "así que los sistemas AMD calculaban en la CPU sin decirlo. "
+               "Corregido; y ahora cada imagen debe demostrar que puede cargar lo "
+               "que trae antes de salir.",
+         "it": "L'immagine AMD/ROCm ora usa davvero la GPU. Due librerie mancanti "
+               "impedivano il caricamento del provider di riconoscimento, così i "
+               "sistemi AMD calcolavano sulla CPU senza dirlo. Risolto; e ora ogni "
+               "immagine deve dimostrare di poter caricare ciò che porta con sé "
+               "prima di uscire.",
+         "fr": "L'image AMD/ROCm utilise enfin vraiment le GPU. Deux bibliothèques "
+               "manquantes empêchaient le chargement du fournisseur de "
+               "reconnaissance, les systèmes AMD calculaient donc sur le "
+               "processeur sans le dire. Corrigé ; et chaque image doit désormais "
+               "prouver qu'elle peut charger ce qu'elle embarque avant de sortir."},
+        {"de": "Die Qualitätsprüfung des Gesichterkatalogs ist neu gebaut. Sie "
+               "urteilt mit der kalibrierten Güte-Skala, gruppiert ihre Funde "
+               "(schwache Bilder, identische Kopien, kein Gesicht gefunden, "
+               "möglicherweise verwechselte Gesichter) und schlägt Entfernungen "
+               "vor — gelöscht wird nichts ohne deinen Klick. Ein Bild zu löschen "
+               "geht jetzt sofort, statt den ganzen Katalog neu zu prüfen. Die "
+               "Katalog-Latte stand viel zu streng und wird auf allen "
+               "Installationen einmalig zurückgesetzt — das automatische Lernen "
+               "sammelt wieder Material.",
+         "en": "Face catalogue quality check rebuilt. It judges with the "
+               "calibrated quality scale, groups its findings (weak pictures, "
+               "identical copies, no face found, possibly mixed-up faces) and "
+               "suggests removals — nothing is deleted without your click. "
+               "Deleting a picture is instant now instead of re-checking the whole "
+               "catalogue. The catalogue bar was set far too strict and is reset "
+               "once on all installations — automatic learning collects material "
+               "again.",
+         "es": "El control de calidad del catálogo de caras se ha rehecho. Juzga "
+               "con la escala de calidad calibrada, agrupa sus hallazgos "
+               "(imágenes débiles, copias idénticas, ninguna cara encontrada, "
+               "caras posiblemente confundidas) y propone eliminaciones: no se "
+               "borra nada sin tu clic. Borrar una imagen es ahora inmediato en "
+               "lugar de revisar todo el catálogo. El listón del catálogo estaba "
+               "demasiado estricto y se restablece una vez en todas las "
+               "instalaciones: el aprendizaje automático vuelve a reunir material.",
+         "it": "Il controllo qualità del catalogo dei volti è stato ricostruito. "
+               "Giudica con la scala di qualità calibrata, raggruppa i suoi rilievi "
+               "(immagini deboli, copie identiche, nessun volto trovato, volti "
+               "forse scambiati) e propone rimozioni: nulla viene cancellato senza "
+               "il tuo clic. Cancellare un'immagine è ora immediato invece di "
+               "ricontrollare l'intero catalogo. L'asticella del catalogo era "
+               "troppo severa e viene reimpostata una volta su tutte le "
+               "installazioni: l'apprendimento automatico raccoglie di nuovo "
+               "materiale.",
+         "fr": "Le contrôle qualité du catalogue de visages a été reconstruit. Il "
+               "juge avec l'échelle de qualité calibrée, regroupe ses constats "
+               "(images faibles, copies identiques, aucun visage trouvé, visages "
+               "peut-être confondus) et propose des suppressions : rien n'est "
+               "supprimé sans votre clic. Supprimer une image est maintenant "
+               "immédiat au lieu de recontrôler tout le catalogue. La barre du "
+               "catalogue était bien trop stricte et est réinitialisée une fois sur "
+               "toutes les installations : l'apprentissage automatique récolte de "
+               "nouveau du matériel."},
+        {"de": "Als Nächstes: der Lernlauf wird auf die neue Güte-Skala neu "
+               "geeicht.",
+         "en": "Still ahead: recalibrating the learning run on the new quality "
+               "scale.",
+         "es": "Lo siguiente: recalibrar el ciclo de aprendizaje con la nueva "
+               "escala de calidad.",
+         "it": "Prossimo passo: ritarare il ciclo di apprendimento sulla nuova "
+               "scala di qualità.",
+         "fr": "Prochaine étape : réétalonner le cycle d'apprentissage sur la "
+               "nouvelle échelle de qualité."},
+    )),
+    # 0.1.0.510 — INHALT MIT DEM USER ABGESTIMMT (07.09.2026 20:0x; die abgenommene
+    # Fassung liegt in backups/bau_0510/whatsnew_0510.txt). GENAU EIN Eintrag, der
+    # englische Wortlaut steht WOERTLICH so, wie abgestimmt — DE/ES/IT/FR sind die
+    # Uebersetzung davon (DE deckt sich mit der Mitlese-Zeile der Abstimmung),
+    # Begriffe wie in den bisherigen Eintraegen (Plaetze / plazas / posti / places).
+    # Nichts selbststaendig ergaenzt (Memory whatsnew-inhalt-abstimmen): die Interna
+    # des Zugs — fail-closed Guete je Fund (B1/B6), Klick-Suche im warmen Worker
+    # (B3/J18), Clip-Tor auch am Ereignis-Weg (B4/J15), haltende Schlange bei
+    # Frigate-Ausfall (B5/J16), maskierte Zugangsdaten im Support-Export (B7) —
+    # bleiben BEWUSST draussen und stehen im CHANGELOG.
+    ("0.1.0.510", (
+        {"de": "Bessere Erkennung: die Bestätigungsschwelle wurde nach einer Feldmessung "
+               "gesenkt, dadurch bekommen mehr echte Auftritte einen Namen. Alle "
+               "Analyse-Plätze bleiben jetzt unter Last ausgelastet. Kleine Fixes.",
+         "en": "Better recognition: the confirmation threshold was lowered after a field "
+               "measurement, so more real appearances get named. All analysis slots now "
+               "stay busy under load. Small fixes.",
+         "es": "Mejor reconocimiento: el umbral de confirmación se ha bajado tras una "
+               "medición sobre el terreno, así más apariciones reales reciben un nombre. "
+               "Todas las plazas de análisis se mantienen ocupadas bajo carga. Pequeñas "
+               "correcciones.",
+         "it": "Riconoscimento migliore: la soglia di conferma è stata abbassata dopo una "
+               "misurazione sul campo, così più comparse reali ricevono un nome. Tutti i "
+               "posti di analisi restano ora occupati sotto carico. Piccole correzioni.",
+         "fr": "Meilleure reconnaissance : le seuil de confirmation a été abaissé après "
+               "une mesure sur le terrain, davantage d'apparitions réelles reçoivent donc "
+               "un nom. Toutes les places d'analyse restent occupées en charge. Petites "
+               "corrections."},
+    )),
     # 0.1.0.509 — EIN Eintrag fuer .505 bis .509. Der Wortlaut ist der des
     # .505-Zugs ("whats new bleibt wie es ist nur ohne test", User 05.09.2026) und
     # bleibt unveraendert (E-O3, User 05.09. 23:30: "What's-new-Text aendern wir

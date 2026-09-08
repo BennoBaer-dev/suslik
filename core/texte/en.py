@@ -15,6 +15,8 @@ T = {
     # Plural-Feinschliff (eins/viele via t_n) ist eine BEWUSSTE spaetere
     # Verhaltensaenderung, nie Teil des Einzugs.
     "gesichter.galerie.bildzahl": "{n} images",
+    "gesichter.galerie.gemischt": "catalogue looks mixed",
+    "gesichter.galerie.vorschlag": "{n} removal suggestion(s)",
     "gesichter.galerie.knopf_entfernen": "remove",
     "gesichter.galerie.knopf_aehnliche": "find matching faces",
     "gesichter.galerie.knopf_qs": "Quality-check",
@@ -240,7 +242,12 @@ T = {
     "aehnliche.unbekannt.titel": "From unknown faces",
     "aehnliche.unbekannt.suche_titel":
         "Search running — references are being re-read.",
-    "aehnliche.unbekannt.suche_hinweis": "The page refreshes by itself.",
+    "aehnliche.unbekannt.kein_cache":
+        "The references have not been read in yet.",
+    "aehnliche.unbekannt.kein_cache_hinweis":
+        "This list needs the reference index. The reference check writes "
+        "it — after that a result appears here.",
+    "aehnliche.unbekannt.knopf_pruefen": "check references",
     "aehnliche.unbekannt.hinweis_leer":
         "No similar unknown faces in stock.",
     "aehnliche.unbekannt.aehnlichkeit": "similarity {sim}",
@@ -249,8 +256,18 @@ T = {
         "New faces from recognized events (7 days)",
     "aehnliche.vorschlaege.suche_titel":
         "Search running — recognized events are being scanned.",
-    "aehnliche.vorschlaege.suche_hinweis":
-        "The page refreshes by itself; result in one or two minutes.",
+    "aehnliche.vorschlaege.nie_gesucht":
+        "Not searched yet.",
+    "aehnliche.vorschlaege.nie_gesucht_hinweis":
+        "The search over recognized events runs on click, not in the "
+        "background.",
+    "aehnliche.vorschlaege.stand_leer": "last searched {stand}",
+    "aehnliche.suche.rechnet":
+        "The search is running; the page reloads by itself once the result "
+        "is there.",
+    "aehnliche.suche.wartet_platz":
+        "Waiting for a free analysis slot ({belegt} of {plaetze} in use); "
+        "the page reloads by itself once the result is there.",
     "aehnliche.vorschlaege.kachel_zeile": "{wann} · {kamera} · sim {sim}",
     "aehnliche.vorschlaege.titel_empfohlen": "Recommended",
     "aehnliche.vorschlaege.titel_neutral":
@@ -1038,6 +1055,7 @@ T = {
     "livekalib.fueller.bilder": "picture(s)",
     "livekalib.tab_erkennen": "Recognition",
     "livekalib.tab_lernen": "Face catalog",
+    "livekalib.tab_pruefen": "Catalogue check",
     "livekalib.uebernehmen": "Apply",
     "livekalib.leer": "No samples yet. They arrive on their own — from a running watcher and from every event analysis of this camera, one face each. If you do not want to wait, use \"Look for fresh material\" below.",
     "livekalib.zurueck": "back to the watcher",
@@ -1049,16 +1067,24 @@ T = {
     "livekalib.abschnitt.anzeige": "Alerts, display and samples",
     "livekalib.abschnitt.anzeige_prosa": "These three decide which picture of this camera goes into an alert, and which faces are kept here as samples. They do not decide who is recognised.",
     "livekalib.abschnitt.katalog": "Catalogue bar",
+    "livekalib.abschnitt.pruefen": "Catalogue check bar",
     "livekalib.abschnitt.material": "Material",
-    "livekalib.katalog.prosa": "A separate, stricter bar: how good a face from this camera must be to become a reference on the AUTOMATIC paths (learning-run takeover, accepting suggestions/stock offers). Faces you tick and name yourself deliberately bypass it — what you tick gets learned, and the quality check can weed out later.",
+    "livekalib.katalog.prosa": "A floor, not a filter: how good a face from this camera has to be before it may become a reference on the AUTOMATIC paths (learning-run takeover, accepting suggestions/stock offers). It is generous on purpose — taking pictures in is the wide door, sorting them out again is the job of the catalogue check in the next tab. Faces you tick and name yourself bypass it entirely.",
     "livekalib.katalog.grenze": "What it does not do: it never removes references you already have, and it never changes who is recognised. Pictures without quality scores (older material, or a build without the quality models) pass untouched — a bar without a measurement would discard blindly.",
     "livekalib.katalog.quelle_kamera": "In use: this camera's own values.",
     "livekalib.katalog.quelle_global": "In use: the global fallback — this camera has no own values yet.",
     "livekalib.katalog.quelle_aus": "No catalogue bar set: every picture may become a reference.",
     "livekalib.katalog.regler_e": "Catalogue: picture impression",
-    "livekalib.katalog.regler_e_prosa": "Minimum picture impression for a reference of this camera. Keep it above the slider further up: what is good enough to show is not automatically good enough to learn from.",
+    "livekalib.katalog.regler_e_prosa": "Minimum picture impression for a reference of this camera. Low on purpose: even an average picture still carries something to learn from, and the catalogue check looks at it again once it is in.",
     "livekalib.katalog.regler_t": "Catalogue: recognisability",
     "livekalib.katalog.regler_t_prosa": "Minimum recognisability for a reference of this camera. This is the one that keeps half-covered faces out of the catalogue.",
+    "livekalib.pruefen.prosa": "This bar judges pictures you ALREADY have. Below it, the catalogue check flags a stored picture of this camera; together with a weak feature norm it becomes a removal suggestion you can click. It never takes a picture in and never removes one by itself.",
+    "livekalib.pruefen.grenze": "It is deliberately separate from the bar above: taking a picture in and checking it later are two questions, and moving one slider must not silently move the other. Pictures without a quality score are never flagged.",
+    "livekalib.pruefen.quelle_kamera": "In use: this camera's own value.",
+    "livekalib.pruefen.quelle_global": "In use: the global fallback — this camera has no own value yet.",
+    "livekalib.pruefen.quelle_aus": "No check bar set: the catalogue check does not judge picture quality.",
+    "livekalib.pruefen.regler_t": "Check: recognisability",
+    "livekalib.pruefen.regler_t_prosa": "Below this recognisability score, a stored picture of this camera gets flagged. The default comes from a hand-scored set of catalogue pictures, not from a guess.",
     "livekalib.material.aus": "Sample collection is switched off (Advanced, calibration samples). Without samples this page has nothing to show.",
     "livekalib.material.stand": "{n} of at most {deckel} samples stored",
     "livekalib.material.wann": "latest {wann}",
@@ -1070,6 +1096,7 @@ T = {
     "livekalib.material.fuellen_prosa": "Looking for fresh material works through the most recent person events of this camera and keeps the best face of each. It stops at {ziel} pictures or after {events} events, whichever comes first.",
     "livekalib.material.lauf": "Plus {n} picture(s) of this camera from the latest learning run — shown below and marked as such.",
     "livekalib.js.katalog": "{n} of {gesamt} would be allowed into the catalogue",
+    "livekalib.js.pruefen": "{n} of {gesamt} would be flagged by the check",
     "livekalib.js.lauf": "run",
     # ----------------------------------------------- routes/erkennung ---
     # NICHT eingezogen (bewusst, Stufe-0-Grenzen): die ek-satz-Zeile der
@@ -1225,11 +1252,12 @@ T = {
     "qualitaet.tabelle.kopf_links": "&larr; left",
     "qualitaet.tabelle.kopf_front": "front",
     "qualitaet.tabelle.kopf_rechts": "right &rarr;",
-    "qualitaet.tabelle.kopf_doppel": "duplicates",
+    "qualitaet.tabelle.kopf_doppel": "look-alikes",
     "qualitaet.tabelle.kopf_verwechslung": "confusion",
     "qualitaet.person.funde": "{n} picture(s) worth a look",
     "qualitaet.person.verwechselt": "maybe mixed-up",
     "qualitaet.person.alles_gut": "all good",
+    "qualitaet.person.gemischt": "catalogue looks mixed",
     # Ergebnis-Satz "alles gut": die <b>-Grenze trennt zwei VOLLSTAENDIGE
     # Saetze — B9-sicherer Split (der Funde-Zweig dagegen bleibt literal,
     # s. Abschnittskommentar).
@@ -1250,6 +1278,17 @@ T = {
     "qualitaet.galerie.vorrat": "from stock",
     "qualitaet.galerie.norm": "quality {norm}",
     "qualitaet.galerie.okay": "okay",
+    "qualitaet.galerie.unter_beide": "below the check bar and the norm floor",
+    "qualitaet.galerie.unter_guete": "below the check bar",
+    "qualitaet.galerie.unter_norm": "below the norm floor",
+    "qualitaet.galerie.guete_datei": "score read from the stored crop",
+    "qualitaet.galerie.rang": "#{rang} of this person",
+    "qualitaet.galerie.marge": "identity margin {marge}",
+    "qualitaet.galerie.dubl_behalten": "keep this one",
+    "qualitaet.galerie.dubl_weg": "identical copy",
+    "qualitaet.galerie.dubl_hinweis": "These files are byte-for-byte identical. “Select all” here ticks every copy but the first of each set — look them over and remove what you do not need.",
+    "qualitaet.galerie.noface_hinweis": "No face could be found in these pictures, so nothing about them could be measured. They are worth a look: some hold a face the detector missed, others hold none at all.",
+    "qualitaet.galerie.gemischt": "This catalogue looks mixed: {neg} of {n} pictures sit closer to {fremd} than to this person. Have a look before you learn from them — nothing is removed unless you say so.",
     "qualitaet.galerie.satz_gut": "All {n} pictures look fine.",
     "qualitaet.galerie.satz_funde":
         "{funde} of {n} pictures are worth a look — the two right-hand "
@@ -1258,6 +1297,8 @@ T = {
     "qualitaet.reiter.gut": "Good ({n})",
     "qualitaet.reiter.check": "Check these ({n})",
     "qualitaet.reiter.weg": "Suggest removing ({n})",
+    "qualitaet.reiter.dubl": "Identical copies ({n})",
+    "qualitaet.reiter.noface": "No face found ({n})",
     "qualitaet.galerie.knopf_alle": "Select all",
     "qualitaet.galerie.knopf_keine": "Deselect all",
     "qualitaet.galerie.knopf_entfernen": "Remove selected",
@@ -1430,6 +1471,8 @@ T = {
     "kalib.kachel.vorgabe": "default values",
     "kalib.kachel.fremd": "not in Frigate",
     "kalib.kachel.fremd_tip": "This camera has calibration values but Frigate no longer reports it. The values stay, nothing is deleted.",
+    "kalib.kachel.offline": "Frigate not connected",
+    "kalib.kachel.offline_tip": "This camera is known from what is stored here — its values and its samples. Frigate is not answering right now, so whether it still exists there is unknown. Calibrating it works either way.",
     "kalib.kachel.vorrat": "{n} of {deckel} samples",
     "kalib.kachel.vorrat_aus": "Sample collection is off (Advanced, calibration samples).",
     "kalib.kachel.stand": "latest {wann}",
@@ -3075,6 +3118,9 @@ T = {
     "antwort.person_name_ungueltig": "invalid name",
     "antwort.person_unbekannt": "unknown person",
     "antwort.pruefung_gestartet": "check started",
+    "antwort.pruefung_laeuft":
+        "check running — reload this page in about a minute",
+    "antwort.ref_batch_weg": "{n} picture(s) removed",
     "antwort.reorg_los":
         "Reorganizing (pool re-check + re-cluster, 1-2 min, then reload "
         "the pages)",

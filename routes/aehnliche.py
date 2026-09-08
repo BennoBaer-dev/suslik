@@ -1,8 +1,18 @@
 """routes/aehnliche — "Matching faces": passende Unbekannte + Bestands-Vorschlaege zu
-einer Person (M1a, byte-treu aus verifyd extrahiert). Kontrakt: NUR rendern — die
-Seiteneffekte (Suchlaeufe qs_neu_starten/vorschlaege_starten) loest der Handler aus,
-BEVOR er render() ruft; hier entscheidet nur noch kand/vs None-oder-nicht ueber die
-Platzhalter + refresh (15 s Quelle 1 / 20 s Quelle 2, wie im Bestand).
+einer Person (M1a, byte-treu aus verifyd extrahiert). Kontrakt: NUR rendern.
+
+.510/J18 (d): der Seitenaufruf startet KEINE Suche mehr (bis .509 startete er
+`qs_neu_starten` bei fehlendem refcache und `vorschlaege_starten` bei fehlender
+Vorschlagsdatei — zwei Subprozesse, ausgeloest vom blossen Hinsehen). Damit
+zerfaellt `None` in ZWEI verschiedene Lagen, die vorher eine waren:
+  * es LAEUFT gerade eine Suche  -> Platzhalter + Zaehler + Selbst-Neuladen
+    (refresh 15 s Quelle 1 / 20 s Quelle 2 wie im Bestand — jetzt aber ENDLICH:
+    er hoert auf, sobald der Lauf vorbei ist);
+  * es laeuft KEINE              -> ehrlicher Satz („noch nie gesucht" bzw.
+    „zuletzt gesucht am …") plus der Knopf, der sie startet. KEIN Refresh.
+Welche Lage vorliegt, sagt `stand` (verifyd.Service.such_stand) — diese Datei
+raet es nicht aus den Daten.
+
 Sprach-Stufe 0 (konzept_sprache.md v2): sichtbare Texte aus core/sprache.t()
 — BYTE-TREU (Harnisch tools/harnisch_sprache.py)."""
 import datetime
@@ -15,26 +25,70 @@ import webui
 from core.sprache import t
 
 
-def render(person, kand, vs, data_dir, va=None):
-    """-> (inhalt, refresh). kand = anlernen.aehnliche_unbekannte(person) (None = laeuft),
-    vs = anlernen.lade_vorschlaege(person) (None = laeuft),
+def _zaehler(inhalt, person):
+    """Den mitlaufenden Sekundenzaehler in einen `webui.leer`-Kasten haengen
+    (webui/app.js: `.such-zaehler` zaehlt hoch und pollt `/aehnliche_status`,
+    laedt bei „fertig" sofort neu)."""
+    return inhalt.replace(
+        "</b>", '</b> <span class="such-zaehler" data-person="'
+        + html.escape(person, quote=True) + '"></span>', 1)
+
+
+def _lauf_hinweis(st, plaetze, belegt):
+    """Der ehrliche Zwischenstand EINER laufenden Suche: wartet sie auf einen
+    Platz oder rechnet sie schon? Bei einem Analyse-Platz ist genau das die
+    Erklaerung fuer die Wartezeit — sie steht deshalb mit dabei."""
+    if (st or {}).get("phase") == "wartet":
+        return t("aehnliche.suche.wartet_platz", belegt=belegt, plaetze=plaetze)
+    return t("aehnliche.suche.rechnet")
+
+
+def _stand_text(ts):
+    """Zeitpunkt der letzten Suche. HEUTE nur die Uhrzeit (wie bis .509), aelter
+    MIT Datum: eine Vorschlagsdatei aus der alten Automatik kann Tage alt sein,
+    und „as of 09:14" haette das verschwiegen (J18 (d), Altstaende)."""
+    d = datetime.datetime.fromtimestamp(ts or 0)
+    return d.strftime("%H:%M" if d.date() == datetime.date.today()
+                      else "%d.%m. %H:%M")
+
+
+def render(person, kand, vs, data_dir, va=None, stand=None):
+    """-> (inhalt, refresh). kand = anlernen.aehnliche_unbekannte(person)
+    (None = kein refcache-Eintrag), vs = anlernen.lade_vorschlaege(person)
+    (None = keine Vorschlagsdatei),
     va = offene Vorrats-Angebote der Person (core.vorrat.angebote_lesen,
     bauplan_vorrat.md B4) — None/leer: der Abschnitt erscheint gar nicht
-    (Alt-Render byte-identisch)."""
+    (Alt-Render byte-identisch).
+    stand (.510/J18 d) = verifyd.Service.such_stand(person): welche Suche
+    LAEUFT gerade und wie viele Analyse-Plaetze es gibt. Ohne `stand` (Alt-
+    Aufrufer, Proben) gilt „nichts laeuft" — dann zeigt die Seite Knoepfe
+    statt Platzhalter, nie einen Dauer-Refresh."""
     pe = html.escape(person)
     pj = html.escape(person.replace("\\", "\\\\").replace("'", "\\'"), quote=True)
+    st = stand or {}
+    st_vs = st.get("vorschlaege") or {}
+    st_uk = st.get("unbekannt") or {}
+    plaetze = int(st.get("plaetze") or 1)
+    belegt = int(st.get("belegt") or 0)
     refresh = None
     teile = [f"<h2>{t('aehnliche.kopf.titel', person=pe)}</h2>"
              f"<p>{t('aehnliche.kopf.satz', person=pe)} "
              f"<a href='/gesichter'>{t('aehnliche.kopf.link_zurueck')}</a></p>"]
     # --- Quelle 1: unbekannte Gesichter ---
     teile.append(f"<h3>{t('aehnliche.unbekannt.titel')}</h3>")
-    if kand is None:
+    if kand is None and st_uk.get("laeuft"):
         refresh = 15
-        teile.append(webui.leer(t("aehnliche.unbekannt.suche_titel"),
-                                t("aehnliche.unbekannt.suche_hinweis"))
-                     .replace("</b>", '</b> <span class="such-zaehler" '
-                              'data-person="' + html.escape(person, quote=True) + '"></span>', 1))
+        teile.append(_zaehler(webui.leer(t("aehnliche.unbekannt.suche_titel"),
+                                         t("aehnliche.suche.rechnet")), person))
+    elif kand is None:
+        # M-10 (W1): genau hier stand bis .509 der Dauer-Platzhalter mit 20-s-
+        # Refresh fuer eine Suche, die niemand gestartet hatte. Quelle 1 haengt
+        # am refcache; geschrieben wird der von der Referenz-Pruefung, und die
+        # startet dieser Knopf (`refPruefNeu`, derselbe wie auf der Qualitaets-Seite).
+        teile.append(webui.leer(t("aehnliche.unbekannt.kein_cache"),
+                                t("aehnliche.unbekannt.kein_cache_hinweis"))
+                     + f'<p><button class="gtb" onclick="refPruefNeu(this)">'
+                     f'{t("aehnliche.unbekannt.knopf_pruefen")}</button></p>')
     elif not kand:
         teile.append(webui.leer(t("aehnliche.unbekannt.hinweis_leer")))
     else:
@@ -53,18 +107,35 @@ def render(person, kand, vs, data_dir, va=None):
                      f'{t("aehnliche.unbekannt.knopf_hinzu", person=pe)}</button></div>')
     # --- Quelle 2: Bestands-Suche in erkannten Events ---
     teile.append(f"<h3>{t('aehnliche.vorschlaege.titel')}</h3>")
-    if vs is None:
+    if st_vs.get("laeuft"):
+        # Laeuft wirklich — Platzhalter samt Zwischenstand. Der Refresh endet
+        # mit dem Lauf (bis .509 lief er ohne Ende, weil ihn nichts abstellte).
         refresh = refresh or 20
-        teile.append(webui.leer(t("aehnliche.vorschlaege.suche_titel"),
-                                t("aehnliche.vorschlaege.suche_hinweis"))
-                     .replace("</b>", '</b> <span class="such-zaehler" '
-                              'data-person="' + html.escape(person, quote=True) + '"></span>', 1))
+        teile.append(_zaehler(
+            webui.leer(t("aehnliche.vorschlaege.suche_titel"),
+                       _lauf_hinweis(st_vs, plaetze, belegt)), person))
+    elif vs is None:
+        teile.append(webui.leer(t("aehnliche.vorschlaege.nie_gesucht"),
+                                t("aehnliche.vorschlaege.nie_gesucht_hinweis"))
+                     + f'<p><button class="gtb on" onclick="vorschlagNeu(\'{pj}\',this)">'
+                     f'{t("aehnliche.vorschlaege.knopf_neu")}</button></p>')
     else:
         ev_base = os.path.join(data_dir, "events")
         ks = [k for k in vs.get("kandidaten", [])
               if os.path.isfile(os.path.join(ev_base, str(k["eid"]).replace("/", "_"),
                                              k["datei"]))]
-        stand_v = datetime.datetime.fromtimestamp(vs.get("ts", 0)).strftime("%H:%M")
+        # J18 (d), Altstaende: `ts` schreibt anlernen seit je mit; fehlt es in
+        # einer alten Datei, gilt deren mtime — nie die Epoche (1970 als
+        # „zuletzt gesucht" waere schlechter als keine Angabe).
+        _ts = vs.get("ts")
+        if not _ts:
+            try:
+                _ts = os.path.getmtime(os.path.join(data_dir, "learn",
+                                                    "vorschlaege_"
+                                                    + person.replace(" ", "_") + ".json"))
+            except OSError:
+                _ts = 0
+        stand_v = _stand_text(_ts)
         if ks:
             def _vs_kachel(k, rand="", cbcls=""):
                 ed = urllib.parse.quote(str(k["eid"]).replace("/", "_"))
@@ -109,10 +180,14 @@ def render(person, kand, vs, data_dir, va=None):
                 f'<small style="color:var(--faint)">'
                 f'{t("aehnliche.vorschlaege.fuss", stand=stand_v, person=pe)}</small></div>')
         else:
+            # J18 (d): auch der leere Treffer traegt den Zeitpunkt — sonst steht
+            # eine Woche alte „nichts gefunden"-Aussage wie eine frische da.
             teile.append(webui.leer(t("aehnliche.vorschlaege.hinweis_leer"),
                                     t("aehnliche.vorschlaege.hinweis_leer_kriterien"))
                          + f'<p><button class="gtb" onclick="vorschlagNeu(\'{pj}\',this)">'
-                         f'{t("aehnliche.vorschlaege.knopf_neu")}</button></p>')
+                         f'{t("aehnliche.vorschlaege.knopf_neu")}</button> '
+                         f'<small style="color:var(--faint)">'
+                         f'{t("aehnliche.vorschlaege.stand_leer", stand=stand_v)}</small></p>')
     # --- Quelle 3: Vorrats-Angebote der Lernlaeufe (bauplan_vorrat.md B4) ---
     # Direkt aus vorrat.jsonl der EXISTIERENDEN Laeufe gerendert (kein Misch-
     # File, Konzept-QS W1.14/W2.10); eigener Draht ueber data-Attribute — der

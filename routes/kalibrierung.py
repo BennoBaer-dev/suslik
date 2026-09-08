@@ -59,19 +59,31 @@ def _quelle_wort(quelle):
 
 
 # ------------------------------------------------------------- Uebersicht
-def _kachel(k, deckel, bilanz=None):
+def _kachel(k, deckel, bilanz=None, frigate_weg=False):
     """EINE Kamera-Kachel. Sie beantwortet in dieser Reihenfolge: habe ich hier
     Material, wie alt ist es, welche Werte gelten — und dann erst die
     Knoepfe. Ein Kalibrier-Knopf ohne Material waere ein Weg ins Leere,
-    deshalb sagt die Kachel den Stand VOR dem Knopf."""
+    deshalb sagt die Kachel den Stand VOR dem Knopf.
+
+    `frigate_weg` (08.09.): Frigate antwortet gerade gar nicht (keine URL,
+    keine Verbindung). Dann steht KEINE Kamera in Frigates Liste, und die
+    alte Marke "not in Frigate" (Text: "Frigate no longer reports it") waere
+    fuer jede Kachel eine Falschaussage — sie behauptete einen Verlust, wo
+    nur die Verbindung fehlt. Ehrlich ist in diesem Fall: bekannt aus dem
+    Store, Live-Zustand unbekannt."""
     nid = html.escape(k["name"], quote=True)
     name = html.escape(k["name"])
     marke = (f'<span class="pill lvp lvp-ok">{t("kalib.kachel.eigene")}</span>'
              if k["eigene"] else
              f'<span class="pill">{t("kalib.kachel.vorgabe")}</span>')
-    fremd = ("" if k.get("in_frigate") else
-             f' <span class="pill warn" title="{html.escape(t("kalib.kachel.fremd_tip"))}">'
-             f'{t("kalib.kachel.fremd")}</span>')
+    if k.get("in_frigate"):
+        fremd = ""
+    elif frigate_weg:
+        fremd = (f' <span class="pill" title="{html.escape(t("kalib.kachel.offline_tip"))}">'
+                 f'{t("kalib.kachel.offline")}</span>')
+    else:
+        fremd = (f' <span class="pill warn" title="{html.escape(t("kalib.kachel.fremd_tip"))}">'
+                 f'{t("kalib.kachel.fremd")}</span>')
     if not deckel:
         stand = f'<div class="dim lv-zeile">{t("kalib.kachel.vorrat_aus")}</div>'
     elif k["vorrat_n"]:
@@ -144,6 +156,10 @@ def uebersicht(daten, global_werte, kat_global, deckel, lauf_da,
     lauf_da      = gibt es ueberhaupt einen Lernlauf mit Guete-Werten?
     fueller      = (ziel_bilder, deckel_events) des On-demand-Fuellers, damit
                    der Knopf-Text nicht behauptet, was die Config nicht sagt
+    banner_leer  = Frigates Fehlertext (leer = Frigate hat geantwortet). Er
+                   fuellt nicht nur den Leer-Zweig: solange er steht, ist die
+                   Frigate-Liste als Ganzes nicht da, und die Kacheln sagen
+                   "nicht verbunden" statt "nicht mehr in Frigate" (08.09.).
     """
     kopf = (f'<h1>{t("kalib.titel")}</h1>'
             f'<p class="hinweis">{t("kalib.uebersicht.erklaerung")}</p>')
@@ -159,7 +175,8 @@ def uebersicht(daten, global_werte, kat_global, deckel, lauf_da,
                   f'<small>{html.escape(banner_leer or t("kalib.uebersicht.leer_hinweis"))}'
                   f'</small></div>')
     kacheln = '<div class="lv-grid">' + "".join(
-        _kachel(k, deckel, (bilanzen or {}).get(k["name"]))
+        _kachel(k, deckel, (bilanzen or {}).get(k["name"]),
+                frigate_weg=bool(banner_leer))
         for k in daten) + '</div>'
     glob = (f'<div class="card"><b>{t("kalib.global.titel")}</b>'
             f'<div class="dim lv-zeile">{t("kalib.global.satz")}</div>'

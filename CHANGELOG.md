@@ -7,6 +7,167 @@ this file — the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git
 history.
 
+## 0.1.0.511 (unreleased)
+
+A fix for the AMD image, the check that would have caught it, and a loud word
+when an accelerator sits there unused.
+
+- **The rocm image could never load its MIGraphX provider.** Two ROCm libraries
+  were missing from the bundle, so the provider failed to load and every AMD
+  system quietly fell back to the CPU: recognition still worked, it was just
+  slow, and nothing said why. The missing libraries and the HIP headers now ship
+  with the image, and the build itself checks every library it bundles and stops
+  if one of them cannot be loaded. Reported in PR #28 by @olivierberthomme.
+- **New check before publishing: an image must be able to load what it ships.**
+  `tools/image_ldd_audit.sh` runs over all five image variants, in the release
+  gate and in the quality gate.
+- **Startup now warns loudly when a usable GPU or NPU is present but the backend
+  is pinned to cpu.** The start-up check reported the GPU and the NPU as usable
+  and, three lines further down, the cpu backend as fine — without ever
+  connecting the two. A machine can run on the CPU for weeks that way, because
+  someone once set the backend to cpu and forgot about it. There is now a warning
+  line that names the usable devices and points at the setting (`backend`, or the
+  older `ov_device`). Nothing is switched for you: if you chose the CPU, it stays.
+  The line does not appear when the CPU is the only option — cpu image, no device
+  found, or a device that is not usable here.
+- **The log is quiet again: routine chatter moved behind the existing debug
+  switch.** On a busy site the service log ran to roughly 92,000 lines a day, and
+  `/log` covered barely an hour before the interesting part had scrolled away.
+  The lines that repeat for every event and every track — analysis started, a
+  setting that has not changed, the live watcher's track and trigger bookkeeping,
+  cleanup totals, our own support downloads — now appear only when `debug` is on
+  in the configuration page. Measured against two real days from a test site,
+  that is 85 % fewer lines in normal operation. Errors, decisions, state changes,
+  start and stop, and the verdict for every event are always visible, switch or
+  no switch. The switch works while the service runs, no restart, and it now
+  reaches the live watcher process too. The per-camera `wache.log` under
+  `live/<camera>/` is untouched and keeps every line, so camera diagnosis loses
+  nothing. The start-up block now says so in one line when `debug` is off, so a
+  quiet log never looks like a broken one.
+- **Deleting a face no longer re-checks the whole catalog.** Every removed
+  picture used to start a full quality run over all your reference images —
+  measured on a 1228-image catalog that was 14 minutes for a single deleted face,
+  and a clean-up session chained one full run after another. The bookkeeping is
+  updated in place instead, in seconds: the quality report loses exactly the
+  entries of the deleted picture (measured 0.08 s instead of 872 s), and the
+  recognition cache loses exactly its one row instead of being thrown away and
+  rebuilt. It also closes an old gap — deleting a whole person used to leave all
+  of that person's findings standing in the report. Renaming, enrolling and
+  importing still trigger a full re-check, but they now collect for a moment and
+  run once instead of once per action; the two buttons that ask for a check
+  ("Quality-check my pictures" and "Check again") still start it right away.
+- **Catalog checks run in the warm worker now and only re-measure changed
+  images; the first run after the update fills in the values once.** Until now
+  every check measured every reference picture again, in a freshly started
+  process that loaded the models from scratch each time — on a 1229-image
+  catalog that was around 90 seconds of measuring plus more than two minutes of
+  start-up, for numbers that had not changed since the last run. The measured
+  values are kept next to your reference pictures now and re-used as long as the
+  file and the recognition model are unchanged, so a second check over the same
+  catalog took 4 seconds instead of 91 in our test, and the report is identical
+  down to the last field. The check also runs inside the analysis worker that
+  already has the models loaded, so it no longer opens a second GPU context of
+  its own (which had run some graphics cards out of memory) and no longer blocks
+  the learning run and the calibration harvest while it works.
+  The first check after updating has no stored values yet and measures the whole
+  catalog once; it says so in the log and keeps going. Two things come along for
+  free: reference pictures that never carried a camera name get one from your own
+  event records where possible (692 of 1229 before, 1096 after in our test set),
+  and every picture now also carries the two image-quality scores the calibration
+  page works with.
+- **The catalog check now judges with the calibrated quality scale, shows
+  removal suggestions in groups — duplicates, no-face, below-threshold — and
+  warns when a person's catalog looks mixed. Nothing is ever deleted
+  automatically.** Until now the check looked at a stored picture through pixel
+  size, a sharpness number and the feature norm; the two quality scores you
+  calibrate your cameras with were not part of the verdict at all, and the
+  sharpness number turned out not to separate good pictures from bad ones when we
+  measured it against hand-scored sets. A picture that falls below the check bar
+  *and* below the learning-stock norm floor is now suggested for removal; below
+  just one of the two it is flagged for a look. The person's gallery has two new
+  tabs: byte-identical copies, shown as sets so one click pre-selects every copy
+  but the first, and pictures where no face could be found at all. Each tile says
+  why it is marked and where it ranks among that person's pictures. And when more
+  than half of someone's pictures sit closer to a different person than to
+  themselves, their card says so — on our test catalog that flagged exactly the
+  one person whose gallery really did hold a stranger's face. All of it is a
+  suggestion: nothing leaves your library without your click. The check bar is
+  yours to set, per camera or globally, in a new tab on the camera calibration
+  page — separate from the bar that decides which new pictures are taken in, so
+  moving one never silently moves the other. Stock references that never carried
+  a quality score are measured once from their stored crop so they can be judged
+  too (554 of 1229 pictures had a score before, 1146 after in our test set); the
+  files themselves are only read, never touched.
+- **Camera calibration pages open for every camera this installation knows, with
+  or without a Frigate connection.** The overview listed only cameras that
+  Frigate had just reported or that had a live watcher; every other camera's
+  page answered "not found". An installation that had already collected
+  calibration samples but was not talking to Frigate at that moment had the
+  material sitting on disk with no way to reach it — including the new
+  catalogue-check tab. Cameras known from what is stored here, their values or
+  their collected samples, now appear on the overview and their page opens.
+  While Frigate is not answering, their tile says the connection is missing
+  instead of reporting the camera as gone from Frigate.
+- **Two answers on the quality page came back in German whatever language you
+  had set** — the one after removing several pictures at once, and the one after
+  pressing "Check again". Both speak your language now. The duplicate count in
+  the summary line reads "look-alike" as well, because it counts pictures that
+  look alike to the recognition, which is a different set from the byte-identical
+  files in the "Identical copies" tab.
+- **The catalogue bar is reset once, on every installation — including values
+  you set yourself.** The bar that decides which pictures the automatic paths
+  may take into your reference catalogue was far too strict: it stood at
+  0.200/0.400, the calibration of the learning run, and on a real camera that
+  let 34 of 200 collected samples through. Automatic learning was starving on
+  it. The factory values are 0.125/0.125 now, and because a stored value hides
+  a new default forever, this update lowers what is stored — once, at start-up,
+  for the global bar and for every camera, calibrated or not. Everything else is
+  untouched: your "Recognition" tab (detection, picture impression,
+  recognisability, head pose) and the catalogue check bar stay exactly as you
+  set them. Each change is written to the configuration audit log with the old
+  and the new value, and the service log says which camera was reset and why.
+  You can put the bar back up on the camera calibration page at any time — it
+  will never be migrated again. The sliders start at 0.100 now instead of
+  0.175/0.375, so a lower bar can actually be set.
+  The bar has a different job since this release: taking pictures in is meant to
+  be generous, and sorting them out again is the catalogue check's job. The
+  learning run itself is not yet recalibrated on the new quality scale; that is
+  the next step, and until then its own bar stays at the measured 0.200/0.400.
+
+## 0.1.0.510 (2026-09-07)
+
+Recognition and the analysis queue: names that were missed just below the old
+line, all analysis slots kept busy, and a queue that survives Frigate being away.
+
+- **The threshold that confirms a name is 0.45 instead of 0.50.** A field
+  measurement showed real appearances staying unnamed just under the old line.
+  Installations still on the factory value 0.50 are moved once, noted in the
+  audit log; a value you set yourself is never touched.
+- **A face whose quality cannot be measured no longer votes.** The quality check
+  is fail-closed per face now — an unmeasurable face is dropped and counted
+  instead of passing through unchecked. If the pose model is missing altogether,
+  recognition keeps running without that criterion rather than refusing every
+  face, and the worker and the live watcher behave the same way.
+- **Searching for references on click runs in the warm worker.** The search no
+  longer starts on its own; you trigger it, and it runs as an interactive job in
+  the process that already has the models loaded, using the crop cache. Ranking
+  puts interactive work and event analysis first, background work only fills
+  idle slots.
+- **All analysis slots stay busy under load.** Background fairness used to leave
+  a slot empty while events were waiting.
+- **The clip download gate now covers the event path too.** Until now only the
+  learning run was limited; poll, MQTT and backfill downloads went past it and
+  could saturate Frigate's API the same way. An event that hits the cap stays
+  unbooked and a later run picks it up.
+- **The queue holds while Frigate is unreachable.** A Frigate restart used to
+  empty the pending queue; the entries now keep their age and order and are
+  worked off when Frigate answers again, with one collected log line instead of
+  an error per event.
+- **The support export masks stream credentials.** Camera URLs with a user and
+  password in them are masked from one source everywhere they are shown or
+  exported — the old check in the sync diagnosis broke on an `@` inside the
+  password. A release gate stage now looks for credentials in support answers.
+
 ## 0.1.0.509 (2026-09-06)
 
 Bundles 0.1.0.508, which was never published — everything listed there is in

@@ -245,6 +245,55 @@ def dateien(ordner):
     return aus
 
 
+# --------------------------------------------------------- Debug-Schalter (.511)
+# WARUM EINE DATEI UND NICHT DER CONFIG-STORE: der Live-Waechter laeuft als
+# EIGENER Prozess (core/livewached, gestartet von core/liveaufsicht) und holt
+# seine Config ueber `verifyd.load_config`. Genau dort steht seit B6 (24.08.)
+# der Start-Reset "debug wird bei jedem Start auf aus gestellt" — der Store
+# taugt deshalb NICHT als Traeger: jeder Reload der Engine bekaeme debug=False
+# zurueck, egal was der Nutzer eben auf der Konfigurationsseite gesetzt hat.
+# Also spiegelt der DIENST seinen laufenden Schalter in diese eine Datei
+# (Existenz = an), und die Engine liest sie. Ein Schalter, eine Wahrheit, und
+# der Start-Reset bleibt unangetastet: beim Start ist der Schalter aus, also
+# loescht der Dienst die Datei.
+# Muster wie state/live_kommando.json: der Dienst schreibt, die Engine liest.
+FLAGGE = "debug_an"
+
+
+def debug_flagge_pfad(data_dir):
+    return os.path.join(str(data_dir or ""), "state", FLAGGE)
+
+
+def debug_flagge_setzen(data_dir, an):
+    """Den LAUFENDEN debug-Stand des Dienstes in die Flaggendatei spiegeln.
+    Nie laut scheitern: ein read-only /data (Erststart-Fall aus B6) darf den
+    Dienst nicht kosten — dann bleibt die Engine eben still. -> bool(an)."""
+    p = debug_flagge_pfad(data_dir)
+    try:
+        if an:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w") as f:
+                f.write("1\n")
+        else:
+            try:
+                os.remove(p)
+            except FileNotFoundError:
+                pass
+    except OSError:
+        pass
+    return bool(an)
+
+
+def debug_flagge_an(data_dir):
+    """Steht der Schalter? (Existenz der Flaggendatei.) Fail-closed: was nicht
+    gelesen werden kann, gilt als aus — ein Diagnose-Schalter darf nie durch
+    einen IO-Fehler ANgehen."""
+    try:
+        return os.path.exists(debug_flagge_pfad(data_dir))
+    except OSError:
+        return False
+
+
 def schwanz(pfad, zeilen=2000):
     """Die letzten `zeilen` Zeilen der laufenden Datei, ohne sie ganz zu lesen."""
     try:
