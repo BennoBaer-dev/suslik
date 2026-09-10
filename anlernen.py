@@ -15,7 +15,7 @@ Unknown-Reiter (22.07.) NUR noch intern gerufen (_reconcile_intern + CLI 'cluste
 Widerleger-Fund 30.07.: die alte Import-Behauptung fuehrte Reviews in die Irre.
 Read-only gegen Frigate; schreibt nur in verify_data/anlernen/ (+ refs/ beim Benennen).
 """
-import os, sys, json, time, argparse, collections, fcntl, tempfile, threading
+import os, sys, json, time, argparse, collections, fcntl, hashlib, tempfile, threading
 from contextlib import contextmanager
 os.environ.setdefault("OV_DEVICE", "GPU")
 from core.pfade import WURZEL as HERE   # M0-Anker (Falle 0): eine Pfad-Quelle
@@ -26,6 +26,7 @@ from face_audit import Embedder, aktuelles_modell, ist_fehldetektion
 from core.unbekanntpool import ARCHIV_TAGE   # EINE Quelle: Archiv-/Reaktivierungs-Fenster (auch Today-Kachel)
 from core.benennung import REF_LATTE         # .265 EINE Quelle: Referenz-Latte (auch _reihung/empfehlen)
 from core import atomar as _atomar           # .411: eindeutige tmp beim atomaren Schreiben (refcache.npz)
+from core import messkarte as _mk            # .513 Etappe 1: DER Vertrag der Messkarte
 
 DATA = os.environ.get("VERIFY_DATA_DIR") or os.path.join(HERE, "verify_data")  # von verifyd prozessweit gesetzt
 MASTER = os.path.join(DATA, "faces")
@@ -119,14 +120,19 @@ def _latte_aus_env(name):
 
 # .380 (Beschluss 31.08. "Gruppenbildungs-Vereinheitlichung"): die Latten des
 # POOL-ZULAUFS. verifyd reicht die FERTIGEN Dicts als JSON durch die Env
-# (norm_latte_aus_cfg / guete_latte_aus_cfg) — hier wird bewusst KEIN
+# (norm_latte_aus_cfg / kamerakalib.katalog_latten) — hier wird bewusst KEIN
 # Config-Schluessel ein zweites Mal ausgewaehlt, sonst haette der Pool seine
 # eigene Auswahl und driftete gegen Lernlauf und Anzeige (K3-Regel).
 # Vererbungs-Muster wie VERIFY_DATA_DIR/VERIFY_FD_*: Worker und Subprozess
 # erben die Umgebung des Dienstes. Ohne Dienst (CLI, Gate-Fixtures) bleiben
 # beide leer und der Zulauf verhaelt sich wie vor .380.
+# .516 ALT-LATTEN-ABLOESUNG: statt der zwei globalen Guete-Werte reist jetzt
+# das GANZE Register „Face catalog" ({"global": {...}, "kameras": {...}},
+# core.kamerakalib.katalog_latten). Nur so kann der Pool je Kamera dieselbe
+# Latte anlegen wie Ernte und Gruppen-Flaeche; ein Transport der zwei globalen
+# Zahlen haette den Kamera-Bezug unterwegs verloren.
 NORM_LATTE_ZULAUF = _latte_aus_env("VERIFY_NORM_LATTE")
-GUETE_LATTE_ZULAUF = _latte_aus_env("VERIFY_GUETE_LATTE")
+KAT_LATTEN_ZULAUF = _latte_aus_env("VERIFY_KAT_LATTEN")
 # Cluster-Schwelle: ab dieser Cosinus-Aehnlichkeit zaehlen zwei Gesichter als dieselbe Person.
 # Hebel 2 (21.07.): auf den modell-konsistenten Daten (nach Hebel 1) rekalibriert 0.45->0.50 —
 # echte Cluster liegen >=0.55, Fehl-Merges verschiedener Personen bei 0.45-0.48; 0.50 trennt sie,
@@ -292,9 +298,16 @@ def _pruef_tag():
     # abgehakte Events). Preis, bewusst: nach diesem Update laeuft das Fenster
     # einmal neu durch — genau das soll es, denn die Zeilen bekommen dabei ihre
     # Messwerte.
+    # .516: das Register ist keine flache Zahl mehr (Werte je Kamera). In den
+    # Tag geht deshalb sein STABILER Fingerabdruck — sortiertes JSON, gekuerzt
+    # auf 12 Hex-Stellen. Zweck unveraendert: aendert der Betreiber eine Latte,
+    # gilt der alte Abhak-Vermerk nicht mehr und das Fenster laeuft einmal neu.
+    _reg = hashlib.sha1(
+        json.dumps(KAT_LATTEN_ZULAUF, sort_keys=True,
+                   ensure_ascii=False).encode("utf-8")).hexdigest()[:12]
     _z = "/".join(str(x) for x in
                   (NORM_LATTE_ZULAUF.get("struktur"), NORM_LATTE_ZULAUF.get("veto"),
-                   GUETE_LATTE_ZULAUF.get("empfinden_min"), GUETE_LATTE_ZULAUF.get("t_min")))
+                   _reg))
     return f"{aktuelles_modell()}|k{MIN_KANTE}|d{MIN_DET}|ff{FD_FRONT_MIN}|fs{FD_SHARP_MIN}|fx{FD_DET_MAX}|z{_z}"   # FD-Schwellen im Tag (Review .52: sonst wirkt eine Schwellenaenderung nie auf abgehakte Events)
 
 
@@ -371,7 +384,7 @@ def _zulauf_urteil(k):
     damit die beiden Env-Latten nicht an mehreren Stellen ausgepackt werden.
     Leeres Dict -> None weitergereicht: 'Achse aus', kein Ausschluss."""
     from core.benennung import pool_zulauf
-    return pool_zulauf(k, NORM_LATTE_ZULAUF or None, GUETE_LATTE_ZULAUF or None)
+    return pool_zulauf(k, NORM_LATTE_ZULAUF or None, KAT_LATTEN_ZULAUF or None)
 
 
 def sammle(tage=5.0, fps_sample=2, mit_migriere=True, kalib_deckel=None):
@@ -2476,14 +2489,37 @@ def qs_bericht_bereinigen(person, dateien=None):
 
 
 def _ref_datei_weg(person, datei):
-    """Die Datei-Seite einer Loeschung: Pfad pruefen, Datei entfernen, TOMBSTONE in
-    refs_meta anhaengen (aktiv:false; NICHT die Zeile entfernen — ohne Tombstone
-    wuerde sync_refs das in Frigate noch vorhandene Bild als 'neu' re-importieren).
+    """Die Datei-Seite einer Loeschung: Pfad pruefen, Datei in den PAPIERKORB
+    verschieben, TOMBSTONE in refs_meta anhaengen (aktiv:false; NICHT die Zeile
+    entfernen — ohne Tombstone wuerde sync_refs das in Frigate noch vorhandene
+    Bild als 'neu' re-importieren).
     Nur innerhalb refs/ (Containment). Die Buchhaltung (QS-Bericht, refcache)
     machen die Aufrufer GEMEINSAM fuer alle Bilder eines Zuges — sie ist der
     teure Teil, und je Bild einmal waere bei einer 317er-Batch-Loeschung
-    (Feldtester-Maximum) 317-mal dieselbe npz."""
+    (Feldtester-Maximum) 317-mal dieselbe npz.
+
+    .512 (Feldtester 09.09.): bis .511 stand hier `os.remove` — die
+    Einzelbild-Loeschung der Qualitaets- und der Faces-Seite war ENDGUELTIG,
+    waehrend `/person_loeschen` (der viel drastischere Weg) den Ordner nach
+    `<data>/trash/` verschiebt und damit umkehrbar ist. Auf der Qualitaets-Seite
+    reichen zwei Klicks ("Select all" in zwei Reitern), um den Bestand einer
+    Person auszuraeumen; bei einem der drei angesehenen Feldtester-Faelle waeren
+    danach 0 von 21 Bildern uebrig gewesen. Der reversible Weg war der
+    drastischere — das ist jetzt umgedreht.
+
+    ABLAGE: `<data>/trash/refs/<Person>/<Datei>` — Person UND Dateiname bleiben
+    erhalten, ein Restore ist damit ein reines Zurueckschieben. Traegt der Korb
+    den Namen schon (dasselbe Bild ein zweites Mal geloescht und neu geerntet),
+    bekommt der Neuzugang einen Zeitstempel angehaengt, statt den alten Stand zu
+    ueberschreiben.
+
+    FACHLICH UNVERAENDERT: der Tombstone, der Rueckgabe-Vertrag und die
+    Buchhaltung der Aufrufer sind dieselben wie in .511 — nur der
+    Datei-Endpunkt wechselt von 'entfernen' auf 'verschieben'. Scheitert das
+    Verschieben, wird NICHT ersatzweise geloescht: dann meldet der Griff einen
+    Fehler und das Bild bleibt liegen (fail-closed auf dem Loeschweg)."""
     import re
+    import shutil
     from core.registry import DATEI_RE, PERSON_RE   # Vertrag (Issue #12 + Sweep 03.08.)
     if not re.fullmatch(PERSON_RE, person or "") or not re.fullmatch(DATEI_RE, datei or ""):
         return False, "ungueltiger Pfad"
@@ -2491,12 +2527,29 @@ def _ref_datei_weg(person, datei):
     ziel = os.path.realpath(os.path.join(base, person, datei))
     if not ziel.startswith(base + os.sep) or not os.path.isfile(ziel):
         return False, "Bild nicht gefunden"
-    os.remove(ziel)
+    korb = os.path.join(DATA, "trash", "refs", person)
+    try:
+        os.makedirs(korb, exist_ok=True)
+        ablage = os.path.join(korb, datei)
+        if os.path.exists(ablage):
+            stamm, endung = os.path.splitext(datei)
+            ablage = os.path.join(korb, f"{stamm}_{int(time.time())}{endung}")
+        try:
+            os.replace(ziel, ablage)
+        except OSError:
+            shutil.move(ziel, ablage)      # anderes Dateisystem (EXDEV)
+    except OSError as e:
+        return False, f"Papierkorb nicht beschreibbar: {e}"
     with open(os.path.join(MASTER, "refs_meta.jsonl"), "a") as f:
         f.write(json.dumps({"ts": round(time.time(), 1), "person": person, "datei": datei,
                             "aktiv": False, "grund": "ui-entfernt"}, ensure_ascii=False) + "\n")
         f.flush()
-    return True, f"{person}/{datei} entfernt"
+    # .525 (Prod-Pruefung 10.09., Befund B-6): der Rueckgabe-Satz wandert
+    # UNVERAENDERT in eine sonst englische Dienst-Logzeile ("REFERENCE REMOVED:
+    # … entfernt") UND in die Antwort der Oberflaeche — beide sind englisch, das
+    # eine deutsche Wort war der einzige Fremdkoerper darin. Betrifft jede
+    # Referenz-Loeschung, nicht nur die Gate-Probe, an der es auffiel.
+    return True, f"{person}/{datei} removed"
 
 
 def _nach_loeschung(je_person):
@@ -2747,7 +2800,7 @@ def bild_stufe(eigen, fremd, kante, sh, *,
                norm=None, norm_gut=None, norm_min=None,
                norm_kante_min=None, norm_sharp_min=None,
                fiqa_t=None, empf=None,
-               guete_t_min=None, guete_empfinden_min=None):
+               latte_t=None, latte_e=None):
     """.257: die Zwei-Achsen-Bewertung der Bruecke als EINE QUELLE (QS-Ebenen-
     Regel; Anlass: die Benenn-Pruefung der Zuweisungs-Flaeche hatte nur den
     Dedup und liess 12 matschige Bilder als 'neu' durch — User-Fang am
@@ -2765,7 +2818,11 @@ def bild_stufe(eigen, fremd, kante, sh, *,
     Parameter (Default) urteilt die Funktion UNVERAENDERT (.257-Gate-Vektoren).
     GUETE-WEG (.377, User-Entscheid 30.08.): traegt das Bild beide Ernte-Masse
     (fiqa_t/empf) UND sind beide Schwellen gesetzt, urteilt die kalibrierte
-    Guete-Latte statt der Laplacian-Schaerfe — siehe unten.
+    Guete-Latte statt der Laplacian-Schaerfe — siehe unten. Die zwei Schwellen
+    `latte_e`/`latte_t` kommen seit .516 AUFGELOEST vom Aufrufer (Register
+    „Face catalog" je Kamera, core.kamerakalib.sieb_latten) statt aus den zwei
+    globalen Config-Werten; diese Funktion bleibt rein und waehlt nie selbst
+    einen Config-Schluessel aus.
     -> (stufe 'empfohlen'|'neutral'|None, grund_englisch fuer die UI)."""
     _norm_ok = (norm is not None and norm_min is not None
                 and kante is not None and sh is not None
@@ -2785,15 +2842,21 @@ def bild_stufe(eigen, fremd, kante, sh, *,
     # Lern-Bruecke am frisch gemessenen Crop), urteilt der Alt-Weg darunter
     # Zeile fuer Zeile unveraendert weiter (.257-Gate-Vektoren).
     _g_da = (fiqa_t is not None and empf is not None
-             and guete_t_min is not None and guete_empfinden_min is not None)
+             and latte_t is not None and latte_e is not None)
     _g_gut = False
     if _g_da:
         # .379 (User-Entscheid 30.08.): allein die kalibrierte Latte — die
         # Norm-Rettung nach oben ist raus (Begruendung: core.benennung.
         # _lattenklasse, dieselbe Aenderung im selben Zug).
-        _g_gut = (kante is not None and kante >= min_kante
-                  and float(empf) >= float(guete_empfinden_min)
-                  and float(fiqa_t) >= float(guete_t_min))
+        # .516: der dritte Teil dieser Bedingung, `kante >= min_kante` (70 px),
+        # ist WEG. Er war die letzte der drei Kanten-Schranken neben Sensor 6
+        # (Register-Achse `k`, Werkswert 25 px) — am .514-Abnahmelauf traf er
+        # 512 von 1385 Zeilen, die Ernte und Anker-Sieb schon durchgelassen
+        # hatten. Zwei Kanten-Zahlen fuer dieselbe Frage sind genau die
+        # Doppel-Siebung, die die Sechs-Achsen-Verfassung verbietet; das
+        # Kanten-Urteil faellt ausschliesslich das Register.
+        _g_gut = (float(empf) >= float(latte_e)
+                  and float(fiqa_t) >= float(latte_t))
         if not _g_gut:
             return None, GRUND_TEXT["guete_zu_schwach"]
     elif ((kante is None or sh is None or kante < min_kante or sh < unscharf_max)
@@ -2903,7 +2966,15 @@ def diagnose_dominant(dg):
 # (2) Der Cache waechst mit den Ereignissen; geraeumt wird beim Schreiben ueber
 # das Vorhandensein der Crop-Datei (geloeschte Ereignisse fallen heraus).
 CROPCACHE = "cropcache.npz"
-_CC_LEN = 7 + 512          # flag, kante, sh, norm, mtime, size, norm_da + Embedding
+# Aufbau EINER Zeile (Indizes sind Vertrag zwischen _cc_zeile und _cc_werte):
+#   [0] Gesicht gefunden · [1] kante · [2] sharp · [3] norm · [4] mtime
+#   [5] groesse · [6] norm_da · [7:7+512] Embedding
+#   [519] mk_fiqa_t · [520] mk_empf · [521] guete_da        (.513, Etappe 1 B3)
+# Die drei neuen Werte stehen HINTER dem Embedding, damit der Slice [7:7+512]
+# derselbe bleibt. Alt-Zeilen sind kuerzer und fallen ueber die Laengen-Wache
+# in `_cc_passt` heraus: sie werden einmal neu gemessen, nie halb gelesen.
+_CC_EMB0 = 7
+_CC_LEN = 7 + 512 + 3
 
 
 def _cropcache_pfad():
@@ -2944,10 +3015,16 @@ def _cc_schluessel(eid, datei):
     return f"{eid}|{datei}"
 
 
-def _cc_zeile(v, kante, sh, norm, mt, sz, norm_da):
+def _cc_zeile(v, kante, sh, norm, mt, sz, norm_da,
+              mk_fiqa_t=None, mk_empf=None, guete_da=False):
     """Messwerte -> eine Cache-Zeile. `v is None` (kein Gesicht) ist ein
     GUELTIGES Ergebnis und wird mitgecacht — genau diese Bilder sind sonst
-    jedes Mal wieder 0,3 s Detektion fuer ein „kein_gesicht"."""
+    jedes Mal wieder 0,3 s Detektion fuer ein „kein_gesicht".
+
+    .513 (Etappe 1 B3): die zwei Guete-Masse der Messkarte reisen mit. Ohne
+    sie liefe jeder Cache-Treffer der Bestands-Suche weiter ungemessen durch
+    — die Messpflicht griffe genau bei dem Bild nicht, das der Nutzer schon
+    einmal geprueft hat (Inventur §I-4, Nebenbedingung fuer den Bau)."""
     z = np.zeros(_CC_LEN, np.float64)
     z[0] = 1.0 if v is not None else 0.0
     z[1] = float(kante) if kante is not None else np.nan
@@ -2957,16 +3034,23 @@ def _cc_zeile(v, kante, sh, norm, mt, sz, norm_da):
     z[5] = float(sz)
     z[6] = 1.0 if norm_da else 0.0
     if v is not None:
-        z[7:] = np.asarray(v, np.float64).ravel()[:512]
+        z[_CC_EMB0:_CC_EMB0 + 512] = np.asarray(v, np.float64).ravel()[:512]
+    z[519] = float(mk_fiqa_t) if mk_fiqa_t is not None else np.nan
+    z[520] = float(mk_empf) if mk_empf is not None else np.nan
+    z[521] = 1.0 if guete_da else 0.0
     return z
 
 
 def _cc_werte(z):
-    """Cache-Zeile -> (v|None, kante|None, sh, norm|None) wie `bild_metriken`."""
-    v = np.asarray(z[7:], np.float32) if z[0] >= 0.5 else None
+    """Cache-Zeile -> (v|None, kante|None, sh, norm|None, (fiqa_t|None,
+    empf|None)) — dieselbe Gestalt wie `bild_metriken(..., mit_guete=True)`."""
+    v = (np.asarray(z[_CC_EMB0:_CC_EMB0 + 512], np.float32)
+         if z[0] >= 0.5 else None)
     kante = None if np.isnan(z[1]) else int(z[1])
     norm = None if np.isnan(z[3]) else float(z[3])
-    return v, kante, float(z[2]), norm
+    g = (None if np.isnan(z[519]) else float(z[519]),
+         None if np.isnan(z[520]) else float(z[520]))
+    return v, kante, float(z[2]), norm, g
 
 
 def _cc_passt(z, mt, sz):
@@ -3023,6 +3107,8 @@ def vorschlaege_person(person, tage=7.0, max_n=16,
           "gedeckelt": False, "empfohlen": 0, "neutral": 0,
           # .510/J18 b: was der Crop-Cache gespart hat (Diagnose, keine Entscheidung)
           "cache_treffer": 0, "cache_neu": 0}
+    # B4: die Mess-Bilanz DIESER Suche (core/messkarte).
+    _bilanz = _mk.bilanz_start("bestands-suche")
 
     def _zaehl(klasse):
         dg["klassen"][klasse] = dg["klassen"].get(klasse, 0) + 1
@@ -3039,6 +3125,14 @@ def vorschlaege_person(person, tage=7.0, max_n=16,
         if "wert" not in _nm_stand:
             _nm_stand["wert"] = _normmass_geteilt() is not None
         return _nm_stand["wert"]
+
+    def _guete_da():
+        """.513: dieselbe Lazy-Frage fuer die Guete-Modelle — sie entscheidet,
+        ob eine Cache-Zeile OHNE Guete noch taugt."""
+        if "guete" not in _nm_stand:
+            from core import guete as _gu
+            _nm_stand["guete"] = bool(_gu.verfuegbar())
+        return _nm_stand["guete"]
 
     if len(refs.get(person, [])):
         grenze = time.time() - tage * 86400
@@ -3112,9 +3206,13 @@ def vorschlaege_person(person, tage=7.0, max_n=16,
             _treffer = (_cc_passt(_z, _mt, _sz)
                         # `norm_da == 0` heisst „damals ohne Feature-Norm gemessen":
                         # nur brauchbar, solange es auch JETZT keine gibt.
-                        and (_z[6] >= 0.5 or not _norm_da()))
+                        and (_z[6] >= 0.5 or not _norm_da())
+                        # .513 dieselbe Regel fuer die Guete: eine Zeile, die
+                        # ohne die Guete-Modelle entstand, taugt nur solange
+                        # die Modelle auch jetzt fehlen.
+                        and (_z[521] >= 0.5 or not _guete_da()))
             if _treffer:
-                v, kante, sh, norm = _cc_werte(_z)
+                v, kante, sh, norm, _g = _cc_werte(_z)
                 geprueft += 1
                 dg["geprueft"] = geprueft
                 dg["cache_treffer"] += 1
@@ -3128,10 +3226,26 @@ def vorschlaege_person(person, tage=7.0, max_n=16,
                 dg["geprueft"] = geprueft
                 # .308: Norm aus DERSELBEN Detektion — der Norm-Weg qualifiziert
                 # alternativ zur Pixel-Latte (norm_latte aus der Dienst-Config).
-                v, kante, sh, norm = bild_metriken(emb, img, mit_norm=True)
+                # .513 (Etappe 1 B3): mit_guete=True — dieser Weg mass bisher
+                # kante/sharp/norm und liess die zwei Kalibrier-Masse liegen,
+                # obwohl `bild_metriken` sie seit .511 kann (Inventur §I-4).
+                # Die Werte landen in der Messkarte der Vorschlags-Zeile; der
+                # `bild_stufe`-Aufruf unten bleibt WORTGLEICH ohne sie — die
+                # Daten werden vollstaendig, das Urteil nicht anders.
+                v, kante, sh, norm, _g = bild_metriken(emb, img, mit_norm=True,
+                                                       mit_guete=True)
                 if crop_cache:
                     dg["cache_neu"] += 1
-                    _cc_neu[_k] = _cc_zeile(v, kante, sh, norm, _mt, _sz, _norm_da())
+                    _cc_neu[_k] = _cc_zeile(v, kante, sh, norm, _mt, _sz,
+                                            _norm_da(), _g[0], _g[1], _guete_da())
+            # BILANZ (.513, Etappe 1 B4): je gemessenem Bild eine Buchung —
+            # dieselbe Mechanik wie in der Ernte, damit „wie viel konnte
+            # ueberhaupt beurteilt werden?" auf JEDEM Weg dieselbe Zahl ist.
+            _mk.bilanz_zaehlen(
+                _bilanz, _g[0] is not None and _g[1] is not None,
+                (_mk.GRUND_KEIN_GESICHT if v is None
+                 else (_mk.GRUND_MODELL_FEHLT if not _guete_da()
+                       else _mk.GRUND_MESSFEHLER)))
             _nl = norm_latte or {}
             _norm_ok = (norm is not None and _nl.get("min") is not None
                         and kante is not None and norm >= _nl["min"]
@@ -3171,11 +3285,24 @@ def vorschlaege_person(person, tage=7.0, max_n=16,
                 # sagen zu koennen woran es lag. Kennung statt Text (§8.19).
                 _zaehl(GRUND_KLASSE.get(grund, "sonstiges"))
                 continue
-            kand.append({"eid": d["eid"], "datei": datei, "sim": round(eigen, 3),
+            # MESSKARTE (.513, Etappe 1 B3): die Vorschlags-Zeile traegt die
+            # Karte. Was dieser Weg messen KANN, steht drin — det/front/pose/
+            # struktur/luma kennt er nicht (er misst an einem Event-Crop, nicht
+            # am Ernte-Frame) und traegt sie deshalb als None: die Karte sagt
+            # „nicht gemessen", sie schweigt nicht. `mk_quelle` benennt den
+            # Ausschnitt, damit niemand die Zahlen fuer Ernte-Werte haelt
+            # ([[ersatzmessungen-sind-hypothesen]]).
+            kand.append(_mk.uebernehmen(
+                        {"eid": d["eid"], "datei": datei, "sim": round(eigen, 3),
                          "fremd": round(fremd, 3), "kante": kante, "sharp": sh,
                          "norm": norm,
                          "stufe": stufe, "sicher": (stufe == "empfohlen"),
-                         "camera": d.get("camera"), "ts": d.get("start") or d.get("ts")})
+                         "camera": d.get("camera"), "ts": d.get("start") or d.get("ts"),
+                         "mk_fiqa_t": _g[0], "mk_empf": _g[1],
+                         "mk_quelle": (_mk.QUELLE_EVENT if _g[0] is not None
+                                       and _g[1] is not None else None),
+                         "mk_modell": emb.modell},
+                        {}))
         kand.sort(key=lambda k: (0 if k["stufe"] == "empfohlen" else 1, k["sim"]))
         kand = kand[:max_n]
         dg["empfohlen"] = sum(1 for k in kand if k["stufe"] == "empfohlen")
@@ -3184,6 +3311,12 @@ def vorschlaege_person(person, tage=7.0, max_n=16,
             print(f"vorschlaege {person}: cap of {max_pruef} image measurements reached, "
                   f"older events unchecked", flush=True)
     dg["dominant"] = diagnose_dominant(dg)
+    # B4: die Bilanz gehoert in die Diagnose (der Worker traegt sie zum Dienst)
+    # UND als EINE Zeile ins Log — sonst weiss niemand, ob die Latte auf
+    # diesem Weg ueberhaupt Messgrundlage hatte.
+    dg["mkbilanz"] = _bilanz
+    if _bilanz["gesehen"]:
+        print(f"vorschlaege {person}: " + _mk.bilanz_satz(_bilanz), flush=True)
     if diagnose is not None:
         diagnose.update(dg)
     # .510/J18 b: Cache fortschreiben. Behalten wird, was DIESER Lauf angefasst
@@ -3212,6 +3345,10 @@ def vorschlaege_person(person, tage=7.0, max_n=16,
         os.makedirs(ANLERN, exist_ok=True)
         _schreibe_json_atomar(_vorschlaege_pfad(person),
                               {"ts": time.time(), "person": person, "tage": tage,
+                               # B4: die Bilanz steht in der Ergebnis-Datei des
+                               # Laufs (Muster refs_qs_lauf.json) — sie soll
+                               # nachschlagbar sein, nicht nur im Log stehen.
+                               "messdeckung": _bilanz,
                                "kandidaten": kand})
     return kand
 
@@ -3635,6 +3772,103 @@ def vorrat_aufnehmen(person, lauf_id, datei, eid, data_dir=None,
     return True, ziel
 
 
+def passernte_aufnehmen(person, lauf_id, datei, eid, data_dir=None,
+                        kat_latten=None):
+    """Ein Bild des MINI-ERNTE-LAUFS als Referenz uebernehmen (.521).
+
+    ZWILLING von `vorrat_aufnehmen` und bewusst danebengestellt statt
+    hineingebogen: derselbe Beiwert-Weg (Bild kopieren, refs_meta MIT
+    Embedding, refcache ueber den Beiwert einpflegen), aber eine andere
+    Quelle. Der Vorrats-Weg nimmt den Rand-Ausschnitt aus `vorrat/` und
+    schlaegt seinen Beiwert in der `vorrat.jsonl` nach; hier liegt das Bild
+    als M-Crop in `crops/`, und der Beiwert steht in der `auswahl.jsonl`, die
+    der Identitaets-Schritt geschrieben hat (core/passernte.py). Ein
+    gemeinsamer Rumpf mit zwei Weichen waere schwerer zu lesen als zwei
+    kurze, ehrliche Wege — dieselbe Begruendung, mit der `vorrat_aufnehmen`
+    seinerzeit neben `vorschlag_aufnehmen` entstand (Konzept-QS W1.13).
+
+    DAS EMBEDDING WIRD NIE NEU GERECHNET: es kommt aus der Kandidaten-Zeile,
+    also vom ERNTE-FRAME. Ein aus dem gespeicherten JPEG nachgemessener Wert
+    waere eine Ersatzmessung ([[ersatzmessungen-sind-hypothesen]]) — und am
+    engen Crop scheitert die Nachmessung gemessen in 28 von 40 Faellen.
+
+    `herkunft` ist deshalb `vorrat`, obwohl das Bild aus einem anderen Ordner
+    kommt: das Feld ist an seinen zwei Lesestellen eine KLASSE, keine
+    Wegbeschreibung — `lade_master_bilder` entscheidet daran, ob die
+    Beiwert-Latte urteilt, und `sync_refs` haelt genau diese Klasse vom
+    Frigate-Export fern (die kleine Bilddatei kann Frigates eigene Pipeline
+    oft nicht detektieren). Beides gilt hier Wort fuer Wort. Der WEG steht
+    daneben in `weg`, damit die Herkunft trotzdem nachlesbar bleibt.
+
+    -> (ok, ziel_oder_fehler)."""
+    import re, shutil
+    from core.registry import PERSON_RE, DATEI_RE   # Namens-Vertrag statt Streu-Literal
+    from core import benennung as _bn_pe
+    from core import passernte as _pe
+    dd = data_dir or DATA
+    if (not re.fullmatch(PERSON_RE, person or "")
+            or not re.fullmatch(r"[LB]\w+", str(lauf_id or ""))
+            or not re.fullmatch(rf"{DATEI_RE}\.jpg", str(datei or ""), re.I)):
+        return False, "ungueltige Angaben"
+    lauf_dir = os.path.join(dd, "state", "lernlauf", str(lauf_id))
+    basis = os.path.realpath(os.path.join(lauf_dir, "crops"))
+    quelle = os.path.realpath(os.path.join(basis, datei))
+    if not quelle.startswith(basis + os.sep) or not os.path.isfile(quelle):
+        return False, "Bild nicht gefunden (Pruefung schon aufgeraeumt?)"
+    zeile = next((z for z in _pe.auswahl_lesen(lauf_dir)
+                  if os.path.basename(str(z.get("datei") or "")) == datei
+                  and str(z.get("person") or "") == person), None)
+    if zeile is None:
+        return False, "Bild gehoert nicht zur geprueften Auswahl"
+    if str(zeile.get("eid") or "") != str(eid or ""):
+        return False, "Angebot passt nicht zum Event"
+    emb_vec = zeile.get("emb")
+    if not emb_vec:
+        # Ohne Beiwert keine Uebernahme — LAUT ablehnen statt eine tote
+        # Referenz anzulegen (28/40-Befund, wortgleich `vorrat_aufnehmen`).
+        return False, "kein Embedding-Beiwert in der Auswahl"
+    # KATALOG-LATTE, dieselbe EINE Funktion wie an den anderen
+    # Uebernahme-Stellen (Deckungs-Vertrag: keine Ausnahme). Sie fragt genau
+    # die zwei Werte, mit denen das Register schon gesiebt hat — sie beisst
+    # hier also per Konstruktion nicht, und das ist richtig so: eine zweite
+    # Qualitaets-Entscheidung waere die Doppel-Siebung. Die Masse kommen ueber
+    # den EINEN Griff `core.benennung.guete_masse` (Messkarte zuerst).
+    from core import kamerakalib as _kk
+    _empf, _fiqa = _bn_pe.guete_masse(zeile)
+    _kok, _kgrund = _kk.katalog_ok(kat_latten, zeile.get("kamera"),
+                                   _empf, _fiqa)
+    if not _kok:
+        return False, _kgrund
+    zdir = os.path.join(MASTER, person)
+    os.makedirs(zdir, exist_ok=True)
+    ed = str(eid).replace("/", "_")
+    ziel = (f"pass_{int(time.time())}_{ed[-10:]}_"
+            f"{re.sub(r'[^\w.-]', '_', datei)[-30:]}")
+    shutil.copyfile(quelle, os.path.join(zdir, ziel))
+    with open(os.path.join(MASTER, "refs_meta.jsonl"), "a") as f:
+        f.write(json.dumps({"ts": round(time.time(), 1), "person": person,
+                            "datei": ziel, "herkunft": "vorrat",
+                            "weg": "passernte", "eid": eid,
+                            "aktiv": True, "emb": emb_vec,
+                            "emb_modell": zeile.get("modell"),
+                            "kante": zeile.get("kante"),
+                            "sharp": zeile.get("sharp"),
+                            "norm": zeile.get("norm"),
+                            "camera": zeile.get("kamera"),
+                            "fiqa_t": _fiqa, "empf": _empf,
+                            "lauf_id": lauf_id},
+                           ensure_ascii=False) + "\n")
+        f.flush()
+    if not refcache_ergaenzen(person, os.path.join(zdir, ziel), ziel, None,
+                              emb_vec=emb_vec,
+                              emb_modell=zeile.get("modell")):
+        try:
+            os.remove(os.path.join(CLIPS, "refcache.npz"))
+        except FileNotFoundError:
+            pass
+    return True, ziel
+
+
 def lernbruecke_pruefen(person, eids, emb=None, diagnose=None, norm_latte=None):
     """Lern-Bruecke Schritt 1 (User 16.08., zweite Fassung: 'erst pruefen,
     welche Bilder uebernommen werden sollen — dann ist der gleiche Schalter:
@@ -3701,7 +3935,7 @@ BRUECKE_JE_EVENT = 2   # .32x: wie viele Bilder die Pass-Pruefung je EVENT
 #                        Was der Deckel abschneidet, wird Grenzfall (sichtbar,
 #                        ohne Haken) — nie stiller Verlust.
 SICHTUNG_JE_BLICK = 14   # .271: Pruef-Kandidaten je Blickwinkel-Reihe
-SICHTUNG_WAHL = "blick-rr-ernte-struktur-luma-guete"  # Cache-Kennung der Sichtung.
+SICHTUNG_WAHL = "blick-rr-ernte-struktur-luma-guete-kamera"  # Cache-Kennung der Sichtung.
                                    # Alt-Tags ('blick-rr-norm2' = Crop-Nachmessung bis .313,
                                    # 'blick-rr-ernte' = ohne Gruppen-Konsens,
                                    # 'blick-rr-ernte-struktur' = ohne Belichtung,
@@ -3765,7 +3999,7 @@ def _norm_nachmessen(lauf_dir, rel, emb=None):
 
 
 def _sichtungs_kandidaten(mitglieder, deckel_je_blick, yaw_grenze, norm_latte=None,
-                          luma_grenzen=None, guete_latte=None):
+                          luma_grenzen=None, kat_latten=None):
     """.271 (User-Zielbild: 'eine Reihe links, eine frontal, eine rechts —
     und das sind schon die optimalen'): Kandidaten-Wahl JE BLICKWINKEL-BIN
     (perspektiv_bin) und darin JE EVENT verteilt (Round-Robin, innerhalb
@@ -3786,11 +4020,11 @@ def _sichtungs_kandidaten(mitglieder, deckel_je_blick, yaw_grenze, norm_latte=No
     # Blickwinkel-Reihen. Der Tauglichkeits-Schnitt (_lk) bleibt unberuehrt:
     # Belichtung entscheidet ueber die REIHENFOLGE, nie ueber die Menge.
     _rk = functools.partial(_reihung, norm_latte=norm_latte,
-                            luma_grenzen=luma_grenzen, guete_latte=guete_latte)
+                            luma_grenzen=luma_grenzen, kat_latten=kat_latten)
     # .377: derselbe Guete-Weg im Tauglichkeits-Schnitt — Zeilen ohne die
     # Guete-Felder (Alt-Laeufe) urteilen unveraendert nach der Pixel-Latte.
     _lk = functools.partial(_lattenklasse, norm_latte=norm_latte,
-                            guete_latte=guete_latte)
+                            kat_latten=kat_latten)
     kand = []
     for blick in BLICK_REIHEN:
         im_bin = [x for x in sorted(mitglieder, key=_rk)
@@ -3840,7 +4074,7 @@ def _sichtungs_kandidaten(mitglieder, deckel_je_blick, yaw_grenze, norm_latte=No
 
 def gruppen_sichtung(satz, lauf_dir, emb=None,
                      deckel_je_blick=SICHTUNG_JE_BLICK, yaw_grenze=15.0,
-                     norm_latte=None, luma_grenzen=None, guete_latte=None):
+                     norm_latte=None, luma_grenzen=None, kat_latten=None):
     """.266 'Sicht = Pruefergebnis' (User 18.08.: 'erst ein Schnellcheck,
     welche Bilder wirklich gut sind, und DAVON die Anzeige'): die besten
     `deckel` Mitglieder der Gruppe (Reihung `_reihung`) werden gesichtet
@@ -3889,7 +4123,7 @@ def gruppen_sichtung(satz, lauf_dir, emb=None,
     for x, blick in _sichtungs_kandidaten(m, deckel_je_blick, yaw_grenze,
                                           norm_latte=norm_latte,
                                           luma_grenzen=luma_grenzen,
-                                          guete_latte=guete_latte):
+                                          kat_latten=kat_latten):
         rel = str(x.get("datei", ""))
         v = x.get("emb")
         if v is not None and str(x.get("modell") or modell).lower() == modell:
@@ -3914,7 +4148,23 @@ def gruppen_sichtung(satz, lauf_dir, emb=None,
                 # Alignment) und ist deshalb bewusst NICHT genommen.
                 emb = emb or _embedder_geteilt()   # erst JETZT, nie fuer den Normalfall
                 _n = _norm_nachmessen(lauf_dir, rel, emb)
-            bilder.append({"datei": rel, "blick": blick,
+            # MESSKARTE (.513, Etappe 1): die Karte des Mitglieds haengt als
+            # GANZES an (core/messkarte.uebernehmen) — das ist der VIERTE der
+            # vier Kopierschritte, die die Inventur (§I-3) gezaehlt hat.
+            # `uebernehmen` ERGAENZT nur: `norm` steht hier schon mit dem
+            # nachgemessenen Wert (`_n`) und behaelt ihn, `kante`/`sharp`
+            # ebenso. Ohne diese Regel wuerde die Karte die Nachmessung mit
+            # dem None des Mitglieds ueberschreiben — ein stiller Verlust.
+            bilder.append(_mk.uebernehmen({"datei": rel, "blick": blick,
+                           # .516: die KAMERA des Mitglieds wandert mit. Die
+                           # Messkarte fuehrt sie bewusst nicht (sie ist Ort,
+                           # keine Messung), aber sichtung_bewerten loest die
+                           # Guete-Latte seit .516 je Kamera aus dem Register
+                           # auf — ohne dieses Feld urteilte die Flaeche global,
+                           # waehrend Ernte und Anker-Sieb je Kamera urteilen.
+                           # Alt-Caches ohne das Feld faellt SICHTUNG_WAHL neu
+                           # an (Kennung um '-kamera' erweitert).
+                           "kamera": x.get("kamera"),
                            "kante": _k, "sharp": _s, "norm": _n,
                            # .32x: die Struktur kommt aus der Ernte mit (core/anker
                            # kopiert sie ins Mitglied). Fehlt sie — Alt-Anker vor
@@ -3940,7 +4190,7 @@ def gruppen_sichtung(satz, lauf_dir, emb=None,
                            "fiqa_t": x.get("fiqa_t"), "empf": x.get("empf"),
                            "emb": [round(float(t), 5) for t in v],
                            "quelle": "ernte" if x.get("norm") is not None
-                                     else ("ernte+norm" if _n is not None else "ernte")})
+                                     else ("ernte+norm" if _n is not None else "ernte")}, x))
             continue
         # Fallback (Alt-Mitglied ohne Ernte-Embedding): Crop-Nachmessung wie bis .313.
         img = cv2.imread(os.path.join(lauf_dir, rel))
@@ -3951,7 +4201,7 @@ def gruppen_sichtung(satz, lauf_dir, emb=None,
             continue
         emb = emb or _embedder_geteilt()
         v, kante, sh, norm = bild_metriken(emb, img, mit_norm=True)
-        bilder.append({"datei": rel, "blick": blick, "kante": kante,
+        bilder.append(_mk.uebernehmen({"datei": rel, "blick": blick, "kante": kante,
                        "sharp": sh, "norm": norm, "struktur": None,
                        # Auch der Alt-Weg traegt die Luma, falls das Mitglied
                        # sie hat (die Crop-Nachmessung misst sie NICHT nach —
@@ -3963,7 +4213,7 @@ def gruppen_sichtung(satz, lauf_dir, emb=None,
                        "fiqa_t": x.get("fiqa_t"), "empf": x.get("empf"),
                        "emb": ([round(float(t), 5) for t in v]
                                if v is not None else None),
-                       "quelle": "crop"})
+                       "quelle": "crop"}, x))
     d = {"modell": modell, "gesamt": len(m), "wahl": SICHTUNG_WAHL,
          "bilder": bilder,
          "ts": round(time.time(), 1)}
@@ -3995,7 +4245,7 @@ def sichtung_lesen(satz, lauf_dir, modell):
 
 
 def sichtung_hat_sichtbare(satz, lauf_dir, modell, refs, dup_sim,
-                           norm_latte=None, luma_grenzen=None, guete_latte=None):
+                           norm_latte=None, luma_grenzen=None, kat_latten=None):
     """.318 (User 22.08.: "da brauchst du sie auch gar nicht erst als Gruppe
     angezeigt werden beim Aufrufen"): traegt diese Gruppe nach der Bewertung noch
     EIN Bild im Rahmen? Rein lesend — Sichtungs-Cache + Matrix, kein Modell, keine
@@ -4011,12 +4261,12 @@ def sichtung_hat_sichtbare(satz, lauf_dir, modell, refs, dup_sim,
         return None
     bew = sichtung_bewerten(satz.get("person") or None, si, refs, dup_sim, [],
                             norm_latte=norm_latte, luma_grenzen=luma_grenzen,
-                            guete_latte=guete_latte)
+                            kat_latten=kat_latten)
     return any(b.get("stufe") != "raus" for b in bew)
 
 
 def sichtung_bewerten(person, sichtung, refs, dup_sim, adoptierte,
-                      norm_latte=None, luma_grenzen=None, guete_latte=None):
+                      norm_latte=None, luma_grenzen=None, kat_latten=None):
     """Matrix-Anwendung auf die GECACHTEN Sichtungs-Messwerte (.266): keine
     Bild-I/O, kein Modell — Identitaets-Achse gegen `refs` (Matrizen je
     Person; person=None oder ohne Referenzen -> Identitaet ist das
@@ -4030,11 +4280,12 @@ def sichtung_bewerten(person, sichtung, refs, dup_sim, adoptierte,
     norm_latte["struktur"] (.32x): gemessene Gesichts-STRUKTUR unter diesem Wert
     schliesst aus — der Ausschnitt zeigt kein Gesicht (Nacken, Ohr, Hinterkopf,
     Vegetation). Ersetzt den .316b-Gruppen-Konsens, der ersatzlos entfaellt.
-    guete_latte {empfinden_min, t_min} (.377): traegt das Sichtungsbild beide
-    Guete-Masse der Ernte, urteilt die vom Nutzer kalibrierte Latte ueber die
-    Qualitaets-Achse statt der Laplacian-Schaerfe (bild_stufe, DIESELBE
-    Staffelung wie core.benennung._lattenklasse in der Vorauswahl). Ohne die
-    Masse oder ohne die Schwellen urteilt der Alt-Weg unveraendert.
+    kat_latten (.377, seit .516 das Register „Face catalog"): traegt das
+    Sichtungsbild beide Guete-Masse der Ernte, urteilt die je KAMERA
+    aufgeloeste Register-Latte ueber die Qualitaets-Achse statt der
+    Laplacian-Schaerfe (bild_stufe, DIESELBE Staffelung wie
+    core.benennung._lattenklasse in der Vorauswahl). Ohne die Masse oder ohne
+    Register urteilt der Alt-Weg unveraendert.
     luma_grenzen {min, max} (bauplan_belichtung.md E5b, Issue 26): ein Bild
     ausserhalb der Belichtungsgrenzen wird GRENZFALL mit Grund — nie 'raus'
     (Nicht-Loeschen-Prinzip; bewusste Zuwahl bleibt moeglich). Die Achse kann
@@ -4048,6 +4299,10 @@ def sichtung_bewerten(person, sichtung, refs, dup_sim, adoptierte,
     # und Anker-Detailseite verschiedene Vokabulare fuehren.
     from core.benennung import belichtungs_lage as _bn_belichtung
     from core.benennung import harte_linie as _bn_harte_linie
+    # .516: EINE Quelle fuer „welche zwei Zahlen sind die Guete dieser Zeile"
+    # und „welche Kamera gehoert dazu" — nie ein zweites Feldnamen-Paar hier.
+    from core.benennung import guete_masse as _bn_guete_masse
+    from core.benennung import kamera_von as _bn_kamera
     eigen_refs = refs.get(person) if person else None
     if eigen_refs is not None and not len(eigen_refs):
         eigen_refs = None
@@ -4119,15 +4374,25 @@ def sichtung_bewerten(person, sichtung, refs, dup_sim, adoptierte,
         # Schwellen gehen mit in die EINE Bewertung — sonst siebt die
         # Gruppenbildung nach der Guete und die Flaeche verwirft nach der
         # Schaerfe (QS-Befund 30.08., .367-Fehlerklasse).
-        _gl = guete_latte or {}
+        # .516: die zwei Guete-Schwellen kommen JE BILD aus dem Register,
+        # ueber die Kamera des Sichtungsbildes aufgeloest (Muster
+        # core.anker._guete_besteht). Ohne Register bleibt _sl None und der
+        # Alt-Weg urteilt unveraendert — nie fail-closed. Die Messwerte holt
+        # core.benennung.guete_masse (Messkarte zuerst, Legacy-Paar danach),
+        # damit hier kein zweites Feldnamen-Paar steht.
+        _sl = None
+        if kat_latten:
+            from core import kamerakalib as _kk_sb
+            _sl = _kk_sb.sieb_latten(kat_latten, _bn_kamera(b))
+        _e_b, _t_b = _bn_guete_masse(b)
         stufe, grund = bild_stufe(eigen, fremd, b.get("kante"), b.get("sharp"),
                                   norm=b.get("norm"),
                                   norm_gut=_nl.get("gut"), norm_min=_nl.get("min"),
                                   norm_kante_min=_nl.get("kante"),
                                   norm_sharp_min=_nl.get("sharp"),
-                                  fiqa_t=b.get("fiqa_t"), empf=b.get("empf"),
-                                  guete_t_min=_gl.get("t_min"),
-                                  guete_empfinden_min=_gl.get("empfinden_min"))
+                                  fiqa_t=_t_b, empf=_e_b,
+                                  latte_t=(_sl or {}).get("t"),
+                                  latte_e=(_sl or {}).get("e"))
         # .313b (User 21.08.): 'gedeckt' (eigen >= sim_neu, Bestands-Duplikat)
         # ist fuer die Bruecke ein Nicht-Vorschlag, fuer die Gruppen-Flaeche
         # aber ein SICHTBARER Grenzfall — schon zugewiesene Bilder bleiben im
@@ -4155,12 +4420,14 @@ def sichtung_bewerten(person, sichtung, refs, dup_sim, adoptierte,
         # saehe der Nutzer nur "image quality too low" und wuesste nicht, an
         # welchem der beiden Regler er drehen muss.
         if stufe is None and grund == GRUND_TEXT["guete_zu_schwach"]:
+            # .516: der Kanten-Nachsatz ist raus, weil die Kante hier nicht
+            # mehr siebt (Sensor 6 tut das in der Ernte). Ein Grund, der eine
+            # Schranke nennt, die gar nicht gewirkt hat, schickt den Nutzer an
+            # den falschen Regler.
             grund = (f"{GRUND_TEXT['guete_zu_schwach']} "
-                     f"(quality {b.get('empf')} / recognisability "
-                     f"{b.get('fiqa_t')} — needs {_gl.get('empfinden_min')} / "
-                     f"{_gl.get('t_min')}; "
-                     f"{b.get('kante') if b.get('kante') is not None else '?'} px "
-                     f"— needs {REF_LATTE['min_kante']} px)")
+                     f"(quality {_e_b} / recognisability "
+                     f"{_t_b} — needs {(_sl or {}).get('e')} / "
+                     f"{(_sl or {}).get('t')})")
         # .313b (User 21.08., 'bei einem Lauf immer die Bilder sehen, egal ob
         # ich die schon mal zugewiesen habe'): SCHON GELERNT versteckt nicht
         # mehr. Bis .313 nahm die .267-Regel ein Double einer adoptierten
@@ -4248,7 +4515,7 @@ def sichtung_bewerten(person, sichtung, refs, dup_sim, adoptierte,
 
 
 def benennung_bewerten(person, satz, dup_sim, adoptierte, lauf_dir, emb=None,
-                       norm_latte=None, luma_grenzen=None, guete_latte=None):
+                       norm_latte=None, luma_grenzen=None, kat_latten=None):
     """.257/.266: DIESELBE Pruefung wie die Lern-Bruecke, identisch by
     construction (User-Auflage 17.08.: nie zwei verschiedene Pruefungen fuer
     dasselbe Bild). Seit .266 zehrt sie aus dem Sichtungs-Cache
@@ -4267,21 +4534,21 @@ def benennung_bewerten(person, satz, dup_sim, adoptierte, lauf_dir, emb=None,
     if not len(refs.get(person, [])) and os.path.isdir(os.path.join(MASTER, person)):
         refs = lade_master_refs(emb)               # Cache kennt die Person noch nicht
     sicht = gruppen_sichtung(satz, lauf_dir, emb=emb, norm_latte=norm_latte,
-                             guete_latte=guete_latte,
+                             kat_latten=kat_latten,
                              luma_grenzen=luma_grenzen)
     # .267 (Widerleger-Blocker): beurteilt werden ALLE Sichtungs-Kandidaten —
     # exakt die Menge, aus der die Flaeche rendert. Die frueher persistierte
     # gewaehlt-Auswahl ist fuer die Pruefung bedeutungslos (sie wird beim
     # Take ohnehin mit der SICHTBAREN Auswahl neu geschrieben); sie zu
     # filtern liess Pruefung und Anzeige wieder auseinanderlaufen.
-    # .377: guete_latte MIT durchreichen — diese Pruefung ist die LETZTE Instanz
-    # vor der Uebernahme. Ohne sie urteilte sie als einzige Stelle noch nach der
-    # abgeloesten Schaerfe, waehrend Sichtung und Anzeige daneben schon die
-    # kalibrierte Latte nahmen (QS-Befund 30.08.: 'nie zwei verschiedene
-    # Pruefungen fuer dasselbe Bild', User-Auflage 17.08.).
+    # .377: das Register MIT durchreichen — diese Pruefung ist die LETZTE
+    # Instanz vor der Uebernahme. Ohne es urteilte sie als einzige Stelle noch
+    # nach der abgeloesten Schaerfe, waehrend Sichtung und Anzeige daneben
+    # schon die kalibrierte Latte nahmen (QS-Befund 30.08.: 'nie zwei
+    # verschiedene Pruefungen fuer dasselbe Bild', User-Auflage 17.08.).
     return sichtung_bewerten(person, sicht, refs, dup_sim, adoptierte,
                              norm_latte=norm_latte, luma_grenzen=luma_grenzen,
-                             guete_latte=guete_latte)
+                             kat_latten=kat_latten)
 
 
 def lernbruecke_uebernehmen(person, items, emb=None):

@@ -839,6 +839,25 @@ function refBatchLoeschen(btn) {
   }
   if (!items.length) { alert(TT('js.auswahl.bild_fehlt', 'Please select at least one image.')); return; }
   if (!confirm(TT('js.ref.batch_frage', 'Delete {n} image(s)?', {n: items.length}))) return;
+  /* .512: ZWEITE Frage, wenn die Auswahl ALLE verbleibenden Referenzen einer
+     Person umfasst. Zwei Klicks ("Select all" in zwei Reitern) reichen dafuer,
+     und danach kann diese Person nicht mehr erkannt werden. Kein Verbot,
+     sondern eine Nachfrage, die Person und Anzahl NENNT — der Bestand kommt
+     server-seitig vom Knopf (data-person/data-bestand), nicht aus dem
+     Abzaehlen der Kacheln: der Kopien-Reiter zeigt nicht jede Datei einzeln.
+     Fehlt die Angabe (andere Seite, alter Cache), bleibt es bei der ersten
+     Frage — die Nachfrage ist eine Zutat, keine Voraussetzung. */
+  var bp = btn && btn.getAttribute ? btn.getAttribute('data-person') : null;
+  var bn = parseInt((btn && btn.getAttribute ? btn.getAttribute('data-bestand') : '0') || '0', 10);
+  if (bp && bn > 0) {
+    var eigene = 0;
+    for (i = 0; i < items.length; i++) { if (items[i].person === bp) eigene++; }
+    if (eigene >= bn && !confirm(TT('js.ref.batch_alle_frage',
+                                    'That is ALL {n} reference image(s) of {person}. ' +
+                                    'Without a reference, {person} can no longer be recognised. ' +
+                                    'The images move to the trash folder and can be moved back. Continue?',
+                                    {n: eigene, person: bp}))) return;
+  }
   btn.disabled = true; btn.textContent = TT('js.status.loeschen', 'deleting …');
   fetch('/ref_entfernen_batch', {method: 'POST', body: JSON.stringify({items: items})})
     .then(function (r) { return r.json(); })

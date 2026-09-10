@@ -1052,6 +1052,52 @@ T = {
         "tête (matière ancienne, ou images arrivées par une autre voie) : ce "
         "curseur ne change donc rien ici. Les nouveaux échantillons de "
         "l’analyse d’événements apportent la valeur avec eux.",
+    "livekalib.katalog.regler_n":
+        "Catalogue : norme des traits",
+    "livekalib.katalog.regler_n_prosa":
+        "\u00c0 quel point un visage doit \u00eatre solide comme mati\u00e8re de "
+        "reconnaissance pour qu\u2019un passage d\u2019apprentissage le garde : la "
+        "mesure sans r\u00e9f\u00e9rence avec laquelle la r\u00e9serve d\u2019apprentissage "
+        "travaille d\u00e9j\u00e0 (un bon visage de face tourne autour de 24). Il sort "
+        "d\u2019usine ALLUM\u00c9, \u00e0 20, r\u00e9gl\u00e9 sur de la vraie mati\u00e8re r\u00e9colt\u00e9e "
+        "(756 images, m\u00e9diane 20,7). Le curseur ne descend pas sous 18 : "
+        "ici l\u2019axe ne peut pas \u00eatre \u00e9teint, seulement r\u00e9gl\u00e9 "
+        "entre 18 et 35. C\u2019est une autre question que la ligne de "
+        "r\u00e9serve dans la configuration, qui d\u00e9cide quelles images te sont "
+        "PROPOS\u00c9ES.",
+    "livekalib.ohne_norm":
+        "Aucun de ces \u00e9chantillons ne porte de valeur de norme des "
+        "traits (la r\u00e9serve de calibrage ne la mesure pas, un passage "
+        "d\u2019apprentissage si) : ce curseur ne change donc rien \u00e0 la galerie "
+        "ici. Il r\u00e8gle tout de m\u00eame la valeur qu\u2019utilise le passage "
+        "d\u2019apprentissage.",
+    "livekalib.regler_k":
+        "Plus petit visage (px)",
+    "livekalib.regler_k_prosa":
+        "\u00c0 quel point un visage peut \u00eatre petit et compter "
+        "quand m\u00eame comme voix : mesur\u00e9 sur le petit c\u00f4t\u00e9 de son cadre, en "
+        "pixels. C\u2019est un plancher contre l\u2019absurde, pas une barre de "
+        "qualit\u00e9 : sur le terrain, les voix justes se situent entre 30 et "
+        "49 px sur les cam\u00e9ras de vue d\u2019ensemble et les cas absurdes entre 11 "
+        "et 19 px, tandis que 70 px emporterait aussi les justes. La valeur "
+        "d\u2019usine 25 est exactement le nombre avec lequel ce syst\u00e8me mesure "
+        "chaque voix depuis la 0.1.0.400 ; le curseur la rend seulement "
+        "r\u00e9glable par cam\u00e9ra. 0 = \u00e9teint.",
+    "livekalib.katalog.regler_k":
+        "Catalogue : plus petit visage (px)",
+    "livekalib.katalog.regler_k_prosa":
+        "La m\u00eame mesure, pour l\u2019apprentissage : \u00e0 "
+        "quel point un visage peut \u00eatre petit et qu\u2019un passage "
+        "d\u2019apprentissage le garde quand m\u00eame. Monte-le sur une cam\u00e9ra dont "
+        "les visages sont tout simplement trop loin, et note que c\u2019est une "
+        "autre question que dans l\u2019onglet voisin : \u00eatre averti que quelqu\u2019un "
+        "est l\u00e0 demande moins de r\u00e9solution qu\u2019apprendre \u00e0 quoi il "
+        "ressemble. 0 = \u00e9teint.",
+    "livekalib.ohne_kante":
+        "Aucun de ces \u00e9chantillons ne porte sa taille de visage "
+        "(la r\u00e9serve de calibrage ne l\u2019enregistre pas, un passage "
+        "d\u2019apprentissage si) : ce curseur ne change donc rien \u00e0 la galerie "
+        "ici. Il r\u00e8gle tout de m\u00eame la valeur utilis\u00e9e.",
     "livekalib.standard": "Valeurs par défaut",
     "livekalib.fueller.laeuft": "recherche de matériel en cours",
     "livekalib.fueller.bilanz": "dernière recherche de matériel",
@@ -1072,8 +1118,8 @@ T = {
     "livekalib.abschnitt.katalog": "Seuil du catalogue",
     "livekalib.abschnitt.pruefen": "Seuil du contrôle du catalogue",
     "livekalib.abschnitt.material": "Matériel",
-    "livekalib.katalog.prosa": "Un plancher, pas un filtre : la qualité qu'un visage de cette caméra doit avoir pour devenir référence par les voies AUTOMATIQUES (reprise du cycle d'apprentissage, acceptation de propositions/réserves). Elle est généreuse à dessein : accueillir est la porte large, trier est le travail du contrôle du catalogue dans l'onglet suivant. Ce que vous cochez et nommez vous-même la contourne entièrement.",
-    "livekalib.katalog.grenze": "Ce qu'il ne fait pas : il ne supprime jamais les références existantes et ne change pas qui est reconnu. Les images sans scores de qualité (matériel ancien ou build sans les modèles de qualité) passent intactes — un seuil sans mesure jetterait à l'aveugle.",
+    "livekalib.katalog.prosa": "Ces quatre valeurs d\u00e9cident de ce que cette cam\u00e9ra apporte \u00e0 l\u2019apprentissage : une passe d\u2019apprentissage ne garde que les visages qui passent les quatre, et seul ce mat\u00e9riel peut devenir une r\u00e9f\u00e9rence par les voies AUTOMATIQUES (reprise de la passe, acceptation des suggestions ou des offres du stock). Ce sont les m\u00eames quatre curseurs que dans l\u2019onglet Reconna\u00eetre et le m\u00eame calcul \u2014 avec seulement leurs propres chiffres, parce qu\u2019alerter et apprendre ne demandent pas la m\u00eame chose. Ce que vous cochez et nommez vous-m\u00eame les contourne enti\u00e8rement.",
+    "livekalib.katalog.grenze": "Ce qu\u2019ils ne font pas : ils ne retirent jamais des r\u00e9f\u00e9rences que vous avez d\u00e9j\u00e0 et ne changent rien \u00e0 qui est reconnu. Lorsqu\u2019une image entre au catalogue, l\u2019absence de notes de qualit\u00e9 (mat\u00e9riel ancien, une image sans les mod\u00e8les de qualit\u00e9) la laisse passer intacte. Dans une passe d\u2019apprentissage, c\u2019est l\u2019autre moiti\u00e9 de la m\u00eame r\u00e8gle : un visage dont la valeur n\u2019a pas pu \u00eatre mesur\u00e9e tombe \u2014 le bilan en fin de passe compte ces cas un par un au lieu de les laisser dispara\u00eetre.",
     "livekalib.katalog.quelle_kamera": "Actif : les valeurs propres de cette caméra.",
     "livekalib.katalog.quelle_global": "Actif : la valeur globale de repli — cette caméra n'a pas encore de valeurs propres.",
     "livekalib.katalog.quelle_aus": "Aucun seuil de catalogue : toute image peut devenir une référence.",
@@ -1081,6 +1127,10 @@ T = {
     "livekalib.katalog.regler_e_prosa": "Impression minimale pour une référence de cette caméra. Basse à dessein : même une image moyenne apporte quelque chose à apprendre, et le contrôle du catalogue la reverra plus tard.",
     "livekalib.katalog.regler_t": "Catalogue : reconnaissabilité",
     "livekalib.katalog.regler_t_prosa": "Reconnaissabilité minimale pour une référence de cette caméra. C'est elle qui garde les visages à moitié couverts hors du catalogue.",
+    "livekalib.katalog.regler_det": "Catalogue : score de d\u00e9tection",
+    "livekalib.katalog.regler_det_prosa": "\u00c0 partir d\u2019o\u00f9 le d\u00e9tecteur est assez s\u00fbr qu\u2019il y a bien un visage. La m\u00eame mesure que dans l\u2019onglet Reconna\u00eetre, mais pour l\u2019apprentissage \u2014 et elle peut tr\u00e8s bien se situer ailleurs ici : ce dont vous voulez \u00eatre averti n\u2019est pas forc\u00e9ment ce dont vous voulez apprendre.",
+    "livekalib.katalog.regler_p": "Catalogue : pose de la t\u00eate",
+    "livekalib.katalog.regler_p_prosa": "\u00c0 quel point une t\u00eate se distingue \u00e0 l\u2019endroit trouv\u00e9. C\u2019est le curseur contre les poubelles, les haies et les calandres dans le mat\u00e9riel d\u2019apprentissage \u2014 les deux notes de qualit\u00e9 seules ne voient pas cela. \u00c0 nouveau la m\u00eame mesure que dans l\u2019onglet Reconna\u00eetre.",
     "livekalib.pruefen.prosa": "Ce seuil juge les images que vous avez DÉJÀ. En dessous, le contrôle du catalogue signale une image enregistrée de cette caméra ; avec une norme de traits faible, elle devient une suggestion de retrait sur laquelle vous pouvez cliquer. Il n'accepte jamais une image et n'en retire jamais une tout seul.",
     "livekalib.pruefen.grenze": "Il est volontairement séparé du seuil ci-dessus : accepter une image et la contrôler plus tard sont deux questions, et bouger un curseur ne doit pas bouger l'autre en silence. Les images sans note de qualité ne sont jamais signalées.",
     "livekalib.pruefen.quelle_kamera": "En vigueur : la valeur propre de cette caméra.",
@@ -1101,6 +1151,7 @@ T = {
     "livekalib.js.katalog": "{n} sur {gesamt} pourraient entrer au catalogue",
     "livekalib.js.pruefen": "le contrôle signalerait {n} sur {gesamt}",
     "livekalib.js.lauf": "passage",
+    "livekalib.js.aus": "\u00e9teint",
     # ----------------------------------------------- routes/erkennung ---
     "erkennung.titel": "Reconnaissance",
     "erkennung.kopf.satz":
@@ -1247,11 +1298,7 @@ T = {
     "qualitaet.ergebnis.alles_gut_satz":
         "{n} photos de {np} personnes vérifiées &mdash; rien ne réclame "
         "votre attention.",
-    "qualitaet.wort.defekt": "fichier défectueux",
     "qualitaet.wort.kein_gesicht": "aucun visage trouvé",
-    "qualitaet.wort.zu_klein": "trop petite",
-    "qualitaet.wort.unscharf": "floue",
-    "qualitaet.wort.schwach": "photo faible",
     "qualitaet.galerie.looks_like": "ressemble à {name}",
     "qualitaet.galerie.doppel": "doublon — celle conservée la couvre",
     "qualitaet.galerie.gut": "bonne",
@@ -1412,17 +1459,6 @@ T = {
     "lernwizard.kachel.lauf": "Session d'apprentissage",
     "lernwizard.kachel.sammeln": "Collecter &amp; trier",
     "kalib.titel": "Calibrage des caméras",
-    "kalib.erklaerung": "Ces deux seuils décident quels visages les prochains apprentissages conservent. Faites glisser jusqu'à ce que la limite vous convienne — tout ce qui est grisé serait écarté. Ci-dessous, les images du dernier passage, meilleure impression d'abord. Cadre jaune = image retenue pour l'adoption.",
-    "kalib.leer": "Rien à calibrer pour l'instant : le dernier passage ne porte pas de valeurs de qualité. Lancez d'abord un apprentissage avec cette version.",
-    "kalib.regler_e": "Impression d'image",
-    "kalib.regler_e_prosa": "À quel point l'image paraît nette et lumineuse. Plus bas garde davantage, mais des images plus sombres et plus grossières.",
-    "kalib.regler_t": "Reconnaissabilité",
-    "kalib.regler_t_prosa": "À quel point la personne est identifiable. Écarte aussi les visages à moitié masqués.",
-    "kalib.standard": "Rétablir les valeurs par défaut",
-    "kalib.uebernehmen": "Appliquer les seuils",
-    "kalib.js.genutzt": "Conservées : {n} sur {gesamt}",
-    "kalib.js.gespeichert": "Enregistré — le passage est réévalué avec les nouvelles limites, retour à l'apprentissage dans un instant …",
-    "kalib.js.fehler": "Échec de l'enregistrement",
     # --- zentrale Kamera-Uebersicht + globaler Rueckfall (31.08.)
     "kalib.knopf": "Calibrage",
     "kalib.knopf_tip": "Calibrage des caméras : les seuils pour les alertes, les échantillons et le catalogue de références",
@@ -1454,13 +1490,8 @@ T = {
     "kalib.knopf_fuellen": "Chercher du matériel frais",
     "kalib.knopf_leeren": "Supprimer les échantillons",
     "kalib.global.titel": "Repli global",
-    "kalib.global.satz": "Elles valent pour les caméras sans valeurs propres et servent de seuil quand un passage d'apprentissage décide quels visages garder.",
-    "kalib.global.werte": "impression {e} · reconnaissabilité {tw}",
+    "kalib.global.satz": "Elles valent pour les caméras sans valeurs propres : elles sont le seuil avec lequel un passage d'apprentissage décide quels visages garder et lesquels peuvent devenir une référence enregistrée.",
     "kalib.global.katalog": "seuil du catalogue {e} / {tw}",
-    "kalib.global.knopf": "Régler sur le dernier passage d'apprentissage",
-    "kalib.global.kein_lauf": "Pas encore de passage d'apprentissage avec des scores de qualité — réglable dès qu'un passage est terminé.",
-    "kalib.lauf.titel": "Seuils globaux — dernier passage d'apprentissage",
-    "kalib.zurueck": "retour à toutes les caméras",
     "js.kalib.start": "recherche de matériel …",
     "js.kalib.lauf": "{i} sur {n} événements · {bilder} image(s)",
     "js.kalib.fertig": "{bilder} image(s) de {events} événement(s)",
@@ -1787,6 +1818,10 @@ T = {
     "js.import.fertig_ges": "✓ {n} importés — calcul des caractéristiques, la page se recharge …",
     "js.ref.frage": "Retirer l'image de référence de {person} ?",
     "js.ref.batch_frage": "Supprimer {n} image(s) ?",
+    "js.ref.batch_alle_frage":
+        "Ce sont TOUTES les {n} image(s) de référence de {person}. Sans "
+        "référence, {person} ne pourra plus être reconnu. Les images vont "
+        "dans la corbeille et peuvent être restaurées. Continuer ?",
     "js.dienst.nicht_erreichbar": "service injoignable — réessayer dans un instant.",
     "js.unb.tick": "{phase} … {s} s",
     "js.unb.besucher_frage": "Ignorer comme visiteur inconnu habituel ? Il ne déclenchera plus d'alertes. (Réactivable à tout moment ci-dessous, dans \"visiteurs habituels\".)",
@@ -3233,6 +3268,17 @@ T = {
         "rien à prendre — aucune nouvelle image utile dans ce passage "
         "(ce n'est pas grave)",
     "antwort.bruecke_undo": "{n} image(s) retirée(s)",
+    # .521 mini-récolte : rien n'est repris et le passage est éphémère — ses
+    # images disparaissent aussitôt, le prochain clic récolte de nouveau.
+    "antwort.passernte_verworfen":
+        "vérification abandonnée, les images ont disparu — "
+        "recliquez pour en lancer une nouvelle",
+    # .524 Fix 11 : annulation sur la barre de progression EN COURS.
+    "antwort.passernte_abgebrochen":
+        "vérification annulée — {n} événement(s) sur {m} abandonné(s) ; "
+        "ce qui est déjà lancé se termine, puis les images sont supprimées",
+    "antwort.passernte_abbruch_leer":
+        "rien à annuler — cette vérification n'est plus en cours",
     "antwort.personlauf_kein_review": "aucune session en attente d'examen",
     "antwort.personlauf_kein_lauf": "aucune session active",
     "antwort.events_bereich":
@@ -4074,8 +4120,10 @@ connues.</p>""",
     "anwesenheit.nacht": "nuit",
     "anwesenheit.legende_da": "présence confirmée",
     "anwesenheit.legende_weg": "système en marche, personne confirmé",
-    "anwesenheit.legende_leer": "système arrêté ou sans observation",
+    "anwesenheit.legende_leer": "le service ne tournait pas",
+    "anwesenheit.legende_teil": "en marche, certains événements non analysés",
     "anwesenheit.legende_jetzt": "maintenant",
+    "anwesenheit.legende_satz": "Le blanc ne veut dire qu'une chose : le service ne tournait pas à ce moment-là. Une cellule verte au coin coupé indique que le service tournait mais que certains événements n'ont pas été analysés — survolez pour voir les chiffres.",
     "anwesenheit.zaehler": "{zeilen} marques lues, {kaputt} lignes endommagées ignorées.",
     "anwesenheit.gekappt": "Le fichier du jour dépasse la limite de lecture ; seule sa fin a été lue.",
     "anwesenheit.nie": "Non vus dans cette vue : {namen}",
@@ -4085,7 +4133,8 @@ connues.</p>""",
     "anwesenheit.keine_aufzeichnung": "Aucun enregistrement pour ce jour.",
     "anwesenheit.tip_da": "{zeit} · {kameras} · {quelle}",
     "anwesenheit.tip_weg": "{zeit} · système en marche, personne confirmé",
-    "anwesenheit.tip_leer": "{zeit} · aucune information (système arrêté ou sans observation)",
+    "anwesenheit.tip_weg_teil": "{zeit} · système en marche, personne confirmé · {gelungen} événements analysés, {luecken} non",
+    "anwesenheit.tip_leer": "{zeit} · le service ne tournait pas",
     "anwesenheit.tip_zukunft": "{zeit} · pas encore",
     "anwesenheit.quelle_worker": "analyse des événements",
     "anwesenheit.quelle_live": "surveillant en direct",

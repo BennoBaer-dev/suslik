@@ -14,8 +14,9 @@ DATENMODELL (Konzept §2): Append-Datei je Kalendertag,
 <data_dir>/state/anwesenheit/<JJJJ-MM-TT>.jsonl, eine Zeile je Marke:
   {"ts", "bis", "person", "kamera", "quelle", "eid"?}        Personen-Marke
   {"ts", "bis", "kamera", "art": "luecke", "eid"}             Luecken-Marke
+  {"ts", "bis", "kamera", "art": "erfolg", "eid"}             Erfolgs-Marke (.519)
   {"ts", "art": "lauf"}                                       Lauf-Marke
-Personen- und Luecken-Marken tragen EREIGNISZEIT, nie die Analysezeit
+Personen-, Luecken- und Erfolgs-Marken tragen EREIGNISZEIT, nie die Analysezeit
 (Rueckstau-Lehre 02.09.: ein um 13 Uhr nachanalysiertes Event von 10:14 faerbt
 den 10:00-Slot) und IMMER eine Kamera (User 02.09.: die Seite filtert je
 Kamera und je Area, Area = Partition ueber Kameras, loest sich beim Lesen
@@ -25,14 +26,46 @@ Slot, in dem der Dienst lief, geschrieben aus der Sweep-Schleife.
 DREI ZUSTAENDE einer Zelle (User-Entscheid 02.09., woertlich: "wenn wir etwas
 nicht gemessen haben oder das System das nicht betrachtet hat, dann sollten
 wir keine Farbe darstellen, also auch kein Gruen, kein Rot, weil das System
-ja nicht lief"):
+ja nicht lief"; NEU GEFASST 10.09. — User-Zuschnitt zu Fix 10):
   rot    = Personen-Marke (gewinnt IMMER, auch ohne Lauf-Marke)
-  gruen  = Lauf-Marke, keine Luecke, keine Person ("analysiert, nicht da")
-  LEER   = keine Lauf-Marke (vor der Installation, Ausfall, Nachhol-Fenster)
-           oder Lauf-Marke mit Luecke ohne Person ("nicht hingesehen")
+  gruen  = Lauf-Marke ohne Person ("der Dienst lief in dieser Viertelstunde")
+  LEER   = keine Lauf-Marke — und AUSSCHLIESSLICH das ("der Dienst lief nicht")
+Dazu eine vierte, kleinere Aussage OHNE eigene Signalfarbe: eine gruene Zelle
+mit mindestens einer OFFENEN Luecke traegt eine dezente Markierung und beim
+Draufzeigen die beiden Zahlen (gelungen / Luecken).
+
+WARUM DIE NEUFASSUNG (Diagnose backups/praesenz_diagnose_0910/bericht.md):
+bis .518 stach EINE Luecke die ganze Viertelstunde weiss — systemweit,
+kamerauebergreifend und nie widerrufen. Gemessen am 02.09. 15:00: 106
+gelungene Analysen gegen 12 Luecken, und die Kachel sagte "System lief nicht
+oder hat nicht hingesehen". 41 % aller roten Zellen unserer Anlage standen so
+in weisser Umgebung. Weiss trug damit zwei voellig verschiedene Bedeutungen;
+seit .519 traegt es nur noch die eine, die der Nutzer darin liest.
+
+DIE ZWEI QUELLEN, sauber getrennt (Antwort auf die Sicht-Asymmetrie desselben
+Berichts): die FARBE einer Zelle entscheidet allein die SYSTEMWEITE Lauf-Marke
+(sie hat per Konstruktion keine Kamera und laesst sich deshalb auch nicht je
+Kamera filtern). Die kamerabezogenen Marken — Person, Luecke, Erfolg — faerben
+nie weiss; sie machen rot bzw. setzen die Markierung und die Zahlen, und sie
+werden ALLE DREI gleich behandelt, wenn eine Kamera-/Area-Sicht filtert. Damit
+kann dieselbe Viertelstunde in der Alle-Sicht nicht mehr eine andere Farbe
+haben als in einer Einzelkamera-Sicht.
+
+ENTWERTUNG statt Umschreiben (append-only, K8): ein spaeter geglueckter
+Nachhol-Versuch schreibt eine ERFOLGS-Marke mit derselben `eid`. Der Leser
+zaehlt eine Luecke nur, solange fuer ihre `eid` keine Erfolgs-Marke im selben
+Tag steht — die Zelle verliert ihre Markierung, sobald alle ihre Luecken-eids
+erfolgreich sind. Es wird nie eine Zeile geaendert oder geloescht. Erfolg
+gewinnt unabhaengig von der Reihenfolge im File (zwei Schreiber, drei Threads:
+eine reihenfolgeabhaengige Regel waere hier nicht entscheidbar). Eine Luecke
+OHNE eid ist nicht entwertbar und bleibt stehen — ehrliche Grenze.
+
 KEINE VERGANGENHEITSBETRACHTUNG (User 02.09.): die Historie beginnt mit der
 Version, die diese Marken schreibt — es gibt keine Migration aus Akte, Archiv
-oder Live-Protokoll. Aufbewahrung `anwesenheit_tage` (Config, 30).
+oder Live-Protokoll. Alt-Tagesdateien aus .408-.518 haben keine Erfolgs-Marken
+und bleiben unveraendert lesbar: sie zeigen dann gelungen = 0 und ihre Luecken
+als offen — die FARBEN stimmen dort trotzdem, weil die Lauf-Marke sie traegt.
+Aufbewahrung `anwesenheit_tage` (Config, 30).
 
 APPEND-AUFLAGE (K8): je Marke open(pfad, "a") / write / close — kein
 prozess- oder threadweit offener Handle, Zeilen weit unter 4 KB. Die beiden
@@ -84,6 +117,7 @@ SPANNE_MAX_S = 24 * 3600
 QUELLEN = ("worker", "live")
 ART_LUECKE = "luecke"
 ART_LAUF = "lauf"
+ART_ERFOLG = "erfolg"          # .519: Analyse dieses Ereignisses ist gelungen
 
 # Tagesfenster (Konzept §4, Fassung 2 gemessen): 2.–98. Perzentil der
 # Marken-Uhrzeiten ueber die letzten 14 Kalendertage AB HEUTE (nicht ab dem
@@ -100,7 +134,7 @@ FENSTER_PERZENTILE = (2, 98)
 WERK_VON, WERK_BIS = 7, 20
 
 _LOCK = threading.Lock()
-_ZAEHLER = {"marken": 0, "luecken": 0, "lauf": 0, "fehler": 0}
+_ZAEHLER = {"marken": 0, "luecken": 0, "erfolge": 0, "lauf": 0, "fehler": 0}
 _DECKEL_GEMELDET = set()          # Tagesdateien, deren 20-MB-Zeile schon fiel
 _FEHLER_LOG_MONO = [-1e18]        # Log-Drossel der Schreibfehler (1/min)
 FEHLER_LOG_DROSSEL_S = 60.0
@@ -282,9 +316,12 @@ def markieren(cfg, person, ts_von, ts_bis, kamera, quelle, eid=None, log=None):
 
 def luecke(cfg, ts_von, ts_bis, kamera, eid, log=None):
     """Luecken-Marke (K1): ein Event wurde OHNE Analyse abgehakt (uebersprungen,
-    fehler). Die Zelle bleibt dann LEER statt gruen — "nicht hingesehen" ist
-    etwas anderes als "nicht da". Kamera ist Pflicht wie bei der Personen-
-    Marke (die Seite filtert je Kamera/Area)."""
+    fehler). Sie faerbt die Zelle NICHT MEHR weiss (User-Zuschnitt 10.09.,
+    Kopfkommentar): sie setzt die dezente Markierung "hier blieb etwas
+    unanalysiert" auf eine ansonsten gruene Kachel und geht in deren Zahlen
+    ein — und sie ist entwertbar, sobald fuer ihre `eid` eine Erfolgs-Marke
+    kommt. Kamera ist Pflicht wie bei der Personen-Marke (die Seite filtert je
+    Kamera/Area)."""
     kamera = str(kamera or "").strip()
     if not kamera:
         _fehler_loggen(log, "gap mark without camera rejected")
@@ -302,6 +339,41 @@ def luecke(cfg, ts_von, ts_bis, kamera, eid, log=None):
     if ok:
         with _LOCK:
             _ZAEHLER["luecken"] += 1
+    return ok
+
+
+def erfolg(cfg, ts_von, ts_bis, kamera, eid, log=None):
+    """Erfolgs-Marke (.519, User-Zuschnitt 10.09. Punkt 3+4): die Analyse
+    DIESES Ereignisses ist gelungen — unabhaengig davon, ob dabei jemand
+    bestaetigt wurde. Sie leistet zweierlei:
+
+      (a) sie ist die Gegen-Zahl zur Luecke. Ohne sie liesse sich "1 Luecke bei
+          106 gelungenen Analysen" nicht von "1 Luecke, sonst nichts"
+          unterscheiden — genau diese Unterscheidung fehlte bis .518;
+      (b) sie ENTWERTET jede Luecken-Marke derselben `eid` (Kopfkommentar).
+          Ein geglueckter Nachhol-Versuch nimmt damit seine eigene alte Luecke
+          zurueck, ohne dass eine Zeile umgeschrieben wird.
+
+    Kamera ist Pflicht wie bei Personen- und Luecken-Marke; die Sicht filtert
+    alle drei gleich. Ohne `eid` wird die Marke trotzdem geschrieben (sie
+    zaehlt dann als gelungene Analyse), kann aber nichts entwerten."""
+    kamera = str(kamera or "").strip()
+    if not kamera:
+        _fehler_loggen(log, "success mark without camera rejected")
+        return False
+    try:
+        ts_von, ts_bis = _spanne_klemmen(ts_von, ts_bis, log)
+    except (TypeError, ValueError) as e:
+        _fehler_loggen(log, f"bad timestamps for success mark: {e}")
+        return False
+    zeile = {"ts": round(ts_von, 1), "bis": round(ts_bis, 1),
+             "kamera": kamera, "art": ART_ERFOLG, "eid": str(eid or "")}
+    ok = True
+    for datum in _tage_der_spanne(ts_von, ts_bis):
+        ok = _zeile_schreiben(cfg, datum, zeile, log) and ok
+    if ok:
+        with _LOCK:
+            _ZAEHLER["erfolge"] += 1
     return ok
 
 
@@ -350,11 +422,19 @@ def zeitspanne_akte(zeile):
 
 def akte_zeile_markieren(cfg, zeile, log=None):
     """Der Worker-Griff (Konzept §3, Quelle A): EINE Akte-Zeile -> Marken.
-    kategorie uebersprungen/fehler -> Luecken-Marke; sonst je bestaetigter
-    Person eine Marke, Kamera = Kamera des Events. Wird von JEDER Stelle
-    gerufen, die `bestaetigt` setzt oder erweitert (Deckungs-Vertrag,
-    Gate-Inventar) — process() nachhol-unabhaengig und _deckung_korrektur.
-    -> Zahl der geschriebenen Marken."""
+    kategorie uebersprungen/fehler -> Luecken-Marke; sonst EINE Erfolgs-Marke
+    (.519) und je bestaetigter Person eine Personen-Marke, Kamera = Kamera des
+    Events. Wird von JEDER Stelle gerufen, die `bestaetigt` setzt oder
+    erweitert (Deckungs-Vertrag, Gate-Inventar) — process() nachhol-unabhaengig
+    und _deckung_korrektur.
+    -> Zahl der geschriebenen Marken.
+
+    Die Erfolgs-Marke faellt bewusst AUCH dann, wenn niemand bestaetigt wurde:
+    "analysiert und niemanden gefunden" ist eine gelungene Analyse, und genau
+    solche Ereignisse machen den Grossteil aus. Sie faellt AUCH im Nachhol-Lauf
+    und AUCH bei der Anlern-Korrektur — dass dieselbe `eid` dann mehrfach
+    erfolgreich gemeldet wird, ist gewollt: der Leser zaehlt je Zelle
+    EREIGNISSE (Menge der eids), nicht Zeilen."""
     if not isinstance(zeile, dict):
         return 0
     try:
@@ -366,7 +446,7 @@ def akte_zeile_markieren(cfg, zeile, log=None):
     eid = zeile.get("eid")
     if zeile.get("kategorie") in ("uebersprungen", "fehler"):
         return 1 if luecke(cfg, von, bis, kamera, eid, log=log) else 0
-    n = 0
+    n = 1 if erfolg(cfg, von, bis, kamera, eid, log=log) else 0
     for p in zeile.get("bestaetigt") or []:
         if markieren(cfg, p, von, bis, kamera, "worker", eid=eid, log=log):
             n += 1
@@ -374,7 +454,9 @@ def akte_zeile_markieren(cfg, zeile, log=None):
 
 
 def zaehler():
-    """Prozess-Zaehler (Marken/Luecken/Lauf/Fehler) fuer die Systemstatus-Auskunft."""
+    """Prozess-Zaehler (Marken/Luecken/Erfolge/Lauf/Fehler) fuer die
+    Systemstatus-Auskunft. Die Schluessel werden dort generisch als
+    `anwesenheit_<name>` ausgegeben — ein neuer Zaehler braucht drueben nichts."""
     with _LOCK:
         return dict(_ZAEHLER)
 
@@ -504,15 +586,33 @@ def _zeilen_lesen(pfad):
 def tag_lesen(cfg, datum, kameras=None):
     """Die Marken EINES Tages, dedupliziert auf (person, zelle).
     kameras: optionaler Filter (Menge von Kameranamen) — None = alle. Mit
-    Menge zaehlen nur Personen-/Luecken-Marken dieser Kameras; Lauf-Marken
-    zaehlen IMMER (sie sind systemweit). Die Area-Sicht loest der Aufrufer
-    ueber core/areas in eine Kameramenge auf; hier gibt es kein Area-Feld.
+    Menge zaehlen nur Personen-, Luecken- und Erfolgs-Marken dieser Kameras
+    (alle drei GLEICH — die Asymmetrie, die bis .518 die Alle-Sicht
+    systematisch weisser machte als jede Einzelsicht, ist damit weg);
+    Lauf-Marken zaehlen IMMER, weil sie systemweit sind und gar keine Kamera
+    tragen. Die Area-Sicht loest der Aufrufer ueber core/areas in eine
+    Kameramenge auf; hier gibt es kein Area-Feld.
     -> {"personen": {person: {zelle: {"quellen": [...], "kameras": [...],
                                        "eids": [...]}}},
-        "zellen": {0..95: {"lauf": bool, "luecke_n": n}},
+        "zellen": {0..95: {"lauf": bool, "luecke_n": n,
+                           "gelungen_n": n, "luecke_offen_n": n}},
         "kaputt": n, "zeilen": n, "gekappt": bool, "n_slots": 92|96|100}
-    Renderer-Semantik (Kopfkommentar): Person -> rot; sonst lauf und
-    luecke_n == 0 -> gruen; sonst LEER.
+    Renderer-Semantik (Kopfkommentar): Person -> rot; sonst lauf -> gruen;
+    sonst LEER. `luecke_offen_n` > 0 setzt auf gruen die dezente Markierung,
+    `gelungen_n`/`luecke_offen_n` sind ihre beiden Zahlen.
+
+    DIE DREI ZAHLEN, genau gelesen:
+      luecke_n        Luecken-MARKEN (Zeilen) der Sicht — unveraendert die Zahl
+                      aus .408, damit Bestands-Leser (und die Diagnose vom
+                      10.09.) dieselbe Groesse vorfinden wie bisher.
+      gelungen_n      EREIGNISSE (Menge der eids) mit Erfolgs-Marke. Mehrfache
+                      Erfolgs-Zeilen desselben Ereignisses — Nachhol-Lauf,
+                      Anlern-Korrektur — zaehlen einmal.
+      luecke_offen_n  EREIGNISSE mit Luecke, fuer die KEINE Erfolgs-Marke im
+                      selben Tag steht (Entwertung, Kopfkommentar). Luecken
+                      ohne eid sind nicht entwertbar und zaehlen einzeln je
+                      Marke.
+
     Je Zeile fehlertolerant (S3): eine kaputte Zeile wird gezaehlt, nie
     geworfen — ein Schreiber und ein Leser koennen sich an einer halben
     Zeile begegnen. Kein Cache: Z4 ruft es je Filter einmal."""
@@ -520,6 +620,14 @@ def tag_lesen(cfg, datum, kameras=None):
     filter_set = None if kameras is None else {str(k) for k in kameras}
     personen = {}
     zellen = {c: {"lauf": False, "luecke_n": 0} for c in range(ZELLEN_JE_TAG)}
+    # Je Zelle die Ereignis-MENGEN, aus denen die beiden neuen Zahlen fallen.
+    # Sie stehen bewusst neben `zellen` und nicht darin: das Ergebnis-dict ist
+    # die Datenform, die Renderer und Miniatur lesen — Mengen haben darin
+    # nichts verloren (sie waeren nicht json-fest und laden zum Weiterreichen
+    # von Zustand ein).
+    luecke_eids = {c: set() for c in range(ZELLEN_JE_TAG)}
+    erfolg_eids = {c: set() for c in range(ZELLEN_JE_TAG)}
+    ohne_eid = 0                 # laufende Nummer fuer Luecken ohne eid
     kaputt = n = 0
     for z in zeilen:
         if not z.strip():
@@ -547,8 +655,24 @@ def tag_lesen(cfg, datum, kameras=None):
             continue
         cs = zellen_im_tag(datum, von, bis)
         if art == ART_LUECKE:
+            # Eine Luecke OHNE eid ist nicht entwertbar (nichts kann sie
+            # zurechnen) — sie bekommt einen eigenen, nie treffbaren
+            # Schluessel, damit sie zaehlt und trotzdem keine fremde Luecke
+            # verschluckt.
+            e_id = str(d.get("eid") or "")
+            if not e_id:
+                ohne_eid += 1
+                e_id = f"\x00ohne-eid-{ohne_eid}"
             for c in cs:
                 zellen[c]["luecke_n"] += 1
+                luecke_eids[c].add(e_id)
+            continue
+        if art == ART_ERFOLG:
+            e_id = str(d.get("eid") or "")
+            for c in cs:
+                # Ohne eid zaehlt der Erfolg als Ereignis, aber unter einem
+                # eigenen Schluessel — er darf keine fremde Luecke entwerten.
+                erfolg_eids[c].add(e_id or f"\x00ohne-eid-e{n}")
             continue
         p = str(d.get("person") or "")
         if not p:
@@ -567,6 +691,12 @@ def tag_lesen(cfg, datum, kameras=None):
         for e in p.values():
             for k in ("quellen", "kameras", "eids"):
                 e[k] = sorted(e[k])
+    # Entwertung (Kopfkommentar): eine Luecke zaehlt nur noch, solange ihre eid
+    # in DIESER Zelle nicht auch erfolgreich gemeldet ist. Reihenfolgefrei —
+    # zwei Prozesse und drei Threads schreiben in diese Datei.
+    for c, z in zellen.items():
+        z["gelungen_n"] = len(erfolg_eids[c])
+        z["luecke_offen_n"] = len(luecke_eids[c] - erfolg_eids[c])
     return {"personen": personen, "zellen": zellen, "kaputt": kaputt,
             "zeilen": n, "gekappt": gekappt, "n_slots": slots_im_tag(datum)}
 

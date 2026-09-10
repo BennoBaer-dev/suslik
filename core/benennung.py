@@ -35,6 +35,25 @@ REF_LATTE = {"min_kante": 70, "unscharf_max": 350,
              "kante_gut": 112, "sharp_gut": 600}
 
 
+# .521 — die IDENTITAETS-Achse als EINE Quelle. KEINE neue Latte: es sind Wort
+# fuer Wort die vier Zahlen, die seit .257 als Signatur-Defaults in
+# `anlernen.bild_stufe` (und wortgleich in `vorschlaege_person`) stehen und
+# ueber die Identitaet jedes Vorschlags entscheiden — sicher ab `sim_min`,
+# „wahrscheinlich" ab `sim_unsicher` MIT `abstand` zum naechsten Fremden,
+# gedeckt (Bestands-Duplikat) ab `sim_neu`.
+#
+# WOZU der Umzug hierher: der Mini-Ernte-Lauf am Pass-Knopf (.521,
+# core/passernte.py) stellt DIESELBE Identitaets-Frage an einem anderen
+# Material (Ernte-Kandidaten statt Event-Crops). Ohne diese Quelle stuenden
+# die vier Zahlen zum dritten Mal irgendwo im Code — genau das verstreute
+# Zweit-Literal, das die K3-Regel verbietet (`qs_ebenen.md`). `bild_stufe`
+# behaelt seine Signatur-Defaults unangetastet (die .257-Gate-Vektoren
+# rechnen mit ihnen); die Probe s11_p3 haelt beide Fassungen gegeneinander
+# — ein DECKUNGS-VERTRAG statt einer stillen Kopie.
+ID_LATTE = {"sim_min": 0.45, "sim_neu": 0.75, "sim_unsicher": 0.30,
+            "abstand": 0.10}
+
+
 # .308 — die NORM-Latte als EINE Quelle der Auslieferungs-Defaults (bauplan_vorrat.md,
 # alle Werte GEMESSEN 20.08.: Linie 24 = beste 22 %% des Bestands, Sammel-Schwelle 22,
 # Vorrats-Boeden Kante 40 / Schaerfe 600). verifyd.load_config zieht seine
@@ -44,24 +63,67 @@ REF_LATTE = {"min_kante": 70, "unscharf_max": 350,
 NORM_LATTE = {"gut": 24.0, "min": 22.0, "kante": 40, "sharp": 600}
 
 
-def guete_weg_aktiv(m, guete_latte=None):
-    """DIE eine Bedingung "fuer DIESE Zeile urteilt die kalibrierte Guete-Latte":
-    beide Masse gemessen UND beide Regler gesetzt.
+def guete_masse(m):
+    """Die zwei Guete-Masse EINER Zeile -> (empfinden, erkennbarkeit).
+
+    EINE Quelle fuer alle Leser (.516): MESSKARTE zuerst
+    (`mk_empf`/`mk_fiqa_t`, core/messkarte.py — sie traegt seit .514 die VOLLE
+    Messung jedes Funds), das gewachsene Paar `empf`/`fiqa_t` als Rueckfall
+    fuer Zeilen aus Laeufen vor .513 und fuer die Wege, die nur dieses Paar
+    fuehren (Sichtung, Bestands-Suche). Wer die zwei Zahlen braucht, holt sie
+    HIER — ein eigenes Feldnamen-Paar an einer weiteren Stelle waere genau das
+    verstreute Zweit-Literal, das die K3-Regel verbietet.
+
+    None heisst unveraendert "nicht gemessen": die Verbraucher urteilen dann
+    NICHT nach der Guete (fail-open je Messung, Alt-Bestand bleibt sichtbar)."""
+    q = m or {}
+    e = q.get("mk_empf")
+    t = q.get("mk_fiqa_t")
+    return (q.get("empf") if e is None else e,
+            q.get("fiqa_t") if t is None else t)
+
+
+def kamera_von(m):
+    """Der Kamera-Bezug EINER Zeile -> Name oder None.
+
+    Die zwei gewachsenen Feldnamen unter EINEM Griff: `kamera` (Ernte-/Anker-/
+    Sichtungs-Zeile) und `camera` (Pool-/Event-Zeile). None = diese Zeile hat
+    keinen Kamera-Bezug; dann gilt die GLOBALE Register-Zeile — dieselbe Regel,
+    mit der der Lernlauf sein Manifest-Profil aufloest
+    (core.kamerakalib.sieb_latten mit kamera=None)."""
+    q = m or {}
+    for k in ("kamera", "camera"):
+        v = q.get(k)
+        if v:
+            return str(v)
+    return None
+
+
+def guete_weg_aktiv(m, kat_latten=None):
+    """DIE eine Bedingung "fuer DIESE Zeile urteilt die Register-Latte":
+    beide Masse gemessen UND ein Register da.
 
     Steht als eigene Funktion, seit zwei Stellen sie brauchen (.380): unten
     _lattenklasse (welcher der beiden Wege urteilt) und pool_zulauf (darf die
     Latte diesen Kandidaten ueberhaupt sperren, oder fehlt ihr die
-    Messgrundlage). Eine zweite Kopie derselben vierteiligen Bedingung waere
+    Messgrundlage). Eine zweite Kopie derselben Bedingung waere
     genau das verstreute Zweit-Literal, das die K3-Regel verbietet — driftet
     eine der beiden, urteilt der Pool nach einer anderen Regel als die
-    Gruppen-Flaeche, und niemand saehe es."""
-    gl = guete_latte or {}
-    return (m.get("fiqa_t") is not None and m.get("empf") is not None
-            and gl.get("t_min") is not None
-            and gl.get("empfinden_min") is not None)
+    Gruppen-Flaeche, und niemand saehe es.
+
+    .516 (Alt-Latten-Abloesung): der zweite Teil hiess bis .515 "beide GLOBALEN
+    Regler gesetzt" (`guete_empfinden_min`/`guete_t_min` aus
+    core.guete.STARTWERTE). Diese zwei Werte gibt es nicht mehr — das Register
+    „Face catalog" ist seit .514 das EINE Sieb, und seine Aufloesung
+    (core.kamerakalib.sieb_latten) traegt IMMER eine Zahl je Achse. Gefragt
+    wird deshalb nur noch, ob ein Register hereingereicht wurde; ohne eines
+    (Alt-Aufrufer, CLI ohne Dienst-Config) urteilt der Alt-Weg unveraendert
+    weiter, nie fail-closed."""
+    e, t = guete_masse(m)
+    return e is not None and t is not None and bool(kat_latten)
 
 
-def _lattenklasse(m, norm_latte=None, guete_latte=None):
+def _lattenklasse(m, norm_latte=None, kat_latten=None):
     """0 = GUT / 1 = Mindest bestanden / 2 = darunter — Ernte-Messwerte
     (Video-Frame) als VORsortierung; letzte Instanz bleibt die
     Benenn-Pruefung am Crop (anlernen.benennung_bewerten, .257).
@@ -73,13 +135,12 @@ def _lattenklasse(m, norm_latte=None, guete_latte=None):
     kalibrierte Latte (User 30.08., s.u.)."""
     k = float(m.get("kante") or 0)
     # .377 GUETE-WEG (Kalibrier-Funktion, User-Entscheid 30.08.): traegt die
-    # Zeile beide Guete-Masse UND sind die Schwellen gesetzt, urteilt die
-    # kalibrierte Latte — die Laplacian-Schaerfe ist fuer NEUE Ernten als
-    # Kriterium abgeloest (Messtag 30.08.: r=-0,06 zum FIQA-Urteil, 661/662
-    # Fehlverwerfungen am Feldmaterial; Vierervergleich in
-    # analysen/todos_29_08.md Punkt 9). Alt-Zeilen ohne die Felder (Laeufe
-    # vor .377, Alt-Images ohne die Modelle) laufen unveraendert den
-    # sharp-Weg darunter — ein Urteil ohne Messgrundlage waere ein stiller
+    # Zeile beide Guete-Masse, urteilt die kalibrierte Latte — die Laplacian-
+    # Schaerfe ist fuer NEUE Ernten als Kriterium abgeloest (Messtag 30.08.:
+    # r=-0,06 zum FIQA-Urteil, 661/662 Fehlverwerfungen am Feldmaterial;
+    # Vierervergleich in analysen/todos_29_08.md Punkt 9). Alt-Zeilen ohne die
+    # Felder (Laeufe vor .377, Alt-Images ohne die Modelle) laufen unveraendert
+    # den sharp-Weg darunter — ein Urteil ohne Messgrundlage waere ein stiller
     # Verlust (Muster belichtungs_lage). .379 (User-Entscheid 30.08., "neue
     # Regel, sonst ist es nicht konsistent"): im Guete-Weg entscheidet ALLEIN
     # die kalibrierte Latte — die Norm-Rettung nach oben ist raus. Sie liess
@@ -87,14 +148,31 @@ def _lattenklasse(m, norm_latte=None, guete_latte=None):
     # waehrend die Kalibrier-Seite "Kept: 1 of 28" sagte; der Regler waere
     # sonst nur eine von zwei Tueren. Die Norm bleibt Veto nach UNTEN
     # (harte_linie) und Alternativweg fuer UNGEMESSENE Zeilen (Alt-Weg).
-    gl = guete_latte or {}
-    ft, ew = m.get("fiqa_t"), m.get("empf")
-    if guete_weg_aktiv(m, guete_latte):
-        if (k >= REF_LATTE["min_kante"]
-                and float(ew) >= float(gl["empfinden_min"])
-                and float(ft) >= float(gl["t_min"])):
-            return 0
-        return 2
+    #
+    # .516 ALT-LATTEN-ABLOESUNG (User 10.09.2026, SECHS-ACHSEN-VERFASSUNG:
+    # „keine Altlasten mitschleppen — nur die sechs Werte, durchgaengig").
+    # ZWEI Aenderungen, beide gemessen begruendet:
+    #   1. Die Latte kommt aus dem REGISTER „Face catalog", je Kamera
+    #      aufgeloest (core.kamerakalib.sieb_latten) und ueber DIESELBE
+    #      Mechanik verglichen wie die Ernte (sieb_ok/achse_ok) — nicht mehr
+    #      aus den zwei globalen Config-Werten. Der .514-Widerleger hat
+    #      gemessen, was die alte Latte an dieser Stelle anrichtete: von 1385
+    #      Bildern, die Ernte und Anker-Sieb durchliessen, verwarf sie 1382,
+    #      und beide Anker-Gruppen des Abnahmelaufs hatten 0 von 31
+    #      ankreuzbaren Bildern (gegen 15 von 15 auf .513). Das ist die
+    #      .367-Fehlerklasse: der Nutzer bekommt Gruppen, zu denen er nichts
+    #      entscheiden kann.
+    #   2. `kante >= REF_LATTE["min_kante"]` (70 px) FAELLT WEG. Die
+    #      Kantenlaenge ist seit .515 Sensor 6 — eine eigene Register-Achse mit
+    #      Werkswert 25 px, die in der Ernte wirkt. Sie ein zweites Mal und mit
+    #      einer anderen Zahl hier zu fuehren, waere genau die Doppel-Siebung,
+    #      die dieser Zug abschafft (die 70 traf 512 der 1385 M-Zeilen).
+    e_w, t_w = guete_masse(m)
+    if guete_weg_aktiv(m, kat_latten):
+        from core import kamerakalib as _kk           # lazy: Modul bleibt leicht
+        w = _kk.sieb_latten(kat_latten, kamera_von(m))
+        ok, _grund = _kk.sieb_ok({"e": w["e"], "t": w["t"]}, e=e_w, t=t_w)
+        return 0 if ok else 2
     s = float(m.get("sharp") or 0)
     if k >= REF_LATTE["kante_gut"] and s >= REF_LATTE["sharp_gut"]:
         return 0
@@ -143,7 +221,7 @@ def harte_linie(m, norm_latte=None):
     return None
 
 
-def pool_zulauf(m, norm_latte=None, guete_latte=None):
+def pool_zulauf(m, norm_latte=None, kat_latten=None):
     """DIE eine Eintritts-Pruefung des Unbekannt-Pools (.380, User-Beschluss
     31.08. "Gruppenbildungs-Vereinheitlichung").
     -> Grund-Schluessel ('struktur' | 'norm' | 'guete') oder None = darf hinein.
@@ -157,12 +235,14 @@ def pool_zulauf(m, norm_latte=None, guete_latte=None):
 
     Zwei Instanzen, beide dieselben wie in core.anker._sieb_besteht:
       1. harte_linie — Struktur-/Norm-Veto (kein Gesicht im Ausschnitt).
-      2. die kalibrierte Guete-Latte ueber ist_gut. Sie sperrt NUR, wenn sie
-         ueberhaupt urteilen darf (guete_weg_aktiv): beide Masse gemessen,
-         beide Regler gesetzt. Ohne Messgrundlage entscheidet hier NICHTS —
-         die Pixel-Latte 112/600 des Alt-Wegs waere eine ZWEITE, viel
-         schaerfere Sammel-Schranke, die niemand beschlossen hat, und
-         ungemessene Kandidaten verschwaenden still.
+      2. die Register-Latte ueber ist_gut (seit .516 das Register
+         „Face catalog", je Kamera aufgeloest — bis .515 waren es die zwei
+         globalen Config-Werte). Sie sperrt NUR, wenn sie ueberhaupt urteilen
+         darf (guete_weg_aktiv): beide Masse gemessen, Register da. Ohne
+         Messgrundlage entscheidet hier NICHTS — die Pixel-Latte 112/600 des
+         Alt-Wegs waere eine ZWEITE, viel schaerfere Sammel-Schranke, die
+         niemand beschlossen hat, und ungemessene Kandidaten verschwaenden
+         still.
 
     DECKUNGS-VERTRAG (K3-Regel, qs_ebenen.md): Aufrufer ist genau EINE Stelle,
     `anlernen._sammle_intern` — der einzige Weg, auf dem ein Gesicht neu in
@@ -176,12 +256,12 @@ def pool_zulauf(m, norm_latte=None, guete_latte=None):
     hart = harte_linie(m, norm_latte)
     if hart:
         return hart
-    if guete_weg_aktiv(m, guete_latte) and not ist_gut(m, norm_latte, guete_latte):
+    if guete_weg_aktiv(m, kat_latten) and not ist_gut(m, norm_latte, kat_latten):
         return "guete"
     return None
 
 
-def bestes_zuerst(mitglieder, norm_latte=None, luma_grenzen=None, guete_latte=None):
+def bestes_zuerst(mitglieder, norm_latte=None, luma_grenzen=None, kat_latten=None):
     """DIE eine Reihung einer Mitglieder-/Kandidatenliste, bestes Bild zuerst.
     Duennschale um _reihung, damit ausserhalb dieses Moduls niemand eine
     ZWEITE Rangfolge ueber dieselbe Liste legt.
@@ -197,17 +277,17 @@ def bestes_zuerst(mitglieder, norm_latte=None, luma_grenzen=None, guete_latte=No
     Gruppe NUR Bilder unter diesen Linien, steht auch hier eines vorn — sie
     hat dann aber ohnehin kein gutes."""
     return sorted(mitglieder or [],
-                  key=lambda m: _reihung(m, norm_latte, luma_grenzen, guete_latte))
+                  key=lambda m: _reihung(m, norm_latte, luma_grenzen, kat_latten))
 
 
-def ist_gut(m, norm_latte=None, guete_latte=None):
+def ist_gut(m, norm_latte=None, kat_latten=None):
     """DIE eine Definition der Stufe GUT — Phase 1 des intelligenten Lernens
     fragt HIER, nie mit eigenen Zahlen (analysen/intelligentes_lernen.md).
     Duennschale um _lattenklasse, damit die Latte an EINER Stelle steht und
     ein Modul ausserhalb keinen privaten Namen ueber die Grenze zieht.
     m: eine Kandidaten-Zeile (kante/sharp/norm). norm_latte wie dort — ohne
     Dict gilt die Pixel-Latte allein, der Norm-Weg faellt dann aus."""
-    return _lattenklasse(m, norm_latte, guete_latte) == 0
+    return _lattenklasse(m, norm_latte, kat_latten) == 0
 
 
 def belichtungs_lage(m, luma_grenzen=None):
@@ -255,7 +335,7 @@ def _belichtungsklasse(m, luma_grenzen=None):
     return 1 if belichtungs_lage(m, luma_grenzen) else 0
 
 
-def _reihung(m, norm_latte=None, luma_grenzen=None, guete_latte=None):
+def _reihung(m, norm_latte=None, luma_grenzen=None, kat_latten=None):
     """Sortier-Schluessel der Empfehlungs-Reihung (bester zuerst via sorted()).
     .265: Latten-Klasse VOR Frontalitaet (User-Fund 18.08.: Gruppe mit 144
     Bildern trug 9 nachgemessen GUTE — die Flaeche zeigte trotzdem 12 kleine
@@ -267,7 +347,7 @@ def _reihung(m, norm_latte=None, luma_grenzen=None, guete_latte=None):
     sichtbar zu dunkle Bilder): NACH der Lattenklasse, VOR der Norm reiht die
     Belichtungsklasse. Ohne Grenzen und ohne gemessene Luma ist sie konstant 0
     und die Ordnung bleibt Element fuer Element die heutige."""
-    return (_lattenklasse(m, norm_latte, guete_latte),
+    return (_lattenklasse(m, norm_latte, kat_latten),
             _belichtungsklasse(m, luma_grenzen),
             -float(m.get("norm") or 0.0) if norm_latte else 0.0,
             -float(m.get("front") or 0.0), -float(m.get("sharp") or 0.0),
@@ -322,7 +402,7 @@ def _grund(kennung, **werte):
 
 
 def empfehlen(mitglieder, k_je_bin, yaw_grenze, dup_sim, luma_grenzen=None,
-              stufen=None, guete_latte=None):
+              stufen=None, kat_latten=None):
     """Empfehlungs-Analyse eines Ankers -> (bewertet, flags).
     bewertet = Liste in Mitglieder-Reihenfolge: {datei, bin, empfohlen, grund}
     (grund nur bei nicht-empfohlen — Nicht-Loeschen-Prinzip: alles bleibt
@@ -353,7 +433,8 @@ def empfehlen(mitglieder, k_je_bin, yaw_grenze, dup_sim, luma_grenzen=None,
     (Aufrufer ohne Sichtung) bleibt alles byte-gleich zum Verhalten davor."""
     flags = {"emb_fehlt": any(not m.get("emb") for m in mitglieder)}
     geordnet = sorted(mitglieder,
-                      key=lambda x: _reihung(x, luma_grenzen=luma_grenzen, guete_latte=guete_latte))
+                      key=lambda x: _reihung(x, luma_grenzen=luma_grenzen,
+                                             kat_latten=kat_latten))
     ergebnis = {}                                     # datei -> (empfohlen, grund, bin)
     phys_gesehen, empfohlene, bin_zahl = set(), [], {}
     _lg = luma_grenzen or {}
@@ -502,7 +583,7 @@ def namens_kollision(name, quelle, norm):
 
 
 def benennungs_kontext(satz, alle_saetze, master_personen, werte, norm,
-                       referenz=None, luma_grenzen=None, guete_latte=None):
+                       referenz=None, luma_grenzen=None, kat_latten=None):
     """Glue fuer die Benennungs-Seite (EIN Aufruf je Detail-GET, rein lesend):
     Empfehlung + Personen-Vereinigung (ohne den eigenen Anker) + Vorschlag.
     werte = {k_je_bin, yaw_grenze, dup_sim, vorschlag_schwelle} aus der
@@ -519,7 +600,7 @@ def benennungs_kontext(satz, alle_saetze, master_personen, werte, norm,
     bewertet, flags = empfehlen(satz.get("mitglieder") or [], werte["k_je_bin"],
                                 werte["yaw_grenze"], werte["dup_sim"],
                                 luma_grenzen=luma_grenzen,
-                                guete_latte=guete_latte)
+                                kat_latten=kat_latten)
     quelle = personen_quelle(
         master_personen,
         [a for a in alle_saetze if a.get("anker_id") != satz.get("anker_id")],

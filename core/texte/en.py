@@ -1049,6 +1049,46 @@ T = {
         "or pictures that came in through another path), so this slider "
         "changes nothing here. New samples from the event analysis bring the "
         "value with them.",
+    "livekalib.katalog.regler_n":
+        "Catalogue: feature norm",
+    "livekalib.katalog.regler_n_prosa":
+        "How strong a face has to be as recognition material before a "
+        "learning run keeps it \u2014 the reference-free measure the learning "
+        "stock already works with (a good frontal face sits around 24). It "
+        "leaves the factory switched ON, at 20, set by looking at real "
+        "harvested material (756 pictures, median 20.7). The slider does not "
+        "go below 18 \u2014 you cannot switch the axis off here, only set it "
+        "between 18 and 35. That is a different question from the stock line "
+        "in the settings, which decides which pictures are OFFERED to you.",
+    "livekalib.ohne_norm":
+        "None of these samples carries a feature-norm value (the "
+        "calibration stock does not measure it, a learning run does), so this "
+        "slider changes nothing in the gallery here. It still sets the value "
+        "the learning run uses.",
+    "livekalib.regler_k":
+        "Smallest face (px)",
+    "livekalib.regler_k_prosa":
+        "How small a face may be and still count as a "
+        "vote — measured on the shorter side of its box, in pixels. This is a "
+        "floor against nonsense, not a quality bar: field data puts correct "
+        "votes at 30-49 px on overview cameras and the nonsense cases at "
+        "11-19 px, while 70 px would kill correct ones. The factory value 25 "
+        "is exactly the number this system has used for every vote since "
+        "0.1.0.400; the slider only makes it a per-camera setting. 0 = off.",
+    "livekalib.katalog.regler_k":
+        "Catalogue: smallest face (px)",
+    "livekalib.katalog.regler_k_prosa":
+        "The same measure, for learning: how small "
+        "a face may be and a learning run still keeps it. Set it higher on a "
+        "camera whose faces are simply too far away to learn from, and note "
+        "that this is a different question from the tab next door — being "
+        "told about someone needs less resolution than learning what they "
+        "look like. 0 = off.",
+    "livekalib.ohne_kante":
+        "None of these samples carries its face size (the "
+        "calibration stock does not store it, a learning run does), so this "
+        "slider changes nothing in the gallery here. It still sets the value "
+        "that is used.",
     "livekalib.standard": "Defaults",
     "livekalib.fueller.laeuft": "material search running",
     "livekalib.fueller.bilanz": "last material search",
@@ -1069,8 +1109,8 @@ T = {
     "livekalib.abschnitt.katalog": "Catalogue bar",
     "livekalib.abschnitt.pruefen": "Catalogue check bar",
     "livekalib.abschnitt.material": "Material",
-    "livekalib.katalog.prosa": "A floor, not a filter: how good a face from this camera has to be before it may become a reference on the AUTOMATIC paths (learning-run takeover, accepting suggestions/stock offers). It is generous on purpose — taking pictures in is the wide door, sorting them out again is the job of the catalogue check in the next tab. Faces you tick and name yourself bypass it entirely.",
-    "livekalib.katalog.grenze": "What it does not do: it never removes references you already have, and it never changes who is recognised. Pictures without quality scores (older material, or a build without the quality models) pass untouched — a bar without a measurement would discard blindly.",
+    "livekalib.katalog.prosa": "These four values decide what this camera contributes to learning: a learning run keeps only faces that pass all four, and only such material may become a reference on the AUTOMATIC paths (learning-run takeover, accepting suggestions/stock offers). They are the same four sliders as in the Recognition tab and the same arithmetic \u2014 only their own numbers, because alerting and learning do not ask for the same thing. Faces you tick and name yourself bypass them entirely.",
+    "livekalib.katalog.grenze": "What they do not do: they never remove references you already have, and they change nothing about who gets recognized. When a picture is taken into the catalogue, missing quality scores (older material, a build without the quality models) let it pass untouched. In a learning run the other half of the same rule applies: a face whose value could not be measured is dropped \u2014 the balance at the end of the run counts those cases one by one instead of letting them vanish.",
     "livekalib.katalog.quelle_kamera": "In use: this camera's own values.",
     "livekalib.katalog.quelle_global": "In use: the global fallback — this camera has no own values yet.",
     "livekalib.katalog.quelle_aus": "No catalogue bar set: every picture may become a reference.",
@@ -1078,6 +1118,10 @@ T = {
     "livekalib.katalog.regler_e_prosa": "Minimum picture impression for a reference of this camera. Low on purpose: even an average picture still carries something to learn from, and the catalogue check looks at it again once it is in.",
     "livekalib.katalog.regler_t": "Catalogue: recognisability",
     "livekalib.katalog.regler_t_prosa": "Minimum recognisability for a reference of this camera. This is the one that keeps half-covered faces out of the catalogue.",
+    "livekalib.katalog.regler_det": "Catalogue: detection score",
+    "livekalib.katalog.regler_det_prosa": "From where the detector is sure enough that there is a face at all. Same measurement as in the Recognition tab, but for learning \u2014 and it may well sit somewhere else here: what you want to be told about is not the same as what you want to learn from.",
+    "livekalib.katalog.regler_p": "Catalogue: head pose",
+    "livekalib.katalog.regler_p_prosa": "How clearly a head can be made out at the find. This is the slider against bins, hedges and car fronts in the learning material \u2014 the two quality scores alone do not see those. Again the same measurement as in the Recognition tab.",
     "livekalib.pruefen.prosa": "This bar judges pictures you ALREADY have. Below it, the catalogue check flags a stored picture of this camera; together with a weak feature norm it becomes a removal suggestion you can click. It never takes a picture in and never removes one by itself.",
     "livekalib.pruefen.grenze": "It is deliberately separate from the bar above: taking a picture in and checking it later are two questions, and moving one slider must not silently move the other. Pictures without a quality score are never flagged.",
     "livekalib.pruefen.quelle_kamera": "In use: this camera's own value.",
@@ -1098,6 +1142,7 @@ T = {
     "livekalib.js.katalog": "{n} of {gesamt} would be allowed into the catalogue",
     "livekalib.js.pruefen": "{n} of {gesamt} would be flagged by the check",
     "livekalib.js.lauf": "run",
+    "livekalib.js.aus": "off",
     # ----------------------------------------------- routes/erkennung ---
     # NICHT eingezogen (bewusst, Stufe-0-Grenzen): die ek-satz-Zeile der
     # Live-Kachel (<b>moment</b> mitten im Satz), der Expert-Status
@@ -1265,11 +1310,7 @@ T = {
     "qualitaet.ergebnis.alles_gut_satz":
         "Checked {n} pictures of {np} people &mdash; nothing needs your "
         "attention.",
-    "qualitaet.wort.defekt": "broken file",
     "qualitaet.wort.kein_gesicht": "no face found",
-    "qualitaet.wort.zu_klein": "too small",
-    "qualitaet.wort.unscharf": "blurry",
-    "qualitaet.wort.schwach": "weak picture",
     # {name} kommt escaped aus der Route (Muster lernanker {kamera}).
     "qualitaet.galerie.looks_like": "looks like {name}",
     "qualitaet.galerie.doppel": "duplicate — the kept one covers it",
@@ -1448,17 +1489,6 @@ T = {
     "lernwizard.kachel.lauf": "Learning run",
     "lernwizard.kachel.sammeln": "Collect &amp; sort",
     "kalib.titel": "Camera calibration",
-    "kalib.erklaerung": "These two thresholds decide which faces future learning runs keep. Slide until the border feels right — everything greyed out would be dropped. Below are the pictures of the latest run, best picture impression first. Yellow frame = picture picked for adoption.",
-    "kalib.leer": "Nothing to calibrate yet: the latest run carries no quality scores. Start a learning run with this version first.",
-    "kalib.regler_e": "Picture impression",
-    "kalib.regler_e_prosa": "How clean and bright the picture looks to the eye. Lower keeps more, but darker and rougher pictures.",
-    "kalib.regler_t": "Recognisability",
-    "kalib.regler_t_prosa": "How well the person can be identified on the picture. Also sorts out half-covered faces.",
-    "kalib.standard": "Reset to defaults",
-    "kalib.uebernehmen": "Apply thresholds",
-    "kalib.js.genutzt": "Kept: {n} of {gesamt}",
-    "kalib.js.gespeichert": "Saved — the run is re-graded with the new thresholds, taking you back to the learning run …",
-    "kalib.js.fehler": "Saving failed",
     # --- zentrale Kamera-Uebersicht + globaler Rueckfall (31.08.)
     "kalib.knopf": "Calibration",
     "kalib.knopf_tip": "Camera calibration: the bars for alerts, samples and the reference catalogue",
@@ -1490,13 +1520,8 @@ T = {
     "kalib.knopf_fuellen": "Look for fresh material",
     "kalib.knopf_leeren": "Delete samples",
     "kalib.global.titel": "Global fallback",
-    "kalib.global.satz": "These apply to cameras without their own values, and they are the bar a learning run uses when it decides which faces to keep.",
-    "kalib.global.werte": "impression {e} · recognisability {tw}",
+    "kalib.global.satz": "These apply to cameras without their own values: they are the bar a learning run uses when it decides which faces to keep, and which of them may become a stored reference.",
     "kalib.global.katalog": "catalogue bar {e} / {tw}",
-    "kalib.global.knopf": "Set on the latest learning run",
-    "kalib.global.kein_lauf": "No learning run with quality scores yet — these can be set once a run has finished.",
-    "kalib.lauf.titel": "Global bars — latest learning run",
-    "kalib.zurueck": "back to all cameras",
     "js.kalib.start": "looking for material …",
     "js.kalib.lauf": "{i} of {n} events · {bilder} picture(s)",
     "js.kalib.fertig": "{bilder} picture(s) from {events} event(s)",
@@ -1825,6 +1850,10 @@ T = {
     "js.import.fertig_ges": "✓ imported {n} — computing features, page reloads …",
     "js.ref.frage": "Remove reference image of {person}?",
     "js.ref.batch_frage": "Delete {n} image(s)?",
+    "js.ref.batch_alle_frage":
+        "That is ALL {n} reference image(s) of {person}. Without a reference, "
+        "{person} can no longer be recognised. The images move to the trash "
+        "folder and can be moved back. Continue?",
     "js.dienst.nicht_erreichbar": "cannot reach the service — try again in a moment.",
     "js.unb.tick": "{phase} … {s} s",
     "js.unb.besucher_frage": "Ignore as a known stranger? It will no longer trigger alerts. (Re-activate any time under \"known visitors\" below.)",
@@ -3162,6 +3191,17 @@ T = {
         "nothing to take — no helpful new picture in this pass (that is "
         "fine)",
     "antwort.bruecke_undo": "{n} picture(s) removed again",
+    # .521 mini harvest: nothing taken, and the run is transient — its
+    # pictures are gone right away and the next click harvests again.
+    "antwort.passernte_verworfen":
+        "check discarded, the pictures are gone — click again to run a new one",
+    # .524 Fix 11: cancel at the RUNNING progress bar. {n} events never
+    # started; whatever was running finishes properly, then the folder falls.
+    "antwort.passernte_abgebrochen":
+        "check cancelled — {n} of {m} event(s) dropped; anything already "
+        "running finishes, then the pictures are removed",
+    "antwort.passernte_abbruch_leer":
+        "nothing to cancel — this check is not running any more",
     "antwort.personlauf_kein_review": "no run awaiting review",
     "antwort.personlauf_kein_lauf": "no active run",
     "antwort.events_bereich": "events must be 1..{max}",
@@ -3964,8 +4004,10 @@ between.</p>""",
     "anwesenheit.nacht": "night",
     "anwesenheit.legende_da": "confirmed present",
     "anwesenheit.legende_weg": "system running, nobody confirmed",
-    "anwesenheit.legende_leer": "system not running or did not look",
+    "anwesenheit.legende_leer": "service not running",
+    "anwesenheit.legende_teil": "running, some events not analysed",
     "anwesenheit.legende_jetzt": "now",
+    "anwesenheit.legende_satz": "White means one thing only: the service was not running at that time. A green cell with a clipped corner means the service was running but some events were not analysed — hover for the numbers.",
     "anwesenheit.zaehler": "{zeilen} marks read, {kaputt} broken lines skipped.",
     "anwesenheit.gekappt": "The day file is larger than the reading limit; only its end was read.",
     "anwesenheit.nie": "Not seen in this view: {namen}",
@@ -3975,7 +4017,8 @@ between.</p>""",
     "anwesenheit.keine_aufzeichnung": "No recording for this day.",
     "anwesenheit.tip_da": "{zeit} · {kameras} · {quelle}",
     "anwesenheit.tip_weg": "{zeit} · system running, nobody confirmed",
-    "anwesenheit.tip_leer": "{zeit} · no statement (system not running or did not look)",
+    "anwesenheit.tip_weg_teil": "{zeit} · system running, nobody confirmed · {gelungen} events analysed, {luecken} not",
+    "anwesenheit.tip_leer": "{zeit} · the service was not running",
     "anwesenheit.tip_zukunft": "{zeit} · not yet",
     "anwesenheit.quelle_worker": "event analysis",
     "anwesenheit.quelle_live": "live watcher",

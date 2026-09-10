@@ -730,8 +730,15 @@ def render(cfg, log_pfad, personen_bekannt, params):
           'var wahl2=null;'
           'if(ng){var gh=document.createElement("div");gh.className="dim";'
           'gh.style.marginTop="6px";'
-          'gh.textContent=ng+" borderline picture(s) \\u2014 identity sure, '
-          'picture quality only fair; tick to take anyway:";'
+          # .521: der Satz sagt jetzt, was ein Grenzfall WIRKLICH ist. Bis .520
+          # hiess er „identity sure, picture quality only fair" — auf dem
+          # Mini-Ernte-Weg ist genau das Gegenteil der Fall: die Bildqualitaet
+          # hat das Register schon bestaetigt, unsicher ist die IDENTITAET
+          # (oder es ist das dritte, vierte … Bild desselben Ereignisses, das
+          # der Deckel vom Haken genommen hat).
+          'gh.textContent=ng+" borderline picture(s) \\u2014 quality is fine, '
+          'but the identity is only probable, or the picture is an extra one '
+          'from the same event; tick to take anyway:";'
           'dg.appendChild(gh);wahl2=reihe(d.grenz,false);dg.appendChild(wahl2);}'
           'var ok=document.createElement("button");ok.className="gtb on";'
           'var ab=document.createElement("button");ab.className="gtb";'
@@ -747,8 +754,18 @@ def render(cfg, log_pfad, personen_bekannt, params):
           'items.push({eid:c._it.eid,datei:c._it.datei,'
           'lauf_id:c._it.lauf_id,herkunft:c._it.herkunft});});'
           'ov.remove();lbUebernehmen(b,st,items);};'
+          # .521 FLUECHTIG: Abbrechen raeumt den Mini-Ernte-Lauf sofort weg
+          # (Bilder, Kandidaten, Auswahl). Der naechste Klick erntet neu — das
+          # ist der bewusste Preis dafuer, dass eine angesehene und verworfene
+          # Pruefung nichts liegen laesst. `lauf_id` kommt aus der Antwort;
+          # fehlt sie (Alt-Antwort), bleibt es beim blossen Schliessen.
           'ab.onclick=function(){ov.remove();st.textContent="nothing taken";'
-          'lbStart(b);};'
+          'lbStart(b);var lid=(d&&d.lauf_id)||null;if(lid)'
+          'fetch("/auftritt_lernen",{method:"POST",'
+          'headers:{"Content-Type":"application/json"},'
+          'body:JSON.stringify({person:b.dataset.person,verwerfen:lid})})'
+          '.then(function(r){return r.json()}).then(function(dv){'
+          'if(dv&&dv.msg)st.textContent=dv.msg;}).catch(function(){});};'
           'dg.appendChild(ok);dg.appendChild(ab);ov.appendChild(dg);'
           'ov.onclick=function(ev){if(ev.target===ov)ab.onclick(ev);};'
           'document.body.appendChild(ov);}'
@@ -796,6 +813,16 @@ def render(cfg, log_pfad, personen_bekannt, params):
           'b2.appendChild(bf);'
           'r.appendChild(kf);r.appendChild(b2);w.appendChild(r);'
           'c.rows.push({bf:bf,zt:zt});});'
+          # .524 Fix 11 (Betreiber-Auflage 10.09.): ABBRECHEN gehoert an den
+          # LAUFENDEN Balken. Bis .523 gab es Abbrechen nur im Overlay des
+          # FERTIGEN Ergebnisses — wer einen zu lang laufenden Check loswerden
+          # wollte, konnte ihn nur aussitzen. Der Knopf steht im Block selbst
+          # (nicht neben dem Lupen-Knopf), weil der Block die volle Zeilen-
+          # breite hat und der Balken sonst zwischen zwei Knoepfen klemmt.
+          'var ab=document.createElement("button");ab.className="gtb fs-ab";'
+          'ab.textContent="Cancel this check";ab.style.marginTop="6px";'
+          'ab.onclick=function(){lbAbbrechen(st,ab);};'
+          'w.appendChild(ab);'
           'st.appendChild(w);st._fsb=c;}'
           'c.m.textContent=msg;'
           # .507 B3 (E-B2/E-P3/E-P5): Startzeit und — NUR wenn der Dienst eine
@@ -835,8 +862,32 @@ def render(cfg, log_pfad, personen_bekannt, params):
           'else if(!g.wert)zt.textContent="waiting";'
           'else if(g.k==="pose")zt.textContent=g.wert+" found";'
           'else zt.textContent=g.wert+" recognized";});}'
+          # .524 Fix 11: der Abbruch selbst. Er schickt den Ordner-Namen, den
+          # der Dienst seit .524 SCHON WAEHREND des Laufs mitliefert
+          # (`lauf_id` in der laden-Antwort) — bis .523 kannte das Blatt ihn
+          # erst mit dem fertigen Ergebnis, und genau deshalb konnte der Knopf
+          # nur im Overlay stehen. Die Poll-Schleife wird hier angehalten:
+          # sonst fragte sie 2,5 s spaeter nach und startete den eben
+          # abgebrochenen Lauf neu (sein Ordner ist dann weg).
+          'function lbAbbrechen(st,ab){'
+          'var d=st._lbd||{},b=st._lbB,lid=d.lauf_id||null;'
+          'ab.disabled=true;if(b)b._lbStop=true;'
+          'function fertig(txt){st._fsb=null;st.style.display="";'
+          'st.textContent=txt;if(b){lbStart(b);lbFrei(b);}}'
+          'if(!lid){fertig("nothing to cancel \\u2014 reload the page");return;}'
+          'ab.textContent="cancelling\\u2026";'
+          'fetch("/auftritt_lernen",{method:"POST",'
+          'headers:{"Content-Type":"application/json"},'
+          'body:JSON.stringify({person:st._lbP,abbrechen:lid})})'
+          '.then(function(r){return r.json()}).then(function(dv){'
+          'fertig((dv&&dv.msg)||"cancelled");})'
+          '.catch(function(e){fertig("error: "+e);});}'
           'function lernBruecke(b){'
           'var st=b.parentNode.querySelector(".lb-status");'
+          # .524: ein frischer KLICK hebt eine vorherige Abbruch-Sperre auf,
+          # ein POLL nicht — sonst liefe die Schleife nach dem Abbrechen
+          # weiter und stiesse einen neuen Lauf an.
+          'if(b._lbPoll){b._lbPoll=0;if(b._lbStop)return;}else{b._lbStop=false;}'
           'var kk0=b.closest(".pass-card"),pn=b.dataset.person;'
           'if(kk0){kk0._lbLauf=kk0._lbLauf||{};'
           'if(kk0._lbLauf[pn]&&kk0._lbLauf[pn]!==b){'
@@ -863,7 +914,11 @@ def render(cfg, log_pfad, personen_bekannt, params):
           # Die Antwort selbst haengt am Status-Feld: lbBlock liest daraus
           # Grund, Startzeit und Dauer. Der Aufruf von lbBlock bleibt dabei
           # woertlich wie im .345-Vertrag (qs.sh) — kein fuenftes Argument.
-          'st._lbd=d;'
+          # .524: der Abbrechen-Knopf im Block braucht Knopf und Person —
+          # `lbBlock` bekommt bewusst kein fuenftes Argument (der .345-Vertrag
+          # in qs.sh prueft den Aufruf wortgleich), also reisen sie wie die
+          # Antwort selbst am Status-Feld mit.
+          'st._lbd=d;st._lbB=b;st._lbP=pn;'
           'if(!d.ok){st._fsb=null;st.style.display="";'
           'st.textContent="error: "+d.msg;b.disabled=false;lbFrei(b);return;}'
           # .232 (User-Idee): kaltes Modell -> ehrliche Lade-Anzeige und
@@ -876,13 +931,14 @@ def render(cfg, log_pfad, personen_bekannt, params):
           # einem anderen Hintergrund-Job). Reines Modell-Laden (ohne n)
           # behaelt den 60-s-Deckel und bleibt schlichte Textzeile.
           'if(d.zustand){lbBlock(st,d.msg,d.zustand,d.fortschritt);'
-          'b._ladeversuche=0;setTimeout(function(){lernBruecke(b)},2500);return;}'
+          'b._ladeversuche=0;'
+          'setTimeout(function(){b._lbPoll=1;lernBruecke(b)},2500);return;}'
           'st._fsb=null;st.textContent=d.msg;'
           'b._ladeversuche=(b._ladeversuche||0)+1;'
           'if(b._ladeversuche>24){st._fsb=null;st.style.display="";'
           'st.textContent="model did not load — try again";'
           'b.disabled=false;b._ladeversuche=0;lbFrei(b);return;}'
-          'setTimeout(function(){lernBruecke(b)},2500);return;}'
+          'setTimeout(function(){b._lbPoll=1;lernBruecke(b)},2500);return;}'
           'b._ladeversuche=0;'
           'st._fsb=null;st.style.display="";st.textContent=d.msg;b.disabled=false;'
           'lbFrei(b);'

@@ -3330,6 +3330,22 @@ def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
     # sie unangetastet, nur ein mitgesandtes Feld aendert etwas.
     k_e, f_ke = _opt_zahl("katalog_e_min", 0.0, 1.0)
     k_t, f_kt = _opt_zahl("katalog_t_min", 0.0, 1.0)
+    # .514: die zwei neuen Achsen desselben Registers. Spannen wie ihre
+    # Geschwister im Erkennen-Register (det wie det_min, Pose wie pose_min) —
+    # es ist dieselbe Messgroesse, nur ein anderer Zweck.
+    k_d, f_kd = _opt_zahl("katalog_det_min", DET_MIN_MIN, DET_MIN_MAX)
+    k_p, f_kp = _opt_zahl("katalog_pose_min", POSE_MIN_MIN, POSE_MIN_MAX)
+    # .515: die Norm-Achse, einmal je Register. Dieselbe Halte-Regel wie alle
+    # Nachbarn (fehlendes Feld = unveraendert), dieselbe Spanne in beiden —
+    # es ist dieselbe Messgroesse, nur ein anderer Zweck.
+    k_n, f_kn = _opt_zahl("katalog_norm_min", NORM_MIN_MIN, NORM_MIN_MAX)
+    n_min, f_nm = _opt_zahl("norm_min", NORM_MIN_MIN, NORM_MIN_MAX)
+    # .515: die Kanten-Achse, ganze Pixel (ganz=True) — halbe Pixel gibt es
+    # nicht, und der Regler stellt auch keine ein.
+    k_k, f_kk = _opt_zahl("katalog_kante_min", KANTE_MIN_MIN, KANTE_MIN_MAX,
+                          ganz=True)
+    kt_min, f_km = _opt_zahl("kante_min", KANTE_MIN_MIN, KANTE_MIN_MAX,
+                             ganz=True)
     # Pruefer-Latte je Kamera (.511 Stufe C) — dieselbe Halte-Regel: ein
     # Formular ohne dieses Feld (Live-Detailseite, Alt-UI, API) laesst den
     # Wert unangetastet.
@@ -3338,7 +3354,7 @@ def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
     # das Feld (Live-Detailseite, Alt-UI, API-Aufrufer) laesst den Wert
     # unangetastet. Spanne = die des Vorgabe-Werts pose_kopf.
     p_min, f_pm = _opt_zahl("pose_min", POSE_MIN_MIN, POSE_MIN_MAX)
-    for fehler in (f_ke, f_kt, f_pm, f_pt):
+    for fehler in (f_ke, f_kt, f_kd, f_kp, f_kn, f_nm, f_kk, f_km, f_pm, f_pt):
         if fehler:
             return False, fehler
     fr_ab, f_fa = _opt_zahl("frigate_abstand_s", WIEDER_SCHARF_MIN,
@@ -3386,7 +3402,11 @@ def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
     neu = dict(alt, quelle=q, url=url, ende_ohne_gesicht_s=ende_s,
                wieder_scharf_s=scharf_s, kanaele=kanaele, hoehe=hoehe,
                det_min=det_min, guete_e_min=g_e, guete_t_min=g_t,
-               katalog_e_min=k_e, katalog_t_min=k_t, pruef_t_min=pr_t,
+               katalog_e_min=k_e, katalog_t_min=k_t,
+               katalog_det_min=k_d, katalog_pose_min=k_p,
+               katalog_norm_min=k_n, norm_min=n_min,
+               katalog_kante_min=k_k, kante_min=kt_min,
+               pruef_t_min=pr_t,
                pose_min=p_min,
                erkannt_n=erk_n, erkannt_t_s=erk_t, erkannt_fenster_s=erk_f,
                frigate_events=fr_ev, frigate_abstand_s=fr_ab,
@@ -3402,7 +3422,11 @@ def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
         "ende_ohne_gesicht_s": ende_s, "wieder_scharf_s": scharf_s,
         "kanaele": kanaele, "hoehe": hoehe, "det_min": det_min,
         "guete_e_min": g_e, "guete_t_min": g_t,
-        "katalog_e_min": k_e, "katalog_t_min": k_t, "pruef_t_min": pr_t,
+        "katalog_e_min": k_e, "katalog_t_min": k_t,
+        "katalog_det_min": k_d, "katalog_pose_min": k_p,
+        "katalog_norm_min": k_n, "norm_min": n_min,
+        "katalog_kante_min": k_k, "kante_min": kt_min,
+        "pruef_t_min": pr_t,
         "pose_min": p_min,
         "erkannt_n": erk_n,
         "erkannt_t_s": erk_t, "erkannt_fenster_s": erk_f,
@@ -3653,6 +3677,28 @@ KANAELE_ERLAUBT = ("pushover", "telegram", "mqtt")
 from core.guete import POSE_BODEN as _POSE_BODEN
 POSE_MIN_MIN, POSE_MIN_MAX = _POSE_BODEN, _DEFAULTS_GRENZEN["pose_kopf"][1]
 
+# Spanne der NORM-Latte (.515, Sensor 5) — dieselbe EINE Quelle wie ueberall:
+# core.guete.NORM_BODEN (0 = die Achse ist aus) bis core.guete.NORM_MAX (35 =
+# die Skala, auf der die bestehenden Norm-Linien des Lernvorrats stehen). Die 0
+# muss durchkommen, sonst waere die Achse nicht ABSCHALTBAR, sondern nur
+# hochziehbar.
+# .520: der STORE ist seitdem WEITER als der Regler der Kalibrier-Seite. Dessen
+# linker Anschlag steht auf core.guete.NORM_REGLER_MIN = 18 (User-Entscheid
+# 10.09.2026) — die Aus-Stellung ist von der Seite aus nicht mehr erreichbar,
+# ueber Config-Schluessel/API bleibt sie es. Der Unterschied ist Absicht: hier
+# steht die ANNAHME-Spanne des Schreibwegs, dort die Bedien-Spanne EINER Seite;
+# ein gespeicherter Wert unter 18 bleibt gueltig und siebt weiter.
+from core.guete import NORM_BODEN as _NORM_BODEN
+from core.guete import NORM_MAX as _NORM_MAX
+NORM_MIN_MIN, NORM_MIN_MAX = _NORM_BODEN, _NORM_MAX
+
+# Spanne der KANTEN-Latte (.515, Sensor 6) in Pixeln — 0..core.guete.KANTE_MAX,
+# genau die Spanne, die die Konfigurationsseite fuer `urteil_kante` seit jeher
+# annimmt. Untergrenze 0 = „diese Achse ist aus"; der WERKSWERT (25) ist hier
+# bewusst NICHT die Untergrenze, sonst waere die Achse nicht abschaltbar.
+from core.guete import KANTE_MAX as _KANTE_MAX
+KANTE_MIN_MIN, KANTE_MIN_MAX = 0, _KANTE_MAX
+
 # DECKUNGS-VERTRAG Guard-Felder (UI-B1, Fix-Zyklus 12.08. — gemessen: die
 # Streu-Feldliste in guards_lesen liess `messung` FALLEN, die Last-Messung
 # wurde deshalb NIE angezeigt). DIE eine Quelle fuer die Struktur eines
@@ -3680,6 +3726,39 @@ GUARD_USER_FELDER = ("enabled", "quelle", "url", "ende_ohne_gesicht_s",
                      # Zentral-Umbau auch aus dem Event-Weg gespeist).
                      "katalog_e_min",    # Katalog-Latte Empfinden
                      "katalog_t_min",    # Katalog-Latte Erkennbarkeit
+                     # .514 (Etappe 3 „ein Sieb"): die zwei fehlenden Achsen
+                     # desselben Registers. Sie machen aus der zweiachsigen
+                     # Aufnahme-Latte den VIERACHSIGEN Werte-Satz, mit dem seit
+                     # .514 auch der LERNLAUF siebt (core.kamerakalib.sieb_ok)
+                     # — dieselbe Mechanik wie der Erkennungs-Weg, nur eigene
+                     # Zahlen. Ablageort unveraendert der Guard-Block: EIN
+                     # Schreibweg fuer alle Kamera-Werte.
+                     "katalog_det_min",   # Katalog-/Lern-Latte Detektion
+                     "katalog_pose_min",  # Katalog-/Lern-Latte Kopf-Pose
+                     # .515 (Sensor 5): die FEATURE-NORM als fuenfte Achse —
+                     # einmal je Register. `katalog_norm_min` siebt den
+                     # Lernweg (werksseitig AN seit .516, Grundwert 20 seit
+                     # .517 — core.guete.norm_werk); `norm_min` gehoert zum
+                     # Erkennen-Register (globaler Rueckfall
+                     # `urteil_norm_min`) und bleibt werksseitig 0 = aus,
+                     # weil dort niemand die Norm misst. Seit .517 hat die
+                     # Kalibrierseite dafuer auch keinen Regler mehr; das
+                     # FELD bleibt (Sechs-Achsen-Verfassung), es wird von der
+                     # Seite nur nicht mehr geschrieben.
+                     # NICHT zu verwechseln mit dem globalen Config-Wert
+                     # `katalog_norm_min` (Angebots-Linie des Lernvorrats) —
+                     # das hier ist ein GUARD-Feld, s. kamerakalib.KAT_FELDER.
+                     "katalog_norm_min",  # Katalog-/Lern-Latte Feature-Norm
+                     "norm_min",          # Erkennen-Latte Feature-Norm
+                     # .515 (Sensor 6): die KANTEN-LATTE in Pixeln, ebenfalls
+                     # einmal je Register. `kante_min` loest den bisherigen
+                     # GLOBALEN Wert `urteil_kante` je Kamera auf (der bleibt
+                     # der Rueckfall); `katalog_kante_min` ist die sechste
+                     # Achse des Lern-Siebs. Werkswert in beiden 25 px =
+                     # core.guete.KANTE_WERK, also genau der Wert, der bis
+                     # .514 als Konstante im Stimmweg stand.
+                     "katalog_kante_min",  # Katalog-/Lern-Latte Kantenlaenge
+                     "kante_min",          # Erkennen-Latte Kantenlaenge
                      # PRUEFER-LATTE (.511 Stufe C): die eigene Latte des
                      # BESTANDS-Pruefers ueber schon vorhandene Katalogbilder.
                      # Getrennt von katalog_t_min mit Absicht — Aufnahme und
@@ -3894,6 +3973,40 @@ def guards_lesen(cfg, log=print):
                                        f"live.guards.{name}.katalog_e_min"),
             "katalog_t_min": _zahl_opt(g.get("katalog_t_min"), 0.0, 1.0, log,
                                        f"live.guards.{name}.katalog_t_min"),
+            # .514: die zwei neuen Achsen desselben Registers — gleiche
+            # None-Politik (nicht gesetzt = der naechste Rang der Kette gilt,
+            # core.kamerakalib.sieb_latten: Kamera -> global -> Werks-Boden),
+            # gleiche Spannen wie ihre Geschwister im Erkennen-Block.
+            "katalog_det_min": _zahl_opt(g.get("katalog_det_min"), DET_MIN_MIN,
+                                         DET_MIN_MAX, log,
+                                         f"live.guards.{name}.katalog_det_min"),
+            "katalog_pose_min": _zahl_opt(g.get("katalog_pose_min"),
+                                          POSE_MIN_MIN, POSE_MIN_MAX, log,
+                                          f"live.guards.{name}.katalog_pose_min"),
+            # .515 (Sensor 5): die Feature-Norm je Register. Gleiche
+            # None-Politik wie alle Nachbarn — nicht gesetzt heisst „der
+            # naechste Rang der Kette gilt" (Kamera -> global -> Werks-Boden,
+            # core.kamerakalib.sieb_latten bzw. erk_latten), nie ein zweiter
+            # Zahlen-Default an dieser Stelle. 0 ist ein GUELTIGER Wert und
+            # heisst „diese Achse ist aus" — er darf nicht wie „nicht
+            # gesetzt" behandelt werden.
+            "katalog_norm_min": _zahl_opt(g.get("katalog_norm_min"),
+                                          NORM_MIN_MIN, NORM_MIN_MAX, log,
+                                          f"live.guards.{name}.katalog_norm_min"),
+            "norm_min": _zahl_opt(g.get("norm_min"), NORM_MIN_MIN,
+                                  NORM_MIN_MAX, log,
+                                  f"live.guards.{name}.norm_min"),
+            # .515 (Sensor 6): die Kanten-Latte je Register, ganze Pixel.
+            # Gleiche None-Politik: nicht gesetzt = der naechste Rang gilt
+            # (fuer `kante_min` ist das der bisherige globale `urteil_kante`).
+            "katalog_kante_min": _zahl_opt(g.get("katalog_kante_min"),
+                                           KANTE_MIN_MIN, KANTE_MIN_MAX, log,
+                                           f"live.guards.{name}.katalog_kante_min",
+                                           ganz=True),
+            "kante_min": _zahl_opt(g.get("kante_min"), KANTE_MIN_MIN,
+                                   KANTE_MIN_MAX, log,
+                                   f"live.guards.{name}.kante_min",
+                                   ganz=True),
             # PRUEFER-LATTE je Kamera (.511 Stufe C): die EIGENE Latte des
             # BESTANDS-Pruefers — sie urteilt ueber schon vorhandene
             # Katalogbilder und nimmt nie eines auf. Bewusst nicht dieselbe
@@ -5690,6 +5803,12 @@ class Engine:
         Der Anwesenheits-Trigger (Stufe 1) bleibt unberuehrt — er meldet
         weiterhin sofort JEDEN Menschen, auch Fremde."""
         import anlernen
+        # .515 (Sensor 6): die Register-Aufloesung der Kanten-Achse — EINMAL je
+        # Aufruf statt je Namens-Stimme, aber erst beim ERSTEN Treffer. Der
+        # Zeitpunkt ist Absicht und nicht Sparsamkeit: bis .514 wurde die Config
+        # an dieser Stelle ebenfalls nur im Treffer-Zweig gelesen, und ein Frame
+        # ohne Namens-Treffer soll auch weiterhin gar nichts davon anfassen.
+        _erk_lw = {}
         # .313 (Tester-Fund 21.08., 8x derselbe Name auf leerem Garten): EINE Stimme je
         # Person je Frame — vorher zaehlten zwei Boxen desselben Bildes doppelt,
         # NAME_STIMMEN=2 war damit aus einem einzigen Frame erreichbar.
@@ -5708,7 +5827,18 @@ class Engine:
                 # live-eigen). Sieb-Reihenfolge nach Kosten: Kante (gratis)
                 # vor Guete (~17 ms) vor Pose (teuerste Messung).
                 _bx = getattr(g, "bbox", None)
-                _kante = float(self.cfg.get("urteil_kante") or 0)
+                # .515 (Sensor 6): DIESELBE Zahl wie bisher, nur aus dem
+                # Register statt aus einer globalen Konstante. `erk_latten`
+                # loest Kamera -> global (`urteil_kante`) -> Werks-Wert
+                # (core.guete.KANTE_WERK = 25) auf; ohne Kamera-Wert kommt
+                # damit genau der Wert heraus, der hier bis .514 stand. Die
+                # VERGLEICHSZEILE darunter ist bewusst Wort fuer Wort
+                # unveraendert geblieben — geaendert hat sich die QUELLE der
+                # Zahl, nicht die Regel.
+                if not _erk_lw:
+                    from core import kamerakalib as _kk_lw   # lazy wie alles hier
+                    _erk_lw = _kk_lw.erk_latten(self.cfg, k.cfg)
+                _kante = float(_erk_lw["k"] or 0)
                 if (_kante > 0 and _bx is not None
                         and min(float(_bx[2]) - float(_bx[0]),
                                 float(_bx[3]) - float(_bx[1])) < _kante):

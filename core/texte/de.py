@@ -1036,6 +1036,49 @@ T = {
         "(Altbestand, oder Bilder, die über einen anderen Weg hereinkamen), "
         "deshalb ändert dieser Regler hier nichts. Neue Bilder aus der "
         "Ereignis-Analyse bringen den Wert mit.",
+    "livekalib.katalog.regler_n":
+        "Katalog: Feature-Norm",
+    "livekalib.katalog.regler_n_prosa":
+        "Wie stark ein Gesicht als Erkennungsmaterial sein muss, damit ein "
+        "Lernlauf es beh\u00e4lt \u2014 das referenzfreie Ma\u00df, mit dem "
+        "der Lernvorrat schon arbeitet (ein gutes frontales Gesicht liegt um "
+        "24). Ab Werk steht die Achse AN, bei 20 \u2014 an echtem "
+        "Ernte-Material eingestellt (756 Bilder, Median 20,7). Der Regler "
+        "geht nicht unter 18 \u2014 abschalten l\u00e4sst sich die Achse hier "
+        "nicht, nur zwischen 18 und 35 einstellen. Das ist eine andere Frage "
+        "als die "
+        "Vorrats-Linie in der Konfiguration, die entscheidet, welche Bilder "
+        "dir ANGEBOTEN werden.",
+    "livekalib.ohne_norm":
+        "Keines dieser Bilder tr\u00e4gt einen Feature-Norm-Wert (der "
+        "Kalibrier-Vorrat misst sie nicht, ein Lernlauf schon), deshalb "
+        "\u00e4ndert dieser Regler an der Galerie hier nichts. Den Wert f\u00fcr den "
+        "Lernlauf stellt er trotzdem ein.",
+    "livekalib.regler_k":
+        "Kleinstes Gesicht (px)",
+    "livekalib.regler_k_prosa":
+        "Wie klein ein Gesicht sein darf und trotzdem als "
+        "Stimme z\u00e4hlt — gemessen an der k\u00fcrzeren Seite seines Rahmens, in "
+        "Pixeln. Das ist ein Boden gegen Unsinn, keine G\u00fcte-Latte: am "
+        "Feldmaterial liegen richtige Stimmen auf \u00dcbersichts-Kameras bei "
+        "30-49 px und die Unsinns-F\u00e4lle bei 11-19 px, w\u00e4hrend 70 px die "
+        "richtigen mitkippen w\u00fcrde. Der Werkswert 25 ist genau die Zahl, mit "
+        "der dieses System seit 0.1.0.400 jede Stimme misst; der Regler macht "
+        "sie nur je Kamera einstellbar. 0 = aus.",
+    "livekalib.katalog.regler_k":
+        "Katalog: kleinstes Gesicht (px)",
+    "livekalib.katalog.regler_k_prosa":
+        "Dasselbe Ma\u00df, f\u00fcr das Lernen: wie klein "
+        "ein Gesicht sein darf und ein Lernlauf es trotzdem beh\u00e4lt. Bei einer "
+        "Kamera, deren Gesichter schlicht zu weit weg sind, h\u00f6her stellen — "
+        "und beachten, dass das eine andere Frage ist als im Register nebenan: "
+        "gemeldet zu bekommen, dass jemand da ist, braucht weniger Aufl\u00f6sung "
+        "als zu lernen, wie er aussieht. 0 = aus.",
+    "livekalib.ohne_kante":
+        "Keines dieser Bilder tr\u00e4gt seine Gesichtsgr\u00f6\u00dfe (der "
+        "Kalibrier-Vorrat speichert sie nicht, ein Lernlauf schon), deshalb "
+        "\u00e4ndert dieser Regler an der Galerie hier nichts. Den Wert stellt er "
+        "trotzdem ein.",
     "livekalib.standard": "Vorgaben",
     "livekalib.fueller.laeuft": "Materialsuche läuft",
     "livekalib.fueller.bilanz": "Letzte Materialsuche",
@@ -1056,8 +1099,8 @@ T = {
     "livekalib.abschnitt.katalog": "Katalog-Latte",
     "livekalib.abschnitt.pruefen": "Latte der Bestands-Prüfung",
     "livekalib.abschnitt.material": "Material",
-    "livekalib.katalog.prosa": "Ein Boden, kein Sieb: wie gut ein Gesicht dieser Kamera sein muss, damit es auf den AUTOMATIK-Wegen Referenz werden darf (Lernlauf übernehmen, Vorschlag/Vorrat annehmen). Sie ist mit Absicht großzügig — aufnehmen ist die weite Tür, aussortiert wird danach von der Bestands-Prüfung im nächsten Register. Was du selbst ankreuzt und benennst, geht ganz daran vorbei.",
-    "livekalib.katalog.grenze": "Was sie nicht tut: Sie entfernt nie vorhandene Referenzen, und sie ändert nichts daran, wer erkannt wird. Bilder ohne Guete-Messwerte (älteres Material oder ein Image ohne die Guete-Modelle) kommen unangetastet durch — eine Latte ohne Messung würde blind wegwerfen.",
+    "livekalib.katalog.prosa": "Diese vier Werte entscheiden, was diese Kamera zum Lernen beiträgt: Ein Lernlauf behält nur Gesichter, die alle vier bestehen, und nur solches Material darf auf den AUTOMATIK-Wegen Referenz werden (Lernlauf übernehmen, Vorschlag/Vorrat annehmen). Es sind dieselben vier Regler wie im Register Erkennen und dieselbe Rechnung — nur eigene Zahlen, weil melden und lernen nicht dasselbe verlangen. Was du selbst ankreuzt und benennst, geht ganz daran vorbei.",
+    "livekalib.katalog.grenze": "Was sie nicht tut: Sie entfernt nie vorhandene Referenzen, und sie ändert nichts daran, wer erkannt wird. Beim Aufnehmen in den Katalog kommen Bilder ohne Güte-Messwerte (älteres Material, ein Build ohne die Güte-Modelle) unangetastet durch. Im Lernlauf gilt die andere Hälfte derselben Regel: dort fällt ein Gesicht, dessen Wert sich nicht messen ließ — die Bilanz am Ende des Laufs zählt diese Fälle einzeln auf, statt sie verschwinden zu lassen.",
     "livekalib.katalog.quelle_kamera": "Es gelten die eigenen Werte dieser Kamera.",
     "livekalib.katalog.quelle_global": "Es gilt der globale Rückfall — diese Kamera hat noch keine eigenen Werte.",
     "livekalib.katalog.quelle_aus": "Keine Katalog-Latte gesetzt: jedes Bild darf Referenz werden.",
@@ -1065,6 +1108,10 @@ T = {
     "livekalib.katalog.regler_e_prosa": "Mindest-Bildeindruck für eine Referenz dieser Kamera. Bewusst niedrig: Auch ein mittelmäßiges Bild trägt noch etwas zum Lernen bei, und die Bestands-Prüfung schaut es sich später noch einmal an.",
     "livekalib.katalog.regler_t": "Katalog: Erkennbarkeit",
     "livekalib.katalog.regler_t_prosa": "Mindest-Erkennbarkeit für eine Referenz dieser Kamera. Dieser Wert hält halb verdeckte Gesichter aus dem Katalog heraus.",
+    "livekalib.katalog.regler_det": "Katalog: Erkennungswert",
+    "livekalib.katalog.regler_det_prosa": "Ab wann der Detektor sicher genug ist, dass da überhaupt ein Gesicht ist. Dieselbe Messgröße wie im Register Erkennen, nur für das Lernen — hier darf sie ruhig anders stehen: was gemeldet werden soll, muss nicht dasselbe sein wie das, woraus gelernt wird.",
+    "livekalib.katalog.regler_p": "Katalog: Kopfhaltung",
+    "livekalib.katalog.regler_p_prosa": "Wie klar an der Fundstelle ein Kopf auszumachen ist. Das ist der Regler gegen Tonnen, Hecken und Kühlergrills im Lernmaterial — die Güte-Werte allein sehen so etwas nicht. Wieder dieselbe Messgröße wie im Register Erkennen.",
     "livekalib.pruefen.prosa": "Diese Latte urteilt über Bilder, die du BEREITS hast. Darunter markiert die Bestands-Prüfung ein gespeichertes Bild dieser Kamera; zusammen mit einer schwachen Feature-Norm wird daraus ein Entfernen-Vorschlag zum Anklicken. Sie nimmt nie ein Bild auf und entfernt nie eines von selbst.",
     "livekalib.pruefen.grenze": "Sie ist mit Absicht von der Latte darüber getrennt: ein Bild aufnehmen und es später prüfen sind zwei Fragen, und ein Zug am einen Regler darf den anderen nicht still mitziehen. Bilder ohne Güte-Messung werden nie markiert.",
     "livekalib.pruefen.quelle_kamera": "In Kraft: der eigene Wert dieser Kamera.",
@@ -1085,6 +1132,7 @@ T = {
     "livekalib.js.katalog": "{n} von {gesamt} dürften in den Katalog",
     "livekalib.js.pruefen": "{n} von {gesamt} würde die Prüfung markieren",
     "livekalib.js.lauf": "Lauf",
+    "livekalib.js.aus": "aus",
     # ----------------------------------------------- routes/erkennung ---
     "erkennung.titel": "Erkennung",
     "erkennung.kopf.satz":
@@ -1228,11 +1276,7 @@ T = {
     "qualitaet.ergebnis.alles_gut_satz":
         "{n} Bilder von {np} Personen geprüft &mdash; nichts braucht "
         "deine Aufmerksamkeit.",
-    "qualitaet.wort.defekt": "defekte Datei",
     "qualitaet.wort.kein_gesicht": "kein Gesicht gefunden",
-    "qualitaet.wort.zu_klein": "zu klein",
-    "qualitaet.wort.unscharf": "unscharf",
-    "qualitaet.wort.schwach": "schwaches Bild",
     "qualitaet.galerie.looks_like": "sieht aus wie {name}",
     "qualitaet.galerie.doppel":
         "Dublette — das behaltene Bild deckt es ab",
@@ -1392,17 +1436,6 @@ T = {
     "lernwizard.kachel.lauf": "Lernlauf",
     "lernwizard.kachel.sammeln": "Sammeln &amp; sortieren",
     "kalib.titel": "Kamera-Kalibrierung",
-    "kalib.erklaerung": "Diese zwei Schwellen entscheiden, welche Gesichter künftige Lernläufe behalten. Schiebe, bis sich die Grenze richtig anfühlt — alles Ausgegraute würde aussortiert. Unten stehen die Bilder des letzten Laufs, bester Bild-Eindruck zuerst. Gelber Rahmen = für die Übernahme ausgewähltes Bild.",
-    "kalib.leer": "Noch nichts zu kalibrieren: der letzte Lauf trägt keine Güte-Werte. Starte zuerst einen Lernlauf mit dieser Version.",
-    "kalib.regler_e": "Bild-Eindruck",
-    "kalib.regler_e_prosa": "Wie sauber und hell das Bild fürs Auge wirkt. Niedriger behält mehr, aber dunklere und gröbere Bilder.",
-    "kalib.regler_t": "Erkennbarkeit",
-    "kalib.regler_t_prosa": "Wie gut die Person auf dem Bild zu identifizieren ist. Sortiert auch halb verdeckte Gesichter aus.",
-    "kalib.standard": "Auf Standard zurück",
-    "kalib.uebernehmen": "Schwellen übernehmen",
-    "kalib.js.genutzt": "Behalten: {n} von {gesamt}",
-    "kalib.js.gespeichert": "Gespeichert — der Lauf wird mit den neuen Grenzen neu bewertet, gleich geht es zurück zum Lernlauf …",
-    "kalib.js.fehler": "Speichern fehlgeschlagen",
     # --- zentrale Kamera-Uebersicht + globaler Rueckfall (31.08.)
     "kalib.knopf": "Kalibrierung",
     "kalib.knopf_tip": "Kamera-Kalibrierung: die Latten für Meldungen, Vorrat und den Referenz-Katalog",
@@ -1434,13 +1467,8 @@ T = {
     "kalib.knopf_fuellen": "Frisches Material suchen",
     "kalib.knopf_leeren": "Vorrat löschen",
     "kalib.global.titel": "Globaler Rückfall",
-    "kalib.global.satz": "Diese Werte gelten für Kameras ohne eigene — und sie sind die Latte, mit der ein Lernlauf entscheidet, welche Gesichter er behält.",
-    "kalib.global.werte": "Bildeindruck {e} · Erkennbarkeit {tw}",
+    "kalib.global.satz": "Diese Werte gelten für Kameras ohne eigene: sie sind die Latte, mit der ein Lernlauf entscheidet, welche Gesichter er behält und welche davon eine gespeicherte Referenz werden dürfen.",
     "kalib.global.katalog": "Katalog-Latte {e} / {tw}",
-    "kalib.global.knopf": "Am letzten Lernlauf einstellen",
-    "kalib.global.kein_lauf": "Noch kein Lernlauf mit Güte-Messwerten — einstellbar, sobald ein Lauf durch ist.",
-    "kalib.lauf.titel": "Globale Latten — letzter Lernlauf",
-    "kalib.zurueck": "zurück zu allen Kameras",
     "js.kalib.start": "suche Material …",
     "js.kalib.lauf": "{i} von {n} Ereignissen · {bilder} Bild(er)",
     "js.kalib.fertig": "{bilder} Bild(er) aus {events} Ereignis(sen)",
@@ -1765,6 +1793,10 @@ T = {
     "js.import.fertig_ges": "✓ {n} importiert — Merkmale werden berechnet, Seite lädt neu …",
     "js.ref.frage": "Referenzbild von {person} entfernen?",
     "js.ref.batch_frage": "{n} Bild(er) löschen?",
+    "js.ref.batch_alle_frage":
+        "Das sind ALLE {n} Referenzbild(er) von {person}. Ohne Referenz kann "
+        "{person} nicht mehr erkannt werden. Die Bilder wandern in den "
+        "Papierkorb und lassen sich zurückholen. Fortfahren?",
     "js.dienst.nicht_erreichbar": "Dienst nicht erreichbar — gleich noch einmal versuchen.",
     "js.unb.tick": "{phase} … {s} s",
     "js.unb.besucher_frage": "Als bekannten Fremden ignorieren? Er löst dann keine Meldungen mehr aus. (Jederzeit unten unter \"bekannte Besucher\" wieder aktivierbar.)",
@@ -3167,6 +3199,19 @@ T = {
         "nichts zu übernehmen — kein hilfreiches neues Bild in diesem "
         "Durchgang (das ist in Ordnung)",
     "antwort.bruecke_undo": "{n} Bild(er) wieder entfernt",
+    # .521 Mini-Ernte-Lauf: der Nutzer schliesst die Auswahl, ohne etwas zu
+    # nehmen. Der Lauf ist FLUECHTIG — seine Bilder fallen sofort, der naechste
+    # Klick erntet neu. Der Satz sagt beides, damit niemand glaubt, die Pruefung
+    # sei "gespeichert".
+    "antwort.passernte_verworfen":
+        "Prüfung verworfen, die Bilder sind weg — ein neuer Klick prüft neu",
+    # .524 Fix 11: Abbrechen am LAUFENDEN Balken. {n} Ereignisse wurden nie
+    # begonnen; was gerade rechnet, läuft sauber aus, danach fällt der Ordner.
+    "antwort.passernte_abgebrochen":
+        "Prüfung abgebrochen — {n} von {m} Ereignis(sen) verworfen; was schon "
+        "läuft, läuft aus, danach fallen die Bilder",
+    "antwort.passernte_abbruch_leer":
+        "nichts abzubrechen — diese Prüfung läuft nicht mehr",
     "antwort.personlauf_kein_review": "kein Lauf wartet auf Durchsicht",
     "antwort.personlauf_kein_lauf": "kein aktiver Lauf",
     "antwort.events_bereich":
@@ -3978,8 +4023,10 @@ Personen zwischendurch auffüllen.</p>""",
     "anwesenheit.nacht": "Nacht",
     "anwesenheit.legende_da": "bestätigt da",
     "anwesenheit.legende_weg": "System lief, niemand bestätigt",
-    "anwesenheit.legende_leer": "System lief nicht oder hat nicht hingesehen",
+    "anwesenheit.legende_leer": "Dienst lief nicht",
+    "anwesenheit.legende_teil": "gelaufen, einzelne Ereignisse nicht analysiert",
     "anwesenheit.legende_jetzt": "jetzt",
+    "anwesenheit.legende_satz": "Weiß heißt ausschließlich: der Dienst lief in dieser Zeit nicht. Eine grüne Zelle mit abgeschnittener Ecke sagt, dass der Dienst lief, dabei aber einzelne Ereignisse nicht analysiert wurden — die Zahlen dazu stehen beim Draufzeigen.",
     "anwesenheit.zaehler": "{zeilen} Marken gelesen, {kaputt} kaputte Zeilen übersprungen.",
     "anwesenheit.gekappt": "Die Tagesdatei ist größer als die Lesegrenze; nur ihr Ende wurde gelesen.",
     "anwesenheit.nie": "In dieser Sicht nicht gesehen: {namen}",
@@ -3989,7 +4036,8 @@ Personen zwischendurch auffüllen.</p>""",
     "anwesenheit.keine_aufzeichnung": "Für diesen Tag liegt keine Aufzeichnung vor.",
     "anwesenheit.tip_da": "{zeit} · {kameras} · {quelle}",
     "anwesenheit.tip_weg": "{zeit} · System lief, niemand bestätigt",
-    "anwesenheit.tip_leer": "{zeit} · keine Aussage (System lief nicht oder hat nicht hingesehen)",
+    "anwesenheit.tip_weg_teil": "{zeit} · System lief, niemand bestätigt · {gelungen} Ereignisse analysiert, {luecken} nicht",
+    "anwesenheit.tip_leer": "{zeit} · der Dienst lief nicht",
     "anwesenheit.tip_zukunft": "{zeit} · noch nicht",
     "anwesenheit.quelle_worker": "Ereignis-Analyse",
     "anwesenheit.quelle_live": "Live-Wächter",

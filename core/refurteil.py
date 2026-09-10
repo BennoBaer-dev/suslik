@@ -78,7 +78,8 @@ URTEILE = ("ok", "auffaellig", "raus", "ungemessen")
 # "raus" als Vorschlag, 9 weitere als "auffaellig", und keinen einzigen seiner
 # 28 "ok" als Vorschlag (9 der 58 waren zum Messzeitpunkt ungemessen).
 # EINE Quelle: der Config-Default und der Vorgaben-Knopf der Kalibrierseite
-# lesen von HIER (K3-Regel gegen Zweit-Literale, Muster core.guete.STARTWERTE).
+# lesen von HIER (K3-Regel gegen Zweit-Literale, Muster
+# core.guete.KATALOG_STARTWERTE).
 PRUEF_STARTWERTE = {"t": 0.3425}
 
 # Personen-Warnung "catalog looks mixed" ab welchem Anteil negativer Margen?

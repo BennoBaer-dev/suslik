@@ -587,10 +587,25 @@ def whatsnew_block():
             betont = txt.startswith(BETONT)
             if betont:
                 txt = txt[len(BETONT):]
+        # .526 (User-Auflage zur .526-Box): die Marke faerbt nur noch den KOPF
+        # des Eintrags — den Teil bis zum ersten Gedankenstrich, hier "Test
+        # release" — rot und fett, der Rest steht normal. Vorher hing die
+        # Klasse am ganzen <li>, ein langer Satz stand also komplett in
+        # Warnfarbe und las sich als Alarm statt als Aufkleber.
+        # FALLBACK bewusst: fehlt der Gedankenstrich, gilt wie bisher der ganze
+        # Eintrag als markiert — Alt-Eintraege ohne Strich aendern ihr Aussehen
+        # dadurch nicht. Der Strich bleibt IM Text stehen (er gehoert zum
+        # abgestimmten Wortlaut), nur die Faerbung endet vor ihm.
+        kopf, pos = None, txt.find("—")
+        if betont and pos > 0:
+            kopf, txt = txt[:pos].rstrip(), txt[pos:]
         kl = " ".join(x for x in (("wn-mehr" if i >= 3 else ""),
-                                  ("wn-betont" if betont else "")) if x)
+                                  ("wn-betont" if betont and kopf is None else "")) if x)
+        koerper = (html.escape(txt) if kopf is None else
+                   f'<span class="wn-betont">{html.escape(kopf)}</span> '
+                   + html.escape(txt))
         li.append(f'<li{f' class="{kl}"' if kl else ""}>{chip}'
-                  + html.escape(txt) + "</li>")
+                  + koerper + "</li>")
     mehr = len(eintraege) - 3
     toggle = (f'<button class="wn-toggle" data-n="{mehr}">'
               f'{html.escape(t("ui.wn.mehr", n=len(eintraege)))}</button>'

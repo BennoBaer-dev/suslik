@@ -1026,6 +1026,50 @@ T = {
         "cabeza (material antiguo, o imágenes que llegaron por otra vía), así "
         "que este deslizador no cambia nada aquí. Las muestras nuevas del "
         "análisis de eventos traen el valor consigo.",
+    "livekalib.katalog.regler_n":
+        "Cat\u00e1logo: norma de rasgos",
+    "livekalib.katalog.regler_n_prosa":
+        "Lo fuerte que tiene que ser una cara como material de reconocimiento "
+        "para que un proceso de aprendizaje la conserve: la medida sin "
+        "referencia con la que ya trabaja la reserva de aprendizaje (una cara "
+        "frontal buena ronda 24). Sale de f\u00e1brica ENCENDIDO, en 20, "
+        "ajustado sobre material de cosecha real (756 im\u00e1genes, mediana "
+        "20,7). El deslizador no baja de 18: aqu\u00ed el eje no se puede "
+        "apagar, solo ajustar entre 18 y 35. Es una pregunta "
+        "distinta de la l\u00ednea de reserva en la configuraci\u00f3n, que decide "
+        "qu\u00e9 im\u00e1genes se te OFRECEN.",
+    "livekalib.ohne_norm":
+        "Ninguna de estas muestras lleva un valor de norma de "
+        "rasgos (la reserva de calibraci\u00f3n no la mide, un proceso de "
+        "aprendizaje s\u00ed), as\u00ed que este deslizador no cambia nada en la galer\u00eda "
+        "de aqu\u00ed. Aun as\u00ed fija el valor que usa el proceso de aprendizaje.",
+    "livekalib.regler_k":
+        "Cara m\u00e1s peque\u00f1a (px)",
+    "livekalib.regler_k_prosa":
+        "Lo peque\u00f1a que puede ser una cara y contar aun "
+        "as\u00ed como voto: se mide en el lado corto de su recuadro, en p\u00edxeles. "
+        "Es un suelo contra el disparate, no una barra de calidad: en datos de "
+        "campo los votos correctos est\u00e1n entre 30 y 49 px en c\u00e1maras "
+        "panor\u00e1micas y los casos absurdos entre 11 y 19 px, mientras que 70 px "
+        "se llevar\u00eda por delante los correctos. El valor de f\u00e1brica 25 es "
+        "exactamente el n\u00famero con el que este sistema mide cada voto desde "
+        "0.1.0.400; el deslizador solo lo hace ajustable por c\u00e1mara. 0 = "
+        "apagado.",
+    "livekalib.katalog.regler_k":
+        "Cat\u00e1logo: cara m\u00e1s peque\u00f1a (px)",
+    "livekalib.katalog.regler_k_prosa":
+        "La misma medida, para el aprendizaje: lo "
+        "peque\u00f1a que puede ser una cara y que un proceso de aprendizaje la "
+        "conserve igualmente. S\u00fabelo en una c\u00e1mara cuyas caras est\u00e9n "
+        "sencillamente demasiado lejos, y ten en cuenta que es una pregunta "
+        "distinta de la pesta\u00f1a de al lado: que te avisen de que hay alguien "
+        "necesita menos resoluci\u00f3n que aprender qu\u00e9 aspecto tiene. 0 = "
+        "apagado.",
+    "livekalib.ohne_kante":
+        "Ninguna de estas muestras lleva su tama\u00f1o de cara (la "
+        "reserva de calibraci\u00f3n no lo guarda, un proceso de aprendizaje s\u00ed), "
+        "as\u00ed que este deslizador no cambia nada en la galer\u00eda de aqu\u00ed. Aun as\u00ed "
+        "fija el valor que se usa.",
     "livekalib.standard": "Valores por defecto",
     "livekalib.fueller.laeuft": "búsqueda de material en curso",
     "livekalib.fueller.bilanz": "última búsqueda de material",
@@ -1046,8 +1090,8 @@ T = {
     "livekalib.abschnitt.katalog": "Umbral del catálogo",
     "livekalib.abschnitt.pruefen": "Listón de revisión del catálogo",
     "livekalib.abschnitt.material": "Material",
-    "livekalib.katalog.prosa": "Un suelo, no un filtro: lo bueno que debe ser una cara de esta cámara para convertirse en referencia por las vías AUTOMÁTICAS (adopción del ciclo de aprendizaje, aceptar propuestas/reservas). Es generosa a propósito: admitir es la puerta ancha, descartar es tarea de la revisión del catálogo en la pestaña siguiente. Lo que marcas y nombras tú mismo pasa de largo por completo.",
-    "livekalib.katalog.grenze": "Lo que no hace: nunca elimina referencias existentes y nunca cambia a quién se reconoce. Las imágenes sin puntuaciones de calidad (material antiguo o una versión sin los modelos de calidad) pasan intactas — un umbral sin medición descartaría a ciegas.",
+    "livekalib.katalog.prosa": "Estos cuatro valores deciden qu\u00e9 aporta esta c\u00e1mara al aprendizaje: una pasada de aprendizaje solo conserva caras que superan los cuatro, y solo ese material puede llegar a ser referencia por las v\u00edas AUTOM\u00c1TICAS (aceptar la pasada de aprendizaje, aceptar sugerencias u ofertas del almac\u00e9n). Son los mismos cuatro controles que en la pesta\u00f1a Reconocer y el mismo c\u00e1lculo \u2014 solo con n\u00fameros propios, porque avisar y aprender no piden lo mismo. Lo que marcas y nombras t\u00fa mismo se los salta por completo.",
+    "livekalib.katalog.grenze": "Lo que no hacen: nunca retiran referencias que ya tienes y no cambian nada sobre qui\u00e9n se reconoce. Al admitir una imagen en el cat\u00e1logo, la falta de puntuaciones de calidad (material antiguo, una imagen sin los modelos de calidad) la deja pasar intacta. En una pasada de aprendizaje vale la otra mitad de la misma regla: una cara cuyo valor no se pudo medir se descarta \u2014 el balance al final de la pasada cuenta esos casos uno a uno en vez de dejarlos desaparecer.",
     "livekalib.katalog.quelle_kamera": "En uso: los valores propios de esta cámara.",
     "livekalib.katalog.quelle_global": "En uso: el valor global de reserva — esta cámara aún no tiene valores propios.",
     "livekalib.katalog.quelle_aus": "Sin umbral de catálogo: cualquier imagen puede convertirse en referencia.",
@@ -1055,6 +1099,10 @@ T = {
     "livekalib.katalog.regler_e_prosa": "Impresión mínima para una referencia de esta cámara. Baja a propósito: incluso una imagen mediocre aporta algo que aprender, y la revisión del catálogo vuelve a mirarla más tarde.",
     "livekalib.katalog.regler_t": "Catálogo: reconocibilidad",
     "livekalib.katalog.regler_t_prosa": "Reconocibilidad mínima para una referencia de esta cámara. Es la que mantiene las caras medio tapadas fuera del catálogo.",
+    "livekalib.katalog.regler_det": "Cat\u00e1logo: puntuaci\u00f3n de detecci\u00f3n",
+    "livekalib.katalog.regler_det_prosa": "A partir de d\u00f3nde el detector est\u00e1 lo bastante seguro de que ah\u00ed hay una cara. La misma medida que en la pesta\u00f1a Reconocer, pero para el aprendizaje \u2014 y aqu\u00ed puede estar en otro sitio: lo que quieres que te avisen no tiene por qu\u00e9 ser lo mismo de lo que quieres aprender.",
+    "livekalib.katalog.regler_p": "Cat\u00e1logo: postura de la cabeza",
+    "livekalib.katalog.regler_p_prosa": "Con qu\u00e9 claridad se distingue una cabeza en el hallazgo. Este es el control contra cubos, setos y parrillas de coche en el material de aprendizaje \u2014 las dos puntuaciones de calidad por s\u00ed solas no ven eso. De nuevo la misma medida que en la pesta\u00f1a Reconocer.",
     "livekalib.pruefen.prosa": "Este listón juzga imágenes que YA tienes. Por debajo de él, la revisión del catálogo marca una imagen guardada de esta cámara; junto con una norma de rasgos débil se convierte en una sugerencia de retirada que puedes pulsar. Nunca admite una imagen ni quita ninguna por su cuenta.",
     "livekalib.pruefen.grenze": "Está separado a propósito del listón de arriba: admitir una imagen y revisarla más tarde son dos preguntas, y mover un control no debe mover el otro en silencio. Las imágenes sin puntuación de calidad nunca se marcan.",
     "livekalib.pruefen.quelle_kamera": "En uso: el valor propio de esta cámara.",
@@ -1075,6 +1123,7 @@ T = {
     "livekalib.js.katalog": "{n} de {gesamt} podrían entrar en el catálogo",
     "livekalib.js.pruefen": "la revisión marcaría {n} de {gesamt}",
     "livekalib.js.lauf": "proceso",
+    "livekalib.js.aus": "apagado",
     # ----------------------------------------------- routes/erkennung ---
     "erkennung.titel": "Reconocimiento",
     "erkennung.kopf.satz":
@@ -1219,11 +1268,7 @@ T = {
     "qualitaet.ergebnis.alles_gut_satz":
         "Comprobadas {n} imágenes de {np} personas &mdash; nada requiere "
         "tu atención.",
-    "qualitaet.wort.defekt": "archivo dañado",
     "qualitaet.wort.kein_gesicht": "ningún rostro encontrado",
-    "qualitaet.wort.zu_klein": "demasiado pequeña",
-    "qualitaet.wort.unscharf": "borrosa",
-    "qualitaet.wort.schwach": "imagen débil",
     "qualitaet.galerie.looks_like": "se parece a {name}",
     "qualitaet.galerie.doppel": "duplicada — la conservada la cubre",
     "qualitaet.galerie.gut": "buena",
@@ -1381,17 +1426,6 @@ T = {
     "lernwizard.kachel.lauf": "Aprendizaje",
     "lernwizard.kachel.sammeln": "Recoger y ordenar",
     "kalib.titel": "Calibración de cámaras",
-    "kalib.erklaerung": "Estos dos umbrales deciden qué caras conservan los próximos aprendizajes. Desliza hasta que el límite te convenza — todo lo atenuado se descartaría. Abajo están las imágenes del último proceso, mejor impresión primero. Marco amarillo = imagen elegida para adoptar.",
-    "kalib.leer": "Aún no hay nada que calibrar: el último proceso no tiene valores de calidad. Inicia primero un aprendizaje con esta versión.",
-    "kalib.regler_e": "Impresión de imagen",
-    "kalib.regler_e_prosa": "Qué tan limpia y luminosa se ve la imagen. Más bajo conserva más, pero imágenes más oscuras y toscas.",
-    "kalib.regler_t": "Reconocibilidad",
-    "kalib.regler_t_prosa": "Qué tan bien se puede identificar a la persona. También descarta caras medio tapadas.",
-    "kalib.standard": "Restablecer valores",
-    "kalib.uebernehmen": "Aplicar umbrales",
-    "kalib.js.genutzt": "Conservadas: {n} de {gesamt}",
-    "kalib.js.gespeichert": "Guardado — el proceso se reevalúa con los nuevos límites, enseguida vuelves al aprendizaje …",
-    "kalib.js.fehler": "Error al guardar",
     # --- zentrale Kamera-Uebersicht + globaler Rueckfall (31.08.)
     "kalib.knopf": "Calibración",
     "kalib.knopf_tip": "Calibración de cámaras: los umbrales para avisos, muestras y el catálogo de referencias",
@@ -1423,13 +1457,8 @@ T = {
     "kalib.knopf_fuellen": "Buscar material nuevo",
     "kalib.knopf_leeren": "Borrar muestras",
     "kalib.global.titel": "Reserva global",
-    "kalib.global.satz": "Se aplican a las cámaras sin valores propios y son el umbral con el que un proceso de aprendizaje decide qué caras conserva.",
-    "kalib.global.werte": "impresión {e} · reconocibilidad {tw}",
+    "kalib.global.satz": "Se aplican a las cámaras sin valores propios: son el listón con el que un ciclo de aprendizaje decide qué caras conserva y cuáles de ellas pueden convertirse en referencia guardada.",
     "kalib.global.katalog": "umbral del catálogo {e} / {tw}",
-    "kalib.global.knopf": "Ajustar con el último proceso de aprendizaje",
-    "kalib.global.kein_lauf": "Aún no hay un proceso de aprendizaje con puntuaciones de calidad — se podrán ajustar cuando termine uno.",
-    "kalib.lauf.titel": "Umbrales globales — último proceso de aprendizaje",
-    "kalib.zurueck": "volver a todas las cámaras",
     "js.kalib.start": "buscando material …",
     "js.kalib.lauf": "{i} de {n} eventos · {bilder} imagen(es)",
     "js.kalib.fertig": "{bilder} imagen(es) de {events} evento(s)",
@@ -1749,6 +1778,10 @@ T = {
     "js.import.fertig_ges": "✓ {n} importados — calculando características, la página se recarga …",
     "js.ref.frage": "¿Quitar la imagen de referencia de {person}?",
     "js.ref.batch_frage": "¿Eliminar {n} imagen(es)?",
+    "js.ref.batch_alle_frage":
+        "Esas son TODAS las {n} imagen(es) de referencia de {person}. Sin "
+        "referencias ya no se podrá reconocer a {person}. Las imágenes van a "
+        "la papelera y se pueden restaurar. ¿Continuar?",
     "js.dienst.nicht_erreichbar": "no se puede contactar con el servicio — inténtalo de nuevo en un momento.",
     "js.unb.tick": "{phase} … {s} s",
     "js.unb.besucher_frage": "¿Ignorar como extraño conocido? Ya no generará avisos. (Puedes volver a activarlo cuando quieras, más abajo en \"visitantes conocidos\".)",
@@ -3167,6 +3200,17 @@ T = {
         "nada que tomar — ninguna imagen nueva útil en este recorrido "
         "(no pasa nada)",
     "antwort.bruecke_undo": "{n} imagen(es) quitada(s) de nuevo",
+    # .521 mini cosecha: no se toma nada y la ejecución es efímera — sus
+    # imágenes desaparecen enseguida y el próximo clic vuelve a cosechar.
+    "antwort.passernte_verworfen":
+        "comprobación descartada, las imágenes ya no están — "
+        "haz clic otra vez para una nueva",
+    # .524 Fix 11: cancelar en la barra de progreso EN CURSO.
+    "antwort.passernte_abgebrochen":
+        "comprobación cancelada — {n} de {m} evento(s) descartado(s); "
+        "lo que ya está en marcha termina y después se borran las imágenes",
+    "antwort.passernte_abbruch_leer":
+        "nada que cancelar — esta comprobación ya no está en curso",
     "antwort.personlauf_kein_review":
         "ninguna ejecución pendiente de revisión",
     "antwort.personlauf_kein_lauf": "ninguna ejecución activa",
@@ -3974,8 +4018,10 @@ del día vaya completando a las personas conocidas entre medias.</p>""",
     "anwesenheit.nacht": "noche",
     "anwesenheit.legende_da": "presencia confirmada",
     "anwesenheit.legende_weg": "sistema en marcha, nadie confirmado",
-    "anwesenheit.legende_leer": "sistema parado o sin mirar",
+    "anwesenheit.legende_leer": "el servicio no estaba en marcha",
+    "anwesenheit.legende_teil": "en marcha, algunos eventos sin analizar",
     "anwesenheit.legende_jetzt": "ahora",
+    "anwesenheit.legende_satz": "El blanco significa una sola cosa: el servicio no estaba en marcha en ese momento. Una celda verde con una esquina recortada indica que el servicio funcionaba pero algunos eventos no se analizaron: pasa el ratón para ver las cifras.",
     "anwesenheit.zaehler": "{zeilen} marcas leídas, {kaputt} líneas dañadas omitidas.",
     "anwesenheit.gekappt": "El archivo del día supera el límite de lectura; solo se ha leído su final.",
     "anwesenheit.nie": "No vistos en esta vista: {namen}",
@@ -3985,7 +4031,8 @@ del día vaya completando a las personas conocidas entre medias.</p>""",
     "anwesenheit.keine_aufzeichnung": "No hay registro para este día.",
     "anwesenheit.tip_da": "{zeit} · {kameras} · {quelle}",
     "anwesenheit.tip_weg": "{zeit} · sistema en marcha, nadie confirmado",
-    "anwesenheit.tip_leer": "{zeit} · sin datos (sistema parado o sin mirar)",
+    "anwesenheit.tip_weg_teil": "{zeit} · sistema en marcha, nadie confirmado · {gelungen} eventos analizados, {luecken} no",
+    "anwesenheit.tip_leer": "{zeit} · el servicio no estaba en marcha",
     "anwesenheit.tip_zukunft": "{zeit} · todavía no",
     "anwesenheit.quelle_worker": "análisis de eventos",
     "anwesenheit.quelle_live": "vigilante en vivo",

@@ -611,7 +611,7 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
                personen=None, zielperson="", reihenfolge=None,
                sichtung=None, sichtung_gesamt=0, ernte_puls=None,
                kameras=None, norm_latte=None, luma_grenzen=None,
-               guete_latte=None):
+               kat_latten=None):
     """.246 (Lernfluss-Redesign, Mockup b_lernfluss, User-Abnahme 17.08.):
     EINE Fluss-Seite mit vier Kacheln (Start / Saeule / Benennen / Fertig) und
     der Zuweisungs-Flaeche ueber die ganze Zeile. zustand darf None sein
@@ -977,7 +977,7 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
         # Kachel warb fuer eine Gruppe mit einem Bild, das die Flaeche als
         # 'kein Gesicht nach dem Qualitaetsmass' verwarf.
         mg = bestes_zuerst(g.get("mitglieder"), norm_latte, luma_grenzen,
-                           guete_latte=guete_latte)
+                           kat_latten=kat_latten)
         bild = ""
         if mg and lid_g:
             fn = html.escape(str(mg[0].get("datei", "")).rsplit("/", 1)[-1])

@@ -7,11 +7,26 @@ Was die Seite zeigt (User-Auftrag 02.09., woertlich "wie die Partitionierung
 von Platten"): eine Zeile je Person, dahinter der Tag in Viertelstunden-
 Zellen. Rot = in dieser Viertelstunde bestaetigt da (Worker-Urteil ODER
 Live-Waechter, nie doppelt — der Leser dedupliziert auf Person+Zelle).
-Gruen = das System lief und hat niemanden bestaetigt. LEER = das System
-lief nicht oder hat nicht hingesehen (keine Lauf-Marke, oder Lauf-Marke mit
-Luecke). Die Semantik steht im Kopf von core/anwesenheit.py; hier gibt es
-GENAU EINE Funktion dafuer (zustand), die Zellen, Nachtzellen und Legende
-gemeinsam benutzen.
+Gruen = der Dienst lief und hat niemanden bestaetigt. WEISS = der Dienst lief
+in dieser Viertelstunde nicht — und AUSSCHLIESSLICH das.
+
+FIX 10 (User-Zuschnitt 10.09., Diagnose backups/praesenz_diagnose_0910/
+bericht.md): bis .518 faerbte auch EINE einzelne Luecke die Zelle weiss. Das
+legte zwei voellig verschiedene Aussagen auf eine Farbe — "der Dienst lief
+nicht" und "ein Ereignis von vielen wurde nicht analysiert" — und die
+haeufigere davon war die zweite (gemessen 02.09. 15:00: 106 gelungene
+Analysen gegen 12 Luecken, Kachel weiss; 41 % aller roten Zellen standen in
+weisser Umgebung). Seit .519 sagt Weiss nur noch das eine. Die Teil-Luecke
+bleibt sichtbar, aber OHNE dritte Signalfarbe: eine kleine Ecke auf der
+gruenen Kachel, und beim Draufzeigen die beiden Zahlen (gelungen X /
+Luecken Y). Sie sitzt auf GRUEN, weil sie genau dessen Aussage abschwaecht
+("niemand bestaetigt" ist weniger wert, wenn etwas ungesehen blieb) — auf Rot
+schwaecht sie nichts ab, dort war die Person nachweislich da.
+
+Die Semantik steht im Kopf von core/anwesenheit.py; hier gibt es GENAU EINE
+Funktion fuer die Farbe (zustand) und GENAU EINE fuer die Markierung
+(teil_luecke), die Zellen, Nachtzellen und Legende gemeinsam benutzen — die
+Today-Miniatur (routes/heute.anw_stunden) benutzt dieselben.
 
 Tag und Nacht (Konzept §4): das Tagesfenster (fenster(cfg): Perzentil-
 Automatik ueber 14 Tage, Werkswert unter 20 Marken, oder feste Vorgabe)
@@ -89,21 +104,47 @@ def sicht_waehlen(kameras, areas, kamera_par, area_par):
 
 # ------------------------------------------------------------ Semantik (rein)
 def zustand(zelle, person_eintrag):
-    """DIE Renderer-Regel (core/anwesenheit Kopfkommentar): Person -> da
-    (gewinnt immer, auch ohne Lauf-Marke); Lauf ohne Luecke -> weg; sonst
+    """DIE Renderer-Regel (core/anwesenheit Kopfkommentar, neu gefasst .519):
+    Person -> da (gewinnt immer, auch ohne Lauf-Marke); Lauf -> weg; sonst
     leer. zelle = tag_lesen()["zellen"][c], person_eintrag = der Eintrag
-    der Person fuer diese Zelle oder None."""
+    der Person fuer diese Zelle oder None.
+
+    Die FARBE haengt seit .519 an genau EINER Groesse — der systemweiten
+    Lauf-Marke. Luecken faerben nicht mehr mit (teil_luecke); damit kann
+    dieselbe Viertelstunde in der Alle-Sicht nicht mehr anders aussehen als
+    in einer Kamera-Sicht, und Weiss heisst ueberall dasselbe."""
     if person_eintrag:
         return "da"
-    if zelle and zelle.get("lauf") and not zelle.get("luecke_n"):
+    if zelle and zelle.get("lauf"):
         return "weg"
     return "leer"
 
 
+def teil_luecke(zelle):
+    """Traegt diese Zelle die dezente Teil-Luecken-Markierung? Ja, wenn der
+    Dienst lief UND mindestens ein Ereignis der Sicht unanalysiert blieb, das
+    inzwischen nicht doch noch geglueckt ist (core/anwesenheit entwertet die
+    Luecke seiner eid). Bewusst NUR auf gruenen Zellen sinnvoll: die Marke
+    schwaecht die Aussage "niemand bestaetigt" ab — die Aussage "diese Person
+    war da" schwaecht sie nicht. Ohne Lauf-Marke gibt es sie nicht: was nicht
+    lief, hat auch keine Teil-Luecke."""
+    return bool(zelle and zelle.get("lauf") and zelle.get("luecke_offen_n"))
+
+
+def luecke_zahlen(zellen, cs):
+    """Die beiden Zahlen fuer den Tooltip einer Spalte -> (gelungen, luecken).
+    Eine Nachtzelle deckt vier Viertelstunden ab; ihre Zahlen sind die Summe
+    (die Zelle IST der Stundenblock, ihr Tooltip spricht ueber die Stunde)."""
+    g = sum(int((zellen.get(c) or {}).get("gelungen_n") or 0) for c in cs)
+    l = sum(int((zellen.get(c) or {}).get("luecke_offen_n") or 0) for c in cs)
+    return g, l
+
+
 def nacht_zustand(zustaende):
     """Vier Viertelstunden -> eine Nachtzelle: rot, sobald eine rot ist;
-    gruen nur, wenn ALLE gruen sind; sonst leer (eine leere Viertelstunde
-    macht die Stunde zur "keine Aussage"-Stunde — ehrlicher als gruen)."""
+    gruen nur, wenn ALLE gruen sind; sonst leer (eine Viertelstunde ohne
+    Lauf-Marke macht die Stunde zur "lief nicht"-Stunde — ehrlicher als
+    gruen)."""
     if "da" in zustaende:
         return "da"
     if zustaende and all(z == "weg" for z in zustaende):
@@ -168,11 +209,14 @@ def _quelle_text(quellen):
 
 
 def _zelle_html(person, art, wert, z, eintrag, datum, heute, sicht,
-                jetzt_zelle, vergangen):
+                jetzt_zelle, vergangen, teil=None):
     """EINE Zelle. Rot ist ein Link (eid -> /pass/<eid>, sonst Personensicht
     des Tages — K7: dort gibt es keinen Slot-Filter, nur den Tag); gruen und
     leer sind spans. title + aria-label tragen die Aussage (M9: Farbe ist
-    nie der einzige Traeger; dazu gefuellt/rahmenlos/leer per CSS)."""
+    nie der einzige Traeger; dazu gefuellt/rahmenlos/leer per CSS).
+    teil = (gelungen, luecken) einer gruenen Zelle mit Teil-Luecke, sonst
+    None — die Markierung ist eine CSS-Ecke, KEINE dritte Signalfarbe, und
+    die Zahlen stehen im Tooltip (User-Zuschnitt 10.09.)."""
     zeit = _spanne(art, wert)
     # Zustands-/Lagen-Klassen IMMER mit anw-Praefix: "leer" allein traefe die
     # Leerzustands-Regel .leer des Hauses (24 px Padding), "n"/"da" waeren
@@ -199,6 +243,10 @@ def _zelle_html(person, art, wert, z, eintrag, datum, heute, sicht,
     if not vergangen:
         tip = t("anwesenheit.tip_zukunft", zeit=zeit)
         kl.append("anw-zukunft")
+    elif z == "weg" and teil:
+        kl.append("anw-teil")
+        tip = t("anwesenheit.tip_weg_teil", zeit=zeit,
+                gelungen=teil[0], luecken=teil[1])
     elif z == "weg":
         tip = t("anwesenheit.tip_weg", zeit=zeit)
     else:
@@ -227,8 +275,14 @@ def _zeile_html(person, je_zelle, zellen, sp, datum, heute, sicht, jetzt_zelle):
             eintrag = {"quellen": sorted({q for e in eintraege if e for q in e["quellen"]}),
                        "kameras": sorted({k for e in eintraege if e for k in e["kameras"]}),
                        "eids": sorted({x for e in eintraege if e for x in e["eids"]})}
+        # Teil-Luecke: fuer die Nachtzelle gilt sie, sobald EINE der vier
+        # Viertelstunden sie traegt — dieselbe "eine reicht"-Regel, mit der
+        # nacht_zustand rot faerbt.
+        teil = None
+        if z == "weg" and any(teil_luecke(zellen.get(c)) for c in cs):
+            teil = luecke_zahlen(zellen, cs)
         teile.append(_zelle_html(person, art, wert, z, eintrag, datum, heute,
-                                 sicht, jetzt_zelle, vergangen))
+                                 sicht, jetzt_zelle, vergangen, teil))
     return (f'<div class="anw-r"><div class="anw-nm" title="{html.escape(person, quote=True)}">'
             f'{html.escape(person)}</div><div class="anw-l">{"".join(teile)}</div></div>')
 
@@ -351,15 +405,23 @@ def _seit_html(aeltester):
 
 
 def _legende():
+    """Legende + der EINE klarstellende Satz darunter. Der Satz ist kein
+    Schmuck: bis .518 hiess Weiss zweierlei, und der alte Legendentext
+    ("System lief nicht ODER hat nicht hingesehen") war genau die Stelle, an
+    der die Seite ihre eigene Doppeldeutigkeit zugab. Jetzt sagt die Legende
+    die eine Bedeutung, und der Satz sagt sie noch einmal ausdruecklich."""
     texte = {"da": t("anwesenheit.legende_da"),
              "weg": t("anwesenheit.legende_weg"),
              "leer": t("anwesenheit.legende_leer")}
     assert set(texte) == set(ZUSTAENDE)
     teile = "".join(f'<span><span class="anw-z anw-{z}" aria-hidden="true"></span>{html.escape(texte[z])}</span>'
                     for z in ZUSTAENDE)
+    teile += (f'<span><span class="anw-z anw-weg anw-teil" aria-hidden="true"></span>'
+              f'{html.escape(t("anwesenheit.legende_teil"))}</span>')
     teile += (f'<span><span class="anw-z anw-leer anw-jetzt" aria-hidden="true"></span>'
               f'{html.escape(t("anwesenheit.legende_jetzt"))}</span>')
-    return f'<div class="anw-legende">{teile}</div>'
+    return (f'<div class="anw-legende">{teile}</div>'
+            f'<p class="dim anw-legsatz">{html.escape(t("anwesenheit.legende_satz"))}</p>')
 
 
 # ------------------------------------------------------------ Seite
