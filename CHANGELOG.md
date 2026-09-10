@@ -7,7 +7,454 @@ this file — the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git
 history.
 
-## 0.1.0.511 (unreleased)
+## 0.1.0.526 (2026-09-10)
+
+Bundles the internal steps 0.1.0.512 – 0.1.0.525. Everything below ships for all
+five variants for the first time in this release.
+
+**A test release: the learning run is new.** It was rebuilt from the measurement
+core up and harmonised — one quality sieve with the same rules everywhere,
+instead of a learning path that judged pictures by a yardstick of its own. Please
+test it and report anything that looks wrong.
+
+- **One sieve, one set of bars.** The learning run sieves with the same axes as
+  the recognition side, per camera, out of the *Face catalog* register: detection
+  score, face size, edge length, impression, recognisability, head pose and the
+  feature norm. The old global quality bars and their page are gone, and every
+  screen that comes after a run — group view, picture check, ranking,
+  suggestions, unknown pool — asks the same register now.
+- **A one-click check on any pass.** The button on a pass runs a small learning
+  run: it fetches the clips, harvests the frames, sieves them with the camera's
+  register, and only then asks which of the surviving faces belong to the person
+  you clicked. It offers the best pictures; what you tick becomes a reference,
+  the rest is thrown away. It can be cancelled while it runs, and a second click
+  queues up instead of competing for the same slots.
+- **The suggested pictures are not tuned yet.** The step moved the decision onto
+  the new scale; the numbers behind it are not recalibrated. Better: look for
+  yourself and pick the faces that look best to you.
+- **Presence page: white means one thing only** — the service was not running in
+  that quarter hour. Quarter hours that ran are green, an event that stayed
+  unanalysed is a small corner on the green tile with the counts in the tooltip,
+  and a later retry takes back its own gap.
+- **A learning run measures the feature norm once, in a bundled step**, instead
+  of building a recognition session inside every harvest job. Same pixels, same
+  bars, same decisions — the analysis slots just stay light.
+- Log and switch polish: with Frigate's own face recognition switched off the
+  automatic export to Frigate stays idle and says so once, instead of writing a
+  failure line after every successful adoption; the model library's start-up
+  chatter sits behind the `debug` switch.
+- Reference pictures deleted one by one move to the trash folder, removing every
+  picture of a person asks a second time, and a name with an apostrophe no longer
+  kills the buttons of its own suggestion.
+
+## 0.1.0.525 (unreleased)
+
+Internal step. **Log and switch polish**, from reading a full day of the real
+service log. Nothing about recognition changes; what changes is what the log
+claims about itself.
+
+- **A successful adoption no longer ends in a failure line.** If Frigate's own
+  face recognition is switched off, Frigate refuses every face upload — so the
+  automatic export to Frigate is no longer started at all in that case. It says
+  once that it stays idle and why, instead of writing `!! … FAILED` after every
+  single adoption, which read as if the adoption itself had failed. With
+  Frigate's face recognition on, nothing changes.
+- **The model library's startup chatter is out of the way.** On the first
+  interactive click the detector bundle used to print five raw
+  `Applied providers: ['CPUExecutionProvider']` lines into the service log,
+  right after the startup line that says which device is engaged. Those are
+  throwaway CPU sessions that are replaced by the real backend a moment later —
+  but they read like "it is not using the GPU after all". They are hidden now
+  and counted; switch on `debug` and they come back word for word. Lines that
+  report an actual problem with the model folder are untouched, and so are the
+  per-job logs.
+- **Two log labels tell the truth again.** The pass check named its number
+  "passed the register sieve" while the balance line in the same second said
+  what the register really let through; the number is what is in the offer, and
+  now says so. And the harvest balance now names the findings that were blocked
+  by the structure test, so the axes add up to the number of sieved-out
+  findings again.
+- **One German word in an English log line** is English.
+
+## 0.1.0.524 (unreleased)
+
+Internal step. **Two fixes to the pass check of 0.1.0.521**, both asked for
+after watching it run, and neither of them ever released.
+
+- **You can cancel a running check.** There is now a Cancel button right at the
+  progress bar, not only in the overlay you get once the check has finished.
+  Events that have not started yet are dropped; whatever is running at that
+  moment finishes properly — a job is never killed mid-way, because a half-
+  written candidate line or a slot nobody released is worse than waiting a few
+  more seconds. After that the pictures are removed over the same path that
+  already handles "dismiss", and the bar says what happened: how many of how
+  many events were dropped. Cancelling something that already finished is not
+  an error, it just says there is nothing to cancel.
+- **Only one picture check runs at a time.** Click a second one and it is
+  accepted, not refused: it queues up and says so ("waiting for the picture
+  check that is running now", with its place in the queue from the second one
+  on). Two checks at once do not make the total any faster — they share the
+  same analysis slots, the same worker and the same clip gate — they only make
+  each one slower and the progress bar less honest. A queued check holds no
+  analysis slot and reserves none, so live detection, event analysis, the
+  learning run and the calibration top-up are unaffected. When the running
+  check ends — or is cancelled — the next one starts on its own. A page reload
+  keeps its place in the queue; a service restart does not, and then the log
+  says so instead of leaving a bar that leads nowhere.
+
+## 0.1.0.522 (unreleased)
+
+Internal step. **Three repairs to the pass check of 0.1.0.521**, all found by
+the adversarial review of that step and none of them ever released.
+
+- **The progress bar no longer goes silent.** After the harvest, the check
+  measures the feature norm in one bundled step and then asks the identity
+  question — together that can legitimately take a long time (waiting for an
+  analysis slot, then the job itself). During that stretch nothing refreshed
+  the run file, so the click handler eventually considered the run dead and
+  started a *second* harvest into the same folder: duplicate jobs, two
+  interactive slots, and a bar that jumped back to "0 of 0". The chain now
+  keeps a heartbeat over both steps, and a second harvest for a folder that is
+  already being worked on is refused outright — the service asks the running
+  thread, not a file timestamp.
+- **A folder left over from an older version no longer stalls the check.**
+  Candidate lines written before 0.1.0.517 carry a stock picture, and the
+  transient pass run deliberately carries no stock thresholds. The bundled step
+  ran into that combination and died with a key error: five futile worker
+  rounds, and the event stayed unmeasured while the log blamed the worker. Such
+  a line is now left untouched — a run that does not decide the stock line
+  throws nothing away — and the step says how many lines it passed over.
+- **Dismissing or adopting no longer deletes a folder that is still in use.**
+  Clicking the tile and then the card of the same pass addresses the same run;
+  a "Cancel" in the first overlay used to remove the folder while the second
+  harvest was still writing into it, which left that run without even an error
+  marker. The removal is now deferred until the run ends, and it still happens
+  — transient still means transient.
+
+## 0.1.0.521 (unreleased)
+
+Internal step. **The "check this pass" button now runs a small learning run
+instead of measuring stored thumbnails.** Click it and the service fetches the
+clips of that pass, harvests every frame, sieves with the "Face catalog"
+register of each camera, measures the feature norm in one bundled step — and
+only then asks which of the surviving faces belong to the person you clicked.
+
+- **One system, not two.** Until now the button judged picture quality with a
+  yardstick of its own: either a pixel bar on the stored event thumbnail
+  (70 px / 350 sharpness) or a stock-line consensus, depending on the
+  `vorrat_aktiv` switch. The same button behaved fundamentally differently
+  depending on a switch most people never touch. Quality is now decided by the
+  camera's register — the same six axes the learning run uses — and nothing
+  else.
+- **Identity is the only question left at the end.** It uses the same
+  thresholds the catalogue search has used since 0.1.0.257; a face of a
+  different person cannot be adopted by construction. If the person has no
+  reference picture of their own yet, the check says so instead of proposing
+  anything.
+- **The run is transient.** It feeds no learning stock, forms no groups and
+  writes no catalogue offer. What you tick becomes a reference; the rest is
+  removed as soon as you adopt or dismiss, and the nightly cleanup remains the
+  safety net.
+- **At most two suggestions per event get a tick**, the rest stay visible as
+  borderline without one — five pictures of the same second are worth less than
+  five angles.
+- The progress bar, the pass chaining and the slot handling are unchanged: the
+  service works out the pass itself, the harvest spreads over the free analysis
+  slots, and every step shows up in the slots widget.
+- Honest limit: the numbers behind the identity axis are not calibrated by this
+  step. It moved the decision, not the thresholds.
+
+## 0.1.0.519 (unreleased)
+
+Internal step. **On the presence page, white now means one thing only: the
+service was not running in that quarter hour.** Until now it also meant "at
+least one event somewhere was not analysed", and in practice that was the more
+common of the two — a quarter hour with 106 successful analyses and 12 gaps was
+shown as white, with the legend saying the system had not looked.
+
+- **A quarter hour in which the service was running is green** (or red, if
+  someone was confirmed present — red still wins over everything, including
+  quarter hours the service never ran in, which is how a re-analysed event from
+  an outage keeps its red cell).
+- **Gaps no longer overrule green.** A cell where the service ran but at least
+  one event stayed unanalysed keeps its green tile and gets a small clipped
+  corner. Hovering it says how many events were analysed and how many were
+  not. No third signal colour.
+- **Successful analyses are counted too.** Until now only the failures were,
+  which is why one failure could outvote a hundred successes. An analysis that
+  finds nobody counts as a success — that is what most of them are.
+- **A retry that finally works takes back its own gap.** The cell loses its
+  mark once every event behind it has succeeded. Nothing is rewritten: the
+  record file only ever grows, and the later success cancels the earlier gap.
+- **The same quarter hour now looks the same in every view.** Before, gaps were
+  filtered per camera while the running mark was not, so the "all cameras" view
+  was systematically the whitest one — and the more cameras an installation
+  had, the whiter it got.
+- Honest limits: history is not rewritten. Day files written by earlier
+  versions have no success marks, so they show zero successes and keep their
+  gaps open — their colours are still correct, because those come from the
+  running mark. And a gap recorded without an event id cannot be cancelled by
+  anything.
+
+## 0.1.0.518 (unreleased)
+
+Internal step. **A learning run now measures the feature norm once, in a
+bundled step, instead of inside every harvest job.** The result is the same —
+same pixels, same bars, same decisions. What changes is what a run costs: the
+analysis slots stay equally light.
+
+- **The harvest sieves on five axes** (detection score, edge length,
+  impression, recognisability, head pose). The sixth — the feature norm —
+  needs its own recognition session, and that session peaks at 2.7 GB while it
+  is built. Since the harvest started fetching events with several collectors
+  in parallel, every one of those slots could become a 2.7 GB slot. Now none
+  of them does.
+- **A single bundled step measures the norm for the whole run**, after the
+  harvest and before the anchor stage. It holds one session, takes one
+  analysis slot, and gives it back when it is done.
+- **The measurement basis is unchanged, on purpose.** The harvest keeps the
+  aligned 112-pixel tile of each candidate frame as raw data, and the bundled
+  step measures exactly those pixels, one at a time. Not a re-decoded JPEG,
+  and not one big batch — both would give slightly different numbers than
+  before. The tiles cost about 37 KB each while the run is going and are
+  removed as soon as their event is booked.
+- **The learning stock's own norm line is decided in the same step**, from the
+  same measurement. Pictures that do not make it lose their stock image right
+  there.
+- **Interruptible and resumable**: the step books each event as it goes, so a
+  restart continues where it stopped instead of measuring everything again.
+  If the recognition session cannot be built at all, the run says so out loud
+  and keeps every finding on that axis rather than dropping all of them.
+- Honest limit, stated in the run log: the two harvest paths that have no
+  bundled step (the calibration material search and the pass-check bridge) do
+  not apply the norm axis at all, and they collect no stock pictures. They say
+  so per event instead of quietly letting everything through.
+
+## 0.1.0.517 (unreleased)
+
+Internal step. **The feature-norm bar starts at 20 now, and only the register
+that measures it still has a slider for it.** 0.1.0.516 switched the axis on and
+borrowed its number from the one feature-norm value that already existed in the
+code (the learning stock's collection floor, 22.0). Looking at real harvested
+material put the bar where that material actually sits.
+
+- **Factory value 20 instead of 22.0** for the *Face catalog* register, decided
+  on 756 harvested pictures (median 20.7). The number now lives in exactly one
+  place in the code and is no longer tied to the learning stock's own floor —
+  that floor stays where it belongs and can move without dragging this bar with
+  it. A camera that carries its own value keeps it; 0 still switches the axis
+  off, and camera value still beats global value beats factory value.
+- **The Recognition register has no feature-norm slider any more.** That side
+  does not measure the feature norm at all, so the slider set a number no vote
+  was ever judged by — a control that invites you to change something and then
+  changes nothing. The AXIS is untouched and still exists in both registers
+  (`norm_min`, global fallback `urteil_norm_min`, per camera, factory 0 = off);
+  only the control is gone. The calibration page no longer sends that field, so
+  a value you set earlier stays exactly as it is.
+- The slider in the *Face catalog* register stays where it was, with its off
+  position at the left stop and its factory mark at 20 — that is the register
+  where the learning run really measures the feature norm and really sieves on
+  it.
+
+## 0.1.0.516 (unreleased)
+
+Internal step. **The old global quality bars are gone.** Until now two values
+(`guete_empfinden_min` / `guete_t_min`, factory 0.20 / 0.40) decided, on their
+own page, which faces a learning run kept. Stage 3 took that job away from them
+and gave it to the *Face catalog* register — but it left them wired to
+everything that comes AFTER the run: the group view, the picture check, the
+ranking, the suggestions and the unknown pool. Measured on a real run: of 1385
+pictures that the harvest and the anchor sieve had let through, those two values
+threw away 1382, and both groups the run produced had not a single tickable
+picture in them. This step removes them and points every one of those places at
+the register instead — the same bars, per camera, that decided the run.
+
+- **One bar, everywhere.** Group view, picture check, ranking, recommendation,
+  unknown-pool intake and the anchor sieve now all ask the *Face catalog*
+  register of the camera the picture came from. A picture your learning run kept
+  is no longer thrown away by the next screen.
+- **The 70-pixel rule is gone for good.** It sat in three places and judged
+  faces by size a second time, next to the face-size bar that 0.1.0.515 made a
+  proper per-camera slider. Face size is now decided in exactly one place.
+- **The feature-norm bar of the Face catalog register is switched ON at the
+  factory** (22.0). 0.1.0.515 built the axis and left it off because it was
+  brand new; it is now doing what it was built for — it is the one measure that
+  separates false detections with a high detection score from genuine small
+  faces. The number is not a new one: it is the collection floor the learning
+  stock has used since 0.1.0.308, on the same scale. **This costs learning
+  material on cameras that deliver weak faces**, deliberately; the slider on
+  each camera's calibration page turns it back down, and 0 switches it off. The
+  Recognition register keeps it at 0/off — that side does not measure the
+  feature norm at all, so a bar there would throw every vote away.
+- **The page that set the old bars is gone** (`/kalibrierung?lauf=1`). It
+  promised, in five languages, to decide "which faces future learning runs
+  keep" — which had not been true since 0.1.0.514. What it used to set is set
+  per camera on the calibration page of that camera. Re-grading the last run
+  after a change still happens; it now hangs on the save button that actually
+  changes the bar.
+- **Fixes an 0.1.0.515 defect found while checking this step:** the factory
+  value of the face-size bar was written as `25.0` where the setting is a whole
+  number, and the configuration sheet refused to save at all because of it
+  ("'katalog_guete_kante_min': invalid value"). Every register factory value is
+  now checked against its own setting type by the gate.
+- **A raised global bar now reaches half-calibrated cameras.** The order
+  "camera value beats global value beats factory floor" was applied per SOURCE,
+  not per axis: one own value on a camera took the whole global row out of the
+  running, and every axis it had not set fell to the factory floor instead. Any
+  camera calibrated before 0.1.0.514 is in exactly that state, so raising the
+  global head-pose or detection bar did nothing there — silently, while the
+  setting's own description promised the opposite. Each axis now falls back on
+  its own, and the run log says which number came from where.
+- **A hand-edited value can no longer go below its floor.** The recognition
+  side has always clamped; the learning register did not, and because the
+  harvest binds the DETECTOR to its detection value, an edit of 0.05 was not a
+  soft sieve but a detection explosion. A deliberate 0 still means "this axis is
+  off" — except for the detection value, which parametrises the detector and
+  has no off state.
+- **A pose model that fails while loading no longer eats a whole event.** The
+  check was a file probe ("model present"), and the harvest swallowed the load
+  error, so every finding of the first event of each worker came out
+  "unmeasurable" — silently, without the promised "sieve axis off" line. The
+  model is now actually touched once, exactly as the recognition path does it.
+- Pictures with no quality measurement at all (runs from before 0.1.0.377,
+  images without the quality models) are judged exactly as before — nothing is
+  dropped for want of a measurement.
+
+## 0.1.0.515 (unreleased)
+
+Internal step. Two more sensors go into the worker, both as further axes of the
+one sieve that stage 3 built: the **feature norm** and the **face-edge bar**.
+Both live in BOTH tabs of the calibration page, per camera and globally, in the
+same shape as the four axes that were already there.
+
+- **The feature norm is now a bar you can switch on** (Face catalog tab and
+  Recognition tab). It is the reference-free measure the learning stock has
+  used for a long time — how strong a face is as recognition material, not how
+  sharp it looks. **The factory value is 0, which means the axis is OFF**, so
+  nothing about your system changes by installing this: it is a switch that is
+  built in and left alone until you decide otherwise.
+- **Where it works and where it does not, said plainly.** In the Face catalog
+  tab the bar really sieves — a learning run asks it like the other four. In
+  the Recognition tab the value is stored, resolved per camera and shown, but
+  it does not sieve yet: the recognition path does not measure the feature norm
+  today, and giving it one means a second copy of the recognition model in the
+  analysis worker. The slider says so instead of pretending.
+- **A run that cannot measure the norm switches the axis off loudly** instead
+  of throwing every finding away, the same rule the quality and pose axes
+  already follow. And a run whose norm bar is raised now gets the measurement
+  built for it, instead of only when the learning stock happens to be on.
+- The run record of a learning run carries the norm bar as well — a bar that
+  sieves and does not appear in the record is a record that lies.
+- **The smallest face that may still cast a vote is now a slider**, per camera,
+  in both tabs. It was already a number this system used for every vote — 25
+  pixels on the shorter side of the face box, measured on field data and
+  unchanged since 0.1.0.400 — but it was one number for your whole site. It is
+  still 25 for every camera that does not set its own, so **nothing changes
+  unless you move the slider**: the same decision comes out at 24, 25 and 26
+  pixels as before, in the event analysis and in the live watcher alike.
+- **In the Face catalog tab that face-size bar is new.** Until 0.1.0.514 the
+  learning run had its own, much stricter one (60 px) that had nothing to do
+  with the recognition side, and stage 3 removed it. It comes back as a proper
+  axis of the register, and it comes back with the recognition side's number,
+  not the old one. Being told that someone is there and learning what they
+  look like are two questions — now you can answer them separately, per camera.
+
+## 0.1.0.514 (unreleased)
+
+Internal step, stage 3 of the learning-run rebuild ("one sieve"). Unlike stage 1
+this one **does** change behaviour: a learning run now keeps different material
+than before. The recognition side is untouched and was accepted against a
+before/after comparison that requires identical verdicts.
+
+- **The learning run now judges pictures with the same four sliders as the
+  recognition side.** Until now it used a different set entirely — detector
+  score, edge length, sharpness and two stock-specific bars — none of which had
+  anything to do with the four values you calibrate per camera. Head pose did
+  not exist on the learning path at all. There is now one mechanism with two
+  sets of numbers: what you want to be told about, and what you want to learn
+  from.
+- **The "Face catalog" tab gained the two missing sliders** (detection score and
+  head pose) so it can carry that full set. Cameras override the global values
+  as before; nothing is applied retroactively to references you already have.
+- **The head-pose slider is what keeps bins, hedges and car fronts out of the
+  learning material.** The two quality scores cannot see those — that is what
+  the measurements of the last weeks showed, and it is why this axis was worth
+  the extra computation.
+- **The second, contradictory bar behind the harvest is gone.** A learning run
+  used to hand pictures on and then have them thrown away by a different bar
+  measured against different values. Both now read the same numbers.
+- **Every run says what it sieved out and why**, per axis, including the
+  findings it dropped because a value could not be measured at all. Pictures
+  that do not pass keep their line and their measurements, so a bar you change
+  later can be checked against material you already have.
+
+## 0.1.0.513 (unreleased)
+
+Internal step, stage 1 of the learning-run rebuild ("measurement core"). Nothing
+about the app behaves differently: every threshold, every sieve and every verdict
+is unchanged, and the release was accepted against a before/after comparison of
+the same 50 events that requires the verdicts to be identical. What changes is
+what the system *knows* about its own pictures.
+
+- **Every face finding now carries the same measurement card.** Until now the
+  measured values of a face were assembled by hand at four different places on
+  their way from the harvest to the group view, and a fifth place quietly dropped
+  two of them. They now travel as one declared set, and the quality gate holds
+  every station against that one list.
+- **The learning path measures the quality scores for stock pictures too.** They
+  were measured for close crops only, which left three quarters of the material
+  the group building actually uses without a quality number. The values are
+  recorded, not yet used for judging — that step comes with the calibration of
+  the new scale.
+- **Every run now says how much of its material it could measure.** One balance
+  line per run and per path, with the reason for each finding it could not
+  measure. Without that number, tightening a threshold later would be blind.
+
+## 0.1.0.512 (unreleased)
+
+Four fixes from the catalogue diagnosis of 09.09., all reported from the field:
+a button that a name could kill, a word that accused good pictures, a delete
+that could not be taken back, and a count that added the same picture twice.
+
+- **A person whose name contains an apostrophe could neither be accepted nor
+  rejected on the Learn page.** The suggestion's identifier carries the person's
+  name, and it was escaped for HTML instead of for JavaScript. The browser turned
+  `&#x27;` back into `'` before the script was compiled, the line no longer
+  parsed, and both buttons of that card silently did nothing — the suggestion
+  stayed forever. Reported by a field tester; it is the second time the same
+  apostrophe has bitten, so the gate now checks the rendered page, not just the
+  name pattern.
+- **The quality page no longer calls good pictures "blurry".** The page still
+  ranked pictures by the old pixel sharpness (a measure that, against the
+  calibrated eye, separates no better than a coin flip), and that verdict
+  outranked the calibrated quality check that was introduced in 0.1.0.511. On one
+  test library 103 pictures were labelled "blurry" and put up for removal, twelve
+  of which the calibrated check considers fine. Tab and wording now come from the
+  same judgement; sharpness is still measured and still shown on the learning
+  pages, it just does not decide here any more.
+- **Deleted reference pictures move to the trash folder.** Removing a single
+  picture used to be final, while deleting a whole person — the far more drastic
+  action — has always been reversible. The reversible path was the drastic one.
+  Single pictures now land in `trash/refs/<person>/<file>` and can be moved back;
+  nothing else about the deletion changed.
+- **Removing every picture of a person now asks twice.** Two clicks on "Select
+  all" in two tabs can empty a person's whole library, after which that person
+  cannot be recognised any more. The second question names the person and the
+  number. It asks, it does not forbid.
+- **The overview's finding count counts every picture once.** It used to add four
+  numbers that contained the same pictures, reporting 734 findings on 1185
+  pictures where only 772 tiles were actually marked. The numbers now match the
+  tabs of the gallery.
+- **The AMD image finally has its own installation section.** `-rocm` was the
+  only one of the five variants without one — a table row and a pull command
+  were all there was. The new section carries the compose block with both device
+  nodes (`/dev/kfd` and `/dev/dri`) and the numeric render GID, records that
+  `HSA_OVERRIDE_GFX_VERSION` was *not* needed on an RDNA3 card from 0.1.0.511 on,
+  and explains why the startup compute check spreads itself over several starts
+  on MIGraphX: compiling one model for the GPU takes about two minutes there.
+  All of it from the first field report on a real AMD box, PR #28.
+
+## 0.1.0.511 (2026-09-08)
 
 A fix for the AMD image, the check that would have caught it, and a loud word
 when an accelerator sits there unused.

@@ -17,6 +17,8 @@ import time
 
 import numpy as np
 
+from core import messkarte as _mk
+
 
 # ------------------------------------------------------------------ B1: Durchgangs-Kette
 def durchgaenge_bilden(events_liste, gap_min):
@@ -87,6 +89,49 @@ def _fehldetektion(z):
         return False
 
 
+def _guete_besteht(z, sieb):
+    """Das Guete-Kriterium DIESER Zeile (.514 B3, seit .516 EINE Frage) -> bool.
+
+    ZWEI Wege, und die Zeile selbst entscheidet welchen — beide liegen seit
+    .516 in core.benennung.ist_gut, das ist der ganze Punkt der
+    Alt-Latten-Abloesung:
+
+    * Traegt sie GEMESSENE Guete (Messkarte `mk_*`, sonst das gewachsene Paar
+      `empf`/`fiqa_t` — core.benennung.guete_masse), urteilt DIESELBE Mechanik
+      wie die Ernte: core.kamerakalib.sieb_ok mit dem je Kamera aufgeloesten
+      Register-Satz. Nicht „dieselben Zahlen in einer anderen Formel", sondern
+      dieselbe Funktion — alles andere waere wieder ein zweites System.
+    * ALTLAUF-KOMPATIBILITAET (bewusste Ausnahme, User 10.09.): eine Zeile
+      OHNE jede Guete-Messung (Laeufe vor .377, Alt-Images ohne die
+      Guete-Modelle) laeuft Wort fuer Wort den Pixel-/Norm-Alt-Weg in
+      _lattenklasse. Sie fail-closed durch `sieb_ok` zu schicken hiesse, sie
+      mit e=None/t=None gegen eine aktive Latte zu halten — jede Zeile eines
+      Altlaufs fiele, ein Totalverlust ohne Ansage. Genau davor warnt der
+      .514-Widerleger, und genau deshalb bleibt der Alt-Zweig stehen. Fuer
+      NEUE Laeufe gilt ausschliesslich das Register.
+
+    NUR die zwei Guete-Achsen werden hier gefragt, det und Pose nicht:
+    die haben in der Ernte gewirkt, ihr Ergebnis steht im m-/v-Flag der Zeile.
+    Ein zweiter Pose-Vergleich waere obendrein gefaehrlich — hat der Ernte-Lauf
+    seine Pose-Achse wegen eines fehlenden Modells laut herausgenommen, traegt
+    JEDE Zeile mk_pose=None, und eine fail-closed-Nachpruefung hier wuerde
+    genau das tun, was die Invariante verbietet: einen Modell-Ausfall in einen
+    Totalverlust verwandeln.
+
+    MITGEGANGENE FOLGE, benannt und gewollt: der Alt-Weg verlangte im
+    Guete-Zweig zusaetzlich `kante >= REF_LATTE["min_kante"]` (70 px). Diese
+    Pixel-Schranke ist seit .516 UEBERALL weg (nicht mehr nur hier) — sie war
+    eine zweite Kanten-Zahl neben Sensor 6, der die Kante seit .515 als
+    Register-Achse mit 25 px fuehrt. Am ABEYRD-Lauf war das kein Randfall:
+    die einzige entstandene Anker-Gruppe bestand ausschliesslich aus
+    Vorratsbildern mit Kante 40-59 px, und an der Flaeche traf die 70er-Latte
+    512 von 1385 M-Zeilen. Die Naehe-Frage beantworten weiter die
+    Norm-Linien (harte_linie/norm_latte), nicht die Kantenlaenge."""
+    from core import benennung as _ben
+    return _ben.ist_gut(z, sieb.get("norm_latte"),
+                        kat_latten=sieb.get("kat_latten"))
+
+
 def _sieb_besteht(z, sieb):
     """Qualitaets-Sieb des intelligenten Lernens (Phase 1,
     analysen/intelligentes_lernen.md). Alle Achsen stehen bereits in der Zeile —
@@ -103,8 +148,7 @@ def _sieb_besteht(z, sieb):
     # anzeigbar war. Der Nutzer sah Gruppen, zu denen er nichts entscheiden kann.
     if _ben.harte_linie(z, sieb.get("norm_latte")):
         return False
-    if not _ben.ist_gut(z, sieb.get("norm_latte"),
-                        guete_latte=sieb.get("guete_latte")):
+    if not _guete_besteht(z, sieb):
         return False
     try:
         winkel = [float(w) for w in (z.get("pose") or [])]
@@ -415,7 +459,17 @@ def anker_datensaetze(cluster, margen, lauf_id, schwellen, version):
         # Dedup-Schluessel, Zeitbezug und Fast-Duplikat-Pruefung rechnen damit
         # rein lesend am Store, ohne Rueckgriff auf den trash-gefaehrdeten
         # Kandidaten-Ordner. modell fuettert den Bedingungs-Tag der Benennung.
-        mitglieder = [{"event": mm["eid"], "datei": mm["datei"], "t": mm["t"],
+        # MESSKARTE (.513, Etappe 1): die Karte des Kandidaten wandert als
+        # GANZES ins Mitglied (core/messkarte.uebernehmen, s. unten am Ende
+        # des Dicts). Der Kommentar an den Guete-Feldern weiter unten nennt
+        # den Grund: „dieselbe Falle wie bei norm in .308 und struktur in
+        # .32x, hier zum dritten Mal" — genau diese Handkopie-Kette ersetzt
+        # der EINE Griff. Die bestehenden Zeilen bleiben stehen: `uebernehmen`
+        # ergaenzt nur Fehlendes und aendert weder Wert noch Position eines
+        # vorhandenen Schluessels (Etappe 3 raeumt die Doppelung ab, wenn die
+        # Verbraucher auf die Kartennamen umgehaengt sind).
+        mitglieder = [_mk.uebernehmen({
+                       "event": mm["eid"], "datei": mm["datei"], "t": mm["t"],
                        "kamera": mm["kamera"], "front": mm["front"], "sharp": mm["sharp"],
                        "det": mm["det"], "kante": mm["kante"], "pose": mm["pose"],
                        "bbox": mm.get("bbox") or [], "ts": mm.get("ts", 0),
@@ -457,7 +511,7 @@ def anker_datensaetze(cluster, margen, lauf_id, schwellen, version):
                        # beide Werte). Am DICT-ENDE und per .get(): Alt-Anker
                        # ohne die Felder bleiben gueltig und urteilen
                        # unveraendert den Alt-Weg (Muster luma).
-                       "fiqa_t": mm.get("fiqa_t"), "empf": mm.get("empf")}
+                       "fiqa_t": mm.get("fiqa_t"), "empf": mm.get("empf")}, mm)
                       for v in c for mm in v["mitglieder"]]
         z_ank = zentroid([v["emb"] for v in c])
         dgs = sorted({round(float(v["durchgang_start"]), 1) for v in c})
@@ -649,7 +703,7 @@ def zuweisung_pruefen(saetze, refs, sim_min, marge_min, einigkeit_min):
 
 def anker_phase_fahren(data_dir, lauf_dir, lauf_id, events_liste, schwellen, clusterer,
                        version, log, fortschreiben, norm_latte=None,
-                       guete_latte=None):
+                       kat_latten=None):
     """Die komplette Anker-Phase, dienst-frei (verifyd reicht Config-Schwellen,
     Clusterer und Callbacks herein). fortschreiben(**updates) -> zustand | None;
     None heisst 'Lauf wurde abgebrochen' => sofort aussteigen (Ernte-Semantik).
@@ -657,6 +711,11 @@ def anker_phase_fahren(data_dir, lauf_dir, lauf_id, events_liste, schwellen, clu
     intelligenten Lernens braucht es fuer die Stufe GUT). Bewusst KEIN Eintrag
     in schwellen: das Dict wandert 1:1 in jede anker.jsonl-Zeile, dort gehoeren
     nur flache Zahlen hin (dieselbe Begruendung wie fuer luma_grenzen).
+    kat_latten: das Katalog-Register (core.kamerakalib.katalog_latten) — seit
+    .514 urteilt das Sieb mit DENSELBEN Werten wie die Ernte, je Kamera
+    aufgeloest. Seit .516 ist es die EINZIGE Guete-Quelle dieser Phase (die
+    alte globale `guete_latte` ist mit core.guete.STARTWERTE entfallen);
+    None = keine Guete-Latte, dann urteilt der Pixel-/Norm-Alt-Weg.
     -> Ergebnis-Dict oder None bei Abbruch. Wirft NICHT (Fehler faengt der Aufrufer)."""
     t0 = time.time()
     if int(schwellen["anker_deckel"]) > int(schwellen["anker_deckel_hart"]):
@@ -690,10 +749,21 @@ def anker_phase_fahren(data_dir, lauf_dir, lauf_id, events_liste, schwellen, clu
         sieb = {"winkel_max": schwellen["anker_qualitaet_winkel_max"],
                 "roll_max": schwellen["anker_qualitaet_winkel_max"],
                 "norm_latte": norm_latte,
-                # .377: die kalibrierte Guete-Latte wirkt im Sieb ueber
-                # ist_gut — Zeilen ohne Guete-Felder (Alt-Ernten) urteilen
-                # dort unveraendert nach der Pixel-Latte.
-                "guete_latte": guete_latte,
+                # .514 (Etappe 3 B3, DOPPEL-SIEBUNG AUFGELOEST): liegt das
+                # Katalog-Register vor, gilt HIER dieselbe Latte wie in der
+                # Ernte — je Kamera aufgeloest, gegen dieselben mk_-Messwerte.
+                # Anlass, gemessen am ABEYRD-Lauf vom 09.09.: die Ernte liess
+                # 1123 Bilder durch, und dieses Sieb haette mit seiner eigenen
+                # Latte (0,200/0,400, damals core.guete.STARTWERTE) 1120 davon
+                # verworfen — zwei Systeme, die sich widersprachen. Jetzt ist
+                # es konsistent-redundant: was die Ernte nahm, faellt hier
+                # nicht mehr an DERSELBEN Frage.
+                # .516: dieses Register ist die EINZIGE Guete-Quelle des Siebs
+                # — die zweite („guete_latte", global 0,200/0,400) ist samt
+                # ihrer Werks-Konstante entfernt. Zeilen ohne jede Guete-
+                # Messung laufen weiter den Alt-Weg (Altlauf-Kompatibilitaet,
+                # _guete_besteht oben).
+                "kat_latten": kat_latten,
                 # Der Szenario-Konsens des Vorrats wirkt mit, wo er gemessen
                 # ist — dieselbe Schwelle, keine zweite Zahl.
                 "konsens_min": schwellen.get("vorrat_konsens_min"),

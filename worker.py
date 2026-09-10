@@ -29,7 +29,22 @@ serialisiert (self.lock) und haelt Timeout/killpg. stdin-EOF (execv-Waise/Ende) 
       pruefe`; Antwortfeld "refqs" = Zaehler des Laufs. IMMER ungefiltert —
       der Personen-Filter ist reine Anzeige, Widerleger-Blocker .273)
   {"typ":"ernte","eid":"...","kamera":"...","ts":0,"fps_sample":3,
-   "schwellen":{...},"lauf_dir":"...","log":"..."}   (E2: 1 Event je Job, Live-Vorrang)
+   "schwellen":{...},"lauf_dir":"...","nachmess":false,"log":"..."}
+     (E2: 1 Event je Job, Live-Vorrang. `nachmess` = auf diesem Weg folgt der
+      gebuendelte Norm-Schritt; nur dann konserviert die Ernte die Warp-Kacheln
+      und legt Vorratsbilder an — .518)
+  {"typ":"norm","lauf_dir":"...","eids":[...],"schwellen":{...},
+   "latten":{"<kamera>":{...},"":{...}},"log":"..."}
+     (.518 DER gebuendelte Feature-Norm-Schritt: EIN Job je Lauf, EINE
+      NormMass-Session fuer ALLE Uebergabe-Kandidaten. Antwortfeld "norm" =
+      core.normlauf.norm_job-Ergebnis. Er laeuft NACH allen Ernte-Jobs und VOR
+      der Anker-Phase — der Grund steht in core/normlauf.py)
+  {"typ":"passernte","lauf_dir":"...","eids":[...],"person":"...",
+   "id_werte":{...},"je_event":2,"log":"..."}
+     (.521 DER Identitaets-Schritt des Mini-Ernte-Laufs am Pass-Knopf: EIN Job
+      je Lauf, NACH Ernte und Norm-Schritt. Er fragt NUR die Identitaet — die
+      Qualitaet hat das Register schon gesiebt (Sechs-Achsen-Verfassung).
+      Antwortfeld "passernte" = core.passernte.passernte_job-Ergebnis)
   {"typ":"rechenprobe","zeitbudget_s":60,"backend_geraet_je_task":{...},"log":"..."}
      (Lieferung C: rechnet jedes Modell auf seinem BETRIEBS-Geraet gegen die CPU —
       Antwortfeld "rechenprobe" = eine Zeile je Modell; gedruckt wird beim Dienst)
@@ -782,17 +797,26 @@ def _job_ausfuehren(job, antwort_out=None):
                     eid, erzeugung=bool(job.get("clip_erzeugung")),
                     erzeugung_deckel_s=job.get("clip_erzeugung_deckel_s"))
                 try:
-                    # Vorrats-Gate nur, wenn das eingefrorene Job-Regime die
-                    # vorrat-Keys traegt (alte Manifeste: None -> Alt-Verhalten).
-                    # Der Bau selbst liegt hinter Budget und Wachen-Anmeldung
-                    # (_normmass_fuer_ernte) — er ist der einzige Grund, aus dem
-                    # dieser Prozess ueberhaupt eine NormMass haelt.
-                    nm = (_normmass_fuer_ernte(wache)
-                          if _ernte.vorrat_schwellen_da(job["schwellen"]) else None)
+                    # .518 (Norm-Nachmess-Job, User-Go 10.09.2026): HIER stand
+                    # bis .517 der NormMass-Bau des Ernte-Jobs — erst fuer den
+                    # Vorrat (B2), seit .515 auch fuer die Norm-ACHSE des Siebs.
+                    # Er ist ersatzlos weg, und das ist der ganze Punkt des
+                    # Zugs: die Bauspitze liegt bei 2700 MB
+                    # (_NORMMASS_BAUSPITZE_MB), und seit die Ernte mit K
+                    # Abholern faehrt, war jeder der K Ernte-Plaetze potenziell
+                    # ein 2,7-GB-Platz. Die Analyse-Plaetze sind damit wieder
+                    # gleich schwer (Konsistenz-Ziel des Users).
+                    # Die Feature-Norm misst jetzt EIN gebuendelter Job NACH
+                    # der Ernte (typ `norm`, unten) mit EINER Session, aus den
+                    # Warp-Kacheln, die die Ernte je Uebergabe-Kandidat
+                    # konserviert. `nachmess` sagt dem Ernte-Job, dass dieser
+                    # Schritt auf SEINEM Weg folgt — nur dann kostet die
+                    # Konservierung Platte.
                     zusatz = _ernte.ernte_event(
                         vid, eid, job.get("kamera"), float(job.get("ts") or 0),
                         float(job.get("fps_sample") or 3), job["schwellen"],
-                        job["lauf_dir"], emb=face_audit.Embedder(), norm_mass=nm,
+                        job["lauf_dir"], emb=face_audit.Embedder(),
+                        nachmess=bool(job.get("nachmess")),
                         struktur_mass=(_strukturmass_holen()
                                        if job["schwellen"].get("struktur_min")
                                        else None),
@@ -805,9 +829,78 @@ def _job_ausfuehren(job, antwort_out=None):
                         # dem eingefrorenen Manifest — der Ring-Deckel ist eine
                         # laufende Config-Entscheidung. Alt-Jobs ohne das Feld
                         # ernten unveraendert ohne Vorrats-Speisung.
-                        kalib=job.get("kalib"))
+                        kalib=job.get("kalib"),
+                        # DAS SIEB (.514, Etappe 3): die vier aufgeloesten
+                        # Latten DIESER Kamera aus dem Katalog-Register. Wie
+                        # `kalib` aus dem JOB und NICHT aus dem eingefrorenen
+                        # Manifest — die Latte ist eine laufende Entscheidung
+                        # des Betreibers (Entscheid E10). Der Worker liest sie
+                        # nie selbst aus der Config: „der Worker greift nie
+                        # selbst in die Config" (refqs-Muster oben).
+                        sieb=job.get("sieb"))
                 finally:
                     clipcache.frei(eid)   # nie eine Pin-Waise (Size-Cap)
+            elif typ == "norm":
+                # .518 DER GEBUENDELTE NORM-SCHRITT (User-Go 10.09.2026).
+                # Vergabestellen-Muster wie `refqs`: EIN Platz, EINE
+                # budgetierte NormMass-Ladung ueber _normmass_fuer_ernte (Budget
+                # + Anmeldung bei der RSS-Wache), nach dem Job ist der Platz
+                # wieder frei. Er misst die Feature-Norm fuer ALLE
+                # Uebergabe-Kandidaten des Laufs am Stueck — aus den
+                # Warp-Kacheln, die die Ernte je Kandidat konserviert hat.
+                #
+                # MODELL-GEGENSTUECK an genau EINER Stelle: baut die Session
+                # nicht (fremdes Erkennungsmodell, Budget zu knapp), bekommt
+                # `norm_job` messen=None und laesst den Lauf LAUT ohne diese
+                # Achse weiter (fail-open je MODELL, Blocker BL-1) — statt
+                # jeden Fund als 'n_unmessbar' zu verwerfen.
+                #
+                # Der Worker greift auch hier nie selbst in die Config: Latten
+                # (je Kamera aufgeloest) und Lauf-Regime kommen fertig im Job.
+                from core import normlauf as _nl
+                nm = _normmass_fuer_ernte(wache)
+                _messen = None
+                if nm is not None and getattr(nm, "ok", False):
+                    # BATCH 1, bewusst: NormMass driftet zwischen
+                    # Batchgroessen — ein Sammel-Batch maesse etwas anderes als
+                    # der Weg bis .517, und der ganze Umzug steht und faellt
+                    # damit, dass die Messbasis dieselbe bleibt.
+                    def _messen(warp, _nm=nm):
+                        return float(_nm.feature_norm([warp])[0])
+                zusatz = {"norm": _nl.norm_job(
+                    job["lauf_dir"], job.get("eids") or [],
+                    job.get("schwellen") or {}, job.get("latten") or {},
+                    messen=_messen, log=lambda s: print(s, flush=True))}
+            elif typ == "passernte":
+                # .521 DER IDENTITAETS-SCHRITT des Mini-Ernte-Laufs
+                # (User-Go 10.09.2026 „Pass-Knopf = Mini-Erntelauf").
+                # Vergabestellen-Muster wie `norm`: EIN Platz, EIN Job je
+                # Lauf, danach ist der Platz wieder frei.
+                #
+                # KEINE NormMass und KEIN Bild wird hier angefasst: gerechnet
+                # wird ausschliesslich mit den Embeddings, die die Ernte am
+                # FRAME gemessen hat, gegen die Referenz-Matrizen. Der warme
+                # Embedder dieses Prozesses wird gebraucht, weil
+                # `refs_matrix` den refcache notfalls neu aufbaut — genau der
+                # Grund, aus dem die Bestands-Suche seit .510 hier laeuft und
+                # nicht mehr in einem frischen Subprozess.
+                #
+                # LADEQUELLE der Referenzen wortgleich `vorschlaege_person`:
+                # refcache zuerst, Master-Rueckfall, wenn die Person darin
+                # keine Zeile hat. Ein zweiter Ladeweg haette eine zweite
+                # Vorstellung davon, was „die Referenzen dieser Person" sind.
+                import anlernen as _al_pe
+                import face_audit as _fa_pe
+                from core import passernte as _pe
+                _emb_pe = _fa_pe.Embedder()
+                _refs_pe = _al_pe.refs_matrix(_emb_pe)
+                if not len(_refs_pe.get(job["person"], [])):
+                    _refs_pe = _al_pe.lade_master_refs(_emb_pe)
+                zusatz = {"passernte": _pe.passernte_job(
+                    job["lauf_dir"], job.get("eids") or [], job["person"],
+                    _refs_pe, job.get("id_werte") or {},
+                    int(job.get("je_event") or 0),
+                    log=lambda s: print(s, flush=True))}
             elif typ == "rechenprobe":
                 # Lieferung C (analysen/15 §4): laeuft im BOOT-EXKLUSIVFENSTER als
                 # eigener WorkerProzess (verifyd.startup_selfcheck, Schritt 8) — dort

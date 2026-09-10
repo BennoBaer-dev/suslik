@@ -41,6 +41,8 @@ from core import sprache as _sprache                  # Sprach-Stufe 1: contextv
 from core import systemstat as _systemstat            # .341: Systemzahlen (Sammler, Ringpuffer, /health.system)
 from core import anwesenheit as _anw                  # .408: Anwesenheits-Marken (der eine Worker-Griff + Marge-Regel)
 from core import einspielen as _einspiel              # .416: Testbett-Einspielung (Praefix-Konvention + Injektor-Ablage)
+from core import messkarte as _ern_mk                 # .513: Messkarte + Mess-Bilanz (Etappe 1)
+from core import kamerakalib as _kk_ernte             # .514: DAS Sieb (Etappe 3, ein System)
 # Oeffentliche Projekt-Doku (GitHub). Lokale Arbeitsnotizen des Autors enthalten interne
 # IPs + Zugaenge und duerfen NICHT ueber das UI ausgeliefert werden -> System-Seite + /doc zeigen aufs Repo.
 DOCS_URL = "https://github.com/BennoBaer-dev/suslik"
@@ -728,17 +730,19 @@ def fehler_kern(text, n=220):
     return (zeilen[-1] if zeilen else "")[:n]
 
 
-def guete_latte_aus_cfg(cfg):
-    """Guete-Latte der Kalibrier-Funktion (.377, User-Entscheid 30.08.):
-    die zwei nutzer-kalibrierten Schwellen fuer die Bildguete-Masse aus
-    core/guete.py (empfinden = Bild-Eindruck, fiqa_t = Erkennbarkeit).
-    Defaults sind die am Feldmaterial geeichten Startwerte (Messtag 30.08.,
-    714 Bilder, User-Slider: E 0,200 / T 0,40 — analysen/todos_29_08.md
-    Punkt 9). Immer ein Dict: die Latte urteilt in core/benennung ohnehin
-    nur ueber Zeilen, die BEIDE Masse tragen (Alt-Bestand laeuft den
-    sharp-Weg)."""
-    return {"empfinden_min": cfg.get("guete_empfinden_min"),
-            "t_min": cfg.get("guete_t_min")}
+# .516 ALT-LATTEN-ABLOESUNG (User 10.09.2026): der Griff `guete_latte_aus_cfg`
+# ist ERSATZLOS ENTFERNT. Er lieferte die zwei GLOBALEN Config-Werte
+# `guete_empfinden_min`/`guete_t_min` (Werks-Quelle core.guete.STARTWERTE,
+# 0,200/0,400) an Gruppen-Flaeche, Sichtung, Reihung, Empfehlung, Pool-Zulauf
+# und Anker-Sieb. Der .514-Widerleger hat gemessen, was das anrichtete: von
+# 1385 Bildern, die Ernte und Anker-Sieb durchliessen, verwarf diese Latte
+# 1382 — die Doppel-Siebung war nicht aufgeloest, sondern eine Station weiter
+# gerueckt. Alle diese Stellen lesen jetzt das Register „Face catalog"
+# (core.kamerakalib.katalog_latten, je Kamera aufgeloest ueber sieb_latten) —
+# DIESELBE Latte, mit der die Ernte dasselbe Material schon beurteilt hat.
+# Es gibt bewusst KEINEN Ersatz-Griff hier: die Aufrufer nehmen die zentrale
+# Quelle direkt (_kk_ernte.katalog_latten), ein zweiter Name daneben waere
+# genau die K3-Falle.
 
 
 def norm_latte_aus_cfg(cfg):
@@ -847,8 +851,13 @@ def ernte_schwellen_aus_cfg(cfg):
 
 def load_config(path):
     from core.benennung import NORM_LATTE as _NL   # .308: EINE Quelle der Norm-Defaults
-    from core.guete import STARTWERTE as _guete_start  # .377: EINE Quelle der Guete-Startwerte
-    from core.guete import KATALOG_STARTWERTE as _kat_start  # .511: dito Katalog-Latte
+    from core.guete import KATALOG_STARTWERTE as _kat_start  # .511: EINE Quelle der Katalog-Latte
+    # .514/.515: ALLE Achsen des Registers als EIN Werks-Satz (die neuen
+    # Achsen holen ihre Boeden ueber diese eine Funktion, nie als Literal hier).
+    from core.kamerakalib import katalog_start as _kat_start_alle
+    from core.kamerakalib import erkennen_start as _erk_start_alle
+    _kat_start_v = _kat_start_alle()
+    _erk_start_v = _erk_start_alle()
     from core.refurteil import PRUEF_STARTWERTE as _pruef_start  # .511 C: dito Pruefer-Latte
     raw = open(path).read()
     raw = re.sub(r"\$\{(\w+)\}", lambda m: os.environ.get(m.group(1), ""), raw)
@@ -1121,10 +1130,17 @@ def load_config(path):
                          # sie holen. Wenn der Knopf wiederkommt, hier zurueck
                          # auf "ask" — der Rest der Mechanik bleibt bestehen.
                          ("start_catchup", "on"),
-                         # .377 Kalibrier-Funktion: Startwerte der Guete-Latte,
-                         # am Feldmaterial geeicht (Messtag 30.08., User-Slider).
-                         ("guete_empfinden_min", _guete_start["empfinden"]),
-                         ("guete_t_min", _guete_start["t"]),
+                         # .377 hatte HIER die zwei GLOBALEN Guete-Werte
+                         # `guete_empfinden_min`/`guete_t_min` (Werks-Quelle
+                         # core.guete.STARTWERTE, 0,200/0,400). Beide sind mit
+                         # .516 ERSATZLOS ENTFALLEN — ihre sechs Verbraucher
+                         # (Gruppen-Flaeche, Sichtung, Reihung, Empfehlung,
+                         # Pool-Zulauf, Anker-Sieb) lesen seither das
+                         # Katalog-Register darunter. Ein gespeicherter
+                         # Alt-Wert im Store schadet nicht: er hat keinen
+                         # Leser mehr und faellt beim naechsten Speichern aus
+                         # der Whitelist (dieselbe Mechanik wie bei jedem
+                         # anderen abgeloesten Schluessel).
                          # KATALOG-LATTE (Drei-Latten-Semantik, User 31.08.):
                          # die Latte fuer die Aufnahme in den Referenz-Katalog
                          # — global als Rueckfall, je Kamera ueberschreibbar
@@ -1140,6 +1156,41 @@ def load_config(path):
                          # _migration_katalog_0125 auf diese Werte.
                          ("katalog_guete_e_min", _kat_start["empfinden"]),
                          ("katalog_guete_t_min", _kat_start["t"]),
+                         # .514 (Etappe 3 „ein Sieb"): die zwei fehlenden
+                         # Achsen desselben Registers als GLOBALER Rueckfall.
+                         # Werkswerte sind die gemessenen Boeden
+                         # (core.guete.DET_BODEN / POSE_BODEN) — EINE Quelle
+                         # ueber core.kamerakalib.katalog_start(), kein
+                         # zweites Literal. Seit .514 siebt der LERNLAUF mit
+                         # diesen vier Werten (kamerakalib.sieb_ok) statt mit
+                         # seinem eigenen Achsen-Satz.
+                         ("katalog_guete_det_min", _kat_start_v["det"]),
+                         ("katalog_guete_pose_min", _kat_start_v["p"]),
+                         # .515 (Sensor 5, User-Go 10.09.2026): die FEATURE-NORM
+                         # als fuenfte Achse — global je Register, je Kamera
+                         # ueberschreibbar. .516 (User-Entscheid 10.09.):
+                         # im KATALOG-Register geht sie werksseitig AN; .517
+                         # setzt ihren Grundwert auf 20 (User nach Sichtung
+                         # am Norm-Schieber, 756 Ernte-Bilder, Median 20,7).
+                         # Die Zahl steht als EINE Quelle in
+                         # core.guete.norm_werk(); im ERKENNEN-Register
+                         # bleibt sie 0 = AUS, weil der Erkennungs-Weg die
+                         # Norm nicht misst und eine Latte ohne Messung
+                         # fail-closed waere. NICHT zu verwechseln mit
+                         # `katalog_norm_min` weiter oben — das ist die
+                         # Angebots-Linie des Lernvorrats (24,0) und bleibt
+                         # unangetastet.
+                         ("katalog_guete_norm_min", _kat_start_v["n"]),
+                         ("urteil_norm_min", _erk_start_v["n"]),
+                         # .515 (Sensor 6): die KANTEN-LATTE als sechste Achse.
+                         # Global je Register, je Kamera ueberschreibbar.
+                         # Der Erkennen-Rueckfall ist der SCHON VORHANDENE
+                         # Schluessel `urteil_kante` weiter unten — er bekommt
+                         # seinen Werkswert seit .515 aus derselben EINEN
+                         # Quelle (core.guete.KANTE_WERK ueber
+                         # kamerakalib.erkennen_start), statt als Literal 25
+                         # dazustehen.
+                         ("katalog_guete_kante_min", _kat_start_v["k"]),
                          # PRUEFER-LATTE (.511 Stufe C): die EIGENE Latte des
                          # Bestands-Pruefers — global als Rueckfall, je Kamera
                          # ueberschreibbar (live.guards.<kam>.pruef_t_min).
@@ -1165,7 +1216,7 @@ def load_config(path):
                          ("hunger_bremse_s", 60),
         ("selbstwache", True),
         ("urteil_marge", 0.05),
-        ("urteil_kante", 25),
+        ("urteil_kante", _erk_start_v["k"]),
                          # BLICKFENSTER (User-Entscheid 03.09. abends, geeicht
                          # an den vier Testbett-Clips): Anker + Unterstuetzung
                          # muessen in EINEM gleitenden Fenster liegen; 45 s ist
@@ -1455,7 +1506,12 @@ def load_config(path):
     # nach dem Klemmen, damit die WIRKSAMEN Werte reisen. Leeres Dict = Achse
     # aus (Vorrat aus -> norm_latte_aus_cfg None) und damit kein Ausschluss.
     os.environ["VERIFY_NORM_LATTE"] = json.dumps(norm_latte_aus_cfg(cfg) or {})
-    os.environ["VERIFY_GUETE_LATTE"] = json.dumps(guete_latte_aus_cfg(cfg) or {})
+    # .516: statt der zwei globalen Guete-Zahlen reist das GANZE Register
+    # („global" + "kameras"), damit der Pool je Kamera dieselbe Latte anlegt
+    # wie Ernte und Gruppen-Flaeche. Klein genug fuer die Env: sechs Zahlen je
+    # kalibrierter Kamera plus die globale Zeile.
+    os.environ["VERIFY_KAT_LATTEN"] = json.dumps(
+        _kk_ernte.katalog_latten(cfg) or {})
     # Recognition-Modell prozessweit setzen: jeder Subprozess-env ist dict(os.environ, ...) und
     # erbt VERIFY_MODELL damit automatisch (analyze/backtest/anlernen/abnahme -> gleiches Modell,
     # kein refcache-Mix). Umschaltbar ueber modell: in verifyd.yaml/Store (buffalo | adaface).
@@ -1995,15 +2051,23 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
             # erreichten den Worker seit .402/.404 nicht (stille Werkswerte).
             "--det-thresh", str(((((cfg.get("live") or {}).get("guards") or {}).get(camera) or {}).get("det_min"))
                                 or cfg["det_thresh"]),
-            # .400 Urteils-Kante: EIGENER Wert, Default 40 px — GEMESSEN
+            # .400 Urteils-Kante: EIGENER Wert — GEMESSEN
             # (Trennschaerfe-Test 01.09., 14 falsche/7 korrekte Feld-Faelle:
             # 70 px kippte ALLE korrekten mit [Tester-Kameras liefern auch
-            # richtig erkannte Stimmen nur mit 36-58 px], 40 px ist der am
-            # wenigsten schlechte Punkt: 8/14 falsche gekippt, 4/7 korrekte
-            # ueberleben). BEWUSST nicht an min_kante(70) gebunden:
-            # Anlern-Qualitaet und Urteils-Minimum sind verschiedene
-            # Groessen.
-            "--urteil-kante", str(cfg.get("urteil_kante", 25)),
+            # richtig erkannte Stimmen nur mit 36-58 px]). BEWUSST nicht an
+            # min_kante(70) gebunden: Anlern-Qualitaet und Urteils-Minimum
+            # sind verschiedene Groessen.
+            # .515 (Sensor 6): DIESELBE Zahl, andere QUELLE. Sie kommt jetzt
+            # aus dem Erkennen-Register DIESER Kamera (kamerakalib.erk_latten:
+            # Kamera -> global `urteil_kante` -> Werks-Wert
+            # core.guete.KANTE_WERK = 25) statt aus dem globalen Config-Wert
+            # allein. Eine unkalibrierte Kamera bekommt damit genau den Wert,
+            # der hier bis .514 stand — WERTGLEICH, nachgewiesen im Harnisch
+            # tools/harnisch_kante515.py. Neu ist nur, dass eine Kamera ihre
+            # eigene Kante setzen kann; dasselbe Muster wie bei det_min
+            # darueber (Asymmetrie-Befund 01.09.).
+            "--urteil-kante", str(_kk_ernte.erk_latten(
+                cfg, ((cfg.get("live") or {}).get("guards") or {}).get(camera))["k"]),
             # BLICKFENSTER (User 03.09. abends): analyze misst je Person das
             # beste Anker-Fenster (blick_n/blick_max), verdict prueft win_min.
             "--blick-fenster", str(cfg.get("blick_fenster_s", 45.0)),
@@ -3040,6 +3104,18 @@ def transcode_kommandos(src, ziel, hoehe, q_hw, q_cpu, dauer_s=None, q_vaapi=Non
 # Bedingungs-Struktur). Re-Export hier haelt den Deckungs-Vertrag der Whitelist
 # (Stufen-Quelle bleibt EINE, qs_ebenen.md).
 KETTE_STUFEN = _kette.KETTE_STUFEN
+
+# .515 (Sensor 5): die Spanne der NORM-Achse fuer die zwei neuen Whitelist-
+# Eintraege. Re-Export aus core.guete statt zweier Literale in der Tabelle —
+# dieselbe Regel, aus der KETTE_STUFEN oben steht (die Skala hat EINE Quelle,
+# und der Regler der Kalibrier-Seite liest sie aus derselben).
+from core.guete import NORM_BODEN as _NORM_LO          # 0 = die Achse ist aus
+from core.guete import NORM_MAX as _NORM_HI            # 35 = Skala des Lernvorrats
+# .515 (Sensor 6): dieselbe Regel fuer die Kanten-Skala. Die Untergrenze ist 0
+# (= die Achse ist aus), NICHT der Werkswert 25 — sonst waere die Achse nicht
+# abschaltbar. Die 0-400-Spanne fuehrt der Schluessel `urteil_kante` seit .400.
+from core.guete import KANTE_MAX as _KANTE_HI          # 400 px
+_KANTE_LO = 0
 
 
 # ------------------------------------------------------------------ Analyse-Plaetze (Vergabestelle)
@@ -5025,6 +5101,34 @@ class Service:
                 self._sync_url_gemeldet = True
                 self.log("frigate_sync: no Frigate URL configured — export skipped")
             return
+        # .525 (Prod-Pruefung 10.09., Befund B-1): TORWAECHTER gegen den
+        # BEKANNTEN Zustand von FRIGATES eigener Gesichtserkennung. Frigate
+        # verweigert JEDE Faces-Mutation mit HTTP 400 "Face recognition is not
+        # enabled", solange sein eigener Schalter aus ist (sync_refs.api_upload)
+        # — der Export lief trotzdem los und endete nach JEDER Uebernahme in
+        # einer `!! … FAILED (rc=1)`-Zeile. Das `!!`-Praefix ist im Haus fuer
+        # echte Stoerungen reserviert; nach einer GELUNGENEN Uebernahme liest es
+        # sich, als sei die Uebernahme fehlgeschlagen (Feldnutzer-Falle 3 des
+        # Berichts). [[registrieren-nach-schaltern]]: ein Register-Fluss bedient
+        # nur EINGESCHALTETE Erkennungswege — der Anlass wird also gar nicht
+        # erst erzeugt, statt den Fehler hinterher zu verschlucken.
+        # QUELLE ist der gemerkte Live-Stand aus Frigates /api/config
+        # (`_frigate_fr`, gefuellt in frigate_cameras, dieselbe Quelle wie der
+        # Startlog-Satz "frigate own face recognition: off" und der /heute-
+        # Hinweis). `bekannt` trennt "aus" von "nie gefragt": ohne Kenntnis
+        # laeuft der Export wie bisher und darf wie bisher laut scheitern.
+        if _frigate_fr.get("bekannt") and not _frigate_fr.get("an"):
+            if not getattr(self, "_sync_fr_aus_gemeldet", False):
+                self._sync_fr_aus_gemeldet = True
+                self.log("frigate_sync is on, but Frigate's own face recognition "
+                         "is off — Frigate refuses every face upload while it is; "
+                         "the export stays idle (nothing is lost, references stay "
+                         "here). Enable it in Frigate, or switch the sync off.")
+            return
+        # Zustandswechsel: nach einem AN darf ein spaeteres AUS wieder EINMAL
+        # gesagt werden (sonst gaelte die Meldung ein Prozessleben lang als
+        # erledigt).
+        self._sync_fr_aus_gemeldet = False
         def job():
             # .134 Lauf-Riegel: laeuft ein manueller Sync, kapert der Auto-Export
             # sonst dessen Status-/Ergebnis-Dateien — dann lieber diese Runde
@@ -6440,10 +6544,17 @@ class Service:
         # Wert hier wieder in die Liste und der Satz wieder in die Erklaerung.
         "start_catchup": (list, ["on", "off"], None,
                           "what happens to the person events that piled up while the service was down. on (default): work through them right away, one after another. off: mark them as skipped in the record — they keep their place and are never retried. In poll mode the periodic sweep keeps running in both, because it is the only thing that picks up new events there"),
-        "guete_empfinden_min": (float, 0.0, 1.0, "calibration: minimum picture-impression score (Efficient-FIQA) a face needs to count as good for learning. Set via the calibration page after a learning run; lower keeps more but darker/rougher pictures"),
-        "guete_t_min": (float, 0.0, 1.0, "calibration: minimum recognisability score (eDifFIQA-T) a face needs to count as good for learning. This one also sorts out half-covered faces; set via the calibration page"),
-        "katalog_guete_e_min": (float, 0.0, 1.0, "catalogue bar (picture impression): how good a face has to look before it may become a stored reference. Stricter than the bar above on purpose — that one decides what a learning run keeps, this one decides what ends up in the catalogue. Cameras can override it on their calibration page; pictures without quality scores are never rejected by it"),
-        "katalog_guete_t_min": (float, 0.0, 1.0, "catalogue bar (recognisability): how recognisable a face has to be before it may become a stored reference. Per-camera values on the calibration page win over this one; existing references are never removed by it"),
+        # .516: `guete_empfinden_min` / `guete_t_min` standen hier bis .515 als
+        # die zwei GLOBALEN Guete-Regler des Lernwegs. Sie sind ersatzlos
+        # entfallen — ihre Verbraucher lesen seither die Achsen des
+        # Katalog-Registers darunter, je Kamera aufgeloest.
+        "katalog_guete_e_min": (float, 0.0, 1.0, "catalogue bar (picture impression): how good a face has to look before a learning run keeps it and before it may become a stored reference. Since 0.1.0.516 this one value decides both — the separate global learning bar that used to sit above it is gone, so a picture is judged by the same number wherever it is looked at. Cameras can override it on their calibration page; pictures without quality scores are never rejected by it"),
+        "katalog_guete_t_min": (float, 0.0, 1.0, "catalogue bar (recognisability): how recognisable a face has to be before a learning run keeps it and before it may become a stored reference. Since 0.1.0.516 this one value decides both. Per-camera values on the calibration page win over this one; existing references are never removed by it"),
+        "katalog_guete_det_min": (float, 0.05, 0.95, "catalogue bar (detection): how sure the detector has to be that this is a face at all before a learning run keeps it. Same scale and same meaning as the detection bar of the recognition side — only the value differs. Per-camera values on the calibration page win over this one"),
+        "katalog_guete_pose_min": (float, 0.0, 2.0, "catalogue bar (head pose): how clearly a head has to be visible in the body pose before a learning run keeps the face. This is what keeps bins, leaves and car parts out of the learning material. Same measurement as the pose bar of the recognition side; per-camera values on the calibration page win over this one"),
+        "katalog_guete_norm_min": (float, _NORM_LO, _NORM_HI, "catalogue bar (feature norm): how strong a face has to be as recognition material before a learning run keeps it. The feature norm is the reference-free quality measure the learning stock already uses (a good frontal face sits around 24). FACTORY VALUE 20 since 0.1.0.517, set after looking at real harvested material (756 pictures, median 20.7); it is the one axis that separates false detections with a high detection score from real small faces. Set it to 0 to switch the axis off. It is a separate question from the stock line further down, which decides which pictures are OFFERED to you — this one decides what the run keeps at all. Per-camera values on the calibration page win over this one"),
+        "urteil_norm_min": (float, _NORM_LO, _NORM_HI, "recognition bar (feature norm): the same measure as the catalogue bar above, but for the recognition side. FACTORY VALUE 0 = switched off. IT DOES NOT SIEVE: the value is stored and resolved per camera, but the recognition path does not measure the feature norm at all — switching that on means loading a second copy of the recognition model in the analysis worker, which is a memory decision, not a slider. Because of that the recognition side has NO feature-norm slider on the calibration page since 0.1.0.517 (a slider that changes nothing is worse than none); the axis stays here as a prepared setting. The catalogue bar above is the one that really sieves"),
+        "katalog_guete_kante_min": (int, _KANTE_LO, _KANTE_HI, "catalogue bar (face size): the smallest face, in pixels of its shorter box side, a learning run keeps. FACTORY VALUE 25, the same number the recognition side has used as its vote floor since 0.1.0.400 (measured on field data: correct votes live at 30-49 px on overview cameras, the nonsense cases at 11-19 px; 70 would kill correct ones, 25 costs none). Raise it if your learning material is full of faces that are simply too small to learn anything from; 0 switches the axis off. Per-camera values on the calibration page win over this one"),
         "pruef_guete_t_min": (float, 0.0, 1.0, "catalogue check bar (recognisability): below this, the catalogue check flags a stored picture — together with a feature norm below the learning-stock floor it becomes a removal suggestion. It only looks at pictures you already have and never removes anything by itself; per-camera values on the calibration page win over this one, and pictures without a quality score are never flagged"),
         "hunger_bremse_s": (int, 0, 600, "background harvest jobs (pass check, learning run, calibration top-up) that wait longer than this many seconds for the worker get the next slot before the event stream continues; 0 disables the brake"),
         "selbstwache": (bool, None, None, "watchdog thread probes this service's own /health every 15 s; after 4 consecutive failures it exits hard so the container restart policy brings the service back (covers full web-server hangs that even the remote restart endpoint cannot reach)"),
@@ -6451,7 +6562,7 @@ class Service:
         "blick_fenster_s": (float, 0.0, 600.0, "judgement: width of the sliding view window in seconds — anchor and support votes must fall inside ONE window (calibrated on four test clips: 45 s is the smallest width that judges all four correctly); 0 = legacy fixed 3-second window"),
         "urteil_anker": (float, 0.0, 1.0, "judgement: anchor — at least one vote inside the view window must reach this cosine before the window counts; support votes only need win_thresh; 0 disables the anchor. The factory value moved from 0.50 down to 0.45 on 2026-09-07: all 173 field cases sitting in the 0.45-0.50 band were re-read case by case (a second opinion read 149 of them as the right person; the 24 it disputed were then looked at by hand and read as right as well). That is a review of 173 cases, not a proof — raise the value again if your cameras start putting the wrong name on an event. Installations that had 0.50 stored were lifted to 0.45 once, with an audit line; a value you set yourself is never touched"),
         "urteil_trennung": (float, 0.0, 1.0, "judgement: margin becomes source-aware — two candidates only compete when at least this share of their votes comes from the SAME face detections (share of the smaller set); separated vote sets are two real people and both get named; 0 = old behaviour (everything competes)"),
-        "urteil_kante": (int, 0, 400, "minimum face edge in pixels for a frame to count as a recognition vote; a floor against absurd votes, not a separator (measured on field data: correct votes live at 30-49 px on overview cameras, the nonsense cases at 11-19 px; 70 would kill correct ones, 25 costs none); 0 disables"),
+        "urteil_kante": (int, _KANTE_LO, _KANTE_HI, "minimum face edge in pixels for a frame to count as a recognition vote; a floor against absurd votes, not a separator (measured on field data: correct votes live at 30-49 px on overview cameras, the nonsense cases at 11-19 px; 70 would kill correct ones, 25 costs none); 0 disables. Since 0.1.0.515 this is the GLOBAL fallback of a per-camera slider: a camera that sets its own face-size bar on its calibration page wins over this value, and a camera that does not keeps using exactly this one"),
         # .408 Anwesenheits-Marken (Vorlauf der Anwesenheitsseite): drei Paare.
         "anwesenheit_tage": (int, 1, 365, "presence marks: how many days of quarter-hour presence history are kept (default 30). Every analysed event and every live appearance writes marks, the nightly job trims older days. History starts with the version that introduced it — there is no back-fill from older records"),
         "anwesenheit_tag_von": (int, -1, 23, "presence view: first hour of the day window shown in quarter-hour cells, e.g. 7. -1 (default) = automatic: derived once a day from where your marks actually fall (2nd to 98th percentile of the last 14 days, whole hours, 8 to 16 h wide; factory 07-20 while fewer than 20 marks exist). Both hours must be set for the override to apply"),
@@ -6608,12 +6719,16 @@ class Service:
         _fa_geaendert = bool(_fa_neu is not None
                              and any(self.cfg.get(k, _fehlt) != _fa_neu.get(k)
                                      for k in _fauth.SEKTIONS_SCHLUESSEL))
-        # .378: die zwei Kalibrier-Schwellen wirken ebenfalls LIVE — alle Leser
-        # rechnen guete_latte_aus_cfg(self.cfg) JE AUFRUF (Flaeche, Sichtung,
-        # Auswahl), die Ernte liest je Lauf; ein Neustart braeche zudem die
-        # sofortige Neubewertung des laufenden Bestands, die das Kalibrier-
-        # Uebernehmen direkt anschliesst (User 30.08.).
-        _live_keys = {"debug", "guete_empfinden_min", "guete_t_min"}
+        # .378: die Kalibrier-Schwellen wirken ebenfalls LIVE — alle Leser
+        # rechnen _kk_ernte.katalog_latten(self.cfg) JE AUFRUF (Flaeche,
+        # Sichtung, Auswahl), die Ernte liest je Lauf; ein Neustart braeche
+        # zudem die sofortige Neubewertung des laufenden Bestands, die das
+        # Kalibrier-Uebernehmen direkt anschliesst (User 30.08.).
+        # .516: die zwei GLOBALEN Guete-Werte sind entfallen; live wirken jetzt
+        # die globalen Register-Achsen des Katalog-Registers. Ihre Namen kommen
+        # aus DER einen Quelle (core.kamerakalib.ACHSE_GLOBAL) — eine
+        # abgeschriebene Liste hier waere die K3-Falle.
+        _live_keys = {"debug", *_kk_ernte.ACHSE_GLOBAL.values()}
         if not geaendert and not _fa_geaendert:
             # .378: kein Wert weicht von der laufenden Config ab — ein Neustart
             # haette nichts zu laden. Wichtig fuer das Kalibrier-Uebernehmen
@@ -8696,6 +8811,45 @@ class Service:
     #                                   (ersetzt die fixen 90 s Boot-Ruhe)
     _lernlauf_start_lock = threading.RLock()
     _bruecke_anlage_lock = threading.RLock()      # S2: Ordner-Anlage + Manifest + Alt-Raeumen + Takt-Proben atomar (.507)
+    # DAS THREAD-BUCH der Mini-Ernte-Laeufe (.522, Widerleger-Befunde R-4/R-3):
+    # bid -> {"t": Thread, "raeumen": bool, "gemeldet": ts}. Es beantwortet zwei
+    # Fragen, die die PLATTE nicht zuverlaessig beantworten kann:
+    #   (1) laeuft fuer DIESEN Ordner gerade eine Ernte? Bis .521 entschied das
+    #       allein die mtime von `laeuft.json` — und ein langer, pulsloser
+    #       Norm-Schritt liess sie altern, worauf der naechste Poll einen
+    #       ZWEITEN Ernte-Thread auf denselben Ordner startete (R-4).
+    #   (2) darf jemand den Ordner wegraeumen? Verwerfen/Uebernahme nehmen zwar
+    #       die Anlage-Sperre, aber die Ernte laeuft ausdruecklich AUSSERHALB
+    #       davon — ein rmtree konnte also unter einem lebenden Thread laufen
+    #       (R-3, Klickfolge Kachel -> Karte auf denselben `bid`).
+    # Prozess-lokal und damit genau so weit gueltig wie die Threads, die es
+    # fuehrt (ein Neustart raeumt beides). IMMER unter `_bruecke_anlage_lock`
+    # anfassen.
+    # .524 (Fix 11): der Eintrag traegt zusaetzlich die WARTESCHLANGE der noch
+    # nicht begonnenen Ereignisse dieses Laufs (`offen`/`q_lock`) und sein
+    # Stopp-Signal (`stop`). Beides steht hier statt nur im Ernte-Thread, weil
+    # der Abbrechen-Knopf von AUSSEN (POST-Handler) genau zwei Dinge tun
+    # koennen muss: die noch nicht begonnenen Ereignisse ziehen und die Zahl
+    # dazu SOFORT nennen. Angefasst wird `offen` ausschliesslich unter
+    # `q_lock` — die Abholer des Laufs nehmen daraus.
+    _bruecke_laeufe = {}
+    # DIE WARTESCHLANGE der interaktiven Klick-Laeufe (.524, Fix 12 —
+    # Betreiber-Entscheid 10.09.2026). Genau EIN Pass-Check rechnet; jeder
+    # weitere Klick wird ANGENOMMEN und reiht sich hier ein (FIFO), statt
+    # abgewiesen zu werden. Begruendung des Zuschnitts: zwei gleichzeitige
+    # Checks machen die SUMME nicht schneller — sie teilen sich dieselben
+    # Analyse-Plaetze, denselben Worker und dasselbe Clip-Tor; sie machen nur
+    # jeden einzelnen langsamer und die Anzeige unehrlich.
+    # Eintrag = der fertig vorbereitete Lauf (s. `_bruecke_lauf_starten`).
+    # WICHTIG: ein wartender Eintrag hat KEINEN Thread und belegt deshalb auch
+    # keinen Analyse-Platz und reserviert keinen — er kostet nur diesen
+    # Listenplatz. Betroffen ist ausschliesslich die interaktive Klasse:
+    # Live-Wache, Ereignis-Analyse, Lernlauf und Kalibrier-Auffueller laufen
+    # unveraendert weiter.
+    # Prozess-lokal wie das Thread-Buch: ein Dienst-Neustart verwirft sie, und
+    # `bruecke_waisen_start` sagt es dann LAUT (Auflage des Zuschnitts).
+    # IMMER unter `_bruecke_anlage_lock` anfassen.
+    _bruecke_warteschlange = []
     # B4 Hunger-Bremse (User-Go 01.09., Vorschlag 31.08.): wartet ein
     # Hintergrund-Job (Pass-/Lernlauf-/Fueller-Ernte) laenger als
     # hunger_bremse_s auf den Worker, laesst der Event-Strom VOR dem
@@ -9683,7 +9837,13 @@ class Service:
                 os.environ.get("SUSLIK_VERSION", "dev"), self.log,
                 lambda **u: _ll.lauf_fortschreiben(dd, **u),
                 norm_latte=norm_latte_aus_cfg(self.cfg),
-                guete_latte=guete_latte_aus_cfg(self.cfg))
+                # .514 (Etappe 3 B3): das Katalog-Register — dieselbe Latte,
+                # mit der die Ernte dieses Material schon beurteilt hat, je
+                # Kamera aufgeloest. .516: es ist die EINZIGE Guete-Quelle
+                # dieser Phase; die globale Zweitlatte ist entfernt, Zeilen
+                # ohne jede Guete-Messung laufen weiter den Alt-Weg
+                # (core.anker._guete_besteht, Altlauf-Kompatibilitaet).
+                kat_latten=_kk_ernte.katalog_latten(self.cfg))
             if erg is not None:
                 # Crash-Loop-Wache (#20): erfolgreicher Abschluss setzt den
                 # Boot-Resume-Zaehler zurueck — nur ununterbrochene Fehlserien
@@ -9759,13 +9919,34 @@ class Service:
         return [eid]          # Akte da, aber keinem Durchgang zugeordnet: eigener Pass
 
     def bruecke_vorrat(self, person, eid, ganzer_pass=False):
-        """Pass-Check ueber die Vorrats-Kette (.308, User 21.08.: 'Check this pass'
-        lieferte aus 13 Events/5 Kameras EIN Bild — die alte Bruecke misst je
-        Event nur den gespeicherten Crop an der Pixel-Latte). Geerntet wird wie im
-        Lernlauf (alle Frames, Worker-Job je Event, Norm inklusive), danach Konsens
-        + Linie (core.vorrat.angebote_bewerten) — Ergebnis in einem Bruecken-Laufordner
-        state/lernlauf/B<hash>/ (gleiche Ablage wie Lernlaeufe: Bild-Route,
-        vorrat_aufnehmen und /aehnliche kennen ihn damit automatisch).
+        """Pass-Check als MINI-ERNTE-LAUF (.521, User-Go 10.09.2026:
+        „Pass-Knopf = Mini-Erntelauf").
+
+        Der Knopf faehrt fuer DIESEN Durchgang einen kleinen Lernlauf, Schritt
+        fuer Schritt derselbe wie der grosse: Clips holen, alle Frames ernten,
+        mit dem Register „Face catalog" DIESER Kamera sieben (fuenf leichte
+        Achsen), die Feature-Norm gebuendelt nachmessen (sechste Achse) — und
+        erst DANACH auf die geklickte Person filtern
+        (core/passernte.py). Ergebnis in einem Lauf-Ordner
+        state/lernlauf/B<hash>/ (gleiche Ablage wie Lernlaeufe: die Bild-Route
+        kennt ihn damit automatisch).
+
+        WAS DAMIT ERSETZT IST — und zwar an diesem Knopf VOLLSTAENDIG, nicht
+        danebengestellt (User-Auflage): die beiden Alt-Wege. Der eine mass je
+        Ereignis den GESPEICHERTEN Event-Crop an der Pixel-Latte (70 px/350
+        Laplace, `anlernen.lernbruecke_pruefen`) und lieferte aus 13
+        Ereignissen ueber 5 Kameras EIN Bild; der andere (.308) erntete zwar,
+        urteilte danach aber mit Konsens + Vorrats-LINIE
+        (`core.vorrat.angebote_bewerten`) — also mit einer zweiten
+        Qualitaets-Vorstellung neben dem Register. Beides waren Latten neben
+        dem einen Sieb; seit .521 gilt am Knopf dasselbe System wie im
+        Lernlauf (Sechs-Achsen-Verfassung).
+
+        DER LAUF IST FLUECHTIG: er speist keinen Lernvorrat, bildet keine
+        Anker und schreibt kein Angebot. Was der Mensch anhakt, geht ueber den
+        bestehenden Referenz-Weg (`anlernen.passernte_aufnehmen`, Muster
+        `vorrat_aufnehmen`); danach faellt der Ordner. Das TTL-Auffangnetz ist
+        der Nachtjob (`_bruecke_alt_raeumen`, `lernlauf_retention_d`).
 
         .507 B2 — ZUSCHNITT (E-P2/E-B3, Betreiber-Entscheid 05.09.): der Klick meint
         GENAU DAS EINE Ereignis, das der Nutzer sieht, fuer genau diese Person.
@@ -9789,6 +9970,7 @@ class Service:
            | ("fehler", text)."""
         import hashlib
         from core import ernte as _ern
+        from core import passernte as _pe
         from core import wanduhr as _wu
         dd = self.cfg["data_dir"]
         eid = str(eid or "").strip()
@@ -9811,6 +9993,18 @@ class Service:
             # fuer die Durchgangs-Kette unsichtbar — geerntet wuerde, bewertet
             # nichts, und die Antwort hiesse frueher "nothing to take".
             return "fehler", "no record for this event yet — was it analysed?"
+        # DECKEL des Durchgangs (.507 B3, seit .521 hier statt im
+        # abgeloesten Alt-Zweig): ein Tagesdurchgang eines betriebsamen
+        # Geländes kann hunderte Ereignisse tragen, und der Klick soll nicht
+        # zur halben Nacht Ernte werden. Die Zahl ist NICHT neu — sie stand
+        # bis .520 als `[:200]` am Alt-Weg und wandert mit ihm.
+        # Das geklickte Ereignis bleibt IMMER dabei, auch wenn es hinter dem
+        # Deckel laege: sonst faehrt der Klick einen Lauf, in dem sein eigenes
+        # Bild gar nicht vorkommt.
+        if len(pass_eids) > self.BRUECKE_PASS_MAX:
+            pass_eids = pass_eids[:self.BRUECKE_PASS_MAX]
+            if eid not in pass_eids:
+                pass_eids = pass_eids + [eid]
         eids = pass_eids if ganzer_pass else [eid]
         # S2 (01.09.): Anlage+Auswertung atomar — Doppel-Anlage derselben Person
         # (zwei Klicks) und rmtree-Kollisionen (siehe _bruecke_alt_raeumen,
@@ -9837,6 +10031,21 @@ class Service:
                 except OSError:
                     pass
                 return "fehler", txt
+            # DIE WARTESCHLANGE ZUERST (.524, Fix 12): steht dieser Lauf schon
+            # angenommen und wartet, ist DAS die ganze Wahrheit — er hat keinen
+            # Thread, keinen Platz und keine Datei, die sich von selbst bewegt.
+            # Die Frage steht bewusst VOR dem Frische-Fenster: die POSITION
+            # aendert sich, waehrend er wartet, und eine Datei von vor drei
+            # Minuten naennte eine Zahl, die nicht mehr stimmt. Der Puls wird
+            # deshalb bei jedem Poll frisch geschrieben (er kostet einen
+            # kleinen Schrieb je 2,5 s, wie bei jedem anderen Wartegrund auch).
+            _wpos, _weintrag = self._bruecke_warte_stand(bid)
+            if _weintrag is not None:
+                self._bruecke_puls(_weintrag["laeuft"], 0,
+                                   len(_weintrag["fehlend"]), "warteschlange",
+                                   dict(_weintrag["kopf"] or {}, pos=_wpos))
+                return "laeuft", self._bruecke_fortschritt(
+                    _weintrag["laeuft"], self._plaetze, bid)
             # Frische-Fenster: laeuft.json wird bei jedem Schritt neu geschrieben
             # (auch WAEHREND des Wartens auf einen Platz, im Sekundentakt) — still
             # ist die Datei nur, solange ein Worker-Job laeuft, und der ist durch
@@ -9856,16 +10065,65 @@ class Service:
                     # der Bestands-QS): die Ernte schreibt i/n/zustand in
                     # laeuft.json — der Klick-Handler reicht es durch, das Blatt
                     # zeigt einen kleinen Balken und gibt nicht per Zaehler auf.
-                    return "laeuft", self._bruecke_fortschritt(laeuft, self._plaetze)
+                    return "laeuft", self._bruecke_fortschritt(
+                        laeuft, self._plaetze, bid)
+            # DER DOPPELSTART-RIEGEL (.522, Widerleger-Befund R-4, HOCH).
+            # Hier ist die Datei entweder weg oder ueberaltert — bis .521 hiess
+            # das „der Lauf ist tot, ich fange neu an". Der gebuendelte
+            # Norm-Schritt kann aber legal LANGE stumm sein (Slot-Warten je
+            # Runde plus Job-Frist), und dann startete der naechste Poll einen
+            # ZWEITEN Ernte-Thread auf denselben Ordner: zwei Norm-Jobs, zwei
+            # Identitaets-Jobs, zwei `interaktiv`-Plaetze, doppelte Buchungen
+            # in `norm_fertig.jsonl` und ein Balken, der auf „0 of 0" springt.
+            # Der Puls ist mit .522 gestopft (Herzschlag in `_bruecke_ernte`);
+            # DIESER Riegel ist das Netz darunter — er haelt auch dann, wenn
+            # der Puls doch einmal ausbleibt (Platte voll, Datei geloescht,
+            # Uhr springt), weil er den lebenden THREAD fragt und nicht eine
+            # Datei-mtime.
+            _lauf = self._bruecke_lauf_thread(bid)
+            if _lauf is not None:
+                # Gedrosselt melden: der Browser pollt alle 2,5 s, eine Zeile je
+                # Poll waere Log-Flut — aber ganz still bleibt es nie, denn ein
+                # ueberalterter Puls bei lebendem Lauf ist ein echter Befund.
+                if time.time() - float(_lauf.get("gemeldet") or 0.0) > 60.0:
+                    _lauf["gemeldet"] = time.time()
+                    self.log(f"PASS CHECK ({bid}): the run is still going, but "
+                             f"its progress file is older than {frische_s:.0f}s "
+                             f"— NOT starting a second harvest for this folder")
+                return "laeuft", self._bruecke_fortschritt(laeuft, self._plaetze,
+                                                           bid)
             geerntet, _summe = _ern.fertig_lesen(bdir) if os.path.isdir(bdir) else (set(), {})
             fehlend = [e for e in eids if e not in geerntet]
-            if not fehlend and os.path.isfile(os.path.join(bdir, "vorrat.jsonl")):
-                return "fertig", self._bruecke_angebote(
+            if not fehlend and os.path.isfile(_pe.auswahl_pfad(bdir)):
+                # FERTIG-MARKE ist seit .521 die Auswahl-Datei des
+                # Identitaets-Schritts (bis .520: die `vorrat.jsonl` der
+                # Angebots-Bewertung). Sie wird atomar getauscht — eine halb
+                # geschriebene Auswahl kann hier also nicht als fertiger Lauf
+                # durchgehen.
+                return "fertig", self._passernte_auswahl(
                     bdir, bid, person, None if ganzer_pass else {eid})
             # Start (oder Nachernte der fehlenden Events): Regime einfrieren,
             # Event-Menge im Manifest fuehren, Hintergrund-Ernte
             os.makedirs(bdir, exist_ok=True)
             schwellen = ernte_schwellen_aus_cfg(self.cfg)
+            # .521 KEINE VORRATS-LINIE auf diesem Weg. Der Mini-Lauf ist
+            # fluechtig: sein Ergebnis wird angesehen, angehakt und
+            # weggeraeumt — es wird nie ein Katalog-Angebot. Die Vorrats-Achsen
+            # sind deshalb ausdruecklich NICHT Teil seines Regimes; die Ernte
+            # legt dann auch keine Rand-Ausschnitte an (core.ernte: `v_aktiv`
+            # braucht beides, den vollen Vorrats-Satz UND `nachmess`), und der
+            # Norm-Schritt entscheidet nur die Sieb-Achse. Gesagt wird es
+            # trotzdem — eine Aussetzung wird nie verschwiegen, und die
+            # Ernte-Zeile `v_aus` bliebe hier stumm, weil die Keys gar nicht
+            # erst da sind.
+            _v_weg = [k for k in _ern.VORRAT_SCHLUESSEL if k in schwellen]
+            for k in _v_weg:
+                schwellen.pop(k, None)
+            if _v_weg:
+                self.log(f"PASS CHECK ({bid}): the learning-stock line is not "
+                         f"decided on this path — this run is transient and "
+                         f"never feeds the catalogue offers; the catalogue "
+                         f"register alone judges quality")
             if _ern.schwellen_pruefen(schwellen):
                 return "fehler", "harvest thresholds missing in config"
             _ern.manifest_schreiben(bdir, {"schema": 2, "bruecke": True, "person": person,
@@ -9873,6 +10131,17 @@ class Service:
                                            "modell": self.cfg.get("modell"),
                                            "fps_sample": self.cfg.get("fps_sample"),
                                            "schwellen": schwellen, "eids": list(pass_eids),
+                                           # .521: WELCHE Achsen dieser Lauf
+                                           # nach der Ernte misst (Quelle
+                                           # core.kamerakalib.NACHMESS_ACHSEN,
+                                           # nie ein Literal) — dasselbe Feld
+                                           # wie im Lernlauf-Manifest, damit
+                                           # ein Ordner selbst sagt, ob ein
+                                           # gebuendelter Schritt zu ihm
+                                           # gehoert.
+                                           "profil_nachmess": list(
+                                               _kk_ernte.NACHMESS_ACHSEN),
+                                           "vorrat": False,
                                            "angelegt": round(time.time(), 1)})
             # E-P3: Start UND geschaetzte Dauer stehen ab dem ersten Puls in
             # laeuft.json. Die Rate ist an Maschine UND Version gebunden
@@ -9920,12 +10189,33 @@ class Service:
                     kopf["dauer_s"] = round(kopf["dauer_s"] + float(_kalt), 1)
                 else:
                     kopf["warm_up"] = True
-            self._bruecke_puls(laeuft, 0, len(fehlend), "startet", kopf)
-            threading.Thread(target=self._bruecke_ernte,
-                             args=(bdir, bid, fehlend, list(pass_eids), schwellen,
-                                   kopf, k_abholer),
-                             daemon=True, name="bruecke-ernte").start()
-            return "laeuft", self._bruecke_fortschritt(laeuft, self._plaetze)
+            # .524 Fix 12: EINREIHEN, DANN VERTEILEN. Jeder angenommene Klick
+            # geht durch dieselbe Schlange — auch der, der sofort faehrt. So
+            # entsteht die FIFO-Reihenfolge von selbst, statt aus einem
+            # if/else, das beim naechsten Umbau auseinanderlaeuft; und es gibt
+            # weiterhin genau EINE Startstelle (`_bruecke_lauf_starten`).
+            _eintrag = {"bid": bid, "bdir": bdir, "laeuft": laeuft,
+                        "fehlend": list(fehlend), "pass_eids": list(pass_eids),
+                        "schwellen": schwellen, "kopf": kopf,
+                        "k_abholer": k_abholer, "person": person,
+                        "seit": round(time.time(), 1)}
+            self._bruecke_warteschlange.append(_eintrag)
+            self._bruecke_naechsten_starten()
+            _wpos, _weintrag = self._bruecke_warte_stand(bid)
+            if _weintrag is not None:
+                # Es rechnet schon einer: angenommen und eingereiht — NICHT
+                # abgewiesen. Ein wartender Eintrag haelt keinen Platz und
+                # meldet sich bei der Vergabestelle auch nicht an.
+                self._bruecke_puls(laeuft, 0, len(fehlend), "warteschlange",
+                                   dict(kopf, pos=_wpos))
+                self.log(f"PASS CHECK ({bid}, {person}): accepted and queued "
+                         f"— another picture check is running; this one is "
+                         f"number {_wpos} in the queue "
+                         f"({len(self._bruecke_warteschlange)} waiting). Two "
+                         f"checks at once would not make the sum faster, they "
+                         f"share the same analysis slots and the same worker")
+            return "laeuft", self._bruecke_fortschritt(laeuft, self._plaetze,
+                                                       bid)
 
     # E-P5 (.507 B2): die EINE Aufzaehlung der Bruecken-Gruende — WARUM gerade
     # nichts vorangeht — und der grobe Zustand, den sie bedeuten. Der Zustand
@@ -9935,9 +10225,15 @@ class Service:
     # wartete, und der Wartetext nannte pauschal einen fremden 'background job'
     # — auch dann, wenn in Wahrheit alle Analyseplaetze belegt waren
     # (Auftragszettel §F: der Satz war irrefuehrend).
+    # .524 (Fix 12): `warteschlange` ist der SECHSTE Grund — angenommen, aber
+    # noch nicht begonnen, weil ein anderer Pass-Check rechnet. Der grobe
+    # Zustand bleibt der alte Dreiklang (`wartet`), damit Blatt-JS,
+    # tools/tick_check.py und der Gate-Vertrag ihn unveraendert lesen.
+    # Er ist ausdruecklich NICHT `kein_platz`: dort sind die Plaetze belegt,
+    # hier ist gar keiner angefordert.
     BRUECKE_GRUENDE = {"startet": "wartet", "bg_lock": "wartet",
-                       "kein_platz": "wartet", "erntet": "erntet",
-                       "bewertet": "bewertet"}
+                       "kein_platz": "wartet", "warteschlange": "wartet",
+                       "erntet": "erntet", "bewertet": "bewertet"}
     # Englische Woerter der Platz-Klassen fuer den Wartetext. DECKUNGS-VERTRAG
     # (qs_ebenen.md): jede Klasse aus Analyseplaetze.ARTEN steht hier — die
     # Probe s11_f2 sichert das zu, eine neue Klasse faellt dort auf. Eine
@@ -9961,6 +10257,11 @@ class Service:
     # Lage: wer ihn liest, soll wissen, was zu tun ist.
     BRUECKE_WORKER_AUS = ("the picture check needs worker mode "
                           "(worker: true in the config)")
+    # Deckel des DURCHGANGS am Pass-Knopf (.507 B3, seit .521 als benannte
+    # Quelle statt als `[:200]`-Literal am abgeloesten Alt-Zweig): so viele
+    # Ereignisse eines Durchgangs erntet ein Klick hoechstens. Das geklickte
+    # Ereignis ist immer dabei (s. `bruecke_vorrat`).
+    BRUECKE_PASS_MAX = 200
     # Deckel der Takt-Proben-Datei (E-P3): so viele (clip_s, wall_s)-Paare
     # bleiben stehen, aelteste fallen. 50 ist reichlich fuer einen Fit ueber
     # ERNTE_RATE_MIN_PROBEN und haelt die Datei unter ein paar KB.
@@ -9987,11 +10288,18 @@ class Service:
             pass
 
     @staticmethod
-    def _bruecke_fortschritt(laeuft, plaetze=None):
+    def _bruecke_fortschritt(laeuft, plaetze=None, lauf_id=None):
         """-> {"msg", "i", "n", "zustand", "grund", "fortschritt", "start_ts",
-        "dauer_s" | "dauer_unbekannt", "warm_up"?, "plaetze"?} fuer den Klick-Handler
+        "dauer_s" | "dauer_unbekannt", "warm_up"?, "plaetze"?, "pos"?,
+        "lauf_id"?} fuer den Klick-Handler
         (laden=True). Texte englisch wie die uebrigen Bruecken-Meldungen dieses
         Blatts (Overlay-Texte: ME2-Uebersetzungsstrang).
+
+        .524 (Fix 11): `lauf_id` reist MIT, solange der Lauf laeuft — bis .523
+        bekam das Blatt den Ordner-Namen erst mit dem FERTIGEN Ergebnis, und
+        genau deshalb gab es Abbrechen nur im Overlay. Der Knopf am Balken
+        braucht ihn vorher. Er ist optional, damit Gate und Probe die Funktion
+        weiter mit ein oder zwei Argumenten an der Klasse rufen koennen.
 
         .345 (User 25.08., Konsens: 1 Gesamt- + 3 Unterbalken): `fortschritt`
         kommt render-fertig aus ernte.fortschritt_rechnen — der EINEN Quelle
@@ -10031,7 +10339,11 @@ class Service:
         puls = _ern.puls_lesen(os.path.dirname(laeuft))
         aus = {"i": i, "n": n, "zustand": z, "grund": grund,
                "fortschritt": _ern.fortschritt_rechnen(i, n, puls)}
-        for k in ("start_ts", "dauer_s", "dauer_unbekannt", "warm_up"):
+        if lauf_id:
+            aus["lauf_id"] = str(lauf_id)
+        # `pos` (.524): der Platz in der Warteschlange, 1-basiert. Er steht in
+        # der Datei, weil ihn der Schreiber kennt und der Leser nicht.
+        for k in ("start_ts", "dauer_s", "dauer_unbekannt", "warm_up", "pos"):
             if d.get(k) is not None:
                 aus[k] = d[k]
         lage = ""
@@ -10056,6 +10368,17 @@ class Service:
         elif grund == "kein_platz":
             msg = (f"waiting for a free analysis slot{lage} "
                    f"({i} of {n} event(s) done) \u2026")
+        elif grund == "warteschlange":
+            # .524 Fix 12: der EHRLICHE Satz. \u201ewaiting for a free analysis
+            # slot" waere hier falsch \u2014 es wartet kein Platz-Wunsch, dieser
+            # Lauf hat noch gar keinen gestellt; er wartet auf den Check, der
+            # gerade rechnet. Die Position steht nur dabei, wenn es wirklich
+            # eine Reihe gibt (bei 1 waere \u201enumber 1 in the queue" nur Laerm).
+            _pos = int(d.get("pos") or 1)
+            msg = ("queued \u2014 waiting for the picture check that is "
+                   "running now"
+                   + (f" (number {_pos} in the queue)" if _pos > 1 else "")
+                   + f"; {n} event(s) to prepare \u2026")
         elif grund == "bewertet":
             msg = f"rating the pictures ({n} event(s) harvested) \u2026"
         else:
@@ -10070,41 +10393,334 @@ class Service:
         aus["msg"] = msg
         return aus
 
-    def _bruecke_angebote(self, bdir, bid, person, nur_eids=None):
-        """Angebote + Grenzfaelle EINER Person aus der vorrat.jsonl eines
-        Bruecken-Laufs, in der Item-Form des Overlays.
+    def _passernte_auswahl(self, bdir, bid, person, nur_eids=None):
+        """Empfehlungen + Grenzfaelle EINER Person aus der `auswahl.jsonl` des
+        Mini-Ernte-Laufs, in der Item-Form des Overlays (.521).
+
+        Der Nachfolger von `_bruecke_angebote`: dieselbe Aufgabe, aber die
+        AUSWAHL selbst faellt nicht mehr hier. Sie steht fertig in der Datei,
+        die der Identitaets-Schritt geschrieben hat (core/passernte.py) — mit
+        Stufe, Naehe und Beiwert je Bild. Diese Funktion liest, schneidet zu
+        und baut die Anzeige-URL; ein zweites Urteil an dieser Stelle waere
+        genau die Doppelbewertung, die der Zug abschafft (bis .520 stand hier
+        eine eigene `sim_min`-Zahl neben der von `bild_stufe`).
 
         `nur_eids` (.507 B2, E-P2): der ZUSCHNITT auf das geklickte Ereignis.
         Ohne diesen Filter waere er Schein — der Ordner traegt den ganzen
         Durchgang, und der Nutzer saehe wieder die Bilder der Nachbar-Ereignisse
         (Risiko 1 der Zuschnitt-Inventur). None = ganzer Durchgang."""
-        zeilen = []
-        with open(os.path.join(bdir, "vorrat.jsonl"), encoding="utf-8") as f:
-            for l in f:
-                try:
-                    zeilen.append(json.loads(l))
-                except Exception:
-                    pass
-        sim_min = 0.45   # dieselbe 'sicher'-Grenze wie bild_stufe/angebote_bewerten
+        from core import passernte as _pe
+        zeilen = _pe.auswahl_lesen(bdir)
 
         def _item(z):
-            basis = os.path.basename(str(z.get("datei_v") or ""))
-            return {"eid": z["eid"], "datei": basis, "lauf_id": bid,
-                    "herkunft": "vorrat", "sim": z.get("sim"), "norm": z.get("norm"),
+            basis = os.path.basename(str(z.get("datei") or ""))
+            # Bild-Route: `/lernlauf/crop/<lauf_id>/<datei>` liefert aus
+            # crops/ (und faellt auf vorrat/ zurueck) — der Ordner IST ein
+            # Lauf-Ordner, es braucht also keine neue Route und kein zweites
+            # Containment-Muster.
+            return {"eid": z.get("eid"), "datei": basis, "lauf_id": bid,
+                    "herkunft": "passernte", "sim": z.get("sim"),
+                    "norm": z.get("norm"), "kante": z.get("kante"),
                     "richtung": z.get("richtung"),
-                    "url": f"/lernlauf/vorrat/{bid}/{urllib.parse.quote(basis)}"}
+                    "url": f"/lernlauf/crop/{bid}/{urllib.parse.quote(basis)}"}
+
         def _dabei(z):
             return nur_eids is None or str(z.get("eid")) in nur_eids
-        zeilen = [z for z in zeilen if _dabei(z)]
+        zeilen = [z for z in zeilen
+                  if _dabei(z) and z.get("person") == person]
         nehmen = [_item(z) for z in zeilen
-                  if z.get("angebot") and z.get("person") == person]
-        # Grenzfaelle = Identitaet sicher, Norm unter der Linie aber ueber der
-        # Sammel-Schwelle (die 'quality only fair'-Stufe der alten Bruecke)
+                  if z.get("stufe") == _pe.STUFE_EMPFOHLEN]
         grenz = [_item(z) for z in zeilen
-                 if not z.get("angebot") and z.get("grund") == "unter_linie"
-                 and z.get("person") == person and (z.get("sim") or 0) >= sim_min
-                 and (z.get("fremd") is None or z["fremd"] < z["sim"])]
-        return {"nehmen": nehmen, "grenz": grenz, "v_gesamt": len(zeilen)}
+                 if z.get("stufe") == _pe.STUFE_GRENZ]
+        # D1 (.30x, hier weitergefuehrt): der Grund-Satz braucht die Diagnose
+        # des Laufs, und die entstand im Hintergrund-Thread — sie kommt
+        # deshalb aus der Datei, nicht aus einem Prozess-Zustand.
+        return {"nehmen": nehmen, "grenz": grenz, "v_gesamt": len(zeilen),
+                "diagnose": (_pe.diagnose_lesen(bdir) or {}).get("diagnose") or {},
+                "lauf_id": bid}
+
+    def _bruecke_lauf_thread(self, bid):
+        """Der Buch-Eintrag des GERADE laufenden Mini-Ernte-Laufs zu `bid`
+        -> dict oder None (.522). Ein Eintrag, dessen Thread nicht mehr lebt,
+        faellt dabei aus dem Buch — so raeumt sich das Buch selbst auf, auch
+        wenn ein Thread einmal ohne sein `finally` endet.
+
+        NUR unter `_bruecke_anlage_lock` rufen: die Antwort entscheidet
+        darueber, ob ein zweiter Thread startet bzw. ob ein rmtree laeuft, und
+        beides passiert unter genau dieser Sperre."""
+        d = self._bruecke_laeufe.get(bid)
+        if d is None:
+            return None
+        if not d["t"].is_alive():
+            self._bruecke_laeufe.pop(bid, None)
+            return None
+        return d
+
+    def _bruecke_aktiv(self):
+        """Der `bid` des GERADE rechnenden Mini-Ernte-Laufs, oder None (.524).
+
+        Die Ein-Lauf-Regel von Fix 12 haengt an genau dieser Frage. Tote
+        Eintraege fallen dabei aus dem Buch (dieselbe Selbstreinigung wie in
+        `_bruecke_lauf_thread`) — sonst koennte ein Thread, der ohne sein
+        `finally` endete, die Schlange fuer immer blockieren.
+        NUR unter `_bruecke_anlage_lock` rufen."""
+        for bid in list(self._bruecke_laeufe):
+            if self._bruecke_lauf_thread(bid) is not None:
+                return bid
+        return None
+
+    def _bruecke_warte_stand(self, bid):
+        """-> (position_1basiert, eintrag) fuer einen WARTENDEN Klick-Lauf,
+        sonst (None, None). NUR unter `_bruecke_anlage_lock` rufen."""
+        for i, e in enumerate(self._bruecke_warteschlange):
+            if e.get("bid") == bid:
+                return i + 1, e
+        return None, None
+
+    @staticmethod
+    def _bruecke_lauf_eintrag(fehlend):
+        """Der Buch-Eintrag EINES Klick-Laufs — die eine Bauform (.524).
+
+        Er traegt drei Dinge, die von aussen erreichbar sein muessen: den
+        Thread (Doppelstart-Riegel .522), die Warteschlange der noch nicht
+        begonnenen Ereignisse samt ihrer Sperre (Abbrechen zieht daraus) und
+        das Stopp-Signal. `raeumen` bleibt die Vormerkung aus .522."""
+        return {"t": None, "raeumen": False, "gemeldet": 0.0,
+                "stop": threading.Event(),
+                "offen": collections.deque(fehlend),
+                "q_lock": threading.Lock(),
+                "n": len(fehlend)}
+
+    def _bruecke_lauf_starten(self, e):
+        """Einen vorbereiteten Klick-Lauf WIRKLICH starten: Puls, Buch, Thread.
+
+        DIE EINE STARTSTELLE (.524, Fix 12) — der erste Klick und das
+        Nachruecken aus der Warteschlange laufen beide hier durch. Zwei
+        Startwege waeren zwei Gelegenheiten, den Doppelstart-Riegel oder den
+        Buch-Eintrag zu vergessen.
+
+        Der erste Puls steht VOR dem Start: danach schreibt der Thread selbst,
+        und ein Puls von hier koennte seinen ersten ueberholen.
+        NUR unter `_bruecke_anlage_lock` rufen (.522: der Eintrag muss im Buch
+        stehen, BEVOR der Thread laeuft — sonst gibt es ein Fenster, in dem der
+        naechste Klick ihn nicht sieht)."""
+        self._bruecke_puls(e["laeuft"], 0, len(e["fehlend"]), "startet",
+                           e["kopf"])
+        lauf = self._bruecke_lauf_eintrag(e["fehlend"])
+        lauf["t"] = threading.Thread(
+            target=self._bruecke_ernte,
+            args=(e["bdir"], e["bid"], list(e["fehlend"]),
+                  list(e["pass_eids"]), e["schwellen"], e["kopf"],
+                  e["k_abholer"], e["person"], lauf),
+            daemon=True, name="bruecke-ernte")
+        self._bruecke_laeufe[e["bid"]] = lauf
+        lauf["t"].start()
+
+    def _bruecke_naechsten_starten(self):
+        """Den ersten wartenden Klick-Lauf starten, falls gerade keiner rechnet
+        (.524, Fix 12). NUR unter `_bruecke_anlage_lock` rufen.
+
+        Gerufen an genau zwei Stellen: beim Annehmen eines Klicks (dann faehrt
+        er sofort, wenn nichts laeuft) und am Ende jedes Laufs
+        (`_bruecke_lauf_beenden`) — auch nach einem ABBRUCH, damit der naechste
+        automatisch nachrueckt.
+
+        Eintraege, deren Ordner inzwischen weg ist (der Nutzer hat den
+        wartenden Lauf abgebrochen oder der Nachtjob hat geraeumt), fallen
+        dabei LAUT heraus statt ins Leere zu starten."""
+        while self._bruecke_warteschlange and self._bruecke_aktiv() is None:
+            e = self._bruecke_warteschlange.pop(0)
+            if not os.path.isdir(e["bdir"]):
+                self.log(f"PASS CHECK ({e['bid']}): the queued check is gone "
+                         f"(its folder was removed) — dropping it from the "
+                         f"queue, {len(self._bruecke_warteschlange)} still "
+                         f"waiting")
+                continue
+            if len(self._bruecke_warteschlange) or e["seit"] < time.time() - 1:
+                self.log(f"PASS CHECK ({e['bid']}, {e['person']}): its turn "
+                         f"— starting the queued check now "
+                         f"({len(self._bruecke_warteschlange)} still waiting)")
+            self._bruecke_lauf_starten(e)
+            return
+
+    def bruecke_abbrechen(self, lauf_id):
+        """ABBRECHEN eines laufenden oder wartenden Klick-Laufs (.524, Fix 11).
+
+        Der Knopf sitzt seit .524 an der laufenden Fortschritts-Anzeige, nicht
+        mehr nur im Overlay des fertigen Ergebnisses — bis .523 konnte ein
+        Mensch einen zu lang laufenden Check nur aussitzen.
+
+        WAS PASSIERT, in dieser Reihenfolge:
+          1. die noch NICHT begonnenen Ereignisse werden aus der Schlange des
+             Laufs gezogen und gezaehlt (das ist die Zahl der Quittung);
+          2. das Stopp-Signal faellt — die Kette ueberspringt danach den
+             gebuendelten Norm-Schritt und den Identitaets-Schritt;
+          3. der bestehende Raeum-Weg `_passernte_raeumen` wird gerufen. Er
+             raeumt einen ruhenden Ordner sofort und merkt einen laufenden VOR
+             (.522, R-3) — der Ernte-Thread fuehrt das in seinem `finally`
+             aus. KEIN zweiter Raeumpfad.
+        WAS AUSDRUECKLICH NICHT PASSIERT: ein laufender Ernte- oder Norm-Job
+        wird nie hart abgebrochen. Er laeuft sauber aus; sonst bliebe ein
+        halber Zustand zurueck (halbe Kandidaten-Zeile, halbe Warp-Kachel,
+        ein Platz, den der Waechter erst nach 120 s einzieht).
+
+        Ein schon fertiger oder nie existierender Lauf ist kein Fehler,
+        sondern der ehrliche Ist-Zustand: ok, nichts verworfen, Log ehrlich.
+
+        -> {"lief": bool, "verworfen": int, "gesamt": int, "wartete": bool}."""
+        import re as _re_ab
+        lauf_id = str(lauf_id or "")
+        if not _re_ab.fullmatch(r"B[A-Za-z0-9_]+", lauf_id):
+            self.log(f"PASS CHECK cancel ignored: {lauf_id[:32]!r} is not a "
+                     f"picture-check run")
+            return {"lief": False, "verworfen": 0, "gesamt": 0,
+                    "wartete": False}
+        with self._bruecke_anlage_lock:
+            _pos, _wart = self._bruecke_warte_stand(lauf_id)
+            if _wart is not None:
+                # Ein WARTENDER Lauf: nichts hat begonnen, also faellt alles.
+                self._bruecke_warteschlange.remove(_wart)
+                weg, ges = len(_wart["fehlend"]), len(_wart["fehlend"])
+                self.log(f"PASS CHECK ({lauf_id}) cancelled while queued "
+                         f"(position {_pos}): {weg} event(s) dropped, nothing "
+                         f"had started; {len(self._bruecke_warteschlange)} "
+                         f"still waiting")
+                self._passernte_raeumen(lauf_id)
+                self._bruecke_naechsten_starten()
+                return {"lief": True, "verworfen": weg, "gesamt": ges,
+                        "wartete": True}
+            d = self._bruecke_lauf_thread(lauf_id)
+            if d is None:
+                # Fertig, nie gestartet oder vom Neustart verworfen. Der Ordner
+                # kann trotzdem noch stehen — der bestehende Raeum-Weg raeumt
+                # ihn, das ist genau die Wirkung, die „Abbrechen" hier meint.
+                _weg = self._passernte_raeumen(lauf_id)
+                self.log(f"PASS CHECK ({lauf_id}) cancel: no such run is "
+                         f"active any more — nothing to stop"
+                         + (" (its folder was removed)" if _weg else ""))
+                return {"lief": False, "verworfen": 0, "gesamt": 0,
+                        "wartete": False}
+            with d["q_lock"]:
+                weg = len(d["offen"])
+                d["offen"].clear()
+            ges = int(d.get("n") or 0)
+            d["stop"].set()
+            self.log(f"PASS CHECK ({lauf_id}) cancelled by the user: {weg} of "
+                     f"{ges} event(s) dropped before they started; whatever is "
+                     f"running right now finishes normally, then the folder "
+                     f"falls (no half state, never a hard kill)")
+            # Der BESTEHENDE Raeum-Weg — er merkt unter einem lebenden Thread
+            # vor und raeumt im `finally` des Laufs (.522, R-3).
+            self._passernte_raeumen(lauf_id)
+            return {"lief": True, "verworfen": weg, "gesamt": ges,
+                    "wartete": False}
+
+    def bruecke_waisen_start(self):
+        """Beim Dienststart: angenommene, aber nie begonnene Klick-Laeufe LAUT
+        verwerfen (.524, Fix 12 — Auflage des Zuschnitts).
+
+        Die Warteschlange lebt im Prozess; ein Neustart verliert sie. Was auf
+        der Platte bleibt, ist der vorbereitete Ordner mit einer `laeuft.json`,
+        die `grund: warteschlange` traegt. Genau die sind hier gemeint: sie
+        gehoerten zu einem Menschen, der auf einen Balken sah, und sie fahren
+        nach dem Neustart NICHT von selbst weiter. Die Marke faellt (sonst
+        saehe der naechste Klick einen Lauf, den es nicht gibt), der Ordner
+        bleibt stehen — die Ernte darin ist bezahlte Arbeit, und der naechste
+        Klick nimmt sie mit. Das TTL-Netz raeumt ihn ohnehin.
+
+        Ein RECHNENDER Lauf wird hier nicht angefasst: seine Marke ueberaltert
+        von selbst, und der naechste Klick erntet nach (Verhalten seit .507)."""
+        n = 0
+        try:
+            wurzel = os.path.join(self.cfg["data_dir"], "state", "lernlauf")
+            for d in sorted(os.listdir(wurzel)):
+                if not d.startswith("B"):
+                    continue
+                p = os.path.join(wurzel, d, "laeuft.json")
+                try:
+                    with open(p, encoding="utf-8") as f:
+                        if (json.load(f) or {}).get("grund") != "warteschlange":
+                            continue
+                    os.unlink(p)
+                except (OSError, ValueError):
+                    continue
+                n += 1
+                self.log(f"PASS CHECK ({d}): this check was queued when the "
+                         f"service restarted — the queue does not survive a "
+                         f"restart, so it was DROPPED; click the check again "
+                         f"(its harvested events are kept)")
+        except OSError:
+            return 0
+        return n
+
+    def _bruecke_lauf_beenden(self, bid):
+        """Der Ernte-Thread von `bid` ist fertig: Buch freigeben — und einen
+        WAEHREND des Laufs gestellten Raeum-Wunsch jetzt ausfuehren (.522, R-3).
+
+        So bleibt „fluechtig heisst fluechtig" gueltig, ohne dass ein rmtree
+        einem lebenden Thread den Boden wegzieht: wer waehrend des Laufs
+        verwirft oder uebernimmt, bekommt sein Raeumen — nur eben in dem
+        Moment, in dem niemand mehr in den Ordner schreibt.
+
+        .524 (Fix 12): und DANACH rueckt der naechste wartende Klick-Lauf nach.
+        Das ist die einzige Stelle, an der das passiert — egal ob der Lauf
+        regulaer endete, an einem Fehler starb oder ABGEBROCHEN wurde."""
+        with self._bruecke_anlage_lock:
+            d = self._bruecke_laeufe.pop(bid, None)
+            _raeumen = bool(d and d.get("raeumen"))
+        if _raeumen:
+            self.log(f"PASS CHECK ({bid}): the folder was discarded while the "
+                     f"run was still going — removing it now that the run has "
+                     f"ended")
+            self._passernte_raeumen(bid)
+        with self._bruecke_anlage_lock:
+            self._bruecke_naechsten_starten()
+
+    def _passernte_raeumen(self, lauf_id):
+        """Den Ordner EINES Mini-Ernte-Laufs entfernen -> True, wenn er weg ist.
+
+        FLUECHTIG heisst fluechtig (User-Auflage .521): nach der Uebernahme
+        oder dem Verwerfen faellt das Material sofort, nicht erst mit der
+        Retention. Das TTL-Auffangnetz bleibt trotzdem (`_bruecke_alt_raeumen`
+        im Nachtjob) — es traegt die Faelle, in denen niemand mehr klickt
+        (Tab geschlossen, Browser weg, Dienst neu gestartet).
+
+        Geloescht wird ausschliesslich unterhalb von `state/lernlauf/B*`, unter
+        derselben Sperre wie Anlage und Nachtjob (S2 [QS15]: nie ein rmtree
+        neben einer laufenden Anlage).
+
+        .522 (Widerleger-Befund R-3, MITTEL): die Sperre allein reicht dafuer
+        NICHT — die Ernte selbst laeuft ausdruecklich ausserhalb von ihr
+        (`bruecke_vorrat`), und Kachel- wie Karten-Klick treffen denselben
+        `bid` (der Hash kennt nur Person + erste eid des Durchgangs). Das
+        Blatt gibt den Karten-Riegel ausserdem VOR dem Overlay frei
+        (`auftritte.py`), also war die gemessene Klickfolge Kachel -> fertig
+        -> Karte -> „Cancel" im ersten Overlay genau ein rmtree unter einem
+        lebenden Ernte-Thread: gefangene FileNotFoundError, und selbst die
+        `fehler.json` liess sich nicht mehr schreiben — der zweite Lauf endete
+        OHNE Fehler-Marke, der Nutzer sah einen haengenden Balken. Seitdem
+        wird ein laufender Ordner nicht geraeumt, sondern VORGEMERKT: der
+        Ernte-Thread raeumt ihn in seinem `finally` (`_bruecke_lauf_beenden`).
+        Der Rueckgabewert bleibt ehrlich False — geraeumt ist er JETZT nicht."""
+        import re as _re_pr
+        import shutil
+        lauf_id = str(lauf_id or "")
+        if not _re_pr.fullmatch(r"B[A-Za-z0-9_]+", lauf_id):
+            return False              # nur Bruecken-Ordner, nie L-Laeufe
+        p = os.path.join(self.cfg["data_dir"], "state", "lernlauf", lauf_id)
+        with self._bruecke_anlage_lock:
+            _lauf = self._bruecke_lauf_thread(lauf_id)
+            if _lauf is not None:
+                _lauf["raeumen"] = True
+                self.log(f"PASS CHECK ({lauf_id}): discard requested while the "
+                         f"run is still going — the folder stays until the run "
+                         f"ends, then it falls (never an rmtree under a live "
+                         f"harvest)")
+                return False
+            if not os.path.isdir(p):
+                return False
+            shutil.rmtree(p, ignore_errors=True)
+        return not os.path.isdir(p)
 
     def _bruecke_alt_raeumen(self, dd, tage=None):
         """Bruecken-Ordner aelter als `tage` Tage entfernen (sie sind klein und
@@ -10245,6 +10861,14 @@ class Service:
                         "clip_tor_deckel_s": clip_tor_deckel_s_aus_cfg(cfg),
                         "kalib": {"data_dir": cfg["data_dir"],
                                   "deckel": int(cfg.get("live_kalib_max") or 0)},
+                        # DAS SIEB (.514) — auch hier: JEDER Ernte-Weg siebt
+                        # mit denselben vier Latten dieser Kamera. Ein Weg
+                        # ohne das Feld wuerde laut sterben (sieb_pruefen),
+                        # und das ist Absicht: ein zweiter, ungesiebter
+                        # Zulauf waere genau die Sorte stiller Ausnahme, die
+                        # der Ein-Sieb-Zug beseitigt.
+                        "sieb": _kk_ernte.sieb_latten(
+                            _kk_ernte.katalog_latten(cfg), kamera),
                         "log": os.path.join(lauf_dir, "ernte.log")}
                     # A1 (05.09.): Klasse statt Text-Etikett — der Waechter reiht
                     # eine eingezogene Ernte nie mehr als Ereignis ein (404-Schleife).
@@ -10309,10 +10933,21 @@ class Service:
             abschluss=_abschluss)
 
     def _bruecke_ernte(self, bdir, bid, eids, alle_eids, schwellen,
-                       kopf=None, k_abholer=1):
-        """Ernte des Pass-Checks: 1 Worker-Job je FEHLENDEM Event (eids) auf
-        einem Platz der Klasse `interaktiv`, danach Vorrat-Bewertung ueber ALLE
-        Events des Durchgangs (alle_eids). Fehler landen LAUT in fehler.json + Log.
+                       kopf=None, k_abholer=1, person=None, lauf=None):
+        """Der MINI-ERNTE-LAUF des Pass-Checks, drei Schritte in einer Kette
+        (.521): 1 Worker-Job je FEHLENDEM Event (eids) auf Plaetzen der Klasse
+        `interaktiv` -> DER gebuendelte Norm-Schritt ueber alle Ereignisse des
+        Durchgangs -> DER Identitaets-Schritt auf `person`. Fehler landen LAUT
+        in fehler.json + Log.
+
+        DIE REIHENFOLGE IST DIESELBE WIE IM LERNLAUF und aus demselben Grund:
+        die Ernte siebt mit den fuenf leichten Achsen und konserviert je
+        Uebergabe-Kandidaten den 112er-Warp (`nachmess: True`), der Norm-Schritt
+        misst die sechste Achse aus genau diesen Kacheln (EINE Session statt
+        einer je Platz, .518) und loescht die Bilder der Verworfenen, und erst
+        dann fragt ueberhaupt jemand nach der Identitaet. Wer die Reihenfolge
+        dreht, misst Identitaeten an Material, das das Sieb gar nicht
+        durchgelassen hat.
 
         .507 B2 (E-B2/E-P1): die Klasse ist `interaktiv`, nicht mehr `ernte` —
         hinter diesem Job steht ein Mensch, der auf einen Balken sieht, und die
@@ -10333,6 +10968,14 @@ class Service:
         `kopf` sind die Lauf-Felder des Balkens (start_ts, dauer_s |
         dauer_unbekannt); sie reisen bei jedem Puls mit, weil laeuft.json jedes
         Mal neu geschrieben wird.
+
+        `lauf` (.524) ist der BUCH-EINTRAG dieses Laufs. Dort wohnen die
+        Warteschlange der noch nicht begonnenen Ereignisse und das
+        Stopp-Signal des Abbrechen-Knopfs — ausserhalb der Kette, weil der
+        POST-Handler von aussen hineingreifen muss. Ein Abbruch zieht die
+        Schlange leer und setzt `stop`; die Abholer beenden ihr LAUFENDES
+        Ereignis noch sauber, danach ueberspringt die Kette Norm- und
+        Identitaets-Schritt und faellt in ihr `finally`, das raeumt.
 
         .508 Nachfix: ohne Worker (Legacy-Modus) endet der Lauf hier EHRLICH,
         bevor ein Platz genommen wird — s. den Wach-Block gleich unten."""
@@ -10362,10 +11005,17 @@ class Service:
             except OSError:
                 pass
             return
-        from core import ernte as _ern, vorrat as _vor
+        from core import ernte as _ern
+        from core import passernte as _pe_bilanz
+        from core.benennung import ID_LATTE as _ID_LATTE   # EINE Quelle (.521)
         import anlernen as _al
         dd = self.cfg["data_dir"]
         laeuft = os.path.join(bdir, "laeuft.json")
+        # .522 (R-4): der Herzschlag der beiden LANGEN Schritte, s. unten. Er
+        # steht hier oben, damit ihn das `finally` in jedem Fall stoppen kann —
+        # auch wenn die Kette vorher scheitert.
+        _herz_stop = threading.Event()
+        _herz = None
         try:
             # Event-Daten (start/kamera/clip_s) aus der Akte — fuer die
             # Durchgangs-Kette der Vorrat-Bewertung
@@ -10402,8 +11052,15 @@ class Service:
             # den Erzeugungs-Aufschlag nicht).
             tor_deckel_s = clip_tor_deckel_s_aus_cfg(self.cfg)
             n_ges = len(eids)
-            offen = collections.deque(eids)
-            q_lock, buch_lock = threading.Lock(), threading.Lock()
+            # .524 (Fix 11): Schlange, Sperre und Stopp-Signal gehoeren dem
+            # BUCH-EINTRAG, nicht dieser Funktion — nur so kann der
+            # Abbrechen-Knopf von aussen die noch nicht begonnenen Ereignisse
+            # ziehen und ihre Zahl sofort nennen. Ohne Eintrag (ein Direktruf
+            # ausserhalb des Klick-Wegs) baut die Kette sich denselben Satz
+            # selbst; sie ist dann nicht abbrechbar, laeuft aber unveraendert.
+            _lauf = lauf if lauf is not None else self._bruecke_lauf_eintrag(eids)
+            offen, q_lock, stop = _lauf["offen"], _lauf["q_lock"], _lauf["stop"]
+            buch_lock = threading.Lock()
             buch = {"i": 0}
             proben = []                      # (clip_s, wall_s) je fertigem Event (E-P3)
             panne = {"e": None}
@@ -10451,6 +11108,18 @@ class Service:
                             # aus dem Manifest — der Deckel ist laufende Config.
                             "kalib": {"data_dir": dd,
                                       "deckel": int(self.cfg.get("live_kalib_max") or 0)},
+                            # DAS SIEB (.514) — dritter und letzter Ernte-Weg,
+                            # dieselben vier Latten dieser Kamera.
+                            "sieb": _kk_ernte.sieb_latten(
+                                _kk_ernte.katalog_latten(self.cfg),
+                                d.get("camera")),
+                            # .521: auf DIESEM Weg folgt seit dem Mini-Ernte-Zug
+                            # der gebuendelte Norm-Schritt (unten in dieser
+                            # Kette). Nur deshalb konserviert die Ernte hier die
+                            # Warp-Kacheln — die Messbasis der sechsten Achse.
+                            # Der Zettel vom .518-Zug („die Bruecke verliert die
+                            # Norm-Achse", offener Punkt 1) ist damit eingeloest.
+                            "nachmess": True,
                             "clip_vod": self.cfg.get("clip_vod") is not False,
                             "clip_tor": tor_n,          # .509, s. oben
                             "clip_tor_deckel_s": tor_deckel_s,
@@ -10511,6 +11180,15 @@ class Service:
                     # des Lernlaufs.
                     for k in _ern.ZAEHLER_FELDER:
                         eintrag[k] = int(antwort.get(k) or 0)
+                    # .521: die MESS-BILANZ des Ereignisses in die Buchung —
+                    # dasselbe Muster wie im Lernlauf (B4/.513). Ohne sie
+                    # summierte `core.ernte.fertig_lesen` fuer diesen Ordner
+                    # `mkbilanz: None`, und die Bilanz-Zeile der Kette koennte
+                    # nicht sagen, an WELCHER Register-Achse das Material
+                    # haengengeblieben ist — genau die Frage, die ein Betreiber
+                    # stellt, wenn er einen Regler verstellen soll.
+                    if antwort.get("mkbilanz"):
+                        eintrag["mkbilanz"] = antwort["mkbilanz"]
                     if not antwort.get("ok"):
                         eintrag["fehler"] = str(antwort.get("fehler"))[:160]
                 with buch_lock:
@@ -10528,7 +11206,12 @@ class Service:
             def _abholer():
                 """EIN Abholer: naechstes Ereignis nehmen, ernten, weiter.
                 Eine Ausnahme beendet den ganzen Lauf LAUT (fehler.json des
-                Koordinators), statt diesen Abholer still sterben zu lassen."""
+                Koordinators), statt diesen Abholer still sterben zu lassen.
+
+                .524: der Abbrechen-Knopf braucht hier keine eigene Abfrage —
+                er LEERT die Schlange (unter derselben `q_lock`), und die
+                nachste Runde findet nichts mehr. Das laufende Ereignis dieses
+                Abholers wird dadurch nie mittendrin unterbrochen."""
                 while True:
                     with q_lock:
                         if not offen or panne["e"] is not None:
@@ -10551,23 +11234,123 @@ class Service:
                 t.join()
             if panne["e"] is not None:
                 raise panne["e"]
+            # .524 (Fix 11): ABGEBROCHEN? Die Abholer sind hier durch, weil die
+            # Schlange leer ist — ihr jeweils LAUFENDES Ereignis haben sie noch
+            # zu Ende gebracht (nie ein harter Kill, sonst bliebe ein halber
+            # Zustand: halbe Kandidaten-Zeile, halbe Warp-Kachel, ein Platz,
+            # den der Waechter erst nach 120 s einzieht). Was jetzt NICHT mehr
+            # kommt, sind die beiden teuren Schritte danach — sie messen und
+            # urteilen fuer ein Ergebnis, das niemand mehr ansieht.
+            # KEIN `fehler.json`: ein Abbruch ist kein Fehler, und der naechste
+            # Klick soll keine Fehlermeldung von gestern vorgesetzt bekommen.
+            # Die gemessenen Takt-Proben der FERTIGEN Ereignisse bleiben — sie
+            # sind echte Messungen dieser Maschine (E-P3).
+            if stop.is_set():
+                self.log(f"PASS CHECK ({bid}, {person}) cancelled: "
+                         f"{buch['i']} of {n_ges} event(s) were harvested "
+                         f"before the stop, the rest was dropped; norm step "
+                         f"and identity step are skipped, the folder falls "
+                         f"now")
+                self._bruecke_takt_buchen(proben)
+                return
             _puls("bewertet")
+            # DER HERZSCHLAG (.522, Widerleger-Befund R-4, HOCH). Ab hier
+            # kommen die beiden LANGEN Schritte, und zwischen ihnen stand bis
+            # .521 kein einziger Puls: der gebuendelte Norm-Schritt darf
+            # LERNLAUF_NORM_RUNDEN mal bis LERNLAUF_NORM_DECKEL_MIN_S auf einen
+            # Platz warten und danach bis LERNLAUF_NORM_DECKEL_MAX_S im Job
+            # stehen (zusammen bis ~85 min), der Identitaets-Schritt noch einmal
+            # bis 2 x `nachhol_analyse_timeout_s`. Das Frische-Fenster des
+            # Klick-Handlers ist aber `min(900, 2 x nachhol_analyse_timeout_s)`
+            # — Werkswert 600 s. Ohne Puls hielt er `laeuft.json` also fuer tot
+            # und startete eine zweite Kette auf denselben Ordner.
+            # Ein eigener Takt-Thread, weil an den blockierenden Stellen
+            # (Semaphor der Vergabestelle, select auf die Worker-Antwort) kein
+            # Ort fuer eine Inline-Zeile ist. Er sagt „diese Kette lebt", nicht
+            # „sie kommt voran" — die Fortschrittszahlen i/n aendert er nicht
+            # (der Zustand bleibt `bewertet`, wie es das Blatt erwartet).
+            def _herzschlag():
+                while not _herz_stop.wait(PULS_TAKT_S):
+                    try:
+                        _puls("bewertet")
+                    except Exception:          # noqa: BLE001 — nie die Kette
+                        pass
+            _herz = threading.Thread(target=_herzschlag, daemon=True,
+                                     name=f"bruecke-puls-{bid}")
+            _herz.start()
             # E-P3 (Ernte-Takt): die Bruecke misst ab jetzt MIT und schreibt
             # ueber DIESELBE Funktion wie der Lernlauf (core.wanduhr). Ohne das
             # haette eine Installation ohne je gelaufenen Lernlauf nie eine
             # Rate — und der Balken sagte fuer immer "Dauer unbekannt".
             self._bruecke_takt_buchen(proben)
-            refs = _al.refs_matrix_roh(self.cfg.get("modell"))
-            if not any(len(M) for M in refs.values()):
-                raise RuntimeError("reference cache empty — open the person page "
-                                   "once more in a minute")
-            s = dict(schwellen)
-            s["szenario_gap_min"] = int(self.cfg.get("szenario_gap_min", 5))
-            erg = _vor.angebote_bewerten(bdir, events_liste, s, refs)
-            self.log(f"PASS STOCK ({bid}): {n_ges} event(s) harvested "
-                     f"({len(alle_eids)} in the pass) -> {erg['angebote']} offer(s) "
-                     f"from {erg['v_gesamt']} stock faces"
-                     + (f"; rejected {erg['gruende']}" if erg["gruende"] else ""))
+            # --- Schritt 2 (.521): DER gebuendelte Norm-Schritt. Klasse
+            # `interaktiv` wie die Ernte-Jobs desselben Klicks — hinter dem
+            # Balken wartet ein Mensch, und die Fairness-Regel N-1 haelt nur
+            # die Klasse `ernte` zurueck.
+            # `puls` (.522): der Schritt meldet sich zusaetzlich SELBST an den
+            # definierten Stellen (je Runde, im Job-Puls) — der Lernlauf gibt
+            # keinen mit, er zeigt seinen Stand ueber den Lauf-Zustand.
+            # `lebt` (.524, Fix 11): die Lebensprobe des Schritts fragt das
+            # Stopp-Signal. Sie steht am ANFANG jeder Runde — ein laufender
+            # Norm-Job wird also nie unterbrochen, er laeuft aus, und erst die
+            # naechste Runde entfaellt. Genau das meint „laufende Jobs laufen
+            # sauber aus".
+            _norm_erg, _norm_rest, _norm_ab = self._norm_schritt(
+                f"pass check {bid}", bdir, list(alle_eids), events_liste,
+                schwellen, lebt=lambda: not stop.is_set(),
+                puls=lambda: _puls("bewertet"), art="interaktiv")
+            if _norm_ab or stop.is_set():
+                self.log(f"PASS CHECK ({bid}, {person}) cancelled during the "
+                         f"norm step: the running round finished, the identity "
+                         f"step is skipped, the folder falls now")
+                return
+            # --- Schritt 3 (.521): DER Identitaets-Schritt. Er urteilt NUR
+            # ueber die Identitaet — die Qualitaet hat das Register schon
+            # gesiebt (Sechs-Achsen-Verfassung, core/passernte.py).
+            _puls("bewertet")
+            _auftrag_id = {
+                "typ": "passernte", "lauf_dir": bdir,
+                "eids": list(alle_eids), "person": person,
+                # Die vier Identitaets-Zahlen kommen aus der EINEN Quelle
+                # (core.benennung.ID_LATTE) und reisen fertig im Job — der
+                # Worker greift nie selbst nach Latten (refqs-Muster).
+                "id_werte": dict(_ID_LATTE),
+                # Deckel je Ereignis: DIESELBE Zahl wie die alte Pass-Pruefung
+                # (anlernen.BRUECKE_JE_EVENT) — kein zweiter Wert daneben.
+                "je_event": int(_al.BRUECKE_JE_EVENT),
+                "log": os.path.join(bdir, "passernte.log")}
+            _erg_id = None
+            with self._plaetze.wartend("interaktiv"), \
+                    self._plaetze.platz(f"passernte {bid}", art="interaktiv",
+                                        timeout_s=float(timeout_s)) as _inr:
+                if _inr is None:
+                    raise RuntimeError("no free analysis slot for the identity "
+                                       "step — try the check again in a moment")
+                _antw_id = self._worker(_inr).job(
+                    _auftrag_id, timeout_s=timeout_s,
+                    puls=self._plaetze.puls_fuer(_inr))
+            if not (_antw_id and _antw_id.get("ok")):
+                raise RuntimeError(
+                    "identity step failed: "
+                    + str((_antw_id or {}).get("fehler") or "no answer"))
+            _erg_id = _antw_id.get("passernte") or {}
+            # DIE EINE BILANZ-ZEILE der Kette (E: geerntet / je Achse gesiebt /
+            # an der Norm gefallen / an der Identitaet verworfen / empfohlen /
+            # grenz). Gebaut wird sie im Modul aus den drei Vorstufen, damit
+            # hier keine zweite Buchfuehrung entsteht.
+            _summe_e = _ern.fertig_lesen(bdir)[1] or {}
+            self.log(f"PASS CHECK ({bid}, {person}): {n_ges} event(s) "
+                     f"harvested ({len(alle_eids)} in the pass) | "
+                     + _pe_bilanz.bilanz_satz(_erg_id, _summe_e, _norm_erg)
+                     + (f" | norm step left {_norm_rest} event(s) unmeasured"
+                        if _norm_rest else ""))
+            if _erg_id.get("keine_refs"):
+                # NIE STILL: ohne eigene Referenz kann die Identitaets-Achse
+                # nichts messen, und das ist der Grund fuer ein leeres Overlay
+                # — nicht „es war nichts da".
+                self.log(f"PASS CHECK ({bid}): {person} has no reference of "
+                         f"their own yet — teach one picture first, then this "
+                         f"check can propose more")
         except Exception as e:
             self.log(f"PASS CHECK (stock chain, {bid}) failed: {type(e).__name__}: {e}")
             try:
@@ -10576,10 +11359,22 @@ class Service:
             except OSError:
                 pass
         finally:
+            # .522: ERST den Herzschlag stoppen UND einholen, dann aufraeumen.
+            # Andersherum koennte sein letzter Schlag `laeuft.json` NACH dem
+            # Loeschen neu anlegen — der naechste Klick saehe dann einen Lauf,
+            # den es nicht mehr gibt, und wartete bis zum Ablauf des
+            # Frische-Fensters auf ein Ergebnis, das niemand mehr schreibt.
+            _herz_stop.set()
+            if _herz is not None:
+                _herz.join(timeout=PULS_TAKT_S)
             try:
                 os.unlink(laeuft)
             except OSError:
                 pass
+            # .522 (R-3): das Thread-Buch freigeben — und einen waehrend des
+            # Laufs gestellten Raeum-Wunsch (Verwerfen/Uebernahme) jetzt
+            # ausfuehren, wo niemand mehr in den Ordner schreibt.
+            self._bruecke_lauf_beenden(bid)
 
     def _bruecke_takt_buchen(self, proben):
         """Ernte-Takt aus den Proben DIESES Laufs fortschreiben (E-P3).
@@ -10684,6 +11479,205 @@ class Service:
             except Exception:
                 pass
 
+    # .518 DER GEBUENDELTE FEATURE-NORM-SCHRITT (User-Go 10.09.2026, „so
+    # bauen"). Bis .517 mass jeder Ernte-Job die Norm selbst und hielt dafuer
+    # eine eigene adaface-Session (Bauspitze 2700 MB) — bei K Abholern also bis
+    # zu K solcher Sessions, und die Analyse-Plaetze waren nicht mehr gleich
+    # schwer. Jetzt sieben die Ernte-Jobs mit den fuenf leichten Achsen, und
+    # DIESER eine Job misst danach alles am Stueck. Warum je Runde ein eigener
+    # Job und nicht einer mit offener Frist: die Frist eines Platzes ist die
+    # Zusage „so lange darf er legitim belegt sein" — ein Lauf ueber 40.000
+    # Kandidaten haelt sie nicht, und ein gekillter Worker waere hier teurer
+    # als eine Wiederaufnahme. Der Schritt ist resumefest gebaut
+    # (core/normlauf.py), also holt ihn die naechste Runde einfach ein.
+    LERNLAUF_NORM_RUNDEN = 5
+    LERNLAUF_NORM_DECKEL_MIN_S = 300
+    LERNLAUF_NORM_DECKEL_MAX_S = 3600
+    LERNLAUF_NORM_S_JE_KANDIDAT = 0.1     # grosszuegig; die Messung liegt darunter
+
+    def _norm_schritt(self, kennung, lauf_dir, eids, events_liste, schwellen,
+                      lebt=None, fortschritt=None, puls=None, art="ernte"):
+        """Die Feature-Norm ALLER Uebergabe-Kandidaten EINES Lauf-Ordners,
+        gebuendelt -> (erg|None, offen_geblieben, abgebrochen).
+
+        Duenner Dienst-Mantel um core.normlauf (Logik NUR im Modul, I1):
+        Latten je Kamera aufloesen, Job vergeben, Bilanz loggen. Der Worker
+        greift nie selbst in die Config — Latten und Lauf-Regime reisen fertig
+        im Job (refqs-Muster).
+
+        ZWEI AUFRUFER seit .521, und deshalb steht der Schritt hier statt in
+        `_lernlauf_norm`: der Lernlauf (dort zwischen Buecher-Wache und
+        Anker-Phase) UND der Mini-Ernte-Lauf des Pass-Knopfs. Beide ernten mit
+        `nachmess: True`, beide muessen die sechste Achse also auch wirklich
+        messen — ein Ernte-Weg, der Warp-Kacheln anlegt und niemanden hat, der
+        sie misst, waere Platte ohne Abnehmer (.518, dort ausdruecklich als
+        offener Punkt gefuehrt).
+
+        `kennung` benennt den Lauf im Log ('run L…' / 'pass check B…').
+        `lebt`   = optionale Lebensprobe (ein abgebrochener Lauf soll keinen
+                   Platz mehr belegen).
+        `fortschritt` = optionaler Melder fuer die Oberflaeche (ein Satz).
+        `puls`   = optionales LEBENSZEICHEN ohne Argument (.522,
+                   Widerleger-Befund R-4): der Pass-Knopf gibt eines mit, weil
+                   sein Klick-Handler `laeuft.json` nach
+                   `min(900, 2 x nachhol_analyse_timeout_s)` fuer tot haelt —
+                   dieser Schritt darf aber laenger stumm sein (Slot-Warten je
+                   Runde plus Job-Frist). Gerufen wird es an den definierten
+                   Stellen: vor jedem Warten auf einen Platz, im Puls des
+                   Worker-Jobs und nach jeder Runde. Der Lernlauf gibt KEINES
+                   mit — er zeigt seinen Stand ueber den Lauf-Zustand, und der
+                   grosse Weg bleibt damit Aufruf fuer Aufruf derselbe wie bis
+                   .521.
+        `art`    = Platz-Klasse. Der Lernlauf nimmt `ernte` (Fairness N-1: er
+                   laesst der Ereignis-Analyse den Vortritt); am Pass-Knopf
+                   wartet ein MENSCH, dort gilt dieselbe Klasse wie fuer die
+                   Ernte-Jobs desselben Klicks (`interaktiv`).
+
+        Fehler sind LAUT, kippen aber nie die Kette: die Achse laesst dann
+        alles durch (fail-open). Ein Abbruch hier duerfte nie das geerntete
+        Material kosten."""
+        from core import ernte as _ern
+        from core import normlauf as _nl
+
+        def _puls_ui():
+            """Das Lebenszeichen der OBERFLAECHE — nie ein Grund, den Schritt
+            zu verlieren (ein misslungener Puls kostet Anzeige, nicht Arbeit)."""
+            if puls is None:
+                return
+            try:
+                puls()
+            except Exception:                       # noqa: BLE001
+                pass
+        if not _nl.offene_events(lauf_dir, eids):
+            self.log(f"norm step skipped ({kennung}): nothing left to measure")
+            return None, 0, False
+        # Die Latten JE KAMERA, plus die globale Zeile als Rueckfall fuer
+        # ein Ereignis, dessen Kamera hier nicht mehr auftaucht. LIVE aus
+        # der Config wie beim Ernte-Job (Entscheid E10: kein Einfrieren).
+        _kl = _kk_ernte.katalog_latten(self.cfg)
+        latten = {"": _kk_ernte.sieb_latten(_kl, None)}
+        for e in events_liste or []:
+            k = str(e.get("kamera") or "")
+            if k and k not in latten:
+                latten[k] = _kk_ernte.sieb_latten(_kl, k)
+        _n_kand = int((_ern.fertig_lesen(lauf_dir)[1] or {}).get("m") or 0)
+        deckel_s = min(self.LERNLAUF_NORM_DECKEL_MAX_S,
+                       max(self.LERNLAUF_NORM_DECKEL_MIN_S,
+                           int(self.LERNLAUF_NORM_S_JE_KANDIDAT * _n_kand)
+                           + 180))
+        self.log(f"norm step starting ({kennung}): {_n_kand} handover "
+                 f"candidate(s) from {len(eids)} event(s), one bundled "
+                 f"feature-norm session")
+        if fortschritt is not None:
+            fortschritt("measuring the feature norm (bundled step)")
+        erg, warte_s = None, 0.0
+        for _runde in range(self.LERNLAUF_NORM_RUNDEN):
+            if lebt is not None and not lebt():
+                # Der Lauf ist weg. ABGEBROCHEN heisst hier auch: der Aufrufer
+                # schreibt KEINE Deckung mehr fort — der Lauf-Zustand gehoert
+                # ihm nicht mehr (unveraendert zum Verhalten bis .520).
+                return erg, len(_nl.offene_events(lauf_dir, eids)), True
+            offen_vor = len(_nl.offene_events(lauf_dir, eids))
+            if not offen_vor:
+                break
+            _auftrag = {"typ": "norm", "lauf_dir": lauf_dir, "eids": eids,
+                        "schwellen": schwellen, "latten": latten,
+                        "log": os.path.join(lauf_dir, "norm.log")}
+            _t0 = time.monotonic()
+            _puls_ui()          # vor dem Warten auf den Platz (.522, R-4)
+            # Die WARTEZEIT je Runde ist bewusst kuerzer als die Job-Frist —
+            # sonst koennte eine belegte Anlage die Runden-Schleife zu einem
+            # Halbtag Warten machen.
+            with self._plaetze.wartend(art), \
+                    self._plaetze.platz(
+                        f"norm {kennung}", art=art,
+                        timeout_s=self.LERNLAUF_NORM_DECKEL_MIN_S) as nr:
+                if nr is None:
+                    self.log(f"norm step ({kennung}): no free analysis "
+                             f"slot within "
+                             f"{self.LERNLAUF_NORM_DECKEL_MIN_S}s — trying "
+                             "again")
+                    _puls_ui()
+                    continue
+                warte_s += time.monotonic() - _t0
+                _puls_ui()
+                _platz_puls = self._plaetze.puls_fuer(nr)
+
+                def _job_puls():
+                    """Der Job pulst zwei Adressaten: den PLATZ (sonst zieht ihn
+                    der Waechter nach 120 s ein) und die OBERFLAECHE (.522). Bis
+                    .521 kannte er nur den Platz, und genau darin lag die
+                    Puls-Luecke: der Platz galt als gesund, waehrend
+                    `laeuft.json` ueberalterte."""
+                    _platz_puls()
+                    _puls_ui()
+                antwort = self._worker(nr).job(
+                    # OHNE Melder bekommt der Job GENAU den Griff, den er bis
+                    # .521 bekam — der Lernlauf-Weg bleibt damit Aufruf fuer
+                    # Aufruf derselbe (Gleichheits-Harnisch h1 des
+                    # .521-Widerlegers).
+                    _auftrag, timeout_s=deckel_s,
+                    puls=_platz_puls if puls is None else _job_puls)
+            _puls_ui()
+            if antwort and antwort.get("ok"):
+                erg = antwort.get("norm") or {}
+                if not erg.get("offen"):
+                    break
+            else:
+                # Der Worker ist gestorben oder die Frist riss. Gebuchtes
+                # bleibt gebucht (je Ereignis), also holt die naechste
+                # Runde den Rest — genau dafuer ist der Schritt resumefest.
+                self.log(f"norm step ({kennung}): worker round failed "
+                         f"({(antwort or {}).get('fehler') or 'no answer'})"
+                         f" — {offen_vor} event(s) were still open, trying "
+                         "again")
+        _rest = len(_nl.offene_events(lauf_dir, eids))
+        satz = _nl.bilanz_satz(erg)
+        if satz:
+            self.log(f"norm step ({kennung}): {satz} "
+                     f"(waited {warte_s:.1f}s for a slot)")
+        if _rest:
+            # NIE STILL: was hier offen bleibt, geht ungesiebt weiter — die
+            # Achse laesst es durch (fail-open), aber der Betreiber muss es
+            # lesen koennen.
+            self.log(f"norm step ({kennung}): {_rest} event(s) NOT "
+                     f"measured after {self.LERNLAUF_NORM_RUNDEN} round(s)"
+                     " — their findings keep the norm axis open")
+        return erg, _rest, False
+
+    def _lernlauf_norm(self, lauf_id, events_liste, lebt=None):
+        """Der gebuendelte Norm-Schritt DES LERNLAUFS (Kette: zwischen der
+        Buecher-gegen-Platte-Wache und der Anker-Phase).
+
+        Nur noch der lauf-spezifische Mantel: Regime aus dem eingefrorenen
+        Manifest holen, den gemeinsamen Schritt fahren (`_norm_schritt`), und
+        die Deckung in den Lauf-Zustand schreiben, damit sie die Logrotation
+        ueberlebt."""
+        from core import ernte as _ern
+        from core import lernlauf as _ll
+        dd = self.cfg["data_dir"]
+        lauf_dir = os.path.join(dd, "state", "lernlauf", str(lauf_id))
+        try:
+            manifest = _ern.manifest_lesen(lauf_dir) or {}
+            schwellen = dict(manifest.get("schwellen") or {})
+            eids = [e.get("eid") for e in (events_liste or []) if e.get("eid")]
+            erg, _rest, _ab = self._norm_schritt(
+                f"run {lauf_id}", lauf_dir, eids, events_liste, schwellen,
+                lebt=lebt,
+                fortschritt=lambda s: _ll.lauf_fortschreiben_geduldig(
+                    dd, {"fortschritt": {"status": s}}),
+                art="ernte")
+            if _ab:
+                return
+            _ll.lauf_fortschreiben_geduldig(dd, {"normdeckung": {
+                "events": (erg or {}).get("events", 0), "offen": _rest,
+                "bilanz": (erg or {}).get("bilanz"),
+                "achse_aus": (erg or {}).get("achse_aus"),
+                "warp_fehlt": (erg or {}).get("warp_fehlt", 0)}})
+        except Exception as e:                                  # noqa: BLE001
+            self.log(f"norm step failed (run {lauf_id}): {type(e).__name__}: {e}"
+                     " — the norm axis lets everything through in this run")
+
     def _gruppen_auswahl(self, satz, person, refs):
         """Die EINE Auswahl-Rechnung fuer eine Gruppe — Auto-Benennung und
         Kalibrier-Neubewertung (.378) nutzen sie gemeinsam, damit nirgends
@@ -10714,7 +11708,7 @@ class Service:
                                _ue_ad(dd, person),
                                norm_latte=norm_latte_aus_cfg(self.cfg),
                                luma_grenzen=luma_grenzen_aus_cfg(self.cfg),
-                               guete_latte=guete_latte_aus_cfg(self.cfg))}
+                               kat_latten=_kk_ernte.katalog_latten(self.cfg))}
         except Exception as e:
             self.log(f"group selection: picture check unavailable for "
                      f"{satz.get('anker_id')} ({type(e).__name__}: {e}) — "
@@ -10724,7 +11718,7 @@ class Service:
             werte["yaw_grenze"], werte["dup_sim"],
             luma_grenzen=luma_grenzen_aus_cfg(self.cfg),
             stufen=_stufen,
-            guete_latte=guete_latte_aus_cfg(self.cfg))
+            kat_latten=_kk_ernte.katalog_latten(self.cfg))
         gewaehlt = {b["datei"] for b in bewertet if b.get("empfohlen")}
         mit = [dict(m, gewaehlt=(str(m.get("datei", "")).rsplit("/", 1)[-1]
                                  in gewaehlt
@@ -10889,7 +11883,7 @@ class Service:
                 _al.gruppen_sichtung(satz, ldir, emb=self.embedder,
                                      norm_latte=norm_latte_aus_cfg(self.cfg),
                                      luma_grenzen=luma_grenzen_aus_cfg(self.cfg),
-                                     guete_latte=guete_latte_aus_cfg(self.cfg))
+                                     kat_latten=_kk_ernte.katalog_latten(self.cfg))
                 fertig += 1
             except Exception as e:
                 fehler += 1
@@ -11001,6 +11995,11 @@ class Service:
                 self.log(f"harvest failed: thresholds missing ({fehlend})")
                 return
             starts = [e.get("start") for e in liste if e.get("start")]
+            # .514: der GLOBALE Satz des Katalog-Registers fuer das Protokoll
+            # dieses Laufs (je Kamera loest jeder Job selbst auf, s. Job-Feld
+            # `sieb`). kamera=None heisst ausdruecklich „die globale Zeile".
+            _lauf_sieb = _kk_ernte.sieb_latten(
+                _kk_ernte.katalog_latten(self.cfg), None)
             manifest = {"schema": 2 if self.cfg.get("vorrat_aktiv") else 1,
                         # schema 2 = Regime traegt Vorrats-Schwellen (W1.21:
                         # ein Downgrade-Resume ist damit wenigstens ERKENNBAR;
@@ -11019,7 +12018,44 @@ class Service:
                         # E3-Hinweis (§Q): exakter N-Schnitt kann den aeltesten
                         # Durchgang anschneiden — die Grenze steht HIER, nicht nirgends.
                         "schnitt_exakt_n": not bool(zustand.get("alle")),
-                        "aeltester_start": min(starts) if starts else None}
+                        "aeltester_start": min(starts) if starts else None,
+                        # PROFIL (.513 als Geruest, seit .514 die WAHRHEIT):
+                        # der Zweck-Name plus die vier Achsen, die im Lauf
+                        # wirklich sieben. Bis .513 stand hier ein Protokoll
+                        # ohne Wirkung („es SIEBT NICHTS"), und `pose_min` war
+                        # ausdruecklich null, weil der Lernlauf diese Achse gar
+                        # nicht kannte. Seit dem Ein-Sieb-Zug siebt genau das:
+                        # jeder Ernte-Job bekommt die je Kamera aufgeloesten
+                        # Werte (Feld `sieb` am Job), und HIER steht der
+                        # GLOBALE Satz desselben Registers — der Lauf gilt ueber
+                        # viele Kameras, eine einzelne Kameraspalte waere an
+                        # dieser Stelle eine Behauptung.
+                        # Gefuellt vom DIENST (der Worker greift nie selbst in
+                        # die Config). E10: NICHT eingefroren — das Manifest
+                        # dokumentiert, was beim Start galt; gesiebt wird mit
+                        # dem, was zum Job-Zeitpunkt gilt.
+                        "profil": _ern_mk.profil(_ern_mk.ZWECK_LERNEN, {
+                            "det_min": _lauf_sieb["det"],
+                            "guete_e_min": _lauf_sieb["e"],
+                            "guete_t_min": _lauf_sieb["t"],
+                            "pose_min": _lauf_sieb["p"],
+                            # .515: die Norm-Achse gehoert ins Protokoll, auch
+                            # (gerade) wenn sie auf 0 steht — „aus" ist eine
+                            # Entscheidung des Betreibers und muss am Lauf
+                            # ablesbar sein.
+                            "norm_min": _lauf_sieb["n"],
+                            "kante_min": _lauf_sieb["k"]}),
+                        # Woher dieser Satz kam (kamera/global/aus) — dieselbe
+                        # Ehrlichkeit wie die Quellen-Zeile der Kalibrierseite.
+                        "profil_quelle": _lauf_sieb["quelle"],
+                        # .518: WO die Achsen des Profils fallen. Die Werte
+                        # oben gelten alle — aber die Norm-Achse siebt nicht
+                        # im Ernte-Job, sondern im gebuendelten Schritt danach
+                        # (core/normlauf.py). Ein Manifest, das das
+                        # verschweigt, waere wieder „das Manifest sagt nicht
+                        # die Wahrheit" (Widerleger-Befund B9). Aus der EINEN
+                        # Quelle, nie als Literal.
+                        "profil_nachmess": list(_kk_ernte.NACHMESS_ACHSEN)}
             _ern.manifest_schreiben(lauf_dir, manifest)
         schwellen = manifest["schwellen"]
         fps = manifest.get("fps_sample") or self.cfg.get("fps_sample")
@@ -11447,6 +12483,21 @@ class Service:
                             eintrag[k] = int(antwort.get(k) or 0)
                             summe[k] = summe.get(k, 0) + eintrag[k]
                         eintrag["frames_soll"] = antwort.get("frames_soll")
+                        # B4 (.513): die Mess-Bilanz des Events in die Buchung —
+                        # der Lauf zieht seine Summe daraus (core.ernte.
+                        # fertig_lesen) und schreibt EINE Zeile am Ende.
+                        if antwort.get("mkbilanz"):
+                            eintrag["mkbilanz"] = antwort["mkbilanz"]
+                            # Die LAUF-Summe waechst hier mit, wie jeder andere
+                            # Zaehler auch. fertig_lesen liefert sie nur beim
+                            # RESUME (dann aus der Buchung) — im laufenden Betrieb
+                            # summiert diese Schleife, sonst stuende am Ende die
+                            # Bilanz von vorhin oder gar keine (im Feldlauf
+                            # getreten: `messdeckung: null` nach einem Lauf, in
+                            # dessen fertig.jsonl jede Zeile ihre Bilanz trug).
+                            summe["mkbilanz"] = _ern_mk.bilanz_summe(
+                                [b for b in (summe.get("mkbilanz"),
+                                             antwort["mkbilanz"]) if b])
                         if antwort.get("frames_soll"):
                             # .287 [clipdbg] (c): Clip-Qualitaet der Ernte-Analyse
                             # im DIENST-Log (die Download-Zeilen stehen im
@@ -11561,6 +12612,25 @@ class Service:
                             "kalib": {"data_dir": dd,
                                       "deckel": int(self.cfg.get(
                                           "live_kalib_max") or 0)},
+                            # DAS SIEB (.514, Etappe 3): die vier Latten des
+                            # Katalog-Registers, aufgeloest fuer DIESE Kamera
+                            # (Kamera -> global -> Werks-Boden). LIVE aus der
+                            # Config je Event, ausdruecklich NICHT aus dem
+                            # eingefrorenen Manifest — Entscheid E10 vom 09.09.:
+                            # „kein Einfrieren mehr, wir haben jederzeit
+                            # variable Startpunkte". Nachvollziehbar bleibt es
+                            # ueber das Manifest-Profil und den Rueckgabe-Topf
+                            # jedes Events (z["sieb"]).
+                            "sieb": _kk_ernte.sieb_latten(
+                                _kk_ernte.katalog_latten(self.cfg),
+                                e.get("kamera")),
+                            # .518: auf DIESEM Weg folgt der gebuendelte
+                            # Norm-Schritt (_lernlauf_norm, unten in der
+                            # Kette). Nur deshalb konserviert die Ernte hier
+                            # die Warp-Kacheln und legt Vorratsbilder an — auf
+                            # den zwei anderen Ernte-Wegen waere beides
+                            # Platte ohne Abnehmer.
+                            "nachmess": True,
                             # .287 [clipdbg]: Quelle + Event-Alter (jetzt
                             # minus Ende = start + clip_s) fuer die
                             # Clip-Debug-Zeilen im Worker (ernte.log).
@@ -11906,13 +12976,55 @@ class Service:
                              "next run estimates with it")
                 except OSError as _re:
                     self.log(f"harvest rate not saved ({_re})")
+            # .514: was der Lauf-Satz galt, steht in EINER Zeile im Log — die
+            # Frage „mit welchen Latten lief das eigentlich" soll niemand aus
+            # dem Manifest zusammensuchen muessen (E10: je Lauf dokumentiert).
+            self.log(f"harvest (run {lauf_id}): "
+                     + _ern_mk.profil_satz(
+                         manifest.get("profil"),
+                         # .518: Alt-Manifeste tragen den Schluessel nicht —
+                         # dort gab es den gebuendelten Schritt noch nicht,
+                         # und die Zeile soll das nicht behaupten.
+                         nachmess=manifest.get("profil_nachmess"))
+                     + f" [{manifest.get('profil_quelle', '?')}]")
             self.log(f"harvest finished (run {lauf_id}): "
                      f"{summe.get('kandidaten', 0)} candidates "
-                     f"({summe.get('m', 0)} crop-worthy, {summe.get('s', 0)} anchor-ready) "
+                     f"({summe.get('m', 0)} crop-worthy, {summe.get('s', 0)} anchor-ready, "
+                     f"{summe.get('gesiebt', 0)} sieved out) "
                      f"from {n} events; {summe.get('ohne_gesicht', 0)} without a face, "
                      f"{summe.get('unlesbar', 0)} not readable, "
                      f"{summe.get('unvollstaendig', 0)} partly readable, "
                      f"{summe.get('fehler', 0)} errors")
+            # B4 (.513, Inventur §I-7): DIE Bilanz-Zeile des Laufs. Bis .512
+            # gab es auf dem Lernpfad keine einzige Zahl dafuer, wie viel des
+            # Materials die Guete-Latte ueberhaupt beurteilen konnte — nur der
+            # Urteilspfad hatte sein Gegenstueck. Sie steht ausserdem im
+            # Lauf-Zustand, damit sie die Logrotation ueberlebt.
+            _mkb = summe.get("mkbilanz")
+            if _mkb:
+                self.log(f"harvest (run {lauf_id}): " + _ern_mk.bilanz_satz(_mkb))
+                _ll.lauf_fortschreiben_geduldig(
+                    dd, {"messdeckung": _mkb}, melde=_blink_melden)
+            # .518 DER GEBUENDELTE NORM-SCHRITT — genau HIER, zwischen der
+            # Ernte und der Anker-Phase (Fluss des Users: „... -> DANN die
+            # Normierung als EIN gebuendelter Schritt -> dann die
+            # Abarbeitung"). Er MUSS vor der Anker-Phase liegen: die entscheidet
+            # ueber die Bildquelle einer Zeile, und ein Fund, den die Norm-Achse
+            # verwirft, darf dort gar nicht erst auftauchen. Bewusst
+            # SYNCHRON im Ernte-Thread und kein eigener Phasenwert (W2.1: ein
+            # neuer Wert in PHASEN haette den Wizard dauerhaft blockiert).
+            self._lernlauf_norm(lauf_id, liste, lebt=lambda: _lauf_lebt(
+                "harvest stopped before the norm step (run aborted)"))
+            if ende["grund"]:
+                # Der Lauf ist waehrenddessen weggefallen: keine Anker-Kette.
+                # Derselbe Block wie beim Ende der Abholer (J13 b) — jedes Ende
+                # ausser Abbruch/Neustart hinterlaesst den sichtbaren Halt,
+                # sonst stuende der Lauf ohne Thread und ohne Grund da.
+                if ende["art"] not in ("abbruch", "neustart"):
+                    self._lernlauf_unterbrochen(
+                        dd, ende["grund"], zustand, lauf_id=lauf_id,
+                        infra=(ende["art"] == "infra"))
+                return
             self.lernlauf_anker_starten()      # E3: Auto-Kette Ernte -> Anker (wie Vorbereitung -> Ernte)
         except Exception as e:
             # .509 J13 (b): ein gestorbener Ernte-Thread hinterliess bis .508
@@ -12157,13 +13269,20 @@ class Service:
                     if float((A @ v).max()) > 0.5:
                         continue                  # derselbe abgelehnte Fremde — keine Wiedervorlage
                 pro_person[schluessel] += 1
-                self._enroll_append({"id": kid, "ts": round(time.time(), 1), "eid": eid,
+                # MESSKARTE (.513, Etappe 1 B3): diese feste Feldliste ist
+                # genau die Bauform, an der Messwerte still verschwinden —
+                # analyze misst, und beim Umfuellen in die Queue faellt alles
+                # heraus, was hier nicht wortwoertlich steht. Die Karte reist
+                # deshalb ueber den EINEN Griff mit (ergaenzt nur; die sechs
+                # Felder oben behalten Wert und Position).
+                self._enroll_append(_ern_mk.uebernehmen(
+                                    {"id": kid, "ts": round(time.time(), 1), "eid": eid,
                                      "camera": camera, "person": kd.get("person"),
                                      "score": kd.get("score"), "nn_eigen": kd.get("nn_eigen"),
                                      "front": kd.get("front"), "sharp": kd.get("sharp"),
                                      "bw": kd.get("bw"), "bh": kd.get("bh"),
                                      "datei": kd.get("datei"), "emb": kd.get("emb"),
-                                     "status": "offen"})
+                                     "status": "offen"}, kd))
                 self.log(f"{eid}: enrollment suggestion ({schluessel}, score {kd.get('score')})")
 
     def enroll_entscheiden(self, kid, aktion, person=None):
@@ -15774,16 +16893,73 @@ def make_handler(svc):
                         return self._send(400, json.dumps(
                             {"ok": False, "msg": _sprache.t("antwort.person_unbekannt")},
                             ensure_ascii=False), "application/json")
+                    if d.get("abbrechen"):
+                        # .524 Fix 11: ABBRECHEN am laufenden Balken. Nicht zu
+                        # verwechseln mit `verwerfen` darunter — das raeumt ein
+                        # FERTIGES Ergebnis weg, das der Nutzer angesehen hat.
+                        # Hier laeuft (oder wartet) noch etwas: die noch nicht
+                        # begonnenen Ereignisse fallen, das Laufende laeuft
+                        # aus, danach faellt der Ordner ueber denselben
+                        # Raeum-Weg.
+                        _ab = svc.bruecke_abbrechen(str(d.get("abbrechen")))
+                        _msg = (_sprache.t("antwort.passernte_abgebrochen",
+                                           n=_ab["verworfen"],
+                                           m=_ab["gesamt"])
+                                if _ab["lief"]
+                                else _sprache.t("antwort.passernte_abbruch_leer"))
+                        return self._send(200, json.dumps(
+                            {"ok": True, "n": 0, "lief": _ab["lief"],
+                             "verworfen": _ab["verworfen"],
+                             "gesamt": _ab["gesamt"], "msg": _msg},
+                            ensure_ascii=False), "application/json")
+                    if d.get("verwerfen"):
+                        # .521 FLUECHTIG, zweite Haelfte: der Nutzer schliesst
+                        # das Overlay, ohne etwas zu nehmen. Dann faellt das
+                        # Material SOFORT — nicht erst mit der Retention. Der
+                        # naechste Klick erntet neu; das ist der bewusste Preis
+                        # dafuer, dass ein Pass-Check nichts liegen laesst.
+                        _weg = svc._passernte_raeumen(str(d.get("verwerfen")))
+                        if _weg:
+                            svc.log(f"PASS CHECK discarded: run "
+                                    f"{str(d.get('verwerfen'))[:32]} removed "
+                                    f"({person})")
+                        return self._send(200, json.dumps(
+                            {"ok": True, "n": 0,
+                             "msg": _sprache.t("antwort.passernte_verworfen")},
+                            ensure_ascii=False), "application/json")
                     if d.get("uebernehmen"):
                         # Schritt 2 (.226): genau die GEPRUEFTEN Bilder — der
                         # Nutzer hat sie gesehen und bestaetigt sie jetzt.
-                        # .308: Items der NEUEN Kette (herkunft vorrat) gehen
-                        # ueber den Beiwert-Weg (vorrat_aufnehmen), Event-Crops
-                        # wie bisher.
+                        # .521: Items des Mini-Ernte-Laufs (herkunft
+                        # `passernte`) gehen ueber den Beiwert-Weg
+                        # `passernte_aufnehmen`. Die zwei Alt-Zweige bleiben
+                        # stehen und werden NICHT mehr erzeugt: ein Browser-Tab,
+                        # der vor dem Update geoeffnet wurde, haelt noch Items
+                        # der alten Ketten in der Hand, und seine Uebernahme
+                        # soll funktionieren statt still ins Leere zu laufen
+                        # (dieselbe Ruecksicht wie beim Alt-Body-Zweig unten).
                         _items = d["uebernehmen"] or []
+                        _pe_it = [it for it in _items
+                                  if it.get("herkunft") == "passernte"]
                         _vo = [it for it in _items if it.get("herkunft") == "vorrat"]
-                        _ev = [it for it in _items if it.get("herkunft") != "vorrat"]
+                        _ev = [it for it in _items
+                               if it.get("herkunft") not in ("vorrat", "passernte")]
                         dateien = []
+                        _laeufe = set()
+                        for it in _pe_it[:50]:
+                            _ok, _ziel = anlernen.passernte_aufnehmen(
+                                person, str(it.get("lauf_id") or ""),
+                                str(it.get("datei") or ""), str(it.get("eid") or ""),
+                                data_dir=cfg["data_dir"],
+                                kat_latten=_kk_ue.katalog_latten(cfg))
+                            if _ok:
+                                dateien.append(_ziel)
+                                _laeufe.add(str(it.get("lauf_id") or ""))
+                            else:
+                                # NIE STILL: eine abgelehnte Uebernahme sagt
+                                # warum (Latte, Beiwert fehlt, Lauf geraeumt).
+                                svc.log(f"PASS LEARN: picture not adopted for "
+                                        f"{person} — {str(_ziel)[:120]}")
                         for it in _vo[:50]:
                             _ok, _ziel = anlernen.vorrat_aufnehmen(
                                 person, str(it.get("lauf_id") or ""),
@@ -15799,7 +16975,24 @@ def make_handler(svc):
                             svc.log(f"PASS LEARN: {len(dateien)} reference(s) "
                                     f"adopted for {person} from one pass")
                             svc.qs_neu_starten()
+                            # .525 (B-1): die HIER uebernommenen Bilder sind per
+                            # Bauart NIE Export-Kandidaten — `passernte_aufnehmen`
+                            # schreibt sie mit `herkunft: "vorrat"`, und
+                            # `sync_refs.diff` sortiert genau diese Klasse aus
+                            # ("bleibt lokal"). Der Aufruf bleibt trotzdem stehen:
+                            # er raeumt einen ALTEN Rueckstand anderer Herkunft ab
+                            # und haelt den Vier-Klassen-Abgleich frisch (wie an
+                            # der Vorrats-Stelle darunter). Neu ist der Torwaechter
+                            # IN `frigate_sync_export`: ist Frigates eigene
+                            # Gesichtserkennung bekanntermassen aus, laeuft gar
+                            # nichts los.
                             svc.frigate_sync_export()
+                        # .521: nach der Uebernahme faellt der Lauf-Ordner —
+                        # die Bilder sind als Referenzen KOPIERT, der Rest war
+                        # Anschauungsmaterial. Erst NACH dem Kopieren, sonst
+                        # zoege das Raeumen der Uebernahme die Quelle weg.
+                        for _lid in _laeufe:
+                            svc._passernte_raeumen(_lid)
                         return self._send(200, json.dumps(
                             {"ok": True, "n": len(dateien), "dateien": dateien,
                              "msg": _sprache.t("antwort.bruecke_hinzu", n=len(dateien))},
@@ -15847,95 +17040,86 @@ def make_handler(svc):
                         return self._send(400, json.dumps(
                             {"ok": False, "msg": "no event given — reload the page"},
                             ensure_ascii=False), "application/json")
-                    if cfg.get("vorrat_aktiv"):
-                        # .308: Pass-Check ueber die Vorrats-Kette — Frames
-                        # geerntet, Konsens + Linie; der Alt-Weg (ein
-                        # Event-Crop je Event) bleibt bei Vorrat=aus.
-                        _zst, _nutz = svc.bruecke_vorrat(person, eid, ganzer_pass)
-                        if _zst == "laeuft":
-                            # .507: der Regelfall. Bis .506 war der Vorrat meist
-                            # schon da (Auto-Ernte nach Durchgangs-Ende); die
-                            # Automatik ist weg, geerntet wird auf Klick — also
-                            # ist der Balken Pflicht, nicht Ausnahme. Der
-                            # Browser fragt wie beim Modell-Laden nach.
-                            _antw = {"ok": True, "laden": True,
-                                     "msg": _nutz["msg"],
-                                     "i": _nutz["i"], "n": _nutz["n"],
-                                     "zustand": _nutz["zustand"],
-                                     # .343-Lehre (Bug-Jagd 25.08.): der Handler
-                                     # pickt Felder EINZELN — was
-                                     # _bruecke_fortschritt liefert, MUSS hier
-                                     # explizit mit, sonst faellt es stumm raus.
-                                     # Genau deshalb stehen die .507-Felder
-                                     # (Grund, Start, Dauer, Platz-Lage) hier
-                                     # namentlich und nicht als Rest-Dict.
-                                     "grund": _nutz.get("grund"),
-                                     "start_ts": _nutz.get("start_ts"),
-                                     "dauer_s": _nutz.get("dauer_s"),
-                                     "dauer_unbekannt": _nutz.get("dauer_unbekannt"),
-                                     # .508 J1: kalter Worker ohne gemessenen
-                                     # Kaltaufschlag — das Blatt haengt "+ warm-up"
-                                     # an die Dauer-Zeile.
-                                     "warm_up": _nutz.get("warm_up"),
-                                     "plaetze": _nutz.get("plaetze"),
-                                     "fortschritt": _nutz.get("fortschritt")}
-                            return self._send(200, json.dumps(
-                                _antw, ensure_ascii=False), "application/json")
-                        if _zst == "fehler":
-                            return self._send(200, json.dumps(
-                                {"ok": False, "msg": str(_nutz)[:160]},
-                                ensure_ascii=False), "application/json")
-                        nehmen, grenz = _nutz["nehmen"], _nutz["grenz"]
-                        if nehmen:
-                            msg = (_sprache.t("antwort.bruecke_nimmt", n=len(nehmen))
-                                   + (_sprache.t("antwort.bruecke_grenz_zusatz",
-                                                 n=len(grenz)) if grenz else ""))
-                        elif grenz:
-                            msg = _sprache.t("antwort.bruecke_nur_grenz", n=len(grenz))
-                        else:
-                            msg = _sprache.t("antwort.bruecke_nichts")
-                        # .507: der Umfang steht in der Zeile, nicht mehr eine
-                        # Event-Zahl, die der Browser geschickt hat.
-                        _pass = svc._bruecke_durchgang(eid) or [eid]
-                        _umfang = (f"{len(_pass)} event(s) of this pass" if ganzer_pass
-                                   else f"1 event of {len(_pass)} in this pass")
-                        svc.log(f"PASS CHECK: {person} — {_umfang} via stock "
-                                f"chain -> {len(nehmen)} to take / {len(grenz)} borderline "
-                                f"({_nutz.get('v_gesamt', 0)} stock faces)")
+                    # .521 EIN WEG, IMMER (User-Auflage „ersetzt, nicht
+                    # danebengestellt"): der Klick faehrt den MINI-ERNTE-LAUF —
+                    # Clips holen, alle Frames ernten, mit dem Register „Face
+                    # catalog" sieben, die Feature-Norm gebuendelt nachmessen,
+                    # dann auf die Person filtern (svc.bruecke_vorrat ->
+                    # _bruecke_ernte -> core/passernte.py).
+                    #
+                    # WAS HIER WEG IST: bis .520 haing der Weg am Schalter
+                    # `vorrat_aktiv`. War er AN, lief die Vorrats-Kette (ernten,
+                    # dann Konsens + Vorrats-LINIE); war er AUS, mass ein
+                    # Alt-Zweig die GESPEICHERTEN Event-Crops an einer eigenen
+                    # Pixel-Latte (70 px / 350 Laplace, anlernen
+                    # .lernbruecke_pruefen -> vorschlaege_person). Dieselbe
+                    # Oberflaeche verhielt sich also je nach Schalter
+                    # grundverschieden, und BEIDE Zweige urteilten mit einer
+                    # Qualitaets-Vorstellung NEBEN dem Register — genau die
+                    # Doppel-Siebung, die die Sechs-Achsen-Verfassung verbietet.
+                    # `vorschlaege_person` selbst bleibt unangetastet: die
+                    # Bestands-Suche der Personenseite ruft sie weiter.
+                    _zst, _nutz = svc.bruecke_vorrat(person, eid, ganzer_pass)
+                    if _zst == "laeuft":
+                        # .507: der Regelfall. Bis .506 war der Vorrat meist
+                        # schon da (Auto-Ernte nach Durchgangs-Ende); die
+                        # Automatik ist weg, geerntet wird auf Klick — also
+                        # ist der Balken Pflicht, nicht Ausnahme. Der
+                        # Browser fragt wie beim Modell-Laden nach.
+                        _antw = {"ok": True, "laden": True,
+                                 "msg": _nutz["msg"],
+                                 "i": _nutz["i"], "n": _nutz["n"],
+                                 "zustand": _nutz["zustand"],
+                                 # .343-Lehre (Bug-Jagd 25.08.): der Handler
+                                 # pickt Felder EINZELN — was
+                                 # _bruecke_fortschritt liefert, MUSS hier
+                                 # explizit mit, sonst faellt es stumm raus.
+                                 # Genau deshalb stehen die .507-Felder
+                                 # (Grund, Start, Dauer, Platz-Lage) hier
+                                 # namentlich und nicht als Rest-Dict.
+                                 "grund": _nutz.get("grund"),
+                                 "start_ts": _nutz.get("start_ts"),
+                                 "dauer_s": _nutz.get("dauer_s"),
+                                 "dauer_unbekannt": _nutz.get("dauer_unbekannt"),
+                                 # .508 J1: kalter Worker ohne gemessenen
+                                 # Kaltaufschlag — das Blatt haengt "+ warm-up"
+                                 # an die Dauer-Zeile.
+                                 "warm_up": _nutz.get("warm_up"),
+                                 "plaetze": _nutz.get("plaetze"),
+                                 # .524 Fix 11/12: der Ordner-Name (der
+                                 # Abbrechen-Knopf am Balken braucht ihn,
+                                 # bevor es ein Ergebnis gibt) und der Platz
+                                 # in der Warteschlange. Beide stehen hier
+                                 # namentlich — s. die .343-Lehre darueber.
+                                 "lauf_id": _nutz.get("lauf_id"),
+                                 "pos": _nutz.get("pos"),
+                                 "fortschritt": _nutz.get("fortschritt")}
                         return self._send(200, json.dumps(
-                            {"ok": True, "nehmen": nehmen, "grenz": grenz,
-                             "msg": msg}, ensure_ascii=False), "application/json")
-                    # Alt-Weg (vorrat_aktiv=aus): DERSELBE Zuschnitt, sonst
-                    # verhielte sich dieselbe Oberflaeche je nach Schalter
-                    # anders. Ohne Akte bleibt es beim geklickten Ereignis —
-                    # dieser Weg misst gespeicherte Event-Crops und braucht die
-                    # Durchgangs-Kette nicht. .507 B3: der 200er-Deckel schuetzt
-                    # jetzt genau diesen Weg (der Durchgang kommt aus der Akte,
-                    # nicht mehr aus dem Browser).
-                    eids = ((svc._bruecke_durchgang(eid) or [eid])[:200]
-                            if ganzer_pass else [eid])
-                    dg = {}          # D1: Diagnose-Satz der Pruefung (Zahlen)
-                    nehmen, grenz = anlernen.lernbruecke_pruefen(
-                        person, eids, emb=svc.embedder, diagnose=dg,
-                        norm_latte=norm_latte_aus_cfg(cfg))
-                    # .226b: Bild-URL je Kandidat (derselbe Weg wie die
-                    # Thumb-Reihe) — das Auswahl-Overlay zeigt EXAKT die
-                    # Bilder, die uebernommen wuerden.
-                    for it in nehmen + grenz:
-                        _ed = str(it["eid"]).replace("/", "_")
-                        it["url"] = (f"/events/{urllib.parse.quote(_ed)}/"
-                                     f"{urllib.parse.quote(str(it['datei']))}")
-                    # .231: Grenzfaelle nie mehr verschweigen (Pass-3-Befund:
-                    # 8 sichere Identitaeten fielen still an der Gut-Qualitaet).
+                            _antw, ensure_ascii=False), "application/json")
+                    if _zst == "fehler":
+                        return self._send(200, json.dumps(
+                            {"ok": False, "msg": str(_nutz)[:160]},
+                            ensure_ascii=False), "application/json")
+                    nehmen, grenz = _nutz["nehmen"], _nutz["grenz"]
+                    # .521: die Auswahl traegt ihren Lauf-Ordner mit
+                    # (`lauf_id`), damit die Uebernahme den Beiwert findet UND
+                    # das Overlay beim Abbrechen sagen kann, was zu raeumen ist.
+                    _lauf_id = _nutz.get("lauf_id")
                     # D1 (.30x): der dominante Ausschlussgrund MIT ZAHLEN statt
-                    # des Pauschalsatzes "(that is fine)" — ohne Diagnose
-                    # (grund None) bleibt es beim alten Wortlaut.
+                    # eines Pauschalsatzes. Die Kennungen des Mini-Ernte-Laufs
+                    # sind bewusst die des Bestands-Wegs (core/passernte.py),
+                    # also urteilen dieselbe Wahl (anlernen.diagnose_dominant)
+                    # und dieselbe Satz-Tabelle (webui.bausteine.bruecke_grund)
+                    # wie zuvor — kein zweites Vokabular, keine fuenf neuen
+                    # Uebersetzungen fuer eine Aussage, die es schon gibt.
+                    dg = dict(_nutz.get("diagnose") or {})
+                    if dg:
+                        dg["dominant"] = anlernen.diagnose_dominant(dg)
                     grund = _bruecke_grund(dg)
                     if nehmen:
                         msg = (_sprache.t("antwort.bruecke_nimmt", n=len(nehmen))
                                + (_sprache.t("antwort.bruecke_grenz_zusatz",
-                                             n=len(grenz))
-                                  if grenz else ""))
+                                             n=len(grenz)) if grenz else ""))
                     elif grenz:
                         msg = (_sprache.t("antwort.bruecke_nur_grenz",
                                           n=len(grenz))
@@ -15946,22 +17130,31 @@ def make_handler(svc):
                                          grund=grund)
                     else:
                         msg = _sprache.t("antwort.bruecke_nichts")
-                    # D2 (.30x): der Pruefzweig protokollierte bisher NICHTS
-                    # (K1 — die Diagnose stand nur im Browser). EINE Zeile je
-                    # Pruefung, englisch wie jedes Log (B20); die Klassen sind
-                    # Kennungen, die Schwellen kommen aus der Diagnose.
-                    _kl = dg.get("klassen") or {}
-                    svc.log(
-                        f"PASS CHECK: {person} — {len(eids)} event(s), "
-                        f"{dg.get('geprueft') or 0} crop(s) measured -> "
-                        f"{len(nehmen)} to take / {len(grenz)} borderline; "
-                        f"reason={dg.get('dominant') or '-'} {_kl or '{}'} "
-                        f"(best {dg.get('kante_max') or '-'} px / sharpness "
-                        f"{dg.get('sharp_max') or '-'}, needs "
-                        f"{dg.get('min_kante')} px / {dg.get('unscharf_max')})")
+                    # .507: der Umfang steht in der Zeile, nicht mehr eine
+                    # Event-Zahl, die der Browser geschickt hat.
+                    _pass = svc._bruecke_durchgang(eid) or [eid]
+                    _umfang = (f"{len(_pass)} event(s) of this pass" if ganzer_pass
+                               else f"1 event of {len(_pass)} in this pass")
+                    # .525 (Prod-Pruefung 10.09., Befund B-2): das Etikett hinter
+                    # der Zahl benannte die FALSCHE Siebstufe. `v_gesamt` ist die
+                    # Zeilenzahl der `auswahl.jsonl` dieses Zuschnitts — also was
+                    # nach Register UND Feature-Norm UND Identitaet im ANGEBOT
+                    # steht (`_passernte_auswahl`), nicht was das Register
+                    # durchgelassen hat. Die Bilanz-Zeile davor sagt im selben
+                    # Sekundentakt die Register-Zahl (z.B. 338), diese sagte 97 —
+                    # zwei Zeilen desselben Laufs widersprachen sich sichtbar
+                    # (Fehlerklasse "falsche Darstellung", qs.md). Zahl
+                    # unveraendert, Etikett korrigiert.
+                    svc.log(f"PASS CHECK: {person} — {_umfang} via mini "
+                            f"harvest -> {len(nehmen)} to take / {len(grenz)} "
+                            f"borderline ({_nutz.get('v_gesamt', 0)} candidate(s) "
+                            f"in the offer); "
+                            f"reason={dg.get('dominant') or '-'} "
+                            f"{dg.get('klassen') or '{}'}")
                     return self._send(200, json.dumps(
                         {"ok": True, "nehmen": nehmen, "grenz": grenz,
-                         "msg": msg}), "application/json")
+                         "lauf_id": _lauf_id, "msg": msg},
+                        ensure_ascii=False), "application/json")
                 except Exception as e:
                     return self._send(500, json.dumps(
                         {"ok": False, "msg": str(e)[:160]}), "application/json")
@@ -16747,39 +17940,15 @@ def make_handler(svc):
                     {"ok": True, "stunden": std, "limit": lim,
                      "msg": _sprache.t("antwort.catchup_gestartet", stunden=std, n=lim)},
                     ensure_ascii=False), "application/json")
-            if pfad == "/kalibrierung_setzen":
-                # .377: die zwei kalibrierten Schwellen — DERSELBE Weg wie
-                # jede Config-Aenderung (Whitelist, Audit); seit .378 wirken
-                # sie live (kein Neustart), und der letzte Lauf wird im
-                # selben Zug neu bewertet (User 30.08.: "wenn ich kalibriere,
-                # muesste das Ergebnis des Lernlaufs doch angepasst werden").
-                try:
-                    d = self._body_json(1024, erwartet=dict)
-                    if d is _ABGEWIESEN:
-                        return
-                    ok, msg, neustart = svc.config_schreiben(
-                        {"guete_empfinden_min": d.get("empfinden"),
-                         "guete_t_min": d.get("t")})
-                    neu_bewertet = 0
-                    if ok:
-                        # synchron: die Antwort kommt erst, wenn der Bestand
-                        # neu urteilt — der Sprung zur Lernseite zeigt dann
-                        # sofort den neuen Stand. Scheitert die Neubewertung,
-                        # bleibt der Save trotzdem gueltig (laut im Log).
-                        try:
-                            neu_bewertet = svc._lernlauf_kalibrier_neubewertung()
-                        except Exception as e:
-                            svc.log(f"calibration: regrade of the last run "
-                                    f"failed ({type(e).__name__}: {e})")
-                    return self._send(200 if ok else 400,
-                                      json.dumps({"ok": ok, "msg": msg,
-                                                  "neustart": neustart,
-                                                  "neu_bewertet": neu_bewertet},
-                                                 ensure_ascii=False),
-                                      "application/json")
-                except Exception as e:      # Sammel-Fang wie der Zwilling /konfig: config_schreiben schreibt Store + Audit, das wirft OSError (volles/read-only Volume), und do_POST hat keinen Sammel-Except
-                    return self._send(400, json.dumps(
-                        {"ok": False, "msg": str(e)}), "application/json")
+            # /kalibrierung_setzen ist mit .516 AUSGEBAUT. Der Endpunkt schrieb
+            # ausschliesslich die zwei GLOBALEN Guete-Werte der .377-Seite
+            # (`guete_empfinden_min`/`guete_t_min`), und beide sind mit der
+            # Alt-Latten-Abloesung entfallen — der Lernlauf siebt seit .514 ueber
+            # das Katalog-Register, das je Kamera auf /kalibrierung/<kamera>
+            # gestellt wird. Die Zusage der .378-Neubewertung ("wenn ich
+            # kalibriere, muesste das Ergebnis des Lernlaufs doch angepasst
+            # werden") ist nicht verlorengegangen, sie haengt jetzt an
+            # /live_speichern — dem Speicherweg genau dieser Regler.
             if pfad == "/konfig":                              # Konfigblatt speichern (AP5)
                 try:
                     d = self._body_json(8192, erwartet=dict)
@@ -16881,6 +18050,24 @@ def make_handler(svc):
                 kamera = str(d.get("kamera") or "")
                 if pfad == "/live_speichern":
                     ok, msg = svc.live_speichern(kamera, d)
+                    # .516: HIER haengt seit der Alt-Latten-Abloesung die
+                    # Kalibrier-Neubewertung (.378, User 30.08.: "wenn ich
+                    # kalibriere, muesste das Ergebnis des Lernlaufs doch
+                    # angepasst werden"). Bis .515 sass sie an
+                    # /kalibrierung_setzen, dem Speicherweg der zwei GLOBALEN
+                    # Guete-Werte; die gibt es nicht mehr, und die Latte, die
+                    # den Lernlauf siebt, wird auf DIESER Seite gestellt.
+                    # Nur bei einem Save, der ueberhaupt eine Register-Achse
+                    # traegt (Feldnamen aus DER einen Quelle, nie abgeschrieben),
+                    # und nie als Blocker: ein Fehler in der Neubewertung darf
+                    # den gespeicherten Wert nicht entwerten — laut ins Log,
+                    # genau wie zuvor.
+                    if ok and any(f in d for f in _kk_ernte.KAT_FELDER):
+                        try:
+                            svc._lernlauf_kalibrier_neubewertung()
+                        except Exception as e:
+                            svc.log(f"calibration: regrade of the last run "
+                                    f"failed ({type(e).__name__}: {e})")
                 elif pfad == "/live_schalter":
                     ok, msg = svc.live_schalter(kamera, bool(d.get("enabled")))
                 elif pfad == "/live_test":
@@ -17332,7 +18519,7 @@ def make_handler(svc):
                             yaw_grenze=cfg["benennung_yaw_grenze"],
                             norm_latte=norm_latte_aus_cfg(cfg),
                             luma_grenzen=luma_grenzen_aus_cfg(cfg),
-                            guete_latte=guete_latte_aus_cfg(cfg))
+                            kat_latten=_kk_ernte.katalog_latten(cfg))
                     finally:
                         svc._sichtung_aid = None
                     return self._send(200, json.dumps({"ok": True}),
@@ -17388,7 +18575,7 @@ def make_handler(svc):
                                               "lernlauf", lid),
                         norm_latte=norm_latte_aus_cfg(cfg),
                         luma_grenzen=luma_grenzen_aus_cfg(cfg),
-                        guete_latte=guete_latte_aus_cfg(cfg))
+                        kat_latten=_kk_ernte.katalog_latten(cfg))
                     return self._send(200, json.dumps(
                         {"ok": True, "person": person, "bewertung": bew},
                         ensure_ascii=False), "application/json")
@@ -17426,7 +18613,6 @@ def make_handler(svc):
                     plan = _ue.plan_bauen(satz, cfg["benennung_dup_sim"],
                                           _ue.adoptierte_embs(cfg["data_dir"], person),
                                           luma_grenzen=luma_grenzen_aus_cfg(cfg),
-                                          guete_latte=guete_latte_aus_cfg(cfg),
                                           kat_latten=_kk_ad.katalog_latten(cfg))
                     if not plan["aufnehmen"]:
                         if not plan["uebersprungen"]:
@@ -19205,7 +20391,7 @@ def make_handler(svc):
                                 os.path.join(cfg["data_dir"], "clips",
                                              "refcache.npz"), cfg["modell"]),
                             luma_grenzen=luma_grenzen_aus_cfg(cfg),
-                            guete_latte=guete_latte_aus_cfg(cfg))
+                            kat_latten=_kk_ernte.katalog_latten(cfg))
                         # .224: Fluss-Kontext (Group x of y + naechste offene
                         # Gruppe) — dieselbe Reihenfolge wie die Listen-Seite
                         # (Stuetz absteigend), damit Karte und Liste eine
@@ -19284,52 +20470,44 @@ def make_handler(svc):
             # stille Grenzfall-Rueckstufung); nur der Bedienweg faellt.
             if path == "/kalibrierung":
                 # ZENTRALE Kamera-Kalibrierung (User-Entscheid 31.08., eigener
-                # Knopf in der Hauptleiste). Zwei Ansichten an EINER Adresse:
-                # ohne Parameter die Kamera-Uebersicht, mit ?lauf=1 die
-                # GLOBALEN Guete-Werte am Material des letzten Lernlaufs (die
-                # .377-Seite — sie stellt die Latte des Lernlauf-Siebs und den
-                # Rueckfall fuer Kameras ohne eigene Werte).
-                from core import guete as _gt_k
+                # Knopf in der Hauptleiste). Seit .516 nur noch EINE Ansicht:
+                # die Kamera-Uebersicht. Die zweite (?lauf=1, die .377-Seite mit
+                # den zwei GLOBALEN Guete-Reglern am Material des letzten
+                # Lernlaufs) ist mit der Alt-Latten-Abloesung ausgebaut — sie
+                # stellte Werte ein, die nichts mehr sieben, und versprach in
+                # fuenf Sprachen weiter, sie entschieden "welche Gesichter
+                # kuenftige Lernlaeufe behalten". Gestellt wird die Lern-Latte
+                # seither je Kamera auf /kalibrierung/<kamera>, im Register
+                # "Face catalog".
                 from core import kamerakalib as _kk
-                from core import lernlauf as _ll_k
                 from routes import kalibrierung as _r_kal
+                # .516: der Anker-Store wird auf DIESER Seite nicht mehr
+                # gelesen. Er lieferte allein das Material der ausgebauten
+                # ?lauf=1-Ansicht; die Uebersicht selbst hat nie etwas daraus
+                # gebraucht. Der Lese-Schutz gegen eine unlesbare anker.jsonl
+                # steht unveraendert auf der Kamera-Seite, wo die
+                # Lernlauf-Bilder wirklich gezeigt werden.
+                _cams_k, _cfehl_k = frigate_cameras(cfg)
                 try:
-                    _saetze_k, _ = _ll_k.anker_lesen(cfg["data_dir"])
-                except OSError as _e_ank:
-                    # Der Anker-Store ist NICHT die Aufgabe dieser Seite — er
-                    # liefert nur das Lernlauf-Material. Ist er unlesbar (im
-                    # Feld gesehen: root-eigene Datei aus einem Container-Lauf),
-                    # darf der MENUEPUNKT trotzdem nicht sterben: die
-                    # Kamera-Kalibrierung funktioniert ohne ihn vollstaendig.
-                    # Laut ins Log, leer in die Seite — nie ein stilles Nichts.
-                    svc.log(f"calibration page: learning-run material "
-                            f"unreadable ({type(_e_ank).__name__}: {_e_ank})")
-                    _saetze_k = []
-                if (qs.get("lauf") or [""])[0]:
-                    _inh_k = _r_kal.lauf(
-                        _saetze_k, cfg, {"e": _gt_k.STARTWERTE["empfinden"],
-                                         "t": _gt_k.STARTWERTE["t"]})
-                else:
-                    _cams_k, _cfehl_k = frigate_cameras(cfg)
-                    try:
-                        with open(os.path.join(cfg["data_dir"], "state",
-                                               "kalib_bilanz.json"),
-                                  encoding="utf-8") as _f_kb:
-                            _bilanzen_k = json.load(_f_kb)
-                        if not isinstance(_bilanzen_k, dict):
-                            _bilanzen_k = {}
-                    except Exception:
+                    with open(os.path.join(cfg["data_dir"], "state",
+                                           "kalib_bilanz.json"),
+                              encoding="utf-8") as _f_kb:
+                        _bilanzen_k = json.load(_f_kb)
+                    if not isinstance(_bilanzen_k, dict):
                         _bilanzen_k = {}
-                    _inh_k = _r_kal.uebersicht(
-                        _kk.uebersicht_daten(cfg, _cams_k),
-                        _kk.global_latte(cfg),
-                        (_kk.katalog_latten(cfg) or {}).get("global") or {},
-                        int(cfg.get("live_kalib_max") or 0),
-                        bool(_r_kal.mitglieder_mit_guete(_saetze_k)),
-                        (int(cfg.get("kalib_fueller_bilder") or 0),
-                         int(cfg.get("kalib_fueller_events") or 0)),
-                        banner_leer=str(_cfehl_k or ""),
-                        bilanzen=_bilanzen_k)
+                except Exception:
+                    _bilanzen_k = {}
+                _inh_k = _r_kal.uebersicht(
+                    _kk.uebersicht_daten(cfg, _cams_k),
+                    # .516: die globale Zeile des Katalog-Registers IST der
+                    # Rueckfall (frueher standen hier zwei Karten nebeneinander,
+                    # die zweite mit den abgeloesten Guete-Werten).
+                    (_kk.katalog_latten(cfg) or {}).get("global") or {},
+                    int(cfg.get("live_kalib_max") or 0),
+                    (int(cfg.get("kalib_fueller_bilder") or 0),
+                     int(cfg.get("kalib_fueller_events") or 0)),
+                    banner_leer=str(_cfehl_k or ""),
+                    bilanzen=_bilanzen_k)
                 import webui   # lokal wie in den Nachbar-Zweigen — spaetere
                                    # lokale Imports machen den Namen funktionslokal
                                    # (UnboundLocalError beim ersten Prod-Aufruf, 31.08.)
@@ -19391,6 +20569,13 @@ def make_handler(svc):
                      "e": _kk.anzeige_start()["e"], "t": _kk.anzeige_start()["t"]},
                     {"akt": _kat_lk, "std": _kk.katalog_start()},
                     pruef={"akt": _pru_lk, "std": dict(_ru_lk.PRUEF_STARTWERTE)},
+                    # .515 (Sensor 5): die neuen Achsen des ERKENNEN-Registers.
+                    # Sie kommen AUFGELOEST (Kamera -> global -> Werks-Boden)
+                    # aus DEM einen Leser core.kamerakalib.erk_latten — nie
+                    # ueber einen zweiten Config-Griff auf dieser Seite,
+                    # dieselbe Regel wie beim Pruefer-Register darueber.
+                    erk={"akt": _kk.erk_latten(cfg, _g_lk.get(kamera)),
+                         "std": _kk.erkennen_start()},
                     lauf_bilder=_r_kal.mitglieder_mit_guete(_saetze_lk, kamera),
                     deckel=int(cfg.get("live_kalib_max") or 0),
                     fueller=(int(cfg.get("kalib_fueller_bilder") or 0),
@@ -19734,11 +20919,11 @@ def make_handler(svc):
                         _rfz = _al_leer.refs_matrix_roh(cfg["modell"])
                         _nlz = norm_latte_aus_cfg(cfg)
                         _lgz = luma_grenzen_aus_cfg(cfg)
-                        _glz = guete_latte_aus_cfg(cfg)
+                        _glz = _kk_ernte.katalog_latten(cfg)
                         _wart.sort(key=lambda s: 1 if _al_leer.sichtung_hat_sichtbare(
                             s, _lz, cfg["modell"], _rfz, cfg["benennung_dup_sim"],
                             norm_latte=_nlz, luma_grenzen=_lgz,
-                            guete_latte=_glz) is False else 0)
+                            kat_latten=_glz) is False else 0)
                     except Exception as e:
                         svc.log(f"lernlauf: empty-group ordering failed "
                                 f"({type(e).__name__}: {e})")
@@ -19765,7 +20950,7 @@ def make_handler(svc):
                                                  "refcache.npz"),
                                     cfg["modell"]),
                                 luma_grenzen=luma_grenzen_aus_cfg(cfg),
-                                guete_latte=guete_latte_aus_cfg(cfg))
+                                kat_latten=_kk_ernte.katalog_latten(cfg))
                         except Exception as e:
                             # Flaeche ist Zusatz-Weg — die Benennungs-Karte
                             # bleibt erreichbar, deshalb laut statt Blocker.
@@ -19811,7 +20996,7 @@ def make_handler(svc):
                                     if _pf else [],
                                     norm_latte=norm_latte_aus_cfg(cfg),
                                     luma_grenzen=luma_grenzen_aus_cfg(cfg),
-                                    guete_latte=guete_latte_aus_cfg(cfg))
+                                    kat_latten=_kk_ernte.katalog_latten(cfg))
                                 sichtung_gesamt = _si.get("gesamt", 0)
                         except Exception as e:
                             svc.log(f"lernlauf: sichtung render failed "
@@ -19869,7 +21054,7 @@ def make_handler(svc):
                                                # aus DERSELBEN Reihung kommt.
                                                norm_latte=norm_latte_aus_cfg(cfg),
                                                luma_grenzen=luma_grenzen_aus_cfg(cfg),
-                                               guete_latte=guete_latte_aus_cfg(cfg))
+                                               kat_latten=_kk_ernte.katalog_latten(cfg))
                     # .260: kein meta-refresh mehr — das Saeule-Widget der
                     # Seite pollt /lernlauf_status (Tick-Regel lebt als EINE
                     # Quelle in lernwizard.lauf_status) und laedt genau EINMAL
@@ -22276,6 +23461,16 @@ def startup_selfcheck(svc):
         erg("info", f"suppressed {_STDERR_SIEB.anzahl} harmless driver "
                     f"thread-affinity notices so far (model library sets no "
                     f"thread cap; computation is unaffected)")
+    # .525 dasselbe fuer die stdout-Seite: die insightface-Init-Zeilen des
+    # Detektor-Bundles ("Applied providers: ['CPUExecutionProvider']"). Sie sind
+    # KEIN Hinweis auf das Backend dieses Dienstes — die Sessions werden direkt
+    # danach ersetzt. Nie still: die Zahl steht hier, und mit `debug` kommen die
+    # Zeilen im Wortlaut zurueck.
+    if _STDOUT_SIEB is not None and _STDOUT_SIEB.anzahl:
+        erg("info", f"hid {_STDOUT_SIEB.anzahl} raw model-library startup line(s) "
+                    f"(the detector bundle builds throwaway CPU sessions before "
+                    f"they are replaced by the backend above) — enable 'debug' "
+                    f"to see them")
     try:
         cache = os.path.join(cfg.get("data_dir") or "", "clips", "ov_cache")   # clips/ ist vom Backup ausgeschlossen (Cache = regenerierbar, NICHT in state/)
         try:
@@ -22330,7 +23525,33 @@ def _sigterm(signum, frame):
 
 
 _STDERR_SIEB = None   # gesetzt in main(); Selfcheck druckt die Summe
+_STDOUT_SIEB = None   # .525: fd-1-Sieb gegen die insightface-Init-Flut
 _LOGDATEI = None      # .354: gesetzt in main(); Tee nach <data_dir>/logs/
+
+# .525: der Datenordner steht erst nach load_config fest. Bis dahin kennt das
+# fd-1-Sieb den debug-Schalter nicht und siebt — das ist die richtige Richtung:
+# genau in der Startphase faellt die insightface-Flut an, und wer sie sehen will,
+# hat debug an und bekommt sie ab der Config-Zeile.
+_SIEB_DBG = {"dd": None, "ts": 0.0, "an": False}
+
+
+def _sieb_debug_an():
+    """Steht der debug-Schalter? Quelle ist die Flaggendatei des Dienstes
+    (core/logdatei.debug_flagge_an — dieselbe, die die Live-Engine liest), mit
+    2-s-Gedaechtnis wie dort: der Sieb-Faden sieht JEDE Zeile und darf dafuer
+    nicht je Zeile die Platte fragen."""
+    dd = _SIEB_DBG.get("dd")
+    if not dd:
+        return False
+    jetzt = time.monotonic()
+    if jetzt - _SIEB_DBG["ts"] > 2.0:
+        try:
+            from core import logdatei as _ld
+            _SIEB_DBG["an"] = _ld.debug_flagge_an(dd)
+        except Exception:
+            _SIEB_DBG["an"] = False
+        _SIEB_DBG["ts"] = jetzt
+    return _SIEB_DBG["an"]
 
 
 def main():
@@ -22350,9 +23571,19 @@ def main():
         _LOGDATEI = None
         print(f"[suslik] log file not available ({type(_e).__name__}) — "
               f"continuing with docker logs only", flush=True)
-    global _STDERR_SIEB
+    global _STDERR_SIEB, _STDOUT_SIEB
     from core import stderr_sieb as _ss
     _STDERR_SIEB = _ss.installieren()
+    # .525 (Prod-Pruefung 10.09., Feldnutzer-Falle 1): dasselbe Sieb auf fd 1
+    # gegen die insightface-Init-Flut ("Applied providers:
+    # ['CPUExecutionProvider']" x5 direkt hinter der Startzusage "device
+    # engaged"). Begruendung, Muster und Grenze stehen im Modulkopf; kurz: der
+    # Nutzer soll die Wegwerf-Sessions des Detektor-Bundles nicht fuer sein
+    # Backend halten, und das Sieb endet an derselben Grenze wie das fd-2-Sieb
+    # (Job-Fenster des Workers bleiben ungefiltert — dort MISST das Gate).
+    # Mit gesetztem debug-Schalter filtert es nichts.
+    _STDOUT_SIEB = _ss.installieren(1, passt=_ss.insightface_init_zeile,
+                                    durchlass=_sieb_debug_an)
     # umask 022 fuer den GANZEN Dienst-Baum (Kinder erben: Engine, Worker,
     # Wartung): der Container schreibt als root, und mit der Default-umask
     # entstanden 600er-Dateien, die der Host weder lesen noch sichern konnte
@@ -22375,6 +23606,8 @@ def main():
     a = ap.parse_args()
     cfg = load_config(a.config)
 
+    _SIEB_DBG["dd"] = cfg.get("data_dir")         # .525: ab hier kennt das
+    _SIEB_DBG["ts"] = 0.0                         #        fd-1-Sieb den Schalter
     if _LOGDATEI is not None:                     # .354: Ordner nachreichen
         if cfg.get("log_datei", True):
             _LOGDATEI.behalten_tage = max(1, int(cfg.get("log_behalten_tage") or 14))
@@ -22547,6 +23780,9 @@ def main():
     _rmf_start.start_zuruecksetzen(cfg["data_dir"], svc.log)
     svc.vision_waisen_start()             # .164: Laeufe schliessen, die der letzte
     #                                       Neustart mitten drin erwischt hat
+    svc.bruecke_waisen_start()            # .524 Fix 12: angenommene, aber nie
+    #                                       begonnene Pass-Checks LAUT verwerfen
+    #                                       (die Warteschlange lebt im Prozess)
     if not cfg["frigate_url"]:                 # frisch (Docker-Erstboot): erst der Setup-Wizard,
         svc.log("frigate_url empty — setup wizard (UI) only; Frigate poll starts after the wizard restart")
         while True:                            # Web-Thread laeuft weiter (Wizard); wir pollen nicht ins Leere

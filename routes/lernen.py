@@ -14,6 +14,23 @@ import webui
 from core.sprache import t
 
 
+def _js(s):
+    """JS-String-Kontext in onclick — das HAUSMUSTER (routes/gesichter.py,
+    routes/aehnliche.py), nicht `html.escape` allein.
+
+    .512 (Feldtester-Meldung 09.09., zweiter Fall derselben Klasse): die
+    Vorschlags-Kennung traegt den PERSONENNAMEN woertlich
+    (verifyd._enroll_uebernehmen: f"{eid}:{person}:{t}"), und `PERSON_RE`
+    laesst genau ein gefaehrliches Zeichen zu — den Apostroph. `html.escape`
+    macht daraus `&#x27;`; der HTML-Parser des Browsers dekodiert das im
+    Attributwert zurueck, BEVOR der JS-Compiler die Zeile sieht. Der bekam dann
+    (synthetisches Beispiel) `enroll('…:O'Test:10.3','ablehnen',null,this)` und
+    brach mit SyntaxError ab: weder "Reject" noch "Add as …" feuerten, die Karte
+    war fuer diese eine Person tot. Erst maskieren wir also fuer JS, dann fuer
+    HTML. Probe: tools/proben/s11_k1_onclick_js.py."""
+    return html.escape(s.replace("\\", "\\\\").replace("'", "\\'"), quote=True)
+
+
 def render(offen, personen, data_dir):
     """-> Seiten-INHALT. offen = sortierte offene Queue-Eintraege (neueste zuerst),
     personen = master_persons(cfg)."""
@@ -29,7 +46,7 @@ def render(offen, personen, data_dir):
                  front=d.get("front"), sharp=f"{d.get('sharp'):.0f}")
                if d.get("sharp") is not None
                else t("lernen.karte.metrik_kurz", score=d.get("score")))
-        kid = html.escape(d["id"], quote=True)
+        kid = _js(d["id"])
         vid = (f' <a href="/video/{urllib.parse.quote(ed)}">&#9654; {t("lernen.karte.link_video")}</a>'
                if any(os.path.isfile(os.path.join(data_dir, "clips", ed + s))
                       for s in ("_review.mp4", ".mp4")) else "")

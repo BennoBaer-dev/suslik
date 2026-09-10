@@ -10,7 +10,7 @@ hardware:
 | **Intel** | `-gpu` | Intel iGPU / NPU via OpenVINO | you have an Intel integrated GPU (and optionally NPU) |
 | **Intel legacy** | `-gpu-legacy` | Intel Gen8/9/11 iGPU (HD 5xxx/UHD 6xx) via OpenVINO legacy runtime | you have a 5th–10th gen Intel iGPU — the regular `-gpu` image cannot bind it |
 | **NVIDIA** | `-cuda` | NVIDIA GPU via CUDA | you have an NVIDIA GPU |
-| **AMD** | `-rocm` | AMD GPU via ROCm / MIGraphX (testing) | you have an AMD GPU — pass `/dev/kfd` + `/dev/dri` into the container |
+| **AMD** | `-rocm` | AMD GPU via ROCm / MIGraphX (testing, confirmed working on a Radeon 760M) | you have an AMD GPU — pass `/dev/kfd` + `/dev/dri` into the container |
 
 > Why separate images instead of one universal image? The Intel (`onnxruntime-openvino`) and
 > NVIDIA (`onnxruntime-gpu`) runtimes cannot coexist in one Python environment — they overwrite
@@ -63,8 +63,9 @@ You can either **pull a published image** or **build it yourself**.
 
 All variants are published on the GitHub Container Registry.
 
-> **Alpha note:** `latest-*` follows the newest published version (currently
-> **0.1.0.339** — see the README status for what's new), so a plain
+> **Alpha note:** `latest-*` follows the newest published version — whichever is at the top of
+> [Releases](https://github.com/BennoBaer-dev/suslik/releases), with the README status
+> describing what is new in it. So a plain
 > `docker compose pull` tracks the alpha. Every `latest-*` tag only
 > moves after that release ran on real test hardware. If you would rather decide yourself when
 > to move, pin the version tag explicitly (see *Staying on a fixed version* below):
@@ -78,16 +79,19 @@ docker pull ghcr.io/bennobaer-dev/suslik:latest-gpu-legacy  # Intel Gen8/9/11 (t
 docker pull ghcr.io/bennobaer-dev/suslik:latest-rocm        # AMD (testing)
 
 # the same release, pinned so it never moves under you:
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.511-gpu
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.511-cuda
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.511-cpu
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.511-gpu-legacy
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.511-rocm
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.526-gpu
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.526-cuda
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.526-cpu
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.526-gpu-legacy
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.526-rocm
 ```
 
 > **Testing variants:** `gpu-legacy` and `rocm` follow every release under `latest-*` like
 > the others, but they are not covered by our own release test machines — they rely on
-> field reports. If you need stability there, pin the version tag.
+> field reports. Both have one now: `gpu-legacy` on a UHD 630, and `rocm` confirmed working
+> on a Radeon 760M (RDNA3, ROCm 7.2.4) from 0.1.0.511 on — see
+> [PR #28](https://github.com/BennoBaer-dev/suslik/pull/28). If you need more assurance than
+> that, pin the version tag.
 
 > The **NVIDIA/CUDA** image is now on GHCR too (`latest-cuda`), so you can pull it like the
 > others. Note it is a **large image** — it bundles the multi-GB CUDA runtime — so the pull takes
@@ -289,6 +293,72 @@ compatibility note are in [hardware-acceleration.md](hardware-acceleration.md).
 
 ---
 
+## AMD variant (ROCm / MIGraphX)
+
+Pass through **both** AMD device nodes: `/dev/kfd` (the ROCm compute device) and `/dev/dri` (the
+render node) — ROCm needs both. As with the Intel variant, the container also has to be in the
+host's `render` group, and the group ID differs per host, so read it from the host rather than
+hardcoding.
+
+**docker run:**
+```bash
+docker run -d --name suslik \
+  -p 8199:8199 \
+  -e TZ=Europe/Berlin \
+  -v /path/to/suslik-data:/data \
+  --device /dev/kfd:/dev/kfd \
+  --device /dev/dri:/dev/dri \
+  --group-add "$(getent group render | cut -d: -f3)" \
+  ghcr.io/bennobaer-dev/suslik:latest-rocm
+```
+
+**docker compose** (`compose.yml`):
+```yaml
+services:
+  suslik:
+    image: ghcr.io/bennobaer-dev/suslik:latest-rocm   # or pin the version tag (testing variant: not covered by our release test machines)
+    container_name: suslik
+    restart: unless-stopped
+    ports:
+      - "8199:8199"
+    environment:
+      - TZ=Europe/Berlin
+    devices:
+      - "/dev/kfd:/dev/kfd"                       # ROCm compute device
+      - "/dev/dri:/dev/dri"                       # render node
+    group_add:
+      # NUMERIC host GID of the render group. The group NAME ("render") does NOT work here —
+      # Docker resolves group_add against the CONTAINER's /etc/group, which has no render group,
+      # and the container fails to start. Find your host's GID with:  getent group render
+      - "992"                                     # your host's 'render' GID (varies per system!)
+    volumes:
+      - ./suslik-data:/data
+```
+
+The startup self-check will report `migraphx:0 — device engaged` when the GPU is working, and the
+benchmark step a few lines further down times MIGraphX against the CPU baseline on your machine.
+
+**Step 8 of the startup check needs a few starts here.** MIGraphX compiles each model for your
+specific GPU the first time it meets it, and that compile is slow — roughly two minutes for the
+first model in the field report. The compute cross-check therefore runs on a time budget and
+reports `not measured yet (time budget) — continues on a later start` for the models it did not
+reach, picking them up on later starts. That is expected on this variant, not a fault. The image
+points MIGraphX's compile caches at the `/data` volume so they outlive the container.
+
+**`HSA_OVERRIDE_GFX_VERSION` is probably not needed.** It is the first thing most AMD guides tell
+you to set. From **0.1.0.511** on, a field report on a **Radeon 760M (RDNA3, ROCm 7.2.4)** ran
+without it — and without the extra `LD_LIBRARY_PATH` and include-path overrides earlier images
+needed ([PR #28](https://github.com/BennoBaer-dev/suslik/pull/28)). Start plain; only reach for
+the override if your card refuses to bind.
+
+> **Optional, from that same field report — not a requirement:** that setup also granted
+> `cap_add: [CAP_PERFMON, SYS_RAWIO]` so AMD GPU metrics could be read. suslik does not need
+> them. Its system-stats page has no AMD GPU utilization reading yet — the `-rocm` image ships
+> `rocminfo`, not `rocm-smi` — so that tile reports *"the query tool for this device is not part
+> of this image"* either way.
+
+---
+
 ## Verifying the start
 
 Whatever variant you run, watch the log:
@@ -328,7 +398,7 @@ A `latest-*` tag only moves once a release has been deployed and verified on rea
 when to move, pin the version explicitly:
 
 ```yaml
-    image: ghcr.io/bennobaer-dev/suslik:0.1.0.511-cpu
+    image: ghcr.io/bennobaer-dev/suslik:0.1.0.526-cpu
 ```
 
 To move, change the tag and run `docker compose up -d`. Recent versions stay pullable, but a

@@ -713,8 +713,13 @@ a.pchip:hover, a.badge.warn:hover { filter: brightness(1.15); }
 .wnblock .wn-liste li { margin: 3px 0; }
 .wnblock .wn-liste li.wn-mehr { display: none; }
 /* .168: der hervorgehobene Eintrag (Vorab-Hinweis eines Releases) — fett und in
-   der Warnfarbe des Themes, damit er in BEIDEN Themes lesbar bleibt. */
+   der Warnfarbe des Themes, damit er in BEIDEN Themes lesbar bleibt.
+   .526: die Marke sitzt jetzt am KOPF des Eintrags (span bis zum ersten
+   Gedankenstrich), der Rest bleibt normal gesetzt. Die li-Regel bleibt fuer den
+   Fallback stehen: ein markierter Eintrag OHNE Gedankenstrich wird wie bisher
+   ganz gefaerbt. */
 .wnblock .wn-liste li.wn-betont { font-weight: 700; color: var(--crit, #c44); }
+.wnblock .wn-liste li .wn-betont { font-weight: 700; color: var(--crit, #c44); }
 .wnblock.wn-open .wn-liste li.wn-mehr { display: list-item; }
 .wnblock .wn-v { display: inline-block; font-size: 11px; font-weight: 600;
   color: var(--accent); border: 1px solid var(--accent); border-radius: 9px;
@@ -1008,6 +1013,10 @@ body:not(.easy) .nur-easy { display: none; }
 .fs-fill { display: block; height: 100%; background: seagreen;
   transition: width .6s; }
 .fs-fill.warte { background: var(--warn); }
+/* .524 Fix 11: der Abbrechen-Knopf IM Fortschritts-Block (nur der Pass-Check
+   baut ihn, s. auftritte.py lbBlock). Klein und unauffaellig — er ist der
+   Ausweg, nicht das Angebot. */
+.fs-ab { font-size: 11px; padding: 2px 8px; }
 .fs-phasen { display: flex; flex-wrap: wrap; gap: 4px 14px;
   font-size: 12px; margin: 5px 0 2px; }
 .fs-phasen div { display: flex; gap: 5px; align-items: center;
@@ -1219,6 +1228,15 @@ body:not(.easy) .nur-easy { display: none; }
 .anw-z.anw-n{width:6px;height:12px;opacity:.75}
 .anw-z.anw-weg{background:var(--ok);border-color:var(--ok);opacity:.55}
 .anw-z.anw-weg.anw-n{opacity:.4}
+/* Teil-Luecke (.519, Fix 10): der Dienst lief, aber ein Ereignis dieser Sicht blieb
+   unanalysiert. KEINE dritte Signalfarbe (User-Zuschnitt 10.09.) — eine Ecke wird aus der
+   gruenen Kachel herausgenommen, also FORM statt Farbe (M9), und die Zahlen stehen im
+   Tooltip. Die Kachel bleibt dabei etwas kraeftiger als eine glatte gruene, damit die Ecke
+   auf 10 px ueberhaupt auffaellt. Nacht-Kacheln sind schmaler, ihre Ecke entsprechend. */
+.anw-z.anw-weg.anw-teil{opacity:.8;
+  background-image:linear-gradient(225deg,var(--bg) 0,var(--bg) 4px,transparent 4px)}
+.anw-z.anw-weg.anw-teil.anw-n{opacity:.65;
+  background-image:linear-gradient(225deg,var(--bg) 0,var(--bg) 3px,transparent 3px)}
 .anw-z.anw-da{background:var(--crit);border-color:var(--crit);height:20px;opacity:1}
 .anw-z.anw-da.anw-n{height:16px}
 .anw-z.anw-zukunft{border-style:dotted;opacity:.5}
@@ -1232,6 +1250,9 @@ a.anw-z:hover{outline:2px solid var(--accent);outline-offset:1px}
 .anw-legende>span{display:inline-flex;align-items:center;gap:5px}
 .anw-legende .anw-z{display:inline-block;height:14px}
 .anw-legende .anw-z.anw-da{height:14px}
+/* Der klarstellende Satz unter der Legende (Weiss = "lief nicht"). Er steht dort, wo bis
+   .518 die Doppeldeutigkeit stand, und darf deshalb nicht wegoptimiert werden. */
+.anw-legsatz{font-size:12px;margin:0 0 8px}
 .anw-zaehler{font-size:12px}
 .anw-nie{font-size:13px;color:var(--dim);margin:10px 0 4px}
 .anw-alle summary{cursor:pointer;font-size:13px;color:var(--accent)}

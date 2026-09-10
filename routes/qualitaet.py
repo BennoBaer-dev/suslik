@@ -21,6 +21,51 @@ import urllib.parse
 import webui
 from core.sprache import t
 
+# Reiter der Personen-Galerie, in der Reihenfolge der Zuordnung. Der erste
+# Eintrag ist der Rest-Reiter ("gut"), die vier danach sind BEFUND-Reiter.
+REITER_ORDNUNG = ("gut", "check", "weg", "dubl", "noface")
+
+
+def reiter_gruppe(k, noface, dubl_alle, verwechselt, dup_weg, urteil):
+    """DIE EINE Reiter-Regel der Qualitaets-Seite -> ein Wert aus REITER_ORDNUNG.
+    `k` ist der Bild-Schluessel (Dateiname in der Galerie, (Person, Datei) in der
+    Uebersicht), `urteil` das Stufe-C-Wort dieses Bildes ('ok'/'auffaellig'/
+    'raus'/'ungemessen'/None).
+
+    EXKLUSIV: ein Bild steht in GENAU EINEM Reiter. Sonst zaehlte der
+    Remove-Zaehler dieselbe Datei zweimal — und genau daraus entstanden die
+    734 "Funde" auf 1185 Bildern, die der Feldtester am 09.09. sah.
+
+    .512 (Feldtester-Meldung 09.09., Diagnose backups/katalog_diagnose_0909/
+    blurry_diagnose_bericht.md): bis .511 entschied HIER noch die ALTE
+    Pixel-Achse (`qs["ungeeignet"]`, `sharp < unscharf_max`) ueber Reiter UND
+    Wort — und zwar VOR dem Stufe-C-Urteil, das deshalb nur noch als dim-Zusatz
+    danebenstand. Folge auf dem Feldtester-Bestand: 103 Kacheln mit dem Wort
+    "blurry" im Entfernen-Reiter, 12 davon haelt der kalibrierte Pruefer fuer
+    `ok`, und in der Sichtpruefung waren mehrere davon fuer das Auge sichtbar
+    scharf. Die Alt-Achse misst mit `sharp` weiter (Sidecar, Lern-Seiten,
+    REF_LATTE — alles unveraendert), aber auf DIESER Seite urteilt sie nicht
+    mehr: `sharp` trennt am Eichsatz mit AUC 0,48 nicht besser als ein
+    Muenzwurf (core/refurteil.py, Stufe B §3d).
+
+    Was hier weiterhin VOR dem Guete-Urteil kommt, sind die Befunde, die es
+    nicht faellen KANN: kein Gesicht gefunden (keine einzige Messung),
+    Byte-Kopien (Datei-Identitaet), Verwechslung und Nah-Dublette (beides
+    Beziehungen zwischen zwei Bildern, keine Guete-Frage)."""
+    if k in noface:
+        return "noface"
+    if k in dubl_alle:
+        return "dubl"
+    if k in verwechselt:
+        return "check"
+    if k in dup_weg:
+        return "weg"
+    if urteil == "raus":
+        return "weg"
+    if urteil == "auffaellig":
+        return "check"
+    return "gut"
+
 
 def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
     """-> Seiten-INHALT (kopf+koerper; layout/banner bleiben beim Handler).
@@ -47,7 +92,9 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
         paare = [p for p in paare
                  if person in (p["a_person"], p["b_person"])]
         ug = [u for u in ug if u["person"] == person]
-    krit = [p for p in paare if p.get("kritisch")]
+    # .512: die frueher hier gebildete Liste `krit` ist entfallen — die
+    # Verwechslungs-Zahl der Uebersicht zaehlt seitdem BILDER (Teilmenge der
+    # Reiter-Zuordnung) statt PAARE, s. _uebersicht_zaehlen().
     # .273 Bestands-QS: Doppel-Befunde + Personen-Kopftabelle + Lauf-Fortschritt.
     doppel = [d for d in qs.get("doppel", [])
               if _da(d["person"], d["datei"]) and _da(d["person"], d["behalten"])]
@@ -182,17 +229,75 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
     # .273b (User: 'vom Ablauf muss es so sein, dass es jeder versteht'):
     # EIN Klartext-Ergebnis-Satz vor allen Tabellen — was wurde geprueft,
     # was ist zu tun. Zahlen kommen aus dem Bericht, nichts wird erfunden.
+    def _uebersicht_zaehlen():
+        """Die BEFUND-Zahlen der Uebersicht -> ({reiter: n}, n_verwechselt).
+
+        .512 (Feldtester 09.09.): bis .511 addierte der Satz vier Groessen, die
+        DIESELBEN Bilder mehrfach enthielten — `len(krit) + len(ug) +
+        len(doppel) + vorschlag`. Auf dem Feldtester-Bestand ergab das 734
+        "Funde" auf 1185 Bilder, obwohl nur 772 Kacheln ueberhaupt markiert
+        waren: `ug` fuehrte 171 unscharf-Befunde, von denen der Stufe-C-Zweig
+        110 noch einmal als `raus` zaehlte. Gezaehlt wird jetzt nach DERSELBEN
+        exklusiven Reiter-Regel wie in der Galerie (`reiter_gruppe`) — jedes
+        Bild genau einmal, die Summe der Gruppen ist die Zahl der markierten
+        Bilder.
+
+        Der Behalten-Kandidat einer Byte-Kopien-Gruppe zaehlt NICHT als Fund:
+        er bleibt ja liegen. Deshalb steht unter "dubl" nur das Ueberzaehlige —
+        genau die Menge, die auch der Reiter im Titel nennt."""
+        noface_s = {(u["person"], u["datei"]) for u in ug
+                    if u.get("hauptgrund") == "kein_gesicht"}
+        verw_s, krit_s = set(), set()
+        for pr in paare:
+            beide = {(pr["a_person"], pr["a_datei"]),
+                     (pr["b_person"], pr["b_datei"])}
+            if person:
+                beide = {k for k in beide if k[0] == person}
+            verw_s |= beide
+            if pr.get("kritisch"):
+                krit_s |= beide
+        dupw_s = {(d["person"], d["datei"]) for d in doppel}
+        dubl_alle_s, dubl_extra_s = set(), set()
+        for g in (qs.get("dubletten") or []):
+            p_ = g.get("person")
+            # Ohne Person ist die Gruppe nicht zuzuordnen — ueberspringen statt
+            # _da(None, …) laufen zu lassen (Alt-/Fremdbericht, Klasse
+            # "Nutzer-Zustand, den das Testbett nicht hat").
+            if not p_ or not g.get("behalten"):
+                continue
+            if (person and p_ != person) or not _da(p_, g["behalten"]):
+                continue
+            weg_ = [d for d in (g.get("weg") or []) if _da(p_, d)]
+            if not weg_:                    # Gruppe ohne Kopien ist keine Gruppe
+                continue
+            dubl_alle_s.add((p_, g["behalten"]))
+            dubl_alle_s.update((p_, d) for d in weg_)
+            dubl_extra_s.update((p_, d) for d in weg_)
+        urteil = {}
+        for p_, karte in (qs.get("pruefung") or {}).items():
+            if (person and p_ != person) or not isinstance(karte, dict):
+                continue
+            for d_, z in karte.items():
+                if isinstance(z, dict) and z.get("u") in ("raus", "auffaellig") \
+                        and _da(p_, d_):
+                    urteil[(p_, d_)] = z["u"]
+        zahl = {g: 0 for g in REITER_ORDNUNG}
+        n_verw = 0
+        for k in (noface_s | dubl_alle_s | verw_s | dupw_s | set(urteil)):
+            grp = reiter_gruppe(k, noface_s, dubl_alle_s, verw_s, dupw_s,
+                                urteil.get(k))
+            if grp == "dubl" and k not in dubl_extra_s:
+                continue                    # Behalten-Kandidat: kein Fund
+            zahl[grp] += 1
+            if grp != "gut" and k in krit_s:
+                n_verw += 1
+        zahl.pop("gut", None)
+        return zahl, n_verw
+
     ergebnis_satz = ""
     if qs.get("ts"):
-        # Stufe C (.511): die Guete-VORSCHLAEGE zaehlen mit. Sie stecken in
-        # keiner der drei alten Klassen — ein Bild kann tadellos scharf und
-        # gross und einzigartig sein und trotzdem unter beiden Guete-Achsen
-        # liegen. Stuende es nicht im Satz, verschwiege die Uebersicht genau
-        # die Gruppe, die dieser Umbau neu findet.
-        _vor = sum(int((e or {}).get("vorschlag") or 0)
-                   for p_, e in (qs.get("personen") or {}).items()
-                   if not person or p_ == person)
-        _funde = len(krit) + len(ug) + len(doppel) + _vor
+        _zahl, _n_verw = _uebersicht_zaehlen()
+        _funde = sum(_zahl.values())
         _np = len(qs.get("personen") or {}) or "?"
         if _funde == 0:
             # Die <b>-Grenze trennt zwei VOLLSTAENDIGE Saetze — B9-sicherer
@@ -206,29 +311,27 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
         else:
             # Stufe-0-Grenze (§8.3): der Funde-Satz joint <b>-Zaehler-
             # Fragmente mit ", "/" and " — bleibt literal.
-            teile = []
-            if krit:
-                teile.append(f'<b>{len(krit)}</b> possibly mixed-up')
-            if ug:
-                teile.append(f'<b>{len(ug)}</b> weak')
-            if doppel:
-                # .511 (Live-Kontrolle 08.09.): das Wort sagt jetzt, WAS
-                # gezaehlt wird. "near-duplicate" hier und "Identical copies"
-                # im Reiter waren zwei Zahlen mit demselben Klang und
-                # verschiedener Bedeutung — die Uebersicht meint qs["doppel"]
-                # (AEHNLICHKEIT: Cosinus >= dup_sim je Person, und nur Bilder
-                # MIT Vektor), der Reiter qs["dubletten"] (BYTE-gleich, md5,
-                # auch Bilder ohne Vektor). Sie ueberschneiden sich, keine ist
-                # Teilmenge der anderen. Die Reiter-Logik bleibt unberuehrt.
-                teile.append(f'<b>{len(doppel)}</b> look-alike')
-            if _vor:
-                teile.append(f'<b>{_vor}</b> below the check bar')
+            # .512: die Fragmente sind jetzt die REITER der Galerie, in
+            # derselben Reihenfolge und mit denselben Zahlen. Wer den Satz
+            # liest und dann auf eine Person klickt, findet die Zahl wieder —
+            # vorher nannte der Satz Klassen ("weak"), die es als Reiter gar
+            # nicht gab, und zaehlte Bilder doppelt.
+            # "(s)" statt Plural-Formen — dieselbe Bauform wie die uebrigen
+            # Antworten dieser Familie (antwort.ref_batch_weg).
+            _wort = {"check": "to check", "weg": "suggested for removal",
+                     "dubl": "identical copy(s)", "noface": "with no face found"}
+            teile = [f'<b>{_zahl[g]}</b> {_wort[g]}'
+                     for g in REITER_ORDNUNG if g in _wort and _zahl[g]]
+            # Die Verwechslungs-Zahl ist eine TEILMENGE der obigen (fast immer
+            # von "to check") und steht deshalb als eigener Satz, nicht als
+            # fuenfter Summand — sonst waere die Doppelzaehlung sofort zurueck.
+            _mix = (f'<b>{_n_verw}</b> of those may be mixed up with another '
+                    'person. ' if _n_verw else '')
             ergebnis_satz = (
                 f'<p style="font-size:15px">&#128269; Checked '
                 f'{qs.get("ref_count", "?")} pictures of {_np} people '
-                f'&mdash; {" and ".join([", ".join(teile[:-1]), teile[-1]] if len(teile) > 1 else teile)} '
-                'picture(s) worth a look &mdash; nothing is deleted unless '
-                'you say so.</p>')
+                f'&mdash; {" and ".join([", ".join(teile[:-1]), teile[-1]] if len(teile) > 1 else teile)}. '
+                f'{_mix}Nothing is deleted unless you say so.</p>')
     kopf = (f'<h2>{t("qualitaet.kopf.titel")}</h2>' + lauf_zeile
             + ergebnis_satz
             + f'<p class="dim">{t("qualitaet.kopf.hinweis")}</p>'
@@ -262,11 +365,6 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
             if pr["b_person"] == person:
                 verwechselt.setdefault(pr["b_datei"],
                                        (pr["a_person"], pr["a_datei"]))
-        # Anzeige-Map zur Render-Zeit (Funktion statt Konstante, §8.12).
-        WORT = {"defekt": t("qualitaet.wort.defekt"),
-                "kein_gesicht": t("qualitaet.wort.kein_gesicht"),
-                "zu_klein": t("qualitaet.wort.zu_klein"),
-                "unscharf": t("qualitaet.wort.unscharf")}
         # .279 (User: '97 Bilder erschlagen — drei Gruppen: gut / pruefen /
         # loeschen, als Registerkarten mit Select all/Deselect all, Knoepfe
         # nach OBEN'): Kacheln in drei Reitern statt einer Bandwurmliste.
@@ -281,22 +379,30 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
         #            tragen keine einzige Messung und sind deshalb kein
         #            Guete-Fall, sondern ein Durchsicht-Fall.
         # Zuordnung ist EXKLUSIV (ein Bild steht in genau einem Reiter): sonst
-        # zaehlte der Remove-Zaehler dieselbe Datei zweimal.
+        # zaehlte der Remove-Zaehler dieselbe Datei zweimal. Die Regel selbst
+        # steht seit .512 in `reiter_gruppe` — EINE Quelle fuer Galerie UND
+        # Uebersichts-Zaehlung.
         pruefung = (qs.get("pruefung") or {}).get(person, {})
         dubl_gruppen = [g for g in (qs.get("dubletten") or [])
                         if g.get("person") == person
                         and _da(person, g.get("behalten"))]
-        dubl_alle, dubl_extra = set(), set()
         for g in dubl_gruppen:
             g["weg"] = [d for d in (g.get("weg") or []) if _da(person, d)]
+        # .512: Gruppen OHNE ueberzaehlige Kopie fallen VOR der Mengenbildung
+        # weg. Bis .511 blieb ihr Behalten-Kandidat in `dubl_alle` — er bekam
+        # den Reiter "dubl", wurde dort aber nicht gerendert (der Reiter zeigt
+        # nur `dubl_gruppen`) und verschwand damit ganz von der Seite.
+        dubl_gruppen = [g for g in dubl_gruppen if g["weg"]]
+        dubl_alle, dubl_extra = set(), set()
+        for g in dubl_gruppen:
             dubl_alle.add(g["behalten"])
             dubl_alle.update(g["weg"])
             dubl_extra.update(g["weg"])
-        dubl_gruppen = [g for g in dubl_gruppen if g["weg"]]
         noface = {d for d, u in gruende.items()
                   if u.get("hauptgrund") == "kein_gesicht"}
-        gruppen_k = {"gut": [], "check": [], "weg": [], "dubl": [], "noface": []}
+        gruppen_k = {g: [] for g in REITER_ORDNUNG}
         dubl_kacheln = {}
+        dubl_funde = 0
 
         def _kachel(f, rand, wort, zusatz, markiert, behalten=False):
             src = f'/refs/{urllib.parse.quote(person)}/{urllib.parse.quote(f)}'
@@ -314,13 +420,24 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
                 '</span></label>')
 
         for f in alle:
-            rand, wort, grp, zusatz = "var(--border)", "", "gut", ""
+            rand, wort, zusatz = "var(--border)", "", ""
             pz = pruefung.get(f) or {}
-            if f in noface:
-                rand, grp = "var(--warn)", "noface"
+            # Stufe C (.511): das zweistufige URTEIL auf den gemessenen Achsen.
+            # Seit .512 ist es auf DIESER Seite das einzige Guete-Wort — die
+            # alte Pixel-Achse (`gruende`: unscharf/zu_klein/defekt) urteilt
+            # hier nicht mehr mit, s. reiter_gruppe().
+            _u, _g = pz.get("u"), pz.get("g") or ""
+            _uwort = ""
+            if _u == "raus":
+                _uwort = t("qualitaet.galerie.unter_beide")
+            elif _u == "auffaellig":
+                _uwort = (t("qualitaet.galerie.unter_norm") if _g == "norm"
+                          else t("qualitaet.galerie.unter_guete"))
+            grp = reiter_gruppe(f, noface, dubl_alle, verwechselt, dup_weg, _u)
+            if grp == "noface":
+                rand = "var(--warn)"
                 wort = t("qualitaet.wort.kein_gesicht")
-            elif f in dubl_alle:
-                grp = "dubl"
+            elif grp == "dubl":
                 if f in dubl_extra:
                     rand, wort = "var(--dim)", t("qualitaet.galerie.dubl_weg")
                 else:
@@ -331,7 +448,6 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
                 # {name} kommt escaped (Muster lernanker {kamera}).
                 wort = t("qualitaet.galerie.looks_like",
                          name=html.escape(vp))
-                grp = "check"
                 # .280: das GEGENBILD als Mini-Thumb — ersetzt den alten
                 # Confusion-Tab (dort stand das Paar nebeneinander).
                 zusatz = (f'<img src="/refs/{urllib.parse.quote(vp)}/'
@@ -341,30 +457,14 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
                           'vertical-align:middle;margin-left:4px;'
                           'border:1px solid var(--crit)">')
             elif f in dup_weg:
-                rand, grp = "var(--dim)", "weg"
+                rand = "var(--dim)"
                 wort = t("qualitaet.galerie.doppel")
-            elif f in gruende:
-                rand, grp = "var(--warn)", "weg"
-                wort = WORT.get(gruende[f]["hauptgrund"],
-                                t("qualitaet.wort.schwach"))
-            # Stufe C (.511): das zweistufige URTEIL auf den gemessenen Achsen.
-            # Es ordnet nur ein, was nicht schon einen staerkeren Befund traegt
-            # — ein verwechseltes oder doppeltes Bild bleibt in seinem Reiter,
-            # die Guete-Marke steht dann als Wort daneben.
-            _u, _g = pz.get("u"), pz.get("g") or ""
-            _uwort = ""
-            if _u == "raus":
-                _uwort = t("qualitaet.galerie.unter_beide")
-            elif _u == "auffaellig":
-                _uwort = (t("qualitaet.galerie.unter_norm") if _g == "norm"
-                          else t("qualitaet.galerie.unter_guete"))
-            if grp == "gut" and _uwort:
-                grp = "weg" if _u == "raus" else "check"
+            elif _uwort:
                 rand = "var(--warn)" if _u == "raus" else "var(--dim)"
                 wort = _uwort
-            elif _uwort and not wort:
-                wort = _uwort
-            elif _uwort:
+            if _uwort and wort != _uwort:
+                # Beziehungs-Befund (Verwechslung/Dublette) traegt den Reiter,
+                # die Guete-Marke steht als Zusatz daneben.
                 zusatz += (f' <span class="dim" style="font-size:11px">'
                            f'&middot; {_uwort}</span>')
             if not wort and stufen.get(f) == "gut":
@@ -402,8 +502,14 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
             gruppen_k[grp].append(_k)
             if grp == "dubl":
                 dubl_kacheln[f] = _k
+                if f in dubl_extra:
+                    dubl_funde += 1
+        # .512: EIN Bild = EIN Fund. Bis .511 stand hier `len(dubl_extra)` —
+        # eine ueberzaehlige Byte-Kopie, in der auch kein Gesicht gefunden
+        # wurde, sitzt aber im noface-Reiter und waere doppelt gezaehlt worden.
+        # Gezaehlt wird jetzt, was wirklich in einem Befund-Reiter LIEGT.
         funde_n = (len(gruppen_k["check"]) + len(gruppen_k["weg"])
-                   + len(dubl_extra) + len(gruppen_k["noface"]))
+                   + dubl_funde + len(gruppen_k["noface"]))
         satz = (t("qualitaet.galerie.satz_gut", n=len(alle))
                 if funde_n == 0 else
                 t("qualitaet.galerie.satz_funde", funde=funde_n,
@@ -419,7 +525,7 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
                   ("weg", t("qualitaet.reiter.weg",
                             n=len(gruppen_k['weg']))),
                   ("dubl", t("qualitaet.reiter.dubl",
-                             n=len(dubl_extra))),
+                             n=dubl_funde)),
                   ("noface", t("qualitaet.reiter.noface",
                                n=len(gruppen_k['noface'])))]
         leiste = ("".join(
@@ -431,7 +537,14 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
             + t("qualitaet.galerie.knopf_alle") + '</button> '
             '<button class="gtb" onclick="qgAlle(false)">'
             + t("qualitaet.galerie.knopf_keine") + '</button> '
-            '<button class="gtb on" onclick="refBatchLoeschen(this)">'
+            # .512: der Knopf traegt den BESTAND dieser Person mit (Person +
+            # Zahl). Daraus erkennt refBatchLoeschen, ob die Auswahl den
+            # gesamten Rest umfasst, und fragt dann ein zweites Mal — mit Namen
+            # und Anzahl. Die Zahl kommt von hier und nicht aus dem Abzaehlen
+            # der Kacheln: im Kopien-Reiter steht nicht jede Datei einzeln.
+            '<button class="gtb on" onclick="refBatchLoeschen(this)" '
+            f'data-person="{html.escape(person, quote=True)}" '
+            f'data-bestand="{len(alle)}">'
             + t("qualitaet.galerie.knopf_entfernen")
             + '</button> <span id="qg-n" class="dim"></span>')
         # Stufe C: die zwei neuen Reiter tragen einen eigenen Erklaersatz —

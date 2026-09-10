@@ -89,7 +89,7 @@ def bedingungs_tag_pruefen(anker, aktuelle_werte):
 
 
 def plan_bauen(anker, dup_sim, bestands_embs, luma_grenzen=None,
-               guete_latte=None, kat_latten=None):
+               kat_latten=None):
     """Verbindlicher Dedup-Plan ueber die PERSISTIERTE Auswahl (nie neu empfehlen —
     Bauplan: E4b uebernimmt GENAU die benannte Menge, prueft sie nur auf Duplikate).
     Reihenfolge deterministisch (front/sharp/det/id wie die Benennungs-Reihung).
@@ -104,13 +104,16 @@ def plan_bauen(anker, dup_sim, bestands_embs, luma_grenzen=None,
     wie das Dedup-Ergebnis. Das Mitglied traegt kamera + fiqa_t/empf (seit
     .377 wandern die Guete-Masse mit), die Latte beisst hier also real.
     Ungemessene Mitglieder (Alt-Anker) kommen durch — Bestandsschutz.
+    .516: dasselbe Register speist seit der Alt-Latten-Abloesung auch die
+    REIHUNG (frueher die globale `guete_latte`) — ein Aufruf, eine Latte.
     -> {aufnehmen: [mitglied...], uebersprungen: [{datei, grund}...]}"""
     from core.benennung import _reihung
     from core.kamerakalib import katalog_ok
     gewaehlt = [m for m in (anker.get("mitglieder") or []) if m.get("gewaehlt")]
     aufnehmen, uebersprungen, gesehen = [], [], [list(e) for e in bestands_embs]
     for m in sorted(gewaehlt,
-                    key=lambda x: _reihung(x, luma_grenzen=luma_grenzen, guete_latte=guete_latte)):
+                    key=lambda x: _reihung(x, luma_grenzen=luma_grenzen,
+                                           kat_latten=kat_latten)):
         kat_ok, kat_grund = katalog_ok(kat_latten, m.get("kamera"),
                                        m.get("empf"), m.get("fiqa_t"))
         if not kat_ok:

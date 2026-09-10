@@ -1104,6 +1104,51 @@ T = {
         "testa (materiale vecchio, o immagini arrivate per un’altra via), "
         "quindi qui questo cursore non cambia nulla. I campioni nuovi "
         "dall’analisi degli eventi portano il valore con sé.",
+    "livekalib.katalog.regler_n":
+        "Catalogo: norma delle caratteristiche",
+    "livekalib.katalog.regler_n_prosa":
+        "Quanto deve essere forte un volto come materiale di riconoscimento "
+        "perch\u00e9 un ciclo di apprendimento lo tenga: la misura senza "
+        "riferimento con cui la riserva di apprendimento lavora gi\u00e0 (un "
+        "buon volto frontale sta intorno a 24). Esce di fabbrica ACCESO, a 20, "
+        "regolato su materiale di raccolta reale (756 immagini, mediana "
+        "20,7). Il cursore non scende sotto 18: qui l\u2019asse non si pu\u00f2 "
+        "spegnere, solo regolare tra 18 e 35. \u00c8 una "
+        "domanda diversa dalla linea della riserva nelle impostazioni, che "
+        "decide quali immagini ti vengono PROPOSTE.",
+    "livekalib.ohne_norm":
+        "Nessuno di questi campioni porta un valore di norma delle "
+        "caratteristiche (la riserva di calibrazione non la misura, un ciclo "
+        "di apprendimento s\u00ec), quindi qui questo cursore non cambia nulla "
+        "nella galleria. Imposta comunque il valore usato dal ciclo di "
+        "apprendimento.",
+    "livekalib.regler_k":
+        "Volto pi\u00f9 piccolo (px)",
+    "livekalib.regler_k_prosa":
+        "Quanto pu\u00f2 essere piccolo un volto e valere "
+        "comunque come voto: si misura sul lato corto del suo riquadro, in "
+        "pixel. \u00c8 un fondo contro l\u2019assurdo, non una barra di qualit\u00e0: sui "
+        "dati di campo i voti giusti stanno tra 30 e 49 px sulle telecamere "
+        "panoramiche e i casi assurdi tra 11 e 19 px, mentre 70 px "
+        "porterebbe via anche quelli giusti. Il valore di fabbrica 25 \u00e8 "
+        "esattamente il numero con cui questo sistema misura ogni voto dalla "
+        "0.1.0.400; il cursore lo rende solo regolabile per telecamera. 0 = "
+        "spento.",
+    "livekalib.katalog.regler_k":
+        "Catalogo: volto pi\u00f9 piccolo (px)",
+    "livekalib.katalog.regler_k_prosa":
+        "La stessa misura, per l\u2019apprendimento: "
+        "quanto pu\u00f2 essere piccolo un volto e un ciclo di apprendimento lo "
+        "tenga lo stesso. Alzalo su una telecamera i cui volti sono "
+        "semplicemente troppo lontani, e tieni presente che \u00e8 una domanda "
+        "diversa da quella della scheda accanto: essere avvisati che c\u2019\u00e8 "
+        "qualcuno richiede meno risoluzione che imparare com\u2019\u00e8 fatto. 0 = "
+        "spento.",
+    "livekalib.ohne_kante":
+        "Nessuno di questi campioni porta la propria dimensione "
+        "del volto (la riserva di calibrazione non la salva, un ciclo di "
+        "apprendimento s\u00ec), quindi qui questo cursore non cambia nulla nella "
+        "galleria. Imposta comunque il valore usato.",
     "livekalib.standard": "Valori predefiniti",
     "livekalib.fueller.laeuft": "ricerca materiale in corso",
     "livekalib.fueller.bilanz": "ultima ricerca materiale",
@@ -1124,8 +1169,8 @@ T = {
     "livekalib.abschnitt.katalog": "Soglia del catalogo",
     "livekalib.abschnitt.pruefen": "Asticella del controllo catalogo",
     "livekalib.abschnitt.material": "Materiale",
-    "livekalib.katalog.prosa": "Una soglia, non un filtro: quanto deve essere buono un volto di questa telecamera per diventare riferimento sulle vie AUTOMATICHE (adozione del ciclo di apprendimento, accettare proposte/scorte). È generosa di proposito: accogliere è la porta larga, scartare è compito del controllo del catalogo nella scheda successiva. Ciò che spunti e nomini tu stesso la aggira del tutto.",
-    "livekalib.katalog.grenze": "Cosa non fa: non rimuove mai i riferimenti già presenti e non cambia chi viene riconosciuto. Le immagini senza punteggi di qualità (materiale più vecchio o una build senza i modelli di qualità) passano intatte — una soglia senza misura scarterebbe alla cieca.",
+    "livekalib.katalog.prosa": "Questi quattro valori decidono che cosa questa telecamera porta all\u2019apprendimento: una sessione di apprendimento tiene solo i volti che superano tutti e quattro, e solo quel materiale pu\u00f2 diventare riferimento sulle vie AUTOMATICHE (accettare la sessione, accettare proposte o offerte della scorta). Sono gli stessi quattro cursori della scheda Riconoscere e lo stesso calcolo \u2014 solo con numeri propri, perch\u00e9 avvisare e imparare non chiedono la stessa cosa. Ci\u00f2 che spunti e nomini tu stesso li salta del tutto.",
+    "livekalib.katalog.grenze": "Che cosa non fanno: non rimuovono mai riferimenti che hai gi\u00e0 e non cambiano nulla su chi viene riconosciuto. Quando un\u2019immagine entra nel catalogo, la mancanza dei punteggi di qualit\u00e0 (materiale pi\u00f9 vecchio, un\u2019immagine senza i modelli di qualit\u00e0) la lascia passare intatta. In una sessione di apprendimento vale l\u2019altra met\u00e0 della stessa regola: un volto il cui valore non si \u00e8 potuto misurare cade \u2014 il bilancio a fine sessione conta questi casi uno per uno invece di lasciarli sparire.",
     "livekalib.katalog.quelle_kamera": "In uso: i valori propri di questa telecamera.",
     "livekalib.katalog.quelle_global": "In uso: il valore globale di riserva — questa telecamera non ha ancora valori propri.",
     "livekalib.katalog.quelle_aus": "Nessuna soglia di catalogo: ogni immagine può diventare un riferimento.",
@@ -1133,6 +1178,10 @@ T = {
     "livekalib.katalog.regler_e_prosa": "Impressione minima per un riferimento di questa telecamera. Bassa di proposito: anche un'immagine mediocre porta qualcosa da imparare, e il controllo del catalogo la riguarda più tardi.",
     "livekalib.katalog.regler_t": "Catalogo: riconoscibilità",
     "livekalib.katalog.regler_t_prosa": "Riconoscibilità minima per un riferimento di questa telecamera. È quella che tiene i volti mezzi coperti fuori dal catalogo.",
+    "livekalib.katalog.regler_det": "Catalogo: punteggio di rilevamento",
+    "livekalib.katalog.regler_det_prosa": "Da dove il rilevatore \u00e8 abbastanza sicuro che ci sia davvero un volto. La stessa misura della scheda Riconoscere, ma per l\u2019apprendimento \u2014 e qui pu\u00f2 benissimo stare altrove: ci\u00f2 di cui vuoi essere avvisato non \u00e8 per forza ci\u00f2 da cui vuoi imparare.",
+    "livekalib.katalog.regler_p": "Catalogo: posizione della testa",
+    "livekalib.katalog.regler_p_prosa": "Quanto chiaramente si distingue una testa nel punto trovato. \u00c8 il cursore contro bidoni, siepi e mascherine d\u2019auto nel materiale di apprendimento \u2014 i due punteggi di qualit\u00e0 da soli non li vedono. Di nuovo la stessa misura della scheda Riconoscere.",
     "livekalib.pruefen.prosa": "Questa asticella giudica immagini che hai GIÀ. Sotto di essa il controllo del catalogo segnala un'immagine salvata di questa telecamera; insieme a una norma dei tratti debole diventa una proposta di rimozione da cliccare. Non accetta mai un'immagine e non ne toglie mai una da sola.",
     "livekalib.pruefen.grenze": "È separata di proposito dall'asticella qui sopra: accettare un'immagine e controllarla più tardi sono due domande, e spostare un cursore non deve spostare l'altro in silenzio. Le immagini senza punteggio di qualità non vengono mai segnalate.",
     "livekalib.pruefen.quelle_kamera": "In uso: il valore proprio di questa telecamera.",
@@ -1153,6 +1202,7 @@ T = {
     "livekalib.js.katalog": "{n} di {gesamt} potrebbero entrare nel catalogo",
     "livekalib.js.pruefen": "il controllo segnalerebbe {n} su {gesamt}",
     "livekalib.js.lauf": "ciclo",
+    "livekalib.js.aus": "spento",
     # ----------------------------------------------- routes/erkennung ---
     # NICHT eingezogen (bewusst, Stufe-0-Grenzen): die ek-satz-Zeile der
     # Live-Kachel (<b>moment</b> mitten im Satz), der Expert-Status
@@ -1325,11 +1375,7 @@ T = {
     "qualitaet.ergebnis.alles_gut_satz":
         "Controllate {n} immagini di {np} persone &mdash; niente "
         "richiede la tua attenzione.",
-    "qualitaet.wort.defekt": "file danneggiato",
     "qualitaet.wort.kein_gesicht": "nessun volto trovato",
-    "qualitaet.wort.zu_klein": "troppo piccola",
-    "qualitaet.wort.unscharf": "sfocata",
-    "qualitaet.wort.schwach": "immagine debole",
     # {name} kommt escaped aus der Route (Muster lernanker {kamera}).
     "qualitaet.galerie.looks_like": "somiglia a {name}",
     "qualitaet.galerie.doppel": "duplicata — è coperta da quella tenuta",
@@ -1511,17 +1557,6 @@ T = {
     "lernwizard.kachel.lauf": "Sessione di apprendimento",
     "lernwizard.kachel.sammeln": "Estrai &amp; raggruppa",
     "kalib.titel": "Calibrazione delle telecamere",
-    "kalib.erklaerung": "Queste due soglie decidono quali volti terranno i prossimi apprendimenti. Sposta finché il limite ti convince — tutto ciò che è attenuato verrebbe scartato. Sotto ci sono le immagini dell'ultimo ciclo, migliore impressione prima. Cornice gialla = immagine scelta per l'adozione.",
-    "kalib.leer": "Ancora niente da calibrare: l'ultimo ciclo non ha valori di qualità. Avvia prima un apprendimento con questa versione.",
-    "kalib.regler_e": "Impressione dell'immagine",
-    "kalib.regler_e_prosa": "Quanto l'immagine appare pulita e luminosa. Più basso conserva di più, ma immagini più scure e grezze.",
-    "kalib.regler_t": "Riconoscibilità",
-    "kalib.regler_t_prosa": "Quanto bene si può identificare la persona. Scarta anche i volti mezzo coperti.",
-    "kalib.standard": "Ripristina predefiniti",
-    "kalib.uebernehmen": "Applica soglie",
-    "kalib.js.genutzt": "Conservate: {n} su {gesamt}",
-    "kalib.js.gespeichert": "Salvato — il ciclo viene rivalutato con le nuove soglie, tra poco torni all'apprendimento …",
-    "kalib.js.fehler": "Salvataggio non riuscito",
     # --- zentrale Kamera-Uebersicht + globaler Rueckfall (31.08.)
     "kalib.knopf": "Calibrazione",
     "kalib.knopf_tip": "Calibrazione delle telecamere: le soglie per avvisi, campioni e catalogo dei riferimenti",
@@ -1553,13 +1588,8 @@ T = {
     "kalib.knopf_fuellen": "Cerca materiale fresco",
     "kalib.knopf_leeren": "Elimina i campioni",
     "kalib.global.titel": "Riserva globale",
-    "kalib.global.satz": "Valgono per le telecamere senza valori propri e sono la soglia con cui un ciclo di apprendimento decide quali volti tenere.",
-    "kalib.global.werte": "impressione {e} · riconoscibilità {tw}",
+    "kalib.global.satz": "Valgono per le telecamere senza valori propri: sono la soglia con cui un ciclo di apprendimento decide quali volti tenere e quali di essi possono diventare un riferimento salvato.",
     "kalib.global.katalog": "soglia catalogo {e} / {tw}",
-    "kalib.global.knopf": "Imposta sull'ultimo ciclo di apprendimento",
-    "kalib.global.kein_lauf": "Ancora nessun ciclo di apprendimento con punteggi di qualità — si potranno impostare quando un ciclo sarà finito.",
-    "kalib.lauf.titel": "Soglie globali — ultimo ciclo di apprendimento",
-    "kalib.zurueck": "torna a tutte le telecamere",
     "js.kalib.start": "cerco materiale …",
     "js.kalib.lauf": "{i} di {n} eventi · {bilder} immagine/i",
     "js.kalib.fertig": "{bilder} immagine/i da {events} evento/i",
@@ -1882,6 +1912,10 @@ T = {
     "js.import.fertig_ges": "✓ {n} importati — calcolo delle caratteristiche, la pagina si ricarica …",
     "js.ref.frage": "Rimuovere l’immagine di riferimento di {person}?",
     "js.ref.batch_frage": "Eliminare {n} immagine/i?",
+    "js.ref.batch_alle_frage":
+        "Sono TUTTE le {n} immagine/i di riferimento di {person}. Senza "
+        "riferimenti {person} non potrà più essere riconosciuto. Le immagini "
+        "finiscono nel cestino e possono essere ripristinate. Continuare?",
     "js.dienst.nicht_erreichbar": "servizio non raggiungibile — riprova tra un momento.",
     "js.unb.tick": "{phase} … {s} s",
     "js.unb.besucher_frage": "Ignorare come estraneo conosciuto? Non attiverà più avvisi. (Riattivabile in qualsiasi momento qui sotto, in \"visitatori conosciuti\".)",
@@ -3326,6 +3360,17 @@ T = {
         "niente da prendere — nessuna nuova immagine utile in questo "
         "passaggio (va bene così)",
     "antwort.bruecke_undo": "{n} immagine/i rimossa/e di nuovo",
+    # .521 mini raccolta: non si prende nulla e l'esecuzione è effimera — le
+    # sue immagini spariscono subito e il clic successivo raccoglie di nuovo.
+    "antwort.passernte_verworfen":
+        "verifica scartata, le immagini non ci sono più — "
+        "clicca di nuovo per una nuova verifica",
+    # .524 Fix 11: annullamento sulla barra di avanzamento IN CORSO.
+    "antwort.passernte_abgebrochen":
+        "verifica annullata — {n} evento/i su {m} scartato/i; "
+        "quello che è già in corso finisce, poi le immagini vengono rimosse",
+    "antwort.passernte_abbruch_leer":
+        "niente da annullare — questa verifica non è più in corso",
     "antwort.personlauf_kein_review":
         "nessuna sessione in attesa di revisione",
     "antwort.personlauf_kein_lauf": "nessuna sessione attiva",
@@ -4151,8 +4196,10 @@ vista del giorno integri le persone conosciute.</p>""",
     "anwesenheit.nacht": "notte",
     "anwesenheit.legende_da": "presenza confermata",
     "anwesenheit.legende_weg": "sistema in funzione, nessuno confermato",
-    "anwesenheit.legende_leer": "sistema fermo o senza osservazione",
+    "anwesenheit.legende_leer": "il servizio non era in funzione",
+    "anwesenheit.legende_teil": "in funzione, alcuni eventi non analizzati",
     "anwesenheit.legende_jetzt": "adesso",
+    "anwesenheit.legende_satz": "Il bianco significa una cosa sola: il servizio non era in funzione in quel momento. Una cella verde con un angolo tagliato indica che il servizio era in funzione ma alcuni eventi non sono stati analizzati: passa il mouse per vedere i numeri.",
     "anwesenheit.zaehler": "{zeilen} marcature lette, {kaputt} righe danneggiate saltate.",
     "anwesenheit.gekappt": "Il file del giorno supera il limite di lettura; è stata letta solo la parte finale.",
     "anwesenheit.nie": "Non visti in questa vista: {namen}",
@@ -4162,7 +4209,8 @@ vista del giorno integri le persone conosciute.</p>""",
     "anwesenheit.keine_aufzeichnung": "Nessuna registrazione per questo giorno.",
     "anwesenheit.tip_da": "{zeit} · {kameras} · {quelle}",
     "anwesenheit.tip_weg": "{zeit} · sistema in funzione, nessuno confermato",
-    "anwesenheit.tip_leer": "{zeit} · nessuna informazione (sistema fermo o senza osservazione)",
+    "anwesenheit.tip_weg_teil": "{zeit} · sistema in funzione, nessuno confermato · {gelungen} eventi analizzati, {luecken} no",
+    "anwesenheit.tip_leer": "{zeit} · il servizio non era in funzione",
     "anwesenheit.tip_zukunft": "{zeit} · non ancora",
     "anwesenheit.quelle_worker": "analisi degli eventi",
     "anwesenheit.quelle_live": "sorvegliante live",

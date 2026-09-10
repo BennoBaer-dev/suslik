@@ -30,6 +30,8 @@ FRIGATE = os.environ.get("FRIGATE_URL", "")
 SCRATCH = os.environ.get("SCRATCH_DIR") or os.path.join(tempfile.gettempdir(), "suslik-scratch")
 from core.pfade import WURZEL as HERE   # M0-Anker (Falle 0): eine Pfad-Quelle
 from core import frames as clipcache    # Z2: EINE Clip-Beschaffung fuer alle Wege
+from core import messkarte as _mk_bilanz                  # .513: Messkarte + Mess-Bilanz
+from core.messkarte import QUELLE_ANALYSE as _mk_quelle   # .513: Herkunft der Messkarte
 os.makedirs(SCRATCH, exist_ok=True)     # SCRATCH bleibt der refcache-Ort (Z.100)
 
 ap = argparse.ArgumentParser()
@@ -712,7 +714,24 @@ for k, eid in enumerate(a.eids):
                     kd = {"t": round(i / fps, 1), "bw": x2 - x1, "bh": y2 - y1,
                           "front": round(front, 2), "det": round(float(fc.det_score), 2),
                           "sharp": round(schaerfe, 0), "crop": crop.copy(),
-                          "emb": [round(float(x), 5) for x in fc.normed_embedding]}
+                          "emb": [round(float(x), 5) for x in fc.normed_embedding],
+                          # MESSKARTE (.513, Etappe 1 B3): fiqa_v/empf_v sind im
+                          # SELBEN Schleifendurchlauf schon gerechnet (oben, fuer
+                          # Stimm-Kandidat bzw. Kalibrier-Ring) und landeten
+                          # bisher im Muell — die Enrollment-Zeile ging ungemessen
+                          # weiter, und verifyd.enroll_entscheiden fragte seine
+                          # Katalog-Latte mit zwei None (Inventur §I-5).
+                          # KEINE zusaetzliche Messung: was nicht ohnehin
+                          # gemessen wurde, bleibt None. Die Werte stehen unter
+                          # den KARTEN-Namen; `fiqa_t`/`empf` traegt die Zeile
+                          # weiterhin nicht, damit der katalog_ok-Aufruf drueben
+                          # woertlich stehen bleibt (Etappe 1: kein Urteil
+                          # aendert sich; Etappe 3 haengt ihn bewusst um).
+                          "mk_fiqa_t": fiqa_v, "mk_empf": empf_v,
+                          "mk_quelle": (_mk_quelle
+                                        if (fiqa_v is not None and empf_v is not None)
+                                        else None),
+                          "mk_modell": emb.modell}
                     bester = max(sc.values())
                     if sc[p] >= 0.45 and sc[p] == bester:      # Personen-Kandidat (p = bester Match)
                         if sc[p] > enroll.get(p, (-1, None))[0]:
@@ -958,6 +977,29 @@ for k, eid in enumerate(a.eids):
                                                **({"aus": URT_G_AUS} if URT_G_AUS else {}),
                                                **({"pose_aus": URT_POSE_AUS}
                                                   if URT_POSE_AUS else {})},
+                              # PROFIL (.513, Etappe 1 B5, Variante KLEIN): der
+                              # Zweck-Name plus die vier Achsen, die galten. Es
+                              # SIEBT NICHTS — gesiebt hat `urteil_guete`
+                              # darueber, aus denselben Variablen. Es steht
+                              # daneben, damit an jedem Ergebnis in EINER Form
+                              # nachschlagbar ist, unter welchem Profil es
+                              # entstand (E10), und weil Etappe 2/3 genau hier
+                              # den Job-Parameter erwartet. Die Werte kommen aus
+                              # den ARGUMENTEN des Dienstes, nicht aus einer
+                              # Config — dieser Prozess liest keine.
+                              "profil": _mk_bilanz.profil(_mk_bilanz.ZWECK_ANALYSE, {
+                                  "det_min": float(a.det_thresh),
+                                  "guete_e_min": URT_G_E, "guete_t_min": URT_G_T,
+                                  "pose_min": URT_POSE,
+                                  # .515: die Kante hat auf DIESEM Weg wirklich
+                                  # gesiebt (URT_KANTE oben) und gehoert
+                                  # deshalb ins Profil. Die Feature-Norm nicht:
+                                  # der Erkennungs-Weg misst sie nicht, und
+                                  # `norm_min` bleibt hier ehrlich None
+                                  # („auf diesem Weg gilt keine Latte"), statt
+                                  # eine 0 zu behaupten, die nach nichts
+                                  # aussieht.
+                                  "kante_min": URT_KANTE}),
                               "persons": summary.get(label, {})}, default=float, ensure_ascii=False) + "\n")
         _rf.flush()
     # Kalibrier-Vorrat: Bilanzzeile (der Zulauf selbst laeuft jetzt je Gesicht
@@ -977,15 +1019,27 @@ for k, eid in enumerate(a.eids):
     if fremd_kand:
         kand_liste.append(fremd_kand[1])
     if kand_liste:
+        # BILANZ (.513, Etappe 1 B4): auch dieser Weg sagt, wie viele seiner
+        # Kandidaten eine Guete-Zahl tragen. Er MISST nichts zusaetzlich —
+        # gemessen wurde oben nur fuer Stimm-Kandidaten und Ring-Bilder; alles
+        # andere zaehlt hier als „kein Weg dorthin". Genau diese Zahl fehlte
+        # bisher, und ohne sie waere die Latte an dieser Stelle blind.
+        _bilanz = _mk_bilanz.bilanz_start("enrollment")
         with open(os.path.join(outdir, "kandidaten.jsonl"), "a") as kf:
             for k_, kd in enumerate(kand_liste):
                 kcrop = kd.pop("crop")
                 fn = f"{label}_enroll_{kd['person'] or 'FREMD'}_{k_}.jpg"
                 cv2.imwrite(os.path.join(outdir, fn), kcrop)
+                _mk_bilanz.bilanz_zaehlen(
+                    _bilanz,
+                    kd.get("mk_fiqa_t") is not None and kd.get("mk_empf") is not None,
+                    (_mk_bilanz.GRUND_MODELL_FEHLT if not guete_mod.verfuegbar()
+                     else _mk_bilanz.GRUND_KEIN_WEG))
                 kf.write(json.dumps({**kd, "datei": fn, "label": label, "source": eid},
                                     ensure_ascii=False) + "\n")
             kf.flush()
         print(f"  Enrollment-Kandidaten: {len(kand_liste)}")
+        print("  " + _mk_bilanz.bilanz_satz(_bilanz))
 
 # --- Gesamturteil je Person ueber alle Winkel -------------------------
 print("\n" + "="*60 + "\nZusammenfassung je Person (bestes Event nach max-Score):")

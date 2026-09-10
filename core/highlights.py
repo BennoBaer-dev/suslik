@@ -12,7 +12,161 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.0.511"   # .511 Box-Inhalt MIT dem User abgestimmt (08.09.2026, EN-Wortlaut vom
+STAND = "0.1.0.526"   # .526 ist das RELEASE des Lernlauf-Umbaus (.512-.525). Box-Inhalt
+                      # MIT dem User abgestimmt (10.09.2026 ~19:2x, "perfekt";
+                      # Fassung tester/whatsnew_box_abgestimmt_525.md): VIER
+                      # Eintraege, EN woertlich wie abgestimmt. Der .512-ENTWURF
+                      # ist dabei ersetzt worden (nie veroeffentlicht, nie
+                      # abgestimmt) — genau die Auflage, unter der er stand.
+                      # Dazu die Renderer-Auflage des Users: die Marke faerbt nur
+                      # den Kopf bis zum ersten Gedankenstrich rot/fett.
+                      # Davor: "0.1.0.525"   # .525 ist eine LOG-/SCHALTER-POLITUR aus dem Prod-Pruefbericht
+                      # des .523-Standes: der Auto-Export nach Frigate startet nicht
+                      # mehr, wenn Frigates eigene Gesichtserkennung bekanntermassen
+                      # aus ist (dann endete jede gelungene Uebernahme in einer
+                      # `!! … FAILED`-Zeile); die rohen insightface-Init-Zeilen
+                      # ("Applied providers: ['CPUExecutionProvider']") liegen im
+                      # Dienst-Log hinter dem debug-Schalter; zwei Log-Etiketten
+                      # stimmen wieder (Angebot statt Register, struktur-gesperrte
+                      # Funde in der Achsen-Bilanz) und ein deutsches Wort ist
+                      # englisch. Alles Darstellung/Hygiene, KEINE
+                      # Verhaltensaenderung an der Erkennung — also KEIN Box-Eintrag
+                      # ([[whatsnew-inhalt-abstimmen]]: Box-Inhalte nur mit
+                      # User-Abstimmung). STAND wandert nur mit, damit das Gate
+                      # (STAND == VERSION) faehrt.
+                      # Davor: "0.1.0.524"   # .524 baut zwei Fixes AM PASS-KNOPF von .521 (User-Bestellung
+                      # 10.09.): Abbrechen an der laufenden Anzeige (Fix 11) und
+                      # hoechstens EIN interaktiver Klick-Lauf, weitere reihen sich
+                      # FIFO ein (Fix 12). Beides betrifft einen Schritt, der noch
+                      # NICHT veroeffentlicht ist — also KEIN Box-Eintrag
+                      # ([[whatsnew-inhalt-abstimmen]]: Box-Inhalte nur mit
+                      # User-Abstimmung, und die .521-Box steht noch aus). STAND
+                      # wandert nur mit, damit das Gate (STAND == VERSION) faehrt.
+                      # Davor: "0.1.0.523"   # .523 ist ein GATE-/PIN-ZUG: die fuenf compose-Pins auf die neue
+                      # VERSION, die .257-Benenn-Stufe am AST statt am Text-Zaehler,
+                      # und der Namen-Scrub der Zuschreibungs-Kommentare aus dem
+                      # .515-.522-Bauzug. NICHTS davon ist Nutzer-sichtbar, also KEIN
+                      # Box-Eintrag ([[whatsnew-inhalt-abstimmen]]: Box-Inhalte nur mit
+                      # User-Abstimmung). STAND wandert nur mit, damit das Gate
+                      # (STAND == VERSION) faehrt.
+                      # Davor: "0.1.0.522"   # .522 ist ein REPARATUR-ZUG (Widerleger-Befunde des .521-Zugs:
+                      # Puls-Luecke am Pass-Knopf, Altdaten-Falle im Norm-Schritt,
+                      # rmtree neben laufender Ernte). KEIN Box-Eintrag — er behebt
+                      # Fehler eines noch unveroeffentlichten Schritts, es gibt nichts
+                      # Neues zu zeigen. STAND wandert nur mit, damit das Gate
+                      # (STAND == VERSION) faehrt.
+                      # Davor: "0.1.0.521"   # .521 PLATZHALTER, MIT DEM USER NICHT ABGESTIMMT. .521 macht den
+                      # PASS-KNOPF zu einem MINI-ERNTELAUF (User-Go 10.09.): der Klick
+                      # auf einen Durchgang holt sich die Clips, erntet alle Frames,
+                      # siebt mit dem Register „Face catalog" der jeweiligen Kamera,
+                      # misst die Feature-Norm gebuendelt nach — und filtert erst
+                      # danach auf die Person. Damit urteilt am Knopf DASSELBE System
+                      # wie im Lernlauf; die zwei Alt-Wege (Pixel-Latte am
+                      # gespeicherten Ausschnitt bzw. Konsens + Vorrats-Linie) sind
+                      # ersetzt, nicht danebengestellt. Sichtbar wird das als „mehr
+                      # und bessere Vorschlaege je Durchgang". Fuer die Box waere das
+                      # ein guter Eintrag; der Wortlaut wird vor der Veroeffentlichung
+                      # mit dem User durchgegangen ([[whatsnew-inhalt-abstimmen]]),
+                      # solange wandert STAND nur mit, damit das Gate (STAND ==
+                      # VERSION) faehrt. Was .521 fachlich tut, steht im CHANGELOG.
+                      # (.520 hat STAND nicht mitgezogen — der Regler-Zug war rein
+                      # intern; nachgeholt mit diesem Zug.)
+                      # Davor: "0.1.0.519"   # .519 PLATZHALTER, MIT DEM USER NICHT ABGESTIMMT. .519 ist FIX 10,
+                      # die PRAESENZ-DARSTELLUNG (User-Zuschnitt 10.09.): Weiss auf der
+                      # Anwesenheitsleiste heisst ab sofort ausschliesslich "der Dienst
+                      # lief in dieser Viertelstunde nicht". Bis .518 hiess es zweierlei
+                      # — das und "mindestens ein Ereignis irgendeiner Kamera wurde nicht
+                      # analysiert" —, und die zweite Bedeutung war die haeufigere: eine
+                      # Viertelstunde mit 106 gelungenen Analysen und 12 Luecken stand
+                      # weiss da. Gelaufene Slots sind jetzt gruen, Teil-Luecken eine
+                      # kleine Ecke auf der gruenen Kachel mit den Zahlen im Tooltip, und
+                      # ein spaeter geglueckter Nachhol-Versuch nimmt seine eigene Luecke
+                      # zurueck. Fuer die Box waere das ein guter Eintrag (es ist eine
+                      # sichtbare Verhaltensaenderung an einer Seite, die Nutzer taeglich
+                      # ansehen) — der Wortlaut wird vor der Veroeffentlichung mit dem
+                      # User durchgegangen ([[whatsnew-inhalt-abstimmen]]); solange
+                      # wandert STAND nur mit, damit das Gate (STAND == VERSION) faehrt.
+                      # Was .519 fachlich tut, steht im CHANGELOG.
+                      # Davor: "0.1.0.518"   # .518 PLATZHALTER, MIT DEM USER NICHT ABGESTIMMT. .518 ist der
+                      # NORM-NACHMESS-JOB (User-Go 10.09. „so bauen"): der Lernlauf
+                      # erntet mit den fuenf leichten Achsen und misst die Feature-Norm
+                      # danach in EINEM gebuendelten Schritt statt in jedem Ernte-Job.
+                      # Fuer den Betreiber aendert sich am ERGEBNIS nichts (dieselbe
+                      # Messbasis, dieselben Latten, dieselben Entscheidungen) — es
+                      # aendert sich, WAS ein Lauf an Speicher braucht: die
+                      # Analyse-Plaetze bleiben gleich leicht, statt dass jeder von
+                      # ihnen eine eigene 2,7-GB-Session bauen kann. Ein Box-Eintrag
+                      # ist faellig, sobald der Zug veroeffentlicht wird; solange
+                      # bleibt es ein LOKALER Bau, und STAND wandert nur mit, damit das
+                      # Gate (STAND == VERSION) faehrt. Der Wortlaut wird vor der
+                      # Veroeffentlichung mit dem User durchgegangen
+                      # ([[whatsnew-inhalt-abstimmen]]); was .518 fachlich tut, steht
+                      # im CHANGELOG.
+                      # Davor: "0.1.0.517"   # .517 PLATZHALTER, MIT DEM USER NICHT ABGESTIMMT. .517 ist der
+                      # NORM-ENTSCHEID (User 10.09. nach Sichtung am Norm-Schieber):
+                      # der Grundwert der Norm-Achse im Register "Face catalog" ist
+                      # jetzt 20 statt der geliehenen 22,0 (756 Ernte-Bilder, Median
+                      # 20,7), und den Norm-Regler gibt es nur noch DORT — im Register
+                      # "Recognition" wird die Feature-Norm nicht gemessen, ein Regler
+                      # ohne Wirkung ist schlechter als keiner. Die Achse selbst bleibt
+                      # in beiden Registern (je Kamera einstellbar und gespeichert).
+                      # Ein Box-Eintrag ist faellig, sobald der Zug veroeffentlicht
+                      # wird; solange bleibt es ein LOKALER Bau, und STAND wandert nur
+                      # mit, damit das Gate (STAND == VERSION) faehrt. Der Wortlaut wird
+                      # vor der Veroeffentlichung mit dem User durchgegangen
+                      # ([[whatsnew-inhalt-abstimmen]]); was .517 fachlich tut, steht im
+                      # CHANGELOG.
+                      # Davor: "0.1.0.516"   # .516 PLATZHALTER, MIT DEM USER NICHT ABGESTIMMT. .516 ist die
+                      # ALT-LATTEN-ABLOESUNG (User-Go 10.09., Sechs-Achsen-Verfassung
+                      # "keine Altlasten mitschleppen"): die zwei GLOBALEN Guete-Regler
+                      # samt ihrer Seite verschwinden, alle ihre Verbraucher lesen das
+                      # Register "Face catalog" je Kamera, und die Norm-Achse des
+                      # Katalog-Registers geht werksseitig AN. Das ist eine sichtbare
+                      # Verhaltensaenderung fuer jeden, der den Lernlauf nutzt (die
+                      # Gruppen-Flaeche verwarf bis .515 fast alles, was das Sieb
+                      # durchliess) — ein Box-Eintrag ist faellig, sobald der Zug
+                      # veroeffentlicht wird; solange bleibt es ein LOKALER Bau, und
+                      # STAND wandert nur mit, damit das Gate (STAND == VERSION) faehrt.
+                      # Der Wortlaut wird vor der Veroeffentlichung mit dem User
+                      # durchgegangen ([[whatsnew-inhalt-abstimmen]]); was .516 fachlich
+                      # tut, steht im CHANGELOG.
+                      # Davor: "0.1.0.515"   # .515 PLATZHALTER, MIT DEM USER NICHT ABGESTIMMT. .515 baut die zwei
+                      # weiteren Sensoren in den Worker ein (User-Go 10.09.): die FEATURE-NORM
+                      # und die KANTEN-LATTE werden fuenfte und sechste Achse derselben
+                      # Sieb-Mechanik, in beiden Registern, je Kamera und global. Die Norm kommt
+                      # werksseitig AUS (0), die Kanten-Latte mit 25 px — also genau dem Wert,
+                      # der bisher als Konstante im Stimmweg stand. Nach heutigem Stand aendert
+                      # sich am Verhalten des Normalwegs damit NICHTS; im Lernlauf-Sieb ist die
+                      # Kanten-Achse neu. Ein Box-Eintrag ist faellig, sobald der Zug
+                      # veroeffentlicht wird; solange bleibt es ein LOKALER Bau, und STAND
+                      # wandert nur mit, damit das Gate (STAND == VERSION) faehrt. Der Wortlaut
+                      # wird vor der Veroeffentlichung mit dem User durchgegangen
+                      # ([[whatsnew-inhalt-abstimmen]]); was .515 fachlich tut, steht im CHANGELOG.
+                      # Davor: "0.1.0.514"   # .514 PLATZHALTER, MIT DEM USER NICHT ABGESTIMMT. .514 ist Etappe 3 des
+                      # Lernlauf-Umbaus ("ein Sieb"): der Lernlauf siebt seitdem mit denselben
+                      # vier Reglern wie die Erkennung, nur mit eigenen Werten, und das
+                      # Register "Face catalog" bekommt dafuer die zwei fehlenden Regler.
+                      # Anders als .513 ist das ausdruecklich KEINE verhaltensneutrale Etappe —
+                      # ein Lernlauf behaelt danach anderes Material als vorher. Genau deshalb
+                      # ist hier ein Box-Eintrag faellig, sobald der Zug veroeffentlicht wird;
+                      # solange bleibt es ein LOKALER Bau auf der Werkbank, und STAND wandert
+                      # nur mit, damit das Gate (STAND == VERSION) faehrt. Der Wortlaut wird vor
+                      # der Veroeffentlichung mit dem User durchgegangen
+                      # ([[whatsnew-inhalt-abstimmen]]); was .514 fachlich tut, steht im CHANGELOG.
+                      # Davor: "0.1.0.513"   # .513 PLATZHALTER, MIT DEM USER NICHT ABGESTIMMT. .513 ist Etappe 1 des
+                      # Lernlauf-Umbaus ("Messkern") und ausdruecklich VERHALTENSNEUTRAL: keine
+                      # Latte, kein Sieb, kein Urteil aendert sich, es gibt also nichts, was ein
+                      # Nutzer an seiner Anlage merken wuerde. Deshalb KEIN eigener Box-Eintrag
+                      # (User-Entscheid 02.08.: nicht jede Version bekommt einen — abgestimmt sein
+                      # muss aber jede, darum wandert STAND mit). Vor jeder Veroeffentlichung wird
+                      # der Box-Inhalt mit dem User durchgegangen ([[whatsnew-inhalt-abstimmen]]);
+                      # was .513 fachlich tut, steht im CHANGELOG.
+                      # Davor: "0.1.0.512"   # .512 ACHTUNG: Box-Inhalt ist ein ENTWURF, NICHT abgestimmt. .512 ist ein
+                      # rein LOKALER Bau (vier Fixes aus der Katalog-Diagnose 09.09., kein Push,
+                      # kein Deploy); der Eintrag steht hier, damit das Gate (STAND == VERSION)
+                      # faehrt, und wird vor jeder Veroeffentlichung mit dem User durchgegangen
+                      # und ersetzt ([[whatsnew-inhalt-abstimmen]]).
+                      # Davor: "0.1.0.511"   # .511 Box-Inhalt MIT dem User abgestimmt (08.09.2026, EN-Wortlaut vom
                       # User vorgegeben): DREI Eintraege — ROCm-Fix samt neuer Ladeprobe im
                       # Gate, die neu gebaute Katalog-Pruefung samt einmaliger Ruecksetzung
                       # der Katalog-Latte, und der Ausblick auf die Neu-Eichung des
@@ -422,6 +576,75 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # ####################################################################
+    # 0.1.0.526 — INHALT MIT DEM USER ABGESTIMMT (10.09.2026 ~19:2x, "perfekt";
+    # Fassung tester/whatsnew_box_abgestimmt_525.md). VIER Eintraege, der
+    # englische Wortlaut steht WOERTLICH so, wie er abgestimmt wurde;
+    # DE/ES/IT/FR sind die Uebersetzung davon (Praxis seit .298/§6.3).
+    # Der ENTWURF-Eintrag "0.1.0.512" (Qualitaetsseite/Papierkorb, nie
+    # veroeffentlicht, nie abgestimmt) ist damit ERSETZT — genau das war seine
+    # Auflage ([[whatsnew-inhalt-abstimmen]]: vor jedem Release durchgehen und
+    # ersetzen). Der erste Eintrag traegt die Marke; sie faerbt seit .526 nur
+    # den Kopf bis zum ersten Gedankenstrich ("Test release"), nicht mehr den
+    # ganzen Satz (User-Auflage zur Box, Renderer webui.whatsnew_block).
+    # ####################################################################
+    ("0.1.0.526", (
+        {"betont": True,
+         "de": "Testversion — der Lernlauf ist ganz neu. Bitte teste ihn und "
+               "melde alles, was falsch aussieht.",
+         "en": "Test release — the learning run is brand new. Please test it "
+               "and report anything that looks wrong.",
+         "es": "Versión de prueba — el ciclo de aprendizaje es completamente "
+               "nuevo. Pruébalo y avisa de todo lo que parezca mal.",
+         "it": "Versione di prova — il ciclo di apprendimento è completamente "
+               "nuovo. Provalo e segnala tutto ciò che sembra sbagliato.",
+         "fr": "Version de test — le cycle d'apprentissage est tout nouveau. "
+               "Testez-le et signalez tout ce qui vous semble anormal."},
+        {"de": "Der Lernlauf wurde neu gebaut und vereinheitlicht. Ein "
+               "Güte-Sieb, überall dieselben Regeln. Im Kern: eine Prüfung auf "
+               "einen Klick für jeden Durchgang. Sie erntet die Ereignisse, "
+               "filtert auf die Person und bietet die besten Bilder an.",
+         "en": "The learning run was rebuilt and harmonised. One quality "
+               "sieve, the same rules everywhere. At its core: a one-click "
+               "check on any pass. It harvests the events, filters for the "
+               "person and offers the best pictures.",
+         "es": "El ciclo de aprendizaje se ha reconstruido y unificado. Un "
+               "solo tamiz de calidad, las mismas reglas en todas partes. En "
+               "su núcleo: una comprobación con un clic para cualquier pasada. "
+               "Recoge los eventos, filtra por la persona y ofrece las mejores "
+               "imágenes.",
+         "it": "Il ciclo di apprendimento è stato ricostruito e uniformato. Un "
+               "solo setaccio di qualità, le stesse regole ovunque. Al centro: "
+               "un controllo con un clic su qualsiasi passaggio. Raccoglie gli "
+               "eventi, filtra sulla persona e propone le immagini migliori.",
+         "fr": "Le cycle d'apprentissage a été reconstruit et harmonisé. Un "
+               "seul tamis de qualité, les mêmes règles partout. Au cœur : un "
+               "contrôle en un clic sur n'importe quel passage. Il récolte les "
+               "événements, filtre sur la personne et propose les meilleures "
+               "images."},
+        {"de": "Die vorgeschlagenen Bilder sind noch nicht eingestellt. "
+               "Besser: schau selbst und wähle die Gesichter, die dir am "
+               "besten gefallen.",
+         "en": "The suggested pictures are not tuned yet. Better: look for "
+               "yourself and pick the faces that look best to you.",
+         "es": "Las imágenes propuestas todavía no están ajustadas. Mejor: "
+               "mira tú mismo y elige las caras que mejor te parezcan.",
+         "it": "Le immagini proposte non sono ancora tarate. Meglio: guarda tu "
+               "stesso e scegli i volti che ti sembrano migliori.",
+         "fr": "Les images proposées ne sont pas encore réglées. Mieux : "
+               "regardez vous-même et choisissez les visages qui vous semblent "
+               "les meilleurs."},
+        {"de": "Wenn dir mein Programm nützt, freue ich mich über einen Stern "
+               "auf GitHub.",
+         "en": "If my program is useful to you, I would be happy about a star "
+               "on GitHub.",
+         "es": "Si mi programa te resulta útil, me alegraría una estrella en "
+               "GitHub.",
+         "it": "Se il mio programma ti è utile, sarei felice di una stella su "
+               "GitHub.",
+         "fr": "Si mon programme vous est utile, une étoile sur GitHub me "
+               "ferait plaisir."},
+    )),
     # 0.1.0.511 — INHALT MIT DEM USER ABGESTIMMT (08.09.2026, Wortlaut vom User
     # vorgegeben). DREI Eintraege, der englische Text steht WOERTLICH so, wie er
     # abgestimmt wurde; DE/ES/IT/FR sind die Uebersetzung davon, Begriffe wie in

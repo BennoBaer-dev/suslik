@@ -28,6 +28,8 @@ import tempfile
 
 import numpy as np
 
+from core import messkarte as _mk
+
 
 def v_zeilen_lesen(lauf_dir, eids):
     """v-Kandidaten (v==True, datei_v gesetzt) aus den Kandidaten-Dateien der
@@ -148,7 +150,16 @@ def angebote_bewerten(lauf_dir, events_liste, schwellen, refs,
                 angebot = True
             if grund:
                 _grund(grund)
-            dg_zeilen.append({
+            # MESSKARTE (.513, Etappe 1): die Angebots-Zeile bekommt die Karte
+            # der Kandidaten-Zeile als GANZES angehaengt. Das ist die
+            # „vergessene fuenfte" Kopierstelle der Inventur (§I-3): hier
+            # wurden kante/sharp/norm von Hand kopiert und alles andere fiel
+            # heraus — die Guete-Masse, obwohl m∩v-Zeilen sie tragen, ebenso
+            # det/front/pose/struktur/luma. `uebernehmen` ergaenzt nur, was
+            # nicht schon dasteht, und haengt hinten an: die bestehenden
+            # Schluessel behalten Wert UND Position (Byte-Diff zeigt
+            # Ergaenzung, keine Umsortierung).
+            dg_zeilen.append(_mk.uebernehmen({
                 "eid": z["eid"], "kamera": z.get("kamera"), "t": z["t"],
                 "ts": z.get("ts"), "datei_v": z["datei_v"], "kante": z["kante"],
                 "sharp": z["sharp"], "norm": z["norm"],
@@ -158,7 +169,7 @@ def angebote_bewerten(lauf_dir, events_liste, schwellen, refs,
                 "auch_anker": bool(z.get("datei")),   # W1.23: markiert, nie verschwiegen
                 "modell": z.get("modell"),
                 "emb": z["emb"],                       # A2-Beiwert fuer die Uebernahme
-                "angebot": angebot, "grund": grund})
+                "angebot": angebot, "grund": grund}, z))
         # Zwillings-Zusammenfassung (.307, User-Go 20.08.: 'Nachbar-Frame-
         # Zwillinge zusammenfassen'): innerhalb EINES Durchgangs behaelt von
         # nahezu identischen Angeboten (cos >= vorrat_zwilling_sim, gemessen:
