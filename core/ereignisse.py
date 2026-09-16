@@ -11,7 +11,7 @@ MAX_SEITEN = 200          # Deckel (Widerleger F2.1): 200 Seiten x 200 = 40.000 
 
 
 def person_events(hole, anzahl=None, kameras=None, seite=200, max_seiten=MAX_SEITEN,
-                  fenster=None):
+                  fenster=None, nur_beendet=False, log=None):
     """Die juengsten `anzahl` person-Events (None = ALLE bis Historien-Ende), notfalls
     ueber MEHRERE Seiten (before-Cursor auf start_time). -> (events, seiten_geholt).
     Duplikat-sicher UND verlustfrei am Gleichstand-Cursor (Widerleger F2.6: Frigate
@@ -19,8 +19,16 @@ def person_events(hole, anzahl=None, kameras=None, seite=200, max_seiten=MAX_SEI
     max_seiten deckelt hart — nie unbegrenzt im Request-Thread (F2.1).
     fenster=(after_ts, before_ts) (.263 Tages-Modus): begrenzt auf das
     Zeitfenster — after konstant je Seite, der Cursor wandert im Fenster
-    (Frigate-Filter live verifiziert 17.08.: strikt after < t < before)."""
-    events, gesehen, seiten = [], set(), 0
+    (Frigate-Filter live verifiziert 17.08.: strikt after < t < before).
+    nur_beendet (.534, Pruefbericht E-9): laesst Ereignisse OHNE `end_time`
+    (in Frigate noch nicht abgeschlossen) gar nicht erst in die Liste. AUSDRUECK-
+    LICH ein Argument und keine stille Regel: dieses Modul ist reine Blaetter-
+    Logik, und wer hier filtert, aendert die Bedeutung fuer JEDEN Aufrufer. Die
+    ERNTE-Wege geben es mit (ein Ereignis ohne Ende hat keinen fertigen Clip und
+    kostet dort einen Job bis zur Frist); Anzeige- und Zaehlwege sollen den
+    Bestand sehen, wie er ist. `log` bekommt EINE Zeile, wenn welche
+    uebersprungen wurden; None = stumm."""
+    events, gesehen, seiten, offen_n = [], set(), 0, 0
     before, limit = None, min(seite, 1000)
     ziel = anzahl if anzahl is not None else float("inf")
     while len(events) < ziel and seiten < max_seiten:
@@ -47,6 +55,22 @@ def person_events(hole, anzahl=None, kameras=None, seite=200, max_seiten=MAX_SEI
         neu = [e for e in batch if e.get("id") not in gesehen]
         for e in neu:
             gesehen.add(e.get("id"))
+        # .534 (Pruefbericht E-9): EREIGNISSE OHNE ENDE GEHOEREN IN KEINE ERNTE —
+        # aber nur, wenn der Aufrufer das sagt (`nur_beendet`, s. Docstring).
+        # Frigate liefert auch noch LAUFENDE Ereignisse (`end_time` None) — im
+        # Lasttest vom 15.09. waren drei von 393 nie abgeschlossen, und eines
+        # davon liess im Analyse-Weg die Job-Frist reissen und riss den ganzen
+        # Worker-Prozess mit. Der Analyse-Weg prueft das seitdem selbst; die
+        # Ernte-Wege (Lernlauf, Pass-Check, Kalibrier-Auffueller, Bruecke)
+        # bekommen sie HIER gar nicht erst in die Liste. Sie sind ohnehin
+        # wertlos: ein Ereignis ohne Ende hat keinen fertigen Clip.
+        # Gezaehlt wird der Uebersprung im Rueckgabewert, damit es keine stille
+        # Auslassung ist.
+        if nur_beendet:
+            _offen = [e for e in neu if not e.get("end_time")]
+            if _offen:
+                offen_n += len(_offen)
+                neu = [e for e in neu if e.get("end_time")]
         events.extend(neu)
         if len(batch) < limit:
             break                                   # Historien-Ende
@@ -62,6 +86,9 @@ def person_events(hole, anzahl=None, kameras=None, seite=200, max_seiten=MAX_SEI
         # die id-Dedupe frisst die Wiederholungen (live gegen Frigate verifiziert).
         before = min(e.get("start_time") or 0 for e in batch) + 1e-6
         limit = min(seite, 1000)                    # nach Fortschritt zurueck auf Normalgroesse
+    if offen_n and callable(log):
+        log(f"{offen_n} event(s) skipped: Frigate has not finished them yet "
+            f"(no end_time) — an event without an end has no usable clip")
     return (events if anzahl is None else events[:anzahl]), seiten
 
 

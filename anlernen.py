@@ -179,6 +179,72 @@ def ctx_crop(frame, x1, y1, x2, y2, faktor=2.5, max_kante=560):
 
 
 # ---------------------------------------------------------------- Referenz-Embeddings (det 320!)
+REF_ENDUNGEN = (".jpg", ".jpeg", ".png", ".webp")
+# .536 B3 — DIE PROZESSWEITE REFERENZ-MATRIX (Messung 16.09., Knecht CPU).
+#
+# ANLASS, beziffert statt vermutet: ein Sammel-Lauf kostet auf CPU 100 s Prolog,
+# davon 100 s allein `lade_master_refs` — die Funktion bettet bei JEDEM Aufruf
+# jedes Master-Bild ohne Beiwert neu ein (in diesem Bestand 252 von 489). Ein
+# Ereignis kostet im Median 24 s. Wer den Sammel-Lauf in Haeppchen zerlegt, zahlt
+# den Prolog also je Haeppchen noch einmal und verfuenffacht den Aufwand
+# (Verhaeltnis 4,2 : 1) — die Zerlegung waere teurer als die 1800-s-Kette, die sie
+# ersetzen soll. Deshalb wird die Matrix im PROZESS gehalten: der Worker lebt
+# ueber die ganze Kette, der zweite bis n-te Aufruf ist dann ein Woerterbuch-
+# Zugriff.
+#
+# SCHLUESSEL IST DER BESTAND SELBST, nicht eine Zeit: Recognition-Modell,
+# Dateizahl und ein Fingerabdruck ueber (Person/Datei, mtime_ns, Groesse) aller
+# Master-Bilder PLUS mtime/Groesse von `refs_meta.jsonl` (dort stehen die
+# A2-Beiwerte, core/refbeiwert — eine Aenderung dort aendert Vektoren, ohne ein
+# Bild anzufassen). Anlernen, Uebernehmen, Loeschen, Reorganisieren und Import
+# fassen genau diese Dateien an; der Cache faellt damit VON SELBST, niemand muss
+# ihn irgendwo entwerten.
+#
+# EHRLICHE GRENZEN: (1) eine Datei, die mit IDENTISCHER mtime_ns und Groesse
+# ueberschrieben wird, faellt durch den Stempel — im Dateisystem mit
+# Nanosekunden-Aufloesung praktisch ausgeschlossen, aber es ist eine Annahme.
+# (2) Die Matrizen werden GETEILT ausgegeben (nur das Woerterbuch ist eine
+# Kopie): wer eine Zeile in-place aendert, aendert sie fuer alle. Kein heutiger
+# Aufrufer tut das (geprueft: die `refs[...] = `-Stellen in diesem Modul arbeiten
+# auf der npz-Matrix von `refs_matrix_roh`, nicht auf dieser). (3) Der Stempel
+# kostet ein `stat` je Master-Bild (bei 489 Bildern im Millisekunden-Bereich,
+# gegen 100 s Neuaufbau).
+_REFS_CACHE = {"stempel": None, "refs": None, "namen": None, "n": 0, "fremd": 0}
+_REFS_ZAEHLER = {"treffer": 0, "aufbau": 0, "verfall": 0}
+
+
+def _master_stempel(modell):
+    """Fingerabdruck des Referenzbestands -> str, oder None wenn nicht stempelbar
+    (dann gibt es keinen Cache — lieber rechnen als raten)."""
+    try:
+        teile = []
+        n = 0
+        for p in sorted(os.listdir(MASTER)):
+            pd = os.path.join(MASTER, p)
+            if not os.path.isdir(pd):
+                continue
+            for f in sorted(os.listdir(pd)):
+                if not f.lower().endswith(REF_ENDUNGEN):
+                    continue
+                st = os.stat(os.path.join(pd, f))
+                teile.append(f"{p}/{f}|{st.st_mtime_ns}|{st.st_size}")
+                n += 1
+        meta = os.path.join(MASTER, "refs_meta.jsonl")      # A2-Beiwerte, s. oben
+        if os.path.exists(meta):
+            st = os.stat(meta)
+            teile.append(f"§meta|{st.st_mtime_ns}|{st.st_size}")
+        h = hashlib.sha1("\n".join(teile).encode("utf-8")).hexdigest()[:16]
+        return f"{modell}|{n}|{h}"
+    except OSError:
+        return None
+
+
+def refs_cache_stand():
+    """Zaehler des Referenz-Cache (Treffer/Aufbau/Verfall) — die Antwort des
+    Sammel-Jobs traegt sie in den Dienst, `/health` zeigt sie."""
+    return dict(_REFS_ZAEHLER)
+
+
 def lade_master_refs(emb, puls=None, namen=None):
     """Embeddings aller bekannten Personen aus dem Master — MIT det 320 (kleine Ref-Crops),
     VOR dem Umschalten auf 1280 fuers Video (Memory-Regel: sonst brechen die Embeddings ein).
@@ -192,12 +258,41 @@ def lade_master_refs(emb, puls=None, namen=None):
     namen (Stufe A .511, optional): leeres dict herein -> es kommt mit
     {person: [datei je ZEILE der Matrix]} zurueck. Das ist die Zuordnung, die
     der refcache als '§rows' braucht, damit eine einzelne Referenz spaeter
-    wieder herausgenommen werden kann (refcache_entfernen)."""
+    wieder herausgenommen werden kann (refcache_entfernen).
+
+    .536 B3: DER PROZESSWEITE CACHE (Begruendung + Grenzen im Block darueber).
+    Ein Treffer liefert dasselbe Ergebnis wie ein Neuaufbau — der Schluessel ist
+    der Bestand selbst. `namen` wird IMMER mitgefuehrt und mitgelegt, auch wenn
+    dieser Aufrufer es nicht will: sonst bekaeme der naechste Aufrufer mit
+    `namen` einen Treffer ohne Zuordnung, und `refcache_aufbauen` schriebe eine
+    Karte ohne '§rows' (dann faellt `refcache_entfernen` auf 'Cache verwerfen'
+    zurueck — ein stiller Verlust an Beschleunigung)."""
     from core import refbeiwert as _rb
     refs = {}
     if not os.path.isdir(MASTER):
         return refs
-    endungen = (".jpg", ".jpeg", ".png", ".webp")
+    endungen = REF_ENDUNGEN
+    stempel = _master_stempel(emb.modell)
+    if stempel is not None and _REFS_CACHE["stempel"] == stempel:
+        _REFS_ZAEHLER["treffer"] += 1
+        if _REFS_CACHE["fremd"]:
+            # Auch bei einem Treffer LAUT: die Warnung gehoert in jeden Lauf,
+            # nicht nur in den, der die Matrix zufaellig gebaut hat.
+            print(f"lade_master_refs: {_REFS_CACHE['fremd']} stock reference(s) carry "
+                  f"an embedding for another model — not usable, re-learn them", flush=True)
+        if namen is not None:
+            namen.update({p: list(N) for p, N in (_REFS_CACHE["namen"] or {}).items()})
+        if puls:                                  # Balken direkt auf voll (kein Neuaufbau)
+            puls(0, _REFS_CACHE["n"])
+            puls(_REFS_CACHE["n"], _REFS_CACHE["n"])
+        print(f"reference matrix: reused from this process "
+              f"({sum(len(v) for v in _REFS_CACHE['refs'].values())} vectors, "
+              f"{_REFS_ZAEHLER['treffer']} hit(s))", flush=True)
+        return dict(_REFS_CACHE["refs"])
+    if _REFS_CACHE["stempel"] is not None:
+        _REFS_ZAEHLER["verfall"] += 1
+        print("reference matrix: the reference set changed — rebuilding", flush=True)
+    _namen = {}                                   # s. Docstring: immer mitgefuehrt
     i = n = 0
     if puls:
         for p in os.listdir(MASTER):
@@ -234,8 +329,17 @@ def lade_master_refs(emb, puls=None, namen=None):
                 N.append(f)
         if V:
             refs[p] = np.asarray(V, dtype=np.float32)
+            _namen[p] = N
             if namen is not None:
-                namen[p] = N
+                namen[p] = list(N)
+    # Stempel ERNEUT nehmen: hat jemand waehrend des Aufbaus eine Referenz
+    # angefasst, gehoert das Ergebnis nicht in den Cache (es waere ein Mischstand).
+    _REFS_ZAEHLER["aufbau"] += 1
+    if stempel is not None and _master_stempel(emb.modell) == stempel:
+        # `n` zaehlt nur mit Puls vorab, `i` immer — fuer den Balken eines
+        # spaeteren Treffers ist die groessere der beiden Zahlen die richtige.
+        _REFS_CACHE.update(stempel=stempel, refs=dict(refs), namen=_namen,
+                           n=max(int(n), int(i)), fremd=int(fremd or 0))
     return refs
 
 
@@ -251,7 +355,17 @@ def nn(refs, v):
 
 # ---------------------------------------------------------------- Sammeln
 def _unbekannt_eids(tage):
-    """eids aus deckung.jsonl, die als unbekannt gewertet wurden und deren Clip im Cache liegt."""
+    """eids aus deckung.jsonl, die als unbekannt gewertet wurden und deren Clip im Cache liegt.
+    -> [(eid, camera, ts, clip_s)].
+
+    .536 B3: `clip_s` ist die EREIGNIS-Laenge (`ende_ts - start`), also die Menge
+    Video, die das Sammeln durchrechnen muss. Sie ist der Preis-Schaetzer fuer die
+    Haeppchen-Packung im Dienst (gemessen 16.09.: 1,50 s Rechenzeit je Clip-Sekunde
+    auf CPU, ueber 1080p/4K stabil). 0.0 heisst „unbekannt" — bei Ereignissen, die
+    Frigate nie beendet hat, gibt es keine Laenge, und eine erfundene waere
+    schlechter als keine (der Dienst setzt dafuer den Median des Auftrags ein).
+    NICHT genommen wird `dauer_s` der Akte: das ist die Wanduhr der ANALYSE, nicht
+    die Laenge des Clips (Feldzeile: 1,9 s Analyse auf einem 16-s-Ereignis)."""
     grenze = time.time() - tage * 86400
     out = []
     dp = os.path.join(DATA, "state", "deckung.jsonl")
@@ -274,7 +388,10 @@ def _unbekannt_eids(tage):
         eid = d["eid"]
         clip = os.path.join(CLIPS, eid.replace("/", "_") + ".mp4")
         if os.path.exists(clip):
-            out.append((eid, d.get("camera", "?"), d.get("start") or d.get("ts")))
+            _start, _ende = d.get("start") or 0, d.get("ende_ts") or 0
+            _len = float(_ende) - float(_start) if (_start and _ende) else 0.0
+            out.append((eid, d.get("camera", "?"), d.get("start") or d.get("ts"),
+                        round(_len, 1) if _len > 0 else 0.0))
     return out
 
 
@@ -387,7 +504,8 @@ def _zulauf_urteil(k):
     return pool_zulauf(k, NORM_LATTE_ZULAUF or None, KAT_LATTEN_ZULAUF or None)
 
 
-def sammle(tage=5.0, fps_sample=2, mit_migriere=True, kalib_deckel=None):
+def sammle(tage=5.0, fps_sample=2, mit_migriere=True, kalib_deckel=None,
+           nur_eids=None, zeit_deckel_s=None):
     """Gelockter Wrapper ums Sammeln (serialisiert gegen andere Pool-Schreiber, Review 21.07.).
     mit_migriere=False fuer das szenario-getriggerte Sofort-Sammeln (nur neue Gesichter, OHNE die
     teure Pool-Neupruefung/Referenz-Neueinbettung — die macht der Reorganisieren-Button).
@@ -396,15 +514,38 @@ def sammle(tage=5.0, fps_sample=2, mit_migriere=True, kalib_deckel=None):
     Ring-Deckel je Kamera (live_kalib_max). Ist er gesetzt (> 0), legt das
     Sammeln je Event sein BESTES Bild zusaetzlich in den Kalibrier-Ring der
     Kamera — dieselbe Nebenprodukt-Oekonomie wie die Ernte, kein eigener
-    Rechenlauf. None/0 = aus (CLI-Altverhalten ohne den Wert)."""
+    Rechenlauf. None/0 = aus (CLI-Altverhalten ohne den Wert).
+
+    .536 B3 — ZWEI NEUE ARGUMENTE, damit der Dienst den Lauf in Haeppchen
+    zerlegen kann (Muster `vorschlaege_person(nur_eids=...)`):
+      nur_eids      None = wie bisher alles, was faellig ist. Eine Liste/Menge
+                    beschraenkt den Lauf auf GENAU diese eids; die LEERE Liste
+                    heisst „kein Ereignis" (so faehrt das 06:00-Netz seine
+                    Pool-Pflege als eigenes erstes Haeppchen).
+      zeit_deckel_s Zeitbudget der Ereignis-Schleife. Der Lauf bricht NACH dem
+                    Ereignis ab, mit dem das Budget ueberschritten ist, und meldet
+                    den Rest als `offen` — die Naht dafuer ist schon da:
+                    `gesichter.jsonl`/`geprueft.jsonl` werden je Ereignis
+                    angehaengt und geflusht, ein Abbruch dazwischen verliert
+                    nichts. Ein einzelner sehr langer Clip sprengt damit sein
+                    Haeppchen, nicht die Frist des Jobs.
+
+    Rueckgabe seit .536 ein dict statt der blossen Zahl (die Aufrufer im Worker
+    reichen es als ANTWORTFELD zurueck, statt eine Summe aus stdout zu fischen):
+      {"neu", "events", "offen", "dauer_s", "prolog_s", "clip_s", "cache"}"""
     with pool_lock():
-        return _sammle_intern(tage, fps_sample, mit_migriere, kalib_deckel)
+        return _sammle_intern(tage, fps_sample, mit_migriere, kalib_deckel,
+                              nur_eids=nur_eids, zeit_deckel_s=zeit_deckel_s)
 
 
-def _sammle_intern(tage, fps_sample, mit_migriere, kalib_deckel=None):
+def _sammle_intern(tage, fps_sample, mit_migriere, kalib_deckel=None,
+                   nur_eids=None, zeit_deckel_s=None):
+    t_start = time.time()
     os.makedirs(CROPS, exist_ok=True)
     emb = Embedder()
+    _treffer0 = _REFS_ZAEHLER["treffer"]
     refs = lade_master_refs(emb)
+    _cache = "hit" if _REFS_ZAEHLER["treffer"] > _treffer0 else "miss"
     print(f"reference base: {sum(len(v) for v in refs.values())} vectors, {len(refs)} persons", flush=True)
     if mit_migriere:
         stat = migriere_und_pruefe_pool(emb, refs)          # Hebel 1: modell-konsistent + bekannte raus
@@ -413,7 +554,10 @@ def _sammle_intern(tage, fps_sample, mit_migriere, kalib_deckel=None):
     tag = _pruef_tag()                                     # Modell + Schwellen -> entwertet Vermerke bei Aenderung
     schon = _schon_gesammelt()                             # schon im Pool -> nie neu sammeln
     geprueft = _schon_geprueft(tag) | schon               # schon im Pool ODER (mit diesem tag) ohne Gesicht abgehakt
-    evs = [e for e in _unbekannt_eids(tage) if e[0] not in geprueft]
+    _nur = None if nur_eids is None else set(nur_eids)     # leere Menge = kein Ereignis (Pool-Pflege)
+    evs = [e for e in _unbekannt_eids(tage)
+           if e[0] not in geprueft and (_nur is None or e[0] in _nur)]
+    prolog_s = time.time() - t_start
     print(f"{len(evs)} events to check ({len(schon)} in the pool, "
           f"{len(geprueft) - len(schon)} already checked off without a face) [tag {tag}]", flush=True)
     # .380: DER eine 112er-Warp des Hauses, nicht ein zweiter hier (core/ernte).
@@ -421,8 +565,10 @@ def _sammle_intern(tage, fps_sample, mit_migriere, kalib_deckel=None):
     from core.ernte import align112 as _align112
     neu = 0
     mess_ges, mess_n = 0.0, 0                             # Bilanz des Zulauf-Siebs
+    offen, clip_s_ges, fertig = [], 0.0, 0                # .536 B3: Zeit-Deckel-Bilanz
+    t_ereignisse = time.time()                            # die Uhr des Deckels laeuft OHNE Prolog
     with open(GES_PATH, "a") as out, open(GEPRUEFT_PATH, "a") as gpr:
-        for eid, camera, ts in evs:
+        for _i_ev, (eid, camera, ts, _clip_s) in enumerate(evs):
             clip = os.path.join(CLIPS, eid.replace("/", "_") + ".mp4")
             # TOP-3 je Event statt EIN Bestes (Umbau 25.07., mit eigenen Augen belegt): die
             # guete-Formel bevorzugt systematisch das statische Objekt (gross, kantenreich,
@@ -547,13 +693,30 @@ def _sammle_intern(tage, fps_sample, mit_migriere, kalib_deckel=None):
             gpr.write(json.dumps({"eid": eid, "tag": tag, "gesicht": best is not None, "ts": ts},
                                  ensure_ascii=False) + "\n")   # jedes Event genau einmal abhaken (auch ohne Gesicht)
             gpr.flush()
-    print(f"\n{neu} faces collected, {len(evs)} events checked -> {GES_PATH}", flush=True)
+            fertig += 1
+            clip_s_ges += max(0.0, float(_clip_s or 0.0))
+            # .536 B3 ZEIT-DECKEL: NACH dem Ereignis fragen, nie mittendrin. Das
+            # Ereignis ist damit immer ganz gerechnet und abgehakt; abgebrochen
+            # wird die SCHLEIFE, und der Rest reist als `offen` zurueck zum
+            # Dienst, der ihn ins naechste Haeppchen legt. Ein Ereignis wird so
+            # nie halb gerechnet und nie doppelt.
+            if zeit_deckel_s and (time.time() - t_ereignisse) >= float(zeit_deckel_s):
+                offen = [e[0] for e in evs[_i_ev + 1:]]
+                if offen:
+                    print(f"time budget of this batch spent after {fertig} event(s) "
+                          f"({time.time() - t_ereignisse:.0f}s of {float(zeit_deckel_s):.0f}s) "
+                          f"— {len(offen)} event(s) handed back as open", flush=True)
+                break
+    print(f"\n{neu} faces collected, {fertig} events checked -> {GES_PATH}", flush=True)
     if mess_n:
         # Der Preis des Siebs, beziffert statt behauptet (Haus-Regel: Posten
         # ehrlich nennen). ms JE POOL-KANDIDAT, nicht je Detektion.
         print(f"inflow measurement: {mess_n} candidate(s), "
               f"{mess_ges * 1000 / mess_n:.1f} ms each ({mess_ges:.1f} s total)", flush=True)
-    return neu
+    return {"neu": neu, "events": fertig, "offen": offen,
+            "dauer_s": round(time.time() - t_start, 1),
+            "prolog_s": round(prolog_s, 1),
+            "clip_s": round(clip_s_ges, 1), "cache": _cache}
 
 
 # ---------------------------------------------------------------- Clustern

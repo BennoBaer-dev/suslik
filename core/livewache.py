@@ -534,10 +534,14 @@ def masse(url, versuche=4):
     Laut + verdoppelnd wie der Reconnect; nach dem letzten Versuch ein klarer Fehler
     statt des nackten ValueError."""
     for i in range(versuche):
+        # .536 B1a: stdin=DEVNULL (Hygiene derselben Klasse wie im Worker —
+        # kein Kind erbt einen fd 0, den es nicht braucht). ffprobe kennt kein
+        # `-nostdin`, die abgeklemmte Quelle ist hier der einzige Riegel.
         p = subprocess.run(["ffprobe", "-v", "error"] + auth_argumente(url)
                            + ["-rtsp_transport", "tcp",
                             "-select_streams", "v:0", "-show_entries",
                             "stream=width,height", "-of", "csv=p=0", url],
+                           stdin=subprocess.DEVNULL,
                            capture_output=True, text=True,
                            timeout=probe_timeout(url))
         teile = p.stdout.strip().split(",")
@@ -625,7 +629,11 @@ def leser(url, rate=1, skala=None, hw=True):
         hw = hw_wahl()
     elif not hw:
         hw = None
-    cmd = ["ffmpeg", "-v", "error"]
+    # .536 B1a: `-nostdin` (Hygiene derselben Klasse). Der Waechter-Strom laeuft
+    # in verifyd, dessen fd 0 nicht die Job-Pipe ist — aber ein ffmpeg, das den
+    # fd 0 seines Elternprozesses pollt, ist die Fehlerklasse, nicht der eine
+    # Weg, auf dem sie heute weh tut. Am Bild aendert der Schalter nichts.
+    cmd = ["ffmpeg", "-nostdin", "-v", "error"]
     if quelle_ist_datei(url):
         # Feed-Test: -re taktet wie eine Kamera, die Schleife haelt den
         # Waechter am Leben, bis er ausgeschaltet wird.
@@ -659,7 +667,8 @@ def leser(url, rate=1, skala=None, hw=True):
         b, h = skala
     cmd += ["-vf", ",".join(kette), "-fps_mode", "passthrough", "-f", "rawvideo", "-"]
     fsz = b * h * 3 // 2
-    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,       # .536 B1a
+                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                          bufsize=fsz * 2)
     return p, b, h
 
@@ -1516,6 +1525,11 @@ def video_bauen(frames, pfad, fps):
     if not frames:
         return None
     h, b = frames[0].shape[:2]
+    # .536 B1a — DIE EINE AUSNAHME der stdin-Regel, mit Absicht: hier IST stdin
+    # der Datenweg (die gepufferten BGR-Bilder werden unten hineingeschrieben).
+    # Weder `stdin=DEVNULL` noch `-nostdin` duerfen hier stehen; die Gate-Probe
+    # tools/proben/s11_v3_stdin_kinder.py fuehrt genau diese Stelle in ihrer
+    # Ausnahmeliste und prueft, dass sie NICHT abgeklemmt wird.
     p = subprocess.Popen(
         ["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24",
          "-s", f"{b}x{h}", "-r", f"{max(fps, 1):.2f}", "-i", "-",
@@ -1654,7 +1668,10 @@ def steckbrief_ermitteln(url, versuche=4, log=print):
             "-of", "json", url]
     for i in range(versuche):
         try:
-            p = subprocess.run(cmd, capture_output=True, text=True,
+            # .536 B1a: stdin=DEVNULL (Hygiene, s. masse()). ffprobe kennt kein
+            # `-nostdin`.
+            p = subprocess.run(cmd, stdin=subprocess.DEVNULL,
+                               capture_output=True, text=True,
                                timeout=probe_timeout(url))
             d = json.loads(p.stdout or "{}")
             st = (d.get("streams") or [{}])[0]
@@ -6507,7 +6524,13 @@ class Engine:
             offen, k.fr_offen = k.fr_offen, {}
         for person, eid in offen.items():
             self.fr_queue.end(eid)
-            self._klog(k, f"Frigate-Event [{person}] beendet ({eid})")
+            # .534: „angefordert", nicht „beendet". Im Feld stand am 15.09. in
+            # diesem Log „beendet" — und dieselben Ereignisse hatten in Frigate
+            # nie ein `end_time` (das `/end` fiel auf ein 404-Anlege-Rennen oder
+            # war stillschweigend wirkungslos). Das BESTAETIGTE Ende meldet die
+            # Warteschlange selbst, nachdem sie in Frigate nachgesehen hat.
+            self._klog(k, f"Frigate-Event [{person}] Ende angefordert ({eid}) — "
+                          f"die Bestaetigung meldet die Warteschlange")
 
     def _guete_von(self, k, frame, face):
         """Die zwei Guete-Masse EINES Ketten-Bilds -> (empfinden, fiqa_t).

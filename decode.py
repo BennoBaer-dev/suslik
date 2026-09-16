@@ -54,11 +54,15 @@ def _probe(vid):
     """EIN ffprobe fuer alle Metadaten (Panel-Fund: 3 Parser = 217 ms je Clip,
     einer = 93 ms). Rueckgabe dict oder {} — Aufrufer faellt auf cv2 zurueck."""
     try:
+        # .536 B1a: stdin=DEVNULL. ffprobe kennt kein `-nostdin` — hier ist die
+        # abgeklemmte Quelle des fd 0 der einzige Riegel. Er zaehlt, weil dieser
+        # Probe-Lauf im Worker vor JEDEM FrameIter steht.
         r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
                             "-count_packets", "-show_entries",
                             "stream=codec_name,pix_fmt,width,height,"
                             "avg_frame_rate,nb_read_packets",
                             "-of", "json", vid],
+                           stdin=subprocess.DEVNULL,
                            capture_output=True, text=True, timeout=30)
         import json as _json
         s = (_json.loads(r.stdout or "{}").get("streams") or [{}])[0]
@@ -163,7 +167,11 @@ class FrameIter:
         # nur die gebrauchten Frames den Decoder; die gelieferten Bilder
         # sind BYTE-IDENTISCH zur frueheren Python-seitigen Auswahl
         # (Gate-A-Beweis), nur der Ballast der Zwischenframes entfaellt.
-        basis = ["ffmpeg", "-v", "warning"]   # warning: Concealment-Zeilen sichtbar (Wache-Quelle)
+        # .536 B1a: `-nostdin` — ffmpeg darf den fd 0 seines Elternprozesses
+        # nicht pollen. Im Worker ist das die Job-Pipe (Byte-Beweis im Kopf von
+        # worker_kern.nv12_strom). Kein Eingriff in den Pixelpfad: der Schalter
+        # betrifft allein den Tastatur-Poll, nicht Decoder, Filter oder Format.
+        basis = ["ffmpeg", "-nostdin", "-v", "warning"]   # warning: Concealment-Zeilen sichtbar (Wache-Quelle)
         if hw == "vaapi":
             dev = os.environ.get("SUSLIK_HWDEC_DEVICE", "/dev/dri/renderD128")
             basis += ["-hwaccel", "vaapi", "-hwaccel_device", dev,
@@ -189,7 +197,11 @@ class FrameIter:
         # ab und die Wache sah den Verlust. Die Fehlerzeilen sind jetzt die
         # einzige ehrliche Quelle fuer 'Bild-Inhalt beschaedigt'.)
         with tempfile.TemporaryFile() as err:
-            p = subprocess.Popen(self._kommando(hw), stdout=subprocess.PIPE,
+            # .536 B1a: stdin=DEVNULL, der zweite Riegel neben `-nostdin`
+            # (s. _kommando). Diese Pipe laeuft im Worker auf dem Sammel- und
+            # Ernte-Weg (anlernen.py:164/437, core/ernte.py).
+            p = subprocess.Popen(self._kommando(hw), stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.PIPE,
                                  stderr=err, bufsize=fsz * 2)
             self._proc = p                    # Griff fuer abbrechen() (Z5)
             try:

@@ -503,10 +503,23 @@ def _sonde_cuda():
     if not _knoten_da(_pflicht_knoten("cuda")):
         return _fehlt("kein_geraet")
     try:
+        # .536 B1a: stdin=DEVNULL. Diese Sonde ist IM WORKER erreichbar (die
+        # Speicher-Wache fragt sie im Takt), und ein Kind, das den fd 0 des
+        # Worker-Prozesses erbt, ist die Fehlerklasse aus dem IPC-Befund vom
+        # 16.09. — unabhaengig davon, ob genau dieses Werkzeug stdin liest.
         r = subprocess.run(
             ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total,"
              "temperature.gpu", "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=8)
+            stdin=subprocess.DEVNULL,
+            # .531: 2 s statt 8. Diese Sonde haengt seit .529 am ABSETZWEG jedes
+            # Jobs (verifyd: worker_fussabdruck_max_mb/worker_geometrien_max) und
+            # seit .531 zusaetzlich am Takt der Speicher-Wache im Worker. Ein
+            # haengendes nvidia-smi kostete damit bis zu 8 s JE AUFRUF, und zwar
+            # dort, wo der Dienst gerade einen Job absetzen will. Eine Karte, die
+            # 2 s braucht, um ihre eigene Belegung zu nennen, ist ohnehin kein
+            # verlaesslicher Messwert mehr — der Aufrufer nimmt dann den letzten
+            # guten Wert MIT Alter.
+            capture_output=True, text=True, timeout=2)
     except FileNotFoundError:
         return _fehlt("werkzeug_fehlt")
     except Exception:                                        # noqa: BLE001
@@ -524,6 +537,97 @@ def _sonde_cuda():
         return _fehlt("nicht_lesbar")
 
 
+def prozesse_karte_mb(pids=None):
+    """Was MEHRERE Prozesse auf der NVIDIA-Karte halten (.534). -> (dict, grund)
+
+    EIN nvidia-smi-Aufruf fuer alle: wer die Karte fuer eine Prozessgruppe
+    fragt (ein Worker und seine Decoder-Kinder), soll nicht je Kind forken.
+    Das dict traegt nur pids, die der Treiber WIRKLICH nennt; fehlt eine,
+    fehlt sie auch im dict — eine 0 waere ein luegender Diagnosewert.
+    `pids=None` liefert alle Zeilen.
+
+    `grund is None` heisst „gemessen". Die Ausfall-Gruende sind dieselben wie
+    bei `prozess_karte_mb`, das auf dieser Funktion aufsitzt — EIN Parser.
+
+    .535: „DIE LISTE STEHT, UNSERE PID FEHLT" IST EIN EIGENER AUSGANG. Bis .534
+    kam dieser Fall als `({}, None)` zurueck — „gemessen, null MB" —, und der
+    Aufrufer machte daraus stillschweigend eine 0. Im Feld (15.09.) war
+    das der ganze Fehler: der Treiber nennt dort die WIRT-pids, unsere stand nie
+    darin, und die Leiter plante den laufenden Worker mit „belegt nichts". Seit
+    .535 unterscheidet diese Funktion drei Lagen, und jede hat ihren Namen:
+    `liste_leer` (der Treiber nennt ueberhaupt keinen Prozess), `kein_eintrag`
+    (er nennt welche, aber keine der gefragten) und „gemessen" (grund None).
+    Wortgleich mit `prozess_karte_mb` — EIN Vokabular fuer dieselbe Auskunft."""
+    if not _knoten_da(_pflicht_knoten("cuda")):
+        return {}, "kein_geraet"
+    try:
+        # .536 B1a: stdin=DEVNULL, gleiche Begruendung wie bei der Karten-Sonde
+        # oben — dieser Aufruf haengt am Ende JEDES Analyse-Jobs im Worker.
+        r = subprocess.run(
+            ["nvidia-smi", "--query-compute-apps=pid,used_memory",
+             "--format=csv,noheader,nounits"],
+            stdin=subprocess.DEVNULL,
+            # Dieselbe Frist wie die Karten-Sonde: der Aufruf haengt am Ende
+            # jedes Analyse-Jobs, und eine Karte, die zwei Sekunden braucht,
+            # um ihre eigenen Prozesse zu nennen, ist kein Messwert mehr.
+            capture_output=True, text=True, timeout=2)
+    except FileNotFoundError:
+        return {}, "werkzeug_fehlt"
+    except subprocess.TimeoutExpired:
+        return {}, "timeout"
+    except Exception:                                        # noqa: BLE001
+        return {}, "nicht_lesbar"
+    if r.returncode != 0:
+        return {}, "nicht_lesbar"
+    gesucht = None if pids is None else {str(x) for x in pids}
+    aus = {}
+    zeilen_n = 0
+    for zeile in (r.stdout or "").splitlines():
+        teile = [x.strip() for x in zeile.split(",")]
+        if len(teile) < 2:
+            continue
+        zeilen_n += 1
+        if gesucht is not None and teile[0] not in gesucht:
+            continue
+        try:
+            aus[int(teile[0])] = int(float(teile[1]))
+        except (TypeError, ValueError):
+            continue
+    if gesucht is not None and not aus:
+        # .535: KEINE STILLE NULL. Ob der Treiber gar keinen Prozess nennt oder
+        # nur unsere nicht, sind zwei verschiedene Auskuenfte — und beide sind
+        # etwas anderes als „gemessen, null MB".
+        return {}, ("kein_eintrag" if zeilen_n else "liste_leer")
+    return aus, None
+
+
+def prozess_karte_mb(pid=None):
+    """Was EIN Prozess auf der NVIDIA-Karte haelt (.532). -> (mb|None, grund)
+
+    `grund is None` heisst „gemessen". Eine Zahl kommt nur zurueck, wenn der
+    Treiber wirklich eine Zeile fuer DIESE pid nennt; sonst None mit Grund —
+    eine 0 hiesse „belegt nichts" und waere ein luegender Diagnosewert.
+
+    WARUM HIER UND NICHT BEIM AUFRUFER: das ist der zweite Blick auf dieselbe
+    Karte (`--query-gpu` sagt, was die KARTE traegt, `--query-compute-apps`,
+    was ein PROZESS haelt), und beide Parser gehoeren in dieselbe Datei — ein
+    zweiter nvidia-smi-Parser anderswo driftet still ab.
+
+    EHRLICHE GRENZE: ob der Treiber im Container die CONTAINER-pid meldet oder
+    die des Wirts, ist eine Eigenschaft von Treiber und Laufzeit. Im Labor am
+    15.09.2026 waren es die Container-pids; auf der Feldtester-Anlage waren
+    es die des WIRTS, und unsere pid stand nie in der Liste. Zugesagt ist das
+    nicht, und deshalb ist „kein_eintrag" ein benannter Ausgang und kein Fehler.
+    `liste_leer` daneben heisst: der Treiber nennt ueberhaupt keinen Prozess."""
+    gesucht = int(pid if pid is not None else os.getpid())
+    d, grund = prozesse_karte_mb([gesucht])
+    if grund is not None:
+        return None, grund
+    if gesucht not in d:
+        return None, "kein_eintrag"
+    return d[gesucht], None
+
+
 def _sonde_migraphx():
     """AMD: rocm-smi. UNGEPRUEFT — auf dieser Anlage gibt es kein AMD-Geraet
     (Bauplan §2). Der Parser nimmt deshalb NUR eine Spalte an, deren Kopf
@@ -532,7 +636,10 @@ def _sonde_migraphx():
     if not _knoten_da(_pflicht_knoten("migraphx")):
         return _fehlt("kein_geraet")
     try:
+        # .536 B1a: stdin=DEVNULL, gleiche Klasse wie die beiden nvidia-smi-
+        # Sonden darueber (das ROCm-Gegenstueck derselben Sammelstelle).
         r = subprocess.run(["rocm-smi", "--showuse", "--csv"],
+                           stdin=subprocess.DEVNULL,
                            capture_output=True, text=True, timeout=10)
     except FileNotFoundError:
         return _fehlt("werkzeug_fehlt")

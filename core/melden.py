@@ -575,7 +575,11 @@ def transcode_lauf(cmd, timeout, lock, procs):
     ohne Logzeile. Registrierung + killpg in neustart() schliessen das; der eindeutige
     .part-Name je Versuch (s. Aufrufer) ist der doppelte Boden.
     `lock`/`procs` definiert der Dienst (eine Lock-Quelle) und reicht sie herein."""
-    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    # .536 B1a: stdin=DEVNULL (Hygiene derselben Klasse — kein Kind erbt einen
+    # fd 0, den es nicht braucht). `-nostdin` tragen die Kommandoketten dieses
+    # Wegs bereits seit langem (verifyd.transcode_kommandos).
+    p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                          start_new_session=True)
     with lock:
         procs.add(p)

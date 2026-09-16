@@ -12,7 +12,84 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.0.526"   # .526 ist das RELEASE des Lernlauf-Umbaus (.512-.525). Box-Inhalt
+STAND = "0.1.0.537"   # .537 traegt EINEN Box-Eintrag, INHALT VOM INHABER
+                      # VORGEGEBEN (16.09.2026 21:0x): die Box wird
+                      # KONSOLIDIERT — ein Eintrag unter 0.1.0.537 mit der
+                      # Test-Marke, dem Worker-Umbau-Satz (.527) und dem
+                      # Lernlauf-Satz (.526). .537 ist funktionsgleich zur .536
+                      # und geht NUR als cuda und gpu raus (bewusste Ausnahme
+                      # von der 5-Varianten-Regel, cpu/gpu-legacy/rocm werden
+                      # geprueft und nachgezogen).
+                      # Davor: "0.1.0.536"   # .536 traegt KEINEN Box-Eintrag — Inhaber-Entscheid
+                      # 16.09.2026 woertlich: „Keine Aenderung an der Box, nur
+                      # die Version anpassen, sonst nichts Neues." Der
+                      # Vordertuer-Umbau der Vergabe (Analyseplaetze sind
+                      # Rechenstraenge, Hintergrund-Arbeit haelt ihr eigenes
+                      # Konto), das Sammeln in Haeppchen und die Umbenennung
+                      # „Analysis slots" -> „Compute threads" stehen im
+                      # CHANGELOG. Die Box bleibt Key-Features-only (User
+                      # 01.08.); nur STAND wandert mit.
+                      # Davor: "0.1.0.535"   # .535 traegt KEINEN Box-Eintrag: Sonde, Grundlinie und
+                      # die angehobene Strang-Obergrenze sind Innenleben und
+                      # Fehlerfixe zum Feldbefund vom 15.09. Die Box bleibt
+                      # Key-Features-only (User 01.08.); nur STAND wandert mit.
+                      # Davor: "0.1.0.534"   # .534 traegt KEINEN Box-Eintrag: die Preise des
+                      # Kartenhaushalts kommen jetzt von der Karte, auf der die
+                      # Anlage wirklich laeuft (statt von den Ankern einer
+                      # 6-GB-Karte), die RAM-Wache skaliert mit den
+                      # Rechenstraengen, und ein von Frigate nie beendetes
+                      # Ereignis haelt die Anlage nicht mehr an. Innenleben und
+                      # Fehlerfixe — die Box bleibt Key-Features-only (User
+                      # 01.08.).
+                      # Davor: "0.1.0.533"   # .533 ist der Aufrufpunkt-Fix zu .532 (die Plaetze wurden
+                      # nie wirklich an die Rechenstraenge gebunden) — kein
+                      # Box-Eintrag, dieselbe Begruendung wie .532.
+                      # Davor: "0.1.0.532"   # .532 traegt KEINEN Box-Eintrag: es ist der Nachzug zum
+                      # Feldtest der .531 (Arena-Deckel bekommt das ganze Budget,
+                      # Memory-Pattern aus, Ausweg nach zwei eigenen Deckel-
+                      # Treffern, Plaetze folgen den Rechenstraengen, die eigene
+                      # Kartenbelegung steht im Log). Fehlerfix und Innenleben,
+                      # und die Box bleibt Key-Features-only (User 01.08.).
+                      # Davor: "0.1.0.531"   # .531 traegt KEINEN Box-Eintrag: der Kartenhaushalt des
+                      # CUDA-Workers ist ein Fehlerfix und Innenleben, und die
+                      # Box bleibt Key-Features-only (User 01.08.). Nur STAND
+                      # wandert mit. Ein Satz dazu liegt dem Inhaber als ENTWURF
+                      # vor — er entscheidet, ob die Box ihn bekommt.
+                      # .529 ist der FELD-FIX zum Vorfall auf der Feldtester-Anlage vom
+                      # 15.09.2026 (Kaltstart mit zwei Rechenstraengen, fuenf Live-
+                      # Waechtern und 4K): Bauschritte des Worker-Dienstes laufen jetzt
+                      # NACHEINANDER (Geometrie-Bau und Warmlauf unter EINEM Riegel, das
+                      # Rechnen bleibt parallel), die Politik-Grenze der Speicher-Wache
+                      # haengt bei lesbarem Maschinen-RAM an der MASCHINE statt an der
+                      # Waechterzahl, und die Strang-Zahl rechnet gegen das real freie
+                      # VRAM der Karte statt nur gegen die eigenen Posten.
+                      # KEIN Box-Eintrag: die .527-Box steht unveraendert und ist die,
+                      # die der Nutzer zu sehen bekommt; ein Fehlerfix bekommt keinen
+                      # eigenen Key-Feature-Eintrag ([[whatsnew-inhalt-abstimmen]]).
+                      # STAND wandert nur mit, damit das Gate (STAND == VERSION) faehrt.
+                      # Davor: "0.1.0.528"   # .528 ist ein INTERNER FIX vor dem ersten Push von .527 (die .527
+                      # ist nie veroeffentlicht worden): die Politik-Grenze der
+                      # Speicher-Wache wird auf Backends ohne RAM-Messung aus
+                      # gemessenen Container-Posten gerechnet, statt die konfigurierte
+                      # Je-Worker-Zahl gegen ein Container-Mass zu stellen (sie schoss
+                      # den Worker auf dem CUDA-Notebook alle 600 s ab), dazu die
+                      # wiederhergestellte Decode-Meldung und eine gedaempfte
+                      # Bibliotheks-Warnung. KEIN Box-Eintrag: die .527-Box steht
+                      # unveraendert und ist die, die der Nutzer zu sehen bekommt —
+                      # ein Fix an einer nie ausgelieferten Version hat in der Box
+                      # nichts verloren ([[whatsnew-inhalt-abstimmen]]). STAND wandert
+                      # nur mit, damit das Gate (STAND == VERSION) faehrt.
+                      # Davor: "0.1.0.527"   # .527 ist das RELEASE des WORKER-NEUBAUS (E3-Schnitt: der Analyse-
+                      # Weg rechnet im neuen worker_dienst auf der GPU). Box-Inhalt vom
+                      # User vorgegeben (14.09.2026 ~14:4x, per Nachsteuerung): ZWEI
+                      # Eintraege — der betonte Test-Release-Hinweis in der Form der
+                      # frueheren Test-Boxen (Marke faerbt den Kopf bis zum ersten
+                      # Gedankenstrich) und EIN Satz zum Worker. Der Tempo-Faktor darf
+                      # in die Box, aber nur als ehrliche Spanne ohne Nachkommastellen:
+                      # gemessen Intel ~4,7-5,1x gegen den Alt-Worker (End-Tempo
+                      # Schlusszug C), CUDA 2,5-3,05x (NB-Abholung 14.09.) -> "3-5x".
+                      # Keine weiteren Zahlen, keine Benchmarks in der Box.
+                      # Davor: "0.1.0.526"   # .526 ist das RELEASE des Lernlauf-Umbaus (.512-.525). Box-Inhalt
                       # MIT dem User abgestimmt (10.09.2026 ~19:2x, "perfekt";
                       # Fassung tester/whatsnew_box_abgestimmt_525.md): VIER
                       # Eintraege, EN woertlich wie abgestimmt. Der .512-ENTWURF
@@ -576,6 +653,82 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # ####################################################################
+    # 0.1.0.537 — INHALT VOM USER VORGEGEBEN (16.09.2026 21:0x): die Box wird
+    # KONSOLIDIERT. DREI Eintraege unter EINER Nummer, alle drei Wortlaute sind
+    # bereits abgestimmt und stehen hier UNVERAENDERT: die Test-Marke aus der
+    # .527-Box (sie faerbt seit .526 nur den Kopf bis zum ersten Gedankenstrich),
+    # der Worker-Satz aus der .527-Box und der Lernlauf-Satz aus der .526-Box —
+    # dort trug er die Marke, hier steht er ohne sie als eigener Punkt, weil die
+    # Marke schon der erste Eintrag ist. Nichts selbststaendig ergaenzt
+    # ([[whatsnew-inhalt-abstimmen]]). Die Alt-Eintraege .527/.526 bleiben
+    # unveraendert in der Historie darunter stehen.
+    # ####################################################################
+    ("0.1.0.537", (
+        {"betont": True,
+         "de": "Testversion — für den Feldtest, kein allgemeines Update.",
+         "en": "Test release — for field testing, not a general update.",
+         "es": "Versión de prueba — para pruebas de campo, no es una "
+               "actualización general.",
+         "it": "Versione di prova — per il test sul campo, non è un "
+               "aggiornamento generale.",
+         "fr": "Version de test — pour les essais sur le terrain, pas une mise "
+               "à jour générale."},
+        {"de": "Kompletter Umbau des Analyse-Workers: in unseren Tests 3-5x "
+               "schneller, je nach Hardware.",
+         "en": "Complete rebuild of the analysis worker: 3-5x faster in our "
+               "tests, depending on hardware.",
+         "es": "Reconstrucción completa del motor de análisis: 3-5 veces más "
+               "rápido en nuestras pruebas, según el hardware.",
+         "it": "Ricostruzione completa del motore di analisi: 3-5 volte più "
+               "veloce nei nostri test, a seconda dell'hardware.",
+         "fr": "Reconstruction complète du moteur d'analyse : 3-5 fois plus "
+               "rapide dans nos tests, selon le matériel."},
+        {"de": "Der Lernlauf ist ganz neu. Bitte teste ihn und melde alles, was "
+               "falsch aussieht.",
+         "en": "The learning run is brand new. Please test it and report "
+               "anything that looks wrong.",
+         "es": "El ciclo de aprendizaje es completamente nuevo. Pruébalo y "
+               "avisa de todo lo que parezca mal.",
+         "it": "Il ciclo di apprendimento è completamente nuovo. Provalo e "
+               "segnala tutto ciò che sembra sbagliato.",
+         "fr": "Le cycle d'apprentissage est tout nouveau. Testez-le et "
+               "signalez tout ce qui vous semble anormal."},
+    )),
+    # ####################################################################
+    # 0.1.0.527 — INHALT VOM USER VORGEGEBEN (14.09.2026 ~14:4x, per Nachsteuerung
+    # an den E3.5-Bauer). ZWEI Eintraege. Der erste traegt die Marke `betont`;
+    # sie faerbt seit .526 nur den Kopf bis zum ersten Gedankenstrich rot/fett
+    # (Renderer webui.whatsnew_block) — deshalb steht "Test release" vor dem
+    # Gedankenstrich und die Einordnung dahinter, genau wie in der .526-Box.
+    # Der zweite Eintrag nennt den Tempo-Gewinn als SPANNE: der User hat die
+    # gemessenen Faktoren ausdruecklich freigegeben (Intel ~4,7-5,1x gegen den
+    # Alt-Worker, CUDA 2,5-3,05x), aber "keine anderen Zahlen, keine
+    # Nachkommastellen in der Box" — daraus wird ehrlich "3-5x ... depending on
+    # hardware". EN ist der Vorgabe-Wortlaut, DE ebenfalls vorgegeben;
+    # ES/IT/FR sind die Uebersetzung davon (Praxis seit .298/§6.3).
+    # ####################################################################
+    ("0.1.0.527", (
+        {"betont": True,
+         "de": "Testversion — für den Feldtest, kein allgemeines Update.",
+         "en": "Test release — for field testing, not a general update.",
+         "es": "Versión de prueba — para pruebas de campo, no es una "
+               "actualización general.",
+         "it": "Versione di prova — per il test sul campo, non è un "
+               "aggiornamento generale.",
+         "fr": "Version de test — pour les essais sur le terrain, pas une mise "
+               "à jour générale."},
+        {"de": "Kompletter Umbau des Analyse-Workers: in unseren Tests 3-5x "
+               "schneller, je nach Hardware.",
+         "en": "Complete rebuild of the analysis worker: 3-5x faster in our "
+               "tests, depending on hardware.",
+         "es": "Reconstrucción completa del motor de análisis: 3-5 veces más "
+               "rápido en nuestras pruebas, según el hardware.",
+         "it": "Ricostruzione completa del motore di analisi: 3-5 volte più "
+               "veloce nei nostri test, a seconda dell'hardware.",
+         "fr": "Reconstruction complète du moteur d'analyse : 3-5 fois plus "
+               "rapide dans nos tests, selon le matériel."},
+    )),
     # ####################################################################
     # 0.1.0.526 — INHALT MIT DEM USER ABGESTIMMT (10.09.2026 ~19:2x, "perfekt";
     # Fassung tester/whatsnew_box_abgestimmt_525.md). VIER Eintraege, der

@@ -23,7 +23,29 @@ durchwinken): stattdessen bekommt jedes Backend seinen eigenen, auf seiner Masch
 eingefrorenen Stand, und ohne diesen Stand ist das Ergebnis ROT statt "geht schon".
 
 Exit 0 = gruen, 1 = ROT (Umbau hat die Kalibrierung verschoben -> nicht mergen).
-det_size-Reihenfolge beachtet: Snapshot ist fertig embedded, Video laeuft mit 1280."""
+det_size-Reihenfolge beachtet: Snapshot ist fertig embedded, Video laeuft mit 1280.
+
+FIXPUNKT-KLASSEN (E3.5, 14.09.2026): `events.json` fuehrt zwei Listen — `fixpunkte`
+(Eigen-Events, Soll exakt) und `fremde` (muessen 0x treffen). Der Worker-Neubau hat
+eine DRITTE Klasse sichtbar gemacht, die hier bisher keinen Namen hatte und die beim
+naechsten Nachziehen des Archivs mit besetzt gehoert:
+
+  DECODE-RUECKFALL — ein Bestands-Clip, dessen HARDWARE-Decode scheitert und der
+  deshalb ueber den SOFTWARE-Rueckfall gelesen werden MUSS. Der belegte Fall heisst
+  im Bestand „…-exf13p" (4K-Kamera; Herleitung und Messwerte im Kopf von
+  worker_kern.py, E2d-Block): der alte Weg las ihn ueber den Rueckfall mit 340
+  Frames und fand zwei Bewohner; ein Neubau ohne Rueckfall brach mit rc=251 ab und
+  verlor als EINZIGER Fall Namen. Die Klasse prueft etwas, das keiner der heutigen
+  Fixpunkte prueft: nicht „rechnet die Kette richtig", sondern „faellt sie LAUT und
+  vollstaendig zurueck, wenn der Beschleuniger den Clip nicht nehmen kann".
+
+  WARUM ER HIER (NOCH) NICHT STEHT, ausdruecklich statt stillschweigend: das Archiv
+  unter samples/ ist bewusst NICHT im Repo und nicht im Image (Hausregel „keine
+  Medien in Release/Image/Code") — das Aufnehmen eines weiteren Clips ist deshalb
+  eine Entscheidung ueber das LOKALE Archiv jeder Maschine, kein Code-Zug. Gedeckt
+  ist der Fall heute ueber die Decode-Wache in S2 (Glitch-Clip) und ueber die
+  E2d-Messreihe (340/340 nach der Heilung). Wer das Archiv das naechste Mal
+  einfriert, nimmt einen Clip DIESER Klasse mit auf und vermerkt ihn hier."""
 import os, sys, json
 import numpy as np, cv2
 

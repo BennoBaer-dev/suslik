@@ -43,11 +43,16 @@ def _ffprobe(pfad):
     """-> dict mit dauer_s, breite, hoehe, codec, creation_time (oder None-Werte).
     Wirft nicht: ein unlesbares Video meldet der Aufrufer als Fehler."""
     try:
+        # .536 B1a: stdin=DEVNULL (Hygiene derselben Klasse). Die Einspeisung
+        # laeuft heute in verifyd, das Modul ist aber aus beiden Prozessen
+        # importierbar — ein Kind ohne abgeklemmten fd 0 ist die Fehlerklasse,
+        # nicht der einzelne Aufrufweg. ffprobe kennt kein `-nostdin`.
         r = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "v:0",
              "-show_entries", "stream=width,height,codec_name:format=duration",
              "-show_entries", "format_tags=creation_time",
              "-of", "json", pfad],
+            stdin=subprocess.DEVNULL,
             capture_output=True, text=True, timeout=60)
         d = json.loads(r.stdout or "{}")
     except Exception:
