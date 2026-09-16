@@ -43,6 +43,7 @@ from core import anwesenheit as _anw                  # .408: Anwesenheits-Marke
 from core import einspielen as _einspiel              # .416: Testbett-Einspielung (Praefix-Konvention + Injektor-Ablage)
 from core import messkarte as _ern_mk                 # .513: Messkarte + Mess-Bilanz (Etappe 1)
 from core import kamerakalib as _kk_ernte             # .514: DAS Sieb (Etappe 3, ein System)
+from core import gpubudget as _gpubudget              # E3.2: Speicher-Formel je Karte (Strang-Zahl, Wache-Grenze, Deckel)
 # Oeffentliche Projekt-Doku (GitHub). Lokale Arbeitsnotizen des Autors enthalten interne
 # IPs + Zugaenge und duerfen NICHT ueber das UI ausgeliefert werden -> System-Seite + /doc zeigen aufs Repo.
 DOCS_URL = "https://github.com/BennoBaer-dev/suslik"
@@ -328,6 +329,371 @@ def _migration_anker_045_innen(cfg):
                          f"({type(e).__name__}: {e}) — decision is retried next start\n")
 
 
+STRAENGE_MIGRATION_MARKE = "migration_straenge_0535.json"   # state/, Muster oben
+STRAENGE_ALT_MAX = 4          # die Obergrenze bis 0.1.0.534
+
+
+def _migration_straenge_0535(cfg):
+    """EINMALIGES Nachziehen der Obergrenze 4 -> 6 (.535, User-Entscheid
+    15.09.2026: „bei dieser Version, wenn sie ausgerollt wird, den Max-Wert auf
+    6 setzen, nicht dass draussen noch alte Werte stehen ... so dass ein User
+    das nachtraeglich auch aendern kann").
+
+    WARUM ueberhaupt: `STRAENGE_MAX` ist von 4 auf 6 gegangen (Feldmessung
+    15.09.: drei Straenge lassen die Karte bei 55 % Mittel und 2769 von 12288
+    MiB). Wer die alte Obergrenze im Store stehen hat — und das hat jeder, der
+    den Regler je auf Anschlag gestellt hat —, saehe davon nichts: der Store
+    ueberlagert den Default, und 4 bleibt 4. Dieselbe Klasse wie die
+    Anker-Migration der .510.
+
+    Fallunterscheidung (alles andere ist Nutzerwille und bleibt):
+      Store traegt genau 4       -> auf 6, Audit-Zeile, Marke
+      Store traegt 0 (Automatik) -> unveraendert, nur Marke
+      Store traegt 1, 2, 3       -> unveraendert, nur Marke (bewusst kleiner)
+      Store ohne den Schluessel  -> unveraendert, nur Marke
+      Store vorhanden, unlesbar  -> NICHTS, auch keine Marke
+
+    Betroffen sind BEIDE Schluessel, die an der Zahl hingen: `worker_straenge`
+    (Rechenstraenge) und `analyse_plaetze` (gleichzeitige Analysen) — ihre
+    Schema-Obergrenze kommt seit .535 aus derselben Konstante.
+
+    Wie die Nachbarn: ein Fehler hindert den Start NIE, die Marke haelt auch den
+    NICHT-Eingriff fest, und wer den Wert danach selbst aendert, behaelt ihn."""
+    try:
+        _migration_straenge_0535_innen(cfg)
+    except Exception as e:                                     # noqa: BLE001
+        sys.stderr.write(f"[suslik] thread-ceiling migration failed "
+                         f"({type(e).__name__}: {e}) — values unchanged, "
+                         f"retried next start\n")
+
+
+def _migration_straenge_0535_innen(cfg):
+    """Der Rumpf von _migration_straenge_0535 (dort steht die Begruendung)."""
+    marke = os.path.join(cfg["data_dir"], "state", STRAENGE_MIGRATION_MARKE)
+    if os.path.exists(marke):
+        return
+    neu_max = int(_gpubudget.STRAENGE_MAX)
+    store_datei = _config_store_pfad(cfg)
+    aenderungen = {}
+    vorher = {}
+    with _cfg_lock:
+        store = _lade_config_store(cfg)
+        if not store and os.path.exists(store_datei):
+            sys.stderr.write("[suslik] thread-ceiling migration skipped: config "
+                             "store exists but reads empty/unreadable — not "
+                             "touching it (no marker; retried next start)\n")
+            return
+        for schluessel in ("worker_straenge", "analyse_plaetze"):
+            alt = store.get(schluessel)
+            try:
+                trifft = alt is not None and int(alt) == STRAENGE_ALT_MAX
+            except (TypeError, ValueError):
+                trifft = False           # kaputter Typ ist keine Obergrenze
+            if trifft and neu_max > STRAENGE_ALT_MAX:
+                vorher[schluessel] = int(alt)
+                aenderungen[schluessel] = neu_max
+                store[schluessel] = neu_max
+                cfg[schluessel] = neu_max     # sofort wirksam
+        if aenderungen:
+            _store_schreiben(store_datei, store)
+    info = {"ts": round(time.time(), 1),
+            "version": os.environ.get("SUSLIK_VERSION", "dev"),
+            "vorher": vorher, "nachher": aenderungen,
+            "alt_max": STRAENGE_ALT_MAX, "neu_max": neu_max,
+            "angewendet": bool(aenderungen),
+            "grund": f"one-time ceiling change {STRAENGE_ALT_MAX} -> {neu_max} "
+                     f"(2026-09-15)"}
+    if aenderungen:
+        # AUDIT VOR der Marke (Muster Anker-Migration).
+        try:
+            audit = os.path.join(cfg["data_dir"], "config", "config_audit.jsonl")
+            os.makedirs(os.path.dirname(audit), exist_ok=True)
+            with open(audit, "a") as f:
+                f.write(json.dumps(
+                    {"ts": info["ts"], "aenderungen": aenderungen,
+                     "auto": f"one-time migration: max compute threads/analysis "
+                             f"slots {STRAENGE_ALT_MAX} -> {neu_max}, set "
+                             f"explicitly, change it any time",
+                     "vorher": vorher}, ensure_ascii=False) + "\n")
+                f.flush()
+        except Exception as e:                                 # noqa: BLE001
+            sys.stderr.write(f"[suslik] thread-ceiling migration: audit line not "
+                             f"written ({type(e).__name__}: {e}) — values are in "
+                             f"place\n")
+        was = ", ".join(f"{k} {vorher[k]} -> {v}" for k, v in sorted(aenderungen.items()))
+        sys.stderr.write(f"[suslik] ceiling raised ONCE for this install: {was}. "
+                         f"The old maximum was {STRAENGE_ALT_MAX}; a field "
+                         f"measurement showed three threads leaving the card "
+                         f"mostly idle, so the ceiling is now {neu_max}. The "
+                         f"memory formula still decides what is really built — "
+                         f"change the value in Settings any time, it will never "
+                         f"be migrated again (marker "
+                         f"state/{STRAENGE_MIGRATION_MARKE})\n")
+    try:
+        from core import atomar as _at
+        _at.json_schreiben(marke, info)
+    except Exception as e:                                     # noqa: BLE001
+        sys.stderr.write(f"[suslik] thread-ceiling migration: marker not written "
+                         f"({type(e).__name__}: {e}) — decision is retried next "
+                         f"start\n")
+
+
+EICH_AUS_MARKE = "migration_eich_aus_0535.json"      # state/, Muster oben
+EICH_AUS_SCHLUESSEL = ("eich_fenster", "eich_planung")
+EICH_AUS_DATEI = "vram_eichung.json"                 # state/, der Alt-Bestand
+
+
+def _migration_eich_aus_0535(cfg):
+    """EINMALIGES AUFRAEUMEN NACH DEM AUSBAU DER PREIS-MESSUNG (.535).
+
+    WAS WEGFAELLT: die beiden Config-Schluessel `eich_fenster`/`eich_planung`
+    und die Messdatei `state/vram_eichung.json`. Geplant wird seit .535 aus der
+    Messtabelle in `core.gpubudget`; es gibt nichts mehr, was die beiden Zahlen
+    steuern koennten, und nichts, was die Datei noch liest.
+
+    WIE DER STORE UNBEKANNTE SCHLUESSEL BEHANDELT — nachgesehen, nicht vermutet
+    (`load_config`, s. dort): der Store wird UNGEPRUEFT ueber die yaml-Basis
+    gelegt (`for k, v in _lade_config_store(cfg).items(): cfg[k] = v`, nur
+    `data_dir`/`web_port` sind tabu). Ein Schluessel, den niemand mehr liest,
+    landet also in `cfg` und tut dort nichts; die Spannen-Klemme darunter laeuft
+    ausdruecklich nur ueber Schluessel, die IN der Whitelist stehen. EIN START
+    SCHEITERT DARAN NICHT — diese Migration ist deshalb Hygiene und kein
+    Rettungsanker. Wo sie wirklich zieht: das Konfigurations-Blatt postet beim
+    Speichern alle Felder, die es rendert, und `config_schreiben` weist einen
+    Schluessel ausserhalb der Whitelist mit „ist nicht aenderbar" ab. Gerendert
+    werden nur Whitelist-Schluessel, die beiden sind also schon aus dem Blatt
+    verschwunden — die Zeile im Store waere nur noch eine Karteileiche, die bei
+    jedem Blick in config.json Fragen aufwirft.
+
+    Fallunterscheidung (dieselbe Bauform wie die Nachbarn darueber):
+      Store traegt einen der Schluessel -> Zeile raus, Audit-Zeile, Marke
+      Store ohne die Schluessel         -> unveraendert, nur Marke
+      Store vorhanden, unlesbar         -> NICHTS, auch keine Marke
+    Die Messdatei wird geloescht, wenn sie da ist; sie ist abgeleitetes
+    Messmaterial, keine Nutzereingabe, und ohne Leser nur noch Ballast. Ein
+    Fehler dabei hindert den Start NIE."""
+    try:
+        _migration_eich_aus_0535_innen(cfg)
+    except Exception as e:                                     # noqa: BLE001
+        sys.stderr.write(f"[suslik] calibration cleanup failed "
+                         f"({type(e).__name__}: {e}) — nothing changed, "
+                         f"retried next start\n")
+
+
+def _migration_eich_aus_0535_innen(cfg):
+    """Der Rumpf von _migration_eich_aus_0535 (dort steht die Begruendung)."""
+    marke = os.path.join(cfg["data_dir"], "state", EICH_AUS_MARKE)
+    if os.path.exists(marke):
+        return
+    store_datei = _config_store_pfad(cfg)
+    entfernt = {}
+    with _cfg_lock:
+        store = _lade_config_store(cfg)
+        if not store and os.path.exists(store_datei):
+            sys.stderr.write("[suslik] calibration cleanup skipped: config store "
+                             "exists but reads empty/unreadable — not touching it "
+                             "(no marker; retried next start)\n")
+            return
+        for schluessel in EICH_AUS_SCHLUESSEL:
+            if schluessel in store:
+                entfernt[schluessel] = store.pop(schluessel)
+            cfg.pop(schluessel, None)          # sofort wirksam, auch aus der yaml
+        if entfernt:
+            _store_schreiben(store_datei, store)
+    # Die Messdatei — abgeleitet, ohne Leser, deshalb weg.
+    datei = os.path.join(cfg["data_dir"], "state", EICH_AUS_DATEI)
+    datei_weg = False
+    try:
+        if os.path.exists(datei):
+            os.remove(datei)
+            datei_weg = True
+    except Exception as e:                                     # noqa: BLE001
+        sys.stderr.write(f"[suslik] calibration cleanup: state/{EICH_AUS_DATEI} "
+                         f"could not be removed ({type(e).__name__}: {e}) — it is "
+                         f"unused either way\n")
+    info = {"ts": round(time.time(), 1),
+            "version": os.environ.get("SUSLIK_VERSION", "dev"),
+            "entfernt": entfernt, "datei_geloescht": datei_weg,
+            "angewendet": bool(entfernt or datei_weg),
+            "grund": "price measurement removed in 0.1.0.535 — planning comes "
+                     "from the measurement table (2026-09-15)"}
+    if entfernt:
+        try:
+            audit = os.path.join(cfg["data_dir"], "config", "config_audit.jsonl")
+            os.makedirs(os.path.dirname(audit), exist_ok=True)
+            with open(audit, "a") as f:
+                f.write(json.dumps(
+                    {"ts": info["ts"], "aenderungen": {},
+                     "auto": "one-time cleanup: the calibration keys are gone "
+                             "(the service no longer measures prices, it plans "
+                             "from the measurement table)",
+                     "entfernt": entfernt}, ensure_ascii=False) + "\n")
+                f.flush()
+        except Exception as e:                                 # noqa: BLE001
+            sys.stderr.write(f"[suslik] calibration cleanup: audit line not "
+                             f"written ({type(e).__name__}: {e}) — the keys are "
+                             f"gone either way\n")
+        was = ", ".join(f"{k}={v}" for k, v in sorted(entfernt.items()))
+        sys.stderr.write(f"[suslik] calibration settings removed ONCE for this "
+                         f"install: {was}. Since 0.1.0.535 the service plans the "
+                         f"card from a fixed measurement table instead of "
+                         f"measuring its own prices, so neither key had anything "
+                         f"left to steer (marker state/{EICH_AUS_MARKE})\n")
+    try:
+        from core import atomar as _at
+        _at.json_schreiben(marke, info)
+    except Exception as e:                                     # noqa: BLE001
+        sys.stderr.write(f"[suslik] calibration cleanup: marker not written "
+                         f"({type(e).__name__}: {e}) — decision is retried next "
+                         f"start\n")
+
+
+MIGRATION_0536_MARKE = "migration_0536.json"         # state/, Muster oben
+# .536 B4.3/B5: die Schluessel, die mit dieser Version ihren Gegenstand
+# verlieren. EINE Liste, EIN Marker fuer die ganze Version — ein zweiter Marker
+# fuer dieselbe Version waere eine zweite Wahrheit.
+MIGRATION_0536_SCHLUESSEL = ("hunger_bremse_s", "analyse_plaetze")
+# Was der Betreiber im Audit-Log lesen soll — je Schluessel EIN Satz, in seinen
+# Worten und nicht in unseren. Kein Personenname (Log-Vertrag §9).
+MIGRATION_0536_SATZ = {
+    "hunger_bremse_s": ("the 'hunger brake' setting ({wert}s) is gone — "
+                        "background work now has its own slot and gets its "
+                        "turn without holding up the event stream"),
+    "analyse_plaetze": ("your old 'analysis slots' setting ({wert}) is no longer "
+                        "a separate setting — the service now runs one analysis "
+                        "slot per compute thread. Set 'Compute threads' if you "
+                        "want fewer"),
+}
+# .536 B5: was nach dem Raeumen im laufenden `cfg` stehen soll. Fuer die
+# Hunger-Bremse ist es NICHTS (der Schluessel ist ersatzlos weg, auch der
+# Default-Eintrag). `analyse_plaetze` dagegen LEBT weiter als Experten-Override
+# im Schema — geraeumt wird nur der alte NUTZER-Wert, und danach gilt wieder der
+# Werkswert 0 = Automatik. Ohne diesen Eintrag stuende der Schluessel nach der
+# Migration gar nicht mehr in `cfg`, und jeder Leser muesste „fehlt" ein zweites
+# Mal als „0" auslegen.
+MIGRATION_0536_WERK = {"analyse_plaetze": 0}
+
+
+def _migration_0536(cfg):
+    """EINMALIGES AUFRAEUMEN NACH DEM VERGABE-ZUG (.536, Bauplan §4.2).
+
+    WAS WEGFAELLT: `hunger_bremse_s`. Die Bremse hielt den Ereignis-Strom bis zu
+    120 s an, damit ein wartender Hintergrund-Job einen Analyse-Platz bekommt.
+    Seit .536 haelt kein Hintergrund-Weg mehr einen Analyse-Platz — sie sitzen
+    alle auf dem eigenen bg-Konto und bekommen ihren Zug dort. Es gibt nichts
+    mehr vorzulassen, und eine Bremse ohne Gegenstand waere reiner Stillstand.
+
+    WAS GERAEUMT WIRD: `analyse_plaetze` (B5/R7). Der Schluessel bleibt im Schema
+    als Experten-Override, aber sein alter NUTZER-Wert wird entfernt und der
+    Werkswert 0 (Automatik) gilt wieder. Drei Gruende, alle nachgeprueft:
+      (a) Der Schluessel aendert seine BEDEUTUNG — von „wieviele Analysen
+          gleichzeitig" zu „Drossel unter der Strangzahl". Ein alter Wert ist
+          kein gueltiger Wert des neuen Schluessels.
+      (b) Der GPU-Regler schrieb ihn bei JEDEM Speichern (bis .535
+          `/gpu_speichern`), er steht also auf sehr vielen Anlagen, meist auf 1.
+          Stehen gelassen drosselte er die Mehrheit still und dauerhaft auf EINEN
+          Platz — R7 waere fuer sie wirkungslos.
+      (c) Die .535-Migration hat gespeicherte 4 auf 6 gezogen, und zwar fuer
+          BEIDE Schluessel. Ein Store kann heute `analyse_plaetze = 6` tragen,
+          ohne dass je jemand sechs gewollt hat.
+    Betreiber-Entscheid 3 vom 16.09. („nicht uebernommen, die Automatik gewinnt,
+    Override nur kleiner") ist damit genau erfuellt. Eine UEBERNAHME nach
+    `worker_straenge` findet ausdruecklich NICHT statt (User-Auflage W2-B16):
+    vier Plaetze waren vier Prozesse, vier Straenge sind etwas anderes. Der
+    Preis ist beziffert und gewollt: Bestandsanlagen springen beim Update von
+    1 auf n Analyseplaetze — deshalb die laute Audit-Zeile mit dem ALTEN Wert.
+
+    WARUM UEBERHAUPT RAEUMEN, wo ein unbekannter Schluessel doch nichts tut:
+    dieselbe Begruendung wie bei `_migration_eich_aus_0535` (dort ausfuehrlich).
+    Der Schluessel stand im Konfigurations-Blatt und kann deshalb auf jeder
+    Anlage im Store liegen; als Karteileiche wirft er bei jedem Blick in
+    config.json Fragen auf, und `config_schreiben` wuerde ihn kuenftig als
+    „nicht aenderbar" abweisen.
+
+    Fallunterscheidung (Bauform der Nachbarn darueber):
+      Store traegt den Schluessel -> Zeile raus, Audit-Zeile, Marke
+      Store ohne den Schluessel   -> unveraendert, nur Marke
+      Store vorhanden, unlesbar   -> NICHTS, auch keine Marke
+    Ein Fehler hindert den Start NIE; ein zweiter Lauf ist stumm (Marke)."""
+    try:
+        _migration_0536_innen(cfg)
+    except Exception as e:                                     # noqa: BLE001
+        sys.stderr.write(f"[suslik] .536 settings cleanup failed "
+                         f"({type(e).__name__}: {e}) — nothing changed, "
+                         f"retried next start\n")
+
+
+def _migration_0536_innen(cfg):
+    """Der Rumpf von _migration_0536 (dort steht die Begruendung)."""
+    marke = os.path.join(cfg["data_dir"], "state", MIGRATION_0536_MARKE)
+    if os.path.exists(marke):
+        return
+    store_datei = _config_store_pfad(cfg)
+    entfernt = {}
+    with _cfg_lock:
+        store = _lade_config_store(cfg)
+        if not store and os.path.exists(store_datei):
+            sys.stderr.write("[suslik] .536 settings cleanup skipped: config "
+                             "store exists but reads empty/unreadable — not "
+                             "touching it (no marker; retried next start)\n")
+            return
+        for schluessel in MIGRATION_0536_SCHLUESSEL:
+            drin = schluessel in store
+            if drin:
+                entfernt[schluessel] = store.pop(schluessel)
+            if schluessel not in MIGRATION_0536_WERK:
+                # Der Schluessel ist ersatzlos weg — dann auch aus der yaml,
+                # sofort wirksam (er hat keinen Leser mehr).
+                cfg.pop(schluessel, None)
+            elif drin:
+                # Der Schluessel LEBT als Experten-Override weiter. Geraeumt
+                # wird deshalb genau der STORE-Wert (den die Oberflaeche
+                # geschrieben hat), und in derselben Sitzung gilt wieder der
+                # Werkswert — sonst truege `cfg` bis zum Neustart die Zahl, die
+                # gerade geraeumt wurde.
+                # EHRLICHE GRENZE: ein Hand-Eintrag in der yaml bleibt
+                # unangetastet. Ihn hier zu nullen hiesse, ihn beim ERSTEN Start
+                # zu verlieren und ab dem zweiten (Marke steht) wiederzuhaben —
+                # zwei Verhalten derselben Anlage. Die yaml hat nie eine
+                # Oberflaeche geschrieben; was dort steht, ist Absicht.
+                cfg[schluessel] = MIGRATION_0536_WERK[schluessel]
+        if entfernt:
+            _store_schreiben(store_datei, store)
+    saetze = [MIGRATION_0536_SATZ[k].format(wert=v)
+              for k, v in sorted(entfernt.items()) if k in MIGRATION_0536_SATZ]
+    info = {"ts": round(time.time(), 1),
+            "version": os.environ.get("SUSLIK_VERSION", "dev"),
+            "entfernt": entfernt, "angewendet": bool(entfernt),
+            "grund": "0.1.0.536: background work has its own slot and analysis "
+                     "slots follow the compute threads, the keys below lost "
+                     "their subject (2026-09-16)"}
+    if entfernt:
+        # AUDIT VOR der Marke (Muster der Nachbar-Migrationen).
+        try:
+            audit = os.path.join(cfg["data_dir"], "config", "config_audit.jsonl")
+            os.makedirs(os.path.dirname(audit), exist_ok=True)
+            with open(audit, "a") as f:
+                f.write(json.dumps(
+                    {"ts": info["ts"], "aenderungen": {},
+                     "auto": "one-time cleanup (0.1.0.536): " + "; ".join(saetze),
+                     "entfernt": entfernt}, ensure_ascii=False) + "\n")
+                f.flush()
+        except Exception as e:                                 # noqa: BLE001
+            sys.stderr.write(f"[suslik] .536 settings cleanup: audit line not "
+                             f"written ({type(e).__name__}: {e}) — the keys are "
+                             f"gone either way\n")
+        for satz in saetze:
+            sys.stderr.write(f"[suslik] {satz} (one-time, marker "
+                             f"state/{MIGRATION_0536_MARKE})\n")
+    try:
+        from core import atomar as _at
+        _at.json_schreiben(marke, info)
+    except Exception as e:                                     # noqa: BLE001
+        sys.stderr.write(f"[suslik] .536 settings cleanup: marker not written "
+                         f"({type(e).__name__}: {e}) — decision is retried next "
+                         f"start\n")
+
+
 KATALOG_MIGRATION_MARKE = "migration_katalog_0125.json"   # state/, Muster oben
 
 
@@ -526,6 +892,17 @@ WANDUHR_MIN_KERNE = WANDUHR_AKTEURE * WANDUHR_BAUSTEINE_JE_AKTEUR
 # Default-Block referenziert (Muster WANDUHR_MIN_KERNE): EINE Zahl, kein
 # zweites Literal neben der Whitelist-Spanne. Stellbar ist er wie alles hier.
 CLIP_TOR_WERK = 2                  # Betreiber-Entscheid 06.09.: „ein bis zwei"
+
+# .529: der WERKSWERT von `worker_rss_max_mb`, an EINER Stelle (Muster
+# CLIP_TOR_WERK). Er wird nicht nur als Vorgabe gebraucht, sondern auch als
+# VERGLEICHSWERT: seit .529 entscheidet die Speicher-Wache-Rechnung anders,
+# wenn der Betreiber diese Zahl BEWUSST auf etwas anderes gestellt hat
+# (`core.gpubudget.wache_grenze_rechnung`, Quelle "config"). Ohne eine Zahl,
+# gegen die man vergleichen kann, waere „bewusst gesetzt" nicht feststellbar.
+# EHRLICHE GRENZE: wer den Werkswert von Hand noch einmal hinschreibt, ist von
+# der Vorgabe nicht unterscheidbar — der Store merkt sich nicht, wer geschrieben
+# hat. Dann rechnet die Maschine, und das ist die harmlosere Richtung.
+WORKER_RSS_WERK_MB = 4096
 
 
 def _cpu_quote():
@@ -1048,9 +1425,47 @@ def load_config(path):
                          # max_slots_lesen).
                          ("live_max_slots", 5),
                          # E2 (Konzept Parallel-Analyse): Zahl der gleichzeitigen
-                         # Ereignis-Analysen. Werk 1 = das bisherige Verhalten, exakt.
-                         # Bestands-Installationen aendern sich dadurch nicht.
-                         ("analyse_plaetze", 1),
+                         # Ereignis-Analysen.
+                         # .536 B5 (R7): WERK 0 = Automatik — die Plaetze folgen
+                         # den Rechenstraengen. Bis .535 stand hier 1 („das
+                         # bisherige Verhalten, exakt"), damit sich eine
+                         # Bestands-Installation beim Update nicht aendert;
+                         # genau diese 1 hielt im Feld die Mehrheit dauerhaft
+                         # bei EINER gleichzeitigen Analyse, waehrend die Karte
+                         # mehrere Straenge trug. Ein gesetzter Store-Wert wird
+                         # EINMAL geraeumt (`_migration_0536`); als Hand-Eintrag
+                         # bleibt der Schluessel ein Experten-Override, der nur
+                         # nach unten wirkt.
+                         ("analyse_plaetze", 0),
+                         # E3.2 (14.09.2026): die Zahl der RECHENSTRAENGE des einen
+                         # Worker-Prozesses. 0 = Werkswert = Automatik, also die
+                         # Speicher-Formel je Karte. Bewusst ein EIGENER Schluessel
+                         # neben analyse_plaetze: Plaetze sind eine Vergabe-Groesse
+                         # (wie viele Analysen gleichzeitig laufen duerfen),
+                         # Straenge eine Speicher-Groesse — sie gleichzusetzen war
+                         # die Migrations-Falle W2-B16.
+                         ("worker_straenge", 0),
+                         # .531: der NOT-WEG fuer Anlagen, in denen nvidia-smi im
+                         # Container nicht erreichbar ist — dann hat die Automatik
+                         # nichts zu messen. 0 = automatisch.
+                         ("worker_vram_mb", 0),
+                         # .531: ORT nach jedem Erkennungslauf die Arena schrumpfen
+                         # lassen. .532 WERKSSEITIG AN (1): die zweite Messreihe
+                         # vom 15.09. an 4K-Material des Feldtesters (bis 205
+                         # Gesichter je Bild) hat den Preis neu beziffert — +2 bis
+                         # +4 % Rechenzeit statt der 9-12 % der Nachtprobe, und
+                         # dafuer bleibt das Plateau bei zwei Straengen flach
+                         # (0 statt +62 MiB je Durchgang). Der Schalter bleibt:
+                         # wer eine Karte mit Luft hat, darf ihn ausmachen.
+                         # WIRKT NUR AUF KARTEN-BACKENDS — der Intel-Zweig liest
+                         # den Wert nicht (s. worker_vram_start).
+                         ("worker_arena_shrink", 1),
+                         # .532: den Memory-Pattern-Planer von onnxruntime
+                         # eingeschaltet lassen (1) oder nicht (0 = Werk). Aus,
+                         # weil die Arena sonst mit jedem Lauf aus einem zweiten
+                         # Rechenstrang weiterwaechst; Messung und Belegort im
+                         # Kopf von engine_cuda.py. Ebenfalls nur Karten-Backends.
+                         ("worker_mem_pattern", 0),
                          # .503 (User 04.09.): Obergrenze eines Einspiel-Aufrufs.
                          # Werk 20 = bisheriges Verhalten; hoeher stellen, wer einen
                          # Nachlauf ueber eine Stunde oder einen Tag fahren will.
@@ -1111,7 +1526,67 @@ def load_config(path):
                          # S2 no_person (konzept_no_person.md): Schwellen setzt der
                          # Retro-Backtest; None = Klassifikation komplett AUS (kein Rate-Default).
                          ("np_det_max", None), ("np_frigate_max", None),
+                         # E3.4 ANOMALIE-WACHE (Konzept §4 Schicht 3): nach wie vielen
+                         # Ereignissen IN FOLGE mit 0 Gesichtern bei VOLLER Frame-Zahl
+                         # der Dienst laut wird und den Worker seinen Selbstbeweis
+                         # vorlegen laesst. 0 = aus. Der Werkswert ist KEINE neue Zahl,
+                         # sondern die Serien-Schwelle des Hauses
+                         # (SERIE_STRUKTURSIGNAL_N, s. dort) — dieselbe, mit der der
+                         # SD4-Waechter seit dem 22.07.-Ausfall arbeitet.
+                         ("null_gesichter_serie", SERIE_STRUKTURSIGNAL_N),
                          # Nachhol-Lauf fuer gescheiterte Analysen (Vorfall 22./23.07.)
+                         # .534 (B9, Feldbefund Lasttest 15.09.): wie lange ein
+                         # Ereignis, das Frigate NIE abgeschlossen hat (kein
+                         # end_time), zurueckgestellt wird, bevor es endgueltig
+                         # uebersprungen wird. 0 = nie ueberspringen (dann bleibt
+                         # es liegen, bis Frigate es schliesst).
+                         # .534 (B5): die Bilanzzeile je Ereignis. AN als Vorgabe —
+                         # sie ist eine Zeile je Ereignis und die einzige Stelle,
+                         # an der sichtbar wird, wo die Platzzeit hingeht.
+                         ("zeitprotokoll", 1),
+                         # .534 (B6c): die Abrufstufe vor der Vergabestelle.
+                         # `vorlauf_max = 0` schaltet sie aus und stellt exakt
+                         # das Verhalten der .533 her (Abruf im Platz) — die
+                         # Feld-Rueckfahrkarte ohne neues Image.
+                         ("vorlauf_min", VORLAUF_MIN_WERK),
+                         ("vorlauf_max", VORLAUF_MAX_WERK),
+                         ("vorlauf_parallel", VORLAUF_PARALLEL_WERK),
+                         # .534 (B8): eigener Platz fuer Hintergrund-Jobs.
+                         # 0 = Verhalten der .533 (sie sitzen auf den
+                         # Analyse-Plaetzen).
+                         ("bg_platz_getrennt", 1),
+                         # .536 (B3): das Sammeln laeuft in HAEPPCHEN. Zwei
+                         # Stellschrauben und zwei STARTWERTE mit Herkunft
+                         # (Messung 16.09. auf dem Rechenknecht, CPU, Maschine
+                         # nicht leer -> obere Schranken; die Anlage misst beides
+                         # im Betrieb nach und merkt es sich je Backend in
+                         # state/sammel_takt.json, nicht in der Config).
+                         ("sammel_haeppchen_ziel_s", 120),
+                         ("sammel_haeppchen_frist_faktor", 3),
+                         # 1,50 s Rechenzeit je CLIP-Sekunde (CPU, Median ueber
+                         # 98 Ereignisse, p10 1,29/p90 1,87, stabil ueber
+                         # 1080p/4K) — die uebertragbare Groesse, K ist es nicht.
+                         ("sammel_rechenfaktor_start", 1.5),
+                         # 105 s kalter Prolog (gemessen 100 s = lade_master_refs
+                         # allein, plus Reserve). Er faellt nur noch im ERSTEN
+                         # Haeppchen eines Auftrags an, danach ist die Matrix im
+                         # Prozess warm.
+                         ("sammel_prolog_kalt_start_s", 105),
+                         # .535: HIER STANDEN `eich_fenster` und `eich_planung`
+                         # — Fensterbreite der Preis-Messung und die Wahl
+                         # zwischen Messwert und Anker. Mit dem Ausbau der
+                         # Messung haben beide nichts mehr zu steuern; alte
+                         # Store-Werte raeumt `_migration_eich_aus_0535` weg.
+                         # .534 (Nutzer-Entscheid 15.09.): die Reserve ist
+                         # waehlbar. -1 = Automatik nach Formel wie bisher.
+                         ("worker_vram_reserve_mb", -1),
+                         ("offen_max_min", 60),
+                         # .534 (B9b): ab welchem Alter ein von UNS per API
+                         # angelegtes Frigate-Ereignis nachtraeglich geschlossen
+                         # wird, falls sein Ende nie angekommen ist. Grosszuegig:
+                         # ein noch LAUFENDER Auftritt soll nicht abgeschnitten
+                         # werden.
+                         ("api_event_max_min", 30),
                          ("nachhol_versuche", 3),            # 0 = Feature komplett aus
                          ("nachhol_tage", 3),                # Fenster, gemessen an der EVENT-Startzeit
                          ("nachhol_intervall_s", 600),       # Takt: EIN Event pro Runde
@@ -1209,11 +1684,14 @@ def load_config(path):
                          # Der Lauf endet, was zuerst eintritt.
                          ("kalib_fueller_bilder", 25),
                          ("kalib_fueller_events", 50),
-                         # B4 Hunger-Bremse (01.09.): 0 = aus. 60 s liegt
-                         # unter den Job-Timeouts (300 s) und weit ueber der
-                         # typischen Einzel-Analyse — kein Messwert, ein
-                         # Startwert; justierbar wie alles hier.
-                         ("hunger_bremse_s", 60),
+                         # .536 B4.3: HIER STAND die Hunger-Bremse
+                         # (`hunger_bremse_s`, Werk 60 s). Sie hielt den
+                         # Ereignis-Strom bis zu 120 s an, damit ein
+                         # Hintergrund-Weg „vorgelassen" wird — den er seit
+                         # .536 ohnehin bekommt: er sitzt auf dem eigenen
+                         # bg-Konto und nimmt der Analyse keinen Platz mehr
+                         # weg. Ein bestehender Store-Wert wird EINMAL geraeumt
+                         # (`_migration_0536`), nie stillschweigend.
         ("selbstwache", True),
         ("urteil_marge", 0.05),
         ("urteil_kante", _erk_start_v["k"]),
@@ -1379,7 +1857,7 @@ def load_config(path):
                          # Default hier, Whitelist-Eintrag in der Tabelle; gelesen
                          # von core/personmodell._person_backend (Config-Store).
                          ("person_backend", "cpu"),
-                         ("worker_rss_max_mb", 4096),        # Neustart-Schwelle (VmRSS des Workers;
+                         ("worker_rss_max_mb", WORKER_RSS_WERK_MB),  # Neustart-Schwelle (VmRSS des Workers;
                          # warm real ~1,9 GB [adaface/GPU] — 2048 liess nur 10 % Luft und riss im
                          # Soak 27.07.; 4096 = User-Entscheid: faengt Ausufern, nicht Normalbetrieb)
                          ("zeitzone", ""),                  # leer = keine eigene Vorgabe (s. TZ-Block unten)
@@ -1422,6 +1900,21 @@ def load_config(path):
     # auf die neuen Werkswerte zurueckgesetzt (auch von Hand kalibrierte
     # Kameras, User-Ansage 08.09.), bevor der erste Leser sie sieht.
     _migration_katalog_0125(cfg)
+    # .535: dieselbe Bauform — wer die ALTE Obergrenze 4 im Store stehen hat,
+    # bekommt sie EINMAL auf die neue (6) nachgezogen, damit ein angehobener
+    # Riegel draussen nicht an einem alten Wert haengen bleibt. 0 (Automatik)
+    # und bewusst kleinere Zahlen bleiben.
+    _migration_straenge_0535(cfg)
+    # .535: dieselbe Bauform, derselbe Ort — nach dem Ausbau der Preis-Messung
+    # werden ihre beiden Config-Schluessel und ihre Messdatei EINMAL entfernt.
+    # Sie halten keinen Start auf (der Store legt unbekannte Schluessel
+    # ungeprueft in `cfg`, s. die Migration), aber eine Zeile, die nichts mehr
+    # tut, gehoert nicht in die Konfiguration eines Nutzers.
+    _migration_eich_aus_0535(cfg)
+    # .536: dieselbe Bauform, derselbe Ort — nach dem Vergabe-Zug verliert die
+    # Hunger-Bremse ihren Gegenstand (Hintergrund-Arbeit hat ihr eigenes Konto)
+    # und ihr Schluessel wird EINMAL geraeumt, mit Audit-Zeile und altem Wert.
+    _migration_0536(cfg)
     # .374 (User-Entscheid 30.08., Fund am Q4-Umbau des Gates): ein Altwert
     # ausserhalb der Whitelist-Spanne (gemessen: lookback_h: 100 aus einer
     # handgepflegten yaml, erlaubt 1-72) machte das GANZE Konfigurations-Blatt
@@ -1599,6 +2092,36 @@ _LIVE_HELFER_FRIST_S = 240.0
 # riskant, laenger traege (der Feldstillstand am 04.09. dauerte 28 min).
 PULS_TAKT_S = 10.0
 PLATZ_STUMM_FRIST_S = 120.0
+# --- .531 KARTEN-SONDE UND KARTEN-CHECK ------------------------------------
+# Mindestabstand zweier nvidia-smi-Aufrufe im Dienst. Jeder Aufruf ist ein FORK
+# im Absetzweg eines Jobs (s. `_karte_frei_mb`); der freie Kartenspeicher aendert
+# sich nicht in Millisekunden.
+KARTE_SONDE_ABSTAND_S = 2.0
+# Fehlversuche IN FOLGE, ab denen die Karte als nicht messbar gilt. Einer ist ein
+# Hikel, drei sind ein Zustand.
+KARTE_FEHLVERSUCHE_MAX = 3
+# Wie lange der Dienst VOR einem Worker-Start auf freien Kartenspeicher wartet.
+# EIGENE Zahl, ausdruecklich NICHT `worker_kern.BARRIERE_FRIST` (1800 s): das ist
+# die Frist einer Warmlauf-Barriere INNERHALB des Worker-Prozesses und hat mit dem
+# Absetzweg nichts zu tun. Die Grenze nach oben setzt der Platzwaechter: er zieht
+# einen Platz nach PLATZ_STUMM_FRIST_S (120 s) ein, wenn er kein Lebenszeichen
+# sieht. 45 s ist weniger als die Haelfte davon — mit Puls in der Schleife, aber
+# auch ohne ihn bliebe Luft.
+KARTE_WARTE_FRIST_S = 45.0
+# WIE VIELE GLEICHARTIGE EREIGNISSE IN FOLGE EIN STRUKTURSIGNAL SIND.
+#
+# Die Zahl ist NICHT neu, sie war nur bisher ein Literal an einer einzigen Stelle:
+# der SD4-Fehlerserien-Waechter (qs.md §offen, qs_ebenen.md Paket 1) meldet seit dem
+# 9-Stunden-Ausfall vom 22.07.2026 bei „drei gescheiterte Analysen IN FOLGE" — die
+# Begruendung steht dort im Wortlaut: drei hintereinander sind kein Einzelfall-
+# Rauschen mehr, sondern ein Hinweis auf Backend/Decode. E3.4 (14.09.2026) braucht
+# dieselbe Schwelle fuer die zweite Serien-Wache („N Ereignisse in Folge 0 Gesichter
+# bei voller Frame-Zahl", Konzept §4 Schicht 3). Sie bekommt deshalb KEINE eigene,
+# erfundene Zahl, sondern liest diese hier — und die SD4-Stelle liest sie ebenfalls
+# (wertgleich zum Literal, das dort stand). Wer die Schwelle des Hauses aendern will,
+# aendert sie hier; die neue Wache ist zusaetzlich je Anlage konfigurierbar
+# (`null_gesichter_serie`, 0 = aus).
+SERIE_STRUKTURSIGNAL_N = 3
 # C2 (05.09.2026, bauplan_0505.md §1): das Fairness-VENTIL der Ernte
 # (`ERNTE_MAX_WARTE_S`, 300 s) ist ERSATZLOS entfallen. An seine Stelle tritt die
 # Regel N-1 in der Vergabestelle (`Analyseplaetze.platz`): von N Plaetzen haelt eine
@@ -1608,6 +2131,17 @@ PLATZ_STUMM_FRIST_S = 120.0
 # „nicht ein Weg nimmt alles, jeder mal dran"). Die Wartescheibe: so lange schlaeft ein
 # zurueckgetretener Kunde, bevor er erneut fragt.
 FAIRNESS_SCHEIBE_S = 0.5
+
+# .534 (B9b): wie oft die Analyse EINES Ereignisses am Platzwaechter eingezogen
+# werden darf, bevor das Ereignis uebersprungen wird. Dieselbe Zahl wie beim
+# Nachhol-Budget (`nachhol_versuche`, Vorgabe 3) und aus demselben Grund: nach
+# drei Anlaeufen ist nicht das Ereignis das Problem, sondern die Kombination —
+# und ein viertes Mal kostet wieder den ganzen Worker-Prozess.
+HAENGER_VERSUCHE_MAX = 3
+
+# .535: HIER STAND `EICH_FENSTER_WERK` — die Fensterbreite der Preis-Messung.
+# Sie ist mit der Messung entfallen; geplant wird aus der Messtabelle
+# (`core.gpubudget`).
 NEUSTART_LOCK_FRIST_S = 60.0
 NEUSTART_LOCK_NOTFRIST_S = 15.0
 
@@ -1987,6 +2521,21 @@ def clip_tor_deckel_s_aus_cfg(cfg):
     return int(cfg.get("clip_erzeugung_deckel_s") or 300)
 
 
+# E3.1: Uebersetzung Latten-Schluessel -> analyze.py-Schalter, NUR fuer den
+# Legacy-Subprozess-Weg (`worker: false`). Der Worker-Dienst bekommt die Latten als
+# Job-FELDER und kennt keine Kommandozeile mehr; diese Tabelle stirbt zusammen mit
+# dem Alt-Weg im Aufraeumzug nach der Version. Reihenfolge = die der alten
+# argv-Bildung, damit ein Diff zweier Kommandozeilen lesbar bleibt.
+_ANALYZE_SCHALTER = (
+    ("--fps-sample", "fps_sample"), ("--win-thresh", "win_thresh"),
+    ("--fd-front-min", "fd_front_min"), ("--fd-sharp-min", "fd_sharp_min"),
+    ("--fd-det-max", "fd_det_max"), ("--det-thresh", "det_thresh"),
+    ("--urteil-kante", "urteil_kante"), ("--blick-fenster", "blick_fenster_s"),
+    ("--urteil-anker", "urteil_anker"), ("--urteil-guete-e", "urteil_guete_e"),
+    ("--urteil-guete-t", "urteil_guete_t"), ("--urteil-pose", "urteil_pose"),
+)
+
+
 def _verwurf_melden(info, code):
     """E-P7 (.507): den Verwurfsgrund an den Aufrufer zurueckgeben — ueber
     DASSELBE `info`-dict, das schon die Wartezeit traegt (W7). Ein eigener
@@ -2033,11 +2582,27 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
     tor_n = clip_tor_aus_cfg(cfg)
     tor_deckel_s = clip_tor_deckel_s_aus_cfg(cfg)
     tmo += tor_deckel_s
-    argv = [eid, "--labels", camera, "--persons", *persons,
-            "--dir", event_dir, "--fps-sample", str(cfg["fps_sample"]),
-            "--win-thresh", str(cfg["win_thresh"]),
-            "--fd-front-min", str(cfg["fd_front_min"]), "--fd-sharp-min", str(cfg["fd_sharp_min"]),
-            "--fd-det-max", str(cfg["fd_det_max"]),
+    # ------------------------------------------------------------------
+    # DIE URTEILS-LATTEN DIESES JOBS — EINE Quelle (E3.1, 14.09.2026).
+    # Bis .526 wurde hier eine analyze-KOMMANDOZEILE gebaut und drueben wieder
+    # zerlegt. Der Worker-Dienst bekommt sie seitdem als JOB-FELDER; die Namen sind
+    # die von `worker_kern.urteils_latten`, nicht mehr die der alten Schalter.
+    # Die HERLEITUNG jedes Wertes (welcher Regler, welche Kamera, welcher Rueckfall)
+    # steht unveraendert hier — sie ist der Teil, der nie zweimal dastehen darf.
+    # Der Legacy-Subprozess-Weg (worker=aus) leitet seine Kommandozeile weiter unten
+    # MECHANISCH aus genau diesem dict ab; er stirbt im Aufraeumzug.
+    _reg = ((cfg.get("live") or {}).get("guards") or {}).get(camera) or {}   # LOOKUP-FIX 03.09.
+    # POSE-SIEB Stufe 2 (User 03.09.): der Kalibrier-Regler der Kamera wirkt
+    # im Worker als viertes Stimm-Sieb + Ring-Einlass. Unkalibriert gilt der
+    # gemessene Werks-Boden (core.guete.POSE_BODEN) — dieselbe Politik wie bei
+    # den zwei Guete-Boeden ("Werkswert = Boden", User-Entscheid).
+    from core.guete import POSE_BODEN as _pb
+    latten = {
+        "fps_sample": cfg["fps_sample"],
+        "win_thresh": cfg["win_thresh"],
+        "fd_front_min": cfg["fd_front_min"],
+        "fd_sharp_min": cfg["fd_sharp_min"],
+        "fd_det_max": cfg["fd_det_max"],
             # .402 (User-Linie 01.09.: EIN Kernmodell, EINE Erkennen-
             # Kalibrierung fuer Szenario+Worker+Live): die det-Schwelle der
             # Event-Analyse kommt aus dem Erkennen-Register der KAMERA
@@ -2049,8 +2614,7 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
             # unter live.guards.<kamera> — der alte Griff cfg["live"][camera]
             # fand NIE etwas, det_min und die Guete-Latten der Kamera
             # erreichten den Worker seit .402/.404 nicht (stille Werkswerte).
-            "--det-thresh", str(((((cfg.get("live") or {}).get("guards") or {}).get(camera) or {}).get("det_min"))
-                                or cfg["det_thresh"]),
+        "det_thresh": _reg.get("det_min") or cfg["det_thresh"],
             # .400 Urteils-Kante: EIGENER Wert — GEMESSEN
             # (Trennschaerfe-Test 01.09., 14 falsche/7 korrekte Feld-Faelle:
             # 70 px kippte ALLE korrekten mit [Tester-Kameras liefern auch
@@ -2066,82 +2630,77 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
             # tools/harnisch_kante515.py. Neu ist nur, dass eine Kamera ihre
             # eigene Kante setzen kann; dasselbe Muster wie bei det_min
             # darueber (Asymmetrie-Befund 01.09.).
-            "--urteil-kante", str(_kk_ernte.erk_latten(
-                cfg, ((cfg.get("live") or {}).get("guards") or {}).get(camera))["k"]),
-            # BLICKFENSTER (User 03.09. abends): analyze misst je Person das
-            # beste Anker-Fenster (blick_n/blick_max), verdict prueft win_min.
-            "--blick-fenster", str(cfg.get("blick_fenster_s", 45.0)),
-            # Rueckfall-Literal: dieselbe 0,45 wie im Default-Block oben
-            # (.510). Es greift nur, wenn cfg den Schluessel gar nicht kennt.
-            "--urteil-anker", str(cfg.get("urteil_anker", 0.45))]
-    # .404 KALIBRIER-VORFILTER (User-Entscheid 01.09., fest in Watcher UND
-    # Worker: "es sollte doch immer durch die Kalibrierung vorgefiltert
-    # werden"): die Erkennen-Guete-Latten der KAMERA gehen als Stimm-Sieb
-    # mit; ohne Kalibrierung laesst analyze seinen Werks-Boden
-    # (guete.KELLER_BODEN) greifen — deshalb wird hier NUR uebergeben,
-    # was der Nutzer wirklich kalibriert hat (analyze klemmt auf den
-    # Boden). Der fruehere "Guete-Latten bleiben draussen"-Satz galt der
-    # GLOBALEN Latte (Kamera-Bias Faktor 5); die Kamera-Latte ist genau
-    # die Antwort darauf.
-    _reg = ((cfg.get("live") or {}).get("guards") or {}).get(camera) or {}   # LOOKUP-FIX 03.09. (s. o.)
-    if _reg.get("guete_e_min") is not None:
-        argv += ["--urteil-guete-e", str(_reg["guete_e_min"])]
-    if _reg.get("guete_t_min") is not None:
-        argv += ["--urteil-guete-t", str(_reg["guete_t_min"])]
-    # POSE-SIEB Stufe 2 (User 03.09.): der Kalibrier-Regler der Kamera wirkt
-    # im Worker als viertes Stimm-Sieb + Ring-Einlass. Unkalibriert gilt der
-    # gemessene Werks-Boden (core.guete.POSE_BODEN) — dieselbe Politik wie bei
-    # den zwei Guete-Boeden ("Werkswert = Boden", User-Entscheid).
-    from core.guete import POSE_BODEN as _pb
-    argv += ["--urteil-pose", str(_reg["pose_min"]
-                                  if _reg.get("pose_min") is not None else _pb)]
+        "urteil_kante": _kk_ernte.erk_latten(cfg, _reg or None)["k"],
+        # BLICKFENSTER (User 03.09. abends): analyze misst je Person das
+        # beste Anker-Fenster (blick_n/blick_max), verdict prueft win_min.
+        "blick_fenster_s": cfg.get("blick_fenster_s", 45.0),
+        # Rueckfall-Literal: dieselbe 0,45 wie im Default-Block oben
+        # (.510). Es greift nur, wenn cfg den Schluessel gar nicht kennt.
+        "urteil_anker": cfg.get("urteil_anker", 0.45),
+        # .404 KALIBRIER-VORFILTER (User-Entscheid 01.09., fest in Watcher UND
+        # Worker: "es sollte doch immer durch die Kalibrierung vorgefiltert
+        # werden"): die Erkennen-Guete-Latten der KAMERA gehen als Stimm-Sieb
+        # mit; ohne Kalibrierung laesst der Worker seinen Werks-Boden
+        # (guete.KELLER_BODEN) greifen — deshalb geht hier NUR mit, was der
+        # Nutzer wirklich kalibriert hat (None = nicht gesetzt; der Worker
+        # klemmt dann auf den Boden). Der fruehere "Guete-Latten bleiben
+        # draussen"-Satz galt der GLOBALEN Latte (Kamera-Bias Faktor 5); die
+        # Kamera-Latte ist genau die Antwort darauf.
+        "urteil_guete_e": _reg.get("guete_e_min"),
+        "urteil_guete_t": _reg.get("guete_t_min"),
+        "urteil_pose": _reg["pose_min"] if _reg.get("pose_min") is not None else _pb,
+    }
     # KALIBRIER-VORRAT AUS DER ANALYSE (User 03.09., beauftragt seit 31.08.):
     # jede Event-Analyse darf den Ring ihrer Kamera speisen — Deckel ist
     # derselbe wie beim Live-Vorrat (live_kalib_max, 0 = aus), der Schreibweg
     # samt Einlass-Boden liegt in core.livewache.kalib_schreiben.
     _kd = int(cfg.get("live_kalib_max") or 0)
-    if _kd:
-        argv += ["--kalib-deckel", str(_kd),
-                 "--kalib-data-dir", cfg["data_dir"],
-                 "--kalib-kamera", camera]
-    if cfg.get("debug"):
-        argv += ["--urteil-debug"]
-    if koerper and worker is not None:
-        # Z5 (konzept_frames v2 §4): der Koerper-Abnehmer faehrt im selben
-        # Frame-Lauf mit — EIN Decode statt zwei. Scharf-Zustand kommt als
-        # JOB-PARAMETER (der Worker soll nie fuer sich entscheiden), das
-        # RAM-Budget als Deckel: analyze zieht davon seinen eigenen VmRSS ab
-        # und puffert nur, wenn es hineinpasst (§5 'RAM'). Nur im Worker-Weg,
-        # weil nur dort der Deckel gilt (worker_rss_max_mb, :695-698).
-        argv += ["--koerper", "--koerper-rss-max-mb",
-                 str(int(cfg.get("worker_rss_max_mb") or 4096))]
+    kalib = ({"deckel": _kd, "data_dir": cfg["data_dir"], "kamera": camera}
+             if _kd else {"deckel": 0, "data_dir": "", "kamera": ""})
+    # Z5 (konzept_frames v2 §4): der Koerper-Abnehmer faehrt im selben Frame-Lauf
+    # mit — EIN Decode statt zwei. Scharf-Zustand kommt als JOB-FELD (der Worker
+    # soll nie fuer sich entscheiden), das RAM-Budget als Deckel. Nur im Worker-Weg,
+    # weil nur dort der Deckel gilt.
+    _koerper = bool(koerper and worker is not None)
+    felder = {"eids": [eid], "labels": [camera], "persons": list(persons),
+              "dir": event_dir, "latten": latten, "kalib": kalib,
+              "koerper": _koerper, "debug": bool(cfg.get("debug"))}
+    if _koerper:
+        # .528, bewusst MIT `or 4096`: das hier ist kein WAECHTER, sondern das
+        # Abtast-BUDGET des Koerper-Wegs (er degradiert daran, statt in den OOM zu
+        # laufen). „Kein Budget" hiesse hier nicht „keine Regel", sondern
+        # ungebremstes Abtasten — deshalb faellt eine 0 hier auf den Werkswert
+        # zurueck, waehrend sie bei der Wache (WorkerProzess._rss_grenze) AUS heisst.
+        felder["koerper_rss_max_mb"] = int(cfg.get("worker_rss_max_mb") or 4096)
     logpfad = os.path.join(event_dir, "analyze.log")
     if worker is not None:
         # W2: Job in den persistenten Worker statt Prozess-Start je Event (~85 % der CPU
         # war Modell-Laden). Ergebnis-Kontrakt identisch: results.jsonl + analyze.log.
         open(logpfad, "w").close()            # wie der alte "w"-Modus: je Versuch frisch
-        # Nachbesserung W7: die Wartezeit am Job-Lock (Ernte/Sammle/Wanduhr-
-        # Roundtrip halten es teils minutenlang) ist KEINE Analysezeit. job()
-        # meldet sie ueber `info` zurueck; dt (Watchdog-Einstufung, Logzeilen)
-        # und dauer_s beim Aufrufer rechnen sie heraus — sonst erfindet die
-        # Events-Anzeige eine Analysedauer und die watchdog/worker-died-
-        # Unterscheidung (:dt >= frist) kippt nach langem Lock-Warten.
+        # Nachbesserung W7: die Wartezeit ist KEINE Analysezeit. job() meldet sie
+        # ueber `info` zurueck; dt (Watchdog-Einstufung, Logzeilen) und dauer_s beim
+        # Aufrufer rechnen sie heraus — sonst erfindet die Events-Anzeige eine
+        # Analysedauer und die watchdog/worker-died-Unterscheidung (:dt >= frist)
+        # kippt. E3.1: gemeint ist jetzt die Zeit IN DER SCHLANGE des Dienstes
+        # (Antwortfeld `warte_s`), nicht mehr die am Job-Lock eines Prozesses —
+        # dieselbe Groesse, nur an der Stelle gemessen, an der sie entsteht.
         w1, w2 = {}, {}
         t0 = time.monotonic()
         # .287 [clipdbg]: Quelle (live/nachhol) + Event-Alter reisen als
         # Job-Felder mit — der Worker armiert damit core.frames je Job.
         # .290: dazu die Erzeugungs-Weiche + Deckel (Verhalten, s.o.).
-        antwort = worker.job({"typ": "analyze", "argv": argv, "log": logpfad,
-                              "clip_quelle": clip_quelle,
-                              "clip_alter_min": clip_alter_min,
-                              "clip_erzeugung": erz,
-                              "clip_erzeugung_deckel_s": erz_deckel,
-                              # .510/J15: dasselbe Job-Feld wie bei der Ernte —
-                              # armiert wird im Worker (core.frames.CLIP_TOR_N).
-                              "clip_tor": tor_n,
-                              "clip_tor_deckel_s": tor_deckel_s,
-                              "clip_vod": cfg.get("clip_vod") is not False},
-                             tmo, info=w1, puls=puls)      # P1: Lebenszeichen des Platzes
+        _auftrag = {"typ": "analyze", **felder, "log": logpfad,
+                    "clip_quelle": clip_quelle,
+                    "clip_alter_min": clip_alter_min,
+                    "clip_erzeugung": erz,
+                    "clip_erzeugung_deckel_s": erz_deckel,
+                    # .510/J15: dasselbe Job-Feld wie bei der Ernte —
+                    # armiert wird im Worker (core.frames.CLIP_TOR_N).
+                    "clip_tor": tor_n,
+                    "clip_tor_deckel_s": tor_deckel_s,
+                    "clip_vod": cfg.get("clip_vod") is not False}
+        antwort = worker.job(dict(_auftrag), tmo,
+                             info=w1, puls=puls)      # P1: Lebenszeichen des Platzes
         dt = time.monotonic() - t0 - float(w1.get("wartezeit_s") or 0.0)
         frist = tmo
         if antwort is None and timeout_s is None:
@@ -2172,18 +2731,20 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
             watchdog = dt >= tmo
             frist = tmo * 2 if watchdog else tmo
             with open(logpfad, "a") as lf:
-                if w1.get("lock_timeout"):
-                    # C3 (05.09.2026, Widerleger C1 Punkt 2): job() kam die ganze
-                    # Frist nicht ans Job-Lock — der Worker LEBT, er war fremd
-                    # belegt (Sammeln/Wanduhr/Ernte auf demselben Worker). Diese
-                    # Frage steht VOR beiden anderen, weil sie die einzige ist,
-                    # die der Rueckweg sicher beantwortet: `dt` ist hier rund 0
-                    # (die Wartezeit wird herausgerechnet), also faellt der Fall
-                    # sonst in den „worker died"-Zweig und zieht dort eine ALTE,
-                    # fremde `letzte_ursache` mit.
-                    lf.write(f"\nverifyd: worker busy — its job lock was held by "
-                             f"another job for the full {tmo}s (worker alive, "
-                             f"nothing analysed) — one immediate retry "
+                if w1.get("fremdverschuldet"):
+                    # E3.1: der Worker-Prozess ist unter dem Job weggegangen
+                    # (Speicher-Zusage gerissen -> geordnetes Ende, harter Abbruch
+                    # der Wache, oder Tod). Diese Frage steht VOR beiden anderen,
+                    # weil sie die einzige ist, die der Rueckweg SICHER beantwortet
+                    # — und weil hier niemand bestraft werden darf: der Job hat
+                    # nichts falsch gemacht, der naechste Versuch laeuft auf einem
+                    # frischen Prozess. (Sie ersetzt den `lock_timeout`-Zweig aus
+                    # C3: ein Job-Lock, an dem sich etwas aufreihen koennte, gibt es
+                    # im Dienst nicht mehr.)
+                    lf.write(f"\nverifyd: the worker process went away while this "
+                             f"job was running (not this event's fault: "
+                             f"{getattr(worker, 'letzte_ursache', None) or '?'}) "
+                             f"— one immediate retry on a fresh worker "
                              f"(deadline {frist}s)\n")
                 elif watchdog:
                     lf.write(f"\nverifyd: analyze watchdog fired after {dt:.0f}s "
@@ -2200,35 +2761,39 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
                              f"immediate retry on a fresh worker "
                              f"(deadline {tmo}s)\n")
             t0 = time.monotonic()
-            antwort = worker.job({"typ": "analyze", "argv": argv, "log": logpfad,
-                                  "clip_quelle": clip_quelle,
-                                  "clip_alter_min": clip_alter_min,
-                                  "clip_erzeugung": erz,
-                                  "clip_erzeugung_deckel_s": erz_deckel,
-                                  "clip_tor": tor_n,          # .510/J15, auch im Retry
-                                  "clip_tor_deckel_s": tor_deckel_s,
-                                  "clip_vod": cfg.get("clip_vod")
-                                  is not False},
-                                 frist, info=w2, puls=puls)   # P1: auch im Retry
+            # Derselbe Auftrag, neue Frist (Job-Felder wie oben, auch clip_tor —
+            # .510/J15 gilt im Retry genauso).
+            antwort = worker.job(dict(_auftrag), frist,
+                                 info=w2, puls=puls)         # P1: auch im Retry
             dt = time.monotonic() - t0 - float(w2.get("wartezeit_s") or 0.0)
         warte = float(w1.get("wartezeit_s") or 0.0) + float(w2.get("wartezeit_s") or 0.0)
         if info is not None:
             info["wartezeit_s"] = round(warte, 2)
         with open(logpfad, "a") as lf:
             if warte >= 0.1:                  # unter der dauer_s-Aufloesung waere es Rauschen
-                lf.write(f"\nverifyd: waited {warte:.1f}s for the analysis slot "
-                         f"(another analysis/measurement held it) — not counted "
+                lf.write(f"\nverifyd: waited {warte:.1f}s in the worker queue "
+                         f"(all compute threads were busy) — not counted "
                          f"as analysis time\n")
             if antwort is None:
-                # C3 (05.09.2026, Widerleger C1 Punkt 2): dieselbe Frage wie oben,
-                # fuer den LETZTEN job()-Aufruf. `w2` ist nur gefuellt, wenn der
-                # Sofort-Retry ueberhaupt lief (job() schreibt in jedes info
-                # mindestens `wartezeit_s`), sonst gilt `w1`.
+                # Dieselbe Frage wie oben, fuer den LETZTEN job()-Aufruf. `w2` ist
+                # nur gefuellt, wenn der Sofort-Retry ueberhaupt lief (job()
+                # schreibt in jedes info mindestens `wartezeit_s`), sonst gilt `w1`.
                 _letzt = w2 if w2 else w1
-                art = ("worker busy (job lock)" if _letzt.get("lock_timeout")
+                art = ("worker process gone (not this event's fault)"
+                       if _letzt.get("fremdverschuldet")
                        else "watchdog" if dt >= frist else "worker died")
                 lf.write(f"\nverifyd: analyze aborted ({art} after {dt:.0f}s, "
                          f"deadline {frist}s)\n")
+                # E3.3 (W2-B4/B5): DIE FRAGE MUSS DEN AUFRUFER ERREICHEN. Bis hier
+                # blieb „fremdverschuldet" in `w1`/`w2` liegen, also in run_analyze
+                # — der Aufrufer bekam ein nacktes `None` und konnte nicht
+                # unterscheiden, ob das Ereignis versagt hat oder der Prozess unter
+                # ihm weggegangen ist. Genau daran haengt der Nachhol-Zaehler
+                # (`_nachhol_runde`): ein fremdverschuldeter Versuch darf kein
+                # Versuchsbudget kosten, sonst steht ein unschuldiges Ereignis nach
+                # drei Kollisionen endgueltig auf `tot`.
+                if info is not None and _letzt.get("fremdverschuldet"):
+                    info["fremdverschuldet"] = True
                 _verwurf_melden(info, _registry.VERWURF_ANALYSE_NONE)
                 return None
             if not antwort.get("ok"):
@@ -2256,6 +2821,34 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
                 _verwurf_melden(info, antwort.get("verwurf_grund")
                                 or _registry.VERWURF_ANALYSE_NONE)
                 return None
+            # E3.1 DIE STRUKTURIERTEN FELDER DER ANTWORT an den Aufrufer geben
+            # (Konzept §2 Log-Kontrakt): PROVIDER-GUARD, PLACEMENT-FALLBACK und die
+            # Decode-Kette standen bis .526 als TEXTMARKEN in der analyze.log und
+            # wurden dort wieder herausgegriept. Im Mehr-Job-Betrieb gibt es diese
+            # eine Prozess-Logdatei nicht mehr (dup2 gilt dem ganzen Prozess, mit N
+            # Jobs also allen) — und Log-Parsing war ohnehin nie eine Quelle,
+            # sondern eine Rekonstruktion. Jetzt kommen sie als Felder; die Leser
+            # sitzen am Rueckweg `info`, nicht mehr an einer Datei.
+            if info is not None:
+                info["provider_guard"] = antwort.get("provider_guard")
+                info["placement_fallback"] = list(antwort.get("placement_fallback") or [])
+                info["bindung"] = dict(antwort.get("bindung") or {})
+                info["frames"] = dict(antwort.get("frames") or {})
+                info["kompilat_probe"] = dict(antwort.get("kompilat_probe") or {})
+                # .534 (Abnahme-Befund 15.09.): DIE ZEITEN DES WORKERS. Sie
+                # fehlten in dieser Aufzaehlung — und damit im Zeitprotokoll
+                # genau die zwei Spalten, die der Dienst nicht selbst messen
+                # kann: der Clip-Abruf und das erste dekodierte Bild. Im
+                # Feld-Log stand deshalb bei JEDER Zeile „abruf cache" und
+                # „erstes bild n/a", auch wenn der Clip nachweislich frisch aus
+                # Frigate kam, und `gesamt_s` war gleich `rechnung_s`. Der
+                # Rueckweg ist eine WEISSE LISTE; wer hier etwas vergisst,
+                # verliert es still.
+                info["zeiten"] = dict(antwort.get("zeiten") or {})
+                if antwort.get("null_gesichter_serie"):
+                    info["null_gesichter_serie"] = antwort["null_gesichter_serie"]
+                if antwort.get("frist_gerissen"):
+                    info["frist_gerissen"] = True
             # Telemetrie fuer den W2-Soak (CPU/Event, Peak-RSS) — greifbar per grep.
             # Z5: vmhwm_mb ist die SPITZE im Job (die rss_mb-Schwelle sieht nur den
             # Stand danach), koerper_* der zusatz-Rueckweg des zweiten Abnehmers.
@@ -2284,6 +2877,21 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
             env["SUSLIK_CLIP_QUELLE"] = str(clip_quelle)
             if clip_alter_min is not None:
                 env["SUSLIK_CLIP_ALTER_MIN"] = str(clip_alter_min)
+        # E3.1: die Kommandozeile dieses ALT-Weges wird MECHANISCH aus `latten`
+        # abgeleitet — die Werte kommen also aus derselben einen Quelle wie die
+        # Job-Felder oben. Nur die Uebersetzung Schluessel -> Schalter steht hier;
+        # sie stirbt mit dem Legacy-Zweig im Aufraeumzug.
+        argv = [eid, "--labels", camera, "--persons", *persons, "--dir", event_dir]
+        for _sch, _k in _ANALYZE_SCHALTER:
+            _w = latten.get(_k)
+            if _w is not None:
+                argv += [_sch, str(_w)]
+        if kalib["deckel"]:
+            argv += ["--kalib-deckel", str(kalib["deckel"]),
+                     "--kalib-data-dir", kalib["data_dir"],
+                     "--kalib-kamera", kalib["kamera"]]
+        if cfg.get("debug"):
+            argv += ["--urteil-debug"]
         cmd = [sys.executable, os.path.join(HERE, "analyze.py"), *argv]
         # Nachbesserung W8: derselbe EINE Analyse-Slot wie im Worker-Zweig, hier
         # als Modul-Lock (_ANALYSE_SERIELL, s. Kopf) — die Wanduhr-Messung haelt
@@ -2351,7 +2959,19 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
 
 
 class WorkerProzess:
-    """W2: EIN persistenter Analyse-Worker (worker.py) statt Prozess-Start je Event.
+    """VERWAIST SEIT E3.1 (14.09.2026) — kein Aufrufer mehr, nur noch Bestand.
+
+    Der Dienst startet seit E3.1 `WorkerDienst` (EIN langlebiger Prozess,
+    worker_dienst.py, N Rechenstraenge). Diese Klasse startet `worker.py` (ein
+    Prozess je Platz, ein Job zur Zeit) und wird von NICHTS mehr gerufen. Sie bleibt
+    physisch liegen, bis der Aufraeumzug NACH der laufenden Version sie mit dem
+    uebrigen Alt-Weg entfernt (analyze.py-Kern, runpy-Weg, worker.py; Entscheid
+    User 14.09.: erst raeumen, wenn die neue Version hier laeuft). Wer sie wieder
+    ruft, baut den Parallel-Betrieb zweier Compute-Prozesse wieder auf — genau die
+    Kontext-Kollision, gegen die der Umbau gebaut ist.
+
+    -- Herkunft (unveraendert) ------------------------------------------------
+    W2: EIN persistenter Analyse-Worker (worker.py) statt Prozess-Start je Event.
     Haelt die Modelle warm (gemessen 26.07.: 55 CPU-s/Event, davon ~85 % Modell-Laden;
     warm ~6-14 CPU-s). ALLE Compute-Jobs laufen durch diesen einen Prozess — das buendelt
     die GPU-Kontexte und loest die Kontext-Kollision, die _gpu_bg_lock nur entschaerfte.
@@ -2403,6 +3023,26 @@ class WorkerProzess:
         self._geschossen_grund = None
         self._geschossen_quelle = None
         self._geschossen_pid = None
+
+    def _rss_grenze(self):
+        """Die VmRSS-Politik-Grenze dieser Instanz in MB — 0 = AUSDRUECKLICH aus
+        (.528). EINE Lesestelle fuer beide Verbraucher (Job-Feld `rss_max_mb` und
+        die Neustart-Schwelle), Deckungs-Vertrag wie bisher.
+
+        Der Unterschied zum alten `int(cfg.get(key) or default)`: ein
+        ausdrueckliches 0 ist jetzt eine ANTWORT („diese Regel soll nicht gelten")
+        und faellt nicht mehr still auf den Werkswert zurueck. Fehlt der
+        Schluessel oder ist er leer, gilt weiter der Werkswert — dieser Fall ist
+        „nichts gesagt", nicht „aus". Ohne die Unterscheidung waere die 0, die das
+        Schema seit .528 erlaubt, eine Zahl ohne Wirkung — und die Hilfe, die sie
+        erklaert, eine Luege."""
+        w = self.cfg.get(self.rss_key)
+        if w is None or w == "":
+            return int(self.rss_default)
+        try:
+            return max(0, int(w))
+        except (TypeError, ValueError):
+            return int(self.rss_default)
 
     def _start(self):
         r, w = os.pipe()
@@ -2721,8 +3361,9 @@ class WorkerProzess:
                 # Deckungs-Vertrag: DIESELBE Config-Zahl wie die Neustart-Schwelle
                 # unten in dieser Methode — keine zweite Zahlenquelle.
                 if job.get("typ") != "ping":
-                    job.setdefault("rss_max_mb",
-                                   int(self.cfg.get(self.rss_key) or self.rss_default))
+                    _rg = self._rss_grenze()
+                    if _rg:            # .528: 0 = ausdruecklich aus, kein Feld
+                        job.setdefault("rss_max_mb", _rg)
                     # .287 [clipdbg]: der EINE debug-Schalter (Whitelist-Key
                     # 'debug') wandert als Job-Feld in den Worker — gleicher
                     # Deckungs-Vertrag wie rss_max_mb, keine zweite Quelle.
@@ -2784,8 +3425,8 @@ class WorkerProzess:
                     # bei 0 begonnen); dann zaehlt n ganz, sonst nur der Zuwachs.
                     self.rueckfaelle["summe"] += n if n < letzt else n - letzt
                     self.rueckfaelle["letzt"] = n
-                grenze = int(self.cfg.get(self.rss_key) or self.rss_default)
-                if int(antwort.get("rss_mb") or 0) > grenze:
+                grenze = self._rss_grenze()
+                if grenze and int(antwort.get("rss_mb") or 0) > grenze:
                     self.log(f"{self.name} rss {antwort.get('rss_mb')} MB > {grenze} MB — restarting {self.name}")
                     self._stop()
                 return antwort
@@ -2795,6 +3436,1146 @@ class WorkerProzess:
                 return None
         finally:
             self.lock.release()
+
+
+# ---------------------------------------------------------------- E3.1: DER Worker-Dienst
+def vram_startargumente(v):
+    """DIE EINE QUELLE fuer die Kartenhaushalt-Argumente JEDES worker_dienst-
+    Spawns dieses Dienstes. -> Liste von Argumenten (leer = kein Kartenhaushalt).
+
+    WARUM ALS EIGENE FUNKTION, und nicht zweimal hingeschrieben: der Dienst
+    startet worker_dienst an ZWEI Stellen — den Betriebs-Worker
+    (`WorkerDienst._start`) und den Roundtrip der Wanduhr-Messung
+    (`Service._roundtrip_fahren`). Die zweite hatte die Argumente bis zum
+    NB-Befund vom 15.09. nicht, rechnete also mit UNGEDECKELTER Arena auf
+    derselben Karte — und lieferte genau dort die einzige `bfc_arena`-Zeile des
+    Abnahme-Laufs. Eine Liste an zwei Stellen laeuft wieder auseinander; deshalb
+    baut sie ab jetzt eine Funktion, und eine Probe sichert zu, dass beide
+    Spawn-Stellen sie rufen.
+
+    .535: KEINE GRUNDLINIE MEHR. Bis .534 reiste hier `--vram-grundlinie-mb`
+    mit — die kartenweite Belegung vor diesem Prozess, gegen die der Worker
+    sein Preis-Plateau rechnete. Gemessen wird nicht mehr, um zu planen; die
+    Preise stehen in der Messtabelle (`core.gpubudget`)."""
+    v = v or {}
+    argv = []
+    if v.get("deckel_mb"):
+        argv += ["--vram-deckel-mb", str(int(v["deckel_mb"]))]
+    if v.get("geometrien_max"):
+        argv += ["--geometrien-max", str(int(v["geometrien_max"]))]
+    if v.get("arena_strategie"):
+        argv += ["--arena-strategie", str(v["arena_strategie"])]
+    if v.get("arena_shrink"):
+        argv += ["--arena-shrink", "1"]
+    # .532: das Argument steht NUR da, wenn der Planer AN sein soll — die
+    # Vorgabe des Workers ist „aus", und ein Argument, das die Vorgabe
+    # wiederholt, ist eine zweite Wahrheit.
+    if v.get("mem_pattern"):
+        argv += ["--mem-pattern", "1"]
+    return argv
+
+
+def worker_dienst_pfad():
+    """DER Pfad des Worker-Dienstes — EINE Lesestelle (Deckungs-Vertrag).
+
+    Der Ort ist `<wurzel>/worker_dienst.py`: dort liegen auch verifyd.py,
+    analyze.py und worker.py, und nur von dort kommt die Datei in die Images
+    (docker/Dockerfile*: `COPY verifyd.py analyze.py … worker_dienst.py … /app/`).
+
+    R1-UMZUG GEFAHREN (E3.5, 14.09.2026): die fuenf Neubau-Dateien
+    (worker_dienst/worker_kern/bild_kern/engine_ov/engine_cuda) liegen per `git mv`
+    in der Wurzel, alle fuenf Dockerfiles kopieren sie, die Whitelist in
+    tools/source_export.sh fuehrt sie. Der frueher noetige Rueckfall auf
+    `prototyp/worker_gpu/` ist damit WEG — er war kein Betriebs-Schalter im Sinne
+    von §0a (beide Zweige starteten denselben Dienst von verschiedenen Dateipfaden),
+    sondern nur die Bruecke ueber die laufende Messreihe des GPU-Strangs. Ohne ihn
+    ist ein fehlender Dienst ein LAUTER Fehler statt eines stillen Prototyp-Starts.
+    Die Mess-Apparaturen unter prototyp/worker_gpu/ finden den Kern weiter, sie
+    haben seit dem Umzug einen Pfad-Bootstrap im Kopf (worker_gpu.py u. a.)."""
+    return os.path.join(HERE, "worker_dienst.py")
+
+
+class _JobWarter:
+    """Ein wartender Job: sein Platz in der Antwort-Zuordnung des Dienstes."""
+
+    __slots__ = ("ereignis", "antwort")
+
+    def __init__(self):
+        self.ereignis = threading.Event()
+        self.antwort = None
+
+
+class WorkerDienst:
+    """E3.1 (14.09.2026): EIN langlebiger Worker-PROZESS fuer ALLE Compute-Jobs.
+
+    ER ERSETZT `WorkerProzess` (worker.py, ein Prozess je Platz, EIN Job zur Zeit).
+    Der Unterschied ist nicht die Groesse, sondern die Bauart:
+
+      alt   N Plaetze -> N Prozesse -> je Prozess ein Job-Lock, je Prozess eine
+            eigene Modell-Sitzung und ein eigener GPU-Kontext.
+      neu   N Plaetze -> EIN Prozess mit N Rechenstraengen. Ein Kontext, ein
+            Kompilat-Satz, ein Speicher-Konto. Die Zuordnung Antwort->Job laeuft
+            ueber die JOB-ID (`id`), die jede Antwortzeile traegt; deshalb gibt es
+            hier KEIN Job-Lock mehr — es waere genau die Serialisierung, die der
+            Umbau beseitigt.
+
+    LEBENSZYKLUS (Bauauftrag E3.1-1):
+      * Start im BOOT (`Service.worker_dienst_starten`, im Exklusivfenster der
+        Rechenprobe) und sonst lazy beim ersten Job — nie zwei Prozesse.
+      * Der Prozess beendet sich SELBST geordnet, wenn er ueber seine Speicher-
+        Zusage waechst (`Dienst.ende_bitten`: erst die offenen Jobs fertig, dann
+        Schluss). verifyd erkennt das am EOF der Antwort-Pipe und startet beim
+        naechsten Job frisch. Deshalb hat verifyd seit E3.1 KEINE eigene
+        RSS-Neustart-Schwelle mehr: zwei Politiken auf einer Zahl sind eine zu
+        viel, und die im Prozess misst das richtige Mass (anon+shmem statt der
+        VmRSS-Luege der iGPU).
+      * `stop()` schliesst stdin -> EOF -> der Dienst fuehrt laufende Jobs zu Ende
+        und geht (Waisen-Schutz vor execv, Exit-139-Bootfenster).
+      * Stirbt er mitten im Betrieb, bekommen ALLE wartenden Jobs eine Absage mit
+        `fremdverschuldet` — kein Job bleibt stumm haengen.
+
+    WAS BEWUSST GLEICH BLEIBT, damit der Umbau eine Naht und kein Neuland ist:
+    die Antwortfelder (ok/cpu_s/wall_s/rss_mb/vmhwm_mb/frame_rueckfaelle/fehler/
+    verwurf_grund), der Rueckweg `info` mit `wartezeit_s`, der `puls` fuer den
+    Platzwaechter, `zustand()` fuer /health und die Systemseite, `kill_hart` fuer
+    den Klemmfall des Neustarts.
+
+    DER HAENGER-SCHUSS (E3.3/E3.4, Bauplan 2d — ausgebaut, nicht offen): einen
+    einzelnen haengenden Rechenstrang kann NIEMAND schiessen; ein Python-Thread ist
+    von aussen nicht beendbar (Herleitung in `kill_hart`). Die kleinste schiessbare
+    Einheit ist der PROZESS, und die gebaute Kette ist deshalb: Frist reisst ->
+    Prozess schiessen -> ALLE offenen Jobs als `fremdverschuldet` buchen (sie haben
+    nichts falsch gemacht) -> beim naechsten Job frisch starten -> KURZFORM der
+    Start-Proben auf dem frischen Prozess -> der Vorgang wird als
+    `haenger_schuesse` gezaehlt und steht mit Grund in /health. Ein „gezielter
+    Strang-Schuss" bliebe eine Scheinloesung und wird deshalb nicht gebaut."""
+
+    def __init__(self, cfg, log=None, threads=1, name="worker", grenze=None,
+                 geometrien=None, bei_neustart=None, vram=None, karte=None,
+                 grundlast=None):
+        self.cfg = cfg
+        self.log = log or (lambda m: None)
+        self.name = name
+        # E3.3 (W2-B29): der Geometrie-Deckel, den der Prozess als Job-Feld bekommt
+        # (`geometrien_max`). Wie `grenze` ein `callable`, damit er den Stand bei der
+        # Job-Uebergabe traegt; None/0 = kein Deckel, dann waechst der Prozess wie
+        # bis E2d und sagt das drueben einmal laut.
+        self._geometrien = geometrien
+        # E3.4: was nach einem BETRIEBS-Neustart zu tun ist (Kurzform der
+        # Start-Proben). Der Rueckruf darf NICHT blockieren — er laeuft unter dem
+        # Absetz-Lock dieses Objekts; `Service.kurzprobe_ausloesen` spannt deshalb
+        # einen eigenen Thread auf. None = kein Rueckruf (Proben, Fremd-Aufrufer).
+        self._bei_neustart = bei_neustart
+        # .531: der Kartenhaushalt fuer den NAECHSTEN Prozess-Start (Arena-Deckel,
+        # Geometrie-Deckel, Strategie, Shrink-Schalter). Wie `grenze` ein
+        # `callable`: der Deckel muss den Stand vom START tragen, nicht den vom
+        # Bauzeitpunkt dieses Objekts — zwischen beiden kann ein Live-Waechter
+        # dazugekommen sein. None = kein Kartenhaushalt (Intel, Proben).
+        self._vram = vram
+        # .531: die KARTEN-SONDE als Rueckfrage. Sie wohnt im Service (dort liegt
+        # der Merker, und dort wird sie auch fuer /health gebraucht) — dieser
+        # Dienst fragt sie, statt eine zweite Sonde mit eigenem Merker zu halten.
+        self._karte = karte
+        self._starts = 0
+        # SPEICHER-POLITIK (E3.2): die Grenze, gegen die die Wache DRUEBEN misst
+        # (anon+shmem, Job-Feld `fussabdruck_max_mb`). Sie kommt aus derselben
+        # Formel wie die Strang-Zahl; `callable`, damit sie den Stand bei der
+        # Job-Uebergabe traegt und nicht den beim Bau des Objekts. None = keine
+        # Politik-Grenze, dann wacht drueben nur die cgroup-Regel — und der
+        # Dienst sagt genau das laut ins Prozess-Log.
+        self._grenze = grenze
+        # .534 (B3): der GRUNDLAST-Posten derselben Rechnung, als Rueckfrage aus
+        # demselben Grund wie `grenze`. Der Prozess drueben misst das ganze
+        # Speicher-Konto des Containers; ohne den Posten, der nicht ihm gehoert,
+        # kann er aus seinem Maximum keinen Vorschlag je Rechenstrang machen.
+        # None = kein Posten, dann meldet er nur die Messwerte.
+        self._grundlast = grundlast
+        # RECHENSTRAENGE — DIE EINE STELLE (Bauauftrag E3.1-1). Heute die
+        # Platz-Zahl der Vergabestelle (`Service._plaetze_kapazitaet`), damit N
+        # Plaetze auch N Rechenstraenge bedeuten. E3.2 ersetzt GENAU DIESEN Wert
+        # durch die Speicher-Formel je Karte (Fussabdruck(N,G)); hier ist dann
+        # nichts weiter zu tun, als die Quelle zu tauschen. `callable`, damit der
+        # Wert beim Prozess-START gilt und nicht beim Bau des Objekts.
+        self._threads = threads
+        self.p = None
+        self.rx = None
+        # .536 B1b: das SCHREIBENDE der Job-Pipe (`WORKER_JOB_FD` drueben). Bis
+        # .535 war das `self.p.stdin`; seitdem hat die Job-Zeile einen eigenen
+        # Deskriptor und liegt nicht mehr auf fd 0 des Kindes (s. `_start`).
+        self.tx = None
+        # ZWEI Locks, und der Unterschied ist wichtig:
+        #   self.lock      das EXKLUSIV-Lock. Es haelt, wer den Worker fuer sich
+        #                  allein braucht: `stop()` (Neustart/--once-Ende) und der
+        #                  Wanduhr-Roundtrip, der als eigener Subprozess neben dem
+        #                  Dienst misst (`_roundtrip_seriell` nimmt es nicht
+        #                  blockierend). Genau dadurch wartet ein Neustart das Ende
+        #                  einer laufenden Messung ab, statt sie als Vollast-Waise
+        #                  ins frische Boot-Fenster zu entlassen.
+        #   self._absetzen das feine Lock um Prozess-Start und Job-Absetzen.
+        # Ein JOB nimmt nur das zweite. Naehme er `self.lock`, waere der ganze
+        # Sinn des Umbaus dahin: waehrend einer Messung (bis 3 x analyse_timeout_s)
+        # stuende dann JEDER Job, auch die Analysen auf anderen Plaetzen — im alten
+        # Pool-Modell lief deren eigener Prozess weiter, das waere also ein
+        # Rueckschritt gewesen.
+        self.lock = threading.Lock()
+        self._absetzen = threading.Lock()
+        self._schreib = threading.Lock()        # eine Job-Zeile am Stueck in die Job-Pipe
+        # .536 B1c2: die ZULETZT GESCHRIEBENE Job-Id, gemerkt unter demselben
+        # Lock, unter dem geschrieben wird. Sie ist die Zuordnung fuer eine
+        # Antwort OHNE `id`: so eine Antwort entsteht drueben genau dann, wenn
+        # eine Job-ZEILE unlesbar ankam (worker_dienst: json.loads scheitert ->
+        # `{"id": None}`), und verstuemmelt wird immer die Zeile, die gerade
+        # geschrieben wurde. Deterministisch statt `max()` ueber eine Menge.
+        self._zuletzt_geschrieben = None
+        self._warter = {}                       # job-id -> _JobWarter
+        self._warter_lock = threading.Lock()
+        self._nr = 0
+        self._leser = None
+        # Z8 Mitnahme A (unveraendert uebernommen): der Dienst meldet SEINEN
+        # kumulativen Stand, ein Neustart faengt bei 0 an.
+        self.rueckfaelle = {"summe": 0, "letzt": 0}
+        self.letzte_ursache = None
+        # PHYSISCHE Tode dieses Prozesses — je PIPE-SCHLUSS genau ein Eintrag
+        # (`_pipe_zu`). E3.3 haelt das ausdruecklich auseinander: `tode_24h` zaehlt
+        # PROZESSE, nicht Jobs (W2-B6). Ein Tod, der zehn offene Jobs mitnimmt, ist
+        # EIN Tod und zehn fremdverschuldete Absagen — die zweite Zahl steht unten
+        # in `job_tode`, damit niemand die eine fuer die andere haelt.
+        self.tode = collections.deque(maxlen=500)
+        # E3.3 (W2-B6): die Todesursache JE JOB-ID. Ring, weil das hier eine
+        # Auskunft ist und kein Journal: (ts, job-id, typ, ursache).
+        self.job_tode = collections.deque(maxlen=200)
+        # E3.3 / Bauplan 2d: die HAENGER-SCHUESSE dieses Dienstes — wie oft der eine
+        # Prozess wegen eines haengenden Rechenstrangs geschossen wurde, mit Grund
+        # und Schuetzen. Getrennt von `tode`, weil das die FRAGE ist, die ein
+        # Betreiber stellt („haengt hier etwas?"), nicht „ist etwas gestorben?".
+        self.schuesse = collections.deque(maxlen=200)
+        self.haenger_schuesse = 0
+        # .536 B1c3: die zwei Zaehler der IPC-Klasse, sichtbar in /health.worker.
+        #   spaete_antworten     Antwort MIT `id`, aber niemand wartet mehr —
+        #                        der Aufrufer ist in seine Frist gelaufen. Das
+        #                        ist ein zu knapper Watchdog, kein IPC-Fehler.
+        #   id_lose_antworten    Antwort OHNE `id` — drueben war die Job-ZEILE
+        #                        unlesbar. Genau diese Zahl gehoert auf Null;
+        #                        stand sie im Feld auf 2, kostete das zwei
+        #                        Worker-Prozesse (16.09.).
+        self.spaete_antworten = 0
+        self.id_lose_antworten = 0
+        # .536 B4.5 (Invariante I13): wie oft standen MEHR Jobs offen, als der
+        # Prozess gleichzeitig rechnen kann. SOLL: 0. Die Zahl ist die
+        # Gegenprobe zur ganzen Vergabe-Umbau-Zusage — jeder offene Job ueber
+        # „Rechenstraenge + 1" wartet IM Worker statt an der Vergabestelle, und
+        # genau dort verbrennt er seine Frist unsichtbar (die Falle der K
+        # Ernte-Abholer vom 16.09.).
+        self.offene_ueber_soll = 0
+        self._i13_log_ts = 0.0
+        self._geschossen_grund = None
+        self._geschossen_quelle = None
+        self._geschossen_pid = None
+        self._ende_gemeldet = False
+        # E3.4: der zuletzt gemeldete Stand der zwei Selbstbeweis-Wachen des
+        # Prozesses. Er kommt mit JEDER Antwort (auch mit dem `ping`) und wird hier
+        # gemerkt, damit /health ihn zeigen kann, ohne selbst einen Job abzusetzen.
+        self.kompilat_probe = {"stand": "noch keine antwort"}
+        self.startprobe = {"stand": "noch keine antwort"}
+        self.rueckfall_arten = []
+        # .531: der Kartenhaushalt des laufenden Prozesses, wie er ihn zuletzt
+        # gemeldet hat. Leer heisst „noch keine Antwort", nicht „kein Druck".
+        self.vram_stand = {}
+        # .534 (B3): dasselbe fuer den CONTAINER-Speicher. Leer heisst „noch keine
+        # Antwort" — auf Backends ohne Karte ist das der EINZIGE Speicher-Stand,
+        # den es gibt.
+        self.ram_stand = {}
+        # .531: wann zuletzt ein Neustart WEGEN Kartendruck gelaufen ist. Daran
+        # haengt der Abstand (gpubudget.DRUCK_NEUSTART_ABSTAND_S) — der Prozess
+        # drueben kennt nur sich selbst, die Reihe kennt nur der Dienst.
+        self.vram_neustart_ts = 0.0
+        self.vram_neustart_gedeckelt = False
+        self.vram_deckel_gehalten = 0
+        # .532: mit wie vielen Rechenstraengen der LAUFENDE Prozess gestartet
+        # ist, und der Deckel, den ein zweimal getroffener EIGENER Arena-Deckel
+        # gesetzt hat (0 = keiner). Er gilt bis zum naechsten DIENST-Start:
+        # ein Prozess-Neustart soll ihn gerade NICHT vergessen, sonst liefe der
+        # frische Prozess in dieselbe Wand. Nicht persistent — beim Neustart
+        # des Dienstes rechnet die Leiter neu, und sie soll es duerfen.
+        self.straenge_laufend = 0
+        self.straenge_deckel_druck = 0
+        # .535: DER AUFSTIEG IST ERSATZLOS WEG. Er war die Antwort auf eine
+        # Welt ohne Preise — erst klein starten, messen, dann hochgehen. Mit der
+        # Messtabelle gibt es die Preise VOR dem Start, und der Worker beginnt
+        # gleich mit der Stufe, die die Karte traegt. Was bleibt, ist der Weg
+        # nach UNTEN: zwei Treffer am eigenen Arena-Deckel senken die naechste
+        # Zahl (`straenge_deckel_druck`), und der Druck-Merker bleibt.
+
+    # ---------------------------------------------------------- Prozess
+    def _threads_zahl(self):
+        t = self._threads() if callable(self._threads) else self._threads
+        try:
+            n = max(1, int(t))
+        except (TypeError, ValueError):
+            n = 1
+        # .532: der Druck-Deckel schlaegt die Formel NACH UNTEN. Er entsteht,
+        # wenn der Prozess zweimal an seinem EIGENEN Arena-Deckel gescheitert
+        # ist (worker_dienst.druck_buchen) — dann hat die Rechnung fuer diese
+        # Anlage zu viel erlaubt, und die Formel wuerde beim naechsten Start
+        # dieselbe Zahl wieder liefern. Nach oben wirkt er nie.
+        deckel = max(0, int(self.straenge_deckel_druck or 0))
+        return min(n, deckel) if deckel else n
+
+    def _grenze_zahl(self):
+        """Politik-Grenze in MB, 0 = keine (E3.2). Gleiche Bauart wie oben."""
+        g = self._grenze() if callable(self._grenze) else self._grenze
+        try:
+            return max(0, int(g or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def _grundlast_zahl(self):
+        """Grundlast-Posten des Containers in MB, 0 = keiner (.534). Gleiche
+        Bauart wie oben — und dieselbe Regel: keine Zahl statt einer geratenen."""
+        g = self._grundlast() if callable(self._grundlast) else self._grundlast
+        try:
+            return max(0, int(g or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def _geometrien_zahl(self):
+        """Geometrie-Deckel, 0 = keiner (E3.3). Gleiche Bauart wie oben."""
+        g = self._geometrien() if callable(self._geometrien) else self._geometrien
+        try:
+            return max(0, int(g or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def _karte_bereit(self, job, puls):
+        """Hat die Karte genug frei, um einen Worker zu STARTEN? (.531 D3)
+        -> None = ja (oder die Frage stellt sich nicht), sonst der Absage-Grund.
+
+        Gefragt wird NUR, wenn wirklich ein Start ansteht — laeuft der Prozess,
+        steht sein Deckel laengst fest und ein Blick auf die Karte aendert nichts.
+
+        DREI AUSGAENGE, und die Unterscheidung ist der eigentliche Inhalt:
+          * genug frei            -> starten.
+          * die Karte ist durch die EIGENEN Live-Waechter belegt -> NICHT warten.
+            Warten hilft nicht, die Waechter gehen nicht von selbst; der Job wird
+            sofort abgesagt, mit der Handlungsanweisung dazu.
+          * fremd belegt          -> bis zu KARTE_WARTE_FRIST_S warten, mit Puls.
+            Ein Anzeige-Transcode ist meist in Sekunden vorbei.
+        Reisst die Frist, scheitert DIESER EINE Job. Der Dienst laeuft weiter."""
+        if not (self.p is None or self.p.poll() is not None):
+            return None
+        try:
+            st = self._vram_start() or {}
+        except Exception as e:                            # noqa: BLE001
+            self.log(f"{self.name}: card state not computable "
+                     f"({type(e).__name__}: {e}) — starting anyway")
+            return None
+        if not st:
+            return None
+        noetig = int(st.get("noetig_mb") or 0)
+        if noetig <= 0:
+            return None
+        # VERWEIGERT heisst „mit dem, was JETZT frei ist, traegt die Karte nicht
+        # einmal einen Rechenstrang". Das kann zweierlei sein, und die
+        # Unterscheidung entscheidet, ob Warten ueberhaupt etwas bringen kann:
+        #   * die Karte ist zu klein bzw. durch unsere EIGENEN Waechter belegt —
+        #     dann wird sie auch in 45 s nicht groesser, und der Job wird sofort
+        #     abgesagt, mit der Handlungsanweisung dazu;
+        #   * ein FREMDER Verbraucher haelt sie gerade — dann ist die Absage von
+        #     eben nur eine Momentaufnahme, und die Warteschleife unten ist genau
+        #     dafuer da. Ohne diese Unterscheidung wuerde ein Anzeige-Transcode
+        #     von zehn Sekunden den Worker dauerhaft aussperren.
+        if st.get("verweigert"):
+            _platz_ohne_fremde = (int(st.get("gesamt_mb") or 0)
+                                  - int(st.get("eigen_mb") or 0))
+            if _platz_ohne_fremde < noetig:
+                return (f"the card does not carry one compute thread "
+                        f"({st.get('budget_mb')} MiB budget against "
+                        f"{st.get('pflicht_mb')} MiB needed, and even with nothing "
+                        f"foreign on the card there would be "
+                        f"{max(0, _platz_ohne_fremde)} MiB) — not starting the "
+                        f"worker. Turn off live watchers or set worker_vram_mb")
+        t0 = time.monotonic()
+        gemeldet = False
+        while True:
+            frei, _alter, grund = self._karte_frei(st["kind"])
+            if grund == "nicht_messbar":
+                # Fail-closed ist bereits in der Leiter geschehen (ein Strang,
+                # Anker-Deckel). Hier gibt es nichts mehr zu warten: wer nicht
+                # messen kann, kann auch das Freiwerden nicht sehen.
+                return None
+            if frei >= noetig:
+                return None
+            eigen = int(st.get("eigen_mb") or 0)
+            if eigen and frei + eigen >= noetig:
+                return (f"the card is held by our OWN live watchers ({eigen} MiB "
+                        f"for {st.get('waechter_n')}) — not waiting, they will not "
+                        f"go away on their own. Reduce live watchers or set "
+                        f"worker_vram_mb")
+            if (time.monotonic() - t0) >= KARTE_WARTE_FRIST_S:
+                return (f"card memory did not free within "
+                        f"{int(KARTE_WARTE_FRIST_S)}s ({frei} MiB free, {noetig} "
+                        f"MiB needed) — this job is refused, the service keeps "
+                        f"running")
+            if not gemeldet:
+                gemeldet = True
+                self.log(f"{self.name} start: waiting for card memory ({frei} MiB "
+                         f"free, {noetig} MiB needed)")
+            puls()
+            time.sleep(1.0)
+
+    def _karte_frei(self, kind):
+        """Der freie Kartenspeicher, ueber die Rueckfrage (.531).
+        -> (mb, alter_s, grund); ohne Rueckfrage 'nicht gefragt' statt 0.
+
+        KEINE eigene Sonde: ein zweiter Merker haette einen zweiten Takt und
+        damit zwei Wahrheiten ueber dieselbe Karte."""
+        if not callable(self._karte):
+            return 0, 0.0, "nicht_gefragt"
+        try:
+            wert = self._karte(kind)
+        except Exception as e:                             # noqa: BLE001
+            self.log(f"{self.name}: card probe failed ({type(e).__name__}: {e})")
+            return 0, 0.0, "sonde_fehler"
+        if isinstance(wert, tuple) and len(wert) == 3:
+            return wert
+        # Eine Sonde, die nur eine Zahl liefert, ist eine aeltere Bauart — ihr
+        # Wert gilt, aber ohne Alter und ohne Grund.
+        try:
+            return int(wert or 0), 0.0, None
+        except (TypeError, ValueError):
+            return 0, 0.0, "unlesbar"
+
+    def _vram_start(self):
+        """Der Kartenhaushalt fuer den naechsten Start (.531) -> dict|None.
+
+        FRISCH GERECHNET, wie die Grenze: zwischen dem Bau dieses Objekts und dem
+        Start kann ein Live-Waechter dazugekommen sein, und der verkleinert den
+        Platz auf der Karte wirklich."""
+        v = self._vram() if callable(self._vram) else self._vram
+        return v if isinstance(v, dict) else None
+
+    def _start(self):
+        """Den Prozess starten. Aufrufer haelt `self.lock`."""
+        r, w = os.pipe()
+        # .536 B1b: DIE JOB-PIPE BEKOMMT EINEN EIGENEN DESKRIPTOR — sie liegt
+        # nicht mehr auf fd 0 des Worker-Prozesses. Spiegelbild der Antwort-Pipe
+        # darueber: der LESE-Teil `rj` reist ueber `pass_fds` mit und steht als
+        # `WORKER_JOB_FD` im env, der SCHREIB-Teil `wj` bleibt hier.
+        # WARUM STRUKTURELL UND NICHT NUR PER stdin=DEVNULL AN DEN KINDERN
+        # (B1a): solange die Jobs auf fd 0 liegen, ist jedes neue Kind, das
+        # jemand irgendwo im Worker ohne abgeklemmten stdin startet, wieder ein
+        # Leser der Job-Pipe. Zwei Worker-Tode am 16.09. (j26 08:02:56,
+        # j2325 12:26:10) hingen genau daran: ffmpeg erbte fd 0, pollte ihn alle
+        # 100 ms auf einen Tastendruck und frass die ersten Bytes einer gerade
+        # geschriebenen Job-Zeile; die verstuemmelte Zeile kam als ID-lose
+        # Antwort zurueck, der Job haengte bis zur Frist, der Job-Watchdog schoss
+        # den ganzen Prozess. Auf einem eigenen fd kann kein Kind die Pipe mehr
+        # erben — `os.pipe()` liefert nicht-vererbbare Deskriptoren, und
+        # `pass_fds` reicht GENAU diesen einen weiter.
+        rj, wj = os.pipe()
+        n = self._threads_zahl()
+        env = dict(os.environ, OV_DEVICE=self.cfg["ov_device"],
+                   FRIGATE_URL=self.cfg["frigate_url"],
+                   SCRATCH_DIR=os.path.join(self.cfg["data_dir"], "clips"),
+                   WORKER_ANTWORT_FD=str(w), WORKER_JOB_FD=str(rj))
+        # start_new_session: killpg muss auch ffmpeg-ENKEL treffen (W1-Lektion).
+        # Job- und Antwort-Pipe sind non-inheritable (CLOEXEC) und reisen nur
+        # ueber `pass_fds` -> nach einem execv von verifyd bekommt eine Waise EOF
+        # und endet. Die EOF-Semantik ist unveraendert, nur der Deskriptor ist
+        # ein anderer: NUR verifyd haelt das Schreibende, also endet der Worker
+        # weiterhin genau dann, wenn verifyd weg ist.
+        # .531: der Kartenhaushalt reist als START-ARGUMENT mit, nicht als Env.
+        # Der Arena-Deckel steht bei der Konstruktion der Arena fest und gilt fuer
+        # die ganze Prozess-Lebenszeit — er gehoert deshalb an den Start und
+        # nirgendwo sonst hin.
+        argv = [sys.executable, worker_dienst_pfad(), "--threads", str(n)]
+        self._vram_bitte_gebucht = False          # neuer Prozess, neue Bitte
+        _vram = self._vram_start() or {}
+        argv += vram_startargumente(_vram)
+        if _vram.get("deckel_mb"):
+            self.vram_deckel_gehalten = int(_vram["deckel_mb"])
+        try:
+            self.p = subprocess.Popen(
+                argv,
+                # .536 B1a/B1b: fd 0 des Worker-Prozesses ist /dev/null. Damit
+                # erbt KEIN Kind (ffmpeg, ffprobe, nvidia-smi) mehr etwas, das
+                # es lesen koennte — und die Jobs kommen ueber `WORKER_JOB_FD`.
+                stdin=subprocess.DEVNULL, pass_fds=(w, rj), env=env,
+                start_new_session=True, text=True, bufsize=1,
+                preexec_fn=_analyse_nice)   # Issue #21, s. ANALYSE_NICE
+        except BaseException:
+            # Scheitert der Start, gehoeren die BEIDEN neuen Deskriptoren
+            # geschlossen — sonst haelt der Dienst nach ein paar Fehlstarts
+            # Waisen, und das Schreibende einer Waise verhindert genau das EOF,
+            # auf dem die ganze Ende-Logik aufsetzt.
+            for _fd in (rj, wj):
+                try:
+                    os.close(_fd)
+                except OSError:
+                    pass
+            raise
+        os.close(w)
+        os.close(rj)                        # das Leseende gehoert dem Kind
+        # zeilengepuffert wie die frueheren `p.stdin` (bufsize=1): eine
+        # Job-Zeile geht als Ganzes hinaus, `_schreiben` flusht zusaetzlich.
+        self.tx = os.fdopen(wj, "w", buffering=1)
+        self.rx = os.fdopen(r, "r")
+        try:                                # bevorzugtes OOM-Opfer vor verifyd selbst
+            with open(f"/proc/{self.p.pid}/oom_score_adj", "w") as f:
+                f.write("500")
+        except Exception:                   # noqa: BLE001
+            pass
+        self._leser = threading.Thread(target=self._lesen, args=(self.p, self.rx),
+                                       name=f"{self.name}-antworten", daemon=True)
+        self._leser.start()
+        self._starts += 1
+        self.straenge_laufend = n                 # .532: womit DIESER Prozess laeuft
+        self.log(f"{self.name} started (pid {self.p.pid}, {n} compute thread(s), "
+                 f"start #{self._starts})")
+        # E3.4 (Konzept §4 Schicht 1): DER ERSTE Start ist der BOOT — dort laeuft die
+        # VOLLFORM im Exklusivfenster (Rechenprobe als Job, s.
+        # `Service.worker_dienst_starten`). JEDER WEITERE Start ist ein
+        # Betriebs-Neustart: kein Exklusivfenster, Live-Waechter und Nachbarjobs
+        # laufen weiter — und trotzdem darf der frische Prozess nicht stumm wieder
+        # Namen liefern („ein Neustart ist kein Ausweg", die belegte Im-Lauf-Klasse).
+        # Deshalb hier die KURZFORM: Bind-Check + Pruefbild, ohne Exklusivitaet.
+        # Der Rueckruf spannt einen eigenen Thread auf — dieser hier haelt das
+        # Absetz-Lock, aus dem heraus kein Job abgesetzt werden kann.
+        if self._starts > 1 and self._bei_neustart is not None:
+            try:
+                self._bei_neustart(f"worker restart #{self._starts} "
+                                   f"(last cause: {self.letzte_ursache or '?'})")
+            except Exception as e:                           # noqa: BLE001
+                self.log(f"{self.name}: could not schedule the short start proof "
+                         f"({type(e).__name__}: {e})")
+
+    def _lesen(self, p, rx):
+        """Antwortzeilen lesen und je JOB-ID zustellen — EIN Thread je Prozess.
+
+        Er ersetzt das `select` im Job-Thread des alten Workers: dort wartete der
+        Aufrufer selbst auf SEINE eine Antwort, hier kommen N Antworten in
+        beliebiger Reihenfolge. Am EOF (Prozess tot ODER geordnetes Ende) werden
+        ALLE noch wartenden Jobs abgesagt — ein stummer Warter waere sonst bis zu
+        seiner vollen Frist blind."""
+        try:
+            for zeile in rx:
+                zeile = zeile.strip()
+                if not zeile:
+                    continue
+                try:
+                    antwort = json.loads(zeile)
+                except Exception:                          # noqa: BLE001
+                    self.log(f"{self.name}: unreadable answer line ({zeile[:120]})")
+                    continue
+                self._buchen(antwort)
+                jid = str(antwort.get("id") or "")
+                with self._warter_lock:
+                    warter = self._warter.pop(jid, None)
+                if warter is None:
+                    if not jid:
+                        # .536 B1c2 — ANTWORT OHNE JOB-ID. Sie hat genau EINE
+                        # Ursache: drueben war die JOB-ZEILE unlesbar
+                        # (worker_dienst: json.loads scheitert -> {"id": None}).
+                        # Bis .535 wurde sie nur geloggt, und der Job, dessen
+                        # Zeile es war, wartete danach bis zu seiner vollen
+                        # Frist (gemessen 900,1 s bzw. 1200,1 s bei 0,2 s
+                        # Rechnung) — dann schoss der Job-Watchdog den GANZEN
+                        # Worker samt aller Nachbarjobs. Hier wird der Warter
+                        # deshalb SOFORT abgesagt: fremdverschuldet, also darf
+                        # der Aufrufer ohne Strafe wiederholen.
+                        # ZUORDNUNG: die zuletzt geschriebene Job-Id (gemerkt
+                        # unter dem Schreib-Lock). Die Verstuemmelung passiert
+                        # beim SCHREIBEN der Zeile, also ist das der Job, dem
+                        # sie gehoert. EHRLICHE GRENZE: treffen zwei Jobs in
+                        # derselben Mikrosekunde aufeinander, kann die Absage
+                        # den falschen treffen — beide enden dann in
+                        # „ungebucht neu absetzen", der Preis ist ein
+                        # wiederholter Job statt eines Prozess-Schusses.
+                        self.id_lose_antworten += 1
+                        _zj = self._zuletzt_geschrieben
+                        with self._warter_lock:
+                            _zw = self._warter.pop(_zj, None) if _zj else None
+                        if _zw is not None:
+                            self.log(f"{self.name}: ALARM — the worker could not "
+                                     f"read a job line (answer without an id, "
+                                     f"#{self.id_lose_antworten}); job {_zj} is "
+                                     f"cancelled right away instead of hanging "
+                                     f"until its deadline (not its own fault, "
+                                     f"the caller may repeat it)")
+                            _zw.antwort = {"id": _zj, "ok": False,
+                                           "fremdverschuldet": True,
+                                           "fehler": "job line corrupted in transit"}
+                            _zw.ereignis.set()
+                        else:
+                            self.log(f"{self.name}: ALARM — the worker could not "
+                                     f"read a job line (answer without an id, "
+                                     f"#{self.id_lose_antworten}), and no job is "
+                                     f"waiting that it could belong to "
+                                     f"(last written: {_zj or '?'})")
+                        continue
+                    # Antwort MIT id, aber ohne Warter: der Aufrufer ist in seine
+                    # Frist gelaufen und hat den Platz schon verlassen. Nicht
+                    # still schlucken — genau so sieht ein zu knapp gesetzter
+                    # Watchdog aus. KEINE Absage hier: eine spaete Antwort MIT id
+                    # ist kein IPC-Fehler, und auf einer langsamen Platte ist sie
+                    # der Normalfall.
+                    self.spaete_antworten += 1
+                    self.log(f"{self.name}: late answer for job {jid} "
+                             f"(nobody waiting any more, #{self.spaete_antworten})")
+                    continue
+                warter.antwort = antwort
+                warter.ereignis.set()
+        except Exception as e:                             # noqa: BLE001
+            self.log(f"{self.name}: answer pipe read failed "
+                     f"({type(e).__name__}: {e})")
+        finally:
+            self._pipe_zu(p)
+
+    def _pipe_zu(self, p):
+        """Die Antwort-Pipe ist zu: Ursache feststellen, alle Warter absagen."""
+        if p is not self.p:                 # Nachzuegler eines alten Prozesses
+            return
+        art, kurz = self._todesursache(p)
+        self.letzte_ursache = kurz or "answer pipe closed, process still alive"
+        # EIN Eintrag — das ist ein PHYSISCHER Tod (W2-B6). Wie viele Jobs er
+        # mitnimmt, steht gleich darunter in `job_tode`; `tode_24h` zaehlt bewusst
+        # nicht mit, sonst meldete /health nach einem Tod mit vier offenen Jobs
+        # „4 Tode in 24 h" und ein Betreiber suchte vier Ursachen statt einer.
+        self.tode.append((time.time(), self.letzte_ursache))
+        with self._warter_lock:
+            offen, self._warter = self._warter, {}
+        self.log(f"{self.name} {art} ({self.letzte_ursache}) — restart on next job"
+                 + (f"; {len(offen)} open job(s) booked as NOT THEIR OWN FAULT"
+                    if offen else ""))
+        for jid, warter in offen.items():
+            # FREMDVERSCHULDET: der Job hat nichts falsch gemacht, der Prozess ist
+            # unter ihm weggegangen (W2-B4/B5 — der Aufrufer darf ohne Strafe
+            # wiederholen).
+            # E3.3: die Todesursache reist als FELD mit (`todesursache`), nicht nur
+            # im Fliesstext, UND sie wird je Job-Id gebucht. Der Unterschied ist
+            # nicht kosmetisch: `letzte_ursache` ist eine PROZESS-Groesse und wird
+            # vom naechsten Tod ueberschrieben — wer hinterher fragt, woran Job j17
+            # gestorben ist, bekam bis hier die Ursache eines ganz anderen Todes.
+            warter.antwort = {"id": jid, "ok": False, "fremdverschuldet": True,
+                              "todesursache": art,
+                              "todesursache_text": self.letzte_ursache,
+                              "fehler": f"worker process gone: {self.letzte_ursache}"}
+            self.job_tode.append((time.time(), jid, None, self.letzte_ursache))
+            warter.ereignis.set()
+        self._stop(kill=True)
+
+    def _stop(self, kill=False):
+        """Prozess beenden und Deskriptoren schliessen. Ohne `kill` ueber den EOF
+        der JOB-PIPE: der Dienst fuehrt laufende Jobs zu Ende (seine eigene Frist)
+        und geht.
+
+        .536 B1b: das EOF kommt seitdem vom Schliessen von `self.tx` statt von
+        `self.p.stdin` — dieselbe Semantik, nur ein anderer Deskriptor. Der
+        Worker liest seine Jobs jetzt von `WORKER_JOB_FD`, sein fd 0 ist
+        /dev/null; ein `p.stdin` gibt es dort nicht mehr."""
+        p, rx, tx = self.p, self.rx, self.tx
+        self.p = self.rx = self.tx = None
+        if not p:
+            # Waise aus einem gescheiterten Start: das Schreibende gehoert
+            # trotzdem geschlossen, sonst bekaeme ein spaeter gestarteter
+            # Prozess sein EOF nie.
+            self._datei_zu(tx)
+            return
+        try:
+            if not kill:
+                tx = self._datei_zu(tx)      # EOF -> geordnetes Ende drueben
+                try:
+                    p.wait(timeout=30)       # der Dienst raeumt bis EOF_FRIST_S
+                    rx = self._datei_zu(rx)
+                    return
+                except subprocess.TimeoutExpired:
+                    pass
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except Exception:                # noqa: BLE001
+                pass
+            tx = self._datei_zu(tx)
+            p.wait()
+        except Exception:                    # noqa: BLE001
+            pass
+        finally:
+            self._datei_zu(rx)
+            self._datei_zu(tx)
+
+    @staticmethod
+    def _datei_zu(f):
+        """Einen Pipe-Griff schliessen, ohne dass ein Fehler die Beendigung
+        kippt -> None (damit der Aufrufer sein lokales Handle loswird und nicht
+        zweimal schliesst). .536 B1b: dieselbe Hand fuer BEIDE Pipes — ein
+        zweiter, fast gleicher Helfer waere eine zweite Wahrheit."""
+        if f:
+            try:
+                f.close()
+            except Exception:                # noqa: BLE001
+                pass
+        return None
+
+    def stop(self):
+        """Geordnet beenden. Beide Locks: das Exklusiv-Lock laesst eine laufende
+        Messung zu Ende kommen, das Absetz-Lock verhindert, dass gerade eine
+        Job-Zeile halb geschrieben ist, wenn die Job-Pipe zugeht."""
+        with self.lock, self._absetzen:
+            self._stop()
+
+    def kill_hart(self, grund="restart deadlock", quelle="verifyd", haenger=False):
+        """Den Prozess SOFORT schiessen, ohne auf `self.lock` zu warten -> True,
+        wenn ein Signal ging. Wortgleich zur Fassung von `WorkerProzess`: die
+        Antwort-Pipe bleibt offen, damit der Lese-Thread sein EOF bekommt und die
+        Warter dort abgesagt werden — statt hier nebenlaeufig aufzuraeumen.
+
+        `haenger=True` markiert den HAENGER-SCHUSS (Bauplan 2d). Das ist die
+        Fassung, die dieses Haus bauen kann, und der Grund gehoert hier hin statt in
+        eine Fussnote: EIN PYTHON-THREAD IST VON AUSSEN NICHT BEENDBAR. Es gibt kein
+        `thread.kill()`; `PyThreadState_SetAsyncExc` wirkt erst, wenn der Thread
+        wieder Bytecode ausfuehrt — ein Strang, der in einer C-Funktion der Engine
+        oder in einem Treiber-Aufruf haengt, kommt dort nie an. Die kleinste
+        SCHIESSBARE Einheit ist deshalb der PROZESS. Der gezielte Strang-Schuss
+        waere eine Scheinloesung; was hier stattdessen gebaut ist, ist die ehrliche
+        Kette: schiessen -> ALLE offenen Jobs als fremdverschuldet buchen (der
+        Lese-Thread am EOF, `_pipe_zu`) -> beim naechsten Job frisch starten ->
+        Kurzform der Start-Proben auf dem frischen Prozess (E3.4) -> und der
+        Vorgang wird GEZAEHLT, mit Grund, sichtbar in /health.
+
+        Gezaehlt wird hier und nicht am Kill-Ort, weil es zwei Schuetzen gibt (Job-
+        Watchdog und Platzwaechter) und ein dritter dazukommen kann; eine zweite
+        Zaehlstelle waere eine zweite Wahrheit."""
+        p = self.p
+        if p is None:
+            return False
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+            self._geschossen_grund = grund
+            self._geschossen_quelle = quelle
+            self._geschossen_pid = p.pid
+            if haenger:
+                self.haenger_schuesse += 1
+                self.schuesse.append((time.time(), quelle, grund))
+            self.log(f"{self.name} killed hard (pid {p.pid}) — {grund}"
+                     + (f" [hang shot #{self.haenger_schuesse}]" if haenger else ""))
+            return True
+        except Exception:                    # noqa: BLE001
+            return False
+
+    def _todesursache(self, p, wartefrist_s=1.0):
+        """WARUM ist der Prozess verstummt? -> (art, kurz). Reihenfolge und Faelle
+        wie in `WorkerProzess._todesursache` (dort steht die Herleitung, S1/A4/W4-1):
+        ZUERST der gemerkte eigene Schuss (an die PID gebunden), dann der
+        Rueckgabewert, dann „lebt noch, nur die Pipe ist zu"."""
+        grund = self._geschossen_grund
+        if grund and p is not None and p.pid == self._geschossen_pid:
+            wer = self._geschossen_quelle or "verifyd"
+            self._geschossen_grund = self._geschossen_quelle = None
+            self._geschossen_pid = None
+            return "died", f"killed by {wer} ({grund})"
+        if p is None:
+            return "died", "exit status unavailable"
+        try:
+            rc = p.wait(timeout=wartefrist_s)
+        except subprocess.TimeoutExpired:
+            return "lebt", ""
+        except Exception:                    # noqa: BLE001
+            return "died", "exit status unavailable"
+        if rc is None:
+            return "died", "exit status unavailable"
+        if rc < 0:
+            n = -rc
+            try:
+                name = signal.Signals(n).name
+            except Exception:                # noqa: BLE001
+                name = "unknown signal"
+            zusatz = (" — most likely the kernel out-of-memory killer"
+                      if n == int(signal.SIGKILL) else "")
+            return "died", f"signal {n} = {name}{zusatz}"
+        # Exit 0 ist hier der REGELFALL des geordneten Endes (Speicher-Zusage
+        # ueberschritten oder stdin-EOF) — kein Schaden, aber auch keine Luege:
+        # der Prozess ist weg und der naechste Job startet einen frischen.
+        return "exited", f"exit code {rc}"
+
+    def _buchen(self, antwort):
+        """Zaehler, die am PROZESS haengen, nicht am Job (Rueckfaelle, Ende-Wunsch)."""
+        if "frame_rueckfaelle" in antwort:
+            n, letzt = int(antwort["frame_rueckfaelle"] or 0), self.rueckfaelle["letzt"]
+            # n < letzt = der Prozess ist zwischendurch neu gestartet (Zaehler bei 0
+            # begonnen); dann zaehlt n ganz, sonst nur der Zuwachs.
+            self.rueckfaelle["summe"] += n if n < letzt else n - letzt
+            self.rueckfaelle["letzt"] = n
+        # E3.4: der Stand der zwei Selbstbeweis-Wachen reist mit JEDER Antwort
+        # (auch mit dem `ping`) und wird hier gemerkt — /health liest ihn, ohne
+        # selbst einen Job abzusetzen. Eine Anzeige, die dafuer rechnen laesst,
+        # veraendert das, was sie anzeigt.
+        if antwort.get("kompilat_probe"):
+            self.kompilat_probe = dict(antwort["kompilat_probe"])
+        if antwort.get("startprobe"):
+            self.startprobe = dict(antwort["startprobe"])
+        # .531: der Kartenhaushalt des Worker-Prozesses (Druck-Zaehler, Sonde,
+        # Deckel). Er reist mit JEDER Antwort, auch mit dem `ping` — /health liest
+        # ihn hier, ohne selbst einen Job abzusetzen.
+        # .534 (B3): der Container-Speicher dieses Prozesses. Er reist mit JEDER
+        # Antwort, auch mit dem `ping` — /health liest ihn hier, ohne selbst
+        # einen Job abzusetzen.
+        if antwort.get("ram"):
+            self.ram_stand = dict(antwort["ram"])
+        if antwort.get("vram"):
+            self.vram_stand = dict(antwort["vram"])
+            # .532: der Prozess sagt mit demselben Block, dass sein EIGENER
+            # Arena-Deckel zweimal getroffen hat. Dann bekommt der naechste
+            # Start einen Strang weniger — der Deckel selbst steht fuer die
+            # Lebenszeit eines Prozesses fest, die Zahl der Straenge nicht.
+            # Der Merker haelt bis zum naechsten DIENST-Start; er wird nicht
+            # bei jeder Antwort neu gesenkt (`straenge_deckel_druck` ist
+            # danach gesetzt und bleibt).
+            if self.vram_stand.get("straenge_senken") and not self.straenge_deckel_druck:
+                _jetzt = max(1, int(self.straenge_laufend
+                                    or self.vram_stand.get("straenge") or 1))
+                self.straenge_deckel_druck = max(1, _jetzt - 1)
+                self.log(f"{self.name}: straenge_druck: {_jetzt} -> "
+                         f"{self.straenge_deckel_druck}, reason: own arena cap "
+                         f"hit {self.vram_stand.get('deckel_treffer')}x "
+                         f"(cap {self.vram_stand.get('deckel_mb')} MiB) — the "
+                         f"next start of this worker runs with one thread less")
+        # .531 NEUSTART-BACKOFF: der Worker sagt mit dem Ende-SCHLUESSEL, WARUM er
+        # gehen will. `vram_druck` ist der einzige Grund, der einen Abstand
+        # braucht — er kommt aus einem Zustand, den ein Neustart nicht immer
+        # heilt (ein fremder Verbraucher bleibt liegen). Gebucht wird der Moment
+        # der BITTE, nicht der des Todes: das ist die vorsichtigere Seite.
+        if (antwort.get("ende_schluessel") == "vram_druck"
+                and not getattr(self, "_vram_bitte_gebucht", False)):
+            self._vram_bitte_gebucht = True       # je Prozess einmal, s. `_start`
+            self.vram_neustart_ts = time.time()
+            self.log(f"{self.name}: the worker asked to restart under card memory "
+                     f"pressure — the next pressure-driven cap reduction is held "
+                     f"back for {int(_gpubudget.DRUCK_NEUSTART_ABSTAND_S)}s")
+        # E3.3 (Bauplan 2e): die PROZESS-Summe der Rueckfall-Arten. Das Feld je JOB
+        # (`placement_fallback`) gehoert dem Ereignis und wird vom Aufrufer gelesen;
+        # diese Menge hier beantwortet die andere Frage — „ist dieser Worker je
+        # zurueckgefallen?" — und gehoert deshalb an den Prozess, nicht ans Ereignis.
+        if antwort.get("placement_fallback_prozess"):
+            self.rueckfall_arten = list(antwort["placement_fallback_prozess"])
+        # E3.3 (W2-B6): eine fremdverschuldete Absage, die DRUEBEN entstanden ist
+        # (Speicher-Abbruch, geordnetes Ende), traegt ihre Ursache als Feld. Sie
+        # wird je Job-Id gebucht wie die Absagen am EOF — sonst haetten zwei Wege
+        # fuer dieselbe Sache zwei verschiedene Buecher.
+        if antwort.get("fremdverschuldet") and antwort.get("todesursache"):
+            self.job_tode.append((time.time(), str(antwort.get("id") or "?"), None,
+                                  antwort.get("todesursache_text")
+                                  or antwort["todesursache"]))
+
+    # ---------------------------------------------------------- Zustand
+    def zustand(self):
+        """Wie `WorkerProzess.zustand` (dieselben Schluessel — /health, Systemseite
+        und `_worker_warm` lesen sie unveraendert), dazu die zwei Groessen, die es
+        vorher nicht geben konnte: wie viele Jobs GERADE offen sind und mit wie
+        vielen Rechenstraengen der Prozess laeuft."""
+        grenze, p = time.time() - 86400, self.p
+        letzte = self.tode[-1] if self.tode else None
+        with self._warter_lock:
+            offen = len(self._warter)
+        letzter_schuss = self.schuesse[-1] if self.schuesse else None
+        return {"laeuft": bool(p is not None and p.poll() is None),
+                # PROZESSE, nicht Jobs (W2-B6, s. `_pipe_zu`).
+                "tode_24h": sum(1 for ts, _u in self.tode if ts >= grenze),
+                "letzter_tod_ts": letzte[0] if letzte else None,
+                "letzte_ursache": letzte[1] if letzte else None,
+                "offene_jobs": offen, "threads": self._threads_zahl(),
+                # E3.3/E3.4 — die Groessen, die es im Pool-Modell nicht geben konnte
+                # und die ein Betreiber sonst nur aus 400 Logzeilen zusammensuchen
+                # muesste (Support-Faelle schicken /health):
+                #   jobs_fremdverschuldet_24h  wie viele JOBS ein Tod/Abbruch
+                #                              mitgenommen hat — die Zahl NEBEN
+                #                              tode_24h, nie statt ihrer.
+                #   haenger_schuesse           Bauplan 2d: wie oft ein haengender
+                #                              Rechenstrang den Prozess gekostet hat.
+                #   neustarts                  wie oft der Prozess gestartet wurde
+                #                              (1 = nur der Boot).
+                #   kompilat_probe/startprobe  der Selbstbeweis-Stand des Prozesses,
+                #                              samt „wache: aus" auf Engines ohne
+                #                              eigene Kompilat-Probe (CUDA).
+                "jobs_fremdverschuldet_24h": sum(1 for ts, *_r in self.job_tode
+                                                 if ts >= grenze),
+                "haenger_schuesse": self.haenger_schuesse,
+                # .536 B1c3 — DIE IPC-KLASSE, sichtbar statt nur im Log:
+                #   id_lose_antworten   eine Job-ZEILE kam drueben unlesbar an
+                #                       (Antwort ohne `id`). SOLL: 0. Jede Zahl
+                #                       darueber ist die Klasse, die am 16.09.
+                #                       zwei Worker-Prozesse gekostet hat.
+                #   spaete_antworten    Antwort MIT `id`, aber der Aufrufer war
+                #                       schon in seiner Frist — ein zu knapper
+                #                       Watchdog, kein IPC-Fehler.
+                "id_lose_antworten": self.id_lose_antworten,
+                "spaete_antworten": self.spaete_antworten,
+                # .536 B4.5 — Invariante I13: wie oft standen mehr Jobs offen,
+                # als der Prozess gleichzeitig rechnen kann (Straenge + 1).
+                # SOLL: 0. Jede Zahl darueber heisst, dass ein Job IM Worker
+                # wartet statt an der Vergabestelle — dort sieht ihn niemand,
+                # und er verbrennt seine Frist unbemerkt.
+                "offene_ueber_soll": self.offene_ueber_soll,
+                "letzter_schuss": ({"ts": letzter_schuss[0],
+                                    "quelle": letzter_schuss[1],
+                                    "grund": letzter_schuss[2]}
+                                   if letzter_schuss else None),
+                "neustarts": self._starts,
+                "kompilat_probe": dict(self.kompilat_probe),
+                "startprobe": dict(self.startprobe),
+                "placement_fallback_prozess": list(self.rueckfall_arten),
+                # .532: DER KARTENHAUSHALT DES PROZESSES, wie er ihn zuletzt
+                # gemeldet hat. Er wurde seit .531 in `_buchen` gemerkt, kam
+                # aber nie hier heraus — `_vram_zustand` las die Druck-Zaehler
+                # deshalb ins Leere und /health zeigte sie nie. Dazu der
+                # Druck-Deckel dieses Dienstes: wie viele Straenge der laufende
+                # Prozess hat und auf wie viele der naechste gedeckelt ist.
+                "vram": dict(self.vram_stand),
+                "ram": dict(self.ram_stand),
+                "straenge_laufend": int(self.straenge_laufend or 0),
+                "straenge_deckel_druck": int(self.straenge_deckel_druck or 0),
+                "grund": None}
+
+    # ---------------------------------------------------------- Jobs
+    def job(self, job, timeout_s, info=None, puls=None):
+        """Einen Job absetzen und auf SEINE Antwort warten.
+
+        None heisst wie bisher „kein Ergebnis" — der Aufrufer wiederholt oder bucht.
+        Drei Faelle, die der Rueckweg `info` unterscheidet (der Aufrufer soll nie
+        raten muessen, das ist die K1-Regel):
+          info['fremdverschuldet']  der Prozess ging unter dem Job weg (Tod,
+                                    geordnetes Ende, Speicher-Abbruch) — der Job
+                                    darf ohne Strafe wiederholt werden.
+          info['frist']             die Frist des Jobs ist abgelaufen.
+          sonst                     Absetzen selbst gescheitert (kein Prozess).
+        `info['wartezeit_s']` ist die Zeit, die der Job IM DIENST in der Schlange
+        stand (Antwortfeld `warte_s`) plus die Zeit am Lebenszyklus-Lock: sie ist
+        keine Analysezeit und wird beim Aufrufer aus `dauer_s` herausgerechnet (W7).
+        """
+        t_warte = time.monotonic()
+
+        def _puls():
+            """A2: ein Lebenszeichen darf NIE einen Job kosten."""
+            if puls is None:
+                return
+            try:
+                puls()
+            except Exception:                              # noqa: BLE001
+                pass
+
+        if info is not None:
+            info["wartezeit_s"] = 0.0
+        job = dict(job)
+        # Die Politik-Grenze des Prozesses reist als Job-Feld mit. Sie ist seit
+        # E2d ein anderes MASS als frueher (anon+shmem statt VmRSS), deshalb nimmt
+        # die Wache drueben `fussabdruck_max_mb` — und seit E3.2 (14.09.) liefert
+        # die Speicher-Formel diesen Wert wirklich (E3.1-Rest R2 geschlossen).
+        # `rss_max_mb` wandert unveraendert weiter mit: es ist die Grenze der
+        # IN-JOB-Wache von worker.py (anderes Mass, anderer Ort, Rangfolge
+        # `_job_rss_grenze`) und nicht dasselbe Ding.
+        # Bleibt die Formel stumm (Backend ohne Messung, kein lesbares Limit),
+        # wird KEINE Zahl erfunden: das Feld fehlt dann, die Wache sagt drueben
+        # laut, dass nur die cgroup-Regel greift. Lieber eine laute Luecke als
+        # eine stille — und lieber keine Grenze als eine falsch geeichte.
+        if job.get("typ") != "ping":
+            job.setdefault("rss_max_mb",
+                           int(self.cfg.get("worker_rss_max_mb") or 4096))
+            _fg = self._grenze_zahl()
+            if _fg:
+                job.setdefault("fussabdruck_max_mb", _fg)
+            # .534 (B3): der GRUNDLAST-Posten derselben Rechnung. Der Prozess
+            # drueben misst das ganze Speicher-Konto des Containers; ohne den
+            # Posten, der nicht ihm gehoert, wird aus seinem Maximum kein
+            # Vorschlag je Rechenstrang. Fehlt er (Intel-Zweig, kein
+            # Container-Mass), fehlt das Feld — und drueben der Vorschlag. Keine
+            # erfundene Zahl.
+            _gl = self._grundlast_zahl()
+            if _gl:
+                job.setdefault("fussabdruck_grundlast_mb", _gl)
+            # E3.3 (W2-B29): derselbe Weg fuer den GEOMETRIE-Deckel. Er kommt aus
+            # derselben Speicher-Formel; bleibt sie stumm (Backend ohne Messung,
+            # kein lesbares Limit), fehlt das Feld und der Prozess waechst wie bis
+            # E2d — laut, nicht still. Keine erfundene Zahl.
+            _gm = self._geometrien_zahl()
+            if _gm:
+                job.setdefault("geometrien_max", _gm)
+            # .535: HIER STANDEN die Job-Felder der Preis-Messung
+            # (`eich_schluessel`, `eich_fenster`, `eich_waechter_n`,
+            # `vram_grundlinie_mb`). Der Worker misst seine Preise nicht
+            # mehr nach — sie stehen in der Messtabelle.
+            # .287 [clipdbg]: der EINE debug-Schalter als Job-Feld (Deckungs-Vertrag,
+            # keine zweite Quelle) — der Dienst armiert damit core.frames je Job.
+            job.setdefault("clip_dbg", bool(self.cfg.get("debug")))
+        # Die Frist des Jobs reist mit: drueben misst der Frist-Waechter daran (er
+        # macht eine gerissene Frist laut und zaehlt sie). Ohne das Feld gilt dort
+        # eine Vorgabe, die mit der Politik dieses Dienstes nichts zu tun hat.
+        job.setdefault("frist_s", float(timeout_s))
+        warter = _JobWarter()
+        # .531 KARTEN-CHECK — AUSSERHALB DES ABSETZ-LOCKS, und genau das ist der
+        # Punkt (Blocker WL3-T3): wartet der Dienst INNERHALB von `self._absetzen`
+        # auf freien Kartenspeicher, steht jeder andere Job dahinter still, `_puls()`
+        # laeuft dort nicht, und der Platzwaechter zieht nach PLATZ_STUMM_FRIST_S
+        # die Plaetze ein. Hier draussen kostet ein Warten nur DIESEN Job.
+        if job.get("typ") != "ping":
+            _absage = self._karte_bereit(job, _puls)
+            if _absage is not None:
+                if info is not None:
+                    info["wartezeit_s"] = round(time.monotonic() - t_warte, 3)
+                    info["fremdverschuldet"] = True
+                self.letzte_ursache = _absage
+                self.log(f"{self.name}: job ({job.get('typ')}) refused before "
+                         f"dispatch — {_absage}")
+                return None
+        # Prozess sicherstellen + Job-Id vergeben: UNTER dem Absetz-Lock, damit
+        # zwei gleichzeitige erste Jobs nicht zwei Prozesse starten. NICHT unter
+        # `self.lock` — s. dort.
+        _puls()
+        with self._absetzen:
+            try:
+                if self.p is None or self.p.poll() is not None:
+                    self._stop(kill=True)      # Reste (Pipe/Zombie) wegraeumen
+                    self._start()
+                self._nr += 1
+                jid = f"j{self._nr}"
+                job["id"] = jid
+                with self._warter_lock:
+                    self._warter[jid] = warter
+                self._schreiben(job)
+                self._i13_wache(jid, job)
+            except Exception as e:                         # noqa: BLE001
+                with self._warter_lock:
+                    self._warter.pop(job.get("id") or "", None)
+                self.log(f"{self.name} error while dispatching "
+                         f"{job.get('typ')}: {type(e).__name__}: {e} — killing {self.name}")
+                self._stop(kill=True)
+                if info is not None:
+                    info["wartezeit_s"] = round(time.monotonic() - t_warte, 3)
+                return None
+        _puls()
+        # P1: in Scheiben warten, damit dieser Thread sein Lebenszeichen setzt. Der
+        # Gesamt-Deckel bleibt exakt `timeout_s`.
+        frist = time.monotonic() + float(timeout_s)
+        while True:
+            rest = frist - time.monotonic()
+            if rest <= 0:
+                break
+            if warter.ereignis.wait(min(max(0.01, PULS_TAKT_S), rest)):
+                break
+            _puls()
+        if not warter.ereignis.is_set():
+            with self._warter_lock:
+                self._warter.pop(jid, None)
+            if info is not None:
+                info["wartezeit_s"] = round(time.monotonic() - t_warte, 3)
+                info["frist"] = True
+            # DER HAENGER-SCHUSS (Bauplan 2d). EIN Rechenstrang haengt — schiessbar
+            # ist nur der ganze Prozess; die Begruendung steht vollstaendig in
+            # `kill_hart` (ein Python-Thread ist von aussen nicht beendbar). Die
+            # Mitbetroffenen sagt der Lese-Thread am EOF als fremdverschuldet ab,
+            # der frische Prozess laeuft beim naechsten Job an und legt dabei seine
+            # Kurzform der Start-Proben vor (E3.4). Gezaehlt wird der Vorgang als
+            # `haenger_schuesse` — sichtbar in /health, mit Grund.
+            _mit = max(0, self.zustand().get("offene_jobs", 0))
+            self.log(f"{self.name} job {jid} ({job.get('typ')}) missed its "
+                     f"deadline ({timeout_s}s) — killing the worker process "
+                     f"(a hung compute thread cannot be shot on its own; "
+                     f"{_mit} other job(s) go with it and are booked as not "
+                     f"their own fault)")
+            self.letzte_ursache = f"killed after job {jid} missed its {timeout_s}s deadline"
+            self.kill_hart(grund=f"job {jid} ({job.get('typ')}) deadline {timeout_s}s",
+                           quelle="the job watchdog", haenger=True)
+            return None
+        antwort = warter.antwort or {}
+        warte_s = float(antwort.get("warte_s") or 0.0)
+        if info is not None:
+            info["wartezeit_s"] = round(warte_s, 3)
+        if antwort.get("fremdverschuldet"):
+            # Der Prozess ging unter dem Job weg (Tod, Speicher-Abbruch oder
+            # geordnetes Ende). Das ist KEIN Analysefehler — der Aufrufer bekommt
+            # `None` und damit denselben Rueckweg wie beim alten Worker-Tod, aber
+            # `info` sagt, dass niemand dafuer bestraft werden darf.
+            if info is not None:
+                info["fremdverschuldet"] = True
+            self.letzte_ursache = (antwort.get("fehler")
+                                   or "worker process gone (no fault of this job)")
+            self.log(f"{self.name}: job {jid} ({job.get('typ')}) booked as "
+                     f"NOT ITS OWN FAULT — {self.letzte_ursache}")
+            return None
+        return antwort
+
+    def _i13_wache(self, jid, job):
+        """.536 B4.5 — INVARIANTE I13: „offene Jobs <= Rechenstraenge + 1".
+
+        DIE GEGENPROBE ZUM GANZEN VERGABE-ZUG. Nach B4 soll kein Job mehr IM
+        WORKER warten: die Vergabestelle laesst hoechstens so viele Jobs los,
+        wie der Prozess gleichzeitig rechnen kann — N Rechenstraenge fuer
+        `analyze` plus EINEN Hintergrund-Strang fuer alles andere
+        (worker_dienst.py:2647/3503). Das „+1" ist genau dieser
+        Hintergrund-Strang und keine Nachlaessigkeit. Steht die Zahl darueber,
+        verbrennt irgendwo ein Job seine Frist in einer Schlange, in die
+        niemand hineinsieht — die Falle, die am 16.09. die K Ernte-Abholer
+        gestellt haben.
+
+        LAUT, ABER GEDROSSELT auf eine Zeile je Minute: die Frage wird bei JEDEM
+        Absetzen gestellt, und eine Zeile je Job waere eine Flut, in der die
+        Meldung selbst untergeht. Der ZAEHLER (`offene_ueber_soll` in
+        `zustand()`, also /health) zaehlt dagegen jeden Fall — gedrosselt wird
+        die Zeile, nie die Messung.
+
+        DIE EINE LEGITIME URSACHE, ausdruecklich benannt statt versteckt: der
+        PLATZWAECHTER-EINZUG. Er gibt einen stummen Platz frei, waehrend der
+        alte Job im Worker noch offen steht, und der neue Halter setzt sofort
+        einen zweiten ab (dieselbe Folge, die auch `_sammle_fahren` im Kommentar
+        traegt). Diese Wache unterdrueckt den Fall NICHT — sie kann ihn von
+        aussen nicht von einem echten Rueckstau unterscheiden, und eine
+        Unterdrueckung, die raet, waere schlimmer als eine Zeile zuviel. Wer die
+        Zeile sieht, prueft deshalb zuerst, ob kurz zuvor ein Platz eingezogen
+        wurde („reclaimed after going silent").
+
+        DARF NIE EINE AUSNAHME WERFEN: sie laeuft innerhalb der Absetz-Klammer,
+        und dort endet jede Ausnahme im Schuss auf den Worker-Prozess. Eine
+        Wache, die den Betrieb kostet, ist keine."""
+        try:
+            with self._warter_lock:
+                offen = len(self._warter)
+            straenge = int(self.straenge_laufend or 0)
+            if straenge <= 0:
+                return                      # noch keine Auskunft -> nicht raten
+            soll = straenge + 1
+            if offen <= soll:
+                return
+            self.offene_ueber_soll += 1
+            jetzt = time.monotonic()
+            if jetzt - self._i13_log_ts < 60:
+                return
+            self._i13_log_ts = jetzt
+            self.log(f"{self.name}: {offen} jobs open, but this process computes "
+                     f"at most {soll} at a time ({straenge} compute thread(s) + 1 "
+                     f"background thread) — a job is now waiting INSIDE the "
+                     f"worker instead of at the slot desk and burns its deadline "
+                     f"unseen (job {jid}, typ={job.get('typ')}; seen "
+                     f"{self.offene_ueber_soll}x). The one legitimate cause is a "
+                     f"slot reclaimed after going silent — check the log above "
+                     f"for 'reclaimed after going silent'")
+        except Exception:                                  # noqa: BLE001
+            pass
+
+    def _schreiben(self, job):
+        """EINE Job-Zeile in die JOB-PIPE. Gesperrt, weil N Threads gleichzeitig
+        absetzen — eine halb geschriebene Zeile brachte den Leser drueben aus dem
+        Tritt.
+
+        .536 B1b: der Weg ist `self.tx` (eigener Deskriptor, `WORKER_JOB_FD`
+        drueben) statt `self.p.stdin`. .536 B1c2: unter DEMSELBEN Lock wird die
+        Job-Id gemerkt — kommt gleich darauf eine Antwort OHNE `id` zurueck, war
+        genau diese Zeile die unlesbare, und ihr Warter wird sofort abgesagt
+        statt bis zur Frist zu haengen. Gemerkt wird VOR dem Schreiben: die
+        Verstuemmelung passiert waehrenddessen."""
+        with self._schreib:
+            tx = self.tx
+            if tx is None:
+                raise RuntimeError("the job pipe is gone (worker not started)")
+            self._zuletzt_geschrieben = str(job.get("id") or "") or None
+            tx.write(json.dumps(job) + "\n")
+            tx.flush()
 
 
 # ------------------------------------------------------------------ Deckungs-Logik (§6 Konzept)
@@ -3160,15 +4941,100 @@ class Analyseplaetze:
     # wartet. Die RANGFOLGE seit .510/J18 lautet `interaktiv` > `analyse` > `bg`,
     # `ernte` haelt hoechstens N-1 — die Regeln dazu stehen in
     # `_ueber_der_latte` und `wartende_andere`, mehr nicht.
-    ARTEN = ("analyse", "ernte", "bg", "interaktiv")
+    # .536 B4.2 bringt die FUENFTE Klasse `live`: das Koerper-Urteil, das eine
+    # laufende Analyse selbst anstoesst (`personwork_job_live`). Es hatte bis
+    # .535 ueberhaupt keinen Platz und nur EINE Reihenfolge-Regel, die nirgends
+    # sichtbar war (`_pw_live_offen`, live vor batch) — die unsichtbare dritte
+    # Vergabe-Ebene. Eigener Rang und nicht `interaktiv`, weil dahinter kein
+    # Mensch wartet, sondern eine Automatik; eigener Rang und nicht `bg`, weil
+    # der Auftrag „live vor batch" sonst verloren ginge.
+    ARTEN = ("analyse", "ernte", "bg", "interaktiv", "live")
 
-    def __init__(self, kapazitaet=1, log=None, vorschlag=None):
+    # .536 B4.1 — DIE EINE MENGE DER HINTERGRUND-KLASSEN.
+    # Ab .536 gilt „Analyse-Platz = Rechenstrang" PER BAUART: einen
+    # Analyse-Platz nimmt ausschliesslich `analyse`, jede andere Klasse sitzt
+    # auf dem bg-Konto (Kapazitaet 1 = der EINE Hintergrund-Strang des Workers,
+    # worker_dienst.py:2647/3503). Vorher stand die Frage als Literal
+    # `art == "bg"` an DREI Stellen (Erwerb in `platz`, Rueckgabe in
+    # `einziehen`, Zaehlung in `zustand`) — genau der Streu-Fehler, gegen den
+    # qs_ebenen.md geschrieben ist: eine vierte Stelle haette still eine
+    # andere Antwort gegeben. Abgeleitet aus `ARTEN`, damit eine neue Klasse
+    # automatisch auf dem richtigen Konto landet und nicht vergessen wird.
+    HINTERGRUND_ARTEN = tuple(a for a in ARTEN if a != "analyse")
+
+    # .536 B4.2 — DIE VERGABEREGEL AM bg-KONTO (Betreiber-Entscheid 16.09.,
+    # Punkt 4: „Klick zuerst, sonst Wechsel Ernte/Sammeln je Job"):
+    #
+    #     interaktiv   (Klick — ein Mensch wartet)                immer zuerst
+    #     live         (Koerper-Urteil aus der laufenden Analyse)  danach
+    #     ernte <-> bg (Wechsel, EIN Zeiger, leere Seite wird uebersprungen)
+    #
+    # `BG_RANG` sind die FESTEN Raenge davor, `BG_WECHSEL` die zwei Seiten, die
+    # sich abwechseln. Beide sind aus `ARTEN` abgeleitet zu pruefen (s. die
+    # Zusicherung unter der Klasse) — nicht, weil es huebsch waere, sondern
+    # weil eine sechste Klasse sonst still durch jedes Raster fiele.
+    BG_RANG = ("interaktiv", "live")
+    BG_WECHSEL = ("ernte", "bg")
+
+    # .534 (B8): die Nummern des getrennten bg-Platzes. Sie liegen bewusst WEIT
+    # ueber denen der Analyse-Plaetze, damit sie in Log, /health und
+    # Platzwaechter auf einen Blick als das zu erkennen sind, was sie sind — und
+    # damit ein `kapazitaet_setzen` der Analyse-Seite sie nie treffen kann.
+    BG_NR_BASIS = 900
+
+    def __init__(self, kapazitaet=1, log=None, vorschlag=None, bg_getrennt=False,
+                 bg_kapazitaet=1, override=None):
         self.kapazitaet = max(1, int(kapazitaet or 1))
         # P4: was auf DIESER Hardware gemessen am schnellsten war. Nur Auskunft —
         # die Oberflaeche (P5) belegt damit ihren Regler vor, der Dienst regelt nichts
         # von selbst nach.
         self.vorschlag = int(vorschlag or self.kapazitaet)
         self._sem = threading.BoundedSemaphore(self.kapazitaet)
+        # --- .534 (B8) DER EIGENE BG-PLATZ -----------------------------------
+        # BEFUND (Lasttest 15.09.): ein `bg:sammle` hielt 468 s einen der ZWEI
+        # Analyse-Plaetze, waehrend auf dem anderen eine Analyse lief — acht
+        # Minuten lang rechnete also nur EIN Strang Ereignisse, obwohl der
+        # Worker den Hintergrund-Job ohnehin in seinem GETRENNTEN bg-Strang
+        # rechnet. Der Platz war eine Buchhaltungs-Groesse, die eine
+        # Rechen-Groesse blockierte.
+        # Seitdem hat `bg` sein eigenes kleines Konto: eigenes Semaphor, eigene
+        # Nummern.
+        # .536 B2: die ZULASSUNGS-Regel („bg nur bei Leerlauf",
+        # `_ueber_der_latte`) blieb in .534 bewusst stehen — und genau das war
+        # der Feldschaden: 46 x „no free analysis slot within 600s" an EINEM
+        # Vormittag, weil es bei 1600-2700 wartenden Ereignissen keinen Leerlauf
+        # gab. Sie gilt deshalb nur noch, wenn `bg_platz_getrennt` AUS ist (dann
+        # sitzt `bg` wieder auf den Analyse-Plaetzen und die Regel schuetzt eine
+        # Rechen-Groesse). Mit eigenem Konto bekommt `bg` seinen Platz sofort;
+        # er nimmt der Analyse keinen weg, und mehr als EINEN Hintergrund-Job
+        # kann der Worker ohnehin nicht gleichzeitig rechnen (Kapazitaet 1 =
+        # sein einer Hintergrund-Strang).
+        self.bg_getrennt = bool(bg_getrennt)
+        self.bg_kapazitaet = max(1, int(bg_kapazitaet or 1))
+        self._sem_bg = threading.BoundedSemaphore(self.bg_kapazitaet)
+        self._frei_nummern_bg = list(range(self.BG_NR_BASIS + 1,
+                                           self.BG_NR_BASIS + 1
+                                           + self.bg_kapazitaet))
+        # .536 B5 (R7): DIE PLAETZE SIND KEINE EIGENE EINSTELLUNG MEHR.
+        #
+        # Bis .535 stand hier der Config-Wert `analyse_plaetze`, und die
+        # Strangzahl DECKELTE ihn. Damit gab es zwei Regler fuer dieselbe Sache,
+        # und der Werkswert 1 hielt jede Anlage still bei EINER gleichzeitigen
+        # Analyse (Inhaber 16.09.: „eigentlich muessten die Analyseplaetze immer
+        # identisch sein mit der Anzahl der Threads"). Seit .536 SETZT
+        # `Service._plaetze_an_straenge` die Kapazitaet auf die Strangzahl; was
+        # hier steht, ist nur der Startwert bis zu dieser ersten Bindung.
+        #
+        # `config_kapazitaet` ist seitdem die OVERRIDE-AUSKUNFT: None heisst
+        # „kein Override gesetzt" (der Normalfall), eine Zahl ist die
+        # Experten-Drossel aus `analyse_plaetze` — und die gilt nur, wenn sie
+        # KLEINER ist als die Strangzahl (Betreiber-Entscheid 3: die Automatik
+        # gewinnt, ein Override nur nach unten).
+        self.config_kapazitaet = (int(override) if override else None)
+        # „start" = noch nicht an die Straenge gebunden. Die beiden anderen
+        # Werte setzt `_plaetze_an_straenge`: „straenge" (der Normalfall) und
+        # „override" (die Experten-Drossel zieht).
+        self.quelle = "start"
         self._mutex = threading.Lock()
         self._belegt = {}          # platz_nr -> {"art", "etikett", "seit", "puls", "marke"}
         self._frei_nummern = list(range(1, self.kapazitaet + 1))
@@ -3182,12 +5048,77 @@ class Analyseplaetze:
         # deshalb thread-lokal mit, statt durch jede Signatur gefaedelt zu werden.
         self._warte_tls = threading.local()
         self._fair_log_ts = 0.0
+        # .536 B4.2: DER EINE ZEIGER des Wechsels `ernte` <-> `bg`. Bewusst EINE
+        # Groesse fuer die ganze Vergabestelle und nicht eine je Warter — sonst
+        # entschiede die Weck-Reihenfolge des Semaphors, welche Seite drankommt,
+        # und die Regel waere eine Behauptung. Er rueckt beim ERWERB des Kontos
+        # (nicht beim Anmelden, nicht beim Freigeben) und immer unter
+        # `self._mutex`, in demselben Block, in dem die Belegung eingetragen
+        # wird. Startwert: die Ernte — irgendeine Seite muss anfangen, und mit
+        # ihr faengt der Lernlauf an, der die meiste Arbeit mitbringt.
+        self._bg_zeiger = self.BG_WECHSEL[0]
+        # .536 B4.5: die WIEDERHOLUNGS-BREMSE der Zuweisungs-Zeile. Der Bauplan
+        # ging davon aus, das bg-Konto werde „hoechstens einmal je Job"
+        # vergeben — das stimmt fuer alle Kunden AUSSER der Wanduhr: die nimmt
+        # das Konto im 2-s-Takt, prueft unter ihm, ob Live ruhig ist, und gibt
+        # es sofort zurueck (`_roundtrip_seriell`). Ihre Zeile waere wortgleich
+        # und minutenlang die einzige im Log. Unterdrueckt wird deshalb NUR die
+        # WORTGLEICHE Wiederholung (gleiche Klasse, gleiches Etikett, gleicher
+        # Grund) innerhalb einer Minute; die naechste davon abweichende Vergabe
+        # steht sofort und sagt, wie viele Wiederholungen davor ausgelassen
+        # wurden. Der Wechsel Ernte/Sammeln ist damit vollstaendig belegt — er
+        # wechselt ja gerade, also weicht jede Zeile von der vorigen ab.
+        # Ohne Lock: das Konto hat Kapazitaet 1, es schreibt immer nur der
+        # Halter, der es gerade bekommen hat.
+        self._bg_log_letzt = None
+        self._bg_log_ts = 0.0
+        self._bg_log_aus = 0
         # Die Analyse meldet sich NICHT an: ihre Nachfrage steht in der
         # Ereignis-Warteschlange, nicht in einem Thread, der auf einen Platz wartet
         # (der Abholer hat sein Ereignis schon gezogen, wenn er hier ankommt). Der
         # Dienst setzt hier `lambda: rueckstau_zahlen()[0] > 0`; ohne gesetzte
         # Funktion (Proben, Alt-Fixtures) wartet die Analyse nie.
         self.wartend_fn_analyse = None
+
+    def kapazitaet_setzen(self, neu, grund=""):
+        """Die Kapazitaet neu setzen (.532). -> True, wenn sie wirklich steht.
+
+        NUR BEI LEERER VERGABESTELLE: ein `BoundedSemaphore` laesst sich nicht
+        vergroessern oder verkleinern, es wird ERSETZT — und wer das tut,
+        waehrend ein Platz belegt ist, gibt beim `release()` des laufenden Jobs
+        ein Ticket auf ein Objekt zurueck, das die Freigabe nie erwartet hat
+        (ValueError) oder verschenkt einen Platz. Deshalb: ist etwas belegt
+        oder wartet jemand, bleibt alles wie es ist und der Aufrufer versucht
+        es beim naechsten Mal wieder. Das ist die ehrliche Grenze dieses
+        Weges — die Kapazitaet folgt der Strangzahl beim naechsten Start mit
+        ruhiger Vergabestelle, nie mitten im Lauf."""
+        neu = max(1, int(neu or 1))
+        with self._mutex:
+            if neu == self.kapazitaet:
+                return True
+            if self._belegt or any(self._wartend.values()):
+                return False
+            self.kapazitaet = neu
+            self._sem = threading.BoundedSemaphore(neu)
+            self._frei_nummern = list(range(1, neu + 1))
+        self.log(f"analysis slots: {neu}" + (f" ({grund})" if grund else ""))
+        return True
+
+    def _auf_bg_konto(self, art):
+        """.536 B4.1: sitzt eine Belegung dieser Klasse auf dem bg-Konto? -> bool.
+
+        DIE EINE Antwort fuer alle drei Stellen, an denen sie gebraucht wird:
+        beim ERWERB (`platz`), bei der gewaltsamen RUECKGABE (`einziehen`) und
+        bei der ZAEHLUNG (`zustand`). Laufen sie auseinander, gibt ein Halter
+        das falsche Semaphor zurueck — mit den zwei Folgen, die im Kommentar von
+        `einziehen` stehen (haengendes `_sem_bg` oder stille Ueberbuchung der
+        Analyse). Deshalb genau hier und nirgends sonst.
+
+        `bg_platz_getrennt = 0` (die .533-Rueckfahrkarte) faellt auf das alte
+        Verhalten zurueck: dann gibt es kein eigenes Konto, ALLE Klassen sitzen
+        wieder auf den Analyse-Plaetzen, und die alten Regeln greifen woertlich
+        weiter (s. `_fairness_blockiert`)."""
+        return bool(self.bg_getrennt and art in self.HINTERGRUND_ARTEN)
 
     @staticmethod
     def _label(d):
@@ -3358,20 +5289,23 @@ class Analyseplaetze:
                       der vierte Platz gehoerte per Regel der bg-Klasse, bei
                       2 815 wartenden Ereignissen und 89 min aeltestem Eintrag.
                       Das war die falsche Prioritaet, und sie ist weg.
-          bg          bekommt einen Platz NUR bei LEERLAUF: die Latte ist fuer
-                      sie immer erreicht, `_fairness_blockiert` fragt danach nur
-                      noch, ob sonst jemand wartet. Sammeln und Wanduhr sind
-                      Auffangnetze ohne Frist; sie duerfen keinem Ereignis und
-                      keinem Klick im Weg stehen. GENAU GENOMMEN heisst „sonst
+          bg          .536 B2: NIE ZURUECKGEHALTEN, solange `bg` sein eigenes
+                      Konto hat (`bg_platz_getrennt`, Werkseinstellung seit
+                      .534). Dort ist der Platz keine Rechen-Groesse der Analyse
+                      mehr, sondern die Buchung des EINEN Hintergrund-Strangs des
+                      Workers — es gibt nichts zu daempfen, und die Analyse
+                      verliert dadurch null Plaetze. In der
+                      Rueckfahrkarten-Stellung `bg_platz_getrennt = 0` sitzt `bg`
+                      wieder auf den Analyse-Plaetzen; dann gilt woertlich die
+                      alte Regel: Platz NUR bei LEERLAUF, die Latte ist fuer sie
+                      immer erreicht, `_fairness_blockiert` fragt danach nur
+                      noch, ob sonst jemand wartet. GENAU GENOMMEN heisst „sonst
                       jemand" das, was `wartende_andere` zurueckgibt: eine
                       wartende Analyse und jedes `interaktiv` zaehlen IMMER, eine
                       wartende `ernte` nur, wenn sie sich FRUEHER angemeldet hat
-                      (FIFO, C2). Das ist Absicht und keine Aufweichung: gegen
-                      eine dauerangemeldete Lernlauf-Ernte (K Abholer) kaeme das
-                      06:00-Netz sonst nie mehr dran — verhungern statt
-                      zuruecktreten. Der gemessene J17-Fall (bg nahm den vierten
+                      (FIFO, C2). Der gemessene J17-Fall (bg nahm den vierten
                       Platz bei 2 815 wartenden Ereignissen) liegt auf der
-                      Analyse-Achse und faellt damit.
+                      Analyse-Achse und faellt schon mit dem eigenen Konto.
           ernte       behaelt die N-1-Regel aus C2 (.505). Sie ist die einzige
                       Klasse mit K parallelen Abholern (P6) und wuerde sonst bei
                       Rueckstand alle Plaetze belegen — genau das, was der
@@ -3381,15 +5315,239 @@ class Analyseplaetze:
 
         Ehrliche Folge, die der Betreiber kennen muss: bei N = 1 haelt ein Klick
         den Ereignis-Strom fuer die Dauer seines Jobs an, ab N = 2 faellt der
-        garantierte Analyse-Platz fuer diese Dauer auf 0."""
+        garantierte Analyse-Platz fuer diese Dauer auf 0.
+
+        .536 B4.2 — GELTUNGSBEREICH: diese Rechnung wird nur noch in der
+        RUECKFAHRKARTEN-Stellung (`bg_platz_getrennt = 0`) gerufen. Steht der
+        Schalter wie ab Werk auf 1, sitzt jede Nicht-Analyse-Klasse auf dem
+        bg-Konto und folgt dort dem Rang (`_bg_rang_grund`); `analyse` hat die
+        Plaetze dann allein und hat ohnehin keine Latte. Die N-1-Latte der
+        Ernte BLEIBT hier trotzdem stehen und wird nicht geloescht: in der
+        Rueckfahrkarten-Stellung sitzt die Ernte wieder auf den
+        Analyse-Plaetzen, und ohne die Latte naehme sie dort bei Rueckstand
+        alle N — genau das, was der Betreiber-Auftrag „nicht ein Weg nimmt
+        alles" verbietet (Bauplan §4.1: „mit 0 ... muesste die N-1-Latte wieder
+        greifen")."""
         if art in ("interaktiv", "analyse"):
             return False
         if art == "bg":
-            return True                       # bg nimmt nur bei Leerlauf
+            # .536 B2 — DIE LEERLAUF-REGEL GILT NUR NOCH IN DER
+            # RUECKFAHRKARTEN-STELLUNG (`bg_platz_getrennt = 0`).
+            # Begruendung: seit .534 hat `bg` sein EIGENES Konto (Kapazitaet 1,
+            # eigene Nummern, `_sem_bg`) und nimmt der Analyse keinen Platz mehr
+            # weg. Damit gibt es nichts mehr zu daempfen — der Platz ist keine
+            # Rechen-Groesse der Analyse, sondern die Buchung des EINEN
+            # Hintergrund-Strangs, den der Worker ohnehin faehrt
+            # (worker_dienst.py:2647/3503). Die Zulassungs-Regel blieb in .534
+            # bewusst unangetastet, und GENAU DAS war der Feldschaden: zwischen
+            # 08:02 und 15:55 stand 46 x „collection: no free analysis slot
+            # within 600s — postponed" im Log, weil es bei 1600-2700 wartenden
+            # Ereignissen keinen Leerlauf gab und das Szenario-Nachsammeln den
+            # ganzen Vormittag nicht drankam.
+            # Steht `bg_platz_getrennt` auf 0, faellt `bg` wieder auf die
+            # Analyse-Plaetze zurueck — dann ist die alte Regel wieder richtig
+            # und gilt woertlich weiter.
+            return not self.bg_getrennt
+        # .536 B4.2: `live` faellt hier NICHT durch Zufall auf die Ernte-Latte,
+        # sondern ausdruecklich — in der Rueckfahrkarten-Stellung sitzt auch das
+        # Koerper-Urteil auf den Analyse-Plaetzen, und es wird von einer
+        # AUTOMATIK angestossen, nicht von einem Menschen. Es darf dort deshalb
+        # so wenig alle N Plaetze nehmen wie die Ernte. (In der Werkstellung
+        # wird diese Zeile fuer `live` nie erreicht, s. Kopf.)
         return gehalten >= self.kapazitaet - 1
 
+    def _klasse_wartet(self, art):
+        """Wartet jemand dieser Klasse — angemeldet UND nicht schon haltend?
+        -> bool. .536 B4.2: die verallgemeinerte Fassung von
+        `_interaktiv_wartet`, und zwar WOERTLICH dieselbe Subtraktion (die
+        Begruendung steht dort, sie ist an Probe S11-F1 gelernt). Die
+        Rangfolge am bg-Konto braucht die Frage fuer JEDE Klasse; zwei
+        Zaehlweisen nebeneinander waeren genau der Streu-Fehler, den
+        qs_ebenen.md verbietet.
+
+        SO IST „LEER" DEFINIERT — die Wechsel-Regel unten fragt nichts
+        anderes: eine Seite gilt als leer, wenn niemand dieser Klasse
+        angemeldet ist, der nicht schon haelt."""
+        with self._mutex:
+            angemeldet = len(self._wartend.get(art) or ())
+            haelt = sum(1 for d in self._belegt.values() if d["art"] == art)
+            return max(0, angemeldet - haelt) > 0
+
+    def _wartend_je_art_unsafe(self):
+        """Wartezahlen je Hintergrund-Klasse -> {art: anzahl}.
+
+        NUR UNTER `self._mutex` rufen (daher `_unsafe` im Namen): der Aufrufer
+        haelt ihn bereits, und `threading.Lock` ist nicht reentrant — ein
+        `with self._mutex` hier waere ein sofortiger Selbst-Verklemmer, kein
+        Schoenheitsfehler. Gerechnet wird dieselbe Subtraktion wie in
+        `_klasse_wartet`: angemeldet MINUS haltend."""
+        haelt = {}
+        for d in self._belegt.values():
+            haelt[d["art"]] = haelt.get(d["art"], 0) + 1
+        return {a: max(0, len(self._wartend.get(a) or ()) - haelt.get(a, 0))
+                for a in self.HINTERGRUND_ARTEN}
+
+    def _bg_zuweisung_melden(self, nr, art, etikett, marke, zeiger_vor, wartend):
+        """.536 B4.5: EINE Zeile je Vergabe des bg-Kontos — wer bekam es, woran,
+        wer wartet noch, wo steht der Zeiger und WARUM war es diese Klasse.
+
+        NICHT GEDROSSELT, anders als `_fair_melden`: das Konto wird hoechstens
+        einmal je Job vergeben (Kapazitaet 1), das Volumen ist damit klein, und
+        der Prueflauf verlangt genau diese Zeile als Beleg der Wechsel-Sequenz.
+        Die ANALYSE-Plaetze bekommen bewusst keine solche Zeile — das waere eine
+        je Ereignis und damit eine Log-Flut.
+
+        Log-Vertrag §9: kein Personenname. `etikett` ist eine Ereignis-ID oder
+        ein fester Text (`sammle`, `wanduhr`, `start proof`) — dieselbe Groesse,
+        die Platzwaechter und /health seit je zeigen."""
+        if art in self.BG_RANG:
+            grund = ("click waiting" if art == "interaktiv"
+                     else "live judgment")
+        elif zeiger_vor == art:
+            grund = f"turn -> {'ernte' if art == 'ernte' else 'collecting'}"
+        else:
+            grund = "only non-empty queue"
+        zahlen = ", ".join(f"{a}={(wartend or {}).get(a, 0)}"
+                           for a in self.HINTERGRUND_ARTEN)
+        # Wiederholungs-Bremse, s. `_bg_log_letzt` im Konstruktor.
+        sig = (art, etikett, grund)
+        jetzt = time.monotonic()
+        if sig == self._bg_log_letzt and jetzt - self._bg_log_ts < 60:
+            self._bg_log_aus += 1
+            return
+        zusatz = (f" [{self._bg_log_aus} identical assignment(s) before this one "
+                  f"not logged]" if self._bg_log_aus else "")
+        self._bg_log_letzt, self._bg_log_ts, self._bg_log_aus = sig, jetzt, 0
+        # Der Zeigerstand NACH der Vergabe darf hier ohne Mutex gelesen werden:
+        # das Konto hat Kapazitaet 1, es haelt es gerade dieser Aufrufer, und
+        # nur ein ERWERB rueckt den Zeiger — ein zweiter kann es also nicht,
+        # solange diese Zeile geschrieben wird.
+        self.log(f"background slot {nr} -> {art} ({etikett}, booking {marke}): "
+                 f"{grund}; waiting {zahlen}; "
+                 f"pointer {zeiger_vor} -> {self._bg_zeiger}{zusatz}")
+
+    def _bg_rang_grund(self, art):
+        """.536 B4.2: MUSS `art` am bg-Konto zurueckstehen? -> Grund (Text)
+        oder None, wenn sie nehmen darf.
+
+        Text statt bool, weil derselbe Griff zwei Aufgaben hat: die Vergabe
+        entscheiden UND die Zeile schreiben, die sagt WARUM. Zwei getrennte
+        Rechnungen dafuer waeren die K1-Klasse (die Diagnose luegt).
+
+        DIE REGEL, in dieser Reihenfolge:
+          1. Ein hoeherer Rang ist angemeldet und haelt noch nicht -> zurueck.
+             `interaktiv` steht ueber allem (dahinter wartet ein Mensch),
+             `live` darunter (ein Koerper-Urteil, das eine laufende Analyse
+             angestossen hat — Vorrang wie heute live vor batch).
+          2. Sonst der WECHSEL zwischen `ernte` und `bg`: wer nicht an der
+             Reihe ist, tritt zurueck — ABER nur, solange die andere Seite
+             nicht leer ist. Ist sie leer, wird sie uebersprungen und der
+             Zeiger bleibt, wo er steht (er rueckt nur auf den GEGNER der
+             Klasse, die wirklich genommen hat). Damit verliert eine Seite,
+             die kurz leer war und sofort wieder anklopft, hoechstens EINEN
+             Zug — statt dauerhaft hinten zu stehen.
+
+        KEINE VERDRAENGUNG, an keiner Stelle: ein laufender Job laeuft aus.
+        Die Zusage aus `_ueber_der_latte` gilt woertlich weiter."""
+        for hoeher in self.BG_RANG:
+            if hoeher == art:
+                return None                 # ueber ihr steht niemand mehr
+            if self._klasse_wartet(hoeher):
+                return (f"a waiting {hoeher} job has priority at the "
+                        f"background slot")
+        with self._mutex:
+            zeiger = self._bg_zeiger
+        if zeiger == art:
+            return None
+        if self._klasse_wartet(zeiger):
+            return f"it is {zeiger}'s turn at the background slot"
+        return None                         # leere Seite: uebersprungen
+
+    def _interaktiv_wartet(self):
+        """Steht gerade ein Mensch AN (und rechnet nicht schon)? -> bool.
+        FIX 13 fragt genau das.
+
+        DIE SUBTRAKTION IST DER GANZE PUNKT, und sie ist an der Probe S11-F1
+        gelernt: die Anmeldung liegt an allen fuenf Aufrufstellen um die GANZE
+        `platz()`-Klammer (`with wartend(art), platz(...)`), bleibt also stehen,
+        solange der Klick RECHNET. Wer nur `len(_wartend)` fragt, haelt einen
+        laufenden Klick fuer einen wartenden — und sperrt die Ereignis-Analyse fuer
+        dessen ganze Dauer aus. Das waere Verdraengung durch die Hintertuer, genau
+        das, was Fix 13 ausdruecklich NICHT tut. Wartend ist deshalb: angemeldet
+        MINUS die, die schon ein Fenster halten.
+
+        `max(0, …)`: ein Halter ohne Anmeldung (Probe, kuenftiger Aufrufer, der das
+        `wartend()` vergisst) darf die Zahl nicht ins Negative ziehen und damit eine
+        echte Anmeldung verdecken.
+
+        .536 B4.2: die Rechnung steht seitdem in `_klasse_wartet` — dieselbe
+        Subtraktion, nur fuer jede Klasse. Dieser Name bleibt, weil FIX 13 ihn
+        in der Rueckfahrkarten-Stellung noch stellt und weil ein Leser hier
+        sucht."""
+        return self._klasse_wartet("interaktiv")
+
     def _fairness_blockiert(self, art, marke):
-        """Muss `art` jetzt zurueckstehen? (Regel + Anmeldungen zusammen.)"""
+        """Muss `art` jetzt zurueckstehen? (Regel + Anmeldungen zusammen.)
+
+        FIX 13 (User-Zuschnitt 10.09.2026, in E3.1 gebaut): DER WARTENDE
+        INTERAKTIV-JOB BEKOMMT DAS NAECHSTE FREIE FENSTER. Solange eine
+        `interaktiv`-Anmeldung steht, tritt `analyse` an der Vergabestelle zurueck.
+
+        WARUM ES DIE ZEILE BRAUCHT, obwohl `interaktiv` schon seit .507 nie
+        zurueckgehalten wird: „nicht zurueckgehalten" heisst nur, dass der Klick
+        MITBIETEN darf. Wer ein frei werdendes Fenster bekommt, entschied bis .526
+        das Semaphor, und gegen den Live-Nachschub verliert ein Mensch dieses
+        Rennen beliebig oft — jedes fertige Ereignis gibt ein Fenster frei, das der
+        naechste Abholer sofort wieder nimmt. Genau das ist der Fall, den der User
+        am 10.09. beschrieben hat.
+
+        WAS FIX 13 AUSDRUECKLICH NICHT TUT:
+          * KEIN VORHALTEN. Steht kein Klick an, gilt fuer `analyse` weiter „nie
+            zurueckhalten" (.510/J18) — es bleibt kein Fenster leer, nur weil
+            vielleicht jemand klicken koennte.
+          * KEINE VERDRAENGUNG. Ein laufender Job wird nie geschossen; das kostete
+            der Lernlauf-Ernte dauerhaft ein Ereignis und der Pass-Ernte ebenso.
+            Der Klick bekommt das naechste FREI WERDENDE Fenster, nicht sofort eins.
+          * Nur `analyse` tritt neu zurueck. `ernte` und `bg` tun es ohnehin schon,
+            weil `wartende_andere` ein wartendes `interaktiv` fuer jede andere
+            Klasse IMMER zaehlt (B1, .507).
+
+        EHRLICHE FOLGE, die der Betreiber kennen muss: bei N = 1 haelt ein Klick
+        den Ereignis-Strom fuer die Dauer SEINES Jobs an — das stand schon vor
+        Fix 13 so in `_ueber_der_latte` und aendert sich nicht. Neu ist, dass der
+        Klick auf einer beschaeftigten Maschine ueberhaupt drankommt.
+
+        .536 B4.2 — ZWEI GETRENNTE WELTEN, und das ist der ganze Zuschnitt:
+
+        (a) `bg_platz_getrennt` AN (Werkseinstellung seit .534, der Normalfall):
+            `analyse` hat die Analyse-Plaetze fuer sich allein und tritt NIE
+            zurueck; jede andere Klasse sitzt auf dem bg-Konto und folgt dort
+            der Rangfolge aus `_bg_rang_grund`.
+            FIX 13 FUER `analyse` ENTFAELLT HIER, und zwar begruendet (Auflage 1
+            der Gegenprobe zum Bauplan): ein Klick wartet ab .536 auf das
+            HINTERGRUND-Konto, nicht auf einen Analyse-Platz. Bliebe die Zeile,
+            traeten ALLE N Analysen zurueck, solange ein Klick hinter einer
+            laufenden Ernte wartet — die Analyse stuende still, ohne dass der
+            Klick dadurch auch nur eine Sekunde frueher drankaeme. Der
+            Klick-Vorrang lebt seitdem ausschliesslich im Rang am bg-Konto.
+            Folge, ausdruecklich: `wartende_andere` und damit
+            `wartend_fn_analyse` werden in dieser Stellung von niemandem mehr
+            befragt.
+
+        (b) `bg_platz_getrennt` AUS (die .533-Rueckfahrkarte, im Feld umlegbar):
+            es gibt kein eigenes Konto, ALLE Klassen sitzen wieder auf den
+            Analyse-Plaetzen — und dann gelten die alten Regeln WOERTLICH
+            weiter, Fix 13 eingeschlossen. Dort wartet ein Klick wieder auf
+            einen Analyse-Platz, also ist die Zeile dort wieder richtig.
+            (Bauplan §4.1: „mit 0 fallen ALLE Klassen auf die Analyseplaetze
+            zurueck und die N-1-Latte muesste wieder greifen" — dieselbe
+            Begruendung deckt Fix 13.)"""
+        if self.bg_getrennt:
+            if art == "analyse":
+                return False                      # (a), Auflage 1
+            return self._bg_rang_grund(art) is not None
+        if art == "analyse" and self._interaktiv_wartet():
+            return True                           # (b), Fix 13 unveraendert
         if not self._ueber_der_latte(art, self.belegt_je_art()[art]):
             return False
         return self.wartende_andere(art, marke)
@@ -3401,15 +5559,41 @@ class Analyseplaetze:
 
         .510: der GRUND steht jetzt drin. Die alte Zeile sagte fuer JEDE Klasse
         „holds X of N" — fuer `bg` war das seit .510 irrefuehrend: sie tritt
-        zurueck, weil jemand wartet, nicht weil sie zu viele Plaetze haelt."""
+        zurueck, weil jemand wartet, nicht weil sie zu viele Plaetze haelt.
+
+        E3.1/FIX 13: dasselbe gilt jetzt fuer `analyse`. Sie haelt keine Latte
+        (sie darf alle Fenster nehmen) und tritt genau aus EINEM Grund zurueck:
+        ein Mensch steht an. Eine Zeile „holds X of N" waere hier die falsche
+        Auskunft — sie zeigte auf eine Regel, die es fuer diese Klasse gar nicht
+        gibt."""
         jetzt = time.monotonic()
         if jetzt - self._fair_log_ts < 60:
             return
         self._fair_log_ts = jetzt
-        if art == "bg":
-            self.log(f"slot fairness: bg stands back (background class yields "
-                     f"whenever anyone else waits; holds {gehalten} of "
-                     f"{self.kapazitaet})")
+        if self._auf_bg_konto(art):
+            # .536 B4.2: am bg-Konto gibt es keine Latte, sondern einen RANG —
+            # „holds X of N" waere hier die falsche Auskunft (dieselbe Klasse
+            # wie bei `analyse` unten). Der Grund kommt aus derselben Rechnung,
+            # die die Vergabe entschieden hat.
+            self.log(f"slot fairness: {art} stands back — "
+                     f"{self._bg_rang_grund(art) or 'it may take the slot now'} "
+                     f"(no running job is ever cancelled)")
+        elif art == "analyse" and self._interaktiv_wartet():
+            self.log(f"slot fairness: analysis stands back — someone is waiting on "
+                     f"a click, and the next free worker window is theirs (fix 13; "
+                     f"no running job is ever cancelled)")
+        elif art == "bg":
+            # .536 B2: diese Zeile gilt nur noch in der Rueckfahrkarten-Stellung
+            # `bg_platz_getrennt = 0` — dort sitzt `bg` wieder auf den
+            # Analyse-Plaetzen und die Leerlauf-Regel greift wirklich. Mit dem
+            # getrennten Konto (Werkseinstellung) tritt `bg` nicht mehr zurueck,
+            # und dann wird diese Zeile auch nicht mehr erreicht. Der Text sagt
+            # deshalb dazu, WARUM die Regel gerade gilt; sonst behauptete das Log
+            # eine Regel, die im Regelfall gar nicht mehr existiert.
+            self.log(f"slot fairness: bg stands back — background work is "
+                     f"sharing the analysis slots (bg_platz_getrennt is off), "
+                     f"so it yields whenever anyone else waits; holds "
+                     f"{gehalten} of {self.kapazitaet}")
         else:
             self.log(f"slot fairness: {art} stands back (holds {gehalten} of "
                      f"{self.kapazitaet}, another class is waiting)")
@@ -3465,6 +5649,12 @@ class Analyseplaetze:
         # heutiger Aufrufer uebergibt 0, der Rueckfall war also nie sichtbar; er
         # bleibt trotzdem eine Falle fuer den naechsten (Proben, Kurz-Versuche).
         frist_ende = (time.monotonic() + timeout_s) if timeout_s is not None else None
+        # .534 (B8): auf welchem Konto dieser Halter sitzt.
+        # .536 (B4.1): das ist ab hier JEDE Klasse ausser `analyse` — die
+        # Analyse-Plaetze sind die Rechenstraenge, alles andere teilt sich das
+        # eine bg-Konto (`_auf_bg_konto`, dort die Begruendung).
+        _bg = self._auf_bg_konto(art)
+        _sem = self._sem_bg if _bg else self._sem
         while True:
             while self._fairness_blockiert(art, marke_w):
                 self._fair_melden(art, self.belegt_je_art()[art])
@@ -3477,20 +5667,45 @@ class Analyseplaetze:
                     return
                 time.sleep(min(FAIRNESS_SCHEIBE_S, max(0.01, rest)))
             if frist_ende is None:
-                erworben = self._sem.acquire()
+                erworben = _sem.acquire()
             else:
                 rest = frist_ende - time.monotonic()
-                erworben = rest > 0 and self._sem.acquire(timeout=rest)
+                erworben = rest > 0 and _sem.acquire(timeout=rest)
             if not erworben:
                 yield None
                 return
             # Gegenpruefung (s. Docstring): `wartende_andere` VOR dem Mutex, weil
             # es die Warteschlangen-Frage des Dienstes stellt und damit dessen
             # Locks anfasst; unter dem Mutex wird nur noch gezaehlt und belegt.
-            andere = self.wartende_andere(art, marke_w)
+            # FIX 13 auch HIER, und nicht nur in der Vorpruefung: eine Analyse, die
+            # schon im `acquire` parkte, als der Mensch klickte, haette das frei
+            # werdende Fenster sonst mit 50 % Wahrscheinlichkeit weggeschnappt (das
+            # Semaphor weckt irgendeinen Warter). Sie gibt es stattdessen sofort
+            # zurueck und stellt sich neu an — dort greift die Vorpruefung, sie
+            # schlaeft eine Fairness-Scheibe, und der Klick kommt dran. Kein
+            # Livelock: der Zurueckgetretene ist waehrend seines Schlafs aus dem
+            # Rennen. `_interaktiv_wartet` nimmt selbst den Mutex, deshalb VOR dem
+            # `with` (das Muster von `wartende_andere` eine Zeile darueber).
+            #
+            # .536 B4.2: DIESELBE ZWEITEILUNG wie in `_fairness_blockiert`, und
+            # sie muss dieselbe sein — eine Nachpruefung, die eine ANDERE Regel
+            # stellt als die Vorpruefung, laesst genau die Faelle durch, gegen die
+            # die Vorpruefung gebaut ist. Am bg-Konto ist der Grund dafuer
+            # derselbe wie bei Fix 13: wer schon im `acquire` parkte, als ein
+            # Klick anklopfte, gibt das Konto sofort zurueck, statt es ihm
+            # wegzuschnappen.
+            if self.bg_getrennt:
+                andere = False
+                nachrang = (False if art == "analyse"
+                            else self._bg_rang_grund(art) is not None)
+            else:
+                andere = self.wartende_andere(art, marke_w)
+                nachrang = art == "analyse" and self._interaktiv_wartet()
+            _zeiger_vor, _warteschau = None, None
             with self._mutex:
                 gehalten = sum(1 for d in self._belegt.values() if d["art"] == art)
-                zu_viel = andere and self._ueber_der_latte(art, gehalten)
+                zu_viel = nachrang or (andere
+                                       and self._ueber_der_latte(art, gehalten))
                 if not zu_viel:
                     # Der `else 0`-Zweig ist unerreichbar: das BoundedSemaphore
                     # laesst hoechstens `kapazitaet` Halter gleichzeitig herein,
@@ -3500,15 +5715,37 @@ class Analyseplaetze:
                     # bekaemen beide die 0 und ueberschrieben einander in
                     # `_belegt` — s. die Warnung in `_worker()` (C3, 05.09.2026,
                     # Widerleger C1 Notiz 10).
-                    nr = self._frei_nummern.pop(0) if self._frei_nummern else 0
+                    _vorrat = self._frei_nummern_bg if _bg else self._frei_nummern
+                    nr = _vorrat.pop(0) if _vorrat else 0
                     self._marke += 1
                     marke = self._marke
                     self._belegt[nr] = {"art": art, "etikett": etikett,
                                         "seit": time.time(),
                                         "puls": time.monotonic(), "marke": marke}
+                    if _bg:
+                        # .536 B4.2: DER ZEIGER RUECKT HIER — beim ERWERB, unter
+                        # demselben Mutex, in dem die Belegung eingetragen wird.
+                        # Nicht beim Anmelden (dann entschiede, wer zuerst
+                        # anklopft) und nicht beim Freigeben (dann entschiede,
+                        # wer zuerst fertig ist). Er rueckt IMMER auf den Gegner
+                        # der Klasse, die wirklich genommen hat: nimmt die leere
+                        # Seite nichts und die andere zieht durch, bleibt der
+                        # Zeiger stehen, und die kurz leere Seite verliert
+                        # hoechstens EINEN Zug.
+                        _zeiger_vor = self._bg_zeiger
+                        if art in self.BG_WECHSEL:
+                            self._bg_zeiger = self.BG_WECHSEL[
+                                1 - self.BG_WECHSEL.index(art)]
+                        # Wartezahlen NACH dieser Vergabe (der Nehmer haelt
+                        # jetzt, zaehlt also nicht mehr als wartend) — genau die
+                        # Zahlen, die die Zuweisungs-Zeile und /health zeigen.
+                        _warteschau = self._wartend_je_art_unsafe()
             if not zu_viel:
+                if _bg:
+                    self._bg_zuweisung_melden(nr, art, etikett, marke,
+                                              _zeiger_vor, _warteschau)
                 break
-            self._sem.release()
+            _sem.release()
             self._fair_melden(art, gehalten)
         try:
             yield nr
@@ -3524,11 +5761,12 @@ class Analyseplaetze:
                 _meins = self._belegt.get(nr, {}).get("marke") == marke
                 if _meins:
                     self._belegt.pop(nr, None)
-                    if nr and nr not in self._frei_nummern:
-                        self._frei_nummern.append(nr)
-                        self._frei_nummern.sort()
+                    _vorrat = self._frei_nummern_bg if _bg else self._frei_nummern
+                    if nr and nr not in _vorrat:
+                        _vorrat.append(nr)
+                        _vorrat.sort()
             if _meins:
-                self._sem.release()
+                _sem.release()
 
     def puls(self, nr):
         """Lebenszeichen eines Platzes (Konzept §5.1: die Freigabe haengt spaeter am
@@ -3659,7 +5897,7 @@ class Analyseplaetze:
         stimmt sie nicht, passiert NICHTS: kein Einzug, keine Semaphor-Freigabe (die
         gehoert dem neuen Halter, ein Release hier gaebe die Kapazitaet doppelt aus).
         `marke=None` bleibt der ungepruefte Griff fuer Proben und Zustands-Werkzeuge."""
-        fremd = None
+        fremd, _bg = None, False
         with self._mutex:
             if nr not in self._belegt:
                 return None
@@ -3667,16 +5905,35 @@ class Analyseplaetze:
                 fremd = self._label(self._belegt[nr])
             else:
                 d = self._belegt.pop(nr)
-                if nr and nr not in self._frei_nummern:
-                    self._frei_nummern.append(nr)
-                    self._frei_nummern.sort()
+                # .534 (B8): AUF WELCHES KONTO der Platz zurueckgeht, steht an der
+                # BELEGUNG — und das muss hier genauso gelesen werden wie beim
+                # Erwerb. Bis zum Nachzug gab dieser Griff IMMER das
+                # Analyse-Semaphor frei und legte die Nummer immer in den
+                # Analyse-Vorrat. Der Weg ist real: der Platzwaechter zieht jeden
+                # stummen Platz ein, und der ANLASS fuer das eigene bg-Konto war
+                # ein klemmender Sammellauf. Die Folgen waeren zwei, beide
+                # schlimmer als das behobene Problem: ein `ValueError` auf dem
+                # vollen Analyse-Semaphor (dann liefe NIE WIEDER ein
+                # Hintergrund-Job, weil `_sem_bg` auf 0 haengenbliebe), oder —
+                # bei freiem Analyse-Platz — eine stille Ueberbuchung: drei
+                # gleichzeitige Analysen auf zwei Plaetzen und zwei
+                # Rechenstraengen, also genau die Ueberzeichnung, gegen die die
+                # Speicher-Formel budgetiert.
+                # .536 (B4.1): DIESELBE Frage wie beim Erwerb, aus derselben
+                # Quelle — seit .536 gehoert jede Klasse ausser `analyse` aufs
+                # bg-Konto, nicht mehr nur `bg`.
+                _bg = self._auf_bg_konto(d["art"])
+                _vorrat = self._frei_nummern_bg if _bg else self._frei_nummern
+                if nr and nr not in _vorrat:
+                    _vorrat.append(nr)
+                    _vorrat.sort()
         if fremd is not None:                     # Logzeile bewusst ohne den Mutex
             self.log(f"slot {nr}: holder changed since the verdict — not reclaimed "
                      f"(now {fremd})")
             return None
-        self._sem.release()
-        self.log(f"analysis slot {nr} ({self._label(d)}) reclaimed after going "
-                 f"silent ({grund})")
+        (self._sem_bg if _bg else self._sem).release()
+        self.log(f"{'background' if _bg else 'analysis'} slot {nr} "
+                 f"({self._label(d)}) reclaimed after going silent ({grund})")
         return d["art"], d["etikett"]
 
     def zustand(self):
@@ -3689,12 +5946,613 @@ class Analyseplaetze:
         den Text zu parsen."""
         with self._mutex:
             jetzt = time.monotonic()
-            return {"kapazitaet": self.kapazitaet, "belegt": len(self._belegt),
+            # .534 (H-7 des Pruefberichts): `belegt` zaehlt gegen `kapazitaet`,
+            # und die ist die der ANALYSE — ein bg-Halter darf dort nicht
+            # mitzaehlen, sonst stuenden „3 von 2 Plaetzen belegt" da.
+            # .536 (B4.1): das gilt jetzt fuer JEDE Hintergrund-Klasse, nicht
+            # mehr nur fuer `bg` — dieselbe Frage, dieselbe Quelle
+            # (`_auf_bg_konto`). Waere sie hier anders beantwortet als beim
+            # Erwerb, meldete /health genau den H-7-Fehler wieder.
+            return {"kapazitaet": self.kapazitaet,
+                    "belegt": sum(1 for d in self._belegt.values()
+                                  if not self._auf_bg_konto(d["art"])),
                     "vorschlag": self.vorschlag,
+                    # .532: WOHER die Kapazitaet kommt und was der Betreiber
+                    # eingestellt hat — zwei Zahlen, nie nur eine (dieselbe
+                    # Regel wie bei n/formel_n der Strang-Formel).
+                    # .536 B5: `quelle` ist seitdem „start" (noch nicht
+                    # gebunden), „straenge" (Plaetze = Rechenstraenge, der
+                    # Normalfall) oder „override" (die Experten-Drossel
+                    # `analyse_plaetze` zieht, weil sie kleiner ist).
+                    "quelle": getattr(self, "quelle", "start"),
+                    # .536 B5: die OVERRIDE-AUSKUNFT, nicht mehr „was der
+                    # Betreiber eingestellt hat". None = kein Override gesetzt,
+                    # die Plaetze folgen den Straengen ohne Zutun.
+                    "config_kapazitaet": getattr(self, "config_kapazitaet", None),
+                    # .534 (B8): das getrennte bg-Konto. `getrennt: false` heisst
+                    # „bg sitzt wie frueher auf den Analyse-Plaetzen" — der
+                    # Schalter ist im Feld umlegbar und muss deshalb sichtbar
+                    # sein.
+                    # .534 (Abnahme-Befund B-4): in der ALTEN Stellung gibt es
+                    # kein eigenes bg-Konto — dann ist auch keine bg-Kapazitaet
+                    # durchgesetzt, und „2 von 1 belegt" waere eine Auskunft, die
+                    # ein Supportfall falsch liest. `kapazitaet` ist deshalb None,
+                    # wenn nicht getrennt wird: die bg-Halter sitzen dann auf den
+                    # Analyse-Plaetzen und zaehlen dort.
+                    # .536 (B4.1): `belegt` ist hier die Zahl der Halter AUF DEM
+                    # KONTO — seit .536 also jede Hintergrund-Klasse, nicht nur
+                    # `bg`. In der Rueckfahrkarten-Stellung gibt es kein Konto,
+                    # dann ist die Zahl 0 und `kapazitaet` None: die
+                    # Hintergrund-Halter zaehlen dort oben bei der Analyse mit
+                    # (.534 Abnahme-Befund B-4, unveraendert gueltig).
+                    # .536 (B4.5): `wartend` und `zeiger` dazu. Ohne die beiden
+                    # Zahlen ist die Rangfolge am Konto eine Behauptung — ein
+                    # Supportfall soll in /health sehen, WER ansteht und WESSEN
+                    # Zug gerade ist, nicht erst 400 Logzeilen sortieren
+                    # muessen. `wartend` ist angemeldet MINUS haltend (dieselbe
+                    # Subtraktion wie ueberall).
+                    "bg": {"getrennt": bool(getattr(self, "bg_getrennt", False)),
+                           "kapazitaet": (int(getattr(self, "bg_kapazitaet", 1))
+                                          if getattr(self, "bg_getrennt", False)
+                                          else None),
+                           "belegt": sum(1 for d in self._belegt.values()
+                                         if self._auf_bg_konto(d["art"])),
+                           "wartend": self._wartend_je_art_unsafe(),
+                           "zeiger": self._bg_zeiger},
                     "plaetze": [{"nr": nr, "eid": self._label(d), "art": d["art"],
                                  "seit_s": round(time.time() - d["seit"], 1),
                                  "puls_alter_s": round(jetzt - d["puls"], 1)}
                                 for nr, d in sorted(self._belegt.items())]}
+
+
+# .536 B4.2 — DER DECKUNGS-VERTRAG DER VERGABEREGEL. Jede Hintergrund-Klasse
+# MUSS entweder einen festen Rang haben oder eine Seite des Wechsels sein; eine
+# Klasse, die in keiner der beiden Listen steht, waere fuer `_bg_rang_grund`
+# unsichtbar und bekaeme das Konto ohne jede Regel — also genau die stille
+# Luecke, gegen die qs_ebenen.md geschrieben ist. Bewusst KEIN `assert`
+# (python -O wuerde ihn wegwerfen) und bewusst beim Import, nicht erst zur
+# Laufzeit: wer eine sechste Klasse anlegt, merkt es beim ersten Start.
+if (set(Analyseplaetze.BG_RANG) | set(Analyseplaetze.BG_WECHSEL)
+        != set(Analyseplaetze.HINTERGRUND_ARTEN)) or (
+        set(Analyseplaetze.BG_RANG) & set(Analyseplaetze.BG_WECHSEL)):
+    raise RuntimeError(
+        "Analyseplaetze: BG_RANG + BG_WECHSEL decken die Hintergrund-Klassen "
+        f"nicht ueberschneidungsfrei ab (ARTEN={Analyseplaetze.ARTEN}, "
+        f"RANG={Analyseplaetze.BG_RANG}, WECHSEL={Analyseplaetze.BG_WECHSEL})")
+
+
+# ------------------------------------------------------------- Abrufstufe (.534 B6c)
+# Takt der Abrufstufe. Kein Budget: sie schaut nach, ob der Vorrat noch reicht,
+# und das kostet ein paar Dateiabfragen.
+VORLAUF_TAKT_S = 2.0
+# Vorgabewerte des Vorrats, aus der Feldmessung vom 15.09. abgeleitet: rund
+# 20 Ereignisse je Minute bei zwei Rechenstraengen und rund 3 s je Abruf — 20
+# ist damit eine Minute Vorrat, 50 gibt kurze Nachladeschuebe statt eines
+# 75-s-Dauerzugs gegen Frigate. Die LAST auf Frigate steuert
+# `vorlauf_parallel`, nicht diese beiden Marken.
+VORLAUF_MIN_WERK = 20
+VORLAUF_MAX_WERK = 50
+VORLAUF_PARALLEL_WERK = 2
+VORLAUF_PARALLEL_MAX = 3
+VORLAUF_MIN_GRENZE = 200
+VORLAUF_MAX_GRENZE = 500
+# Wie lange die Antwort „dieses Ereignis ist in Frigate noch offen" gilt, bevor
+# erneut gefragt wird. KEIN Budget: ein Ereignis, das Frigate noch nicht
+# abgeschlossen hat, wird durch haeufigeres Fragen nicht schneller fertig — und
+# die Stufe, die Frigate schonen soll, darf es nicht im Sekundentakt befragen
+# (0.18 teilt Clip-Streams und /auth EINEN Thread-Pool).
+VORLAUF_OFFEN_TAKT_S = 30.0
+# Wie viele „hier nicht zu holen"-Merker hoechstens mitlaufen. Er ist eine
+# Gedaechtnisstuetze gegen Dauerschleifen, kein Verzeichnis — laeuft er voll,
+# wird er geleert und die Stufe versucht es noch einmal.
+VORLAUF_NICHT_HOLEN_MAX = 500
+
+
+class Vorlauf:
+    """DIE ABRUFSTUFE VOR DER VERGABESTELLE (.534 B6c, Inhaber 15.09.:
+    „Hysterese einbauen, bevor wir ausrollen").
+
+    DAS PROBLEM, gemessen im Lasttest desselben Tages: ein Analyseplatz rechnet
+    nicht nur, er HOLT auch. Je Platz vergingen rund 9 s je Ereignis, davon rund
+    5,5 s Analyse — rund 40 % der Platzzeit waren Abruf und Uebergabe. Solange
+    ein Platz seinen Clip aus Frigate zieht, steht sein Rechenstrang still; die
+    Karte brach auf 4 % ein, waehrend 43 Ereignisse warteten.
+
+    DIE ANTWORT IST NICHT EIN PLATZ MEHR (das haette die Wartezeit nur in den
+    Worker verschoben, wo sie gegen die Job-Frist laeuft), sondern eine EIGENE
+    Stufe davor: dieser Thread haelt einen VORRAT fertiger Clips im bestehenden
+    Clip-Cache, aus dem sich die Plaetze bedienen. Er rechnet nicht und belegt
+    keinen Platz.
+
+    HYSTERESE STATT REGELUNG, und das ist der Kern: unter `vorlauf_min` faehrt
+    er nach, bis `vorlauf_max` erreicht ist, dann PAUSIERT er, bis der Vorrat
+    wieder unter `vorlauf_min` faellt. Eine Nachfuehrung ohne Totband haette bei
+    jedem einzelnen abgearbeiteten Ereignis einen neuen Abruf ausgeloest — genau
+    das Dauerfeuer gegen Frigate, das die Threadpool-Klasse aus dem Feld
+    verbietet.
+
+    VIER RIEGEL, jeder gegen einen bekannten Fall:
+      * hoechstens `vorlauf_parallel` gleichzeitige Abrufe (Frigate 0.18 teilt
+        Clip-Streams und /auth EINEN Thread-Pool — MEMORY frigate-018-threadpool);
+        darueber liegt unveraendert das Clip-Tor des Hauses.
+      * nur Ereignisse, die Frigate ABGESCHLOSSEN hat (`end_time`, dieselbe
+        Pruefung wie B9a) — ein Ereignis ohne Ende hat keinen brauchbaren Clip,
+        und ihn zu ziehen hiesse, den Fehler vorzuverlegen.
+      * das Clip-Tor gehoert den PLAETZEN: der Vorrat nimmt hoechstens `tor_n-1`
+        Torplaetze und nie den letzten, damit ein Platz — und vor allem ein
+        interaktives Ereignis, hinter dem ein Mensch wartet — nicht hinter dem
+        Auffuellen des Vorrats ansteht (Pruefbericht E-1).
+      * `vorlauf_max = 0` schaltet die Stufe AUS und stellt exakt das Verhalten
+        der .533 her (Abruf im Platz). Der Schalter ist die Feld-Rueckfahrkarte
+        ohne neues Image.
+
+    REIHENFOLGE ist die der Warteschlange; der Interaktiv-Vorrang (Fix 13) wird
+    nicht beruehrt — diese Stufe vergibt keine Plaetze, sie legt nur Dateien
+    bereit. Und sie besitzt nichts: geholt wird mit demselben `clip_holen` in
+    denselben Cache, dessen Grenzen (`clip_cache_max_gb`, Alters-Verfall)
+    unveraendert gelten. Faellt ein Clip vor seiner Analyse wieder heraus, holt
+    ihn der Platz wie bisher selbst.
+    """
+
+    def __init__(self, svc):
+        self.svc = svc
+        self._stop = threading.Event()
+        self._t = None
+        self.pausiert = False
+        self.geholt = 0
+        self.fehler = 0
+        self.bereit = 0
+        self._laeuft = set()              # eids, die gerade geholt werden
+        self._mutex = threading.Lock()
+        self._fertig = set()              # eids, die Frigate abgeschlossen hat
+        self._offen_gefragt = {}          # eid -> mono der letzten Frage
+        self._nicht_holen = set()         # eids, die hier nicht zu holen sind
+        self.cache_voll_gemeldet = False
+        self.fehler_arten = {}
+        self.letzter_fehler = None
+        self._fehler_gemeldet = set()
+
+    # ----------------------------------------------------------- Einstellungen
+    def _zahlen(self):
+        """(min, max, parallel) aus der Config, geklemmt. max = 0 heisst AUS."""
+        cfg = self.svc.cfg
+
+        def _z(name, werk, klein, gross):
+            try:
+                return max(klein, min(gross, int(cfg.get(name, werk))))
+            except (TypeError, ValueError):
+                return werk
+        hoch = _z("vorlauf_max", VORLAUF_MAX_WERK, 0, VORLAUF_MAX_GRENZE)
+        tief = _z("vorlauf_min", VORLAUF_MIN_WERK, 0, VORLAUF_MIN_GRENZE)
+        if hoch and hoch < tief:
+            # „max kleiner als min" ist keine Einstellung, sondern ein Vertipper.
+            # Dann gilt die untere Marke fuer beide — der Vorrat bleibt bei ihr
+            # stehen, statt dass die Stufe gar nicht mehr laedt.
+            hoch = tief
+        if hoch and tief >= hoch:
+            # Ohne Totband waere es keine Hysterese. Lieber eine gerade noch
+            # sinnvolle Untergrenze als ein Dauerfeuer.
+            tief = max(0, hoch - 1)
+        par = _z("vorlauf_parallel", VORLAUF_PARALLEL_WERK, 1,
+                 VORLAUF_PARALLEL_MAX)
+        return tief, hoch, par
+
+    def zustand(self):
+        tief, hoch, par = self._zahlen()
+        with self._mutex:
+            laedt = len(self._laeuft)
+        return {"an": bool(hoch), "bereit": self.bereit, "min": tief,
+                "max": hoch, "laedt": laedt, "parallel": par,
+                "pausiert": bool(self.pausiert), "geholt": self.geholt,
+                "fehler": self.fehler,
+                # .534: WOMIT die Abrufe gescheitert sind. Eine Zahl ohne Grund
+                # laesst den Betreiber raten.
+                "fehler_arten": dict(self.fehler_arten),
+                "letzter_fehler": self.letzter_fehler,
+                # .534: der zweite Grund fuers Stillstehen — der Cache ist an
+                # seiner Grenze. Ohne dieses Feld saehe man nur „bereit steigt
+                # nicht" und suchte an der falschen Stelle.
+                "cache_voll": bool(self.cache_voll_gemeldet)}
+
+    # ----------------------------------------------------------- Lebenszyklus
+    def start(self):
+        if self._t is not None:
+            return self
+        self._t = threading.Thread(target=self._lauf, daemon=True,
+                                   name="vorlauf")
+        self._t.start()
+        return self
+
+    def stop(self):
+        self._stop.set()
+
+    # ------------------------------------------------------------------ Lauf
+    def _warteschlange(self):
+        """Die eids der Warteschlange in ihrer Reihenfolge."""
+        q = getattr(self.svc, "_ev_q", None)
+        wecker = getattr(self.svc, "_ev_wecker", None)
+        if q is None:
+            return []
+        # .534 (Pruefbericht H-3): NUR FAELLIGE Eintraege. Ein Ereignis, dessen
+        # `clip_delay` noch laeuft, ist bei Frigate oft noch gar nicht fertig —
+        # es vorzuziehen hiesse, genau die Wartezeit zu bezahlen, die das Tor
+        # vermeiden soll.
+        jetzt = time.time()
+        if wecker is None:
+            return [e for f, e, *_r in list(q) if not f or f <= jetzt]
+        with wecker:
+            return [e for f, e, *_r in list(q) if not f or f <= jetzt]
+
+    def _liegt(self, eid):
+        try:
+            return os.path.exists(_frames.cache_pfad(eid, self.svc.cfg["data_dir"]))
+        except Exception:                                 # noqa: BLE001
+            return False
+
+    def _fertig_in_frigate(self, eid):
+        """Hat Frigate dieses Ereignis abgeschlossen? Dieselbe Frage wie B9a.
+
+        EINMAL gefragt und gemerkt: ein abgeschlossenes Ereignis wird nicht
+        wieder offen. Ein offenes wird beim naechsten Takt erneut gefragt — es
+        kann jederzeit zugehen."""
+        if eid in self._fertig:
+            return True
+        # .534 (Pruefbericht H-2): beide Merker sind Arbeits-Gedaechtnis, kein
+        # Verzeichnis. Auf einer Anlage mit Dauerbetrieb wuechsen sie sonst
+        # unbegrenzt — dieselbe Klasse wie der schon behobene `_nicht_holen`.
+        if len(self._fertig) >= VORLAUF_NICHT_HOLEN_MAX:
+            self._fertig.clear()
+        if len(self._offen_gefragt) >= VORLAUF_NICHT_HOLEN_MAX:
+            self._offen_gefragt.clear()
+        if _einspiel.ist_einspiel(eid):
+            # Eingespielte Ereignisse haben kein Frigate dahinter; ihr Clip
+            # liegt ohnehin schon unter data_dir.
+            return False
+        # NICHT IM TAKT DER STUFE FRAGEN. Ein offenes Ereignis wird durch
+        # haeufigeres Fragen nicht fertig; im Feld lagen drei davon in der
+        # Schlange, und bei 2 s Takt waeren das 1,5 Anfragen je Sekunde gegen
+        # genau den Engpass, den diese Stufe entlasten soll.
+        jetzt = time.monotonic()
+        if jetzt - self._offen_gefragt.get(eid, -1e18) < VORLAUF_OFFEN_TAKT_S:
+            return False
+        self._offen_gefragt[eid] = jetzt
+        try:
+            ev = api(self.svc.cfg, f"/api/events/{eid}")
+        except Exception:                                 # noqa: BLE001
+            return False
+        if (ev or {}).get("end_time"):
+            self._fertig.add(eid)
+            self._offen_gefragt.pop(eid, None)
+            return True
+        return False
+
+    def _holen(self, eid):
+        """EIN Clip in den Cache. Laeuft in einem eigenen kurzen Thread."""
+        cfg = self.svc.cfg
+        t0 = time.monotonic()
+        try:
+            # .534 (Pruefbericht E-1): DAS TOR GEHOERT DEN PLAETZEN, nicht dem
+            # Vorrat. Die Vorratsstufe und die Analyse-Plaetze ziehen durch
+            # DASSELBE flock-Tor (`core/frames.tor_nehmen`); mit Werkswert 2 und
+            # `vorlauf_parallel` 2 konnte der Vorrat beide Torplaetze halten,
+            # waehrend er von 20 auf 50 auffuellt. Ein Platz mit Cache-Fehlschlag
+            # — besonders ein INTERAKTIVES Ereignis, hinter dem ein Mensch wartet
+            # — haette dann bis zum Tor-Deckel gewartet und waere ungebucht
+            # herausgefallen. Der Vorrat nimmt deshalb NIE den letzten Torplatz:
+            # `tor_n - 1`, mindestens 1. Bei einem Tor von 1 laeuft er damit
+            # ungedrosselt durch das Tor, aber sein eigener Deckel
+            # (`vorlauf_parallel`) gilt unveraendert — und ein Tor von 1 heisst
+            # ohnehin, dass hier nur einer zieht.
+            _tor = clip_tor_aus_cfg(cfg)
+            _frames.clip_holen(
+                eid, data_dir=cfg["data_dir"],
+                frigate_url=cfg.get("frigate_url") or "",
+                quelle="vorlauf",
+                tor_n=(max(1, _tor - 1) if _tor else 0),
+                tor_deckel_s=clip_tor_deckel_s_aus_cfg(cfg),
+                vod=bool(cfg.get("clip_vod", True)))
+            try:
+                groesse = os.path.getsize(_frames.cache_pfad(eid, cfg["data_dir"]))
+            except OSError:
+                groesse = 0
+            self.geholt += 1
+            self.svc.debug(f"vorlauf: {eid} geholt in "
+                           f"{time.monotonic() - t0:.1f}s "
+                           f"({groesse / 1048576.0:.1f} MB)")
+        except Exception as e:                            # noqa: BLE001
+            self.fehler += 1
+            # .534 (Abnahme-Befund 15.09.): DER GRUND MUSS SICHTBAR SEIN. Er
+            # stand nur in `debug`, und das ist werksseitig aus — im Feld sah
+            # man „7 von 61 Abrufen fehler" und hatte keine Ahnung, woran. Eine
+            # gezaehlte Stoerung ohne Grund ist eine luegende Diagnose.
+            art = type(e).__name__
+            self.fehler_arten[art] = self.fehler_arten.get(art, 0) + 1
+            self.letzter_fehler = f"{art}: {str(e)[:200]}"
+            if art not in self._fehler_gemeldet:
+                self._fehler_gemeldet.add(art)
+                self.svc.log(f"vorlauf: a clip could not be fetched ahead "
+                             f"({self.letzter_fehler}) — the analysis slot "
+                             f"fetches it itself when its turn comes; further "
+                             f"errors of this kind are counted, not logged")
+            # Nicht wieder und wieder: ein Ereignis, dessen Clip sich nicht
+            # holen laesst, blockiert sonst den Vorrat. Der Platz versucht es
+            # spaeter ohnehin selbst — dort ist es ein Urteil wert, hier nicht.
+            if len(self._nicht_holen) >= VORLAUF_NICHT_HOLEN_MAX:
+                # Gedaechtnisstuetze, kein Verzeichnis: laeuft sie voll, wird sie
+                # geleert und die Stufe versucht es noch einmal.
+                self._nicht_holen.clear()
+            self._nicht_holen.add(eid)
+            self.svc.debug(f"vorlauf: {eid} nicht geholt "
+                           f"({type(e).__name__}: {e}) — der Analyse-Platz "
+                           f"versucht es selbst")
+        finally:
+            try:
+                _frames.frei(eid, cfg["data_dir"])
+            except Exception:                             # noqa: BLE001
+                pass
+            with self._mutex:
+                self._laeuft.discard(eid)
+
+    def _cache_voll(self):
+        """Ist der Clip-Cache an seiner eigenen Grenze? -> bool
+
+        .534 (Pruefbericht E-5): der Vorrat wird in STUECK gezaehlt, der Cache in
+        BYTES — und im Feld reicht eine Clipdauer bis 780 s. Stiesse der Vorrat
+        den Cache ueber seine Grenze, raeumte der Aufraeumer AELTEST ZUERST; das
+        ist genau der Clip, der als naechstes gebraucht wird (geholt wird in
+        Warteschlangen-Reihenfolge). Ergebnis waere ein Hol-Raeum-Hol-Kreis gegen
+        dasselbe Frigate, das diese Stufe schonen soll.
+        KEINE NEUE ZAHL: gefragt wird die Grenze, die der Cache ohnehin hat."""
+        try:
+            grenze_gb = float(self.svc.speichergrenzen()[0] or 0)
+            if grenze_gb <= 0:
+                return False
+            return self.svc.clip_cache_bytes() >= grenze_gb * 1024 ** 3
+        except Exception:                                 # noqa: BLE001
+            return False
+
+    def _takt(self):
+        tief, hoch, par = self._zahlen()
+        if not hoch:
+            self.bereit, self.pausiert = 0, False
+            return
+        if self._cache_voll():
+            if not self.cache_voll_gemeldet:
+                self.cache_voll_gemeldet = True
+                self.svc.log("vorlauf: the clip cache is at its limit — not "
+                             "fetching ahead (the cleaner drops the oldest clip, "
+                             "and that is the one needed next)")
+            return
+        self.cache_voll_gemeldet = False
+        warte = self._warteschlange()
+        bereit = sum(1 for e in warte if self._liegt(e))
+        self.bereit = bereit
+        if self.pausiert and bereit < tief:
+            self.pausiert = False
+            self.svc.log(f"vorlauf: stock down to {bereit} clip(s) (below "
+                         f"{tief}) — fetching again up to {hoch}")
+        elif not self.pausiert and bereit >= hoch:
+            self.pausiert = True
+            self.svc.log(f"vorlauf: {bereit} clip(s) ready (limit {hoch}) — "
+                         f"pausing until the stock falls below {tief}")
+        if self.pausiert:
+            return
+        with self._mutex:
+            frei = par - len(self._laeuft)
+            laeuft = set(self._laeuft)
+        if frei <= 0:
+            return
+        for eid in warte:
+            if frei <= 0 or self._stop.is_set():
+                return
+            if eid in laeuft or eid in self._nicht_holen or self._liegt(eid):
+                continue
+            if not self._fertig_in_frigate(eid):
+                continue                  # noch offen -> zurueckgestellt (B9a)
+            with self._mutex:
+                if len(self._laeuft) >= par:
+                    return
+                self._laeuft.add(eid)
+            frei -= 1
+            threading.Thread(target=self._holen, args=(eid,), daemon=True,
+                             name=f"vorlauf-{eid}").start()
+
+    def _lauf(self):
+        while not self._stop.wait(VORLAUF_TAKT_S):
+            try:
+                self._takt()
+            except Exception as e:                        # noqa: BLE001
+                # Eine Vorrats-Stufe darf den Dienst nie mitnehmen.
+                self.svc.debug(f"vorlauf: {type(e).__name__}: {e}")
+
+
+# ------------------------------------------------------------------ Feinmessung (.534 B7)
+# Wie lange eine eingeschaltete Feinmessung HOECHSTENS laeuft, und wie viele
+# Zeilen die Datei traegt. Beides sind Deckel gegen eine vergessene Messung, keine
+# Betriebswerte: bei einer Zeile je Sekunde sind zwei Stunden 7200 Zeilen, und
+# genau danach faengt der Ring von vorn an.
+FEINMESSUNG_TAKT_S = 1.0
+FEINMESSUNG_RING_S = 7200
+FEINMESSUNG_DAUER_WERK_MIN = 30
+FEINMESSUNG_DAUER_MAX_MIN = 120
+# Alle wie viele Zeilen der Ring gestutzt wird. Stutzen heisst lesen + neu
+# schreiben; je Zeile waere das bei 7200 Zeilen eine Dauerlast, und die Messung
+# soll messen, nicht selbst der Verbraucher sein.
+FEINMESSUNG_STUTZ_ALLE = 600
+
+
+class Feinmessung:
+    """SEKUNDENGENAUE TELEMETRIE AUF ZURUF (.534 B7, Inhaber 15.09.).
+
+    ANLASS: der Lasttest vom 15.09. zeigte eine Karte, die waehrend der Rechnung
+    auf 53-74 % laeuft und auf 4 % einbricht, waehrend 43 Ereignisse warten. Wer
+    das erklaeren will, braucht den Verlauf in Sekunden — /health ist eine
+    Momentaufnahme und die Akte kennt nur fertige Ereignisse.
+
+    WAS SIE NICHT IST: kein Dauerbetrieb und kein zweiter Zustand. Sie wird auf
+    Zuruf eingeschaltet, laeuft hoechstens `dauer_min` (Deckel
+    FEINMESSUNG_DAUER_MAX_MIN) und schaltet sich DANN SELBST AUS — eine vergessene
+    Messung, die tagelang je Sekunde schreibt, waere genau der Schaden, den sie
+    aufklaeren soll. Sie ueberlebt keinen Dienst-Neustart (bewusst: nach einem
+    Neustart weiss niemand mehr, warum sie lief).
+
+    EHRLICHE GRENZEN, benannt:
+      * Die Karten-Sonde ist ein Fork je Sekunde. Sie traegt ihren eigenen kurzen
+        Timeout; antwortet sie nicht, steht in der Zeile `null` und die Messung
+        laeuft weiter. Eine Messung darf den Betrieb nie anhalten.
+      * `abrufe` (Clips, die gerade aus Frigate gezogen werden) steht auf `null`:
+        das Clip-Tor lebt im WORKER-Prozess, der Dienst sieht es nicht. Eine
+        geschaetzte Zahl waere hier schlimmer als keine.
+      * Der Container-Speicher ist der zuletzt GEMELDETE Wert des Workers (er
+        misst ihn ohnehin je Sekunde), nicht eine zweite Messung dieses Threads.
+    """
+
+    def __init__(self, svc):
+        self.svc = svc
+        self._mutex = threading.Lock()
+        self._t = None
+        self._stop = threading.Event()
+        self.an = False
+        self.seit = 0.0
+        self.endet = 0.0
+        self.zeilen = 0
+        self.datei = ""
+
+    # ----------------------------------------------------------- Schalten
+    def schalten(self, an, dauer_min=None, quelle="support-api"):
+        """Ein- oder ausschalten. -> dict (der Zustand, wie ihn die Antwort traegt).
+
+        Ein zweites Einschalten VERLAENGERT die laufende Messung, statt einen
+        zweiten Schreiber zu starten."""
+        with self._mutex:
+            if not an:
+                war = self.an
+                self.an = False
+                self._stop.set()
+                if war:
+                    self.svc.log(f"feinmessung: switched OFF ({quelle}) after "
+                                 f"{self.zeilen} line(s)")
+                return self.zustand()
+            try:
+                d = int(dauer_min if dauer_min is not None
+                        else FEINMESSUNG_DAUER_WERK_MIN)
+            except (TypeError, ValueError):
+                d = FEINMESSUNG_DAUER_WERK_MIN
+            d = max(1, min(FEINMESSUNG_DAUER_MAX_MIN, d))
+            self.datei = self._pfad()
+            self.endet = time.time() + d * 60
+            if self.an:
+                self.svc.log(f"feinmessung: extended to {d} min ({quelle})")
+                return self.zustand()
+            self.an = True
+            self.seit = time.time()
+            self.zeilen = 0
+            self._stop = threading.Event()
+            self._t = threading.Thread(target=self._lauf, daemon=True,
+                                       name="feinmessung")
+            self._t.start()
+            self.svc.log(f"feinmessung: switched ON ({quelle}) for {d} min, one "
+                         f"line per second to {self.datei or '(no state folder)'} "
+                         f"— it switches itself off at the end")
+            return self.zustand()
+
+    def zustand(self):
+        """Fuer /health und die Support-Antwort."""
+        return {"an": bool(self.an), "seit": int(self.seit) or None,
+                "endet": int(self.endet) or None,
+                "zeilen": int(self.zeilen),
+                "datei": self.datei or None,
+                "takt_s": FEINMESSUNG_TAKT_S, "ring_zeilen": FEINMESSUNG_RING_S}
+
+    # ----------------------------------------------------------- Schreiben
+    def _pfad(self):
+        try:
+            st = os.path.join(self.svc.cfg["data_dir"], "state")
+            os.makedirs(st, exist_ok=True)
+            return os.path.join(st, "feinmessung.jsonl")
+        except Exception:                                 # noqa: BLE001
+            return ""
+
+    def _zeile(self):
+        """EINE Messzeile. Keine Ausnahme verlaesst diese Funktion — fehlt eine
+        Groesse, steht `null` da."""
+        svc = self.svc
+        z = {"ts": round(time.time(), 1)}
+        try:
+            from core import systemstat as _st           # noqa: PLC0415
+            g = _st.gpu_messen() or {}
+            z["gpu_prozent"] = g.get("prozent")
+            z["karte_mb"] = g.get("speicher_mb")
+            z["karte_max_mb"] = g.get("speicher_max_mb")
+        except Exception:                                 # noqa: BLE001
+            z["gpu_prozent"] = z["karte_mb"] = z["karte_max_mb"] = None
+        try:
+            wartend, in_arbeit = svc.rueckstau_zahlen()
+            z["queue_n"], z["in_arbeit"] = int(wartend), int(in_arbeit)
+        except Exception:                                 # noqa: BLE001
+            z["queue_n"] = z["in_arbeit"] = None
+        try:
+            p = svc._plaetze
+            with p._mutex:
+                belegt = [{"nr": nr, "art": d["art"], "eid": p._label(d)}
+                          for nr, d in sorted(p._belegt.items())]
+            z["plaetze_belegt"] = len(belegt)
+            z["plaetze_kapazitaet"] = int(p.kapazitaet)
+            z["eids"] = [b["eid"] for b in belegt]
+            z["arten"] = [b["art"] for b in belegt]
+        except Exception:                                 # noqa: BLE001
+            z["plaetze_belegt"] = z["plaetze_kapazitaet"] = None
+            z["eids"] = z["arten"] = None
+        try:
+            d = getattr(svc, "_dienst_obj", None)
+            z["straenge"] = int(getattr(d, "straenge_laufend", 0) or 0) if d else None
+            z["ram_mb"] = ((d.ram_stand or {}).get("own_mb") if d else None)
+        except Exception:                                 # noqa: BLE001
+            z["straenge"] = z["ram_mb"] = None
+        # Das Clip-Tor lebt im Worker-Prozess (core/frames), der Dienst sieht es
+        # nicht — s. Kopfkommentar. `null` statt einer geschaetzten Zahl.
+        z["abrufe"] = None
+        return z
+
+    def _stutzen(self, pfad):
+        """Den Ring auf FEINMESSUNG_RING_S Zeilen kuerzen (aelteste zuerst)."""
+        try:
+            with open(pfad) as f:
+                zeilen = f.readlines()
+            if len(zeilen) <= FEINMESSUNG_RING_S:
+                return
+            tmp = pfad + ".neu"
+            with open(tmp, "w") as f:
+                f.writelines(zeilen[-FEINMESSUNG_RING_S:])
+            os.replace(tmp, pfad)
+        except Exception:                                 # noqa: BLE001
+            pass
+
+    def _lauf(self):
+        pfad = self.datei
+        seit_stutzen = 0
+        while not self._stop.wait(FEINMESSUNG_TAKT_S):
+            if not self.an:
+                break
+            if time.time() >= self.endet:
+                with self._mutex:
+                    self.an = False
+                self.svc.log(f"feinmessung: reached its own time limit and "
+                             f"switched OFF — {self.zeilen} line(s) in "
+                             f"{os.path.basename(pfad or 'feinmessung.jsonl')}")
+                break
+            if not pfad:
+                continue
+            try:
+                with open(pfad, "a") as f:
+                    f.write(json.dumps(self._zeile(), ensure_ascii=False) + "\n")
+                self.zeilen += 1
+                seit_stutzen += 1
+            except Exception:                             # noqa: BLE001
+                continue
+            if seit_stutzen >= FEINMESSUNG_STUTZ_ALLE:
+                seit_stutzen = 0
+                self._stutzen(pfad)
 
 
 # ------------------------------------------------------------------ Kern: ein Event verarbeiten
@@ -3780,6 +6638,14 @@ class Service:
         self._sammel_lock = threading.Lock()      # schuetzt die Sammel-/Reorg-Flags (User 21.07.)
         self._sammel_laeuft = False               # ein Szenario-Sammeln gleichzeitig (Prozess-Ebene serialisiert der pool_lock in anlernen.py)
         self._sammel_nachhol = False              # Szenario waehrend eines Laufs -> danach EINMAL nachziehen statt verwerfen
+        # .536 B3: der Stand der laufenden Haeppchen-Kette, EINE Quelle fuer
+        # `/health` (`sammel_zustand`). Nur der Ketten-Fahrer schreibt hier —
+        # er laeuft im Sammel-Thread, und `_sammel_laeuft` sorgt dafuer, dass
+        # es immer nur einen davon gibt.
+        self._sammel_stand = {"auftrag_aktiv": False, "haeppchen_n": 0,
+                              "haeppchen_offen": None, "letzte_dauer_s": None,
+                              "cache_treffer": 0, "tag": None, "faktor": None,
+                              "prolog_kalt_s": None, "quelle": None}
         self._reorg_laeuft = False                # Reorganisieren-Button laeuft (Doppelklick-Schutz)
         self._qs_lock = threading.Lock()          # Guard-Zugriff (ThreadingHTTPServer-Threads)
         self._qs_laeuft = False
@@ -3846,6 +6712,17 @@ class Service:
         self.last_seen = self._load_last_seen()   # Person -> ts letzte Bestaetigung; aus dem Log
                                                   # rekonstruiert, sonst Push-Salve nach Neustart
         self.own_writes = self._load_own_writes() # eids mit VON UNS gesetztem sub_label (Echo-Freiheit)
+        # .534 (B9): welche noch offenen Frigate-Ereignisse schon EINMAL gemeldet
+        # sind. Ohne den Merker stuende die Zurueckstell-Zeile bei jedem Sweep
+        # wieder da — bei einem Ereignis, das eine Stunde offen bleibt, waeren
+        # das rund 180 gleiche Zeilen. Prozess-Zustand, bewusst nicht persistent.
+        self._offen_gemeldet = set()
+        self.uebersprungen_offen = 0
+        # .534 (B9b): wie oft die Analyse EINES Ereignisses schon am Platzwaechter
+        # eingezogen wurde. Ein Gift-Ereignis darf den einen Worker-Prozess nicht
+        # im Frist-Takt toeten — nach HAENGER_VERSUCHE_MAX Einzuegen wird es
+        # uebersprungen statt wieder eingereiht.
+        self._haenger_versuche = {}
         self.pub = None                           # MQTT-Publisher (AP2), Setup via start_publisher()
         self.mqtt_trigger = None                  # MQTT-Trigger-Client (nur trigger=mqtt), Setup via mqtt_loop()
         self.frigate_fehler = None                # (ts, msg) letzter Frigate-API-Fehler -> UI-Banner
@@ -3857,12 +6734,16 @@ class Service:
         frigate_schoner.log = self.log
         self._emb = None                          # Lazy-Embedder (Upload-Gate + Lern-Bruecke seit .235)
         self._emb_lock = threading.Lock()         # .235: Vorwaerm-Thread + Klick duerfen nicht doppelt bauen
-        # C1 (05.09.2026): EIN Pool fuer ALLE Plaetze — Platz 1 ist kein Sonderling
-        # mehr (frueher stand er als `_worker_obj` daneben und wurde von allen
-        # Hintergrund-Jobs mitbenutzt, s. `_worker`). `_worker_obj` ist seitdem eine
-        # lesende Eigenschaft auf `_worker_pool[1]`.
-        self._worker_pool = {}                    # Platz 1..N -> eigener WorkerProzess (lazy)
-        self._personwork_obj = None               # P1 (.202): Koerper-Prozess (lazy, s. _personwork)
+        # E3.1 (14.09.2026): EIN Worker-PROZESS fuer alles. Bis .526 stand hier ein
+        # POOL — ein Prozess je Platz (C1, 05.09.) plus ein zweiter fuer die
+        # Koerper-Urteile (P1, .202) plus ein dritter fuer die Rechenprobe. Der neue
+        # Dienst traegt N Rechenstraenge in EINEM Prozess (Job-Id-Protokoll), also
+        # gibt es genau ein Objekt: ein Kontext, ein Kompilat-Satz, ein
+        # Speicher-Konto. `_worker(nr)`, `_personwork()` und der Boot-Start liefern
+        # alle DIESES Objekt; `_worker_obj` bleibt die lesende Eigenschaft der
+        # Bestandsleser (/health, Systemseite, Rueckfall-Zahlen).
+        self._dienst_obj = None                   # WorkerDienst (lazy, s. worker_dienst)
+        self._dienst_lock = threading.Lock()      # nur EIN Objekt, auch bei zwei ersten Jobs
         self._pw_prio_lock = threading.Lock()     # P1: Vorrang-Zaehler der Live-Spur
         self._pw_live_offen = 0
         self._review_lock = threading.Lock()      # W3: laufende Lazy-Browser-Kopien (ein Bau je Clip)
@@ -3897,9 +6778,24 @@ class Service:
         # durch, der Fehler waere also erst beim Intel-Nutzer im Feld aufgeschlagen.
         self._plaetze_meldung = None
         self._plaetze_vorschlag = None
+        # .536 B5: der Experten-Override aus `analyse_plaetze`. Er entsteht in
+        # `_plaetze_kapazitaet` und wird von `_plaetze_an_straenge` gelesen —
+        # vorbelegt, damit ein Aufrufer ohne diesen Weg (Proben, Teilaufbauten)
+        # nicht auf ein fehlendes Attribut laeuft.
+        self._plaetze_override = None
         _kap = self._plaetze_kapazitaet(cfg)          # setzt auch _plaetze_vorschlag
+        #                                               und _plaetze_override
+        # .534 (B8): `bg_platz_getrennt` (Vorgabe 1) gibt den Hintergrund-Jobs ihr
+        # eigenes kleines Konto. 0 stellt das Verhalten der .533 her — die
+        # Feld-Rueckfahrkarte ohne neues Image (Inhaber-Auflage 15.09.).
+        try:
+            _bg_getrennt = bool(int(cfg.get("bg_platz_getrennt", 1) or 0))
+        except (TypeError, ValueError):
+            _bg_getrennt = True
         self._plaetze = Analyseplaetze(kapazitaet=_kap, log=self.log,
-                                       vorschlag=self._plaetze_vorschlag)
+                                       vorschlag=self._plaetze_vorschlag,
+                                       bg_getrennt=_bg_getrennt,
+                                       override=self._plaetze_override)
         # C2 (05.09.2026, bauplan_0505.md §1): so sieht die Vergabestelle, dass die
         # ANALYSE wartet. Sie meldet sich nicht selbst an — ihre Nachfrage steht in
         # der Ereignis-Warteschlange (der Abholer hat sein Ereignis bereits gezogen,
@@ -3953,6 +6849,23 @@ class Service:
         self.logbuf = collections.deque(maxlen=300)   # Dienst-Log fuer Webview /log
         if self._plaetze_meldung:      # gemerkt im Konstruktor, s. dort (logbuf gab es noch nicht)
             self.log(self._plaetze_meldung)
+        # .533 DIE PLAETZE AN DIE RECHENSTRAENGE BINDEN — HIER, beim Dienststart.
+        # .532 versuchte es ausschliesslich am Worker-Start, und das kam per
+        # Bauart zu spaet: dort haelt der Job, der den Start ausloest, selbst
+        # schon einen Platz, und ein BoundedSemaphore darf nicht ersetzt werden,
+        # solange jemand ein Ticket haelt. In der NB-Abnahme vom 15.09. stand
+        # deshalb bei JEDEM Start „keeping 3 for now" und die Kapazitaet blieb
+        # bis zum Schluss auf der Config-Zahl — die Bindung fand nie statt.
+        # An DIESER Stelle ist die Vergabestelle garantiert leer (sie ist gerade
+        # entstanden, es laeuft noch kein Abholer), und `self.log` steht seit der
+        # Zeile darueber. Der Versuch am Worker-Start BLEIBT als Nachfuehrung:
+        # senkt ein Deckel-Druck die Strangzahl (B3), folgen die Plaetze beim
+        # naechsten Start mit ruhiger Vergabestelle nach.
+        try:
+            self._plaetze_an_straenge(self.worker_straenge())
+        except Exception as e:                            # noqa: BLE001
+            self.log(f"analysis slots: not bound to the compute threads "
+                     f"({type(e).__name__}: {e}) — the configured number applies")
         # .173 Auto-Default (User-Go 10.08.): Erst-Boot-Entscheid HIER im __init__ —
         # vor Publisher/Trigger/Web, es kann noch kein Event verarbeitet worden sein.
         self._kette_auto_default()
@@ -4176,15 +7089,18 @@ class Service:
 
         def lauf():
             try:
-                out, fehler = self._sammle_fahren(tage=0.1, mit_migriere=False, timeout=600)
+                # .536 B3: `_sammle_fahren` faehrt die ganze KETTE aus Haeppchen und
+                # liefert deren Summe als Zahl — der Griff nach „N faces collected"
+                # im Log-Text ist damit weg. `reconcile_unbekannte` laeuft EINMAL am
+                # Ende des Auftrags, nicht je Haeppchen.
+                summe, fehler = self._sammle_fahren(tage=0.1, mit_migriere=False, timeout=600)
                 if fehler:
                     self.log(f"scenario collection FAILED: {fehler}")
                 else:
-                    m = re.search(r"(\d+) faces collected", out or "")
-                    if m and int(m.group(1)) > 0:            # nur bei echten neuen Gesichtern clustern
+                    if summe:                                # nur bei echten neuen Gesichtern clustern
                         import anlernen
                         idents, _ = anlernen.reconcile_unbekannte()   # nimmt selbst den pool_lock
-                        self.log(f"scenario collection: {m.group(1)} new faces, "
+                        self.log(f"scenario collection: {summe} new faces, "
                                  f"{len(idents)} unknown identities")
             except subprocess.TimeoutExpired:
                 self.log("scenario collection TIMEOUT (>10 min)")
@@ -5201,101 +8117,417 @@ class Service:
             self.log(f"reorganize thread start error: {e}")
             return False
 
-    def _sammle_fahren(self, tage, mit_migriere, timeout):
-        """anlernen-sammle fahren — durch den W2-Worker (worker=an, Kontext-Buendelung) oder
-        als Subprozess (Fallback worker=aus). Rueckgabe (stdout_text, fehler|None); der
-        Subprozess-Weg wirft bei Timeout weiter subprocess.TimeoutExpired (alter Kontrakt).
+    # ------------------------------------------------ .536 B3: Sammeln in Haeppchen
+    # DIE ZAHLEN DER HAEPPCHEN-RECHNUNG, die NICHT in die Config gehoeren: harte
+    # Grenzen und Daempfung des Reglers. Sie schuetzen vor einer entgleisten
+    # Messung (ein Haeppchen, das auf einer ueberlasteten Maschine 20x zu lange
+    # brauchte, darf den Faktor nicht dauerhaft verbiegen), sie sind keine
+    # Betreiber-Entscheidung.
+    SAMMEL_FAKTOR_MIN = 0.05          # s Rechenzeit je Clip-Sekunde, untere Schranke
+    SAMMEL_FAKTOR_MAX = 50.0          # obere Schranke (CPU-Messung 16.09.: 1,50)
+    SAMMEL_FAKTOR_GEWICHT = 0.5       # Gewicht des neuen Messwerts (Rest: alter Wert)
+    SAMMEL_FAKTOR_SCHRITT = 2.0       # hoechstens Faktor 2 je Schritt (Daempfung)
+    SAMMEL_PROLOG_MAX_S = 900.0       # obere Schranke der gelernten Kaltstart-Reserve
+    SAMMEL_PROLOG_ABKLINGEN = 0.9     # der gelernte Kaltstart faellt langsam, steigt sofort
+    SAMMEL_CLIP_FALLBACK_S = 20.0     # Ereignis ohne bekannte Laenge (Frigate ohne Ende)
+    SAMMEL_HAEPPCHEN_N_MAX = 200      # Stueck-Deckel je Haeppchen (Groesse der Job-Zeile)
+    SAMMEL_WIEDERHOLUNG_MAX = 2       # fremdverschuldete Haeppchen: zwei Anlaeufe, dann laut
 
-        C1 (05.09.2026, bauplan_0505.md §1): der Worker-Weg ist jetzt KUNDE der
-        Vergabestelle — er nimmt einen Platz der Klasse `bg`, statt sich unsichtbar am
-        Job-Lock von Worker 1 anzustellen. Das war der Feldbefund vom 05.09.: 23
-        eingezogene LEBENDE Analysen an einem Vormittag, alle auf Platz 1, weil Platz 1
-        seinen Worker mit Sammle und Wanduhr teilte. Die Analyse stand dort stumm hinter
-        dem Sammel-Job (der Puls beginnt erst im Job), der Waechter hielt sie fuer tot.
-        Jetzt sieht der Broker den Sammel-Job: bei `analyse_plaetze = 1` ist der eine
-        Platz entweder Analyse ODER Sammeln — exakt das alte BG-Gate, nur sichtbar.
+    def _sammel_takt_pfad(self):
+        return os.path.join(self.cfg["data_dir"], "state", "sammel_takt.json")
+
+    def _sammel_takt_lesen(self):
+        """Die GELERNTEN Sammel-Zahlen DIESES Backends -> (faktor, prolog_kalt_s, quelle).
+
+        Sie stehen bewusst NICHT in der Config: der Betreiber stellt sie nicht ein,
+        die Anlage misst sie. In der Config stehen nur die Startwerte mit ihrer
+        Herkunft (Messung 16.09., CPU, obere Schranken) — auf einer Karte gelten
+        andere, und die kennt nur die Karte selbst. Je Backend eine Zeile, weil das
+        Verhaeltnis Prolog/Ereignis zwischen CPU, Intel und CUDA nicht uebertragbar
+        ist (der Prolog sind viele kleine Inferenzen bei det 320, die Ereignisse
+        wenige grosse bei det 1280)."""
+        f0 = float(self.cfg.get("sammel_rechenfaktor_start") or 1.5)
+        p0 = float(self.cfg.get("sammel_prolog_kalt_start_s") or 105)
+        try:
+            d = json.load(open(self._sammel_takt_pfad()))
+            e = d.get(str(self.cfg.get("backend") or "")) or {}
+            f = float(e.get("faktor_s_je_clip_s") or 0) or None
+            p = float(e.get("prolog_kalt_s") or 0) or None
+        except Exception:                                     # noqa: BLE001
+            f = p = None
+        return (min(max(f or f0, self.SAMMEL_FAKTOR_MIN), self.SAMMEL_FAKTOR_MAX),
+                min(max(p if p is not None else p0, 0.0), self.SAMMEL_PROLOG_MAX_S),
+                "measured" if (f or p) else "start value")
+
+    def _sammel_takt_schreiben(self, faktor, prolog_kalt_s, n):
+        """Gelernte Zahlen je Backend ablegen. Ein Fehler kostet nur das Lernen,
+        nie den Lauf (Muster wanduhr_fehl.json)."""
+        try:
+            pfad = self._sammel_takt_pfad()
+            try:
+                d = json.load(open(pfad))
+                if not isinstance(d, dict):
+                    d = {}
+            except Exception:                                 # noqa: BLE001
+                d = {}
+            d[str(self.cfg.get("backend") or "")] = {
+                "faktor_s_je_clip_s": round(float(faktor), 3),
+                "prolog_kalt_s": round(float(prolog_kalt_s), 1),
+                "haeppchen": int(n), "ts": round(time.time(), 1),
+                "version": os.environ.get("SUSLIK_VERSION", "dev")}
+            os.makedirs(os.path.dirname(pfad), exist_ok=True)
+            from core import atomar as _at
+            _at.json_schreiben(pfad, d)
+        except Exception as e:                                # noqa: BLE001
+            self.log(f"collection: pace not saved ({type(e).__name__}: {e}) "
+                     f"— measured again next run")
+
+    def _sammel_liste(self, tage):
+        """Die Ereignisliste EINES Auftrags -> ([(eid, clip_s)], tag).
+
+        Sie entsteht EINMAL je Auftrag im DIENST, nicht je Haeppchen im Worker:
+        sonst berechnete jedes Haeppchen den Pruef-Tag neu, und ein Wechsel
+        mitten in der Kette (der Betreiber verstellt eine Zulauf-Latte) haette
+        die Liste unter der laufenden Kette verschoben.
+
+        `import anlernen` bleibt LAZY (Bauplan B3.1, ausdrueckliche Auflage): die
+        Modul-Konstanten von `anlernen` kommen aus Umgebungsvariablen, die dieser
+        Dienst beim Config-Laden setzt. Eine Import-Zeile im Modulkopf wuerde alte
+        Werte einfrieren, und Dienst und Worker rechneten verschiedene Tage."""
+        import anlernen                                       # noqa: PLC0415 (s. Docstring)
+        tag = anlernen._pruef_tag()
+        schon = anlernen._schon_gesammelt()
+        geprueft = anlernen._schon_geprueft(tag) | schon
+        evs = [(e[0], float(e[3] or 0.0)) for e in anlernen._unbekannt_eids(tage)
+               if e[0] not in geprueft]
+        return evs, tag
+
+    def _sammel_packen(self, rest, faktor, ziel_s, fallback_s):
+        """Das naechste Haeppchen nach VORHERGESAGTER Rechenzeit packen
+        -> (eids, clip_s, rest).
+
+        Nicht nach Stueckzahl: die Streuung je Ereignis ist zu gross (gemessen
+        4 s bis 248 s). Uebertragbar ist die Rechenzeit JE CLIP-SEKUNDE — sie war
+        ueber 1080p, 4K und 4:3 stabil, weil die Abtastung (`fps_sample=2`) die
+        Frame-Zahl an die Clip-Laenge koppelt.
+
+        MINDESTENS EIN EREIGNIS, auch wenn es allein das Budget sprengt: sonst
+        blockierte ein einziger langer Clip die Kette fuer immer. Es bekommt dann
+        sein eigenes Haeppchen, und der Zeit-Deckel im Worker sorgt dafuer, dass
+        es der einzige Posten bleibt."""
+        eids, clip_s = [], 0.0
+        for eid, c in rest:
+            c = float(c) if c and c > 0 else float(fallback_s)
+            if eids and (clip_s + c) * faktor > float(ziel_s):
+                break
+            if len(eids) >= self.SAMMEL_HAEPPCHEN_N_MAX:
+                break
+            eids.append(eid)
+            clip_s += c
+        return eids, clip_s, rest[len(eids):]
+
+    def _sammel_faktor_nachfuehren(self, faktor, erg):
+        """Den Rechenfaktor aus einem fertigen Haeppchen nachfuehren -> neuer Faktor.
+
+        Gemessen wird nur der EREIGNIS-Anteil (`dauer_s` minus Prolog) gegen die
+        Clip-Sekunden, die das Haeppchen wirklich abgearbeitet hat. Gedaempft
+        (halbes Gewicht), je Schritt hoechstens Faktor 2, und in harten Grenzen:
+        eine einzelne entgleiste Messung soll die naechsten Haeppchen nicht
+        verbiegen."""
+        clip_s = float(erg.get("clip_s") or 0)
+        rechen_s = float(erg.get("dauer_s") or 0) - float(erg.get("prolog_s") or 0)
+        if clip_s <= 0 or rechen_s <= 0 or not erg.get("events"):
+            return faktor
+        gemessen = rechen_s / clip_s
+        neu = faktor * (1.0 - self.SAMMEL_FAKTOR_GEWICHT) + gemessen * self.SAMMEL_FAKTOR_GEWICHT
+        neu = min(max(neu, faktor / self.SAMMEL_FAKTOR_SCHRITT),
+                  faktor * self.SAMMEL_FAKTOR_SCHRITT)
+        return min(max(neu, self.SAMMEL_FAKTOR_MIN), self.SAMMEL_FAKTOR_MAX)
+
+    def _sammel_prolog_nachfuehren(self, prolog_kalt_s, erg):
+        """Die KALTE Prolog-Reserve nachfuehren -> neuer Wert.
+
+        Nur ein Haeppchen, das die Referenz-Matrix wirklich neu gebaut hat
+        (`cache: miss`), sagt etwas ueber den Kaltstart. Der Wert steigt SOFORT
+        auf einen hoeheren Messwert (er ist eine Frist-Reserve — zu klein
+        erschiesst den Worker) und faellt nur langsam."""
+        if erg.get("cache") != "miss":
+            return prolog_kalt_s
+        gemessen = float(erg.get("prolog_s") or 0)
+        if gemessen <= 0:
+            return prolog_kalt_s
+        neu = (gemessen if gemessen >= prolog_kalt_s
+               else prolog_kalt_s * self.SAMMEL_PROLOG_ABKLINGEN)
+        return min(max(neu, 0.0), self.SAMMEL_PROLOG_MAX_S)
+
+    def _sammle_fahren(self, tage, mit_migriere, timeout):
+        """DER KETTEN-FAHRER des Sammelns (.536 B3) -> (summe|None, fehler|None).
+
+        WARUM ES IHN GIBT, in Feldzahlen: bis .535 war ein Sammel-Lauf EIN Job
+        ueber ALLE offenen Ereignisse. Am 15.09. verfehlten sechs davon die
+        600-s-Frist und rissen beim Prozess-Schuss je 2-5 fremde Jobs mit; auf der
+        CPU-Maschine des Feldtesters scheiterten 368 von 369 Szenario-Sammellaeufen
+        („worker timeout (600s) or died"). Ein Haeppchen dauert jetzt Minuten, und
+        eine gerissene Frist kostet ein Haeppchen statt des Prozesses.
+
+        DIE KETTE (Gegenprobe §7 nach der Messung vom 16.09.):
+          * Liste, Pruef-Tag und Abhak-Vermerke EINMAL je Auftrag (`_sammel_liste`).
+          * Haeppchen 0 ist beim 06:00-Netz die POOL-PFLEGE (`mit_migriere=True`,
+            `nur_eids=[]` = kein Ereignis) — derselbe Jobtyp, kein neuer Codeweg.
+          * Danach Ereignis-Haeppchen, gepackt nach vorhergesagter Rechenzeit
+            (Clip-Sekunden x gemessener Faktor <= `sammel_haeppchen_ziel_s`).
+          * Frist je Haeppchen = Zielzeit x `sammel_haeppchen_frist_faktor`, plus
+            der kalten Prolog-Reserve NUR im ersten Haeppchen eines Auftrags
+            (danach ist die Referenz-Matrix im Worker warm, s. anlernen.py).
+          * Der Auftrag als Ganzes bleibt im alten Zeitrahmen des Aufrufers
+            (`timeout`): reicht der Rest nicht mehr fuer ein volles Haeppchen,
+            endet die Kette und sagt, was liegen bleibt. Verloren ist nichts —
+            `geprueft.jsonl` haelt jedes fertige Ereignis fest, der naechste
+            Auftrag setzt dort auf.
+          * Fremdverschuldete Haeppchen (der Prozess ging unter dem Job weg) gehen
+            UNGEBUCHT an den Kettenanfang zurueck, zweimal; danach laut abbrechen.
+
+        `_gpu_bg_lock` und der Platz werden JE HAEPPCHEN genommen, nicht je
+        Auftrag: ueber den ganzen Auftrag gehalten sperrte das Lock die
+        Subprozess-Jobs (Anlern-Nachpruefung) laenger als die alten 30 min — das
+        waere eine Verschlechterung. Zwischen zwei Haeppchen gibt es jetzt ein
+        Fenster, und der im Code dokumentierte schlimmste Fall „3 x timeout"
+        schrumpft von 3 x 1800 s auf 3 x Haeppchen-Frist. Die Lock-Ordnung
+        `_gpu_bg_lock -> Platz -> Job` bleibt unveraendert.
+
+        Der Puls bleibt Pflicht je Haeppchen (sonst zieht der Platzwaechter nach
+        120 s Stille den Platz ein, waehrend der Job weiterrechnet).
+
+        Rueckgabe ist die SUMME der neuen Gesichter ueber alle Haeppchen (statt
+        des stdout-Textes bis .535): die Aufrufer fischen ihre Zahl nicht mehr mit
+        einem regulaeren Ausdruck aus dem Log."""
+        if not self.cfg.get("worker", True):
+            return self._sammle_subprozess(tage, mit_migriere, timeout)
+        lp = os.path.join(self.cfg["data_dir"], "state", "sammle.log")
+        t_auftrag = time.monotonic()
+        ziel_s = float(self.cfg.get("sammel_haeppchen_ziel_s") or 120)
+        frist_faktor = float(self.cfg.get("sammel_haeppchen_frist_faktor") or 3)
+        faktor, prolog_kalt, quelle = self._sammel_takt_lesen()
+        faktor0, prolog0 = faktor, prolog_kalt
+        try:
+            liste, tag = self._sammel_liste(tage)
+        except Exception as e:                                # noqa: BLE001
+            return None, f"event list unreadable ({type(e).__name__}: {e})"
+        # Ereignisse ohne bekannte Laenge (Frigate hat sie nie beendet) bekommen den
+        # Median des Auftrags als Preis-Schaetzung — erfunden ist daran nur die
+        # Zuordnung, nicht die Groessenordnung; kennt der Auftrag gar keine Laenge,
+        # gilt der deklarierte Fallback.
+        _bekannt = sorted(c for _e, c in liste if c and c > 0)
+        fallback_s = (_bekannt[len(_bekannt) // 2] if _bekannt
+                      else self.SAMMEL_CLIP_FALLBACK_S)
+        warteschlange = []
+        if mit_migriere:
+            warteschlange.append({"art": "pflege", "eids": [], "clip_s": 0.0, "versuche": 0})
+        rest = liste
+        # DAS LOG WIRD JE AUFTRAG FRISCH GELEERT, aber ERST HIER — hinter der
+        # Liste und nur, wenn es wirklich etwas zu tun gibt (E4-Nachzug zu E3).
+        # Grund: ein Szenario-Nachsammeln ohne offene Ereignisse fuehrt kein
+        # einziges Haeppchen aus; stand das Leeren wie bis eben ganz oben, loeschte
+        # genau dieser Leerlauf-Auftrag das Log des VORIGEN, echten Laufs — der
+        # Betreiber sah danach eine leere Datei, obwohl nichts passiert war.
+        # Dasselbe galt fuer einen Auftrag, dessen Listenbildung scheitert.
+        # Geleert wird weiterhin je AUFTRAG und nicht je Haeppchen: der Worker
+        # haengt seine Zeilen an (JobLog im Anhaenge-Modus), also traegt das Log
+        # am Ende die ganze Kette; im Haeppchen zeigte es nur das letzte.
+        if warteschlange or rest:
+            try:
+                open(lp, "w").close()
+            except OSError as e:                              # noqa: BLE001
+                self.log(f"collection log {lp} not writable ({e})")
+        summe, n_haeppchen, offen_rest = 0, 0, 0
+        fehler = None
+        self._sammel_stand.update(
+            auftrag_aktiv=True, haeppchen_n=0, haeppchen_offen=len(liste),
+            letzte_dauer_s=None, cache_treffer=0, tag=tag,
+            faktor=round(faktor, 3), prolog_kalt_s=round(prolog_kalt, 1), quelle=quelle)
+        self.log(f"collection: {len(liste)} event(s) to check, batches of about "
+                 f"{ziel_s:.0f}s at {faktor:.2f}s per clip second ({quelle})")
+        try:
+            while True:
+                if warteschlange:
+                    h = warteschlange.pop(0)
+                elif rest:
+                    eids, clip_s, rest = self._sammel_packen(rest, faktor, ziel_s, fallback_s)
+                    h = {"art": "ereignisse", "eids": eids, "clip_s": clip_s, "versuche": 0}
+                else:
+                    break
+                # Die KALTE Reserve bekommt, wer wirklich kalt startet: das
+                # erste Haeppchen eines Auftrags (der Worker kann seit dem
+                # letzten Lauf neu gestartet sein, die Referenz-Matrix ist dann
+                # leer) — UND jede Wiederholung nach einem fremdverschuldeten
+                # Abgang, denn genau dort ist der Prozess unter dem Job
+                # weggegangen und der naechste beginnt wieder kalt. Ohne diesen
+                # zweiten Fall bekaeme die Wiederholung die WARME Frist und
+                # riesse sie auf einer langsamen Anlage gleich wieder.
+                kalt = (n_haeppchen == 0) or bool(h.get("versuche"))
+                frist = ziel_s * frist_faktor + (prolog_kalt if kalt else 0.0)
+                frist = min(frist, float(timeout))            # nie ueber den Rahmen des Aufrufers
+                rest_budget = float(timeout) - (time.monotonic() - t_auftrag)
+                # Ein Haeppchen wird nur begonnen, wenn seine GANZE Frist noch in
+                # den Rahmen des Aufrufers passt — sonst stuende der Auftrag laenger
+                # als die 600 s (Szenario) bzw. 1800 s (Netz), die er immer hatte.
+                # Das ERSTE laeuft trotzdem immer: sonst liefe bei knappem Rahmen nie
+                # eines, und die Kette kaeme nie vom Fleck (die Liste bilden kostet
+                # schon Sekunden).
+                if n_haeppchen and rest_budget < frist:
+                    offen_rest = len(h["eids"]) + sum(len(x["eids"]) for x in warteschlange) + len(rest)
+                    if offen_rest:
+                        self.log(f"collection: time budget of this run spent after "
+                                 f"{n_haeppchen} batch(es) — {offen_rest} event(s) left "
+                                 f"for the next run (nothing lost, they are not checked off)")
+                    break
+                erg, fehl, wi = self._sammle_haeppchen(
+                    tage, h, frist, mit_migriere=(h["art"] == "pflege"), log_pfad=lp)
+                if erg is None:
+                    if wi.get("fremdverschuldet") and h["versuche"] < self.SAMMEL_WIEDERHOLUNG_MAX:
+                        # UNGEBUCHT zurueck an den KETTENANFANG (Bauplan B3.3):
+                        # der Job hat seinen Fehler nicht verschuldet, seine
+                        # Ereignisse sind nicht abgehakt.
+                        h["versuche"] += 1
+                        warteschlange.insert(0, h)
+                        self.log(f"collection: batch put back unbooked (not its own "
+                                 f"fault: {fehl}) — attempt {h['versuche'] + 1} of "
+                                 f"{self.SAMMEL_WIEDERHOLUNG_MAX + 1}")
+                        continue
+                    fehler = fehl
+                    break
+                n_haeppchen += 1
+                summe += int(erg.get("neu") or 0)
+                if erg.get("cache") == "hit":
+                    self._sammel_stand["cache_treffer"] += 1
+                if h["art"] == "ereignisse":
+                    faktor = self._sammel_faktor_nachfuehren(faktor, erg)
+                prolog_kalt = self._sammel_prolog_nachfuehren(prolog_kalt, erg)
+                # Was der Zeit-Deckel im Worker liegen liess, kommt VORNE wieder
+                # in den Rest — es ist der aelteste Stoff des Auftrags.
+                offen = [e for e in (erg.get("offen") or [])]
+                if offen:
+                    _laengen = dict(liste)
+                    rest = [(e, _laengen.get(e, 0.0)) for e in offen] + rest
+                self._sammel_stand.update(
+                    haeppchen_n=n_haeppchen, haeppchen_offen=len(rest) + sum(
+                        len(x["eids"]) for x in warteschlange),
+                    letzte_dauer_s=erg.get("dauer_s"),
+                    faktor=round(faktor, 3), prolog_kalt_s=round(prolog_kalt, 1))
+                self.log(f"collection batch {n_haeppchen}: {erg.get('events')} event(s), "
+                         f"{erg.get('neu')} new face(s), {erg.get('dauer_s')}s "
+                         f"(prologue {erg.get('prolog_s')}s, references {erg.get('cache')})"
+                         + (f", {len(offen)} handed back" if offen else "")
+                         + f" — {len(rest)} left")
+        finally:
+            self._sammel_stand.update(auftrag_aktiv=False)
+            if n_haeppchen and (abs(faktor - faktor0) > 0.01
+                                or abs(prolog_kalt - prolog0) > 1.0):
+                self._sammel_takt_schreiben(faktor, prolog_kalt, n_haeppchen)
+        if fehler:
+            return (summe if n_haeppchen else None), fehler
+        return summe, None
+
+    def _sammle_haeppchen(self, tage, h, frist, mit_migriere, log_pfad):
+        """EIN Haeppchen durch den Worker -> (ergebnis|None, fehler|None, info).
+
+        Das ist der Rumpf, der bis .535 der ganze Lauf war — Lock, Platz, Job,
+        Rueckweg. Geaendert hat sich, WAS im Job steht (`nur_eids`,
+        `zeit_deckel_s`) und dass die Bilanz als Antwortfeld zurueckkommt.
+
+        C1 (05.09.2026, bauplan_0505.md §1): der Worker-Weg ist KUNDE der
+        Vergabestelle — er nimmt einen Platz der Klasse `bg`, statt sich unsichtbar
+        am Job-Lock von Worker 1 anzustellen. Das war der Feldbefund vom 05.09.: 23
+        eingezogene LEBENDE Analysen an einem Vormittag, alle auf Platz 1, weil
+        Platz 1 seinen Worker mit Sammle und Wanduhr teilte.
 
         `_gpu_bg_lock` bleibt darum: es serialisiert weiter gegen die SUBPROZESS-Jobs
-        (anlern_nachpruefung; .510: vorschlaege, .511: Referenz-QS NICHT mehr), die einen eigenen
-        GPU-Kontext aufmachen und keinen Platz halten (bekannte Luecke, bauplan §1).
-        Lock-Ordnung wie bei Ernte und Wanduhr: erst `_gpu_bg_lock`, dann Platz."""
-        if self.cfg.get("worker", True):
-            lp = os.path.join(self.cfg["data_dir"], "state", "sammle.log")
-            open(lp, "w").close()
-            with self._gpu_bg_lock:              # gegen die QS-/Nachpruef-Subprozesse serialisieren (Review 21.07.)
-                # FRIST = die des Jobs. Eine kuerzere Frist waere eine echte
-                # Verhaltensaenderung: auf einem Rueckstands-System kaeme das
-                # 06:00-Netz dann nie mehr dran.
-                # C3 (05.09.2026, Widerleger C1 Notiz 3, Nachzug N1): hier stand
-                # „die Wartestelle wandert nur vom Lock in die Vergabestelle" —
-                # das ist zu freundlich. Die Platz-Wartezeit kommt VOR den
-                # unveraenderten Job-Lock-Deckel (`.502`, ebenfalls `timeout`),
-                # sie ersetzt ihn nicht. Damit haelt dieser Zweig `_gpu_bg_lock`
-                # im schlimmsten Fall 3 x `timeout` (Platz + Job-Lock + Antwort)
-                # statt der 2 x vor .505 — beim 06:00-Netz also bis zu 90 statt
-                # 60 min. Blockiert werden dabei nur die Subprozess-Jobs
-                # (anlern_nachpruefung; .510: vorschlaege, .511: Referenz-QS NICHT mehr), die
-                # sich beim Anstehen mit einem `.locked()`-Blick begnuegen.
-                # C2 (05.09.2026): als wartend ANMELDEN, sonst ist dieser Kunde
-                # fuer die Fairness-Regel unsichtbar — die Ernte duerfte dann bei
-                # N >= 2 die N-1-Regel gegen die Analyse ausspielen, waehrend das
-                # 06:00-Netz danebensteht, und bei N = 1 kaeme es nie dran.
-                with self._plaetze.wartend("bg"), \
-                        self._plaetze.platz("sammle", art="bg",
-                                            timeout_s=timeout) as nr:
-                    if nr is None:
-                        # Kein Platz binnen der Frist — derselbe Rueckweg wie bisher bei
-                        # „Worker die ganze Frist beschaeftigt": (out, fehler). Die
-                        # Aufrufer loggen ihn und melden ihn (Netz-Sammeln zusaetzlich
-                        # per Push); genau das soll ein System auch sagen, das eine
-                        # halbe Stunde lang keinen freien Platz hatte.
-                        self.log(f"collection: no free analysis slot within "
-                                 f"{timeout}s — postponed")
-                        return "", (f"no free analysis slot within {timeout}s — "
-                                    f"collection postponed")
-                    w = self._worker(nr)
-                    # C3 (05.09.2026, Widerleger C1 Punkt 2): eigener Rueckweg je
-                    # Aufruf — daran haengt unten die Unterscheidung „Worker tot"
-                    # gegen „Job-Lock die ganze Frist fremd belegt".
-                    _wi = {}
-                    antwort = w.job({"typ": "sammle", "tage": tage,
-                                     "mit_migriere": mit_migriere, "log": lp,
-                                     # .398 Ring-Zulauf: der Szenario-Weg speist
-                                     # die Kalibrier-Ringe (Deckel aus der Config,
-                                     # 0 = aus wie ueberall)
-                                     "kalib_deckel": int(self.cfg.get("live_kalib_max") or 0)},
-                                    timeout, info=_wi,
-                                    # C1: Lebenszeichen des Platzes (A2/A3-Muster der
-                                    # Ernte). Ohne es zoege der Platzwaechter jeden
-                                    # Sammel-Job ueber 120 s ein — der Job liefe weiter
-                                    # und der Platz waere doppelt vergeben.
-                                    puls=self._plaetze.puls_fuer(nr))
-            try:
-                out = open(lp).read()
-            except Exception:
-                out = ""
-            if antwort is None:
-                # C3 (05.09.2026, Widerleger C1 Punkt 2, Nachzug N1): zuerst die
-                # Frage, die der Rueckweg dieses Aufrufs sicher beantwortet. Blieb
-                # das Job-Lock die ganze Frist fremd belegt, LEBT der Worker — die
-                # Meldung „worker died (…)" darunter haette dann eine beliebig
-                # alte, FREMDE Todesursache genannt (sie wird nur unter dem Lock
-                # gesetzt, dieser Aufruf hat das Lock nie bekommen). Beim
-                # Netz-Sammeln geht dieser Text per Pushover an den Nutzer.
-                if _wi.get("lock_timeout"):
-                    return out, (f"worker busy: its job lock was held by another "
-                                 f"job for the full {timeout}s — collection "
-                                 f"postponed")
-                # C0/W4-2 (05.09.2026, Widerleger A4): die WIRKLICHE Ursache statt der
-                # Sammel-Vermutung „timeout or died" — Muster `run_analyze`. Sie steht
-                # im Docker-Log schon; ohne sie reiste in Log und Pushover-Meldung des
-                # Netz-Sammelns nur ein Entweder-oder.
-                _u = getattr(w, "letzte_ursache", None)
-                return out, (f"worker died ({_u})" if _u
-                             else f"worker timeout ({timeout}s) or died")
-            if not antwort.get("ok"):
-                return out, str(antwort.get("fehler") or "unbekannt")
-            return out, None
+        (anlern_nachpruefung; .510: vorschlaege, .511: Referenz-QS NICHT mehr), die
+        einen eigenen GPU-Kontext aufmachen und keinen Platz halten (bekannte Luecke,
+        bauplan §1). Lock-Ordnung wie bei Ernte und Wanduhr: erst `_gpu_bg_lock`,
+        dann Platz."""
+        _wi = {}
+        with self._gpu_bg_lock:              # gegen die QS-/Nachpruef-Subprozesse serialisieren (Review 21.07.)
+            # C2 (05.09.2026): als wartend ANMELDEN, sonst ist dieser Kunde
+            # fuer die Fairness-Regel unsichtbar — die Ernte duerfte dann bei
+            # N >= 2 die N-1-Regel gegen die Analyse ausspielen, waehrend das
+            # 06:00-Netz danebensteht, und bei N = 1 kaeme es nie dran.
+            with self._plaetze.wartend("bg"), \
+                    self._plaetze.platz("sammle", art="bg", timeout_s=frist) as nr:
+                if nr is None:
+                    # Kein Platz binnen der Frist — derselbe Rueckweg wie bisher bei
+                    # „Worker die ganze Frist beschaeftigt". Die Aufrufer loggen ihn
+                    # und melden ihn (Netz-Sammeln zusaetzlich per Push); genau das
+                    # soll ein System auch sagen, das keinen freien Platz hatte.
+                    self.log(f"collection: no free analysis slot within "
+                             f"{frist:.0f}s — postponed")
+                    return None, (f"no free analysis slot within {frist:.0f}s — "
+                                  f"collection postponed"), _wi
+                w = self._worker(nr)
+                antwort = w.job({"typ": "sammle", "tage": tage,
+                                 "mit_migriere": mit_migriere,
+                                 "log": log_pfad,
+                                 # .536 B3: die beiden Haeppchen-Felder. `nur_eids`
+                                 # ist bei der Pool-Pflege die LEERE Liste — sie
+                                 # heisst „kein Ereignis", nicht „alles".
+                                 "nur_eids": list(h["eids"]),
+                                 "zeit_deckel_s": float(self.cfg.get(
+                                     "sammel_haeppchen_ziel_s") or 120),
+                                 # .398 Ring-Zulauf: der Szenario-Weg speist
+                                 # die Kalibrier-Ringe (Deckel aus der Config,
+                                 # 0 = aus wie ueberall)
+                                 "kalib_deckel": int(self.cfg.get("live_kalib_max") or 0)},
+                                frist, info=_wi,
+                                # C1: Lebenszeichen des Platzes (A2/A3-Muster der
+                                # Ernte). Ohne es zoege der Platzwaechter jeden
+                                # Sammel-Job ueber 120 s ein — der Job liefe weiter
+                                # und der Platz waere doppelt vergeben.
+                                puls=self._plaetze.puls_fuer(nr))
+        if antwort is None:
+            # C3 (05.09.2026, Widerleger C1 Punkt 2, Nachzug N1): zuerst die
+            # Frage, die der Rueckweg dieses Aufrufs sicher beantwortet. Blieb
+            # der Prozess unter dem Job weg (Speicher-Zusage gerissen,
+            # geordnetes Ende, Tod), ist das NICHT die Schuld dieses Jobs — die
+            # Meldung „worker died (…)" darunter wuerde ihm eine anhaengen.
+            # Genau dieser Rueckweg traegt seit .536 die Wiederholung: der
+            # Ketten-Fahrer legt so ein Haeppchen UNGEBUCHT zurueck.
+            if _wi.get("fremdverschuldet"):
+                return None, (f"the worker process went away while collecting "
+                              f"(not the job's fault: "
+                              f"{getattr(w, 'letzte_ursache', None) or '?'})"), _wi
+            # C0/W4-2 (05.09.2026, Widerleger A4): die WIRKLICHE Ursache statt der
+            # Sammel-Vermutung „timeout or died" — Muster `run_analyze`.
+            _u = getattr(w, "letzte_ursache", None)
+            return None, (f"worker died ({_u})" if _u
+                          else f"worker timeout ({frist:.0f}s) or died"), _wi
+        if not antwort.get("ok"):
+            return None, str(antwort.get("fehler") or "unbekannt"), _wi
+        erg = antwort.get("sammle")
+        if not isinstance(erg, dict):
+            # Ein Worker ohne das Antwortfeld (Alt-Image im Mischbetrieb) — der
+            # Job LIEF, nur die Bilanz fehlt. Nicht als Fehler buchen, sonst
+            # wiederholte die Kette einen erledigten Lauf; stattdessen eine
+            # ehrliche Null und die Ereignisse dieses Haeppchens gelten als
+            # erledigt (sie sind in `geprueft.jsonl` abgehakt).
+            self.log("collection: worker answered without a batch summary "
+                     "(older worker?) — counting 0 new faces for this batch")
+            erg = {"neu": 0, "events": len(h["eids"]), "offen": [],
+                   "dauer_s": None, "prolog_s": None, "clip_s": 0.0, "cache": "?"}
+        return erg, None, _wi
+
+    def _sammle_subprozess(self, tage, mit_migriere, timeout):
+        """Der Fallback-Weg OHNE Worker (`worker: false`) -> (summe|None, fehler|None).
+
+        BEWUSSTE TEIL-LUECKE (.536 B3): hier wird NICHT in Haeppchen zerlegt. Der
+        Grund, der die Zerlegung ueberhaupt erzwingt, gibt es auf diesem Weg nicht
+        — es gibt keinen Worker-Prozess, dessen Tod fremde Jobs mitreisst; ein
+        ueberzogener Lauf kostet hier nur sich selbst (`subprocess.TimeoutExpired`,
+        alter Kontrakt, die Aufrufer fangen ihn). Der Preis ist ehrlich benannt:
+        wer `worker: false` faehrt, behaelt das Verhalten der .535.
+
+        Und weil dieser Weg keine strukturierte Antwort hat, bleibt hier — und NUR
+        hier — der Griff nach der Summe im Text. Er steht jetzt an EINER Stelle
+        statt an zweien (bis .535 in `_szenario_nachsammeln` und `_netz_sammeln`)."""
         env = dict(os.environ, OV_DEVICE=self.cfg["ov_device"],
                    # .398: Ring-Deckel auch auf dem Subprozess-Fallback-Weg
                    # (K3: die Erweiterung muss BEIDE sammle-Wege erreichen)
@@ -5308,8 +8540,21 @@ class Service:
                                preexec_fn=_analyse_nice)   # Issue #21, s. ANALYSE_NICE
         if r.returncode != 0:
             tail = " | ".join((r.stderr or r.stdout or "").strip().splitlines()[-3:])[:300]
-            return (r.stdout or ""), f"exit {r.returncode}: {tail}"
-        return (r.stdout or ""), None
+            return None, f"exit {r.returncode}: {tail}"
+        m = re.search(r"(\d+) faces collected", r.stdout or "")
+        return (int(m.group(1)) if m else 0), None
+
+    def sammel_zustand(self):
+        """Der Sammel-Stand fuer `/health` (.536 B3.4) — Momentaufnahme, keine Historie."""
+        s = dict(self._sammel_stand)
+        return {"auftrag_aktiv": bool(s.get("auftrag_aktiv")),
+                "haeppchen_offen": s.get("haeppchen_offen"),
+                "haeppchen_n": s.get("haeppchen_n"),
+                "letzte_dauer_s": s.get("letzte_dauer_s"),
+                "rechenfaktor_s_je_clip_s": s.get("faktor"),
+                "prolog_kalt_s": s.get("prolog_kalt_s"),
+                "quelle": s.get("quelle"),
+                "cache_treffer": s.get("cache_treffer")}
 
     def _netz_sammeln(self):
         """Naechtliches Auffangnetz (06:00): breiter Sammel-Sweep MIT Modell-Neupruefung (migriere).
@@ -5326,14 +8571,19 @@ class Service:
                 return
             self._sammel_laeuft = True
         try:
-            out, fehler = self._sammle_fahren(tage=2, mit_migriere=True, timeout=1800)
+            # .536 B3: die Kette beginnt hier mit der POOL-PFLEGE als Haeppchen 0
+            # (`mit_migriere=True` wirkt nur dort, `nur_eids=[]` = kein Ereignis),
+            # danach laufen die Ereignis-Haeppchen. Kein neuer Jobtyp, kein zweiter
+            # Codeweg — und die 1800 s sind jetzt der Rahmen des AUFTRAGS, nicht die
+            # Frist eines einzelnen Jobs (die Frist, an der am 15.09. sechs Jobs
+            # starben und je 2-5 fremde mitrissen).
+            summe, fehler = self._sammle_fahren(tage=2, mit_migriere=True, timeout=1800)
             if fehler:
                 self.log(f"SAFETY-NET COLLECTION FAILED: {fehler}")
                 push(self.cfg, "suslik: Netz-Sammeln fehlgeschlagen",
                      f"sammle scheiterte: {fehler}", None)
             else:
-                m = re.search(r"(\d+) faces collected", out or "")
-                n = int(m.group(1)) if m else 0
+                n = int(summe or 0)
                 import anlernen
                 idents, _ = anlernen.reconcile_unbekannte()
                 self.log(f"safety-net collection ok ({n} new faces, {len(idents)} unknown identities)")
@@ -5554,7 +8804,11 @@ class Service:
                     # wie das popleft, damit kein zweiter Abholer sie erbt.
                     _marke = self._ev_marken.pop(eid, None)
                 try:
-                    self.process_safe(eid, marke=_marke)
+                    # .534 (B5): der Einreih-Zeitpunkt reist MIT dem Eintrag und
+                    # wird hier mit ihm herausgenommen — daraus wird die Spalte
+                    # „warte" des Zeitprotokolls. Er kostet nichts: die Queue
+                    # fuehrt ihn seit B1 ohnehin.
+                    self.process_safe(eid, marke=_marke, einge_ts=_einge)
                 finally:
                     # B1/T2 (05.09.2026, Widerleger-Befund W-A3 "Queue-Fenster"):
                     # der Vermerk faellt ERST HIER, nicht schon beim popleft.
@@ -5585,6 +8839,11 @@ class Service:
         for _i in range(max(1, self._plaetze.kapazitaet)):
             threading.Thread(target=lauf, daemon=True,
                              name=f"event-queue-{_i + 1}").start()
+        # .534 (B6c): die Abrufstufe haengt an derselben Warteschlange und
+        # startet mit ihr. Sie rechnet nicht und nimmt keinen Platz — sie legt
+        # fertige Clips bereit, damit die Rechenstraenge nicht auf Frigate
+        # warten. Ausgeschaltet (vorlauf_max = 0) tut ihr Takt nichts.
+        self.vorlauf().start()
 
     def rueckstau_zahlen(self):
         """(wartend, in_arbeit) — die EINE Quelle fuer Banner, Kachel, /health
@@ -5764,9 +9023,14 @@ class Service:
         Warteschlange steht dann ohnehin sichtbar am Anschlag.
         """
         if not hasattr(self, "_ev_q"):
+            # .534 (Abnahme-Befund B-6): auch der Timer-Rueckfall reicht den
+            # Einreih-Zeitpunkt durch. Ohne ihn stand im Zeitprotokoll jeder ueber
+            # diesen Weg gestarteten Analyse `warte n/a` — und wer den
+            # Einspiel-Weg zum MESSEN nutzt, bekam die Spalte nie.
             threading.Timer(0 if sofort else self.cfg["clip_delay"],
                             self.process_safe, args=(eid,),
-                            kwargs={"marke": marke}).start()
+                            kwargs={"marke": marke,
+                                    "einge_ts": time.time()}).start()
             return True
         with self._ev_wecker:
             if eid in self._ev_gesehen:
@@ -6019,7 +9283,7 @@ class Service:
         weil dann ohnehin alles stand; bei N Plaetzen sinkt die Kapazitaet schleichend.
 
         Kriterium ist das Lebenszeichen, NICHT eine Frist auf die Analysedauer: ein
-        wartender Thread pulst alle PULS_TAKT_S (s. WorkerProzess.job), ein haengender
+        wartender Thread pulst alle PULS_TAKT_S (s. WorkerDienst.job), ein haengender
         nicht. Deshalb darf eine legale Analyse beliebig lange dauern, ohne dass hier
         etwas passiert. **Bewusst KEINE zweite Frist auf die Laufzeit** — zwei Waechter
         auf dieselbe Frage waeren ein Fehler, kein doppelter Schutz.
@@ -6057,9 +9321,16 @@ class Service:
             while True:
                 time.sleep(PULS_TAKT_S * 2)
                 try:
-                    for nr, etikett, alter in self._plaetze.stumme_plaetze(PLATZ_STUMM_FRIST_S):
+                    stumme = self._plaetze.stumme_plaetze(PLATZ_STUMM_FRIST_S)
+                    if not stumme:
+                        continue
+                    # E3.3 (W2-B8): DER WAECHTER URTEILT JE PROZESS, MIT KENNTNIS
+                    # ALLER HALTER — die Runde wird EINMAL aufgenommen und dann
+                    # abgearbeitet (s. `_platzwaechter_runde`).
+                    runde = self._platzwaechter_runde(stumme)
+                    for nr, etikett, alter in stumme:
                         try:
-                            self._platzwaechter_platz(nr, etikett, alter)
+                            self._platzwaechter_platz(nr, etikett, alter, runde=runde)
                         except Exception as e:            # noqa: BLE001
                             self.log(f"slot {nr}: watchdog step failed: "
                                      f"{type(e).__name__}: {e}")
@@ -6067,7 +9338,39 @@ class Service:
                     self.log(f"slot watchdog error: {type(e).__name__}: {e}")
         threading.Thread(target=lauf, daemon=True, name="platzwache").start()
 
-    def _platzwaechter_platz(self, nr, etikett, alter_s, gnadenfrist_s=None):
+    def _platzwaechter_runde(self, stumme):
+        """DIE LAGE EINER WAECHTER-RUNDE — einmal aufgenommen, fuer alle stummen
+        Plaetze dieser Runde (W2-B8, E3.3).
+
+        WARUM ES DIESE AUFNAHME BRAUCHT, und warum das seit E3.1 ein echter Fehler
+        war: bis .526 gehoerte jedem Platz ein EIGENER Worker-Prozess — der Schuss
+        wegen Platz 2 traf genau Platz 2. Seit dem Umbau gibt es EINEN Prozess mit N
+        Rechenstraengen. Der Waechter arbeitete seine Liste aber weiter Platz fuer
+        Platz ab und schoss je Eintrag. Zwei Folgen, beide schlecht:
+          1. KOLLATERAL UNBENANNT. Ein Schuss wegen EINES stummen Platzes nimmt die
+             Jobs ALLER anderen mit. Sie werden korrekt als fremdverschuldet gebucht
+             (W2-B4/B5) — aber niemand sagte, dass es sie gab. Wer im Log sucht,
+             warum vier Ereignisse gleichzeitig in den Retry gingen, fand nur einen
+             Satz ueber Platz 2.
+          2. ZWEITER SCHUSS AUF EINEN UNSCHULDIGEN. Nach dem ersten Schuss startet
+             der naechste Job SOFORT einen frischen Prozess. Der zweite stumme Platz
+             derselben Runde haette auf DEN geschossen — auf einen Prozess, der
+             gerade erst hochgekommen ist und mit dem alten Haenger nichts zu tun
+             hat. Die Liste ist zu diesem Zeitpunkt ohnehin schon bis zu eine
+             Gnadenfrist alt (B4-Befund).
+        Deshalb: EINE Aufnahme, EIN Schuss je Runde, und die Kollateral-Zahl steht
+        in der Log-Zeile. -> dict, das `_platzwaechter_platz` mitfuehrt."""
+        z = self._plaetze.zustand()
+        stumm_nrn = {nr for nr, _e, _a in stumme}
+        halter = list(z.get("plaetze") or [])
+        return {"geschossen": False, "pid": None, "halter": halter,
+                "stumm_n": len(stumme),
+                # Die LEBENDEN Mitbetroffenen: Plaetze, die pulsen und deren Job ein
+                # Schuss trotzdem kostet. Genau das ist der Preis, den die Zeile
+                # nennen muss.
+                "lebend": [p for p in halter if p.get("nr") not in stumm_nrn]}
+
+    def _platzwaechter_platz(self, nr, etikett, alter_s, gnadenfrist_s=None, runde=None):
         """Die drei Schritte des Platzwaechters fuer EINEN stummen Platz (A1, s.
         `start_platzwaechter`). `gnadenfrist_s` nur fuer Proben; Werk 2 x PULS_TAKT_S.
 
@@ -6092,16 +9395,47 @@ class Service:
             self.log(f"slot {nr}: no longer silent (pulsed {_alter}s ago) — "
                      f"skipped, no kill ({etikett})")
             return None
-        # (b) Der Worker DIESES Platzes — `_worker(nr)` ist die eine Quelle. Der Kill
-        # trifft, was auf diesem Worker gerade rechnet: den haengenden Job des Halters
-        # ODER den fremden Job, hinter dem der Halter am Job-Lock steht (Platz 1 teilt
-        # seinen Worker bis C1 mit den Hintergrund-Jobs). In beiden Faellen kommt der
-        # Halter wieder in Bewegung — oder er ist wirklich tot, und dann bewegt er
-        # sich auch jetzt nicht.
+        # (b) Der Worker — `_worker(nr)` ist die eine Quelle. Der Kill loest den
+        # haengenden Halter aus seinem Warten; kommt er nicht in Bewegung, ist er
+        # wirklich tot.
+        # E3.1 — WAS DER SCHUSS SEIT DEM UMBAU KOSTET, ehrlich gesagt: es gibt nur
+        # noch EINEN Worker-Prozess, und er ist die kleinste schiessbare Einheit.
+        # Ein Schuss wegen Platz 2 nimmt die Jobs der uebrigen Plaetze mit. Die
+        # bekommen dafuer keine Schuld: der Lese-Thread sagt sie am EOF als
+        # `fremdverschuldet` ab, ihre Aufrufer wiederholen ohne Strafe (W2-B4/B5).
+        # E3.3 (W2-B8): der Schuss faellt JE PROZESS und mit Kenntnis ALLER Halter —
+        # einmal je Runde, und die Zeile nennt die lebenden Mitbetroffenen. Ein
+        # GEZIELTER Schuss auf einen einzelnen Rechenstrang wird nicht gebaut: ein
+        # Python-Thread ist von aussen nicht beendbar (Herleitung in
+        # `WorkerDienst.kill_hart`). Die Reihenfolge bleibt bewusst so: lieber N Jobs
+        # sauber wiederholen als einen haengenden Platz stehen lassen, denn der haelt
+        # sonst dauerhaft ein Fenster.
         w = self._worker(nr)
-        geschossen = bool(w.kill_hart(grund=f"slot {nr} silent for {alter_s}s",
-                                      quelle="the slot watchdog")) \
-            if w is not None else False
+        if w is None:
+            geschossen = False
+        elif runde is not None and runde.get("geschossen"):
+            # E3.3 (W2-B8): IN DIESER RUNDE IST DER EINE PROZESS SCHON GESCHOSSEN.
+            # Ein zweiter Schuss traefe entweder ins Leere oder — schlimmer — einen
+            # frisch gestarteten Prozess, der mit dem Haenger nichts zu tun hat.
+            # Der Entscheid unten laeuft trotzdem: ob DIESER Halter zurueckkommt,
+            # ist eine eigene Frage.
+            geschossen = True
+            self.log(f"slot {nr}: the one worker process was already shot in this "
+                     f"watchdog round — no second shot ({etikett})")
+        else:
+            _mit = [p for p in (runde or {}).get("lebend", [])]
+            self.log(f"slot {nr}: silent for {alter_s}s — shooting the ONE worker "
+                     f"process (a hung compute thread cannot be shot on its own)"
+                     + (f"; {len(_mit)} live holder(s) lose their job with it and "
+                        f"are booked as not their own fault: "
+                        f"{', '.join(str(p.get('eid')) for p in _mit)}"
+                        if _mit else "; no other holder is affected"))
+            geschossen = bool(w.kill_hart(
+                grund=f"slot {nr} silent for {alter_s}s"
+                      + (f", {len(_mit)} live holder(s) affected" if _mit else ""),
+                quelle="the slot watchdog", haenger=True))
+            if runde is not None and geschossen:
+                runde["geschossen"] = True
         urteil = self._platzwaechter_entscheid(nr, marke_vorher, gnadenfrist_s)
         if urteil == "zurueckgekehrt":
             # (d) Sein `finally` lief: er war blockiert, nicht tot. Was aus seiner
@@ -6195,8 +9529,43 @@ class Service:
             # Waechter verhindern soll. Er kann ihn hier nicht heilen (die
             # Schlange ist voll), aber er muss ihn SAGEN — der naechste Sweep holt
             # es innerhalb `lookback_h` zurueck, darueber hinaus der Merkzettel.
-            if self.event_einreihen(eid, sofort=True):
+            # .534 (B9b) — DER VERSUCHSZAEHLER. Feldbefund 15.09.: ein Ereignis,
+            # das Frigate nie abgeschlossen hatte, liess die Job-Frist reissen,
+            # der Waechter schoss den EINEN Worker-Prozess und reihte dasselbe
+            # Ereignis sofort wieder ein — im 600-s-Takt, mit allen Nachbarjobs
+            # als Kollateralschaden. B9a nimmt diesem Fall die Ursache; der
+            # Zaehler hier ist das Netz darunter, denn es gibt mehr als eine Art,
+            # einen Job zum Haengen zu bringen. Nach HAENGER_VERSUCHE_MAX
+            # Einzuegen bekommt das Ereignis eine ehrliche Akte-Zeile und ist
+            # fertig — lieber ein uebersprungenes Ereignis als eine Anlage, die
+            # nichts mehr urteilt.
+            # `getattr`, weil die Proben den Dienst als Teil-Buehne aufstellen
+            # (`Service.__new__`) — derselbe Grund wie ueberall sonst hier.
+            _merk = getattr(self, "_haenger_versuche", None)
+            if _merk is None:
+                _merk = self._haenger_versuche = {}
+            _v = _merk.get(eid, 0) + 1
+            _merk[eid] = _v
+            if _v >= HAENGER_VERSUCHE_MAX:
+                _merk.pop(eid, None)
+                self._uebersprungen_zaehlen()
+                self._uebersprungen_buchen(
+                    eid, etikett if isinstance(etikett, str) else "?", None,
+                    "haenger",
+                    f"the analysis of this event was collected dead {_v} times "
+                    f"(job deadline) — skipped so it cannot keep killing the "
+                    f"worker process")
+                self.log(f"slot {nr}: dead analysis {eid} NOT re-queued — "
+                         f"{_v}. collection, skipped for good (see record)")
+            elif self.event_einreihen(eid, sofort=True):
+                # WORTLAUT UNVERAENDERT: an dieser Zeile haengt eine Zusicherung
+                # der S11-Proben. Die Versuchszahl bekommt ihre eigene Zeile, und
+                # nur, wenn es wirklich schon einmal passiert ist.
                 self.log(f"slot {nr}: dead analysis {eid} re-queued")
+                if _v > 1:
+                    self.log(f"slot {nr}: {eid} has now been collected {_v}/"
+                             f"{HAENGER_VERSUCHE_MAX} times — after that it is "
+                             f"skipped instead of re-queued")
             else:
                 self.log(f"slot {nr}: dead analysis {eid} could NOT be re-queued "
                          f"(queue full or already queued) — the next sweep has to "
@@ -6485,7 +9854,19 @@ class Service:
         # .505 (05.09.2026): Obergrenze 2000 -> 5000, Zwilling von
         # core.einspielen.FENSTER_DECKEL_MAX (beide Zahlen gehoeren zusammen).
         "einspiel_deckel": (int, 1, 5000, "upper limit for a single support replay call (POST /support/einspielen), up to 5000. 20 is the default and enough for a spot check. Raise it to replay a whole hour or day through the full path — analysis, records, alerts and the label written back to Frigate. This limit caps how many events are queued, not how far the call looks: it always pages through the whole window and then takes the oldest events (\"richtung\": \"vor\") or the newest ones (\"zurueck\"); if you ask for more than this limit, the answer says so in \"geklemmt_auf\". On an installation that is already behind, a large replay competes with catching up, so watch the backlog (/health) while it runs"),
-        "analyse_plaetze": (int, 0, 4, "how many event analyses may run at the same time. 1 is the default and means exactly what the service has always done: one event after another. 0 means automatic: the value measured fastest on your accelerator (3 on Nvidia, 2 on Intel, 1 on CPU). Raising it lets the accelerator work on a second event while the first one is fetching or decoding its clip, which is where most of the idle time sits. Each slot brings its own worker process and its own model session, so memory grows with it: measured 1.2 to 1.4 GB of graphics memory per slot. Going above the measured value did not get faster in our tests"),
+        # E3.2 (14.09.2026): die Obergrenze kommt aus core.gpubudget.STRAENGE_MAX,
+        # nicht als zweites Literal — die Kapp-Regel im Dienst liest denselben Wert
+        # (Deckungs-Vertrag; ein Schema, das mehr erlaubt als der Dienst nimmt,
+        # waere ein stilles Versprechen).
+        "worker_vram_mb": (int, 0, 65536, "0 is the default and means automatic: the cap is computed from what the card really has free. A number sets a fixed cap in MB on the card memory the analysis worker's inference arena may use — the escape hatch for installations where nvidia-smi is not reachable inside the container, so the automatic computation has nothing to measure. The cap is set when the worker process starts and holds for its whole life; a smaller one only takes effect on the next start. Below the measured minimum the worker refuses to start and says so. This does not change how many compute threads run — that is worker_straenge"),
+        "worker_arena_shrink": (int, 0, 1, "1 lets the analysis worker hand unused card memory back to the driver after each recognition run, and that is the default. Measured on an RTX 2060 on 15.09.2026 against 4K clips with up to 205 faces per frame: with two compute threads the worker's card memory stays flat instead of creeping up, its peak drops a little, and an event takes about 2 to 4 percent longer; the results were identical either way. Set it to 0 on a card with plenty of room to spare. Only NVIDIA cards read this"),
+        # .532: der Verweis auf die ORT-Fassung gehoert in den Code, nicht in
+        # den Text der Oberflaeche — der Betreiber soll wissen, WAS der Schalter
+        # tut, nicht welche Fehlernummer dahintersteht (onnxruntime issue 29351,
+        # Fassung 1.26.0 im Image, behoben erst in 1.29.0).
+        "worker_mem_pattern": (int, 0, 1, "0 is the default and switches off onnxruntime's memory pattern planner on NVIDIA cards. With the version in this image the planner keeps a block per run that is never handed back once a second compute thread runs the same model, so the worker's card memory grows slowly but steadily. Measured on an RTX 2060 on 15.09.2026 against 4K clips with up to 205 faces per frame: with the planner off a single thread needs about 11 percent less card memory and one event takes about 4 percent longer; with two threads it costs no time at all. Set it to 1 only if you want the old behaviour back. Only NVIDIA cards read this"),
+        "worker_straenge": (int, 0, _gpubudget.STRAENGE_MAX, "how many compute threads the analysis worker runs in its one process. 0 is the default and means automatic: the number is computed from the memory this machine really has — card memory on Nvidia, container memory on Intel — minus what the service itself, the live watchers and a safety reserve need. Set a number only if you want to override that: the value is used as asked, even above the computed number, and the service says so in the log and in /health. Each thread costs measured memory (about 1.7 GB of card memory per thread on Nvidia, about 1.6 GB of system memory on Intel), and the hard ceiling is worker_straenge's own maximum (raised from four to six in 0.1.0.535 after a field measurement showed three threads leaving the card at 55 % average load with 2769 MB of 12288 used — where the curve really flattens has to be measured, not guessed). Without a value set here, the measured throughput suggestion still caps the automatic number. Since 0.1.0.536 this is THE one setting behind \"Compute threads\" on the graphics card page: the number of event analyses that may run at the same time follows it (one analysis slot per thread), so the old analyse_plaetze key is no longer a second setting beside it — it survives only as an expert override that can take slots away, never add them"),
+        "analyse_plaetze": (int, 0, _gpubudget.STRAENGE_MAX, "expert override, not shown in the interface: how many event analyses may run at the same time. 0 is the default and means what 0.1.0.536 made the rule — one analysis slot per compute thread, so this number follows worker_straenge and needs no setting of its own. A number here can only take slots AWAY: it is used when it is SMALLER than the number of compute threads, and ignored (with a line in the log) when it is larger, because an extra slot without a thread behind it only makes a job wait inside the worker against its deadline. An old value from before 0.1.0.536 is cleared once at startup, with the old number in the audit log: the key changed its meaning, and the slider used to write it on every save. Set Compute threads on the graphics card page instead"),
         # N1 (05.09.2026, Widerleger E3c Punkt 11): „allowed cores" beschrieb den
         # Mechanismus vor .384 — seither wird der Wert beim Start GEMESSEN
         # (cgroup-Quote gegen die Affinitaets-Maske, das Kleinere gewinnt).
@@ -6556,7 +9937,6 @@ class Service:
         "urteil_norm_min": (float, _NORM_LO, _NORM_HI, "recognition bar (feature norm): the same measure as the catalogue bar above, but for the recognition side. FACTORY VALUE 0 = switched off. IT DOES NOT SIEVE: the value is stored and resolved per camera, but the recognition path does not measure the feature norm at all — switching that on means loading a second copy of the recognition model in the analysis worker, which is a memory decision, not a slider. Because of that the recognition side has NO feature-norm slider on the calibration page since 0.1.0.517 (a slider that changes nothing is worse than none); the axis stays here as a prepared setting. The catalogue bar above is the one that really sieves"),
         "katalog_guete_kante_min": (int, _KANTE_LO, _KANTE_HI, "catalogue bar (face size): the smallest face, in pixels of its shorter box side, a learning run keeps. FACTORY VALUE 25, the same number the recognition side has used as its vote floor since 0.1.0.400 (measured on field data: correct votes live at 30-49 px on overview cameras, the nonsense cases at 11-19 px; 70 would kill correct ones, 25 costs none). Raise it if your learning material is full of faces that are simply too small to learn anything from; 0 switches the axis off. Per-camera values on the calibration page win over this one"),
         "pruef_guete_t_min": (float, 0.0, 1.0, "catalogue check bar (recognisability): below this, the catalogue check flags a stored picture — together with a feature norm below the learning-stock floor it becomes a removal suggestion. It only looks at pictures you already have and never removes anything by itself; per-camera values on the calibration page win over this one, and pictures without a quality score are never flagged"),
-        "hunger_bremse_s": (int, 0, 600, "background harvest jobs (pass check, learning run, calibration top-up) that wait longer than this many seconds for the worker get the next slot before the event stream continues; 0 disables the brake"),
         "selbstwache": (bool, None, None, "watchdog thread probes this service's own /health every 15 s; after 4 consecutive failures it exits hard so the container restart policy brings the service back (covers full web-server hangs that even the remote restart endpoint cannot reach)"),
         "urteil_marge": (float, 0.0, 0.5, "when several names pass the recognition rule in one event, none is confirmed unless the best cosine leads the runner-up by at least this margin (measured on field data: wrong names won by 0.001-0.047, a clean case led by 0.112); 0 disables the rule"),
         "blick_fenster_s": (float, 0.0, 600.0, "judgement: width of the sliding view window in seconds — anchor and support votes must fall inside ONE window (calibrated on four test clips: 45 s is the smallest width that judges all four correctly); 0 = legacy fixed 3-second window"),
@@ -6569,10 +9949,29 @@ class Service:
         "anwesenheit_tag_bis": (int, -1, 24, "presence view: hour at which the day window ends, e.g. 20 (must be later than the start hour). -1 (default) = automatic, see the start hour"),
         "kalib_fueller_bilder": (int, 1, 200, "calibration top-up: how many pictures the 'look for fresh material' button aims to collect for a camera before it stops"),
         "kalib_fueller_events": (int, 1, 500, "calibration top-up: how many recent person events of that camera it may work through at most — whichever limit is reached first ends the run"),
+        "null_gesichter_serie": (int, 0, 20, "how many events in a row may find zero faces WHILE the clip was fully readable before the service calls it a fault. This is the quiet failure mode that start-up checks cannot catch: the accelerator still answers, frames still arrive, nothing errors out - and every event comes back empty. When the run is reached the service says so in the log, shows it in /health and makes the worker prove itself again (a short bind check plus a check image). 0 turns the watch off. The factory value is the same run length the service already uses for failed analyses in a row"),
+        "worker_vram_reserve_mb": (int, -1, 65536, "how much card memory the service leaves unassigned, in MiB. -1 (default) = automatic: a tenth of the card, at least the built-in floor — 614 MiB on a 6 GB card, 1229 MiB on 12 GB. 0 is allowed and means no reserve at all. The reserve is not a safety margin for the analysis itself (the arena cap is the wall the worker cannot cross); it is the room left for everything else that may land on the same card without asking us — a display transcode, a second container, another user's process. Set it small and the compute threads get that memory; the price is that a foreign consumer arriving later finds the card full, and on NVIDIA that ends in a CUDA out-of-memory in whichever process asks next, ours or theirs. A value larger than the card is clamped to the card. The calculation names the source (\"config\"/\"formel\") in the log and in /health; it takes effect at the next worker start, like the other worker keys"),
+        "bg_platz_getrennt": (int, 0, 1, "1 gives background work (collecting, harvesting, your clicks, the live body judgment, the wall-clock measurement) its own slot instead of one of the analysis slots. It is computed in a separate thread of the worker anyway, so a background job that holds an analysis slot blocks a compute thread for nothing — measured on 15.09.2026: a collection run held one of two analysis slots for eight minutes while events were waiting. Since 0.1.0.536 WHEN it starts changed too: with its own slot it takes its turn right away instead of waiting for an idle moment that never comes on a busy installation (46 postponed collection runs in one morning). 0 restores the behaviour of 0.1.0.533 and is load-bearing: every class then sits on the analysis slots again, the old idle rule and the rule that keeps one slot free for events apply word for word, and a collection run can take an analysis slot again"),
+        "sammel_haeppchen_ziel_s": (int, 30, 1800, "how much computing time one batch of the automatic collection should aim for, in seconds. The collection used to run as ONE job over all open events: on 15.09. six of those were shot at their deadline here, and on a CPU-only test machine 368 of 369 runs never finished at all. It now runs in batches — the service predicts the cost of each event from its clip length and packs a batch up to this budget; a batch that overruns it stops after the current event and hands the rest to the next batch. 120 s is the default. Larger batches mean fewer starts, smaller batches free the background slot more often for a click or a harvest"),
+        "sammel_haeppchen_frist_faktor": (int, 2, 10, "how much longer than its target time a collection batch may take before the service calls it hung (the deadline is the target time times this factor, plus a cold-start reserve for the first batch of a run). 3 is the default: if a batch needs three times its target, the cost per event has changed by a factor of three within one step — which is exactly when a deadline should bite"),
+        "sammel_rechenfaktor_start": (float, 0.1, 50.0, "start value for the cost of collecting, in seconds of computing per second of clip. 1.5 was measured on 2026-09-16 on a CPU machine (median over 98 events, 1.29 to 1.87, the same across 1080p and 4K) and is an upper bound — the machine was busy. It is only the start value: the service measures its own factor from the batches it runs and remembers it per backend, so on a graphics card the stored value replaces this one after the first run"),
+        "sammel_prolog_kalt_start_s": (int, 0, 900, "start value for the cold start of a collection run, in seconds — the time the first batch needs before it looks at a single event, almost all of it spent embedding the reference pictures. 105 s comes from the same CPU measurement (100 s measured, plus reserve) and is an upper bound. Only the FIRST batch of a run pays it: the reference matrix then stays warm in the worker for the rest of the run. Like the factor above, the service measures the real value and remembers it per backend"),
+        "vorlauf_max": (int, 0, VORLAUF_MAX_GRENZE, "how many finished clips the service keeps ready on disk ahead of the analysis. An analysis slot does not only compute, it also fetches: while it pulls a clip from Frigate its compute thread stands still. With a stock of clips already on disk the threads keep working. The service fetches until this many are ready, then pauses until the stock falls below vorlauf_min. 50 is the default, derived from a field measurement: about 20 events per minute on two compute threads and about 3 s per fetch, so 50 gives short refill bursts instead of one long pull. 0 switches the whole stage off — then each slot fetches its own clip as before. The clips go into the normal clip cache and obey its size cap"),
+        "vorlauf_min": (int, 0, VORLAUF_MIN_GRENZE, "the lower mark of the stock (see vorlauf_max): once fewer than this many clips are ready, the service fetches again until vorlauf_max is reached. 20 is the default, about one minute of stock at the measured rate. The gap between the two marks is what keeps the service from asking Frigate for a new clip after every single event"),
+        "vorlauf_parallel": (int, 1, 3, "how many clips the service fetches from Frigate at the same time while filling the stock. 2 is the default. Frigate 0.18 serves clip streams and authentication from one thread pool, so more parallel pulls make the whole installation slower, not faster; the normal clip gate applies on top of this"),
+        "zeitprotokoll": (int, 0, 1, "1 writes one balance line per event to the log and keeps the same figures in the record and in /health: how long the event waited in the queue, how long its clip took to fetch (with size), how long the handover to the worker took, how long until the first decoded frame (and which decoder), the analysis itself, writing the record, and the total time the analysis slot was busy. It costs one line per event and answers the question the record cannot: where the time goes when the accelerator sits idle while events are waiting. 0 turns the line off"),
+        "api_event_max_min": (int, 1, 1440, "how long one of suslik's OWN Frigate events may stay open before the service closes it after the fact, in minutes. 30 is the default. The live watchers can create their own events in Frigate (per camera switch) and close them when the appearance is over; if that close is lost — Frigate creates API events asynchronously and can answer the close with a 404 — the event would stay open for ever, and an event without an end has no usable clip. The service keeps a list of its own open events, retries the close, and checks afterwards that the end really arrived"),
+        "offen_max_min": (int, 0, 1440, "how long an event that Frigate never finished (no end_time) is held back before it is skipped for good, in minutes. 60 is the default. Such an event has no end, so the analysis reads its clip until the job deadline expires and the worker is shot — one of them can stall the whole queue. While it is held back nothing is computed and nothing is written; after this many minutes the record gets one honest line (\"skipped, event never ended in Frigate\") and the event is done. 0 keeps holding it back for ever"),
         "nachhol_versuche": (int, 0, 5, "retry attempts for events whose analysis failed (0 = off); retries are silent, they never alert"),
         "nachhol_tage": (int, 1, 3, "how far back the retry looks for failed analyses (days)"),
         "worker": (bool, None, None, "persistent analysis worker: keeps the models loaded between events (large CPU saving); off = one process per event (pre-0.1.0.38 behavior)"),
-        "worker_rss_max_mb": (int, 512, 16384, "memory threshold (MB): the worker is restarted cleanly once its RSS exceeds this"),
+        # .528: Untergrenze 512 -> 0. 0 war bis dahin UNERREICHBAR, obwohl der
+        # Dienst den Zweig hat („kein Budget gesetzt -> Politik-Regel aus, nur die
+        # cgroup-Regel wacht", gpubudget.wache_grenze_rechnung). Auf Backends ohne
+        # RAM-Messung ist dieser Wert das JE-WORKER-Budget, aus dem die
+        # Container-Grenze gerechnet wird — wer die Politik-Regel loswerden will,
+        # braucht die 0 wirklich (Feldfund NB-Abnahme 14.09.).
+        "worker_rss_max_mb": (int, 0, 16384, "memory budget of ONE analysis worker in MB. The persistent worker is restarted cleanly once it exceeds this, and on machines where the thread formula cannot measure system memory itself (Nvidia, CPU, ROCm) this is also the worker's share of the process guard's limit: there the service ADDS what it has measured for its neighbours in the same container (itself, the live-watcher engine, one decoder per watcher) instead of assuming them inside this number. The factory value 4096 catches a runaway worker without firing in normal work (a warm worker really holds about 1.9 GB). 0 turns the policy rule OFF - then only the container's own memory rule guards the process, which aborts open jobs when the container is about to run out. Do not set a small non-zero value: anything near or below what a worker really needs restarts it during normal work, and every restart costs the jobs that were open"),
         "personwork_rss_max_mb": (int, 512, 16384, "memory threshold (MB) of the body-recognition process — large events degrade sampling instead of exhausting memory"),
         "person_backend": (list, ["cpu", "openvino:GPU", "openvino:NPU", "cuda", "migraphx"], None, "compute placement of the body-recognition embedding model — cpu is the measured default (the path is dominated by video decode, not by this model; measured 18.8 ms/image on CPU vs 3.2 ms on an Intel iGPU). The accelerator values need the matching image variant (openvino in gpu/gpu-legacy, cuda in cuda, migraphx in rocm) and an extra GPU context can starve the live watchers — move it only after measuring on your box; on failure the model falls back to CPU loudly"),
         "wanduhr_min_kerne": (int, 1, 64, "self-measurement gate: minimum PHYSICAL cores (capped by a cgroup CPU quota if one is set) required to run the boot-time timing self-measurement, which is a second full analysis process next to the live one. The default 4 is a structural floor (2 processes x 2 concurrent parts each: video decode + inference), not a measured value. On a machine below the floor the measurement is skipped loudly and run-duration forecasts keep the labeled fallback values. Lower this deliberately if you accept minutes of full load on a small machine in exchange for measured forecasts. Also used as the weak-machine floor for the first-boot chain defaults (fresh installs below it start with person_pfad=nur_wenn_gesicht_leer, vision_pfad=aus) — raising it widens that group too"),
@@ -8368,7 +11767,8 @@ class Service:
         self.log(f"RE-ANALYSIS start: pass={pass_key} events={len(eids)}")
         try:
             for eid in eids:
-                self.process_safe(eid, nachhol=1, koerper=True)
+                self.process_safe(eid, nachhol=1, koerper=True,
+                                  einge_ts=time.time())
                 with self._vision_lock:
                     self._nachanalyse["fertig"] = \
                         int(self._nachanalyse.get("fertig") or 0) + 1
@@ -8594,68 +11994,190 @@ class Service:
                         pass
         threading.Thread(target=_lauf, daemon=True).start()
 
-    # ---------------------------------------------------------- W2: persistenter Worker
+    # ---------------------------------------------------------- E3.1: DER Worker-Dienst
+    def worker_dienst(self):
+        """DAS Worker-Objekt dieses Dienstes (lazy) — oder None bei `worker: false`
+        (Legacy-Subprozess-Weg, Config-Schalter 'worker'; sein Abbau gehoert in den
+        Aufraeumzug nach der Version, nicht hierher).
+
+        LEBENSZYKLUS-Griff ohne Platz: ihn nehmen der Boot-Start und die Stoppwege.
+        Wer einen JOB absetzen will, nimmt `_worker(nr)` und haelt damit einen Platz
+        — diese Regel aus C1 (05.09.) bleibt unveraendert in Kraft."""
+        if not self.cfg.get("worker", True):
+            return None
+        with self._dienst_lock:
+            if self._dienst_obj is None:
+                self._dienst_obj = WorkerDienst(
+                    self.cfg, log=self.log,
+                    # DIE EINE Stelle, an der die Zahl der Rechenstraenge herkommt
+                    # (E3.1-1). Seit E3.2 (14.09.2026) ist das die SPEICHER-FORMEL
+                    # je Karte/Maschine (`worker_straenge`), nicht mehr die
+                    # Platz-Zahl der Vergabestelle: Plaetze sind eine Vergabe-
+                    # Groesse, Straenge eine Speicher-Groesse, und beide gleich-
+                    # zusetzen war genau die Migrations-Falle W2-B16 (4 Prozesse
+                    # != 4 Threads = reproduzierter OOM). Die Plaetze bleiben
+                    # unveraendert, was sie sind: wie viele Analysen gleichzeitig
+                    # laufen duerfen.
+                    threads=self.worker_straenge_zahl,
+                    grenze=self.worker_fussabdruck_max_mb,
+                    # .534 (B3): der Grundlast-Posten derselben Rechnung.
+                    grundlast=self.worker_grundlast_mb,
+                    # E3.3 (W2-B29): der Geometrie-Deckel, aus derselben Formel.
+                    geometrien=self.worker_geometrien_max,
+                    # E3.4: die Kurzform der Start-Proben nach jedem BETRIEBS-
+                    # Neustart — die Vollform bleibt dem Boot-Exklusivfenster.
+                    bei_neustart=self.kurzprobe_ausloesen,
+                    # .531: der Kartenhaushalt, aus derselben Leiter.
+                    vram=self.worker_vram_start,
+                    karte=self._karte_frei_mb,
+                    name="worker")
+            return self._dienst_obj
+
+    def worker_dienst_starten(self):
+        """Den Worker-Prozess im BOOT hochfahren -> True, wenn er laeuft.
+
+        WARUM IM BOOT UND NICHT MEHR LAZY: der alte Worker startete beim ersten Job,
+        und das war richtig, solange er ein Prozess je Platz war (der Exit-139-
+        Bootfall: eine Worker-Waise neben dem frischen Startup-Benchmark). Der neue
+        Dienst baut beim Start seine Kompilate — ohne Cache gemessen 24-36 s. Diese
+        Kosten gehoeren in den Boot, nicht in das erste Ereignis des Tages.
+
+        WO GENAU: im BOOT-EXKLUSIVFENSTER, in dem schon die Rechenprobe laeuft
+        (rechenprobe_schritt, s. dort: main() startet nur den Web-Thread, dann den
+        Selbstcheck, erst danach Wartung/Live/Poll). Damit rechnet waehrend des
+        Kompilat-Baus nichts anderes auf der GPU — genau die Messbedingung, die der
+        Probelauf 24.08. verlangt (vier gleichzeitig offene Modelle druecken den
+        Erkennungs-Kosinus von 0,999753 auf 0,857).
+
+        Der Start selbst ist ein `ping`: er geht durch dieselbe Mechanik wie jeder
+        Job und beweist damit den Rueckweg (Antwort-Pipe, Job-Id) statt nur ein
+        Popen abzusetzen. Schlaegt er fehl, ist das KEIN Boot-Abbruch — der erste
+        echte Job startet dann eben lazy, wie bisher."""
+        d = self.worker_dienst()
+        if d is None:
+            return False
+        try:
+            antwort = d.job({"typ": "ping"}, 180)
+        except Exception as e:                             # noqa: BLE001
+            self.log(f"worker service did not come up at boot "
+                     f"({type(e).__name__}: {e}) — it will start with the first job")
+            return False
+        if not (antwort or {}).get("ok"):
+            self.log("worker service did not answer its boot ping — it will start "
+                     "with the first job")
+            return False
+        return True
+
+    def kurzprobe_ausloesen(self, grund):
+        """DIE KURZFORM DER START-PROBEN ANSTOSSEN (E3.4, Konzept §4 Schicht 1).
+
+        ZWEI Ausloeser, EIN Weg — das ist Absicht: derselbe Beweis beantwortet
+        beide Fragen („rechnet der frische Prozess noch dasselbe?" nach einem
+        Neustart, „rechnet dieser Prozess ueberhaupt noch?" nach einer Anomalie),
+        und zwei Wege waeren zwei Wahrheiten.
+          1. BETRIEBS-NEUSTART des Worker-Prozesses (`WorkerDienst._start`, jeder
+             Start nach dem ersten). Der Boot hat sein Exklusivfenster mit der
+             VOLLFORM; ein Neustart im Betrieb hat keines.
+          2. ANOMALIE-WACHE: N Ereignisse in Folge 0 Gesichter bei voller
+             Frame-Zahl (s. `_null_serie_pruefen`).
+
+        EIGENER THREAD, und das ist kein Stil: Ausloeser (1) laeuft im Absetz-Lock
+        des Worker-Objekts — von dort aus laesst sich kein Job absetzen. Ausloeser
+        (2) laeuft mitten in `process()` und darf eine Analyse nicht aufhalten.
+
+        MIT PLATZ, wie jeder GPU-Job (Regel C1, 05.09.): die Probe rechnet, also
+        gehoert sie an die Vergabestelle. Bekommt sie keinen Platz, wird sie NICHT
+        nachgeholt — sie ist eine Wache, kein Auftrag, und ein voller Dienst ist
+        selbst die Auskunft, dass gerechnet wird."""
+        if not self.cfg.get("worker", True):
+            return False                      # Legacy-Subprozess-Weg hat keinen Dienst
+
+        def _lauf():
+            try:
+                # KEINE NEUEN ZAHLEN. Die Wartezeit auf den Platz ist die
+                # Gnadenfrist des Platzwaechters (2 x PULS_TAKT_S, s.
+                # `_platzwaechter_platz`) — eine Wache stellt sich nicht an. Die
+                # Job-Frist ist die jeder anderen Rechnung dieses Dienstes
+                # (`analyse_timeout_s`), damit die Probe nicht an einer eigenen,
+                # knapperen Uhr scheitert als der Betrieb, den sie pruefen soll.
+                _platz_frist = PULS_TAKT_S * 2
+                _job_frist = int(self.cfg.get("analyse_timeout_s") or 600)
+                with self._plaetze.platz("start proof", art="bg",
+                                         timeout_s=_platz_frist) as nr:
+                    if nr is None:
+                        self.log(f"short start proof ({grund}) skipped: no free "
+                                 f"analysis slot within {_platz_frist:.0f}s "
+                                 f"(a busy service is itself the answer that it "
+                                 f"is computing)")
+                        return
+                    w = self._worker(nr)
+                    if w is None:
+                        return
+                    # EINE WACHE STARTET KEINEN PROZESS (.536, gemessen 16.09.).
+                    # Lebt der Worker nicht mehr, wuerde der Job-Weg ihn neu
+                    # anwerfen (`WorkerDienst.job` startet einen toten Prozess) —
+                    # und JEDER Start loest wieder eine Probe aus: Selbsterregung.
+                    # Im geraetelosen Container (so faehrt die Sweep-Stufe) stirbt
+                    # der Worker sofort mit Exit 1, und das .536-gpu-Image drehte
+                    # deshalb 121 Starts in 45 s bei 104 % CPU, waehrend .528/.531
+                    # dort bei 2 Starts und ~0 % standen. Echte Jobs (Ereignis,
+                    # Klick) starten einen toten Worker weiterhin — nur diese
+                    # Wache nicht, sie hat nichts zu beweisen, wenn nichts laeuft.
+                    if not self._worker_warm():
+                        self.log(f"short start proof ({grund}) skipped: no live "
+                                 f"worker process — a watch does not start one, "
+                                 f"the next real job does")
+                        return
+                    antwort = w.job({"typ": "startprobe", "grund": grund},
+                                    _job_frist,
+                                    puls=self._plaetze.puls_fuer(nr))
+            except Exception as e:                         # noqa: BLE001
+                self.log(f"short start proof ({grund}) failed to run: "
+                         f"{type(e).__name__}: {e}")
+                return
+            if antwort is None:
+                self.log(f"short start proof ({grund}) got NO answer — the worker "
+                         f"could not prove itself; the next job starts a fresh "
+                         f"process")
+                return
+            sp = antwort.get("startprobe") or {}
+            if not antwort.get("ok"):
+                # LAUT: ein Prozess, der seinen eigenen Beweis nicht besteht, darf
+                # nicht stillschweigend weiter Namen liefern. Er hat sich drueben
+                # bereits den Job als Fehler gebucht; hier steht die Zeile, die ein
+                # Betreiber im Dienst-Log findet.
+                self.log(f"STOERUNG (selbstbeweis): the worker FAILED its short "
+                         f"start proof ({grund}): {antwort.get('fehler')}")
+                return
+            self.log(f"short start proof ({grund}): {sp.get('stand')} — bound to "
+                     f"{sp.get('geraet')}, {sp.get('personen_mit_vektoren')} "
+                     f"person(s) with vectors"
+                     + (f", notes: {'; '.join(sp.get('befunde') or [])}"
+                        if sp.get("befunde") else ""))
+
+        threading.Thread(target=_lauf, daemon=True, name="startprobe").start()
+        return True
+
     def _worker(self, platz_nr):
-        """Worker-Objekt des Platzes `platz_nr` bei worker=an (Default), sonst None ->
-        alter Subprozess-Weg (der Fallback bleibt vollstaendig im Code, Config-Schalter
-        'worker').
+        """Das Worker-Objekt fuer einen JOB — `platz_nr` ist der gehaltene Platz.
 
-        E2: JE PLATZ ein eigener Prozess. Ohne das waere die Platz-Vergabe wirkungslos —
-        `WorkerProzess.lock` haelt seinen Job ueber die volle Dauer, zwei Plaetze wuerden
-        sich also am selben Worker wieder aufreihen. Ein Prozess traegt ausserdem genau
-        EINE Modell-Sitzung; zwei Jobs darin waeren kein zweiter Rechenstrang.
+        C1 (05.09.2026, bauplan_0505.md §1) GILT WEITER: es gibt keinen Worker-Job
+        ohne Platz. Ein Aufruf ohne Nummer faellt laut, er koennte nur wieder an der
+        Vergabestelle vorbeirechnen; eine Gate-Wache prueft das zusaetzlich am
+        Quelltext.
 
-        C1 (05.09.2026, bauplan_0505.md §1): die Fassung OHNE Platznummer ist weg. Sie
-        war der Weg der Hintergrund-Jobs (Sammle, Wanduhr) auf den Worker von Platz 1 —
-        und damit die Ursache des Feldbefunds vom 05.09.: 23 eingezogene LEBENDE
-        Analysen an einem Vormittag, alle Platz 1, alle 125-138 s, weil sie hinter einem
-        Hintergrund-Job am Job-Lock standen, wo noch kein Puls laeuft. Seit C1 haelt
-        JEDER Worker-Nutzer einen Platz, und die Platznummer sagt, welcher Prozess es
-        ist. Ein Aufruf ohne Nummer ist deshalb ein Programmierfehler und faellt laut —
-        er koennte nur wieder an der Vergabestelle vorbeirechnen. Eine Gate-Wache prueft
-        zusaetzlich, dass es im Auslieferungscode keinen `_worker()` mehr gibt.
-
-        Platz 1 ist damit kein Sonderling mehr: er wohnt im selben Pool wie 2..N und
-        heisst `worker-1`. `_worker_obj` bleibt als Eigenschaft auf Platz 1 bestehen —
-        `/health.worker` und die Rueckfall-Statistik lesen unveraendert weiter.
-
-        Platznummer 0 (der defensive Zweig in `platz()`: belegt, aber ohne freie
-        Nummer — eine Buchhaltungs-Ungereimtheit, die nicht vorkommen sollte) bekommt
-        genau wie jeder andere Platz einen EIGENEN Prozess `worker-0`. Ihn auf Platz 1
-        zu legen hiesse, zwei Halter wieder an denselben Job-Lock zu haengen; so steht
-        er stattdessen sichtbar in `/health.worker_plaetze` und verraet den Zustand."""
+        WAS SICH IN E3.1 GEAENDERT HAT: die Nummer waehlt keinen PROZESS mehr aus.
+        Bis .526 gehoerte jedem Platz ein eigener Worker-Prozess, weil dessen
+        Job-Lock einen Job ueber die volle Dauer hielt — zwei Plaetze haetten sich
+        sonst am selben Worker aufgereiht. Der neue Dienst traegt N Rechenstraenge
+        in EINEM Prozess und ordnet Antworten ueber die Job-Id zu; ein Lock, an dem
+        sich Plaetze aufreihen koennten, gibt es nicht mehr. Die Platznummer sagt
+        seitdem nur noch, welches FENSTER der Vergabestelle dieser Job hat — sie
+        bleibt Pflicht, weil an ihr Fairness, Puls und Platzwaechter haengen."""
         if platz_nr is None:
             raise RuntimeError("worker without slot — every GPU job holds an "
                                "Analyseplaetze slot since .505")
-        if not self.cfg.get("worker", True):
-            return None
-        with self._zustand_lock:
-            w = self._worker_pool.get(platz_nr)
-            if w is None:
-                # P2: eigener NAME je Platz. Ohne ihn heissen alle Worker "worker",
-                # und eine Zeile wie "worker died mid-job" laesst offen, WELCHER
-                # gestorben ist — bei drei Prozessen ist das der Unterschied zwischen
-                # einem Einzelfall und einem Dauertod auf genau einem Platz.
-                w = WorkerProzess(self.cfg, log=self.log, name=f"worker-{platz_nr}")
-                self._worker_pool[platz_nr] = w
-                if platz_nr:
-                    self.log(f"analysis slot {platz_nr}: own worker process started")
-                else:
-                    # C3 (05.09.2026, Widerleger C1 Notiz 8, Nachzug N1): Platz 0
-                    # ist der defensive Zweig, den es nicht geben sollte — und er
-                    # startet einen Worker-Prozess, den die VRAM-Rechnung in
-                    # `core/gpubudget.py` NICHT kennt (sie rechnet mit
-                    # `analyse_plaetze` Workern). Bei vier Plaetzen liefe hier
-                    # also ein fuenfter Modellprozess ausserhalb des Budgets.
-                    # Deshalb ist diese Zeile eine WARNUNG, keine Betriebsmeldung:
-                    # wer sie im Feld sieht, hat eine Buchhaltungs-Ungereimtheit
-                    # in der Vergabestelle gefunden, nicht einen normalen Start.
-                    self.log(f"WARNING: analysis slot 0 (bookkeeping fallback — "
-                             f"should never happen): started an extra worker "
-                             f"process worker-0 that the VRAM budget "
-                             f"(core/gpubudget.py, sized for analyse_plaetze "
-                             f"workers) does not account for")
-            return w
+        return self.worker_dienst()
 
     def _worker_warm(self):
         """Steht ueberhaupt ein WARMER Modell-Prozess bereit? (J1, .508)
@@ -8665,48 +12187,45 @@ class Service:
         lud aber erst sein Modell (~85 % der kalten Kosten, s. WorkerProzess).
         Wer eine Dauer nennt, muss den Posten also kennen.
 
-        Welchen PLATZ der Lauf bekommt, entscheidet erst `_ernte_eines` an der
-        Vergabestelle — die Prognose weiss es nicht. Die ehrliche Sicht des
-        Dienstes ist deshalb: laeuft irgendein Worker-Prozess? Laeuft keiner
-        (frischer Start, alle gestorben oder gestoppt), startet der Job SICHER
-        kalt. Laeuft einer und der Lauf bekommt trotzdem einen anderen, noch
-        leeren Platz (je Platz ein eigener Prozess, s. `_worker`), ist die
-        Schaetzung zu optimistisch — dieselbe bewusste Grenze wie beim
-        k_abholer-Teiler, und der harmlosere der beiden Fehler: dauerhaft einen
-        Aufschlag zu zeigen, den es nicht gibt, waere die schlechtere Luege.
+        E3.1: die Frage ist seitdem EINDEUTIG beantwortbar — es gibt genau einen
+        Worker-Prozess, und entweder er laeuft oder nicht. Die alte, bewusst
+        optimistische Schaetzung („laeuft irgendeiner von N?", die bei einem noch
+        leeren zweiten Platz zu guenstig war) faellt damit ersatzlos weg.
 
-        `zustand()["laeuft"]` ist die EINE Quelle dafuer, ob ein Worker lebt
-        (auch /health.worker_plaetze liest sie). `getattr`, damit die
-        Gate-Fixturen (Service ohne `__init__`) hier nicht stolpern: sie haben
-        keinen Pool und gelten damit als kalt."""
-        for w in (getattr(self, "_worker_pool", None) or {}).values():
-            try:
-                if w.zustand()["laeuft"]:
-                    return True
-            except Exception:                 # ein Leser darf nie den Klick werfen
-                pass
-        return False
+        `zustand()["laeuft"]` ist die EINE Quelle dafuer, ob der Worker lebt (auch
+        /health liest sie). `getattr`, damit die Gate-Fixturen (Service ohne
+        `__init__`) hier nicht stolpern: sie haben kein Dienst-Objekt und gelten
+        damit als kalt."""
+        w = getattr(self, "_dienst_obj", None)
+        if w is None:
+            return False
+        try:
+            return bool(w.zustand()["laeuft"])
+        except Exception:                     # ein Leser darf nie den Klick werfen
+            return False
 
     @property
     def _worker_obj(self):
-        """Der Worker von Platz 1 — oder None, solange ihn niemand gebraucht hat.
+        """DER Worker — oder None, solange ihn niemand gebraucht hat.
 
-        C1 (05.09.2026): frueher ein eigenes Feld neben dem Pool, weil Platz 1 und alle
-        Hintergrund-Jobs sich diesen einen Prozess teilten. Seit C1 wohnt Platz 1 im
-        Pool; die Eigenschaft bleibt als LESENDER Griff fuer die Bestandsleser
-        (`/health.worker` ueber `systemstat_dienst`, die Rueckfall-Zahlen der
-        Oberflaeche, `_alle_worker` gab es hier). Kein Setter: wer einen Worker will,
-        nimmt `_worker(nr)` — es gibt keinen Worker mehr ohne Platz. `getattr`, damit
-        auch die Gate-Fixtures (Service ohne `__init__`) ihn lesen duerfen."""
-        return (getattr(self, "_worker_pool", None) or {}).get(1)
+        Die Eigenschaft bleibt als LESENDER Griff der Bestandsleser (`/health.worker`
+        ueber `systemstat_dienst`, die Rueckfall-Zahlen der Oberflaeche). Kein
+        Setter: wer einen Worker fuer einen JOB will, nimmt `_worker(nr)` und haelt
+        dabei einen Platz; wer den Lebenszyklus meint, nimmt `worker_dienst()`.
+        `getattr`, damit auch die Gate-Fixtures (Service ohne `__init__`) ihn lesen
+        duerfen."""
+        return getattr(self, "_dienst_obj", None)
 
     def _alle_worker(self):
-        """Alle Worker-Instanzen: die Plaetze 1..N und personwork.
-        EINE Quelle — Stoppwege, Statistik und /health duerfen sich hier nicht
-        unterscheiden, sonst ist ein zweiter Worker unsichtbar oder ueberlebt einen
-        Neustart als Waise (das ist die Exit-139-Bootfenster-Klasse)."""
-        return [o for o in ([self._worker_pool[k] for k in sorted(self._worker_pool)]
-                            + [self._personwork_obj]) if o is not None]
+        """Alle Worker-Instanzen — seit E3.1 hoechstens eine.
+
+        EINE Quelle fuer Stoppwege, Statistik und /health: sie duerfen sich hier
+        nicht unterscheiden, sonst ist ein Worker unsichtbar oder ueberlebt einen
+        Neustart als Waise (das ist die Exit-139-Bootfenster-Klasse). Die Methode
+        bleibt in der Mehrzahl stehen, weil die Stoppwege ueber sie schleifen und
+        sich an einem zweiten Prozess (kaeme je einer zurueck) nichts aendern muesste."""
+        w = getattr(self, "_dienst_obj", None)
+        return [w] if w is not None else []
 
     def worker_stoppen(self):
         """Worker beenden+wait — VOR execv (neustart) und am --once-Ende. Sonst liefe eine
@@ -8736,25 +12255,96 @@ class Service:
                 pass
         return n
 
-    # ------------------------------------------- P1 (.202): personwork-Prozess
+    def _ernte_abholer_zahl(self):
+        """.536 B4.3: wie viele Ernte-Abholer ein Lauf gleichzeitig anstellt.
+
+        DIE EINE Quelle fuer beide Lernlauf-Wege (Lernlauf-Ernte und
+        Durchgangs-Knopf) — vorher stand `max(1, self._plaetze.kapazitaet)`
+        zweimal wortgleich im Code, und die Restzeit-Schaetzung teilte an einer
+        dritten Stelle durch dieselbe Zahl.
+
+        SEIT .536 IST SIE 1, solange `bg_platz_getrennt` an ist (Werk seit
+        .534), und zwar aus einem gemessenen Grund und nicht aus Vorsicht: die
+        Ernte haelt seitdem das bg-Konto, das hat Kapazitaet 1, und der Worker
+        rechnet Hintergrund-Arbeit ohnehin auf EINEM Strang
+        (worker_dienst.py:2647/3503). K Abholer brachten damit null Durchsatz,
+        kosteten aber zweierlei: die Restzeit-Schaetzung teilt durch K und log
+        um genau diesen Faktor, und K Threads halten K `wartend("ernte")`-
+        Anmeldungen, die die Wartezahlen der Vergabestelle aufblaehen.
+        „Parallel" war seit je die Vordertuer, nie die Rechnung.
+
+        In der Rueckfahrkarten-Stellung `bg_platz_getrennt = 0` sitzt die Ernte
+        wieder auf den Analyse-Plaetzen; dort gibt es echte Gleichzeitigkeit,
+        und die Zahl bleibt woertlich die alte."""
+        if getattr(self._plaetze, "bg_getrennt", False):
+            return 1
+        return max(1, int(self._plaetze.kapazitaet))
+
+    # ------------------------------------------- Koerper-/Personlauf-Jobs
     def _personwork(self):
-        """Zweite WorkerProzess-Instanz fuer Koerper-Urteile und Personlauf-
-        Ernte (konzept_speicher.md §3): eigener Prozess, eigene RSS-Schwelle
-        (personwork_rss_max_mb), EIN Job gleichzeitig — eine Welle wird zur
-        Schlange statt zum Thread-Faecher. Lazy wie der Analyse-Worker."""
-        if self._personwork_obj is None:
-            self._personwork_obj = WorkerProzess(
-                self.cfg, log=self.log, rss_key="personwork_rss_max_mb",
-                rss_default=3072, name="personwork")
-        return self._personwork_obj
+        """Der Worker fuer Koerper-Urteile und Personlauf-Ernte — seit E3.1 DERSELBE
+        Prozess wie fuer alles andere.
+
+        Bis .526 war das ein ZWEITER WorkerProzess (P1, .202, konzept_speicher.md §3)
+        mit eigener RSS-Schwelle. Der Grund dafuer ist mit dem neuen Dienst entfallen
+        und war in Wahrheit ein Symptom: zwei Compute-Prozesse auf einer Karte sind
+        genau die Kontext-Kollision, gegen die der Umbau gebaut ist (W2-B3, Feldbeleg
+        CUDA-OOM 4x, iGPU-Kosinus 0,9997 -> 0,857 bei vier offenen Modellen). Im
+        Dienst laufen `koerper` und `personlauf_ernte` als Hintergrund-Jobs auf dem
+        EINEN Hintergrund-Strang — einer zur Zeit, genau wie vorher, nur ohne den
+        zweiten Kontext und ohne das zweite Speicher-Konto.
+
+        EHRLICHE FOLGE: `personwork_rss_max_mb` wirkt damit nicht mehr als eigene
+        Schwelle (es gibt keinen zweiten Prozess, der sie reissen koennte). Die
+        Speicher-Zusage des einen Prozesses kommt mit E3.2 aus der Formel; der
+        Config-Wert bleibt bis zum Aufraeumzug stehen, statt still zu verschwinden.
+
+        Die Vorrang-Spur (`personwork_job_live` vor `personwork_job_batch`) bleibt
+        unveraendert: sie ist eine Reihenfolge-Regel des Dienstes, keine Eigenschaft
+        des Prozesses."""
+        return self.worker_dienst()
 
     def personwork_job_live(self, job, timeout_s):
         """Vorrang-Spur (konzept_speicher.md L5): Live-Urteile melden sich an,
-        BEVOR sie am Job-Lock warten — Batch-Einreiher lassen sie vor."""
+        BEVOR sie am Job-Lock warten — Batch-Einreiher lassen sie vor.
+
+        .536 B4.4: DIESER WEG IST JETZT KUNDE DER VERGABESTELLE, Klasse `live`.
+        Bis .535 nahm er ueberhaupt keinen Platz — er war der Vergabestelle
+        unsichtbar, rechnete aber auf demselben EINEN Hintergrund-Strang wie
+        Sammeln und Ernte. Seine einzige Reihenfolge-Regel war `_pw_live_offen`
+        (live vor batch), also eine Rangfolge, die es im Verhalten gab, aber
+        nirgends in Log, /health oder GPU-Kachel. Genau diese unsichtbare dritte
+        Vergabe-Ebene macht die Klasse sichtbar.
+
+        Warum eine EIGENE Klasse und nicht `interaktiv`: dahinter wartet kein
+        Mensch, sondern eine Automatik (die laufende Analyse stoesst das Urteil
+        an). Klick-Gleichrang waere derselbe Fehler, den das Konzept bei `refqs`
+        ruegt. Warum nicht `bg`: dann waere der Auftrag „live vor batch"
+        verloren. Die Platz-Frist ist die JOB-Frist dieses Urteils
+        (`analyse_timeout_s` beim Aufrufer) — kein zweiter Zeitbegriff.
+
+        EHRLICHE FOLGE, ausdruecklich benannt (Bauplan §5 R-2): bekommt der
+        Live-Job das bg-Konto nicht, weil ein langer Hintergrund-Job darauf
+        sitzt, wartet er bis zu seiner Frist. Das war vorher genauso — er stand
+        dann in der Job-Schlange des Workers statt hier —, nur unsichtbar."""
+        w = self._personwork()
+        if w is None:                         # Legacy-Modus (`worker: false`)
+            self.log("body judgment skipped: the persistent worker is disabled "
+                     "(config 'worker'), and the body path runs only as a job")
+            return None
         with self._pw_prio_lock:
             self._pw_live_offen += 1
         try:
-            return self._personwork().job(job, timeout_s)
+            with self._plaetze.wartend("live"), \
+                    self._plaetze.platz(job.get("eid") or "body judgment",
+                                        art="live", timeout_s=timeout_s) as nr:
+                if nr is None:
+                    self.log(f"body judgment: no free background slot within "
+                             f"{timeout_s}s — no verdict for this event "
+                             f"(typ={job.get('typ')})")
+                    return None
+                return w.job(job, timeout_s,
+                             puls=self._plaetze.puls_fuer(nr))
         finally:
             with self._pw_prio_lock:
                 self._pw_live_offen -= 1
@@ -8763,7 +12353,25 @@ class Service:
         """Batch-Spur (Nachanalyse, Personlauf-Ernte): wartet, solange ein
         Live-Job angemeldet ist (strikte Prioritaet ohne Preemption), und
         wiederholt einen gestorbenen Job genau EINMAL — danach gilt er als
-        vergiftet (laut, konzept_speicher.md §3)."""
+        vergiftet (laut, konzept_speicher.md §3).
+
+        .536 B4.4: auch dieser Weg ist Kunde der Vergabestelle, Klasse `bg` —
+        stille Nachanalyse und Personlauf-Ernte sind Hintergrundarbeit wie
+        Sammeln. Platz-Frist = Job-Frist des Aufrufers.
+
+        DIE 120-s-WARTESCHLEIFE BLEIBT STEHEN (Bauplan §7.1 Punkt 4, bewusst):
+        sie ist mit der Kontoordnung redundant — `live` steht dort ueber `bg`,
+        also laesst der Rang denselben Vorrang walten —, schadet aber nicht und
+        deckt die Rueckfahrkarten-Stellung ab, in der es kein bg-Konto gibt.
+        WICHTIG ist ihre REIHENFOLGE: sie laeuft VOR der Platznahme. Wuerde sie
+        innerhalb der Platz-Klammer warten, hielte dieser Job das Konto fest,
+        waehrend er auf den Live-Job wartet, der genau dieses Konto braucht —
+        eine Verklemmung, die es vor .536 nicht geben konnte."""
+        w = self._personwork()
+        if w is None:                         # Legacy-Modus (`worker: false`)
+            self.log(f"body/person job skipped: the persistent worker is disabled "
+                     f"(config 'worker') — typ={job.get('typ')}")
+            return None
         for v in range(1, versuche + 1):
             frist = time.monotonic() + 120
             while time.monotonic() < frist:
@@ -8772,7 +12380,16 @@ class Service:
                 if frei:
                     break
                 time.sleep(0.5)
-            antwort = self._personwork().job(job, timeout_s)
+            with self._plaetze.wartend("bg"), \
+                    self._plaetze.platz(job.get("eid") or job.get("lauf_id")
+                                        or "body/person job",
+                                        art="bg", timeout_s=timeout_s) as nr:
+                if nr is None:
+                    self.log(f"body/person job: no free background slot within "
+                             f"{timeout_s}s — skipped (typ={job.get('typ')})")
+                    return None
+                antwort = w.job(job, timeout_s,
+                                puls=self._plaetze.puls_fuer(nr))
             if antwort is not None:
                 return antwort
             self.log(f"personwork batch job attempt {v}/{versuche} died "
@@ -8850,23 +12467,16 @@ class Service:
     # `bruecke_waisen_start` sagt es dann LAUT (Auflage des Zuschnitts).
     # IMMER unter `_bruecke_anlage_lock` anfassen.
     _bruecke_warteschlange = []
-    # B4 Hunger-Bremse (User-Go 01.09., Vorschlag 31.08.): wartet ein
-    # Hintergrund-Job (Pass-/Lernlauf-/Fueller-Ernte) laenger als
-    # hunger_bremse_s auf den Worker, laesst der Event-Strom VOR dem
-    # naechsten Event eine Luecke, bis der Job den Slot hat. Nur
-    # Zeitstempel, kein Lock (Zuweisung atomar genug fuer eine Vorrangs-
-    # Heuristik); der PULS haelt die Bremse ehrlich — ein toter Warter
-    # bremst nach 10 s nicht mehr.
-    _bg_hunger_seit = None
-    _bg_hunger_puls = 0.0
-
-    def _bg_hungert(self):
-        if self._bg_hunger_seit is None:
-            self._bg_hunger_seit = time.monotonic()
-        self._bg_hunger_puls = time.monotonic()
-
-    def _bg_satt(self):
-        self._bg_hunger_seit = None      # E2: check-then-act der Lauf-Starter atomar
+    # .536 B4.3: HIER STAND DIE HUNGER-BREMSE (`_bg_hungert`/`_bg_satt`,
+    # Zeitstempel `_bg_hunger_seit`/`_bg_hunger_puls`, Werk 60 s). Sie war die
+    # Antwort auf ein Problem, das es seit .536 nicht mehr gibt: ein
+    # Hintergrund-Job, der keinen Analyse-Platz bekam, hielt den EREIGNIS-STROM
+    # bis zu 120 s an, damit er vorgelassen wird. Seit B4 haelt kein
+    # Hintergrund-Weg mehr einen Analyse-Platz — sie sitzen alle auf dem eigenen
+    # bg-Konto (Kapazitaet 1 = der eine Hintergrund-Strang des Workers) und
+    # bekommen ihren Zug dort nach Rang und Wechsel, ohne dass die Analyse auch
+    # nur eine Sekunde stehen bleibt. Eine Bremse, die den Ereignis-Strom
+    # anhaelt, waere danach reiner Schaden.
     #                                               (ThreadingHTTPServer; RLock, weil der
     #                                               POST-Handler Starter UNTER dem Lock ruft)
     LERNLAUF_EVENTS_MAX = 40000                   # EIN Eingabe-Deckel fuer POST/GET/Wizard
@@ -8883,6 +12493,40 @@ class Service:
         (Config-Paar, Default WANDUHR_MIN_KERNE — ein Struktur-Axiom, s. dessen
         Kopf) wird GAR NICHT gemessen — LAUT + /health-Vermerk (K1), Prognosen
         bleiben ehrlich auf den als 'rueckfall' gekennzeichneten Autorwerten."""
+        # .534 (Abnahme-Befund B-2, 15.09.): AUF KARTEN-BACKENDS WIRD NICHT
+        # GEMESSEN, SOLANGE EIN WORKER LEBT. Die Wanduhr startet einen ZWEITEN
+        # vollen Analyse-Prozess neben dem laufenden — auf der 6-GB-Karte des
+        # Notebooks war das der EINZIGE `bfc_arena`-Treffer aller vier
+        # Abnahme-Laeufe (Kartenspitze 5405 von 6144 MiB, 14:59:15). Der zweite
+        # Prozess bekommt zwar seit .531 dieselben Startargumente und damit
+        # denselben Arena-Deckel, aber der Deckel wird gegen die Karte gerechnet,
+        # wie sie VOR ihm aussah — zwei Prozesse mit je eigenem Deckel passen
+        # nicht zwangslaeufig nebeneinander. Die Messung ist eine Auskunft ueber
+        # Laufzeiten; sie darf keine Analyse gefaehrden.
+        # EHRLICHE GRENZE: damit misst eine Karten-Anlage im Normalbetrieb gar
+        # nicht mehr, und die Prognosen bleiben auf den Rueckfallwerten. Das ist
+        # die bewusste Seite der Abwaegung — und es steht in /health.
+        if (_gpubudget.stuetzwerte(getattr(self, "_plaetze_kind", None) or "")
+                or {}).get("mass") == "vram":
+            d = getattr(self, "_dienst_obj", None)
+            lebt = False
+            try:
+                lebt = bool(d and (d.zustand() or {}).get("laeuft"))
+            except Exception:                             # noqa: BLE001
+                lebt = bool(d is not None)
+            if lebt:
+                self._wanduhr_skip = (
+                    "not measured while an analysis worker is running on this "
+                    "card: the measurement starts a SECOND full analysis process, "
+                    "and two of them do not fit next to each other on one card "
+                    "(measured 15.09.: the only out-of-memory hit of a four-run "
+                    "acceptance came from this measurement, card at 5405 of 6144 "
+                    "MiB). Run-duration forecasts keep the fallback values, "
+                    "labeled as such")
+                if not getattr(self, "_wanduhr_karte_gemeldet", False):
+                    self._wanduhr_karte_gemeldet = True
+                    self.log(f"wanduhr: measurement SKIPPED — {self._wanduhr_skip}")
+                return False
         min_kerne = int(self.cfg.get("wanduhr_min_kerne") or WANDUHR_MIN_KERNE)
         kerne = _phys_kerne()
         if kerne < min_kerne:
@@ -9140,7 +12784,12 @@ class Service:
         produktiven Spawns (F2.4: SCRATCH_DIR fehlte -> refcache/Clip landeten in /tmp
         und verfaelschten den Kaltaufschlag; OV_DEVICE der Symmetrie halber)."""
         import subprocess as _sp
-        cmd = [sys.executable, os.path.join(HERE, "worker.py"), "--roundtrip",
+        # E3.1: derselbe Selbsttest, aber im NEUEN Dienst (`worker_dienst.py
+        # --roundtrip`, zwei analyze-Jobs kalt+warm ueber die echte Job-Mechanik).
+        # Die Wanduhr misst, was der Betrieb rechnet — misst sie den alten Worker,
+        # misst sie eine Maschine, die es nicht mehr gibt. Aufruf und Antwortform
+        # (`{"lauf1":…,"lauf2":…}`) sind unveraendert.
+        cmd = [sys.executable, worker_dienst_pfad(), "--roundtrip",
                str(eid), "--persons", person, "--labels", "WANDUHR",
                "--dir", out, "--fps-sample", str(self.cfg.get("fps_sample", 3))]
         _env = {**os.environ,
@@ -9159,6 +12808,14 @@ class Service:
         # Analyse auf DIESER Maschine dauert — die echten Analysen laufen mit
         # nice +10, also muss die Messung es auch, sonst misst sie eine andere
         # Scheduling-Welt als die, in der spaeter geurteilt wird.
+        # .531 (NB-Befund 15.09.): die WANDUHR startet hier einen ZWEITEN
+        # worker_dienst-Prozess. Ohne die Kartenhaushalt-Argumente haette er eine
+        # UNGEDECKELTE Arena und rechnete parallel zum laufenden Worker auf
+        # derselben Karte — genau er lieferte im NB-Lauf die einzige
+        # `bfc_arena`-Zeile, waehrend der gedeckelte Worker unter seinem Deckel
+        # blieb. Er bekommt deshalb denselben Deckel. Die Strang-Zahl bleibt beim
+        # Roundtrip-Vorgabewert (ein Strang): die Wanduhr misst EINE Analyse.
+        cmd += vram_startargumente(self.worker_vram_start())
         r = _sp.run(cmd, capture_output=True, text=True, timeout=tmo, env=_env,
                     preexec_fn=_analyse_nice)
         d = json.loads((r.stdout.strip().splitlines() or ["{}"])[-1])
@@ -9194,12 +12851,26 @@ class Service:
     PLAETZE_VORSCHLAG = {"cuda": 3, "openvino": 2, "cpu": 1}
 
     def _plaetze_kapazitaet(self, cfg):
-        """Wie viele Analysen gleichzeitig laufen duerfen.
+        """Der STARTWERT der Vergabestelle — und der Experten-Override.
 
-        Ohne eigenen Config-Wert gilt der HARDWARE-VORSCHLAG (s. PLAETZE_VORSCHLAG) —
-        die Zahl, die auf diesem Beschleuniger gemessen am schnellsten war. Setzt der
-        Nutzer `analyse_plaetze` selbst, gilt seine Zahl; wir klemmen sie nicht mehr,
-        sondern sagen im Log, was gemessen wurde, wenn er darueber geht.
+        .536 B5 (R7, Inhaber 16.09.: „eigentlich muessten die Analyseplaetze immer
+        identisch sein mit der Anzahl der Threads … das, was wir jetzt als
+        MaxWorker haben, das hierueber eingepflegt wird"): die Zahl der
+        gleichzeitigen Analysen ist KEINE eigene Einstellung mehr. Sie folgt den
+        Rechenstraengen, gesetzt in `_plaetze_an_straenge` — dieser Griff liefert
+        nur noch den Wert, mit dem die Vergabestelle gebaut wird, bis diese
+        Bindung im selben `__init__` ein paar Zeilen weiter passiert.
+
+        Der zweite Zweck ist der EXPERTEN-OVERRIDE: ein von Hand gesetzter
+        `analyse_plaetze`-Wert wird hier als `self._plaetze_override` gemerkt und
+        wirkt NUR nach unten (Betreiber-Entscheid 3: die Automatik gewinnt). Er ist
+        bewusst kein Bedienweg mehr — der Regler auf der GPU-Seite schreibt seit
+        .536 `worker_straenge`, und ein im Store stehender Altwert wird von
+        `_migration_0536` einmalig geraeumt.
+
+        Ohne Override gilt der HARDWARE-VORSCHLAG (s. PLAETZE_VORSCHLAG) als
+        Startwert — die Zahl, die auf diesem Beschleuniger gemessen am
+        schnellsten war.
 
         DIE OPENVINO-KLEMMUNG IST ERSATZLOS ENTFALLEN (04.09.). Sie beruhte auf einem
         einzelnen alten Messfall — zwei suslik-Instanzen auf einer iGPU toeteten einander
@@ -9209,9 +12880,11 @@ class Service:
         vor der logbuf-Initialisierung), nicht OpenVINO. Projektregel: alte Pruef-Urteile
         sind Pruefauftraege, keine Grundlagen — hier hat die Pruefung das Urteil kassiert.
 
-        Der Werkswert `analyse_plaetze` bleibt bei 1 (Default-Block), damit eine
-        Bestands-Installation sich beim Update NICHT von selbst aendert. Der Vorschlag
-        greift nur, wo der Nutzer nichts gesetzt hat."""
+        Der Werkswert `analyse_plaetze` ist seit .536 die 0 (Default-Block) —
+        „Automatik", also Plaetze = Straenge. Bis .535 stand er auf 1, damit eine
+        Bestands-Installation sich beim Update nicht von selbst aenderte; genau
+        diese 1 hielt im Feld die Mehrheit der Anlagen dauerhaft bei EINER
+        gleichzeitigen Analyse."""
         try:
             from face_audit import resolve_backend
             kind, _dev = resolve_backend()
@@ -9219,32 +12892,1177 @@ class Service:
             kind = "cpu"
         vorschlag = self.PLAETZE_VORSCHLAG.get(kind, 1)
         self._plaetze_vorschlag = vorschlag       # fuer /health und die Oberflaeche (P5)
-        # ACHTUNG `or`: `cfg.get(...) or 1` machte aus der gewollten 0 eine 1 und die
-        # Automatik war tot (04.09. im Test gefangen). 0 ist hier ein BEDEUTENDER Wert,
-        # kein "leer".
+        self._plaetze_kind = kind                 # E3.2: die Strang-Formel braucht
+        #                                           dasselbe kind — EINE Aufloesung
+        #                                           des Backends je Start, kein
+        #                                           zweiter resolve_backend-Griff.
+        # ACHTUNG `or`: `cfg.get(...) or 0` machte aus einer gewollten Zahl nichts.
+        # Seit .536 ist FEHLEND dasselbe wie 0 — die Migration raeumt den Schluessel
+        # aus dem Store, und der Werkswert ist 0.
         _roh = cfg.get("analyse_plaetze")
         try:
-            roh = 1 if _roh is None or _roh == "" else int(_roh)
+            roh = 0 if _roh is None or _roh == "" else int(_roh)
         except (TypeError, ValueError):
-            roh = 1
-        # 0 = AUSDRUECKLICH automatisch. Der Werkswert bleibt 1, damit eine
-        # Bestands-Installation sich beim Update nicht von selbst aendert (des Users
-        # Vorgabe 1 aus konzept_parallel_analyse.md: der Aus-Zustand ist das heutige
-        # Verhalten). Wer die Automatik will, waehlt sie — der GPU-Knopf (P5) wird
-        # genau das anbieten und den Vorschlag als Vorbelegung zeigen.
+            roh = 0
+        # DER OVERRIDE. Nur eine Zahl > 0 ist einer; alles andere heisst
+        # „Automatik" und damit: die Plaetze folgen den Straengen.
+        self._plaetze_override = roh if roh > 0 else None
         if roh <= 0:
-            self._plaetze_meldung = (f"analyse_plaetze=auto — using the measured value "
-                                     f"for {kind}: {vorschlag}")
             return vorschlag
-        kap = max(1, roh)
-        if kap > vorschlag:
-            # Kein Eingriff, nur eine ehrliche Zeile: der Nutzer darf ueber den
-            # gemessenen Punkt hinaus, soll aber wissen, dass es dort langsamer wurde.
-            self._plaetze_meldung = (
-                f"analyse_plaetze={kap} is above the measured sweet spot for "
-                f"{kind} ({vorschlag}) — more slots did not get faster in our tests; "
-                f"watch total time and memory")
-        return kap
+        # EINE Zeile beim Start, damit ein Hand-Eintrag im Store nicht still
+        # wirkt. Ob er ueberhaupt zieht, entscheidet `_plaetze_an_straenge`:
+        # groesser als die Strangzahl wird er ignoriert, und das sagt der
+        # Dienst dort auch.
+        self._plaetze_meldung = (
+            f"analyse_plaetze={roh} is an expert override — analysis slots follow "
+            f"the compute threads, this value can only cap them lower")
+        return max(1, roh)
+
+    # ------------------------------------------------------ E3.2: Strang-Formel
+    def _waechter_zahl(self, cfg=None):
+        """Wie viele Live-Waechter gerade EINGESCHALTET sind.
+
+        DYNAMISCH aus der Config, nie eine gemerkte Zahl: der Nutzer schaltet
+        Waechter zur Laufzeit zu und weg, und jeder von ihnen belegt auf
+        derselben Karte Speicher (14.09. gemessen). Derselbe Griff wie auf der
+        /gpu-Seite — dort steht die Begruendung, warum die LAUFENDE Config
+        gelesen wird und nicht die vom Start."""
+        try:
+            g = ((cfg if cfg is not None else self.cfg).get("live") or {}).get("guards") or {}
+            return len([1 for _k, _v in g.items() if (_v or {}).get("enabled")])
+        except Exception:                                 # noqa: BLE001
+            return 0
+
+    def _maschine_speicher_mb(self, kind):
+        """Was diese Maschine dem Worker ueberhaupt anbieten kann, in MB.
+        -> (mb, quelle); mb = 0 heisst AUSDRUECKLICH "nicht lesbar".
+
+        ZWEI MASSE, je nach Backend, und das ist keine Feinheit:
+          * eigener Kartenspeicher (cuda) -> die Karte, gelesen mit derselben
+            Sonde wie die Systemstatistik (`core.systemstat.SONDEN`, EINE Quelle
+            — kein zweiter nvidia-smi-Aufruf mit eigenem Parser).
+          * Systemspeicher (openvino/cpu/rocm) -> die eigene cgroup
+            (`ram_messen().limit_mb`). NIE /proc/meminfo: das zeigt im Container
+            den Wirt (dokumentierte Falle, wiki/maschinen.md).
+
+        DASS DAS OFT NICHT LESBAR IST, IST DER NORMALFALL UND KEIN FEHLER: laeuft
+        der Container ohne `--memory`, meldet die cgroup `max`, und das echte
+        Limit liegt auf einem von innen unsichtbaren Eltern-cgroup — so steht es
+        auf der eigenen Prod (14.09. nachgesehen). Der Aufrufer faellt dann laut
+        auf den gemessenen Durchsatz-Wert zurueck.
+
+        Die Zahl wird EINMAL je Prozess geholt: die Karte waechst nicht, und ein
+        nvidia-smi-Aufruf in der Job-Absetz-Klammer waere eine Bremse."""
+        merk = getattr(self, "_maschine_mb_merk", None)
+        if merk and merk[0] == kind:
+            return merk[1], merk[2]
+        mb, quelle = 0, "unbekannt"
+        try:
+            from core import systemstat as _st
+            if kind == "cuda":
+                d = (_st.SONDEN.get(kind) or (lambda: {}))()
+                mb = int((d or {}).get("speicher_max_mb") or 0)
+                quelle = "nvidia-smi" if mb > 0 else "unbekannt"
+            else:
+                mb = int((_st.ram_messen() or {}).get("limit_mb") or 0)
+                quelle = "cgroup" if mb > 0 else "unbekannt"
+        except Exception as e:                            # noqa: BLE001
+            self.log(f"machine memory not readable ({type(e).__name__}: {e})")
+            mb, quelle = 0, "unbekannt"
+        self._maschine_mb_merk = (kind, max(0, mb), quelle)
+        return max(0, mb), quelle
+
+    def _maschine_ram_mb(self):
+        """Der SYSTEMSPEICHER dieser Maschine in MB, unabhaengig vom Backend.
+        -> (mb, quelle); mb = 0 heisst AUSDRUECKLICH "nicht lesbar" (.529).
+
+        Warum das neben `_maschine_speicher_mb` steht und nicht darin: die
+        Methode oben liefert je Backend ZWEI VERSCHIEDENE MASSE — auf cuda den
+        Kartenspeicher, sonst den Systemspeicher. Die Politik-Grenze der
+        Speicher-Wache misst aber IMMER Systemspeicher (anon + cgroup-shmem des
+        Containers), auch auf cuda. Sie braucht deshalb einen Griff, der auf
+        JEDEM Backend dasselbe Mass zurueckgibt; die beiden zusammenzulegen
+        hiesse, dasselbe Feld je Backend anders zu lesen — genau der
+        Masse-Mischmasch, den der .528-Feldfund teuer gemacht hat.
+
+        QUELLE IST DIE EIGENE CGROUP (`memory.max` ueber `systemstat.ram_messen`)
+        — dieselbe Zahl, die `docker info` als MemTotal meldet. NIE
+        /proc/meminfo: das zeigt im Container den Wirt (dokumentierte Falle,
+        wiki/maschinen.md; auf der eigenen Prod gemessen 62,3 GiB statt der
+        16 GiB, die die LXC wirklich hat).
+
+        DASS DAS OFT NICHT LESBAR IST, IST HIER KEIN RANDFALL, sondern der
+        Normalfall auf Containern ohne `--memory` (eigene Prod und die
+        Feldtester-Anlage gemessen, deren Log am 15.09. woertlich „no container
+        memory limit set" sagt). Der Aufrufer faellt dann laut auf die
+        Posten-Rechnung zurueck."""
+        merk = getattr(self, "_maschine_ram_merk", None)
+        if merk is not None:
+            return merk
+        mb, quelle = 0, "unbekannt"
+        try:
+            from core import systemstat as _st
+            mb = int((_st.ram_messen() or {}).get("limit_mb") or 0)
+            quelle = "cgroup" if mb > 0 else "unbekannt"
+        except Exception as e:                            # noqa: BLE001
+            self.log(f"machine RAM not readable ({type(e).__name__}: {e})")
+            mb, quelle = 0, "unbekannt"
+        self._maschine_ram_merk = (max(0, mb), quelle)
+        return self._maschine_ram_merk
+
+    def _karte_frei_mb(self, kind):
+        """Was auf der Beschleuniger-Karte JETZT WIRKLICH frei ist, in MB.
+        -> (mb, alter_s, grund); `grund is None` heisst „frisch gemessen",
+        `grund == "nicht_messbar"` heisst fail-closed (.531).
+
+        Anlass ist der Feldvorfall vom 15.09.: die Strang-Formel rechnete
+        `gesamt - eigene Posten` und liess zwei Rechenstraenge zu, waehrend auf
+        derselben Karte noch Anzeige-Transcodes und Fremdverbrauch lagen — der
+        Geometrie-Bau endete im CUDA-BFC-OOM. Die Karte KANN sagen, was frei
+        ist; sie wurde nur nicht gefragt.
+
+        EINE QUELLE: dieselbe Sonde wie die Systemstatistik
+        (`core.systemstat.SONDEN`), kein zweiter nvidia-smi-Aufruf mit eigenem
+        Parser. Sie liefert Gesamt und Belegt; frei ist die Differenz — das ist
+        `memory.free` derselben Abfrage.
+
+        GEMERKT MIT MINDESTABSTAND UND ALTER (.531), und hier steht warum: der
+        Docstring behauptete bis .530 „je Worker-Start". Das war falsch — die
+        Sonde haengt ueber `worker_fussabdruck_max_mb` und `worker_geometrien_max`
+        an JEDEM Nicht-ping-Job, lief also ZWEIMAL je Job als eigener Prozess-Fork
+        mit 8 s Zeitgrenze, mitten im Absetzweg. Seit .531: hoechstens ein Fork je
+        KARTE_SONDE_ABSTAND_S, Zeitgrenze 2 s (core/systemstat.py), und bei einem
+        Ausfall der LETZTE gute Wert mit seinem ALTER statt einer 0. Eine 0 hiesse
+        „Karte voll" und waere ein luegender Diagnosewert.
+
+        NUR AUF BACKENDS MIT EIGENEM KARTENSPEICHER. Auf Intel ist der
+        Fussabdruck Systemspeicher; dort gibt es nichts, was ein
+        `memory.free` der Karte waere, und die Formel rechnet ohnehin im
+        richtigen Mass."""
+        if kind != "cuda":
+            return 0, 0.0, "kein_kartenmass"
+        jetzt = time.monotonic()
+        merk = getattr(self, "_karte_merk", None)
+        if merk is None:
+            merk = self._karte_merk = {"mb": 0, "ts": 0.0, "fehl": 0,
+                                       "grund": "noch_nicht_gemessen"}
+        if merk["ts"] and (jetzt - merk["ts"]) < KARTE_SONDE_ABSTAND_S:
+            return merk["mb"], round(jetzt - merk["ts"], 2), merk["grund"]
+        mb, grund = 0, None
+        try:
+            from core import systemstat as _st
+            d = (_st.SONDEN.get(kind) or (lambda: {}))() or {}
+            gesamt = int(d.get("speicher_max_mb") or 0)
+            belegt = int(d.get("speicher_mb") or 0)
+            if gesamt <= 0 or belegt < 0 or belegt > gesamt:
+                # VIER AUSFALL-ARTEN, VIER GRUENDE (K1): eine Diagnose, die jeden
+                # Ausfall gleich nennt, schickt den Betreiber in die falsche
+                # Richtung. `_fehlt()` der Sonde unterscheidet werkzeug_fehlt /
+                # nicht_lesbar / kein_geraet — das wird hier durchgereicht.
+                grund = str(d.get("grund") or "nicht_lesbar")
+            else:
+                mb = max(0, gesamt - belegt)
+        except Exception as e:                            # noqa: BLE001
+            grund = f"sonde_fehler: {type(e).__name__}"
+        if grund is None:
+            merk.update({"mb": mb, "ts": jetzt, "fehl": 0, "grund": None})
+            return mb, 0.0, None
+        merk["fehl"] += 1
+        alter = round(jetzt - merk["ts"], 2) if merk["ts"] else 0.0
+        if merk["fehl"] >= KARTE_FEHLVERSUCHE_MAX:
+            if merk["grund"] != "nicht_messbar":
+                self.log(f"free card memory not readable ({grund}) — "
+                         f"{merk['fehl']} attempts in a row, treating the card as "
+                         f"NOT MEASURABLE (fail-closed: one compute thread, anchor "
+                         f"cap). Set worker_vram_mb by hand or check that the "
+                         f"container can reach nvidia-smi")
+            merk["grund"] = "nicht_messbar"
+            return 0, alter, "nicht_messbar"
+        merk["grund"] = grund
+        return merk["mb"], alter, grund
+
+    # .535: HIER STAND `_vram_eichung` — der Leser der Eichdatei
+    # `state/vram_eichung.json`. Die Datei wird nicht mehr geschrieben und
+    # nicht mehr gelesen; was eine Stufe kostet, sagt die Messtabelle in
+    # `core.gpubudget`. Alt-Dateien raeumt `_migration_eich_aus_0535` weg.
+
+    def _live_engine_alter_s(self):
+        """Wie lange laeuft die Live-Engine schon? -> Sekunden oder None.
+
+        None heisst AUSDRUECKLICH „laeuft nicht oder ich weiss es nicht" — und
+        genau das ist die vorsichtige Antwort: dann wird ihr Kartenposten
+        reserviert, statt ihn im Messwert zu vermuten (s.
+        `gpubudget.waechter_abzug_mb`).
+
+        Auch der STANDALONE-Fall (Engine ausserhalb des Dienstes gestartet)
+        liefert None: dort kennen wir den Startzeitpunkt nicht, und eine
+        geschaetzte Laufzeit waere genau die Art Zahl, die diese Rechnung teuer
+        gemacht hat."""
+        a = getattr(self, "_live_aufsicht", None)
+        if a is None:
+            return None
+        try:
+            p = getattr(a, "proc", None)
+            if p is None or p.poll() is not None or getattr(a, "standalone", False):
+                return None
+            start = getattr(a, "start_mono", None)
+            if start is None:
+                return None
+            return max(0.0, float(a.jetzt() - start))
+        except Exception:                                 # noqa: BLE001
+            return None
+
+    def _karten_name(self):
+        """Der Name der Beschleuniger-Karte, EINMAL gemerkt. Er steht in
+        /health (`worker_straenge.karte`) und sagt dem Betreiber, ueber welche
+        Karte die Zahlen daneben reden. None heisst „nicht ermittelbar"."""
+        merk = getattr(self, "_karten_name_merk", "?")
+        if merk != "?":
+            return merk
+        name = None
+        # Auf Backends ohne eigenen Kartenspeicher gibt es nichts zu fragen —
+        # dort kostete der Aufruf nur einen Fork ins Leere (nvidia-smi gibt es
+        # auf einer Intel-Maschine gar nicht).
+        _k = getattr(self, "_plaetze_kind", None) or ""
+        if (_gpubudget.stuetzwerte(_k) or {}).get("mass") != "vram":
+            self._karten_name_merk = None
+            return None
+        try:
+            r = subprocess.run(["nvidia-smi", "--query-gpu=name",
+                                "--format=csv,noheader"],
+                               capture_output=True, text=True, timeout=2)
+            if r.returncode == 0 and r.stdout.strip():
+                name = r.stdout.strip().splitlines()[0].strip()
+        except Exception:                                 # noqa: BLE001
+            name = None
+        self._karten_name_merk = name or None
+        return self._karten_name_merk
+
+    # .535: HIER STAND `vram_eich_schluessel` — die Kennung, unter der eine
+    # Messung DIESER Karte galt. Ohne Eichdatei gibt es nichts mehr zu
+    # kennzeichnen.
+
+    def worker_straenge(self):
+        """DIE Antwort auf 'wie viele Rechenstraenge bekommt der Worker-Dienst'.
+
+        Bis E3.1 war das die Platz-Zahl der Vergabestelle — eine PROZESS-Zahl auf
+        einem THREAD-Modell. Seit E3.2 rechnet die Speicher-Formel je Karte
+        (core.gpubudget.straenge): Karte/RAM ausmessen, Reserve, Dienst und
+        Live-Waechter abziehen, den Rest gegen Fussabdruck(N, G) halten und mit
+        dem gemessenen Durchsatz-Wert deckeln.
+
+        MIGRATIONS-KLEMME (W2-B16, User-Auflage): ein gesetzter alter
+        `analyse_plaetze`-Wert wird NIE als Strang-Zahl uebernommen. Vier Plaetze
+        waren vier Prozesse mit je eigenem Kontext; vier Straenge in EINEM Prozess
+        sind etwas anderes, und die Gleichsetzung hat den OOM reproduziert. Der
+        Wert bleibt unangetastet stehen (er steuert weiter die Vergabestelle), er
+        wird nur nicht mehr als Threadzahl GEDEUTET — und wenn er von der
+        gerechneten Zahl abweicht, sagt der Dienst das dem Nutzer EINMAL laut.
+
+        -> dict (auch fuer /health). Wird bei jedem Prozess-Start gerufen, damit
+        ein zur Laufzeit zugeschalteter Waechter beim naechsten Start zaehlt."""
+        _gb = _gpubudget
+        kind = getattr(self, "_plaetze_kind", None) or "cpu"
+        vor = getattr(self, "_plaetze_vorschlag", 1) or 1
+        n_wae = self._waechter_zahl()
+        gesamt, quelle = self._maschine_speicher_mb(kind)
+        # NUTZER-WAHL (User 14.09.): der NEUE Schluessel `worker_straenge`, und nur
+        # er. 0/fehlt = Automatik. Ein gesetzter Wert gilt, auch ueber dem
+        # gerechneten Deckel — gewarnt wird, eingegriffen nicht (Tester nicht
+        # bevormunden). Der einzige harte Riegel ist gpubudget.STRAENGE_MAX.
+        try:
+            _nutzer = int(self.cfg.get("worker_straenge") or 0)
+        except (TypeError, ValueError):
+            _nutzer = 0
+        # .529: das REAL FREIE VRAM der Karte kommt als eigene Groesse dazu. Die
+        # Posten-Rechnung kennt nur die eigenen Verbraucher; was ein
+        # Anzeige-Transcode oder ein fremder Prozess auf derselben Karte haelt,
+        # sah sie nie — und genau daran starb der Geometrie-Bau am 15.09. im
+        # CUDA-BFC-OOM. Die kleinere der beiden Mengen gilt (gpubudget.straenge).
+        _frei_gem, _frei_alter, _frei_grund = self._karte_frei_mb(kind)
+        # .531: WIE ALT die Live-Engine ist, entscheidet, ob ihr Kartenposten vom
+        # gemessenen Wert noch abgezogen werden muss oder schon darin steckt.
+        _eng_alter = self._live_engine_alter_s()
+        # .534: die Karten-Reserve aus der Config (-1 = Formel wie bisher).
+        try:
+            _res_wunsch = int(self.cfg.get("worker_vram_reserve_mb", -1))
+        except (TypeError, ValueError):
+            _res_wunsch = -1
+        # .535: der eigene Anteil kommt MIT GRUND. 0 mit Grund heisst „nicht
+        # zuordenbar", nicht „belegt nichts" — und das steht ab jetzt in /health,
+        # statt als stille Null in die Leiter zu gehen.
+        _eig_mb, _eig_grund = self._worker_karte_eigen_mb()
+        st = _gb.straenge(gesamt, n_wae, kind, vor, nutzer_n=max(0, _nutzer),
+                          frei_gemessen_mb=_frei_gem,
+                          engine_alter_s=_eng_alter,
+                          laufend_eigen_mb=_eig_mb,
+                          reserve_wunsch=_res_wunsch,
+                          # .535: WIE VIELE STRAENGE GERADE LAUFEN. Ohne
+                          # Prozess-Sonde rechnet die Leiter daraus zurueck,
+                          # was der laufende Worker belegt — sonst zaehlt sein
+                          # eigener Verbrauch gegen ihn (Feldbefund 18:06).
+                          laufend_n=int(getattr(
+                              getattr(self, "_dienst_obj", None),
+                              "straenge_laufend", 0) or 0))
+        st["laufend_eigen_grund"] = _eig_grund
+        st["quelle"] = quelle
+        st["frei_alter_s"] = _frei_alter
+        st["frei_grund"] = _frei_grund
+        st["sonde_fehlversuche"] = int((getattr(self, "_karte_merk", None)
+                                        or {}).get("fehl") or 0)
+        st["karte"] = self._karten_name()
+        # .531 NOT-WEG `worker_vram_mb`: ein gesetzter Wert ERSETZT den gerechneten
+        # Arena-Deckel. Er ist fuer Anlagen gedacht, in denen `nvidia-smi` im
+        # Container nicht erreichbar ist — dann hat die Automatik nichts zu messen,
+        # und der Betreiber weiss es besser als wir. Die Strang-Zahl beruehrt er
+        # NICHT: das ist eine andere Frage und hat mit `worker_straenge` ihren
+        # eigenen Schluessel.
+        try:
+            _vram_cfg = int(self.cfg.get("worker_vram_mb") or 0)
+        except (TypeError, ValueError):
+            _vram_cfg = 0
+        if _vram_cfg > 0 and st.get("mass") == "vram":
+            st["arena_deckel_mb"] = _vram_cfg
+            st["deckel_quelle"] = "config"
+            st["rechenweg"] = (f"{st['rechenweg']}; worker_vram_mb={_vram_cfg} "
+                               f"overrides the computed arena cap")
+        # Die Grenze der Speicher-Wache aus derselben Rechnung (E3.1-Rest R2:
+        # bis hierher hatte der Dienst gar keine Politik-Grenze und sagte das
+        # laut). `worker_rss_max_mb` reist als KONFIGURIERTES JE-WORKER-BUDGET
+        # mit; wo die Formel fuer dieses Mass nichts zu sagen hat, RECHNET
+        # gpubudget die Container-Grenze daraus plus den gemessenen Nachbarn
+        # (.528, Feldfund NB-Abnahme 14.09. — s. gpubudget.CONTAINER_RAM_POSTEN).
+        # Die POSTEN reisen mit in /health: eine Grenze, deren Zustandekommen
+        # niemand sehen kann, ist genau die Zahl, die der Feldfund teuer gemacht
+        # hat (der Betreiber sah 4096 und konnte nicht wissen, wogegen sie stand).
+        # .529 (Feldvorfall 15.09.): dazu der MASCHINEN-RAM. Die reine
+        # Posten-Summe haengt an der Waechterzahl und am Budget, nicht an der
+        # Maschine — auf der Feldtester-Anlage (5 Waechter) ergab sie 10350 MB,
+        # der Container kam auf 10384 und die Wache fuhr den Worker herunter,
+        # obwohl der Wirt rund 48 GB hat. Ist der RAM lesbar, gilt deshalb
+        # Maschine minus Reserve; ist er es nicht, bleibt es bei der Summe.
+        # Ein BEWUSST gesetzter `worker_rss_max_mb` schlaegt beides.
+        _ram_mb, _ram_quelle = self._maschine_ram_mb()
+        _rss_roh = self.cfg.get("worker_rss_max_mb")
+        _rss_mb = (WORKER_RSS_WERK_MB if _rss_roh in (None, "")
+                   else max(0, int(_rss_roh)))
+        _gr = _gb.wache_grenze_rechnung(
+            kind, st["n"], n_wae, gesamt,
+            konfiguriert_mb=_rss_mb, maschine_ram_mb=_ram_mb,
+            nutzer_gesetzt=bool(_rss_mb and _rss_mb != WORKER_RSS_WERK_MB))
+        st["maschine_ram_mb"], st["maschine_ram_quelle"] = _ram_mb, _ram_quelle
+        st["grenze_mb"], st["grenze_quelle"] = _gr["mb"], _gr["quelle"]
+        st["grenze_posten"] = _gr["posten"]
+        st["grenze_rechenweg"] = _gr["rechenweg"]
+        _gh = _gr["hinweis"]
+        if _gh and not st.get("hinweis"):
+            st["hinweis"] = _gh
+        # E3.3 (W2-B29): der GEOMETRIE-Deckel aus derselben Rechnung. Er begrenzt,
+        # wie viele Clip-Aufloesungen der Prozess gleichzeitig kompiliert haelt —
+        # ohne ihn wuchs `worker_dienst.graphen` monoton, waehrend die Formel oben
+        # mit einer endlichen Zahl plant. 0 = nicht ableitbar, dann KEIN Deckel.
+        # .531: auf Karten-Backends kommt die Zahl aus der LEITER — aus demselben
+        # `n` und demselben Budget wie die Strang-Zahl (Defekt 4: zwei getrennt
+        # gebaute Rechnungen fuer dasselbe Konto gaben auf der vollen Feldkarte
+        # Geometrien frei, die es nicht mehr gab). Auf Container-RAM-Backends
+        # bleibt `geometrien_deckel` unveraendert in Gebrauch.
+        if st.get("mass") == "vram":
+            st["geometrien_rechenweg"] = (
+                f"from the ladder: {st.get('g_zusatz', 0)} extra geometry/ies on "
+                f"top of the {_gb.GEOMETRIEN_IN_ANKERN} the anchors already carry "
+                f"-> {st.get('geometrien_max')}")
+        else:
+            st["geometrien_max"], st["geometrien_rechenweg"] = _gb.geometrien_deckel(
+                kind, st["n"], n_wae, gesamt)
+        # MIGRATIONS-KLEMME: der alte Wert wird gelesen, um ihn zu MELDEN, nie
+        # um ihn zu nehmen.
+        _roh = self.cfg.get("analyse_plaetze")
+        try:
+            roh = 0 if _roh is None or _roh == "" else int(_roh)
+        except (TypeError, ValueError):
+            roh = 0
+        st["analyse_plaetze"] = roh
+        st["klemme"] = None
+        # Gemeldet wird die UMSTELLUNG, nicht jede Abweichung: wer den neuen
+        # Schluessel selbst gesetzt hat, hat die Trennung verstanden und braucht
+        # den Migrations-Satz nicht mehr (User 14.09.: nur der NEUE Schluessel
+        # zaehlt als bewusster Eingriff).
+        if roh > 0 and _nutzer <= 0 and roh != st["n"]:
+            st["klemme"] = (
+                f"analyse_plaetze={roh} is a SLOT count from the old worker (one "
+                f"process per slot) and is NOT used as the number of compute "
+                f"threads — {roh} processes are not {roh} threads. The new worker "
+                f"runs {st['n']} thread(s) computed from measured memory; since "
+                f"0.1.0.536 the analysis slots follow those threads, and your "
+                f"value only still acts as an expert cap while it is SMALLER than "
+                f"them")
+        # EINE kompakte Zeile beim Start, und nur wenn sich etwas geaendert hat —
+        # der Dienst startet im Betrieb oefter neu, ein Log je Start waere Rauschen.
+        marke = (st["n"], st["grund"], st["waechter_n"], st["grenze_mb"],
+                 bool(st["klemme"]), bool(st.get("deckel_meldung")),
+                 bool(st.get("ueber_formel")), bool(st.get("unter_formel")),
+                 # .531: der Kartenhaushalt gehoert in die Marke — eine
+                 # geaenderte Leiter oder ein anderer Arena-Deckel ist genau die
+                 # Aenderung, die der Betreiber sehen muss, auch wenn die
+                 # Strang-Zahl zufaellig dieselbe blieb.
+                 st.get("arena_deckel_mb"), st.get("preis_quelle"),
+                 st.get("zustand"), st.get("geometrien_max"),
+                 # .531: kippt der Waechter-Abzug (Engine kam hoch oder ging),
+                 # aendert sich das Budget — das gehoert in die Marke.
+                 st.get("waechter_abzug_mb"),
+                 # .529: WOHER die beiden Zahlen kommen, gehoert in die Marke.
+                 # Kippt die Grenze von der Maschine auf die Posten-Rechnung
+                 # (Container-Limit weg) oder die freie Menge von gerechnet auf
+                 # gemessen (fremder Verbraucher auf der Karte), ist das eine
+                 # Aenderung, die der Betreiber sehen muss — auch wenn die Zahl
+                 # zufaellig dieselbe blieb.
+                 st.get("grenze_quelle"), st.get("frei_quelle"))
+        if marke != getattr(self, "_straenge_marke", None):
+            self._straenge_marke = marke
+            self.log(f"worker threads: {st['rechenweg']}; footprint limit "
+                     f"{st['grenze_mb']} MB ({st['grenze_quelle']})")
+            # .528: die RECHNUNG der Grenze, Posten fuer Posten. Sie steht in
+            # derselben Marke-Klammer wie die Zeile darueber, also genauso
+            # selten — und sie ist die Zeile, die im Feldfund vom 14.09. gefehlt
+            # hat: „4096 MB (config)" sagte nicht, wogegen die Zahl stand.
+            if st.get("grenze_rechenweg"):
+                self.log(f"worker threads: footprint limit = "
+                         f"{st['grenze_rechenweg']}")
+            for _zeile in (st.get("hinweis"), st.get("deckel_meldung"),
+                           st.get("ueber_formel"), st.get("unter_formel"),
+                           st.get("klemme")):
+                if _zeile:
+                    self.log(f"worker threads: {_zeile}")
+        self._straenge_stand = st
+        # .535: HIER STANDEN AUFSTIEGS-PRUEFUNG UND MESS-VERGLEICH. Mit der
+        # Messtabelle gibt es keinen Aufstieg mehr (der Worker startet gleich
+        # mit der Stufe, die die Karte traegt) und keine laufende Preis-Messung,
+        # die man dagegenhalten koennte. Wer nachmessen will, nimmt die
+        # Feinmessung (s. `Feinmessung`).
+        return st
+
+    def _zeitprotokoll(self, eid, entry, ainfo, einge_ts, z_platz, z_schreiben,
+                       warte_s):
+        """EINE BILANZZEILE JE EREIGNIS (.534 B5, Schalter `zeitprotokoll`).
+
+        DER ANLASS, in Zahlen: im Lasttest vom 15.09. lief die Karte waehrend
+        der Rechnung auf 53-74 % und brach auf 4 % ein, waehrend 43 Ereignisse
+        warteten und zwei Plaetze „in Arbeit" standen. Je Platz vergingen rund
+        9 s je Ereignis, davon rund 5,5 s Analyse — rund 40 % der Platzzeit
+        waren Abruf und Uebergabe. Sichtbar war davon NICHTS: die Akte kennt nur
+        `dauer_s`, /health ist eine Momentaufnahme.
+
+        KEINE NEUEN UHREN. Jede Spalte kommt aus einem Punkt, den es schon gab:
+          warte        Einreihen -> Platz (der Queue-Eintrag fuehrt seinen
+                       Einreih-Zeitpunkt seit B1)
+          abruf        Clip aus Frigate, mit Bytes (Job-Antwort `zeiten`, im
+                       Worker gemessen — dort passiert es)
+          uebergabe    Platz -> Job angenommen (`wartezeit_s`, die Zahl, die
+                       schon aus `dauer_s` herausgerechnet wird)
+          erstes bild  bis zum ersten dekodierten Frame, mit Decoder-Art
+                       (Job-Antwort)
+          rechnung     `dauer_s` der Akte, unveraendert
+          schreiben    Akte-Zeile
+          gesamt       Platz belegt -> Platz frei
+
+        Die Zeile ist eine AUSKUNFT und veraendert nichts. Sie steht je Ereignis
+        genau einmal und laesst sich abschalten (`zeitprotokoll: 0`) — mit dem
+        Vorbehalt, dass dann auch die Vorher/Nachher-Vergleiche fehlen, fuer die
+        sie gebaut ist."""
+        try:
+            if not int(self.cfg.get("zeitprotokoll", 1) or 0):
+                return
+        except (TypeError, ValueError):
+            return
+        try:
+            jetzt = time.monotonic()
+            zt = dict((ainfo or {}).get("zeiten") or {})
+            warte = (round(max(0.0, time.time() - float(einge_ts)), 1)
+                     if einge_ts else None)
+            gesamt = round(max(0.0, jetzt - z_platz), 1)
+            schreiben = round(max(0.0, jetzt - z_schreiben), 2)
+            rechnung = entry.get("dauer_s")
+            bytes_mb = (round(int(zt["abruf_bytes"]) / 1048576.0, 1)
+                        if zt.get("abruf_bytes") else None)
+            teile = [f"warte {warte} s" if warte is not None else "warte n/a",
+                     (f"abruf {zt['abruf_s']} s"
+                      + (" (" + ", ".join(
+                          [x for x in (f"{bytes_mb} MB" if bytes_mb is not None
+                                       else None, zt.get("abruf_quelle")) if x])
+                         + ")" if (bytes_mb is not None or zt.get("abruf_quelle"))
+                         else "")
+                      if zt.get("abruf_s") is not None else "abruf n/a"),
+                     f"uebergabe {round(float(warte_s or 0.0), 1)} s",
+                     (f"erstes bild {zt['erstes_bild_s']} s"
+                      + (f" ({zt['decoder']})" if zt.get("decoder") else "")
+                      if zt.get("erstes_bild_s") is not None
+                      else "erstes bild n/a"),
+                     f"rechnung {rechnung} s",
+                     f"schreiben {schreiben} s",
+                     f"gesamt {gesamt} s"]
+            if zt.get("kompilat_s"):
+                teile.insert(4, f"bau {zt['kompilat_s']} s")
+            self.log(f"zeit: {eid} " + " | ".join(teile))
+            # Dieselben Zahlen strukturiert — in die Akte-Zeile dieses
+            # Ereignisses und in den Ringpuffer fuer /health.
+            zeiten = {"warte_s": warte, "abruf_s": zt.get("abruf_s"),
+                      "abruf_bytes": zt.get("abruf_bytes"),
+                      "abruf_quelle": zt.get("abruf_quelle"),
+                      "uebergabe_s": round(float(warte_s or 0.0), 2),
+                      "erstes_bild_s": zt.get("erstes_bild_s"),
+                      "decoder": zt.get("decoder"),
+                      "bau_s": zt.get("kompilat_s"),
+                      "rechnung_s": rechnung, "schreiben_s": schreiben,
+                      "gesamt_s": gesamt}
+            entry["zeiten"] = zeiten
+            ring = getattr(self, "_zeiten_ring", None)
+            if ring is None:
+                ring = self._zeiten_ring = collections.deque(maxlen=100)
+            ring.append(zeiten)
+        except Exception as e:                            # noqa: BLE001
+            # Eine Auskunft darf ein Urteil nie kosten.
+            self.debug(f"{eid}: time protocol failed ({type(e).__name__}: {e})")
+
+    def zeiten_zustand(self):
+        """Die letzten 100 Ereignisse als Median und Summe — fuer /health (.534).
+
+        MEDIAN, nicht Mittel: eine einzelne 50-s-Analyse (1017 Gesichter, im
+        Feld gemessen) zieht ein Mittel so weit, dass der Normalfall verschwindet
+        — und der Normalfall ist die Frage."""
+        ring = list(getattr(self, "_zeiten_ring", ()) or ())
+        aus = {"n": len(ring), "median": {}, "summe": {}}
+        if not ring:
+            return aus
+        for feld in ("warte_s", "abruf_s", "uebergabe_s", "erstes_bild_s",
+                     "bau_s", "rechnung_s", "schreiben_s", "gesamt_s"):
+            werte = sorted(float(z[feld]) for z in ring
+                           if z.get(feld) is not None)
+            if not werte:
+                continue
+            aus["median"][feld] = round(werte[len(werte) // 2], 2)
+            aus["summe"][feld] = round(sum(werte), 1)
+        # DER ANTEIL, UM DEN ES GEHT: wie viel der Platzzeit NICHT Rechnung war.
+        # JE EREIGNIS gerechnet und davon der Median — NICHT aus den Medianen
+        # der Spalten. Die stammen aus verschiedenen Ereignissen, und ihre Summe
+        # kann ueber der Gesamtzeit liegen (in der Probe gemessen: 1,33). Eine
+        # Verhaeltniszahl, die groesser als 1 werden kann, ist keine Auskunft,
+        # sondern ein Rechenfehler mit Nachkommastelle.
+        anteile = []
+        for z in ring:
+            g = z.get("gesamt_s")
+            if not g:
+                continue
+            ausser = sum(float(z[f]) for f in ("abruf_s", "uebergabe_s",
+                                               "erstes_bild_s", "schreiben_s")
+                         if z.get(f) is not None)
+            anteile.append(min(1.0, max(0.0, ausser / float(g))))
+        if anteile:
+            anteile.sort()
+            aus["anteil_nicht_rechnung"] = round(anteile[len(anteile) // 2], 2)
+        return aus
+
+    def _uebersprungen_zaehlen(self):
+        """Den /health-Zaehler der Uebersprünge hochsetzen (.534 B9) — stubfest,
+        weil die Proben den Dienst als Teil-Buehne aufstellen."""
+        sperre = getattr(self, "_zustand_lock", None)
+        try:
+            if sperre is not None:
+                with sperre:
+                    self.uebersprungen_offen = getattr(
+                        self, "uebersprungen_offen", 0) + 1
+            else:
+                self.uebersprungen_offen = getattr(
+                    self, "uebersprungen_offen", 0) + 1
+        except Exception:                                 # noqa: BLE001
+            pass
+
+    def _uebersprungen_buchen(self, eid, camera, ev, grund, text):
+        """EINE ehrliche Akte-Zeile fuer ein Ereignis, das NICHT gerechnet wurde
+        (.534 B9). Muster der `live_only`-Zeile: dasselbe Schema, dieselbe
+        Kategorie, derselbe `processed`-Vermerk.
+
+        WARUM EINE ZEILE UND NICHT EINFACH NICHTS: ein still verschwundenes
+        Ereignis ist genau die Klasse, gegen die die Akte geschrieben ist. Der
+        Betreiber soll das Ereignis in der Liste finden und dort lesen, warum
+        hier nichts gerechnet wurde. Eine `fehler`-Zeile waere die falsche
+        Aussage — nicht die Analyse ist gescheitert, sie hat nie stattgefunden,
+        und ein Nachhol-Lauf soll sie auch nicht versuchen."""
+        try:
+            with self.lock, open(self.log_path, "a") as f:
+                f.write(json.dumps(
+                    {"schema": 3, "ts": round(time.time(), 1), "eid": eid,
+                     "camera": camera, "start": (ev or {}).get("start_time"),
+                     "faces": 0, "max_bw": 0, "frames_gelesen": None,
+                     "frames_soll": None,
+                     "frigate": {"label": None, "score": None, "cos": None},
+                     "ours": {}, "bestaetigt": [],
+                     "kategorie": "uebersprungen", "kategorie_v1": "uebersprungen",
+                     "dauer_s": 0.0, "alerted": False,
+                     "ende_ts": (ev or {}).get("end_time"),
+                     "uebersprungen": {"grund": grund, "text": text,
+                                       # .534 (Pruefbericht E-10): DIESE ZEILE
+                                       # IST ENDGUELTIG. Der Nachhol-Lauf nimmt
+                                       # nur `fehler`-Zeilen; ein Ereignis, das
+                                       # Frigate erst spaeter schliesst, wird
+                                       # nicht von selbst nachgerechnet. Der Weg
+                                       # zurueck ist die Support-Einspielung
+                                       # (POST /support/einspielen) — und das
+                                       # steht hier, damit niemand ihn suchen
+                                       # muss.
+                                       "zurueckholen": "POST /support/einspielen"}},
+                    ensure_ascii=False) + "\n")
+                f.flush()
+            with self.lock:
+                self.processed.add(eid)
+            # .408 LUECKEN-MARKE (K5-Deckungsvertrag): hier lief KEINE Analyse.
+            # Ohne die Marke saehe die Anwesenheits-Seite an dieser Stelle
+            # „niemand da" statt „nicht hingesehen" — genau die Verwechslung,
+            # gegen die sie geschrieben ist. Anders als beim live_only-
+            # Uebersprung (dort schaut ein laufender Live-Waechter hin) hat
+            # hier wirklich niemand hingesehen.
+            _anw.luecke(self.cfg, (ev or {}).get("start_time"),
+                        (ev or {}).get("end_time"), camera, eid, log=self.log)
+        except Exception as e:                            # noqa: BLE001
+            self.log(f"{eid}: could not record the skip ({type(e).__name__}: {e})")
+        self.log(f"{eid} ({camera}): uebersprungen [v1:{grund}] ({text})")
+
+    # .535: HIER STANDEN `_messung_pruefen` und `_plateau_gemessen_mb` — der
+    # Vergleich "gemessen gegen Tabelle" und sein Leser in der Eichdatei.
+    # Beide sind mit der Messung ausgebaut.
+
+    def _eigen_kinder(self, pid, tiefe=3):
+        """Die pids UNTER `pid` (Decoder-Kinder), hoechstens `tiefe` Ebenen.
+        -> set. Gelesen aus /proc; ein nicht lesbarer Zweig ist kein Fehler,
+        er fehlt dann einfach (die Sonde meldet ohnehin nur, was der Treiber
+        nennt)."""
+        aus, rand = set(), [int(pid)]
+        for _ in range(max(1, int(tiefe))):
+            naechste = []
+            for p in rand:
+                try:
+                    with open(f"/proc/{p}/task/{p}/children") as f:
+                        kinder = [int(x) for x in f.read().split()]
+                except Exception:                          # noqa: BLE001
+                    continue
+                for k in kinder:
+                    if k not in aus:
+                        aus.add(k)
+                        naechste.append(k)
+            if not naechste:
+                break
+            rand = naechste
+        return aus
+
+    def _worker_karte_eigen_mb(self):
+        """Was UNSER laufender Worker auf der Karte haelt — Prozess UND seine
+        Decoder-Kinder, im selben Moment gemessen. -> (mb, grund)
+
+        `grund is None` heisst „gemessen"; sonst ist `mb` 0 UND der Grund sagt,
+        warum es keine Zahl gibt (`kein_worker`, `kein_eintrag`, `liste_leer`,
+        `werkzeug_fehlt`, `timeout`, `nicht_lesbar`, `kein_geraet`).
+
+        .535 — WARUM DAS EIN PAAR IST UND KEINE NACKTE ZAHL: bis .534 gab dieser
+        Griff eine 0 zurueck, und eine 0 ist hier nicht „nichts belegt", sondern
+        „ich weiss es nicht". Im Feld (15.09. 17:20) nannte der Treiber
+        nur Wirt-pids; `prozesse_karte_mb` lieferte `({}, None)`, daraus wurde
+        still eine 0, /health zeigte `laufend_eigen_mb = 0`, und NICHTS im Log
+        sagte, dass hier gar nicht gemessen werden konnte. Der Grund reist
+        seitdem mit, wird EINMAL je Worker-Leben geloggt und steht in /health
+        unter `worker_straenge.laufend_eigen_grund`.
+
+        Die Zahl geht als `laufend_eigen_mb` in die Leiter und wird dort dem
+        gemessenen Frei-Wert zurueckgerechnet — der laufende Worker steht in
+        `memory.free` als belegt, waehrend die Leiter ihn daneben von null auf
+        plant (NB-2, .534).
+
+        WARUM GEMESSEN UND NICHT „PLATEAU MINUS GRUNDLINIE": die Eich-Groesse
+        ist ein PREIS je Konstellation, keine Momentaufnahme; sie kennt den
+        gerade laufenden Decoder nicht und haengt an einer Grundlinie, die zu
+        einem anderen Zeitpunkt gemessen wurde. Am 15.09. war der Unterschied
+        522 MiB (Plateau 738 gegen wirklich gehaltene 1004-1262 MiB), und
+        genau diese Differenz hat den Aufstieg blockiert. Der Decoder gehoert
+        MIT in die Zahl: die Leiter plant ihren eigenen Decoder-Posten
+        ausserhalb der Arena, also darf der gerade laufende nicht noch einmal
+        als fremd belegt gelten.
+
+        GETAKTET wie die Karten-Sonde (`KARTE_SONDE_ABSTAND_S`): derselbe
+        Fork-Preis, derselbe Mindestabstand."""
+        d = getattr(self, "_dienst_obj", None)
+        _p = getattr(d, "p", None) if d else None
+        if _p is None or _p.poll() is not None:
+            return 0, "kein_worker"
+        jetzt = time.monotonic()
+        merk = getattr(self, "_eigen_merk", None)
+        if merk is None:
+            merk = self._eigen_merk = {"mb": 0, "ts": 0.0, "grund": None,
+                                       "gemeldet_pid": None}
+        if merk["ts"] and (jetzt - merk["ts"]) < KARTE_SONDE_ABSTAND_S:
+            return int(merk["mb"] or 0), merk.get("grund")
+        try:
+            from core import systemstat as _st              # noqa: PLC0415
+            pids = {int(_p.pid)} | self._eigen_kinder(_p.pid)
+            gefunden, grund = _st.prozesse_karte_mb(pids)
+            mb = 0 if grund is not None else sum(int(v or 0) for v in gefunden.values())
+        except Exception as e:                              # noqa: BLE001
+            mb, grund = 0, f"sonde_fehler: {type(e).__name__}"
+        merk.update({"mb": max(0, int(mb)), "ts": jetzt, "grund": grund})
+        # GEMELDET WIRD HIER NICHT — und das ist eine Lehre aus dem NB-Lauf vom
+        # 15.09. 18:32: unmittelbar nach dem Worker-Start haelt der Prozess noch
+        # NICHTS auf der Karte, der Treiber nennt ihn folglich nicht, und die
+        # Antwort lautet fuer ein paar Sekunden `kein_eintrag`. Wer daraus eine
+        # Logzeile oder gar einen Merker macht, erklaert eine funktionierende
+        # Anlage fuer blind. Die momentane Antwort steht deshalb dort, wo sie
+        # hingehoert: in /health und an der Speicherleiste, als das, was sie
+        # ist — eine Momentaufnahme mit Grund daneben.
+        return int(merk["mb"]), grund
+
+    # .535: HIER STANDEN `_vram_sonde_grund` (kann diese Anlage ueberhaupt
+    # eichen?) und `_eich_grundlinie_nach` (eine neue Grundlinie fuer den
+    # lebenden Worker). Beide beantworteten Fragen der Preis-Messung; die
+    # gibt es nicht mehr. Was die Prozess-Sonde JETZT sieht, steht weiter in
+    # /health (`laufend_eigen_grund`) und beschriftet die Speicherleiste.
+
+    def worker_straenge_zahl(self):
+        """Nur die Zahl — das ist der Ausdruck, den `worker_dienst()` einsetzt."""
+        try:
+            return int(self.worker_straenge()["n"])
+        except Exception as e:                            # noqa: BLE001
+            # Die Formel darf den Dienst NIE am Starten hindern. Faellt sie aus,
+            # laeuft er mit einem Strang (dem sicheren Boden) und sagt es.
+            self.log(f"thread formula failed ({type(e).__name__}: {e}) — "
+                     f"starting the worker with one compute thread")
+            return 1
+
+    def worker_straenge_zustand(self):
+        """Der Stand fuer /health — LESEND. Er nimmt, was beim letzten
+        Dienst-Start gerechnet wurde, und rechnet nur, wenn es das noch nicht
+        gibt (frischer Prozess vor dem ersten Worker-Start). Grund: /health wird
+        getaktet abgefragt; eine Seite darf nicht bei jedem Abruf die Karte
+        ausmessen und Logzeilen erzeugen."""
+        st = getattr(self, "_straenge_stand", None)
+        if st is None:
+            try:
+                st = self.worker_straenge()
+            except Exception as e:                        # noqa: BLE001
+                return {"n": None, "grund": "fehler",
+                        "hinweis": f"{type(e).__name__}: {e}"}
+        return {"n": st.get("n"), "grund": st.get("grund"),
+                # BEIDE Zahlen, nie nur eine: `n` ist, was laeuft, `formel_n`,
+                # was die Maschine rechnerisch traegt. Wer seine Zahl selbst
+                # setzt, soll die gerechnete daneben sehen.
+                "formel_n": st.get("formel_n"), "nutzer_n": st.get("nutzer_n"),
+                "deckel_max": _gpubudget.STRAENGE_MAX,
+                "deckel_meldung": st.get("deckel_meldung"),
+                "ueber_formel": st.get("ueber_formel"),
+                # .531: auf Karten-Backends ist die Nutzer-Zahl eine OBERGRENZE;
+                # wurde sie nicht voll gebaut, steht hier, warum.
+                "unter_formel": st.get("unter_formel"),
+                "vram": self._vram_zustand(st),
+                # .534 (B3): der CONTAINER-Speicher des laufenden Prozesses —
+                # gemessenes Jetzt, gemessenes Maximum, der Posten, der nicht ihm
+                # gehoert, und was daraus je Rechenstrang uebrig bleibt. NUR
+                # ZAHLEN: aus ihnen entscheidet der Betreiber ueber
+                # `worker_rss_max_mb`, sie entscheiden nichts selbst.
+                "ram": self._ram_zustand(st),
+                "backend": st.get("kind"), "mass": st.get("mass"),
+                "quelle": st.get("quelle"), "gesamt_mb": st.get("gesamt_mb"),
+                "reserve_mb": st.get("reserve_mb"), "dienst_mb": st.get("dienst_mb"),
+                "waechter_n": st.get("waechter_n"), "waechter_mb": st.get("waechter_mb"),
+                "frei_mb": st.get("frei_mb"),
+                # .529: WOHER die freie Menge kommt und beide Zahlen daneben. Die
+                # Posten-Rechnung kennt nur die eigenen Verbraucher; der gemessene
+                # Wert kennt auch die fremden. Wer nur eine Zahl sieht, kann den
+                # OOM vom 15.09. nicht nachvollziehen.
+                "frei_quelle": st.get("frei_quelle"),
+                "frei_gerechnet_mb": st.get("frei_gerechnet_mb"),
+                "frei_gemessen_mb": st.get("frei_gemessen_mb"),
+                # .534 (NB-2): was der LAUFENDE Worker selbst haelt und dem
+                # Messwert zurueckgerechnet wurde — sonst zaehlt er zweimal.
+                # .535: DANEBEN DER GRUND der Prozess-Sonde. Leer heisst
+                # „gemessen"; steht dort etwas (`kein_eintrag` im Feld), ist
+                # die 0 daneben KEINE Messung, sondern eine Blindstelle — und
+                # genau so beschriftet die Speicherleiste sie auch.
+                "laufend_eigen_mb": st.get("laufend_eigen_mb"),
+                "laufend_eigen_grund": st.get("laufend_eigen_grund"),
+                # .535: WOHER die zurueckgerechnete Zahl kommt — `tabelle`
+                # (der Tabellenwert der laufenden Stufe) oder leer (es laeuft
+                # kein Worker). Was die Sonde im selben Moment gemessen hat,
+                # steht als `laufend_eigen_gemessen_mb` daneben und plant nicht
+                # mit; ohne diese Felder liest sich eine zurueckgerechnete Zahl
+                # wie eine gemessene.
+                "laufend_eigen_quelle": st.get("laufend_eigen_quelle"),
+                "laufend_eigen_gemessen_mb": st.get("laufend_eigen_gemessen_mb"),
+                "reserve_quelle": st.get("reserve_quelle"),
+                "fussabdruck_mb": st.get("fussabdruck_mb"),
+                # .529: die Maschinen-Groesse, gegen die die Politik-Grenze steht
+                # (0/'unbekannt' = kein Container-Limit lesbar, dann gilt die
+                # Posten-Rechnung — das ist eine Aussage, kein Loch).
+                "maschine_ram_mb": st.get("maschine_ram_mb"),
+                "maschine_ram_quelle": st.get("maschine_ram_quelle"),
+                "grenze_mb": st.get("grenze_mb"), "grenze_quelle": st.get("grenze_quelle"),
+                # .528: die Grenze MIT ihren Posten. `grenze_quelle` allein sagt
+                # nur, WOHER die Zahl kommt; erst die Posten sagen, WOGEGEN sie
+                # steht — und genau das fehlte, als die Wache auf dem CUDA-NB den
+                # Worker im 600-s-Takt abschoss (4096 MB Je-Worker-Budget gegen ein
+                # Container-Mass, das ohne Worker schon 3310 MB trug).
+                "grenze_posten": st.get("grenze_posten"),
+                "grenze_rechenweg": st.get("grenze_rechenweg"),
+                # E3.3: der Geometrie-Deckel samt Rechenweg. 0 heisst „kein Deckel
+                # ableitbar" — das ist eine Aussage und wird als solche gezeigt.
+                "geometrien_max": st.get("geometrien_max"),
+                "geometrien_rechenweg": st.get("geometrien_rechenweg"),
+                "durchsatz_vorschlag": st.get("vorschlag"),
+                "rechenweg": st.get("rechenweg"),
+                "analyse_plaetze": st.get("analyse_plaetze"),
+                # .532: was der Nutzer eingestellt hat (`analyse_plaetze`,
+                # Zeile darueber) UND was wirklich vergeben wird, samt
+                # Herkunft. Zwei Zahlen, nie nur eine — auf Karten-Backends
+                # deckelt die Strangzahl die Plaetze (s. `_plaetze_an_straenge`).
+                "analyse_plaetze_aktiv": int(getattr(
+                    getattr(self, "_plaetze", None), "kapazitaet", 0) or 0),
+                "analyse_plaetze_quelle": getattr(
+                    getattr(self, "_plaetze", None), "quelle", "config"),
+                "klemme": st.get("klemme"), "hinweis": st.get("hinweis")}
+
+    def _ram_zustand(self, st):
+        """Der CONTAINER-Speicher des laufenden Worker-Prozesses fuer /health
+        (.534 B3). -> dict
+
+        Er kommt aus der Antwort des Prozesses (dort gemessen, hier nur gelesen) —
+        keine zweite Messung, und schon gar keine im Web-Thread. Fehlt eine
+        Antwort, stehen die Felder auf None: „noch nichts gemessen" ist eine
+        Aussage, 0 waere eine Luege.
+
+        `vorschlag_mb` ist der MESSWERT-Vorschlag je Rechenstrang und ausdruecklich
+        KEIN Automatismus — `worker_rss_max_mb` bleibt die Zahl des Betreibers.
+        Was hier steht, ist die Grundlage, die es bis .533 nicht gab: im Feldtest
+        der .533 musste der Wert von Hand geraten werden, weil niemand wusste, was
+        ein Strang in diesem Mass wirklich braucht."""
+        d = getattr(self, "_dienst_obj", None)
+        stand = {}
+        try:
+            stand = (d.zustand() or {}).get("ram") or {} if d else {}
+        except Exception:                                 # noqa: BLE001
+            stand = {}
+        return {"own_mb": stand.get("own_mb"),
+                "own_max_mb": stand.get("own_max_mb"),
+                "grundlast_mb": stand.get("grundlast_mb"),
+                "straenge": stand.get("straenge"),
+                "vorschlag_mb": stand.get("vorschlag_mb"),
+                # Was der Dienst zusagt, daneben — der Vorschlag ist nur gegen
+                # diese Zahl zu lesen.
+                "grenze_mb": st.get("grenze_mb"),
+                "grenze_quelle": st.get("grenze_quelle"),
+                "konfiguriert_je_strang_mb": (st.get("grenze_posten") or {}).get(
+                    "worker_budget_mb")}
+
+    # .535: HIER STAND `_eichung_zustand` — der /health-Block `eichung` mit
+    # Fassung, Schluessel, Stufen, Plateaus und dem Mess-Vergleich. Geplant
+    # wird aus der Messtabelle; die Preise stehen in `preise_mb` und ihre
+    # Herkunft in `preis_quelle_stufen` — eine zweite Sicht auf dieselbe
+    # Frage gibt es nicht mehr.
+
+    def _vram_zustand(self, st):
+        """Der Kartenhaushalt fuer /health (.531). None auf allen Wegen, die gar
+        keine Karte planen — das ist eine Aussage und kein Loch.
+
+        WARUM DAS SO AUSFUEHRLICH IST: der Feldvorfall vom 15.09. war von aussen
+        nicht nachvollziehbar. Sichtbar war „3 Straenge", unsichtbar blieb, gegen
+        welches Budget das gerechnet war, was ausserhalb der Arena liegt und
+        welche Stufe an welchem Preis gescheitert ist. Genau diese drei Auskuenfte
+        stehen hier."""
+        lt = (st or {}).get("leiter")
+        if not st or (st.get("mass") != "vram" and not lt
+                      and st.get("grund") != "nicht_messbar"):
+            return None
+        d = getattr(self, "_dienst_obj", None)
+        zaehler = {}
+        try:
+            zaehler = (d.zustand() or {}).get("vram") or {} if d else {}
+        except Exception:                                 # noqa: BLE001
+            zaehler = {}
+        aus = {"zustand": st.get("zustand"), "grund": st.get("grund"),
+               "budget_mb": st.get("worker_budget_mb"),
+               "arena_deckel_mb": st.get("arena_deckel_mb"),
+               "deckel_quelle": st.get("deckel_quelle"),
+               "posten_ausserhalb_mb": st.get("posten_ausserhalb_mb"),
+               "posten": st.get("posten"),
+               "preis_quelle": st.get("preis_quelle"),
+               # .534: dieselbe Auskunft je Stufe plus die Preise selbst, dazu
+               # das, was der laufende Prozess zuletzt geschrieben hat. Der
+               # Betreiber soll sehen koennen, WELCHE Zahl von SEINER Karte
+               # stammt und welche noch der skalierte Anker einer fremden ist.
+               "preis_quelle_stufen": st.get("preis_quelle_stufen") or {},
+               "preise_mb": st.get("preise_mb") or {},
+               # .534: was GEMESSEN wurde, neben dem, was GEPLANT wird. Bei
+               # konservativer Planung sind das zwei verschiedene Zahlen, und
+               # beide gehoeren sichtbar nebeneinander.
+               "gemessen_mb": st.get("gemessen_mb") or {},
+               "geometrien_max": st.get("geometrien_max"),
+               "verweigert": bool(st.get("verweigert")),
+               "frei_alter_s": st.get("frei_alter_s"),
+               "frei_grund": st.get("frei_grund"),
+               # .531: welcher Zweig der Waechter-Abzugsregel gegriffen hat —
+               # sonst ist das Budget eine Zahl ohne nachvollziehbare Herkunft.
+               "waechter_abzug_mb": st.get("waechter_abzug_mb"),
+               "waechter_abzug_grund": st.get("waechter_abzug_grund"),
+               "engine_alter_s": st.get("engine_alter_s"),
+               "sonde_fehlversuche": st.get("sonde_fehlversuche"),
+               "leiter": [{"stufe": s["stufe"], "art": s["art"],
+                           "preis_mb": s["preis_mb"], "gebaut": s["gebaut"],
+                           "grund": s["grund"]}
+                          for s in (lt or {}).get("stufen", [])]}
+        aus.update({"druck": zaehler.get("druck") or {},
+                    "wiederholungen": zaehler.get("wiederholungen"),
+                    "neustarts": zaehler.get("neustarts"),
+                    # `neustart_gedeckelt` kennt nur der DIENST (er haelt den
+                    # Abstand), nicht der Worker-Prozess.
+                    "neustart_gedeckelt": bool(getattr(
+                        d, "vram_neustart_gedeckelt", False)) if d else None,
+                    # .532: der EIGENE Kartenanteil (die Zahl, die im Feld
+                    # gefehlt hat), der Memory-Pattern-Schalter und der
+                    # Druck-Deckel auf die Straenge.
+                    "own_mb": zaehler.get("own_mb"),
+                    "own_delta_mb": zaehler.get("own_delta_mb"),
+                    "own_max_mb": zaehler.get("own_max_mb"),
+                    "own_grund": zaehler.get("own_grund"),
+                    "mem_pattern": zaehler.get("mem_pattern"),
+                    "deckel_treffer": zaehler.get("deckel_treffer"),
+                    "straenge_laufend": int(getattr(d, "straenge_laufend", 0) or 0)
+                    if d else None,
+                    "straenge_deckel_druck": int(
+                        getattr(d, "straenge_deckel_druck", 0) or 0) if d else None})
+        return aus
+
+    def worker_fussabdruck_max_mb(self):
+        """Die Politik-Grenze fuer die Speicher-Wache des Dienstes (MB, 0 = keine).
+        Aus derselben Rechnung wie die Strang-Zahl — keine zweite Zahlenquelle.
+
+        FRISCH GERECHNET, nicht aus dem Stand vom Prozess-Start: die Wache misst
+        das ganze Speicher-Konto des Containers, und in dem kann ein Live-Waechter
+        auftauchen, NACHDEM der Worker gestartet ist (2422 MB auf Intel gemessen).
+        Die Grenze reist je Job mit, drueben gilt die GROESSTE angemeldete — so
+        waechst sie mit dem Nachbarn, statt ihn dem laufenden Prozess anzulasten.
+        Teuer ist das nicht: die Maschinen-Groesse liegt im Merker, der Rest ist
+        eine Handvoll Multiplikationen."""
+        try:
+            return int(self.worker_straenge().get("grenze_mb") or 0)
+        except Exception:                                 # noqa: BLE001
+            return 0
+
+    def vorlauf(self):
+        """DIE Abrufstufe dieses Dienstes (.534 B6c), lazy. Sie wird beim
+        Start der Warteschlange angeworfen (s. dort) und laeuft auch dann, wenn
+        sie ausgeschaltet ist — ihr Takt sieht das an der Config und tut nichts.
+        So wirkt ein Umschalten im Betrieb, ohne Neustart."""
+        v = getattr(self, "_vorlauf_obj", None)
+        if v is None:
+            v = self._vorlauf_obj = Vorlauf(self)
+        return v
+
+    def feinmessung(self):
+        """DIE Feinmessung dieses Dienstes (.534 B7), lazy. Sie haelt ihren
+        Zustand im Prozess und NICHT in der Config — eine eingeschaltete Messung
+        soll einen Neustart ausdruecklich nicht ueberleben."""
+        fm = getattr(self, "_feinmessung_obj", None)
+        if fm is None:
+            fm = self._feinmessung_obj = Feinmessung(self)
+        return fm
+
+    def worker_grundlast_mb(self):
+        """Der GRUNDLAST-Posten des Container-Speichers (MB, 0 = keiner, .534).
+
+        Aus derselben Rechnung wie Strang-Zahl und Politik-Grenze — keine zweite
+        Zahlenquelle. Er ist das, was im Speicher-Konto des Containers NICHT dem
+        Worker gehoert (Dienst, Live-Engine, Waechter-Decoder); der Worker zieht
+        ihn von seinem gemessenen Maximum ab, um einen Vorschlag je Rechenstrang
+        zu nennen. Der Intel-Zweig rechnet keinen solchen Posten — dort ist die
+        Antwort 0, und drueben unterbleibt der Vorschlag statt geraten zu werden."""
+        try:
+            posten = self.worker_straenge().get("grenze_posten") or {}
+            return int(posten.get("grundlast_mb") or 0)
+        except Exception:                                 # noqa: BLE001
+            return 0
+
+    def worker_vram_start(self):
+        """Was der naechste Worker-Prozess als Kartenhaushalt mitbekommt (.531).
+        -> dict oder None auf Backends ohne eigenen Kartenspeicher.
+
+        FRISCH GERECHNET aus derselben Leiter wie Strang-Zahl und Wache-Grenze —
+        keine zweite Zahlenquelle. Der Arena-Deckel gilt fuer die ganze
+        Prozess-Lebenszeit; deshalb ist der Moment des Starts der einzige, in dem
+        er gesetzt werden kann.
+
+        NEUSTART-BACKOFF: liegt der letzte druckbedingte Neustart weniger als
+        `gpubudget.DRUCK_NEUSTART_ABSTAND_S` zurueck, wird trotzdem gestartet
+        (ohne Worker keine Analyse) — aber mit DEMSELBEN Deckel wie zuvor, und
+        /health meldet rot. Sonst antwortete der Dienst auf einen dauerhaften
+        Fremdverbraucher mit einer Neustart-Schleife, und die kostet mehr
+        Analysen als der Druck."""
+        try:
+            st = self.worker_straenge()
+        except Exception as e:                            # noqa: BLE001
+            self.log(f"card budget not computable ({type(e).__name__}: {e}) — "
+                     f"the worker starts without an arena cap")
+            return None
+        if st.get("mass") != "vram":
+            return None
+        # .532: DIE PLAETZE FOLGEN DEN STRAENGEN (Inhaber 15.09.: „wenn wir nur
+        # zwei Threads haben, brauchen wir nur zwei Plaetze"). Hier, weil dieser
+        # Griff an JEDEM Worker-Start haengt — der Boot-Start und jeder
+        # druckbedingte Neustart kommen beide hier vorbei, und die Zahl steht
+        # zu diesem Zeitpunkt frisch gerechnet da.
+        self._plaetze_an_straenge(st)
+        deckel = int(st.get("arena_deckel_mb") or 0)
+        # OHNE `worker_dienst()` und damit ohne dessen Lebenszyklus-Lock: dieser
+        # Griff laeuft aus `WorkerDienst._start()` heraus, also unter dem
+        # Absetz-Lock desselben Objekts. Das Objekt gibt es an dieser Stelle
+        # zwangslaeufig schon — es ruft ja.
+        d = getattr(self, "_dienst_obj", None)
+        letzter = float(getattr(d, "vram_neustart_ts", 0.0) or 0.0) if d else 0.0
+        gehalten = int(getattr(d, "vram_deckel_gehalten", 0) or 0) if d else 0
+        gedeckelt = False
+        if (letzter and gehalten
+                and (time.time() - letzter) < _gpubudget.DRUCK_NEUSTART_ABSTAND_S
+                and deckel < gehalten):
+            self.log(f"vram restart: pressure restart suppressed, the last one was "
+                     f"{int(time.time() - letzter)}s ago (minimum "
+                     f"{int(_gpubudget.DRUCK_NEUSTART_ABSTAND_S)}s) — keeping the "
+                     f"current cap of {gehalten} MiB and reporting red")
+            deckel, gedeckelt = gehalten, True
+        if d is not None:
+            d.vram_neustart_gedeckelt = gedeckelt
+        try:
+            _shrink = int(self.cfg.get("worker_arena_shrink") or 0)
+        except (TypeError, ValueError):
+            _shrink = 0
+        # .532: derselbe Griff fuer den Memory-Pattern-Schalter. Beide Werte
+        # reisen als START-ARGUMENT mit (s. `vram_startargumente`) — sie stehen
+        # beim Bau der Sessions fest und sind im Lauf nicht zu aendern.
+        try:
+            _mempat = int(self.cfg.get("worker_mem_pattern") or 0)
+        except (TypeError, ValueError):
+            _mempat = 0
+        lt = st.get("leiter") or {}
+        # .534: die GRUNDLINIE fuer die Preis-Messung — kartenweit belegt, JETZT,
+        # also unmittelbar vor dem Start dieses Prozesses. `_karte_frei_mb` ist
+        # dieselbe gemerkte Sonde wie ueberall; ohne lesbaren Wert gibt es keine
+        # Grundlinie und damit keine Messung (fail-closed, nicht geraten).
+        return {"deckel_mb": deckel,
+                "geometrien_max": int(st.get("geometrien_max") or 0),
+                "arena_strategie": None,      # Vorgabe der Engine, s. dort
+                "arena_shrink": bool(_shrink),
+                "mem_pattern": bool(_mempat),
+                "neustart_gedeckelt": gedeckelt,
+                "verweigert": bool(st.get("verweigert")),
+                # ... und die LAGE, fuer den Karten-Check vor dem Absetzen. Aus
+                # DERSELBEN Rechnung — keine zweite Zahlenquelle fuer dieselbe
+                # Frage.
+                "kind": st.get("kind"),
+                "gesamt_mb": int(st.get("gesamt_mb") or 0),
+                "waechter_n": int(st.get("waechter_n") or 0),
+                "eigen_mb": int(st.get("waechter_mb") or 0)
+                + int(st.get("dienst_mb") or 0),
+                "budget_mb": int(st.get("worker_budget_mb") or 0),
+                "pflicht_mb": int(lt.get("pflicht_preis_mb") or 0),
+                # WAS AUF DER KARTE FREI SEIN MUSS, damit dieser Start Sinn hat:
+                # die Summe der Stufen, die gebaut werden sollen, plus die nicht
+                # vergebbare Reserve. Die Waechter stehen NICHT darin — sie liegen
+                # schon auf der Karte, ihr Platz ist in `frei` bereits weg.
+                "noetig_mb": int(lt.get("summe_mb") or 0)
+                + int(st.get("reserve_mb") or 0)}
+
+    def _plaetze_an_straenge(self, st):
+        """Die Kapazitaet der Vergabestelle an die Rechenstraenge binden (.532).
+
+        WARUM: ein Platz mehr als Straenge hat keinen Nutzen — der ueberzaehlige
+        Job wartet dann nicht in der Warteschlange, sondern IM Worker, und zaehlt
+        dort gegen seine Frist (genau deshalb laeuft die seit .531 ab
+        Rechenbeginn). Und ein Platz WENIGER als Straenge laesst einen
+        Rechenstrang leer stehen, den die Anlage bezahlt hat.
+
+        .536 B5 (R7): GESETZT, NICHT GEDECKELT — `ziel = n`. Bis .535 stand hier
+        `min(config_kapazitaet, n)`, und `config_kapazitaet` war der Werkswert 1.
+        Damit rechnete die Mehrheit der Anlagen dauerhaft EINE Analyse zur Zeit,
+        egal wie viele Straenge die Karte trug; die Strangzahl konnte die Plaetze
+        nur senken, nie heben. Inhaber 16.09.: „eigentlich muessten die
+        Analyseplaetze immer identisch sein mit der Anzahl der Threads … die
+        Threadsanzahl maximal vorgeben". Seitdem gibt es genau EINE Einstellung
+        (`worker_straenge`), und die Plaetze folgen ihr.
+
+        DER EXPERTEN-OVERRIDE (`analyse_plaetze`, `self._plaetze_override`) wirkt
+        nur nach UNTEN: `min(override, n)`. Eine Zahl ueber der Strangzahl wird
+        IGNORIERT und einmal laut gemeldet — sie waere genau der Platz, der im
+        Worker wartet. Betreiber-Entscheid 3 vom 16.09.: „nicht uebernommen, die
+        Automatik gewinnt, Override nur kleiner".
+
+        FRUEHER STAND HIER: „Auf Container-RAM-Backends (Intel) bleibt die Config
+        unberuehrt." Das stimmte schon vor .536 nicht — der Rumpf unterscheidet
+        die Backends nicht, und der Dienststart ruft ihn fuer jedes Mass. Nur die
+        NACHFUEHRUNG am Worker-Start (`worker_vram_start`) ist kartenspezifisch,
+        weil sie hinter der VRAM-Rechnung haengt.
+
+        .534: Der am 15.09. erwogene Vorlauf-PLATZ (ein Platz mehr, damit der
+        naechste Clip schon geholt wird, waehrend die Straenge rechnen) ist
+        VERWORFEN: er haette die Wartezeit in den Worker verschoben statt sie zu
+        vermeiden. Der Abruf bekommt statt dessen eine EIGENE Stufe vor der
+        Vergabestelle (`Vorlauf`, s. dort) — dort gehoert er hin, denn er rechnet
+        nicht.
+
+        EHRLICHE GRENZE: umgestellt wird nur bei ruhiger Vergabestelle (s.
+        `Analyseplaetze.kapazitaet_setzen`). Laeuft gerade eine Analyse,
+        bleibt die alte Zahl bis zum naechsten Worker-Start stehen."""
+        p = getattr(self, "_plaetze", None)
+        if p is None:
+            return
+        try:
+            n = max(1, int(st.get("n") or 1))
+        except (TypeError, ValueError):
+            return
+        try:
+            ov = getattr(self, "_plaetze_override", None)
+            ov = int(ov) if ov else None
+        except (TypeError, ValueError):
+            ov = None
+        if ov is not None and ov > n:
+            # LAUT, aber nur einmal je Paarung: ein zu grosser Override ist ein
+            # Hand-Eintrag, der nichts bewirkt — das darf der Betreiber nicht
+            # erst am ausbleibenden Effekt merken.
+            if getattr(self, "_plaetze_override_gemeldet", None) != (ov, n):
+                self._plaetze_override_gemeldet = (ov, n)
+                self.log(f"analysis slots: the expert override analyse_plaetze={ov} "
+                         f"is above the {n} compute thread(s) and is IGNORED — "
+                         f"slots follow the threads, an override can only set fewer")
+        ziel = n if ov is None else min(ov, n)
+        quelle = "override" if (ov is not None and ov < n) else "straenge"
+        if ziel == p.kapazitaet:
+            p.quelle = quelle
+            return
+        grund = (f"{n} compute thread(s)" if quelle == "straenge" else
+                 f"{n} compute thread(s), capped to {ziel} by the expert override "
+                 f"analyse_plaetze")
+        if p.kapazitaet_setzen(ziel, grund):
+            p.quelle = quelle
+            self._plaetze_ziel_gemeldet = None
+        elif getattr(self, "_plaetze_ziel_gemeldet", None) != ziel:
+            # .533: EINMAL je Zielwert, nicht bei jedem Versuch. Der Griff haengt
+            # am Worker-Start, und der wird im Betrieb oft gefragt — in der
+            # NB-Abnahme standen fuenf gleiche Zeilen binnen einer Sekunde.
+            self._plaetze_ziel_gemeldet = ziel
+            self.log(f"analysis slots: keeping {p.kapazitaet} for now — "
+                     f"{ziel} ({grund}) applies at the next worker start with "
+                     f"no analysis running")
+
+    def worker_geometrien_max(self):
+        """Der Geometrie-Deckel fuer den Worker-Prozess (Anzahl, 0 = keiner).
+        Aus derselben Rechnung wie Strang-Zahl und Speicher-Grenze — und aus
+        demselben Grund frisch gerechnet: ein Live-Waechter, der NACH dem Start
+        dazukommt, verkleinert den Platz fuer Geometrien genauso wie den fuer
+        Straenge. Drueben gilt die GROESSTE angemeldete Zusage (s. `annehmen`)."""
+        try:
+            return int(self.worker_straenge().get("geometrien_max") or 0)
+        except Exception:                                 # noqa: BLE001
+            return 0
 
     def _analyse_klammer(self):
         """Die Klammer um die Analyse — E2, der eigentliche Eingriff.
@@ -9292,7 +14110,7 @@ class Service:
               gilt auch hier).
           (2) Live pruefen (_live_aktiv: Gesichts-Pass ODER Koerper-Strang, W1b)
               und einen PLATZ der Vergabestelle nehmen (Klasse `bg`, kurze Frist
-              wie bei der Ernte), dazu den Job-Lock des Platz-Workers
+              wie bei der Ernte), dazu das EXKLUSIV-Lock des Worker-Dienstes
               NICHT-BLOCKIEREND (bei worker=aus dasselbe _ANALYSE_SERIELL, das der
               Legacy-run_analyze nimmt — Nachbesserung W8, vorher reines
               check-then-act mit nachgewiesenem Parallel-Fenster).
@@ -9311,17 +14129,20 @@ class Service:
         bisher, nur sichtbar), ab zwei Plaetzen laeuft die Analyse auf einem anderen
         Platz weiter, statt sich anzustellen.
 
-        Der Job-Lock des Platz-Workers wird TROTZDEM genommen, und zwar aus einem
+        Das EXKLUSIV-Lock des Workers wird TROTZDEM genommen, und zwar aus einem
         anderen Grund als frueher: `worker_stoppen()` (Neustart, --once-Ende) geht
         ueber genau dieses Lock. Nur so wartet ein Neustart das Ende des laufenden
         Roundtrips ab, statt ihn als Vollast-Waise ins frische Boot-Fenster zu
         entlassen. Gegen ANDERE Rechner schuetzt seit C1 der Platz, nicht mehr das
-        Lock — dieses Lock kann waehrend unseres Platzes ohnehin nur noch ein
-        eingezogener Zombie desselben Platzes halten, deshalb bleibt der Griff
-        nicht-blockierend.
+        Lock, deshalb bleibt der Griff nicht-blockierend.
+        E3.1: es ist nicht mehr der JOB-Lock eines Platz-Prozesses (den gibt es im
+        Dienst nicht mehr — er traegt N Jobs gleichzeitig), sondern das Lock, das
+        „dieser Worker gehoert gerade mir allein" bedeutet. Laufende Jobs anderer
+        Plaetze bremst es NICHT; das ist Absicht und entspricht dem alten Verhalten,
+        in dem die Prozesse der uebrigen Plaetze ebenfalls weiterliefen.
 
         PULS (C1): der Roundtrip laeuft als EIGENER Subprozess (`_roundtrip_fahren`),
-        nicht ueber `WorkerProzess.job()` — es gibt hier also keinen Puls, der von
+        nicht ueber `WorkerDienst.job()` — es gibt hier also keinen Puls, der von
         selbst mitlaeuft. Ohne einen zoege der Platzwaechter jede Messung nach 120 s
         ein, waehrend der Subprozess weiterrechnet (die Ernte-Falle aus §0). Der Takt
         laeuft deshalb als eigener Thread neben dem Roundtrip und ist ueber
@@ -9342,7 +14163,7 @@ class Service:
         s. _live_aktiv — Anzeige-Transcodes und der Vision-Anstoss bleiben
         aussen vor, die rechnen im Dienstprozess nicht schwer).
         LOCK-ORDNUNG (unveraendert, nur mit dem Platz an der Stelle des alten
-        Slot-Begriffs): _gpu_bg_lock -> Platz -> Job-Lock des Platz-Workers. Genau
+        Slot-Begriffs): _gpu_bg_lock -> Platz -> Exklusiv-Lock des Workers. Genau
         diese Reihenfolge nehmen auch Ernte und `_sammle_fahren`; niemand nimmt sie
         andersherum. Ein Platz-Halter fordert NIE `_gpu_bg_lock` an (die Ernte nimmt
         es VOR ihrem Platz, die Analyse gar nicht), und kein self.lock-Halter
@@ -9427,7 +14248,8 @@ class Service:
             import shutil as _sh
             from core import ereignisse as _evm
             from core import wanduhr as _wu
-            evs, _ = _evm.person_events(lambda p: api(self.cfg, p), 40)
+            evs, _ = _evm.person_events(lambda p: api(self.cfg, p), 40,
+                                        nur_beendet=True)
             mess, clip_s = _wu.kontroll_event(evs)
             personen = master_persons(self.cfg)
             if mess is None or not personen:
@@ -9580,12 +14402,18 @@ class Service:
                 evs, _seiten = _evm.person_events(
                     lambda p: api(self.cfg, p), None, kameras=kameras,
                     fenster=(_t0.timestamp(),
-                             (_t0 + datetime.timedelta(days=1)).timestamp()))
+                             (_t0 + datetime.timedelta(days=1)).timestamp()),
+                    # .534 (Pruefbericht E-9): nur ABGESCHLOSSENE Ereignisse.
+                    # Eines ohne Ende hat keinen fertigen Clip und kostet hier
+                    # einen Job bis zur Frist — im Lasttest vom 15.09. riss ein
+                    # solches Ereignis den ganzen Worker-Prozess.
+                    nur_beendet=True, log=self.log)
             else:
                 hol_n = (None if alle_modus else
                          min(anzahl + len(gesehen), self.LERNLAUF_EVENTS_MAX))
                 evs, _seiten = _evm.person_events(lambda p: api(self.cfg, p), hol_n,
-                                                  kameras=kameras)
+                                                  kameras=kameras,
+                                                  nur_beendet=True, log=self.log)
             alt_uebersprungen = 0
             if gesehen:
                 _v = len(evs)
@@ -10148,7 +14976,9 @@ class Service:
             # (core/wanduhr.ernte_rate_lesen) — nach jedem Update ist sie einmal
             # leer, und dann sagt der Balken "Dauer unbekannt" statt einer
             # geratenen Zahl ([[keine-eigenen-schwellen]]).
-            k_abholer = (max(1, int(self._plaetze.kapazitaet)) if ganzer_pass else 1)
+            # .536 B4.3: EINE Quelle fuer die Abholerzahl (dort die
+            # Begruendung, warum sie mit dem eigenen bg-Konto 1 ist).
+            k_abholer = (self._ernte_abholer_zahl() if ganzer_pass else 1)
             kopf = {"start_ts": round(time.time(), 1)}
             _rate = _wu.ernte_rate_lesen(dd, _placement_hw_key(),
                                          os.environ.get("SUSLIK_VERSION", "dev"))
@@ -10156,10 +14986,12 @@ class Service:
                 _clips = [{"clip_s": (akte.get(e) or {}).get("clip_s")
                            or (akte.get(e) or {}).get("dauer_s") or 0.0}
                           for e in fehlend]
-                # Geteilt durch die Zahl der Abholer, wie beim Lernlauf: K
-                # Ereignisse laufen gleichzeitig. Ehrliche Grenze (dieselbe wie
-                # dort): bekommt die Ernte weniger Plaetze, ist die Anzeige zu
-                # optimistisch — beim Einzelklick ist K = 1, also exakt.
+                # Geteilt durch die Zahl der Abholer. .536 B4.3: die ist
+                # jetzt 1, solange die Ernte auf dem bg-Konto sitzt — die
+                # Schaetzung ist damit exakt statt um den Faktor K zu
+                # optimistisch. Die alte Fussnote („bekommt die Ernte weniger
+                # Plaetze, ist die Anzeige zu optimistisch") galt der
+                # Rueckfahrkarten-Stellung und gilt nur noch dort.
                 kopf["dauer_s"] = round(_wu.ernte_prognose_s(_rate, _clips)
                                         / k_abholer, 1)
             else:
@@ -10241,8 +15073,12 @@ class Service:
     # (Die uebersetzte Beschriftung der GPU-Seite wohnt in routes/gpu.py; der
     # Satz hier ist ein Bruecken-Literal wie alle uebrigen Overlay-Texte,
     # ME2-Uebersetzungsstrang.)
+    # .536 B4.2: `live` (Koerper-Urteil) kommt dazu — jede Klasse aus
+    # `Analyseplaetze.ARTEN` braucht hier ein Wort, sonst steht im Wartetext des
+    # Pass-Checks eine nackte Kennung. Eine Gate-Zusicherung haelt das fest.
     BRUECKE_ART_WORT = {"analyse": "analysis", "ernte": "harvest",
-                        "bg": "background", "interaktiv": "interactive"}
+                        "bg": "background", "interaktiv": "interactive",
+                        "live": "body judgment"}
     # Legacy-Modus (`worker: false`, ein Subprozess je Ereignis statt des
     # stehenden Worker-Prozesses): der Klick-Weg kann dort NICHT ernten.
     # `_worker(nr)` liefert in diesem Modus None (Zweig in `_worker`), und die
@@ -10814,7 +15650,9 @@ class Service:
         def _events():
             evs, _seiten = _erg_kf.person_events(
                 lambda pfad: api(cfg, pfad), anzahl=deckel_ev,
-                kameras=[kamera])
+                kameras=[kamera],
+                # .534 (E-9): nur abgeschlossene Ereignisse, s. Lernlauf-Ernte.
+                nur_beendet=True, log=self.log)
             return evs
 
         def _job(eid, ts):
@@ -10824,7 +15662,6 @@ class Service:
                 # Live-Wache hat Vorrang. Wartende Runden kosten eine Sekunde.
                 if time.monotonic() - _warte_seit > 5:
                     _kf.notiz(kamera, "waiting for a free worker slot")
-                self._bg_hungert()                        # B4
                 # C2 (05.09.2026, bauplan_0505.md §1): die Ernte NIMMT
                 # `_gpu_bg_lock` nicht mehr — sie ist Kunde der Vergabestelle, und
                 # das Lock schuetzt seit .505 nur noch die SUBPROZESS-Jobs
@@ -10878,7 +15715,6 @@ class Service:
                             self._plaetze.platz(eid, art="ernte",
                                                 timeout_s=1.0) as _enr:
                         if _enr is not None:
-                            self._bg_satt()               # B4
                             # A2 (05.09.): Lebenszeichen des Platzes — ohne
                             # das zog der Waechter jede Ernte > 120 s ein.
                             # A3: an die Belegung GEBUNDEN (puls_fuer), damit
@@ -10958,9 +15794,12 @@ class Service:
         stuerbe die Arbeit still (S11b-Wache).
 
         `k_abholer` (E-O1): beim Einzelklick 1 — ein Ereignis, ein Abholer. Beim
-        zweiten Knopf (ganzer Durchgang) K = Platzzahl, dasselbe Muster wie der
-        Lernlauf seit C2 (Warteschlange + K Abholer + EIN Koordinator, hier der
-        aufrufende Thread). Geteilt wird unter `q_lock` die Warteschlange, unter
+        zweiten Knopf (ganzer Durchgang) kommt die Zahl aus
+        `_ernte_abholer_zahl()`; seit .536 B4.3 ist auch sie 1, solange die
+        Ernte auf dem bg-Konto sitzt (der Worker rechnet Hintergrund-Arbeit auf
+        EINEM Strang — K Abholer brachten dort nie Durchsatz). Das Muster bleibt
+        das des Lernlaufs seit C2 (Warteschlange + K Abholer + EIN Koordinator,
+        hier der aufrufende Thread). Geteilt wird unter `q_lock` die Warteschlange, unter
         `buch_lock` die Buecher (i_fertig, fertig.jsonl, Takt-Proben, Puls) —
         die Datei schreibt zwar jeder atomar an, der Zaehler daneben waere sonst
         ein verlorenes Read-Modify-Write.
@@ -11077,7 +15916,6 @@ class Service:
                 start = float(d.get("start") or d.get("ts") or 0)
                 abgesendet, antwort, wall_s = False, None, 0.0
                 while not abgesendet:
-                    self._bg_hungert()            # B4
                     # C2 (05.09.2026, bauplan_0505.md §1): `_gpu_bg_lock` wird
                     # nicht mehr GENOMMEN (Begruendung ausfuehrlich am
                     # Kalibrier-Auffueller); der lesende Blick bleibt und meldet
@@ -11085,17 +15923,12 @@ class Service:
                     if self._gpu_bg_lock.locked():
                         _puls("bg_lock")
                     else:
-                        # .502 (Feldfall beim Tester 04.09.2026): _bg_satt() stand
-                        # frueher VOR der Slot-Pruefung. Damit loeschte
-                        # jede Warterunde den eigenen Hunger-Zaehler, bevor er
-                        # die Bremse (hunger_bremse_s, Werk 60 s) erreichen
-                        # konnte: die Schleife dreht im Sekundentakt, der
-                        # Zaehler wurde nie aelter als eine Sekunde, und der
-                        # Event-Strom liess die Ernte NIE vor. Sichtbar wurde
-                        # das beim Stau-Abbau (Analyse an Analyse): der
-                        # Pass-Check stand bei "0 of 200 event(s) done" und
-                        # kam nicht los. Satt ist die Ernte erst, wenn sie
-                        # den Slot wirklich bekommt.
+                        # .536 B4.3: hier stand der Hunger-Zaehler der
+                        # Bremse (`_bg_satt`, .502). Die Bremse ist weg —
+                        # dieser Klick-Lauf braucht sie nicht mehr: er haelt
+                        # seit .536 das bg-Konto und hat dort als
+                        # `interaktiv` den obersten Rang, ohne dass der
+                        # Ereignis-Strom dafuer anhalten muss.
                         # P3: Platz BELEGEN statt nur "alle frei" pruefen — der Broker
                         # muss von diesem Job wissen, sonst laeuft eine Analyse daneben.
                         _auftrag = {
@@ -11132,7 +15965,6 @@ class Service:
                                 self._plaetze.platz(eid, art="interaktiv",
                                                     timeout_s=1.0) as _enr:
                             if _enr is not None:
-                                self._bg_satt()           # B4
                                 _puls("erntet")
                                 # E-P3: die Wanduhr des Jobs — ohne das Warten auf
                                 # den Platz (Muster _lernlauf_ernte), sonst maesse
@@ -12582,7 +17414,6 @@ class Service:
                     _stopp("harvest paused for service restart — resumes after boot",
                            art="neustart")
                     return "ende"
-                self._bg_hungert()                # B4
                 # C2 (05.09.2026, bauplan_0505.md §1): die Ernte NIMMT
                 # `_gpu_bg_lock` nicht mehr. Sie ist Kunde der Vergabestelle; das
                 # Lock schuetzt seit .505 nur noch die SUBPROZESS-Jobs
@@ -12659,6 +17490,13 @@ class Service:
                             "clip_tor_deckel_s": tor_deckel_s,
                             "log": os.path.join(lauf_dir, "ernte.log")}
                 antwort, abgesendet, _t_ev = None, False, None
+                # .536 B1c4: der EIGENE Rueckweg dieses Jobs (Muster
+                # `_sammle_fahren`). Ohne ihn kann dieser Weg nicht
+                # unterscheiden, ob ein leeres Ergebnis dem Ereignis gehoert
+                # oder dem Prozess — und `_fehler_buchbar` bucht bei lebendem
+                # Frigate ENDGUELTIG „fehler". Das trifft seit .536 auch die
+                # neue sofortige Absage einer verstuemmelten Job-Zeile (B1c2).
+                _wi = {}
                 # A1 (05.09.): Klasse statt Text-Etikett — der Waechter reiht eine
                 # eingezogene Ernte nie mehr als Ereignis ein (404-Schleife).
                 # C2: die Anmeldung DAVOR macht das Warten fuer die Fairness-Regel
@@ -12669,8 +17507,9 @@ class Service:
                     if _enr is not None:
                         # .86: das AKTUELLE Event sichtbar machen — bei hoher fps
                         # dauert ein Event Minuten, und ohne diese Zeile sieht die
-                        # Seite wie ein Haenger aus. Seit C2 stehen dort bis zu K
-                        # Ereignisse nebeneinander (der Koordinator setzt sie).
+                        # Seite wie ein Haenger aus. Seit C2 konnten dort bis zu K
+                        # Ereignisse nebeneinander stehen; seit .536 B4.3 ist K = 1,
+                        # solange die Ernte auf dem bg-Konto sitzt, also genau eins.
                         with buch_lock:
                             laufende[eid] = (f"{e.get('kamera', '?')} clip "
                                              f"{round(e.get('clip_s') or 0)}s")
@@ -12695,6 +17534,7 @@ class Service:
                                 # ehrlichen Budget.
                                 timeout_s=timeout_s + tor_deckel_s
                                 + (erz_deckel_s if alt_ev else 0),
+                                info=_wi,             # .536 B1c4, s. oben
                                 # A2 (05.09.): Lebenszeichen des Platzes,
                                 # sonst zieht der Waechter jede Ernte
                                 # > 120 s ein (404-Schleife des Etiketts).
@@ -12711,6 +17551,20 @@ class Service:
                 if not _lauf_lebt("harvest stopped after the running event "
                                   "(run aborted)"):
                     return "ende"
+                # .536 B1c4 — FREMDVERSCHULDET HEISST UNGEBUCHT. Der Prozess ist
+                # unter dem Job weggegangen (Tod, Speicher-Abbruch, geordnetes
+                # Ende) oder seine Job-Zeile kam verstuemmelt an (B1c2): beides
+                # ist nicht die Schuld dieses Ereignisses. Bis .535 lief genau
+                # das in `_fehler_buchbar`, und weil Frigate dabei lebt, lieferte
+                # es `True` — das Ereignis wurde ENDGUELTIG als „fehler" gebucht
+                # und kein spaeterer Lauf holte es je nach. Jetzt geht es
+                # ungebucht an den Anfang der Warteschlange zurueck (der Rueckweg
+                # `offen.appendleft(e)` steht im Abholer darunter).
+                if _wi.get("fremdverschuldet"):
+                    self.log(f"harvest {eid}: the worker process was not able to "
+                             f"finish this job through no fault of the event — "
+                             f"NOT booked, it goes back into the queue")
+                    return "nochmal"
                 if antwort and antwort.get("ok"):
                     _buchen(e, eid, antwort, time.perf_counter() - _t_ev)
                 elif _fehler_buchbar(eid, antwort):
@@ -12742,11 +17596,12 @@ class Service:
                 Rate des letzten Laufs dieser Maschine, erst ganz ohne beides aus
                 den Analyse-Konstanten der Wanduhr (altes Verhalten).
 
-                Seit C2 geteilt durch die Zahl der Abholer: K Ereignisse laufen
-                gleichzeitig. Die Annahme dahinter ist ehrlich zu nennen — bekommt
-                die Ernte wegen der Fairness-Regel nur K-1 Plaetze (Rueckstand),
-                ist die Anzeige zu optimistisch; ohne die Teilung waere sie um den
-                Faktor K zu pessimistisch."""
+                Seit C2 geteilt durch die Zahl der Abholer. .536 B4.3: die ist
+                mit eigenem bg-Konto 1 (`_ernte_abholer_zahl`), die Teilung also
+                wirkungslos und die Schaetzung damit ehrlich. Die alte Fussnote
+                („bekommt die Ernte wegen der Fairness-Regel nur K-1 Plaetze, ist
+                die Anzeige zu optimistisch") gilt nur noch in der
+                Rueckfahrkarten-Stellung, wo es wirklich K Abholer gibt."""
                 try:
                     with q_lock:
                         rest_liste = list(offen)
@@ -12879,7 +17734,10 @@ class Service:
             # hier laufenden Koordinator. Wuerde jeder Abholer schreiben, mischten
             # sich K Teil-Staende in dieselbe Datei und jeder laese die
             # Abbruch-Antwort ein weiteres Mal.
-            k_abholer = max(1, int(self._plaetze.kapazitaet))
+            # .536 B4.3: EINE Quelle (s. `_ernte_abholer_zahl`) — mit eigenem
+            # bg-Konto ist das 1, weil der Worker Hintergrund-Arbeit auf EINEM
+            # Strang rechnet und K Threads nur die Wartezahlen aufblaehen.
+            k_abholer = self._ernte_abholer_zahl()
             abholer = [threading.Thread(target=_abholer, daemon=True,
                                         name=f"lernlauf-ernte-{j + 1}")
                        for j in range(k_abholer)]
@@ -13650,7 +18508,105 @@ class Service:
             if token is not None:
                 self._analyse_beendet(eid, token)
 
-    def process(self, eid, nachhol=0, koerper=False, marke=None):
+    def worker_health(self):
+        """DER ZUSTAND DES WORKER-PROZESSES fuer /health (E3.3/E3.4) — rein lesend,
+        kein Lazy-Start, kein Job.
+
+        EINE QUELLE: `WorkerDienst.zustand()`, dieselbe, aus der die Systemseite
+        liest (`systemstat_dienst`). Was hier dazukommt, ist nur der Zustand, den es
+        zu berichten gibt, wenn es gar keinen Prozess gibt — und der sagt dann
+        AUSDRUECKLICH warum, statt zu fehlen (K1): ein fehlendes Feld liest sich wie
+        „in Ordnung"."""
+        w = getattr(self, "_dienst_obj", None)
+        if w is None:
+            return {"laeuft": False,
+                    "grund": ("legacy subprocess mode (config 'worker' is off) — "
+                              "there is no worker service in this mode"
+                              if not self.cfg.get("worker", True)
+                              else "not started yet (it starts at boot or with the "
+                                   "first job)")}
+        try:
+            return w.zustand()
+        except Exception as e:                                # noqa: BLE001
+            return {"laeuft": None, "grund": f"{type(e).__name__}: {e}"}
+
+    def null_serie_stand(self):
+        """Der Stand der Anomalie-Wache fuer /health (E3.4) — rein lesend."""
+        n = int(getattr(self, "_null_serie", 0) or 0)
+        latte = int(self.cfg.get("null_gesichter_serie") or 0)
+        return {"serie": n, "latte": latte, "an": latte > 0,
+                "seit_ts": round(getattr(self, "_null_serie_start", 0.0) or 0.0, 1) or None,
+                "gemeldet_ts": round(getattr(self, "_null_serie_gemeldet", 0.0) or 0.0, 1) or None,
+                "letzte_eids": list(getattr(self, "_null_serie_eids", ()) or ())}
+
+    def _null_serie_pruefen(self, res, frames_fehlen, eid=None):
+        """DIE ANOMALIE-WACHE „N EREIGNISSE IN FOLGE 0 GESICHTER BEI VOLLER
+        FRAME-ZAHL" (Konzept §4 Schicht 3, E3.4).
+
+        WAS SIE FAENGT, und warum Start-Proben es NICHT fangen: die belegten
+        Im-Lauf-Klassen sind STILL. Der Beschleuniger antwortet, die Frames kommen
+        vollzaehlig an, kein Fehler wird geworfen — und jedes Ereignis kommt leer
+        zurueck. Fuer den SD4-Waechter daneben passiert dabei nichts (nichts ist
+        `fehler`), fuer /health ist alles gruen, und in der Akte steht eine lange
+        Reihe ehrlich aussehender „niemand da"-Zeilen. Diese Anlage hat ihre
+        Erkennung dann faktisch verloren, ohne es zu sagen.
+
+        DIE BEDINGUNG IST BEWUSST ENG — beide Haelften muessen zutreffen:
+          0 Gesichter    `faces == 0` in der frisch geschriebenen Akte-Zeile, und
+          VOLLE Frames   `frames_fehlen` ist NICHT gesetzt.
+        Ein Clip, von dem nur die Haelfte lesbar war, beweist gar nichts; ohne die
+        zweite Haelfte wuerde eine Reihe kaputter Aufnahmen als Erkennungsausfall
+        gemeldet. Und ein Ereignis, in dem wirklich niemand ins Bild lief, ist der
+        NORMALFALL einer Ueberwachungsanlage — deshalb laeuft die Wache ueber eine
+        SERIE und nicht ueber den Einzelfall, und deshalb ist die Latte
+        konfigurierbar (eine Kamera am Gartenzaun sieht tagelang niemanden).
+
+        DIE REGELN SIND DIE DES SD4-WAECHTERS, und das ist Absicht: nur der
+        LIVE-Pfad zaehlt (Nachhol-Laeufe sind per Vertrag stumm), die Serie
+        verjaehrt nach einer Stunde, gemeldet wird hoechstens alle sechs Stunden,
+        und das Hochzaehlen ist EIN Read-Modify-Write unter `_zustand_lock`.
+        Zwei Waechter mit verschiedenen Regeln waeren zwei Wahrheiten.
+
+        WAS BEIM AUSLOESEN PASSIERT: eine laute Zeile, ein Feld in /health — und der
+        Worker muss sich beweisen (`kurzprobe_ausloesen`). Das ist der Unterschied
+        zu einer reinen Meldung: die Kurzform rechnet den Erkennungs-Vektor gegen
+        die Eichmarke und sagt, ob dieser Prozess noch dasselbe rechnet wie bei der
+        Eichung."""
+        latte = int(self.cfg.get("null_gesichter_serie") or 0)
+        if latte <= 0:
+            return                                  # Wache bewusst aus
+        leer = (res is not None and int((res or {}).get("faces") or 0) == 0
+                and not frames_fehlen)
+        jetzt_ts = time.time()
+        if not leer:
+            self._null_serie = 0
+            self._null_serie_eids = []
+            return
+        with self._zustand_lock:
+            if jetzt_ts - getattr(self, "_null_serie_start", 0) > 3600:
+                self._null_serie = 0                # alte Serie verjaehrt
+            if getattr(self, "_null_serie", 0) == 0:
+                self._null_serie_start = jetzt_ts
+                self._null_serie_eids = []
+            self._null_serie = getattr(self, "_null_serie", 0) + 1
+            _eids = list(getattr(self, "_null_serie_eids", ()) or ())
+            if eid:
+                _eids = (_eids + [eid])[-10:]
+                self._null_serie_eids = _eids
+            n = self._null_serie
+        if n < latte or jetzt_ts - getattr(self, "_null_serie_gemeldet", 0) <= 6 * 3600:
+            return
+        self._null_serie_gemeldet = jetzt_ts
+        self.log(f"STOERUNG (null-gesichter-serie): {n} Ereignisse in Folge mit 0 "
+                 f"Gesichtern bei VOLLSTAENDIG lesbaren Clips (Latte {latte}) — das "
+                 f"ist die stille Ausfall-Klasse: der Beschleuniger antwortet, die "
+                 f"Frames kommen an, und trotzdem findet niemand mehr ein Gesicht. "
+                 f"Der Worker muss sich jetzt beweisen (Kurzprobe).")
+        self.kurzprobe_ausloesen(f"{n} events in a row with zero faces on fully "
+                                 f"readable clips")
+
+    def process(self, eid, nachhol=0, koerper=False, marke=None, lauf_info=None,
+                einge_ts=None):
         """nachhol=N (N>=1): Wiederholung einer frueher mit 'fehler' geendeten Analyse.
         Ein Nachhol-Lauf ist STUMM (kein Alert/Push/Telegram/MQTT, s. _nachhol_runde) und
         fasst die Live-Gesundheitssignale nicht an — er repariert nur die Akte.
@@ -13658,25 +18614,48 @@ class Service:
         laeuft mit, weil NUR er die beurteilten Bilder in den Kontroll-Speicher legt.
         marke (H1/.507): die Marke des Queue-Eintrags — heute genau
         `core.einspielen.reanalyse_marke()`, die den Live-only-Uebersprung
-        bewusst umgeht (E-P9). Kein Aufrufer ohne Marke aendert sein Verhalten."""
+        bewusst umgeht (E-P9). Kein Aufrufer ohne Marke aendert sein Verhalten.
+        einge_ts (.534 B5, optional): wann dieses Ereignis in die Warteschlange
+        gelegt wurde (`time.time()`). Nur fuer das Zeitprotokoll — daraus wird
+        die Spalte „warte" (Einreihen -> Platz). Ohne den Wert bleibt die Spalte
+        leer statt geraten zu werden; die uebrigen Spalten stehen trotzdem.
+        lauf_info (E3.3, optional dict): der RUECKWEG fuer das, was NICHT in die
+        Akte gehoert, den Aufrufer aber angeht. Heute genau ein Schluessel —
+        `fremdverschuldet`: der Worker-Prozess ist unter diesem Lauf weggegangen
+        (Tod, Speicher-Abbruch, geordnetes Ende). Er steht bewusst NICHT in der
+        Akte-Zeile: die Akte beschreibt das EREIGNIS, nicht den Zustand des
+        Rechners. Genau ein Leser braucht ihn, und fuer den ist er entscheidend —
+        `_nachhol_runde` darf einen fremdverschuldeten Versuch nicht als Versuch
+        buchen (W2-B4/B5). `None` (jeder andere Aufrufer) tut nichts."""
         cfg = self.cfg
-        _hb = int(cfg.get("hunger_bremse_s") or 0)
-        if _hb and self._bg_hunger_seit is not None:
-            # B4: dem hungernden Hintergrund-Job die Luecke lassen — mit
-            # Deckel (120 s) und Lebens-Puls, damit ein gestorbener Warter
-            # den Event-Strom nie festhaelt.
-            _hb_deckel = time.monotonic() + 120
-            while (self._bg_hunger_seit is not None
-                   and time.monotonic() - self._bg_hunger_seit > _hb
-                   and time.monotonic() - self._bg_hunger_puls < 10
-                   and time.monotonic() < _hb_deckel):
-                time.sleep(0.5)
+        # .536 B4.3: HIER STAND DIE HUNGER-BREMSE — bis zu 120 s Stillstand des
+        # Ereignis-Stroms VOR jeder Analyse, damit ein wartender
+        # Hintergrund-Job vorgelassen wird. Seit B4 haelt kein Hintergrund-Weg
+        # mehr einen Analyse-Platz (eigenes bg-Konto, Rang + Wechsel dort), also
+        # gibt es nichts mehr vorzulassen: die Analyse laeuft durch, der
+        # Hintergrund-Job bekommt sein Konto daneben. Ein noch gespeicherter
+        # `hunger_bremse_s` wird beim ersten Start EINMAL geraeumt, mit
+        # Audit-Zeile (`_migration_0536`).
         # E0 (Konzept §3): Platz-Vergabe DAVOR, self.lock bleibt darunter. Bei
         # Kapazitaet 1 ist das genau die alte Serialisierung — ein Platz, ein Lock.
         # Ab Kapazitaet > 1 wandert der Lock spaeter (E2) von der ganzen Analyse auf
         # die Akte-Zugriffe; die Platzzahl bestimmt dann, wie viele parallel rechnen.
+        # .534 (B5): die Uhr des ZEITPROTOKOLLS. Sie laeuft ab dem Moment, in dem
+        # dieser Platz belegt ist — genau die Groesse, die im Feld fehlte: je
+        # Platz vergingen 9 s je Ereignis, davon 5,5 s Analyse, und niemand
+        # konnte sagen, wo die uebrigen 3,5 s blieben. KEINE neue Uhr: dieselbe
+        # `time.monotonic`, die der Dienst ueberall nimmt.
+        _z_platz = None
         with self._plaetze.platz(eid, art="analyse") as _platz_nr, self._analyse_klammer(), \
                 self._analyse_marke(eid, nachhol) as _darf:  # E2: bei 1 Platz = self.lock
+            # Zugesagt ist „Platz belegt -> Platz frei", also AB HIER. Bis zum
+            # Pruefbericht (E-11) stand die Zuweisung VOR der Klammer und sogar
+            # hinter der Hunger-Bremse: das Warten auf den Platz lag damit in
+            # `gesamt_s`, aber in keiner Spalte, aus der der Anteil „nicht
+            # Rechnung" gebildet wird — die Kennzahl, um die es bei B5 ueberhaupt
+            # geht, fiel systematisch zu KLEIN aus, und zwar genau dann, wenn es
+            # eng war. Das Warten steht als `warte` in seiner eigenen Spalte.
+            _z_platz = time.monotonic()
             # A3 (05.09.2026): der Eintritts-Guard liegt in `_analyse_beginnen` —
             # `processed` UND die In-Arbeit-Marke, atomar unter self.lock. Die
             # Klammer gibt die Marke auf JEDEM Rueckweg wieder her, und zwar noch
@@ -13725,6 +18704,60 @@ class Service:
                             else "no processed entry, sweep will catch up") + ")")
                 return None
             camera = ev.get("camera", "?")
+            # .534 (B9) — EIN EREIGNIS OHNE ENDE IST KEINES ZUM RECHNEN.
+            #
+            # FELDBEFUND Lasttest 15.09.: Frigate lieferte 3 von 393 Ereignissen
+            # OHNE `end_time` — bei ihm nie abgeschlossen. Der Dienst gab eines
+            # davon an einen Analyseplatz, der Worker las dessen Clip bis die
+            # Job-Frist von 600 s riss, der Platzwaechter schoss den EINEN
+            # Worker-Prozess (die beiden anderen Jobs gingen als
+            # fremdverschuldet mit), der Dienst startete neu — und reihte
+            # DASSELBE Ereignis wieder ein. 14 Minuten kein Urteil bei 377
+            # wartenden Ereignissen; ein einzelnes Gift-Ereignis hielt die ganze
+            # Anlage an.
+            #
+            # ZWEI SCHRITTE, und der erste ist der wichtige: gar nicht erst
+            # rechnen. Solange das Ereignis jung ist, wird es ZURUECKGESTELLT —
+            # ungebucht, damit der naechste Sweep es wieder aufnimmt (derselbe
+            # Weg wie beim Clip-Tor-Deckel, s. `nicht_buchen`); Frigate schliesst
+            # die allermeisten Ereignisse binnen Sekunden. Erst nach
+            # `offen_max_min` bekommt es EINE ehrliche Akte-Zeile und ist fertig.
+            # Kein Fehlurteil, kein Worker-Job, keine Neustart-Schleife.
+            #
+            # Eingespielte Ereignisse (Testbett) haben per Bauart kein Frigate
+            # dahinter und sind davon ausgenommen.
+            if not ev.get("end_time") and not _einspiel.ist_einspiel(eid):
+                _offen_s = max(0.0, time.time() - float(ev.get("start_time") or 0)
+                               ) if ev.get("start_time") else 0.0
+                _deckel_min = int(cfg.get("offen_max_min") or 0)
+                _gem = getattr(self, "_offen_gemeldet", None)
+                if _gem is None:
+                    _gem = self._offen_gemeldet = set()
+                if not _deckel_min or _offen_s < _deckel_min * 60:
+                    if eid not in _gem:
+                        _gem.add(eid)
+                        self.log(f"{eid} ({camera}): Frigate has not finished this "
+                                 f"event yet (no end_time, open for "
+                                 f"{int(_offen_s / 60)} min) — held back, NOT "
+                                 f"analysed; a later run picks it up"
+                                 + (f" (given up after {_deckel_min} min)"
+                                    if _deckel_min else ""))
+                    return None
+                _gem.discard(eid)
+                self._uebersprungen_zaehlen()
+                self._uebersprungen_buchen(
+                    eid, camera, ev, "offen",
+                    f"event never ended in Frigate (open for "
+                    f"{int(_offen_s / 60)} min, limit {_deckel_min} min)")
+                return None
+            else:
+                # .534 (Pruefbericht H-6): der Merker ist ein BESTAND, kein
+                # Lebenszeit-Zaehler — ein Ereignis, das Frigate inzwischen
+                # geschlossen hat, faellt hier heraus. Sonst stuende es in
+                # /health fuer immer als „zurueckgestellt".
+                _g = getattr(self, "_offen_gemeldet", None)
+                if _g:
+                    _g.discard(eid)
             eigen = eid in self.own_writes          # Echo-Freiheit: unser eigenes Label ist
             f_label = None if eigen else (ev.get("sub_label") or None)   # keine Frigate-Wahrheit
             f_score = None if eigen else (ev.get("data") or {}).get("sub_label_score")
@@ -13918,6 +18951,12 @@ class Service:
                               clip_alter_min=_clip_alter_min(
                                   ev.get("end_time"), ev.get("start_time")))
             _warte_s = float(_ainfo.get("wartezeit_s") or 0.0)
+            # E3.3 (W2-B4/B5): den Rueckweg SOFORT bedienen, vor jedem anderen
+            # Zweig. Jeder Ausgang unter dieser Zeile kann `return` sein, und der
+            # Aufrufer muss auch dann wissen, dass der Prozess unter dem Lauf
+            # weggegangen ist.
+            if lauf_info is not None and _ainfo.get("fremdverschuldet"):
+                lauf_info["fremdverschuldet"] = True
             # .510/J15: der eigene Clip-Tor-Deckel laesst das Ereignis UNGEBUCHT.
             # Hier — und nur hier — endet der Lauf ohne Akte-Zeile und ohne
             # `processed`-Vermerk; der Sweep reiht es spaeter wieder ein. Der
@@ -13930,22 +18969,25 @@ class Service:
                          f"full cap — event NOT booked, a later run will fetch "
                          f"it ({_ainfo['nicht_buchen']})")
                 return None
-            # P1: Provider-Guard-Vorfaelle aus dem Subprozess ins DIENST-Log heben —
-            # analyze.log liest sonst niemand, und ein degradierter Lauf bliebe unsichtbar
-            # (Plan-QS Lens3-8). qs S4 warnt auf den Marker.
-            try:
-                with open(os.path.join(event_dir, "analyze.log")) as _gf:
-                    _gt = _gf.read()
-                if "PROVIDER-GUARD" in _gt:
-                    self.log(f"{eid}: PROVIDER-GUARD tripped in analyze "
-                             f"({'NOT healed' if 'PROVIDER-GUARD FAILED' in _gt else 'healed'}) "
-                             f"— see analyze.log")
-                # P4: Placement-Rueckfall (NPU band nicht -> Kette) ebenso heben — qs S4 warnt.
-                if "PLACEMENT-FALLBACK" in _gt:
-                    self.log(f"{eid}: PLACEMENT-FALLBACK in analyze — requested device did "
-                             f"not bind, chain took over — see analyze.log")
-            except Exception:
-                pass
+            # P1/P4: degradierte Laeufe ins DIENST-Log heben — ein Lauf, der auf
+            # CPU zurueckgefallen ist, bliebe sonst unsichtbar (Plan-QS Lens3-8),
+            # und qs S4 warnt auf genau diese Zeilen.
+            # E3.1: die Quelle ist das ANTWORTFELD, nicht mehr der Text der
+            # analyze.log. Das Log-Greifen war eine Rekonstruktion — es las eine
+            # Datei, die im Mehr-Job-Betrieb gar nicht mehr EINEM Job gehoert, und
+            # es konnte einen Vorfall nur finden, solange jemand ihn als Satz
+            # hineinschrieb. Jetzt sagt der Worker es selbst:
+            #   provider_guard      'ok' | 'failed'  (die Bindung hat gehalten?)
+            #   placement_fallback  Liste der Arten, die auf Software/CPU fielen
+            # `_ainfo` ist der Rueckweg von run_analyze; bei worker=aus (Legacy)
+            # bleibt es leer und es wird nichts behauptet.
+            if _ainfo.get("provider_guard") == "failed":
+                self.log(f"{eid}: the accelerator did NOT bind for this analysis "
+                         f"(provider guard failed, binding "
+                         f"{_ainfo.get('bindung') or '?'})")
+            for _art in (_ainfo.get("placement_fallback") or []):
+                self.log(f"{eid}: fell back to software/CPU for '{_art}' — the "
+                         f"requested device did not carry this step")
             # W1/E1 (User 26.07.): unter der Haelfte lesbarer Frames traegt kein Teilurteil
             # mehr — wie ein Analysefehler behandeln (stumm; der Nachhol-Lauf versucht es mit
             # seinem Versuchsbudget erneut). Darueber: Teilurteil MIT sichtbarem Flag.
@@ -13960,8 +19002,46 @@ class Service:
             # `hwdec_fallback` reist aus demselben Zug mit: der Rueckfall auf
             # Software-Decode stand bisher nur in results.jsonl und war in der
             # Dienst-Akte unsichtbar (Decode-Leser §5.1).
-            _ffehlen = bool((res or {}).get("frames_fehlen"))
-            _hwfb = bool((res or {}).get("hwdec_fallback"))
+            # E3.1: er kommt jetzt aus dem Antwortfeld `frames` (dort steht auch
+            # die KETTE, also welcher Decode-Weg wirklich lief). Die results-Zeile
+            # fuehrt ihn nicht mehr — sie trug ihn als Anhaengsel des alten
+            # Decode-Wegs, und ein zweites Feld fuer dieselbe Sache waere genau die
+            # Streuung, die der Log-Kontrakt beendet. Fuer ALTE Akten (und den
+            # Legacy-Weg) bleibt der results-Griff als Rueckfall stehen.
+            _frinfo = _ainfo.get("frames") or {}
+            _ffehlen = bool((res or {}).get("frames_fehlen") or _frinfo.get("fehlen"))
+            # .528 (Feldfund Intel-Abnahme 14.09.): ZWEI Faelle, nicht einer. Die
+            # Hardware-Kette kann auf zwei Arten versagen, und bis .527 wurde nur
+            # die eine gemeldet:
+            #   (a) sie liefert NICHTS -> worker_kern.nv12_mit_rueckfall startet
+            #       Software neu und setzt `hwdec_fallback`.
+            #   (b) sie liefert und STIRBT DANN (real: VAAPI rc=251 mitten im
+            #       Clip) -> es gibt keinen Rueckfall, die gelieferten Frames sind
+            #       beim Verbraucher; worker_dienst.EngineTor urteilt den lesbaren
+            #       Teil und meldet `teilabbruch`.
+            # Der ALTE Weg (.526, decode.FrameIter.__iter__, decode.py:244-251)
+            # setzte `hwdec_fallback` fuer BEIDE Faelle — der neue nur fuer (a).
+            # Folge im Feld: 2 von 59 Ereignissen mit echtem VAAPI-Fehler trugen
+            # nur noch die allgemeine placement_fallback-Zeile, die informative
+            # Zeile hier blieb aus und in der Akte fehlte die Marke. Deshalb wird
+            # hier BEIDES gelesen, und der Wortlaut sagt, welcher Fall es war —
+            # „fiel auf Software zurueck" waere im Fall (b) schlicht falsch.
+            _hwteil = _frinfo.get("teilabbruch")
+            _hwfb = bool(_frinfo.get("hwdec_fallback") or _hwteil
+                         or (res or {}).get("hwdec_fallback"))
+            if _hwfb:
+                # User-Auflage 13.09.: „Bei Rueckfall auf CPU eine Information im
+                # Log, aber nur einmal pro Event." Genau das — eine Zeile je
+                # Ereignis, mit der Kette, die wirklich lief.
+                _hwgrund = _frinfo.get("hwdec_grund") or _hwteil
+                _hwgrund = (" ".join(str(_hwgrund).split())[:200] if _hwgrund else "")
+                self.log(f"{eid}: hardware decode "
+                         + ("aborted mid-clip and did NOT fall back — judged the "
+                            "readable part" if _hwteil and
+                            not _frinfo.get("hwdec_fallback")
+                            else "fell back to software")
+                         + f" (chain {_frinfo.get('kette') or '?'}"
+                         + (f", {_hwgrund}" if _hwgrund else "") + ")")
             _verwurf = _ainfo.get("verwurf_grund")
             if _fs:
                 # .287 [clipdbg] (c): Clip-Qualitaet nach der Analyse — die
@@ -14017,11 +19097,15 @@ class Service:
                         if getattr(self, "_fehlerserie", 0) == 0:
                             self._fehlerserie_start = jetzt_ts
                         self._fehlerserie = getattr(self, "_fehlerserie", 0) + 1
-                    if self._fehlerserie >= 3 and \
+                    # E3.4: die 3 kommt aus SERIE_STRUKTURSIGNAL_N — wertgleich zum
+                    # Literal, das hier stand, aber jetzt EINE Quelle fuer beide
+                    # Serien-Wachen des Hauses (s. dort).
+                    if self._fehlerserie >= SERIE_STRUKTURSIGNAL_N and \
                             jetzt_ts - getattr(self, "_fehlerserie_gemeldet", 0) > 6 * 3600:
                         self._fehlerserie_gemeldet = jetzt_ts
-                        self.log("STOERUNG (analyse-serie): 3 Analysen in Folge fehlgeschlagen — "
-                                 "Erkennung moeglicherweise tot (Backend/Decode pruefen)")
+                        self.log(f"STOERUNG (analyse-serie): {SERIE_STRUKTURSIGNAL_N} "
+                                 f"Analysen in Folge fehlgeschlagen — "
+                                 f"Erkennung moeglicherweise tot (Backend/Decode pruefen)")
                         if not self.dry_alert:
                             def _sd4_push():
                                 # eigener Thread: 20-s-HTTP darf den Analyse-Lock nicht halten
@@ -14033,6 +19117,11 @@ class Service:
                             threading.Thread(target=_sd4_push, daemon=True).start()
                 else:
                     self._fehlerserie = 0
+                # E3.4 DIE ZWEITE SERIEN-WACHE, unmittelbar neben der ersten und mit
+                # denselben Regeln (nur Live zaehlt, Verjaehrung, EIN Read-Modify-
+                # Write unter `_zustand_lock`). Sie fragt das Gegenteil: nicht „was
+                # scheitert laut", sondern „was gelingt still und falsch".
+                self._null_serie_pruefen(res, _ffehlen, eid)
             import szenarien as _szenarien   # .356: EINE Definition der
             #                       Gesichtsguete (gesicht_gut_zaehlen) — dieselbe
             #                       Funktion liest spaeter die Durchgangs-Regel.
@@ -14064,6 +19153,12 @@ class Service:
                 # `(res or {})` — sonst faellt die Marke genau dort weg, wo sie
                 # am meisten sagt.
                 **({"frames_fehlen": True} if _ffehlen else {}),
+                # .528: diese Marke traegt BEIDE Arten des HW-Decode-Versagens
+                # (vollstaendiger Software-Rueckfall UND Abbruch mitten im Clip) —
+                # genau wie sie es bis .526 tat, als decode.FrameIter sie fuer
+                # beide setzte. Die Unterscheidung steht in der Logzeile oben; in
+                # der Akte ist die Frage „hat die Hardware diesen Clip getragen?",
+                # und die Antwort ist in beiden Faellen nein.
                 **({"hwdec_fallback": True} if _hwfb else {}),
                 # .510 B1: wie viele STIMM-KANDIDATEN dieses Ereignisses daran
                 # scheiterten, dass ihre Guete/Pose nicht messbar war
@@ -14193,10 +19288,13 @@ class Service:
             # kategorie fehler -> Luecken-Marke; ein Schreibfehler kostet nie
             # die Analyse (Zaehler + Log-Zeile im Modul).
             _anw.akte_zeile_markieren(cfg, entry, log=self.log)
+            _z_schreiben = time.monotonic()
             with self.lock, open(self.log_path, "a") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
                 f.flush()
             with self.lock: self.processed.add(eid)
+            self._zeitprotokoll(eid, entry, _ainfo, einge_ts, _z_platz,
+                                _z_schreiben, _warte_s)
             self.log(f"{eid}: {kategorie} [v1:{kategorie_v1}] (Frigate={f_label}, "
                      f"ours={confirmed or 'unknown'}, {entry['faces']} faces, {entry['dauer_s']}s)" +
                      (" -> ALERT" if entry["alerted"] else "") +
@@ -14390,11 +19488,14 @@ class Service:
         self._spur(f"presence {entry['eid']}", _senden)
         return True
 
-    def process_safe(self, eid, nachhol=0, koerper=False, marke=None):
+    def process_safe(self, eid, nachhol=0, koerper=False, marke=None,
+                     einge_ts=None):
         """process() fuer Timer-/Sweep-Threads: Exception darf nie einen Thread still toeten.
-        `marke` reicht die Queue-Marke dieses Eintrags durch (H1/.507)."""
+        `marke` reicht die Queue-Marke dieses Eintrags durch (H1/.507),
+        `einge_ts` den Einreih-Zeitpunkt fuer das Zeitprotokoll (.534)."""
         try:
-            self.process(eid, nachhol=nachhol, koerper=koerper, marke=marke)
+            self.process(eid, nachhol=nachhol, koerper=koerper, marke=marke,
+                         einge_ts=einge_ts)
         except Exception as e:
             self.log(f"{eid}: unexpected error in the processing thread: {e}")
 
@@ -14559,9 +19660,29 @@ class Service:
                 # eine DAUERMARKE und bleiben in BEIDEN Zweigen stehen. Grund: sie
                 # sind nicht nachladbar — ein geloeschter Frigate-Clip kostet einen
                 # Download, ein geloeschter eingespeister ist endgueltig weg.
+                def _aelter_als(pfad, grenze):
+                    """Ist die Datei aelter als `grenze`? Weg = NEIN.
+
+                    .536 B1b(2): die Alters-Frage stand bis .535 NACKT in der
+                    Comprehension darunter. Der Vorlauf benennt staendig
+                    `.part` -> `.mp4` um; verschwindet eine Datei zwischen
+                    `listdir` und `getmtime`, warf das eine
+                    FileNotFoundError in den aeusseren Fang und der GANZE
+                    Durchgang entfiel — Alters-Retention, Size-Cap,
+                    Live-Aufraeumen UND die DISK-LOW-Pruefung. Im Feld
+                    160 x „cache cleanup error: No such file … .part" an
+                    EINEM Tag, unter Last etwa alle zwei Minuten. Der Fix vom
+                    28.08. deckte nur den `remove`-Schritt, nicht die Auswahl.
+                    Eine Datei, die es nicht mehr gibt, ist nichts, was man
+                    wegraeumen muesste — deshalb False und weiter."""
+                    try:
+                        return os.path.getmtime(pfad) < grenze
+                    except OSError:
+                        return False
+
                 gone = [fn for fn in os.listdir(cache)
                         if fn.endswith((".mp4", ".part"))
-                        and os.path.getmtime(os.path.join(cache, fn)) < cutoff
+                        and _aelter_als(os.path.join(cache, fn), cutoff)
                         and not _fr.gepinnt(os.path.join(cache, fn))
                         and not _fr.wird_behalten(os.path.join(cache, fn))]
                 befreit = 0
@@ -14742,26 +19863,22 @@ class Service:
         except Exception:                                     # noqa: BLE001
             pass
         try:                                  # kein Lazy-Start: nur fragen, wenn er lebt
-            # C1 (05.09.2026): `worker` bleibt der Zustand von Worker 1 — die
-            # Eigenschaft `_worker_obj` liest ihn jetzt aus `_worker_pool[1]` statt aus
-            # einem eigenen Feld. Fuer die Systemseite aendert sich damit nichts; was
-            # sich aendert, ist die Rolle: Worker 1 ist seit C1 kein Sonderling mehr
-            # (kein geteilter Hintergrund-Worker), sondern der Prozess von Platz 1.
+            # E3.1: `worker` ist der Zustand DES einen Worker-Prozesses. Bis .526
+            # war es der von Platz 1 aus einem Pool von N; die Schluessel sind
+            # dieselben geblieben, damit Systemseite und Support-Faelle unveraendert
+            # weiterlesen — dazugekommen sind `offene_jobs` und `threads`
+            # (Rechenstraenge), die es im Pool-Modell gar nicht geben konnte.
             aus["worker"] = (self._worker_obj.zustand() if self._worker_obj
                              else {"laeuft": False, "tode_24h": 0,
                                    "letzter_tod_ts": None, "letzte_ursache": None,
                                    "grund": None})
-            # E2: die Worker der Plaetze daneben, je Platznummer. `worker` bleibt
-            # Worker 1, damit Bestandsleser (Systemseite, Support-Faelle) unveraendert
-            # weiterlesen; ohne diesen Zusatz waeren Zustand und Tode-Zahl des zweiten
-            # Prozesses nirgends sichtbar, und ein stiller Dauertod saehe aus wie
-            # "alles gruen". Seit C1 steht Platz 1 hier mit drin (er wohnt im selben
-            # Pool) — dieselbe Auskunft wie in `worker`, nur an ihrem Platz.
-            # IMMER setzen, auch leer: der Durchreiche-Vertrag in
-            # core/systemstat.momentaufnahme traegt sonst "kein_dienst" ein und
-            # behauptet damit einen Ausfall, wo nur ein Platz konfiguriert ist.
-            aus["worker_plaetze"] = {str(nr): self._worker_pool[nr].zustand()
-                                     for nr in sorted(self._worker_pool)}
+            # `worker_plaetze` BLEIBT als Schluessel stehen (Durchreiche-Vertrag in
+            # core/systemstat.momentaufnahme: fehlt er, traegt sie "kein_dienst" ein
+            # und behauptet einen Ausfall). Seit E3.1 steht dort der EINE Prozess
+            # unter seiner Platznummer 1 — es gibt keinen zweiten mehr, hinter dem
+            # sich ein stiller Dauertod verstecken koennte. Die Zahl der
+            # gleichzeitigen Jobs steht als `offene_jobs` im Zustand selbst.
+            aus["worker_plaetze"] = ({"1": aus["worker"]} if self._worker_obj else {})
         except Exception:                                     # noqa: BLE001
             pass
         try:
@@ -14778,6 +19895,17 @@ class Service:
             try:
                 q = getattr(self, "_ev_q", None)
                 st["queue_n"], st["in_arbeit"] = self.rueckstau_zahlen()
+                # .534 (B9): wie viele Ereignisse uebersprungen wurden, weil
+                # Frigate sie nie abgeschlossen hat bzw. weil ihre Analyse
+                # wiederholt eingezogen wurde. Steht die Zahl still, ist nichts
+                # los; waechst sie, hat der Betreiber etwas zu klaeren.
+                st["uebersprungen_offen"] = int(
+                    getattr(self, "uebersprungen_offen", 0) or 0)
+                # BESTAND, nicht Lebenszeit-Zaehler: die Menge traegt die
+                # Ereignisse, die GERADE zurueckgestellt sind (ein Eintrag faellt
+                # beim Ueberspringen und beim erfolgreichen Lauf).
+                st["offen_zurueckgestellt"] = len(
+                    getattr(self, "_offen_gemeldet", ()) or ())
                 st["aktiv"] = self.rueckstau_aktiv((st["queue_n"], st["in_arbeit"]))
                 # B2 (05.09.2026, Widerleger-Befund B1 N-7): der Griff auf q[0]
                 # lief OHNE `_ev_wecker` — zwischen der Wahrheitspruefung und dem
@@ -15897,7 +21025,37 @@ class Service:
         self.log(f"{eid}: catch-up attempt {n}/{cfg['nachhol_versuche']} "
                  f"({max(0, offen - 1)} more pending, {tot} abandoned)")
         self._nachhol_aufraeumen(eid, n)
-        entry = self.process(eid, nachhol=n)
+        _lauf = {}
+        entry = self.process(eid, nachhol=n, lauf_info=_lauf)
+        if _lauf.get("fremdverschuldet"):
+            # E3.3 (W2-B4/B5) — DER WRITE-AHEAD-ZAEHLER WIRD ZURUECKGENOMMEN.
+            #
+            # Der Zaehler steht write-ahead: er wird VOR der Analyse hochgezaehlt und
+            # persistiert, damit ein Absturz mitten im Versuch nicht in eine endlose
+            # Wiederholung laeuft. Das ist richtig — aber es setzt voraus, dass ein
+            # Versuch auch ein Versuch DIESES Ereignisses war. Seit E3.1 laufen N
+            # Jobs in EINEM Worker-Prozess: geht der Prozess weg (Speicher-Abbruch,
+            # geordnetes Ende, Haenger-Schuss wegen eines ANDEREN Jobs), sterben alle
+            # offenen Jobs mit — und keiner von ihnen hat etwas falsch gemacht. Ohne
+            # diese Ruecknahme stuende ein voellig unschuldiges Ereignis nach drei
+            # solchen Kollisionen endgueltig auf `tot` und wuerde nie wieder
+            # angefasst. Genau dagegen ist W2-B4 geschrieben.
+            #
+            # Zurueckgenommen wird auf den Stand VOR diesem Versuch, nicht auf 0: ein
+            # Ereignis, das vorher schon zweimal an sich selbst gescheitert ist, soll
+            # seine zwei Versuche behalten. `ts` bleibt fortgeschrieben (der Backoff
+            # greift weiter) — sonst zoege dasselbe Ereignis den einen Slot der Runde
+            # sofort wieder an sich.
+            st = self._nachhol_lesen()
+            s2 = st.setdefault(eid, dict(s))
+            s2["n"] = max(0, n - 1)
+            s2["ts"] = round(time.time(), 1)
+            self._nachhol_schreiben(st)
+            self.log(f"{eid}: catch-up attempt {n} does NOT count — the worker "
+                     f"process went away while it was running (not this event's "
+                     f"fault); attempts stay at {s2['n']}/"
+                     f"{cfg['nachhol_versuche']}")
+            return
         if entry is None:                                   # Kamera aus / Zonen-Gate / Abbruch:
             st = self._nachhol_lesen()                      # process() hat KEINE Zeile geschrieben
             st.setdefault(eid, s)["aus"] = "kein_ergebnis"  # -> FAIL-SAFE endgueltig aufgeben
@@ -17964,7 +23122,7 @@ def make_handler(svc):
                                       "application/json")
                 except Exception as e:
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
-            if pfad == "/gpu_speichern":                       # Analyse-Plaetze von der GPU-Seite (P5)
+            if pfad == "/gpu_speichern":                       # Rechenstraenge von der GPU-Seite (R7)
                 try:
                     d = self._body_json(512, erwartet=dict)
                     if d is _ABGEWIESEN:
@@ -17973,8 +23131,12 @@ def make_handler(svc):
                     # jede andere Config-Aenderung (config_schreiben prueft die
                     # Whitelist, klemmt und schreibt den Store). Kein eigener
                     # Pfad in die Datei — sonst haetten wir zwei Wahrheiten.
-                    _w = int(d.get("analyse_plaetze") or 0)
-                    ok, msg, _neu = svc.config_schreiben({"analyse_plaetze": _w})
+                    # .536 B5 (R7): der Regler schreibt `worker_straenge`, nicht
+                    # mehr `analyse_plaetze`. Es gibt nur noch EINE Einstellung;
+                    # die Plaetze folgen den Straengen (`_plaetze_an_straenge`).
+                    # 0 = Automatik, wie im Schema.
+                    _w = int(d.get("worker_straenge") or 0)
+                    ok, msg, _neu = svc.config_schreiben({"worker_straenge": _w})
                     return self._send(200 if ok else 400,
                                       json.dumps({"ok": ok,
                                                   "msg": (_sprache.t("gpu.gespeichert")
@@ -18765,6 +23927,51 @@ def make_handler(svc):
                 threading.Timer(0.5, svc.neustart,
                                 kwargs={"grund": "support API request"}).start()
                 return
+            if pfad == "/support/feinmessung":
+                # .534 (B7) FEINMESSUNG AUF ZURUF — die DRITTE deklarierte
+                # Aktions-Ausnahme im Support-Baum, nach /support/restart und
+                # /support/einspielen. Inhaber-Entscheid vom 15.09.2026: dieser
+                # Schalter gehoert AUSDRUECKLICH NICHT ins UI und nicht in die
+                # Config, sondern hierher — er ist ein Diagnose-Griff fuer den
+                # Fernzugriff, kein Betriebsregler, und was er bewirkt, ist eng
+                # begrenzt: er schaltet EINE Telemetrie-Datei ein und aus.
+                # Er ruehrt weder Config noch Daten noch Frigate an, er ueberlebt
+                # keinen Dienst-Neustart, und er schaltet sich nach seiner
+                # eigenen Frist selbst wieder aus (Feinmessung, s. dort).
+                # Torwaechter wie ueberall im Support-Baum: Schalter
+                # support_zugriff + Token LIVE aus dem Store, Abweisung =
+                # generisches 404 (kein Orakel).
+                from core import support as _sup4
+                _st = _lade_config_store(cfg)
+                if not _sup4.zugriff_ok(_st, self.headers.get("X-Support-Token")):
+                    _sup4.abweisung_zaehlen(svc.log)
+                    return self._send(404, "not found", "text/plain")
+                _b = self._body_json(2048, default={}, erwartet=dict)
+                if _b is _ABGEWIESEN:
+                    return
+                _unbekannt = [k for k in _b if k not in ("an", "dauer_min")]
+                if _unbekannt:
+                    # .505-Lehre: ein fremdes Feld wird nicht still verworfen.
+                    return self._send(400, json.dumps(
+                        {"ok": False, "msg": f"unknown field(s): "
+                                             f"{', '.join(sorted(_unbekannt))} "
+                                             f"(allowed: an, dauer_min)"}),
+                        "application/json")
+                # .534 (Pruefbericht H-5): OHNE `an` wird nichts geschaltet.
+                # Ein leerer Body schaltete bis dahin EIN — ein Dauerschreiber,
+                # den niemand bestellt hat, ist genau die Ueberraschung, die ein
+                # Diagnose-Griff nicht machen darf.
+                if _b.get("an") is None:
+                    return self._send(400, json.dumps(
+                        {"ok": False, "msg": "field 'an' is required (1 = on, "
+                                             "0 = off)"}), "application/json")
+                _an = bool(int(_b.get("an") or 0))
+                _z = svc.feinmessung().schalten(
+                    _an, _b.get("dauer_min"), quelle="support-api")
+                return self._send(200, json.dumps(
+                    {"ok": True, "an": _z["an"], "endet_ts": _z["endet"],
+                     "datei": _z["datei"], "zeilen": _z["zeilen"]},
+                    ensure_ascii=False), "application/json")
             if pfad == "/support/einspielen":
                 # .416 TESTBETT-EINSPIELUNG (User-Go 03.09.): ZWEITE
                 # deklarierte Aktions-Ausnahme im Support-Baum neben
@@ -21257,16 +26464,13 @@ def make_handler(svc):
                 _sys = _systemstat.letzte() or {}
                 _gpu = dict(_sys.get("gpu") or {})
                 # Der Kartenname steht nicht in der Momentaufnahme (die misst nur
-                # Zahlen) — hier einmal nachfragen, damit die Seite sagen kann, WELCHE
-                # Karte gefunden wurde. Schlaegt es fehl, bleibt es beim Kind.
-                try:
-                    _n = subprocess.run(["nvidia-smi", "--query-gpu=name",
-                                         "--format=csv,noheader"],
-                                        capture_output=True, text=True, timeout=4)
-                    if _n.returncode == 0 and _n.stdout.strip():
-                        _gpu["name"] = _n.stdout.strip().splitlines()[0]
-                except Exception:                        # noqa: BLE001
-                    pass
+                # Zahlen). .531: er kommt aus dem EINEN Griff `Service._karten_name`
+                # (einmal gefragt, dann gemerkt) — er ist seitdem auch Teil des
+                # Eich-Schluessels, und zwei Stellen mit zwei Schreibweisen derselben
+                # Karte waeren genau der stille Schluessel-Fehlschlag.
+                _kn = svc._karten_name()
+                if _kn:
+                    _gpu["name"] = _kn
                 _nw = svc._plaetze.kapazitaet
                 try:
                     # `cfg` ist die LAUFENDE Config des Handlers (nicht svc.cfg vom
@@ -21276,8 +26480,27 @@ def make_handler(svc):
                                                 or {}).items() if (_v or {}).get("enabled")])
                 except Exception:                        # noqa: BLE001
                     _lw = 0
-                _roh = cfg.get("analyse_plaetze")
-                _roh = 1 if _roh is None or _roh == "" else int(_roh)
+                # .536 B5 (R7): DER REGLER ZEIGT DIE RECHENSTRAENGE. Bis .535
+                # belegte er sich aus `analyse_plaetze` vor und schrieb ihn
+                # zurueck — die zweite Einstellung, die R7 abschafft. Die Zahlen
+                # kommen aus DERSELBEN Quelle wie /health
+                # (`worker_straenge_zustand`): `nutzer_n` ist, was eingestellt
+                # ist (0 = Automatik), `formel_n` der Vorschlag der
+                # Speicher-Rechnung, `n` was daraus wird.
+                _str = svc.worker_straenge_zustand()
+                try:
+                    _nutzer = int(_str.get("nutzer_n") or 0)
+                except (TypeError, ValueError):
+                    _nutzer = 0
+                # In der Automatik zeigt die Auswahl „automatisch"; die Zahl
+                # daneben ist die LAUFENDE, damit „laeuft noch mit X" nicht gegen
+                # eine 0 vergleicht (der Satz erschiene sonst dauerhaft).
+                _gesetzt = _nutzer if _nutzer > 0 else (int(_str.get("n") or 0)
+                                                        or _nw)
+                # Der Vorschlag hinter „automatisch" ist die gerechnete
+                # Strangzahl, nicht mehr der gemessene Platz-Vorschlag: der
+                # Regler stellt Straenge.
+                _vor_str = int(_str.get("formel_n") or 0) or _nw
                 # Verlauf aus DEMSELBEN Ringpuffer wie die Systemlast-Seite (nie
                 # frisch messen — sonst kostet jeder Reload eine Messrunde und
                 # stiehlt dem Sammler seine Delta-Bezugsgroesse, .341).
@@ -21291,14 +26514,28 @@ def make_handler(svc):
                 _pk = [(_a, sum(1 for _p in _pz["plaetze"] if _p["art"] == _a))
                        for _a in svc._plaetze.ARTEN]
                 inhalt = _r_gpu.seite(_gpu, _nw, _lw,
-                                      getattr(svc._plaetze, "vorschlag", _nw),
-                                      _nw if _roh <= 0 else _roh,
-                                      auto=(_roh <= 0),
+                                      _vor_str, _gesetzt,
+                                      auto=(_nutzer <= 0),
                                       belegt=_pz["belegt"], klassen=_pk,
                                       npu=_sys.get("npu"),
                                       gpu_eigen=_sys.get("gpu_eigen"),
                                       ram=_sys.get("ram"), cpu=_sys.get("cpu"),
-                                      verlauf=_verl)
+                                      verlauf=_verl,
+                                      # .536 B5: die GEMESSENE Zahl gleichzeitiger
+                                      # Analysen. Sie steuert nichts mehr und steht
+                                      # deshalb bei den Messwerten, nicht im
+                                      # Reglertext (Bauplan B5.2).
+                                      mess_n=getattr(svc._plaetze, "vorschlag",
+                                                     None),
+                                      # .536 B5 (L-4): im Legacy-Modus
+                                      # `worker: false` gibt es keinen
+                                      # Analyse-Worker und damit keine
+                                      # Rechenstraenge — der Regler sagt das.
+                                      legacy=not bool(cfg.get("worker", True)),
+                                      # .534 (B10): DIESELBE Auskunft, die
+                                      # /health ausgibt — die Seite rechnet die
+                                      # Platzzahl nicht ein zweites Mal.
+                                      straenge=svc.worker_straenge_zustand())
                 return self._send(200, webui.layout(_sprache.t("gpu.titel"), "/gpu",
                                                     inhalt, self._banner()))
             if path == "/gesichter":                     # zentrale Personen-/Referenzverwaltung (19.07.)
@@ -22068,6 +27305,42 @@ def make_handler(svc):
                      # nur `_worker_obj`, also Worker 1 (Widerleger-Befund B8: Zustand,
                      # Tode-Zahl und Rueckfall-Statistik des zweiten Prozesses blind).
                      "analyse_plaetze": svc._plaetze.zustand(),
+                     # E3.2 (14.09.): die Strang-Formel sichtbar machen — WIE VIELE
+                     # Rechenstraenge der Worker-Dienst hat, WORAUS die Zahl kommt
+                     # (Rechenweg in Klartext) und ob die Migrations-Klemme
+                     # gegriffen hat. Ohne diese Zeile waere die wichtigste
+                     # Speicher-Entscheidung der Anlage nur im Startlog zu finden,
+                     # und Supportfaelle schicken /health, nicht 400 Logzeilen.
+                     "worker_straenge": svc.worker_straenge_zustand(),
+                     # .534 (B7): laeuft gerade eine Feinmessung, seit wann, bis
+                     # wann und wie viele Zeilen. Sie ist von aussen schaltbar
+                     # (/support/feinmessung) — dann muss von aussen auch sichtbar
+                     # sein, dass sie laeuft.
+                     "feinmessung": svc.feinmessung().zustand(),
+                     # .534 (B5): wo die Platzzeit je Ereignis wirklich
+                     # hingeht — Median und Summe der letzten 100.
+                     "zeiten": svc.zeiten_zustand(),
+                     # .534 (B6c): der Vorrat fertiger Clips vor der
+                     # Vergabestelle, mit beiden Marken und dem Pausen-Zustand.
+                     "vorlauf": svc.vorlauf().zustand(),
+                     # E3.3/E3.4 (14.09.): DER WORKER-PROZESS SELBST. Bis hier stand
+                     # sein Zustand nur auf der Systemseite (systemstat_dienst) —
+                     # Support-Faelle schicken aber /health. Und seit dem Umbau haengt
+                     # an diesem einen Prozess alles: Haenger-Schuesse, fremdverschuldet
+                     # gebuchte Jobs, der Selbstbeweis. `svc.worker_health()` ist DIE
+                     # Quelle, dieselbe, die auch die Systemseite liest.
+                     "worker": svc.worker_health(),
+                     # E3.4: die Anomalie-Wache. Sie ist die einzige Wache, die die
+                     # STILLE Ausfall-Klasse sieht — sie gehoert dorthin, wo jemand
+                     # nachsieht, wenn „eigentlich laeuft alles".
+                     "null_gesichter": svc.null_serie_stand(),
+                     # .536 (B3.4): das Sammeln laeuft in Haeppchen — dann muss
+                     # von aussen sichtbar sein, ob gerade eine Kette laeuft, wie
+                     # viele Ereignisse noch offen sind und mit welchen ZAHLEN die
+                     # Anlage rechnet (Rechenfaktor und kalter Prolog werden je
+                     # Backend gemessen, die Config traegt nur die Startwerte).
+                     # Ohne diese Zeile waere die Packung eine Behauptung.
+                     "sammeln": svc.sammel_zustand(),
                      # .340: Start-Nachholen — Schalter UND Fortschritt aus DERSELBEN
                      # Quelle wie der Banner (K1: die Anzeige kann dem Verhalten nicht
                      # widersprechen). Supportfaelle schicken /health, nicht 400 Logzeilen.
@@ -22477,6 +27750,13 @@ def make_handler(svc):
                 if _sup.zugriff_ok(_store,
                                    self.headers.get("X-Support-Token")):
                     _rest = path[len("/support/"):]
+                    if _rest == "feinmessung":
+                        # .534 (B7): der LESENDE Teil des Schalters — laeuft sie,
+                        # seit wann, bis wann, wie viele Zeilen. Geschaltet wird
+                        # per POST auf denselben Pfad (s. dort).
+                        return self._send(200, json.dumps(
+                            svc.feinmessung().zustand(), ensure_ascii=False),
+                            "application/json")
                     if _rest == "inventar":
                         return self._send(200, json.dumps(
                             _sup.inventar(cfg["data_dir"],
@@ -23023,12 +28303,16 @@ def rechenprobe_schritt(svc, cfg, erg):
     auf einer 24-EU-iGPU haben in einem Probelauf den Erkennungs-Kosinus von 0,999753 auf
     0,857 gedrueckt (Probelauf 24.08.).
 
-    ALS EIGENER PROZESS der Worker-Maschinerie (dritte WorkerProzess-Instanz nach dem
-    personwork-Muster): er erbt killpg, oom_score_adj, RSS-Wache, fd-Umleitung und den
-    Stopp-vor-execv-Pfad. Er LIEFERT nur Daten — gedruckt wird hier im Hauptprozess,
-    sonst stuende nichts davon im Docker-Log (User-Entscheid). Danach wird er SOFORT
-    gestoppt: ein stehender dritter Prozess hielte seine ORT-Arena fuer immer
-    (Soak-Befund 27.07.: nur ein Prozess-Ende gibt sie zurueck).
+    ALS JOB IM EINEN WORKER-DIENST (E3.1, 14.09.2026 — vorher eine DRITTE
+    WorkerProzess-Instanz nach dem personwork-Muster, die danach sofort gestoppt
+    werden musste). Der Grund fuer den alten Aufbau war der Soak-Befund 27.07.: ein
+    stehender dritter Prozess hielte seine ORT-Arena fuer immer, nur ein Prozess-Ende
+    gibt sie zurueck. Seit E3.1 gibt es diesen dritten Prozess gar nicht mehr — die
+    Probe laeuft in genau dem Prozess, der ohnehin bleibt, und die Fehlerklasse ist
+    damit weg statt bewacht. Er wird hier ausdruecklich NICHT gestoppt: er haelt die
+    im Boot gebauten Kompilate warm, und genau dafuer wird er im Boot gestartet.
+    Die Probe LIEFERT nur Daten — gedruckt wird hier im Hauptprozess, sonst stuende
+    nichts davon im Docker-Log (User-Entscheid).
 
     ABSTURZSICHERUNG wie _anker_boot_start: der Versuchszaehler wird VOR dem Start
     geschrieben, damit auch ein Kill mitten im Lauf zaehlt. Ab
@@ -23074,18 +28358,44 @@ def rechenprobe_schritt(svc, cfg, erg):
     #                                 Treiber-Gerede sind ~450 Zeilen je Lauf und ist nur
     #                                 fuer DEN Versuch interessant, der gerade lief
     erg("info", f"{'probe':<5} raw driver output of this step goes to state/rechenprobe.log")
-    w = WorkerProzess(cfg, log=svc.log, rss_key="worker_rss_max_mb", rss_default=4096,
-                      name="rechenprobe")
-    try:
-        # Frist: das Messbudget selbst ist 60 s (Konzept §7 "Vorschlag 60 s gesamt"), es
-        # wird VOR jedem Modell geprueft — ein Modell, das um 59 s beginnt, darf noch
-        # fertig kompilieren (kalt gemessen: voller Lauf 42,7 s). 240 s decken das plus
-        # den Prozessstart; reisst die Frist, killt job() den Prozess und der Zaehler
-        # oben steht schon.
+    # E3.1: ALS JOB im EINEN Worker-Prozess, nicht mehr als dritte Instanz daneben.
+    # Der alte Weg startete hier einen eigenen Prozess und stoppte ihn sofort wieder
+    # (ein stehender dritter Prozess haette seine ORT-Arena fuer immer gehalten,
+    # Soak-Befund 27.07.). Beides ist gegenstandslos: es gibt nur noch einen
+    # Compute-Prozess, er steht im Boot ohnehin schon, und ein zweiter neben ihm
+    # waere genau die Kontext-Kollision, gegen die der Umbau gebaut ist.
+    w = svc.worker_dienst()
+    if w is None:
+        erg("info", "compute probe skipped: the persistent worker is disabled "
+                    "(config 'worker')")
+        svc.rechenprobe = {"quelle": "skipped", "grund": "worker disabled"}
+        return
+    # Frist: das Messbudget selbst ist 60 s (Konzept §7 "Vorschlag 60 s gesamt"), es
+    # wird VOR jedem Modell geprueft — ein Modell, das um 59 s beginnt, darf noch
+    # fertig kompilieren (kalt gemessen: voller Lauf 42,7 s). 240 s decken das plus
+    # den Prozessstart; reisst die Frist, schiesst job() den Prozess und der Zaehler
+    # oben steht schon.
+    # .536 B4.4: MIT PLATZ, wie jeder GPU-Job (Regel C1) — bis .535 rechnete die
+    # Probe an der Vergabestelle vorbei. KURZE Platz-Frist wie die Start-Probe
+    # (2 x PULS_TAKT_S = 20 s, keine neue Zahl): sie ist eine BOOT-Stufe, kein
+    # Auftrag. Bekommt sie den Platz nicht, wird sie NICHT nachgeholt und sagt
+    # das laut — der Versuchszaehler steht dabei ausdruecklich NICHT hoeher (sie
+    # ist nicht gescheitert, sie kam nicht dran), damit ein belegtes Konto keine
+    # Anlage in den „aufgegeben"-Zustand treibt.
+    _platz_frist = PULS_TAKT_S * 2
+    with svc._plaetze.wartend("bg"), \
+            svc._plaetze.platz("compute probe", art="bg",
+                               timeout_s=_platz_frist) as _rp_nr:
+        if _rp_nr is None:
+            grund = (f"compute probe skipped: no free background slot within "
+                     f"{_platz_frist:.0f}s — it is a boot step, not an order, "
+                     f"and it is NOT retried later")
+            erg("warn", grund)
+            svc.rechenprobe = {"quelle": "skipped", "grund": grund}
+            return
         antwort = w.job({"typ": "rechenprobe", "zeitbudget_s": 60,
-                         "backend_geraet_je_task": karte, "log": log}, 240)
-    finally:
-        w.stop()
+                         "backend_geraet_je_task": karte, "log": log}, 240,
+                        puls=svc._plaetze.puls_fuer(_rp_nr))
     zeilen = (antwort or {}).get("rechenprobe")
     if zeilen is None:
         grund = (f"compute probe did not deliver (attempt {versuche + 1}/"
@@ -23207,9 +28517,15 @@ def startup_selfcheck(svc):
         # Die konfigurierten POLITIK-Grenzen der beiden WorkerProzess-Instanzen
         # (rss_key je Instanz: _worker -> worker_rss_max_mb, _personwork ->
         # personwork_rss_max_mb, s. Service._personwork).
-        _wr = int(cfg.get("worker_rss_max_mb") or 4096)
+        # .528: ein ausdrueckliches 0 heisst AUS und wird auch so gemeldet. Mit
+        # dem alten `or 4096` behauptete diese Zeile 4096, waehrend die Regel gar
+        # nicht galt — genau die luegende Diagnose (K1), und ausgerechnet in dem
+        # Block, den die Ferndiagnose zuerst liest.
+        _wr_roh = cfg.get("worker_rss_max_mb")
+        _wr = 4096 if _wr_roh in (None, "") else max(0, int(_wr_roh))
         _pr = int(cfg.get("personwork_rss_max_mb") or 3072)
-        erg("info", f"{'mem':<5} worker memory guards: worker_rss_max_mb={_wr} MB, "
+        erg("info", f"{'mem':<5} worker memory guards: worker_rss_max_mb="
+                    f"{str(_wr) + ' MB' if _wr else 'OFF (only the cgroup rule guards)'}, "
                     f"personwork_rss_max_mb={_pr} MB")
         # Bewertung: liegt die Politik-Grenze ueber der Container-Decke, schiesst
         # der Kernel, BEVOR die Wache greift — dann sieht man im Log nur ein
@@ -23227,10 +28543,27 @@ def startup_selfcheck(svc):
         # Quelle ist die LAUFENDE Vergabestelle, nicht der Config-Wert: eine
         # backend-bedingte Klemmung (OpenVINO hart auf 1) waere sonst nicht abgebildet.
         _np = max(1, getattr(getattr(svc, "_plaetze", None), "kapazitaet", 1) or 1)
-        _pol = max(_np * _wr, _pr)
-        if _np > 1:
-            erg("info", f"{'mem':<5} {_np} analysis slots — guard scales to "
-                        f"{_np} x {_wr} = {_np * _wr} MB")
+        # .534: EINE QUELLE FUER BEIDE SEITEN. Diese Zeile rechnete bis .533 ihre
+        # eigene Skalierung (Plaetze x worker_rss_max_mb), waehrend die Wache im
+        # Worker das Budget EINMAL bekam — zwei Zahlen fuer dieselbe Grenze, und
+        # im Feldtest der .533 nannten sie verschiedene. Jetzt kommt die Zahl aus
+        # `gpubudget.wache_grenze_rechnung`, also aus genau der Rechnung, die auch
+        # als Job-Feld `fussabdruck_max_mb` drueben ankommt; die Strangzahl aus
+        # derselben Leiter. Faellt die Rechnung aus, bleibt die alte Schaetzung —
+        # eine Diagnose darf den Start nie aufhalten.
+        try:
+            _st = svc.worker_straenge()
+            _n_str = max(1, int(_st.get("n") or 1))
+            _w_lim = max(0, int(_st.get("grenze_mb") or 0))
+            _w_q = str(_st.get("grenze_quelle") or "?")
+        except Exception:                             # noqa: BLE001
+            _n_str, _w_lim, _w_q = _np, _np * _wr, "estimated"
+        _pol = max(_w_lim or _np * _wr, _pr)
+        if _wr:                                   # .528: mit _wr=0 skaliert nichts
+            erg("info", f"{'mem':<5} {_np} analysis slot(s), {_n_str} compute "
+                        f"thread(s) — the worker guard limit is {_w_lim} MB "
+                        f"({_w_q}); that is the same number the worker's own "
+                        f"guard measures against")
         if _gmb > 0 and _gmb < _pol + 1024:
             erg("warn", f"{'mem':<5} memory guard ({_pol} MB) sits at/above the "
                         f"container limit ({_gmb} MB) — the kernel OOM killer "
@@ -23487,6 +28820,23 @@ def startup_selfcheck(svc):
     #    nie Richtigkeit (Feldfall: eine Gen8-iGPU bindet, ist 5,9x schneller als ihre
     #    CPU und rechnet die Feature-Norm um 105,276 daneben).
     schritt(8, "compute", "does each model compute on its device what the CPU computes?")
+    # E3.1: ZUERST den Worker-Prozess hochfahren — hier, im Boot-Exklusivfenster.
+    # Er baut dabei seine Kompilate (ohne Cache gemessen 24-36 s); dieser Posten
+    # gehoert in den Boot und nicht in das erste Ereignis des Tages. Die Rechenprobe
+    # laeuft danach ALS JOB in genau diesem Prozess, statt einen dritten
+    # Modellprozess neben ihm zu oeffnen (vier gleichzeitig offene Modelle druecken
+    # den Erkennungs-Kosinus gemessen von 0,999753 auf 0,857, Probelauf 24.08.).
+    try:
+        if svc.worker_dienst_starten():
+            erg("ok", "worker service up (compute threads warm, compiles built)")
+        elif not cfg.get("worker", True):
+            erg("info", "worker service disabled by config ('worker') — legacy "
+                        "one-process-per-event path")
+        else:
+            erg("warn", "worker service did not come up at boot — it will start "
+                        "with the first job (first event pays the compile cost)")
+    except Exception as e:                            # Diagnose reisst den Start nie
+        erg("warn", f"worker service start skipped: {type(e).__name__}: {str(e)[:80]}")
     try:
         rechenprobe_schritt(svc, cfg, erg)
     except Exception as e:                            # Diagnose reisst den Start nie

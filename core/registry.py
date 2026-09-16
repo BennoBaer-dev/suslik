@@ -163,6 +163,30 @@ APP_DATEIEN = ("verifyd.py", "analyze.py", "anlernen.py", "face_audit.py", "abna
                "auftritte.py", "szenarien.py", "decode.py", "worker.py", "no_person.py",
                "sync_refs.py")
 
+# -------------------------------------------- Kartenspeicher-Fehlertexte (.531)
+# EINE Quelle fuer ZWEI Leser: den Log-Scan des Gates (tools/qs.sh S4, liest sie
+# ueber python3) und die Laufzeit-Erkennung im Worker (worker_dienst.druck_buchen).
+# Ein zweites verstreutes Muster waere genau der Fehler vom 15.09.: das damalige
+# Gate-Muster `OOM|out of memory` fand KEINE der 89 Feldzeilen, weil ORT den
+# Vorfall gar nicht so nennt (Diagnose §7).
+#
+# ERKANNT WIRD AN DER DATEI, nicht am Satz: `bfc_arena.cc` steht in jeder Zeile,
+# die aus der ORT-Arena kommt, und ueberlebt Umformulierungen. Die beiden SAETZE
+# unterscheiden die beiden Lagen und werden GETRENNT gebucht:
+#   „Available memory of … is smaller than requested" -> unser eigener Deckel ist
+#      zu klein (bfc_arena.cc:97-107, Pruefung gegen memory_limit_)
+#   „Failed to allocate memory for requested buffer"  -> die KARTE ist voll
+#      (bfc_arena.cc:358, der Text der 89 Feldzeilen vom 15.09.)
+VRAM_DRUCK_DATEI = "bfc_arena.cc"
+VRAM_DRUCK_TEXTE = {"deckel": "Available memory of",
+                    "karte_voll": "Failed to allocate"}
+# HART = das ist ein Fehler, nicht nur ein Verdacht. Rot im Gate.
+VRAM_MUSTER_HART = ("bfc_arena|CUBLAS|Available memory of|"
+                    "Failed to allocate memory")
+# WEICH = Decoder-Seite. NUR mit Fehlerwort: `h264_cuvid` steht in JEDER normalen
+# Decoder-Kommandozeile, ein Ein-Muster-Scan erzoege zum Wegsehen.
+VRAM_MUSTER_WEICH = "(cuvid|nvdec)[^\\n]*(error|fail)|out of memory"
+
 # ---------------------------------------------------------------- Frame-Quelle (Z7)
 # EINE Stelle baut decode.FrameIter selbst: der Verteiler. Alle anderen bekommen ihre
 # Frames von ihm (konzept_frames.md v2 §3.2/§7) — ein zweiter Direktzugriff waere ein

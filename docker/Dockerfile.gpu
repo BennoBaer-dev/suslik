@@ -55,6 +55,24 @@ RUN pip install --no-cache-dir -r /app/requirements.txt \
     && pip uninstall -y onnxruntime onnxruntime-openvino \
     && pip install --no-cache-dir --no-deps onnxruntime-openvino==1.24.1
 
+# --- E3.5 (14.09.2026): standalone OpenVINO, EXAKT die Version, die onnxruntime-openvino
+#     1.24.1 ohnehin gebuendelt mitbringt (2025.4.1). Anlass ist der E3-Schnitt: der neue
+#     Worker rechnet ueber engine_ov.py, und die Datei importiert `openvino` bzw.
+#     `openvino.opset15` hart (kein Rueckfall). Ohne dieses Paket startet der Worker im
+#     Image gar nicht — gemessen am 0.1.0.526-gpu-Image: `import openvino` ->
+#     ModuleNotFoundError; die Messreihen des GPU-Strangs haengten es deshalb per
+#     `-e PYTHONPATH=/ov2025` von aussen ein, was fuer ein Produkt-Image kein Weg ist
+#     (self-contained-Regel).
+#     WARUM GEPINNT UND WARUM DIESE ZAHL: requirements.gpu.txt verbietet ein UNGEPINNTES
+#     `openvino` aus gutem Grund (pip zog dort 2026.2.1, neuer als die Runtime in
+#     onnxruntime-openvino 1.24.1). Der Pin auf 2025.4.1 loest genau das: er trifft die
+#     gebuendelte Runtime und ist die Version, gegen die ALLE v7/v8/E1-E3-Messungen des
+#     neuen Workers gelaufen sind. Gegenprobe im Image gefahren (14.09.): OV 2025.4.1
+#     importiert, und onnxruntime meldet weiterhin ['OpenVINOExecutionProvider',
+#     'CPUExecutionProvider'] — die EP-Erzwingung darueber bleibt also heil.
+#     Heben = bewusste Entscheidung + neue Abnahme (A15-Regel), nie nebenbei.
+RUN pip install --no-cache-dir openvino==2025.4.1
+
 # --- S3: Intel-NEO-Kernel-Cache ins VOLUME. Muster ist Dockerfile.rocm (MIOPEN_CUSTOM_CACHE_DIR /
 #     AMD_COMGR_CACHE_DIR -> /data/clips/migraphx_cache); clips/ ist vom Backup ausgeschlossen,
 #     weil Kompilate regenerierbar sind.
@@ -80,7 +98,13 @@ ENV NEO_CACHE_DIR=/data/clips/neo_cache \
 COPY NOTICE LICENSE /app/
 COPY models/ /app/models/
 COPY docker/buffalo_l/ /root/.insightface/models/buffalo_l/
-COPY verifyd.py analyze.py anlernen.py face_audit.py abnahme.py auftritte.py szenarien.py decode.py worker.py no_person.py sync_refs.py /app/
+# R1-UMZUG (E3.5, 14.09.2026): die fuenf Neubau-Dateien des Workers liegen seit dem
+#   E3-Schnitt in der Projektwurzel und MUESSEN mit ins Image — verifyd startet
+#   worker_dienst.py aus /app (verifyd.worker_dienst_pfad, ohne Rueckfall).
+#   engine_ov/engine_cuda werden im Dienst LAZY importiert (worker_dienst.engine_bauen),
+#   die jeweils fremde Engine stoert deshalb in keinem Image.
+COPY verifyd.py analyze.py anlernen.py face_audit.py abnahme.py auftritte.py szenarien.py decode.py worker.py no_person.py sync_refs.py \
+     worker_dienst.py worker_kern.py bild_kern.py engine_ov.py engine_cuda.py /app/
 COPY webui/ /app/webui/
 COPY core/ /app/core/
 COPY routes/ /app/routes/

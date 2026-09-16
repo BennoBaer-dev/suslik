@@ -1273,6 +1273,7 @@ a.anw-z:hover{outline:2px solid var(--accent);outline-offset:1px}
 .gpuseg.g{background:#5b8dd6}                      /* Live-Waechter */
 .gpuseg.gh{background:#5b8dd6;opacity:.45}         /* Waechter-Spitze */
 .gpuseg.d{background:#888}                         /* Dienst */
+.gpuseg.b{background:#6b5b7b}                      /* belegt, nicht zuordenbar (.535) */
 .gpuseg.f{background:transparent}                  /* frei */
 .gpuseg.r{background:repeating-linear-gradient(45deg,#a55,#a55 5px,#933 5px,#933 10px)}
 .gpuzeile{font-size:.9em;opacity:.85;margin:2px 0}
@@ -1282,6 +1283,7 @@ a.anw-z:hover{outline:2px solid var(--accent);outline-offset:1px}
     margin-right:4px;vertical-align:baseline}
 .lg.w{background:var(--accent,#4a9)} .lg.g{background:#5b8dd6}
 .lg.gh{background:#5b8dd6;opacity:.45} .lg.f{background:#555}
+.lg.d{background:#888} .lg.b{background:#6b5b7b}
 .lg.r{background:repeating-linear-gradient(45deg,#a55,#a55 4px,#933 4px,#933 8px)}
 
 /* P5-Layout (User 04.09.): das Bedienbare oben und ohne Scrollen erreichbar,

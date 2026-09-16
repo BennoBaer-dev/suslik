@@ -50,7 +50,13 @@ RUN pip install --no-cache-dir --upgrade pip \
 COPY NOTICE LICENSE /app/
 COPY models/ /app/models/
 COPY docker/buffalo_l/ /root/.insightface/models/buffalo_l/
-COPY verifyd.py analyze.py anlernen.py face_audit.py abnahme.py auftritte.py szenarien.py decode.py worker.py no_person.py sync_refs.py /app/
+# R1-UMZUG (E3.5, 14.09.2026): die fuenf Neubau-Dateien des Workers liegen seit dem
+#   E3-Schnitt in der Projektwurzel und MUESSEN mit ins Image — verifyd startet
+#   worker_dienst.py aus /app (verifyd.worker_dienst_pfad, ohne Rueckfall).
+#   engine_ov/engine_cuda werden im Dienst LAZY importiert (worker_dienst.engine_bauen),
+#   die jeweils fremde Engine stoert deshalb in keinem Image.
+COPY verifyd.py analyze.py anlernen.py face_audit.py abnahme.py auftritte.py szenarien.py decode.py worker.py no_person.py sync_refs.py \
+     worker_dienst.py worker_kern.py bild_kern.py engine_ov.py engine_cuda.py /app/
 COPY webui/ /app/webui/
 COPY core/ /app/core/
 COPY routes/ /app/routes/
@@ -62,6 +68,34 @@ COPY modelle/dinov2_vits14_126x252.onnx /app/modelle/
 # .203: Person-ReID-Backbone (Intel OMZ 0277, Apache-2.0 inkl. Modelldatei; Bezug/Checksumme: core/personmodell.py BACKBONES + wiki/erkennung.md)
 COPY modelle/person-reidentification-retail-0265.onnx /app/modelle/
 ENV SUSLIK_DATA_DIR=/data SUSLIK_WERKSTATT=/data/personlern/werkstatt VERIFY_DATA_DIR=/data
+
+# --- E3.5 (14.09.2026): fp16-ARTEFAKTE BEIM BAU ERZEUGEN --------------------------
+# Hausregel „self-contained & reproduzierbar": Modelle werden ins Image gebacken,
+# nichts wird zur Laufzeit nachgeladen. Bis hierher lagen die fp16-Fassungen als
+# Messartefakte AUSSERHALB des Repos und wurden den Prototypen per --det-onnx/
+# --rec-onnx/… von aussen gereicht — als Produkt-Weg untauglich.
+#
+# EXAKTE PINS, beide bewusst (A15-Regel: heben = Entscheidung + neue Abnahme). Es sind
+# die Versionen, mit denen die v3b-/v6-/v8-Artefakte entstanden sind, gegen die der
+# CUDA-Prototyp gemessen wurde (Belege .suslik_tmp/gt5/runs/v6_20260912/
+# modelle_fp16_berichte/*.json, Feld "werkzeug": onnxconverter_common 1.16.0,
+# onnx 1.22.0, numpy 2.5.1). onnx 1.22.0 ist ohnehin die Laufzeit-Version des Images
+# (insightface-Abhaengigkeit) — der Pin haelt sie fest, statt sie dem Zufall des
+# Bau-Tages zu ueberlassen. onnxconverter-common wird nach dem Backen wieder
+# entfernt: es ist ein BAU-Werkzeug, kein Laufzeit-Paket.
+#
+# WAS DAS WERKZEUG MACHT und warum 1k3d68 max_finite_val=65504 bekommt sowie RTMPose
+# die Clip-Sperre: Kopf von tools/fp16_backen.py (beides gemessen, nicht gewaehlt).
+# Das Manifest (models/fp16/manifest.json) traegt md5 + Groesse je Datei; engine_cuda
+# liest daraus seine Vorgaben und prueft die md5 der AUSGELIEFERTEN Datei vor dem
+# Laden (engine_cuda.fp16_bestand), die Rechenprobe meldet den Befund.
+COPY tools/fp16_backen.py /app/tools/fp16_backen.py
+RUN pip install --no-cache-dir "onnx==1.22.0" "onnxconverter-common==1.16.0" \
+    && python3 /app/tools/fp16_backen.py /app/models/fp16 \
+    && pip uninstall -y onnxconverter-common \
+    && find /app -type d -name __pycache__ -exec rm -rf {} + \
+    && rm -rf /root/.cache/pip
+
 COPY VERSION /app/VERSION
 COPY docker/verifyd.container.cuda.yaml /app/verifyd.yaml
 

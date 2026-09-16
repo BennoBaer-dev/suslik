@@ -7,6 +7,112 @@ this file — the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git
 history.
 
+## 0.1.0.537 (2026-09-16)
+
+Functionally identical to 0.1.0.536 — no code of the service changed. What
+changed is the What's-new box: it is consolidated into a single entry that
+carries the test-release marker, the rebuilt analysis worker and the new
+learning run, instead of leaving those two points spread over the 0.1.0.526 and
+0.1.0.527 entries. Published as the `cuda` and `gpu` variants only; `cpu`,
+`gpu-legacy` and `rocm` are checked separately and follow.
+
+## 0.1.0.536 (unreleased)
+
+Internal step. **The front door is fair now; the worker itself is untouched.**
+Everything below is about who gets to compute when — the analysis slots, the
+background work, and the one setting that governs both. Recognition, the pixel
+path and the Frigate access are unchanged. There is no What's-new box entry for
+this step.
+
+- **An analysis slot is a compute thread, by construction.** Only event analysis
+  takes one. Everything else — harvest, your click, collection, the wall-clock
+  roundtrip, the start and compute probes, and the live body judgment — holds a
+  separate **background account** with capacity 1, which is exactly the one
+  background thread the worker computes them on. Until now a single collection
+  run could hold an analysis slot for eight minutes without computing on it, and
+  on a four-slot machine one slot belonged to background work by rule: in 89 of
+  120 sampled minutes only three of four analyses were running. The switch
+  `bg_platz_getrennt = 0` still restores the previous behaviour in full.
+- **Background work no longer waits for an idle service.** It used to be let
+  through only when nobody else wanted a slot, and under a backlog that moment
+  never comes: on one installation the scenario collection was postponed 46
+  times between 08:02 and 15:55 (`collection: no free analysis slot within
+  600s — postponed`). With its own account there is nothing left to hold back.
+  The wording of that log line is unchanged on purpose — it is the yardstick,
+  and on this version its count is 0.
+- **The order on the background account**: your click first, because a person is
+  waiting; then the live body judgment; then harvest and collection take turns,
+  job by job, with one pointer that skips a side with nothing to do. Nothing
+  running is ever displaced — a click gets the next account that frees up. Every
+  assignment writes one log line (class, reason, who is waiting, where the
+  pointer moved) and `/health.analyse_plaetze.bg` shows the same numbers per
+  class.
+- **Collection runs in chunks instead of one long job.** One collection used to
+  be a single job over all open events with a 600 s (scenario) or 1800 s
+  (nightly safety net) deadline — and a job that misses its deadline costs the
+  whole worker process, taking the other threads' jobs down with it. Measured on
+  a CPU installation: 368 of 369 scenario collections failed that way within ten
+  days; on a GPU installation six collection jobs were shot in one day, each
+  taking two to five unrelated jobs with it. A collection is now a chain of small
+  jobs, cut by **predicted compute time** (clip seconds × a factor the
+  installation measures for its own backend) rather than by a piece count, with
+  the cold start-up cost budgeted into the first chunk only. The reference matrix
+  stays warm across the chain instead of being rebuilt for every job — that
+  rebuild alone was 100 s per run. A chunk only starts if its deadline still fits
+  into the caller's; `/health.sammeln` says whether the factor is still a start
+  value or measured.
+- **ffmpeg no longer eats the job line.** The worker read its jobs from standard
+  input, and every ffmpeg it started inherited that pipe and polled it for
+  keystrokes — so a job line arriving while a decoder ran could lose its first
+  bytes. The worker then answered without a job ID, the waiting job hung until
+  its deadline, and the watchdog shot the whole process. Two of four worker
+  deaths in one night on a field installation were this, and the effect is
+  reproducible in the shipped image (200 job lines, 7890 of 7892 bytes arrive).
+  Three layers now: every child process of the worker starts with its standard
+  input on `/dev/null` and every ffmpeg call carries `-nostdin`; the job pipe
+  itself moved off file descriptor 0 onto its own descriptor (with a fallback to
+  the old way, so an older caller still works); and an answer without a job ID
+  now cancels the youngest waiting job immediately instead of letting it run into
+  its deadline — counted in `/health` as `id_lose_antworten` and
+  `spaete_antworten`, and the harvest side re-queues such an event instead of
+  booking it as a failure.
+- **A vanishing temporary file no longer costs the whole cleanup pass.** In the
+  clip cache, a `.part` file that disappeared between listing and reading its
+  age aborted the run — and with it the size cap, the live cleanup and the
+  low-disk check. One installation hit this about every two minutes under load
+  (160 occurrences). The age question now answers "leave it" for a file that is
+  already gone, and the pass continues.
+- **One setting instead of two: "Analysis slots" is now "Compute threads".**
+  Slots follow the threads, so there is one number to set, in five languages and
+  on the GPU page. An `analysis slots` value stored from the old slider is
+  cleared once during the update, with an audit line naming the old value —
+  otherwise the factory value of 1 would keep most installations at a single
+  concurrent analysis for good. A hand-written `analyse_plaetze` entry still
+  works as an expert override, but only downwards, and it says so out loud when
+  it is set above the thread count. The **hunger brake** (`hunger_bremse_s`)
+  and the **N−1 bar** for harvest are gone with the same migration; background
+  work has its own slot now and no longer has to be throttled to get out of the
+  event stream's way.
+- **The learning run harvests with one collector.** It used to use as many
+  collectors as there were slots, which looked parallel at the front door while
+  the worker computed them one after another on its single background thread —
+  and made the remaining-time estimate exactly that much too optimistic. With the
+  rollback switch set, the old count returns.
+- **A new watch (I13) on the worker's open jobs.** If more jobs are in flight
+  than threads plus a tolerance, the service says so with the numbers instead of
+  finding out at the next deadline; the line is throttled, the counter is not,
+  and both are in `/health`.
+
+**Known and open, named rather than hidden.** The one-per-run norm round can
+still hold the background account for up to 3600 s; the "not its own fault"
+re-queue covers collection chunks and the learning-run harvest, not yet the
+stock search and the reference check; the "no snippet twice" guard still covers
+only the event path; in legacy mode (`worker: false`) the thread setting
+describes something that mode does not have, and the slider says so in one line;
+the enrolment re-check still computes outside the assignment as its own
+subprocess; and the chunk size is adaptive rather than measured on every
+backend.
+
 ## 0.1.0.526 (2026-09-10)
 
 Bundles the internal steps 0.1.0.512 – 0.1.0.525. Everything below ships for all

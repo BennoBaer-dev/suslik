@@ -23,7 +23,13 @@ COPY models/ /app/models/
 COPY docker/buffalo_l/ /root/.insightface/models/buffalo_l/
 
 # --- Code + Container-Config ---
-COPY verifyd.py analyze.py anlernen.py face_audit.py abnahme.py auftritte.py szenarien.py decode.py worker.py no_person.py sync_refs.py /app/
+# R1-UMZUG (E3.5, 14.09.2026): die fuenf Neubau-Dateien des Workers liegen seit dem
+#   E3-Schnitt in der Projektwurzel und MUESSEN mit ins Image — verifyd startet
+#   worker_dienst.py aus /app (verifyd.worker_dienst_pfad, ohne Rueckfall).
+#   engine_ov/engine_cuda werden im Dienst LAZY importiert (worker_dienst.engine_bauen),
+#   die jeweils fremde Engine stoert deshalb in keinem Image.
+COPY verifyd.py analyze.py anlernen.py face_audit.py abnahme.py auftritte.py szenarien.py decode.py worker.py no_person.py sync_refs.py \
+     worker_dienst.py worker_kern.py bild_kern.py engine_ov.py engine_cuda.py /app/
 COPY webui/ /app/webui/
 COPY core/ /app/core/
 COPY routes/ /app/routes/

@@ -693,9 +693,16 @@ def _job_ausfuehren(job, antwort_out=None):
                 zusatz = _koerper_zusatz(job.get("argv") or [])
             elif typ == "sammle":
                 import anlernen
+                # .536 B3: `nur_eids`/`zeit_deckel_s` reisen auch hier mit. Dieser
+                # Weg ist seit E3.1 verwaist (der Dienst fuehrt den Worker selbst,
+                # verifyd.py:2782 ff.) — aber ein Haeppchen-Job, der die Beschraenkung
+                # still verloere, wuerde den GANZEN Bestand sammeln statt seiner
+                # paar Ereignisse. Der Rueckgabewert bleibt hier unbenutzt.
                 anlernen.sammle(float(job.get("tage", 0.1)),
                                 mit_migriere=bool(job.get("mit_migriere", False)),
-                                kalib_deckel=job.get("kalib_deckel"))
+                                kalib_deckel=job.get("kalib_deckel"),
+                                nur_eids=job.get("nur_eids"),
+                                zeit_deckel_s=job.get("zeit_deckel_s"))
             elif typ == "vorschlaege":
                 # .510/J18 (b): die BESTANDS-SUCHE einer Person laeuft seit .510
                 # HIER statt als eigener Subprozess. Der Grund sind die

@@ -240,10 +240,29 @@ CLIP_TOR_DECKEL_S = (float(os.environ["SUSLIK_CLIP_TOR_DECKEL_S"])
                      if os.environ.get("SUSLIK_CLIP_TOR_DECKEL_S") else None)
 
 
+# E2 (13.09.2026, Konzept analysen/worker_neubau.md §2 „core.frames-Armierung je
+# Job statt Modulglobals", W2-B2): der neue Worker rechnet MEHRERE Jobs
+# gleichzeitig in Threads EINES Prozesses. Ein prozessweites CLIP_DBG ist dort
+# keine Armierung mehr, sondern ein Wettrennen — Job A wuerde Job B die Senke
+# unter den Fuessen wegziehen. Die VERHALTENS-Schalter nimmt clip_holen laengst
+# als Argumente (quelle, alter_min, erzeugung, erzeugung_deckel_s, tor_n,
+# tor_deckel_s); allein die Debug-SENKE war nur prozessweit setzbar.
+# Sie bekommt deshalb eine THREAD-lokale Ueberlagerung: `dbg=` an clip_holen gilt
+# fuer die Dauer DIESES Aufrufs und nur in DIESEM Thread; alle [clipdbg]-Zeilen,
+# die unterwegs anfallen (auch aus tor_nehmen/_vod_holen), landen dadurch im Log
+# DIESES Jobs. Ohne `dbg=` aendert sich nichts: worker.py, der Legacy-Subprozess
+# und die ENV-Wege armieren weiter das Modul-Global.
+_TL = threading.local()
+
+
 def clip_dbg(msg):
-    """[clipdbg]-Zeile an die Prozess-Senke — das EINE Praefix an der EINEN
-    Stelle. Eine kaputte Senke darf nie die Clip-Beschaffung reissen."""
-    s = CLIP_DBG
+    """[clipdbg]-Zeile an die Senke — das EINE Praefix an der EINEN Stelle.
+    Rangfolge: die thread-lokale Senke DIESES Aufrufs (clip_holen(dbg=...),
+    E2-Block oben), sonst die Prozess-Senke CLIP_DBG. Eine kaputte Senke darf
+    nie die Clip-Beschaffung reissen."""
+    s = getattr(_TL, "dbg", None)
+    if s is None:
+        s = CLIP_DBG
     if s is None:
         return
     try:
@@ -436,9 +455,14 @@ def _vod_holen(eid, teil, basis, deckel_s):
         # Cookie kommen deshalb als ffmpeg-Argumente aus derselben Quelle
         # (frigate_auth.ffmpeg_kopf, dort begruendet), nie als zweiter
         # Login-Weg.
+        # .536 B1a: `-nostdin` + stdin=DEVNULL. Der VOD-Remux laeuft IM WORKER
+        # (Clip-Abruf im Rechenstrang, worker_dienst.py:2937-2950); ohne die
+        # beiden Riegel erbt ffmpeg dessen fd 0 und pollt ihn — bis .535 war das
+        # die Job-Pipe (Byte-Beweis im Kopf von worker_kern.nv12_strom).
         lauf = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-y"] + _fauth.ffmpeg_kopf(url)
+            ["ffmpeg", "-nostdin", "-hide_banner", "-y"] + _fauth.ffmpeg_kopf(url)
             + ["-i", url, "-c", "copy", "-f", "mp4", teil],
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             timeout=deckel_s)
     except subprocess.TimeoutExpired:
@@ -726,7 +750,7 @@ def tor_zustand(n, data_dir=None):
 def clip_holen(eid, data_dir=None, frigate_url=None, timeout=30,
                quelle=None, alter_min=None,
                erzeugung=None, erzeugung_deckel_s=None, warte=None,
-               tor_n=None, tor_deckel_s=None):
+               tor_n=None, tor_deckel_s=None, dbg=None, vod=None):
     """Clip beschaffen: Cache-Treffer ODER atomarer Download (.part wie
     analyze.py — ein abgerissener Download darf nie als halbes Video
     durchgehen). Der PIN dieses Halters wird IM SELBEN ZUG gesetzt
@@ -760,7 +784,26 @@ def clip_holen(eid, data_dir=None, frigate_url=None, timeout=30,
     gehalten: ein Cache-Treffer und eine eingespeiste Vorlage warten nie.
     tor_deckel_s (.509 Review-MUSS): wie lange am Tor hoechstens gewartet
     wird — danach `ClipErzeugungAbbruch('clip_tor_deckel')`, das Ereignis
-    bleibt ungebucht. None nimmt den Prozess-/Job-Default CLIP_TOR_DECKEL_S."""
+    bleibt ungebucht. None nimmt den Prozess-/Job-Default CLIP_TOR_DECKEL_S.
+    dbg (E2, 13.09.2026): die [clipdbg]-Senke NUR fuer diesen Aufruf und nur in
+    diesem Thread (Block `_TL` oben). Der Mehr-Job-Worker armiert damit je Job
+    statt ueber das Modul-Global; None = unveraendert CLIP_DBG.
+    vod (E3.3, 14.09.2026 — die letzte Armierung, die nur prozessweit ging):
+    True/False schaltet den VOD-Weg NUR fuer diesen Aufruf; None nimmt
+    unveraendert das Modul-Global CLIP_VOD. Damit ist der Schalter im
+    Mehr-Job-Worker je JOB armierbar (W2-B2) statt ueber ein Modulglobal, das
+    sich zwei gleichzeitige Jobs gegenseitig unter den Fuessen wegziehen —
+    genau dieselbe Klasse wie beim `dbg=` der E2-Etappe. `worker.py`, der
+    Legacy-Subprozess und die ENV-Wege armieren weiter das Global."""
+    if dbg is not None:
+        _dbg_vorher = getattr(_TL, "dbg", None)
+        _TL.dbg = dbg
+        try:
+            return clip_holen(eid, data_dir, frigate_url, timeout, quelle,
+                              alter_min, erzeugung, erzeugung_deckel_s, warte,
+                              tor_n, tor_deckel_s, None, vod)
+        finally:
+            _TL.dbg = _dbg_vorher
     if erzeugung is None:
         erzeugung = CLIP_ERZEUGUNG
     if erzeugung_deckel_s is None:
@@ -769,6 +812,9 @@ def clip_holen(eid, data_dir=None, frigate_url=None, timeout=30,
         tor_n = CLIP_TOR_N
     if tor_deckel_s is None:
         tor_deckel_s = CLIP_TOR_DECKEL_S
+    if vod is None:
+        vod = CLIP_VOD
+    vod = bool(vod)
     erzeugung = bool(erzeugung)
     pfad = cache_pfad(eid, data_dir)
     pin(eid, data_dir)
@@ -832,7 +878,9 @@ def clip_holen(eid, data_dir=None, frigate_url=None, timeout=30,
             # clip.mp4-Weg darunter zurueck. Deckel: im Erzeugungs-Fall der
             # Config-Deckel, sonst das normale Socket-Fenster (VOD liefert
             # frisch in <1 s, gemessen).
-            if CLIP_VOD and _vod_holen(
+            # E3.3: `vod` ist der je-Aufruf armierte Schalter (Vorgabe = CLIP_VOD,
+            # s. Kopf). Ein zweiter Griff auf das Modul-Global gaebe es hier nicht.
+            if vod and _vod_holen(
                     eid, teil, basis,
                     warte.deckel_s if (erzeugung and warte is not None)
                     else float(timeout)):
