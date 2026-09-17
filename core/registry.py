@@ -54,6 +54,9 @@ OV_DEVS = ("GPU", "NPU", "MIXED", "AUTO")
 # knoten = Pflicht-Geraeteknoten-Muster (None = keine Vorbedingung pruefbar).
 # MIXED ist UNSER Untermodus (detector=GPU, recognition=NPU), kein OpenVINO-Device —
 # er erreicht die Knoten-Vorpruefung nie als Einzel-Device (face_audit verteilt).
+# ep_optionen = zusaetzliche Provider-Optionen, die zu DIESEM Geraet gehoeren und die
+#   jeder Session-Bau mitgeben MUSS (face_audit._ort_session merged sie). Fehlt der
+#   Schluessel, gibt es keine.
 DEVICES = {
     "cpu": (),
     "openvino": (
@@ -63,6 +66,28 @@ DEVICES = {
          "default": False, "beleg": {"knoten": "eigene Anlage 2026-07-22"}},
         {"name": "MIXED", "knoten": None, "benchmark_label": None,
          "default": False, "beleg": {}},
+        # OpenVINO AUF DER CPU (.541, E4, 17.09.2026). Kein Beschleuniger, sondern ein
+        # zweiter Rechen-Stack auf derselben CPU — und der gemessen schnellere: der
+        # Feldtester-Vergleich vom 10.09.2026 (Discussion #29, dieselbe Maschine, alle
+        # Modelle des Urteilspfads) mass ihn durchgehend 3-7x schneller als das nackte
+        # onnxruntime (adaface 48,7 statt 192,2 ms je Inferenz). `engine_cpu` faehrt die
+        # Stufen des Workers seitdem hier.
+        # KEIN default: ein Config-Wert `openvino:CPU` waere ein zweiter Name fuer
+        # `cpu` und wuerde die Backend-Wahl doppeldeutig machen — die Wizard-Werte
+        # kommen aus BACKENDS, nicht von hier, und bleiben unveraendert. Dieser
+        # Eintrag existiert, damit der Startup-BENCHMARK den Weg misst, den die Anlage
+        # wirklich faehrt (sonst zeigte er die Zahl des nackten CPU-EP und die Anlage
+        # rechnete mit einer anderen — K1).
+        # WARUM DIE PRAEZISION HIER STEHT UND NICHT IN engine_cpu: der OpenVINO-CPU-
+        # Plugin waehlt seine Rechen-Genauigkeit sonst selbst und nimmt auf CPUs mit
+        # AVX512-BF16/AMX bf16. Die Latten dieses Hauses sind an fp32 geeicht (dieselbe
+        # Klasse Fehler wie fp16 auf der iGPU: Abweichung bis 0,149 gegen 0,0000095 mit
+        # FP32, face_audit.NORM_PSEUDO_GERAETE, 24.08.2026). Engine UND Benchmark muessen
+        # dieselbe Genauigkeit fahren, sonst misst der Benchmark etwas anderes als die
+        # Anlage rechnet — also EINE Quelle, und die ist hier. `engine_cpu` liest sie.
+        {"name": "CPU", "knoten": None, "benchmark_label": "CPU  (OpenVINO)",
+         "default": False, "ep_optionen": {"precision": "FP32"},
+         "beleg": {"ep_optionen": "eigene Anlage 2026-09-17 (fp32-Eichung des Hauses)"}},
     ),
     "cuda": (
         {"name": "0", "knoten": "/dev/nvidia*", "benchmark_label": "CUDA (Nvidia)",
@@ -214,6 +239,15 @@ FRAMEITER_AUSNAHMEN = {
         "Knecht-Container-Umgebung bit-vergleichbar bleiben, Parallel-Validierung "
         "20.08.: 0 Abweichungen). Laeuft nie automatisch, liegt nicht im Image "
         "(prototyp/ wird nur fuer personlern gestaged, norm_vorrat gehoert nicht dazu).",
+    "tools/proben/e3_17_sample_deckel.py":
+        "GATE-PROBE des K-Deckels (.540), KEIN Urteilspfad und nicht im Image: sie "
+        "MUSS direkt an `decode.FrameIter`, weil genau er der Prueflingsteil ist — "
+        "die Probe zeigt an einem selbst erzeugten 5-kB-Testclip, dass der Deckel "
+        "die Schrittweite vergroessert statt frueh zu stoppen (konstante Abstaende, "
+        "beide Clip-Haelften gleich dicht, letzter Sample weniger als eine "
+        "Schrittweite vor dem Ende). Ueber den Verteiler gefuehrt bewiese sie den "
+        "Vertrag des Verteilers, nicht die Kappung; und der Verteiler traegt den "
+        "Deckel bewusst NICHT (deklarierte Naht, s. verifyd._ANALYZE_SCHALTER).",
     "prototyp/frame_vergleich.py":
         "Prototyp (E-P1b Frame-Vergleich, 03.08.), KEIN Urteilspfad: der Direktzugriff "
         "sitzt in event_verarbeiten(), und das ruft nur main() dieses Werkzeugs. Der "
@@ -289,6 +323,78 @@ def default_device(kind):
         if d.get("default"):
             return d["name"]
     return None
+
+
+# ---------------------------------------------------------------- Werks-Deckel je Variante
+# K-DECKEL-WERKSWERTE JE IMAGE-VARIANTE (.541, Entscheid des Inhabers 17.09.2026).
+# DECKUNGS-VERTRAG wie bei STUETZWERTE: je Variante genau ein Eintrag, kein Loch.
+#
+# WOZU UEBERHAUPT VERSCHIEDENE WERTE. `sample_deckel` kappt, wie viele Sample-Frames
+# EIN Ereignis anschauen darf (Formel und Messbasis: decode.sample_schritt). Der
+# Werkswert 240 aus .540 ist am P95 zweier echter Bestaende geeicht (201 / 211) und
+# beschneidet dort 3,8 / 3,9 % der Ereignisse. Er ist damit auf Anlagen geeicht, die
+# ihre Warteschlange abarbeiten. Wo das NICHT gilt, ist die Abwaegung eine andere:
+#
+#   cpu = 120. Auf der CPU ist RUECKSTAU schaedlicher als duenneres Abtasten. Der
+#     Feldbefund aus Discussion #30 zeigt den Zusammenhang: die Quote der
+#     Mehr-Namen-Faelle steigt mit der Tiefe der Warteschlange — eine Anlage, die
+#     nicht hinterherkommt, urteilt schlechter, nicht nur spaeter. 120 liegt im
+#     P90-Bereich beider gemessener Bestaende; die Risiko-Naeherung des Schnitts
+#     betraegt 0,07 %.
+#   gpu-legacy = 180. Dieselbe Richtung, abgeschwaecht. Legacy-iGPUs rechnen
+#     gemessen rund 2,5x langsamer (66,5 ms fp32 auf einer UHD 630 gegen 26 ms auf
+#     einer modernen iGPU), sie fahren seit .540 den fp32-Zwang ohne fp16-Ausweg,
+#     und sie teilen sich typischerweise die Karte mit Frigate.
+#   gpu / cuda / rocm = 240. Unveraendert der gemessene P95-Wert aus .540.
+#
+# NUR WERKSWERT, NIE UEBERSTEUERUNG: ein vom Betreiber gesetzter Wert gewinnt immer
+# und fuer immer, auch wenn er zufaellig 240 oder 0 ist. Die Aufloesung passiert an
+# der EINEN Stelle, an der der Schema-Default gezogen wird (verifyd.load_config);
+# yaml und Config-Store liegen darueber.
+SAMPLE_DECKEL_WERK = {
+    "cpu": 120,
+    "gpu-legacy": 180,
+    "gpu": 240,
+    "cuda": 240,
+    "rocm": 240,
+}
+# Wenn keine Variante bekannt ist (nackter Lauf aus dem Arbeitsbaum, fremder
+# Starter, Probe): der Wert von .540. Die vorsichtige Richtung ist hier der GROESSERE
+# Deckel — wer seine Variante nicht nennt, bekommt nicht ungefragt duenner abgetastet.
+SAMPLE_DECKEL_OHNE_VARIANTE = 240
+
+
+def sample_deckel_werk(variante):
+    """Werks-Deckel dieser Image-Variante -> (wert, herkunft)
+
+    `variante` ist der Wert von `SUSLIK_VARIANT` (jedes Dockerfile setzt ihn; er ist
+    das einzige Merkmal, das `gpu-legacy` von `gpu` unterscheidet — beide fahren das
+    openvino-Backend, das Backend allein kann die Frage also nicht beantworten).
+    Leer oder unbekannt -> der Wert von .540 mit ehrlicher Herkunft.
+
+    Die HERKUNFT wandert bis ins Startlog und nach /health: ein Betreiber, der 120
+    statt 240 sieht, muss erfahren koennen, dass das die Variante war und nicht ein
+    Wert, den er selbst vergessen hat."""
+    v = str(variante or "").strip().lower()
+    if v in SAMPLE_DECKEL_WERK:
+        return SAMPLE_DECKEL_WERK[v], f"variant default ({v})"
+    return SAMPLE_DECKEL_OHNE_VARIANTE, ("factory default (no image variant named)"
+                                         if not v else
+                                         f"factory default (unknown variant {v!r})")
+
+
+def ep_optionen(kind, dev):
+    """Zusaetzliche Provider-Optionen DIESES Geraets -> dict (leer, wenn keine).
+
+    Sie gehoeren zum Geraet, nicht zum Aufrufer: wer eine Session auf `openvino:CPU`
+    baut, muss dieselbe Genauigkeit fahren wie die Engine, sonst misst er etwas
+    anderes als die Anlage rechnet (s. Kommentar am Eintrag). Basislookup ueber
+    split('.') wie `knoten_von` (GPU.1 -> GPU)."""
+    b = str(dev).split(".")[0] if dev is not None else dev
+    for d in DEVICES.get(kind, ()):
+        if d["name"] == b:
+            return dict(d.get("ep_optionen") or {})
+    return {}
 
 
 def knoten_von(basis):

@@ -7,6 +7,137 @@ this file — the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git
 history.
 
+## 0.1.0.541 (unreleased)
+
+Internal step for the `cpu` image. The What's-new box is not filled for this
+version yet (content is the owner's decision).
+
+- **The CPU image analyses again, and it does it on a faster engine.** The
+  rebuilt analysis core that shipped with 0.1.0.527 had no compute path for
+  `backend: cpu`; on the CPU image the worker stopped at startup with an error
+  and no event was ever analysed. It now has one. The path itself is not new
+  code: it is the CPU path the AMD engine already falls back to, which
+  reproduces this machine's reference result frame for frame.
+- **The CPU image now computes on the OpenVINO CPU runtime instead of plain
+  onnxruntime.** A field comparison on 10 September — same machine, same model
+  files, every model of the recognition path — measured the OpenVINO CPU
+  provider 3 to 7 times faster, with the recognition model at 48.7 ms per
+  inference instead of 192.2 ms. No graphics drivers were added: the image stays
+  driver-free and runs anywhere an x86-64 CPU does. Precision is pinned to fp32,
+  the same precision the thresholds of this program are calibrated on.
+- **The startup log now says which of the two CPU stacks is computing**, and the
+  startup benchmark measures both, so the numbers you see are the numbers your
+  installation actually gets.
+- **If an accelerator image ends up computing on the CPU, it says so in every
+  record, not just at startup.** Before this version that situation stopped the
+  analysis entirely with an error message. It now analyses — correctly, but much
+  slower — and reports the state, so the installation keeps working while you
+  find out why the device did not bind.
+- **A fresh installation now starts with face recognition only.** The body and
+  vision paths are off on the first start, whatever the machine measures; you
+  switch them on in Settings when you want them. Until now a machine that
+  measured strong started with both paths running, which meant a new
+  installation spent compute and produced messages before a single face had been
+  taught. Existing installations and any value you ever set are untouched.
+- **The factory value of the per-event analysis budget now depends on your
+  image**: 120 frames on the CPU image, 180 on `gpu-legacy`, 240 everywhere else.
+  On a machine that cannot keep up, a growing queue costs more than slightly
+  thinner sampling does — an analysis that never catches up judges worse, not
+  just later. The 120 sits in the 90th-percentile range of both measured
+  installations; the older integrated graphics the `gpu-legacy` image serves
+  measured about 2.5 times slower than current ones and gets the middle value.
+  **Anything you set yourself wins from then on, including 240 and 0** — this
+  only changes the value for installations that never touched the setting. The
+  startup log and `/health` now say which value is in force and where it came
+  from.
+
+## 0.1.0.540 (unreleased)
+
+The What's-new box carries three entries under this one version (content given by
+the owner): the test-release marker, the rebuilt recognition core, and the new
+per-event analysis budget.
+
+- **A single event can no longer eat an unlimited amount of compute.** Until now
+  the analysis sampled every event at a fixed rate, so the work grew with the
+  length of the event and nothing stopped it. Measured across two real
+  installations (9659 events here, 50068 at a field tester's site): the most
+  expensive ONE PERCENT of events carried 12 to 16 percent of all analysis work,
+  the most expensive tenth carried 43 percent, and the single worst case needed
+  4464 sampled frames and 22 minutes of compute. New setting **`sample_deckel`**
+  (Configuration page, factory value 240, 0 switches it off) caps how many frames
+  one event analysis may look at. It does **not** stop early: the cap widens the
+  spacing instead, so the last minute of a long visit is sampled exactly as
+  densely as the first — only the spacing changes. The factory value sits above
+  the 95th percentile of both installations, trims under 4 percent of events and
+  saves 12 to 17 percent of the sampling work. Each event where the cap took
+  effect gets one line in the log, and the numbers are written into the record so
+  the setting can later be calibrated from your own data.
+- **The record now says how many frames an analysis really looked at.** `samples`
+  (and, where known, `samples_moeglich`) sit next to the existing frame counts.
+  That number existed only in the per-event text log before; the fields it sat
+  beside mean the length of the clip, not the sampling.
+- **The `gpu-legacy` image now computes in FP32 throughout.** It serves Intel
+  integrated graphics of generations 8, 9 and 11 (UHD 6xx), and a field tester on
+  a UHD 630 measured that the half-precision the driver picks by default makes
+  the recognition model's values unusable there. The other images are untouched;
+  they keep the behaviour that was measured on their hardware.
+- **If the graphics driver does not bind, the message now says what the runtime
+  actually sees** instead of only "no GPU, no fallback" — including which image
+  serves which generation of Intel graphics.
+
+## 0.1.0.539 (unreleased)
+
+Internal step. No What's-new box entry.
+
+- **An analysis that was computing when the worker had to be shot now costs an
+  attempt.** When a job misses its deadline, the service kills the whole worker
+  process, because a hung compute thread cannot be shot on its own. Until now
+  every open job of that shot was booked as "not their own fault" — including
+  the ones that were on a compute thread and may have caused the hang. "Not
+  their own fault" means "costs no attempt", so the same event came back, was
+  computed again, and killed the next worker process as well (measured in the
+  field on 17.09.: three shots within 31 minutes). Jobs that were on a compute
+  thread are now counted against the existing hang counter and are skipped with
+  an honest record line after three of them; jobs that were only queued stay
+  blameless as before.
+
+## 0.1.0.538 (unreleased)
+
+Internal step. **The AMD/ROCm image gets a working analysis worker.** Until now
+the `rocm` image shipped `backend: migraphx` as its factory default while the
+rebuilt worker only knew Intel and NVIDIA — it refused to start at all. There is
+no What's-new box entry for this step.
+
+- **New engine `engine_migraphx.py`.** Detection, face structure, both quality
+  models, pose and recognition run on the GPU through the MIGraphX execution
+  provider; the crops and the sharpness measure stay on the CPU with OpenCV.
+  That split is not a preference: the ONNX Runtime MIGraphX provider does not
+  list `GridSample` in any released version, so the crop graphs the Intel and
+  NVIDIA engines use cannot reach the card at all. The upside is that the crop
+  bytes are the ones every reference in this program was measured against.
+- **Every stage says out loud where it landed** — bound on the card, partly on
+  the CPU, or fully on the CPU, with the reason. A missing card or a missing
+  `/dev/kfd` no longer stops the worker: it computes correct results on the CPU
+  and reports that state in `/health` and in every job answer, instead of
+  failing to start.
+- **GPU memory is reported, once at start and after every event** (VRAM and GTT,
+  read from the kernel). The MIGraphX provider has no memory cap that can be
+  enforced, so the worker plans conservatively for one compute thread; set
+  `worker_straenge` if you measured that your card carries more.
+- **Compiled models are cached** under `/data/model_cache`, so a restart does not
+  recompile every stage.
+- **`--benchmark` gained a decode byte probe.** After the per-backend timings it
+  now decodes the same clip once with hardware acceleration and once in software
+  and compares the raw bytes. On Intel these are known to be bit-identical
+  (measured 2026-08-04) — on AMD and on unfamiliar drivers nobody has checked,
+  and the whole pixel path rests on it. It runs only when you ask for it:
+  `docker exec <container> python verifyd.py --benchmark`.
+- **`--benchmark` no longer loses its last lines.** The log tee and the message
+  filter each read from a pipe in a background thread that dies with the
+  process, so anything printed shortly before a short command exits could be
+  dropped. The running service never noticed; `--benchmark` lost whole sections.
+  It now drains both before it returns.
+
 ## 0.1.0.537 (2026-09-16)
 
 Functionally identical to 0.1.0.536 — no code of the service changed. What

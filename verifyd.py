@@ -1240,7 +1240,25 @@ def load_config(path):
     raw = re.sub(r"\$\{(\w+)\}", lambda m: os.environ.get(m.group(1), ""), raw)
     cfg = yaml.safe_load(raw)
     cfg.setdefault("frigate_url", os.environ.get("FRIGATE_URL", ""))
+    # .541: DER K-DECKEL HAT SEINEN WERKSWERT JE IMAGE-VARIANTE (cpu 120,
+    # gpu-legacy 180, sonst 240). Die Tabelle und ihre Begruendung stehen EINMAL in
+    # `core.registry.SAMPLE_DECKEL_WERK`; hier wird sie nur gezogen — und zwar
+    # GENAU HIER, wo der Schema-Default entsteht, damit darueber unveraendert erst
+    # die yaml und dann der Config-Store liegen. Ein gesetzter Wert gewinnt damit
+    # immer und fuer immer, auch wenn er zufaellig der Werkswert ist.
+    # `SUSLIK_VARIANT` ist das einzige Merkmal, das `gpu-legacy` von `gpu` trennt —
+    # beide fahren das openvino-Backend.
+    from core.registry import sample_deckel_werk as _sdw    # noqa: PLC0415
+    _sd_wert, _sd_herkunft = _sdw(os.environ.get("SUSLIK_VARIANT"))
+    _sd_aus_yaml = "sample_deckel" in cfg
     for key, default in [("poll_interval", 20), ("clip_delay", 15), ("fps_sample", 3),
+                         # .540 K-DECKEL. GEMESSEN, nicht geraten: 240 liegt ueber
+                         # dem P95 beider Bestaende (Prod 9659 Ereignisse gemessen:
+                         # P95 201 · Feld 50068 abgeleitet: P95 211). Herleitung,
+                         # Formel und ehrliche Grenzen stehen EINMAL in
+                         # decode.sample_schritt; welche Variante welchen Werkswert
+                         # bekommt, steht in core.registry.SAMPLE_DECKEL_WERK.
+                         ("sample_deckel", _sd_wert),
                          # P4 (0.1.0.42, E4 "auto+klebrig"): Default AUTO = einmaliger Mini-Benchmark
                          # waehlt das Placement (NPU fuer Recognition, wenn sie die P4.0-Kriterien
                          # erfuellt) und wird in state/placement.json festgehalten. Explizite Werte
@@ -1866,6 +1884,11 @@ def load_config(path):
                          # (mtime-gecacht, auch aus Prozessen ohne Dienst-Config).
                          ("sprache", "en")]:
         cfg.setdefault(key, default)
+    # .541: WOHER der wirksame K-Deckel kommt. Der Wert allein beantwortet die Frage
+    # nicht — wer auf einem cpu-Image 120 sieht, muss erfahren koennen, dass das die
+    # VARIANTE war und nicht ein Wert, den er selbst vergessen hat. Der Store legt
+    # sich spaeter darueber (Service.__init__) und korrigiert die Herkunft dort.
+    cfg["sample_deckel_quelle"] = "config file" if _sd_aus_yaml else _sd_herkunft
     os.environ["VERIFY_DATA_DIR"] = cfg["data_dir"]   # Subprozesse (anlernen) erben den Datenpfad
     # S3-Nachzug (24.08., am Image gemessen): der Intel-NEO-Treiber legt sein
     # NEO_CACHE_DIR NICHT selbst an — fehlt das Verzeichnis, ist der Kernel-Cache
@@ -1887,10 +1910,21 @@ def load_config(path):
     # kommen NUR aus yaml/ENV, nie aus dem Store/Restore (Code-Review 24.07.: sonst data_dir-Injection
     # = Schreiben ausserhalb des Datenpfads, bzw. ein kaputter web_port = Boot-Loop bei jedem Neustart).
     STORE_INFRA_TABU = {"data_dir", "web_port"}
-    for k, v in _lade_config_store(cfg).items():
+    _store_roh = _lade_config_store(cfg)
+    for k, v in _store_roh.items():
         if k in STORE_INFRA_TABU:
             continue
         cfg[k] = v
+    # .541: hat der Betreiber den K-Deckel je selbst gesetzt? Der Store ist die
+    # Antwort, und sie gilt fuer immer — auch wenn der gespeicherte Wert zufaellig
+    # der Werkswert ist. Preis, bewusst getragen und derselbe wie bei den
+    # Ketten-Schaltern (core/kette.auto_default): wer einmal auf Speichern geklickt
+    # hat, hat alle Whitelist-Schluessel im Store und ist von „nie angefasst" nicht
+    # zu unterscheiden — er behaelt dann den Wert, den er damals sah. Das ist die
+    # richtige Richtung: eine Zahl, die ein Nutzer schon einmal gesehen hat, aendern
+    # wir ihm nicht hinter dem Ruecken.
+    if "sample_deckel" in _store_roh:
+        cfg["sample_deckel_quelle"] = "settings store"
     # .510: die EINMALIGE Anker-Migration steht HIER, unmittelbar hinter der
     # Store-Ueberlagerung und damit vor jedem Leser des Ankers (run_analyze je
     # Ereignis, Live-Engine beim Start). Sie schreibt Store UND cfg, wirkt also
@@ -2527,6 +2561,15 @@ def clip_tor_deckel_s_aus_cfg(cfg):
 # dem Alt-Weg im Aufraeumzug nach der Version. Reihenfolge = die der alten
 # argv-Bildung, damit ein Diff zweier Kommandozeilen lesbar bleibt.
 _ANALYZE_SCHALTER = (
+    # .540: `sample_deckel` steht hier BEWUSST NICHT. Der K-Deckel greift an der
+    # Schrittweite des Frame-Laufs; auf diesem Alt-Weg haengt analyze.py aber nicht
+    # mehr direkt am FrameIter, sondern als Abnehmer am Verteiler (core.frames),
+    # dessen Vertrag die Schrittweite allein aus `fps_sample` ableitet und ein
+    # gemeinsames Dekodieren nur bei step-Gleichheit ALLER Abnehmer zulaesst. Einen
+    # siebten Vertragsfeld-Eintrag dafuer zu erfinden, waere ein Umbau am
+    # Frame-Verteiler fuer einen Weg, der im Aufraeumzug stirbt. Die Naht ist
+    # deklariert und wird LAUT gemeldet (s. den Legacy-Zweig weiter unten), statt
+    # still anders zu rechnen als bestellt.
     ("--fps-sample", "fps_sample"), ("--win-thresh", "win_thresh"),
     ("--fd-front-min", "fd_front_min"), ("--fd-sharp-min", "fd_sharp_min"),
     ("--fd-det-max", "fd_det_max"), ("--det-thresh", "det_thresh"),
@@ -2599,6 +2642,12 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
     from core.guete import POSE_BODEN as _pb
     latten = {
         "fps_sample": cfg["fps_sample"],
+        # .540 K-DECKEL: hoechstens so viele Sample-Frames je Ereignis,
+        # gleichmaessig ueber die Cliplaenge. Die Formel und ihre Messbasis
+        # stehen EINMAL in decode.sample_schritt; hier steht nur, WOHER der
+        # Wert kommt — aus dem Config-Store, wie fps_sample direkt darueber.
+        # `or 0` traegt die Haus-Konvention: fehlender/leerer Wert = aus.
+        "sample_deckel": int(cfg.get("sample_deckel") or 0),
         "win_thresh": cfg["win_thresh"],
         "fd_front_min": cfg["fd_front_min"],
         "fd_sharp_min": cfg["fd_sharp_min"],
@@ -2794,6 +2843,14 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
                 # drei Kollisionen endgueltig auf `tot`.
                 if info is not None and _letzt.get("fremdverschuldet"):
                     info["fremdverschuldet"] = True
+                # .539: die Haenger-Marke gilt dem VERSUCH, nicht dem letzten
+                # job()-Aufruf — deshalb aus BEIDEN Anlaeufen. Der erste riss die
+                # Frist (Marke in `w1`), der Sofort-Retry endet oft schon vor dem
+                # Absetzen (Karte belegt, Marke in `w2` gar nicht erst gesetzt);
+                # `_letzt` allein haette den Verursacher genau dann verloren.
+                if info is not None and (w1.get("haenger_verdacht")
+                                         or w2.get("haenger_verdacht")):
+                    info["haenger_verdacht"] = True
                 _verwurf_melden(info, _registry.VERWURF_ANALYSE_NONE)
                 return None
             if not antwort.get("ok"):
@@ -2909,6 +2966,18 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
                     lf.write(f"verifyd: waited {warte:.1f}s for the analysis slot "
                              f"(another analysis/measurement held it) — not "
                              f"counted as analysis time\n")
+                if latten.get("sample_deckel"):
+                    # .540 DIE DEKLARIERTE NAHT, laut statt still: wer den
+                    # persistenten Worker abgeschaltet hat (`worker: false`),
+                    # faehrt diesen Alt-Weg — und dort greift der Sample-Deckel
+                    # nicht (Begruendung bei _ANALYZE_SCHALTER). Ein Deckel, der
+                    # eingestellt ist und stillschweigend nichts tut, waere die
+                    # schlimmere Variante: der Betreiber suchte die Wirkung an
+                    # der falschen Stelle.
+                    lf.write(f"verifyd: sample cap ({int(latten['sample_deckel'])}) "
+                             f"does NOT apply here — the persistent analysis worker "
+                             f"is switched off and this legacy path samples the "
+                             f"whole clip at the configured rate\n")
                 # W1: eigene Prozessgruppe + killpg — ein Timeout-Kill muss auch ffmpeg-ENKEL treffen
                 # (kuenftige HW-Decode-Pipes; der 480-MB-ffmpeg-Zombie aus der Plan-Recon war die
                 # Live-Demo dieser Luecke). subprocess.run killte nur das direkte Kind.
@@ -3498,11 +3567,16 @@ def worker_dienst_pfad():
 class _JobWarter:
     """Ein wartender Job: sein Platz in der Antwort-Zuordnung des Dienstes."""
 
-    __slots__ = ("ereignis", "antwort")
+    __slots__ = ("ereignis", "antwort", "haenger_verdacht")
 
     def __init__(self):
         self.ereignis = threading.Event()
         self.antwort = None
+        # .539: „dieser Job sass auf einem Rechenstrang, als der Haenger-Schuss
+        # fiel" — gesetzt NUR vom Job-Watchdog (`job()`), gelesen von `_pipe_zu`.
+        # Ein Prozess-Tod ohne Schuss (OOM, geordnetes Ende) laesst die Marke
+        # False, und die Jobs bleiben fremdverschuldet wie bisher.
+        self.haenger_verdacht = False
 
 
 class WorkerDienst:
@@ -4056,9 +4130,13 @@ class WorkerDienst:
             # nicht kosmetisch: `letzte_ursache` ist eine PROZESS-Groesse und wird
             # vom naechsten Tod ueberschrieben — wer hinterher fragt, woran Job j17
             # gestorben ist, bekam bis hier die Ursache eines ganz anderen Todes.
+            # .539: die Marke des Job-Watchdogs reist mit. Sie steht NUR auf den
+            # Jobs, die beim Haenger-Schuss auf einem Rechenstrang sassen (s. dort);
+            # bei jedem anderen Prozess-Tod ist sie False und nichts aendert sich.
             warter.antwort = {"id": jid, "ok": False, "fremdverschuldet": True,
                               "todesursache": art,
                               "todesursache_text": self.letzte_ursache,
+                              "haenger_verdacht": bool(warter.haenger_verdacht),
                               "fehler": f"worker process gone: {self.letzte_ursache}"}
             self.job_tode.append((time.time(), jid, None, self.letzte_ursache))
             warter.ereignis.set()
@@ -4462,10 +4540,45 @@ class WorkerDienst:
             _puls()
         if not warter.ereignis.is_set():
             with self._warter_lock:
+                # .539 — WER VON DEN OFFENEN JOBS IST EIN MOEGLICHER VERURSACHER?
+                #
+                # Der Schuss nimmt ALLE offenen Jobs mit, und bis .538 wurden sie
+                # alle als fremdverschuldet gebucht — auch der, dessen Rechnung den
+                # Strang blockierte. Dessen Versuch zaehlte damit nie, das Ereignis
+                # kam wieder und toetete den naechsten Prozess (Feldfall 17.09.:
+                # drei Schuesse in 31 min, `_nachhol_runde` nahm jeden Versuch
+                # zurueck).
+                #
+                # WORAN „war dispatcht" ABGELESEN WIRD, und warum es die kleinste
+                # ehrliche Naeherung ist: der Worker nimmt `analyze`-Jobs aus EINER
+                # FIFO-Schlange (`worker_dienst.schlange`, queue.Queue, gelesen von
+                # N Rechenstraengen in `_schlange_fahren`). Auf den Straengen sitzen
+                # also immer die N AELTESTEN noch offenen Jobs; was juenger ist,
+                # wartet drueben in der Schlange. `self._warter` ist ein dict und
+                # traegt seit Python 3.7 die Einfuege-Reihenfolge — und eingefuegt
+                # wird unter `self._absetzen`, also in Absetz-Reihenfolge. Die ersten
+                # `straenge_laufend` Eintraege sind damit die Rechnenden. Es ist eine
+                # NAEHERUNG und keine Messung: das echte `t_lauf0` steht im Worker
+                # (worker_dienst.JobLauf), und der SIGKILL laesst nichts mehr
+                # zurueckreisen. Eine eigene Buchfuehrung dafuer wird bewusst nicht
+                # gebaut — sie waere eine zweite Wahrheit ueber denselben Vorgang.
+                #
+                # `straenge_laufend` und NICHT `_threads_zahl()`: gefragt ist, mit
+                # wie vielen Straengen DIESER Prozess gestartet ist, nicht was die
+                # Formel jetzt raet. Und `_threads_zahl()` laesst die Formel die
+                # Karte ausmessen (Logzeilen, Millisekunden) — unter
+                # `self._warter_lock` stuende so lange die Antwort-Zustellung.
+                _n_str = max(1, int(self.straenge_laufend or 1))
+                for _i, _wid in enumerate(self._warter):
+                    if _i >= _n_str:
+                        break
+                    self._warter[_wid].haenger_verdacht = True
                 self._warter.pop(jid, None)
             if info is not None:
                 info["wartezeit_s"] = round(time.monotonic() - t_warte, 3)
                 info["frist"] = True
+                if warter.haenger_verdacht:
+                    info["haenger_verdacht"] = True
             # DER HAENGER-SCHUSS (Bauplan 2d). EIN Rechenstrang haengt — schiessbar
             # ist nur der ganze Prozess; die Begruendung steht vollstaendig in
             # `kill_hart` (ein Python-Thread ist von aussen nicht beendbar). Die
@@ -4482,6 +4595,10 @@ class WorkerDienst:
             self.letzte_ursache = f"killed after job {jid} missed its {timeout_s}s deadline"
             self.kill_hart(grund=f"job {jid} ({job.get('typ')}) deadline {timeout_s}s",
                            quelle="the job watchdog", haenger=True)
+            if warter.haenger_verdacht:
+                self.log(f"{self.name}: job {jid} ({job.get('typ')}) was on a "
+                         f"compute thread when the hang shot fell — booked as a "
+                         f"HANG ATTEMPT, not as someone else's fault")
             return None
         antwort = warter.antwort or {}
         warte_s = float(antwort.get("warte_s") or 0.0)
@@ -4494,10 +4611,20 @@ class WorkerDienst:
             # `info` sagt, dass niemand dafuer bestraft werden darf.
             if info is not None:
                 info["fremdverschuldet"] = True
+                # .539: ... ES SEI DENN, dieser Job war beim Haenger-Schuss selbst
+                # auf einem Rechenstrang. Dann ist er ein moeglicher Verursacher und
+                # sein Versuch wird angeschrieben (`Service.process`); `info` traegt
+                # beide Marken, der Leser entscheidet.
+                if antwort.get("haenger_verdacht"):
+                    info["haenger_verdacht"] = True
             self.letzte_ursache = (antwort.get("fehler")
                                    or "worker process gone (no fault of this job)")
             self.log(f"{self.name}: job {jid} ({job.get('typ')}) booked as "
                      f"NOT ITS OWN FAULT — {self.letzte_ursache}")
+            if antwort.get("haenger_verdacht"):
+                self.log(f"{self.name}: job {jid} ({job.get('typ')}) was on a "
+                         f"compute thread when the hang shot fell — booked as a "
+                         f"HANG ATTEMPT, not as someone else's fault")
             return None
         return antwort
 
@@ -9890,6 +10017,7 @@ class Service:
         "benennung_dup_sim": (float, 0.5, 0.99, "naming: embedding similarity at/above this = near-identical, one kept (same notion as pool sim_neu)"),
         "benennung_vorschlag_schwelle": (float, 0.2, 0.95, "naming: 'looks like X' suggestion threshold vs named-anchor centroids (conservative start; suggestion only, never forces)"),
         "fps_sample": (float, 1, 30, "analysis sampling rate (calibrated 3)"),
+        "sample_deckel": (int, 0, 10000, "largest number of frames one event analysis may look at, spread evenly over the whole clip. Without it the work grows with the length of the event and nothing stops it: on two real installations the most expensive ONE PERCENT of events carried 12 to 16 percent of all analysis work, and the worst single case needed 4464 sampled frames and 22 minutes of compute. Those are the events that block a compute thread while the queue grows. The cap does NOT stop early — it takes a wider stride, so the last minute of a long visit is sampled exactly as densely as the first; only the spacing changes. FACTORY VALUE DEPENDS ON YOUR IMAGE: 240 on the gpu, cuda and rocm images, 180 on gpu-legacy, 120 on the cpu image. The 240 is about 80 seconds of clip at the default sampling rate and was measured, not guessed: it sits above the 95th percentile of both installations (201 and 211 sampled frames), trims 3.8 and 3.9 percent of events, and saves 16.5 and 12.5 percent of the sampling work. The lower values are for machines where a growing queue hurts more than thinner sampling does — on a CPU-only machine, and on the older integrated graphics the gpu-legacy image serves, an analysis that never catches up judges worse, not just later. Whatever you set here wins from then on, including 240 or 0. 0 switches it off and restores the old behaviour. Raise it if your cameras record long visits you want looked at in full detail; lower it if the analysis queue on your machine never catches up"),
         "szene_karenz_s": (int, 30, 900, "scene grace: unknown alert only if nobody was confirmed in the window"),
         "alert_stil": (list, ["worte", "worte_zahlen"], None, "alert text style (.249 Kosinus-raus): worte (plain words, default) / worte_zahlen (words plus raw scores)"),
         "telegram_modus": (list, ["aus", "ha", "direkt", "beide"], None, "Telegram sending: aus (off) / ha (HA script) / direkt (direct) / beide (both)"),
@@ -9974,7 +10102,7 @@ class Service:
         "worker_rss_max_mb": (int, 0, 16384, "memory budget of ONE analysis worker in MB. The persistent worker is restarted cleanly once it exceeds this, and on machines where the thread formula cannot measure system memory itself (Nvidia, CPU, ROCm) this is also the worker's share of the process guard's limit: there the service ADDS what it has measured for its neighbours in the same container (itself, the live-watcher engine, one decoder per watcher) instead of assuming them inside this number. The factory value 4096 catches a runaway worker without firing in normal work (a warm worker really holds about 1.9 GB). 0 turns the policy rule OFF - then only the container's own memory rule guards the process, which aborts open jobs when the container is about to run out. Do not set a small non-zero value: anything near or below what a worker really needs restarts it during normal work, and every restart costs the jobs that were open"),
         "personwork_rss_max_mb": (int, 512, 16384, "memory threshold (MB) of the body-recognition process — large events degrade sampling instead of exhausting memory"),
         "person_backend": (list, ["cpu", "openvino:GPU", "openvino:NPU", "cuda", "migraphx"], None, "compute placement of the body-recognition embedding model — cpu is the measured default (the path is dominated by video decode, not by this model; measured 18.8 ms/image on CPU vs 3.2 ms on an Intel iGPU). The accelerator values need the matching image variant (openvino in gpu/gpu-legacy, cuda in cuda, migraphx in rocm) and an extra GPU context can starve the live watchers — move it only after measuring on your box; on failure the model falls back to CPU loudly"),
-        "wanduhr_min_kerne": (int, 1, 64, "self-measurement gate: minimum PHYSICAL cores (capped by a cgroup CPU quota if one is set) required to run the boot-time timing self-measurement, which is a second full analysis process next to the live one. The default 4 is a structural floor (2 processes x 2 concurrent parts each: video decode + inference), not a measured value. On a machine below the floor the measurement is skipped loudly and run-duration forecasts keep the labeled fallback values. Lower this deliberately if you accept minutes of full load on a small machine in exchange for measured forecasts. Also used as the weak-machine floor for the first-boot chain defaults (fresh installs below it start with person_pfad=nur_wenn_gesicht_leer, vision_pfad=aus) — raising it widens that group too"),
+        "wanduhr_min_kerne": (int, 1, 64, "self-measurement gate: minimum PHYSICAL cores (capped by a cgroup CPU quota if one is set) required to run the boot-time timing self-measurement, which is a second full analysis process next to the live one. The default 4 is a structural floor (2 processes x 2 concurrent parts each: video decode + inference), not a measured value. On a machine below the floor the measurement is skipped loudly and run-duration forecasts keep the labeled fallback values. Lower this deliberately if you accept minutes of full load on a small machine in exchange for measured forecasts. Also used as the weak-machine floor for one first-boot default: on a fresh install below it, cpu_threads is preset to the measured physical core count — raising it widens that group too. It no longer decides the starting state of the recognition chain: since 0.1.0.541 EVERY fresh install starts with face recognition only (body and vision paths off), whatever the machine measures, and you switch them on when you want them"),
         "analyse_timeout_s": (int, 60, 3600, "watchdog for one live analysis (seconds): if the analysis has not answered by then it is presumed hung, killed, and the event is retried once immediately with a doubled deadline (in worker mode on a fresh worker, otherwise in a fresh process). The default 600 is measured, not guessed: across 1394 live analyses on the reference machine the slowest successful run took 258 s, so 600 leaves over twice that, and the doubled retry additionally carries machines up to roughly 4-5x slower before an event is handed to the silent catch-up. Raise this if you keep seeing 'analyze watchdog' lines for runs that would have finished"),
         # Vision detect (konzept_vision.md v2 §5): die zwei reinen Zahlen des
         # Adapters. Endpunkt/Key/Prompt liegen im `vision`-Block und werden NUR
@@ -12848,6 +12976,25 @@ class Service:
     #                     ab drei wieder langsamer (die EINE NPU traegt die Erkennung)
     #   CPU (12 Kerne)    94 s / 93 s bei 1/2                    -> kein Gewinn, und die
     #                     Einzelanalyse wird 39 % langsamer (ONNX nutzt schon alle Kerne)
+    # Der Startwert je Beschleuniger: die Zahl, die auf diesem Rechenweg gemessen
+    # am schnellsten war.
+    # .541 (17.09.2026) — DIE cpu-1 IST JETZT GEMESSEN, nicht mehr geerbt. Sie stand
+    # aus der Alt-Stack-Welt da; mit dem neuen Worker und dem OpenVINO-CPU-Stack ist
+    # sie auf der CPU-Testmaschine .165 nachgefahren worden (LXC 610, Ryzen 9 4900H,
+    # 8 Kerne laut nproc, keine cgroup-Quote, 8 GB RAM; Wirt nachweislich still:
+    # 99,1-99,9 % idle, 0,0 % nice in allen drei Laeufen). EIN Prozess, die fuenf
+    # Grundwahrheits-Events gleichzeitig eingereicht, Gesichtszahlen in allen drei
+    # Laeufen identisch:
+    #     1 Strang  106,6 s Wanduhr · 419,5 CPU-s (Prozessbaum) · RSS-Spitze 2667 MB
+    #     2 Straenge 104,9 s (1,02x) · 443,8 CPU-s              · RSS-Spitze 3590 MB
+    #     3 Straenge 167,5 s (0,64x) · 406,4 CPU-s              · RSS-Spitze 4268 MB
+    # DIE ERWARTUNG „je Strang etwa ein Kern, also fast lineare Beschleunigung" IST
+    # DAMIT WIDERLEGT: EIN Strang zieht auf diesem Weg im Mittel schon 3,94 Kerne
+    # (419,5/106,6) — die Intra-Op-Threads der Stufen und der ffmpeg-Decode laufen
+    # parallel. Ein zweiter Strang bringt 1,6 % (Rauschen), ein dritter ist 57 %
+    # LANGSAMER als einer. ENTSCHEID DES INHABERS (17.09.2026, auf genau diese
+    # Zahlen): der Werks-Default der cpu-Variante bleibt EIN Strang. Die 1 steht
+    # also unveraendert — neu ist, dass sie belegt ist statt geerbt.
     PLAETZE_VORSCHLAG = {"cuda": 3, "openvino": 2, "cpu": 1}
 
     def _plaetze_kapazitaet(self, cfg):
@@ -13475,6 +13622,47 @@ class Service:
                     self, "uebersprungen_offen", 0) + 1
         except Exception:                                 # noqa: BLE001
             pass
+
+    def _haenger_versuch_anschreiben(self, eid, camera, ev):
+        """.539 — DEM EREIGNIS SEINEN HAENGER-VERSUCH ANSCHREIBEN -> True, wenn es
+        damit endgueltig ausgesondert ist.
+
+        Anlass (Feldfall 17.09.): der Job-Watchdog schiesst den Worker-Prozess und
+        buchte bis .538 ALLE offenen Jobs als fremdverschuldet — auch die, die
+        gerade auf einem Rechenstrang sassen und den Riss verursacht haben koennen.
+        Fremdverschuldet heisst „kostet keinen Versuch"; `_nachhol_runde` nimmt
+        seinen Zaehler dafuer ausdruecklich zurueck. Damit kam dasselbe Ereignis
+        unbegrenzt wieder und toetete den naechsten Prozess erneut.
+
+        DERSELBE ZAEHLER wie am Platzwaechter-Weg (`self._haenger_versuche` gegen
+        `HAENGER_VERSUCHE_MAX`) und dasselbe Verhalten an der Grenze: eine ehrliche
+        `uebersprungen`-Akte-Zeile, `processed`-Vermerk, kein weiterer Lauf (der
+        Nachhol-Lauf nimmt nur `fehler`-Zeilen, s. `_nachhol_kandidaten`). Zwei
+        Zaehler fuer dieselbe Frage waeren zwei Wahrheiten — ein Ereignis, das
+        einmal ueber den Platzwaechter und zweimal ueber den Job-Watchdog einen
+        Prozess gekostet hat, hat ihn dreimal gekostet.
+
+        `getattr` wie am anderen Weg: die Proben stellen den Dienst als Teil-Buehne
+        auf (`Service.__new__`)."""
+        _merk = getattr(self, "_haenger_versuche", None)
+        if _merk is None:
+            _merk = self._haenger_versuche = {}
+        _v = _merk.get(eid, 0) + 1
+        _merk[eid] = _v
+        if _v < HAENGER_VERSUCHE_MAX:
+            self.log(f"{eid} ({camera}): this analysis was on a compute thread "
+                     f"when the worker process had to be shot — counted as hang "
+                     f"attempt {_v}/{HAENGER_VERSUCHE_MAX}, NOT as someone "
+                     f"else's fault")
+            return False
+        _merk.pop(eid, None)
+        self._uebersprungen_zaehlen()
+        self._uebersprungen_buchen(
+            eid, camera, ev, "haenger",
+            f"this analysis was on a compute thread {_v} times when the worker "
+            f"process had to be shot (job deadline) — skipped so it cannot keep "
+            f"killing the worker process")
+        return True
 
     def _uebersprungen_buchen(self, eid, camera, ev, grund, text):
         """EINE ehrliche Akte-Zeile fuer ein Ereignis, das NICHT gerechnet wurde
@@ -18957,6 +19145,18 @@ class Service:
             # weggegangen ist.
             if lauf_info is not None and _ainfo.get("fremdverschuldet"):
                 lauf_info["fremdverschuldet"] = True
+            # .539 — DIE GIFTPILLE BEKOMMT IHREN VERSUCH ANGESCHRIEBEN.
+            # Diese Analyse sass auf einem Rechenstrang, als der Job-Watchdog den
+            # Worker-Prozess schiessen musste — sie ist ein moeglicher Verursacher,
+            # kein blosser Mitbetroffener. Der Zaehler ist der BESTEHENDE
+            # (`HAENGER_VERSUCHE_MAX`, s. `_haenger_versuch_anschreiben`); erst an
+            # seiner Grenze wird ausgesondert, und dann steht statt der
+            # `fehler`-Zeile eine ehrliche `uebersprungen`-Zeile in der Akte.
+            # Jobs, die beim Schuss nur in der Schlange standen, tragen die Marke
+            # nicht und bleiben fremdverschuldet wie bisher.
+            if _ainfo.get("haenger_verdacht") and \
+                    self._haenger_versuch_anschreiben(eid, camera, ev):
+                return None
             # .510/J15: der eigene Clip-Tor-Deckel laesst das Ereignis UNGEBUCHT.
             # Hier — und nur hier — endet der Lauf ohne Akte-Zeile und ohne
             # `processed`-Vermerk; der Sweep reiht es spaeter wieder ein. Der
@@ -19029,6 +19229,15 @@ class Service:
             _hwteil = _frinfo.get("teilabbruch")
             _hwfb = bool(_frinfo.get("hwdec_fallback") or _hwteil
                          or (res or {}).get("hwdec_fallback"))
+            # .540 Sample-Budget: Antwortfeld zuerst (der Worker fuehrt es, auch
+            # wenn die results-Zeile ausblieb), results-Zeile als Rueckfall.
+            _samples = _frinfo.get("samples")
+            if _samples is None:
+                _samples = (res or {}).get("samples")
+            _s_moegl = _frinfo.get("samples_moeglich")
+            if _s_moegl is None:
+                _s_moegl = (res or {}).get("samples_moeglich")
+            _s_deckel = _frinfo.get("sample_deckel") or (res or {}).get("sample_deckel") or 0
             if _hwfb:
                 # User-Auflage 13.09.: „Bei Rueckfall auf CPU eine Information im
                 # Log, aber nur einmal pro Event." Genau das — eine Zeile je
@@ -19160,6 +19369,23 @@ class Service:
                 # der Akte ist die Frage „hat die Hardware diesen Clip getragen?",
                 # und die Antwort ist in beiden Faellen nein.
                 **({"hwdec_fallback": True} if _hwfb else {}),
+                # .540 DAS SAMPLE-BUDGET DIESES EREIGNISSES. `samples` ist die
+                # Zahl, die es in der Dienst-Akte noch NIE gab — die K-Auswertung
+                # vom 17.09. musste sie fuer den Feld-Bestand aus `step`
+                # rekonstruieren, weil `frames_gelesen`/`frames_soll` die
+                # Clip-LAENGE meinen und nicht die Abtastung. Zusammen mit
+                # `samples_moeglich` (was das Zeitraster allein ergeben haette)
+                # ist sie die Grundlage der spaeteren Auto-Kalibrierung des
+                # Deckels; `sample_deckel` steht nur auf Zeilen, an denen er
+                # wirklich gekappt hat. Gelesen wird ZUERST aus dem Antwortfeld
+                # `frames` (dort fuehrt sie der Worker) und sonst aus der
+                # results-Zeile — dieselbe Zwei-Quellen-Politik wie bei
+                # `hwdec_fallback` darueber, damit auch eine Fehler-Zeile die
+                # Zahlen traegt, wenn der Worker sie geliefert hat. Additiv und
+                # nur vorwaerts: Alt-Zeilen bleiben ohne die Felder.
+                **({"samples": int(_samples)} if _samples is not None else {}),
+                **({"samples_moeglich": int(_s_moegl)} if _s_moegl is not None else {}),
+                **({"sample_deckel": int(_s_deckel)} if _s_deckel else {}),
                 # .510 B1: wie viele STIMM-KANDIDATEN dieses Ereignisses daran
                 # scheiterten, dass ihre Guete/Pose nicht messbar war
                 # (fail-closed je Fund). Additiv und nur vorwaerts: die Zahl
@@ -27312,6 +27538,17 @@ def make_handler(svc):
                      # Speicher-Entscheidung der Anlage nur im Startlog zu finden,
                      # und Supportfaelle schicken /health, nicht 400 Logzeilen.
                      "worker_straenge": svc.worker_straenge_zustand(),
+                     # .541: der wirksame K-Deckel UND seine HERKUNFT. Seit die
+                     # Werkswerte je Image-Variante verschieden sind (cpu 120,
+                     # gpu-legacy 180, sonst 240), beantwortet die Zahl allein die
+                     # Frage nicht mehr: wer auf einem cpu-Image 120 sieht, muss
+                     # erfahren koennen, dass das die Variante war und nicht ein
+                     # Wert, den er selbst gesetzt und vergessen hat. Quelle ist
+                     # `core.registry.SAMPLE_DECKEL_WERK`, aufgeloest in
+                     # load_config und vom Config-Store ueberlagert.
+                     "sample_deckel": {"wert": int(cfg.get("sample_deckel") or 0),
+                                       "quelle": cfg.get("sample_deckel_quelle"),
+                                       "variante": os.environ.get("SUSLIK_VARIANT") or None},
                      # .534 (B7): laeuft gerade eine Feinmessung, seit wann, bis
                      # wann und wie viele Zeilen. Sie ist von aussen schaltbar
                      # (/support/feinmessung) — dann muss von aussen auch sichtbar
@@ -28122,6 +28359,12 @@ def hardware_benchmark(max_iters=30, budget_s=3.0, cache_dir=None):
     # (ein neues Backend/Geraet erscheint hier automatisch; Reihenfolge = Registry-Ordnung,
     # identisch zur bisherigen Literal-Liste, MIXED traegt bewusst kein Benchmark-Label).
     from core.registry import BACKENDS, geraete_von
+    # .541: `openvino:CPU` steht seit E4 als Geraet in der Registry und bekommt damit
+    # AUTOMATISCH eine Zeile — sie ist kein Beschleuniger, sondern der zweite
+    # Rechen-Stack auf derselben CPU, und auf dem cpu-Image der, den die Analyse
+    # wirklich faehrt. Ohne die Zeile zeigte der Benchmark die Zahl des nackten
+    # CPU-EP, waehrend die Anlage 3-7x schneller rechnet (Feldvergleich 10.09.) —
+    # eine Diagnose, die die eigene Maschine unter Wert meldet.
     cands = [("CPU (baseline)", "cpu", None, BACKENDS["cpu"]["ep"])]
     for _kind in ("openvino", "cuda", "migraphx"):
         if BACKENDS[_kind]["ep"] in avail:
@@ -28159,6 +28402,129 @@ def hardware_benchmark(max_iters=30, budget_s=3.0, cache_dir=None):
     ref_cpu, ref_date, ref_vals = BENCHMARK_REFERENCE
     res.append(("info", "reference", f"{ref_cpu} ({ref_date}): "
                 + " · ".join(f"{k} {v}ms" for k, v in ref_vals.items())))
+    return res
+
+
+def decode_byte_probe(cfg, max_clips=3, deckel_s=180.0):
+    """DER DECODE-BYTE-VERGLEICH als Abschnitt des `--benchmark`-Aufrufs
+    (E6, 17.09.2026). -> Liste (mark, label, detail) wie `hardware_benchmark`.
+
+    WOZU. Der gepinnte Pixelpfad steht auf einem Byte-Beweis vom 04.08.2026:
+    HW-Decode liefert BIT-IDENTISCHE Rohpixel wie Software (md5 ueber rawvideo,
+    h264-4K / hevc-4K / hevc-1080p). Der Beweis ist auf INTEL gefuehrt. Auf AMD
+    (mesa/radeonsi) und auf jeder fremden Anlage ist er ungemessen — und weil wir
+    hier keine AMD-Karte haben, kann ihn nur der Betreiber fuehren. Diese Funktion
+    ist genau das, mit direkt postbaren Zeilen.
+
+    NUR VON AUSSEN (Inhaber-Entscheid 17.09.2026): es gibt bewusst KEINEN
+    automatischen Selbsttest im Dienstbetrieb. Der Nutzer faehrt
+    `docker exec <container> python verifyd.py --benchmark`, wenn er es wissen
+    will, und schickt die Ausgabe.
+
+    DER PROBE-KERN IST `decode.byte_probe` — dieselbe ffmpeg-Kette, die der
+    Betrieb fuehrt (`decode.FrameIter._kommando`), keine zweite Implementierung.
+
+    WOHER DIE CLIPS: zuerst aus dem eigenen Clip-Cache (`<data_dir>/clips`), je
+    Codec/Aufloesung einer — das ist echtes Material dieser Anlage und kostet
+    kein Netz. Ist er leer, wird EIN Clip bei Frigate geholt (derselbe Griff wie
+    die Analyse, `core.frames.clip_holen`). Geht auch das nicht, sagt der
+    Abschnitt in einer Zeile, was fehlt, statt zu verschwinden."""
+    import glob as _g                                      # noqa: PLC0415
+    import decode as _dec                                  # noqa: PLC0415  zieht cv2
+    art, beschreibung = _dec.hw_geraet()
+    res = [("info", "device", beschreibung)]
+    if art is None:
+        # EHRLICH STATT FEHLEND (Auflage des Inhabers): auf einer Maschine ohne nutzbares
+        # HW-Decode-Geraet hat der Vergleich keine zwei Seiten. Das ist eine
+        # Aussage, kein Ausfall.
+        res.append(("--", "decode bytes",
+                    "no hardware decode device — nothing to compare against "
+                    "software decode here"))
+        return res
+    dd = cfg.get("data_dir") or ""
+    kandidaten, gesehen = [], set()
+    for pfad in sorted(_g.glob(os.path.join(dd, "clips", "*.mp4")),
+                       key=lambda p: -os.path.getmtime(p)):
+        try:
+            meta = _dec._probe(pfad) or {}
+        except Exception:                                  # noqa: BLE001
+            continue
+        schluessel = (meta.get("codec"), meta.get("breite"), meta.get("hoehe"))
+        if not schluessel[0] or schluessel in gesehen:
+            continue
+        gesehen.add(schluessel)
+        kandidaten.append(pfad)
+        if len(kandidaten) >= max_clips:
+            break
+    geholt = None
+    if not kandidaten:
+        try:
+            evs = api(cfg, "/api/events?labels=person&has_clip=1&limit=5") or []
+            for e in evs:
+                eid = e.get("id")
+                if not eid:
+                    continue
+                kandidaten.append(_frames.clip_holen(
+                    eid, data_dir=dd, frigate_url=cfg.get("frigate_url", "")))
+                geholt = eid          # der PIN haengt an der Event-Id, nicht am Pfad
+                break
+        except Exception as ex:                            # noqa: BLE001
+            res.append(("--", "clip source",
+                        f"no clip in {os.path.join(dd, 'clips')} and Frigate did "
+                        f"not deliver one ({type(ex).__name__}: "
+                        f"{str(ex)[:70]}) — run one event through the analysis "
+                        f"first, then try again"))
+            return res
+    if not kandidaten:
+        res.append(("--", "clip source",
+                    f"no clip found in {os.path.join(dd, 'clips')} and no event "
+                    f"with a clip in Frigate — run one event through the "
+                    f"analysis first, then try again"))
+        return res
+    try:
+        gedeckt = set()
+        for pfad in kandidaten:
+            r = _dec.byte_probe(pfad, deckel_s=deckel_s)
+            label = f"{r['codec'] or '?'} {r['breite']}x{r['hoehe']}"
+            gedeckt.add((r["codec"], r["hoehe"]))
+            if r["verdikt"] == "bitgleich":
+                res.append(("ok", label,
+                            f"identical bytes  md5 {r['md5_hw'][:12]}  "
+                            f"({r['bytes'] // 1024} KiB, {art} {r['s_hw']}s vs "
+                            f"software {r['s_sw']}s)"))
+            elif r["verdikt"] == "abweichend":
+                # DER BEFUND, auf den es ankommt: hier stimmt der gepinnte
+                # Pixelpfad auf DIESER Maschine nicht, und das gehoert laut gesagt.
+                res.append(("!!", label,
+                            f"DIFFERENT bytes — {r['grund']} (hw {r['md5_hw'][:12]} "
+                            f"vs sw {r['md5_sw'][:12]}). Please report this."))
+            else:
+                # Die Verdikte des Kerns sind deutsch (Hausstil), die Ausgabe
+                # dieses Aufrufs ist englisch wie alles, was ein Nutzer sieht —
+                # und diese Zeilen sollen postbar sein.
+                res.append(("--", label,
+                            {"kein-hw": "no hardware decode",
+                             "fehler": "could not measure"}.get(r["verdikt"],
+                                                                r["verdikt"])
+                            + f": {r['grund']}"))
+        # Was die Referenz-Matrix vom 04.08.2026 enthielt und was dieses Material
+        # nicht hergab — damit niemand aus drei gruenen Zeilen mehr liest, als sie
+        # sagen.
+        fehlt = [n for n, (c, h) in (("h264 4K", ("h264", 2160)),
+                                     ("hevc 4K", ("hevc", 2160)),
+                                     ("hevc 1080p", ("hevc", 1080)))
+                 if (c, h) not in gedeckt]
+        if fehlt:
+            res.append(("info", "not covered",
+                        "the 2026-08-04 reference matrix also had "
+                        + ", ".join(fehlt)
+                        + " — no clip of that kind was available here"))
+    finally:
+        if geholt:
+            try:
+                _frames.frei(geholt, data_dir=dd)          # nie eine Pin-Waise
+            except Exception:                              # noqa: BLE001
+                pass
     return res
 
 
@@ -28459,6 +28825,13 @@ def startup_selfcheck(svc):
                   f"model={aktuelles_modell()}")
     except Exception as e:
         erg("FAIL", f"data_dir={dd} NOT writable: {e}")
+    # .541: der wirksame K-Deckel MIT Herkunft. Die Werkswerte sind seit dieser
+    # Version je Image-Variante verschieden (cpu 120, gpu-legacy 180, sonst 240,
+    # Tabelle in core.registry.SAMPLE_DECKEL_WERK) — eine Zahl ohne Herkunft
+    # liesse den Betreiber raten, ob sie von ihm oder vom Image kommt.
+    _sd = int(cfg.get("sample_deckel") or 0)
+    erg("info", f"sample cap: {_sd if _sd else 'off'} frame(s) per event "
+                f"({cfg.get('sample_deckel_quelle') or 'unknown source'})")
     # Issue #13: /data ohne Mount = Datenverlust beim naechsten Recreate — laut
     # sagen, im Log UND als stehender UI-Banner (gleiche Quelle, ein Text).
     svc.daten_hinweis = daten_mount_hinweis(dd)
@@ -28617,6 +28990,22 @@ def startup_selfcheck(svc):
                             f"— suslik still runs recognition on the CUDA EP")
         if kind == "cpu":
             erg("ok", f"{spec} — providers: {', '.join(avail)}")
+            # .541 (E4): WELCHER CPU-STACK RECHNET? Seit dem cpu-Image den
+            # OpenVINO-Stack traegt, gibt es auf der CPU zwei Wege, und sie liegen
+            # gemessen 3-7x auseinander (Feldvergleich 10.09.2026, adaface 48,7 gegen
+            # 192,2 ms). Ein Startlog, das nur „cpu" sagt, laesst offen, welchen die
+            # Anlage faehrt — und genau daran haengt, ob ein Betreiber seine Zeiten
+            # fuer normal haelt. Die Zeile kostet keine Session: sie liest die
+            # Provider-Liste, die oben ohnehin steht. Die ms-Zahlen liefert der
+            # Benchmark-Schritt darunter (Zeile „CPU (OpenVINO)" gegen „CPU (baseline)").
+            from core.registry import ep_von as _ep_von2   # noqa: PLC0415
+            if _ep_von2("openvino") in avail:
+                erg("ok", "analysis runs on the OpenVINO CPU runtime (measured 3-7x "
+                          "faster than plain onnxruntime on the same CPU)")
+            else:
+                erg("info", "analysis runs on the plain onnxruntime CPU provider — "
+                            "correct, but an onnxruntime-openvino build computes the "
+                            "same models 3-7x faster on the same CPU")
             # Feldfall 08.09.: darueber standen zwei gruene Haken fuer iGPU und NPU,
             # hier ein gruenes cpu — und niemand zog die Verbindung. Die Befunde des
             # Hardware-Schritts liegen vor, also wird der Zustand benannt (keine
@@ -28863,6 +29252,45 @@ def startup_selfcheck(svc):
     L("========== ready ==========")
 
 
+def _ausgabe_auslaufen(frist_s=2.0):
+    """Tee und Siebe ABBAUEN, damit die LETZTEN Zeilen wirklich ankommen.
+
+    GEMESSEN 17.09.2026 (Klasse stiller Verlust, im rocm-Image nachgestellt):
+    `stderr_sieb` und `logdatei` haengen je einen DAEMON-Faden an ein Rohr auf
+    fd 1 bzw. fd 2. Endet der Prozess kurz nach einem `print`, stirbt der Faden
+    mit dem Interpreter, bevor er das Rohr geleert hat — die letzten Zeilen sind
+    weg. Dem DIENST passiert das nie (er laeuft weiter); einem KURZ-KOMMANDO
+    schon, und `--benchmark` verlor so seinen ganzen Schluss-Abschnitt: genau die
+    Zeilen, die ein Feldnutzer uns schicken soll. Nachgestellt ohne jedes
+    Sieb-Wissen — eine Zeile eine Sekunde vor dem Ende kam an, die unmittelbar
+    davor nicht.
+
+    REIHENFOLGE IST PFLICHT und ergibt sich aus dem Aufbau in `main`: dort wird
+    ERST der Logdatei-Tee gelegt und DANN das Sieb darauf. fd 1 zeigt also auf
+    das Sieb-Rohr, und das Sieb schreibt in das Logdatei-Rohr. Abgebaut wird
+    deshalb von innen nach aussen — erst das Sieb (fd 1/2 zeigen wieder auf den
+    Tee), dann der Tee (fd 1/2 zeigen wieder nach draussen). Andersherum liefe
+    die letzte Zeile in ein Rohr, dessen Leser schon weg ist.
+
+    NUR FUER KURZ-KOMMANDOS: danach siebt und protokolliert nichts mehr."""
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:                                  # noqa: BLE001
+        pass
+    for _s in (_STDOUT_SIEB, _STDERR_SIEB):
+        try:
+            if _s is not None and hasattr(_s, "abbauen"):
+                _s.abbauen(frist_s)
+        except Exception:                              # noqa: BLE001
+            pass
+    try:
+        if _LOGDATEI is not None:
+            _LOGDATEI.zuruecksetzen()
+    except Exception:                                  # noqa: BLE001
+        pass
+
+
 def _sigterm(signum, frame):
     """SIGTERM/SIGINT sauber beenden. Im Container laeuft dieser Prozess als PID 1, und der Kernel
     liefert PID 1 KEINE Default-Signalbehandlung: ohne eigenen Handler ignoriert der Dienst
@@ -28973,7 +29401,22 @@ def main():
         print("========== suslik hardware benchmark ==========")
         for mark, label, detail in hardware_benchmark(max_iters=50, budget_s=5.0, cache_dir=cache):
             print(f"  [{mark:^4}] {label:<16} {detail}")
+        # E6 (17.09.2026): DER DECODE-BYTE-VERGLEICH, hinter den ms/inf-Zeilen.
+        # Er beantwortet die zweite Frage, die dieser Aufruf im Feld beantworten
+        # soll: liefert der Hardware-Decoder dieser Maschine DIESELBEN Rohpixel wie
+        # Software? Der gepinnte Pixelpfad haengt daran, und bewiesen ist er nur auf
+        # Intel (04.08.2026). Bewusst NUR hier, nie automatisch im Dienstbetrieb.
+        print("  ---------- decode byte probe (hardware vs software) ----------")
+        try:
+            for mark, label, detail in decode_byte_probe(cfg):
+                print(f"  [{mark:^4}] {label:<16} {detail}")
+        except Exception as e:                    # noqa: BLE001
+            # LAUT, aber nicht toedlich: der Backend-Benchmark darueber ist die
+            # Hauptauskunft dieses Aufrufs und darf an dieser Zugabe nicht sterben.
+            print(f"  [ -- ] {'decode bytes':<16} probe failed "
+                  f"({type(e).__name__}: {str(e)[:100]})")
         print("===============================================")
+        _ausgabe_auslaufen()
         return
 
     svc = Service(cfg, dry_alert=a.dry_alert)

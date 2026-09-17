@@ -4,14 +4,38 @@
 # entwertet (onnxruntime-Fall vom 25.07.). Heben = bewusste Entscheidung + neue Abnahme.
 # suslik Container-Deps (Stufe 1, CPU). Gegenueber der Repo-requirements.txt ergaenzt:
 #   PyYAML + paho-mqtt (vom Code gebraucht, fehlten) — Fund aus dem 1. Docker-Test.
-# onnxruntime = plain (CPU) fuer Stufe 1; Stufe 2 (iGPU) -> onnxruntime-openvino.
-# GEPINNT (25.07.): als einzige Variante war onnxruntime hier ohne Version — das cpu-Image bekam
-# bei jedem Bau, was pip gerade liefert (gemessen 1.27.0, waehrend gpu auf 1.24.1 pinnt). Das
-# unterlaeuft den backend-eigenen Soll-Stand der Abnahme: verschiedene onnxruntime-Versionen
-# rechnen minimal andere Scores, ein eingefrorener Stand waere nach dem naechsten Rebuild
-# grundlos rot. Gepinnt auf die Version, die im ausgelieferten 0.1.0.22/0.1.0.23-cpu steckt.
+#
+# WECHSEL 17.09.2026 (0.1.0.541, E4): onnxruntime==1.27.0 -> onnxruntime-openvino==1.24.1,
+# also derselbe Stack wie in requirements.gpu.txt. DAS IST GENAU DIE „bewusste
+# Entscheidung + neue Abnahme", die der Kopf hier seit dem 25.07. verlangt, und sie ist
+# GEMESSEN, nicht vermutet:
+#   Feldtester-Vergleich vom 10.09.2026 (Discussion #29, dieselbe Maschine, dieselben
+#   Modelldateien, alle Modelle des Urteilspfads): der OpenVINO-CPU-EP rechnet
+#   durchgehend 3-7x schneller als das nackte onnxruntime — adaface 48,7 ms je
+#   Inferenz statt 192,2 ms.
+# Das cpu-Image ist der universelle Rueckfall und damit die Variante, die am wenigsten
+# Rechenzeit uebrig hat; ein Faktor 3-7 auf dem Urteilspfad ist dort der groesste
+# Einzel-Hebel, den wir haben.
+#
+# DIE ABNAHME, die dieser Wechsel verlangt (und die er bekommen hat): Vorher/Nachher am
+# Grundwahrheits-Korpus, .526-cpu gegen 0.1.0.541-cpu, je Event Wanduhr UND Urteil —
+# ein anderer Inferenz-Stack darf schneller sein, aber nicht anders entscheiden.
+# Ergebnis siehe CHANGELOG 0.1.0.541.
+#
+# ZWEI PUNKTE, die aus requirements.gpu.txt WORTGLEICH weitergelten:
+#   * insightface zieht plain `onnxruntime` rein und VERDECKT damit die
+#     openvino-Variante (kein OV-EP). Das Dockerfile erzwingt danach, dass
+#     onnxruntime-openvino gewinnt (uninstall + reinstall --no-deps).
+#   * standalone `openvino` NICHT ungepinnt hier hineinnehmen — pip zieht eine neuere
+#     Fassung als die, die onnxruntime-openvino 1.24.1 gebuendelt mitbringt. Der Pin
+#     steht im Dockerfile (2025.4.1, dieselbe Zahl wie im gpu-Image).
+#
+# WAS NICHT MITKOMMT (Unterschied zum gpu-Image, ausdruecklich): KEINE
+# Intel-GPU-/NPU-Treiberpakete (compute-runtime, IGC, libze, NPU-Tarball). Der
+# OpenVINO-CPU-Plugin braucht keinen Treiber — er rechnet auf der CPU. Das cpu-Image
+# bleibt damit das treiberfreie, ueberall lauffaehige Image, das es war.
 insightface==1.0.1
-onnxruntime==1.27.0
+onnxruntime-openvino==1.24.1
 opencv-python==5.0.0.93
 scikit-learn==1.9.0
 numpy==2.5.1

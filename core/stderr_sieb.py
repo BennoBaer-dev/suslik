@@ -68,12 +68,46 @@ def insightface_init_zeile(zeile):
 
 
 class Sieb:
-    def __init__(self, echt_fd):
+    def __init__(self, echt_fd, fd=2):
         self.echt_fd = echt_fd      # geretteter Original-Deskriptor (Docker-Log)
+        self.fd = fd                # welcher Deskriptor durch dieses Sieb laeuft
         self.anzahl = 0             # verworfene Musterzeilen seit Prozessstart
+        self.faden = None           # der Lese-Faden (gesetzt von installieren)
 
     def summe(self):
         return self.anzahl
+
+    def abbauen(self, frist_s=2.0):
+        """Das Sieb ABBAUEN und den Rest durchlassen. -> True, wenn der Faden
+        fertig wurde.
+
+        WOZU (GEMESSEN 17.09.2026 im rocm-Image, Klasse stiller Verlust): der
+        Lese-Faden ist ein DAEMON. Endet der Prozess kurz nach einem `print`,
+        stirbt der Faden mit dem Interpreter, bevor er das Rohr geleert hat —
+        die letzten Zeilen sind weg. Im DIENST faellt das nie auf (er laeuft
+        weiter), bei einem kurzen Kommando schon: `verifyd.py --benchmark`
+        verlor damit seinen GANZEN Schluss-Abschnitt, also genau die Zeilen, die
+        ein Nutzer uns schicken soll. Nachgestellt ohne jedes Sieb-Wissen: A
+        kommt an, ein `print` unmittelbar vor dem Prozessende nicht.
+
+        WIE: der gerettete Original-Deskriptor kommt auf `fd` zurueck. Damit
+        faellt die LETZTE Schreibseite des Rohres weg, der Faden liest EOF,
+        schreibt aus, was noch drin liegt, und endet. Danach geht jede Ausgabe
+        wieder direkt nach draussen. Das ist derselbe Griff, den
+        `logdatei.zuruecksetzen` vor einem execv macht — hier zusaetzlich mit
+        einem Join, denn uns interessiert gerade das AUSLAUFEN.
+
+        NUR FUER KURZ-KOMMANDOS gedacht (Benchmark, Proben), nicht im
+        Dienstbetrieb: danach siebt nichts mehr."""
+        try:
+            os.dup2(self.echt_fd, self.fd)
+        except OSError:
+            return False
+        t = self.faden
+        if t is None:
+            return True
+        t.join(max(0.0, float(frist_s)))
+        return not t.is_alive()
 
 
 def installieren(fd=2, passt=None, durchlass=None):
@@ -93,7 +127,7 @@ def installieren(fd=2, passt=None, durchlass=None):
     os.set_inheritable(echt, False)
     r, w = os.pipe()
     os.set_inheritable(r, False)
-    sieb = Sieb(echt)
+    sieb = Sieb(echt, fd)
     os.dup2(w, fd)
     os.close(w)
 
@@ -135,4 +169,5 @@ def installieren(fd=2, passt=None, durchlass=None):
 
     t = threading.Thread(target=_lauf, name=f"sieb-fd{fd}", daemon=True)
     t.start()
+    sieb.faden = t              # Griff fuer `abbauen` (Auslaufen bei Kurz-Kommandos)
     return sieb

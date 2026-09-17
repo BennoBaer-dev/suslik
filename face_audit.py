@@ -714,7 +714,12 @@ def _ort_session(kind, dev, model_file, cache=None):
     """Baut EINE onnxruntime-Session fuers gewaehlte Backend. Validiert gegen die REAL verfuegbaren
     Provider; fehlt der gewuenschte EP -> LAUTE Warnung + CPU (kein STILLER Fallback, das versteckt
     Fehlkonfiguration und war ein bekannter Footgun). provider_options unterscheiden sich je Backend:
-    OpenVINO {device_type, cache_dir}, CUDA {device_id} (kein device_type/cache_dir)."""
+    OpenVINO {device_type, cache_dir}, CUDA {device_id} (kein device_type/cache_dir).
+
+    .541: dazu die GERAETE-EIGENEN Provider-Optionen aus der Registry
+    (`registry.ep_optionen`). Sie gehoeren zum Geraet, nicht zum Aufrufer — `openvino:CPU`
+    traegt dort z. B. `precision: FP32`, damit eine Messung auf diesem Weg dieselbe
+    Genauigkeit fahrt wie die Engine, die ihn im Betrieb faehrt."""
     import onnxruntime as ort
     import sys as _sys
     avail = ort.get_available_providers()
@@ -734,6 +739,8 @@ def _ort_session(kind, dev, model_file, cache=None):
         opts = {"device_type": dev}
         if cache:                                 # cache_dir NUR bei echtem Pfad — None wuerde als String
             opts["cache_dir"] = cache             # "None" landen und OpenVINO legt einen Ordner "None/" im CWD an
+        from core.registry import ep_optionen as _ep_opt   # .541: geraete-eigene Optionen
+        opts.update(_ep_opt("openvino", dev))
         s = ort.InferenceSession(model_file, providers=["OpenVINOExecutionProvider"],
                                  provider_options=[opts], sess_options=_ort_thread_opts())
         # EP war da, aber das DEVICE kann fehlen ("Device GPU is not available") -> onnxruntime faellt

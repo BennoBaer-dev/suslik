@@ -206,12 +206,18 @@ BARRIERE_FRIST = 1800.0
 
 # ------------------------------------------------------------------ Config
 def cfg_lesen(pfad):
-    """fps_sample, globale det-Schwelle und Kamera-Guards aus dem Config-Store,
-    dieselben Schluessel wie verifyd.run_analyze (verifyd.py:2037, :2052)."""
+    """fps_sample, globale det-Schwelle, Kamera-Guards und das Sample-Budget aus dem
+    Config-Store, dieselben Schluessel wie verifyd.run_analyze (verifyd.py:2037, :2052).
+
+    .540: `sample_deckel` kommt MIT (0 = aus). Er gehoert hierher und nicht in einen
+    eigenen Leser, weil ein Messlauf sonst eine Maschine messen wuerde, die es im
+    Betrieb nicht gibt — derselbe Grund, aus dem fps_sample und det_thresh hier
+    stehen. Fehlt der Schluessel (Alt-Store), ist er 0 und nichts aendert sich."""
     with open(pfad, encoding="utf-8") as f:
         d = json.load(f)
     guards = ((d.get("live") or {}).get("guards") or {})
-    return float(d["fps_sample"]), float(d["det_thresh"]), guards
+    return (float(d["fps_sample"]), float(d["det_thresh"]), guards,
+            int(d.get("sample_deckel") or 0))
 
 
 def det_schwelle(det_global, guards, kamera):
@@ -1365,12 +1371,20 @@ def mt_argumente(ap):
 
 
 def clip_geometrien(clips, events):
-    """(Breite, Hoehe, fps) je Event, aus den Metadaten. -> {eid: (W, H, fps)}"""
-    geo = {}
+    """(Breite, Hoehe, fps) je Event, aus den Metadaten. -> ({eid: (W, H, fps)},
+    {eid: pakete}).
+
+    .540: die PAKETZAHL kommt als ZWEITES dict zurueck, nicht als viertes Feld des
+    Tupels — das Tupel wird von allen drei Engines ausgepackt (`for W, H, _fps in
+    geo.values()`), und die Paketzahl geht sie nichts an. Sie ist die Clip-LAENGE
+    und damit die Basis des Sample-Deckels (decode.sample_schritt); derselbe eine
+    ffprobe-Lauf liefert sie ohnehin mit."""
+    geo, pakete = {}, {}
     for eid, _kamera in events:
         meta = decode._probe(os.path.join(clips, eid + ".mp4"))
         geo[eid] = (int(meta["breite"]), int(meta["hoehe"]), meta["fps"] or 25)  # decode.py:146
-    return geo
+        pakete[eid] = meta.get("pakete")
+    return geo, pakete
 
 
 def kopf(engine, graphen, erk, alle, mit_refs, lat, extra=None):
@@ -1419,7 +1433,12 @@ def auftrag_rechnen(engine, graphen, geo, fest, eid, kamera, datei):
     derselbe fuer Einzel- und Mehrstrang-Fassung und fuer beide Backends.
     -> (Auftragszeile ohne Thread-Felder, persons)"""
     W, H, fps = geo[eid]
-    schritt = max(1, int(round(fps / fest["fps_sample"])))        # wie decode.py:148
+    # .540 K-DECKEL: EINE Formel fuer Mess-Weg und Dienst (decode.sample_schritt,
+    # Herleitung und Messbasis stehen dort). Ohne Deckel (0 = Vorgabe) ist das
+    # Ergebnis bitgleich zu dem, was hier bis .539 stand.
+    schritt, _moegl, _verw = decode.sample_schritt(
+        fps, fest["fps_sample"], (fest.get("pakete") or {}).get(eid),
+        fest.get("sample_deckel") or 0)
     schwelle = det_schwelle(fest["det_global"], fest["guards"], kamera)
     zaehler, zeiten = collections.Counter(), collections.Counter()
     t_start = time.monotonic()
@@ -1446,15 +1465,25 @@ def auftrag_rechnen(engine, graphen, geo, fest, eid, kamera, datei):
     return ({"eid": eid, "kamera": kamera, "wall_s": round(t_ende - t_start, 2),
              "frames": frames, "gesichter": len(zeilen), "stufen": dict(zaehler),
              "schritt": schritt, "det_schwelle": schwelle, "geometrie": f"{W}x{H}",
+             # .540: nur wenn der Deckel WIRKLICH gegriffen hat. Ein Messlauf soll
+             # nicht stillschweigend als ungedeckelter durchgehen (Kopf-Regel:
+             # „ein Lauf darf nicht als die andere Bauart durchgehen").
+             **({"sample_deckel": int(fest.get("sample_deckel") or 0),
+                 "samples_moeglich": _moegl}
+                if _moegl is not None and _verw is not None and _verw < _moegl else {}),
              "zeiten_ms": {k: round(v * 1000) for k, v in sorted(zeiten.items())},
              "bilder": dict(bilanz)}, persons, t_start, t_ende)
 
 
-def _fest_bauen(a, fps_sample, det_global, guards, alle, mit_refs, erk, lat, zf):
+def _fest_bauen(a, fps_sample, det_global, guards, alle, mit_refs, erk, lat, zf,
+                sample_deckel=0, pakete=None):
     """Alles, was jeder Auftrag unveraendert braucht, in einem dict — damit die
     Auftrags-Funktion eine Signatur behaelt, die man noch lesen kann."""
     return {"fps_sample": fps_sample, "det_global": det_global, "guards": guards,
             "alle": alle, "mit_refs": mit_refs, "lat": lat, "erk": erk, "zf": zf,
+            # .540: Sample-Budget + Clip-Laengen (Paketzahl je eid) — beides nur
+            # Eingang der EINEN Schrittweiten-Formel, s. auftrag_rechnen.
+            "sample_deckel": int(sample_deckel or 0), "pakete": pakete or {},
             "clips": a.clips, "out": a.out,
             "modell": face_audit.aktuelles_modell(),
             "bilder": a.bilder or os.path.join(a.out, "bilder")}
@@ -1462,21 +1491,24 @@ def _fest_bauen(a, fps_sample, det_global, guards, alle, mit_refs, erk, lat, zf)
 
 def _aufbau(a):
     """Config, Plan, Latten, Referenzen, Geometrien — der gemeinsame Vorlauf beider
-    Fassungen. -> (fps_sample, det_global, guards, plan, lat, alle, mit_refs, erk, geo)"""
-    fps_sample, det_global, guards = cfg_lesen(a.config)
+    Fassungen. -> (fps_sample, det_global, guards, plan, lat, alle, mit_refs, erk, geo,
+    sample_deckel, pakete)"""
+    fps_sample, det_global, guards, sample_deckel = cfg_lesen(a.config)
     with open(a.plan, encoding="utf-8") as f:
         plan = json.load(f)
     lat = urteils_latten(plan)
     alle, mit_refs, erk = referenzen_laden(a.refcache)
     os.makedirs(a.out, exist_ok=True)
-    geo = clip_geometrien(a.clips, plan["events"])
-    return fps_sample, det_global, guards, plan, lat, alle, mit_refs, erk, geo
+    geo, pakete = clip_geometrien(a.clips, plan["events"])
+    return (fps_sample, det_global, guards, plan, lat, alle, mit_refs, erk, geo,
+            sample_deckel, pakete)
 
 
 def lauf_einzel(engine, a):
     """Die Einzelreihe: ein Rechenstrang, jedes Plan-Event einmal. Aufbau (Graphen/
     Sessions und Warmlauf) VOR der Zeitmessung, wie in einem warmen Worker."""
-    (fps_sample, det_global, guards, plan, lat, alle, mit_refs, erk, geo) = _aufbau(a)
+    (fps_sample, det_global, guards, plan, lat, alle, mit_refs, erk, geo,
+     sample_deckel, pakete) = _aufbau(a)
     events = plan["events"]
     t_bau = time.monotonic()
     graphen = engine.geometrie_bauen(geo)
@@ -1485,10 +1517,15 @@ def lauf_einzel(engine, a):
         g.satz().warm()
     print(json.dumps(kopf(engine, graphen, erk, alle, mit_refs, lat,
                           {"aufbau_s": round(time.monotonic() - t_bau, 1),
-                           "bau_s": round(t_graphen, 1), "threads": 1})), flush=True)
+                           "bau_s": round(t_graphen, 1), "threads": 1,
+                           # .540: in den KOPF, weil er sagt, WAS wirklich lief —
+                           # ein gedeckelter Lauf darf nicht als ungedeckelter
+                           # durchgehen (Fixpunkte haengen an der Index-Menge).
+                           "sample_deckel": int(sample_deckel or 0)})), flush=True)
 
     with open(os.path.join(a.out, "zusammenfassung.jsonl"), "a", encoding="utf-8") as zf:
-        fest = _fest_bauen(a, fps_sample, det_global, guards, alle, mit_refs, erk, lat, zf)
+        fest = _fest_bauen(a, fps_sample, det_global, guards, alle, mit_refs, erk, lat, zf,
+                           sample_deckel, pakete)
         for eid, kamera in events:
             s, persons, _t0, _t1 = auftrag_rechnen(engine, graphen, geo, fest, eid, kamera,
                                                    eid + ".jsonl")
@@ -1542,7 +1579,8 @@ def lauf_mt(engine, a):
     Kein globales Rechen-Schloss. Keine Stufe ist gesperrt."""
     if a.threads < 1 or a.jobs < 1:
         raise SystemExit("--threads und --jobs muessen >= 1 sein")
-    (fps_sample, det_global, guards, plan, lat, alle, mit_refs, erk, geo) = _aufbau(a)
+    (fps_sample, det_global, guards, plan, lat, alle, mit_refs, erk, geo,
+     sample_deckel, pakete) = _aufbau(a)
     events = plan["events"]
     t_bau = time.monotonic()
     graphen = engine.geometrie_bauen(geo)
@@ -1564,7 +1602,8 @@ def lauf_mt(engine, a):
                                  action=lambda: t0_box.__setitem__("t0", time.monotonic()))
 
     with open(os.path.join(a.out, "zusammenfassung.jsonl"), "a", encoding="utf-8") as zf:
-        fest = _fest_bauen(a, fps_sample, det_global, guards, alle, mit_refs, erk, lat, zf)
+        fest = _fest_bauen(a, fps_sample, det_global, guards, alle, mit_refs, erk, lat, zf,
+                           sample_deckel, pakete)
         threads = [threading.Thread(
             target=arbeiter,
             args=(i, schlange, engine, graphen, geo, fest, ergebnisse, barriere, t0_box,
@@ -1580,6 +1619,9 @@ def lauf_mt(engine, a):
                                "warm_s": round(t0 - t_bau - t_graphen, 1),
                                "threads": a.threads, "jobs_faktor": a.jobs,
                                "auftraege": len(jobs),
+                               # .540: wie in der Einzelreihe — der Kopf nennt das
+                               # Sample-Budget, unter dem dieser Lauf gerechnet hat.
+                               "sample_deckel": int(sample_deckel or 0),
                                "saetze": {f"{g.W}x{g.H}": g.saetze
                                           for g in graphen.values()}})), flush=True)
         for th in threads:

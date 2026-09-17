@@ -217,7 +217,16 @@ def kontroll_speicher(cfg, log_path, debug, eid, entry=None):
 
 
 KETTE_AUTO_MARKER = "kette_auto.json"          # klebriger Erst-Boot-Entscheid (Muster placement.json)
-KETTE_AUTO_WERTE = {"person_pfad": "nur_wenn_gesicht_leer", "vision_pfad": "aus"}
+# .541 (Produktentscheid des Inhabers 17.09.2026): EINE FRISCHINSTALLATION STARTET
+# MIT NUR AKTIVER GESICHTSERKENNUNG — beide Zusatzwege aus, UNABHAENGIG von der
+# Maschinenstaerke. Die fruehere Weiche (schwach -> nur_wenn_gesicht_leer/aus,
+# stark -> immer/immer) ist fuer diese zwei Schalter entfallen; `wanduhr_min_kerne`
+# behaelt ihre uebrigen Aufgaben (Selbstmessungs-Gate) und entscheidet hier nur
+# noch ueber `cpu_threads`. Grund: was beim ersten Start laeuft, entscheidet, was
+# ein neuer Nutzer als „normal" erlebt — und die beiden Zusatzwege kosten Rechenzeit
+# und erzeugen Meldungen, bevor ueberhaupt ein Gesicht angelernt ist. Die UI bietet
+# beide unveraendert zum Einschalten an; es aendert sich allein der Startzustand.
+KETTE_AUTO_WERTE = {"person_pfad": "aus", "vision_pfad": "aus"}
 # Neutralwerte der drei Auto-Schalter — die user_gesetzt-Erkennung vergleicht den
 # WIRKSAMEN cfg-Wert (Store UND yaml) gegen genau diese Defaults. cpu_threads gehoert
 # seit dem Tokn59-Befund dazu (#21: der Deckel senkt ohne gesetzten Wert nichts,
@@ -299,11 +308,17 @@ def auto_default(cfg, log_path, log, *, store_pfad, store_laden, store_schreiben
         info = {"ts": round(time.time(), 1), "kerne": kerne,
                 "min_kerne": min_kerne, "schwach": schwach,
                 "bestand": bestand, "user_gesetzt": user_gesetzt, "gesetzt": {}}
-        if schwach and not user_gesetzt:
+        if not user_gesetzt:
+            # .541: DIE ZWEI KETTEN-SCHALTER IMMER, `cpu_threads` NUR AUF DER
+            # SCHWACHEN MASCHINE. Bis .540 hing beides an derselben Schwelle; das
+            # war fuer die Threadzahl richtig (sie ist eine Leistungsfrage) und fuer
+            # den Startzustand der Kette falsch (er ist eine Produktfrage).
             # cpu_threads = die gemessenen PHYSISCHEN Kerne (#21): der 0-Default kappt
             # nur auf die Affinitaets-Maske, die auf SMT-Maschinen die Threads zaehlt
             # (2C/4T -> 4); erst der Kern-Wert drueckt die ORT-Pools real.
-            info["gesetzt"] = {**KETTE_AUTO_WERTE, "cpu_threads": kerne}
+            info["gesetzt"] = dict(KETTE_AUTO_WERTE)
+            if schwach:
+                info["gesetzt"]["cpu_threads"] = kerne
             store.update(info["gesetzt"])
             store_schreiben(store_datei, store)
             angewendet = True                          # erst NACH dem realen Schreiben (D1)
@@ -322,11 +337,15 @@ def auto_default(cfg, log_path, log, *, store_pfad, store_laden, store_schreiben
                 _fa._ORT_THREADS = None
             except Exception:
                 pass
-            log(f"chain defaults set: measured {kerne} usable physical core(s), "
-                f"below the floor of {min_kerne} (wanduhr_min_kerne), first start "
-                f"of this version -> person_pfad=nur_wenn_gesicht_leer, "
-                f"vision_pfad=aus, cpu_threads={kerne} — defaulted because this "
-                f"machine measured weak; change it in Settings anytime")
+            _gesetzt_text = ", ".join(f"{k}={v}" for k, v in
+                                      sorted(info["gesetzt"].items()))
+            log(f"chain defaults set at first start -> {_gesetzt_text}. A fresh "
+                f"installation runs face recognition only; the body and vision "
+                f"paths are yours to switch on in Settings whenever you want them"
+                + (f". cpu_threads={kerne} on top, because this machine measured "
+                   f"{kerne} usable physical core(s), below the floor of "
+                   f"{min_kerne} (wanduhr_min_kerne)" if schwach else "")
+                + ". Change any of it in Settings anytime")
             # AUDIT VOR dem Marker (Recheck MUSS 1): der Marker ist aus der Audit-Zeile
             # rekonstruierbar (Nachhol-Pfad unten), umgekehrt nicht — scheiterte frueher
             # der Marker, fand der naechste Boot keine Herkunft und schrieb den Entscheid
@@ -337,7 +356,9 @@ def auto_default(cfg, log_path, log, *, store_pfad, store_laden, store_schreiben
                 os.makedirs(os.path.dirname(audit), exist_ok=True)
                 with open(audit, "a") as f:
                     f.write(json.dumps({"ts": info["ts"], "aenderungen": info["gesetzt"],
-                                        "auto": "weak-machine first-boot default",
+                                        "auto": ("first-boot default (face only"
+                                                 + (", weak machine" if schwach else "")
+                                                 + ")"),
                                         "kerne": kerne, "min_kerne": min_kerne},
                                        ensure_ascii=False) + "\n")
                     f.flush()
@@ -371,7 +392,12 @@ def auto_default(cfg, log_path, log, *, store_pfad, store_laden, store_schreiben
                                     # die heutigen (der Hinweis laesst die Klammer weg)
                                     info.pop("kerne", None)
                                     info.pop("min_kerne", None)
-                                info["schwach"] = True   # der Alt-Entscheid setzte nur bei schwach
+                                # .541: „schwach" ist nicht mehr die Bedingung des
+                                # ganzen Entscheids, sondern nur noch die von
+                                # `cpu_threads`. Der nachgeholte Marker liest sie
+                                # deshalb aus dem, was DAMALS gesetzt wurde, statt
+                                # sie zu behaupten.
+                                info["schwach"] = "cpu_threads" in (d.get("aenderungen") or {})
             except Exception:
                 pass
         os.makedirs(os.path.dirname(marker), exist_ok=True)
@@ -408,9 +434,21 @@ def auto_hinweise(cfg):
                   if mk.get("kerne") is not None and mk.get("min_kerne") is not None
                   else "")   # nachgeholter Marker ohne historische Zahlen: Klammer weg
         for k, v in (mk.get("gesetzt") or {}).items():
-            if cfg.get(k) == v:
+            if cfg.get(k) != v:
+                continue
+            if k == "cpu_threads":
+                # Die Threadzahl ist und bleibt die LEISTUNGS-Entscheidung — sie
+                # haengt weiter an der gemessenen Kernzahl.
                 out[k] = (f"auto-defaulted at first start because this machine "
                           f"measured weak{zahlen} — change it here anytime")
+            else:
+                # .541: die zwei Ketten-Schalter sind eine PRODUKT-Entscheidung und
+                # haben mit der Maschinenstaerke nichts zu tun. Der alte Text hat
+                # das behauptet; auf einer starken Maschine waere er schlicht
+                # falsch gewesen (K1 — die Anzeige darf dem Verhalten nicht
+                # widersprechen).
+                out[k] = ("off at first start: a fresh installation runs face "
+                          "recognition only — switch it on here whenever you want it")
     except Exception:
         pass
     return out
