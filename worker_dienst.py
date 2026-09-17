@@ -447,6 +447,12 @@ def cgroup_frei_mb():
 # eines argv-Parsers: verifyd schickt jede Latte als Feld (`felder_lesen`), und was
 # ein Aufrufer nicht schickt, bekommt hier den belegten Wert statt eines Absturzes.
 ARGV_VORGABE = {
+    # .540 K-Deckel: hoechstens so viele Sample-Frames je Ereignis, gleichmaessig
+    # ueber die Cliplaenge (decode.sample_schritt). 0 = aus — und 0 ist hier
+    # RICHTIG als Fuellwert: wer das Feld nicht schickt, bekommt das Verhalten von
+    # vor .540, nie einen Deckel, den er nicht bestellt hat. Den Werkswert 240
+    # setzt der Config-Store (verifyd.py), nicht diese Fuellung.
+    "sample_deckel": 0,
     "fps_sample": 2.0,        # analyze.py:42
     "win_thresh": 0.40,       # analyze.py:43
     "urteil_kante": 0.0,      # analyze.py:45
@@ -463,6 +469,7 @@ ARGV_VORGABE = {
 # argv-Flagge -> Schluessel oben. Die Namen sind die von verifyd.run_analyze
 # (verifyd.py:2036-2117), die Schluessel die von worker_kern.urteils_latten.
 ARGV_FLAGGEN = {
+    "--sample-deckel": "sample_deckel",                   # .540
     "--fps-sample": "fps_sample", "--win-thresh": "win_thresh",
     "--urteil-kante": "urteil_kante", "--urteil-guete-e": "urteil_guete_e",
     "--urteil-guete-t": "urteil_guete_t", "--blick-fenster": "blick_fenster_s",
@@ -1072,7 +1079,8 @@ def persons_fuer_akte(persons_voll, idx_karte):
     return aus
 
 
-def results_zeile(label, eid, zeilen, persons, wache, lat, stat, profil):
+def results_zeile(label, eid, zeilen, persons, wache, lat, stat, profil,
+                  samples_moeglich=None, sample_deckel=0):
     """EINE results.jsonl-Zeile, Feld fuer Feld und in der REIHENFOLGE von
     analyze.py:940-1003. Die Reihenfolge ist kein Selbstzweck: die Akte wird
     gelesen, verglichen und von Menschen begutachtet, und ein Diff gegen Bestands-
@@ -1083,6 +1091,25 @@ def results_zeile(label, eid, zeilen, persons, wache, lat, stat, profil):
          "max_bw": max((f["bw"] for f in zeilen if not f["fd"]), default=0),
          "detektionen": detektionen_bauen(zeilen),
          "frames_gelesen": wache.gelesen, "frames_soll": wache.soll}
+    # .540 DAS ZAHLENPAAR DES SAMPLE-BUDGETS. Bis hier stand die WIRKLICHE Zahl
+    # abgetasteter Frames in KEINER Akte — nur im Klartext-Kopf der analyze.log
+    # („=== <Kamera> (<eid>) — N Frames"), und `frames_gelesen`/`frames_soll`
+    # meinen etwas anderes (Original-Frame-Index bzw. Paketzahl, also die
+    # Clip-Laenge). Die K-Auswertung vom 17.09. musste die Zahl fuer den
+    # Feld-Bestand deshalb aus `step` REKONSTRUIEREN. Das Feld schliesst die
+    # Luecke und ist zugleich die Grundlage der spaeteren Auto-Kalibrierung:
+    #   samples            wirklich abgetastete Frames (immer)
+    #   samples_moeglich   was das Zeitraster allein ergeben haette (wenn die
+    #                      Paketzahl bekannt war)
+    #   sample_deckel      NUR gesetzt, wenn der Deckel wirklich gegriffen hat —
+    #                      seine blosse Anwesenheit heisst „hier wurde gekappt"
+    # Additiv und nur vorwaerts: Leser greifen per .get() zu, Bestandszeilen
+    # bleiben unveraendert lesbar (dieselbe Politik wie Schema 3).
+    z["samples"] = wache.samples
+    if samples_moeglich is not None:
+        z["samples_moeglich"] = int(samples_moeglich)
+        if int(sample_deckel or 0) > 0 and wache.samples < int(samples_moeglich):
+            z["sample_deckel"] = int(sample_deckel)
     if wache.unvollstaendig:
         z["frames_fehlen"] = True
     if wache.decoder_fehler:
@@ -1703,8 +1730,23 @@ class Dienst:
             import engine_ov as eng                        # noqa: PLC0415
         elif name == "cuda":
             import engine_cuda as eng                      # noqa: PLC0415
+        elif name == "migraphx":
+            # E6 (17.09.2026): die AMD/ROCm-Seite. Sie WIRFT nicht, wenn das Geraet
+            # fehlt — sie faellt je Stufe LAUT auf die CPU und meldet den Zustand in
+            # `kopf_auskunft`/`/health` (Begruendung im Kopf von engine_migraphx und
+            # in `engine_migraphx._sitzung`). Der Guard unten prueft deshalb bei
+            # diesem Backend nicht das Gelingen des Baus, sondern liest die Bindung
+            # aus der Engine (s. `bindung_ergaenzen` weiter unten).
+            import engine_migraphx as eng                  # noqa: PLC0415
+        elif name == "cpu":
+            # E4 (17.09.2026): die CPU-Seite — der universelle Rueckfall, und auf dem
+            # cpu-Image das SOLL. Sie wirft ebenfalls nicht: hier gibt es kein Geraet,
+            # das fehlen koennte. Was sie meldet, ist der STACK (OpenVINO-CPU-Laufzeit
+            # gegen nacktes onnxruntime, gemessen 3-7x auseinander), nicht ein
+            # Fehlzustand.
+            import engine_cpu as eng                       # noqa: PLC0415
         else:
-            raise SystemExit(f"unbekannte Engine {name!r} (ov|cuda)")
+            raise SystemExit(f"unbekannte Engine {name!r} (ov|cuda|migraphx|cpu)")
         ap = argparse.ArgumentParser(add_help=False)
         eng.Engine.argumente(ap)
         vorgabe, _rest = ap.parse_known_args(self.a.engine_argv)
@@ -1729,6 +1771,20 @@ class Dienst:
             self.bindung = {"engine": name, "geraet": None, "gebunden": False,
                             "grund": str(e)}
             raise
+        # E6/E4: auf den beiden Engines, die NICHT werfen, ist „die Engine steht"
+        # nicht dasselbe wie „das gewuenschte Geraet rechnet" — auf migraphx, weil
+        # EP oder /dev/kfd fehlen koennen, auf cpu, weil zwei verschiedene
+        # Rechen-Stacks in Frage kommen. Was daran wahr ist, weiss nur die Engine.
+        #
+        # E4 (17.09.2026) HAT DIESE STELLE GENERISCH GEMACHT: bis .540 stand hier ein
+        # `hasattr(engine, 'ep_gelistet')`-Sonderfall mit MIGraphX-Texten IM DIENST,
+        # und der naechste Backend-Sonderfall haette einen zweiten danebengestellt.
+        # Jetzt fragt der Dienst EINE Methode; die Texte stehen dort, wo die Tatsache
+        # herkommt (K1: eine Diagnose, die „gebunden" sagt, waehrend etwas anderes
+        # rechnet, ist die teuerste Sorte Luege).
+        _erg = getattr(self.engine, "bindung_ergaenzen", None)
+        if _erg is not None:
+            _erg(self.bindung)
         prozess_log(f"engine {eng.Engine.name} bound ({self.bindung['geraet']}), "
                     f"{self.threads} compute thread(s)")
         # HIER WURDE BIS ZUR NB-ABNAHME DER SESSION-SATZ GEMESSEN. Das ist RAUS:
@@ -2776,6 +2832,20 @@ class Dienst:
             except Exception as e:                         # noqa: BLE001
                 prozess_log(f"ram own: could not be reported "
                             f"({type(e).__name__}: {e})")
+        # E6 (17.09.2026): dieselbe Kadenz fuer die AMD-Speicherlage aus sysfs.
+        # Sie ist auf diesem Backend die EINZIGE Karten-Auskunft — der
+        # MIGraphX-EP kennt keinen auswertbaren Speicherdeckel (Provider-Optionen
+        # `migraphx_mem_limit`/`migraphx_arena_extend_strategy` sind in 1.27.1
+        # wirkungslos), also gibt es nichts zu deckeln, nur zu beobachten. Die
+        # Engine liefert die Zahlen; `worker_dienst` muss nichts ueber amdgpu
+        # wissen. Nicht lesbar -> genau EINE laute Zeile, dann still (dort).
+        _spei = getattr(self.engine, "speicher_melden", None)
+        if lauf.typ == "analyze" and _spei is not None:
+            try:
+                _spei(f"after job {lauf.id}")
+            except Exception as e:                         # noqa: BLE001
+                prozess_log(f"gpu memory: could not be reported "
+                            f"({type(e).__name__}: {e})")
         # .531: derselbe Kartenhaushalt wie im Lebenszeichen. Er gehoert zu jedem
         # Urteil, das dieser Prozess faellt — ein Ereignis, das unter Kartendruck
         # gerechnet wurde, ist etwas anderes als eines aus dem Normalbetrieb.
@@ -3337,7 +3407,20 @@ class Dienst:
             fps = meta.get("fps") or 25
             if not (W and H):
                 raise RuntimeError(f"keine Videogeometrie fuer {eid}")
-            schritt = max(1, int(round(fps / float(fest["fps_sample"]))))  # decode.py:148
+            # .540 K-DECKEL: DIE Schrittweite kommt aus der EINEN Formel
+            # (decode.sample_schritt — Herleitung, Messbasis und ehrliche Grenzen
+            # stehen dort, nicht hier). Sie deckelt die Zahl der Sample-Frames je
+            # Ereignis, indem sie die Schrittweite vergroessert: der Clip wird bis
+            # zum Ende abgetastet, nur weiter auseinander. KEIN Frueh-Stopp — die
+            # letzte Minute eines langen Auftritts bleibt genauso dicht abgetastet
+            # wie die erste. `meta["pakete"]` ist die Clip-Laenge und kommt aus
+            # DEMSELBEN ffprobe-Lauf eine Zeile hoeher (kein zweiter Parser).
+            # Ohne Deckel (0, Vorgabe) ist `schritt` bitgleich zu vor .540.
+            _deckel = int(float(fest.get("sample_deckel") or 0))
+            schritt, _s_moegl, _s_verw = decode.sample_schritt(
+                fps, float(fest["fps_sample"]), meta.get("pakete"), _deckel)
+            _gekappt = (_s_moegl is not None and _s_verw is not None
+                        and _s_verw < _s_moegl)
             g = self.geometrie(W, H, fps, lauf)
             wache = DecoderWache(vid, schritt)
             tor = EngineTor(self.engine, wache)
@@ -3359,6 +3442,19 @@ class Dienst:
                 clipcache.frei(pin)                        # nie eine Pin-Waise
         # --- Wachen-Zeilen VOR dem Ergebnisblock (analyze.py:796-809: qs schneidet
         #     mit tail das ENDE, die Ergebniszeilen muessen dort bleiben)
+        if _gekappt:
+            # .540: EINE kompakte Zeile je Ereignis, an dem der Deckel wirklich
+            # gegriffen hat — kein Rauschen auf den 96 % der Ereignisse, die
+            # darunter bleiben. Kein WARN: das hier ist eine bestellte Einstellung,
+            # die tut, was sie soll, kein Ausfall. Die Zahlen daneben sind die, die
+            # eine spaetere Auto-Kalibrierung braucht (und sie stehen zusaetzlich
+            # in der Akte, s. results_zeile).
+            self.zaehler["sample_gekappt"] += 1
+            lauf.log.zeile(
+                f"  sample budget: capped to {_s_verw} of {_s_moegl} sample frames "
+                f"(cap {_deckel}, every {schritt}th frame instead of every "
+                f"{max(1, int(round(fps / float(fest['fps_sample']))))}th, "
+                f"spread evenly over the whole clip)")
         if wache.hwdec_fallback:
             # E2d, Konzept §4: LAUT, aber genau EINMAL je Ereignis (User 13.09.).
             # `rueckfall_melden` fuehrt den Zaehler und traegt die Art in
@@ -3419,7 +3515,8 @@ class Dienst:
                 f"(bestes {rec['best_wh']} t={rec['best_t']:.0f}s)")
         stat = self.stat_bauen(zeilen, lat, g_aus, pose_aus)
         zeile = results_zeile(label, eid, zeilen, persons_fuer_akte(persons_voll, idx_karte),
-                              wache, lat, stat, profil)
+                              wache, lat, stat, profil,
+                              samples_moeglich=_s_moegl, sample_deckel=_deckel)
         # pro Clip SOFORT persistieren, geflusht (analyze.py:925-1004)
         with open(results_pfad, "a", encoding="utf-8") as rf:
             rf.write(json.dumps(zeile, default=float, ensure_ascii=False) + "\n")
@@ -3436,6 +3533,13 @@ class Dienst:
                 "frames": {"gelesen": wache.gelesen, "soll": wache.soll,
                            "samples": wache.samples, "kette": wache.kette,
                            "decoder_fehler": wache.decoder_fehler,
+                           # .540: dasselbe Zahlenpaar wie in der Akte, damit es
+                           # auch auf dem Rueckweg steht (der Rueckweg ist eine
+                           # WEISSE LISTE, s. verifyd.py — was hier fehlt, ist
+                           # drueben still weg).
+                           **({"samples_moeglich": int(_s_moegl)}
+                              if _s_moegl is not None else {}),
+                           **({"sample_deckel": _deckel} if _gekappt else {}),
                            # E2d: das Feld, das decode.FrameIter seit jeher fuehrt —
                            # „HW angefordert, Software hat geliefert" (Konzept §4).
                            **({"hwdec_fallback": True,
@@ -3535,7 +3639,8 @@ class Dienst:
 def argumente():
     ap = argparse.ArgumentParser(
         description="worker_dienst — Dienst-Anschluss des neuen Kerns (E2)")
-    ap.add_argument("--engine", default=None, choices=("ov", "cuda"),
+    ap.add_argument("--engine", default=None,
+                    choices=("ov", "cuda", "migraphx", "cpu"),
                     help="Backend-Engine. Vorgabe: aus VERIFY_BACKEND/OV_DEVICE "
                          "(face_audit.resolve_backend), wie im Dienst.")
     ap.add_argument("--threads", type=int, default=int(os.environ.get("SUSLIK_WORKER_THREADS", "1")),
@@ -3593,9 +3698,45 @@ def argumente():
         a.refcache = os.path.join(a.scratch, "refcache.npz")
     if a.engine is None:
         kind, _dev = face_audit.resolve_backend()
-        a.engine = {"openvino": "ov", "cuda": "cuda"}.get(kind)
+        # E4 (17.09.2026): `cpu` hat jetzt eine eigene Engine (engine_cpu), die
+        # Abbildung ist damit VOLLSTAENDIG — jedes kind der Registry hat einen
+        # Rechenweg. Der Zweig darunter bleibt trotzdem: er faengt den Fall
+        # „unbekanntes/neues kind" und vor allem den Fall, den das gpu-legacy-Image
+        # am 17.09. gezeigt hat (Treiber bindet nicht, resolve_backend faellt
+        # zurueck). Nur ist der Text jetzt ein anderer: es fehlt keine Engine mehr,
+        # sondern ein GERAET.
+        a.engine = {"openvino": "ov", "cuda": "cuda",
+                    "migraphx": "migraphx", "cpu": "cpu"}.get(kind)
         if a.engine is None:
-            raise SystemExit(f"Backend {kind!r} hat noch keine Engine (E4: cpu, E6: rocm)")
+            # .540: DIESE ZEILE LIEST EIN NUTZER. Bis .539 stand hier ein deutscher
+            # Halbsatz mit einer internen Etappen-Nummer — und zwar an der Stelle,
+            # an der die Anlage aufhoert zu rechnen.
+            #
+            # .541 (E4) HAT IHREN ANWENDUNGSFALL VERSCHOBEN, und das ist wichtig
+            # genug fuer einen eigenen Absatz: der Fall, der sie geboren hat (das
+            # gpu-legacy-Image, dessen Legacy-Treiber auf einer Gen12+-iGPU nicht
+            # bindet, `resolve_backend` faellt auf `cpu`), kommt hier NICHT MEHR AN —
+            # `cpu` hat jetzt eine Engine und rechnet. Damit der Befund trotzdem
+            # nicht still wird, meldet ihn `engine_cpu` selbst: dort weiss man, dass
+            # `SUSLIK_VARIANT` eine GPU-Variante nennt, waehrend die CPU rechnet, und
+            # die Warnung geht ueber `bindung` in jede Job-Antwort und nach /health.
+            # Der Unterschied ist bewusst: eine Anlage, die langsam analysiert, ist
+            # besser als eine, die gar nicht analysiert — aber sie muss es SAGEN.
+            #
+            # Was hier ankommt, ist jetzt allein ein kind der Registry OHNE Eintrag
+            # in der Abbildung oben (ein neues Backend, ein Tippfehler im Config-Wert,
+            # den `resolve_backend` als unbekannt zurueckgibt). Das ist ein echter
+            # Abbruchgrund: wir wissen nicht, womit wir rechnen sollen.
+            # Die Liste der gueltigen Werte kommt aus der EINEN Quelle (Registry),
+            # nicht als Literal in einem Fehlertext — sonst nennt sie nach dem
+            # naechsten Backend etwas Falsches (qs_ebenen K3).
+            from core.registry import alle_wizard_werte    # noqa: PLC0415
+            raise SystemExit(
+                f"no analysis engine for backend {kind!r}: suslik does not know this "
+                f"backend. Check the 'backend' value in your configuration — the "
+                f"values this build knows are "
+                f"{', '.join(alle_wizard_werte())}. "
+                f"'suslik --benchmark' inside the container shows what it sees.")
     return a
 
 

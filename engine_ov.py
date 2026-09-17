@@ -128,13 +128,51 @@ def _namen_festpinnen(modell):
     return modell
 
 
+# ------------------------------------------------- Rechengenauigkeit (Varianten-Schalter)
+# .540, ANLASS: Discussion #30. Der Feldtester faehrt eine UHD 630 (Gen9, i7-8700) und
+# hat GEMESSEN, dass fp16-adaface auf seinem Geraet unbrauchbare Werte liefert; er
+# rechnet deshalb FP32 mit rund 66,5 ms je Inferenz. Diese Engine laesst bisher die
+# GPU-VORGABE gelten (auf Intel-iGPUs fp16) und hebt nur ZWEI Stufen ausdruecklich auf
+# f32 (Warp/GridSample und die Normierung, je mit eigener Messung an Ort und Stelle).
+#
+# Auf Gen12+ ist das richtig und gemessen. Auf Gen8/9/11 ist es es offenbar nicht — und
+# genau diese Generationen bedient das `gpu-legacy`-Image. Deshalb der Schalter, und
+# deshalb als UMGEBUNGS-Variable statt als Config-Wert: er gehoert zur IMAGE-VARIANTE
+# (Dockerfile.gpu-legacy setzt ihn), nicht zur Anlage des Betreibers, und die Varianten
+# gpu/cuda bleiben ohne ihn Byte fuer Byte beim heutigen Verhalten.
+#
+# EHRLICHE GRENZE: der Preis ist NICHT beziffert. Auf DIESER Maschine (Gen12+) laesst
+# sich der Legacy-Treiber nicht binden, die 66,5 ms sind die Zahl des Feldtesters fuer
+# SEINE Stufe, nicht unsere Messung fuer die ganze Kaskade. Was f32 dort wirklich
+# kostet und ob es seine Werte wirklich heilt, beantwortet sein Log — nicht diese
+# Datei. Solange das offen ist, traegt nur das Legacy-Image den Zwang.
+OV_PRAEZISION_ENV = "SUSLIK_OV_PRECISION"
+
+
+def _praezision_zwang():
+    """Erzwungener Rechentyp aller Stufen oder None (= Vorgabe des Geraets).
+    Erlaubt sind 'f32'/'fp32'/'float32' (gleichbedeutend) — alles andere gilt als
+    'nicht gesetzt', damit ein Tippfehler nie still eine dritte Genauigkeit erfindet."""
+    w = (os.environ.get(OV_PRAEZISION_ENV) or "").strip().lower()
+    return "f32" if w in ("f32", "fp32", "float32") else None
+
+
+PRAEZISION_ZWANG = _praezision_zwang()
+
+
 def _kompilieren(core, modell, konfig=None):
     """DIE EINE Stelle, an der ein Graph dieser Engine kompiliert wird.
 
     Sie existiert, damit das Namens-Festpinnen (s. `_namen_festpinnen`) nicht an neun
     Aufrufstellen stehen muss und keine neue vergessen werden kann: wer hier nicht
-    durchgeht, kommt nicht auf die GPU. -> CompiledModel"""
-    return core.compile_model(_namen_festpinnen(modell), GERAET, konfig or {})
+    durchgeht, kommt nicht auf die GPU. Aus demselben Grund steht der
+    Genauigkeits-Zwang hier und nicht an neun Stellen. `setdefault`: eine Stufe, die
+    ihre Genauigkeit SELBST bestimmt hat (Warp, Normierung — beide f32, beide mit
+    Messung begruendet), behaelt ihre Entscheidung. -> CompiledModel"""
+    konfig = dict(konfig or {})
+    if PRAEZISION_ZWANG:
+        konfig.setdefault("INFERENCE_PRECISION_HINT", PRAEZISION_ZWANG)
+    return core.compile_model(_namen_festpinnen(modell), GERAET, konfig)
 
 
 # ------------------------------------------------------------------ Pruefvektor
@@ -1024,7 +1062,28 @@ class Engine:
     def __init__(self, a):
         self.core = ov.Core()
         if GERAET not in self.core.available_devices:
-            raise SystemExit(f"kein {GERAET}, kein Rueckfall")
+            # LAUT, mit dem, was die Laufzeit WIRKLICH sieht. Bis .539 stand hier nur
+            # „kein GPU, kein Rueckfall" — auf einer Anlage, deren Treiber nicht
+            # bindet (Gen9 ohne legacy1-Runtime, fehlendes /dev/dri, kaputte ICD),
+            # sagte das nicht, WAS statt dessen da ist. Der Grund reist als
+            # `bindung.grund` bis in jede Job-Antwort (worker_dienst.engine_bauen),
+            # also gehoert die Geraeteliste hinein.
+            raise SystemExit(
+                f"no {GERAET} device, no fallback — OpenVINO only sees "
+                f"{', '.join(self.core.available_devices) or '(nothing)'} here. "
+                f"Intel integrated graphics of generations 8, 9 and 11 need the "
+                f"gpu-legacy image (Intel's legacy1 compute runtime), generation "
+                f"12 and newer need the gpu image, and both need /dev/dri passed "
+                f"into the container")
+        if PRAEZISION_ZWANG:
+            # .540: laut sagen, dass diese Variante ANDERS rechnet als die Vorgabe.
+            # Ein stiller Genauigkeits-Wechsel waere die K1-Klasse: dieselbe
+            # Software, andere Zahlen, und niemand sieht warum.
+            print(f"HINWEIS: {OV_PRAEZISION_ENV}={PRAEZISION_ZWANG} — ALLE Stufen "
+                  f"werden mit dem Genauigkeits-Hinweis '{PRAEZISION_ZWANG}' "
+                  f"gebaut statt in der Vorgabe des Geraets (auf Intel-iGPUs fp16). "
+                  f"Gesetzt vom gpu-legacy-Image; Anlass und Grenzen stehen bei "
+                  f"engine_ov._praezision_zwang.", flush=True)
         # Der Geraete-Kontext, aus dem die Remote-Tensoren stammen (v7). Er ist der
         # Vorgabe-Kontext derselben iGPU, auf der die Kompilate laufen — nur so darf ein
         # Tensor zwischen zwei Kompilaten wandern.
@@ -1138,6 +1197,13 @@ class Engine:
                 "modell_pfade": {k: best.pfade[k] for k in sorted(best.pfade)},
                 "det_onnx": wk.modell_pfad("det_10g"), "det_ausgaenge": g0.det_n,
                 "geraet": GERAET, "openvino": ov.__version__,
+                # .540: der VARIANTEN-Zwang, nicht die Genauigkeit einer einzelnen
+                # Stufe. Die Zeile darunter liest die fuenf Ausschnitt-Graphen am
+                # Kompilat ab; die Modell-Stufen (det/e/t/p/r) liegen im
+                # prozessweiten Bestand und tauchen dort nicht auf — ohne dieses
+                # Feld waere an der Auskunft nicht erkennbar, unter welcher
+                # Genauigkeit sie gebaut wurden.
+                "praezision_zwang": PRAEZISION_ZWANG,
                 "cache": self.cache or None, "cache_kalt": self.kalt,
                 "cache_frei_mb": (self.frei // 1024 // 1024) if self.frei is not None else None,
                 # AM KOMPILAT ABGELESEN, nicht behauptet — je Stufe einzeln, seit dem

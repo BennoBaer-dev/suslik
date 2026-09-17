@@ -79,12 +79,18 @@ docker pull ghcr.io/bennobaer-dev/suslik:latest-gpu-legacy  # Intel Gen8/9/11 (t
 docker pull ghcr.io/bennobaer-dev/suslik:latest-rocm        # AMD (testing)
 
 # the same release, pinned so it never moves under you:
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.526-gpu
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.526-cuda
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.541-gpu
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.541-cuda
 docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.526-cpu
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.526-gpu-legacy
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.526-rocm
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.541-gpu-legacy
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.541-rocm
 ```
+
+> **The `cpu` image is one release behind on purpose.** `latest-cpu` stays on 0.1.0.526.
+> In the 0.1.0.541 build of that variant the new OpenVINO CPU runtime does not actually
+> engage — the image falls back to the plain CPU provider and says so in its startup log,
+> so it would give you nothing over 0.1.0.526 while being considerably larger. A fixed
+> `cpu` build follows as its own release. The other four variants are on 0.1.0.541.
 
 > **Testing variants:** `gpu-legacy` and `rocm` follow every release under `latest-*` like
 > the others, but they are not covered by our own release test machines — they rely on

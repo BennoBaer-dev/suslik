@@ -104,7 +104,7 @@ COPY docker/buffalo_l/ /root/.insightface/models/buffalo_l/
 #   engine_ov/engine_cuda werden im Dienst LAZY importiert (worker_dienst.engine_bauen),
 #   die jeweils fremde Engine stoert deshalb in keinem Image.
 COPY verifyd.py analyze.py anlernen.py face_audit.py abnahme.py auftritte.py szenarien.py decode.py worker.py no_person.py sync_refs.py \
-     worker_dienst.py worker_kern.py bild_kern.py engine_ov.py engine_cuda.py /app/
+     worker_dienst.py worker_kern.py bild_kern.py engine_ov.py engine_cuda.py engine_migraphx.py engine_cpu.py /app/
 COPY webui/ /app/webui/
 COPY core/ /app/core/
 COPY routes/ /app/routes/

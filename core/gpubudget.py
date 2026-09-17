@@ -392,6 +392,32 @@ STUETZWERTE = {
     "migraphx": None,
 }
 
+# BACKENDS MIT EIGENEM GERAETESPEICHER, ABER OHNE DURCHSETZBAREN DECKEL (E6,
+# 17.09.2026). Sie bekommen OHNE Messung genau EINEN Rechenstrang statt des
+# Durchsatz-Vorschlags — die vorsichtige Richtung, dieselbe wie `_fail_closed`.
+#
+# Warum migraphx hier steht, belegt statt vermutet: die Provider-Optionen
+# `migraphx_mem_limit` und `migraphx_arena_extend_strategy` gibt es zwar, sie
+# werden in onnxruntime 1.27.1 aber NICHT ausgewertet — `mem_limit_` und
+# `arena_extend_strategy_` setzt der EP-Konstruktor nicht aus `info`
+# (migraphx_execution_provider.h:129-130, .cc:233-234), und
+# `CreatePreferredAllocators` baut die Arena mit `AllocatorCreationInfo(factory,
+# id)`, also Vorgabe `use_arena=true` und `arena_cfg = {0,-1,-1,-1,-1,-1}` ohne
+# Deckel (allocator_utils.h:17-35). Der .531-Kartenhaushalt hat auf diesem EP
+# damit keine Entsprechung: Es gibt nichts, wogegen eine Leiter planen koennte.
+# Beobachtet wird der Speicher statt dessen ueber sysfs
+# (engine_migraphx.SysfsSpeicher, eine Zeile je Ereignis).
+# cpu steht ausdruecklich NICHT hier: dort gibt es keinen Geraetespeicher, und der
+# Durchsatz-Vorschlag ist der richtige Rueckfall.
+OHNE_DECKEL = {
+    "migraphx": ("the MIGraphX execution provider has no enforceable memory cap "
+                 "(migraphx_mem_limit is not evaluated in onnxruntime 1.27.1) and "
+                 "no memory measurements exist for it yet — the worker plans for "
+                 "ONE compute thread. Set worker_straenge if you measured that "
+                 "your card carries more; the card-memory lines in the worker "
+                 "log (vram/gtt from sysfs) are the number to watch"),
+}
+
 
 def stuetzwerte(kind):
     """-> Stuetzwerte dieses Backends oder None, wenn es keine Messung gibt."""
@@ -1102,6 +1128,18 @@ def straenge(gesamt_mb, n_waechter, kind, vorschlag, g_zusatz=0, nutzer_n=0,
            "preis_quelle_stufen": {}, "preise_mb": {},
            "zustand": "gruen", "verweigert": False, "unter_formel": None}
     if not s:
+        if kind in OHNE_DECKEL:
+            # E6 (17.09.2026): ein Backend MIT eigenem Geraetespeicher, aber OHNE
+            # jede Moeglichkeit, ihn zu deckeln — der Durchsatz-Vorschlag waere hier
+            # fail-OPEN in genau der Lage, in der wir am wenigsten wissen (dieselbe
+            # Richtung wie `_fail_closed` auf den Karten-Backends). Die Nutzer-Zahl
+            # gilt weiter, sie laeuft unten durch `_nutzer_wahl`.
+            aus["n"] = 1
+            aus["grund"] = "kein_deckel_moeglich"
+            aus["hinweis"] = OHNE_DECKEL[kind]
+            aus["rechenweg"] = (f"{kind}: no memory measurements and no enforceable "
+                                f"arena cap -> 1 compute thread (conservative)")
+            return _nutzer_wahl(aus)
         aus["grund"] = "backend_ungemessen"
         aus["hinweis"] = (f"no memory measurements exist for backend '{kind}' yet — "
                           f"falling back to the measured throughput value ({vor}); "

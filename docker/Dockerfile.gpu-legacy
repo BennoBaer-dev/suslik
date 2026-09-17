@@ -85,6 +85,19 @@ ENV NEO_CACHE_DIR=/data/clips/neo_cache \
     NEO_CACHE_PERSISTENT=1 \
     NEO_CACHE_MAX_SIZE=1073741824
 
+# --- .540 FP32-ZWANG FUER GEN8/9/11 (Anlass Discussion #30, Feldtester UHD 630 / i7-8700).
+#     Der neue Worker (engine_ov.py) laesst sonst die GPU-VORGABE gelten, und die ist auf
+#     Intel-iGPUs fp16; nur zwei Stufen heben sich ausdruecklich auf f32 (Warp und
+#     Normierung, je mit eigener Messung). Der Feldtester hat auf SEINEM Geraet gemessen,
+#     dass fp16-adaface dort unbrauchbare Werte liefert, und faehrt FP32 mit rund 66,5 ms
+#     je Inferenz. Diese Variante bedient genau die Generationen, um die es geht — deshalb
+#     steht der Zwang HIER und nicht in gpu/cuda: dort bleibt alles beim gemessenen
+#     Verhalten. Gelesen wird die Variable in engine_ov._praezision_zwang; dort stehen
+#     auch die ehrlichen Grenzen (der ZEITpreis ist auf unserer Hardware nicht messbar,
+#     weil der Legacy-Treiber hier nicht bindet — das beantwortet sein Log). Wer sie
+#     beim Start ueberschreibt (-e SUSLIK_OV_PRECISION=), bekommt die GPU-Vorgabe zurueck.
+ENV SUSLIK_OV_PRECISION=f32
+
 # --- Modelle backen + Code + Container-Config (identisch zum gpu-Image; backend: auto loest
 #     auf Gen9 ohne NPU nach openvino:GPU auf). ---
 COPY NOTICE LICENSE /app/
@@ -96,7 +109,7 @@ COPY docker/buffalo_l/ /root/.insightface/models/buffalo_l/
 #   engine_ov/engine_cuda werden im Dienst LAZY importiert (worker_dienst.engine_bauen),
 #   die jeweils fremde Engine stoert deshalb in keinem Image.
 COPY verifyd.py analyze.py anlernen.py face_audit.py abnahme.py auftritte.py szenarien.py decode.py worker.py no_person.py sync_refs.py \
-     worker_dienst.py worker_kern.py bild_kern.py engine_ov.py engine_cuda.py /app/
+     worker_dienst.py worker_kern.py bild_kern.py engine_ov.py engine_cuda.py engine_migraphx.py engine_cpu.py /app/
 COPY webui/ /app/webui/
 COPY core/ /app/core/
 COPY routes/ /app/routes/

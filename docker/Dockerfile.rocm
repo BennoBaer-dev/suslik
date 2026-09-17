@@ -44,6 +44,7 @@ RUN mkdir -p /opt/rocm-dist/opt/rocm-$ROCM/lib/migraphx/lib \
     rm -f /opt/rocm-dist/opt/rocm-$ROCM/lib/libmigraphx_py*.so*; \
     cd /opt/rocm-$ROCM/lib && cp -dpr migraphx/lib/* /opt/rocm-dist/opt/rocm-$ROCM/lib/migraphx/lib/ \
     && (cp -dpr rocblas/library/*gfx10* rocblas/library/*gfx11* rocblas/library/*gfx12* \
+        rocblas/library/*_fallback.dat rocblas/library/TensileManifest.txt \
         /opt/rocm-dist/opt/rocm-$ROCM/lib/rocblas/library/ 2>/dev/null || true) \
     && (cp -dpr /opt/rocm-$ROCM/share/miopen/db/*gfx10* /opt/rocm-$ROCM/share/miopen/db/*gfx11* \
         /opt/rocm-$ROCM/share/miopen/db/*gfx12* /opt/rocm-dist/opt/rocm-$ROCM/share/miopen/db/ 2>/dev/null || true) \
@@ -63,6 +64,21 @@ RUN mkdir -p /opt/rocm-dist/opt/rocm-$ROCM/lib/migraphx/lib \
 #    einzeln aufzaehlen und wuerde beim naechsten ROCm-Sprung still etwas verlieren.
 #    Das `rm -f` sagt dagegen genau, was hier NICHT mitfaehrt. Nebenbei faellt damit
 #    die _3.12-Datei weg, deren libpython3.12.so.1.0 in diesem Image nie existiert.
+#  - *_fallback.dat + TensileManifest.txt (E6, 17.09.2026): die ARCH-UNABHAENGIGEN
+#    Loesungs-Indizes von Tensile. AM GEBAUTEN IMAGE GEMESSEN, nicht vermutet:
+#    ROCm 7.2.4 liefert rocBLAS-Kernel fuer gfx1030/1100/1101/1102/1150/1151/
+#    1200/1201 (dazu gfx803/900/906/908/90a/942/950) — fuer **gfx1103**, die Karte
+#    des einzigen Feldtesters, GAR KEINE. Der Zaehler ist 0, und die drei
+#    gfx-Globs oben haetten sie mitgenommen, wenn es sie gaebe; es gibt hier also
+#    nichts nachzulegen. Was diese Karte dann benutzen MUSS, ist der
+#    Fallback-Pfad — und von dem lagen bis .537 nur die Code-Objekte
+#    (`*_fallback_gfx*.hsaco`, ueber die gfx-Globs mitgekommen) im Image, waehrend
+#    die `.dat`-Dateien, die sie benennen, keinen gfx-Token im Namen tragen und
+#    deshalb still herausfielen. Code-Objekte ohne ihren Index auszuliefern ist
+#    keine Entscheidung, sondern eine Luecke — 2 MB fuer 54 Dateien plus das
+#    Manifest. EHRLICHE GRENZE: dass rocBLAS damit auf gfx1103 laeuft, ist NICHT
+#    geprueft (keine AMD-Karte hier). Behauptet wird nur, dass das Buendel jetzt
+#    in sich stimmt.
 #  - include/: die HIP-Header. Laut PR-#28-Tester braucht der hiprtc-JIT sie zur
 #    Laufzeit, wenn MIGraphX Kernel fuer eine Karte uebersetzt, fuer die keine
 #    vorkompilierten Bibliotheken vorliegen (genau der RDNA3-Fall). Hier nicht
@@ -121,7 +137,25 @@ ENV MIGRAPHX_DISABLE_MIOPEN_FUSION=1 \
     MIOPEN_CUSTOM_CACHE_DIR=/data/clips/migraphx_cache \
     MIOPEN_USER_DB_PATH=/data/clips/migraphx_cache \
     AMD_COMGR_CACHE=1 \
-    AMD_COMGR_CACHE_DIR=/data/clips/migraphx_cache
+    AMD_COMGR_CACHE_DIR=/data/clips/migraphx_cache \
+    ORT_MIGRAPHX_MODEL_CACHE_PATH=/data/model_cache
+# ORT_MIGRAPHX_MODEL_CACHE_PATH (E6, 17.09.2026) — der .mxr-Kompilat-Cache des
+# MIGraphX-EP. Er ist im EP per Vorgabe AUS ("empty cache path means the MXR caching
+# is disabled - always compile", migraphx_execution_provider.cc:1321), und ohne ihn
+# kostet JEDER Prozessstart die volle Kompilierung jeder Stufe in jeder Form; der
+# Feldtester mass am 10.09. 63 s fuer EIN kleines Modell. Der Pfad liegt unter /data
+# (das Volume), damit die Kompilate Neustarts ueberleben (Warmup-Lehre P4) — aber
+# NICHT unter /data/clips wie die MIOpen-/COMGR-Caches daneben: `clips/` wird vom
+# Aufraeumer regelmaessig geleert, und ein halb weggeraeumter Kompilat-Cache ist
+# schlimmer als keiner. Die Variable schlaegt die gleichnamige Provider-Option
+# (GET_ENV_STRING wird NACH der Uebernahme aus `info` gelesen, .cc:178); die Engine
+# reicht denselben Wert zusaetzlich als Option herein, damit beide nie auseinander-
+# laufen (engine_migraphx._provider_optionen).
+# ACHTUNG, KEIN fp16-SCHALTER: ORT_MIGRAPHX_FP16_ENABLE steht hier bewusst NICHT.
+# Er fuehrt zu migraphx::quantize_fp16(prog) mit der Vorgabe-Op-Liste {"all"}
+# (quantization.hpp:41-42) und kappt damit den GANZEN Fused-Subgraphen — auch
+# Rechnungen mit f32-Pflicht. Der belastbare Weg waere wie auf CUDA das Vorab-Backen
+# je Modell; das ist eine eigene Etappe mit eigener Abnahme.
 # Suchpfad fuer die HIP-Header (Angabe des PR-#28-Testers): hiprtc uebersetzt Kernel
 # zur Laufzeit und findet die Header sonst nicht. Auf DIESER Maschine nicht pruefbar
 # (keine AMD-Karte) — uebernommen, weil es ohne Karte nichts kostet und der einzige
@@ -138,7 +172,7 @@ COPY docker/buffalo_l/ /root/.insightface/models/buffalo_l/
 #   engine_ov/engine_cuda werden im Dienst LAZY importiert (worker_dienst.engine_bauen),
 #   die jeweils fremde Engine stoert deshalb in keinem Image.
 COPY verifyd.py analyze.py anlernen.py face_audit.py abnahme.py auftritte.py szenarien.py decode.py worker.py no_person.py sync_refs.py \
-     worker_dienst.py worker_kern.py bild_kern.py engine_ov.py engine_cuda.py /app/
+     worker_dienst.py worker_kern.py bild_kern.py engine_ov.py engine_cuda.py engine_migraphx.py engine_cpu.py /app/
 COPY webui/ /app/webui/
 COPY core/ /app/core/
 COPY routes/ /app/routes/

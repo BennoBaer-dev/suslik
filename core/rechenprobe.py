@@ -492,11 +492,23 @@ def messen(vertrag, session_bauer, zeitbudget_s=60.0, backend_geraet_je_task=Non
             # SYSTEMS (cpu-Image, kein Beschleuniger, Placement auf CPU) — wer im
             # Startlog liest "cpu by design", waehrend in Wahrheit sein Beschleuniger
             # fehlt, sucht an der falschen Stelle.
+            # .541 (E4): auf der CPU gibt es seit dem OpenVINO-Stack ZWEI Rechenwege
+            # (OpenVINO-CPU-Runtime und der nackte CPU-EP), und die Anlage faehrt den
+            # ersten. Gegengeprueft wird hier trotzdem keiner von beiden — die Probe
+            # vergleicht Geraet gegen CPU, und beide SIND die CPU. Das steht jetzt so
+            # da, statt „nichts gegenzupruefen" zu sagen und den zweiten Weg zu
+            # verschweigen: ein Betreiber, der wissen will, ob sein Stack dieselben
+            # Zahlen rechnet, soll sehen, dass diese Zeile die Frage nicht beantwortet.
+            # OFFEN, bewusst: ein echter Kreuzvergleich OpenVINO-CPU gegen CPU-EP
+            # waere eine eigene Stufe mit eigener Eichung — sie zaehlte in
+            # startup_fails, und eine ungeeichte Latte dort kostet Starts.
             aus.append(_zeile(name, geraet, massart(name, v), urteil="skip",
                               grund=("cpu by design — no accelerator to check"
                                      if v.get("cpu_fest") else
-                                     "runs on the CPU with this backend — nothing to "
-                                     "cross-check against")))
+                                     "runs on the CPU with this backend — no "
+                                     "accelerator to cross-check against (if this "
+                                     "build has the OpenVINO CPU runtime, that is "
+                                     "what computes; it is not cross-checked here)")))
             continue
         art = massart(name, v)
         if art is None:

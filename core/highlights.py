@@ -12,7 +12,43 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.0.537"   # .537 traegt EINEN Box-Eintrag, INHALT VOM INHABER
+STAND = "0.1.0.541"   # .541 traegt den Box-Eintrag des Sammel-Release, INHALT VOM
+                      # INHABER VORGEGEBEN (17.09.2026 abends, zwei Entscheide).
+                      # (a) KONSOLIDIERUNG: „alles unter der aktuellen Version, nicht
+                      # aufgeteilt auf mehrere" — der .540-Eintrag ist deshalb nicht
+                      # stehen geblieben, sondern auf 0.1.0.541 UMGEHAENGT; .541 ist
+                      # die eine Nummer, unter der alle fuenf Varianten dieses Pakets
+                      # ausgeliefert werden. Eintraege 1 (Test-Marke) und 2
+                      # (Kern-Neubau) sind wortgleich uebernommen, in allen Sprachen.
+                      # (b) EINTRAG 3 OHNE ZAHL („Nummer 1, Zahl raus"): seit der
+                      # Werksstaffel je Variante (cpu 120 / gpu-legacy 180 / sonst 240,
+                      # core.registry.SAMPLE_DECKEL_WERK) waere die feste „240" fuer
+                      # zwei von fuenf Varianten schlicht falsch. Der neue Wortlaut
+                      # nennt deshalb nur noch „Werkswert je Variante".
+                      # Nichts selbststaendig ergaenzt ([[whatsnew-inhalt-abstimmen]]).
+                      # Davor: "0.1.0.540"   # .540 traegt EINEN Box-Eintrag, INHALT VOM INHABER VORGEGEBEN
+                      # (17.09.2026, per Nachsteuerung an den Legacy-Bauer, zweimal
+                      # praezisiert): die Box wird KONSOLIDIERT — ALLES unter der
+                      # EINEN aktuellen Nummer, nicht auf Zwischenversionen
+                      # aufgeteilt, kurze Saetze. Inhalt: Test-Marke (fett/rot),
+                      # Kern-Neubau der Erkennung samt Tempo (die Aussage der
+                      # .537/.527-Box, an dieser Stelle neu formuliert wie
+                      # vorgegeben) und NEU der Sample-Deckel. Der Deckel-Satz
+                      # steht in der gekuerzten Zweitfassung des Inhabers. Nichts
+                      # selbststaendig ergaenzt ([[whatsnew-inhalt-abstimmen]]);
+                      # der Wortlaut geht vor der Veroeffentlichung noch einmal
+                      # durch (Release-Runbook Stufe 0).
+                      # Davor: "0.1.0.539"   # .539 traegt KEINEN Box-Eintrag — die Giftpillen-
+                      # Klemme beim Watchdog-Schuss ist ein interner Fix; STAND war
+                      # dort nicht mitgezogen worden und wird hier nachgeholt.
+                      # Davor: "0.1.0.538"   # .538 traegt KEINEN Box-Eintrag — die MIGraphX-Engine der
+                      # rocm-Variante (E6) ist ein interner Bauschritt, und ob
+                      # davon ueberhaupt etwas in die Box gehoert, ist mit dem
+                      # Inhaber NICHT abgestimmt ([[whatsnew-inhalt-abstimmen]]:
+                      # Box-Inhalt wird nie selbstaendig gefuellt). Alles steht im
+                      # CHANGELOG. STAND wandert nur mit, damit das Gate
+                      # (STAND == VERSION) faehrt.
+                      # Davor: "0.1.0.537"   # .537 traegt EINEN Box-Eintrag, INHALT VOM INHABER
                       # VORGEGEBEN (16.09.2026 21:0x): die Box wird
                       # KONSOLIDIERT — ein Eintrag unter 0.1.0.537 mit der
                       # Test-Marke, dem Worker-Umbau-Satz (.527) und dem
@@ -653,6 +689,76 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # ####################################################################
+    # 0.1.0.541 — INHALT VOM INHABER VORGEGEBEN. DREI Eintraege unter EINER
+    # Nummer; ausdrueckliche Auflage (17.09.2026, zweimal praezisiert):
+    # „ALLES unter der EINEN aktuellen Version, nicht aufgeteilt auf
+    # Zwischenversionen", kurze Saetze. Der Eintrag stand bis zum Sammel-Release
+    # unter 0.1.0.540 und ist am Abend des 17.09. auf 0.1.0.541 UMGEHAENGT
+    # worden — der Inhaber sinngemaess: „alles unter der aktuellen Version, nicht
+    # aufgeteilt auf mehrere". .541 ist die eine Nummer, unter der alle fuenf
+    # Varianten dieses Pakets rausgehen; .540 ging nur als gpu-legacy raus.
+    #   1. Die Test-Marke, fett und rot. Sie ist KEIN neues Markup: `betont`
+    #      faerbt den Kopf bis zum ersten Gedankenstrich (Renderer
+    #      webui.whatsnew_block, Auflage seit .526) — deshalb steht „Test
+    #      version" davor und die Einordnung dahinter. Der Rest des Satzes ist
+    #      der abgestimmte Wortlaut der .537/.527-Box, nur „release" -> „version"
+    #      wie vorgegeben. WORTGLEICH beim Umhaengen uebernommen.
+    #   2. Der Kern-Neubau. Er sagt dasselbe wie der Worker-Satz der .537-Box,
+    #      aber in der vorgegebenen Fassung: die Stufen laufen als EINE Kette auf
+    #      der GPU, und das Tempo wird OHNE Faktor genannt („significantly faster
+    #      than 0.1.0.526") — die „3-5x" der .537-Box waren fuer den damaligen
+    #      Stand freigegeben, nicht fuer diesen. WORTGLEICH uebernommen.
+    #   3. Der Sample-Deckel — NEU GEFASST, OHNE ZAHL (Inhaber 17.09. abends:
+    #      „Nummer 1, Zahl raus"). Die vorige Fassung nannte „240 Frames je
+    #      Ereignis"; seit .541 traegt jede Variante ihren eigenen Werkswert
+    #      (cpu 120, gpu-legacy 180, sonst 240 — core.registry.SAMPLE_DECKEL_WERK),
+    #      und eine feste 240 in der Box waere fuer zwei von fuenf ausgelieferten
+    #      Varianten schlicht falsch. Der Satz nennt deshalb nur noch, DASS es
+    #      einen Werkswert je Variante gibt. Nichts darueber hinaus ergaenzt.
+    # Die Alt-Eintraege .537/.527/.526 bleiben unveraendert in der Historie.
+    # EN ist der vorgegebene Wortlaut; DE/ES/IT/FR sind die Uebersetzung davon
+    # (Praxis seit .298/§6.3).
+    # ####################################################################
+    ("0.1.0.541", (
+        {"betont": True,
+         "de": "Testversion — für den Feldtest, kein allgemeines Update.",
+         "en": "Test version — for field testing, not a general update.",
+         "es": "Versión de prueba — para pruebas de campo, no es una "
+               "actualización general.",
+         "it": "Versione di prova — per il test sul campo, non è un "
+               "aggiornamento generale.",
+         "fr": "Version de test — pour les essais sur le terrain, pas une mise "
+               "à jour générale."},
+        {"de": "Der Erkennungs-Kern ist neu gebaut. Alle Analyse-Stufen laufen "
+               "jetzt als eine Kette auf der GPU. Die Analyse ist deutlich "
+               "schneller als 0.1.0.526.",
+         "en": "The recognition core has been rebuilt. All analysis stages now "
+               "run on the GPU as one pipeline. Analysis is significantly "
+               "faster than 0.1.0.526.",
+         "es": "El núcleo de reconocimiento se ha reconstruido. Todas las "
+               "etapas del análisis funcionan ahora en la GPU como una sola "
+               "cadena. El análisis es mucho más rápido que en 0.1.0.526.",
+         "it": "Il nucleo di riconoscimento è stato ricostruito. Tutte le fasi "
+               "dell'analisi ora girano sulla GPU come un'unica catena. "
+               "L'analisi è molto più veloce della 0.1.0.526.",
+         "fr": "Le cœur de reconnaissance a été reconstruit. Toutes les étapes "
+               "de l'analyse tournent maintenant sur le GPU en une seule "
+               "chaîne. L'analyse est nettement plus rapide que la 0.1.0.526."},
+        {"de": "Neu: ein Analyse-Budget je Ereignis, gleichmäßig über den Clip "
+               "verteilt. Werkswert je Variante (Advanced, 0 = aus).",
+         "en": "New: a per-event analysis budget, spread evenly over the clip. "
+               "Factory default depends on the variant (Advanced, 0 = off).",
+         "es": "Nuevo: un presupuesto de análisis por evento, repartido "
+               "uniformemente por el clip. El valor de fábrica depende de la "
+               "variante (Advanced, 0 = desactivado).",
+         "it": "Novità: un budget di analisi per evento, distribuito "
+               "uniformemente sul clip. Il valore di fabbrica dipende dalla "
+               "variante (Advanced, 0 = disattivato).",
+         "fr": "Nouveau : un budget d'analyse par événement, réparti "
+               "uniformément sur le clip. La valeur d'usine dépend de la "
+               "variante (Advanced, 0 = désactivé)."},
+    )),
     # ####################################################################
     # 0.1.0.537 — INHALT VOM USER VORGEGEBEN (16.09.2026 21:0x): die Box wird
     # KONSOLIDIERT. DREI Eintraege unter EINER Nummer, alle drei Wortlaute sind
