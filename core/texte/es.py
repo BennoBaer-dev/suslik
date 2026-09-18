@@ -20,6 +20,7 @@ T = {
     "gesichter.galerie.knopf_aehnliche": "buscar rostros coincidentes",
     "gesichter.galerie.knopf_qs": "Comprobar calidad",
     "gesichter.galerie.knopf_loeschen": "Eliminar persona\u2026",
+    "gesichter.galerie.knopf_umbenennen": "Renombrar persona\u2026",
     "gesichter.galerie.hinweis_leer": "aún sin imágenes",
     "gesichter.upload.titel": "Subir foto",
     "gesichter.upload.attr_person": "persona existente\u2026",
@@ -1792,6 +1793,13 @@ T = {
     "js.unb.objekt_frage": "¿Marcar como «no es una persona» (un arbusto, un reflejo, un coche aparcado)? Dejará de aparecer como visitante; puedes deshacerlo en «no son personas».",
     "js.person.loesch_frage": "¿Eliminar TODAS las referencias y el nombre \"{person}\"?\nLas imágenes pasan a la papelera (recuperables).\n\nEscribe el nombre para confirmar:",
     "js.person.name_falsch": "El nombre no coincide — no se ha eliminado nada.",
+    "js.person.umbenennen_frage":
+        "Renombrar \"{person}\" — corrija el nombre abajo.\n\n"
+        "Tenga en cuenta:\n"
+        "- sus propias automatizaciones (Home Assistant / MQTT) comparan el nombre del mensaje y hay que adaptarlas\n"
+        "- si la exportaci\u00f3n a Frigate est\u00e1 activa, el nombre antiguo permanece en Frigate (su API no puede renombrar)\n"
+        "- las im\u00e1genes, registros y copias de seguridad antiguas conservan el nombre antiguo",
+    "js.person.umbenennen_lauf": "renombrando — {phase} {i}/{n}",
     "js.areas.fehl": "no se pudo guardar — ¿está accesible el servicio?",
     "js.areas.name_fehlt": "Introduce primero un nombre de área.",
     "js.areas.existiert": "Esta área ya existe.",
@@ -3149,6 +3157,15 @@ T = {
         "a la papelera — recuperables)",
     "antwort.person_name_ungueltig": "nombre no válido",
     "antwort.person_unbekannt": "persona desconocida",
+    "antwort.person_name_belegt":
+        "Ya existe una persona con este nombre ({person}) — fusionar dos personas est\u00e1 previsto para una versi\u00f3n posterior.",
+    "antwort.person_name_gleich": "nombre sin cambios — nada que hacer",
+    "antwort.person_name_reserviert": "este nombre est\u00e1 reservado",
+    "antwort.person_umbenennen_blockiert":
+        "Ahora no se puede renombrar — en segundo plano se est\u00e1 ejecutando: {jobs}. Espere e int\u00e9ntelo de nuevo.",
+    "antwort.person_umbenennen_laeuft": "renombrando \u2026",
+    "antwort.person_umbenennen_laeuft_schon":
+        "ya se est\u00e1 renombrando una persona",
     "antwort.pruefung_gestartet": "comprobación iniciada",
     "antwort.pruefung_laeuft":
         "comprobación en curso: recarga esta página dentro de un minuto",

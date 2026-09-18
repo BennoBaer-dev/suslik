@@ -2858,6 +2858,38 @@ def lade_vorschlaege(person):
         return None
 
 
+def vorschlaege_umbenennen(alt, neu, log=None):
+    """.542 (Person umbenennen): die Bestands-Vorschlaege einer Person auf den
+    neuen Namen umhaengen — DATEINAME und inneres Feld "person".
+
+    Der Pfad haengt am Namen (`_vorschlaege_pfad`), deshalb liegt die Logik
+    hier und nicht im Migrationsmodul: die Namens-zu-Dateiname-Abbildung
+    bleibt EINE Quelle (K3-Regel). Sie ist NICHT injektiv — "Person A" und
+    "Person_A" ergeben denselben Pfad. Liegt am Ziel schon eine FREMDE
+    Vorschlagsdatei, wird sie NICHT ueberschrieben; das waere ein stiller
+    Verlust fertig gerechneter Vorschlaege (ein Lauf kostet bis 900 s GPU).
+    Laeuft unter pool_lock wie jeder andere Schreibweg unter learn/.
+    -> 1 = umgehaengt, 0 = nichts da, -1 = Zielpfad belegt (gemeldet)."""
+    with pool_lock():
+        q, z = _vorschlaege_pfad(alt), _vorschlaege_pfad(neu)
+        if not os.path.exists(q):
+            return 0
+        if os.path.exists(z) and os.path.realpath(q) != os.path.realpath(z):
+            if log:
+                log(f"rename: suggestions file for the new name already exists "
+                    f"— left untouched ({os.path.basename(z)})")
+            return -1
+        try:
+            d = json.load(open(q))
+        except Exception:
+            d = None
+        if isinstance(d, dict) and d.get("person") == alt:
+            d["person"] = neu
+            _schreibe_json_atomar(q, d)
+        os.replace(q, z)
+        return 1
+
+
 # .230 (User 17.08.: "der Check ist sehr sehr langsam" — GEMESSEN: 11-13 s
 # Embedder-Aufbau bei JEDEM Aufruf, refcache-Lesen 0,01 s): der Embedder der
 # Vorschlags-/Bruecken-Strecke wird prozessweit EINMAL gebaut und danach

@@ -8122,6 +8122,196 @@ class Service:
         self.log(f"{eid}: record corrected after enrolling — now '{kategorie}' "
                  f"({person}, sim {sim})")
 
+    # ------------------------------------------------- Person umbenennen (.542)
+    def _umbenennen_blocker(self):
+        """Welche Hintergrundarbeit wuerde den Umbenenn-Zug vergiften? -> Liste
+        von Kennungen (leer = frei).
+
+        Begruendung je Eintrag: alle diese Laeufe halten einen eigenen
+        Personen-Schnappschuss und schreiben ihn am Ende weg — der QS-Runner
+        einen Bericht mit Alt-Namen, die Bestands-Suche `vorschlaege_<alt>.json`,
+        Sammeln/Reorganisieren `learn/gesichter.jsonl`, der Frigate-Export die
+        `<Person>/<Datei>`-Merker, Lernlauf und Personen-Lauf ein Lauf-Manifest
+        mit dem Label. Blockieren ist hier richtiger als nebenher umschreiben:
+        die Guards liegen alle schon vor, und ein abgelehnter Klick kostet den
+        Nutzer Sekunden, ein halb migrierter Bestand kostet ihn Vertrauen.
+
+        BEWUSST NICHT geblockt: laufende ANALYSEN. Sie laufen im Normalbetrieb
+        praktisch immer (beim Feldtester mit vierstelligem Rueckstau), ein
+        Riegel waere ein Nie-Knopf. Stattdessen faengt der Zug sie hinten ein:
+        zweite Event-Runde ueber frisch geschriebene Ordner und der
+        Akten-Append zuletzt (s. core/umbenennen.umbenennen)."""
+        blocker = []
+        if getattr(self, "_qs_laeuft", False):
+            blocker.append("quality-check")
+        if getattr(self, "_vs_laeuft", None):
+            blocker.append("catalogue search")
+        if getattr(self, "_sammel_laeuft", False):
+            blocker.append("face collection")
+        if getattr(self, "_reorg_laeuft", False):
+            blocker.append("pool reorganisation")
+        if getattr(self, "_sync_job_aktiv", False):
+            blocker.append("frigate sync")
+        _pt = getattr(self, "_personlauf_thread", None)
+        if _pt is not None and _pt.is_alive():
+            blocker.append("person run")
+        try:
+            from core import lernlauf as _ll_b
+            _lauf, _fehler = _ll_b.lauf_lesen(self.cfg["data_dir"])
+            if _lauf and not _ll_b.lauf_abgeschlossen(_lauf):
+                blocker.append("learning run")
+        except Exception:
+            pass
+        return blocker
+
+    def umbenennen_stand(self):
+        """Stand des laufenden/letzten Umbenenn-Zugs fuer den Poll der Seite.
+        Der Zug laeuft ueber tausende Event-Ordner (hier vierstellig) — ein
+        blockierender Klick waere der falsche Bau, also Hintergrund-Thread
+        plus ehrlicher Fortschritt (was gerade laeuft, wie weit)."""
+        return dict(getattr(self, "_rename_stand", None)
+                    or {"laeuft": False, "phase": None, "i": 0, "n": 0})
+
+    def person_umbenennen_starten(self, alt, neu):
+        """Eingangstor + Hintergrund-Zug. -> (ok, kennung, zusatz):
+        kennung ist ein TEXTSCHLUESSEL (leer/gleich/reserviert/pfad/ungueltig/
+        kollision/unbekannt/laeuft/blockiert/gestartet), die Sprache waehlt der
+        Handler. Ein Merge ist ausdruecklich NICHT gebaut: bei Kollision
+        kommt der kanonische Bestandsname zurueck und die Oberflaeche sagt,
+        dass Zusammenfuehren einer spaeteren Version gehoert."""
+        from core import benennung as _ben
+        from core import lernlauf as _ll
+        from core import umbenennen as _umb
+        alt = (alt or "").strip()
+        neu = _ll.person_norm(neu)
+        if not alt or alt not in master_persons(self.cfg):
+            return False, "unbekannt", None
+        # Doppelstart-Riegel als EIN Read-Modify-Write (E0b-Muster): zwei Klicks
+        # im selben Sekundenfenster kommen aus zwei HTTP-Threads. Ungeschuetzt
+        # sahen beide "laeuft nicht" und zwei Zuege liefen ueber denselben
+        # Bestand — die schlimmste denkbare Gleichzeitigkeit hier.
+        with self._zustand_lock:
+            if getattr(self, "_rename_stand", None) and self._rename_stand.get("laeuft"):
+                return False, "laeuft", None
+            self._rename_stand = {"laeuft": True, "phase": "pruefung", "i": 0,
+                                  "n": 0, "alt": alt, "neu": neu, "fertig": False}
+        # Kollisions-Menge: Master + benannte, noch nicht uebernommene Anker
+        # (core/benennung.personen_quelle, dieselbe Quelle wie /lernlauf/benennen)
+        # — OHNE den eigenen Altnamen, sonst meldet jede reine Gross-/Klein-
+        # schreibungs-Korrektur eine Kollision mit sich selbst.
+        try:
+            anker, _kaputt = _ll.anker_lesen(self.cfg["data_dir"])
+        except Exception:
+            anker = []
+        quelle = _ben.personen_quelle(
+            [p for p in master_persons(self.cfg) if p != alt],
+            [a for a in anker if a.get("person") != alt],
+            _ll.person_norm)
+
+        def _riegel_los(kennung, zusatz=None):
+            # Der Riegel ist oben schon gesetzt; jede Ablehnung MUSS ihn wieder
+            # fallen lassen, sonst sperrt ein abgewiesener Klick (Tippfehler,
+            # belegter Name) alle weiteren bis zum Dienstneustart.
+            with self._zustand_lock:
+                self._rename_stand = {"laeuft": False, "phase": kennung,
+                                      "i": 0, "n": 0, "fertig": False}
+            return False, kennung, zusatz
+
+        ok, kennung, kanon = _umb.ziel_pruefen(
+            neu, alt, lambda n: _ben.namens_kollision(n, quelle, _ll.person_norm),
+            _reg.PERSON_RE)
+        if not ok:
+            return _riegel_los(kennung, kanon)
+        blocker = self._umbenennen_blocker()
+        if blocker:
+            return _riegel_los("blockiert", ", ".join(blocker))
+        with self._zustand_lock:
+            self._rename_stand["phase"] = "start"
+
+        def _puls(phase, i, n):
+            self._rename_stand.update({"phase": phase, "i": int(i), "n": int(n)})
+
+        def job():
+            try:
+                umfeld = {
+                    "akte_lock": self.lock,
+                    "akte_markieren": (lambda z: _anw.akte_zeile_markieren(
+                        self.cfg, z, log=self.log)),
+                    "engine_stoppen": (
+                        (lambda: self._live_aufsicht.neustarten("person renamed"))
+                        if self._live_aufsicht is not None else None),
+                    # Der Neustart der Engine steckt schon im Stopp-Griff
+                    # (liveaufsicht.neustarten): das Kind faellt, die Aufsicht
+                    # bleibt arbeitsfaehig und startet im naechsten Takt neu.
+                    # Ein zweiter Griff waere ein zweiter Weg zur selben Sache.
+                    "engine_starten": None,
+                    "worker_stoppen": self.worker_stoppen,
+                    "last_seen_umhaengen": self._last_seen_umhaengen,
+                    "qs_neu": (lambda: self.qs_neu_starten(sofort=True)),
+                    "training": self._personmodell_neu,
+                    "refcache_neu": (lambda: threading.Thread(
+                        target=self._refcache_bau_anstossen, daemon=True).start()),
+                }
+                bericht = _umb.umbenennen(self.cfg["data_dir"], alt, neu,
+                                          umfeld=umfeld, puls=_puls, log=self.log)
+                self.log(f"PERSON RENAMED: {alt} -> {neu} "
+                         f"({bericht.get('dauer_s')}s, "
+                         f"{len(bericht.get('fehler') or {})} step error(s)) "
+                         f"— log state/umbenennungen.jsonl")
+                self._rename_stand.update({"laeuft": False, "fertig": True,
+                                           "phase": "fertig",
+                                           "fehler": sorted(
+                                               (bericht.get("fehler") or {}).keys())})
+            except Exception as e:
+                self.log(f"person rename FAILED: {type(e).__name__}: {e}")
+                self._rename_stand.update({"laeuft": False, "fertig": True,
+                                           "phase": "fehler",
+                                           "fehler": [f"{type(e).__name__}: {e}"]})
+
+        threading.Thread(target=job, daemon=True).start()
+        return True, "gestartet", None
+
+    def _last_seen_umhaengen(self, alt, neu):
+        """svc.last_seen {Person -> ts}: Schluessel umhaengen. Ohne das gilt die
+        Person als nie gesehen und der Anwesenheits-Push feuert beim naechsten
+        Auftauchen sofort (der Zustand heilte sonst erst beim naechsten
+        Dienststart aus der Akte)."""
+        with self._zustand_lock:
+            if alt in self.last_seen:
+                self.last_seen[neu] = max(self.last_seen.get(neu, 0),
+                                          self.last_seen.pop(alt))
+        with self._qs_lock:
+            if isinstance(getattr(self, "_vs_laeuft", None), dict) \
+                    and alt in self._vs_laeuft:
+                self._vs_laeuft[neu] = self._vs_laeuft.pop(alt)
+
+    def _personmodell_neu(self):
+        """Koerper-Modell nach dem Umbenennen der Trainings-Label neu bauen —
+        das ist der Weg, der svm.pkl korrekt erzeugt (core/personlive zieht
+        per mtime-Pruefung selbst nach). Ein Pickle mit fremder Klassenliste
+        von Hand zu flicken waere unnoetig riskant. Laeuft nur, wenn es
+        ueberhaupt ein Modell gibt, und im Hintergrund (Sekunden auf CPU)."""
+        def _job():
+            try:
+                from core import personmodell as _pm
+                if not (_pm.status_lesen(self.cfg["data_dir"]) or {}).get("personen"):
+                    return
+                _pm.trainieren(self.cfg["data_dir"])
+                self.log("person model retrained after rename")
+            except Exception as e:
+                self.log(f"person model retrain after rename failed: "
+                         f"{type(e).__name__}: {e}")
+        threading.Thread(target=_job, daemon=True).start()
+
+    def _refcache_bau_anstossen(self):
+        """refcache-Neuaufbau, falls das Re-Keying scheiterte (dann ist der
+        Cache weg und der naechste Urteilslauf zahlte ihn sonst selbst)."""
+        try:
+            import anlernen as _al_rc
+            _al_rc.refcache_aufbauen(self.embedder())
+        except Exception as e:
+            self.log(f"refcache rebuild after rename failed: {type(e).__name__}: {e}")
+
     # ENTFERNT 0.1.0.45 (User 27.07.): suslik loescht NIE in Frigate. Richtung Frigate gibt
     # es nur Holen (Import) und Schicken (Export) — eine Fern-Loeschung muesste zu 100 %
     # sicher das Richtige treffen und lief hier ohnehin ueber einen nicht portablen SSH-Weg,
@@ -19267,13 +19457,28 @@ class Service:
             max_bw = (res or {}).get("max_bw", 0)
             if res is None:      # analyze gescheitert -> nicht als "unknown" fehlwerten/alerten
                 kategorie = kategorie_v1 = "fehler"
-                confirmed = []
+                confirmed = confirmed_v1 = []
             else:
                 kategorie, confirmed = verdict_v2(
                     cfg, ours, max_bw,
                     det_t=[float(_d.get("t") or 0)
                            for _d in (res.get("detektionen") or [])])
-                kategorie_v1, _ = verdict(cfg, f_label, ours)
+                # .542 DARSTELLUNGS-FIX (Feldfund 18.09. beim Tester: 10 von 154
+                # Urteilszeilen behaupteten `[v1:deckung]` mit einem Frigate-Namen,
+                # der in der gedruckten `ours=`-Liste fehlte). Ursache ist KEIN
+                # Rechenfehler, sondern zwei verschiedene Mengen in EINER Zeile:
+                # `verdict` (v1) leitet sein `confirmed` selbst aus `_bestaetigt_aus`
+                # ab — ohne die Marge-Verengung, die `verdict_v2` seit .400 anwendet.
+                # Gedruckt wurde aber nur die verengte v2-Liste.
+                # Gefixt wird die DARSTELLUNG, nicht das Etikett: `kategorie_v1`
+                # geht in die Akte UND in `_maybe_alert` (das matcht auf
+                # {kategorie, kategorie_v1}) — es auf die verengte Menge zu stellen
+                # waere ein Alarm-Verhaltens-Change (deckung<->widerspruch kippt
+                # genau an dieser Mengenfrage), nicht ein Darstellungs-Fix. Deshalb
+                # traegt v1 seine eigene Menge jetzt sichtbar mit, und nur dann,
+                # wenn sie abweicht: im Regelfall (Marge greift nicht) ist die
+                # Log-Zeile bytegleich zu .541.
+                kategorie_v1, confirmed_v1 = verdict(cfg, f_label, ours)
                 if kategorie in ("fremd_verdacht", "unbekannt_schwach"):
                     # S2 no_person (deklarierte I1-Ausnahme, Masterbauplan §5.2): EIN
                     # Eingriff am Urteilspunkt, Logik in no_person.py. Greift nur mit
@@ -19521,7 +19726,10 @@ class Service:
             with self.lock: self.processed.add(eid)
             self._zeitprotokoll(eid, entry, _ainfo, einge_ts, _z_platz,
                                 _z_schreiben, _warte_s)
-            self.log(f"{eid}: {kategorie} [v1:{kategorie_v1}] (Frigate={f_label}, "
+            self.log(f"{eid}: {kategorie} [v1:{kategorie_v1}"
+                     + (f" on {', '.join(confirmed_v1) or 'unknown'}"
+                        if set(confirmed_v1 or []) != set(confirmed or []) else "")
+                     + f"] (Frigate={f_label}, "
                      f"ours={confirmed or 'unknown'}, {entry['faces']} faces, {entry['dauer_s']}s)" +
                      (" -> ALERT" if entry["alerted"] else "") +
                      (f" -> SUBLABEL '{entry['sublabel']}'" if entry.get("sublabel") else ""))
@@ -21881,6 +22089,39 @@ def make_handler(svc):
                                        mb=f"{erg['frei_mb']:.0f}", cache=f"{erg['cache_gb']:.1f}",
                                        frei=f"{erg['frei_gb']:.0f}")},
                     ensure_ascii=False), "application/json")
+            if pfad == "/person_umbenennen":                   # .542: Tippfehler im Namen korrigieren
+                # Der Gegenpol zu /person_loeschen: dort verschwindet die
+                # Person und alle Leser filtern implizit ueber die Existenz —
+                # hier BLEIBT sie und jeder Speicher mit dem alten Namen
+                # wuerde zur stillen Waise. Der Zug selbst wohnt in
+                # core/umbenennen (Deckungs-Vertrag + Migrator je Bestand).
+                # Zusammenfuehren ist ausdruecklich NICHT gebaut: bei einem
+                # bestehenden Zielnamen (case-insensitiv) kommt der kanonische
+                # Bestandsname zurueck, und die Oberflaeche sagt, dass Merge
+                # einer spaeteren Version gehoert.
+                try:
+                    d = self._body_json(8192, default={}, erwartet=dict)
+                    if d is _ABGEWIESEN:
+                        return
+                    from core import umbenennen as _umb_t
+                    ok, kennung, zusatz = svc.person_umbenennen_starten(
+                        (d.get("person") or ""), (d.get("neu") or ""))
+                    # Kennung -> Textschluessel kommt aus core/umbenennen.ANTWORT_TEXTE
+                    # (EINE Aufzaehlung; die Sprach-Deckungsstufe des Gates liest
+                    # sie, statt Literale hier zu suchen).
+                    schluessel = _umb_t.ANTWORT_TEXTE.get(
+                        kennung, "antwort.person_name_ungueltig")
+                    msg = _sprache.t(schluessel,
+                                     **({"person": zusatz} if kennung == "kollision"
+                                        else {"jobs": zusatz} if kennung == "blockiert"
+                                        else {}))
+                    return self._send(200, json.dumps(
+                        {"ok": ok, "grund": kennung, "msg": msg,
+                         **({"belegt": zusatz} if kennung == "kollision" else {})},
+                        ensure_ascii=False), "application/json")
+                except Exception as e:
+                    return self._send(200, json.dumps({"ok": False, "msg": str(e)[:120]}),
+                                      "application/json")
             if pfad == "/ref_pruef_neu":                       # Referenz-QS neu berechnen (Hintergrund)
                 svc.qs_neu_starten(sofort=True)                # Knopf: kein Sammelfenster (.511)
                 return self._send(200, json.dumps({"ok": True,
@@ -26810,6 +27051,13 @@ def make_handler(svc):
                 except Exception:
                     d = {"phase": "-", "done": 0, "total": 0, "ts": 0}
                 return self._send(200, json.dumps(d), "application/json")
+            if path == "/person_umbenennen/status":   # .542: Fortschritt des Umbenenn-Zugs
+                # Der Zug laeuft ueber alle Event-Ordner (hier vierstellig) —
+                # der Knopf wartet also nicht, er pollt. Muster wie
+                # /qualitaet/status.
+                return self._send(200, json.dumps(svc.umbenennen_stand(),
+                                                  ensure_ascii=False),
+                                  "application/json")
             if path == "/qualitaet/status":           # .310 Fortschritts-Widget der Bestands-QS (kein Seiten-Reload)
                 import anlernen
                 _lp = os.path.join(anlernen.ANLERN, "refs_qs_lauf.json")
@@ -28133,20 +28381,51 @@ def make_handler(svc):
 
 
 # ------------------------------------------------------------------ Main
+def _openvino_paket_version():
+    """Fassung des standalone `openvino`-Wheels — OHNE es zu importieren. -> str oder None.
+
+    Gelesen werden die PAKET-METADATEN (importlib.metadata), nicht das Modul: ein
+    `import openvino` laedt dessen Laufzeit-Bibliotheken und zerstoert damit den
+    OpenVINO-EP der onnxruntime fuer den Rest des Prozesses (Begruendung im Kopf von
+    `hardware_probe`). Die Zeile im Startlog will ohnehin nur wissen, WELCHE Fassung im
+    Image liegt — dafuer braucht es das Modul nicht. Nebenbei behoben: bis 0.1.0.541
+    meldete diese Zeile auf dem gpu-Image 'not installed', obwohl das Paket dort liegt
+    (der Import scheiterte, weil die ORT-Laufzeit schon geladen war)."""
+    try:
+        from importlib.metadata import PackageNotFoundError, version   # noqa: PLC0415
+        try:
+            return version("openvino")
+        except PackageNotFoundError:
+            return None
+    except Exception:                                    # noqa: BLE001
+        return None
+
+
 def hardware_probe(placement_mess=None):
     """Beschleuniger-Status fuer Selbstcheck/Wizard: je Geraet -> gefunden (Geraetedatei) + nutzbar.
-    Autoritativ via openvino.Core().available_devices (wenn das Paket da ist — dort erscheinen GPU/NPU
-    nur, wenn Treiber+Runtime wirklich greifen); sonst Fallback: Geraetedatei da + OpenVINO-EP
-    einkompiliert = 'gefunden, Nutzung hier nicht bestaetigt'. Ergebnis: Liste (marker, name, detail),
-    marker 'ok'=gruen (gefunden+nutzbar), 'warn'=gelb (gefunden, Treiber fehlt), '?'=unbestaetigt,
-    '--'=nicht gefunden."""
+    Quelle der Nutzbarkeit ist die ECHTE Bind-Probe weiter unten (Session bauen, get_providers
+    lesen); ohne sie bleibt 'gefunden, Nutzung hier nicht bestaetigt'. Ergebnis: Liste (marker,
+    name, detail), marker 'ok'=gruen (gefunden+nutzbar), 'warn'=gelb (gefunden, Treiber fehlt),
+    '?'=unbestaetigt, '--'=nicht gefunden.
+
+    HIER STAND BIS 0.1.0.542 EIN `import openvino` (Geraete-Sichtung ueber
+    `openvino.Core().available_devices`). Der Import ist RAUS und darf nicht
+    zurueckkommen: die beiden OpenVINO-Laufzeiten im Image — die des
+    `openvino`-Wheels und die, die `onnxruntime-openvino` mitbringt — sind
+    ABI-unvertraeglich, und zwar in BEIDE Richtungen (gemessen 17.09.2026 am
+    .541-cpu- UND am .541-gpu-Image). Wer zuerst laedt, gewinnt; der andere
+    stirbt mit `undefined symbol`. Weil dieser Schritt VOR dem Backend-Schritt
+    laeuft, hat die Sichtung im cpu-Image den OpenVINO-EP der onnxruntime fuer
+    den GANZEN Dienstprozess zerstoert — die Provider-LISTE sagte weiter
+    'OpenVINOExecutionProvider', jede Session fiel still auf die CPU. Auf dem
+    gpu-Image ging es nur deshalb gut, weil dort zufaellig eine ORT-Session
+    zuerst kam und der Import HIER scheiterte (Startlog: 'standalone openvino
+    pkg: not installed', obwohl das Paket im Image liegt). Verlassen wir uns
+    auf diesen Zufall nicht: der Dienstprozess importiert `openvino` NIRGENDS,
+    Versionen kommen aus den Paket-Metadaten (`_openvino_paket_version`),
+    Geraete-Fakten aus der Bind-Probe. Wache: Gate-Stufe 'EP-Instanziierung je
+    Variante' + SU1-Vektor G."""
     import glob as _glob
-    ov_usable = None
-    try:
-        import openvino as _ov
-        ov_usable = {d.split(".")[0].upper() for d in _ov.Core().available_devices}
-    except Exception:
-        ov_usable = None
     try:
         import onnxruntime as _ort
         eps = _ort.get_available_providers()
@@ -28154,12 +28433,9 @@ def hardware_probe(placement_mess=None):
         eps = []
     ov_ep = "OpenVINOExecutionProvider" in eps
 
-    def stat(present, key):
+    def stat(present):
         if not present:
             return ("--", "not found")
-        if ov_usable is not None:
-            return ("ok", "found & usable") if key in ov_usable \
-                else ("warn", "found but NOT usable — runtime/driver version mismatch — using CPU")
         return ("?", "found; OpenVINO EP present, engagement unconfirmed here") if ov_ep \
             else ("warn", "found; no OpenVINO runtime")
 
@@ -28191,16 +28467,19 @@ def hardware_probe(placement_mess=None):
         res.append(("--", "hw iGPU",
                     "no Intel iGPU (render node is " + "/".join(sorted(set(_gf))) + ")"))
     else:
-        m, d = stat(_gi, "GPU"); res.append((m, "hw iGPU", d))
-    m, d = stat(bool(_glob.glob(knoten_von("NPU"))), "NPU"); res.append((m, "hw NPU", d))
+        m, d = stat(_gi); res.append((m, "hw iGPU", d))
+    m, d = stat(bool(_glob.glob(knoten_von("NPU")))); res.append((m, "hw NPU", d))
     # P4-Nachzieher (0.1.0.44, User 27.07.): das "?"-Urteil aufloesen. Das openvino-Paket
-    # fehlt im Image BEWUSST (zweite OV-Runtime neben onnxruntime-openvino = Konfliktrisiko),
-    # available_devices ist also nicht abfragbar. Stattdessen ECHTE Bind-Fakten: (a) die
-    # Placement-Benchmark-Messung vom Boot (AUTO-Fall — beide Geraete real gebunden/nicht),
-    # (b) sonst eine budgetierte Mini-Bind-Probe je gefundenem Geraet (Session bauen,
-    # get_providers pruefen; mit warmem OV-Cache <1 s). Gleiche Probe-Philosophie wie
-    # video_encoder() — messen statt raten.
-    if ov_usable is None and ov_ep:
+    # ist im Dienstprozess TABU (Kopf dieser Funktion: zwei OV-Laufzeiten, wer zuerst
+    # laedt gewinnt), available_devices also nicht abfragbar. Stattdessen ECHTE
+    # Bind-Fakten: (a) die Placement-Benchmark-Messung vom Boot (AUTO-Fall — beide
+    # Geraete real gebunden/nicht), (b) sonst eine budgetierte Mini-Bind-Probe je
+    # gefundenem Geraet (Session bauen, get_providers pruefen; mit warmem OV-Cache
+    # <1 s). Gleiche Probe-Philosophie wie video_encoder() — messen statt raten.
+    # 0.1.0.542: dieser Weg ist jetzt der EINZIGE (vorher stand er unter
+    # `ov_usable is None` und lief auf dem cpu-Image nie) — er ist zugleich der
+    # staerkere, weil er bindet statt aufzuzaehlen.
+    if ov_ep:
         mess = dict(placement_mess or {})
         if not mess:
             try:
@@ -28998,10 +29277,39 @@ def startup_selfcheck(svc):
             # fuer normal haelt. Die Zeile kostet keine Session: sie liest die
             # Provider-Liste, die oben ohnehin steht. Die ms-Zahlen liefert der
             # Benchmark-Schritt darunter (Zeile „CPU (OpenVINO)" gegen „CPU (baseline)").
+            #
+            # 0.1.0.542 — DIESE ZEILE HAT AM 17.09. GELOGEN, und zwar genau so, wie es
+            # die Hausregel K1 verbietet: sie las die Provider-LISTE und meldete „runs
+            # on the OpenVINO CPU runtime", waehrend im selben Startlog wenige Zeilen
+            # spaeter `undefined symbol` stand und jede Session auf der CPU landete.
+            # Eine Liste ist kein Beweis. Sie baut deshalb eine ECHTE Session und liest
+            # zurueck, was gebunden hat — dieselbe Probe-Philosophie wie bei iGPU/NPU
+            # im Hardware-Schritt. Der Preis ist EINE kleine Session beim Start.
             from core.registry import ep_von as _ep_von2   # noqa: PLC0415
-            if _ep_von2("openvino") in avail:
-                erg("ok", "analysis runs on the OpenVINO CPU runtime (measured 3-7x "
-                          "faster than plain onnxruntime on the same CPU)")
+            _ov_ep = _ep_von2("openvino")
+            _ov_cpu_onnx = next((v["onnx"] for v in MODELLE.values()
+                                 if v.get("onnx") and os.path.exists(v["onnx"])), None)
+            _ov_cpu_bind, _ov_cpu_grund = None, ""
+            if _ov_ep in avail and _ov_cpu_onnx:
+                try:
+                    _s_cpu = _ort_session("openvino", "CPU", _ov_cpu_onnx,
+                                          os.environ.get("OV_CACHE_DIR"))
+                    _ov_cpu_bind = _ov_ep in _s_cpu.get_providers()
+                except Exception as _e_cpu:               # noqa: BLE001
+                    _ov_cpu_bind, _ov_cpu_grund = False, f"{type(_e_cpu).__name__}: {str(_e_cpu)[:120]}"
+            if _ov_cpu_bind:
+                erg("ok", "analysis runs on the OpenVINO CPU runtime (probed: a real "
+                          "session bound the provider; measured 3-7x faster than plain "
+                          "onnxruntime on the same CPU)")
+            elif _ov_cpu_bind is False:
+                # Der .541-cpu-Fall: EP gelistet, Session faellt trotzdem auf die CPU.
+                erg("warn", "the OpenVINO CPU provider is LISTED but did NOT bind in a "
+                            "real session — analysis falls back to the plain onnxruntime "
+                            "CPU provider (3-7x slower)"
+                            + (f"; {_ov_cpu_grund}" if _ov_cpu_grund else ""))
+            elif _ov_ep in avail:
+                erg("?", "OpenVINO CPU runtime present, engagement unconfirmed here "
+                         "(no onnx model to probe)")
             else:
                 erg("info", "analysis runs on the plain onnxruntime CPU provider — "
                             "correct, but an onnxruntime-openvino build computes the "
@@ -29079,14 +29387,13 @@ def startup_selfcheck(svc):
                         f"GPU cpu/inf {(_m.get('GPU') or {}).get('cpu_ms', '–')} ms — "
                         f"sticky in state/placement.json)")
         # Versionsstaende immer zeigen — passen Runtime + OpenVINO + Host-Treiber zusammen?
-        try:
-            import openvino as _ov
-            ovv = getattr(_ov, "__version__", "?")
-        except Exception:
-            ovv = "not installed"
+        # 0.1.0.542: aus den Paket-Metadaten statt per Import (s. _openvino_paket_version) —
+        # und das Paket ist NICHT mehr "probe helper", sondern nur noch das, was
+        # engine_ov im WORKER-Prozess braucht. Im Dienstprozess wird es nie geladen.
+        ovv = _openvino_paket_version() or "not installed"
         ov_build = "OpenVINOExecutionProvider" in avail
         erg("info", f"runtime: onnxruntime {_ort.__version__}, OpenVINO EP built-in: "
-                    f"{'yes' if ov_build else 'NO'}; standalone openvino pkg (probe helper only): {ovv}")
+                    f"{'yes' if ov_build else 'NO'}; standalone openvino pkg (worker engine only): {ovv}")
         # Welche GPU haengt eigentlich dran? (A1, Tester-Bestaetigung: Arc A380.) NUR melden, wenn der
         # Geraeteknoten wirklich in den Container gereicht wurde: /sys/class/drm zeigt sonst die
         # HOST-GPUs, die dieser Container gar nicht benutzen kann (Plan-QS am cpu-Image gemessen).

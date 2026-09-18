@@ -22,6 +22,7 @@ T = {
     "gesichter.galerie.knopf_aehnliche": "trouver les visages correspondants",
     "gesichter.galerie.knopf_qs": "Vérifier la qualité",
     "gesichter.galerie.knopf_loeschen": "Supprimer la personne\u2026",
+    "gesichter.galerie.knopf_umbenennen": "Renommer la personne\u2026",
     "gesichter.galerie.hinweis_leer": "aucune image pour l'instant",
     "gesichter.upload.titel": "Téléverser une photo",
     "gesichter.upload.attr_person": "personne existante\u2026",
@@ -1832,6 +1833,13 @@ T = {
     "js.unb.objekt_frage": "Marquer comme « pas une personne » (un buisson, un reflet, une voiture garée) ? Ce groupe n'apparaîtra plus comme visiteur ; annulation possible sous « pas des personnes ».",
     "js.person.loesch_frage": "Supprimer TOUTES les références et le nom \"{person}\" ?\nLes images vont dans le dossier corbeille (récupérables).\n\nSaisir le nom pour confirmer :",
     "js.person.name_falsch": "Le nom ne correspond pas — rien n'a été supprimé.",
+    "js.person.umbenennen_frage":
+        "Renommer \"{person}\" — corrigez le nom ci-dessous.\n\n"
+        "\u00c0 noter\u00a0:\n"
+        "- vos propres automatisations (Home Assistant / MQTT) comparent le nom dans le message et doivent \u00eatre adapt\u00e9es\n"
+        "- si l'export Frigate est actif, l'ancien nom reste du c\u00f4t\u00e9 de Frigate (son API ne sait pas renommer)\n"
+        "- les anciennes images, journaux et sauvegardes gardent l'ancien nom",
+    "js.person.umbenennen_lauf": "renommage en cours — {phase} {i}/{n}",
     "js.areas.fehl": "échec de l'enregistrement — le service est-il joignable ?",
     "js.areas.name_fehlt": "Saisir d'abord un nom de secteur.",
     "js.areas.existiert": "Ce secteur existe déjà.",
@@ -3218,6 +3226,15 @@ T = {
         "vers la corbeille — récupérables)",
     "antwort.person_name_ungueltig": "nom invalide",
     "antwort.person_unbekannt": "personne inconnue",
+    "antwort.person_name_belegt":
+        "Une personne porte d\u00e9j\u00e0 ce nom ({person}) — la fusion de deux personnes est pr\u00e9vue pour une version ult\u00e9rieure.",
+    "antwort.person_name_gleich": "nom inchang\u00e9 — rien \u00e0 faire",
+    "antwort.person_name_reserviert": "ce nom est r\u00e9serv\u00e9",
+    "antwort.person_umbenennen_blockiert":
+        "Renommage impossible pour le moment — en cours en arri\u00e8re-plan\u00a0: {jobs}. Merci de patienter et de r\u00e9essayer.",
+    "antwort.person_umbenennen_laeuft": "renommage \u2026",
+    "antwort.person_umbenennen_laeuft_schon":
+        "une personne est d\u00e9j\u00e0 en cours de renommage",
     "antwort.pruefung_gestartet": "vérification lancée",
     "antwort.pruefung_laeuft":
         "vérification en cours : rechargez cette page dans une minute environ",

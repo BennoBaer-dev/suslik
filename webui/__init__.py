@@ -274,6 +274,13 @@ _FLAGGEN = {
            '<rect width="60" height="40" fill="#EF4135"/>'
            '<rect width="40" height="40" fill="#fff"/>'
            '<rect width="20" height="40" fill="#0055A4"/></svg>'),
+    # .542: Finnland — weisses Feld mit blauem nordischen Kreuz. Der
+    # Querbalken sitzt auf halber Hoehe, der Laengsbalken links der Mitte
+    # (wie im Original, dort 5/18 von links); Blau ist #003580.
+    "fi": ('<svg class="flg" viewBox="0 0 60 40" aria-hidden="true">'
+           '<rect width="60" height="40" fill="#fff"/>'
+           '<rect y="14.5" width="60" height="11" fill="#003580"/>'
+           '<rect x="16.5" width="11" height="40" fill="#003580"/></svg>'),
 }
 
 

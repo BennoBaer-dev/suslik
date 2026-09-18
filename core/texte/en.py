@@ -21,6 +21,7 @@ T = {
     "gesichter.galerie.knopf_aehnliche": "find matching faces",
     "gesichter.galerie.knopf_qs": "Quality-check",
     "gesichter.galerie.knopf_loeschen": "Delete person\u2026",
+    "gesichter.galerie.knopf_umbenennen": "Rename person\u2026",
     "gesichter.galerie.hinweis_leer": "no images yet",
     "gesichter.upload.titel": "Upload photo",
     "gesichter.upload.attr_person": "existing person\u2026",
@@ -1864,6 +1865,13 @@ T = {
     "js.unb.objekt_frage": "Mark as \"no person\" (a bush, a reflection, a parked car)? It stops showing up as a visitor; you can undo this under \"not people\".",
     "js.person.loesch_frage": "Delete ALL references and the name \"{person}\"?\nThe images move to the trash folder (recoverable).\n\nType the name to confirm:",
     "js.person.name_falsch": "Name did not match — nothing deleted.",
+    "js.person.umbenennen_frage":
+        "Rename \"{person}\" — correct the name below.\n\n"
+        "Please note:\n"
+        "- your own automations (Home Assistant / MQTT) match the name in the payload and need updating\n"
+        "- if the Frigate export is on, the old name stays on the Frigate side (its API cannot rename)\n"
+        "- past snapshots, logs and backups keep the old name",
+    "js.person.umbenennen_lauf": "renaming — {phase} {i}/{n}",
     "js.areas.fehl": "save failed — is the service reachable?",
     "js.areas.name_fehlt": "Enter an area name first.",
     "js.areas.existiert": "This area already exists.",
@@ -3146,6 +3154,15 @@ T = {
         "recoverable)",
     "antwort.person_name_ungueltig": "invalid name",
     "antwort.person_unbekannt": "unknown person",
+    "antwort.person_name_belegt":
+        "A person with this name already exists ({person}) — merging two persons is planned for a later version.",
+    "antwort.person_name_gleich": "name unchanged — nothing to do",
+    "antwort.person_name_reserviert": "this name is reserved",
+    "antwort.person_umbenennen_blockiert":
+        "Renaming is not possible right now — running in the background: {jobs}. Please wait and try again.",
+    "antwort.person_umbenennen_laeuft": "renaming \u2026",
+    "antwort.person_umbenennen_laeuft_schon":
+        "a person is already being renamed",
     "antwort.pruefung_gestartet": "check started",
     "antwort.pruefung_laeuft":
         "check running — reload this page in about a minute",

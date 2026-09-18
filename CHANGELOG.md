@@ -7,6 +7,31 @@ this file — the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git
 history.
 
+## 0.1.0.542 (unreleased)
+
+A fix for the `cpu` image of 0.1.0.541. The What's-new box is unchanged for this
+version (owner's decision) — this release keeps the promise the box already made.
+
+- **The CPU image now really runs on the OpenVINO CPU runtime.** 0.1.0.541 shipped
+  that runtime, and the event analysis in the worker process did use it — but the
+  service process itself did not, and said the opposite. At startup it asked the
+  standalone `openvino` package which devices exist, and that single question
+  loaded a second OpenVINO runtime whose libraries are incompatible with the ones
+  `onnxruntime-openvino` brings. From then on every session in that process fell
+  back to the plain CPU provider without being asked, with an `undefined symbol`
+  line in the log. The startup benchmark, the live watcher and enrolment were
+  affected; judgements were always correct, only slower. The service no longer
+  imports that package anywhere: device facts come from a real session that binds,
+  versions from package metadata.
+- **The startup line about the CPU stack is now measured, not read off a list.**
+  It used to report "analysis runs on the OpenVINO CPU runtime" whenever the
+  provider was *listed* — which is exactly what it printed on 0.1.0.541 while the
+  provider was in fact dead. It now opens a real session and reports what actually
+  bound, including a warning for the case "listed but did not bind".
+- **On the accelerator images the runtime line told a small lie of its own**: it
+  claimed the standalone `openvino` package was "not installed" although it is in
+  the image. It now reads the version from the package metadata.
+
 ## 0.1.0.541 (unreleased)
 
 Internal step for the `cpu` image. The What's-new box is not filled for this

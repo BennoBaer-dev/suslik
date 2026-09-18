@@ -839,7 +839,16 @@ def eich_umfeld(engine):
     der Code ueber den md5 der zwei Dateien, die den Graphen bauen."""
     aus = {"engine": getattr(engine, "name", "?")}
     try:
-        import openvino as _ov                              # noqa: PLC0415
+        # 0.1.0.542: NIE selbst importieren, nur nehmen was schon geladen IST.
+        # Ein `import openvino` zerstoert den OpenVINO-EP der onnxruntime fuer den
+        # Rest des Prozesses (ABI-Konflikt beider OV-Laufzeiten, gemessen 17.09. am
+        # .541-cpu-Image) — und dieser Prozess baut seine Sessions teils erst
+        # spaeter (engine_cpu._sitzung je Stufe/Geometrie). Wo OpenVINO die
+        # Rechenquelle IST (engine_ov), liegt das Modul ohnehin in sys.modules;
+        # wo nicht (engine_cpu/cuda/migraphx), gibt es hier auch nichts abzulesen.
+        _ov = sys.modules.get("openvino")                   # noqa: PLC0415
+        if _ov is None:
+            raise LookupError("openvino not loaded in this process (by design)")
         aus["openvino"] = _ov.__version__
         aus["geraet"] = str(engine.core.get_property(
             getattr(sys.modules[type(engine).__module__], "GERAET", "GPU"),
