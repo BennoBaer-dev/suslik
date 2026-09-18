@@ -276,6 +276,16 @@ FRAMEITER_INVENTAR_AUS = {
     "samples": "Testmaterial, kein Code",
     "node_modules": "Fremd-Pakete",
     "__pycache__": "Bytecode",
+    "labor_frigate": "Analyse-Arbeitsordner (gitignored, .gitignore:122) — "
+                     "read-only Messlaeufe an FREMDEM Material, etwa die "
+                     "Bitraten-Wirkungsanalyse an den Clips des Feldtesters. "
+                     "Diese Skripte nutzen `decode.FrameIter` absichtlich direkt: "
+                     "der gepinnte Pixelpfad OHNE Verteiler-Mantel ist dort die "
+                     "Messbedingung (gleiche Begruendung wie bei prototyp/"
+                     "norm_vorrat.py). Sie liegen nie im Image, urteilen nie und "
+                     "sind nicht im Repo — als Datei-Ausnahme waeren sie die "
+                     "schlechtere Form, weil die Wache eine verschwundene "
+                     "Ausnahme zu Recht als verfallen meldet.",
 }
 
 # abnahme.backend_kennung: PRUEFREIHENFOLGE ist Semantik (CUDA vor MIGraphX vor OpenVINO
@@ -381,6 +391,92 @@ def sample_deckel_werk(variante):
     return SAMPLE_DECKEL_OHNE_VARIANTE, ("factory default (no image variant named)"
                                          if not v else
                                          f"factory default (unknown variant {v!r})")
+
+
+# ------------------------------------------------- Beworbener EP je Variante (0.1.0.542)
+# WAS JEDES IMAGE VERSPRICHT — und woran die zwei neuen Gate-Stufen es messen.
+# DECKUNGS-VERTRAG wie SAMPLE_DECKEL_WERK/STUETZWERTE: je Variante genau ein Eintrag,
+# kein Loch (das Gate bricht ab, wenn eine Variante fehlt).
+#
+# ANLASS (17.09.2026, .541-cpu): das Image trug den OpenVINO-CPU-Stack, der Dienst
+# band ihn NIE, und drei Stufen standen gruen daneben — ldd loest DATEIEN auf (keine
+# SYMBOLE), SU2 las ein Startlog, in dem der Rueckfall als gewoehnliche Zeile stand,
+# und `get_available_providers()` nennt einen Provider auch dann, wenn seine .so beim
+# Laden mit `undefined symbol` stirbt. Was fehlte, war die einfachste Frage: baut
+# dieses Image eine Session auf dem EP, den es bewirbt — im Importkontext des
+# Dienstes?
+#
+#   kind/dev      = Soll-Backend (BACKENDS/DEVICES oben) fuer die Instanziierungs-Probe.
+#   geraetefrei   = True: dieses Soll braucht KEINE Hardware, die Probe MUSS gruen sein
+#                   (CPU gibt es ueberall). False: ohne Geraet ist nur die LADBARKEIT
+#                   der Provider-Bibliothek pruefbar, die Bindung bleibt der Abnahme
+#                   auf der echten Maschine vorbehalten -> sichtbarer skip, nie gruen.
+#
+# WARUM gpu/gpu-legacy hier auf CPU proben: ihr Betriebs-Soll ist openvino:GPU, aber
+# die Fehlerklasse sitzt in der BIBLIOTHEK, nicht im Geraet. Eine Session auf
+# openvino:CPU laedt dieselbe libonnxruntime_providers_openvino.so — sie faellt also
+# in genau dem Moment um, in dem der Konflikt wieder da waere, und das auf jeder
+# Gate-Maschine. Ob die iGPU bindet, beantwortet die Kaltstart-Abnahme im Feld.
+EP_PROBE = {
+    "cpu":        {"kind": "openvino", "dev": "CPU", "geraetefrei": True},
+    "gpu":        {"kind": "openvino", "dev": "CPU", "geraetefrei": True},
+    "gpu-legacy": {"kind": "openvino", "dev": "CPU", "geraetefrei": True},
+    "cuda":       {"kind": "cuda",     "dev": "0",   "geraetefrei": False},
+    "rocm":       {"kind": "migraphx", "dev": "0",   "geraetefrei": False},
+}
+
+# Rueckfall-Signaturen fuers Startlog (Stufe „Startlog-Soll-Abgleich", 0.1.0.542).
+# ALLGEMEIN = hat NIE einen harmlosen Grund: beide Zeilen heissen, dass eine
+# Provider-Bibliothek nicht geladen werden konnte. Sie sind auf JEDER Variante rot,
+# auch ohne Geraet.
+STARTLOG_RUECKFALL_ALLGEMEIN = (
+    "undefined symbol",
+    "Failed to load library",
+)
+# JE VARIANTE: was zusaetzlich rot ist, WEIL das Soll dieser Variante geraetefrei
+# erreichbar ist. Auf gpu/cuda/rocm ist „device not available" im geraetelosen
+# Gate-Container die WAHRHEIT und darf nicht rot sein — auf cpu dagegen gibt es kein
+# fehlendes Geraet: eine CPU hat jeder Host. DECKUNGS-VERTRAG: je Variante ein
+# Eintrag (leeres Tupel ist eine Aussage, kein Loch).
+STARTLOG_RUECKFALL_VARIANTE = {
+    "cpu": ("OpenVINO device 'CPU' not available",
+            "did NOT bind in a real session",
+            "OpenVINO CPU EP unusable",
+            "OpenVINO CPU EP did not stay bound"),
+    "gpu": (),
+    "gpu-legacy": (),
+    "cuda": (),
+    "rocm": (),
+}
+# Was im Startlog STEHEN MUSS, je Variante (Positiv-Soll der geraetefreien Zusage).
+STARTLOG_SOLL_VARIANTE = {
+    "cpu": ("analysis runs on the OpenVINO CPU runtime",),
+    "gpu": (),
+    "gpu-legacy": (),
+    "cuda": (),
+    "rocm": (),
+}
+
+
+def ep_probe(variante):
+    """Beworbener EP dieser Image-Variante -> dict(kind, dev, geraetefrei, ep) oder None.
+    None heisst „diese Variante kenne ich nicht" und ist beim Aufrufer ein Abbruch,
+    nie ein stilles Gruen (Deckungs-Vertrag)."""
+    v = str(variante or "").strip().lower()
+    spec = EP_PROBE.get(v)
+    if not spec:
+        return None
+    return {**spec, "ep": ep_von(spec["kind"])}
+
+
+def startlog_muster(variante):
+    """Startlog-Soll dieser Variante -> (pflicht, verboten). Unbekannte Variante ->
+    (None, None): der Aufrufer bricht ab statt gruen zu melden."""
+    v = str(variante or "").strip().lower()
+    if v not in STARTLOG_RUECKFALL_VARIANTE or v not in STARTLOG_SOLL_VARIANTE:
+        return None, None
+    return (tuple(STARTLOG_SOLL_VARIANTE[v]),
+            tuple(STARTLOG_RUECKFALL_ALLGEMEIN) + tuple(STARTLOG_RUECKFALL_VARIANTE[v]))
 
 
 def ep_optionen(kind, dev):

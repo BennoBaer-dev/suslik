@@ -21,6 +21,7 @@ T = {
     "gesichter.galerie.knopf_aehnliche": "passende Gesichter suchen",
     "gesichter.galerie.knopf_qs": "Qualitätscheck",
     "gesichter.galerie.knopf_loeschen": "Person löschen…",
+    "gesichter.galerie.knopf_umbenennen": "Person umbenennen\u2026",
     "gesichter.galerie.hinweis_leer": "noch keine Bilder",
     "gesichter.upload.titel": "Foto hochladen",
     "gesichter.upload.attr_person": "bestehende Person…",
@@ -1807,6 +1808,13 @@ T = {
     "js.unb.objekt_frage": "Als \"keine Person\" markieren (Busch, Spiegelung, geparktes Auto)? Sie taucht dann nicht mehr als Besucher auf; unter \"keine Personen\" lässt sich das zurücknehmen.",
     "js.person.loesch_frage": "ALLE Referenzen und den Namen \"{person}\" löschen?\nDie Bilder wandern in den Papierkorb-Ordner (wiederherstellbar).\n\nZur Bestätigung den Namen eintippen:",
     "js.person.name_falsch": "Name stimmte nicht überein — nichts gelöscht.",
+    "js.person.umbenennen_frage":
+        "\"{person}\" umbenennen — den Namen unten korrigieren.\n\n"
+        "Bitte beachten:\n"
+        "- eigene Automationen (Home Assistant / MQTT) vergleichen den Namen in der Nachricht und muessen angepasst werden\n"
+        "- bei aktivem Frigate-Export bleibt der alte Name auf der Frigate-Seite stehen (deren API kann nicht umbenennen)\n"
+        "- alte Bilder, Protokolle und Backups behalten den alten Namen",
+    "js.person.umbenennen_lauf": "wird umbenannt — {phase} {i}/{n}",
     "js.areas.fehl": "Speichern fehlgeschlagen — ist der Dienst erreichbar?",
     "js.areas.name_fehlt": "Erst einen Bereichsnamen eingeben.",
     "js.areas.existiert": "Diesen Bereich gibt es schon.",
@@ -3148,6 +3156,15 @@ T = {
         "verschoben — wiederherstellbar)",
     "antwort.person_name_ungueltig": "ungültiger Name",
     "antwort.person_unbekannt": "unbekannte Person",
+    "antwort.person_name_belegt":
+        "Es gibt schon eine Person mit diesem Namen ({person}) — zwei Personen zusammenzulegen ist fuer eine spaetere Version geplant.",
+    "antwort.person_name_gleich": "Name unveraendert — nichts zu tun",
+    "antwort.person_name_reserviert": "dieser Name ist reserviert",
+    "antwort.person_umbenennen_blockiert":
+        "Umbenennen jetzt nicht moeglich — im Hintergrund laeuft: {jobs}. Bitte abwarten und erneut versuchen.",
+    "antwort.person_umbenennen_laeuft": "wird umbenannt \u2026",
+    "antwort.person_umbenennen_laeuft_schon":
+        "es wird gerade schon eine Person umbenannt",
     "antwort.pruefung_gestartet": "Prüfung gestartet",
     "antwort.pruefung_laeuft":
         "Prüfung läuft — Seite in etwa einer Minute neu laden",

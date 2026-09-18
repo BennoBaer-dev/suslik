@@ -34,7 +34,7 @@ import threading
 # en/de/es/it/fr seit Sprach-Stufe 1 (Registrierung war bewusst der LETZTE
 # Schritt: der Schalter blendet sich unter 2 Eintraegen selbst aus, nichts
 # lief halb verdrahtet).
-SPRACHEN = ("en", "de", "es", "it", "fr")
+SPRACHEN = ("en", "de", "es", "it", "fr", "fi")
 _STANDARD = "en"
 
 # Eigennamen der Sprachen fuer den Schalter (konzept_sprache.md §6.1):
@@ -42,7 +42,7 @@ _STANDARD = "en"
 # als zentrale Tabelle und nicht als Text-Schluessel. Schluesselmenge ==
 # moegliche SPRACHEN-Eintraege (Deckungs-Vertrag, Gate prueft Deckung).
 NAMEN = {"en": "English", "de": "Deutsch", "es": "Español",
-         "it": "Italiano", "fr": "Français"}
+         "it": "Italiano", "fr": "Français", "fi": "Suomi"}
 
 _aktiv = contextvars.ContextVar("suslik_sprache", default=None)
 

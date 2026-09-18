@@ -1228,6 +1228,58 @@ function personLoeschen(person, btn) {
     .catch(function () { btn.textContent = TT('js.status.fehler', 'error'); btn.disabled = false; });
 }
 
+/* ── Person umbenennen (.542: Tippfehler im Namen korrigieren) ─────────────────────────
+   Der Stift steht direkt am Namen. Vorbefuelltes Textfeld: es wird KORRIGIERT, nicht
+   neu getippt — wer "Tomas" zu "Thomas" macht, will nicht den ganzen Namen eingeben.
+   Der Dialogtext sagt die drei Dinge, die der Nutzer vorher wissen muss und nachher
+   nicht mehr aendern kann: eigene Automationen (HA/MQTT) hoeren auf den Namen im
+   Payload, ein aktiver Frigate-Export laesst den alten Namen drueben stehen (die
+   Frigate-API kennt kein Rename), und der Zug laeuft im Hintergrund ueber alle
+   Ereignisse. Zusammenfuehren ist nicht dieser Knopf — bei belegtem Namen lehnt der
+   Server ab und sagt es. */
+function personUmbenennen(person, btn) {
+  var neu = prompt(TT('js.person.umbenennen_frage',
+                      'Rename "{person}" — correct the name below.\n\n' +
+                      'Please note:\n' +
+                      '- your own automations (Home Assistant / MQTT) match the name in the payload and need updating\n' +
+                      '- if the Frigate export is on, the old name stays on the Frigate side (its API cannot rename)\n' +
+                      '- past snapshots, logs and backups keep the old name',
+                      {person: person}), person);
+  if (neu === null) return;
+  neu = neu.trim();
+  if (!neu || neu === person) return;
+  btn.disabled = true;
+  var box = document.createElement('span');
+  box.className = 'dim'; box.style.marginLeft = '6px';
+  box.textContent = TT('js.status.starten', 'starting …');
+  btn.parentNode.insertBefore(box, btn.nextSibling);
+  fetch('/person_umbenennen', {method: 'POST',
+                               body: JSON.stringify({person: person, neu: neu})})
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      box.textContent = d.msg;
+      if (!d.ok) { btn.disabled = false; return; }
+      (function poll() {
+        fetch('/person_umbenennen/status').then(function (r) { return r.json(); })
+          .then(function (s) {
+            if (s.laeuft) {
+              box.textContent = '⏳ ' + (s.n
+                ? TT('js.person.umbenennen_lauf', 'renaming — {phase} {i}/{n}',
+                     {phase: s.phase || '', i: s.i, n: s.n})
+                : TT('js.status.starten', 'starting …'));
+              setTimeout(poll, 3000);
+            } else {
+              box.textContent = '✅';
+              setTimeout(function () { location.href = '/gesichter'; }, 1200);
+            }
+          }).catch(function () { setTimeout(poll, 5000); });
+      })();
+    })
+    .catch(function () {
+      box.textContent = TT('js.status.fehler', 'error'); btn.disabled = false;
+    });
+}
+
 /* ── Hochzaehlen bei laufender Suche (requirement: show elapsed time while searching) ────────
    Der Zaehler ueberlebt die Auto-Refreshes der Seite (Startzeit je Person in
    sessionStorage) und pollt alle 3 s, ob das Ergebnis da ist — dann laedt die Seite

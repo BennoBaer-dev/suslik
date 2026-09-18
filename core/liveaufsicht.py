@@ -296,6 +296,35 @@ class Aufsicht:
         self.warte_bis = -1e18
         self.weck.set()
 
+    def neustarten(self, grund="restart"):
+        """Das laufende Kind beenden, die Aufsicht aber WEITER arbeiten lassen —
+        der naechste Takt startet die Engine neu.
+
+        .542 (Person umbenennen): dafuer gab es keinen Griff, und die
+        naheliegende Kombination `stop()` + `anstossen()` waere eine Falle
+        gewesen: `stop()` setzt `gestoppt = True`, und das nimmt NICHTS
+        zurueck ausser `__init__` — `anstossen()` hebt nur Pause und Backoff
+        auf. Die Engine waere nach einem Umbenennen bis zum naechsten
+        Dienststart aus geblieben, also genau der stille Verlust, den der
+        Umbenenn-Zug verhindern soll.
+
+        Warum ein Neustart ueberhaupt noetig ist: die Engine laedt die
+        Referenzen genau EINMAL beim Start (core/livewached) und hat keinen
+        Reload-Weg; der selektive Reload betrifft Config/Guards, nie die
+        Referenzen. Ohne Neustart meldet sie den Altnamen weiter.
+
+        Laeuft unter `_takt_lock` (dieselbe KANN-3-Begruendung wie `stop`:
+        sonst kann im Spawn-Fenster ein Kind am Kill vorbei entstehen).
+        Fehlstart-Zaehler und Backoff werden zurueckgesetzt — der Neustart ist
+        eine bewusste Handlung, keine Fortsetzung einer Crash-Kette."""
+        with self._takt_lock:
+            self._stop_innen(grund)
+        self.fehlstarts = 0
+        self.backoff = self.backoff_start
+        self.pause_bis = -1e18
+        self.warte_bis = -1e18
+        self.weck.set()
+
     def stop(self, grund="stop"):
         """Dienst-Stopp: SIGTERM auf die PROZESSGRUPPE (die Engine endet
         sauber, Kacheln schreiben den finalen Status), nach der Frist

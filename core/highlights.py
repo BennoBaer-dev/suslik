@@ -12,7 +12,23 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.0.541"   # .541 traegt den Box-Eintrag des Sammel-Release, INHALT VOM
+STAND = "0.1.0.542"   # .542 traegt den KONSOLIDIERTEN Box-Eintrag, INHALT VOM
+                      # INHABER VORGEGEBEN (18.09.2026 vormittags). Dieser Entscheid
+                      # ERSETZT den vom Vorabend („What's-new aendern wir nicht, nur
+                      # Versionsnummer") — Anlass ist, dass .542 nicht mehr nur der
+                      # cpu-Fix ist, sondern das Umbenennen von Personen mitbringt.
+                      # Drei Vorgaben: (a) die TEST-MARKE („fuer den Feldtest, kein
+                      # allgemeines Update") FAELLT WEG — mit .542 tragen wieder alle
+                      # fuenf Varianten dasselbe `latest`, die Einschraenkung waere
+                      # unwahr; (b) Kern-Neubau und Sample-Deckel wortgleich aus der
+                      # .541-Box uebernommen; (c) NEU ein Satz zum Umbenennen, Auflage
+                      # woertlich „kurz und knapp". Wie am Vorabend gilt: ALLES unter
+                      # der EINEN aktuellen Nummer — der .541-Block ist deshalb nicht
+                      # stehen geblieben, sondern auf 0.1.0.542 UMGEHAENGT (dasselbe
+                      # Verfahren wie .540 -> .541). Der cpu-Fix selbst bleibt
+                      # box-los: er loest die Zusage der Box ein, statt sie zu
+                      # aendern (Details im CHANGELOG).
+                      # Davor: "0.1.0.541"   # .541 traegt den Box-Eintrag des Sammel-Release, INHALT VOM
                       # INHABER VORGEGEBEN (17.09.2026 abends, zwei Entscheide).
                       # (a) KONSOLIDIERUNG: „alles unter der aktuellen Version, nicht
                       # aufgeteilt auf mehrere" — der .540-Eintrag ist deshalb nicht
@@ -690,46 +706,35 @@ BETONT = "!! "
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
     # ####################################################################
-    # 0.1.0.541 — INHALT VOM INHABER VORGEGEBEN. DREI Eintraege unter EINER
-    # Nummer; ausdrueckliche Auflage (17.09.2026, zweimal praezisiert):
-    # „ALLES unter der EINEN aktuellen Version, nicht aufgeteilt auf
-    # Zwischenversionen", kurze Saetze. Der Eintrag stand bis zum Sammel-Release
-    # unter 0.1.0.540 und ist am Abend des 17.09. auf 0.1.0.541 UMGEHAENGT
-    # worden — der Inhaber sinngemaess: „alles unter der aktuellen Version, nicht
-    # aufgeteilt auf mehrere". .541 ist die eine Nummer, unter der alle fuenf
-    # Varianten dieses Pakets rausgehen; .540 ging nur als gpu-legacy raus.
-    #   1. Die Test-Marke, fett und rot. Sie ist KEIN neues Markup: `betont`
-    #      faerbt den Kopf bis zum ersten Gedankenstrich (Renderer
-    #      webui.whatsnew_block, Auflage seit .526) — deshalb steht „Test
-    #      version" davor und die Einordnung dahinter. Der Rest des Satzes ist
-    #      der abgestimmte Wortlaut der .537/.527-Box, nur „release" -> „version"
-    #      wie vorgegeben. WORTGLEICH beim Umhaengen uebernommen.
-    #   2. Der Kern-Neubau. Er sagt dasselbe wie der Worker-Satz der .537-Box,
-    #      aber in der vorgegebenen Fassung: die Stufen laufen als EINE Kette auf
-    #      der GPU, und das Tempo wird OHNE Faktor genannt („significantly faster
-    #      than 0.1.0.526") — die „3-5x" der .537-Box waren fuer den damaligen
-    #      Stand freigegeben, nicht fuer diesen. WORTGLEICH uebernommen.
-    #   3. Der Sample-Deckel — NEU GEFASST, OHNE ZAHL (Inhaber 17.09. abends:
-    #      „Nummer 1, Zahl raus"). Die vorige Fassung nannte „240 Frames je
-    #      Ereignis"; seit .541 traegt jede Variante ihren eigenen Werkswert
-    #      (cpu 120, gpu-legacy 180, sonst 240 — core.registry.SAMPLE_DECKEL_WERK),
-    #      und eine feste 240 in der Box waere fuer zwei von fuenf ausgelieferten
-    #      Varianten schlicht falsch. Der Satz nennt deshalb nur noch, DASS es
-    #      einen Werkswert je Variante gibt. Nichts darueber hinaus ergaenzt.
-    # Die Alt-Eintraege .537/.527/.526 bleiben unveraendert in der Historie.
+    # 0.1.0.542 — INHALT VOM INHABER VORGEGEBEN (18.09.2026 vormittags, er
+    # ersetzt damit seinen Entscheid vom Vorabend „What's-new aendern wir
+    # nicht"). Wieder KONSOLIDIERT: ALLES unter der EINEN aktuellen Nummer,
+    # nicht auf Zwischenversionen aufgeteilt — der Eintrag ist deshalb nicht
+    # unter 0.1.0.541 stehen geblieben, sondern auf 0.1.0.542 UMGEHAENGT
+    # (dasselbe Verfahren wie .540 -> .541 am Vorabend). .542 ist die eine
+    # Nummer, unter der alle fuenf Varianten dieses Pakets rausgehen.
+    # Drei Aenderungen, jede einzeln vorgegeben:
+    #   (a) Die TEST-MARKE (fett/rot, erster Eintrag der .541-Box) ist
+    #       ENTFERNT. Sie sagte „fuer den Feldtest, kein allgemeines Update" —
+    #       mit .542 tragen wieder alle fuenf Varianten dasselbe `latest`, die
+    #       Einschraenkung waere also unwahr geworden.
+    #   (b) Kern-Neubau und Sample-Deckel sind WORTGLEICH uebernommen, in allen
+    #       fuenf Sprachen (kein Wort geaendert, auch nicht die Bezugsversion
+    #       0.1.0.526 — sie ist der abgestimmte Vergleichspunkt).
+    #   (c) NEU der dritte Eintrag: Personen umbenennen. Auflage woertlich
+    #       „kurz und knapp" — daher EIN Satz, der sagt, dass es geht und wo
+    #       der Knopf sitzt, und kein Wort ueber die Migration darunter (die
+    #       Teil-Luecken stehen im Dialog und im CHANGELOG, nicht in der Box).
+    #       Der Seitenname ist je Sprache der ECHTE Titel der Seite
+    #       (gesichter.titel: Known people / Bekannte Personen / Personnes
+    #       connues / Personas conocidas / Persone conosciute) — ein
+    #       erfundener Name waere ein Hinweis ins Leere.
     # EN ist der vorgegebene Wortlaut; DE/ES/IT/FR sind die Uebersetzung davon
-    # (Praxis seit .298/§6.3).
+    # (Praxis seit .298/§6.3). Nichts selbststaendig ergaenzt
+    # ([[whatsnew-inhalt-abstimmen]]); der Wortlaut des neuen Eintrags liegt
+    # dem Inhaber zur Sicht vor (Einspruch bis zum latest-Promote moeglich).
     # ####################################################################
-    ("0.1.0.541", (
-        {"betont": True,
-         "de": "Testversion — für den Feldtest, kein allgemeines Update.",
-         "en": "Test version — for field testing, not a general update.",
-         "es": "Versión de prueba — para pruebas de campo, no es una "
-               "actualización general.",
-         "it": "Versione di prova — per il test sul campo, non è un "
-               "aggiornamento generale.",
-         "fr": "Version de test — pour les essais sur le terrain, pas une mise "
-               "à jour générale."},
+    ("0.1.0.542", (
         {"de": "Der Erkennungs-Kern ist neu gebaut. Alle Analyse-Stufen laufen "
                "jetzt als eine Kette auf der GPU. Die Analyse ist deutlich "
                "schneller als 0.1.0.526.",
@@ -744,7 +749,10 @@ HIGHLIGHTS = (
                "L'analisi è molto più veloce della 0.1.0.526.",
          "fr": "Le cœur de reconnaissance a été reconstruit. Toutes les étapes "
                "de l'analyse tournent maintenant sur le GPU en une seule "
-               "chaîne. L'analyse est nettement plus rapide que la 0.1.0.526."},
+               "chaîne. L'analyse est nettement plus rapide que la 0.1.0.526.",
+        "fi": "Tunnistuksen ydin on rakennettu uudelleen. Kaikki analyysin "
+               "vaiheet ajetaan nyt GPU:lla yhtenä ketjuna. Analyysi on "
+               "selvästi nopeampi kuin 0.1.0.526."},
         {"de": "Neu: ein Analyse-Budget je Ereignis, gleichmäßig über den Clip "
                "verteilt. Werkswert je Variante (Advanced, 0 = aus).",
          "en": "New: a per-event analysis budget, spread evenly over the clip. "
@@ -757,7 +765,32 @@ HIGHLIGHTS = (
                "variante (Advanced, 0 = disattivato).",
          "fr": "Nouveau : un budget d'analyse par événement, réparti "
                "uniformément sur le clip. La valeur d'usine dépend de la "
-               "variante (Advanced, 0 = désactivé)."},
+               "variante (Advanced, 0 = désactivé).",
+        "fi": "Uutta: tapahtumakohtainen analyysibudjetti, jaettuna "
+               "tasaisesti leikkeen yli. Tehdasarvo riippuu variantista "
+               "(Advanced, 0 = pois)."},
+        {"de": "Neu: Personen lassen sich umbenennen — der Stift neben dem "
+               "Namen unter „Bekannte Personen“.",
+         "en": "New: you can rename a person — the pencil next to the name on "
+               "“Known people”.",
+         "es": "Nuevo: ahora se puede renombrar una persona — el lápiz junto "
+               "al nombre en «Personas conocidas».",
+         "it": "Novità: ora si può rinominare una persona — la matita accanto "
+               "al nome in «Persone conosciute».",
+         "fr": "Nouveau : vous pouvez renommer une personne — le crayon à côté "
+               "du nom dans « Personnes connues ».",
+        "fi": "Uutta: henkilön voi nimetä uudelleen — kynä nimen vieressä "
+               "sivulla \u201dTunnetut henkilöt\u201d."},
+        # .542 vierter Eintrag (Inhaber-Entscheid 18.09. vormittags, nachgereicht):
+        # kurzer Hinweis auf die sechste Oberflaechen-Sprache, in ALLEN sechs
+        # Fassungen — auch der finnische Nutzer soll ihn lesen koennen.
+        {"de": "Neu: die Oberfläche gibt es jetzt auch auf Finnisch.",
+         "en": "New: the interface is now also available in Finnish.",
+         "es": "Nuevo: la interfaz también está disponible en finés.",
+         "it": "Novità: l'interfaccia è ora disponibile anche in finlandese.",
+         "fr": "Nouveau : l'interface est désormais disponible aussi en "
+               "finnois.",
+        "fi": "Uutta: käyttöliittymä on nyt saatavilla myös suomeksi."},
     )),
     # ####################################################################
     # 0.1.0.537 — INHALT VOM USER VORGEGEBEN (16.09.2026 21:0x): die Box wird

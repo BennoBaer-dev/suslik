@@ -25,6 +25,7 @@ T = {
     "gesichter.galerie.knopf_aehnliche": "trova volti corrispondenti",
     "gesichter.galerie.knopf_qs": "Controlla la qualità",
     "gesichter.galerie.knopf_loeschen": "Elimina persona…",
+    "gesichter.galerie.knopf_umbenennen": "Rinomina persona\u2026",
     "gesichter.galerie.hinweis_leer": "ancora nessuna immagine",
     "gesichter.upload.titel": "Carica foto",
     "gesichter.upload.attr_person": "persona esistente…",
@@ -1926,6 +1927,13 @@ T = {
     "js.unb.objekt_frage": "Segnare come «non è una persona» (un cespuglio, un riflesso, un'auto parcheggiata)? Non comparirà più come visitatore; si può annullare in «non persone».",
     "js.person.loesch_frage": "Eliminare TUTTI i riferimenti e il nome \"{person}\"?\nLe immagini finiscono nella cartella cestino (recuperabili).\n\nDigita il nome per confermare:",
     "js.person.name_falsch": "Il nome non corrisponde — nulla è stato eliminato.",
+    "js.person.umbenennen_frage":
+        "Rinomina \"{person}\" — correggi il nome qui sotto.\n\n"
+        "Nota bene:\n"
+        "- le tue automazioni (Home Assistant / MQTT) confrontano il nome nel messaggio e vanno adeguate\n"
+        "- se l'esportazione verso Frigate \u00e8 attiva, il nome vecchio resta sul lato Frigate (la sua API non sa rinominare)\n"
+        "- immagini, registri e backup vecchi mantengono il nome vecchio",
+    "js.person.umbenennen_lauf": "rinomina in corso — {phase} {i}/{n}",
     "js.areas.fehl": "salvataggio non riuscito — il servizio è raggiungibile?",
     "js.areas.name_fehlt": "Inserisci prima un nome per l’area.",
     "js.areas.existiert": "Quest’area esiste già.",
@@ -3311,6 +3319,15 @@ T = {
         "cestino — recuperabili)",
     "antwort.person_name_ungueltig": "nome non valido",
     "antwort.person_unbekannt": "persona sconosciuta",
+    "antwort.person_name_belegt":
+        "Esiste gi\u00e0 una persona con questo nome ({person}) — unire due persone \u00e8 previsto per una versione successiva.",
+    "antwort.person_name_gleich": "nome invariato — nulla da fare",
+    "antwort.person_name_reserviert": "questo nome \u00e8 riservato",
+    "antwort.person_umbenennen_blockiert":
+        "Rinomina non possibile adesso — in background \u00e8 in esecuzione: {jobs}. Attendi e riprova.",
+    "antwort.person_umbenennen_laeuft": "rinomina \u2026",
+    "antwort.person_umbenennen_laeuft_schon":
+        "una persona \u00e8 gi\u00e0 in fase di rinomina",
     "antwort.pruefung_gestartet": "controllo avviato",
     "antwort.pruefung_laeuft":
         "controllo in corso: ricarica questa pagina tra circa un minuto",

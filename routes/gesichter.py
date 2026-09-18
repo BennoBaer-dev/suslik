@@ -70,7 +70,14 @@ def render(personen, data_dir, gefiltert=False, alle=None, pruefung=None):
             # .507 B4: id= je Personenkarte — bis .506 hatte die Galerie keine
             # Sprungmarke, das #-Fragment von /faces lief deshalb ins Leere.
             f'<div class="card" id="p-{urllib.parse.quote(pp, safe="")}">'
-            f'<b>{html.escape(pp)}</b> — '
+            f'<b>{html.escape(pp)}</b> '
+            # .542: der Stift steht DIREKT am Namen, nicht bei den
+            # Aktionsknoepfen — umbenannt wird der Name, und der Nutzer sucht
+            # die Handlung dort, wo das Ding steht, das sie aendert. Die
+            # roten/grauen Knoepfe rechts betreffen die BILDER der Person.
+            f'<button class="gtb" title="{t("gesichter.galerie.knopf_umbenennen")}" '
+            f'style="font-size:11px;padding:0 5px" '
+            f'onclick="personUmbenennen(\'{_js(pp)}\',this)">&#9998;</button> — '
             f'{t("gesichter.galerie.bildzahl", n=len(bil))}{_marken} &nbsp; '
             f'<a class="gtb" href="/aehnliche?person={urllib.parse.quote(pp)}">'
             f'{t("gesichter.galerie.knopf_aehnliche")}</a> '
