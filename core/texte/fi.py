@@ -18,7 +18,7 @@ T = {
         "henkilön oman painikkeen kautta tai lähettää alta kuvan, myös "
         "aivan uudelle henkilölle.",
     "gesichter.galerie.bildzahl": "{n} kuvaa",
-    "gesichter.galerie.gemischt": "kokoelma vaikuttaa sekalaiselta",
+    "gesichter.galerie.gemischt": "kirjasto vaikuttaa sekalaiselta",
     "gesichter.galerie.vorschlag": "{n} poistoehdotusta",
     "gesichter.galerie.knopf_entfernen": "poista",
     "gesichter.galerie.knopf_aehnliche": "etsi sopivia kasvoja",
@@ -74,7 +74,7 @@ T = {
         "niin että kaksi lähekkäin olevaa henkilöä eivät enää sulaudu "
         "yhdeksi päätelmäksi.",
     "readme.lernen.titel": "Miten opetan uusia kasvoja?",
-    "readme.lernen.text": "Näin teen sen omassa järjestelmässäni:\n\nKasvojen oppimisajo. Uudessa järjestelmässä ensimmäinen asia. Laitteiston mukaan viimeiset 500 tapahtumaa, 1000 jos tehoa on varalla. Ohjelma hakee tapahtumat, joissa on henkilö, ryhmittelee ne ja kokoaa kuvat yhteen. Tunnetut se liittää itse. Tuntemattomat se kerää ryhmäksi, ja minä annan ryhmälle nimen. Siitä syntyy alkujoukko. Toimii vain kasvoilla, jotka tunnistettiin siististi.\n\nTänään. Kun alkujoukko on koossa, kaikki uusi tulee täältä: napsauta tapahtumaa tai henkilöä, ota kasvot käyttöön.\n\nTunnetut henkilöt. Valitse henkilö, sitten etsi sopivia kasvoja.\n\nHenkilöiden oppimisajo. Sellainen on vieressä, niitä varten, joiden kasvot eivät ole luettavissa. Kirjoitan siitä myöhemmin enemmän.\n\nLaatu. Käytän tuota välilehteä säännöllisesti. Se näyttää, kuinka hyviä henkilön kuvat todella ovat, mitkä ovat liian heikkoja ja mitkä menevät päällekkäin toisen henkilön kanssa. Liian samanlaiset otan pois.\n\nVälilehti Tuntemattomat on jäänne aiemmasta versiosta. Minä en käytä sitä.",
+    "readme.lernen.text": "Näin teen sen omassa järjestelmässäni:\n\nKasvojen oppimisajo. Uudessa järjestelmässä ensimmäinen asia. Laitteiston mukaan viimeiset 500 tapahtumaa, 1000 jos tehoa on varalla. Ohjelma hakee tapahtumat, joissa on henkilö, ryhmittelee ne ja kokoaa kuvat yhteen. Tunnetut se liittää itse. Tuntemattomat se kerää ryhmäksi, ja minä annan ryhmälle nimen. Siitä syntyy alkujoukko. Toimii vain kasvoilla, jotka tunnistettiin siististi.\n\nTänään. Kun alkujoukko on koossa, kaikki uusi tulee täältä: napsauta tapahtumaa tai henkilöä, ota kasvot käyttöön.\n\nTunnetut henkilöt. Valitse henkilö, sitten etsi sopivia kasvoja. Täällä myös nimeän henkilön uudelleen, jos nimessä on kirjoitusvirhe. Ohjelma vie uuden nimen tallennettuihin tietoihin, myös vanhoihin tapahtumiin. Lokit ja varmuuskopiot säilyttävät vanhan nimen.\n\nHenkilöiden oppimisajo. Sellainen on vieressä, niitä varten, joiden kasvot eivät ole luettavissa. Kirjoitan siitä myöhemmin enemmän.\n\nLaatu. Käytän tuota välilehteä säännöllisesti. Se näyttää, kuinka hyviä henkilön kuvat todella ovat, mitkä ovat liian heikkoja ja mitkä menevät päällekkäin toisen henkilön kanssa. Liian samanlaiset otan pois.\n\nVälilehti Tuntemattomat on jäänne aiemmasta versiosta. Minä en käytä sitä.",
     "readme.persoenlich.titel": "Henkilökohtaista",
     "readme.persoenlich.text": "Tämä on puhdasta harrastusta. Senior IT-arkkitehtina minulla on hauskaa rakentaa jotain tekoälyn kanssa. Se on tehty kokonaan Claude Codella, pääosin Fable 5:llä, agentteihin Opus 5:llä.\n\nToivoisin palautetta, ja minua ilahduttaa, kun joku ottaa järjestelmän käyttöön. Se on minun palkkani.",
     "kameras.titel": "Kamerat",
@@ -103,9 +103,9 @@ T = {
         "jälkeen.",
     "lernen.karte.unbekannt": "Tuntematon/vieras",
     "lernen.karte.metrik_voll":
-        "score {score} · uutuus {novelty} · {bw}×{bh}px · edestä {front} "
+        "tulos {score} · uutuus {novelty} · {bw}×{bh}px · edestä {front} "
         "· terävyys {sharp}",
-    "lernen.karte.metrik_kurz": "score {score}",
+    "lernen.karte.metrik_kurz": "tulos {score}",
     "lernen.karte.link_video": "Video",
     "lernen.karte.knopf_add_person": "Lisää nimellä {person}",
     "lernen.karte.attr_person": "henkilönä…",
@@ -184,10 +184,10 @@ T = {
     "benachrichtigungen.alerts.stil_label": "Ilmoitusten tekstityyli:",
     "benachrichtigungen.alerts.stil_worte": "selkeät sanat",
     "benachrichtigungen.alerts.stil_worte_zahlen":
-        "sanat + raa'at score-arvot",
+        "sanat + raa'at tulosarvot",
     "benachrichtigungen.alerts.stil_hinweis":
         "miten ilmoitukset kuvaavat osuman (selkeät sanat on oletus; "
-        "raa'at kosini-/score-luvut vain jos haluat ne takaisin)",
+        "raa'at kosini-/tulosluvut vain jos haluat ne takaisin)",
     "benachrichtigungen.alerts.label_anwesenheit_push": "Läsnäolo-push:",
     "benachrichtigungen.alerts.label_alert_cooldown":
         "Ilmoitusten rauhoitusaika (s):",
@@ -196,13 +196,13 @@ T = {
     "benachrichtigungen.alerts.label_szene_karenz":
         "Kohtauksen armonaika (s):",
     "benachrichtigungen.pushover.label_token": "Token:",
-    "benachrichtigungen.pushover.label_user": "User key:",
+    "benachrichtigungen.pushover.label_user": "Käyttäjäavain:",
     "benachrichtigungen.pushover.knopf_test": "Testaa Pushover",
     "benachrichtigungen.pushover.zustand_an":
-        "Aktiivinen — token ja user key on asetettu.",
+        "Aktiivinen — token ja käyttäjäavain on asetettu.",
     "benachrichtigungen.pushover.zustand_aus":
-        "Pois — token tai user key puuttuu, tällä kanavalla ei lähetetä "
-        "mitään.",
+        "Pois — token tai käyttäjäavain puuttuu, tällä kanavalla ei "
+        "lähetetä mitään.",
     "benachrichtigungen.pushover.zustand_pause":
         "Tauolla — Pushover hylkäsi {n} ilmoitusta peräkkäin. Tallenna "
         "asetukset tai lähetä onnistunut testi, niin lähetys jatkuu.",
@@ -220,7 +220,7 @@ T = {
         "Tuntemattoman rauhoitusaika (s):",
     "benachrichtigungen.telegram.knopf_test": "Testaa Telegram",
     "benachrichtigungen.mqtt.label_publish": "Julkaise tunnistus-topicit:",
-    "benachrichtigungen.mqtt.label_host": "Host:",
+    "benachrichtigungen.mqtt.label_host": "Palvelin:",
     "benachrichtigungen.mqtt.label_port": "Portti:",
     "benachrichtigungen.mqtt.label_user": "Käyttäjä:",
     "benachrichtigungen.mqtt.label_password": "Salasana:",
@@ -396,7 +396,7 @@ T = {
         "kasvotie on jokaisen analyysin selkäranka — henkilö ja Vision "
         "riippuvat sen käyntipäätelmästä",
     "konfiguration.kette.grund_person":
-        "koulutettua henkilömallia ei ole vielä otettu käyttöön",
+        "opetettua henkilömallia ei ole vielä otettu käyttöön",
     "konfiguration.kette.grund_vision": "Vision-tunnistus on kytketty pois",
     "konfiguration.kette.grund_aus": "kytketty täällä pois",
     "konfiguration.kette.status_aus": "tila: ei käynnissä ({grund})",
@@ -444,8 +444,8 @@ T = {
     "konfiguration.support.token_fehlt": "Ei vielä support-tokenia.",
     "konfiguration.support.knopf_token": "Luo uusi token",
     "konfiguration.support.einmal_hinweis":
-        "Token näkyy tässä täsmälleen kertaalleen luonnin jälkeen — ota "
-        "se talteen; sen jälkeen näytetään enää ••• .",
+        "Token näkyy tässä vain kerran luonnin jälkeen — ota se "
+        "talteen; sen jälkeen näkyy vain •••.",
     "konfiguration.titel": "Lisäasetukset",
     "konfiguration.kopf.satz1":
         "Muutokset kirjataan (config_audit.jsonl); tallennuksen jälkeen "
@@ -1038,7 +1038,7 @@ T = {
         "(vanhaa materiaalia tai kuvia, jotka tulivat toista tietä), "
         "joten tämä säädin ei muuta tässä mitään. Uudet kuvat "
         "tapahtuma-analyysistä tuovat arvon mukanaan.",
-    "livekalib.katalog.regler_n": "Katalogi: Feature-normi",
+    "livekalib.katalog.regler_n": "Kirjasto: ominaisuusnormi",
     "livekalib.katalog.regler_n_prosa":
         "Kuinka vahvat kasvojen on tunnistusmateriaalina oltava, jotta "
         "oppimisajo säilyttää ne — viitteetön mitta, jolla oppimisvarasto "
@@ -1049,21 +1049,22 @@ T = {
         "välille 18–35. Tämä on eri kysymys kuin asetusten varastoraja, "
         "joka päättää, mitkä kuvat sinulle TARJOTAAN.",
     "livekalib.ohne_norm":
-        "Yksikään näistä kuvista ei kanna Feature-normin arvoa "
+        "Yksikään näistä kuvista ei kanna ominaisuusnormin arvoa "
         "(kalibrointivarasto ei mittaa sitä, oppimisajo mittaa), joten "
-        "tämä säädin ei muuta tämän galleriaa mitenkään. Oppimisajon "
+        "tämä säädin ei muuta tämän kirjastoa mitenkään. Oppimisajon "
         "käyttämän arvon se asettaa silti.",
     "livekalib.regler_k": "Pienimmät kasvot (px)",
     "livekalib.regler_k_prosa":
-        "Kuinka pienet kasvot saavat olla ja käydä silti äänestä — "
-        "mitattuna rajauksen lyhyemmältä sivulta, pikseleinä. Tämä on "
+        "Kuinka pienet kasvot saavat olla ja vaikuttaa silti "
+        "tunnistukseen — mitattuna rajauksen lyhyemmältä sivulta, "
+        "pikseleinä. Tämä on "
         "pohja hölynpölyä vastaan, ei laaturaja: kenttäaineistossa oikeat "
         "äänet ovat yleiskuvakameroilla 30-49 px ja hölynpölytapaukset "
         "11-19 px, kun taas 70 px kaataisi oikeatkin. Tehdasarvo 25 on "
         "täsmälleen se luku, jolla tämä järjestelmä on mitannut jokaisen "
         "äänen versiosta 0.1.0.400 lähtien; säädin tekee siitä vain "
         "kamerakohtaisen. 0 = pois.",
-    "livekalib.katalog.regler_k": "Katalogi: pienimmät kasvot (px)",
+    "livekalib.katalog.regler_k": "Kirjasto: pienimmät kasvot (px)",
     "livekalib.katalog.regler_k_prosa":
         "Sama mitta oppimiseen: kuinka pienet kasvot saavat olla ja "
         "oppimisajo säilyttää ne silti. Aseta se korkeammalle kameralla, "
@@ -1074,15 +1075,15 @@ T = {
     "livekalib.ohne_kante":
         "Yksikään näistä kuvista ei kanna kasvojensa kokoa "
         "(kalibrointivarasto ei tallenna sitä, oppimisajo tallentaa), "
-        "joten tämä säädin ei muuta tämän galleriaa mitenkään. "
+        "joten tämä säädin ei muuta tämän kirjastoa mitenkään. "
         "Käytettävän arvon se asettaa silti.",
     "livekalib.standard": "Oletukset",
     "livekalib.fueller.laeuft": "materiaalihaku käynnissä",
     "livekalib.fueller.bilanz": "Viimeisin materiaalihaku",
     "livekalib.fueller.bilder": "kuva(a)",
     "livekalib.tab_erkennen": "Tunnistus",
-    "livekalib.tab_lernen": "Kasvokatalogi",
-    "livekalib.tab_pruefen": "Katalogin tarkistus",
+    "livekalib.tab_lernen": "Kasvokirjasto",
+    "livekalib.tab_pruefen": "Kirjaston tarkistus",
     "livekalib.uebernehmen": "Ota käyttöön",
     "livekalib.leer":
         'Ei vielä kuvia. Ne tulevat itsestään — käynnissä olevalta '
@@ -1099,8 +1100,8 @@ T = {
         "Nämä kolme päättävät, mikä tämän kameran kuva menee ilmoitukseen "
         "ja mitkä kasvot säilyvät tässä varastona. Ne eivät päätä, kuka "
         "tunnistetaan.",
-    "livekalib.abschnitt.katalog": "Katalogin raja",
-    "livekalib.abschnitt.pruefen": "Katalogin tarkistuksen raja",
+    "livekalib.abschnitt.katalog": "Kirjaston raja",
+    "livekalib.abschnitt.pruefen": "Kirjaston tarkistuksen raja",
     "livekalib.abschnitt.material": "Materiaali",
     "livekalib.katalog.prosa":
         "Nämä neljä arvoa päättävät, mitä tämä kamera antaa oppimiseen: "
@@ -1115,7 +1116,7 @@ T = {
     "livekalib.katalog.grenze":
         "Mitä ne eivät tee: ne eivät koskaan poista jo olevia viitteitä, "
         "eivätkä muuta mitään siinä, kuka tunnistetaan. Kun kuva otetaan "
-        "katalogiin, puuttuvat laatuluvut (vanhempi materiaali, build "
+        "kirjastoon, puuttuvat laatuluvut (vanhempi materiaali, build "
         "ilman laatumalleja) päästävät sen läpi koskematta. Oppimisajossa "
         "pätee saman säännön toinen puoli: kasvot, joiden arvoa ei voitu "
         "mitata, putoavat pois — ajon lopussa oleva yhteenveto laskee "
@@ -1125,26 +1126,26 @@ T = {
         "Käytössä: yleinen varasääntö — tällä kameralla ei ole vielä omia "
         "arvoja.",
     "livekalib.katalog.quelle_aus":
-        "Katalogin rajaa ei ole asetettu: mistä tahansa kuvasta voi tulla "
+        "Kirjaston rajaa ei ole asetettu: mistä tahansa kuvasta voi tulla "
         "viite.",
-    "livekalib.katalog.regler_e": "Katalogi: kuvan vaikutelma",
+    "livekalib.katalog.regler_e": "Kirjasto: kuvan vaikutelma",
     "livekalib.katalog.regler_e_prosa":
         "Tämän kameran viitteen vähimmäisvaikutelma kuvana. "
         "Tarkoituksella matala: keskinkertainenkin kuva kantaa vielä "
-        "jotain opittavaa, ja katalogin tarkistus katsoo sitä uudelleen, "
+        "jotain opittavaa, ja kirjaston tarkistus katsoo sitä uudelleen, "
         "kun se on sisällä.",
-    "livekalib.katalog.regler_t": "Katalogi: tunnistettavuus",
+    "livekalib.katalog.regler_t": "Kirjasto: tunnistettavuus",
     "livekalib.katalog.regler_t_prosa":
         "Tämän kameran viitteen vähimmäistunnistettavuus. Juuri tämä "
-        "pitää puoliksi peittyneet kasvot pois katalogista.",
-    "livekalib.katalog.regler_det": "Katalogi: havaintoarvo",
+        "pitää puoliksi peittyneet kasvot pois kirjastosta.",
+    "livekalib.katalog.regler_det": "Kirjasto: havaintoarvo",
     "livekalib.katalog.regler_det_prosa":
         "Mistä lähtien detektori on tarpeeksi varma, että kasvot ovat "
         "ylipäätään olemassa. Sama mittari kuin Tunnistus-välilehdessä, "
         "mutta oppimiseen — ja täällä se saa hyvin olla muualla: se, "
         "mistä haluat ilmoituksen, ei ole sama kuin se, mistä haluat "
         "oppia.",
-    "livekalib.katalog.regler_p": "Katalogi: pään asento",
+    "livekalib.katalog.regler_p": "Kirjasto: pään asento",
     "livekalib.katalog.regler_p_prosa":
         "Kuinka selvästi löytöpaikalla on erotettavissa pää. Tämä on "
         "säädin roska-astioita, pensasaitoja ja auton keuloja vastaan "
@@ -1152,9 +1153,10 @@ T = {
         "sellaista. Jälleen sama mittari kuin Tunnistus-välilehdessä.",
     "livekalib.pruefen.prosa":
         "Tämä raja arvioi kuvia, jotka sinulla JO on. Sen alapuolella "
-        "katalogin tarkistus merkitsee tämän kameran tallennetun kuvan; "
-        "yhdessä heikon Feature-normin kanssa siitä tulee poistoehdotus, "
-        "jota voit napsauttaa. Se ei koskaan ota kuvaa sisään eikä "
+        "kirjaston tarkistus merkitsee tämän kameran tallennetun kuvan; "
+        "yhdessä heikon ominaisuusnormin kanssa siitä tulee "
+        "poistoehdotus, jota voit napsauttaa. Se ei koskaan ota kuvaa "
+        "sisään eikä "
         "koskaan poista kuvaa itse.",
     "livekalib.pruefen.grenze":
         "Se on tarkoituksella erillään yllä olevasta rajasta: kuvan "
@@ -1166,17 +1168,17 @@ T = {
         "Käytössä: yleinen varasääntö — tällä kameralla ei ole vielä omaa "
         "arvoa.",
     "livekalib.pruefen.quelle_aus":
-        "Tarkistusrajaa ei ole asetettu: katalogin tarkistus ei arvioi "
+        "Tarkistusrajaa ei ole asetettu: kirjaston tarkistus ei arvioi "
         "kuvanlaatua.",
     "livekalib.pruefen.regler_t": "Tarkistus: tunnistettavuus",
     "livekalib.pruefen.regler_t_prosa":
         "Tämän tunnistettavuusarvon alle jäävä tämän kameran tallennettu "
-        "kuva merkitään. Oletus tulee käsin arvioidusta katalogikuvien "
+        "kuva merkitään. Oletus tulee käsin arvioidusta kirjastokuvien "
         "joukosta, ei arvauksesta.",
     "livekalib.material.aus":
-        "Kuvien kerääminen on kytketty pois (Advanced, calibration "
-        "samples). Ilman varastoa tällä sivulla ei ole mitään "
-        "näytettävää.",
+        "Kuvien kerääminen on kytketty pois (Lisäasetukset, "
+        "calibration samples). Ilman varastoa tällä sivulla ei ole "
+        "mitään näytettävää.",
     "livekalib.material.stand": "{n} kuvaa varastossa, enintään {deckel}",
     "livekalib.material.wann": "viimeksi {wann}",
     "livekalib.material.zeitraum": "kuvia ajalta {von}–{bis}",
@@ -1188,7 +1190,7 @@ T = {
     "livekalib.material.lauf":
         "Lisäksi {n} tämän kameran kuvaa viimeisimmästä oppimisajosta — "
         "mukana alla ja sellaisiksi merkittyinä.",
-    "livekalib.js.katalog": "{n}/{gesamt} pääsisi katalogiin",
+    "livekalib.js.katalog": "{n}/{gesamt} pääsisi kirjastoon",
     "livekalib.js.pruefen": "{n}/{gesamt} merkittäisiin tarkistuksessa",
     "livekalib.js.lauf": "ajo",
     "livekalib.js.aus": "pois",
@@ -1233,7 +1235,7 @@ T = {
     "erkennung.koerper.beweis_kein_modell":
         "ei vielä henkilömallia — opeta ja käy läpi ensin",
     "erkennung.status.kein_modell":
-        "ei käynnissä (koulutettua henkilömallia ei ole vielä otettu "
+        "ei käynnissä (opetettua henkilömallia ei ole vielä otettu "
         "käyttöön)",
     "erkennung.status.hier_aus": "ei käynnissä (kytketty täällä pois)",
     "erkennung.status.vision_aus":
@@ -1328,7 +1330,7 @@ T = {
     "qualitaet.person.funde": "{n} kuvaa vilkaisun arvoista",
     "qualitaet.person.verwechselt": "mahdollisesti sekaantunut",
     "qualitaet.person.alles_gut": "kaikki hyvin",
-    "qualitaet.person.gemischt": "kokoelma vaikuttaa sekalaiselta",
+    "qualitaet.person.gemischt": "kirjasto vaikuttaa sekalaiselta",
     "qualitaet.ergebnis.alles_gut": "Kaikki hyvin.",
     "qualitaet.ergebnis.alles_gut_satz":
         "Tarkistettu {n} kuvaa {np} henkilöltä &mdash; mikään ei vaadi "
@@ -1358,7 +1360,7 @@ T = {
         "mitään. Vilkaisu kannattaa: joissakin on kasvot, jotka detektori "
         "ohitti, toisissa ei kasvoja lainkaan.",
     "qualitaet.galerie.gemischt":
-        "Tämä kokoelma vaikuttaa sekalaiselta: {neg}/{n} kuvasta on "
+        "Tämä kirjasto vaikuttaa sekalaiselta: {neg}/{n} kuvasta on "
         "lähempänä henkilöä {fremd} kuin tätä henkilöä. Katso ne, ennen "
         "kuin opit niistä — mitään ei poisteta ilman että sanot niin.",
     "qualitaet.galerie.satz_gut": "Kaikki {n} kuvaa näyttävät hyviltä.",
@@ -1500,7 +1502,7 @@ T = {
     "kalib.knopf": "Kalibrointi",
     "kalib.knopf_tip":
         "Kameran kalibrointi: rajat ilmoituksille, varastolle ja "
-        "viitekatalogille",
+        "viitekirjastolle",
     "kalib.uebersicht.erklaerung":
         "Yksi kamera, yksi arvojoukko. Laatuasteikot vaihtelevat "
         "kamerasta kameraan — yhdellä kokoonpanolla mitattuna yhden "
@@ -1529,7 +1531,8 @@ T = {
         "avoinna, onko sitä siellä enää. Kalibrointi onnistuu silti.",
     "kalib.kachel.vorrat": "{n}/{deckel} kuvaa",
     "kalib.kachel.vorrat_aus":
-        "Kuvien kerääminen on pois (Advanced, calibration samples).",
+        "Kuvien kerääminen on pois (Lisäasetukset, calibration "
+        "samples).",
     "kalib.kachel.stand": "viimeksi {wann}",
     "kalib.kachel.leer": "Ei vielä kuvia",
     "kalib.kachel.leer_hinweis":
@@ -1550,7 +1553,7 @@ T = {
     "kalib.kachel.werte":
         "havainto {det} · vaikutelma {e} · tunnistettavuus {tw} · asento "
         "{p}",
-    "kalib.kachel.katalog": "katalogin raja {e} / {tw}",
+    "kalib.kachel.katalog": "kirjaston raja {e} / {tw}",
     "kalib.quelle.kamera": "oma",
     "kalib.quelle.global": "yleinen varasääntö",
     "kalib.quelle.aus": "pois",
@@ -1562,7 +1565,7 @@ T = {
         "Nämä arvot pätevät kameroihin, joilla ei ole omia: ne ovat raja, "
         "jolla oppimisajo päättää, mitkä kasvot se säilyttää ja mistä "
         "niistä voi tulla tallennettu viite.",
-    "kalib.global.katalog": "katalogin raja {e} / {tw}",
+    "kalib.global.katalog": "kirjaston raja {e} / {tw}",
     "js.kalib.start": "etsitään materiaalia …",
     "js.kalib.lauf": "{i}/{n} tapahtumaa · {bilder} kuvaa",
     "js.kalib.fertig": "{bilder} kuvaa {events} tapahtumasta",
@@ -1719,7 +1722,7 @@ T = {
     "nav.bereich.vision": "Vision",
     "nav.bereich.live": "Live",
     "nav.bereich.frigate": "Frigate",
-    "nav.bereich.configuration": "Määritykset",
+    "nav.bereich.configuration": "Asetukset",
     "nav.bereich.erkennungstest": "Tunnistustesti",
     "nav.bereich.system": "Järjestelmä",
     "nav.heute": "Tänään",
@@ -1752,12 +1755,12 @@ T = {
     "nav.frigate": "Frigate",
     "ui.fuss.log": "Palvelun loki",
     "ui.fuss.docs": "Ohjeet",
-    "ui.fuss.health": "health",
-    "ui.modus.easy": "Easy",
-    "ui.modus.expert": "Expert",
+    "ui.fuss.health": "tila",
+    "ui.modus.easy": "Helppo",
+    "ui.modus.expert": "Asiantuntija",
     "ui.modus.tooltip":
-        "Easy näyttää ydinsivut — Expert näyttää kaiken. Mitään ei "
-        "poisteta, Easy vain piilottaa.",
+        "Helppo näyttää ydinsivut — Asiantuntija näyttää kaiken. "
+        "Mitään ei poisteta, Helppo vain piilottaa.",
     "ui.live.chip": "Live",
     "ui.theme.knopf": "Teema",
     "ui.last.knopf": "Järjestelmätilastot",
@@ -1785,7 +1788,7 @@ T = {
     "titel.live_kamera": "Live — {kamera}",
     "titel.video": "Video",
     "titel.event": "Tapahtuma",
-    "titel.vision_galerie": "Rakenna galleria",
+    "titel.vision_galerie": "Rakenna kirjasto",
     "titel.hilfe": "Näin se toimii",
     "setup.sprache.titel": "Kieli",
     "setup.sprache.satz":
@@ -1823,7 +1826,7 @@ T = {
         "Tallennettu. Palvelu käynnistyy uudelleen, odota hetki …",
     "js.neustart.warten": "Palvelu käynnistyy uudelleen, odota hetki …",
     "js.konfig.frage":
-        "Tallennetaanko määritykset ja käynnistetäänkö palvelu uudelleen?",
+        "Tallennetaanko asetukset ja käynnistetäänkö palvelu uudelleen?",
     "js.lernlauf.fps_zeile": "≈ yhteensä ~{dauer} nopeudella {fps}/s",
     "js.lernlauf.tag_fehlt": "valitse ensin päivä",
     "js.lernlauf.abbruch_frage": "Keskeytetäänkö tämä oppimisajo?",
@@ -1861,7 +1864,7 @@ T = {
         "Noudan viimeiset {stunden} h, enintään {n} tapahtumaa.",
     "antwort.catchup_laeuft": "Noutoajo on jo käynnissä.",
     "js.restore.frage":
-        'Palautetaanko määritykset kohteesta "{name}"? Tämä korvaa '
+        'Palautetaanko asetukset kohteesta "{name}"? Tämä korvaa '
         'nykyiset asetukset ja käynnistää palvelun uudelleen.',
     "js.vollrestore.frage":
         'Palautetaanko KOKO varmuuskopio "{name}"? Tämä korvaa asetukset, '
@@ -1927,7 +1930,7 @@ T = {
     "js.ref.frage": "Poistetaanko henkilön {person} viitekuva?",
     "js.ref.batch_frage": "Poistetaanko {n} kuvaa?",
     "js.ref.batch_alle_frage":
-        "Nämä ovat KAIKKI {n} henkilön {person} viitekuvaa. Ilman "
+        "Nämä ovat KAIKKI henkilön {person} {n} viitekuvaa. Ilman "
         "viitettä {person} ei voi enää tunnistaa. Kuvat siirtyvät "
         "roskakorikansioon ja ne voi siirtää takaisin. Jatketaanko?",
     "js.dienst.nicht_erreichbar":
@@ -2015,11 +2018,11 @@ T = {
     "js.rt.nach_fehl": "ei voitu käynnistää",
     "js.vw.geliehen": "riviltä {reihe}",
     "js.vw.vergessen_frage":
-        "Unohdetaanko kuvat, jotka hylkäsit tästä galleriasta? Niitä "
+        "Unohdetaanko kuvat, jotka hylkäsit tästä kirjastosta? Niitä "
         "voidaan ehdottaa uudelleen.",
     "js.vw.leer_frage":
-        "{n} solua ei voitu täyttää. Hyväksytäänkö galleria silti?",
-    "js.vw.kopiert": "kuvia kopioidaan galleriaan …",
+        "{n} solua ei voitu täyttää. Hyväksytäänkö kirjasto silti?",
+    "js.vw.kopiert": "kuvia kopioidaan kirjastoon …",
     "js.live.phase_verbinden": "Yhdistetään",
     "js.live.phase_messen": "Mitataan",
     "js.live.phase_auswerten": "Arvioidaan",
@@ -2065,8 +2068,9 @@ T = {
     "auftritte.zuweisen.titel": "Kuka tämä on?",
     "auftritte.zuweisen.satz":
         "Nämä ovat TÄMÄN käynnin kasvot. Merkitse ne, jotka todella "
-        "kuuluvat henkilölle &mdash; kelvoton jää jäljelle. Anna niille "
-        "nimi (uusi tai olemassa oleva), niin ne opetetaan; jos et tee "
+        "kuuluvat henkilölle &mdash; roskakuvat jäävät pois. Anna "
+        "niille nimi (uusi tai olemassa oleva), niin ne opetetaan; jos "
+        "et tee "
         "mitään, ne pysyvät tuntemattomina.",
     "auftritte.zuweisen.knopf_alle": "Valitse kaikki",
     "auftritte.zuweisen.knopf_keine": "Ei mitään",
@@ -2199,12 +2203,12 @@ T = {
     "setupwiz.fertig.satz":
         "Tallentaa valintasi ja käynnistää palvelun kertaalleen "
         "uudelleen.",
-    "setupwiz.restore.titel": "Onko määritykset jo olemassa?",
+    "setupwiz.restore.titel": "Onko asetukset jo olemassa?",
     "setupwiz.restore.satz":
-        "Jos olet aiemmin vienyt suslikin määritykset (Järjestelmä → "
-        "Määritysten varmuuskopio), lataa ne tässä, niin kaikki asetukset "
+        "Jos olet aiemmin vienyt suslikin asetukset (Järjestelmä → "
+        "Asetusten varmuuskopio), lataa ne tässä, niin kaikki asetukset "
         "palautuvat ja ohitat ohjatun asennuksen.",
-    "setupwiz.restore.knopf": "Lataa määritystiedosto…",
+    "setupwiz.restore.knopf": "Lataa asetustiedosto…",
     "setupwiz.write.titel": "Kirjoitetaanko takaisin Frigateen?",
     "setupwiz.write.satz":
         "suslik voi kirjoittaa päätelmänsä takaisin Frigateen "
@@ -2215,7 +2219,7 @@ T = {
     "setupwiz.write.opt_rw": "Kirjoita takaisin Frigateen (rinnakkaiskäyttö)",
     "setupwiz.willkommen.titel": "Tervetuloa suslikiin",
     "setupwiz.willkommen.satz":
-        "Lyhyt ohjattu asennus — tai lataa olemassa olevat määritykset ja "
+        "Lyhyt ohjattu asennus — tai lataa olemassa olevat asetukset ja "
         "ohita se. Kaikkea tätä voi muokata myöhemmin tavallisilla "
         "sivuilla.",
     "leer.passe_area_heute": "Tänään ei vielä käyntejä alueella {area}.",
@@ -2225,7 +2229,7 @@ T = {
     "leer.passe_heute": "Tänään ei vielä käyntejä, joissa olisi kasvot.",
     "leer.passe_heute_hinweis":
         "Heti kun joku kulkee tontin yli, käynti ilmestyy tähän.",
-    "leer.tag": "Tänä päivänä ei mitään, jossa olisi kasvot.",
+    "leer.tag": "Ei havaittuja kasvoja tälle päivälle",
     "leer.tag_hinweis":
         "Siirry nuolilla toiseen päivään tai avaa Tapahtumat, niin näet "
         "koko listan.",
@@ -2335,7 +2339,7 @@ T = {
     "event.ours_rest.eins": " · {n} muu henkilö: ei osumaa",
     "event.ours_rest.viele": " · {n} muuta henkilöä: ei osumaa",
     "event.grenze":
-        "tämän viivan alla: heikot osumat (paras score &lt; {wert}) — "
+        "tämän viivan alla: heikot osumat (paras tulos &lt; {wert}) — "
         "nimi on arvaus, tämä voi olla eri henkilö",
     "event.gruppe_ohne": "Ilman kohdennusta",
     "event.badge_unsicher": "epävarma",
@@ -2426,7 +2430,7 @@ T = {
     "system.qc.kopf_gesicht": "kasvot mukana",
     "system.qc.kopf_bestaetigt": "vahvistettu",
     "system.qc.kopf_quote": "osuus ikkunassa",
-    "system.backup.titel": "Määritysten varmuuskopio",
+    "system.backup.titel": "Asetusten varmuuskopio",
     "system.backup.satz":
         "Lataa hakemistoon /data/config tallennetut asetukset yhtenä "
         "JSON-tiedostona tai palauta ne sellaisesta tiedostosta. "
@@ -2435,7 +2439,7 @@ T = {
         "verifyd.yaml-tiedostossa tai ympäristömuuttujilla, EIVÄT ole "
         "tässä tiedostossa. Opitut henkilöt ja viitteet: käytä alla "
         "olevaa täyttä varmuuskopiota.",
-    "system.backup.knopf_download": "Lataa määritykset",
+    "system.backup.knopf_download": "Lataa asetukset",
     "system.backup.knopf_restore": "Palauta tiedostosta…",
     "system.backup.careful": "Huomio:",
     "system.backup.careful_config":
@@ -2449,7 +2453,7 @@ T = {
         "Yksi siirrettävä arkisto, jossa on kaikki, mitä olet tälle "
         "asennukselle opettanut: asetukset, kasvojen viitekirjasto, "
         "oppimisajojen tulokset, koko henkilöntunnistuksen materiaali "
-        "(kuvat, läpikäynnistä syntyneet päätelmäsi, koulutetut mallit) "
+        "(kuvat, läpikäynnistä syntyneet päätelmäsi, opetetut mallit) "
         "ja tapahtumakirjanpito. Tehty toiselle koneelle siirtymiseen. "
         "Rehellinen laajuus: videoleikkeiden välimuisti ja "
         "tapahtumakohtaiset analyysiartefaktit EIVÄT ole mukana — ne "
@@ -2493,8 +2497,8 @@ T = {
     "vision.schalter.knopf_an": "Kytke päälle",
     "vision.schalter.fehlt": "Puuttuu vielä:",
     "vision.schalter.fehlt_galerien":
-        "{n}/{soll} hyväksyttyä galleriaa — rakenna yksi kohdassa "
-        "'Rakenna galleria'",
+        "{n}/{soll} hyväksyttyä kirjastoa — rakenna yksi kohdassa "
+        "'Rakenna kirjasto'",
     "vision.schalter.fehlt_test": "vihreä yhteystesti",
     "vision.schalter.fehlt_kandidaten":
         "arvioidut kuvat ehdokkaiden lähteeksi — ne ilmestyvät, kun "
@@ -2507,10 +2511,10 @@ T = {
         "yksikään kuva poistu tältä koneelta.",
     "vision.frage.titel": "Miten vertailua kysytään",
     "vision.frage.doppel_titel":
-        "Kysy jokaista paria kahdesti, galleriat vaihdettuina",
+        "Kysy jokaista paria kahdesti, kirjastot vaihdettuina",
     "vision.frage.doppel_satz":
         "Tämä on asemakoe. A ensimmäisessä ajossa ja B vaihdetussa ajossa "
-        "tarkoittavat SAMAA galleriaa, joten ristiriita paljastaa mallin, "
+        "tarkoittavat SAMAA kirjastoa, joten ristiriita paljastaa mallin, "
         "joka yksinkertaisesti suosii sitä, mikä tulee ensin. Täällä "
         "mitattuna: jokainen väärä vastaus kaikissa testisarjoissamme oli "
         "&bdquo;A&ldquo;, ei koskaan &bdquo;B&ldquo;. Pois kytkeminen "
@@ -2538,7 +2542,7 @@ T = {
         "torjuminen on heikko puoli, siksi Vision ei koskaan anna ääntä "
         "siihen suuntaan.",
     "vision.kachel.was_key": "syötät API-avaimen",
-    "vision.kachel.was_host": "syötät hostin ja portin",
+    "vision.kachel.was_host": "syötät palvelimen ja portin",
     "vision.kachel.was_url": "syötät URL:n ja halutessasi avaimen",
     "vision.kachel.titel": "Missä malli ajetaan",
     "vision.kachel.satz":
@@ -2550,7 +2554,7 @@ T = {
         "se säilyy",
     "vision.verb.key_pflicht_ph": "liitä avaimesi tähän",
     "vision.verb.key_frei_ph": "vain jos palvelimesi vaatii sellaisen",
-    "vision.verb.host": "Host",
+    "vision.verb.host": "Palvelin",
     "vision.verb.host_ph": "koneen nimi tai osoite",
     "vision.verb.port": "Portti",
     "vision.verb.host_satz":
@@ -2652,23 +2656,23 @@ T = {
     "vision.test.letzter": "Viimeisin ajo {zeit} vasten",
     "vision.galerien.stand_gut": "hyväksytty {zeit} &middot; {zellen} solua",
     "vision.galerien.pruefen": "vaatii vilkaisun",
-    "vision.galerien.keine": "ei vielä galleriaa",
+    "vision.galerien.keine": "ei vielä kirjastoa",
     "vision.galerien.zu_wenig":
         "hyväksyttyjä kehokuvia ei ole vielä tarpeeksi ({n} "
         "käyttökelpoista)",
-    "vision.galerien.knopf_auffrischen": "Virkistä",
-    "vision.galerien.knopf_bauen": "Rakenna galleria",
+    "vision.galerien.knopf_auffrischen": "Päivitä",
+    "vision.galerien.knopf_bauen": "Rakenna kirjasto",
     "vision.galerien.zahl": "{n} käyttökelpoista kuvaa &middot; {reihen}",
-    "vision.galerien.titel": "Galleriat",
+    "vision.galerien.titel": "Kirjastot",
     "vision.galerien.stand":
-        "{n} galleriaa valmiina ({min} vaaditaan) &mdash; Vision "
+        "{n} kirjastoa valmiina ({min} vaaditaan) &mdash; Vision "
         "tarvitsee vähintään kaksi, koska se vertaa aina yhtä henkilöä "
         "toiseen.",
     "vision.galerien.satz":
-        "Gallerian voivat saada vain henkilöt, joilla on opittu "
+        "Kirjasto voi olla vain henkilöillä, joille on opittu "
         "kehomalli; kuvat tulevat kehomateriaalista, jonka olet jo "
         "hyväksynyt. Vision arvioi aina vain henkilöitä, joilla on "
-        "galleria, ja se kertoo sen päätelmän yhteydessä.",
+        "kirjasto, ja se kertoo sen päätelmän yhteydessä.",
     "visiontest.titel": "Tunnistustesti",
     "visiontest.kopf.satz":
         "Kasvot ja henkilö luetaan siitä, mikä tallennettiin silloin "
@@ -2677,9 +2681,9 @@ T = {
     "visiontest.kosten":
         "Testiajo kuluttaa oikeita pyyntöjä, täsmälleen kuin "
         "normaalikäyttö: koko käynti menee sisään yhtenä "
-        "ehdokasruudukkona, ja jokainen verrattu galleriapari kustantaa "
+        "ehdokasruudukkona, ja jokainen verrattu kirjastopari kustantaa "
         "kaksi pyyntöä, koska jokainen kysymys kysytään uudelleen "
-        "galleriat vaihdettuina. Se lasketaan käsin tehdyksi "
+        "kirjastot vaihdettuina. Se lasketaan käsin tehdyksi "
         "napsautukseksi, joten se ei syö päivärajaasi &mdash; mutta "
         "maksullisella päätepisteellä se on rahaa, ja paikallisella "
         "CPU-mallilla se kestää minuutteja.",
@@ -2716,9 +2720,9 @@ T = {
         "kirjanpidosta",
     "visiontest.koerper.kandidaten":
         "ehdokkaita, kukaan ei ylitä sääntöä: {liste}",
-    "visiontest.koerper.nichts": "ei mitään arvioitu",
+    "visiontest.koerper.nichts": "mitään ei arvioitu",
     "visiontest.koerper.zeile":
-        "{klasse} &middot; score {score} / {schwelle} &middot; {quelle}",
+        "{klasse} &middot; tulos {score} / {schwelle} &middot; {quelle}",
     "visiontest.koerper.bild_weg": "kuva vanhentunut",
     "visiontest.koerper.titel": "Henkilö",
     "visiontest.koerper.quelle":
@@ -2757,7 +2761,7 @@ T = {
         "tallenneta ja normaalikäyttö säilyttää omat asetuksensa. Tässä "
         "käynnissä on {material} käyttökelpoista kuvaa &mdash; useampaa "
         "solua voi pyytää huoletta, ruudukko vain pienenee. {galerien} "
-        "hyväksyttyä galleriaa sallii enintään {voten_max} vertailua. Kun "
+        "hyväksyttyä kirjastoa sallii enintään {voten_max} vertailua. Kun "
         "vaihtokoe on päällä, vertailu kustantaa kaksi pyyntöä; ilman "
         "sitä yhden &mdash; ja se nojaa silloin yhteen ainoaan "
         "vastaukseen.",
@@ -2782,7 +2786,7 @@ T = {
         "tulee tämän käynnin omasta lokista ja katoaa sen mukana.",
     "visiontest.vision.titel": "Vision",
     "visiontest.vision.quelle_kurz":
-        "Vision-malli, joka vertaa tätä käyntiä gallerioihisi",
+        "Vision-malli, joka vertaa tätä käyntiä kirjastoihisi",
     "visiontest.vision.unkonfiguriert": "ei asetettu",
     "visiontest.vision.attr_nichts": "vertailtavaa ei vielä ole",
     "visiontest.vision.knopf": "Aja Vision tälle käynnille",
@@ -2795,9 +2799,9 @@ T = {
     "visiontest.vision.startet":
         "käynnistyy &mdash; mitään ei ole vielä ilmoitettu",
     "visiontest.vision.quelle":
-        "pakkovalinta gallerioitasi vasten: koko käynti menee sisään "
+        "pakkovalinta kirjastojasi vasten: koko käynti menee sisään "
         "YHTENÄ ehdokasruudukkona, ja jokainen pari kysytään kahdesti "
-        "galleriat vaihdettuina",
+        "kirjastot vaihdettuina",
     "visiontest.vision.nicht_gelaufen": "ei ajettu tälle käynnille",
     "visiontest.vision.verglichen":
         "verrattu: {a} vastaan {b} &mdash; kaikista muista se ei sano "
@@ -2819,15 +2823,15 @@ T = {
     "visionwizard.schritt.groesse": "valitse koko",
     "visionwizard.schritt.vorschlag": "tarkista ehdotus",
     "visionwizard.schritt.abnahme": "hyväksy",
-    "visionwizard.titel": "Rakenna galleria",
+    "visionwizard.titel": "Rakenna kirjasto",
     "visionwizard.kopf.satz":
-        "Galleria on pieni ruudukko yhden henkilön kuvia &mdash; juuri "
+        "Kirjasto on pieni ruudukko yhden henkilön kuvia &mdash; juuri "
         "siihen Vision-malli vertaa uutta kuvaa. Se rakennetaan "
         "kehokuvista, jotka olet jo hyväksynyt; mitään uutta ei "
         "tallenneta eikä yhtään videota avata.",
-    "visionwizard.person.stand_gut": "galleria hyväksytty {zeit}",
+    "visionwizard.person.stand_gut": "kirjasto hyväksytty {zeit}",
     "visionwizard.person.zu_wenig":
-        "{n} käyttökelpoista kuvaa &mdash; ei vielä tarpeeksi galleriaan. "
+        "{n} käyttökelpoista kuvaa &mdash; ei vielä tarpeeksi kirjastoon. "
         "Aja henkilöiden oppimisajo useammalle käynnille.",
     "visionwizard.person.max_gitter":
         "suurin ruudukko, jonka tämä materiaali kantaa: {n}",
@@ -2860,17 +2864,17 @@ T = {
         "Kuva, jossa joku sitoo hiuksiaan tai kumartuu, näyttää jokaisen "
         "mittauksen silmissä hyvältä &mdash; sitä varten sinulla on "
         "silmät.",
-    "visionwizard.vorschlag.knopf": "Hyväksy tämä galleria",
+    "visionwizard.vorschlag.knopf": "Hyväksy tämä kirjasto",
     "visionwizard.vorschlag.kopie_satz":
-        "Hyväksyminen kopioi nämä kuvat gallerian kansioon. Siitä lähtien "
-        "galleria on kiinteä: myöhemmin poistettu alkuperäinen ei voi "
+        "Hyväksyminen kopioi nämä kuvat kirjaston kansioon. Siitä lähtien "
+        "kirjasto on kiinteä: myöhemmin poistettu alkuperäinen ei voi "
         "repiä siihen reikiä &mdash; suslik vain pyytää sinua hyväksymään "
         "sen uudelleen.",
     "visionwizard.fertig.geliehen": " &middot; lainattu",
-    "visionwizard.fertig.titel": "Hyväksytty galleria",
+    "visionwizard.fertig.titel": "Hyväksytty kirjasto",
     "visionwizard.fertig.stand": "{zellen} solua, hyväksytty {zeit}.",
     "visionwizard.fertig.satz":
-        "Nämä ovat kopioita gallerian kansiossa, ja jokaisen kuvan "
+        "Nämä ovat kopioita kirjaston kansiossa, ja jokaisen kuvan "
         "alkuperä (ajo, tiedosto, tarkistussumma) on kirjattu niiden "
         "viereen. Ne siirtyvät varmuuskopiosi mukana.",
     "visionwizard.fertig.knopf_neu":
@@ -2878,7 +2882,7 @@ T = {
     "visionwizard.fertig.knopf_zurueck": "Takaisin Vision-tunnistukseen",
     "visionwizard.neu.titel": "Uutta materiaalia saatavilla",
     "visionwizard.neu.satz":
-        "Mikään ei muutu itsestään &mdash; hyväksymäsi galleria pysyy "
+        "Mikään ei muutu itsestään &mdash; hyväksymäsi kirjasto pysyy "
         "juuri sellaisena, kunnes rakennat ja hyväksyt uuden.",
     "personwizard.wer.alle": "kaikki tunnetut henkilöt",
     "personwizard.wer.fremde": "vieraat",
@@ -2900,7 +2904,7 @@ T = {
         "3 · SINÄ käyt läpi jokaisen kerätyn kuvan; yksi napsautus hylkää "
         "väärän. Ilman hyväksyntääsi ei opita mitään.",
     "personwizard.kopf.schritt4":
-        "4 · Koulutus ajetaan sen jälkeen paikallisesti sekunneissa, ja "
+        "4 · Opetus ajetaan sen jälkeen paikallisesti sekunneissa, ja "
         "päätöskynnys mitataan niin, että vieraat jäävät sen alle.",
     "personwizard.kopf.tempo":
         "Huomautus nopeudesta: keräys ajetaan tällä hetkellä CPU:lla, "
@@ -2958,7 +2962,7 @@ T = {
         "niiden vanhoja vahvistettuja tapahtumia ei kerätä.",
     "personwizard.fertig.fremd":
         "{n} vahvistettua vieraan kuvaa siirtyi vieraiden pooliin — "
-        "seuraava koulutus käyttää niitä heti.",
+        "seuraava opetus käyttää niitä heti.",
     "personwizard.fertig.titel":
         "Läpikäynti valmis — materiaali otettu käyttöön",
     "personwizard.fertig.zeile":
@@ -3033,7 +3037,7 @@ T = {
     "personwizard.kontrolle.titel": "Arvioidut kuvat",
     "personwizard.kontrolle.satz":
         "Mitä kehontunnistus todella katsoi, yksi lohko käyntiä kohti: "
-        "arvioitu kuva, luokka johon se päätyi, score ja mistä kuva tuli. "
+        "arvioitu kuva, luokka johon se päätyi, tulos ja mistä kuva tuli. "
         "Hyödyllinen, kun henkilö jäi huomaamatta tai joku tunnistettiin, "
         "jota ei olisi pitänyt tunnistaa.",
     "personwizard.kontrolle.leer_titel": "Mitään ei ole vielä kirjattu",
@@ -3063,18 +3067,18 @@ T = {
     "personwizard.tabelle.konf_vor":
         "Suurin ryhmien välinen sekaannus kalibroinnissa: ",
     "personwizard.tabelle.konf_nach":
-        " — vahvin score, jonka jokin kuva saavutti VÄÄRÄLLE ryhmälle; "
+        " — vahvin tulos, jonka jokin kuva saavutti VÄÄRÄLLE ryhmälle; "
         "mitä lähempänä ykköstä, sitä lähempänä kaksi ryhmää ovat "
         "toisiaan.",
     "personwizard.tabelle.titel": "Opitut ryhmät",
     "personwizard.karte.scharf": "Aktivoitu",
     "personwizard.karte.unscharf": "Ei vielä aktivoitu",
     "personwizard.karte.fehler":
-        "Viimeisin koulutusyritys EPÄONNISTUI: {fehler} — tämä kortti "
+        "Viimeisin opetusyritys EPÄONNISTUI: {fehler} — tämä kortti "
         "näyttää edellisen mallin.",
     "personwizard.karte.titel": "Mallin tila",
     "personwizard.karte.zeile":
-        "koulutettu {wann} ajassa {dauer} s — {bilder} kuvaa: {je} · "
+        "opetettu {wann} ajassa {dauer} s — {bilder} kuvaa: {je} · "
         "{modell} · ",
     "personwizard.karte.link": "tiedot",
     "personwizard.bestand.titel": "Henkilömateriaali — mitä on opittu",
@@ -3082,7 +3086,7 @@ T = {
         "Hyväksytyt kokovartalokuvat henkilöä kohti. Valitse alta ryhmä, "
         "niin näet sen kuvat; poista yksittäinen kuva (&times; ruudussa) "
         "— uusi ajo voi aina kerätä uudelleen. Poistot vaikuttavat "
-        "seuraavassa koulutuksessa.",
+        "seuraavassa opetuksessa.",
     "personwizard.bestand.leer_titel": "Ei vielä hyväksyttyä materiaalia",
     "personwizard.bestand.stark_titel": "Mikä tekee tästä mallista vahvan",
     "personwizard.bestand.chip_fremde": "Vieraat ({n})",
@@ -3103,22 +3107,22 @@ T = {
     "personwizard.bestand.z_kameras.viele": "{n} kameraa",
     "personwizard.modell.titel": "Henkilömalli — tila",
     "personwizard.modell.satz":
-        "Kehontunnistuksen malli, koulutettu hyväksymistäsi kuvista. Se "
-        "koulutetaan automaattisesti uudelleen jokaisen päätetyn "
+        "Kehontunnistuksen malli, opetettu hyväksymistäsi kuvista. Se "
+        "opetetaan automaattisesti uudelleen jokaisen päätetyn "
         "läpikäynnin ja jokaisen poiston jälkeen.",
     "personwizard.modell.leer_titel": "Ei vielä mallia",
     "personwizard.modell.fremd_keine":
         "ei vielä yhtään — kynnys on mitattu vain henkilöidesi väliltä",
     "personwizard.modell.fremd_gesammelt":
         "{n} kerätty — {min} tarvitaan, ennen kuin ne otetaan "
-        "koulutukseen ja kalibroivat kynnyksen",
+        "opetukseen ja kalibroivat kynnyksen",
     "personwizard.modell.fremd_geeicht":
-        "{n} koulutuksessa · kynnys kalibroitu oikeilla vierailla",
+        "{n} opetuksessa · kynnys kalibroitu oikeilla vierailla",
     "personwizard.modell.fremd_ungeeicht":
-        "{n} koulutuksessa — kynnyksen kalibrointi ei ajettu (katso alla "
+        "{n} opetuksessa — kynnyksen kalibrointi ei ajettu (katso alla "
         "oleva huomautus)",
-    "personwizard.modell.f_trainiert": "Koulutettu",
-    "personwizard.modell.f_dauer": "Koulutuksen kesto",
+    "personwizard.modell.f_trainiert": "Opetettu",
+    "personwizard.modell.f_dauer": "Opetuksen kesto",
     "personwizard.modell.f_modell": "Malli",
     "personwizard.modell.f_bilder": "Kuvia yhteensä",
     "personwizard.modell.f_personen": "Henkilöt",
@@ -3126,7 +3130,7 @@ T = {
     "personwizard.modell.scharf_ja": "KYLLÄ — live-arviointi aktiivinen",
     "personwizard.modell.scharf_nein": "ei — ei vielä aktivoitu",
     "personwizard.modell.fehler":
-        "Viimeisin koulutusyritys EPÄONNISTUI ({zeit}): {fehler} — tässä "
+        "Viimeisin opetusyritys EPÄONNISTUI ({zeit}): {fehler} — tässä "
         "näkyvä malli on edellinen eikä sisällä viimeisimpiä muutoksiasi.",
     "personwizard.modell.aktuell_titel": "Nykyinen malli",
     "personwizard.modell.material_titel": "Oppimateriaali henkilöä kohti",
@@ -3156,7 +3160,7 @@ T = {
     "personwizard.modell.regeln_satz":
         "Jätä kynnys tyhjäksi, niin se seuraa mitattua arvoa "
         "automaattisesti (se mitataan uudelleen jokaisessa "
-        "koulutuksessa). Laukaisusääntö: ilmoitetaan vasta, kun ikkunan "
+        "opetuksessa). Laukaisusääntö: ilmoitetaan vasta, kun ikkunan "
         "sisällä on näin monta tukitapahtumaa, ja sen jälkeen pysytään "
         "hiljaa rauhoitusajan verran.",
     "personwizard.modell.knopf_speichern": "Tallenna asetukset",
@@ -3327,7 +3331,8 @@ T = {
     "antwort.lernlauf_resume_laeuft":
         "tämä ajo ei ole pysähtynyt — ei mitään jatkettavaa",
     "antwort.lernlauf_resume_fremd": "pysähtynyt ajo on sillä välin eri ajo",
-    "antwort.lernlauf_resume_aktiv": "yksi tämän ajon etappi laskee vielä",
+    "antwort.lernlauf_resume_aktiv":
+        "yksi tämän ajon vaihe on vielä käynnissä",
     "antwort.lernlauf_resume_etappe":
         "tätä ajoa ei voi jatkaa siitä kohdasta, johon se jäi",
     "antwort.lernlauf_resume_weg": "ajon tila katosi jatkamisen aikana",
@@ -3434,9 +3439,9 @@ T = {
     "hilfe.koerper.satz4": "<p>Yllä olevalla kytkimellä valitset, ajetaanko se ja milloin. <b>Only if no face</b>\ntarkoittaa: se pysyy hiljaa, ellei kasvotarkistus jää tyhjäksi. <b>Always</b>\ntarkoittaa: se tarkistaa jokaisen käynnin. Pois tarkoittaa: sitä ei ajeta koskaan.</p>",
     "hilfe.vision.titel": "Vision-tekoäly selitettynä",
     "hilfe.vision.satz1": "<p>Vision-tekoäly on oma tunnistustiensä. Se näyttää käynnin kuvat kuvamallille\nja kysyy, ketä rekisteröityä henkilöä ne muistuttavat. Voit käyttää sitä\nvarmistuksena vaikeisiin tapauksiin tai antaa sen kantaa tunnistuksen\nyksin: asetuksella <b>Always</b> se arvioi jokaisen käynnin itse, vaikka kasvoja\nei olisi opetettu lainkaan. Se arvioi käynnin päätteeksi, ei livenä.</p>",
-    "hilfe.vision.satz2": "<p>Mitä se tarvitsee toimiakseen: rekisteröityjä henkilöitä, joilla on\nhyväksytyt kehokuvat (heidän galleriansa), ja yhdistetyn mallin. Malli voi\najaa paikallisesti omalla laitteistollasi tai pilvessä. Pilvimallin kohdalla\nmuista, että kuvat poistuvat talostasi: se mikä on paikallisen mallin\nkanssa kunnossa, ei ole automaattisesti sallittua pilvimallilla. Äläkä\nvalitse pienimpiä malleja; keskikokoinen malli hoitaa tehtävän hyvin.</p>",
+    "hilfe.vision.satz2": "<p>Mitä se tarvitsee toimiakseen: rekisteröityjä henkilöitä, joilla on\nhyväksytyt kehokuvat (heidän kirjastonsa), ja yhdistetyn mallin. Malli voi\najaa paikallisesti omalla laitteistollasi tai pilvessä. Pilvimallin kohdalla\nmuista, että kuvat poistuvat talostasi: se mikä on paikallisen mallin\nkanssa kunnossa, ei ole automaattisesti sallittua pilvimallilla. Äläkä\nvalitse pienimpiä malleja; keskikokoinen malli hoitaa tehtävän hyvin.</p>",
     "hilfe.vision.satz3": "<p>Mitä itse ajamme: Qwen 3.5 koossa 9B, ja se hoitaa tehtävän\nhyvin, niin paikallisesti kuin pilvessä. Testasimme myös Anthropicin\n(Claude), Googlen (Gemini) ja OpenAI:n (GPT) malleja. Ota tämä\ntestattuna, ei suosituksena; Vision-sivun malliluettelo merkitsee\nmittaamamme mallit juuri siihen, missä valinta tehdään.</p>",
-    "hilfe.vision.satz4": "<p>Eikä se jää yhteen vertailuun: sekaannusten poissulkemiseksi käynti\ntarkistetaan myös muiden henkilöiden gallerioita vasten, molempiin suuntiin.\nJokainen verrattu pari kustantaa kaksi pyyntöä, joten yhdestä käynnistä\nvoi kertyä jo jotakin. <b>If needed</b> pitää tämän laskun pienenä:\nmallilta kysytään vain, kun kasvot jättävät epäilyksen. Ilman yhdistettyä\nmallia Vision jää yksinkertaisesti pelistä pois, ja kortti sanoo sen.</p>",
+    "hilfe.vision.satz4": "<p>Eikä se jää yhteen vertailuun: sekaannusten poissulkemiseksi käynti\ntarkistetaan myös muiden henkilöiden kirjastoja vasten, molempiin suuntiin.\nJokainen verrattu pari kustantaa kaksi pyyntöä, joten yhdestä käynnistä\nvoi kertyä jo jotakin. <b>If needed</b> pitää tämän laskun pienenä:\nmallilta kysytään vain, kun kasvot jättävät epäilyksen. Ilman yhdistettyä\nmallia Vision jää yksinkertaisesti pelistä pois, ja kortti sanoo sen.</p>",
     "hilfe.faces_bekannt.titel":
         "Tunnetut henkilöt & rekisteröinti selitettynä",
     "hilfe.faces_bekannt.satz1": "<p>Tässä näet jokaisen henkilön, jonka järjestelmäsi tuntee &mdash;\nnapauta kasvoja, niin näet jokaisen niiden taakse tallennetun kuvan.</p>",
@@ -3480,7 +3485,7 @@ T = {
         "Kolmas tunnistustie kasvojen ja kehon rinnalla: "
         "Vision-kielimalli katsoo yhtä käynnin kuvaa ja sanoo, kuka "
         "opetetuista henkilöistäsi siinä on &mdash; vertaamalla sitä "
-        "pieneen kyseisen henkilön galleriaan. Se on <b>ylimääräinen "
+        "pieneen kyseisen henkilön kirjastoon. Se on <b>ylimääräinen "
         "ääni</b>, ei koskaan ovimies: pakkovalinta vastaa &bdquo;A vai "
         "B&ldquo;, joten se voi vahvistaa asukkaan, mutta se ei voi "
         "torjua vierasta. Se pysyy olemassa olevan tunnistuksen "
@@ -3493,8 +3498,9 @@ T = {
         "kuin 9B ja tarvitsee noin puolet muistista). Sen <b>ei</b> "
         "tarvitse ajaa tällä koneella.",
     "vision.hinweis.host_satz":
-        "<b>Tämä host on paikalliselle mallille yleensä liian pieni.</b> "
-        "9B tarvitsee noin 12 GB työmuistia, 4B noin 6,6 GB, ja suslik "
+        "<b>Tämä palvelin on paikalliselle mallille yleensä liian "
+        "pieni.</b> 9B tarvitsee noin 12 GB työmuistia, 4B noin "
+        "6,6 GB, ja suslik "
         "sekä analyysiworker asuvat täällä jo &mdash; worker on "
         "ensimmäinen, jonka kernel ampuu alas, kun muisti loppuu. Toinen "
         "kone tai verkkopalveluntarjoaja on järkevä kokoonpano.",
@@ -3508,15 +3514,16 @@ T = {
     "vision.hinweis.kosten_satz":
         "Nopeus ja kustannus, mitattuina, ettei mikään yllätä myöhemmin: "
         "koko käynti menee sisään <b>yhtenä ehdokasruudukkona</b>, ja "
-        "jokainen <b>verrattu galleriapari on kaksi pyyntöä</b> (sama "
-        "kysymys kysytään uudelleen kahdella gallerialla vaihdettuina, "
+        "jokainen <b>verrattu kirjastopari on kaksi pyyntöä</b> (sama "
+        "kysymys kysytään uudelleen kahdella kirjastolla vaihdettuina, "
         "jotta asemavinouma paljastuu). Yleensä yksi pari ratkaisee. "
         "CPU-luokan koneella se on noin 7 minuuttia paria kohti; tässä "
         "mitatuilla verkkopäätepisteillä sekunteja.",
     "vision.verb.key_ort":
         "<b>Syötä avain avainkenttään, ei URL:ään</b>: päätepiste, joka "
-        "kantaa tunnuksia osoitteessaan &mdash; hostnimen edessä tai "
-        "kyselyparametrina &mdash; sisältää saman salaisuuden, ja se "
+        "kantaa tunnuksia osoitteessaan &mdash; palvelinnimen edessä "
+        "tai kyselyparametrina &mdash; sisältää saman salaisuuden, ja "
+        "se "
         "päätyy paljon useampiin paikkoihin (tila, loki, varmuuskopio).",
     "vision.modell.leer_key":
         "Ei vielä mitään valittavaa. Syötä avaimesi ylle ja paina "
@@ -3566,7 +3573,7 @@ T = {
         "<b>Vision</b>.",
     "visiontest.vision.einrichten_satz":
         'Aseta se kohdassa <a href="/vision">Vision-tunnistus</a>: malli, '
-        'vihreä yhteystesti ja vähintään kaksi hyväksyttyä galleriaa. '
+        'vihreä yhteystesti ja vähintään kaksi hyväksyttyä kirjastoa. '
         'Kaksi muuta saraketta toimivat ilmankin.',
     "visionwizard.groesse.satz":
         "Rehellisesti mitattuna: koko <b>ei</b> ollut vipu yhdessäkään "
@@ -3587,7 +3594,7 @@ T = {
         "kuvan alla oleva rivi kertoo, mitä siitä mitattiin. Napsauta "
         "kaikessa käyttökelvottomassa <b>ei sovi</b> &mdash; SAMAN "
         "näkymän seuraavaksi paras kuva nousee tilalle. Tämä ei koske "
-        "oppimateriaaliasi; se sanoo vain &bdquo;ei gallerian "
+        "oppimateriaaliasi; se sanoo vain &bdquo;ei kirjaston "
         "soluksi&ldquo;.",
     "personwizard.kopf.stark_satz":
         "<b>Mikä tekee mallista vahvan:</b> vaihtelevuus voittaa määrän. "
@@ -3597,11 +3604,11 @@ T = {
         "yhdestä päivästä syvemmälle. Vahvistetut vieraiden kuvat "
         "terävöittävät päätöskynnystä samalla tavalla.",
     "personwizard.fertig.training_satz":
-        'Koulutus hyväksytyllä materiaalilla käynnistyy automaattisesti '
+        'Opetus hyväksytyllä materiaalilla käynnistyy automaattisesti '
         'läpikäynnin jälkeen — katso <a href="/person/modell">Mallin '
         'tila</a>. Voit käynnistää alta uuden ajon milloin tahansa.',
     "personwizard.kontrolle.schalter_satz":
-        'Kytke se kohdassa <a href="/konfiguration">Määritykset &rarr; '
+        'Kytke se kohdassa <a href="/konfiguration">Asetukset &rarr; '
         'Lisäasetukset</a>, avain <code>diagnostic_collection</code>. '
         'Kuvat ja loki vanhenevat yhdessä osumalokin kanssa 30 päivän '
         'jälkeen &mdash; mitään täällä ei säilytetä pidempään kuin '
@@ -3625,17 +3632,17 @@ T = {
         "<code>personlern/fremd/</code>; sivu, jolla tätä joukkoa voi "
         "kasvattaa oman kadun liikenteestä, on suunnitteilla.)",
     "personwizard.bestand.fremd_erklaerung":
-        "Vahvistetut vieraiden kuvat — ne kouluttavat lisäluokan ja "
-        "kalibroivat päätöskynnyksen. Yhden poistaminen kouluttaa mallin "
+        "Vahvistetut vieraiden kuvat — ne opettavat lisäluokan ja "
+        "kalibroivat päätöskynnyksen. Yhden poistaminen opettaa mallin "
         "heti uudelleen (tiedostot ovat hakemistossa "
         "<code>personlern/fremd/</code>).",
     "personwizard.modell.leer_satz":
         'Aja <a href="/personlauf">henkilöiden oppimisajo</a> ja saata '
-        'läpikäynti loppuun — koulutus käynnistyy sen jälkeen '
+        'läpikäynti loppuun — opetus käynnistyy sen jälkeen '
         'automaattisesti.',
     "personwizard.modell.material_satz":
         'Hallitse kuvia kohdassa <a href="/person">Kehokuvat</a> — '
-        'poistot kouluttavat mallin automaattisesti uudelleen.',
+        'poistot opettavat mallin automaattisesti uudelleen.',
     "meldung.titel.kategorie": "suslik: {wort}",
     "meldung.alert.bestaetigt":
         "{name} vahvistettu ({wort}, nähty {n} ikkunassa)",
@@ -3653,7 +3660,7 @@ T = {
         "{name} tunnistettu kehosta (henkilöntunnistus, ei kasvot) — "
         "{wort}, {n} tukitapahtumaa",
     "meldung.person.wort_ersatz": "osuma",
-    "meldung.person.zahl": "[score {score}]",
+    "meldung.person.zahl": "[tulos {score}]",
     "meldung.vision.titel": "suslik Vision",
     "meldung.vision.unbestaetigt":
         "Vision ei voinut vahvistaa ketään tässä käynnissä",
@@ -3719,7 +3726,7 @@ T = {
     "meldung.wache.name_zahl": "[kosini {cos}]",
     "meldung.wache.funde.eins": "{n} kasvot {sek} sekunnissa",
     "meldung.wache.funde.viele": "{n} kasvoa {sek} sekunnissa",
-    "meldung.wache.funde_zahl": "(score {score}, {ms} ms)",
+    "meldung.wache.funde_zahl": "(tulos {score}, {ms} ms)",
     "meldung.video_ersatz.satz": "(video ei saatavilla — lähetetään kuva)",
     "meldung.test.satz": "Testi-ilmoitus suslikilta ✓",
     "antwort.bruecke_nichts_grund": "ei mitään otettavaa — {grund}",
@@ -3765,7 +3772,7 @@ T = {
         "Vaihe, joka tarvitsee sinua: jokainen kerätty kuva saa sinun "
         "kyllä- tai ei-vastauksesi, ennen kuin mitään opitaan.",
     "personwizard.k4.satz":
-        "Hyväksytyt kuvat kouluttavat kehomallin heti &mdash; se "
+        "Hyväksytyt kuvat opettavat kehomallin heti &mdash; se "
         "tunnistaa henkilöt sen jälkeen myös ilman näkyviä kasvoja.",
     "personwizard.such.titel": "Aseta henkilöiden oppimisajo",
     "systemstat.titel": "Järjestelmän kuorma",
@@ -3852,15 +3859,15 @@ T = {
     "systemstat.live.waechter": "Vahteja aktiivisena",
     "systemstat.live.supervisor": "Supervisor",
     "systemstat.stand":
-        "Mitattu klo {zeit}. Sivu latautuu itsestään uudelleen.",
+        "Mitattu klo {zeit}. Sivu päivittyy itsestään.",
     "systemstat.stand_live":
         "Mitattu klo {zeit}. Live: uusi mittaus {takt} sekunnin välein.",
     "systemstat.live_knopf": "Live",
     "systemstat.live_knopf.an": "Live · {rest} min",
     "systemstat.live_knopf.tip_aus":
-        "Lataa uudelleen {takt} sekunnin välein, enintään {minuten} "
-        "minuutin ajan, sitten takaisin normaaliin tahtiin. Sivulta "
-        "poistuminen päättää sen myös.",
+        "Päivitä {takt} sekunnin välein, enintään {minuten} "
+        "minuutin ajan, sitten takaisin normaaliin tahtiin. Myös "
+        "sivulta poistuminen lopettaa sen.",
     "systemstat.live_knopf.tip_an":
         "Live vielä noin {rest} minuuttia. Napsautus lopettaa heti.",
     "systemstat.grund.erster_lauf":
@@ -3916,7 +3923,8 @@ T = {
         "Alueita ei ole määritelty — luo ne Alueet-sivulla",
     "anwesenheit.nacht": "yö",
     "anwesenheit.legende_da": "läsnäolo vahvistettu",
-    "anwesenheit.legende_weg": "järjestelmä kävi, ketään ei vahvistettu",
+    "anwesenheit.legende_weg":
+        "järjestelmä oli käynnissä, ketään ei vahvistettu",
     "anwesenheit.legende_leer": "palvelu ei ollut käynnissä",
     "anwesenheit.legende_teil": "kävi, yksittäisiä tapahtumia ei analysoitu",
     "anwesenheit.legende_jetzt": "nyt",

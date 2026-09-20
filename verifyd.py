@@ -2156,6 +2156,15 @@ KARTE_WARTE_FRIST_S = 45.0
 # aendert sie hier; die neue Wache ist zusaetzlich je Anlage konfigurierbar
 # (`null_gesichter_serie`, 0 = aus).
 SERIE_STRUKTURSIGNAL_N = 3
+# WIE LANGE EINE SERIE GILT, BEVOR SIE VERJAEHRT (.543). Auch diese Zahl ist NICHT
+# neu — sie stand bisher als Literal `3600` an zwei Stellen (SD4-Fehlerserie und
+# Null-Gesichter-Wache) und heisst: drei Einzelfehler ueber Tage sind KEINE Serie
+# (Anlagen mit wenig Verkehr). .543 braucht sie an einer dritten Stelle, weil
+# /health jetzt ROT meldet, solange eine Serie aktiv ist: ohne dasselbe Fenster
+# bliebe die Ampel auf einem ruhigen Grundstueck fuer immer rot, wo die Wache
+# laengst verjaehrt haette. Ein drittes verstreutes Literal waere genau die
+# Deckungs-Luecke aus qs_ebenen.md — deshalb steht die Zahl ab hier EINMAL.
+SERIE_FENSTER_S = 3600
 # C2 (05.09.2026, bauplan_0505.md §1): das Fairness-VENTIL der Ernte
 # (`ERNTE_MAX_WARTE_S`, 300 s) ist ERSATZLOS entfallen. An seine Stelle tritt die
 # Regel N-1 in der Vergabestelle (`Analyseplaetze.platz`): von N Plaetzen haelt eine
@@ -3541,6 +3550,18 @@ def vram_startargumente(v):
     # wiederholt, ist eine zweite Wahrheit.
     if v.get("mem_pattern"):
         argv += ["--mem-pattern", "1"]
+    # .543 (Issue #32): DIE KARTEN-RESERVE REIST MIT. Der Wunsch steht nur dann
+    # als Argument da, wenn er GESETZT ist (>= 0) — -1 ist die Vorgabe auf beiden
+    # Seiten, und ein Argument, das die Vorgabe wiederholt, waere die zweite
+    # Wahrheit von oben. `0` ist ausdruecklich ein Wert („keine Reserve") und
+    # darf deshalb nicht ueber `if v.get(...)` laufen wie die Zeilen darueber.
+    _res = v.get("reserve_wunsch_mb")
+    try:
+        _res = -1 if _res is None else int(_res)
+    except (TypeError, ValueError):
+        _res = -1
+    if _res >= 0:
+        argv += ["--vram-reserve-mb", str(_res)]
     return argv
 
 
@@ -12555,11 +12576,18 @@ class Service:
             except Exception:
                 pass
 
-    def worker_hart_stoppen(self):
+    def worker_hart_stoppen(self, quelle="the restart clamp"):
         """Beide Worker SOFORT schiessen, ohne auf ihren Job-Lock zu warten
-        (.502) -> Anzahl der geschossenen Prozesse. Nur fuer den Klemmfall
+        (.502) -> Anzahl der geschossenen Prozesse. Fuer den Klemmfall
         des Neustarts: worker_stoppen() geht ueber stop() und damit ueber
-        genau das Lock, das ein haengender Job haelt."""
+        genau das Lock, das ein haengender Job haelt.
+
+        `quelle` (.543): WER schiesst. Die Vorgabe ist der Neustart-Klemmfall,
+        fuer den dieser Griff gebaut wurde; seit .543 kommt der Serien-Schuss
+        als zweiter Schuetze dazu (`_serie_schuss`). Der Parameter ist kein
+        Schmuck — die Todesursache landet in der analyze.log des getroffenen
+        Ereignisses, und dort waere „the restart clamp" fuer einen Schuss der
+        Fehlerserie schlicht falsch (A4/B5, s. `kill_hart`)."""
         n = 0
         for obj in self._alle_worker():               # E2: auch die Plaetze 2..N
             try:
@@ -12567,7 +12595,7 @@ class Service:
                 # zwischen hier und dem execv liegen bis zu 15 s, in denen der
                 # getroffene Job-Thread seine Ursache noch in die analyze.log des
                 # Ereignisses schreibt.
-                if obj.kill_hart(quelle="the restart clamp"):
+                if obj.kill_hart(quelle=quelle):
                     n += 1
             except Exception:
                 pass
@@ -14338,6 +14366,23 @@ class Service:
                 # Frage.
                 "kind": st.get("kind"),
                 "gesamt_mb": int(st.get("gesamt_mb") or 0),
+                # .543 (Issue #32, Pranz187): DER CONFIG-WUNSCH REIST MIT. Bis .542
+                # wirkte `worker_vram_reserve_mb` nur in der Leiter dieses
+                # Dienstprozesses; die beiden Laufzeit-Wachen IM Worker-Prozess
+                # riefen `reserve_strang_mb(gesamt)` ohne Wunsch und rechneten
+                # deshalb immer mit der Automatik-Formel. Wer die Reserve klein
+                # stellte, bekam ein passendes Budget — und danach eine Druck-
+                # Meldung gegen die alte, grosse Formel-Reserve. Es ist NICHT die
+                # gerechnete Zahl (die steht als `reserve_mb` in `st` und fliesst
+                # unten in `noetig_mb`), sondern der ROHE Wunsch mit seiner
+                # Semantik: -1 Automatik, 0 keine Reserve, sonst MiB. Er kommt aus
+                # DERSELBEN Leiter wie alles andere hier (`worker_straenge` liest
+                # die Config, gpubudget.straenge reicht ihn auf jedem Weg durch) —
+                # ein zweites `self.cfg.get(...)` an dieser Stelle waere die
+                # zweite Wahrheit, die spaeter auseinanderlaeuft.
+                "reserve_wunsch_mb": int(st.get("reserve_wunsch_mb", -1)
+                                         if st.get("reserve_wunsch_mb") is not None
+                                         else -1),
                 "waechter_n": int(st.get("waechter_n") or 0),
                 "eigen_mb": int(st.get("waechter_mb") or 0)
                 + int(st.get("dienst_mb") or 0),
@@ -18917,6 +18962,105 @@ class Service:
                 "gemeldet_ts": round(getattr(self, "_null_serie_gemeldet", 0.0) or 0.0, 1) or None,
                 "letzte_eids": list(getattr(self, "_null_serie_eids", ()) or ())}
 
+    def analyse_serie_stand(self):
+        """Der Stand der SD4-Fehlerserie fuer /health (.543) — rein lesend.
+
+        `aktiv` ist die Zahl, an der die Ampel haengt, und sie hat ZWEI Haelften:
+        die Serie muss die Schwelle erreicht haben UND frisch sein. Die zweite
+        Haelfte ist nicht Vorsicht, sondern dieselbe Verjaehrung, die die Wache
+        drueben beim naechsten Fehler anwendet (`SERIE_FENSTER_S`) — sie wird
+        dort nur LAZY ausgewertet, naemlich erst, wenn wieder eine Analyse
+        scheitert. Ohne sie bliebe /health auf einem ruhigen Grundstueck fuer
+        immer rot: drei Fehler um Mitternacht, danach kommt tagelang niemand
+        vorbei, und `_fehlerserie` steht bis zum naechsten Ereignis auf 3.
+
+        HEILUNG ist der bestehende Reset: die erste erfolgreiche LIVE-Analyse
+        setzt `_fehlerserie` auf 0 (`process`, der else-Zweig der Wache). Hier
+        wird nichts geheilt und nichts gesetzt — diese Methode liest nur."""
+        n = int(getattr(self, "_fehlerserie", 0) or 0)
+        seit = float(getattr(self, "_fehlerserie_start", 0.0) or 0.0)
+        alter = (time.time() - seit) if seit else None
+        frisch = alter is not None and alter <= SERIE_FENSTER_S
+        return {"serie": n, "schwelle": SERIE_STRUKTURSIGNAL_N,
+                "aktiv": bool(n >= SERIE_STRUKTURSIGNAL_N and frisch),
+                "fenster_s": SERIE_FENSTER_S,
+                "seit_ts": round(seit, 1) or None,
+                "alter_s": round(alter, 1) if alter is not None else None,
+                "gemeldet_ts": round(getattr(self, "_fehlerserie_gemeldet", 0.0)
+                                     or 0.0, 1) or None,
+                # Der Serien-Schuss (.543): wie oft er gefallen ist, wann zuletzt
+                # und warum. Nach dem Vorbild `haenger_schuesse` im Worker-Zustand
+                # — eine Zahl, die ein Betreiber sonst aus dem Log klauben muesste.
+                "schuesse": int(getattr(self, "_serie_schuesse", 0) or 0),
+                "letzter_schuss": ({"ts": round(self._serie_schuss_ts, 1),
+                                    "grund": getattr(self, "_serie_schuss_grund", None)}
+                                   if getattr(self, "_serie_schuss_ts", 0.0) else None),
+                "bremse_s": float(_gpubudget.DRUCK_NEUSTART_ABSTAND_S)}
+
+    def _serie_schuss(self, n, jetzt_ts):
+        """DER SERIEN-SCHUSS (.543, Feld-Prio nach dem i915-Hang vom 18./20.09.).
+        -> True, wenn wirklich geschossen wurde.
+
+        WARUM ES IHN GIBT: am 20.09. warf der Wirt EINEN i915-GPU-Hang (dmesg
+        `GPU HANG: ecode 12:10`, `context reset due to GPU hang`). Damit war der
+        GPU-Kontext DES WORKER-PROZESSES tot, und jeder OpenVINO-Aufruf danach
+        endete in `CL_OUT_OF_RESOURCES` — rund 80 Minuten Ausbluten, bis der
+        Prozess aus einem anderen Grund neu startete. Ein In-Process-Reset ist
+        fuer diese Klasse nirgends verlaesslich belegt; der EINZIGE belegte Weg
+        zurueck ist ein frischer Prozess. Genau den zieht diese Methode.
+
+        GENERISCH, OHNE FEHLERTEXT-LISTE: geschossen wird auf die SERIE, nicht
+        auf ein Wort im Fehlertext. Eine Liste bekannter Texte waere per Bau
+        blind fuer den naechsten Treiber, die naechste ORT-Fassung und jedes
+        andere Backend — und drei gescheiterte Analysen in Folge sind so oder so
+        ein Struktursignal (das ist die Begruendung, mit der die Wache 2026
+        ueberhaupt gebaut wurde). Kostet ein Fehlalarm etwas? Einen Prozessstart
+        und die warmen Kompilate. Kostet das Nichtschiessen etwas? 80 Minuten
+        Erkennung.
+
+        DIE BREMSE IST KEINE NEUE ZAHL: es ist derselbe Abstand, mit dem der
+        druckbedingte Neustart sich selbst bremst (`gpubudget.
+        DRUCK_NEUSTART_ABSTAND_S`, s. `worker_vram_start`). Der Grund ist
+        derselbe: auf eine DAUERHAFTE Stoerung mit einer Neustart-Schleife zu
+        antworten kostet mehr Analysen als die Stoerung. Innerhalb des Abstands
+        faellt kein zweiter Schuss — gemeldet wird trotzdem, sonst waere die
+        Bremse die naechste stille Stelle.
+
+        WAS DANACH PASSIERT, ist gebauter Bestand und wird hier NICHT wiederholt:
+        `kill_hart` laesst die Antwort-Pipe offen, der Lese-Thread sagt alle
+        offenen Jobs am EOF als `fremdverschuldet` ab, der naechste Job startet
+        einen frischen Prozess, und auf dem laeuft die Kurzform der Start-Proben."""
+        letzter = float(getattr(self, "_serie_schuss_ts", 0.0) or 0.0)
+        abstand = float(_gpubudget.DRUCK_NEUSTART_ABSTAND_S)
+        if letzter and (jetzt_ts - letzter) < abstand:
+            self.log(f"analysis-failure series: NOT shooting the worker again — "
+                     f"the last shot was {int(jetzt_ts - letzter)}s ago (minimum "
+                     f"{int(abstand)}s). A permanent fault must not turn into a "
+                     f"restart loop; /health stays red until an analysis succeeds")
+            return False
+        grund = (f"{n} analyses in a row failed — the compute context of the "
+                 f"worker process may be dead (a GPU hang on the host kills it "
+                 f"for good); pulling up a fresh process")
+        self._serie_schuss_ts = jetzt_ts
+        self._serie_schuesse = int(getattr(self, "_serie_schuesse", 0) or 0) + 1
+        self._serie_schuss_grund = grund
+        try:
+            # Der Schuetze wird BENANNT: zwischen hier und dem naechsten Start
+            # schreibt der getroffene Job-Thread seine Todesursache in die
+            # analyze.log des Ereignisses, und „the restart clamp" waere dort
+            # schlicht gelogen (s. `kill_hart`).
+            geschossen = self.worker_hart_stoppen(
+                quelle="the analysis-failure series")
+        except Exception as e:                            # noqa: BLE001
+            # Ein Schuss, der scheitert, darf die Analyse-Schleife NICHT
+            # mitreissen: wir sind hier im Urteilspfad eines Ereignisses.
+            self.log(f"analysis-failure series: the worker shot failed "
+                     f"({type(e).__name__}: {e}) — /health stays red")
+            return False
+        self.log(f"analysis-failure series [series shot #{self._serie_schuesse}]: "
+                 f"{grund} — {geschossen} process(es) shot")
+        return True
+
     def _null_serie_pruefen(self, res, frames_fehlen, eid=None):
         """DIE ANOMALIE-WACHE „N EREIGNISSE IN FOLGE 0 GESICHTER BEI VOLLER
         FRAME-ZAHL" (Konzept §4 Schicht 3, E3.4).
@@ -18961,7 +19105,7 @@ class Service:
             self._null_serie_eids = []
             return
         with self._zustand_lock:
-            if jetzt_ts - getattr(self, "_null_serie_start", 0) > 3600:
+            if jetzt_ts - getattr(self, "_null_serie_start", 0) > SERIE_FENSTER_S:
                 self._null_serie = 0                # alte Serie verjaehrt
             if getattr(self, "_null_serie", 0) == 0:
                 self._null_serie_start = jetzt_ts
@@ -19506,7 +19650,7 @@ class Service:
                     # spaet oder gar nicht — die Klasse, die er fangen soll, ist gerade
                     # die, in der viele Analysen gleichzeitig scheitern.
                     with self._zustand_lock:
-                        if jetzt_ts - getattr(self, "_fehlerserie_start", 0) > 3600:
+                        if jetzt_ts - getattr(self, "_fehlerserie_start", 0) > SERIE_FENSTER_S:
                             self._fehlerserie = 0              # alte Serie verjaehrt
                         if getattr(self, "_fehlerserie", 0) == 0:
                             self._fehlerserie_start = jetzt_ts
@@ -19514,21 +19658,34 @@ class Service:
                     # E3.4: die 3 kommt aus SERIE_STRUKTURSIGNAL_N — wertgleich zum
                     # Literal, das hier stand, aber jetzt EINE Quelle fuer beide
                     # Serien-Wachen des Hauses (s. dort).
-                    if self._fehlerserie >= SERIE_STRUKTURSIGNAL_N and \
-                            jetzt_ts - getattr(self, "_fehlerserie_gemeldet", 0) > 6 * 3600:
-                        self._fehlerserie_gemeldet = jetzt_ts
-                        self.log(f"STOERUNG (analyse-serie): {SERIE_STRUKTURSIGNAL_N} "
-                                 f"Analysen in Folge fehlgeschlagen — "
-                                 f"Erkennung moeglicherweise tot (Backend/Decode pruefen)")
-                        if not self.dry_alert:
-                            def _sd4_push():
-                                # eigener Thread: 20-s-HTTP darf den Analyse-Lock nicht halten
-                                for _f in stoerung_melden(
-                                        self.cfg, "3 Analysen in Folge fehlgeschlagen — die "
-                                        "Erkennung ist moeglicherweise tot (Dienst-Log / "
-                                        "System-Seite pruefen)."):
-                                    self.log(f"fault notify failed: {_f}")
-                            threading.Thread(target=_sd4_push, daemon=True).start()
+                    if self._fehlerserie >= SERIE_STRUKTURSIGNAL_N:
+                        # .543: MELDEN und HANDELN sind zwei Dinge mit zwei
+                        # Fristen, und sie werden deshalb getrennt. Die Meldung
+                        # geht an einen MENSCHEN — sie darf ihn nicht alle zehn
+                        # Minuten wecken, Cooldown 6 h wie seit .93. Der Schuss
+                        # geht an einen PROZESS und hat die Bremse des
+                        # druckbedingten Neustarts (600 s). Haengte der Schuss am
+                        # Melde-Cooldown, koennte der Dienst sich sechs Stunden
+                        # lang nicht heilen, nur weil er schon einmal gemeldet
+                        # hat — genau die 80 Minuten Ausbluten vom 20.09., nur
+                        # laenger.
+                        if jetzt_ts - getattr(self, "_fehlerserie_gemeldet", 0) > 6 * 3600:
+                            self._fehlerserie_gemeldet = jetzt_ts
+                            self.log(f"STOERUNG (analyse-serie): {SERIE_STRUKTURSIGNAL_N} "
+                                     f"Analysen in Folge fehlgeschlagen — "
+                                     f"Erkennung moeglicherweise tot (Backend/Decode pruefen)")
+                            if not self.dry_alert:
+                                def _sd4_push():
+                                    # eigener Thread: 20-s-HTTP darf den Analyse-Lock nicht halten
+                                    for _f in stoerung_melden(
+                                            self.cfg, "3 Analysen in Folge fehlgeschlagen — die "
+                                            "Erkennung ist moeglicherweise tot (Dienst-Log / "
+                                            "System-Seite pruefen)."):
+                                        self.log(f"fault notify failed: {_f}")
+                                threading.Thread(target=_sd4_push, daemon=True).start()
+                        # .543 DER SERIEN-SCHUSS: den Worker-Prozess hart neu
+                        # aufziehen. Herleitung und Bremse in `_serie_schuss`.
+                        self._serie_schuss(self._fehlerserie, jetzt_ts)
                 else:
                     self._fehlerserie = 0
                 # E3.4 DIE ZWEITE SERIEN-WACHE, unmittelbar neben der ersten und mit
@@ -27770,8 +27927,22 @@ def make_handler(svc):
                 # die Startup-Banner-Zeile oft nicht, und "latest-gpu" im Issue-Formular ist
                 # mehrdeutig — /health ist die eine Zeile, die Support-Faelle eindeutig macht.
                 _sf = getattr(svc, "startup_fails", 0)   # SD1: B8-Fang — Selbstcheck-FAIL
-                h = {"ok": _sf == 0,                     # und health-ok nie wieder gleichzeitig
+                # .543 DIE AMPEL LERNT DIE LAUFZEIT (K1, dritter Beleg). Bis .542
+                # war `ok` ausschliesslich eine START-Aussage: `startup_fails == 0`.
+                # Genau deshalb blieb /health am 18. und 20.09. GRUEN, waehrend der
+                # Dienst nach einem i915-GPU-Hang des Wirts rund 80 Minuten lang
+                # jede Analyse mit CL_OUT_OF_RESOURCES verlor — der Start war ja
+                # tadellos gewesen. Eine Diagnose, die in genau der Lage gruen
+                # meldet, fuer die sie da ist, ist eine luegende Diagnose.
+                # Seitdem zaehlt auch die LAUFENDE Fehlerserie: drei gescheiterte
+                # Live-Analysen in Folge (SERIE_STRUKTURSIGNAL_N) schalten rot, und
+                # rot bleibt es, bis die erste Live-Analyse wieder gelingt oder die
+                # Serie verjaehrt (SERIE_FENSTER_S). Der Grund steht darunter in
+                # `analyse_serie` — wer rot sieht, soll nicht raten muessen.
+                _serie = svc.analyse_serie_stand()
+                h = {"ok": _sf == 0 and not _serie["aktiv"],
                      "startup_fails": _sf,
+                     "analyse_serie": _serie,
                      "version": os.environ.get("SUSLIK_VERSION", "dev"),
                      "processed": len(svc.processed),
                      # E0: die Platz-Vergabe sichtbar machen. Ohne diese Zeile waere ein

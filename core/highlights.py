@@ -12,7 +12,21 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.0.542"   # .542 traegt den KONSOLIDIERTEN Box-Eintrag, INHALT VOM
+STAND = "0.1.0.543"   # .543 traegt ZWEI Box-Eintraege: den PERSOENLICHEN des
+                      # Inhabers, Wortlaut DE+EN von ihm abgenommen (20.09.2026
+                      # ~14:15 „perfekt"), woertlich uebernommen, ES/IT/FR/FI
+                      # uebersetzt. NICHT konsolidiert — .542 ist bereits
+                      # ausgeliefert, ein Umhaengen zeigte dieselben vier Saetze
+                      # ein zweites Mal als „neu" (Herleitung am Eintrag).
+                      # Die beiden FIX-Eintraege von .543 (Karten-Reserve
+                      # Issue #32, GPU-Haenger-Heilung) hat der Inhaber am Abend
+                      # des 20.09. ABGELEHNT — „Die beiden Fixes lassen wir raus.
+                      # Max ganz unten als incl. small fixes."; ihre Entwuerfe
+                      # sind ersatzlos raus, statt ihrer steht als LETZTER
+                      # Eintrag die schlichte Sammel-Zeile („Also includes small
+                      # fixes." / „Dazu kleinere Fixes."). Nichts selbststaendig
+                      # gefuellt ([[whatsnew-inhalt-abstimmen]]).
+                      # Davor: "0.1.0.542"   # .542 traegt den KONSOLIDIERTEN Box-Eintrag, INHALT VOM
                       # INHABER VORGEGEBEN (18.09.2026 vormittags). Dieser Entscheid
                       # ERSETZT den vom Vorabend („What's-new aendern wir nicht, nur
                       # Versionsnummer") — Anlass ist, dass .542 nicht mehr nur der
@@ -705,6 +719,97 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # ####################################################################
+    # 0.1.0.543 — ZWEI Eintraege, INHALT VOM INHABER, WOERTLICH UEBERNOMMEN:
+    # sein PERSOENLICHER Eintrag und darunter die Sammel-Zeile (s. unten).
+    # Er hat den Wortlaut des persoenlichen Eintrags am 20.09.2026 gegen
+    # ~14:15 abgenommen („perfekt"),
+    # DE und EN im Wortlaut vorgegeben; ES/IT/FR/FI sind die Uebersetzung
+    # davon (Praxis seit .298/§6.3), Finnisch im Stil der
+    # Muttersprachler-Korrekturen von Simo (b673846f, 20.09.).
+    #
+    # NICHT KONSOLIDIERT, und das ist eine bewusste Entscheidung mit einer
+    # Rueckfrage daran: .540 -> .541 -> .542 wurden je auf die neue Nummer
+    # UMGEHAENGT, weil dort jeweils EIN Paket unter EINER Nummer ausgeliefert
+    # wurde. Hier ist der Fall ein anderer — .542 IST draussen (alle fuenf
+    # Varianten, alle `latest`), ein Nutzer hat diese Box also schon gesehen.
+    # Ein Umhaengen wuerde ihm dieselben vier Saetze ein zweites Mal als
+    # „neu" zeigen. Die Box stellt ohnehin die letzten zehn Eintraege
+    # versionsweise untereinander (webui.whatsnew_block), .542 bleibt also
+    # sichtbar. Wenn der Inhaber trotzdem konsolidieren will, ist es ein
+    # Verschieben der vier .542-Eintraege in diesen Block.
+    #
+    # NICHT BETONT, ebenfalls bewusst: die Marke faerbt seit .526 nur den Kopf
+    # BIS ZUM ERSTEN GEDANKENSTRICH rot — fehlt der Strich, faellt sie auf
+    # „ganzer Eintrag rot" zurueck (webui/__init__.py, Fallback). Der
+    # abgenommene Wortlaut hat keinen Gedankenstrich; betont gesetzt stuende
+    # eine freundliche persoenliche Zeile komplett in Warnfarbe und laese sich
+    # als Alarm. Der persoenliche Eintrag von .199 trug die Marke noch, dort
+    # gab es die Kopf-Faerbung aber auch noch nicht.
+    #
+    # DIE BEIDEN FIX-EINTRAEGE (.543) SIND ENTSCHIEDEN: der Inhaber hat sie am
+    # 20.09.2026 abends ABGELEHNT — „Die beiden Fixes lassen wir raus. Max ganz
+    # unten als incl. small fixes." Ihre Entwuerfe (Karten-Reserve Issue #32,
+    # GPU-Haenger-Heilung) sind deshalb ERSATZLOS aus diesem Kommentar entfernt;
+    # an ihre Stelle tritt der ZWEITE Eintrag unten, die schlichte Sammel-Zeile.
+    # Sie steht bewusst als LETZTE des Blocks, ohne Marke und ohne Details — der
+    # Wortlaut EN/DE ist vom Inhaber, ES/IT/FR/FI die Uebersetzung davon, mit den
+    # Begriffen der .510-Box (Small fixes / Pequenas correcciones / Piccole
+    # correzioni / Petites corrections). Was die beiden Fixes wirklich tun, steht
+    # im CHANGELOG. ([[whatsnew-inhalt-abstimmen]])
+    # ####################################################################
+    ("0.1.0.543", (
+        {"de": "In eigener Sache: Ich bin wirklich glücklich und stolz, was "
+               "aus diesem Programm geworden ist, und dass wir inzwischen eine "
+               "kleine Community haben, von der so viele Rückmeldungen kommen. "
+               "Das freut mich total. Nur wie ich das Ganze weiter verbreite, "
+               "davon habe ich ehrlich gesagt keine Ahnung. Wenn jemand eine "
+               "Idee hat oder Lust, irgendwo zu posten, was ich hier gebaut "
+               "habe: Ich würde mich sehr freuen.",
+         "en": "A personal note: I'm really happy and proud of what this "
+               "program has become, and that there's a small community now "
+               "sending me so much feedback. That genuinely makes my day. But "
+               "I honestly have no idea how to spread the word about it. If "
+               "anyone has an idea, or feels like posting somewhere about what "
+               "I built here, I'd be really happy.",
+         "es": "Una nota personal: estoy realmente contento y orgulloso de lo "
+               "que se ha convertido este programa, y de que ahora haya una "
+               "pequeña comunidad que me envía tantos comentarios. Eso me "
+               "alegra mucho. Pero, sinceramente, no tengo ni idea de cómo "
+               "darlo a conocer. Si alguien tiene una idea, o le apetece "
+               "publicar en algún sitio lo que he construido aquí, me haría "
+               "mucha ilusión.",
+         "it": "Una nota personale: sono davvero contento e orgoglioso di ciò "
+               "che è diventato questo programma, e del fatto che ormai ci sia "
+               "una piccola comunità che mi manda così tanti riscontri. Mi fa "
+               "davvero piacere. Ma onestamente non ho idea di come farlo "
+               "conoscere di più. Se qualcuno ha un'idea, o ha voglia di "
+               "scrivere da qualche parte di quello che ho costruito qui, ne "
+               "sarei molto contento.",
+         "fr": "Un mot personnel : je suis vraiment heureux et fier de ce "
+               "qu'est devenu ce programme, et qu'il y ait maintenant une "
+               "petite communauté qui m'envoie autant de retours. Ça me fait "
+               "très plaisir. Mais honnêtement, je n'ai aucune idée de la "
+               "façon de le faire connaître. Si quelqu'un a une idée, ou a "
+               "envie de publier quelque part ce que j'ai construit ici, j'en "
+               "serais très heureux.",
+         "fi": "Henkilökohtainen huomio: olen todella iloinen ja ylpeä siitä, "
+               "mitä tästä ohjelmasta on tullut, ja siitä että ympärillä on "
+               "nyt pieni yhteisö, jolta tulee näin paljon palautetta. Se "
+               "ilahduttaa minua kovasti. En vain rehellisesti sanottuna "
+               "tiedä, miten saisin sitä levitettyä laajemmalle. Jos "
+               "jollakulla on idea tai halua kirjoittaa jossakin siitä, mitä "
+               "olen tänne rakentanut, olisin siitä hyvin iloinen."},
+        # Sammel-Zeile, Inhaber-Entscheid 20.09.2026 abends („Max ganz unten als
+        # incl. small fixes."): EN/DE von ihm, ES/IT/FR/FI uebersetzt mit den
+        # Begriffen der .510-Box. Keine Marke, keine Details — genau so gewollt.
+        {"de": "Dazu kleinere Fixes.",
+         "en": "Also includes small fixes.",
+         "es": "Incluye también pequeñas correcciones.",
+         "it": "Include anche piccole correzioni.",
+         "fr": "Inclut aussi de petites corrections.",
+         "fi": "Lisäksi pieniä korjauksia."},
+    )),
     # ####################################################################
     # 0.1.0.542 — INHALT VOM INHABER VORGEGEBEN (18.09.2026 vormittags, er
     # ersetzt damit seinen Entscheid vom Vorabend „What's-new aendern wir

@@ -1427,7 +1427,11 @@ class SpeicherWache:
         Companion, ein anderer Container). Auf Nicht-CUDA laeuft hier nichts.
 
         Die Reserve ist KEINE neue Zahl: es ist dieselbe `reserve_strang_mb`, mit
-        der der Dienst drueben sein Budget gerechnet hat."""
+        der der Dienst drueben sein Budget gerechnet hat — und seit .543 (Issue
+        #32) auch mit DEMSELBEN Wunsch. Bis .542 stand hier `reserve_strang_mb(
+        gesamt)` ohne zweites Argument: wer `worker_vram_reserve_mb` klein
+        stellte, bekam drueben ein grosses Budget und hier trotzdem eine
+        Druckmeldung gegen die alte Formel-Reserve."""
         if not self.dienst.auf_karte():
             return
         frei, _alter, grund = self.karte_frei_mb()
@@ -1437,7 +1441,8 @@ class SpeicherWache:
             gesamt = int(self._karte["gesamt"] or 0)
         if gesamt <= 0:
             return
-        res = _gpubudget.reserve_strang_mb(gesamt)
+        res = _gpubudget.reserve_strang_mb(
+            gesamt, getattr(self.dienst, "vram_reserve_mb", -1))
         if 0 <= frei < res:
             self.dienst.druck_buchen(
                 "fremd",
@@ -1674,6 +1679,15 @@ class Dienst:
         self._geo_deckel_gemeldet = False
         # --- .531 KARTENHAUSHALT ------------------------------------------------
         self.vram_deckel_mb = max(0, int(getattr(a, "vram_deckel_mb", 0) or 0))
+        # .543 (Issue #32): der Reserve-WUNSCH des Betreibers, wie ihn der Dienst
+        # gerechnet hat. KEIN `or -1` und kein `max(0, …)`: 0 ist hier ein Wert
+        # („keine Reserve"), und `0 or -1` waere -1 — genau der Fehler, der den
+        # Schalter ein zweites Mal wirkungslos machte.
+        _resw = getattr(a, "vram_reserve_mb", -1)
+        try:
+            self.vram_reserve_mb = -1 if _resw is None else int(_resw)
+        except (TypeError, ValueError):
+            self.vram_reserve_mb = -1
         self.arena_strategie = getattr(a, "arena_strategie", None) or None
         self.arena_shrink = bool(int(getattr(a, "arena_shrink", 0) or 0))
         # .532: der Memory-Pattern-Schalter reist mit, damit /health und jede
@@ -2268,6 +2282,15 @@ class Dienst:
             return None
         z = self.zaehler
         return {"deckel_mb": self.vram_deckel_mb,
+                # .543 (Issue #32): WOMIT die Laufzeit-Wachen dieses Prozesses
+                # rechnen. -1 = Automatik-Formel wie bisher, sonst der
+                # eingestellte Wunsch. Sichtbar, weil genau diese Zahl im Feld
+                # unbemerkt von der Dienst-Seite abwich. Mit `getattr` aus
+                # demselben Grund wie in `auf_karte`: die Proben stellen
+                # absichtlich nur Teile des Dienstes auf, und ein Feld, das eine
+                # Teil-Buehne zum Absturz braechte, wuerde dort nicht mehr
+                # geprueft (e3_7_deckel_annahme, gemessen beim Bau von .543).
+                "reserve_wunsch_mb": int(getattr(self, "vram_reserve_mb", -1)),
                 "arena_strategie": self.arena_strategie,
                 "arena_shrink": self.arena_shrink,
                 # .532: wie dieser Prozess rechnet, nicht was gewuenscht war.
@@ -2407,7 +2430,10 @@ class Dienst:
             _frei, _a, _g = self.speicher.karte_frei_mb()
             with self.speicher._karte_schloss:
                 _ges = int(self.speicher._karte["gesamt"] or 0)
-            if _g is None and _ges > 0 and _frei < _gpubudget.reserve_strang_mb(_ges):
+            # .543 (Issue #32): dieselbe Reserve wie in `_karte_takt` — mit dem
+            # eingestellten Wunsch, nicht mit der Automatik-Formel.
+            if _g is None and _ges > 0 and _frei < _gpubudget.reserve_strang_mb(
+                    _ges, getattr(self, "vram_reserve_mb", -1)):
                 self.vram_neustart_bitten(art, text)
             return
         else:
@@ -3670,6 +3696,17 @@ def argumente():
                          "(0 = kein Deckel, Verhalten vor .531). Kommt aus der "
                          "Leiter in core.gpubudget; gilt fuer die ganze "
                          "Prozess-Lebenszeit und ist im Lauf nicht senkbar.")
+    ap.add_argument("--vram-reserve-mb", type=int,
+                    default=int(os.environ.get("SUSLIK_VRAM_RESERVE_MB", "-1")
+                                or -1),
+                    help="Der Config-Wunsch `worker_vram_reserve_mb` (.543, Issue "
+                         "#32): -1 (Vorgabe) = Automatik nach Formel, 0 = keine "
+                         "Reserve, sonst MiB. Er steuert NICHT das Budget dieses "
+                         "Prozesses (das steckt im Arena-Deckel), sondern die "
+                         "Schwelle, ab der die Laufzeit-Wachen 'die Karte ist eng' "
+                         "melden. Ohne ihn massen sie bis .542 gegen die "
+                         "Automatik-Formel, auch wenn der Betreiber eine andere "
+                         "Reserve eingestellt hatte.")
     ap.add_argument("--geometrien-max", type=int, default=0,
                     help="Wie viele Clip-Geometrien der Prozess gleichzeitig haelt "
                          "(0 = es gilt das Job-Feld 'geometrien_max').")

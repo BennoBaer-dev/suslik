@@ -1102,6 +1102,13 @@ def straenge(gesamt_mb, n_waechter, kind, vorschlag, g_zusatz=0, nutzer_n=0,
     vor = max(1, int(vorschlag or 1))
     s = stuetzwerte(kind)
     gesamt = int(gesamt_mb or 0)
+    # .543: unlesbarer Wunsch = Automatik, und zwar HIER abgefangen. Ohne diesen
+    # Griff braechte ein krummer Config-Wert die fruehen Rueckgabewege (die
+    # `reserve_strang_mb` nie erreichen) neu zum Absturz.
+    try:
+        res_wunsch = int(reserve_wunsch if reserve_wunsch is not None else -1)
+    except (TypeError, ValueError):
+        res_wunsch = -1
     aus = {"n": vor, "kind": kind, "vorschlag": vor, "gesamt_mb": gesamt,
            "mass": (s or {}).get("mass"), "reserve_mb": 0, "dienst_mb": 0,
            "waechter_mb": 0, "waechter_n": max(0, int(n_waechter or 0)),
@@ -1112,6 +1119,15 @@ def straenge(gesamt_mb, n_waechter, kind, vorschlag, g_zusatz=0, nutzer_n=0,
            "frei_gemessen_mb": max(0, int(frei_gemessen_mb or 0)),
            "laufend_eigen_mb": 0, "laufend_eigen_quelle": None,
            "reserve_quelle": "formel",
+           # .543 (Issue #32): DER ROHE WUNSCH, auf JEDEM Rueckgabeweg — auch auf
+           # den fruehen (fail-closed, keine lesbare Grenze), wo die Rechnung gar
+           # nicht bis `reserve_strang_mb` kommt. Er ist nicht `reserve_mb` (das
+           # ist die GERECHNETE Zahl in MiB), sondern der Config-Wert mit seiner
+           # Semantik: -1 Automatik, 0 keine Reserve, sonst MiB. Der Dienst gibt
+           # ihn von hier an den Worker-Prozess weiter, dessen Laufzeit-Wachen
+           # sonst gegen die Automatik-Formel messen statt gegen die eingestellte
+           # Reserve.
+           "reserve_wunsch_mb": res_wunsch,
            "grund": "durchsatz", "hinweis": None,
            "nutzer_n": max(0, int(nutzer_n or 0)), "deckel_meldung": None,
            "ueber_formel": None,
@@ -1169,8 +1185,11 @@ def straenge(gesamt_mb, n_waechter, kind, vorschlag, g_zusatz=0, nutzer_n=0,
         return _fail_closed(aus, kind, vor,
                             "free card memory not measurable (no usable "
                             "nvidia-smi answer)")
-    res = reserve_strang_mb(gesamt, reserve_wunsch)
-    aus["reserve_quelle"] = reserve_quelle_mb(reserve_wunsch)
+    # .543: DERSELBE gepruefte Wert wie im Ergebnis oben, nicht der rohe. Sonst
+    # entschieden die beiden Stellen bei einem krummen Config-Wert verschieden —
+    # das Ergebnis saegte „Automatik", die Rechnung fiele mit ValueError.
+    res = reserve_strang_mb(gesamt, res_wunsch)
+    aus["reserve_quelle"] = reserve_quelle_mb(res_wunsch)
     dienst = s["dienst_mb"]
     wae = waechter_posten_mb(n_waechter, kind)
     wae_abzug, wae_grund = (waechter_abzug_mb(n_waechter, kind, engine_alter_s)

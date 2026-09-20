@@ -7,6 +7,34 @@ this file — the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git
 history.
 
+## 0.1.0.543 (unreleased)
+
+Two fixes, both from the field. The What's-new box carries one entry for this
+version — a personal note from the author; the wording of the two fix entries is
+still the owner's decision.
+
+- **The card-memory reserve now reaches the worker process** (reported by
+  Pranz187, issue #32). `worker_vram_reserve_mb` under Advanced took effect where
+  the service plans the worker's budget, but not in the two runtime guards inside
+  the worker process. Those always measured the free card memory against the
+  automatic value instead. Anyone who lowered the reserve got the larger budget
+  they asked for and, on the same card, pressure reports and orderly restarts
+  measured against the old, larger formula reserve. The setting now travels with
+  the worker as a start argument, both guards use it, and `/health` shows which
+  value the running process measures against. Semantics are unchanged: -1
+  automatic, 0 no reserve at all, larger than the card is clamped to the card.
+- **A GPU hang on the host no longer costs an hour of recognition.** When the
+  host's graphics driver resets the GPU (an i915 `GPU HANG` on Intel, seen twice
+  on our own machine), the compute context of the worker process is dead for
+  good: every analysis after that fails, and no in-process recovery is reliable
+  for this class. Until now the service kept trying until something else
+  restarted the process — up to 80 minutes of failed analyses, while the health
+  page still reported OK. Now three failed live analyses in a row pull up a fresh
+  worker process (at most one restart per 10 minutes, so a permanent fault cannot
+  become a restart loop), and `/health` reports `ok: false` with the reason in a
+  new `analyse_serie` block until an analysis succeeds again. Events hit by the
+  restart are not booked as failures — they go back into the queue.
+
 ## 0.1.0.542 (unreleased)
 
 A fix for the `cpu` image of 0.1.0.541. The What's-new box is unchanged for this
