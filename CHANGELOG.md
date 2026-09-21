@@ -7,7 +7,99 @@ this file — the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git
 history.
 
-## 0.1.0.543 (unreleased)
+## 0.1.0.545 (2026-09-21)
+
+This release bundles 0.1.0.544, which was built and tested but never pushed. The
+What's-new box is unchanged for this version (owner's decision) — there is no new
+key feature here, the work went into recognition staying up.
+
+- **A dead compute context is now caught in seconds instead of up to 40 minutes.**
+  0.1.0.543 restarts the worker process after three failed analyses in a row, but it
+  only counted analyses of fresh events. On a quiet night only the catch-up run
+  produces analyses, and with its pause rounds the third booking can be 40 minutes
+  away; on the author's own machine an installation stayed blind for eight hours
+  after the host's graphics driver reset the GPU, with the health page reporting OK
+  the whole time. Every failed analysis now counts towards the series, fresh or
+  catch-up. A successful analysis of any kind clears the counter that watches both
+  paths; the event counter and the red health page clear with the next successful
+  analysis of a fresh event, or after 60 minutes without a new failure. A collection
+  run that dies in the worker counts too — on a property without traffic it can be the
+  only thing that touches the accelerator all night. On top of that, the first failure alone now
+  triggers the short start probe the program already runs after a restart: if the
+  worker passes, the failure was specific to that event and nothing else happens; if
+  it does not, the worker is pulled up immediately, at most once per 10 minutes.
+  Only the class "the worker returned nothing at all" counts — a missing recording
+  neither counts nor heals, so events whose clips are gone can never shoot down a
+  healthy worker.
+- **Catch-up now also runs on a busy installation.** The catch-up round required a
+  quiet window first (no event for `nachhol_ruhe_s`, factory 300 s). At a field
+  tester's site with around 10 000 events a day that window never arrives during the
+  day, so the run was not slow there, it was effectively switched off, and a failed
+  event waited until after midnight for its second attempt — or, if its recording had
+  fallen out of retention by then, for none at all. The quiet window stays and stays
+  the normal path; in addition, one single event per round is now allowed through when
+  the queue is empty and an analysis slot is free. Live recognition keeps priority:
+  the catch-up run never takes the last free slot while an event is waiting.
+- **The cost of an analysis is now measured on your card instead of read off a
+  table.** The number of compute threads was planned against a table measured on two other cards with
+  4K clips. On an 8 GB card with five live watchers that table asked for 3175 MiB
+  against a 1929 MiB budget, so the planning refused every compute thread: recognition
+  dead, every event an error, and the message sent the operator into the config file
+  over a difference of a few MiB. The worker now keeps the maximum share it really
+  uses per constellation (threads times built clip geometries) and stores it per card,
+  image and version; the thread planning, the required price and the fallback arithmetic use
+  the measured prices as soon as enough samples exist and the table only until then.
+  Measured on a 6 GB test card, the process price came out at 1463 MiB instead of the
+  1940 MiB the table assumed, which was enough for a second compute thread.
+- **New setting `vorrang` decides who gets the card when it cannot carry both**
+  (Configuration page, values `erkennung` / `wache`, factory value `erkennung`). This
+  only matters on a card that is too small for recognition and the live watchers at
+  the same time; where there is room, nothing changes. With `erkennung` the service
+  no longer jumps from "full" to "nothing": it waits while a foreign process holds the
+  memory, then falls back to a minimum mode (one compute thread, one clip geometry),
+  and only if even that does not fit it takes live watchers off the net, the most
+  recently started one first and only as many as the minimum needs. It says so in the
+  log and in `/health`, and it switches them back on by itself once the card carries
+  the full price again. With `wache` the watchers stay and the analysis worker stays
+  off, exactly as before this version, but the log now says that recognition is off
+  because the watchers have priority instead of asking you to edit a config file. A
+  card that cannot even carry the minimum loses nothing: nothing is switched off for a
+  recognition that would not run afterwards anyway.
+- **The worker process no longer quits as a precaution, and events are no longer
+  dropped when memory is tight.** At a field tester's site 1077 of 10 279 events
+  (10.5 %) were lost in a single working day, and none of the four ways there was a
+  real shortage: 145 of 157 orderly worker exits happened with 381 to 1226 MiB still
+  free, because the guard read "free memory below the reserve" as a reason to quit —
+  while the consumer it was reacting to was this program's own live watchers, whose 4K
+  decoding breathes by hundreds of MiB. Each exit took about 20 queued jobs with it,
+  which the service immediately retried into the 24 to 36 seconds the fresh process
+  needs to build up. Now the thread planning uses the minimum free memory over
+  the last ten minutes instead of a single sample; memory pressure only delays
+  building a new clip geometry instead of ending the process; a real out-of-memory
+  during an analysis lets the oldest spare geometry expire, waits and retries once;
+  and an event that could not be computed for a reason outside itself goes back into
+  the queue unbooked instead of being counted as a failure. Restarts now come only
+  from repeated real allocation failures.
+- **A learning run over a period without events now ends properly.** A day-long run
+  over a day with no person events reported a broken run state and advised resuming,
+  which can never find anything — one tester resumed four times. The run now
+  distinguishes a missing event list (damage, resume offered) from a legitimately
+  empty one, closes the empty run with a status line that also names what it looked at
+  (day, last N, all, cameras, only new, file source), and offers no resume.
+- **The Finnish interface has been through a native speaker's review.** The machine
+  translated base version went through two rounds of corrections with a native speaker
+  in discussion #1 (thanks to @sla004); the first round shipped with 0.1.0.543, and
+  this release carries the latest round's 152 corrections, applied word for word. The
+  header of the language file no longer claims the translation is unreviewed.
+- **Status output now reports what was actually measured.** The sentence comparing the
+  measured free memory with the sum of the planned items always read "less than", even
+  when the measured value was larger or equal; it now takes its direction from the
+  numbers. The free-memory band the planning uses (value, window, sample count,
+  reason, current sample) is now a field in `/health` instead of only appearing in the
+  text of the calculation. A live watcher that was taken off the net and that you
+  switch back on yourself is no longer listed as reduced afterwards.
+
+## 0.1.0.543 (2026-09-20)
 
 Two fixes, both from the field. The What's-new box carries one entry for this
 version — a personal note from the author; the wording of the two fix entries is

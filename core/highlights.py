@@ -12,7 +12,11 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.0.543"   # .543 traegt ZWEI Box-Eintraege: den PERSOENLICHEN des
+STAND = "0.1.0.545"   # .545: Fix-forward-Release nach rotem Datenschutz-Gate der .544 (Testername im Docstring), Box unveraendert wie vom Inhaber fuer .544 entschieden (21.09.2026 ~09:20) — „What's New bleibt identisch mit
+                      # der Version davor, nur die Versionsnummer wird angehoben." KEIN
+                      # neuer Box-Eintrag (Simo-Korrekturen, Serien-Fix, Speicher-Paket
+                      # bleiben ohne Box-Zeile), nur STAND hoch — Mechanik s. o.
+                      # Davor: "0.1.0.543"   # .543 traegt ZWEI Box-Eintraege: den PERSOENLICHEN des
                       # Inhabers, Wortlaut DE+EN von ihm abgenommen (20.09.2026
                       # ~14:15 „perfekt"), woertlich uebernommen, ES/IT/FR/FI
                       # uebersetzt. NICHT konsolidiert — .542 ist bereits

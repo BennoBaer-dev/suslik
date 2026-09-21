@@ -574,16 +574,41 @@ TABELLE_BELEG = ("gemessen 15.09.2026, RTX 2060 Mobile (1762 MiB, 4K, ein "
                  "je weiterer Geometrie), je Posten Maximum + 10 %")
 
 
-def tabelle_summe(n_straenge, geometrien=None):
-    """Was `n` Rechenstraenge mit `g` Geometrien nach der Tabelle kosten. -> MB
+def preis_herkunft_text(preis_quelle=None, gemessen=None):
+    """WOHER DIE PREISE KOMMEN, in einem englischen Satzstueck (.544 B).
+
+    EINE Formulierung fuer die Log-Zeile der Leiter UND fuer den Absage-Hinweis:
+    stuende an einer der beiden Stellen weiter „from the measurement table",
+    waehrend die Zahlen von dieser Karte stammen, waere das die luegende
+    Diagnose (K1) — und zwar an genau der Stelle, an der der Betreiber
+    nachrechnet."""
+    gem = dict(gemessen or {})
+    if not gem:
+        return (f"prices from the measurement table (version "
+                f"{TABELLE_FASSUNG}, {TABELLE_BELEG})")
+    pq = dict(preis_quelle or {})
+    daten = sorted({str(pq.get(a, "")).split("(")[-1].rstrip(")")
+                    for a in gem} - {""})
+    return ("prices measured on this card"
+            + (f" ({', '.join(daten)})" if daten else "")
+            + (f", the rest from the measurement table "
+               f"(version {TABELLE_FASSUNG})"
+               if len(gem) < len(PREIS_ARTEN) else ""))
+
+
+def tabelle_summe(n_straenge, geometrien=None, preise=None):
+    """Was `n` Rechenstraenge mit `g` Geometrien kosten. -> MB
 
     EINE Formel fuer Leiter, Rueckrechnung und Probe: Prozess + je weitere
     Geometrie + je weiterer Strang. Ohne `geometrien` gilt die feste Annahme
-    (`GEOMETRIEN_IN_ANKERN`)."""
+    (`GEOMETRIEN_IN_ANKERN`).
+    .544 B: `preise` ueberlagert die Tabellen-Posten mit den auf DIESER Karte
+    gemessenen (s. `preise_wirksam`) — die Arithmetik bleibt dieselbe, nur die
+    Zahlen kommen dann von hier statt aus einer fremden Karte."""
     n = max(1, int(n_straenge or 1))
     g = max(1, int(GEOMETRIEN_IN_ANKERN if geometrien is None else geometrien))
-    return (TAB_PROZESS_MB + (g - 1) * TAB_GEOMETRIE_MB
-            + (n - 1) * TAB_STRANG_MB)
+    p, _q, _gem = preise_wirksam(preise)
+    return (p["prozess"] + (g - 1) * p["geometrie"] + (n - 1) * p["strang"])
 
 
 # ============================================================================
@@ -660,6 +685,94 @@ DRUCK_NEUSTART_ABSTAND_S = 600
 # und ein zweiter Abzug waere doppelt gezaehlt.
 LIVE_WARM_S = 60
 
+# --- .544 M1: DAS FREI-BAND STATT DES MOMENTWERTS ---------------------------
+# ANLASS, in Feldzahlen (Feldtester-Anlage, RTX 3060 mit 12288 MiB, Werktag
+# 21.09.2026, Belege Feldtester-Nachtauswertung 21.09.2026, Befund §4.4 im nicht getrackten Laborordner (s. stand.md)): die
+# Leiter mass „frei" als EINE Momentaufnahme, sah 6 Straenge passen und baute
+# sie mit 69 MiB Luft. Danach meldete die Takt-Wache im Worker 145 mal an EINEM
+# Tag „frei unter Reserve" und beendete den Prozess — bei 381 bis 1226 MiB noch
+# freiem Speicher. Der „Fremdverbraucher" waren die EIGENEN fuenf Live-Waechter,
+# deren Verbrauch atmet: 4K-Decode, Nachtsicht-Umschaltung, Bewegungsschuebe.
+# Die Momentaufnahme traf regelmaessig ein TAL dieser Welle und plante darauf.
+#
+# WAS SICH AENDERT: geplant wird auf dem MINIMUM des kartenweit freien Speichers
+# ueber ein Fenster — der schlechteste Moment, den die Karte in dieser Zeit
+# wirklich hatte, statt des Moments, in dem zufaellig gefragt wurde. Das ist
+# dieselbe Hausregel wie ueberall hier: wo zwei Messungen streiten, nimmt die
+# Formel die vorsichtigere.
+#
+# WARUM 600 s: die Quelle ist der Ringpuffer der Systemstatistik
+# (`core.systemstat`, eine Zeile je `TAKT_S` = 60 s) — eine Zahl, die es schon
+# gibt, keine neue Sonde. 600 s sind zehn seiner Takte, also zehn Stuetzstellen,
+# und decken die Wellen, in denen die Waechter-Ausschlaege am 21.09. sichtbar
+# wurden (die Ausstiege kamen in Buendeln ueber wenige Minuten). Kuerzer waere
+# wieder fast ein Moment; laenger schleppte die Leiter Taeler mit, die die
+# jetzige Konstellation gar nicht mehr hat (ein abgeschalteter Waechter wirkte
+# dann eine halbe Stunde nach).
+FREI_BAND_FENSTER_S = 600
+# WIE VIELE STUETZSTELLEN ES MINDESTENS BRAUCHT. Unter drei ist es kein Band,
+# sondern ein Moment mit Umweg — bei einem frischen Start (Ring noch leer), auf
+# Anlagen ohne nvidia-smi im Ring oder nach einem Datenverlust. Dann faellt die
+# Leiter LAUT auf den Momentwert zurueck (`frei_band_grund` in /health und im
+# Rechenweg), statt so zu tun, als haette sie ein Band gemessen.
+FREI_BAND_MIN_PROBEN = 3
+
+# --- .544 M2/M3: DIE EINE WARTE-FRIST AUF FREIEN KARTENSPEICHER -------------
+# SIE IST NICHT NEU. Bis .543 stand sie als `verifyd.KARTE_WARTE_FRIST_S` an
+# genau einer Stelle (dem Start-Tor des Workers) und war dort richtig
+# hergeleitet: ausdruecklich NICHT `worker_kern.BARRIERE_FRIST` (1800 s, die
+# Frist einer Warmlauf-Barriere INNERHALB des Prozesses), sondern gegen den
+# Platzwaechter gerechnet — der zieht einen Platz nach 120 s ohne Lebenszeichen
+# ein, 45 s sind weniger als die Haelfte davon, und in der Schleife pulst es.
+# SEIT .544 BRAUCHT SIE AUCH DER WORKER (M2: warten statt eine neue Geometrie zu
+# bauen, solange fremder Druck steht; M3a: warten nach `karte_voll`, bevor der
+# eine Retry faehrt). Zwei Prozesse, dieselbe Frage, dieselbe Zahl — deshalb
+# steht sie ab jetzt HIER, und `verifyd` liest sie von hier. Ein zweites Literal
+# im Worker waere genau die K3-Klasse (die Erweiterung erreicht nicht alle
+# Stellen), die dieses Haus schon mehrfach bezahlt hat.
+KARTE_WARTE_FRIST_S = 45.0
+
+
+def frei_mess_kennung(aus):
+    """WIE DER GEMESSENE FREI-WERT ZUSTANDE KAM — ein Satzstueck, EINE Stelle.
+
+    Steht in beiden Rechenwegen (Karten- und RAM-Zweig). Ohne die gemeinsame
+    Stelle stuende in einem von beiden irgendwann wieder „measured", waehrend
+    die Zahl laengst aus dem Band kommt — genau die luegende Diagnose (K1)."""
+    n = int((aus or {}).get("frei_band_n") or 0)
+    if n >= FREI_BAND_MIN_PROBEN:
+        return (f"band (min over {int(aus.get('frei_band_fenster_s') or 0)}s, "
+                f"{n} samples)")
+    return "measured"
+
+
+def frei_vergleich_text(frei_mb, gerechnet_mb, einheit, posten_text=""):
+    """GEMESSEN GEGEN GERECHNET — die Richtung kommt aus den ZAHLEN, nicht aus
+    dem Zweig (.544 Teil 6, BEF-1 der CUDA-Abnahme 21.09.2026).
+
+    Beide Rechenwege sagten bisher „less than", sobald der gemessene Wert
+    gezogen hatte. Das stimmte, solange der Messwert nur KLEMMEN konnte; seit
+    .531 gewinnt er auf Karten-Backends auch, wenn er GROESSER ist (s. den
+    Zweig `s["mass"] == "vram"` in `straenge`). Auf dem CUDA-Testsystem stand
+    deshalb `3512 MiB budget, less than the 2186 MiB …` im Rechenweg und in
+    /health — die Zahlen daneben widersprachen dem eigenen Satz, und eine
+    Gleichheit (`4386, less than the 4386`) las sich genauso falsch.
+
+    EINE Stelle fuer beide Zweige, aus demselben Grund wie bei
+    `frei_mess_kennung`: sonst steht der alte Satz irgendwann wieder in einem
+    von beiden."""
+    f, g = int(frei_mb or 0), int(gerechnet_mb or 0)
+    p = f" ({posten_text})" if posten_text else ""
+    if f < g:
+        return (f"less than the {g} {einheit} the posten sum{p} would have "
+                f"allowed — free measured instead of computed")
+    if f > g:
+        return (f"more than the {g} {einheit} the posten sum{p} would have "
+                f"allowed — measured free wins over the computed value")
+    return (f"as much as the {g} {einheit} the posten sum{p} would have "
+            f"allowed — measured and computed agree")
+
+
 # .535: HIER STANDEN `STUFEN_ORDNUNG`, `_stufen_preis` und `stuetzwerte_eich`
 # — die Wahl-Reihenfolge der alten Leiter und die Ueberlagerung der Anker durch
 # die Eichdatei. Alle drei sind mit der Messtabelle ersatzlos entfallen: es gibt
@@ -673,7 +786,137 @@ LIVE_WARM_S = 60
 # nachmessen will, nimmt die Feinmessung.
 
 
-def pflicht_preis_mb(kind):
+# ============================================================================
+# .544 B (21.09.2026) — PREISE, DIE AUF DIESER KARTE GEMESSEN WURDEN
+# ============================================================================
+# WARUM DIE TABELLE NICHT REICHT, in Feldzahlen: sie ist am 15.09. auf einer RTX
+# 2060 Mobile und einer RTX 3060 mit 4K-Clips entstanden. Ein Feldtester faehrt
+# eine GTX 1070 (8 GB) mit Kameras in 2560x1920 und 1080p — dort verlangte die
+# Tabelle 3175 MiB Pflichtpreis gegen 1929 MiB Budget, und die Leiter verweigerte
+# JEDEN Rechenstrang. Die Preise einer fremden Karte mit fremden Bildgroessen als
+# Mass der eigenen zu nehmen ist genau der Fehler, den `arena_deckel_mb` schon
+# einmal bezahlt hat.
+#
+# WAS GEMESSEN WIRD, und warum NICHT am Bauschritt: um den Geometrie-Bau herum zu
+# messen ist GEMESSEN FALSCH — onnxruntime allokiert seine Arena traege, der
+# Zuwachs faellt erst waehrend der ersten Analysen. Auf dem CUDA-Notebook ergab
+# die Bau-Messung 148 MiB, wo die Dauerlast ~976 MiB sah (Begruendung im
+# Kopfkommentar von `worker_dienst._staffel`), und ZU KLEINE Preise machen die
+# Leiter zu GROSS — also genau in die Richtung, die im Feld die Karte fuellt.
+# Deshalb ist die Quelle hier das PLATEAU: der groesste Kartenanteil, den der
+# laufende Worker-Prozess samt seiner Decoder-Kinder ueber sein Leben wirklich
+# gehalten hat (`--query-compute-apps`, dieselbe Sonde wie ueberall, keine
+# zweite), zugeordnet zu der Konstellation, mit der er lief (N Straenge,
+# G Geometrien). Aus zwei benachbarten Konstellationen folgt ein Posten-Preis,
+# und nur aus benachbarten — ein Preis aus Messung MINUS Tabellenwert waere eine
+# halb gemessene Zahl, die niemand mehr einordnen kann.
+#
+# DIE 10 % sind KEINE neue Zahl: es ist dieselbe Sicherheit, die der
+# Inhaber-Entscheid vom 15.09. auf jeden Tabellen-Posten gelegt hat („Maximum
+# plus 10 %", s. TABELLE_BELEG). Ein gemessenes Maximum ist genauso ein Maximum.
+PREIS_SICHERHEIT = 1.10
+# WIE VIELE MESSUNGEN EINE KONSTELLATION MINDESTENS BRAUCHT — dieselbe Hausregel
+# wie beim Frei-Band (unter drei Stuetzstellen ist es ein Moment mit Umweg, kein
+# Plateau), deshalb DIESELBE Zahl aus DERSELBEN Quelle statt eines zweiten
+# Literals.
+PREIS_MIN_PROBEN = FREI_BAND_MIN_PROBEN
+# Die Posten, die ueberhaupt gemessen werden koennen — dieselbe Aufzaehlung wie
+# in `preise_mb`/`preis_quelle` der Leiter, EINE Quelle (K3).
+PREIS_ARTEN = ("prozess", "strang", "geometrie")
+# Die kleinste in diesem Haus gemessene Groesse einer ZUSAETZLICHEN Geometrie:
+# die beiden Frame-Puffer eines Strangs (engine_cuda.Satz legt y und uv an, bei
+# 4K zusammen rund 12 MB — zitiert im Kopf von `worker_dienst.geometrie`). Sie
+# ist keine Erwartung, sondern der Boden, unter dem eine Messung keine Geometrie
+# mehr beschreibt.
+GEOMETRIE_UNTERGRENZE_MB = 12
+
+
+def preis_untergrenze_mb(art):
+    """UNTER WELCHEM WERT EINE MESSUNG UNGLAUBWUERDIG IST. -> MB
+
+    Keine gegriffene Zahl, sondern die kleinste Groesse, die dieses Haus fuer
+    denselben Sachverhalt schon gemessen hat:
+      * `prozess`   ein rechnender CUDA-Prozess haelt allein an Kontext und
+                    Handles KONTEXT_HANDLES_CUDA_MB (726 MiB gemessen) — was
+                    darunter liegt, ist ein Prozess, der seine Modelle noch gar
+                    nicht gebaut hat, keine Preisauskunft.
+      * `strang`    ein Strang traegt mindestens sein eigenes NVDEC-ffmpeg
+                    (DECODER_CUDA_MB, 358 MiB gemessen).
+      * `geometrie` hier gibt es in diesem Haus KEINE grosse gemessene
+                    Untergrenze, und eine erfundene waere schlimmer als keine:
+                    ob eine zweite Aufloesung viel kostet, haengt an den
+                    Bildgroessen der Anlage, und eine Anlage mit zwei
+                    aehnlichen Streams zahlt wirklich wenig. Das Kleinste, was
+                    dieses Haus je dafuer gemessen hat, sind die beiden
+                    Frame-Puffer eines Strangs (engine_cuda.Satz: y + uv, bei
+                    4K zusammen rund 12 MB, zitiert in worker_dienst.geometrie).
+                    Die Wache ist hier die PLATEAU-Regel und die Differenz
+                    zweier echter Messungen, nicht eine Untergrenze.
+    Eine Messung unter der Grenze wird VERWORFEN und gesagt, nie stillschweigend
+    benutzt: ein zu kleiner Preis macht die Leiter zu gross."""
+    if art == "prozess":
+        return int(KONTEXT_HANDLES_CUDA_MB)
+    if art == "geometrie":
+        return int(GEOMETRIE_UNTERGRENZE_MB)
+    return int(DECODER_CUDA_MB)
+
+
+def preis_pruefen(art, mb, gesamt_mb=0, proben=0):
+    """Ist dieser gemessene Posten-Preis brauchbar? -> (ok, grund|None)
+
+    Fail-closed in die richtige Richtung: im Zweifel gilt die Tabelle. Geprueft
+    wird gegen die Karte selbst (ein Posten, der groesser ist als die ganze
+    Karte, ist eine kaputte Messung), gegen die Untergrenze oben und gegen die
+    Zahl der Stuetzstellen."""
+    try:
+        mb = int(mb)
+    except (TypeError, ValueError):
+        return False, "not a number"
+    if mb <= 0:
+        return False, f"{mb} MiB is not a price (0 or negative)"
+    g = int(gesamt_mb or 0)
+    if g > 0 and mb > g:
+        return False, f"{mb} MiB is larger than the whole card ({g} MiB)"
+    unten = preis_untergrenze_mb(art)
+    if mb < unten:
+        return False, (f"{mb} MiB is below what this posten costs at the very "
+                       f"least ({unten} MiB measured) — the process had not "
+                       f"built its models yet")
+    if int(proben or 0) < PREIS_MIN_PROBEN:
+        return False, (f"only {int(proben or 0)} sample(s), {PREIS_MIN_PROBEN} "
+                       f"needed (a plateau, not a moment)")
+    return True, None
+
+
+def preise_wirksam(preise=None):
+    """WELCHE PREISE GELTEN — gemessene vor Tabelle. -> (mb, quelle, gemessen)
+
+    `preise` ist das Ergebnis von `core.vrampreise.preise_ableiten`: je Posten
+    {"mb": …, "datum": "YYYY-MM-DD", "proben": n, …} oder nichts. Was fehlt,
+    kommt aus der Tabelle — sie bleibt Startwert und Rueckfall, denn eine Anlage
+    ohne eigene Messung soll genauso planen wie bisher.
+    `quelle` sagt JE POSTEN, woher die Zahl kommt; `gemessen` traegt nur die
+    wirklich gemessenen Werte (fuer /health: geplant und gemessen nebeneinander,
+    nie nur eins)."""
+    mb = {"prozess": TAB_PROZESS_MB, "strang": TAB_STRANG_MB,
+          "geometrie": TAB_GEOMETRIE_MB}
+    tab = f"tabelle (fassung {TABELLE_FASSUNG})"
+    quelle = {art: tab for art in PREIS_ARTEN}
+    gemessen = {}
+    for art in PREIS_ARTEN:
+        eintrag = ((preise or {}).get(art) or {})
+        try:
+            wert = int(eintrag.get("mb") or 0)
+        except (TypeError, ValueError):
+            wert = 0
+        if wert > 0:
+            mb[art] = wert
+            quelle[art] = f"gemessen ({eintrag.get('datum') or '?'})"
+            gemessen[art] = wert
+    return mb, quelle, gemessen
+
+
+def pflicht_preis_mb(kind, preise=None):
     """WAS EIN RECHNENDER PROZESS MINDESTENS KOSTET — S0 + S1.
 
     EINE Groesse fuer Verweigerung, Wartebedingung, Leiter-Tabelle und Probe
@@ -688,10 +931,10 @@ def pflicht_preis_mb(kind):
         # RAM-Backends haben keine Tabelle und keine Leiter — dort gilt der
         # Fussabdruck, nicht der Pflichtpreis.
         return 0
-    return tabelle_summe(1)
+    return tabelle_summe(1, preise=preise)
 
 
-def straenge_preis_mb(kind, n):
+def straenge_preis_mb(kind, n, preise=None):
     """WAS `n` RECHENSTRAENGE NACH DEN GELTENDEN PREISEN KOSTEN (.535).
 
     Basis + n × Strang-Paket, ohne Zusatzgeometrien — also dieselbe Summe, die
@@ -704,7 +947,7 @@ def straenge_preis_mb(kind, n):
     s = stuetzwerte(kind)
     if not s or s.get("mass") != "vram" or int(n or 0) <= 0:
         return 0
-    return tabelle_summe(int(n))
+    return tabelle_summe(int(n), preise=preise)
 
 
 def posten_ausserhalb_mb(kind, n_straenge):
@@ -732,6 +975,49 @@ def posten_ausserhalb_mb(kind, n_straenge):
                        "kontext_und_handles_mb": kon,
                        "gemessen": bool(KONTEXT_HANDLES_GEMESSEN),
                        "beleg": KONTEXT_HANDLES_BELEG}
+
+
+def mindest_preis_mb(kind, preise=None):
+    """DER MINIMALMODUS-PREIS: EIN Strang, EINE Geometrie. -> MB (0 = kein
+    Karten-Backend)
+
+    .544 A (Feldbefund 21.09.2026): zwischen „die Karte traegt den vollen
+    Pflichtpreis" und „gar keine Erkennung" lag bis .543 NICHTS. Auf einer
+    8-GB-Karte mit fuenf Live-Waechtern fehlten 11 MiB am Pflichtpreis — und die
+    Anlage stand still, statt mit einem Strang und einer Aufloesung zu rechnen.
+    Der Pflichtpreis plant eine ZWEITE Geometrie fest ein (GEOMETRIEN_IN_ANKERN,
+    damit ein Wechsel zwischen 1080p und 4K nicht 24-36 s Neubau kostet); wer
+    sie nicht bezahlen kann, kann immer noch EINE Aufloesung rechnen und zahlt
+    den Neubau beim Wechsel. Das ist langsamer und ehrlich — Stillstand ist
+    keines von beidem.
+
+    EINE Groesse fuer Leiter, Start-Tor, Waechter-Reduktion und Probe: wer hier
+    eine zweite Zahl hinschreibt, baut die Stelle, an der Gate und Meldung
+    auseinanderlaufen (genau der Widerspruch, den .544 C auflöst)."""
+    s = stuetzwerte(kind)
+    if not s or s.get("mass") != "vram":
+        return 0
+    return tabelle_summe(1, 1, preise=preise)
+
+
+def waechter_frei_mb(n_jetzt, n_weg, kind):
+    """WAS DAS ABSCHALTEN VON `n_weg` WAECHTERN FREI MACHT. -> MB
+
+    Aus den GEMESSENEN Posten (`waechter_posten_mb`), nicht aus einer eigenen
+    Rechnung: die Engine traegt die Modelle EINMAL, jeder Waechter sein eigenes
+    ffmpeg — der erste abgeschaltete Waechter gibt deshalb weniger her als der
+    letzte, und eine lineare Schaetzung waere in beide Richtungen falsch.
+
+    EHRLICHE GRENZE, benannt: das ist eine VORHERSAGE aus unseren Posten, keine
+    Messung dieser Anlage ([[ersatzmessungen-sind-hypothesen]]). Ob wirklich so
+    viel frei wird, zeigt erst der gemessene Frei-Wert danach — und genau
+    deshalb entscheidet die Leiter beim naechsten Start neu, statt diese Zahl zu
+    glauben."""
+    n = max(0, int(n_jetzt or 0))
+    weg = max(0, min(n, int(n_weg or 0)))
+    if weg <= 0:
+        return 0
+    return max(0, waechter_posten_mb(n, kind) - waechter_posten_mb(n - weg, kind))
 
 
 def waechter_abzug_mb(n_waechter, kind, engine_alter_s=None):
@@ -790,7 +1076,7 @@ def arena_deckel_mb(kind, budget_mb, n_straenge):
     return max(ARENA_DECKEL_MIN_MB, int(roh))
 
 
-def leiter(kind, worker_budget_mb, vorschlag, nutzer_n=0):
+def leiter(kind, worker_budget_mb, vorschlag, nutzer_n=0, preise=None):
     """DIE LEITER, seit .535 aus der MESSTABELLE statt aus Ankern/Eichung.
 
     -> dict {n, g_zusatz, geometrien_max, summe_mb, stufen[], quelle, grund, …}
@@ -816,7 +1102,13 @@ def leiter(kind, worker_budget_mb, vorschlag, nutzer_n=0):
     .535 (Ausbau): `eich`, `karte`, `gesamt_mb`, `waechter_n` und `planung`
     sind aus der Signatur VERSCHWUNDEN. Sie gehoerten zur Preis-Messung, die es
     nicht mehr gibt; als tote Parameter stehenzulassen hiesse, dem naechsten
-    Leser eine Wahl vorzugaukeln, die keine ist."""
+    Leser eine Wahl vorzugaukeln, die keine ist.
+
+    .544 B: `preise` sind die auf DIESER Karte gemessenen Posten (s.
+    `preise_wirksam` und `core.vrampreise`). Sie gelten VOR der Tabelle, sobald
+    sie vorliegen; was fehlt, kommt weiter aus der Tabelle. Die Leiter selbst
+    rechnet unveraendert — sie bekommt nur Zahlen, die von hier stammen statt
+    von einer fremden Karte, und sagt je Posten, welche das ist."""
     s = stuetzwerte(kind)
     if not s or s.get("mass") != "vram":
         return None
@@ -830,14 +1122,19 @@ def leiter(kind, worker_budget_mb, vorschlag, nutzer_n=0):
     # liest ihn nicht mehr. Was wirklich schneller ist, sagt die Messung, und
     # wem das zu viel ist, setzt `worker_straenge`.
     obergrenze = min(wunsch or STRAENGE_MAX, STRAENGE_MAX)
+    # .544 B: DIE GELTENDEN PREISE — gemessen vor Tabelle, an EINER Stelle
+    # aufgeloest. Von hier an rechnet die Leiter mit `p[...]` statt mit den
+    # TAB_*-Konstanten; ein uebersehenes Literal waere genau die Stelle, an der
+    # Plan und Meldung auseinanderlaufen.
+    p, preis_quelle, preis_gemessen = preise_wirksam(preise)
     g = int(GEOMETRIEN_IN_ANKERN)
-    pflicht = tabelle_summe(1, g)
-    stufen = [{"stufe": "S0", "art": "prozess", "preis_mb": TAB_PROZESS_MB,
+    pflicht = tabelle_summe(1, g, preise=preise)
+    stufen = [{"stufe": "S0", "art": "prozess", "preis_mb": p["prozess"],
                "gebaut": True, "grund": "pflicht: Prozess mit erstem Strang "
                                         "und erster Geometrie"}]
     for _ in range(max(0, g - 1)):
         stufen.append({"stufe": f"S{len(stufen)}", "art": "geometrie",
-                       "preis_mb": TAB_GEOMETRIE_MB, "gebaut": True,
+                       "preis_mb": p["geometrie"], "gebaut": True,
                        "grund": "pflicht: fest eingeplante Aufloesung"})
     n, summe = 1, pflicht
     durchsatz_moeglich = False
@@ -847,39 +1144,41 @@ def leiter(kind, worker_budget_mb, vorschlag, nutzer_n=0):
             # Der harte Riegel. Traegt die Karte noch mehr, ist das eine
             # Auskunft und keine Nebensache — sie steht als `grund: max` in
             # /health, damit niemand den Riegel fuer die Karte haelt.
-            if summe + TAB_STRANG_MB <= budget:
+            if summe + p["strang"] <= budget:
                 durchsatz_moeglich = True
                 stufen.append({"stufe": f"S{len(stufen)}", "art": "strang",
-                               "preis_mb": TAB_STRANG_MB, "gebaut": False,
+                               "preis_mb": p["strang"], "gebaut": False,
                                "grund": f"uebersprungen: harter Riegel "
                                         f"STRAENGE_MAX {STRAENGE_MAX}"})
             break
         if n + 1 > obergrenze:
-            if summe + TAB_STRANG_MB <= budget:
+            if summe + p["strang"] <= budget:
                 durchsatz_moeglich = True
             stufen.append({"stufe": name, "art": "strang",
-                           "preis_mb": TAB_STRANG_MB, "gebaut": False,
+                           "preis_mb": p["strang"], "gebaut": False,
                            "grund": f"uebersprungen: obergrenze {obergrenze} "
                                     f"({'nutzerwahl' if wunsch else 'durchsatz'})"})
             break
-        if summe + TAB_STRANG_MB > budget:
+        if summe + p["strang"] > budget:
             stufen.append({"stufe": name, "art": "strang",
-                           "preis_mb": TAB_STRANG_MB, "gebaut": False,
-                           "grund": (f"ausgelassen: preis {TAB_STRANG_MB} MiB > "
+                           "preis_mb": p["strang"], "gebaut": False,
+                           "grund": (f"ausgelassen: preis {p['strang']} MiB > "
                                      f"rest {max(0, budget - summe)} MiB")})
             break
-        summe += TAB_STRANG_MB
+        summe += p["strang"]
         n += 1
         stufen.append({"stufe": name, "art": "strang",
-                       "preis_mb": TAB_STRANG_MB, "gebaut": True, "grund": None})
-    quelle = f"tabelle (fassung {TABELLE_FASSUNG})"
+                       "preis_mb": p["strang"], "gebaut": True, "grund": None})
     return {"n": n, "g_zusatz": 0, "geometrien_max": g,
-            "summe_mb": summe, "stufen": stufen, "quelle": "tabelle",
-            "preis_quelle": {"prozess": quelle, "strang": quelle,
-                             "geometrie": quelle},
-            "preise_mb": {"prozess": TAB_PROZESS_MB, "strang": TAB_STRANG_MB,
-                          "geometrie": TAB_GEOMETRIE_MB},
-            "gemessen_mb": {}, "tabelle_beleg": TABELLE_BELEG,
+            "summe_mb": summe, "stufen": stufen,
+            # `quelle` ist die Auskunft in EINEM Wort: „gemessen", sobald
+            # irgendein Posten von dieser Karte stammt, sonst „tabelle". Je
+            # Posten steht es darunter — eine Zahl, die halb gemessen ist, darf
+            # sich nicht ganz gemessen nennen.
+            "quelle": "gemessen" if preis_gemessen else "tabelle",
+            "preis_quelle": dict(preis_quelle),
+            "preise_mb": dict(p),
+            "gemessen_mb": dict(preis_gemessen), "tabelle_beleg": TABELLE_BELEG,
             "obergrenze": obergrenze,
             "budget_mb": budget, "pflicht_preis_mb": pflicht,
             "unter_pflicht": budget < pflicht,
@@ -893,21 +1192,28 @@ def leiter(kind, worker_budget_mb, vorschlag, nutzer_n=0):
 
 
 def leiter_text(kind, lt):
-    """Die Leiter als EINE Log-Zeile (Englisch wie die Nachbarzeilen)."""
+    """Die Leiter als EINE Log-Zeile (Englisch wie die Nachbarzeilen).
+
+    .544 B: die Zeile sagt, WOHER die Preise kommen. Solange sie aus der Tabelle
+    kommen, steht dort wie bisher deren Beleg; sobald ein Posten auf DIESER
+    Karte gemessen wurde, steht das MIT Datum davor. Eine Zeile, die weiter „aus
+    der Messtabelle" behauptet, waehrend die Zahlen von hier stammen, waere
+    genau die luegende Diagnose (K1)."""
     if not lt:
         return ""
     gebaut = [st["stufe"] for st in lt["stufen"] if st["gebaut"]]
     pm = lt.get("preise_mb") or {}
-    herkunft = ", ".join(f"{art} {pm.get(art, '?')} MiB"
-                         for art in ("prozess", "geometrie", "strang"))
+    pq = lt.get("preis_quelle") or {}
+    herkunft = ", ".join(f"{art} {pm.get(art, '?')} MiB ({pq.get(art, '?')})"
+                         for art in PREIS_ARTEN)
+    woher = preis_herkunft_text(pq, lt.get("gemessen_mb"))
     return (f"ladder {','.join(gebaut)} = {lt['summe_mb']} MiB "
             f"({lt['n']} thread(s), {lt['geometrien_max']} geometries) of "
-            f"{lt['budget_mb']} MiB budget; prices from the measurement table "
-            f"(version {TABELLE_FASSUNG}, {TABELLE_BELEG})"
+            f"{lt['budget_mb']} MiB budget; {woher}"
             + (f" [{herkunft}]" if herkunft else ""))
 
 
-def _fail_closed(aus, kind, vor, warum):
+def _fail_closed(aus, kind, vor, warum, preise=None):
     """DIE KARTE IST NICHT MESSBAR — ein Strang, Tabellen-Deckel, rot.
 
     Bis .530 fiel dieser Fall auf den gemessenen Durchsatz-Wert zurueck, also
@@ -916,7 +1222,7 @@ def _fail_closed(aus, kind, vor, warum):
     gewagt. Der Durchsatz-Vorschlag ist auf Karten-Backends nie mehr der
     Rueckfall. Die Nutzer-Zahl gilt hier ebenfalls nicht nach oben — sie ist auf
     diesem Backend eine Obergrenze, und die kleinste Obergrenze ist ein Strang."""
-    pflicht = pflicht_preis_mb(kind)
+    pflicht = pflicht_preis_mb(kind, preise=preise)
     posten_mb, posten = posten_ausserhalb_mb(kind, 1)
     # HIER ist der Pflichtpreis wirklich das Budget: es gibt keine Messung, aus
     # der ein groesseres folgen koennte (.532 aendert nur den gemessenen Weg).
@@ -948,13 +1254,17 @@ def _fail_closed(aus, kind, vor, warum):
 
 
 def _kartenhaushalt(aus, s, kind, worker_budget, vor, gesamt,
-                    n_waechter, gem, res, dienst, wae):
+                    n_waechter, gem, res, dienst, wae, preise=None):
     """DER KARTENHAUSHALT (.531): aus dem Budget die Leiter, aus der Leiter den
-    Arena-Deckel. EINE Rechnung fuer Straenge UND Geometrien (Defekt 4)."""
-    lt = leiter(kind, worker_budget, vor, nutzer_n=aus["nutzer_n"])
+    Arena-Deckel. EINE Rechnung fuer Straenge UND Geometrien (Defekt 4).
+
+    .544 B: `preise` sind die auf dieser Karte gemessenen Posten; sie gehen
+    unveraendert in BEIDE Leitern — die gewaehlte und die Formel-Leiter daneben.
+    Zwei Leitern mit verschiedenen Preisen waeren zwei Wahrheiten."""
+    lt = leiter(kind, worker_budget, vor, nutzer_n=aus["nutzer_n"], preise=preise)
     # Dieselbe Leiter OHNE die Nutzer-Obergrenze: das ist die Zahl, die neben der
     # gewaehlten stehen muss ('du hast 3 gewaehlt, die Karte traegt 1').
-    lt_formel = leiter(kind, worker_budget, vor, nutzer_n=0)
+    lt_formel = leiter(kind, worker_budget, vor, nutzer_n=0, preise=preise)
     pflicht = lt["pflicht_preis_mb"]
     aus["leiter"] = lt
     aus["worker_budget_mb"] = worker_budget
@@ -979,14 +1289,20 @@ def _kartenhaushalt(aus, s, kind, worker_budget, vor, gesamt,
         grund = "zu_klein"
         aus["zustand"] = "rot"
         aus["verweigert"] = True
+        # .544 B: DIE ZAHLEN IM HINWEIS SIND DIE GELTENDEN, nicht die der
+        # Tabelle. Standen dort weiter 1940/1235, waehrend die Leiter mit
+        # gemessenen Preisen rechnete, waere die Erklaerung von der Rechnung
+        # abgekoppelt — und der Betreiber koennte die Absage nicht nachrechnen.
+        _pw, _pq, _pg = preise_wirksam(preise)
         aus["hinweis"] = (
             f"the card does not carry one compute thread: {worker_budget} "
-            f"{einheit} budget against {pflicht} {einheit} from the measurement "
-            f"table ({TAB_PROZESS_MB} process incl. first geometry + "
-            f"{TAB_GEOMETRIE_MB} for the second). The worker is NOT started "
-            f"into this. Turn off live watchers, lower worker_vram_reserve_mb, "
-            f"set worker_vram_mb by hand if you know better, or run the cpu "
-            f"image variant")
+            f"{einheit} budget against {pflicht} {einheit} "
+            f"({_pw['prozess']} process incl. first geometry + "
+            f"{_pw['geometrie']} for the second, "
+            f"{preis_herkunft_text(_pq, _pg)}). "
+            f"The worker is NOT started into this. Turn off live watchers, "
+            f"lower worker_vram_reserve_mb, set worker_vram_mb by hand if you "
+            f"know better, or run the cpu image variant")
     else:
         n, g = lt["n"], lt["g_zusatz"]
         posten_mb, posten = posten_ausserhalb_mb(kind, n)
@@ -1009,7 +1325,8 @@ def _kartenhaushalt(aus, s, kind, worker_budget, vor, gesamt,
                 "posten_ausserhalb_mb": posten_mb, "posten": posten})
     if aus["frei_quelle"] == "gemessen":
         _eig = int(aus.get("laufend_eigen_mb") or 0)
-        frei_text = (f"{gem} {einheit} really free on the card (measured)"
+        frei_text = (f"{gem} {einheit} really free on the card "
+                     f"({frei_mess_kennung(aus)})"
                      + (f" + {_eig} {einheit} the running worker holds itself "
                         f"(already counted in the ladder, not foreign use)"
                         if _eig else "")
@@ -1017,9 +1334,9 @@ def _kartenhaushalt(aus, s, kind, worker_budget, vor, gesamt,
                      f"reserve ({aus.get('reserve_quelle') or 'formel'}) "
                      f"- {aus['waechter_abzug_mb']} guards"
                      f"({aus['waechter_n']}, {aus['waechter_abzug_grund']}) "
-                     f"= {worker_budget} {einheit} budget, less than the "
-                     f"{aus['frei_gerechnet_mb']} {einheit} the posten sum would "
-                     f"have allowed — free measured instead of computed")
+                     f"= {worker_budget} {einheit} budget, "
+                     + frei_vergleich_text(worker_budget,
+                                           aus["frei_gerechnet_mb"], einheit))
     else:
         frei_text = (f"{gesamt} - {res} reserve "
                      f"({aus.get('reserve_quelle') or 'formel'}) - {dienst} service - {wae} "
@@ -1033,12 +1350,21 @@ def _kartenhaushalt(aus, s, kind, worker_budget, vor, gesamt,
         f"context/handles"
         + ("" if posten.get("gemessen") else ", context/handles UNMEASURED")
         + f") -> {n} thread(s), {aus['geometrien_max']} geometries ({grund})")
+    # .544 M1: DER RUECKFALL WIRD LAUT GESAGT. Eine Leiter, die auf einem
+    # Moment plant, obwohl sie ein Band versprochen hat, waere genau die
+    # Diagnose-Luege — der Betreiber soll den Unterschied am Rechenweg sehen.
+    if aus.get("frei_band_grund"):
+        aus["rechenweg"] += (f"; NO free-memory band available "
+                             f"({aus['frei_band_grund']}) — planned on the "
+                             f"momentary value {aus.get('frei_moment_mb')} "
+                             f"{einheit} instead")
     return _nutzer_wahl(aus)
 
 
 def straenge(gesamt_mb, n_waechter, kind, vorschlag, g_zusatz=0, nutzer_n=0,
              frei_gemessen_mb=0, engine_alter_s=None,
-             laufend_eigen_mb=0, reserve_wunsch=-1, laufend_n=0):
+             laufend_eigen_mb=0, reserve_wunsch=-1, laufend_n=0,
+             frei_band=None, preise=None):
     """WIE VIELE RECHENSTRAENGE DIESE MASCHINE TRAEGT — die eine Antwort.
 
     Sie ist das Minimum aus zwei Groessen, und beide sind gemessen:
@@ -1081,6 +1407,17 @@ def straenge(gesamt_mb, n_waechter, kind, vorschlag, g_zusatz=0, nutzer_n=0,
     Formel die vorsichtigere. Welche gezogen hat, steht als `frei_quelle` im
     Ergebnis und im Rechenweg.
 
+    .544 M1 — `frei_gemessen_mb` IST EIN BAND, KEIN MOMENT: der Aufrufer reicht
+    seit .544 das MINIMUM des kartenweit freien Speichers ueber
+    `FREI_BAND_FENSTER_S` herein (s. dort: 145 Vorsorge-Ausstiege an einem
+    Werktag, weil der eigene Waechter-Verbrauch atmet und die Momentaufnahme ein
+    Tal traf). Gerechnet wird damit unveraendert — die Zahl ist dieselbe Art
+    Zahl, nur vorsichtiger erhoben. `frei_band` traegt die Herkunft mit
+    (`band_mb`, `fenster_s`, `n`, `moment_mb`, `grund`), damit /health und der
+    Rechenweg sagen koennen, WORAUF geplant wurde; gab der Ring zu wenige
+    Stuetzstellen her, steht dort der Grund und der Rechenweg sagt wieder
+    „measured".
+
     WAS DER LAUFENDE WORKER HAELT (`laufend_eigen_mb`, .534): auf Karten-
     Backends ist `frei_gemessen_mb` das JETZT der Karte — ein schon laufender
     Worker steht darin als belegt, waehrend die Leiter ihn daneben von null auf
@@ -1117,6 +1454,13 @@ def straenge(gesamt_mb, n_waechter, kind, vorschlag, g_zusatz=0, nutzer_n=0,
            # daneben — eine Auskunft, die man nachrechnen kann.
            "frei_quelle": "gerechnet", "frei_gerechnet_mb": 0,
            "frei_gemessen_mb": max(0, int(frei_gemessen_mb or 0)),
+           # .544 M1: WORAUF GEPLANT WURDE — das Band, sein Fenster, seine
+           # Stuetzstellen und der Momentwert daneben. Alle vier stehen auf
+           # JEDEM Rueckgabeweg (auch den frueh abbiegenden), denn ein fehlendes
+           # Feld liest sich wie „kein Band" und waere dort eine Behauptung.
+           "frei_band_mb": None, "frei_band_fenster_s": 0, "frei_band_n": 0,
+           "frei_moment_mb": max(0, int(frei_gemessen_mb or 0)),
+           "frei_band_grund": None,
            "laufend_eigen_mb": 0, "laufend_eigen_quelle": None,
            "reserve_quelle": "formel",
            # .543 (Issue #32): DER ROHE WUNSCH, auf JEDEM Rueckgabeweg — auch auf
@@ -1143,6 +1487,15 @@ def straenge(gesamt_mb, n_waechter, kind, vorschlag, g_zusatz=0, nutzer_n=0,
            # „gemessen", und das waere genau die luegende Diagnose.
            "preis_quelle_stufen": {}, "preise_mb": {},
            "zustand": "gruen", "verweigert": False, "unter_formel": None}
+    # .544 M1: die Herkunft des Frei-Werts, sofort und vor jedem Rueckgabeweg.
+    _fb = frei_band if isinstance(frei_band, dict) else {}
+    if _fb:
+        aus["frei_band_mb"] = _fb.get("band_mb")
+        aus["frei_band_fenster_s"] = int(_fb.get("fenster_s") or 0)
+        aus["frei_band_n"] = int(_fb.get("n") or 0)
+        aus["frei_band_grund"] = _fb.get("grund")
+        if _fb.get("moment_mb") is not None:
+            aus["frei_moment_mb"] = max(0, int(_fb.get("moment_mb") or 0))
     if not s:
         if kind in OHNE_DECKEL:
             # E6 (17.09.2026): ein Backend MIT eigenem Geraetespeicher, aber OHNE
@@ -1170,7 +1523,8 @@ def straenge(gesamt_mb, n_waechter, kind, vorschlag, g_zusatz=0, nutzer_n=0,
             # nichts wissen. Das ist die Richtung, in der der Feldvorfall vom
             # 15.09. lag. Jetzt: ein Strang, Anker-Deckel, rot.
             return _fail_closed(aus, kind, vor,
-                                "no card size readable (nvidia-smi total is 0)")
+                                "no card size readable (nvidia-smi total is 0)",
+                                preise=preise)
         aus["grund"] = "keine_grenze"
         aus["hinweis"] = (f"no readable machine limit (no cgroup memory.max, no "
                           f"nvidia-smi total) — the memory formula cannot be applied; "
@@ -1184,7 +1538,7 @@ def straenge(gesamt_mb, n_waechter, kind, vorschlag, g_zusatz=0, nutzer_n=0,
         # diesem Mass eine Behauptung — s. o.
         return _fail_closed(aus, kind, vor,
                             "free card memory not measurable (no usable "
-                            "nvidia-smi answer)")
+                            "nvidia-smi answer)", preise=preise)
     # .543: DERSELBE gepruefte Wert wie im Ergebnis oben, nicht der rohe. Sonst
     # entschieden die beiden Stellen bei einem krummen Config-Wert verschieden —
     # das Ergebnis saegte „Automatik", die Rechnung fiele mit ValueError.
@@ -1228,7 +1582,7 @@ def straenge(gesamt_mb, n_waechter, kind, vorschlag, g_zusatz=0, nutzer_n=0,
     # dieselbe Klasse Fehler in die andere Richtung.
     eigen_lauf, eigen_quelle = 0, None
     if s["mass"] == "vram" and gem > 0 and int(laufend_n or 0) > 0:
-        _geplant = tabelle_summe(int(laufend_n))
+        _geplant = tabelle_summe(int(laufend_n), preise=preise)
         _rest = max(0, gesamt - gem - dienst - wae)
         eigen_lauf = min(int(_geplant), int(_rest))
         eigen_quelle = "tabelle" if eigen_lauf else None
@@ -1278,7 +1632,7 @@ def straenge(gesamt_mb, n_waechter, kind, vorschlag, g_zusatz=0, nutzer_n=0,
                 "engine_alter_s": engine_alter_s})
     if s["mass"] == "vram":
         return _kartenhaushalt(aus, s, kind, frei, vor, gesamt,
-                               n_waechter, gem, res, dienst, wae)
+                               n_waechter, gem, res, dienst, wae, preise=preise)
     # Der groesste Strang-Satz, der noch hineinpasst — hoechstens der Vorschlag.
     passt = 0
     for n in range(1, vor + 1):
@@ -1304,13 +1658,14 @@ def straenge(gesamt_mb, n_waechter, kind, vorschlag, g_zusatz=0, nutzer_n=0,
         aus["grund"] = "durchsatz" if passt == vor else "speicher"
     einheit = "MiB" if s["mass"] == "vram" else "MB"
     if frei_quelle == "gemessen":
-        frei_text = (f"{gem} {einheit} really free on the card (measured) - "
+        frei_text = (f"{gem} {einheit} really free on the card "
+                     f"({frei_mess_kennung(aus)}) - "
                      f"{res} reserve ({aus.get('reserve_quelle') or 'formel'}) "
-                     f"= {frei} {einheit} free, less than the "
-                     f"{frei_gerechnet} {einheit} the posten sum "
-                     f"({gesamt} - {res} reserve - {dienst} service - {wae} "
-                     f"guards({aus['waechter_n']})) would have allowed — free "
-                     f"measured instead of computed")
+                     f"= {frei} {einheit} free, "
+                     + frei_vergleich_text(
+                         frei, frei_gerechnet, einheit,
+                         f"{gesamt} - {res} reserve - {dienst} service - "
+                         f"{wae} guards({aus['waechter_n']})"))
     else:
         frei_text = (f"{gesamt} - {res} reserve "
                      f"({aus.get('reserve_quelle') or 'formel'}) - {dienst} service "

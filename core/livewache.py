@@ -2362,6 +2362,74 @@ def status_lesen(cfg, jetzt=time.time):
     return d, alter <= 3 * HERZSCHLAG_S
 
 
+# --- .544 A: DIE VOM DIENST ZURUECKGENOMMENEN WAECHTER -----------------------
+# WOZU: faellt die Karte unter das, was EIN Rechenstrang kostet, nimmt der
+# Dienst Live-Waechter vom Netz, damit die Erkennung ueberhaupt laeuft
+# (Vorrang-Entscheid 21.09.2026). Damit er sie spaeter wieder anschalten kann —
+# auch nach einem Neustart —, muss irgendwo stehen, WELCHE er es waren und
+# WARUM. Der Schalter selbst bleibt der normale (`live_schalter`): eine zweite
+# Abschalt-Mechanik waere ein zweiter Weg mit eigener Wahrheit.
+# EHRLICHE GRENZE, benannt: der Betreiber sieht die betroffenen Kacheln in der
+# Oberflaeche als ausgeschaltet — es IST ein Eingriff in seinen Schalter. Dass
+# er automatisch geschah, steht in /health.live (`reduziert*`) und im Log.
+REDUZIERT_DATEI = "live_reduziert.json"
+
+
+def reduziert_lesen(cfg):
+    """Der Merker der automatischen Waechter-Reduktion -> dict (leer = keine).
+    Unlesbar heisst „keine" — dann bleibt hoechstens ein Waechter aus, den der
+    Betreiber selbst wieder einschalten kann; das ist die harmlosere Richtung
+    als ein Merker, dem niemand trauen kann."""
+    pfad = os.path.join(cfg.get("data_dir") or os.path.join(WURZEL, "verify_data"),
+                        "state", REDUZIERT_DATEI)
+    try:
+        with open(pfad) as f:
+            d = json.load(f)
+    except Exception:
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def reduziert_schreiben(cfg, daten):
+    """Den Merker atomar setzen ({} loescht ihn). -> True|False"""
+    pfad = os.path.join(cfg.get("data_dir") or os.path.join(WURZEL, "verify_data"),
+                        "state", REDUZIERT_DATEI)
+    try:
+        if not daten:
+            try:
+                os.remove(pfad)
+            except OSError:
+                pass
+            return True
+        _atomar_schreiben(pfad, daten)
+        return True
+    except Exception:
+        return False
+
+
+def reduziert_entfernen(cfg, name):
+    """EINEN Waechter aus dem Merker nehmen -> bool (stand er ueberhaupt drin?)
+
+    WOZU (.544 Teil 6, BEF-4 der CUDA-Abnahme 21.09.2026): schaltet der
+    Betreiber einen zurueckgestellten Waechter SELBST wieder ein, hat er
+    entschieden — ab da ist der Eintrag eine Falschaussage. In der Abnahme
+    meldete /health beide Waechter noch Stunden spaeter als `reduziert`,
+    obwohl sie liefen, und die Rueckhol-Rechnung kam mit den doppelt
+    gezaehlten Namen nie ueber ihre Schwelle.
+
+    Der Merker behaelt `ts` und `grund` der urspruenglichen Reduktion, solange
+    noch Namen drin stehen — es ist dieselbe Reduktion, nur um einen Namen
+    kuerzer. Bleibt keiner uebrig, verschwindet die Datei (leerer Merker =
+    keine Reduktion, dieselbe Aussage wie nach der System-Rueckkehr)."""
+    merk = reduziert_lesen(cfg)
+    namen = [n for n in (merk.get("namen") or ()) if n]
+    if name not in namen:
+        return False
+    rest = [n for n in namen if n != name]
+    reduziert_schreiben(cfg, dict(merk, namen=rest) if rest else {})
+    return True
+
+
 def kommando_schreiben(cfg, aktion, kamera, **extra):
     """Dienst -> Engine: Auftrag (Quelltest `test` / Last-Messung `messung`)
     als atomare Kommando-Datei; die Engine liest sie im Status-Takt
@@ -4137,6 +4205,11 @@ class Kachel:
     def __init__(self, name, guard, defaults):
         self.name = name
         self.cfg = guard
+        # .544 A: WANN DIESER WAECHTER AUFGENOMMEN WURDE. Der Dienst nimmt bei
+        # Kartendruck den ZULETZT gestarteten zuerst vom Netz (wer am laengsten
+        # laeuft, gehoert am ehesten zum Alltag der Anlage) — ohne diese Zahl
+        # bliebe nur die alphabetische Reihenfolge, und die waere willkuerlich.
+        self.start_ts = time.time()
         self.zustand = "startet"                 # aus KACHEL_ZUSTAENDE
         self.zustand_grund = ""
         self.stop_ev = threading.Event()         # Einzel-Stopp (Reload je Waechter,
@@ -7166,6 +7239,9 @@ class Engine:
                      if k.letztes_bild_mono is not None else None)
             d["kacheln"][k.name] = {
                 "zustand": k.zustand, "grund": k.zustand_grund,
+                # .544 A: seit wann diese Kachel laeuft (Wanduhr) — die
+                # Reihenfolge der Waechter-Reduktion haengt daran.
+                "start_ts": k.start_ts,
                 "letztes_bild_ts": k.letztes_bild_wand,
                 "letztes_bild_alter_s": alter,
                 "letzter_trigger_ts": k.letzter_trigger_wand,

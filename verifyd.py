@@ -1598,6 +1598,13 @@ def load_config(path):
                          # .534 (Nutzer-Entscheid 15.09.): die Reserve ist
                          # waehlbar. -1 = Automatik nach Formel wie bisher.
                          ("worker_vram_reserve_mb", -1),
+                         # .544 A: WER GEWINNT, wenn die Karte nicht beides
+                         # traegt — die Ereignis-Erkennung oder die Live-Wache.
+                         # Werkseitig die Erkennung: sie ist der Kern dieses
+                         # Programms, und eine Anlage, die gar nichts mehr
+                         # erkennt, ist schlimmer als eine mit einem Waechter
+                         # weniger.
+                         ("vorrang", "erkennung"),
                          ("offen_max_min", 60),
                          # .534 (B9b): ab welchem Alter ein von UNS per API
                          # angelegtes Frigate-Ereignis nachtraeglich geschlossen
@@ -2141,7 +2148,17 @@ KARTE_FEHLVERSUCHE_MAX = 3
 # einen Platz nach PLATZ_STUMM_FRIST_S (120 s) ein, wenn er kein Lebenszeichen
 # sieht. 45 s ist weniger als die Haelfte davon — mit Puls in der Schleife, aber
 # auch ohne ihn bliebe Luft.
-KARTE_WARTE_FRIST_S = 45.0
+# .544: DIE ZAHL WOHNT JETZT IN `core.gpubudget` — der Worker braucht seit M2/M3
+# dieselbe Frist (warten statt bauen, warten vor dem einen Retry), und zwei
+# Literale fuer dieselbe Frage sind die K3-Klasse. Der NAME bleibt hier stehen:
+# die Wege dieses Moduls lesen ihn weiterhin, und die Probe e3_8 stellt ihn zum
+# Kuerzen der Uhr um.
+KARTE_WARTE_FRIST_S = _gpubudget.KARTE_WARTE_FRIST_S
+# .544 M3b: EIN RUECKFALL-SCHLOSS fuer Buehnen ohne `_zustand_lock`. Die Proben
+# stellen absichtlich nur Teile des Dienstes auf (s. e3_5/e3_2); ein Griff, der
+# an einem fehlenden Feld abstuerzt, wuerde dort gar nicht mehr geprueft. Es
+# ersetzt kein echtes Schloss — im Dienst gibt es `_zustand_lock` immer.
+_NULL_LOCK = threading.RLock()
 # WIE VIELE GLEICHARTIGE EREIGNISSE IN FOLGE EIN STRUKTURSIGNAL SIND.
 #
 # Die Zahl ist NICHT neu, sie war nur bisher ein Literal an einer einzigen Stelle:
@@ -2761,7 +2778,17 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
                              info=w1, puls=puls)      # P1: Lebenszeichen des Platzes
         dt = time.monotonic() - t0 - float(w1.get("wartezeit_s") or 0.0)
         frist = tmo
-        if antwort is None and timeout_s is None:
+        # .544 M3b: EIN FREMDVERSCHULDETER ABGANG BEKOMMT HIER KEINEN
+        # SOFORT-RETRY MEHR. Der Worker ist gerade weggegangen oder baut seine
+        # Arena neu auf (gemessen 24-36 s) — ein zweiter Anlauf in derselben
+        # Sekunde laeuft in genau dieses Fenster und scheitert fast
+        # zwangslaeufig. Im Feld war das der Weg, auf dem an einem Werktag 1077
+        # von 10279 Ereignissen (10,5 %) endgueltig verloren gingen. Der Job
+        # kehrt jetzt mit der Marke `fremdverschuldet` zurueck, und der Dienst
+        # stellt das Ereignis mit Backoff in die Warteschlange zurueck
+        # (`Service._zurueckstellen`). Watchdog und Worker-Tod behalten ihren
+        # Sofort-Retry unveraendert — dort hilft er (10.08. gemessen: 9,4 s).
+        if antwort is None and timeout_s is None and not w1.get("fremdverschuldet"):
             # Requeue-Strecke (Fix 10.08., nachgebessert F5): EINMAL sofort
             # nachfassen, statt den Pass zu verlieren und auf die Nachhol-
             # Runde zu warten (die kam am 10.08. erst 29 min nach dem Kill;
@@ -2789,22 +2816,16 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
             watchdog = dt >= tmo
             frist = tmo * 2 if watchdog else tmo
             with open(logpfad, "a") as lf:
-                if w1.get("fremdverschuldet"):
-                    # E3.1: der Worker-Prozess ist unter dem Job weggegangen
-                    # (Speicher-Zusage gerissen -> geordnetes Ende, harter Abbruch
-                    # der Wache, oder Tod). Diese Frage steht VOR beiden anderen,
-                    # weil sie die einzige ist, die der Rueckweg SICHER beantwortet
-                    # — und weil hier niemand bestraft werden darf: der Job hat
-                    # nichts falsch gemacht, der naechste Versuch laeuft auf einem
-                    # frischen Prozess. (Sie ersetzt den `lock_timeout`-Zweig aus
-                    # C3: ein Job-Lock, an dem sich etwas aufreihen koennte, gibt es
-                    # im Dienst nicht mehr.)
-                    lf.write(f"\nverifyd: the worker process went away while this "
-                             f"job was running (not this event's fault: "
-                             f"{getattr(worker, 'letzte_ursache', None) or '?'}) "
-                             f"— one immediate retry on a fresh worker "
-                             f"(deadline {frist}s)\n")
-                elif watchdog:
+                # .544 M3b: HIER STAND DER FREMDVERSCHULDET-ZWEIG (E3.1) mit
+                # seinem „one immediate retry on a fresh worker". Er ist nicht
+                # entfallen, sondern eine Ebene hoeher gewandert: diese Strecke
+                # wird fuer fremdverschuldete Abgaenge gar nicht mehr betreten
+                # (s. Bedingung oben), das Ereignis geht stattdessen mit Backoff
+                # in die Warteschlange des Dienstes zurueck. Der Grundsatz
+                # bleibt Wort fuer Wort: dieser Job hat nichts falsch gemacht,
+                # sein naechster Versuch laeuft auf einem frischen Prozess — nur
+                # eben nicht in derselben Sekunde.
+                if watchdog:
                     lf.write(f"\nverifyd: analyze watchdog fired after {dt:.0f}s "
                              f"(deadline {tmo}s) — one immediate retry on a "
                              f"fresh worker, deadline doubled to {frist}s\n")
@@ -2841,7 +2862,14 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
                        if _letzt.get("fremdverschuldet")
                        else "watchdog" if dt >= frist else "worker died")
                 lf.write(f"\nverifyd: analyze aborted ({art} after {dt:.0f}s, "
-                         f"deadline {frist}s)\n")
+                         f"deadline {frist}s)"
+                         # .544 M3b: … und was daraus wird. Ohne diesen Zusatz
+                         # las sich die Zeile wie das Ende des Ereignisses; sie
+                         # ist aber bei einem fremdverschuldeten Abgang erst der
+                         # Anfang der Rueckstellung.
+                         + (" — this event goes BACK into the queue, it is not "
+                            "booked as failed yet"
+                            if _letzt.get("fremdverschuldet") else "") + "\n")
                 # E3.3 (W2-B4/B5): DIE FRAGE MUSS DEN AUFRUFER ERREICHEN. Bis hier
                 # blieb „fremdverschuldet" in `w1`/`w2` liegen, also in run_analyze
                 # — der Aufrufer bekam ein nacktes `None` und konnte nicht
@@ -2860,6 +2888,15 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
                 if info is not None and (w1.get("haenger_verdacht")
                                          or w2.get("haenger_verdacht")):
                     info["haenger_verdacht"] = True
+                # .544: ... UND DER FEHLERTEXT GEHOERT AUCH DAZU. Bis .543 stand
+                # er nur in der `analyze.log` DIESES Ereignisses; im Dienst-Log
+                # blieb `analyse_none` ohne Ursache stehen (Vorfall 20./21.09.:
+                # `CL_OUT_OF_RESOURCES` in 24 Ereignis-Ordnern, kein einziges Mal
+                # im Log des Dienstes). Nur weiterreichen, nicht bewerten — wer
+                # ihn druckt, drosselt (`Service._analyse_none_melden`).
+                _u = getattr(worker, "letzte_ursache", None)
+                if info is not None and _u:
+                    info["fehler_text"] = str(_u)
                 _verwurf_melden(info, _registry.VERWURF_ANALYSE_NONE)
                 return None
             if not antwort.get("ok"):
@@ -2884,6 +2921,12 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
                 # eindeutig war, eingeordnet (core.frames.verwurf_grund) — ohne
                 # dieses Feld war der Feldfall H4 nicht von einem Watchdog-Riss
                 # zu unterscheiden.
+                # .544: DIES IST DER WEG DES VORFALLS — ein lebender Worker, der
+                # die Ausnahme sauber zurueckmeldet (`ok: false`, `fehler`). Der
+                # Text reist jetzt mit; gedruckt wird er gedrosselt beim
+                # Aufrufer.
+                if info is not None and antwort.get("fehler"):
+                    info["fehler_text"] = str(antwort.get("fehler"))
                 _verwurf_melden(info, antwort.get("verwurf_grund")
                                 or _registry.VERWURF_ANALYSE_NONE)
                 return None
@@ -3850,12 +3893,19 @@ class WorkerDienst:
 
         DREI AUSGAENGE, und die Unterscheidung ist der eigentliche Inhalt:
           * genug frei            -> starten.
-          * die Karte ist durch die EIGENEN Live-Waechter belegt -> NICHT warten.
-            Warten hilft nicht, die Waechter gehen nicht von selbst; der Job wird
-            sofort abgesagt, mit der Handlungsanweisung dazu.
-          * fremd belegt          -> bis zu KARTE_WARTE_FRIST_S warten, mit Puls.
+          * die Karte traegt nicht einmal EINEN Rechenstrang, auch ohne alles
+            Fremde -> sofort absagen, mit der Handlungsanweisung dazu. Hier
+            hilft Warten wirklich nicht, die Karte wird nicht groesser.
+          * belegt, egal von wem  -> bis zu KARTE_WARTE_FRIST_S warten, mit Puls.
             Ein Anzeige-Transcode ist meist in Sekunden vorbei.
-        Reisst die Frist, scheitert DIESER EINE Job. Der Dienst laeuft weiter."""
+        .544 M3c: DER ZWEITE FALL WAR BIS .543 WEITER GEFASST — die EIGENEN
+        Live-Waechter fuehrten zur sofortigen Absage („sie gehen nicht von
+        selbst"). Das stimmt fuer ihre Existenz, nicht fuer ihren VERBRAUCH: im
+        Feld schwankte der freie Speicher derselben Konstellation zwischen 381
+        und 1226 MiB, und die Absage traf an einem Werktag 142 Jobs. Jetzt wird
+        auch dort gewartet; die Handlungsanweisung steht in der Logzeile.
+        Reisst die Frist, geht DIESER EINE Job ueber `fremdverschuldet` in die
+        Warteschlange zurueck (M3b) statt verloren. Der Dienst laeuft weiter."""
         if not (self.p is None or self.p.poll() is not None):
             return None
         try:
@@ -3869,28 +3919,28 @@ class WorkerDienst:
         noetig = int(st.get("noetig_mb") or 0)
         if noetig <= 0:
             return None
-        # VERWEIGERT heisst „mit dem, was JETZT frei ist, traegt die Karte nicht
-        # einmal einen Rechenstrang". Das kann zweierlei sein, und die
-        # Unterscheidung entscheidet, ob Warten ueberhaupt etwas bringen kann:
-        #   * die Karte ist zu klein bzw. durch unsere EIGENEN Waechter belegt —
-        #     dann wird sie auch in 45 s nicht groesser, und der Job wird sofort
-        #     abgesagt, mit der Handlungsanweisung dazu;
-        #   * ein FREMDER Verbraucher haelt sie gerade — dann ist die Absage von
-        #     eben nur eine Momentaufnahme, und die Warteschleife unten ist genau
-        #     dafuer da. Ohne diese Unterscheidung wuerde ein Anzeige-Transcode
-        #     von zehn Sekunden den Worker dauerhaft aussperren.
-        if st.get("verweigert"):
-            _platz_ohne_fremde = (int(st.get("gesamt_mb") or 0)
-                                  - int(st.get("eigen_mb") or 0))
-            if _platz_ohne_fremde < noetig:
-                return (f"the card does not carry one compute thread "
+        # .544 C: HIER WIRD NICHT MEHR GERECHNET, HIER WIRD GELESEN.
+        # Bis .543 stellte dieses Tor die Frage „traegt die Karte?" ein zweites
+        # Mal und anders als die Leiter (`gesamt - eigen` gegen `noetig`). Im
+        # Feld standen deshalb zwei Saetze nebeneinander, die sich widersprachen:
+        # „The worker is NOT started into this" (Leiter-Meldung) und 13 Sekunden
+        # spaeter „worker started (pid 335, 1 compute thread(s))" (dieses Tor).
+        # Der Betreiber konnte nicht wissen, was gilt. Seitdem entscheidet die
+        # LEITER, und zwar einmal: `modus` sagt, was das System tut, und
+        # `warten_lohnt` sagt, ob ein Warten ueberhaupt etwas bringen kann (die
+        # Zahl dahinter steht in `worker_vram_start`, an genau einer Stelle).
+        #   * `verweigert` UND Warten lohnt nicht -> sofort absagen, mit dem
+        #     Satz, den auch das Log traegt.
+        #   * `verweigert`, aber die Karte truege es ohne Fremdverbrauch -> die
+        #     Absage war eine Momentaufnahme, unten wird gewartet (M3c).
+        if st.get("verweigert") and not st.get("warten_lohnt"):
+            return (st.get("modus_text")
+                    or (f"the card does not carry one compute thread "
                         f"({st.get('budget_mb')} MiB budget against "
-                        f"{st.get('pflicht_mb')} MiB needed, and even with nothing "
-                        f"foreign on the card there would be "
-                        f"{max(0, _platz_ohne_fremde)} MiB) — not starting the "
-                        f"worker. Turn off live watchers or set worker_vram_mb")
+                        f"{st.get('pflicht_mb')} MiB needed) — not starting the "
+                        f"worker"))
         t0 = time.monotonic()
-        gemeldet = False
+        gemeldet = eigen_gemeldet = False
         while True:
             frei, _alter, grund = self._karte_frei(st["kind"])
             if grund == "nicht_messbar":
@@ -3901,16 +3951,35 @@ class WorkerDienst:
             if frei >= noetig:
                 return None
             eigen = int(st.get("eigen_mb") or 0)
-            if eigen and frei + eigen >= noetig:
-                return (f"the card is held by our OWN live watchers ({eigen} MiB "
-                        f"for {st.get('waechter_n')}) — not waiting, they will not "
-                        f"go away on their own. Reduce live watchers or set "
-                        f"worker_vram_mb")
+            if eigen and frei + eigen >= noetig and not eigen_gemeldet:
+                # .544 M3c: HIER WURDE BIS .543 SOFORT ABGESAGT — „die Waechter
+                # gehen nicht von selbst". Das stimmt fuer ihre EXISTENZ, aber
+                # nicht fuer ihren VERBRAUCH: fuenf 4K-Waechter atmen (Decode,
+                # Nachtsicht-Umschaltung, Bewegungsschuebe), und im Feld schwankte
+                # der freie Speicher derselben Konstellation zwischen 381 und
+                # 1226 MiB. Die Absage traf an einem Werktag 142 Jobs, jeder
+                # sofort und ohne zweiten Blick. Gewartet wird deshalb GENAUSO
+                # gedeckelt wie beim fremden Verbraucher; die Handlungsanweisung
+                # bleibt in der Zeile, sie ist ja weiterhin richtig.
+                eigen_gemeldet = True
+                self.log(f"{self.name} start: the card is held by our OWN live "
+                         f"watchers ({eigen} MiB for {st.get('waechter_n')}) — "
+                         f"waiting up to {int(KARTE_WARTE_FRIST_S)}s for their "
+                         f"usage to dip ({frei} MiB free, {noetig} MiB needed). "
+                         f"Reduce live watchers or set worker_vram_mb")
             if (time.monotonic() - t0) >= KARTE_WARTE_FRIST_S:
+                # .544 M3b: DIESE ABSAGE VERLIERT DAS EREIGNIS NICHT MEHR. Der
+                # Aufrufer bucht sie als `fremdverschuldet` (s. `job`), und der
+                # Dienst stellt das Ereignis in die Warteschlange zurueck statt
+                # es als `analyse_none` abzuschreiben.
                 return (f"card memory did not free within "
                         f"{int(KARTE_WARTE_FRIST_S)}s ({frei} MiB free, {noetig} "
-                        f"MiB needed) — this job is refused, the service keeps "
-                        f"running")
+                        f"MiB needed"
+                        + (", held by our OWN live watchers — reduce live "
+                           "watchers or set worker_vram_mb" if eigen_gemeldet
+                           else "")
+                        + f") — this job goes back into the queue, the service "
+                        f"keeps running")
             if not gemeldet:
                 gemeldet = True
                 self.log(f"{self.name} start: waiting for card memory ({frei} MiB "
@@ -7241,10 +7310,29 @@ class Service:
                 # liefert deren Summe als Zahl — der Griff nach „N faces collected"
                 # im Log-Text ist damit weg. `reconcile_unbekannte` laeuft EINMAL am
                 # Ende des Auftrags, nicht je Haeppchen.
-                summe, fehler = self._sammle_fahren(tage=0.1, mit_migriere=False, timeout=600)
+                _si = {}
+                summe, fehler = self._sammle_fahren(tage=0.1, mit_migriere=False,
+                                                    timeout=600, info=_si)
                 if fehler:
+                    # .544: das Sammeln zaehlt in die Serie ueber ALLE Pfade.
+                    # Es laeuft durch denselben Worker-Prozess wie jede Analyse
+                    # — ein toter Rechenkontext faellt hier genauso auf, und auf
+                    # einem Grundstueck ohne Verkehr ist das unter Umstaenden
+                    # die EINZIGE Stelle, an der er auffaellt.
+                    # .544 Teil 2b: ABER NUR, WENN DER WORKER DABEI WAR. „kein
+                    # freier Analyse-Platz binnen Frist" ist eine Aussage ueber
+                    # die Vergabestelle — auf einer ausgelasteten Anlage waere
+                    # das der Weg vom Vollbetrieb in den Prozessschuss.
+                    if _si.get("worker_ausnahme"):
+                        self._serie_alle_buchen(True, "scenario collection")
                     self.log(f"scenario collection FAILED: {fehler}")
                 else:
+                    # .544 Teil 2b: EIN GELUNGENES SAMMELN HEILT. Es ist derselbe
+                    # Beweis wie eine gelungene Analyse — der Rechenkontext lebt.
+                    # Nur wenn wirklich ein Haeppchen gelaufen ist: ein Auftrag
+                    # ohne offene Ereignisse rechnet nichts und beweist nichts.
+                    if _si.get("haeppchen_n"):
+                        self._serie_alle_buchen(False, "scenario collection")
                     if summe:                                # nur bei echten neuen Gesichtern clustern
                         import anlernen
                         idents, _ = anlernen.reconcile_unbekannte()   # nimmt selbst den pool_lock
@@ -8598,7 +8686,7 @@ class Service:
                else prolog_kalt_s * self.SAMMEL_PROLOG_ABKLINGEN)
         return min(max(neu, 0.0), self.SAMMEL_PROLOG_MAX_S)
 
-    def _sammle_fahren(self, tage, mit_migriere, timeout):
+    def _sammle_fahren(self, tage, mit_migriere, timeout, info=None):
         """DER KETTEN-FAHRER des Sammelns (.536 B3) -> (summe|None, fehler|None).
 
         WARUM ES IHN GIBT, in Feldzahlen: bis .535 war ein Sammel-Lauf EIN Job
@@ -8638,9 +8726,29 @@ class Service:
 
         Rueckgabe ist die SUMME der neuen Gesichter ueber alle Haeppchen (statt
         des stdout-Textes bis .535): die Aufrufer fischen ihre Zahl nicht mehr mit
-        einem regulaeren Ausdruck aus dem Log."""
+        einem regulaeren Ausdruck aus dem Log.
+
+        `info` (.544 Teil 2b, optional, Muster `worker.job(info=…)`) traegt zwei
+        Angaben zurueck, die die Serien-Wache braucht und die im Fehlertext nur
+        als Wortlaut staenden:
+          `worker_ausnahme`  der Lauf scheiterte, WEIL der Worker scheiterte
+                             (Job-Antwort mit Fehlertext, Tod, fremdverschuldeter
+                             Abgang nach allen Wiederholungen). FALSCH bleibt er
+                             bei einer Absage ohne jede Worker-Beteiligung —
+                             „kein freier Analyse-Platz binnen Frist" ist eine
+                             Aussage ueber die Vergabestelle, nicht ueber den
+                             Rechenkontext, und sie darf keinen Prozessschuss
+                             ausloesen.
+          `haeppchen_n`      wie viele Haeppchen wirklich durch den Worker
+                             gelaufen sind. Nur damit ist ein `fehler=None` ein
+                             BEWEIS, dass der Kontext lebt; ein Auftrag ohne
+                             offene Ereignisse rechnet nichts und beweist nichts.
+        Entschieden wird weiterhin nie an einem Wortlaut."""
+        _si = info if isinstance(info, dict) else {}
+        _si.setdefault("worker_ausnahme", False)
+        _si.setdefault("haeppchen_n", 0)
         if not self.cfg.get("worker", True):
-            return self._sammle_subprozess(tage, mit_migriere, timeout)
+            return self._sammle_subprozess(tage, mit_migriere, timeout, info=_si)
         lp = os.path.join(self.cfg["data_dir"], "state", "sammle.log")
         t_auftrag = time.monotonic()
         ziel_s = float(self.cfg.get("sammel_haeppchen_ziel_s") or 120)
@@ -8733,6 +8841,13 @@ class Service:
                                  f"{self.SAMMEL_WIEDERHOLUNG_MAX + 1}")
                         continue
                     fehler = fehl
+                    # .544 Teil 2b: WER HAT VERSAGT? Ein Haeppchen, das gar nicht
+                    # erst einen Platz bekam, hat den Worker nie gesehen — es
+                    # sagt nichts ueber den Rechenkontext und darf deshalb weder
+                    # die Serie fuellen noch einen Prozessschuss ausloesen. Die
+                    # Unterscheidung kommt als FELD aus `_sammle_haeppchen`
+                    # (`kein_platz`), nicht aus dem Fehlertext.
+                    _si["worker_ausnahme"] = not wi.get("kein_platz")
                     break
                 n_haeppchen += 1
                 summe += int(erg.get("neu") or 0)
@@ -8762,6 +8877,7 @@ class Service:
             if n_haeppchen and (abs(faktor - faktor0) > 0.01
                                 or abs(prolog_kalt - prolog0) > 1.0):
                 self._sammel_takt_schreiben(faktor, prolog_kalt, n_haeppchen)
+            _si["haeppchen_n"] = n_haeppchen
         if fehler:
             return (summe if n_haeppchen else None), fehler
         return summe, None
@@ -8799,6 +8915,10 @@ class Service:
                     # soll ein System auch sagen, das keinen freien Platz hatte.
                     self.log(f"collection: no free analysis slot within "
                              f"{frist:.0f}s — postponed")
+                    # .544 Teil 2b: DIESER Rueckweg hat den Worker nie erreicht.
+                    # Als FELD, nicht als Wortlaut — der Ketten-Fahrer entscheidet
+                    # daran, ob die Serien-Wache diesen Fehlschlag zaehlen darf.
+                    _wi["kein_platz"] = True
                     return None, (f"no free analysis slot within {frist:.0f}s — "
                                   f"collection postponed"), _wi
                 w = self._worker(nr)
@@ -8853,7 +8973,7 @@ class Service:
                    "dauer_s": None, "prolog_s": None, "clip_s": 0.0, "cache": "?"}
         return erg, None, _wi
 
-    def _sammle_subprozess(self, tage, mit_migriere, timeout):
+    def _sammle_subprozess(self, tage, mit_migriere, timeout, info=None):
         """Der Fallback-Weg OHNE Worker (`worker: false`) -> (summe|None, fehler|None).
 
         BEWUSSTE TEIL-LUECKE (.536 B3): hier wird NICHT in Haeppchen zerlegt. Der
@@ -8876,9 +8996,15 @@ class Service:
         with self._gpu_bg_lock:                  # gegen vorschlaege/qs/Netz serialisieren (Review 21.07.)
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env,
                                preexec_fn=_analyse_nice)   # Issue #21, s. ANALYSE_NICE
+        _si = info if isinstance(info, dict) else {}
         if r.returncode != 0:
             tail = " | ".join((r.stderr or r.stdout or "").strip().splitlines()[-3:])[:300]
+            # .544 Teil 2b: auf diesem Weg IST der Subprozess die Rechenstelle —
+            # sein Scheitern ist dieselbe Aussage wie eine Worker-Ausnahme drueben.
+            # Eine Platz-Absage gibt es hier gar nicht (kein Platz, kein Worker).
+            _si["worker_ausnahme"] = True
             return None, f"exit {r.returncode}: {tail}"
+        _si["haeppchen_n"] = 1                   # er lief und kam durch: der Beweis
         m = re.search(r"(\d+) faces collected", r.stdout or "")
         return (int(m.group(1)) if m else 0), None
 
@@ -8915,12 +9041,32 @@ class Service:
             # Codeweg — und die 1800 s sind jetzt der Rahmen des AUFTRAGS, nicht die
             # Frist eines einzelnen Jobs (die Frist, an der am 15.09. sechs Jobs
             # starben und je 2-5 fremde mitrissen).
-            summe, fehler = self._sammle_fahren(tage=2, mit_migriere=True, timeout=1800)
+            _si = {}
+            summe, fehler = self._sammle_fahren(tage=2, mit_migriere=True,
+                                                timeout=1800, info=_si)
             if fehler:
+                # .544: dieselbe Buchung wie beim Szenario-Sammeln. In der Nacht
+                # vom 20./21.09. war GENAU DAS die laute Stelle — das 06:00-Netz
+                # scheiterte mit `RuntimeError … CL_OUT_OF_RESOURCES` —, und sie
+                # zaehlte fuer die Serien-Wache nicht mit.
+                # .544 Teil 2b SCHLIESST DIE OFFENE GRENZE von Teil 2: gebucht
+                # wird nur noch, wenn die Ausnahme AUS DEM WORKER kam. Ein „kein
+                # freier Analyse-Platz binnen Frist" ist das Gegenteil eines
+                # toten Rechenkontextes — da rechnet die Anlage so viel, dass
+                # kein Platz frei wurde. Entschieden wird trotzdem nicht am
+                # Wortlaut, sondern am Feld `worker_ausnahme` aus dem
+                # Ketten-Fahrer.
+                if _si.get("worker_ausnahme"):
+                    self._serie_alle_buchen(True, "safety-net collection")
                 self.log(f"SAFETY-NET COLLECTION FAILED: {fehler}")
                 push(self.cfg, "suslik: Netz-Sammeln fehlgeschlagen",
                      f"sammle scheiterte: {fehler}", None)
             else:
+                # .544 Teil 2b: das gelungene Netz-Sammeln heilt die Serie — auf
+                # einer ruhigen Anlage ist es womoeglich der einzige Beweis der
+                # Nacht, dass der Rechenkontext noch lebt.
+                if _si.get("haeppchen_n"):
+                    self._serie_alle_buchen(False, "safety-net collection")
                 n = int(summe or 0)
                 import anlernen
                 idents, _ = anlernen.reconcile_unbekannte()
@@ -9165,6 +9311,33 @@ class Service:
                     # ihn zu loeschen (Begruendung dort).
                     with self._ev_wecker:
                         self._ev_gesehen.discard(eid)
+                        # .544 M3b: WIEDER EINREIHEN, UND ZWAR ERST HIER. Der
+                        # Lauf hat das Ereignis zurueckgestellt (der Worker war
+                        # nicht bereit) und den Wunsch abgelegt; ausgefuehrt wird
+                        # er NACH dem `discard`, sonst haenge der neue Eintrag an
+                        # einer eid, die noch als „gesehen" vermerkt ist — der
+                        # Dedup liesse ihn entweder fallen oder (ohne Vermerk)
+                        # doppelt zu. Genau dieses Fenster ist der E6/N1-Befund
+                        # vom 05.09. Unter DERSELBEN `_ev_wecker`-Klammer wie
+                        # Vermerk und Schlange, damit dazwischen niemand
+                        # dieselbe eid neu einreiht.
+                        _vz = getattr(self, "_ev_zurueck", {}).pop(eid, None)
+                        _voll = _vz is not None and len(self._ev_q) >= self.EV_QUEUE_MAX
+                        if _vz is not None and not _voll:
+                            self._ev_gesehen.add(eid)
+                            _j = time.time()
+                            self._ev_q.append((_j + float(_vz), eid, _j))
+                            self._ev_wecker.notify()
+                    if _voll:
+                        # Die Schlange steht am Anschlag. Verloren ist das
+                        # Ereignis trotzdem nicht: es ist NICHT als verarbeitet
+                        # vermerkt, der naechste Sweep reiht es innerhalb von
+                        # `lookback_h` wieder ein. Gesagt wird es trotzdem —
+                        # still waere hier genau die Klasse Fehler, gegen die
+                        # dieser ganze Zug geschrieben ist.
+                        self.log(f"{eid}: could not be put back (queue at its "
+                                 f"{self.EV_QUEUE_MAX} cap) — the next sweep "
+                                 f"will pick it up again")
         # E2b (gemessen 04.09.): EIN Abarbeiter je Analyse-Platz, nicht einer insgesamt.
         # Ohne das ist die Platz-Vergabe wirkungslos — der eine Thread ruft process_safe
         # SYNCHRON auf und holt das naechste Ereignis erst, wenn die Analyse fertig ist.
@@ -9385,6 +9558,91 @@ class Service:
                                eid, _jetzt))
             self._ev_wecker.notify()
             return True
+
+    def _zurueck_stand(self, eid):
+        """Wie oft dieses Ereignis schon zurueckgestellt war — GELESEN UND
+        GELOESCHT (.544 M3b).
+
+        Read-and-clear, weil dieser Griff genau EINMAL je `process()`-Lauf
+        gerufen wird, direkt an der Entscheidungsstelle: wird zurueckgestellt,
+        schreibt `_zurueckstellen` die erhoehte Zahl zurueck; wird gebucht oder
+        gelingt die Analyse, ist der Eintrag weg. Ohne das Loeschen wuechse der
+        Merker mit jedem je gestoerten Ereignis und stuende auch dann noch da,
+        wenn dasselbe Ereignis Tage spaeter erneut laeuft.
+
+        Er lebt im Prozessgedaechtnis, nicht in einer Datei: nach einem
+        Dienst-Neustart ist der Worker ohnehin frisch, und eine gezaehlte
+        Rueckstellung von vorgestern wuerde einem gesunden Lauf ein
+        Versuchsbudget wegnehmen. EHRLICHE GRENZE, benannt: ein Ereignis, das
+        einen Dienst-Neustart ueberlebt, beginnt seine Zaehlung neu."""
+        with getattr(self, "_zustand_lock", _NULL_LOCK):
+            merk = getattr(self, "_zurueck_n", None)
+            if not merk:
+                return 0
+            return int(merk.pop(str(eid), 0) or 0)
+
+    def _zurueckstellen(self, eid, camera, bisher, ainfo=None):
+        """EIN FREMDVERSCHULDETES EREIGNIS IN DIE SCHLANGE ZURUECK (.544 M3b).
+        -> True = zurueckgestellt, der Aufrufer bucht NICHTS.
+
+        DER BEFUND (Feldtester-Anlage, Werktag 21.09.2026): jeder Prozess-
+        Ausstieg riss rund 20 Jobs mit. Die kamen als `fremdverschuldet`
+        zurueck, `run_analyze` schickte sie SOFORT ein zweites Mal — in genau
+        das Fenster, in dem der frische Prozess seine Arena baut (gemessen
+        24-36 s). Der zweite Anlauf scheiterte damit fast zwangslaeufig, und das
+        Ereignis stand endgueltig auf `analyse_none`: 1077 von 10279 Ereignissen
+        (10,5 %) an einem Tag.
+
+        WAS STATTDESSEN PASSIERT: das Ereignis geht UNGEBUCHT in die
+        Warteschlange zurueck — derselbe Rueckweg wie beim Clip-Tor-Deckel, nur
+        mit eigener Faelligkeit. Es zaehlt nicht als Lueckenmarke (es wird ja
+        gar nichts in die Akte geschrieben), es loest keinen Alarm aus, und es
+        verbraucht nichts ausser einer Zeile im Log.
+
+        DER DECKEL IST DER BESTEHENDE: `nachhol_versuche` (Vorgabe 3), dieselbe
+        Zahl, mit der der Nachhol-Lauf sein Budget rechnet — keine neue. Steht
+        sie auf 0 (Nachhol ganz aus), wird NICHT zurueckgestellt: wer das
+        Nachholen abschaltet, will keine stillen Wiederholungen.
+
+        DER BACKOFF IST `gpubudget.KARTE_WARTE_FRIST_S` (45 s), und zwar
+        IMMER — auch wenn der Worker-Prozess gerade wieder laeuft. Herleitung:
+        der teure Fall ist nicht „kein Prozess", sondern „Prozess da, Arena noch
+        im Bau" (24-36 s gemessen), und genau diesen Zustand kann der Dienst von
+        aussen nicht sehen, ohne einen Ping-Rundweg zu fahren. 45 s liegen
+        oberhalb der gemessenen Bauzeit; das ist die konservative Wahl. BEFUND,
+        offen benannt: ein echter Bereitschafts-Beweis (Start-Probe gelaufen)
+        waere genauer und braeuchte einen eigenen Zug.
+
+        OHNE WARTESCHLANGE (Alt-Tests, Timer-Rueckfall) wird nicht
+        zurueckgestellt — dann gibt es niemanden, der das Ereignis wieder
+        abholt, und eine stille Rueckstellung waere ein verlorenes Ereignis."""
+        if not hasattr(self, "_ev_q"):
+            return False
+        try:
+            kappe = int(self.cfg.get("nachhol_versuche") or 0)
+        except (TypeError, ValueError):
+            kappe = 0
+        if kappe <= 0:
+            return False
+        n = int(bisher or 0) + 1
+        if n > kappe:
+            self.log(f"{eid} ({camera}): worker was not ready {kappe} times in a "
+                     f"row — giving up and booking the failure "
+                     f"({(ainfo or {}).get('fehler_text') or 'no worker text'})")
+            return False
+        verzug = float(_gpubudget.KARTE_WARTE_FRIST_S)
+        with getattr(self, "_zustand_lock", _NULL_LOCK):
+            if not hasattr(self, "_zurueck_n"):
+                self._zurueck_n = {}
+            self._zurueck_n[str(eid)] = n
+        with self._ev_wecker:
+            if not hasattr(self, "_ev_zurueck"):
+                self._ev_zurueck = {}
+            self._ev_zurueck[str(eid)] = verzug
+        self.log(f"{eid} ({camera}): the worker was not ready (not this event's "
+                 f"fault) — event put BACK into the queue, attempt {n} of "
+                 f"{kappe} in {int(verzug)}s. Nothing booked, nothing lost")
+        return True
 
     def _alt_akte_beiseite(self, eid):
         """Die results.jsonl eines Ereignisses beiseitelegen (nie loeschen).
@@ -10289,6 +10547,7 @@ class Service:
         "kalib_fueller_bilder": (int, 1, 200, "calibration top-up: how many pictures the 'look for fresh material' button aims to collect for a camera before it stops"),
         "kalib_fueller_events": (int, 1, 500, "calibration top-up: how many recent person events of that camera it may work through at most — whichever limit is reached first ends the run"),
         "null_gesichter_serie": (int, 0, 20, "how many events in a row may find zero faces WHILE the clip was fully readable before the service calls it a fault. This is the quiet failure mode that start-up checks cannot catch: the accelerator still answers, frames still arrive, nothing errors out - and every event comes back empty. When the run is reached the service says so in the log, shows it in /health and makes the worker prove itself again (a short bind check plus a check image). 0 turns the watch off. The factory value is the same run length the service already uses for failed analyses in a row"),
+        "vorrang": (list, ["erkennung", "wache"], None, "who wins when the accelerator cannot carry both: erkennung (default) = event recognition has priority, wache = the live watchers do. This only ever matters when the card is too small for both at the same time; on a card with room, nothing here changes anything. With erkennung the service first falls back to a minimum mode (one compute thread, one clip geometry — a second resolution then costs a rebuild each time instead of being kept ready), and if even that does not fit it takes live watchers off the net, the most recently started one first, only as many as the minimum needs. It says so in the log and in /health, and it switches them back on by itself once the card carries the full price again. With wache the analysis worker stays off in that situation, exactly as it did before 0.1.0.544 — but the log then says that recognition is off BECAUSE the watchers have priority, instead of asking you to edit config.json. A machine whose card cannot even carry the minimum gets neither: nothing is switched off for a recognition that would not run afterwards anyway"),
         "worker_vram_reserve_mb": (int, -1, 65536, "how much card memory the service leaves unassigned, in MiB. -1 (default) = automatic: a tenth of the card, at least the built-in floor — 614 MiB on a 6 GB card, 1229 MiB on 12 GB. 0 is allowed and means no reserve at all. The reserve is not a safety margin for the analysis itself (the arena cap is the wall the worker cannot cross); it is the room left for everything else that may land on the same card without asking us — a display transcode, a second container, another user's process. Set it small and the compute threads get that memory; the price is that a foreign consumer arriving later finds the card full, and on NVIDIA that ends in a CUDA out-of-memory in whichever process asks next, ours or theirs. A value larger than the card is clamped to the card. The calculation names the source (\"config\"/\"formel\") in the log and in /health; it takes effect at the next worker start, like the other worker keys"),
         "bg_platz_getrennt": (int, 0, 1, "1 gives background work (collecting, harvesting, your clicks, the live body judgment, the wall-clock measurement) its own slot instead of one of the analysis slots. It is computed in a separate thread of the worker anyway, so a background job that holds an analysis slot blocks a compute thread for nothing — measured on 15.09.2026: a collection run held one of two analysis slots for eight minutes while events were waiting. Since 0.1.0.536 WHEN it starts changed too: with its own slot it takes its turn right away instead of waiting for an idle moment that never comes on a busy installation (46 postponed collection runs in one morning). 0 restores the behaviour of 0.1.0.533 and is load-bearing: every class then sits on the analysis slots again, the old idle rule and the rule that keeps one slot free for events apply word for word, and a collection run can take an analysis slot again"),
         "sammel_haeppchen_ziel_s": (int, 30, 1800, "how much computing time one batch of the automatic collection should aim for, in seconds. The collection used to run as ONE job over all open events: on 15.09. six of those were shot at their deadline here, and on a CPU-only test machine 368 of 369 runs never finished at all. It now runs in batches — the service predicts the cost of each event from its clip length and packs a batch up to this budget; a batch that overruns it stops after the current event and hands the rest to the next batch. 120 s is the default. Larger batches mean fewer starts, smaller batches free the background slot more often for a click or a harvest"),
@@ -10632,14 +10891,31 @@ class Service:
         # Phase 4: Supervisor-Lage — Standalone-Erkennung sichtbar in /health
         # ("standalone engine detected"), dieselbe Quelle wie die Live-Seite.
         aus["supervisor"] = self.live_aufsicht_status()
+        # .544 A: WAS DER DIENST SELBST ABGESCHALTET HAT. Ohne diese drei
+        # Zahlen waere ein automatisch zurueckgestellter Waechter von einem vom
+        # Betreiber ausgeschalteten nicht zu unterscheiden — und genau das waere
+        # der stille Eingriff, den dieses Haus nirgends will.
+        _red = _lw.reduziert_lesen(self.cfg)
+        _rnamen = [n for n in (_red.get("namen") or ()) if n]
+        aus["reduziert_n"] = len(_rnamen)
+        aus["reduziert"] = sorted(_rnamen)
+        aus["reduziert_grund"] = _red.get("grund") if _rnamen else None
+        aus["reduziert_seit_ts"] = _red.get("ts") if _rnamen else None
         for name, g in sorted(guards.items()):
             ks = ((status or {}).get("kacheln") or {}).get(name)
             verw = ((status or {}).get("verweigert") or {}).get(name, "")
             z, detail = _lw.ui_zustand(g, ks, frisch, gesperrt,
                                        verweigert_grund=verw,
                                        sperr_grund=sperr_grund)
-            aus["watchers"][name] = ({"state": z, "detail": detail}
-                                     if detail else {"state": z})
+            _w = ({"state": z, "detail": detail} if detail else {"state": z})
+            if name in _rnamen:
+                # Der Zustand bleibt der QUITTIERTE (K1: die Kachel sagt, was
+                # die Engine bestaetigt hat, nie was wir uns wuenschen) — aber
+                # er traegt jetzt den Urheber. „tested" ohne diesen Zusatz saehe
+                # aus wie ein Schalter, den der Betreiber selbst umgelegt hat.
+                _w["reduziert"] = True
+                _w["reduziert_grund"] = _red.get("grund")
+            aus["watchers"][name] = _w
         return aus
 
     def live_speichern(self, kamera, d):
@@ -10734,6 +11010,21 @@ class Service:
                                         store_laden=_lade_config_store,
                                         store_schreiben=_store_schreiben,
                                         retest_merker=_rm)
+        # .544 Teil 6 (BEF-4): DER BETREIBER HAT ENTSCHIEDEN. Schaltet er einen
+        # Waechter wieder ein, den der Vorrang-Entscheid zurueckgestellt hat,
+        # faellt dessen Eintrag im Merker — sonst meldet /health ihn weiter als
+        # `reduziert`, waehrend er laeuft, und die Rueckhol-Rechnung zaehlt ihn
+        # ein zweites Mal gegen die eigene Schwelle. Nur auf DIESEM Weg: der
+        # Dienst schaltet ueber `_waechter_schalten` direkt an der Fachschicht
+        # vorbei, sein eigener Eintrag bleibt also stehen, bis er ihn selbst
+        # raeumt. Ausserhalb des `_cfg_lock`, weil der Merker eine eigene,
+        # atomar geschriebene Datei ist und kein Store-Feld.
+        # EHRLICHE GRENZE: schaltet der Betreiber einen zurueckgestellten
+        # Waechter AUS (er ist es ohnehin schon), bleibt der Eintrag stehen —
+        # der Dienst holt ihn dann spaeter zurueck.
+        if ok and enabled and _lw.reduziert_entfernen(self.cfg, kamera):
+            self.log(f"live watcher {kamera} re-enabled by user — no longer "
+                     f"counted as reduced")
         if ok and enabled and _rm.get("grund"):
             # Anstoss NACH dem Lock (live_test_starten braucht es teils
             # selbst). Scheitert er, bleibt enabled stehen und der Nutzer
@@ -12407,31 +12698,51 @@ class Service:
             return False
         return True
 
-    def kurzprobe_ausloesen(self, grund):
+    def kurzprobe_ausloesen(self, grund, danach=None):
         """DIE KURZFORM DER START-PROBEN ANSTOSSEN (E3.4, Konzept §4 Schicht 1).
 
-        ZWEI Ausloeser, EIN Weg — das ist Absicht: derselbe Beweis beantwortet
-        beide Fragen („rechnet der frische Prozess noch dasselbe?" nach einem
-        Neustart, „rechnet dieser Prozess ueberhaupt noch?" nach einer Anomalie),
-        und zwei Wege waeren zwei Wahrheiten.
+        DREI Ausloeser, EIN Weg — das ist Absicht: derselbe Beweis beantwortet
+        alle drei Fragen („rechnet der frische Prozess noch dasselbe?" nach einem
+        Neustart, „rechnet dieser Prozess ueberhaupt noch?" nach einer Anomalie
+        oder nach einer Analyse, die nichts geliefert hat), und zwei Wege waeren
+        zwei Wahrheiten.
           1. BETRIEBS-NEUSTART des Worker-Prozesses (`WorkerDienst._start`, jeder
              Start nach dem ersten). Der Boot hat sein Exklusivfenster mit der
              VOLLFORM; ein Neustart im Betrieb hat keines.
           2. ANOMALIE-WACHE: N Ereignisse in Folge 0 Gesichter bei voller
              Frame-Zahl (s. `_null_serie_pruefen`).
+          3. .544 TEIL 5A — SOFORT NACH EINER ANALYSE, DIE NICHTS LIEFERTE
+             (`_sofortprobe_nach_ausfall`, Verwurfgrund `analyse_none`).
 
         EIGENER THREAD, und das ist kein Stil: Ausloeser (1) laeuft im Absetz-Lock
         des Worker-Objekts — von dort aus laesst sich kein Job absetzen. Ausloeser
-        (2) laeuft mitten in `process()` und darf eine Analyse nicht aufhalten.
+        (2) und (3) laufen mitten in `process()` und duerfen eine Analyse nicht
+        aufhalten.
 
         MIT PLATZ, wie jeder GPU-Job (Regel C1, 05.09.): die Probe rechnet, also
         gehoert sie an die Vergabestelle. Bekommt sie keinen Platz, wird sie NICHT
         nachgeholt — sie ist eine Wache, kein Auftrag, und ein voller Dienst ist
-        selbst die Auskunft, dass gerechnet wird."""
+        selbst die Auskunft, dass gerechnet wird.
+
+        `danach` (.544 Teil 5a) ist der RUECKWEG des Urteils: bis .543 stand das
+        Ergebnis der Probe ausschliesslich im Log, und wer daran eine Handlung
+        haengen wollte, haette einen ZWEITEN Probenweg bauen muessen. Der
+        Rueckruf bekommt genau ein Wort — 'ok', 'fehler' oder 'nicht_gelaufen' —
+        und laeuft im Proben-Thread, also nie im Urteilspfad eines Ereignisses.
+        Ohne `danach` (die Ausloeser 1 und 2) ist das Verhalten Wort fuer Wort
+        das von .543: es wird geloggt und sonst nichts getan.
+
+        'nicht_gelaufen' ist AUSDRUECKLICH kein Fehlerbefund: kein freier Platz
+        und kein lebender Worker sind Aussagen ueber die Vergabestelle bzw. ueber
+        einen Prozess, den der naechste echte Job ohnehin frisch startet — auf
+        so etwas darf nicht geschossen werden."""
         if not self.cfg.get("worker", True):
             return False                      # Legacy-Subprozess-Weg hat keinen Dienst
 
-        def _lauf():
+        def _proben():
+            """Die Probe fahren -> 'ok' | 'fehler' | 'nicht_gelaufen'. Wort fuer
+            Wort der .543-Rumpf; neu ist allein, dass jeder Ausgang ein WORT
+            zurueckgibt statt nur eine Logzeile zu hinterlassen."""
             try:
                 # KEINE NEUEN ZAHLEN. Die Wartezeit auf den Platz ist die
                 # Gnadenfrist des Platzwaechters (2 x PULS_TAKT_S, s.
@@ -12448,10 +12759,10 @@ class Service:
                                  f"analysis slot within {_platz_frist:.0f}s "
                                  f"(a busy service is itself the answer that it "
                                  f"is computing)")
-                        return
+                        return "nicht_gelaufen"
                     w = self._worker(nr)
                     if w is None:
-                        return
+                        return "nicht_gelaufen"
                     # EINE WACHE STARTET KEINEN PROZESS (.536, gemessen 16.09.).
                     # Lebt der Worker nicht mehr, wuerde der Job-Weg ihn neu
                     # anwerfen (`WorkerDienst.job` startet einen toten Prozess) —
@@ -12466,19 +12777,19 @@ class Service:
                         self.log(f"short start proof ({grund}) skipped: no live "
                                  f"worker process — a watch does not start one, "
                                  f"the next real job does")
-                        return
+                        return "nicht_gelaufen"
                     antwort = w.job({"typ": "startprobe", "grund": grund},
                                     _job_frist,
                                     puls=self._plaetze.puls_fuer(nr))
             except Exception as e:                         # noqa: BLE001
                 self.log(f"short start proof ({grund}) failed to run: "
                          f"{type(e).__name__}: {e}")
-                return
+                return "fehler"
             if antwort is None:
                 self.log(f"short start proof ({grund}) got NO answer — the worker "
                          f"could not prove itself; the next job starts a fresh "
                          f"process")
-                return
+                return "fehler"
             sp = antwort.get("startprobe") or {}
             if not antwort.get("ok"):
                 # LAUT: ein Prozess, der seinen eigenen Beweis nicht besteht, darf
@@ -12487,15 +12798,136 @@ class Service:
                 # Betreiber im Dienst-Log findet.
                 self.log(f"STOERUNG (selbstbeweis): the worker FAILED its short "
                          f"start proof ({grund}): {antwort.get('fehler')}")
-                return
+                return "fehler"
             self.log(f"short start proof ({grund}): {sp.get('stand')} — bound to "
                      f"{sp.get('geraet')}, {sp.get('personen_mit_vektoren')} "
                      f"person(s) with vectors"
                      + (f", notes: {'; '.join(sp.get('befunde') or [])}"
                         if sp.get("befunde") else ""))
+            return "ok"
+
+        def _lauf():
+            ergebnis = _proben()
+            if danach is None:
+                return
+            try:
+                danach(ergebnis)
+            except Exception as e:                         # noqa: BLE001
+                # Ein Rueckruf, der scheitert, darf die Probe nicht mitreissen —
+                # sie hat ihre Auskunft schon ins Log geschrieben.
+                self.log(f"short start proof ({grund}): the follow-up failed "
+                         f"({type(e).__name__}: {e})")
 
         threading.Thread(target=_lauf, daemon=True, name="startprobe").start()
         return True
+
+    def _sofortprobe_nach_ausfall(self, pfad):
+        """DIE SOFORTPROBE NACH `analyse_none` (.544 Teil 5a) -> True, wenn eine
+        Probe wirklich losgeschickt wurde.
+
+        WAS SIE KOSTET UND WAS SIE SPART: der Serien-Schuss (.543/.544 Teil 2)
+        braucht DREI gescheiterte Analysen, bis er faellt. Tagsueber ist das eine
+        Sache von Minuten. Nachts ist es das nicht: auf einem ruhigen Grundstueck
+        liefert nur der Nachhol-Lauf Analysen, und der laeuft im
+        `nachhol_intervall_s`-Takt mit Pause-Runden nach jedem Fehlschlag
+        (1, 3, 6 Runden) — drei Fehler brauchen dort bis zu ~40 Minuten. Genau
+        diese Zeit war in der Nacht vom 20./21.09. Blindheit.
+
+        Die Sofortprobe ersetzt das Abwarten durch eine FRAGE: eine Analyse, die
+        gar nichts geliefert hat, ist der Anlass, den lebenden Worker SOFORT
+        seinen Kurz-Selbstbeweis fahren zu lassen. Besteht er ihn, war der
+        Fehlschlag ereignis-spezifisch (kaputter Clip, Einzel-Ausnahme) und es
+        passiert nichts. Besteht er ihn nicht, ist der Rechenkontext tot und der
+        Schuss faellt in Sekunden statt in einer Dreiviertelstunde.
+
+        KEINE ZWEITE PROBE UND KEINE ZWEITE SCHWELLE: gefahren wird die
+        VORHANDENE Kurzform (`kurzprobe_ausloesen`) als Job mit Frist, und
+        geschossen wird ueber den VORHANDENEN `_serie_schuss` samt seiner Bremse.
+        Diese Methode bringt genau eine eigene Groesse mit, die Drossel — und
+        auch die ist keine neue Zahl, sondern derselbe Abstand
+        (`gpubudget.DRUCK_NEUSTART_ABSTAND_S`), mit dem sich Schuss und
+        Fehlertext-Meldung bremsen. Sie muss sein: ein Ereignis-spezifischer
+        Dauerfehler (eine Reihe kaputter Clips) wuerde sonst eine Probenflut
+        ausloesen, und jede Probe rechnet auf demselben Beschleuniger wie die
+        Erkennung. Unterdrueckte Anlaesse werden GEZAEHLT und in der naechsten
+        Zeile genannt, sonst waere die Drossel die naechste stille Stelle.
+
+        STEMPEL BEIM START, nicht beim Ergebnis: die Probe laeuft in einem
+        eigenen Thread und kann bis zu `analyse_timeout_s` dauern. Haengte die
+        Drossel am Ergebnis, koennten in der Zwischenzeit beliebig viele weitere
+        Proben starten — also genau die Flut, gegen die sie geschrieben ist."""
+        if not self.cfg.get("worker", True):
+            return False                      # Legacy-Subprozess-Weg hat keinen Dienst
+        jetzt_ts = time.time()
+        abstand = float(_gpubudget.DRUCK_NEUSTART_ABSTAND_S)
+        with self._zustand_lock:
+            letzte = float(getattr(self, "_sofortprobe_ts", 0.0) or 0.0)
+            if letzte and (jetzt_ts - letzte) < abstand:
+                self._sofortprobe_still = int(
+                    getattr(self, "_sofortprobe_still", 0) or 0) + 1
+                return False
+            still = int(getattr(self, "_sofortprobe_still", 0) or 0)
+            self._sofortprobe_still = 0
+            self._sofortprobe_ts = jetzt_ts
+            self._sofortproben = int(getattr(self, "_sofortproben", 0) or 0) + 1
+            self._sofortprobe_ergebnis = "laeuft"
+            n = self._sofortproben
+        self.log(f"analysis returned nothing [{pfad}] — the worker has to prove "
+                 f"itself right now (post-failure probe #{n})"
+                 + (f" (+{still} more occasions suppressed in the last "
+                    f"{int(abstand)}s)" if still else ""))
+        _los = self.kurzprobe_ausloesen(
+            f"post-failure probe, an analysis returned nothing ({pfad})",
+            danach=self._sofortprobe_urteil)
+        if not _los:
+            self._sofortprobe_ergebnis = "nicht_gelaufen"
+        return bool(_los)
+
+    def _sofortprobe_urteil(self, ergebnis):
+        """Was aus dem Ergebnis der Sofortprobe folgt (.544 Teil 5a) — der
+        Rueckruf aus `kurzprobe_ausloesen`, im Proben-Thread.
+
+        DREI AUSGAENGE, und nur einer handelt:
+          'ok'             der Prozess hat sich bewiesen -> der Fehlschlag war
+                           ereignis-spezifisch, es wird NICHT geschossen. Diese
+                           Zeile ist der eigentliche Gewinn der Probe: sie
+                           unterscheidet den toten Rechenkontext vom kaputten
+                           Einzel-Clip, und bis .543 konnte das niemand.
+          'nicht_gelaufen' kein Platz oder kein lebender Worker — es gibt keinen
+                           Befund, also folgt nichts daraus.
+          'fehler'         gebucht UND geschossen (s. unten).
+
+        REIHENFOLGE BUCHEN -> SCHIESSEN, und sie ist ueberlegt: die Buchung in
+        `_fehlerserie_alle` macht /health rot und meldet dem Betreiber; sie kann
+        an der Schwelle selbst schon schiessen. Genau dann faellt hier KEIN
+        zweiter Schuss — nicht, weil die Bremse ihn abfinge (das taete sie),
+        sondern damit nicht im Log steht „NOT shooting the worker again", obwohl
+        gerade eben geschossen wurde. Erkannt wird es am Schuss-Zeitstempel, der
+        einzigen Groesse, die beide Wege teilen.
+
+        DER SCHUSS TRAEGT SEINEN EIGENEN GRUND: `_serie_schuss` formuliert sonst
+        „N analyses in a row failed", und das waere hier schlicht falsch — hier
+        ist EINE Analyse gescheitert und der Selbstbeweis danach. Ein Schuetze,
+        der seine Herkunft falsch angibt, schickt den naechsten Sucher in die
+        falsche Richtung (dieselbe Begruendung wie beim `quelle`-Parameter von
+        `worker_hart_stoppen`)."""
+        self._sofortprobe_ergebnis = ergebnis
+        if ergebnis != "fehler":
+            if ergebnis == "ok":
+                self.log("post-failure probe ok — the failure was event-specific, "
+                         "no shot")
+            return False
+        _vorher = float(getattr(self, "_serie_schuss_ts", 0.0) or 0.0)
+        n = self._serie_alle_buchen(True, "probe failed")
+        if float(getattr(self, "_serie_schuss_ts", 0.0) or 0.0) != _vorher:
+            return True                       # die Buchung hat schon geschossen
+        return self._serie_schuss(
+            max(1, int(n or 0)), time.time(),
+            grund=("the worker FAILED its short start proof right after an "
+                   "analysis returned nothing — the compute context of the "
+                   "worker process is dead (a GPU hang on the host kills it "
+                   "for good); pulling up a fresh process"),
+            quelle="the failed start proof after an analysis returned nothing")
 
     def _worker(self, platz_nr):
         """Das Worker-Objekt fuer einen JOB — `platz_nr` ist der gehaltene Platz.
@@ -13446,6 +13878,84 @@ class Service:
         merk["grund"] = grund
         return merk["mb"], alter, grund
 
+    def _karte_frei_band_mb(self, kind, moment_mb):
+        """DAS FREI-BAND DER KARTE (.544 M1) -> dict fuer `gpubudget.straenge`.
+
+        -> {"band_mb", "fenster_s", "n", "moment_mb", "grund"}; `grund is None`
+        heisst „es gibt ein Band", sonst steht dort, warum keines zustande kam
+        und dass auf dem Momentwert geplant wird.
+
+        DER BEFUND, gegen den das gebaut ist (Feldtester-Anlage, 21.09.2026,
+        Feldtester-Nachtauswertung 21.09.2026, Befund §4.4 im nicht getrackten Laborordner (s. stand.md)): die Leiter mass
+        „frei" EINMAL, sah sechs Straenge passen und baute sie mit 69 MiB Luft.
+        Am selben Werktag meldete die Takt-Wache im Worker 145 mal „frei unter
+        Reserve" — bei 381 bis 1226 MiB noch freiem Speicher. Der
+        „Fremdverbraucher" waren die EIGENEN fuenf 4K-Live-Waechter, deren
+        Verbrauch atmet. Die Momentaufnahme traf ein Tal dieser Welle.
+
+        DIE QUELLE IST DER RING, DEN ES SCHON GIBT (`core.systemstat`, eine
+        Zeile je `TAKT_S`): `gpu.speicher_max_mb - gpu.speicher_mb` je Takt. Es
+        entsteht KEINE zweite Sonde und kein zweiter nvidia-smi-Aufruf — die
+        Klasse Fehler, die zwei Messstellen fuer dieselbe Sache erzeugen, ist in
+        diesem Modul schon teuer bezahlt worden.
+
+        DER MOMENTWERT ZAEHLT MIT: die juengste Ringzeile kann fast einen Takt
+        alt sein, der Moment ist frischer. Das Minimum aus beiden ist die
+        vorsichtigere Zahl, und genau die will die Leiter.
+
+        GEMERKT FUER EINEN RING-TAKT: `worker_straenge` haengt am Absetzweg
+        JEDES Jobs (worker_fussabdruck_max_mb, worker_geometrien_max). Den Ring
+        oefter zu lesen als er geschrieben wird, brauchte niemand und kostete je
+        Job zweimal das Parsen der 48-h-Datei. Der Abstand ist deshalb der Takt
+        des Rings selbst (`systemstat.TAKT_S`), keine neue Zahl.
+
+        NUR AUF BACKENDS MIT EIGENEM KARTENSPEICHER — auf Intel/CPU gibt es
+        nichts, was ein `memory.free` der Karte waere (s. `_karte_frei_mb`)."""
+        moment = max(0, int(moment_mb or 0))
+        aus = {"band_mb": None, "fenster_s": int(_gpubudget.FREI_BAND_FENSTER_S),
+               "n": 0, "moment_mb": moment, "grund": None}
+        if kind != "cuda" or moment <= 0:
+            aus["grund"] = "no card memory measurement on this backend"
+            return aus
+        jetzt = time.monotonic()
+        merk = getattr(self, "_karte_band_merk", None)
+        if merk is not None and (jetzt - merk[0]) < float(_systemstat.TAKT_S):
+            band = dict(merk[1])
+            # Der MOMENT ist frisch, auch wenn der Ring es nicht ist — er geht
+            # immer neu ins Minimum ein.
+            band["moment_mb"] = moment
+            if band["grund"] is None:
+                band["band_mb"] = min(int(band["band_mb"] or moment), moment)
+            return band
+        werte = []
+        try:
+            seit = time.time() - float(_gpubudget.FREI_BAND_FENSTER_S)
+            for d in (_systemstat.lesen(self.cfg, seit) or []):
+                g = d.get("gpu")
+                if not isinstance(g, dict) or g.get("kind") != kind:
+                    continue
+                gesamt = int(g.get("speicher_max_mb") or 0)
+                belegt = g.get("speicher_mb")
+                if gesamt <= 0 or belegt is None:
+                    continue
+                belegt = int(belegt)
+                if belegt < 0 or belegt > gesamt:
+                    continue
+                werte.append(gesamt - belegt)
+        except Exception as e:                            # noqa: BLE001
+            aus["grund"] = f"ring not readable ({type(e).__name__})"
+            self._karte_band_merk = (jetzt, dict(aus))
+            return aus
+        aus["n"] = len(werte)
+        if len(werte) < int(_gpubudget.FREI_BAND_MIN_PROBEN):
+            aus["grund"] = (f"only {len(werte)} of at least "
+                            f"{int(_gpubudget.FREI_BAND_MIN_PROBEN)} samples in the "
+                            f"last {int(_gpubudget.FREI_BAND_FENSTER_S)}s")
+        else:
+            aus["band_mb"] = min(min(werte), moment)
+        self._karte_band_merk = (jetzt, dict(aus))
+        return aus
+
     # .535: HIER STAND `_vram_eichung` — der Leser der Eichdatei
     # `state/vram_eichung.json`. Die Datei wird nicht mehr geschrieben und
     # nicht mehr gelesen; was eine Stufe kostet, sagt die Messtabelle in
@@ -13543,8 +14053,25 @@ class Service:
         # Posten-Rechnung kennt nur die eigenen Verbraucher; was ein
         # Anzeige-Transcode oder ein fremder Prozess auf derselben Karte haelt,
         # sah sie nie — und genau daran starb der Geometrie-Bau am 15.09. im
-        # CUDA-BFC-OOM. Die kleinere der beiden Mengen gilt (gpubudget.straenge).
+        # CUDA-BFC-OOM. WELCHE DER BEIDEN MENGEN GILT, haengt am Mass
+        # (gpubudget.straenge): auf KARTEN-Backends gewinnt seit .531 der
+        # MESSWERT, auch wenn er groesser ist als die Posten-Rechnung (Zweig
+        # `s["mass"] == "vram"`; die Begruendung steht dort: die
+        # Posten-Rechnung zieht Dienst und Waechter ab, die zur Messzeit
+        # schon auf der Karte liegen). Nur im RAM-Zweig gilt weiter die
+        # kleinere der beiden. Bis .544 Teil 6 behauptete diese Zeile das
+        # Minimum fuer beide — wer hier plante, plante mit einer Regel, die
+        # das gerufene Modul nicht anwendet (BEF-2 der CUDA-Abnahme
+        # 21.09.2026).
         _frei_gem, _frei_alter, _frei_grund = self._karte_frei_mb(kind)
+        # .544 M1: … UND ZWAR ALS BAND, NICHT ALS MOMENT. Der Momentwert von
+        # eben bleibt als Diagnose stehen (`frei_moment_mb`); geplant wird mit
+        # dem schlechtesten Moment des letzten Fensters. Herleitung und der
+        # Feldbefund (145 Vorsorge-Ausstiege an einem Tag, weil der eigene
+        # Waechter-Verbrauch atmet) stehen in `_karte_frei_band_mb`.
+        _band = self._karte_frei_band_mb(kind, _frei_gem)
+        if _band.get("band_mb") is not None:
+            _frei_gem = int(_band["band_mb"])
         # .531: WIE ALT die Live-Engine ist, entscheidet, ob ihr Kartenposten vom
         # gemessenen Wert noch abgezogen werden muss oder schon darin steckt.
         _eng_alter = self._live_engine_alter_s()
@@ -13557,19 +14084,41 @@ class Service:
         # zuordenbar", nicht „belegt nichts" — und das steht ab jetzt in /health,
         # statt als stille Null in die Leiter zu gehen.
         _eig_mb, _eig_grund = self._worker_karte_eigen_mb()
+        # .544 B: DIE PREISE DIESER KARTE, falls es welche gibt. Sie gelten vor
+        # der Messtabelle; was fehlt, kommt weiter aus ihr. Gebucht wird dabei,
+        # was der zuletzt gelaufene Worker-Prozess gemeldet hat — dieser Griff
+        # haengt am Worker-START, also genau an der Stelle, an der ohnehin
+        # gerechnet wird und an der ein abgeloester Prozess seinen Plateau-Wert
+        # gerade fertig gemessen hat.
+        try:
+            _preise, _preis_stand, _preis_verworfen = self._vram_preise(kind,
+                                                                       gesamt)
+        except Exception as _pe:                          # noqa: BLE001
+            # Eine Preis-Auskunft darf den Worker-Start nie kosten — dann gilt
+            # die Tabelle wie vor .544, und der Grund steht im Log.
+            self.log(f"vram prices failed ({type(_pe).__name__}: {_pe}) — "
+                     f"planning from the measurement table")
+            _preise, _preis_stand, _preis_verworfen = None, None, []
         st = _gb.straenge(gesamt, n_wae, kind, vor, nutzer_n=max(0, _nutzer),
                           frei_gemessen_mb=_frei_gem,
                           engine_alter_s=_eng_alter,
                           laufend_eigen_mb=_eig_mb,
                           reserve_wunsch=_res_wunsch,
+                          preise=_preise,
                           # .535: WIE VIELE STRAENGE GERADE LAUFEN. Ohne
                           # Prozess-Sonde rechnet die Leiter daraus zurueck,
                           # was der laufende Worker belegt — sonst zaehlt sein
                           # eigener Verbrauch gegen ihn (Feldbefund 18:06).
                           laufend_n=int(getattr(
                               getattr(self, "_dienst_obj", None),
-                              "straenge_laufend", 0) or 0))
+                              "straenge_laufend", 0) or 0),
+                          # .544 M1: die HERKUNFT des Frei-Werts reist mit —
+                          # ohne sie stuende in /health eine Zahl, von der
+                          # niemand wuesste, ob sie ein Band oder ein Moment ist.
+                          frei_band=_band)
         st["laufend_eigen_grund"] = _eig_grund
+        st["preis_stand"] = _preis_stand
+        st["preis_verworfen"] = _preis_verworfen
         st["quelle"] = quelle
         st["frei_alter_s"] = _frei_alter
         st["frei_grund"] = _frei_grund
@@ -13639,6 +14188,18 @@ class Service:
         else:
             st["geometrien_max"], st["geometrien_rechenweg"] = _gb.geometrien_deckel(
                 kind, st["n"], n_wae, gesamt)
+        # .544 A: DIE VORRANG-STUFEN. Erst HIER, nach Leiter, Deckel, Grenze und
+        # Geometrie-Zahl — sie ueberschreiben bewusst das Ergebnis dieser
+        # Rechnungen (ein Strang, eine Geometrie), und wer sie frueher fahren
+        # liesse, saehe seine Zahlen gleich wieder ueberschrieben.
+        try:
+            st = self._vorrang_stufen(st, kind, _preise)
+        except Exception as _ve:                          # noqa: BLE001
+            # Eine Stufen-Entscheidung darf den Dienst nie am Starten hindern:
+            # faellt sie aus, gilt die Leiter wie vor .544, und der Grund steht
+            # im Log.
+            self.log(f"priority stages failed ({type(_ve).__name__}: {_ve}) — "
+                     f"the ladder decides alone (as before 0.1.0.544)")
         # MIGRATIONS-KLEMME: der alte Wert wird gelesen, um ihn zu MELDEN, nie
         # um ihn zu nehmen.
         _roh = self.cfg.get("analyse_plaetze")
@@ -13681,11 +14242,28 @@ class Service:
                  # gemessen (fremder Verbraucher auf der Karte), ist das eine
                  # Aenderung, die der Betreiber sehen muss — auch wenn die Zahl
                  # zufaellig dieselbe blieb.
-                 st.get("grenze_quelle"), st.get("frei_quelle"))
+                 st.get("grenze_quelle"), st.get("frei_quelle"),
+                 # .544 M1: DER RUECKFALL AUF DEN MOMENTWERT gehoert in die
+                 # Marke — nicht das Band selbst (das atmet und schriebe eine
+                 # Zeile je Start), sondern die Frage, OB ueberhaupt eines da
+                 # war. Ein Kippen dieser Frage muss der Betreiber sehen.
+                 bool(st.get("frei_band_grund")),
+                 # .544 A: der MODUS (voll / minimal / reduziert / aus) und der
+                 # Vorrang. Ein Wechsel hier ist die wichtigste Nachricht, die
+                 # dieser Block ueberhaupt hat — er sagt, ob die Anlage gerade
+                 # erkennt und womit.
+                 st.get("modus"), st.get("vorrang"))
         if marke != getattr(self, "_straenge_marke", None):
             self._straenge_marke = marke
             self.log(f"worker threads: {st['rechenweg']}; footprint limit "
                      f"{st['grenze_mb']} MB ({st['grenze_quelle']})")
+            # .544 A+C: WAS DAS SYSTEM GETAN HAT, in einer Zeile und aus
+            # DERSELBEN Rechnung wie das Start-Tor. Bis .543 standen hier zwei
+            # Saetze nebeneinander, die sich widersprachen: „The worker is NOT
+            # started into this" und 13 s spaeter „worker started (pid …)" —
+            # der Betreiber konnte nicht wissen, was nun gilt.
+            if st.get("modus_text"):
+                self.log(f"worker threads: {st['modus_text']}")
             # .528: die RECHNUNG der Grenze, Posten fuer Posten. Sie steht in
             # derselben Marke-Klammer wie die Zeile darueber, also genauso
             # selten — und sie ist die Zeile, die im Feldfund vom 14.09. gefehlt
@@ -13696,7 +14274,10 @@ class Service:
             for _zeile in (st.get("hinweis"), st.get("deckel_meldung"),
                            st.get("ueber_formel"), st.get("unter_formel"),
                            st.get("klemme")):
-                if _zeile:
+                # .544 A: NICHT ZWEIMAL DERSELBE SATZ. In den Stufen-Faellen ist
+                # der Hinweis genau der Modus-Satz von oben — eine zweite,
+                # wortgleiche Zeile liest sich wie zwei Befunde.
+                if _zeile and _zeile != st.get("modus_text"):
                     self.log(f"worker threads: {_zeile}")
         self._straenge_stand = st
         # .535: HIER STANDEN AUFSTIEGS-PRUEFUNG UND MESS-VERGLEICH. Mit der
@@ -13959,6 +14540,451 @@ class Service:
             rand = naechste
         return aus
 
+    def _live_aktive_namen(self):
+        """DIE EINGESCHALTETEN LIVE-WAECHTER, JUENGSTER ZUERST -> [name, …]
+
+        Die Reihenfolge ist die Reihenfolge der Reduktion (.544 A): wer am
+        laengsten laeuft, gehoert am ehesten zum Alltag dieser Anlage — der
+        zuletzt dazugekommene wird zuerst zurueckgestellt. Die Startzeit kommt
+        aus der Engine-Quittung (`kacheln.<name>.start_ts`); wo sie fehlt (alte
+        Engine, Kachel noch nicht quittiert), gilt der Name als stabile Kante.
+        Eine WILLKUERLICHE Reihenfolge waere hier das Schlimmste: der Betreiber
+        soll im Log nachlesen koennen, warum GENAU diese Kamera still wurde."""
+        from core import livewache as _lw_a
+        try:
+            status, _frisch = _lw_a.status_lesen(self.cfg)
+        except Exception:                                  # noqa: BLE001
+            status = None
+        kacheln = ((status or {}).get("kacheln") or {})
+        guards = ((self.cfg.get("live") or {}).get("guards") or {})
+        namen = [k for k, v in guards.items() if (v or {}).get("enabled")]
+
+        def _schluessel(name):
+            try:
+                ts = float((kacheln.get(name) or {}).get("start_ts") or 0.0)
+            except (TypeError, ValueError):
+                ts = 0.0
+            return (-ts, str(name))
+        return sorted(namen, key=_schluessel)
+
+    def _waechter_reduktion_planen(self, st, kind, minimum_mb):
+        """WIE VIELE WAECHTER MUESSEN WEG, damit die Erkennung wieder rechnet?
+        -> plan|None (None = nicht noetig oder es wuerde auch dann nicht reichen)
+
+        Gerechnet wird mit den GEMESSENEN Posten (gpubudget.waechter_frei_mb):
+        die Live-Engine traegt die Modelle einmal, jeder Waechter sein eigenes
+        ffmpeg — der erste abgeschaltete gibt weniger her als der letzte.
+
+        REICHT ES AUCH DANN NICHT, wird NICHTS abgeschaltet. Waechter fuer eine
+        Erkennung zu opfern, die danach trotzdem nicht laeuft, waere der
+        schlechteste aller Ausgaenge: der Betreiber verloere beides."""
+        budget = int(st.get("worker_budget_mb") or 0)
+        aktive = self._live_aktive_namen()
+        n = len(aktive)
+        if n <= 0 or int(minimum_mb or 0) <= 0:
+            return None
+        for weg in range(1, n + 1):
+            frei = _gpubudget.waechter_frei_mb(n, weg, kind)
+            if budget + frei >= int(minimum_mb):
+                return {"namen": aktive[:weg], "n_vorher": n, "n_nachher": n - weg,
+                        "frei_mb": frei, "budget_mb": budget,
+                        "minimum_mb": int(minimum_mb), "ts": round(time.time(), 1),
+                        "grund": (f"the card carried {budget} MiB, one compute "
+                                  f"thread with one geometry needs "
+                                  f"{int(minimum_mb)} MiB")}
+        return None
+
+    def _waechter_schalten(self, namen, an, grund):
+        """Waechter schalten — ueber den NORMALEN Schalter, in einem eigenen
+        Thread. -> None
+
+        WARUM EIN THREAD: `live_schalter` nimmt `_cfg_lock` (Lesen-Aendern-
+        Schreiben am Store), und dieser Griff haengt am Worker-START, der das
+        Absetz-Lock des Dienstes haelt. Beides in einer Hand waere eine
+        Verklemmung, auf die man so lange wartet, bis es sie einmal wirklich
+        gibt.
+        WARUM DER NORMALE SCHALTER: eine zweite Abschalt-Mechanik waere ein
+        zweiter Weg mit eigener Wahrheit — die Engine kennt genau einen
+        (Store-Reload je Waechter), und der Zustand der Kachel kommt weiter aus
+        ihrer Quittung."""
+        from core import livewache as _lw_s
+
+        def _lauf():
+            for name in list(namen or ()):
+                try:
+                    with _cfg_lock:
+                        ok, msg = _lw_s.live_schalter(
+                            self.cfg, name, bool(an),
+                            store_pfad=_config_store_pfad,
+                            store_laden=_lade_config_store,
+                            store_schreiben=_store_schreiben,
+                            log=self.log)
+                    self.log(f"live watcher {name} "
+                             f"{'back on' if an else 'taken off the net'} "
+                             f"automatically ({grund}): {msg}"
+                             if ok else
+                             f"live watcher {name} could NOT be switched "
+                             f"{'on' if an else 'off'} ({msg}) — {grund}")
+                except Exception as e:                     # noqa: BLE001
+                    self.log(f"live watcher {name}: automatic switch failed "
+                             f"({type(e).__name__}: {e})")
+        threading.Thread(target=_lauf, daemon=True,
+                         name="waechter-vorrang").start()
+
+    def _waechter_reduzieren(self, plan):
+        """Den Plan ausfuehren und MERKEN (.544 A). -> bool (wirklich getan)
+
+        Gemerkt wird klebrig (`state/live_reduziert.json`), damit die Waechter
+        auch nach einem Dienst-Neustart wieder zurueckkommen — ein Eingriff, an
+        den sich niemand erinnert, waere ein dauerhaft abgeschalteter Waechter
+        ohne Urheber."""
+        from core import livewache as _lw_r
+        merk = _lw_r.reduziert_lesen(self.cfg)
+        schon = set(merk.get("namen") or ())
+        neu = [n for n in (plan or {}).get("namen") or () if n not in schon]
+        if not neu:
+            return False
+        alle = sorted(schon | set(neu))
+        _lw_r.reduziert_schreiben(self.cfg, {
+            "namen": alle, "ts": merk.get("ts") or plan["ts"],
+            "grund": plan["grund"], "vorrang": "erkennung"})
+        self.log(f"live watchers reduced {plan['n_vorher']} -> "
+                 f"{plan['n_nachher']} to keep recognition running: "
+                 f"{', '.join(neu)} taken off the net ({plan['grund']}; the "
+                 f"posten say that frees about {plan['frei_mb']} MiB). They "
+                 f"come back automatically once the card carries the full "
+                 f"price again. Set vorrang=wache if the live watchers should "
+                 f"win instead")
+        self._waechter_schalten(neu, False, "recognition has priority")
+        return True
+
+    def _waechter_zurueckholen(self, st, kind, sofort=False):
+        """DIE ZURUECKGESTELLTEN WAECHTER WIEDER ANSCHALTEN, sobald Platz ist.
+        -> bool (zurueckgeholt)
+
+        ZWEI BEDINGUNGEN, und beide haben einen Grund:
+          * HALTEZEIT. Ohne sie antwortete die Anlage auf jeden Schwankung der
+            Karte mit An-Aus-An — dieselbe Flatter-Klasse, gegen die schon der
+            Mindestabstand zwischen zwei druckbedingten Worker-Neustarts steht.
+            Genommen wird deshalb DIESE Frist (`DRUCK_NEUSTART_ABSTAND_S`, 600
+            s) und keine neue Zahl.
+          * HYSTERESE. Zurueckgeholt wird erst, wenn das Budget den VOLLEN
+            Pflichtpreis traegt — abgeschaltet wurde unter dem MINIMUM. Waeren
+            es dieselbe Schwelle, kippte es an der Kante hin und her.
+
+        `sofort=True` ueberspringt beides: das ist der Fall „der Betreiber hat
+        auf vorrang=wache gestellt" — seine Ansage gilt ohne Wartezeit."""
+        from core import livewache as _lw_z
+        merk = _lw_z.reduziert_lesen(self.cfg)
+        namen = [n for n in (merk.get("namen") or ()) if n]
+        if not namen:
+            return False
+        if not sofort:
+            seit = float(merk.get("ts") or 0.0)
+            if (time.time() - seit) < _gpubudget.DRUCK_NEUSTART_ABSTAND_S:
+                return False
+            budget = int((st or {}).get("worker_budget_mb") or 0)
+            pflicht = int(((st or {}).get("leiter") or {}).get(
+                "pflicht_preis_mb") or 0)
+            n_jetzt = int((st or {}).get("waechter_n") or 0)
+            kosten = (_gpubudget.waechter_posten_mb(n_jetzt + len(namen), kind)
+                      - _gpubudget.waechter_posten_mb(n_jetzt, kind))
+            if not pflicht or (budget - kosten) < pflicht:
+                return False
+        _lw_z.reduziert_schreiben(self.cfg, {})
+        self.log(f"live watchers back on ({', '.join(namen)}) — "
+                 + ("live watchers have priority again (vorrang=wache)"
+                    if sofort else
+                    "the card carries the full price again"))
+        self._waechter_schalten(namen, True, "card has room again")
+        return True
+
+    def _reduktion_laeuft(self):
+        """WELCHE WAECHTER WIR GERADE ZURUECKSTELLEN, deren Schalter aber noch
+        nicht durch ist -> [name, …]
+
+        Der Unterschied ist nicht akademisch: zwischen dem Merker und der
+        Engine-Quittung liegen Sekunden, in denen der Platz noch nicht da ist.
+        Wer diese Sekunden fuer „es hat nicht geholfen" haelt, sagt zwei
+        gegensaetzliche Saetze in zwei Minuten."""
+        from core import livewache as _lw_l
+        merk = _lw_l.reduziert_lesen(self.cfg)
+        guards = ((self.cfg.get("live") or {}).get("guards") or {})
+        return [n for n in (merk.get("namen") or ())
+                if (guards.get(n) or {}).get("enabled")]
+
+    def _warten_lohnt(self, st, noetig_mb):
+        """LOHNT ES, AUF FREIEN KARTENSPEICHER ZU WARTEN? -> bool
+
+        DIE EINE STELLE (.544 C). Bis .543 rechnete das Start-Tor diese Frage
+        selbst und die Leiter-Meldung daneben eine andere — im Feldlog standen
+        deshalb „The worker is NOT started into this" und 13 Sekunden spaeter
+        „worker started (pid 335)". Seitdem steht die Zahl hier, und beide
+        lesen sie.
+
+        DIE FRAGE, ausgeschrieben: waeren nur UNSERE bekannten Verbraucher auf
+        der Karte (Live-Waechter und der Dienstprozess), truege sie das
+        Noetige? Dann ist das, was gerade drueckt, ein FREMDER Verbraucher —
+        ein Anzeige-Transcode, ein zweiter Container, Frigate selbst —, und der
+        ist meist in Sekunden vorbei. Truege sie es auch dann nicht, sind WIR
+        der Grund, und kein Warten macht die Karte groesser; dann entscheiden
+        die Vorrang-Stufen."""
+        ohne_fremde = (int((st or {}).get("gesamt_mb") or 0)
+                       - int((st or {}).get("waechter_mb") or 0)
+                       - int((st or {}).get("dienst_mb") or 0))
+        return ohne_fremde >= int(noetig_mb or 0)
+
+    def _vorrang_stufen(self, st, kind, preise=None):
+        """VORRANG ERKENNUNG VOR WACHE — die Stufen (.544 A). -> st
+
+        DER BEFUND (Feldtester-Log 21.09.2026): auf einer 8-GB-Karte mit fuenf
+        Live-Waechtern fehlten 11 MiB am Pflichtpreis. Zwischen „voll" und „gar
+        nichts" lag NICHTS: der Worker wurde nicht gestartet, jedes Ereignis
+        endete als `fehler`, und die Meldung schickte den Betreiber in seine
+        `config.json`. Seitdem gibt es drei Stufen, und das System geht sie
+        SELBST (Grundsatz „Automatik statt manuell"):
+
+          1. Das Budget traegt den vollen Pflichtpreis -> wie bisher.
+          2. Es traegt Prozess + EINE Geometrie -> MINIMALMODUS: ein Strang,
+             Geometrie-Deckel 1. Langsamer bei wechselnden Bildgroessen (jeder
+             Wechsel kostet einen Neubau), aber die Anlage erkennt.
+          3. Nicht einmal das -> WAECHTER REDUZIEREN, den zuletzt gestarteten
+             zuerst, so viele wie noetig; sie kommen von selbst zurueck.
+          4. `vorrang=wache` dreht die Rangfolge um: dann bleibt der Worker aus
+             wie bisher — aber mit einer ehrlichen Meldung statt einer
+             Handlungsanweisung.
+
+        WAS SICH FUER ANLAGEN OHNE ENGPASS AENDERT: NICHTS. Traegt die Karte,
+        laeuft dieser Griff durch bis zum ersten `return` — er fasst weder die
+        Leiter noch einen Schalter an."""
+        if not isinstance(st, dict) or st.get("mass") != "vram":
+            return st
+        vorrang = str(self.cfg.get("vorrang") or "erkennung").strip().lower()
+        if vorrang not in ("erkennung", "wache"):
+            vorrang = "erkennung"
+        st["vorrang"] = vorrang
+        minimum = _gpubudget.mindest_preis_mb(kind, preise)
+        st["minimum_mb"] = minimum
+        st["modus"] = "voll"
+        st["modus_text"] = None
+        st["reduktion"] = None
+        reserve = int(st.get("reserve_mb") or 0)
+        voll_noetig = (int((st.get("leiter") or {}).get("summe_mb") or 0)
+                       + reserve)
+        if not st.get("verweigert"):
+            # Die Karte traegt. Liegt noch eine Reduktion von vorhin an, ist
+            # JETZT der Moment, sie zurueckzunehmen (mit Haltezeit, s. dort).
+            st["warten_lohnt"] = self._warten_lohnt(st, voll_noetig)
+            self._waechter_zurueckholen(st, kind)
+            return st
+        budget = int(st.get("worker_budget_mb") or 0)
+        pflicht = int((st.get("leiter") or {}).get("pflicht_preis_mb") or 0)
+        # ERST DIE FRAGE, WER DRUECKT. Traegt die Karte das Noetige, sobald nur
+        # unsere eigenen Verbraucher darauf liegen, ist ein FREMDER Prozess der
+        # Grund — und dann ist die Absage von eben eine Momentaufnahme. Waechter
+        # dafuer abzuschalten waere der falsche Eingriff am falschen Ort: sie
+        # sind nicht der Engpass. Das Start-Tor wartet gedeckelt (M3c), und
+        # reisst die Frist, geht der Job zurueck in die Warteschlange (M3b).
+        if self._warten_lohnt(st, voll_noetig):
+            st["modus"] = "warten"
+            st["warten_lohnt"] = True
+            st["modus_text"] = (
+                f"the card is held by something outside this service right now "
+                f"({budget} MiB budget against {voll_noetig} MiB needed, but "
+                f"{int(st.get('gesamt_mb') or 0)} MiB minus our own live "
+                f"watchers and service would be enough) — the worker waits for "
+                f"it to free up instead of taking live watchers off the net")
+            st["rechenweg"] = (f"{st.get('rechenweg') or ''}; mode wait "
+                               f"(foreign consumer, vorrang={vorrang})")
+            return st
+        if vorrang == "wache":
+            self._waechter_zurueckholen(st, kind, sofort=True)
+            st["modus"] = "aus"
+            st["modus_text"] = (
+                f"recognition is off because live watchers have priority "
+                f"(vorrang=wache): the card carries {budget} MiB, one compute "
+                f"thread with one geometry needs {minimum} MiB. Set "
+                f"vorrang=erkennung and the service takes live watchers off "
+                f"the net instead, or free card memory yourself")
+            st["hinweis"] = st["modus_text"]
+            st["warten_lohnt"] = False      # WIR sind der Grund, s. o.
+            st["rechenweg"] = (f"{st.get('rechenweg') or ''}; mode off "
+                               f"(vorrang=wache)")
+            return st
+        if minimum > 0 and budget >= minimum:
+            st = self._minimalmodus(st, kind, budget, minimum, pflicht)
+            st["warten_lohnt"] = self._warten_lohnt(st, minimum + reserve)
+            st["rechenweg"] = (f"{st.get('rechenweg') or ''}; mode minimum "
+                               f"(1 thread, 1 geometry, vorrang={vorrang})")
+            return st
+        plan = self._waechter_reduktion_planen(st, kind, minimum)
+        # WICHTIG, und im Bau zuerst falsch gewesen: dieser Griff laeuft bei
+        # JEDEM Worker-Start. Der zweite Start faellt in die Zeit, in der die
+        # Waechter gerade herunterfahren — der Platz ist also noch nicht da,
+        # und die Reduktion ist schon gemerkt. Wer dann wieder auf „aus"
+        # kippte, sagte zwei Saetze in zwei Minuten und verlor die Ereignisse
+        # dazwischen. Solange eine Reduktion LAEUFT (gemerkt und der Schalter
+        # noch nicht durch), bleibt es beim Minimalmodus; das Start-Tor wartet
+        # gedeckelt auf den Platz (M3c), und ein Job geht notfalls zurueck in
+        # die Warteschlange statt verloren (M3b).
+        _laeuft = self._reduktion_laeuft()
+        if plan or _laeuft:
+            if plan:
+                self._waechter_reduzieren(plan)       # schaltet nur Neues
+            st = self._minimalmodus(st, kind, budget, minimum, pflicht)
+            _vor = (plan or {}).get("n_vorher", st.get("waechter_n"))
+            _nach = (plan or {}).get("n_nachher", st.get("waechter_n"))
+            st["rechenweg"] = (f"{st.get('rechenweg') or ''}; mode reduced "
+                               f"({_vor} -> {_nach} live watchers, then 1 "
+                               f"thread, 1 geometry, vorrang={vorrang})")
+            st["modus"] = "reduziert"
+            st["reduktion"] = plan or {"namen": _laeuft, "n_vorher": _vor,
+                                       "n_nachher": _nach, "ts": None,
+                                       "grund": "reduction still taking effect"}
+            st["modus_text"] = (
+                f"live watchers reduced {_vor} -> {_nach} to keep recognition "
+                f"running; the worker starts as soon as the card frees up")
+            # WARTEN LOHNT HIER IMMER: der Platz kommt gerade frei. Das Tor
+            # wartet gedeckelt darauf, statt den Job wegzuwerfen.
+            st["warten_lohnt"] = True
+            return st
+        st["modus"] = "aus"
+        st["modus_text"] = (
+            f"the card does not carry one compute thread: {budget} MiB budget "
+            f"against {minimum} MiB for one thread with one geometry"
+            + (f", and taking live watchers off the net would not close that "
+               f"gap either" if self._live_aktive_namen() else
+               f", and there is no live watcher left to take off the net")
+            + ". The worker is NOT started. Lower worker_vram_reserve_mb, set "
+              "worker_vram_mb by hand if you know better, or run the cpu image "
+              "variant")
+        st["hinweis"] = st["modus_text"]
+        st["warten_lohnt"] = False          # die Karte wird nicht groesser
+        st["rechenweg"] = (f"{st.get('rechenweg') or ''}; mode off "
+                           f"(vorrang={vorrang})")
+        return st
+
+    def _minimalmodus(self, st, kind, budget, minimum, pflicht):
+        """EIN STRANG, EINE GEOMETRIE (.544 A, Stufe 2) -> st
+
+        Die Zahlen kommen aus DERSELBEN Rechnung wie sonst auch: der Preis aus
+        `gpubudget.mindest_preis_mb`, der Arena-Deckel aus
+        `gpubudget.arena_deckel_mb` mit EINEM Strang. Neu ist nur, dass die
+        zweite Geometrie nicht mehr eingeplant wird — sie ist Komfort (kein
+        Neubau beim Wechsel zwischen zwei Bildgroessen), und Komfort ist das
+        erste, was fehlen darf, wenn sonst gar nichts rechnet."""
+        posten_mb, posten = _gpubudget.posten_ausserhalb_mb(kind, 1)
+        st.update({
+            "n": 1, "g_zusatz": 0, "geometrien_max": 1,
+            "verweigert": False, "zustand": "rot", "grund": "minimalmodus",
+            "fussabdruck_mb": minimum,
+            "arena_deckel_mb": _gpubudget.arena_deckel_mb(kind, budget, 1),
+            "deckel_quelle": "formel",
+            "posten_ausserhalb_mb": posten_mb, "posten": posten,
+            "modus": "minimal",
+            "geometrien_rechenweg": (
+                "minimum mode: ONE geometry — the second one is planned only "
+                "when the budget carries the full price")})
+        st["modus_text"] = (
+            f"recognition runs in minimum mode (1 thread, 1 geometry) — the "
+            f"card carries no more beside {st.get('waechter_n')} live "
+            f"watcher(s): {budget} MiB budget, {minimum} MiB for the minimum, "
+            f"{pflicht} MiB for the full price. Clips of a second resolution "
+            f"cost a rebuild each time instead of being kept ready")
+        st["hinweis"] = st["modus_text"]
+        # ZUSTAND BLEIBT ROT, und das ist Absicht: die Anlage rechnet, aber sie
+        # rechnet unter ihrem Soll. Gruen hiesse „alles in Ordnung" — es ist
+        # nicht alles in Ordnung, es ist nur nicht mehr tot.
+        return st
+
+    def _vram_preise(self, kind, gesamt_mb):
+        """DIE AUF DIESER KARTE GEMESSENEN PREISE — buchen und lesen (.544 B).
+        -> (preise, stand_fuer_health, verworfen[])
+
+        DER ANLASS, in Feldzahlen: die Messtabelle in `core.gpubudget` ist am
+        15.09. auf einer RTX 2060 Mobile und einer RTX 3060 mit 4K-Clips
+        entstanden. Auf einer GTX 1070 mit 2560x1920- und 1080p-Kameras
+        verlangte sie 3175 MiB Pflichtpreis gegen 1929 MiB Budget und
+        verweigerte JEDEN Rechenstrang — die Erkennung war tot, und die Meldung
+        schickte den Betreiber in seine `config.json`.
+
+        WAS HIER PASSIERT, in drei Schritten:
+          (1) BUCHEN: was der Worker-Prozess gemeldet hat (`preis_proben` in
+              seiner Antwort — das MAXIMUM seines Kartenanteils je
+              Konstellation, mit der vorhandenen Sonde gemessen) wandert in den
+              klebrigen Speicher `state/vram_preise.json`.
+          (2) ABLEITEN: aus benachbarten Konstellationen werden Posten-Preise
+              (core.vrampreise.preise_ableiten), jeder gegen die
+              Plausibilitaets-Regeln in core.gpubudget geprueft.
+          (3) MELDEN: was verworfen wurde, steht im Log und in /health — eine
+              still verworfene Messung waere eine Blindstelle.
+
+        NUR AUF KARTEN-BACKENDS. Der Intel-/RAM-Zweig (`mass == "ram"`) rechnet
+        unveraendert mit seiner eigenen Formel: dort gibt es keine Leiter, keine
+        Tabelle und keinen Kartenanteil je Prozess. Das ist eine Aussage, kein
+        Loch — wer dort lernen will, misst erst das Mass.
+
+        GESCHRIEBEN WIRD NUR, WENN SICH ETWAS GEAENDERT HAT: dieser Griff haengt
+        am Worker-Start, und ein Schrieb je Start waere eine Datei, die sich
+        dauernd selbst neu schreibt, ohne dass eine Zahl anders wird."""
+        s_b = _gpubudget.stuetzwerte(kind) or {}
+        if s_b.get("mass") != "vram":
+            return None, None, []
+        try:
+            from core import vrampreise as _vp                 # noqa: PLC0415
+        except Exception as e:                                 # noqa: BLE001
+            self.log(f"vram prices unavailable ({type(e).__name__}: {e}) — "
+                     f"planning from the measurement table")
+            return None, None, []
+        # OHNE DATENORDNER KEIN SPEICHER, und das ist kein Fehler: die Proben
+        # stellen absichtlich nur Teile des Dienstes auf (dieselbe Regel wie
+        # `worker_dienst.auf_karte`), und eine Preis-Auskunft darf die Leiter
+        # NIE am Rechnen hindern — sie ist eine Verbesserung, keine Bedingung.
+        dd = (self.cfg or {}).get("data_dir")
+        if not dd:
+            return None, None, []
+        schluessel = _vp.hw_schluessel(kind, self._karten_name(), gesamt_mb,
+                                       os.environ.get("SUSLIK_VERSION", "dev"))
+        stand = _vp.lesen(dd)
+        proben = {}
+        _d = getattr(self, "_dienst_obj", None)
+        if _d is not None:
+            proben = dict((getattr(_d, "vram_stand", None)
+                           or {}).get("preis_proben") or {})
+        if proben:
+            neu, gebucht, verworfen_roh = _vp.buchen(
+                stand, schluessel,
+                {"karte": self._karten_name(), "gesamt_mb": int(gesamt_mb or 0),
+                 "kind": kind,
+                 "suslik": os.environ.get("SUSLIK_VERSION", "dev")},
+                proben, gesamt_mb=int(gesamt_mb or 0))
+            for _z in verworfen_roh:
+                self.log(f"vram price measurement discarded — {_z}")
+            if gebucht and neu != stand:
+                if _vp.schreiben(dd, neu):
+                    stand = neu
+                else:
+                    self.log("vram prices could not be written — planning from "
+                             "the measurement table for now")
+        preise, verworfen = _vp.preise_ableiten(stand, schluessel,
+                                                int(gesamt_mb or 0))
+        # LAUT, aber nur bei Aenderung: die Verwurfs-Gruende wiederholen sich
+        # sonst bei jedem Worker-Start (der Griff haengt am Start, und ein
+        # halbes Plateau bleibt eben ein halbes Plateau).
+        _marke = (schluessel, tuple(sorted(verworfen)),
+                  tuple(sorted((a, p.get("mb")) for a, p in preise.items())))
+        if _marke != getattr(self, "_preis_marke", None):
+            self._preis_marke = _marke
+            for _z in verworfen:
+                self.log(f"vram price NOT used — {_z} (the measurement table "
+                         f"applies for this posten)")
+            if preise:
+                self.log("vram prices measured on this card: "
+                         + ", ".join(f"{a} {p['mb']} MiB ({p['datum']}, "
+                                     f"{p['proben']} samples)"
+                                     for a, p in sorted(preise.items())))
+        return (preise or None), _vp.stand_zeigen(stand, schluessel), verworfen
+
     def _worker_karte_eigen_mb(self):
         """Was UNSER laufender Worker auf der Karte haelt — Prozess UND seine
         Decoder-Kinder, im selben Moment gemessen. -> (mb, grund)
@@ -14082,6 +15108,20 @@ class Service:
                 "frei_quelle": st.get("frei_quelle"),
                 "frei_gerechnet_mb": st.get("frei_gerechnet_mb"),
                 "frei_gemessen_mb": st.get("frei_gemessen_mb"),
+                # .544 Teil 6 (BEF-5): … UND OB DIESE ZAHL EIN BAND ODER EIN
+                # MOMENT IST. Teil 3 hat die Herkunft mitreisen lassen, genau
+                # damit in /health nicht eine Zahl steht, von der niemand
+                # weiss,
+                # wie sie erhoben wurde — bis hierher kam sie aber nur im
+                # Fliesstext `rechenweg` an, als Feld nirgends. `frei_band_mb`
+                # None MIT `frei_band_grund` heisst „kein Band, geplant wurde
+                # auf `frei_moment_mb`"; auf Backends ohne Kartenspeicher ist
+                # genau das der Normalfall und steht als Grund da.
+                "frei_band_mb": st.get("frei_band_mb"),
+                "frei_band_fenster_s": st.get("frei_band_fenster_s"),
+                "frei_band_n": st.get("frei_band_n"),
+                "frei_band_grund": st.get("frei_band_grund"),
+                "frei_moment_mb": st.get("frei_moment_mb"),
                 # .534 (NB-2): was der LAUFENDE Worker selbst haelt und dem
                 # Messwert zurueckgerechnet wurde — sonst zaehlt er zweimal.
                 # .535: DANEBEN DER GRUND der Prozess-Sonde. Leer heisst
@@ -14128,6 +15168,14 @@ class Service:
                     getattr(self, "_plaetze", None), "kapazitaet", 0) or 0),
                 "analyse_plaetze_quelle": getattr(
                     getattr(self, "_plaetze", None), "quelle", "config"),
+                # .544 A: WAS DIE ANLAGE GERADE TUT — voll / minimal /
+                # reduziert / aus, wer Vorrang hat und was der Minimalmodus
+                # kostet. Der Satz daneben ist derselbe, den das Log traegt und
+                # den das Start-Tor als Absage zurueckgibt (EINE Rechnung).
+                "modus": st.get("modus"), "modus_text": st.get("modus_text"),
+                "vorrang": st.get("vorrang"),
+                "minimum_mb": st.get("minimum_mb"),
+                "reduktion": st.get("reduktion"),
                 "klemme": st.get("klemme"), "hinweis": st.get("hinweis")}
 
     def _ram_zustand(self, st):
@@ -14200,6 +15248,13 @@ class Service:
                # stammt und welche noch der skalierte Anker einer fremden ist.
                "preis_quelle_stufen": st.get("preis_quelle_stufen") or {},
                "preise_mb": st.get("preise_mb") or {},
+               # .544 B: der klebrige Speicher der auf DIESER Karte gemessenen
+               # Preise (state/vram_preise.json) und das, was daraus NICHT
+               # verwendet werden konnte. Beides gehoert sichtbar nebeneinander:
+               # eine still verworfene Messung waere eine Blindstelle, und eine
+               # Zahl ohne ihren Ursprung ist keine Auskunft.
+               "preis_stand": st.get("preis_stand"),
+               "preis_verworfen": st.get("preis_verworfen") or [],
                # .534: was GEMESSEN wurde, neben dem, was GEPLANT wird. Bei
                # konservativer Planung sind das zwei verschiedene Zahlen, und
                # beide gehoeren sichtbar nebeneinander.
@@ -14388,12 +15443,37 @@ class Service:
                 + int(st.get("dienst_mb") or 0),
                 "budget_mb": int(st.get("worker_budget_mb") or 0),
                 "pflicht_mb": int(lt.get("pflicht_preis_mb") or 0),
+                # .544 A: DER MODUS und sein Satz reisen MIT — das Start-Tor
+                # rechnet seit .544 C nicht mehr selbst, es liest hier.
+                "modus": st.get("modus") or "voll",
+                "modus_text": st.get("modus_text"),
+                "minimum_mb": int(st.get("minimum_mb") or 0),
+                "vorrang": st.get("vorrang") or "erkennung",
+                # .544 C: LOHNT WARTEN? Genau EINMAL gerechnet, hier, aus den
+                # Zahlen der Leiter — und von beiden Lesern (Start-Tor und
+                # Meldung) nur noch GELESEN. Bis .543 rechnete das Start-Tor
+                # diese Frage selbst (`gesamt - eigen`), waehrend die Leiter
+                # danebenstand: sein Log sagte „The worker is NOT started into
+                # this" und 13 s spaeter „worker started (pid 335)". Der
+                # Betreiber konnte nicht wissen, was gilt.
+                # Die Bedeutung, ausgeschrieben: waere NICHTS Fremdes auf der
+                # Karte, truege sie das Noetige — dann ist die Absage von eben
+                # eine Momentaufnahme und die Warteschleife im Start-Tor ist
+                # genau dafuer da. Truege sie es auch dann nicht, hilft kein
+                # Warten: die Karte wird nicht groesser.
+                "warten_lohnt": bool(st.get("warten_lohnt")),
                 # WAS AUF DER KARTE FREI SEIN MUSS, damit dieser Start Sinn hat:
                 # die Summe der Stufen, die gebaut werden sollen, plus die nicht
                 # vergebbare Reserve. Die Waechter stehen NICHT darin — sie liegen
                 # schon auf der Karte, ihr Platz ist in `frei` bereits weg.
-                "noetig_mb": int(lt.get("summe_mb") or 0)
-                + int(st.get("reserve_mb") or 0)}
+                # .544 A: im Minimalmodus ist es der Minimum-Preis — sonst
+                # wartete das Tor auf einen Platz, den dieser Prozess gar nicht
+                # mehr anfordert.
+                "noetig_mb": ((int(st.get("minimum_mb") or 0)
+                               + int(st.get("reserve_mb") or 0))
+                              if st.get("modus") in ("minimal", "reduziert")
+                              else (int(lt.get("summe_mb") or 0)
+                                    + int(st.get("reserve_mb") or 0)))}
 
     def _plaetze_an_straenge(self, st):
         """Die Kapazitaet der Vergabestelle an die Rechenstraenge binden (.532).
@@ -17218,10 +18298,27 @@ class Service:
         # (der zweite Raeumer sitzt an der Lauf-Anlage).
         _ll.abbruch_marke_raeumen(dd)
         liste = zustand.get("events_liste")
-        if not liste:
+        # .544 K1 (Feldbefund 21.09.2026): FEHLENDE Liste und LEERE Liste sind
+        # zwei verschiedene Dinge, und bis .543 waren sie dasselbe `not liste`.
+        #   * KEINE Liste (Schluessel fehlt, None, kein list) heisst: die
+        #     Zustandsdatei traegt die Vorbereitung nicht — ein echter Schaden,
+        #     und „fortsetzen" ist der richtige Rat.
+        #   * LEERE Liste heisst: die Vorbereitung lief sauber durch und der
+        #     UMFANG enthielt nichts (`learning run prepared: 0 events checked`
+        #     steht dann sogar im Log darueber). Fortsetzen kann dort NIE etwas
+        #     finden — der Lauf ist fertig, nicht kaputt.
+        # Ein Feldtester hat den Unterschied bezahlt: sein Tageslauf fand null
+        # Ereignisse, die Meldung behauptete einen Zustandsdatei-Schaden und riet
+        # zum Fortsetzen, und er hat VIERMAL fortgesetzt — jedes Mal dieselbe
+        # Kette. Fremd-Augen-Frage bedient: „Nutzer waehlt einen Tag/eine Kamera
+        # ohne Ereignisse" ist ein Zustand, den unser Testbett nicht hat.
+        if not isinstance(liste, list):
             self._lernlauf_unterbrochen(
                 dd, "run state carries no prepared event list", zustand)
             self.log("harvest failed: run state carries no events_liste")
+            return
+        if not liste:
+            self._lernlauf_leer_beenden(dd, zustand)
             return
         if not self.cfg.get("worker", True):
             # Die Ernte laeuft AUSSCHLIESSLICH ueber den Worker (1 Event je Job =
@@ -18341,6 +19438,85 @@ class Service:
     LERNLAUF_BLINK_EINZELN = 3
     LERNLAUF_BLINK_SAMMEL = 100
 
+    def _lernlauf_umfang_text(self, zustand):
+        """DER UMFANG eines Laufs als ein englisches Satzstueck (.544 K1).
+
+        Er steht in der Abschluss-Zeile eines LEEREN Laufs, und ohne ihn waere
+        „0 Ereignisse" die halbe Auskunft: der Betreiber soll am Log und auf der
+        Lauf-Seite sehen, WORAUF nichts gefunden wurde, ohne die Zustandsdatei
+        aufzumachen. Gelesen wird nur, was die Anlage-Route wirklich
+        hineinschreibt (POST /lernlauf_start) — keine geratenen Felder."""
+        z = zustand or {}
+        teile = []
+        if z.get("quelle") == "datei":
+            _d = z.get("dateien")
+            _n = len(_d) if isinstance(_d, list) else 0
+            teile.append(f"{_n} own video file(s)" if _n else "own video files")
+        elif z.get("tag"):
+            teile.append(f"day {z['tag']}")
+        elif z.get("alle"):
+            teile.append("all events")
+        else:
+            try:
+                _n = int(z.get("events") or 0)
+            except (TypeError, ValueError):
+                _n = 0
+            teile.append(f"last {_n} events" if _n else "the requested events")
+        _k = z.get("kameras")
+        if isinstance(_k, list) and _k:
+            teile.append("camera(s) " + ", ".join(str(x) for x in _k))
+        if z.get("nur_neue"):
+            teile.append("only events not searched yet")
+        if z.get("zielperson"):
+            teile.append("limited to one person")
+        return ", ".join(teile)
+
+    def _lernlauf_leer_beenden(self, dd, zustand):
+        """EIN LAUF MIT LEEREM UMFANG ENDET EHRLICH (.544 K1) -> Zustand|None.
+
+        Kein `unterbrochen`, kein Resume-Rat: die Vorbereitung ist sauber
+        durchgelaufen (ihre eigene Zeile sagt `learning run prepared: 0 events
+        checked`), der Umfang enthielt nur nichts. Fortsetzen kann dort NIE
+        etwas finden — ein Feldtester hat das viermal ausprobiert, weil die
+        Meldung es ihm geraten hat.
+
+        GESCHRIEBEN WIRD DIE VORHANDENE ABSCHLUSS-KENNUNG, kein neuer Phasenwert:
+        phase `anker` mit einem Status, der mit `anchors: none` beginnt — genau
+        das schreibt die Anker-Phase selbst, wenn sie nichts findet
+        (core/anker.py), und genau daran erkennen `lauf_abgeschlossen`, die
+        Lauf-Seite und die Anlage des naechsten Laufs einen fertigen Lauf. Ein
+        eigener Phasenwert waere ein zweites Abschluss-Literal und haette den
+        Wizard dauerhaft blockiert (die W2.1-Lehre steht an
+        core.lernlauf.UNTERBROCHEN).
+
+        Die Anker-Phase wird ausdruecklich NICHT gestartet: sie braucht eine
+        gefuellte `events_liste` und schriebe sonst „anchor stage failed: run has
+        no persisted event list" — also wieder einen Schaden, den es nicht gibt."""
+        from core import lernlauf as _ll_leer
+        umfang = self._lernlauf_umfang_text(zustand)
+        lid = str((zustand or {}).get("lauf_id") or "")
+        z = _ll_leer.lauf_fortschreiben_geduldig(
+            dd, {"phase": "anker",
+                 "fortschritt": {
+                     "status": f"anchors: none — no events in this scope "
+                               f"({umfang})",
+                     "scope": umfang,
+                     # Die Arbeits-Zeile der Vorbereitung raeumen (None loescht
+                     # den Schluessel) — sie stuende sonst am fertigen Lauf wie
+                     # der `analysing`-Rest am Ernte-Ende (Forensik-Fund 7).
+                     "analysing": None}},
+            melde=lambda v, n: self.log(
+                f"run state file missing for a moment ({v}/{n}) — "
+                "continuing (non-atomic rename on this filesystem?)"))
+        if z is None:
+            self.log("learning run: 0 events in this scope, but there is no run "
+                     "state left to record that in")
+            return None
+        self.log(f"learning run{(' ' + lid) if lid else ''} finished: 0 events "
+                 f"in this scope ({umfang}) — nothing to harvest, and nothing "
+                 f"to resume; pick a different scope for the next run")
+        return z
+
     def _lernlauf_unterbrochen(self, dd, grund, zustand=None, stand=None,
                                infra=False, lauf_id=None):
         """Den Lauf sichtbar ANHALTEN statt ihn still stehen zu lassen (b):
@@ -18474,7 +19650,13 @@ class Service:
                 neu["auto_resume"] = int(z.get("auto_resume") or 0) + 1
             if _ll_f.lauf_fortschreiben_geduldig(dd, neu) is None:
                 return False, _sprache.t("antwort.lernlauf_resume_weg")
-            self.log(f"learning run {z.get('lauf_id')} resumes "
+            # .544 K1: OHNE KENNUNG STEHT KEINE DA. Die `lauf_id` wird erst im
+            # Ernte-Eintritt vergeben; ein Lauf, der vorher anhielt, schrieb hier
+            # woertlich „learning run None resumes" — eine Kennung, die es nicht
+            # gibt, liest sich wie ein Datenfehler. Ist sie da, steht sie; ist
+            # sie es nicht, entfaellt sie.
+            _rid = str(z.get("lauf_id") or "")
+            self.log(f"learning run{(' ' + _rid) if _rid else ''} resumes "
                      + ("automatically" if auto else "on request")
                      + " (harvest resume — already harvested events are skipped)")
         self.lernlauf_ernte_starten()
@@ -18976,16 +20158,41 @@ class Service:
 
         HEILUNG ist der bestehende Reset: die erste erfolgreiche LIVE-Analyse
         setzt `_fehlerserie` auf 0 (`process`, der else-Zweig der Wache). Hier
-        wird nichts geheilt und nichts gesetzt — diese Methode liest nur."""
+        wird nichts geheilt und nichts gesetzt — diese Methode liest nur.
+
+        .544 DIE ZWEITE SERIE STEHT DANEBEN (`serie_alle`, `seit_alle_ts`), und
+        `aktiv` ist seitdem ODER-verknuepft. Anlass ist die Nacht vom 20. auf
+        den 21.09.: nach dem i915-Hang lieferte JEDE Analyse `analyse_none`, 24
+        Nachhol-Versuche ueber die Nacht plus das 06:00-Netz-Sammeln — und
+        /health stand die ganze Zeit auf `ok=true`, weil `_fehlerserie` per
+        Vertrag NUR den Ereignis-Pfad zaehlt und nachts kein frisches Ereignis
+        kam. Die zweite Serie zaehlt BEIDE Pfade (`_serie_alle_buchen`); die
+        erste bleibt unveraendert die Ereignis-Aussage. Zwei Zahlen statt einer
+        gemischten, damit ein Betreiber sieht, WELCHE Serie rot macht."""
+        jetzt = time.time()
         n = int(getattr(self, "_fehlerserie", 0) or 0)
         seit = float(getattr(self, "_fehlerserie_start", 0.0) or 0.0)
-        alter = (time.time() - seit) if seit else None
+        alter = (jetzt - seit) if seit else None
         frisch = alter is not None and alter <= SERIE_FENSTER_S
+        # Die zweite Serie mit DERSELBEN Verjaehrung — sie wird drueben genauso
+        # lazy ausgewertet, und ein anderes Fenster hier waere eine zweite
+        # Wahrheit ueber denselben Zeitraum.
+        n_alle = int(getattr(self, "_fehlerserie_alle", 0) or 0)
+        seit_alle = float(getattr(self, "_fehlerserie_alle_start", 0.0) or 0.0)
+        alter_alle = (jetzt - seit_alle) if seit_alle else None
+        frisch_alle = alter_alle is not None and alter_alle <= SERIE_FENSTER_S
         return {"serie": n, "schwelle": SERIE_STRUKTURSIGNAL_N,
-                "aktiv": bool(n >= SERIE_STRUKTURSIGNAL_N and frisch),
+                "aktiv": bool((n >= SERIE_STRUKTURSIGNAL_N and frisch)
+                              or (n_alle >= SERIE_STRUKTURSIGNAL_N and frisch_alle)),
                 "fenster_s": SERIE_FENSTER_S,
                 "seit_ts": round(seit, 1) or None,
                 "alter_s": round(alter, 1) if alter is not None else None,
+                # .544: die Serie ueber BEIDE Pfade (Ereignis + Nachhol +
+                # Sammel-Ausnahme) — die Zahl, die in der Nacht vom 20./21.09.
+                # gefehlt hat.
+                "serie_alle": n_alle,
+                "seit_alle_ts": round(seit_alle, 1) or None,
+                "alter_alle_s": round(alter_alle, 1) if alter_alle is not None else None,
                 "gemeldet_ts": round(getattr(self, "_fehlerserie_gemeldet", 0.0)
                                      or 0.0, 1) or None,
                 # Der Serien-Schuss (.543): wie oft er gefallen ist, wann zuletzt
@@ -18995,9 +20202,20 @@ class Service:
                 "letzter_schuss": ({"ts": round(self._serie_schuss_ts, 1),
                                     "grund": getattr(self, "_serie_schuss_grund", None)}
                                    if getattr(self, "_serie_schuss_ts", 0.0) else None),
-                "bremse_s": float(_gpubudget.DRUCK_NEUSTART_ABSTAND_S)}
+                "bremse_s": float(_gpubudget.DRUCK_NEUSTART_ABSTAND_S),
+                # .544 Teil 5a DIE SOFORTPROBE: wie oft sie gefahren ist, wann
+                # zuletzt und was sie sagte ('ok' | 'fehler' | 'nicht_gelaufen'
+                # | 'laeuft'). Ohne diese drei Felder waere der schnellste Weg
+                # zum Schuss der einzige unbeobachtbare — und eine Probe, die
+                # ein Betreiber nur im Log findet, beantwortet die Frage „war
+                # das mein Clip oder meine Karte?" erst nach dem Log-Lesen.
+                "proben": int(getattr(self, "_sofortproben", 0) or 0),
+                "probe_letzte_ts": round(float(getattr(self, "_sofortprobe_ts",
+                                                       0.0) or 0.0), 1) or None,
+                "probe_letztes_ergebnis": getattr(self, "_sofortprobe_ergebnis",
+                                                  None)}
 
-    def _serie_schuss(self, n, jetzt_ts):
+    def _serie_schuss(self, n, jetzt_ts, grund=None, quelle=None):
         """DER SERIEN-SCHUSS (.543, Feld-Prio nach dem i915-Hang vom 18./20.09.).
         -> True, wenn wirklich geschossen wurde.
 
@@ -19029,7 +20247,16 @@ class Service:
         WAS DANACH PASSIERT, ist gebauter Bestand und wird hier NICHT wiederholt:
         `kill_hart` laesst die Antwort-Pipe offen, der Lese-Thread sagt alle
         offenen Jobs am EOF als `fremdverschuldet` ab, der naechste Job startet
-        einen frischen Prozess, und auf dem laeuft die Kurzform der Start-Proben."""
+        einen frischen Prozess, und auf dem laeuft die Kurzform der Start-Proben.
+
+        .544 TEIL 5A — `grund` UND `quelle` SIND ANSCHRIFTEN, KEINE SCHALTER:
+        beide Vorgaben sind wortgleich die von .543 und bleiben es fuer jeden
+        bestehenden Aufrufer. Der ZWEITE Schuetze dieses Hauses (die Sofortprobe
+        nach `analyse_none`) schiesst nicht wegen einer Serie, sondern wegen
+        eines gescheiterten Selbstbeweises — stuende in seinem Log und in
+        /health „N analyses in a row failed", waere das eine falsche Auskunft
+        ueber die Ursache. Entschieden wird hier weiterhin nichts an einem Text:
+        der Aufrufer hat schon entschieden, dieser Text sagt nur, WER."""
         letzter = float(getattr(self, "_serie_schuss_ts", 0.0) or 0.0)
         abstand = float(_gpubudget.DRUCK_NEUSTART_ABSTAND_S)
         if letzter and (jetzt_ts - letzter) < abstand:
@@ -19038,9 +20265,10 @@ class Service:
                      f"{int(abstand)}s). A permanent fault must not turn into a "
                      f"restart loop; /health stays red until an analysis succeeds")
             return False
-        grund = (f"{n} analyses in a row failed — the compute context of the "
-                 f"worker process may be dead (a GPU hang on the host kills it "
-                 f"for good); pulling up a fresh process")
+        grund = grund or (f"{n} analyses in a row failed — the compute context "
+                          f"of the worker process may be dead (a GPU hang on "
+                          f"the host kills it for good); pulling up a fresh "
+                          f"process")
         self._serie_schuss_ts = jetzt_ts
         self._serie_schuesse = int(getattr(self, "_serie_schuesse", 0) or 0) + 1
         self._serie_schuss_grund = grund
@@ -19050,7 +20278,7 @@ class Service:
             # analyze.log des Ereignisses, und „the restart clamp" waere dort
             # schlicht gelogen (s. `kill_hart`).
             geschossen = self.worker_hart_stoppen(
-                quelle="the analysis-failure series")
+                quelle=quelle or "the analysis-failure series")
         except Exception as e:                            # noqa: BLE001
             # Ein Schuss, der scheitert, darf die Analyse-Schleife NICHT
             # mitreissen: wir sind hier im Urteilspfad eines Ereignisses.
@@ -19060,6 +20288,150 @@ class Service:
         self.log(f"analysis-failure series [series shot #{self._serie_schuesse}]: "
                  f"{grund} — {geschossen} process(es) shot")
         return True
+
+    def _serie_alle_buchen(self, fehler, quelle, verwurf=None):
+        """DIE ZWEITE ZAEHLSTELLE — SIE ZAEHLT ALLE PFADE (.544) -> die Serie.
+
+        DER VORFALL, gegen den sie geschrieben ist (Prod, Nacht 20./21.09.2026):
+        um 23:41:08 warf der Wirt einen i915-GPU-Hang und toetete den
+        GPU-Kontext des Worker-Prozesses. Ab 23:41:10 endete JEDE Analyse als
+        `analyse_none` — 24 Nachhol-Versuche ueber die Nacht, dazu ein
+        gescheitertes 06:00-Netz-Sammeln (`CL_OUT_OF_RESOURCES`) und ein
+        frisches Ereignis erst um 07:19. Der .543-Serien-Schuss fiel NICHT, und
+        /health blieb `ok=true`: die bestehende Zaehlstelle sitzt hinter
+        `if not nachhol` — per Vertrag, und der Vertrag ist richtig, s. unten.
+        Acht Stunden blind, geheilt erst durch einen Neustart von Hand.
+
+        WARUM EINE ZWEITE STELLE UND KEINE AENDERUNG DER ERSTEN: die erste
+        beantwortet die Frage „hat ein EREIGNIS versagt?" und haengt an den
+        Ereignis-Alarmen (Widerleger-MUSS 31.07.: „retries are silent" — ein
+        geglueckter Retry darf eine echte Live-Serie nicht loeschen, und ein
+        Nachhol-Lauf darf keinen Ereignis-Alarm ausloesen). Diese hier
+        beantwortet die andere Frage: „rechnet dieser DIENST ueberhaupt noch?"
+        Das ist eine Struktur-Aussage, und die darf melden — auch wenn die
+        Auskunft aus einem stillen Nachhol-Lauf oder aus dem Sammeln kommt.
+        Der Ereignis-Vertrag bleibt unangetastet: hier entsteht kein
+        Ereignis-Alarm, nur die Stoerungsmeldung an den Betreiber.
+
+        MECHANIK WIE BEI DER ERSTEN, absichtlich bis auf die Zeile: Verjaehrung
+        nach `SERIE_FENSTER_S`, Schwelle `SERIE_STRUKTURSIGNAL_N`, Hochzaehlen
+        und Pruefen als EIN Read-Modify-Write unter `_zustand_lock` (E0b: ohne
+        das zaehlen zwei gleichzeitig gescheiterte Analysen als eine — und genau
+        „viele scheitern gleichzeitig" ist die Klasse, die sie fangen soll).
+        Der Melde-Cooldown ist DERSELBE (`_fehlerserie_gemeldet`, 6 h): ein
+        Betreiber soll nicht zwei Meldungen fuer dieselbe Stoerung bekommen,
+        nur weil sie ueber zwei Zaehler sichtbar wurde.
+
+        HEILUNG: JEDE gelungene Analyse setzt zurueck, egal ob live oder
+        nachhol. Genau darin liegt der Unterschied zur ersten Stelle — ein
+        Nachhol-Lauf, der wieder durchkommt, IST der Beweis, dass der
+        Rechenkontext lebt.
+
+        `quelle` ist nur Text fuer Log und Meldung ('live', 'nachhol',
+        'safety-net collection', 'scenario collection') — entschieden wird an
+        der SERIE, nie an einem Wortlaut (s. `_serie_schuss`).
+
+        .544 TEIL 2B — WELCHE FEHLERKLASSE HIER UEBERHAUPT ETWAS SAGT
+        (`verwurf`, der Verwurfgrund des Ereignisses):
+        Gezaehlt wird NUR `VERWURF_ANALYSE_NONE` — der Worker lieferte gar
+        nichts (Ausnahme, Tod, Watchdog, kein results-Eintrag). Das ist die
+        Klasse, die „rechnet dieser Dienst noch?" beantwortet.
+
+        JEDER ANDERE GRUND SCHWEIGT, und zwar in beide Richtungen: er zaehlt
+        nicht und er heilt auch nicht. Anlass ist der 21.09.2026 vormittags —
+        nach dem Umzug der Frigate-Medien auf NFS fehlen die Aufnahmen alter
+        Ereignisse, 55 davon standen in der Nachhol-Liste und endeten mit
+        `clip_fehlt`. Mit „jeder Fehler zaehlt" haette der Zaehler in drei
+        Runden einen KERNGESUNDEN Worker abgeschossen. Ein fehlender Clip ist
+        eine Aussage ueber Frigates Aufbewahrung, `lesbarkeit_riegel` eine
+        ueber die Bildqualitaet, `speicher_knapp` eine ueber die Karte (die
+        gehoert dem Speicher-Paket) — keine davon sagt, dass der Rechenkontext
+        tot ist. Heilen duerfen sie genauso wenig: ein Ereignis, dessen Clip
+        fehlt, ist kein Beweis, dass gerechnet werden kann.
+
+        `verwurf=None` heisst „dieser Aufrufer fuehrt keinen Verwurfgrund" (die
+        beiden Sammel-Wege) — dort steht die Vorpruefung woanders: gebucht wird
+        nur eine Ausnahme AUS DEM WORKER (`info['worker_ausnahme']`)."""
+        if fehler and verwurf is not None and verwurf != _reg.VERWURF_ANALYSE_NONE:
+            # SCHWEIGEN, nicht heilen: der Fehler gehoert einer anderen Klasse an.
+            return int(getattr(self, "_fehlerserie_alle", 0) or 0)
+        jetzt_ts = time.time()
+        with self._zustand_lock:
+            if not fehler:
+                self._fehlerserie_alle = 0
+                self._fehlerserie_alle_start = 0.0
+                return 0
+            if jetzt_ts - getattr(self, "_fehlerserie_alle_start", 0) > SERIE_FENSTER_S:
+                self._fehlerserie_alle = 0             # alte Serie verjaehrt
+            if getattr(self, "_fehlerserie_alle", 0) == 0:
+                self._fehlerserie_alle_start = jetzt_ts
+            self._fehlerserie_alle = getattr(self, "_fehlerserie_alle", 0) + 1
+            n = self._fehlerserie_alle
+        if n < SERIE_STRUKTURSIGNAL_N:
+            return n
+        # MELDEN und HANDELN sind zwei Dinge mit zwei Fristen (Herleitung bei
+        # der ersten Zaehlstelle): die Meldung geht an einen MENSCHEN und traegt
+        # den 6-h-Cooldown, der Schuss geht an einen PROZESS und traegt seine
+        # eigene Bremse in `_serie_schuss`.
+        if jetzt_ts - getattr(self, "_fehlerserie_gemeldet", 0) > 6 * 3600:
+            self._fehlerserie_gemeldet = jetzt_ts
+            self.log(f"STOERUNG (analyse-serie, alle Pfade): {n} Analysen in "
+                     f"Folge fehlgeschlagen — gezaehlt werden hier AUCH "
+                     f"Nachhol-Laeufe und das Sammeln (zuletzt: {quelle}); "
+                     f"Erkennung moeglicherweise tot (Backend/Decode pruefen)")
+            if not self.dry_alert:
+                def _sd4_alle_push():
+                    # eigener Thread wie bei der ersten Stelle: 20-s-HTTP darf
+                    # den Analyse-Lock nicht halten
+                    for _f in stoerung_melden(
+                            self.cfg, f"{n} Analysen in Folge fehlgeschlagen — "
+                            f"gezaehlt werden auch Nachhol-Laeufe und das "
+                            f"Sammeln (zuletzt: {quelle}). Die Erkennung ist "
+                            f"moeglicherweise tot (Dienst-Log / System-Seite "
+                            f"pruefen)."):
+                        self.log(f"fault notify failed: {_f}")
+                threading.Thread(target=_sd4_alle_push, daemon=True).start()
+        self._serie_schuss(n, jetzt_ts)
+        return n
+
+    def _analyse_none_melden(self, text, pfad):
+        """DER FEHLERTEXT DES WORKERS INS DIENST-LOG (.544), gedrosselt.
+
+        In der Nacht vom 20./21.09. tauchte `CL_OUT_OF_RESOURCES` NIE im
+        Dienst-Log auf: `run_analyze` liefert bei einem Worker-Fehler still
+        `None`, der Text blieb in der `analyze.log` des jeweiligen Ereignisses
+        liegen. Im Log stand nur, DASS die Analyse scheiterte. Wer die Ursache
+        suchte, musste 24 Ereignis-Ordner aufmachen.
+
+        GEDROSSELT, weil der Fall per Bauart in Serie auftritt: bei einem toten
+        Rechenkontext scheitert jede Analyse mit demselben Satz. Der Abstand ist
+        KEINE neue Zahl — es ist derselbe, mit dem sich der Serien-Schuss bremst
+        (`gpubudget.DRUCK_NEUSTART_ABSTAND_S`): so steht zu jedem Schuss-Zyklus
+        hoechstens EIN Fehlertext im Log. Die unterdrueckten werden GEZAEHLT und
+        in der naechsten Zeile genannt, sonst waere die Drossel die naechste
+        stille Stelle.
+
+        KEIN MATCHING auf Woerter, keine Fehlertext-Liste: der Text wird
+        weitergereicht, nicht bewertet (einzeilig, 300 Zeichen — ein
+        mehrzeiliger Traceback im Dienst-Log faerbt sonst das Prod-Log-Gate
+        rot)."""
+        text = " ".join(str(text).split())[:300]
+        if not text:
+            return
+        jetzt_ts = time.time()
+        abstand = float(_gpubudget.DRUCK_NEUSTART_ABSTAND_S)
+        with self._zustand_lock:
+            letzte = float(getattr(self, "_analyse_none_log_ts", 0.0) or 0.0)
+            if letzte and (jetzt_ts - letzte) < abstand:
+                self._analyse_none_log_still = int(
+                    getattr(self, "_analyse_none_log_still", 0) or 0) + 1
+                return
+            still = int(getattr(self, "_analyse_none_log_still", 0) or 0)
+            self._analyse_none_log_still = 0
+            self._analyse_none_log_ts = jetzt_ts
+        self.log(f"analysis failed (analyse_none) [{pfad}]: {text}"
+                 + (f" (+{still} more suppressed in the last "
+                    f"{int(abstand)}s)" if still else ""))
 
     def _null_serie_pruefen(self, res, frames_fehlen, eid=None):
         """DIE ANOMALIE-WACHE „N EREIGNISSE IN FOLGE 0 GESICHTER BEI VOLLER
@@ -19479,6 +20851,23 @@ class Service:
             # weggegangen ist.
             if lauf_info is not None and _ainfo.get("fremdverschuldet"):
                 lauf_info["fremdverschuldet"] = True
+            # .544 M3b: ZURUECKSTELLEN STATT WEGWERFEN. Ein fremdverschuldeter
+            # Abgang heisst: der Worker ging unter dem Job weg (geordnetes Ende,
+            # Tod, Start-Tor-Absage) — das Ereignis hat nichts falsch gemacht.
+            # Bis .543 schickte `run_analyze` es SOFORT ein zweites Mal, und zwar
+            # in genau dasselbe Fenster: der frische Prozess baut seine Arena in
+            # gemessen 24-36 s, der Retry lief hinein und endete als
+            # `analyse_none`. Im Feld riss jeder Prozess-Ausstieg so rund 20 Jobs
+            # mit; von 10279 Ereignissen eines Werktages gingen 1077 (10,5 %)
+            # endgueltig verloren. Jetzt geht das Ereignis UNGEBUCHT in die
+            # Warteschlange zurueck (wie beim Clip-Tor-Deckel darunter) und
+            # kommt nach einem Backoff wieder — hoechstens `nachhol_versuche` mal.
+            # Erst danach steht hier eine ehrliche `fehler`-Zeile MIT der Zahl
+            # der Rueckstellungen.
+            _zurueck_n = self._zurueck_stand(eid)
+            if res is None and _ainfo.get("fremdverschuldet") \
+                    and self._zurueckstellen(eid, camera, _ainfo):
+                return None
             # .539 — DIE GIFTPILLE BEKOMMT IHREN VERSUCH ANGESCHRIEBEN.
             # Diese Analyse sass auf einem Rechenstrang, als der Job-Watchdog den
             # Worker-Prozess schiessen musste — sie ist ein moeglicher Verursacher,
@@ -19586,6 +20975,23 @@ class Service:
                          + f" (chain {_frinfo.get('kette') or '?'}"
                          + (f", {_hwgrund}" if _hwgrund else "") + ")")
             _verwurf = _ainfo.get("verwurf_grund")
+            # .544 DER FEHLERTEXT DES WORKERS ERREICHT DAS DIENST-LOG. Bis .543
+            # blieb er in der `analyze.log` des Ereignisses liegen — in der Nacht
+            # vom 20./21.09. stand `CL_OUT_OF_RESOURCES` in 24 Ereignis-Ordnern
+            # und kein einziges Mal im Dienst-Log. Gedrosselt, weil der Fall per
+            # Bauart in Serie auftritt (s. `_analyse_none_melden`).
+            if _verwurf == _reg.VERWURF_ANALYSE_NONE:
+                if _ainfo.get("fehler_text"):
+                    self._analyse_none_melden(_ainfo["fehler_text"],
+                                              "nachhol" if nachhol else "live")
+                # .544 Teil 5a DIE SOFORTPROBE. Sie haengt NICHT am Fehlertext:
+                # in der Vorfallsnacht trug jede gescheiterte Analyse einen, aber
+                # ein Worker, der gar nicht mehr antwortet, liefert auch keinen —
+                # und gerade der Fall ist der schlimmste. Gefragt wird an der
+                # KLASSE (`analyse_none`), wie ueberall in dieser Wache.
+                # Der Aufruf kostet den Urteilspfad nichts: die Probe laeuft in
+                # einem eigenen Thread und auf dem getrennten bg-Konto.
+                self._sofortprobe_nach_ausfall("nachhol" if nachhol else "live")
             if _fs:
                 # .287 [clipdbg] (c): Clip-Qualitaet nach der Analyse — die
                 # '1/210'-Klasse des Haenger-Befunds wird hier je Event belegt.
@@ -19631,6 +21037,20 @@ class Service:
                     # dass der fremd_verdacht-Zweig unten nicht mehr betreten wird.
                     if self._no_person_pruefen(eid, ev, res, obj_score):
                         kategorie = "no_person"
+            # .544 DIE ZWEITE ZAEHLSTELLE — VOR der ersten und AUSSERHALB von
+            # `if not nachhol`, weil genau dort der Vorfall vom 20./21.09. durch
+            # das Raster fiel: 24 Nachhol-Versuche mit `analyse_none` ueber eine
+            # ganze Nacht, kein frisches Ereignis, kein Schuss, /health gruen.
+            # Sie zaehlt BEIDE Pfade und heilt aus beiden; die Ereignis-Wache
+            # darunter bleibt Wort fuer Wort, wie sie war (Herleitung und die
+            # Abgrenzung der zwei Fragen stehen in `_serie_alle_buchen`).
+            # .544 Teil 2b: MIT DER FEHLERKLASSE. Nur `analyse_none` sagt etwas
+            # ueber den Rechenkontext; ein fehlender Clip (NFS-Umzug der
+            # Frigate-Medien, 21.09. vormittags: 55 solche Ereignisse in der
+            # Nachhol-Liste) haette sonst einen gesunden Worker abgeschossen.
+            self._serie_alle_buchen(kategorie == "fehler",
+                                    "nachhol" if nachhol else "live",
+                                    verwurf=_verwurf)
             # SD4 Fehlerserien-Waechter (qs.md §offen, qs_ebenen.md Paket 1): der 22.07.-Ausfall
             # blieb 9 h unbemerkt, weil Startup//health gruen blieben. Drei gescheiterte Analysen
             # IN FOLGE sind ein Struktursignal (Backend/Decode tot), kein Einzelfall-Rauschen ->
@@ -19772,6 +21192,15 @@ class Service:
                 # einer leeren Zeile.
                 **({"verwurf_grund": _verwurf or _reg.VERWURF_ANALYSE_NONE}
                    if kategorie == "fehler" else {}),
+                # .544 M3b: WIE OFT DIESES EREIGNIS VORHER ZURUECKGESTELLT WAR.
+                # Kein neuer Verwurf-CODE (die Aufzaehlung in
+                # registry.VERWURF_GRUENDE bleibt, wie sie ist, samt ihrem
+                # Sprach-Deckungsvertrag), sondern eine ZAHL daneben: eine
+                # `fehler`-Zeile mit `zurueckgestellt: 3` sagt, dass der Dienst
+                # es dreimal mit einem frischen Worker versucht hat, bevor er
+                # aufgab. Ohne sie saehe diese Zeile aus wie ein Sofort-Aufgeben.
+                **({"zurueckgestellt": _zurueck_n}
+                   if kategorie == "fehler" and _zurueck_n else {}),
                 "frigate": {"label": f_label, "score": f_score, "cos": frigate_to_cos(f_score),
                             # additiv, nur vorwaerts (S2-Fund): Objekt-Score fuer no_person —
                             # Altzeilen ohne das Feld sind un-klassifizierbar (Sicherheits-Semantik)
@@ -21581,13 +23010,72 @@ class Service:
         except Exception as e:
             self.log(f"{eid}: catch-up cleanup failed: {e}")
 
+    def _nachhol_luecke_frei(self):
+        """Darf JETZT ein Nachhol-Lauf fahren, obwohl Live-Betrieb ist?
+        -> bool (.544 Teil 5b).
+
+        DER FELDBEFUND, gegen den diese Methode geschrieben ist: beim Feldtester
+        laufen rund 10 000 Ereignisse am Tag auf. `letzte_aktivitaet` wird von
+        jedem davon fortgeschrieben, und das Ruhefenster (`nachhol_ruhe_s`,
+        Werk 300 s) kommt deshalb tagsueber NIE zustande — der Nachhol-Lauf ist
+        auf einer belebten Anlage praktisch abgeschaltet. Gescheiterte
+        Ereignisse warten dort bis nach Mitternacht auf ihren zweiten Versuch,
+        und wenn ihr Frigate-Clip bis dahin aus der Aufbewahrung gefallen ist,
+        auf gar keinen mehr.
+
+        Das Ruhefenster ist trotzdem RICHTIG, und es bleibt: es schuetzt die
+        Live-Erkennung vor einem Hintergrundlauf, der ihr den Beschleuniger
+        wegnimmt. Was fehlte, ist die zweite Frage — ob es in diesem Moment
+        ueberhaupt etwas zu schuetzen GIBT. Genau die stellt diese Methode, und
+        sie stellt sie an den Groessen, die die Vergabestelle ohnehin fuehrt:
+
+          LEERE WARTESCHLANGE  `rueckstau_zahlen()[0] == 0`. Das ist dieselbe
+                Schwelle, an der die Vergabestelle „wartet eine Analyse?"
+                festmacht (`wartend_fn_analyse`, gesetzt im Konstruktor) — keine
+                zweite, kleinere Zahl. Wartet auch nur EIN Ereignis, faehrt kein
+                Nachhol-Lauf: der Rueckstand gehoert dem Live-Betrieb.
+          FREIER PLATZ  `kapazitaet - anzahl_belegt() > 0`. Ein Nachhol-Lauf,
+                der sich an der Vergabestelle anstellen muesste, waere wieder
+                genau der Hintergrundjob, den das Ruhefenster fernhaelt.
+
+        BEIDE ZUSAMMEN SIND DER LIVE-VORRANG in seiner strengsten Form: der
+        Nachhol-Lauf nimmt nie den letzten freien Platz, waehrend Live-
+        Ereignisse warten — er faehrt ueberhaupt nur, wenn KEINES wartet. Das
+        ist bewusst strenger als die N-1-Latte der Vergabestelle
+        (`_ueber_der_latte`), die bei Kapazitaet > 1 mehr erlauben wuerde; bei
+        einem Weg, der bisher gar nicht fuhr, ist die enge Kante die richtige
+        Anfangsstellung. Sie bleibt als bewusste Naht auf der offenen Liste.
+
+        WAS DIESE METHODE NICHT AENDERT: das Tempo. `_nachhol_runde` holt
+        weiterhin genau EIN Ereignis je Runde, und die Runden kommen im
+        `nachhol_intervall_s`-Takt. Neu ist allein, dass eine Runde auf einer
+        belebten Anlage ueberhaupt bis zur Kandidatenliste kommt."""
+        p = getattr(self, "_plaetze", None)
+        if p is None:
+            return False
+        try:
+            wartend, _arbeit = self.rueckstau_zahlen()
+            if int(wartend) > 0:
+                return False
+            return (int(p.kapazitaet) - int(p.anzahl_belegt())) > 0
+        except Exception:                                   # noqa: BLE001
+            # Wer die Lage nicht lesen kann, faehrt nicht: das Ruhefenster ist
+            # die sichere Stellung, nicht die Ausnahme.
+            return False
+
     def _nachhol_runde(self):
         cfg, jetzt = self.cfg, time.time()
         if self._nachhol_sperre > 0:                        # Schutzschalter nach Fehlversuch
             self._nachhol_sperre -= 1
             return
+        # .544 Teil 5b: OHNE Ruhefenster faehrt eine Runde nur dann, wenn gerade
+        # nichts zu schuetzen ist (leere Warteschlange UND freier Platz, s.
+        # `_nachhol_luecke_frei`). Ohne Aktivitaet bleibt alles wie bisher.
+        _unter_last = False
         if jetzt - getattr(self, "letzte_aktivitaet", 0) < int(cfg["nachhol_ruhe_s"]):
-            return                                          # Live-Betrieb hat Vorrang (GPU)
+            if not self._nachhol_luecke_frei():
+                return                                      # Live-Betrieb hat Vorrang (GPU)
+            _unter_last = True
         if self._gpu_bg_lock.locked():
             return                                          # schwerer GPU-Hintergrundjob laeuft
         kand, offen, tot = self._nachhol_kandidaten()
@@ -21613,8 +23101,17 @@ class Service:
         if not self._nachhol_schreiben(st):
             return                                          # Zaehler nicht persistierbar -> KEINE Analyse
         n = s["n"]
+        if _unter_last:
+            # .544 Teil 5b: EIN Zaehler, und er steht an der Stelle, an der der
+            # Versuch wirklich losgeht — nicht dort, wo die Erlaubnis erteilt
+            # wurde. Sonst zaehlte auch eine Runde mit, die danach an der
+            # Vorpruefung oder an der leeren Kandidatenliste umkehrt.
+            self._nachhol_unter_last_n = int(
+                getattr(self, "_nachhol_unter_last_n", 0) or 0) + 1
         self.log(f"{eid}: catch-up attempt {n}/{cfg['nachhol_versuche']} "
-                 f"({max(0, offen - 1)} more pending, {tot} abandoned)")
+                 f"({max(0, offen - 1)} more pending, {tot} abandoned)"
+                 + (" — running during live operation: the event queue is empty "
+                    "and an analysis slot is free" if _unter_last else ""))
         self._nachhol_aufraeumen(eid, n)
         _lauf = {}
         entry = self.process(eid, nachhol=n, lauf_info=_lauf)
@@ -27997,6 +29494,14 @@ def make_handler(svc):
                      # Backend gemessen, die Config traegt nur die Startwerte).
                      # Ohne diese Zeile waere die Packung eine Behauptung.
                      "sammeln": svc.sammel_zustand(),
+                     # .544 Teil 5b: wie oft der Nachhol-Lauf eine Luecke im
+                     # Live-Betrieb genutzt hat (leere Warteschlange, freier
+                     # Platz). Auf einer ruhigen Anlage bleibt die Zahl 0 — dort
+                     # kommt das Ruhefenster von selbst zustande. Steht sie auf
+                     # einer BELEBTEN Anlage still, faehrt der Nachhol-Lauf
+                     # wieder gar nicht, und genau das war der Feldbefund.
+                     "nachhol_unter_last_n": int(
+                         getattr(svc, "_nachhol_unter_last_n", 0) or 0),
                      # .340: Start-Nachholen — Schalter UND Fortschritt aus DERSELBEN
                      # Quelle wie der Banner (K1: die Anzeige kann dem Verhalten nicht
                      # widersprechen). Supportfaelle schicken /health, nicht 400 Logzeilen.

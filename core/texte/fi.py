@@ -1,9 +1,12 @@
-# NICHT muttersprachlich geprueft (Stand 18.09.2026): diese Fassung ist
-# MASCHINELL uebersetzt (Opus-Uebersetzungsagent, in Bloecken gegen en.py
-# geprueft: Schluesselmenge, Reihenfolge, Format-Platzhalter, HTML-Tagfolge,
-# Randleerzeichen). Die anderen vier Fassungen haben am 19.08.2026 eine
-# Muttersprachler-QS durchlaufen, diese noch NICHT. Aktiv seit der
-# Registrierung in core/sprache.py (.542).
+# MUTTERSPRACHLICH GEPRUEFT (Stand 21.09.2026): Grundfassung maschinell
+# uebersetzt (Opus-Uebersetzungsagent, in Bloecken gegen en.py geprueft:
+# Schluesselmenge, Reihenfolge, Format-Platzhalter, HTML-Tagfolge,
+# Randleerzeichen), danach Muttersprachler-Review in zwei Runden (Simo,
+# GitHub Discussion #1: Runde 2 in .543, Runde 3 mit 152 Korrekturen am
+# 2026-09-20 in .544, Glossar: score=tulos, stranger=tuntematon henkilo,
+# train=opeta/opetus, gallery=kirjasto, health=tila, settings=asetukset).
+# Die anderen vier Fassungen haben am 19.08.2026 ihre Muttersprachler-QS
+# durchlaufen. Aktiv seit der Registrierung in core/sprache.py (.542).
 """Finnische Uebersetzung der Referenz-Texte (gleiche Schluessel und
 Reihenfolge wie en.py; Schluessel-Konvention <modul>.<block>.<rolle>,
 konzept_sprache.md v2)."""
@@ -32,8 +35,8 @@ T = {
     "gesichter.upload.knopf": "Lähetä",
     "gesichter.upload.hinweis":
         "Uusi henkilö: kirjoita nimi vapaan tekstin kenttään. Ehto: "
-        "buffalo_l:n on löydettävä kasvot (muuten näkyviin tulee kysymys "
-        "pakottamisesta).",
+        "buffalo_l:n on löydettävä kasvot (muuten sinulta kysytään, "
+        "lisätäänkö kuva silti).",
     "gesichter.import.titel": "Tuonti / uudelleentäsmäytys Frigatesta",
     "gesichter.import.knopf": "Täsmäytä kasvot Frigatesta",
     "gesichter.import.hinweis":
@@ -98,10 +101,10 @@ T = {
     "lernen.kopf.titel_offen": "Ehdotukset ({n})",
     "lernen.leer.titel": "Ei avoimia opetusehdotuksia.",
     "lernen.leer.hinweis":
-        "Hyvät uudet kasvot (isot, terävät, edestä, varmasti tunnistetut "
-        "tai selvästi vieraat) ilmestyvät tänne automaattisesti analyysin "
-        "jälkeen.",
-    "lernen.karte.unbekannt": "Tuntematon/vieras",
+        "Hyvät uudet kasvot (isot, terävät, edestä, joko varmasti "
+        "tunnistetut tai selvästi tuntemattoman henkilön kasvot) "
+        "ilmestyvät tänne automaattisesti analyysin jälkeen.",
+    "lernen.karte.unbekannt": "Tuntematon henkilö",
     "lernen.karte.metrik_voll":
         "tulos {score} · uutuus {novelty} · {bw}×{bh}px · edestä {front} "
         "· terävyys {sharp}",
@@ -178,7 +181,7 @@ T = {
     "benachrichtigungen.kategorien.erkannt": "tunnettu henkilö tunnistettiin",
     "benachrichtigungen.kategorien.fremd_verdacht":
         "käyttökelpoiset kasvot, mutta kukaan ei vahvistanut "
-        "(mahdollisesti vieras)",
+        "(mahdollisesti tuntematon henkilö)",
     "benachrichtigungen.kategorien.unbekannt_schwach":
         "kasvot liian heikot tai pienet tunnistamiseen",
     "benachrichtigungen.alerts.stil_label": "Ilmoitusten tekstityyli:",
@@ -933,7 +936,7 @@ T = {
         "katsomaan useammin; suuremmat arvot pitävät sen rauhallisena "
         "tuulisen pensasaidan äärellä. Jokainen paikka on erilainen — "
         "nämä kuuluvat TÄLLE kameralle, eivät koko järjestelmälle.",
-    "live.abschnitt.guete": "Kuvanlaadun rajat",
+    "live.abschnitt.guete": "Kuvanlaadun kynnykset",
     "live.abschnitt.last": "Kuormamittaus",
     "live.erkennung.det_zeile":
         "Löydös lasketaan kasvoiksi havaintoarvosta {wert} "
@@ -1051,8 +1054,8 @@ T = {
     "livekalib.ohne_norm":
         "Yksikään näistä kuvista ei kanna ominaisuusnormin arvoa "
         "(kalibrointivarasto ei mittaa sitä, oppimisajo mittaa), joten "
-        "tämä säädin ei muuta tämän kirjastoa mitenkään. Oppimisajon "
-        "käyttämän arvon se asettaa silti.",
+        "tämä säädin ei muuta mitään kirjastossa. Oppimisajon käyttämän "
+        "arvon se asettaa silti.",
     "livekalib.regler_k": "Pienimmät kasvot (px)",
     "livekalib.regler_k_prosa":
         "Kuinka pienet kasvot saavat olla ja vaikuttaa silti "
@@ -1075,8 +1078,8 @@ T = {
     "livekalib.ohne_kante":
         "Yksikään näistä kuvista ei kanna kasvojensa kokoa "
         "(kalibrointivarasto ei tallenna sitä, oppimisajo tallentaa), "
-        "joten tämä säädin ei muuta tämän kirjastoa mitenkään. "
-        "Käytettävän arvon se asettaa silti.",
+        "joten tämä säädin ei muuta mitään kirjastossa. Käytettävän arvon "
+        "se asettaa silti.",
     "livekalib.standard": "Oletukset",
     "livekalib.fueller.laeuft": "materiaalihaku käynnissä",
     "livekalib.fueller.bilanz": "Viimeisin materiaalihaku",
@@ -1937,9 +1940,9 @@ T = {
         "palvelua ei tavoiteta — yritä hetken kuluttua uudelleen.",
     "js.unb.tick": "{phase} … {s} s",
     "js.unb.besucher_frage":
-        'Sivuutetaanko tunnettuna vieraana? Se ei enää laukaise '
-        'ilmoituksia. (Voi aktivoida milloin tahansa uudelleen alta '
-        'kohdasta "tunnetut vierailijat".)',
+        'Sivuutetaanko tunnettuna tuntemattomana henkilönä? Se ei enää '
+        'laukaise ilmoituksia. (Voi aktivoida milloin tahansa uudelleen '
+        'alta kohdasta "tunnetut vierailijat".)',
     "js.unb.merge_frage": "Yhdistetäänkö?",
     "js.unb.name_fehlt": "Syötä nimi (uusi tai olemassa oleva henkilö).",
     "js.unb.benennen_frage":
@@ -2127,7 +2130,7 @@ T = {
     "auftritte.pass.kopf": "Käynti {von} &ndash; {bis}",
     "auftritte.pass.label_unbek": "Ei osumaa",
     "auftritte.pass.label_gt": "Nimeäminen",
-    "auftritte.pass.badge_fremd": "vahvistettu vieras",
+    "auftritte.pass.badge_fremd": "vahvistettu tuntematon henkilö",
     "auftritte.pass.grund_ohne_zeile":
         "analyze.log ei sisällä riviä syystä — avaa tapahtuma, niin näet "
         "koko lokin",
@@ -2203,7 +2206,7 @@ T = {
     "setupwiz.fertig.satz":
         "Tallentaa valintasi ja käynnistää palvelun kertaalleen "
         "uudelleen.",
-    "setupwiz.restore.titel": "Onko asetukset jo olemassa?",
+    "setupwiz.restore.titel": "Onko sinulla jo asetustiedosto?",
     "setupwiz.restore.satz":
         "Jos olet aiemmin vienyt suslikin asetukset (Järjestelmä → "
         "Asetusten varmuuskopio), lataa ne tässä, niin kaikki asetukset "
@@ -2285,7 +2288,7 @@ T = {
         " liittää ruudun henkilöön (uusi tai olemassa oleva, kirjoita "
         "nimi),",
     "unbekannte.kopf_satz_ignorieren":
-        " vaimentaa tunnetun vieraan (ei ilmoitusta).",
+        " vaimentaa tunnetun tuntemattoman henkilön (ei ilmoitusta).",
     "unbekannte.kopf_satz_auto":
         "Uudet kasvot kerätään automaattisesti jokaisen käynnin jälkeen.",
     "unbekannte.knopf_reorg": "Ryhmittele nyt uudelleen",
@@ -2538,9 +2541,9 @@ T = {
         "silti vahvistanut ketään. Se pysyy hiljaa, kun materiaalia ei "
         "yksinkertaisesti ollut tarpeeksi &mdash; se olisi kohinaa. "
         "Opetettujen henkilöiden tunnistaminen on tämän tien vahva puoli, "
-        "joten vahvistamatta jättäminen merkitsee jotain; vieraiden "
-        "torjuminen on heikko puoli, siksi Vision ei koskaan anna ääntä "
-        "siihen suuntaan.",
+        "joten vahvistamatta jättäminen merkitsee jotain; tuntemattomien "
+        "henkilöiden torjuminen on heikko puoli, siksi Vision ei koskaan "
+        "anna ääntä siihen suuntaan.",
     "vision.kachel.was_key": "syötät API-avaimen",
     "vision.kachel.was_host": "syötät palvelimen ja portin",
     "vision.kachel.was_url": "syötät URL:n ja halutessasi avaimen",
@@ -2633,10 +2636,11 @@ T = {
     "vision.cloud.titel": "Kuvien lähettäminen ulkopuoliseen palveluun",
     "vision.cloud.satz":
         "Näissä kuvissa ei ole vain täällä asuvia ihmisiä: epävarmat "
-        "tapaukset ovat useimmiten vieraita &mdash; vierailijoita, "
-        "kuriireja, naapureita, ohikulkijoita. Vastuu siitä on sinulla, "
-        "ei palvelun ylläpitäjällä. Vahvistuksesi kirjataan aikaleimalla "
-        "audit-lokiin; vaihto takaisin paikalliseen malliin peruu sen.",
+        "tapaukset ovat useimmiten tuntemattomia henkilöitä &mdash; "
+        "vierailijoita, kuriireja, naapureita, ohikulkijoita. Vastuu "
+        "siitä on sinulla, ei palvelun ylläpitäjällä. Vahvistuksesi "
+        "kirjataan aikaleimalla audit-lokiin; vaihto takaisin "
+        "paikalliseen malliin peruu sen.",
     "vision.cloud.bestaetigung": "Ymmärrän ja vahvistan tämän",
     "vision.cloud.bestaetigt": "(vahvistettu {zeit})",
     "vision.test.treffer": "{n}/2 oikein",
@@ -2885,7 +2889,7 @@ T = {
         "Mikään ei muutu itsestään &mdash; hyväksymäsi kirjasto pysyy "
         "juuri sellaisena, kunnes rakennat ja hyväksyt uuden.",
     "personwizard.wer.alle": "kaikki tunnetut henkilöt",
-    "personwizard.wer.fremde": "vieraat",
+    "personwizard.wer.fremde": "tuntemattomat henkilöt",
     "personwizard.titel": "Opeta henkilöitä — kehontunnistus",
     "personwizard.kopf.satz":
         "Toinen, riippumaton tunnistustie: se oppii, miltä henkilö "
@@ -2905,7 +2909,8 @@ T = {
         "väärän. Ilman hyväksyntääsi ei opita mitään.",
     "personwizard.kopf.schritt4":
         "4 · Opetus ajetaan sen jälkeen paikallisesti sekunneissa, ja "
-        "päätöskynnys mitataan niin, että vieraat jäävät sen alle.",
+        "päätöskynnys mitataan niin, että tuntemattomat henkilöt jäävät "
+        "sen alle.",
     "personwizard.kopf.tempo":
         "Huomautus nopeudesta: keräys ajetaan tällä hetkellä CPU:lla, "
         "joten malta hetki ajon kanssa (karkeasti 15&ndash;30 s "
@@ -2961,8 +2966,9 @@ T = {
         "Ohitettu tarkoituksella: {liste} — poistettuja henkilöitä; "
         "niiden vanhoja vahvistettuja tapahtumia ei kerätä.",
     "personwizard.fertig.fremd":
-        "{n} vahvistettua vieraan kuvaa siirtyi vieraiden pooliin — "
-        "seuraava opetus käyttää niitä heti.",
+        "{n} vahvistettua tuntemattoman henkilön kuvaa siirtyi "
+        "tuntemattomien henkilöiden joukkoon — seuraava opetus käyttää "
+        "niitä heti.",
     "personwizard.fertig.titel":
         "Läpikäynti valmis — materiaali otettu käyttöön",
     "personwizard.fertig.zeile":
@@ -2971,17 +2977,19 @@ T = {
     "personwizard.fertig.knopf": "Katso opittu materiaali",
     "personwizard.fehler.titel": "Viimeisin ajo epäonnistui",
     "personwizard.auswahl.opt_alle": "Kaikki tunnetut henkilöt",
-    "personwizard.auswahl.opt_fremde": "Vieraat — kerää vieraiden kuvia",
+    "personwizard.auswahl.opt_fremde":
+        "Tuntemattomat henkilöt — kerää tuntemattomien henkilöiden kuvia",
     "personwizard.auswahl.titel": "Kuka opetetaan",
     "personwizard.auswahl.satz":
         "Valitse yksi henkilö, niin käyt läpi pieniä, kohdennettuja eriä "
         "— tai kaikki kerralla. Henkilöt tulevat kasvokokoelmastasi; "
         "yhden kerrallaan opettaminen pitää läpikäynnin lyhyenä.",
     "personwizard.auswahl.fremde_satz":
-        "Vieraat: kerää käyntejä, joissa ketään ei tunnistettu (pelkät "
-        "katukäynnit, vahvistamattomat vierailijat). Läpikäynnissä "
-        "vahvistat, ketkä todella ovat vieraita — he siirtyvät vieraiden "
-        "pooliin ja terävöittävät päätöskynnystä.",
+        "Tuntemattomat henkilöt: kerää käyntejä, joissa ketään ei "
+        "tunnistettu (pelkät katukäynnit, vahvistamattomat vierailijat). "
+        "Läpikäynnissä vahvistat, ketkä todella ovat tuntemattomia "
+        "henkilöitä — he siirtyvät tuntemattomien henkilöiden joukkoon ja "
+        "terävöittävät päätöskynnystä.",
     "personwizard.umfang.knopf_letzte": "viimeiset {n}",
     "personwizard.umfang.attr_eigen": "oma N",
     "personwizard.umfang.knopf_go": "aja",
@@ -2994,12 +3002,12 @@ T = {
     "personwizard.bilanz.zahl_vor": "viimeiset {n} henkilötapahtumaa · ",
     "personwizard.bilanz.zahl_nach":
         " voidaan sitoa henkilöön {wer} vahvistettujen käyntien kautta",
-    "personwizard.bilanz.fremd": " · {n} vierasehdokasta",
+    "personwizard.bilanz.fremd": " · {n} tuntemattoman henkilön ehdokasta",
     "personwizard.bilanz.erkl_fremd":
         "Ehdokkaat ovat käyntejä, joissa ketään ei tunnistettu — pelkkiä "
         "katukäyntejä ja vahvistamattomia vierailijoita. Läpikäyntiisi "
         "asti kaikki on EPÄILY; merkitse siellä jokainen, joka EI ole "
-        "vieras.",
+        "tuntematon henkilö.",
     "personwizard.bilanz.erkl":
         "Sidonta on varovaista: vain käynnit, joissa on täsmälleen yksi "
         "kasvoilla vahvistettu henkilö, lasketaan. Kaiken, minkä näet sen "
@@ -3007,13 +3015,13 @@ T = {
     "personwizard.bilanz.titel": "Sinun valintasi",
     "personwizard.bilanz.knopf": "Luo tämä ajo",
     "personwizard.review.stempel": "VÄÄRIN",
-    "personwizard.review.h_fremde": "Vieraat",
+    "personwizard.review.h_fremde": "Tuntemattomat henkilöt",
     "personwizard.review.frage_fremd":
-        "napsauta jokaista kuvaa, jossa EI ole vierasta (asukas, tunnettu "
-        "vierailija) tai joka on käyttökelvoton. Toinen napsautus peruu "
-        "sen. Kaikki tallennetaan heti; merkitsemättömät kuvat otetaan "
-        "käyttöön vahvistettuina vieraina ja ne terävöittävät "
-        "päätöskynnystä.",
+        "napsauta jokaista kuvaa, jossa EI ole tuntematonta henkilöä "
+        "(asukas, tunnettu vierailija) tai joka on käyttökelvoton. Toinen "
+        "napsautus peruu sen. Kaikki tallennetaan heti; merkitsemättömät "
+        "kuvat otetaan käyttöön vahvistettuina tuntemattomina henkilöinä "
+        "ja ne terävöittävät päätöskynnystä.",
     "personwizard.review.frage":
         "napsauta jokaista kuvaa, joka on VÄÄRIN (ei tämä henkilö tai "
         "käyttökelvoton). Toinen napsautus peruu sen. Kaikki tallennetaan "
@@ -3041,7 +3049,7 @@ T = {
         "Hyödyllinen, kun henkilö jäi huomaamatta tai joku tunnistettiin, "
         "jota ei olisi pitänyt tunnistaa.",
     "personwizard.kontrolle.leer_titel": "Mitään ei ole vielä kirjattu",
-    "personwizard.kontrolle.tag_fremd": "vieras",
+    "personwizard.kontrolle.tag_fremd": "tuntematon henkilö",
     "personwizard.kontrolle.tag_drueber": "kynnyksen yllä",
     "personwizard.kontrolle.tag_drunter": "kynnyksen alla",
     "personwizard.kontrolle.schwelle": " &middot; kynnys {schwelle}",
@@ -3049,12 +3057,12 @@ T = {
         "{wann} — {judged} arvioitu, {n} kuva säilytetty",
     "personwizard.kontrolle.kopfzeile.viele":
         "{wann} — {judged} arvioitu, {n} kuvaa säilytetty",
-    "personwizard.tabelle.fremd_zeile": "Vieraat (lisäluokka)",
+    "personwizard.tabelle.fremd_zeile": "Tuntemattomat henkilöt (lisäluokka)",
     "personwizard.tabelle.kein_fremd":
-        "Ei vielä vieraiden luokkaa — sellaisen kanssa tunnistus toimii "
-        "selvästi paremmin: vahvistetut vieraiden kuvat opettavat "
-        "mallille, mikä EI kuulu joukkoon, ja kalibroivat "
-        "päätöskynnyksen.",
+        "Ei vielä tuntemattomien henkilöiden luokkaa — sellaisen kanssa "
+        "tunnistus toimii selvästi paremmin: vahvistetut tuntemattomien "
+        "henkilöiden kuvat opettavat mallille, mikä EI kuulu joukkoon, ja "
+        "kalibroivat päätöskynnyksen.",
     "personwizard.tabelle.q_eichung": "mitattu",
     "personwizard.tabelle.q_user": "itse asettamasi",
     "personwizard.tabelle.q_standard": "sisäänrakennettu oletus",
@@ -3089,7 +3097,7 @@ T = {
         "seuraavassa opetuksessa.",
     "personwizard.bestand.leer_titel": "Ei vielä hyväksyttyä materiaalia",
     "personwizard.bestand.stark_titel": "Mikä tekee tästä mallista vahvan",
-    "personwizard.bestand.chip_fremde": "Vieraat ({n})",
+    "personwizard.bestand.chip_fremde": "Tuntemattomat henkilöt ({n})",
     "personwizard.bestand.zeigen_titel": "Näytä kuvat kohteesta",
     "personwizard.bestand.zeigen_satz":
         "Valitse ryhmä — sen kuvat avautuvat alle, uusimmat ensin.",
@@ -3117,7 +3125,8 @@ T = {
         "{n} kerätty — {min} tarvitaan, ennen kuin ne otetaan "
         "opetukseen ja kalibroivat kynnyksen",
     "personwizard.modell.fremd_geeicht":
-        "{n} opetuksessa · kynnys kalibroitu oikeilla vierailla",
+        "{n} opetuksessa · kynnys kalibroitu oikeilla tuntemattomilla "
+        "henkilöillä",
     "personwizard.modell.fremd_ungeeicht":
         "{n} opetuksessa — kynnyksen kalibrointi ei ajettu (katso alla "
         "oleva huomautus)",
@@ -3126,7 +3135,7 @@ T = {
     "personwizard.modell.f_modell": "Malli",
     "personwizard.modell.f_bilder": "Kuvia yhteensä",
     "personwizard.modell.f_personen": "Henkilöt",
-    "personwizard.modell.f_fremd": "Vieraiden negatiivit",
+    "personwizard.modell.f_fremd": "Tuntemattomien henkilöiden negatiivit",
     "personwizard.modell.scharf_ja": "KYLLÄ — live-arviointi aktiivinen",
     "personwizard.modell.scharf_nein": "ei — ei vielä aktivoitu",
     "personwizard.modell.fehler":
@@ -3142,16 +3151,17 @@ T = {
     "personwizard.modell.eich_fremd":
         "Mitattu {folds}-kertaisella ristiinvalidoinnilla {n} sivuun "
         "jätetystä henkilöidesi kuvasta ja {n_fremd} vahvistetusta "
-        "vieraasta: vahvin asukasvarmuus, jonka oikea vieras saavutti, "
-        "oli {max} &rarr; kynnys {schwelle}; {pct} % aidoista kuvista "
-        "pääsee läpi. Kolikon toinen puoli: {ueber} omista kuvistasi "
-        "saavuttaisi tämän kynnyksen VÄÄRÄLLE henkilölle (vahvin {vmax}).",
+        "tuntemattomasta henkilöstä: vahvin asukasvarmuus, jonka oikea "
+        "tuntematon henkilö saavutti, oli {max} &rarr; kynnys {schwelle}; "
+        "{pct} % aidoista kuvista pääsee läpi. Kolikon toinen puoli: "
+        "{ueber} omista kuvistasi saavuttaisi tämän kynnyksen VÄÄRÄLLE "
+        "henkilölle (vahvin {vmax}).",
     "personwizard.modell.eich_intern":
         "Mitattu {folds}-kertaisella ristiinvalidoinnilla {n} sivuun "
         "jätetystä kuvasta: vahvin varmuus VÄÄRÄLLE henkilölle {max} "
         "&rarr; kynnys {schwelle}; {pct} % aidoista kuvista pääsee läpi. "
         "Rehellinen raja: tämä kalibroi opittujen henkilöidesi VÄLILLÄ — "
-        "oikeita vieraita ei ole vielä materiaalissa.",
+        "oikeita tuntemattomia henkilöitä ei ole vielä materiaalissa.",
     "personwizard.modell.regeln_titel": "Päätelmän asetukset",
     "personwizard.modell.schwelle_vor": "Päätöskynnys: ",
     "personwizard.modell.r_fenster": "Laukaisuikkuna",
@@ -3167,15 +3177,18 @@ T = {
     "personwizard.modell.satz_user":
         "Päätöskynnys on sinun asettamasi ({schwelle})",
     "personwizard.modell.satz_user_eich":
-        " — kalibrointi {n} vahvistettua vierasta vasten antaisi {alt}",
+        " — kalibrointi {n} vahvistettua tuntematonta henkilöä vasten "
+        "antaisi {alt}",
     "personwizard.modell.satz_geeicht":
-        "Päätöskynnys on kalibroitu {n} vahvistetulla vieraan kuvalla.",
+        "Päätöskynnys on kalibroitu {n} vahvistetulla tuntemattoman "
+        "henkilön kuvalla.",
     "personwizard.modell.satz_ungeeicht":
-        "Päätöskynnystä ei ole vielä kalibroitu vierasmateriaalilla — "
-        "pidä ilmoituksia esikatseluna ja seuraa niitä.",
+        "Päätöskynnystä ei ole vielä kalibroitu tuntemattomien "
+        "henkilöiden materiaalilla — pidä ilmoituksia esikatseluna ja "
+        "seuraa niitä.",
     "personwizard.modell.satz_fremd_drop":
-        " Keho, jonka malli lukee vieraaksi, hylätään ennen kuin siitä "
-        "voi tulla osuma.",
+        " Keho, jonka malli lukee tuntemattomaksi henkilöksi, hylätään "
+        "ennen kuin siitä voi tulla osuma.",
     "personwizard.modell.live_titel": "Live-kytkin",
     "personwizard.modell.live_an":
         "AKTIVOITU — kehotie arvioi live-tapahtumia ja saa ilmoittaa.",
@@ -3185,13 +3198,13 @@ T = {
         "kasvot&quot;.",
     "personwizard.modell.knopf_disarm": "Poista aktivointi",
     "personwizard.modell.knopf_arm": "Aktivoi kehontunnistus",
-    "baustein.gt.fremd": "Vieras",
+    "baustein.gt.fremd": "Tuntematon henkilö",
     "baustein.gt.kein_mensch": "Ei henkilö",
     "baustein.gt.add": "lisää henkilö…",
     "baustein.gt.uebernehmen":
         "vahvista tämä ehdotus (kaikki luetellut olivat paikalla)",
     "baustein.gt.fremd_titel":
-        "paikalla oli vieras (voi olla nimien rinnalla)",
+        "paikalla oli tuntematon henkilö (voi olla nimien rinnalla)",
     "baustein.gt.unklar_titel": "epävarma — jätä auki",
     "baustein.gt.kein_mensch_titel":
         "tässä tapahtumassa ei ole henkilöä (virhelaukaisu)",
@@ -3404,13 +3417,13 @@ T = {
     "visiongalerie.reihe.hinten": "takaa",
     "visiongalerie.reihe.unklar": "epäselvä",
     "baustein.kat.erkannt": "Tunnistettu",
-    "baustein.kat.fremd_verdacht": "Vieras?",
+    "baustein.kat.fremd_verdacht": "Tuntematon henkilö?",
     "baustein.kat.unbekannt_schwach": "Tuntematon (heikko)",
     "baustein.kat.fehler": "Virhe",
     "baustein.kat.no_person":
         "Henkilöä ei löytynyt (todennäköisesti virhelaukaisu)",
     "baustein.kat.uebersprungen": "Ohitettu käynnistyksessä",
-    "baustein.kat.deckung": "Yhtenevä",
+    "baustein.kat.deckung": "Osuma",
     "baustein.kat.widerspruch": "Ristiriita",
     "baustein.kat.frigate_nur": "Vain Frigate",
     "baustein.kat.wir_nur": "Vain suslik",
@@ -3488,8 +3501,8 @@ T = {
         "pieneen kyseisen henkilön kirjastoon. Se on <b>ylimääräinen "
         "ääni</b>, ei koskaan ovimies: pakkovalinta vastaa &bdquo;A vai "
         "B&ldquo;, joten se voi vahvistaa asukkaan, mutta se ei voi "
-        "torjua vierasta. Se pysyy olemassa olevan tunnistuksen "
-        "tehtävänä.",
+        "torjua tuntematonta henkilöä. Se pysyy olemassa olevan "
+        "tunnistuksen tehtävänä.",
     "vision.hinweis.modell_satz":
         "Vision-malli, joka osaa katsoa useita kuvia yhtä aikaa. Voit "
         "käyttää alla olevia verkkopalveluntarjoajia tai ajaa mallia itse "
@@ -3539,14 +3552,15 @@ T = {
         "Tämän päätepiste vastasi, kun suslik kysyi siltä, {zeit} &mdash; "
         "mikään tässä ei ole meidän ehdotus. Siellä missä olemme mallin "
         "mitanneet, huomautus on kiinni siinä mallissa. Kaksi kykyä näkyy "
-        "erikseen, koska ne eroavat toisistaan: <b>residents</b> "
+        "erikseen, koska ne eroavat toisistaan: <b>asukkaat</b> "
         "tarkoittaa oikean valitsemista kahdesta tunnetusta henkilöstä, "
-        "<b>strangers</b> tarkoittaa vastausta &bdquo;ei kumpikaan&ldquo; "
-        "jollekulle, jota et ole koskaan opettanut. Merkki tarkoittaa: "
-        "jokainen tämänlaatuinen päätelmä mittauksessamme oli oikein; "
-        "vieressä oleva murtoluku kertoo koko kuvan. Malleista ilman "
-        "mittausta lukee <b>täällä testaamaton</b> &mdash; se ei ole "
-        "tuomio, vain rehellisyyttä (mittaukset {stand}).",
+        "<b>tuntemattomat henkilöt</b> tarkoittaa vastausta &bdquo;ei "
+        "kumpikaan&ldquo; jollekulle, jota et ole koskaan opettanut. "
+        "Merkki tarkoittaa: jokainen tämänlaatuinen päätelmä "
+        "mittauksessamme oli oikein; vieressä oleva murtoluku kertoo koko "
+        "kuvan. Malleista ilman mittausta lukee <b>täällä testaamaton</b> "
+        "&mdash; se ei ole tuomio, vain rehellisyyttä (mittaukset "
+        "{stand}).",
     "vision.prompt.eigen_satz":
         "Tämä on oma sanamuotosi &mdash; sillä tehdyt päätelmät on "
         "merkitty <b>muokattu sanamuoto</b>. Palauta se, jos haluat "
@@ -3601,8 +3615,8 @@ T = {
         "Kuvat <b>monilta eri päiviltä</b> (vaatteet, valo, kamerat) "
         "auttavat paljon enemmän kuin monet kuvat yhdestä käynnistä — "
         "käynnistä keräys mieluummin uudelleen uusina päivinä kuin kaiva "
-        "yhdestä päivästä syvemmälle. Vahvistetut vieraiden kuvat "
-        "terävöittävät päätöskynnystä samalla tavalla.",
+        "yhdestä päivästä syvemmälle. Vahvistetut tuntemattomien "
+        "henkilöiden kuvat terävöittävät päätöskynnystä samalla tavalla.",
     "personwizard.fertig.training_satz":
         'Opetus hyväksytyllä materiaalilla käynnistyy automaattisesti '
         'läpikäynnin jälkeen — katso <a href="/person/modell">Mallin '
@@ -3626,15 +3640,16 @@ T = {
         "yhdestä käynnistä. Tavoittele useampia päiviä henkilöä kohti ja "
         "anna keräyksen kattaa kaikki kamerasi.",
     "personwizard.bestand.fremd_satz":
-        "<b>Vieraat:</b> {n} vahvistettua vieraan kuvaa kalibroi "
-        "päätöskynnystä — mitä useampia vieraita malli on nähnyt, sitä "
-        "luotettavampi tämä viiva on. (Kerätään hakemistoon "
+        "<b>Tuntemattomat henkilöt:</b> {n} vahvistettua tuntemattoman "
+        "henkilön kuvaa kalibroi päätöskynnystä — mitä useampia "
+        "tuntemattomia henkilöitä malli on nähnyt, sitä luotettavampi "
+        "tämä viiva on. (Kerätään hakemistoon "
         "<code>personlern/fremd/</code>; sivu, jolla tätä joukkoa voi "
         "kasvattaa oman kadun liikenteestä, on suunnitteilla.)",
     "personwizard.bestand.fremd_erklaerung":
-        "Vahvistetut vieraiden kuvat — ne opettavat lisäluokan ja "
-        "kalibroivat päätöskynnyksen. Yhden poistaminen opettaa mallin "
-        "heti uudelleen (tiedostot ovat hakemistossa "
+        "Vahvistetut tuntemattomien henkilöiden kuvat — ne opettavat "
+        "lisäluokan ja kalibroivat päätöskynnyksen. Yhden poistaminen "
+        "opettaa mallin heti uudelleen (tiedostot ovat hakemistossa "
         "<code>personlern/fremd/</code>).",
     "personwizard.modell.leer_satz":
         'Aja <a href="/personlauf">henkilöiden oppimisajo</a> ja saata '
@@ -3689,8 +3704,8 @@ T = {
     "heute.person.zuletzt": "viimeksi {kamera} {zeit}",
     "heute.person.live": "live",
     "heute.person.live_title":
-        "nimetty vain live-vahdin toimesta (nimi-ilmoitus useiden "
-        "löytöjen jälkeen) — ei vielä vahvistettua käyntiä",
+        "nimetty vain live-vahdin toimesta (nimi-ilmoitus useiden osumien "
+        "jälkeen) — ei vielä vahvistettua käyntiä",
     "heute.person.live_link": "siirry live-ilmoitukseen {zeit} · {kamera}",
     "heute.person.mehr": "kaikki {n} henkilöä ({m} lisää)",
     "heute.anw.dauer": "paikalla noin {h} h",

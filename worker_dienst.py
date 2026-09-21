@@ -1236,6 +1236,22 @@ class SpeicherWache:
         self._eigen = {"mb": None, "vorher": None, "max": 0, "ts": 0.0,
                        "grund": "noch_nicht_gemessen", "gemeldet": False}
         self._eigen_schloss = threading.Lock()
+        # --- .544 B: DER PREIS DIESER KARTE, je KONSTELLATION.
+        # Der Dienst plant aus einer Messtabelle, die am 15.09. auf zwei fremden
+        # Karten mit 4K-Clips entstanden ist. Was ein Prozess auf DIESER Karte
+        # mit DIESEN Bildgroessen wirklich haelt, weiss nur dieser Prozess — und
+        # zwar als PLATEAU: das Maximum ueber sein Leben, nicht ein Delta um
+        # einen Bauschritt herum (eine Bau-Messung sah 148 MiB, wo die Dauerlast
+        # 976 MiB fand; Begruendung an `_staffel`). Gemessen wird mit der
+        # VORHANDENEN Sonde oben, kein zweiter Aufruf, kein eigener Takt.
+        # Der Schluessel ist die Konstellation "<Straenge>x<Geometrien>": das
+        # Maximum bei EINER Geometrie ist kein Preis fuer ZWEI, und es einer
+        # groesseren Konstellation zuzuschlagen waere zu klein — also genau die
+        # Richtung, die die Karte fuellt. `mb` ist der ANTEIL DIESES PROZESSES;
+        # das NVDEC-ffmpeg je Strang ist eine eigene pid und steckt NICHT darin
+        # (s. gpubudget.KONTEXT_HANDLES_CUDA_MB) — der Dienst rechnet es mit dem
+        # gemessenen Decoder-Posten der Tabelle dazu und sagt das auch.
+        self._preis_proben = {}
 
     def grenze_melden(self, job):
         """Die Politik-Grenze eines Jobs anmelden (Feld `fussabdruck_max_mb`, s. o.).
@@ -1361,6 +1377,7 @@ class SpeicherWache:
                 self._eigen.update({"mb": mb, "vorher": vorher, "ts": jetzt,
                                     "grund": None,
                                     "max": max(int(self._eigen["max"] or 0), mb)})
+                self._preis_buchen(mb)          # .544 B, unter demselben Schloss
                 return mb, (None if vorher is None else mb - vorher), None
             self._eigen.update({"ts": jetzt, "grund": grund})
             erstmals = not self._eigen["gemeldet"]
@@ -1419,6 +1436,51 @@ class SpeicherWache:
                                  else alt["mb"] - alt["vorher"]),
                 "own_max_mb": int(alt["max"] or 0) or None,
                 "own_grund": alt["grund"]}
+
+    def _konstellation(self):
+        """Womit dieser Prozess GERADE rechnet -> (Straenge, Geometrien).
+
+        Beide Zahlen kommen aus dem Prozess selbst, nicht aus dem Plan: geplant
+        wird mit zwei Geometrien, gebaut wird, was die Clips dieser Anlage
+        wirklich verlangen. Ein Preis, der die geplante statt der gebauten Zahl
+        traegt, waere einer Konstellation zugeschlagen, die es nie gab."""
+        d = self.dienst
+        n = max(1, int(getattr(d, "threads", 1) or 1))
+        try:
+            with d._geo_schloss:
+                g = len(d.graphen)
+        except Exception:                                  # noqa: BLE001
+            g = 0
+        return n, max(1, g)
+
+    def _preis_buchen(self, mb):
+        """EINE Messung in den Preis-Topf dieser Konstellation (.544 B).
+        Aufrufer haelt `self._eigen_schloss`.
+
+        Gefuehrt wird das MAXIMUM je Konstellation und die Zahl der Proben — der
+        Dienst entscheidet daraus, ob das schon ein Plateau ist
+        (`gpubudget.PREIS_MIN_PROBEN`) oder noch ein Moment. Hier wird NICHTS
+        bewertet und nichts verworfen: diese Stelle misst, die Bewertung gehoert
+        an EINE andere (sonst gaebe es zwei Regeln fuer dieselbe Frage)."""
+        try:
+            mb = int(mb)
+        except (TypeError, ValueError):
+            return
+        if mb <= 0:
+            return
+        n, g = self._konstellation()
+        k = f"{n}x{g}"
+        topf = self._preis_proben.get(k)
+        if topf is None:
+            topf = self._preis_proben[k] = {"straenge": n, "geometrien": g,
+                                            "max_mb": 0, "proben": 0}
+        topf["max_mb"] = max(int(topf["max_mb"] or 0), mb)
+        topf["proben"] = int(topf["proben"] or 0) + 1
+
+    def preis_proben(self):
+        """Die Preis-Toepfe dieses Prozesses fuer die Antwort an den Dienst."""
+        with self._eigen_schloss:
+            return {k: dict(v) for k, v in self._preis_proben.items()}
 
     def _karte_takt(self):
         """DRUCK-SIGNAL 1 (.531): faellt der kartenweit freie Speicher unter die
@@ -1707,6 +1769,15 @@ class Dienst:
         self._vram_druck_schloss = threading.Lock()
         self._vram_deckel_treffer = 0
         self._vram_straenge_senken = False
+        # .544 M2 FREMDDRUCK IST EIN ZUSTAND, KEIN AUSSTIEGSGRUND. Der Zeitstempel
+        # steht, solange die Takt-Wache „frei unter Reserve" gesehen hat; er faellt,
+        # sobald wieder Luft da ist. Gelesen wird er VOR dem teuersten Posten (dem
+        # Bau einer NEUEN Geometrie) — laufende Rechnungen beruehrt er nie.
+        # `_vram_fremd_pause_s` ist die kumulierte Wartezeit, die dieser Zustand
+        # gekostet hat; ohne sie waere die Bremse die naechste stille Stelle.
+        self._vram_druck_fremd_ts = 0.0
+        self._vram_fremd_pause_s = 0.0
+        self._vram_luft_pause_s = 0.0          # .544 M3a: Warten nach karte_voll
         self.engine = None
         self.alle = self.mit_refs = self.erk = None
         self.modell = None
@@ -1925,6 +1996,15 @@ class Dienst:
                 with self._geo_schloss:
                     g = self.graphen.get((W, H))     # in der Wartezeit gebaut?
                 if g is None:
+                    # .544 M2: EINE NEUE GEOMETRIE IST DER TEUERSTE POSTEN, den
+                    # dieser Prozess der Karte abverlangt. Steht fremder Druck
+                    # an, wird hier GEWARTET statt gebaut — gedeckelt, mit Puls,
+                    # und im Zweifel wird trotzdem gebaut (s. dort). Innerhalb
+                    # der Staffel-Klammer, damit die Frist-Wache die Wartezeit
+                    # nicht als Analysezeit gegen diesen Job rechnet — das ist
+                    # der Puls dieser Seite; der Platz-Puls des Dienstes laeuft
+                    # ohnehin drueben, waehrend er auf die Antwort wartet.
+                    self.fremddruck_abwarten(lauf)
                     with self._kompilat_buchen(lauf, f"geometry {W}x{H}"):
                         neu = self.engine.geometrie_bauen({"x": (W, H, fps)})
                     with self._geo_schloss:
@@ -2297,6 +2377,12 @@ class Dienst:
                 "mem_pattern": self.mem_pattern,
                 "geometrien_max": self.geometrien_max,
                 "geometrien_jetzt": len(self.graphen),
+                # .544 B: WELCHE Aufloesungen dieser Prozess wirklich gebaut hat
+                # (die Preise gelten je Konstellation, und eine Anlage mit einer
+                # einzigen Kameragroesse zahlt eben nur eine Geometrie) …
+                "geometrien_wxh": sorted(f"{W}x{H}" for (W, H) in self.graphen),
+                # … und was er dabei auf der Karte hielt, je Konstellation.
+                "preis_proben": self.speicher.preis_proben(),
                 "karte": self.speicher.karte_stand(),
                 # .532: der EIGENE Anteil an der Karte (own_mb/own_delta_mb/
                 # own_max_mb/own_grund) — die Zahl, die im Feld gefehlt hat.
@@ -2312,6 +2398,21 @@ class Dienst:
                           "fremd": int(z.get("vram_druck_fremd") or 0),
                           "hwdec": int(z.get("vram_druck_hwdec") or 0),
                           "cuda_fehler": int(z.get("vram_druck_cuda_fehler") or 0)},
+                # .544 M2: WAS DIE BREMSE GEKOSTET HAT. `druck.fremd` zaehlt
+                # unveraendert, wie oft die Takt-Wache Fremddruck sah — nur
+                # beendet dieser Zaehler den Prozess nicht mehr. Daneben steht
+                # jetzt, wie lange dafuer gewartet wurde und ob GERADE gewartet
+                # wird; ohne diese zwei Zahlen waere die Bremse die naechste
+                # stille Stelle (der Ausstieg war wenigstens sichtbar).
+                "fremd_pause_s": round(float(
+                    getattr(self, "_vram_fremd_pause_s", 0.0) or 0.0), 1),
+                "fremd_pausen": int(z.get("vram_fremd_pausen") or 0),
+                "fremd_druck_steht": bool(getattr(self, "_vram_druck_fremd_ts", 0.0)),
+                # .544 M3a: dasselbe fuer die Wartezeit nach `karte_voll` — die
+                # Sekunden, die ein Ereignis gekostet hat, statt des Ereignisses.
+                "luft_pause_s": round(float(
+                    getattr(self, "_vram_luft_pause_s", 0.0) or 0.0), 1),
+                "luft_pausen": int(z.get("vram_luft_pausen") or 0),
                 "wiederholungen": int(z.get("vram_wiederholungen") or 0),
                 "neustarts": int(z.get("vram_neustarts") or 0),
                 "geometrien_verfallen": int(z.get("geometrien_verfallen") or 0),
@@ -2361,7 +2462,7 @@ class Dienst:
                 return art
         return "karte_voll"
 
-    def druck_buchen(self, art, text):
+    def druck_buchen(self, art, text, neustart=True):
         """EIN Kartendruck-Ereignis buchen und darauf antworten (.531).
 
         Vier Arten, drei Antworten:
@@ -2375,7 +2476,19 @@ class Dienst:
                         AUSSERHALB der Arena; gezaehlt und gemeldet, der Neustart
                         ist derselbe gedeckelte Weg.
         Gezaehlt wird IMMER und je Art getrennt: eine Zahl, die zwei Lagen
-        zusammenwirft, kann der Betreiber nicht lesen."""
+        zusammenwirft, kann der Betreiber nicht lesen.
+
+        .544: ZWEI DER VIER ANTWORTEN HABEN SICH GEAENDERT.
+          `fremd` beendet den Prozess NICHT mehr (M2) — die Lage ist Vorsorge,
+                  nicht Fehler; sie setzt einen Zustand, der den Bau neuer
+                  Geometrien bremst.
+          `karte_voll` bekommt mit `neustart=False` einen zweiten Anlauf (M3a):
+                  der Aufrufer hat dann schon eine Geometrie verfallen lassen
+                  und auf Luft gewartet. Gezaehlt und gemeldet wird trotzdem —
+                  nur der Neustart wartet, bis auch der zweite Anlauf scheitert.
+        `neustart` gilt NUR fuer `karte_voll`; die Zwei-Treffer-Entscheidung des
+        eigenen Deckels bleibt unberuehrt (sie gehoert dem Prozess, nicht dem
+        Job, und ein uebersprungener Treffer verschoebe sie still)."""
         art = str(art or "")
         self.zaehler[f"vram_druck_{art}"] += 1
         self.zaehler["vram_druck"] += 1
@@ -2416,8 +2529,24 @@ class Dienst:
             # sonst eine Zeile je Sekunde.
             if not self.speicher._karte_gemeldet:
                 self.speicher._karte_gemeldet = True
-                prozess_log(f"vram pressure: {text}")
-        elif art == "hwdec":
+                prozess_log(f"vram pressure: {text} — NOT exiting; new geometry "
+                            f"builds wait while the pressure lasts")
+            # .544 M2: HIER ENDETE BIS .543 DER PROZESS. „Frei unter Reserve" ist
+            # eine VORSORGE-Lage, kein Fehler: es ist noch nichts misslungen. Im
+            # Feld war das die teuerste Zeile des Tages — an EINEM Werktag 145
+            # solcher Ausstiege bei 381 bis 1226 MiB noch freiem Speicher, und
+            # der „Fremdverbraucher" waren unsere EIGENEN Live-Waechter, deren
+            # 4K-Decode atmet (Befund 21.09.2026 §4.4). Jeder Ausstieg riss rund
+            # 20 Jobs mit und kostete 24-36 s Arena-Aufbau.
+            # STATTDESSEN: ein Zustand mit Zeitstempel. Er bremst genau den
+            # Posten, der die Karte wirklich belastet (eine NEUE Geometrie, s.
+            # `fremddruck_abwarten`), und laesst alles andere weiterrechnen.
+            # Neustarts kommen seit .544 nur noch aus ECHTEN Allokationsfehlern
+            # (`deckel` nach dem Zwei-Treffer-Muster, `karte_voll` nach dem
+            # Retry) — dort ist etwas misslungen, hier nicht.
+            self._vram_druck_fremd_ts = time.monotonic()
+            return
+        if art == "hwdec":
             prozess_log(f"vram pressure: hardware decode fell back ({text}) — "
                         f"card pressure outside the arena")
             # ABWEICHUNG VOM BAUPLAN, bewusst und hier begruendet: ein
@@ -2436,11 +2565,155 @@ class Dienst:
                     _ges, getattr(self, "vram_reserve_mb", -1)):
                 self.vram_neustart_bitten(art, text)
             return
-        else:
-            prozess_log(f"vram pressure: ORT allocation failed with the card full "
-                        f"({_registry.VRAM_DRUCK_DATEI}, "
-                        f"\"{_registry.VRAM_DRUCK_TEXTE['karte_voll']}\") — {text}")
+        # Was hier ankommt, ist `karte_voll` — ein ECHTER Allokationsfehler bei
+        # voller Karte. Er hat den Retry aus M3a schon hinter sich (Verfall,
+        # warten, ein zweiter Anlauf); jetzt hilft nur ein frischer Prozess.
+        prozess_log(f"vram pressure: ORT allocation failed with the card full "
+                    f"({_registry.VRAM_DRUCK_DATEI}, "
+                    f"\"{_registry.VRAM_DRUCK_TEXTE['karte_voll']}\") — {text}"
+                    + ("" if neustart else " — a second attempt follows after "
+                                           "the geometry expiry, NOT restarting yet"))
+        if not neustart:
+            return
         self.vram_neustart_bitten(art, text)
+
+    def fremddruck_abwarten(self, lauf=None, puls=None):
+        """WARTEN STATT BAUEN, SOLANGE FREMDER DRUCK STEHT (.544 M2).
+        -> gewartete Sekunden (0.0 = es stand kein Druck an).
+
+        GERUFEN VOR DEM TEUERSTEN POSTEN — dem Bau einer NEUEN Geometrie. Alles
+        andere laeuft weiter: ein Job auf einer FERTIGEN Geometrie rechnet, der
+        Warmlauf eines schon gebauten Satzes laeuft, Hintergrund-Jobs laufen.
+        Gebremst wird genau die Handlung, die der Karte mehrere hundert MiB auf
+        einmal abverlangt.
+
+        WARUM ES DIESEN GRIFF GIBT: bis .543 beendete `druck_buchen("fremd")`
+        den Prozess. Das kostete am 21.09.2026 an EINEM Werktag 145 Ausstiege
+        bei 381-1226 MiB noch freiem Speicher, jeder riss rund 20 Jobs mit und
+        jeder Neuaufbau kostete 24-36 s. Warten ist die billigere Antwort auf
+        eine Lage, in der noch nichts misslungen ist.
+
+        DREI AUSGAENGE:
+          * kein Druck vermerkt          -> sofort zurueck, ohne zu messen.
+          * der Druck faellt             -> Vermerk weg, weiter im Text.
+          * die Frist reisst             -> TROTZDEM BAUEN. Die Frist ist
+            `gpubudget.KARTE_WARTE_FRIST_S`, dieselbe, mit der der Dienst vor
+            einem Worker-Start wartet — keine neue Zahl. Und der Ausgang ist
+            bewusst „bauen": ein Bau, der scheitert, faellt in M3a (Verfall,
+            warten, ein Retry); ein Job, der nie gebaut haette, waere sicher
+            verloren.
+        NICHT MESSBAR HEISST NICHT WARTEN (K1): wer nicht messen kann, kann auch
+        das Freiwerden nicht sehen. Dann faellt der Vermerk und es wird gebaut."""
+        # `getattr` aus demselben Grund wie in `vram_bericht`: die Proben stellen
+        # absichtlich nur Teile des Dienstes auf, und ein Griff, der an einem
+        # fehlenden Feld abstuerzt, wuerde dort gar nicht mehr geprueft.
+        if not getattr(self, "_vram_druck_fremd_ts", 0.0):
+            return 0.0
+        t0 = time.monotonic()
+        gemeldet = False
+        while True:
+            frei, _alter, grund = self.speicher.karte_frei_mb()
+            with self.speicher._karte_schloss:
+                gesamt = int(self.speicher._karte["gesamt"] or 0)
+            if grund is not None or gesamt <= 0:
+                self._vram_druck_fremd_ts = 0.0
+                break
+            res = _gpubudget.reserve_strang_mb(
+                gesamt, getattr(self, "vram_reserve_mb", -1))
+            if frei >= res:
+                self._vram_druck_fremd_ts = 0.0
+                if gemeldet:
+                    prozess_log(f"vram pressure gone ({frei} MiB free, reserve "
+                                f"{res} MiB) — building the geometry now")
+                break
+            if (time.monotonic() - t0) >= _gpubudget.KARTE_WARTE_FRIST_S:
+                prozess_log(f"vram pressure still on after "
+                            f"{int(_gpubudget.KARTE_WARTE_FRIST_S)}s ({frei} MiB "
+                            f"free, reserve {res} MiB) — building anyway rather "
+                            f"than dropping the job")
+                break
+            if self.ende.is_set():
+                # Der Prozess geht ohnehin. Weiterzuwarten hiesse, das Ende
+                # hinauszuzoegern; der Job soll fertig werden.
+                break
+            if not gemeldet:
+                gemeldet = True
+                prozess_log(f"vram pressure: waiting before building a new "
+                            f"geometry ({frei} MiB free, reserve {res} MiB, at "
+                            f"most {int(_gpubudget.KARTE_WARTE_FRIST_S)}s)")
+            if puls is not None:
+                try:
+                    puls()
+                except Exception:                          # noqa: BLE001
+                    pass
+            time.sleep(KARTE_TAKT_S)                       # Takt der Karten-Sonde
+        wartete = time.monotonic() - t0
+        # GEBUCHT WIRD DIE PAUSE GETRENNT, nicht als Bauzeit und nicht als
+        # Staffel-Wartezeit: sonst liesse sich hinterher nicht mehr sagen, ob ein
+        # Job lange gebaut, auf einen anderen Bau gewartet oder auf die Karte
+        # gewartet hat — und genau diese Unterscheidung ist der Beleg, dass die
+        # Bremse statt des Ausstiegs gewirkt hat.
+        with self._vram_druck_schloss:
+            self._vram_fremd_pause_s += wartete
+        self.zaehler["vram_fremd_pausen"] += 1
+        return wartete
+
+    def karte_luft_abwarten(self, lauf, noetig_mb=0):
+        """NACH `karte_voll`: WARTEN, BIS DIE KARTE WIEDER LUFT HAT (.544 M3a).
+        -> gewartete Sekunden.
+
+        Der Verfall der aeltesten Zusatz-Geometrie hat gerade Platz gemacht,
+        aber der Treiber gibt ihn nicht in derselben Millisekunde zurueck, und
+        der fremde Verbraucher, der die Karte vollgemacht hat, ist oft in
+        Sekunden wieder weg (ein Anzeige-Transcode). Ein sofortiger zweiter
+        Anlauf traefe dieselbe volle Karte — genau die Begruendung, mit der
+        schon der `deckel`-Weg erst den Verfall abwartet.
+
+        WORAUF GEWARTET WIRD: dass `karte_frei_mb()` den BEDARF wieder deckt.
+        Ohne uebergebenen Bedarf ist das die Reserve dieses Prozesses — dieselbe
+        Schwelle, an der die Takt-Wache „eng" sagt, keine zweite Zahl. Die Frist
+        ist `gpubudget.KARTE_WARTE_FRIST_S`, dieselbe wie in M2 und wie im
+        Start-Tor des Dienstes.
+
+        REISST DIE FRIST, WIRD TROTZDEM WIEDERHOLT: der Anlauf kostet Rechenzeit,
+        das Aufgeben kostet das Ereignis. Nicht messbar heisst ebenfalls
+        wiederholen — wer nicht messen kann, kann das Freiwerden nicht sehen."""
+        t0 = time.monotonic()
+        gemeldet = False
+        while True:
+            frei, _alter, grund = self.speicher.karte_frei_mb()
+            with self.speicher._karte_schloss:
+                gesamt = int(self.speicher._karte["gesamt"] or 0)
+            if grund is not None or gesamt <= 0:
+                break
+            noetig = int(noetig_mb or 0) or _gpubudget.reserve_strang_mb(
+                gesamt, getattr(self, "vram_reserve_mb", -1))
+            if frei >= noetig:
+                if gemeldet:
+                    prozess_log(f"card has room again ({frei} MiB free, {noetig} "
+                                f"MiB needed) — retrying job {lauf.id}")
+                break
+            if (time.monotonic() - t0) >= _gpubudget.KARTE_WARTE_FRIST_S:
+                prozess_log(f"card still full after "
+                            f"{int(_gpubudget.KARTE_WARTE_FRIST_S)}s ({frei} MiB "
+                            f"free, {noetig} MiB needed) — retrying job "
+                            f"{lauf.id} anyway rather than dropping the event")
+                break
+            if self.ende.is_set():
+                break
+            if not gemeldet:
+                gemeldet = True
+                prozess_log(f"card full (job {lauf.id}): waiting for room after "
+                            f"the geometry expiry ({frei} MiB free, {noetig} MiB "
+                            f"needed, at most "
+                            f"{int(_gpubudget.KARTE_WARTE_FRIST_S)}s)")
+            time.sleep(KARTE_TAKT_S)
+        wartete = time.monotonic() - t0
+        with self._vram_druck_schloss:
+            self._vram_luft_pause_s = float(
+                getattr(self, "_vram_luft_pause_s", 0.0) or 0.0) + wartete
+        self.zaehler["vram_luft_pausen"] += 1
+        return wartete
 
     def vram_neustart_bitten(self, art, text):
         """Den geordneten Neustart wegen Kartendruck erbitten — hoechstens EINMAL
@@ -2806,11 +3079,34 @@ class Dienst:
                     verwurf = None
                 art = self.vram_druck_art(f"{type(e).__name__}: {e}")
                 if art:
-                    self.druck_buchen(art, f"job {lauf.id}: {fehler}")
+                    # .544 M3a: EINE VOLLE KARTE IST NOCH KEIN VERLORENES
+                    # EREIGNIS. `deckel` hat seit .531 einen zweiten Anlauf —
+                    # aelteste Zusatz-Geometrie verfallen lassen, dann noch
+                    # einmal, verlustfrei ueber `results.jsonl`. `karte_voll`
+                    # hatte ihn NICHT: der Job ging sofort als `speicher_knapp`
+                    # verloren, im Feld am 21.09.2026 134 mal an einem Werktag,
+                    # je ein Ereignis. Er bekommt jetzt denselben Weg, und dazu
+                    # ZEIT: nach dem Verfall wird gedeckelt gewartet, bis die
+                    # Karte wieder Luft hat (`karte_luft_abwarten`). Erst wenn
+                    # auch dieser zweite Anlauf scheitert, gilt wie bisher
+                    # `speicher_knapp` plus geordneter Neustart.
+                    # DIE REIHENFOLGE: erst entscheiden, ob ein zweiter Anlauf
+                    # ueberhaupt moeglich ist (dafuer muss eine Geometrie
+                    # wirklich fallen), dann buchen — denn nur dann darf der
+                    # Neustart unterbleiben. GEBUCHT UND GEZAEHLT WIRD IMMER:
+                    # der Zwei-Treffer-Zaehler des eigenen Deckels lebt in
+                    # `druck_buchen`, und eine Lage, die nicht gezaehlt wird,
+                    # sieht in /health aus wie eine, die es nicht gab.
+                    nochmal = (_versuch == 1
+                               and art in ("deckel", "karte_voll")
+                               and lauf.id not in self._vram_wiederholt
+                               and self.vram_verfall_erzwingen(lauf))
+                    if nochmal and art == "karte_voll":
+                        self.karte_luft_abwarten(lauf)
+                    self.druck_buchen(art, f"job {lauf.id}: {fehler}",
+                                      neustart=not (nochmal and art == "karte_voll"))
                     verwurf = verwurf or "speicher_knapp"
-                    if (art == "deckel" and _versuch == 1
-                            and lauf.id not in self._vram_wiederholt
-                            and self.vram_verfall_erzwingen(lauf)):
+                    if nochmal:
                         self._vram_wiederholt.add(lauf.id)
                         self.zaehler["vram_wiederholungen"] += 1
                         prozess_log(f"vram pressure: job {lauf.id} retried after "
