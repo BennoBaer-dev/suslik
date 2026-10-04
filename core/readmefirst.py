@@ -35,6 +35,8 @@ bei der What's-new-Box) — bis er ihn diktiert hat, traegt jedes Kapitel seinen
 Platzhalter und die Seite sagt das auch.
 """
 import os
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 MARKE = "readmefirst_gesehen"      # <data_dir>/state/…
 
@@ -47,9 +49,14 @@ KONTAKT = "suslik_dev@posteo.de"
 
 # Reihenfolge der Kapitel. Je Eintrag: (anker, textschluessel-praefix).
 # Der Titel kommt aus "<praefix>.titel", der Fliesstext aus "<praefix>.text".
-# Neue Kapitel hier anhaengen und die beiden Schluessel in allen fuenf
-# Sprachdateien ergaenzen — mehr ist nicht zu tun.
+# Neue Kapitel hier eintragen und die beiden Schluessel in allen sechs
+# Sprachdateien ergaenzen, an derselben Stelle der Schluesselfolge.
+# "neu" steht vorn: was sich mit dieser Version geaendert hat. Wortlaut EN und
+# DE vom Eigentuemer abgenommen (Befehlsbuch 04.10.2026 17:50:29), ES, FR, IT
+# und FI uebersetzt nach EN (Bauplan analysen/bauplan_pruefmaterial_k3.md,
+# Stufe PM6).
 KAPITEL = (
+    ("neu", "readme.neu"),
     ("generell", "readme.generell"),
     ("lernen", "readme.lernen"),
     ("aktuell", "readme.aktuell"),
@@ -70,10 +77,10 @@ def start_zuruecksetzen(data_dir, log=None):
         if os.path.exists(p):
             os.remove(p)
             if log:
-                log("read-me-first: shown again after this restart")
+                log.info("read-me-first: shown again after this restart")
     except Exception as e:
         if log:
-            log(f"read-me-first: marker not cleared ({type(e).__name__}: {e})")
+            log.warning(f"read-me-first: marker not cleared ({type(e).__name__}: {e})")
 
 
 def soll_zeigen(data_dir):
@@ -83,6 +90,7 @@ def soll_zeigen(data_dir):
     try:
         return not os.path.exists(_pfad(data_dir))
     except Exception:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning False")
         return False
 
 
@@ -97,6 +105,7 @@ def gesehen_merken(data_dir):
             os.fsync(f.fileno())
         return True, "ok"
     except Exception as e:
+        _logbuch.swallowed(_log, _logbuch.ERROR, "returning (False, f'{type(e).__name__}: {e}')", throttle=False)
         return False, f"{type(e).__name__}: {e}"
 
 

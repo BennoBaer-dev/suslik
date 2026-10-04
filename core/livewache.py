@@ -76,6 +76,8 @@ from core import sprache as _sprache   # Sprach-Stufe 4: Waechter-Meldetexte (st
 from core import anwesenheit as _anw   # .408: Anwesenheits-Marken der Live-Auftritte (stdlib-only)
 from core import atomar as _atomar     # .411: eindeutige tmp beim atomaren Schreiben (stdlib-only)
 from core import logdatei as _logdatei  # .511: debug-Flagge des Dienstes (stdlib-only, kein Zyklus)
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 WURZEL = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -112,10 +114,8 @@ VIDEO_SEK = 6.0           # Rueckblick fuers Telegram-Video
 RECONNECT_WARTE = 5.0     # Reconnect: erster Versuch ...
 RECONNECT_MAX = 60.0      # ... verdoppelnd bis Deckel
 RECONNECT_STABIL = 30.0   # Backoff-Reset erst nach so lange getragener Verbindung
-LOG_MAX_MB = 20.0         # Kachel-Log-Deckel, eine .1-Stufe (Prototyp-Muster)
-DEBUG_FLAGGE_TTL_S = 2.0  # .511: so lange gilt ein gelesener debug-Stand (die
-#                           Flaggendatei liest sonst jede Kachelzeile neu — bei
-#                           ~9.700 Zeilen/h waeren das ebenso viele stat()-Zuege)
+LOG_MAX_MB = _logdatei.DIAGNOSE_MAX_MB   # Kachel-Log-Deckel, eine .1-Stufe; der Wert
+#                           steht mit den Drehwerten des Hauptlogs an EINER Stelle (E3)
 
 # Die zwei User-Zeiten je Waechter (Bauplan §4) — Defaults + Plausibilitaets-Riegel.
 ENDE_OHNE_GESICHT_S = 10       # (a) Inaktivitaets-Ende des Auftritts, Anker LETZTER Fund
@@ -471,6 +471,23 @@ def hw_wahl():
     return None
 
 
+# Feldbefunde Punkt 18 (Leser N6, Discussion #30): das EINGESTELLTE Backend, nicht das
+# aufgeloeste. Der Dienst legt es beim Start in die Umgebung (Service.__init__, dasselbe
+# Muster wie SUSLIK_CPU_THREADS); Worker und Live-Engine erben es. Hat der Start-Benchmark
+# gewaehlt (backend: auto), steht dort „auto“ — faellt auto auf die CPU, bleibt das ein
+# Rueckfall, ein eingestelltes `cpu` oder `openvino:CPU` ist keiner.
+BACKEND_EINGESTELLT_ENV = "SUSLIK_BACKEND_EINGESTELLT"
+
+
+def cpu_angefordert():
+    """Ist der CPU-Weg ANGEFORDERT — `cpu` oder `openvino:CPU` eingestellt — und nicht aus
+    einem Rueckfall entstanden (Feldbefunde Punkt 18)? EINE Stelle fuer engine_cpu, die
+    Live-Engine (livewached) und die Kachel-Sperre des Dienstes. -> bool"""
+    kind, _, dev = os.environ.get(BACKEND_EINGESTELLT_ENV, "").strip().partition(":")
+    return ((kind.lower() == "cpu" and not dev)
+            or (kind.lower() == "openvino" and dev.upper() == "CPU"))
+
+
 # ======================================================================
 # GEERBTER BLOCK — aus prototyp/live_wache.py umgezogen (Multi-Track-Stand).
 # Woertlich bis auf die markierten [ERBE-ANPASSUNG]-Stellen (ENV -> Parameter).
@@ -511,8 +528,8 @@ def auth_argumente(url):
         from core import frigate_auth as _fauth
         return _fauth.ffmpeg_kopf(url)
     except Exception as e:                          # nie den Waechter kippen
-        print(f"auth_argumente: frigate_auth fuer {quelle_maskiert(url)} nicht "
-              f"nutzbar ({type(e).__name__}) — weiter ohne Anmeldung", flush=True)
+        _log.error(f"auth_argumente: frigate_auth for {quelle_maskiert(url)} not "
+              f"usable ({type(e).__name__}) — continuing without login")
         return []
 
 
@@ -549,8 +566,8 @@ def masse(url, versuche=4):
             return int(teile[0]), int(teile[1])
         if i + 1 < versuche:
             warte = 5 * (2 ** i)
-            print(f"masse: ffprobe ohne Masse fuer {quelle_maskiert(url)} "
-                  f"(Versuch {i + 1}/{versuche}) — neuer Versuch in {warte} s", flush=True)
+            _log.warning(f"masse: ffprobe without dimensions for {quelle_maskiert(url)} "
+                  f"(attempt {i + 1}/{versuche}) — next attempt in {warte} s")
             time.sleep(warte)
     raise RuntimeError(f"masse: ffprobe liefert nach {versuche} Versuchen keine "
                        f"Masse fuer {quelle_maskiert(url)}")
@@ -592,10 +609,10 @@ def wach_skala(breite, hoehe, ziel_hoehe=None):
         return None                       # nativ: keine Skalierung (s. o.)
     zh = int(ziel_hoehe)
     if zh > WACH_HOEHE_MAX:
-        print(f"live: Verarbeitungshoehe {zh} gibt es nicht mehr (gemessen "
-              f"ohne Gewinn, Welle 1 Etappe C) — dieser Waechter laeuft mit "
-              f"{WACH_HOEHE_MAX}; der gespeicherte Wert und der Quelltest "
-              f"bleiben unangetastet", flush=True)
+        _log.info(f"live: processing height {zh} no longer exists (measured "
+              f"without gain, wave 1 stage C) — this watcher runs at "
+              f"{WACH_HOEHE_MAX}; the stored value and the source test "
+              f"stay untouched")
         zh = WACH_HOEHE_MAX
     if not breite or not hoehe:
         return (1280, zh)
@@ -649,7 +666,10 @@ def leser(url, rate=1, skala=None, hw=True):
         cmd += ["-hwaccel", "vaapi", "-hwaccel_device", RENDER_NODE,
                 "-hwaccel_output_format", "vaapi"]
     elif hw == "nvdec":
-        cmd += ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
+        # Feldbefunde Punkt 14 (Issue #33): NVDEC-Eingang samt Decoder-Threads aus der
+        # Flaechengrenze, EINE Stelle fuer alle vier Wege (decode.nvdec_eingang).
+        import decode
+        cmd += decode.nvdec_eingang()
     cmd += ["-i", url, "-map", "0:v:0"]
     kette = [f"select='not(mod(n\\,{rate}))'"] if rate > 1 else []
     if skala and hw == "vaapi":
@@ -789,6 +809,7 @@ def echtes_gesicht(f, frame, min_score=None):
                                   cv2.CV_64F).var()) if aus.size else 0.0
         return not ist_fehldetektion(front, sch, float(f.det_score))
     except Exception:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning True")
         return True
 
 
@@ -1198,6 +1219,7 @@ class Bewegungswache:
                 return True
             klein = self._klein(y_ebene)
         except Exception:                                     # noqa: BLE001
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning True")
             return True                        # im Zweifel messen, nie sieben
         self.gesehen += 1
         if self._hintergrund is None:
@@ -1255,7 +1277,7 @@ def referenzen_laden(app):
                 if any(len(M) for M in refs.values()):
                     return refs, f"refcache ({app.modell})"
         except Exception:
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     return anlernen.lade_master_refs(app), f"Master-Ordner ({app.modell})"
 
 
@@ -1313,6 +1335,7 @@ def schnell_urteil(refs, kandidaten, schwelle, max_bilder=None,
         try:
             v = np.asarray(f.normed_embedding, np.float32)
         except Exception:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
             continue
         if v.size != 512 or not np.all(np.isfinite(v)):
             continue
@@ -1449,6 +1472,7 @@ def pose_verfuegbar():
         import pose_wache as _pwm
         return bool(_pwm.MODELL_STD) and os.path.exists(_pwm.MODELL_STD[0])
     except Exception:                                          # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning False")
         return False
 
 
@@ -1475,7 +1499,7 @@ def person_region(bbox, breite, hoehe):
     return (cx - 2.4 * bh, y1 - 0.6 * bh, cx + 2.4 * bh, y1 + 8.0 * bh)
 
 
-def pose_bestaetigt(kette, log=print, kopf_schwelle=None):
+def pose_bestaetigt(kette, log=_log, kopf_schwelle=None):
     """Steht an der Fundstelle ein MENSCH? -> (ok, detail).
 
     Das Melde-Gate des Triggers: die 2-4 Bilder der Burst-Kette gehen EINMALIG
@@ -1508,7 +1532,7 @@ def pose_bestaetigt(kette, log=print, kopf_schwelle=None):
             _pts, sc = w.skelett(bild, bbox=person_region(gesicht.bbox, b_, h_))
             koepfe.append(float(max(sc[i] for i in KOPF_IDX)))
         except Exception as e:
-            log(f"   Pose-Bestaetigung: Bild uebersprungen ({type(e).__name__}: {e})")
+            log.info(f"   pose confirmation: image skipped ({type(e).__name__}: {e})")
     ms = 1000.0 * (time.time() - t0)
     if not koepfe:
         # Kein Bild pruefbar (Nutzlast schon freigegeben): NICHT verwerfen.
@@ -1553,7 +1577,7 @@ def video_bauen(frames, pfad, fps):
 # NEU: Quelle aufloesen, Steckbrief, lauter HW-Rueckfall, Quell-Test (§5)
 # ======================================================================
 
-def producer_url(host, kamera, log=print):
+def producer_url(host, kamera, log=_log):
     """Producer-URL einer Kamera aus der go2rtc-API (Quellentyp 'direct').
     Geerbt aus prototyp/live_wache.stream_url (der ENV-Schalter LIVE_QUELLE
     bleibt dem Prototyp; das Produkt entscheidet per Config). None = keiner."""
@@ -1566,7 +1590,7 @@ def producer_url(host, kamera, log=print):
             if u.startswith("rtsp://") and ":8554/" not in u:
                 return u
     except Exception as e:
-        log(f"  !! go2rtc-Lookup {type(e).__name__} fuer {kamera}")
+        log.warning(f"  !! go2rtc-lookup {type(e).__name__} for {kamera}")
     return None
 
 
@@ -1580,7 +1604,7 @@ def proxy_url(cfg, kamera):
     return f"rtsp://{host}:8554/{kamera}"
 
 
-def quelle_aufloesen(cfg, kamera, guard, streng=False, log=print):
+def quelle_aufloesen(cfg, kamera, guard, streng=False, log=_log):
     """Guard-Config -> (url, weg, fehler). Wege: proxy | direct | url.
 
     streng=True ist der TEST-MODUS (Bauplan §5 Stufe 1): der User hat 'direct'
@@ -1606,7 +1630,7 @@ def quelle_aufloesen(cfg, kamera, guard, streng=False, log=print):
             return u, q, None
         if streng:
             return None, q, f"no go2rtc producer for {kamera}"
-        log(f"  !! direct: no go2rtc producer for {kamera} — falling back to proxy (LOUD)")
+        log.warning(f"  !! direct: no go2rtc producer for {kamera} — falling back to proxy (LOUD)")
         return proxy, "direct->proxy", None
     return None, q, f"unknown source type {q!r}"
 
@@ -1640,6 +1664,7 @@ def _fps_plausibel(roh):
             return None
         fps = round(float(z) / n, 2)
     except Exception:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
         return None
     return fps if FPS_MIN <= fps <= FPS_MAX else None
 
@@ -1649,11 +1674,12 @@ def _bitrate_plausibel(roh):
     try:
         kbps = round(int(roh) / 1000)
     except Exception:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
         return None
     return kbps if KBPS_MIN <= kbps <= KBPS_MAX else None
 
 
-def steckbrief_ermitteln(url, versuche=4, log=print):
+def steckbrief_ermitteln(url, versuche=4, log=_log):
     """Stream-Steckbrief per ffprobe: Aufloesung, echte Framerate, Codec,
     Bitrate wo ffprobe sie nennt (RTSP meist nicht — ehrliche Grenze; die
     volle Stream-Analyse mit Durchsatz-Sampling ist ein DIENST-Feature nach
@@ -1681,20 +1707,20 @@ def steckbrief_ermitteln(url, versuche=4, log=print):
                 if fps is None:                   # .354: Rueckfall auf die
                     fps = _fps_plausibel(st.get("r_frame_rate"))   # Nennrate
                     if fps is not None:
-                        log(f"steckbrief: avg_frame_rate "
-                            f"{st.get('avg_frame_rate')!r} unglaubwuerdig fuer "
-                            f"{quelle_maskiert(url)} — nehme r_frame_rate {fps}")
+                        log.info(f"steckbrief: avg_frame_rate "
+                            f"{st.get('avg_frame_rate')!r} implausible for "
+                            f"{quelle_maskiert(url)} — using r_frame_rate {fps}")
                 kbps = _bitrate_plausibel(st.get("bit_rate"))
                 if kbps is None and st.get("bit_rate"):
-                    log(f"steckbrief: bit_rate {st.get('bit_rate')!r} "
-                        f"unglaubwuerdig fuer {quelle_maskiert(url)} — "
-                        f"wird nicht angezeigt")
+                    log.info(f"steckbrief: bit_rate {st.get('bit_rate')!r} "
+                        f"implausible for {quelle_maskiert(url)} — "
+                        f"not shown")
                 return {"breite": b, "hoehe": h,
                         "fps": fps, "codec": st.get("codec_name") or "",
                         "bitrate_kbps": kbps}
         except Exception as e:
-            log(f"steckbrief: {type(e).__name__} fuer {quelle_maskiert(url)} "
-                f"(Versuch {i + 1}/{versuche})")
+            log.info(f"steckbrief: {type(e).__name__} for {quelle_maskiert(url)} "
+                f"(attempt {i + 1}/{versuche})")
         if i + 1 < versuche:
             time.sleep(5 * (2 ** i))
     raise RuntimeError(f"steckbrief: ffprobe liefert nach {versuche} Versuchen "
@@ -1720,7 +1746,7 @@ def hw_probe_frist(url):
     return 25.0
 
 
-def leser_mit_rueckfall(url, skala, log=print, probe_s=None):
+def leser_mit_rueckfall(url, skala, log=_log, probe_s=None):
     """leser() MIT der HW-Wahl nach Verfuegbarkeit (hw_wahl) und lautem
     SW-Rueckfall (Bauplan §5 Stufe 3 — der geerbte leser() kennt keinen: eine
     gescheiterte HW-Pipe liefert dort einfach keine Bilder, stumm). Vorbild
@@ -1748,8 +1774,8 @@ def leser_mit_rueckfall(url, skala, log=print, probe_s=None):
         p.wait()
     except Exception:
         pass
-    log(f"  !! HW-Decode ({wahl}) liefert nicht ({quelle_maskiert(url)}) — "
-        f"LAUTER Rueckfall auf Software-Decode (.hwdec_fallback-Muster)")
+    log.warning(f"  !! HW-Decode ({wahl}) delivers nothing ({quelle_maskiert(url)}) — "
+        f"LOUD fallback to software decode (.hwdec_fallback pattern)")
     p, b, h = leser(url, rate=1, skala=skala, hw=False)
     return p, b, h, False
 
@@ -1798,7 +1824,7 @@ def lieferrate(frames, n_nach, dauer):
     return round(frames / max(dauer, 0.001), 1), "throughput"
 
 
-def quelle_testen(cfg, kamera, guard, detektor, log=print, det_basis=None,
+def quelle_testen(cfg, kamera, guard, detektor, log=_log, det_basis=None,
                   hoehe=None, soll_frames=20, frist_s=15.0, kill_registrar=None,
                   mess_s=LIEFER_MESS_S):
     """Die Test-Strecke aus Bauplan §5 — vier Stufen, jede mit eigenem
@@ -1816,6 +1842,7 @@ def quelle_testen(cfg, kamera, guard, detektor, log=print, det_basis=None,
     try:
         steck = steckbrief_ermitteln(url, versuche=2, log=log)
     except Exception as e:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning (False, f'step 2/4 (probe): {type(e).__name__}: {str(e)[:...")
         return False, (f"step 2/4 (probe): {type(e).__name__}: {str(e)[:120]}"), None
     skala = wach_skala(steck["breite"], steck["hoehe"], hoehe)
     from face_audit import Embedder
@@ -1872,6 +1899,7 @@ def quelle_testen(cfg, kamera, guard, detektor, log=print, det_basis=None,
         detektor.erkennen(frame_bgr, netz)
         prov = detektor.provider()
     except Exception as e:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning (False, f'step 4/4 (detector): {type(e).__name__}: {str(e...")
         return False, f"step 4/4 (detector): {type(e).__name__}: {str(e)[:120]}", None
     block = {"ok": True, "ts": round(time.time(), 1), "quelle_fp": quelle_fp(guard),
              "aufloesung": f"{steck['breite']}x{steck['hoehe']}",
@@ -2072,20 +2100,20 @@ def ram_frei_mb():
         if mx != "max":
             return (int(mx) - cur) / 1048576.0, "cgroup2"
     except Exception:
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     try:
         lim = int(open("/sys/fs/cgroup/memory/memory.limit_in_bytes").read().strip())
         use = int(open("/sys/fs/cgroup/memory/memory.usage_in_bytes").read().strip())
         if lim < 1 << 60:
             return (lim - use) / 1048576.0, "cgroup1"
     except Exception:
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     try:
         for z in open("/proc/meminfo"):
             if z.startswith("MemAvailable:"):
                 return int(z.split()[1]) / 1024.0, "meminfo (CAUTION: host view in LXC)"
     except Exception:
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     return None, "unbekannt"
 
 
@@ -2096,7 +2124,7 @@ def rss_mb():
             if z.startswith("VmRSS:"):
                 return round(int(z.split()[1]) / 1024.0, 1)
     except Exception:
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     return None
 
 
@@ -2354,6 +2382,7 @@ def status_lesen(cfg, jetzt=time.time):
         with open(pfad) as f:
             d = json.load(f)
     except Exception:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning (None, False)")
         return None, False
     try:
         alter = jetzt() - float(d.get("ts") or 0)
@@ -2386,6 +2415,7 @@ def reduziert_lesen(cfg):
         with open(pfad) as f:
             d = json.load(f)
     except Exception:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning {}")
         return {}
     return d if isinstance(d, dict) else {}
 
@@ -2404,6 +2434,7 @@ def reduziert_schreiben(cfg, daten):
         _atomar_schreiben(pfad, daten)
         return True
     except Exception:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning False")
         return False
 
 
@@ -2456,6 +2487,7 @@ def kommando_unverarbeitet(cfg, status):
         with open(pfad) as f:
             ts = json.load(f).get("ts")
     except Exception:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
         return None
     if ts is None or (status or {}).get("kommando_ts") == ts:
         return None
@@ -2479,11 +2511,16 @@ def melde_protokoll_zeile(live_dir, eintrag):
     Stoerung darf nie den Melde-Thread kosten."""
     os.makedirs(live_dir, exist_ok=True)
     pfad = os.path.join(live_dir, MELDE_PROTOKOLL)
+    # Feldbefunde Punkt 22 (O336, Testversion 27.09.): die Rotation nur pruefen, wenn es die
+    # Datei schon gibt. Beim ERSTEN Anhaengen fehlte sie, getsize warf, und die geschluckte
+    # Ausnahme stand als ERROR im Log, obwohl die Zeile danach normal geschrieben wurde. Ein
+    # anderer Fehler an der Rotation kostet keine Zeile (WARNING); scheitert das Schreiben
+    # danach, meldet der Aufrufer _melde_protokoll ERROR.
     try:
-        if os.path.getsize(pfad) > LOG_MAX_MB * 1024 * 1024:
+        if os.path.exists(pfad) and os.path.getsize(pfad) > LOG_MAX_MB * 1024 * 1024:
             os.replace(pfad, pfad + ".1")
     except OSError:
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored", throttle=False)
     with open(pfad, "a") as f:
         f.write(json.dumps(eintrag, ensure_ascii=False) + "\n")
         f.flush()
@@ -2513,6 +2550,7 @@ def melde_liste(cfg, von, bis, kameras=None, max_gruppen=12):
         try:
             f = open(os.path.join(live_dir, MELDE_PROTOKOLL + endung))
         except OSError:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
             continue
         with f:
             for zeile in f:
@@ -2529,6 +2567,7 @@ def melde_liste(cfg, von, bis, kameras=None, max_gruppen=12):
                                    str(d.get("person") or ""),
                                    str(d.get("bild") or "")))
                 except Exception:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                     continue
     zeilen.sort()
     gruppen = []
@@ -2660,6 +2699,7 @@ def auftritt_medien(cfg, kamera, von, bis, rand=6.0):
     try:
         dateien = sorted(os.listdir(ordner))
     except OSError:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning (bilder, videos)")
         return bilder, videos
     for d in dateien:
         if d.startswith("verworfen"):
@@ -2691,6 +2731,7 @@ def melde_zaehler(cfg, von, bis, kameras=None):
         try:
             f = open(os.path.join(live_dir, MELDE_PROTOKOLL + endung))
         except OSError:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
             continue
         with f:
             for zeile in f:
@@ -2700,6 +2741,7 @@ def melde_zaehler(cfg, von, bis, kameras=None):
                     art, kanal = str(d["art"]), str(d["kanal"])
                     kamera = str(d.get("kamera") or "")
                 except Exception:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                     continue
                 if not von <= ts < bis:
                     continue
@@ -2722,11 +2764,13 @@ def engine_lebt(cfg):
     try:
         f = open(pfad, "a+")
     except OSError:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning False")
         return False
     try:
         try:
             fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning True")
             return True                          # Lock gehalten -> Engine lebt
         fcntl.flock(f.fileno(), fcntl.LOCK_UN)
         return False
@@ -2896,6 +2940,7 @@ def steckbriefe_lesen(cfg):
             d = json.load(f)
         return d if isinstance(d, dict) else {}
     except Exception:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning {}")
         return {}
 
 
@@ -2950,6 +2995,7 @@ def kalib_lesen(cfg, kamera):
     try:
         f = open(os.path.join(d, KALIB_INDEX), encoding="utf-8")
     except OSError:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning aus")
         return aus
     with f:
         for zeile in f:
@@ -2957,6 +3003,7 @@ def kalib_lesen(cfg, kamera):
                 e = json.loads(zeile)
                 name = str(e["d"])
             except Exception:
+                _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                 continue
             if not KALIB_NAME_RE.match(name):
                 continue
@@ -2995,6 +3042,7 @@ def kalib_kameras(cfg):
     try:
         namen = os.listdir(wurzel)
     except OSError:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning aus")
         return aus
     for name in namen:
         d = kalib_dir(cfg, name)          # None = Name genuegt dem Muster nicht
@@ -3003,7 +3051,7 @@ def kalib_kameras(cfg):
     return sorted(aus)
 
 
-def kalib_schreiben(cfg, kamera, bild, mass, deckel=KALIB_DECKEL, log=print,
+def kalib_schreiben(cfg, kamera, bild, mass, deckel=KALIB_DECKEL, log=_log,
                     mensch_ok=True, latte=None):
     """EIN Bild in den Ring legen -> Dateiname oder None.
 
@@ -3013,6 +3061,7 @@ def kalib_schreiben(cfg, kamera, bild, mass, deckel=KALIB_DECKEL, log=print,
     Schreibweg, also genau eine Stelle, an der der Ring greifen kann.
     Platten-/IO-Fehler sind eine Log-Zeile, nie ein Waechter-Ende (K-1-Haltung
     der Beweisbild-Ablage)."""
+    log = _logbuch.as_logger(log)      # E7: analyze.py und anlernen.py reichen eine Funktion
     if not deckel or bild is None:
         return None
     if not mensch_ok:
@@ -3020,8 +3069,8 @@ def kalib_schreiben(cfg, kamera, bild, mass, deckel=KALIB_DECKEL, log=print,
         # Erzeugers gilt am EINEN Schreibweg — was "kein Mensch im Bild"
         # war, wird kein Kalibrier-Bild. Laut, damit die Klasse im Log
         # sichtbar bleibt (die Faesser standen sonst still im Ring).
-        log(f"live {kamera}: Kalibrier-Bild verworfen (Pose-Urteil: kein "
-            f"Mensch an der Fundstelle)")
+        log.warning(f"live {kamera}: calibration image discarded (pose verdict: no "
+            f"person at the detection spot)")
         return None
     # .401 RING-EINLASS-LATTE (User-Linie 01.09.: "die Kalibrierung laeuft
     # immer; bei unkalibrierter Kamera greifen die Werkswerte"): gemessene
@@ -3038,8 +3087,8 @@ def kalib_schreiben(cfg, kamera, bild, mass, deckel=KALIB_DECKEL, log=print,
             from core.guete import RING_BODEN as _RB
             latte = (_RB["empfinden"], _RB["t"])
         if _e < latte[0] or _t < latte[1]:
-            log(f"live {kamera}: Kalibrier-Bild verworfen (unter der "
-                f"Latte: e {_e:.3f}/{latte[0]:.3f}, t {_t:.3f}/{latte[1]:.3f})")
+            log.warning(f"live {kamera}: calibration image discarded (below the "
+                f"bar: e {_e:.3f}/{latte[0]:.3f}, t {_t:.3f}/{latte[1]:.3f})")
             return None
     d = kalib_dir(cfg, kamera)
     if not d:
@@ -3070,7 +3119,7 @@ def kalib_schreiben(cfg, kamera, bild, mass, deckel=KALIB_DECKEL, log=print,
         _kalib_ring_kappen(d, deckel)
         return name
     except Exception as e:                                    # noqa: BLE001
-        log(f"live {kamera}: Kalibrier-Vorrat nicht schreibbar "
+        log.error(f"live {kamera}: calibration stock not writable "
             f"({type(e).__name__}: {e})")
         return None
 
@@ -3087,10 +3136,12 @@ def _kalib_ring_kappen(d, deckel):
                 try:
                     e = json.loads(z)
                 except Exception:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                     continue
                 if KALIB_NAME_RE.match(str(e.get("d") or "")):
                     zeilen.append(e)
     except OSError:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
         return
     weg = zeilen[:max(0, len(zeilen) - int(deckel))]
     if not weg:
@@ -3099,7 +3150,7 @@ def _kalib_ring_kappen(d, deckel):
         try:
             os.remove(os.path.join(d, str(e["d"])))
         except OSError:
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     rest = zeilen[len(weg):]
     tmp = pfad + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -3157,6 +3208,7 @@ def kalib_bilanz_vergessen(cfg, kamera):
         os.replace(tmp, pfad)
         return True
     except Exception:                                       # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.ERROR, "returning False", throttle=False)
         return False
 
 
@@ -3196,6 +3248,7 @@ def kalib_leeren(cfg, kamera):
         # der Fall, in dem sie den leeren Ring erklaert.
         leer_msg = "no samples stored yet"
     except OSError as e:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning (False, f'could not clear samples: {e}')")
         return False, f"could not clear samples: {e}"
     kalib_bilanz_vergessen(cfg, kamera)
     return True, (leer_msg or
@@ -3223,7 +3276,7 @@ def kalib_crop(frame, box, rand=KALIB_RAND):
     return a.copy() if a.size else None
 
 
-def guete_messen(crop, aligned112, log=print):
+def guete_messen(crop, aligned112, log=_log):
     """Die zwei Bildguete-Masse EINES Fundes -> (empfinden, fiqa_t), je None,
     wenn nicht messbar. DERSELBE Griff wie im Lernlauf (core/guete auf dem
     align112-Warp) — nur so bedeuten die Regler auf der Kalibrier-Seite hier
@@ -3245,7 +3298,7 @@ def guete_messen(crop, aligned112, log=print):
         t = _guete.fiqa_t(aligned112) if aligned112 is not None else None
         return e, t
     except Exception as ex:                                   # noqa: BLE001
-        log(f"live: Guete-Messung entfaellt ({type(ex).__name__}: {ex})")
+        log.warning(f"live: quality measurement skipped ({type(ex).__name__}: {ex})")
         return None, None
 
 
@@ -3294,7 +3347,7 @@ def live_verstecken(cfg, kamera, versteckt, *, store_pfad, store_laden,
     store_schreiben(store_pfad(cfg), store)
     cfg["live"] = store["live"]                  # Prozess-Sicht sofort aktuell
     _audit_zeile(cfg, {"live_versteckt": {kamera: bool(versteckt)}})
-    log(f"LIVE tile {kamera} {'hidden' if versteckt else 'shown'} via UI")
+    log.info(f"LIVE tile {kamera} {'hidden' if versteckt else 'shown'} via UI")
     return True, ("hidden" if versteckt else "shown")
 
 
@@ -3519,7 +3572,7 @@ def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
         "frigate_abstand_s": fr_ab, "bewegung_gate": bw_gate,
         "ruhe_takt_s": ruhe_s, "bewegung_schwelle": bw_schw,
         "bewegung_flaeche": bw_fl, "worker_aus": wk_aus}}})
-    log(f"LIVE guard {kamera} changed via UI (URL masked)")
+    log.info(f"LIVE guard {kamera} changed via UI (URL masked)")
     hinweis = ""
     alt_fp = (alt.get("test") or {}).get("quelle_fp")
     if alt_fp and alt_fp != quelle_fp(neu):
@@ -3531,13 +3584,19 @@ def live_speichern(cfg, kamera, d, *, store_pfad, store_laden, store_schreiben,
 
 
 def live_schalter(cfg, kamera, enabled, *, store_pfad, store_laden,
-                  store_schreiben, log, retest_merker=None):
+                  store_schreiben, log, retest_merker=None, auto_grund=None):
     """Enable/Disable EINES Waechters — der Enable-Riegel SERVERSEITIG
     (Bauplan §2.4: nicht nur UI-Grau; ein direkter POST kommt hier genauso
     vorbei): Enable nur mit gruenem Quelltest fuer GENAU diese Quell-
     Konfiguration (test_gueltig, Fingerprint-Vergleich). -> (ok, msg).
     Die Engine uebernimmt den Schalter selbst (Store-Reload); die Kachel
     zeigt den neuen Zustand erst mit der Engine-QUITTUNG (K1).
+
+    WER SCHALTET (Feldbefunde Punkt 23, O337): schaltet der Dienst selbst
+    (Vorrang Erkennung, Rueckkehr), reicht er seinen Grund als `auto_grund`
+    herein, und die Log-Zeile nennt ihn; ohne ihn kam der Schalter aus der
+    Oberflaeche („via UI“). Bis 0.1.0.549 sagte die Zeile immer „via UI“,
+    auch wenn der Dienst den Waechter vom Netz nahm.
 
     HARTER AKTIVIER-RIEGEL (User 12.08. mittags, ERSETZT das Verweigert-
     Modell im Normalweg): es koennen nur so viele Waechter AKTIVIERT werden,
@@ -3584,9 +3643,9 @@ def live_schalter(cfg, kamera, enabled, *, store_pfad, store_laden,
                     emax_i = int(emax)
                 except (TypeError, ValueError):
                     emax_i = None
-                    log(f"!! live_schalter: slots.effektiv_max unbrauchbar "
-                        f"({emax!r}) — Kapazitaets-Riegel uebersprungen, "
-                        f"Randfall-Weg gilt")
+                    log.warning(f"!! live_schalter: slots.effektiv_max unusable "
+                        f"({emax!r}) — capacity bolt skipped, "
+                        f"edge-case path applies")
                 blk = (store.get("live") or {}).get("guards") or {}
                 an = sum(1 for g_ in blk.values()
                          if isinstance(g_, dict) and g_.get("enabled"))
@@ -3605,7 +3664,8 @@ def live_schalter(cfg, kamera, enabled, *, store_pfad, store_laden,
     store_schreiben(store_pfad(cfg), store)
     cfg["live"] = store["live"]
     _audit_zeile(cfg, {"live": {kamera: {"enabled": bool(enabled)}}})
-    log(f"LIVE guard {kamera} {'enabled' if enabled else 'disabled'} via UI")
+    wer = f"automatically ({auto_grund})" if auto_grund else "via UI"
+    log.info(f"LIVE guard {kamera} {'enabled' if enabled else 'disabled'} {wer}")
     if enabled:
         if retest_merker and retest_merker.get("grund"):
             return True, ("enabled — the source changed since the last "
@@ -3676,11 +3736,11 @@ def _klemmen(wert, std, lo, hi, log, name, feld):
     try:
         w = int(wert if wert is not None else std)
     except Exception:
-        log(f"live: {name}.{feld}={wert!r} ungueltig — Default {std}")
+        log.info(f"live: {name}.{feld}={wert!r} ungueltig — Default {std}")
         return std
     if w < lo or w > hi:
         g = min(max(w, lo), hi)
-        log(f"live: {name}.{feld}={w} ausserhalb {lo}-{hi} — geklemmt auf {g}")
+        log.warning(f"live: {name}.{feld}={w} outside {lo}-{hi} — clamped to {g}")
         return g
     return w
 
@@ -3702,7 +3762,7 @@ def _bool_lesen(wert, std, log, feld):
         return True
     if w in ("0", "false", "nein", "off", "no", ""):
         return False
-    log(f"live: {feld}={wert!r} ungueltig (bool erwartet) — Default {std}")
+    log.info(f"live: {feld}={wert!r} ungueltig (bool erwartet) — Default {std}")
     return std
 
 
@@ -3712,11 +3772,11 @@ def _zahl_lesen(wert, std, lo, hi, log, feld):
     try:
         w = type(std)(wert)
     except (TypeError, ValueError):
-        log(f"live: {feld}={wert!r} ungueltig — Default {std}")
+        log.info(f"live: {feld}={wert!r} ungueltig — Default {std}")
         return std
     if w < lo or w > hi:
         g = min(max(w, lo), hi)
-        log(f"live: {feld}={w} ausserhalb {lo}-{hi} — geklemmt auf {g}")
+        log.warning(f"live: {feld}={w} outside {lo}-{hi} — clamped to {g}")
         return g
     return w
 
@@ -3737,10 +3797,10 @@ def _zahl_opt(wert, lo, hi, log, feld, ganz=False):
     try:
         w = int(wert) if ganz else float(wert)
     except (TypeError, ValueError):
-        log(f"live: {feld}={wert!r} ungueltig — Vorgabe gilt")
+        log.warning(f"live: {feld}={wert!r} invalid — default applies")
         return None
     if w < lo or w > hi:
-        log(f"live: {feld}={w} ausserhalb {lo}-{hi} — Vorgabe gilt")
+        log.warning(f"live: {feld}={w} outside {lo}-{hi} — default applies")
         return None
     return w
 
@@ -3825,8 +3885,10 @@ GUARD_USER_FELDER = ("enabled", "quelle", "url", "ende_ohne_gesicht_s",
                      # Lernweg (werksseitig AN seit .516, Grundwert 20 seit
                      # .517 — core.guete.norm_werk); `norm_min` gehoert zum
                      # Erkennen-Register (globaler Rueckfall
-                     # `urteil_norm_min`) und bleibt werksseitig 0 = aus,
-                     # weil dort niemand die Norm misst. Seit .517 hat die
+                     # `urteil_norm_min`, Werkswert 18,5 aus
+                     # kamerakalib.erkennen_start; seit Bauplan K3 Stufe KP1
+                     # siebt der Analyse-Worker damit, der Live-Waechter
+                     # nicht). Seit .517 hat die
                      # Kalibrierseite dafuer auch keinen Regler mehr; das
                      # FELD bleibt (Sechs-Achsen-Verfassung), es wird von der
                      # Seite nur nicht mehr geschrieben.
@@ -3909,17 +3971,17 @@ def _hoehe_lesen(wert, log, name):
         # der gespeicherte Wert traegt den Quell-Fingerprint des gruenen Tests,
         # und ein Update darf ihn nie entwerten. Gekappt wird erst dort, wo aus
         # der Hoehe eine Skala wird (wach_skala -> WACH_HOEHE_MAX).
-        log(f"live.guards.{name}.hoehe: {h} wird nicht mehr angeboten — der "
-            f"Waechter laeuft mit {WACH_HOEHE_MAX}; der gespeicherte Wert und "
-            f"der Quelltest bleiben gueltig")
+        log.info(f"live.guards.{name}.hoehe: {h} is no longer offered — the "
+            f"watcher runs at {WACH_HOEHE_MAX}; the stored value and "
+            f"the source test stay valid")
         return h
     if h in HOEHEN_ERLAUBT:
         return h
-    log(f"live.guards.{name}.hoehe: {wert!r} unbekannt — Default gilt")
+    log.warning(f"live.guards.{name}.hoehe: {wert!r} unknown — default applies")
     return None
 
 
-def max_slots_lesen(cfg, log=print):
+def max_slots_lesen(cfg, log=_log):
     """Harter Slot-Deckel der Engine -> int, geklemmt auf 1..MAX_SLOTS_WAND.
     Gleiches Fail-safe-Muster wie guards_lesen: klemmen statt crashen,
     jeder Eingriff laut. Default bleibt die gemessene Wand HART_MAX_SLOTS.
@@ -3943,7 +4005,7 @@ def max_slots_lesen(cfg, log=print):
                            1, MAX_SLOTS_WAND, log, "live.max_slots"))
 
 
-def guards_lesen(cfg, log=print):
+def guards_lesen(cfg, log=_log):
     """Config-Store-Block `live` -> (defaults, guards). Bauplan §3: Defaults
     sind die GEMESSENEN Werte (hier die Modul-Literale), der Store ueberlagert;
     ein Guard traegt nur die echten User-Entscheide.
@@ -3955,8 +4017,8 @@ def guards_lesen(cfg, log=print):
     (er wuerde sonst still nirgendwo melden — die Fehlklasse im Reinformat)."""
     live = cfg.get("live") or {}
     if not isinstance(live, dict):
-        log(f"live: Config-Block ist kein Objekt ({type(live).__name__}) — "
-            f"ignoriert, Defaults gelten, keine Waechter")
+        log.warning(f"live: config block is not an object ({type(live).__name__}) — "
+            f"ignored, defaults apply, no watchers")
         live = {}
     # min_score = die det-Grenze des Live-Wegs. Seit 31.08. DET_MIN_LIVE (0,40)
     # statt MIN_SCORE (0,60) — zweifach an Feldmaterial gemessen: die
@@ -3975,11 +4037,11 @@ def guards_lesen(cfg, log=print):
          "burst_fenster_s": BURST_FENSTER, "rate": PRUEF_RATE}
     roh_defaults = live.get("defaults") or {}
     if not isinstance(roh_defaults, dict):
-        log("live.defaults: kein Objekt — ignoriert")
+        log.warning("live.defaults: not an object — ignored")
         roh_defaults = {}
     for k, v in roh_defaults.items():
         if k not in d:
-            log(f"live.defaults: unbekannter Schluessel {k!r} — ignoriert")
+            log.warning(f"live.defaults: unknown key {k!r} — ignored")
             continue
         if isinstance(d[k], bool):
             d[k] = _bool_lesen(v, d[k], log, f"live.defaults.{k}")
@@ -3989,12 +4051,12 @@ def guards_lesen(cfg, log=print):
     guards = {}
     roh_guards = live.get("guards") or {}
     if not isinstance(roh_guards, dict):
-        log(f"live.guards: kein Objekt ({type(roh_guards).__name__}) — "
-            f"ignoriert, keine Waechter")
+        log.warning(f"live.guards: not an object ({type(roh_guards).__name__}) — "
+            f"ignored, no watchers")
         roh_guards = {}
     for name, g in roh_guards.items():
         if not isinstance(g, dict):
-            log(f"live.guards.{name}: kein Objekt — ignoriert")
+            log.warning(f"live.guards.{name}: not an object — ignored")
             continue
         roh_kanaele = g.get("kanaele")
         if roh_kanaele is None:
@@ -4007,13 +4069,13 @@ def guards_lesen(cfg, log=print):
             from core import melden as _melden
             roh_kanaele = _melden.konfigurierte_kanaele(cfg)
             if not roh_kanaele:
-                log(f"!! live.guards.{name}: kein Meldekanal konfiguriert — der "
-                    f"Waechter triggert und erscheint unter Live alerts (.245), "
-                    f"aber es geht KEINE Benachrichtigung raus "
-                    f"(Notifications-Seite)")
+                log.warning(f"!! live.guards.{name}: no notification channel configured — the "
+                    f"watcher triggers and shows up under Live alerts (.245), "
+                    f"but NO notification goes out "
+                    f"(Notifications page)")
         if isinstance(roh_kanaele, str):
             # YAML-/Hand-Edit-Klassiker: String statt Liste — tolerant lesen, laut.
-            log(f"live.guards.{name}.kanaele ist ein String ({roh_kanaele!r}) — "
+            log.info(f"live.guards.{name}.kanaele ist ein String ({roh_kanaele!r}) — "
                 f"als Ein-Element-Liste gelesen")
             roh_kanaele = [roh_kanaele]
         kanaele = []
@@ -4021,12 +4083,12 @@ def guards_lesen(cfg, log=print):
             if kk in KANAELE_ERLAUBT:
                 kanaele.append(kk)
             else:
-                log(f"live.guards.{name}.kanaele: unbekannter Kanal {kk!r} "
-                    f"verworfen (erlaubt: {', '.join(KANAELE_ERLAUBT)})")
+                log.warning(f"live.guards.{name}.kanaele: unknown channel {kk!r} "
+                    f"discarded (allowed: {', '.join(KANAELE_ERLAUBT)})")
         if not kanaele and roh_kanaele:
-            log(f"!! live.guards.{name}: nach dem Kanal-Sieb ist KEIN Meldekanal "
-                f"uebrig — der Waechter triggert und erscheint unter Live alerts "
-                f"(.245), aber es geht KEINE Benachrichtigung raus")
+            log.warning(f"!! live.guards.{name}: after the channel sieve NO notification channel "
+                f"is left — the watcher triggers and shows up under Live alerts "
+                f"(.245), but NO notification goes out")
         guards[name] = {
             "enabled": _bool_lesen(g.get("enabled"), False, log,
                                    f"live.guards.{name}.enabled"),
@@ -4181,12 +4243,12 @@ def guards_lesen(cfg, log=print):
                 # Ausweg nennen, statt sie bei jedem Start wie einen Tippfehler
                 # zu bewarnen. Keine Store-Bereinigung von hier: dieser Leser ist
                 # bewusst KEIN achter Schreibweg (Store-Governance verifyd.py:96).
-                log(f"live.guards.{name}: field {fremd!r} was removed in an "
+                log.warning(f"live.guards.{name}: field {fremd!r} was removed in an "
                     f"earlier version — ignored; delete it from config.json to "
                     f"silence this line")
             else:
-                log(f"live.guards.{name}: unbekanntes Feld {fremd!r} — ignoriert "
-                    f"(Vertrag GUARD_FELDER)")
+                log.warning(f"live.guards.{name}: unknown field {fremd!r} — ignored "
+                    f"(contract GUARD_FELDER)")
     return d, guards
 
 
@@ -4297,7 +4359,7 @@ class Melder:
     (`_sprache.aktivieren()` ist dieselbe Funktion wie
     `melden.sprache_aktivieren()`, dort steht ihre Begruendung)."""
 
-    def __init__(self, cfg, log=print, pub=None):
+    def __init__(self, cfg, log=_log, pub=None):
         self.cfg = cfg
         self.log = log
         self.pub = pub                            # paho-Client des Startwegs (oder None)
@@ -4439,7 +4501,7 @@ class Inferenzkern:
     ZUSAETZLICH .sammelbatch_moeglich()/.detektieren()/.embeddings(), schaltet
     der Kern den Batch ein — die Faehigkeit wird GEFRAGT, nie angenommen."""
 
-    def __init__(self, det, lock, log=print, sammel_ms=SAMMEL_MS_VORGABE,
+    def __init__(self, det, lock, log=_log, sammel_ms=SAMMEL_MS_VORGABE,
                  parallel=None, jetzt=time.monotonic):
         self.det = det
         self.lock = lock
@@ -4463,12 +4525,14 @@ class Inferenzkern:
                         and callable(getattr(self.det, "embeddings", None))
                         and self.det.sammelbatch_moeglich())
         except Exception:                                     # noqa: BLE001
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning False")
             return False
 
     def rec_geraet(self):
         try:
             return str(self.det.rec_geraet()).upper()
         except Exception:                                     # noqa: BLE001
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning '?'")
             return "?"
 
     def sessions(self):
@@ -4479,6 +4543,7 @@ class Inferenzkern:
             from face_audit import Embedder
             return Embedder.instanzen()
         except Exception:                                     # noqa: BLE001
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
             return None
 
     # ---- Rechnen ----------------------------------------------------------
@@ -4576,7 +4641,7 @@ class Engine:
       refs/win_thresh  Schnell-Urteil-Zutaten (None -> Schnell-Urteil aus)
       jetzt/wanduhr  Uhren (monoton fuer Fristen / Wanduhr fuer Anzeige)"""
 
-    def __init__(self, cfg, log=print, *, detektor=None, detektor_fabrik=None,
+    def __init__(self, cfg, log=_log, *, detektor=None, detektor_fabrik=None,
                  melder=None, frames_fabrik=None, kameras=None,
                  refs=None, win_thresh=None,
                  jetzt=time.monotonic, wanduhr=time.time,
@@ -4618,16 +4683,6 @@ class Engine:
         self._lock_handle = None
         self._fehler_drossel = {}     # (quelle) -> letzter Log mono
         self._stoer_global_mono = -1e18
-        # .511 Log-Bereinigung: der debug-Schalter des DIENSTES, gespiegelt in
-        # <data_dir>/state/debug_an (core.logdatei — dort steht, warum der
-        # Config-Store diesen Weg nicht kann). Gelesen mit TTL, weil die
-        # Kachelzeilen die haeufigsten Zeilen der ganzen Anlage sind.
-        # DERSELBE aufgeloeste data_dir wie oben (nicht cfg.get je Aufruf):
-        # sonst liest eine Config ohne data_dir einen relativen Pfad, waehrend
-        # Status und live_dir laengst im Rueckfall-Ordner liegen.
-        self._dbg_datadir = data_dir
-        self._dbg_stand = False
-        self._dbg_bis = -1e18
         self._start_mono = None
         self._start_wand = None
         self._gestoppt = False        # stop()-Idempotenz UNABHAENGIG von stop_ev
@@ -4689,12 +4744,12 @@ class Engine:
             try:
                 return max(1, min(8, int(w)))
             except (TypeError, ValueError):
-                self.log(f"live: live_rec_parallel={w!r} ungueltig — Vorgabe gilt")
+                self.log.warning(f"live: live_rec_parallel={w!r} invalid — default applies")
         try:
             if str(self.detektor.rec_geraet()).upper() == "NPU":
                 return REC_PARALLEL_NPU
         except Exception:                                     # noqa: BLE001
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         return 1
 
     # ---------------------------------------------------------------- Start/Stop
@@ -4702,7 +4757,7 @@ class Engine:
         """Kacheln nach Riegel + Slot-Pruefung starten; Threads hochziehen.
         -> True, wenn die Engine laeuft (auch mit 0 Kacheln — Status lebt)."""
         if not self._flock_nehmen():
-            self.log(f"live: another engine holds {self.lock_pfad} — refusing "
+            self.log.info(f"live: another engine holds {self.lock_pfad} — refusing "
                      f"(zwei Engines = doppelte Meldungen, Bauplan §8)")
             return False
         self._start_mono = self.jetzt()
@@ -4716,12 +4771,12 @@ class Engine:
             with open(self.kommando_pfad) as f:
                 self._kommando_ts = json.load(f).get("ts")
         except Exception:
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         if self.store_pfad:
             try:
                 self._store_mtime = os.path.getmtime(self.store_pfad)
             except OSError:
-                pass
+                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         for name, guard in self.guards.items():
             if not guard["enabled"]:
                 continue
@@ -4741,7 +4796,7 @@ class Engine:
                if g.get("enabled")):
             from core import frigateevents as _fev
             self.fr_queue = _fev.Warteschlange(self.cfg, self.log).start()
-            self.log("live: manual Frigate events enabled for at least one "
+            self.log.info("live: manual Frigate events enabled for at least one "
                      "watcher — writes go through a background queue (the "
                      "watchers never wait for Frigate)")
         for ziel, nm in ((self._detektor_lauf, "live-detektor"),
@@ -4750,7 +4805,7 @@ class Engine:
             self.threads.append(t)
         for t in self.threads:
             t.start()
-        self.log(f"live engine up: {len(self.kacheln)} watcher(s), "
+        self.log.info(f"live engine up: {len(self.kacheln)} watcher(s), "
                  f"{len(self.verweigert)} refused, heartbeat {HERZSCHLAG_S:g}s, "
                  f"watchdog {self.watchdog_s:g}s")
         # .338: Summenzeile des stderr-Siebs (livewached.main) statt 30+ roter
@@ -4758,11 +4813,11 @@ class Engine:
         try:
             from core import livewached as _lwd
             if getattr(_lwd, "_STDERR_SIEB", None) is not None and _lwd._STDERR_SIEB.anzahl:
-                self.log(f"suppressed {_lwd._STDERR_SIEB.anzahl} harmless driver "
+                self.log.warning(f"suppressed {_lwd._STDERR_SIEB.anzahl} harmless driver "
                          f"thread-affinity notices during engine start (model "
                          f"library sets no thread cap; computation is unaffected)")
         except Exception:
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         return True
 
     def stop(self, grund="stop"):
@@ -4774,7 +4829,7 @@ class Engine:
         if self._gestoppt:
             return
         self._gestoppt = True
-        self.log(f"live engine stopping ({grund})")
+        self.log.info(f"live engine stopping ({grund})")
         self.stop_ev.set()
         for k in list(self.kacheln.values()):
             k.stop_ev.set()
@@ -4809,13 +4864,13 @@ class Engine:
         try:
             self._status_schreiben(self.jetzt())
         except Exception:
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         if self._lock_handle:
             try:
                 self._lock_handle.close()
             except Exception:
                 pass
-        self.log("live engine stopped")
+        self.log.info("live engine stopped")
 
     def warten(self):
         """Blockiert bis stop() (Signal-Handler des Startwegs ruft stop())."""
@@ -4839,6 +4894,7 @@ class Engine:
             self._lock_handle = f
             return True
         except OSError:
+            _logbuch.swallowed(_log, _logbuch.ERROR, "returning False", throttle=False)
             return False
 
     def _prototyp_warnung(self):
@@ -4864,6 +4920,7 @@ class Engine:
                 try:
                     cmd = open(f"/proc/{eintrag}/cmdline", "rb").read()
                 except OSError:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                     continue
                 if not ist_prototyp_waechter(cmd):
                     continue
@@ -4875,13 +4932,13 @@ class Engine:
                             kamera = teil.split(b"=", 1)[1].decode("utf-8", "replace")
                             break
                 except OSError:
-                    pass
-                self.log(f"!! WARNING: prototype watcher RUNNING (pid {eintrag}"
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
+                self.log.warning(f"!! WARNING: prototype watcher RUNNING (pid {eintrag}"
                          + (f", {kamera}" if kamera else "")
                          + ") — double alerts possible until it is stopped "
                            "(no shared alert throttle between prototype and engine)")
         except OSError:
-            self.log("!! prototype check unavailable (/proc not readable)")
+            self.log.error("!! prototype check unavailable (/proc not readable)")
 
     def _feed_inventar(self):
         """Feed-Inventar-Auflage (stand.md 11.08.): beim Start ein Inventar
@@ -4890,7 +4947,7 @@ class Engine:
         Aufloesung folgen je Kachel in der WACHE-START-Zeile (erst nach dem
         Verbinden sind sie Messwerte statt Annahmen)."""
         if not self.kameras:
-            self.log("live feed inventory: no Frigate camera list injected")
+            self.log.info("live feed inventory: no Frigate camera list injected")
             return
         for name, info in sorted(self.kameras.items()):
             g = self.guards.get(name)
@@ -4898,11 +4955,11 @@ class Engine:
                   else ("configured, disabled" if g else "no watcher configured"))
             # .511: Feed-Inventar je Engine-Start — Buchhaltung. Was wirklich
             # laeuft, sagt die WACHE-START-Zeile je Kachel (bleibt sichtbar).
-            self._dbg(f"live feed: {name} detect {info.get('width')}x{info.get('height')}"
+            self.log.debug(f"live feed: {name} detect {info.get('width')}x{info.get('height')}"
                       f" — {zu}")
         for name in self.guards:
             if name not in self.kameras:
-                self.log(f"live feed: {name} — configured but NOT in Frigate "
+                self.log.info(f"live feed: {name} — configured but NOT in Frigate "
                          f"(camera renamed/removed? guard kept, Bauplan §3)")
 
     # ------------------------------------------------- Kachel-Lebenszyklus (Reload)
@@ -4918,14 +4975,14 @@ class Engine:
         ok, grund = test_gueltig(guard)
         if not ok:
             self.verweigert[name] = f"enable refused: {grund}"
-            self.log(f"live {name}: {self.verweigert[name]}")
+            self.log.warning(f"live {name}: {self.verweigert[name]}")
             return None
         ok, grund = self.vermessung.slot_pruefen(len(self.kacheln))
         if not ok:
             self.verweigert[name] = f"slot refused: {grund}"
-            self.log(f"live {name}: {self.verweigert[name]}")
+            self.log.error(f"live {name}: {self.verweigert[name]}")
             return None
-        self.log(f"live {name}: slot granted ({grund})")
+        self.log.info(f"live {name}: slot granted ({grund})")
         self.verweigert.pop(name, None)
         k = Kachel(name, guard, self.defaults)
         self.kacheln[name] = k
@@ -4953,7 +5010,7 @@ class Engine:
         k.stop_ev.set()
         k.zustand = "gestoppt"
         k.zustand_grund = grund
-        self._klog(k, f"WACHE STOPP ({grund})")
+        self._klog(k, f"WATCH STOP ({grund})")
 
         def aufraeumen():
             if k.kill:
@@ -4983,6 +5040,7 @@ class Engine:
                 return True, ""
             return False, f"Store-Inhalt ist {type(probe).__name__}, kein Objekt"
         except Exception as e:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning (False, f'{type(e).__name__}: {str(e)[:120]}')")
             return False, f"{type(e).__name__}: {str(e)[:120]}"
 
     def _config_pruefen(self):
@@ -5015,9 +5073,9 @@ class Engine:
             # Schluessel ('reload',) schluckte die B2-Zeile, wenn kurz zuvor
             # ein Ladefehler lief — dieselbe Kollisions-Klasse wie Lens-A B3).
             self._fehler_log(("reload", "laden"),
-                             f"Config-Reload fehlgeschlagen: "
+                             f"config reload failed: "
                              f"{type(e).__name__}: {e} — "
-                             f"naechster Versuch am naechsten Takt")
+                             f"next attempt on the next cycle", stufe=_logbuch.ERROR)
             return
         defaults_neu, guards_neu = guards_lesen(cfg_neu, self.log)
         # Engine-B2 (gemessen: EIN unlesbarer Store — halber Hand-Edit,
@@ -5032,17 +5090,17 @@ class Engine:
             echt_leer, probe_fehler = self._store_leere_echt()
             if not echt_leer:
                 self._fehler_log(("reload", "store"),
-                                 f"Config-Store NICHT lesbar ({probe_fehler}) — "
-                                 f"{len(self.kacheln)} laufende Waechter werden "
-                                 f"BEHALTEN (das ist KEINE Guard-Loeschung); "
-                                 f"naechster Versuch am naechsten Takt")
+                                 f"config store NOT readable ({probe_fehler}) — "
+                                 f"{len(self.kacheln)} running watchers are "
+                                 f"KEPT (this is NO guard deletion); "
+                                 f"next attempt on the next cycle", stufe=_logbuch.WARNING)
                 self._stoerung_global(
                     f"config store unreadable ({probe_fehler}) — keeping "
                     f"{len(self.kacheln)} running watcher(s), fix the store file")
                 return
         self._store_mtime = mt              # Kante erst NACH erfolgreichem Laden (M2)
         if defaults_neu != self.defaults:
-            self.log("live: defaults changed in the store — guards reload "
+            self.log.info("live: defaults changed in the store — guards reload "
                      "live, defaults need an engine restart (unchanged in "
                      "this process, LOUD by design)")
         # Melder/_echte_quelle halten eine Referenz auf DIESES dict — in
@@ -5079,8 +5137,8 @@ class Engine:
                 continue
             leichte = ("ende_ohne_gesicht_s", "wieder_scharf_s", "kanaele")
             if any(k.cfg.get(f) != g.get(f) for f in leichte):
-                self._klog(k, "Konfig uebernommen ohne Neustart "
-                              "(Zeiten/Kanaele/Schnell-Urteil)")
+                self._klog(k, "config applied without restart "
+                              "(times/channels/quick verdict)")
             k.cfg = g                                # atomarer dict-Tausch
 
     # ---------------------------------------------------------------- Leser je Kachel
@@ -5187,8 +5245,8 @@ class Engine:
                     k.zustand = "gestoert"
                     k.zustand_grund = f"connect: {type(e).__name__}: {str(e)[:80]}"
                     k.reconnect_fehler += 1
-                    self._klog(k, f"Verbindung fehlgeschlagen ({k.zustand_grund}) "
-                                  f"— neuer Versuch in {warte:g}s")
+                    self._klog(k, f"connection failed ({k.zustand_grund}) "
+                                  f"— next attempt in {warte:g}s", stufe=_logbuch.ERROR)
                     if self._warte_kachel(k, warte):
                         break
                     warte = min(warte * 2, RECONNECT_MAX)
@@ -5206,18 +5264,18 @@ class Engine:
                 k.zustand_grund = ""
                 # Feed-Steckbrief in die Startzeile (stand.md-Auflage):
                 # Original -> verarbeitet, fps/Codec/Bezugsweg, Bandbreite wo da.
-                self._klog(k, f"WACHE START {k.name} (Quelle "
+                self._klog(k, f"WATCH START {k.name} (source "
                               f"{steck.get('breite')}x{steck.get('hoehe')}"
                               + (f" @ {steck.get('fps')} fps" if steck.get("fps") else "")
                               + (f", {steck.get('codec')}" if steck.get("codec") else "")
                               + (f", ~{steck.get('bitrate_kbps')} kbit/s"
                                  if steck.get("bitrate_kbps") else "")
-                              + f" -> verarbeitet {steck.get('skala_b')}x{steck.get('skala_h')}, "
+                              + f" -> processed {steck.get('skala_b')}x{steck.get('skala_h')}, "
                               + (f"HW-Decode ({steck.get('hw')})" if steck.get("hw")
-                                 else ("SW-Decode (Rueckfall)"
+                                 else ("SW-Decode (fallback)"
                                        if steck.get("hw") is False else "SW-Decode"))
-                              + f", Netz {k.netz[0]}x{k.netz[1]}, Weg {steck.get('weg')}, "
-                              + f"Quelle {steck.get('quelle')})")
+                              + f", net {k.netz[0]}x{k.netz[1]}, path {steck.get('weg')}, "
+                              + f"source {steck.get('quelle')})")
                 n_vorher = k.bilder
                 try:
                     for yuv in frames:
@@ -5293,10 +5351,10 @@ class Engine:
                     enden = k.burst.abriss_enden(mono)
                 for ende in enden:
                     self._ende_loggen(k, ende)
-                self._klog(k, f"STREAM-ABRISS nach {k.bilder} Bildern "
-                              f"({k.bilder - n_vorher} auf dieser Verbindung, "
-                              f"{stand_s / 60:.1f} min) — Neuverbindung in {warte:g}s "
-                              f"[Abriss #{k.abrisse}]")
+                self._klog(k, f"STREAM BREAK after {k.bilder} frames "
+                              f"({k.bilder - n_vorher} on this connection, "
+                              f"{stand_s / 60:.1f} min) — reconnect in {warte:g}s "
+                              f"[break #{k.abrisse}]", stufe=_logbuch.WARNING)
                 if self._warte_kachel(k, warte):
                     break
                 warte = min(warte * 2, RECONNECT_MAX)
@@ -5306,8 +5364,8 @@ class Engine:
             import traceback
             k.zustand = "gestoert"
             k.zustand_grund = f"thread died: {type(e).__name__}: {str(e)[:120]}"
-            self._klog(k, f"!! Waechter-Thread gestorben: {k.zustand_grund}")
-            self.log(traceback.format_exc())
+            self._klog(k, f"!! watcher thread died: {k.zustand_grund}", stufe=_logbuch.ERROR)
+            self.log.info(traceback.format_exc())
             self._stoerung_senden(k, f"watcher thread died: {type(e).__name__}: "
                                      f"{str(e)[:120]}")
         finally:
@@ -5323,6 +5381,7 @@ class Engine:
             with open(self.kommando_pfad) as f:
                 cmd = json.load(f)
         except Exception:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
             return
         ts = cmd.get("ts")
         if ts is None or ts == self._kommando_ts:
@@ -5331,7 +5390,7 @@ class Engine:
         art = str(cmd.get("aktion") or "")
         kamera = str(cmd.get("kamera") or "")
         if art not in ("messung", "test") or not kamera:
-            self.log(f"live: unbekanntes Kommando {art!r}/{kamera!r} — ignoriert")
+            self.log.warning(f"live: unknown command {art!r}/{kamera!r} — ignored")
             return
         self._auftrag_starten(art, kamera, cmd)
 
@@ -5339,7 +5398,7 @@ class Engine:
         with self._auftrag_lock:
             if self._auftrag is not None:
                 laeuft = f"{self._auftrag.get('art')} {self._auftrag.get('kamera')}"
-                self.log(f"live {art} {kamera}: refused — another job is "
+                self.log.warning(f"live {art} {kamera}: refused — another job is "
                          f"running ({laeuft})")
                 self.auftrag_ergebnisse.setdefault(kamera, {})[art] = {
                     "ok": False, "ts": round(self.wanduhr(), 1), "art": art,
@@ -5356,7 +5415,7 @@ class Engine:
             # Toleranz.
             if (kamera not in self.guards and self.kameras
                     and kamera not in self.kameras):
-                self.log(f"live {art} {kamera}: refused — unknown camera")
+                self.log.warning(f"live {art} {kamera}: refused — unknown camera")
                 self.auftrag_ergebnisse.setdefault(kamera, {})[art] = {
                     "ok": False, "ts": round(self.wanduhr(), 1), "art": art,
                     "vorab": True,
@@ -5403,7 +5462,7 @@ class Engine:
         pausiert = sorted(self.kacheln)
         self._pause_ausser = "\x00auftrag"
         verworfen = self.scheduler.raeumen()
-        self.log(f"live {art} {kamera}: watchers paused for measurement: "
+        self.log.warning(f"live {art} {kamera}: watchers paused for measurement: "
                  f"{', '.join(pausiert) or '(none)'}"
                  + (f" — {verworfen} queued frame(s) dropped (stale by design)"
                     if verworfen else ""))
@@ -5436,19 +5495,19 @@ class Engine:
             # Not-Aus hat abgebrochen und quittiert — das Spaet-Ergebnis
             # dieses Laufs (unter Abbruch entstanden) ueberschreibt weder
             # die Timeout-Quittung noch ein Nachfolger-Ergebnis.
-            self.log(f"live {art} {kamera}: aborted job thread ended "
+            self.log.error(f"live {art} {kamera}: aborted job thread ended "
                      f"(late result discarded)")
             return
         ergebnis["ts"] = round(self.wanduhr(), 1)
         ergebnis["art"] = art
         self.auftrag_ergebnisse.setdefault(kamera, {})[art] = ergebnis
-        self.log(f"live {art} {kamera}: "
-                 f"{'ok' if ergebnis.get('ok') else 'FEHLER'} — "
+        self.log.info(f"live {art} {kamera}: "
+                 f"{'ok' if ergebnis.get('ok') else 'ERROR'} — "
                  f"{ergebnis.get('text') or ergebnis.get('fehler') or ''}")
         try:
             self._status_schreiben(self.jetzt())     # Ende sofort quittieren
         except Exception:
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
 
     def _quelltest_ausfuehren(self, kamera, guard, a=None):
         """§5-Quelltest ueber den GETEILTEN Detektor der Engine (kein zweites
@@ -5479,6 +5538,7 @@ class Engine:
             felder = open(f"/proc/{pid}/stat").read().rsplit(") ", 1)[1].split()
             return (int(felder[11]) + int(felder[12])) / os.sysconf("SC_CLK_TCK")
         except Exception:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
             return None
 
     def _messung_ausfuehren(self, kamera, guard, dauer_s, a=None):
@@ -5517,6 +5577,7 @@ class Engine:
                             q.put(yuv, timeout=0.25)
                             break
                         except queue.Full:
+                            _logbuch.swallowed(_log, _logbuch.WARNING, "skipped", throttle=False)
                             continue
                     if fertig.is_set():
                         return
@@ -5524,7 +5585,7 @@ class Engine:
                 try:
                     q.put_nowait(ENDE)
                 except queue.Full:
-                    pass
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "ignored", throttle=False)
         zt = threading.Thread(target=zulieferer,
                               name=f"live-mess-zulieferer-{kamera}", daemon=True)
         try:
@@ -5568,6 +5629,7 @@ class Engine:
                         # die Messung sieht damit genau den Weg des Betriebs.
                         self.kern.erkennen(frame, netz)
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning {'ok': False, 'fehler': f'detector: {type(e).__name__}: {...")
                     return {"ok": False, "fehler": f"detector: "
                                                    f"{type(e).__name__}: {str(e)[:80]}"}
                 det_ms.append((self.jetzt() - t1) * 1000.0)
@@ -5686,8 +5748,8 @@ class Engine:
                 det_dauer = (self.jetzt() - t0) / max(1, len(arbeit))
             except Exception as e:
                 import traceback
-                self.log(f"!! live detector failure: {type(e).__name__}: {e}")
-                self.log(traceback.format_exc())
+                self.log.warning(f"!! live detector failure: {type(e).__name__}: {e}")
+                self.log.info(traceback.format_exc())
                 self._stoerung_global(f"detector failure: {type(e).__name__}: "
                                       f"{str(e)[:120]}")
                 if self.detektor_fabrik and neubauten < 3:
@@ -5699,10 +5761,10 @@ class Engine:
                         self.kern.det = self.detektor      # der Kern folgt dem
                         #                                    Neubau (sonst rechnete
                         #                                    er weiter auf der Leiche)
-                        self.log(f"live detector rebuilt (attempt {neubauten})")
+                        self.log.info(f"live detector rebuilt (attempt {neubauten})")
                         continue
                     except Exception as e2:
-                        self.log(f"!! detector rebuild failed: {e2}")
+                        self.log.error(f"!! detector rebuild failed: {e2}")
                 if neubauten >= 3 or not self.detektor_fabrik:
                     self.engine_fehler = (f"detector dead after {neubauten} rebuild "
                                           f"attempts: {type(e).__name__}")
@@ -5732,7 +5794,7 @@ class Engine:
             finally:
                 stufe = self.scheduler.arbeit_melden(self.jetzt() - t0, self.jetzt())
                 if stufe is not None:
-                    self.log(f"live overload rule: throttle level {stufe} "
+                    self.log.warning(f"live overload rule: throttle level {stufe} "
                              f"(normal rate x{self.scheduler.normal_faktor()}, "
                              f"utilization {self.scheduler.auslastung():.2f}) — "
                              f"bursts stay at full rate")
@@ -5812,7 +5874,7 @@ class Engine:
                               "funde": 0, "trigger": 0,
                               "start_ts": _wand, "letzter_fund_ts": _wand}
                 # .511: Auftritts-Buchhaltung (4.209 Zeilen in zwei Tagen)
-                self._klog(k, f"Auftritt #{k.auftritte} beginnt", dbg=True)
+                self._klog(k, f"Auftritt #{k.auftritte} beginnt", stufe=_logbuch.DEBUG)
             k.auftritt["letzter_fund_mono"] = mono
             k.auftritt["letzter_fund_ts"] = round(self.wanduhr(), 1)
             k.auftritt["funde"] += len(echte)
@@ -5832,9 +5894,9 @@ class Engine:
                 # .511: 31.579 Zeilen in zwei Tagen — die groesste Vorlage
                 # ueberhaupt. In der wache.log der Kamera bleibt sie stehen.
                 self._klog(k, f"Track T{info['track']} START (Score {s_:.2f})"
-                              + (f" — neben {info['neben']} Track(s)"
-                                 if info["neben"] else " — ab jetzt jedes Bild"),
-                           dbg=True)
+                              + (f" — next to {info['neben']} track(s)"
+                                 if info["neben"] else " — every frame from now on"),
+                           stufe=_logbuch.DEBUG)
             elif ereignis == "trigger":
                 self._trigger(k, info, mono)
         # Stufe 2 (.193, User 13.08.): kontinuierliches Namens-Voting ueber
@@ -5907,6 +5969,7 @@ class Engine:
             try:
                 v = np.asarray(g.normed_embedding, np.float32)
             except Exception:
+                _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                 continue
             if v.size != 512 or not np.all(np.isfinite(v)):
                 continue
@@ -5959,9 +6022,10 @@ class Engine:
                 if not _gm.verfuegbar():
                     if not getattr(k, "guete_modelle_aus", False):
                         k.guete_modelle_aus = True
-                        self._klog(k, "STIMM-VORFILTER AUS: Guete-Modelle nicht "
-                                      "vorhanden — Stimmen laufen ohne die "
-                                      "Erkennen-Latten weiter (fail-open je Modell)")
+                        self._klog(k, "VOTE PRE-FILTER OFF: quality models not "
+                                      "present — votes run without the "
+                                      "recognition bars (fail-open per model)",
+                                  stufe=_logbuch.ERROR)
                     _le = _lt = 0.0
                 if not _gm.stimme_ok(_le, _lt, e_g, t_g):
                     k.stimm_siebe = getattr(k, "stimm_siebe", 0) + 1
@@ -5985,7 +6049,7 @@ class Engine:
                                 k.stimm_siebe = getattr(k, "stimm_siebe", 0) + 1
                                 continue
                     except Exception:                      # noqa: BLE001
-                        pass
+                        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
                 if self.cfg.get("debug"):
                     self._stimm_debug_bild(k, frame, g, p, float(s), e_g, t_g)
                 if p not in treffer or float(s) > treffer[p][0]:
@@ -6105,9 +6169,9 @@ class Engine:
         if not sperre:
             return
         self.marge_gesperrt += 1
-        self._klog(k, f"Marge sperrt: {sperre['a']} {sperre['ca']:.2f} gegen "
+        self._klog(k, f"margin blocks: {sperre['a']} {sperre['ca']:.2f} against "
                       f"{sperre['b']} {sperre['cb']:.2f} (< {sperre['marge']:.2f})"
-                      " — keine Namens-Meldung, Auftritt unsicher")
+                      " — no name notification, appearance uncertain")
 
     @classmethod
     def _namens_faellige(cls, a, guard_cfg, mono, final=False, marge=None,
@@ -6235,11 +6299,11 @@ class Engine:
             # EINE kompakte Zeile je finaler Entscheidung (User 31.08.:
             # keine Buchhaltung je Bild/Fenster auf Platte — das Log traegt
             # sie, nie je Frame).
-            self._klog(k, "URTEIL-FENSTER entschieden: "
-                       + ", ".join(f"{p} ({n} Stimmen, max {cos:.2f})"
+            self._klog(k, "VERDICT WINDOW decided: "
+                       + ", ".join(f"{p} ({n} votes, max {cos:.2f})"
                                    for p, n, cos, _bx, _kd in feuern)
-                       + (f" — Spanne {spanne:.1f} s" if spanne is not None
-                          else " — Spanne: Auftritts-Ende"))
+                       + (f" — span {spanne:.1f} s" if spanne is not None
+                          else " — span: end of appearance"))
 
     def _anw_auftrag(self, a, guard_cfg):
         """.408 Anwesenheits-Marke: der Marken-Auftrag EINES Auftritts, unter
@@ -6269,7 +6333,7 @@ class Engine:
         Live-Status ablesbar) und gedrosselt geloggt, nie verschluckt."""
         for p in personen:
             _anw.markieren(self.cfg, p, von, bis, k.name, "live",
-                           log=lambda z: self._klog(k, z))
+                           log=_logbuch.Adapter(self._klog, k))
 
     def _namens_meldung(self, k, person, stimmen, cos, frame, box=None):
         """Die Namens-Meldung der zweiten Stufe: eigene Nachricht NEBEN der
@@ -6303,8 +6367,8 @@ class Engine:
         UI nur ANZEIGT (html.escape, gekappt) — dort steht kuenftig die
         Sprache, in der wirklich gemeldet wurde."""
         _sprache.aktivieren()         # Eintrittspunkt (c), s. melden.sprache_aktivieren()
-        self._klog(k, f"NAME [{person}]: {stimmen} Funde >= Schwelle, bester "
-                      f"Kosinus {cos:.2f} — Namens-Meldung (preliminary)")
+        self._klog(k, f"NAME [{person}]: {stimmen} hits >= threshold, best "
+                      f"cosine {cos:.2f} — name notification (preliminary)")
         # Frigate-Manual-Event (31.08.): eigener Weg mit eigenem Schalter und
         # eigenem Deckel — bewusst VOR den Melde-Kanaelen und unabhaengig von
         # ihnen. Eine Installation ohne Pushover/Telegram soll trotzdem ihre
@@ -6368,7 +6432,7 @@ class Engine:
         if not push_offen:
             self._klog(k, f"NAME [{person}]: push suppressed, quiet for "
                           f"{k.melde_bis_mono - mono_jetzt:.0f} s more "
-                          f"(MQTT and journal unaffected)")
+                          f"(MQTT and journal unaffected)", stufe=_logbuch.WARNING)
 
         def job():
             for kanal in k.cfg["kanaele"]:
@@ -6383,7 +6447,7 @@ class Engine:
                 except Exception as e:
                     self._fehler_log((kanal, k.name),
                                      f"{k.name}: {kanal} failed (Name): "
-                                     f"{type(e).__name__}: {e}")
+                                     f"{type(e).__name__}: {e}", stufe=_logbuch.ERROR)
             if not push_offen:
                 # Die Live-Sicht darf den Auftritt nicht verlieren (QS-Auflage):
                 # eine Journal-Zeile mit kanal 'none' wie im kanallosen Fall.
@@ -6402,15 +6466,16 @@ class Engine:
                 k.auftritt["trigger"] += 1
         p_ok, p_det = True, None
         if self.defaults["pose_gate"]:
-            p_ok, p_det = pose_bestaetigt(info["kette"], log=lambda z: self._klog(k, z),
+            p_ok, p_det = pose_bestaetigt(info["kette"], log=_logbuch.Adapter(self._klog, k),
                                           kopf_schwelle=self.defaults["pose_kopf"])
             if p_det and "grund" in p_det and "kopf_max" not in p_det:
                 # Pose-Gate laeuft NICHT (Modell nicht ladbar o. ae.) — LAUT
                 # statt der stillen "[Pose-Kopf None]"-Zeile (Lens-A M6):
                 # gedrosselte Log-Warnung + Engine-Stoerungs-Selbstmeldung.
                 self._fehler_log(("pose_gate",),
-                                 f"Pose-Gate laeuft NICHT ({p_det['grund']}) — "
-                                 f"Trigger melden UNGEFILTERT (jede Katze meldet)")
+                                 f"pose gate is NOT running ({p_det['grund']}) — "
+                                 f"triggers notify UNFILTERED (every cat notifies)",
+                                 stufe=_logbuch.ERROR)
                 self._stoerung_global(f"pose gate unavailable: {p_det['grund']}")
         praefix = "" if p_ok else "verworfen_"
         # .32x (User 22.08.: "gar nicht erst schreiben"): der Pose-Sieb-Ausschuss
@@ -6426,14 +6491,14 @@ class Engine:
             k.verworfen_pose += 1
             if _serie:
                 self._klog(k, f"TRIGGER #{t_nr} [T{info['track']}]: "
-                              f"Wiederholungs-Verwurf an derselben Stelle — "
-                              f"Karenz bleibt stehen (Serie gebrochen)", dbg=True)
+                              f"repeat discard at the same spot — "
+                              f"quiet period stays (series broken)", stufe=_logbuch.DEBUG)
             # .511: Verwurfs-Buchhaltung (9.427 Zeilen in zwei Tagen mit dem
             # Zweig darunter). Gezaehlt wird weiter (k.verworfen_pose, /live).
-            self._klog(k, f"TRIGGER #{t_nr} [T{info['track']}] VERWORFEN (kein Mensch an "
-                          f"der Fundstelle bestaetigt): Pose-Kopf hoechstens "
-                          f"{(p_det or {}).get('kopf_max')} — keine Meldung, keine "
-                          f"Karenz, kein Bild (live_verworfen_speichern=off)", dbg=True)
+            self._klog(k, f"TRIGGER #{t_nr} [T{info['track']}] DISCARDED (no person at "
+                          f"the detection spot confirmed): pose head at most "
+                          f"{(p_det or {}).get('kopf_max')} — no notification, no "
+                          f"quiet period, no image (live_verworfen_speichern=off)", stufe=_logbuch.DEBUG)
             return
         # K-1 (Sched-R4): die Beweisbild-Ablage darf die MELDUNG nie kosten —
         # volle Platte (ENOSPC-Klasse) schlug hier VOR _meldung_starten zu,
@@ -6479,12 +6544,12 @@ class Engine:
             k.verworfen_pose += 1
             if _serie:
                 self._klog(k, f"TRIGGER #{t_nr} [T{info['track']}]: "
-                              f"Wiederholungs-Verwurf an derselben Stelle — "
-                              f"Karenz bleibt stehen (Serie gebrochen)", dbg=True)
-            self._klog(k, f"TRIGGER #{t_nr} [T{info['track']}] VERWORFEN (kein Mensch an "
-                          f"der Fundstelle bestaetigt): Pose-Kopf hoechstens "
-                          f"{(p_det or {}).get('kopf_max')} — keine Meldung, keine Karenz",
-                       dbg=True)
+                              f"repeat discard at the same spot — "
+                              f"quiet period stays (series broken)", stufe=_logbuch.DEBUG)
+            self._klog(k, f"TRIGGER #{t_nr} [T{info['track']}] DISCARDED (no person at "
+                          f"the detection spot confirmed): pose head at most "
+                          f"{(p_det or {}).get('kopf_max')} — no notification, no quiet period",
+                       stufe=_logbuch.DEBUG)
             return
         # .313: ab hier ist ein Mensch bestaetigt (Pose-Gate bestanden oder aus) —
         # die Namens-Stufe darf fuer diesen Auftritt feuern (aufgelaufene
@@ -6501,7 +6566,8 @@ class Engine:
                 u_text, u_person, _c, u_urteil = schnell_urteil(
                     self.refs, kandidaten, self.win_thresh)
             except Exception as e:
-                self._klog(k, f"Schnell-Urteil entfaellt: {type(e).__name__}: {e}")
+                self._klog(k, f"quick verdict skipped: {type(e).__name__}: {e}",
+                           stufe=_logbuch.WARNING)
         beste_score = kandidaten[0][0] if kandidaten else 0.0
         pose_zusatz = ""
         if p_det:
@@ -6516,11 +6582,11 @@ class Engine:
                       f"konsistente Funde in {info['spanne']:.2f} s, Latenz "
                       f"{info['latenz_ms']:.0f} ms, bester Score {beste_score:.2f}"
                       + pose_zusatz
-                      + (f" — {u_text}" if u_text else ""), dbg=True)
+                      + (f" — {u_text}" if u_text else ""), stufe=_logbuch.DEBUG)
         k.letzter_trigger_wand = self.wanduhr()
         if not melde_erlaubt(k, mono):
-            self._klog(k, f"Meldung unterdrueckt (min interval, noch "
-                          f"{k.melde_bis_mono - mono:.0f} s)", dbg=True)
+            self._klog(k, f"notification suppressed (min interval, "
+                          f"{k.melde_bis_mono - mono:.0f} s left)", stufe=_logbuch.DEBUG)
             return
         k.melde_bis_mono = mono + k.cfg["wieder_scharf_s"]
         # .412 (User 02.09.): der Push-Text kommt aus meldetext_trigger —
@@ -6574,9 +6640,9 @@ class Engine:
         abstand = self.frigate_abstand(k.cfg)
         letzte = k.fr_letzte.get(person)
         if abstand and letzte is not None and mono - letzte < abstand:
-            self._klog(k, f"Frigate-Event [{person}] unterdrueckt "
-                          f"(Deckel {abstand:.0f} s, noch "
-                          f"{abstand - (mono - letzte):.0f} s)")
+            self._klog(k, f"Frigate-Event [{person}] suppressed "
+                          f"(cap {abstand:.0f} s, "
+                          f"{abstand - (mono - letzte):.0f} s left)")
             return
         k.fr_letzte[person] = mono
         # Quittung traegt die Event-Kennung nach — sie kommt aus dem
@@ -6585,8 +6651,8 @@ class Engine:
             with _k.lock:
                 _k.fr_offen[_p] = eid
         self.fr_queue.create(k.name, person, score=cos, quittung=quittung)
-        self._klog(k, f"Frigate-Event [{person}] eingereiht (manual event, "
-                      f"sub_label) — der Waechter wartet nicht auf die Antwort")
+        self._klog(k, f"Frigate-Event [{person}] queued (manual event, "
+                      f"sub_label) — the watcher does not wait for the answer")
 
     def _frigate_auftritt_ende(self, k):
         """Offene Manual-Events dieser Kamera schliessen (PUT .../end) — der
@@ -6602,8 +6668,8 @@ class Engine:
             # nie ein `end_time` (das `/end` fiel auf ein 404-Anlege-Rennen oder
             # war stillschweigend wirkungslos). Das BESTAETIGTE Ende meldet die
             # Warteschlange selbst, nachdem sie in Frigate nachgesehen hat.
-            self._klog(k, f"Frigate-Event [{person}] Ende angefordert ({eid}) — "
-                          f"die Bestaetigung meldet die Warteschlange")
+            self._klog(k, f"Frigate-Event [{person}] end requested ({eid}) — "
+                          f"the queue reports the confirmation")
 
     def _guete_von(self, k, frame, face):
         """Die zwei Guete-Masse EINES Ketten-Bilds -> (empfinden, fiqa_t).
@@ -6618,8 +6684,9 @@ class Engine:
             if kps is not None:
                 from core import ernte as _ernte
                 al = _ernte.align112(frame, kps)
-            return guete_messen(crop, al, log=lambda z: self._klog(k, z))
+            return guete_messen(crop, al, log=_logbuch.Adapter(self._klog, k))
         except Exception:                                     # noqa: BLE001
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning (None, None)")
             return None, None
 
     def _stimm_debug_bild(self, k, frame, face, person, s, e_g, t_g):
@@ -6650,7 +6717,7 @@ class Engine:
             n[1] += 1
             k.stimm_debug = n
         except Exception:                                     # noqa: BLE001
-            pass
+            _logbuch.swallowed(_log, _logbuch.ERROR, "ignored", throttle=False)
 
     def _kalib_deckel(self):
         """Ring-Deckel je Kamera aus der Config (live_kalib_max, 0 = Vorrat
@@ -6711,8 +6778,8 @@ class Engine:
                     k.kalib_kand = {"crop": crop, "al": al, "det": det}
         except Exception as e:                                # noqa: BLE001
             self._fehler_log(("kalib", k.name),
-                             f"live {k.name}: Kalibrier-Kandidat entfaellt "
-                             f"({type(e).__name__}: {e})")
+                             f"live {k.name}: calibration candidate skipped "
+                             f"({type(e).__name__}: {e})", stufe=_logbuch.WARNING)
 
     def _kalib_ablegen(self, k, kand, mensch_ok=True):
         """Den Kandidaten EINES Auftritts in den Ring legen (Status-Thread).
@@ -6723,7 +6790,7 @@ class Engine:
         if not deckel or not kand:
             return
         e, t = guete_messen(kand.get("crop"), kand.get("al"),
-                            log=lambda z: self._klog(k, z))
+                            log=_logbuch.Adapter(self._klog, k))
         if not guete_reicht(k.cfg, e, t):
             return
         # .511: die Kalibrier-Zeilen bringen ihren Kamera-Namen selbst mit
@@ -6732,7 +6799,7 @@ class Engine:
         if kalib_schreiben(self.cfg, k.name, kand["crop"],
                            {"det": kand["det"], "e": e, "t": t},
                            deckel=deckel,
-                           log=lambda z: self._klog(k, z, dbg=True, praefix=False),
+                           log=_logbuch.Adapter(self._klog, k, stufe=_logbuch.DEBUG, praefix=False),
                            mensch_ok=mensch_ok):
             k.kalib_bilder += 1
 
@@ -6745,8 +6812,8 @@ class Engine:
             os.makedirs(ablage, exist_ok=True)
             return ablage
         except OSError as e:
-            self._klog(k, f"Bild-Ablage nicht moeglich ({e}) — Meldung geht "
-                          f"ohne Beweisbild raus")
+            self._klog(k, f"image storage not possible ({e}) — notification goes "
+                          f"out without evidence image", stufe=_logbuch.ERROR)
             return None
 
     def _bild_schreiben(self, k, pfad, bild):
@@ -6766,7 +6833,7 @@ class Engine:
         # voller Platte schrieb jeder Trigger bis zu kette-viele ungedrosselte
         # Zeilen — eine je Drosselfenster reicht, der Ausfall bleibt laut.
         self._fehler_log(("bild_ablage", k.name),
-                         f"live {k.name}: Bild-Ablage fehlgeschlagen: {fehler}")
+                         f"live {k.name}: image storage failed: {fehler}", stufe=_logbuch.ERROR)
         return None
 
     def _vorschau_schreiben(self, k, frame, mono):
@@ -6797,8 +6864,8 @@ class Engine:
             os.replace(tmp, os.path.join(d, f"{k.name}.jpg"))
         except Exception as e:
             self._fehler_log(("vorschau", k.name),
-                             f"live {k.name}: Vorschau-Bild fehlgeschlagen: "
-                             f"{type(e).__name__}: {str(e)[:120]}")
+                             f"live {k.name}: preview image failed: "
+                             f"{type(e).__name__}: {str(e)[:120]}", stufe=_logbuch.ERROR)
 
     def _thread_starten(self, name, ziel):
         """Melde-/Stoerungs-Thread starten UND registrieren (Lens-A M5:
@@ -6839,8 +6906,8 @@ class Engine:
                               if y.ndim == 2 else y for _, y in rueckblick]
                     vid = video_bauen(frames, video_pfad, fps)
                 except Exception as e:
-                    self._fehler_log(("video", k.name), f"{k.name}: Rueckblick-Video "
-                                                        f"fehlgeschlagen: {e}")
+                    self._fehler_log(("video", k.name), f"{k.name}: look-back video "
+                                                        f"failed: {e}", stufe=_logbuch.ERROR)
             for kanal in k.cfg["kanaele"]:
                 try:
                     if self._kanal_senden(k, kanal, text, bild, vid, payload):
@@ -6856,7 +6923,7 @@ class Engine:
                 except Exception as e:
                     # gedrosselt, nicht je Trigger neu (§6)
                     self._fehler_log((kanal, k.name),
-                                     f"{k.name}: {kanal} failed: {type(e).__name__}: {e}")
+                                     f"{k.name}: {kanal} failed: {type(e).__name__}: {e}", stufe=_logbuch.ERROR)
         self._thread_starten(f"live-melde-{k.name}", job)
 
     def _kanal_senden(self, k, kanal, text, bild, vid, payload,
@@ -6901,7 +6968,7 @@ class Engine:
             melde_protokoll_zeile(self.live_dir, eintrag)
         except Exception as e:
             self._fehler_log(("melde_protokoll",),
-                             f"Melde-Protokoll fehlgeschlagen: {e}")
+                             f"notification log failed: {e}", stufe=_logbuch.ERROR)
 
     def _bild_rel(self, pfad):
         """Beweisbild-Pfad -> data_dir-relativ ('live/<kamera>/<datei>.jpg')
@@ -6946,10 +7013,10 @@ class Engine:
                     import traceback
                     fehler_serie += 1
                     self._fehler_log(("status_runde",),
-                                     f"Status-Runde fehlgeschlagen "
-                                     f"({fehler_serie}. Mal in Folge): "
-                                     f"{type(e).__name__}: {e}")
-                    self.log(traceback.format_exc())
+                                     f"status round failed "
+                                     f"({fehler_serie} times in a row): "
+                                     f"{type(e).__name__}: {e}", stufe=_logbuch.ERROR)
+                    self.log.info(traceback.format_exc())
                     # K-2-Rest (Fix-Zyklus 12.08.): bei DAUERdefekt nicht genau
                     # EINE Selbstmeldung — die dritte in Folge geht drosselfrei,
                     # danach meldet jeder weitere Fehltakt ueber die normale
@@ -6966,7 +7033,7 @@ class Engine:
             try:
                 self._status_schreiben(self.jetzt())
             except Exception:
-                pass
+                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
 
     def _status_runde(self, mono):
         """Der Inhalt EINER Beobachtungs-Runde (getrennt, damit ein Fehler
@@ -6978,9 +7045,9 @@ class Engine:
             # der VORIGEN Verbindung in der Zeile): Zeit ohne Bild AUF DIESER
             # Verbindung, nie laenger als die Verbindung selbst.
             anker = max(k.letztes_bild_mono or -1e18, k.verbunden_mono or -1e18)
-            self._klog(k, f"WATCHDOG: kein Bild seit {mono - anker:.0f} s auf "
-                          f"dieser Verbindung — Leser wird gekillt, Reconnect "
-                          f"uebernimmt")
+            self._klog(k, f"WATCHDOG: no frame for {mono - anker:.0f} s on "
+                          f"this connection — reader gets killed, reconnect "
+                          f"takes over", stufe=_logbuch.WARNING)
             if k.kill:
                 try:
                     k.kill()
@@ -7000,9 +7067,9 @@ class Engine:
                 if a and mono - a["letzter_fund_mono"] > k.cfg["ende_ohne_gesicht_s"]:
                     # .511: Auftritts-Bilanz (4.200 Zeilen in zwei Tagen).
                     # Was der Auftritt ERGAB, steht in NAME/URTEIL-FENSTER.
-                    self._klog(k, f"Auftritt #{k.auftritte} beendet "
-                                  f"({a['funde']} Funde, {a['trigger']} Trigger, "
-                                  f"{mono - a['seit_mono']:.0f} s)", dbg=True)
+                    self._klog(k, f"appearance #{k.auftritte} ended "
+                                  f"({a['funde']} hits, {a['trigger']} triggers, "
+                                  f"{mono - a['seit_mono']:.0f} s)", stufe=_logbuch.DEBUG)
                     # S5 (01.09., Tonnen-Fund): das Pose-Urteil des Auftritts
                     # wandert mit zum Ring — hatte der Auftritt Trigger und
                     # KEIN einziger bestand das Pose-Gate, war die Fundstelle
@@ -7104,8 +7171,8 @@ class Engine:
             if self._pause_ausser:
                 self._pause_ausser = None
                 self._fehler_log(("auftrag", "pause"),
-                                 "live: Pause ohne laufenden Auftrag vorgefunden "
-                                 "— aufgehoben (Waechter laufen weiter)")
+                                 "live: pause found without a running order "
+                                 "— lifted (watchers keep running)")
             return
         if mono - a["start_mono"] <= AUFTRAG_TIMEOUT_S:
             return
@@ -7116,7 +7183,7 @@ class Engine:
                 try:
                     a["kill"]()
                 except Exception:
-                    pass
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
             self._auftrag_phase("abbruch")
             self.auftrag_ergebnisse.setdefault(a["kamera"], {})[a["art"]] = {
                 "ok": False, "art": a["art"], "ts": round(self.wanduhr(), 1),
@@ -7124,9 +7191,10 @@ class Engine:
                            f"— aborted, watchers resume when the job thread "
                            f"has ended")}
             self._fehler_log(("auftrag", "abbruch"),
-                             f"live {a['art']} {a['kamera']}: haengt seit "
-                             f"{AUFTRAG_TIMEOUT_S:.0f} s — ABBRUCH (Verbindung "
-                             f"gekillt), warte auf das echte Thread-Ende")
+                             f"live {a['art']} {a['kamera']}: hanging for "
+                             f"{AUFTRAG_TIMEOUT_S:.0f} s — ABORT (connection "
+                             f"killed), waiting for the real thread end",
+                             stufe=_logbuch.ERROR)
             return
         t = a.get("thread")
         if t is not None and t.is_alive():
@@ -7136,10 +7204,10 @@ class Engine:
                         self._auftrag = None
                         self._pause_ausser = None
                 self._fehler_log(("auftrag", "zwang"),
-                                 f"live {a['art']} {a['kamera']}: Thread endet "
-                                 f"trotz Kill nicht — Slot ZWANGS-geloest "
-                                 f"(Zombie bleibt generations-isoliert), "
-                                 f"Waechter laufen weiter")
+                                 f"live {a['art']} {a['kamera']}: thread does not end "
+                                 f"despite the kill — slot FORCE-released "
+                                 f"(zombie stays generation-isolated), "
+                                 f"watchers keep running", stufe=_logbuch.WARNING)
                 self._stoerung_global(
                     f"live job thread for {a['kamera']} did not end after "
                     f"abort — detached as zombie, watchers resumed",
@@ -7166,7 +7234,7 @@ class Engine:
         try:
             self._status_schreiben_innen(mono)
         except Exception as e:
-            self._fehler_log(("status",), f"Status-Schreib fehlgeschlagen: {e}")
+            self._fehler_log(("status",), f"status write failed: {e}", stufe=_logbuch.ERROR)
             raise
 
     def _kapazitaet(self):
@@ -7309,7 +7377,7 @@ class Engine:
                         f"{self.scheduler.auslastung():.3f},{self.scheduler.stufe},"
                         f"{det:.1f}\n")
         except Exception as e:
-            self._fehler_log(("verbrauch",), f"Verbrauchszeile fehlgeschlagen: {e}")
+            self._fehler_log(("verbrauch",), f"consumption line failed: {e}", stufe=_logbuch.ERROR)
 
     # ---------------------------------------------------------------- Hilfen
     def _stoerung_senden(self, k, text):
@@ -7360,9 +7428,11 @@ class Engine:
                 for kanal in gesendet:
                     self._melde_protokoll(k.name, "stoerung", kanal)
                 for fz in fehler or []:
-                    self._fehler_log(("stoerung", k.name), f"{k.name}: {fz}")
+                    self._fehler_log(("stoerung", k.name), f"{k.name}: {fz}",
+                                     stufe=_logbuch.ERROR)
             except Exception as e:
-                self._fehler_log(("stoerung", k.name), f"{k.name}: {e}")
+                self._fehler_log(("stoerung", k.name), f"{k.name}: {e}",
+                                 stufe=_logbuch.ERROR)
         self._thread_starten(f"live-stoer-{k.name}", job)
 
     def _stoerung_global(self, text, drosselfrei=False):
@@ -7374,7 +7444,7 @@ class Engine:
         if not drosselfrei and mono - self._stoer_global_mono < STOERUNG_LOG_DROSSEL_S:
             return
         self._stoer_global_mono = mono
-        self.log(f"!! STOERUNG (engine): {text}")
+        self.log.warning(f"!! DISTURBANCE (engine): {text}")
         if not self.melder:
             return
 
@@ -7386,7 +7456,8 @@ class Engine:
                 for kanal in gesendet:
                     self._melde_protokoll("", "stoerung", kanal)
             except Exception as e:
-                self._fehler_log(("stoerung", "global"), f"global: {e}")
+                self._fehler_log(("stoerung", "global"), f"global: {e}",
+                                 stufe=_logbuch.ERROR)
         self._thread_starten("live-stoer-global", job)
 
     def _kachel_fehler(self, k, quelle, text):
@@ -7399,52 +7470,39 @@ class Engine:
         if mono - self._fehler_drossel.get(schluessel, -1e18) < STOERUNG_LOG_DROSSEL_S:
             return
         self._fehler_drossel[schluessel] = mono
-        self._klog(k, f"!! Verarbeitungs-Fehler ({quelle}): {text}")
+        self._klog(k, f"!! processing error ({quelle}): {text}", stufe=_logbuch.ERROR)
         self._stoerung_senden(k, f"processing error ({quelle}): {text}")
 
-    def _fehler_log(self, quelle, zeile):
+    def _fehler_log(self, quelle, zeile, stufe=_logbuch.INFO):
         mono = self.jetzt()
         if mono - self._fehler_drossel.get(quelle, -1e18) < STOERUNG_LOG_DROSSEL_S:
             return
         self._fehler_drossel[quelle] = mono
-        self.log(f"!! {zeile}")
+        self.log.log(stufe, f"!! {zeile}")
 
     def _ende_loggen(self, k, ende):
         # .511: verwaiste Tracks sind der Normalfall an einer belebten
         # Kamera (16.586 Zeilen in zwei Tagen) — reine Buchhaltung.
-        self._klog(k, f"Track T{ende['track']} ENDE ohne Trigger ({ende['grund']}) "
-                      f"nach {ende['dauer']:.1f} s (laengste Kette "
-                      f"{ende['max_kette']}/{k.burst.anzahl})", dbg=True)
+        self._klog(k, f"Track T{ende['track']} END without trigger ({ende['grund']}) "
+                      f"after {ende['dauer']:.1f} s (longest chain "
+                      f"{ende['max_kette']}/{k.burst.anzahl})", stufe=_logbuch.DEBUG)
 
-    def _dbg_an(self):
-        """Steht der debug-Schalter des Dienstes? (TTL-gepuffert, s.
-        DEBUG_FLAGGE_TTL_S.) Der Waechter laeuft als eigener Prozess und sieht
-        die laufende Dienst-Config nicht — deshalb die Flaggendatei."""
-        jetzt = self.jetzt()
-        if jetzt >= self._dbg_bis:
-            self._dbg_stand = _logdatei.debug_flagge_an(self._dbg_datadir)
-            self._dbg_bis = jetzt + DEBUG_FLAGGE_TTL_S
-        return self._dbg_stand
-
-    def _dbg(self, zeile):
-        """Engine-Log NUR bei gesetztem debug — [dbg]-Praefix wie im Dienst."""
-        if self._dbg_an():
-            self.log(f"[dbg] {zeile}")
-
-    def _klog(self, k, zeile, dbg=False, praefix=True):
+    @_logbuch.pass_through
+    def _klog(self, k, zeile, stufe=_logbuch.INFO, praefix=True):
         """Kachel-Log: Engine-Log UND je Kachel eine wache.log im Datenordner
         (rotiert am Deckel, Prototyp-Muster — Zaehler laufen im Prozess weiter).
 
-        .511 Log-Bereinigung (User-Auftrag 08.09.): `dbg=True` schickt NUR die
-        Doppelung ins DIENST-Log hinter den debug-Schalter. Die `wache.log` der
-        Kachel schreibt IMMER weiter — sie ist das Kamera-Diagnose-Werkzeug,
-        liegt je Kamera getrennt und stoert niemanden. Gemessen war die
-        Kachel-Spur die Haelfte aller Dienst-Log-Zeilen (87.967 von 173.608).
+        .511 Log-Bereinigung (User-Auftrag 08.09.): Diagnose-Zeilen gehen mit
+        `stufe=DEBUG` ins Engine-Log, also nur bei gesetztem debug-Schalter
+        (Log-Systematik E1, K01; die Stufe folgt dem Schalter ueber die
+        Flaggendatei, core/logbuch). Die `wache.log` der Kachel schreibt IMMER
+        weiter — sie ist das Kamera-Diagnose-Werkzeug, liegt je Kamera getrennt
+        und stoert niemanden. Gemessen war die Kachel-Spur die Haelfte aller
+        Dienst-Log-Zeilen (87.967 von 173.608).
 
         `praefix=False` fuer Zeilen, die ihren Kamera-Namen SCHON mitbringen
         (kalib_schreiben) — genau daher kam das doppelte `live X: live X:`."""
-        (self._dbg if dbg else self.log)(
-            f"live {k.name}: {zeile}" if praefix else zeile)
+        self.log.log(stufe, f"live {k.name}: {zeile}" if praefix else zeile)
         try:
             ablage = os.path.join(self.live_dir, k.name)
             os.makedirs(ablage, exist_ok=True)

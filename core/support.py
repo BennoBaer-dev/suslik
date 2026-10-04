@@ -66,6 +66,8 @@ import time
 from core.registry import (SUPPORT_BEREICHE, SUPPORT_MASKE_ORDNER,
                            SUPPORT_SECRET_MUSTER, LAUF_ID_RE,
                            endpunkt_anzeige)
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 MASKE = "***"
 # Bereichs-Code des Vollbaums — EINE Quelle fuer Handler, Route und Gate
@@ -95,7 +97,7 @@ def abweisung_zaehlen(log):
     jetzt = time.time()
     _ABWEIS_DROSSEL["zaehler"] += 1
     if jetzt >= _ABWEIS_DROSSEL["bis"]:
-        log(f"SUPPORT: {_ABWEIS_DROSSEL['zaehler']} rejected request(s) in "
+        log.info(f"SUPPORT: {_ABWEIS_DROSSEL['zaehler']} rejected request(s) in "
             f"the last minute (switch off, or wrong/missing token)")
         _ABWEIS_DROSSEL["bis"] = jetzt + 60
         _ABWEIS_DROSSEL["zaehler"] = 0
@@ -327,7 +329,7 @@ def datei_streamen(pfad, wfile, log, kennung, inhalt=None, dbg=None):
                     wfile.write(stueck)
                     n += len(stueck)
     except (BrokenPipeError, ConnectionResetError, OSError) as e:
-        log(f"SUPPORT: {kennung} stream aborted after {n} byte(s) "
+        log.info(f"SUPPORT: {kennung} stream aborted after {n} byte(s) "
             f"({type(e).__name__})")
         return False, "aborted"
     (dbg or log)(f"SUPPORT: {kennung} served — {n} byte(s)"
@@ -370,7 +372,7 @@ def inventar(data_dir, version):
                                 n += 1
                                 groesse += os.path.getsize(os.path.join(w, f))
                             except OSError:
-                                pass
+                                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
             e["dateien"] = n
             e["bytes"] = groesse
         if b["art"] == "baum":
@@ -482,7 +484,7 @@ def _tar_schreiben(data_dir, start, arc0, kennung, wfile, log,
                 except (FileNotFoundError, PermissionError, OSError):
                     uebersprungen += 1
     except (BrokenPipeError, ConnectionResetError, OSError) as e:
-        log(f"SUPPORT: {kennung} stream aborted by client after "
+        log.info(f"SUPPORT: {kennung} stream aborted by client after "
             f"{gepackt} file(s) ({type(e).__name__})")
         return False, "aborted"
     (dbg or log)(f"SUPPORT: {kennung} served — {gepackt} file(s)"

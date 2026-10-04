@@ -34,8 +34,9 @@ DREI LATTEN, DREI ZWECKE (die Semantik, gegen die dieses Modul geschrieben ist):
       Sensor 5, die FEATURE-NORM (`katalog_norm_min`/`katalog_guete_norm_min`),
       seit .516 werksseitig AN und seit .517 mit dem Grundwert 20
       (core.guete.norm_werk — User-Entscheid 10.09. nach Sichtung am
-      Norm-Schieber; im ERKENNEN-Register bleibt sie 0/aus, dort wird die Norm
-      nicht gemessen); und Sensor 6, die KANTEN-LATTE in Pixeln
+      Norm-Schieber; im ERKENNEN-Register gilt seit Bauplan K3 Stufe KP1 der
+      eigene Werkswert 18,5 aus `erkennen_start`, dort siebt der Analyse-Worker
+      mit der gemessenen Norm); und Sensor 6, die KANTEN-LATTE in Pixeln
       (`katalog_kante_min`/`katalog_guete_kante_min`), werksseitig 25 px.
       Beide stehen in BEIDEN Registern — im Erkennen-Register als
       `norm_min`/`urteil_norm_min` und `kante_min`/`urteil_kante` (ERK_FELD
@@ -82,6 +83,8 @@ genau eine Frage (katalog_ok). Zahlen kommen aus der Config bzw. aus
 core.guete.KATALOG_STARTWERTE, nie von hier (Haus-Regel, Muster
 norm_latte/REF_LATTE).
 """
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 # ---------------------------------------------------------------- Ablageort
 # Die zwei Guard-Felder der Katalog-Latte. Sie stehen zusaetzlich in
@@ -291,8 +294,9 @@ def guards(cfg):
     fuellen."""
     from core import livewache as _lw          # lazy: dieses Modul bleibt leicht
     try:
-        _d, g = _lw.guards_lesen(cfg, log=lambda *_a, **_k: None)
+        _d, g = _lw.guards_lesen(cfg, log=_logbuch.NULL)
     except Exception:                                       # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning {}")
         return {}
     return g
 
@@ -351,8 +355,9 @@ def katalog_start():
     Vorrats-Boden 22,0; .517 setzt den Grundwert auf 20 (User-Entscheid
     10.09.2026 nach Sichtung am Norm-Schieber, 756 Ernte-Bilder, Median 20,7).
     Die Zahl steht als EINE Quelle in `core.guete.norm_werk()` — hier wird sie
-    nur gelesen, die Herleitung steht dort. Das ERKENNEN-Register bleibt bei
-    0/aus (`erkennen_start`), weil der Erkennungs-Weg die Norm nicht misst."""
+    nur gelesen, die Herleitung steht dort. Das ERKENNEN-Register hat seinen
+    eigenen Werkswert (`erkennen_start`, seit Bauplan K3 Stufe KP1 18,5): der
+    Analyse-Worker misst die Norm an der Erkennungsstufe und siebt damit."""
     from core import guete as _guete
     return {"e": float(_guete.KATALOG_STARTWERTE["empfinden"]),
             "t": float(_guete.KATALOG_STARTWERTE["t"]),
@@ -376,9 +381,11 @@ def erkennen_start():
 
     Dieselbe EINE Quelle wie im Katalog-Register (core.guete): die zwei
     Register unterscheiden sich in ihren WERTEN, nicht in ihren Zahlen-
-    Quellen. Norm = NORM_BODEN = 0 = aus (und das bleibt sie mit .516: der
-    Erkennungs-Weg MISST die Feature-Norm nicht, eine Latte ohne Messung waere
-    fail-closed — nur das Katalog-Register schaltet sie ein);
+    Quellen. Norm = ERK_NORM_WERK = 18,5 (Bauplan K3, Stufe KP1 Punkt 10: der
+    Analyse-Worker misst die Feature-Norm an der Erkennungsstufe und siebt
+    damit; verifyd.load_config liest den Werkswert von `urteil_norm_min` HIER,
+    ebenso die Einmal-Migration einer gespeicherten 0). Kein Boden: ein
+    gesetzter Wert darunter, auch 0 = aus, bleibt gueltig (`klemm_boeden`);
     Kante = KANTE_WERK = 25 px, also
     GENAU die Zahl, die bis .514 als Konstante `urteil_kante` im Stimmweg
     stand — der Umbau ist damit im Werkszustand wertgleich."""
@@ -386,7 +393,7 @@ def erkennen_start():
     # `k` bewusst int — dieselbe Falle wie im Katalog-Register darueber:
     # `urteil_kante` steht in der Whitelist als int, und ein float-Werkswert
     # machte das Konfigurations-Blatt unspeicherbar (Fund .516).
-    return {"n": float(_guete.NORM_BODEN), "k": int(_guete.KANTE_WERK)}
+    return {"n": float(_guete.ERK_NORM_WERK), "k": int(_guete.KANTE_WERK)}
 
 
 def katalog_latten(cfg):
@@ -701,7 +708,7 @@ def store_kameras(cfg):
     try:
         aus |= {str(n) for n in _lw.kalib_kameras(cfg)}
     except Exception:                                       # noqa: BLE001
-        pass                    # Anzeige-Pfad: eine unlesbare Platte darf die
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")                    # Anzeige-Pfad: eine unlesbare Platte darf die
                                 # Guard-Kameras nicht mitreissen
     return aus
 

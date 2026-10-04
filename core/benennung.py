@@ -13,6 +13,8 @@ lexikografisch (front absteigend, sharp absteigend, det absteigend, id
 aufsteigend) — parameterfrei, deterministisch, keine erfundene Formel; eine
 gemessene Skalar-Guete kann ihn spaeter ersetzen, dann HIER, nirgendwo sonst."""
 import numpy as np
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 
 # .265: DIE Referenz-Latte als EINE Quelle (QS-Ebenen-Regel; Verbraucher:
@@ -512,6 +514,7 @@ def referenz_zentroide(refcache_pfad, modell):
             zents[p] = [round(float(x), 5) for x in (c / n)]
         return zents
     except Exception:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning {}")
         return {}
 
 

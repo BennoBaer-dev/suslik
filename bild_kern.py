@@ -76,6 +76,8 @@ import numpy as np                                         # noqa: E402  (schon 
 import cv2                                                 # noqa: E402  (ebenso)
 
 import face_audit                                          # noqa: E402  Modell-Spec, ar_det_size
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 
 def _det_thresh_vorgabe():
@@ -92,6 +94,7 @@ def _det_thresh_vorgabe():
         w = inspect.signature(FaceAnalysis.prepare).parameters["det_thresh"].default
         return float(w)
     except Exception:                                      # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning 0.5")
         return 0.5
 
 

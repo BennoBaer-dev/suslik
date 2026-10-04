@@ -53,6 +53,8 @@ if WURZEL not in sys.path:
 
 from core import livewache as lw                          # noqa: E402
 from core.liveaufsicht import RC_NICHTS_ZU_TUN            # noqa: E402
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 # ^ Exit-Vertrag Kind -> Supervisor (EINE Quelle, Deckungs-Regel): "kein
 #   enabled-Guard" endet mit RC_NICHTS_ZU_TUN statt 0 — der Supervisor
 #   unterscheidet das geordnete Nichts-zu-tun damit vom Absturz (rc 0 nach
@@ -61,7 +63,9 @@ from core.liveaufsicht import RC_NICHTS_ZU_TUN            # noqa: E402
 CONFIG_PFAD = os.environ.get("VERIFYD_CONFIG", os.path.join(WURZEL, "verifyd.yaml"))
 
 
-def _log(zeile):
+def _konsole(zeile):
+    """Konsolenausgabe der Kommandozeilen-Befehle `test` und `status` (E7, K22):
+    sie bleiben print mit eigenem Zeitstempel; `run` loggt ueber core/logbuch."""
     print(f"{time.strftime('%d.%m %H:%M:%S')} {zeile}", flush=True)
 
 
@@ -90,16 +94,24 @@ class Detektor:
         self._netz = None
         prov = self.provider()
         if prov.startswith("CPU"):
-            log("!! Detektion laeuft auf CPU — auf einer GPU-Variante ist das "
-                "der stille Rueckfall (K1); Live erwartet einen GPU-Provider")
+            # Log-Systematik E16: auf der cpu-Variante ist die CPU das Soll (Frage 1,
+            # INFO), auf jeder anderen der stille Rueckfall (Frage 3, ERROR). Die
+            # Variante kommt wie in engine_cpu aus SUSLIK_VARIANT. Feldbefunde Punkt 18:
+            # ein ANGEFORDERTER CPU-Weg (eingestelltes Backend) ist ebenso das Soll.
+            cpu_soll = ((os.environ.get("SUSLIK_VARIANT") or "").strip().lower() == "cpu"
+                        or lw.cpu_angefordert())
+            log.log(_logbuch.INFO if cpu_soll else _logbuch.ERROR,
+                "!! detection runs on CPU — on a GPU variant this is "
+                "the silent fallback (K1); live expects a GPU provider")
         else:
-            log(f"Detektion: {prov}")
+            log.info(f"detection: {prov}")
 
     def provider(self):
         try:
             return self.app.app.models["detection"].session.get_providers()[0] \
                 .replace("ExecutionProvider", "")
         except Exception:
+            _logbuch.swallowed(_log, _logbuch.ERROR, "returning 'unbekannt'", throttle=False)
             return "unbekannt"
 
     def _netz_stellen(self, netz):
@@ -143,7 +155,8 @@ CPU_EMPFOHLEN = 1     # CPU-Runde 17.08., .252 (User-Entscheid nachmittags):
 def _cpu_lage(log=_log):
     """§11 Entscheid 3, UMGEBAUT in der CPU-Runde 17.08. (User-Go nach der
     Messung verify_data/messungen/cpu_live_haustuer_20260817.json):
-    -> 'frei' (GPU-Backend) | 'begrenzt' (kind=cpu AUF der cpu-Variante:
+    -> 'frei' (GPU-Backend) | 'begrenzt' (kind=cpu AUF der cpu-Variante oder,
+    Feldbefunde Punkt 18, als eingestelltes Backend angefordert:
     erlaubt; die Waechter-Zahl entscheidet der USER, wir empfehlen
     CPU_EMPFOHLEN und warnen laut — .252, gemessen det ~330 ms = ~3
     Bilder/s, Quick-Check 1-2 s statt <1 s) | 'gesperrt' (kind=cpu auf
@@ -159,14 +172,18 @@ def _cpu_lage(log=_log):
     kind, _dev = resolve_backend()
     if kind == "cpu":
         variante = os.environ.get("SUSLIK_VARIANT", "")
-        if variante == "cpu":
-            log(f"live: CPU mode (cpu image) — watchers are expensive here "
+        if variante == "cpu" or lw.cpu_angefordert():
+            # Feldbefunde Punkt 18: ein ANGEFORDERTER CPU-Weg auf einer GPU-Variante ist
+            # kein Rueckfall und startet begrenzt wie auf der cpu-Variante.
+            log.info(("live: CPU mode (cpu image)" if variante == "cpu" else
+                      f"live: cpu requested — computing on CPU on the '{variante}' image")
+                + " — watchers are expensive here "
                 f"(quick check typically 1-2 s, ~3 processed frames/s "
                 f"measured; GPU builds react in under a second). "
                 f"Recommended: {CPU_EMPFOHLEN} watcher; more is your call, "
                 "they share the same cores")
             return "begrenzt"
-        log("Live watchers need GPU recognition — integrated Intel graphics "
+        log.info("Live watchers need GPU recognition — integrated Intel graphics "
             "(gpu / gpu-legacy images, OpenVINO), an NVIDIA card (cuda "
             "image) or an AMD card (rocm image, MIGraphX) all qualify. "
             "This build resolved to CPU"
@@ -195,7 +212,7 @@ def _mqtt_client(cfg, log=_log):
         return None
     m = cfg.get("mqtt") or {}
     if not m.get("host"):
-        log("live: mqtt channel configured but no broker in config — "
+        log.error("live: mqtt channel configured but no broker in config — "
             "mqtt alerts will report as failed")
         return None
     try:
@@ -206,10 +223,10 @@ def _mqtt_client(cfg, log=_log):
         c.reconnect_delay_set(min_delay=1, max_delay=60)
         c.connect_async(m["host"], int(m.get("port", 1883)), 60)
         c.loop_start()
-        log(f"live: mqtt publisher connecting to {m['host']}:{m.get('port', 1883)}")
+        log.info(f"live: mqtt publisher connecting to {m['host']}:{m.get('port', 1883)}")
         return c
     except Exception as e:
-        log(f"live: mqtt publisher not available: {e}")
+        log.error(f"live: mqtt publisher not available: {e}")
         return None
 
 
@@ -226,21 +243,24 @@ def referenzen_noetig(guards):
 
 def cmd_run():
     cfg, verifyd = _cfg_laden()
+    # E11: Stufe und Pruef-Kanal folgen den Flaggendateien des Dienstes (2-s-Gedaechtnis);
+    # derselbe aufgeloeste Datenordner wie in lw.Engine.
+    _logbuch.watch_flags(cfg.get("data_dir") or os.path.join(lw.WURZEL, "verify_data"))
     if _cpu_sperre():
         return 2
     defaults, guards = lw.guards_lesen(cfg, _log)
     if not any(g["enabled"] for g in guards.values()):
-        _log("live: no enabled guard in config store (live.guards.<camera>."
+        _log.info("live: no enabled guard in config store (live.guards.<camera>."
              "enabled) — nothing to do. Run 'test <camera>' first, then enable.")
         return RC_NICHTS_ZU_TUN
     # CPU-Empfehlung (.252, User-Entscheid: er entscheidet, wir warnen):
     # im begrenzten Modus startet die Engine mit BELIEBIG vielen Waechtern
     # (Notbremse bleibt der generelle harte Deckel) — ueber CPU_EMPFOHLEN
     # hinaus aber mit LAUTER Warnung statt stillem Schlucken.
-    if _cpu_lage(log=lambda z: None) == "begrenzt":
+    if _cpu_lage(log=_logbuch.NULL) == "begrenzt":
         an = [k for k, g in guards.items() if g["enabled"]]
         if len(an) > CPU_EMPFOHLEN:
-            _log(f"live: CPU mode with {len(an)} watchers "
+            _log.warning(f"live: CPU mode with {len(an)} watchers "
                  f"({', '.join(sorted(an))}) — recommended is "
                  f"{CPU_EMPFOHLEN}. They share the same cores: every "
                  "additional watcher slows ALL of them and heats the "
@@ -254,15 +274,15 @@ def cmd_run():
         try:
             refs, ref_quelle = lw.referenzen_laden(det.app)
             schwelle = float(cfg["win_thresh"])
-            _log(f"live: Schnell-Urteil {sum(len(M) for M in refs.values())} "
-                 f"Referenzen / {len(refs)} Personen aus {ref_quelle}, Schwelle "
-                 f"{schwelle:.2f} (win_thresh) — VORLAEUFIG, nur fuer die Meldung")
+            _log.info(f"live: quick verdict {sum(len(M) for M in refs.values())} "
+                 f"references / {len(refs)} persons from {ref_quelle}, threshold "
+                 f"{schwelle:.2f} (win_thresh) — PRELIMINARY, for the notification only")
         except Exception as e:
             refs, schwelle = {}, None
-            _log(f"live: Schnell-Urteil aus ({type(e).__name__}: {e})")
+            _log.info(f"live: quick verdict off ({type(e).__name__}: {e})")
     kameras, kam_fehler = verifyd.frigate_cameras(cfg)
     if kam_fehler:
-        _log(f"live: Frigate camera list unavailable ({kam_fehler}) — "
+        _log.error(f"live: Frigate camera list unavailable ({kam_fehler}) — "
              f"feed inventory limited to configured guards")
     pub = _mqtt_client(cfg, _log)
     melder = lw.Melder(cfg, _log, pub=pub)
@@ -293,9 +313,9 @@ def cmd_run():
             pub.loop_stop()
             pub.disconnect()
         except Exception:
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     if engine.engine_fehler:
-        _log(f"live: engine ended with error: {engine.engine_fehler}")
+        _log.error(f"live: engine ended with error: {engine.engine_fehler}")
         return 1
     return 0
 
@@ -316,26 +336,27 @@ def cmd_test(kamera, als_json=False):
     dafuer noch nicht existieren (die UI testet auch unkonfigurierte
     Kameras mit dem proxy-Default)."""
     cfg, verifyd = _cfg_laden()
-    if _cpu_sperre():
+    konsole = _logbuch.CatchLogger(_konsole)     # E7: Kommandozeilen-Ausgabe wie bisher
+    if _cpu_sperre(konsole):
         return 2
-    _defaults, guards = lw.guards_lesen(cfg, _log)
+    _defaults, guards = lw.guards_lesen(cfg, konsole)
     guard = guards.get(kamera)
     if guard is None:
         if not als_json:
-            _log(f"live test: no live.guards entry for {kamera!r} in the config "
+            _konsole(f"live test: no live.guards entry for {kamera!r} in the config "
                  f"store — add one first (Bauplan §3 schema)")
             return 1
         guard = {"quelle": "proxy", "url": ""}
-    det = Detektor(_log)
+    det = Detektor(konsole)
     # .248 (Fund beim CPU-Setup 17.08.): der Test lief IMMER mit der
     # globalen Default-Hoehe und ignorierte guard['hoehe'] — der gruene
     # Test mass damit eine ANDERE Skala als der Betrieb (der nutzt
     # guard.hoehe, livewache:3534). Jetzt dieselbe Vorrangregel.
-    ok, text, block = lw.quelle_testen(cfg, kamera, guard, det, log=_log,
+    ok, text, block = lw.quelle_testen(cfg, kamera, guard, det, log=konsole,
                                        det_basis=_defaults["det_basis"],
                                        hoehe=(guard.get("hoehe")
                                               or _defaults["hoehe"]))
-    _log(f"live test {kamera}: {'GRUEN' if ok else 'ROT'} — {text}")
+    _konsole(f"live test {kamera}: {'GRUEN' if ok else 'ROT'} — {text}")
     if als_json:
         print(json.dumps({"ok": ok, "text": text, "block": block},
                          ensure_ascii=False), flush=True)
@@ -345,7 +366,7 @@ def cmd_test(kamera, als_json=False):
         g = store.setdefault("live", {}).setdefault("guards", {}).setdefault(kamera, {})
         g["test"] = block
         verifyd._store_schreiben(verifyd._config_store_pfad(cfg), store)
-        _log(f"live test {kamera}: test-Block gespeichert (quelle_fp "
+        _konsole(f"live test {kamera}: test-Block gespeichert (quelle_fp "
              f"{block['quelle_fp']}) — enable prueft genau diesen Fingerprint")
     return 0 if ok else 1
 
@@ -396,6 +417,9 @@ def main(argv):
     os.umask(0o022)
     was = argv[1] if len(argv) > 1 else "run"
     if was == "run":
+        # Log-Systematik (G4): die Live-Engine loggt ueber core/logbuch nach stdout;
+        # `test` und `status` sind Kommandozeilen-Befehle (E7) und bleiben print.
+        _logbuch.einrichten("live", 1)
         return cmd_run()
     if was == "test":
         rest = [a for a in argv[2:] if a != "--json"]

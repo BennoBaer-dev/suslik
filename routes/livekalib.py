@@ -62,23 +62,20 @@ dort, wo sie auch gemessen wird:
     ganz aus haben will, nimmt den Config-Schluessel `katalog_guete_norm_min`
     (Store-Spanne unveraendert ab 0). Die zwei KANTEN-Regler behalten ihre
     Aus-Stellung — dort ist die 0 weiter der linke Anschlag.
-  * Register ERKENNEN — KEIN Regler mehr. Der Erkennungs-Weg MISST die
-    Feature-Norm nicht (sie braeuchte eine zweite Kopie des Erkennungs-Modells
-    im Analyse-Worker — eine Speicher-Entscheidung, kein Regler), also gibt es
-    dort nichts einzustellen: die Achse steht werksseitig auf 0/aus und bleibt
-    es. .515/.516 hatten den Schieber dort mit einem Ehrlichkeits-Satz
-    („gespeichert, aber siebt nicht"); ein Regler, der nichts bewirkt, ist
-    schlechter als keiner — er laedt zum Einstellen ein und veraendert nichts.
-    Der gespeicherte Wert (`norm_min`, globaler Rueckfall `urteil_norm_min`)
-    bleibt unangetastet: diese Seite schickt das Feld nicht mehr mit, und ein
-    fehlendes Feld heisst bei live_speichern „behalten".
+  * Register ERKENNEN — KEIN Regler. Seit Bauplan K3 Stufe KP1 misst der
+    Analyse-Worker die Feature-Norm an der Erkennungsstufe und siebt damit
+    (Norm-Sieb, Werkswert 18,5 ueber den Config-Schluessel `urteil_norm_min`).
+    Einen Schieber dafuer bietet diese Seite in dieser Version nicht an (Bauplan
+    K3, Entscheid 5). Der gespeicherte Wert (`norm_min`, globaler Rueckfall
+    `urteil_norm_min`) bleibt unangetastet: diese Seite schickt das Feld nicht
+    mit, und ein fehlendes Feld heisst bei live_speichern „behalten".
 Die Galerie kann den verbliebenen Regler nur an LERNLAUF-Bildern vorfuehren:
 der Kalibrier-Ring fuehrt keine Norm. Steht keine im Material, sagt die Seite
 das (ohne_norm), statt den Regler wortlos anzubieten.
 
 KANTEN-REGLER (.515, Sensor 6): die Mindest-Kantenlaenge eines Gesichts in
-PIXELN, ebenfalls in beiden Gruppen. Anders als bei der Norm siebt dieser Wert
-auf BEIDEN Wegen wirklich:
+PIXELN, ebenfalls in beiden Gruppen. Dieser Wert siebt auf BEIDEN Wegen und hat
+auf beiden einen Regler:
   * Register ERKENNEN — er ist der Wert, den der Stimmweg bisher als eine
     globale Konstante `urteil_kante` (25 px) las. Werkswert und globaler
     Rueckfall sind unveraendert diese 25, der Regler macht sie nur je Kamera
@@ -263,9 +260,10 @@ def render(kamera, vorrat, guard, standard, kat, pruef=None, erk=None,
               Werks-Boden) und sind deshalb NICHT im `guard` ablesbar. None =
               wie vor .515 (der Regler steht dann auf seinem Boden).
               Seit .517 nutzt die Seite davon nur noch die KANTE: die
-              Norm-Achse hat im Erkennen-Register keinen Regler mehr, weil
-              dort niemand die Feature-Norm misst. Der Aufrufer darf `n`
-              weiter mitschicken, die Seite liest es nicht
+              Norm-Achse hat im Erkennen-Register keinen Regler (seit K3
+              siebt sie im Analyse-Worker, eingestellt ueber die Config).
+              Der Aufrufer darf `n` weiter mitschicken, die Seite liest es
+              nicht
     lauf_bilder = Lernlauf-Bilder DIESER Kamera (kann leer sein)
     deckel  = live_kalib_max (0 = Vorrats-Sammlung aus)
     fueller = (ziel_bilder, deckel_events) des On-demand-Fuellers
@@ -322,7 +320,7 @@ def render(kamera, vorrat, guard, standard, kat, pruef=None, erk=None,
     # Dieselbe Ehrlichkeit fuer die Norm (.515): traegt KEIN Bild eine
     # Feature-Norm, bewegt der Regler an dieser Galerie nichts. Das ist der
     # Normalfall auf einer Kamera, deren Material nur aus dem Ring kommt —
-    # gemessen wird die Norm im LERNLAUF, nicht im Live-/Analyse-Weg. Der
+    # der Ring fuehrt keine Norm, Lernlauf-Bilder tragen sie. Der
     # Regler bleibt trotzdem bedienbar: er stellt einen WERT ein, die Galerie
     # ist nur die Vorschau darauf.
     ohne_norm = bool(bilder) and all(b.get("n", -1.0) < 0 for b in bilder)
@@ -440,13 +438,12 @@ def render(kamera, vorrat, guard, standard, kat, pruef=None, erk=None,
         + ('<div class="kal-prosa">' + t("livekalib.ohne_pose") + "</div>"
            if ohne_pose else "")
         # .517 (User-Entscheid 10.09.): HIER stand bis .516 der Norm-Regler
-        # `lk-n`. Er ist raus — die Feature-Norm wird auf dem Erkennungs-Weg
-        # gar nicht gemessen, der Regler stellte also einen Wert ein, der nie
-        # ein Urteil beruehrt hat. Die ACHSE bleibt (Sechs-Achsen-Verfassung:
+        # `lk-n`. Er ist raus. Die ACHSE bleibt (Sechs-Achsen-Verfassung:
         # `norm_min` im Guard-Block, globaler Rueckfall `urteil_norm_min`,
-        # Aufloesung ueber kamerakalib.erk_latten) und steht werksseitig auf
-        # 0 = aus. Ihr Regler lebt im Register „Face catalog" weiter, wo die
-        # Norm wirklich gemessen wird und wirklich siebt.
+        # Aufloesung ueber kamerakalib.erk_latten); seit Bauplan K3 Stufe KP1
+        # siebt sie im Analyse-Worker mit dem Werkswert 18,5 aus der Config.
+        # Einen Regler hier gibt es in dieser Version nicht (Bauplan K3,
+        # Entscheid 5); der Norm-Regler im Register „Face catalog" bleibt.
         # .515 (Sensor 6): die Kanten-Latte. Sie steht ganz unten, obwohl ihre
         # MESSUNG nichts kostet — die Reihenfolge hier ist die des Anbaus, und
         # ein Umsortieren der bestehenden Regler waere eine Aenderung an einer
@@ -686,8 +683,8 @@ document.getElementById("lk-std").onclick = () => {{
   setz("lk-kp", KSTD.p === null ? {_POSE_LO} : KSTD.p, {_POSE_LO}, {_POSE_HI});
   /* Norm-Vorgabe: nur noch im Katalog-Register, seit .517 der Werkswert 20
      (core.guete.norm_werk). Er kommt vom Server durch (KSTD), nie als Literal
-     hier. Das Erkennen-Register hat keinen Norm-Regler mehr — dort wird die
-     Norm nicht gemessen, es gibt nichts vorzugeben. Die Klemm-Spanne ist seit
+     hier. Das Erkennen-Register hat keinen Norm-Regler, es gibt dort nichts
+     vorzugeben (sein Wert kommt aus der Config). Die Klemm-Spanne ist seit
      .520 18..35 (NORM_REGLER_MIN..NORM_MAX); der Werkswert 20 liegt darin, der
      Vorgaben-Knopf zeigt ihn also unveraendert. */
   setz("lk-kn", KSTD.n === null ? {_NORM_LO} : KSTD.n, {_NORM_LO}, {_NORM_HI});

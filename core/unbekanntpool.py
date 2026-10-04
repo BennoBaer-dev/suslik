@@ -18,6 +18,8 @@ Bewusst OHNE anlernen-Import: /heute liest den Pool schon heute als rohe Datei
 import json
 import os
 import time
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 # Alterungs- UND Reaktivierungs-Fenster der Unbekannt-Cluster in Tagen — EINE
 # Quelle (QS-Ebenen-Regel, kein Streu-Literal): anlernen._reconcile_intern
@@ -46,6 +48,7 @@ def _cluster_lesen(data_dir):
     try:
         f = open(pfad)
     except OSError:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
         return
     with f:
         for line in f:
@@ -55,6 +58,7 @@ def _cluster_lesen(data_dir):
             try:
                 d = json.loads(line)
             except Exception:
+                _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                 continue
             if isinstance(d, dict):
                 yield d
@@ -95,7 +99,7 @@ def tages_cluster(data_dir, von, bis, gap_s, log=None):
         except (TypeError, ValueError, AttributeError):
             kaputt += 1
     if kaputt and log:
-        log(f"!! unbekannte.jsonl: {kaputt} unreadable cluster line(s) "
+        log.error(f"!! unbekannte.jsonl: {kaputt} unreadable cluster line(s) "
             f"skipped on the Today derivation — check the pool file")
     return out
 
@@ -126,6 +130,6 @@ def tages_archiv(data_dir, von, bis, log=None):
         except (TypeError, ValueError, AttributeError):
             kaputt += 1
     if kaputt and log:
-        log(f"!! unbekannte.jsonl: {kaputt} unreadable cluster line(s) "
+        log.error(f"!! unbekannte.jsonl: {kaputt} unreadable cluster line(s) "
             f"skipped on the archive derivation — check the pool file")
     return n

@@ -47,6 +47,8 @@ import tempfile
 import time
 
 from core import gpubudget as _gb
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 SCHEMA_VERSION = 1
 DATEI = "vram_preise.json"
@@ -94,6 +96,7 @@ def lesen(data_dir):
         with open(pfad(data_dir), encoding="utf-8") as f:
             d = json.load(f)
     except Exception:                                      # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning {}")
         return {}
     if not isinstance(d, dict) or int(d.get("schema") or 0) != SCHEMA_VERSION:
         return {}
@@ -119,6 +122,7 @@ def schreiben(data_dir, stand):
                 os.unlink(tmp)
         return True
     except Exception:                                      # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.ERROR, "returning False", throttle=False)
         return False
 
 

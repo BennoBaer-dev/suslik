@@ -21,6 +21,8 @@ import shutil
 import time
 
 from core.sprache import t, t_html
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 
 def render(svc, cfg, ro, docs_url):
@@ -36,7 +38,7 @@ def render(svc, cfg, ro, docs_url):
                         continue     # Retry misst einen Batch-Job, nicht den Live-Pfad
                     letzte = d
                 except Exception:
-                    pass
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     cache_gb, frei_gb = svc.cache_stand()      # .313: EINE Quelle (auch Knopf/Wache)
     # .32x: die WIRKSAMEN Grenzen, nicht die rohen Config-Zahlen. Seit 0 fuer
     # "aus der Plattengroesse ableiten" steht, ist der rohe Wert als Anzeige
@@ -175,7 +177,7 @@ def render(svc, cfg, ro, docs_url):
                        f"<th>{t('system.qc.kopf_quote')}</th></tr>"
                        + zeilen + "</table></div></div>")
         except Exception:
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     # Der Abschnittstitel "Configuration backup" wird von setupwiz.restore.satz
     # aller fuenf Sprachen woertlich englisch zitiert — der Einzug hier macht
     # ihn uebersetzbar; die Zitate (und der "(page System)"-Wegweiser) muessen

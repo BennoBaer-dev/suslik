@@ -155,6 +155,10 @@ import core.registry as _reg                             # noqa: E402  Geraete-O
 # Funktion, die hier ersetzt wird. `SysfsSpeicher` sucht beim Import einmal nach
 # einer amdgpu-Karte und findet keine; das kostet einen glob und sonst nichts.
 import engine_migraphx as em                             # noqa: E402
+from core.livewache import cpu_angefordert               # noqa: E402  Punkt 18: EINE Stelle
+from core import logbuch as _logbuch
+from core import tuer                                    # noqa: E402  KP2: Sprung-Kette der Tuer
+_log = _logbuch.logger(__name__)
 
 EP_OV = "OpenVINOExecutionProvider"
 EP_CPU = "CPUExecutionProvider"
@@ -202,15 +206,6 @@ CACHE_VORGABE = "/data/clips/ov_cache_models"
 STUFEN_DECKEL = {"e": 4, "t": 4, wk.FD: 4, "p": 4, "r": None, "det": None}
 
 
-def _melden(text):
-    """Eine Zeile ins Prozess-Log (fd 2) — dorthin, wo auch der Dienst seine
-    Aufbau-Zeilen schreibt. Kein Import von `worker_dienst`: der importiert diese
-    Datei, und ein Ringimport waere hier ein Startfehler statt einer Logzeile
-    (wortgleiche Begruendung wie `engine_cuda._melden`/`engine_migraphx._melden`)."""
-    try:
-        os.write(2, (f"engine_cpu: {str(text).strip()}\n").encode())
-    except Exception:                                    # noqa: BLE001
-        pass
 
 
 def _kerne():
@@ -277,13 +272,13 @@ def regie_setzen(straenge):
         deckel, bericht = _stufen_deckel(straenge)
         _REGIE["deckel"], _REGIE["bericht"] = deckel, bericht
     je_klasse = ", ".join(f"{k}={v}" for k, v in sorted(deckel.items()))
-    _melden(f"thread plan: {bericht['kerne']} usable core(s) "
+    _log.info(f"thread plan: {bericht['kerne']} usable core(s) "
             f"({bericht['kerne_quelle']}) / {bericht['straenge']} compute thread(s) "
             f"= {bericht['budget_je_strang']} per session, capped per model class "
             f"({je_klasse})")
     if bericht.get("ueberbucht"):
         u = bericht["ueberbucht"]
-        _melden(f"WARN: cpu_threads is set explicitly, so every session gets that "
+        _log.warning(f"WARN: cpu_threads is set explicitly, so every session gets that "
                 f"number — {bericht['straenge']} compute thread(s) x "
                 f"{bericht['budget_je_strang']} = {u['threads_gesamt']} threads on "
                 f"{u['kerne']} usable core(s). That is your setting and it is kept; "
@@ -318,7 +313,7 @@ def cache_vorbereiten():
             f.write("x")
         os.remove(probe)
     except OSError as e:
-        _melden(f"WARN: OpenVINO cache dir {pfad!r} not writable "
+        _log.warning(f"WARN: OpenVINO cache dir {pfad!r} not writable "
                 f"({type(e).__name__}: {e}) — every process start will recompile "
                 f"every stage")
         return pfad, f"{quelle} (not writable)"
@@ -390,12 +385,12 @@ def _sitzung(modell_bytes, marke):
                     s = None
                     bericht.update({"stand": "cpu",
                                     "grund": f"{type(e).__name__}: {str(e)[:300]}"})
-                    _melden(f"stage {marke}: OpenVINO CPU EP unusable "
+                    _log.warning(f"stage {marke}: OpenVINO CPU EP unusable "
                             f"({bericht['grund']}) — plain onnxruntime CPU instead")
                     break
         if s is not None:
             for k, g in verloren:
-                _melden(f"stage {marke}: provider option {k!r} rejected by this "
+                _log.error(f"stage {marke}: provider option {k!r} rejected by this "
                         f"onnxruntime-openvino ({g})" + (
                             " — stages may compute in a precision other than fp32; "
                             "the house thresholds are calibrated on fp32"
@@ -405,7 +400,7 @@ def _sitzung(modell_bytes, marke):
                                 "precision": opt.get("precision"),
                                 "cache_dir": opt.get("cache_dir"),
                                 "optionen_abgelehnt": [k for k, _g in verloren]})
-                _melden(f"stage {marke}: bound openvino:{OV_GERAET} "
+                _log.info(f"stage {marke}: bound openvino:{OV_GERAET} "
                         f"(precision {opt.get('precision', 'plugin default')}, "
                         f"{bericht['threads'] or 'default'} thread(s))")
                 return s, bericht
@@ -414,7 +409,7 @@ def _sitzung(modell_bytes, marke):
             # aber es ist NICHT der Weg, den wir gewaehlt haben — also laut.
             bericht.update({"stand": "cpu",
                             "grund": "OpenVINO EP dropped out of get_providers()"})
-            _melden(f"stage {marke}: OpenVINO CPU EP did not stay bound "
+            _log.warning(f"stage {marke}: OpenVINO CPU EP did not stay bound "
                     f"({bericht['grund']}) — plain onnxruntime CPU instead")
     else:
         bericht.update({"stand": "cpu", "grund": f"no {EP_OV} in this onnxruntime "
@@ -422,7 +417,7 @@ def _sitzung(modell_bytes, marke):
     s = ort.InferenceSession(modell_bytes, sess_options=sess_opt,
                              providers=[EP_CPU])
     bericht["geraet"] = "cpu"
-    _melden(f"stage {marke}: plain onnxruntime CPU "
+    _log.info(f"stage {marke}: plain onnxruntime CPU "
             f"({bericht.get('grund') or 'no reason recorded'}, "
             f"{bericht['threads'] or 'default'} thread(s))")
     return s, bericht
@@ -441,15 +436,17 @@ def _run(s, eingabe):
 
 
 # ------------------------------------------------------------------ Decode
-def frames_nv12(clip, W, H, schritt, wache=None):
+def frames_nv12(clip, W, H, schritt, wache=None, sprung=None):
     """Sample-Frames als (i, y, uv) — SOFTWARE-Decode, ohne HW-Versuch.
 
     Begruendung im Modulkopf („DECODE"): das cpu-Image traegt keinen VAAPI-Treiber,
     ein HW-Versuch koennte nie gelingen, und eine `hwdec_fallback`-Zeile je Ereignis
     entwertete dieselbe Zeile auf den Varianten, wo sie ein echter Befund ist.
-    Kette und Byte-Weg sind die des Hauses, nicht eine dritte Fassung."""
-    return wk.nv12_strom(em._ffmpeg_nv12(clip, schritt, False), W, H, schritt, "SW",
-                         wache=wache)
+    Kette und Byte-Weg sind die des Hauses, nicht eine dritte Fassung.
+    `sprung` (Bauplan K3, KP2): Ansatzpunkt der Tuer (core.tuer.Sprung), None = Clip-Anfang; die
+    Bildnummern zaehlen ab core.tuer.start(sprung)."""
+    return wk.nv12_strom(em._ffmpeg_nv12(clip, schritt, False, sprung), W, H, schritt, "SW",
+                         wache=wache, start=tuer.start(sprung))
 
 
 # ------------------------------------------------------------------ Bild-Weg
@@ -502,15 +499,22 @@ class Engine:
         # Lauf, Probe), gilt 1 — die vorsichtige Richtung.
         self.straenge = max(1, int(getattr(a, "threads", 1) or 1))
         self.regie = regie_setzen(self.straenge)
-        _melden(f"compute cache: {_CACHE['pfad']} ({_CACHE['quelle']})")
-        if self.ep_ov:
-            _melden(f"computing on CPU — this is the design of the cpu image, not a "
+        _log.info(f"compute cache: {_CACHE['pfad']} ({_CACHE['quelle']})")
+        # Feldbefunde Punkt 18 (Leser N6): ANGEFORDERT (eingestelltes Backend cpu oder
+        # openvino:CPU) ist kein Rueckfall — auch nicht auf einer GPU-Variante.
+        self.variante = (os.environ.get("SUSLIK_VARIANT") or "").strip().lower()
+        self.angefordert = cpu_angefordert()
+        if self.angefordert and self.variante not in ("", "cpu"):
+            _log.info(f"cpu requested — computing on CPU (the {self.variante!r} image; "
+                      f"stages run on {EP_OV if self.ep_ov else EP_CPU})")
+        elif self.ep_ov:
+            _log.info(f"computing on CPU — this is the design of the cpu image, not a "
                     f"fallback. Stages run on the OpenVINO CPU runtime "
                     f"({EP_OV}, precision {OV_PRAEZISION}); measured 3-7x faster "
                     f"than plain onnxruntime on the same CPU (field comparison "
                     f"2026-09-10).")
         else:
-            _melden(f"computing on CPU — this is the design of the cpu image, not a "
+            _log.warning(f"computing on CPU — this is the design of the cpu image, not a "
                     f"fallback. No {EP_OV} in this onnxruntime build, so the stages "
                     f"run on the plain onnxruntime CPU provider. That is correct, "
                     f"just slower (measured 3-7x on the same CPU); an "
@@ -523,11 +527,11 @@ class Engine:
         # stand). Seit E4 rechnet dieser Fall — langsam, aber er rechnet. Das ist die
         # bessere Anlage und die schlechtere Diagnose, wenn niemand es sagt. Also wird
         # es gesagt: laut im Log UND in `bindung`, damit es in jeder Job-Antwort und
-        # in /health steht. `SUSLIK_VARIANT` setzt jedes Dockerfile.
-        self.variante = (os.environ.get("SUSLIK_VARIANT") or "").strip().lower()
-        self.unerwartet = bool(self.variante) and self.variante != "cpu"
+        # in /health steht. `SUSLIK_VARIANT` setzt jedes Dockerfile (gelesen oben).
+        self.unerwartet = (bool(self.variante) and self.variante != "cpu"
+                           and not self.angefordert)
         if self.unerwartet:
-            _melden(f"WARN: this is the {self.variante!r} image, but the analysis "
+            _log.warning(f"WARN: this is the {self.variante!r} image, but the analysis "
                     f"resolved to the CPU — the accelerator did not bind. Analysis "
                     f"runs (correct values, much slower). Check that the device is "
                     f"passed into the container (/dev/dri for Intel and AMD, "
@@ -544,7 +548,7 @@ class Engine:
         """Der Modell-Bestand — Bestands-Mechanik, eigener Session-Bauer, eigene
         Log-Kennung (sonst stuende „engine_migraphx" im Log eines cpu-Images) und
         ein schlichter `run` statt des io-bindings der AMD-Seite (s. `_run`)."""
-        return em.ModellBestand(_sitzung, _melden, _run)
+        return em.ModellBestand(_sitzung, _log, _run)
 
     def bindung_ergaenzen(self, bindung):
         """Was NUR diese Engine weiss, in die Bindung des Dienstes. In place.
@@ -563,15 +567,18 @@ class Engine:
             bindung["grund"] = (f"the {self.variante} image resolved to the CPU — the "
                                 f"accelerator did not bind; analysis runs, much slower")
         else:
-            bindung["grund"] = ("CPU by design (this image computes on the CPU)"
-                                if self.ep_ov else
-                                "CPU by design (this image computes on the CPU); no "
-                                "OpenVINO CPU runtime in this build — correct, slower")
+            # Feldbefunde Punkt 18: auf einer GPU-Variante ist die CPU dann angefordert.
+            soll = ("CPU requested (backend set to the CPU)"
+                    if self.angefordert and self.variante not in ("", "cpu") else
+                    "CPU by design (this image computes on the CPU)")
+            bindung["grund"] = (soll if self.ep_ov else
+                                f"{soll}; no OpenVINO CPU runtime in this build — "
+                                f"correct, slower")
         bindung["variante"] = self.variante or None
         return bindung
 
-    def frames(self, clip, W, H, schritt, wache=None):
-        return frames_nv12(clip, W, H, schritt, wache=wache)
+    def frames(self, clip, W, H, schritt, wache=None, sprung=None):
+        return frames_nv12(clip, W, H, schritt, wache=wache, sprung=sprung)
 
     def bild_stufen(self):
         """Der BILD-Weg dieser Engine, einmal je Prozess. -> BildStufen"""

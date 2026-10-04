@@ -49,13 +49,14 @@ Der Prototyp misst Tempo; der gepinnte Pixelpfad (CLAUDE.md) gilt fuer ihn nicht
 """
 import os
 import shutil
-import sys
 import threading
 import time
 
 import numpy as np
 
 import worker_kern as wk                                 # noqa: E402  Bootstrap + Wert-Weg
+from core import inferenzmessung as im                   # noqa: E402  .546 Zeit + Tiefe je Inferenz
+from core import tuer                                    # noqa: E402  KP2: Sprung-Kette der Tuer
 
 import openvino as ov                                    # noqa: E402
 # opset15 statt opset16: im Prod-Image steckt OpenVINO 2025.4.1 (in onnxruntime-openvino
@@ -63,6 +64,8 @@ import openvino as ov                                    # noqa: E402
 # Alle hier benutzten Operationen gibt es in opset15 unter 2025.4.1 und 2026.3.1
 # (geprueft 11.09.).
 from openvino import opset15 as ops                      # noqa: E402
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 GERAET = "GPU"
 # Die Namen der Geraete-Tensoren, ueber die die Graphen aneinanderhaengen. Sie stehen
@@ -81,10 +84,6 @@ NAME_SL, NAME_SL2 = "s_lap", "s_lap2"
 # Fehler, und erst der naechste Lauf scheitert beim Lesen ("Check 'written_size == size'
 # failed", binary_buffer.hpp:27). Genau so passiert im 2-GB-tmpfs unter /tmp.
 CACHE_BEDARF = 1200 * 1024 * 1024
-# Der Pruefvektor der Kompilat-Probe (E2d): eine feste Pseudo-Zufallsfolge, aus der
-# jede Stufe ihre Eingabe in ihrer eigenen Form schoepft. Er steht hier als ZAHL, nicht
-# als Datei — eine Probe, die erst eine Datei braucht, laeuft im Feld nicht.
-PROBE_SAAT = 20260913
 
 
 # ------------------------------------------------------------------ Kompilieren
@@ -175,48 +174,15 @@ def _kompilieren(core, modell, konfig=None):
     return core.compile_model(_namen_festpinnen(modell), GERAET, konfig)
 
 
-# ------------------------------------------------------------------ Pruefvektor
-def probe_nv12(H, W):
-    """Die NV12-Halbbilder des Pruefvektors — RECHNUNG, kein Zufallsgenerator und keine
-    Datei: dieselben Bytes auf jeder Maschine, jeder numpy-Fassung und ohne Zugriff auf
-    Bestandsdaten. Der Inhalt ist ein schraeges Streifenmuster mit Struktur in beiden
-    Achsen; ein Grauwert-Flaechenbild waere als Probe wertlos, weil Faltungen darauf
-    nahezu konstant antworten. -> (y [1,H,W,1], uv [1,H/2,W/2,2]) uint8"""
-    i = np.arange(H, dtype=np.int32)[:, None]
-    j = np.arange(W, dtype=np.int32)[None, :]
-    y = (16 + ((i * 7 + j * 13 + ((i * j) >> 6) + PROBE_SAAT) % 220)).astype(np.uint8)
-    ih = np.arange(H // 2, dtype=np.int32)[:, None]
-    jh = np.arange(W // 2, dtype=np.int32)[None, :]
-    u = (16 + ((ih * 11 + jh * 5 + PROBE_SAAT) % 225)).astype(np.uint8)
-    v = (16 + ((ih * 3 + jh * 17 + PROBE_SAAT) % 225)).astype(np.uint8)
-    return y[None, :, :, None], np.stack([u, v], axis=-1)[None]
-
-
-def probe_box(W, H):
-    """Die feste Pruef-Box im Frame (Anteile der Kanten, dann ganzzahlig wie eine echte
-    Detektion). Sie liegt mittig und ist gross genug, dass alle fuenf Ausschnitte
-    Bildinhalt sehen statt Polster. -> (x1, y1, x2, y2) int"""
-    return (int(0.30 * W), int(0.22 * H), int(0.42 * W), int(0.52 * H))
-
-
-def probe_kps(box):
-    """Fuenf Pruef-Landmarken in der Box, in der Reihenfolge von insightface
-    (Auge links, Auge rechts, Nase, Mund links, Mund rechts). Die Anteile sind die
-    Lage-Verhaeltnisse eines frontalen Gesichts; gebraucht wird nur, dass sie FEST
-    sind. -> [5,2] float32"""
-    x1, y1, x2, y2 = (float(v) for v in box)
-    w, h = x2 - x1, y2 - y1
-    teile = ((0.32, 0.38), (0.68, 0.38), (0.50, 0.58), (0.36, 0.76), (0.64, 0.76))
-    return np.array([[x1 + a * w, y1 + b * h] for a, b in teile], np.float32)
-
-
 # ------------------------------------------------------------------ Decode
-def _ffmpeg_nv12(clip, schritt, hw):
+def _ffmpeg_nv12(clip, schritt, hw, sprung=None):
     """Die ffmpeg-Kette dieser Engine, EINMAL fuer beide Wege. Auswahl per ffmpeg-select
     VOR dem Download wie decode.FrameIter (decode.py:159-177), aber NV12 statt yuv420p
     und ohne cv2-Umrechnung. `hw=False` ist dieselbe Kette OHNE VAAPI und ohne
     hwdownload — der Software-Rueckfall; sie endet auf demselben `format=nv12` ueber
-    demselben Decoder-Bild."""
+    demselben Decoder-Bild.
+    `sprung` (Bauplan K3, KP2): Ansatzpunkt der Tuer (core.tuer.Sprung), None = Clip-Anfang; Sprung und
+    Auswahl kommen aus core.tuer (eingang, auswahl), die Kette bleibt dieselbe."""
     # .536 B1a: `-nostdin` — ffmpeg darf den fd 0 seines Elternprozesses nicht
     # pollen. Im Worker ist das die Job-Pipe (s. worker_kern.nv12_strom, dort
     # steht der Byte-Beweis). Aendert nichts am Decoder und nichts an den Pixeln.
@@ -226,19 +192,20 @@ def _ffmpeg_nv12(clip, schritt, hw):
         basis += ["-hwaccel", "vaapi", "-hwaccel_device", dev,
                   "-hwaccel_output_format", "vaapi"]
     rest = "hwdownload,format=nv12" if hw else "format=nv12"
-    return basis + ["-i", clip, "-map", "0:v:0",
-                    "-vf", f"select='not(mod(n\\,{schritt}))',{rest}",
+    return basis + tuer.eingang(sprung) + ["-i", clip, "-map", "0:v:0",
+                    "-vf", f"{tuer.auswahl(schritt, sprung)},{rest}",
                     "-fps_mode", "passthrough", "-f", "rawvideo", "-"]
 
 
-def frames_nv12(clip, W, H, schritt, wache=None):
+def frames_nv12(clip, W, H, schritt, wache=None, sprung=None):
     """Sample-Frames als (i, y, uv) ueber VAAPI, MIT LAUTEM SOFTWARE-RUECKFALL (E2d).
     Regel und Begruendung stehen EINMAL in worker_kern.nv12_mit_rueckfall; der Byte-Weg
     dahinter (Leser-Thread, Vorlauf, Pipe-Kapazitaet) ist worker_kern.nv12_strom.
-    `wache` (E2): dict fuer Kette/rc/decoder_fehler, dazu hwdec_fallback/hwdec_grund."""
-    return wk.nv12_mit_rueckfall(_ffmpeg_nv12(clip, schritt, True),
-                                 _ffmpeg_nv12(clip, schritt, False),
-                                 W, H, schritt, "VAAPI", wache=wache)
+    `wache` (E2): dict fuer Kette/rc/decoder_fehler, dazu hwdec_fallback/hwdec_grund.
+    `sprung` (KP2): die Kette setzt dort an, die Bildnummern zaehlen ab core.tuer.start(sprung)."""
+    return wk.nv12_mit_rueckfall(_ffmpeg_nv12(clip, schritt, True, sprung),
+                                 _ffmpeg_nv12(clip, schritt, False, sprung),
+                                 W, H, schritt, "VAAPI", wache=wache, start=tuer.start(sprung))
 
 
 # ------------------------------------------------------------------ Graphen
@@ -689,6 +656,60 @@ class ModellBestand:
         return len(self._kompilate)
 
 
+# ------------------------------------------------------------------ Wartefrist
+# Bauplan analysen/bauplan_gpu_wartefrist.md, Stufe 1 (Fassung 3, abgenickt 28.09.2026
+# 16:16:13). ANLASS: im Release-Lauf 0.1.1.001 (Intel, Test 1) brach der i915-Treiber einen
+# GPU-Auftrag nach seiner eigenen Frist ab (Wirt-Journal 14:27:15 „Fence expiration time
+# out“), und der Rechenstrang wartete in `wait()` ohne Frist weiter: kein Fehler, kein
+# Neustart, /health gruen, bis der Job-Watchdog nach `analyse_timeout_s` schoss. Seitdem
+# wartet JEDE Einreichung dieser Engine an EINER Stelle (`abwarten`) mit Frist.
+# DIE FRIST ist der Config-Wert `inferenz_frist_s` (Werkswert und Herleitung in
+# verifyd.load_config). Sie kommt als Start-Argument `--inferenz-frist-s` in den Prozess und
+# hier nur ueber `frist_ms` herein — kein Literal in dieser Datei.
+# NACH DEM RISS gilt der GPU-Kontext als nicht vertrauenswuerdig: kein Rueckfall, keine
+# Wiederholung auf ihm. Der Worker beantwortet den Job als GPU-Haenger und bittet um sein
+# Ende (worker_dienst.Dienst.job_rechnen), der Dienst schiesst den Prozess
+# (verifyd.WorkerDienst.job). EHRLICHE GRENZE: `wait_for` (Frist in Millisekunden, True =
+# fertig) beendet nichts auf der Karte; ob der Treiber den Auftrag spaeter noch abschliesst,
+# sieht diese Stelle nicht.
+class InferenzHaenger(RuntimeError):
+    """Eine eingereichte Inferenz ist nicht binnen ihrer Frist zurueckgekehrt (`abwarten`).
+    Traegt den Text der ERROR-Zeile; der Kontext gilt danach als nicht vertrauenswuerdig."""
+
+
+def frist_ms(a):
+    """Die Wartefrist dieses Prozesses aus dem Start-Argument `--inferenz-frist-s`.
+    -> Millisekunden (int); ohne gueltigen Wert SystemExit — diese Engine wartet nie ohne Frist."""
+    try:
+        ms = int(round(float(getattr(a, "inferenz_frist_s", None)) * 1000.0))
+    except (TypeError, ValueError):
+        ms = 0
+    if ms <= 0:
+        raise SystemExit("no inference deadline given (--inferenz-frist-s, config "
+                         "inferenz_frist_s) — the OpenVINO engine does not wait for the "
+                         "GPU without one")
+    return ms
+
+
+def abwarten(req, frist, marke, geo=None):
+    """Auf EINE eingereichte Inferenz warten, hoechstens `frist` Millisekunden.
+    -> None, wenn sie fertig ist; sonst eine ERROR-Zeile und InferenzHaenger.
+
+    Gerufen INNERHALB der Mess-Klammer `im.Einreichung`: die Tiefe (`im.offene()`) zaehlt die
+    haengende Einreichung mit, und die Klammer bucht ihre Dauer auch im Fehlerfall. Die
+    Job-Kennung ist die Marke des Buchs dieses Strangs (Job-Id der Analyse); Wege ohne Buch
+    (Hintergrund-Jobs, Warmlauf ohne Ereignis) nennen keine."""
+    if req.wait_for(frist):
+        return
+    buch = im.buch_laufend()
+    teile = (f"{marke} did not return within the {frist / 1000.0:g} s deadline "
+             f"(inferenz_frist_s) — {GERAET}, {geo or 'n/a'}, inflight {im.offene()}, "
+             f"job {getattr(buch, 'marke', '') or 'n/a'}")
+    _log.error(f"inference HANG: {teile}; the request is abandoned, no retry on this GPU "
+               f"context")
+    raise InferenzHaenger(f"inference HANG: {teile}")
+
+
 # ------------------------------------------------------------------ Lauf
 class Satz:
     """Alles, was EIN Rechenstrang fuer sich braucht (v7): je Kompilat eine
@@ -706,6 +727,12 @@ class Satz:
 
     def __init__(self, g):
         self.g = g
+        # .546: die Marken der Inferenz-Messung stehen EINMAL hier, statt je
+        # Einreichung eine Zeichenkette zu bauen — ein Ereignis reicht in der
+        # Groessenordnung tausend Anfragen ein.
+        self.m_det = "det"
+        self.m_crop = {k: f"crop:{k}" for k in wk.STUFEN}
+        self.m_modell = {k: f"modell:{k}" for k in wk.STUFEN}
         self.rgb = g.ctx.create_tensor(ov.Type.f32, ov.Shape([1, 3, g.H, g.W]), {})
         self.det_req = g.pre.create_infer_request()
         self.det_req.set_tensor(NAME_RGB, self.rgb)
@@ -746,8 +773,11 @@ class Satz:
         als numpy holen (Probe 12.09.). -> die neun Detektor-Ausgaenge"""
         np.copyto(self.y_t.data, y)
         np.copyto(self.uv_t.data, uv)
-        self.det_req.start_async()
-        self.det_req.wait()
+        # .546: die Klammer misst Wanduhr-Start, Dauer und Tiefe DIESER
+        # Einreichung (core/inferenzmessung.py). Sie fasst die Rechnung nicht an.
+        with im.Einreichung(self.m_det, self.g.marke):
+            self.det_req.start_async()
+            abwarten(self.det_req, self.g.frist_ms, self.m_det, self.g.marke)
         return [self.det_req.get_output_tensor(i).data for i in range(self.g.det_n)]
 
     def _ruf(self, k, thetas):
@@ -756,10 +786,12 @@ class Satz:
         -> je Gesicht ein Tupel seiner Ausgabezeilen"""
         c_req, m_req, _zw, n_aus, th_t = self.stufen[k]
         np.copyto(th_t.data, np.stack(thetas))
-        c_req.start_async()                              # Ausgang 'crop' ist ein
-        c_req.wait()                                     # Geraete-Tensor
-        m_req.start_async()
-        m_req.wait()
+        with im.Einreichung(self.m_crop[k], self.g.marke):
+            c_req.start_async()                          # Ausgang 'crop' ist ein
+            abwarten(c_req, self.g.frist_ms, self.m_crop[k], self.g.marke)   # Geraete-Tensor
+        with im.Einreichung(self.m_modell[k], self.g.marke):
+            m_req.start_async()
+            abwarten(m_req, self.g.frist_ms, self.m_modell[k], self.g.marke)
         werte = [m_req.get_output_tensor(j).data for j in range(n_aus)]
         # Kopie: die Ausgaenge sind Sichten in die Tensoren der Anfrage, und der
         # naechste Aufruf ueberschreibt sie.
@@ -791,12 +823,14 @@ class Satz:
         np.copyto(iy_t.data, np.stack([z[1] for z in zuege]))
         np.copyto(mu_t.data, np.stack([z[2] for z in zuege]))
         np.copyto(mv_t.data, np.stack([z[3] for z in zuege]))
-        c_req.start_async()
-        c_req.wait()
+        with im.Einreichung(self.m_crop[wk.FD], self.g.marke):
+            c_req.start_async()
+            abwarten(c_req, self.g.frist_ms, self.m_crop[wk.FD], self.g.marke)
         sL = np.array(c_req.get_tensor(NAME_SL).data)
         sL2 = np.array(c_req.get_tensor(NAME_SL2).data)
-        m_req.start_async()
-        m_req.wait()
+        with im.Einreichung(self.m_modell[wk.FD], self.g.marke):
+            m_req.start_async()
+            abwarten(m_req, self.g.frist_ms, self.m_modell[wk.FD], self.g.marke)
         pts = m_req.get_output_tensor(0).data
         return [(np.array(pts[i]), float(sL[i]), float(sL2[i])) for i in range(len(thetas))]
 
@@ -824,60 +858,6 @@ class Satz:
         zug0 = wk.leinwand_zug([0, 0, wk.LEINWAND - 2, wk.LEINWAND - 2], self.g.W, self.g.H)
         self._ruf_fd([th0] * wk.AUFRUF_BREITE, [zug0] * wk.AUFRUF_BREITE)
 
-    def probe(self, roh=False):
-        """DIE KOMPILAT-PROBE (E2d): ein FESTER Pruefvektor durch ALLE Stufen dieses
-        Satzes, Stufe fuer Stufe mit Fingerabdruck.
-
-        WOZU. Am 13.09. hat ein Lauf ueber einen fremd beschriebenen Kompilat-Cache die
-        ERKENNUNG falsch gerechnet, waehrend Detektionen, Frames und Guete-Werte
-        unauffaellig blieben: Score 0,441 -> 0,421 (in der E2b-Eichung bis 0,073), und
-        NICHTS im Lauf sagte etwas. Genau diese Klasse — „das geladene Kompilat rechnet
-        anders als das gemessene" — darf nie wieder still sein. Der Pruefvektor haengt
-        NICHT an Bildern, Clips oder Referenzen: er entsteht aus PROBE_SAAT und der
-        Geometrie, ist also auf jeder Maschine derselbe.
-
-        WAS SIE NICHT KANN, benannt: sie weiss nicht, welcher Wert RICHTIG ist. Sie
-        liefert einen Fingerabdruck; die Aussage „gleich wie beim Bau" macht erst der
-        Vergleich gegen die Eichmarke (worker_dienst). Auf anderer Hardware, anderem
-        Treiber oder anderer OpenVINO-Fassung sind andere Zahlen richtig — deshalb
-        traegt die Eichmarke ihr Umfeld mit sich.
-        -> {stufe: md5 der Ausgabe-Bytes, 'r_norm': die zwei Feature-Normen}"""
-        import hashlib                                      # noqa: PLC0415
-        g = self.g
-        y, uv = probe_nv12(g.H, g.W)
-        box = probe_box(g.W, g.H)
-        kps = probe_kps(box)
-        aus = {}
-        d = self.det(y, uv)
-        aus["det"] = hashlib.md5(b"".join(np.ascontiguousarray(x, np.float32).tobytes()
-                                          for x in d)).hexdigest()[:12]
-        th = {"e": wk.theta_e(box, g.W, g.H, g.seiten["e"], g.nm),
-              "t": wk.theta_t(kps, g.seiten["t"][0], g.nm),
-              "p": wk.theta_p(box, g.W, g.H, g.nm),
-              "r": wk.theta_t(kps, g.seiten["r"][0], g.nm)}
-        for k in wk.KASKADE:
-            werte = self._ruf(k, [th[k]] * wk.AUFRUF_BREITE)
-            aus[k] = hashlib.md5(b"".join(np.ascontiguousarray(v, np.float32).tobytes()
-                                          for zeile in werte for v in zeile)).hexdigest()[:12]
-            if k == "r":
-                # Die Feature-Norm als ZAHL dazu: sie ist die Groesse, an der die
-                # Verschiebung vom 13.09. am deutlichsten hing (best_norm bis 6,58),
-                # und eine Zahl liest ein Mensch, einen Hash nicht.
-                aus["r_norm"] = [round(float(zeile[1]), 4) for zeile in werte]
-                # Das Embedding selbst als VERGLEICHBARE Zahl: der Hash sagt nur
-                # „anders", nicht „wie viel anders". Der Wert, der das Urteil traegt,
-                # ist der Kosinus — also wird er gegen die Eichmarke gerechnet.
-                if roh:
-                    aus["_r_emb"] = np.asarray(werte[0][0], np.float64).tolist()
-        th_fd, _M = wk.theta_fd(box, g.seiten[wk.FD][0], g.nm)
-        zug = wk.leinwand_zug(box, g.W, g.H)
-        werte = self._ruf_fd([th_fd] * wk.AUFRUF_BREITE, [zug] * wk.AUFRUF_BREITE)
-        aus[wk.FD] = hashlib.md5(
-            b"".join(np.ascontiguousarray(v, np.float32).tobytes()
-                     for p, sL, sL2 in werte
-                     for v in (p, np.float32(sL), np.float32(sL2)))).hexdigest()[:12]
-        return aus
-
 
 class Geometrie:
     """Die Kompilate EINER Clip-Geometrie (v7): der Vorverarbeitungs-Graph mit den
@@ -889,9 +869,11 @@ class Geometrie:
     Einzelstrang und die Mehrstrang-Fassung, ohne dass eine der beiden eine zweite
     Bauvorschrift braucht."""
 
-    def __init__(self, core, ctx, W, H, best):
+    def __init__(self, core, ctx, W, H, best, frist):
         t0 = time.monotonic()
         self.core, self.ctx, self.W, self.H = core, ctx, W, H
+        self.marke = f"{W}x{H}"                        # .546: Geometrie der Inferenz-Messung
+        self.frist_ms = frist                          # Wartefrist der Engine (`abwarten`)
         self.pre, self.det_wh, self.det_scale, self.det_n = graph_pre_det(core, H, W)
         self.bestand, self.seiten = best, best.seiten
         geteilt0 = best.bau_s
@@ -1008,8 +990,13 @@ class BildStufen:
             req, n_aus = eintrag
             t = req.get_tensor("leinwand")
             np.copyto(t.data, leinwand)
-            req.start_async()
-            req.wait()
+            # .546: auch der Bild-Weg reicht auf dieselbe Engine ein und gehoert
+            # deshalb in dieselbe Messung — mit eigener Marke, damit ein Katalog-
+            # oder Ernte-Lauf nicht als Analyse-Inferenz gelesen wird.
+            geo = f"{det_wh[0]}x{det_wh[1]}"
+            with im.Einreichung("bild:det", geo):
+                req.start_async()
+                abwarten(req, self.engine.frist_ms, "bild:det", geo)
             return [np.array(req.get_output_tensor(i).data) for i in range(n_aus)]
 
     def det_normiert(self):
@@ -1030,10 +1017,12 @@ class BildStufen:
             req, n_aus = eintrag
             aus = []
             t = req.get_tensor(NAME_CROP)
+            marke = f"bild:{k}"                            # .546, s. BildStufen.det
             for zeile in np.asarray(X, np.float32):
                 np.copyto(t.data, zeile[None])
-                req.start_async()
-                req.wait()
+                with im.Einreichung(marke):
+                    req.start_async()
+                    abwarten(req, self.engine.frist_ms, marke)
                 aus.append(tuple(np.array(req.get_output_tensor(j).data[0])
                                  for j in range(n_aus)))
             return aus
@@ -1050,6 +1039,10 @@ class Engine:
 
     name = "ov"
     stufen_folge = wk.STUFEN
+    # Die Ausnahme, mit der diese Engine einen gerissenen GPU-Auftrag meldet (`abwarten`).
+    # worker_dienst liest sie per `getattr` (dasselbe Muster wie `inferenz_buch_start`): eine
+    # Engine ohne Wartefrist liefert sie nicht, und der Worker bleibt dort beim alten Weg.
+    haenger_klasse = InferenzHaenger
 
     @staticmethod
     def argumente(ap):
@@ -1060,6 +1053,9 @@ class Engine:
                                         "am Cache-Zustand.")
 
     def __init__(self, a):
+        # Wartefrist-Stufe 1: ZUERST, vor jedem Geraete-Zugriff — ohne Frist bindet diese
+        # Engine gar nicht erst (SystemExit mit Grund, wie beim fehlenden Geraet darunter).
+        self.frist_ms = frist_ms(a)
         self.core = ov.Core()
         if GERAET not in self.core.available_devices:
             # LAUT, mit dem, was die Laufzeit WIRKLICH sieht. Bis .539 stand hier nur
@@ -1079,11 +1075,11 @@ class Engine:
             # .540: laut sagen, dass diese Variante ANDERS rechnet als die Vorgabe.
             # Ein stiller Genauigkeits-Wechsel waere die K1-Klasse: dieselbe
             # Software, andere Zahlen, und niemand sieht warum.
-            print(f"HINWEIS: {OV_PRAEZISION_ENV}={PRAEZISION_ZWANG} — ALLE Stufen "
-                  f"werden mit dem Genauigkeits-Hinweis '{PRAEZISION_ZWANG}' "
-                  f"gebaut statt in der Vorgabe des Geraets (auf Intel-iGPUs fp16). "
-                  f"Gesetzt vom gpu-legacy-Image; Anlass und Grenzen stehen bei "
-                  f"engine_ov._praezision_zwang.", flush=True)
+            _log.info(f"NOTE: {OV_PRAEZISION_ENV}={PRAEZISION_ZWANG} — ALL stages "
+                  f"are built with the precision hint '{PRAEZISION_ZWANG}' "
+                  f"instead of the device default (fp16 on Intel iGPUs). "
+                  f"Set by the gpu-legacy image; reason and limits are at "
+                  f"engine_ov._praezision_zwang.")
         # Der Geraete-Kontext, aus dem die Remote-Tensoren stammen (v7). Er ist der
         # Vorgabe-Kontext derselben iGPU, auf der die Kompilate laufen — nur so darf ein
         # Tensor zwischen zwei Kompilaten wandern.
@@ -1099,8 +1095,8 @@ class Engine:
 
         DER BEFUND. Ein Prozess, der einen TEIL seiner Kompilate aus dem Blob-Cache
         IMPORTIERT und den Rest neu KOMPILIERT, rechnet die ERKENNUNGS-Stufe anders.
-        Gemessen am festen Pruefvektor (Satz.probe), zwei Geometrien, derselbe Code,
-        dieselbe Maschine:
+        Gemessen am festen Pruefvektor (heute worker_kern.kompilat_probe), zwei
+        Geometrien, derselbe Code, dieselbe Maschine:
             alles selbst kompiliert   ||f|| 23,4062 / 24,3281
             warmer Cache (gemischt)   ||f|| 23,6406 / 23,2656
             Embedding dazu: max|d| 4,2e-03 bis 8,4e-03, 1-cos bis 1,8e-03
@@ -1139,40 +1135,54 @@ class Engine:
         cache = a.cache or ""
         umgebung = os.environ.get("SUSLIK_OV_CACHE")
         if umgebung and not cache:
-            print(f"HINWEIS: SUSLIK_OV_CACHE={umgebung} wird ignoriert — der "
-                  f"Kompilat-Cache ist seit E2d aus (Werte haengen sonst am "
-                  f"Cache-Zustand). Mit --cache <ordner> ausdruecklich einschalten.",
-                  file=sys.stderr, flush=True)
+            _log.warning(f"NOTE: SUSLIK_OV_CACHE={umgebung} is ignored — the "
+                  f"compiled-model cache is off since E2d (values would otherwise depend on the "
+                  f"cache state). Switch it on explicitly with --cache <folder>.")
         kalt, frei = None, None
         if cache:
             os.makedirs(cache, exist_ok=True)
             kalt = not any(os.scandir(cache))
             frei = shutil.disk_usage(cache).free
-            print(f"WARNUNG: Kompilat-Cache AUSDRUECKLICH EIN ({cache}). Gemessen "
-                  f"(E2d): ein Prozess, der teils importiert und teils kompiliert, "
-                  f"rechnet die Erkennung anders (1-cos bis 1,8e-03, ||f|| bis -1,07). "
-                  f"Nur fuer Messreihen, nicht fuer Urteile.",
-                  file=sys.stderr, flush=True)
+            _log.warning(f"WARNING: compiled-model cache EXPLICITLY ON ({cache}). Measured "
+                  f"(E2d): a process that partly imports and partly compiles "
+                  f"computes recognition differently (1-cos up to 1.8e-03, ||f|| down to -1.07). "
+                  f"For measurement series only, not for verdicts.")
             if kalt and frei < CACHE_BEDARF:
                 # Lieber ohne Cache neu bauen als einen abgeschnittenen hinterlassen, an
                 # dem der naechste Lauf hart scheitert (CACHE_BEDARF). Laut, nicht still.
-                print(f"WARNUNG: Cache {cache} hat nur {frei // 1024 // 1024} MB frei, "
-                      f"noetig sind rund {CACHE_BEDARF // 1024 // 1024} MB — Cache bleibt "
-                      f"AUS. Ordner auf eine groessere Ablage legen (nicht ins tmpfs "
-                      f"unter /tmp).", file=sys.stderr, flush=True)
+                _log.warning(f"WARNING: cache {cache} has only {frei // 1024 // 1024} MB free, "
+                      f"about {CACHE_BEDARF // 1024 // 1024} MB are needed — cache stays "
+                      f"OFF. Put the folder on a larger storage (not into the tmpfs "
+                      f"under /tmp).")
                 cache = ""
             else:
                 self.core.set_property({"CACHE_DIR": cache})
         return cache, kalt, frei
 
-    def frames(self, clip, W, H, schritt, wache=None):
-        return frames_nv12(clip, W, H, schritt, wache=wache)
+    def frames(self, clip, W, H, schritt, wache=None, sprung=None):
+        return frames_nv12(clip, W, H, schritt, wache=wache, sprung=sprung)
 
     def bild_stufen(self):
         """Der BILD-Weg dieser Engine (E2c), einmal je Prozess. -> BildStufen"""
         if getattr(self, "_bild", None) is None:
             self._bild = BildStufen(self)
         return self._bild
+
+    # ---------------------------------------------------- Inferenz-Messung (.546)
+    # Der Dienst greift die beiden Methoden per `getattr` ab (dasselbe Muster wie
+    # `speicher_melden`): eine Engine ohne Messung liefert sie nicht, und der
+    # Dienst laeuft dann unveraendert weiter. Das GERAET kommt aus `GERAET` und
+    # nicht aus einer zweiten Angabe — diese Engine bindet genau ein Geraet und
+    # faellt nicht zurueck (s. Kopf: „KEIN RUECKFALL: Geraet fest 'GPU'"). Ein
+    # Weg mit einem zweiten Geraet (NPU) fuehrt sein eigenes Buch und traegt
+    # damit seine eigene Kennung.
+    def inferenz_buch_start(self, marke="", melder=None):
+        """Die Messung fuer DIESEN Rechenstrang aufschlagen. -> Buch"""
+        return im.buch_start(marke, GERAET, melder)
+
+    def inferenz_buch_ende(self):
+        """Sie schliessen. -> Bilanz (dict) oder None"""
+        return im.buch_ende()
 
     def geometrie_bauen(self, geo):
         """Je Clip-Geometrie einmal die Kompilate. -> {(W, H): Geometrie}"""
@@ -1181,7 +1191,8 @@ class Engine:
         graphen = {}
         for W, H, _fps in geo.values():
             if (W, H) not in graphen:
-                graphen[(W, H)] = Geometrie(self.core, self.ctx, W, H, self.bestand)
+                graphen[(W, H)] = Geometrie(self.core, self.ctx, W, H, self.bestand,
+                                            self.frist_ms)
         return graphen
 
     def kopf_auskunft(self, graphen):

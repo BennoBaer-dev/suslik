@@ -58,6 +58,26 @@ T = {
     "readme.zurueck": 'Zurück',
         "readme.fuss": 'Dieser Text erscheint nach jedem Neustart einmal.',
         "readme.inhalt": 'Inhalt',
+    "readme.neu.titel": "Neu in dieser Version",
+    "readme.neu.text":
+        "In dieser Version hat sich viel geändert, angefangen damit, wie ich vor "
+        "einer Veröffentlichung teste. Jede Version läuft jetzt durch einen "
+        "Testlauf auf drei Testrechnern, bevor ich sie herausgebe. Ab und zu "
+        "hatten sich Fehler in den Code eingeschlichen. Der Testlauf soll sie "
+        "früher finden.\n\n"
+        "Die Gesichtserkennung arbeitet anders. Das Programm prüft weiterhin "
+        "jedes x-te Bild eines Events. Erreicht ein Gesicht bei einer bekannten "
+        "Person einen bestimmten Wert, geht eine Tür auf: Die nächsten 20 Bilder "
+        "werden einzeln geprüft. Erreicht ein Gesicht den Wert im Fenster "
+        "erneut, bleibt die Tür länger offen. Danach geht es wieder mit jedem "
+        "x-ten Bild weiter.\n\n"
+        "Grün wird ein Name erst nach drei Treffern. Jedes brauchbare Gesicht, "
+        "das zur Person passt, zählt als ein Treffer. Ein Gesicht, das nur kurz "
+        "gut zu sehen ist, hat damit eine bessere Chance: Sobald es entdeckt "
+        "ist, werden die Bilder direkt danach nicht mehr übersprungen.\n\n"
+        "Ich freue mich über jede Rückmeldung, besonders wenn die neue Erkennung "
+        "danebenliegt: ein falscher Name oder eine bekannte Person, die nicht "
+        "erkannt wird. Nur so kann ich an den Fehlern arbeiten.",
         "readme.generell.titel": 'Generelles',
     "readme.generell.text": 'Meine Szenario-Erkennung hängt an Frigates Personenerkennung. Sobald Frigate eine Person meldet, hole ich das ganze Personen-Ereignis. So ein Ereignis ist mal wenige Sekunden lang, mal mehrere Minuten. Ich schaue es komplett durch, um alle Personen darin zu finden.\n\nOb Frigates eigene Gesichtserkennung an ist, spielt dafür keine Rolle. Sie wird nur gebraucht, wenn Gesichter mit Frigate abgeglichen werden sollen.\n\nGeprüft wird nie der Detect-Stream, sondern die Aufzeichnung, also der beste Stream, den die Kamera an Frigate liefert.\n\nEine Prüfung startet auf zwei Wegen. Entweder über das Personen-Event aus Frigate, das ist der Szenario-Weg. Oder über den Live-Wächter: Der holt den laufenden Stream, direkt von der Kamera oder über Frigates Proxy, sucht darin Gesichter und startet von dort.\n\nEine Person wird auf drei Wegen erkannt. Über das Gesicht. Über die Person als Ganzes, allein aus dem Bild, ohne Gesicht. Über ein Vision-Modell, dieser Weg ist noch Beta.\n\nIch fahre hier 4K-Kameras mit einer möglichst hohen Bildrate, mindestens 15 Bilder je Sekunde. Die Bitrate ebenso hoch wie möglich. Eine niedrige Bitrate macht bewegte Gesichter unscharf.',
     "readme.aktuell.titel": 'Woran ich gerade arbeite',
@@ -427,7 +447,7 @@ T = {
     "konfiguration.neustart.frage": "Dienst jetzt neu starten? Die Verarbeitung pausiert ein paar Sekunden.",
     "antwort.neustart": "Neustart laeuft — diese Seite antwortet in wenigen Sekunden wieder.",
     "konfiguration.support.titel": "Fern-Support-Zugriff",
-    "konfiguration.support.satz": "Nur-Lese-Download benannter Bereiche (Logs, maskierte Config, Gesichter, Lernlaeufe, Koerpermaterial, Zustandsdateien) fuer den Inhaber des Support-Tokens. Der Ein/Aus-Schalter support_zugriff steht in der Tabelle unten, Standard aus. Jede Anfrage steht im Dienst-Log. Die Gesichts- und Koerperbereiche enthalten Bilder echter Personen — den Token mit Bedacht weitergeben. Ohne TLS vor diesem Dienst reist der Token im Klartext. Seit 0.1.0.395 erlaubt der Token auch eine Aktion: diesen Dienst aus der Ferne neu zu starten (POST /support/restart).",
+    "konfiguration.support.satz": "Nur-Lese-Download benannter Bereiche (Logs, maskierte Config, Gesichter, Lernlaeufe, Koerpermaterial, Zustandsdateien) fuer den Inhaber des Support-Tokens. Der Ein/Aus-Schalter support_zugriff steht in der Tabelle unten, Standard aus. Jede Anfrage steht im Dienst-Log. Die Gesichts- und Koerperbereiche enthalten Bilder echter Personen — den Token mit Bedacht weitergeben. Ohne TLS vor diesem Dienst reist der Token im Klartext. Der Token erlaubt auch vier Aktionen: diesen Dienst aus der Ferne neu starten (POST /support/restart), Ereignisse erneut durch die Erkennung schicken (POST /support/einspielen), die Feinmessung ein- und ausschalten (POST /support/feinmessung) und das Debug-Log ohne Neustart ein- und ausschalten (POST /support/debug).",
     "konfiguration.support.token_gesetzt": "Ein Support-Token ist gesetzt.",
     "konfiguration.support.token_fehlt": "Noch kein Support-Token.",
     "konfiguration.support.knopf_token": "Neuen Token erzeugen",

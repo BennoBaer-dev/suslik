@@ -63,6 +63,8 @@ import tempfile
 
 from core import ernte as _ern         # Namensregeln (Pfade, Warp) + gate_v_norm
 from core import messkarte as _mk      # Bilanz-Vertrag, EIN Vokabular
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 # Buchung je Ereignis — dieselbe Bauform wie core.ernte.fertig.jsonl: eine
 # Zeile je erledigtem Ereignis, angehaengt und geflusht. Sie ist die einzige
@@ -109,6 +111,7 @@ def fertig_lesen(lauf_dir):
                     d = json.loads(zeile)
                     je_eid[str(d["eid"])] = d
                 except Exception:                       # noqa: BLE001
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                     continue
     bilanzen = [d.get("bilanz") for d in je_eid.values() if d.get("bilanz")]
     v_ja = sum(int(d.get("v_ja") or 0) for d in je_eid.values())
@@ -160,6 +163,7 @@ def _warp_lesen(lauf_dir, rel, np_mod):
     try:
         return np_mod.load(os.path.join(lauf_dir, rel))
     except Exception:                                   # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
         return None
 
 
@@ -376,6 +380,7 @@ def warp_deckung(lauf_dir, eids):
                 try:
                     z = json.loads(roh)
                 except Exception:                       # noqa: BLE001
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                     continue
                 if not z.get("m"):
                     continue
@@ -386,7 +391,7 @@ def warp_deckung(lauf_dir, eids):
     return kand, mit, kand - mit
 
 
-def norm_job(lauf_dir, eids, schwellen, latten, messen=None, log=print,
+def norm_job(lauf_dir, eids, schwellen, latten, messen=None, log=_log,
              abbruch=None):
     """DER gebuendelte Norm-Schritt eines Laufs -> Ergebnis-Dict.
 
@@ -411,6 +416,7 @@ def norm_job(lauf_dir, eids, schwellen, latten, messen=None, log=print,
     .521). Kein Verlust, aber eine Ansage: bis .521 riss an dieser Stelle ein
     KeyError den ganzen Job.
     """
+    log = _logbuch.as_logger(log)      # E7: der Kommandozeilen-Weg (worker.py) reicht eine Funktion
     offen = offene_events(lauf_dir, eids)
     if messen is None:
         # FAIL-OPEN JE MODELL. Nichts wird angefasst: die Zeilen tragen
@@ -420,7 +426,7 @@ def norm_job(lauf_dir, eids, schwellen, latten, messen=None, log=print,
         # funktionierender Session noch messen kann.
         grund = ("feature-norm session not available — this run keeps every "
                  "finding on the norm axis and decides no stock line")
-        log(f"norm step: SIEVE AXIS OFF (n) — {grund}")
+        log.error(f"norm step: SIEVE AXIS OFF (n) — {grund}")
         return {"events": 0, "offen": len(offen), "bilanz": None,
                 "v_ja": 0, "v_nein": 0, "v_aus": 0, "warps_geraeumt": 0,
                 "achse_aus": grund, "abgebrochen": False,
@@ -451,7 +457,7 @@ def norm_job(lauf_dir, eids, schwellen, latten, messen=None, log=print,
     w_fehlt = int(((summe or {}).get("gruende") or {}).get(
         _mk.GRUND_WARP_FEHLT) or 0)
     if w_fehlt:
-        log(f"norm step: {w_fehlt} of {w_kand} handover candidate(s) carried "
+        log.error(f"norm step: {w_fehlt} of {w_kand} handover candidate(s) carried "
             f"no preserved warp tile — they could not be measured and fell on "
             f"the norm axis (fail-closed per finding)")
     if v_aus_g:
@@ -460,7 +466,7 @@ def norm_job(lauf_dir, eids, schwellen, latten, messen=None, log=print,
         # Vorrats-Linie aber nicht (sein Regime traegt die Achsen nicht). Bis
         # .521 riss genau das den Job mit einem KeyError — jetzt laeuft er
         # durch und sagt, was er nicht entschieden hat.
-        log(f"norm step: {v_aus_g} candidate line(s) still carry a stock "
+        log.warning(f"norm step: {v_aus_g} candidate line(s) still carry a stock "
             f"picture from an older run, but this run's regime has no stock "
             f"thresholds — their stock line stays untouched (no v decision on "
             f"this path)")

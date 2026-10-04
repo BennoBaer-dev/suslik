@@ -59,6 +59,27 @@ T = {
     "readme.zurueck": 'Retour',
         "readme.fuss": 'Ce texte apparaît une fois après chaque redémarrage.',
         "readme.inhalt": 'Sommaire',
+    "readme.neu.titel": "Nouveautés de cette version",
+    "readme.neu.text":
+        "Cette version change beaucoup de choses, à commencer par ma façon de "
+        "tester avant une publication. Chaque version passe maintenant par un "
+        "test sur trois machines de test avant que je la publie. De temps en "
+        "temps, des erreurs s'étaient glissées dans le code. Le test doit les "
+        "trouver plus tôt.\n\n"
+        "La reconnaissance faciale fonctionne autrement. Le programme vérifie "
+        "toujours une image sur x d'un événement. Quand un visage atteint un "
+        "certain score pour une personne connue, une porte s'ouvre : les 20 "
+        "images suivantes sont vérifiées une par une. Si un visage atteint de "
+        "nouveau ce score dans la fenêtre, la porte reste ouverte plus "
+        "longtemps. Ensuite, on revient à une image sur x.\n\n"
+        "Un nom ne passe au vert qu'après trois correspondances. Chaque visage "
+        "exploitable qui correspond à la personne compte comme une "
+        "correspondance. Un visage qui n'est net qu'un instant a maintenant une "
+        "meilleure chance : dès qu'il est repéré, les images juste après ne "
+        "sont plus sautées.\n\n"
+        "Tout retour me fait plaisir, surtout quand la nouvelle reconnaissance "
+        "se trompe : un mauvais nom, ou une personne connue qui n'est pas "
+        "reconnue. C'est la seule façon pour moi de travailler sur les erreurs.",
         "readme.generell.titel": 'Généralités',
     "readme.generell.text": "Ma détection de scénario repose sur la détection de personne de Frigate. Dès que Frigate signale une personne, je récupère tout l'événement personne. Un tel événement dure parfois quelques secondes, parfois plusieurs minutes. Je le parcours en entier pour y trouver toutes les personnes.\n\nQue la reconnaissance faciale de Frigate soit activée n'a pas d'importance. Elle ne sert que si vous voulez synchroniser les visages avec Frigate.\n\nLa vérification n'utilise jamais le flux de détection, mais l'enregistrement, c'est-à-dire le meilleur flux que la caméra fournit à Frigate.\n\nUne vérification démarre de deux façons. Soit par l'événement personne de Frigate, c'est la voie du passage. Soit par la veille en direct : elle prend le flux en cours, directement de la caméra ou via le proxy de Frigate, y cherche des visages et démarre à partir de là.\n\nUne personne est reconnue par trois voies. Par le visage. Par la personne entière, à partir de l'image seule, sans visage. Par un modèle de vision, et cette voie est encore en bêta.\n\nJ'utilise ici des caméras 4K avec la fréquence d'images la plus élevée possible, au moins 15 images par seconde. Le débit aussi haut que possible. Un débit faible rend flous les visages en mouvement.",
     "readme.aktuell.titel": 'Ce sur quoi je travaille',
@@ -434,7 +455,7 @@ T = {
     "konfiguration.neustart.frage": "Redémarrer le service maintenant ? Le traitement s'interrompt quelques secondes.",
     "antwort.neustart": "Redémarrage en cours — cette page répond de nouveau dans quelques secondes.",
     "konfiguration.support.titel": "Acces support a distance",
-    "konfiguration.support.satz": "Telechargement en lecture seule de zones nommees (logs, config masquee, visages, passes d'apprentissage, materiel corporel, fichiers d'etat) pour le detenteur du token de support. L'interrupteur support_zugriff se trouve dans le tableau ci-dessous, desactive par defaut. Chaque requete est ecrite dans le log du service. Les zones visages et corps contiennent des images de personnes reelles — remettez le token avec prudence. Sans TLS devant ce service, le token circule en clair. Depuis 0.1.0.395 le jeton permet aussi une action : redemarrer ce service a distance (POST /support/restart).",
+    "konfiguration.support.satz": "Telechargement en lecture seule de zones nommees (logs, config masquee, visages, passes d'apprentissage, materiel corporel, fichiers d'etat) pour le detenteur du token de support. L'interrupteur support_zugriff se trouve dans le tableau ci-dessous, desactive par defaut. Chaque requete est ecrite dans le log du service. Les zones visages et corps contiennent des images de personnes reelles — remettez le token avec prudence. Sans TLS devant ce service, le token circule en clair. Le jeton permet aussi quatre actions : redemarrer ce service a distance (POST /support/restart), renvoyer des evenements dans la reconnaissance (POST /support/einspielen), activer ou desactiver la mesure fine (POST /support/feinmessung) et activer ou desactiver le log de debug sans redemarrage (POST /support/debug).",
     "konfiguration.support.token_gesetzt": "Un token de support est defini.",
     "konfiguration.support.token_fehlt": "Pas encore de token de support.",
     "konfiguration.support.knopf_token": "Creer un nouveau token",

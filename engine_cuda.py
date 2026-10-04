@@ -59,6 +59,10 @@ import onnxruntime as ort                                # noqa: E402
 from onnx import TensorProto, helper, numpy_helper       # noqa: E402
 
 import face_audit                                        # noqa: E402  BATCH_STUFEN, Threads
+import decode                                            # noqa: E402  NVDEC-Eingang (Punkt 14)
+from core import tuer                                    # noqa: E402  KP2: Sprung-Kette der Tuer
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 EP = "CUDAExecutionProvider"
 OPSET = 16                                              # GridSample braucht >= 16
@@ -106,14 +110,6 @@ _MEM_PATTERN = {"an": False, "gemeldet": False}
 _ENV_ARENA_SCHLOSS = threading.Lock()
 
 
-def _melden(text):
-    """Eine Zeile ins Prozess-Log (fd 2) — dorthin, wo auch der Dienst seine
-    Aufbau-Zeilen schreibt. Kein Import von `worker_dienst`: der importiert diese
-    Datei, und ein Ringimport waere hier ein Startfehler statt einer Logzeile."""
-    try:
-        os.write(2, (f"engine_cuda: {str(text).strip()}\n").encode())
-    except Exception:                                    # noqa: BLE001
-        pass
 
 
 def arena_strategie_name():
@@ -144,7 +140,7 @@ def env_arena_registrieren(deckel_mb, strategie=None):
         if mb <= 0:
             if not _ENV_ARENA["gemeldet"]:
                 _ENV_ARENA["gemeldet"] = True
-                _melden("no VRAM cap — arena unbounded (pre-.531 behaviour)")
+                _log.info("no VRAM cap — arena unbounded (pre-.531 behaviour)")
             return False
         try:
             cfg = ort.OrtArenaCfg(mb * 1024 * 1024, ARENA_STRATEGIEN[strat], -1, -1)
@@ -156,13 +152,13 @@ def env_arena_registrieren(deckel_mb, strategie=None):
             # .531 weiter. Ein Prozess, der gar nicht startet, analysiert nichts —
             # und /health zeigt `env_arena: false`, der Betreiber sieht es.
             _ENV_ARENA["fehler"] = f"{type(e).__name__}: {e}"
-            _melden(f"ERROR: VRAM cap {mb} MiB could NOT be registered "
+            _log.error(f"ERROR: VRAM cap {mb} MiB could NOT be registered "
                     f"({_ENV_ARENA['fehler']}) — running WITHOUT a cap "
                     f"(pre-.531 behaviour)")
             return False
         _ENV_ARENA.update({"registriert": True, "deckel_mb": mb,
                            "strategie": strat, "geraet": GERAET_ID})
-        _melden(f"VRAM cap {mb} MiB registered on device {GERAET_ID} "
+        _log.info(f"VRAM cap {mb} MiB registered on device {GERAET_ID} "
                 f"({strat}, pid {os.getpid()}) — one shared arena for all sessions")
         # PINNED (Host-Speicher, NICHT Karte): ohne diese zweite Registrierung
         # behaelt jede Session ihre eigene Pinned-Arena. Der Zweig haengt
@@ -178,7 +174,7 @@ def env_arena_registrieren(deckel_mb, strategie=None):
                                                  ort.OrtArenaCfg(0, -1, -1, -1))
             _ENV_ARENA["pinned"] = True
         except Exception as e:                           # noqa: BLE001
-            _melden(f"WARN: pinned arena not registered ({type(e).__name__}: {e}) "
+            _log.warning(f"WARN: pinned arena not registered ({type(e).__name__}: {e}) "
                     f"— each session keeps its own host-memory arena; that is "
                     f"host RAM, not card memory, so the card cap still holds")
         return True
@@ -277,6 +273,7 @@ def fp16_bestand(ordner=None):
         with open(pfad, encoding="utf-8") as f:
             man = json.load(f)
     except Exception as e:                                 # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning ({}, {'stand': f'Manifest unlesbar: {type(e).__name__}: {...")
         return {}, {"stand": f"Manifest unlesbar: {type(e).__name__}: {e}", "ordner": ordner}
     pfade, dateien = {}, {}
     for stufe, e in sorted((man.get("modelle") or {}).items()):
@@ -301,34 +298,39 @@ def fp16_bestand(ordner=None):
 
 
 # ------------------------------------------------------------------ Decode
-def _ffmpeg_nv12(clip, schritt, hw):
+def _ffmpeg_nv12(clip, schritt, hw, sprung=None):
     """Die ffmpeg-Kette dieser Engine, EINMAL fuer beide Wege. Auswahl vor dem Download
     wie decode.FrameIter (decode.py:159-177), aber NV12 statt yuv420p und ohne
     cv2-Umrechnung. `hw=False` ist dieselbe Kette OHNE NVDEC und ohne hwdownload — der
-    Software-Rueckfall; sie endet auf demselben `format=nv12`."""
+    Software-Rueckfall; sie endet auf demselben `format=nv12`.
+    `sprung` (Bauplan K3, KP2): Ansatzpunkt der Tuer (core.tuer.Sprung), None = Clip-Anfang; Sprung und
+    Auswahl kommen aus core.tuer (eingang, auswahl), die Kette bleibt dieselbe."""
     # .536 B1a: `-nostdin` — ffmpeg darf den fd 0 seines Elternprozesses nicht
     # pollen. Im Worker ist das die Job-Pipe (s. worker_kern.nv12_strom, dort
     # steht der Byte-Beweis). Aendert nichts am Decoder und nichts an den Pixeln.
     basis = ["ffmpeg", "-nostdin", "-v", "warning"]
     if hw:
-        basis += ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
+        # Feldbefunde Punkt 14 (Issue #33): die NVDEC-Eingangsoptionen samt der aus der
+        # Flaechengrenze abgeleiteten Decoder-Threads stehen an EINER Stelle.
+        basis += decode.nvdec_eingang()
     rest = "hwdownload,format=nv12" if hw else "format=nv12"
-    return basis + ["-i", clip, "-map", "0:v:0",
-                    "-vf", f"select='not(mod(n\\,{schritt}))',{rest}",
+    return basis + tuer.eingang(sprung) + ["-i", clip, "-map", "0:v:0",
+                    "-vf", f"{tuer.auswahl(schritt, sprung)},{rest}",
                     "-fps_mode", "passthrough", "-f", "rawvideo", "-"]
 
 
-def frames_nv12(clip, W, H, schritt, wache=None):
+def frames_nv12(clip, W, H, schritt, wache=None, sprung=None):
     """Sample-Frames als (i, y, uv) ueber NVDEC, MIT LAUTEM SOFTWARE-RUECKFALL (E2d).
     Regel und Begruendung stehen EINMAL in worker_kern.nv12_mit_rueckfall; der Byte-Weg
     dahinter ist worker_kern.nv12_strom. Der NVDEC-Byte-Beweis vom 12.09. deckt die
     HW-Kette; der Nachweis, dass die SW-Kette hier dieselben NV12-Bytes liefert, steht
     fuer die CUDA-Seite noch aus (auf dem NB zu messen, wie fuer VAAPI in E2d gemessen) —
     diese Fassung ist strukturell gleich, nicht gemessen.
-    `wache` (E2): dict fuer Kette/rc/decoder_fehler, dazu hwdec_fallback/hwdec_grund."""
-    return wk.nv12_mit_rueckfall(_ffmpeg_nv12(clip, schritt, True),
-                                 _ffmpeg_nv12(clip, schritt, False),
-                                 W, H, schritt, "NVDEC", wache=wache)
+    `wache` (E2): dict fuer Kette/rc/decoder_fehler, dazu hwdec_fallback/hwdec_grund.
+    `sprung` (KP2): die Kette setzt dort an, die Bildnummern zaehlen ab core.tuer.start(sprung)."""
+    return wk.nv12_mit_rueckfall(_ffmpeg_nv12(clip, schritt, True, sprung),
+                                 _ffmpeg_nv12(clip, schritt, False, sprung),
+                                 W, H, schritt, "NVDEC", wache=wache, start=tuer.start(sprung))
 
 
 # ------------------------------------------------------------------ Modelle vorbereiten
@@ -468,7 +470,7 @@ def _sitzung(modell_bytes):
         so.enable_mem_pattern = False
         if not _MEM_PATTERN["gemeldet"]:
             _MEM_PATTERN["gemeldet"] = True
-            _melden(f"mem-pattern: off (pid {os.getpid()})")
+            _log.info(f"mem-pattern: off (pid {os.getpid()})")
     # .531: nur wenn die Env-Arena wirklich steht. Ohne Registrierung waere der
     # Schluessel eine Zusage ohne Deckung.
     if _ENV_ARENA["registriert"]:
@@ -856,11 +858,11 @@ def _shrink_ro():
             ro = ort.RunOptions()
             ro.add_run_config_entry("memory.enable_memory_arena_shrinkage", "gpu:0")
             _ARENA_SHRINK["ro"] = ro
-            _melden("arena shrink on: card memory is handed back after every "
+            _log.info("arena shrink on: card memory is handed back after every "
                     "recognition chain (measured -20 % peak, +9-12 % time)")
         except Exception as e:                           # noqa: BLE001
             _ARENA_SHRINK["ro"] = False
-            _melden(f"WARN: arena shrink not available ({type(e).__name__}: {e}) "
+            _log.warning(f"WARN: arena shrink not available ({type(e).__name__}: {e}) "
                     f"— running without it")
     return _ARENA_SHRINK["ro"] or None
 
@@ -1485,8 +1487,8 @@ class Engine:
             aus[k] = p
         return aus
 
-    def frames(self, clip, W, H, schritt, wache=None):
-        return frames_nv12(clip, W, H, schritt, wache=wache)
+    def frames(self, clip, W, H, schritt, wache=None, sprung=None):
+        return frames_nv12(clip, W, H, schritt, wache=wache, sprung=sprung)
 
     def bild_stufen(self):
         """Der BILD-Weg dieser Engine (E2c), einmal je Prozess. -> BildStufen"""

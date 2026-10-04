@@ -15,6 +15,8 @@ import html
 import re
 
 from core.sprache import t
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 
 def gt_leiste(eid, schnell, andere, cur="", vorschlag=None):
@@ -105,6 +107,7 @@ def fehler_grund(log_pfad, n=220):
         with open(log_pfad, encoding="utf-8", errors="replace") as f:
             zeilen = [z.strip() for z in f if z.strip()]
     except Exception:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning ''")
         return ""
     kand = ""
     for z in zeilen:

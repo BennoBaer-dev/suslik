@@ -65,6 +65,8 @@ in keiner Vorschlagsgruppe.
 import collections
 import hashlib
 import os
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 # ---------------------------------------------------------------- Vertrag
 # DIE Aufzaehlung der Urteilsworte (QS-Ebenen-Regel: eine zentrale Quelle statt
@@ -229,6 +231,7 @@ def md5_gruppen(master_dir, dateien):
             with open(pfad, "rb") as fh:
                 h = hashlib.md5(fh.read()).hexdigest()      # noqa: S324
         except OSError:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
             continue                     # nicht lesbar -> keine Dubletten-Aussage
         je_hash[h].append((p, f))
     aus = []

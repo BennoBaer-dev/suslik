@@ -100,6 +100,8 @@ import threading
 import time
 
 from core import atomar as _atomar   # .411: eindeutige tmp beim atomaren Schreiben (stdlib-only)
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 ORDNER_TEILE = ("state", "anwesenheit")
 FENSTER_DATEI = "fenster.json"    # Tagesfenster, einmal je Kalendertag (M6)
@@ -219,7 +221,7 @@ def _spanne_klemmen(ts_von, ts_bis, log):
         ts_bis = ts_von
     if ts_bis - ts_von > SPANNE_MAX_S:
         if log:
-            log(f"anwesenheit: span {ts_bis - ts_von:.0f} s clamped to "
+            log.error(f"anwesenheit: span {ts_bis - ts_von:.0f} s clamped to "
                 f"{SPANNE_MAX_S} s (broken end time)")
         ts_bis = ts_von + SPANNE_MAX_S
     return ts_von, ts_bis
@@ -250,7 +252,7 @@ def _fehler_loggen(log, text):
         if laut:
             _FEHLER_LOG_MONO[0] = jetzt
     if laut and log:
-        log(f"anwesenheit: {text} ({_ZAEHLER['fehler']} write failures so far)")
+        log.error(f"anwesenheit: {text} ({_ZAEHLER['fehler']} write failures so far)")
 
 
 def _zeile_schreiben(cfg, datum, zeile, log):
@@ -271,11 +273,11 @@ def _zeile_schreiben(cfg, datum, zeile, log):
                 neu = pfad not in _DECKEL_GEMELDET
                 _DECKEL_GEMELDET.add(pfad)
             if neu and log:
-                log(f"anwesenheit: {os.path.basename(pfad)} exceeds "
+                log.warning(f"anwesenheit: {os.path.basename(pfad)} exceeds "
                     f"{DECKEL_B // (1024 * 1024)} MB — still appending, readers "
                     f"only see the last {LESE_DECKEL_B // (1024 * 1024)} MB")
     except OSError:
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     return True
 
 
@@ -579,6 +581,7 @@ def _zeilen_lesen(pfad):
     except FileNotFoundError:
         return [], False
     except Exception:                                        # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning ([], False)")
         return [], False
     return roh.splitlines(), gekappt
 
@@ -712,6 +715,7 @@ def tage_vorhanden(cfg):
     try:
         namen = os.listdir(o)
     except OSError:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning []")
         return []
     return sorted(m.group(1) for m in (TAG_RE.match(n) for n in namen) if m)
 
@@ -754,6 +758,7 @@ def fenster_rechnen(cfg, heute):
                 von = float(d["ts"])
                 bis = float(d.get("bis") if d.get("bis") is not None else von)
             except Exception:                                # noqa: BLE001
+                _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                 continue
             marken += 1
             proben.append(_stundenbruch(von))
@@ -796,7 +801,7 @@ def fenster(cfg, heute=None, log=None):
         if isinstance(d, dict) and d.get("datum") == heute and "von" in d and "bis" in d:
             return d
     except Exception:                                        # noqa: BLE001
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     d = fenster_rechnen(cfg, heute)
     d["datum"] = heute
     try:
@@ -807,7 +812,7 @@ def fenster(cfg, heute=None, log=None):
         _atomar.json_schreiben(pfad, d, indent=None, ensure_ascii=True)   # Bytes wie bisher
     except Exception as e:                                   # noqa: BLE001
         if log:
-            log(f"anwesenheit: window file not written: {type(e).__name__}: {e}")
+            log.error(f"anwesenheit: window file not written: {type(e).__name__}: {e}")
     return d
 
 
@@ -839,7 +844,7 @@ def kuerzen(cfg, tage, log=None, heute=None):
                 weg += 1
             except OSError as e:
                 if log:
-                    log(f"anwesenheit: trim could not remove {name}: {e}")
+                    log.error(f"anwesenheit: trim could not remove {name}: {e}")
                 behalten += 1
         else:
             behalten += 1

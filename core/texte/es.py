@@ -56,6 +56,25 @@ T = {
     "readme.zurueck": 'Volver',
         "readme.fuss": 'Este texto aparece una vez tras cada reinicio.',
         "readme.inhalt": 'Contenido',
+    "readme.neu.titel": "Novedades de esta versión",
+    "readme.neu.text":
+        "Esta versión cambia mucho, empezando por cómo pruebo antes de una "
+        "publicación. Ahora cada versión pasa por una prueba en tres máquinas "
+        "de prueba antes de que la publique. De vez en cuando se habían colado "
+        "errores en el código. La prueba debe encontrarlos antes.\n\n"
+        "El reconocimiento facial funciona de otra manera. El programa sigue "
+        "revisando una de cada x imágenes de un evento. Cuando una cara alcanza "
+        "cierta puntuación para una persona conocida, se abre una puerta: las "
+        "20 imágenes siguientes se revisan una por una. Si una cara vuelve a "
+        "alcanzar esa puntuación dentro de la ventana, la puerta queda abierta "
+        "más tiempo. Después se vuelve a una de cada x imágenes.\n\n"
+        "Un nombre solo se pone verde tras tres coincidencias. Cada cara "
+        "aprovechable que encaja con la persona cuenta como una coincidencia. "
+        "Una cara que solo se ve bien un momento tiene ahora más posibilidades: "
+        "en cuanto se detecta, las imágenes justo después ya no se saltan.\n\n"
+        "Me alegra recibir cualquier comentario, sobre todo cuando el nuevo "
+        "reconocimiento se equivoca: un nombre equivocado, o una persona "
+        "conocida que no se reconoce. Solo así puedo trabajar en los errores.",
         "readme.generell.titel": 'General',
     "readme.generell.text": 'Mi reconocimiento de recorridos depende de la detección de personas de Frigate. En cuanto Frigate avisa de una persona, me traigo el evento de persona entero. Un evento así dura unas veces pocos segundos y otras varios minutos. Lo reviso de principio a fin para encontrar a todas las personas que aparecen en él.\n\nQue el reconocimiento facial propio de Frigate esté activado no importa. Solo hace falta si quieres sincronizar caras con Frigate.\n\nLa comprobación nunca usa el stream de detección, sino la grabación, es decir el mejor stream que la cámara entrega a Frigate.\n\nUna comprobación arranca por dos vías. O por el evento de persona de Frigate, esa es la vía del recorrido. O por el vigilante en vivo: toma el stream en curso, directo de la cámara o por el proxy de Frigate, busca caras y arranca desde ahí.\n\nUna persona se reconoce por tres vías. Por la cara. Por la persona entera, solo a partir de la imagen, sin cara. Por un modelo de visión, y esa vía sigue en beta.\n\nAquí uso cámaras 4K con la tasa de imagen lo más alta posible, al menos 15 imágenes por segundo. El bitrate igual de alto. Un bitrate bajo deja borrosas las caras en movimiento.',
     "readme.aktuell.titel": 'En qué estoy trabajando',
@@ -420,7 +439,7 @@ T = {
     "konfiguration.neustart.frage": "¿Reiniciar el servicio ahora? El procesamiento se pausa unos segundos.",
     "antwort.neustart": "Reiniciando — esta página vuelve a responder en unos segundos.",
     "konfiguration.support.titel": "Acceso remoto de soporte",
-    "konfiguration.support.satz": "Descarga de solo lectura de areas con nombre (logs, config enmascarada, caras, corridas de aprendizaje, material corporal, archivos de estado) para quien tenga el token de soporte. El interruptor support_zugriff esta en la tabla de abajo, apagado por defecto. Cada peticion queda en el log del servicio. Las areas de caras y cuerpo contienen imagenes de personas reales — entrega el token con cuidado. Sin TLS delante de este servicio el token viaja en texto plano. Desde 0.1.0.395 el token tambien permite una accion: reiniciar este servicio a distancia (POST /support/restart).",
+    "konfiguration.support.satz": "Descarga de solo lectura de areas con nombre (logs, config enmascarada, caras, corridas de aprendizaje, material corporal, archivos de estado) para quien tenga el token de soporte. El interruptor support_zugriff esta en la tabla de abajo, apagado por defecto. Cada peticion queda en el log del servicio. Las areas de caras y cuerpo contienen imagenes de personas reales — entrega el token con cuidado. Sin TLS delante de este servicio el token viaja en texto plano. El token tambien permite cuatro acciones: reiniciar este servicio a distancia (POST /support/restart), volver a pasar eventos por el reconocimiento (POST /support/einspielen), encender o apagar la medicion fina (POST /support/feinmessung) y encender o apagar el log de depuracion sin reiniciar (POST /support/debug).",
     "konfiguration.support.token_gesetzt": "Hay un token de soporte establecido.",
     "konfiguration.support.token_fehlt": "Aun no hay token de soporte.",
     "konfiguration.support.knopf_token": "Crear token nuevo",

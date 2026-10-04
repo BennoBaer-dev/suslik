@@ -24,6 +24,8 @@ import webui
 from core import areas as _areas_mod
 from core.sprache import t, t_n
 from webui.bausteine import KAT_FARBE, bild_nn, gt_leiste, kat_map, kat_wort
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 
 
@@ -86,7 +88,7 @@ def render_offen(cfg, log_path, qs, gt_schnellpersonen, master_persons):
                 try:
                     rows.append(json.loads(l))
                 except Exception:
-                    pass
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     gtmap = szenarien.gt_labelmap(             # .313: EINE Lese-Quelle
         os.path.join(cfg["data_dir"], "state", "ground_truth.jsonl"))
     gt_schnell = gt_schnellpersonen(rows, cfg)
@@ -215,7 +217,7 @@ def render_ereignisse(cfg, log_path, qs, gt_schnellpersonen, master_persons):
                     if r.get("eid"):
                         by[r["eid"]] = r       # letzte Zeile pro Event gewinnt
                 except Exception:
-                    pass       # abgerissene Zeile (Crash mid-write) darf die UI nicht killen
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")       # abgerissene Zeile (Crash mid-write) darf die UI nicht killen
     rows = sorted(by.values(), key=lambda r: -(r.get("start") or r.get("ts", 0)))
     f_kam = qs.get("kamera", [""])[0]
     f_per = qs.get("person", [""])[0]

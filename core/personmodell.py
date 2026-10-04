@@ -22,6 +22,8 @@ import os
 import time
 
 import numpy as np
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 WURZEL = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
@@ -69,7 +71,7 @@ def _person_backend(data_dir=None):
             if wert:
                 return str(wert)
         except (OSError, ValueError):
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     return "cpu"
 
 
@@ -91,6 +93,25 @@ def _providers(backend):
     return ["CPUExecutionProvider"]
 
 
+# Feldbefunde Punkt 6 (O290): hat die zuletzt gebaute Sitzung dieses Prozesses ihr
+# eingestelltes Geraet NICHT gebunden? Der Worker legt das Merkmal in jede Antwort
+# (worker_dienst, Feld `person`), der Dienst zeigt es in /health (`worker.person`).
+FALLBACK = {"fallback": False, "backend": None}
+
+
+def _bindung_pruefen(sess, backend):
+    """Nach dem Bau: bindet die Sitzung den eingestellten Provider? Sonst rechnet
+    onnxruntime still auf der CPU (Vorbild face_audit._ort_session) — eine ERROR-Zeile
+    je Sitzung und das Merkmal FALLBACK, KEIN Neuaufbau. -> dieselbe Sitzung"""
+    gewollt = _providers(backend)[0]
+    name = gewollt[0] if isinstance(gewollt, tuple) else gewollt
+    gefallen = name != "CPUExecutionProvider" and name not in sess.get_providers()
+    FALLBACK.update(fallback=gefallen, backend=backend)
+    if gefallen:
+        _log.error(f"person_backend {backend} not bound — computing on CPU")
+    return sess
+
+
 def session_bauen(backbone, data_dir=None):
     """DIE eine ORT-Session-Fabrik des Personen-Pfads (Training UND Serving,
     personlive nutzt sie mit). Scheitert das konfigurierte Backend, faellt
@@ -99,14 +120,16 @@ def session_bauen(backbone, data_dir=None):
     from face_audit import _ort_thread_opts
     backend = _person_backend(data_dir)
     try:
-        return ort.InferenceSession(_modell_pfad(backbone),
-                                    providers=_providers(backend),
-                                    sess_options=_ort_thread_opts())
+        return _bindung_pruefen(ort.InferenceSession(_modell_pfad(backbone),
+                                                     providers=_providers(backend),
+                                                     sess_options=_ort_thread_opts()),
+                                backend)
     except Exception:
         if backend == "cpu":
             raise
-        print(f"[personmodell] person_backend={backend} nicht verfuegbar — "
-              "LAUTER Rueckfall auf CPU", flush=True)
+        _log.error(f"[personmodell] person_backend={backend} not available — "
+              "LOUD fallback to CPU")
+        FALLBACK.update(fallback=True, backend=backend)
         return ort.InferenceSession(_modell_pfad(backbone),
                                     providers=["CPUExecutionProvider"],
                                     sess_options=_ort_thread_opts())
@@ -136,6 +159,7 @@ def fremd_pfade(data_dir):
     try:
         namen = os.listdir(d)
     except OSError:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning []")
         return []
     return sorted(os.path.join(d, n) for n in namen
                   if n.lower().endswith(FREMD_ENDUNGEN)

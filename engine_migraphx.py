@@ -109,9 +109,10 @@ WAS BEWUSST NICHT DRIN IST (Erstwurf)
   Fused-Subgraphen — auch Rechnungen mit f32-Pflicht. Der belastbare Weg waere wie
   auf CUDA das Vorab-Backen je Modell (`tools/fp16_backen.py`); das ist eine eigene
   Etappe mit eigener Abnahme.
-* **Kompilat-/Werte-Probe (`Satz.probe`).** Gibt es nur in `engine_ov`; der Dienst
-  meldet das Fehlen LAUT und setzt die Kurzform `startprobe` als Ersatz
-  (`worker_dienst.engine_bauen`). Hier unveraendert wie auf CUDA.
+* **Eine eigene Kompilat-/Werte-Probe.** Die Probe ist seit Stufe 2 des Pose-Bauplans
+  EINE Mechanik fuer alle Engines (`worker_kern.kompilat_probe`); sie laeuft ueber die
+  Satz-Schnittstelle (`det`, `stufe`, `stufe_fd`), die diese Engine dem Kern ohnehin
+  liefert. Diese Datei traegt dafuer nichts Eigenes.
 * **Arena-Deckel.** `migraphx_mem_limit` und `migraphx_arena_extend_strategy` sind in
   v1.27.1 WIRKUNGSLOS: `mem_limit_`/`arena_extend_strategy_` werden im EP-Konstruktor
   nicht aus `info` gesetzt (`migraphx_execution_provider.h:129-130`, `.cc:233-234`),
@@ -147,6 +148,9 @@ import face_audit                                        # noqa: E402  Thread-Ka
 # in `_sitzung`/`Engine.__init__`, und beide ruft diese Datei nie. Das rocm-Image
 # liefert `engine_cuda.py` ohnehin aus (Dockerfile.rocm, R1-Umzug).
 import engine_cuda as ec                                 # noqa: E402
+from core import logbuch as _logbuch
+from core import tuer                                    # noqa: E402  KP2: Sprung-Kette der Tuer
+_log = _logbuch.logger(__name__)
 
 EP = "MIGraphXExecutionProvider"
 # Der Geraetename fuer die ORT-PYTHON-Schicht — „gpu", NICHT „cuda".
@@ -189,15 +193,6 @@ SYSFS_FELDER = (("vram_used", "mem_info_vram_used"), ("vram_total", "mem_info_vr
                 ("gtt_used", "mem_info_gtt_used"), ("gtt_total", "mem_info_gtt_total"))
 
 
-def _melden(text):
-    """Eine Zeile ins Prozess-Log (fd 2) — dorthin, wo auch der Dienst seine
-    Aufbau-Zeilen schreibt. Kein Import von `worker_dienst`: der importiert diese
-    Datei, und ein Ringimport waere hier ein Startfehler statt einer Logzeile
-    (wortgleiche Begruendung wie `engine_cuda._melden`)."""
-    try:
-        os.write(2, (f"engine_migraphx: {str(text).strip()}\n").encode())
-    except Exception:                                    # noqa: BLE001
-        pass
 
 
 # ------------------------------------------------------------------ GPU-Speicher (sysfs)
@@ -242,7 +237,7 @@ class SysfsSpeicher:
             with self._schloss:
                 if not self._gemeldet:
                     self._gemeldet = True
-                    _melden(f"gpu memory: {self.pfad} not readable "
+                    _log.error(f"gpu memory: {self.pfad} not readable "
                             f"({type(e).__name__}: {e}) — no further memory lines")
             self.pfad = None
             return None
@@ -261,10 +256,10 @@ class SysfsSpeicher:
     def melden(self, wobei=""):
         z = self.zeile(wobei)
         if z:
-            _melden(z)
+            _log.info(z)
         elif not self._gemeldet:
             self._gemeldet = True
-            _melden(f"gpu memory: not readable ({self.grund or 'unknown'}) — "
+            _log.error(f"gpu memory: not readable ({self.grund or 'unknown'}) — "
                     f"no further memory lines")
 
 
@@ -272,7 +267,7 @@ SPEICHER = SysfsSpeicher()
 
 
 # ------------------------------------------------------------------ Decode
-def _ffmpeg_nv12(clip, schritt, hw):
+def _ffmpeg_nv12(clip, schritt, hw, sprung=None):
     """Die ffmpeg-Kette dieser Engine, EINMAL fuer beide Wege — wortgleich zu
     `engine_ov._ffmpeg_nv12` (VAAPI ist herstellerneutral: mesa/radeonsi bedient
     dieselbe Schnittstelle wie Intels iHD). Auswahl per ffmpeg-select VOR dem
@@ -283,7 +278,9 @@ def _ffmpeg_nv12(clip, schritt, hw):
     WARUM HIER EINE DRITTE KOPIE UND KEIN IMPORT AUS engine_ov: `engine_ov` importiert
     beim Laden das eigenstaendige `openvino`-Paket, und das gibt es im rocm-Image
     nicht. Der BYTE-Weg (Leser-Thread, Vorlauf, Pipe-Kapazitaet, Rueckfall-Regel) ist
-    trotzdem nur EINMAL im Haus: `worker_kern.nv12_strom` / `nv12_mit_rueckfall`."""
+    trotzdem nur EINMAL im Haus: `worker_kern.nv12_strom` / `nv12_mit_rueckfall`.
+    `sprung` (Bauplan K3, KP2): Ansatzpunkt der Tuer (core.tuer.Sprung), None = Clip-Anfang; Sprung und
+    Auswahl kommen aus core.tuer (eingang, auswahl), die Kette bleibt dieselbe."""
     # .536 B1a: `-nostdin` — ffmpeg darf den fd 0 seines Elternprozesses nicht pollen.
     # Im Worker ist das die Job-Pipe (Byte-Beweis in worker_kern.nv12_strom).
     basis = ["ffmpeg", "-nostdin", "-v", "warning"]
@@ -292,22 +289,23 @@ def _ffmpeg_nv12(clip, schritt, hw):
         basis += ["-hwaccel", "vaapi", "-hwaccel_device", dev,
                   "-hwaccel_output_format", "vaapi"]
     rest = "hwdownload,format=nv12" if hw else "format=nv12"
-    return basis + ["-i", clip, "-map", "0:v:0",
-                    "-vf", f"select='not(mod(n\\,{schritt}))',{rest}",
+    return basis + tuer.eingang(sprung) + ["-i", clip, "-map", "0:v:0",
+                    "-vf", f"{tuer.auswahl(schritt, sprung)},{rest}",
                     "-fps_mode", "passthrough", "-f", "rawvideo", "-"]
 
 
-def frames_nv12(clip, W, H, schritt, wache=None):
+def frames_nv12(clip, W, H, schritt, wache=None, sprung=None):
     """Sample-Frames als (i, y, uv) ueber VAAPI, MIT LAUTEM SOFTWARE-RUECKFALL.
     Regel und Begruendung stehen EINMAL in `worker_kern.nv12_mit_rueckfall`.
 
     UNGEMESSEN AUF AMD (s. Modulkopf): dass die VAAPI-Kette auf gfx1103 dieselben
     NV12-Bytes liefert wie die Software-Kette, ist ein Plausibilitaets-Schluss aus der
     Norm (H.264/HEVC-Decode ist normativ festgelegt), KEINE Messung. Nachgemessen
-    wird per `verifyd.py --benchmark`, Abschnitt „decode byte probe"."""
-    return wk.nv12_mit_rueckfall(_ffmpeg_nv12(clip, schritt, True),
-                                 _ffmpeg_nv12(clip, schritt, False),
-                                 W, H, schritt, "VAAPI", wache=wache)
+    wird per `verifyd.py --benchmark`, Abschnitt „decode byte probe".
+    `sprung` (KP2): die Kette setzt dort an, die Bildnummern zaehlen ab core.tuer.start(sprung)."""
+    return wk.nv12_mit_rueckfall(_ffmpeg_nv12(clip, schritt, True, sprung),
+                                 _ffmpeg_nv12(clip, schritt, False, sprung),
+                                 W, H, schritt, "VAAPI", wache=wache, start=tuer.start(sprung))
 
 
 # ------------------------------------------------------------------ Sessions
@@ -364,7 +362,7 @@ def modell_cache_vorbereiten():
     try:
         os.makedirs(pfad, exist_ok=True)
     except OSError as e:
-        _melden(f"WARN: model cache {pfad!r} not writable ({type(e).__name__}: {e}) "
+        _log.warning(f"WARN: model cache {pfad!r} not writable ({type(e).__name__}: {e}) "
                 f"— every process start will recompile every stage (measured 63 s "
                 f"for one small model on the field tester's card)")
         return pfad, f"{quelle} (not writable)"
@@ -416,7 +414,7 @@ def _sitzung(modell_bytes, marke):
                                  providers=["CPUExecutionProvider"])
         bericht.update({"stand": "cpu", "grund": "MIGraphXExecutionProvider not in "
                                                  "onnxruntime's provider list"})
-        _melden(f"stage {marke}: FELL BACK cpu ({bericht['grund']})")
+        _log.error(f"stage {marke}: FELL BACK cpu ({bericht['grund']})")
         return s, bericht
     if not _kfd_da():
         # Task-#15-Muster (face_audit._ort_session): ohne Geraeteknoten ist der
@@ -424,7 +422,7 @@ def _sitzung(modell_bytes, marke):
         s = ort.InferenceSession(modell_bytes, sess_options=_so(False),
                                  providers=["CPUExecutionProvider"])
         bericht.update({"stand": "cpu", "grund": f"no AMD KFD device node ({KFD})"})
-        _melden(f"stage {marke}: FELL BACK cpu ({bericht['grund']})")
+        _log.error(f"stage {marke}: FELL BACK cpu ({bericht['grund']})")
         return s, bericht
     opt = _provider_optionen()
     try:
@@ -433,7 +431,7 @@ def _sitzung(modell_bytes, marke):
         if EP in s.get_providers():
             bericht.update({"stand": "migraphx", "geraet": f"migraphx:{GERAET_ID}",
                             "deckung": "ganzer graph"})
-            _melden(f"stage {marke}: bound migraphx:{GERAET_ID} (whole graph)")
+            _log.info(f"stage {marke}: bound migraphx:{GERAET_ID} (whole graph)")
             return s, bericht
         voll_grund = "EP dropped out of get_providers()"
     except Exception as e:                               # noqa: BLE001
@@ -446,15 +444,15 @@ def _sitzung(modell_bytes, marke):
                                  providers=["CPUExecutionProvider"])
         bericht.update({"stand": "cpu",
                         "grund": f"{type(e).__name__}: {str(e)[:300]}"})
-        _melden(f"stage {marke}: FELL BACK cpu ({bericht['grund']})")
+        _log.error(f"stage {marke}: FELL BACK cpu ({bericht['grund']})")
         return s, bericht
     if EP not in s.get_providers():
         bericht.update({"stand": "cpu", "grund": voll_grund})
-        _melden(f"stage {marke}: FELL BACK cpu ({voll_grund})")
+        _log.error(f"stage {marke}: FELL BACK cpu ({voll_grund})")
         return s, bericht
     bericht.update({"stand": "migraphx_teilweise", "geraet": f"migraphx:{GERAET_ID}",
                     "deckung": "teilweise", "grund": voll_grund})
-    _melden(f"stage {marke}: PARTLY cpu — the EP bound, but not every node landed on "
+    _log.error(f"stage {marke}: PARTLY cpu — the EP bound, but not every node landed on "
             f"it ({voll_grund}). Run once with ORT_MIGRAPHX_DUMP_MODEL_OPS=1 and "
             f"onnxruntime log level INFO to see WHICH ops the EP rejected.")
     return s, bericht
@@ -492,7 +490,7 @@ def _lauf(s, eingabe):
             if not _BIND["aus"]:
                 _BIND["aus"] = True
                 _BIND["grund"] = f"{type(e).__name__}: {str(e)[:200]}"
-                _melden(f"io-binding not usable on this runtime "
+                _log.info(f"io-binding not usable on this runtime "
                         f"({_BIND['grund']}) — running the stages with "
                         f"session.run() instead (same values, one extra copy)")
         return s.run(None, eingabe)
@@ -572,7 +570,7 @@ class ModellBestand:
 
     def __init__(self, sitzung=None, melden=None, lauf=None):
         self.sitzung = sitzung or _sitzung
-        self.melden = melden or _melden
+        self.melden = melden or _log
         self.lauf = lauf or _lauf
         self.spec = wk.rec_spec()
         self.pfade = wk.vorgabe_pfade(self.spec)
@@ -631,7 +629,7 @@ class ModellBestand:
                 # Die Bauzeit ist auf diesem EP eine ECHTE Auskunft, keine Fussnote:
                 # ohne .mxr-Cache faellt sie bei JEDEM Prozessstart erneut an (der
                 # Feldtester mass am 10.09. 63 s fuer ein kleines Modell).
-                self.melden(f"stage {marke}: built in {dauer:.1f}s")
+                self.melden.info(f"stage {marke}: built in {dauer:.1f}s")
                 eintrag = self._sessions[schluessel] = s
             return eintrag
 
@@ -742,8 +740,9 @@ class Satz:
     Frame unter der laufenden Rechnung austauschen, und der Fehler faellt nicht auf,
     er verschiebt nur Werte.
 
-    KEIN `probe`: die Kompilat-Wache existiert allein in `engine_ov`; der Dienst
-    meldet das Fehlen LAUT und setzt `startprobe` als Ersatz."""
+    Die Kompilat-Probe rechnet `worker_kern.kompilat_probe` ueber `det`, `stufe` und
+    `stufe_fd` dieses Satzes (Bauplan pose_kompilat, Stufe 2) — fuer rocm und cpu
+    dieselbe wie fuer alle anderen Engines."""
 
     def __init__(self, g):
         self.g = g
@@ -990,7 +989,7 @@ class Engine:
         if getattr(a, "migraphx_cache", None):
             os.environ["ORT_MIGRAPHX_MODEL_CACHE_PATH"] = a.migraphx_cache
         self.cache, self.cache_quelle = modell_cache_vorbereiten()
-        _melden(f"model cache: {self.cache} ({self.cache_quelle})")
+        _log.info(f"model cache: {self.cache} ({self.cache_quelle})")
         self.ep_gelistet = EP in ort.get_available_providers()
         self.kfd = _kfd_da()
         if not self.ep_gelistet:
@@ -998,19 +997,19 @@ class Engine:
             # Provider-Liste allein ist ohnehin KEIN Beweis fuer Ladbarkeit — das
             # war der .510-Befund, aus dem die ldd-Selbstpruefung im Dockerfile
             # entstand; den Beweis liefert erst der Session-Bau.
-            _melden("WARN: no MIGraphXExecutionProvider in onnxruntime — every "
+            _log.warning("WARN: no MIGraphXExecutionProvider in onnxruntime — every "
                     "stage of this process will run on the CPU (correct values, "
                     "slower). This is reported in /health and in every job answer.")
         elif not self.kfd:
-            _melden(f"WARN: no AMD KFD device node ({KFD}) in this container — every "
+            _log.warning(f"WARN: no AMD KFD device node ({KFD}) in this container — every "
                     f"stage will run on the CPU. Pass the devices through "
                     f"(--device /dev/kfd --device /dev/dri).")
         os.makedirs(a.out, exist_ok=True)
         self.bestand = None
         SPEICHER.melden("at start")
 
-    def frames(self, clip, W, H, schritt, wache=None):
-        return frames_nv12(clip, W, H, schritt, wache=wache)
+    def frames(self, clip, W, H, schritt, wache=None, sprung=None):
+        return frames_nv12(clip, W, H, schritt, wache=wache, sprung=sprung)
 
     def bild_stufen(self):
         """Der BILD-Weg dieser Engine, einmal je Prozess. -> BildStufen"""

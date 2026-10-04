@@ -5,6 +5,7 @@ samples
 backups
 diag
 tester
+befehle
 __pycache__
 **/__pycache__
 *.tar.gz

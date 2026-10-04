@@ -29,6 +29,8 @@ import urllib.parse
 import urllib.request
 
 from core import registry as _reg
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 # ------------------------------------------------------------------ Prompt
 # GEMESSENER Wortlaut. Quelle byte-genau: scratchpad/ionos_vision_test.py FRAGE
@@ -846,9 +848,8 @@ def senden_mit_deadline(url, kopf, body, timeout_s, deadline_s, geheimnisse=()):
         t.join(10)
         kasten.clear()                             # keine Bild-Bytes am Dict halten
         if t.is_alive():                           # Leck SICHTBAR statt still
-            print("[vision] WARN: request thread still alive after deadline "
-                  "+10s — it will end at the socket timeout at the latest",
-                  flush=True)
+            _log.warning("[vision] WARN: request thread still alive after deadline "
+                  "+10s — it will end at the socket timeout at the latest")
         raise VisionFehler(
             "no vision verdict (timeout) — the endpoint answered, but kept "
             f"trickling past the overall deadline of {int(deadline_s)} s",
@@ -1086,8 +1087,10 @@ def modell_manuell_pruefen(vcfg, modell_id, timeout_s=30):
         antwort, meta = anfrage(probe, [("text", "Say OK.")],
                                 roh=True, timeout_s=timeout_s)
     except VisionFehler as ex:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning (False, f'the endpoint refused this id: {ex}')")
         return False, f"the endpoint refused this id: {ex}"
     except Exception as ex:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning (False, f'check failed: {type(ex).__name__}')")
         return False, f"check failed: {type(ex).__name__}"
     text = (antwort.get("text") or "").strip()
     if not text:
@@ -1306,6 +1309,7 @@ def _stufe1(vcfg, prot, timeout_s):
     try:
         b64 = testbild()
     except Exception as ex:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning _stufe_setzen(...)")
         return _stufe_setzen(prot, 1, "rot",
                              f"could not build the test image: {ex}")
     teile = [("text", "Test image. Answer with exactly one word: OK"),
@@ -1314,6 +1318,7 @@ def _stufe1(vcfg, prot, timeout_s):
     try:
         roh, meta = anfrage(vcfg, teile, prompt_kopf="", timeout_s=timeout_s)
     except VisionFehler as ex:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning _stufe_setzen(prot, 1, 'rot', str(ex))")
         return _stufe_setzen(prot, 1, "rot", str(ex))
     dauer = round(time.monotonic() - t0, 1)
     u = antwort_auswerten(roh, kachel_name=vcfg.get("kachel"), dauer_s=dauer,
@@ -1338,6 +1343,7 @@ def _stufe2(vcfg, prot, timeout_s, zellen):
         g_drei = formprobe_gitter("dreieck", zellen, p.get("leinwand"))
         k_kreis = formprobe_kandidat("kreis", p.get("leinwand"))
     except Exception as ex:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning _stufe_setzen(...)")
         return _stufe_setzen(prot, 2, "rot",
                              f"could not build the probe grids: {ex}")
     la, lb = formprobe_labels(zellen)
@@ -1350,6 +1356,7 @@ def _stufe2(vcfg, prot, timeout_s, zellen):
             roh, meta = anfrage(vcfg, teile, prompt_kopf=FORMPROBE_KOPF,
                                 timeout_s=timeout_s)
         except VisionFehler as ex:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning _stufe_setzen(prot, 2, 'rot', str(ex), laeufe=laeufe)")
             return _stufe_setzen(prot, 2, "rot", str(ex), laeufe=laeufe)
         u = antwort_auswerten(roh, kachel_name=vcfg.get("kachel"),
                               dauer_s=meta["dauer_s"], quelle=meta["quelle"],
@@ -1617,7 +1624,7 @@ def vorbedingungen(data_dir, vcfg, testprotokoll=None):
             n for n in os.listdir(wurz)
             if os.path.isfile(os.path.join(wurz, n, "herkunft.json")))
     except OSError:
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     test_gruen = bool((testprotokoll or {}).get("ampel") == "gruen")
     try:
         kontrolle = bool(os.listdir(os.path.join(str(data_dir or ""), "personlern",

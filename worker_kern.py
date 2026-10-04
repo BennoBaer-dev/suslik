@@ -21,6 +21,8 @@ Der Kern importiert WEDER openvino NOCH onnxruntime; die Engine kennt keine Latt
 DIE ENGINE-SCHNITTSTELLE, vollstaendig (mehr verlangt der Kern nicht):
   engine.argumente(ap)                  eigene CLI-Schalter anhaengen (Klassenmethode)
   engine.frames(clip, W, H, schritt)    Sample-Frames (i, y, uv) als NV12, kein Rueckfall
+  engine.frames(..., sprung=s)          dieselbe Kette ab einem Ansatzpunkt der Tuer (core.tuer.Sprung,
+                                        Bauplan K3, KP2); i ist die Original-Bildnummer
   engine.geometrie_bauen(geo)           -> {(W, H): Geometrie}
   engine.kopf_auskunft(graphen)         -> dict fuer die Kopfzeile (darf 'fd' tragen)
   engine.stufen_folge                   die Stufen in Bau-/Rechenreihenfolge
@@ -30,6 +32,8 @@ DIE ENGINE-SCHNITTSTELLE, vollstaendig (mehr verlangt der Kern nicht):
              .stufe(k, thetas)        -> je Gesicht ein Tupel seiner Ausgabezeilen
              .stufe_fd(thetas, zuege) -> je Gesicht (Punkte [68,3], s_lap, s_lap2)
              .warm()
+  Die Kompilat-Probe (`kompilat_probe`) laeuft ueber genau diese Satz-Schnittstelle — eine
+  Engine liefert dafuer nichts Eigenes (Bauplan pose_kompilat, Stufe 2).
 
 MATMUL-RAUS (E1, Konzept §1c — die EINE fachliche Aenderung dieses Umbaus):
 Die Erkennungs-Stufe der Prototypen trug die Referenz-Matrix als GRAPH-KONSTANTE
@@ -41,6 +45,27 @@ fuer Zeile analyze.nn, analyze.py:319-321). Folge, bewusst und gemessen: die Sco
 verschieben sich minimal (andere Rechenstelle, auf der iGPU vorher fp16), das
 Embedding selbst nicht.
 
+STOERSTELLE — CPU-NEULAUF NACH EINEM HARDWARE-ABBRUCH MITTEN IM CLIP (Bauplan
+analysen/bauplan_stoerstelle.md, Fassung 4, Stufe U, 30.09.2026, ab 0.1.1.007):
+HERKUNFT: Prod meldete am 30.09. an EINEM Ereignis viermal „hardware decode aborted
+mid-clip" (VAAPI rc=251 nach 238 von 630 Frames, weniger als die Haelfte geurteilt); die
+Ursache ist eine Transport-Stoerung im HEVC-Stream. Im Labor liest Software denselben Clip
+ganz, VAAPI bricht immer an derselben Stelle ab. Ein Wiederansetzen der Hardware-Kette
+hinter der Stoerstelle (Fassungen 1 bis 3) hat der Eigentuemer als zu kompliziert
+verworfen (30.09. 18:58:46: „den ganzen Clip, dekodieren auf CPU … Fehlermeldung im Log").
+ZWECK: stirbt die Hardware-Kette nach einer Teillieferung, schreibt `nv12_mit_rueckfall` den
+Fehler unter HW_TEILABBRUCH ins wache-Dict und wirft ihn weiter. Der Dienst
+(worker_dienst.Dienst.rechnen_mit_neulauf) rechnet daraufhin das GANZE Ereignis genau
+einmal neu, mit SW_ERZWUNGEN im wache-Dict: dieser Lauf nimmt sofort den bestehenden
+Software-Rueckfall des Totalausfalls. Der Frame-Index zaehlt im Neulauf von 0.
+EHRLICHE GRENZEN:
+  - Im fehlerfreien Lauf entsteht keine Zusatzarbeit (ein Feld-Lesen je Job).
+  - Die Samples des Erstversuchs verfallen, sie sind doppelt gerechnet (bewusster,
+    seltener Preis).
+  - Stirbt auch die Software-Kette mitten im Clip, gibt es keine zweite Wiederholung;
+    dann bleibt der Teilabbruch wie vor dem Vorhaben.
+  - decode.FrameIter (Ernte, Sammeln, analyze, anlernen) wiederholt nicht.
+
 Aufruf: ueber die Huellen worker_gpu.py / worker_gpu_mt.py (Intel) bzw.
 worker_cuda.py / worker_cuda_mt.py (CUDA). Deren Argumente sind unveraendert.
 """
@@ -48,6 +73,7 @@ import argparse
 import collections
 import ctypes
 import fcntl
+import hashlib                                           # Kompilat-Probe: Fingerabdruecke
 import inspect
 import json
 import os
@@ -81,6 +107,8 @@ for _blas in ("OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "BLIS_NUM_THREADS",
 
 import cv2                                              # noqa: E402  zieht numpy mit
 import numpy as np                                      # noqa: E402
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 
 def _wurzel():
@@ -108,6 +136,7 @@ import decode                                           # noqa: E402  _probe: EI
 import face_audit                                       # noqa: E402  ar_det_size, MODELLE, fd-Regel
 import pose_wache                                       # noqa: E402  RTMPose-Vorverarbeitung
 from core import guete                                  # noqa: E402  e/t-Modelle + Normierung
+from core import tuer as _tuer                          # noqa: E402  KP2: Tuer-Quelle
 from core.livewache import person_region                # noqa: E402  Personenregion aus Gesichtsbox
 from core.messkarte import QUELLE_ANALYSE as MK_QUELLE  # noqa: E402  Herkunft der Messkarte
 from core.registry import MODELL_VERTRAG                # noqa: E402  Detektor- und 1k3d68-Pfad
@@ -156,6 +185,23 @@ STUFEN = (FD, "e", "t", "p", "r")
 # Die KASKADEN-Stufen, also die Folge ohne die fd-Vorstufe: fd entscheidet nicht ueber
 # Stimmen, es sortiert Fehldetektionen vor den teuren Stufen aus.
 KASKADE = tuple(k for k in STUFEN if k != FD)
+# Die MESS-Stufen der Kaskade hinter Kante und fd, in Rechenreihenfolge, je mit dem Entscheid,
+# ob sie die KASKADE sieben (True: wer die Latte reisst, bekommt keine Erkennung) oder nur
+# MESSEN (False: der Wert siebt allein die Stimmen). Seit Bauplan analysen/bauplan_k3_produkt.md,
+# Stufe KP1 Punkt 3 (K3 aus L16, Entscheid 2) sieben e, t und p; der Entscheid vom 14.09.2026
+# (e und t messen nur) ist damit bewusst gekippt, Herleitung in `event_rechnen`. DIE EINE QUELLE
+# dieser Eigenschaft: `event_rechnen` baut seine Stufenfolge daraus, und die Kompilat-Probe des
+# Dienstes liest ueber `siebende_stufen`, welche Abweichung fatal ist (Bauplan
+# analysen/bauplan_pose_kompilat.md, Stufe 1).
+GPU_STUFEN_SIEBT = (("e", True), ("t", True), ("p", True))
+
+
+def siebende_stufen():
+    """Die Stufen, die die Kaskade sieben, gelesen aus GPU_STUFEN_SIEBT.
+    -> Tupel der Stufennamen in Rechenreihenfolge"""
+    return tuple(k for k, siebt in GPU_STUFEN_SIEBT if siebt)
+
+
 # Decoder-Vorlauf (v2): so viele fertige Frames darf der Leser vorausholen, waehrend die
 # GPU noch am vorigen rechnet. 4 * 12,4 MB (4K NV12) = rund 50 MB Vorrat.
 VORLAUF = 4
@@ -227,6 +273,12 @@ def det_schwelle(det_global, guards, kamera):
 
 
 # ------------------------------------------------------------------ Decode-Plumbing
+# Stoerstelle (Bauplan analysen/bauplan_stoerstelle.md, Fassung 4): die zwei Felder im
+# wache-Dict, ueber die Kern und Dienst den CPU-Neulauf verabreden. HW_TEILABBRUCH setzt
+# nv12_mit_rueckfall, wenn die Hardware-Kette nach einer Teillieferung starb (Wert: der
+# Fehlertext); SW_ERZWUNGEN setzt der Dienst fuer den einen Neulauf (Wert: derselbe Text).
+HW_TEILABBRUCH = "hw_teilabbruch"
+SW_ERZWUNGEN = "sw_erzwungen"
 # glibc-Allokator: Parameter-Nummer aus malloc.h. -3 ist M_MMAP_THRESHOLD.
 M_MMAP_THRESHOLD = -3
 # Die Schwelle, ab der malloc() einen Block direkt per mmap holt statt aus einer Arena.
@@ -290,6 +342,7 @@ def allokator_politik(schwelle=MMAP_SCHWELLE):
         libc.mallopt.restype = ctypes.c_int
         rc = int(libc.mallopt(M_MMAP_THRESHOLD, int(schwelle)))
     except Exception as e:                                  # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning {'gesetzt': False, 'quelle': 'mallopt', 'fehler': f'{type...")
         return {"gesetzt": False, "quelle": "mallopt", "fehler": f"{type(e).__name__}: {e}"}
     return {"gesetzt": bool(rc), "quelle": "mallopt", "schwelle": int(schwelle)}
 
@@ -305,6 +358,7 @@ def pipe_kapazitaet(fd, ziel=PIPE_ZIEL):
         try:
             return fcntl.fcntl(fd, fcntl.F_GETPIPE_SZ), f"{e.strerror} (ziel {ziel})"
         except OSError:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning (None, str(e))")
             return None, str(e)
 
 
@@ -321,7 +375,7 @@ def pipe_probe(ziel=PIPE_ZIEL):
         os.close(w)
 
 
-def nv12_strom(cmd, W, H, schritt, kette, vorlauf=VORLAUF, wache=None):
+def nv12_strom(cmd, W, H, schritt, kette, vorlauf=VORLAUF, wache=None, start=0):
     """Sample-Frames als (i, y, uv), y [1,H,W,1] und uv [1,H/2,W/2,2] uint8, aus der
     rawvideo-Pipe von `cmd`. Das ist der BYTE-Weg von frames_nv12 aus beiden
     Prototypen — er war dort wortgleich; unterschiedlich ist allein die ffmpeg-Kette
@@ -341,12 +395,18 @@ def nv12_strom(cmd, W, H, schritt, kette, vorlauf=VORLAUF, wache=None):
 
     E2 (13.09., W1-M9 „die Wache gegen still verfaelschte Clips"): `wache` ist ein dict,
     das dieser Strom mit dem fuellt, was NUR ER wissen kann — Kette, ffmpeg-Exitcode und
-    die Zahl der Decoder-Kontext-Zeilen aus stderr. Die Zaehlregel ist die von
-    decode.FrameIter (` @ 0x` bei -v warning, decode.py:222-227), nicht eine zweite
-    Heuristik: ffmpeg dekodiert kaputte Clips mit rc=0 und vollem Zaehler DURCH und
-    verfaelscht still die Bilder; ohne diese Zeilen sieht das niemand. Das URTEIL
-    (Toleranz, frames_fehlen) faellt beim Aufrufer mit den Formeln der Frame-Quelle.
-    None = das Verhalten von E1, Byte fuer Byte."""
+    die Zahl der Fehlerzeilen vom Lesen und Dekodieren aus stderr. Die Zaehlregel ist die
+    des alten Wegs, an einer Stelle (decode.decoder_fehler_zaehlen: ganze Fehlerausgabe, ohne
+    Ausgabe- und Skalierer-Zeilen), nicht eine zweite Heuristik: ffmpeg dekodiert kaputte
+    Clips mit rc=0 und vollem Zaehler DURCH und verfaelscht still die Bilder; ohne diese
+    Zeilen sieht das niemand. Seit Bauplan K3, KP2 Punkt 9 zaehlt jede Kette eines Ereignisses
+    in die Summe `decoder_fehler`, auch eine, die die Tuer oder das fruehe Ende beendet. Das
+    URTEIL (Toleranz, frames_fehlen) faellt beim Aufrufer mit den Formeln der Frame-Quelle.
+    None = das Verhalten von E1, Byte fuer Byte.
+
+    Bauplan K3, Stufe KP2 (Tuer): `start` ist die Original-Bildnummer des ersten Bildes, wenn die
+    Kette nach einem Sprung ansetzt (core.tuer.start); die Nummern zaehlen von dort in `schritt`.
+    0 = Clip-Anfang, das Verhalten von vorher."""
     fsz = W * H * 3 // 2
     schlange, fehler, ENDE = queue.Queue(maxsize=max(1, vorlauf)), [], object()
     if wache is not None:
@@ -378,7 +438,7 @@ def nv12_strom(cmd, W, H, schritt, kette, vorlauf=VORLAUF, wache=None):
                     if len(b) < fsz:
                         return
                     a = np.frombuffer(b, np.uint8)
-                    schlange.put((k * schritt, a[:W * H].reshape(1, H, W, 1),
+                    schlange.put((start + k * schritt, a[:W * H].reshape(1, H, W, 1),
                                   a[W * H:].reshape(1, H // 2, W // 2, 2)))
                     k += 1
             except BaseException as e:                      # noqa: BLE001  im Thread gefangen,
@@ -407,16 +467,17 @@ def nv12_strom(cmd, W, H, schritt, kette, vorlauf=VORLAUF, wache=None):
             th.join()
             p.stdout.close()
             rc = p.wait()
+            if wache is not None:
+                # Bauplan K3, KP2 Punkt 9: im finally, damit auch eine Kette, die die Tuer oder das
+                # fruehe Ende beendet (GeneratorExit), ihre Zeilen abgibt; die Zahl kommt zur Summe
+                # der Ketten dieses Ereignisses dazu. Die Regel: decode.decoder_fehler_zaehlen.
+                try:
+                    wache["decoder_fehler"] = (int(wache.get("decoder_fehler") or 0)
+                                               + decode.decoder_fehler_zaehlen(err, cmd))
+                except OSError:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         if wache is not None:
             wache["rc"] = rc
-            try:
-                err.seek(0)
-                text = err.read(65536).decode("utf-8", "replace")
-                # Zaehlregel wortgleich decode.FrameIter._pipe (decode.py:226-227):
-                # bei -v warning ist JEDE Decoder-Kontext-Zeile eine Auffaelligkeit.
-                wache["decoder_fehler"] = sum(1 for z in text.splitlines() if " @ 0x" in z)
-            except OSError:
-                pass
         if fehler:
             raise fehler[0]
         if rc != 0:
@@ -425,7 +486,7 @@ def nv12_strom(cmd, W, H, schritt, kette, vorlauf=VORLAUF, wache=None):
                                + err.read(4000).decode("utf-8", "replace").strip()[-400:])
 
 
-def nv12_mit_rueckfall(hw_cmd, sw_cmd, W, H, schritt, kette, vorlauf=VORLAUF, wache=None):
+def nv12_mit_rueckfall(hw_cmd, sw_cmd, W, H, schritt, kette, vorlauf=VORLAUF, wache=None, start=0):
     """Der Frame-Strom EINES Jobs MIT LAUTEM SOFTWARE-RUECKFALL (E2d, Konzept §4).
 
     Der Prototyp-Grundsatz „kein Rueckfall" war eine MESS-Auflage: eine Messung, die
@@ -446,6 +507,12 @@ def nv12_mit_rueckfall(hw_cmd, sw_cmd, W, H, schritt, kette, vorlauf=VORLAUF, wa
         rueckholbar; ein zweiter Durchlauf wuerde sie doppelt liefern. Der Fehler fliegt
         weiter, und der Aufrufer (worker_dienst.EngineTor) urteilt den lesbaren Teil und
         FLAGGT ihn — das ist die Behandlung, die analyze.py fuer diesen Fall hat.
+        Stoerstelle (Bauplan analysen/bauplan_stoerstelle.md, Fassung 4): vorher steht
+        der Fehlertext unter HW_TEILABBRUCH in `wache`. Daran erkennt der Dienst den
+        Fall und rechnet das ganze Ereignis einmal neu; in diesem Neulauf traegt `wache`
+        SW_ERZWUNGEN (den Grund), und die Hardware-Kette wird gar nicht erst gestartet:
+        es laeuft sofort der Software-Rueckfall wie beim Totalausfall, mit genau diesem
+        Grund als `hwdec_grund`.
 
     LAUT heisst: `wache['hwdec_fallback'] = True` plus `wache['hwdec_grund']`, und
     `wache['kette']` traegt danach die SOFTWARE-Kette. Eine Log-Zeile je Ereignis schreibt
@@ -454,25 +521,40 @@ def nv12_mit_rueckfall(hw_cmd, sw_cmd, W, H, schritt, kette, vorlauf=VORLAUF, wa
 
     BYTE-GLEICHHEIT ist Bedingung, nicht Hoffnung: beide Ketten enden auf `format=nv12`
     ueber demselben Decoder-Bild. Der Nachweis je Backend gehoert ins Gate (Konzept §4,
-    W3-V9) — fuer VAAPI gemessen in E2d, s. Rundordner."""
+    W3-V9) — fuer VAAPI gemessen in E2d, s. Rundordner.
+
+    `start` (Bauplan K3, KP2): die Original-Bildnummer des ersten Bildes nach einem Sprung der Tuer,
+    gilt fuer beide Ketten; 0 = Clip-Anfang."""
     n = 0
-    grund = None
-    try:
-        for s in nv12_strom(hw_cmd, W, H, schritt, kette, vorlauf=vorlauf, wache=wache):
-            n += 1
-            yield s
-    except RuntimeError as e:
-        if n:
-            raise                      # Teilabbruch: der Aufrufer urteilt den Rest
-        grund = str(e)[:300]
-    if n:
-        return
+    # Stoerstelle: im Neulauf des Dienstes steht hier der Grund, und die HW-Kette entfaellt
+    grund = wache.get(SW_ERZWUNGEN) if wache is not None else None
+    # KP2 Punkt 9: die Summe der Fehlerzeilen vor dieser Kette. Liefert die HW-Kette kein Bild, zaehlt
+    # wie bisher nur die Software-Kette: ihre Zeilen fallen aus der Summe wieder heraus.
+    vorher = wache.get("decoder_fehler") if wache is not None else None
     if grund is None:
-        grund = f"die {kette}-Kette lieferte 0 Frames"
+        try:
+            for s in nv12_strom(hw_cmd, W, H, schritt, kette, vorlauf=vorlauf, wache=wache,
+                                start=start):
+                n += 1
+                yield s
+        except RuntimeError as e:
+            if n:
+                if wache is not None:
+                    wache[HW_TEILABBRUCH] = str(e)[:300]   # der Dienst rechnet neu
+                raise                  # Teilabbruch: der Aufrufer urteilt den Rest
+            grund = str(e)[:300]
+        if n:
+            return
+        if grund is None:
+            grund = f"die {kette}-Kette lieferte 0 Frames"
     if wache is not None:
         wache["hwdec_fallback"] = True
         wache["hwdec_grund"] = grund
-    yield from nv12_strom(sw_cmd, W, H, schritt, "SW", vorlauf=vorlauf, wache=wache)
+        if vorher is None:
+            wache.pop("decoder_fehler", None)
+        else:
+            wache["decoder_fehler"] = vorher
+    yield from nv12_strom(sw_cmd, W, H, schritt, "SW", vorlauf=vorlauf, wache=wache, start=start)
 
 
 # ------------------------------------------------------------------ Modelle und Normierung
@@ -797,6 +879,128 @@ def nv12_bgr(rahmen, W, H):
     return cv2.cvtColor(buf, cv2.COLOR_YUV2BGR_NV12)
 
 
+# ------------------------------------------------------------------ Kompilat-Probe (alle Engines)
+# Bauplan analysen/bauplan_pose_kompilat.md, Stufe 2: die Stufen-Pruefsummen-Probe (E2d) stand
+# bis dahin als `Satz.probe` allein in engine_ov; cpu, cuda und rocm hatten keine, eine
+# Abweichung blieb dort still. Sie steht jetzt EINMAL hier und laeuft ueber die Satz-
+# Schnittstelle, die jede Engine dem Kern ohnehin liefert (Kopf: det, stufe, stufe_fd).
+# Pruefvektor, Thetas und Fingerabdruck-Rechnung sind Zeile fuer Zeile die von engine_ov, damit
+# die Eichmarken der Bestaende nicht kippen. Der Pruefvektor steht als ZAHL da, nicht als
+# Datei — eine Probe, die erst eine Datei braucht, laeuft im Feld nicht.
+PROBE_SAAT = 20260913
+# Welche Satz-Methode welche Fingerabdruecke der Probe traegt. Fehlt einer Engine eine davon,
+# sind genau diese Stufen technisch nicht probbar (det traegt alle: ohne ihn gibt es kein Bild).
+PROBE_TRAEGER = (("det", ("det",) + STUFEN), ("stufe", KASKADE), ("stufe_fd", (FD,)))
+
+
+def probe_nv12(H, W):
+    """Die NV12-Halbbilder des Pruefvektors — RECHNUNG, kein Zufallsgenerator und keine
+    Datei: dieselben Bytes auf jeder Maschine, jeder numpy-Fassung und ohne Zugriff auf
+    Bestandsdaten. Der Inhalt ist ein schraeges Streifenmuster mit Struktur in beiden
+    Achsen; ein Grauwert-Flaechenbild waere als Probe wertlos, weil Faltungen darauf
+    nahezu konstant antworten. -> (y [1,H,W,1], uv [1,H/2,W/2,2]) uint8"""
+    i = np.arange(H, dtype=np.int32)[:, None]
+    j = np.arange(W, dtype=np.int32)[None, :]
+    y = (16 + ((i * 7 + j * 13 + ((i * j) >> 6) + PROBE_SAAT) % 220)).astype(np.uint8)
+    ih = np.arange(H // 2, dtype=np.int32)[:, None]
+    jh = np.arange(W // 2, dtype=np.int32)[None, :]
+    u = (16 + ((ih * 11 + jh * 5 + PROBE_SAAT) % 225)).astype(np.uint8)
+    v = (16 + ((ih * 3 + jh * 17 + PROBE_SAAT) % 225)).astype(np.uint8)
+    return y[None, :, :, None], np.stack([u, v], axis=-1)[None]
+
+
+def probe_box(W, H):
+    """Die feste Pruef-Box im Frame (Anteile der Kanten, dann ganzzahlig wie eine echte
+    Detektion). Sie liegt mittig und ist gross genug, dass alle fuenf Ausschnitte
+    Bildinhalt sehen statt Polster. -> (x1, y1, x2, y2) int"""
+    return (int(0.30 * W), int(0.22 * H), int(0.42 * W), int(0.52 * H))
+
+
+def probe_kps(box):
+    """Fuenf Pruef-Landmarken in der Box, in der Reihenfolge von insightface
+    (Auge links, Auge rechts, Nase, Mund links, Mund rechts). Die Anteile sind die
+    Lage-Verhaeltnisse eines frontalen Gesichts; gebraucht wird nur, dass sie FEST
+    sind. -> [5,2] float32"""
+    x1, y1, x2, y2 = (float(v) for v in box)
+    w, h = x2 - x1, y2 - y1
+    teile = ((0.32, 0.38), (0.68, 0.38), (0.50, 0.58), (0.36, 0.76), (0.64, 0.76))
+    return np.array([[x1 + a * w, y1 + b * h] for a, b in teile], np.float32)
+
+
+def _fingerabdruck(werte):
+    """md5 ueber die float32-Bytes der Werte in ihrer Reihenfolge (die Rechnung von E2d).
+    -> die ersten 12 Hex-Zeichen"""
+    return hashlib.md5(b"".join(np.ascontiguousarray(v, np.float32).tobytes()
+                                for v in werte)).hexdigest()[:12]
+
+
+def probe_grenzen(satz):
+    """Die Stufen, die dieser Satz technisch NICHT proben kann, je mit Grund — abgelesen an der
+    Satz-Schnittstelle (fehlende Geometrie oder Methode), nicht behauptet.
+    -> {stufe: grund}; leer heisst: alle Stufen probbar"""
+    name = f"{type(satz).__module__}.{type(satz).__name__}"
+    if getattr(satz, "g", None) is None:
+        return {k: f"{name} has no geometry (g)" for k in PROBE_TRAEGER[0][1]}
+    offen = {}
+    for methode, stufen in PROBE_TRAEGER:
+        if not callable(getattr(satz, methode, None)):
+            for k in stufen:
+                offen.setdefault(k, f"{name} has no {methode}()")
+    return offen
+
+
+def kompilat_probe(satz, roh=False):
+    """DIE KOMPILAT-PROBE (E2d), seit Stufe 2 des Pose-Bauplans fuer JEDE Engine: ein FESTER
+    Pruefvektor durch alle Stufen des Satzes, Stufe fuer Stufe mit Fingerabdruck.
+
+    WOZU. Am 13.09. hat ein Lauf ueber einen fremd beschriebenen Kompilat-Cache die
+    ERKENNUNG falsch gerechnet, waehrend Detektionen, Frames und Guete-Werte unauffaellig
+    blieben, und NICHTS im Lauf sagte etwas; seit 17.09. rechnete die siebende Pose-Stufe nach
+    Worker-Neustarts anders (Bauplan pose_kompilat). Der Pruefvektor haengt NICHT an Bildern,
+    Clips oder Referenzen: er entsteht aus PROBE_SAAT und der Geometrie.
+
+    WAS SIE NICHT KANN, benannt: sie weiss nicht, welcher Wert RICHTIG ist. Sie liefert einen
+    Fingerabdruck; „gleich wie beim Bau" sagt erst der Vergleich gegen die Eichmarke
+    (worker_dienst), die ihr Umfeld mit sich traegt. Eine Stufe, die der Satz technisch nicht
+    rechnen kann (`probe_grenzen`), fehlt im Ergebnis und steht LAUT unter 'nicht_probbar'.
+    -> {stufe: md5 der Ausgabe-Bytes, 'r_norm': die Feature-Normen, '_r_emb' nur bei roh,
+        'nicht_probbar': {stufe: grund} nur wenn es eine solche Stufe gibt}"""
+    offen = probe_grenzen(satz)
+    aus = {}
+    if "det" in offen:
+        aus["nicht_probbar"] = offen
+        return aus
+    g = satz.g
+    y, uv = probe_nv12(g.H, g.W)
+    box = probe_box(g.W, g.H)
+    kps = probe_kps(box)
+    aus["det"] = _fingerabdruck(satz.det(y, uv))
+    th = {"e": theta_e(box, g.W, g.H, g.seiten["e"], g.nm),
+          "t": theta_t(kps, g.seiten["t"][0], g.nm),
+          "p": theta_p(box, g.W, g.H, g.nm),
+          "r": theta_t(kps, g.seiten["r"][0], g.nm)}
+    for k in KASKADE:
+        if k in offen:
+            continue
+        werte = satz.stufe(k, [th[k]] * AUFRUF_BREITE)
+        aus[k] = _fingerabdruck(v for zeile in werte for v in zeile)
+        if k == "r":
+            # Die Feature-Norm als ZAHL dazu (an ihr hing die Verschiebung vom 13.09.), und
+            # bei roh das Embedding selbst: der Kosinus traegt das Urteil, nicht der Hash.
+            aus["r_norm"] = [round(float(zeile[1]), 4) for zeile in werte]
+            if roh:
+                aus["_r_emb"] = np.asarray(werte[0][0], np.float64).tolist()
+    if FD not in offen:
+        th_fd, _M = theta_fd(box, g.seiten[FD][0], g.nm)
+        zug = leinwand_zug(box, g.W, g.H)
+        werte = satz.stufe_fd([th_fd] * AUFRUF_BREITE, [zug] * AUFRUF_BREITE)
+        aus[FD] = _fingerabdruck(v for p, sL, sL2 in werte
+                                 for v in (p, np.float32(sL), np.float32(sL2)))
+    if offen:
+        aus["nicht_probbar"] = offen
+    return aus
+
+
 # ------------------------------------------------------------------ Referenzen und Scores
 def referenzen_laden(pfad):
     """Referenzen aus dem refcache des alten Workers (analyze.load_refs, analyze.py:263-315):
@@ -812,7 +1016,7 @@ def referenzen_laden(pfad):
     E1: 'refs_t' ist die transponierte Matrix, EINMAL zusammenhaengend gelegt — sie ist
     seit dem Matmul-Umbau der rechte Faktor der Score-Rechnung auf der CPU (vorher war
     sie eine Graph-Konstante, gelegt in graph_rec_post). 'refs' bleibt daneben stehen,
-    weil der Kandidaten-Zweig zeilenweise darin liest (nn_eigen)."""
+    weil die Kandidaten-Auswahl (Bildvorrat._kandidaten) zeilenweise darin liest (nn_eigen)."""
     z = np.load(pfad, allow_pickle=True)
     meta = json.loads(str(z["§meta" if "§meta" in z.files else "meta"]))  # wie analyze._refcache_meta
     modell = face_audit.aktuelles_modell()
@@ -848,7 +1052,12 @@ def urteils_latten(plan):
     """Die Urteils-Latten wie analyze.py:114-133 und :197-201. Werte aus dem Messplan
     (argv_fest = die argv, die verifyd.run_analyze baut): Kante, win_thresh,
     Blickfenster, Anker, Pose; die Guete-Latten wie analyze._latte_aufloesen (nicht
-    gesetzt -> guete.STIMM_DEFAULT, gesetzt -> auf guete.STIMM_BODEN geklemmt)."""
+    gesetzt -> guete.STIMM_DEFAULT, gesetzt -> auf guete.STIMM_BODEN geklemmt).
+    Seit Bauplan K3 Stufe KP1: dazu das Norm-Sieb `urteil_norm_min` (event_rechnen) und
+    `stapel_stimmen`, die Stimmen bis erkannt des Stapels (core.stapel); fehlt einer der
+    beiden im Messplan, ist er 0 = aus (Messplaene von vor dieser Stufe rechnen unveraendert).
+    Seit Stufe KP2: `tuer_fenster` (Bilder je Oeffnung der Tuer, core.tuer) und `tuer_deckel` (hoechstens
+    so viele Tuer-Bilder je Ereignis); fehlen sie, sind sie 0: keine Tuer bzw. kein Deckel."""
     fest = plan["argv_fest"]
 
     def latte(schluessel, mass):
@@ -860,6 +1069,10 @@ def urteils_latten(plan):
            "urteil_anker": float(fest["urteil_anker"]),
            "pose": max(0.0, float(fest["urteil_pose"])),
            "guete_e": latte("urteil_guete_e", "empfinden"), "guete_t": latte("urteil_guete_t", "t"),
+           "urteil_norm_min": float(fest.get("urteil_norm_min") or 0),
+           "stapel_stimmen": int(float(fest.get("stapel_stimmen") or 0)),
+           "tuer_fenster": int(float(fest.get("tuer_fenster") or 0)),
+           "tuer_deckel": int(float(fest.get("tuer_deckel") or 0)),
            # v8: die Latten der fd-Regel. Die Schluessel kommen aus der Signatur von
            # face_audit.ist_fehldetektion selbst (FD_VORGABE), die Werte aus dem Messplan
            # unter den argparse-Namen von analyze (fd_front_min, fd_sharp_min, fd_det_max);
@@ -872,9 +1085,12 @@ def urteils_latten(plan):
 
 # ------------------------------------------------------------------ Kandidaten und Bilder
 def kand_gate(f):
-    """Das Kandidaten-Gate von analyze.py:711-712 — UNABHAENGIG von der Kaskade. Es ist
-    keine Teilmenge von ihr: ein Gesicht kann an e/t/p scheitern und trotzdem hier
-    durchkommen (dann braucht es die Erkennungs-Stufe extra).
+    """Das Kandidaten-Gate von analyze.py:711-712 — UNABHAENGIG von der Kaskade gerechnet.
+    Es ist keine Teilmenge von ihr: ein Gesicht kann an e/t/p scheitern und trotzdem hier
+    durchkommen. Seit Bauplan K3, KP1 Punkt 8 ist es nur noch eine ZUSAETZLICHE
+    Bedingung: Kandidat wird erst ein Gesicht, das auch einen Erkennungswert hat
+    (Bildvorrat.frame_zug); ein Tor-Erfueller ausserhalb der Kaskade wird nicht mehr
+    nachgerechnet.
     Nebenbei: es trifft NIE eine Fehldetektion, denn fd verlangt det < fd_det_max (0,70)
     und das Gate det >= 0,7 — die beiden Mengen sind disjunkt, ohne dass hier gefiltert
     werden muss."""
@@ -941,9 +1157,13 @@ class Bildvorrat:
         Sentinel 0 / -1,0 / -2,0 stehen an derselben Stelle.
 
         UNTERSCHIED ZU ALT, bewusst: dort hat JEDE Detektion Scores, hier nur die
-        Kaskaden-Ueberlebenden (und im Kandidaten-Zweig die Gate-Erfueller). Die Argmaxe
-        laufen deshalb ueber dieselbe Menge, die auch zusammenfassen() sieht — sonst
-        stuende im Dateinamen ein NN-Wert, den die Zusammenfassung nicht kennt."""
+        Kaskaden-Ueberlebenden. Die Argmaxe laufen deshalb ueber dieselbe Menge, die auch
+        zusammenfassen() sieht — sonst stuende im Dateinamen ein NN-Wert, den die
+        Zusammenfassung nicht kennt.
+
+        KANDIDATEN (Bauplan K3, KP1 Punkt 8): Anlern- und Fremd-Kandidat wird nur ein
+        Gesicht mit Erkennungswert (`sc`), also eines, das alle Siebe bestanden hat (Kante,
+        Fehldetektion, e, t, p, Norm), und das zusaetzlich das Kandidaten-Tor erfuellt."""
         wt = self.lat["win_thresh"]
         for f in faces:
             x1, y1, x2, y2 = f["_bb"]
@@ -958,10 +1178,7 @@ class Bildvorrat:
                         self._tausch(self.nnctx, pp, s, i, rahmen, cbox)
                     if s > self.best.get(pp, (-2.0,))[0]:
                         self._tausch(self.best, pp, s, i, rahmen, f["_bb"])
-            if not f["kand"]:
-                continue
-            ksc = f["sc"] if f["sc"] is not None else f.get("ksc")
-            if not ksc or f["_emb"] is None:
+            if not f["kand"] or not sc:
                 continue
             kd = {"t": round(i / fps, 1), "bw": f["bw"], "bh": f["bh"],
                   "front": round(f["front"], 2), "det": round(f["det"], 2),
@@ -973,12 +1190,12 @@ class Bildvorrat:
                   "mk_quelle": (MK_QUELLE if (f["t"] is not None and f["e"] is not None)
                                 else None),
                   "mk_modell": self.modell}
-            p = max(ksc, key=ksc.get)
-            bester = max(ksc.values())
-            if ksc[p] >= KAND_SCORE_MIN and ksc[p] == bester:
-                if ksc[p] > self.enroll.get(p, (-1.0,))[0]:
-                    self._tausch(self.enroll, p, ksc[p], i, rahmen,
-                                 ({**kd, "person": p, "score": round(ksc[p], 3)}, f["_bb"]))
+            p = max(sc, key=sc.get)
+            bester = max(sc.values())
+            if sc[p] >= KAND_SCORE_MIN and sc[p] == bester:
+                if sc[p] > self.enroll.get(p, (-1.0,))[0]:
+                    self._tausch(self.enroll, p, sc[p], i, rahmen,
+                                 ({**kd, "person": p, "score": round(sc[p], 3)}, f["_bb"]))
             elif bester < FREMD_UNTER:
                 guete_wert = f["det"] * (x2 - x1) * (y2 - y1)
                 if self.fremd is None or guete_wert > self.fremd[0]:
@@ -1075,7 +1292,7 @@ class Bildvorrat:
 
 # ------------------------------------------------------------------ Die Kaskade
 def event_rechnen(engine, g, clip, schritt, schwelle, fps, alle, mit_refs, erk, lat,
-                  zaehler, zeiten, vorrat=None):
+                  zaehler, zeiten, vorrat=None, personenzahl=None, ende=None):
     """EIN Event: decodieren, je Sample-Frame und Gesicht die fuenf Werte in fester
     Reihenfolge, Abbruch beim ersten Wert ausserhalb seiner Latte; die Erkennung
     bekommt nur ein Gesicht, das alle fuenf besteht (User 11.09.: „wenn einer der
@@ -1085,19 +1302,19 @@ def event_rechnen(engine, g, clip, schritt, schwelle, fps, alle, mit_refs, erk, 
     Kaskade, Latten wie im Worker (urteils_latten):
       det   det-Schwelle der Kamera: darunter liefert der Detektor nichts
       k     kurze Boxkante >= urteil_kante                      CPU, ohne Kosten   SIEBT
-      e     Efficient-FIQA, Guete-Latte e                        GPU-Stufe e       misst
-      t     eDifFIQA-T, Guete-Latte t                            GPU-Stufe t       misst
+      e     Efficient-FIQA, Guete-Latte e                        GPU-Stufe e       SIEBT
+      t     eDifFIQA-T, Guete-Latte t                            GPU-Stufe t       SIEBT
       p     RTMPose-Kopf-Score >= urteil_pose                    GPU-Stufe p       SIEBT
       Erkennung, Scores je Person                                GPU-Stufe r + CPU-Matmul
-    SIEBT/misst ist der Entscheid vom 14.09.2026 (s. gpu_stufen unten): e und t
-    MESSEN nur — ihr Wert siebt die STIMMEN in `zusammenfassen` (guete.stimme_ok),
-    genau wie im alten Worker, aber nicht mehr das Bild und nicht mehr die Akte.
-    Kante, fd und Pose sieben die Kaskade weiter; wer dort ausscheidet, bekommt
-    keine Erkennung. Nicht messbar (leerer Box-Ausschnitt fuer e) verwirft die
-    Stimme fail-closed (guete.stimme_ok), nimmt dem Fund aber keinen Score. Eine
-    Latte <= 0 ist aus: der Wert wird nicht gemessen. Werte ungerundet; "abbruch"
-    nennt die Stufe, an der ein Gesicht die KASKADE verliess; zaehler: wie viele
-    Gesichter jede Stufe bestanden.
+      n     Feature-Norm >= urteil_norm_min (Norm-Sieb)          aus der Stufe r   SIEBT
+    SIEBT/misst steht in GPU_STUFEN_SIEBT (s. gpu_stufen unten). Seit Bauplan K3,
+    Stufe KP1 sieben e, t und p die Kaskade (K3 aus L16); der Entscheid vom
+    14.09.2026, nach dem e und t nur messen, ist damit gekippt. Wer an Kante, fd,
+    e, t, p oder am Norm-Sieb ausscheidet, bekommt keine Erkennung. Nicht messbar
+    (leerer Box-Ausschnitt fuer e) heisst bei einer siebenden Stufe Abbruch an ihr.
+    Eine Latte <= 0 ist aus: der Wert wird nicht gemessen. Werte ungerundet;
+    "abbruch" nennt die Stufe, an der ein Gesicht die KASKADE verliess; zaehler:
+    wie viele Gesichter jede Stufe bestanden.
 
     v7: die Stufen laufen ueber den Satz dieses Rechenstrangs (satz.stufe), in
     Aufrufen fester Breite; das RGB-Vollbild entsteht einmal je Frame in satz.det()
@@ -1105,14 +1322,26 @@ def event_rechnen(engine, g, clip, schritt, schwelle, fps, alle, mit_refs, erk, 
 
     v8: DREI Zusaetze. Die fd-Stufe RECHNET vor der k-Latte fuer jede Detektion
     (Nachzug 13.09.), nimmt ihre fd-Gesichter aber erst hinter der k-Latte aus der
-    Kaskade — zwischen k und e; der Kandidaten-Zweig laeuft HINTER ihr und ist von ihrem
-    Ergebnis unabhaengig (er kann eine eigene Erkennungs-Stufe ausloesen); die Argmaxe
+    Kaskade — zwischen k und e; das Kandidaten-Tor markiert HINTER ihr die Tor-Erfueller,
+    Kandidat wird davon seit Bauplan K3, KP1 Punkt 8 nur, wer einen Erkennungswert hat
+    (keine eigene Erkennungs-Stufe mehr fuer Gesichter ausserhalb der Kaskade); die Argmaxe
     der Bestbilder wandern in den `vorrat`, der die Sieger-Frames festhaelt. `zeiten`
     sammelt die Stufenzeiten in Sekunden.
 
     E1: die r-Stufe liefert jetzt das Embedding, die Scores rechnet scores_rechnen auf
     der CPU (Kopf dieser Datei, Konzept §1c). Die Stelle im Ablauf ist dieselbe, und die
-    Zeit dafuer bleibt im Zeitnehmer der Stufe."""
+    Zeit dafuer bleibt im Zeitnehmer der Stufe.
+
+    TUER (Bauplan K3, Stufe KP2): steht `tuer_fenster` in den Latten ueber 0, liefert core.tuer.TuerQuelle
+    die Bilder; sie bekommt nach jedem Bild mit Gesichtern alle Zeilen bis hier (`melden`) und setzt die
+    Kette der Engine danach selbst neu an. Die Kaskade je Bild bleibt dieselbe. `frames` zaehlt dann
+    Grundrate und Tuer zusammen.
+
+    PERSONENZAHL UND FRUEHES ENDE (Bauplan K3, Stufe KP3): `personenzahl` (gueltige Zahl oder None) geht an
+    die Tuer-Quelle, die damit den Stapel deckelt und das Ereignis frueh beendet, sobald so viele
+    verschiedene Namen erkannt sind und die Tuer zu ist. Ein dict `ende` bekommt am Schluss deren Bilanz
+    (core.tuer.bilanz: Grund, geplantes Ende, Tuer-Oeffnungen, Zusatz-Bilder, Logik-Fehler); der
+    Dienst meldet damit das geplante Ende an die Wache. Ohne Tuer endet das Ereignis am Clip-Ende."""
     satz = g.satz()
     zeilen, frames = [], 0
     ohne = {pn: -1.0 for pn in alle if pn not in mit_refs}              # wie analyze.nn
@@ -1126,7 +1355,12 @@ def event_rechnen(engine, g, clip, schritt, schwelle, fps, alle, mit_refs, erk, 
     #   False = sie MISST nur. Der Wert entsteht, er steht in der Akte, und er siebt
     #           allein die STIMMEN (`zusammenfassen.stimme` -> guete.stimme_ok).
     #
-    # Warum e und t hier auf False stehen, und zwar GEMESSEN: im alten Worker
+    # SEIT BAUPLAN K3, STUFE KP1 Punkt 3 stehen e und t wieder auf True (K3 aus L16, Entscheid 2
+    # „wie gemessen"): die Marge ist im Stapel aus, an ihrer Stelle tragen Guete-Sieb,
+    # Norm-Sieb und die Stimmen aus gueltigen Gesichtern (Konzept analysen/konzept_k3_produkt.md,
+    # Abschnitt 2). Den Preis beziffert die Eich-Messung darunter (65 statt 75 Bilder, 0 Namen
+    # anders); er ist mit dem Entscheid angenommen. Der Absatz bleibt als Herleitung stehen.
+    # Warum e und t bis dahin auf False standen, und zwar GEMESSEN: im alten Worker
     # entstanden persons.max/median/best ueber ALLE Detektionen (analyze.py:831-833),
     # und die Guete-Latte siebte dort ausschliesslich die Stimmen (analyze.py:869-872).
     # Das Bild-Gate (analyze.py:915, `mx >= win_thresh`) hat die Guete-Latte deshalb
@@ -1140,19 +1374,26 @@ def event_rechnen(engine, g, clip, schritt, schwelle, fps, alle, mit_refs, erk, 
     # WORAUF sie wirkt. Die Pose-Stufe siebt weiter die Kaskade: sie stand auch im
     # alten Worker vor der Stimme, und die Eich-Messung lief genau so (Diagnose-Lauf
     # mit `--urteil-pose 0.65` und nicht-siebenden Guete-Latten).
-    gpu_stufen = (
-        ("e", lat["guete_e"], False,
-         lambda f: theta_e(f["_bb"], g.W, g.H, g.seiten["e"], g.nm)),
-        ("t", lat["guete_t"], False,
-         lambda f: theta_t(f["_kp"], g.seiten["t"][0], g.nm)),
-        ("p", lat["pose"], True,
-         lambda f: theta_p(f["_box"], g.W, g.H, g.nm)))
-    for i, y, uv in engine.frames(clip, g.W, g.H, schritt):
+    # Reihenfolge und SIEBT/misst stehen EINMAL in GPU_STUFEN_SIEBT (Kopf dieser Datei); hier
+    # kommen nur Latte und Ausschnitt-Vorschrift je Stufe dazu.
+    latte_je = {"e": lat["guete_e"], "t": lat["guete_t"], "p": lat["pose"]}
+    theta_je = {"e": lambda f: theta_e(f["_bb"], g.W, g.H, g.seiten["e"], g.nm),
+                "t": lambda f: theta_t(f["_kp"], g.seiten["t"][0], g.nm),
+                "p": lambda f: theta_p(f["_box"], g.W, g.H, g.nm)}
+    gpu_stufen = tuple((k, latte_je[k], siebt, theta_je[k]) for k, siebt in GPU_STUFEN_SIEBT)
+    # TUER (Bauplan K3, Stufe KP2): mit `tuer_fenster` > 0 kommen die Bilder aus der Tuer-Quelle
+    # (core.tuer), die auf derselben Engine-Kette neu ansetzt; sonst unveraendert die Grundrate.
+    quelle = (_tuer.TuerQuelle(lambda s, sp: (engine.frames(clip, g.W, g.H, s) if sp is None
+                                              else engine.frames(clip, g.W, g.H, s, sprung=sp)),
+                               clip, schritt, lat, personenzahl) if lat["tuer_fenster"] > 0 else None)
+    for i, y, uv in (quelle if quelle is not None else engine.frames(clip, g.W, g.H, schritt)):
         frames += 1
+        herkunft = quelle.herkunft if quelle is not None else _tuer.GRUNDRATE
         t0 = time.monotonic()
         dets, kpss = detektor(satz.det(y, uv), g.det_wh, g.det_scale, schwelle, g.zentren)
         zeiten["det"] += time.monotonic() - t0
         if len(dets) == 0:
+            bild_melden(clip, i, herkunft, ())
             continue
         faces = []
         for d, kp in zip(dets, kpss):
@@ -1252,36 +1493,50 @@ def event_rechnen(engine, g, clip, schritt, schwelle, fps, alle, mit_refs, erk, 
             for q, (f, w) in enumerate(zip(weiter, aus)):
                 f["sc"] = {**ohne, **{pn: float(sc[q][j]) for j, pn in enumerate(mit_refs)}}
                 f["norm"] = float(np.ravel(w[1])[0])
+                # NORM-SIEB (Bauplan K3 Stufe KP1 Punkt 4, wie im Labor L16): liegt die
+                # Feature-Norm unter `urteil_norm_min`, verliert das Gesicht seinen
+                # Erkennungswert und verlaesst die Kaskade mit Abbruch "n"; die Norm bleibt
+                # stehen. Latte <= 0 = aus. Ohne Erkennungswert wird das Gesicht auch kein
+                # Anlern- oder Fremd-Kandidat (Bildvorrat.frame_zug, KP1 Punkt 8).
+                if lat["urteil_norm_min"] > 0 and f["norm"] < lat["urteil_norm_min"]:
+                    f["sc"] = None
+                    f["abbruch"] = "n"
                 f["_emb"] = w[0]
             zeiten["r"] += time.monotonic() - t0
-        # --- Kandidaten-Zweig (v8): Gate-Erfueller bekommen die Erkennung AUCH ohne
-        #     Kaskade. Nur die, die sie nicht schon haben — die uebrigen Gate-Erfueller
-        #     tragen ihr Embedding aus dem Aufruf oben.
+        # --- Kandidaten-Tor (v8): es markiert nur noch. Kandidat wird ein Gesicht erst mit
+        #     Erkennungswert, also nach allen Sieben (Bauplan K3, KP1 Punkt 8; Eigentuemer
+        #     04.10.: in Unbekannt- und Anlern-Pool nur Bilder, die durch die Filter kamen).
+        #     Der fruehere Kandidaten-Zweig, der Tor-Erfueller ausserhalb der Kaskade
+        #     nachrechnete, ist damit entfallen.
         gate = [f for f in faces if kand_gate(f)]
         for f in gate:
             f["kand"] = True
-        offen = [f for f in gate if f["_emb"] is None]
-        if offen:
-            t0 = time.monotonic()
-            aus = satz.stufe("r", [theta_t(f["_kp"], g.seiten["r"][0], g.nm)
-                                   for f in offen])
-            ksc = scores_rechnen([w[0] for w in aus], erk)
-            for q, (f, w) in enumerate(zip(offen, aus)):
-                # NICHT in "sc": die Zusammenfassung rechnet ueber die Kaskade, ein
-                # Kandidaten-Score wuerde ihre Kennwerte verschieben. Eigener Schluessel.
-                f["ksc"] = {**ohne, **{pn: float(ksc[q][j]) for j, pn in enumerate(mit_refs)}}
-                f["_emb"] = w[0]
-            zeiten["kand"] += time.monotonic() - t0
-            zaehler["kand_extra"] += len(offen)
         zaehler["kand_gate"] += len(gate)
         if vorrat is not None:
             t0 = time.monotonic()
             vorrat.frame_zug(faces, int(i), (y, uv), fps)
             zeiten["bilder"] += time.monotonic() - t0
+        bild_melden(clip, i, herkunft, faces)
         for f in faces:
             del f["_bb"], f["_box"], f["_kp"], f["_emb"]
         zeilen.extend(faces)
+        if quelle is not None:
+            quelle.melden(i, faces, zeilen)          # je Bild: erst Urteil, dann Tuer (l5_regel.py:11)
+    if ende is not None:                             # KP3: Bilanz des Endes fuer den Dienst
+        ende.update(_tuer.bilanz(quelle))
     return zeilen, frames
+
+
+def bild_melden(clip, i, herkunft, faces):
+    """Die Ausgabe je gepruefem Bild fuer den Abgleich gegen den Anker (Bauplan K3, KP2 Punkt 6;
+    Konzept 3.8): Bildnummer, Herkunft, je Gesicht Box, Sieb-Grund und Erkennungswert, ungerundet, als
+    DEBUG-Zeile (nur bei eingeschaltetem Debug, Tuer-Konzept Abschnitt 5). -> None"""
+    if not _log.isEnabledFor(_logbuch.DEBUG):
+        return
+    _log.debug("frame " + json.dumps({
+        "clip": os.path.basename(clip), "i": int(i), "herkunft": herkunft,
+        "gesichter": [{"box": f["_bb"], "abbruch": f["abbruch"], "erkennung": f["sc"]}
+                      for f in faces]}))
 
 
 # ------------------------------------------------------------------ Zusammenfassung
@@ -1293,13 +1548,11 @@ def zusammenfassen(zeilen, personen, lat):
     wortgleich drin und sieben die STIMMEN — nicht die Kennwerte.
     best_front/best_pose fehlen, bis die Landmarks eingebaut sind.
 
-    WIRKSTELLE (User-Entscheid 14.09.2026): seit die Guete-Stufen e/t nur noch
-    MESSEN und nicht mehr die Kaskade sieben (event_rechnen, gpu_stufen), ist diese
-    Menge wieder die des alten Workers — alle Detektionen, die Kante, fd und Pose
-    bestanden haben, mit ihrem Score. Die Guete-Latte trifft sie erst hier, in
-    `stimme`, und damit genau dort, wo sie im alten Worker immer stand. Der Filter
-    unten (`sc is not None`) ist deshalb keine Latten-Frage mehr, sondern nur noch
-    die technische: hat dieser Fund ueberhaupt eine Erkennung bekommen."""
+    WIRKSTELLE: seit Bauplan K3, Stufe KP1 sieben e, t, p und das Norm-Sieb die
+    Kaskade (event_rechnen, gpu_stufen); diese Menge sind damit die Gesichter, die
+    alle Siebe bestanden haben. Die Stimm-Filter in `stimme` bleiben wortgleich
+    stehen. Die Namen des Ereignisses entscheidet auf dem Worker-Weg der Stapel
+    (core.stapel), nicht diese Kennwerte; sie tragen Akte, Bilder und Log-Zeilen."""
     zeilen = [f for f in zeilen if f["sc"] is not None]
     if not zeilen:
         return {}

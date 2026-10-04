@@ -23,6 +23,8 @@ from core.sprache import t, t_n
 from webui.bausteine import KAT_FARBE, bild_nn, gt_leiste
 from webui.bausteine import fehler_grund as _fehler_grund
 from webui.bausteine import kat_wort as _kat_wort, stufe_wort as _stufe_wort
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 
 def verwurf_text(row):
@@ -54,6 +56,7 @@ def render(cfg, log_path, eid, gt_schnellpersonen, master_persons):
                 try:
                     r = json.loads(l)
                 except Exception:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                     continue
                 rows_all.append(r)
                 if r.get("eid") == eid:

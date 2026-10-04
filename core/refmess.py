@@ -44,6 +44,8 @@ import os
 import re
 
 from core import atomar as _atomar
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 SCHEMA = 1
 DATEI = "refs_mess.json"
@@ -79,6 +81,7 @@ def anker(bild_pfad):
     try:
         st = os.stat(bild_pfad)
     except OSError:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
         return None
     return [int(st.st_size), int(st.st_mtime_ns)]
 
@@ -91,6 +94,7 @@ def lesen(master_dir):
         with open(pfad(master_dir), encoding="utf-8") as f:
             d = json.load(f)
     except Exception:                                    # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning ({}, {})")
         return {}, {}
     if not isinstance(d, dict) or int(d.get("schema") or 0) != SCHEMA:
         return {}, {}
@@ -110,8 +114,8 @@ def schreiben(master_dir, bilder, kopf=None):
                           lambda f: json.dump(d, f, ensure_ascii=False))
         return True
     except Exception as e:                               # noqa: BLE001
-        print(f"reference measurement store not written: "
-              f"{type(e).__name__}: {e}", flush=True)
+        _log.error(f"reference measurement store not written: "
+              f"{type(e).__name__}: {e}")
         return False
 
 
@@ -173,7 +177,7 @@ def kamera_karte(data_dir, eids):
         quellen += sorted(os.path.join(adir, f) for f in os.listdir(adir)
                           if f.startswith("deckung_") and f.endswith(".jsonl"))
     except OSError:
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     quellen.append(os.path.join(data_dir, "learn", "gesichter.jsonl"))
     for q in quellen:
         try:
@@ -186,6 +190,7 @@ def kamera_karte(data_dir, eids):
                     if c is not None and c.group(1):
                         aus[m.group(1)] = c.group(1)
         except OSError:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
             continue
         if len(aus) == len(gesucht):
             break

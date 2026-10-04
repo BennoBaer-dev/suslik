@@ -7,6 +7,8 @@
 import json
 import os
 import time
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 
 def dateisystem_typ(pfad, mounts="/proc/mounts"):
@@ -26,6 +28,7 @@ def dateisystem_typ(pfad, mounts="/proc/mounts"):
     try:
         ziel = os.path.realpath(pfad or "")
     except Exception:                                         # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning '?'")
         return "?"
     if not ziel:
         return "?"
@@ -33,6 +36,7 @@ def dateisystem_typ(pfad, mounts="/proc/mounts"):
         with open(mounts, encoding="utf-8", errors="replace") as f:
             zeilen = f.readlines()
     except Exception:                                         # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning '?'")
         return "?"
     treffer, laenge = "?", -1
     for z in zeilen:

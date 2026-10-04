@@ -91,6 +91,8 @@ import tempfile
 import time
 
 from core import messkarte as _mk     # nur Vertrag/Feldnamen, keine schweren Imports
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 # Pflicht-Schwellen, die der Aufrufer aus der Config liefern MUSS (kein Default hier —
 # Allgemeinheits-Wache §2.4b: fehlt einer, ist das ein Verdrahtungsfehler und faellt laut).
@@ -483,7 +485,7 @@ def puls_schreiben(lauf_dir, daten):
             json.dump(daten, f, ensure_ascii=False)
         os.replace(tmp, p)
     except OSError:
-        pass
+        _logbuch.swallowed(_log, _logbuch.ERROR, "ignored", throttle=False)
 
 
 def puls_loeschen(lauf_dir):
@@ -492,7 +494,7 @@ def puls_loeschen(lauf_dir):
     try:
         os.unlink(puls_pfad(lauf_dir))
     except OSError:
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
 
 
 def puls_lesen(lauf_dir, jetzt=None):
@@ -502,6 +504,7 @@ def puls_lesen(lauf_dir, jetzt=None):
         with open(puls_pfad(lauf_dir), encoding="utf-8") as f:
             d = json.load(f)
     except (OSError, ValueError):
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
         return None
     if not isinstance(d, dict):
         return None
@@ -584,6 +587,7 @@ def manifest_lesen(lauf_dir):
         with open(p, encoding="utf-8") as f:
             return json.load(f)
     except Exception:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
         return None
 
 
@@ -692,10 +696,11 @@ def pose_kopf(frame, bbox):
         _pts, sc = w.skelett(frame, bbox=_pr(bbox, b, h))
         return float(max(sc[j] for j in _KIDX))
     except Exception:                                          # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
         return None
 
 
-def kalib_vorrat_speisen(lauf_dir, kamera, best, kalib, log=print):
+def kalib_vorrat_speisen(lauf_dir, kamera, best, kalib, log=_log):
     """EIN Bild dieses Events in den Kalibrier-Vorrat SEINER Kamera legen.
 
     WARUM HIER (User-Entscheid 31.08., Zentral-Umbau der Kalibrierung): der
@@ -740,7 +745,7 @@ def kalib_vorrat_speisen(lauf_dir, kamera, best, kalib, log=print):
             # das mensch_ok=True ist die deklarierte Grenze dieses Zulaufs.
             mensch_ok=True))
     except Exception as e:                                    # noqa: BLE001
-        log(f"ernte: Kalibrier-Vorrat nicht beschickt "
+        log.warning(f"ernte: calibration stock not fed "
             f"({type(e).__name__}: {e})")
         return False
 
@@ -1385,17 +1390,17 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
                  if z.get("guete_fehler") else
                  f"models missing ({os.path.basename(_guete.PFAD_T)}, "
                  f"{os.path.basename(_guete.PFAD_E)})")
-        print(f"ernte {eid}: no image-quality scores for "
+        _log.error(f"ernte {eid}: no image-quality scores for "
               f"{bilanz['unmessbar']} of {bilanz['gesehen']} finding(s) — {grund}; "
               f"those lines carry no quality scores and the calibration page "
-              f"cannot use them", flush=True)
+              f"cannot use them")
     # .514: eine Achse, die wegen eines fehlenden MODELLS herausgenommen wurde,
     # wird nie verschwiegen (fail-open je Modell, aber laut). Dieselbe Haltung
     # wie v_aus/struktur_aus und wortgleich zum Erkennungs-Weg
     # (analyze.py „URTEILS-VORFILTER AUS" / „POSE-STIMM-SIEB AUS").
     for _achse, _grund in (sieb_aus or {}).items():
-        print(f"ernte {eid}: SIEVE AXIS OFF ({_achse}) — {_grund}; "
-              f"this axis lets everything through for this run", flush=True)
+        _log.error(f"ernte {eid}: SIEVE AXIS OFF ({_achse}) — {_grund}; "
+              f"this axis lets everything through for this run")
     # .518: eine Achse, die NACH der Ernte gemessen wird, ist keine
     # abgeschaltete Achse — aber eine, fuer die es auf DIESEM Weg gar keinen
     # Nachmess-Schritt gibt, wirkt nirgends. Nur diesen zweiten Fall meldet der
@@ -1403,8 +1408,8 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
     # (EINE Zeile je Lauf statt einer je Ereignis).
     if not nachmess:
         for _achse, _grund in (sieb_nach or {}).items():
-            print(f"ernte {eid}: SIEVE AXIS NOT APPLIED ({_achse}) — {_grund}; "
-                  f"this axis lets everything through on this path", flush=True)
+            _log.warning(f"ernte {eid}: SIEVE AXIS NOT APPLIED ({_achse}) — {_grund}; "
+                  f"this axis lets everything through on this path")
     # KALIBRIER-VORRAT: nach dem Lauf, EIN Bild. BEWUSST kein neuer Zaehler im
     # Rueckgabe-Topf — ZAEHLER_START und die festen Transport-Listen (Regel
     # SK3) bleiben unberuehrt; wer wissen will, wie viele Bilder ankamen,
@@ -1470,6 +1475,7 @@ def bestand_pruefen(lauf_dir):
                 try:
                     d = json.loads(zeile)
                 except Exception:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                     continue
                 if d.get("ok"):
                     eids_ok[d["eid"]] = int(d.get("kandidaten") or 0)

@@ -10,6 +10,8 @@ import hashlib
 import time
 
 from core import areas as _areas          # .507 B3b: Kettungs-Modus je Area —
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 # reines Datenmodul (nur `re`), kein Dienst-Import; der Modul-Kontrakt bleibt.
 
 
@@ -175,6 +177,7 @@ def gt_laden(pfad, master=None):
                     pers = gt_personen_aus_label(lbl, master)
                 out[eid] = {"label": lbl, "personen": [str(x) for x in pers]}
             except Exception:
+                _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                 continue
     return out
 
@@ -302,10 +305,15 @@ def gesicht_gut_zaehlen(detektionen, front_min=GESICHT_FRONT_MIN,
     Gross allein reicht NICHT: im Anlass-Durchgang hatte eine Kamera das mit
     Abstand groesste Gesicht (141x183 Pixel), aber front 0.02 — reines Profil
     und damit wertlos. Frontalitaet und Groesse muessen zusammen stimmen, und
-    Fehldetektionen (Gras, Laub) zaehlen nie mit."""
+    Fehldetektionen (Gras, Laub) zaehlen nie mit.
+
+    Bauplan K3, Stufe KP2 (Entscheid 7): gezaehlt werden nur Bilder der Grundrate.
+    Eine Detektion aus einem Zusatzbild der Tuer (`"grundrate": false`, gesetzt von
+    worker_dienst.detektionen_bauen) zaehlt nicht, damit die Tuer die Einstufung der
+    Durchgaenge nicht verschiebt; fehlt das Feld, ist es ein Bild der Grundrate."""
     n = 0
     for d in (detektionen or []):
-        if d.get("fd"):
+        if d.get("fd") or d.get("grundrate") is False:
             continue
         if (d.get("front") or 0) >= front_min and (d.get("bw") or 0) >= breite_min:
             n += 1

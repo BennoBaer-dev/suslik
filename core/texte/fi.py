@@ -67,6 +67,26 @@ T = {
         "Tämä teksti näkyy kertaalleen jokaisen uudelleenkäynnistyksen "
         "jälkeen.",
     "readme.inhalt": "Sisältö",
+    "readme.neu.titel": "Uutta tässä versiossa",
+    "readme.neu.text":
+        "Tässä versiossa on muuttunut paljon, alkaen siitä, miten testaan ennen "
+        "julkaisua. Jokainen versio käy nyt läpi testiajon kolmella "
+        "testikoneella ennen kuin julkaisen sen. Välillä koodiin oli livahtanut "
+        "virheitä. Testiajon tarkoitus on löytää ne aiemmin.\n\n"
+        "Kasvontunnistus toimii nyt eri tavalla. Ohjelma tarkistaa edelleen "
+        "tapahtumasta joka x:nnen kuvan. Kun kasvot saavuttavat tunnetun "
+        "henkilön kohdalla tietyn arvon, ovi aukeaa: seuraavat 20 kuvaa "
+        "tarkistetaan yksitellen. Jos kasvot saavuttavat saman arvon uudelleen "
+        "ikkunan sisällä, ovi pysyy auki pidempään. Sen jälkeen palataan joka "
+        "x:nteen kuvaan.\n\n"
+        "Nimi muuttuu vihreäksi vasta kolmen osuman jälkeen. Jokainen "
+        "käyttökelpoinen kasvokuva, joka sopii henkilöön, lasketaan yhdeksi "
+        "osumaksi. Kasvot, jotka näkyvät selvästi vain hetken, saavat nyt "
+        "paremman mahdollisuuden: kun ne on havaittu, heti niiden jälkeisiä "
+        "kuvia ei enää ohiteta.\n\n"
+        "Kaikki palaute ilahduttaa minua, varsinkin kun uusi tunnistus menee "
+        "pieleen: väärä nimi tai tunnettu henkilö, jota ei tunnisteta. Vain "
+        "niin pystyn työstämään virheitä.",
     "readme.generell.titel": "Yleistä",
     "readme.generell.text": "Skenaariotunnistukseni nojaa Frigaten henkilöiden havaitsemiseen. Heti kun Frigate ilmoittaa henkilöstä, haen koko henkilötapahtuman. Tällainen tapahtuma on joskus muutaman sekunnin, joskus useita minuutteja pitkä. Käyn sen kokonaan läpi löytääkseni siitä jokaisen henkilön.\n\nSillä ei ole väliä, onko Frigaten oma kasvontunnistus päällä. Sitä tarvitaan vain, jos haluat täsmäyttää kasvot Frigaten kanssa.\n\nTarkistus ei koskaan käytä detect-streamia. Se käyttää tallennetta, eli parasta streamia, jonka kamera antaa Frigatelle.\n\nTarkistus käynnistyy kahdella tavalla. Joko Frigaten henkilötapahtumasta, se on skenaarion tie. Tai live-vahdista: se hakee käynnissä olevan streamin suoraan kamerasta tai Frigaten proxyn kautta, etsii siitä kasvot ja lähtee siitä liikkeelle.\n\nHenkilö tunnistetaan kolmella tavalla. Kasvoista. Koko henkilöstä, pelkästä kuvasta, ilman kasvoja. Vision-mallilla, ja se tie on vielä beta.\n\nMinulla on täällä 4K-kamerat, kuvataajuus niin korkealla kuin se menee, vähintään 15 kuvaa sekunnissa. Bittinopeus yhtä lailla. Matala bittinopeus jättää liikkuvat kasvot epäteräviksi.",
     "readme.aktuell.titel": "Mitä parhaillaan työstän",
@@ -440,9 +460,12 @@ T = {
         "taulukossa, oletuksena pois. Jokainen pyyntö kirjataan palvelun "
         "lokiin. Kasvo- ja kehoalueet sisältävät kuvia oikeista ihmisistä "
         "— luovuta token harkiten. Ilman TLS:ää tämän palvelun edessä "
-        "token kulkee selkokielisenä. Versiosta 0.1.0.395 lähtien token "
-        "sallii myös yhden toiminnon: tämän palvelun "
-        "uudelleenkäynnistyksen etänä (POST /support/restart).",
+        "token kulkee selkokielisenä. Token sallii myös neljä toimintoa: "
+        "tämän palvelun uudelleenkäynnistyksen etänä (POST /support/restart), "
+        "tapahtumien ajamisen uudelleen tunnistuksen läpi "
+        "(POST /support/einspielen), hienomittauksen kytkemisen päälle tai "
+        "pois (POST /support/feinmessung) ja debug-lokin kytkemisen päälle "
+        "tai pois ilman uudelleenkäynnistystä (POST /support/debug).",
     "konfiguration.support.token_gesetzt": "Support-token on asetettu.",
     "konfiguration.support.token_fehlt": "Ei vielä support-tokenia.",
     "konfiguration.support.knopf_token": "Luo uusi token",

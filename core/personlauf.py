@@ -13,6 +13,8 @@ import json
 import os
 import sys
 import time
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 WURZEL = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -43,6 +45,7 @@ def pass_schluessel(pk):
         import szenarien as _szen
         return _szen._pass_schluessel(float(pk))
     except (TypeError, ValueError, ImportError):
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning str(pk)")
         return str(pk)
 
 
@@ -142,7 +145,7 @@ def fenster_bestimmen(timeout=10):
             if tage:
                 return tage, "frigate-config", je_kamera
         except Exception:
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     return FENSTER_FALLBACK_TAGE, "fallback", {}
 
 
@@ -275,7 +278,7 @@ def anlegen(data_dir, n_events, person="", tage=None):
                         if (o.get("max") or 0) >= 0.3:
                             schwach += 1
         except OSError:
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         diagnose["zuletzt_bestaetigt"] = zuletzt or None
         diagnose["akte_seit"] = akte_seit or None
         diagnose["gesehen_schwach"] = schwach

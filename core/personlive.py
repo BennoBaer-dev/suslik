@@ -37,6 +37,8 @@ import urllib.request
 from core import frigate_auth as _fauth   # 5e: DER eine Frigate-HTTP-Griff
 
 import numpy as np
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 FENSTER_S = 600
 FEUER_AB = 2
@@ -64,6 +66,7 @@ def _fenster_lesen(data_dir):
     try:
         return json.load(open(p))
     except (ValueError, OSError):
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning {'treffer': [], 'karenz': {}}")
         return {"treffer": [], "karenz": {}}
 
 
@@ -128,12 +131,12 @@ def treffer_buchen(data_dir, eintrag, kontrolle=None):
                     if fn.endswith(".jpg") and fn not in bleiben:
                         os.remove(os.path.join(tdir, fn))
             except OSError:
-                pass
+                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
             # Z8: der Kontroll-Speicher verfaellt im SELBEN Trim — dieselbe
             # Bildklasse, dieselbe Frist (TRIM_TAGE), dieselbe Waisen-Idee.
             kontrolle_raeumen(data_dir, kontrolle)
     except OSError:
-        pass                       # Buchung ist Zusatznutzen, nie Urteils-Blocker
+        _logbuch.swallowed(_log, _logbuch.ERROR, "ignored", throttle=False)                       # Buchung ist Zusatznutzen, nie Urteils-Blocker
 
 
 def treffer_karte(data_dir):
@@ -148,7 +151,7 @@ def treffer_karte(data_dir):
             except ValueError:
                 pass
     except OSError:
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     return karte
 
 
@@ -239,6 +242,7 @@ def kontrolle_ablegen(data_dir, kontrolle, eid, crop, urteil):
             f.flush()
             os.fsync(f.fileno())
     except (OSError, ValueError, KeyError):
+        _logbuch.swallowed(_log, _logbuch.ERROR, "returning None", throttle=False)
         return None
     # Raeumen gleich hier, weil erst HIER der laufende Pass bekannt ist: im
     # Schlank-Modus soll ein abgeschlossener Durchgang seine Bilder wieder
@@ -275,6 +279,7 @@ def kontrolle_raeumen(data_dir, kontrolle, jetzt=None):
     try:
         ordner = sorted(os.listdir(wurzel))
     except OSError:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning weg")
         return weg
     for pk in ordner:
         d = os.path.join(wurzel, pk)
@@ -283,6 +288,7 @@ def kontrolle_raeumen(data_dir, kontrolle, jetzt=None):
         try:
             dateien = os.listdir(d)
         except OSError:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
             continue
         gebucht, letzt = set(), 0.0
         try:
@@ -295,7 +301,7 @@ def kontrolle_raeumen(data_dir, kontrolle, jetzt=None):
                     gebucht.add(e["datei"])
                 letzt = max(letzt, float(e.get("ts") or 0))
         except OSError:
-            pass                   # Ordner ohne Protokoll: Alter aus den Dateien
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")                   # Ordner ohne Protokoll: Alter aus den Dateien
         # Das abgelegte Kandidaten-Gitter des Vision-Laufs ist KEINE Waise: es
         # steht mit Namen in der Abschlusszeile des Vision-Protokolls
         # (`gitter_datei`, geschrieben von core.visionurteil.gitter_ablegen).
@@ -331,12 +337,12 @@ def kontrolle_raeumen(data_dir, kontrolle, jetzt=None):
             if isinstance(buch, list):
                 gebucht.update(x for x in buch if isinstance(x, str))
         except Exception:
-            pass                       # kaputtes Sidecar schuetzt nur nicht
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")                       # kaputtes Sidecar schuetzt nur nicht
         for fn in dateien:
             try:
                 letzt = max(letzt, os.path.getmtime(os.path.join(d, fn)))
             except OSError:
-                pass
+                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         if letzt and jetzt - letzt > TRIM_TAGE * 86400:
             shutil.rmtree(d, ignore_errors=True)
             weg["passe"] += 1
@@ -376,6 +382,7 @@ def kontrolle_lesen(data_dir, max_passe=40):
     try:
         ordner = sorted(os.listdir(wurzel), reverse=True)
     except OSError:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning []")
         return []
     passe = []
     for pk in ordner:
@@ -393,6 +400,7 @@ def kontrolle_lesen(data_dir, max_passe=40):
                     os.path.join(d, e["datei"]))
                 zeilen.append(e)
         except OSError:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
             continue
         if not zeilen:
             continue
@@ -479,7 +487,7 @@ def _uebergabe_raeumen(d):
                     or fn == "koerper.json":
                 os.remove(os.path.join(d, fn))
     except OSError:
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
 
 
 def _uebergabe_lesen(data_dir, eid):
@@ -498,6 +506,7 @@ def _uebergabe_lesen(data_dir, eid):
         with open(os.path.join(d, "koerper.json")) as f:
             daten = json.load(f)
     except (OSError, ValueError):
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
         return None
     try:
         if daten.get("ausfall"):
@@ -555,10 +564,10 @@ def _bild_holen(frigate_url, eid, data_dir=None):
             if (top is None and "snapshot_frame_time" in str(_info or "")
                     and not _CACHE.get("sft_gemeldet")):
                 _CACHE["sft_gemeldet"] = True
-                print("personlive: this Frigate sends no data.snapshot_frame_time "
+                _log.error("personlive: this Frigate sends no data.snapshot_frame_time "
                       f"(first seen on {eid}) — body judgements use the snapshot "
                       "path; body harvest (Person Learn) cannot run on such "
-                      "events (reported once per service start)", flush=True)
+                      "events (reported once per service start)")
         if top:
             if _CACHE.get("wache") is None:
                 from pose_wache import PoseWache
@@ -598,14 +607,14 @@ def _bild_holen(frigate_url, eid, data_dir=None):
                                           "knoechel": det.get("knoechel"),
                                           "fuesse": det.get("fuesse")}}
                 except Exception:
-                    pass               # Zuschnitt ist Politur, nie Blocker
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")               # Zuschnitt ist Politur, nie Blocker
                 px = zug.shape[0] * zug.shape[1]
                 if px > beste_px:
                     beste, beste_px, beste_mess = zug, px, mess
             if beste is not None:
                 return Image.fromarray(beste[:, :, ::-1]), "frames", beste_mess
     except Exception:
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     # Notnagel: Snapshot + Frigate-Box (Alt-Weg bis .147)
     try:
         with _fauth.oeffnen(                                # 5e
@@ -629,6 +638,7 @@ def _bild_holen(frigate_url, eid, data_dir=None):
             return None, "snapshot", {}
         return im.crop((l, t, rt, bb)), "snapshot", {}
     except Exception:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning (None, 'snapshot', {})")
         return None, "snapshot", {}
 
 

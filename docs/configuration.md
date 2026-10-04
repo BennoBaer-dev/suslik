@@ -82,15 +82,47 @@ These are the settings most people touch (all set via the wizard/UI; names shown
   benchmark decides where recognition runs — Intel NPU (`openvino:MIXED`), GPU or CPU — and
   the choice sticks in `state/placement.json` until hardware, runtime or version change),
   or explicit: `openvino:GPU` \| `openvino:NPU` \| `openvino:MIXED` (Intel), `cuda` \| `cuda:0`
-  (NVIDIA), `cpu` (universal fallback for the analysis pipeline — note that **live
-  watchers need a GPU build**; the watcher engine refuses to start on the cpu backend).
+  (NVIDIA), `cpu` (computes on the CPU, available in every image).
   Explicit values are never overridden.
   Equivalent environment variable: `VERIFY_BACKEND`.
+  `cpu` set explicitly is a deliberate choice, not a fallback, also on a GPU image: the log says
+  `cpu requested — computing on CPU` instead of warning that the accelerator did not bind, and live
+  watchers start in the limited CPU mode (one watcher recommended, they share the CPU cores) instead
+  of being refused. A GPU image that ends up on the CPU without that choice — for example `auto`
+  when the device does not bind — is still reported as a fallback. `openvino:CPU` is not offered by
+  the wizard; set by hand, it computes on the CPU (the analysis worker runs its CPU engine, on the
+  OpenVINO CPU runtime where the image has it), not on the GPU.
 - **`worker`** / **`worker_rss_max_mb`** — the persistent analysis worker (default on) keeps
   the models warm between events (the big per-event CPU win). It exits by itself
   after 15 min of quiet and restarts lazily; if its memory ever exceeds
   `worker_rss_max_mb` (default 4096 MB) it is restarted cleanly. `worker: false` restores
   the old process-per-event behavior.
+- **`stillstand_min`** — how many minutes work may wait without one successful analysis before
+  the service reports a standstill: `/health` turns red, the log gets an ERROR line and the fault
+  channel a message. Work means events in the queue or being analysed, background and harvest
+  jobs, and due catch-up retries; the events held back at start for the catch-up button do not
+  count. 10 is the default. The lowest value is 10 because the check runs every 10 minutes, a
+  smaller one could not take effect; the highest is 120 so that a real standstill never stays
+  unreported for more than two hours.
+- **`speicher_ruhe_min`** — how many minutes the card memory must stay free before the service
+  uses more of it again: one more compute thread for the analysis worker, or a live watcher that
+  was switched off for lack of card memory. The room has to be there the whole time; after a
+  setback the time starts again from the beginning. 10 is the default. The lowest value is 10 so
+  that the number of threads cannot swing up and down within minutes (a field system went 5, 6,
+  5); the highest is 240 so that a card with room again waits at most four hours. Watchers come
+  back one per such period. The time only runs while the service runs and jobs arrive; after a
+  restart it starts from the beginning.
+- **`/health` fields for stalls, losses and fallbacks** — `ok` is false while a start check
+  failed, an analysis-failure series is active or a standstill lasts; a standstill lasts until the
+  next successful analysis. `nachhol` counts the events the catch-up run gave up for good since the
+  service started (`verloren_n`, split by reason: `fenster`, `versuche`, `kaputt`, `event_weg`,
+  `clip_weg`, `kein_ergebnis`); each of them also has one ERROR line in the log.
+  `worker.absagen_n` counts the jobs the card memory gate refused since start. `worker.person`
+  says whether the person model's session in the analysis worker fell back to the CPU
+  (`fallback`, with the configured `backend`); that fallback also writes one ERROR line.
+  `worker_straenge.wechsel_letzter` (direction, from, to, time, reason) and `wechsel_n` show the
+  changes of the compute thread count since start; a drop below the configured `worker_straenge`
+  and a drop back after a rise are ERROR lines.
 - **`fd_front_min` / `fd_sharp_min` / `fd_det_max`** — the false-detection filter. The face
   detector sometimes fires on things that are clearly not faces (a wheel hub, foliage, fabric);
   a detection is discarded from *counting, display and the unknown pool* when all three match:
@@ -135,15 +167,36 @@ These are the settings most people touch (all set via the wizard/UI; names shown
   source (`proxy` / `direct` / `url`), processing resolution (360p–2160p, default
   1080p), the two times (appearance end, re-arm), and the notification channels per
   watcher. See [live-watchers.md](live-watchers.md).
-- **Service log on disk** (`log_datei`, `log_behalten_tage`, `log_max_mb`) — suslik writes
-  everything it prints to `<data_dir>/logs/suslik.log`, so the log survives restarts and stays
-  readable without shell access to the container. The file is rotated on every service start,
-  at midnight and when it passes `log_max_mb` (default 64); older pieces are gzipped and deleted
-  after `log_behalten_tage` days (default 14). A full service run is roughly 70 kB, so two weeks
-  cost megabytes, not gigabytes. Read it at `/log` (add `?lines=20000` for more than the default
-  5000), or download every piece at once from `/log/suslik-logs.tar.gz` — that archive is the
-  file to attach when you report a problem. Set `log_datei: false` to keep the old behaviour
-  (in-memory ring buffer only).
+- **Service log on disk** (`log_datei`, `log_behalten_tage`, `log_max_mb`) — the service, the
+  analysis worker and the live-watcher engine all log through one module, and suslik writes the
+  result to `<data_dir>/logs/suslik.log`, so the log survives restarts and stays readable without
+  shell access to the container. Every line has the same form: date, time with milliseconds and
+  time zone, the level, the source as `process/module:function`, then ` | ` and the text;
+  continuation lines of a multi-line entry (a traceback) repeat the head and use ` +| ` instead.
+  The levels are Python's standard five (DEBUG, INFO, WARNING, ERROR, CRITICAL); by default the log
+  shows INFO and above. The `debug` setting adds the DEBUG lines: it takes effect at once, without a
+  restart, and is off again after every restart. The file is rotated on every service start, at
+  midnight and when it passes `log_max_mb` (default 64); older pieces are gzipped and deleted after
+  `log_behalten_tage` days (default 14). Read it at `/log` (the last 5000 lines; add `?lines=20000`
+  for more, the ceiling is 200000), or download every piece at once from
+  `/log/suslik-logs.tar.gz` — that archive is the file to attach when you report a problem.
+  `/health` carries a `log` block: per process (`dienst`, `worker`, `live`) the number of WARNING,
+  ERROR and CRITICAL entries since the service started, `fremd_n` for lines without the head
+  (native library output, crash messages), `letzte_error` with time, source and text of the latest
+  ERROR or CRITICAL line, and next to them the state of the log writer and the switches. Set
+  `log_datei: false` to write no file; `/log` then shows the service's last 300 lines from memory.
+- **Check log** (`pruef_log`, `pruef_takt_s`) — off by default. When on, suslik confirms its own
+  state at a fixed interval in a second file, `<data_dir>/logs/pruef.log`: compute threads alive
+  against the configured number, the backend and the device that really computes, events accepted
+  and booked, time per event, the health counters and the live watchers. Every WARNING, ERROR and
+  CRITICAL line of all processes is copied there as well, so the file is complete on its own; the
+  confirmation lines themselves stay out of `suslik.log` (they do show in `docker logs`).
+  `pruef_takt_s` is the interval in seconds (default 30, allowed 10–3600). Switch it on the
+  **Advanced** settings page, or through the API with `POST /konfig` and a JSON body such as
+  `{"pruef_log": true}`: it takes effect at once, without a restart, and stays on after a restart
+  until you switch it off. `pruef.log` rotates like `suslik.log` and is part of
+  `/log/suslik-logs.tar.gz` and of the support area `/support/logs`
+  ([support-access.md](support-access.md)).
 
 ## Environment variables
 

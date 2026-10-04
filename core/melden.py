@@ -47,6 +47,8 @@ from core import areas as _areas_mod       # Areas Stufe 1 (Meldetext + Payload-
 from core import registry as _reg          # MELDE_HERKUNFT (eine Quelle, .163)
 from core import sprache as _sprache       # Sprach-Stufe 4: Meldetexte (Eintrittspunkt b/c)
 from core import vertrauen as _vertrauen   # Wortstufen (.249, Kosinus-raus)
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 
 # ------------------------------------------------- Sprache am Meldeweg (Stufe 4)
@@ -154,10 +156,6 @@ _PO_LOCK = threading.Lock()
 _PO = {"ablehnungen": 0, "pausiert": False, "seit": 0.0, "grund": ""}
 
 
-def _stdout_log(zeile):
-    print(zeile, flush=True)
-
-
 def pushover_konfiguriert(cfg):
     """Token UND User gesetzt? Sonst gilt der Kanal als AUS (.411 a)."""
     po = cfg.get("pushover") or {}
@@ -204,7 +202,7 @@ def _pushover_ablehnung(log, grund):
         if _PO["pausiert"] or n < PUSHOVER_ABLEHNUNGEN_MAX:
             return
         _PO.update(pausiert=True, seit=time.time(), grund=grund)
-    (log or _stdout_log)(
+    (log or _log).warning(
         f"Pushover rejected {n} times in a row ({grund}) — channel paused until the "
         f"notification settings are saved again or a channel test succeeds")
 
@@ -370,9 +368,9 @@ def mqtt_pub(pub, log, topic, payload, retain=False, herkunft=None):
         info = pub.publish(topic, payload, retain=retain)
         if getattr(info, "rc", 1) == 0:                  # 0 == MQTT_ERR_SUCCESS
             return True
-        log(f"!! MQTT NOT delivered ({topic}, rc={info.rc}) — broker disconnected?")
+        log.error(f"!! MQTT NOT delivered ({topic}, rc={info.rc}) — broker disconnected?")
     except Exception as e:
-        log(f"!! MQTT publish failed ({topic}): {e}")
+        log.error(f"!! MQTT publish failed ({topic}): {e}")
     return False
 
 
@@ -389,7 +387,7 @@ def publisher_starten(cfg, log, *, pub_setzen, pub_holen, processed_len, hb_setz
     # HIER einmal laut — nicht in praefix() selbst, das liefe je Publish (Spam).
     _roh = (cfg.get("mqtt") or {}).get("topic_praefix")
     if _roh and praefix(cfg) == PRAEFIX_STD and _roh.strip("/") != PRAEFIX_STD:
-        log(f"MQTT topic prefix in store is invalid ({str(_roh)[:40]!r}) — "
+        log.warning(f"MQTT topic prefix in store is invalid ({str(_roh)[:40]!r}) — "
             f"falling back to '{PRAEFIX_STD}/' for ALL topics")
     try:
         import paho.mqtt.client as mqtt
@@ -414,11 +412,16 @@ def publisher_starten(cfg, log, *, pub_setzen, pub_holen, processed_len, hb_setz
             schlecht = getattr(rc, "is_failure", None)
             if schlecht is None:
                 schlecht = str(rc) not in ("0", "Success")
-            log(f"MQTT connection REJECTED: {rc} — check credentials/ACL." if schlecht
-                else f"MQTT publisher connected to {m['host']}:{m.get('port', 1883)}")
+            # Feldbefunde Punkt 20 (O334): nur die Ablehnung ist ein Fehler. Bis 0.1.0.549
+            # liefen beide Zweige ueber log.error, und /health zaehlte jede gelungene
+            # Verbindung als ERROR; nach E16 ist sie geplant (INFO).
+            if schlecht:
+                log.error(f"MQTT connection REJECTED: {rc} — check credentials/ACL.")
+            else:
+                log.info(f"MQTT publisher connected to {m['host']}:{m.get('port', 1883)}")
 
         def _on_disconnect(client, userdata, *a):
-            log("MQTT publisher disconnected — paho reconnects on its own.")
+            log.warning("MQTT publisher disconnected — paho reconnects on its own.")
         pub.on_connect, pub.on_disconnect = _on_connect, _on_disconnect
         pub.reconnect_delay_set(min_delay=1, max_delay=60)
         pub.connect_async(m["host"], int(m.get("port", 1883)), 60)
@@ -437,14 +440,14 @@ def publisher_starten(cfg, log, *, pub_setzen, pub_holen, processed_len, hb_setz
                     if info.rc == mqtt.MQTT_ERR_SUCCESS:
                         hb_setzen()
                 except Exception:
-                    pass
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
                 time.sleep(60)
         threading.Thread(target=hb, daemon=True).start()
-        log(f"MQTT publisher started, connecting to {m['host']} "
+        log.info(f"MQTT publisher started, connecting to {m['host']} "
             f"({topic(cfg, 'erkennung')} + {t_hb})")
     except Exception as e:
         pub_setzen(None)
-        log(f"MQTT publisher not available: {e}")
+        log.error(f"MQTT publisher not available: {e}")
 
 
 def publish_erkennung(cfg, pub, log, debug, entry):
@@ -496,7 +499,7 @@ def telegram_melden(cfg, log, dry_alert, zustand, best_crop, clip_holen, ha_meld
     if art == "unbekannt":
         now = time.time()
         if now - zustand.get("tg_unbekannt", 0.0) < cfg.get("telegram_cooldown", 600):
-            log(f"{entry['eid']}: Telegram unknown throttled (cooldown)")
+            log.warning(f"{entry['eid']}: Telegram unknown throttled (cooldown)")
             return
         zustand["tg_unbekannt"] = now
     eid, camera = entry["eid"], entry["camera"]
@@ -527,14 +530,14 @@ def telegram_melden(cfg, log, dry_alert, zustand, best_crop, clip_holen, ha_meld
                 cap = caption + ("\n" + _sprache.t("meldung.video_ersatz.satz")
                                  if will_video and not video else "")
                 ok = telegram_video(cfg, video, cap, crop)
-                log(f"{eid}: Telegram {art} direct "
+                log.error(f"{eid}: Telegram {art} direct "
                     f"{'sent' if ok else 'FAILED'}"
                     + (" [video missing -> image]" if will_video and not video else "")
                     + (" [telegram_inhalt=bild]" if not will_video else ""))
             if modus in ("ha", "beide"):
                 ha_melden(eid, camera, caption)
         except Exception as e:
-            log(f"{eid}: Telegram {art} error: {e}")
+            log.error(f"{eid}: Telegram {art} error: {e}")
     threading.Thread(target=job, daemon=True).start()
 
 
@@ -552,7 +555,7 @@ def telegram_ha_script(cfg, log, zustand, eid, camera, caption):
                                          ("telegram.chat_id", chat)) if not v)
         if time.time() - zustand.get("ha_warn", 0) > 3600:
             zustand["ha_warn"] = time.time()
-            log(f"telegram_modus=ha, but {fehlt} is missing — NO Telegram will be sent.")
+            log.error(f"telegram_modus=ha, but {fehlt} is missing — NO Telegram will be sent.")
         return
     body = json.dumps({"event_id": eid, "camera": camera,
                        "chat_id": str(chat), "caption": caption}).encode()
@@ -562,9 +565,9 @@ def telegram_ha_script(cfg, log, zustand, eid, camera, caption):
                                           "Content-Type": "application/json"})
     try:
         urllib.request.urlopen(req, timeout=30)
-        log(f"{eid}: Telegram triggered via HA script")
+        log.info(f"{eid}: Telegram triggered via HA script")
     except Exception as e:
-        log(f"{eid}: HA script call failed: {e}")
+        log.error(f"{eid}: HA script call failed: {e}")
 
 
 def transcode_lauf(cmd, timeout, lock, procs):
@@ -657,21 +660,21 @@ def telegram_clip(cfg, log, transcode, kommandos, encoder, eid):
                 # sonst waere der Laufzeit-Rueckfall genauso still wie der alte Start-Rueckfall,
                 # waehrend Selbstcheck und QS-Gate weiter HW-Betrieb behaupten).
                 e1 = (r.stderr or b"").decode("utf-8", "replace").strip().splitlines()
-                log(f"{eid}: HW transcode ({encoder()[0]}) failed "
+                log.warning(f"{eid}: HW transcode ({encoder()[0]}) failed "
                     f"(rc={r.returncode}) — CPU takes over: {e1[-1] if e1 else 'no stderr'}")
             r = transcode(cpu, 600)
         if r.returncode == 0 and os.path.exists(part) and os.path.getsize(part) > 0:
             os.replace(part, dst)
         else:                     # rc des Fallbacks wurde frueher verworfen -> Alert ohne Video,
             err = (r.stderr or b"").decode("utf-8", "replace").strip().splitlines()   # ohne Grund
-            log(f"{eid}: Telegram clip failed (rc={r.returncode}): "
+            log.error(f"{eid}: Telegram clip failed (rc={r.returncode}): "
                 f"{' | '.join(err[-2:]) if err else 'no stderr output'}")
             try:
                 os.remove(part)
             except OSError:
                 pass
     except Exception as e:
-        log(f"{eid}: Telegram clip failed: {e}")
+        log.error(f"{eid}: Telegram clip failed: {e}")
         try:
             os.remove(part)
         except OSError:
@@ -715,6 +718,7 @@ def notif_speichern(cfg, d, *, log, whitelist, store_pfad, store_laden,
                 if not (lo <= w <= hi):
                     return False, f"'{key}': erlaubt {lo}–{hi}"
         except Exception:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning (False, f''{key}': ungueltiger Wert')")
             return False, f"'{key}': ungueltiger Wert"
         store[key] = w
         audit[key] = w
@@ -773,11 +777,11 @@ def notif_speichern(cfg, d, *, log, whitelist, store_pfad, store_laden,
     with open(os.path.join(cfg["data_dir"], "config", "config_audit.jsonl"), "a") as f:
         f.write(json.dumps({"ts": round(time.time(), 1), "notif": audit}, ensure_ascii=False) + "\n")
         f.flush()
-    log("NOTIFICATIONS changed via UI (secrets masked) — restart after the current analysis")
+    log.info("NOTIFICATIONS changed via UI (secrets masked) — restart after the current analysis")
     # .411: Speichern hebt eine Pushover-Pause auf (der Neustart taete es auch —
     # hier steht es ausdruecklich, damit die Zusicherung nicht am Neustart haengt).
     if pushover_pause_aufheben("settings saved"):
-        log("Pushover channel resumed (notification settings saved)")
+        log.info("Pushover channel resumed (notification settings saved)")
     neustart("Notifications")
     return True, "gespeichert — Dienst startet gleich neu"
 
@@ -854,5 +858,6 @@ def notif_test(cfg, kanal, d):
             c.disconnect()
             return True, f"MQTT: connected {host}:{port} + published {t} ✓"
     except Exception as e:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning (False, f'{kanal} error: {str(e)[:90]}')")
         return False, f"{kanal} error: {str(e)[:90]}"
     return False, "unknown channel"

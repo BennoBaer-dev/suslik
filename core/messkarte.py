@@ -300,8 +300,9 @@ ZWECK_ANALYSE = "analyse"      # die normale Ereignis-Analyse
 # WIRKENDE Achse verschweigt, ist genau die Klasse „das Manifest sagt nicht die
 # Wahrheit", die der .514-Widerleger als B9 gefuehrt hat — also wandert jede
 # neue Sieb-Achse hier mit. None heisst weiterhin „auf diesem Weg gilt keine
-# Latte": der ANALYSE-Weg misst die Feature-Norm nicht, und das soll sein
-# Profil auch sagen, statt eine 0 zu behaupten, die nach nichts aussieht.
+# Latte". Seit Bauplan K3, Stufe KP1 misst der ANALYSE-Weg im Worker die
+# Feature-Norm und siebt damit; sein Profil nennt deshalb die wirksame Grenze
+# (0 = Sieb aus), nicht None.
 # ANGEHAENGT, nicht einsortiert (Haus-Muster oben): neue Felder kommen ans
 # ENDE, sonst zeigte ein Byte-Vergleich zweier Laeufe eine Schluessel-
 # Umsortierung statt einer Ergaenzung. Die Reihenfolge hier ist deshalb

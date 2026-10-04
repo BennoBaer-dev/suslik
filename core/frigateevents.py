@@ -63,6 +63,8 @@ import urllib.error
 import urllib.request
 
 from core import frigate_auth as _fauth     # 5e: DER eine Frigate-HTTP-Griff
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 # Warteschlangen-Tiefe: grosszuegig genug fuer eine Frigate-Pause von einigen
 # Minuten (ein Auftrag je erkannter Person je Kamera, gedrosselt durch den
@@ -114,7 +116,7 @@ def read_only(cfg):
 class Warteschlange:
     """Der Hintergrund-Schreiber. Ein Thread, eine Queue, drei Zaehler."""
 
-    def __init__(self, cfg, log=print, tiefe=TIEFE):
+    def __init__(self, cfg, log=_log, tiefe=TIEFE):
         self.cfg = cfg
         self.log = log
         self.q = queue.Queue(maxsize=int(tiefe))
@@ -156,7 +158,7 @@ class Warteschlange:
         try:
             self.q.put_nowait(None)
         except queue.Full:
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored", throttle=False)
         if self.thread is not None:
             self.thread.join(timeout=frist)
 
@@ -195,7 +197,7 @@ class Warteschlange:
             self._laut("voll", f"frigate events: queue full ({self.q.maxsize}) "
                                f"— {self.verworfen} order(s) dropped so far; "
                                f"the watchers keep running (they never wait "
-                               f"for Frigate)")
+                               f"for Frigate)", stufe=_logbuch.WARNING)
             return False
 
     # ----------------------------------------------------------------- Lauf
@@ -228,7 +230,7 @@ class Warteschlange:
                 self.fehler += 1
                 self._laut(f"{a.get('art')}",
                            f"frigate events: {a.get('art')} failed "
-                           f"({type(e).__name__}: {e})")
+                           f"({type(e).__name__}: {e})", stufe=_logbuch.ERROR)
 
     def _ausfuehren(self, a):
         if read_only(self.cfg):
@@ -271,13 +273,13 @@ class Warteschlange:
             try:
                 a["quittung"](str(eid))
             except Exception:                                 # noqa: BLE001
-                pass
+                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         if not eid:
             # Ehrliche Grenze statt Schweigen: ohne Kennung koennen wir das
             # Event spaeter nicht beenden — Frigate schliesst es dann selbst.
             self._laut("keine_id", "frigate events: create answered without an "
                                    "event id — the event stays open until "
-                                   "Frigate closes it")
+                                   "Frigate closes it", stufe=_logbuch.WARNING)
 
     def _end(self, a):
         """Ein eigenes Ereignis beenden — mit Wiederholung und Bestaetigung.
@@ -305,7 +307,7 @@ class Warteschlange:
                     self._laut("end_fehler",
                                f"frigate events: end failed "
                                f"({type(e).__name__}: {e}) — one more try in "
-                               f"{END_BACKOFF_S[0]:g}s, then the periodic sweep")
+                               f"{END_BACKOFF_S[0]:g}s, then the periodic sweep", stufe=_logbuch.ERROR)
                     return
                 raise
             # DAS 404 IST KEIN FEHLER, SONDERN EIN RENNEN: Frigate legt per API
@@ -325,20 +327,20 @@ class Warteschlange:
                                f"answered with 404 (Frigate creates API events "
                                f"asynchronously) — trying again in "
                                f"{abstand:g}s ({versuch + 1}/"
-                               f"{len(END_BACKOFF_S)})")
+                               f"{len(END_BACKOFF_S)})", stufe=_logbuch.WARNING)
                 else:
                     self._laut("end404_voll",
                                f"frigate events: the retry of an end could not "
                                f"be queued (queue full) — the event stays on the "
                                f"list of own open events, the periodic sweep "
-                               f"closes it")
+                               "closes it", stufe=_logbuch.WARNING)
                 return
             self.fehler += 1
             self._laut("end404_aus",
                        f"frigate events: end still 404 after "
                        f"{len(END_BACKOFF_S)} tries — the event stays on the "
                        f"list of own open events and the periodic sweep keeps "
-                       f"trying")
+                       f"trying", stufe=_logbuch.WARNING)
             return
         # DIE BESTAETIGUNG. Ein gemeldeter Erfolg ist keiner: im Feld blieb ein
         # Ereignis offen, obwohl das `/end` 200 antwortete.
@@ -349,7 +351,7 @@ class Warteschlange:
             return
         if _b:
             self._offen_loeschen(eid)
-            self.log(f"frigate events: own event beendet ({eid})")
+            self.log.info(f"frigate events: own event ended ({eid})")
             return
         self._laut("end_unbestaetigt",
                    f"frigate events: end was accepted but the event still has "
@@ -373,8 +375,10 @@ class Warteschlange:
         try:
             d = self._get(f"/api/events/{_quote(eid)}")
         except RuntimeError as e:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning None if 'HTTP 404' in str(e) else False")
             return None if "HTTP 404" in str(e) else False
         except Exception:                                     # noqa: BLE001
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning False")
             return False
         if not isinstance(d, dict):
             return False
@@ -393,6 +397,7 @@ class Warteschlange:
         try:
             os.makedirs(ordner, exist_ok=True)
         except Exception:                                     # noqa: BLE001
+            _logbuch.swallowed(_log, _logbuch.ERROR, "returning None", throttle=False)
             return None
         return os.path.join(ordner, MERKDATEI)
 
@@ -417,14 +422,14 @@ class Warteschlange:
                             "erstellt_ts": float(wert.get("erstellt_ts") or 0),
                             "versuche": int(wert.get("versuche") or 0)}
             if self._offen:
-                self.log(f"frigate events: {len(self._offen)} own event(s) from "
+                self.log.warning(f"frigate events: {len(self._offen)} own event(s) from "
                          f"an earlier run are still open in Frigate — they are "
                          f"closed as soon as they are older than the limit")
         except Exception as e:                                # noqa: BLE001
             self._laut("merk_lesen",
                        f"frigate events: the list of own open events could not "
                        f"be read ({type(e).__name__}: {e}) — starting with an "
-                       f"empty one")
+                       f"empty one", stufe=_logbuch.ERROR)
 
     def _offen_schreiben(self):
         pfad = self._merkdatei()
@@ -440,7 +445,7 @@ class Warteschlange:
         except Exception as e:                                # noqa: BLE001
             self._laut("merk_schreiben",
                        f"frigate events: the list of own open events could not "
-                       f"be written ({type(e).__name__}: {e})")
+                       f"be written ({type(e).__name__}: {e})", stufe=_logbuch.ERROR)
 
     def _versuch_zaehlen(self, eid, grund):
         """Einen erfolglosen Nachschluss-Versuch buchen und nach
@@ -460,7 +465,7 @@ class Warteschlange:
         self._offen_schreiben()
         if aus:
             self.aufgegeben += 1
-            self.log(f"!! frigate events: giving up on an own open event after "
+            self.log.error(f"!! frigate events: giving up on an own open event after "
                      f"{NACHSCHLUSS_VERSUCHE_MAX} attempts ({grund}) — it stays "
                      f"open in Frigate and is no longer tracked here")
 
@@ -480,7 +485,7 @@ class Warteschlange:
             self._laut("offen_voll",
                        f"frigate events: the list of own open events hit its "
                        f"limit of {OFFEN_MAX} — the oldest entry was dropped; "
-                       f"something is keeping these events from closing")
+                       f"something is keeping these events from closing", stufe=_logbuch.WARNING)
         self._offen_schreiben()
 
     def _offen_loeschen(self, eid):
@@ -536,12 +541,12 @@ class Warteschlange:
                 self._versuch_zaehlen(eid, str(e))
                 self._laut("nachschluss",
                            f"frigate events: could not close an own open event "
-                           f"({type(e).__name__}: {e}) — trying again next time")
+                           f"({type(e).__name__}: {e}) — trying again next time", stufe=_logbuch.ERROR)
                 continue
             if self._ende_bestaetigt(eid) is True:
                 self._offen_loeschen(eid)
                 self.nachgeschlossen += 1
-                self.log(f"frigate events: own event nachgeschlossen ({eid}) — "
+                self.log.info(f"frigate events: own event nachgeschlossen ({eid}) — "
                          f"it had stayed open for more than {grenze_min:g} min")
             else:
                 self._versuch_zaehlen(eid, "end not confirmed")
@@ -586,7 +591,7 @@ class Warteschlange:
             try:
                 detail = e.read(200).decode("utf-8", "replace").strip()
             except Exception:                                 # noqa: BLE001
-                pass
+                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
             raise RuntimeError(f"HTTP {e.code} on {pfad}"
                                + (f": {detail}" if detail else "")) from None
         try:
@@ -594,14 +599,14 @@ class Warteschlange:
         except ValueError:
             return {}
 
-    def _laut(self, art, zeile):
+    def _laut(self, art, zeile, stufe=_logbuch.INFO):
         """Gedrosselte Fehlerzeile (Muster livewache._fehler_log): ein totes
         Frigate schreibt sonst je Auftritt eine Zeile ins Log."""
         jetzt = time.monotonic()
         if jetzt - self._letzte_zeile.get(art, -1e18) < LOG_DROSSEL_S:
             return
         self._letzte_zeile[art] = jetzt
-        self.log(f"!! {zeile}")
+        self.log.log(stufe, f"!! {zeile}")
 
 
 def _quote(s):

@@ -15,7 +15,7 @@ Aufruf:
   verifyd.py --config verifyd.yaml --once EID # ein Event verarbeiten (Test), dann Ende
   Optionen: --dry-alert (Alert nur loggen, nicht senden)
 """
-import argparse, collections, contextlib, datetime, html, json, math, os, re, select, signal, subprocess, sys, threading, time
+import argparse, atexit, collections, contextlib, datetime, html, json, math, os, re, select, signal, subprocess, sys, threading, time
 import urllib.request, urllib.parse, urllib.error, uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -41,9 +41,35 @@ from core import sprache as _sprache                  # Sprach-Stufe 1: contextv
 from core import systemstat as _systemstat            # .341: Systemzahlen (Sammler, Ringpuffer, /health.system)
 from core import anwesenheit as _anw                  # .408: Anwesenheits-Marken (der eine Worker-Griff + Marge-Regel)
 from core import einspielen as _einspiel              # .416: Testbett-Einspielung (Praefix-Konvention + Injektor-Ablage)
+from core import personenzahl as _personenzahl        # K3 KP3: Personenzahl aus Frigate, Zaehler ohne fruehes Ende
 from core import messkarte as _ern_mk                 # .513: Messkarte + Mess-Bilanz (Etappe 1)
 from core import kamerakalib as _kk_ernte             # .514: DAS Sieb (Etappe 3, ein System)
 from core import gpubudget as _gpubudget              # E3.2: Speicher-Formel je Karte (Strang-Zahl, Wache-Grenze, Deckel)
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
+# Die Config-Schluessel der Log-Schalter (Log-Systematik E9, E11): sie wirken live
+# ohne Neustart ueber core/logbuch.set_switches (config_schreiben, _schalter_spiegeln).
+LOG_SWITCH_KEYS = frozenset({"debug", "pruef_log", "pruef_takt_s"})
+
+
+# Bauplan Debug-Zeitfenster Stufe 1 (Eigentuemer 29.09.2026 09:59:12): debug schaltet sich
+# zeitgesteuert aus statt beim Start. EINE Stelle fuer das Fensterende; es lesen der
+# Start (load_config), der Zeitgeber (Service._debug_zeitgeber_stellen) und /health.
+def debug_fenster_ende(cfg):
+    """Ende des Debug-Fensters: Einschaltzeit `debug_seit` plus `debug_dauer_h` Stunden.
+    -> Zeitpunkt in Sekunden seit 1970, oder None ohne gueltige Einschaltzeit."""
+    try:
+        return float(cfg.get("debug_seit")) + float(cfg.get("debug_dauer_h")) * 3600.0
+    except (TypeError, ValueError):
+        return None
+
+
+def _debug_zeit_text(ts):
+    """Zeitpunkt fuer die Log-Zeilen des Debug-Fensters, mit Zeitzone.
+    -> Text wie '2026-09-30 12:00:00 CEST'."""
+    return time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime(float(ts)))
+
+
 # Oeffentliche Projekt-Doku (GitHub). Lokale Arbeitsnotizen des Autors enthalten interne
 # IPs + Zugaenge und duerfen NICHT ueber das UI ausgeliefert werden -> System-Seite + /doc zeigen aufs Repo.
 DOCS_URL = "https://github.com/BennoBaer-dev/suslik"
@@ -56,6 +82,7 @@ def suslik_version():
         with open(os.path.join(HERE, "VERSION")) as _f:
             return _f.read().strip() or "dev"
     except Exception:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning 'dev'")
         return "dev"
 
 
@@ -103,8 +130,8 @@ def _lade_config_store(cfg):
         except Exception as e:
             # NICHT still zu {} degradieren: der naechste Schreiber wuerde den Bestand ueberbuegeln.
             # Laut auf stderr (landet in `docker logs`) — hier gibt es noch kein svc.log().
-            sys.stderr.write(f"[suslik] WARN: config store {p} unreadable ({e}) — "
-                             f"yaml defaults apply; do NOT let the store be overwritten!\n")
+            _log.warning(f"WARN: config store {p} unreadable ({e}) — "
+                             f"yaml defaults apply; do NOT let the store be overwritten!")
     return {}
 
 
@@ -163,7 +190,7 @@ def _live_guards_aktiv(cfg):
         store = _lade_config_store(cfg)
     blk = (store.get("live") or {}).get("guards") or {}
     return any(isinstance(g, dict)
-               and _lw._bool_lesen(g.get("enabled"), False, lambda z: None,
+               and _lw._bool_lesen(g.get("enabled"), False, _logbuch.NULL,
                                    f"live.guards.{name}.enabled")
                for name, g in blk.items())
 
@@ -268,9 +295,9 @@ def _migration_anker_045(cfg):
         # Eine gescheiterte Migration darf den Dienst NIE am Start hindern:
         # der Anker bleibt dann, wie er im Store steht, und der naechste Start
         # entscheidet neu (die Marke wird in diesem Fall nicht gesetzt).
-        sys.stderr.write(f"[suslik] anchor migration failed "
+        _log.warning(f"anchor migration failed "
                          f"({type(e).__name__}: {e}) — anchor unchanged, "
-                         f"retried next start\n")
+                         f"retried next start")
 
 
 def _migration_anker_045_innen(cfg):
@@ -282,9 +309,9 @@ def _migration_anker_045_innen(cfg):
     with _cfg_lock:
         store = _lade_config_store(cfg)
         if not store and os.path.exists(store_datei):
-            sys.stderr.write("[suslik] anchor migration skipped: config store "
+            _log.warning("anchor migration skipped: config store "
                              "exists but reads empty/unreadable — not touching "
-                             "it (no marker; retried next start)\n")
+                             "it (no marker; retried next start)")
             return
         alt = store.get("urteil_anker")
         try:
@@ -314,19 +341,19 @@ def _migration_anker_045_innen(cfg):
                                     "vorher": ANKER_ALT}, ensure_ascii=False) + "\n")
                 f.flush()
         except Exception as e:                                 # noqa: BLE001
-            sys.stderr.write(f"[suslik] anchor migration: audit line not written "
-                             f"({type(e).__name__}: {e}) — value is in place\n")
-        sys.stderr.write(f"[suslik] judgement anchor lifted ONCE for this install: "
+            _log.error(f"anchor migration: audit line not written "
+                             f"({type(e).__name__}: {e}) — value is in place")
+        _log.info(f"judgement anchor lifted ONCE for this install: "
                          f"{ANKER_ALT} -> {ANKER_NEU} (old factory value found in "
                          f"the config store; measured on 173 field cases 2026-09-07). "
                          f"Change it in Settings anytime — it will never be "
-                         f"migrated again (marker state/{ANKER_MIGRATION_MARKE})\n")
+                         f"migrated again (marker state/{ANKER_MIGRATION_MARKE})")
     try:
         from core import atomar as _at
         _at.json_schreiben(marke, info)
     except Exception as e:                                     # noqa: BLE001
-        sys.stderr.write(f"[suslik] anchor migration: marker not written "
-                         f"({type(e).__name__}: {e}) — decision is retried next start\n")
+        _log.warning(f"anchor migration: marker not written "
+                         f"({type(e).__name__}: {e}) — decision is retried next start")
 
 
 STRAENGE_MIGRATION_MARKE = "migration_straenge_0535.json"   # state/, Muster oben
@@ -362,9 +389,9 @@ def _migration_straenge_0535(cfg):
     try:
         _migration_straenge_0535_innen(cfg)
     except Exception as e:                                     # noqa: BLE001
-        sys.stderr.write(f"[suslik] thread-ceiling migration failed "
+        _log.warning(f"thread-ceiling migration failed "
                          f"({type(e).__name__}: {e}) — values unchanged, "
-                         f"retried next start\n")
+                         f"retried next start")
 
 
 def _migration_straenge_0535_innen(cfg):
@@ -379,9 +406,9 @@ def _migration_straenge_0535_innen(cfg):
     with _cfg_lock:
         store = _lade_config_store(cfg)
         if not store and os.path.exists(store_datei):
-            sys.stderr.write("[suslik] thread-ceiling migration skipped: config "
+            _log.warning("thread-ceiling migration skipped: config "
                              "store exists but reads empty/unreadable — not "
-                             "touching it (no marker; retried next start)\n")
+                             "touching it (no marker; retried next start)")
             return
         for schluessel in ("worker_straenge", "analyse_plaetze"):
             alt = store.get(schluessel)
@@ -417,25 +444,25 @@ def _migration_straenge_0535_innen(cfg):
                      "vorher": vorher}, ensure_ascii=False) + "\n")
                 f.flush()
         except Exception as e:                                 # noqa: BLE001
-            sys.stderr.write(f"[suslik] thread-ceiling migration: audit line not "
+            _log.error(f"thread-ceiling migration: audit line not "
                              f"written ({type(e).__name__}: {e}) — values are in "
-                             f"place\n")
+                             f"place")
         was = ", ".join(f"{k} {vorher[k]} -> {v}" for k, v in sorted(aenderungen.items()))
-        sys.stderr.write(f"[suslik] ceiling raised ONCE for this install: {was}. "
+        _log.info(f"ceiling raised ONCE for this install: {was}. "
                          f"The old maximum was {STRAENGE_ALT_MAX}; a field "
                          f"measurement showed three threads leaving the card "
                          f"mostly idle, so the ceiling is now {neu_max}. The "
                          f"memory formula still decides what is really built — "
                          f"change the value in Settings any time, it will never "
                          f"be migrated again (marker "
-                         f"state/{STRAENGE_MIGRATION_MARKE})\n")
+                         f"state/{STRAENGE_MIGRATION_MARKE})")
     try:
         from core import atomar as _at
         _at.json_schreiben(marke, info)
     except Exception as e:                                     # noqa: BLE001
-        sys.stderr.write(f"[suslik] thread-ceiling migration: marker not written "
+        _log.warning(f"thread-ceiling migration: marker not written "
                          f"({type(e).__name__}: {e}) — decision is retried next "
-                         f"start\n")
+                         f"start")
 
 
 EICH_AUS_MARKE = "migration_eich_aus_0535.json"      # state/, Muster oben
@@ -475,9 +502,9 @@ def _migration_eich_aus_0535(cfg):
     try:
         _migration_eich_aus_0535_innen(cfg)
     except Exception as e:                                     # noqa: BLE001
-        sys.stderr.write(f"[suslik] calibration cleanup failed "
+        _log.warning(f"calibration cleanup failed "
                          f"({type(e).__name__}: {e}) — nothing changed, "
-                         f"retried next start\n")
+                         f"retried next start")
 
 
 def _migration_eich_aus_0535_innen(cfg):
@@ -490,9 +517,9 @@ def _migration_eich_aus_0535_innen(cfg):
     with _cfg_lock:
         store = _lade_config_store(cfg)
         if not store and os.path.exists(store_datei):
-            sys.stderr.write("[suslik] calibration cleanup skipped: config store "
+            _log.warning("calibration cleanup skipped: config store "
                              "exists but reads empty/unreadable — not touching it "
-                             "(no marker; retried next start)\n")
+                             "(no marker; retried next start)")
             return
         for schluessel in EICH_AUS_SCHLUESSEL:
             if schluessel in store:
@@ -508,9 +535,9 @@ def _migration_eich_aus_0535_innen(cfg):
             os.remove(datei)
             datei_weg = True
     except Exception as e:                                     # noqa: BLE001
-        sys.stderr.write(f"[suslik] calibration cleanup: state/{EICH_AUS_DATEI} "
+        _log.error(f"calibration cleanup: state/{EICH_AUS_DATEI} "
                          f"could not be removed ({type(e).__name__}: {e}) — it is "
-                         f"unused either way\n")
+                         f"unused either way")
     info = {"ts": round(time.time(), 1),
             "version": os.environ.get("SUSLIK_VERSION", "dev"),
             "entfernt": entfernt, "datei_geloescht": datei_weg,
@@ -530,22 +557,22 @@ def _migration_eich_aus_0535_innen(cfg):
                      "entfernt": entfernt}, ensure_ascii=False) + "\n")
                 f.flush()
         except Exception as e:                                 # noqa: BLE001
-            sys.stderr.write(f"[suslik] calibration cleanup: audit line not "
+            _log.error(f"calibration cleanup: audit line not "
                              f"written ({type(e).__name__}: {e}) — the keys are "
-                             f"gone either way\n")
+                             f"gone either way")
         was = ", ".join(f"{k}={v}" for k, v in sorted(entfernt.items()))
-        sys.stderr.write(f"[suslik] calibration settings removed ONCE for this "
+        _log.info(f"calibration settings removed ONCE for this "
                          f"install: {was}. Since 0.1.0.535 the service plans the "
                          f"card from a fixed measurement table instead of "
                          f"measuring its own prices, so neither key had anything "
-                         f"left to steer (marker state/{EICH_AUS_MARKE})\n")
+                         f"left to steer (marker state/{EICH_AUS_MARKE})")
     try:
         from core import atomar as _at
         _at.json_schreiben(marke, info)
     except Exception as e:                                     # noqa: BLE001
-        sys.stderr.write(f"[suslik] calibration cleanup: marker not written "
+        _log.warning(f"calibration cleanup: marker not written "
                          f"({type(e).__name__}: {e}) — decision is retried next "
-                         f"start\n")
+                         f"start")
 
 
 MIGRATION_0536_MARKE = "migration_0536.json"         # state/, Muster oben
@@ -618,9 +645,9 @@ def _migration_0536(cfg):
     try:
         _migration_0536_innen(cfg)
     except Exception as e:                                     # noqa: BLE001
-        sys.stderr.write(f"[suslik] .536 settings cleanup failed "
+        _log.warning(f".536 settings cleanup failed "
                          f"({type(e).__name__}: {e}) — nothing changed, "
-                         f"retried next start\n")
+                         f"retried next start")
 
 
 def _migration_0536_innen(cfg):
@@ -633,9 +660,9 @@ def _migration_0536_innen(cfg):
     with _cfg_lock:
         store = _lade_config_store(cfg)
         if not store and os.path.exists(store_datei):
-            sys.stderr.write("[suslik] .536 settings cleanup skipped: config "
+            _log.warning(".536 settings cleanup skipped: config "
                              "store exists but reads empty/unreadable — not "
-                             "touching it (no marker; retried next start)\n")
+                             "touching it (no marker; retried next start)")
             return
         for schluessel in MIGRATION_0536_SCHLUESSEL:
             drin = schluessel in store
@@ -679,19 +706,19 @@ def _migration_0536_innen(cfg):
                      "entfernt": entfernt}, ensure_ascii=False) + "\n")
                 f.flush()
         except Exception as e:                                 # noqa: BLE001
-            sys.stderr.write(f"[suslik] .536 settings cleanup: audit line not "
+            _log.error(f".536 settings cleanup: audit line not "
                              f"written ({type(e).__name__}: {e}) — the keys are "
-                             f"gone either way\n")
+                             f"gone either way")
         for satz in saetze:
-            sys.stderr.write(f"[suslik] {satz} (one-time, marker "
-                             f"state/{MIGRATION_0536_MARKE})\n")
+            _log.info(f"{satz} (one-time, marker "
+                             f"state/{MIGRATION_0536_MARKE})")
     try:
         from core import atomar as _at
         _at.json_schreiben(marke, info)
     except Exception as e:                                     # noqa: BLE001
-        sys.stderr.write(f"[suslik] .536 settings cleanup: marker not written "
+        _log.warning(f".536 settings cleanup: marker not written "
                          f"({type(e).__name__}: {e}) — decision is retried next "
-                         f"start\n")
+                         f"start")
 
 
 KATALOG_MIGRATION_MARKE = "migration_katalog_0125.json"   # state/, Muster oben
@@ -729,9 +756,9 @@ def _migration_katalog_0125(cfg):
     try:
         _migration_katalog_0125_innen(cfg)
     except Exception as e:                                     # noqa: BLE001
-        sys.stderr.write(f"[suslik] catalogue-bar migration failed "
+        _log.warning(f"catalogue-bar migration failed "
                          f"({type(e).__name__}: {e}) — bars unchanged, "
-                         f"retried next start\n")
+                         f"retried next start")
 
 
 def _kat_gleich(alt, neu):
@@ -755,9 +782,9 @@ def _migration_katalog_0125_innen(cfg):
     # Waechst KAT_FELDER, faellt das hier auf, statt still ein Feld auszulassen.
     kam_neu = dict(zip(_KATF, (neu_e, neu_t)))
     if len(kam_neu) != len(_KATF):
-        sys.stderr.write(f"[suslik] catalogue-bar migration: kamerakalib."
+        _log.info(f"catalogue-bar migration: kamerakalib."
                          f"KAT_FELDER has {len(_KATF)} fields, this migration "
-                         f"knows {len(kam_neu)} — the rest is left untouched\n")
+                         f"knows {len(kam_neu)} — the rest is left untouched")
     glob_neu = {"katalog_guete_e_min": neu_e, "katalog_guete_t_min": neu_t}
     # [(bereich, {feld: alt}, {feld: neu})] — Bereich ist None fuer global,
     # sonst der Kameraname. Je Eintrag wird spaeter EINE Audit-Zeile geschrieben.
@@ -766,9 +793,9 @@ def _migration_katalog_0125_innen(cfg):
         store_datei = _config_store_pfad(cfg)
         store = _lade_config_store(cfg)
         if not store and os.path.exists(store_datei):
-            sys.stderr.write("[suslik] catalogue-bar migration skipped: config "
+            _log.warning("catalogue-bar migration skipped: config "
                              "store exists but reads empty/unreadable — not "
-                             "touching it (no marker; retried next start)\n")
+                             "touching it (no marker; retried next start)")
             return
         vorher_g, nachher_g = {}, {}
         for feld, neu in glob_neu.items():
@@ -823,23 +850,108 @@ def _migration_katalog_0125_innen(cfg):
                      "vorher": vorher}, ensure_ascii=False) + "\n")
                 f.flush()
         except Exception as e:                                 # noqa: BLE001
-            sys.stderr.write(f"[suslik] catalogue-bar migration: audit line for "
+            _log.error(f"catalogue-bar migration: audit line for "
                              f"{name or 'global'} not written "
-                             f"({type(e).__name__}: {e}) — value is in place\n")
+                             f"({type(e).__name__}: {e}) — value is in place")
         wo = "global" if name is None else f"camera {name}"
         alt_txt = ", ".join(f"{k}={v}" for k, v in sorted(vorher.items()))
-        sys.stderr.write(f"[suslik] catalogue bar reset ONCE for this install "
+        _log.info(f"catalogue bar reset ONCE for this install "
                          f"({wo}): {alt_txt} -> {neu_e}/{neu_t}. The old bar was "
                          f"far too strict for taking pictures in; the recognition "
                          f"tab is untouched. Re-calibrate it any time on the "
                          f"camera calibration page — it will never be migrated "
-                         f"again (marker state/{KATALOG_MIGRATION_MARKE})\n")
+                         f"again (marker state/{KATALOG_MIGRATION_MARKE})")
     try:
         from core import atomar as _at
         _at.json_schreiben(marke, info)
     except Exception as e:                                     # noqa: BLE001
-        sys.stderr.write(f"[suslik] catalogue-bar migration: marker not written "
-                         f"({type(e).__name__}: {e}) — decision is retried next start\n")
+        _log.warning(f"catalogue-bar migration: marker not written "
+                         f"({type(e).__name__}: {e}) — decision is retried next start")
+
+
+NORM_MIGRATION_MARKE = "migration_norm_k3.json"      # state/, Muster oben
+
+
+def _migration_norm_k3(cfg):
+    """EINMALIGES Anheben einer gespeicherten globalen Erkennen-Norm 0 auf den Werkswert
+    (Bauplan analysen/bauplan_k3_produkt.md, Stufe KP1 Punkt 9; Code-QS KP1, Befund 1).
+
+    WARUM ueberhaupt: `urteil_norm_min` stand seit .515 mit dem Werkswert 0 (= aus) in
+    der Whitelist, und die Konfigurationsseite postet beim Sichern IMMER alle Felder.
+    Jede Anlage, auf der je gespeichert wurde, traegt die 0 im Store; sie ueberlagert
+    den neuen Werkswert (core.kamerakalib.erkennen_start), und das Norm-Sieb des
+    Analyse-Workers bliebe still aus. Dieselbe Klasse wie die Anker-Migration der .510.
+
+    Fallunterscheidung (alles andere ist Nutzerwille und bleibt):
+      Store traegt genau 0       -> Werkswert, Audit-Zeile, Log-Zeile, Marke
+      Store traegt anderen Wert  -> unveraendert, nur Marke
+      Store ohne den Schluessel  -> unveraendert, nur Marke (der Default greift)
+      Store vorhanden, unlesbar  -> NICHTS, auch keine Marke
+    Kamera-eigene Werte (Guard-Feld `norm_min`) fasst sie nicht an.
+
+    Wie die Nachbarn: ein Fehler hindert den Start NIE, die Marke haelt auch den
+    NICHT-Eingriff fest, und wer den Wert danach selbst auf 0 stellt, behaelt ihn."""
+    try:
+        _migration_norm_k3_innen(cfg)
+    except Exception as e:                                     # noqa: BLE001
+        _log.warning(f"recognition-norm migration failed "
+                     f"({type(e).__name__}: {e}) — value unchanged, retried next start")
+
+
+def _migration_norm_k3_innen(cfg):
+    """Der Rumpf von _migration_norm_k3 (dort steht die Begruendung)."""
+    from core.kamerakalib import erkennen_start
+    marke = os.path.join(cfg["data_dir"], "state", NORM_MIGRATION_MARKE)
+    if os.path.exists(marke):
+        return
+    neu = erkennen_start()["n"]                    # der Werkswert, EINE Quelle
+    store_datei = _config_store_pfad(cfg)
+    with _cfg_lock:
+        store = _lade_config_store(cfg)
+        if not store and os.path.exists(store_datei):
+            _log.warning("recognition-norm migration skipped: config store exists but "
+                         "reads empty/unreadable — not touching it (no marker; retried "
+                         "next start)")
+            return
+        alt = store.get("urteil_norm_min")
+        try:
+            trifft = alt is not None and float(alt) == 0.0
+        except (TypeError, ValueError):
+            trifft = False               # kaputter Typ ist kein Werkswert
+        if trifft:
+            store["urteil_norm_min"] = neu
+            _store_schreiben(store_datei, store)
+            cfg["urteil_norm_min"] = neu         # sofort wirksam, kein Neustart noetig
+    info = {"ts": round(time.time(), 1),
+            "version": os.environ.get("SUSLIK_VERSION", "dev"),
+            "vorher": alt, "nachher": neu if trifft else alt,
+            "angewendet": bool(trifft),
+            "grund": f"one-time factory-value change 0 -> {neu} (K3, 2026-10-04)"}
+    if trifft:
+        # AUDIT VOR der Marke (Muster Anker-Migration).
+        try:
+            audit = os.path.join(cfg["data_dir"], "config", "config_audit.jsonl")
+            os.makedirs(os.path.dirname(audit), exist_ok=True)
+            with open(audit, "a") as f:
+                f.write(json.dumps({"ts": info["ts"],
+                                    "aenderungen": {"urteil_norm_min": neu},
+                                    "auto": f"one-time recognition-norm migration 0 -> {neu}",
+                                    "vorher": alt}, ensure_ascii=False) + "\n")
+                f.flush()
+        except Exception as e:                                 # noqa: BLE001
+            _log.error(f"recognition-norm migration: audit line not written "
+                       f"({type(e).__name__}: {e}) — value is in place")
+        _log.info(f"recognition norm bar raised ONCE for this install: urteil_norm_min "
+                  f"0 -> {neu}. 0 was the old factory value and switched the feature-norm "
+                  f"sieve of the analysis worker off; {neu} is the measured factory value. "
+                  f"Camera values are untouched. Change it in Settings any time — it will "
+                  f"never be migrated again (marker state/{NORM_MIGRATION_MARKE})")
+    try:
+        from core import atomar as _at
+        _at.json_schreiben(marke, info)
+    except Exception as e:                                     # noqa: BLE001
+        _log.warning(f"recognition-norm migration: marker not written "
+                     f"({type(e).__name__}: {e}) — decision is retried next start")
 
 
 def _placement_hw_key():
@@ -853,7 +965,7 @@ def _placement_hw_key():
                 if line.startswith("model name"):
                     cpu = line.split(":", 1)[1].strip(); break
     except Exception:
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     try:
         import onnxruntime as _ort
         ov = _ort.__version__
@@ -920,14 +1032,14 @@ def _cpu_quote():
             periode = int(teile[1]) if len(teile) > 1 else 100000
             return max(1, int(teile[0]) // max(1, periode))
     except (OSError, ValueError, IndexError):
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     try:                                                   # cgroup v1
         q = int(open("/sys/fs/cgroup/cpu/cpu.cfs_quota_us").read())
         p = int(open("/sys/fs/cgroup/cpu/cpu.cfs_period_us").read())
         if q > 0 and p > 0:
             return max(1, q // p)
     except (OSError, ValueError):
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     return None
 
 
@@ -967,6 +1079,7 @@ def _cgroup_speicher_grenze(wurzel="/sys/fs/cgroup", hoch_max=4):
             try:
                 b = leser(d)
             except (OSError, ValueError):
+                _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                 continue
             if b:
                 return (b // 1048576,
@@ -993,7 +1106,7 @@ def _meminfo_mb():
                 if feld in ("MemTotal", "MemAvailable", "SwapTotal"):
                     werte[feld] = int(rest.split()[0]) // 1024
     except (OSError, ValueError, IndexError):
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     return (werte.get("MemTotal"), werte.get("MemAvailable"), werte.get("SwapTotal"))
 
 
@@ -1044,7 +1157,7 @@ def placement_aufloesen(cfg):
         if alt.get("hw_key") == key and alt.get("backend"):
             return alt["backend"], {**alt, "quelle": "sticky"}
     except Exception:
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     from face_audit import MODELLE, _ort_session
     onnx = next((v["onnx"] for v in MODELLE.values()
                  if v.get("onnx") and os.path.exists(v["onnx"])), None)
@@ -1091,7 +1204,7 @@ def placement_aufloesen(cfg):
             json.dump(info, f)
         os.replace(tmp, pfad)
     except Exception:
-        pass
+        _logbuch.swallowed(_log, _logbuch.ERROR, "ignored", throttle=False)
     return wahl, {**info, "quelle": "benchmarked"}
 
 
@@ -1393,6 +1506,13 @@ def load_config(path):
                          # haette false festgeschrieben). Werte = die bisherigen Inline-Defaults.
                          ("szenario_gap_min", 5), ("besucher_sim", 0.50),
                          ("update_check", True), ("debug", False),
+                         # Bauplan Debug-Zeitfenster Stufe 1 (Klaerungspunkt 2, Eigentuemer
+                         # 29.09.2026 11:30:13): so viele Stunden bleibt debug nach dem
+                         # Einschalten an, auch ueber einen Neustart.
+                         ("debug_dauer_h", 24),
+                         # Log-Systematik E9 (Eigentuemer 26.09.2026 17:32:58, F8): der
+                         # Pruef-Kanal, Werkswert aus, Takt 30 s (Inventur Punkt 9).
+                         ("pruef_log", False), ("pruef_takt_s", 30),
                          ("anwesenheit_push", True), ("anwesenheit_cooldown", 1800),
                          ("alert_stil", "worte"),
                          ("telegram", {}), ("telegram_modus", "aus"), ("telegram_inhalt", "video"),
@@ -1619,6 +1739,16 @@ def load_config(path):
                          ("nachhol_pause_s", 3600),          # Mindestabstand je Event (x Versuchsnr.)
                          ("nachhol_analyse_timeout_s", 300), # harter Deckel der Retry-Laeufe
                          ("nachhol_start_s", 600),           # Anlauf nach Dienststart
+                         # Feldbefunde Punkt 2 (Eigentuemer 27.09.2026 15:55:57, F3 und F6):
+                         # nach wie vielen Minuten ununterbrochenen Wartens ohne erfolgreiche
+                         # Analyse der Stoerungswaechter den Grund `stillstand` meldet.
+                         # Vorschlag der Session, kein Messwert; Spanne ab dem Takt 600 s.
+                         ("stillstand_min", 10),
+                         # Feldbefunde Punkte 13 und 19 (Eigentuemer 27.09.2026 16:55:34, F9;
+                         # 16:56:29, F10): Beruhigungszeit, bevor mehr Kartenspeicher genutzt
+                         # wird (ein Strang mehr, ein abgeschalteter Waechter zurueck). EIN
+                         # Wert fuer beides, keine Verdopplung.
+                         ("speicher_ruhe_min", 10),
                          # .340/.371 Nachholen beim Dienststart. Drei Zustaende, ausgelegt
                          # in catchup_modus(): "ask" (Default seit .371 — zurueckhalten und
                          # anbieten), "on" (sofort durcharbeiten), "off" (als uebersprungen
@@ -1673,14 +1803,20 @@ def load_config(path):
                          # setzt ihren Grundwert auf 20 (User nach Sichtung
                          # am Norm-Schieber, 756 Ernte-Bilder, Median 20,7).
                          # Die Zahl steht als EINE Quelle in
-                         # core.guete.norm_werk(); im ERKENNEN-Register
-                         # bleibt sie 0 = AUS, weil der Erkennungs-Weg die
-                         # Norm nicht misst und eine Latte ohne Messung
-                         # fail-closed waere. NICHT zu verwechseln mit
+                         # core.guete.norm_werk(). NICHT zu verwechseln mit
                          # `katalog_norm_min` weiter oben — das ist die
                          # Angebots-Linie des Lernvorrats (24,0) und bleibt
                          # unangetastet.
                          ("katalog_guete_norm_min", _kat_start_v["n"]),
+                         # Bauplan K3 (analysen/bauplan_k3_produkt.md), Stufe KP1
+                         # Punkt 4: im ERKENNEN-Register siebt die Norm seit K3 im
+                         # Analyse-Worker (worker_kern.event_rechnen, Norm-Sieb
+                         # hinter der Erkennungsstufe). Werkswert 18,5, gemessen im
+                         # Labor L16 Lauf 2, als EINE Quelle in
+                         # kamerakalib.erkennen_start (KP1 Punkt 10); aufgeloest je
+                         # Kamera ueber kamerakalib.erk_latten in run_analyze. Eine
+                         # gespeicherte 0 (alter Werkswert) hebt die Einmal-Migration
+                         # _migration_norm_k3.
                          ("urteil_norm_min", _erk_start_v["n"]),
                          # .515 (Sensor 6): die KANTEN-LATTE als sechste Achse.
                          # Global je Register, je Kamera ueberschreibbar.
@@ -1719,6 +1855,17 @@ def load_config(path):
                          # (`_migration_0536`), nie stillschweigend.
         ("selbstwache", True),
         ("urteil_marge", 0.05),
+                         # Bauplan K3, Stufe KP1 Punkt 5 (Eigentuemer 03.10., Befehlsbuch
+                         # :2121, „sie anzahl der treffen für den spael (aktuell 3)
+                         # … möchte ich über die config steuerbar haben"): Stimmen bis erkannt des
+                         # Stapels (core.stapel), Werkswert 3 wie im Labor L16.
+                         # PAAR-Bauart: Default hier, Whitelist-Eintrag dort.
+        ("stapel_stimmen", 3),
+                         # Bauplan K3, Stufe KP2 Punkt 7 (Eigentuemer 03.10., Befehlsbuch :2121,
+                         # „die anzahl für die offene tür (aktuell 20) möchte ich über die config
+                         # steuerbar haben"): Tuer-Fenster in Bildern (core.tuer), Werkswert 20 wie
+                         # im Labor L16. 0 = keine Tuer. PAAR-Bauart: Default hier, Whitelist dort.
+        ("tuer_fenster", 20),
         ("urteil_kante", _erk_start_v["k"]),
                          # BLICKFENSTER (User-Entscheid 03.09. abends, geeicht
                          # an den vier Testbett-Clips): Anker + Unterstuetzung
@@ -1783,6 +1930,18 @@ def load_config(path):
                          # durch, Worst-Case-Blockade 600+1200 s = die alte feste
                          # 1800-s-Frist (nie schlechter als vor dem Fix).
                          ("analyse_timeout_s", 600),
+                         # Bauplan GPU-Wartefrist, Stufe 1 (F1, Eigentuemer 28.09.2026
+                         # 16:16:13 „10 Sekunden"): wie lange der Worker auf EINEN
+                         # eingereichten GPU-Auftrag wartet, bevor er ihn als Haenger meldet
+                         # (engine_ov.abwarten). HERLEITUNG (Bauplan Abschnitt 6, F1):
+                         # gemessen am Intel-Test 28.09. (`openvino:GPU`, 3966 Einreichungen
+                         # im 10-Minuten-Fenster) Groesstwert 128,4 ms, keine ueber 1000 ms;
+                         # Kernel-Fristen am Wirt: Compute-Preemption 7,5 s, Abbruch des
+                         # Auftrags durch den Treiber 20 s. 10 s liegt rund 80-fach ueber dem
+                         # Groesstwert, ueber der Preemptionsfrist (dort kann ein legitimer
+                         # Auftrag zurueckgestellt sein) und unter dem Treiberabbruch.
+                         # `analyse_timeout_s` bleibt der aeussere Deckel des Ereignisses.
+                         ("inferenz_frist_s", 10),
                          # Issue #21/W2: Kern-Untergrenze der Wanduhr-Selbstmessung.
                          # Default = Struktur-Axiom 2 Akteure x 2 Bausteine (s.
                          # WANDUHR_MIN_KERNE-Kopf), KEINE Messung — deshalb als
@@ -1952,6 +2111,9 @@ def load_config(path):
     # ungeprueft in `cfg`, s. die Migration), aber eine Zeile, die nichts mehr
     # tut, gehoert nicht in die Konfiguration eines Nutzers.
     _migration_eich_aus_0535(cfg)
+    # Bauplan K3, Stufe KP1 Punkt 9: dieselbe Bauform, derselbe Ort — eine gespeicherte
+    # globale Erkennen-Norm 0 (alter Werkswert) wird EINMAL auf den neuen Werkswert gehoben.
+    _migration_norm_k3(cfg)
     # .536: dieselbe Bauform, derselbe Ort — nach dem Vergabe-Zug verliert die
     # Hunger-Bremse ihren Gegenstand (Hintergrund-Arbeit hat ihr eigenes Konto)
     # und ihr Schluessel wird EINMAL geraeumt, mit Audit-Zeile und altem Wert.
@@ -1976,8 +2138,8 @@ def load_config(path):
             continue                      # kaputter Typ: faengt config_schreiben
         if _w < _lo or _w > _hi:
             _neu = min(max(_w, _lo), _hi)
-            sys.stderr.write(f"[suslik] config: {_k}={_w} is outside the allowed "
-                             f"range {_lo}-{_hi} — clamped to {_neu}\n")
+            _log.warning(f"config: {_k}={_w} is outside the allowed "
+                             f"range {_lo}-{_hi} — clamped to {_neu}")
             sys.stderr.flush()
             cfg[_k] = _neu
     # B6 (User-Entscheid 24.08. abends): debug ist NICHT persistent — "debug wird
@@ -1991,10 +2153,24 @@ def load_config(path):
     # Schalter danach anhakt, bekommt ihn zur Laufzeit (config_schreiben wendet eine
     # reine debug-Aenderung LIVE an, ohne Neustart — ein Neustart liefe sofort
     # wieder hier hinein). Kein stiller Eingriff: die Zeile sagt, was passiert ist.
+    # Bauplan Debug-Zeitfenster Stufe 1 Punkt 3 (Eigentuemer 29.09.2026 09:59:12 „und sich
+    # nicht beim Start wieder ausschaltet, sondern zeitgesteuert"): debug BLEIBT an,
+    # solange sein Fenster laeuft (debug_seit legt config_schreiben beim Einschalten in
+    # den Store, Laenge debug_dauer_h). Der Ruecksetzer oben gilt nur noch fuer ein
+    # abgelaufenes Fenster und fuer einen debug-Wert ohne Einschaltzeit (alter
+    # Store-Wert, yaml); die Zeile nennt den Grund.
     if cfg.get("debug"):
-        cfg["debug"] = False
-        sys.stderr.write("[suslik] debug was on from a previous run — reset to off; "
-                         "enable it at runtime in the configuration page\n")
+        _dbg_bis = debug_fenster_ende(cfg)
+        if _dbg_bis is not None and time.time() < _dbg_bis:
+            _log.info(f"debug stays on until {_debug_zeit_text(_dbg_bis)} (switched on "
+                      f"{_debug_zeit_text(cfg['debug_seit'])}, window "
+                      f"{cfg['debug_dauer_h']} h)")
+        else:
+            _dbg_grund = (f"its window ended {_debug_zeit_text(_dbg_bis)}"
+                          if _dbg_bis is not None else "no switch-on time stored")
+            cfg["debug"] = False
+            _log.info(f"debug was on from a previous run — reset to off ({_dbg_grund}); "
+                      "enable it at runtime in the configuration page")
         sys.stderr.flush()
     # ENV-Bruecke Frigate-URL (#18 carlsmith360): personlern-Kette und sync_refs
     # lesen die Frigate-Adresse aus der ENV — normale Installationen setzen sie
@@ -2107,6 +2283,15 @@ FRIGATE_READONLY_FORCED = False
 # konfigurierbare nachhol_tage (max 3): wuerde man gegen nachhol_tage prunen, koennte eine
 # UI-Aenderung Zaehler wegwerfen und damit aufgegebene Events wiederbeleben.
 NACHHOL_PRUNE_TAGE = 4
+# Feldbefunde Punkt 3 (O296): Fassung der Datei state/nachhol.json. Ab 2 traegt jede
+# Aufgabe ihre Zeit (`aus_ts`); eine Datei mit kleinerer Fassung heisst: der Altbestand
+# (Ereignisse schon ausserhalb des Fensters) ist noch nicht gesichtet.
+NACHHOL_ZUSTAND_VERSION = 2
+# ... und die Gruende, aus denen der Nachhol-Lauf ein Ereignis endgueltig aufgibt: je einer
+# ein Teilzaehler im /health-Block `nachhol` (fenster, versuche, kaputt neu; event_weg,
+# clip_weg aus `_nachhol_vorpruefung`, kein_ergebnis aus `_nachhol_runde`).
+NACHHOL_VERLUST_GRUENDE = ("fenster", "versuche", "kaputt", "event_weg", "clip_weg",
+                           "kein_ergebnis")
 # .408 Takt der Anwesenheits-Lauf-Marke (start_anwesenheit_takt): deutlich
 # unter dem 15-min-Slot (core/anwesenheit.SLOT_S), damit kein Slot ohne
 # Marke bleibt, solange der Dienst lebt; das Dedup je Slot lebt im Modul,
@@ -2182,6 +2367,13 @@ SERIE_STRUKTURSIGNAL_N = 3
 # laengst verjaehrt haette. Ein drittes verstreutes Literal waere genau die
 # Deckungs-Luecke aus qs_ebenen.md — deshalb steht die Zahl ab hier EINMAL.
 SERIE_FENSTER_S = 3600
+# Der Stand, den der Worker-Prozess in seinem Kompilat-Bericht (`kompilat_probe`, reist mit jeder
+# Antwort und jedem `ping`) meldet, wenn er nach der einen frischen Wiederholung erneut eine
+# Kompilat-Abweichung in einer siebenden Stufe sah und LAUT gestoppt hat
+# (worker_dienst.Dienst.siebend_behandeln, Pose-Bauplan Stufe 1). Ein Protokoll-Wert ueber die
+# Prozessgrenze, wie der Ende-Schluessel `vram_druck`; tools/proben/s14_a3_serialisierung.py haelt
+# beide Enden am Verhalten zusammen. Daran haengt der Aussetzer des Serien-Schusses (Stufe 3).
+KOMPILAT_STAND_GESTOPPT = "gestoppt"
 # C2 (05.09.2026, bauplan_0505.md §1): das Fairness-VENTIL der Ernte
 # (`ERNTE_MAX_WARTE_S`, 300 s) ist ERSATZLOS entfallen. An seine Stelle tritt die
 # Regel N-1 in der Vergabestelle (`Analyseplaetze.platz`): von N Plaetzen haelt eine
@@ -2191,6 +2383,33 @@ SERIE_FENSTER_S = 3600
 # „nicht ein Weg nimmt alles, jeder mal dran"). Die Wartescheibe: so lange schlaeft ein
 # zurueckgetretener Kunde, bevor er erneut fragt.
 FAIRNESS_SCHEIBE_S = 0.5
+
+# .546 (Feldbefund AU, 22.09.2026): DER DRAIN. Wie lange die Vergabestelle
+# hoechstens leerlaufen darf, damit die Platz-Zahl der Strangzahl folgen kann.
+# ANLASS: bis .545 wurde umgestellt, sobald KEIN Job lief (`kapazitaet_setzen`,
+# „nur bei leerer Vergabestelle") — auf einer Anlage mit rund 10 000 Ereignissen
+# am Tag gibt es diesen Moment nie, und die Anlage rechnete den ganzen Morgen mit
+# EINEM Strang, obwohl die Karte sechs trug. Statt auf Leerlauf zu WARTEN, wird
+# er jetzt HERGESTELLT: keine neuen Tickets, den laufenden Job zu Ende, dann
+# umstellen. Die Frist ist der Deckel dafuer — laeuft sie ab, bleibt alles wie es
+# ist und der naechste Anlauf versucht es erneut (nie hart abschneiden: ein
+# laufender Job wird in diesem Haus nirgends verdraengt).
+# 120 s = dieselbe Zahl wie `PLATZ_STUMM_FRIST_S`, und bewusst dieselbe: laenger
+# als die Frist, nach der ein Platz ohnehin als stumm eingezogen wird, braucht
+# kein Drain zu warten.
+PLAETZE_DRAIN_FRIST_S = PLATZ_STUMM_FRIST_S
+PLAETZE_DRAIN_TAKT_S = 0.5
+# Wie lange der Drain hoechstens auf das EXKLUSIV-Lock des Worker-Dienstes
+# wartet, um ihn fuer die neue Strangzahl geordnet zu beenden. Es kann von einer
+# Wanduhr-Messung gehalten werden; waehrend dieses Wartens steht die
+# Vergabestelle. Lieber ein Prozess, der eine Runde laenger mit der alten Zahl
+# laeuft, als eine Anlage, die steht, weil sie schneller werden wollte.
+PLAETZE_DRAIN_STOP_FRIST_S = 20.0
+# Mindestabstand zwischen zwei Drain-Anlaeufen. Er ist die Bremse gegen eine
+# Neustart-Schleife: der Wechsel zieht einen Worker-Neustart nach sich, und der
+# kostet den Kompilat-Bau. Ein Budget, das im Minutentakt zwischen zwei Stufen
+# schwankt, darf nicht im Minutentakt Prozesse wechseln.
+PLAETZE_DRAIN_ABSTAND_S = 300.0
 
 # .534 (B9b): wie oft die Analyse EINES Ereignisses am Platzwaechter eingezogen
 # werden darf, bevor das Ereignis uebersprungen wird. Dieselbe Zahl wie beim
@@ -2243,7 +2462,7 @@ class FrigateHttpFehler(urllib.error.HTTPError):
         try:
             detail = e.read(300).decode("utf-8", "replace").strip()
         except Exception:
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         super().__init__(e.url, e.code, e.msg, e.hdrs, None)
         self.detail = detail
         self.pfad = pfad
@@ -2320,6 +2539,7 @@ def pruefe_url(u):
     try:
         p = urllib.parse.urlparse(u)
     except Exception:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning (False, 'URL not parseable')")
         return False, "URL not parseable"
     if p.scheme not in ("http", "https"):
         return False, "only http:// or https:// is allowed"
@@ -2365,7 +2585,7 @@ def frigate_cameras(cfg, force=False):
             _frigate_fr["an"] = bool((c.get("face_recognition") or {}).get("enabled"))
             _frigate_fr["bekannt"] = True
         except Exception:
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         for name, cc in (c.get("cameras") or {}).items():
             det = cc.get("detect") or {}
             out[name] = {"enabled": bool(cc.get("enabled", True)),
@@ -2533,7 +2753,7 @@ def _analyse_nice():
     try:
         os.nice(ANALYSE_NICE)
     except OSError:
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
 
 
 def _clip_alter_min(ende_ts, start_ts=None):
@@ -2545,6 +2765,7 @@ def _clip_alter_min(ende_ts, start_ts=None):
         t = float(ende_ts or 0) or float(start_ts or 0)
         return round((time.time() - t) / 60, 1) if t else None
     except Exception:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
         return None
 
 
@@ -2617,7 +2838,10 @@ def _verwurf_melden(info, code):
 
 def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=None,
                 koerper=False, info=None, clip_quelle="live", clip_alter_min=None,
-                puls=None):
+                puls=None, personenzahl=None):
+    # Bauplan K3, Stufe KP3: `personenzahl` (gueltige Zahl oder None, Service.process ueber
+    # core.personenzahl) geht als Job-Feld {eid: Zahl} an den Worker; None = kein fruehes Ende.
+    # Der Alt-Weg ohne Worker kennt sie nicht.
     # Watchdog der Live-Analyse aus der Config (analyse_timeout_s, messbasiert —
     # s. Default-Block; vorher fest 1800 s: am 10.08. hing der Worker exakt diese
     # 1800 s im Swap-Thrashing und blockierte den Pass 34 min). Nachhol-Laeufe
@@ -2724,6 +2948,18 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
         "urteil_guete_e": _reg.get("guete_e_min"),
         "urteil_guete_t": _reg.get("guete_t_min"),
         "urteil_pose": _reg["pose_min"] if _reg.get("pose_min") is not None else _pb,
+        # Bauplan K3 (analysen/bauplan_k3_produkt.md), Stufe KP1 Punkt 4: das Norm-Sieb
+        # des Workers. DIESELBE Aufloesung wie die Kante darueber (Kamera -> global
+        # `urteil_norm_min` -> Werks-Boden), aus dem Erkennen-Register DIESER Kamera.
+        "urteil_norm_min": _kk_ernte.erk_latten(cfg, _reg or None)["n"],
+        # Punkt 5: Stimmen bis erkannt des Stapels (core.stapel). `or 0` traegt die
+        # Haus-Konvention wie beim sample_deckel: fehlender Wert = kein Stapel.
+        "stapel_stimmen": int(cfg.get("stapel_stimmen") or 0),
+        # Stufe KP2 Punkt 7 und 3: die Tuer. Das Fenster aus der Config (`or 0` = keine Tuer, Haus-
+        # Konvention), der Deckel der Tuer-Bilder als Werkswert der Image-Variante aus der Registry
+        # (dieselbe Tabelle wie der Bild-Deckel, core.registry.tuer_deckel_werk).
+        "tuer_fenster": int(cfg.get("tuer_fenster") or 0),
+        "tuer_deckel": _registry.tuer_deckel_werk(os.environ.get("SUSLIK_VARIANT"))[0],
     }
     # KALIBRIER-VORRAT AUS DER ANALYSE (User 03.09., beauftragt seit 31.08.):
     # jede Event-Analyse darf den Ring ihrer Kamera speisen — Deckel ist
@@ -2773,7 +3009,8 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
                     # armiert wird im Worker (core.frames.CLIP_TOR_N).
                     "clip_tor": tor_n,
                     "clip_tor_deckel_s": tor_deckel_s,
-                    "clip_vod": cfg.get("clip_vod") is not False}
+                    "clip_vod": cfg.get("clip_vod") is not False,
+                    "personenzahl": {eid: personenzahl}}
         antwort = worker.job(dict(_auftrag), tmo,
                              info=w1, puls=puls)      # P1: Lebenszeichen des Platzes
         dt = time.monotonic() - t0 - float(w1.get("wartezeit_s") or 0.0)
@@ -3074,6 +3311,7 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
             try:
                 return json.loads(line)
             except Exception:
+                _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                 continue      # halb geschriebene Zeile (Kill mid-write); naechste vollstaendige zaehlt
     _verwurf_melden(info, _registry.VERWURF_ANALYSE_NONE)
     return None
@@ -3109,7 +3347,7 @@ class WorkerProzess:
         Instanz aus ihrem eigenen Config-Paar, die Logzeilen tragen den
         Instanz-Namen."""
         self.cfg = cfg
-        self.log = log or (lambda m: None)
+        self.log = log or _logbuch.NULL
         self.rss_key = rss_key
         self.rss_default = rss_default
         self.name = name
@@ -3183,8 +3421,8 @@ class WorkerProzess:
             with open(f"/proc/{self.p.pid}/oom_score_adj", "w") as f:   # erhoehen geht unprivilegiert
                 f.write("500")
         except Exception:
-            pass
-        self.log(f"{self.name} started (pid {self.p.pid})")
+            _logbuch.swallowed(_log, _logbuch.ERROR, "ignored", throttle=False)
+        self.log.info(f"{self.name} started (pid {self.p.pid})")
 
     def _stop(self, kill=False):
         p, rx = self.p, self.rx
@@ -3266,9 +3504,12 @@ class WorkerProzess:
             self._geschossen_grund = grund
             self._geschossen_quelle = quelle
             self._geschossen_pid = p.pid
-            self.log(f"{self.name} killed hard (pid {p.pid}) — {grund}")
+            # Log-Systematik E16 (1): INFO, der Grund steht am Schuetzen (V2). Diese
+            # Fassung ist verwaist, kein Aufrufer; sie kennt kein `haenger`.
+            self.log.info(f"{self.name} killed hard (pid {p.pid}) — {grund}")
             return True
         except Exception:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning False")
             return False
 
     def _todesursache(self, wartefrist_s=1.0):
@@ -3382,7 +3623,7 @@ class WorkerProzess:
             try:
                 puls()
             except Exception:                    # noqa: BLE001
-                pass
+                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
 
         # .502 FRIST AUF DEN JOB-LOCK (Feldfall beim Tester 04.09.2026): vorher stand
         # hier ein `with self.lock:` OHNE Deckel. Der 06:00-Wartungslauf
@@ -3442,7 +3683,7 @@ class WorkerProzess:
                 # rennfrei by construction; ein Attribut am Worker waere es
                 # nicht (zwei Threads, ein Objekt).
                 info["lock_timeout"] = True
-            self.log(f"{self.name} job lock held by another job for "
+            self.log.warning(f"{self.name} job lock held by another job for "
                      f"{timeout_s}s — giving this job up (caller retries)")
             return None
         try:
@@ -3516,9 +3757,9 @@ class WorkerProzess:
                         try:
                             puls()
                         except Exception:            # noqa: BLE001 — ein Puls darf nie einen Job kosten
-                            pass
+                            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
                 if not r:
-                    self.log(f"{self.name} job timeout ({timeout_s}s) — killing {self.name}")
+                    self.log.warning(f"{self.name} job timeout ({timeout_s}s) — killing {self.name}")
                     self._stop(kill=True)
                     return None
                 zeile = self.rx.readline()
@@ -3531,11 +3772,14 @@ class WorkerProzess:
                     art, kurz = self._todesursache()
                     self.letzte_ursache = kurz or "pipe closed, process still alive"
                     self.tode.append((time.time(), self.letzte_ursache))
+                    # E16 (Log-Systematik): mitten im Job verstummt heisst, der Job ist
+                    # verloren — ERROR. Diese Klasse ist verwaist (kein Aufrufer, s.
+                    # Klassenkopf); kein gewollter Stopp des Dienstes erreicht die Zeilen.
                     if art == "lebt":
-                        self.log(f"{self.name} closed its pipe mid-job but is still "
+                        self.log.error(f"{self.name} closed its pipe mid-job but is still "
                                  f"alive — killing it, restart on next job")
                     else:
-                        self.log(f"{self.name} {art} mid-job ({kurz}) — "
+                        self.log.error(f"{self.name} {art} mid-job ({kurz}) — "
                                  f"restart on next job")
                     self._stop(kill=True)
                     return None
@@ -3548,11 +3792,11 @@ class WorkerProzess:
                     self.rueckfaelle["letzt"] = n
                 grenze = self._rss_grenze()
                 if grenze and int(antwort.get("rss_mb") or 0) > grenze:
-                    self.log(f"{self.name} rss {antwort.get('rss_mb')} MB > {grenze} MB — restarting {self.name}")
+                    self.log.info(f"{self.name} rss {antwort.get('rss_mb')} MB > {grenze} MB — restarting {self.name}")
                     self._stop()
                 return antwort
             except Exception as e:
-                self.log(f"{self.name} error: {type(e).__name__}: {e} — killing {self.name}")
+                self.log.error(f"{self.name} error: {type(e).__name__}: {e} — killing {self.name}")
                 self._stop(kill=True)
                 return None
         finally:
@@ -3608,6 +3852,21 @@ def vram_startargumente(v):
     return argv
 
 
+def inferenz_frist_argumente(cfg):
+    """Die Wartefrist je GPU-Auftrag als Start-Argument JEDES worker_dienst-Spawns (GPU-Wartefrist, Stufe 1).
+    -> Liste von Argumenten; leer, wenn die Config den Schluessel nicht traegt.
+
+    DER WEG DES WERTS: Config `inferenz_frist_s` (Werkswert in load_config, Settings-Liste)
+    -> hier -> `--inferenz-frist-s` -> worker_dienst.argumente -> engine_ov.frist_ms -> jede
+    Wartestelle (engine_ov.abwarten). Beide Spawn-Stellen rufen diese Funktion
+    (`WorkerDienst._start`, `Service._roundtrip_fahren`), aus demselben Grund wie
+    `vram_startargumente`. Fehlt der Schluessel (nur Proben-Buehnen, load_config setzt ihn
+    immer), fehlt das Argument, und die OpenVINO-Engine startet laut nicht (engine_ov.frist_ms)
+    statt ohne Frist zu warten."""
+    frist = (cfg or {}).get("inferenz_frist_s")
+    return [] if frist is None else ["--inferenz-frist-s", str(frist)]
+
+
 def worker_dienst_pfad():
     """DER Pfad des Worker-Dienstes — EINE Lesestelle (Deckungs-Vertrag).
 
@@ -3641,6 +3900,14 @@ class _JobWarter:
         # Ein Prozess-Tod ohne Schuss (OOM, geordnetes Ende) laesst die Marke
         # False, und die Jobs bleiben fremdverschuldet wie bisher.
         self.haenger_verdacht = False
+
+
+# .546 (Hang-Suche): das Fenster der Inferenz-Kurzauskunft in /health. Zehn
+# Minuten, weil /health im Support-Fall eine MOMENTAUFNAHME beantwortet („steht
+# gerade etwas lange auf der Karte?") und nicht die Tagesstatistik — die liegt im
+# Prod-Log, wo jede Bilanzzeile mit ihrer Wanduhr-Zeit steht. Die Zahl steht hier
+# EINMAL; die Feldnamen in `_inferenz_zustand` leiten sich aus ihr ab.
+INFERENZ_FENSTER_S = 600.0
 
 
 class WorkerDienst:
@@ -3692,7 +3959,7 @@ class WorkerDienst:
                  geometrien=None, bei_neustart=None, vram=None, karte=None,
                  grundlast=None):
         self.cfg = cfg
-        self.log = log or (lambda m: None)
+        self.log = log or _logbuch.NULL
         self.name = name
         # E3.3 (W2-B29): der Geometrie-Deckel, den der Prozess als Job-Feld bekommt
         # (`geometrien_max`). Wie `grenze` ein `callable`, damit er den Stand bei der
@@ -3798,6 +4065,10 @@ class WorkerDienst:
         #                        Worker-Prozesse (16.09.).
         self.spaete_antworten = 0
         self.id_lose_antworten = 0
+        # Feldbefunde Punkt 5: Absagen des Start-Tors seit Dienststart (/health, PRUEF health),
+        # und der Grund der letzten (Stoerungszeile `stillstand`, Punkt 2).
+        self.absagen_n = 0
+        self.letzte_absage = None
         # .536 B4.5 (Invariante I13): wie oft standen MEHR Jobs offen, als der
         # Prozess gleichzeitig rechnen kann. SOLL: 0. Die Zahl ist die
         # Gegenprobe zur ganzen Vergabe-Umbau-Zusage — jeder offene Job ueber
@@ -3816,6 +4087,14 @@ class WorkerDienst:
         self.kompilat_probe = {"stand": "noch keine antwort"}
         self.startprobe = {"stand": "noch keine antwort"}
         self.rueckfall_arten = []
+        # Feldbefunde Punkt 6: Merkmal der Personen-Sitzung aus der letzten Antwort.
+        self.person_stand = {"fallback": False, "backend": None}
+        # .546 (Hang-Suche): die Inferenz-Bilanz des zuletzt gerechneten
+        # Ereignisses und ein Ring darueber. Leer heisst „noch keine Antwort mit
+        # Messung" — auf einem Backend ohne Inferenz-Messung bleibt er leer, und
+        # genau das sagt `/health` dann auch, statt eine Null zu zeigen.
+        self.inferenz_letzte = {}
+        self._inferenz_ring = collections.deque(maxlen=500)
         # .531: der Kartenhaushalt des laufenden Prozesses, wie er ihn zuletzt
         # gemeldet hat. Leer heisst „noch keine Antwort", nicht „kein Druck".
         self.vram_stand = {}
@@ -3837,6 +4116,9 @@ class WorkerDienst:
         # des Dienstes rechnet die Leiter neu, und sie soll es duerfen.
         self.straenge_laufend = 0
         self.straenge_deckel_druck = 0
+        # Feldbefunde Punkt 1 (d): wann der letzte eigene Worker-Prozess endete (0.0 = noch
+        # keiner). Gesetzt in `_stop()`, gelesen vom Frei-Band des Dienstes.
+        self.ende_ts = 0.0
         # .535: DER AUFSTIEG IST ERSATZLOS WEG. Er war die Antwort auf eine
         # Welt ohne Preise — erst klein starten, messen, dann hochgehen. Mit der
         # Messtabelle gibt es die Preise VOR dem Start, und der Worker beginnt
@@ -3845,8 +4127,20 @@ class WorkerDienst:
         # Zahl (`straenge_deckel_druck`), und der Druck-Merker bleibt.
 
     # ---------------------------------------------------------- Prozess
-    def _threads_zahl(self):
-        t = self._threads() if callable(self._threads) else self._threads
+    def _threads_zahl(self, roh=None):
+        """Mit wie vielen Rechenstraengen der NAECHSTE Start faehrt.
+
+        `roh` (.546): die Formel-Zahl, falls der Aufrufer sie schon hat. Ohne
+        Angabe wird die Rueckfrage gestellt wie bisher. Der Parameter ist kein
+        Bequemlichkeits-Weg, sondern verhindert eine Endlos-Rekursion: die
+        Rueckfrage ist `Service.worker_straenge_zahl`, und die bindet seit .546
+        am Ende ihrer Rechnung die Plaetze an die Straenge — wer aus dieser
+        Bindung heraus wieder hier hereinkaeme, riefe die Rechnung erneut.
+        Der Druck-Deckel unten gilt in BEIDEN Faellen; genau dafuer geht die
+        Frage hier durch und nicht am Aufrufer vorbei (eine zweite Stelle mit
+        demselben `min()` waere die zweite Wahrheit)."""
+        t = (roh if roh is not None
+             else (self._threads() if callable(self._threads) else self._threads))
         try:
             n = max(1, int(t))
         except (TypeError, ValueError):
@@ -3911,7 +4205,7 @@ class WorkerDienst:
         try:
             st = self._vram_start() or {}
         except Exception as e:                            # noqa: BLE001
-            self.log(f"{self.name}: card state not computable "
+            self.log.warning(f"{self.name}: card state not computable "
                      f"({type(e).__name__}: {e}) — starting anyway")
             return None
         if not st:
@@ -3962,8 +4256,11 @@ class WorkerDienst:
                 # gedeckelt wie beim fremden Verbraucher; die Handlungsanweisung
                 # bleibt in der Zeile, sie ist ja weiterhin richtig.
                 eigen_gemeldet = True
-                self.log(f"{self.name} start: the card is held by our OWN live "
-                         f"watchers ({eigen} MiB for {st.get('waechter_n')}) — "
+                # Feldbefunde Punkt 9 (O302): `eigen_mb` ist die Summe der POSTEN von
+                # Waechtern und Dienst (worker_vram_start), kein Messwert.
+                self.log.info(f"{self.name} start: the card is held by our OWN live "
+                         f"watchers (planned {eigen} MiB for {st.get('waechter_n')} "
+                         f"watcher(s) and the service — posted values, not measured) — "
                          f"waiting up to {int(KARTE_WARTE_FRIST_S)}s for their "
                          f"usage to dip ({frei} MiB free, {noetig} MiB needed). "
                          f"Reduce live watchers or set worker_vram_mb")
@@ -3982,7 +4279,7 @@ class WorkerDienst:
                         f"keeps running")
             if not gemeldet:
                 gemeldet = True
-                self.log(f"{self.name} start: waiting for card memory ({frei} MiB "
+                self.log.info(f"{self.name} start: waiting for card memory ({frei} MiB "
                          f"free, {noetig} MiB needed)")
             puls()
             time.sleep(1.0)
@@ -3998,7 +4295,7 @@ class WorkerDienst:
         try:
             wert = self._karte(kind)
         except Exception as e:                             # noqa: BLE001
-            self.log(f"{self.name}: card probe failed ({type(e).__name__}: {e})")
+            self.log.error(f"{self.name}: card probe failed ({type(e).__name__}: {e})")
             return 0, 0.0, "sonde_fehler"
         if isinstance(wert, tuple) and len(wert) == 3:
             return wert
@@ -4041,7 +4338,8 @@ class WorkerDienst:
         env = dict(os.environ, OV_DEVICE=self.cfg["ov_device"],
                    FRIGATE_URL=self.cfg["frigate_url"],
                    SCRATCH_DIR=os.path.join(self.cfg["data_dir"], "clips"),
-                   WORKER_ANTWORT_FD=str(w), WORKER_JOB_FD=str(rj))
+                   WORKER_ANTWORT_FD=str(w), WORKER_JOB_FD=str(rj),
+                   SUSLIK_STARTNUMMER=str(self._starts + 1))   # E6/D11: Startzeile des Workers
         # start_new_session: killpg muss auch ffmpeg-ENKEL treffen (W1-Lektion).
         # Job- und Antwort-Pipe sind non-inheritable (CLOEXEC) und reisen nur
         # ueber `pass_fds` -> nach einem execv von verifyd bekommt eine Waise EOF
@@ -4056,6 +4354,7 @@ class WorkerDienst:
         self._vram_bitte_gebucht = False          # neuer Prozess, neue Bitte
         _vram = self._vram_start() or {}
         argv += vram_startargumente(_vram)
+        argv += inferenz_frist_argumente(self.cfg)   # GPU-Wartefrist, Stufe 1 Punkt 2
         if _vram.get("deckel_mb"):
             self.vram_deckel_gehalten = int(_vram["deckel_mb"])
         try:
@@ -4088,14 +4387,15 @@ class WorkerDienst:
             with open(f"/proc/{self.p.pid}/oom_score_adj", "w") as f:
                 f.write("500")
         except Exception:                   # noqa: BLE001
-            pass
+            _logbuch.swallowed(_log, _logbuch.ERROR, "ignored", throttle=False)
         self._leser = threading.Thread(target=self._lesen, args=(self.p, self.rx),
                                        name=f"{self.name}-antworten", daemon=True)
         self._leser.start()
         self._starts += 1
         self.straenge_laufend = n                 # .532: womit DIESER Prozess laeuft
-        self.log(f"{self.name} started (pid {self.p.pid}, {n} compute thread(s), "
+        self.log.info(f"{self.name} started (pid {self.p.pid}, {n} compute thread(s), "
                  f"start #{self._starts})")
+        self._wechsel_buchen(n, _vram)            # Feldbefunde Punkt 13
         # E3.4 (Konzept §4 Schicht 1): DER ERSTE Start ist der BOOT — dort laeuft die
         # VOLLFORM im Exklusivfenster (Rechenprobe als Job, s.
         # `Service.worker_dienst_starten`). JEDER WEITERE Start ist ein
@@ -4110,8 +4410,39 @@ class WorkerDienst:
                 self._bei_neustart(f"worker restart #{self._starts} "
                                    f"(last cause: {self.letzte_ursache or '?'})")
             except Exception as e:                           # noqa: BLE001
-                self.log(f"{self.name}: could not schedule the short start proof "
+                self.log.error(f"{self.name}: could not schedule the short start proof "
                          f"({type(e).__name__}: {e})")
+
+    def _wechsel_buchen(self, n, vram):
+        """Ein Wechsel der Strangzahl wirkt beim Start (Feldbefunde Punkt 13): gezaehlt, fuer
+        /health gemerkt (`worker_straenge.wechsel_*`), eine Zeile nach E16 mit Posten —
+        Aufstieg INFO, Abstieg unter die eingestellte Zahl ERROR, Rueckfall nach einem
+        Aufstieg ERROR. -> None"""
+        alt = int(getattr(self, "_start_n", 0) or 0)
+        self._start_n = int(n)
+        if not alt or int(n) == alt:
+            return
+        vorher = getattr(self, "wechsel_letzter", None) or {}
+        richtung = "up" if n > alt else "down"
+        deckel = int(getattr(self, "straenge_deckel_druck", 0) or 0)
+        grund = ("the card budget carries more (ladder)" if richtung == "up" else
+                 "own arena cap hit twice (pressure cap)" if deckel and n <= deckel else
+                 "the card budget carries less (ladder)")
+        posten = (vram or {}).get("posten") or "no card posten on this backend"
+        nutzer = int((vram or {}).get("nutzer_n") or 0)
+        self.wechsel_n = int(getattr(self, "wechsel_n", 0) or 0) + 1
+        self.wechsel_letzter = {"richtung": richtung, "von": alt, "nach": int(n),
+                                "ts": round(time.time(), 1), "grund": grund}
+        if richtung == "up":
+            self.log.info(f"compute threads up {alt} -> {n}: {grund} ({posten})")
+        elif vorher.get("richtung") == "up":
+            self.log.error(f"thread count back to {n} after a rise ({alt} -> {n}: {grund}; "
+                           f"{posten})")
+        else:
+            self.log.log(_logbuch.ERROR if nutzer and n < nutzer else _logbuch.INFO,
+                         f"compute threads down {alt} -> {n}"
+                         + (f", below the configured {nutzer}" if nutzer and n < nutzer
+                            else "") + f": {grund} ({posten})")
 
     def _lesen(self, p, rx):
         """Antwortzeilen lesen und je JOB-ID zustellen — EIN Thread je Prozess.
@@ -4129,7 +4460,7 @@ class WorkerDienst:
                 try:
                     antwort = json.loads(zeile)
                 except Exception:                          # noqa: BLE001
-                    self.log(f"{self.name}: unreadable answer line ({zeile[:120]})")
+                    self.log.error(f"{self.name}: unreadable answer line ({zeile[:120]})")
                     continue
                 self._buchen(antwort)
                 jid = str(antwort.get("id") or "")
@@ -4160,7 +4491,7 @@ class WorkerDienst:
                         with self._warter_lock:
                             _zw = self._warter.pop(_zj, None) if _zj else None
                         if _zw is not None:
-                            self.log(f"{self.name}: ALARM — the worker could not "
+                            self.log.error(f"{self.name}: ALARM — the worker could not "
                                      f"read a job line (answer without an id, "
                                      f"#{self.id_lose_antworten}); job {_zj} is "
                                      f"cancelled right away instead of hanging "
@@ -4171,7 +4502,7 @@ class WorkerDienst:
                                            "fehler": "job line corrupted in transit"}
                             _zw.ereignis.set()
                         else:
-                            self.log(f"{self.name}: ALARM — the worker could not "
+                            self.log.error(f"{self.name}: ALARM — the worker could not "
                                      f"read a job line (answer without an id, "
                                      f"#{self.id_lose_antworten}), and no job is "
                                      f"waiting that it could belong to "
@@ -4184,13 +4515,13 @@ class WorkerDienst:
                     # ist kein IPC-Fehler, und auf einer langsamen Platte ist sie
                     # der Normalfall.
                     self.spaete_antworten += 1
-                    self.log(f"{self.name}: late answer for job {jid} "
+                    self.log.info(f"{self.name}: late answer for job {jid} "
                              f"(nobody waiting any more, #{self.spaete_antworten})")
                     continue
                 warter.antwort = antwort
                 warter.ereignis.set()
         except Exception as e:                             # noqa: BLE001
-            self.log(f"{self.name}: answer pipe read failed "
+            self.log.error(f"{self.name}: answer pipe read failed "
                      f"({type(e).__name__}: {e})")
         finally:
             self._pipe_zu(p)
@@ -4199,6 +4530,13 @@ class WorkerDienst:
         """Die Antwort-Pipe ist zu: Ursache feststellen, alle Warter absagen."""
         if p is not self.p:                 # Nachzuegler eines alten Prozesses
             return
+        # E16 (Log-Systematik): die Stufe der Zeile unten folgt der Ursache. Gewollt
+        # (INFO) ist ein Schuss dieses Dienstes auf genau diesen Prozess (`kill_hart`
+        # merkt die PID, `_todesursache` liest sie gleich darunter; der Grund steht
+        # schon am Schuetzen) und das geordnete Ende mit exit code 0 (Speicherregel,
+        # `Dienst.ende_bitten`). Sonst ungeplant: ERROR mit offenen Jobs (verloren),
+        # WARNING ohne.
+        eigener_schuss = p is not None and p.pid == self._geschossen_pid
         art, kurz = self._todesursache(p)
         self.letzte_ursache = kurz or "answer pipe closed, process still alive"
         # EIN Eintrag — das ist ein PHYSISCHER Tod (W2-B6). Wie viele Jobs er
@@ -4208,7 +4546,18 @@ class WorkerDienst:
         self.tode.append((time.time(), self.letzte_ursache))
         with self._warter_lock:
             offen, self._warter = self._warter, {}
-        self.log(f"{self.name} {art} ({self.letzte_ursache}) — restart on next job"
+        # Feldbefunde Punkt 13: endet der Prozess geordnet WEGEN voller Karte
+        # (`ende_schluessel` vram_druck, s. `_buchen`) mit offenen Jobs, ist das ERROR.
+        karte_voll = bool(offen and art == "exited" and p.returncode == 0
+                          and getattr(self, "_vram_bitte_gebucht", False))
+        if karte_voll:
+            stufe = _logbuch.ERROR
+        elif eigener_schuss or (art == "exited" and p.returncode == 0):
+            stufe = _logbuch.INFO
+        else:
+            stufe = _logbuch.ERROR if offen else _logbuch.WARNING
+        self.log.log(stufe, f"{self.name} {art} ({self.letzte_ursache}) — restart on next job"
+                 + (" — it had to end under card memory pressure" if karte_voll else "")
                  + (f"; {len(offen)} open job(s) booked as NOT THEIR OWN FAULT"
                     if offen else ""))
         for jid, warter in offen.items():
@@ -4243,6 +4592,13 @@ class WorkerDienst:
         /dev/null; ein `p.stdin` gibt es dort nicht mehr."""
         p, rx, tx = self.p, self.rx, self.tx
         self.p = self.rx = self.tx = None
+        # Feldbefunde Punkt 1 (O294): ohne Prozess laeuft kein Strang. Bis hier galt die
+        # Zahl des letzten Starts ueber dessen Ende hinaus, und die Leiter rechnete einem
+        # toten Worker seinen Kartenanteil gut (core/gpubudget.straenge, `laufend_n`).
+        self.straenge_laufend = 0
+        if p:
+            # Punkt 1 (d): ab hier beginnt das Frei-Band neu (Service._karte_frei_band_mb).
+            self.ende_ts = time.time()
         if not p:
             # Waise aus einem gescheiterten Start: das Schreibende gehoert
             # trotzdem geschlossen, sonst bekaeme ein spaeter gestarteter
@@ -4265,7 +4621,7 @@ class WorkerDienst:
             tx = self._datei_zu(tx)
             p.wait()
         except Exception:                    # noqa: BLE001
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         finally:
             self._datei_zu(rx)
             self._datei_zu(tx)
@@ -4283,12 +4639,32 @@ class WorkerDienst:
                 pass
         return None
 
-    def stop(self):
+    def stop(self, frist_s=None):
         """Geordnet beenden. Beide Locks: das Exklusiv-Lock laesst eine laufende
         Messung zu Ende kommen, das Absetz-Lock verhindert, dass gerade eine
-        Job-Zeile halb geschrieben ist, wenn die Job-Pipe zugeht."""
-        with self.lock, self._absetzen:
-            self._stop()
+        Job-Zeile halb geschrieben ist, wenn die Job-Pipe zugeht.
+
+        `frist_s` (.546) -> False, wenn das EXKLUSIV-Lock nicht binnen der Frist
+        frei wurde; ohne Frist wartet der Griff wie bisher unbegrenzt und gibt
+        True. Der Unterschied zaehlt genau fuer EINEN Aufrufer, den Drain-Wechsel
+        (`Service._plaetze_drain_lauf`): der haelt so lange die ganze
+        Vergabestelle an, und das Exklusiv-Lock kann von einer Wanduhr-Messung
+        gehalten werden, die ihre eigene Zeit braucht. Ein unbegrenztes Warten
+        an dieser Stelle waere eine Anlage, die steht, weil sie schneller werden
+        wollte. Neustart und `--once`-Ende warten weiter ohne Frist — dort ist
+        das Ende das Ziel, nicht ein Zwischenschritt."""
+        if frist_s is None:
+            with self.lock, self._absetzen:
+                self._stop()
+            return True
+        if not self.lock.acquire(timeout=float(frist_s)):
+            return False
+        try:
+            with self._absetzen:
+                self._stop()
+        finally:
+            self.lock.release()
+        return True
 
     def kill_hart(self, grund="restart deadlock", quelle="verifyd", haenger=False):
         """Den Prozess SOFORT schiessen, ohne auf `self.lock` zu warten -> True,
@@ -4323,10 +4699,16 @@ class WorkerDienst:
             if haenger:
                 self.haenger_schuesse += 1
                 self.schuesse.append((time.time(), quelle, grund))
-            self.log(f"{self.name} killed hard (pid {p.pid}) — {grund}"
-                     + (f" [hang shot #{self.haenger_schuesse}]" if haenger else ""))
+            # Log-Systematik E16: ein Haenger-Schuss (Job-Watchdog, Platzwaechter) bleibt
+            # WARNING; der Schuss ueber `worker_hart_stoppen` (Neustart-Klemme,
+            # Serien-Schuss) ist INFO. Den Grund jedes Schusses sagt die Zeile am
+            # Schuetzen (V2).
+            self.log.log(_logbuch.WARNING if haenger else _logbuch.INFO,
+                         f"{self.name} killed hard (pid {p.pid}) — {grund}"
+                         + (f" [hang shot #{self.haenger_schuesse}]" if haenger else ""))
             return True
         except Exception:                    # noqa: BLE001
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning False")
             return False
 
     def _todesursache(self, p, wartefrist_s=1.0):
@@ -4380,6 +4762,13 @@ class WorkerDienst:
             self.kompilat_probe = dict(antwort["kompilat_probe"])
         if antwort.get("startprobe"):
             self.startprobe = dict(antwort["startprobe"])
+        # .546: die Inferenz-Bilanz des Ereignisses (Zeit und Tiefe je
+        # Einreichung, gemessen in der Engine). Sie kommt nur mit ANALYSE-
+        # Antworten — ein `ping` rechnet nichts und darf den Stand nicht mit
+        # einer Null ueberschreiben.
+        if antwort.get("inferenz"):
+            self.inferenz_letzte = dict(antwort["inferenz"])
+            self._inferenz_ring.append((time.time(), self.inferenz_letzte))
         # .531: der Kartenhaushalt des Worker-Prozesses (Druck-Zaehler, Sonde,
         # Deckel). Er reist mit JEDER Antwort, auch mit dem `ping` — /health liest
         # ihn hier, ohne selbst einen Job abzusetzen.
@@ -4401,7 +4790,7 @@ class WorkerDienst:
                 _jetzt = max(1, int(self.straenge_laufend
                                     or self.vram_stand.get("straenge") or 1))
                 self.straenge_deckel_druck = max(1, _jetzt - 1)
-                self.log(f"{self.name}: straenge_druck: {_jetzt} -> "
+                self.log.info(f"{self.name}: straenge_druck: {_jetzt} -> "
                          f"{self.straenge_deckel_druck}, reason: own arena cap "
                          f"hit {self.vram_stand.get('deckel_treffer')}x "
                          f"(cap {self.vram_stand.get('deckel_mb')} MiB) — the "
@@ -4415,7 +4804,7 @@ class WorkerDienst:
                 and not getattr(self, "_vram_bitte_gebucht", False)):
             self._vram_bitte_gebucht = True       # je Prozess einmal, s. `_start`
             self.vram_neustart_ts = time.time()
-            self.log(f"{self.name}: the worker asked to restart under card memory "
+            self.log.info(f"{self.name}: the worker asked to restart under card memory "
                      f"pressure — the next pressure-driven cap reduction is held "
                      f"back for {int(_gpubudget.DRUCK_NEUSTART_ABSTAND_S)}s")
         # E3.3 (Bauplan 2e): die PROZESS-Summe der Rueckfall-Arten. Das Feld je JOB
@@ -4424,6 +4813,10 @@ class WorkerDienst:
         # zurueckgefallen?" — und gehoert deshalb an den Prozess, nicht ans Ereignis.
         if antwort.get("placement_fallback_prozess"):
             self.rueckfall_arten = list(antwort["placement_fallback_prozess"])
+        # Feldbefunde Punkt 6 (O290): das Merkmal der Personen-Sitzung des Workers
+        # (`person.fallback` in /health), gemerkt wie die Prozess-Felder darueber.
+        if isinstance(antwort.get("person"), dict):
+            self.person_stand = dict(antwort["person"])
         # E3.3 (W2-B6): eine fremdverschuldete Absage, die DRUEBEN entstanden ist
         # (Speicher-Abbruch, geordnetes Ende), traegt ihre Ursache als Feld. Sie
         # wird je Job-Id gebucht wie die Absagen am EOF — sonst haetten zwei Wege
@@ -4434,6 +4827,43 @@ class WorkerDienst:
                                   or antwort["todesursache"]))
 
     # ---------------------------------------------------------- Zustand
+    def _inferenz_zustand(self):
+        """DIE INFERENZ-MESSUNG fuer /health (.546) — rein lesend.
+
+        ZWEI ZAHLEN, zwei Fragen. `letzte` ist die Bilanz des zuletzt
+        gerechneten Ereignisses (n, Groesstwert mit Wanduhr-Zeit, p95, Mittel,
+        groesste Tiefe) — sie beantwortet „wie lief der letzte Lauf". Die Werte
+        ueber das Fenster beantworten „steht hier gerade etwas lange auf der
+        Karte", und das ist die Frage, mit der jemand auf /health schaut, wenn
+        der Wirt Engine-Resets meldet.
+
+        DER GROESSTWERT ueber das Fenster ist das MAXIMUM der Ereignis-Maxima,
+        nicht ein Mittel: gesucht wird die laengste einzelne Einreichung, und ein
+        Mittel ueber Ereignisse macht genau die unsichtbar.
+
+        Die Feldnamen tragen die Fensterlaenge (`max_10min_ms` bei 600 s) und
+        werden aus `INFERENZ_FENSTER_S` gebildet — eine zweite Zahl im Namen
+        waere das Streu-Literal, das beim naechsten Fensterwechsel luegt.
+        `fenster_s` steht daneben, damit niemand einen Namen parsen muss."""
+        jetzt = time.time()
+        grenze = jetzt - INFERENZ_FENSTER_S
+        p = f"{int(INFERENZ_FENSTER_S // 60)}min"
+        fenster = [b for ts, b in self._inferenz_ring if ts >= grenze]
+        aus = {"letzte": dict(self.inferenz_letzte),
+               "fenster_s": INFERENZ_FENSTER_S,
+               f"n_{p}": len(fenster)}
+        if not fenster:
+            return aus
+        laengste = max(fenster, key=lambda b: float(b.get("max_ms") or 0.0))
+        aus[f"max_{p}_ms"] = laengste.get("max_ms")
+        aus[f"max_{p}_zeit"] = laengste.get("max_zeit")
+        aus[f"max_{p}_stufe"] = laengste.get("max_stufe")
+        aus[f"langsam_{p}"] = sum(int(b.get("langsam_n") or 0) for b in fenster)
+        aus[f"inflight_max_{p}"] = max(int(b.get("inflight_max") or 0)
+                                       for b in fenster)
+        aus[f"submissions_{p}"] = sum(int(b.get("n") or 0) for b in fenster)
+        return aus
+
     def zustand(self):
         """Wie `WorkerProzess.zustand` (dieselben Schluessel — /health, Systemseite
         und `_worker_warm` lesen sie unveraendert), dazu die zwei Groessen, die es
@@ -4476,6 +4906,8 @@ class WorkerDienst:
                 #                       Watchdog, kein IPC-Fehler.
                 "id_lose_antworten": self.id_lose_antworten,
                 "spaete_antworten": self.spaete_antworten,
+                # Feldbefunde Punkt 5: Absagen des Start-Tors seit Dienststart.
+                "absagen_n": int(getattr(self, "absagen_n", 0) or 0),
                 # .536 B4.5 — Invariante I13: wie oft standen mehr Jobs offen,
                 # als der Prozess gleichzeitig rechnen kann (Straenge + 1).
                 # SOLL: 0. Jede Zahl darueber heisst, dass ein Job IM Worker
@@ -4489,7 +4921,16 @@ class WorkerDienst:
                 "neustarts": self._starts,
                 "kompilat_probe": dict(self.kompilat_probe),
                 "startprobe": dict(self.startprobe),
+                # .546 (Hang-Suche): wie lange die laengste Einreichung auf der
+                # Karte stand und wie viele gleichzeitig eingereicht waren.
+                # ADDITIV — alle bisherigen Schluessel dieses Blocks bleiben
+                # unveraendert (Support-API-Vertrag).
+                "inferenz": self._inferenz_zustand(),
                 "placement_fallback_prozess": list(self.rueckfall_arten),
+                # Feldbefunde Punkt 6: faellt die Personen-Sitzung des Workers auf die
+                # CPU, steht das hier (`person.fallback`), nicht nur im Log.
+                "person": dict(getattr(self, "person_stand", None)
+                               or {"fallback": False, "backend": None}),
                 # .532: DER KARTENHAUSHALT DES PROZESSES, wie er ihn zuletzt
                 # gemeldet hat. Er wurde seit .531 in `_buchen` gemerkt, kam
                 # aber nie hier heraus — `_vram_zustand` las die Druck-Zaehler
@@ -4502,6 +4943,22 @@ class WorkerDienst:
                 "straenge_deckel_druck": int(self.straenge_deckel_druck or 0),
                 "grund": None}
 
+    def haenger_offen(self):
+        """Steht seit dem letzten Haenger-Schuss noch kein frischer Worker-Prozess? (GPU-Wartefrist F2)
+        -> bool, gelesen aus den bestehenden Buechern `schuesse` und `tode` und dem Prozess.
+
+        Kein neuer Zustand (Bauplan Stufe 1 Punkt 5): nach dem Schuss ist der Prozess tot, sein
+        Tod steht in `tode`; der naechste Job startet einen frischen, und solange der laeuft, ist
+        die Frage erledigt. Stirbt dieser frische Prozess spaeter aus einem anderen Grund, steht
+        ein ZWEITER Tod nach dem Schuss im Buch — das ist kein offener Haenger mehr."""
+        if not self.schuesse:
+            return False
+        p = self.p
+        if p is not None and p.poll() is None:
+            return False
+        seit = self.schuesse[-1][0]
+        return sum(1 for ts, _u in self.tode if ts >= seit) <= 1
+
     # ---------------------------------------------------------- Jobs
     def job(self, job, timeout_s, info=None, puls=None):
         """Einen Job absetzen und auf SEINE Antwort warten.
@@ -4513,6 +4970,8 @@ class WorkerDienst:
                                     geordnetes Ende, Speicher-Abbruch) — der Job
                                     darf ohne Strafe wiederholt werden.
           info['frist']             die Frist des Jobs ist abgelaufen.
+          info['vor_absetzen_abgesagt']  das Start-Tor hat abgesagt, es lief kein
+                                    Prozess (traegt zugleich 'fremdverschuldet').
           sonst                     Absetzen selbst gescheitert (kein Prozess).
         `info['wartezeit_s']` ist die Zeit, die der Job IM DIENST in der Schlange
         stand (Antwortfeld `warte_s`) plus die Zeit am Lebenszyklus-Lock: sie ist
@@ -4527,7 +4986,7 @@ class WorkerDienst:
             try:
                 puls()
             except Exception:                              # noqa: BLE001
-                pass
+                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
 
         if info is not None:
             info["wartezeit_s"] = 0.0
@@ -4585,11 +5044,16 @@ class WorkerDienst:
         if job.get("typ") != "ping":
             _absage = self._karte_bereit(job, _puls)
             if _absage is not None:
+                # Feldbefunde Punkt 5: jede Absage zaehlt (/health worker.absagen_n,
+                # PRUEF health), die Zeile darunter bleibt die eine Zeile (V2).
+                self.absagen_n = int(getattr(self, "absagen_n", 0) or 0) + 1
+                self.letzte_absage = _absage
                 if info is not None:
                     info["wartezeit_s"] = round(time.monotonic() - t_warte, 3)
                     info["fremdverschuldet"] = True
+                    info["vor_absetzen_abgesagt"] = True
                 self.letzte_ursache = _absage
-                self.log(f"{self.name}: job ({job.get('typ')}) refused before "
+                self.log.warning(f"{self.name}: job ({job.get('typ')}) refused before "
                          f"dispatch — {_absage}")
                 return None
         # Prozess sicherstellen + Job-Id vergeben: UNTER dem Absetz-Lock, damit
@@ -4611,7 +5075,7 @@ class WorkerDienst:
             except Exception as e:                         # noqa: BLE001
                 with self._warter_lock:
                     self._warter.pop(job.get("id") or "", None)
-                self.log(f"{self.name} error while dispatching "
+                self.log.error(f"{self.name} error while dispatching "
                          f"{job.get('typ')}: {type(e).__name__}: {e} — killing {self.name}")
                 self._stop(kill=True)
                 if info is not None:
@@ -4677,7 +5141,7 @@ class WorkerDienst:
             # Kurzform der Start-Proben vor (E3.4). Gezaehlt wird der Vorgang als
             # `haenger_schuesse` — sichtbar in /health, mit Grund.
             _mit = max(0, self.zustand().get("offene_jobs", 0))
-            self.log(f"{self.name} job {jid} ({job.get('typ')}) missed its "
+            self.log.error(f"{self.name} job {jid} ({job.get('typ')}) missed its "
                      f"deadline ({timeout_s}s) — killing the worker process "
                      f"(a hung compute thread cannot be shot on its own; "
                      f"{_mit} other job(s) go with it and are booked as not "
@@ -4686,7 +5150,7 @@ class WorkerDienst:
             self.kill_hart(grund=f"job {jid} ({job.get('typ')}) deadline {timeout_s}s",
                            quelle="the job watchdog", haenger=True)
             if warter.haenger_verdacht:
-                self.log(f"{self.name}: job {jid} ({job.get('typ')}) was on a "
+                self.log.warning(f"{self.name}: job {jid} ({job.get('typ')}) was on a "
                          f"compute thread when the hang shot fell — booked as a "
                          f"HANG ATTEMPT, not as someone else's fault")
             return None
@@ -4709,14 +5173,45 @@ class WorkerDienst:
                     info["haenger_verdacht"] = True
             self.letzte_ursache = (antwort.get("fehler")
                                    or "worker process gone (no fault of this job)")
-            self.log(f"{self.name}: job {jid} ({job.get('typ')}) booked as "
+            self.log.info(f"{self.name}: job {jid} ({job.get('typ')}) booked as "
                      f"NOT ITS OWN FAULT — {self.letzte_ursache}")
             if antwort.get("haenger_verdacht"):
-                self.log(f"{self.name}: job {jid} ({job.get('typ')}) was on a "
+                self.log.warning(f"{self.name}: job {jid} ({job.get('typ')}) was on a "
                          f"compute thread when the hang shot fell — booked as a "
                          f"HANG ATTEMPT, not as someone else's fault")
             return None
+        if antwort.get("haenger"):
+            # Bauplan GPU-Wartefrist, Stufe 1 Punkt 4: der Worker meldet einen GPU-Auftrag,
+            # der nicht binnen `inferenz_frist_s` zurueckkam — behandelt wie der Ablauf des
+            # Job-Watchdogs darueber (Schuss, Zaehler, Wiedereinreihen der offenen Jobs).
+            return self._haenger_schuss(jid, job, antwort, info)
         return antwort
+
+    def _haenger_schuss(self, jid, job, antwort, info):
+        """Den Worker-Prozess schiessen, weil ein Job einen GPU-Haenger meldet (GPU-Wartefrist, Stufe 1).
+        -> None wie beim Ablauf des Job-Watchdogs; `info` traegt `haenger_verdacht`.
+
+        DERSELBE WEG WIE DER JOB-WATCHDOG in `job`: ERROR-Zeile mit dem Grund aus der Antwort,
+        dann `kill_hart(haenger=True)` — damit zaehlen `haenger_schuesse`, `letzter_schuss` und
+        `letzte_ursache` an ihrer einen Stelle, und `_pipe_zu` sagt die uebrigen offenen Jobs
+        am EOF als fremdverschuldet ab (sie gehen zurueck in die Warteschlange). Der meldende
+        Job sass nachweislich auf einem Rechenstrang und traegt deshalb `haenger_verdacht` wie
+        beim Watchdog (Versuch angeschrieben, danach Sofort-Retry bzw. Nachhol wie heute).
+        Kein zweiter Zaehler, keine eigene Frist: `analyse_timeout_s` bleibt der aeussere
+        Deckel, und der frische Prozess startet beim naechsten Job wie nach jedem Schuss."""
+        typ, text = job.get("typ"), antwort.get("fehler") or "no text"
+        with self._warter_lock:
+            mit = len(self._warter)
+        self.log.error(f"{self.name} job {jid} ({typ}) reported a GPU hang ({text}) — killing "
+                       f"the worker process (the GPU context is not trustworthy after an "
+                       f"abandoned request; {mit} other job(s) go with it and are booked as "
+                       f"not their own fault)")
+        self.letzte_ursache = f"killed after job {jid} reported a GPU hang: {text}"
+        self.kill_hart(grund=f"job {jid} ({typ}) gpu hang: {text}",
+                       quelle="the worker (gpu hang report)", haenger=True)
+        if info is not None:
+            info["haenger_verdacht"] = True
+        return None
 
     def _i13_wache(self, jid, job):
         """.536 B4.5 — INVARIANTE I13: „offene Jobs <= Rechenstraenge + 1".
@@ -4764,7 +5259,7 @@ class WorkerDienst:
             if jetzt - self._i13_log_ts < 60:
                 return
             self._i13_log_ts = jetzt
-            self.log(f"{self.name}: {offen} jobs open, but this process computes "
+            self.log.info(f"{self.name}: {offen} jobs open, but this process computes "
                      f"at most {soll} at a time ({straenge} compute thread(s) + 1 "
                      f"background thread) — a job is now waiting INSIDE the "
                      f"worker instead of at the slot desk and burns its deadline "
@@ -4773,7 +5268,7 @@ class WorkerDienst:
                      f"slot reclaimed after going silent — check the log above "
                      f"for 'reclaimed after going silent'")
         except Exception:                                  # noqa: BLE001
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
 
     def _schreiben(self, job):
         """EINE Job-Zeile in die JOB-PIPE. Gesperrt, weil N Threads gleichzeitig
@@ -4954,6 +5449,7 @@ def _encode_probe(argv):
     try:
         return subprocess.run(argv, capture_output=True, timeout=20).returncode == 0
     except Exception:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning False")
         return False
 
 
@@ -4998,6 +5494,7 @@ def video_encoder():
         # Pipeline (cuvid/scale_cuda vorhanden+nutzbar), Codec-Sonderfaelle faengt der
         # Laufzeit-CPU-Fallback der Aufrufer (mit Logzeile).
         import tempfile
+        import decode as _dec_nv                     # noqa: PLC0415  Punkt 14: NVDEC-Eingang
         art = "nvenc"
         with tempfile.TemporaryDirectory() as td:
             smp = os.path.join(td, "probe.mp4")
@@ -5005,7 +5502,7 @@ def video_encoder():
                               *quelle, "-vf", "format=yuv420p", "-c:v", "libx264",
                               "-f", "mp4", smp]) \
                and _encode_probe(["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
-                                  "-hwaccel", "cuda", "-hwaccel_output_format", "cuda",
+                                  *_dec_nv.nvdec_eingang(),
                                   # 256 wie die Encode-Probe: NVENC lehnt zu kleine Frames ab
                                   # (64x64 gemessen; W3-Review: 128 laege unter dem Minimum und
                                   # liesse die Voll-HW-Probe IMMER scheitern -> Feature still tot)
@@ -5073,8 +5570,10 @@ def transcode_kommandos(src, ziel, hoehe, q_hw, q_cpu, dauer_s=None, q_vaapi=Non
         # wenn die EXAKTE Pipeline beim Start probiert wurde (s. video_encoder): mit
         # -hwaccel_output_format cuda faellt nicht dekodierbares Material HART statt weich —
         # den weichen Rueckzug liefert dann der Laufzeit-CPU-Fallback der Aufrufer.
+        # Feldbefunde Punkt 14: der NVDEC-Eingang kommt von der EINEN Stelle.
+        import decode as _dec_nv                     # noqa: PLC0415
         hw = ["ffmpeg", "-nostdin", "-loglevel", "error", "-y",
-              "-hwaccel", "cuda", "-hwaccel_output_format", "cuda", "-i", src, *t,
+              *_dec_nv.nvdec_eingang(), "-i", src, *t,
               "-vf", f"scale_cuda=-2:{hoehe}:format=yuv420p", "-c:v", "h264_nvenc",
               "-cq", str(q_hw_voll if q_hw_voll is not None else q_hw),
               *ton, "-f", "mp4", ziel]
@@ -5256,7 +5755,7 @@ class Analyseplaetze:
         self._belegt = {}          # platz_nr -> {"art", "etikett", "seit", "puls", "marke"}
         self._frei_nummern = list(range(1, self.kapazitaet + 1))
         self._marke = 0            # P1: laufende Nummer JE BELEGUNG (nicht je Platz)
-        self.log = log or (lambda *_a, **_k: None)
+        self.log = log or _logbuch.NULL
         # C2 (05.09.2026): die Warte-Anmeldung je Klasse. `art -> [Marken]`, die
         # Marke ist die ANMELDE-Reihenfolge (FIFO zwischen `ernte` und `bg`).
         self._wartend = {a: [] for a in self.ARTEN}
@@ -5290,6 +5789,15 @@ class Analyseplaetze:
         self._bg_log_letzt = None
         self._bg_log_ts = 0.0
         self._bg_log_aus = 0
+        # .546 DER DRAIN (Feldbefund AU, 22.09.2026): „keine neuen Tickets".
+        # None = normaler Betrieb, sonst der GRUND, der im Log steht. Solange er
+        # gesetzt ist, bekommt NIEMAND mehr einen Platz — auch das bg-Konto
+        # nicht, denn der Wechsel endet in einem Worker-Neustart, und der darf
+        # so wenig einen Sammel-Job abschneiden wie eine Analyse. Wer schon
+        # haelt, rechnet unbehelligt zu Ende; wer wartet, wartet laenger.
+        self._drain = None
+        self._drain_seit = 0.0
+        self._drain_log_ts = 0.0
         # Die Analyse meldet sich NICHT an: ihre Nachfrage steht in der
         # Ereignis-Warteschlange, nicht in einem Thread, der auf einen Platz wartet
         # (der Abholer hat sein Ereignis schon gezogen, wenn er hier ankommt). Der
@@ -5297,29 +5805,93 @@ class Analyseplaetze:
         # Funktion (Proben, Alt-Fixtures) wartet die Analyse nie.
         self.wartend_fn_analyse = None
 
-    def kapazitaet_setzen(self, neu, grund=""):
+    def kapazitaet_setzen(self, neu, grund="", im_drain=False):
         """Die Kapazitaet neu setzen (.532). -> True, wenn sie wirklich steht.
 
         NUR BEI LEERER VERGABESTELLE: ein `BoundedSemaphore` laesst sich nicht
         vergroessern oder verkleinern, es wird ERSETZT — und wer das tut,
         waehrend ein Platz belegt ist, gibt beim `release()` des laufenden Jobs
         ein Ticket auf ein Objekt zurueck, das die Freigabe nie erwartet hat
-        (ValueError) oder verschenkt einen Platz. Deshalb: ist etwas belegt
-        oder wartet jemand, bleibt alles wie es ist und der Aufrufer versucht
-        es beim naechsten Mal wieder. Das ist die ehrliche Grenze dieses
-        Weges — die Kapazitaet folgt der Strangzahl beim naechsten Start mit
-        ruhiger Vergabestelle, nie mitten im Lauf."""
+        (ValueError) oder verschenkt einen Platz. Deshalb: ist etwas belegt,
+        bleibt alles wie es ist und der Aufrufer versucht es beim naechsten Mal
+        wieder.
+
+        `im_drain` (.546) — WARUM DIE ANGEMELDETEN WARTER DANN NICHT MEHR
+        ZAEHLEN: ohne Drain blockiert auch eine blosse ANMELDUNG den Wechsel.
+        Das war die vorsichtige Seite und richtig, denn ein Warter kann bereits
+        im `acquire` des ALTEN Semaphors parken und waere nach dem Tausch ein
+        Halter auf einem Objekt, das niemand mehr kennt. Unter Drain kann das
+        nicht passieren: `platz()` prueft den Drain NACH dem Erwerb ein zweites
+        Mal, gibt das Ticket sofort zurueck und stellt sich neu an — und holt
+        sich dabei das dann gueltige Semaphor (s. dort). Belegte Plaetze bleiben
+        auch unter Drain ein hartes Nein; ein laufender Job wird nie
+        verdraengt.
+
+        EHRLICHE GRENZE (unveraendert): mitten in einer laufenden Analyse wird
+        nicht umgestellt. Neu ist allein, dass der Dienst den ruhigen Moment
+        HERSTELLT, statt auf ihn zu warten (`Service._plaetze_drain_lauf`)."""
         neu = max(1, int(neu or 1))
         with self._mutex:
             if neu == self.kapazitaet:
                 return True
-            if self._belegt or any(self._wartend.values()):
+            if self._belegt:
+                return False
+            if not im_drain and any(self._wartend.values()):
                 return False
             self.kapazitaet = neu
             self._sem = threading.BoundedSemaphore(neu)
             self._frei_nummern = list(range(1, neu + 1))
-        self.log(f"analysis slots: {neu}" + (f" ({grund})" if grund else ""))
+        self.log.debug(f"analysis slots: {neu}" + (f" ({grund})" if grund else ""))
         return True
+
+    # -- .546 DER DRAIN: Leerlauf HERSTELLEN statt auf ihn warten -------------
+    def drain_an(self, grund):
+        """Keine neuen Tickets mehr — fuer JEDE Klasse und BEIDE Konten.
+        -> True, wenn dieser Aufruf den Drain gesetzt hat (False: laeuft schon).
+
+        WARUM AUCH DAS bg-KONTO: am Ende des Wechsels steht ein Worker-Neustart
+        (die Rechenstraenge folgen der Platz-Zahl, sonst waere der Wechsel eine
+        Buchung ohne Wirkung). `WorkerDienst.stop()` laesst dem Prozess 30 s fuer
+        seine offenen Jobs und schiesst ihn danach — ein Sammel-Job auf dem
+        bg-Konto waere also genauso betroffen wie eine Analyse. Der Drain gilt
+        deshalb fuer alles, was im Worker rechnet."""
+        with self._mutex:
+            if self._drain:
+                return False
+            self._drain = str(grund or "slot change")
+            self._drain_seit = time.monotonic()
+            self._drain_log_ts = 0.0
+        self.log.info(f"analysis slots: draining — no new slots are handed out until "
+                 f"the running job(s) finish ({grund}); nothing running is ever "
+                 f"cancelled")
+        return True
+
+    def drain_aus(self):
+        """Den Drain aufheben. Gehoert in ein `finally` — bleibt er stehen,
+        steht die ganze Anlage."""
+        with self._mutex:
+            if not self._drain:
+                return
+            self._drain = None
+            self._drain_seit = 0.0
+        self.log.info("analysis slots: drain lifted — slots are handed out again")
+
+    def im_drain(self):
+        """Laeuft gerade ein Drain? -> der Grund (str) oder None."""
+        with self._mutex:
+            return self._drain
+
+    def _drain_melden(self, art):
+        """Hoechstens eine Zeile je 10 s — der Drain dauert Sekunden bis
+        Minuten, und in dieser Zeit fragen alle Klassen im Takt nach."""
+        jetzt = time.monotonic()
+        with self._mutex:
+            grund, seit = self._drain, self._drain_seit
+            if not grund or (jetzt - self._drain_log_ts) < 10.0:
+                return
+            self._drain_log_ts = jetzt
+        self.log.info(f"analysis slots: {art} waits for the drain ({grund}, "
+                 f"{jetzt - seit:.0f}s so far)")
 
     def _auf_bg_konto(self, art):
         """.536 B4.1: sitzt eine Belegung dieser Klasse auf dem bg-Konto? -> bool.
@@ -5367,6 +5939,15 @@ class Analyseplaetze:
             for d in self._belegt.values():
                 aus[d["art"]] = aus.get(d["art"], 0) + 1
             return aus
+
+    def nachfrage_hintergrund(self):
+        """Hintergrund-Arbeit, die wartet (Feldbefunde Punkt 2, Menge „wartet“): angemeldet und
+        noch ohne Platz, dazu die gehaltenen Ernte-Plaetze (ein Ernte-Job wartet im Start-Tor
+        auf seinem Platz, Feld-Bericht Muster 9). -> int"""
+        with self._mutex:
+            ohne_platz = sum(self._wartend_je_art_unsafe().values())
+            ernte = sum(1 for d in self._belegt.values() if d["art"] == "ernte")
+        return ohne_platz + ernte
 
     # -- Fairness: Rangfolge statt Reserve (.510/J18; Basis C2, bauplan_0505.md §1) --
     # Auftrag des Betreibers 05.09.: „nicht ein Weg nimmt alles, jeder mal dran, weder
@@ -5452,6 +6033,7 @@ class Analyseplaetze:
         try:
             return bool(fn())
         except Exception:                       # noqa: BLE001 — eine Auskunft
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning False")
             return False                        #   darf nie eine Vergabe kippen
 
     def wartende_andere(self, art, marke=None):
@@ -5639,7 +6221,7 @@ class Analyseplaetze:
         # das Konto hat Kapazitaet 1, es haelt es gerade dieser Aufrufer, und
         # nur ein ERWERB rueckt den Zeiger — ein zweiter kann es also nicht,
         # solange diese Zeile geschrieben wird.
-        self.log(f"background slot {nr} -> {art} ({etikett}, booking {marke}): "
+        self.log.debug(f"background slot {nr} -> {art} ({etikett}, booking {marke}): "
                  f"{grund}; waiting {zahlen}; "
                  f"pointer {zeiger_vor} -> {self._bg_zeiger}{zusatz}")
 
@@ -5792,11 +6374,11 @@ class Analyseplaetze:
             # „holds X of N" waere hier die falsche Auskunft (dieselbe Klasse
             # wie bei `analyse` unten). Der Grund kommt aus derselben Rechnung,
             # die die Vergabe entschieden hat.
-            self.log(f"slot fairness: {art} stands back — "
+            self.log.warning(f"slot fairness: {art} stands back — "
                      f"{self._bg_rang_grund(art) or 'it may take the slot now'} "
                      f"(no running job is ever cancelled)")
         elif art == "analyse" and self._interaktiv_wartet():
-            self.log(f"slot fairness: analysis stands back — someone is waiting on "
+            self.log.warning("slot fairness: analysis stands back — someone is waiting on "
                      f"a click, and the next free worker window is theirs (fix 13; "
                      f"no running job is ever cancelled)")
         elif art == "bg":
@@ -5807,12 +6389,12 @@ class Analyseplaetze:
             # und dann wird diese Zeile auch nicht mehr erreicht. Der Text sagt
             # deshalb dazu, WARUM die Regel gerade gilt; sonst behauptete das Log
             # eine Regel, die im Regelfall gar nicht mehr existiert.
-            self.log(f"slot fairness: bg stands back — background work is "
+            self.log.warning(f"slot fairness: bg stands back — background work is "
                      f"sharing the analysis slots (bg_platz_getrennt is off), "
                      f"so it yields whenever anyone else waits; holds "
                      f"{gehalten} of {self.kapazitaet}")
         else:
-            self.log(f"slot fairness: {art} stands back (holds {gehalten} of "
+            self.log.warning(f"slot fairness: {art} stands back (holds {gehalten} of "
                      f"{self.kapazitaet}, another class is waiting)")
 
     def marke_von(self, nr):
@@ -5871,10 +6453,24 @@ class Analyseplaetze:
         # Analyse-Plaetze sind die Rechenstraenge, alles andere teilt sich das
         # eine bg-Konto (`_auf_bg_konto`, dort die Begruendung).
         _bg = self._auf_bg_konto(art)
-        _sem = self._sem_bg if _bg else self._sem
         while True:
-            while self._fairness_blockiert(art, marke_w):
-                self._fair_melden(art, self.belegt_je_art()[art])
+            # .546: DAS SEMAPHOR WIRD JE ANLAUF NEU GELESEN und nicht einmal vor
+            # der Schleife. Waehrend eines Drains kann `kapazitaet_setzen` es
+            # ERSETZEN; wer die alte Referenz festhielte, gaebe sein Ticket
+            # spaeter an ein Objekt zurueck, das niemand mehr fuehrt — genau die
+            # Buchungsluecke, gegen die der ganze Abschnitt hier gebaut ist. Das
+            # bg-Konto wird nie ersetzt, es liest sich nur mit.
+            _sem = self._sem_bg if _bg else self._sem
+            while True:
+                # .546: DER DRAIN STEHT VOR DER FAIRNESS. Er ist keine Frage der
+                # Rangfolge zwischen Klassen, sondern ein Schalter fuer alle:
+                # solange er steht, wird nichts vergeben.
+                if self.im_drain():
+                    self._drain_melden(art)
+                elif self._fairness_blockiert(art, marke_w):
+                    self._fair_melden(art, self.belegt_je_art()[art])
+                else:
+                    break
                 if frist_ende is None:
                     time.sleep(FAIRNESS_SCHEIBE_S)
                     continue
@@ -5891,6 +6487,22 @@ class Analyseplaetze:
             if not erworben:
                 yield None
                 return
+            # .546 DIE ZWEITE DRAIN-FRAGE, NACH DEM ERWERB — und sie ist der
+            # Grund, warum `kapazitaet_setzen` unter Drain die Anmeldungen
+            # ignorieren darf: wer schon im `acquire` parkte, als der Drain
+            # begann, wacht beim `release()` des letzten Halters auf und waere
+            # sonst genau der Halter, der den Wechsel verhindert. Er gibt sein
+            # Ticket auf DASSELBE Objekt zurueck, das er genommen hat (`_sem`,
+            # lokal), und stellt sich neu an — oben liest der naechste Anlauf
+            # das dann gueltige Semaphor.
+            if self.im_drain():
+                _sem.release()
+                self._drain_melden(art)
+                time.sleep(min(FAIRNESS_SCHEIBE_S,
+                               max(0.01, (frist_ende - time.monotonic())
+                                   if frist_ende is not None
+                                   else FAIRNESS_SCHEIBE_S)))
+                continue
             # Gegenpruefung (s. Docstring): `wartende_andere` VOR dem Mutex, weil
             # es die Warteschlangen-Frage des Dienstes stellt und damit dessen
             # Locks anfasst; unter dem Mutex wird nur noch gezaehlt und belegt.
@@ -5921,8 +6533,19 @@ class Analyseplaetze:
             _zeiger_vor, _warteschau = None, None
             with self._mutex:
                 gehalten = sum(1 for d in self._belegt.values() if d["art"] == art)
-                zu_viel = nachrang or (andere
-                                       and self._ueber_der_latte(art, gehalten))
+                # .546 IST DAS TICKET NOCH GUELTIG? Unter DEMSELBEN Mutex, unter
+                # dem `kapazitaet_setzen` das Semaphor ERSETZT — und genau das
+                # macht die Frage dicht: entweder diese Belegung wird zuerst
+                # eingetragen (dann ist die Vergabestelle nicht leer und der
+                # Tausch wird abgelehnt), oder der Tausch war zuerst (dann liegt
+                # hier ein Ticket auf einem Objekt, das niemand mehr fuehrt, und
+                # es wandert sofort zurueck). Ohne diese Zeile gaebe es ein
+                # schmales Fenster zwischen `acquire` und Eintrag, in dem ein
+                # Halter auf dem alten und N Halter auf dem neuen Semaphor
+                # nebeneinander stuenden — ueberbucht, und niemand saehe es.
+                _ueberholt = _sem is not (self._sem_bg if _bg else self._sem)
+                zu_viel = _ueberholt or nachrang or (
+                    andere and self._ueber_der_latte(art, gehalten))
                 if not zu_viel:
                     # Der `else 0`-Zweig ist unerreichbar: das BoundedSemaphore
                     # laesst hoechstens `kapazitaet` Halter gleichzeitig herein,
@@ -5963,6 +6586,12 @@ class Analyseplaetze:
                                               _zeiger_vor, _warteschau)
                 break
             _sem.release()
+            if _ueberholt:
+                # KEINE Fairness-Zeile: hier ist niemand zurueckgetreten, das
+                # Semaphor wurde unter dem Warter gewechselt. Der naechste
+                # Anlauf nimmt das neue — eine Fairness-Meldung waere an dieser
+                # Stelle schlicht die falsche Auskunft.
+                continue
             self._fair_melden(art, gehalten)
         try:
             yield nr
@@ -6145,11 +6774,11 @@ class Analyseplaetze:
                     _vorrat.append(nr)
                     _vorrat.sort()
         if fremd is not None:                     # Logzeile bewusst ohne den Mutex
-            self.log(f"slot {nr}: holder changed since the verdict — not reclaimed "
+            self.log.info(f"slot {nr}: holder changed since the verdict — not reclaimed "
                      f"(now {fremd})")
             return None
         (self._sem_bg if _bg else self._sem).release()
-        self.log(f"{'background' if _bg else 'analysis'} slot {nr} "
+        self.log.info(f"{'background' if _bg else 'analysis'} slot {nr} "
                  f"({self._label(d)}) reclaimed after going silent ({grund})")
         return d["art"], d["etikett"]
 
@@ -6404,6 +7033,7 @@ class Vorlauf:
         try:
             return os.path.exists(_frames.cache_pfad(eid, self.svc.cfg["data_dir"]))
         except Exception:                                 # noqa: BLE001
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning False")
             return False
 
     def _fertig_in_frigate(self, eid):
@@ -6436,6 +7066,7 @@ class Vorlauf:
         try:
             ev = api(self.svc.cfg, f"/api/events/{eid}")
         except Exception:                                 # noqa: BLE001
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning False")
             return False
         if (ev or {}).get("end_time"):
             self._fertig.add(eid)
@@ -6468,12 +7099,19 @@ class Vorlauf:
                 tor_n=(max(1, _tor - 1) if _tor else 0),
                 tor_deckel_s=clip_tor_deckel_s_aus_cfg(cfg),
                 vod=bool(cfg.get("clip_vod", True)))
+            # Bauplan Feldstau Stufe 3 (Fund 3): nach jeder Ablage den Aufraeum-Faden
+            # anstupsen (zusammenfallend wie aus process()). Sein Lauf eicht den
+            # Groessen-Stand, auf dem die Bremse `_cache_voll` faehrt — solange geholt
+            # wird, wird also geeicht. Rest-Grenze: bis der Lauf endet, kann der Cache
+            # um die inzwischen geholten Clips ueber der Grenze liegen; der Size-Cap
+            # desselben Laufs raeumt zurueck.
+            self.svc.aufraeumen_anstossen()
             try:
                 groesse = os.path.getsize(_frames.cache_pfad(eid, cfg["data_dir"]))
             except OSError:
                 groesse = 0
             self.geholt += 1
-            self.svc.debug(f"vorlauf: {eid} geholt in "
+            self.svc.log.debug(f"vorlauf: {eid} fetched in "
                            f"{time.monotonic() - t0:.1f}s "
                            f"({groesse / 1048576.0:.1f} MB)")
         except Exception as e:                            # noqa: BLE001
@@ -6487,7 +7125,7 @@ class Vorlauf:
             self.letzter_fehler = f"{art}: {str(e)[:200]}"
             if art not in self._fehler_gemeldet:
                 self._fehler_gemeldet.add(art)
-                self.svc.log(f"vorlauf: a clip could not be fetched ahead "
+                self.svc.log.error(f"vorlauf: a clip could not be fetched ahead "
                              f"({self.letzter_fehler}) — the analysis slot "
                              f"fetches it itself when its turn comes; further "
                              f"errors of this kind are counted, not logged")
@@ -6499,14 +7137,14 @@ class Vorlauf:
                 # geleert und die Stufe versucht es noch einmal.
                 self._nicht_holen.clear()
             self._nicht_holen.add(eid)
-            self.svc.debug(f"vorlauf: {eid} nicht geholt "
-                           f"({type(e).__name__}: {e}) — der Analyse-Platz "
-                           f"versucht es selbst")
+            self.svc.log.debug(f"vorlauf: {eid} not fetched "
+                           f"({type(e).__name__}: {e}) — the analysis slot "
+                           f"tries it itself")
         finally:
             try:
                 _frames.frei(eid, cfg["data_dir"])
             except Exception:                             # noqa: BLE001
-                pass
+                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
             with self._mutex:
                 self._laeuft.discard(eid)
 
@@ -6519,13 +7157,17 @@ class Vorlauf:
         ist genau der Clip, der als naechstes gebraucht wird (geholt wird in
         Warteschlangen-Reihenfolge). Ergebnis waere ein Hol-Raeum-Hol-Kreis gegen
         dasselbe Frigate, das diese Stufe schonen soll.
-        KEINE NEUE ZAHL: gefragt wird die Grenze, die der Cache ohnehin hat."""
+        KEINE NEUE ZAHL: gefragt wird die Grenze, die der Cache ohnehin hat.
+        Bauplan Feldstau Stufe 3: die Groesse kommt aus dem gepflegten Stand, den jeder
+        Aufraeum-Lauf eicht (und jede Ablage in `_holen` stoesst einen an). Fehlt der Stand
+        noch, zaehlt die Bremse EINMAL selbst und legt ihn ab — sie wird nie stiller."""
         try:
             grenze_gb = float(self.svc.speichergrenzen()[0] or 0)
             if grenze_gb <= 0:
                 return False
-            return self.svc.clip_cache_bytes() >= grenze_gb * 1024 ** 3
+            return self.svc.clip_cache_bytes_oder_zaehlen() >= grenze_gb * 1024 ** 3
         except Exception:                                 # noqa: BLE001
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning False")
             return False
 
     def _takt(self):
@@ -6536,7 +7178,7 @@ class Vorlauf:
         if self._cache_voll():
             if not self.cache_voll_gemeldet:
                 self.cache_voll_gemeldet = True
-                self.svc.log("vorlauf: the clip cache is at its limit — not "
+                self.svc.log.warning("vorlauf: the clip cache is at its limit — not "
                              "fetching ahead (the cleaner drops the oldest clip, "
                              "and that is the one needed next)")
             return
@@ -6546,11 +7188,11 @@ class Vorlauf:
         self.bereit = bereit
         if self.pausiert and bereit < tief:
             self.pausiert = False
-            self.svc.log(f"vorlauf: stock down to {bereit} clip(s) (below "
+            self.svc.log.warning(f"vorlauf: stock down to {bereit} clip(s) (below "
                          f"{tief}) — fetching again up to {hoch}")
         elif not self.pausiert and bereit >= hoch:
             self.pausiert = True
-            self.svc.log(f"vorlauf: {bereit} clip(s) ready (limit {hoch}) — "
+            self.svc.log.warning(f"vorlauf: {bereit} clip(s) ready (limit {hoch}) — "
                          f"pausing until the stock falls below {tief}")
         if self.pausiert:
             return
@@ -6580,7 +7222,7 @@ class Vorlauf:
                 self._takt()
             except Exception as e:                        # noqa: BLE001
                 # Eine Vorrats-Stufe darf den Dienst nie mitnehmen.
-                self.svc.debug(f"vorlauf: {type(e).__name__}: {e}")
+                self.svc.log.debug(f"vorlauf: {type(e).__name__}: {e}")
 
 
 # ------------------------------------------------------------------ Feinmessung (.534 B7)
@@ -6647,7 +7289,7 @@ class Feinmessung:
                 self.an = False
                 self._stop.set()
                 if war:
-                    self.svc.log(f"feinmessung: switched OFF ({quelle}) after "
+                    self.svc.log.info(f"feinmessung: switched OFF ({quelle}) after "
                                  f"{self.zeilen} line(s)")
                 return self.zustand()
             try:
@@ -6659,7 +7301,7 @@ class Feinmessung:
             self.datei = self._pfad()
             self.endet = time.time() + d * 60
             if self.an:
-                self.svc.log(f"feinmessung: extended to {d} min ({quelle})")
+                self.svc.log.info(f"feinmessung: extended to {d} min ({quelle})")
                 return self.zustand()
             self.an = True
             self.seit = time.time()
@@ -6668,7 +7310,7 @@ class Feinmessung:
             self._t = threading.Thread(target=self._lauf, daemon=True,
                                        name="feinmessung")
             self._t.start()
-            self.svc.log(f"feinmessung: switched ON ({quelle}) for {d} min, one "
+            self.svc.log.info(f"feinmessung: switched ON ({quelle}) for {d} min, one "
                          f"line per second to {self.datei or '(no state folder)'} "
                          f"— it switches itself off at the end")
             return self.zustand()
@@ -6688,6 +7330,7 @@ class Feinmessung:
             os.makedirs(st, exist_ok=True)
             return os.path.join(st, "feinmessung.jsonl")
         except Exception:                                 # noqa: BLE001
+            _logbuch.swallowed(_log, _logbuch.ERROR, "returning ''", throttle=False)
             return ""
 
     def _zeile(self):
@@ -6743,7 +7386,7 @@ class Feinmessung:
                 f.writelines(zeilen[-FEINMESSUNG_RING_S:])
             os.replace(tmp, pfad)
         except Exception:                                 # noqa: BLE001
-            pass
+            _logbuch.swallowed(_log, _logbuch.ERROR, "ignored", throttle=False)
 
     def _lauf(self):
         pfad = self.datei
@@ -6754,7 +7397,7 @@ class Feinmessung:
             if time.time() >= self.endet:
                 with self._mutex:
                     self.an = False
-                self.svc.log(f"feinmessung: reached its own time limit and "
+                self.svc.log.warning(f"feinmessung: reached its own time limit and "
                              f"switched OFF — {self.zeilen} line(s) in "
                              f"{os.path.basename(pfad or 'feinmessung.jsonl')}")
                 break
@@ -6766,6 +7409,7 @@ class Feinmessung:
                 self.zeilen += 1
                 seit_stutzen += 1
             except Exception:                             # noqa: BLE001
+                _logbuch.swallowed(_log, _logbuch.ERROR, "skipped", throttle=False)
                 continue
             if seit_stutzen >= FEINMESSUNG_STUTZ_ALLE:
                 seit_stutzen = 0
@@ -6774,15 +7418,20 @@ class Feinmessung:
 
 # ------------------------------------------------------------------ Kern: ein Event verarbeiten
 class Service:
+    # Log-Systematik (Stufe 2, E12): DER Logger des Dienstes. Als Klassen-Attribut,
+    # damit auch ein Service ohne __init__ (Proben) loggt; Uebergaben `log=self.log`
+    # reichen damit den Logger an die core-Funktionen weiter.
+    log = _log
+
     def __init__(self, cfg, dry_alert=False):
         self.cfg = cfg
         self.dry_alert = dry_alert
-        # .287 Clip-Debug: die [clipdbg]-Senke des DIENST-Prozesses einhaengen
-        # (core.frames.clip_dbg — Vorlader-Downloads, Nachhol-Meta-Auskunft
-        # [has_clip statt HEAD seit .288], Qualitaets-Zeilen). Der Schalter
-        # ist cfg['debug'] und wird JE ZEILE geprueft (s. _clip_dbg_senke)
-        # — Umschalten wirkt sofort.
-        _frames.CLIP_DBG = self._clip_dbg_senke
+        # Feldbefunde Punkt 1 (d): der Dienststart begrenzt das Frei-Band nach hinten —
+        # Messungen eines frueheren Dienstes gehoeren nicht in die Planung dieses.
+        self._dienst_start_ts = time.time()
+        # .287 Clip-Debug: die [clipdbg]-Zeilen des DIENST-Prozesses gehen seit der
+        # Log-Systematik (E11) ohne eigene Senke als DEBUG ins zentrale Log
+        # (core.frames.clip_dbg) — Umschalten wirkt ueber die Stufe sofort.
         # .292: VOD-Weg-Schalter des DIENST-Prozesses (Melden-Video, direkte
         # Zuege) — beim Start aus der Config; der Vorlader armiert je Zug
         # zusaetzlich frisch, Worker-Jobs tragen ihn als Job-Feld.
@@ -6792,13 +7441,24 @@ class Service:
             # liest es beim ersten Session-Bau (_so_mit_threads), Transcode je Kommando.
             # 0/unset = auto (erlaubte Kerne) = Verhalten wie bisher.
             os.environ["SUSLIK_CPU_THREADS"] = str(cfg["cpu_threads"])
+        # Feldbefunde Punkt 18: das EINGESTELLTE Backend fuer Worker und Live-Engine (sie
+        # erben die Umgebung wie SUSLIK_CPU_THREADS); was der Start-Benchmark gewaehlt hat
+        # (backend: auto, `placement_info`), heisst „auto“.
+        from core import livewache as _lw_bk                 # noqa: PLC0415
+        os.environ[_lw_bk.BACKEND_EINGESTELLT_ENV] = (
+            "auto" if cfg.get("placement_info") else str(cfg.get("backend") or ""))
         self.log_path = os.path.join(cfg["data_dir"], "state", "deckung.jsonl")
         os.makedirs(os.path.join(cfg["data_dir"], "events"), exist_ok=True)
         os.makedirs(os.path.join(cfg["data_dir"], "clips"), exist_ok=True)
         # .511: den debug-Stand fuer den Live-Engine-PROZESS spiegeln. Beim
-        # Start ist er nach dem B6-Reset immer aus — die Zeile raeumt also
-        # eine Flagge weg, die ein frueherer Lauf stehengelassen hat.
-        self._debug_spiegeln()
+        # Start ist er aus, ausser sein Fenster laeuft noch (Bauplan
+        # Debug-Zeitfenster Stufe 1) — die Zeile raeumt also eine Flagge weg,
+        # die ein frueherer Lauf stehengelassen hat. Seit der
+        # Log-Systematik (E9, E11) spiegelt sie auch den Pruef-Kanal.
+        self._schalter_spiegeln()
+        # Bauplan Debug-Zeitfenster Stufe 1 Punkt 4: ist debug nach dem Start an,
+        # schaltet der Zeitgeber es am Fensterende live aus.
+        self._debug_zeitgeber_stellen()
         self.processed = self._load_processed()
         # .340 Start-Nachholen: der Sweep wusste bisher nicht, der wievielte Lauf er ist.
         # Die Marke faellt erst NACH dem Frigate-Aufruf (sonst hebelt ein Haenger beim
@@ -6854,7 +7514,16 @@ class Service:
                                                   # bekommt das Dict als Parameter (Modulumbau R3)
         self._sammel_lock = threading.Lock()      # schuetzt die Sammel-/Reorg-Flags (User 21.07.)
         self._sammel_laeuft = False               # ein Szenario-Sammeln gleichzeitig (Prozess-Ebene serialisiert der pool_lock in anlernen.py)
-        self._sammel_nachhol = False              # Szenario waehrend eines Laufs -> danach EINMAL nachziehen statt verwerfen
+        # Stufe 3 (bauplan_sammeln_debug.md, O415): der EINE Faellig-Vermerk des
+        # Sammelns, ersetzt die fruehere Marke `_sammel_nachhol`. None = nichts
+        # faellig; sonst ein dict mit `seit` (Beginn des Aufschubs), `grenze`
+        # (aelteste Verarbeitungszeit, ab der gesammelt wird), `netz` (06:00-Netz
+        # mit Pool-Pflege faellig), `anstoesse`, `gemeldet` (Aufschub-Zeile
+        # geschrieben) und `verlust` (Zeitpunkt der Warnung zur Clip-Aufbewahrung).
+        # Er steht unter `_sammel_lock` und setzt `_sammel_laeuft` NICHT: solange
+        # nur vorgemerkt ist, bleiben Umbenennen und Lernlauf frei. Gestartet wird
+        # allein ueber `_sammeln_starten`, und nur bei leerem Rueckstand.
+        self._sammel_faellig = None
         # .536 B3: der Stand der laufenden Haeppchen-Kette, EINE Quelle fuer
         # `/health` (`sammel_zustand`). Nur der Ketten-Fahrer schreibt hier —
         # er laeuft im Sammel-Thread, und `_sammel_laeuft` sorgt dafuer, dass
@@ -6944,7 +7613,9 @@ class Service:
         self.mqtt_trigger = None                  # MQTT-Trigger-Client (nur trigger=mqtt), Setup via mqtt_loop()
         self.frigate_fehler = None                # (ts, msg) letzter Frigate-API-Fehler -> UI-Banner
         self.disk_warnung = None                  # .313 (ts, frei_gb): Platte unter Mindestfrei trotz leerem Clip-Cache
-        self._cleanup_lock = threading.Lock()     # Event-Hook, Platten-Wache und Knopf raeumen nie gleichzeitig
+        self._cleanup_lock = threading.Lock()     # Aufraeum-Faden, Platten-Wache und Knopf raeumen nie gleichzeitig
+        self._aufraeum_zeichen = threading.Event()   # Anstups-Zeichen des Aufraeum-Fadens (start_aufraeumer)
+        self._groessen_stand = None               # Feldstau Stufe 3: (Bytes, monotonic der Eichung) des Clip-Caches
         # .264 Frigate-Schoner: Config-Werte + lauter Log-Kanal verdrahten.
         frigate_schoner.schwelle = int(self.cfg.get("frigate_schoner_fehler") or 3)
         frigate_schoner.pause_s = float(self.cfg.get("frigate_schoner_pause_s") or 180)
@@ -7063,9 +7734,9 @@ class Service:
         # CPU-schwersten Installationen (Koerper-Strang opt-in, Issue-#21-Klasse).
         self._personlive_lock = threading.Lock()
         self._personlive_aktiv = 0
-        self.logbuf = collections.deque(maxlen=300)   # Dienst-Log fuer Webview /log
+        self.logbuf = _logbuch.ring_buffer()   # Dienst-Log fuer /log (E10, Handler im Modul)
         if self._plaetze_meldung:      # gemerkt im Konstruktor, s. dort (logbuf gab es noch nicht)
-            self.log(self._plaetze_meldung)
+            self.log.info(self._plaetze_meldung)
         # .533 DIE PLAETZE AN DIE RECHENSTRAENGE BINDEN — HIER, beim Dienststart.
         # .532 versuchte es ausschliesslich am Worker-Start, und das kam per
         # Bauart zu spaet: dort haelt der Job, der den Start ausloest, selbst
@@ -7081,7 +7752,7 @@ class Service:
         try:
             self._plaetze_an_straenge(self.worker_straenge())
         except Exception as e:                            # noqa: BLE001
-            self.log(f"analysis slots: not bound to the compute threads "
+            self.log.warning(f"analysis slots: not bound to the compute threads "
                      f"({type(e).__name__}: {e}) — the configured number applies")
         # .173 Auto-Default (User-Go 10.08.): Erst-Boot-Entscheid HIER im __init__ —
         # vor Publisher/Trigger/Web, es kann noch kein Event verarbeitet worden sein.
@@ -7095,7 +7766,7 @@ class Service:
                     try:
                         done.add(json.loads(line)["eid"])
                     except Exception:
-                        pass
+                        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         return done
 
     def _load_last_seen(self):
@@ -7108,7 +7779,7 @@ class Service:
                         for p in d.get("bestaetigt") or []:
                             seen[p] = max(seen.get(p, 0), d.get("start") or d.get("ts") or 0)
                     except Exception:
-                        pass
+                        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         return seen
 
     def _load_own_writes(self):
@@ -7120,7 +7791,7 @@ class Service:
                     try:
                         eids.add(json.loads(l)["eid"])
                     except Exception:
-                        pass
+                        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         return eids
 
     def _writes_append(self, **d):
@@ -7140,14 +7811,14 @@ class Service:
         if eid in self.own_writes or entry["frigate"].get("label") == top:
             return None                       # schon von uns geschrieben / Frigate sagt es selbst
         if nachhol and entry["frigate"].get("label"):
-            self.log(f"{eid}: catch-up — Frigate meanwhile carries "
+            self.log.info(f"{eid}: catch-up — Frigate meanwhile carries "
                      f"'{entry['frigate']['label']}', will NOT be overwritten")
             return None                       # rueckwirkend nie eine zwischenzeitliche Korrektur ueberschreiben
         cos = (entry["ours"].get(top) or {}).get("max") or 0
         score = round(1.0 / (1.0 + math.exp(-20.0 * (cos - 0.3))), 3)
         if frigate_read_only(cfg):                # Vertrauensphase: NICHT schreiben, nur protokollieren
             self._writes_append(eid=eid, label=top, score=score, cos=cos, readonly=True)
-            self.log(f"{eid}: read-only — would set sub_label -> '{top}' ({score}), Frigate NOT modified")
+            self.log.info(f"{eid}: read-only — would set sub_label -> '{top}' ({score}), Frigate NOT modified")
             return None
         self._writes_append(eid=eid, label=top, score=score, cos=cos)
         self.own_writes.add(eid)
@@ -7165,9 +7836,9 @@ class Service:
             for wartezeit in (2, 6):
                 time.sleep(wartezeit)
                 if api(cfg, f"/api/events/{eid}").get("sub_label") == top:
-                    self.log(f"{eid}: sub_label -> '{top}' ({score}) written + verified")
+                    self.log.info(f"{eid}: sub_label -> '{top}' ({score}) written + verified")
                     return
-            self.log(f"{eid}: sub_label write without GET echo (async? check later)")
+            self.log.warning(f"{eid}: sub_label write without GET echo (async? check later)")
         self._spur(f"sub_label {eid}", _senden)
         return top
 
@@ -7186,7 +7857,7 @@ class Service:
         statt einer "REJECTED"-Zeile je Alarm (Tester-Log 02.09.). Telegram/
         MQTT melden ihren Zustand an ihren eigenen Startstellen."""
         if not _melden.pushover_konfiguriert(self.cfg):
-            self.log("Pushover not configured (token or user key missing) — "
+            self.log.info("Pushover not configured (token or user key missing) — "
                      "nothing is sent on this channel")
 
     def start_publisher(self):
@@ -7219,11 +7890,11 @@ class Service:
             erkannt = [p for p, ts in snap.items()
                        if start - karenz <= ts <= start + karenz]
             if erkannt:
-                self.log(f"{entry['eid']}: fremd_verdacht defused by scene context "
+                self.log.info(f"{entry['eid']}: fremd_verdacht defused by scene context "
                          f"(recognized in the window: {', '.join(sorted(erkannt))})")
                 return
             if self._ist_ignorierter_besucher(entry):        # User 21.07.: "Ignorieren" = kein Alert
-                self.log(f"{entry['eid']}: fremd_verdacht suppressed (ignored visitor)")
+                self.log.warning(f"{entry['eid']}: fremd_verdacht suppressed (ignored visitor)")
                 return
             # Areas Stufe 1: Meldungen NENNEN die Area (Text + additives MQTT-Feld areas[]),
             # Verhalten/Anzahl/Timing unveraendert — Melde-Scoping je Area kommt mit Stufe 2.
@@ -7241,12 +7912,12 @@ class Service:
                         {"eid": entry["eid"], "camera": entry["camera"], "areas": _ar,
                          "ts": entry.get("start") or entry["ts"],      # Vorfalls-Zeit fuer die Caption
                          "max_bw": entry.get("max_bw")}, ensure_ascii=False)):
-                    self.log(f"SCENE unknown: {entry['eid']} ({entry['camera']}"
+                    self.log.info(f"SCENE unknown: {entry['eid']} ({entry['camera']}"
                              f"{' · ' + ' + '.join(_ar) if _ar else ''}) — "
                              f"nobody recognized in the {karenz}s window")
                 self._telegram_melden("unbekannt", entry)
             else:
-                self.log(f"{entry['eid']}: scene-unknown notification suppressed "
+                self.log.warning(f"{entry['eid']}: scene-unknown notification suppressed "
                          f"(category fremd_verdacht not enabled)")
             self._szenario_nachsammeln()             # sofort sammeln+clustern statt bis 06:00 warten (User 21.07.)
         threading.Timer(karenz, entscheiden).start()
@@ -7280,6 +7951,7 @@ class Service:
                     try:
                         e = json.loads(line).get("emb")
                     except Exception:
+                        _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                         continue
                     if e and len(e) == 512:
                         E.append(e)
@@ -7289,7 +7961,7 @@ class Service:
             E = E / (_np.linalg.norm(E, axis=1, keepdims=True) + 1e-9)
             return float((E @ V.T).max()) >= float(self.cfg.get("besucher_sim", 0.50))
         except Exception as e:
-            self.log(f"visitor check error: {e}")
+            self.log.error(f"visitor check error: {e}")
             return False
 
     def _szenario_nachsammeln(self):
@@ -7297,64 +7969,160 @@ class Service:
         im Fenster, kein ignorierter Besucher) sofort die neuen Gesichter sammeln + clustern, statt
         bis zum 06:00-Job zu warten (User 21.07.). Serialisiert (ein Lauf gleichzeitig) + gethrottled;
         dank geprueft.jsonl werden nur wirklich NEUE Events verarbeitet, also Sekundensache. Der
-        06:00-Job bleibt Sicherheitsnetz + eigentliche Wartung (Pool-Pruefung/Referenz-QS/Backup)."""
-        with self._sammel_lock:
-            if self._sammel_laeuft:
-                self._sammel_nachhol = True              # laeuft schon -> nach dem Lauf EINMAL nachziehen
-                return
-            self._sammel_laeuft = True
+        06:00-Job bleibt Sicherheitsnetz + eigentliche Wartung (Pool-Pruefung/Referenz-QS/Backup).
 
-        def lauf():
-            try:
-                # .536 B3: `_sammle_fahren` faehrt die ganze KETTE aus Haeppchen und
-                # liefert deren Summe als Zahl — der Griff nach „N faces collected"
-                # im Log-Text ist damit weg. `reconcile_unbekannte` laeuft EINMAL am
-                # Ende des Auftrags, nicht je Haeppchen.
-                _si = {}
-                summe, fehler = self._sammle_fahren(tage=0.1, mit_migriere=False,
-                                                    timeout=600, info=_si)
-                if fehler:
-                    # .544: das Sammeln zaehlt in die Serie ueber ALLE Pfade.
-                    # Es laeuft durch denselben Worker-Prozess wie jede Analyse
-                    # — ein toter Rechenkontext faellt hier genauso auf, und auf
-                    # einem Grundstueck ohne Verkehr ist das unter Umstaenden
-                    # die EINZIGE Stelle, an der er auffaellt.
-                    # .544 Teil 2b: ABER NUR, WENN DER WORKER DABEI WAR. „kein
-                    # freier Analyse-Platz binnen Frist" ist eine Aussage ueber
-                    # die Vergabestelle — auf einer ausgelasteten Anlage waere
-                    # das der Weg vom Vollbetrieb in den Prozessschuss.
-                    if _si.get("worker_ausnahme"):
-                        self._serie_alle_buchen(True, "scenario collection")
-                    self.log(f"scenario collection FAILED: {fehler}")
-                else:
-                    # .544 Teil 2b: EIN GELUNGENES SAMMELN HEILT. Es ist derselbe
-                    # Beweis wie eine gelungene Analyse — der Rechenkontext lebt.
-                    # Nur wenn wirklich ein Haeppchen gelaufen ist: ein Auftrag
-                    # ohne offene Ereignisse rechnet nichts und beweist nichts.
-                    if _si.get("haeppchen_n"):
-                        self._serie_alle_buchen(False, "scenario collection")
-                    if summe:                                # nur bei echten neuen Gesichtern clustern
-                        import anlernen
-                        idents, _ = anlernen.reconcile_unbekannte()   # nimmt selbst den pool_lock
-                        self.log(f"scenario collection: {summe} new faces, "
-                                 f"{len(idents)} unknown identities")
-            except subprocess.TimeoutExpired:
-                self.log("scenario collection TIMEOUT (>10 min)")
-            except Exception as e:
-                self.log(f"scenario collection error: {e}")
-            finally:
-                with self._sammel_lock:
-                    nachhol = self._sammel_nachhol
-                    self._sammel_nachhol = False
-                    self._sammel_laeuft = False
-                if nachhol:
-                    self._szenario_nachsammeln()             # ausstehenden Durchgang nachziehen
+        Stufe 3 (bauplan_sammeln_debug.md, O415): dies ist nur noch der ANSTOSS. Er
+        merkt den Lauf mit seiner Fenster-Grenze vor und fragt die eine Startstelle;
+        die startet erst, wenn die Analyse keinen Rueckstand mehr hat (Eigentuemer
+        29.09.2026 09:47:20). Der Lauf selbst ist `_szenario_lauf`."""
+        self._sammel_vormerken(
+            False, time.time() - self.SAMMEL_FENSTER_SZENARIO_D * 86400)
+        self._sammeln_starten()
+
+    def _szenario_lauf(self, grenze):
+        """Ein Szenario-Sammellauf ab der festen Fenster-Grenze `grenze` -> None.
+        Laeuft im Faden der Startstelle; Fehler meldet er selbst im Log."""
         try:
-            threading.Thread(target=lauf, daemon=True).start()
-        except Exception as e:                               # Thread-Start-Fehler -> Flag nicht haengen lassen (Review 21.07.)
+            # .536 B3: `_sammle_fahren` faehrt die ganze KETTE aus Haeppchen und
+            # liefert deren Summe als Zahl — der Griff nach „N faces collected"
+            # im Log-Text ist damit weg. `reconcile_unbekannte` laeuft EINMAL am
+            # Ende des Auftrags, nicht je Haeppchen.
+            _si = {}
+            summe, fehler = self._sammle_fahren(tage=None, mit_migriere=False,
+                                                timeout=600, info=_si,
+                                                grenze=grenze)
+            if fehler:
+                # .544: das Sammeln zaehlt in die Serie ueber ALLE Pfade.
+                # Es laeuft durch denselben Worker-Prozess wie jede Analyse
+                # — ein toter Rechenkontext faellt hier genauso auf, und auf
+                # einem Grundstueck ohne Verkehr ist das unter Umstaenden
+                # die EINZIGE Stelle, an der er auffaellt.
+                # .544 Teil 2b: ABER NUR, WENN DER WORKER DABEI WAR. „kein
+                # freier Analyse-Platz binnen Frist" ist eine Aussage ueber
+                # die Vergabestelle — auf einer ausgelasteten Anlage waere
+                # das der Weg vom Vollbetrieb in den Prozessschuss.
+                if _si.get("worker_ausnahme"):
+                    self._serie_alle_buchen(True, "scenario collection")
+                self.log.error(f"scenario collection FAILED: {fehler}")
+            else:
+                # .544 Teil 2b: EIN GELUNGENES SAMMELN HEILT. Es ist derselbe
+                # Beweis wie eine gelungene Analyse — der Rechenkontext lebt.
+                # Nur wenn wirklich ein Haeppchen gelaufen ist: ein Auftrag
+                # ohne offene Ereignisse rechnet nichts und beweist nichts.
+                if _si.get("haeppchen_n"):
+                    self._serie_alle_buchen(False, "scenario collection")
+                if summe:                                # nur bei echten neuen Gesichtern clustern
+                    import anlernen
+                    idents, _ = anlernen.reconcile_unbekannte()   # nimmt selbst den pool_lock
+                    self.log.info(f"scenario collection: {summe} new faces, "
+                             f"{len(idents)} unknown identities")
+        except subprocess.TimeoutExpired:
+            self.log.warning("scenario collection TIMEOUT (>10 min)")
+        except Exception as e:
+            self.log.error(f"scenario collection error: {e}")
+
+    def _sammel_vormerken(self, netz, grenze, anstoesse=1, seit=None):
+        """Einen Sammellauf vormerken oder den bestehenden Vermerk erweitern -> None.
+        Die aeltere Grenze gewinnt, ein vorgemerktes Netz bleibt vorgemerkt."""
+        jetzt = time.time()
+        with self._sammel_lock:
+            v = self._sammel_faellig
+            if v is None:
+                self._sammel_faellig = {"seit": seit or jetzt, "grenze": float(grenze),
+                                        "netz": bool(netz), "anstoesse": int(anstoesse),
+                                        "gemeldet": False, "verlust": None}
+                return
+            v["grenze"] = min(v["grenze"], float(grenze))
+            v["netz"] = v["netz"] or bool(netz)
+            v["anstoesse"] += int(anstoesse)
+            if seit:
+                v["seit"] = min(v["seit"], seit)
+
+    def _sammeln_starten(self):
+        """DIE EINE Startstelle des Sammelns (Stufe 3 Punkt 2): startet den vorgemerkten
+        Lauf, wenn kein Lauf haelt und kein Rueckstand da ist -> True, wenn gestartet.
+
+        Gerufen von jedem Anstoss, von `_analyse_beendet` (der Moment, in dem der
+        Rueckstand null wird) und vom Ende jedes Laufs, Netzes und Lernlaufs.
+        Die Rueckstandsfrage steht OHNE `_sammel_lock`: bei einem Analyse-Platz ist
+        `self.lock` hier die Analyse-Klammer, unter `_sammel_lock` stehen nur
+        Vermerk und `_sammel_laeuft` (keine neue Lock-Verschachtelung)."""
+        # Schneller Weg ohne Lock: solange nichts vorgemerkt ist, kostet der Aufruf
+        # nach jeder Analyse nur diese Abfrage. `getattr`, weil Proben den Dienst
+        # ohne __init__ bauen (Muster `_analyse_beginnen`).
+        if getattr(self, "_sammel_faellig", None) is None:
+            return False
+        with self._sammel_lock:
+            if self._sammel_faellig is None or self._sammel_laeuft:
+                return False
+        jetzt = time.time()
+        self._sammel_verlust_pruefen(jetzt)
+        zahlen = self.rueckstau_zahlen()
+        if self.rueckstau_aktiv(zahlen):
+            with self._sammel_lock:
+                v = self._sammel_faellig
+                neu = v is not None and not v["gemeldet"]
+                if neu:
+                    v["gemeldet"] = True
+            if neu:                                  # EINE Zeile je Aufschub, keine je Anstoss
+                self.log.info(f"collection deferred: analysis backlog ({zahlen[0]} "
+                              f"waiting, {zahlen[1]} in work) — it starts as soon "
+                              f"as the backlog is zero")
+            return False
+        with self._sammel_lock:
+            v = self._sammel_faellig
+            if v is None or self._sammel_laeuft:
+                return False
+            self._sammel_faellig = None
+            self._sammel_laeuft = True
+        # Die Grenze dieses Laufs steht EINMAL fest (Stufe 3 Punkt 6): die aeltere
+        # von Vermerk-Grenze und eigenem Fenster, nie aelter als die Clips reichen.
+        fenster_d = (self.SAMMEL_FENSTER_NETZ_D if v["netz"]
+                     else self.SAMMEL_FENSTER_SZENARIO_D)
+        grenze = min(v["grenze"], jetzt - fenster_d * 86400)
+        grenze = max(grenze, jetzt - float(self.cfg["clip_retention_d"]) * 86400)
+        if v["gemeldet"]:
+            self.log.info(f"collection starts after {jetzt - v['seit']:.0f}s deferred "
+                          f"({v['anstoesse']} trigger(s), "
+                          f"{'safety net' if v['netz'] else 'scenario'})")
+        try:
+            threading.Thread(target=self._sammel_faden, args=(v["netz"], grenze),
+                             daemon=True).start()
+        except Exception as e:                       # Thread-Start-Fehler -> nichts haengen lassen, nichts verlieren
             with self._sammel_lock:
                 self._sammel_laeuft = False
-            self.log(f"scenario collection thread start error: {e}")
+            self._sammel_vormerken(v["netz"], v["grenze"], v["anstoesse"], v["seit"])
+            self.log.error(f"collection thread start error: {e} — the run stays due")
+            return False
+        return True
+
+    def _sammel_faden(self, netz, grenze):
+        """Der Faden eines gestarteten Sammellaufs -> None. Am Ende faellt
+        `_sammel_laeuft`, und die Startstelle nimmt, was inzwischen faellig ist."""
+        try:
+            if netz:
+                self._netz_lauf(grenze)
+            else:
+                self._szenario_lauf(grenze)
+        finally:
+            with self._sammel_lock:
+                self._sammel_laeuft = False
+            self._sammeln_starten()
+
+    def _sammel_verlust_pruefen(self, jetzt):
+        """Warnt einmal je Aufschub, der laenger dauert als die Clip-Aufbewahrung
+        -> None (Stufe 3 Punkt 9: Aelteres wird ab dann nicht mehr gesammelt)."""
+        tage = float(self.cfg["clip_retention_d"])
+        with self._sammel_lock:
+            v = self._sammel_faellig
+            neu = (v is not None and v["verlust"] is None
+                   and jetzt - v["seit"] > tage * 86400)
+            if neu:
+                v["verlust"] = jetzt
+        if neu:
+            self.log.warning(f"collection deferred longer than the clip retention "
+                             f"({tage:g} d) — older unknown events are no longer "
+                             f"collected")
 
     # .510/J18: `_nachlern_anstossen` und `_nachlern_lauf` sind hier ERSATZLOS
     # entfallen (Betreiber-Entscheid 07.09., Akte `backups/analyse_0907/b1_bestandssuche_bericht.md`).
@@ -7373,7 +8141,7 @@ class Service:
     # Lock-Quelle, Definition bleibt im Service) und die Bild-/Encoder-Quellen
     # reicht der Dienst als Parameter/Callables herein.
     def publish_erkennung(self, entry):
-        _melden.publish_erkennung(self.cfg, self.pub, self.log, self.debug, entry)
+        _melden.publish_erkennung(self.cfg, self.pub, self.log, self.log.debug, entry)
 
     def _telegram_melden(self, art, entry, personen=None):
         _melden.telegram_melden(self.cfg, self.log, self.dry_alert,
@@ -7410,7 +8178,7 @@ class Service:
                         if r.get("eid") and (r.get("start") or r.get("ts", 0)) >= grenze:
                             by[r["eid"]] = r
                     except Exception:
-                        pass
+                        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         kameras = {}
         for r in by.values():
             if r.get("kategorie") == "uebersprungen":
@@ -7444,9 +8212,9 @@ class Service:
                 os.remove(qtmp)
             except OSError:
                 pass
-            self.log(f"QS report NOT written: {e}")
+            self.log.error(f"QS report NOT written: {e}")
             return
-        self.log(f"QS report written ({len(by)} events / {tage} days)")
+        self.log.info(f"QS report written ({len(by)} events / {tage} days)")
 
     def master_backup(self):
         """AP7: taegliches tar des Masters + aller Wahrheits-Dateien, 14 Staende rotierend."""
@@ -7495,38 +8263,38 @@ class Service:
                 os.remove(tmp)
             except OSError:
                 pass
-            self.log(f"!! MASTER BACKUP FAILED: {e} — nothing backed up, next run will retry")
+            self.log.error(f"!! MASTER BACKUP FAILED: {e} — nothing backed up, next run will retry")
             if not self.dry_alert:
                 try:
                     push(self.cfg, "suslik-Stoerung", f"Master-Backup fehlgeschlagen: {e}", None)
                 except Exception as pe:
-                    self.log(f"backup fault push failed: {pe}")
+                    self.log.error(f"backup fault push failed: {pe}")
             return
         if not gefunden:                      # Total-Leere: nie wieder still scheitern — Archiv weg
             try:                              # (damit der naechste Lauf es erneut versucht) + laut
                 os.remove(tmp)
             except Exception:
                 pass
-            self.log("!! MASTER BACKUP EMPTY: not a single source path found — layout changed? "
+            self.log.warning("!! MASTER BACKUP EMPTY: not a single source path found — layout changed? "
                      "(nothing backed up, archive discarded)")
             if not self.dry_alert:
                 try:
                     push(self.cfg, "suslik-Stoerung",
                          "Master-Backup leer: Quellpfade nicht gefunden — Referenzen UNGESICHERT", None)
                 except Exception as e:
-                    self.log(f"backup fault push failed: {e}")
+                    self.log.error(f"backup fault push failed: {e}")
             return
         # Teil-Verlust-Guard: faces/ sind die nicht-reproduzierbaren Referenzen. Fehlen sie, WAEHREND
         # der Betrieb laeuft (state-Dateien vorhanden), ist das kein frischer Install, sondern ein
         # Pfad-/Layout-Problem -> laut melden, das Backup mit dem Rest aber behalten (Teil > nichts).
         if "faces" in fehlend and any(r.startswith("state/") for r in gefunden):
-            self.log("!! master backup WITHOUT faces/ — references missing while the service is running (check)")
+            self.log.error("!! master backup WITHOUT faces/ — references missing while the service is running (check)")
             if not self.dry_alert:
                 try:
                     push(self.cfg, "suslik-Stoerung",
                          "Master-Backup ohne Referenzen (faces/) — Pfad/Layout pruefen", None)
                 except Exception as e:
-                    self.log(f"backup warning push failed: {e}")
+                    self.log.error(f"backup warning push failed: {e}")
         os.replace(tmp, ziel)                 # erst JETZT gilt das Backup als vorhanden/erledigt
         for f in os.listdir(bdir):            # Reste abgebrochener Laeufe (auch aelterer PIDs) weg
             if f.startswith("master_") and ".tmp-" in f:
@@ -7538,7 +8306,7 @@ class Service:
                       if f.startswith("master_") and f.endswith(".tar.gz"))    # nur fertige Staende
         for f in alte[:-14]:
             os.remove(os.path.join(bdir, f))
-        self.log(f"master backup: {os.path.basename(ziel)} ({len(alte[-14:])} snapshots) — "
+        self.log.info(f"master backup: {os.path.basename(ziel)} ({len(alte[-14:])} snapshots) — "
                  f"{len(gefunden)} sources, missing: {', '.join(fehlend) if fehlend else '—'}")
 
     def deckung_rotieren(self):
@@ -7551,6 +8319,10 @@ class Service:
         # zwischen Lesen und Ersetzen anhaengt, verlorengehen (Bestandsfehler). Fuer den
         # Nachhol-Zaehler waere das fatal — Versuch verbraucht, Ergebniszeile weg.
         with self.lock:
+            # Bauplan Feldstau Stufe 5.5: die Dauer unter self.lock (Lesen, Archiv, Neu-
+            # Schreiben mit fsync) steht in der Abschluss-Zeile — derselbe Blockade-Weg wie die
+            # Nachkorrektur, monatlich; der Umbau ist bewusst nicht Teil (Klaerungspunkt 2).
+            t0 = time.monotonic()
             behalten, archiv = [], []
             with open(self.log_path) as f:
                 for l in f:
@@ -7569,7 +8341,9 @@ class Service:
                 os.fsync(f.fileno())      # deckung.jsonl ist die zentrale Akte: ohne fsync koennte
             os.replace(tmp, self.log_path)   # nach Stromausfall eine LEERE Datei unter dem gueltigen
                                              # Namen stehen — die Rotation haette das Log dann geloescht
-        self.log(f"deckung.jsonl rotated: {len(archiv)} lines archived, {len(behalten)} kept (7-day overlap)")
+            dauer = time.monotonic() - t0
+        self.log.info(f"deckung.jsonl rotated: {len(archiv)} lines archived, {len(behalten)} kept "
+                      f"(7-day overlap), took {dauer:.1f} s under the service lock")
 
     def crops_retention(self):
         """AP7: events/-Ordner aelter 60 Tage OHNE GT-Label loeschen."""
@@ -7582,7 +8356,7 @@ class Service:
                     try:
                         gt.add(json.loads(l)["eid"])
                     except Exception:
-                        pass
+                        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         basis = os.path.join(self.cfg["data_dir"], "events")
         grenze = time.time() - 60 * 86400
         n = 0
@@ -7592,7 +8366,7 @@ class Service:
                 shutil.rmtree(p, ignore_errors=True)
                 n += 1
         if n:
-            self.log(f"crops retention: {n} event folders older than 60 days (no GT) deleted")
+            self.log.info(f"crops retention: {n} event folders older than 60 days (no GT) deleted")
 
     def alt_aufraeumen(self):
         """Nachtjob-Schritt (User 25.08.): die Stellen raeumen, die bisher NIEMAND
@@ -7627,6 +8401,7 @@ class Service:
             try:
                 echt = os.path.realpath(pfad) + os.sep
             except OSError:
+                _logbuch.swallowed(_log, _logbuch.WARNING, "returning False")
                 return False
             return not any(echt.startswith(os.path.realpath(t.rstrip(os.sep)) + os.sep)
                            for t in tabu)
@@ -7637,10 +8412,10 @@ class Service:
             tage = int(self.cfg.get("lernlauf_retention_d") or 0)
             bilanz, weg = _ll.laeufe_nach_alter_loeschen(dd, tage)
             if weg:
-                self.log(f"cleanup: {len(weg)} learning run(s) older than {tage}d deleted "
+                self.log.info(f"cleanup: {len(weg)} learning run(s) older than {tage}d deleted "
                          f"({bilanz['dateien']} files)")
         except Exception as e:
-            self.log(f"cleanup: learning-run retention failed: {e}")
+            self.log.error(f"cleanup: learning-run retention failed: {e}")
 
         # --- Bruecken-Ernten (B<hash>): der Pass-Check legt je Person und
         # Durchgang einen Ordner an; die Lernlauf-Logik kennt ihn nicht, weil
@@ -7653,11 +8428,11 @@ class Service:
         try:
             nb, mb = self._bruecke_alt_raeumen(dd)
             if nb:
-                self.log(f"cleanup: {nb} stale pass-check folder(s) older than "
+                self.log.warning(f"cleanup: {nb} stale pass-check folder(s) older than "
                          f"{int(self.cfg.get('lernlauf_retention_d') or 0)}d deleted "
                          f"({mb / 1024 ** 2:.0f} MB freed)")
         except Exception as e:
-            self.log(f"cleanup: pass-check folder cleanup failed: {e}")
+            self.log.error(f"cleanup: pass-check folder cleanup failed: {e}")
 
         # --- der Papierkorb der Lernlaeufe (state/lernlauf/trash): auch er
         # kennt keine Anker-Zeilen; auf Prod ein nie geleerter Korb (76 MB).
@@ -7679,12 +8454,12 @@ class Service:
                         nb += 1
                         mb += gr
                     except OSError:
-                        pass
+                        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
                 if nb:
-                    self.log(f"cleanup: {nb} trashed run(s) older than "
+                    self.log.info(f"cleanup: {nb} trashed run(s) older than "
                              f"{tage}d deleted ({mb / 1024 ** 2:.0f} MB freed)")
         except Exception as e:
-            self.log(f"cleanup: trash cleanup failed: {e}")
+            self.log.error(f"cleanup: trash cleanup failed: {e}")
 
         # --- verwaiste Pin-Marken (Clip laengst geloescht)
         try:
@@ -7697,9 +8472,9 @@ class Service:
                     os.remove(pin)
                     n += 1
             if n:
-                self.log(f"cleanup: {n} orphaned pin marker(s) removed")
+                self.log.info(f"cleanup: {n} orphaned pin marker(s) removed")
         except Exception as e:
-            self.log(f"cleanup: pin cleanup failed: {e}")
+            self.log.error(f"cleanup: pin cleanup failed: {e}")
 
         # --- OpenVINO-Kompilat-Caches deckeln (aelteste zuerst)
         try:
@@ -7719,7 +8494,7 @@ class Service:
                             try:
                                 dat.append((os.path.getmtime(fp), os.path.getsize(fp), fp))
                             except OSError:
-                                pass
+                                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
                 ges = sum(d[1] for d in dat)
                 grenze = deckel * 1024 ** 3
                 if ges > grenze:
@@ -7735,10 +8510,10 @@ class Service:
                             n += 1
                         except OSError:
                             pass
-                    self.log(f"cleanup: compile cache trimmed to {deckel} GB "
+                    self.log.info(f"cleanup: compile cache trimmed to {deckel} GB "
                              f"({n} files, {weg_b / 1024 ** 2:.0f} MB freed)")
         except Exception as e:
-            self.log(f"cleanup: compile-cache cap failed: {e}")
+            self.log.error(f"cleanup: compile-cache cap failed: {e}")
 
         # --- Systemstatistik-Ringpuffer auf 48 h stutzen (.341). Er waechst mit
         # ~1,4 MB/Tag (GEMESSEN 25.08.: ~1 KB je Zeile; die ~430 KB des Bauplans
@@ -7749,10 +8524,10 @@ class Service:
             from core import systemstat as _ss
             behalten, weg = _ss.kuerzen(self.cfg)
             if weg:
-                self.log(f"cleanup: system stats trimmed to {_ss.AUFBEWAHRUNG_H}h "
+                self.log.warning(f"cleanup: system stats trimmed to {_ss.AUFBEWAHRUNG_H}h "
                          f"({weg} lines dropped, {behalten} kept)")
         except Exception as e:
-            self.log(f"cleanup: system-stats trim failed: {e}")
+            self.log.error(f"cleanup: system-stats trim failed: {e}")
 
         # --- Anwesenheits-Marken (.408): Tagesdateien aelter als anwesenheit_tage
         # kuerzen (nur <datum>.jsonl; fenster.json bleibt) und das Tagesfenster
@@ -7762,13 +8537,13 @@ class Service:
             _tage = int(self.cfg["anwesenheit_tage"])
             behalten, weg = _anw.kuerzen(self.cfg, _tage, log=self.log)
             if weg:
-                self.log(f"cleanup: presence marks trimmed to {_tage}d "
+                self.log.warning(f"cleanup: presence marks trimmed to {_tage}d "
                          f"({weg} day file(s) dropped, {behalten} kept)")
             _fz = _anw.fenster(self.cfg, log=self.log)
-            self.log(f"presence window today: {_fz['von']:02d}-{_fz['bis']:02d} h "
+            self.log.info(f"presence window today: {_fz['von']:02d}-{_fz['bis']:02d} h "
                      f"({_fz['quelle']}, {_fz.get('marken')} marks)")
         except Exception as e:
-            self.log(f"cleanup: presence-mark trim failed: {e}")
+            self.log.error(f"cleanup: presence-mark trim failed: {e}")
 
     def update_check(self):
         """#53 (User 26.07.): 1x taeglich anonym die neueste Release-Version von GitHub holen
@@ -7807,13 +8582,13 @@ class Service:
                     os.fsync(f.fileno())
                 os.replace(tmp, p)
             except Exception as e:
-                self.debug(f"update check failed (offline is fine): {e}")
+                self.log.debug(f"update check failed (offline is fine): {e}")
         neu = _version_neuer(d.get("tag"), os.environ.get("SUSLIK_VERSION", ""))
         webui.UPDATE_INFO = ({"tag": d["tag"], "url": d.get("url") or
                               "https://github.com/BennoBaer-dev/suslik/releases"} if neu else None)
         if neu and d.get("tag") != getattr(self, "_upd_gemeldet", None):
             self._upd_gemeldet = d["tag"]     # genau EINE Logzeile je entdeckter Version
-            self.log(f"update check: {d['tag']} is available on GitHub "
+            self.log.info(f"update check: {d['tag']} is available on GitHub "
                      f"(running {os.environ.get('SUSLIK_VERSION', 'dev')})")
 
     def qs_neu_starten(self, sofort=False):
@@ -7901,7 +8676,7 @@ class Service:
                                 if f.lower().endswith((".jpg", ".jpeg",
                                                        ".png", ".webp")))
                 except OSError:
-                    pass
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
                 deckel_s = max(600, 3 * _n_bilder + 120)
                 # Stufe B: der ERSTLAUF eines Bestands ohne Mess-Speicher misst
                 # jedes Bild einmal und kann Minuten dauern. Das ist erwuenscht
@@ -7910,7 +8685,7 @@ class Service:
                 from core import refmess as _rm
                 from core import refurteil as _refurteil
                 if not os.path.exists(_rm.pfad(_fd)):
-                    self.log(f"reference QS: no measurement store yet — this "
+                    self.log.info(f"reference QS: no measurement store yet — this "
                              f"first run measures all {_n_bilder} catalog "
                              f"image(s) once and saves the values; later runs "
                              f"read them and take seconds")
@@ -7947,27 +8722,34 @@ class Service:
                     else:
                         warte_s = time.monotonic() - t0
                         w = self._worker(nr)
-                        antwort = w.job(_auftrag, deckel_s,
+                        _wi = {}
+                        antwort = w.job(_auftrag, deckel_s, info=_wi,
                                         puls=self._plaetze.puls_fuer(nr))
                         if antwort is None:
                             _u = getattr(w, "letzte_ursache", None)
-                            fehler = (f"worker died ({_u})" if _u else
-                                      f"worker timeout ({deckel_s}s) or died")
+                            # Feldbefunde Punkt 9 (O301): der Text folgt der Ursache —
+                            # ohne laufenden Prozess sagte das Start-Tor ab, gestorben
+                            # ist dann nichts.
+                            if _wi.get("vor_absetzen_abgesagt"):
+                                fehler = f"worker not started (card memory gate): {_u}"
+                            else:
+                                fehler = (f"worker died ({_u})" if _u else
+                                          f"worker timeout ({deckel_s}s) or died")
                         elif not antwort.get("ok"):
                             fehler = str(antwort.get("fehler") or "unbekannt")
                         else:
                             _dg = antwort.get("refqs") or {}
                 if fehler:
-                    self.log(f"reference QS FAILED: {fehler}")
+                    self.log.error(f"reference QS FAILED: {fehler}")
                     try:
                         import anlernen as _al
                         _al._schreibe_json_atomar(
                             _al.QS_LAUF_PATH,
                             {"fehler": fehler, "ts": round(time.time(), 1)})
                     except Exception:
-                        pass
+                        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
                 else:
-                    self.log(
+                    self.log.error(
                         f"reference QS recalculated: {_dg.get('gesamt', 0)} "
                         f"image(s) — {_dg.get('gemessen', 0)} measured, "
                         f"{_dg.get('aus_speicher', 0)} from the measurement "
@@ -8066,7 +8848,7 @@ class Service:
                     if nr is None:
                         # Ehrlich statt still: der Nutzer hat geklickt, und es
                         # gab die ganze Frist lang keinen Platz.
-                        self.log(f"reference search for {person}: no free analysis "
+                        self.log.warning(f"reference search for {person}: no free analysis "
                                  f"slot within {frist}s — not run, please try again")
                         return
                     with self._qs_lock:
@@ -8078,16 +8860,16 @@ class Service:
                                     puls=self._plaetze.puls_fuer(nr))
                 if antwort is None:
                     _u = getattr(w, "letzte_ursache", None)
-                    self.log(f"reference search for {person} FAILED: "
+                    self.log.error(f"reference search for {person} FAILED: "
                              + (f"worker died ({_u})" if _u
                                 else f"worker timeout ({frist}s) or died"))
                     return
                 if not antwort.get("ok"):
-                    self.log(f"reference search for {person} FAILED: "
+                    self.log.error(f"reference search for {person} FAILED: "
                              f"{antwort.get('fehler') or 'unbekannt'}")
                     return
                 z = antwort.get("vorschlaege") or {}
-                self.log(f"reference search for {person} finished: "
+                self.log.info(f"reference search for {person} finished: "
                          f"{z.get('empfohlen', 0)} recommended / "
                          f"{z.get('neutral', 0)} neutral from {z.get('geprueft', 0)} "
                          f"image(s) of {z.get('events', 0)} event(s) "
@@ -8097,7 +8879,7 @@ class Service:
                          + (" — measurement cap reached, older events unchecked"
                             if z.get("gedeckelt") else ""))
             except Exception as e:                            # noqa: BLE001
-                self.log(f"reference search for {person} FAILED: "
+                self.log.error(f"reference search for {person} FAILED: "
                          f"{type(e).__name__}: {e}")
             finally:
                 with self._qs_lock:
@@ -8135,8 +8917,9 @@ class Service:
     def anlern_nachpruefung_starten(self, person, betroffen):
         """Issue #19 Teil 2: nach dem Anlernen die EVENTS der uebernommenen Gesichter im
         Hintergrund gegen die neue Referenzbibliothek pruefen (anlernen.py nachpruefen,
-        Embedding-Vergleich, keine Video-Neuanalyse) und je bestaetigtem Event die
-        deckung-Akte korrigieren — vorher blieben die Karten der gerade angelernten
+        Embedding-Vergleich, keine Video-Neuanalyse) und die bestaetigten Events GESAMMELT
+        in der deckung-Akte korrigieren (eine _deckung_korrektur je Lauf, Bauplan
+        Feldstau Stufe 2) — vorher blieben die Karten der gerade angelernten
         Person als "Unknown" stehen (Repro: 4/4 angelernte eids weiter bestaetigt=[]).
         Subprozess-Muster wie qs_neu_starten (die Bestands-Suche ist seit .510
         KEIN Subprozess mehr, s. vorschlaege_starten), MIT _gpu_bg_lock (Widerleger 11.08.:
@@ -8163,19 +8946,24 @@ class Service:
                                        capture_output=True, timeout=900, check=False, env=env,
                                        preexec_fn=_analyse_nice)   # Issue #21, s. ANALYSE_NICE
                 if not os.path.exists(pfad + ".ergebnis"):
-                    self.log(f"enroll re-check FAILED rc={r.returncode}: "
+                    self.log.error(f"enroll re-check FAILED rc={r.returncode}: "
                              f"{(r.stderr or b'').decode(errors='replace')[-300:]}")
                     return
                 erg = json.load(open(pfad + ".ergebnis"))
                 schwelle = erg.get("schwelle")
+                # Bauplan Feldstau Stufe 2: erst sammeln, dann EINE Korrektur je Lauf
+                # (ein Voll-Lesen der Akte statt eines je bestaetigtem Ereignis).
+                treffer = []
                 for eid, e in sorted((erg.get("events") or {}).items()):
                     if e.get("bestaetigt"):
-                        self._deckung_korrektur(eid, person, e.get("sim"), "anlernen", schwelle)
+                        treffer.append((eid, e.get("sim")))
                     else:
-                        self.log(f"{eid}: enroll re-check NOT confirmed "
+                        self.log.warning(f"{eid}: enroll re-check NOT confirmed "
                                  f"(sim {e.get('sim')} < {schwelle}) — card stays")
+                if treffer:
+                    self._deckung_korrektur(person, treffer, "anlernen", schwelle)
             except Exception as e:
-                self.log(f"enroll re-check error: {type(e).__name__}: {e}")
+                self.log.error(f"enroll re-check error: {type(e).__name__}: {e}")
             finally:
                 for p in (pfad, pfad + ".ergebnis"):
                     try:
@@ -8184,12 +8972,21 @@ class Service:
                         pass
         threading.Thread(target=job, daemon=True).start()
 
-    def _deckung_korrektur(self, eid, person, sim, quelle, schwelle=None):
-        """Issue #19: ein nachtraeglich bestaetigtes Event in der deckung-Akte korrigieren —
-        als ANGEHAENGTE Zeile (last-wins-Muster der Akte, kein Rewrite), unter self.lock
-        wie der process()-Append (_deckung_by_eid nimmt self.lock selbst NICHT — auf
-        genau dieser Invariante steht dieser with-Block, threading.Lock ist nicht
-        reentrant). Gehoben werden NUR ts/bestaetigt/kategorie/kategorie_v1; die
+    def _deckung_korrektur(self, person, treffer, quelle, schwelle=None):
+        """Issue #19: die nachtraeglich bestaetigten Events EINES Nachpruef-Laufs in der
+        deckung-Akte korrigieren; `treffer` = Liste (eid, sim). -> None.
+
+        Je Event eine ANGEHAENGTE Zeile (last-wins-Muster der Akte, kein Rewrite). Bauplan
+        Feldstau Stufe 2 (O464, Widerleger-Fund 1): der ganze Lauf steht in EINER
+        self.lock-Klammer — die Akte wird darin EINMAL gelesen (vorher einmal je Event,
+        im Feld je Lesen rund 20 s unter der Sperre), und jede Korrektur-Zeile entsteht
+        aus dieser Basis und wird in derselben Klammer angehaengt. Lesen und Anhaengen
+        bleiben damit atomar gegen alle anderen Akte-Schreiber (process()/Nachanalyse,
+        Umbenennen, ein zweiter Nachpruef-Lauf): die reihen sich am Lock, keiner schreibt
+        zwischen Lesen und Anhaengen. _deckung_by_eid nimmt self.lock selbst NICHT — auf
+        dieser Invariante steht der with-Block; self.lock ist seit E2 ein RLock, der
+        Block klemmt also auch unter einer aeusseren Klammer desselben Fadens nicht.
+        Gehoben werden NUR ts/bestaetigt/kategorie/kategorie_v1; die
         Kategorien kommen aus der EINEN zentralen Quelle verdict/verdict_v2
         (confirmed-Override). `ours` bleibt UNANGETASTET (Widerleger 11.08.): die
         Nachpruef-sim ist die Aehnlichkeit des gerade angelernten Crops zu sich selbst
@@ -8200,36 +8997,59 @@ class Service:
         nie eine tragende Analyse bzw. war keine Person — eine Bestaetigung wuerde das
         maskieren). Kein Alarm, kein MQTT, kein sublabel; ground_truth.jsonl
         unberuehrt."""
+        korrigiert = []
         with self.lock:
-            basis = self._deckung_by_eid().get(eid)
-            if not basis:
-                self.log(f"{eid}: enroll re-check confirmed, but no deckung record — skipped")
-                return
-            if basis.get("kategorie") in ("fehler", "no_person", "uebersprungen"):
-                self.log(f"{eid}: enroll re-check confirmed, but record says "
-                         f"'{basis.get('kategorie')}' — not corrected (no analysis to lift)")
-                return
-            z = dict(basis)
-            z["ts"] = round(time.time(), 1)
-            ours = z.get("ours") or {}
-            confirmed = sorted(set((z.get("bestaetigt") or []) + [person]))
-            kategorie, _ = verdict_v2(self.cfg, ours, z.get("max_bw"), confirmed=confirmed)
-            kategorie_v1, _ = verdict(self.cfg, (z.get("frigate") or {}).get("label"),
-                                      ours, confirmed=confirmed)
-            z["bestaetigt"] = confirmed
-            z["kategorie"] = kategorie
-            z["kategorie_v1"] = kategorie_v1
-            z["korrektur"] = {"quelle": quelle, "person": person, "sim": sim,
-                              **({"schwelle": schwelle} if schwelle is not None else {})}
-            with open(self.log_path, "a") as f:
-                f.write(json.dumps(z, ensure_ascii=False) + "\n")
-                f.flush()
-            # .408 Anwesenheits-Marke (Deckungs-Vertrag K5: JEDE Stelle, die
-            # `bestaetigt` setzt oder erweitert, markiert — dieser Weg betritt
-            # process() nie und ist der haeufigste Nutzerweg nach dem Anlernen).
-            _anw.akte_zeile_markieren(self.cfg, z, log=self.log)
-        self.log(f"{eid}: record corrected after enrolling — now '{kategorie}' "
-                 f"({person}, sim {sim})")
+            # Bauplan Feldstau Stufe 5.2: Lese-Dauer der Akte und gehaltene Sperr-Dauer
+            # (Zeile bei Debug, nach dem Lauf ausserhalb der Sperre). Klaerungspunkt 9 (Eigentuemer
+            # 30.09. 12:39:42): statt der Zeilenzahl die Ereignisse der gelesenen Sicht und
+            # die Dateigroesse der Akte, beides ohne zweites Lesen.
+            t_lock = time.monotonic()
+            akte = self._deckung_by_eid()          # EIN Voll-Lesen je Lauf
+            lese_s = time.monotonic() - t_lock
+            ereignisse = len(akte)
+            try:
+                groesse = f"{os.path.getsize(self.log_path) / 1024**2:.1f} MB"
+            except OSError:
+                _logbuch.swallowed(_log, _logbuch.WARNING, "size n/a")
+                groesse = "n/a"
+            for eid, sim in treffer:
+                basis = akte.get(eid)
+                if not basis:
+                    self.log.warning(f"{eid}: enroll re-check confirmed, but no deckung record — skipped")
+                    continue
+                if basis.get("kategorie") in ("fehler", "no_person", "uebersprungen"):
+                    self.log.info(f"{eid}: enroll re-check confirmed, but record says "
+                             f"'{basis.get('kategorie')}' — not corrected (no analysis to lift)")
+                    continue
+                z = dict(basis)
+                z["ts"] = round(time.time(), 1)
+                ours = z.get("ours") or {}
+                confirmed = sorted(set((z.get("bestaetigt") or []) + [person]))
+                kategorie, _ = verdict_v2(self.cfg, ours, z.get("max_bw"), confirmed=confirmed)
+                kategorie_v1, _ = verdict(self.cfg, (z.get("frigate") or {}).get("label"),
+                                          ours, confirmed=confirmed)
+                z["bestaetigt"] = confirmed
+                z["kategorie"] = kategorie
+                z["kategorie_v1"] = kategorie_v1
+                z["korrektur"] = {"quelle": quelle, "person": person, "sim": sim,
+                                  **({"schwelle": schwelle} if schwelle is not None else {})}
+                with open(self.log_path, "a") as f:
+                    f.write(json.dumps(z, ensure_ascii=False) + "\n")
+                    f.flush()
+                akte[eid] = z                      # die Basis bleibt die frische last-wins-Sicht
+                # .408 Anwesenheits-Marke (Deckungs-Vertrag K5: JEDE Stelle, die
+                # `bestaetigt` setzt oder erweitert, markiert — dieser Weg betritt
+                # process() nie und ist der haeufigste Nutzerweg nach dem Anlernen).
+                _anw.akte_zeile_markieren(self.cfg, z, log=self.log)
+                korrigiert.append((eid, kategorie, sim))
+            lock_s = time.monotonic() - t_lock
+        self.log.debug(f"enroll re-check correction ({quelle}): deckung.jsonl read in "
+                       f"{lese_s:.2f} s ({ereignisse} events, {groesse}), "
+                       f"{len(korrigiert)} events corrected, "
+                       f"service lock held {lock_s:.2f} s")
+        for eid, kategorie, sim in korrigiert:
+            self.log.info(f"{eid}: record corrected after enrolling — now '{kategorie}' "
+                     f"({person}, sim {sim})")
 
     # ------------------------------------------------- Person umbenennen (.542)
     def _umbenennen_blocker(self):
@@ -8270,7 +9090,7 @@ class Service:
             if _lauf and not _ll_b.lauf_abgeschlossen(_lauf):
                 blocker.append("learning run")
         except Exception:
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         return blocker
 
     def umbenennen_stand(self):
@@ -8363,16 +9183,21 @@ class Service:
                 }
                 bericht = _umb.umbenennen(self.cfg["data_dir"], alt, neu,
                                           umfeld=umfeld, puls=_puls, log=self.log)
-                self.log(f"PERSON RENAMED: {alt} -> {neu} "
+                # E1 (d) / O252: die gelungene Umbenennung ist ein Zustand (INFO);
+                # nennt sie Schrittfehler, WARNING. Die Stufe folgt der Zahl, nicht
+                # dem Wort „error(s)" im Text.
+                _schrittfehler = len(bericht.get('fehler') or {})
+                self.log.log(_logbuch.WARNING if _schrittfehler else _logbuch.INFO,
+                         f"PERSON RENAMED: {alt} -> {neu} "
                          f"({bericht.get('dauer_s')}s, "
-                         f"{len(bericht.get('fehler') or {})} step error(s)) "
+                         f"{_schrittfehler} step error(s)) "
                          f"— log state/umbenennungen.jsonl")
                 self._rename_stand.update({"laeuft": False, "fertig": True,
                                            "phase": "fertig",
                                            "fehler": sorted(
                                                (bericht.get("fehler") or {}).keys())})
             except Exception as e:
-                self.log(f"person rename FAILED: {type(e).__name__}: {e}")
+                self.log.error(f"person rename FAILED: {type(e).__name__}: {e}")
                 self._rename_stand.update({"laeuft": False, "fertig": True,
                                            "phase": "fehler",
                                            "fehler": [f"{type(e).__name__}: {e}"]})
@@ -8406,9 +9231,9 @@ class Service:
                 if not (_pm.status_lesen(self.cfg["data_dir"]) or {}).get("personen"):
                     return
                 _pm.trainieren(self.cfg["data_dir"])
-                self.log("person model retrained after rename")
+                self.log.info("person model retrained after rename")
             except Exception as e:
-                self.log(f"person model retrain after rename failed: "
+                self.log.error(f"person model retrain after rename failed: "
                          f"{type(e).__name__}: {e}")
         threading.Thread(target=_job, daemon=True).start()
 
@@ -8419,7 +9244,7 @@ class Service:
             import anlernen as _al_rc
             _al_rc.refcache_aufbauen(self.embedder())
         except Exception as e:
-            self.log(f"refcache rebuild after rename failed: {type(e).__name__}: {e}")
+            self.log.error(f"refcache rebuild after rename failed: {type(e).__name__}: {e}")
 
     # ENTFERNT 0.1.0.45 (User 27.07.): suslik loescht NIE in Frigate. Richtung Frigate gibt
     # es nur Holen (Import) und Schicken (Export) — eine Fern-Loeschung muesste zu 100 %
@@ -8441,7 +9266,7 @@ class Service:
         if not (self.cfg.get("frigate_url") or "").strip():
             if not getattr(self, "_sync_url_gemeldet", False):
                 self._sync_url_gemeldet = True
-                self.log("frigate_sync: no Frigate URL configured — export skipped")
+                self.log.warning("frigate_sync: no Frigate URL configured — export skipped")
             return
         # .525 (Prod-Pruefung 10.09., Befund B-1): TORWAECHTER gegen den
         # BEKANNTEN Zustand von FRIGATES eigener Gesichtserkennung. Frigate
@@ -8462,7 +9287,7 @@ class Service:
         if _frigate_fr.get("bekannt") and not _frigate_fr.get("an"):
             if not getattr(self, "_sync_fr_aus_gemeldet", False):
                 self._sync_fr_aus_gemeldet = True
-                self.log("frigate_sync is on, but Frigate's own face recognition "
+                self.log.warning("frigate_sync is on, but Frigate's own face recognition "
                          "is off — Frigate refuses every face upload while it is; "
                          "the export stays idle (nothing is lost, references stay "
                          "here). Enable it in Frigate, or switch the sync off.")
@@ -8476,7 +9301,7 @@ class Service:
             # sonst dessen Status-/Ergebnis-Dateien — dann lieber diese Runde
             # auslassen (der naechste Anlass exportiert nach).
             if getattr(self, "_sync_job_aktiv", False):
-                self.log("frigate_sync: a manual sync is running — auto export skipped")
+                self.log.warning("frigate_sync: a manual sync is running — auto export skipped")
                 return
             self._sync_job_aktiv = True
             try:
@@ -8489,10 +9314,10 @@ class Service:
             finally:
                 self._sync_job_aktiv = False
             if r.returncode == 0:
-                self.log("frigate_sync: master -> Frigate exported")
+                self.log.info("frigate_sync: master -> Frigate exported")
             else:                                  # Fehler NICHT verschlucken (frueher: immer 'exportiert')
                 err = fehler_kern(r.stderr or r.stdout)
-                self.log(f"!! frigate_sync: auto export FAILED (rc={r.returncode}): {err}")
+                self.log.error(f"!! frigate_sync: auto export FAILED (rc={r.returncode}): {err}")
         threading.Thread(target=job, daemon=True).start()
 
     def _reorganisieren(self):
@@ -8509,7 +9334,7 @@ class Service:
             self._reorg_laeuft = True
 
         def lauf():
-            self.log("reorganize started ...")
+            self.log.info("reorganize started ...")
             try:
                 env = dict(os.environ, OV_DEVICE=self.cfg["ov_device"])
                 r = subprocess.run([sys.executable,
@@ -8518,18 +9343,18 @@ class Service:
                                    preexec_fn=_analyse_nice)   # Issue #21, s. ANALYSE_NICE
                 if r.returncode != 0:
                     tail = " | ".join((r.stderr or r.stdout or "").strip().splitlines()[-3:])[:300]
-                    self.log(f"REORGANIZE FAILED (exit {r.returncode}): {tail}")
+                    self.log.error(f"REORGANIZE FAILED (exit {r.returncode}): {tail}")
                     push(self.cfg, "suslik: Reorganisieren fehlgeschlagen",
                          f"reorganisieren beendete mit exit {r.returncode}. {tail}", None)
                 else:
                     m = re.search(r"Reorganized: (\d+) identities", r.stdout or "")
-                    self.log(f"reorganize ok ({m.group(1) if m else '?'} unknown identities)")
+                    self.log.info(f"reorganize ok ({m.group(1) if m else '?'} unknown identities)")
                     self.qs_neu_starten()                # Referenz-QS mit erneuern
             except subprocess.TimeoutExpired:
-                self.log("REORGANIZE TIMEOUT (>30 min)")
+                self.log.warning("REORGANIZE TIMEOUT (>30 min)")
                 push(self.cfg, "suslik: Reorganisieren-Timeout", "reorganisieren lief >30 min.", None)
             except Exception as e:
-                self.log(f"reorganize error: {e}")
+                self.log.error(f"reorganize error: {e}")
                 push(self.cfg, "suslik: Reorganisieren-Fehler", str(e)[:200], None)
             finally:
                 with self._sammel_lock:
@@ -8540,7 +9365,7 @@ class Service:
         except Exception as e:                           # Thread-Start-Fehler -> Flag nicht haengen lassen
             with self._sammel_lock:
                 self._reorg_laeuft = False
-            self.log(f"reorganize thread start error: {e}")
+            self.log.error(f"reorganize thread start error: {e}")
             return False
 
     # ------------------------------------------------ .536 B3: Sammeln in Haeppchen
@@ -8558,6 +9383,11 @@ class Service:
     SAMMEL_CLIP_FALLBACK_S = 20.0     # Ereignis ohne bekannte Laenge (Frigate ohne Ende)
     SAMMEL_HAEPPCHEN_N_MAX = 200      # Stueck-Deckel je Haeppchen (Groesse der Job-Zeile)
     SAMMEL_WIEDERHOLUNG_MAX = 2       # fremdverschuldete Haeppchen: zwei Anlaeufe, dann laut
+    # Stufe 3 (O415): die Fenster der beiden Sammel-Arten in Tagen. Bis dahin
+    # standen sie als `tage=0.1` und `tage=2` in den Aufrufen; der Vermerk braucht
+    # sie beim Anstoss UND beim Start, deshalb stehen sie jetzt hier einmal.
+    SAMMEL_FENSTER_SZENARIO_D = 0.1
+    SAMMEL_FENSTER_NETZ_D = 2.0
 
     def _sammel_takt_pfad(self):
         return os.path.join(self.cfg["data_dir"], "state", "sammel_takt.json")
@@ -8605,7 +9435,7 @@ class Service:
             from core import atomar as _at
             _at.json_schreiben(pfad, d)
         except Exception as e:                                # noqa: BLE001
-            self.log(f"collection: pace not saved ({type(e).__name__}: {e}) "
+            self.log.warning(f"collection: pace not saved ({type(e).__name__}: {e}) "
                      f"— measured again next run")
 
     def _sammel_liste(self, tage):
@@ -8686,7 +9516,7 @@ class Service:
                else prolog_kalt_s * self.SAMMEL_PROLOG_ABKLINGEN)
         return min(max(neu, 0.0), self.SAMMEL_PROLOG_MAX_S)
 
-    def _sammle_fahren(self, tage, mit_migriere, timeout, info=None):
+    def _sammle_fahren(self, tage, mit_migriere, timeout, info=None, grenze=None):
         """DER KETTEN-FAHRER des Sammelns (.536 B3) -> (summe|None, fehler|None).
 
         WARUM ES IHN GIBT, in Feldzahlen: bis .535 war ein Sammel-Lauf EIN Job
@@ -8743,12 +9573,33 @@ class Service:
                              gelaufen sind. Nur damit ist ein `fehler=None` ein
                              BEWEIS, dass der Kontext lebt; ein Auftrag ohne
                              offene Ereignisse rechnet nichts und beweist nichts.
-        Entschieden wird weiterhin nie an einem Wortlaut."""
+          `aufgeschoben`     der Auftrag endete, weil die Analyse wieder Rueckstand
+                             hatte; der Rest steht im Faellig-Vermerk.
+        Entschieden wird weiterhin nie an einem Wortlaut.
+
+        STUFE 3 (bauplan_sammeln_debug.md, O415): `grenze` ist die FESTE
+        Fenster-Grenze des Laufs (Zeitpunkt, von der Startstelle bestimmt); ohne
+        sie gilt jetzt minus `tage`. Liste und jedes Haeppchen nutzen dieselbe
+        Grenze, das Haeppchen bekommt `tage` daraus erst beim Senden. Vor der
+        Liste und vor jedem Haeppchen (auch vor der Pool-Pflege) fragt der Fahrer
+        `rueckstau_aktiv()`: bei Rueckstand endet die Kette, ein laufendes Haeppchen
+        laeuft zu Ende, und der Rest geht mit dieser Grenze in den Vermerk; ebenso,
+        was der Zeitrahmen liegen laesst."""
         _si = info if isinstance(info, dict) else {}
         _si.setdefault("worker_ausnahme", False)
         _si.setdefault("haeppchen_n", 0)
+        _si.setdefault("aufgeschoben", False)
+        if grenze is None:
+            grenze = time.time() - float(tage) * 86400
+        # Vor der Liste (und vor beiden Wegen, G9): sonst leerte ein aufgeschobener
+        # Lauf das Log des vorigen und zahlte die Listenbildung umsonst.
+        if self.rueckstau_aktiv():
+            self._sammel_vormerken(mit_migriere, grenze, anstoesse=0)
+            _si["aufgeschoben"] = True
+            return 0, None
         if not self.cfg.get("worker", True):
-            return self._sammle_subprozess(tage, mit_migriere, timeout, info=_si)
+            return self._sammle_subprozess((time.time() - grenze) / 86400,
+                                           mit_migriere, timeout, info=_si)
         lp = os.path.join(self.cfg["data_dir"], "state", "sammle.log")
         t_auftrag = time.monotonic()
         ziel_s = float(self.cfg.get("sammel_haeppchen_ziel_s") or 120)
@@ -8756,8 +9607,9 @@ class Service:
         faktor, prolog_kalt, quelle = self._sammel_takt_lesen()
         faktor0, prolog0 = faktor, prolog_kalt
         try:
-            liste, tag = self._sammel_liste(tage)
+            liste, tag = self._sammel_liste((time.time() - grenze) / 86400)
         except Exception as e:                                # noqa: BLE001
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning (None, f'event list unreadable ({type(e).__name__}: {e})')")
             return None, f"event list unreadable ({type(e).__name__}: {e})"
         # Ereignisse ohne bekannte Laenge (Frigate hat sie nie beendet) bekommen den
         # Median des Auftrags als Preis-Schaetzung — erfunden ist daran nur die
@@ -8784,17 +9636,26 @@ class Service:
             try:
                 open(lp, "w").close()
             except OSError as e:                              # noqa: BLE001
-                self.log(f"collection log {lp} not writable ({e})")
+                self.log.error(f"collection log {lp} not writable ({e})")
         summe, n_haeppchen, offen_rest = 0, 0, 0
         fehler = None
         self._sammel_stand.update(
             auftrag_aktiv=True, haeppchen_n=0, haeppchen_offen=len(liste),
             letzte_dauer_s=None, cache_treffer=0, tag=tag,
             faktor=round(faktor, 3), prolog_kalt_s=round(prolog_kalt, 1), quelle=quelle)
-        self.log(f"collection: {len(liste)} event(s) to check, batches of about "
+        self.log.info(f"collection: {len(liste)} event(s) to check, batches of about "
                  f"{ziel_s:.0f}s at {faktor:.2f}s per clip second ({quelle})")
         try:
             while True:
+                # Stufe 3 Punkt 5: vor JEDEM Haeppchen, auch vor der Pool-Pflege.
+                # Bei Rueckstand endet die Kette; der Rest (und die Pflege, falls
+                # sie noch aussteht) bleibt mit der Grenze dieses Laufs faellig.
+                if (warteschlange or rest) and self.rueckstau_aktiv():
+                    self._sammel_vormerken(
+                        any(x["art"] == "pflege" for x in warteschlange), grenze,
+                        anstoesse=0)
+                    _si["aufgeschoben"] = True
+                    break
                 if warteschlange:
                     h = warteschlange.pop(0)
                 elif rest:
@@ -8823,12 +9684,18 @@ class Service:
                 if n_haeppchen and rest_budget < frist:
                     offen_rest = len(h["eids"]) + sum(len(x["eids"]) for x in warteschlange) + len(rest)
                     if offen_rest:
-                        self.log(f"collection: time budget of this run spent after "
+                        self.log.info(f"collection: time budget of this run spent after "
                                  f"{n_haeppchen} batch(es) — {offen_rest} event(s) left "
                                  f"for the next run (nothing lost, they are not checked off)")
+                        # Stufe 3 Punkt 7 (Klaerungspunkt 1): der Rest bleibt
+                        # faellig, mit der Grenze dieses Laufs.
+                        self._sammel_vormerken(
+                            h["art"] == "pflege"
+                            or any(x["art"] == "pflege" for x in warteschlange),
+                            grenze, anstoesse=0)
                     break
                 erg, fehl, wi = self._sammle_haeppchen(
-                    tage, h, frist, mit_migriere=(h["art"] == "pflege"), log_pfad=lp)
+                    grenze, h, frist, mit_migriere=(h["art"] == "pflege"), log_pfad=lp)
                 if erg is None:
                     if wi.get("fremdverschuldet") and h["versuche"] < self.SAMMEL_WIEDERHOLUNG_MAX:
                         # UNGEBUCHT zurueck an den KETTENANFANG (Bauplan B3.3):
@@ -8836,7 +9703,7 @@ class Service:
                         # Ereignisse sind nicht abgehakt.
                         h["versuche"] += 1
                         warteschlange.insert(0, h)
-                        self.log(f"collection: batch put back unbooked (not its own "
+                        self.log.info(f"collection: batch put back unbooked (not its own "
                                  f"fault: {fehl}) — attempt {h['versuche'] + 1} of "
                                  f"{self.SAMMEL_WIEDERHOLUNG_MAX + 1}")
                         continue
@@ -8867,7 +9734,7 @@ class Service:
                         len(x["eids"]) for x in warteschlange),
                     letzte_dauer_s=erg.get("dauer_s"),
                     faktor=round(faktor, 3), prolog_kalt_s=round(prolog_kalt, 1))
-                self.log(f"collection batch {n_haeppchen}: {erg.get('events')} event(s), "
+                self.log.info(f"collection batch {n_haeppchen}: {erg.get('events')} event(s), "
                          f"{erg.get('neu')} new face(s), {erg.get('dauer_s')}s "
                          f"(prologue {erg.get('prolog_s')}s, references {erg.get('cache')})"
                          + (f", {len(offen)} handed back" if offen else "")
@@ -8882,8 +9749,13 @@ class Service:
             return (summe if n_haeppchen else None), fehler
         return summe, None
 
-    def _sammle_haeppchen(self, tage, h, frist, mit_migriere, log_pfad):
+    def _sammle_haeppchen(self, grenze, h, frist, mit_migriere, log_pfad):
         """EIN Haeppchen durch den Worker -> (ergebnis|None, fehler|None, info).
+
+        Stufe 3 (O415): `grenze` ist die feste Fenster-Grenze des Auftrags; das
+        Jobfeld `tage` entsteht daraus erst beim Senden, damit der Worker dieselbe
+        Grenze filtert wie die Liste (bis dahin dasselbe relative `tage` wie die
+        Liste, und was inzwischen aelter wurde, fiel still heraus).
 
         Das ist der Rumpf, der bis .535 der ganze Lauf war — Lock, Platz, Job,
         Rueckweg. Geaendert hat sich, WAS im Job steht (`nur_eids`,
@@ -8913,7 +9785,7 @@ class Service:
                     # „Worker die ganze Frist beschaeftigt". Die Aufrufer loggen ihn
                     # und melden ihn (Netz-Sammeln zusaetzlich per Push); genau das
                     # soll ein System auch sagen, das keinen freien Platz hatte.
-                    self.log(f"collection: no free analysis slot within "
+                    self.log.warning(f"collection: no free analysis slot within "
                              f"{frist:.0f}s — postponed")
                     # .544 Teil 2b: DIESER Rueckweg hat den Worker nie erreicht.
                     # Als FELD, nicht als Wortlaut — der Ketten-Fahrer entscheidet
@@ -8922,7 +9794,8 @@ class Service:
                     return None, (f"no free analysis slot within {frist:.0f}s — "
                                   f"collection postponed"), _wi
                 w = self._worker(nr)
-                antwort = w.job({"typ": "sammle", "tage": tage,
+                antwort = w.job({"typ": "sammle",
+                                 "tage": (time.time() - grenze) / 86400,
                                  "mit_migriere": mit_migriere,
                                  "log": log_pfad,
                                  # .536 B3: die beiden Haeppchen-Felder. `nur_eids`
@@ -8967,7 +9840,7 @@ class Service:
             # wiederholte die Kette einen erledigten Lauf; stattdessen eine
             # ehrliche Null und die Ereignisse dieses Haeppchens gelten als
             # erledigt (sie sind in `geprueft.jsonl` abgehakt).
-            self.log("collection: worker answered without a batch summary "
+            self.log.warning("collection: worker answered without a batch summary "
                      "(older worker?) — counting 0 new faces for this batch")
             erg = {"neu": 0, "events": len(h["eids"]), "offen": [],
                    "dauer_s": None, "prolog_s": None, "clip_s": 0.0, "cache": "?"}
@@ -9009,9 +9882,20 @@ class Service:
         return (int(m.group(1)) if m else 0), None
 
     def sammel_zustand(self):
-        """Der Sammel-Stand fuer `/health` (.536 B3.4) — Momentaufnahme, keine Historie."""
+        """Der Sammel-Stand fuer `/health` (.536 B3.4) — Momentaufnahme, keine Historie.
+
+        Stufe 3 Punkte 8 und 9: dazu der Faellig-Vermerk (`aufgeschoben_seit`,
+        `faellig`, `anstoesse`, `fenster_ab`) und `verlust_warnung`, der Zeitpunkt
+        der Warnung, dass der Aufschub laenger dauert als die Clip-Aufbewahrung."""
         s = dict(self._sammel_stand)
-        return {"auftrag_aktiv": bool(s.get("auftrag_aktiv")),
+        with self._sammel_lock:
+            v = dict(self._sammel_faellig) if self._sammel_faellig else None
+        return {"aufgeschoben_seit": round(v["seit"], 1) if v else None,
+                "faellig": ("netz" if v["netz"] else "szenario") if v else "",
+                "anstoesse": v["anstoesse"] if v else 0,
+                "fenster_ab": round(v["grenze"], 1) if v else None,
+                "verlust_warnung": round(v["verlust"], 1) if v and v["verlust"] else None,
+                "auftrag_aktiv": bool(s.get("auftrag_aktiv")),
                 "haeppchen_offen": s.get("haeppchen_offen"),
                 "haeppchen_n": s.get("haeppchen_n"),
                 "letzte_dauer_s": s.get("letzte_dauer_s"),
@@ -9024,16 +9908,19 @@ class Service:
         """Naechtliches Auffangnetz (06:00): breiter Sammel-Sweep MIT Modell-Neupruefung (migriere).
         Faengt schwache Durchgaenge, die der szenario-Trigger (nur fremd_verdacht) verpasst, und haelt
         den Unbekannt-Pool modell-konsistent (Review 21.07.). Dank geprueft.jsonl nur die verpassten
-        Events -> nachts in Sekunden. Blockierend (laeuft im Wartungs-Thread); der pool_lock serialisiert
-        gegen das kontinuierliche Sammeln, der _sammel_laeuft-Guard vermeidet parallelen GPU-Init."""
-        with self._sammel_lock:
-            if self._sammel_laeuft:
-                # Sammeln ODER Ernte aktiv -> Netz heute auslassen, aber SAGEN
-                # (Leitprinzip 3/§2.6: nichts faellt still aus; Widerleger .75)
-                self.log("safety-net collection skipped for today "
-                         "(collection or harvest active)")
-                return
-            self._sammel_laeuft = True
+        Events -> nachts in Sekunden.
+
+        Stufe 3 (bauplan_sammeln_debug.md, O415): dies ist nur noch der ANSTOSS des
+        Netzes. Statt „skipped for today", wenn gerade gesammelt wird, merkt er das
+        Netz mit seinem Fenster vor; es laeuft, sobald kein Lauf haelt und die
+        Analyse keinen Rueckstand hat. Der Wartungsfaden wartet nicht mehr darauf.
+        Der Lauf selbst ist `_netz_lauf`."""
+        self._sammel_vormerken(True, time.time() - self.SAMMEL_FENSTER_NETZ_D * 86400)
+        self._sammeln_starten()
+
+    def _netz_lauf(self, grenze):
+        """Ein Netz-Sammellauf (Pool-Pflege zuerst) ab der festen Grenze `grenze`
+        -> None. Laeuft im Faden der Startstelle; Fehler meldet er selbst."""
         try:
             # .536 B3: die Kette beginnt hier mit der POOL-PFLEGE als Haeppchen 0
             # (`mit_migriere=True` wirkt nur dort, `nur_eids=[]` = kein Ereignis),
@@ -9042,8 +9929,14 @@ class Service:
             # Frist eines einzelnen Jobs (die Frist, an der am 15.09. sechs Jobs
             # starben und je 2-5 fremde mitrissen).
             _si = {}
-            summe, fehler = self._sammle_fahren(tage=2, mit_migriere=True,
-                                                timeout=1800, info=_si)
+            summe, fehler = self._sammle_fahren(tage=None, mit_migriere=True,
+                                                timeout=1800, info=_si,
+                                                grenze=grenze)
+            if _si.get("aufgeschoben") and not _si.get("haeppchen_n"):
+                # Vor dem ersten Haeppchen wieder Rueckstand: nichts gerechnet,
+                # das Netz steht samt Pflege wieder im Vermerk. Kein „ok" und kein
+                # Clustern fuer einen Lauf, der nicht stattfand.
+                return
             if fehler:
                 # .544: dieselbe Buchung wie beim Szenario-Sammeln. In der Nacht
                 # vom 20./21.09. war GENAU DAS die laute Stelle — das 06:00-Netz
@@ -9058,7 +9951,7 @@ class Service:
                 # Ketten-Fahrer.
                 if _si.get("worker_ausnahme"):
                     self._serie_alle_buchen(True, "safety-net collection")
-                self.log(f"SAFETY-NET COLLECTION FAILED: {fehler}")
+                self.log.error(f"SAFETY-NET COLLECTION FAILED: {fehler}")
                 push(self.cfg, "suslik: Netz-Sammeln fehlgeschlagen",
                      f"sammle scheiterte: {fehler}", None)
             else:
@@ -9070,15 +9963,12 @@ class Service:
                 n = int(summe or 0)
                 import anlernen
                 idents, _ = anlernen.reconcile_unbekannte()
-                self.log(f"safety-net collection ok ({n} new faces, {len(idents)} unknown identities)")
+                self.log.info(f"safety-net collection ok ({n} new faces, {len(idents)} unknown identities)")
         except subprocess.TimeoutExpired:
-            self.log("SAFETY-NET COLLECTION TIMEOUT (>30 min)")
+            self.log.warning("SAFETY-NET COLLECTION TIMEOUT (>30 min)")
             push(self.cfg, "suslik: Netz-Sammeln-Timeout", "sammle lief laenger als 30 min.", None)
         except Exception as e:
-            self.log(f"safety-net collection error: {e}")
-        finally:
-            with self._sammel_lock:
-                self._sammel_laeuft = False
+            self.log.error(f"safety-net collection error: {e}")
 
     def start_wartung(self):
         """06:00-Job: QS-Bericht + Master-Backup + Crops-Retention + (monatlich) Rotation + schlankes
@@ -9108,7 +9998,7 @@ class Service:
                     try:
                         fn()
                     except Exception as e:
-                        self.log(f"maintenance job '{name}' failed: {e}")
+                        self.log.error(f"maintenance job '{name}' failed: {e}")
                 erst = False
                 jetzt = datetime.datetime.now()
                 ziel = jetzt.replace(hour=6, minute=0, second=0, microsecond=0)
@@ -9129,15 +10019,15 @@ class Service:
             staende = [os.path.join(bdir, f) for f in os.listdir(bdir)
                       if f.startswith("master_") and f.endswith(".tar.gz")]
         except OSError as e:
-            melde("backup", f"Backup-Verzeichnis nicht lesbar ({bdir}): {e}")
+            melde("backup", f"backup folder not readable ({bdir}): {e}")
             return
         if not staende:
-            melde("backup", f"Kein einziges Master-Backup in {bdir} — 06:00-Job pruefen.")
+            melde("backup", f"not a single master backup in {bdir} — check the 06:00 job.")
             return
         alter_h = (time.time() - max(os.path.getmtime(p) for p in staende)) / 3600
         if alter_h > 48:
-            melde("backup", f"Juengstes Master-Backup ist {alter_h:.0f} h alt (>48 h) — "
-                            f"der 06:00-Job laeuft nicht durch. Log auf 'maintenance job' pruefen.")
+            melde("backup", f"newest master backup is {alter_h:.0f} h old (>48 h) — "
+                            f"the 06:00 job does not finish. Check the log for 'maintenance job'.")
 
     def start_melde_spur(self):
         """W3 Stufe 1 (.399): die EINE serielle Nachwehen-Spur fuer externe
@@ -9166,25 +10056,29 @@ class Service:
                     self._spur_stat["gesendet"] += 1
                 except Exception as e:                      # noqa: BLE001
                     self._spur_stat["fehler"] += 1
-                    self.log(f"delivery lane: {beschreibung} failed "
+                    self.log.error(f"delivery lane: {beschreibung} failed "
                              f"({type(e).__name__}: {e})")
         threading.Thread(target=lauf, daemon=True, name="melde-spur").start()
 
-    def start_event_queue(self):
-        """W3 Stufe 1 (.399): geordnete MQTT-Event-Warteschlange statt der
-        Timer-Herde. Bis .398 startete on_msg je Event einen threading.Timer,
-        alle Timer-Threads stauten sich UNFAIR und UNSICHTBAR am Analyse-Lock
-        (kein Deckel, keine Reihenfolge — CPython-Locks sind nicht FIFO).
-        Jetzt: EIN Abarbeiter, FIFO nach Faelligkeit (clip_delay ab
-        Event-Ende), Deckel EV_QUEUE_MAX (seit B2 wird bei voller Schlange das
-        NEUE abgewiesen statt das aelteste verdraengt — s. `event_einreihen`;
-        das Nachhol-Netz holt Abgewiesene spaeter nach, jenseits des
-        lookback-Fensters haelt sie der Merkzettel), Laenge und Alter sichtbar
-        im Systemstatus.
+    def event_queue_anlegen(self):
+        """Legt die Ereignis-Warteschlange samt Begleitern an, falls sie noch fehlt.
+        -> True = neu angelegt, False = stand schon (jeder Eintrag bleibt erhalten).
+
+        Zweiter Versuch Stufe 1 (29.09.2026, Befund Lauf 0.1.1.004 Intel Test 1):
+        `main()` ruft das VOR dem Web-Server. Bis dahin entstand die Schlange erst
+        in `start_event_queue`, also nach dem Selbsttest; ein Ereignis, das
+        waehrend des Starts ankam, lief ueber den Timer-Rueckweg von
+        `event_einreihen` an ihr vorbei, rechnete parallel zum Start und bekam
+        nach einem Abgang des Workers keinen zweiten Versuch (wieder eingereiht
+        wird nur im `finally` des Abholers). Jetzt wartet es in der Schlange, bis
+        die Abholer starten. Ein zweiter Aufruf legt NICHT neu an — er wuerfe die
+        frueh eingereihten Ereignisse weg.
 
         Bewusst eine `deque` OHNE `maxlen`: mit `maxlen` waere das Verdraengen
         des aeltesten wieder da, und zwar unsichtbar im Datentyp statt sichtbar
         im Code (Widerleger-Befund B1 B-4)."""
+        if hasattr(self, "_ev_q"):
+            return False
         import collections as _coll
         self._ev_q = _coll.deque()
         self._ev_wecker = threading.Condition()
@@ -9201,6 +10095,26 @@ class Service:
         # der EINEN Sammelzeile je Ausfall — der Halt selbst wird jede Runde neu
         # aus Protector und Fehlerserie beantwortet, nie aus diesem Merker.
         self._frigate_halt = False
+        return True
+
+    def start_event_queue(self):
+        """W3 Stufe 1 (.399): geordnete MQTT-Event-Warteschlange statt der
+        Timer-Herde. Bis .398 startete on_msg je Event einen threading.Timer,
+        alle Timer-Threads stauten sich UNFAIR und UNSICHTBAR am Analyse-Lock
+        (kein Deckel, keine Reihenfolge — CPython-Locks sind nicht FIFO).
+        Jetzt: EIN Abarbeiter, FIFO nach Faelligkeit (clip_delay ab
+        Event-Ende), Deckel EV_QUEUE_MAX (seit B2 wird bei voller Schlange das
+        NEUE abgewiesen statt das aelteste verdraengt — s. `event_einreihen`;
+        das Nachhol-Netz holt Abgewiesene spaeter nach, jenseits des
+        lookback-Fensters haelt sie der Merkzettel), Laenge und Alter sichtbar
+        im Systemstatus.
+
+        Zweiter Versuch Stufe 1 (29.09.2026): angelegt wird die Schlange in
+        `event_queue_anlegen`, im Dienst schon vor dem Web-Server (`main()`).
+        Hier startet nur noch, wer sie abarbeitet; was waehrend des Starts
+        eingereiht wurde, bleibt liegen und laeuft jetzt. Der Aufruf unten legt
+        nur an, wo noch nichts steht (Dienst-Attrappen der Proben)."""
+        self.event_queue_anlegen()
 
         def lauf():
             while True:
@@ -9263,14 +10177,14 @@ class Service:
                         # es gibt einen Abholer je Platz).
                         if not getattr(self, "_frigate_halt", False):
                             self._frigate_halt = True
-                            self.log(f"Frigate down — {len(self._ev_q)} queued "
+                            self.log.warning(f"Frigate down — {len(self._ev_q)} queued "
                                      f"events on hold (queue kept, order and age "
                                      f"preserved; resuming automatically)")
                         self._ev_wecker.wait(timeout=2.0)
                         continue
                     if not _halt and getattr(self, "_frigate_halt", False):
                         self._frigate_halt = False
-                        self.log(f"Frigate answers again — resuming "
+                        self.log.info(f"Frigate answers again — resuming "
                                  f"{len(self._ev_q)} queued events")
                     if treffer is None:
                         # Schlafen bis zum FRUEHESTEN faelligen Eintrag, nicht bis
@@ -9335,7 +10249,7 @@ class Service:
                         # `lookback_h` wieder ein. Gesagt wird es trotzdem —
                         # still waere hier genau die Klasse Fehler, gegen die
                         # dieser ganze Zug geschrieben ist.
-                        self.log(f"{eid}: could not be put back (queue at its "
+                        self.log.error(f"{eid}: could not be put back (queue at its "
                                  f"{self.EV_QUEUE_MAX} cap) — the next sweep "
                                  f"will pick it up again")
         # E2b (gemessen 04.09.): EIN Abarbeiter je Analyse-Platz, nicht einer insgesamt.
@@ -9383,7 +10297,7 @@ class Service:
                 with self._ev_wecker:
                     wartend = len(q)
         except Exception:                                 # noqa: BLE001
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         arbeit = 0
         try:
             _l = getattr(self, "_laufend", None)
@@ -9395,7 +10309,7 @@ class Service:
                 else:
                     arbeit = len(_l)
         except Exception:                                 # noqa: BLE001
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         return wartend, arbeit
 
     def rueckstau_aktiv(self, zahlen=None):
@@ -9436,7 +10350,7 @@ class Service:
                     if any(e[1] in eids for e in q):
                         return True
         except Exception:                                 # noqa: BLE001
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         try:
             # Gleiche Lock-Regel wie in rueckstau_zahlen (W-A3 E2).
             _l = getattr(self, "_laufend", None) or {}
@@ -9446,6 +10360,7 @@ class Service:
                     return bool(eids & set(_l))
             return bool(eids & set(_l))
         except Exception:                                 # noqa: BLE001
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning False")
             return False
 
     def rueckstau_aktiv_nutzerlauf(self):
@@ -9626,7 +10541,7 @@ class Service:
             return False
         n = int(bisher or 0) + 1
         if n > kappe:
-            self.log(f"{eid} ({camera}): worker was not ready {kappe} times in a "
+            self.log.error(f"{eid} ({camera}): worker was not ready {kappe} times in a "
                      f"row — giving up and booking the failure "
                      f"({(ainfo or {}).get('fehler_text') or 'no worker text'})")
             return False
@@ -9639,7 +10554,7 @@ class Service:
             if not hasattr(self, "_ev_zurueck"):
                 self._ev_zurueck = {}
             self._ev_zurueck[str(eid)] = verzug
-        self.log(f"{eid} ({camera}): the worker was not ready (not this event's "
+        self.log.warning(f"{eid} ({camera}): the worker was not ready (not this event's "
                  f"fault) — event put BACK into the queue, attempt {n} of "
                  f"{kappe} in {int(verzug)}s. Nothing booked, nothing lost")
         return True
@@ -9661,10 +10576,10 @@ class Service:
             if os.path.exists(_rp):
                 os.replace(_rp, os.path.join(
                     _ed, f"results.vor_reanalyse_{int(time.time())}.jsonl"))
-                self.log(f"{eid}: previous results set aside — re-analysis "
+                self.log.info(f"{eid}: previous results set aside — re-analysis "
                          f"computes fresh (support request)")
         except OSError as _e:
-            self.log(f"{eid}: could not set previous results aside "
+            self.log.error(f"{eid}: could not set previous results aside "
                      f"({type(_e).__name__}: {_e}) — analyze may resume the old file")
 
     def event_neu_einreihen(self, eid, marke=None):
@@ -9763,7 +10678,7 @@ class Service:
                     self.processed.discard(eid)
                     self._alt_akte_beiseite(eid)
         if laeuft:
-            self.log(f"{eid}: re-analysis refused — this event is being analysed "
+            self.log.warning(f"{eid}: re-analysis refused — this event is being analysed "
                      f"right now; nothing was changed (support request)")
             return False
         # `_ev_gesehen` haengt am `_ev_wecker`, nicht an `self.lock` — bewusst
@@ -9783,7 +10698,7 @@ class Service:
                     # der Bediener saehe wieder ok:true bei nichts.
                     if marke:
                         self._ev_marken[eid] = marke
-                    self.log(f"{eid}: re-analysis accepted, but the event is "
+                    self.log.info(f"{eid}: re-analysis accepted, but the event is "
                              f"already queued — no second queue entry (previous "
                              f"results were set aside, it will be computed fresh)")
                     return None
@@ -9796,7 +10711,7 @@ class Service:
         # Frist selbst gehoert trotzdem weg.
         if self.event_einreihen(eid, sofort=True, marke=marke):
             return True
-        self.log(f"{eid}: re-analysis could NOT be queued — the event queue is "
+        self.log.warning(f"{eid}: re-analysis could NOT be queued — the event queue is "
                  f"at its limit ({self.EV_QUEUE_MAX}); nothing is waiting for "
                  f"this event, please retry later")
         return False
@@ -9811,6 +10726,25 @@ class Service:
         with self._spur_wecker:
             self._spur_q.append((beschreibung, fn))
             self._spur_wecker.notify()
+
+    # Antwort-Frist der Selbstwache an ihr eigenes /health (bis Feldstau Stufe 5 ein Literal
+    # im urlopen-Aufruf). Bauplan Feldstau Stufe 5.3 (Klaerungspunkt 4): /health meldet sich
+    # mit einer WARNING, sobald eine Antwort die HALBE Frist ueberschreitet — abgeleitet, kein
+    # Config-Schluessel; ein drohender Abgang der Selbstwache steht damit vorher im Log.
+    SELBSTWACHE_FRIST_S = 30
+    HEALTH_LANGSAM_S = SELBSTWACHE_FRIST_S / 2
+
+    def health_dauer_melden(self, gesamt_s, log_block_s):
+        """Meldet die Antwort-Dauer eines /health-Abrufs samt dem Anteil des Log-Blocks mit den
+        Tee-Zaehlern (Bauplan Feldstau Stufe 5.3): ueber HEALTH_LANGSAM_S als WARNING (immer),
+        sonst als DEBUG-Zeile (steht nur bei eingeschaltetem Debug). -> None"""
+        text = (f"/health answered in {gesamt_s:.2f} s "
+                f"(log block with tee counters {log_block_s:.2f} s)")
+        if gesamt_s > self.HEALTH_LANGSAM_S:
+            self.log.warning(f"{text} — over half the self-watch deadline "
+                             f"({self.HEALTH_LANGSAM_S:g} of {self.SELBSTWACHE_FRIST_S} s)")
+        else:
+            self.log.debug(text)
 
     def start_selbstwache(self):
         """R(b) Fern-Reset-Paket (01.09., User-Go): Selbstwache gegen den
@@ -9835,7 +10769,7 @@ class Service:
         HTTP-Threads und einen toten serve_forever, nicht den toten Prozess.
         Schalter: Config 'selbstwache' (Default an)."""
         if not self.cfg.get("selbstwache"):
-            self.log("self-watch disabled via config")
+            self.log.info("self-watch disabled via config")
             return
         url = f"http://127.0.0.1:{int(self.cfg['web_port'])}/health"
 
@@ -9845,19 +10779,19 @@ class Service:
             while True:
                 time.sleep(15)
                 try:
-                    with urllib.request.urlopen(url, timeout=30) as r:
+                    with urllib.request.urlopen(url, timeout=self.SELBSTWACHE_FRIST_S) as r:
                         r.read(64)
                     if not scharf:
-                        self.log("self-watch armed (own /health answers)")
+                        self.log.info("self-watch armed (own /health answers)")
                     scharf, fehler = True, 0
                 except Exception as e:
                     if not scharf:
                         continue               # Anlauf: nie scharf vor der ersten Antwort
                     fehler += 1
-                    self.log(f"self-watch: own /health not answering "
+                    self.log.warning(f"self-watch: own /health not answering "
                              f"({fehler}/4, {type(e).__name__})")
                     if fehler >= 4:
-                        self.log("SELF-WATCH: web server dead for ~3 min — "
+                        self.log.error("SELF-WATCH: web server dead for ~3 min — "
                                  "exiting hard so the supervisor restarts the "
                                  "service (restart policy required)")
                         try:
@@ -9909,7 +10843,7 @@ class Service:
         Fall ab, den ein Waechter faengt — und der Selbst-Deadlock eines
         Dienst-Threads bleibt dort ungedeckt, so wie vor P1 ueberall."""
         if not self.cfg.get("worker", True):
-            self.log("slot watchdog inactive: legacy subprocess mode has no "
+            self.log.warning("slot watchdog inactive: legacy subprocess mode has no "
                      "heartbeat — analyse_timeout_s remains the guard")
             return
 
@@ -9928,10 +10862,10 @@ class Service:
                         try:
                             self._platzwaechter_platz(nr, etikett, alter, runde=runde)
                         except Exception as e:            # noqa: BLE001
-                            self.log(f"slot {nr}: watchdog step failed: "
+                            self.log.error(f"slot {nr}: watchdog step failed: "
                                      f"{type(e).__name__}: {e}")
                 except Exception as e:                    # noqa: BLE001
-                    self.log(f"slot watchdog error: {type(e).__name__}: {e}")
+                    self.log.error(f"slot watchdog error: {type(e).__name__}: {e}")
         threading.Thread(target=lauf, daemon=True, name="platzwache").start()
 
     def _platzwaechter_runde(self, stumme):
@@ -9988,7 +10922,7 @@ class Service:
             # unbeweisbar (der Kandidat verschwaende einfach).
             if _alter is None:                   # zwischen Auskunft und jetzt schon frei
                 return None
-            self.log(f"slot {nr}: no longer silent (pulsed {_alter}s ago) — "
+            self.log.warning(f"slot {nr}: no longer silent (pulsed {_alter}s ago) — "
                      f"skipped, no kill ({etikett})")
             return None
         # (b) Der Worker — `_worker(nr)` ist die eine Quelle. Der Kill loest den
@@ -10016,11 +10950,11 @@ class Service:
             # Der Entscheid unten laeuft trotzdem: ob DIESER Halter zurueckkommt,
             # ist eine eigene Frage.
             geschossen = True
-            self.log(f"slot {nr}: the one worker process was already shot in this "
+            self.log.warning(f"slot {nr}: the one worker process was already shot in this "
                      f"watchdog round — no second shot ({etikett})")
         else:
             _mit = [p for p in (runde or {}).get("lebend", [])]
-            self.log(f"slot {nr}: silent for {alter_s}s — shooting the ONE worker "
+            self.log.error(f"slot {nr}: silent for {alter_s}s — shooting the ONE worker "
                      f"process (a hung compute thread cannot be shot on its own)"
                      + (f"; {len(_mit)} live holder(s) lose their job with it and "
                         f"are booked as not their own fault: "
@@ -10038,11 +10972,11 @@ class Service:
             # Analyse wird, hat run_analyze/process schon entschieden (Retry ueber
             # `antwort is None` oder Fehler in der Akte). KEINE Neu-Einreihung —
             # das war die Quelle der Doppel-Urteile.
-            self.log(f"slot {nr}: holder returned after worker kill (was blocked, "
+            self.log.info(f"slot {nr}: holder returned after worker kill (was blocked, "
                      f"not hung) — no requeue ({etikett})")
             return urteil
         if urteil == "lebt":
-            self.log(f"slot {nr}: holder pulsing again after worker kill (was "
+            self.log.info(f"slot {nr}: holder pulsing again after worker kill (was "
                      f"blocked, now working) — slot kept, no requeue ({etikett})")
             return urteil
         # (e) Tot: einziehen. Erst jetzt wird das Semaphor frei.
@@ -10076,7 +11010,7 @@ class Service:
             # kommt durch den Guard. Der `pop` gehoert einzig in den Analyse-Zweig
             # unten, wo der Waechter den Halter der Marke wirklich fuer tot erklaert
             # hat.
-            self.log(f"slot {nr}: dead {art} job {eid} reclaimed — not an event, "
+            self.log.error(f"slot {nr}: dead {art} job {eid} reclaimed — not an event, "
                      f"not re-queued (its caller books the miss itself)")
             return urteil
         # Das Ereignis NICHT verlorengeben: `processed` freigeben und neu
@@ -10151,23 +11085,23 @@ class Service:
                     f"the analysis of this event was collected dead {_v} times "
                     f"(job deadline) — skipped so it cannot keep killing the "
                     f"worker process")
-                self.log(f"slot {nr}: dead analysis {eid} NOT re-queued — "
+                self.log.error(f"slot {nr}: dead analysis {eid} NOT re-queued — "
                          f"{_v}. collection, skipped for good (see record)")
             elif self.event_einreihen(eid, sofort=True):
                 # WORTLAUT UNVERAENDERT: an dieser Zeile haengt eine Zusicherung
                 # der S11-Proben. Die Versuchszahl bekommt ihre eigene Zeile, und
                 # nur, wenn es wirklich schon einmal passiert ist.
-                self.log(f"slot {nr}: dead analysis {eid} re-queued")
+                self.log.error(f"slot {nr}: dead analysis {eid} re-queued")
                 if _v > 1:
-                    self.log(f"slot {nr}: {eid} has now been collected {_v}/"
+                    self.log.warning(f"slot {nr}: {eid} has now been collected {_v}/"
                              f"{HAENGER_VERSUCHE_MAX} times — after that it is "
                              f"skipped instead of re-queued")
             else:
-                self.log(f"slot {nr}: dead analysis {eid} could NOT be re-queued "
+                self.log.error(f"slot {nr}: dead analysis {eid} could NOT be re-queued "
                          f"(queue full or already queued) — the next sweep has to "
                          f"pick it up")
         except Exception as e:                            # noqa: BLE001
-            self.log(f"slot {nr}: re-queue of {eid} failed: "
+            self.log.error(f"slot {nr}: re-queue of {eid} failed: "
                      f"{type(e).__name__}: {e}")
         return urteil
 
@@ -10220,10 +11154,10 @@ class Service:
             if time.time() - gemeldet.get(grund, 0) < 6 * 3600:
                 return
             gemeldet[grund] = time.time()
-            self.log(f"STOERUNG ({grund}): {text}")
+            self.log.error(f"DISTURBANCE ({grund}): {text}")
             if not self.dry_alert:
                 for _f in stoerung_melden(self.cfg, text):
-                    self.log(f"fault notify failed: {_f}")
+                    self.log.error(f"fault notify failed: {_f}")
 
         def lauf():
             while True:
@@ -10231,35 +11165,37 @@ class Service:
                 try:
                     jetzt = datetime.datetime.now()
                     if 7 <= jetzt.hour <= 22 and time.time() - self.letzte_aktivitaet > 4 * 3600:
-                        melde("inaktiv", "Seit >4 h tagsueber kein Event verarbeitet/uebersprungen — "
-                                         "MQTT/Frigate/Analyse pruefen.")
+                        melde("inaktiv", "no event processed/skipped for >4 h in daytime — "
+                                         "check MQTT/Frigate/analysis.")
                     ff = self.frigate_fehler
                     if ff and time.time() - ff[0] < 900 and getattr(self, "frigate_fehlerserie", 0) >= 5:
-                        melde("frigate", f"5+ Frigate-Abrufe in Folge fehlgeschlagen: {ff[1][:100]}")
+                        melde("frigate", f"5+ Frigate fetches failed in a row: {ff[1][:100]}")
                     if self.cfg.get("mqtt_publish", True):
                         # pub is None = Publisher gar nicht erst hochgekommen. Die alte Bedingung
                         # verlangte 'self.pub and ...' und konnte genau diesen Fall NIE melden:
                         # MQTT war tot und niemand erfuhr es.
                         if not self.pub:
-                            melde("mqtt", "MQTT-Publisher ist nicht gestartet (mqtt_publish=an) — "
-                                          "Broker-Adresse/Zugangsdaten pruefen.")
+                            melde("mqtt", "MQTT publisher is not started (mqtt_publish=on) — "
+                                          "check broker address/credentials.")
                         elif not self.pub.is_connected():
-                            melde("mqtt", "MQTT-Publisher laenger getrennt — Broker/Netz pruefen.")
+                            melde("mqtt", "MQTT publisher disconnected for a while — check broker/network.")
                     if self.cfg.get("trigger") == "mqtt":
                         # Der Trigger-Client ist im mqtt-Modus die EINZIGE Event-Quelle. Seit er
                         # den Erstverbindungsversuch wiederholt statt den Prozess zu reissen
                         # (26.07.), waere ein nie erreichter Broker sonst ein STILLER Totalausfall:
                         # Web-UI und /health blieben gruen, es kaeme nur nie wieder ein Event.
                         if not self.mqtt_trigger:
-                            melde("mqtt_trigger", "MQTT-Trigger-Client ist nicht gestartet "
-                                                  "(trigger=mqtt) — es kommen KEINE Events an.")
+                            melde("mqtt_trigger", "MQTT trigger client is not started "
+                                                  "(trigger=mqtt) — NO events arrive.")
                         elif not self.mqtt_trigger.is_connected():
-                            melde("mqtt_trigger", "MQTT-Trigger nicht mit dem Broker verbunden — "
-                                                  "es kommen KEINE Events an (Netz/Firewall/Broker "
-                                                  "pruefen).")
+                            melde("mqtt_trigger", "MQTT trigger not connected to the broker — "
+                                                  "NO events arrive (check network/firewall/broker"
+                                                  ").")
                     self._backup_frische_pruefen(melde)
+                    # Feldbefunde Punkt 2 (O295): Arbeit wartet, aber nichts gelingt.
+                    self._stillstand_pruefen(melde)
                 except Exception:
-                    pass
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         threading.Thread(target=lauf, daemon=True).start()
         self.wanduhr_messen_starten()  # E1: Selbstmessung vom Boot (nie von Seitenbesuchen — Widerleger F2.3);
         #                                weitere Versuche startet nur der Wiederholer (H3/.507)
@@ -10277,7 +11213,7 @@ class Service:
             zustand, fehler = _ll.lauf_lesen_geduldig(self.cfg["data_dir"])
             if zustand is None:
                 if fehler:
-                    self.log(f"learning run state unreadable — not resuming ({fehler})")
+                    self.log.error(f"learning run state unreadable — not resuming ({fehler})")
                 return
             ph = zustand.get("phase")
             f = zustand.get("fortschritt") or {}
@@ -10288,7 +11224,7 @@ class Service:
                 # der Neustart-Pause, die weiter in `ernte` steht und unten
                 # regulaer wiederaufgenommen wird.
                 _st = zustand.get("stand") or {}
-                self.log(f"learning run was INTERRUPTED after "
+                self.log.info(f"learning run was INTERRUPTED after "
                          f"{_st.get('n', '?')}/{_st.get('m', '?')} "
                          f"({zustand.get('grund') or 'no reason recorded'})")
                 # .509 Review-SOLL: der EINE zugesagte Automatik-Versuch lebte
@@ -10304,7 +11240,7 @@ class Service:
                     self._lernlauf_autoresume_armieren(self.cfg["data_dir"],
                                                        zustand)
                 else:
-                    self.log("waiting for Resume on the run page")
+                    self.log.info("waiting for Resume on the run page")
                 return
             if ph == "ernte":
                 if str(f.get("status", "")).startswith("harvest finished"):
@@ -10312,13 +11248,13 @@ class Service:
                                            "learning run found complete (harvest finished) — "
                                            "starting the anchor stage")
                     return
-                self.log("learning run resumes after restart (harvest)")
+                self.log.info("learning run resumes after restart (harvest)")
                 self.lernlauf_ernte_starten()
                 return
             if ph == "anker":
                 st = str(f.get("status", ""))
                 if st.startswith("anchors ready") or st.startswith("anchors: none"):
-                    self.log("learning run found complete (anchors ready) — "
+                    self.log.info("learning run found complete (anchors ready) — "
                              "open the anchor clusters to name them")
                     return
                 # unterbrochen oder failed: die Phase ist nur so lange wiederholbar,
@@ -10326,25 +11262,25 @@ class Service:
                 # Neuschreiben behielte sie zwar, aber ein Re-Run waehrend der
                 # Benennung bleibt bewusst aus — Widerleger-MUSS 01.08.).
                 if _ll.benannte_zaehlen(self.cfg["data_dir"], zustand["lauf_id"]):
-                    self.log("naming in progress — anchor stage not re-run")
+                    self.log.info("naming in progress — anchor stage not re-run")
                     return
                 self._anker_boot_start(zustand,
                                        "learning run resumes after restart (anchor stage)")
                 return
             if ph != "vorbereitung":
                 if "status" not in f:
-                    self.log(f"learning run found in phase '{ph}' — waiting for its "
+                    self.log.info(f"learning run found in phase '{ph}' — waiting for its "
                              "stage to ship (no engine for it in this build)")
                 return
             if not zustand.get("erntefreigabe"):
-                self.log("learning run from the foundation build found — NOT starting "
+                self.log.info("learning run from the foundation build found — NOT starting "
                          "a harvest without a fresh run creation")
                 _ll.lauf_fortschreiben(self.cfg["data_dir"], fortschritt={
                     "status": "planned under the foundation build — abort this run "
                               "and create it again to actually harvest"})
                 return
             if zustand.get("events_liste"):
-                self.log("learning run resumes after restart (prepared -> harvest)")
+                self.log.info("learning run resumes after restart (prepared -> harvest)")
                 self.lernlauf_ernte_starten()
                 return
             ev = int(zustand.get("events") or 0)
@@ -10352,10 +11288,10 @@ class Service:
             if ev <= 0 and not _rtag:
                 # NIE einen Ersatz-Umfang raten (frueher: stiller 100er-Rueckfall);
                 # .263: ein Tages-Lauf traegt seinen Umfang im tag-Feld.
-                self.log("learning run state incomplete (no scope) — not resuming; "
+                self.log.warning("learning run state incomplete (no scope) — not resuming; "
                          "abort the run and create a new one")
                 return
-            self.log("learning run resumes after restart (preparation from scratch)")
+            self.log.info("learning run resumes after restart (preparation from scratch)")
             self.lernlauf_vorbereiten_starten(ev, alle_modus=bool(zustand.get("alle")),
                                               nur_neue=bool(zustand.get("nur_neue")),
                                               tag=_rtag or None,
@@ -10365,7 +11301,7 @@ class Service:
                                               # nach einem Neustart ein anderer.
                                               kameras=(zustand.get("kameras") or None))
         except Exception as e:
-            self.log(f"learning run resume failed ({type(e).__name__}: {e})")
+            self.log.error(f"learning run resume failed ({type(e).__name__}: {e})")
 
     def _anker_boot_start(self, zustand, meldung):
         """Crash-Loop-Wache um jeden BOOT-Start der Anker-Phase (#20 gr33nh07n:
@@ -10397,11 +11333,11 @@ class Service:
                     "anker_resume_max in Settings and restart to retry")
             if str((zustand.get("fortschritt") or {}).get("status", "")) != halt:
                 _ll.lauf_fortschreiben(dd, fortschritt={"status": halt})
-            self.log(f"learning run NOT resumed: anchor stage already interrupted "
+            self.log.error(f"learning run NOT resumed: anchor stage already interrupted "
                      f"{n}x (anker_resume_max {limit}) — halted, waiting for user")
             return
         _ll.lauf_fortschreiben(dd, anker_neuanlaeufe=n + 1)
-        self.log(meldung + f" — attempt {n + 1}/{limit}")
+        self.log.info(meldung + f" — attempt {n + 1}/{limit}")
         self.lernlauf_anker_starten()
 
     # ---------------------------------------------------------- Konfigblatt (Plan AP5)
@@ -10506,7 +11442,13 @@ class Service:
         "besucher_sim": (float, 0.40, 0.70, "threshold: at this similarity an unknown event counts as an ignored visitor (no alert)"),
         "modell": (list, ["buffalo", "adaface"], None, "recognition model: buffalo (insightface w600k_r50) | adaface (IR101, better separation) — the refcache is rebuilt automatically after a switch"),
         "update_check": (bool, None, None, "daily anonymous check for a newer release on GitHub — shows a quiet hint in the header; the only outbound call besides notification channels"),
-        "debug": (bool, None, None, "verbose debug logging: per-person scores/windows, MQTT payloads, timing, plus a [clipdbg] trace of every Frigate clip interaction (fetch start/end with bytes+duration, clip-generation waits, per-clip frame quality) (INFO stays the default; turn on to validate the system in depth)"),
+        "debug": (bool, None, None, "verbose debug logging: per-person scores/windows, MQTT payloads, timing, plus a [clipdbg] trace of every Frigate clip interaction (fetch start/end with bytes+duration, clip-generation waits, per-clip frame quality) (INFO stays the default; turn on to validate the system in depth). It switches itself off after debug_dauer_h hours, counted from the moment it is switched on; until then it stays on across a restart. /health shows the end of the window as log.debug_bis"),
+        # Bauplan Debug-Zeitfenster Stufe 1 Punkt 1 (Klaerungspunkt 2, Eigentuemer 29.09.2026 11:30:13).
+        "debug_dauer_h": (int, 1, 72, "how many hours debug stays on after it was switched on; 24 is the default. The window starts when debug is switched on and survives a restart; when it ends, debug switches itself off without a restart. Switching debug off and on again starts a new window. Saving a new value restarts the service like other settings, and the running window is then measured with the new length"),
+        # Log-Systematik E9 (Eigentuemer 26.09.2026 17:32:58): der Pruef-Kanal, live schaltbar
+        # wie debug (config_schreiben, _live_keys); Worker und Live-Engine lesen die Flagge.
+        "pruef_log": (bool, None, None, "check log channel: when on, the service confirms its own state at a fixed interval (compute threads alive, backend computing, events accepted and booked, health, watchers active) in logs/pruef.log, together with every WARNING and ERROR of all processes — reading material for the release test and for support (default off)"),
+        "pruef_takt_s": (int, 10, 3600, "interval of the check log channel in seconds; 30 is the default"),
         "clip_erzeugung_alter_min": (int, 5, 1440, "harvest: events older than this (minutes) count as ARCHIVED — Frigate has to rebuild their clip from recording segments before a single byte arrives, which takes far longer than a live download. For those the fetch waits patiently (see the cap below) instead of aborting; a measured abort during that rebuild permanently leaks one API thread and one ffmpeg inside Frigate until Frigate is restarted"),
         "clip_erzeugung_deckel_s": (int, 60, 1800, "harvest: absolute cap (seconds) on waiting for Frigate to rebuild an archived event's clip. While waiting, a cheap probe checks every stall that Frigate itself still answers — if it does, the wait continues up to this cap; if not, the fetch stops immediately. Events hitting the cap stay unbooked and are retried in a later run"),
         "clip_download_parallel": (int, 1, 8, "how many event clips may be downloaded from Frigate at the same time — for the learning run, the pass check AND the regular event analysis. This is a limit on the DOWNLOADS only: all analysis slots stay in use, they just take turns fetching, because once a clip is here Frigate is out of the picture. Raise it on a fast local link with small clips; leave it low (1-2) if Frigate sits behind a slow line, records 4K, or serves several live streams: parallel clip streaming is what makes a Frigate API stall (measured at a user's site, where four parallel 4K fetches pushed a trivial event query from 0.01 s to 13.4 s and the harvest stopped after 19 of 672 events)"),
@@ -10531,7 +11473,11 @@ class Service:
         "katalog_guete_det_min": (float, 0.05, 0.95, "catalogue bar (detection): how sure the detector has to be that this is a face at all before a learning run keeps it. Same scale and same meaning as the detection bar of the recognition side — only the value differs. Per-camera values on the calibration page win over this one"),
         "katalog_guete_pose_min": (float, 0.0, 2.0, "catalogue bar (head pose): how clearly a head has to be visible in the body pose before a learning run keeps the face. This is what keeps bins, leaves and car parts out of the learning material. Same measurement as the pose bar of the recognition side; per-camera values on the calibration page win over this one"),
         "katalog_guete_norm_min": (float, _NORM_LO, _NORM_HI, "catalogue bar (feature norm): how strong a face has to be as recognition material before a learning run keeps it. The feature norm is the reference-free quality measure the learning stock already uses (a good frontal face sits around 24). FACTORY VALUE 20 since 0.1.0.517, set after looking at real harvested material (756 pictures, median 20.7); it is the one axis that separates false detections with a high detection score from real small faces. Set it to 0 to switch the axis off. It is a separate question from the stock line further down, which decides which pictures are OFFERED to you — this one decides what the run keeps at all. Per-camera values on the calibration page win over this one"),
-        "urteil_norm_min": (float, _NORM_LO, _NORM_HI, "recognition bar (feature norm): the same measure as the catalogue bar above, but for the recognition side. FACTORY VALUE 0 = switched off. IT DOES NOT SIEVE: the value is stored and resolved per camera, but the recognition path does not measure the feature norm at all — switching that on means loading a second copy of the recognition model in the analysis worker, which is a memory decision, not a slider. Because of that the recognition side has NO feature-norm slider on the calibration page since 0.1.0.517 (a slider that changes nothing is worse than none); the axis stays here as a prepared setting. The catalogue bar above is the one that really sieves"),
+        "urteil_norm_min": (float, _NORM_LO, _NORM_HI, "recognition bar (feature norm): the same measure as the catalogue bar above, but for the recognition side. FACTORY VALUE 18.5, measured on real events. It sieves in the analysis worker: the recognition stage delivers the feature norm of every face it computes, and a face below this value gets no recognition score, so it casts no vote and gives no picture. The value is resolved per camera (a camera value wins over this one); the calibration page has no slider for it. 0 switches the sieve off"),
+        # KP2: Obergrenze = der groesste Werks-Deckel der Tuer-Bilder (core.registry.tuer_deckel_werk, dieselbe
+        # Tabelle wie der Bild-Deckel); ein laengeres Fenster koennte der Deckel nie zu Ende fuehren.
+        "tuer_fenster": (int, 0, max(_registry.SAMPLE_DECKEL_WERK.values()), "door window in frames: when a face reaches the door bar of the analysis worker for a person it has not recognised yet in this event, the worker looks at every following frame instead of only the sampled ones, for this many frames; a new such face inside the window extends it. Afterwards it continues on the normal sampling grid. FACTORY VALUE 20, measured on real events. How many door frames one event may use at most is fixed per image and equals the factory value of the frame cap (sample_deckel). 0 switches the door off"),
+        "stapel_stimmen": (int, 1, 10, "votes until recognized: how many valid faces of an event have to vote for the same person before the analysis worker names that person. A face votes for its best person when its recognition score reaches the vote bar of the analysis worker; faces that fail the size, quality, head-pose or feature-norm bars do not vote. The votes may come from anywhere in the clip, and two faces in the same picture give two votes. There is no margin rule on this path. FACTORY VALUE 3"),
         "katalog_guete_kante_min": (int, _KANTE_LO, _KANTE_HI, "catalogue bar (face size): the smallest face, in pixels of its shorter box side, a learning run keeps. FACTORY VALUE 25, the same number the recognition side has used as its vote floor since 0.1.0.400 (measured on field data: correct votes live at 30-49 px on overview cameras, the nonsense cases at 11-19 px; 70 would kill correct ones, 25 costs none). Raise it if your learning material is full of faces that are simply too small to learn anything from; 0 switches the axis off. Per-camera values on the calibration page win over this one"),
         "pruef_guete_t_min": (float, 0.0, 1.0, "catalogue check bar (recognisability): below this, the catalogue check flags a stored picture — together with a feature norm below the learning-stock floor it becomes a removal suggestion. It only looks at pictures you already have and never removes anything by itself; per-camera values on the calibration page win over this one, and pictures without a quality score are never flagged"),
         "selbstwache": (bool, None, None, "watchdog thread probes this service's own /health every 15 s; after 4 consecutive failures it exits hard so the container restart policy brings the service back (covers full web-server hangs that even the remote restart endpoint cannot reach)"),
@@ -10562,6 +11508,10 @@ class Service:
         "offen_max_min": (int, 0, 1440, "how long an event that Frigate never finished (no end_time) is held back before it is skipped for good, in minutes. 60 is the default. Such an event has no end, so the analysis reads its clip until the job deadline expires and the worker is shot — one of them can stall the whole queue. While it is held back nothing is computed and nothing is written; after this many minutes the record gets one honest line (\"skipped, event never ended in Frigate\") and the event is done. 0 keeps holding it back for ever"),
         "nachhol_versuche": (int, 0, 5, "retry attempts for events whose analysis failed (0 = off); retries are silent, they never alert"),
         "nachhol_tage": (int, 1, 3, "how far back the retry looks for failed analyses (days)"),
+        # Feldbefunde Punkt 2 (Eigentuemer 27.09.2026 15:55:57, F3 und F6).
+        "stillstand_min": (int, 10, 120, "how many minutes work may wait without one successful analysis before the service reports a standstill: /health turns red, the log gets an ERROR line and the fault channel a message. Work means events in the queue or being analysed, background and harvest jobs, and due catch-up retries; the events held back at start for the catch-up button do not count. 10 is the default. The lowest value is 10 because the check runs every 10 minutes, a smaller one could not take effect; the highest is 120 so that a real standstill never stays unreported for more than two hours"),
+        # Feldbefunde Punkte 13 und 19 (Eigentuemer 27.09.2026 16:55:34, F9; 16:56:29, F10).
+        "speicher_ruhe_min": (int, 10, 240, "how many minutes the card memory must stay free before the service uses more of it again: one more compute thread for the analysis worker, or a live watcher that was switched off for lack of card memory. The room has to be there the whole time; after a setback the time starts again from the beginning. 10 is the default. The lowest value is 10 so that the number of threads cannot swing up and down within minutes (a field system went 5, 6, 5); the highest is 240 so that a card with room again waits at most four hours"),
         "worker": (bool, None, None, "persistent analysis worker: keeps the models loaded between events (large CPU saving); off = one process per event (pre-0.1.0.38 behavior)"),
         # .528: Untergrenze 512 -> 0. 0 war bis dahin UNERREICHBAR, obwohl der
         # Dienst den Zweig hat („kein Budget gesetzt -> Politik-Regel aus, nur die
@@ -10574,6 +11524,9 @@ class Service:
         "person_backend": (list, ["cpu", "openvino:GPU", "openvino:NPU", "cuda", "migraphx"], None, "compute placement of the body-recognition embedding model — cpu is the measured default (the path is dominated by video decode, not by this model; measured 18.8 ms/image on CPU vs 3.2 ms on an Intel iGPU). The accelerator values need the matching image variant (openvino in gpu/gpu-legacy, cuda in cuda, migraphx in rocm) and an extra GPU context can starve the live watchers — move it only after measuring on your box; on failure the model falls back to CPU loudly"),
         "wanduhr_min_kerne": (int, 1, 64, "self-measurement gate: minimum PHYSICAL cores (capped by a cgroup CPU quota if one is set) required to run the boot-time timing self-measurement, which is a second full analysis process next to the live one. The default 4 is a structural floor (2 processes x 2 concurrent parts each: video decode + inference), not a measured value. On a machine below the floor the measurement is skipped loudly and run-duration forecasts keep the labeled fallback values. Lower this deliberately if you accept minutes of full load on a small machine in exchange for measured forecasts. Also used as the weak-machine floor for one first-boot default: on a fresh install below it, cpu_threads is preset to the measured physical core count — raising it widens that group too. It no longer decides the starting state of the recognition chain: since 0.1.0.541 EVERY fresh install starts with face recognition only (body and vision paths off), whatever the machine measures, and you switch them on when you want them"),
         "analyse_timeout_s": (int, 60, 3600, "watchdog for one live analysis (seconds): if the analysis has not answered by then it is presumed hung, killed, and the event is retried once immediately with a doubled deadline (in worker mode on a fresh worker, otherwise in a fresh process). The default 600 is measured, not guessed: across 1394 live analyses on the reference machine the slowest successful run took 258 s, so 600 leaves over twice that, and the doubled retry additionally carries machines up to roughly 4-5x slower before an event is handed to the silent catch-up. Raise this if you keep seeing 'analyze watchdog' lines for runs that would have finished"),
+        # Bauplan GPU-Wartefrist, Stufe 1 (F1, Eigentuemer 28.09.2026 16:16:13): Werkswert 10,
+        # Spanne 2-120; die Herleitung steht am Werkswert in load_config.
+        "inferenz_frist_s": (int, 2, 120, "deadline for ONE computation the analysis worker hands to the Intel GPU, in seconds. If the GPU does not return it in time, the worker logs an ERROR ('inference HANG'), answers the event as a GPU hang, and the service replaces the worker process, because the GPU context is not trusted after an abandoned request; the event is treated as after the analysis watchdog, the other events in the worker go back into the queue. The default 10 is measured, not guessed: on the Intel test machine the longest of 3966 computations took 128 ms; 10 s also stays above the kernel's compute preemption timeout (7.5 s), where a legitimate computation may be held back, and below the driver's own abort of a GPU request (20 s). Raise it only if 'inference HANG' lines appear on a machine that is merely slow. analyse_timeout_s stays the outer limit for the whole event"),
         # Vision detect (konzept_vision.md v2 §5): die zwei reinen Zahlen des
         # Adapters. Endpunkt/Key/Prompt liegen im `vision`-Block und werden NUR
         # auf dem Vision-Reiter bearbeitet — ein Key in dieser Tabelle stuende
@@ -10671,6 +11624,7 @@ class Service:
                 try:
                     w = (str(wert).lower() in ("1", "true", "ja", "on")) if typ is bool else typ(wert)
                 except Exception:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning (False, f''{key}': ungueltiger Wert', False)")
                     return False, f"'{key}': ungueltiger Wert", False
                 if typ is not bool and not (lo <= w <= hi):
                     return False, f"'{key}': erlaubt {lo}–{hi}", False
@@ -10685,6 +11639,15 @@ class Service:
             _fa_audit = {k: (_mask_secret(_fa_neu.get(k))
                              if k in _fauth.GEHEIME_SCHLUESSEL else _fa_neu.get(k))
                          for k in _fauth.SEKTIONS_SCHLUESSEL}
+        # Bauplan Debug-Zeitfenster Stufe 1 Punkt 2: die Einschaltzeit liegt neben debug im
+        # Store, ohne Whitelist-Feld (Klaerungspunkt 3). Neu gesetzt nur beim Wechsel von
+        # aus auf an gegenueber der LAUFENDEN Config (neues Fenster), beim Ausschalten
+        # faellt sie weg. load_config liest sie beim Start, der Zeitgeber im Betrieb.
+        if "debug" in angewendet:
+            if not angewendet["debug"]:
+                store.pop("debug_seit", None)
+            elif not self.cfg.get("debug"):
+                store["debug_seit"] = round(time.time(), 1)
         p = _config_store_pfad(self.cfg)
         _store_schreiben(p, store)      # atomar + fsync, unter _cfg_lock (5 Schreibwege)
         with open(os.path.join(self.cfg["data_dir"], "config", "config_audit.jsonl"), "a") as f:
@@ -10696,13 +11659,15 @@ class Service:
         # B6: eine Aenderung, die NUR 'debug' betrifft, wirkt LIVE und loest KEINEN
         # Neustart aus. Ohne diesen Zweig waere debug unanschaltbar: der Save-Neustart
         # liefe sofort in den Start-Reset von load_config und loeschte den Schalter,
-        # den der User gerade gesetzt hat.
+        # den der User gerade gesetzt hat. (Seit Bauplan Debug-Zeitfenster Stufe 1
+        # bleibt debug ueber einen Neustart an, solange sein Fenster laeuft; der
+        # Live-Zweig erspart den Neustart trotzdem.)
         # "Nur debug" heisst: gegenueber der LAUFENDEN Config unterscheidet sich kein
         # anderer Schluessel. Am Payload allein waere das nie zu erkennen — die Seite
         # postet IMMER alle ihre cfg-Felder (webui/app.js konfigSpeichern sammelt
         # [id^=cfg-]), nicht nur die geaenderten.
-        # Live traegt: alle Leser fragen self.cfg['debug'] JE ZEILE (debug(),
-        # _clip_dbg_senke), und beide WorkerProzess-Instanzen halten DASSELBE
+        # Live traegt: die Stufe des zentralen Logs folgt dem Schalter
+        # (core/logbuch.set_switches), und beide WorkerProzess-Instanzen halten DASSELBE
         # cfg-dict als Referenz (WorkerProzess(self.cfg, ...)) — clip_dbg wandert je
         # Job daraus in den Worker. Der Store wird trotzdem geschrieben (oben,
         # unveraendert): er bleibt die Quelle dessen, was der User zuletzt gesetzt hat.
@@ -10725,13 +11690,14 @@ class Service:
         # die globalen Register-Achsen des Katalog-Registers. Ihre Namen kommen
         # aus DER einen Quelle (core.kamerakalib.ACHSE_GLOBAL) — eine
         # abgeschriebene Liste hier waere die K3-Falle.
-        _live_keys = {"debug", *_kk_ernte.ACHSE_GLOBAL.values()}
+        # Log-Systematik (E9): Pruef-Kanal und Takt wirken live wie der Debug-Schalter.
+        _live_keys = {*LOG_SWITCH_KEYS, *_kk_ernte.ACHSE_GLOBAL.values()}
         if not geaendert and not _fa_geaendert:
             # .378: kein Wert weicht von der laufenden Config ab — ein Neustart
             # haette nichts zu laden. Wichtig fuer das Kalibrier-Uebernehmen
             # mit unveraenderten Reglern (zweiter Klick / "nur neu bewerten"):
             # ok=True laesst die Neubewertung trotzdem laufen.
-            self.log(f"CONFIG saved via UI (JSON store): {angewendet} — "
+            self.log.info(f"CONFIG saved via UI (JSON store): {angewendet} — "
                      "no effective change, no restart")
             return True, "gespeichert — keine wirksame Aenderung, kein Neustart", False
         if geaendert <= _live_keys and not _fa_geaendert:
@@ -10739,16 +11705,25 @@ class Service:
                 self.cfg[k] = angewendet[k]
             # .511: der Live-Waechter ist ein EIGENER Prozess und sieht self.cfg
             # nicht — sein Schalter kommt ueber die Flaggendatei (s.
-            # _debug_spiegeln). Ohne diese Zeile bliebe die Haelfte des Logs
-            # (die Waechter-Spur) taub gegen das Umschalten.
+            # _schalter_spiegeln). Ohne diese Zeile bliebe die Haelfte des Logs
+            # (die Waechter-Spur) taub gegen das Umschalten. Der Wechsel schreibt
+            # die Wechselzeile (V7).
+            if geaendert & LOG_SWITCH_KEYS:
+                self._schalter_spiegeln()
+            # Bauplan Debug-Zeitfenster Stufe 1 Punkt 4: die Einschaltzeit folgt dem
+            # Store, der Zeitgeber wird fuer das neue Fenster gestellt (oder abbestellt).
             if "debug" in geaendert:
-                self._debug_spiegeln()
-            self.log(f"CONFIG changed via UI (JSON store): {angewendet} — "
+                if "debug_seit" in store:
+                    self.cfg["debug_seit"] = store["debug_seit"]
+                else:
+                    self.cfg.pop("debug_seit", None)
+                self._debug_zeitgeber_stellen()
+            self.log.info(f"CONFIG changed via UI (JSON store): {angewendet} — "
                      f"applied live, no restart")
             return True, f"gespeichert: {angewendet} — applied live, no restart", False
         # Die Auth-Felder gehen MASKIERT in die Logzeile (_fa_audit) — der
         # Dienst-Log ist die Datei, die Tester in Diagnose-Buendeln mitschicken.
-        self.log(f"CONFIG changed via UI (JSON store): {angewendet}"
+        self.log.info(f"CONFIG changed via UI (JSON store): {angewendet}"
                  f"{' + frigate auth ' + json.dumps(_fa_audit, ensure_ascii=False) if _fa_audit else ''}"
                  f" — restart after the current analysis")
 
@@ -10810,11 +11785,14 @@ class Service:
             if kind != "cpu":
                 return False, ""
             variante = os.environ.get("SUSLIK_VARIANT", "")
-            if variante == "cpu":
+            from core import livewache as _lw_cpu            # noqa: PLC0415
+            if variante == "cpu" or _lw_cpu.cpu_angefordert():
                 # CPU-Runde 17.08. (User-Go nach Messung cpu_live_haustuer_
                 # 20260817): die cpu-VARIANTE ist nicht mehr gesperrt,
                 # sondern BEGRENZT (ein Waechter, ehrliche 1-2-s-Erwartung)
-                # — dasselbe Praedikat wie livewached._cpu_lage.
+                # — dasselbe Praedikat wie livewached._cpu_lage. Feldbefunde
+                # Punkt 18: ein ANGEFORDERTER CPU-Weg auf einer GPU-Variante
+                # ebenso — er ist kein Rueckfall.
                 return False, ""
             elif variante:
                 grund = (f"Live watchers need GPU recognition, but this "
@@ -10826,7 +11804,7 @@ class Service:
                          "detector backend resolved to CPU on this machine")
             return True, grund
         except Exception as e:
-            self.log(f"!! live: backend check failed ({type(e).__name__}: "
+            self.log.error(f"!! live: backend check failed ({type(e).__name__}: "
                      f"{e}) — treating live as unavailable (fail-closed, "
                      f"same direction as the engine lock)")
             return True, ("Live watchers unavailable: the backend check "
@@ -10849,7 +11827,7 @@ class Service:
             self.live_quittungen_uebernehmen(status)
         gesperrt, sperr_grund = self._live_gesperrt()
         _auftrag, _auftraege, ks_ui = _lw.status_fuer_ui(status, frisch)
-        _d, guards = _lw.guards_lesen(self.cfg, lambda z: None)
+        _d, guards = _lw.guards_lesen(self.cfg, _logbuch.NULL)
         versteckt = set(_lw.versteckt_lesen(self.cfg))
         briefe = _lw.steckbriefe_lesen(self.cfg)
         kacheln = []
@@ -10884,7 +11862,7 @@ class Service:
         from core import livewache as _lw
         status, frisch = _lw.status_lesen(self.cfg)
         gesperrt, sperr_grund = self._live_gesperrt()
-        _d, guards = _lw.guards_lesen(self.cfg, lambda z: None)
+        _d, guards = _lw.guards_lesen(self.cfg, _logbuch.NULL)
         aus = {"engine": "ok" if frisch else "not running", "watchers": {}}
         if status and status.get("engine") not in (None, "ok"):
             aus["engine"] = str(status.get("engine"))
@@ -10962,9 +11940,10 @@ class Service:
                 if quota != "max":
                     limit = round(int(quota) / int(periode), 1)
             except Exception:
-                pass
+                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
             return (round(max(kerne, 0.0), 2), limit)
         except Exception:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
             return None
 
     def _live_cpu_begrenzt(self):
@@ -10973,10 +11952,15 @@ class Service:
         (dann greift ohnehin _live_gesperrt)."""
         try:
             from face_audit import resolve_backend
+            from core import livewache as _lw_cpu            # noqa: PLC0415
             kind, _dev = resolve_backend()
+            # Feldbefunde Punkt 18: ein angeforderter CPU-Weg auf einer GPU-Variante
+            # ist ebenso begrenzt, nicht gesperrt (dasselbe Praedikat wie livewached).
             return (kind == "cpu"
-                    and os.environ.get("SUSLIK_VARIANT", "") == "cpu")
+                    and (os.environ.get("SUSLIK_VARIANT", "") == "cpu"
+                         or _lw_cpu.cpu_angefordert()))
         except Exception:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning False")
             return False
 
     def live_schalter(self, kamera, enabled):
@@ -10993,7 +11977,7 @@ class Service:
         cpu_warnung = ""
         if enabled and self._live_cpu_begrenzt():
             from core.livewached import CPU_EMPFOHLEN
-            _d, _guards = _lw.guards_lesen(self.cfg, lambda z: None)
+            _d, _guards = _lw.guards_lesen(self.cfg, _logbuch.NULL)
             an = [k for k, g in _guards.items()
                   if g["enabled"] and k != kamera]
             if len(an) >= CPU_EMPFOHLEN:
@@ -11023,14 +12007,14 @@ class Service:
         # Waechter AUS (er ist es ohnehin schon), bleibt der Eintrag stehen —
         # der Dienst holt ihn dann spaeter zurueck.
         if ok and enabled and _lw.reduziert_entfernen(self.cfg, kamera):
-            self.log(f"live watcher {kamera} re-enabled by user — no longer "
+            self.log.warning(f"live watcher {kamera} re-enabled by user — no longer "
                      f"counted as reduced")
         if ok and enabled and _rm.get("grund"):
             # Anstoss NACH dem Lock (live_test_starten braucht es teils
             # selbst). Scheitert er, bleibt enabled stehen und der Nutzer
             # bekommt die EINE Handlung genannt statt einer Sackgasse.
             t_ok, t_msg = self.live_test_starten(kamera)
-            self.log(f"live {kamera}: stale source test ({_rm['grund']}) — "
+            self.log.warning(f"live {kamera}: stale source test ({_rm['grund']}) — "
                      f"auto re-test {'started' if t_ok else 'NOT started'}"
                      f" ({t_msg})")
             if not t_ok:
@@ -11091,7 +12075,7 @@ class Service:
                 if not offen:
                     return
                 if len(offen) < len(cams):
-                    self.log(f"stream profiles: {len(offen)} of {len(cams)} "
+                    self.log.info(f"stream profiles: {len(offen)} of {len(cams)} "
                              f"camera(s) still unknown — probing only those")
                 for name in offen:
                     url = _lw.proxy_url(self.cfg, name)
@@ -11099,10 +12083,10 @@ class Service:
                         return
                     try:
                         s = _lw.steckbrief_ermitteln(url, versuche=1,
-                                                     log=lambda z: None)
+                                                     log=_logbuch.NULL)
                         _lw.steckbrief_schreiben(
                             self.cfg, name, dict(s, ts=round(time.time(), 1)))
-                        self.log(f"stream profile {name}: "
+                        self.log.info(f"stream profile {name}: "
                                  f"{s.get('breite')}x{s.get('hoehe')}"
                                  + (f" @ {s.get('fps')} fps" if s.get("fps")
                                     else "")
@@ -11122,11 +12106,11 @@ class Service:
                         _lw.steckbrief_schreiben(
                             self.cfg, name,
                             {"fehler": type(e).__name__, "ts": round(time.time(), 1)})
-                        self.log(f"stream profile {name}: "
+                        self.log.warning(f"stream profile {name}: "
                                  f"{type(e).__name__} — skipped")
                     time.sleep(1.0)
             except Exception as e:
-                self.log(f"!! stream profile run failed: "
+                self.log.error(f"!! stream profile run failed: "
                          f"{type(e).__name__}: {e}")
         threading.Thread(target=lauf, name="steckbriefe",
                          daemon=True).start()
@@ -11152,23 +12136,23 @@ class Service:
 
         def lauf():
             try:
-                self.log(f"person model: migrating backbone "
+                self.log.info(f"person model: migrating backbone "
                          f"{st.get('backbone') or _pm.BACKBONE_ALT} -> "
                          f"{_pm.BACKBONE_STANDARD} (one-time re-training)")
                 neu = _pm.trainieren(self.cfg["data_dir"])
                 ei = neu.get("eichung") or {}
-                self.log(f"person model: backbone migration done — "
+                self.log.info(f"person model: backbone migration done — "
                          f"{neu.get('modell')}, threshold "
                          f"{neu.get('schwelle')} ({ei.get('art', '?')})")
             except Exception as e:
-                self.log(f"!! person model backbone migration failed: "
+                self.log.error(f"!! person model backbone migration failed: "
                          f"{type(e).__name__}: {e}")
                 try:
                     _pm.fehler_vermerken(self.cfg["data_dir"],
                                          f"backbone migration: "
                                          f"{type(e).__name__}: {e}")
                 except Exception:
-                    pass
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         threading.Thread(target=lauf, name="backbone-migration",
                          daemon=True).start()
 
@@ -11221,11 +12205,11 @@ class Service:
                         # zurueck, Grund steht sichtbar in test_fehler. Ein
                         # LAUFENDER Waechter (gueltiger Test) bleibt an: sein
                         # transienter Fehl-Retest darf ihn nicht stoppen.
-                        _gn = _lw.guard_normalisiert(g, lambda z: None, kamera)
+                        _gn = _lw.guard_normalisiert(g, _logbuch.NULL, kamera)
                         if g.get("enabled") and not _lw.test_gueltig(_gn)[0]:
                             g["enabled"] = False
                             geaendert.append(f"{kamera}:enabled_zurueck")
-                            self.log(f"live {kamera}: source check FAILED "
+                            self.log.error(f"live {kamera}: source check FAILED "
                                      f"({g['test_fehler']['fehler'][:80]}) — "
                                      f"switching the watcher back off; fix "
                                      f"the source and enable it again")
@@ -11240,7 +12224,7 @@ class Service:
             if geaendert:
                 _store_schreiben(_config_store_pfad(self.cfg), store)
                 self.cfg["live"] = store["live"]
-                self.log(f"LIVE: engine job results stored "
+                self.log.debug(f"LIVE: engine job results stored "
                          f"({', '.join(geaendert)})")
 
     def _live_nachtesten(self, status):
@@ -11260,8 +12244,9 @@ class Service:
         if _lw.kommando_unverarbeitet(self.cfg, status) is not None:
             return                      # ein Kommando haengt bereits
         try:
-            _d, guards = _lw.guards_lesen(self.cfg, lambda z: None)
+            _d, guards = _lw.guards_lesen(self.cfg, _logbuch.NULL)
         except Exception:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
             return
         for kamera, g in sorted(guards.items()):
             if not g.get("enabled"):
@@ -11275,7 +12260,7 @@ class Service:
             self._live_nachtest_zaehler[kamera] = zaehler + 1
             with self._live_cmd_lock:
                 _lw.kommando_schreiben(self.cfg, "test", kamera)
-            self.log(f"live {kamera}: source test queued automatically "
+            self.log.info(f"live {kamera}: source test queued automatically "
                      f"(attempt {zaehler + 1}/2) — watcher starts once it "
                      f"passes")
             return                      # EINE Kamera je Takt
@@ -11296,7 +12281,7 @@ class Service:
                              f"{_LIVE_HELFER_FRIST_S:.0f}s (thread died?) — "
                              f"slot freed"),
                     "ts": jetzt}
-                self.log(f"!! LIVE helper job {k}: stale after "
+                self.log.error(f"!! LIVE helper job {k}: stale after "
                          f"{_LIVE_HELFER_FRIST_S:.0f}s — marked failed, "
                          f"slot freed")
 
@@ -11385,7 +12370,7 @@ class Service:
                         g.pop("test_fehler", None)
                         _store_schreiben(_config_store_pfad(self.cfg), store)
                         self.cfg["live"] = store["live"]
-                        self.log(f"LIVE source test {kamera}: stored "
+                        self.log.info(f"LIVE source test {kamera}: stored "
                                  f"(helper process)")
                     elif not erg.get("ok"):
                         # UI-M3: auch der Helfer-Fehlschlag wird sichtbar
@@ -11452,7 +12437,7 @@ class Service:
             self.live_quittungen_uebernehmen(status)
         gesperrt, sperr_grund = self._live_gesperrt()
         auftrag, auftraege, _ks_ui = _lw.status_fuer_ui(status, frisch)
-        _d, guards = _lw.guards_lesen(self.cfg, lambda z: None)
+        _d, guards = _lw.guards_lesen(self.cfg, _logbuch.NULL)
         zustaende = {}
         for name, g in guards.items():
             ks = ((status or {}).get("kacheln") or {}).get(name)
@@ -11492,6 +12477,9 @@ class Service:
 
         def spawn():
             env = dict(os.environ)
+            # E6/D11: die Startzeile der Engine nennt ihre Startnummer seit Dienststart.
+            self._live_starts = int(getattr(self, "_live_starts", 0) or 0) + 1
+            env["SUSLIK_STARTNUMMER"] = str(self._live_starts)
             cp = self.config_pfad or os.path.join(HERE, "verifyd.yaml")
             env["VERIFYD_CONFIG"] = (cp if os.path.isabs(cp)
                                      else os.path.join(HERE, cp))
@@ -11509,6 +12497,7 @@ class Service:
             try:
                 return _live_guards_aktiv(self.cfg)
             except Exception:
+                _logbuch.swallowed(_log, _logbuch.WARNING, "returning False")
                 return False
 
         def gesperrt():
@@ -11522,7 +12511,7 @@ class Service:
         def stoerung(text):
             from core import melden
             for fz in melden.stoerung_melden(self.cfg, text) or []:
-                self.log(f"!! live supervisor notice channel failed: {fz}")
+                self.log.error(f"!! live supervisor notice channel failed: {fz}")
 
         a = _la.Aufsicht(self.log, spawn_fn=spawn, guards_aktiv_fn=guards_aktiv,
                          gesperrt_fn=gesperrt,
@@ -11541,7 +12530,7 @@ class Service:
                 try:
                     a.takt()
                 except Exception as e:
-                    self.log(f"!! live supervisor tick failed: "
+                    self.log.error(f"!! live supervisor tick failed: "
                              f"{type(e).__name__}: {e}")
                 # Konzept-QS-Blocker 28.08.: die Quittungs-Uebernahme hing
                 # als EINZIGER Store-Schreibweg an den /live-HTTP-Handlern —
@@ -11557,14 +12546,14 @@ class Service:
                         self.live_quittungen_uebernehmen(_st)
                         self._live_nachtesten(_st)
                 except Exception as e:
-                    self.log(f"!! live result pickup failed: "
+                    self.log.error(f"!! live result pickup failed: "
                              f"{type(e).__name__}: {e}")
         threading.Thread(target=lauf, name="live-aufsicht", daemon=True).start()
         # sys.exit (SIGTERM-Handler) laeuft durch atexit — execv NICHT, dort
         # ruft neustart() den Stopp explizit (Muster worker_stoppen).
         import atexit
         atexit.register(self.live_aufsicht_stoppen)
-        self.log("live supervisor started (engine autostarts once a watcher "
+        self.log.info("live supervisor started (engine autostarts once a watcher "
                  "is enabled)")
 
     def live_aufsicht_stoppen(self):
@@ -11577,7 +12566,7 @@ class Service:
         try:
             a.stop("service stop")
         except Exception as e:
-            self.log(f"!! live supervisor stop failed: {type(e).__name__}: {e}")
+            self.log.error(f"!! live supervisor stop failed: {type(e).__name__}: {e}")
 
     def live_aufsicht_status(self):
         """Anzeige-Block des Supervisors (Live-Seite + /health) — EINE Quelle.
@@ -11592,6 +12581,7 @@ class Service:
         try:
             return a.status()
         except Exception as e:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning {'laeuft': False, 'standalone': False, 'text': f'supervis...")
             return {"laeuft": False, "standalone": False,
                     "text": f"supervisor status failed: {type(e).__name__}"}
 
@@ -11644,7 +12634,7 @@ class Service:
             f.write(json.dumps({"ts": round(time.time(), 1), "vision": audit},
                                ensure_ascii=False) + "\n")
             f.flush()
-        self.log("VISION config changed via UI (key + endpoint masked)")
+        self.log.info("VISION config changed via UI (key + endpoint masked)")
         return True, "saved"
 
     def vision_test(self, d):
@@ -11676,7 +12666,7 @@ class Service:
         os.makedirs(os.path.dirname(p), exist_ok=True)
         _store_schreiben(p, prot)          # atomar + fsync, gleicher Griff
         stufe = next((s for s in prot["stufen"] if s["nr"] == nr), None)
-        self.log(f"VISION test{f' step {nr}' if nr else ''}: "
+        self.log.info(f"VISION test{f' step {nr}' if nr else ''}: "
                  f"{(stufe or prot)['ampel']}")
         if nr:
             return True, {"stufe": stufe, "weiter": bool(weiter),
@@ -11697,6 +12687,7 @@ class Service:
             with open(os.path.join(self.cfg["data_dir"], "state", name)) as f:
                 return json.load(f)
         except Exception:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning {}")
             return {}
 
     def _vision_modelle(self, block):
@@ -11729,7 +12720,7 @@ class Service:
         p = os.path.join(self.cfg["data_dir"], "state", "vision_modelle.json")
         os.makedirs(os.path.dirname(p), exist_ok=True)
         _store_schreiben(p, prot)
-        self.log(f"VISION key check: {prot['ampel']} "
+        self.log.info(f"VISION key check: {prot['ampel']} "
                  f"({len(prot.get('modelle') or [])} models)")
         # Die Liste faehrt MIT der Antwort zurueck (Live-Fund 08.08.): die Seite
         # zeigt sie, ohne neu zu laden — sonst gingen die gerade eingetippten
@@ -11751,6 +12742,7 @@ class Service:
                                    "status.json")) as f:
                 return sorted((json.load(f).get("personen") or {}))
         except Exception:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning []")
             return []
 
     def _galerie_person_ok(self, person):
@@ -11842,7 +12834,7 @@ class Service:
         if not [z for z in zellen if z]:
             return False, "nothing to approve"
         m = _vg.abnehmen(dd, person, zellen, int(groesse), bestand=len(k))
-        self.log(f"VISION gallery approved: {person} {m['groesse']} cells "
+        self.log.warning(f"VISION gallery approved: {person} {m['groesse']} cells "
                  f"({m['luecken']} empty, {m['geliehen']} borrowed)")
         return True, (f"approved — {m['groesse']} cells copied into the "
                       "gallery folder")
@@ -11870,7 +12862,7 @@ class Service:
         store["vision"] = block
         _store_schreiben(_config_store_pfad(self.cfg), store)
         self.cfg["vision"] = block
-        self.log(f"VISION detect switched {'on' if an else 'off'}")
+        self.log.info(f"VISION detect switched {'on' if an else 'off'}")
         return True, "on" if an else "off"
 
     # ------------------------------------------- Vision-Urteilspfad (V4, §7)
@@ -11939,7 +12931,7 @@ class Service:
                 "prompt_hash": (hashlib.sha1(_pr.encode()).hexdigest()[:10]
                                 if _pr else "std")}
         except Exception:
-            pass                      # Ausweis ist Mitnahme, nie Voraussetzung
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")                      # Ausweis ist Mitnahme, nie Voraussetzung
         return r
 
     def _vision_galerien(self):
@@ -11974,7 +12966,7 @@ class Service:
                 schon = pk in self._kette_stumm
                 self._kette_stumm[pk] = jetzt
             if not schon:
-                self.log(f"VISION auto-run off (vision_pfad=aus) — pass {pk} "
+                self.log.info(f"VISION auto-run off (vision_pfad=aus) — pass {pk} "
                          f"will not be judged automatically")
             return
         with self._vision_lock:
@@ -12006,7 +12998,7 @@ class Service:
                 self.kette_stufe("vision"),
                 lambda: self._gesicht_pass_bestaetigt(pass_key=pass_key)
                 ) == "gesicht_bestaetigt":
-            self.log(f"VISION run for pass {pass_key} not started — face path "
+            self.log.info(f"VISION run for pass {pass_key} not started — face path "
                      f"confirmed the whole pass (vision_pfad=nur_wenn_gesicht_leer)")
             return
         self.vision_urteil_anstossen(pass_key)
@@ -12040,10 +13032,10 @@ class Service:
         try:
             geschlossen = self.vision_waisen()
         except Exception as e:
-            self.log(f"VISION orphan check failed: {e}")
+            self.log.error(f"VISION orphan check failed: {e}")
             return 0
         if geschlossen:
-            self.log(f"VISION: closed {len(geschlossen)} unfinished run(s) "
+            self.log.error(f"VISION: closed {len(geschlossen)} unfinished run(s) "
                      "from before the restart — they were left without a "
                      "result and would have blocked their walk-through")
         return len(geschlossen)
@@ -12063,7 +13055,7 @@ class Service:
                 self._vision_flug = _vu.Einfachlauf()
             lage = self._vision_flug.annehmen(pass_key)
         if lage == "verworfen":
-            self.log(f"VISION run for pass {pass_key} discarded "
+            self.log.warning(f"VISION run for pass {pass_key} discarded "
                      f"(one running, one queued)")
             return False, "a vision run is already going for this pass"
         if lage == "wartet":
@@ -12083,7 +13075,7 @@ class Service:
         try:
             self._vision_lauf(pass_key, manuell, lauf_regeln)
         except Exception as e:
-            self.log(f"VISION run error ({pass_key}): {e}")
+            self.log.error(f"VISION run error ({pass_key}): {e}")
         with self._vision_lock:
             self._vision_lebt.discard(str(pass_key))
             naechster = self._vision_flug.fertig()
@@ -12112,6 +13104,7 @@ class Service:
             try:
                 roh, meta = _vis.anfrage(blk, teile, deadline_s=tiefe)
             except _vis.VisionFehler as ex:
+                _logbuch.swallowed(_log, _logbuch.WARNING, "returning _vis.urteil_leer(...)")
                 return _vis.urteil_leer(
                     grund="timeout" if ex.code == "deadline" else "fehler",
                     backend=_vis.kachel(blk.get("kachel"))["label"],
@@ -12128,7 +13121,7 @@ class Service:
         # Support-Ausschnitte. Wer WER erkannt wurde, steht im Protokoll im
         # Datenordner und in der Oberflaeche, nicht hier.
         gal = self._vision_galerien()
-        self.log(f"VISION run start: pass={pass_key} "
+        self.log.info(f"VISION run start: pass={pass_key} "
                  f"backend={_reg.endpunkt_anzeige(_vis.endpunkt_wirksam(blk)) or 'n/a'} "
                  f"galleries={len(gal)} manual={bool(manuell)}")
         z = _vu.pass_urteilen(self.cfg["data_dir"], pass_key, gal,
@@ -12141,7 +13134,7 @@ class Service:
         _rl = z.get("regeln_lauf") or {}
         _zellen = _rl.get("bilder_wirksam")
         _gew = _rl.get("bilder_je_pass")
-        self.log(f"VISION run end: pass={pass_key} "
+        self.log.info(f"VISION run end: pass={pass_key} "
                  f"{'verdict' if z.get('person') else 'no verdict'} "
                  f"votes={z.get('voten')} requests={z.get('anfragen')} "
                  f"cells={_zellen if _zellen is not None else '?'}"
@@ -12151,14 +13144,14 @@ class Service:
         try:
             art = self._vision_melden(z)          # optional, beide Default AUS
             if art:
-                self.log(f"VISION notice sent: pass={pass_key} kind={art}")
+                self.log.info(f"VISION notice sent: pass={pass_key} kind={art}")
         except Exception as e:
-            self.log(f"VISION notice failed: {e}")   # nie urteils-relevant
+            self.log.error(f"VISION notice failed: {e}")   # nie urteils-relevant
         if z.get("stoerung"):
             # Stiller Ausfall (§10 Stufe 3): DIE Fehlerklasse dieses Pfades.
             # Watchdog-Konvention wie beim Fehlerserien-Waechter, damit es in
             # derselben Log-Suche auftaucht.
-            self.log(f"STOERUNG (vision-serie): {z['ausfall_serie']} vision "
+            self.log.error(f"DISTURBANCE (vision-serie): {z['ausfall_serie']} vision "
                      f"runs in a row without a verdict — last reason: "
                      f"{z.get('grund') or 'unknown'}")
         return z
@@ -12269,6 +13262,7 @@ class Service:
                     try:
                         r = json.loads(ln)
                     except Exception:
+                        _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                         continue
                     if r.get("eid") and (r.get("start") or r.get("ts") or 0) >= grenze:
                         by_eid[r["eid"]] = r
@@ -12394,7 +13388,7 @@ class Service:
                       "are collected along the way, this takes a few minutes")
 
     def _nachanalyse_thread(self, pass_key, eids):
-        self.log(f"RE-ANALYSIS start: pass={pass_key} events={len(eids)}")
+        self.log.info(f"RE-ANALYSIS start: pass={pass_key} events={len(eids)}")
         try:
             for eid in eids:
                 self.process_safe(eid, nachhol=1, koerper=True,
@@ -12405,7 +13399,7 @@ class Service:
         finally:
             with self._vision_lock:
                 self._nachanalyse["laeuft"] = False
-            self.log(f"RE-ANALYSIS end: pass={pass_key}")
+            self.log.info(f"RE-ANALYSIS end: pass={pass_key}")
 
     def config_wiederherstellen(self, raw):
         """Config-Store aus einer hochgeladenen JSON zurueckspielen (UI 'Restore configuration').
@@ -12416,6 +13410,7 @@ class Service:
         try:
             d = json.loads(raw)
         except Exception:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning (False, 'not valid JSON — is this a suslik config backup?')")
             return False, "not valid JSON — is this a suslik config backup?"
         if not isinstance(d, dict):
             return False, "config backup must be a JSON object"
@@ -12471,7 +13466,7 @@ class Service:
             for old in sorted(_glob.glob(p + ".bak-*"))[:-10]:
                 os.remove(old)
         except Exception:
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         try:
             with open(os.path.join(self.cfg["data_dir"], "config", "config_audit.jsonl"), "a") as f:
                 f.write(json.dumps({"ts": round(time.time(), 1),
@@ -12479,8 +13474,8 @@ class Service:
                                                 "backup": os.path.basename(bak) if bak else None}},
                                    ensure_ascii=False) + "\n")
         except Exception:
-            pass
-        self.log(f"CONFIG RESTORED via UI ({len(bereinigt)} keys, {len(verworfen)} rejected, "
+            _logbuch.swallowed(_log, _logbuch.ERROR, "ignored", throttle=False)
+        self.log.error(f"CONFIG RESTORED via UI ({len(bereinigt)} keys, {len(verworfen)} rejected, "
                  f"backup {os.path.basename(bak) if bak else '—'}) — restart after the current analysis")
         self.neustart("Config-Restore")
         msg = f"restored {len(bereinigt)} settings"
@@ -12534,7 +13529,7 @@ class Service:
         else:
             self.neustart("Full-Restore")
         _sh.rmtree(ziel, ignore_errors=True)
-        self.log(f"FULL RESTORE via UI: {msg} (previous state kept as "
+        self.log.info(f"FULL RESTORE via UI: {msg} (previous state kept as "
                  f"*.pre-restore-{stempel})")
         return True, msg + " — service is restarting, reload in ~1 min"
 
@@ -12553,7 +13548,7 @@ class Service:
         # inhaltlich aendert sich nichts, der eine execv nimmt den juengsten
         # Config-Stand ohnehin mit.
         if getattr(self, "_neustart_laeuft", False):
-            self.log(f"restart already scheduled — ignoring duplicate request"
+            self.log.warning(f"restart already scheduled — ignoring duplicate request"
                      f"{(' (' + grund + ')') if grund else ''}")
             return
         self._neustart_laeuft = True               # E2 unveraendert: Ernte-Schleife startet ab
@@ -12575,16 +13570,16 @@ class Service:
             # nicht durchgreift, ist keiner.
             gehalten = self.lock.acquire(timeout=NEUSTART_LOCK_FRIST_S)
             if not gehalten:
-                self.log(f"restart: analysis still holds the lock after "
+                self.log.info(f"restart: analysis still holds the lock after "
                          f"{NEUSTART_LOCK_FRIST_S:.0f}s — killing the worker "
                          f"to break the jam")
                 self.worker_hart_stoppen()
                 gehalten = self.lock.acquire(timeout=NEUSTART_LOCK_NOTFRIST_S)
                 if not gehalten:
-                    self.log("restart: going ahead WITHOUT the analysis lock — "
+                    self.log.info("restart: going ahead WITHOUT the analysis lock — "
                              "a stuck analysis must never block a restart")
             try:
-                self.log(f"restarting now via re-exec{(': ' + grund) if grund else ''}")
+                self.log.info(f"restarting now via re-exec{(': ' + grund) if grund else ''}")
                 # .502: im Klemmfall waere stop() die naechste Falle — es geht
                 # ueber genau das Job-Lock, das der haengende Job haelt. Ohne
                 # Sperre also hart schiessen, mit Sperre geordnet beenden.
@@ -12612,7 +13607,7 @@ class Service:
                         _LOGDATEI.zuruecksetzen()
                     os.execv(sys.executable, [sys.executable, VERIFYD_PFAD, *sys.argv[1:]])
                 except Exception as e:                 # re-exec scheiterte: Prozess NICHT lebend lassen,
-                    self.log(f"re-exec failed ({type(e).__name__}: {e}); os._exit(0), supervisor takes over")
+                    self.log.warning(f"re-exec failed ({type(e).__name__}: {e}); os._exit(0), supervisor takes over")
                     os._exit(0)                        # ein evtl. Supervisor holt ihn dann doch hoch
             finally:
                 # execv kommt hier nie an; der Zweig deckt nur einen Fehler VOR
@@ -12689,11 +13684,11 @@ class Service:
         try:
             antwort = d.job({"typ": "ping"}, 180)
         except Exception as e:                             # noqa: BLE001
-            self.log(f"worker service did not come up at boot "
+            self.log.warning(f"worker service did not come up at boot "
                      f"({type(e).__name__}: {e}) — it will start with the first job")
             return False
         if not (antwort or {}).get("ok"):
-            self.log("worker service did not answer its boot ping — it will start "
+            self.log.warning("worker service did not answer its boot ping — it will start "
                      "with the first job")
             return False
         return True
@@ -12755,7 +13750,7 @@ class Service:
                 with self._plaetze.platz("start proof", art="bg",
                                          timeout_s=_platz_frist) as nr:
                     if nr is None:
-                        self.log(f"short start proof ({grund}) skipped: no free "
+                        self.log.warning(f"short start proof ({grund}) skipped: no free "
                                  f"analysis slot within {_platz_frist:.0f}s "
                                  f"(a busy service is itself the answer that it "
                                  f"is computing)")
@@ -12774,7 +13769,7 @@ class Service:
                     # Klick) starten einen toten Worker weiterhin — nur diese
                     # Wache nicht, sie hat nichts zu beweisen, wenn nichts laeuft.
                     if not self._worker_warm():
-                        self.log(f"short start proof ({grund}) skipped: no live "
+                        self.log.warning(f"short start proof ({grund}) skipped: no live "
                                  f"worker process — a watch does not start one, "
                                  f"the next real job does")
                         return "nicht_gelaufen"
@@ -12782,11 +13777,11 @@ class Service:
                                     _job_frist,
                                     puls=self._plaetze.puls_fuer(nr))
             except Exception as e:                         # noqa: BLE001
-                self.log(f"short start proof ({grund}) failed to run: "
+                self.log.error(f"short start proof ({grund}) failed to run: "
                          f"{type(e).__name__}: {e}")
                 return "fehler"
             if antwort is None:
-                self.log(f"short start proof ({grund}) got NO answer — the worker "
+                self.log.error(f"short start proof ({grund}) got NO answer — the worker "
                          f"could not prove itself; the next job starts a fresh "
                          f"process")
                 return "fehler"
@@ -12796,10 +13791,10 @@ class Service:
                 # nicht stillschweigend weiter Namen liefern. Er hat sich drueben
                 # bereits den Job als Fehler gebucht; hier steht die Zeile, die ein
                 # Betreiber im Dienst-Log findet.
-                self.log(f"STOERUNG (selbstbeweis): the worker FAILED its short "
+                self.log.error(f"DISTURBANCE (selbstbeweis): the worker FAILED its short "
                          f"start proof ({grund}): {antwort.get('fehler')}")
                 return "fehler"
-            self.log(f"short start proof ({grund}): {sp.get('stand')} — bound to "
+            self.log.info(f"short start proof ({grund}): {sp.get('stand')} — bound to "
                      f"{sp.get('geraet')}, {sp.get('personen_mit_vektoren')} "
                      f"person(s) with vectors"
                      + (f", notes: {'; '.join(sp.get('befunde') or [])}"
@@ -12815,7 +13810,7 @@ class Service:
             except Exception as e:                         # noqa: BLE001
                 # Ein Rueckruf, der scheitert, darf die Probe nicht mitreissen —
                 # sie hat ihre Auskunft schon ins Log geschrieben.
-                self.log(f"short start proof ({grund}): the follow-up failed "
+                self.log.error(f"short start proof ({grund}): the follow-up failed "
                          f"({type(e).__name__}: {e})")
 
         threading.Thread(target=_lauf, daemon=True, name="startprobe").start()
@@ -12872,7 +13867,7 @@ class Service:
             self._sofortproben = int(getattr(self, "_sofortproben", 0) or 0) + 1
             self._sofortprobe_ergebnis = "laeuft"
             n = self._sofortproben
-        self.log(f"analysis returned nothing [{pfad}] — the worker has to prove "
+        self.log.warning(f"analysis returned nothing [{pfad}] — the worker has to prove "
                  f"itself right now (post-failure probe #{n})"
                  + (f" (+{still} more occasions suppressed in the last "
                     f"{int(abstand)}s)" if still else ""))
@@ -12914,7 +13909,7 @@ class Service:
         self._sofortprobe_ergebnis = ergebnis
         if ergebnis != "fehler":
             if ergebnis == "ok":
-                self.log("post-failure probe ok — the failure was event-specific, "
+                self.log.warning("post-failure probe ok — the failure was event-specific, "
                          "no shot")
             return False
         _vorher = float(getattr(self, "_serie_schuss_ts", 0.0) or 0.0)
@@ -12973,6 +13968,7 @@ class Service:
         try:
             return bool(w.zustand()["laeuft"])
         except Exception:                     # ein Leser darf nie den Klick werfen
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning False")
             return False
 
     @property
@@ -13030,7 +14026,7 @@ class Service:
                 if obj.kill_hart(quelle=quelle):
                     n += 1
             except Exception:
-                pass
+                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         return n
 
     def _ernte_abholer_zahl(self):
@@ -13107,7 +14103,7 @@ class Service:
         dann in der Job-Schlange des Workers statt hier —, nur unsichtbar."""
         w = self._personwork()
         if w is None:                         # Legacy-Modus (`worker: false`)
-            self.log("body judgment skipped: the persistent worker is disabled "
+            self.log.warning("body judgment skipped: the persistent worker is disabled "
                      "(config 'worker'), and the body path runs only as a job")
             return None
         with self._pw_prio_lock:
@@ -13117,7 +14113,7 @@ class Service:
                     self._plaetze.platz(job.get("eid") or "body judgment",
                                         art="live", timeout_s=timeout_s) as nr:
                 if nr is None:
-                    self.log(f"body judgment: no free background slot within "
+                    self.log.error(f"body judgment: no free background slot within "
                              f"{timeout_s}s — no verdict for this event "
                              f"(typ={job.get('typ')})")
                     return None
@@ -13147,7 +14143,7 @@ class Service:
         eine Verklemmung, die es vor .536 nicht geben konnte."""
         w = self._personwork()
         if w is None:                         # Legacy-Modus (`worker: false`)
-            self.log(f"body/person job skipped: the persistent worker is disabled "
+            self.log.warning(f"body/person job skipped: the persistent worker is disabled "
                      f"(config 'worker') — typ={job.get('typ')}")
             return None
         for v in range(1, versuche + 1):
@@ -13163,16 +14159,16 @@ class Service:
                                         or "body/person job",
                                         art="bg", timeout_s=timeout_s) as nr:
                 if nr is None:
-                    self.log(f"body/person job: no free background slot within "
+                    self.log.warning(f"body/person job: no free background slot within "
                              f"{timeout_s}s — skipped (typ={job.get('typ')})")
                     return None
                 antwort = w.job(job, timeout_s,
                                 puls=self._plaetze.puls_fuer(nr))
             if antwort is not None:
                 return antwort
-            self.log(f"personwork batch job attempt {v}/{versuche} died "
+            self.log.error(f"personwork batch job attempt {v}/{versuche} died "
                      f"(typ={job.get('typ')}, eid={job.get('eid') or job.get('lauf_id')})")
-        self.log(f"personwork job POISONED after {versuche} attempts — skipped "
+        self.log.error(f"personwork job POISONED after {versuche} attempts — skipped "
                  f"(typ={job.get('typ')}, eid={job.get('eid') or job.get('lauf_id')})")
         return None
 
@@ -13303,7 +14299,7 @@ class Service:
                     "labeled as such")
                 if not getattr(self, "_wanduhr_karte_gemeldet", False):
                     self._wanduhr_karte_gemeldet = True
-                    self.log(f"wanduhr: measurement SKIPPED — {self._wanduhr_skip}")
+                    self.log.warning(f"wanduhr: measurement SKIPPED — {self._wanduhr_skip}")
                 return False
         min_kerne = int(self.cfg.get("wanduhr_min_kerne") or WANDUHR_MIN_KERNE)
         kerne = _phys_kerne()
@@ -13317,7 +14313,7 @@ class Service:
                 f"analysis process next to the live one); run-duration forecasts "
                 f"keep the fallback values (labeled as such) — to measure anyway, "
                 f"deliberately lower wanduhr_min_kerne in Settings")
-            self.log(f"wanduhr: measurement SKIPPED on this machine — {self._wanduhr_skip}")
+            self.log.warning(f"wanduhr: measurement SKIPPED on this machine — {self._wanduhr_skip}")
             return False
         with self._wanduhr_start_lock:
             t = getattr(self, "_wanduhr_thread", None)
@@ -13424,7 +14420,7 @@ class Service:
                 return False, (f"a learning run is active "
                                f"(phase {lauf.get('phase')})")
         except Exception:                                 # noqa: BLE001
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         return True, ""
 
     def _wanduhr_wiederholung(self):
@@ -13454,17 +14450,17 @@ class Service:
                 if not gemeldet:
                     gemeldet = True
                     self._wanduhr_warte_grund = grund
-                    self.log(f"wanduhr: retry is due but the machine is not "
+                    self.log.warning(f"wanduhr: retry is due but the machine is not "
                              f"quiet ({grund}) — waiting, the measurement is "
                              f"worthless under foreign load")
                 time.sleep(5)
             self._wanduhr_warte_grund = None
             self._wanduhr_naechster_ts = None
             if not self.wanduhr_messen_starten():
-                self.log("wanduhr: retry not started (attempt budget spent or "
+                self.log.warning("wanduhr: retry not started (attempt budget spent or "
                          "the persisted 1 h lock is still running)")
         except Exception as ex:                           # noqa: BLE001
-            self.log(f"wanduhr: retry thread died ({type(ex).__name__}: {ex}) "
+            self.log.warning(f"wanduhr: retry thread died ({type(ex).__name__}: {ex}) "
                      f"— fallback values stay until the next restart")
 
     def _wanduhr_boot_ruhe(self):
@@ -13492,7 +14488,7 @@ class Service:
                 break
             time.sleep(2)
         else:
-            self.log(f"wanduhr: the live engine did not report up within "
+            self.log.warning(f"wanduhr: the live engine did not report up within "
                      f"{self.WANDUHR_ENGINE_RUHE_S:.0f}s ({_grund}) — measuring "
                      f"anyway; without a running engine there is no engine load "
                      f"to wait for")
@@ -13554,7 +14550,7 @@ class Service:
                 d = json.load(f)
             st["letzter_fehlversuch"] = {"ts": d.get("ts"), "grund": d.get("grund")}
         except Exception:
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         return st
 
     def _roundtrip_fahren(self, eid, person, out):
@@ -13594,6 +14590,7 @@ class Service:
         # blieb. Er bekommt deshalb denselben Deckel. Die Strang-Zahl bleibt beim
         # Roundtrip-Vorgabewert (ein Strang): die Wanduhr misst EINE Analyse.
         cmd += vram_startargumente(self.worker_vram_start())
+        cmd += inferenz_frist_argumente(self.cfg)    # GPU-Wartefrist, Stufe 1 Punkt 2
         r = _sp.run(cmd, capture_output=True, text=True, timeout=tmo, env=_env,
                     preexec_fn=_analyse_nice)
         d = json.loads((r.stdout.strip().splitlines() or ["{}"])[-1])
@@ -13728,6 +14725,7 @@ class Service:
             g = ((cfg if cfg is not None else self.cfg).get("live") or {}).get("guards") or {}
             return len([1 for _k, _v in g.items() if (_v or {}).get("enabled")])
         except Exception:                                 # noqa: BLE001
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning 0")
             return 0
 
     def _maschine_speicher_mb(self, kind):
@@ -13764,7 +14762,7 @@ class Service:
                 mb = int((_st.ram_messen() or {}).get("limit_mb") or 0)
                 quelle = "cgroup" if mb > 0 else "unbekannt"
         except Exception as e:                            # noqa: BLE001
-            self.log(f"machine memory not readable ({type(e).__name__}: {e})")
+            self.log.error(f"machine memory not readable ({type(e).__name__}: {e})")
             mb, quelle = 0, "unbekannt"
         self._maschine_mb_merk = (kind, max(0, mb), quelle)
         return max(0, mb), quelle
@@ -13802,7 +14800,7 @@ class Service:
             mb = int((_st.ram_messen() or {}).get("limit_mb") or 0)
             quelle = "cgroup" if mb > 0 else "unbekannt"
         except Exception as e:                            # noqa: BLE001
-            self.log(f"machine RAM not readable ({type(e).__name__}: {e})")
+            self.log.error(f"machine RAM not readable ({type(e).__name__}: {e})")
             mb, quelle = 0, "unbekannt"
         self._maschine_ram_merk = (max(0, mb), quelle)
         return self._maschine_ram_merk
@@ -13868,7 +14866,7 @@ class Service:
         alter = round(jetzt - merk["ts"], 2) if merk["ts"] else 0.0
         if merk["fehl"] >= KARTE_FEHLVERSUCHE_MAX:
             if merk["grund"] != "nicht_messbar":
-                self.log(f"free card memory not readable ({grund}) — "
+                self.log.error(f"free card memory not readable ({grund}) — "
                          f"{merk['fehl']} attempts in a row, treating the card as "
                          f"NOT MEASURABLE (fail-closed: one compute thread, anchor "
                          f"cap). Set worker_vram_mb by hand or check that the "
@@ -13918,8 +14916,14 @@ class Service:
             aus["grund"] = "no card memory measurement on this backend"
             return aus
         jetzt = time.monotonic()
+        # Feldbefunde Punkt 1 (d), Issue #33: das Fenster reicht nie vor den Dienststart
+        # und nie vor das Ende des eigenen Worker-Prozesses zurueck — Messungen davor
+        # zeigen einen vergangenen Zustand (alter Dienst, alter Worker als belegt).
+        grenze, grenze_art = self._band_grenze()
         merk = getattr(self, "_karte_band_merk", None)
-        if merk is not None and (jetzt - merk[0]) < float(_systemstat.TAKT_S):
+        # Ein Merker von VOR der Grenze gilt nicht mehr (an diesen Zeitpunkten geleert).
+        if (merk is not None and (jetzt - merk[0]) < float(_systemstat.TAKT_S)
+                and merk[2] == grenze):
             band = dict(merk[1])
             # Der MOMENT ist frisch, auch wenn der Ring es nicht ist — er geht
             # immer neu ins Minimum ein.
@@ -13930,6 +14934,9 @@ class Service:
         werte = []
         try:
             seit = time.time() - float(_gpubudget.FREI_BAND_FENSTER_S)
+            if grenze > seit:
+                seit = grenze
+                aus["fenster_s"] = max(0, int(time.time() - grenze))
             for d in (_systemstat.lesen(self.cfg, seit) or []):
                 g = d.get("gpu")
                 if not isinstance(g, dict) or g.get("kind") != kind:
@@ -13944,17 +14951,31 @@ class Service:
                 werte.append(gesamt - belegt)
         except Exception as e:                            # noqa: BLE001
             aus["grund"] = f"ring not readable ({type(e).__name__})"
-            self._karte_band_merk = (jetzt, dict(aus))
+            self._karte_band_merk = (jetzt, dict(aus), grenze)
             return aus
         aus["n"] = len(werte)
         if len(werte) < int(_gpubudget.FREI_BAND_MIN_PROBEN):
             aus["grund"] = (f"only {len(werte)} of at least "
                             f"{int(_gpubudget.FREI_BAND_MIN_PROBEN)} samples in the "
-                            f"last {int(_gpubudget.FREI_BAND_FENSTER_S)}s")
+                            f"last {aus['fenster_s']}s"
+                            + (f" (the band starts at {grenze_art})"
+                               if aus["fenster_s"] < int(_gpubudget.FREI_BAND_FENSTER_S)
+                               else ""))
         else:
             aus["band_mb"] = min(min(werte), moment)
-        self._karte_band_merk = (jetzt, dict(aus))
+        self._karte_band_merk = (jetzt, dict(aus), grenze)
         return aus
+
+    def _band_grenze(self):
+        """Wie weit das Frei-Band hoechstens zurueckreicht (Feldbefunde Punkt 1 d): der
+        spaetere von Dienststart und Ende des eigenen Worker-Prozesses.
+        -> (ts, Text fuer den Grund); (0.0, "") ohne Grenze."""
+        d = getattr(self, "_dienst_obj", None)
+        start = float(getattr(self, "_dienst_start_ts", 0.0) or 0.0)
+        ende = float(getattr(d, "ende_ts", 0.0) or 0.0) if d is not None else 0.0
+        if ende > start:
+            return ende, "the end of the own worker process"
+        return start, ("the service start" if start else "")
 
     # .535: HIER STAND `_vram_eichung` — der Leser der Eichdatei
     # `state/vram_eichung.json`. Die Datei wird nicht mehr geschrieben und
@@ -13985,6 +15006,7 @@ class Service:
                 return None
             return max(0.0, float(a.jetzt() - start))
         except Exception:                                 # noqa: BLE001
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
             return None
 
     def _karten_name(self):
@@ -14096,7 +15118,7 @@ class Service:
         except Exception as _pe:                          # noqa: BLE001
             # Eine Preis-Auskunft darf den Worker-Start nie kosten — dann gilt
             # die Tabelle wie vor .544, und der Grund steht im Log.
-            self.log(f"vram prices failed ({type(_pe).__name__}: {_pe}) — "
+            self.log.error(f"vram prices failed ({type(_pe).__name__}: {_pe}) — "
                      f"planning from the measurement table")
             _preise, _preis_stand, _preis_verworfen = None, None, []
         st = _gb.straenge(gesamt, n_wae, kind, vor, nutzer_n=max(0, _nutzer),
@@ -14198,7 +15220,7 @@ class Service:
             # Eine Stufen-Entscheidung darf den Dienst nie am Starten hindern:
             # faellt sie aus, gilt die Leiter wie vor .544, und der Grund steht
             # im Log.
-            self.log(f"priority stages failed ({type(_ve).__name__}: {_ve}) — "
+            self.log.warning(f"priority stages failed ({type(_ve).__name__}: {_ve}) — "
                      f"the ladder decides alone (as before 0.1.0.544)")
         # MIGRATIONS-KLEMME: der alte Wert wird gelesen, um ihn zu MELDEN, nie
         # um ihn zu nehmen.
@@ -14253,9 +15275,14 @@ class Service:
                  # dieser Block ueberhaupt hat — er sagt, ob die Anlage gerade
                  # erkennt und womit.
                  st.get("modus"), st.get("vorrang"))
+        # Feldbefunde Punkt 21: die Merkstelle der Kuerzungs-Zeile (`_kuerzung_zeile`) gilt je
+        # Anlauf der Live-Engine; ist die Anlaufminute vorbei, darf der naechste Anlauf wieder
+        # EINE Zeile schreiben. Geprueft an jedem Rechenstand, nicht nur bei neuer Marke.
+        if not self._anlauf_jung(st):
+            self._anlauf_kuerzung_gemeldet = False
         if marke != getattr(self, "_straenge_marke", None):
             self._straenge_marke = marke
-            self.log(f"worker threads: {st['rechenweg']}; footprint limit "
+            self.log.debug(f"worker threads: {st['rechenweg']}; footprint limit "
                      f"{st['grenze_mb']} MB ({st['grenze_quelle']})")
             # .544 A+C: WAS DAS SYSTEM GETAN HAT, in einer Zeile und aus
             # DERSELBEN Rechnung wie das Start-Tor. Bis .543 standen hier zwei
@@ -14263,23 +15290,46 @@ class Service:
             # started into this" und 13 s spaeter „worker started (pid …)" —
             # der Betreiber konnte nicht wissen, was nun gilt.
             if st.get("modus_text"):
-                self.log(f"worker threads: {st['modus_text']}")
+                self.log.debug(f"worker threads: {st['modus_text']}")
             # .528: die RECHNUNG der Grenze, Posten fuer Posten. Sie steht in
             # derselben Marke-Klammer wie die Zeile darueber, also genauso
             # selten — und sie ist die Zeile, die im Feldfund vom 14.09. gefehlt
             # hat: „4096 MB (config)" sagte nicht, wogegen die Zahl stand.
             if st.get("grenze_rechenweg"):
-                self.log(f"worker threads: footprint limit = "
+                self.log.debug(f"worker threads: footprint limit = "
                          f"{st['grenze_rechenweg']}")
-            for _zeile in (st.get("hinweis"), st.get("deckel_meldung"),
-                           st.get("ueber_formel"), st.get("unter_formel"),
-                           st.get("klemme")):
+            # Log-Systematik E16 vor E14 D4 (ED001): die Kuerzung eines gesetzten
+            # worker_straenge ist ERROR (Deckel und Kartenbudget), die Herleitung
+            # bleibt DEBUG; nur in der Anlaufminute der Live-Engine steht fuer die
+            # Kuerzung durch das Kartenbudget je Anlauf EINE INFO-Zeile
+            # (Feldbefunde Punkt 21, `_kuerzung_zeile`).
+            _k_anlauf, _k_zeile = self._kuerzung_zeile(st)
+            for _stufe, _zeile in ((_logbuch.DEBUG, st.get("hinweis")),
+                                   (_logbuch.ERROR, st.get("deckel_meldung")),
+                                   (_logbuch.DEBUG, st.get("ueber_formel")),
+                                   (_logbuch.INFO if _k_anlauf else _logbuch.ERROR, _k_zeile),
+                                   (_logbuch.DEBUG, st.get("klemme"))):
                 # .544 A: NICHT ZWEIMAL DERSELBE SATZ. In den Stufen-Faellen ist
                 # der Hinweis genau der Modus-Satz von oben — eine zweite,
                 # wortgleiche Zeile liest sich wie zwei Befunde.
                 if _zeile and _zeile != st.get("modus_text"):
-                    self.log(f"worker threads: {_zeile}")
+                    self.log.log(_stufe, f"worker threads: {_zeile}")
         self._straenge_stand = st
+        # .546: DIE PLAETZE FOLGEN DEN STRAENGEN AUCH IM BETRIEB, nicht erst beim
+        # naechsten Worker-Start. Bis .545 hing die Bindung an zwei Stellen, die
+        # beide selten sind: dem DIENST-Start und dem WORKER-Start. Auf der
+        # Feldanlage AU wuchs das Budget binnen zehn Minuten von 1 ueber 3 und 4
+        # auf 6 Straenge — keiner dieser Schritte erreichte die Vergabestelle,
+        # weil in dieser Zeit kein Worker startete. Dieser Griff hier wird dagegen
+        # an jedem Job gefragt (ueber `worker_fussabdruck_max_mb` und
+        # `worker_geometrien_max`), er ist also genau die Stelle, an der ein
+        # gewachsenes Budget auch ankommt. Teuer wird das nicht: stimmen Plaetze
+        # und Straenge, kehrt `_plaetze_an_straenge` nach drei Vergleichen um.
+        try:
+            self._plaetze_an_straenge(st)
+        except Exception as e:                            # noqa: BLE001
+            self.log.warning(f"analysis slots: not re-bound to the compute threads "
+                     f"({type(e).__name__}: {e}) — the current number stays")
         # .535: HIER STANDEN AUFSTIEGS-PRUEFUNG UND MESS-VERGLEICH. Mit der
         # Messtabelle gibt es keinen Aufstieg mehr (der Worker startet gleich
         # mit der Stufe, die die Karte traegt) und keine laufende Preis-Messung,
@@ -14288,7 +15338,7 @@ class Service:
         return st
 
     def _zeitprotokoll(self, eid, entry, ainfo, einge_ts, z_platz, z_schreiben,
-                       warte_s):
+                       warte_s, z_ende=None, z_analyse=None):
         """EINE BILANZZEILE JE EREIGNIS (.534 B5, Schalter `zeitprotokoll`).
 
         DER ANLASS, in Zahlen: im Lasttest vom 15.09. lief die Karte waehrend
@@ -14310,6 +15360,15 @@ class Service:
           rechnung     `dauer_s` der Akte, unveraendert
           schreiben    Akte-Zeile
           gesamt       Platz belegt -> Platz frei
+          nacharbeit   Rueckkehr aus run_analyze -> Verlassen der Platz-Klammer
+                       (Bauplan Feldstau Stufe 5.4, Widerleger-Fund 13)
+
+        Feldstau Stufe 5.4: process() ruft diese Funktion beim VERLASSEN der
+        Platz-Klammer (Marke, Klammer und Platz sind zurueckgegeben) und reicht
+        `z_ende` herein, den Zeitpunkt nach Akte-Zeile und `processed`, an dem
+        die Spalten bis `gesamt` bisher endeten — sie bleiben damit, was sie
+        waren. `nacharbeit` misst ab `z_analyse` bis zum Aufruf; ohne `z_analyse`
+        steht „nacharbeit n/a". Ohne `z_ende` endet alles beim Aufruf.
 
         Die Zeile ist eine AUSKUNFT und veraendert nichts. Sie steht je Ereignis
         genau einmal und laesst sich abschalten (`zeitprotokoll: 0`) — mit dem
@@ -14321,7 +15380,8 @@ class Service:
         except (TypeError, ValueError):
             return
         try:
-            jetzt = time.monotonic()
+            aufruf = time.monotonic()
+            jetzt = z_ende if z_ende is not None else aufruf
             zt = dict((ainfo or {}).get("zeiten") or {})
             warte = (round(max(0.0, time.time() - float(einge_ts)), 1)
                      if einge_ts else None)
@@ -14345,10 +15405,12 @@ class Service:
                       else "erstes bild n/a"),
                      f"rechnung {rechnung} s",
                      f"schreiben {schreiben} s",
-                     f"gesamt {gesamt} s"]
+                     f"gesamt {gesamt} s",
+                     (f"nacharbeit {round(max(0.0, aufruf - z_analyse), 2)} s"
+                      if z_analyse is not None else "nacharbeit n/a")]
             if zt.get("kompilat_s"):
                 teile.insert(4, f"bau {zt['kompilat_s']} s")
-            self.log(f"zeit: {eid} " + " | ".join(teile))
+            self.log.debug(f"zeit: {eid} " + " | ".join(teile))
             # Dieselben Zahlen strukturiert — in die Akte-Zeile dieses
             # Ereignisses und in den Ringpuffer fuer /health.
             zeiten = {"warte_s": warte, "abruf_s": zt.get("abruf_s"),
@@ -14367,7 +15429,7 @@ class Service:
             ring.append(zeiten)
         except Exception as e:                            # noqa: BLE001
             # Eine Auskunft darf ein Urteil nie kosten.
-            self.debug(f"{eid}: time protocol failed ({type(e).__name__}: {e})")
+            self.log.warning(f"{eid}: time protocol failed ({type(e).__name__}: {e})")
 
     def zeiten_zustand(self):
         """Die letzten 100 Ereignisse als Median und Summe — fuer /health (.534).
@@ -14420,7 +15482,7 @@ class Service:
                 self.uebersprungen_offen = getattr(
                     self, "uebersprungen_offen", 0) + 1
         except Exception:                                 # noqa: BLE001
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
 
     def _haenger_versuch_anschreiben(self, eid, camera, ev):
         """.539 — DEM EREIGNIS SEINEN HAENGER-VERSUCH ANSCHREIBEN -> True, wenn es
@@ -14449,7 +15511,7 @@ class Service:
         _v = _merk.get(eid, 0) + 1
         _merk[eid] = _v
         if _v < HAENGER_VERSUCHE_MAX:
-            self.log(f"{eid} ({camera}): this analysis was on a compute thread "
+            self.log.warning(f"{eid} ({camera}): this analysis was on a compute thread "
                      f"when the worker process had to be shot — counted as hang "
                      f"attempt {_v}/{HAENGER_VERSUCHE_MAX}, NOT as someone "
                      f"else's fault")
@@ -14510,8 +15572,8 @@ class Service:
             _anw.luecke(self.cfg, (ev or {}).get("start_time"),
                         (ev or {}).get("end_time"), camera, eid, log=self.log)
         except Exception as e:                            # noqa: BLE001
-            self.log(f"{eid}: could not record the skip ({type(e).__name__}: {e})")
-        self.log(f"{eid} ({camera}): uebersprungen [v1:{grund}] ({text})")
+            self.log.error(f"{eid}: could not record the skip ({type(e).__name__}: {e})")
+        self.log.info(f"{eid} ({camera}): uebersprungen [v1:{grund}] ({text})")
 
     # .535: HIER STANDEN `_messung_pruefen` und `_plateau_gemessen_mb` — der
     # Vergleich "gemessen gegen Tabelle" und sein Leser in der Eichdatei.
@@ -14530,6 +15592,7 @@ class Service:
                     with open(f"/proc/{p}/task/{p}/children") as f:
                         kinder = [int(x) for x in f.read().split()]
                 except Exception:                          # noqa: BLE001
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                     continue
                 for k in kinder:
                     if k not in aus:
@@ -14591,8 +15654,28 @@ class Service:
                         "minimum_mb": int(minimum_mb), "ts": round(time.time(), 1),
                         "grund": (f"the card carried {budget} MiB, one compute "
                                   f"thread with one geometry needs "
-                                  f"{int(minimum_mb)} MiB")}
+                                  f"{int(minimum_mb)} MiB"),
+                        # Feldbefunde Punkt 15: die Posten der Karte in die Zeile.
+                        "posten": self._posten_text(st, int(minimum_mb))}
         return None
+
+    def _posten_text(self, st, noetig_mb):
+        """Die Posten der Karte aus den vorhandenen Werten der Leiter, fuer die ERROR-Zeile
+        einer Waechter-Abschaltung (Feldbefunde Punkt 15): Dienst, Live-Engine mit Waechtern
+        und Decodern, eigener Worker, fremd, frei, Reserve, benoetigt. -> str"""
+        def mb(k):
+            return int((st or {}).get(k) or 0)
+        frei = mb("frei_gemessen_mb")
+        # Fremd ist, was die Postensumme der Leiter frei liesse (`frei_gerechnet_mb` samt
+        # Reserve) und trotzdem belegt ist, ohne den eigenen Worker — die Karte minus
+        # unsere Posten steht in der Leiter und wird hier gelesen, nicht neu gerechnet.
+        fremd = max(0, mb("frei_gerechnet_mb") + mb("reserve_mb") - frei
+                    - mb("laufend_eigen_mb"))
+        return (f"card {mb('gesamt_mb')} MiB: service {mb('dienst_mb')} MiB, live engine "
+                f"with {mb('waechter_n')} watcher(s) and their decoders {mb('waechter_mb')} MiB, "
+                f"own worker {mb('laufend_eigen_mb')} MiB, foreign {fremd} MiB, free {frei} "
+                f"MiB, reserve {mb('reserve_mb')} MiB, needed {int(noetig_mb)} MiB "
+                f"(posted values, free measured)")
 
     def _waechter_schalten(self, namen, an, grund):
         """Waechter schalten — ueber den NORMALEN Schalter, in einem eigenen
@@ -14613,20 +15696,25 @@ class Service:
             for name in list(namen or ()):
                 try:
                     with _cfg_lock:
+                        # Feldbefunde Punkt 23: der Grund reist mit, damit die Zeile des
+                        # Schalters den Dienst als Urheber nennt und nicht „via UI“.
                         ok, msg = _lw_s.live_schalter(
                             self.cfg, name, bool(an),
                             store_pfad=_config_store_pfad,
                             store_laden=_lade_config_store,
                             store_schreiben=_store_schreiben,
-                            log=self.log)
-                    self.log(f"live watcher {name} "
+                            log=self.log, auto_grund=grund)
+                    # Feldbefunde Punkt 19: die gelungene Rueckkehr ist geplant (INFO);
+                    # Abschaltung und Scheitern bleiben ERROR.
+                    self.log.log(_logbuch.INFO if (ok and an) else _logbuch.ERROR,
+                             f"live watcher {name} "
                              f"{'back on' if an else 'taken off the net'} "
                              f"automatically ({grund}): {msg}"
                              if ok else
                              f"live watcher {name} could NOT be switched "
                              f"{'on' if an else 'off'} ({msg}) — {grund}")
                 except Exception as e:                     # noqa: BLE001
-                    self.log(f"live watcher {name}: automatic switch failed "
+                    self.log.error(f"live watcher {name}: automatic switch failed "
                              f"({type(e).__name__}: {e})")
         threading.Thread(target=_lauf, daemon=True,
                          name="waechter-vorrang").start()
@@ -14648,10 +15736,13 @@ class Service:
         _lw_r.reduziert_schreiben(self.cfg, {
             "namen": alle, "ts": merk.get("ts") or plan["ts"],
             "grund": plan["grund"], "vorrang": "erkennung"})
-        self.log(f"live watchers reduced {plan['n_vorher']} -> "
+        # Feldbefunde Punkt 15, Eigentuemer 27.09.2026 16:57:43: die Abschaltung eines Waechters
+        # ist ERROR — eine konfigurierte Funktion faellt aus (E16 Frage 3); mit Posten.
+        self.log.error(f"live watchers reduced {plan['n_vorher']} -> "
                  f"{plan['n_nachher']} to keep recognition running: "
                  f"{', '.join(neu)} taken off the net ({plan['grund']}; the "
-                 f"posten say that frees about {plan['frei_mb']} MiB). They "
+                 f"posten say that frees about {plan['frei_mb']} MiB; "
+                 f"{plan.get('posten') or 'no posten'}). They "
                  f"come back automatically once the card carries the full "
                  f"price again. Set vorrang=wache if the live watchers should "
                  f"win instead")
@@ -14673,31 +15764,93 @@ class Service:
             es dieselbe Schwelle, kippte es an der Kante hin und her.
 
         `sofort=True` ueberspringt beides: das ist der Fall „der Betreiber hat
-        auf vorrang=wache gestellt" — seine Ansage gilt ohne Wartezeit."""
+        auf vorrang=wache gestellt" — seine Ansage gilt ohne Wartezeit.
+
+        FELDBEFUNDE PUNKT 19 (Eigentuemer 27.09.2026 16:56:29, „gleiche Regel“ wie Punkt 13):
+        ohne `sofort` gelten die zwei Bedingungen oben nicht mehr — im Minimalmodus
+        trug die Karte den vollen Preis nie, und jede Reduktion blieb fuer immer. Jetzt
+        kommt EIN Waechter zurueck, sobald sein Posten samt Reserve ueber
+        `speicher_ruhe_min` frei war (`_rueckkehr_frei`), und zwar als Drain
+        (`_waechter_im_drain`)."""
         from core import livewache as _lw_z
         merk = _lw_z.reduziert_lesen(self.cfg)
         namen = [n for n in (merk.get("namen") or ()) if n]
         if not namen:
+            self._rueckkehr_seit = None
             return False
         if not sofort:
-            seit = float(merk.get("ts") or 0.0)
-            if (time.time() - seit) < _gpubudget.DRUCK_NEUSTART_ABSTAND_S:
+            name = self._rueckkehr_frei(st, kind, namen)
+            p = getattr(self, "_plaetze", None)
+            if name is None or p is None:
                 return False
-            budget = int((st or {}).get("worker_budget_mb") or 0)
-            pflicht = int(((st or {}).get("leiter") or {}).get(
-                "pflicht_preis_mb") or 0)
-            n_jetzt = int((st or {}).get("waechter_n") or 0)
-            kosten = (_gpubudget.waechter_posten_mb(n_jetzt + len(namen), kind)
-                      - _gpubudget.waechter_posten_mb(n_jetzt, kind))
-            if not pflicht or (budget - kosten) < pflicht:
-                return False
+            self._drain_waechter = name
+            self._plaetze_drain_anstossen(p.kapazitaet, f"live watcher {name} back on",
+                                          quelle=getattr(p, "quelle", "straenge"))
+            return True
         _lw_z.reduziert_schreiben(self.cfg, {})
-        self.log(f"live watchers back on ({', '.join(namen)}) — "
-                 + ("live watchers have priority again (vorrang=wache)"
-                    if sofort else
-                    "the card carries the full price again"))
+        self.log.info(f"live watchers back on ({', '.join(namen)}) — live watchers have "
+                      f"priority again (vorrang=wache)")
         self._waechter_schalten(namen, True, "card has room again")
         return True
+
+    def _rueckkehr_frei(self, st, kind, namen):
+        """Feldbefunde Punkt 19: darf JETZT ein abgeschalteter Waechter zurueck? Erst wenn sein
+        Posten samt Reserve an den Ticks der Strangzahl-Rechnung ueber `speicher_ruhe_min`
+        durchgehend frei war, nie bei aktivem Stillstand oder Kartendruck; hoechstens einer
+        je Beruhigungszeit. -> Name des Waechters oder None
+
+        „Frei“ heisst: das Budget der Leiter (die Reserve ist dort schon abgezogen, der
+        laufende Worker gutgeschrieben) traegt nach Abzug seines Postens noch das Minimum
+        der Erkennung — die Umkehrung von `_waechter_reduktion_planen`, die nur bis zu
+        diesem Minimum abschaltet. So schaltet die Rueckkehr nie die naechste Reduktion aus."""
+        d = getattr(self, "_dienst_obj", None)
+        druck = d is not None and (
+            bool((getattr(d, "vram_stand", None) or {}).get("fremd_druck_steht"))
+            or time.time() - float(getattr(d, "vram_neustart_ts", 0.0) or 0.0)
+            < _gpubudget.DRUCK_NEUSTART_ABSTAND_S)
+        kosten = _gpubudget.waechter_frei_mb(int((st or {}).get("waechter_n") or 0) + 1, 1,
+                                             kind)
+        luft = int((st or {}).get("worker_budget_mb") or 0) - int((st or {}).get(
+            "minimum_mb") or 0)
+        if druck or self.stillstand_stand()["aktiv"] or luft < kosten:
+            self._rueckkehr_seit = None
+            self._drain_waechter = None           # eine Zusage von eben gilt nicht mehr
+            return None
+        jetzt = time.time()
+        seit = getattr(self, "_rueckkehr_seit", None)
+        if seit is None:
+            self._rueckkehr_seit = seit = jetzt
+        if jetzt - seit < 60.0 * float(self.cfg["speicher_ruhe_min"]):
+            return None
+        self._rueckkehr_seit = None
+        return sorted(namen)[0]
+
+    def _waechter_im_drain(self):
+        """Feldbefunde Punkt 19: der vorgemerkte Waechter kommt im Drain zurueck (die Tische
+        sind leer): erst den Worker beenden (sein Speicher wird frei, der naechste Start plant
+        mit dem Waechter), dann die Merkstelle fuer ihn leeren und ihn einschalten; eine
+        INFO-Zeile mit Posten. Kommt der Worker nicht zum Ende, bleibt der Waechter aus. -> None"""
+        name = getattr(self, "_drain_waechter", None)
+        self._drain_waechter = None
+        if not name:
+            return
+        d = getattr(self, "_dienst_obj", None)
+        if d is not None and getattr(d, "p", None) is not None \
+                and not d.stop(frist_s=PLAETZE_DRAIN_STOP_FRIST_S):
+            self.log.warning(f"live watcher {name} stays off for now: the worker was busy with "
+                             f"itself for {int(PLAETZE_DRAIN_STOP_FRIST_S)}s (its exclusive "
+                             f"lock) — the return is tried again after "
+                             f"{int(self.cfg['speicher_ruhe_min'])} min of steady room")
+            return
+        from core import livewache as _lw_d
+        merk = _lw_d.reduziert_lesen(self.cfg)
+        rest = [n for n in (merk.get("namen") or ()) if n and n != name]
+        _lw_d.reduziert_schreiben(self.cfg, {**merk, "namen": rest} if rest else {})
+        _st = getattr(self, "_straenge_stand", None) or {}
+        self.log.info(f"live watcher {name} back on after "
+                      f"{int(self.cfg['speicher_ruhe_min'])} min of steady room for its "
+                      f"posten ({self._posten_text(_st, 0)})")
+        self._waechter_schalten([name], True, "card has room again")
 
     def _reduktion_laeuft(self):
         """WELCHE WAECHTER WIR GERADE ZURUECKSTELLEN, deren Schalter aber noch
@@ -14734,6 +15887,65 @@ class Service:
                        - int((st or {}).get("dienst_mb") or 0))
         return ohne_fremde >= int(noetig_mb or 0)
 
+    @staticmethod
+    def _anlauf_jung(st):
+        """Steht die Live-Engine in ihrer Anlaufminute, und liegt ihr Waechterposten deshalb
+        zurueck (`engine_alter_s` < gpubudget.LIVE_WARM_S und `waechter_abzug_mb` > 0)? Die EINE
+        Stelle dieser Frage fuer die Feldbefunde-Punkte 15, 21 und 23; nur Felder aus `st`,
+        keine eigene Uhr. -> bool"""
+        alter = (st or {}).get("engine_alter_s")
+        return bool(alter is not None and float(alter) < _gpubudget.LIVE_WARM_S
+                    and int((st or {}).get("waechter_abzug_mb") or 0) > 0)
+
+    def _anlauf_warten(self, st, minimum_mb):
+        """Anlaufminute der Live-Engine (Feldbefunde Punkte 15 und 23, Issue #33): beruht der
+        Waechterposten auf einer JUNGEN Engine (`_anlauf_jung`) und traegt der Momentwert samt
+        dem Anteil, den der laufende Worker schon haelt, nach Reserve das Minimum, wird
+        gewartet statt abgeschaltet. Nur Felder aus `st`. -> bool
+
+        HERKUNFT PUNKT 23 (O337, Testversion 27.09., Test 1): bis dahin rechnete die Bedingung
+        `frei_moment_mb - reserve_mb` und liess `laufend_eigen_mb` weg, den das Kartenbudget an
+        derselben Stelle einrechnet (core/gpubudget.straenge: `gem_plus = gem + eigen_lauf`).
+        Im Test waren es 2760 - 614 = 2146 MiB gegen 2147 MiB Minimum, waehrend der Worker schon
+        476 MiB seines Preises hielt; um 1 MiB verfehlt ging ein Waechter 20 s nach dem
+        Engine-Start vom Netz. Jetzt dieselbe Arithmetik wie das Budget, nur ohne den
+        zurueckgelegten Posten (2760 + 476 - 614 = 2622 >= 2147). Reserve und Posten bleiben."""
+        jung = self._anlauf_jung(st)
+        frei = (int(st.get("frei_moment_mb") or 0) + int(st.get("laufend_eigen_mb") or 0)
+                - int(st.get("reserve_mb") or 0))
+        return bool(jung and int(minimum_mb or 0) > 0 and frei >= int(minimum_mb))
+
+    def _kuerzung_zeile(self, st):
+        """Die Zeile der Kuerzung eines gesetzten worker_straenge, fuer die Zeilen von
+        `worker_straenge` (Feldbefunde Punkt 21, O335). -> (in der Anlaufminute, Text oder None);
+        der Aufrufer schreibt sie in der Anlaufminute als INFO, sonst als ERROR.
+
+        Liegt die Kuerzung allein am zurueckgelegten Posten einer jungen Live-Engine
+        (`_anlauf_jung`), ist sie vorlaeufig: nach gpubudget.LIVE_WARM_S steht der Posten im
+        gemessenen Frei-Wert, und die Zahl folgt. Dafuer steht je Anlauf EINE INFO-Zeile im
+        Log, nicht eine je Rechenstand (Feldtester 28.09. mit 0.1.0.549: zehn ERROR-Zeilen in
+        90 s, danach 6 Straenge wie eingestellt). Jede andere Kuerzung und jede, die nach der
+        Anlaufminute steht, bleibt ERROR (Log-Systematik E16 Frage 3, ED001).
+
+        DIE MERKSTELLE `_anlauf_kuerzung_gemeldet` ist bewusst nicht `_anlauf_gemeldet` aus
+        `_vorrang_stufen`: jene haelt die Warte-Zeile des Punkts 15 und faellt bei jedem
+        Rechenstand, an dem die Wartebedingung samt Momentwert nicht gilt; diese haelt die
+        Kuerzungs-Zeile und faellt erst mit dem Ende der Anlaufminute (`worker_straenge`)."""
+        zeile = st.get("unter_formel")
+        if not zeile or not self._anlauf_jung(st):
+            return False, zeile
+        if getattr(self, "_anlauf_kuerzung_gemeldet", False):
+            return True, None
+        self._anlauf_kuerzung_gemeldet = True
+        alter = float(st["engine_alter_s"])
+        rest = max(1, int(round(_gpubudget.LIVE_WARM_S - alter)))
+        return True, (
+            f"start minute: live watcher posten put aside ({int(st['waechter_abzug_mb'])} MiB, "
+            f"the live engine started {int(alter)}s ago), so the card budget carries "
+            f"{st.get('formel_n')} of worker_straenge={st.get('nutzer_n')} thread(s) for now "
+            f"— the planned thread count follows in {rest} s, once the posten stands in the "
+            f"measured free value")
+
     def _vorrang_stufen(self, st, kind, preise=None):
         """VORRANG ERKENNUNG VOR WACHE — die Stufen (.544 A). -> st
 
@@ -14763,8 +15975,15 @@ class Service:
         if vorrang not in ("erkennung", "wache"):
             vorrang = "erkennung"
         st["vorrang"] = vorrang
+        # Feldbefunde Punkt 19: die Beruhigungszeit der Rueckkehr laeuft nur ueber Ticks, an
+        # denen ein Zweig mit Platz sie weiterfuehrt (die zwei Aufrufe von
+        # `_waechter_zurueckholen` unten); jeder andere Zweig laesst sie von vorn beginnen.
+        rueck_seit, self._rueckkehr_seit = getattr(self, "_rueckkehr_seit", None), None
         minimum = _gpubudget.mindest_preis_mb(kind, preise)
         st["minimum_mb"] = minimum
+        anlauf = self._anlauf_warten(st, minimum)          # Feldbefunde Punkt 15
+        if not anlauf:
+            self._anlauf_gemeldet = False
         st["modus"] = "voll"
         st["modus_text"] = None
         st["reduktion"] = None
@@ -14775,6 +15994,7 @@ class Service:
             # Die Karte traegt. Liegt noch eine Reduktion von vorhin an, ist
             # JETZT der Moment, sie zurueckzunehmen (mit Haltezeit, s. dort).
             st["warten_lohnt"] = self._warten_lohnt(st, voll_noetig)
+            self._rueckkehr_seit = rueck_seit
             self._waechter_zurueckholen(st, kind)
             return st
         budget = int(st.get("worker_budget_mb") or 0)
@@ -14816,6 +16036,31 @@ class Service:
             st["warten_lohnt"] = self._warten_lohnt(st, minimum + reserve)
             st["rechenweg"] = (f"{st.get('rechenweg') or ''}; mode minimum "
                                f"(1 thread, 1 geometry, vorrang={vorrang})")
+            # Feldbefunde Punkt 19: auch im Minimalmodus darf ein Waechter zurueck,
+            # wenn sein Posten frei ist (bis hier: nie).
+            self._rueckkehr_seit = rueck_seit
+            self._waechter_zurueckholen(st, kind)
+            return st
+        # Feldbefunde Punkt 15 (Issue #33 Nr 5 und 7): in der Anlaufminute der
+        # Live-Engine steckt ein Teil ihres Postens schon im Momentwert und wird
+        # trotzdem voll zurueckgelegt (gpubudget.waechter_abzug_mb). Traegt der
+        # Momentwert das Minimum, wird gewartet statt abgeschaltet; danach
+        # entscheidet das Bild wie bisher.
+        if anlauf:
+            st["modus"] = "warten"
+            st["warten_lohnt"] = True
+            st["modus_text"] = (
+                f"the live engine started {int(float(st['engine_alter_s']))}s ago and its "
+                f"watcher posten ({int(st.get('waechter_abzug_mb') or 0)} MiB) is still "
+                f"put aside although the card has {int(st.get('frei_moment_mb') or 0)} MiB "
+                f"free right now ({reserve} MiB reserve, {minimum} MiB for one thread with "
+                f"one geometry) — waiting for the start minute instead of taking live "
+                f"watchers off the net")
+            st["rechenweg"] = (f"{st.get('rechenweg') or ''}; mode wait (live engine "
+                               f"starting, vorrang={vorrang})")
+            if not getattr(self, "_anlauf_gemeldet", False):
+                self._anlauf_gemeldet = True
+                self.log.info(f"worker threads: {st['modus_text']}")
             return st
         plan = self._waechter_reduktion_planen(st, kind, minimum)
         # WICHTIG, und im Bau zuerst falsch gewesen: dieser Griff laeuft bei
@@ -14933,7 +16178,7 @@ class Service:
         try:
             from core import vrampreise as _vp                 # noqa: PLC0415
         except Exception as e:                                 # noqa: BLE001
-            self.log(f"vram prices unavailable ({type(e).__name__}: {e}) — "
+            self.log.error(f"vram prices unavailable ({type(e).__name__}: {e}) — "
                      f"planning from the measurement table")
             return None, None, []
         # OHNE DATENORDNER KEIN SPEICHER, und das ist kein Fehler: die Proben
@@ -14959,12 +16204,12 @@ class Service:
                  "suslik": os.environ.get("SUSLIK_VERSION", "dev")},
                 proben, gesamt_mb=int(gesamt_mb or 0))
             for _z in verworfen_roh:
-                self.log(f"vram price measurement discarded — {_z}")
+                self.log.warning(f"vram price measurement discarded — {_z}")
             if gebucht and neu != stand:
                 if _vp.schreiben(dd, neu):
                     stand = neu
                 else:
-                    self.log("vram prices could not be written — planning from "
+                    self.log.error("vram prices could not be written — planning from "
                              "the measurement table for now")
         preise, verworfen = _vp.preise_ableiten(stand, schluessel,
                                                 int(gesamt_mb or 0))
@@ -14976,10 +16221,10 @@ class Service:
         if _marke != getattr(self, "_preis_marke", None):
             self._preis_marke = _marke
             for _z in verworfen:
-                self.log(f"vram price NOT used — {_z} (the measurement table "
+                self.log.warning(f"vram price NOT used — {_z} (the measurement table "
                          f"applies for this posten)")
             if preise:
-                self.log("vram prices measured on this card: "
+                self.log.info("vram prices measured on this card: "
                          + ", ".join(f"{a} {p['mb']} MiB ({p['datum']}, "
                                      f"{p['proben']} samples)"
                                      for a, p in sorted(preise.items())))
@@ -15061,7 +16306,7 @@ class Service:
         except Exception as e:                            # noqa: BLE001
             # Die Formel darf den Dienst NIE am Starten hindern. Faellt sie aus,
             # laeuft er mit einem Strang (dem sicheren Boden) und sagt es.
-            self.log(f"thread formula failed ({type(e).__name__}: {e}) — "
+            self.log.error(f"thread formula failed ({type(e).__name__}: {e}) — "
                      f"starting the worker with one compute thread")
             return 1
 
@@ -15076,6 +16321,7 @@ class Service:
             try:
                 st = self.worker_straenge()
             except Exception as e:                        # noqa: BLE001
+                _logbuch.swallowed(_log, _logbuch.WARNING, "returning {'n': None, 'grund': 'fehler', 'hinweis': f'{type(e).__na...")
                 return {"n": None, "grund": "fehler",
                         "hinweis": f"{type(e).__name__}: {e}"}
         return {"n": st.get("n"), "grund": st.get("grund"),
@@ -15176,6 +16422,12 @@ class Service:
                 "vorrang": st.get("vorrang"),
                 "minimum_mb": st.get("minimum_mb"),
                 "reduktion": st.get("reduktion"),
+                # Feldbefunde Punkt 13: der letzte Wechsel der Strangzahl (Richtung, Zeit,
+                # Grund) und die Zahl der Wechsel seit dem Dienststart.
+                "wechsel_letzter": getattr(getattr(self, "_dienst_obj", None),
+                                           "wechsel_letzter", None),
+                "wechsel_n": int(getattr(getattr(self, "_dienst_obj", None),
+                                         "wechsel_n", 0) or 0),
                 "klemme": st.get("klemme"), "hinweis": st.get("hinweis")}
 
     def _ram_zustand(self, st):
@@ -15309,6 +16561,7 @@ class Service:
         try:
             return int(self.worker_straenge().get("grenze_mb") or 0)
         except Exception:                                 # noqa: BLE001
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning 0")
             return 0
 
     def vorlauf(self):
@@ -15343,6 +16596,7 @@ class Service:
             posten = self.worker_straenge().get("grenze_posten") or {}
             return int(posten.get("grundlast_mb") or 0)
         except Exception:                                 # noqa: BLE001
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning 0")
             return 0
 
     def worker_vram_start(self):
@@ -15363,7 +16617,7 @@ class Service:
         try:
             st = self.worker_straenge()
         except Exception as e:                            # noqa: BLE001
-            self.log(f"card budget not computable ({type(e).__name__}: {e}) — "
+            self.log.warning(f"card budget not computable ({type(e).__name__}: {e}) — "
                      f"the worker starts without an arena cap")
             return None
         if st.get("mass") != "vram":
@@ -15386,7 +16640,7 @@ class Service:
         if (letzter and gehalten
                 and (time.time() - letzter) < _gpubudget.DRUCK_NEUSTART_ABSTAND_S
                 and deckel < gehalten):
-            self.log(f"vram restart: pressure restart suppressed, the last one was "
+            self.log.warning(f"vram restart: pressure restart suppressed, the last one was "
                      f"{int(time.time() - letzter)}s ago (minimum "
                      f"{int(_gpubudget.DRUCK_NEUSTART_ABSTAND_S)}s) — keeping the "
                      f"current cap of {gehalten} MiB and reporting red")
@@ -15462,6 +16716,10 @@ class Service:
                 # genau dafuer da. Truege sie es auch dann nicht, hilft kein
                 # Warten: die Karte wird nicht groesser.
                 "warten_lohnt": bool(st.get("warten_lohnt")),
+                # Feldbefunde Punkt 13: fuer die Zeile eines Strang-Wechsels beim Start —
+                # die Posten der Karte und die eingestellte Strangzahl (0 = Automatik).
+                "posten": self._posten_text(st, int(lt.get("summe_mb") or 0)),
+                "nutzer_n": int(st.get("nutzer_n") or 0),
                 # WAS AUF DER KARTE FREI SEIN MUSS, damit dieser Start Sinn hat:
                 # die Summe der Stufen, die gebaut werden sollen, plus die nicht
                 # vergebbare Reserve. Die Waechter stehen NICHT darin — sie liegen
@@ -15533,28 +16791,293 @@ class Service:
             # erst am ausbleibenden Effekt merken.
             if getattr(self, "_plaetze_override_gemeldet", None) != (ov, n):
                 self._plaetze_override_gemeldet = (ov, n)
-                self.log(f"analysis slots: the expert override analyse_plaetze={ov} "
+                self.log.warning(f"analysis slots: the expert override analyse_plaetze={ov} "
                          f"is above the {n} compute thread(s) and is IGNORED — "
                          f"slots follow the threads, an override can only set fewer")
         ziel = n if ov is None else min(ov, n)
         quelle = "override" if (ov is not None and ov < n) else "straenge"
-        if ziel == p.kapazitaet:
-            p.quelle = quelle
-            return
         grund = (f"{n} compute thread(s)" if quelle == "straenge" else
                  f"{n} compute thread(s), capped to {ziel} by the expert override "
                  f"analyse_plaetze")
+        if ziel == p.kapazitaet:
+            p.quelle = quelle
+            # .546: die Plaetze stimmen — aber der laufende Worker kann trotzdem
+            # mit weniger Straengen fahren, als ein frischer Start heute baeuchte
+            # (er startete, als das Budget kleiner war). Dann ist der Drain
+            # zustaendig, nicht das Nichtstun.
+            self._plaetze_drain_pruefen(ziel, grund, n, quelle)
+            return
         if p.kapazitaet_setzen(ziel, grund):
             p.quelle = quelle
             self._plaetze_ziel_gemeldet = None
-        elif getattr(self, "_plaetze_ziel_gemeldet", None) != ziel:
+            self._plaetze_drain_pruefen(ziel, grund, n, quelle)
+            return
+        if ziel > p.kapazitaet:
+            # .546 HIER LAG DER FELDSCHADEN (Anlage AU, 22.09.2026): die
+            # Umstellung nach OBEN wartete auf einen Moment ohne laufende
+            # Analyse. Auf einer Anlage mit rund 10 000 Ereignissen am Tag gibt
+            # es den nicht — im Log stand um 05:56:05 „keeping 1 for now — 6
+            # (6 compute thread(s)) applies at the next worker start with no
+            # analysis running", und dabei blieb es den ganzen Morgen.
+            # Seitdem wird der ruhige Moment HERGESTELLT (Drain), statt auf ihn
+            # zu warten. Nach unten bleibt es beim alten Weg: weniger Plaetze
+            # sind nie dringend, und einen Leerlauf dafuer herzustellen waere
+            # Arbeitszeit gegen nichts.
+            # Feldbefunde Punkt 13: baut der Neustart dieses Drains MEHR Straenge als
+            # laufen (`_drain_worker_neustart`), ist er ein Aufstieg und gilt dieselbe
+            # Bedingung wie in `_plaetze_drain_pruefen` (Beruhigungszeit, Abstand).
+            _d = getattr(self, "_dienst_obj", None)
+            _n_lauf = int(getattr(_d, "straenge_laufend", 0) or 0) if _d else 0
+            _n_start = self._straenge_start_zahl(n)
+            _n_frei = self._aufstieg_frei(_n_start)    # jeder Tick zaehlt fuer die Beruhigung
+            if _n_start > _n_lauf > 0 and _n_frei <= _n_lauf:
+                return
+            self._plaetze_drain_anstossen(ziel, grund, quelle=quelle)
+            return
+        if getattr(self, "_plaetze_ziel_gemeldet", None) != ziel:
             # .533: EINMAL je Zielwert, nicht bei jedem Versuch. Der Griff haengt
             # am Worker-Start, und der wird im Betrieb oft gefragt — in der
             # NB-Abnahme standen fuenf gleiche Zeilen binnen einer Sekunde.
             self._plaetze_ziel_gemeldet = ziel
-            self.log(f"analysis slots: keeping {p.kapazitaet} for now — "
+            self.log.info(f"analysis slots: keeping {p.kapazitaet} for now — "
                      f"{ziel} ({grund}) applies at the next worker start with "
                      f"no analysis running")
+
+    def _straenge_start_zahl(self, n_formel=None):
+        """MIT WIE VIELEN RECHENSTRAENGEN WUERDE EIN FRISCHER WORKER STARTEN?
+        -> int, 0 wenn die Frage hier nicht zu beantworten ist.
+
+        Bewusst NICHT die nackte Formel-Zahl: der Worker-Dienst legt seinen
+        eigenen DRUCK-DECKEL darueber (`straenge_deckel_druck`, zwei Treffer am
+        eigenen Arena-Deckel = ein Strang weniger beim naechsten Start). Wer den
+        Drain an der Formel-Zahl festmachte, liesse ihn gegen diesen Deckel
+        anrennen: Neustart, wieder dieselbe kleine Zahl, naechster Drain — eine
+        Schleife, die bei jedem Durchgang einen Kompilat-Bau kostet. Gefragt ist
+        hier, was der naechste Start WIRKLICH baut, also Formel MIT Deckel.
+
+        DIE FORMEL-ZAHL WIRD HIER NIE SELBST GERECHNET: `n_formel` kommt vom
+        Aufrufer (der sie gerade gerechnet hat) oder aus dem letzten Stand
+        (`_straenge_stand`, Sekunden alt). Ein Rechnen an dieser Stelle waere ein
+        Ring — `worker_straenge` bindet am Ende die Plaetze, und die Bindung
+        fragt hier. Ohne Stand gibt es keine Antwort und damit keinen Drain: 0."""
+        d = getattr(self, "_dienst_obj", None)
+        if d is None:
+            return 0
+        if n_formel is None:
+            n_formel = (getattr(self, "_straenge_stand", None) or {}).get("n")
+        if not n_formel:
+            return 0
+        try:
+            return int(d._threads_zahl(n_formel))
+        except Exception:                                 # noqa: BLE001
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning 0")
+            return 0
+
+    def _aufstieg_ziel(self, n_start):
+        """Feldbefunde Punkt 13 (c): je Aufstieg hoechstens so viele Straenge, wie das Budget
+        mit Sicherheitsabstand traegt — nach der Leitersumme bleibt noch der Preis eines
+        Strangs frei (die Reserve steckt schon im Budget). Ohne Leiter (RAM-Zweig) oder
+        gedeckelt unter der Leiter gilt die Zahl. -> int"""
+        st = getattr(self, "_straenge_stand", None) or {}
+        lt = st.get("leiter") or {}
+        preis = int((st.get("preise_mb") or {}).get("strang") or 0)
+        if not lt or not preis or int(lt.get("n") or 0) != int(n_start):
+            return int(n_start)
+        luft = int(st.get("worker_budget_mb") or 0) - int(lt.get("summe_mb") or 0)
+        return int(n_start) if luft >= preis else max(1, int(n_start) - 1)
+
+    def _aufstieg_frei(self, n_start):
+        """Feldbefunde Punkt 13 (Eigentuemer 16:20:16, kleine Fassung; 16:55:34): darf der laufende
+        Worker JETZT auf mehr Straenge steigen? Erst wenn der Platz dafuer an den Ticks der
+        Strangzahl-Rechnung ueber `speicher_ruhe_min` durchgehend da war; kein Platz oder ein
+        ausgeloester Aufstieg lassen die Beruhigungszeit von vorn beginnen (keine
+        Verdopplung). -> Zielzahl der Straenge, 0 = kein Aufstieg"""
+        d = getattr(self, "_dienst_obj", None)
+        n_lauf = int(getattr(d, "straenge_laufend", 0) or 0) if d else 0
+        ziel = self._aufstieg_ziel(n_start) if int(n_start or 0) > n_lauf > 0 else 0
+        if ziel <= n_lauf:
+            self._aufstieg_seit = None
+            return 0
+        jetzt = time.time()
+        seit = getattr(self, "_aufstieg_seit", None)
+        ruhe_s = 60.0 * float(self.cfg["speicher_ruhe_min"])
+        if seit is None:
+            self._aufstieg_seit = seit = jetzt
+            self.log.info(f"compute threads: room for {ziel} beside the {n_lauf} running — "
+                          f"rising only after {int(ruhe_s // 60)} min of steady room "
+                          f"(speicher_ruhe_min)")
+        if jetzt - seit < ruhe_s:
+            return 0
+        self._aufstieg_seit = None
+        return ziel
+
+    def _plaetze_drain_pruefen(self, ziel, grund, n_formel=None, quelle="straenge"):
+        """.546: Traegt der LAUFENDE Worker weniger Straenge als ein frischer?
+
+        Die Plaetze sind eine Vergabe-Groesse, die Straenge eine Rechen-Groesse
+        (s. `worker_dienst`). Der Feldfall zeigt beide auseinanderlaufen: der
+        Worker startete um 05:45:36 mit EINEM Strang (das Budget war durch die
+        Start-Doppelzaehlung negativ, s. `gpubudget.straenge`), zehn Minuten
+        spaeter trug die Karte sechs — aber der Prozess lief weiter mit einem,
+        denn die Strangzahl steht fuer die Lebenszeit eines Prozesses fest.
+        Sechs Plaetze auf einem Ein-Strang-Prozess waeren eine Buchung ohne
+        Wirkung: die ueberzaehligen Jobs warteten dann IM Worker.
+
+        Deshalb dieselbe Antwort wie oben: Drain, und im Drain ein geordneter
+        Worker-Neustart."""
+        n_start = self._straenge_start_zahl(n_formel)
+        d = getattr(self, "_dienst_obj", None)
+        n_lauf = int(getattr(d, "straenge_laufend", 0) or 0) if d else 0
+        # `n_lauf <= 0` heisst „es laeuft gar kein Worker" — dann bringt der
+        # Neustart nichts, der naechste Job startet ohnehin frisch.
+        # Feldbefunde Punkt 13 (Eigentuemer 16:20:16, 16:55:34): ein AUFSTIEG erst, wenn der
+        # Platz ueber die Beruhigungszeit durchgehend da war, und nur so weit, wie das
+        # Budget mit Abstand traegt (`_aufstieg_frei`, auch fuer den Weg ueber die Plaetze).
+        n_ziel = self._aufstieg_frei(n_start)
+        if n_lauf > 0 and n_ziel > n_lauf:
+            self._plaetze_drain_anstossen(ziel, grund, straenge_ziel=n_ziel,
+                                          quelle=quelle)
+
+    def _plaetze_drain_anstossen(self, ziel, grund, straenge_ziel=None,
+                                 quelle="straenge"):
+        """Den Drain-Wechsel starten — hoechstens EINEN, und nicht im Minutentakt.
+
+        Der Griff haengt an `worker_straenge()` und wird damit bei JEDEM Job
+        gefragt; die Bremsen stehen deshalb hier und nicht beim Aufrufer:
+          * ein laufender Drain schliesst jeden weiteren aus,
+          * zwischen zwei Anlaeufen liegt `PLAETZE_DRAIN_ABSTAND_S`.
+        Der Abstand ist kein Schmuck: am Ende des Wechsels steht ein
+        Worker-Neustart mit Kompilat-Bau (gemessen 24-36 s ohne Cache). Ein
+        Budget, das um eine Stufe schwankt, darf keine Neustart-Kette ausloesen."""
+        p = getattr(self, "_plaetze", None)
+        if p is None:
+            return
+        t = getattr(self, "_drain_thread", None)
+        if t is not None and t.is_alive():
+            return
+        jetzt = time.monotonic()
+        letzt = float(getattr(self, "_drain_letzt_ts", 0.0) or 0.0)
+        if letzt and (jetzt - letzt) < PLAETZE_DRAIN_ABSTAND_S:
+            if getattr(self, "_drain_bremse_gemeldet", None) != (ziel, straenge_ziel):
+                self._drain_bremse_gemeldet = (ziel, straenge_ziel)
+                self.log.info(f"analysis slots: {ziel} ({grund}) is due, but the last "
+                         f"drain was {int(jetzt - letzt)}s ago (minimum "
+                         f"{int(PLAETZE_DRAIN_ABSTAND_S)}s) — waiting, a slot "
+                         f"change restarts the worker and that costs its "
+                         f"compiled models")
+            return
+        self._drain_letzt_ts = jetzt
+        self._drain_bremse_gemeldet = None
+        self._drain_thread = threading.Thread(
+            target=self._plaetze_drain_lauf,
+            args=(ziel, grund, straenge_ziel, quelle),
+            name="plaetze-drain", daemon=True)
+        self._drain_thread.start()
+
+    def _plaetze_drain_lauf(self, ziel, grund, straenge_ziel=None,
+                            quelle="straenge"):
+        """DER DRAIN-WECHSEL (.546) — in einem eigenen Thread.
+
+        Reihenfolge, und jede Stufe hat ihren Grund:
+          1. keine neuen Tickets (`drain_an`) — wer haelt, rechnet zu Ende,
+          2. warten, bis die Vergabestelle leer ist, gedeckelt durch
+             `PLAETZE_DRAIN_FRIST_S`,
+          3. Kapazitaet setzen (jetzt ist das Semaphor gefahrlos zu ersetzen),
+          4. den Worker geordnet beenden, damit die RECHENSTRAENGE der neuen
+             Zahl folgen — `stop()` schliesst die Job-Pipe, der Prozess geht,
+             und der naechste Job startet ihn frisch mit `_threads_zahl()`,
+          5. `drain_aus()` im `finally`, IMMER.
+
+        REISST DIE FRIST, bleibt alles wie es war: kein Wechsel, kein Neustart,
+        kein abgeschnittener Job. Der naechste Anlauf versucht es nach
+        `PLAETZE_DRAIN_ABSTAND_S` erneut, und der alte Weg (Umstellung beim
+        naechsten Worker-Start mit ruhiger Vergabestelle) gilt unveraendert
+        daneben weiter."""
+        p = self._plaetze
+        ziel = max(1, int(ziel or 1))
+        was = (f"{ziel} analysis slot(s)"
+               + (f" and {int(straenge_ziel)} compute thread(s)"
+                  if straenge_ziel else ""))
+        if not p.drain_an(f"switching to {was}: {grund}"):
+            return
+        try:
+            frist = time.monotonic() + PLAETZE_DRAIN_FRIST_S
+            while time.monotonic() < frist and not p.alle_frei():
+                time.sleep(PLAETZE_DRAIN_TAKT_S)
+            if not p.alle_frei():
+                self.log.warning(f"analysis slots: the drain gave up after "
+                         f"{int(PLAETZE_DRAIN_FRIST_S)}s — {p.anzahl_belegt()} "
+                         f"slot(s) still busy, staying at {p.kapazitaet}. "
+                         f"Nothing was cancelled; {was} is retried later")
+                self._drain_waechter = None               # Punkt 19: neue Beruhigungszeit
+                return
+            gewartet = int(time.monotonic() - (frist - PLAETZE_DRAIN_FRIST_S))
+            if ziel != p.kapazitaet:
+                if p.kapazitaet_setzen(ziel, f"{grund}, after a {gewartet}s drain",
+                                       im_drain=True):
+                    p.quelle = quelle
+                    self._plaetze_ziel_gemeldet = None
+                else:
+                    self.log.info(f"analysis slots: the desk went busy again during "
+                             f"the drain — staying at {p.kapazitaet}")
+                    return
+            self._waechter_im_drain()                     # Feldbefunde Punkt 19
+            self._drain_worker_neustart(was)
+        except Exception as e:                            # noqa: BLE001
+            self.log.error(f"analysis slots: the drain failed "
+                     f"({type(e).__name__}: {e}) — nothing was changed")
+        finally:
+            p.drain_aus()
+
+    def _drain_worker_neustart(self, was):
+        """Den Worker im Drain geordnet beenden, damit die Rechenstraenge der
+        neuen Platz-Zahl folgen (.546).
+
+        SICHER GENAU HIER UND NIRGENDS SONST: `WorkerDienst.stop()` gibt dem
+        Prozess 30 s fuer seine offenen Jobs und schiesst ihn danach. Im Drain
+        ist kein Platz belegt, also rechnet dort auch nichts — der Prozess geht
+        leer und niemand verliert eine Analyse. Ohne Drain waere derselbe Griff
+        genau der Job-Abbruch, den dieses Haus nirgends macht.
+
+        Der neue Prozess entsteht NICHT hier, sondern beim naechsten Job
+        (`WorkerDienst.job`: kein Prozess -> `_start()`), und der holt sich die
+        Strangzahl frisch. Ein Start aus diesem Thread heraus waere ein zweiter
+        Startweg neben dem einen, den es gibt."""
+        d = getattr(self, "_dienst_obj", None)
+        if d is None or getattr(d, "p", None) is None:
+            return
+        alt = int(getattr(d, "straenge_laufend", 0) or 0)
+        neu = self._straenge_start_zahl()
+        if neu <= alt:
+            # Die Plaetze sind gewachsen, die Straenge nicht (Druck-Deckel oder
+            # ein Budget, das nur fuer die Vergabe reicht). Dann waere der
+            # Neustart reine Kosten — und der Betreiber soll wissen, dass die
+            # beiden Zahlen bewusst auseinanderstehen.
+            self.log.info(f"analysis slots: {was} is set, but a fresh worker would "
+                     f"run {neu} compute thread(s) against the {alt} it runs "
+                     f"now — not restarting it for nothing")
+            return
+        # Feldbefunde Punkt 13: der Aufstieg ist geplant (E16 Frage 1) — INFO mit Posten.
+        _st = getattr(self, "_straenge_stand", None) or {}
+        self.log.info(f"analysis slots: restarting the worker for {was} — it runs "
+                 f"{alt} compute thread(s), a fresh start builds {neu}; the desk "
+                 f"is empty (drain), so no analysis is cut off ("
+                 f"{self._posten_text(_st, int((_st.get('leiter') or {}).get('summe_mb') or 0))})")
+        try:
+            # MIT FRIST: das Exklusiv-Lock des Worker-Dienstes kann von einer
+            # Wanduhr-Messung gehalten werden, und solange dieser Griff wartet,
+            # steht der Drain und damit die ganze Vergabestelle. Kommt er nicht
+            # durch, bleibt der Prozess eben, wie er ist — der naechste Anlauf
+            # versucht es wieder.
+            if not d.stop(frist_s=PLAETZE_DRAIN_STOP_FRIST_S):
+                self.log.warning(f"analysis slots: the worker was busy with itself for "
+                         f"{int(PLAETZE_DRAIN_STOP_FRIST_S)}s (its exclusive "
+                         f"lock) — it keeps running with {alt} compute "
+                         f"thread(s), {was} follows at its next start")
+        except Exception as e:                            # noqa: BLE001
+            self.log.error(f"analysis slots: the worker did not stop for the slot "
+                     f"change ({type(e).__name__}: {e}) — it keeps running with "
+                     f"{alt} compute thread(s)")
 
     def worker_geometrien_max(self):
         """Der Geometrie-Deckel fuer den Worker-Prozess (Anzahl, 0 = keiner).
@@ -15565,6 +17088,7 @@ class Service:
         try:
             return int(self.worker_straenge().get("geometrien_max") or 0)
         except Exception:                                 # noqa: BLE001
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning 0")
             return 0
 
     def _analyse_klammer(self):
@@ -15688,7 +17212,7 @@ class Service:
                     try:
                         _puls()
                     except Exception:               # noqa: BLE001 — ein Puls darf nie die Messung kosten
-                        pass
+                        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
             threading.Thread(target=_takt, daemon=True, name="wanduhr-puls").start()
             try:
                 return self._roundtrip_fahren(eid, person, out)
@@ -15724,7 +17248,7 @@ class Service:
                                     slot.release()
             if not gemeldet:
                 gemeldet = True
-                self.log("wanduhr: waiting for live activity (face pass / person "
+                self.log.info("wanduhr: waiting for live activity (face pass / person "
                          "judgment) to finish before measuring")
             time.sleep(2)
 
@@ -15756,7 +17280,7 @@ class Service:
             mess, clip_s = _wu.kontroll_event(evs)
             personen = master_persons(self.cfg)
             if mess is None or not personen:
-                self.log("wanduhr: no suitable measurement event yet (need a clip "
+                self.log.warning("wanduhr: no suitable measurement event yet (need a clip "
                          ">= %.0f s) or empty master — fallback values stay"
                          % _wu.KONTROLL_MIN_CLIP_S)
                 return
@@ -15780,14 +17304,14 @@ class Service:
                 kopp = {"eid": k2["id"], "abweichung": round(abw, 3)}
             else:
                 kopp = None
-                self.log("wanduhr: no second control event — storing measurement "
+                self.log.warning("wanduhr: no second control event — storing measurement "
                          "WITHOUT reality check (will be validated by later runs)")
             _wu.schreiben(self.cfg["data_dir"], _placement_hw_key(),
                           os.environ.get("SUSLIK_VERSION", "dev"), werte,
                           {"eid": mess["id"], "clip_s": round(clip_s, 1),
                            **({"kopplung": kopp} if kopp else {})},
                           gemessen=_wu.GEMESSENE_FELDER_ROUNDTRIP)
-            self.log(f"wanduhr: measured — cold {d['lauf1'].get('wall_s')} s / warm "
+            self.log.info(f"wanduhr: measured — cold {d['lauf1'].get('wall_s')} s / warm "
                      f"{d['lauf2'].get('wall_s')} s on {clip_s:.0f} s clip"
                      + (f"; reality check on 2nd event passed ({kopp['abweichung']:+.0%})"
                         if kopp else ""))
@@ -15803,16 +17327,16 @@ class Service:
                 with open(sp, "w", encoding="utf-8") as f:
                     json.dump({"ts": round(time.time(), 1), "grund": str(ex)[:300]}, f)
             except Exception:
-                pass
+                _logbuch.swallowed(_log, _logbuch.ERROR, "ignored", throttle=False)
             _n = int(getattr(self, "_wanduhr_versucht", 1) or 1)
             _m = self.WANDUHR_VERSUCHE_MAX
             if self._wanduhr_wiederholung_planen():
-                self.log(f"wanduhr: measurement attempt {_n}/{_m} failed ({ex}) "
+                self.log.warning(f"wanduhr: measurement attempt {_n}/{_m} failed ({ex}) "
                          f"— keeping fallback values; next attempt in "
                          f"{self.WANDUHR_WIEDERHOLUNG_S / 60:.0f} min, and only "
                          f"once the machine is quiet (or on restart)")
             else:
-                self.log(f"wanduhr: measurement attempt {_n}/{_m} failed ({ex}) "
+                self.log.warning(f"wanduhr: measurement attempt {_n}/{_m} failed ({ex}) "
                          f"— keeping fallback values; no further attempt in this "
                          f"process (a restart tries again)")
         finally:
@@ -15867,14 +17391,14 @@ class Service:
         vor_id = str((_z_vor or {}).get("lauf_id") or "") or None
 
         def _vor_blink(versuch, von):
-            self.log(f"run state file missing for a moment ({versuch}/{von}) — "
+            self.log.warning(f"run state file missing for a moment ({versuch}/{von}) — "
                      "continuing (non-atomic rename on this filesystem?)")
 
         def _vor_halt(was):
             """None beim Fortschreiben: Abbruch oder Infrastruktur? -> True,
             wenn die Vorbereitung enden muss (immer)."""
             if _ll.abbruch_marke_lesen(dd, vor_id):
-                self.log(f"learning run preparation stopped (run aborted, {was})")
+                self.log.info(f"learning run preparation stopped (run aborted, {was})")
             else:
                 self._lernlauf_unterbrochen(
                     dd, f"preparation stopped: run state file gone ({was}, no "
@@ -15889,7 +17413,7 @@ class Service:
             # Pagination-Deckel). Unlesbare Vermerk-Zeilen zaehlen, nie still.
             gesehen, _gk = (_ll.durchsucht_lesen(dd) if nur_neue else (set(), 0))
             if _gk:
-                self.log(f"learning run: {_gk} unreadable searched-index "
+                self.log.error(f"learning run: {_gk} unreadable searched-index "
                          "line(s) — affected events may be searched again")
             # .358: DER Vorfilter. `kameras` geht an person_events und dort als
             # &cameras= an Frigate — die Events werden also gar nicht erst
@@ -15897,7 +17421,7 @@ class Service:
             # Wege (Tages-Modus und letzte N); wer nur eine Kamera lernt, soll
             # das auch fuer einen ganzen Tag koennen.
             if kameras:
-                self.log(f"learning run: source limited to {len(kameras)} "
+                self.log.warning(f"learning run: source limited to {len(kameras)} "
                          f"camera(s): {', '.join(kameras)}")
             if tag:
                 # .263 Tages-Modus: das Fenster ist der lokale Kalendertag.
@@ -15932,16 +17456,16 @@ class Service:
             # behauptete pauschal "not truncated" und log damit im ersten Fall.
             if not alle_modus and anzahl and len(evs) < anzahl:
                 if _seiten >= _evm.MAX_SEITEN:
-                    self.log(f"learning run: stopped at the paging cap after "
+                    self.log.warning(f"learning run: stopped at the paging cap after "
                              f"{_seiten} pages with {len(evs)} of {anzahl} "
                              f"requested events — there may be MORE, this run "
                              f"is truncated")
                 elif kameras:
-                    self.log(f"learning run: only {len(evs)} of {anzahl} requested "
+                    self.log.info(f"learning run: only {len(evs)} of {anzahl} requested "
                              f"events exist on the selected camera(s) — the run is "
                              f"smaller than ordered, not truncated")
                 else:
-                    self.log(f"learning run: only {len(evs)} of {anzahl} requested "
+                    self.log.info(f"learning run: only {len(evs)} of {anzahl} requested "
                              f"events available — the run is smaller than ordered")
             # .358 (QS-Fund): die Kappung gehoert NICHT in den Ehrlichkeits-Block.
             # Ich hatte sie beim Einbau mit eingefangen, und dort stand sie unter
@@ -15991,11 +17515,11 @@ class Service:
                 # „vorbereitung, checking events n/n" und es stand NICHT EINE
                 # Zeile im Log (Klasse C, stiller Verlust). Jetzt laut, und der
                 # Halt macht die Arbeit ueber Resume wieder erreichbar.
-                self.log(f"learning run: the prepared list of {n} event(s) "
+                self.log.error(f"learning run: the prepared list of {n} event(s) "
                          "could not be persisted — run state file gone")
                 _vor_halt(f"persisting the prepared list of {n} event(s)")
                 return
-            self.log(f"learning run prepared: {n} events checked, {mit_clip} with clip")
+            self.log.info(f"learning run prepared: {n} events checked, {mit_clip} with clip")
             if z.get("erntefreigabe"):
                 self.lernlauf_ernte_starten()  # E2: die Kette laeuft von selbst weiter
             else:
@@ -16009,7 +17533,7 @@ class Service:
             _ll.lauf_fortschreiben_geduldig(
                 dd, {"fortschritt": {"status": f"preparation failed: {e}"}},
                 melde=_vor_blink)
-            self.log(f"learning run preparation failed ({e})")
+            self.log.error(f"learning run preparation failed ({e})")
 
     def _lernlauf_vorbereiten_dateien(self, dateien):
         """.33x DATEIQUELLE (Bauplan analysen/12): die events_liste kommt aus EIGENEN
@@ -16034,14 +17558,14 @@ class Service:
         lid = str((_z0 or {}).get("lauf_id") or "") or None
 
         def _dq_blink(versuch, von):
-            self.log(f"run state file missing for a moment ({versuch}/{von}) — "
+            self.log.warning(f"run state file missing for a moment ({versuch}/{von}) — "
                      "continuing (non-atomic rename on this filesystem?)")
 
         def _dq_halt(was):
             """Wie `_vor_halt` in der Frigate-Variante: `None` heisst nicht
             mehr automatisch Abbruch (Review-MUSS)."""
             if _ll.abbruch_marke_lesen(dd, lid):
-                self.log(f"file source: run was aborted during preparation ({was})")
+                self.log.info(f"file source: run was aborted during preparation ({was})")
             else:
                 self._lernlauf_unterbrochen(
                     dd, f"preparation stopped: run state file gone ({was}, no "
@@ -16063,14 +17587,14 @@ class Service:
                                                      lauf_id=lid))
                     except Exception as e:                        # noqa: BLE001
                         fehler.append((os.path.basename(pf), str(e)))
-                        self.log(f"file source: SKIPPED {os.path.basename(pf)} — {e}")
+                        self.log.warning(f"file source: SKIPPED {os.path.basename(pf)} — {e}")
             n = len(events)
             if not n:
                 _ll.lauf_fortschreiben_geduldig(dd, {"fortschritt": {
                     "status": "file source: no usable video found — "
                               f"{len(fehler)} file(s) rejected"}},
                     melde=_dq_blink)
-                self.log(f"file source: nothing usable ({len(fehler)} rejected)")
+                self.log.error(f"file source: nothing usable ({len(fehler)} rejected)")
                 return
             z = _ll.lauf_fortschreiben_geduldig(
                 dd, {"events": n, "events_liste": events,
@@ -16080,11 +17604,11 @@ class Service:
                                      "status": "prepared — starting the harvest"}},
                 melde=_dq_blink)
             if z is None:
-                self.log(f"file source: the prepared list of {n} clip(s) could "
+                self.log.error(f"file source: the prepared list of {n} clip(s) could "
                          "not be persisted — run state file gone")
                 _dq_halt(f"persisting the prepared list of {n} clip(s)")
                 return
-            self.log(f"learning run prepared from files: {n} clip(s), "
+            self.log.error(f"learning run prepared from files: {n} clip(s), "
                      f"{len(fehler)} rejected")
             if z.get("erntefreigabe"):
                 self.lernlauf_ernte_starten()
@@ -16097,7 +17621,7 @@ class Service:
             _ll.lauf_fortschreiben_geduldig(dd, {"fortschritt": {
                 "status": f"file source preparation failed: {e}"}},
                 melde=_dq_blink)
-            self.log(f"file source preparation failed ({e})")
+            self.log.error(f"file source preparation failed ({e})")
 
     def lernlauf_ernte_starten(self):
         """E2 (S7): Frontal-Ernte-Schleife starten (ein Thread; Doppelstart-Guard
@@ -16140,7 +17664,7 @@ class Service:
             # Dateisystems mit nicht-atomarem Rename.
             zustand, fehler = _ll.lauf_lesen_geduldig(dd)
             if zustand is None:
-                self.log(f"anchor stage: no learning run to work on ({fehler or 'no state'})")
+                self.log.info(f"anchor stage: no learning run to work on ({fehler or 'no state'})")
                 return
             if not zustand.get("events_liste"):
                 _ll.lauf_fortschreiben(dd, fortschritt={
@@ -16161,7 +17685,7 @@ class Service:
             schwellen["vorrat_konsens_min"] = self.cfg.get("vorrat_konsens_min")
             schwellen["anker_qualitaet_fd_wache"] = bool(
                 self.cfg.get("anker_qualitaet_fd_wache", True))
-            self.log(f"anchor stage starting (run {lauf_id})")
+            self.log.info(f"anchor stage starting (run {lauf_id})")
             erg = _ank.anker_phase_fahren(
                 dd, os.path.join(dd, "state", "lernlauf", lauf_id), lauf_id,
                 zustand["events_liste"], schwellen, _al.clustere,
@@ -16206,7 +17730,7 @@ class Service:
         except Exception as e:
             from core import lernlauf as _ll2
             _ll2.lauf_fortschreiben(dd, fortschritt={"status": f"anchor stage failed: {e}"})
-            self.log(f"anchor stage failed ({type(e).__name__}: {e})")
+            self.log.error(f"anchor stage failed ({type(e).__name__}: {e})")
 
     def _bruecke_durchgang(self, eid, akte=None):
         """Der DURCHGANG, zu dem `eid` gehoert -> eids in Zeitreihenfolge, oder
@@ -16314,7 +17838,7 @@ class Service:
             # entscheidbar, vor Akte, Ordner und Thread: so entsteht gar kein
             # Lauf, den jemand abholen muesste, und der Klick bekommt den Grund
             # sofort statt erst ueber die fehler.json des naechsten Pulses.
-            self.log("pass check not started: the persistent worker is "
+            self.log.info("pass check not started: the persistent worker is "
                      "disabled (config 'worker')")
             return "fehler", self.BRUECKE_WORKER_AUS
         akte = self._deckung_by_eid()          # EINE Leseart, EIN Lesen je Aufruf
@@ -16418,7 +17942,7 @@ class Service:
                 # ueberalterter Puls bei lebendem Lauf ist ein echter Befund.
                 if time.time() - float(_lauf.get("gemeldet") or 0.0) > 60.0:
                     _lauf["gemeldet"] = time.time()
-                    self.log(f"PASS CHECK ({bid}): the run is still going, but "
+                    self.log.warning(f"PASS CHECK ({bid}): the run is still going, but "
                              f"its progress file is older than {frische_s:.0f}s "
                              f"— NOT starting a second harvest for this folder")
                 return "laeuft", self._bruecke_fortschritt(laeuft, self._plaetze,
@@ -16451,7 +17975,7 @@ class Service:
             for k in _v_weg:
                 schwellen.pop(k, None)
             if _v_weg:
-                self.log(f"PASS CHECK ({bid}): the learning-stock line is not "
+                self.log.info(f"PASS CHECK ({bid}): the learning-stock line is not "
                          f"decided on this path — this run is transient and "
                          f"never feeds the catalogue offers; the catalogue "
                          f"register alone judges quality")
@@ -16543,7 +18067,7 @@ class Service:
                 # meldet sich bei der Vergabestelle auch nicht an.
                 self._bruecke_puls(laeuft, 0, len(fehlend), "warteschlange",
                                    dict(kopf, pos=_wpos))
-                self.log(f"PASS CHECK ({bid}, {person}): accepted and queued "
+                self.log.info(f"PASS CHECK ({bid}, {person}): accepted and queued "
                          f"— another picture check is running; this one is "
                          f"number {_wpos} in the queue "
                          f"({len(self._bruecke_warteschlange)} waiting). Two "
@@ -16624,7 +18148,7 @@ class Service:
             with open(laeuft, "w", encoding="utf-8") as f:
                 json.dump(d, f)
         except OSError:
-            pass
+            _logbuch.swallowed(_log, _logbuch.ERROR, "ignored", throttle=False)
 
     @staticmethod
     def _bruecke_fortschritt(laeuft, plaetze=None, lauf_id=None):
@@ -16663,7 +18187,7 @@ class Service:
             with open(laeuft, encoding="utf-8") as f:
                 d = json.load(f) or {}
         except (OSError, ValueError):
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         i, n = int(d.get("i") or 0), int(d.get("n") or 0)
         grund = str(d.get("grund") or "")
         if grund not in Service.BRUECKE_GRUENDE:
@@ -16870,13 +18394,13 @@ class Service:
         while self._bruecke_warteschlange and self._bruecke_aktiv() is None:
             e = self._bruecke_warteschlange.pop(0)
             if not os.path.isdir(e["bdir"]):
-                self.log(f"PASS CHECK ({e['bid']}): the queued check is gone "
+                self.log.info(f"PASS CHECK ({e['bid']}): the queued check is gone "
                          f"(its folder was removed) — dropping it from the "
                          f"queue, {len(self._bruecke_warteschlange)} still "
                          f"waiting")
                 continue
             if len(self._bruecke_warteschlange) or e["seit"] < time.time() - 1:
-                self.log(f"PASS CHECK ({e['bid']}, {e['person']}): its turn "
+                self.log.info(f"PASS CHECK ({e['bid']}, {e['person']}): its turn "
                          f"— starting the queued check now "
                          f"({len(self._bruecke_warteschlange)} still waiting)")
             self._bruecke_lauf_starten(e)
@@ -16910,7 +18434,7 @@ class Service:
         import re as _re_ab
         lauf_id = str(lauf_id or "")
         if not _re_ab.fullmatch(r"B[A-Za-z0-9_]+", lauf_id):
-            self.log(f"PASS CHECK cancel ignored: {lauf_id[:32]!r} is not a "
+            self.log.warning(f"PASS CHECK cancel ignored: {lauf_id[:32]!r} is not a "
                      f"picture-check run")
             return {"lief": False, "verworfen": 0, "gesamt": 0,
                     "wartete": False}
@@ -16920,7 +18444,7 @@ class Service:
                 # Ein WARTENDER Lauf: nichts hat begonnen, also faellt alles.
                 self._bruecke_warteschlange.remove(_wart)
                 weg, ges = len(_wart["fehlend"]), len(_wart["fehlend"])
-                self.log(f"PASS CHECK ({lauf_id}) cancelled while queued "
+                self.log.warning(f"PASS CHECK ({lauf_id}) cancelled while queued "
                          f"(position {_pos}): {weg} event(s) dropped, nothing "
                          f"had started; {len(self._bruecke_warteschlange)} "
                          f"still waiting")
@@ -16934,7 +18458,7 @@ class Service:
                 # kann trotzdem noch stehen — der bestehende Raeum-Weg raeumt
                 # ihn, das ist genau die Wirkung, die „Abbrechen" hier meint.
                 _weg = self._passernte_raeumen(lauf_id)
-                self.log(f"PASS CHECK ({lauf_id}) cancel: no such run is "
+                self.log.info(f"PASS CHECK ({lauf_id}) cancel: no such run is "
                          f"active any more — nothing to stop"
                          + (" (its folder was removed)" if _weg else ""))
                 return {"lief": False, "verworfen": 0, "gesamt": 0,
@@ -16944,7 +18468,7 @@ class Service:
                 d["offen"].clear()
             ges = int(d.get("n") or 0)
             d["stop"].set()
-            self.log(f"PASS CHECK ({lauf_id}) cancelled by the user: {weg} of "
+            self.log.warning(f"PASS CHECK ({lauf_id}) cancelled by the user: {weg} of "
                      f"{ges} event(s) dropped before they started; whatever is "
                      f"running right now finishes normally, then the folder "
                      f"falls (no half state, never a hard kill)")
@@ -16982,13 +18506,15 @@ class Service:
                             continue
                     os.unlink(p)
                 except (OSError, ValueError):
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                     continue
                 n += 1
-                self.log(f"PASS CHECK ({d}): this check was queued when the "
+                self.log.warning(f"PASS CHECK ({d}): this check was queued when the "
                          f"service restarted — the queue does not survive a "
                          f"restart, so it was DROPPED; click the check again "
                          f"(its harvested events are kept)")
         except OSError:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning 0")
             return 0
         return n
 
@@ -17008,7 +18534,7 @@ class Service:
             d = self._bruecke_laeufe.pop(bid, None)
             _raeumen = bool(d and d.get("raeumen"))
         if _raeumen:
-            self.log(f"PASS CHECK ({bid}): the folder was discarded while the "
+            self.log.warning(f"PASS CHECK ({bid}): the folder was discarded while the "
                      f"run was still going — removing it now that the run has "
                      f"ended")
             self._passernte_raeumen(bid)
@@ -17051,7 +18577,7 @@ class Service:
             _lauf = self._bruecke_lauf_thread(lauf_id)
             if _lauf is not None:
                 _lauf["raeumen"] = True
-                self.log(f"PASS CHECK ({lauf_id}): discard requested while the "
+                self.log.warning(f"PASS CHECK ({lauf_id}): discard requested while the "
                          f"run is still going — the folder stays until the run "
                          f"ends, then it falls (never an rmtree under a live "
                          f"harvest)")
@@ -17094,11 +18620,11 @@ class Service:
                             groesse += sum(os.path.getsize(os.path.join(w, f))
                                            for w, _d, fs in os.walk(p) for f in fs)
                         except OSError:
-                            pass
+                            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
                         shutil.rmtree(p, ignore_errors=True)
                         n += 1
             except OSError:
-                pass
+                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         return n, groesse
 
     def kalib_fueller_starten(self, kamera):
@@ -17125,7 +18651,7 @@ class Service:
         from core import livewache as _lw_kf
         cfg = self.cfg
         kamera = str(kamera or "")
-        _d_kf, _g_kf = _lw_kf.guards_lesen(cfg, log=lambda z: None)
+        _d_kf, _g_kf = _lw_kf.guards_lesen(cfg, log=_logbuch.NULL)
         _cams_kf, _ = frigate_cameras(cfg)
         if kamera not in _g_kf and kamera not in (_cams_kf or []):
             return False, "unknown camera"
@@ -17261,7 +18787,7 @@ class Service:
                     json.dump(_alle_b, _f_b, ensure_ascii=False)
                 os.replace(_tmp_b, _bp)
             except Exception as _e_b:                       # noqa: BLE001
-                self.log(f"calibration top-up {kamera}: balance not saved "
+                self.log.error(f"calibration top-up {kamera}: balance not saved "
                          f"({type(_e_b).__name__}: {_e_b})")
             shutil.rmtree(lauf_dir, ignore_errors=True)
 
@@ -17334,14 +18860,14 @@ class Service:
             # schon vor der Anlage. Diese zweite Wache traegt den Fall, wenn der
             # Schalter zwischen Anlage und Ernte umgelegt wurde (die Config ist
             # zur Laufzeit stellbar) oder die Ernte direkt angestossen wird.
-            self.log(f"PASS CHECK (stock chain, {bid}) not started: the "
+            self.log.info(f"PASS CHECK (stock chain, {bid}) not started: the "
                      f"persistent worker is disabled (config 'worker')")
             try:
                 with open(os.path.join(bdir, "fehler.json"), "w",
                           encoding="utf-8") as f:
                     json.dump({"fehler": self.BRUECKE_WORKER_AUS}, f)
             except OSError:
-                pass
+                _logbuch.swallowed(_log, _logbuch.ERROR, "ignored", throttle=False)
             try:
                 os.unlink(os.path.join(bdir, "laeuft.json"))
             except OSError:
@@ -17369,6 +18895,7 @@ class Service:
                         try:
                             d = json.loads(l)
                         except Exception:
+                            _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                             continue
                         if d.get("eid") in alle_eids:
                             akte[d["eid"]] = d
@@ -17581,7 +19108,7 @@ class Service:
             # Die gemessenen Takt-Proben der FERTIGEN Ereignisse bleiben — sie
             # sind echte Messungen dieser Maschine (E-P3).
             if stop.is_set():
-                self.log(f"PASS CHECK ({bid}, {person}) cancelled: "
+                self.log.warning(f"PASS CHECK ({bid}, {person}) cancelled: "
                          f"{buch['i']} of {n_ges} event(s) were harvested "
                          f"before the stop, the rest was dropped; norm step "
                          f"and identity step are skipped, the folder falls "
@@ -17609,7 +19136,7 @@ class Service:
                     try:
                         _puls("bewertet")
                     except Exception:          # noqa: BLE001 — nie die Kette
-                        pass
+                        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
             _herz = threading.Thread(target=_herzschlag, daemon=True,
                                      name=f"bruecke-puls-{bid}")
             _herz.start()
@@ -17635,7 +19162,7 @@ class Service:
                 schwellen, lebt=lambda: not stop.is_set(),
                 puls=lambda: _puls("bewertet"), art="interaktiv")
             if _norm_ab or stop.is_set():
-                self.log(f"PASS CHECK ({bid}, {person}) cancelled during the "
+                self.log.warning(f"PASS CHECK ({bid}, {person}) cancelled during the "
                          f"norm step: the running round finished, the identity "
                          f"step is skipped, the folder falls now")
                 return
@@ -17674,7 +19201,7 @@ class Service:
             # grenz). Gebaut wird sie im Modul aus den drei Vorstufen, damit
             # hier keine zweite Buchfuehrung entsteht.
             _summe_e = _ern.fertig_lesen(bdir)[1] or {}
-            self.log(f"PASS CHECK ({bid}, {person}): {n_ges} event(s) "
+            self.log.info(f"PASS CHECK ({bid}, {person}): {n_ges} event(s) "
                      f"harvested ({len(alle_eids)} in the pass) | "
                      + _pe_bilanz.bilanz_satz(_erg_id, _summe_e, _norm_erg)
                      + (f" | norm step left {_norm_rest} event(s) unmeasured"
@@ -17683,16 +19210,16 @@ class Service:
                 # NIE STILL: ohne eigene Referenz kann die Identitaets-Achse
                 # nichts messen, und das ist der Grund fuer ein leeres Overlay
                 # — nicht „es war nichts da".
-                self.log(f"PASS CHECK ({bid}): {person} has no reference of "
+                self.log.info(f"PASS CHECK ({bid}): {person} has no reference of "
                          f"their own yet — teach one picture first, then this "
                          f"check can propose more")
         except Exception as e:
-            self.log(f"PASS CHECK (stock chain, {bid}) failed: {type(e).__name__}: {e}")
+            self.log.error(f"PASS CHECK (stock chain, {bid}) failed: {type(e).__name__}: {e}")
             try:
                 with open(os.path.join(bdir, "fehler.json"), "w", encoding="utf-8") as f:
                     json.dump({"fehler": f"{type(e).__name__}: {e}"[:200]}, f)
             except OSError:
-                pass
+                _logbuch.swallowed(_log, _logbuch.ERROR, "ignored", throttle=False)
         finally:
             # .522: ERST den Herzschlag stoppen UND einholen, dann aufraeumen.
             # Andersherum koennte sein letzter Schlag `laeuft.json` NACH dem
@@ -17741,6 +19268,7 @@ class Service:
                         try:
                             z = json.loads(l)
                         except Exception:
+                            _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                             continue
                         if z.get("hw") == hw and z.get("ver") == ver:
                             alt.append(z)
@@ -17759,11 +19287,11 @@ class Service:
             rate = _wu.ernte_rate_fit([(z["clip_s"], z["wall_s"]) for z in neu])
             if rate:
                 _wu.ernte_rate_schreiben(dd, hw, ver, rate)
-                self.log(f"harvest rate measured (pass check): {rate['k']} s per "
+                self.log.info(f"harvest rate measured (pass check): {rate['k']} s per "
                          f"clip-second + {rate['fix_s']} s per event over "
                          f"{rate['n']} events — the next check estimates with it")
         except OSError as e:
-            self.log(f"harvest rate not saved ({e}) — the progress bar keeps "
+            self.log.warning(f"harvest rate not saved ({e}) — the progress bar keeps "
                      "saying the duration is unknown")
 
     def _lernlauf_vorrat(self, lauf_id, events_liste):
@@ -17778,7 +19306,7 @@ class Service:
             manifest = _ern.manifest_lesen(lauf_dir) or {}
             schwellen = dict(manifest.get("schwellen") or {})
             if not _ern.vorrat_schwellen_da(schwellen):
-                self.log(f"stock stage skipped (run {lauf_id}): run regime carries "
+                self.log.warning(f"stock stage skipped (run {lauf_id}): run regime carries "
                          "no stock thresholds (older run or stock disabled)")
                 return
             schwellen["szenario_gap_min"] = int(self.cfg.get("szenario_gap_min", 5))
@@ -17791,7 +19319,7 @@ class Service:
                 _ll.lauf_fortschreiben(dd, fortschritt={
                     "stock offers": "skipped — reference cache empty/stale "
                                     "(rebuilds after the next check)"})
-                self.log(f"stock stage skipped (run {lauf_id}): reference cache "
+                self.log.warning(f"stock stage skipped (run {lauf_id}): reference cache "
                          "empty or built for another model — no identity axis, "
                          "no offers")
                 return
@@ -17800,19 +19328,19 @@ class Service:
             _ll.lauf_fortschreiben(dd, fortschritt={
                 "stock offers": erg["angebote"],
                 "stock faces": erg["v_gesamt"]})
-            self.log(f"stock stage finished (run {lauf_id}): "
+            self.log.error(f"stock stage finished (run {lauf_id}): "
                      f"{erg['angebote']} catalog offers from {erg['v_gesamt']} "
                      f"stock faces across {erg['durchgaenge']} passes"
                      + (f"; rejected: {erg['gruende']}" if erg["gruende"] else "")
                      + (f"; {erg['fehlend']} candidate files missing" if erg["fehlend"] else ""))
         except Exception as e:
-            self.log(f"stock stage failed (run {lauf_id}): {type(e).__name__}: {e}")
+            self.log.error(f"stock stage failed (run {lauf_id}): {type(e).__name__}: {e}")
             try:
                 from core import lernlauf as _ll
                 _ll.lauf_fortschreiben(dd, fortschritt={
                     "stock offers": f"failed: {type(e).__name__}: {e}"[:120]})
             except Exception:
-                pass
+                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
 
     # .518 DER GEBUENDELTE FEATURE-NORM-SCHRITT (User-Go 10.09.2026, „so
     # bauen"). Bis .517 mass jeder Ernte-Job die Norm selbst und hielt dafuer
@@ -17882,9 +19410,9 @@ class Service:
             try:
                 puls()
             except Exception:                       # noqa: BLE001
-                pass
+                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         if not _nl.offene_events(lauf_dir, eids):
-            self.log(f"norm step skipped ({kennung}): nothing left to measure")
+            self.log.warning(f"norm step skipped ({kennung}): nothing left to measure")
             return None, 0, False
         # Die Latten JE KAMERA, plus die globale Zeile als Rueckfall fuer
         # ein Ereignis, dessen Kamera hier nicht mehr auftaucht. LIVE aus
@@ -17900,7 +19428,7 @@ class Service:
                        max(self.LERNLAUF_NORM_DECKEL_MIN_S,
                            int(self.LERNLAUF_NORM_S_JE_KANDIDAT * _n_kand)
                            + 180))
-        self.log(f"norm step starting ({kennung}): {_n_kand} handover "
+        self.log.info(f"norm step starting ({kennung}): {_n_kand} handover "
                  f"candidate(s) from {len(eids)} event(s), one bundled "
                  f"feature-norm session")
         if fortschritt is not None:
@@ -17928,7 +19456,7 @@ class Service:
                         f"norm {kennung}", art=art,
                         timeout_s=self.LERNLAUF_NORM_DECKEL_MIN_S) as nr:
                 if nr is None:
-                    self.log(f"norm step ({kennung}): no free analysis "
+                    self.log.warning(f"norm step ({kennung}): no free analysis "
                              f"slot within "
                              f"{self.LERNLAUF_NORM_DECKEL_MIN_S}s — trying "
                              "again")
@@ -17962,20 +19490,20 @@ class Service:
                 # Der Worker ist gestorben oder die Frist riss. Gebuchtes
                 # bleibt gebucht (je Ereignis), also holt die naechste
                 # Runde den Rest — genau dafuer ist der Schritt resumefest.
-                self.log(f"norm step ({kennung}): worker round failed "
+                self.log.error(f"norm step ({kennung}): worker round failed "
                          f"({(antwort or {}).get('fehler') or 'no answer'})"
                          f" — {offen_vor} event(s) were still open, trying "
                          "again")
         _rest = len(_nl.offene_events(lauf_dir, eids))
         satz = _nl.bilanz_satz(erg)
         if satz:
-            self.log(f"norm step ({kennung}): {satz} "
+            self.log.info(f"norm step ({kennung}): {satz} "
                      f"(waited {warte_s:.1f}s for a slot)")
         if _rest:
             # NIE STILL: was hier offen bleibt, geht ungesiebt weiter — die
             # Achse laesst es durch (fail-open), aber der Betreiber muss es
             # lesen koennen.
-            self.log(f"norm step ({kennung}): {_rest} event(s) NOT "
+            self.log.warning(f"norm step ({kennung}): {_rest} event(s) NOT "
                      f"measured after {self.LERNLAUF_NORM_RUNDEN} round(s)"
                      " — their findings keep the norm axis open")
         return erg, _rest, False
@@ -18010,7 +19538,7 @@ class Service:
                 "achse_aus": (erg or {}).get("achse_aus"),
                 "warp_fehlt": (erg or {}).get("warp_fehlt", 0)}})
         except Exception as e:                                  # noqa: BLE001
-            self.log(f"norm step failed (run {lauf_id}): {type(e).__name__}: {e}"
+            self.log.error(f"norm step failed (run {lauf_id}): {type(e).__name__}: {e}"
                      " — the norm axis lets everything through in this run")
 
     def _gruppen_auswahl(self, satz, person, refs):
@@ -18045,7 +19573,7 @@ class Service:
                                luma_grenzen=luma_grenzen_aus_cfg(self.cfg),
                                kat_latten=_kk_ernte.katalog_latten(self.cfg))}
         except Exception as e:
-            self.log(f"group selection: picture check unavailable for "
+            self.log.error(f"group selection: picture check unavailable for "
                      f"{satz.get('anker_id')} ({type(e).__name__}: {e}) — "
                      "selecting without it")
         bewertet, _flags = _bn.empfehlen(
@@ -18115,10 +19643,10 @@ class Service:
                         status="unbenannt", mitglieder=mit)
                 neu += 1
             except Exception as e:
-                self.log(f"calibration: regrade failed for "
+                self.log.error(f"calibration: regrade failed for "
                          f"{satz.get('anker_id')} ({type(e).__name__}: {e})")
         self._lernlauf_zuweisung(lauf_id)
-        self.log(f"calibration: {neu} auto-named group(s) of run {lauf_id} "
+        self.log.info(f"calibration: {neu} auto-named group(s) of run {lauf_id} "
                  "re-graded with the new thresholds")
         return neu
 
@@ -18145,7 +19673,7 @@ class Service:
                 # nicht still nichts tun.
                 _ll.lauf_fortschreiben(dd, fortschritt={
                     "smart naming": "skipped — no named people yet"})
-                self.log(f"smart naming skipped (run {lauf_id}): no references")
+                self.log.warning(f"smart naming skipped (run {lauf_id}): no references")
                 return
             vor = _ank.zuweisung_pruefen(
                 offen, refs,
@@ -18171,7 +19699,7 @@ class Service:
                         # Keine Empfehlung = keine Uebernahme moeglich. Dann NICHT
                         # benennen, sonst steht eine Gruppe mit Namen da, deren
                         # Adopt-Knopf ins Leere laeuft.
-                        self.log(f"smart naming: {v['anker_id']} skipped "
+                        self.log.warning(f"smart naming: {v['anker_id']} skipped "
                                  "(no image passed the naming check)")
                         continue
                     _ll.anker_aktualisieren(
@@ -18183,12 +19711,12 @@ class Service:
                                    "einigkeit": v["einigkeit"], "zweiter": v["zweiter"]})
                     gesetzt += 1
                 except Exception as e:
-                    self.log(f"smart naming: {v['anker_id']} not written ({e})")
+                    self.log.error(f"smart naming: {v['anker_id']} not written ({e})")
             _ll.lauf_fortschreiben(dd, fortschritt={
                 "smart naming": f"{gesetzt} of {len(vor)} groups named automatically"})
-            self.log(f"smart naming (run {lauf_id}): {gesetzt} of {len(vor)} groups named")
+            self.log.info(f"smart naming (run {lauf_id}): {gesetzt} of {len(vor)} groups named")
         except Exception as e:
-            self.log(f"smart naming failed (run {lauf_id}): {e}")
+            self.log.error(f"smart naming failed (run {lauf_id}): {e}")
 
     def _lernlauf_endsichtung(self, lauf_id):
         """.294: Sichtung als TEIL des Laufs (Cache je Gruppe vorrechnen, damit
@@ -18203,7 +19731,7 @@ class Service:
         try:
             saetze, _k = _ll.anker_lesen(dd)
         except Exception as e:
-            self.log(f"end check skipped: anchors unreadable "
+            self.log.error(f"end check skipped: anchors unreadable "
                      f"({type(e).__name__}: {e})")
             return
         offen = [s for s in saetze
@@ -18222,9 +19750,9 @@ class Service:
                 fertig += 1
             except Exception as e:
                 fehler += 1
-                self.log(f"end check: group {satz.get('anker_id')} not "
+                self.log.info(f"end check: group {satz.get('anker_id')} not "
                          f"pre-checked ({type(e).__name__}: {e})")
-        self.log(f"end check (run {lauf_id}): picture check prepared for "
+        self.log.error(f"end check (run {lauf_id}): picture check prepared for "
                  f"{fertig} group{'s' if fertig != 1 else ''}"
                  + (f", {fehler} failed" if fehler else "")
                  + " — nothing is set aside automatically")
@@ -18233,7 +19761,7 @@ class Service:
         """Frontal-Ernte (Konzept §P1): 1 Event je Worker-Job; das Regime
         (Schwellen/fps) friert das Lauf-Manifest ein — Resume nutzt IMMER das
         Manifest, nie die aktuelle Config; Koexistenz-Pause uebers
-        _sammel_laeuft/_nachhol-Muster; Resume idempotent (fertig.jsonl +
+        _sammel_laeuft-Muster mit Faellig-Vermerk; Resume idempotent (fertig.jsonl +
         Kandidaten-Datei je Event); ehrliche Zaehler inkl.
         fd/ohne_pose/teilweise-lesbar; am Ende Buecher-gegen-Platte-Wache.
 
@@ -18266,10 +19794,10 @@ class Service:
             blink["n"] += 1
             n = blink["n"]
             if n <= self.LERNLAUF_BLINK_EINZELN:
-                self.log(f"run state file missing for a moment ({versuch}/{von}) "
+                self.log.warning(f"run state file missing for a moment ({versuch}/{von}) "
                          "— continuing (non-atomic rename on this filesystem?)")
             elif n % self.LERNLAUF_BLINK_SAMMEL == 0:
-                self.log(f"run state file missing for a moment — {n} times so "
+                self.log.warning(f"run state file missing for a moment — {n} times so "
                          "far in this run (non-atomic rename on this "
                          "filesystem?), still continuing")
 
@@ -18286,7 +19814,7 @@ class Service:
                 # ohne Thread stehen (der Wizard-Zombie, den J13 abschaffen
                 # sollte). Der Halt wird jetzt geschrieben, sobald die Datei
                 # wieder lesbar ist; ist sie es nicht, sagt das die Meldung.
-                self.log(f"harvest not started: run state unreadable ({fehler})")
+                self.log.error(f"harvest not started: run state unreadable ({fehler})")
                 self._lernlauf_unterbrochen(
                     dd, f"harvest not started: run state unreadable ({fehler})",
                     infra=True)
@@ -18315,7 +19843,7 @@ class Service:
         if not isinstance(liste, list):
             self._lernlauf_unterbrochen(
                 dd, "run state carries no prepared event list", zustand)
-            self.log("harvest failed: run state carries no events_liste")
+            self.log.error("harvest failed: run state carries no events_liste")
             return
         if not liste:
             self._lernlauf_leer_beenden(dd, zustand)
@@ -18326,7 +19854,7 @@ class Service:
             self._lernlauf_unterbrochen(
                 dd, "the persistent worker is disabled (config 'worker'), "
                     "the harvest needs it", zustand)
-            self.log("harvest failed: worker disabled")
+            self.log.error("harvest failed: worker disabled")
             return
         lauf_id = zustand.get("lauf_id") or ("L" + time.strftime("%Y%m%d_%H%M%S"))
         lauf_dir = os.path.join(dd, "state", "lernlauf", lauf_id)
@@ -18344,7 +19872,7 @@ class Service:
             if fehlend:
                 self._lernlauf_unterbrochen(
                     dd, f"thresholds missing ({', '.join(fehlend)})", zustand)
-                self.log(f"harvest failed: thresholds missing ({fehlend})")
+                self.log.error(f"harvest failed: thresholds missing ({fehlend})")
                 return
             starts = [e.get("start") for e in liste if e.get("start")]
             # .514: der GLOBALE Satz des Katalog-Registers fuer das Protokoll
@@ -18426,7 +19954,7 @@ class Service:
             zustand = _z1
         else:
             if _ll.abbruch_marke_lesen(dd, lauf_id):
-                self.log("harvest not started (run aborted)")
+                self.log.info("harvest not started (run aborted)")
             else:
                 self._lernlauf_unterbrochen(
                     dd, "run state file gone before the harvest started "
@@ -18443,12 +19971,12 @@ class Service:
                                                  mit_lock=True)
                 if z0 is None:
                     if f0:
-                        self.log(f"harvest stopped: run state unreadable ({f0})")
+                        self.log.error(f"harvest stopped: run state unreadable ({f0})")
                         self._lernlauf_unterbrochen(
                             dd, f"harvest stopped: run state unreadable ({f0})",
                             zustand, lauf_id=lauf_id)
                     elif _ll.abbruch_marke_lesen(dd, lauf_id):
-                        self.log("harvest stopped while waiting (run aborted)")
+                        self.log.info("harvest stopped while waiting (run aborted)")
                     else:
                         self._lernlauf_unterbrochen(
                             dd, "run state file gone while waiting for the "
@@ -18462,7 +19990,7 @@ class Service:
                         break
                 if not gewartet:
                     gewartet = True
-                    self.log("harvest waiting for a running collection to finish")
+                    self.log.info("harvest waiting for a running collection to finish")
                     _ll.lauf_fortschreiben_geduldig(dd, {"fortschritt": {
                         "status": "waiting for the auto-collection to finish"}},
                         melde=_blink_melden)
@@ -18478,17 +20006,17 @@ class Service:
                     # ungenutzt liegen. Jetzt derselbe Block wie im Zweig 25
                     # Zeilen darueber.
                     if _ll.abbruch_marke_lesen(dd, lauf_id):
-                        self.log("harvest stopped (run aborted)")
+                        self.log.info("harvest stopped (run aborted)")
                     else:
                         self._lernlauf_unterbrochen(
                             dd, "run state file gone while starting the "
                                 "harvest (no abort marker)",
                             zustand, infra=True, lauf_id=lauf_id)
                     return
-            self.log(f"harvest starting (run {lauf_id}): auto-collection paused until done")
+            self.log.warning(f"harvest starting (run {lauf_id}): auto-collection paused until done")
             fertig, summe = _ern.fertig_lesen(lauf_dir)
             if summe.get("kaputt"):
-                self.log(f"harvest resume: {summe['kaputt']} unreadable fertig.jsonl "
+                self.log.error(f"harvest resume: {summe['kaputt']} unreadable fertig.jsonl "
                          "lines — the affected events will be harvested again")
             mit_clip = [e for e in liste if e.get("hat_clip")]
             ohne_clip = len(liste) - len(mit_clip)
@@ -18576,7 +20104,7 @@ class Service:
             # dem Resume, ohne ein einziges gebuchtes Ereignis) bleibt gefangen.
             fortschritt_start = {"n": erledigt["n"], "zurueckgesetzt": False}
 
-            def _stopp(grund, art="infra"):
+            def _stopp(grund, art="infra", stufe=_logbuch.INFO):
                 """Den ganzen Lauf beenden — EIN Grund, EINE Logzeile, egal wie
                 viele Abholer den Abbruch gleichzeitig bemerken. `art` traegt
                 die Folge (s. `ende`)."""
@@ -18586,7 +20114,7 @@ class Service:
                         ende["grund"], ende["art"] = grund, art
                 stopp.set()
                 if erster:
-                    self.log(grund)
+                    self.log.log(stufe, grund)
 
             def _lauf_lebt(grund_wenn_abgebrochen):
                 """Steht der Lauf noch? Sonst: alle Abholer beenden.
@@ -18628,14 +20156,14 @@ class Service:
                     return False
                 if ferr:
                     _stopp(f"harvest stopped: run state unreadable ({ferr})",
-                           art="fehler")
+                           art="fehler", stufe=_logbuch.ERROR)
                 elif _ll.abbruch_marke_lesen(dd, lauf_id):
                     # Der Nutzer hat waehrend der Nachpruefungen abgebrochen.
                     _stopp(grund_wenn_abgebrochen, art="abbruch")
                 else:
                     _stopp("harvest stopped: run state file gone and no abort "
                            "marker — infrastructure, not a user abort",
-                           art="infra")
+                           art="infra", stufe=_logbuch.WARNING)
                 return False
 
             def _vorladen_anstossen(worker_erzeugt):
@@ -18702,7 +20230,7 @@ class Service:
                                 # wie die Ernte-Jobs (Review-MUSS).
                                 tor_n=tor_n, tor_deckel_s=tor_deckel_s)
                         except Exception:
-                            pass   # der Ernte-Job meldet Fehler selbst
+                            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")   # der Ernte-Job meldet Fehler selbst
                         finally:
                             _fr.frei(_ne, data_dir=dd)
 
@@ -18726,11 +20254,11 @@ class Service:
                 try:
                     api(self.cfg, "/api/version")
                 except FrigateHttpFehler:
-                    pass                       # Antwort = Frigate lebt
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")                       # Antwort = Frigate lebt
                 except Exception:
                     infra = True
                 if infra:
-                    self.log(f"harvest {eid}: Frigate not answering — "
+                    self.log.warning(f"harvest {eid}: Frigate not answering — "
                              "event NOT booked, waiting for recovery")
                     while frigate_schoner.gesperrt() and not stopp.is_set():
                         if _ll.lauf_fortschreiben_geduldig(
@@ -18749,19 +20277,19 @@ class Service:
                             # .509 J13 (a): erst die Marke fragen, dann urteilen.
                             if _ll.abbruch_marke_lesen(dd, lauf_id):
                                 _stopp("harvest stopped while waiting for "
-                                       "Frigate (run aborted)", art="abbruch")
+                                       "Frigate (run aborted)", art="abbruch", stufe=_logbuch.INFO)
                             else:
                                 _stopp("harvest stopped: run state file gone "
                                        "while waiting for Frigate (no abort "
-                                       "marker)", art="infra")
+                                       "marker)", art="infra", stufe=_logbuch.WARNING)
                             return False
                         if frigate_schoner.erlaubt():
                             try:            # aktive Probe haelt die Sperre
                                 api(self.cfg, "/api/version")   # ehrlich
                             except FrigateHttpFehler:
-                                pass        # Antwort = lebt, ok() lief
+                                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")        # Antwort = lebt, ok() lief
                             except Exception:
-                                pass        # fehler() lief, Sperre verlaengert
+                                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")        # fehler() lief, Sperre verlaengert
                         time.sleep(10)
                     if not stopp.is_set():
                         if _ll.lauf_fortschreiben_geduldig(
@@ -18777,12 +20305,12 @@ class Service:
                             # ueberhaupt gebaut wurde.
                             if _ll.abbruch_marke_lesen(dd, lauf_id):
                                 _stopp("harvest stopped while waiting for "
-                                       "Frigate (run aborted)", art="abbruch")
+                                       "Frigate (run aborted)", art="abbruch", stufe=_logbuch.INFO)
                             else:
                                 _stopp("harvest stopped: run state file gone "
                                        "while waiting for Frigate (no abort "
                                        "marker) — infrastructure, not a user "
-                                       "abort", art="infra")
+                                       "abort", art="infra", stufe=_logbuch.WARNING)
                     return False
                 # .288: Erzeugungs-Abbrueche (Deckel erreicht ODER Probe
                 # tot, Frigate inzwischen aber wieder da) NIE als
@@ -18798,12 +20326,12 @@ class Service:
                 # Text der Ausnahme; vorher matchte diese Pruefung NIE, der
                 # ganze Nicht-buchen-Zweig war tot.)
                 if "clip_tor_deckel" in _ftxt:
-                    self.log(f"harvest {eid}: waited at the clip download gate "
+                    self.log.warning(f"harvest {eid}: waited at the clip download gate "
                              f"up to the cap ({tor_deckel_s}s) — event NOT "
                              "booked, a later run retries it")
                     return False
                 if "frigate_stoerung" in _ftxt or "erzeugung_deckel" in _ftxt:
-                    self.log(f"harvest {eid}: clip generation aborted "
+                    self.log.error(f"harvest {eid}: clip generation aborted "
                              f"({_ftxt[:120]}) — event NOT booked, "
                              "a later run retries it")
                     return False
@@ -18815,6 +20343,9 @@ class Service:
                 with buch_lock:
                     eintrag = {"eid": eid, "ok": bool(antwort and antwort.get("ok"))}
                     if antwort and antwort.get("ok"):
+                        # Feldbefunde Punkt 2: ein gebuchtes Ernte-Ereignis ist eine
+                        # erfolgreiche Analyse (Grund `stillstand`).
+                        self._erfolg_merken()
                         # .32x: ohne_struktur MIT transportieren — sonst faellt die
                         # Diagnose des Struktur-Tests still raus (QS-Befund 22.08.:
                         # "der neue Zaehler erreicht weder fertig.jsonl noch die
@@ -18863,7 +20394,7 @@ class Service:
                         inv = _ern.zaehler_pruefen(antwort)
                         if inv:
                             summe["invariante"] = summe.get("invariante", 0) + 1
-                            self.log(f"harvest {eid}: {inv}")
+                            self.log.info(f"harvest {eid}: {inv}")
                         if antwort.get("unvollstaendig"):
                             eintrag["unvollstaendig"] = True   # Teil-Verlust NIE still (§2.3)
                             summe["unvollstaendig"] = summe.get("unvollstaendig", 0) + 1
@@ -18879,7 +20410,7 @@ class Service:
                         eintrag["fehler"] = ((antwort or {}).get("fehler")
                                              or "worker timeout/crash")
                         summe["fehler"] = summe.get("fehler", 0) + 1
-                        self.log(f"harvest {eid} FAILED: {eintrag['fehler']}")
+                        self.log.error(f"harvest {eid} FAILED: {eintrag['fehler']}")
                         _ern.event_aufraeumen(lauf_dir, eid)   # keine Teilzeilen-Leichen
                     _ern.fertig_anhaengen(lauf_dir, eintrag)
                     # .262 Fortsetzungs-Suche: Vermerk ok UND fehler (ein heute
@@ -18889,7 +20420,7 @@ class Service:
                         _ll.durchsucht_merken(dd, eid,
                                               "ok" if eintrag.get("ok") else "fehler")
                     except OSError as _de:
-                        self.log(f"searched-index write failed ({_de}) — the event "
+                        self.log.error(f"searched-index write failed ({_de}) — the event "
                                  "may be searched again in a later run")
                     fertig.add(eid)
                     erledigt["n"] += 1
@@ -18932,7 +20463,7 @@ class Service:
                     # .509 J13 (b): BEWUSST kein `unterbrochen` — der Zustand
                     # bleibt in `ernte`, genau daran erkennt ihn der Boot-Resume.
                     _stopp("harvest paused for service restart — resumes after boot",
-                           art="neustart")
+                           art="neustart", stufe=_logbuch.WARNING)
                     return "ende"
                 # C2 (05.09.2026, bauplan_0505.md §1): die Ernte NIMMT
                 # `_gpu_bg_lock` nicht mehr. Sie ist Kunde der Vergabestelle; das
@@ -19081,7 +20612,7 @@ class Service:
                 # ungebucht an den Anfang der Warteschlange zurueck (der Rueckweg
                 # `offen.appendleft(e)` steht im Abholer darunter).
                 if _wi.get("fremdverschuldet"):
-                    self.log(f"harvest {eid}: the worker process was not able to "
+                    self.log.warning(f"harvest {eid}: the worker process was not able to "
                              f"finish this job through no fault of the event — "
                              f"NOT booked, it goes back into the queue")
                     return "nochmal"
@@ -19140,6 +20671,7 @@ class Service:
                         rest_s = p['gesamt_s'] - p['kalt_s']
                     return f"~{int(round(rest_s / max(1, k_abholer) / 60))} min"
                 except Exception:
+                    _logbuch.swallowed(_log, _logbuch.ERROR, "returning '?'", throttle=False)
                     return "?"
 
             letzter_schrieb = {"ts": 0.0, "sig": None}
@@ -19160,6 +20692,7 @@ class Service:
                 try:
                     belegt, wartend = _frames.tor_zustand(tor_n, dd)
                 except OSError:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
                     return None
                 if wartend:
                     return f"clip download ({belegt} in flight)"
@@ -19243,11 +20776,11 @@ class Service:
                         dd, updates, melde=_blink_melden,
                         abbruch=lambda: ende["grund"] is not None) is None:
                     if _ll.abbruch_marke_lesen(dd, lauf_id):
-                        _stopp("harvest stopped (run aborted)", art="abbruch")
+                        _stopp("harvest stopped (run aborted)", art="abbruch", stufe=_logbuch.INFO)
                     else:
                         _stopp("harvest stopped: run state file gone (no abort "
                                "marker) — infrastructure, not a user abort",
-                               art="infra")
+                               art="infra", stufe=_logbuch.WARNING)
                 return i, s
 
             # C2: der Fortschritt wird von GENAU EINEM Thread geschrieben — dem
@@ -19285,7 +20818,7 @@ class Service:
                             or time.time() - getattr(self, "_ernte_logpuls", 0) >= 600):
                         self._ernte_logpuls = time.time()
                         letzter_log = i
-                        self.log(f"harvest progress: {i}/{n} events, "
+                        self.log.info(f"harvest progress: {i}/{n} events, "
                                  f"{s.get('kandidaten', 0)} candidates, "
                                  f"{s.get('ohne_gesicht', 0)} without face, "
                                  f"{s.get('unlesbar', 0)} unreadable"
@@ -19305,7 +20838,7 @@ class Service:
                     t.join(30)
                 _waisen = [t.name for t in abholer if t.is_alive()]
                 if _waisen:
-                    self.log(f"harvest: {len(_waisen)} collector thread(s) still "
+                    self.log.info(f"harvest: {len(_waisen)} collector thread(s) still "
                              f"running after 30s ({', '.join(_waisen)}) — they "
                              f"finish their job and stop, no new event is taken")
                 # .509 Review-SOLL: die BILANZ des Blinkens — die Einzelzeilen
@@ -19313,7 +20846,7 @@ class Service:
                 # gehen. Sie ist die Zahl, an der ein Nutzer-Log zeigt, wie
                 # unruhig sein Dateisystem wirklich ist.
                 if blink["n"]:
-                    self.log(f"run state file was missing for a moment "
+                    self.log.error(f"run state file was missing for a moment "
                              f"{blink['n']} time(s) during this run — the run "
                              "continued each time (non-atomic rename on this "
                              "filesystem?)")
@@ -19334,7 +20867,7 @@ class Service:
             # das Dict gegen sich selbst — HIER stehen Datei und Zaehler gegeneinander).
             befunde = _ern.bestand_pruefen(lauf_dir)
             if befunde:
-                self.log(f"harvest BOOKKEEPING MISMATCH ({len(befunde)}): "
+                self.log.error(f"harvest BOOKKEEPING MISMATCH ({len(befunde)}): "
                          + " · ".join(befunde[:5]))
             schluss = {"status": "harvest finished — anchor stage starting (E3)",
                        "analysing": None}      # .87: aktuelles-Event-Zeile raeumen (Forensik-Fund 7)
@@ -19348,16 +20881,16 @@ class Service:
             if _rate:
                 try:
                     _wu.ernte_rate_schreiben(dd, _rate_hw, _rate_ver, _rate, lauf_id)
-                    self.log(f"harvest rate measured: {_rate['k']} s per clip-second "
+                    self.log.info(f"harvest rate measured: {_rate['k']} s per clip-second "
                              f"+ {_rate['fix_s']} s per event over {_rate['n']} events "
                              f"({_rate['wall_s']} s for {_rate['clip_s']} clip-s) — "
                              "next run estimates with it")
                 except OSError as _re:
-                    self.log(f"harvest rate not saved ({_re})")
+                    self.log.warning(f"harvest rate not saved ({_re})")
             # .514: was der Lauf-Satz galt, steht in EINER Zeile im Log — die
             # Frage „mit welchen Latten lief das eigentlich" soll niemand aus
             # dem Manifest zusammensuchen muessen (E10: je Lauf dokumentiert).
-            self.log(f"harvest (run {lauf_id}): "
+            self.log.info(f"harvest (run {lauf_id}): "
                      + _ern_mk.profil_satz(
                          manifest.get("profil"),
                          # .518: Alt-Manifeste tragen den Schluessel nicht —
@@ -19365,7 +20898,7 @@ class Service:
                          # und die Zeile soll das nicht behaupten.
                          nachmess=manifest.get("profil_nachmess"))
                      + f" [{manifest.get('profil_quelle', '?')}]")
-            self.log(f"harvest finished (run {lauf_id}): "
+            self.log.error(f"harvest finished (run {lauf_id}): "
                      f"{summe.get('kandidaten', 0)} candidates "
                      f"({summe.get('m', 0)} crop-worthy, {summe.get('s', 0)} anchor-ready, "
                      f"{summe.get('gesiebt', 0)} sieved out) "
@@ -19380,7 +20913,7 @@ class Service:
             # Lauf-Zustand, damit sie die Logrotation ueberlebt.
             _mkb = summe.get("mkbilanz")
             if _mkb:
-                self.log(f"harvest (run {lauf_id}): " + _ern_mk.bilanz_satz(_mkb))
+                self.log.info(f"harvest (run {lauf_id}): " + _ern_mk.bilanz_satz(_mkb))
                 _ll.lauf_fortschreiben_geduldig(
                     dd, {"messdeckung": _mkb}, melde=_blink_melden)
             # .518 DER GEBUENDELTE NORM-SCHRITT — genau HIER, zwischen der
@@ -19411,16 +20944,16 @@ class Service:
             # Thread. Jetzt haelt der Lauf sichtbar an und traegt den Grund.
             self._lernlauf_unterbrochen(dd, f"harvest failed: {e}", zustand,
                                         lauf_id=lauf_id)
-            self.log(f"harvest failed ({type(e).__name__}: {e})")
+            self.log.error(f"harvest failed ({type(e).__name__}: {e})")
         finally:
             if erworben:
                 with self._sammel_lock:
-                    nachhol = self._sammel_nachhol
-                    self._sammel_nachhol = False
                     self._sammel_laeuft = False
-                self.log("harvest done: auto-collection resumed")
-                if nachhol:
-                    self._szenario_nachsammeln()
+                self.log.info("harvest done: auto-collection resumed")
+                # Stufe 3 (O415): was waehrend des Lernlaufs angestossen wurde, steht
+                # im Faellig-Vermerk; die Startstelle nimmt es, sobald kein
+                # Rueckstand da ist.
+                self._sammeln_starten()
 
     # -------------------------------------------- Unterbrechung + Fortsetzen (J13)
     # .509, Feldbefund 06.09.2026: drei Lernlaeufe eines Nutzers endeten 39/72/39 s
@@ -19505,14 +21038,14 @@ class Service:
                      # den Schluessel) — sie stuende sonst am fertigen Lauf wie
                      # der `analysing`-Rest am Ernte-Ende (Forensik-Fund 7).
                      "analysing": None}},
-            melde=lambda v, n: self.log(
+            melde=lambda v, n: self.log.warning(
                 f"run state file missing for a moment ({v}/{n}) — "
                 "continuing (non-atomic rename on this filesystem?)"))
         if z is None:
-            self.log("learning run: 0 events in this scope, but there is no run "
+            self.log.info("learning run: 0 events in this scope, but there is no run "
                      "state left to record that in")
             return None
-        self.log(f"learning run{(' ' + lid) if lid else ''} finished: 0 events "
+        self.log.info(f"learning run{(' ' + lid) if lid else ''} finished: 0 events "
                  f"in this scope ({umfang}) — nothing to harvest, and nothing "
                  f"to resume; pick a different scope for the next run")
         return z
@@ -19539,7 +21072,7 @@ class Service:
         # dem Rueckfall NEU an und der Auto-Resume fuhr den abgebrochenen Lauf
         # 60 s spaeter gegen einen Ordner im Trash wieder an.
         if _ll_u.abbruch_marke_lesen(dd, lauf_id):
-            self.log(f"learning run interrupted ({grund}) — but the user "
+            self.log.info(f"learning run interrupted ({grund}) — but the user "
                      "aborted meanwhile, so nothing is recorded")
             return None
         try:
@@ -19548,19 +21081,19 @@ class Service:
                 auto_resume_faehig=bool(infra),
                 rueckfall=dict(zustand, fortschritt=dict(
                     (zustand or {}).get("fortschritt") or {})) if zustand else None,
-                melde=lambda v, n: self.log(
+                melde=lambda v, n: self.log.warning(
                     f"run state file missing for a moment ({v}/{n}) — "
                     "continuing (non-atomic rename on this filesystem?)"))
         except Exception as e:                                    # noqa: BLE001
-            self.log(f"learning run: could not record the interruption "
+            self.log.error(f"learning run: could not record the interruption "
                      f"({type(e).__name__}: {e})")
             return None
         if z is None:
-            self.log(f"learning run interrupted ({grund}) — no run state of "
+            self.log.info(f"learning run interrupted ({grund}) — no run state of "
                      "this run left to record it in")
             return None
         st = z.get("stand") or {}
-        self.log(f"learning run INTERRUPTED after {st.get('n', '?')}/"
+        self.log.warning(f"learning run INTERRUPTED after {st.get('n', '?')}/"
                  f"{st.get('m', '?')}: {grund} — resume it on the run page")
         if infra:
             self._lernlauf_autoresume_armieren(dd, z)
@@ -19574,24 +21107,24 @@ class Service:
         n = int((zustand or {}).get("auto_resume") or 0)
         lid = str((zustand or {}).get("lauf_id") or "")
         if n >= self.LERNLAUF_AUTORESUME_MAX:
-            self.log(f"learning run {lid}: automatic resume already used "
+            self.log.info(f"learning run {lid}: automatic resume already used "
                      f"({n}/{self.LERNLAUF_AUTORESUME_MAX}) — waiting for the "
                      "Resume button")
             return False
 
         def _spaeter():
             time.sleep(self.LERNLAUF_AUTORESUME_S)
-            self.log(f"learning run {lid}: automatic resume attempt "
+            self.log.info(f"learning run {lid}: automatic resume attempt "
                      f"{n + 1}/{self.LERNLAUF_AUTORESUME_MAX} after the "
                      f"interruption")
             ok, msg = self.lernlauf_fortsetzen(lauf_id=lid, auto=True)
             if not ok:
-                self.log(f"learning run {lid}: automatic resume did not start "
+                self.log.warning(f"learning run {lid}: automatic resume did not start "
                          f"({msg})")
 
         threading.Thread(target=_spaeter, daemon=True,
                          name="lernlauf-autoresume").start()
-        self.log(f"learning run {lid}: resuming automatically in "
+        self.log.info(f"learning run {lid}: resuming automatically in "
                  f"{int(self.LERNLAUF_AUTORESUME_S)}s "
                  f"(attempt {n + 1}/{self.LERNLAUF_AUTORESUME_MAX})")
         return True
@@ -19656,7 +21189,7 @@ class Service:
             # gibt, liest sich wie ein Datenfehler. Ist sie da, steht sie; ist
             # sie es nicht, entfaellt sie.
             _rid = str(z.get("lauf_id") or "")
-            self.log(f"learning run{(' ' + _rid) if _rid else ''} resumes "
+            self.log.warning(f"learning run{(' ' + _rid) if _rid else ''} resumes "
                      + ("automatically" if auto else "on request")
                      + " (harvest resume — already harvested events are skipped)")
         self.lernlauf_ernte_starten()
@@ -19686,7 +21219,7 @@ class Service:
                         d = json.loads(l)
                         q[d["id"]] = d
                     except Exception:
-                        pass
+                        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         return q
 
     def _enroll_append(self, d):
@@ -19712,12 +21245,13 @@ class Service:
                     try:
                         abgelehnt.append(json.loads(l)["emb"])
                     except Exception:
-                        pass
+                        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         with open(kp) as f:
             for l in f:
                 try:
                     kd = json.loads(l)
                 except Exception:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                     continue
                 kid = f"{eid}:{kd.get('person') or 'FREMD'}:{kd.get('t')}"
                 if kid in q:
@@ -19746,7 +21280,7 @@ class Service:
                                      "bw": kd.get("bw"), "bh": kd.get("bh"),
                                      "datei": kd.get("datei"), "emb": kd.get("emb"),
                                      "status": "offen"}, kd))
-                self.log(f"{eid}: enrollment suggestion ({schluessel}, score {kd.get('score')})")
+                self.log.info(f"{eid}: enrollment suggestion ({schluessel}, score {kd.get('score')})")
 
     def enroll_entscheiden(self, kid, aktion, person=None):
         """UI-Entscheidung: aufnehmen (in Master + Export + Drift-Waechter) oder ablehnen."""
@@ -19800,7 +21334,7 @@ class Service:
                 pass                              # naechster Analyse-Lauf baut mit neuem Master
         self._enroll_append({**d, "status": "aufgenommen", "als": ziel_person,
                              "ts_entschieden": round(time.time(), 1)})
-        self.log(f"ENROLLMENT: {d['datei']} -> master/{ziel_person}/ (export + drift watchdog running)")
+        self.log.info(f"ENROLLMENT: {d['datei']} -> master/{ziel_person}/ (export + drift watchdog running)")
         self.referenz_nacharbeit()
         return True, f"aufgenommen als {ziel_person}"
 
@@ -19818,7 +21352,7 @@ class Service:
             if self.cfg.get("frigate_sync") and not frigate_read_only(self.cfg):
                 if getattr(self, "_sync_job_aktiv", False):
                     # .134 Lauf-Riegel: manueller Sync laeuft — Runde auslassen.
-                    self.log("frigate_sync: a manual sync is running — post-enrollment export skipped")
+                    self.log.warning("frigate_sync: a manual sync is running — post-enrollment export skipped")
                 else:
                     self._sync_job_aktiv = True
                     try:
@@ -19828,7 +21362,7 @@ class Service:
                                             os.path.join(HERE, "sync_refs.py"), "export", "--force"],
                                            capture_output=True, timeout=300, check=False, env=env)
                         if r.returncode != 0:    # Fehler NIE still verschlucken (Klasse C)
-                            self.log(f"frigate_sync: reference export failed (rc={r.returncode}): "
+                            self.log.error(f"frigate_sync: reference export failed (rc={r.returncode}): "
                                      f"{fehler_kern(r.stderr)}")
                     finally:
                         self._sync_job_aktiv = False
@@ -19838,7 +21372,7 @@ class Service:
                                preexec_fn=_analyse_nice)   # Issue #21, s. ANALYSE_NICE
             if r.returncode == 0:
                 self.enroll_warnung = None
-                self.log("drift watchdog GREEN after enrollment")
+                self.log.info("drift watchdog GREEN after enrollment")
             else:
                 # stderr MIT aufnehmen (Fund 25.07.): auf Prod starb abnahme.py mangels
                 # Fixture sofort mit Traceback auf STDERR — der Banner zeigte ROT mit leerem
@@ -19855,7 +21389,7 @@ class Service:
                 _ab = next((i for i, z in enumerate(_zl) if z.startswith("ROT")), None)
                 _txt = "\n".join(_zl[_ab:] if _ab is not None else _zl)
                 self.enroll_warnung = (time.time(), _txt[-700:])
-                self.log("DRIFT WATCHDOG RED after enrollment — check the reference! (System page)")
+                self.log.warning("DRIFT WATCHDOG RED after enrollment — check the reference! (System page)")
         threading.Thread(target=nacharbeit, daemon=True).start()
 
     def upload_referenz(self, person, daten):
@@ -19889,7 +21423,7 @@ class Service:
                 os.remove(os.path.join(self.cfg["data_dir"], "clips", "refcache.npz"))
             except FileNotFoundError:
                 pass
-        self.log(f"UPLOAD: {person}/{name} into the master")
+        self.log.info(f"UPLOAD: {person}/{name} into the master")
         return True, f"{name} aufgenommen (Export beim naechsten sync/Enrollment)"
 
     def _crop_je_person(self, event_dir, personen):
@@ -19968,47 +21502,133 @@ class Service:
             return ziel
         except Exception as e:
             # Eine misslungene Montage darf die MELDUNG nicht kosten — dann eben ein Bild.
-            self.log(f"push collage failed ({len(treffer)} persons): {e}")
+            self.log.error(f"push collage failed ({len(treffer)} persons): {e}")
             return treffer[0][1]
 
-    def log(self, msg):
-        line = f"[{datetime.datetime.now():%d.%m %H:%M:%S}] {msg}"
-        print(line, flush=True)
-        self.logbuf.append(line)
-
-    def debug(self, msg):
-        """DEBUG-Log: nur wenn cfg['debug'] gesetzt. Geht ueber log() (stdout + /log-Ringpuffer)
-        mit [dbg]-Prefix, damit man die Tiefe zur Laufzeit ein-/ausschalten kann, ohne INFO
-        zuzumuellen. Aktiviert wird ueber Settings (Whitelist-Key 'debug') oder die yaml.
-
-        .511 (User-Auftrag 08.09., Log-Bereinigung): DAS ist der EINE Griff fuer
-        alles Wiederkehrende. Hinter ihm liegt seither die Routine-Buchhaltung
-        des Dienstes (Analyse-Anfangsmarke, Ketten-Konstante je Lauf, Waechter-
-        Uebersprung, Sweep-Einreihung, Aufraeum-Bilanzen, Support-Leseabrufe) —
-        gemessen 80,8 % aller Zeilen eines Feldtesters. Was IMMER bleibt:
-        Fehler, Entscheide, Zustandswechsel, Start/Stop und die Urteilszeile."""
-        if self.cfg.get("debug"):
-            self.log(f"[dbg] {msg}")
-
-    def _debug_spiegeln(self):
-        """Den laufenden debug-Stand in die Flaggendatei spiegeln, damit der
-        Live-Engine-PROZESS ihn sieht (core/logdatei.debug_flagge_setzen — die
-        Begruendung, warum der Config-Store das nicht kann, steht dort).
+    def _schalter_spiegeln(self):
+        """Debug- und Pruef-Schalter anwenden und in die Flaggendateien spiegeln,
+        damit Worker und Live-Engine sie sehen (core/logbuch.set_switches, E9,
+        E11; warum der Config-Store das nicht kann, steht in core/logdatei).
         Nie laut scheitern: der Diagnose-Schalter darf den Dienst nicht kosten."""
         try:
-            from core import logdatei as _ld       # lazy wie die anderen Griffe
-            _ld.debug_flagge_setzen(self.cfg.get("data_dir"),
-                                    bool(self.cfg.get("debug")))
+            _logbuch.set_switches(self.cfg.get("data_dir"), bool(self.cfg.get("debug")),
+                                  bool(self.cfg.get("pruef_log")),
+                                  self.cfg.get("pruef_takt_s"))
         except Exception:
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "switches stay as they were")
 
-    def _clip_dbg_senke(self, zeile):
-        """[clipdbg]-Senke (core.frames.clip_dbg, .287, User-Auftrag 18.08.):
-        DERSELBE Schalter wie debug() (Whitelist-Key 'debug'), die Zeilen gehen
-        ueber log() (stdout + /log-Ringpuffer). Das Praefix setzt core.frames —
-        die eine Stelle fuer alle Prozesse."""
-        if self.cfg.get("debug"):
-            self.log(zeile)
+    def _debug_zeitgeber_stellen(self):
+        """Den Zeitgeber fuer das Ende des Debug-Fensters stellen und einen alten abbestellen
+        (Bauplan Debug-Zeitfenster Stufe 1 Punkt 4). -> der Zeitgeber, oder None bei debug aus."""
+        alt = getattr(self, "_debug_zeitgeber", None)
+        if alt is not None:
+            alt.cancel()
+        self._debug_zeitgeber = None
+        bis = debug_fenster_ende(self.cfg)
+        if not self.cfg.get("debug") or bis is None:
+            return None
+        zg = threading.Timer(max(0.0, bis - time.time()), self._debug_ablauf,
+                             args=(self.cfg.get("debug_seit"),))
+        zg.daemon = True
+        zg.name = "debug-fenster"
+        zg.start()
+        self._debug_zeitgeber = zg
+        return zg
+
+    def _debug_ablauf(self, seit):
+        """Am Fensterende debug live ausschalten, nur wenn noch dasselbe Fenster gilt
+        (Einschaltzeit `seit`); der Store bleibt. -> True, wenn ausgeschaltet wurde."""
+        if not self.cfg.get("debug") or self.cfg.get("debug_seit") != seit:
+            return False
+        self.cfg["debug"] = False
+        self._schalter_spiegeln()
+        self.log.info(f"debug switched itself off: its window of "
+                      f"{self.cfg.get('debug_dauer_h')} h since {_debug_zeit_text(seit)} "
+                      "has ended; switch it on again in the configuration page for a new window")
+        return True
+
+    # ---------------------------------------------- Pruef-Kanal (E9 Weg A), nur lesend
+    def log_startnummern(self):
+        """Startnummern von Worker und Live-Engine seit Dienststart (E6, D11).
+        -> dict worker, live."""
+        w = self._worker_obj
+        return {"worker": int(getattr(w, "_starts", 0) or 0) if w is not None else 0,
+                "live": int(getattr(self, "_live_starts", 0) or 0)}
+
+    def pruef_beobachten(self, nur_aenderung):
+        """Die Pruef-Zeilen des Dienstes im Takt (Z2, Z4, Z6, Z7, Waechter), nur
+        lesend (G0). -> [(stufe, text)]; zwischen den Takten nichts."""
+        if nur_aenderung:
+            return []
+        zeilen = (self._pruef_ereignisse(), self._pruef_gesundheit(),
+                  self._pruef_tempo(), self._pruef_health(), self._pruef_waechter())
+        return [(_logbuch.INFO, z) for z in zeilen if z]
+
+    def _log_zaehler(self):
+        """Summe der Tee-Zaehler ueber alle Prozesse. -> (warning, error, critical, fremd)."""
+        stand = _LOGDATEI.zaehler_stand() if _LOGDATEI is not None else {}
+        z = list((stand.get("zaehler") or {}).values())
+        return (sum(x.get("warning_n", 0) for x in z), sum(x.get("error_n", 0) for x in z),
+                sum(x.get("critical_n", 0) for x in z), int(stand.get("fremd_n") or 0))
+
+    def _pruef_ereignisse(self):
+        """Z2: angenommen = gebucht + offen, abgeleitet (ED011 bleibt unberuehrt)."""
+        wartend, arbeit = self.rueckstau_zahlen()
+        gebucht = len(getattr(self, "processed", ()) or ())
+        zurueck = len(getattr(self, "_zurueck_n", None) or ())
+        return (f"PRUEF ereignisse angenommen={gebucht + wartend + arbeit} gebucht={gebucht} "
+                f"offen={wartend + arbeit} zurueckgestellt={zurueck}")
+
+    def _pruef_gesundheit(self):
+        """Z4: Zaehler aus dem Tee und die Startnummern."""
+        w, e, c, f = self._log_zaehler()
+        st = self.log_startnummern()
+        return (f"PRUEF gesundheit warning={w} error={e} critical={c} fremd={f} "
+                f"worker_starts={st['worker']} engine_starts={st['live']}")
+
+    def _pruef_tempo(self):
+        """Z6: Mittel und laengstes der Ereignisse seit der letzten Pruef-Zeile."""
+        ring = list(getattr(self, "_zeiten_ring", ()) or ())
+        letzt = getattr(self, "_pruef_zeiten_letzt", None)
+        neu = ring
+        for i in range(len(ring) - 1, -1, -1):
+            if ring[i] is letzt:
+                neu = ring[i + 1:]
+                break
+        if ring:
+            self._pruef_zeiten_letzt = ring[-1]
+        werte = [float(z["gesamt_s"]) for z in neu if z.get("gesamt_s") is not None]
+        if not werte:
+            return "PRUEF tempo n=0 mittel_s=- laengstes_s=-"
+        return (f"PRUEF tempo n={len(werte)} mittel_s={sum(werte) / len(werte):.2f} "
+                f"laengstes_s={max(werte):.2f}")
+
+    def _pruef_health(self):
+        """Z7: die /health-Kernwerte zur selben Zeit wie die Zaehler; `ok` aus der EINEN
+        Bedingung (`health_ok`), dazu die Absagen des Start-Tors (Feldbefunde Punkt 5)."""
+        serie = self.analyse_serie_stand()
+        sf = int(getattr(self, "startup_fails", 0) or 0)
+        w, e, _c, _f = self._log_zaehler()
+        d = getattr(self, "_dienst_obj", None)
+        absagen = int(getattr(d, "absagen_n", 0) or 0) if d is not None else 0
+        return (f"PRUEF health ok={str(self.health_ok(serie)).lower()} "
+                f"startup_fails={sf} serie_aktiv={str(bool(serie['aktiv'])).lower()} "
+                f"warning={w} error={e} absagen={absagen}")
+
+    def _pruef_waechter(self):
+        """Waechter aktiv: eingerichtete Guards, laufende Kacheln, Herzschlag, Bildfluss."""
+        from core import livewache as _lw
+        status, _frisch = _lw.status_lesen(self.cfg)
+        _d, guards = _lw.guards_lesen(self.cfg, _logbuch.NULL)
+        kacheln = (status or {}).get("kacheln") or {}
+        bilder = sum(int(k.get("bilder") or 0) for k in kacheln.values())
+        vorher = getattr(self, "_pruef_bilder_letzt", None)
+        self._pruef_bilder_letzt = bilder
+        alter = (round(time.time() - float(status.get("ts") or 0), 1) if status else "-")
+        return (f"PRUEF waechter eingerichtet={sum(1 for g in guards.values() if g.get('enabled'))} "
+                f"aktiv={sum(1 for k in kacheln.values() if k.get('zustand') == 'aktiv')} "
+                f"herzschlag_alter_s={alter} "
+                f"bilder_seit_letzter={bilder - vorher if vorher is not None else bilder}")
 
     def _analyse_beginnen(self, eid, nachhol=0):
         """Darf dieser Aufrufer `eid` jetzt analysieren? -> TOKEN (ab 1) wenn ja,
@@ -20057,7 +21677,7 @@ class Service:
                 if not nachhol:               # Retry beruhigt den Stoerungswaechter NICHT
                     self.letzte_aktivitaet = time.time()
         if doppelt:                           # Logzeile bewusst OHNE den Lock
-            self.log(f"{eid}: already being analysed by another slot — skipped")
+            self.log.warning(f"{eid}: already being analysed by another slot — skipped")
             return None
         return token
 
@@ -20091,6 +21711,10 @@ class Service:
         # einzelnen Analyse. Sie kostet nichts, solange nichts gehalten wird
         # (erste Zeile von `_catchup_freigeben`: leerer Merkzettel -> zurueck).
         self._catchup_freigeben(eid)
+        # Stufe 3 (bauplan_sammeln_debug.md, O415): hier wird der Rueckstand null,
+        # also fragt hier die Startstelle nach einem vorgemerkten Sammellauf. Sie
+        # kostet nichts, solange nichts vorgemerkt ist (erste Zeile dort).
+        self._sammeln_starten()
 
     @contextlib.contextmanager
     def _analyse_marke(self, eid, nachhol=0):
@@ -20100,7 +21724,7 @@ class Service:
         EIGENE Marke trifft und nicht die eines Nachfolgers derselben eid.
 
         WARUM als Klammer und nicht als `try/finally` im Rumpf von `process()`: der
-        Rumpf ist ~450 Zeilen mit einem Dutzend `return None`-Zweigen. Als drittes
+        Rumpf ist ~450 Zeilen mit einem Dutzend `return None`-Zweigen. Als letztes
         Element des BESTEHENDEN `with`-Kopfes deckt die Klammer jeden dieser Rueckwege
         ab, ohne 450 Zeilen umzuruecken (ein Umbau, den niemand mehr im Diff pruefen
         kann). Die Reihenfolge im Kopf ist die Zusicherung: Platz zuerst, Marke
@@ -20133,6 +21757,7 @@ class Service:
         try:
             return w.zustand()
         except Exception as e:                                # noqa: BLE001
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning {'laeuft': None, 'grund': f'{type(e).__name__}: {e}'}")
             return {"laeuft": None, "grund": f"{type(e).__name__}: {e}"}
 
     def null_serie_stand(self):
@@ -20203,6 +21828,12 @@ class Service:
                                     "grund": getattr(self, "_serie_schuss_grund", None)}
                                    if getattr(self, "_serie_schuss_ts", 0.0) else None),
                 "bremse_s": float(_gpubudget.DRUCK_NEUSTART_ABSTAND_S),
+                # Pose-Bauplan Stufe 3: der Serien-Schuss ist ausgesetzt, solange der laufende
+                # Worker wegen wiederholter Kompilat-Abweichung gestoppt hat (`_serie_schuss`).
+                # `aktiv` ist der Zustand jetzt, `n`/`ts`/`grund` die ausgesetzten Schuesse.
+                "schuss_ausgesetzt": ({"aktiv": bool(self._kompilat_stopp_grund()),
+                                       **self._schuss_ausgesetzt}
+                                      if getattr(self, "_schuss_ausgesetzt", None) else None),
                 # .544 Teil 5a DIE SOFORTPROBE: wie oft sie gefahren ist, wann
                 # zuletzt und was sie sagte ('ok' | 'fehler' | 'nicht_gelaufen'
                 # | 'laeuft'). Ohne diese drei Felder waere der schnellste Weg
@@ -20214,6 +21845,88 @@ class Service:
                                                        0.0) or 0.0), 1) or None,
                 "probe_letztes_ergebnis": getattr(self, "_sofortprobe_ergebnis",
                                                   None)}
+
+    def health_ok(self, serie=None):
+        """DIE EINE Bedingung fuer /health `ok` und `PRUEF health ok=` (Feldbefunde G3): kein
+        Start-Fehler, keine aktive Fehlerserie, kein aktiver Stillstand, seit einem
+        Haenger-Schuss laeuft wieder ein frischer Worker (GPU-Wartefrist F2, ED008), und der
+        Aufraeum-Faden ist nicht tot (Bauplan Feldstau Stufe 1.4, ED008). -> bool"""
+        serie = serie if serie is not None else self.analyse_serie_stand()
+        # `getattr` wie in `_worker_warm`: die Proben stellen den Dienst ohne Worker auf.
+        haenger_offen = getattr(getattr(self, "_dienst_obj", None), "haenger_offen", None)
+        # Nur ein GESTARTETER und dann gestorbener Faden ist rot (False); None heisst
+        # „nicht gestartet" (Proben, --once, die Startsekunden vor main()).
+        return (int(getattr(self, "startup_fails", 0) or 0) == 0 and not serie["aktiv"]
+                and not (haenger_offen is not None and haenger_offen())
+                and not self.stillstand_stand()["aktiv"]
+                and self.aufraeum_stand()["faden_lebt"] is not False)
+
+    def stillstand_stand(self):
+        """Der Grund `stillstand` des Stoerungswaechters (Feldbefunde Punkt 2), rein lesend.
+        -> dict aktiv, seit_ts (Beginn des ununterbrochenen Wartens)."""
+        seit = getattr(self, "_stillstand_aktiv_seit", None)
+        return {"aktiv": bool(seit), "seit_ts": round(seit, 1) if seit else None}
+
+    def _erfolg_merken(self):
+        """Eine erfolgreiche Analyse (Feldbefunde Punkt 2): live oder nachhol mit einer
+        Akte-Zeile ausser fehler und uebersprungen, ein gelungenes Sammeln, ein gebuchtes
+        Ernte-Ereignis. Ein aktiver Stillstand endet hier mit genau einer INFO-Zeile. -> None"""
+        jetzt = time.time()
+        with getattr(self, "_zustand_lock", _NULL_LOCK):
+            self._letzter_erfolg_ts = jetzt
+            seit = getattr(self, "_stillstand_aktiv_seit", None)
+            self._stillstand_aktiv_seit = None
+        if seit:
+            self.log.info(f"standstill over: first successful analysis after "
+                          f"{int((jetzt - seit) // 60)} min of waiting")
+
+    def _stillstand_wartet_n(self):
+        """Wie viel Arbeit wartet (Feldbefunde Punkt 2): Live-Schlange samt Rueckstellung und
+        in Arbeit, Hintergrund- und Ernte-Nachfrage, faellige Nachhol-Kandidaten der letzten
+        Runde. Der Start-Stapel (`_catchup_zurueck`) liegt nicht in der Schlange. -> int"""
+        wartend, arbeit = self.rueckstau_zahlen()
+        p = getattr(self, "_plaetze", None)
+        hinter = p.nachfrage_hintergrund() if p is not None else 0
+        return (int(wartend) + int(arbeit) + int(hinter)
+                + int(getattr(self, "_nachhol_faellig_n", 0) or 0))
+
+    def _stillstand_pruefen(self, melde):
+        """Der Grund `stillstand` im Takt des Stoerungswaechters (Feldbefunde Punkt 2): wartet
+        seit `stillstand_min` ununterbrochen Arbeit und gelang seitdem keine Analyse, ist er
+        aktiv (/health ok falsch) und meldet ueber `melde`. -> bool aktiv"""
+        jetzt = time.time()
+        n = self._stillstand_wartet_n()
+        with getattr(self, "_zustand_lock", _NULL_LOCK):
+            erfolg = float(getattr(self, "_letzter_erfolg_ts", 0.0) or 0.0)
+            seit = getattr(self, "_stillstand_seit", None)
+            if n <= 0:
+                self._stillstand_seit = None
+            elif seit is None or erfolg >= seit:
+                self._stillstand_seit = seit = jetzt   # das Warten beginnt (neu)
+            if n <= 0 or jetzt - seit < 60.0 * float(self.cfg["stillstand_min"]):
+                return bool(getattr(self, "_stillstand_aktiv_seit", None))
+            self._stillstand_aktiv_seit = seit
+        melde("stillstand", self._stillstand_text(n, jetzt - seit))
+        return True
+
+    def _stillstand_text(self, n, dauer_s):
+        """Der Text der Stoerungszeile `stillstand`: Menge, Dauer, letzte Absage, aktive
+        geplante Pausen und ob die Fehlerserie aktiv ist. -> str"""
+        d = getattr(self, "_dienst_obj", None)
+        p = getattr(self, "_plaetze", None)
+        pausen = []
+        if p is not None and p.im_drain():
+            pausen.append("slot drain running")
+        if d is not None and d.lock.locked():
+            pausen.append("wall-clock measurement holds the worker")
+        if d is not None and (d.p is None or d.p.poll() is not None):
+            pausen.append("worker process not running")
+        absage = getattr(d, "letzte_absage", None) if d is not None else None
+        serie = "active" if self.analyse_serie_stand()["aktiv"] else "not active"
+        return (f"{n} events waiting since {int(dauer_s // 60)} min, no successful analysis; "
+                f"last refusal: {absage or 'none'}"
+                + (f"; planned pauses now: {', '.join(pausen)}" if pausen else "")
+                + f"; analysis-failure series {serie}")
 
     def _serie_schuss(self, n, jetzt_ts, grund=None, quelle=None):
         """DER SERIEN-SCHUSS (.543, Feld-Prio nach dem i915-Hang vom 18./20.09.).
@@ -20256,11 +21969,31 @@ class Service:
         eines gescheiterten Selbstbeweises — stuende in seinem Log und in
         /health „N analyses in a row failed", waere das eine falsche Auskunft
         ueber die Ursache. Entschieden wird hier weiterhin nichts an einem Text:
-        der Aufrufer hat schon entschieden, dieser Text sagt nur, WER."""
+        der Aufrufer hat schon entschieden, dieser Text sagt nur, WER.
+
+        POSE-BAUPLAN STUFE 3 — DER AUSSETZER (analysen/bauplan_pose_kompilat.md): hat der
+        laufende Worker sich nach einer wiederholten Kompilat-Abweichung in einer siebenden
+        Stufe selbst LAUT gestoppt (`_kompilat_stopp_grund`), faellt KEIN Schuss. Ein frischer
+        Prozess duerfte sonst wieder einmal wiederholen, und „genau einmal wiederholen" gilt je
+        ANLAGE bis zur Behebung, nicht je Prozess (ohne diesen Aussetzer ein Zyklus im Takt der
+        Bremse). Gemeldet wird jeder ausgesetzte Schuss als ERROR-Zeile und in /health
+        (`analyse_serie_stand` -> `schuss_ausgesetzt`); die Serie bleibt aktiv, /health rot."""
+        stopp = self._kompilat_stopp_grund()
+        if stopp:
+            vorher = getattr(self, "_schuss_ausgesetzt", None) or {}
+            self._schuss_ausgesetzt = {"n": int(vorher.get("n") or 0) + 1,
+                                       "ts": round(jetzt_ts, 1), "grund": stopp}
+            self.log.error(f"analysis-failure series: NOT shooting the worker — it stopped "
+                           f"itself after a repeated compiled-model deviation in a filtering "
+                           f"stage, and the one fresh repetition of this installation is used "
+                           f"up; a fresh process would repeat the deviation ({stopp}). The "
+                           f"series shot stays suspended until the cause is fixed and the "
+                           f"service is restarted; /health stays red")
+            return False
         letzter = float(getattr(self, "_serie_schuss_ts", 0.0) or 0.0)
         abstand = float(_gpubudget.DRUCK_NEUSTART_ABSTAND_S)
         if letzter and (jetzt_ts - letzter) < abstand:
-            self.log(f"analysis-failure series: NOT shooting the worker again — "
+            self.log.warning(f"analysis-failure series: NOT shooting the worker again — "
                      f"the last shot was {int(jetzt_ts - letzter)}s ago (minimum "
                      f"{int(abstand)}s). A permanent fault must not turn into a "
                      f"restart loop; /health stays red until an analysis succeeds")
@@ -20282,12 +22015,25 @@ class Service:
         except Exception as e:                            # noqa: BLE001
             # Ein Schuss, der scheitert, darf die Analyse-Schleife NICHT
             # mitreissen: wir sind hier im Urteilspfad eines Ereignisses.
-            self.log(f"analysis-failure series: the worker shot failed "
+            self.log.error(f"analysis-failure series: the worker shot failed "
                      f"({type(e).__name__}: {e}) — /health stays red")
             return False
-        self.log(f"analysis-failure series [series shot #{self._serie_schuesse}]: "
+        self.log.warning(f"analysis-failure series [series shot #{self._serie_schuesse}]: "
                  f"{grund} — {geschossen} process(es) shot")
         return True
+
+    def _kompilat_stopp_grund(self):
+        """Hat der LAUFENDE Worker-Prozess wegen wiederholter Kompilat-Abweichung LAUT gestoppt?
+        -> sein Grund (str) oder None. Quelle ist allein der bestehende Kompilat-Bericht des
+        Prozesses (`WorkerDienst.kompilat_probe`); ein toter Prozess zaehlt nicht, sein letzter
+        Bericht ist dann nur noch Geschichte (`getattr` wie bei `_worker_warm`)."""
+        w = getattr(self, "_dienst_obj", None)
+        if w is None or not self._worker_warm():
+            return None
+        bericht = getattr(w, "kompilat_probe", None) or {}
+        if bericht.get("stand") != KOMPILAT_STAND_GESTOPPT:
+            return None
+        return str(bericht.get("grund") or "compiled-model probe: worker stopped")
 
     def _serie_alle_buchen(self, fehler, quelle, verwurf=None):
         """DIE ZWEITE ZAEHLSTELLE — SIE ZAEHLT ALLE PFADE (.544) -> die Serie.
@@ -20360,6 +22106,9 @@ class Service:
             if not fehler:
                 self._fehlerserie_alle = 0
                 self._fehlerserie_alle_start = 0.0
+                # Feldbefunde Punkt 2: dieselbe Stelle ist der Erfolg fuer den Grund
+                # `stillstand` (live, nachhol, Sammeln — eine Quelle mit der Heilung).
+                self._erfolg_merken()
                 return 0
             if jetzt_ts - getattr(self, "_fehlerserie_alle_start", 0) > SERIE_FENSTER_S:
                 self._fehlerserie_alle = 0             # alte Serie verjaehrt
@@ -20375,10 +22124,10 @@ class Service:
         # eigene Bremse in `_serie_schuss`.
         if jetzt_ts - getattr(self, "_fehlerserie_gemeldet", 0) > 6 * 3600:
             self._fehlerserie_gemeldet = jetzt_ts
-            self.log(f"STOERUNG (analyse-serie, alle Pfade): {n} Analysen in "
-                     f"Folge fehlgeschlagen — gezaehlt werden hier AUCH "
-                     f"Nachhol-Laeufe und das Sammeln (zuletzt: {quelle}); "
-                     f"Erkennung moeglicherweise tot (Backend/Decode pruefen)")
+            self.log.error(f"DISTURBANCE (analyse-serie, all paths): {n} analyses in "
+                     f"a row failed — counted here are ALSO "
+                     f"catch-up runs and collecting (last: {quelle}); "
+                     f"recognition possibly dead (check backend/decode)")
             if not self.dry_alert:
                 def _sd4_alle_push():
                     # eigener Thread wie bei der ersten Stelle: 20-s-HTTP darf
@@ -20389,7 +22138,7 @@ class Service:
                             f"Sammeln (zuletzt: {quelle}). Die Erkennung ist "
                             f"moeglicherweise tot (Dienst-Log / System-Seite "
                             f"pruefen)."):
-                        self.log(f"fault notify failed: {_f}")
+                        self.log.error(f"fault notify failed: {_f}")
                 threading.Thread(target=_sd4_alle_push, daemon=True).start()
         self._serie_schuss(n, jetzt_ts)
         return n
@@ -20429,7 +22178,7 @@ class Service:
             still = int(getattr(self, "_analyse_none_log_still", 0) or 0)
             self._analyse_none_log_still = 0
             self._analyse_none_log_ts = jetzt_ts
-        self.log(f"analysis failed (analyse_none) [{pfad}]: {text}"
+        self.log.error(f"analysis failed (analyse_none) [{pfad}]: {text}"
                  + (f" (+{still} more suppressed in the last "
                     f"{int(abstand)}s)" if still else ""))
 
@@ -20491,13 +22240,38 @@ class Service:
         if n < latte or jetzt_ts - getattr(self, "_null_serie_gemeldet", 0) <= 6 * 3600:
             return
         self._null_serie_gemeldet = jetzt_ts
-        self.log(f"STOERUNG (null-gesichter-serie): {n} Ereignisse in Folge mit 0 "
-                 f"Gesichtern bei VOLLSTAENDIG lesbaren Clips (Latte {latte}) — das "
-                 f"ist die stille Ausfall-Klasse: der Beschleuniger antwortet, die "
-                 f"Frames kommen an, und trotzdem findet niemand mehr ein Gesicht. "
-                 f"Der Worker muss sich jetzt beweisen (Kurzprobe).")
+        self.log.warning(f"DISTURBANCE (null-gesichter-serie): {n} events in a row with 0 "
+                 f"faces on FULLY readable clips (bar {latte}) — this "
+                 f"is the silent failure class: the accelerator answers, the "
+                 f"frames arrive, and still nobody finds a face any more. "
+                 f"The worker has to prove itself now (short probe).")
         self.kurzprobe_ausloesen(f"{n} events in a row with zero faces on fully "
                                  f"readable clips")
+
+    @staticmethod
+    def neulauf_zeile(eid, fr):
+        """Die EINE ERROR-Zeile eines Ereignisses, dessen Hardware-Decode mitten im Clip
+        abbrach und das der Worker darauf ganz auf Software-Decode neu rechnete. -> str
+
+        Bauplan analysen/bauplan_stoerstelle.md, Fassung 4 (Eigentuemer 30.09. 18:58:46: „den
+        ganzen Clip, dekodieren auf CPU … Fehlermeldung im Log"). `fr` ist das `frames`-Dict
+        des Rueckwegs; `sw_neulauf` kommt aus worker_dienst.Dienst.rechnen_mit_neulauf, die
+        uebrigen Felder beschreiben den Neulauf. Der Ausgang steht ehrlich da: „completely"
+        nur, wenn auch der Software-Decode weder abbrach noch Frames verlor."""
+        nl = fr["sw_neulauf"]
+        grund = " ".join(str(nl.get("grund") or "").split())[:200]
+        gelesen, soll = fr.get("gelesen") or 0, fr.get("soll") or "?"
+        dauer = f"{float(nl.get('dauer_s') or 0):.1f} s"
+        if fr.get("teilabbruch"):
+            ausgang = (f"event re-analyzed on CPU, but the software decode aborted mid-clip "
+                       f"too ({gelesen} of {soll} frames, {dauer})")
+        elif fr.get("fehlen"):
+            ausgang = (f"event re-analyzed on CPU, but the clip stayed incomplete "
+                       f"({gelesen} of {soll} frames, {dauer})")
+        else:
+            ausgang = f"event re-analyzed completely on CPU ({gelesen} frames, {dauer})"
+        return (f"{eid}: hardware decode ({nl.get('kette') or '?'}) aborted mid-clip after "
+                f"frame {nl.get('abbruch_bei')}: {grund} — {ausgang}")
 
     def process(self, eid, nachhol=0, koerper=False, marke=None, lauf_info=None,
                 einge_ts=None):
@@ -20540,7 +22314,11 @@ class Service:
         # konnte sagen, wo die uebrigen 3,5 s blieben. KEINE neue Uhr: dieselbe
         # `time.monotonic`, die der Dienst ueberall nimmt.
         _z_platz = None
-        with self._plaetze.platz(eid, art="analyse") as _platz_nr, self._analyse_klammer(), \
+        # Bauplan Feldstau Stufe 5.4: `_ausgang` steht VOR dem Platz im Kopf und schliesst
+        # darum als LETZTES — nach Marke (`_analyse_beendet`), Klammer und Platz-Rueckgabe.
+        # Die `zeit:`-Zeile haengt sich dort an und misst `nacharbeit` bis genau dahin.
+        with contextlib.ExitStack() as _ausgang, \
+                self._plaetze.platz(eid, art="analyse") as _platz_nr, self._analyse_klammer(), \
                 self._analyse_marke(eid, nachhol) as _darf:  # E2: bei 1 Platz = self.lock
             # Zugesagt ist „Platz belegt -> Platz frei", also AB HIER. Bis zum
             # Pruefbericht (E-11) stand die Zuweisung VOR der Klammer und sogar
@@ -20570,7 +22348,7 @@ class Service:
                     # und 'nichts zu tun', nie als Frigate-Fehlerserie.
                     ev = _einspiel.meta_lesen(cfg["data_dir"], eid)
                     if ev is None:
-                        self.log(f"{eid}: injected event metadata missing or "
+                        self.log.error(f"{eid}: injected event metadata missing or "
                                  f"unusable (needs a JSON object with a "
                                  f"camera name under the data folder) — "
                                  f"nothing to process")
@@ -20592,7 +22370,7 @@ class Service:
                     with self._zustand_lock:     # E0b: Zaehler-Inkrement atomar
                         self.frigate_fehler = (time.time(), f"event fetch: {e}")
                         self.frigate_fehlerserie = getattr(self, "frigate_fehlerserie", 0) + 1
-                self.log(f"{eid}: Frigate fetch failed: {e} ("
+                self.log.error(f"{eid}: Frigate fetch failed: {e} ("
                          + ("event not found — Frigate discarded it; no banner"
                             if getattr(e, "code", None) == 404
                             else "no processed entry, sweep will catch up") + ")")
@@ -20630,7 +22408,7 @@ class Service:
                 if not _deckel_min or _offen_s < _deckel_min * 60:
                     if eid not in _gem:
                         _gem.add(eid)
-                        self.log(f"{eid} ({camera}): Frigate has not finished this "
+                        self.log.info(f"{eid} ({camera}): Frigate has not finished this "
                                  f"event yet (no end_time, open for "
                                  f"{int(_offen_s / 60)} min) — held back, NOT "
                                  f"analysed; a later run picks it up"
@@ -20667,19 +22445,19 @@ class Service:
                 # Filter). Review 21.07.: ohne "and not f_label" verlor "aus" dieses Sicherheitsnetz.
                 if not kc.get("verwenden", True) and not f_label:
                     with self.lock: self.processed.add(eid)
-                    self.log(f"{eid} ({camera}): skipped (camera off, no sub_label)")
+                    self.log.warning(f"{eid} ({camera}): skipped (camera off, no sub_label)")
                     return None
                 z = kc.get("zonen")                          # gegen handeditierte String-Zonen haerten
                 zonen = z if isinstance(z, list) else ([z] if isinstance(z, str) and z else [])
                 if zonen and not f_label and not set(ev.get("zones") or []) & set(zonen):
                     with self.lock: self.processed.add(eid)
-                    self.log(f"{eid} ({camera}): skipped (not in a selected zone, no sub_label)")
+                    self.log.warning(f"{eid} ({camera}): skipped (not in a selected zone, no sub_label)")
                     return None
             else:                                           # Fallback: altes required_zones-Verhalten
                 rz = (cfg.get("required_zones") or {}).get(camera)
                 if rz and not f_label and not set(ev.get("zones") or []) & set(rz):
                     with self.lock: self.processed.add(eid)  # nur in-memory, kein deckung-Eintrag; nach Neustart
-                    self.log(f"{eid} ({camera}): skipped (no required_zone, no sub_label)")
+                    self.log.warning(f"{eid} ({camera}): skipped (no required_zone, no sub_label)")
                     return None              # prueft der Sweep das billig erneut (nur API-Call)
             # .407 LIVE ERSETZT DIE EREIGNIS-ANALYSE (User-Spezifikation):
             # Sieht der Live-Waechter dieser Kamera ohnehin zu, ist die
@@ -20780,12 +22558,12 @@ class Service:
                         # (12.755 in zwei Tagen beim Feldtester). Der Uebersprung
                         # selbst steht als 'uebersprungen'-Zeile in der Akte,
                         # geht also nicht verloren, wenn debug aus ist.
-                        self.debug(f"{eid} ({camera}): skipped (live watcher "
+                        self.log.debug(f"{eid} ({camera}): skipped (live watcher "
                                    f"covers this camera)")
                         return None
             persons = master_persons(cfg)    # AP1: aus dem Master, nicht mehr /api/faces
             if not persons:
-                self.log(f"{eid}: reference master empty — sync_refs.py import needed (no processed entry)")
+                self.log.warning(f"{eid}: reference master empty — sync_refs.py import needed (no processed entry)")
                 return None
             event_dir = os.path.join(cfg["data_dir"], "events", eid.replace("/", "_"))
             os.makedirs(event_dir, exist_ok=True)
@@ -20796,7 +22574,7 @@ class Service:
             # tools/proben/mess_gleichzeitigkeit.py), rechnen den Anfang seither
             # aus der Urteilszeile zurueck (Urteilszeit minus dauer_s) und
             # brauchen diese Zeile nicht mehr.
-            self.debug(f"{eid} ({camera}, Frigate={f_label} {f_score}): analysis running ...")
+            self.log.debug(f"{eid} ({camera}, Frigate={f_label} {f_score}): analysis running ...")
             # Ketten-Schalter (Issue #21): Stufe EINMAL je Lauf lesen. "aus"
             # ueberspringt den Koerper-Strang an der QUELLE (kein --koerper im
             # Job -> analyze sammelt keine Crops, unten startet kein Urteil).
@@ -20810,7 +22588,7 @@ class Service:
                 # stehen hat, bekommt dieselbe Konstante je Ereignis — 18.071
                 # Mal in zwei Tagen. Der Stufen-Stand steht im Startblock und
                 # auf der Ketten-Seite, die Zeile ist nur die Wiederholung.
-                self.debug(f"{eid}: person path off (person_pfad=aus) — no body "
+                self.log.debug(f"{eid}: person path off (person_pfad=aus) — no body "
                            f"crops collected, no person judgment started")
             t0 = time.time()
             # Nachbesserung W7: run_analyze meldet ueber `info`, wie lange der
@@ -20820,9 +22598,40 @@ class Service:
             # Anzeige, in den Szenario-Ende-Rueckfall (dort gemessen: 42/103
             # Durchgaenge kippen bei 5x-Analysezeit) und in die Watchdog-Logzeilen.
             _ainfo = {}
+            _wk = self._worker(_platz_nr)                 # E2: Worker dieses Platzes
+            # Bauplan K3, Stufe KP3 Punkt 1: die Personenzahl fuer das fruehe Ende und die Obergrenze
+            # des Stapels (core.personenzahl; Tuer-Konzept 3.2). Ein eingespieltes Ereignis nimmt sie aus
+            # seinen Metadaten (3.7), nie aus Frigate. Nur auf dem Worker-Weg: der Alt-Weg kennt beides
+            # nicht und fragt deshalb auch nicht. Unbrauchbar (3.5) heisst: kein fruehes Ende, eine
+            # WARNING je Ereignis und ein Zaehler in /health.
+            _pzahl = None
+            # KP3 Punkt 5 (Gesammelte Befunde 13): die Abfrage ist keine Analysezeit, sie faellt aus
+            # dauer_s heraus wie die Wartezeit am Platz (_warte_s, unten)
+            _pz_s = 0.0
+            if _wk is not None:
+                _t_pz = time.time()
+                if _einspiel.ist_einspiel(eid):
+                    _pzahl, _pz_grund = _einspiel.personenzahl_lesen(ev)
+                    _pz_teile = {"quelle": "metadata"}
+                else:
+                    _pzahl, _pz_grund, _pz_teile = _personenzahl.aus_frigate(
+                        lambda _p: api(cfg, _p), ev, float(cfg["lookback_h"]) * 3600)
+                _pz_s = time.time() - _t_pz
+                self.log.debug(f"{eid} ({camera}): person count {_pzahl} — {json.dumps(_pz_teile)}")
+                # Bauplan Pruefmaterial K3, Stufe PM2: eine als unbekannt eingespielte Zahl ist kein Fehler,
+                # sie laeuft ebenso ohne fruehes Ende, meldet aber INFO und zaehlt unter ihrem eigenen Grund.
+                if _pzahl is None:
+                    if _pz_grund == _personenzahl.UNBEKANNT:
+                        self.log.info(f"{eid} ({camera}): person count {_personenzahl.UNBEKANNT} (declared by "
+                                      f"the injection) — this event runs without the early end")
+                    else:
+                        self.log.warning(f"{eid} ({camera}): person count unusable ({_pz_grund}) — this event "
+                                         f"runs without the early end")
+                    _personenzahl.ohne_fruehes_ende_zaehlen(_pz_grund)
             res = run_analyze(cfg, eid, camera, persons, event_dir,
                               timeout_s=(int(cfg["nachhol_analyse_timeout_s"]) if nachhol else None),
-                              worker=self._worker(_platz_nr),   # E2: Worker dieses Platzes
+                              worker=_wk,
+                              personenzahl=_pzahl,
                               # P1: solange dieser Thread lebendig wartet, setzt er das
                               # Lebenszeichen seines Platzes. Der Waechter unten kann
                               # damit einen langen, gesunden Lauf von einem haengenden
@@ -20844,6 +22653,7 @@ class Service:
                               clip_quelle=("nachhol" if nachhol else "live"),
                               clip_alter_min=_clip_alter_min(
                                   ev.get("end_time"), ev.get("start_time")))
+            _z_analyse = time.monotonic()      # Feldstau 5.4: Rueckkehr aus run_analyze
             _warte_s = float(_ainfo.get("wartezeit_s") or 0.0)
             # E3.3 (W2-B4/B5): den Rueckweg SOFORT bedienen, vor jedem anderen
             # Zweig. Jeder Ausgang unter dieser Zeile kann `return` sein, und der
@@ -20865,8 +22675,12 @@ class Service:
             # Erst danach steht hier eine ehrliche `fehler`-Zeile MIT der Zahl
             # der Rueckstellungen.
             _zurueck_n = self._zurueck_stand(eid)
+            # .547: `_zurueck_n` ist der ZAEHLER (so oft stand dieses Ereignis schon
+            # zurueck) und gehoert an die Stelle `bisher`. Seit 5e2a680e (.544 M3b)
+            # stand dort `_ainfo`: int(dict) warf, das Ereignis kreiste ohne
+            # Backoff (Feldbefund AU 23.09.: 296 578 Zeilen an einem Tag).
             if res is None and _ainfo.get("fremdverschuldet") \
-                    and self._zurueckstellen(eid, camera, _ainfo):
+                    and self._zurueckstellen(eid, camera, _zurueck_n, _ainfo):
                 return None
             # .539 — DIE GIFTPILLE BEKOMMT IHREN VERSUCH ANGESCHRIEBEN.
             # Diese Analyse sass auf einem Rechenstrang, als der Job-Watchdog den
@@ -20888,7 +22702,7 @@ class Service:
             # hier eine falsche Aussage: nicht die Analyse ist gescheitert,
             # sondern wir haben sie selbst gebremst.
             if _ainfo.get("nicht_buchen"):
-                self.log(f"{eid} ({camera}): clip download gate busy for the "
+                self.log.warning(f"{eid} ({camera}): clip download gate busy for the "
                          f"full cap — event NOT booked, a later run will fetch "
                          f"it ({_ainfo['nicht_buchen']})")
                 return None
@@ -20905,11 +22719,13 @@ class Service:
             # `_ainfo` ist der Rueckweg von run_analyze; bei worker=aus (Legacy)
             # bleibt es leer und es wird nichts behauptet.
             if _ainfo.get("provider_guard") == "failed":
-                self.log(f"{eid}: the accelerator did NOT bind for this analysis "
+                self.log.error(f"{eid}: the accelerator did NOT bind for this analysis "
                          f"(provider guard failed, binding "
                          f"{_ainfo.get('bindung') or '?'})")
             for _art in (_ainfo.get("placement_fallback") or []):
-                self.log(f"{eid}: fell back to software/CPU for '{_art}' — the "
+                if _art == "hwdec":
+                    continue      # E14 D7: die Decode-Zeile unten traegt Kette und Grund
+                self.log.error(f"{eid}: fell back to software/CPU for '{_art}' — the "
                          f"requested device did not carry this step")
             # W1/E1 (User 26.07.): unter der Haelfte lesbarer Frames traegt kein Teilurteil
             # mehr — wie ein Analysefehler behandeln (stumm; der Nachhol-Lauf versucht es mit
@@ -20961,13 +22777,19 @@ class Service:
             if _s_moegl is None:
                 _s_moegl = (res or {}).get("samples_moeglich")
             _s_deckel = _frinfo.get("sample_deckel") or (res or {}).get("sample_deckel") or 0
-            if _hwfb:
+            if _frinfo.get("sw_neulauf"):
+                # Bauplan Stoerstelle Fassung 4: die Hardware-Kette brach mitten im Clip
+                # ab, der Worker rechnete das Ereignis ganz auf Software neu. EINE
+                # ERROR-Zeile je Ereignis an Stelle der Zeile darunter, nie an den
+                # Debug-Schalter gebunden.
+                self.log.error(self.neulauf_zeile(eid, _frinfo))
+            elif _hwfb:
                 # User-Auflage 13.09.: „Bei Rueckfall auf CPU eine Information im
                 # Log, aber nur einmal pro Event." Genau das — eine Zeile je
                 # Ereignis, mit der Kette, die wirklich lief.
                 _hwgrund = _frinfo.get("hwdec_grund") or _hwteil
                 _hwgrund = (" ".join(str(_hwgrund).split())[:200] if _hwgrund else "")
-                self.log(f"{eid}: hardware decode "
+                self.log.warning(f"{eid}: hardware decode "
                          + ("aborted mid-clip and did NOT fall back — judged the "
                             "readable part" if _hwteil and
                             not _frinfo.get("hwdec_fallback")
@@ -20998,8 +22820,17 @@ class Service:
                 _frames.clip_dbg(f"{eid}: clip quality after analysis frames "
                                  f"{_fg}/{_fs} readable "
                                  f"src={'nachhol' if nachhol else 'live'}")
-            if res is not None and _fs and _fg is not None and _fg * 2 < _fs:
-                self.log(f"{eid}: clip only {_fg}/{_fs} frames readable (<50%) — "
+            # Bauplan K3, Stufe KP3 Punkt 2 (Tuer-Konzept 3.6): endete das Ereignis frueh, weil alle
+            # gemeldeten Personen erkannt waren, misst die Pruefung nur bis zum geplanten Ende, das der
+            # Worker in die Akte schreibt (`frames_geplant`) — ein frueh beendetes Ereignis ist kein
+            # Lesefehler. Ohne das Feld (kein fruehes Ende, Alt-Weg) gilt wie bisher die Clip-Laenge.
+            _fgepl = (res or {}).get("frames_geplant")
+            _fs_bis = min(_fs, _fgepl) if (_fs and _fgepl) else _fs
+            if _frinfo.get("fruehes_ende_fehler"):
+                # Fehler der eigenen Logik im Worker (ERROR dort): das Ereignis lief ohne fruehes Ende
+                _personenzahl.ohne_fruehes_ende_zaehlen(_personenzahl.LOGIK_FEHLER)
+            if res is not None and _fs_bis and _fg is not None and _fg * 2 < _fs_bis:
+                self.log.error(f"{eid}: clip only {_fg}/{_fs_bis} frames readable (<50%) — "
                          f"treated as analysis failure")
                 res = None
                 _verwurf = _reg.VERWURF_LESBARKEIT
@@ -21009,8 +22840,17 @@ class Service:
                 kategorie = kategorie_v1 = "fehler"
                 confirmed = confirmed_v1 = []
             else:
+                # Bauplan K3 (analysen/bauplan_k3_produkt.md), Stufe KP1 Punkt 2: traegt die
+                # Akte das Urteil nach dem Stapel (Worker-Weg, core.stapel), sind dessen Namen
+                # `confirmed` fuer verdict_v2 UND verdict (v1) — damit laeuft die Marge nicht,
+                # und v1 rechnet nicht nach der alten Regel daneben (Konzept Abschnitt 2). Eine
+                # leere Liste heisst „der Stapel nennt niemanden". Ohne das Feld (Alt-Weg
+                # analyze.py, `worker: false`) bleibt es None, und beide urteilen wie bisher.
+                _stapel = res.get("stapel")
+                _stapel_namen = (sorted(_stapel["namen"]) if isinstance(_stapel, dict)
+                                 and isinstance(_stapel.get("namen"), list) else None)
                 kategorie, confirmed = verdict_v2(
-                    cfg, ours, max_bw,
+                    cfg, ours, max_bw, confirmed=_stapel_namen,
                     det_t=[float(_d.get("t") or 0)
                            for _d in (res.get("detektionen") or [])])
                 # .542 DARSTELLUNGS-FIX (Feldfund 18.09. beim Tester: 10 von 154
@@ -21028,7 +22868,8 @@ class Service:
                 # traegt v1 seine eigene Menge jetzt sichtbar mit, und nur dann,
                 # wenn sie abweicht: im Regelfall (Marge greift nicht) ist die
                 # Log-Zeile bytegleich zu .541.
-                kategorie_v1, confirmed_v1 = verdict(cfg, f_label, ours)
+                kategorie_v1, confirmed_v1 = verdict(cfg, f_label, ours,
+                                                     confirmed=_stapel_namen)
                 if kategorie in ("fremd_verdacht", "unbekannt_schwach"):
                     # S2 no_person (deklarierte I1-Ausnahme, Masterbauplan §5.2): EIN
                     # Eingriff am Urteilspunkt, Logik in no_person.py. Greift nur mit
@@ -21091,9 +22932,9 @@ class Service:
                         # laenger.
                         if jetzt_ts - getattr(self, "_fehlerserie_gemeldet", 0) > 6 * 3600:
                             self._fehlerserie_gemeldet = jetzt_ts
-                            self.log(f"STOERUNG (analyse-serie): {SERIE_STRUKTURSIGNAL_N} "
-                                     f"Analysen in Folge fehlgeschlagen — "
-                                     f"Erkennung moeglicherweise tot (Backend/Decode pruefen)")
+                            self.log.error(f"DISTURBANCE (analyse-serie): {SERIE_STRUKTURSIGNAL_N} "
+                                     f"analyses in a row failed — "
+                                     f"recognition possibly dead (check backend/decode)")
                             if not self.dry_alert:
                                 def _sd4_push():
                                     # eigener Thread: 20-s-HTTP darf den Analyse-Lock nicht halten
@@ -21101,7 +22942,7 @@ class Service:
                                             self.cfg, "3 Analysen in Folge fehlgeschlagen — die "
                                             "Erkennung ist moeglicherweise tot (Dienst-Log / "
                                             "System-Seite pruefen)."):
-                                        self.log(f"fault notify failed: {_f}")
+                                        self.log.error(f"fault notify failed: {_f}")
                                 threading.Thread(target=_sd4_push, daemon=True).start()
                         # .543 DER SERIEN-SCHUSS: den Worker-Prozess hart neu
                         # aufziehen. Herleitung und Bremse in `_serie_schuss`.
@@ -21222,7 +23063,7 @@ class Service:
                 "bestaetigt": confirmed, "kategorie": kategorie, "kategorie_v1": kategorie_v1,
                 # W7: reine Analysezeit — die Wartezeit am Analyse-Slot ist abgezogen
                 # und steht (wenn nennenswert) separat als warte_s daneben, additiv.
-                "dauer_s": round(max(0.0, time.time() - t0 - _warte_s), 1),
+                "dauer_s": round(max(0.0, time.time() - t0 - _warte_s - _pz_s), 1),
                 **({"warte_s": round(_warte_s, 1)} if _warte_s >= 0.1 else {}),
                 "alerted": False,
                 # Paket A (0.1.0.48, Today-QS F1): das ECHTE Event-Ende aus Frigate — die
@@ -21262,7 +23103,7 @@ class Service:
                 if _p_urteil == "aus":
                     pass
                 elif _p_urteil == "gesicht_bestaetigt":
-                    self.log(f"{eid}: person judgment skipped — face path "
+                    self.log.warning(f"{eid}: person judgment skipped — face path "
                              f"confirmed the whole pass "
                              f"(person_pfad=nur_wenn_gesicht_leer)")
                 else:
@@ -21292,7 +23133,7 @@ class Service:
                 # wie oben beim Nachhol-Pfad, deshalb dieselbe 900s-Grenze wie _maybe_presence.
                 if nachhol or time.time() - (entry.get("start") or entry["ts"]) > 900:
                     if not nachhol:
-                        self.log(f"{eid}: fremd_verdacht without alarm — event older than 900 s "
+                        self.log.info(f"{eid}: fremd_verdacht without alarm — event older than 900 s "
                                  f"(unknown pool only)")
                     self._szenario_nachsammeln()  # Gesichter in den Unbekannt-Pool, aber KEIN Alarm
                 else:
@@ -21310,20 +23151,28 @@ class Service:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
                 f.flush()
             with self.lock: self.processed.add(eid)
-            self._zeitprotokoll(eid, entry, _ainfo, einge_ts, _z_platz,
-                                _z_schreiben, _warte_s)
-            self.log(f"{eid}: {kategorie} [v1:{kategorie_v1}"
+            # Die Spalten bis `gesamt` gelten wie bisher bis HIER (z_ende); die Zeile selbst
+            # steht erst beim Verlassen der Platz-Klammer, mit `nacharbeit` (Feldstau 5.4).
+            _ausgang.callback(self._zeitprotokoll, eid, entry, _ainfo, einge_ts, _z_platz,
+                              _z_schreiben, _warte_s, z_ende=time.monotonic(),
+                              z_analyse=_z_analyse)
+            self.log.info(f"{eid}: {kategorie} [v1:{kategorie_v1}"
                      + (f" on {', '.join(confirmed_v1) or 'unknown'}"
                         if set(confirmed_v1 or []) != set(confirmed or []) else "")
                      + f"] (Frigate={f_label}, "
                      f"ours={confirmed or 'unknown'}, {entry['faces']} faces, {entry['dauer_s']}s)" +
                      (" -> ALERT" if entry["alerted"] else "") +
                      (f" -> SUBLABEL '{entry['sublabel']}'" if entry.get("sublabel") else ""))
-            self.debug(f"{eid}: scores " + (", ".join(
+            self.log.debug(f"{eid}: scores " + (", ".join(
                 f"{p}=max{(r.get('max') or 0):.3f}/win{r.get('win3s') or 0}" for p, r in ours.items()) or "(no candidate)")
                 + f" | gate win_thresh={cfg['win_thresh']} win_min={cfg['win_min']}"
                 + f" faces={entry['faces']} max_bw={max_bw} dur={entry['dauer_s']}s")
-            self.cleanup_cache()
+            # Bauplan Feldstau Stufe 1 (O464): nur ANSTUPSEN, nicht selbst raeumen.
+            # Bis hierher lief cleanup_cache in dieser Platz-Klammer ohne Herzschlag;
+            # auf NFS dauerte ein Lauf 54 bis 150 s, alle Analyse-Faeden stauten sich
+            # an `_cleanup_lock`, und der Platzwaechter schoss einen gesunden Worker.
+            # Geraeumt wird jetzt im Aufraeum-Faden, der Platz ist sofort frei.
+            self.aufraeumen_anstossen()
             if kategorie != "fehler":
                 # W3: Browser-Kopie NICHT mehr eifrig je Event (~1,35 CPU-h/Tag fuer kaum
                 # angesehene Kopien) — sie entsteht lazy beim Klick (/video -> review_anfordern).
@@ -21355,6 +23204,7 @@ class Service:
                         try:
                             r = json.loads(ln)
                         except Exception:
+                            _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                             continue
                         if r.get("eid"):
                             by_eid[r["eid"]] = r        # last-wins je eid (wie /heute)
@@ -21396,20 +23246,21 @@ class Service:
                             try:
                                 rr = json.loads(ln)
                             except Exception:
+                                _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                                 continue
                             if "detektionen" in rr:
                                 d["detektionen"] = rr["detektionen"]
                 except (FileNotFoundError, NotADirectoryError):
-                    pass
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
                 events.append(d)
             ist, beg = klassifiziere(events, np_det_max=nd, np_frigate_max=nf)
             if ist:
-                self.log(f"{eid}: no_person — whole pass shows no usable person "
+                self.log.info(f"{eid}: no_person — whole pass shows no usable person "
                          f"(faces=0, det_max={beg['s2_det_max']:.2f}, "
                          f"frigate_max={beg['s3_frigate_max']:.2f}, {len(events)} events)")
             return ist
         except Exception as e:
-            self.log(f"{eid}: no_person check failed ({e}) — keeping original category")
+            self.log.error(f"{eid}: no_person check failed ({e}) — keeping original category")
             return False
 
     def _maybe_presence(self, entry, event_dir):
@@ -21465,11 +23316,11 @@ class Service:
                                    "cos": (entry["ours"].get(p) or {}).get("max"),
                                    "win": (entry["ours"].get(p) or {}).get("win3s")} for p in neu]},
                     ensure_ascii=False)):
-                self.log(f"SCENE recognized: {' + '.join(neu)} ({entry['camera']}"
+                self.log.info(f"SCENE recognized: {' + '.join(neu)} ({entry['camera']}"
                          f"{' · ' + ' + '.join(_ar) if _ar else ''})")
             self._telegram_melden("erkannt", entry, neu)
         else:
-            self.log(f"{entry['eid']}: scene-recognized notification suppressed "
+            self.log.debug(f"{entry['eid']}: scene-recognized notification suppressed "
                      f"(category erkannt not enabled)")
         if not cfg["anwesenheit_push"] or entry.get("alerted"):
             return False
@@ -21482,7 +23333,7 @@ class Service:
         msg = (f"{' + '.join(neu)} erkannt ({entry['camera']}"
                f"{' · ' + ' + '.join(_ar) if _ar else ''}, {t})")
         if self.dry_alert:
-            self.log(f"DRY-PRESENCE: {msg}")
+            self.log.info(f"DRY-PRESENCE: {msg}")
             return False
         # W3 Stufe 1 (.399): der HTTP-Push wandert in die Spur (Beschluss,
         # Ruhefenster-Zustand und Text sind oben schon gefallen/gepflegt).
@@ -21500,11 +23351,11 @@ class Service:
         def _senden():
             try:
                 if not push(cfg, titel, msg, anhang, log=self.log):
-                    self.log(f"presence push REJECTED by Pushover (status!=1) — check token/user: {msg}")
+                    self.log.error(f"presence push REJECTED by Pushover (status!=1) — check token/user: {msg}")
                     return
-                self.log(f"PRESENCE-PUSH: {msg}")
+                self.log.info(f"PRESENCE-PUSH: {msg}")
             except Exception as e:                          # noqa: BLE001
-                self.log(f"presence push failed: {e}")
+                self.log.error(f"presence push failed: {e}")
         self._spur(f"presence {entry['eid']}", _senden)
         return True
 
@@ -21517,7 +23368,7 @@ class Service:
             self.process(eid, nachhol=nachhol, koerper=koerper, marke=marke,
                          einge_ts=einge_ts)
         except Exception as e:
-            self.log(f"{eid}: unexpected error in the processing thread: {e}")
+            self.log.error(f"{eid}: unexpected error in the processing thread: {e}")
 
     def review_anfordern(self, ed):
         """W3 Lazy: Browser-Kopie erst beim Klick bauen statt je Event (Recon: der eifrige Bau
@@ -21545,7 +23396,7 @@ class Service:
             except Exception as e:
                 # W3-Review: OHNE dieses except stuerbe der Thread VOR dem Fehler-Marker —
                 # und der Auto-Refresh wuerde den Bau alle 2 s endlos neu anstossen.
-                self.log(f"{ed}: lazy browser copy error: {type(e).__name__}: {e}")
+                self.log.error(f"{ed}: lazy browser copy error: {type(e).__name__}: {e}")
                 with self._review_lock:
                     self._review_fehler[ed] = time.monotonic()
             finally:
@@ -21556,7 +23407,7 @@ class Service:
         except Exception as e:                    # Thread-Start-Fehler -> Flag nicht haengen lassen
             with self._review_lock:
                 self._review_laeuft.discard(ed)
-            self.log(f"{ed}: lazy browser copy thread start error: {e}")
+            self.log.error(f"{ed}: lazy browser copy thread start error: {e}")
 
     def make_browser_copy(self, eid):
         """1080p-H.264-Kopie des Clips (Kameras zeichnen HEVC auf, das spielt im Browser
@@ -21592,7 +23443,7 @@ class Service:
                 if r is not None:
                     # s. _telegram_clip: Laufzeit-Rueckfall HW->CPU nie still lassen (Review-Fund).
                     e1 = (r.stderr or b"").decode("utf-8", "replace").strip().splitlines()
-                    self.log(f"{eid}: HW transcode ({video_encoder()[0]}) failed "
+                    self.log.warning(f"{eid}: HW transcode ({video_encoder()[0]}) failed "
                              f"(rc={r.returncode}) — CPU takes over: {e1[-1] if e1 else 'no stderr'}")
                 r = self._transcode_lauf(cpu, 600)
             # rc des FALLBACKS wurde frueher verworfen: scheiterten beide Encoder, gab es keinerlei
@@ -21601,34 +23452,46 @@ class Service:
                 os.replace(part, dst)
             else:
                 err = (r.stderr or b"").decode("utf-8", "replace").strip().splitlines()
-                self.log(f"{eid}: browser copy failed (rc={r.returncode}): "
+                self.log.error(f"{eid}: browser copy failed (rc={r.returncode}): "
                          f"{' | '.join(err[-2:]) if err else 'no stderr output'}")
                 try:
                     os.remove(part)
                 except OSError:
                     pass
         except Exception as e:
-            self.log(f"{eid}: browser copy failed: {e}")
+            self.log.error(f"{eid}: browser copy failed: {e}")
             try:
                 os.remove(part)
             except OSError:
                 pass
 
-    def clip_cache_bytes(self):
-        """Aktuelle Groesse des Clip-Caches (nur .mp4/.part). Fuer /health + cleanup-Log —
-        N8b (Issue #4): age-only-Eviction wurde erst am 97 % vollen Host bemerkt,
-        WEIL die Groesse nirgends sichtbar war."""
-        cache = os.path.join(self.cfg["data_dir"], "clips")
-        try:
-            return sum(os.path.getsize(os.path.join(cache, fn)) for fn in os.listdir(cache)
-                       if fn.endswith((".mp4", ".part")))
-        except OSError:
-            return 0
+    # Bauplan Feldstau Stufe 3 (O464/O466): die Groesse des Clip-Caches ist EIN gepflegter
+    # Stand statt einer Voll-Zaehlung je Abfrage. Bis hierher zaehlten /health, die
+    # Vorrats-Bremse (2-s-Takt), der Systemzahlen-Sammler und die System-Seite je Abruf den
+    # ganzen Clip-Ordner; auf NFS mit rund 20.000 Clips kostete das Sekunden, und /health lief
+    # gegen die Frist der Selbstwache. Geeicht wird am Ende jedes Aufraeum-Laufs
+    # (cleanup_cache), angestossen von process() und von jeder Clip-Ablage des Vorlaufs.
+    # Der Lock haelt nur die EINE Ersatz-Zaehlung der Bremse zusammen (zwei gleichzeitige
+    # Bremsen zaehlen nicht doppelt); /health und der Sammler nehmen ihn nie.
+    _groessen_lock = threading.Lock()
 
-    def cache_stand(self):
-        """Clip-Cache-Groesse (GB) und freier Platz (GB) am Datenverzeichnis — EINE Quelle fuer
-        System-Seite, Aufraeum-Knopf und Platten-Wache."""
-        import shutil
+    def clip_cache_bytes(self):
+        """Groesse des Clip-Caches aus dem gepflegten Stand, ohne Zaehlung und ohne Warten.
+        -> (bytes, alter_s); (None, None), solange noch kein Stand geeicht ist („fehlt")"""
+        stand = getattr(self, "_groessen_stand", None)
+        if stand is None:
+            return None, None
+        return stand[0], time.monotonic() - stand[1]
+
+    def groessen_stand_eichen(self, groesse):
+        """Legt die Groesse des Clip-Caches als Stand ab (Zeitpunkt: jetzt).
+        -> None"""
+        with self._groessen_lock:
+            self._groessen_stand = (int(groesse), time.monotonic())
+
+    def _clip_cache_zaehlen(self):
+        """Zaehlt den Clip-Ordner (nur .mp4/.part) einmal voll durch; eine verschwundene Datei
+        zaehlt nicht. -> bytes, oder None, wenn der Ordner nicht lesbar ist"""
         cache = os.path.join(self.cfg["data_dir"], "clips")
         gesamt = 0
         try:
@@ -21637,9 +23500,38 @@ class Service:
                     try:
                         gesamt += os.path.getsize(os.path.join(cache, fn))
                     except OSError:
-                        pass
+                        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         except OSError:
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
+            return None
+        return gesamt
+
+    def clip_cache_bytes_oder_zaehlen(self):
+        """Fuer die Vorrats-Bremse: der Stand, und fehlt er noch, EINE eigene Zaehlung unter dem
+        Stand-Lock, die als Stand abgelegt wird. -> bytes (0, wenn der Ordner nicht lesbar ist)"""
+        wert, _alter = self.clip_cache_bytes()
+        if wert is not None:
+            return wert
+        with self._groessen_lock:
+            # Wer hier nach einem anderen Zaehler ankommt, findet dessen Stand vor.
+            stand = getattr(self, "_groessen_stand", None)
+            if stand is not None:
+                return stand[0]
+            gezaehlt = self._clip_cache_zaehlen()
+            if gezaehlt is None:
+                return 0                          # wie bisher: unlesbar zaehlt als leer
+            self._groessen_stand = (gezaehlt, time.monotonic())
+            return gezaehlt
+
+    def cache_stand(self):
+        """Clip-Cache-Groesse (GB) aus dem gepflegten Stand und freier Platz (GB) frisch am
+        Datenverzeichnis — EINE Quelle fuer die System-Seite. -> (cache_gb, frei_gb)"""
+        import shutil
+        gesamt, _alter = self.clip_cache_bytes()
+        if gesamt is None:
+            # Bauplan Feldstau Stufe 3 regelt den Fall ohne Stand fuer die System-Seite nicht
+            # (Bilanz Stufe 3, Frage 1): bis zur ersten Eichung zaehlt sie wie bisher selbst.
+            gesamt = self._clip_cache_zaehlen() or 0
         try:
             frei = shutil.disk_usage(self.cfg["data_dir"]).free
         except OSError:
@@ -21659,10 +23551,21 @@ class Service:
         sondern laeuft auch beim Start, im Wachen-Takt (start_plattenwache:
         taeglich, bei Knappheit alle 10 min — .331) und per Knopf.
         Reicht der Clip-Cache nicht, wird es LAUT (disk_warnung -> System-Ampel rot).
+        Feldstau Stufe 3: jeder Lauf eicht am Ende den Groessen-Stand (clip_cache_bytes).
+        Feldstau Stufe 4: EIN Verzeichnis-Durchlauf je Lauf (os.scandir) statt Glob je
+        ausgelaufenem Clip im Alters-Zweig; der Size-Cap-Zweig prueft Loesch-Kandidaten
+        weiter einzeln direkt vor dem Loeschen (Pin-Schutz, Stufe 4.3).
+        Feldstau Stufe 5.1: am Ende jedes Laufs EINE Debug-Zeile mit Dauer gesamt und je Teil,
+        Wartezeit auf `_cleanup_lock` und gesehenen/geloeschten Dateien (`_aufraeum_zeile`).
         -> dict {geloescht, frei_mb, cache_gb, frei_gb, knapp} fuer den Knopf."""
         import shutil
         erg = {"geloescht": 0, "frei_mb": 0.0, "cache_gb": 0.0, "frei_gb": 0.0, "knapp": False}
+        # Messpunkte des Laufs (monotone Uhr); ein Teil, den der Lauf nicht erreicht, bleibt None.
+        mess = {"start": time.monotonic(), "lock": None, "alter": None, "cap": None,
+                "live": None, "clips_gesehen": 0, "clips_geloescht": 0,
+                "live_gesehen": None, "live_geloescht": None}
         with self._cleanup_lock:
+            mess["lock"] = time.monotonic()
             try:
                 cutoff = time.time() - self.cfg["clip_retention_d"] * 86400
                 cache = os.path.join(self.cfg["data_dir"], "clips")
@@ -21680,31 +23583,36 @@ class Service:
                 # eine DAUERMARKE und bleiben in BEIDEN Zweigen stehen. Grund: sie
                 # sind nicht nachladbar — ein geloeschter Frigate-Clip kostet einen
                 # Download, ein geloeschter eingespeister ist endgueltig weg.
-                def _aelter_als(pfad, grenze):
-                    """Ist die Datei aelter als `grenze`? Weg = NEIN.
-
-                    .536 B1b(2): die Alters-Frage stand bis .535 NACKT in der
-                    Comprehension darunter. Der Vorlauf benennt staendig
-                    `.part` -> `.mp4` um; verschwindet eine Datei zwischen
-                    `listdir` und `getmtime`, warf das eine
-                    FileNotFoundError in den aeusseren Fang und der GANZE
-                    Durchgang entfiel — Alters-Retention, Size-Cap,
-                    Live-Aufraeumen UND die DISK-LOW-Pruefung. Im Feld
-                    160 x „cache cleanup error: No such file … .part" an
-                    EINEM Tag, unter Last etwa alle zwei Minuten. Der Fix vom
-                    28.08. deckte nur den `remove`-Schritt, nicht die Auswahl.
-                    Eine Datei, die es nicht mehr gibt, ist nichts, was man
-                    wegraeumen muesste — deshalb False und weiter."""
-                    try:
-                        return os.path.getmtime(pfad) < grenze
-                    except OSError:
-                        return False
-
-                gone = [fn for fn in os.listdir(cache)
-                        if fn.endswith((".mp4", ".part"))
-                        and _aelter_als(os.path.join(cache, fn), cutoff)
-                        and not _fr.gepinnt(os.path.join(cache, fn))
-                        and not _fr.wird_behalten(os.path.join(cache, fn))]
+                # Bauplan Feldstau Stufe 4 (O466): EIN os.scandir-Durchlauf je Lauf liefert
+                # Name, mtime und Groesse jedes Clips und die Marken-Eintraege (Pins,
+                # Dauermarken). Bis hierher kostete jeder ausgelaufene Clip einen eigenen
+                # Glob ueber den Ordner und der Size-Cap-Zweig einen zweiten Voll-Durchlauf.
+                # .536 B1b(2), als Verhalten erhalten: der Vorlauf benennt staendig
+                # `.part` -> `.mp4` um; verschwindet eine Datei zwischen Auflisten und
+                # Abfrage, warf das bis .535 in den aeusseren Fang und der GANZE Durchgang
+                # entfiel — Alters-Retention, Size-Cap, Live-Aufraeumen UND die
+                # DISK-LOW-Pruefung (im Feld 160 x „cache cleanup error: No such file …
+                # .part" an EINEM Tag). Eine Datei, deren Abfrage scheitert, ist nichts,
+                # was man wegraeumen muesste: sie faellt aus beiden Zweigen, der Lauf geht weiter.
+                clips = {}                                    # name -> (mtime, groesse)
+                marken = []
+                with os.scandir(cache) as ordner:
+                    for e in ordner:
+                        mess["clips_gesehen"] += 1            # jeder Eintrag, auch Marken
+                        if not e.name.endswith((".mp4", ".part")):
+                            marken.append(e)
+                            continue
+                        try:
+                            st = e.stat()
+                        except OSError:
+                            _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
+                            continue
+                        clips[e.name] = (st.st_mtime, st.st_size)
+                sicht = _fr.MarkenSicht(cache, marken)
+                gone = [fn for fn, (mtime, _groesse) in clips.items()
+                        if mtime < cutoff
+                        and not sicht.gepinnt(fn)
+                        and not sicht.wird_behalten(fn)]
                 befreit = 0
                 geloescht = 0
                 for fn in gone:
@@ -21719,25 +23627,31 @@ class Service:
                         befreit += os.path.getsize(os.path.join(cache, fn))
                         os.remove(os.path.join(cache, fn))
                         geloescht += 1
+                        del clips[fn]                         # nicht mehr im Size-Cap-Bestand
+                    except FileNotFoundError:
+                        # schon weg: auch der Size-Cap-Bestand kennt sie nicht mehr (wie der
+                        # fruehere zweite Durchlauf, der sie nicht mehr sah)
+                        _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
+                        del clips[fn]
+                        continue
                     except OSError:
+                        _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                         continue
                 if geloescht:
                     # .511: Aufraeum-Buchhaltung. Was WIRKLICH knapp wird, sagt
                     # weiter laut die DISK-LOW-Zeile und der Size-Cap-Zweig
                     # darunter — die bleiben unabhaengig vom Schalter.
-                    self.debug(f"cache cleanup: {geloescht} clips older than {self.cfg['clip_retention_d']}d deleted")
+                    self.log.debug(f"cache cleanup: {geloescht} clips older than {self.cfg['clip_retention_d']}d deleted")
                 erg["geloescht"] += geloescht
+                mess["alter"] = time.monotonic()
                 _cap_gb, _frei_gb, _quelle = self.speichergrenzen()
                 cap = _cap_gb * 1024**3
                 boden = _frei_gb * 1024**3
-                rest = []
-                for fn in os.listdir(cache):
-                    if fn.endswith((".mp4", ".part")):
-                        p = os.path.join(cache, fn)
-                        try:
-                            rest.append((os.path.getmtime(p), os.path.getsize(p), p))
-                        except OSError:
-                            pass
+                # Der Size-Cap-Bestand kommt aus DEMSELBEN Durchlauf (ohne die eben
+                # geloeschten); die Pin-Frage stellt der Zweig trotzdem direkt vor jedem
+                # Loeschen neu (unten, Widerleger-MUSS 4).
+                rest = [(mtime, groesse, os.path.join(cache, fn))
+                        for fn, (mtime, groesse) in clips.items()]
                 gesamt = sum(r[1] for r in rest)
                 frei = shutil.disk_usage(self.cfg["data_dir"]).free
                 if gesamt > cap or frei < boden:
@@ -21761,32 +23675,58 @@ class Service:
                         except OSError:
                             pass
                     erg["geloescht"] += n
-                    self.log(f"cache cleanup ({grund}): "
+                    self.log.info(f"cache cleanup ({grund}): "
                              + ("size cap exceeded" if gesamt + befreit > cap else f"free space below {_frei_gb:.0f} GB")
                              + f" — {n} oldest clips deleted, cache now {gesamt / 1024**3:.1f} GB, "
                              f"{frei / 1024**3:.1f} GB free")
+                mess["cap"] = time.monotonic()
+                mess["clips_geloescht"] = erg["geloescht"]
                 # .315 (User 21.08.): live/ raeumen — zwei Alters-Achsen, Ausschuss
                 # zuerst. NUR Kamera-Unterordner; preview/, meldungen.jsonl und
                 # verbrauch.csv sind laufende Dateien und bleiben unangetastet.
-                lv_n, lv_b = self._live_aufraeumen()
+                lv_n, lv_b, lv_gesehen = self._live_aufraeumen()
+                mess.update(live=time.monotonic(), live_gesehen=lv_gesehen, live_geloescht=lv_n)
                 if lv_n:
                     befreit += lv_b
                     erg["geloescht"] += lv_n
-                    self.debug(f"live cleanup ({grund}): {lv_n} files deleted, "
+                    self.log.debug(f"live cleanup ({grund}): {lv_n} files deleted, "
                                f"{lv_b / 1024**3:.1f} GB freed")   # .511: Buchhaltung
                 frei = shutil.disk_usage(self.cfg["data_dir"]).free
                 erg.update(frei_mb=befreit / 1024**2, cache_gb=gesamt / 1024**3, frei_gb=frei / 1024**3,
                            knapp=bool(boden and frei < boden))
+                # Bauplan Feldstau Stufe 3: `gesamt` ist die Groesse NACH allen Loeschungen
+                # (Alters-Zweig vor der Zaehlung, Size-Cap zieht ab) — sie eicht den Stand,
+                # aus dem /health, Bremse, Systemzahlen und System-Seite lesen.
+                self.groessen_stand_eichen(gesamt)
                 if erg["knapp"]:
                     # Der Clip-Cache allein reicht nicht mehr: LAUT statt still sterben.
                     self.disk_warnung = (time.time(), round(frei / 1024**3, 1))
-                    self.log(f"DISK LOW: {frei / 1024**3:.1f} GB free below {_frei_gb:.0f} GB "
+                    self.log.warning(f"DISK LOW: {frei / 1024**3:.1f} GB free below {_frei_gb:.0f} GB "
                              f"and the clip cache is empty — free space on the data volume (System page)")
                 else:
                     self.disk_warnung = None
             except Exception as e:
-                self.log(f"cache cleanup error: {e}")
+                self.log.error(f"cache cleanup error: {e}")
+        self.log.debug(self._aufraeum_zeile(grund, mess, time.monotonic()))
         return erg
+
+    @staticmethod
+    def _aufraeum_zeile(grund, mess, ende):
+        """Die Lauf-Zeile von cleanup_cache aus seinen Messpunkten (Bauplan Feldstau Stufe 5.1):
+        gesamt ab Aufruf, Warten auf `_cleanup_lock`, je Teil die Dauer (Alters-Zweig mit dem
+        einen Verzeichnis-Durchlauf, Size-Cap/Mindestfrei, live), gesehene und geloeschte
+        Dateien in clips/ und live/; ein nicht erreichter Teil steht als n/a. -> str"""
+        def _s(von, bis):
+            return f"{bis - von:.2f} s" if von is not None and bis is not None else "n/a"
+        live = (f"{mess['live_gesehen']} seen, {mess['live_geloescht']} deleted"
+                if mess["live_gesehen"] is not None else "n/a")
+        return (f"cache cleanup run ({grund}): total {_s(mess['start'], ende)}, "
+                f"lock wait {_s(mess['start'], mess['lock'])}, "
+                f"age branch with directory scan {_s(mess['lock'], mess['alter'])}, "
+                f"size cap {_s(mess['alter'], mess['cap'])}, "
+                f"live {_s(mess['cap'], mess['live'])} | "
+                f"clips/ {mess['clips_gesehen']} entries seen, "
+                f"{mess['clips_geloescht']} clips deleted | live/ {live}")
 
     def _live_aufraeumen(self):
         """.315 (User 21.08. "sollte das nicht aufgeraeumt werden"): Retention fuer
@@ -21797,16 +23737,18 @@ class Service:
         frueher, Beweis-Medien (Bilder + Rueckblick-Videos gemeldeter Auftritte,
         core.livewache.alarmbilder liest sie) halten laenger. Nur Kamera-Unterordner —
         preview/, meldungen.jsonl und verbrauch.csv sind laufende Dateien.
-        -> (anzahl, bytes)."""
+        Feldstau Stufe 4: die dritte Zahl zaehlt die gesehenen Dateien der Kamera-Ordner
+        (fuer die Lauf-Zeile aus Stufe 5).
+        -> (anzahl, bytes, gesehen)."""
         basis = os.path.join(self.cfg["data_dir"], "live")
         if not os.path.isdir(basis):
-            return 0, 0
+            return 0, 0, 0
         d_alle = float(self.cfg.get("live_retention_d") or 0)
         d_vw = float(self.cfg.get("live_verworfen_retention_d") or 0)
         if d_alle <= 0 and d_vw <= 0:
-            return 0, 0                          # ausgeschaltet = kein Raeumen
+            return 0, 0, 0                       # ausgeschaltet = kein Raeumen
         jetzt = time.time()
-        n = befreit = 0
+        n = befreit = gesehen = 0
         for kam in os.listdir(basis):
             ordner = os.path.join(basis, kam)
             if not os.path.isdir(ordner) or kam == "preview":
@@ -21814,7 +23756,9 @@ class Service:
             try:
                 dateien = os.listdir(ordner)
             except OSError:
+                _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                 continue
+            gesehen += len(dateien)
             for fn in dateien:
                 tage = d_vw if fn.startswith("verworfen_") else d_alle
                 if tage <= 0:
@@ -21828,8 +23772,8 @@ class Service:
                     n += 1
                     befreit += st.st_size
                 except OSError:
-                    pass
-        return n, befreit
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
+        return n, befreit, gesehen
 
     # .32x AUTOMATISCHE SPEICHERGRENZEN (User-Entscheid 22.08.). Anteile statt
     # absoluter Zahlen, damit dieselbe Vorgabe auf einer 32-GB-Platte und auf
@@ -21857,6 +23801,7 @@ class Service:
             import shutil as _sh
             ges = _sh.disk_usage(self.cfg["data_dir"]).total / 1024**3
         except Exception:                                         # noqa: BLE001
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning (cap or 10, frei or 10, 'fallback (disk size unreadable)')")
             return (cap or 10), (frei or 10), "fallback (disk size unreadable)"
         # JEDER Wert wird EINZELN aufgeloest — wer nur den Deckel setzt, will die
         # Automatik fuers Mindestfrei behalten und umgekehrt. Ein gemeinsames
@@ -21877,11 +23822,14 @@ class Service:
         aus = {}
         try:
             cap, frei_min, quelle = self.speichergrenzen()
-            aus["platte"] = {"cache_gb": round(self.clip_cache_bytes() / 1024 ** 3, 2),
+            # Feldstau Stufe 3: aus dem Stand, nie gezaehlt; fehlt er noch, steht None da.
+            _cache_b, _cache_alter = self.clip_cache_bytes()
+            aus["platte"] = {"cache_gb": (round(_cache_b / 1024 ** 3, 2)
+                                          if _cache_b is not None else None),
                              "cache_max_gb": round(cap, 1),
                              "frei_min_gb": round(frei_min, 1), "quelle": quelle}
         except Exception:                                     # noqa: BLE001
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         try:                                  # kein Lazy-Start: nur fragen, wenn er lebt
             # E3.1: `worker` ist der Zustand DES einen Worker-Prozesses. Bis .526
             # war es der von Platz 1 aus einem Pool von N; die Schluessel sind
@@ -21900,7 +23848,7 @@ class Service:
             # gleichzeitigen Jobs steht als `offene_jobs` im Zustand selbst.
             aus["worker_plaetze"] = ({"1": aus["worker"]} if self._worker_obj else {})
         except Exception:                                     # noqa: BLE001
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         try:
             st = dict(getattr(self, "_sweep_stand", None) or {})
             st["grund"] = None
@@ -21943,13 +23891,13 @@ class Service:
                 # (MQTT-Zulauf, Platzwaechter) waere sonst nirgends sichtbar.
                 st["queue_abgewiesen"] = int(getattr(self, "_ev_abgewiesen", 0))
             except Exception:                                 # noqa: BLE001
-                pass
+                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
             try:
                 st["spur_n"] = len(getattr(self, "_spur_q", ()) or ())
                 st.update({f"spur_{k}": v for k, v in
                            (getattr(self, "_spur_stat", None) or {}).items()})
             except Exception:                                 # noqa: BLE001
-                pass
+                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
             # .410 Betriebsart fuer die Queue-Kachel (Tester-Screenshot 02.09.:
             # "Event queue ist die ganze Zeit null"): im Poll-Betrieb verarbeitet
             # sweep() direkt, die MQTT-Warteschlange bleibt PER BAU leer — eine
@@ -21962,7 +23910,7 @@ class Service:
                 # -fehler. Die Live-Engine zaehlt ihre eigenen im Status.
                 st.update({f"anwesenheit_{k}": v for k, v in _anw.zaehler().items()})
             except Exception:                                 # noqa: BLE001
-                pass
+                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
             try:
                 # .411 Pushover-Zustand (Feld, keine Kachel): pushover_konfiguriert /
                 # _pausiert / _ablehnungen — eine Pause waere sonst nur im Log.
@@ -21970,14 +23918,14 @@ class Service:
                 st.update({f"pushover_{k}": _po[k]
                            for k in ("konfiguriert", "pausiert", "ablehnungen")})
             except Exception:                                 # noqa: BLE001
-                pass
+                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
             aus["rueckstau"] = st
         except Exception:                                     # noqa: BLE001
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         try:
             aus["live"] = dict(self.live_health(), grund=None)
         except Exception:                                     # noqa: BLE001
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         try:
             # .407 Zeitschiene (User-Wunsch nach dem Feldbefund: die Event-API
             # eines Testers antwortete 35 min lang mit ~120 s je Anfrage, ohne
@@ -21987,7 +23935,7 @@ class Service:
             # ist "letzte Minute" genau der Balken, den die Seite zeichnet.
             aus["frigate"] = _fauth.antwortzeiten(fenster_s=_systemstat.TAKT_S)
         except Exception:                                     # noqa: BLE001
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         return aus
 
     def start_plattenwache(self):
@@ -22007,21 +23955,26 @@ class Service:
                 import shutil as _sh
                 _ges = _sh.disk_usage(self.cfg["data_dir"]).total / 1024**3
                 _cap, _fr, _q = self.speichergrenzen()
-                self.log(f"disk limits: cache cap {_cap:.0f} GB, keep "
+                self.log.info(f"disk limits: cache cap {_cap:.0f} GB, keep "
                          f"{_fr:.0f} GB free — {_q}")
                 if _cap >= _ges * 0.8:
-                    self.log(f"!! clip_cache_max_gb is {_cap:.0f} GB but the disk "
+                    self.log.warning(f"!! clip_cache_max_gb is {_cap:.0f} GB but the disk "
                              f"holds only {_ges:.0f} GB — the cap can never take "
                              f"effect. Lower it (Settings, Expert) or rely on "
                              f"disk_frei_min_gb "
                              f"({_fr:.0f} GB).")
             except Exception:                                     # noqa: BLE001
-                pass
+                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
             # .331 (User-Entscheid 22.08.: "einmal am Tag und bei jedem Start"):
-            # der Grundtakt ist TAEGLICH, nicht mehr alle 10 min. Begruendung
-            # gemessen: cleanup_cache haengt ohnehin an JEDEM verarbeiteten Event
-            # (s. Aufruf im Event-Pfad) — im Normalbetrieb raeumt also der
-            # Ereignisstrom, und die Wache ist nur ein Auffangnetz.
+            # der Grundtakt ist TAEGLICH, nicht mehr alle 10 min. Begruendung:
+            # jedes verarbeitete Ereignis stupst den Aufraeum-Faden an (Bauplan
+            # Feldstau Stufe 1, `aufraeumen_anstossen` am Ende von process()) —
+            # im Normalbetrieb raeumt also der Ereignisstrom ueber diesen Faden,
+            # und die Wache ist nur ein Auffangnetz. Sie ruft cleanup_cache
+            # weiter SELBST und synchron: sie hat einen eigenen Faden ohne
+            # Analyse-Platz, braucht das Ergebnis `knapp` fuer ihren Takt, und
+            # `_cleanup_lock` haelt sie, den Aufraeum-Faden und den Knopf
+            # auseinander (ihr Warten am Lock bleibt bewusst ohne Frist).
             #
             # Das Netz bleibt aber engmaschig, SOLANGE es knapp ist: genau der
             # Fall, fuer den .313 gebaut wurde (volle Platte -> Verarbeitung
@@ -22034,6 +23987,67 @@ class Service:
                 _eng = bool((_erg or {}).get("knapp")) or bool(self.disk_warnung)
                 time.sleep(self.WACHE_ENG_S if _eng else self.WACHE_TAKT_S)
         threading.Thread(target=lauf, daemon=True, name="plattenwache").start()
+
+    # Bauplan Feldstau Stufe 1 (Eigentuemer 30.09.2026 10:10:02, O464): der zentrale
+    # Aufraeum-Faden. Er haelt keinen Analyse-Platz und nimmt `self.lock` nie,
+    # kann also weder den Platzwaechter ausloesen noch Analysen aufhalten.
+    # AUFRAEUM_WACHE_S ist KEIN Takt, nur die Schleifen-Wache des Wartens: laeuft
+    # sie ohne Anstoss ab, wird nicht geraeumt (G5, kein neuer Aufraeum-Takt).
+    # Der Wert wirkt deshalb auf kein Verhalten.
+    AUFRAEUM_WACHE_S = 60.0
+
+    def start_aufraeumer(self):
+        """Startet den Aufraeum-Faden (Bauplan Feldstau Stufe 1): er raeumt den Clip-Cache nur
+        auf Anstoss (`aufraeumen_anstossen`), nie im Analyse-Faden und nie im eigenen Takt. -> None"""
+        if getattr(self, "_aufraeum_zeichen", None) is None:
+            self._aufraeum_zeichen = threading.Event()
+        t = threading.Thread(target=self._aufraeumer_schleife, daemon=True, name="aufraeumer")
+        self._aufraeum_faden = t
+        t.start()
+
+    def aufraeumen_anstossen(self):
+        """Stupst den Aufraeum-Faden an und kehrt sofort zurueck; Anstoesse waehrend eines
+        Laufs fallen zu genau einem Folgelauf zusammen. Ohne Zeichen (Proben) nichts. -> None"""
+        zeichen = getattr(self, "_aufraeum_zeichen", None)
+        if zeichen is not None:
+            zeichen.set()
+
+    def _aufraeumer_schleife(self):
+        """Der Faden: auf das Zeichen warten, es loeschen, EIN Lauf. Ein Fehler im Lauf kommt
+        laut ins Log und der Faden lebt weiter (G3). -> None (endet nicht)"""
+        zeichen = self._aufraeum_zeichen
+        while True:
+            if not zeichen.wait(self.AUFRAEUM_WACHE_S):
+                continue                          # Deckel ohne Anstoss: kein Lauf (G5)
+            # VOR dem Lauf loeschen: ein Anstoss waehrend des Laufs setzt das
+            # Zeichen neu und bringt genau EINEN Folgelauf; mehrere fallen zusammen.
+            zeichen.clear()
+            self._aufraeum_seit = time.monotonic()
+            try:
+                self.cleanup_cache(grund="event")
+            except Exception as e:                                # noqa: BLE001
+                self.log.error(f"cache cleanup error (cleanup thread): "
+                               f"{type(e).__name__}: {e}")
+            finally:
+                ende = time.monotonic()
+                self._aufraeum_dauer_s = ende - self._aufraeum_seit
+                self._aufraeum_ende = ende
+                self._aufraeum_seit = None
+
+    def aufraeum_stand(self):
+        """Zustand des Aufraeum-Fadens fuer /health `cleanup` und `health_ok` (Stufe 1.4).
+        -> dict faden_lebt (None = nicht gestartet, False = tot), laeuft_seit_s (None ohne
+        laufenden Lauf; gezaehlt ab Aufruf, Warten an `_cleanup_lock` inbegriffen),
+        letzter_lauf_vor_s, letzte_dauer_s (None vor dem ersten Lauf)"""
+        t = getattr(self, "_aufraeum_faden", None)
+        seit = getattr(self, "_aufraeum_seit", None)
+        ende = getattr(self, "_aufraeum_ende", None)
+        dauer = getattr(self, "_aufraeum_dauer_s", None)
+        jetzt = time.monotonic()
+        return {"faden_lebt": t.is_alive() if t is not None else None,
+                "laeuft_seit_s": round(jetzt - seit, 1) if seit is not None else None,
+                "letzter_lauf_vor_s": round(jetzt - ende, 1) if ende is not None else None,
+                "letzte_dauer_s": round(dauer, 1) if dauer is not None else None}
 
     # Modulumbau R2: die Ketten-Praedikate leben in core/kette.py (Docstrings/
     # Begruendungen dort). Hier nur Einhaenge: der Dienst reicht cfg, den
@@ -22053,12 +24067,12 @@ class Service:
         return _kette.deckung_by_eid(self.log_path, entry)
 
     def _gesicht_pass_bestaetigt(self, eid=None, entry=None, pass_key=None):
-        return _kette.gesicht_pass_bestaetigt(self.cfg, self.log_path, self.debug,
+        return _kette.gesicht_pass_bestaetigt(self.cfg, self.log_path, self.log.debug,
                                               eid=eid, entry=entry,
                                               pass_key=pass_key)
 
     def _kontroll_speicher(self, eid, entry=None):
-        return _kette.kontroll_speicher(self.cfg, self.log_path, self.debug,
+        return _kette.kontroll_speicher(self.cfg, self.log_path, self.log.debug,
                                         eid, entry)
 
 
@@ -22119,17 +24133,16 @@ class Service:
             antwort = (self.personwork_job_batch(job, timeout) if still
                        else self.personwork_job_live(job, timeout))
             if antwort is None:
-                print(f"[personlive] personwork job failed/timeout ({eid}) — "
-                      f"no body verdict for this event", flush=True)
+                _log.error(f"[personlive] personwork job failed/timeout ({eid}) — "
+                      f"no body verdict for this event")
                 return
             u = antwort.get("u")
             if still:
                 # Zweite, unabhaengige Sperre. KEIN Personenname im
                 # Dienst-Log (Log-Vertrag §9) — die Zeile sagt nur, dass
                 # gearbeitet und geschwiegen wurde.
-                print("[personlive] quiet re-analysis: judged image "
-                      "stored, nothing announced, live state untouched",
-                      flush=True)
+                _log.info("[personlive] quiet re-analysis: judged image "
+                      "stored, nothing announced, live state untouched")
                 return
             # .249 (Kosinus-raus): Wortstufe an der GEEICHTEN Koerper-Latte
             # (status.json: schwelle + fremd_max — das Band ist hier
@@ -22190,11 +24203,11 @@ class Service:
                                   if will_video and not vid else "")
                     telegram_video(self.cfg, vid, cap,
                                    crop=u.get("bild"))
-                print(f"[personlive] MELDUNG {u}", flush=True)
+                _log.info(f"[personlive] NOTIFICATION {u}")
             elif u:
-                print(f"[personlive] Treffer ohne Feuer {u}", flush=True)
+                _log.info(f"[personlive] hit without firing {u}")
         except Exception as e:
-            print(f"[personlive] Fehler: {e}", flush=True)
+            _log.error(f"[personlive] error: {e}")
 
     def _alarm_slot_nehmen(self, now):
         """Cooldown pruefen UND belegen, in einem Schritt (E0b).
@@ -22233,7 +24246,7 @@ class Service:
             return False
         now = time.time()
         if not self._alarm_slot_nehmen(now):     # E0b: pruefen und belegen atomar
-            self.log(f"{entry['eid']}: alert suppressed (cooldown)")
+            self.log.warning(f"{entry['eid']}: alert suppressed (cooldown)")
             return False
         f = entry["frigate"]
         fs = f"{f['score']:.2f}" if f["score"] is not None else "?"
@@ -22278,7 +24291,7 @@ class Service:
                                     cos=f["cos"], unsere=ours_txt)
         anhang = self._best_crop(event_dir, entry, entry["bestaetigt"] or list(entry["ours"]))
         if self.dry_alert:
-            self.log(f"DRY-ALERT: {msg}")
+            self.log.info(f"DRY-ALERT: {msg}")
             self._alarm_slot_zurueck()           # E0b: nichts gesendet, Slot freigeben
             return False
         # .411: Kanal ohne Zugangsdaten oder pausiert (N Ablehnungen in Folge)
@@ -22305,10 +24318,10 @@ class Service:
             try:
                 ok = push(self.cfg, titel, msg, anhang, log=self.log)
             except Exception as e:                          # noqa: BLE001
-                self.log(f"Pushover error: {e}")
+                self.log.error(f"Pushover error: {e}")
                 ok = False
             if not ok:
-                self.log("alert REJECTED by Pushover (status!=1) — check token/user")
+                self.log.error("alert REJECTED by Pushover (status!=1) — check token/user")
                 self.last_alert = 0.0
         self._spur(f"alert {entry['eid']}", _senden)
         return True
@@ -22334,6 +24347,7 @@ class Service:
             # AttributeError gehoert dazu: gueltiges JSON in falscher Form (eine
             # Liste statt eines Objekts) haette sonst den Dienststart gerissen.
             # Ein unlesbarer Merkzettel darf nie mehr kosten als sich selbst.
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning (set(), 0.0, 0.0)")
             return set(), 0.0, 0.0
 
     def _catchup_sichern(self):
@@ -22349,7 +24363,7 @@ class Service:
                 os.fsync(f.fileno())
             os.replace(tmp, self._catchup_pfad)
         except OSError as e:
-            self.log(f"catch-up: could not save the held stack ({e})")
+            self.log.error(f"catch-up: could not save the held stack ({e})")
 
     def _catchup_freigeben(self, eid=None):
         """Abgearbeitete Ereignisse vom Merkzettel nehmen. -> Zahl der Freigaben.
@@ -22414,7 +24428,7 @@ class Service:
             # Eigener Fang: der Aufruf haengt am Ende JEDER Analyse und im
             # Sweep. Ohne ihn faende sich ein Defekt hier als „sweep error"
             # wieder — ein Frigate-Ausfall, den es nicht gibt (K1).
-            self.log(f"catch-up: releasing finished events from the held list "
+            self.log.error(f"catch-up: releasing finished events from the held list "
                      f"failed ({type(e).__name__}: {e})")
             return 0
 
@@ -22490,7 +24504,7 @@ class Service:
             # starteten und erst in einer Downtime endeten, entgehen dem Sweep — bei
             # lookback 2h vs. Eventdauern <2min real irrelevant.
             if self.frigate_fehler:                   # Frigate antwortet wieder -> Banner/Ampel entwarnen
-                self.log("Frigate reachable again (sweep)")
+                self.log.info("Frigate reachable again (sweep)")
             self.frigate_fehler = None
             self.frigate_fehlerserie = 0
             if len(evs) >= LIMIT:                     # harte Grenze ohne Pagination: aelteste fielen still weg
@@ -22498,7 +24512,7 @@ class Service:
                 # dort kommen 200 Events in unter einer halben Stunde zusammen, ein
                 # kleineres Fenster hilft also nicht und verkleinert nur das Nachhol-Netz.
                 # Frigate liefert die NEUESTEN zuerst; abgeschnitten wird das aeltere Ende.
-                self.log(f"sweep: Frigate returned the limit of {LIMIT} events — older ones in the "
+                self.log.warning(f"sweep: Frigate returned the limit of {LIMIT} events — older ones in the "
                          f"last {_std}h may be missing. On a busy site raise "
                          f"sweep_limit (currently {LIMIT})")
             # A3 (05.09.2026): was GERADE auf einem Platz gerechnet wird, gehoert
@@ -22581,7 +24595,7 @@ class Service:
                     self._catchup_seit = 0.0
                     self._catchup_sichern()
                 zurueck = set()
-                self.log(f"catch-up: the switch is set to '{catchup_modus(cfg)}' — "
+                self.log.info(f"catch-up: the switch is set to '{catchup_modus(cfg)}' — "
                          f"the {_n_alt} events on the list are handled that way now")
             # WIDERLEGER-FUND 29.08. (2. Runde): gehaltene Ereignisse, die Frigate
             # nicht mehr kennt (Aufbewahrung abgelaufen, geloescht) oder die jenseits
@@ -22626,7 +24640,7 @@ class Service:
                             self._catchup_aeltest = 0.0
                         self._catchup_sichern()
                     zurueck -= _fort
-                    self.log(f"catch-up: {len(_fort)} held events can no longer be "
+                    self.log.warning(f"catch-up: {len(_fort)} held events can no longer be "
                              f"fetched — gone from Frigate (retention), or older than "
                              f"the largest window that may be asked for ({_max_h}h) — "
                              f"dropped from the list, {len(zurueck)} left")
@@ -22683,7 +24697,7 @@ class Service:
                     if not self._catchup_seit:
                         self._catchup_seit = time.time()
                     self._catchup_sichern()
-                self.log(f"sweep: {len(self._catchup_zurueck)} events from the last "
+                self.log.info(f"sweep: {len(self._catchup_zurueck)} events from the last "
                          f"{_std}h are waiting — start catch-up is set to ask, use the "
                          f"button in the header to work through them")
                 return
@@ -22713,14 +24727,14 @@ class Service:
                         _anw.luecke(cfg, ev.get("start_time"), ev.get("end_time"),
                                     ev.get("camera"), ev["id"], log=self.log)
                     f.flush()
-                self.log(f"sweep: start catch-up is off — {len(todo)} events from the last "
+                self.log.warning(f"sweep: start catch-up is off — {len(todo)} events from the last "
                          f"{cfg['lookback_h']}h marked as skipped (start_catchup)")
                 return
             # Leerer Master: EINMAL pro Sweep melden statt pro Event einen Frigate-GET + Logzeile zu
             # erzeugen. Ohne Referenzen kann keine Analyse gelingen -> der Sweep baute die gleiche
             # todo-Liste im 20s-Takt endlos neu (Dauerlast auf einer frischen Installation).
             if todo and not master_persons(cfg):
-                self.log(f"sweep: {len(todo)} events waiting, but the reference master is EMPTY — "
+                self.log.warning(f"sweep: {len(todo)} events waiting, but the reference master is EMPTY — "
                          f"enroll people first (setup wizard / enroll), then analysis will start")
                 return
             if todo:
@@ -22731,14 +24745,14 @@ class Service:
                 # .511: Takt-Buchhaltung, im Poll-Betrieb alle 20 s. Was aus der
                 # Einreihung wird, steht je Ereignis in der Urteilszeile; die
                 # Warteschlange selbst zeigt /health (rueckstau_zahlen) live.
-                self.debug(f"sweep: queueing {len(todo)} unprocessed events for analysis")
+                self.log.debug(f"sweep: queueing {len(todo)} unprocessed events for analysis")
             elif auf_wunsch:
                 # Widerleger-Fund 29.08.: hier war der Lauf stumm. Sagen, dass
                 # nichts zu holen war, und WARUM — sonst sieht der Nutzer nur
                 # einen Klick ohne Wirkung.
                 with self._start_sweep_lock:
                     _hielt = len(self._catchup_zurueck)
-                self.log(f"catch-up: nothing to fetch in the last {_std}h "
+                self.log.warning(f"catch-up: nothing to fetch in the last {_std}h "
                          f"(limit {LIMIT})"
                          + (f" — {_hielt} held events are older than that window, "
                             f"press again with a larger range" if _hielt else ""))
@@ -22784,7 +24798,7 @@ class Service:
                 # ist NICHT verloren: innerhalb `lookback_h` findet es der
                 # naechste Sweep wieder, darueber hinaus haelt es der Merkzettel
                 # (seit B2 faellt der erst nach der Abarbeitung).
-                self.log(f"sweep: the event queue is full "
+                self.log.info(f"sweep: the event queue is full "
                          f"({self.EV_QUEUE_MAX}) — {_abgewiesen} of {len(todo)} "
                          f"events were not queued; they stay on the list and "
                          f"the next sweep picks them up")
@@ -22840,7 +24854,7 @@ class Service:
             # Sichtbar machen: im Poll-Modus (Default der ausgelieferten Container) ist sweep() der
             # EINZIGE Frigate-Pfad. Ohne das blieben UI-Banner, System-Ampel und Stoerungswaechter
             # gruen, waehrend Frigate tot ist und Events aus dem lookback-Fenster laufen.
-            self.log(f"sweep error: {e}")
+            self.log.error(f"sweep error: {e}")
             self.frigate_fehler = (time.time(), f"event poll: {e}")
             self.frigate_fehlerserie = getattr(self, "frigate_fehlerserie", 0) + 1
         finally:
@@ -22868,24 +24882,37 @@ class Service:
         """Versuchszaehler. FAIL-SAFE: ein Eintrag, den wir nicht sauber lesen koennen, gilt als
         AUFGEGEBEN, nie als 'noch nie versucht' — eine kaputte Datei darf keine Analyse-Schleife
         ausloesen. Wird NUR im Nachhol-Thread gerufen, nie in __init__ (dort gibt es self.logbuf
-        noch nicht, ein log() wuerde den Dienststart killen)."""
+        noch nicht, ein log() wuerde den Dienststart killen).
+
+        Feldbefunde Punkt 3: `aus_ts` (wann aufgegeben) reist mit; ein unlesbarer Eintrag
+        bekommt `aus: kaputt` OHNE `aus_ts` — gemeldet und gezaehlt wird er genau einmal in
+        `_nachhol_kandidaten`. `_nachhol_datei_version` sagt, ob die Datei schon aus dieser
+        Fassung stammt (0 = keine Datei, Altbestand noch nicht gesichtet)."""
+        self._nachhol_datei_version = 0
         try:
             with open(self._nachhol_pfad()) as f:
-                roh = (json.load(f) or {}).get("events")
+                datei = json.load(f) or {}
+            roh = datei.get("events")
             if not isinstance(roh, dict):
                 return {}
         except FileNotFoundError:
             return {}
         except Exception as e:
-            self.log(f"nachhol.json unreadable ({e}) — counters start over")
+            self.log.error(f"nachhol.json unreadable ({e}) — counters start over")
             return {}
+        try:
+            self._nachhol_datei_version = int(datei.get("version") or 0)
+        except (TypeError, ValueError):
+            _logbuch.swallowed(_log, _logbuch.WARNING, "version 0, the old stock is sighted again")
         out = {}
         for eid, s in roh.items():
             try:
                 out[str(eid)] = {"n": int(s["n"]), "ts": float(s.get("ts") or 0),
-                                 "ev": float(s.get("ev") or 0), "aus": s.get("aus") or None}
+                                 "ev": float(s.get("ev") or 0), "aus": s.get("aus") or None,
+                                 "aus_ts": s.get("aus_ts")}
             except Exception:
-                out[str(eid)] = {"n": 99, "ts": time.time(), "ev": 0.0, "aus": "state_kaputt"}
+                out[str(eid)] = {"n": 99, "ts": time.time(), "ev": 0.0, "aus": "kaputt",
+                                 "aus_ts": None}
         return out
 
     def _nachhol_schreiben(self, st):
@@ -22898,12 +24925,13 @@ class Service:
         try:
             os.makedirs(os.path.dirname(p), exist_ok=True)
             with open(p + ".tmp", "w") as f:
-                json.dump({"version": 1, "events": st}, f, ensure_ascii=False, indent=1)
+                json.dump({"version": NACHHOL_ZUSTAND_VERSION, "events": st}, f,
+                          ensure_ascii=False, indent=1)
                 f.flush(); os.fsync(f.fileno())
             os.replace(p + ".tmp", p)
             return True
         except Exception as e:
-            self.log(f"writing nachhol.json failed: {e} — catch-up round skipped")
+            self.log.error(f"writing nachhol.json failed: {e} — catch-up round skipped")
             return False
 
     def _nachhol_kandidaten(self):
@@ -22921,6 +24949,7 @@ class Service:
                     try:
                         r = json.loads(l); eid = r["eid"]
                     except Exception:
+                        _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                         continue
                     letzte[eid] = r
                     # Korrekturzeilen (Issue #19) sind KEINE gelaufene Analyse — ihr ts ist
@@ -22933,24 +24962,48 @@ class Service:
                             and not r.get("korrektur"):
                         letzte_gute = max(letzte_gute, float(r.get("ts") or 0))
         st = self._nachhol_lesen()
-        kand, offen, tot, neu_aus = [], 0, 0, False
+        # Feldbefunde Punkt 3 (O296): JEDES endgueltig aufgegebene Ereignis bekommt genau
+        # eine Zeile, eine Marke `aus` mit Zeit und zaehlt (/health `nachhol`). Die Marke
+        # verhindert die Wiederholung; wer aelter als NACHHOL_PRUNE_TAGE ist, steht nicht
+        # mehr im Zustand und wird nicht neu gemeldet. Beim ersten Lauf dieser Fassung
+        # (Datei aelter oder fehlend) ist, was schon draussen liegt, Altbestand: eine
+        # Sammelzeile, kein Verlust dieses Dienstes.
+        prune = jetzt - NACHHOL_PRUNE_TAGE * 86400
+        erster = getattr(self, "_nachhol_datei_version", 0) < NACHHOL_ZUSTAND_VERSION
+        kand, offen, tot, neu_aus, altbestand = [], 0, 0, erster, 0
+        for eid, s in list(st.items()):                     # (c) unlesbarer Eintrag
+            if s.get("aus") == "kaputt" and not s.get("aus_ts"):
+                self._nachhol_aufgeben(st, eid, s, "kaputt", "catch-up abandoned (its entry "
+                                       "in the catch-up state was unreadable)")
+                neu_aus = True
         for eid, r in letzte.items():
             if r.get("kategorie") != "fehler":
                 continue
             ev = float(r.get("start") or r.get("ts") or 0) or jetzt
-            s = st.get(eid) or {}
+            s = st.get(eid) or {"n": 0, "ts": 0.0, "ev": ev, "aus": None}
             if s.get("aus"):
                 tot += 1
                 continue
             n = int(s.get("n") or 0)
             if not (fenster <= ev <= jetzt + 3600):        # Fenster + Schutz gegen Zukunfts-ts
-                if n < int(cfg["nachhol_versuche"]) and eid in st:
-                    st[eid] = {**s, "aus": "fenster"}      # genau EINE Logzeile statt stillem Verlust
-                    neu_aus = True
-                    self.log(f"{eid}: catch-up abandoned (fell out of the {cfg['nachhol_tage']}d window "
-                             f"after {n} attempts)")
+                if ev < prune:
+                    continue                                # aus dem Zustand beschnitten
+                neu_aus = True
+                if erster:
+                    altbestand += 1
+                    st[eid] = {**s, "aus": "fenster", "aus_ts": round(jetzt, 1)}
+                elif n >= int(cfg["nachhol_versuche"]):
+                    self._nachhol_aufgeben(st, eid, s, "versuche", f"catch-up abandoned "
+                                           f"(all {n} attempts used up)")
+                else:                                       # (a), auch ohne Eintrag
+                    self._nachhol_aufgeben(st, eid, s, "fenster", f"catch-up abandoned (fell "
+                                           f"out of the {cfg['nachhol_tage']}d window after "
+                                           f"{n} attempts)")
                 continue
-            if n >= int(cfg["nachhol_versuche"]):
+            if n >= int(cfg["nachhol_versuche"]):          # (b) Versuche aufgebraucht
+                self._nachhol_aufgeben(st, eid, s, "versuche", f"catch-up abandoned "
+                                       f"(all {n} attempts used up)")
+                neu_aus = True
                 tot += 1
                 continue
             offen += 1
@@ -22961,11 +25014,32 @@ class Service:
             if lv and lv <= jetzt and jetzt - lv < pause:
                 continue                                    # Backoff; lv > jetzt (Uhrsprung) = faellig
             kand.append((lv, -ev, eid, ev))
+        if altbestand:
+            self.log.info(f"{altbestand} events were already outside the catch-up window "
+                          f"at start, not analysed")
         if neu_aus:
             self._nachhol_schreiben(st)
         kand.sort()
         self._nachhol_stat = (offen, tot)
+        self._nachhol_faellig_n = len(kand)                 # Punkt 2, Menge „wartet“
         return [(e, v) for _, _, e, v in kand], offen, tot
+
+    def _nachhol_aufgeben(self, st, eid, s, grund, text):
+        """Ein Ereignis endgueltig aufgeben (Feldbefunde Punkt 3): Marke mit Zeit in den
+        Nachhol-Zustand `st`, genau EINE ERROR-Zeile, Teilzaehler `grund`. -> None"""
+        st[eid] = {**s, "aus": grund, "aus_ts": round(time.time(), 1)}
+        zaehler = getattr(self, "_nachhol_verloren", None)
+        if zaehler is None:
+            zaehler = self._nachhol_verloren = collections.Counter()
+        zaehler[grund] += 1
+        self.log.error(f"{eid}: {text}")
+
+    def nachhol_verluste_stand(self):
+        """Der /health-Block `nachhol` (Feldbefunde Punkt 3): endgueltig aufgegebene
+        Ereignisse seit Dienststart. -> dict verloren_n und je Grund ein Teilzaehler."""
+        z = getattr(self, "_nachhol_verloren", None) or {}
+        teile = {g: int(z.get(g, 0)) for g in NACHHOL_VERLUST_GRUENDE}
+        return {"verloren_n": sum(teile.values()), **teile}
 
     def _nachhol_vorpruefung(self, eid):
         """Billig, EIN HTTP-Call, KEINE GPU. Trennt 'reparierbar' von 'dauerhaft tot':
@@ -22983,8 +25057,10 @@ class Service:
         try:
             ev = api(cfg, f"/api/events/{eid}")
         except urllib.error.HTTPError as e:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning 'event_weg' if e.code == 404 else 'frigate'")
             return "event_weg" if e.code == 404 else "frigate"
         except Exception:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning 'frigate'")
             return "frigate"
         hat = (ev or {}).get("has_clip")
         _frames.clip_dbg(f"{eid}: event meta src=nachhol -> has_clip={hat} "
@@ -23008,7 +25084,7 @@ class Service:
                 if os.path.exists(p):
                     os.remove(p)
         except Exception as e:
-            self.log(f"{eid}: catch-up cleanup failed: {e}")
+            self.log.error(f"{eid}: catch-up cleanup failed: {e}")
 
     def _nachhol_luecke_frei(self):
         """Darf JETZT ein Nachhol-Lauf fahren, obwohl Live-Betrieb ist?
@@ -23061,6 +25137,7 @@ class Service:
         except Exception:                                   # noqa: BLE001
             # Wer die Lage nicht lesen kann, faehrt nicht: das Ruhefenster ist
             # die sichere Stellung, nicht die Ausnahme.
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning False")
             return False
 
     def _nachhol_runde(self):
@@ -23082,7 +25159,7 @@ class Service:
         if not kand:
             return
         if not master_persons(cfg):
-            self.log("catch-up: reference master empty — round skipped")
+            self.log.warning("catch-up: reference master empty — round skipped")
             return
         eid, ev = kand[0]
         st = self._nachhol_lesen()
@@ -23093,9 +25170,9 @@ class Service:
             self._nachhol_schreiben(st)                     # Backoff, aber KEIN Versuch verbrannt
             return
         if grund:
-            s["aus"] = grund
+            self._nachhol_aufgeben(st, eid, s, grund, f"catch-up abandoned for good "
+                                   f"({grund}) — no GPU spent")
             self._nachhol_schreiben(st)
-            self.log(f"{eid}: catch-up abandoned for good ({grund}) — no GPU spent")
             return
         s["n"] = int(s.get("n") or 0) + 1
         if not self._nachhol_schreiben(st):
@@ -23108,7 +25185,7 @@ class Service:
             # Vorpruefung oder an der leeren Kandidatenliste umkehrt.
             self._nachhol_unter_last_n = int(
                 getattr(self, "_nachhol_unter_last_n", 0) or 0) + 1
-        self.log(f"{eid}: catch-up attempt {n}/{cfg['nachhol_versuche']} "
+        self.log.warning(f"{eid}: catch-up attempt {n}/{cfg['nachhol_versuche']} "
                  f"({max(0, offen - 1)} more pending, {tot} abandoned)"
                  + (" — running during live operation: the event queue is empty "
                     "and an analysis slot is free" if _unter_last else ""))
@@ -23139,16 +25216,16 @@ class Service:
             s2["n"] = max(0, n - 1)
             s2["ts"] = round(time.time(), 1)
             self._nachhol_schreiben(st)
-            self.log(f"{eid}: catch-up attempt {n} does NOT count — the worker "
+            self.log.warning(f"{eid}: catch-up attempt {n} does NOT count — the worker "
                      f"process went away while it was running (not this event's "
                      f"fault); attempts stay at {s2['n']}/"
                      f"{cfg['nachhol_versuche']}")
             return
         if entry is None:                                   # Kamera aus / Zonen-Gate / Abbruch:
             st = self._nachhol_lesen()                      # process() hat KEINE Zeile geschrieben
-            st.setdefault(eid, s)["aus"] = "kein_ergebnis"  # -> FAIL-SAFE endgueltig aufgeben
-            self._nachhol_schreiben(st)
-            self.log(f"{eid}: catch-up without result (skipped/aborted) — abandoned")
+            self._nachhol_aufgeben(st, eid, st.get(eid) or s, "kein_ergebnis",
+                                   "catch-up without result (skipped/aborted) — abandoned")
+            self._nachhol_schreiben(st)                     # -> FAIL-SAFE endgueltig aufgeben
             return
         if entry.get("kategorie") == "fehler":
             self._nachhol_sperre = min(6, self._nachhol_sperre * 2 + 1)   # 1, 3, 6 Runden Pause
@@ -23157,14 +25234,14 @@ class Service:
             # 4,7 s, 0 Gesichter) — im Log stand nur, DASS es wieder fehlschlug.
             # Der Code kommt aus der eben geschriebenen Akte-Zeile, es wird
             # nichts zweites gerechnet.
-            self.log(f"{eid}: catch-up attempt {n} again 'fehler' "
+            self.log.error(f"{eid}: catch-up attempt {n} again 'fehler' "
                      f"({entry.get('verwurf_grund') or 'reason not recorded'}) "
                      f"— pausing {self._nachhol_sperre} "
                      f"rounds (malfunction may still be active)")
             return
         self._nachhol_sperre = 0
         # W3: Browser-Kopie lazy beim Klick (/video), nicht mehr im Nachhol-Pfad.
-        self.log(f"{eid}: catch-up successful -> {entry['kategorie']} "
+        self.log.info(f"{eid}: catch-up successful -> {entry['kategorie']} "
                  f"(ours={entry['bestaetigt'] or 'unknown'}, {entry['dauer_s']}s, silent)")
 
     def start_nachhol(self):
@@ -23174,7 +25251,7 @@ class Service:
         self._nachhol_sperre = 0
         self._nachhol_stat = (0, 0)
         if int(self.cfg["nachhol_versuche"]) <= 0 or not self.cfg.get("frigate_url"):
-            self.log("catch-up run off (nachhol_versuche=0 or no frigate_url)")
+            self.log.info("catch-up run off (nachhol_versuche=0 or no frigate_url)")
             return
         def lauf():
             time.sleep(max(60, int(self.cfg["nachhol_start_s"])))
@@ -23182,10 +25259,10 @@ class Service:
                 try:
                     self._nachhol_runde()
                 except Exception as e:
-                    self.log(f"catch-up round error: {e}")
+                    self.log.error(f"catch-up round error: {e}")
                 time.sleep(max(120, int(self.cfg["nachhol_intervall_s"])))   # nie Busy-Loop
         threading.Thread(target=lauf, daemon=True).start()
-        self.log(f"catch-up run active: every {self.cfg['nachhol_intervall_s']}s, window "
+        self.log.info(f"catch-up run active: every {self.cfg['nachhol_intervall_s']}s, window "
                  f"{self.cfg['nachhol_tage']}d, max {self.cfg['nachhol_versuche']} attempts, "
                  f"analysis cap {self.cfg['nachhol_analyse_timeout_s']}s, silent (no alerts)")
 
@@ -23212,11 +25289,11 @@ class Service:
                 try:
                     api(self.cfg, "/api/version")
                     if self.frigate_fehler:
-                        self.log("Frigate reachable again (probe)")
+                        self.log.info("Frigate reachable again (probe)")
                     self.frigate_fehler = None
                     self.frigate_fehlerserie = 0
                 except Exception:
-                    pass          # Drossel/Fehler bucht api() selbst
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")          # Drossel/Fehler bucht api() selbst
         threading.Thread(target=lauf, daemon=True).start()
 
     def start_anwesenheit_takt(self):
@@ -23241,13 +25318,13 @@ class Service:
                 try:
                     _anw.lauf_marke(self.cfg, log=self.log)
                 except Exception as e:                        # noqa: BLE001
-                    self.log(f"presence run mark failed: {type(e).__name__}: {e}")
+                    self.log.error(f"presence run mark failed: {type(e).__name__}: {e}")
                 time.sleep(takt_s)
         threading.Thread(target=lauf, name="anwesenheit-takt", daemon=True).start()
 
     def poll_loop(self):
         cfg = self.cfg
-        self.log(f"poll mode: every {cfg['poll_interval']}s, lookback {cfg['lookback_h']}h, "
+        self.log.info(f"poll mode: every {cfg['poll_interval']}s, lookback {cfg['lookback_h']}h, "
                  f"clip_delay {cfg['clip_delay']}s, backend {cfg.get('backend') or cfg['ov_device']}")
         while True:
             self.sweep()
@@ -23263,16 +25340,16 @@ class Service:
 
         def on_connect(_c, _u, _f, rc, _p=None):
             if getattr(rc, "is_failure", False):
-                self.log(f"MQTT connect rejected: {rc} (check credentials/broker)")
+                self.log.error(f"MQTT connect rejected: {rc} (check credentials/broker)")
                 return
             # subscribe MUSS hier stehen: paho reconnectet nach Abriss still, eine nur
             # einmalig gesetzte Subscription waere danach weg (Dienst liefe taub weiter).
             cl.subscribe("frigate/events")
-            self.log(f"MQTT connected ({rc}), subscribed to frigate/events, catch-up sweep starting")
+            self.log.info(f"MQTT connected ({rc}), subscribed to frigate/events, catch-up sweep starting")
             threading.Thread(target=self.sweep, daemon=True).start()
 
         def on_disconnect(_c, _u, _f, rc, _p=None):
-            self.log(f"MQTT disconnected ({rc}), reconnect runs automatically")
+            self.log.warning(f"MQTT disconnected ({rc}), reconnect runs automatically")
 
         def on_msg(_c, _u, m):
             try:
@@ -23282,7 +25359,7 @@ class Service:
                     eid = after.get("id")
                     self.event_einreihen(eid)
             except Exception as e:
-                self.log(f"MQTT payload error: {e}")
+                self.log.error(f"MQTT payload error: {e}")
 
         letzte_fehlmeldung = [0.0]
 
@@ -23292,7 +25369,7 @@ class Service:
             # sonst schreibt ein dauerhaft toter Broker im 1-60s-Backoff das Log voll.
             if time.time() - letzte_fehlmeldung[0] >= 300:
                 letzte_fehlmeldung[0] = time.time()
-                self.log(f"MQTT trigger: broker {cfg['host']}:{cfg.get('port', 1883)} not "
+                self.log.warning(f"MQTT trigger: broker {cfg['host']}:{cfg.get('port', 1883)} not "
                          f"reachable — no event trigger, reconnect keeps running "
                          f"(check network/firewall/broker)")
 
@@ -23312,7 +25389,7 @@ class Service:
         # retry_first_connection=True, sonst reicht es die OSError durch.
         cl.reconnect_delay_set(min_delay=1, max_delay=60)
         cl.connect_async(cfg["host"], int(cfg.get("port", 1883)), 60)
-        self.log(f"MQTT mode: {cfg['host']}:{cfg.get('port', 1883)} frigate/events")
+        self.log.info(f"MQTT mode: {cfg['host']}:{cfg.get('port', 1883)} frigate/events")
         cl.loop_forever(retry_first_connection=True)
 
 
@@ -23640,6 +25717,7 @@ def make_handler(svc):
                                       json.dumps({"ok": ok, "msg": msg}, ensure_ascii=False),
                                       "application/json")
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad == "/ref_entfernen_batch":                 # mehrere Referenzbilder auf einmal loeschen
                 try:
@@ -23655,7 +25733,7 @@ def make_handler(svc):
                         [((it.get("person") or "").strip(), (it.get("datei") or "").strip())
                          for it in (d.get("items") or [])])
                     if weg:
-                        svc.log(f"REFERENCES REMOVED (batch): {weg} (Frigate untouched by design)")
+                        svc.log.info(f"REFERENCES REMOVED (batch): {weg} (Frigate untouched by design)")
                     # Der Text landet ROH im UI (app.js refBatchLoeschen setzt
                     # d.msg als Knopfbeschriftung) — deshalb seit .511 ueber
                     # core/sprache statt hart deutsch. Bauform wie die
@@ -23666,6 +25744,7 @@ def make_handler(svc):
                                       ensure_ascii=False),
                                       "application/json")
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad == "/person_loeschen":                     # GANZE Person entfernen (User 25.07.:
                 # "es muss ja auch moeglich sein, ein ganzes Benutzerkonto rauszuloeschen — nicht
@@ -23705,13 +25784,14 @@ def make_handler(svc):
                             os.remove(os.path.join(cfg["data_dir"], "clips", "refcache.npz"))
                         except OSError:
                             pass
-                    svc.log(f"PERSON DELETED: {p} ({n_bilder} reference image(s)) -> trash/"
+                    svc.log.info(f"PERSON DELETED: {p} ({n_bilder} reference image(s)) -> trash/"
                             f"{os.path.basename(ziel)} — recoverable by moving back")
                     return self._send(200, json.dumps(
                         {"ok": True, "msg": _sprache.t("antwort.person_entfernt",
                                                        person=p, n=n_bilder)},
                         ensure_ascii=False), "application/json")
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
                     return self._send(200, json.dumps({"ok": False, "msg": str(e)[:120]}),
                                       "application/json")
             if pfad == "/ref_entfernen":                       # Referenzbild loeschen (Fehllabel)
@@ -23729,11 +25809,12 @@ def make_handler(svc):
                         # (anlernen.entferne_referenz) — bis .510 kostete genau dieser
                         # Klick einen Volllauf ueber ALLE Referenzen (Werkbank-Messung
                         # 08.09.: 872,7 s fuer ein Bild bei 1228 Referenzen).
-                        svc.log(f"REFERENCE REMOVED: {msg} (Frigate untouched by design)")
+                        svc.log.info(f"REFERENCE REMOVED: {msg} (Frigate untouched by design)")
                     return self._send(200 if ok else 400,
                                       json.dumps({"ok": ok, "msg": msg}, ensure_ascii=False),
                                       "application/json")
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad == "/cache_aufraeumen":                    # .313 Issue #25: Aufraeum-Knopf (System-Seite)
                 erg = svc.cleanup_cache(grund="button")
@@ -23774,6 +25855,7 @@ def make_handler(svc):
                          **({"belegt": zusatz} if kennung == "kollision" else {})},
                         ensure_ascii=False), "application/json")
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
                     return self._send(200, json.dumps({"ok": False, "msg": str(e)[:120]}),
                                       "application/json")
             if pfad == "/ref_pruef_neu":                       # Referenz-QS neu berechnen (Hintergrund)
@@ -23802,6 +25884,7 @@ def make_handler(svc):
                         {"ok": True, "msg": _sprache.t("antwort.pruefung_gestartet"),
                          "person": pers}, ensure_ascii=False), "application/json")
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
                     return self._send(400, json.dumps(
                         {"ok": False, "msg": str(e)}), "application/json")
             if pfad == "/anlern_wartung_jetzt":                # Reorganisieren (Pool-Neupruefung + Cluster neu), manuell
@@ -23868,7 +25951,7 @@ def make_handler(svc):
                         _an = bool(d.get("an", True))
                         ok = anlernen.unbekannt_objekt(_uid, _an)
                         if ok:
-                            svc.log(f"unknown marked as {'object' if _an else 'person'}: {_uid}")
+                            svc.log.info(f"unknown marked as {'object' if _an else 'person'}: {_uid}")
                         _msg = ((_sprache.t("antwort.unbek_objekt") if _an
                                  else _sprache.t("antwort.unbek_person"))
                                 if ok else _sprache.t("antwort.unbek_weg"))
@@ -23888,7 +25971,7 @@ def make_handler(svc):
                         _uids = [str(x) for x in (d.get("uids") or []) if str(x)]
                         ziel, _n_m = anlernen.unbekannt_merge_viele(_uids)
                         if ziel:
-                            svc.log(f"unknown merge (bulk): {_n_m} group(s) -> {ziel}")
+                            svc.log.info(f"unknown merge (bulk): {_n_m} group(s) -> {ziel}")
                         _a = {"ok": bool(ziel),
                               "msg": (_sprache.t("antwort.unbek_gemergt", n=_n_m + 1)
                                       if ziel else "Fehler"),
@@ -23898,7 +25981,7 @@ def make_handler(svc):
                                           "application/json")
                     if pfad == "/unbekannt_reconcile":
                         idents, vs = anlernen.reconcile_unbekannte()
-                        svc.log(f"unknown reconcile (manual): {len(idents)} identities, {len(vs)} suggestions")
+                        svc.log.info(f"unknown reconcile (manual): {len(idents)} identities, {len(vs)} suggestions")
                         res = (True, f"{len(idents)} Unbekannte, {len(vs)} Vorschläge")
                         _betr = []
                     elif pfad == "/unbekannt_besucher":
@@ -23923,7 +26006,7 @@ def make_handler(svc):
                         ok, msg, betroffen = anlernen.unbekannt_benennen(
                             d.get("uid", ""), _person, emb=svc._emb, ids=_ids)
                         if ok:
-                            svc.log(f"UNKNOWN NAMED: {d.get('uid')} -> {d.get('person')} ({msg})"
+                            svc.log.info(f"UNKNOWN NAMED: {d.get('uid')} -> {d.get('person')} ({msg})"
                                     + (f" [{len(_ids)} of group ticked]" if _ids else ""))
                             svc.qs_neu_starten()
                             # Issue #19: Events der uebernommenen Gesichter nachpruefen,
@@ -23939,6 +26022,7 @@ def make_handler(svc):
                     return self._send(200, json.dumps(_antw,
                                       ensure_ascii=False), "application/json")
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad in ("/sync_abwahl", "/sync_wieder_anbieten"):   # .133/.137: Merker der Sync-Seite
                 # Bewusst abgewaehlte Referenzbilder bleiben im Master, gehen aber
@@ -23969,10 +26053,11 @@ def make_handler(svc):
                     try:
                         n_wa = _sr.wieder_anbieten(_paare("bilder"))
                     except Exception as e:
+                        _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
                         return self._send(400, json.dumps({"ok": False, "msg": str(e)},
                                                           ensure_ascii=False), "application/json")
                     if n_wa:
-                        svc.log(f"sync selection: {n_wa} image(s) offered again")
+                        svc.log.info(f"sync selection: {n_wa} image(s) offered again")
                     return self._send(200, json.dumps(
                         {"ok": True, "msg": _sprache.t("antwort.sync_wieder", n=n_wa)},
                         ensure_ascii=False), "application/json")
@@ -23980,10 +26065,11 @@ def make_handler(svc):
                     n_ab = _sr.abwahl_setzen(_paare("abwahl"), True)
                     n_zu = _sr.abwahl_setzen(_paare("zurueck"), False)
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)},
                                                       ensure_ascii=False), "application/json")
                 if n_ab or n_zu:
-                    svc.log(f"sync selection: {n_ab} deselected, {n_zu} restored")
+                    svc.log.info(f"sync selection: {n_ab} deselected, {n_zu} restored")
                 return self._send(200, json.dumps(
                     {"ok": True, "msg": _sprache.t("antwort.sync_auswahl",
                                                    ab=n_ab, zu=n_zu)},
@@ -24040,7 +26126,7 @@ def make_handler(svc):
                     if furl:
                         env["FRIGATE_URL"] = furl
                     prog = os.path.join(svc.cfg["data_dir"], "state", "sync_progress.json")
-                    svc.log(f"reference sync {modus}: started")
+                    svc.log.info(f"reference sync {modus}: started")
                     # .132 Review-MUSS: Status VOR dem Start zuruecksetzen — sonst
                     # lesen die 1-s-Poller den ENDstatus des VORIGEN Laufs als
                     # Ergebnis DIESES Laufs (phase error/done -> sofort Abbruch).
@@ -24050,7 +26136,7 @@ def make_handler(svc):
                                    "modus": modus, "total": 0, "done": 0},
                                   open(prog, "w"))
                     except Exception:
-                        pass
+                        _logbuch.swallowed(_log, _logbuch.ERROR, "ignored", throttle=False)
                     errp = os.path.join(svc.cfg["data_dir"], "state", f"sync_{modus}_err.log")
                     ef = open(errp, "w+")                      # stderr NICHT verwerfen (frueher DEVNULL -> Fehler still)
                     args = [sys.executable,                    # Container hat kein venv/
@@ -24066,15 +26152,15 @@ def make_handler(svc):
                             with open(prog) as f:
                                 s = json.load(f)
                             if s.get("phase") in ("import", "export"):
-                                svc.log(f"Sync {modus}: {s.get('done')}/{s.get('total')} ({s.get('current','')})")
+                                svc.log.info(f"Sync {modus}: {s.get('done')}/{s.get('total')} ({s.get('current','')})")
                         except Exception:
-                            pass
+                            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
                     try:
                         ef.seek(0); err_txt = fehler_kern(ef.read()); ef.close()
                     except Exception:
                         err_txt = ""
                     if proc.returncode != 0:                   # Exit-Code JETZT geprueft (frueher NIE -> immer 'fertig')
-                        svc.log(f"!! reference sync {modus} FAILED (rc={proc.returncode}): {err_txt}")
+                        svc.log.error(f"!! reference sync {modus} FAILED (rc={proc.returncode}): {err_txt}")
                         # .132: cmd_export schreibt bei Fatal-Stopps selbst einen
                         # REICHEREN error-Status (detail + hinweis aus einer Quelle)
                         # — den NIE ueberschreiben. Review-MUSS: nur ein Status, der
@@ -24088,7 +26174,7 @@ def make_handler(svc):
                                               and float(_ps.get("ts") or 0) >= start_ts
                                               and bool(_ps.get("detail") or _ps.get("hinweis")))
                         except Exception:
-                            pass
+                            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
                         from sync_refs import FR_AUS_MARKER as _frm, FR_AUS_HINWEIS as _frh
                         hinweis = _frh if _frm in err_txt else ""
                         try:                                   # UI-Status auf error statt endlosem Poll auf 'done'
@@ -24099,14 +26185,14 @@ def make_handler(svc):
                                            "detail": err_txt, "hinweis": hinweis},
                                           open(prog, "w"))
                         except Exception:
-                            pass
+                            _logbuch.swallowed(_log, _logbuch.ERROR, "ignored", throttle=False)
                         return
                     if modus == "import":                      # importierte Referenzen -> Embeddings auf GPU neu
                         try:
                             os.remove(os.path.join(svc.cfg["data_dir"], "clips", "refcache.npz"))
                         except FileNotFoundError:
                             pass
-                        svc.log("sync import finished -> recomputing embeddings on GPU (refcache) …")
+                        svc.log.info("sync import finished -> recomputing embeddings on GPU (refcache) …")
                         # .511 Stufe B: der Cache-Neubau haengt NICHT mehr am
                         # QS-Lauf (der schreibt die npz seit .511 nicht mehr,
                         # s. anlernen.pruefe_referenzen). Der Neubau laeuft
@@ -24119,7 +26205,7 @@ def make_handler(svc):
                             target=anlernen.refcache_aufbauen,
                             args=(svc.embedder,), daemon=True).start()
                         svc.qs_neu_starten()
-                    svc.log(f"reference sync {modus}: finished")
+                    svc.log.info(f"reference sync {modus}: finished")
                 # .134 Lauf-Riegel: Flag VOR dem Start setzen (nicht im Thread —
                 # sonst schluepft ein zweiter POST durchs Fenster), im finally raeumen.
                 svc._sync_job_aktiv = True
@@ -24157,6 +26243,7 @@ def make_handler(svc):
                                       "msg": "Suche läuft, Seite lädt gleich neu"}, ensure_ascii=False),
                                       "application/json")
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad == "/auftritt_lernen":                     # Lern-Bruecke (.225/.226): pruefen -> uebernehmen
                 try:
@@ -24199,7 +26286,7 @@ def make_handler(svc):
                         # dafuer, dass ein Pass-Check nichts liegen laesst.
                         _weg = svc._passernte_raeumen(str(d.get("verwerfen")))
                         if _weg:
-                            svc.log(f"PASS CHECK discarded: run "
+                            svc.log.warning(f"PASS CHECK discarded: run "
                                     f"{str(d.get('verwerfen'))[:32]} removed "
                                     f"({person})")
                         return self._send(200, json.dumps(
@@ -24237,7 +26324,7 @@ def make_handler(svc):
                             else:
                                 # NIE STILL: eine abgelehnte Uebernahme sagt
                                 # warum (Latte, Beiwert fehlt, Lauf geraeumt).
-                                svc.log(f"PASS LEARN: picture not adopted for "
+                                svc.log.info(f"PASS LEARN: picture not adopted for "
                                         f"{person} — {str(_ziel)[:120]}")
                         for it in _vo[:50]:
                             _ok, _ziel = anlernen.vorrat_aufnehmen(
@@ -24251,7 +26338,7 @@ def make_handler(svc):
                             dateien += anlernen.lernbruecke_uebernehmen(
                                 person, _ev, emb=svc.embedder)
                         if dateien:
-                            svc.log(f"PASS LEARN: {len(dateien)} reference(s) "
+                            svc.log.info(f"PASS LEARN: {len(dateien)} reference(s) "
                                     f"adopted for {person} from one pass")
                             svc.qs_neu_starten()
                             # .525 (B-1): die HIER uebernommenen Bilder sind per
@@ -24424,7 +26511,7 @@ def make_handler(svc):
                     # zwei Zeilen desselben Laufs widersprachen sich sichtbar
                     # (Fehlerklasse "falsche Darstellung", qs.md). Zahl
                     # unveraendert, Etikett korrigiert.
-                    svc.log(f"PASS CHECK: {person} — {_umfang} via mini "
+                    svc.log.info(f"PASS CHECK: {person} — {_umfang} via mini "
                             f"harvest -> {len(nehmen)} to take / {len(grenz)} "
                             f"borderline ({_nutz.get('v_gesamt', 0)} candidate(s) "
                             f"in the offer); "
@@ -24435,6 +26522,7 @@ def make_handler(svc):
                          "lauf_id": _lauf_id, "msg": msg},
                         ensure_ascii=False), "application/json")
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
                     return self._send(500, json.dumps(
                         {"ok": False, "msg": str(e)[:160]}), "application/json")
             if pfad == "/auftritt_lernen_undo":                # Lern-Bruecke: Undo statt Dialog
@@ -24449,11 +26537,12 @@ def make_handler(svc):
                     n_weg, _weg = anlernen.entferne_referenzen(
                         [(person, str(datei)) for datei in (d.get("dateien") or [])[:50]])
                     if n_weg:
-                        svc.log(f"PASS LEARN UNDO: {n_weg} reference(s) removed for {person}")
+                        svc.log.info(f"PASS LEARN UNDO: {n_weg} reference(s) removed for {person}")
                     return self._send(200, json.dumps(
                         {"ok": True, "msg": _sprache.t("antwort.bruecke_undo", n=n_weg)},
                         ensure_ascii=False), "application/json")
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
                     return self._send(500, json.dumps(
                         {"ok": False, "msg": str(e)[:160]}), "application/json")
             if pfad == "/vorschlag_aufnehmen":                 # Bestands-Vorschlaege uebernehmen
@@ -24474,13 +26563,14 @@ def make_handler(svc):
                         if ok:
                             n_ok += 1
                     if n_ok:
-                        svc.log(f"REFERENCE SEARCH: {n_ok} reference(s) adopted for {person}")
+                        svc.log.info(f"REFERENCE SEARCH: {n_ok} reference(s) adopted for {person}")
                         svc.qs_neu_starten()
                         svc.frigate_sync_export()
                     return self._send(200 if n_ok else 400,
                                       json.dumps({"ok": n_ok > 0, "msg": f"{n_ok} übernommen"},
                                                  ensure_ascii=False), "application/json")
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad == "/vorrat_aufnehmen":                    # Vorrats-Angebote uebernehmen (B4)
                 try:
@@ -24505,7 +26595,7 @@ def make_handler(svc):
                         else:
                             letzter = meldung
                     if n_ok:
-                        svc.log(f"STOCK: {n_ok} reference(s) adopted for {person} "
+                        svc.log.info(f"STOCK: {n_ok} reference(s) adopted for {person} "
                                 f"(embedding sidecar, kept local)")
                         svc.qs_neu_starten()
                         svc.frigate_sync_export()   # exportiert NICHT (diff schliesst vorrat aus) —
@@ -24515,6 +26605,7 @@ def make_handler(svc):
                                                   "msg": (f"{n_ok} übernommen" if n_ok else letzter)},
                                                  ensure_ascii=False), "application/json")
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad == "/anlernen_benennen":                   # Cluster als Person anlernen (19.07.)
                 try:
@@ -24530,7 +26621,7 @@ def make_handler(svc):
                     ok, msg, betroffen = anlernen.benenne_mit_abzug(
                         ids, person, emb=svc._emb)
                     if ok:
-                        svc.log(f"ENROLL: {msg}")
+                        svc.log.info(f"ENROLL: {msg}")
                         svc.qs_neu_starten()               # nach Anlernen automatisch gegenpruefen
                         svc.frigate_sync_export()          # falls frigate_sync an: nach Frigate spiegeln
                         svc.anlern_nachpruefung_starten(person, betroffen)
@@ -24540,6 +26631,7 @@ def make_handler(svc):
                                       json.dumps({"ok": ok, "msg": msg}, ensure_ascii=False),
                                       "application/json")
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad == "/personlauf/urteil":
                 # PE2: Klick-Urteil (letzte Zeile je Datei gilt), fsync-los
@@ -24664,14 +26756,13 @@ def make_handler(svc):
                         # .141 Panel-MUSS: der Fehlschlag wird SICHTBAR
                         # (Modell-Karte), nicht nur eine Container-Logzeile —
                         # die Karte zeigte sonst den Alt-Stand als aktuell.
-                        print(f"[personmodell] Training fehlgeschlagen: {e}",
-                              flush=True)
+                        _log.error(f"[personmodell] training failed: {e}")
                         try:
                             from core import personmodell as _pmf
                             _pmf.fehler_vermerken(
                                 cfg["data_dir"], f"{type(e).__name__}: {e}")
                         except Exception:
-                            pass
+                            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
                 _th.Thread(target=_pm_train2, daemon=True,
                            name="personmodell").start()
                 return self._send(200, json.dumps({"ok": True,
@@ -24718,14 +26809,13 @@ def make_handler(svc):
                         # .141 Panel-MUSS: der Fehlschlag wird SICHTBAR
                         # (Modell-Karte), nicht nur eine Container-Logzeile —
                         # die Karte zeigte sonst den Alt-Stand als aktuell.
-                        print(f"[personmodell] Training fehlgeschlagen: {e}",
-                              flush=True)
+                        _log.error(f"[personmodell] training failed: {e}")
                         try:
                             from core import personmodell as _pmf
                             _pmf.fehler_vermerken(
                                 cfg["data_dir"], f"{type(e).__name__}: {e}")
                         except Exception:
-                            pass
+                            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
                 _th.Thread(target=_pm_train, daemon=True,
                            name="personmodell").start()
                 return self._send(200, json.dumps(
@@ -24801,7 +26891,7 @@ def make_handler(svc):
                     # Ferndiagnose unsichtbar (ein nackter 'personwork
                     # started' um 11:28 liess sich nicht einmal einem Lauf
                     # zuordnen). Start und Ende je eine Zeile.
-                    svc.log(f"person learn run "
+                    svc.log.info(f"person learn run "
                             f"{'resumed' if _wieder else 'started'}: "
                             f"{_ev} events for {_person or 'all named'}")
                     try:
@@ -24830,7 +26920,7 @@ def make_handler(svc):
                         _zf = (_pl.zustand_lesen(cfg["data_dir"]) or {})
                         _ff = _zf.get("fortschritt") or {}
                         _evn = _ff.get('events', '?')
-                        svc.log(f"person learn run finished: "
+                        svc.log.info(f"person learn run finished: "
                                 f"{_evn} events, "
                                 f"{_ff.get('bilder', '?')} images harvested"
                                 + (f" — only {_evn} CONFIRMED passes exist in "
@@ -24839,7 +26929,7 @@ def make_handler(svc):
                                    f"name faces first and re-run later"
                                    if isinstance(_evn, int) and _evn < 20 else ""))
                     except Exception as e:
-                        svc.log(f"person learn run FAILED: "
+                        svc.log.error(f"person learn run FAILED: "
                                 f"{type(e).__name__}: {str(e)[:120]}")
                         try:
                             _z2 = _pl.zustand_lesen(cfg["data_dir"]) \
@@ -24848,7 +26938,7 @@ def make_handler(svc):
                             _z2["fehler"] = f"{type(e).__name__}: {str(e)[:180]}"
                             _pl.zustand_schreiben(cfg["data_dir"], _z2)
                         except Exception:
-                            pass
+                            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
                 svc._personlauf_thread = _th.Thread(
                     target=_pl_lauf, daemon=True, name="personlauf")
                 svc._personlauf_thread.start()
@@ -24973,7 +27063,7 @@ def make_handler(svc):
                                               "msg": _sprache.t("antwort.lernlauf_phase",
                                                                 phase=bestand.get("phase"))},
                                               ensure_ascii=False), "application/json")
-                        svc.log(f"learning run {bestand.get('lauf_id')} is complete — "
+                        svc.log.info(f"learning run {bestand.get('lauf_id')} is complete — "
                                 "starting a new run, keeping its folder and anchors")
                     # Laufende Arbeits-Threads nicht mit neuem Umfang ueberschreiben.
                     # .83: auch der Anker-Thread zaehlt (Widerleger: Abbruch + sofortiger
@@ -25017,7 +27107,7 @@ def make_handler(svc):
                                                             **({"kameras": kameras_wahl}
                                                                if kameras_wahl else {})))
                     except OSError as e:           # F2.7: voller Datentraeger u.ae. LAUT
-                        svc.log(f"learning run NOT created: {e}")
+                        svc.log.info(f"learning run NOT created: {e}")
                         return self._send(500, json.dumps({"ok": False,
                                           "msg": _sprache.t("antwort.lernlauf_schreibfehler",
                                                             fehler=e)},
@@ -25034,12 +27124,12 @@ def make_handler(svc):
                     try:
                         _weg, _rest = _ll.alte_anker_aufraeumen(cfg["data_dir"], None)
                         if _weg:
-                            svc.log(f"anchor housekeeping: {_weg} unnamed group(s) "
+                            svc.log.info(f"anchor housekeeping: {_weg} unnamed group(s) "
                                     f"of earlier runs removed, {_rest} kept")
                     except Exception as e:
                         # Aufraeumen darf einen Lauf NIE verhindern.
-                        svc.log(f"anchor housekeeping skipped ({type(e).__name__}: {e})")
-                    svc.log("learning run created: scope "
+                        svc.log.warning(f"anchor housekeeping skipped ({type(e).__name__}: {e})")
+                    svc.log.info("learning run created: scope "
                             + (f"day {tag_wahl}" if tag_wahl else f"{ev} events")
                             + (f", looking for {zielperson}" if zielperson else "")
                             + (", skipping already-searched events" if nur_neue else ""))
@@ -25067,12 +27157,13 @@ def make_handler(svc):
                     _n = len(_lw_n.steckbriefe_lesen(cfg))
                     if os.path.exists(_pf):
                         os.remove(_pf)
-                    svc.log(f"stream profiles: cache cleared on request "
+                    svc.log.info(f"stream profiles: cache cleared on request "
                             f"({_n} entr{'y' if _n == 1 else 'ies'}) — "
                             "re-probed on the next restart")
                     return self._send(200, json.dumps({"ok": True, "geloescht": _n}),
                                       "application/json")
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
                     return self._send(200, json.dumps(
                         {"ok": False, "msg": f"{type(e).__name__}: {e}"}),
                         "application/json")
@@ -25103,7 +27194,7 @@ def make_handler(svc):
                         # Ohne bekannten Lauf wird NICHTS behauptet und nichts
                         # angefasst — lieber ehrlich abweisen als eine Marke
                         # setzen, die jeden kuenftigen Lauf abbricht.
-                        svc.log("learning run abort: no readable run state "
+                        svc.log.error("learning run abort: no readable run state "
                                 + (f"({_le})" if _le else "(none present)")
                                 + " — nothing aborted")
                         return self._send(200, json.dumps(
@@ -25127,7 +27218,7 @@ def make_handler(svc):
                             if _versuch == 0:
                                 time.sleep(_ll.BLINK_PAUSE_S)
                         except OSError as _re:
-                            svc.log(f"learning run abort: could not remove the "
+                            svc.log.error(f"learning run abort: could not remove the "
                                     f"run state ({_re})")
                             break
                 verschoben = ""
@@ -25144,7 +27235,7 @@ def make_handler(svc):
                             os.replace(quelle, ziel)
                             verschoben = "; harvested material moved to trash"
                         except OSError as e2:
-                            svc.log(f"learning run abort: could not move {lid} "
+                            svc.log.error(f"learning run abort: could not move {lid} "
                                     f"to trash ({e2})")
                     # .83 (Widerleger A11): die anker.jsonl-Zeilen des abgebrochenen
                     # Laufs raeumen — sein Material liegt im Trash, die Zeilen waeren
@@ -25153,8 +27244,8 @@ def make_handler(svc):
                         from core import anker as _ank
                         _ank.anker_lauf_schreiben(cfg["data_dir"], [], lid)
                     except Exception as e3:
-                        svc.log(f"learning run abort: could not clean anchors of {lid} ({e3})")
-                svc.log(f"learning run aborted (state removed{verschoben})")
+                        svc.log.error(f"learning run abort: could not clean anchors of {lid} ({e3})")
+                svc.log.info(f"learning run aborted (state removed{verschoben})")
                 return self._send(200, json.dumps(
                     {"ok": True, "msg": _sprache.t("antwort.lernlauf_abgebrochen")},
                     ensure_ascii=False), "application/json")
@@ -25214,7 +27305,7 @@ def make_handler(svc):
                 # /health wie bei jedem anderen Sweep.
                 threading.Thread(target=lambda: svc.sweep(stunden=std, limit=lim),
                                  daemon=True).start()
-                svc.log(f"catch-up started by user: last {std}h, at most {lim} events")
+                svc.log.info(f"catch-up started by user: last {std}h, at most {lim} events")
                 return self._send(200, json.dumps(
                     {"ok": True, "stunden": std, "limit": lim,
                      "msg": _sprache.t("antwort.catchup_gestartet", stunden=std, n=lim)},
@@ -25242,6 +27333,7 @@ def make_handler(svc):
                                                  ensure_ascii=False),
                                       "application/json")
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad == "/gpu_speichern":                       # Rechenstraenge von der GPU-Seite (R7)
                 try:
@@ -25266,6 +27358,7 @@ def make_handler(svc):
                                                  ensure_ascii=False),
                                       "application/json")
                 except Exception as e:                         # noqa: BLE001
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
                     return self._send(400, json.dumps({"ok": False, "fehler": str(e)}),
                                       "application/json")
             if pfad == "/benachrichtigung_speichern":          # Notifications-Reiter committen (Kanaele + Secrets)
@@ -25277,6 +27370,7 @@ def make_handler(svc):
                     return self._send(200 if ok else 400,
                                       json.dumps({"ok": ok, "msg": msg}, ensure_ascii=False), "application/json")
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad == "/erkennung_live":
                 # .205 Sammel-Schalter der Vier-Saeulen-Seite: aus = alle
@@ -25287,7 +27381,7 @@ def make_handler(svc):
                     return
                 an = bool(d.get("an"))
                 from core import livewache as _lw_s
-                _dflt, _g = _lw_s.guards_lesen(cfg, log=lambda z: None)
+                _dflt, _g = _lw_s.guards_lesen(cfg, log=_logbuch.NULL)
                 ziele = [k for k, g in sorted(_g.items())
                          if bool(g.get("enabled")) != an]
                 fehl = []
@@ -25303,7 +27397,7 @@ def make_handler(svc):
                 _nachtest = 0
                 if an and not fehl:
                     try:
-                        _d3, _g3 = _lw_s.guards_lesen(cfg, log=lambda z: None)
+                        _d3, _g3 = _lw_s.guards_lesen(cfg, log=_logbuch.NULL)
                         _nachtest = sum(1 for _gg in _g3.values()
                                         if _gg.get("enabled")
                                         and not _lw_s.test_gueltig(_gg)[0])
@@ -25349,7 +27443,7 @@ def make_handler(svc):
                         try:
                             svc._lernlauf_kalibrier_neubewertung()
                         except Exception as e:
-                            svc.log(f"calibration: regrade of the last run "
+                            svc.log.error(f"calibration: regrade of the last run "
                                     f"failed ({type(e).__name__}: {e})")
                 elif pfad == "/live_schalter":
                     ok, msg = svc.live_schalter(kamera, bool(d.get("enabled")))
@@ -25453,6 +27547,7 @@ def make_handler(svc):
                     return self._send(200 if ok else 400,
                                       json.dumps({"ok": ok, "msg": msg}, ensure_ascii=False), "application/json")
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad == "/backup_voll_wiederherstellen":   # PE6 Full-Restore (Body = rohes tar.gz)
                 try:
@@ -25487,6 +27582,7 @@ def make_handler(svc):
                                       json.dumps({"ok": ok, "msg": msg}, ensure_ascii=False),
                                       "application/json")
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.ERROR, "returning self._send(...)", throttle=False)
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad in ("/test_pushover", "/test_telegram", "/test_mqtt"):   # Test-Versand je Kanal
                 d = self._body_json(8192, default={}, erwartet=dict)
@@ -25544,11 +27640,12 @@ def make_handler(svc):
                             k: (f"{len(v)} cams" if k == "kameras" else v) for k, v in updates.items()}},
                             ensure_ascii=False) + "\n")
                         f.flush()
-                    svc.log(f"SETUP WIZARD saved: {list(updates.keys())} — restart after the current analysis")
+                    svc.log.info(f"SETUP WIZARD saved: {list(updates.keys())} — restart after the current analysis")
 
                     svc.neustart("Setup-Wizard")
                     return self._send(200, json.dumps({"ok": True, "msg": _sprache.t("antwort.setup_gespeichert")}, ensure_ascii=False), "application/json")
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.ERROR, "returning self._send(...)", throttle=False)
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}, ensure_ascii=False), "application/json")
             if pfad == "/kameras_speichern":                   # Kamera-Blatt speichern (Phase 2b)
                 try:
@@ -25578,7 +27675,7 @@ def make_handler(svc):
                         f.write(json.dumps({"ts": round(time.time(), 1), "kameras": neu},
                                            ensure_ascii=False) + "\n")
                         f.flush()
-                    svc.log(f"CAMERA SHEET saved: {len(neu)} cameras — restart after the current analysis")
+                    svc.log.info(f"CAMERA SHEET saved: {len(neu)} cameras — restart after the current analysis")
 
                     svc.neustart("Kamera-Blatt")
                     return self._send(200, json.dumps({"ok": True,
@@ -25586,6 +27683,7 @@ def make_handler(svc):
                         ensure_ascii=False),
                         "application/json")
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.ERROR, "returning self._send(...)", throttle=False)
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad == "/lernlauf/benennen":                   # E4a Zug 2b: Cluster benennen
                 # Duenner Mantel (I1): Namens-/Kollisions-Logik im Modul, Schreibweg
@@ -25640,13 +27738,14 @@ def make_handler(svc):
                     # .200 (Fix 4): "ships with E4b"/"pending" war seit dem Bau der
                     # Uebernahme (/lernlauf/uebernehmen) falsch — der Adopt-Knopf
                     # erscheint direkt nach dem Benennen.
-                    svc.log(f"anchor {aid} named '{name}' ({n_match} of {len(mit)} images "
+                    svc.log.info(f"anchor {aid} named '{name}' ({n_match} of {len(mit)} images "
                             "selected) — ready to adopt")
                     return self._send(200, json.dumps(
                         {"ok": True, "msg": _sprache.t("antwort.anker_benannt",
                                                        name=name, n=n_match)},
                         ensure_ascii=False), "application/json")
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad == "/lernlauf/verwerfen":                  # Dismiss mit Gedaechtnis (User 05.08.)
                 # Duenner Mantel: Status+Crop-Loeschung in core/lernlauf.anker_verwerfen;
@@ -25672,6 +27771,7 @@ def make_handler(svc):
                         {"ok": True, "msg": _sprache.t("antwort.anker_verworfen", n=ncrops)},
                         ensure_ascii=False), "application/json")
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad == "/lernlauf/lauf_loeschen":              # Lauf KOMPLETT loeschen (User 05.08., 2. Fassung)
                 # Duenner Mantel: Loesch-Regel + Schreibweg in
@@ -25711,7 +27811,7 @@ def make_handler(svc):
                     warn = ("" if z["ordner"] else
                             "; WARNING: run folder could not be fully removed"
                             + (f" — {z['rest']} file(s) remain on disk" if z["rest"] else ""))
-                    svc.log(f"RUN DELETED: {lid} — {z['entfernt']} cluster(s)"
+                    svc.log.info(f"RUN DELETED: {lid} — {z['entfernt']} cluster(s)"
                             + (f" ({detail})" if detail else "")
                             + f", {z['dateien']} file(s){warn}")
                     return self._send(200, json.dumps(
@@ -25721,6 +27821,7 @@ def make_handler(svc):
                                             + warn},
                         ensure_ascii=False), "application/json")
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad == "/lernlauf/alte_loeschen":              # Sammel-Loeschung (User 05.08.: EIN OK)
                 # Duenner Mantel: Auswahl (alle ausser dem neuesten, aktiver Lauf
@@ -25736,7 +27837,7 @@ def make_handler(svc):
                     warn = ("" if z["ordner"] else
                             "; WARNING: not every run folder could be fully removed"
                             + (f" — {z['rest']} file(s) remain on disk" if z["rest"] else ""))
-                    svc.log(f"OLD RUNS DELETED: {', '.join(weg)} — {z['entfernt']} cluster(s), "
+                    svc.log.info(f"OLD RUNS DELETED: {', '.join(weg)} — {z['entfernt']} cluster(s), "
                             f"{z['dateien']} file(s); kept {behalten}{warn}")
                     return self._send(200, json.dumps(
                         {"ok": True, "msg": f"{z['laeufe']} old run(s) deleted: {z['entfernt']} "
@@ -25744,6 +27845,7 @@ def make_handler(svc):
                                             f"removed; kept newest run {behalten}" + warn},
                         ensure_ascii=False), "application/json")
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad == "/lernlauf/sichtung":                   # .266 Erst-Sichtung
                 # 'Sicht = Pruefergebnis' (User 18.08.): die Gruppe EINMAL mit
@@ -25808,6 +27910,7 @@ def make_handler(svc):
                     return self._send(200, json.dumps({"ok": True}),
                                       "application/json")
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
                     return self._send(500, json.dumps(
                         {"ok": False, "msg": f"{type(e).__name__}: {e}"}),
                         "application/json")
@@ -25863,6 +27966,7 @@ def make_handler(svc):
                         {"ok": True, "person": person, "bewertung": bew},
                         ensure_ascii=False), "application/json")
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
                     return self._send(500, json.dumps(
                         {"ok": False,
                          "msg": f"{type(e).__name__}: {e}"}),
@@ -25923,7 +28027,7 @@ def make_handler(svc):
                             "bedingungs_tag": (satz.get("auswahl") or {}).get("bedingungs_tag"),
                             "tag_abweichung": ab})
                         _ll.anker_aktualisieren(cfg["data_dir"], aid, status="uebernommen")
-                        svc.log(f"ADOPTION: anchor {aid} -> master/{person}/ (0 new refs — already "
+                        svc.log.info(f"ADOPTION: anchor {aid} -> master/{person}/ (0 new refs — already "
                                 f"covered, {len(plan['uebersprungen'])} near-identical)")
                         return self._send(200, json.dumps(
                             {"ok": True, "msg": _sprache.t("antwort.adopt_gedeckt",
@@ -25987,7 +28091,7 @@ def make_handler(svc):
                             os.remove(os.path.join(cfg["data_dir"], "clips", "refcache.npz"))
                         except FileNotFoundError:
                             pass                  # naechster Analyse-Lauf baut mit neuem Master
-                    svc.log(f"ADOPTION: anchor {aid} -> master/{person}/ ({len(namen)} refs, "
+                    svc.log.warning(f"ADOPTION: anchor {aid} -> master/{person}/ ({len(namen)} refs, "
                             f"{len(plan['uebersprungen'])} skipped) — export + drift watchdog running")
                     svc.referenz_nacharbeit()
                     # §8.10-Plural via t_n + §8.11-Anhaenge (skip/watchdog).
@@ -25996,6 +28100,7 @@ def make_handler(svc):
                                + (_sprache.t("antwort.adopt_skip", n=len(plan["uebersprungen"])) if plan["uebersprungen"] else "")
                                + _sprache.t("antwort.adopt_watchdog")}, ensure_ascii=False), "application/json")
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad == "/support_token_neu":
                 # Support-Zugriff (.362): Token erzeugen/rotieren. POST wegen
@@ -26010,7 +28115,7 @@ def make_handler(svc):
                     _st = _lade_config_store(cfg)
                     _st["support_token"] = _tok
                     _store_schreiben(_config_store_pfad(cfg), _st)
-                svc.log("SUPPORT: access token rotated (old one is invalid "
+                svc.log.info("SUPPORT: access token rotated (old one is invalid "
                         "from now on)")
                 return self._send(200, json.dumps(
                     {"ok": True, "token": _tok,
@@ -26043,7 +28148,7 @@ def make_handler(svc):
                 if not _sup2.zugriff_ok(_st, self.headers.get("X-Support-Token")):
                     _sup2.abweisung_zaehlen(svc.log)
                     return self._send(404, "not found", "text/plain")
-                svc.log("SUPPORT: restart requested via support API")
+                svc.log.info("SUPPORT: restart requested via support API")
                 self._send(200, json.dumps({"ok": True}), "application/json")
                 threading.Timer(0.5, svc.neustart,
                                 kwargs={"grund": "support API request"}).start()
@@ -26093,6 +28198,50 @@ def make_handler(svc):
                     {"ok": True, "an": _z["an"], "endet_ts": _z["endet"],
                      "datei": _z["datei"], "zeilen": _z["zeilen"]},
                     ensure_ascii=False), "application/json")
+            if pfad == "/support/debug":
+                # Bauplan Debug-Zeitfenster Stufe 2 (Eigentuemer 29.09.2026 11:24:05):
+                # debug ueber die Support-Schnittstelle ein- und ausschalten, ohne
+                # Neustart. Die VIERTE deklarierte Aktions-Ausnahme, gleiche Form wie
+                # /support/feinmessung: Torwaechter support_zugriff + Token LIVE aus dem
+                # Store, Abweisung = generisches 404 (kein Orakel), einziges Feld `an`.
+                # Geschaltet wird ueber den EINEN Live-Weg von config_schreiben (Store,
+                # Audit, laufende Config, Spiegel an Worker und Live-Engine, beim
+                # Einschalten debug_seit und der Zeitgeber aus Stufe 1) — kein zweiter
+                # Schreibweg, und eine reine debug-Aenderung startet dort nicht neu.
+                from core import support as _sup5
+                _st = _lade_config_store(cfg)
+                if not _sup5.zugriff_ok(_st, self.headers.get("X-Support-Token")):
+                    _sup5.abweisung_zaehlen(svc.log)
+                    return self._send(404, "not found", "text/plain")
+                _b = self._body_json(2048, default={}, erwartet=dict)
+                if _b is _ABGEWIESEN:
+                    return
+                _unbekannt = [k for k in _b if k != "an"]
+                if _unbekannt:
+                    return self._send(400, json.dumps(
+                        {"ok": False, "msg": f"unknown field(s): "
+                                             f"{', '.join(sorted(_unbekannt))} "
+                                             f"(allowed: an)"}),
+                        "application/json")
+                if _b.get("an") not in (0, 1):
+                    return self._send(400, json.dumps(
+                        {"ok": False, "msg": "field 'an' is required (1 = on, "
+                                             "0 = off)"}), "application/json")
+                _an = bool(_b["an"])
+                try:
+                    _ok, _msg, _neu = svc.config_schreiben({"debug": _an})
+                except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(500, ...)")
+                    return self._send(500, json.dumps(
+                        {"ok": False, "msg": f"{type(e).__name__}: {e}"}), "application/json")
+                if not _ok:
+                    return self._send(500, json.dumps({"ok": False, "msg": _msg},
+                                                      ensure_ascii=False), "application/json")
+                svc.log.info(f"SUPPORT: debug {'on' if _an else 'off'} via support API")
+                return self._send(200, json.dumps(
+                    {"ok": True, "debug": bool(cfg.get("debug")),
+                     "bis": debug_fenster_ende(cfg) if cfg.get("debug") else None}),
+                    "application/json")
             if pfad == "/support/einspielen":
                 # .416 TESTBETT-EINSPIELUNG (User-Go 03.09.): ZWEITE
                 # deklarierte Aktions-Ausnahme im Support-Baum neben
@@ -26128,6 +28277,12 @@ def make_handler(svc):
                 if _feldfehler:
                     return self._send(400, json.dumps(
                         {"ok": False, "msg": _feldfehler}), "application/json")
+                # Bauplan K3, Stufe KP3 (Tuer-Konzept Punkt 3.7): die Personenzahl eines eingespielten
+                # Ereignisses geht in seine Metadaten; ein Feld, das nirgends ankaeme, ist ein Fehler.
+                _pzahl, _pzfehler = _einspiel.personenzahl_pruefen(_b)
+                if _pzfehler:
+                    return self._send(400, json.dumps(
+                        {"ok": False, "msg": _pzfehler}), "application/json")
                 _dd = cfg["data_dir"]
                 _kam = _b.get("kamera")
                 if _kam is not None and not _einspiel.KAMERA_RE.match(str(_kam)):
@@ -26166,7 +28321,7 @@ def make_handler(svc):
                 if _frigate_weg:
                     _fb = _einspiel.frigate_bereit(cfg)
                     if _fb:
-                        svc.log(f"SUPPORT: einspielen refused — {_fb}")
+                        svc.log.info(f"SUPPORT: einspielen refused — {_fb}")
                         return self._send(503, json.dumps(
                             {"ok": False,
                              "msg": _sprache.t("antwort.einspielen.frigate_fehlt")},
@@ -26286,7 +28441,7 @@ def make_handler(svc):
                             if str(_e3["id"]) in set(_ids)
                             and (_wa.get(str(_e3.get("camera") or "?"))
                                  or {}).get("state") == _reg.LIVE_AKTIV})
-                        svc.log(f"SUPPORT: einspielen source=fenster "
+                        svc.log.info(f"SUPPORT: einspielen source=fenster "
                                 f"camera={_kam or '<all>'} "
                                 + (f"after={_t0:.0f}" if _t0 is not None
                                    else "after=<page limit>")
@@ -26369,7 +28524,7 @@ def make_handler(svc):
                                         f"is at its limit; retry in a moment "
                                         f"(the service log says which)"}),
                                 "application/json")
-                        svc.log(f"SUPPORT: einspielen source=frigate eid={_q_ev} "
+                        svc.log.info(f"SUPPORT: einspielen source=frigate eid={_q_ev} "
                                 f"(no camera override — plain event queue entry"
                                 + ("" if _erg1 is True else ", was already queued")
                                 + ")")
@@ -26388,7 +28543,7 @@ def make_handler(svc):
                         # kein zweiter Download-Pfad.
                         _ev0 = api(cfg, f"/api/events/{_q_ev}")
                         _neu = _einspiel.neue_eid()
-                        _meta = _einspiel.meta_aus_event(_ev0, _neu, _kam)
+                        _meta = _einspiel.meta_aus_event(_ev0, _neu, _kam, _pzahl)
                         _alter = _clip_alter_min(_ev0.get("end_time"),
                                                  _ev0.get("start_time"))
                         _erz = (_alter is not None and _alter >= float(
@@ -26409,7 +28564,7 @@ def make_handler(svc):
                         # Jede Annahme laut: umgesetzte Kamera, verworfenes
                         # sub_label, uebernommene Zonen (die Ziel-Kamera kann
                         # sie filtern) und der wachsende Vorlagen-Ordner.
-                        svc.log(f"SUPPORT: einspielen source=frigate eid={_neu} "
+                        svc.log.info(f"SUPPORT: einspielen source=frigate eid={_neu} "
                                 f"camera={_kam} from={_q_ev} zones="
                                 f"{len(_ev0.get('zones') or [])} sub_label=dropped "
                                 f"age_min={'?' if _alter is None else int(_alter)} "
@@ -26440,12 +28595,12 @@ def make_handler(svc):
                         _dauer = _einspiel.dauer_s(_p)
                         _neu = _einspiel.neue_eid()
                         _einspiel.ablegen(_dd, _neu, _einspiel.meta_aus_clip(
-                            _neu, _kam, _dauer), _p)
+                            _neu, _kam, _dauer, personenzahl=_pzahl), _p)
                         _bn, _bb = _einspiel.bestand(_dd)
                         _dtxt = (f"{round(_dauer, 1)}" if _dauer else
                                  f"unreadable, assuming "
                                  f"{_einspiel.DAUER_FALLBACK_S:.0f}")
-                        svc.log(f"SUPPORT: einspielen source=clip eid={_neu} "
+                        svc.log.info(f"SUPPORT: einspielen source=clip eid={_neu} "
                                 f"camera={_kam} duration_s={_dtxt} "
                                 f"label={_einspiel.LABEL} "
                                 f"score={_einspiel.TOP_SCORE} zones=[] "
@@ -26468,7 +28623,7 @@ def make_handler(svc):
                     _fu = str(cfg.get("frigate_url") or "")
                     if _fu:
                         _msg = _msg.replace(_fu, "<frigate>")
-                    svc.log(f"SUPPORT: einspielen failed ({_msg})")
+                    svc.log.error(f"SUPPORT: einspielen failed ({_msg})")
                     return self._send(400, json.dumps(
                         {"ok": False, "msg": _msg},
                         ensure_ascii=False), "application/json")
@@ -26505,10 +28660,11 @@ def make_handler(svc):
                                                ensure_ascii=False) + "\n")
                             f.flush()
                     except OSError as e:
-                        svc.log(f"SPRACHE audit line failed ({e}) — change is saved and active")
-                    svc.log(f"SPRACHE saved: {erg} (no restart)")
+                        svc.log.error(f"SPRACHE audit line failed ({e}) — change is saved and active")
+                    svc.log.info(f"SPRACHE saved: {erg} (no restart)")
                     return self._send(200, json.dumps({"ok": True, "msg": erg}), "application/json")
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.ERROR, "returning self._send(...)", throttle=False)
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad == "/areas_speichern":                     # Areas Stufe 1: Schrieb OHNE Neustart
                 try:
@@ -26554,13 +28710,14 @@ def make_handler(svc):
                                                ensure_ascii=False) + "\n")
                             f.flush()
                     except OSError as e:
-                        svc.log(f"AREAS audit line failed ({e}) — change is saved and active")
-                    svc.log(f"AREAS saved: {len(erg)} area{'s' if len(erg) != 1 else ''} (no restart)")
+                        svc.log.error(f"AREAS audit line failed ({e}) — change is saved and active")
+                    svc.log.info(f"AREAS saved: {len(erg)} area{'s' if len(erg) != 1 else ''} (no restart)")
                     # §8.10-Plural via t_n (frueher {'s' if n != 1} im f-String).
                     return self._send(200, json.dumps({"ok": True,
                         "msg": _sprache.t_n("antwort.areas_gespeichert", len(erg))},
                         ensure_ascii=False), "application/json")
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.ERROR, "returning self._send(...)", throttle=False)
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad == "/upload":                              # eigenes Referenz-Foto (AP4)
                 try:
@@ -26580,6 +28737,7 @@ def make_handler(svc):
                                       json.dumps({"ok": ok, "msg": msg}, ensure_ascii=False),
                                       "application/json")
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad != "/gt":                                  # Ground-Truth-Label (User-Klick in der UI)
                 return self._send(404, "not found", "text/plain")
@@ -26615,6 +28773,7 @@ def make_handler(svc):
                                                    "label": label}, ensure_ascii=False),
                                   "application/json")
             except Exception:
+                _logbuch.swallowed(_log, _logbuch.ERROR, "returning self._send(400, '{'ok': false}', 'application/json')", throttle=False)
                 return self._send(400, '{"ok": false}', "application/json")
 
         def do_GET(self):
@@ -26680,7 +28839,7 @@ def make_handler(svc):
                             try:
                                 rows.append(json.loads(l))
                             except Exception:
-                                pass
+                                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
                 # Tagesnavigation (User 25.07.: "tagweise vor und zurück pendeln"). Gleiche
                 # Konvention wie der Filter auf /ereignisse: ?tag=JJJJ-MM-TT, ungueltige Eingabe
                 # faellt still auf heute zurueck statt den Request abzureissen. Ohne Parameter
@@ -26751,7 +28910,7 @@ def make_handler(svc):
                             cfg, heute0, tag_ende, kameras=_nk,
                             max_gruppen=200)
                 except Exception as e:
-                    svc.log(f"!! live name list failed: "
+                    svc.log.error(f"!! live name list failed: "
                             f"{type(e).__name__}: {e}")
                 # .413 (Fix-Forward, Prod-Befund 02.09.): NUR Stufe-2-Namens-
                 # meldungen zaehlen als Live-Name — die Regel steht EINMAL in
@@ -27317,7 +29476,7 @@ def make_handler(svc):
                         anw_tag = _anw.tag_lesen(cfg, _tag_s, None)
                         anw_fenster = _anw.fenster(cfg, log=svc.log)
                 except Exception as e:
-                    svc.log(f"!! presence day file failed: {type(e).__name__}: {e}")
+                    svc.log.error(f"!! presence day file failed: {type(e).__name__}: {e}")
                 for p, e in sorted(pers_tag.items(), key=lambda x: -x[1]["letzt"]):
                     # Hauptzeile (§3, K1, Wortliste M5): "first–last confirmed
                     # HH:MM–HH:MM · N passes · last seen KAMERA HH:MM" — Text,
@@ -27785,7 +29944,7 @@ def make_handler(svc):
                                 dubletten[alt_s["anker_id"]] = neu_s["anker_id"]
                                 break
                 except Exception:
-                    pass                       # Zusatz-Nutzen, nie Seiten-Blocker
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")                       # Zusatz-Nutzen, nie Seiten-Blocker
                 return self._send(200, webui.layout(
                     _sprache.t("nav.anker"), "/lernlauf/anker",
                     _r_ank.anker_seite(saetze, kaputt, vorschlaege, dubletten),
@@ -27863,7 +30022,7 @@ def make_handler(svc):
                 from routes import kalibrierung as _r_kal
                 from routes import livekalib as _r_lk
                 kamera = urllib.parse.unquote(path[len("/kalibrierung/"):])
-                _d_lk, _g_lk = _lwk.guards_lesen(cfg, lambda z: None)
+                _d_lk, _g_lk = _lwk.guards_lesen(cfg, _logbuch.NULL)
                 _cams_lk, _ = frigate_cameras(cfg)
                 if kamera not in _kk.bekannt(cfg, _cams_lk):
                     # Den Namen nie aus der URL uebernehmen (keine zweite
@@ -27882,7 +30041,7 @@ def make_handler(svc):
                 try:
                     _saetze_lk, _ = _ll_k.anker_lesen(cfg["data_dir"])
                 except OSError as _e_ank2:
-                    svc.log(f"calibration page {kamera}: learning-run material "
+                    svc.log.error(f"calibration page {kamera}: learning-run material "
                             f"unreadable ({type(_e_ank2).__name__}: {_e_ank2})")
                     _saetze_lk = []
                 _kat_lk = _kk.katalog_werte(_kk.katalog_latten(cfg), kamera)
@@ -28231,7 +30390,7 @@ def make_handler(svc):
                                      if x is not None), default=-1.0)
                             _wart.sort(key=_zsim, reverse=True)
                         except Exception as e:
-                            svc.log(f"lernlauf: zielperson ordering failed "
+                            svc.log.error(f"lernlauf: zielperson ordering failed "
                                     f"({type(e).__name__}: {e})")
                     # .318 (User 22.08.): Gruppen, in denen nach der Bewertung KEIN
                     # Bild mehr im Rahmen steht (Norm-Veto/Gruppen-Konsens), kommen
@@ -28253,7 +30412,7 @@ def make_handler(svc):
                             norm_latte=_nlz, luma_grenzen=_lgz,
                             kat_latten=_glz) is False else 0)
                     except Exception as e:
-                        svc.log(f"lernlauf: empty-group ordering failed "
+                        svc.log.error(f"lernlauf: empty-group ordering failed "
                                 f"({type(e).__name__}: {e})")
                     _gw = (_qd0.get("g", [""])[0] or "").strip()
                     aktuelle = (next((s for s in _wart
@@ -28282,7 +30441,7 @@ def make_handler(svc):
                         except Exception as e:
                             # Flaeche ist Zusatz-Weg — die Benennungs-Karte
                             # bleibt erreichbar, deshalb laut statt Blocker.
-                            svc.log(f"lernlauf: benennungs_kontext failed "
+                            svc.log.error(f"lernlauf: benennungs_kontext failed "
                                     f"({type(e).__name__}: {e})")
                     # .266 'Sicht = Pruefergebnis': liegt fuer die offene
                     # Gruppe ein Sichtungs-Cache (echte Crop-Messung), wird
@@ -28327,7 +30486,7 @@ def make_handler(svc):
                                     kat_latten=_kk_ernte.katalog_latten(cfg))
                                 sichtung_gesamt = _si.get("gesamt", 0)
                         except Exception as e:
-                            svc.log(f"lernlauf: sichtung render failed "
+                            svc.log.error(f"lernlauf: sichtung render failed "
                                     f"({type(e).__name__}: {e})")
                             sichtung_liste = False   # .267: Fehler != kein
                             #                          Cache — nie die
@@ -28441,7 +30600,7 @@ def make_handler(svc):
                     except Exception as e:
                         # Widerleger F5.5: interne Fehler NICHT als Frigate-Ausfall
                         # etikettieren — laut loggen, Auswahl-Teil erklaert sich.
-                        svc.log(f"lernlauf wizard: estimate failed ({type(e).__name__}: {e})")
+                        svc.log.error(f"lernlauf wizard: estimate failed ({type(e).__name__}: {e})")
                         auswahl, alle_modus = None, False
                 schwellen = [(k, cfg.get(k)) for k in
                              ("det_thresh", "fd_front_min", "fd_sharp_min", "fd_det_max",
@@ -28556,6 +30715,7 @@ def make_handler(svc):
                             try:
                                 _c = json.loads(l).get("camera")
                             except Exception:
+                                _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                                 continue
                             if _c:
                                 _cams_a.add(str(_c))
@@ -28733,7 +30893,7 @@ def make_handler(svc):
                 try:
                     fertig_ts = os.path.getmtime(anlernen.QS_PATH)
                 except OSError:
-                    pass
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
                 return self._send(200, json.dumps(
                     {"laeuft": aktiv, "i": int((lauf or {}).get("i") or 0),
                      "n": int((lauf or {}).get("n") or 0),
@@ -28796,7 +30956,7 @@ def make_handler(svc):
                     va = [z for z in _vor.angebote_lesen(cfg["data_dir"], _genommen)
                           if z.get("person") == person]
                 except Exception as _e:
-                    svc.log(f"stock offers unavailable ({type(_e).__name__}: {_e})")
+                    svc.log.error(f"stock offers unavailable ({type(_e).__name__}: {_e})")
                 inhalt, refresh = _r_aehnliche.render(person, kand, vs, cfg["data_dir"],
                                                       va=va,
                                                       # .510/J18 (d): laeuft gerade
@@ -28972,6 +31132,7 @@ def make_handler(svc):
                 try:
                     roh_med = open(p, "rb").read()
                 except OSError:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(404, 'not found', 'text/plain')")
                     return self._send(404, "not found", "text/plain")
                 return self._send(200, roh_med,
                                   "video/mp4" if rel.endswith(".mp4")
@@ -28995,6 +31156,7 @@ def make_handler(svc):
                         return self._send(404, "preview stale", "text/plain")
                     roh_jpg = open(p, "rb").read()
                 except OSError:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(404, 'not found', 'text/plain')")
                     return self._send(404, "not found", "text/plain")
                 return self._send(200, roh_jpg, "image/jpeg")
             if path == "/live_kalib_bild":         # EIN Bild des Kalibrier-Vorrats
@@ -29012,6 +31174,7 @@ def make_handler(svc):
                 try:
                     roh_kal = open(os.path.join(_ord, _dat), "rb").read()
                 except OSError:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(404, 'not found', 'text/plain')")
                     return self._send(404, "not found", "text/plain")
                 return self._send(200, roh_kal, "image/jpeg")
             if path.startswith("/live_kalibrierung/"):
@@ -29061,7 +31224,7 @@ def make_handler(svc):
                     deckel=int(cfg.get("live_kalib_max") or 0),
                     regel=_lwk.Engine.erkannt_regel(_g),
                     det_default=_lwk.guards_lesen(
-                        cfg, lambda z: None)[0]["min_score"],
+                        cfg, _logbuch.NULL)[0]["min_score"],
                     # Welle 1, Etappe A: die Bewegungs-Vorgaben aus der EINEN
                     # Quelle (Frigates Auslieferungswerte im Engine-Modul) —
                     # die Seite zeigt sie als Platzhalter, traegt sie aber nie
@@ -29167,7 +31330,7 @@ def make_handler(svc):
                 from routes import erkennung as _r_erk
                 from core import livewache as _lw_e
                 from core import personmodell as _pm_e
-                _dflt, _g = _lw_e.guards_lesen(cfg, log=lambda z: None)
+                _dflt, _g = _lw_e.guards_lesen(cfg, log=_logbuch.NULL)
                 # .207: Referenzen liegen unter faces/ (nicht refs/ — die
                 # Kachel zeigte 0/0, waehrend /gesichter 4 Personen listete)
                 _refs, _nb = os.path.join(cfg["data_dir"], "faces"), 0
@@ -29205,7 +31368,7 @@ def make_handler(svc):
                             if not _alt or _e.get("ts", 0) > _alt[0]:
                                 _neu[_e["person"]] = (_e.get("ts", 0), _e["datei"])
                 except OSError:
-                    pass
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
                 _pl, _nb = [], 0
                 for _p in sorted(os.listdir(_fd) if os.path.isdir(_fd) else []):
                     _pd = os.path.join(_fd, _p)
@@ -29420,6 +31583,10 @@ def make_handler(svc):
                                                     refresh=(_systemstat.LIVE_TAKT_S if _lv_an
                                                              else _systemstat.TAKT_S)))
             if path == "/health":
+                # Bauplan Feldstau Stufe 5.3: /health misst seine eigene Antwort-Dauer und
+                # getrennt den Log-Block (Tee-Zaehler unter der Sperre, unter der jede
+                # Logzeile auf das Datenverzeichnis geht, Widerleger-Fund 16).
+                _t_health = time.monotonic()
                 # version zuerst (Task #12, User 28.07.): eingesandte Log-AUSSCHNITTE tragen
                 # die Startup-Banner-Zeile oft nicht, und "latest-gpu" im Issue-Formular ist
                 # mehrdeutig — /health ist die eine Zeile, die Support-Faelle eindeutig macht.
@@ -29437,7 +31604,19 @@ def make_handler(svc):
                 # Serie verjaehrt (SERIE_FENSTER_S). Der Grund steht darunter in
                 # `analyse_serie` — wer rot sieht, soll nicht raten muessen.
                 _serie = svc.analyse_serie_stand()
-                h = {"ok": _sf == 0 and not _serie["aktiv"],
+                # Bauplan Feldstau Stufe 3: Cache-Groesse aus dem gepflegten Stand, nie
+                # gezaehlt und nie gewartet (die Selbstwache fragt /health mit Frist);
+                # fehlt der Stand noch, stehen Wert und Alter auf null. Die Ampel liest
+                # beides nicht.
+                _cache_b, _cache_alter = svc.clip_cache_bytes()
+                _t_log = time.monotonic()
+                _log_block = _logbuch.health_block(_LOGDATEI, (_STDOUT_SIEB, _STDERR_SIEB),
+                                                   svc.log_startnummern())
+                _log_block_s = time.monotonic() - _t_log
+                # Feldbefunde G3: `ok` steht an EINER Stelle (Service.health_ok), die
+                # Pruef-Zeile `PRUEF health` liest dieselbe; dazu zaehlt seitdem der
+                # Grund `stillstand` des Stoerungswaechters (Punkt 2).
+                h = {"ok": svc.health_ok(_serie),
                      "startup_fails": _sf,
                      "analyse_serie": _serie,
                      "version": os.environ.get("SUSLIK_VERSION", "dev"),
@@ -29487,6 +31666,9 @@ def make_handler(svc):
                      # STILLE Ausfall-Klasse sieht — sie gehoert dorthin, wo jemand
                      # nachsieht, wenn „eigentlich laeuft alles".
                      "null_gesichter": svc.null_serie_stand(),
+                     # Bauplan K3, Stufe KP3: wie oft ein Ereignis seit dem Start ohne fruehes Ende
+                     # lief (Personenzahl unbrauchbar oder Fehler der eigenen Logik), je Grund.
+                     "personenzahl": _personenzahl.stand(),
                      # .536 (B3.4): das Sammeln laeuft in Haeppchen — dann muss
                      # von aussen sichtbar sein, ob gerade eine Kette laeuft, wie
                      # viele Ereignisse noch offen sind und mit welchen ZAHLEN die
@@ -29502,6 +31684,9 @@ def make_handler(svc):
                      # wieder gar nicht, und genau das war der Feldbefund.
                      "nachhol_unter_last_n": int(
                          getattr(svc, "_nachhol_unter_last_n", 0) or 0),
+                     # Feldbefunde Punkt 3 (O296): endgueltig aufgegebene Ereignisse
+                     # des Nachhol-Laufs seit Dienststart, je Grund.
+                     "nachhol": svc.nachhol_verluste_stand(),
                      # .340: Start-Nachholen — Schalter UND Fortschritt aus DERSELBEN
                      # Quelle wie der Banner (K1: die Anzeige kann dem Verhalten nicht
                      # widersprechen). Supportfaelle schicken /health, nicht 400 Logzeilen.
@@ -29558,8 +31743,16 @@ def make_handler(svc):
                      "backend": cfg.get("backend") or "",
                      # N8b: Cache-Groesse SICHTBAR (Feldbericht: 74-GB-Steady-State erst am
                      # 97 % vollen Host bemerkt) + der wirksame Deckel daneben.
-                     "clip_cache_gb": round(svc.clip_cache_bytes() / 1024**3, 2),
+                     "clip_cache_gb": (round(_cache_b / 1024**3, 2)
+                                       if _cache_b is not None else None),
+                     "clip_cache_alter_s": (round(_cache_alter, 1)
+                                            if _cache_alter is not None else None),
                      "clip_cache_max_gb": round(svc.speichergrenzen()[0], 1),   # .32x: WIRKSAM, nicht roh (0 = abgeleitet)
+                     # Bauplan Feldstau Stufe 1.4: der Aufraeum-Faden — lebt er, laeuft
+                     # gerade ein Lauf und seit wann, wann endete der letzte, wie lange
+                     # dauerte er. Ein langer Lauf ist sichtbar und wird NICHT
+                     # abgeschossen; ein toter Faden macht `ok` rot (health_ok).
+                     "cleanup": svc.aufraeum_stand(),
                      # Ketten-Schalter (Issue #21, K1): konfigurierte Stufe UND
                      # tatsaechliche Scharf-Lage je Erkennungs-Weg — aus DENSELBEN
                      # Praedikaten wie die Quell-Hooks (kette_lage), die Anzeige
@@ -29588,7 +31781,14 @@ def make_handler(svc):
                      # nebenher messen, klaute jeder Abruf den Delta-Zaehlern
                      # (CPU, NPU, i915) ihre Bezugsgroesse. Ein Tester ohne
                      # Browser sieht so exakt die Zahlen der Seite.
-                     "system": _systemstat.letzte() or {"grund": "erster_lauf"}}
+                     "system": _systemstat.letzte() or {"grund": "erster_lauf"},
+                     # Log-Systematik E6 (V4): Zaehler des Tees je Prozess, Zustand
+                     # von Tee und Sieben, Debug- und Pruef-Schalter, Startnummern.
+                     # Bauplan Debug-Zeitfenster Stufe 1 Punkt 5: `debug_bis` ist das
+                     # Fensterende (Sekunden seit 1970 wie `seit`), leer bei debug aus.
+                     "log": {**_log_block,
+                             "debug_bis": (debug_fenster_ende(cfg) if cfg.get("debug")
+                                           else None)}}
                 pi = cfg.get("placement_info")
                 if pi:                                     # P4: aufgeloestes Auto-Placement ausweisen
                     h["placement"] = {"backend": pi.get("backend"), "quelle": pi.get("quelle"),
@@ -29609,7 +31809,9 @@ def make_handler(svc):
                 _zl = _frames_health.RUECKFAELLE.get("zuletzt")
                 if _zl and _zl.get("steps"):               # nur die steps, nie der Clip-Name
                     h["frame_rueckfaelle"]["zuletzt_steps"] = _zl["steps"]
-                return self._send(200, json.dumps(h), "application/json")
+                _antwort = self._send(200, json.dumps(h), "application/json")
+                svc.health_dauer_melden(time.monotonic() - _t_health, _log_block_s)
+                return _antwort
             if path == "/sync_diagnose":                   # .132: Diagnose-Paket BEIDE Seiten (carlsmith-Lehre)
                 # Ein Klick fuer Tester und uns: suslik-Bericht + Sync-Status +
                 # Sync-Logzeilen des Dienstes + Frigate-Log-Tail per API
@@ -29631,6 +31833,7 @@ def make_handler(svc):
                         s = int(time.time() - os.path.getmtime(pfad))
                         return f"written {s // 3600}h {s % 3600 // 60}m {s % 60}s ago"
                     except OSError:
+                        _logbuch.swallowed(_log, _logbuch.WARNING, "returning 'age unknown'")
                         return "age unknown"
                 # Review-SOLL: jedes Teil traegt sein ALTER (ein Alt-Bericht darf sich
                 # nie wie das Ergebnis des aktuellen Laufs lesen) + die err-Logs mit
@@ -29654,7 +31857,9 @@ def make_handler(svc):
                     except Exception as e:
                         teile.append(f"(not available: {e})")
                 teile.append("\n== suslik service log (sync lines, latest last) ==")
-                zeilen = [z for z in list(svc.logbuf) if "sync" in z.lower()]
+                # E10: "sync" im TEXT der Zeile, nicht im Kopf (Modul, Funktion).
+                zeilen = [z for z in list(svc.logbuf)
+                          if "sync" in (_logbuch.split(z) or {"text": z})["text"].lower()]
                 teile.append("\n".join(zeilen[-30:]) or "(none)")
                 teile.append("\n== frigate log tail (via GET /api/logs/frigate) ==")
                 if not furl:
@@ -29733,8 +31938,8 @@ def make_handler(svc):
                                 with open(errp, "wb") as _ef:
                                     _ef.write(r.stderr or b"")
                             except OSError:
-                                pass
-                            svc.log("!! sync pre-check FAILED "
+                                _logbuch.swallowed(_log, _logbuch.ERROR, "ignored", throttle=False)
+                            svc.log.error("!! sync pre-check FAILED "
                                     f"(rc={r.returncode}): {fehler_kern(r.stderr)}")
                             # .134 Hinweis-Fix: Status darf nie auf laeuft=True
                             # stehenbleiben (Seite hinge sonst ewig auf 'checking');
@@ -29749,7 +31954,7 @@ def make_handler(svc):
                                         fehler=fehler_kern(r.stderr)
                                         or f"pre-check failed (rc={r.returncode})")
                             except Exception:
-                                pass
+                                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
                     svc._vorpruef_thread = threading.Thread(target=_vp_job, daemon=True)
                     svc._vorpruef_thread.start()
                     pstat = {"laeuft": True, "gesamt": len(offen), "fertig": 0}
@@ -29781,6 +31986,7 @@ def make_handler(svc):
                     with open(os.path.join(cfg["data_dir"], "state", "sync_progress.json")) as f:
                         return self._send(200, f.read(), "application/json")
                 except Exception:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
                     return self._send(200, json.dumps({"phase": "idle"}), "application/json")
             if path == "/log":
                 # .354: bevorzugt aus der Logdatei, damit /log nicht mehr nur die
@@ -29800,6 +32006,9 @@ def make_handler(svc):
                             f"{_ld.DATEI}. {len(stuecke)} piece(s) on disk; "
                             f"download all: /log/suslik-logs.tar.gz  "
                             f"(more lines: /log?lines=20000)\n"
+                            f"# line form: date time.ms zone LEVEL process/module:function[thread]"
+                            f" | text; continuation lines ' +| '; pattern: "
+                            f"{_logbuch.ZEILENMUSTER.pattern}\n"
                             f"# {'-' * 70}\n")
                     return self._send(200, kopf + text, "text/plain; charset=utf-8")
                 return self._send(200, "\n".join(svc.logbuf) or "(no log lines yet since service start)",
@@ -29818,6 +32027,7 @@ def make_handler(svc):
                         for name, _g, _m in _ld.dateien(ordner):
                             tar.add(os.path.join(ordner, name), arcname=f"logs/{name}")
                 except Exception as e:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
                     return self._send(500, f"log archive failed: {type(e).__name__}",
                                       "text/plain; charset=utf-8")
                 return self._send(200, puffer.getvalue(), "application/gzip")
@@ -29928,7 +32138,7 @@ def make_handler(svc):
                     if _rest == "config":
                         d = _sup.maskiert(
                             _reg.export_ergaenzen(_store, cfg))
-                        svc.debug("SUPPORT: config (masked) served")   # .511: Leseabruf
+                        svc.log.debug("SUPPORT: config (masked) served")   # .511: Leseabruf
                         return self._send(200, json.dumps(
                             d, ensure_ascii=False, indent=1),
                             "application/json")
@@ -29947,7 +32157,7 @@ def make_handler(svc):
                             _l = _sup.baum_listen(cfg["data_dir"])
                             _l["version"] = os.environ.get("SUSLIK_VERSION",
                                                            "dev")
-                            svc.debug(f"SUPPORT: {_sup.BAUM_CODE} listing "
+                            svc.log.debug(f"SUPPORT: {_sup.BAUM_CODE} listing "
                                       f"served — {_l['n']} file(s), "
                                       f"{_l['bytes']} byte(s)")
                             return self._send(200, json.dumps(
@@ -29962,6 +32172,7 @@ def make_handler(svc):
                             except OSError:
                                 # verschwunden/gesperrt: derselbe 404 wie
                                 # fuer "gibt es nicht", nie ein Traceback.
+                                _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(404, 'not found', 'text/plain')")
                                 return self._send(404, "not found",
                                                   "text/plain")
                             self.send_response(200)
@@ -29975,7 +32186,7 @@ def make_handler(svc):
                             _sup.datei_streamen(
                                 _ziel, self.wfile, svc.log,
                                 f"{_sup.BAUM_CODE}/{_rel}", inhalt=_inh,
-                                dbg=svc.debug)
+                                dbg=svc.log.debug)
                             return
                         if _art == "ordner":
                             if not _sup.abzug_sperren():
@@ -29992,7 +32203,7 @@ def make_handler(svc):
                                 self.end_headers()
                                 _sup.baum_tar_streamen(cfg["data_dir"], _ziel,
                                                        self.wfile, svc.log,
-                                                       dbg=svc.debug)
+                                                       dbg=svc.log.debug)
                             finally:
                                 _sup.abzug_freigeben()
                             return
@@ -30023,7 +32234,7 @@ def make_handler(svc):
                             self.end_headers()
                             _sup.tar_streamen(
                                 cfg["data_dir"], _code, self.wfile, svc.log,
-                                lauf_id=_lid, dbg=svc.debug)
+                                lauf_id=_lid, dbg=svc.log.debug)
                             # Header sind raus — ok oder nicht, die
                             # Verbindung endet hier (HTTP/1.0). Abbruch
                             # steht als SUPPORT-Zeile im Dienst-Log.
@@ -30072,8 +32283,10 @@ def _openvino_paket_version():
         try:
             return version("openvino")
         except PackageNotFoundError:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
             return None
     except Exception:                                    # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
         return None
 
 
@@ -30223,6 +32436,7 @@ def cuda_versions():
         if "CUDAExecutionProvider" not in _ort.get_available_providers():
             return ""
     except Exception:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning ''")
         return ""
     import glob as _glob
     out = []
@@ -30237,21 +32451,21 @@ def cuda_versions():
         if mm:
             out.append(f"driver-CUDA {mm.group(1)}")
     except Exception:
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     try:                                                   # gebackene CUDA-Runtime aus dem Image
         with open("/usr/local/cuda/version.json") as f:
             cv = json.load(f).get("cuda", {}).get("version", "")
         if cv:
             out.append(f"image-CUDA {cv}")
     except Exception:
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     cud = _glob.glob("/usr/lib/*/libcudnn.so.*") + _glob.glob("/usr/local/cuda*/lib64/libcudnn.so.*")
     if cud:
         out.append("cuDNN " + os.path.basename(sorted(cud)[-1]).split("libcudnn.so.")[-1])
     try:
         out.append(f"onnxruntime-gpu {_ort.__version__}")
     except Exception:
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     return ", ".join(out)
 
 
@@ -30265,6 +32479,7 @@ def rocm_versions():
         if "MIGraphXExecutionProvider" not in _ort.get_available_providers():
             return ""
     except Exception:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning ''")
         return ""
     import glob as _glob
     out = []
@@ -30273,7 +32488,7 @@ def rocm_versions():
         if ziel.startswith("rocm-"):
             out.append(f"ROCm {ziel[5:]}")
     except Exception:
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     hip = _glob.glob("/opt/rocm*/lib/libamdhip64.so.*.*")
     if hip:
         out.append("HIP " + os.path.basename(sorted(hip)[-1]).split("libamdhip64.so.")[-1])
@@ -30283,7 +32498,7 @@ def rocm_versions():
         import onnxruntime as _ort
         out.append(f"onnxruntime-migraphx {_ort.__version__}")
     except Exception:
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     return ", ".join(out)
 
 
@@ -30334,7 +32549,7 @@ def hardware_benchmark(max_iters=30, budget_s=3.0, cache_dir=None):
                 if line.startswith("model name"):
                     cpu = line.split(":", 1)[1].strip(); break
     except Exception:
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     res = [("info", "this system", f"{cpu} ({os.cpu_count()} threads)")]
     for label, kind, dev, want in cands:
         try:
@@ -30403,6 +32618,7 @@ def decode_byte_probe(cfg, max_clips=3, deckel_s=180.0):
         try:
             meta = _dec._probe(pfad) or {}
         except Exception:                                  # noqa: BLE001
+            _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
             continue
         schluessel = (meta.get("codec"), meta.get("breite"), meta.get("hoehe"))
         if not schluessel[0] or schluessel in gesehen:
@@ -30479,7 +32695,7 @@ def decode_byte_probe(cfg, max_clips=3, deckel_s=180.0):
             try:
                 _frames.frei(geholt, data_dir=dd)          # nie eine Pin-Waise
             except Exception:                              # noqa: BLE001
-                pass
+                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     return res
 
 
@@ -30568,6 +32784,7 @@ def daten_mount_hinweis(data_dir):
         with open("/proc/self/mountinfo") as f:
             punkte = {z.split(" ")[4] for z in f if len(z.split(" ")) > 4}
     except Exception:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
         return None
     if any(p != "/" and (ziel == p or ziel.startswith(p + "/")) for p in punkte):
         return None
@@ -30750,7 +32967,7 @@ def startup_selfcheck(svc):
 
     def schritt(i, name, tut):                        # ein nummerierter Schritt: WAS wird getan
         _schritt_ctx.update(nr=i, name=name)
-        L(f"[{i}/{N}] {name:<10} {tut} …")
+        L.info(f"[{i}/{N}] {name:<10} {tut} …")
 
     # SD1 minimal (P3.4/Anti-Selbstzweck-Schnitt): jede erg()-Zeile wird ZUSAETZLICH als
     # Record gesammelt und am Ende nach state/startup.json geschrieben (core/selfcheck) —
@@ -30760,9 +32977,10 @@ def startup_selfcheck(svc):
     def erg(mark, detail):                            # das Ergebnis darunter: WAS wurde gefunden
         _records.append({"schritt": _schritt_ctx["nr"], "name": _schritt_ctx["name"],
                          "mark": str(mark).strip(), "detail": str(detail)})
-        L(f"         [{mark:^5}] {detail}")
+        # K03 bis K06 (E1): die Stufe kommt aus der Marke, EINE Zuordnung im Modul.
+        L.log(_logbuch.level_from_mark(mark), f"         [{mark:^5}] {detail}")
 
-    L(f"========== suslik {suslik_version()} startup ==========")
+    L.info(f"========== suslik {suslik_version()} startup ==========")
     # 1) Config
     dd = cfg.get("data_dir") or "?"
     schritt(1, "config", "reading yaml + store, checking data dir")
@@ -30933,6 +33151,7 @@ def startup_selfcheck(svc):
                     _trt = _so
                     break
                 except OSError:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                     continue
             if _trt is None:
                 erg("warn", "TensorrtExecutionProvider is LISTED but libnvinfer "
@@ -31023,7 +33242,11 @@ def startup_selfcheck(svc):
                     except Exception:
                         teile.append((rolle, d2, False))
                 if all(okk for _, _, okk in teile):
-                    erg("ok", "openvino:MIXED — device engaged (detector=GPU, recognition=NPU)")
+                    # Feldbefunde Punkt 9 (O312): MIXED verteilt nur im Dienst und in der
+                    # Live-Engine (face_audit._to_backend); engine_ov im Worker bindet die GPU.
+                    erg("ok", "openvino:MIXED — device engaged (detector=GPU, recognition=NPU) "
+                              "for the service and the live engine; the analysis worker "
+                              "computes on the GPU under MIXED and NPU")
                 else:
                     kaputt = ", ".join(f"{r}({d2})" for r, d2, okk in teile if not okk)
                     erg("warn", f"openvino:MIXED — {kaputt} did not bind — per-model "
@@ -31096,7 +33319,7 @@ def startup_selfcheck(svc):
                                 "order; pick one with OV_DEVICE=GPU.0 or GPU.1 and check "
                                 "which engages")
         except OSError:
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     except Exception as e:
         erg("FAIL", str(e))
     # 4) Modell
@@ -31231,8 +33454,8 @@ def startup_selfcheck(svc):
                                              os.environ.get("SUSLIK_VERSION", "dev"), _records)
     except Exception as e:                            # Diagnose darf den Start nie reissen
         svc.startup_fails = 0
-        L(f"selfcheck records not written: {e}")
-    L("========== ready ==========")
+        L.error(f"selfcheck records not written: {e}")
+    L.info("========== ready ==========")
 
 
 def _ausgabe_auslaufen(frist_s=2.0):
@@ -31266,7 +33489,7 @@ def _ausgabe_auslaufen(frist_s=2.0):
             if _s is not None and hasattr(_s, "abbauen"):
                 _s.abbauen(frist_s)
         except Exception:                              # noqa: BLE001
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     try:
         if _LOGDATEI is not None:
             _LOGDATEI.zuruecksetzen()
@@ -31279,10 +33502,22 @@ def _sigterm(signum, frame):
     liefert PID 1 KEINE Default-Signalbehandlung: ohne eigenen Handler ignoriert der Dienst
     'docker stop' komplett, wartet die volle Grace-Zeit ab und wird dann per SIGKILL hart
     abgeschossen — mitten in jedem laufenden Schreibvorgang. Mit Handler endet der Prozess
-    geordnet (offene Dateien werden von CPython beim Exit geschlossen/geflusht)."""
-    sys.stderr.write(f"\n[suslik] signal {signum} received — shutting down cleanly.\n")
-    sys.stderr.flush()
+    geordnet (offene Dateien werden von CPython beim Exit geschlossen/geflusht).
+
+    Log-Systematik (E2): der Griff merkt sich NUR das Signal; aus einem Signal-Griff
+    rät die Python-Doku vom Loggen ab (Schloesser nicht wiedereintrittsfest). Die
+    Zeile schreibt der Hauptweg beim Beenden (`_signal_zeile`, in main registriert)."""
+    _SIGNAL["nr"] = signum
     sys.exit(0)
+
+
+_SIGNAL = {"nr": None}     # vom Signal-Griff gesetzt, von _signal_zeile gelesen
+
+
+def _signal_zeile():
+    """Beim Beenden (atexit, Hauptweg): nach einem Signal die INFO-Zeile (E2)."""
+    if _SIGNAL["nr"] is not None:
+        _log.info(f"signal {_SIGNAL['nr']} received — shutting down cleanly.")
 
 
 _STDERR_SIEB = None   # gesetzt in main(); Selfcheck druckt die Summe
@@ -31324,6 +33559,9 @@ def main():
     # Installieren den damaligen fd 2 und schreibt spaeter dorthin — liefe es
     # zuerst, floesse die gefilterte stderr-Ausgabe an der Logdatei vorbei.
     # Der Ordner steht erst nach load_config fest, bis dahin puffert das Modul.
+    # Log-Systematik (Stufe 2): das zentrale Log ALS ERSTES, Werkswert INFO; nach
+    # load_config folgt es den Schaltern (set_switches unten).
+    _logbuch.einrichten("dienst", 1, ring=True)
     global _LOGDATEI
     try:
         from core import logdatei as _ld
@@ -31357,7 +33595,8 @@ def main():
         try:
             signal.signal(_sig, _sigterm)
         except Exception:
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
+    atexit.register(_signal_zeile)
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default=os.path.join(HERE, "verifyd.yaml"))
     ap.add_argument("--once", default=None, help="genau dieses Event verarbeiten, dann Ende (Test)")
@@ -31371,8 +33610,11 @@ def main():
     _SIEB_DBG["ts"] = 0.0                         #        fd-1-Sieb den Schalter
     if _LOGDATEI is not None:                     # .354: Ordner nachreichen
         if cfg.get("log_datei", True):
-            _LOGDATEI.behalten_tage = max(1, int(cfg.get("log_behalten_tage") or 14))
-            _LOGDATEI.max_bytes = max(1, int(cfg.get("log_max_mb") or 64)) * 1024 * 1024
+            from core import logdatei as _ld
+            _LOGDATEI.behalten_tage = max(1, int(cfg.get("log_behalten_tage")
+                                                 or _ld.BEHALTEN_TAGE_WERK))
+            _LOGDATEI.max_bytes = max(1, int(cfg.get("log_max_mb")
+                                             or _ld.MAX_MB_WERK)) * 1024 * 1024
             _LOGDATEI.ordner_setzen(os.path.join(cfg["data_dir"], "logs"))
 
     if a.benchmark:                               # on-demand: laeuft es wirklich + wie schnell je Device?
@@ -31402,6 +33644,11 @@ def main():
         _ausgabe_auslaufen()
         return
 
+    # V7/E11: die Startzeile nennt Stufe, Debug- und Pruef-Schalter, Takt, Version.
+    # Erst hinter dem Benchmark-Zweig: `--benchmark` ist ein Kommandozeilen-Einstieg
+    # (E7) und schreibt keine Flaggendatei (state/debug_an, state/pruef_an).
+    _logbuch.set_switches(cfg.get("data_dir"), bool(cfg.get("debug")),
+                          bool(cfg.get("pruef_log")), cfg.get("pruef_takt_s"))
     svc = Service(cfg, dry_alert=a.dry_alert)
     svc.config_pfad = a.config
 
@@ -31410,6 +33657,9 @@ def main():
         time.sleep(1)
         svc.processed.discard(a.once)
         entry = svc.process(a.once)
+        # Bauplan Feldstau Stufe 1.3: ohne Aufraeum-Faden raeumt dieser Bedienweg
+        # hier einmal synchron, wie bis dahin process() selbst.
+        svc.cleanup_cache()
         print(json.dumps(entry, ensure_ascii=False, indent=2))
         svc.worker_stoppen()                  # W2: --once = start -> 1 Job -> geordnet beenden
         return                                # non-daemon Szenen-Timer haelt den Prozess ggf. karenz_s am Leben
@@ -31420,10 +33670,14 @@ def main():
     # nur an cfg und verbindet asynchron — es gibt keinen Grund, damit zu warten.
     svc.start_publisher()
     svc.kanaele_startzeile()              # .411: "Pushover not configured" EINMAL statt je Alarm
+    # Zweiter Versuch Stufe 1 (29.09.2026): die Ereignis-Warteschlange steht VOR dem
+    # Web-Server. Ein Ereignis, das waehrend des Starts ankommt, wartet darin bis
+    # `start_event_queue` (nach dem Selbsttest) — sonst lief es am Timer-Rueckweg
+    # vorbei, rechnete parallel zum Start und bekam keinen zweiten Versuch.
+    svc.event_queue_anlegen()
     web = ThreadingHTTPServer(("0.0.0.0", int(cfg["web_port"])), make_handler(svc))
     threading.Thread(target=web.serve_forever, daemon=True).start()
-    svc.log(f"Webview: port {cfg['web_port']} on all interfaces "
-            f"(browse http://<ip-of-this-machine>:{cfg['web_port']}/)")
+    # E14 D3: die Zeile „Webview: port …" entfaellt, der Startblock sagt es (web UI … ready).
     startup_selfcheck(svc)                    # strukturierter Selbstcheck nach stdout (Roadmap 4/10)
     # EINMALIGER KALIBRIER-RING-RESET (User 03.09., Boeden-Neueichung): die
     # Bestands-Ringe wurden mit den ALTEN Boeden und teils ohne Pose-Wert
@@ -31453,7 +33707,7 @@ def main():
                     _shutil.rmtree(_kd)
                     _kr_n += 1
                 except Exception as _ke:                       # noqa: BLE001
-                    svc.log(f"calibration ring reset: {_kd} not removable "
+                    svc.log.warning(f"calibration ring reset: {_kd} not removable "
                             f"({type(_ke).__name__}: {_ke}) — retry next start")
                     raise
             _kr_meta = {
@@ -31461,7 +33715,7 @@ def main():
                 "ts": round(time.time(), 1), "ordner": _kr_n,
                 "bilder": _kr_bilder,
                 "grund": "one-time reset after ground-value recalibration"}
-            svc.log(f"calibration ring reset ONCE for this install: {_kr_n} "
+            svc.log.info(f"calibration ring reset ONCE for this install: {_kr_n} "
                     f"camera ring(s), {_kr_bilder} picture(s) removed — new "
                     f"ground values apply from here (marker state/kalib_reset.json)")
         if not _kr_meta.get("regler"):
@@ -31495,7 +33749,7 @@ def main():
                         _kr_gv.pop(_kf2, None)
             _kr_meta["regler"] = {"ts": round(time.time(), 1),
                                   "kameras": _kr_kam}
-            svc.log(f"calibration slider reset ONCE for this install: cleared "
+            svc.log.info(f"calibration slider reset ONCE for this install: cleared "
                     f"e/t/pose on {_kr_kam} camera(s) — factory ground values "
                     f"apply until recalibrated (marker updated)")
         if not _kr_meta.get("live_regeln"):
@@ -31524,22 +33778,25 @@ def main():
                         _kr_gv.pop(_kf2, None)
             _kr_meta["live_regeln"] = {"ts": round(time.time(), 1),
                                        "kameras": _kr_lkam}
-            svc.log(f"live rule reset ONCE for this install: cleared "
+            svc.log.info(f"live rule reset ONCE for this install: cleared "
                     f"erkannt_n/erkannt_t_s/erkannt_fenster_s on {_kr_lkam} "
                     f"camera(s) — factory judgement defaults apply "
                     f"(marker updated)")
             from core import atomar as _kr_atomar
             _kr_atomar.json_schreiben(_kr_marker, _kr_meta)
     except Exception as _kre:                                  # noqa: BLE001
-        svc.log(f"calibration reset failed ({type(_kre).__name__}: "
+        svc.log.warning(f"calibration reset failed ({type(_kre).__name__}: "
                 f"{_kre}) — will retry on next start, marker not advanced")
     svc.start_wartung()
     svc.start_stoerungswaechter()
     svc.start_plattenwache()                      # .313 Issue #25
+    svc.start_aufraeumer()                        # Bauplan Feldstau Stufe 1: raeumt auf Anstoss, nie im Analyse-Faden
+    svc.aufraeumen_anstossen()                    # erster Lauf gleich nach dem Start
     svc.start_selbstwache()                       # R(b) 01.09.: eigener /health-Puls, harter Exit bei Voll-Haenger
     svc.start_melde_spur()                        # W3 Stufe 1 (.399): Versand-Nachwehen raus aus dem Analyse-Lock
     svc.start_event_queue()                       # W3 Stufe 1 (.399): geordnete Event-Queue statt Timer-Herde
     svc.start_platzwaechter()                     # P1: zieht Plaetze ein, deren Thread nie zurueckkehrt
+    _logbuch.start_pruef_takt(svc.pruef_beobachten)   # E9 Weg A: Pruef-Kanal, nur lesend
     _systemstat.sammler_starten(cfg, svc.systemstat_dienst, svc.log)   # .341: Systemzahlen alle 60 s
     svc.start_nachhol()                   # gescheiterte Analysen spaeter stumm nachholen
     svc.start_frigate_probe()             # .281: Schoner-Sperre aktiv proben (MQTT-Leerlauf)
@@ -31560,7 +33817,7 @@ def main():
     #                                       begonnene Pass-Checks LAUT verwerfen
     #                                       (die Warteschlange lebt im Prozess)
     if not cfg["frigate_url"]:                 # frisch (Docker-Erstboot): erst der Setup-Wizard,
-        svc.log("frigate_url empty — setup wizard (UI) only; Frigate poll starts after the wizard restart")
+        svc.log.warning("frigate_url empty — setup wizard (UI) only; Frigate poll starts after the wizard restart")
         while True:                            # Web-Thread laeuft weiter (Wizard); wir pollen nicht ins Leere
             time.sleep(60)
     elif cfg["trigger"] == "mqtt":

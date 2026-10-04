@@ -134,6 +134,7 @@ AUSDRUECKLICH GEBLIEBEN, gegen die v0.1-Abbauliste:
 import argparse
 import collections
 import contextlib
+import copy                                               # K3 KP3: Sicht der Wache bis zum geplanten Ende
 import gc                                                 # .531: Ringverweis Satz<->Geometrie loest nur der Sammler
 import inspect
 import json
@@ -162,9 +163,15 @@ import decode                                             # noqa: E402  _probe, 
 import face_audit                                         # noqa: E402  Embedder (Referenz-Neubau)
 from core import frames as clipcache                      # noqa: E402  Clip-Beschaffung
 from core import guete as guete_mod                       # noqa: E402  verfuegbar()
+from core import inferenzmessung as im                    # noqa: E402  .546 Zeit + Tiefe je Inferenz
 from core import gpubudget as _gpubudget                  # noqa: E402  .531 Reserve/Leiter
 from core import messkarte as mk_bilanz                   # noqa: E402  profil()
 from core import registry as _registry                    # noqa: E402  .531 VRAM-Fehlertexte
+from core import stapel as _stapel                        # noqa: E402  K3: Urteil nach dem Stapel
+from core import personenzahl as _personenzahl            # noqa: E402  K3 KP3: Gueltigkeit der Personenzahl
+from core import tuer as _tuer                            # noqa: E402  K3 KP3: Gruende des Endes
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 # urlretrieve kennt kein timeout= — prozessweit wie worker.py:88 und analyze.py:27.
 socket.setdefaulttimeout(120)
@@ -244,6 +251,11 @@ GEOMETRIEN_MAX_VORGABE = 0
 # Maschine rechnet, ist eine Eigenschaft der Maschine (Treiber, OpenVINO, iGPU), keine
 # Hauskonstante. Eine hier hineingeschriebene Zahl waere auf jedem fremden System falsch.
 EICHMARKE_DATEI = "kompilat_eichmarke.json"
+# Die Marke „der vorige Worker-Start endete an einer siebenden Kompilat-Abweichung" (Bauplan
+# analysen/bauplan_pose_kompilat.md, Stufe 1). Sie liegt neben der Eichmarke, weil nur sie den
+# Prozesswechsel ueberlebt: der frische Prozess liest und entfernt sie beim Start und weiss
+# damit, dass ER die eine Wiederholung ist.
+WIEDERHOLUNG_DATEI = "kompilat_wiederholung.json"
 # Die Latten der Probe, aus der E2d-Messung und mit Abstand zu BEIDEN Seiten:
 #   Rauschboden  gleiche Bau-Reihenfolge max|d| 0,0 - andere Reihenfolge 4,5e-08 (1-cos ~1e-16)
 #   Defektfall   max|d| 4,2e-03 bis 8,4e-03, 1-cos bis 1,8e-03, ||f|| bis -1,07
@@ -278,15 +290,17 @@ def einzeilig(text, deckel=600):
     return s if len(s) <= deckel else s[:deckel - 1] + "…"
 
 
-def prozess_log(text):
-    """Eine Zeile ins PROZESS-Log (fd 2). Hier landet, was dem Prozess gehoert und
-    nicht einem Job: Aufbau, Wachen, Engine-Bindung. C-Level-Ausgabe von Treiber und
-    Bibliotheken faellt ohne unser Zutun auf denselben fd — genau deshalb wird er im
-    Mehr-Job-Betrieb NICHT mehr per dup2 in eine Job-Datei umgehaengt (W2-B1)."""
-    try:
-        os.write(2, (f"worker_dienst: {einzeilig(text)}\n").encode())
-    except Exception:                                      # noqa: BLE001
-        pass
+# Das PROZESS-Log des Workers ist seit der Log-Systematik (Stufe 2) das zentrale
+# Log auf fd 2 (core/logbuch, eingerichtet unten in __main__): hier landet, was dem
+# Prozess gehoert und nicht einem Job — Aufbau, Wachen, Engine-Bindung. stdout
+# bleibt Datenkanal (Selbsttest-Antwort, DK1).
+
+
+def _inferenz_zeile(zeile):
+    """K13 (E1 a): Inferenz-Zeilen sind DEBUG, die Variante „inference SLOW"
+    WARNING (Signatur des GPU-Stillstands, O208); die Stufe folgt dem Text."""
+    _log.log(_logbuch.WARNING if str(zeile).startswith("inference SLOW")
+             else _logbuch.DEBUG, zeile)
 
 
 class JobLog:
@@ -317,9 +331,10 @@ class JobLog:
                 os.makedirs(os.path.dirname(pfad) or ".", exist_ok=True)
                 self._f = open(pfad, modus, encoding="utf-8")
             except OSError as e:                           # noqa: BLE001
-                prozess_log(f"job log {pfad!r} not writable ({e}) — logging to the process log")
+                _log.warning(f"job log {pfad!r} not writable ({e}) — logging to the process log")
 
-    def zeile(self, text):
+    @_logbuch.pass_through
+    def zeile(self, text, stufe=_logbuch.INFO):
         # Mehrzeiliges wird EINE Zeile (s. einzeilig): die Leser dieses Logs
         # arbeiten zeilenweise. Die eigenen Marken enthalten bewusst ein fuehrendes
         # \n (analyze.py:811) — das bleibt als Leerzeile erhalten.
@@ -327,7 +342,7 @@ class JobLog:
         text = fuehrend + einzeilig(text)
         with self._schloss:
             if self._f is None:
-                prozess_log(text)
+                _log.log(stufe, text)     # ohne Job-Datei: das Prozess-Log, mit Stufe
                 return
             try:
                 self._f.write(text + "\n")
@@ -388,7 +403,7 @@ def _proc_mb(feld):
                 if z.startswith(feld + ":"):
                     return int(z.split()[1]) // 1024
     except Exception:                                      # noqa: BLE001
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     return -1
 
 
@@ -406,6 +421,7 @@ def cgroup_stat():
         with open("/sys/fs/cgroup/memory.stat", encoding="ascii") as f:
             roh = dict(z.split()[:2] for z in f if len(z.split()) >= 2)
     except Exception:                                      # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning {}")
         return {}
     aus = {}
     for k in ("anon", "file", "shmem"):
@@ -465,6 +481,18 @@ ARGV_VORGABE = {
     "fd_sharp_min": 1500.0,   # analyze.py:96
     "fd_det_max": 0.70,       # analyze.py:97
     "det_thresh": 0.5,        # analyze.py:98
+    # Bauplan K3, Stufe KP1: Norm-Sieb und Stimmen bis erkannt des Stapels. 0 = aus, und
+    # 0 ist hier RICHTIG als Fuellwert (dieselbe Regel wie beim sample_deckel oben): wer
+    # die Felder nicht schickt, bekommt das Verhalten von vor KP1 — kein Norm-Sieb, kein
+    # Stapel, das Urteil faellt dann wie bisher im Dienst. Die Werkswerte (18,5 und 3)
+    # setzt der Config-Store (verifyd.load_config), nicht diese Fuellung.
+    "urteil_norm_min": 0.0,
+    "stapel_stimmen": 0,
+    # Bauplan K3, Stufe KP2: die Tuer (core.tuer). Fenster 0 = keine Tuer, Deckel 0 = ohne Deckel; wer
+    # die Felder nicht schickt, rechnet wie vor KP2. Den Werkswert des Fensters (20) setzt der
+    # Config-Store, den Deckel je Variante core.registry (tuer_deckel_werk), nicht diese Fuellung.
+    "tuer_fenster": 0,
+    "tuer_deckel": 0,
 }
 # argv-Flagge -> Schluessel oben. Die Namen sind die von verifyd.run_analyze
 # (verifyd.py:2036-2117), die Schluessel die von worker_kern.urteils_latten.
@@ -577,6 +605,10 @@ def felder_lesen(job):
       koerper (bool)            der Koerper-Abnehmer faehrt mit
       debug (bool)              Urteils-Debugzeilen
       kalib {deckel,data_dir,kamera}   der Kalibrier-Vorrat aus der Analyse
+      personenzahl {eid: zahl}  Bauplan K3, KP3: die Personenzahl je Ereignis (verifyd ueber
+                                core.personenzahl), hier roh uebernommen; event_lauf prueft sie, und
+                                fehlt sie oder ist sie unbrauchbar, gilt None (kein fruehes Ende,
+                                keine Obergrenze im Stapel)
 
     UNBEKANNTE SCHLUESSEL fallen wie bei `argv_lesen` nicht still, sondern werden
     gesammelt und mit dem Job beantwortet — ein Dienst, der eine Vorgabe des
@@ -607,6 +639,7 @@ def felder_lesen(job):
         deckel = int(float(kal.get("deckel") or 0))
     except (TypeError, ValueError):
         deckel = 0
+    pzj = job.get("personenzahl")
     return {"eids": list(job.get("eids") or []),
             "labels": list(job.get("labels") or []),
             "persons": list(job.get("persons") or []),
@@ -615,6 +648,8 @@ def felder_lesen(job):
             "kalib": {"deckel": deckel,
                       "data_dir": str(kal.get("data_dir") or ""),
                       "kamera": str(kal.get("kamera") or "")},
+            # roh je Ereignis; gueltig macht sie erst event_lauf (core.personenzahl.gueltig)
+            "personenzahl": {str(k): v for k, v in (pzj.items() if isinstance(pzj, dict) else ())},
             "unbekannt": unbekannt}
 
 
@@ -656,7 +691,7 @@ def latten_bauen(fest, log):
             da, _ = False, e
         if not da:
             aus = "guete-modelle nicht verfuegbar"
-            log.zeile(f"URTEILS-VORFILTER AUS: {aus}")     # Wortlaut analyze.py:128
+            log.zeile(f"URTEILS-VORFILTER AUS: {aus}", stufe=_logbuch.ERROR)     # Wortlaut analyze.py:128
             lat["guete_e"] = lat["guete_t"] = 0.0
             # Der Kern haette die Pose mit den Guete-Latten zusammen abgeschaltet
             # (urteils_latten, analyze.py:197-201); das holen wir hier nach.
@@ -673,10 +708,10 @@ def latten_bauen(fest, log):
             pose_da = pose_verfuegbar()
         except Exception as e:                             # noqa: BLE001
             pose_da = False
-            log.zeile(f"   (pose-verfuegbarkeit nicht pruefbar: {type(e).__name__})")
+            log.zeile(f"   (pose availability not checkable: {type(e).__name__})", stufe=_logbuch.WARNING)
         if not pose_da:
             pose_aus = "pose-modell nicht verfuegbar"
-            log.zeile(f"POSE-STIMM-SIEB AUS: {pose_aus}")
+            log.zeile(f"POSE-STIMM-SIEB AUS: {pose_aus}", stufe=_logbuch.ERROR)
             lat["pose"] = 0.0
     return lat, aus, pose_aus
 
@@ -721,7 +756,8 @@ def _refs_bauen(master, want, alle, modell, log):
     from core.refbeiwert import beiwerte as _bw            # noqa: PLC0415
     bw, fremd = _bw(master, modell)
     if fremd:
-        log.zeile(f"   ({fremd} Vorrats-Referenz(en) mit fremdem Modell-Beiwert — unbrauchbar)")
+        log.zeile(f"   ({fremd} stock reference(s) with a foreign model coefficient — unusable)",
+                  stufe=_logbuch.WARNING)
     emb = face_audit.Embedder()
     refs, zeilen = {}, {}
     for p in alle:
@@ -741,7 +777,7 @@ def _refs_bauen(master, want, alle, modell, log):
                 N.append(f)
         refs[p] = np.asarray(V, dtype=np.float32)
         zeilen[p] = N
-        log.zeile(f"   {p}: {len(V)} Vektoren")
+        log.zeile(f"   {p}: {len(V)} vectors", stufe=_logbuch.DEBUG)
     return refs, zeilen
 
 
@@ -785,21 +821,22 @@ def referenzen_laden(pfad, log, master=None):
                     and all(meta.get(p) == want[p] for p in alle)):
                 refs = {p: (z[p] if p in z.files else np.zeros((0, 512), np.float32))
                         for p in alle}
-                log.zeile("Referenz-Embeddings aus Cache.")
+                log.zeile("reference embeddings from cache.")
             else:
                 grund = ("Modell" if str(meta.get("§modell", "")) != modell
                          else "Datei-Liste")
-                log.zeile(f"   (refcache passt nicht mehr: {grund} — wird neu berechnet)")
+                log.zeile(f"   (refcache no longer matches: {grund} — being recomputed)")
         except Exception as e:                             # noqa: BLE001
-            log.zeile(f"   (refcache unlesbar: {e} — wird neu berechnet)")
+            log.zeile(f"   (refcache unreadable: {e} — being recomputed)", stufe=_logbuch.WARNING)
     if refs is None:
-        log.zeile("Referenz-Embeddings werden berechnet (einmalig, dann gecacht) ...")
+        log.zeile("reference embeddings are being computed (once, then cached) ...", stufe=_logbuch.DEBUG)
         refs, zeilen = _refs_bauen(master, want, alle, modell, log)
         neu = True
         try:
             _refcache_schreiben(pfad, {**want, "§modell": modell, "§rows": zeilen}, refs)
         except Exception as e:                             # noqa: BLE001
-            log.zeile(f"   (refcache nicht schreibbar: {e} — wird beim naechsten Lauf neu berechnet)")
+            log.zeile(f"   (refcache not writable: {e} — recomputed on the next run)",
+                      stufe=_logbuch.WARNING)
     # Ab hier die Aufbereitung des Kerns (worker_kern.referenzen_laden:617-630):
     # EINE Matrix, je Person auf die groesste Anzahl aufgefuellt durch Wiederholen
     # der ersten Zeile (aendert ihr Maximum nicht).
@@ -828,6 +865,7 @@ def _datei_md5(pfad):
                 h.update(block)
         return h.hexdigest()[:12]
     except OSError:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
         return None
 
 
@@ -836,7 +874,10 @@ def eich_umfeld(engine):
     dann wird die Marke erneuert statt Alarm geschlagen. Alles wird ABGELESEN, nichts
     behauptet: Fassung und Geraetename kommen aus OpenVINO, die Modelle ueber ihren
     Datei-md5 (ein getauschtes ONNX ist ein anderes Modell, auch bei gleichem Namen),
-    der Code ueber den md5 der zwei Dateien, die den Graphen bauen."""
+    der Code ueber den md5 der Dateien, die Graph, Sessions oder Zuschnitt einer Engine
+    bauen. Seit Stufe 2 des Pose-Bauplans proben ALLE Engines; deshalb stehen auch die
+    Dateien von rocm und cpu (engine_migraphx, engine_cpu, ihr Zuschnitt in bild_kern) in
+    der Liste — sonst hielte ein Code-Wechsel dort die neue Rechnung fuer eine Abweichung."""
     aus = {"engine": getattr(engine, "name", "?")}
     try:
         # 0.1.0.542: NIE selbst importieren, nur nehmen was schon geladen IST.
@@ -863,28 +904,48 @@ def eich_umfeld(engine):
         aus["modelle"] = f"?{type(e).__name__}"
     aus["code"] = {n: _datei_md5(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                               n))
-                   for n in ("engine_ov.py", "engine_cuda.py", "worker_kern.py")}
+                   for n in ("engine_ov.py", "engine_cuda.py", "engine_migraphx.py",
+                             "engine_cpu.py", "bild_kern.py", "worker_kern.py")}
     return aus
+
+
+class KompilatNeustart(RuntimeError):
+    """Erste Kompilat-Abweichung in einer siebenden Stufe: dieser Worker-Start gilt als
+    fehlgeschlagen und wird genau einmal in einem frischen Prozess wiederholt."""
 
 
 def probe_vergleich(soll, ist):
     """Zwei Proben vergleichen. -> (urteil, Liste der Befunde)
 
-    ZWEI SCHAERFEN, und der Unterschied ist Absicht (CLAUDE.md „Messbarkeit vor Stimme":
+    DREI SCHAERFEN, und der Unterschied ist Absicht (CLAUDE.md „Messbarkeit vor Stimme":
     fail-closed dort, wo ein falscher Wert still einen NAMEN kostet):
       * Die ERKENNUNGS-Stufe wird als ZAHL geprueft — Kosinus des Pruef-Embeddings und
         Feature-Norm gegen EICH_COS_MAX/EICH_NORM_MAX. Sie traegt das Urteil; eine
         Abweichung hier ist der Blocker vom 13.09. und muss den Prozess anhalten.
-      * Die uebrigen Stufen (det, fd, e, t, p) werden als Fingerabdruck verglichen und
-        eine Abweichung wird LAUT GEMELDET, aber nicht toedlich. Grund, gemessen: ihre
-        Abnehmer runden auf 2-3 Stellen (front, sharp, pkopf), und ueber alle E2d-Laeufe
-        bewegte sich dort nichts — waehrend die r-Stufe sich bewegte. Ein toedlicher
-        Fingerabdruck-Vergleich waere hier eine Fehlalarm-Maschine ohne Gegenwert."""
+        -> "abweichung".
+      * Eine Stufe, die die KASKADE SIEBT (die Menge kommt aus `wk.siebende_stufen`, seit
+        Bauplan K3 Stufe KP1 e, t und p), wird als Fingerabdruck verglichen, und eine
+        Abweichung ist FATAL: wer dort
+        die Latte reisst, bekommt keine Erkennung, ein anders rechnendes Kompilat nimmt also
+        still Namen weg oder oeffnet das Sieb ganz (Analysen r2-0031, Prod 17.09.-30.09.).
+        -> "siebend" (Bauplan analysen/bauplan_pose_kompilat.md, Stufe 1).
+      * Die uebrigen Stufen werden als Fingerabdruck verglichen und eine Abweichung wird
+        LAUT GEMELDET, aber nicht toedlich -> "hinweis". Das sind det und fd, die nicht in
+        der Kaskaden-Liste `wk.GPU_STUFEN_SIEBT` stehen.
+        EHRLICHE GRENZE: auch fd laesst Gesichter aus der Kaskade austreten (Fehldetektion);
+        ob eine fd-/det-Abweichung ebenfalls fatal sein soll, entscheidet der Bauplan, nicht
+        diese Stelle.
+    BIS ZU DIESEM BAU stand hier, alle fuenf Stufen einschliesslich p seien nur gerundete
+    Anzeige-Groessen. Fuer p war das falsch (worker_kern.event_rechnen: p siebt vor der
+    Erkennung), und genau diese Einstufung liess die p-Abweichung nach Worker-Neustarts
+    still Namen kosten."""
     import math                                             # noqa: PLC0415
     befunde, hart = [], False
+    siebend = False
     for k in ("det", "fd", "e", "t", "p"):
         if soll.get(k) != ist.get(k):
             befunde.append(f"{k}: {soll.get(k)} -> {ist.get(k)}")
+            siebend = siebend or k in wk.siebende_stufen()
     sn, inn = soll.get("r_norm") or [], ist.get("r_norm") or []
     if len(sn) == len(inn) and sn:
         dn = max(abs(float(x) - float(y)) for x, y in zip(sn, inn))
@@ -907,6 +968,8 @@ def probe_vergleich(soll, ist):
         befunde.append("r_emb: fehlt oder andere Laenge")
     if hart:
         return "abweichung", befunde
+    if siebend:
+        return "siebend", befunde
     return ("hinweis" if befunde else "ok"), befunde
 
 
@@ -931,13 +994,37 @@ class DecoderWache:
         meta = decode._probe(clip) or {}
         self.soll = meta.get("pakete")       # Gesamt-Pakete des Clips (Wache-Basis)
         self.step = int(schritt)
-        self.samples = 0                     # gelieferte Sample-Frames
+        self.samples = 0                     # gelieferte Bilder auf dem Raster der Grundrate
+        # Bauplan K3, Stufe KP2: mit der Tuer kommen Bilder zwischen den Raster-Punkten dazu. Die Wache
+        # zaehlt deshalb nach der Original-Bildnummer (`bild`): `samples` sind die gelesenen
+        # Raster-Punkte (gleich welche Kette sie lieferte), `geliefert` alle Bilder, `letzter` die
+        # hoechste Nummer. Ohne Tuer sind alle drei Groessen dieselben wie vorher.
+        self.geliefert = 0
+        self.letzter = -1
         # .534 (B5): WANN das erste Bild kam. Die Zahl, die im Feld gefehlt hat —
         # zwischen „Clip liegt da" und „es wird gerechnet" steckt der
         # Decoder-Start (und auf Karten der Rueckfall von HW auf SW).
         self.t_erstes = None
         self.roh = {}                        # von nv12_strom gefuellt (kette/rc/fehler)
         self.teilabbruch = None              # Kette starb MITTEN im Clip (s. EngineTor)
+        # Bauplan K3, Stufe KP3 Punkt 2 (Tuer-Konzept 3.6): das geplante Ende, gemeldet vom Worker, wenn
+        # das Ereignis frueh endete (alle gemeldeten Personen erkannt, Tuer zu). Die Zahl der Bilder bis
+        # dorthin; None = bis zum Clip-Ende wie bisher.
+        self.geplant = None
+
+    def ende_planen(self, i):
+        """Das geplante Ende melden: das Ereignis endete nach Bild i. Ab hier messen Lesbarkeit und
+        Toleranz nur bis dorthin; `soll` (die Pakete des Clips) bleibt. -> None"""
+        self.geplant = int(i) + 1
+
+    def _bis_ende(self):
+        """Worauf die Formeln der Frame-Quelle rechnen: ohne geplantes Ende die Wache selbst, sonst eine
+        Kopie mit dem Soll bis zum geplanten Ende (dieselben Formeln, keine zweite). -> DecoderWache"""
+        if self.geplant is None or not self.soll:
+            return self
+        sicht = copy.copy(self)
+        sicht.soll, sicht.geplant = min(int(self.soll), self.geplant), None
+        return sicht
 
     @property
     def decoder_fehler(self):
@@ -958,24 +1045,33 @@ class DecoderWache:
     def hwdec_grund(self):
         return self.roh.get("hwdec_grund")
 
+    def bild(self, i):
+        """Ein geliefertes Bild mit seiner Original-Bildnummer zaehlen (KP2: auch Bilder der Tuer).
+        -> None"""
+        self.geliefert += 1
+        self.letzter = max(self.letzter, int(i))
+        if int(i) % self.step == 0:
+            self.samples += 1
+
     @property
     def gelesen(self):
         """Fortschritt in ORIGINAL-Indizes, wie decode.FrameIter.gelesen (i + 1 des
         letzten gelieferten Frames, decode.py:203) — das ist die Zahl, die als
-        `frames_gelesen` in die Akte geht."""
-        return (self.samples - 1) * self.step + 1 if self.samples else 0
+        `frames_gelesen` in die Akte geht. Seit KP2 aus der hoechsten gelieferten Nummer,
+        nicht mehr aus der Zahl der Samples: mit Tuer-Bildern waere `(samples-1)*step+1` falsch."""
+        return self.letzter + 1 if self.geliefert else 0
 
     @property
     def _soll_samples(self):
-        return clipcache._formel(decode.FrameIter, "_soll_samples")(self)
+        return clipcache._formel(decode.FrameIter, "_soll_samples")(self._bis_ende())
 
     @property
     def verlust_pct(self):
-        return clipcache._formel(decode.FrameIter, "verlust_pct")(self)
+        return clipcache._formel(decode.FrameIter, "verlust_pct")(self._bis_ende())
 
     @property
     def unvollstaendig(self):
-        return clipcache._formel(decode.FrameIter, "unvollstaendig")(self)
+        return clipcache._formel(decode.FrameIter, "unvollstaendig")(self._bis_ende())
 
 
 class EngineTor:
@@ -990,7 +1086,7 @@ class EngineTor:
         self._engine, self._wache = engine, wache
         self._mit_wache = "wache" in inspect.signature(engine.frames).parameters
 
-    def frames(self, clip, W, H, schritt):
+    def frames(self, clip, W, H, schritt, sprung=None):
         """Die Frames dieses Jobs, gezaehlt — und mit der TEILABBRUCH-Regel.
 
         Warum die Regel sein MUSS (gemessen 13.09. an einem verfaelschten
@@ -1005,18 +1101,22 @@ class EngineTor:
         gekennzeichnet zu urteilen.
 
         0 Frames geliefert = der Fehler bleibt ein Fehler und fliegt weiter; dann
-        gibt es ohnehin keine results-Zeile (W1-M11)."""
+        gibt es ohnehin keine results-Zeile (W1-M11).
+
+        `sprung` (Bauplan K3, KP2): die Tuer setzt die Kette neu an; jede Kette eines Jobs laeuft
+        durch dieses Tor und dieselbe Wache, auch der Software-Neulauf nach einem Teilabbruch."""
         w = self._wache
-        strom = (self._engine.frames(clip, W, H, schritt, wache=w.roh)
-                 if self._mit_wache else self._engine.frames(clip, W, H, schritt))
+        mehr = {} if sprung is None else {"sprung": sprung}
+        strom = (self._engine.frames(clip, W, H, schritt, wache=w.roh, **mehr)
+                 if self._mit_wache else self._engine.frames(clip, W, H, schritt, **mehr))
         try:
             for s in strom:
-                if w.samples == 0:
+                if w.geliefert == 0:
                     w.t_erstes = time.monotonic()      # .534 (B5): das erste Bild
-                w.samples += 1
+                w.bild(s[0])
                 yield s
         except RuntimeError as e:
-            if w.samples == 0:
+            if w.geliefert == 0:
                 raise
             w.teilabbruch = str(e)[:400]
 
@@ -1025,7 +1125,7 @@ class EngineTor:
 
 
 # ----------------------------------------------------------------- Results-Kontrakt
-def detektionen_bauen(zeilen):
+def detektionen_bauen(zeilen, schritt):
     """Die `detektionen`-Liste der Akte (analyze.py:943-953).
 
     VOLLSTAENDIG, W1-M1: jede Roh-Detektion, in derselben Reihenfolge wie gerechnet.
@@ -1036,7 +1136,13 @@ def detektionen_bauen(zeilen):
     STIMM-Kandidaten („sonst waechst die Akte um jede Grasnarbe", analyze.py:934).
     Hier gilt die Regel des Konzepts — „Guete-Werte wo gemessen" (§3). Das ist
     dasselbe Sparziel auf dem neuen Weg: Fehldetektionen verlassen die Kaskade VOR
-    der e-Stufe, eine Grasnarbe bekommt also gar keinen Wert."""
+    der e-Stufe, eine Grasnarbe bekommt also gar keinen Wert.
+
+    HERKUNFT (Bauplan K3, Stufe KP2, Entscheid 7): eine Detektion aus einem Bild, das die Tuer zwischen
+    die Raster-Punkte der Grundrate gelegt hat (Bildnummer kein Vielfaches von `schritt`), traegt
+    `"grundrate": false`. Die Szenario-Zaehlung (szenarien.gesicht_gut_zaehlen) laesst sie aus und
+    zaehlt damit genau die Bilder, die ohne Tuer geprueft worden waeren. Raster-Punkte bleiben ohne Feld,
+    auch wenn die Tuer-Kette sie lieferte; Bestandszeilen ohne das Feld gelten als Grundrate."""
     aus = []
     for f in zeilen:
         d = {"t": round(f["zeit_s"], 1), "bw": f["bw"], "bh": f["bh"],
@@ -1044,6 +1150,8 @@ def detektionen_bauen(zeilen):
              "det": round(f["det"], 2),
              "sharp": None if f["sharp"] is None else round(f["sharp"], 0),
              "fd": f["fd"]}
+        if f["i"] % schritt:
+            d["grundrate"] = False
         if f["e"] is not None or f["t"] is not None or f["p"] is not None:
             d["guete_e"] = None if f["e"] is None else round(float(f["e"]), 3)
             d["guete_t"] = None if f["t"] is None else round(float(f["t"]), 3)
@@ -1089,7 +1197,7 @@ def persons_fuer_akte(persons_voll, idx_karte):
 
 
 def results_zeile(label, eid, zeilen, persons, wache, lat, stat, profil,
-                  samples_moeglich=None, sample_deckel=0):
+                  samples_moeglich=None, sample_deckel=0, stapel=None):
     """EINE results.jsonl-Zeile, Feld fuer Feld und in der REIHENFOLGE von
     analyze.py:940-1003. Die Reihenfolge ist kein Selbstzweck: die Akte wird
     gelesen, verglichen und von Menschen begutachtet, und ein Diff gegen Bestands-
@@ -1098,7 +1206,7 @@ def results_zeile(label, eid, zeilen, persons, wache, lat, stat, profil,
     z = {"label": label, "source": eid, "faces": len(zeilen),
          "faces_geprueft": len(zeilen) - fd_n,
          "max_bw": max((f["bw"] for f in zeilen if not f["fd"]), default=0),
-         "detektionen": detektionen_bauen(zeilen),
+         "detektionen": detektionen_bauen(zeilen, wache.step),
          "frames_gelesen": wache.gelesen, "frames_soll": wache.soll}
     # .540 DAS ZAHLENPAAR DES SAMPLE-BUDGETS. Bis hier stand die WIRKLICHE Zahl
     # abgetasteter Frames in KEINER Akte — nur im Klartext-Kopf der analyze.log
@@ -1119,6 +1227,10 @@ def results_zeile(label, eid, zeilen, persons, wache, lat, stat, profil,
         z["samples_moeglich"] = int(samples_moeglich)
         if int(sample_deckel or 0) > 0 and wache.samples < int(samples_moeglich):
             z["sample_deckel"] = int(sample_deckel)
+    if wache.geplant is not None:
+        # Bauplan K3, Stufe KP3 Punkt 2: das Ereignis endete frueh (alle gemeldeten Personen erkannt);
+        # verifyd misst seine Lesbarkeits-Pruefung nur bis hierher. Nur gesetzt, wenn es frueh endete.
+        z["frames_geplant"] = wache.geplant
     if wache.unvollstaendig:
         z["frames_fehlen"] = True
     if wache.decoder_fehler:
@@ -1127,9 +1239,17 @@ def results_zeile(label, eid, zeilen, persons, wache, lat, stat, profil,
                          "pose": lat["pose"], "kante": lat["urteil_kante"],
                          "anker": lat["urteil_anker"],
                          "win_thresh": lat["win_thresh"],
+                         # Bauplan K3, KP1 Punkt 7: die wirksame Norm-Grenze (0 = Sieb aus)
+                         "norm_min": lat["urteil_norm_min"],
                          **stat}
     z["profil"] = profil
     z["persons"] = persons
+    # Bauplan K3, Stufe KP1 Punkt 1: das Urteil nach dem Stapel (core.stapel), gerechnet aus
+    # den ungerundeten Kern-Zeilen. Der Dienst uebernimmt `namen` als `confirmed` fuer
+    # verdict_v2 und verdict (verifyd); ohne dieses Feld urteilt er wie bisher.
+    if stapel is not None:
+        z["stapel"] = {"namen": stapel["namen"], "stimmen": stapel["stimmen"],
+                       "je_name": stapel["je_name"]}
     return z
 
 
@@ -1276,7 +1396,7 @@ class SpeicherWache:
             self.grundlast = gl
         if not mb and not self._alt_gemeldet and job.get("rss_max_mb"):
             self._alt_gemeldet = True
-            prozess_log(
+            _log.warning(
                 f"job carries rss_max_mb={job['rss_max_mb']} — that is a VmRSS limit, "
                 f"and this guard measures anon+shmem, which is a different quantity "
                 f"(measured 12.09.: 1.9 GB RSS vs 6.85 GB cgroup on the iGPU). The "
@@ -1385,7 +1505,7 @@ class SpeicherWache:
         if erstmals:
             # EINMAL laut, danach still: die Frage wird je Job gestellt, und
             # eine Zeile je Job waere Rauschen statt Auskunft.
-            prozess_log(f"vram own: cannot be attributed ({grund}) — this "
+            _log.warning(f"vram own: cannot be attributed ({grund}) — this "
                         f"process does not report its own card share; the "
                         f"card-wide numbers in /health are unaffected")
         return None, None, grund
@@ -1542,7 +1662,7 @@ class SpeicherWache:
                 # dabei verloren, und verifyd startet einen frischen.
                 if not self._gemeldet:
                     self._gemeldet = True
-                    prozess_log(f"WARN: footprint {jetzt} MB (anon+shmem) exceeds the "
+                    _log.warning(f"WARN: footprint {jetzt} MB (anon+shmem) exceeds the "
                                 f"policy limit {self.grenze} MB while "
                                 f"{self.dienst.offen_n()} job(s) are running")
                 self.dienst.ende_bitten(
@@ -1629,7 +1749,7 @@ class FristWache:
                 if alter > lauf.frist_s:
                     lauf.gemeldet = True
                     self.gerissen += 1
-                    prozess_log(f"WARN: job {lauf.id} ({lauf.typ}) has been "
+                    _log.warning(f"WARN: job {lauf.id} ({lauf.typ}) has been "
                                 f"{'computing' if lauf.t_lauf0 else 'queued'} "
                                 f"{alter:.0f}s, past its {lauf.frist_s:.0f}s deadline "
                                 f"— it is not compiling; the service decides what to do")
@@ -1686,6 +1806,55 @@ class JobLauf:
         self.abruf_quelle = None    # "frigate" | "cache" | "datei"
         self.erstes_bild_s = None   # vom Ende des Abrufs bis zum ersten Frame
         self.decoder = None         # welche Kette das erste Bild geliefert hat
+        # --- .546 (Hang-Suche): die Bilanz der Inferenz-Messung dieses
+        # Ereignisses (n, Groesstwert mit Wanduhr-Zeit, p95, Mittel, groesste
+        # Tiefe). Sie entsteht in der Engine und reist mit der Job-Antwort nach
+        # /health; None heisst „diese Engine misst nicht" oder „es gab keine
+        # Einreichung", nie „war in Ordnung".
+        self.inferenz = None
+
+
+# ----------------------------------------------------------------- Bild-Weg hinter dem Riegel
+class BildBau:
+    """Die Bild-Weg-Stufen der Engine hinter dem Staffel-Riegel (Pose-Bauplan Stufe 3).
+
+    Jede Engine baut ihren Bild-Weg FAUL: der erste Aufruf je Detektor-Leinwand bzw. je Stufe
+    legt das Kompilat oder die Session an (engine_ov `BildStufen.det/stufe`, engine_migraphx und
+    engine_cpu `ModellBestand._bauen`, engine_cuda `BildStufen.det/stufe`). Dieser erste Aufruf
+    laeuft deshalb unter dem Riegel und nie neben einem Geometrie-Bau; jeder weitere ist reine
+    Rechnung und geht direkt durch. Die Huelle sitzt im Dienst, damit es die Regel nur einmal
+    gibt und keine Engine sie nachbauen muss. Alles andere reicht sie unveraendert durch."""
+
+    def __init__(self, stufen, dienst):
+        self._stufen = stufen
+        self._dienst = dienst
+        self._gebaut = set()
+
+    def __getattr__(self, name):
+        return getattr(self._stufen, name)
+
+    def _erstmals(self, schluessel, was, rechnen):
+        """Den Aufruf rechnen — beim ersten Mal je Schluessel unter dem Riegel.
+        -> das Ergebnis des Aufrufs"""
+        if schluessel in self._gebaut:
+            return rechnen()
+        with self._dienst._staffel(None, was):
+            aus = rechnen()
+        self._gebaut.add(schluessel)
+        return aus
+
+    def det(self, leinwand, det_wh):
+        """Detektor des Bild-Wegs auf einer Leinwand (erster Aufruf je Leinwand baut).
+        -> die Ausgaenge der Engine"""
+        w, h = (int(v) for v in det_wh)
+        return self._erstmals(("det", w, h), f"image path det {w}x{h}",
+                              lambda: self._stufen.det(leinwand, det_wh))
+
+    def stufe(self, k, X):
+        """Eine Stufe des Bild-Wegs (erster Aufruf je Stufe baut).
+        -> die Zeilen der Engine"""
+        return self._erstmals(("stufe", k), f"image path stage {k}",
+                              lambda: self._stufen.stufe(k, X))
 
 
 # ----------------------------------------------------------------- Der Dienst
@@ -1723,7 +1892,20 @@ class Dienst:
         # IMMER VOR `_geo_schloss` und `_warm_schloss` genommen, nie umgekehrt. Kein
         # Pfad haelt eines der beiden inneren Schloesser, waehrend er auf dieses
         # wartet.
-        self._bau_schloss = threading.Lock()
+        #
+        # SEIT STUFE 3 DES POSE-BAUPLANS (analysen/bauplan_pose_kompilat.md) liegt derselbe
+        # Riegel auch um die Anlage des BILD-WEGS (`bild_rechner`, vor `_bild_schloss`) und um
+        # die Kurzform der Start-Proben (`startprobe`). Grund ist die Prod-Empirie (Analyse
+        # backups/release3_bau/analyse_r2_0031_m5): lief der Bild-Weg samt Startprobe neben dem
+        # ersten Geometrie-Bau, wich das Pose-Kompilat in 32 von 37 Starts ab, ohne diese
+        # Ueberschneidung in 0 von 29. Die Anlage des Modell-Bestands geschieht in allen vier
+        # Engines faul und ohne eigenes Schloss (`if bestand is None: bestand = …` an zwei
+        # Stellen je Engine); beide Wege erreichen sie nur ueber diesen Dienst, deshalb haelt
+        # EIN Riegel hier sie fuer ov, cuda, migraphx und cpu auseinander. Die faulen
+        # Stufen-Bauten des Bild-Wegs fasst `BildBau` beim ersten Aufruf. WIEDERBETRETBAR
+        # (RLock), weil die Startprobe den Riegel haelt und ihr erster Pruefbild-Aufruf genau
+        # einen solchen Stufen-Bau ausloest — im selben Strang, also kein zweiter Bau daneben.
+        self._bau_schloss = threading.RLock()
         # .535: HIER STAND DER ZUSTAND DER PREIS-MESSUNG (Plateau-Fenster,
         # Grundlinie, Eich-Schluessel, Fenstergroesse, Waechterzahl). Die
         # Messung ist ausgebaut — die Preise stehen in der Messtabelle.
@@ -1762,6 +1944,9 @@ class Dienst:
         self._vram_neustart_gebeten = False
         self._vram_wiederholt = set()          # Job-Ids, die schon einmal liefen
         self._vram_letzter_text = None
+        # Bauplan GPU-Wartefrist, Stufe 1 Punkt 3: das Ende nach einem GPU-Haenger wird wie
+        # der Neustart unter Kartendruck HOECHSTENS EINMAL je Prozess erbeten.
+        self._haenger_gebeten = False
         # .532 EIGENER DECKEL, ZWEITER TREFFER: der Zaehler gehoert dem PROZESS,
         # nicht dem Job — im Feld kamen die Treffer aus zwei Rechenstraengen
         # binnen Sekunden. Das eigene Schloss haelt genau diese Entscheidung
@@ -1803,6 +1988,11 @@ class Dienst:
         self._eich_schloss = threading.Lock()  # E2d: Eichmarke der Kompilat-Probe
         self._eich_umfeld = None
         self.kompilat_bericht = {"stand": "ungeprueft"}
+        # Bauplan pose_kompilat, Stufe 1: `wiederholung` ist die beim Start gelesene Marke des
+        # vorigen Prozesses (None = dieser Start ist keine Wiederholung); `kompilat_gestoppt`
+        # ist der Grund, aus dem dieser Prozess keine Urteile mehr liefert (None = er liefert).
+        self.wiederholung = None
+        self.kompilat_gestoppt = None
         # E3.4: die letzte KURZFORM der Start-Proben (Bindung + Pruefbild). Wie der
         # Kompilat-Bericht: strukturiert in jede Job-Antwort, nicht nur ins Log.
         self.startprobe_bericht = {"stand": "nicht gelaufen"}
@@ -1879,39 +2069,21 @@ class Dienst:
         _erg = getattr(self.engine, "bindung_ergaenzen", None)
         if _erg is not None:
             _erg(self.bindung)
-        prozess_log(f"engine {eng.Engine.name} bound ({self.bindung['geraet']}), "
+        _log.info(f"engine {eng.Engine.name} bound ({self.bindung['geraet']}), "
                     f"{self.threads} compute thread(s)")
         # HIER WURDE BIS ZUR NB-ABNAHME DER SESSION-SATZ GEMESSEN. Das ist RAUS:
         # zur Bauzeit belegt er auf der Karte nichts (gemessen „card did not
         # shrink: 5530 -> 5530"), weil onnxruntime traege allokiert. Sein Anteil
         # steckt im PLATEAU der ersten Konstellation und wird dort abgeleitet.
         _ = _basis_vor
-        # E3.4 (Befund Live-Test 14.09.): OB DIESE ENGINE EINE KOMPILAT-WACHE HAT,
-        # steht ab sofort SOFORT fest und LAUT — nicht erst beim ersten Geometrie-Bau
-        # und nicht nur als stiller Ueberschlag in `kompilat_pruefen`. `def probe`
-        # existiert heute allein in engine_ov (engine_ov.py:786); auf CUDA ist die
-        # Wache damit PER BAUART AUS. Ein Betreiber, der in /health „kompilat_probe:
-        # ok" sucht und dort nichts findet, muss den Unterschied zwischen „noch nicht
-        # geprueft" und „diese Engine kann es gar nicht" sehen koennen — sonst ist die
-        # Diagnose stumm und der Nutzer haelt eine ungewachte Anlage fuer gewacht (K1).
-        # Die Kurzform der Start-Proben (`startprobe`) ist auf CUDA der Ersatz: sie
-        # rechnet den Erkennungs-Vektor des BILD-Wegs gegen dieselbe Eichmarke.
-        _satz_kl = getattr(eng, "Satz", None)
-        _hat_probe = hasattr(_satz_kl, "probe")
-        self.bindung["kompilat_wache"] = "an" if _hat_probe else "aus"
-        if not _hat_probe:
-            self.kompilat_bericht = {"stand": "keine probe in dieser engine",
-                                     "engine": eng.Engine.name, "wache": "aus",
-                                     "ersatz": "startprobe (bild-weg gegen dieselbe "
-                                               "eichmarke)"}
-            prozess_log(f"WARN: engine {eng.Engine.name} has no compiled-model probe "
-                        f"(only engine_ov implements Satz.probe) — the per-geometry "
-                        f"compiled-model guard is OFF by design on this backend; the "
-                        f"short start proof (startprobe) covers the recognition stage "
-                        f"instead. This is reported in /health, not swallowed.")
-        else:
-            self.kompilat_bericht = {"stand": "ungeprueft", "engine": eng.Engine.name,
-                                     "wache": "an"}
+        # Bauplan pose_kompilat, Stufe 2: die Kompilat-Wache ist fuer JEDE Engine an. Die
+        # Probe ist EINE Mechanik (`wk.kompilat_probe`) ueber die Satz-Schnittstelle, die jede
+        # Engine dem Kern liefert; den Zustand „diese Engine hat keine Probe" (bis dahin cpu,
+        # cuda und rocm, E3.4) gibt es nicht mehr. Kann eine Engine eine Stufe technisch nicht
+        # proben, meldet `kompilat_pruefen` das LAUT als eigenen Zustand (`nicht_probbar`).
+        self.bindung["kompilat_wache"] = "an"
+        self.kompilat_bericht = {"stand": "ungeprueft", "engine": eng.Engine.name,
+                                 "wache": "an"}
         # E2c: von hier an rechnen AUCH die Alt-Wege ihre Gesichter auf dieser Engine.
         # Der Griff ist der von worker.py (dort `_patch_embedder`, worker.py:994-999):
         # `face_audit.Embedder` wird auf eine Fabrik umgebogen, damit ihn auch die
@@ -1924,17 +2096,27 @@ class Dienst:
         self.fabrik = bild_kern.Fabrik(self.bild_rechner,
                                        self.bindung.get("geraet")).einhaengen()
 
-    def bild_rechner(self):
+    def bild_rechner(self, lauf=None):
         """Der Bild-Weg dieses Prozesses, beim ersten Bedarf angelegt (E2c).
         Faul, weil er den Modell-Bestand der Engine anlegt — ein Prozess ohne
-        Hintergrund-Jobs und ohne Referenz-Neubau soll das nicht bezahlen."""
-        with self._bild_schloss:
-            if self._bild is None:
-                t0 = time.monotonic()
-                self._bild = bild_kern.BildRechner(self.engine)
-                prozess_log(f"image path ready on the engine in "
-                            f"{time.monotonic() - t0:.1f}s")
+        Hintergrund-Jobs und ohne Referenz-Neubau soll das nicht bezahlen.
+
+        Die Anlage laeuft unter dem Staffel-Riegel (Pose-Bauplan Stufe 3, s. `_bau_schloss`),
+        nie neben einem Geometrie-Bau; seine faulen Stufen-Bauten fasst danach `BildBau`. Wer
+        den fertigen Bild-Weg vorfindet, nimmt den Riegel nicht. `lauf` fehlt, wenn die Fabrik
+        ihn ohne Job anfordert."""
+        if self._bild is not None:
             return self._bild
+        with self._staffel(lauf, "image path"):
+            with self._bild_schloss:
+                if self._bild is None:
+                    t0 = time.monotonic()
+                    rechner = bild_kern.BildRechner(self.engine)
+                    rechner.stufen = BildBau(rechner.stufen, self)
+                    self._bild = rechner
+                    _log.info(f"image path ready on the engine in "
+                                f"{time.monotonic() - t0:.1f}s")
+                return self._bild
 
     def referenzen(self, log):
         """Referenzen EINMAL je Prozess laden (mit Selbstheilung).
@@ -1964,7 +2146,7 @@ class Dienst:
             **({"weg": "engine (E2c: dasselbe Kompilat wie die Live-Erkennung)"}
                if self.erk.get("neu_gebaut") else {})}
         if self.erk.get("neu_gebaut"):
-            prozess_log(f"reference cache rebuilt from the master "
+            _log.info(f"reference cache rebuilt from the master "
                         f"({len(self.mit_refs)} person(s) with vectors) on the engine "
                         f"— references and live embeddings now come from the same "
                         f"compiled model (E2c)")
@@ -2077,10 +2259,16 @@ class Dienst:
            alle uebrigen Straenge still mitnehmen — und weil die Frist-Wache die
            Wartenden ueberspringt (Punkt 1), saehe sie niemand. Der Preis ist
            benannt: in diesem Fall bauen wieder zwei gleichzeitig, also genau die
-           Lage vom 15.09. — aber laut und mit Grund im Log statt stumm."""
+           Lage vom 15.09. — aber laut und mit Grund im Log statt stumm.
+
+        OHNE JOB (`lauf` None, Pose-Bauplan Stufe 3): die Fabrik legt den Bild-Weg an, ohne
+        einen Job zu kennen. Dann gibt es keine Frist-Ausnahme und keine Job-Buchung;
+        Warten, Frist und Meldung sind dieselben."""
         t0 = time.monotonic()
-        vorher = lauf.kompiliert
-        lauf.kompiliert = True                       # Frist-Ausnahme schon fuers Warten
+        vorher = getattr(lauf, "kompiliert", False)
+        if lauf is not None:
+            lauf.kompiliert = True                   # Frist-Ausnahme schon fuers Warten
+        wer = f"job {lauf.id}" if lauf is not None else "no job"
         gehalten = self._bau_schloss.acquire(timeout=STAFFEL_FRIST_S)
         warte = time.monotonic() - t0
         # HIER WURDE BIS ZUR NB-ABNAHME DER .534 GEMESSEN — um den Bauschritt
@@ -2096,8 +2284,8 @@ class Dienst:
         try:
             if not gehalten:
                 self.zaehler["staffel_frist"] += 1
-                prozess_log(f"WARN: waited {warte:.0f}s for the build lock before "
-                            f"{was} (job {lauf.id}) and gave up — another thread's "
+                _log.warning(f"WARN: waited {warte:.0f}s for the build lock before "
+                            f"{was} ({wer}) and gave up — another thread's "
                             f"build is not finishing. Building WITHOUT staggering "
                             f"now: two concurrent builds can exhaust the accelerator "
                             f"(this is the 15.09. field case). Check the log above "
@@ -2107,18 +2295,20 @@ class Dienst:
                 # Mensch sehen soll. Die Schwelle ist eine Protokoll-Schwelle,
                 # kein Budget: eine kurze Wartezeit ist genauso Staffelung wie
                 # eine lange, sie ist nur keine Logzeile wert.
-                lauf.staffel_s += warte
-                lauf.staffel_n += 1
+                if lauf is not None:
+                    lauf.staffel_s += warte
+                    lauf.staffel_n += 1
                 self.zaehler["staffel_wartezeiten"] += 1
                 if warte >= STAFFEL_MELDE_S:
-                    prozess_log(f"staggered {was} (job {lauf.id}): waited "
+                    _log.warning(f"staggered {was} ({wer}): waited "
                                 f"{warte:.1f}s for another thread's build — builds "
                                 f"run one at a time, computing stays parallel")
             yield
         finally:
             if gehalten:
                 self._bau_schloss.release()
-            lauf.kompiliert = vorher
+            if lauf is not None:
+                lauf.kompiliert = vorher
 
     def bg_offen_n(self):
         """Wie viele HINTERGRUND-Jobs gerade offen sind (.534). Sie rechnen im
@@ -2175,7 +2365,7 @@ class Dienst:
             lauf.kompilat_mb += zuwachs
             lauf.kompilat_n += 1
             self.zaehler["kompilat_bauten"] += 1
-            prozess_log(f"built {was} in {dauer:.1f}s (job {lauf.id}, footprint "
+            _log.info(f"built {was} in {dauer:.1f}s (job {lauf.id}, footprint "
                         f"{vor} -> {nach} MB, +{zuwachs} MB booked to this build, "
                         f"not to the analysis)")
 
@@ -2217,7 +2407,7 @@ class Dienst:
         if deckel <= 0:
             if not self._geo_deckel_gemeldet and len(self.graphen) > 1:
                 self._geo_deckel_gemeldet = True
-                prozess_log("no geometry cap configured (job field 'geometrien_max' "
+                _log.warning("no geometry cap configured (job field 'geometrien_max' "
                             "missing) — compiled geometries are kept without a limit, "
                             "as before E3.3. The cap comes from the memory formula in "
                             "verifyd, never from a constant in here.")
@@ -2242,7 +2432,7 @@ class Dienst:
             # der Speicher bis zum naechsten zufaelligen Sammellauf liegen.
             del weg
             gc.collect()
-            prozess_log(f"geometry {opfer[0]}x{opfer[1]} dropped (least recently "
+            _log.debug(f"geometry {opfer[0]}x{opfer[1]} dropped (least recently "
                         f"used, cap {deckel}) — its compiled graphs and per-thread "
                         f"buffers are released")
 
@@ -2256,8 +2446,9 @@ class Dienst:
         denn die Klasse „das geladene Kompilat rechnet anders als das gemessene" hat mehr
         Quellen als den Cache (Treiberwechsel, fremdes Image, getauschtes ONNX).
 
-        ABLAUF: fester Pruefvektor durch alle Stufen (engine_ov.Satz.probe), Vergleich
-        gegen die Marke im Arbeitsordner. Kennt die Marke dieses UMFELD nicht (andere
+        ABLAUF: fester Pruefvektor durch alle Stufen (`wk.kompilat_probe`, seit Stufe 2 des
+        Pose-Bauplans fuer jede Engine dieselbe), Vergleich gegen die Marke im
+        Arbeitsordner. Kennt die Marke dieses UMFELD nicht (andere
         OpenVINO-Fassung, anderer Treiber, anderes Modell, anderer Engine-Code), wird sie
         LAUT erneuert — dort sind andere Zahlen richtig. Ist das Umfeld dasselbe und die
         Erkennungs-Stufe weicht ab, endet der Job mit Fehler; der Prozess produziert
@@ -2267,36 +2458,47 @@ class Dienst:
         sie sagt „so wie damals", nicht „richtig"; die Richtigkeit belegt der
         Werte-Abgleich der Etappen-Gates. (2) Sie gilt je Geometrie: eine neue
         Clip-Groesse bringt ihre eigene Zeile mit und ist beim ersten Mal ungeprueft.
-        (3) Engines ohne `probe` (CUDA heute) werden uebersprungen, und das steht so in
-        der Antwort statt als stilles „ok"."""
-        if not hasattr(satz, "probe"):
-            # E3.4: der Bericht steht schon seit `engine_bauen` (dort LAUT, mit dem
-            # Ersatz-Hinweis). Hier wird er NICHT ueberschrieben — sonst verlöre er
-            # genau die zwei Felder, an denen /health „aus per Bauart" von „noch nicht
-            # geprueft" unterscheidet.
-            return
+        (3) Eine Stufe, die der Satz technisch nicht rechnen kann, ist nicht geprueft; das
+        steht LAUT im Log und als `nicht_probbar` im Bericht statt als stilles „ok"."""
+        if getattr(self, "kompilat_gestoppt", None):
+            # Bauplan pose_kompilat, Stufe 1: nach dem Stopp baut dieser Prozess keine neue
+            # Geometrie mehr fertig — auch ein Job, der vor dem Stopp angenommen wurde, liefert
+            # aus einem frischen Kompilat dieses Prozesses kein Urteil.
+            raise RuntimeError(self.kompilat_gestoppt)
         t0 = time.monotonic()
-        ist = satz.probe(roh=True)
+        # Ein Satz, der `probe` selbst traegt, ist ein Proben-Einschub (die Attrappen der
+        # Verhaltensproben liefern ihren Fingerabdruck so direkt, s. s14_a1). Keine Engine des
+        # Hauses traegt ihn; tools/proben/s14_a2_probe_engines.py haelt das am Syntaxbaum fest.
+        einschub = getattr(satz, "probe", None)
+        ist = einschub(roh=True) if einschub is not None else wk.kompilat_probe(satz, roh=True)
         marke = f"{g.W}x{g.H}"
+        engine = getattr(self, "bindung", {}).get("engine")   # getattr wie bei `auf_karte`
+        offen = ist.get("nicht_probbar") or {}
+        if offen:
+            _log.error(f"compiled-model probe {marke}: stage(s) {', '.join(sorted(offen))} "
+                       f"cannot be probed on engine {engine} — their compiled models are NOT "
+                       f"guarded ({'; '.join(sorted(set(offen.values())))})")
+        if "det" in offen:
+            # Ohne Detektor gibt es keinen einzigen Fingerabdruck: nichts zu eichen und nichts
+            # zu vergleichen. Der Zustand steht laut im Bericht, nie als stilles „ok".
+            self.kompilat_bericht = {"stand": "nicht probbar", "wache": "an", "engine": engine,
+                                     "geometrie": marke, "nicht_probbar": dict(offen)}
+            return
         # E3.4: die Marken-Mechanik (lesen, Umfeld pruefen, laut erneuern, eichen)
         # liegt seitdem in `_eichen` — die Kurzform der Start-Proben braucht exakt
         # dieselbe fuer ihren eigenen Schluessel, und zweimal dieselbe Vorschrift
         # waere die Streuung, die die Hausregel verbietet.
         urteil, befunde = self._eichen(marke, ist)
-        if urteil == "geeicht":
-            self.kompilat_bericht = {"stand": "geeicht", "wache": "an",
-                                     "engine": self.bindung.get("engine"),
-                                     "geometrie": marke,
-                                     "r_norm": ist.get("r_norm"),
-                                     "probe_s": round(time.monotonic() - t0, 2)}
-            prozess_log(f"compiled-model probe {marke}: calibration mark written "
-                        f"(||f|| {ist.get('r_norm')})")
-            return
-        self.kompilat_bericht = {"stand": urteil, "wache": "an",
-                                 "engine": self.bindung.get("engine"),
+        self.kompilat_bericht = {"stand": urteil, "wache": "an", "engine": engine,
                                  "geometrie": marke,
                                  "r_norm": ist.get("r_norm"),
                                  "probe_s": round(time.monotonic() - t0, 2)}
+        if offen:
+            self.kompilat_bericht["nicht_probbar"] = dict(offen)
+        if urteil == "geeicht":
+            _log.info(f"compiled-model probe {marke}: calibration mark written "
+                        f"(||f|| {ist.get('r_norm')})")
+            return
         if befunde:
             self.kompilat_bericht["befunde"] = befunde
         if urteil == "abweichung":
@@ -2304,12 +2506,123 @@ class Dienst:
             text = ("compiled-model probe FAILED for " + marke + ": this process computes "
                     "the recognition stage differently than the calibrated one — "
                     + " | ".join(befunde))
-            prozess_log("FATAL: " + text)
-            lauf.log.zeile("FEHLER: " + text)
+            _log.critical("FATAL: " + text)
+            lauf.log.zeile("FEHLER: " + text, stufe=_logbuch.ERROR)
             raise RuntimeError(text)
+        if urteil == "siebend":
+            self.siebend_behandeln(marke, befunde)
         if urteil == "hinweis":
-            prozess_log(f"WARN: compiled-model probe {marke} differs outside the "
+            _log.warning(f"WARN: compiled-model probe {marke} differs outside the "
                         f"recognition stage (not fatal): {' | '.join(befunde)}")
+
+    def wiederholung_uebernehmen(self):
+        """Die Marke des vorigen Prozesses lesen und entfernen (Bauplan pose_kompilat, Stufe 1).
+        -> None; setzt `self.wiederholung` (dict) oder laesst es None, wenn keine Marke lag."""
+        pfad = os.path.join(self.scratch, WIEDERHOLUNG_DATEI)
+        if not os.path.exists(pfad):
+            return
+        try:
+            with open(pfad, encoding="utf-8") as f:
+                self.wiederholung = json.load(f)
+        except Exception as e:                              # noqa: BLE001
+            # Die Marke LIEGT, also endete der vorige Start an einer siebenden Abweichung —
+            # nur ihr Inhalt fehlt. Gezaehlt wird sie trotzdem (fail-closed je Strang).
+            self.wiederholung = {"unlesbar": f"{type(e).__name__}: {e}"}
+            _log.error(f"compiled-model repeat mark unreadable ({e}) — this start is "
+                       f"still treated as the one fresh repetition")
+        try:
+            os.unlink(pfad)
+        except OSError as e:
+            _log.error(f"compiled-model repeat mark not removable ({e}) — the NEXT worker "
+                       f"start will also count as a repetition and stop at its first "
+                       f"filtering-stage deviation")
+        _log.warning(f"this worker start is the one fresh repetition after a compiled-model "
+                     f"deviation in a filtering stage ({self.wiederholung}) — a second "
+                     f"deviation stops this worker")
+
+    def erststart_ordnung_bauen(self):
+        """Baut vor Startprobe und erstem Job die Geometrien der Eichmarke in deren Reihenfolge.
+        -> None; ohne Eichmarke baut sie nichts (dann ist dies der Erst-Start, faul wie bisher)
+
+        Bauplan analysen/bauplan_pose_reihenfolge.md, Stufe R1: auf intel haengt das p-Kompilat an
+        der Bau-Vorgeschichte des Prozesses (Messung backups/release3_bau/messung_z1z2). Die
+        Eichmarke traegt ihre Zeilen in der Reihenfolge, in der der Erst-Start sie eingefuegt hat
+        (`_eichen` haengt eine neue Zeile hinten an, json erhaelt die Ordnung); eine zweite Liste
+        gibt es nicht. Zeilen, die keine Geometrie sind (die Kurzform „bild"), baut hier niemand.
+        Gebaut wird nur der Modellbestand der Geometrie; Warmlauf und Probe macht der erste Job wie
+        bisher. Scheitert ein Bau, steht das laut im Log, und der Rest entsteht wie bisher beim
+        ersten Job (dort greift der heutige Weg fuer Baufehler)."""
+        pfad = os.path.join(self.scratch, EICHMARKE_DATEI)
+        if not os.path.exists(pfad):
+            return
+        try:
+            with open(pfad, encoding="utf-8") as f:
+                zeilen = list(json.load(f).get("geometrien") or {})
+        except Exception as e:                              # noqa: BLE001
+            _log.error(f"first-start build order: calibration mark unreadable ({e}) — "
+                       f"geometries are built on demand by the first jobs")
+            return
+        for zeile in zeilen:
+            w, _x, h = str(zeile).partition("x")
+            if not (w.isdigit() and h.isdigit()):
+                continue
+            W, H = int(w), int(h)
+            t0 = time.monotonic()
+            try:
+                # Der Riegel selbst, nicht `_staffel`: vor dem ersten Job gibt es keinen Job zu
+                # buchen und niemanden, auf den zu warten waere.
+                with self._bau_schloss:
+                    neu = self.engine.geometrie_bauen({"x": (W, H, None)})
+                    with self._geo_schloss:
+                        for wh, g in neu.items():
+                            self.graphen[wh] = g
+                            self.zaehler["geometrien"] += 1
+                            self._geo_gebraucht(*wh)
+            except Exception as e:                          # noqa: BLE001
+                _log.error(f"first-start build order: building geometry {W}x{H} before the "
+                           f"first job failed ({type(e).__name__}: {e}) — the remaining "
+                           f"geometries are built on demand by the first jobs")
+                break
+            _log.info(f"built geometry {W}x{H} before the first job in "
+                      f"{time.monotonic() - t0:.1f}s (first-start order from the calibration mark)")
+
+    def siebend_behandeln(self, marke, befunde):
+        """Abweichung in einer Stufe, die die Kaskade siebt: beim ersten Mal gilt der Worker-Start
+        als fehlgeschlagen (Marke schreiben, KompilatNeustart), beim zweiten stoppt der Worker
+        LAUT und liefert keine Urteile mehr (Bauplan pose_kompilat, Stufe 1).
+        -> kehrt nie zurueck (wirft KompilatNeustart oder RuntimeError)"""
+        stufen = sorted({b.split(":", 1)[0] for b in befunde} & set(wk.siebende_stufen()))
+        text = (f"compiled-model probe {marke}: the filtering stage(s) {', '.join(stufen)} "
+                f"compute differently than the calibrated one — every face below their bar "
+                f"loses its recognition: " + " | ".join(befunde))
+        self.kompilat_bericht["siebend"] = stufen
+        neu = None
+        wiederholung = getattr(self, "wiederholung", None)   # getattr wie bei `auf_karte`
+        if wiederholung is None:
+            neu = {"geometrie": marke, "stufen": stufen, "befunde": befunde,
+                   "startnummer": os.environ.get("SUSLIK_STARTNUMMER")}
+            try:
+                with open(os.path.join(self.scratch, WIEDERHOLUNG_DATEI), "w",
+                          encoding="utf-8") as f:
+                    json.dump(neu, f, ensure_ascii=False)
+            except OSError as e:
+                # Ohne Marke wuesste der naechste Prozess nicht, dass er die Wiederholung
+                # ist — „genau einmal" waere nicht zu halten. Dann wird sofort gestoppt.
+                neu = None
+                text += f" (repeat mark not writable: {e})"
+        if neu is not None:
+            self.kompilat_bericht["stand"] = "siebend: worker-start wird wiederholt"
+            _log.error(text + " — this worker start counts as FAILED and is repeated ONCE "
+                       "in a fresh process; the job goes back to the service")
+            raise KompilatNeustart(text)
+        warum = ("it was already the fresh repetition" if wiederholung is not None
+                 else "a single fresh repetition cannot be guaranteed")
+        self.kompilat_gestoppt = (f"worker stopped: {text} — {warum}, so this worker delivers "
+                                  f"NO verdicts any more")
+        self.kompilat_bericht["stand"] = "gestoppt"
+        self.kompilat_bericht["grund"] = einzeilig(self.kompilat_gestoppt, 300)
+        _log.error(self.kompilat_gestoppt)
+        raise RuntimeError(self.kompilat_gestoppt)
 
     # ---------------------------------------------------------- Buchhaltung
     def offen_n(self):
@@ -2340,7 +2653,7 @@ class Dienst:
                 self.out.write(json.dumps(antwort, ensure_ascii=False) + "\n")
                 self.out.flush()
             except Exception as e:                         # noqa: BLE001
-                prozess_log(f"answer pipe broken ({type(e).__name__}: {e})")
+                _log.error(f"answer pipe broken ({type(e).__name__}: {e})")
 
     # ------------------------------------------------- .531 Kartenhaushalt
     def auf_karte(self):
@@ -2438,7 +2751,7 @@ class Dienst:
         st = self.ram_bericht()
         if st.get("own_mb") is None:
             return
-        prozess_log(f"ram own: {st['own_mb']} MB container (max "
+        _log.debug(f"ram own: {st['own_mb']} MB container (max "
                     f"{st['own_max_mb']}, threads={st['straenge']}, job {lauf.id})"
                     + (f" — limit {st['grenze_mb']} MB, base {st['grundlast_mb']} "
                        f"MB, suggestion {st['vorschlag_mb']} MB per thread"
@@ -2494,7 +2807,7 @@ class Dienst:
         self.zaehler["vram_druck"] += 1
         self._vram_letzter_text = einzeilig(text, 300)
         if art == "deckel":
-            prozess_log(f"vram pressure: ORT allocation failed inside our own cap "
+            _log.error(f"vram pressure: ORT allocation failed inside our own cap "
                         f"({_registry.VRAM_DRUCK_DATEI}, "
                         f"\"{_registry.VRAM_DRUCK_TEXTE['deckel']}\") — {text}")
             # .532 DER AUSWEG, den .531 nicht hatte: ein EINZELNER Treffer
@@ -2516,7 +2829,7 @@ class Dienst:
                     self._vram_straenge_senken = True
             if not senken:
                 return
-            prozess_log(f"vram pressure: our own arena cap was hit {treffer} "
+            _log.info(f"vram pressure: our own arena cap was hit {treffer} "
                         f"times in this process — asking for an ordered restart "
                         f"with ONE COMPUTE THREAD LESS; the cap itself is fixed "
                         f"for the lifetime of a process, so a smaller footprint "
@@ -2529,7 +2842,7 @@ class Dienst:
             # sonst eine Zeile je Sekunde.
             if not self.speicher._karte_gemeldet:
                 self.speicher._karte_gemeldet = True
-                prozess_log(f"vram pressure: {text} — NOT exiting; new geometry "
+                _log.info(f"vram pressure: {text} — NOT exiting; new geometry "
                             f"builds wait while the pressure lasts")
             # .544 M2: HIER ENDETE BIS .543 DER PROZESS. „Frei unter Reserve" ist
             # eine VORSORGE-Lage, kein Fehler: es ist noch nichts misslungen. Im
@@ -2547,7 +2860,7 @@ class Dienst:
             self._vram_druck_fremd_ts = time.monotonic()
             return
         if art == "hwdec":
-            prozess_log(f"vram pressure: hardware decode fell back ({text}) — "
+            _log.warning(f"vram pressure: hardware decode fell back ({text}) — "
                         f"card pressure outside the arena")
             # ABWEICHUNG VOM BAUPLAN, bewusst und hier begruendet: ein
             # Decoder-Rueckfall ist ein VERDACHT auf Kartendruck, kein Beweis —
@@ -2568,7 +2881,7 @@ class Dienst:
         # Was hier ankommt, ist `karte_voll` — ein ECHTER Allokationsfehler bei
         # voller Karte. Er hat den Retry aus M3a schon hinter sich (Verfall,
         # warten, ein zweiter Anlauf); jetzt hilft nur ein frischer Prozess.
-        prozess_log(f"vram pressure: ORT allocation failed with the card full "
+        _log.error(f"vram pressure: ORT allocation failed with the card full "
                     f"({_registry.VRAM_DRUCK_DATEI}, "
                     f"\"{_registry.VRAM_DRUCK_TEXTE['karte_voll']}\") — {text}"
                     + ("" if neustart else " — a second attempt follows after "
@@ -2623,11 +2936,11 @@ class Dienst:
             if frei >= res:
                 self._vram_druck_fremd_ts = 0.0
                 if gemeldet:
-                    prozess_log(f"vram pressure gone ({frei} MiB free, reserve "
+                    _log.info(f"vram pressure gone ({frei} MiB free, reserve "
                                 f"{res} MiB) — building the geometry now")
                 break
             if (time.monotonic() - t0) >= _gpubudget.KARTE_WARTE_FRIST_S:
-                prozess_log(f"vram pressure still on after "
+                _log.warning(f"vram pressure still on after "
                             f"{int(_gpubudget.KARTE_WARTE_FRIST_S)}s ({frei} MiB "
                             f"free, reserve {res} MiB) — building anyway rather "
                             f"than dropping the job")
@@ -2638,14 +2951,14 @@ class Dienst:
                 break
             if not gemeldet:
                 gemeldet = True
-                prozess_log(f"vram pressure: waiting before building a new "
+                _log.info(f"vram pressure: waiting before building a new "
                             f"geometry ({frei} MiB free, reserve {res} MiB, at "
                             f"most {int(_gpubudget.KARTE_WARTE_FRIST_S)}s)")
             if puls is not None:
                 try:
                     puls()
                 except Exception:                          # noqa: BLE001
-                    pass
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
             time.sleep(KARTE_TAKT_S)                       # Takt der Karten-Sonde
         wartete = time.monotonic() - t0
         # GEBUCHT WIRD DIE PAUSE GETRENNT, nicht als Bauzeit und nicht als
@@ -2690,11 +3003,11 @@ class Dienst:
                 gesamt, getattr(self, "vram_reserve_mb", -1))
             if frei >= noetig:
                 if gemeldet:
-                    prozess_log(f"card has room again ({frei} MiB free, {noetig} "
+                    _log.warning(f"card has room again ({frei} MiB free, {noetig} "
                                 f"MiB needed) — retrying job {lauf.id}")
                 break
             if (time.monotonic() - t0) >= _gpubudget.KARTE_WARTE_FRIST_S:
-                prozess_log(f"card still full after "
+                _log.warning(f"card still full after "
                             f"{int(_gpubudget.KARTE_WARTE_FRIST_S)}s ({frei} MiB "
                             f"free, {noetig} MiB needed) — retrying job "
                             f"{lauf.id} anyway rather than dropping the event")
@@ -2703,7 +3016,7 @@ class Dienst:
                 break
             if not gemeldet:
                 gemeldet = True
-                prozess_log(f"card full (job {lauf.id}): waiting for room after "
+                _log.info(f"card full (job {lauf.id}): waiting for room after "
                             f"the geometry expiry ({frei} MiB free, {noetig} MiB "
                             f"needed, at most "
                             f"{int(_gpubudget.KARTE_WARTE_FRIST_S)}s)")
@@ -2733,6 +3046,22 @@ class Dienst:
                          f"reachable through a fresh process",
                          schluessel="vram_druck")
 
+    def haenger_bitten(self, text):
+        """Nach einem gerissenen GPU-Auftrag um das geordnete Ende bitten, hoechstens EINMAL je Prozess.
+        -> None; Schluessel `gpu_haenger` (Bauplan GPU-Wartefrist, Stufe 1 Punkt 3).
+
+        Der GPU-Kontext ist nach einem Auftrag, der nicht zurueckkam, nicht mehr
+        vertrauenswuerdig; ein frischer Prozess ist der einzige belegte Weg zurueck (Kopf von
+        `verifyd.WorkerDienst.kill_hart`). Der Dienst schiesst den Prozess auf die Antwort
+        `haenger: true` ohnehin; die Bitte haelt bis dahin neue Jobs aus diesem Prozess heraus
+        (`annehmen`) und ist der geordnete Weg, falls der Schuss ausbleibt."""
+        if getattr(self, "_haenger_gebeten", False):
+            return
+        self._haenger_gebeten = True
+        self.ende_bitten(f"gpu hang: {einzeilig(text, 200)} — the GPU context is not "
+                         f"trustworthy after an abandoned request; only a fresh process is",
+                         schluessel="gpu_haenger")
+
     def vram_eigen_melden(self, lauf):
         """EINE Zeile je abgeschlossenem Analyse-Job: was DIESER Prozess auf
         der Karte haelt (.532).
@@ -2754,7 +3083,7 @@ class Dienst:
         geo = getattr(lauf, "geo", None)
         d_text = (f"{delta:+d} MiB" if delta is not None
                   else ("n/a (probe throttled)" if grund else "n/a (first)"))
-        prozess_log(f"vram own: {mb} MiB (pid {os.getpid()}, job {lauf.id}, "
+        _log.debug(f"vram own: {mb} MiB (pid {os.getpid()}, job {lauf.id}, "
                     f"delta {d_text} vs prev, threads={self.threads}, "
                     f"geos={geos}, geo="
                     + (f"{geo[0]}x{geo[1]}" if geo else "-") + ")")
@@ -2781,7 +3110,7 @@ class Dienst:
             self.zaehler["geometrien_verfallen"] += 1
             del weg
             gc.collect()
-            prozess_log(f"geometry {opfer[0]}x{opfer[1]} dropped under card "
+            _log.warning(f"geometry {opfer[0]}x{opfer[1]} dropped under card "
                         f"pressure (job {lauf.id}) — least recently used")
             return True
 
@@ -2810,7 +3139,7 @@ class Dienst:
             # Satz muesste er ihn wieder herausparsen, und genau diese
             # Rekonstruktion beendet der Log-Kontrakt.
             self.ende_schluessel = schluessel
-            prozess_log("orderly shutdown requested: " + grund
+            _log.info("orderly shutdown requested: " + grund
                         + (f" [{schluessel}]" if schluessel else ""))
         self.ende_pruefen()
 
@@ -2842,7 +3171,7 @@ class Dienst:
         des `fehler`. Der Aufrufer drueben bucht sie je Job-Id (WorkerDienst._buchen);
         aus dem Text liesse sie sich nur wieder herausparsen — dieselbe Rekonstruktion,
         die der Log-Kontrakt beendet."""
-        prozess_log("FATAL: " + grund)
+        _log.critical("FATAL: " + grund)
         for lauf in self.offene_jobs():
             self.antworten({
                 "id": lauf.id, "ok": False, "fehler": grund,
@@ -2904,10 +3233,105 @@ class Dienst:
             return
         lauf.rueckfaelle.add(art)
         self.zaehler["rueckfall_" + art] += 1
-        (lauf.log or self).zeile(f"WARN: fell back to {art} — {text}")
+        (lauf.log or self).zeile(f"WARN: fell back to {art} — {text}", stufe=_logbuch.WARNING)
 
-    def zeile(self, text):                                 # Notnagel, wenn kein JobLog
-        prozess_log(text)
+    @_logbuch.pass_through
+    def zeile(self, text, stufe=_logbuch.INFO):             # Notnagel, wenn kein JobLog
+        _log.log(stufe, text)
+
+    # ------------------------------------------------ Pruef-Kanal (E9 Weg B)
+    def pruef_beobachten(self, nur_aenderung):
+        """Z1 (lebende Rechenstraenge) im Takt und bei Aenderung, Z5 (Backend,
+        Einreichungen je Geraet seit der letzten Zeile) im Takt; nur lesend.
+        -> [(stufe, text)]."""
+        lebend = [t.name for t in list(self._arbeiter) if t.is_alive()]
+        stand = (self.threads, len(lebend))
+        zeilen = []
+        if not nur_aenderung or stand != getattr(self, "_pruef_strang_letzt", None):
+            self._pruef_strang_letzt = stand
+            ok = len(lebend) == self.threads
+            zeilen.append((_logbuch.INFO if ok else _logbuch.WARNING,
+                           f"PRUEF strang soll={self.threads} lebend={len(lebend)} "
+                           f"faeden={','.join(lebend) or '-'} | {'ok' if ok else 'MISMATCH'}"))
+        if nur_aenderung:
+            return zeilen
+        buch = dict(self.__dict__.get("_pruef_einreichungen") or {})
+        vorher = (self._pruef_einreichungen_letzt
+                  if hasattr(self, "_pruef_einreichungen_letzt") else {})
+        self._pruef_einreichungen_letzt = buch
+        neu = {g: n - vorher.get(g, 0) for g, n in buch.items() if n - vorher.get(g, 0)}
+        rf = sorted(k[len("rueckfall_"):] for k, v in self.zaehler.items()
+                    if k.startswith("rueckfall_") and v)
+        zeilen.append((_logbuch.INFO,
+                       f"PRUEF backend soll={os.environ.get('VERIFY_BACKEND') or self.a.engine} "
+                       f"gebunden={self.bindung.get('geraet')} "
+                       f"einreichungen={','.join(f'{g}:{n}' for g, n in sorted(neu.items())) or 0} "
+                       f"rueckfaelle={','.join(rf) or '-'}"))
+        # Bauplan K3, Stufe KP3 Punkt 3: die Zaehler der INFO-Zeile je Ereignis (Dienst.ende_melden),
+        # aufsummiert seit dem Start dieses Prozesses
+        z = self.zaehler
+        zeilen.append((_logbuch.INFO,
+                       f"PRUEF personenzahl ereignisse={z['pz_ereignisse']} "
+                       f"personen_frigate={z['pz_personen_frigate']} erkannt={z['pz_erkannt']} "
+                       f"alle_erkannt={z['ende_' + _tuer.ALLE_ERKANNT]} clip_ende={z['ende_' + _tuer.CLIP_ENDE]} "
+                       f"tuer_oeffnungen={z['tuer_oeffnungen']} zusatz_bilder={z['tuer_zusatz']} "
+                       f"ohne_fruehes_ende={z['ohne_fruehes_ende']}"))
+        return zeilen
+
+    # ------------------------------------------------ Inferenz-Messung (.546)
+    # WOZU, und woher die Frage kommt: am Wirt haengt die Compute-Engine — 45
+    # `GPU HANG` seit dem 10.08., jedes Mal mit `python` als schuldigem Prozess,
+    # am 21.09. sechs an einem Tag, der letzte um 21:52:16 an einem Nachhol-Job
+    # mit EINEM Rechenstrang. Die Fristen des Treibers stehen fest (Herzschlag
+    # 2500 ms, Compute-Preemption 7500 ms); was fehlt, ist die Gegenseite: wie
+    # lange steht EINE unserer Einreichungen wirklich, und wie viele liegen
+    # gleichzeitig auf der Karte. Die Messung liegt in der Engine (dort wird
+    # eingereicht), das Buch je JOB hier — beantwortet werden soll „welches
+    # Ereignis stand zur Hang-Sekunde auf der Karte", und das ist eine
+    # Ereignis-Frage.
+    #
+    # WO DIE ZEILEN LANDEN: beide im PROZESS-Log (fd 2) und damit im Prod-Log
+    # neben der `zeit:`-Zeile des Dienstes — genau der Datei, die gegen das
+    # Wirt-Journal gelegt wird. Die Langsam-Zeile schreibt die Engine SOFORT
+    # (der Melder unten), nicht erst am Jobende: nimmt der Hang den Prozess mit,
+    # gibt es keine Bilanz mehr, und die letzte Einreichung ist die gesuchte.
+    def inferenz_start(self, lauf):
+        """Das Inferenz-Buch dieses Ereignisses aufschlagen. Engines ohne Messung
+        (heute CUDA/MIGraphX/CPU) liefern die Methode nicht — dann bleibt es beim
+        alten Verhalten, ohne zweiten Weg und ohne stille Behauptung."""
+        lauf.inferenz = None
+        start = getattr(self.engine, "inferenz_buch_start", None)
+        if start is None:
+            return
+        try:
+            start(lauf.id, _inferenz_zeile)
+        except Exception as e:                             # noqa: BLE001
+            _log.warning(f"inference metering: could not start for job {lauf.id} "
+                        f"({type(e).__name__}: {e})")
+
+    def inferenz_ende(self, lauf):
+        """Es schliessen, die Bilanzzeile schreiben und die Zahlen an den Job
+        haengen (von dort gehen sie mit der Antwort nach /health). Steht sie im
+        `finally` des Ereignisses, gilt sie auch fuer den FEHLERFALL — und genau
+        der ist der interessante: ein Ereignis, das nach dem Engine-Reset mit
+        0 Gesichtern endet, hat seine letzte Einreichung trotzdem gemessen."""
+        ende = getattr(self.engine, "inferenz_buch_ende", None)
+        if ende is None:
+            return
+        try:
+            bilanz = ende()
+            if not bilanz or not bilanz.get("n"):
+                return
+            lauf.inferenz = bilanz
+            zeile = im.zeile_bilanz(bilanz)
+            if zeile:
+                _inferenz_zeile(zeile)
+            _geraet = str(bilanz.get("geraet") or "?")    # E9 Z5: nur zaehlen
+            _buch = self.__dict__.setdefault("_pruef_einreichungen", collections.Counter())
+            _buch[_geraet] += int(bilanz.get("n") or 0)
+        except Exception as e:                             # noqa: BLE001
+            _log.warning(f"inference metering: no summary for job {lauf.id} "
+                        f"({type(e).__name__}: {e})")
 
     # ---------------------------------------------------------- Jobs
     def annehmen(self, job):
@@ -2964,6 +3388,18 @@ class Dienst:
                             "ende_schluessel": self.ende_schluessel,
                             "rss_mb": rss_mb(), "fussabdruck_mb": fussabdruck_mb()})
             return
+        # getattr wie bei `auf_karte`: Proben stellen nur Teile des Dienstes auf.
+        if typ == "analyze" and getattr(self, "kompilat_gestoppt", None):
+            # Bauplan pose_kompilat, Stufe 1: dieser Worker ist an einer siebenden
+            # Kompilat-Abweichung LAUT gestoppt (ERROR-Zeile beim Stopp). Er liefert kein
+            # Urteil mehr (fail-closed); NICHT fremdverschuldet, denn ein Nachholen auf
+            # demselben Prozess traefe dasselbe Kompilat. Der Stand reist mit jeder Antwort
+            # und mit dem Lebenszeichen nach /health (`kompilat_probe`).
+            self.antworten({"id": str(job.get("id") or "?"), "ok": False,
+                            "fehler": self.kompilat_gestoppt,
+                            "kompilat_probe": dict(self.kompilat_bericht),
+                            "rss_mb": rss_mb(), "fussabdruck_mb": fussabdruck_mb()})
+            return
         lauf = self._anmelden(job)
         if typ not in ("analyze",) + HINTERGRUND_TYPEN:
             # Sauber absagen statt still nichts zu tun — ein Dienst, der einen Job
@@ -2998,7 +3434,7 @@ class Dienst:
             _gm = 0
         if _gm > 0 and _gm != self.geometrien_max:
             if _gm < self.geometrien_max:
-                prozess_log(f"geometry cap lowered {self.geometrien_max} -> {_gm} "
+                _log.info(f"geometry cap lowered {self.geometrien_max} -> {_gm} "
                             f"(job {job.get('id')}): the service recomputed it "
                             f"against the card as it is NOW")
             self.geometrien_max = _gm
@@ -3044,6 +3480,8 @@ class Dienst:
         ok, fehler, verwurf = True, None, None
         zusatz = {}
         opt = {"unbekannt": []}
+        haenger = False                    # GPU-Wartefrist, Stufe 1 Punkt 3 (s. unten)
+        neustart = None                    # Bauplan pose_kompilat, Stufe 1 (s. unten)
         # .531 EIN ZWEITER ANLAUF, und nur EINER: trifft der eigene Arena-Deckel,
         # bringt ein sofortiger Wiederholungsversuch nichts — er traefe dieselbe
         # Arithmetik. Erst muss Platz entstehen (Verfall der aeltesten
@@ -3065,10 +3503,29 @@ class Dienst:
             except SystemExit as e:                        # kontrollierter Abbruch
                 ok, fehler = (e.code in (0, None)), f"exit {e.code}"
                 if not ok:
-                    lauf.log.zeile(f"FEHLER: {e.code}")
+                    lauf.log.zeile(f"FEHLER: {e.code}", stufe=_logbuch.ERROR)
             except Exception as e:                         # noqa: BLE001
                 ok, fehler = False, einzeilig(f"{type(e).__name__}: {e}")
-                lauf.log.zeile(f"FEHLER: {fehler}")
+                lauf.log.zeile(f"FEHLER: {fehler}", stufe=_logbuch.ERROR)
+                # Bauplan GPU-Wartefrist, Stufe 1 Punkt 3: ein GPU-Auftrag kam nicht binnen
+                # seiner Frist zurueck (engine_ov.abwarten, die ERROR-Zeile steht schon im
+                # Prozess-Log). Die Rechnung ist damit abgebrochen; KEIN zweiter Anlauf auf
+                # demselben Kontext, die Antwort traegt `haenger: true`, und der Prozess bittet
+                # um sein Ende. Die Klasse kommt von der Engine (`haenger_klasse`); Engines
+                # ohne Wartefrist liefern keine, dort bleibt es beim Weg darunter.
+                _hk = getattr(self.engine, "haenger_klasse", None)
+                if _hk is not None and isinstance(e, _hk):
+                    haenger = True
+                    self.haenger_bitten(fehler)
+                    break
+                # Bauplan pose_kompilat, Stufe 1: erste Abweichung in einer siebenden Stufe.
+                # Der Worker-Start gilt als fehlgeschlagen — geordnetes Ende, und der Job geht
+                # als fremdverschuldet an den Dienst zurueck (er wird auf dem frischen Prozess
+                # wiederholt, ohne Strafe; derselbe Rueckweg wie beim geordneten Ende).
+                if isinstance(e, KompilatNeustart):
+                    neustart = fehler
+                    self.ende_bitten(fehler, schluessel="kompilat_siebend")
+                    break
                 # E-P7 (.507): die Einordnung der Clip-Ausnahmen lebt in
                 # core.frames — die Akte trennt damit „Frigate hat den Clip nicht
                 # (mehr)" vom allgemeinen Abbruch. Eine Einordnung darf nie die
@@ -3109,7 +3566,7 @@ class Dienst:
                     if nochmal:
                         self._vram_wiederholt.add(lauf.id)
                         self.zaehler["vram_wiederholungen"] += 1
-                        prozess_log(f"vram pressure: job {lauf.id} retried after "
+                        _log.info(f"vram pressure: job {lauf.id} retried after "
                                     f"the oldest extra geometry expired — the "
                                     f"analysis resumes from results.jsonl")
                         continue
@@ -3152,7 +3609,7 @@ class Dienst:
             try:
                 self.vram_eigen_melden(lauf)
             except Exception as e:                         # noqa: BLE001
-                prozess_log(f"vram own: could not be reported "
+                _log.warning(f"vram own: could not be reported "
                             f"({type(e).__name__}: {e})")
         # .534 (B3): dieselbe Kadenz fuer den CONTAINER-Speicher, aber OHNE die
         # Karten-Bedingung — auf der Feldmaschine liefert die Karten-Sonde je
@@ -3161,7 +3618,7 @@ class Dienst:
             try:
                 self.ram_eigen_melden(lauf)
             except Exception as e:                         # noqa: BLE001
-                prozess_log(f"ram own: could not be reported "
+                _log.warning(f"ram own: could not be reported "
                             f"({type(e).__name__}: {e})")
         # E6 (17.09.2026): dieselbe Kadenz fuer die AMD-Speicherlage aus sysfs.
         # Sie ist auf diesem Backend die EINZIGE Karten-Auskunft — der
@@ -3175,7 +3632,7 @@ class Dienst:
             try:
                 _spei(f"after job {lauf.id}")
             except Exception as e:                         # noqa: BLE001
-                prozess_log(f"gpu memory: could not be reported "
+                _log.error(f"gpu memory: could not be reported "
                             f"({type(e).__name__}: {e})")
         # .531: derselbe Kartenhaushalt wie im Lebenszeichen. Er gehoert zu jedem
         # Urteil, das dieser Prozess faellt — ein Ereignis, das unter Kartendruck
@@ -3198,6 +3655,13 @@ class Dienst:
                                  "decoder": lauf.decoder,
                                  "kompilat_s": round(lauf.kompilat_s, 2) or None,
                                  "staffel_s": round(lauf.staffel_s, 2) or None}
+        # .546 (Hang-Suche): die Inferenz-Bilanz des Ereignisses. EIGENES Feld
+        # neben `zeiten`, weil sie eine andere Frage beantwortet — `zeiten` teilt
+        # die Platzzeit auf, das hier misst die einzelne Einreichung auf der
+        # Karte. Fehlt das Feld, misst diese Engine nicht (s. inferenz_start);
+        # ein leeres `{}` waere die Behauptung „gemessen, nichts gefunden".
+        if lauf.typ == "analyze" and lauf.inferenz:
+            antwort["inferenz"] = dict(lauf.inferenz)
         # E3.3 / Bauplan 2e — DER FELDSCHNITT: `placement_fallback` ist die Liste
         # DIESES Jobs, nicht mehr die des Prozesses.
         #
@@ -3217,6 +3681,12 @@ class Dienst:
         # und sie hat einen anderen Namen, weil sie eine andere Frage beantwortet.
         antwort["placement_fallback_prozess"] = sorted(
             k[len("rueckfall_"):] for k in self.zaehler if k.startswith("rueckfall_"))
+        # Feldbefunde Punkt 6 (O290): das Merkmal der Personen-Sitzung DIESES Prozesses
+        # (core/personmodell.FALLBACK), ueber denselben Weg wie die Prozess-Felder
+        # darueber; ohne geladenes Modul gibt es keine Sitzung und keinen Rueckfall.
+        _pm = sys.modules.get("core.personmodell")
+        antwort["person"] = (dict(_pm.FALLBACK) if _pm is not None
+                             else {"fallback": False, "backend": None})
         if lauf.kompilat_n:
             # E3.3 (W2-B29): der Kompilat-/Geometrie-Bau, DIESEM Job gebucht. Ohne das
             # Feld steckt der Bauschritt unsichtbar in `wall_s` und `fussabdruck_mb`.
@@ -3238,6 +3708,16 @@ class Dienst:
             antwort["fehler"] = fehler
         if verwurf:
             antwort["verwurf_grund"] = verwurf
+        if haenger:
+            # Das Feld, an dem der Dienst den Haenger-Schuss festmacht (verifyd.WorkerDienst.job).
+            antwort["haenger"] = True
+        if neustart:
+            # Felder wie in `annehmen` beim geordneten Ende: der Dienst stellt das Ereignis
+            # zurueck und startet beim naechsten Job den frischen Prozess.
+            antwort.update({"fremdverschuldet": True,
+                            "todesursache": "kompilat siebend: worker-start wiederholt",
+                            "todesursache_text": einzeilig(neustart, 300),
+                            "ende_schluessel": self.ende_schluessel})
         return antwort
 
     # ---------------------------------------------------------- Hintergrund-Jobs (E2c)
@@ -3385,7 +3865,7 @@ class Dienst:
             return {"norm": _nl.norm_job(
                 job["lauf_dir"], job.get("eids") or [],
                 job.get("schwellen") or {}, job.get("latten") or {},
-                messen=_messen, log=lauf.log.zeile)}
+                messen=_messen, log=_logbuch.Adapter(lauf.log.zeile))}
         if typ == "passernte":
             import anlernen as _al_pe                       # noqa: PLC0415
             from core import passernte as _pe               # noqa: PLC0415
@@ -3396,7 +3876,7 @@ class Dienst:
             return {"passernte": _pe.passernte_job(
                 job["lauf_dir"], job.get("eids") or [], job["person"],
                 _refs_pe, job.get("id_werte") or {},
-                int(job.get("je_event") or 0), log=lauf.log.zeile)}
+                int(job.get("je_event") or 0), log=_logbuch.Adapter(lauf.log.zeile))}
         if typ == "rechenprobe":
             return self.rechenprobe(lauf, job)
         if typ == "startprobe":
@@ -3485,25 +3965,20 @@ class Dienst:
         """DER PRUEFVEKTOR DER KURZFORM: ein fester 112er-Ausschnitt, durch die
         ERKENNUNGS-Stufe des Bild-Wegs gerechnet. -> (embedding-Liste, feature-norm)
 
-        WARUM NICHT `Satz.probe`: die haengt an einer gebauten Video-GEOMETRIE. Nach
+        WARUM NICHT `wk.kompilat_probe`: die haengt an einer gebauten Video-GEOMETRIE. Nach
         einem Betriebs-Neustart gibt es keine — der erste Clip baut sie erst, und bis
         dahin waere die Kurzform blind. Der Bild-Weg dagegen steht ohne Clip und ohne
         Geometrie; er rechnet DIESELBEN Modelle (E2c: eine Fabrik, ein Kompilat).
 
-        DAS BILD IST KEIN BILD, sondern eine Rechenvorschrift: `engine_ov.PROBE_SAAT`
+        DAS BILD IST KEIN BILD, sondern eine Rechenvorschrift: `wk.PROBE_SAAT`
         — dieselbe Saat, aus der die Kompilat-Probe ihren NV12-Pruefvektor baut. Eine
         zweite Saat (oder gar eine JPEG-Datei im Image) gibt es bewusst nicht: eine
         Konserve waere Material im Release (verboten) und eine zweite Zahl im Haus.
-        Die Formel ist die von `engine_ov.probe_nv12`, auf BGR uebertragen; sie ist
-        deterministisch und auf jeder Maschine dieselbe."""
-        try:
-            from engine_ov import PROBE_SAAT                 # noqa: PLC0415
-        except Exception:                                    # noqa: BLE001
-            # Auf einem Backend ohne engine_ov (CUDA-Image) liegt die Saat nicht
-            # daneben. Sie ist eine reine ZAHL, kein OpenVINO-Ding — deshalb hier der
-            # dokumentierte Rueckfall auf denselben Wert statt eines zweiten Literals
-            # irgendwo im Haus.
-            PROBE_SAAT = 20260913                            # engine_ov.py:87
+        Die Formel ist die von `wk.probe_nv12`, auf BGR uebertragen; sie ist
+        deterministisch und auf jeder Maschine dieselbe. Seit Stufe 2 des Pose-Bauplans
+        liegt die Saat im Kern, der auf jedem Backend geladen ist — der fruehere
+        Rueckfall auf ein zweites Literal fuer Images ohne engine_ov entfaellt."""
+        PROBE_SAAT = wk.PROBE_SAAT
         i, j = np.meshgrid(np.arange(112), np.arange(112), indexing="ij")
         b = (16 + ((i * 7 + j * 13 + ((i * j) >> 6) + PROBE_SAAT) % 220)).astype(np.uint8)
         g = (16 + ((i * 11 + j * 5 + PROBE_SAAT) % 225)).astype(np.uint8)
@@ -3532,8 +4007,8 @@ class Dienst:
              Eichung? Der Vektor ist deterministisch (s. `pruefbild`), der Vergleich
              derselbe wie bei der Kompilat-Probe (`probe_vergleich` gegen die
              Eichmarke, Kosinus + Feature-Norm, unter demselben Umfeld-Vorbehalt).
-             Auf CUDA ist das der EINZIGE Kompilat-Nachweis ueberhaupt: `Satz.probe`
-             gibt es dort nicht (s. engine_bauen).
+             Sie ergaenzt die Kompilat-Probe je Geometrie (`wk.kompilat_probe`, seit
+             Stufe 2 des Pose-Bauplans auf jeder Engine), weil sie ohne Clip laeuft.
 
         EIN HARTER BEFUND BEENDET DEN JOB MIT FEHLER — der Prozess produziert keine
         Namen aus einem Kompilat, das nachweislich anders rechnet. Ein Umfeld-Wechsel
@@ -3551,16 +4026,20 @@ class Dienst:
             bericht["stand"] = "bindung weg"
             self.startprobe_bericht = bericht
             lauf.log.zeile("FEHLER: short start proof: the accelerator is no longer "
-                           "bound — this process must not produce names")
+                           "bound — this process must not produce names", stufe=_logbuch.ERROR)
             raise RuntimeError("short start proof: accelerator not bound")
-        emb, norm = self.pruefbild()
+        # Pose-Bauplan Stufe 3: die Probe samt Anlage des Bild-Wegs und dem Bau seiner
+        # Erkennungs-Stufe laeuft nie neben einem Geometrie-Bau — derselbe Riegel, s.
+        # `_bau_schloss`; Anlage und Stufen-Bau darin betreten ihn im selben Strang erneut.
+        with self._staffel(lauf, "short start proof"):
+            emb, norm = self.pruefbild()
         endlich = all(np.isfinite(emb)) and len(emb) == 512 and norm > 0
         bericht["pruefbild"] = {"dim": len(emb), "norm": norm, "endlich": endlich}
         if not endlich:
             bericht["stand"] = "pruefbild unbrauchbar"
             self.startprobe_bericht = bericht
             lauf.log.zeile(f"FEHLER: short start proof: the check image produced an "
-                           f"unusable embedding (dim {len(emb)}, norm {norm})")
+                           f"unusable embedding (dim {len(emb)}, norm {norm})", stufe=_logbuch.ERROR)
             raise RuntimeError("short start proof: unusable check embedding")
         # Gegen DIESELBE Eichmarke wie die Kompilat-Probe, unter dem Schluessel
         # „bild": `probe_vergleich` vergleicht die Erkennungs-Stufe als ZAHL
@@ -3577,10 +4056,10 @@ class Dienst:
             self.zaehler["startprobe_abweichung"] += 1
             text = ("short start proof FAILED: this process computes the recognition "
                     "stage differently than the calibrated one — " + " | ".join(befunde))
-            prozess_log("FATAL: " + text)
-            lauf.log.zeile("FEHLER: " + text)
+            _log.critical("FATAL: " + text)
+            lauf.log.zeile("FEHLER: " + text, stufe=_logbuch.ERROR)
             raise RuntimeError(text)
-        prozess_log(f"short start proof ({grund}): {urteil} — bound to "
+        _log.info(f"short start proof ({grund}): {urteil} — bound to "
                     f"{bericht['geraet']}, {bericht['personen_mit_vektoren']} "
                     f"person(s) with vectors, ||f|| {norm}"
                     + (f", notes: {' | '.join(befunde)}" if befunde else ""))
@@ -3594,7 +4073,8 @@ class Dienst:
         fehlender Zeile eichen — mitten in der Geometrie-Probe. Die Kurzform braucht
         genau dieselbe Mechanik fuer ihren eigenen Schluessel; sie ein zweites Mal
         hinzuschreiben waere die Streuung, gegen die die Hausregel steht.
-        -> ("geeicht", []) heisst „diese Zeile gab es noch nicht, sie steht jetzt"."""
+        -> ("geeicht", []) heisst „diese Zeile gab es noch nicht, sie steht jetzt";
+           ("nicht geeicht", []) heisst „sie fehlt, und ein Prozess mit Start > 1 setzt sie nicht"."""
         pfad = os.path.join(self.scratch, EICHMARKE_DATEI)
         with self._eich_schloss:
             eich = {}
@@ -3602,25 +4082,36 @@ class Dienst:
                 try:
                     eich = json.load(open(pfad, encoding="utf-8"))
                 except Exception as e:                      # noqa: BLE001
-                    prozess_log(f"calibration mark unreadable ({e}) — starting a new one")
+                    _log.error(f"calibration mark unreadable ({e}) — starting a new one")
                     eich = {}
             umfeld = self._eich_umfeld or eich_umfeld(self.engine)
             self._eich_umfeld = umfeld
             neu = eich.get("umfeld") != umfeld
             if neu and eich:
-                prozess_log("compute environment changed (OpenVINO/driver/model/engine "
+                _log.info("compute environment changed (OpenVINO/driver/model/engine "
                             "code) — renewing the compiled-model calibration mark; other "
                             "numbers are correct here")
             if neu:
                 eich = {"umfeld": umfeld, "geometrien": {}}
             soll = (eich.get("geometrien") or {}).get(marke)
+            # Pose-Bauplan Stufe 4 (O521 Punkt 2): nur der Erst-Start eicht. Ein Prozess mit
+            # Start > 1 (Startnummer des Dienstes wie core/logbuch, oder die eine Wiederholung)
+            # baut nach dem Analysebefund r2-0031 anders, sein Kompilat darf kein Soll werden.
+            start = os.environ.get("SUSLIK_STARTNUMMER") or "1"
+            wiederholt = getattr(self, "wiederholung", None) is not None   # wie siebend_behandeln
+            if soll is None and (start != "1" or wiederholt):
+                _log.warning(f"compiled-model probe {marke}: no calibration mark yet, and this "
+                             f"process (start #{start}, repetition {wiederholt}) "
+                             f"must not write one — only a first start calibrates; {marke} stays "
+                             f"UNGUARDED in this process")
+                return "nicht geeicht", []
             if soll is None:
                 eich.setdefault("geometrien", {})[marke] = ist
                 try:
                     with open(pfad, "w", encoding="utf-8") as f:
                         json.dump(eich, f, ensure_ascii=False, indent=1)
                 except OSError as e:                        # noqa: BLE001
-                    prozess_log(f"calibration mark not writable ({e}) — the probe "
+                    _log.warning(f"calibration mark not writable ({e}) — the probe "
                                 f"cannot compare on the next start")
                 return "geeicht", []
         return probe_vergleich(soll, ist)
@@ -3643,7 +4134,7 @@ class Dienst:
                     try:
                         done.add(json.loads(z)["label"])
                     except Exception:                      # noqa: BLE001
-                        pass
+                        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
             if done:
                 lauf.log.zeile(f"Resume: {len(done)} Clips bereits in results.jsonl, "
                                f"werden übersprungen.")
@@ -3651,7 +4142,10 @@ class Dienst:
         profil = mk_bilanz.profil(mk_bilanz.ZWECK_ANALYSE, {
             "det_min": float(opt["argv_fest"]["det_thresh"]),
             "guete_e_min": lat["guete_e"], "guete_t_min": lat["guete_t"],
-            "pose_min": lat["pose"], "kante_min": lat["urteil_kante"]})
+            "pose_min": lat["pose"], "kante_min": lat["urteil_kante"],
+            # Bauplan K3, KP1 Punkt 7: das Norm-Sieb wirkt auf diesem Weg (worker_kern,
+            # 0 = aus), also nennt das Profil seine Grenze statt None.
+            "norm_min": lat["urteil_norm_min"]})
         personen = list(opt["persons"])
         # Jede angefragte Person muss einen Score bekommen, auch ohne Referenzen
         # (analyze.nn liefert dort -1.0) — der Kern baut sein `ohne`-dict aus dieser
@@ -3678,6 +4172,33 @@ class Dienst:
             # Dienst, der die Ereignisse ueber die Zeit sieht — nicht hier.
             aus["null_gesichter_serie"] = self.null_serie
         return aus
+
+    def rechnen_mit_neulauf(self, vid, schritt, rechnen):
+        """Rechnet EIN Ereignis und, wenn die Hardware-Kette mitten im Clip starb, genau
+        einmal ganz neu mit Software-Decode (Bauplan analysen/bauplan_stoerstelle.md, Fassung 4).
+        -> (DecoderWache des letzten Laufs, Rueckgabe von `rechnen`, Neulauf-Dict oder None)
+
+        `rechnen(tor)` ist die Rechnung des Ereignisses hinter dem EngineTor. Steht nach dem
+        Lauf worker_kern.HW_TEILABBRUCH in `wache.roh`, verfaellt dieser Lauf: das Flag
+        `neulauf` wird gesetzt, eine frische Wache traegt worker_kern.SW_ERZWUNGEN, und
+        `rechnen` laeuft noch einmal von Frame 0 an ueber den Software-Rueckfall. Ein gesetztes
+        Flag verhindert jede zweite Wiederholung. Das Neulauf-Dict nennt Kette, Grund und
+        Fortschritt des Abbruchs und die Dauer des Neulaufs in Sekunden; die Log-Zeile dazu
+        schreibt der Dienst (verifyd.Service.neulauf_zeile)."""
+        neulauf = None
+        while True:
+            wache = DecoderWache(vid, schritt)
+            if neulauf is not None:
+                wache.roh[wk.SW_ERZWUNGEN] = neulauf["grund"]
+            t0 = time.monotonic()
+            ergebnis = rechnen(EngineTor(self.engine, wache))
+            if neulauf is not None:
+                neulauf["dauer_s"] = round(time.monotonic() - t0, 2)
+                return wache, ergebnis, neulauf
+            if not wache.roh.get(wk.HW_TEILABBRUCH):
+                return wache, ergebnis, None
+            neulauf = {"kette": wache.kette, "grund": wache.roh[wk.HW_TEILABBRUCH],
+                       "abbruch_bei": wache.gelesen}
 
     def event_lauf(self, lauf, opt, job, eid, label, lat, g_aus, pose_aus, profil,
                    personen, alle, outdir, results_pfad):
@@ -3732,12 +4253,36 @@ class Dienst:
             except OSError:
                 lauf.abruf_bytes = None
         _t_nach_abruf = time.monotonic()
+        # .546: ab HIER wird jede Einreichung dieses Ereignisses gemessen — der
+        # Warmlauf einer frisch gebauten Geometrie gehoert dazu, er rechnet auf
+        # derselben Karte wie die Analyse danach.
+        self.inferenz_start(lauf)
         try:
             meta = decode._probe(vid) or {}
             W, H = int(meta.get("breite") or 0), int(meta.get("hoehe") or 0)
             fps = meta.get("fps") or 25
             if not (W and H):
-                raise RuntimeError(f"keine Videogeometrie fuer {eid}")
+                # O505 F2 und F3 (Bauplan analysen/bauplan_videogeometrie_fix.md): der Text
+                # nennt die Ursache, und eine LEERE Datei aus dem Cache wird verworfen, bevor
+                # der Fehler steigt — sonst nimmt jeder Nachhol-Versuch denselben leeren
+                # Treffer und fragt Frigate nie wieder. Pin-Vertrag: erst den eigenen Pin
+                # loesen, dann nur loeschen, wenn kein anderer Halter die Datei haelt
+                # (core/frames.gepinnt); das finally unten loest den Pin noch einmal, frei()
+                # vertraegt das.
+                try:
+                    _leer = os.path.getsize(vid) == 0
+                except OSError:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "size unknown, not empty")
+                    _leer = False
+                if _leer and pin:
+                    clipcache.frei(pin)
+                    if not clipcache.gepinnt(vid):
+                        try:
+                            os.remove(vid)
+                        except OSError:
+                            _logbuch.swallowed(_log, _logbuch.WARNING, "cached clip kept")
+                raise RuntimeError(f"no video geometry for {eid}: " + (
+                    "file is 0 bytes" if _leer else "no video stream (ffprobe)"))
             # .540 K-DECKEL: DIE Schrittweite kommt aus der EINEN Formel
             # (decode.sample_schritt — Herleitung, Messbasis und ehrliche Grenzen
             # stehen dort, nicht hier). Sie deckelt die Zahl der Sample-Frames je
@@ -3753,13 +4298,23 @@ class Dienst:
             _gekappt = (_s_moegl is not None and _s_verw is not None
                         and _s_verw < _s_moegl)
             g = self.geometrie(W, H, fps, lauf)
-            wache = DecoderWache(vid, schritt)
-            tor = EngineTor(self.engine, wache)
-            vorrat = wk.Bildvorrat(W, H, lat, self.mit_refs, self.erk, self.modell)
-            zaehler, zeiten = collections.Counter(), collections.Counter()
-            zeilen, _frames = wk.event_rechnen(
-                tor, g, vid, schritt, float(fest["det_thresh"]), fps,
-                alle, self.mit_refs, self.erk, lat, zaehler, zeiten, vorrat)
+            # Bauplan K3, Stufe KP3: die Personenzahl dieses Ereignisses (Job-Feld); fehlt sie oder ist
+            # sie unbrauchbar (0, kein Typ), None = kein fruehes Ende, keine Obergrenze im Stapel
+            pz = _personenzahl.gueltig((opt.get("personenzahl") or {}).get(str(eid)))[0]
+
+            def rechnen(tor):
+                # je Lauf ein frischer Vorrat: im Stoerstellen-Neulauf verfaellt der Erstversuch
+                vorrat = wk.Bildvorrat(W, H, lat, self.mit_refs, self.erk, self.modell)
+                zaehler, zeiten, ende = collections.Counter(), collections.Counter(), {}
+                zeilen, _frames = wk.event_rechnen(
+                    tor, g, vid, schritt, float(fest["det_thresh"]), fps,
+                    alle, self.mit_refs, self.erk, lat, zaehler, zeiten, vorrat,
+                    personenzahl=pz, ende=ende)
+                return vorrat, zeilen, ende
+
+            wache, (vorrat, zeilen, ende), neulauf = self.rechnen_mit_neulauf(vid, schritt, rechnen)
+            if ende.get("geplant") is not None:
+                wache.ende_planen(ende["geplant"])     # KP3 Punkt 2: die Wache misst bis hierher
             # .534 (B5): vom fertigen Clip bis zum ERSTEN gelieferten Bild. Darin
             # steckt der Decoder-Start und — wenn eine Geometrie erst gebaut
             # werden musste — der Bau; der steht als `kompilat_s` daneben, damit
@@ -3771,6 +4326,7 @@ class Dienst:
         finally:
             if pin:
                 clipcache.frei(pin)                        # nie eine Pin-Waise
+            self.inferenz_ende(lauf)                       # .546, auch im Fehlerfall
         # --- Wachen-Zeilen VOR dem Ergebnisblock (analyze.py:796-809: qs schneidet
         #     mit tail das ENDE, die Ergebniszeilen muessen dort bleiben)
         if _gekappt:
@@ -3785,36 +4341,43 @@ class Dienst:
                 f"  sample budget: capped to {_s_verw} of {_s_moegl} sample frames "
                 f"(cap {_deckel}, every {schritt}th frame instead of every "
                 f"{max(1, int(round(fps / float(fest['fps_sample']))))}th, "
-                f"spread evenly over the whole clip)")
+                f"spread evenly over the whole clip)", stufe=_logbuch.INFO)
         if wache.hwdec_fallback:
             # E2d, Konzept §4: LAUT, aber genau EINMAL je Ereignis (User 13.09.).
             # `rueckfall_melden` fuehrt den Zaehler und traegt die Art in
             # `placement_fallback` der Antwort — dieselbe Meldeform wie fuer jeden
             # anderen Rueckfall, kein zweiter Weg.
             self.rueckfall_melden(lauf, "hwdec", wache.hwdec_grund or "")
+            # Feldbefunde Punkt 14 (O313): eine DECODER-GRENZE (CUDA-Fehler aus
+            # cuvidCreateDecoder, Issue #33) ist kein Kartendruck — keine Zaehlung als
+            # Druck, keine Neustart-Bitte; die Zeile nennt den Fehler.
+            _grenze = decode.nvdec_fehler_ist_grenze(wache.hwdec_grund)
             # .531 DRUCK-SIGNAL 4: der NVDEC-ffmpeg liegt AUSSERHALB jeder
             # ORT-Arena (eigener Prozess). Faellt er zurueck, kann das an der
             # Karte liegen — und ein Deckel auf unserer Arena sieht davon nichts.
-            if self.auf_karte():
+            if self.auf_karte() and not _grenze:
                 self.druck_buchen("hwdec", einzeilig(wache.hwdec_grund or "", 200))
             lauf.log.zeile(
-                f"WARN: hardware decode unavailable — fell back to software decode "
-                f"(same NV12 bytes, slower): {einzeilig(wache.hwdec_grund or '', 200)}")
+                "WARN: hardware decode unavailable"
+                + (f" at a decoder limit ({_grenze}, not card memory pressure)"
+                   if _grenze else "")
+                + f" — fell back to software decode "
+                f"(same NV12 bytes, slower): {einzeilig(wache.hwdec_grund or '', 200)}", stufe=_logbuch.WARNING)
         if wache.teilabbruch:
             # EINE Zeile je Ereignis (User 13.09.), Wortlaut wie analyze.py:809.
             self.rueckfall_melden(lauf, "hwdec", wache.teilabbruch)
             if self.auf_karte():
                 self.druck_buchen("hwdec", einzeilig(wache.teilabbruch, 200))
-            lauf.log.zeile("WARN: hardware decode aborted mid-clip — judged the readable part")
+            lauf.log.zeile("WARN: hardware decode aborted mid-clip — judged the readable part", stufe=_logbuch.WARNING)
         if wache.unvollstaendig:
             lauf.log.zeile(
                 f"WARN: clip incomplete — read {wache.gelesen} of {wache.soll} frames "
                 f"({wache.verlust_pct:.0f}% lost"
                 + (f", {wache.decoder_fehler} decoder errors" if wache.decoder_fehler else "")
-                + "); judging the readable part (flagged)")
+                + "); judging the readable part (flagged)", stufe=_logbuch.WARNING)
         fd_n = sum(1 for f in zeilen if f["fd"])
         lauf.log.zeile(
-            f"\n=== {label}  ({eid}) — {wache.samples} Frames, {len(zeilen)} Gesichter ==="
+            f"\n=== {label}  ({eid}) — {wache.geliefert} Frames, {len(zeilen)} Gesichter ==="
             + (f"  [{fd_n} als Fehldetektion gefiltert (Zaehlung/Pool, nicht Urteil)]"
                if fd_n else ""))
         if wache.samples == 0:
@@ -3823,7 +4386,7 @@ class Dienst:
             # Fehlerserien-Waechter haengt daran. Der Wortlaut ist der von
             # analyze.py:814 — webui.bausteine.fehler_grund liest die letzte mit
             # „FEHLER" beginnende Zeile.
-            lauf.log.zeile("  FEHLER: keine Frames lesbar — kein results-Eintrag fuer dieses Label")
+            lauf.log.zeile("  FEHLER: keine Frames lesbar — kein results-Eintrag fuer dieses Label", stufe=_logbuch.ERROR)
             return {"frames": {"gelesen": 0, "soll": wache.soll, "samples": 0,
                                "kette": wache.kette, "leer": True,
                                **({"hwdec_fallback": True} if wache.hwdec_fallback else {})}}
@@ -3845,9 +4408,17 @@ class Dienst:
                 f"bestes 3s-Fenster {rec['win3s']}×≥{lat['win_thresh']:.2f}{bl}   "
                 f"(bestes {rec['best_wh']} t={rec['best_t']:.0f}s)")
         stat = self.stat_bauen(zeilen, lat, g_aus, pose_aus)
+        # Bauplan K3, Stufe KP1: der Stapel aus den ungerundeten Zeilen; seit KP3 mit der
+        # Personenzahl als Obergrenze (None = keine). stapel_stimmen 0 (Feld nicht geschickt) = kein Stapel.
+        stapel = (_stapel.entscheiden(zeilen, lat, lat["stapel_stimmen"], pz)
+                  if lat["stapel_stimmen"] > 0 else None)
+        self.ende_melden(eid, label, pz, ende, stapel, lat)
+        # KP3: bei einem fruehen Ende liegen weniger Raster-Punkte vor als moeglich, ohne dass der
+        # Sample-Deckel gegriffen hat; die Akte nennt ihn dann nur, wenn er wirklich griff.
         zeile = results_zeile(label, eid, zeilen, persons_fuer_akte(persons_voll, idx_karte),
-                              wache, lat, stat, profil,
-                              samples_moeglich=_s_moegl, sample_deckel=_deckel)
+                              wache, lat, stat, profil, samples_moeglich=_s_moegl,
+                              sample_deckel=(_deckel if (_gekappt or wache.geplant is None) else 0),
+                              stapel=stapel)
         # pro Clip SOFORT persistieren, geflusht (analyze.py:925-1004)
         with open(results_pfad, "a", encoding="utf-8") as rf:
             rf.write(json.dumps(zeile, default=float, ensure_ascii=False) + "\n")
@@ -3877,7 +4448,36 @@ class Dienst:
                                "hwdec_grund": einzeilig(wache.hwdec_grund or "", 200)}
                               if wache.hwdec_fallback else {}),
                            **({"fehlen": True} if wache.unvollstaendig else {}),
-                           **({"teilabbruch": wache.teilabbruch} if wache.teilabbruch else {})}}
+                           **({"teilabbruch": wache.teilabbruch} if wache.teilabbruch else {}),
+                           # Bauplan K3, KP3: ein Fehler der eigenen Logik schaltete das fruehe
+                           # Ende ab (ERROR in core.tuer); verifyd zaehlt das in /health
+                           **({"fruehes_ende_fehler": True} if ende.get("logik_fehler") else {}),
+                           # Stoerstelle (Fassung 4): das Ereignis wurde nach einem
+                           # Hardware-Abbruch mitten im Clip ganz auf Software neu
+                           # gerechnet; verifyd schreibt daraus die EINE ERROR-Zeile
+                           **({"sw_neulauf": neulauf} if neulauf else {})}}
+
+    def ende_melden(self, eid, label, pz, ende, stapel, lat):
+        """Die Meldungen zum Ende eines Ereignisses nach Tuer-Konzept Abschnitt 5 (Bauplan K3, KP3 Punkt 3):
+        genau eine INFO-Zeile, hoechstens eine WARNING (mehr verschieden erkannt als gemeldet), die
+        Zaehler fuer die Zeile des Pruef-Kanals. -> None"""
+        x = lat["stapel_stimmen"]
+        # verschieden erkannt: Namen mit genug Stimmen, VOR der Obergrenze der Personenzahl
+        n = sum(1 for v in (stapel or {}).get("stimmen", {}).values() if v >= x) if x > 0 else 0
+        z = self.zaehler
+        z["pz_ereignisse"] += 1
+        z["pz_personen_frigate"] += pz or 0
+        z["pz_erkannt"] += n
+        z["ende_" + str(ende.get("grund"))] += 1
+        z["tuer_oeffnungen"] += int(ende.get("oeffnungen") or 0)
+        z["tuer_zusatz"] += int(ende.get("zusatz") or 0)
+        z["ohne_fruehes_ende"] += pz is None or bool(ende.get("logik_fehler"))
+        _log.info(f"{eid} ({label}): persons per Frigate {pz if pz else 'unknown'}, recognised distinct "
+                  f"{n}, end {ende.get('grund')}, door openings {int(ende.get('oeffnungen') or 0)}, "
+                  f"extra frames {int(ende.get('zusatz') or 0)}")
+        if pz and n > pz:
+            _log.warning(f"{eid} ({label}): more distinct persons recognised ({n}) than Frigate reported "
+                         f"({pz}) — the verdict keeps the {pz} with the most votes")
 
     @staticmethod
     def stat_bauen(zeilen, lat, g_aus, pose_aus):
@@ -3900,23 +4500,27 @@ class Dienst:
         gemessen = sum(1 for f in zeilen if f["e"] is not None or f["t"] is not None)
         unmessbar = 0
         for f in zeilen:
-            # E3.3 / Wirkstellen-Entscheid 14.09.: die Guete-Stufen e und t sieben die
-            # KASKADE nicht mehr, sie messen nur (worker_kern.gpu_stufen). Ein nicht
-            # messbarer Guete-Wert traegt deshalb kein `abbruch`-Zeichen mehr — er
-            # kostet die Stimme erst in `zusammenfassen` (guete.stimme_ok,
-            # fail-closed je Fund). Wuerde dieser Zaehler weiter nur auf `abbruch`
-            # schauen, faellt er still auf 0, und der Preis der Invariante
-            # „Messbarkeit vor Stimme" (CLAUDE.md) waere unsichtbar — genau das, was
-            # er beziffern soll. Er fragt jetzt die Sache selbst: hat dieser Fund
-            # eine AKTIVE Latte, deren Wert fehlt?
+            # Seit Bauplan K3, Stufe KP1 sieben e und t wieder die KASKADE
+            # (worker_kern.GPU_STUFEN_SIEBT): ein nicht messbarer Guete-Wert heisst dort
+            # Abbruch an dieser Stufe, OHNE dass ein Wert entsteht; wer an der Latte
+            # scheitert, traegt denselben Abbruch, aber MIT Wert. Gezaehlt wird nur das
+            # Erste, sonst faellt der Zaehler still auf 0 und der Preis der Invariante
+            # „Messbarkeit vor Stimme" (CLAUDE.md) waere unsichtbar — genau das, was er
+            # beziffern soll (Nachbesserung KP1 Punkt 6).
             ab = f["abbruch"]
-            if ab not in (None, "p"):
-                # An Kante oder Fehldetektion ausgeschieden: der Fund war nie ein
-                # Stimm-Kandidat, seine fehlenden Guete-Werte sind kein Verlust.
-                # (Dass e/t keine Abbruch-Stufe mehr sein koennen, macht diese
-                # Abfrage zu dem, was sie meint: „hat er die Guete-Stufen ueberhaupt
-                # erreicht?")
+            if ab in ("e", "t"):
+                if f[ab] is None:
+                    unmessbar += 1
                 continue
+            if ab not in (None, "p"):
+                # An Kante, Fehldetektion oder Norm-Sieb ausgeschieden: an Kante und
+                # Fehldetektion war der Fund nie ein Stimm-Kandidat, am Norm-Sieb hatte
+                # er seine Guete-Werte; fehlende Guete-Werte sind dort kein Verlust.
+                continue
+            # Eine nur MESSENDE Guete-Stufe (GPU_STUFEN_SIEBT False) laesst einen nicht
+            # messbaren Fund ohne Abbruch weiterlaufen; er verliert die Stimme erst in
+            # `zusammenfassen` (guete.stimme_ok, fail-closed je Fund). Diese Abfrage
+            # zaehlt ihn dort: eine AKTIVE Latte, deren Wert fehlt.
             if any(lat.get(k, 0) > 0 and f[w] is None
                    for k, w in (("guete_e", "e"), ("guete_t", "t"))):
                 unmessbar += 1
@@ -3935,8 +4539,10 @@ class Dienst:
     def start(self, log):
         self.engine_bauen()                                # ZUERST, s. referenzen()
         self.referenzen(log)
+        self.wiederholung_uebernehmen()                    # vor dem ersten Job
         self.speicher.__enter__()
         self.frist.__enter__()
+        self.erststart_ordnung_bauen()                     # Bauplan pose_reihenfolge R1, vor dem ersten Job
         for i in range(self.threads):
             t = threading.Thread(target=self.arbeiter, args=(i,), name=f"rechner-{i}",
                                  daemon=False)
@@ -4026,6 +4632,14 @@ def argumente():
                          "(Begruendung und Messung im Kopf von engine_cuda). "
                          "Wirkt nur auf CUDA; der Intel-Zweig liest den Wert "
                          "nicht.")
+    # Bauplan GPU-Wartefrist, Stufe 1 Punkt 2: der Weg des Config-Werts `inferenz_frist_s`
+    # in die Engine. Bewusst OHNE Vorgabe hier: die Zahl steht einmal, als Werkswert in
+    # verifyd.load_config; fehlt das Argument, startet die OpenVINO-Engine laut nicht.
+    ap.add_argument("--inferenz-frist-s", type=float, default=None,
+                    help="Frist je eingereichter GPU-Inferenz in Sekunden (Config "
+                         "inferenz_frist_s; verifyd reicht sie bei jedem Start "
+                         "herein). Nur die OpenVINO-Engine wartet damit "
+                         "(engine_ov.abwarten); die anderen Engines lesen sie nicht.")
     ap.add_argument("--roundtrip", action="store_true",
                     help="QS-Selbsttest: zwei analyze-Jobs (kalt+warm) ueber die "
                          "echte Job-Mechanik; Rest der Kommandozeile = die argv.")
@@ -4049,6 +4663,12 @@ def argumente():
         # sondern ein GERAET.
         a.engine = {"openvino": "ov", "cuda": "cuda",
                     "migraphx": "migraphx", "cpu": "cpu"}.get(kind)
+        if kind == "openvino" and str(_dev or "").upper() == "CPU":
+            # Feldbefunde Punkt 16 (Discussion #30 Nr 4): `openvino:CPU` ist laut
+            # Registry ein zweiter Name fuer `cpu` (core/registry.py, DEVICES), und
+            # engine_ov bindet nur die GPU. Der OpenVINO-CPU-Weg ist engine_cpu (sein
+            # Geraet heisst dort engine_cpu.OV_GERAET, derselbe Name).
+            a.engine = "cpu"
         if a.engine is None:
             # .540: DIESE ZEILE LIEST EIN NUTZER. Bis .539 stand hier ein deutscher
             # Halbsatz mit einer internen Etappen-Nummer — und zwar an der Stelle,
@@ -4132,13 +4752,15 @@ def main(a):
     try:
         jobs = os.fdopen(int(_jfd), "r") if _jfd else sys.stdin
     except (TypeError, ValueError, OSError) as e:
-        prozess_log(f"WORKER_JOB_FD={_jfd!r} is not usable "
+        _log.error(f"WORKER_JOB_FD={_jfd!r} is not usable "
                     f"({type(e).__name__}: {e}) — reading jobs from stdin")
         jobs = sys.stdin
-    prozess_log("job source: " + ("WORKER_JOB_FD" if jobs is not sys.stdin
+    _log.info("job source: " + ("WORKER_JOB_FD" if jobs is not sys.stdin
                                   else "stdin (no WORKER_JOB_FD)"))
     d = Dienst(a, out)
     d.start(JobLog(None))                                  # Aufbau-Meldungen ins Prozess-Log
+    # E9 Weg B: die Pruef-Zeilen dieses Prozesses (Straenge, Backend), nur lesend.
+    _logbuch.start_pruef_takt(d.pruef_beobachten)
     eof = threading.Event()
 
     def lesen():
@@ -4159,7 +4781,7 @@ def main(a):
                     # Bytes gefressen). 200 Zeichen sind der Schnitt, nicht der
                     # ganze Job: mehr braucht niemand, um den Bissrand zu sehen.
                     roh = zeile[:200]
-                    prozess_log(f"job line unreadable ({type(e).__name__}) — "
+                    _log.error(f"job line unreadable ({type(e).__name__}) — "
                                 f"first 200 chars: {roh}")
                     d.antworten({"id": None, "ok": False,
                                  "fehler": "job unlesbar", "roh": roh})
@@ -4179,7 +4801,7 @@ def main(a):
         # Hier wird deshalb nichts mehr geprueft, nur noch vollzogen.
         if d.ende.is_set():
             d.beenden(1.0)
-            prozess_log("orderly shutdown: " + (d.ende_grund or "state"))
+            _log.info("orderly shutdown: " + (d.ende_grund or "state"))
             return
 
 
@@ -4231,8 +4853,13 @@ if __name__ == "__main__":
     # NACH dem Aufruf, und der Speicherbefund vom 14.09. haengt genau an den grossen
     # Frame-Puffern, die gleich danach zu fliessen beginnen. Begruendung und Messung
     # stehen EINMAL in worker_kern.allokator_politik.
-    prozess_log("allocator policy: " + json.dumps(wk.allokator_politik(),
-                                                  ensure_ascii=False))
+    _politik = wk.allokator_politik()
+    # Log-Systematik (G4, E11): das zentrale Log auf fd 2 (stdout ist Datenkanal,
+    # DK1); Stufe und Pruef-Kanal folgen den Flaggendateien des Dienstes.
+    _logbuch.einrichten("worker", 2)
+    if os.environ.get("VERIFY_DATA_DIR"):
+        _logbuch.watch_flags(os.environ["VERIFY_DATA_DIR"])
+    _log.info("allocator policy: " + json.dumps(_politik, ensure_ascii=False))
     _a = argumente()
     if _a.roundtrip:
         roundtrip(_a)

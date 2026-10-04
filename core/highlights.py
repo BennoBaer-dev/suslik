@@ -12,7 +12,21 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.0.545"   # .545: Fix-forward-Release nach rotem Datenschutz-Gate der .544 (Testername im Docstring), Box unveraendert wie vom Inhaber fuer .544 entschieden (21.09.2026 ~09:20) — „What's New bleibt identisch mit
+STAND = "0.1.1.010"   # 0.1.1.006: Eigentuemer 30.09.2026 ~12:44 (Befehlsbuch): "der Bereich
+                      # What's New bleibt es aendert sich nur die Versionsnummer" — kein neuer
+                      # Box-Eintrag, nur STAND wandert mit.
+                      # Historie .547: Eigentuemer 25.09.2026 06:54:15 (Befehlsbuch): "Whausnew einfach
+                      # test" — der erste Lauf des Release-Modells 3.0 (Stufen 1 bis 4) soll an
+                      # 1a nicht haengen. KEIN neuer Box-Eintrag: die Box bleibt Wort fuer Wort
+                      # die der .545, nur STAND wandert mit (Mechanik s. o.). Vor einer
+                      # Veroeffentlichung der .547 wird der Box-Inhalt mit dem Eigentuemer
+                      # abgestimmt (Memory whatsnew-inhalt-abstimmen).
+                      # Davor: "0.1.0.546"   # .546: INTERNER Stand, kein Release — nur Messwerkzeug (Zeit und
+                      # Warteschlangen-Tiefe je Inferenz im Log und in /health, Hang-Suche
+                      # am Wirt). Nichts, was ein Nutzer an der Oberflaeche sieht, also
+                      # KEIN neuer Box-Eintrag: die Box bleibt Wort fuer Wort die der .545,
+                      # nur STAND wandert mit (Mechanik s. o.).
+                      # Davor: "0.1.0.545"   # .545: Fix-forward-Release nach rotem Datenschutz-Gate der .544 (Testername im Docstring), Box unveraendert wie vom Inhaber fuer .544 entschieden (21.09.2026 ~09:20) — „What's New bleibt identisch mit
                       # der Version davor, nur die Versionsnummer wird angehoben." KEIN
                       # neuer Box-Eintrag (Simo-Korrekturen, Serien-Fix, Speicher-Paket
                       # bleiben ohne Box-Zeile), nur STAND hoch — Mechanik s. o.
@@ -723,6 +737,70 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # ####################################################################
+    # 0.1.1.010 — EIN Eintrag, INHALT VOM INHABER: Wortlaut EN und DE abgenommen
+    # (Befehlsbuch 04.10.2026 17:03:24: "Der Text zu What's New passt."), dass er mit
+    # dieser Version kommt: 17:47:46. Woertlich aus tester/entwurf_readme_whatsnew_k3.md,
+    # ES, IT, FR und FI uebersetzt nach EN wie in den Eintraegen davor; der Name des
+    # Knopfs ist je Sprache readme.knopf. Der Satz "More under Read me first" zeigt auf
+    # das neue erste Kapitel von Read me first (core/readmefirst.py, KAPITEL "neu").
+    # Nicht betont, ohne Gedankenstrich. Bauplan analysen/bauplan_pruefmaterial_k3.md,
+    # Stufe PM6. Der Eintrag der 0.1.1.005 bleibt darunter stehen.
+    ("0.1.1.010", (
+        {"de": "Neue Gesichtserkennung. Erreicht ein Gesicht bei einer bekannten Person "
+               "einen bestimmten Wert, werden die nächsten 20 Bilder einzeln geprüft. "
+               "Grün wird ein Name nach drei Treffern. Jede Version läuft jetzt vor der "
+               "Veröffentlichung durch einen neuen Testlauf. Mehr dazu unter „Bitte "
+               'zuerst lesen". Ich freue mich über jede Rückmeldung, besonders wenn die '
+               "neue Erkennung danebenliegt.",
+         "en": "New face recognition. When a face reaches a certain score for a known "
+               "person, the next 20 frames are checked one by one. A name turns green "
+               "after three hits. Every version now goes through a new test run before "
+               "release. More under Read me first. I am happy about any feedback, "
+               "especially if the new recognition gets something wrong.",
+         "es": "Nuevo reconocimiento facial. Cuando una cara alcanza cierta puntuación "
+               "para una persona conocida, las 20 imágenes siguientes se revisan una por "
+               "una. Un nombre se pone verde tras tres coincidencias. Ahora cada versión "
+               "pasa por una nueva prueba antes de publicarse. Más en «Léeme primero». "
+               "Me alegra recibir cualquier comentario, sobre todo si el nuevo "
+               "reconocimiento se equivoca.",
+         "it": "Nuovo riconoscimento facciale. Quando un volto raggiunge un certo "
+               "punteggio per una persona conosciuta, i 20 fotogrammi successivi vengono "
+               "controllati uno per uno. Un nome diventa verde dopo tre corrispondenze. "
+               "Ora ogni versione passa per un nuovo test prima della pubblicazione. "
+               "Maggiori dettagli in «Leggimi prima». Mi fa piacere ogni riscontro, "
+               "soprattutto se il nuovo riconoscimento sbaglia.",
+         "fr": "Nouvelle reconnaissance faciale. Quand un visage atteint un certain "
+               "score pour une personne connue, les 20 images suivantes sont vérifiées "
+               "une par une. Un nom passe au vert après trois correspondances. Chaque "
+               "version passe maintenant par un nouveau test avant sa publication. Plus "
+               "de détails dans « À lire d'abord ». Tout retour me fait "
+               "plaisir, surtout si la nouvelle reconnaissance se trompe.",
+         "fi": "Uusi kasvontunnistus. Kun kasvot saavuttavat tunnetun henkilön kohdalla "
+               "tietyn arvon, seuraavat 20 kuvaa tarkistetaan yksitellen. Nimi muuttuu "
+               "vihreäksi kolmen osuman jälkeen. Jokainen versio käy nyt ennen julkaisua "
+               "läpi uuden testiajon. Lisää kohdassa ”Lue tämä ensin”. Kaikki "
+               "palaute ilahduttaa minua, varsinkin jos uusi tunnistus menee pieleen."},
+    )),
+    # ####################################################################
+    # 0.1.1.005 — erstes Release ueber den Release-Lauf nach Modell 3.0 (die .001 und .002 blieben nach
+    # roten Laeufen 28.09. unveroeffentlicht, die .003 nach rotem Lauf 28.09. und Fixes 29.09., die
+    # .004 nach dem angehaltenen Lauf 29.09. und dem Fix Zweiter Versuch; Stufe 6: neue Nummer;
+    # Eintrag umgehaengt, Text unveraendert nach Befehlsbuch 29.09.2026 15:07:18: "whats new bleibt
+    # wie es ist nur aktuelle versionsnummer" und 17:38:52: "Whatsnew bleibt"). INHALT VOM
+    # INHABER: der Text der Testversion .549 (Befehlsbuch 27.09.2026 20:11:19) ohne
+    # den Testversion-Marker, Befehlsbuch 28.09.2026 14:07:27: "Whats New hatten wir
+    # uns auch schon committed. Nur dieses Mal ohne Testversion." Ohne Marke betont:
+    # der Kopf hat keinen Gedankenstrich mehr, die Marke faerbte sonst den ganzen
+    # Eintrag rot (Fallback webui/__init__.py). Die .549 war ein Testbau (nur cuda,
+    # kein Release) und behaelt keinen eigenen Eintrag, sie steckt in dieser Version.
+    ("0.1.1.005", (
+        {"de": "Die Veröffentlichung (Release-Lauf) und die Log-Systematik sind neu gebaut, "
+               "um Fehler im Code besser zu finden. Dazu einige Fixes aus dem Feldtest "
+               "und von GitHub.",
+         "en": "The release process and the log system were rebuilt to find errors in the "
+               "code better. Plus a few fixes from the field test and from GitHub."},
+    )),
     # ####################################################################
     # 0.1.0.543 — ZWEI Eintraege, INHALT VOM INHABER, WOERTLICH UEBERNOMMEN:
     # sein PERSOENLICHER Eintrag und darunter die Sammel-Zeile (s. unten).

@@ -57,6 +57,8 @@ import tempfile
 
 from core import ernte as _ern         # Namensregeln der Lauf-Dateien
 from core import messkarte as _mk      # Bilanz-Vertrag, EIN Vokabular
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 # Die Auswahl DIESES Laufs — eine Zeile je Kandidat, der die Identitaets-Achse
 # bestanden hat. Sie ist zweierlei in einem, und beides mit Absicht an EINER
@@ -118,6 +120,7 @@ def auswahl_lesen(lauf_dir):
             try:
                 aus.append(json.loads(roh))
             except Exception:                       # noqa: BLE001
+                _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                 continue
     return aus
 
@@ -151,7 +154,7 @@ def diagnose_schreiben(lauf_dir, d):
         with open(diagnose_pfad(lauf_dir), "w", encoding="utf-8") as f:
             json.dump(d, f, ensure_ascii=False)
     except OSError:
-        pass
+        _logbuch.swallowed(_log, _logbuch.ERROR, "ignored", throttle=False)
 
 
 def diagnose_lesen(lauf_dir):
@@ -160,6 +163,7 @@ def diagnose_lesen(lauf_dir):
         with open(diagnose_pfad(lauf_dir), encoding="utf-8") as f:
             return json.load(f) or {}
     except (OSError, ValueError):
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning {}")
         return {}
 
 
@@ -277,6 +281,7 @@ def kandidaten(lauf_dir, eids):
                 try:
                     z = json.loads(roh)
                 except Exception:                   # noqa: BLE001
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                     continue
                 if not z.get("m") or not _anzeige_datei(z):
                     continue
@@ -354,7 +359,7 @@ def auswahl_bilden(zeilen, person, refs, id_werte, je_event, np_mod):
     return aus, bilanz
 
 
-def passernte_job(lauf_dir, eids, person, refs, id_werte, je_event, log=print):
+def passernte_job(lauf_dir, eids, person, refs, id_werte, je_event, log=_log):
     """DER Identitaets-Schritt eines Mini-Ernte-Laufs -> Ergebnis-Dict.
 
     lauf_dir   Lauf-Verzeichnis (dieselben Namensregeln wie core.ernte).
@@ -371,12 +376,13 @@ def passernte_job(lauf_dir, eids, person, refs, id_werte, je_event, log=print):
     KEINE REFERENZEN heisst LAUT und leer (Modulkopf): der Lauf schreibt eine
     leere Auswahl (die Fertig-Marke des Klick-Handlers) und sagt im Log, dass
     die Person keine Referenz hat, an der er messen koennte."""
+    log = _logbuch.as_logger(log)      # E7: der Kommandozeilen-Weg (worker.py) reicht eine Funktion
     import numpy as _np                 # lazy wie ueberall im Haus
     zeilen = kandidaten(lauf_dir, eids)
     M = (refs or {}).get(person)
     keine_refs = M is None or not len(M)
     if keine_refs:
-        log(f"pass check: {person} has no reference of their own yet — the "
+        log.error(f"pass check: {person} has no reference of their own yet — the "
             f"identity axis cannot judge {len(zeilen)} harvested candidate(s); "
             f"nothing is proposed (teach one picture first)")
     aus, bilanz = auswahl_bilden(zeilen, person, refs, id_werte, je_event, _np)

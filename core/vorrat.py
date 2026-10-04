@@ -29,6 +29,8 @@ import tempfile
 import numpy as np
 
 from core import messkarte as _mk
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 
 def v_zeilen_lesen(lauf_dir, eids):
@@ -244,6 +246,7 @@ def angebote_lesen(data_dir, uebernommen=None):
                 try:
                     z = json.loads(zeile)
                 except Exception:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                     continue
                 if not z.get("angebot"):
                     continue
@@ -270,6 +273,7 @@ def beiwert_nachschlagen(data_dir, lauf_id, datei_v):
             try:
                 z = json.loads(zeile)
             except Exception:
+                _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                 continue
             if z.get("datei_v") == datei_v and z.get("emb"):
                 return z["emb"], z

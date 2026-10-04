@@ -48,6 +48,8 @@ import os
 import signal
 import threading
 import time
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 # Betriebs-Konstanten (DESIGN-Werte mit Begruendung, keine Messwerte):
 TAKT_S = 5.0              # Aufsichts-Takt des Dienst-Threads (Exit faellt binnen ~5 s auf)
@@ -160,11 +162,11 @@ class Aufsicht:
         # Standalone ist ZUSTAND, nicht nur Grund: Live-Seite + /health zeigen ihn.
         neu_standalone = (grund == "standalone")
         if neu_standalone and not self.standalone:
-            self.log("live supervisor: standalone engine detected (foreign "
+            self.log.info("live supervisor: standalone engine detected (foreign "
                      "process holds state/live.lock) — not starting a second "
                      "engine, watching read-only until it exits")
         if self.standalone and not neu_standalone:
-            self.log("live supervisor: standalone engine gone — taking over")
+            self.log.info("live supervisor: standalone engine gone — taking over")
         self.standalone = neu_standalone
         if not ok:
             return grund
@@ -189,7 +191,7 @@ class Aufsicht:
         try:
             self.proc = self.spawn_fn()
         except Exception as e:
-            self.log(f"!! live supervisor: engine spawn failed: "
+            self.log.error(f"!! live supervisor: engine spawn failed: "
                      f"{type(e).__name__}: {e}")
             self.proc = None
             self._fehlstart_verbuchen(now)
@@ -197,7 +199,7 @@ class Aufsicht:
         self.start_mono = now
         self._je_frisch = False
         pid = getattr(self.proc, "pid", "?")
-        self.log(f"live supervisor: engine started (pid {pid})")
+        self.log.info(f"live supervisor: engine started (pid {pid})")
         return "gestartet"
 
     def _lebend_pruefen(self, p, now):
@@ -213,7 +215,7 @@ class Aufsicht:
             return "laeuft"
         if not self._herzschlag_tot(now):
             return "startet" if not self._je_frisch else "laeuft"
-        self.log(f"!! live supervisor: engine (pid {getattr(p, 'pid', '?')}) "
+        self.log.error(f"!! live supervisor: engine (pid {getattr(p, 'pid', '?')}) "
                  f"alive but heartbeat dead ({'never fresh' if not self._je_frisch else 'stale'}) "
                  f"— killing the process group and restarting")
         self._killpg(p, signal.SIGKILL)
@@ -248,17 +250,17 @@ class Aufsicht:
             # geordnetes Ende, KEIN Fehlstart (das Disable-zwischen-Spawn-und-
             # Engine-Lesen-Fenster loeste sonst Fehlalarme aus). Neustart
             # regulaer, sobald guards_aktiv wieder wahr ist.
-            self.log(f"live supervisor: engine ended: nothing to do (no "
+            self.log.error(f"live supervisor: engine ended: nothing to do (no "
                      f"enabled guard, rc={rc} after {dauer:.0f}s) — not a "
                      f"failed start; restarts once a watcher is enabled")
             self.fehlstarts = 0
             self.warte_bis = now + self.backoff_start
             return "exit_nichts_zu_tun"
         if haengend or rc != 0 or dauer < self.fehlstart_frist_s:
-            self.log(f"!! live supervisor: engine ended "
+            self.log.warning(f"!! live supervisor: engine ended "
                      f"({'hung' if haengend else f'rc={rc}'} after {dauer:.0f}s)")
             return self._fehlstart_verbuchen(now)
-        self.log(f"live supervisor: engine ended cleanly (rc=0 after "
+        self.log.info(f"live supervisor: engine ended cleanly (rc=0 after "
                  f"{dauer:.0f}s) — restart follows if guards are enabled")
         self.fehlstarts = 0
         self.warte_bis = now + self.backoff_start
@@ -271,11 +273,11 @@ class Aufsicht:
                     f"a row — pausing restarts for {self.pause_s / 60:.0f} min "
                     f"(check the service log; enabling a watcher retries "
                     f"immediately)")
-            self.log(f"!! live supervisor: {text}")
+            self.log.warning(f"!! live supervisor: {text}")
             try:
                 self.stoerung_fn(text)
             except Exception as e:
-                self.log(f"!! live supervisor: disturbance notice failed: "
+                self.log.error(f"!! live supervisor: disturbance notice failed: "
                          f"{type(e).__name__}: {e}")
             self.pause_bis = now + self.pause_s
             self.fehlstarts = 0
@@ -347,13 +349,13 @@ class Aufsicht:
             if p is not None:
                 self._killpg(p, signal.SIGKILL)     # Waisen auch nach Exit
             return
-        self.log(f"live supervisor: stopping engine (pid "
+        self.log.info(f"live supervisor: stopping engine (pid "
                  f"{getattr(p, 'pid', '?')}, {grund})")
         self._killpg(p, signal.SIGTERM)
         try:
             p.wait(timeout=self.stop_frist_s)
         except Exception:
-            self.log("!! live supervisor: engine ignored SIGTERM — SIGKILL "
+            self.log.warning("!! live supervisor: engine ignored SIGTERM — SIGKILL "
                      "on the process group")
             self._killpg(p, signal.SIGKILL)
             try:
@@ -366,7 +368,7 @@ class Aufsicht:
         try:
             self.killpg_fn(getattr(p, "pid", -1), sig)
         except Exception:
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
 
     # ---------------------------------------------------------------- Anzeige
     def status(self):
@@ -412,4 +414,5 @@ class Aufsicht:
         try:
             return bool(self.gesperrt_fn())
         except Exception:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning False")
             return False

@@ -7,7 +7,9 @@ ungeschuetztes Fenster zwischen Download und Abnehmer-Start —
 Widerleger-MUSS 4), pin()/frei() fuehren einen REFCOUNT je Halter
 (<eid>.<pid>.<tid>.pin): zwei unabhaengige Halter (Worker-Analyse +
 Dienst-Thread) koennen sich nie gegenseitig die Datei unter dem Size-Cap
-wegraeumen lassen. gepinnt() ist die Auskunft fuer cleanup_cache.
+wegraeumen lassen. gepinnt() ist die Auskunft fuer cleanup_cache (Size-Cap,
+direkt vor jedem Loeschen), MarkenSicht die Batch-Auskunft seines
+Alters-Zweigs aus EINEM Verzeichnis-Durchlauf (Bauplan Feldstau Stufe 4).
 
 TEIL B (Z4, §3.2) — DER VERTEILER: lauf(vid, abnehmer) faehrt EINEN
 FrameIter und bedient jeden registrierten Abnehmer nach dessen
@@ -34,6 +36,8 @@ import urllib.error
 import urllib.request
 
 from core import frigate_auth as _fauth   # 5e: DER eine Frigate-HTTP-Griff
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 
 def cache_dir(data_dir=None):
@@ -141,6 +145,7 @@ def _behalten_zeilen(pfad):
         with open(pfad, encoding="utf-8") as f:
             return [z.strip() for z in f if z.strip()]
     except OSError:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning []")
         return []
 
 
@@ -180,6 +185,61 @@ def wird_behalten(pfad):
     return os.path.exists(pfad + BEHALTEN_SUFFIX)
 
 
+class MarkenSicht:
+    """Batch-Auskunft fuer den ALTERS-Zweig von cleanup_cache (Bauplan Feldstau Stufe 4,
+    O466): dieselben Antworten wie gepinnt()/wird_behalten(), aber aus EINEM
+    Verzeichnis-Durchlauf statt einem Glob je Clip. Beim Feldtester (NFS, rund 20.000
+    Clips) kostete der Glob je ausgelaufenem Clip einen eigenen Verzeichnis-Lauf.
+
+    Das Namens-Wissen bleibt hier: ein Pin gehoert zu jedem Clip, auf den der Glob
+    `<clip>.*.pin` aus gepinnt() passen wuerde; die Dauermarke ist `<clip>` +
+    BEHALTEN_SUFFIX. Die Frische eines Pins wird erst gefragt, wenn der Clip Kandidat
+    ist (DirEntry.stat() zum Zeitpunkt der Frage, wie heute getmtime im Glob) — damit
+    werden abgestandene Pins wie bisher NUR bei Kandidaten geraeumt.
+
+    Der Size-Cap-Zweig nutzt diese Sicht bewusst NICHT: er fragt gepinnt()/wird_behalten()
+    direkt vor jedem Loeschen, damit ein Pin, der waehrend des Laufs entsteht, schuetzt
+    (Widerleger-MUSS 4, Fund 9)."""
+
+    def __init__(self, ordner, eintraege):
+        """Baut die Sicht aus den Eintraegen EINES os.scandir-Durchlaufs ueber `ordner`.
+        -> None (eintraege: os.DirEntry-Objekte; andere als Pins/Dauermarken zaehlen nicht)"""
+        self.ordner = ordner
+        self._pins = {}
+        self._behalten = set()
+        for e in eintraege:
+            name = e.name
+            if name.endswith(BEHALTEN_SUFFIX):
+                self._behalten.add(name[:-len(BEHALTEN_SUFFIX)])
+            if not name.endswith(".pin"):
+                continue
+            # <clip> + "." + beliebig + ".pin": jeder Punkt, hinter dem noch "." + ".pin"
+            # Platz hat, kann das Ende eines Clip-Namens sein (Glob-gleich, auch mehrdeutig).
+            i = name.find(".")
+            while 0 <= i <= len(name) - 5:
+                self._pins.setdefault(name[:i], []).append(e)
+                i = name.find(".", i + 1)
+
+    def gepinnt(self, clip_name):
+        """Haelt irgendwer diesen Clip (Regeln wie gepinnt(): abgestandene Pins zaehlen nicht und
+        werden geraeumt, im Zweifel schuetzen)? -> bool"""
+        lebt = False
+        for e in self._pins.get(clip_name, ()):
+            try:
+                if time.time() - e.stat().st_mtime > PIN_ABGESTANDEN_S:
+                    os.remove(os.path.join(self.ordner, e.name))
+                else:
+                    lebt = True
+            except OSError:
+                lebt = True          # im Zweifel schuetzen, nie wegraeumen
+        return lebt
+
+    def wird_behalten(self, clip_name):
+        """Traegt dieser Clip im Durchlauf die Dauermarke (wie wird_behalten())?
+        -> bool"""
+        return clip_name in self._behalten
+
+
 # ================================================= Clip-Debug ([clipdbg]) ==
 # .287 (User-Auftrag 18.08.; Frigate-Haenger-Klasse bewiesen, Task #11,
 # verify_data/messungen/frigate_haenger_20260818_191803): Frigates 40er-API-
@@ -198,7 +258,7 @@ def wird_behalten(pfad):
 # JE EREIGNIS genau EINE kompakte Zeile (Beginn / Ende / Cache-Treffer),
 # nie ein Roh-Dump. Nur Telemetrie — nie Verhalten.
 
-CLIP_DBG = ((lambda z: print(z, flush=True))
+CLIP_DBG = ((lambda z: _log.info(z))
             if os.environ.get("SUSLIK_CLIP_DBG") else None)  # Senke | None=aus
 CLIP_QUELLE = os.environ.get("SUSLIK_CLIP_QUELLE") or None   # ernte/vorlader/
 #                                                              nachhol/live
@@ -258,12 +318,16 @@ _TL = threading.local()
 def clip_dbg(msg):
     """[clipdbg]-Zeile an die Senke — das EINE Praefix an der EINEN Stelle.
     Rangfolge: die thread-lokale Senke DIESES Aufrufs (clip_holen(dbg=...),
-    E2-Block oben), sonst die Prozess-Senke CLIP_DBG. Eine kaputte Senke darf
-    nie die Clip-Beschaffung reissen."""
+    E2-Block oben; die Job-Datei des Workers), sonst die Prozess-Senke CLIP_DBG
+    (Legacy-Wege). Ohne Senke geht die Zeile als DEBUG ins zentrale Log
+    (Log-Systematik E11: der Dienst hat keine eigene Senke mehr; Quelle und
+    Stufe stehen im Kopf, das Praefix entfaellt dort, E8). Eine kaputte Senke
+    darf nie die Clip-Beschaffung reissen."""
     s = getattr(_TL, "dbg", None)
     if s is None:
         s = CLIP_DBG
     if s is None:
+        _log.debug(msg)
         return
     try:
         s(f"[clipdbg] {msg}")
@@ -410,8 +474,10 @@ def _version_probe(basis):
                 r.read(64)
             return True
         except urllib.error.HTTPError:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning True")
             return True
         except Exception:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning False")
             return False
     return probe
 
@@ -700,7 +766,7 @@ def tor_geben(halter):
     try:
         fcntl.flock(halter, fcntl.LOCK_UN)
     except OSError:
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     try:
         os.close(halter)
     except OSError:
@@ -732,6 +798,7 @@ def tor_zustand(n, data_dir=None):
         try:
             fd = os.open(p, os.O_CREAT | os.O_RDWR, 0o600)
         except OSError:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
             continue
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -739,7 +806,7 @@ def tor_zustand(n, data_dir=None):
         except BlockingIOError:
             belegt += 1
         except OSError:
-            pass                 # nicht messbar — nie eine Zahl erfinden
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")                 # nicht messbar — nie eine Zahl erfinden
         finally:
             os.close(fd)
     wartend = sum(1 for p in glob.glob(os.path.join(tor_dir(data_dir), "warte.*"))
@@ -911,9 +978,9 @@ def clip_holen(eid, data_dir=None, frigate_url=None, timeout=30,
                     if _sock is not None:
                         _sock.settimeout(timeout)
                     else:
-                        clip_dbg(f"{eid}: WARN kein Socket-Zugriff nach "
-                                 f"Headern — Zwischen-Byte-Fenster bleibt "
-                                 f"auf {_aufbau_to:.0f}s")
+                        clip_dbg(f"{eid}: WARN no socket access after "
+                                 f"headers — inter-byte window stays "
+                                 f"at {_aufbau_to:.0f}s")
                 # Byte-zaehlende 64k-Schleife (ehem. shutil.copyfileobj):
                 # die [clipdbg]-Endzeile braucht bytes= — und nur der Zaehler
                 # trennt 'stall' (Bytes kamen, dann riss der Strom) von
@@ -958,6 +1025,19 @@ def clip_holen(eid, data_dir=None, frigate_url=None, timeout=30,
                         break
                     f.write(stueck)
                     geladen += len(stueck)
+            # O505 F1 (Bauplan analysen/bauplan_videogeometrie_fix.md): eine LEERE
+            # Antwort ist kein Clip. Bis hier wurde sie als 0-Byte-Datei in den Cache
+            # uebernommen, und jeder spaetere Versuch nahm diesen Treffer, statt Frigate
+            # erneut zu fragen. Jetzt scheitert der Abruf laut auf dem bestehenden
+            # Fehlerweg (except unten: .part weg, eigener Pin frei, weiterwerfen). Den
+            # VOD-Weg oben deckt schon _vod_holen: eine leere Datei liefert dort False.
+            _groesse = os.path.getsize(teil)
+            if _groesse == 0:
+                _log.warning(f"empty clip download for {eid} (src={q}, bytes={_groesse})"
+                             " — not taken into the clip cache; the fetch counts as "
+                             "failed, a later attempt asks Frigate again")
+                raise RuntimeError(f"empty clip download for {eid} (src={q}, "
+                                   f"bytes={_groesse}) — not cached")
             os.replace(teil, pfad)
             clip_dbg(f"{eid}: GET clip.mp4 ok src={q} "
                      f"s={time.monotonic() - t0:.1f} bytes={geladen}")
@@ -1218,7 +1298,7 @@ class Wache:
         return _formel(self._quelle, "unvollstaendig")(self)
 
 
-def lauf(vid, abnehmer, log=print):
+def lauf(vid, abnehmer, log=_log):
     """EIN Decode fuer alle registrierten Abnehmer. Rueckgabe: {name: Wache}.
 
     NEUTRALITAET PER KONSTRUKTION: bei EINEM Abnehmer entsteht genau EIN
@@ -1249,7 +1329,7 @@ def lauf(vid, abnehmer, log=print):
         "vid": os.path.basename(str(vid)),
         "steps": {a.name: getattr(it, "step", 1)
                   for a, it in zip(abnehmer, iters)}}
-    log("WARN: frame distributor falls back to separate decodes — consumers "
+    log.warning("WARN: frame distributor falls back to separate decodes — consumers "
         f"ask for different steps {RUECKFAELLE['zuletzt']['steps']}. One "
         "download stays, but a shared step would silently move the "
         "completeness watch (it is computed against the step of the run, "
@@ -1266,6 +1346,7 @@ def _zeiger(frame):
     try:
         return frame.__array_interface__["data"][0]
     except Exception:                                # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
         return None
 
 

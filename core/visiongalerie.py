@@ -43,6 +43,8 @@ import hashlib
 import json
 import os
 import time
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 # --- Regeln, die auch das Gate und der Beweis lesen (eine Quelle) -------------
 MIN_HOEHE_PX = 350             # crop_px[1], die skalierte Hoehe (§6.4)
@@ -194,6 +196,7 @@ def _lesen(pfad, fallback=None):
         with open(pfad, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, ValueError):
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning fallback")
         return fallback
 
 
@@ -894,6 +897,7 @@ def alle(data_dir):
     try:
         namen = sorted(os.listdir(wurzel(data_dir)))
     except OSError:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning aus")
         return aus
     for n in namen:
         m = lesen(data_dir, n)

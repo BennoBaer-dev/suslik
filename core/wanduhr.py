@@ -17,6 +17,8 @@ Reine Funktionen, kein Dienst-Import; I/O nur ueber Parameter-Pfade.
 import json
 import os
 import tempfile
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 SCHEMA_VERSION = 1
 
@@ -50,7 +52,7 @@ def lesen(data_dir, hw_key, version):
                 and d.get("version") == version and isinstance(d.get("werte"), dict)):
             return d["werte"], "gemessen", list(d.get("gemessen") or [])
     except Exception:
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     return dict(RUECKFALL), "rueckfall", []
 
 
@@ -239,7 +241,7 @@ def ernte_rate_lesen(data_dir, hw_key, version):
                 and d["rate"].get("n", 0) >= ERNTE_RATE_MIN_PROBEN):
             return d["rate"]
     except Exception:
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     return None
 
 

@@ -73,6 +73,13 @@ class Sieb:
         self.fd = fd                # welcher Deskriptor durch dieses Sieb laeuft
         self.anzahl = 0             # verworfene Musterzeilen seit Prozessstart
         self.faden = None           # der Lese-Faden (gesetzt von installieren)
+        self.weitergabe_fehler = 0  # Log-Systematik E2: gescheiterte Weitergaben (/health)
+
+    def zustand(self):
+        """Zustand fuer /health, Block `log` (E2, E6): nur lesen, nie schreiben.
+        -> dict faden_lebt, weitergabe_fehler, verworfen."""
+        return {"faden_lebt": bool(self.faden is not None and self.faden.is_alive()),
+                "weitergabe_fehler": self.weitergabe_fehler, "verworfen": self.anzahl}
 
     def summe(self):
         return self.anzahl
@@ -158,12 +165,14 @@ def installieren(fd=2, passt=None, durchlass=None):
                     try:
                         os.write(echt, zeile + b"\n")
                     except OSError:
+                        sieb.weitergabe_fehler += 1
                         return
             # Teilzeile ohne Newline groesser 64k: durchreichen statt horten
             if len(rest) > 65536:
                 try:
                     os.write(echt, rest)
                 except OSError:
+                    sieb.weitergabe_fehler += 1
                     return
                 rest = b""
 

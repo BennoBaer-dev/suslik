@@ -28,6 +28,8 @@ import contextvars
 import json
 import os
 import threading
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 # Registrierte Sprachen — DIE Whitelist (Store-Wert, Schalter, Wizard-Schritt 0,
 # Gate-Deckung via tools/texte_pruefen.py). Reihenfolge = Schalter-Reihenfolge.
@@ -85,6 +87,7 @@ def store_sprache():
     try:
         m = os.path.getmtime(p)
     except OSError:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning _STANDARD")
         return _STANDARD
     with _store_lock:
         if _store["pfad"] == p and _store["mtime"] == m:
@@ -132,15 +135,14 @@ def _roh(key, code):
         marke = (code, key)
         if marke not in _fallback_gemeldet:
             _fallback_gemeldet.add(marke)
-            print(f"[sprache] {code}: key '{key}' fehlt — Fallback en",
-                  flush=True)
+            _log.warning(f"[sprache] {code}: key '{key}' missing — fallback en")
         w = _lade(_STANDARD).get(key)
         if w is not None:
             return w
     marke = (_STANDARD, key)
     if marke not in _fallback_gemeldet:
         _fallback_gemeldet.add(marke)
-        print(f"[sprache] key '{key}' fehlt in der Referenz", flush=True)
+        _log.warning(f"[sprache] key '{key}' missing in the reference")
     return key
 
 

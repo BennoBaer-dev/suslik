@@ -22,9 +22,11 @@ bestaetigte Aktion.
 import contextlib as _contextlib
 import glob as _glob
 import threading as _threading      # E3c: Schloss der Init-Kappung, s. _IF_KAPPUNG_SCHLOSS
-import os, sys, json, argparse, urllib.request, urllib.parse, re, datetime, html
+import os, json, argparse, urllib.request, urllib.parse, re, datetime, html
 import numpy as np
 import cv2
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 FRIGATE = os.environ.get("FRIGATE_URL", "")   # kein Default auf eine konkrete IP (Public-Image); Runtime setzt FRIGATE_URL
 
@@ -135,7 +137,7 @@ def _threads_schluessel(kerne):
                     modell = z.split(":", 1)[1].strip()
                     break
     except OSError:
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     try:
         plaetze = max(1, int(os.environ.get("SUSLIK_ANALYSE_PLAETZE") or 1))
     except ValueError:
@@ -187,6 +189,7 @@ def _bench_modell():
         p = os.path.join(StrukturMass.MODELL_DIR, StrukturMass.MODELL_DATEI)
         return p if os.path.exists(p) else None
     except Exception:                                         # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
         return None
 
 
@@ -277,12 +280,12 @@ def _threads_bestimmen(kerne):
                 _THREADS_BENCH = {**d, "quelle": "cache"}
                 return int(d["threads"])
         except Exception:
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     try:
         beste, tabelle = _threads_messen(kerne)
     except Exception as e:                                    # noqa: BLE001
-        sys.stderr.write(f"[face_audit] thread bench skipped "
-                         f"({type(e).__name__}: {str(e)[:80]}) -> {kerne} threads\n")
+        _log.warning(f"thread bench skipped "
+                         f"({type(e).__name__}: {str(e)[:80]}) -> {kerne} threads")
         _THREADS_BENCH = {"quelle": "bench fehlgeschlagen", "threads": kerne}
         return kerne
     if not beste:
@@ -291,9 +294,9 @@ def _threads_bestimmen(kerne):
     import time as _t
     d = {"schluessel": schluessel, "threads": int(beste),
          "kerne": int(kerne), "tabelle_ms": tabelle, "ts": round(_t.time(), 1)}
-    sys.stderr.write(
-        f"[face_audit] cpu threads measured: {beste} of {kerne} allowed "
-        f"({', '.join(f'{t}={ms}ms' for t, ms in sorted(tabelle.items()))})\n")
+    _log.info(
+        f"cpu threads measured: {beste} of {kerne} allowed "
+        f"({', '.join(f'{t}={ms}ms' for t, ms in sorted(tabelle.items()))})")
     if pfad:
         try:
             os.makedirs(os.path.dirname(pfad), exist_ok=True)
@@ -302,7 +305,7 @@ def _threads_bestimmen(kerne):
                 json.dump(d, f)
             os.replace(tmp, pfad)
         except Exception:
-            pass
+            _logbuch.swallowed(_log, _logbuch.ERROR, "ignored", throttle=False)
     _THREADS_BENCH = {**d, "quelle": "gemessen"}
     return int(beste)
 
@@ -345,7 +348,7 @@ def _cgroup_quote(wurzel="/sys/fs/cgroup"):
             periode = int(teile[1]) if len(teile) > 1 else 100000
             return max(1, int(teile[0]) // max(1, periode))
     except (OSError, ValueError, IndexError):
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     try:                                                   # cgroup v1
         with open(os.path.join(wurzel, "cpu", "cpu.cfs_quota_us")) as f:
             q = int(f.read())
@@ -354,7 +357,7 @@ def _cgroup_quote(wurzel="/sys/fs/cgroup"):
         if q > 0 and p > 0:
             return max(1, q // p)
     except (OSError, ValueError):
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     return None
 
 
@@ -365,6 +368,7 @@ def _cpuset_erlaubt():
     try:
         return max(1, len(os.sched_getaffinity(0)))
     except (AttributeError, OSError):
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
         return None
 
 
@@ -514,6 +518,7 @@ def _insightface_session_ziele():
     try:
         from insightface.model_zoo import model_zoo as _mz
     except Exception:                                  # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning (None, {})")
         return None, {}
     ziele = {}
     for name in ("PickableInferenceSession", "InferenceSession"):
@@ -604,8 +609,8 @@ def _insightface_sessions_gekappt():
                 try:
                     kwargs["sess_options"] = _ort_thread_opts()
                 except Exception as e:                 # noqa: BLE001
-                    sys.stderr.write(f"[ortkappung] WARN: init thread capping "
-                                     f"skipped ({type(e).__name__}: {str(e)[:80]})\n")
+                    _log.warning(f"[ortkappung] WARN: init thread capping "
+                                     f"skipped ({type(e).__name__}: {str(e)[:80]})")
             return orig(*args, **kwargs)
         bauen._suslik_original = orig                  # ablesbar fuer Proben/Wachen
         return bauen
@@ -635,7 +640,7 @@ def _insightface_sessions_gekappt():
                         try:
                             setattr(mz, name, ziele[name])
                         except Exception:              # noqa: BLE001
-                            pass                       # mehr als versuchen geht nicht
+                            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")                       # mehr als versuchen geht nicht
                 else:
                     _IF_KAPPUNG_STAND = (mz, ziele)    # NUR der erste merkt die Originale
                     _IF_KAPPUNG_TIEFE = 1
@@ -643,13 +648,13 @@ def _insightface_sessions_gekappt():
                     gezaehlt = True
             elif not _IF_KAPPUNG_GEMELDET:
                 _IF_KAPPUNG_GEMELDET = True
-                sys.stderr.write("[ortkappung] note: insightface builds its sessions "
+                _log.warning("[ortkappung] note: insightface builds its sessions "
                                  "elsewhere (no PickableInferenceSession/InferenceSession "
-                                 "in model_zoo) -> init thread capping skipped\n")
+                                 "in model_zoo) -> init thread capping skipped")
     if patch_fehler:                                   # Schreiben ohne Schloss
-        sys.stderr.write(f"[ortkappung] WARN: could not patch insightface session "
+        _log.warning(f"[ortkappung] WARN: could not patch insightface session "
                          f"names ({patch_fehler}) — originals restored, init thread "
-                         f"capping skipped\n")
+                         f"capping skipped")
     try:
         yield
     finally:
@@ -667,8 +672,8 @@ def _insightface_sessions_gekappt():
                             and not _IF_KAPPUNG_LEER_GEMELDET):
                         _IF_KAPPUNG_LEER_GEMELDET = melden = True
         if melden:                                     # Schreiben ohne Schloss
-            sys.stderr.write("[ortkappung] note: insightface built no session through "
-                             "the patched name — thread cap may not apply\n")
+            _log.info("[ortkappung] note: insightface built no session through "
+                             "the patched name — thread cap may not apply")
 
 
 def geraete_knoten_muster(dev):
@@ -721,7 +726,6 @@ def _ort_session(kind, dev, model_file, cache=None):
     traegt dort z. B. `precision: FP32`, damit eine Messung auf diesem Weg dieselbe
     Genauigkeit fahrt wie die Engine, die ihn im Betrieb faehrt."""
     import onnxruntime as ort
-    import sys as _sys
     avail = ort.get_available_providers()
     if kind == "openvino" and "OpenVINOExecutionProvider" in avail:
         # Task #15 (Tester-Log Issue #6, Gen9 ohne NPU): Geraete-Knoten VOR dem Session-
@@ -732,8 +736,8 @@ def _ort_session(kind, dev, model_file, cache=None):
         # der Mismatch-Verdacht unten gilt weiter fuer vorhanden-aber-bindet-nicht.
         _knoten = geraete_knoten_muster(dev)
         if _knoten and not _glob.glob(_knoten):
-            _sys.stderr.write(f"[face_audit] note: no {dev} device node ({_knoten}) "
-                              f"on this host -> CPU\n")
+            _log.info(f"note: no {dev} device node ({_knoten}) "
+                              f"on this host -> CPU")
             return ort.InferenceSession(model_file, providers=["CPUExecutionProvider"],
                                         sess_options=_ort_thread_opts())
         opts = {"device_type": dev}
@@ -747,22 +751,22 @@ def _ort_session(kind, dev, model_file, cache=None):
         # STILL auf CPU zurueck. Erkennbar: OpenVINO-Provider faellt aus get_providers() raus. Dann laut
         # warnen (sonst laeuft der Dienst auf CPU und meldet GPU -> genau der Footgun, den wir vermeiden).
         if "OpenVINOExecutionProvider" not in s.get_providers():
-            _sys.stderr.write(f"[face_audit] WARN: OpenVINO device '{dev}' not available -> running on "
-                              f"CPU (GPU/NPU runtime vs. host driver version mismatch?)\n")
+            _log.warning(f"WARN: OpenVINO device '{dev}' not available -> running on "
+                              f"CPU (GPU/NPU runtime vs. host driver version mismatch?)")
         return s
     if kind == "cuda" and "CUDAExecutionProvider" in avail:
         # Task-#15-Muster, cuda nachgezogen (Widerleger 31.07.): ohne /dev/nvidia* ist der
         # Session-Versuch chancenlos und produzierte nur ORT-[E]-Spam + die irrefuehrende
         # "mismatch?"-Warnung — dabei HAT der Host schlicht keine NVIDIA-Karte (Gen9-Klasse).
         if not _glob.glob(geraete_knoten_muster("NVIDIA") or "/dev/nvidia*"):
-            _sys.stderr.write("[face_audit] note: no NVIDIA device node (/dev/nvidia*) "
-                              "on this host -> CPU\n")
+            _log.error("note: no NVIDIA device node (/dev/nvidia*) "
+                              "on this host -> CPU")
             return ort.InferenceSession(model_file, providers=["CPUExecutionProvider"],
                                         sess_options=_ort_thread_opts())
         try:                                      # 'cuda:GPU' o.ae. -> int() wirft; dokumentiert ist ein
             _did = int(dev or 0)                  # lauter CPU-Fallback, kein Absturz des Dienstes
         except (TypeError, ValueError):
-            _sys.stderr.write(f"[face_audit] WARN: ungueltige CUDA-Geraetenummer '{dev}' -> device_id=0\n")
+            _log.warning(f"WARN: invalid CUDA device number '{dev}' -> device_id=0")
             _did = 0
         s = ort.InferenceSession(
             model_file, providers=[("CUDAExecutionProvider", {"device_id": _did}),
@@ -771,37 +775,37 @@ def _ort_session(kind, dev, model_file, cache=None):
         # cuDNN-Mismatch, GPU belegt) -> onnxruntime nimmt still CPUExecutionProvider. Ungeprueft
         # meldete der Startup-Check "cuda engaged", waehrend real die CPU rechnete.
         if "CUDAExecutionProvider" not in s.get_providers():
-            _sys.stderr.write(f"[face_audit] WARN: CUDA device '{dev or 0}' not available -> running on "
-                              f"CPU (driver/cuDNN vs. onnxruntime-gpu version mismatch?)\n")
+            _log.error(f"WARN: CUDA device '{dev or 0}' not available -> running on "
+                              f"CPU (driver/cuDNN vs. onnxruntime-gpu version mismatch?)")
         return s
     if kind == "migraphx" and "MIGraphXExecutionProvider" in avail:
         # AMD (N2): Geraete-Vorpruefung wie im OpenVINO-Zweig — ohne /dev/kfd ist der
         # Versuch chancenlos (leiser note statt Treiber-Spam; Task-#15-Muster).
         if not _glob.glob(geraete_knoten_muster("KFD") or "/dev/kfd"):
-            _sys.stderr.write("[face_audit] note: no AMD KFD device node (/dev/kfd) "
-                              "on this host -> CPU\n")
+            _log.error("note: no AMD KFD device node (/dev/kfd) "
+                              "on this host -> CPU")
             return ort.InferenceSession(model_file, providers=["CPUExecutionProvider"],
                                         sess_options=_ort_thread_opts())
         try:
             _did = int(dev or 0)
         except (TypeError, ValueError):
-            _sys.stderr.write(f"[face_audit] WARN: ungueltige MIGraphX-Geraetenummer "
-                              f"'{dev}' -> device_id=0\n")
+            _log.warning(f"WARN: invalid MIGraphX device number "
+                              f"'{dev}' -> device_id=0")
             _did = 0
         s = ort.InferenceSession(
             model_file, providers=[("MIGraphXExecutionProvider", {"device_id": _did}),
                                    "CPUExecutionProvider"], sess_options=_ort_thread_opts())
         # Wie bei OpenVINO/CUDA: EP gelistet heisst nicht gebunden -> LAUT statt still.
         if "MIGraphXExecutionProvider" not in s.get_providers():
-            _sys.stderr.write(f"[face_audit] WARN: MIGraphX device '{dev or 0}' not "
+            _log.error(f"WARN: MIGraphX device '{dev or 0}' not "
                               f"available -> running on CPU (ROCm runtime vs. host "
-                              f"driver/GPU support mismatch?)\n")
+                              f"driver/GPU support mismatch?)")
         return s
     if kind == "cpu":
         return ort.InferenceSession(model_file, providers=["CPUExecutionProvider"],
                                 sess_options=_ort_thread_opts())
-    _sys.stderr.write(f"[face_audit] WARN: Backend '{kind}:{dev}' nicht verfuegbar "
-                      f"(vorhanden: {avail}) -> CPUExecutionProvider\n")
+    _log.error(f"WARN: Backend '{kind}:{dev}' not available "
+                      f"(present: {avail}) -> CPUExecutionProvider")
     return ort.InferenceSession(model_file, providers=["CPUExecutionProvider"],
                                 sess_options=_ort_thread_opts())
 
@@ -1145,7 +1149,7 @@ class Embedder:
             self.app.prepare(ctx_id=0, det_size=det_size)
         for _z in _buf.getvalue().splitlines():
             if _z.strip() and not _z.startswith("set det-size"):
-                print(_z)
+                _log.info(_z)
         self._provider_guard("set_det_size")
 
     def _provider_guard(self, anlass):
@@ -1174,14 +1178,14 @@ class Embedder:
         fx = _falsche()
         if not fx:
             return True
-        sys.stderr.write(f"[face_audit] PROVIDER-GUARD ({anlass}): session(s) "
-                         f"{', '.join(fx)} fell off {soll} — rebuilding on backend\n")
+        _log.info(f"PROVIDER-GUARD ({anlass}): session(s) "
+                         f"{', '.join(fx)} fell off {soll} — rebuilding on backend")
         self._to_backend()
         fx = _falsche()
         if fx:
-            sys.stderr.write(f"[face_audit] PROVIDER-GUARD FAILED ({anlass}): "
+            _log.error(f"PROVIDER-GUARD FAILED ({anlass}): "
                              f"{', '.join(fx)} still not on {soll} — RUNNING DEGRADED "
-                             f"(runtime vs. host driver? check the startup self-check)\n")
+                             f"(runtime vs. host driver? check the startup self-check)")
             return False
         return True
 
@@ -1251,11 +1255,11 @@ class Embedder:
             s = _ort_session(kind, d, onnx, cache)
             if "OpenVINOExecutionProvider" in s.get_providers():
                 if i:
-                    sys.stderr.write(f"[face_audit] PLACEMENT-FALLBACK: recognition "
-                                     f"{dev} -> {d} (device did not bind)\n")
+                    _log.error(f"PLACEMENT-FALLBACK: recognition "
+                                     f"{dev} -> {d} (device did not bind)")
                 return s
-        sys.stderr.write(f"[face_audit] PLACEMENT-FALLBACK: recognition {dev} -> CPU "
-                         f"(no OpenVINO device bound)\n")
+        _log.error(f"PLACEMENT-FALLBACK: recognition {dev} -> CPU "
+                         f"(no OpenVINO device bound)")
         return _ort_session("cpu", None, onnx, cache)
 
     def _rec_warmup(self):
@@ -1270,8 +1274,8 @@ class Embedder:
         for stufe in self.BATCH_STUFEN:
             x = np.zeros((stufe, 3, 112, 112), np.float32)
             self._rec.run(None, {self._rec_in: x})
-        sys.stderr.write(f"[face_audit] rec warmup: batches {'/'.join(map(str, self.BATCH_STUFEN))} "
-                         f"in {_t.perf_counter() - t0:.1f}s (OV cache keeps them warm)\n")
+        _log.info(f"rec warmup: batches {'/'.join(map(str, self.BATCH_STUFEN))} "
+                         f"in {_t.perf_counter() - t0:.1f}s (OV cache keeps them warm)")
 
     def embed(self, img_bgr):
         h, w = img_bgr.shape[:2]
@@ -1482,20 +1486,20 @@ class NormMass:
             # auf einem anderen Kopf waeren sie Zahlen ohne Bedeutung.
             self.grund = (f"feature norm is calibrated for 'adaface' only "
                           f"(active model: '{self.modell}')")
-            sys.stderr.write(f"[face_audit] NORMMASS: {self.grund} -> disabled\n")
+            _log.warning(f"NORMMASS: {self.grund} -> disabled")
             return
         self._spec = spec
         try:
             self._sess, self.device = self._session_waehlen(spec["onnx"], device)
         except Exception as ex:                                # noqa: BLE001
             self.grund = f"graph variant failed: {type(ex).__name__}: {str(ex)[:200]}"
-            sys.stderr.write(f"[face_audit] NORMMASS: {self.grund} -> disabled\n")
+            _log.warning(f"NORMMASS: {self.grund} -> disabled")
             return
         self._in = self._sess.get_inputs()[0].name
         namen = [o.name for o in self._sess.get_outputs()]
         if "embedding" not in namen or len(namen) != 2:
             self.grund = f"unexpected outputs {namen}"
-            sys.stderr.write(f"[face_audit] NORMMASS: {self.grund} -> disabled\n")
+            _log.warning(f"NORMMASS: {self.grund} -> disabled")
             return
         self._idx_emb = namen.index("embedding")
         self._idx_f = 1 - self._idx_emb
@@ -1505,8 +1509,8 @@ class NormMass:
         # Session (die Norm-Guete selbst sichert die Kreuzprobe gegen CPU).
         if abw > (1e-4 if self.device == "CPU" else 1e-2):
             if self.device != "CPU":
-                sys.stderr.write(f"[face_audit] NORMMASS: consistency probe on {self.device} "
-                                 f"off by {abw:.2e} -> CPU\n")
+                _log.warning(f"NORMMASS: consistency probe on {self.device} "
+                                 f"off by {abw:.2e} -> CPU")
                 try:
                     self._sess = self._feature_norm_session(spec["onnx"], "CPU")
                     self.device = "CPU"
@@ -1518,7 +1522,7 @@ class NormMass:
                 # Falsche Modellvariante wuerde sonst still falsche "Normen" liefern
                 # (der Prototyp-Erstlauf starb genau daran: Werte um 0 statt um 23).
                 self.grund = self.grund or f"consistency probe failed (f/||f|| vs embedding, maxdiff {abw:.2e})"
-                sys.stderr.write(f"[face_audit] NORMMASS: {self.grund} -> disabled\n")
+                _log.warning(f"NORMMASS: {self.grund} -> disabled")
                 return
         self.ok = True
 
@@ -1613,7 +1617,7 @@ class NormMass:
                 os.makedirs(cache, exist_ok=True)
                 opts["cache_dir"] = cache
             except OSError:      # read-only Volume: dann ohne Cache bauen — der
-                pass             # Ausfall des Caches ist kein Grund, das Geraet zu verlieren
+                _logbuch.swallowed(_log, _logbuch.ERROR, "ignored", throttle=False)             # Ausfall des Caches ist kein Grund, das Geraet zu verlieren
         s = ort.InferenceSession(roh, providers=["OpenVINOExecutionProvider"],
                                  provider_options=[opts],
                                  sess_options=_ort_thread_opts())
@@ -1648,8 +1652,8 @@ class NormMass:
                 abw = cls._kreuzprobe(s, cpu)
                 if abw > cls.NORM_KREUZ_MAX:
                     raise ValueError(f"cross-check vs CPU off by {abw:.3f}")
-                sys.stderr.write(f"[face_audit] NORMMASS: feature norm on {dev} "
-                                 f"(cross-check vs CPU max |dNorm| {abw:.3f})\n")
+                _log.info(f"NORMMASS: feature norm on {dev} "
+                                 f"(cross-check vs CPU max |dNorm| {abw:.3f})")
                 # Die CPU-Referenz hat ihren einzigen Zweck erfuellt. Beide
                 # Sessions gleichzeitig zu halten IST die Bauspitze (gemessen
                 # 24.08.2026: 2,7 GB Geraet+CPU gegen 1,1 GB CPU allein). Das
@@ -1661,8 +1665,8 @@ class NormMass:
                 gc.collect()
                 return s, dev
             except Exception as ex:                            # noqa: BLE001
-                sys.stderr.write(f"[face_audit] NORMMASS: {dev} not used "
-                                 f"({type(ex).__name__}: {str(ex)[:120]}) -> next\n")
+                _log.warning(f"NORMMASS: {dev} not used "
+                                 f"({type(ex).__name__}: {str(ex)[:120]}) -> next")
         return (cpu or cls._feature_norm_session(pfad, "CPU", roh)), "CPU"
 
     @classmethod
@@ -1799,7 +1803,7 @@ class StrukturMass:
         pfad = os.path.join(self.MODELL_DIR, self.MODELL_DATEI)
         if not os.path.exists(pfad):
             self.grund = f"model file missing: {pfad}"
-            sys.stderr.write(f"[face_audit] STRUKTURMASS: {self.grund} -> disabled\n")
+            _log.warning(f"STRUKTURMASS: {self.grund} -> disabled")
             return
         try:
             import onnxruntime as ort
@@ -1842,12 +1846,12 @@ class StrukturMass:
                 pfad, sess_options=_so, providers=["CPUExecutionProvider"])
         except Exception as ex:                                   # noqa: BLE001
             self.grund = f"load failed: {type(ex).__name__}: {str(ex)[:200]}"
-            sys.stderr.write(f"[face_audit] STRUKTURMASS: {self.grund} -> disabled\n")
+            _log.warning(f"STRUKTURMASS: {self.grund} -> disabled")
             self._m = None
             return
         self.ok = True
-        sys.stderr.write("[face_audit] STRUKTURMASS: face structure on CPU "
-                         "(2d106det, padding 1.5 fixed)\n")
+        _log.info("STRUKTURMASS: face structure on CPU "
+                         "(2d106det, padding 1.5 fixed)")
 
     def streuung(self, crop_bgr):
         """-> float (Streuung der 106 Punkte / laengste Bildkante) oder None.
@@ -1869,6 +1873,7 @@ class StrukturMass:
                 return None
             return round(float(np.std(P, axis=0).mean() / max(w, h)), 4)
         except Exception:                                          # noqa: BLE001
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
             return None
 
 

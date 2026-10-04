@@ -14,6 +14,7 @@ Kontrakt wie core/registry: reine Zustandsmaschine, kein Netz, keine
 Dienst-Importe; Uhr injizierbar (Tests)."""
 import threading
 import time
+from core import logbuch as _logbuch
 
 
 class Schoner:
@@ -21,7 +22,7 @@ class Schoner:
         self.schwelle = int(schwelle)
         self.pause_s = float(pause_s)
         self.probe_s = float(probe_s)
-        self.log = log or (lambda m: None)
+        self.log = log or _logbuch.NULL
         self.uhr = uhr or time.monotonic
         self._lock = threading.Lock()
         self._n = 0                       # Netz-Fehler in Folge
@@ -59,7 +60,7 @@ class Schoner:
                     self._probe_ab = t + self.probe_s
             n = self._n
         if neu:
-            self.log(f"FRIGATE PROTECTOR: {n} consecutive network failures — "
+            self.log.warning(f"FRIGATE PROTECTOR: {n} consecutive network failures — "
                      f"backing off {int(self.pause_s)} s, one probe every "
                      f"{int(self.probe_s)} s until Frigate answers again")
 
@@ -71,5 +72,5 @@ class Schoner:
             self._n = 0
             self._bis = 0.0
         if war:
-            self.log("FRIGATE PROTECTOR: Frigate answers again — resuming "
+            self.log.info("FRIGATE PROTECTOR: Frigate answers again — resuming "
                      "normal operation")

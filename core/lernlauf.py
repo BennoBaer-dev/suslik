@@ -100,6 +100,8 @@ ANKER_STATUS = ("unbenannt", "benannt", "uebernommen", "verworfen")
 # Tester genau eine von 31 Personen, naemlich die mit dem Apostroph.
 # Jetzt EINE Quelle. Der Alias bleibt, damit bestehende Aufrufer nichts merken.
 from core.registry import PERSON_RE as _REGISTRY_PERSON_RE
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 PERSON_RE = rf"^{_REGISTRY_PERSON_RE}$"
 
 
@@ -200,6 +202,7 @@ def lauf_lesen(data_dir):
             return None, None
         return None, f"{type(e).__name__}: {e}"
     except Exception as e:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning (None, f'{type(e).__name__}: {e}')")
         return None, f"{type(e).__name__}: {e}"
 
 
@@ -304,6 +307,7 @@ def abbruch_marke_lesen(data_dir, lauf_id=None):
         with open(p, encoding="utf-8") as f:
             d = json.load(f)
     except Exception:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
         return None
     m_id = str((d or {}).get("lauf_id") or "")
     if lauf_id is not None and m_id and m_id != str(lauf_id):
@@ -495,6 +499,7 @@ def benannte_zaehlen(data_dir, lauf_id):
                 try:
                     d = json.loads(zeile)
                 except Exception:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                     continue
                 if ((d.get("lauf") or {}).get("lauf_id") == lauf_id
                         and d.get("status") not in (None, "unbenannt")
@@ -670,7 +675,7 @@ def lauf_loeschen(data_dir, lauf_id):
             try:
                 os.remove(_pfad(data_dir, "lernlauf.json"))
             except OSError:
-                pass
+                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     # Lauf-Ordner HART loeschen (nach dem Store-Schreiben; Containment: lauf_id
     # ist vom Aufrufer regex-geprueft, zusaetzlich realpath-Wache gegen Ausbruch).
     # Ehrliche Bilanz per NACHZAEHLUNG statt Vorher-Zaehlung.

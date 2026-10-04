@@ -738,7 +738,13 @@ def frei_mess_kennung(aus):
 
     Steht in beiden Rechenwegen (Karten- und RAM-Zweig). Ohne die gemeinsame
     Stelle stuende in einem von beiden irgendwann wieder „measured", waehrend
-    die Zahl laengst aus dem Band kommt — genau die luegende Diagnose (K1)."""
+    die Zahl laengst aus dem Band kommt — genau die luegende Diagnose (K1).
+
+    .546: ein VERWORFENES Band ist kein Band. Die Zahl daneben ist dann der
+    Momentwert, und genau das muss dastehen — sonst laese sich der Rechenweg
+    des Dienststarts wie eine 600-s-Messung, die er nicht ist."""
+    if (aus or {}).get("frei_band_verworfen"):
+        return "momentary value, band discarded"
     n = int((aus or {}).get("frei_band_n") or 0)
     if n >= FREI_BAND_MIN_PROBEN:
         return (f"band (min over {int(aus.get('frei_band_fenster_s') or 0)}s, "
@@ -1354,10 +1360,16 @@ def _kartenhaushalt(aus, s, kind, worker_budget, vor, gesamt,
     # Moment plant, obwohl sie ein Band versprochen hat, waere genau die
     # Diagnose-Luege — der Betreiber soll den Unterschied am Rechenweg sehen.
     if aus.get("frei_band_grund"):
-        aus["rechenweg"] += (f"; NO free-memory band available "
-                             f"({aus['frei_band_grund']}) — planned on the "
-                             f"momentary value {aus.get('frei_moment_mb')} "
-                             f"{einheit} instead")
+        # .546: zwei Gruende, zwei Saetze — „kein Band da" und „Band verworfen"
+        # sind verschiedene Lagen, und der Betreiber muss sie unterscheiden
+        # koennen (die zweite kommt nur beim Start mit noch nicht laufenden
+        # Waechtern vor und erklaert, warum die Zahl groesser ist als eben).
+        aus["rechenweg"] += (
+            (f"; free-memory band DISCARDED for this computation ("
+             if aus.get("frei_band_verworfen")
+             else f"; NO free-memory band available (")
+            + f"{aus['frei_band_grund']}) — planned on the momentary value "
+            f"{aus.get('frei_moment_mb')} {einheit} instead")
     return _nutzer_wahl(aus)
 
 
@@ -1461,6 +1473,10 @@ def straenge(gesamt_mb, n_waechter, kind, vorschlag, g_zusatz=0, nutzer_n=0,
            "frei_band_mb": None, "frei_band_fenster_s": 0, "frei_band_n": 0,
            "frei_moment_mb": max(0, int(frei_gemessen_mb or 0)),
            "frei_band_grund": None,
+           # .546: … und ob das Band auf diesem Weg VERWORFEN wurde. Auf jedem
+           # Rueckgabeweg, aus demselben Grund wie die vier Felder darueber: ein
+           # fehlendes Feld liest sich wie „das Band hat gegolten".
+           "frei_band_verworfen": False,
            "laufend_eigen_mb": 0, "laufend_eigen_quelle": None,
            "reserve_quelle": "formel",
            # .543 (Issue #32): DER ROHE WUNSCH, auf JEDEM Rueckgabeweg — auch auf
@@ -1552,6 +1568,52 @@ def straenge(gesamt_mb, n_waechter, kind, vorschlag, g_zusatz=0, nutzer_n=0,
     frei = frei_gerechnet
     frei_quelle = "gerechnet"
     gem = max(0, int(frei_gemessen_mb or 0))
+    # .546 — BAND UND WAECHTER-RESERVE SCHLIESSEN EINANDER AUS.
+    #
+    # DER FELDFALL (Anlage AU, RTX 3060 12 GB, 5 Live-Waechter, 22.09.2026
+    # 05:45:36, Dienststart):
+    #     1770 MiB frei (band (min over 600s, 10 samples)) - 0 reserve
+    #     - 4300 guards(5, Live-Engine laeuft nicht … — Posten reserviert)
+    #     = -2530 MiB budget   ->   EIN Strang, auf einer 12-GB-Karte.
+    # Beide Zahlen waren fuer sich richtig und zusammen falsch.
+    #
+    # Das Band kommt aus dem Ring der Systemstatistik und reicht
+    # FREI_BAND_FENSTER_S ZURUECK — beim Dienststart also in die Zeit VOR diesem
+    # Start. Darin lagen die fuenf Waechter, die Live-Engine UND der alte
+    # Worker-Prozess auf der Karte; ihr Speicher steckt im Band, und zwar als
+    # BELEGT. Die Reserve daneben legt denselben Waechtern ihren Posten ein
+    # ZWEITES Mal zurueck, weil die neue Engine noch nicht laeuft
+    # (`waechter_abzug_mb`: Engine unbekannt -> voller Posten). Derselbe Speicher
+    # zweimal, und beide Male in die klemmende Richtung.
+    #
+    # DIE REGEL IST DESHALB: wer die Waechter RESERVIERT, darf nicht auf einem
+    # Band planen, das sie schon enthaelt. Dann gilt der MOMENTWERT — die Karte,
+    # wie sie JETZT ist (die alte Konstellation ist weg, die neue noch nicht da),
+    # und die Reserve sagt, was gleich dazukommt. EIN Bild, nicht zwei.
+    # Der Momentwert ist nie kleiner als das Band (der Aufrufer bildet das
+    # Minimum aus beiden), der Wechsel kann das Budget also nur heben — und er
+    # hebt es genau um das, was zweimal abgezogen war.
+    #
+    # DIE GEGENRICHTUNG BLEIBT UNVERAENDERT: laeuft die Engine laenger als
+    # LIVE_WARM_S, ist `wae_abzug` 0, das Band gilt weiter und ist die
+    # vorsichtigere Zahl (das ist der Normalbetrieb und der Sinn von .544 M1).
+    # Ohne Waechter gibt es keinen Abzug und damit auch nichts zu verwerfen.
+    #
+    # EHRLICHE GRENZE: ist die Engine JUNG (< LIVE_WARM_S), steht sie womoeglich
+    # schon teilweise im Momentwert und wird trotzdem voll reserviert. Das ist
+    # die vorsichtige Seite und bewusst so — lieber ein Strang zu wenig als ein
+    # OOM im Aufbau.
+    if (s["mass"] == "vram" and wae_abzug > 0
+            and _fb.get("band_mb") is not None
+            and int(_fb.get("moment_mb") or 0) > 0):
+        gem = max(0, int(_fb["moment_mb"]))
+        aus["frei_band_verworfen"] = True
+        aus["frei_gemessen_mb"] = gem
+        aus["frei_band_grund"] = (
+            f"the band over {aus['frei_band_fenster_s']}s was measured while the "
+            f"guards were still on the card, and their posten ({wae_abzug} MiB) "
+            f"is being put aside again right now ({wae_grund}) — counting the "
+            f"same memory twice")
     # .534 (NB-2): WAS DER LAUFENDE WORKER SELBST HAELT, IST KEIN FREMDVERBRAUCH.
     # `frei_gemessen_mb` ist `memory.free` der Karte im JETZT — laeuft bereits ein
     # Worker, liegt sein Kartenanteil darin als BELEGT. Die Leiter plant daneben

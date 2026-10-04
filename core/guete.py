@@ -135,10 +135,18 @@ DET_BODEN = 0.40
 # Diese Null ist das REGLER-MINIMUM und zugleich die AUS-Stellung: 0 heisst
 # nach der Haus-Invariante „dieser Anteil ist bewusst aus" (stimme_ok/
 # achse_ok). Sie ist seit .516 NICHT mehr der Werkswert des Katalog-Registers
-# — der steht in `norm_werk()` darunter (User-Entscheid 10.09.). Fuer das
-# ERKENNEN-Register bleibt sie beides, Boden UND Werkswert: dort misst
-# niemand die Feature-Norm, und eine Latte ohne Messung waere fail-closed.
+# — der steht in `norm_werk()` darunter (User-Entscheid 10.09.). Auch fuer das
+# ERKENNEN-Register ist sie seit Bauplan K3, Stufe KP1 nur noch Boden und
+# Aus-Stellung; dessen Werkswert steht in ERK_NORM_WERK darunter.
 NORM_BODEN = 0.0
+# WERKSWERT DER NORM IM ERKENNEN-REGISTER (Bauplan analysen/bauplan_k3_produkt.md,
+# Stufe KP1 Punkte 4 und 10): 18,5, gemessen im Labor L16 Lauf 2 (K3 aus L16). Der
+# Analyse-Worker misst die Feature-Norm an der Erkennungsstufe und siebt damit
+# (worker_kern.event_rechnen, Norm-Sieb). EINE Stelle: core.kamerakalib.erkennen_start
+# liefert die Zahl, verifyd.load_config (Werkswert von `urteil_norm_min`) und die
+# Einmal-Migration einer gespeicherten 0 lesen sie dort. Sie ist KEIN Boden und keine
+# Klemme: ein gesetzter Wert darunter, auch 0 = aus, bleibt gueltig (Boden ist NORM_BODEN).
+ERK_NORM_WERK = 18.5
 
 
 def norm_werk():
@@ -169,11 +177,11 @@ def norm_werk():
     dort still diese Achse mit. Beide stehen weiter auf DERSELBEN Skala
     (0..NORM_MAX = 35), es wird nichts umgerechnet.
 
-    NICHT fuer das ERKENNEN-Register (`erkennen_start`): dort bleibt die Achse
-    auf 0/aus, weil der Erkennungs-Weg die Feature-Norm heute gar nicht misst.
-    Eine Latte ohne Messung waere fail-closed und schaltete die Erkennung ab —
-    deshalb hat dieses Register seit .517 auch keinen Norm-Regler mehr
-    (User-Entscheid 10.09., routes/livekalib.py)."""
+    NICHT fuer das ERKENNEN-Register: dort hat die Achse ihren eigenen
+    Werkswert 18,5 (ERK_NORM_WERK, Bauplan K3 Stufe KP1). Der Analyse-Worker
+    misst die Feature-Norm an der Erkennungsstufe und siebt damit (worker_kern.event_rechnen, Norm-Sieb). Einen Norm-Regler auf
+    der Kalibrier-Seite hat dieses Register weiter nicht (Bauplan K3,
+    Entscheid 5; routes/livekalib.py)."""
     return 20.0
 # Obergrenze der Norm-Skala. Sie ist keine neue Zahl, sondern die Spanne, die
 # die Konfigurationsseite fuer die bestehenden Norm-Linien fuehrt

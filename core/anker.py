@@ -18,6 +18,8 @@ import time
 import numpy as np
 
 from core import messkarte as _mk
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 
 # ------------------------------------------------------------------ B1: Durchgangs-Kette
@@ -181,11 +183,13 @@ def _konsens_karte(lauf_dir):
                 try:
                     z = json.loads(zeile)
                 except Exception:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                     continue
                 d = z.get("datei_v")
                 if d:
                     aus[os.path.basename(d)] = z.get("konsens")
     except OSError:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning {}")
         return {}
     return aus
 
@@ -348,7 +352,7 @@ def stufe2_clustern(vertreter, sim, deckel, deckel_hart, clusterer, log=None):
         return [c["vs"] for c in _clustern(list(vertreter))], 1, 0
 
     if log:
-        log(f"anker stage 2: {len(vertreter)} representatives exceed the hard cap "
+        log.info(f"anker stage 2: {len(vertreter)} representatives exceed the hard cap "
             f"{deckel_hart} — round-based APPROXIMATION (linkage not exact)")
     rest = sorted(vertreter, key=lambda v: (-v["stuetz"], v["mitglieder"][0]["id"]))
     cluster, runden, ungeclustert = [], 0, 0
@@ -361,7 +365,7 @@ def stufe2_clustern(vertreter, sim, deckel, deckel_hart, clusterer, log=None):
             ungeclustert = len(rest)
             cluster.extend({"emb": v["emb"], "vs": [v]} for v in rest)
             if log:
-                log(f"anker stage 2: round full at {len(vorhanden)} clusters — "
+                log.info(f"anker stage 2: round full at {len(vorhanden)} clusters — "
                     f"{ungeclustert} leftover representatives kept as single clusters (declared)")
             break
         tranche = rest[:platz]
@@ -379,7 +383,7 @@ def stufe2_clustern(vertreter, sim, deckel, deckel_hart, clusterer, log=None):
             z = zentroid([v["emb"] for v in vs]) or vs[0]["emb"]
             cluster.append({"emb": z, "vs": vs})
         if log and rest:
-            log(f"anker stage 2: round {runden} done — {len(rest)} representatives remaining")
+            log.info(f"anker stage 2: round {runden} done — {len(rest)} representatives remaining")
     return [c["vs"] for c in cluster], runden, ungeclustert
 
 
@@ -744,7 +748,7 @@ def anker_phase_fahren(data_dir, lauf_dir, lauf_id, events_liste, schwellen, clu
         sieb_aus_grund = ("quality sieve skipped: it needs the learning stock "
                           "(vorrat_aktiv) for its quality measure — grouping ran "
                           "unfiltered")
-        log(f"anchor stage (run {lauf_id}): {sieb_aus_grund}")
+        log.info(f"anchor stage (run {lauf_id}): {sieb_aus_grund}")
     else:
         sieb = {"winkel_max": schwellen["anker_qualitaet_winkel_max"],
                 "roll_max": schwellen["anker_qualitaet_winkel_max"],
@@ -800,7 +804,7 @@ def anker_phase_fahren(data_dir, lauf_dir, lauf_id, events_liste, schwellen, clu
             "status": f"anchor stage failed: {fehlend} candidate file(s) missing — "
                       "harvest data is gone (aborted run? trashed folder?); "
                       "keeping the existing anchors untouched"})
-        log(f"anchor stage failed (run {lauf_id}): harvest data missing "
+        log.error(f"anchor stage failed (run {lauf_id}): harvest data missing "
             f"({fehlend} candidate files) — existing anchors kept")
         return None
     cl, runden, ungeclustert = stufe2_clustern(
@@ -830,11 +834,11 @@ def anker_phase_fahren(data_dir, lauf_dir, lauf_id, events_liste, schwellen, clu
     # Abort waehrend Stufe 2 noch 74 Zeilen mit Pfaden ins frisch getrashte Material
     # persistieren und 'finished' melden.
     if fortschreiben(fortschritt={"status": "writing anchors"}) is None:
-        log(f"anchor stage aborted before writing (run {lauf_id}) — nothing persisted")
+        log.error(f"anchor stage aborted before writing (run {lauf_id}) — nothing persisted")
         return None
     fremde, kaputt, benannt_behalten = anker_lauf_schreiben(data_dir, saetze, lauf_id)
     if benannt_behalten:
-        log(f"anchor stage: {benannt_behalten} named anchors kept (never rewritten)")
+        log.info(f"anchor stage: {benannt_behalten} named anchors kept (never rewritten)")
     dauer = round(time.time() - t0, 1)
     st_zahl = {}
     for m in margen:
@@ -876,7 +880,7 @@ def anker_phase_fahren(data_dir, lauf_dir, lauf_id, events_liste, schwellen, clu
                      "faces that pass the anchor gates (det/edge/sharpness/pose); a camera "
                      "or zone that sees faces head-on would change that")
         fortschreiben(fortschritt=dict(basis, status=f"anchors: none — {grund}"))
-        log(f"anchor stage finished (run {lauf_id}): 0 clusters ({grund})")
+        log.info(f"anchor stage finished (run {lauf_id}): 0 clusters ({grund})")
     else:
         fortschreiben(fortschritt=dict(
             basis, status="anchors ready — open a cluster to name it",
@@ -884,7 +888,7 @@ def anker_phase_fahren(data_dir, lauf_dir, lauf_id, events_liste, schwellen, clu
             hart=st_zahl.get("hart", 0), thin=st_zahl.get("zu_duenn", 0),
             unconfirmed=st_zahl.get("unbestaetigt", 0),
             **({"merge suggestions": vorschlaege_n} if vorschlaege_n else {})))
-        log(f"anchor stage finished (run {lauf_id}): {len(saetze)} clusters "
+        log.error(f"anchor stage finished (run {lauf_id}): {len(saetze)} clusters "
             f"(ok {st_zahl.get('ok', 0)} / hart {st_zahl.get('hart', 0)} / "
             f"thin {st_zahl.get('zu_duenn', 0)} / unconfirmed {st_zahl.get('unbestaetigt', 0)}"
             f"{f' / {vorschlaege_n} merge suggestions' if vorschlaege_n else ''}) "

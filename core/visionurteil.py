@@ -68,6 +68,8 @@ import time
 from core import personlive as _plv
 from core import vision as _vis
 from core import visiongalerie as _vg
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 # --- Regeln, die auch Gate und Beweis lesen (eine Quelle) --------------------
 MIN_HOEHE_PX = _vg.MIN_HOEHE_PX      # dieselbe Mindestgroesse wie die Galerie
@@ -149,7 +151,7 @@ def kandidaten(data_dir, pass_key, n=1, jetzt=None, sammeln=None, min_hoehe=None
                     except ValueError:
                         pass
         except OSError:
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     gesehen = set()
     for e in zeilen:
         datei = e.get("datei")
@@ -349,13 +351,14 @@ def gitter_ablegen(data_dir, pass_key, lauf_id, b64):
                 json.dump(buch, f)
             os.replace(tmp, bp)
     except Exception:
-        pass
+        _logbuch.swallowed(_log, _logbuch.ERROR, "ignored", throttle=False)
     try:
         with open(os.path.join(d, datei), "wb") as f:
             f.write(base64.b64decode(b64))
             f.flush()
             os.fsync(f.fileno())
     except (OSError, ValueError):
+        _logbuch.swallowed(_log, _logbuch.ERROR, "returning None", throttle=False)
         return None
     return datei
 
@@ -375,6 +378,7 @@ def zentroide(data_dir):
         d = np.load(p, allow_pickle=False)
         X, labels = d["X"], [str(x) for x in d["labels"]]
     except (OSError, ValueError, KeyError):
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning {}")
         return {}
     aus = {}
     for name in sorted(set(labels)):
@@ -439,6 +443,7 @@ def zuletzt_bestaetigt(data_dir, max_passe=20):
     try:
         ordner = sorted(os.listdir(_plv.kontrolle_dir(data_dir)), reverse=True)
     except OSError:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
         return None
     for pk in ordner[:max(1, int(max_passe))]:
         for z in reversed(urteile_lesen(data_dir, pk)):
@@ -614,7 +619,7 @@ def _sagen(melden, text, **felder):
         try:
             melden(text, **felder)
         except Exception:
-            pass                      # ein Log-Fehler kippt nie ein Urteil
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")                      # ein Log-Fehler kippt nie ein Urteil
 
 
 def _antwort_satz(u, name_a, name_b, runde, arm, doppellauf=True):
@@ -984,6 +989,7 @@ def zaehler_lesen(data_dir):
         with open(zaehler_pfad(data_dir)) as f:
             d = json.load(f)
     except (OSError, ValueError):
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning leer")
         return leer
     leer.update({k: v for k, v in (d or {}).items() if k in leer})
     return leer
@@ -1089,6 +1095,7 @@ def protokoll_schreiben(data_dir, pass_key, zeile):
             os.fsync(f.fileno())
         return p
     except OSError:
+        _logbuch.swallowed(_log, _logbuch.ERROR, "returning None", throttle=False)
         return None
 
 
@@ -1105,7 +1112,7 @@ def protokoll_lesen(data_dir, pass_key):
                 except ValueError:
                     pass
     except OSError:
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     return aus
 
 
@@ -1206,6 +1213,7 @@ def waisen_schliessen(data_dir, lebt=None):
     try:
         ordner = sorted(os.listdir(_plv.kontrolle_dir(data_dir)))
     except OSError:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning []")
         return []
     aus = []
     for pk in ordner:
@@ -1275,6 +1283,7 @@ def protokoll_karte(data_dir, max_passe=80):
     try:
         ordner = sorted(os.listdir(_plv.kontrolle_dir(data_dir)), reverse=True)
     except OSError:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning karte")
         return karte
     for pk in ordner[:max_passe]:
         zeilen = urteile_lesen(data_dir, pk)
@@ -1591,7 +1600,7 @@ def _abschluss(data_dir, pass_key, zeile, z, jetzt, t0):
     try:
         zaehler_schreiben(data_dir, z)
     except OSError:
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     protokoll_schreiben(data_dir, pass_key, zeile)
     return zeile
 
@@ -1611,6 +1620,7 @@ def _event_scores(event_dir):
                 try:
                     d = json.loads(zeile)
                 except Exception:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                     continue
                 for p, w in (d.get("persons") or {}).items():
                     try:
@@ -1620,7 +1630,7 @@ def _event_scores(event_dir):
                     if p not in werte or v > werte[p]:
                         werte[p] = v
     except OSError:
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     return werte
 
 
@@ -1660,6 +1670,7 @@ def gesichtsbilder(data_dir, szenario):
         try:
             dateien = sorted(d for d in os.listdir(edir) if d.endswith(".jpg"))
         except OSError:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
             continue
         scores = _event_scores(edir)
         rumpf = {"eid": eid, "kamera": str(ev.get("cam") or ""), "t": ev.get("t")}

@@ -58,6 +58,8 @@ tragen dieselbe Wache aus demselben Grund).
 import gc
 import os
 import time
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 # Der Kantenlaenge-Rueckfall fuer Modelle mit DYNAMISCHEM Eingang: der Detektor traegt
 # (1,3,H,W), H/W setzt erst der Betrieb. 320 ist die Groesse, mit der der Embedder seine
@@ -154,6 +156,7 @@ def _pseudo_geraete():
     try:
         return _face_audit().NORM_PSEUDO_GERAETE or {}
     except Exception:                                        # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning {}")
         return {}
 
 
@@ -280,6 +283,7 @@ def norm_geraet(knoten_da=None):
                 import onnxruntime as ort
                 vorhanden = ort.get_available_providers()
             except Exception:                                # noqa: BLE001
+                _logbuch.swallowed(_log, _logbuch.WARNING, "returning False")
                 return False
             if dev == "CUDA":
                 # .506: die CUDA-Stufe der Norm-Kette. Der EP allein genuegt nicht —
@@ -540,6 +544,7 @@ def _ein_modell(name, v, art, kind, dev, geraet, session_bauer):
         quelle = modell_quelle(name, v)
         eingaben = _eingaben(v, skalenliste)
     except Exception as ex:                                  # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning _zeile(...)")
         return _zeile(name, geraet, art, urteil="warn",
                       grund=f"input/model not available ({type(ex).__name__}: "
                             f"{str(ex)[:100]})")
@@ -548,6 +553,7 @@ def _ein_modell(name, v, art, kind, dev, geraet, session_bauer):
         s = session_bauer(quelle, ("cpu", None))
         cpu_aus = _lauf(s, eingaben)
     except Exception as ex:                                  # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning _zeile(...)")
         return _zeile(name, geraet, art, urteil="warn",
                       grund=f"cpu reference session failed ({type(ex).__name__}: "
                             f"{str(ex)[:100]}) — nothing to compare against")
@@ -569,6 +575,7 @@ def _ein_modell(name, v, art, kind, dev, geraet, session_bauer):
             grenze = SCHWELLEN[art] * WIEDERHOL_ANTEIL
             return max(laeufe), abs(laeufe[0] - laeufe[1]) <= grenze, None
         except Exception as ex:                              # noqa: BLE001
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning (None, None, f'{type(ex).__name__}: {str(ex)[:100]}')")
             return None, None, f"{type(ex).__name__}: {str(ex)[:100]}"
         finally:
             del sess

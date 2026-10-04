@@ -39,6 +39,8 @@ keinen eigenen Anker; sonst liefe eine ausgetauschte Datei mit altem Vektor).
 """
 import json
 import os
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 
 def beiwerte(master_dir, modell, alle=None):
@@ -73,6 +75,7 @@ def beiwerte(master_dir, modell, alle=None):
             try:
                 d = json.loads(zeile)
             except Exception:
+                _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                 continue
             person, datei = d.get("person"), d.get("datei")
             if not (person and datei):

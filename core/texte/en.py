@@ -55,6 +55,24 @@ T = {
     "readme.zurueck": 'Back',
         "readme.fuss": 'This text appears once after every restart.',
         "readme.inhalt": 'Contents',
+    "readme.neu.titel": "New in this version",
+    "readme.neu.text":
+        "This version changes a lot, starting with how I test before a release. "
+        "Every version now goes through a test run on three test machines before "
+        "I publish it. Now and then errors had slipped into the code. The test "
+        "run is meant to catch them earlier.\n\n"
+        "Face recognition works differently now. The program still checks every "
+        "x-th frame of an event. When a face reaches a certain score for a known "
+        "person, a door opens: the next 20 frames are checked one by one. If a "
+        "face reaches that score again inside the window, the door stays open "
+        "longer. Then it goes back to every x-th frame.\n\n"
+        "A name only turns green after three hits. Every usable face that "
+        "matches the person counts as one hit. A face that is only clear for a "
+        "moment now gets a better chance: once it is spotted, the frames right "
+        "after it are no longer skipped.\n\n"
+        "I am happy about any feedback, especially when the new recognition gets "
+        "something wrong: a wrong name, or a known person who is not recognised. "
+        "That is the only way I can work on the errors.",
         "readme.generell.titel": 'General',
     "readme.generell.text": "My scenario detection hangs on Frigate's person detection. As soon as Frigate reports a person, I fetch the whole person event. Such an event is sometimes a few seconds long, sometimes several minutes. I go through all of it to find every person in it.\n\nWhether Frigate's own face recognition is switched on makes no difference. It is only needed if you want faces synced with Frigate.\n\nThe check never runs on the detect stream. It runs on the recording, that is the best stream the camera hands to Frigate.\n\nA check starts in one of two ways. Either from a person event in Frigate, which is the scenario path. Or from the live watcher: it pulls the running stream, straight from the camera or through Frigate's proxy, looks for faces and starts from there.\n\nA person is recognised in three ways. By the face. By the person as a whole, from the picture alone, without a face. By a vision model, and that one is still beta.\n\nI run 4K cameras here, with the frame rate as high as it goes, at least 15 frames per second. Same for the bitrate. A low bitrate leaves moving faces blurred.",
     "readme.aktuell.titel": 'What I am working on',
@@ -447,7 +465,7 @@ T = {
     "konfiguration.neustart.frage": "Restart the service now? Processing pauses for a few seconds.",
     "antwort.neustart": "Restarting — this page answers again in a few seconds.",
     "konfiguration.support.titel": "Remote support access",
-    "konfiguration.support.satz": "Read-only download of named areas (logs, masked config, faces, learning runs, body material, state files) for whoever holds the support token. The on/off switch support_zugriff sits in the table below, default off. Every request is written to the service log. The face and body areas contain pictures of real people — hand the token out with care. Without TLS in front of this service the token travels in plain text. Since 0.1.0.395 the token also allows one action: restarting this service remotely (POST /support/restart).",
+    "konfiguration.support.satz": "Read-only download of named areas (logs, masked config, faces, learning runs, body material, state files) for whoever holds the support token. The on/off switch support_zugriff sits in the table below, default off. Every request is written to the service log. The face and body areas contain pictures of real people — hand the token out with care. Without TLS in front of this service the token travels in plain text. The token also allows four actions: restarting this service remotely (POST /support/restart), sending events through the recognition again (POST /support/einspielen), switching the fine measurement on or off (POST /support/feinmessung) and switching debug logging on or off without a restart (POST /support/debug).",
     "konfiguration.support.token_gesetzt": "A support token is set.",
     "konfiguration.support.token_fehlt": "No support token yet.",
     "konfiguration.support.knopf_token": "Create new token",

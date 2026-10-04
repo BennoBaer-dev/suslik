@@ -86,8 +86,8 @@ def person_events(hole, anzahl=None, kameras=None, seite=200, max_seiten=MAX_SEI
         # die id-Dedupe frisst die Wiederholungen (live gegen Frigate verifiziert).
         before = min(e.get("start_time") or 0 for e in batch) + 1e-6
         limit = min(seite, 1000)                    # nach Fortschritt zurueck auf Normalgroesse
-    if offen_n and callable(log):
-        log(f"{offen_n} event(s) skipped: Frigate has not finished them yet "
+    if offen_n and log is not None:
+        log.warning(f"{offen_n} event(s) skipped: Frigate has not finished them yet "
             f"(no end_time) — an event without an end has no usable clip")
     return (events if anzahl is None else events[:anzahl]), seiten
 

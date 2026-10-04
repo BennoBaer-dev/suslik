@@ -35,6 +35,8 @@ Invariante steht der with-Block von _deckung_korrektur in verifyd.py).
 import json
 import os
 import time
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 
 # Ketten-Schalter (Issue #21): die DREI Stufen je Erkennungs-Weg — EINE Quelle
@@ -85,6 +87,7 @@ def koerper_scharf(data_dir):
         from core import personmodell as pm
         st = pm.status_lesen(data_dir)
     except Exception:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning False")
         return False
     return bool(st and st.get("scharf"))
 
@@ -131,6 +134,7 @@ def deckung_by_eid(log_path, entry=None):
                 try:
                     r = json.loads(ln)
                 except Exception:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                     continue
                 if r.get("eid"):
                     by_eid[r["eid"]] = r      # last-wins je eid (wie /heute)
@@ -279,7 +283,7 @@ def auto_default(cfg, log_path, log, *, store_pfad, store_laden, store_schreiben
         # Auto-Default hier die komplette Config samt Meldekanal-Secrets (os.replace,
         # kein Rueckweg) — stiller Verlust in genau der Zielpopulation dieses Features.
         if not store and os.path.exists(store_datei):
-            log("chain auto-default skipped: config store exists but reads empty/"
+            log.warning("chain auto-default skipped: config store exists but reads empty/"
                 "unreadable — not touching it (no marker; decision retried next boot)")
             return
         # User-Wille = WERT weicht vom Neutralwert ab — in Store ODER yaml (Widerleger
@@ -336,10 +340,10 @@ def auto_default(cfg, log_path, log, *, store_pfad, store_laden, store_schreiben
                 import face_audit as _fa
                 _fa._ORT_THREADS = None
             except Exception:
-                pass
+                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
             _gesetzt_text = ", ".join(f"{k}={v}" for k, v in
                                       sorted(info["gesetzt"].items()))
-            log(f"chain defaults set at first start -> {_gesetzt_text}. A fresh "
+            log.info(f"chain defaults set at first start -> {_gesetzt_text}. A fresh "
                 f"installation runs face recognition only; the body and vision "
                 f"paths are yours to switch on in Settings whenever you want them"
                 + (f". cpu_threads={kerne} on top, because this machine measured "
@@ -363,7 +367,7 @@ def auto_default(cfg, log_path, log, *, store_pfad, store_laden, store_schreiben
                                        ensure_ascii=False) + "\n")
                     f.flush()
             except Exception as e:
-                log(f"chain auto-default: audit line not written "
+                log.error(f"chain auto-default: audit line not written "
                     f"({type(e).__name__}: {e}) — values are in place; if the "
                     f"marker write below also fails, the Settings note is lost")
         elif user_gesetzt:
@@ -381,6 +385,7 @@ def auto_default(cfg, log_path, log, *, store_pfad, store_laden, store_schreiben
                             try:
                                 d = json.loads(line)
                             except Exception:
+                                _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                                 continue   # eine zerrissene Zeile darf die Suche nicht killen (Recheck-KANN)
                             if d.get("auto") and set(d.get("aenderungen") or {}) == set(user_gesetzt):
                                 info["gesetzt"] = dict(d["aenderungen"])
@@ -399,7 +404,7 @@ def auto_default(cfg, log_path, log, *, store_pfad, store_laden, store_schreiben
                                 # sie zu behaupten.
                                 info["schwach"] = "cpu_threads" in (d.get("aenderungen") or {})
             except Exception:
-                pass
+                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         os.makedirs(os.path.dirname(marker), exist_ok=True)
         tmp = f"{marker}.tmp-{os.getpid()}"
         with open(tmp, "w") as f:
@@ -413,7 +418,7 @@ def auto_default(cfg, log_path, log, *, store_pfad, store_laden, store_schreiben
         # erfolgreichen Store-Schreiben wahr.
         was = ("values are set, only the sticky marker failed"
                if angewendet else "defaults unchanged")
-        log(f"chain auto-default incomplete ({type(e).__name__}: {e}) — {was}")
+        log.warning(f"chain auto-default incomplete ({type(e).__name__}: {e}) — {was}")
     finally:
         if tmp:
             try:
@@ -450,5 +455,5 @@ def auto_hinweise(cfg):
                 out[k] = ("off at first start: a fresh installation runs face "
                           "recognition only — switch it on here whenever you want it")
     except Exception:
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     return out

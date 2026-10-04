@@ -31,6 +31,8 @@ from routes import areas as _r_areas        # Chip-Leiste (reine Links)
 # fuer beide Seiten statt einer zweiten Kappungs-Rechnung hier. routes/heute
 # fasst weder Netz noch Dateisystem an und kennt auftritte nicht (kein Kreis).
 from routes import heute as _r_heute
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 
 
@@ -46,6 +48,7 @@ def _koerper(cfg):
                   .get("feuer_ab") or _plv.FEUER_AB)
         return kmap, kab
     except Exception:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning ({}, 2)")
         return {}, 2
 
 def _hhmm(t):
@@ -74,6 +77,7 @@ def _ref_eids(cfg, person):
                 stand[e["datei"]] = (e.get("eid") or alt_eid,
                                      bool(e.get("aktiv")))
     except OSError:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning set()")
         return set()
     return {eid for eid, aktiv in stand.values() if aktiv and eid}
 
@@ -97,7 +101,7 @@ def _lade_rows(log_pfad):
                 try:
                     rows.append(json.loads(l))
                 except Exception:
-                    pass
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     return rows
 
 

@@ -48,6 +48,8 @@ import threading
 import time
 
 from core import registry as _reg
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 # Ringpuffer: eine Zeile je Takt, Aufbewahrung 48 h. Gekuerzt wird AUSSCHLIESSLICH
 # im Nachtjob (verifyd Service.alt_aufraeumen) — kein zweiter Aufraeum-Ort, sonst
@@ -163,6 +165,7 @@ def cpu_messen():
     try:
         jetzt = _lesen()
     except Exception:                                        # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning _fehlt('nicht_lesbar', kerne=None, n=None)")
         return _fehlt("nicht_lesbar", kerne=None, n=None)
     if not jetzt.get("cpu"):
         return _fehlt("nicht_lesbar", kerne=None, n=None)
@@ -205,6 +208,7 @@ def ram_messen():
     try:
         roh = int(_text("/sys/fs/cgroup/memory.current").strip())
     except Exception:                                        # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning _fehlt(...)")
         return _fehlt("nicht_lesbar", genutzt_mb=None, limit_mb=None, cache_mb=None)
     inaktiv = 0
     try:
@@ -245,7 +249,7 @@ def ram_messen():
         if w != "max":
             aus["limit_mb"] = int(int(w) / 1024 ** 2)
     except Exception:                                        # noqa: BLE001
-        pass
+        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     if aus["limit_mb"]:
         aus["prozent"] = round(aus["genutzt_mb"] * 100.0 / aus["limit_mb"], 1)
     else:
@@ -274,6 +278,7 @@ def platte_messen(data_dir, grenzen=None):
         aus["genutzt_gb"] = round((gesamt - frei) / 1024 ** 3, 1)
         aus["prozent"] = round((gesamt - frei) * 100.0 / gesamt, 1)
     except Exception:                                        # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning _fehlt(...)")
         return _fehlt("nicht_lesbar", **{k: None for k in aus if k not in ("prozent", "grund")})
     if grenzen:
         aus["cache_gb"] = grenzen.get("cache_gb")
@@ -293,6 +298,7 @@ def npu_messen():
     try:
         us = int(_text(treffer[0]).strip())
     except Exception:                                        # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning _fehlt('nicht_lesbar')")
         return _fehlt("nicht_lesbar")
     jetzt = time.monotonic()
     with _LOCK:
@@ -368,6 +374,7 @@ def _i915_oeffnen():
             roh = _text(pfad).strip()                 # Form: "config=0x0"
             cfg = int(roh.split("=", 1)[1], 0)
         except Exception:                                    # noqa: BLE001
+            _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
             continue
         a = _Attr()
         a.type, a.size, a.config = typ, ctypes.sizeof(_Attr), cfg
@@ -409,6 +416,7 @@ def eigener_gpu_anteil():
             try:
                 text = open(fd).read()
             except OSError:
+                _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                 continue                      # Prozess weg oder fremder Namensraum
             if "drm-engine" not in text:
                 continue
@@ -471,7 +479,7 @@ def _sonde_openvino():
             # auch fuer Selbstmessung gesperrt, s. Kopfkommentar.)
             stand[engine] = struct.unpack("Q", os.read(fd, 8))[0]
         except Exception:                                    # noqa: BLE001
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     if not stand:
         return _fehlt("nicht_lesbar")
     vorher = (_STAND.get("i915") or {}).get("stand")
@@ -523,6 +531,7 @@ def _sonde_cuda():
     except FileNotFoundError:
         return _fehlt("werkzeug_fehlt")
     except Exception:                                        # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning _fehlt('nicht_lesbar')")
         return _fehlt("nicht_lesbar")
     zeile = (r.stdout or "").strip().splitlines()
     if r.returncode != 0 or not zeile:
@@ -534,6 +543,7 @@ def _sonde_cuda():
                 "speicher_max_mb": int(float(teile[2])),
                 "temperatur_c": int(float(teile[3]))}
     except Exception:                                        # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning _fehlt('nicht_lesbar')")
         return _fehlt("nicht_lesbar")
 
 
@@ -576,6 +586,7 @@ def prozesse_karte_mb(pids=None):
     except subprocess.TimeoutExpired:
         return {}, "timeout"
     except Exception:                                        # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning ({}, 'nicht_lesbar')")
         return {}, "nicht_lesbar"
     if r.returncode != 0:
         return {}, "nicht_lesbar"
@@ -644,6 +655,7 @@ def _sonde_migraphx():
     except FileNotFoundError:
         return _fehlt("werkzeug_fehlt")
     except Exception:                                        # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning _fehlt('nicht_lesbar')")
         return _fehlt("nicht_lesbar")
     zeilen = [z for z in (r.stdout or "").splitlines() if z.strip()]
     if r.returncode != 0 or len(zeilen) < 2:
@@ -731,6 +743,7 @@ def durchsatz_messen(data_dir, jetzt=None):
                 f.readline()                        # angeschnittene Zeile verwerfen
             roh = f.read().decode("utf-8", "replace")
     except Exception:                                        # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning {'analysen_1h': None, 'analysen_24h': None, 'dauer_mittel...")
         return {"analysen_1h": None, "analysen_24h": None,
                 "dauer_mittel_s": None, "grund": "nicht_lesbar"}
     dauern = []
@@ -738,6 +751,7 @@ def durchsatz_messen(data_dir, jetzt=None):
         try:
             d = json.loads(z)
         except Exception:                                    # noqa: BLE001
+            _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
             continue
         ts = float(d.get("ts") or 0)
         if ts < jetzt - 86400:
@@ -841,6 +855,7 @@ def schreiben(cfg, snap):
             f.write(json.dumps(_schlank(snap), ensure_ascii=False) + "\n")
         return True
     except Exception:                                        # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.ERROR, "returning False", throttle=False)
         return False
 
 
@@ -856,12 +871,14 @@ def lesen(cfg, seit_ts=None):
                 f.readline()
             roh = f.read().decode("utf-8", "replace")
     except Exception:                                        # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning []")
         return []
     aus = []
     for z in roh.splitlines():
         try:
             d = json.loads(z)
         except Exception:                                    # noqa: BLE001
+            _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
             continue
         if seit_ts and float(d.get("ts") or 0) < seit_ts:
             continue
@@ -998,7 +1015,7 @@ def sammler_starten(cfg, dienst_fn=None, log=None):
     Der Puffer wird beim Start NICHT geleert — ein Neustart soll die Kurve nicht
     abschneiden (Bauplan §3.2). Die erste Runde laeuft sofort und setzt nur die
     Bezugsgroessen der Delta-Zaehler; ihre Werte sind ehrlich None."""
-    melde = log or (lambda m: None)
+    melde = log or _logbuch.NULL
 
     def lauf():
         zustand = {}
@@ -1007,7 +1024,7 @@ def sammler_starten(cfg, dienst_fn=None, log=None):
             try:
                 sammler_schritt(cfg, dienst_fn, zustand, jetzt)
             except Exception as e:                           # noqa: BLE001
-                melde(f"systemstat sampler: {type(e).__name__}: {e}")
+                melde.warning(f"systemstat sampler: {type(e).__name__}: {e}")
             # Event.wait statt sleep: die erste Live-Anforderung weckt sofort.
             # Ein verlorenes set() (Wecker zwischen Timeout und clear) kostet
             # nichts — die Runde misst ohnehin gerade und sieht live_aktiv().

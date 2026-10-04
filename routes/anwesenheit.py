@@ -57,6 +57,8 @@ import webui
 from core import anwesenheit as _anw
 from core import areas as _areas
 from core.sprache import t
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 # EINE Quelle der Sicht-Arten (Registerschalter) und der Zellzustaende
 # (Zellen, Nachtzellen, Legende, Gate-Probe) — QS-Ebenen-Regel: fachliche
@@ -82,6 +84,7 @@ def tag_waehlen(par, heute):
         d.timestamp()
         (d + datetime.timedelta(days=1)).timestamp()
     except (ValueError, OverflowError, OSError):
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning heute")
         return heute
     return heute if p > heute else p
 

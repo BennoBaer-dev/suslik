@@ -45,6 +45,8 @@ from core import atomar as _atomar
 # Datei-Einspeisung — kein zweites verstreutes Literal, keine zweite
 # Messstelle (CLAUDE.md: zentrale Quelle statt Streu-Literal).
 from core.dateiquelle import KAMERA_RE, _ffprobe
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 PRAEFIX = "einspiel-"
 ORDNER = "einspielen"
@@ -66,7 +68,13 @@ FENSTER_SUCHLIMIT = 100    # wie viele Events EINE Frigate-Abfrage liefert (Seit
 # `max`, der Handler ignorierte das Feld STILL und der Werkswert 5 griff — der
 # Bediener hielt einen Nachlauf ueber eine Stunde fuer gefahren, es waren fuenf
 # Ereignisse. Ein unbekanntes Feld ist ab jetzt ein Fehler mit Namensnennung.
-FELDER = ("kamera", "start", "ende", "max", "richtung", "event", "clip")
+# Bauplan K3, Stufe KP3 (Tuer-Konzept Punkt 3.7): die Personenzahl eines eingespielten Ereignisses kommt aus
+# seiner Metadaten-Datei, nicht aus der verbundenen Frigate, die fuer eine `einspiel-`-ID eine falsche
+# Zahl liefern wuerde (Befund B6). Derselbe Name als Feld des Aufrufs und als Schluessel der Metadaten;
+# erlaubt ist eine ganze Zahl ab 1 nach core.personenzahl.gueltig oder, seit Stufe PM2 (Bauplan
+# Pruefmaterial K3), das Wort core.personenzahl.UNBEKANNT fuer eine ausdruecklich unbekannte Zahl.
+PERSONENZAHL = "personenzahl"
+FELDER = ("kamera", "start", "ende", "max", "richtung", "event", "clip", PERSONENZAHL)
 # Fensterweg: welches ENDE des Fensters genommen wird (User 05.09.: "alle
 # Ereignisse ab Zeitpunkt X einer Kamera; oder rueckwaerts ab X bis Y").
 RICHTUNGEN = ("vor", "zurueck")
@@ -212,6 +220,36 @@ def felder_pruefen(body):
             f"known: " + ", ".join(FELDER))
 
 
+def personenzahl_pruefen(body):
+    """Die Personenzahl des Aufrufs pruefen (K3, Stufe KP3; PM2): nur fuer eine Einspielung mit eigener
+    Metadaten-Datei (`clip`, oder `event` mit `kamera`), eine ganze Zahl ab 1 oder das Wort
+    core.personenzahl.UNBEKANNT. Fehlt sie oder ist sie unbekannt, laeuft das Ereignis ohne fruehes Ende;
+    ein Feld, das nirgends ankaeme, und jeder andere Wert sind ein Fehler (Feldfall 04.09.).
+    -> (Zahl oder UNBEKANNT oder None, Fehlertext oder None)"""
+    from core import personenzahl as _pz          # spaet: core.personenzahl liest EPS_S und LABEL von hier
+    b = body or {}
+    if b.get(PERSONENZAHL) is None:
+        return None, None
+    if not (b.get("clip") or (str(b.get("event") or "").strip() and b.get("kamera"))):
+        return None, (f"{PERSONENZAHL} only applies to an injected event with its own metadata ('clip', "
+                      f"or 'event' together with 'kamera'); other runs take the count from Frigate")
+    n, grund = _pz.gueltig(b[PERSONENZAHL])
+    if grund == _pz.UNBEKANNT:
+        return _pz.UNBEKANNT, None
+    if n is None:
+        return None, (f"{PERSONENZAHL} must be a whole number of at least 1 or '{_pz.UNBEKANNT}' "
+                      f"({grund})")
+    return n, None
+
+
+def personenzahl_lesen(meta):
+    """Die Personenzahl aus den Metadaten eines eingespielten Ereignisses (Tuer-Konzept Punkt 3.7); steht dort
+    das Wort core.personenzahl.UNBEKANNT, ist der Grund UNBEKANNT (PM2).
+    -> (Zahl oder None, Grund oder None; Gruende aus core.personenzahl)"""
+    from core import personenzahl as _pz          # spaet: siehe personenzahl_pruefen
+    return _pz.gueltig((meta or {}).get(PERSONENZAHL))
+
+
 def richtung_pruefen(wert):
     """-> (richtung, fehlertext|None). Fehlt die Angabe, gilt RICHTUNG_DEFAULT."""
     r = str(wert or RICHTUNG_DEFAULT)
@@ -353,16 +391,16 @@ def fenster_sammeln(api_fn, kamera, start, ende, seitengroesse=FENSTER_SUCHLIMIT
     gesehen, treffer, seiten = set(), [], 0
     unvollstaendig = False
 
-    def _sagen(zeile):
+    def _sagen(zeile, stufe=_logbuch.INFO):
         if log:
-            log(zeile)
+            log.log(stufe, zeile)
 
     while True:
         if seiten >= max_seiten:
             unvollstaendig = True
             _sagen(f"einspielen: page limit of {max_seiten} pages reached after "
                    f"{len(treffer)} event(s) — the window holds more; the answer "
-                   f"says fenster_unvollstaendig")
+                   f"says fenster_unvollstaendig", stufe=_logbuch.WARNING)
             break
         # `after` exklusiv (gemessen): `start - EPS_S` sorgt dafuer, dass ein
         # Ereignis EXAKT auf `start` im Fenster liegt ("ab 09:00" schliesst
@@ -401,7 +439,7 @@ def fenster_sammeln(api_fn, kamera, start, ende, seitengroesse=FENSTER_SUCHLIMIT
             _sagen(f"einspielen: page {seiten} brought no new event id "
                    f"(identical timestamps or the instance ignores 'before') — "
                    f"stopping after {len(treffer)} event(s); the window holds "
-                   f"more, the answer says fenster_unvollstaendig")
+                   f"more, the answer says fenster_unvollstaendig", stufe=_logbuch.WARNING)
             break
         aeltestes = min(float(e.get("start_time") or 0) for e in seite)
         # +EPS_S: `before` ist exklusiv, `aeltestes` selbst wuerde jeden
@@ -489,6 +527,7 @@ def meta_lesen(data_dir, eid):
         with open(p, encoding="utf-8") as f:
             d = json.load(f)
     except (OSError, ValueError):
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
         return None
     if not isinstance(d, dict):
         return None
@@ -565,7 +604,7 @@ def dauer_s(pfad):
         return None
 
 
-def meta_aus_clip(eid, kamera, dauer, jetzt=None):
+def meta_aus_clip(eid, kamera, dauer, jetzt=None, personenzahl=None):
     """Metadaten fuer einen LOKALEN Clip — so, wie Frigate ein
     Personen-Event beschreiben wuerde. Die Annahmen stehen hier an EINER
     Stelle (der Aufrufer loggt sie):
@@ -577,21 +616,24 @@ def meta_aus_clip(eid, kamera, dauer, jetzt=None):
       sub_label None   — die Erkennung soll SELBST urteilen, nicht eine
                          mitgelieferte Behauptung bestaetigen,
       Zeitachse        — das Ereignis liegt gerade hinter uns:
-                         end_time = jetzt - 25 s, start_time = end - Dauer."""
+                         end_time = jetzt - 25 s, start_time = end - Dauer,
+      personenzahl     — nur wenn der Aufruf sie nennt (KP3, personenzahl_pruefen)."""
     t = float(jetzt if jetzt is not None else time.time())
     d = float(dauer or DAUER_FALLBACK_S)
     start = t - d - VORLAUF_S
     return {"id": str(eid), "camera": str(kamera), "label": LABEL,
             "sub_label": None, "start_time": start, "end_time": start + d,
             "zones": [], "has_clip": True, "data": {"top_score": TOP_SCORE},
-            "quelle": "einspiel"}
+            "quelle": "einspiel",
+            **({PERSONENZAHL: personenzahl} if personenzahl is not None else {})}
 
 
-def meta_aus_event(ev, eid, kamera):
+def meta_aus_event(ev, eid, kamera, personenzahl=None):
     """Metadaten eines ECHTEN Frigate-Events unter neuer ID und neuer
     Kamera. Uebernommen wird alles Uebrige unveraendert (Zeitachse, Zonen,
     Scores) — geaendert werden genau drei Dinge, und jede Aenderung hat
-    einen Grund:
+    einen Grund (dazu seit KP3 die Personenzahl, nur wenn der Aufruf sie
+    nennt; Frigates Zahl gehoert zur Original-Kamera, nicht zur Ziel-Kamera):
       id       -> die neue Einspiel-ID (sonst kollidiert sie mit dem
                   Original in processed/Akte),
       camera   -> die Ziel-Kamera (das ist der ganze Zweck),
@@ -607,6 +649,9 @@ def meta_aus_event(ev, eid, kamera):
         d["data"] = {k: v for k, v in d["data"].items()
                      if k != "sub_label_score"}
     d["quelle"] = "einspiel"
+    d.pop(PERSONENZAHL, None)
+    if personenzahl is not None:
+        d[PERSONENZAHL] = personenzahl
     return d
 
 
@@ -622,5 +667,6 @@ def bestand(data_dir):
                     n += 1
                     b += e.stat().st_size
     except OSError:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning (0, 0)")
         return 0, 0
     return n, b

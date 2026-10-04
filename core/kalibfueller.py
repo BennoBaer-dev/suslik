@@ -35,6 +35,8 @@ entstanden sind (der Index traegt je Bild seinen Zeitstempel). Damit stimmt
 die Bilanz auch dann, wenn der Ring gleichzeitig aeltere Bilder verliert."""
 import threading
 import time
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 # Ein Lauf zur Zeit, prozessweit. Zwei parallele Fueller wuerden sich nur um
 # denselben Worker-Slot streiten und die Fortschritts-Anzeigen beider
@@ -68,6 +70,7 @@ def _zaehlen(vorrat_lesen, t0):
         return sum(1 for e in (vorrat_lesen() or [])
                    if float(e.get("ts") or 0) >= t0)
     except Exception:                                       # noqa: BLE001
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning 0")
         return 0
 
 
@@ -82,7 +85,7 @@ def notiz(kamera, text):
 
 
 def starten(kamera, ziel, deckel_events, events_holen, ernte_job,
-            vorrat_lesen, log=print, abschluss=None, vorbereitung=None):
+            vorrat_lesen, log=_log, abschluss=None, vorbereitung=None):
     """Fueller starten -> (ok, msg). Laeuft im Hintergrund; der Fortschritt
     kommt ueber stand().
 
@@ -121,7 +124,7 @@ def starten(kamera, ziel, deckel_events, events_holen, ernte_job,
             except Exception as e:                            # noqa: BLE001
                 _AKTIV["kamera"] = ""
                 return False, f"preparation failed: {type(e).__name__}: {e}"
-    log(f"calibration top-up {kamera}: started (target {ziel} picture(s), "
+    log.info(f"calibration top-up {kamera}: started (target {ziel} picture(s), "
         f"up to {deckel_events} event(s))")
     threading.Thread(
         target=_lauf, name="kalib-fueller", daemon=True,
@@ -163,7 +166,7 @@ def _lauf(kamera, ziel, deckel_events, events_holen, ernte_job, vorrat_lesen,
     except Exception as e:                                  # noqa: BLE001
         st["grund"] = "fehler"
         st["fehler"] = f"{type(e).__name__}: {e}"[:160]
-        log(f"calibration top-up {kamera}: {type(e).__name__}: {e}")
+        log.error(f"calibration top-up {kamera}: {type(e).__name__}: {e}")
     finally:
         st["bilder"] = _zaehlen(vorrat_lesen, t0)
         st["laeuft"] = False
@@ -172,10 +175,11 @@ def _lauf(kamera, ziel, deckel_events, events_holen, ernte_job, vorrat_lesen,
             try:
                 abschluss()
             except Exception as e:                          # noqa: BLE001
-                log(f"calibration top-up {kamera}: cleanup failed "
+                log.error(f"calibration top-up {kamera}: cleanup failed "
                     f"({type(e).__name__}: {e})")
         with _LOCK:
             _AKTIV["kamera"] = None
-        log(f"CALIBRATION TOP-UP {kamera}: {st['bilder']} picture(s) from "
+        log.log(_logbuch.WARNING if st["fehler"] else _logbuch.INFO,
+                f"CALIBRATION TOP-UP {kamera}: {st['bilder']} picture(s) from "
             f"{st['i']} of {st['n']} event(s) — stopped: {st['grund'] or '?'}"
             + (f" [{st['fehler']}]" if st["fehler"] else ""))

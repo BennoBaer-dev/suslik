@@ -31,6 +31,8 @@ import subprocess
 import time
 
 from core import frames as _fr
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 # Wie eine Frigate-eid: "<unix.mikro>-<6 Zeichen>". Muss zu registry.EID_RE passen
 # ([\w.\-]+), damit ALLE Routen greifen — die Crop-Route verlangt zusaetzlich eine
@@ -56,6 +58,7 @@ def _ffprobe(pfad):
             capture_output=True, text=True, timeout=60)
         d = json.loads(r.stdout or "{}")
     except Exception:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning {}")
         return {}
     st = (d.get("streams") or [{}])[0]
     fm = d.get("format") or {}
@@ -76,10 +79,11 @@ def _startzeit(pfad, meta):
             t = datetime.datetime.fromisoformat(str(ct).replace("Z", "+00:00"))
             return t.timestamp(), "creation_time"
         except Exception:
-            pass
+            _logbuch.swallowed(_log, _logbuch.ERROR, "ignored", throttle=False)
     try:
         return os.path.getmtime(pfad), "datei-mtime (creation_time fehlt)"
     except OSError:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning (time.time(), 'JETZT (weder creation_time noch mtime lesb...")
         return time.time(), "JETZT (weder creation_time noch mtime lesbar)"
 
 
@@ -95,7 +99,7 @@ def eid_erzeugen(pfad, start_ts):
     return f"{start_ts:.6f}-{kurz}"
 
 
-def einspeisen(pfad, kamera, data_dir, log=print, kopieren=True, lauf_id=None):
+def einspeisen(pfad, kamera, data_dir, log=_log, kopieren=True, lauf_id=None):
     """EINE Videodatei in den Clip-Cache einspeisen.
 
     -> Pseudo-Event-dict wie es die events_liste des Lernlaufs erwartet, plus
@@ -111,8 +115,8 @@ def einspeisen(pfad, kamera, data_dir, log=print, kopieren=True, lauf_id=None):
         raise ValueError(f"kein lesbares Video (ffprobe liefert nichts): {os.path.basename(pfad)}")
     start, zeitquelle = _startzeit(pfad, meta)
     if zeitquelle != "creation_time":
-        log(f"file source: {os.path.basename(pfad)} — Startzeit aus {zeitquelle}; "
-            "die Durchgangsbildung haengt daran (szenario_gap_min)")
+        log.warning(f"file source: {os.path.basename(pfad)} — start time from {zeitquelle}; "
+            "the grouping into passes depends on it (szenario_gap_min)")
     eid = eid_erzeugen(pfad, start)
     ziel = _fr.cache_pfad(eid, data_dir)
     os.makedirs(os.path.dirname(ziel), exist_ok=True)
@@ -125,7 +129,7 @@ def einspeisen(pfad, kamera, data_dir, log=print, kopieren=True, lauf_id=None):
             os.link(pfad, ziel)
     _fr.behalten(eid, data_dir, lauf_id=lauf_id)   # Dauermarke, s. Kopf; lauf_id
                                                # = Freigabe-Bezug (.334, Audit)
-    log(f"file source: {os.path.basename(pfad)} -> {eid} "
+    log.info(f"file source: {os.path.basename(pfad)} -> {eid} "
         f"({meta['breite']}x{meta['hoehe']}, {meta['dauer_s']:.0f}s, {meta['codec']}, "
         f"camera {kamera})")
     return {"eid": eid, "kamera": kamera, "start": start,
@@ -133,7 +137,7 @@ def einspeisen(pfad, kamera, data_dir, log=print, kopieren=True, lauf_id=None):
             "quelle": QUELLE_DATEI}
 
 
-def ordner_einspeisen(ordner, data_dir, kamera_aus_name=None, log=print,
+def ordner_einspeisen(ordner, data_dir, kamera_aus_name=None, log=_log,
                       lauf_id=None):
     """Alle Videos eines Ordners einspeisen. kamera_aus_name(dateiname) -> Kamera;
     ohne Funktion wird der Dateiname ohne Endung genommen (auf das erlaubte Muster
@@ -149,5 +153,5 @@ def ordner_einspeisen(ordner, data_dir, kamera_aus_name=None, log=print,
             events.append(einspeisen(p, kam, data_dir, log=log, lauf_id=lauf_id))
         except Exception as e:                                    # noqa: BLE001
             fehler.append((name, f"{type(e).__name__}: {e}"))
-            log(f"file source: SKIPPED {name} — {e}")
+            log.warning(f"file source: SKIPPED {name} — {e}")
     return events, fehler

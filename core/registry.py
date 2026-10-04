@@ -393,6 +393,19 @@ def sample_deckel_werk(variante):
                                          f"factory default (unknown variant {v!r})")
 
 
+# ---------------------------------------------------------------- Tuer-Deckel je Variante
+# TUER-DECKEL (Bauplan analysen/bauplan_k3_produkt.md, Stufe KP2 Punkt 3; Tuer-Konzept Punkt 4.3,
+# Entscheid P6 des Inhabers): hoechstens so viele Bilder der Tuer (core.tuer) je Ereignis wie der
+# Bild-Deckel der Variante. Die Werkswerte SIND die des Bild-Deckels, deshalb steht hier keine zweite
+# Tabelle, sondern ein Verweis auf SAMPLE_DECKEL_WERK (cpu 120, gpu-legacy 180, sonst 240) — samt
+# Deckungs-Vertrag und Rueckfall ohne Variante. In den gemessenen Laeufen (L16, L20, L21) kamen
+# hoechstens 104 Tuer-Bilder je Ereignis vor; der Deckel aendert dort nichts.
+def tuer_deckel_werk(variante):
+    """Werks-Deckel der Tuer-Bilder dieser Image-Variante, gleich dem Bild-Deckel (sample_deckel_werk).
+    -> (wert, herkunft)"""
+    return sample_deckel_werk(variante)
+
+
 # ------------------------------------------------- Beworbener EP je Variante (0.1.0.542)
 # WAS JEDES IMAGE VERSPRICHT — und woran die zwei neuen Gate-Stufen es messen.
 # DECKUNGS-VERTRAG wie SAMPLE_DECKEL_WERK/STUETZWERTE: je Variante genau ein Eintrag,
@@ -477,6 +490,96 @@ def startlog_muster(variante):
         return None, None
     return (tuple(STARTLOG_SOLL_VARIANTE[v]),
             tuple(STARTLOG_RUECKFALL_ALLGEMEIN) + tuple(STARTLOG_RUECKFALL_VARIANTE[v]))
+
+
+# ------------------------------------------- Betriebs-Soll je Variante (Release 2.0, B8)
+# WAS EINE LAUFENDE ANLAGE SAGT, wenn sie faehrt, was ihre Variante verspricht:
+# die GENERISCHE Zeile des Startup-Selbstchecks im Wortlaut, und der Anfang des
+# Backend-Werts, den `/health` (und `placement.backend`) ausweist.
+#
+# ABGRENZUNG zu STARTLOG_SOLL_VARIANTE weiter oben — zwei Fragen, zwei Tabellen:
+#   STARTLOG_SOLL_VARIANTE = Soll des GERAETELOSEN Kaltstarts im Gate-Container.
+#     Was ohne jede Hardware gelten MUSS. `tools/image_startlog_soll.sh` liest
+#     genau die und bleibt von diesem Schluessel unberuehrt.
+#   BETRIEB_SOLL_VARIANTE  = Soll des BETRIEBS auf einer Maschine MIT dem Geraet.
+#     Was der Lasttest/die Abnahme auf der echten Karte sehen muss.
+#
+# HIER STEHEN KEINE ANLAGENDATEN. Kein Kartenname, keine Treiber-/Runtime-Version,
+# keine Herkunftsangabe einer fremden Anlage, keine Messzahl: `core/*.py` wird
+# pauschal exportiert (tools/source_export.sh). Die Anlagen-Werte, die diese
+# Zeilen BELEGEN — Hardware, Version, Datum, Fundstelle je Variante —, stehen
+# ausschliesslich in
+# `wiki/feld-soll.md`. Diese Tabelle ist generisch, jene belegt sie.
+#
+# DECKUNGS-VERTRAG wie SAMPLE_DECKEL_WERK/EP_PROBE: je Variante genau ein Eintrag,
+# kein Loch. Ein leeres `zeilen`-Tupel MIT `backend: None` ist die AUSSAGE
+# "unbelegt" und kein vergessener Eintrag — der Verbraucher meldet sie als
+# "nicht belegt", nie als gruen (sonst ergaebe eine fehlende Rueckmeldung
+# stillschweigend ein Bestanden).
+#
+#   zeilen  = Zeilen, die im Betriebs-Log STEHEN muessen, byte-genau. Quelle des
+#             Wortlauts: verifyd.py:31500 (`f"{spec} — device engaged"`, spec =
+#             `f"{kind}{':'+dev if dev else ''}"`, verifyd.py:31379) bzw. fuer cpu
+#             die OpenVINO-CPU-Zusage aus verifyd.py:31442-31444.
+#   backend = erwarteter ANFANG von `/health.backend` und `placement.backend`.
+#             Der Wert kommt aus `cfg["backend"]` (verifyd.py:30023), gesetzt aus
+#             den wizard_werte dieser Registry (verifyd.py:2072-2082) — also
+#             "cpu" / "openvino:GPU" / "cuda" / "migraphx", NICHT der EP-Name.
+#             (Der EP-Name steht schon in BACKENDS[<kind>]["ep"]; ihn hier zu
+#             wiederholen waere ein zweites Literal fuer eine andere Groesse.)
+BETRIEB_SOLL_VARIANTE = {
+    "cpu": {
+        "zeilen": ("analysis runs on the OpenVINO CPU runtime",),
+        "backend": "cpu",
+    },
+    "gpu": {
+        # ED003 (Inhaber-Entscheid 22.09.2026): "Intel: nur die GPU. Die NPU wird
+        # nicht genutzt, der Mix-Modus raus, hoechstens ueber die Config
+        # aktivierbar." Das Betriebs-Soll dieser Variante ist deshalb das
+        # GPU-Placement. Ein anderes Placement ist eine Abweichung vom Soll und
+        # faellt ueber den backend-Anfang auf, ohne dass hier ein Fehlerbild
+        # benannt werden muesste.
+        "zeilen": ("openvino:GPU — device engaged",),
+        "backend": "openvino:GPU",
+    },
+    "cuda": {
+        "zeilen": ("cuda:0 — device engaged",),
+        "backend": "cuda",
+    },
+    "rocm": {
+        "zeilen": ("migraphx:0 — device engaged",),
+        "backend": "migraphx",
+    },
+    # UNBELEGT (Stand 2026-09-22). Aus dem Feld liegt fuer diese Variante ein
+    # Dauerbetriebs-Bericht und eine Tempo-Messung vor, aber KEINE Betriebszeile
+    # im Wortlaut und kein ausgewiesener Backend-Wert. Was dafuer noetig waere,
+    # steht als Bringschuld in `wiki/feld-soll.md`. Bis dahin bleibt der Eintrag
+    # leer: ein geratener Wortlaut waere schlimmer als keiner, weil ein
+    # Abgleich dagegen gruen meldete, ohne je etwas geprueft zu haben.
+    "gpu-legacy": {
+        "zeilen": (),
+        "backend": None,
+    },
+}
+
+
+def betrieb_soll(variante):
+    """Betriebs-Soll dieser Image-Variante -> (zeilen, backend_praefix).
+
+    `zeilen` ist ein Tupel der Log-Zeilen im Wortlaut, `backend_praefix` der
+    erwartete Anfang von `/health.backend`. Ein LEERES Tupel mit `None` heisst
+    "fuer diese Variante ist nichts belegt" — der Aufrufer meldet das als
+    ungeprueft, nie als gruen. Eine UNBEKANNTE Variante ergibt `(None, None)`
+    wie bei `startlog_muster()`: dort bricht der Aufrufer ab.
+
+    Die Anlagen-Werte, die die Zeilen belegen (Hardware, Runtime-Version,
+    bestaetigt am / mit Version, Fundstelle), stehen in `wiki/feld-soll.md` —
+    hier steht nur das Generische (ED006)."""
+    v = str(variante or "").strip().lower()
+    eintrag = BETRIEB_SOLL_VARIANTE.get(v)
+    if eintrag is None:
+        return None, None
+    return tuple(eintrag["zeilen"]), eintrag["backend"]
 
 
 def ep_optionen(kind, dev):
@@ -756,12 +859,16 @@ SUPPORT_BEREICHE = {
                            "fetches one file or one folder (as tar.gz); "
                            "anything under config/ is served masked only"},
 }
-# DIE ZWEI AKTIONS-ENDPUNKTE stehen ABSICHTLICH NICHT in dieser Tabelle: sie
+# DIE VIER AKTIONS-ENDPUNKTE stehen ABSICHTLICH NICHT in dieser Tabelle: sie
 # holen nichts, also haben sie weder Wurzel noch Groesse, und der Deckungs-
 # Vertrag (Inventar == Handler == QS-Liste, tools/qs.sh) gilt fuer BEREICHE.
 # Sie sind hier trotzdem benannt, damit wer die Support-API liest, sie findet:
 #
 #   POST /support/restart      — Fern-Neustart des Dienstes.
+#   POST /support/feinmessung  — sekuendliche Telemetrie-Datei ein/aus
+#       ({"an": 1|0, "dauer_min": N}), schaltet sich nach ihrer Frist selbst aus.
+#   POST /support/debug        — debug ein/aus ohne Neustart ({"an": 1|0});
+#       dasselbe Zeitfenster wie auf der Einstellungsseite (debug_dauer_h).
 #   POST /support/einspielen   — Ereignisse (erneut) durch die Erkennung
 #       schicken. Drei Wege, alle mit demselben Torwaechter:
 #         {"event": <id>}                  ein Ereignis der verbundenen Frigate,

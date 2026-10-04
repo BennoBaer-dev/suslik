@@ -43,6 +43,8 @@ import subprocess
 
 import cv2
 import numpy as np
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 
 def toleranz(soll):
@@ -73,6 +75,7 @@ def _probe(vid):
                 "hoehe": int(s.get("height") or 0), "fps": fps,
                 "pakete": int(s.get("nb_read_packets") or 0) or None}
     except Exception:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning {}")
         return {}
 
 
@@ -269,7 +272,7 @@ class FrameIter:
             basis += ["-hwaccel", "vaapi", "-hwaccel_device", dev,
                       "-hwaccel_output_format", "vaapi"]
         elif hw == "nvdec":                    # NVIDIA: gleiche Kette, andere Byte-Quelle
-            basis += ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
+            basis += nvdec_eingang()           # Feldbefunde Punkt 14: EINE Stelle (unten)
         basis += ["-i", self.vid, "-map", "0:v:0"]
         sel = f"select='not(mod(n\\,{self.step}))'"
         rest = "hwdownload,format=nv12,format=yuv420p" if hw else "format=yuv420p"
@@ -321,16 +324,11 @@ class FrameIter:
                 p.stdout.close()
                 self.rc = p.wait()
                 try:
-                    err.seek(0)
-                    text = err.read(65536).decode("utf-8", "replace")
-                    # Bei -v warning ist JEDE Decoder-Kontext-Zeile eine
-                    # Auffaelligkeit (gesunde Clips: exakt 0; Glitch-Clip:
-                    # cu_qp_delta/undecodable-NALU-Serien) — Schlagwort-
-                    # Listen waeren ein Streu-Literal je Codec/Version.
-                    self.decoder_fehler = sum(
-                        1 for z in text.splitlines() if " @ 0x" in z)
+                    # Die Zaehlregel steht EINMAL am Dateiende (decoder_fehler_zaehlen),
+                    # der Worker (worker_kern.nv12_strom) nutzt dieselbe.
+                    self.decoder_fehler = decoder_fehler_zaehlen(err, self._kommando(hw))
                 except OSError:
-                    pass
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
 
     def __iter__(self):
         hw = _hwdec(self.meta)
@@ -439,6 +437,67 @@ def nv_da():
 
 
 # ---------------------------------------------------------------------------
+# NVDEC-EINGANG — DIE EINE STELLE (Feldbefunde Punkt 14, Issue #33 Nr 1 bis 3, O313).
+# Alle vier NVDEC-Wege nehmen ihre Eingangsoptionen von hier: engine_cuda._ffmpeg_nv12
+# (Worker), FrameIter._kommando (decode), core/livewache.ffmpeg_leser (Waechter) und
+# verifyd video_encoder/transcode_kommandos (Browser-Kopie und ihre Startprobe).
+#
+# HERLEITUNG (FFmpeg-Quelltext n6.1.1, gelesen im Leser-Bericht
+# backups/community_2709/leser_bericht_1632.md, Abschnitt „FIX F1“): NVDEC legt fuer
+# einen Strom einen Flaechenvorrat an, und der darf NVDEC_FLAECHEN_MAX nicht
+# ueberschreiten (nvdec.c:404-410 warnt: „Try lowering the amount of threads“):
+#     Bildspeicher des Stroms          H.264 ref_frame_count + num_reorder_frames
+#                                      (nvdec_h264.c:170), HEVC max_dec_pic_buffering + 1
+#                                      (nvdec_hevc.c:303)
+#   + 2                                nvdec.c:726
+#   + 3                                decode.c:1144-1147
+#   + 1 je Decoder-Thread              NUR bei Frame-Threading (decode.c:1205-1207);
+#                                      Slice-Threading legt keine Flaeche an.
+# Der ungunstigste Bildspeicher der unterstuetzten Profile: H.264 bis 16 Referenzen und
+# bis 16 umsortierte Bilder (beide Grenzen der Norm, FFmpeg weist mehr ab), HEVC bis 16
+# plus 1. Ohne Angabe folgt die Thread-Zahl den Kernen (im Issue 16) — ein Strom mit
+# grossem Bildspeicher reisst dann die Grenze und faellt mit CUDA_ERROR_INVALID_VALUE
+# aus cuvidCreateDecoder auf Software zurueck.
+NVDEC_FLAECHEN_MAX = 32
+NVDEC_FLAECHEN_ZUSATZ = 2 + 3
+NVDEC_BILDSPEICHER_MAX = {"h264": 16 + 16, "hevc": 16 + 1}
+# Frame-Threading lohnt erst ab zwei Threads; darunter traegt Slice-Threading (keine
+# Zusatzflaechen), die Grenze aus dem Bauplan („wenn die Ableitung weniger als zwei
+# Threads ergaebe").
+NVDEC_FRAME_THREADS_MIN = 2
+
+
+def nvdec_decoder_threads():
+    """Wie viele Frame-Threads der NVDEC-Decoder fuer JEDEN unterstuetzten Strom
+    tragen kann (Herleitung oben). -> int, kleiner NVDEC_FRAME_THREADS_MIN heisst
+    Slice-Threading."""
+    return (NVDEC_FLAECHEN_MAX - max(NVDEC_BILDSPEICHER_MAX.values())
+            - NVDEC_FLAECHEN_ZUSATZ)
+
+
+def nvdec_eingang():
+    """Die ffmpeg-Eingangsoptionen fuer NVDEC, fuer alle vier Wege gleich: Decode auf
+    der Karte, Bilder bleiben dort, Decoder-Threads aus der Flaechengrenze. -> Liste"""
+    basis = ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
+    n = nvdec_decoder_threads()
+    if n >= NVDEC_FRAME_THREADS_MIN:
+        return basis + ["-threads", str(n), "-thread_type", "frame"]
+    return basis + ["-thread_type", "slice"]
+
+
+def nvdec_fehler_ist_grenze(text):
+    """Faellt NVDEC an einer Decoder-Grenze aus statt am Speicher (O313)? Erkannt am
+    CUDA-Fehlernamen, den FFmpeg ausgibt (CHECK_CU: „… failed -> CUDA_ERROR_<NAME>“):
+    jeder ausser CUDA_ERROR_OUT_OF_MEMORY ist eine Grenze des Decoders. Ohne Fehlernamen
+    bleibt es beim Verdacht auf Speicherdruck. -> Name des CUDA-Fehlers oder None"""
+    import re                         # hier, damit die Zeilen-Anker oben stabil bleiben
+    m = re.search(r"CUDA_ERROR_[A-Z_]+", str(text or ""))
+    if m and m.group(0) != "CUDA_ERROR_OUT_OF_MEMORY":
+        return m.group(0)
+    return None
+
+
+# ---------------------------------------------------------------------------
 # DIE BYTE-PROBE (E6, 17.09.2026) — das Nachmess-Werkzeug zum gepinnten Pfad.
 #
 # WOZU. Der Beweis vom 04.08.2026, auf dem der gepinnte Pixelpfad steht (HW-Decode
@@ -497,7 +556,7 @@ def _md5_strom(cmd, deckel_s):
             err.seek(0)
             text = err.read(8000).decode("utf-8", "replace").strip()
         except OSError:
-            pass
+            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     if abbruch:
         return None, n, _t.monotonic() - t0, rc, abbruch
     if rc != 0:
@@ -585,3 +644,41 @@ def byte_probe(vid, fps_sample=2.0, deckel_s=180.0):
     if aus["verdikt"] == "abweichend":
         aus["grund"] = "same size, different bytes"
     return aus
+
+
+# ---------------------------------------------------------------------------
+# DIE ZAEHLREGEL DER DECODER-FEHLERZEILEN — DIE EINE STELLE (Bauplan K3, Stufe KP2 Punkt 9, Eigentuemer
+# 04.10.2026 15:57:37). Beide Wege zaehlen hier: der alte Weg (FrameIter._pipe) und der Worker
+# (worker_kern.nv12_strom), je Kette ueber die GANZE Fehlerausgabe (bis KP2 nur die ersten 64 KiB).
+#
+# WOZU: ffmpeg dekodiert kaputte Clips mit rc 0 und vollem Zaehler durch und verfaelscht still die
+# Bilder; die einzige Spur sind die Meldungen beim Lesen und Dekodieren (W1-M9, E2). Bei -v warning
+# beginnt jede solche Meldung mit ihrem Kontext „[name @ 0x…]".
+#
+# WAS NICHT ZAEHLT, am Material belegt (backups/release3_bau/fixe/belege/kontexte.txt, ffmpeg 7.1.5):
+#   - die Ausgabe der Kette: ihr Muxer traegt den Namen des Ausgabeformats („[rawvideo @ 0x…]
+#     Application provided invalid, non monotonically increasing dts to muxer", an sauberen Clips je
+#     Tuer-Kette 7 bis 120 Zeilen); der Name wird aus dem Kommando gelesen (letztes `-f`), nicht
+#     hier wiederholt;
+#   - der Skalierer („[swscaler @ 0x…] deprecated pixel format used", je Kette einmal bei yuvj420p).
+# Alles andere zaehlt, auch ein Kontext, den das Material nicht zeigt (laute Richtung). Gezaehlt
+# haben im Material der Video-Decoder („[hevc", „[h264") und der Eingangsstrom des Lesers
+# („[vist#0:0/h264 @ 0x…] [dec:h264 @ 0x…] corrupt decoded frame").
+SKALIERER = "swscaler"
+
+
+def decoder_fehler_zaehlen(err, cmd):
+    """Zaehlt in der ganzen Fehlerausgabe `err` (Binaerdatei) einer ffmpeg-Kette `cmd` die Zeilen vom
+    Lesen und Dekodieren (Regel im Block darueber). -> int"""
+    f = [k for k, t in enumerate(cmd) if t == "-f" and k + 1 < len(cmd)]
+    ausgabe = cmd[f[-1] + 1] if f else None       # Ausgabe-Optionen stehen hinten, also das letzte -f
+    err.seek(0)
+    n = 0
+    for roh in err:
+        z = roh.decode("utf-8", "replace")
+        if " @ 0x" not in z:
+            continue
+        kontext = z.split(" @ 0x", 1)[0].rsplit("[", 1)[-1]
+        if kontext not in (ausgabe, SKALIERER):
+            n += 1
+    return n

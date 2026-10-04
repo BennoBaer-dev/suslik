@@ -46,6 +46,8 @@ import re
 import time
 
 from core import atomar as _atomar
+from core import logbuch as _logbuch
+_log = _logbuch.logger(__name__)
 
 # Reservierte Namen: weder Quelle noch Ziel eines Umbenennens.
 #   FREMD          — Klassenkennung des Koerper-Modells (core/personmodell,
@@ -233,6 +235,7 @@ def _json_lesen(pfad, standard):
             d = json.load(f)
         return d if isinstance(d, type(standard)) else standard
     except Exception:
+        _logbuch.swallowed(_log, _logbuch.WARNING, "returning standard")
         return standard
 
 
@@ -284,6 +287,7 @@ def refs_meta_uebertragen(data_dir, alt, neu, log=None):
             try:
                 d = json.loads(zeile)
             except Exception:
+                _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                 continue
             if d.get("person") == alt and d.get("datei"):
                 letzte[d["datei"]] = d              # last-wins je Datei
@@ -364,7 +368,7 @@ def refcache_umschreiben(data_dir, alt, neu, log=None):
         return n
     except Exception as e:
         if log:
-            log(f"rename: refcache re-key failed ({type(e).__name__}: {e}) — "
+            log.error(f"rename: refcache re-key failed ({type(e).__name__}: {e}) — "
                 f"cache discarded, it will be rebuilt")
         try:
             os.remove(ziel)
@@ -391,7 +395,9 @@ def vorschlaege_umbenennen(data_dir, alt, neu, log=None):
     ("A B" und "A_B" teilen dieselbe Datei) — liegt am Zielpfad schon eine
     fremde Vorschlagsdatei, wird NICHT ueberschrieben, sondern gemeldet."""
     import anlernen
-    return anlernen.vorschlaege_umbenennen(alt, neu, log=log)
+    # anlernen.py ist Kommandozeilen-Einstieg (E7) und ruft `log(text)`: es
+    # bekommt die Methode des Loggers, Stufe der Zeile nach der Inventur (K99).
+    return anlernen.vorschlaege_umbenennen(alt, neu, log=log.info if log else None)
 
 
 def gesichter_nn_umschreiben(data_dir, alt, neu, log=None):
@@ -504,7 +510,7 @@ def personlern_galerie_umbenennen(data_dir, alt, neu, log=None):
         return 0
     if os.path.exists(z):
         if log:
-            log(f"rename: gallery folder for the new name already exists — "
+            log.info(f"rename: gallery folder for the new name already exists — "
                 f"left untouched ({z})")
         return 0
     zwischen = os.path.join(basis, f".rename-{int(time.time())}-{os.getpid()}")
@@ -616,11 +622,13 @@ def event_durchgang(data_dir, alt, neu, log=None, puls=None, nur_ab_mtime=None):
                 if os.path.getmtime(ordner) < nur_ab_mtime:
                     continue
             except OSError:
+                _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                 continue
         beruehrt = False
         try:
             dateien = os.listdir(ordner)
         except OSError:
+            _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
             continue
         for d in dateien:
             for art in _CROP_ARTEN:
@@ -633,7 +641,7 @@ def event_durchgang(data_dir, alt, neu, log=None, puls=None, nur_ab_mtime=None):
                         erg["dateien"] += 1
                         beruehrt = True
                     except OSError:
-                        pass
+                        _logbuch.swallowed(_log, _logbuch.ERROR, "ignored", throttle=False)
                     break
         def _res(z):
             p = z.get("persons")
@@ -682,6 +690,7 @@ def deckung_korrigieren(data_dir, alt, neu, log=None, lock=None, markieren=None)
             try:
                 d = json.loads(zeile)
             except Exception:
+                _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                 continue
             if d.get("eid"):
                 letzte[d["eid"]] = d                # last-wins je eid
@@ -720,7 +729,7 @@ def deckung_korrigieren(data_dir, alt, neu, log=None, lock=None, markieren=None)
             try:
                 markieren(z)
             except Exception:
-                pass
+                _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
     return len(neu_zeilen)
 
 
@@ -739,6 +748,7 @@ def ground_truth_korrigieren(data_dir, alt, neu, log=None):
             try:
                 d = json.loads(zeile)
             except Exception:
+                _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                 continue
             if d.get("eid"):
                 letzte[d["eid"]] = d
@@ -923,9 +933,9 @@ def umbenennen(data_dir, alt, neu, umfeld=None, puls=None, log=None):
     bericht = {"alt": alt, "neu": neu, "zahlen": {}, "fehler": {},
                "uebersprungen": [], "start": round(start_ts, 1)}
 
-    def _melde(text):
+    def _melde(text, stufe=_logbuch.INFO):
         if log:
-            log(f"rename {alt!r} -> {neu!r}: {text}")
+            log.log(stufe, f"rename {alt!r} -> {neu!r}: {text}")
 
     def _griff(name):
         g = u.get(name)
@@ -949,7 +959,7 @@ def umbenennen(data_dir, alt, neu, umfeld=None, puls=None, log=None):
             bericht["zahlen"][name] = fn(data_dir, alt, neu, log=log)
         except Exception as e:
             bericht["fehler"][name] = f"{type(e).__name__}: {e}"
-            _melde(f"step {name} FAILED: {type(e).__name__}: {e}")
+            _melde(f"step {name} FAILED: {type(e).__name__}: {e}", stufe=_logbuch.ERROR)
             if name == "ordner_umbenennen":
                 # Ohne den Ordner gibt es die Person unter dem neuen Namen gar
                 # nicht — weitermachen hiesse, den Bestand zu zerlegen.

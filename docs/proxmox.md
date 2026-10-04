@@ -565,12 +565,14 @@ and the setup wizard walks you through Frigate, cameras and backend
 
 ### 8. If it says `running on CPU` instead (in the container)
 
-Step 2 of the same log says which of the two cases you are in:
+Step 2 of the same log says which of the two cases you are in. Every log line starts with date,
+time, time zone, level and source; what to look for is the text after ` | `. The lines below show
+the form, with your own date and time in place of the example's:
 
 ```
-[2/8] hardware   probing accelerators — found + usable? …
-         [ ok  ] iGPU  found & usable — device bound in real probe
-         [ ok  ] NPU   found & usable — device bound in real probe
+2026-09-26 12:34:21.000 +0200 INFO     dienst/verifyd:startup_selfcheck.schritt | [2/8] hardware   probing accelerators — found + usable? …
+2026-09-26 12:34:21.000 +0200 INFO     dienst/verifyd:startup_selfcheck.erg |          [ ok  ] iGPU  found & usable — device bound in real probe
+2026-09-26 12:34:21.000 +0200 INFO     dienst/verifyd:startup_selfcheck.erg |          [ ok  ] NPU   found & usable — device bound in real probe
 ```
 
 * `[ --  ] iGPU  not found`: the device never arrived. Back to step 4, then step 3.
@@ -589,7 +591,7 @@ Step 3 also prints a direct readout of the first hurdle, with the vendor decoded
 so a wrong or missing node is visible at a glance:
 
 ```
-         [info ] GPU render nodes passed through: renderD128=Intel 0x7d51
+2026-09-26 12:34:21.000 +0200 INFO     dienst/verifyd:startup_selfcheck.erg |          [info ] GPU render nodes passed through: renderD128=Intel 0x7d51
 ```
 
 ---
@@ -1417,10 +1419,11 @@ inside the container prints the address) and the setup wizard takes over
 ### 7. If it says `running on CPU` instead (in the container)
 
 The startup log is unusually specific on this path. Step 2 names the missing piece outright rather
-than just reporting a fallback:
+than just reporting a fallback (form of the line, with your own date and time; the text after
+` | ` is what counts):
 
 ```
-         [warn ] AMD   MIGraphXExecutionProvider available but no /dev/kfd — pass /dev/kfd + /dev/dri into the container; using CPU
+2026-09-26 12:34:21.000 +0200 WARNING  dienst/verifyd:startup_selfcheck.erg |          [warn ] AMD   MIGraphXExecutionProvider available but no /dev/kfd — pass /dev/kfd + /dev/dri into the container; using CPU
 ```
 
 That line means hurdle one or two is open, so go back to step 3 and 4. If `/dev/kfd` is present
