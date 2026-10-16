@@ -587,8 +587,10 @@ def whatsnew_block():
         # Seit .298 (§6.3) sind Eintraege mehrsprachig: dict {en,de,es,it,fr
         # [,betont]} mit en-Fallback; Alt-Eintraege bleiben str (nur englisch),
         # dort traegt weiter das BETONT-Praefix die Marke.
+        readme = False
         if isinstance(txt, dict):
             betont = bool(txt.get("betont"))
+            readme = bool(txt.get("readme"))
             txt = txt.get(code) or txt["en"]
         else:
             betont = txt.startswith(BETONT)
@@ -611,6 +613,13 @@ def whatsnew_block():
         koerper = (html.escape(txt) if kopf is None else
                    f'<span class="wn-betont">{html.escape(kopf)}</span> '
                    + html.escape(txt))
+        # Rueckweg 010, Stufe R4: ein Eintrag mit der Marke `readme` zeigt den Knopfnamen
+        # „Bitte zuerst lesen" (readme.knopf der aktiven Sprache, durch dieselbe Escape-Funktion)
+        # an seiner ersten Fundstelle als Link auf das Kapitel „Neu in dieser Version". Steht
+        # der Name nicht im Text (englischer Rueckfall unter anderer Sprache), bleibt er ohne Link.
+        if readme:
+            rmn = html.escape(t("readme.knopf"))
+            koerper = koerper.replace(rmn, f'<a href="/readme#rm-neu">{rmn}</a>', 1)
         li.append(f'<li{f' class="{kl}"' if kl else ""}>{chip}'
                   + koerper + "</li>")
     mehr = len(eintraege) - 3

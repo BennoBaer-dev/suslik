@@ -221,17 +221,21 @@ def _gesichtskacheln(g):
     unbek = int(g.get("unbekannt") or 0)
     ohne_name = sum(1 for b in kacheln if not b.get("person"))
     zeigen = kacheln[:MAX_GESICHTER]
+    # Referenz-Quelle (Bauplan analysen/bauplan_refquelle_einbau.md, Stufe E3 Punkt 1, Nachtrag E3a-3, O569 A):
+    # eine Satz-Kachel traegt statt `datei` die Bild-Adresse `url` (core.visionurteil.gesichtsbilder, Lese-Stufe
+    # d) und wird mit ihr gezeichnet; eine Datei-Kachel wie bisher ueber /events/<eid>/<datei>.
     bilder = "".join(
-        '<figure><img loading="lazy" src="/events/'
-        + urllib.parse.quote(str(b.get("eid") or "")) + "/"
-        + urllib.parse.quote(str(b.get("datei") or "")) + '" alt="">'
+        '<figure><img loading="lazy" src="'
+        + (html.escape(str(b["url"])) if b.get("url") else
+           "/events/" + urllib.parse.quote(str(b.get("eid") or "")) + "/"
+           + urllib.parse.quote(str(b.get("datei") or ""))) + '" alt="">'
         "<figcaption>"
         + (html.escape(str(b["person"])) if b.get("person")
            else t("visiontest.gesicht.kein_match"))
         + (f' {b["score"]:.2f}' if isinstance(b.get("score"), (int, float))
            else "")
         + "</figcaption></figure>"
-        for b in zeigen if b.get("eid") and b.get("datei"))
+        for b in zeigen if b.get("url") or (b.get("eid") and b.get("datei")))
     hinweise = []
     if len(kacheln) > len(zeigen):
         hinweise.append(t("visiontest.gesicht.gezeigt",

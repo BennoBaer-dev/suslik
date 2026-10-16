@@ -371,6 +371,32 @@ def fremd_urteil(evs_g, ab=FREMD_AB_GESICHTER):
                   f"Mengen-Schwelle {ab})")
 
 
+def durchgang_anhaengen(offen, kette, e, gap, tag0):
+    """DIE EINE Anhaenge-Regel eines Ereignisses an den offenen Durchgang seiner Kette (Luecke gap in Sekunden, Ende als
+    Maximum, Tagesschnitt ueber tag0); szenarien_des_tages und der Verbraucher der Unbekannt-Stapel rufen sie (Bauplan
+    analysen/bauplan_verbraucher_unbekannt.md Stufe V1a Punkt 2, W5). Der Aufrufer liefert die Ereignisse einer Kette
+    nach Start geordnet; offen (Ketten-Schluessel -> Durchgang) haelt den laufenden Durchgang je Kette.
+    -> (Durchgang, neu): neu wahr, wenn das Ereignis einen Durchgang eroeffnet"""
+    t = e.get("start") or e.get("ts") or 0
+    # Paket A: echtes Frigate-Event-Ende bevorzugen (maschinenunabhaengiger
+    # Schnitt); dauer_s (Analyse-Wanduhr) nur noch als Fallback fuer
+    # Bestands-Zeilen von vor 0.1.0.48.
+    ende = e.get("ende_ts") or (t + (e.get("dauer_s") or 0))
+    cur = offen.get(kette)
+    if cur and cur["tag0"] == tag0 and t - cur["ende"] <= gap:
+        cur["evs"].append(e)
+        cur["ende"] = max(cur["ende"], ende)
+        return cur, False
+    # `kette` reist am Durchgang mit (B6/.507): der Pass-Schluessel
+    # braucht sie, und sie hier NICHT mitzufuehren hiesse, sie an der
+    # Lesestelle aus den Ereignissen neu abzuleiten — eine zweite
+    # Kettungs-Rechnung, also genau das Streu-Literal, das die
+    # Ein-Quellen-Regel verbietet.
+    cur = {"start": t, "ende": ende, "evs": [e], "kette": kette, "tag0": tag0}
+    offen[kette] = cur
+    return cur, True
+
+
 def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kameras=None,
                         koerper_map=None, koerper_ab=2, vision_map=None):
     """rows-Sicht eines Tages -> Szenarien-Liste (CHRONOLOGISCH, aelteste zuerst
@@ -435,23 +461,10 @@ def szenarien_des_tages(by_h, heute0, tag_ende, cfg, gtmap, now=None, nur_kamera
     _ar = _areas.normalisieren(cfg.get("areas")) if _kett else {}
     grp, offen = [], {}                 # offen: Ketten-Schluessel -> laufender Durchgang
     for e in heute_evs:
-        t = e.get("start") or e.get("ts") or 0
-        # Paket A: echtes Frigate-Event-Ende bevorzugen (maschinenunabhaengiger
-        # Schnitt); dauer_s (Analyse-Wanduhr) nur noch als Fallback fuer
-        # Bestands-Zeilen von vor 0.1.0.48.
-        ende = e.get("ende_ts") or (t + (e.get("dauer_s") or 0))
         k = _areas.ketten_schluessel(_ar, _kett, str(e.get("camera", "?")))
-        cur = offen.get(k)
-        if cur and t - cur["ende"] <= gap:
-            cur["evs"].append(e); cur["ende"] = max(cur["ende"], ende)
-        else:
-            # `kette` reist am Durchgang mit (B6/.507): der Pass-Schluessel
-            # braucht sie, und sie hier NICHT mitzufuehren hiesse, sie an der
-            # Lesestelle aus den Ereignissen neu abzuleiten — eine zweite
-            # Kettungs-Rechnung, also genau das Streu-Literal, das die
-            # Ein-Quellen-Regel verbietet.
-            cur = {"start": t, "ende": ende, "evs": [e], "kette": k}
-            grp.append(cur); offen[k] = cur
+        cur, neu = durchgang_anhaengen(offen, k, e, gap, heute0)
+        if neu:
+            grp.append(cur)
     szenarien = []
     for g in grp:
         pers, unbek, noface = {}, 0, 0

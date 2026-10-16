@@ -58,28 +58,15 @@ def _hhmm(t):
 def _ref_eids(cfg, person):
     """Events, aus denen AKTIVE Referenzen dieser Person stammen (.227,
     User-Fund: nach der Uebernahme sah man den Bildern nicht an, dass sie
-    jetzt Referenzen sind). Letzte refs_meta-Zeile je Datei gilt (Tombstones
-    setzen aktiv:false)."""
-    stand = {}
-    try:
-        for zeile in open(os.path.join(cfg["data_dir"], "faces",
-                                       "refs_meta.jsonl")):
-            try:
-                e = json.loads(zeile)
-            except ValueError:
-                continue
-            if e.get("person") == person and e.get("datei"):
-                # .228 (Live-Fund): die Referenz-Pruefung schreibt je Datei
-                # NEUE Zeilen OHNE eid-Feld — das eid frueherer Zeilen bleibt
-                # deshalb erhalten, nur der aktiv-Status folgt der letzten
-                # Zeile (Tombstones wirken weiter).
-                alt_eid = stand.get(e["datei"], (None, False))[0]
-                stand[e["datei"]] = (e.get("eid") or alt_eid,
-                                     bool(e.get("aktiv")))
-    except OSError:
-        _logbuch.swallowed(_log, _logbuch.WARNING, "returning set()")
-        return set()
-    return {eid for eid, aktiv in stand.values() if aktiv and eid}
+    jetzt Referenzen sind). Seit E3b-2a (Bauplan analysen/bauplan_refquelle_einbau.md,
+    Stufe E3 Punkt 2, I13): die Ereignis-Kennungen aus den Herkunftsfeldern der
+    Saetze, die aktiv als Referenz an die Person gebunden sind (Lese-Stufe b),
+    ohne refs_meta; eine entfernte Referenz (Bindung aus) markiert nichts mehr.
+    -> Menge der Ereignis-Kennungen"""
+    from core import refquelle as _rq
+    kat = _rq.read_catalog({"data_dir": cfg["data_dir"]})
+    herkunft = (kat["eintraege"][r]["herkunft"] for r in kat["personen"].get(person, ()))
+    return {h["ereignis_id"] for h in herkunft if h.get("ereignis_id")}
 
 
 def _crop_url(cfg, eid, person):
@@ -111,32 +98,45 @@ def _lade_gtmap(cfg):
     return _szen.gt_labelmap(os.path.join(cfg["data_dir"], "state", "ground_truth.jsonl"))
 
 
+def _aktive_mitglieder(cfg):
+    """Die Mitglieder der aktiven Nicht-Objekt-Identitaeten ueber den EINEN Leser core.unbekanntpool.mitglieder (Bauplan
+    analysen/bauplan_verbraucher_unbekannt.md Stufe V1c Punkt 2: gebundene Saetze und Altbestand). -> {uid: [Mitglied]}"""
+    idents = unbekanntpool.identitaeten(cfg["data_dir"])
+    return {uid: ms for uid, ms in unbekanntpool.mitglieder(cfg["data_dir"], idents).items()
+            if not idents[uid].get("objekt") and idents[uid].get("status", "aktiv") == "aktiv"}
+
+
 def _eid2uid(cfg):
-    """eid -> U-Nummer aus dem Unbekannt-Pool (Haeppchen 2): dieselbe Zuordnung wie die
-    /heute-Karten (face_id IST die Event-ID; ~2/~3-Suffixe der Top-3-Sammlung matchen
-    ueber die Basis-ID; objekt-Identitaeten ausgenommen). Faellt still auf {} zurueck."""
+    """eid -> U-Nummer der aktiven Nicht-Objekt-Identitaeten (Haeppchen 2): ein Satz-Mitglied ueber das Ereignis seiner
+    Herkunft, ein Altbestand-Mitglied ueber seine Kennung und deren Basis-ID (~2/~3 der Top-3-Sammlung). Leerer Pool: {}.
+    Archivierte stehen auf /unbekannte nicht (Review .55)."""
     m = {}
-    for d in unbekanntpool._cluster_lesen(cfg["data_dir"]):
-        if d.get("objekt") or d.get("status", "aktiv") != "aktiv":
-            continue          # Review .55: archivierte stehen auf /unbekannte nicht
-        u = d.get("uid") or d.get("id")
-        mem = d.get("members")
-        for g in (mem if isinstance(mem, list) else []):
-            m.setdefault(g, u)
-            m.setdefault(str(g).split("~")[0], u)
+    for u, ms in _aktive_mitglieder(cfg).items():
+        for g in ms:
+            m.setdefault(str(g["id"]), u)
+            m.setdefault(str(g["eid"]), u)
     return m
 
 
-def _unbek_zeile(s, eid2uid):
-    """Unbekannt-Angabe eines Durchgangs (Review .55): In Durchgaengen MIT bestaetigter
-    Person bewusst NUR die stumme Zaehlung (User-Entscheid 25.07.: das sind meist
-    dieselben Leute, schlecht getroffen — eine U-Nummer behauptete dort eine zweite
-    Identitaet). U-Nummern nur fuer Durchgaenge OHNE Bestaetigung, verlinkt mit Anker
-    auf die Kachel; archivierte Identitaeten liefert _eid2uid nicht mehr."""
+def _vermutlich(cfg):
+    """Die Person des Merkmals „ähnlich zu P“ je Identitaet, Merkmal und Urteil zusammen gelesen (core.aehnlich.vermutlich;
+    Bauplan analysen/bauplan_aehnlich.md Entscheid 21). -> {uid: Person}"""
+    from core import aehnlich as _aeh
+    aus = {}
+    for uid, z in unbekanntpool.identitaeten(cfg["data_dir"]).items():
+        m = _aeh.vermutlich(z)
+        if m:
+            aus[uid] = m["person"]
+    return aus
+
+
+def _unbek_zeile(s, eid2uid, vermutlich=None):
+    """Unbekannt-Angabe eines Durchgangs (Review .55): U-Nummern der Identitaeten, deren Mitglieder in diesem Durchgang
+    liegen, verlinkt mit Anker auf die Kachel, auch in Durchgaengen MIT bestaetigter Person (Stufe V1c: die Regel vom
+    25.07. ist mit Entscheid 12 abgeloest); Events ohne Identitaet als Zahl. Eine Identitaet mit Merkmal (vermutlich,
+    {uid: Person}) steht als „probably P“ statt als Unbekannte da (Bauplan analysen/bauplan_aehnlich.md Entscheid 21)."""
     if not s.get("unbek"):
         return ""
-    if s.get("pers"):
-        return t("auftritte.unbek.zaehlung", n=s["unbek"])
     uids, ohne = [], 0
     for e in s.get("unbek_eids") or []:
         u = eid2uid.get(str(e or "").replace("/", "_")) or eid2uid.get(str(e or ""))
@@ -145,9 +145,10 @@ def _unbek_zeile(s, eid2uid):
                 uids.append(u)
         else:
             ohne += 1
+    vermutlich = vermutlich or {}
     teile = [f'<a href="/unbekannte#uk-{urllib.parse.quote(str(u))}">'
-             + t("auftritte.unbek.name",
-                 nummer=html.escape(str(u).lstrip("U")))
+             + (html.escape(t("heute.aehnlich.zu", person=vermutlich[u])) if u in vermutlich
+                else t("auftritte.unbek.name", nummer=html.escape(str(u).lstrip("U"))))
              + '</a>' for u in uids]
     if ohne or not teile:
         n = ohne if teile else s["unbek"]
@@ -201,22 +202,22 @@ def render_unbekannt(cfg, log_pfad, personen_bekannt, params):
             t("auftritte.unbek.leer_weg_hinweis"))
     evs = s.get("evs") or []
     pass_eids = {str(e.get("eid")) for e in evs if e.get("eid")}
-    # ALLE unbekannten Gesichter DIESES Laufs, quer ueber die Gruppchen.
-    member, uids = [], []
-    for d in unbekanntpool._cluster_lesen(cfg["data_dir"]):
-        if d.get("status", "aktiv") != "aktiv" or d.get("objekt"):
-            continue
-        traf = False
-        for m in (d.get("members") or []):
-            if str(m).split("~")[0] in pass_eids and str(m) not in member:
-                member.append(str(m))
-                traf = True
+    # ALLE unbekannten Gesichter DIESES Laufs, quer ueber die Gruppchen (Stufe V1c: Saetze und Altbestand ueber
+    # core.unbekanntpool.mitglieder; Zeit und Ereignis kommen aus dem Mitglied, nicht aus seiner Kennung).
+    member, uids = {}, []
+    for u, ms in _aktive_mitglieder(cfg).items():
+        traf = [m for m in ms if str(m["eid"]) in pass_eids and m["id"] not in member]
+        member.update((m["id"], m) for m in traf)
         if traf:
-            uids.append(str(d.get("uid") or d.get("id")))
+            uids.append(str(u))
     nummer = html.escape(uid.lstrip("U"))
-    weitere = max(0, len(uids) - 1)
+    # Bauplan analysen/bauplan_aehnlich.md Entscheid 21: eine Identitaet mit Merkmal heisst „probably P“ und zaehlt bei den
+    # weiteren Unbekannten des Laufs nicht mit.
+    aeh = _vermutlich(cfg)
+    weitere = max(0, len(uids) - 1 - sum(1 for u in uids if u in aeh and u != uid))
+    name = html.escape(t("heute.aehnlich.zu", person=aeh[uid])) if uid in aeh else t("auftritte.unbek.name", nummer=nummer)
     if not member:
-        return t("auftritte.unbek.name", nummer=nummer), zurueck + webui.leer(
+        return name, zurueck + webui.leer(
             t("auftritte.unbek.leer_pool"),
             t("auftritte.unbek.leer_pool_hinweis"))
     # Lauf-Karte im Personen-Layout.
@@ -226,9 +227,16 @@ def render_unbekannt(cfg, log_pfad, personen_bekannt, params):
             gesehen.add(e["cam"])
             folge.append(f'{html.escape(e["cam"])} {_hhmm(e["t"])}')
     _best = sorted(member)[0]
+    # E3a-3 (O568 b): ein Gesicht mit ref_id zeigt das Profilbild seines Satzes, ein altes (J8)
+    # weiter seinen Ausschnitt unter /anlern/crops/ (routes.unbekannte.bild, die eine Regel).
+    from routes.unbekannte import bild as _ub_bild
+    _rids = {k: m["ref_id"] for k, m in member.items() if m["ref_id"]}
+    if any(not m["satz"] for m in member.values()):
+        import anlernen as _al_ub                     # Altbestand: ref_id der Pool-Zeile
+        _rids.update({k: r for k, r in _al_ub.pool_ref_ids().items() if k in member})
     held = (f'<a class="pass-bild" href="/event/'
-            f'{urllib.parse.quote(_best.split("~")[0])}">'
-            f'<img src="/anlern/crops/{urllib.parse.quote(_best)}.jpg" '
+            f'{urllib.parse.quote(str(member[_best]["eid"]))}">'
+            f'<img src="{_ub_bild(_rids.get(_best), _best)}" '
             f'loading="lazy" alt=""></a>')
     video = (f' <a class="gtb pass-knopf" href="/video/'
              f'{urllib.parse.quote(str(evs[0].get("eid")))}">'
@@ -236,9 +244,9 @@ def render_unbekannt(cfg, log_pfad, personen_bekannt, params):
              if evs and evs[0].get("eid") else "")
     thumbs = "".join(
         f'<a class="pass-thumb" href="/event/'
-        f'{urllib.parse.quote(str(m.split("~")[0]))}">'
-        f'<img src="/anlern/crops/{urllib.parse.quote(m)}.jpg" loading="lazy" alt="">'
-        f'<small>{_hhmm(float(m.split(".")[0]))}</small></a>'
+        f'{urllib.parse.quote(str(member[m]["eid"]))}">'
+        f'<img src="{_ub_bild(_rids.get(m), m)}" loading="lazy" alt="">'
+        f'<small>{_hhmm(member[m]["ts"]) if isinstance(member[m]["ts"], (int, float)) else ""}</small></a>'
         for m in sorted(member))
     lauf_karte = (
         f'<div class="card pass-card"><div class="pass-kopf">'
@@ -255,11 +263,11 @@ def render_unbekannt(cfg, log_pfad, personen_bekannt, params):
     wahl = "".join(
         f'<label class="ubw"><input type="checkbox" name="ub-sel" '
         f'value="{html.escape(m)}">'
-        f'<img src="/anlern/crops/{urllib.parse.quote(m)}.jpg" loading="lazy" alt=""></label>'
+        f'<img src="{_ub_bild(_rids.get(m), m)}" loading="lazy" alt=""></label>'
         for m in sorted(member))
     kopf = (
         zurueck
-        + f'<h2>{t("auftritte.unbek.name", nummer=nummer)}'
+        + f'<h2>{name}'
         + (f' <span class="dim" style="font-size:15px">'
            f'{t("auftritte.unbek.mehr_im_lauf", n=weitere)}</span>'
            if weitere else "") + "</h2>"
@@ -314,8 +322,8 @@ def render_unbekannt(cfg, log_pfad, personen_bekannt, params):
           + json.dumps(t("auftritte.zuweisen.js_fehler"), ensure_ascii=False)
           + ';b.disabled=false;});}'
           '</script>')
-    return (t("auftritte.unbek.titel_lauf", nummer=nummer),
-            kopf + lauf_karte + js)
+    return (t("heute.aehnlich.titel_lauf", person=aeh[uid]) if uid in aeh
+            else t("auftritte.unbek.titel_lauf", nummer=nummer), kopf + lauf_karte + js)
 
 
 # .32x (User 22.08.): wie viele Personen eine Durchgangs-Karte gleichwertig
@@ -438,6 +446,7 @@ def render(cfg, log_pfad, personen_bekannt, params):
                                   t("auftritte.leer_passe_hinweis")))
 
     e2u = _eid2uid(cfg)              # Haeppchen 2: U-Nummern in der Unbekannt-Angabe
+    aeh = _vermutlich(cfg)           # Bauplan aehnlich Entscheid 21: „probably P“ statt Unknown
     ref_eids = _ref_eids(cfg, person)   # .227: Referenz-Marker je Thumb
     bloecke = []
     for i, s in enumerate(paesse, 1):
@@ -653,7 +662,7 @@ def render(cfg, log_pfad, personen_bekannt, params):
             # keine zweite Bilderwand auf dieser Seite.
             + (f'<div class="dim">{t("auftritte.auch_dabei", namen=auch_da)}</div>'
                if auch_da else '')
-            + (f'<div class="dim">{_unbek_zeile(s, e2u)}</div>'
+            + (f'<div class="dim">{_unbek_zeile(s, e2u, aeh)}</div>'
                if s.get("unbek") else '')
             + f'<div class="pass-links">{video}{lern}</div></div></div>'
             + thumbs_html + '</div>')
@@ -703,7 +712,7 @@ def render(cfg, log_pfad, personen_bekannt, params):
           'u.onclick=function(ev){ev.preventDefault();st.textContent="removing\\u2026";'
           'fetch("/auftritt_lernen_undo",{method:"POST",'
           'headers:{"Content-Type":"application/json"},'
-          'body:JSON.stringify({person:b.dataset.person,dateien:d2.dateien})})'
+          'body:JSON.stringify({person:b.dataset.person,ref_ids:d2.dateien})})'
           '.then(function(r){return r.json()}).then(function(d3){'
           'st.textContent=d3.msg;u.remove();'
           # Nur die EBEN uebernommenen Marker zuruecknehmen — aeltere
@@ -997,6 +1006,7 @@ def render_pass(cfg, log_pfad, personen_bekannt, eid):
     s = szen[idx]
     evs = s.get("evs") or []
     e2u = _eid2uid(cfg)
+    aeh = _vermutlich(cfg)           # Bauplan aehnlich Entscheid 21: „probably P“ statt Unknown
 
     def _pass_link(s2, txt, titel):
         ziel = next((e.get("eid") for e in s2.get("evs") or [] if e.get("eid")), None)
@@ -1040,7 +1050,7 @@ def render_pass(cfg, log_pfad, personen_bekannt, eid):
             f'<span>{bestz} · {t("auftritte.karte.best_match", wert=bm)}{ort}</span></div>')
     if s.get("unbek"):
         pzeilen.append(f'<div class="evrow"><span class="lab">{t("auftritte.pass.label_unbek")}</span>'
-                       f'<span>{_unbek_zeile(s, e2u)}</span></div>')
+                       f'<span>{_unbek_zeile(s, e2u, aeh)}</span></div>')
     if s.get("gt_fremd"):
         pzeilen.append(f'<div class="evrow"><span class="lab">{t("auftritte.pass.label_gt")}</span>'
                        f'<span class="badge-gtfremd">{t("auftritte.pass.badge_fremd")}</span></div>')

@@ -88,6 +88,10 @@ See [hardware-acceleration.md](hardware-acceleration.md) for the accelerator spe
   libraries, the Python dependencies, and the models (detector + recognition). No runtime
   downloads.
 - **In your `/data` volume (never in the image):** your reference faces, configuration, learned
-  data, and cached clips.
+  data, and cached clips. The reference faces live in the *reference source* `refquelle/`: one set
+  per face (crop, fingerprint, profile picture, origin record) and a catalog that binds sets to
+  persons; one module (`core/refquelle`) reads and writes them, and the recognition reads only the
+  stored fingerprints, never the pictures. Layout and the one-time migration:
+  [installation.md](installation.md#data-layout-and-the-one-time-migration).
 
 This split keeps images reproducible and your data portable across updates.

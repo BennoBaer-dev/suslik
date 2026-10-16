@@ -69,9 +69,11 @@ zwischen Batchgroessen"), und eine andere Batchgroesse maesse etwas anderes als 
 Bestand. Der Bild-Weg ist ausserdem kein Durchsatz-Pfad. Wer viele Gesichter je Bild
 hat, zahlt dafuer Aufrufe — das ist bekannt und bewusst.
 """
+import hashlib
+import os
 import threading
 
-import worker_kern as wk                                 # noqa: E402  Bootstrap + BLAS-Pin
+import worker_kern as wk                                # noqa: E402  Bootstrap + BLAS-Pin
 import numpy as np                                         # noqa: E402  (schon vom Kern geladen)
 import cv2                                                 # noqa: E402  (ebenso)
 
@@ -504,3 +506,196 @@ class Fabrik:
         return {"embedder": "engine", "normmass": "engine", "gebaut": True,
                 "modell": (self._emb.modell if self._emb else None),
                 **self._rechner.stufen.auskunft()}
+
+
+# ----------------------------------------------------------------- Die Rechenwerk-Kennung
+# Bauplan analysen/bauplan_refquelle_einbau.md, Stufe E3 Punkt 1, Schnitt E3a-1a (Entscheid J5,
+# O555 d); Felder und Vergleich: core/refquelle/basis.py ENGINE_FIELDS und ENGINE_COMPARED.
+# WARUM HIER: diese Datei kennt beide Rechenwege — den Engine-Weg (EngineEmbedder, ueber die
+# Bild-Stufen der Engine) und face_audit.Embedder, den sie selbst als Vorbild nachbaut;
+# face_audit kennt den Engine-Weg nicht. Der Helfer liest nur die Engine-Auskunft
+# (`BildStufen.identity()` jeder der vier Engine-Dateien) und die Attribute des Embedders, er
+# importiert keine Engine-Datei und rechnet nichts ausser der Pruefsumme der Modelldatei.
+#
+# DIE TEXTFORMEN (EINE Stelle; erzeugt werden sie in den Engines bzw. unten fuer face_audit).
+# Der Kennungsvergleich des Moduls vergleicht Texte: zwei Prozesse mit gleichem Rechenwerk
+# liefern denselben Text, ein anderes Rechenwerk einen anderen.
+#   Feld         ov (gpu, gpu-legacy)          cuda                        rocm (migraphx)
+#   genauigkeit  Typname am r-Kompilat         Typ der geladenen r-Datei   Typ der geladenen r-Datei
+#                (INFERENCE_PRECISION_HINT):   „fp16“ / „fp32“             „fp16“ / „fp32“
+#                „f16“, „f32“
+#   bibliothek   „openvino <Version>“          „onnxruntime <Version> <Provider der r-Session>“ (beide)
+#   geraet       „GPU“ (kein Rueckfall)        „<Provider>:<device_id>“    „migraphx:<Nummer>“, Teil auf
+#                                              der r-Session               der CPU „…+cpu“, sonst „cpu“
+#   batch        Breite des Bild-Wegs (1)      dito                        dito
+#   Feld         cpu                                   face_audit (alle Varianten)
+#   genauigkeit  precision-Option des OpenVINO-CPU-    OpenVINO-Provider: precision-Option der
+#                Providers („FP32“), abgelehnt         Session, ohne Option „Voreinstellung <Geraet>“,
+#                „Voreinstellung CPU“, nackter CPU-    stellt die Session keine Optionen aus:
+#                Provider: Typ der r-Datei („fp32“)    „unbekannt“; andere Provider: Eingangstyp der
+#                                                      Session („tensor(float)“, „tensor(float16)“)
+#   bibliothek   „onnxruntime <Version> <Provider>“    „onnxruntime <Version> <Provider der Session>“
+#   geraet       „openvino:CPU“ oder „cpu“             „<Provider>:<device_type oder device_id>“,
+#                                                      CPU-Provider „CPUExecutionProvider“, nicht
+#                                                      lesbar „<Provider>:unbekannt“
+#   batch        Breite des Bild-Wegs (1)              Parameter des Aufrufers, sonst „unbekannt“
+# Alle Wege: modell = emb.modell; modell_sha256 = sha256 der geladenen r-Datei; modell_quelle_sha256 =
+# sha256 der Quelldatei des Modells aus der Registry (Fix 0.1.1.013 Nachtrag 4: fuer jedes Rechenwerk
+# gleich, auch wenn es eine abgeleitete Fassung laedt; das Modell-Sieb vergleicht sie); rechenweg
+# „engine“ bzw. „face_audit“ (nie die Marke des Altbestands, die vergibt nur der Umzug);
+# image_variante = SUSLIK_VARIANT, ohne sie „ohne Image“.
+#
+# EHRLICHE GRENZEN:
+#   - „unbekannt“ (gemessen 07.10.2026 an onnxruntime-openvino 1.24.1): eine Session auf dem
+#     OpenVINO-Provider gibt ihre Optionen nicht heraus (`get_provider_options()` liefert fuer
+#     ihn ein leeres dict). Auf dem face_audit-Weg mit OpenVINO sind Geraet und Genauigkeit
+#     deshalb nicht ablesbar; dort stehen sie als „unbekannt“, und zwei solche Rechenwerke auf
+#     verschiedenen Intel-Geraeten saehe der Vergleich als gleich.
+#   - Die Bibliothek nennt Paket und Provider, nicht Treiber oder CUDA/cuDNN-Stand.
+#   - Die Pruefsumme gilt fuer den Pfad: wird die Datei waehrend des Prozesses ersetzt, bleibt
+#     die erste Summe stehen (einmal je Prozess und Pfad, O555 d).
+WAY_ENGINE, WAY_FACE_AUDIT = "engine", "face_audit"
+UNKNOWN = "unbekannt"
+NO_IMAGE = "ohne Image"
+VARIANT_ENV = "SUSLIK_VARIANT"
+ENGINE_INFO_KEYS = ("genauigkeit", "bibliothek", "modell_pfad", "geraet", "breite")
+OV_PROVIDER, CPU_PROVIDER = "OpenVINOExecutionProvider", "CPUExecutionProvider"
+_MODEL_SHA = {}                                           # absoluter Pfad -> sha256 (Hex)
+_MODEL_SHA_LOCK = threading.Lock()
+
+
+def _identity_fail(text):
+    """Laut ablehnen: ERROR ins Log, dann RuntimeError mit Grund. -> kehrt nie zurueck"""
+    _log.error(text)
+    raise RuntimeError(text)
+
+
+def _model_sha256(path):
+    """sha256 der Modelldatei, einmal je Prozess und Pfad gerechnet und gemerkt (O555 d).
+    -> Hex-Text"""
+    key = os.path.abspath(path)
+    with _MODEL_SHA_LOCK:
+        if key not in _MODEL_SHA:
+            h = hashlib.sha256()
+            try:
+                with open(key, "rb") as f:
+                    for block in iter(lambda: f.read(1 << 20), b""):
+                        h.update(block)
+            except OSError as e:
+                _identity_fail(f"engine identity: model file {key} not readable "
+                               f"({type(e).__name__}: {e})")
+            _MODEL_SHA[key] = h.hexdigest()
+            _log.info(f"engine identity: checksum of the model file {key} computed "
+                      f"(once per process)")
+        return _MODEL_SHA[key]
+
+
+def _model_source_sha256(modell):
+    """Pruefsumme der Quelldatei eines Erkennungsmodells (Fix 0.1.1.013 Nachtrag 4, Eigentuemer 12.10.2026 20:09:55): der
+    Eintrag der Registry mit task recognition und diesem modell_schluessel, die Datei im Image, sonst im Repo
+    (worker_kern.modell_pfad), fuer jedes Rechenwerk gleich; einmal je Prozess und Pfad gerechnet wie _model_sha256.
+    -> Hex-Text; kein Eintrag oder keine Datei: lauter Fehler (RuntimeError mit Grund)"""
+    from core.registry import MODELL_VERTRAG as _mv          # noqa: PLC0415  nur die Pfade der Modelle
+    keys = [k for k, v in _mv.items() if v.get("task") == "recognition" and v.get("modell_schluessel") == modell]
+    if len(keys) != 1:
+        _identity_fail(f"engine identity: the registry names {len(keys)} recognition model file(s) for the model "
+                       f"{modell!r} (needs exactly one)")
+    try:
+        path = wk.modell_pfad(keys[0])
+    except StopIteration:
+        _identity_fail(f"engine identity: the source file of the model {modell!r} ({keys[0]}) lies neither in the "
+                       "image nor in the repository")
+    return _model_sha256(path)
+
+
+def _engine_side(emb):
+    """Der Engine-Weg: die Auskunft der Bild-Stufen, unveraendert uebernommen.
+    -> dict modell_pfad, rechenweg, geraet, genauigkeit, bibliothek, batch"""
+    ask = getattr(emb.rechner.stufen, "identity", None)
+    if ask is None:
+        _identity_fail("engine identity: the image path of this engine gives no identity "
+                       "(BildStufen.identity missing)")
+    info = ask()
+    missing = [k for k in ENGINE_INFO_KEYS if info.get(k) in (None, "")]
+    if missing:
+        _identity_fail(f"engine identity: the engine identity lacks {', '.join(missing)}")
+    return {"modell_pfad": info["modell_pfad"], "rechenweg": WAY_ENGINE,
+            "geraet": info["geraet"], "genauigkeit": info["genauigkeit"],
+            "bibliothek": info["bibliothek"], "batch": info["breite"]}
+
+
+def _face_audit_session(emb):
+    """Die Erkennungs-Session, die face_audit.Embedder wirklich haelt, und ihre Modelldatei:
+    eigener Kopf (adaface, `_rec`) oder das insightface-Modell `recognition` (buffalo).
+    -> (Session, Pfad)"""
+    if getattr(emb, "_rec", None) is not None:
+        return emb._rec, emb._rec_spec["onnx"]
+    rec = emb.app.models.get("recognition")
+    sess, path = getattr(rec, "session", None), getattr(rec, "model_file", None)
+    if sess is None or not path:
+        _identity_fail("engine identity: this face_audit embedder holds no recognition session")
+    return sess, path
+
+
+def _face_audit_side(emb, batch):
+    """Der face_audit-Weg: Provider, Optionen und Eingangstyp an der Erkennungs-Session.
+    -> dict modell_pfad, rechenweg, geraet, genauigkeit, bibliothek, batch"""
+    import onnxruntime as ort                              # noqa: PLC0415  die Session ist schon da
+    sess, path = _face_audit_session(emb)
+    provider = sess.get_providers()[0]
+    opts = (sess.get_provider_options() or {}).get(provider) or {}
+    device = opts.get("device_type") or opts.get("device_id")
+    if provider == OV_PROVIDER:
+        precision = (opts.get("precision") or f"Voreinstellung {device or UNKNOWN}") if opts \
+            else UNKNOWN
+    else:
+        precision = sess.get_inputs()[0].type
+    geraet = (provider if provider == CPU_PROVIDER
+              else f"{provider}:{device if device not in (None, '') else UNKNOWN}")
+    return {"modell_pfad": path, "rechenweg": WAY_FACE_AUDIT, "geraet": geraet,
+            "genauigkeit": precision, "bibliothek": f"onnxruntime {ort.__version__} {provider}",
+            "batch": UNKNOWN if batch is None else batch}
+
+
+def engine_identity(emb, batch=None):
+    """Die Rechenwerk-Kennung eines Embedders (EngineEmbedder oder face_audit.Embedder) mit den
+    neun Feldern aus core/refquelle/basis.py ENGINE_FIELDS, keins davon None oder leer.
+    -> dict; ein Rechenwerk, das die Auskunft nicht geben kann, ist ein lauter Fehler
+    (RuntimeError mit Grund). `batch` nur auf dem face_audit-Weg (Stufe und aufgefuellte
+    Zeilen je Aufruf, wie `_rec_infer` sie bildet); auf dem Engine-Weg kommt die Breite aus der
+    Engine, ein mitgegebener Wert ist dort ein Fehler."""
+    if isinstance(emb, EngineEmbedder):
+        if batch is not None:
+            _identity_fail("engine identity: on the engine way the batch comes from the engine, "
+                           "not from the caller")
+        side = _engine_side(emb)
+    elif type(emb).__name__ == "Embedder" and type(emb).__module__ == face_audit.__name__:
+        if batch is not None and (isinstance(batch, bool) or batch == ""
+                                  or not isinstance(batch, (int, str))):
+            _identity_fail(f"engine identity: batch must be a number or a text, not {batch!r}")
+        side = _face_audit_side(emb, batch)
+    else:
+        _identity_fail(f"engine identity: unknown embedder {type(emb).__module__}."
+                       f"{type(emb).__name__}")
+    if not emb.modell:
+        _identity_fail("engine identity: the embedder names no model")
+    return {"modell": emb.modell, "modell_sha256": _model_sha256(side["modell_pfad"]),
+            "modell_quelle_sha256": _model_source_sha256(emb.modell),
+            "rechenweg": side["rechenweg"],
+            "image_variante": os.environ.get(VARIANT_ENV) or NO_IMAGE,
+            "geraet": side["geraet"], "genauigkeit": side["genauigkeit"],
+            "bibliothek": side["bibliothek"], "batch": side["batch"]}
+
+
+def model_identity(modell):
+    """Die Modell-Kennung eines Erkennungsmodells ohne Engine und ohne Bau: genau die zwei Felder, nach denen das
+    Modell-Sieb entscheidet (Name, Pruefsumme der Quelldatei aus der Registry; wie in engine_identity).
+    -> dict modell, modell_quelle_sha256; ohne Namen, Registry-Eintrag oder Datei ein lauter Fehler (RuntimeError)
+
+    Bauplan analysen/bauplan_fix_erststart.md, Stufe K1 Punkt 1: der Worker liest beim Start mit dieser Kennung, damit
+    vor der ersten Geometrie kein Bild-Weg und kein Kompilat entsteht. Der Name wird klein geschrieben wie im
+    EngineEmbedder, damit er dem Feld modell der Rechenwerk-Kennung gleicht."""
+    name = str(modell or "").strip().lower()
+    if not name:
+        _identity_fail("model identity: no model name given")
+    return {"modell": name, "modell_quelle_sha256": _model_source_sha256(name)}

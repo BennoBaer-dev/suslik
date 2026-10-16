@@ -60,24 +60,25 @@ T = {
         "readme.inhalt": 'Inhalt',
     "readme.neu.titel": "Neu in dieser Version",
     "readme.neu.text":
-        "In dieser Version hat sich viel geändert, angefangen damit, wie ich vor "
-        "einer Veröffentlichung teste. Jede Version läuft jetzt durch einen "
-        "Testlauf auf drei Testrechnern, bevor ich sie herausgebe. Ab und zu "
-        "hatten sich Fehler in den Code eingeschlichen. Der Testlauf soll sie "
-        "früher finden.\n\n"
-        "Die Gesichtserkennung arbeitet anders. Das Programm prüft weiterhin "
-        "jedes x-te Bild eines Events. Erreicht ein Gesicht bei einer bekannten "
-        "Person einen bestimmten Wert, geht eine Tür auf: Die nächsten 20 Bilder "
-        "werden einzeln geprüft. Erreicht ein Gesicht den Wert im Fenster "
-        "erneut, bleibt die Tür länger offen. Danach geht es wieder mit jedem "
-        "x-ten Bild weiter.\n\n"
-        "Grün wird ein Name erst nach drei Treffern. Jedes brauchbare Gesicht, "
-        "das zur Person passt, zählt als ein Treffer. Ein Gesicht, das nur kurz "
-        "gut zu sehen ist, hat damit eine bessere Chance: Sobald es entdeckt "
-        "ist, werden die Bilder direkt danach nicht mehr übersprungen.\n\n"
-        "Ich freue mich über jede Rückmeldung, besonders wenn die neue Erkennung "
-        "danebenliegt: ein falscher Name oder eine bekannte Person, die nicht "
-        "erkannt wird. Nur so kann ich an den Fehlern arbeiten.",
+        "Diese Version bringt viele Änderungen. Die wichtigsten:\n\n"
+        "Gelernte Gesichter werden neu gespeichert. Jedes Gesicht liegt jetzt als "
+        "eigener Satz mit Bild, Messwerten und Herkunft. Das ist die Vorbereitung "
+        "für eine bessere Vorauswahl und für Empfehlungen, welche Bilder sich als "
+        "Referenz eignen. Beim ersten Start zieht die Version deine Gesichter "
+        "einmal um. Gelöscht wird nichts, die alten Dateien bleiben, wo sie sind.\n\n"
+        "Unbekannte Gesichter werden besser erkannt und zugeordnet. Die Gesichter "
+        "eines Ereignisses werden nach Ähnlichkeit gebündelt und mit den "
+        "Unbekannten verglichen, die es schon gibt. Passt eine Gruppe zu einem "
+        "davon, kommt sie dazu, sonst entsteht ein neuer Unbekannter.\n\n"
+        "Unbekannte, die einer bekannten Person ähneln, stehen jetzt gesammelt "
+        "unter „Vermutlich erkannt“. Dort kannst du sie der Person zuordnen oder "
+        "sagen, dass sie es nicht ist.\n\n"
+        "Wenn es mit dieser Version Probleme gibt, kannst du zurück auf "
+        "0.1.1.010. Stell dafür das Image wieder auf 0.1.1.010 und starte neu, am "
+        "Datenordner musst du nichts tun. Dann fehlen die Gesichter, die diese "
+        "Version seit dem Update gelernt hat. Und was 0.1.1.010 danach lernt, "
+        "übernimmt ein späteres Update nicht.\n\n"
+        "Ich freue mich über jede Rückmeldung, besonders wenn etwas danebenliegt.",
         "readme.generell.titel": 'Generelles',
     "readme.generell.text": 'Meine Szenario-Erkennung hängt an Frigates Personenerkennung. Sobald Frigate eine Person meldet, hole ich das ganze Personen-Ereignis. So ein Ereignis ist mal wenige Sekunden lang, mal mehrere Minuten. Ich schaue es komplett durch, um alle Personen darin zu finden.\n\nOb Frigates eigene Gesichtserkennung an ist, spielt dafür keine Rolle. Sie wird nur gebraucht, wenn Gesichter mit Frigate abgeglichen werden sollen.\n\nGeprüft wird nie der Detect-Stream, sondern die Aufzeichnung, also der beste Stream, den die Kamera an Frigate liefert.\n\nEine Prüfung startet auf zwei Wegen. Entweder über das Personen-Event aus Frigate, das ist der Szenario-Weg. Oder über den Live-Wächter: Der holt den laufenden Stream, direkt von der Kamera oder über Frigates Proxy, sucht darin Gesichter und startet von dort.\n\nEine Person wird auf drei Wegen erkannt. Über das Gesicht. Über die Person als Ganzes, allein aus dem Bild, ohne Gesicht. Über ein Vision-Modell, dieser Weg ist noch Beta.\n\nIch fahre hier 4K-Kameras mit einer möglichst hohen Bildrate, mindestens 15 Bilder je Sekunde. Die Bitrate ebenso hoch wie möglich. Eine niedrige Bitrate macht bewegte Gesichter unscharf.',
     "readme.aktuell.titel": 'Woran ich gerade arbeite',
@@ -111,16 +112,12 @@ T = {
     "lernen.leer.hinweis":
         "Gute neue Gesichter (groß, scharf, frontal, sicher erkannt "
         "oder klar fremd) erscheinen hier automatisch nach der Analyse.",
-    "lernen.karte.unbekannt": "Unbekannt/Fremd",
     "lernen.karte.metrik_voll":
         "Score {score} · Neuheit {novelty} · {bw}×{bh}px · frontal "
         "{front} · scharf {sharp}",
     "lernen.karte.metrik_kurz": "Score {score}",
     "lernen.karte.link_video": "Video",
     "lernen.karte.knopf_add_person": "Als {person} hinzufügen",
-    "lernen.karte.attr_person": "als Person…",
-    "lernen.karte.attr_neu": "oder neue Person",
-    "lernen.karte.knopf_add": "Hinzufügen",
     "lernen.karte.knopf_ablehnen": "Aussortieren",
     "lernen.galerie.titel": "Referenzen (Master)",
     "lernen.galerie.bildzahl": "{n} Referenzen",
@@ -248,14 +245,6 @@ T = {
         "erkannt wurde. Anhaken und übernehmen.",
     "aehnliche.kopf.link_zurueck": "zurück",
     "aehnliche.unbekannt.titel": "Aus unbekannten Gesichtern",
-    "aehnliche.unbekannt.suche_titel":
-        "Suche läuft — die Referenzen werden neu eingelesen.",
-    "aehnliche.unbekannt.kein_cache":
-        "Die Referenzen sind noch nicht eingelesen.",
-    "aehnliche.unbekannt.kein_cache_hinweis":
-        "Diese Liste braucht den Referenz-Index. Die Referenz-Prüfung "
-        "schreibt ihn mit — danach steht hier ein Ergebnis.",
-    "aehnliche.unbekannt.knopf_pruefen": "Referenzen prüfen",
     "aehnliche.unbekannt.hinweis_leer":
         "Keine ähnlichen unbekannten Gesichter vorhanden.",
     "aehnliche.unbekannt.aehnlichkeit": "Ähnlichkeit {sim}",
@@ -447,7 +436,7 @@ T = {
     "konfiguration.neustart.frage": "Dienst jetzt neu starten? Die Verarbeitung pausiert ein paar Sekunden.",
     "antwort.neustart": "Neustart laeuft — diese Seite antwortet in wenigen Sekunden wieder.",
     "konfiguration.support.titel": "Fern-Support-Zugriff",
-    "konfiguration.support.satz": "Nur-Lese-Download benannter Bereiche (Logs, maskierte Config, Gesichter, Lernlaeufe, Koerpermaterial, Zustandsdateien) fuer den Inhaber des Support-Tokens. Der Ein/Aus-Schalter support_zugriff steht in der Tabelle unten, Standard aus. Jede Anfrage steht im Dienst-Log. Die Gesichts- und Koerperbereiche enthalten Bilder echter Personen — den Token mit Bedacht weitergeben. Ohne TLS vor diesem Dienst reist der Token im Klartext. Der Token erlaubt auch vier Aktionen: diesen Dienst aus der Ferne neu starten (POST /support/restart), Ereignisse erneut durch die Erkennung schicken (POST /support/einspielen), die Feinmessung ein- und ausschalten (POST /support/feinmessung) und das Debug-Log ohne Neustart ein- und ausschalten (POST /support/debug).",
+    "konfiguration.support.satz": "Nur-Lese-Download benannter Bereiche (Logs, maskierte Config, Gesichter, Lernlaeufe, Koerpermaterial, Zustandsdateien) fuer den Inhaber des Support-Tokens. Der Ein/Aus-Schalter support_zugriff steht in der Tabelle unten, Standard aus. Jede Anfrage steht im Dienst-Log. Die Gesichts- und Koerperbereiche enthalten Bilder echter Personen — den Token mit Bedacht weitergeben. Ohne TLS vor diesem Dienst reist der Token im Klartext. Der Token erlaubt auch fuenf Aktionen: diesen Dienst aus der Ferne neu starten (POST /support/restart), Ereignisse erneut durch die Erkennung schicken (POST /support/einspielen), die Feinmessung ein- und ausschalten (POST /support/feinmessung), das Debug-Log ohne Neustart ein- und ausschalten (POST /support/debug) und kleine Dateioperationen im Dienst und in einem frischen Prozess messen (POST /support/dateiprobe).",
     "konfiguration.support.token_gesetzt": "Ein Support-Token ist gesetzt.",
     "konfiguration.support.token_fehlt": "Noch kein Support-Token.",
     "konfiguration.support.knopf_token": "Neuen Token erzeugen",
@@ -1771,7 +1760,6 @@ T = {
     "js.vollrestore.frage": "Das KOMPLETTE Backup \"{name}\" wiederherstellen? Das ersetzt Einstellungen, Referenzen und alles gelernte Material und startet den Dienst neu.",
     "js.vollrestore.laeuft": "wird hochgeladen und wiederhergestellt … (große Dateien brauchen ihre Zeit)",
     "js.enroll.fehler": "Fehler: {msg}",
-    "js.enroll.person_fehlt": "Person wählen oder eine neue eintragen.",
     "js.upload.fehlt": "Person (Auswahl oder neu) und eine Datei wählen.",
     "js.upload.trotzdem": "{msg}\n\nTrotzdem hinzufügen?",
     "js.anlernen.frage": "Gruppe als \"{person}\" übernehmen (die besten Bilder werden Referenzen)?",
@@ -1816,8 +1804,8 @@ T = {
     "js.ref.batch_frage": "{n} Bild(er) löschen?",
     "js.ref.batch_alle_frage":
         "Das sind ALLE {n} Referenzbild(er) von {person}. Ohne Referenz kann "
-        "{person} nicht mehr erkannt werden. Die Bilder wandern in den "
-        "Papierkorb und lassen sich zurückholen. Fortfahren?",
+        "{person} nicht mehr erkannt werden. Die Referenz-Sätze wandern ins "
+        "Archiv (es wird nichts gelöscht). Fortfahren?",
     "js.dienst.nicht_erreichbar": "Dienst nicht erreichbar — gleich noch einmal versuchen.",
     "js.unb.tick": "{phase} … {s} s",
     "js.unb.besucher_frage": "Als bekannten Fremden ignorieren? Er löst dann keine Meldungen mehr aus. (Jederzeit unten unter \"bekannte Besucher\" wieder aktivierbar.)",
@@ -1826,7 +1814,7 @@ T = {
     "js.unb.benennen_frage": "Der Person \"{person}\" zuordnen? Die besten Bilder werden Referenzen.",
     "js.unb.teil_frage": "Die {n} angehakten Bilder \"{person}\" zuweisen? Der Rest der Gruppe bleibt unter Unbekannte.",
     "js.unb.objekt_frage": "Als \"keine Person\" markieren (Busch, Spiegelung, geparktes Auto)? Sie taucht dann nicht mehr als Besucher auf; unter \"keine Personen\" lässt sich das zurücknehmen.",
-    "js.person.loesch_frage": "ALLE Referenzen und den Namen \"{person}\" löschen?\nDie Bilder wandern in den Papierkorb-Ordner (wiederherstellbar).\n\nZur Bestätigung den Namen eintippen:",
+    "js.person.loesch_frage": "ALLE Referenzen und den Namen \"{person}\" löschen?\nDie Referenz-Sätze wandern ins Archiv (es wird nichts gelöscht).\n\nZur Bestätigung den Namen eintippen:",
     "js.person.name_falsch": "Name stimmte nicht überein — nichts gelöscht.",
     "js.person.umbenennen_frage":
         "\"{person}\" umbenennen — den Namen unten korrigieren.\n\n"
@@ -1902,7 +1890,6 @@ T = {
     # ---- auftritte (Stufe 2, Tranche A) ----
     # Uebersetzung 19.08.2026, Muttersprachler-QS dieser Tranche DURCHLAUFEN
     # (12 Korrekturen); Kontext + Stufe-2-Grenzen: siehe en.py-Abschnittskopf.
-    "auftritte.unbek.zaehlung": "+{n} ohne Treffer (meist dieselben Personen)",
     "auftritte.unbek.name": "Unbekannt {nummer}",
     "auftritte.unbek.ohne_treffer.eins": "{n} Event mit Gesicht ohne Treffer",
     "auftritte.unbek.ohne_treffer.viele": "{n} Events mit Gesicht ohne Treffer",
@@ -2335,8 +2322,8 @@ T = {
     "system.voll.knopf_restore": "Voll-Backup wiederherstellen…",
     "system.voll.careful": "dieses Archiv {hinweis}.",
     "system.voll.restore_satz":
-        "Wiederherstellen ersetzt diese Teile (jeder vorherige wird "
-        "einmal als *.pre-restore-* aufbewahrt) und startet den Dienst "
+        "Wiederherstellen ersetzt diese Teile (die vorherigen bleiben "
+        "unter state/archiv/, nichts wird gelöscht) und startet den Dienst "
         "neu. Ein Upload von ein paar hundert MB kann dauern — lass die "
         "Seite offen.",
     "system.live.titel": "Live-Wächter",
@@ -3172,8 +3159,8 @@ T = {
     "personwizard.modell.js_fehler": "Fehler ",
     # --- verifyd.py POST-Antworten (antwort.*, Nutzungs-Reihenfolge) ---
     "antwort.person_entfernt":
-        "{person} entfernt ({n} Referenzbilder in den Papierkorb "
-        "verschoben — wiederherstellbar)",
+        "{person} entfernt ({n} Referenz-Sätze ins Archiv verschoben — "
+        "nichts gelöscht)",
     "antwort.person_name_ungueltig": "ungültiger Name",
     "antwort.person_unbekannt": "unbekannte Person",
     "antwort.person_name_belegt":
@@ -3218,12 +3205,6 @@ T = {
     "antwort.bruecke_hinzu": "{n} Bild(er) hinzugefügt",
     "antwort.modell_laedt":
         "das Erkennungsmodell lädt — ein paar Sekunden …",
-    "antwort.refcache_baut":
-        "die Referenzen werden neu aufgebaut — bei vielen Referenzen "
-        "kann das eine Minute dauern …",
-    "antwort.refcache_fehler":
-        "der Neuaufbau der Referenzen ist zweimal in Folge fehlgeschlagen — "
-        "siehe Dienst-Log (/log); der nächste Versuch läuft in ein paar Minuten",
     "antwort.cache_aufgeraeumt": "{n} Clip(s) entfernt, {mb} MB frei geworden — Cache {cache} GB, {frei} GB frei",
     "antwort.bruecke_nimmt": "die Prüfung wählt {n} Bild(er) aus",
     "antwort.bruecke_grenz_zusatz":
@@ -3844,6 +3825,10 @@ Personen zwischendurch auffüllen.</p>""",
     "heute.person.live_title": "nur vom Live-Wächter benannt (Namensmeldung nach mehreren Funden) — noch kein bestätigter Durchgang",
     "heute.person.live_link": "zur Live-Meldung {zeit} · {kamera}",
     "heute.person.mehr": "alle {n} Personen ({m} weitere)",
+    "heute.unbek.cnt.eins": "{n} unbekannte Person · nach letzter Sichtung sortiert",
+    "heute.unbek.cnt.viele": "{n} unbekannte Personen · nach letzter Sichtung sortiert",
+    "heute.unbek.gesehen": "gesehen {von}–{bis}",
+    "heute.unbek.gesehen_einmal": "gesehen {zeit}",
     "heute.anw.dauer": "anwesend rund {h} h",
     "heute.anw.title": "Anwesenheit je Stunde, alle Kameras — rot: bestätigt anwesend, grün: System lief, niemand gesehen",
     "heute.anw.title_gesamt": "Anwesenheit je Stunde — alle Kameras, nicht nach der Bereichs-Sicht gefiltert",
@@ -3857,6 +3842,24 @@ Personen zwischendurch auffüllen.</p>""",
     "heute.rand.unmatched": "nicht zugeordnet in Durchgängen",
     "heute.rand.unmatched_title": "Events mit Gesicht ohne Treffer auf eine bekannte Person, innerhalb von Durchgängen mit Erkennung — meist dieselben Leute",
     "heute.rand.unbek_title": "Unbekannt-Identitäten des Pools mit Stütze an diesem Tag; ohne Pool-Daten: Durchgänge ohne jede Erkennung",
+    "heute.aehnlich.titel": "Vermutlich erkannt",
+    "heute.aehnlich.cnt.eins": "{n} bekannte Person, nicht bestätigt · nach letzter Sichtung sortiert",
+    "heute.aehnlich.cnt.viele": "{n} bekannte Personen, nicht bestätigt · nach letzter Sichtung sortiert",
+    "heute.aehnlich.zu": "vermutlich {person}",
+    "heute.aehnlich.ident": "{uid} · Median {median} · Abstand {abstand}",
+    "heute.aehnlich.rand.eins": "{n} Person vermutlich erkannt — siehe Vermutlich erkannt",
+    "heute.aehnlich.rand.viele": "{n} Personen vermutlich erkannt — siehe Vermutlich erkannt",
+    "heute.aehnlich.fehler": "Die letzte Prüfung auf vermutlich erkannte Personen ist gescheitert (Fehler) — die Gruppen hier können veraltet sein. Einzelheiten im Log und in /health.",
+    "heute.aehnlich.nein": "nicht {person}",
+    "heute.aehnlich.nein_zurueck": "zurücknehmen",
+    "heute.aehnlich.antwort_nein": "nicht {person} — die Gruppe steht wieder unter Unbekannte",
+    "heute.aehnlich.antwort_zurueck": "Urteil „nicht {person}“ zurückgenommen — die nächste Prüfung (binnen einer Minute) kann die Gruppe wieder zuordnen",
+    "heute.aehnlich.titel_lauf": "vermutlich {person} — Durchgang",
+    "heute.aehnlich.sammel": "ähnlich {person}",
+    "heute.aehnlich.sammel_hinweis": "Gesammelte Gesichter, die {person} ähneln. Gesichter anhaken, um sie {person} zuzuweisen oder als nicht {person} herauszunehmen (sie werden eine neue Unbekannte).",
+    "heute.aehnlich.sammel_nein_teil": "Nicht {person} — die {n} angehakten",
+    "heute.aehnlich.sammel_abgelehnt": "Für „ähnlich {person}“ nicht möglich — hier lassen sich nur angehakte Gesichter zuweisen oder als nicht {person} herausnehmen.",
+    "heute.aehnlich.antwort_sammel_nein": "{n} Gesicht(er) als {name} mit dem Urteil „nicht {person}“ herausgenommen",
     # "{n}× übereinstimmend" statt Zahl+Nomen: {n} kann 1 sein und hat hier
     # kein t_n-Paar — eine Fuegung wie "{n} übereinstimmende Treffer" waere
     # im Singular falsch dekliniert. Wortfamilie wie live.erklaer.satz1.

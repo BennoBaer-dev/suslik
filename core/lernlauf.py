@@ -81,9 +81,12 @@ _ANKER_PFLICHT = {
 _MITGLIED_PFLICHT = ("event", "datei", "t", "kamera", "front", "sharp", "det",
                      "kante", "pose",
                      # E4a: physischer Dedup-Schluessel (kamera+bbox, cross-event
-                     # wie stuetz_phys) + Embedding fuer Fast-Duplikat/Vorschau —
-                     # die Ernte-Kandidaten tragen alle drei Felder bereits.
-                     "bbox", "ts", "emb")
+                     # wie stuetz_phys) + Zeitbezug. E3a-1c (Bauplan Referenz-Quelle
+                     # einbauen, J1): statt des Embeddings die ref_id des Satzes —
+                     # Fingerabdruck und Bild liest jeder Leser ueber core/refquelle
+                     # (fingerabdruecke/mit_fingerabdruecken unten); `datei` traegt
+                     # seitdem dieselbe ref_id als Kennung des Mitglieds.
+                     "bbox", "ts", "ref_id")
 ANKER_STATUS = ("unbenannt", "benannt", "uebernommen", "verworfen")
 
 # E4a Namens-Ebene (Widerleger-MUSS): EINZIGE Namensquelle des Projekts —
@@ -567,40 +570,27 @@ def anker_aktualisieren(data_dir, anker_id, **felder):
     return neu
 
 
-def anker_crops_loeschen(data_dir, satz):
-    """Crop-JPGs eines Ankers von der Platte nehmen (fremde Gesichter muessen
-    nicht liegen bleiben — Dismiss-Entscheid User 05.08.). NUR die Bilddateien;
-    die Anker-Zeile mit Zentroid/Mitglieds-Metadaten bleibt als Gedaechtnis
-    fuer die Wiederernte-Erbschaft. Best-effort (fehlende Datei ist ok),
-    -> Anzahl geloeschter Dateien."""
-    lauf_id = str((satz.get("lauf") or {}).get("lauf_id") or "")
-    if not lauf_id:
-        return 0
-    basis = os.path.realpath(os.path.join(
-        data_dir, "state", "lernlauf", lauf_id, "crops"))
-    n = 0
-    for m in satz.get("mitglieder") or []:
-        fn = os.path.basename(str(m.get("datei") or ""))
-        if not fn:
-            continue
-        p = os.path.realpath(os.path.join(basis, fn))
-        if p.startswith(basis + os.sep) and os.path.isfile(p):
-            try:
-                os.remove(p)
-                n += 1
-            except OSError:
-                pass
-    return n
+GRUND_ANKER_VERWORFEN = "the group was dismissed in the learning run"
+
+
+def anker_saetze_verwerfen(data_dir, satz):
+    """Die Saetze der Mitglieder eines verworfenen Ankers bekommen die Statuszeile verworfen (J3, E3a-1c):
+    fremde Gesichter bleiben nicht liegen (Dismiss-Entscheid User 05.08.), aber geloescht wird nicht
+    selbst — der Verfall nach aufbewahrung_tage raeumt sie; Bilddateien alter Laeufe bleiben bis E4.
+    -> Zahl der Saetze, die verworfen wurden (nur Kandidaten ohne Bindung)."""
+    ids = [m.get("ref_id") for m in satz.get("mitglieder") or [] if m.get("ref_id")]
+    return saetze_verwerfen(datenort_cfg(data_dir), ids, GRUND_ANKER_VERWORFEN) if ids else 0
 
 
 def anker_verwerfen(data_dir, anker_id):
     """Dismiss mit Gedaechtnis (User-Entscheid 05.08., nicht-loeschen-Prinzip):
     Status -> verworfen (Zeile+Zentroid BLEIBEN, damit Wiederernten derselben
-    Events still erben statt erneut zu fragen), Crop-Bilder werden geloescht.
-    -> (satz, geloeschte_crops)."""
+    Events still erben statt erneut zu fragen); die Saetze der Mitglieder
+    bekommen die Statuszeile verworfen (seit E3a-1c statt Loeschen der Crops).
+    -> (satz, verworfene_saetze)."""
     satz = anker_aktualisieren(data_dir, anker_id,
                                status="verworfen", person=None)
-    return satz, anker_crops_loeschen(data_dir, satz)
+    return satz, anker_saetze_verwerfen(data_dir, satz)
 
 
 def lauf_loeschen(data_dir, lauf_id):
@@ -939,3 +929,131 @@ def anker_lesen(data_dir):
                 except Exception:
                     kaputt += 1
     return saetze, kaputt
+
+
+# ------------------------------------------------------------------ Saetze der Laeufe (E3a-1c)
+# Bauplan analysen/bauplan_refquelle_einbau.md, Stufe E3 Punkt 1, Schnitt E3a-1c (J1, J3 mit der
+# Ergaenzung O562 a): die Lauf-Listen tragen seit E3a-1c die ref_id statt Bilddatei und
+# Fingerabdruck; Fingerabdruck und Bild liest jeder Leser ueber core/refquelle. Diese Helfer sind die
+# EINE Stelle dafuer im Lernlauf (Ernte, Norm-Schritt, Anker, Benennung, Vorrat, Raeumen).
+DATENORT_ENV = "VERIFY_DATA_DIR"      # verifyd.py setzt es aus cfg["data_dir"] (Muster core/frames)
+SATZ_LAUF_STATUS = ("kandidat", "referenz")   # was ein Anker-Mitglied als Satz sein kann
+
+
+def datenort_cfg(data_dir=None):
+    """Die Config fuer core/refquelle: data_dir vom Aufrufer, sonst aus VERIFY_DATA_DIR (Worker-Jobs
+    und reine Funktionen ohne Dienst-Config). -> {"data_dir": ...}; fehlt beides, RuntimeError laut."""
+    ort = data_dir or os.environ.get(DATENORT_ENV)
+    if not ort:
+        _log.error(f"reference source: no data folder known (neither passed nor {DATENORT_ENV})")
+        raise RuntimeError(f"no data folder for the reference source ({DATENORT_ENV} not set)")
+    return {"data_dir": ort}
+
+
+def saetze_verwerfen(cfg, ref_ids, grund):
+    """Saetzen die Statuszeile verworfen schreiben (J3), aber nur solchen mit Status kandidat, ohne
+    Bindung und ohne aktive Unbekannt-Bindung; referenz und altbestand nie. -> Zahl der geschriebenen Statuszeilen."""
+    from core import refquelle as _rq                       # noqa: PLC0415  spaet wie im Haus
+    eintraege = _rq.read_catalog(cfg)["eintraege"]
+    n = gebunden = 0
+    for rid in sorted({r for r in ref_ids if r}):
+        e = eintraege.get(rid)
+        if e is None or e["status"].get("status") != "kandidat" or e["bindung"].get("person"):
+            continue
+        # Bauplan analysen/bauplan_verbraucher_unbekannt.md Stufe V1a Punkt 1, Entscheid 10: einen an eine
+        # Unbekannt-Identitaet gebundenen Satz verwerfen weder Aufbewahrung noch Raeumen; die Wiederholungsanalyse
+        # loest die Bindung vorher (core/unbekannt_verbraucher).
+        if _rq.unknown_bound(e):
+            gebunden += 1
+            continue
+        _rq.append(cfg, rid, "status", {"status": "verworfen", "grund": grund})
+        n += 1
+    if gebunden:
+        _log.info(f"reference source: {gebunden} candidate set(s) bound to an unknown identity kept, "
+                  f"not set to discarded ({grund})")
+    if n:
+        _log.info(f"reference source: {n} candidate set(s) set to discarded ({grund})")
+    return n
+
+
+def lauf_saetze_verwerfen(cfg, lauf_ids, grund):
+    """Allen Kandidaten-Saetzen der genannten Laeufe (Herkunft lauf_id) die Statuszeile verworfen
+    schreiben, nach den Regeln von saetze_verwerfen. -> Zahl der geschriebenen Statuszeilen."""
+    from core import refquelle as _rq                       # noqa: PLC0415
+    ids = {str(x) for x in lauf_ids or [] if x}
+    if not ids:
+        return 0
+    eintraege = _rq.read_catalog(cfg)["eintraege"]
+    return saetze_verwerfen(cfg, [r for r, e in eintraege.items()
+                                  if str(e["herkunft"].get("lauf_id")) in ids], grund)
+
+
+def _lauf_kennung(cfg, ref_ids):
+    """Die Rechenwerk-Kennung, mit der die Saetze eines Laufs geschrieben sind (die des ersten Satzes
+    nach ref_id): der Dienst haelt kein Rechenwerk, Lese-Stufe a braucht eine. -> dict oder None."""
+    from core import refquelle as _rq                       # noqa: PLC0415
+    for rid in sorted(ref_ids):
+        s = _rq.read_set(cfg, rid)
+        if s is not None and isinstance((s["quelle"] or {}).get("rechenwerk"), dict):
+            return s["quelle"]["rechenwerk"]
+    return None
+
+
+def fingerabdruecke(cfg, lauf_id, status=SATZ_LAUF_STATUS):
+    """Die Fingerabdruecke der Saetze eines Laufs ueber Lese-Stufe a (Filter Status und Lauf-ID, J1).
+    -> dict vek {ref_id: float32}, fremd (ref_ids mit anderer Kennung), ausgelassen, kennung."""
+    from core import refquelle as _rq                       # noqa: PLC0415
+    st = (status,) if isinstance(status, str) else tuple(status)
+    eintraege = _rq.read_catalog(cfg)["eintraege"]
+    ids = [r for r, e in eintraege.items() if e["status"].get("status") in st
+           and e["herkunft"].get("lauf_id") == lauf_id]
+    kennung = _lauf_kennung(cfg, ids) if ids else None
+    if kennung is None:
+        return {"vek": {}, "fremd": [], "ausgelassen": [], "kennung": None}
+    m = _rq.read_matrix(cfg, kennung, status=st, run_id=lauf_id)
+    fremd = [r for r, z in zip(m["ref_ids"], m["zustand"]) if z == "fremd"]
+    if fremd or m["ausgelassen"]:
+        _log.warning(f"learning run {lauf_id}: {len(fremd)} set(s) computed on another engine than the "
+                     f"rest of the run, {len(m['ausgelassen'])} set(s) without a readable fingerprint")
+    return {"vek": dict(zip(m["ref_ids"], m["matrix"])), "fremd": fremd,
+            "ausgelassen": m["ausgelassen"], "kennung": kennung}
+
+
+def mitglieder_fingerabdruecke(cfg, ref_ids):
+    """Die Fingerabdruecke bestimmter Saetze, gelesen je Lauf ihrer Herkunft ueber Lese-Stufe a (J1).
+    -> {ref_id: float32}; ein Satz ohne lesbaren Fingerabdruck fehlt darin (der Aufrufer zaehlt ihn)."""
+    from core import refquelle as _rq                       # noqa: PLC0415
+    wanted = {r for r in ref_ids if r}
+    if not wanted:
+        return {}
+    eintraege = _rq.read_catalog(cfg)["eintraege"]
+    laeufe = {eintraege[r]["herkunft"].get("lauf_id") for r in wanted if r in eintraege}
+    vek = {}
+    for lid in sorted(laeufe, key=str):
+        vek.update(fingerabdruecke(cfg, lid)["vek"])
+    return {r: v for r, v in vek.items() if r in wanted}
+
+
+def mit_fingerabdruecken(cfg, satz):
+    """Ein Anker-Satz, dessen Mitglieder (ref_id) ihren Fingerabdruck als Feld emb im Speicher tragen,
+    fuer Leser, die ihn so erwarten (anlernen-Sichtung, E3b). -> Kopie des Satzes; nichts geschrieben."""
+    import copy                                             # noqa: PLC0415
+    neu = copy.deepcopy(satz)
+    mitglieder = neu.get("mitglieder") or []
+    if not any(m.get("ref_id") for m in mitglieder):
+        return neu
+    vek = mitglieder_fingerabdruecke(cfg, [m.get("ref_id") for m in mitglieder])
+    for m in mitglieder:
+        v = vek.get(m.get("ref_id"))
+        if v is not None:
+            m["emb"] = [round(float(x), 5) for x in v]
+    return neu
+
+
+def bild_url(datei, lauf_id):
+    """Die Bild-Route eines Lauf-Funds: seit E3a-1c traegt `datei` eines Mitglieds die ref_id (Bild aus
+    dem Satz, Route /lernlauf/satz/), aeltere Laeufe einen Dateinamen unter crops/. -> URL-Pfad (roh)"""
+    name = str(datei or "").rsplit("/", 1)[-1]
+    if name and not os.path.splitext(name)[1]:          # ohne Endung: eine ref_id
+        return f"/lernlauf/satz/{name}"
+    return f"/lernlauf/crop/{lauf_id}/{name}"

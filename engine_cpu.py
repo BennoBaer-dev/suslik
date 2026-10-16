@@ -460,6 +460,23 @@ class BildStufen(em.BildStufen):
         a.update({"engine": Engine.name, "geraet": Engine.geraet_text()})
         return a
 
+    def identity(self):
+        """Die Engine-Auskunft fuer die Rechenwerk-Kennung (Entscheid J5, gelesen von
+        bild_kern.engine_identity; die Textformen stehen dort an einer Stelle).
+        -> dict genauigkeit, bibliothek, modell_pfad, geraet, breite
+
+        Wie `engine_migraphx.BildStufen.identity` (Bind-Bericht der r-Session); anders ist nur
+        die GENAUIGKEIT: hat die r-Stufe auf dem OpenVINO-CPU-Provider gebunden, ist es dessen
+        precision-Option, die `_sitzung` wirklich durchgebracht hat (heute „FP32“ aus der
+        Registry); hat dieser Fassung die Option abgelehnt, waehlt der Plugin selbst (auf
+        AVX512-BF16/AMX bf16, Modulkopf), und das steht als „Voreinstellung CPU“ da. Auf dem
+        nackten CPU-Provider bleibt der Rechentyp der Modelldatei aus der geerbten Methode."""
+        a = super().identity()
+        _s, bericht = self.bestand.stufe_bindung("r", self.BREITE)
+        if bericht.get("stand") == "openvino":
+            a["genauigkeit"] = bericht.get("precision") or f"Voreinstellung {OV_GERAET}"
+        return a
+
 
 # ------------------------------------------------------------------ Die Engine
 class Engine:

@@ -206,27 +206,13 @@ def vergleiche(ist, soll, fixpunkte, fremde, modus):
 
 
 def lade_master_refs(emb):
-    """Referenzen aus dem LEBENDEN Master embedden (det 320!) — fuer den Drift-Waechter
-    nach Enrollment: der muss die NEUE Basis pruefen, nicht den eingefrorenen Snapshot."""
-    from sync_refs import master_stand, MASTER
-    from core.refbeiwert import beiwerte as _bw   # A2-Vertrag Stelle 4
-    bw, _fremd = _bw(MASTER, emb.modell)
-    refs = {}
-    for p, dateien in master_stand().items():
-        V = []
-        for f in dateien:
-            b = bw.get((p, f))
-            if b is not None:
-                V.append(np.asarray(b["emb"], dtype=np.float32))
-                continue
-            img = cv2.imread(os.path.join(MASTER, p, f))
-            if img is None:
-                continue
-            v = emb.embed(img)
-            if v is not None:
-                V.append(np.asarray(v, dtype=np.float32))
-        refs[p] = np.asarray(V, dtype=np.float32)
-    return refs
+    """Referenzen des LEBENDEN Bestands fuer den Drift-Waechter nach Enrollment (der muss die NEUE Basis
+    pruefen, nicht den eingefrorenen Snapshot): Lese-Stufe a der Referenz-Quelle (E3b-1b, J11), ohne
+    Zustandsurteil und ohne Stoerung, gesiebt nur nach emb.modell, kein Bild; Datenordner aus VERIFY_DATA_DIR.
+    -> {Person: float32 [N, 512]} nur fuer Personen mit Zeilen."""
+    from core import lernlauf as _ll
+    from core import refquelle as _rq
+    return _rq.person_matrices(_ll.datenort_cfg(), emb.modell)[0]
 
 
 def entscheidungen(ist):

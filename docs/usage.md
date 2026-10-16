@@ -138,7 +138,7 @@ version that introduced the page — earlier days stay empty.
   **configuration backup/restore** card, the **full backup** card (one portable archive with
   everything you taught the installation — settings, face references, learning results, the
   whole person-recognition material and models — plus a restore that replaces those parts
-  and keeps one `.pre-restore` copy of each), the **Frigate write-back** control (read-only
+  and moves the previous ones into `state/archiv/`, deleting nothing), the **Frigate write-back** control (read-only
   is the safe default), **Re-run setup wizard**, and a link to this documentation.
 - **System stats** (also the **System stats** button in the top bar) — the load of the machine
   and the state of recognition, one sample per minute, kept for 48 hours. Anything this
@@ -181,8 +181,9 @@ On the **Unknown** tab, *"same person?"* rows show faces of both identities so y
 **Merge** or **Different** at a glance; *Different* is remembered permanently. Clusters that turn
 out to be static objects (a wheel arch, a light pattern the face detector keeps firing on) are
 quarantined automatically into their own collapsed bucket. A person can also be **deleted
-entirely** (name + references) from their detail page; the data moves to a recoverable trash
-folder.
+entirely** (name + references) from their detail page; like removing a single picture, this moves
+the reference sets into the archive `state/archiv/refquelle/` — nothing is deleted, and the archive is
+part of the full backup.
 
 A recurring background job keeps the unknown pool tidy and re-checks it against your current
 references. On an **event page**, images are grouped per person, and groups whose best match is

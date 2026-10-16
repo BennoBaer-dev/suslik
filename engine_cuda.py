@@ -1408,6 +1408,24 @@ class BildStufen:
                 "det_leinwaende": [f"{w}x{h}" for (w, h) in sorted(self._det)],
                 "stufen": sorted(self._ketten)}
 
+    def identity(self):
+        """Die Engine-Auskunft fuer die Rechenwerk-Kennung (Entscheid J5, gelesen von
+        bild_kern.engine_identity; die Textformen stehen dort an einer Stelle).
+        -> dict genauigkeit, bibliothek, modell_pfad, geraet, breite
+
+        Die Genauigkeit ist der Rechentyp der r-Datei, die WIRKLICH geladen wurde (fp16 aus
+        dem Manifest oder die fp32-Vorgabe, `bestand.typ`); Provider und Geraetenummer stehen
+        an der ersten Session der r-Kette, derselben, die `stufe("r", ...)` rechnet
+        (`bestand.kette` haelt sie je Stufe und Breite einmal und baut sie beim ersten Bedarf)."""
+        s = self.bestand.kette("r", self.BREITE)[0]
+        provider = s.get_providers()[0]
+        nummer = ((s.get_provider_options() or {}).get(provider) or {}).get("device_id")
+        return {"genauigkeit": _typ_name(self.bestand.typ["r"]),
+                "bibliothek": f"onnxruntime {ort.__version__} {provider}",
+                "modell_pfad": self.bestand.pfade["r"],
+                "geraet": provider if nummer in (None, "") else f"{provider}:{nummer}",
+                "breite": self.BREITE}
+
 
 def _crop_sessions(g):
     """Je Stufe EINE Ausschnitt-Session dieser Geometrie, egal ob sie auf der offenen

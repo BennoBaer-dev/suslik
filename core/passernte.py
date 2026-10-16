@@ -36,7 +36,12 @@ FAIL-VERHALTEN, beide Richtungen benannt:
     Referenzen vorschlaegt.
   * EINE ZEILE OHNE EMBEDDING -> faellt mit eigenem Grund (`kein_emb`), nie
     still. Sie kann nicht beurteilt werden, und das ist ein Verlust, kein
-    Durchlass.
+    Durchlass. Seit E3a-1d (Bauplan analysen/bauplan_refquelle_einbau.md, Stufe
+    E3 Punkt 1) traegt die Kandidaten-Zeile die ref_id ihres Satzes; der
+    Fingerabdruck kommt ueber core/refquelle (Lese-Stufe a je Lauf, Helfer
+    core.lernlauf.fingerabdruecke) und reist nur im Speicher. Eine Zeile ohne
+    ref_id (Lauf vor dieser Version) oder ohne lesbaren Fingerabdruck faellt
+    mit demselben Grund.
 
 DECKEL JE EVENT (BRUECKE_JE_EVENT-Semantik, .32x): hoechstens N Bilder je
 Ereignis bekommen einen Haken; der Rest wird GRENZFALL und bleibt sichtbar —
@@ -49,7 +54,8 @@ KONTRAKT wie core/ernte.py und core/normlauf.py: reine Funktionen, Pfade und
 Schwellen als Parameter, kein Dienst-Import, keine schweren Imports im
 Modulkopf. Die REFERENZ-MATRIZEN kommen als Parameter herein — dieses Modul
 kennt weder insightface noch den refcache; der Worker reicht sie durch, der
-Testharnisch stellt Zahlen.
+Testharnisch stellt Zahlen. Den Datenordner fuer core/refquelle nimmt es wie
+der Norm-Schritt aus core.lernlauf.datenort_cfg (VERIFY_DATA_DIR).
 """
 import json
 import os
@@ -62,11 +68,11 @@ _log = _logbuch.logger(__name__)
 
 # Die Auswahl DIESES Laufs — eine Zeile je Kandidat, der die Identitaets-Achse
 # bestanden hat. Sie ist zweierlei in einem, und beides mit Absicht an EINER
-# Stelle: die Anzeige-Liste des Auswahl-Overlays UND der BEIWERT-Vorrat der
-# Uebernahme (Embedding + Messwerte je Bild, Muster `core/vorrat.vorrat.jsonl`
-# -> `anlernen.vorrat_aufnehmen`). Ohne den Beiwert entstuende bei der
-# Uebernahme eine Referenz ohne Embedding — die tote Referenz aus dem
-# 28/40-Befund.
+# Stelle: die Anzeige-Liste des Auswahl-Overlays UND die Pruefliste der
+# Uebernahme (`anlernen.passernte_aufnehmen` nimmt nur, was hier steht). Seit
+# E3a-1d traegt jede Zeile die ref_id ihres Satzes statt Bildpfad und
+# Embedding: Bild und Fingerabdruck liegen im Satz (core/refquelle), die
+# Uebernahme ist eine Katalogzeile (core.uebernahme.in_den_bestand).
 AUSWAHL_DATEI = "auswahl.jsonl"
 
 # Der Weg-Name der Bilanz (core.messkarte.bilanz_start).
@@ -245,25 +251,24 @@ def naehe(emb_vec, refs, person, np_mod):
     return eigen, (max(fremde) if fremde else None)
 
 
-def _anzeige_datei(zeile):
-    """Das ANZEIGE-Bild einer Kandidaten-Zeile -> lauf-relativer Pfad oder None.
-
-    Der M-Crop (`datei`) ist die Wahl, und zwar dieselbe wie beim
-    Kalibrier-Vorrat (`core.ernte.kalib_vorrat_speisen`): die Messwerte der
-    Zeile gehoeren zu GENAU diesem Ausschnitt. Das Vorratsbild mit Rand
-    (`datei_v`) gibt es auf diesem Weg gar nicht — die Vorrats-Linie wird hier
-    nicht entschieden (der Mini-Lauf ist fluechtig und speist nie den
-    Lernvorrat)."""
-    return zeile.get("datei") or None
+def _fingerabdruecke(lauf_dir):
+    """Die Fingerabdruecke der Saetze dieses Laufs ueber das Modul (Lese-Stufe a, Filter Lauf-ID =
+    Ordnername, J1). -> {ref_id: Liste von Zahlen}"""
+    from core import lernlauf as _ll                       # noqa: PLC0415  spaet wie im Haus
+    lid = os.path.basename(os.path.normpath(lauf_dir))
+    return {r: v.tolist() for r, v in _ll.fingerabdruecke(_ll.datenort_cfg(), lid)["vek"].items()}
 
 
 def kandidaten(lauf_dir, eids):
-    """Die UEBERGABE-KANDIDATEN des Laufs -> Liste der Zeilen mit Bild.
+    """Die UEBERGABE-KANDIDATEN des Laufs -> Liste der Zeilen, je mit dem
+    Fingerabdruck ihres Satzes als `emb` im Speicher (nie in eine Datei).
 
     „Uebergabe-Kandidat" heisst genau das, was es im Lernlauf heisst: `m` ist
     nach Ernte-Sieb UND Norm-Schritt noch True. Zeilen, die eine der sechs
     Achsen verworfen hat, tragen `m: False` (der Norm-Schritt setzt es und
-    loescht ihre Bilder) — sie kommen hier gar nicht mehr an.
+    verwirft ihre Saetze) — sie kommen hier gar nicht mehr an. Eine Zeile ohne
+    ref_id oder ohne lesbaren Fingerabdruck bleibt drin, aber ohne `emb`; die
+    Identitaets-Achse zaehlt sie unter GRUND_KEIN_EMB (nie still).
 
     Ereignisse ohne Kandidaten-Datei fallen weg: sie sind entweder nie
     geerntet worden oder ihr Job ist gescheitert (dann hat
@@ -283,32 +288,33 @@ def kandidaten(lauf_dir, eids):
                 except Exception:                   # noqa: BLE001
                     _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
                     continue
-                if not z.get("m") or not _anzeige_datei(z):
+                if not z.get("m"):
                     continue
+                z.pop("emb", None)
                 aus.append(z)
+    vek = _fingerabdruecke(lauf_dir) if any(z.get("ref_id") for z in aus) else {}
+    for z in aus:
+        if z.get("ref_id") in vek:
+            z["emb"] = vek[z["ref_id"]]
     return aus
 
 
 def _item(zeile, person, stufe, eigen, fremd):
-    """Eine Auswahl-Zeile: Anzeige-Daten UND Beiwert in einem (s. AUSWAHL_DATEI).
+    """Eine Auswahl-Zeile: Anzeige-Daten und Pruefliste der Uebernahme (s. AUSWAHL_DATEI).
+    -> dict; `datei` traegt die ref_id als Kennung des Bildes (wie ein Anker-Mitglied).
 
     Die Messwerte reisen ueber den EINEN Griff der Messkarte mit
     (`core.messkarte.uebernehmen`) statt ueber eine abgeschriebene Feldliste —
     das ist der Kopierschritt, an dem `core/vorrat.py` seine Guete-Masse
-    verloren hat (core/messkarte.py, Inventur §I-3)."""
-    rel = _anzeige_datei(zeile)
+    verloren hat (core/messkarte.py, Inventur §I-3). Der Fingerabdruck (das
+    Embedding vom ERNTE-FRAME) bleibt im Satz und kommt nicht in die Datei."""
     return _mk.uebernehmen(
         {"eid": zeile.get("eid"), "kamera": zeile.get("kamera"),
-         "person": person, "stufe": stufe,
-         "datei": os.path.basename(str(rel)), "datei_rel": rel,
+         "person": person, "stufe": stufe, "datei": zeile.get("ref_id"),
          "sim": None if eigen is None else round(eigen, 3),
          "fremd": None if fremd is None else round(fremd, 3),
          "richtung": zeile.get("richtung"), "ts": zeile.get("ts"),
-         "t": zeile.get("t"),
-         # BEIWERT der Uebernahme (Muster core/vorrat): das Embedding wurde am
-         # ERNTE-FRAME gemessen, nicht am gespeicherten JPEG — es darf nie neu
-         # aus dem Crop gerechnet werden ([[ersatzmessungen-sind-hypothesen]]).
-         "emb": zeile.get("emb"), "modell": zeile.get("modell")},
+         "t": zeile.get("t"), "ref_id": zeile.get("ref_id")},
         zeile)
 
 
@@ -342,7 +348,7 @@ def auswahl_bilden(zeilen, person, refs, id_werte, je_event, np_mod):
     # zwei Bilder mit derselben Naehe sollen nicht je Lauf die Plaetze tauschen.
     treffer.sort(key=lambda p: (0 if p[0] == STUFE_EMPFOHLEN else 1,
                                 p[1] if p[1] is not None else 0.0,
-                                str(p[3].get("datei") or "")))
+                                str(p[3].get("ref_id") or "")))
     je = {}
     aus = []
     deckel = int(je_event or 0)

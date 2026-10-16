@@ -15,7 +15,7 @@ running (see the roadmap section below).
 
 The `latest-*` image tags follow the newest release, so `docker compose pull` gets you
 what this README describes. To pin a version instead, use its tag explicitly:
-`ghcr.io/bennobaer-dev/suslik:0.1.1.010-gpu`.
+`ghcr.io/bennobaer-dev/suslik:0.1.1.021-gpu`.
 
 ## Why this exists
 
@@ -40,7 +40,7 @@ declines rather than mislabels.
 The Today page answers "who was on the property, when, and where did they go" — one card per
 person, one block per pass, unknowns kept visible instead of buried:
 
-![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.1.010)
+![suslik Today page — recognized people, unknown visitors and the day's passes](docs/img/today.png?v=0.1.1.021)
 
 *(Screenshot from a live install of v0.1.0.199; names and faces anonymized. The
 "Recognized live" row is the live watchers' preliminary naming, right on the stream.)*
@@ -62,7 +62,12 @@ all stored face images and short look-back videos.
 - **Alerts & integration** — Pushover, Telegram (via Home Assistant), and MQTT.
 - **Notifications tab** — configure the Pushover / Telegram / MQTT channels in the UI (secrets kept
   in the data volume, shown masked) and send a test message per channel.
-- **Config backup/restore** — download all settings as a single JSON file and restore them from it.
+- **Config backup/restore** — download all settings as a single JSON file and restore them from it;
+  the **full backup** on the System page adds everything you taught the installation.
+- **One store for learned faces** — every reference face is kept with its fingerprint, picture and
+  origin in one place (the *reference source*); removing a face archives it instead of deleting it.
+  Updating from an older version migrates the existing faces once, keeps a full copy of the old
+  files and deletes nothing ([installation guide](docs/installation.md#data-layout-and-the-one-time-migration)).
 - **Web UI** with a guided setup wizard, scenario view, reference/unknown management, and a
   startup self-check you can read from `docker logs`.
 - **Five languages** — the UI speaks English, German, Spanish, Italian and French. Pick

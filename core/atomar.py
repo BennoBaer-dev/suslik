@@ -9,7 +9,9 @@ im Container), und die Live-Status-Runde warf denselben Fehler an
 ueberall `f"{ziel}.tmp-{os.getpid()}"`: der zweite Schreiber oeffnet dieselbe
 tmp (truncate), der erste replace() nimmt sie weg, der zweite replace() findet
 nichts mehr — und je nach Reihenfolge landet ein HALBER Stand unter dem
-Zielnamen.
+Zielnamen. Den ersten Schreiber und seine Matrizen-Datei gibt es seit E3c-1
+(Bauplan analysen/bauplan_refquelle_einbau.md) nicht mehr; Referenzen schreibt
+core/refquelle, und auch das ueber diesen Griff.
 
 mkstemp statt Namens-Bastelei: O_EXCL + Zufallsname sind eindeutig ueber
 Threads UND Prozesse, auch ueber zwei Container auf demselben Volume mit

@@ -3,15 +3,18 @@ einer Person (M1a, byte-treu aus verifyd extrahiert). Kontrakt: NUR rendern.
 
 .510/J18 (d): der Seitenaufruf startet KEINE Suche mehr (bis .509 startete er
 `qs_neu_starten` bei fehlendem refcache und `vorschlaege_starten` bei fehlender
-Vorschlagsdatei — zwei Subprozesse, ausgeloest vom blossen Hinsehen). Damit
-zerfaellt `None` in ZWEI verschiedene Lagen, die vorher eine waren:
+Vorschlagsdatei — zwei Subprozesse, ausgeloest vom blossen Hinsehen). Fuer die
+Bestands-Suche (Quelle 2) zerfaellt `None` damit in ZWEI verschiedene Lagen:
   * es LAEUFT gerade eine Suche  -> Platzhalter + Zaehler + Selbst-Neuladen
-    (refresh 15 s Quelle 1 / 20 s Quelle 2 wie im Bestand — jetzt aber ENDLICH:
-    er hoert auf, sobald der Lauf vorbei ist);
+    (refresh 20 s wie im Bestand — jetzt aber ENDLICH: er hoert auf, sobald der
+    Lauf vorbei ist);
   * es laeuft KEINE              -> ehrlicher Satz („noch nie gesucht" bzw.
     „zuletzt gesucht am …") plus der Knopf, der sie startet. KEIN Refresh.
 Welche Lage vorliegt, sagt `stand` (verifyd.Service.such_stand) — diese Datei
 raet es nicht aus den Daten.
+Quelle 1 (passende Unbekannte) ist seit E3c-1 (Bauplan analysen/bauplan_refquelle_einbau.md,
+Stufe E3 Punkt 3) immer eine Liste: die Matrizen kommen aus der Referenz-Quelle, es gibt keinen
+Cache mehr, der eine Person nicht kennen kann; die zwei Zweige fuer `None` sind entfallen.
 
 Sprach-Stufe 0 (konzept_sprache.md v2): sichtbare Texte aus core/sprache.t()
 — BYTE-TREU (Harnisch tools/harnisch_sprache.py)."""
@@ -22,7 +25,9 @@ import urllib.parse
 
 import webui
 
+from core.lernlauf import bild_url
 from core.sprache import t
+from routes.unbekannte import bild as _bild_pool   # E3a-2: die Bild-Adresse eines Pool-Gesichts
 
 
 def _zaehler(inhalt, person):
@@ -54,7 +59,7 @@ def _stand_text(ts):
 
 def render(person, kand, vs, data_dir, va=None, stand=None):
     """-> (inhalt, refresh). kand = anlernen.aehnliche_unbekannte(person)
-    (None = kein refcache-Eintrag), vs = anlernen.lade_vorschlaege(person)
+    (eine Liste, evtl. leer), vs = anlernen.lade_vorschlaege(person)
     (None = keine Vorschlagsdatei),
     va = offene Vorrats-Angebote der Person (core.vorrat.angebote_lesen,
     bauplan_vorrat.md B4) — None/leer: der Abschnitt erscheint gar nicht
@@ -67,7 +72,6 @@ def render(person, kand, vs, data_dir, va=None, stand=None):
     pj = html.escape(person.replace("\\", "\\\\").replace("'", "\\'"), quote=True)
     st = stand or {}
     st_vs = st.get("vorschlaege") or {}
-    st_uk = st.get("unbekannt") or {}
     plaetze = int(st.get("plaetze") or 1)
     belegt = int(st.get("belegt") or 0)
     refresh = None
@@ -76,20 +80,7 @@ def render(person, kand, vs, data_dir, va=None, stand=None):
              f"<a href='/gesichter'>{t('aehnliche.kopf.link_zurueck')}</a></p>"]
     # --- Quelle 1: unbekannte Gesichter ---
     teile.append(f"<h3>{t('aehnliche.unbekannt.titel')}</h3>")
-    if kand is None and st_uk.get("laeuft"):
-        refresh = 15
-        teile.append(_zaehler(webui.leer(t("aehnliche.unbekannt.suche_titel"),
-                                         t("aehnliche.suche.rechnet")), person))
-    elif kand is None:
-        # M-10 (W1): genau hier stand bis .509 der Dauer-Platzhalter mit 20-s-
-        # Refresh fuer eine Suche, die niemand gestartet hatte. Quelle 1 haengt
-        # am refcache; geschrieben wird der von der Referenz-Pruefung, und die
-        # startet dieser Knopf (`refPruefNeu`, derselbe wie auf der Qualitaets-Seite).
-        teile.append(webui.leer(t("aehnliche.unbekannt.kein_cache"),
-                                t("aehnliche.unbekannt.kein_cache_hinweis"))
-                     + f'<p><button class="gtb" onclick="refPruefNeu(this)">'
-                     f'{t("aehnliche.unbekannt.knopf_pruefen")}</button></p>')
-    elif not kand:
+    if not kand:
         teile.append(webui.leer(t("aehnliche.unbekannt.hinweis_leer")))
     else:
         for g in kand:
@@ -98,7 +89,7 @@ def render(person, kand, vs, data_dir, va=None, stand=None):
             teile.append(
                 f'<label class="card" style="display:inline-block;width:auto;'
                 f'text-align:center;margin:4px;vertical-align:top">'
-                f'<img src="/anlern/crops/{urllib.parse.quote(g["id"])}.jpg" '
+                f'<img src="{_bild_pool(g.get("ref_id"), g["id"])}" '
                 f'style="height:120px;border-radius:5px;display:block;margin-bottom:4px">'
                 f'<input type="checkbox" class="ae-cb" value="{gid}"> '
                 f'{sim_txt}</label>')
@@ -192,13 +183,19 @@ def render(person, kand, vs, data_dir, va=None, stand=None):
     # Direkt aus vorrat.jsonl der EXISTIERENDEN Laeufe gerendert (kein Misch-
     # File, Konzept-QS W1.14/W2.10); eigener Draht ueber data-Attribute — der
     # eid|datei-Wert der Bestands-Suche kann den Lauf-Pfad nicht transportieren.
+    # E3a-1d (Bauplan Referenz-Quelle einbauen): eine Zeile mit ref_id zeigt das
+    # Profilbild ihres Satzes (/lernlauf/satz/, Lese-Stufe d) und schickt die
+    # ref_id als data-datei; eine Zeile aelterer Laeufe zeigt ihr Vorratsbild,
+    # ihre Uebernahme lehnt der Dienst laut ab (J7).
     if va:
         teile.append(f"<h3>{t('aehnliche.vorrat.titel')}</h3>"
                      f"<p style='color:var(--dim);font-size:13px;margin:0 0 6px'>"
                      f"{t('aehnliche.vorrat.hinweis')}</p>")
         for z in va:
             lid = urllib.parse.quote(str(z.get("lauf_id") or ""))
-            basis = os.path.basename(str(z.get("datei_v") or ""))
+            basis = z.get("ref_id") or os.path.basename(str(z.get("datei_v") or ""))
+            bild = (bild_url(basis, z.get("lauf_id")) if z.get("ref_id")
+                    else f"/lernlauf/vorrat/{lid}/{urllib.parse.quote(basis)}")
             wann = datetime.datetime.fromtimestamp(
                 (z.get("ts") or 0) + (z.get("t") or 0)).strftime("%d.%m. %H:%M")
             zeile = t("aehnliche.vorrat.kachel_zeile", wann=wann,
@@ -212,7 +209,7 @@ def render(person, kand, vs, data_dir, va=None, stand=None):
                 f'<label class="card" style="display:inline-block;width:auto;'
                 f'text-align:center;margin:4px;vertical-align:top;'
                 f'outline:2px solid #2a6db8">'
-                f'<img src="/lernlauf/vorrat/{lid}/{urllib.parse.quote(basis)}" '
+                f'<img src="{html.escape(bild, quote=True)}" '
                 f'style="height:120px;border-radius:5px;display:block;margin-bottom:4px">'
                 f'<input type="checkbox" class="vo-cb" '
                 f'data-lauf="{html.escape(str(z.get("lauf_id") or ""), quote=True)}" '

@@ -1252,33 +1252,34 @@ class Bewegungswache:
 
 
 def referenzen_laden(app):
-    """Gelernte Personen -> {Name: Nx512}. NICHTS nachgebaut: beide Wege sind die
-    Bestands-Funktionen aus anlernen.py, die auch der Dienst nutzt.
-
-    Weg 1 ist der Referenz-Cache (verify_data/clips/refcache.npz), den der Dienst
-    ohnehin pflegt — Lesen kostet Millisekunden statt einen Embedder-Lauf ueber
-    hunderte Referenzbilder. Weg 2 (Cache fehlt/leer/anderes Recognition-Modell)
-    ist anlernen.lade_master_refs().
-
-    DIE FALLE (gemessen, Projekt-Memory): Referenzen muessen mit det_size 320
-    gerechnet werden — die Referenzbilder sind kleine Crops, bei 1280 findet der
-    Detektor darin nichts und die Referenzmatrix bleibt STILL leer. Der Embedder
-    steht nach __init__ auf 320, und diese Funktion laeuft VOR der Bildschleife.
-    Wer hier spaeter ein set_det_size() fuers grosse Bild einbaut: NACH diesem
-    Aufruf, nie davor."""
-    import anlernen
-    cache = os.path.join(anlernen.CLIPS, "refcache.npz")
-    if os.path.exists(cache):
-        try:
-            z = np.load(cache, allow_pickle=True)
-            if str(anlernen._cache_meta(z).get("§modell", "")) == app.modell:
-                refs = {p: np.asarray(z[p], np.float32) for p in z.files
-                        if p not in ("meta", "§meta")}
-                if any(len(M) for M in refs.values()):
-                    return refs, f"refcache ({app.modell})"
-        except Exception:
-            _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
-    return anlernen.lade_master_refs(app), f"Master-Ordner ({app.modell})"
+    """Gelernte Personen -> ({Name: Nx512}, Weg-Text), aus Lese-Stufe a der Referenz-Quelle
+    (Bauauftrag E3b-1a): Fingerabdruecke der Saetze, kein Bild, keine Rechnung, keine
+    Matrizen-Datei und kein Rueckfall auf den Personenordner. Gelesen wird mit der
+    Rechenwerk-Kennung des Embedders der Wache (`app`, ein face_audit.Embedder) im Datenordner
+    VERIFY_DATA_DIR, den load_config fuer diesen Prozess setzt (der Embedder traegt keine
+    Config). Gesiebt wird an der einen Stelle des Moduls (`refquelle.model_sieve`): Zeilen
+    gleichen Modells bleiben, auch mit fremdem Rechenweg (laut gezaehlt, Entscheid 8); Zeilen
+    eines anderen Modells bleiben draussen, laut. Fehlt der Datenordner, ist das ein lauter
+    Fehler (RuntimeError); der Aufrufer schaltet dann das Schnell-Urteil ab und sagt es."""
+    from core import refquelle                              # noqa: PLC0415
+    import bild_kern                                        # noqa: PLC0415  die eine Kennung
+    daten = os.environ.get("VERIFY_DATA_DIR")
+    if not daten:
+        _log.error("live: references: VERIFY_DATA_DIR is not set — the reference source cannot be read")
+        raise RuntimeError("VERIFY_DATA_DIR is not set — reference source not readable")
+    kennung = bild_kern.engine_identity(app)
+    gesiebt = refquelle.model_sieve(refquelle.read_matrix({"data_dir": daten}, kennung), kennung)
+    refs = {}
+    for p, v in zip(gesiebt["personen"], gesiebt["matrix"]):
+        refs.setdefault(p, []).append(v)
+    refs = {p: np.stack(v).astype(np.float32) for p, v in refs.items()}
+    z = gesiebt["zahlen"]
+    zeile = (f"live: references from the reference source: {len(gesiebt['ref_ids'])} row(s), "
+             f"{len(refs)} person(s), catalog state {gesiebt['stand']}; foreign engine {z['fremd']}, "
+             f"other model {z[refquelle.MODEL_OTHER]}, left out {len(gesiebt['ausgelassen'])}")
+    _log.log(_logbuch.WARNING if (not refs or z["fremd"] or z[refquelle.MODEL_OTHER]
+                                  or gesiebt["ausgelassen"]) else _logbuch.INFO, zeile)
+    return refs, gesiebt["weg"]
 
 
 # Meldungs-Texte des Schnell-Urteils. Engine-Default englisch (UI-Sprache,

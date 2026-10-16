@@ -1659,7 +1659,15 @@ def gesichtsbilder(data_dir, szenario):
 
     Rueckgabe (zeitlich sortiert, Szenario-Prinzip: der ganze Durchgang):
     `{"eid", "kamera", "t", "datei", "person"|None, "score"|None}` — `person`
-    ist None, wenn das Event keinen bestaetigten Namen trug."""
+    ist None, wenn das Event keinen bestaetigten Namen trug.
+
+    REFERENZ-QUELLE (Bauplan analysen/bauplan_refquelle_einbau.md, Stufe E3 Punkt 1, Schnitt E3a-3):
+    seit dieser Version gibt es keine `_best_`- und `_enroll_`-Dateien mehr; das beste Gesicht je
+    Person und der Fremd-Kandidat sind Saetze (kandidaten.jsonl, ref_id, core.harvest_set.event_rows).
+    Eine Satz-Kachel traegt statt `datei` (None) die Bild-Adresse `url` (core.lernlauf.bild_url,
+    Lese-Stufe d); Datei-Kacheln bleiben, wie sie waren."""
+    from core import harvest_set as _hs
+    from core.lernlauf import bild_url as _satz_url
     s = szenario or {}
     kacheln = []
     for ev in s.get("evs") or []:
@@ -1673,32 +1681,44 @@ def gesichtsbilder(data_dir, szenario):
             _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
             continue
         scores = _event_scores(edir)
+        kand_z, best_z = _hs.event_rows(edir)
         rumpf = {"eid": eid, "kamera": str(ev.get("cam") or ""), "t": ev.get("t")}
+
+        def _datei(d):
+            return {"datei": d}
+
+        def _satz(z):
+            return {"datei": None, "url": _satz_url(z["ref_id"], None)}
         conf = [str(p) for p in (ev.get("conf") or [])]
         for p in conf:
             # Reihenfolge wie im Push-Bild: `_show_` (Gesicht mit Umfeld) vor
-            # dem engen `_best_`-Ausschnitt.
+            # dem engen `_best_`-Ausschnitt bzw. dem besten Gesicht als Satz.
             datei = (next((d for d in dateien if f"_show_{p}_" in d), None)
                      or next((d for d in dateien if f"_best_{p}_NN" in d), None))
-            if datei:
-                kacheln.append({**rumpf, "datei": datei, "person": p,
+            bild = (_datei(datei) if datei else
+                    _satz(best_z[p]) if (best_z.get(p) or {}).get("ref_id") else None)
+            if bild:
+                kacheln.append({**rumpf, **bild, "person": p,
                                 "score": scores.get(p)})
         if conf:
             continue
         # OHNE bestaetigten Namen: das Gesicht, das die Analyse trotzdem
-        # aufgehoben hat — erst der Enrollment-Crop des Fremden, sonst der
-        # staerkste `_best_`-Ausschnitt (er lag ueber der Bild-Schwelle, aber
-        # unter der Bestaetigung). Der Score ist der beste, den irgendeine
-        # Referenz auf diesem Event erreicht hat.
+        # aufgehoben hat — erst der Enrollment-Crop des Fremden (seit E3a-3 sein
+        # Satz), sonst der staerkste `_best_`-Ausschnitt bzw. das beste Gesicht als
+        # Satz (es lag ueber der Bild-Schwelle, aber unter der Bestaetigung). Der
+        # Score ist der beste, den irgendeine Referenz auf diesem Event erreicht hat.
         datei = next((d for d in dateien if "_enroll_FREMD_" in d), None)
-        if datei is None:
-            uebrig = [d for d in dateien if "_best_" in d and "_NN" in d]
-            datei = sorted(uebrig)[0] if uebrig else None
-        if datei:
+        fremd = next((z for z in kand_z if z.get("ref_id") and not z.get("person")), None)
+        uebrig = [d for d in dateien if "_best_" in d and "_NN" in d]
+        satz_best = sorted((z for z in best_z.values() if z.get("ref_id")),
+                           key=lambda z: str(z.get("person")))
+        bild = (_datei(datei) if datei else _satz(fremd) if fremd
+                else _datei(sorted(uebrig)[0]) if uebrig else _satz(satz_best[0]) if satz_best else None)
+        if bild:
             bester = max(scores.values(), default=None)
-            kacheln.append({**rumpf, "datei": datei, "person": None,
+            kacheln.append({**rumpf, **bild, "person": None,
                             "score": bester})
-    kacheln.sort(key=lambda b: (b.get("t") or 0, b.get("datei") or ""))
+    kacheln.sort(key=lambda b: (b.get("t") or 0, b.get("datei") or b.get("url") or ""))
     return kacheln
 
 

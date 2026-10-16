@@ -57,22 +57,25 @@ T = {
         "readme.inhalt": 'Contents',
     "readme.neu.titel": "New in this version",
     "readme.neu.text":
-        "This version changes a lot, starting with how I test before a release. "
-        "Every version now goes through a test run on three test machines before "
-        "I publish it. Now and then errors had slipped into the code. The test "
-        "run is meant to catch them earlier.\n\n"
-        "Face recognition works differently now. The program still checks every "
-        "x-th frame of an event. When a face reaches a certain score for a known "
-        "person, a door opens: the next 20 frames are checked one by one. If a "
-        "face reaches that score again inside the window, the door stays open "
-        "longer. Then it goes back to every x-th frame.\n\n"
-        "A name only turns green after three hits. Every usable face that "
-        "matches the person counts as one hit. A face that is only clear for a "
-        "moment now gets a better chance: once it is spotted, the frames right "
-        "after it are no longer skipped.\n\n"
-        "I am happy about any feedback, especially when the new recognition gets "
-        "something wrong: a wrong name, or a known person who is not recognised. "
-        "That is the only way I can work on the errors.",
+        "This version brings a lot of changes. The main ones:\n\n"
+        "Learned faces are stored in a new way. Each face is now its own set with "
+        "image, measurements and origin. This prepares better pre-selection and "
+        "recommendations on which pictures make good references. At the first "
+        "start the version moves your faces over once. Nothing is deleted, the "
+        "old files stay where they are.\n\n"
+        "Unknown faces are recognized and assigned better. The faces of an event "
+        "are grouped by similarity and compared with the unknowns you already "
+        "have. If a group matches one of them, it is added there, otherwise a new "
+        "unknown is created.\n\n"
+        "Unknowns that look like a known person are now grouped under \"Probably "
+        "recognized\". There you can assign them to that person or say that it is "
+        "not them.\n\n"
+        "If this version gives you trouble, you can go back to 0.1.1.010. Set the "
+        "image back to 0.1.1.010 and restart, there is nothing to do in the data "
+        "folder. The faces this version learned since the update are then "
+        "missing. And what 0.1.1.010 learns afterwards is not taken over by a "
+        "later update.\n\n"
+        "I'm glad about any feedback, especially when something is off.",
         "readme.generell.titel": 'General',
     "readme.generell.text": "My scenario detection hangs on Frigate's person detection. As soon as Frigate reports a person, I fetch the whole person event. Such an event is sometimes a few seconds long, sometimes several minutes. I go through all of it to find every person in it.\n\nWhether Frigate's own face recognition is switched on makes no difference. It is only needed if you want faces synced with Frigate.\n\nThe check never runs on the detect stream. It runs on the recording, that is the best stream the camera hands to Frigate.\n\nA check starts in one of two ways. Either from a person event in Frigate, which is the scenario path. Or from the live watcher: it pulls the running stream, straight from the camera or through Frigate's proxy, looks for faces and starts from there.\n\nA person is recognised in three ways. By the face. By the person as a whole, from the picture alone, without a face. By a vision model, and that one is still beta.\n\nI run 4K cameras here, with the frame rate as high as it goes, at least 15 frames per second. Same for the bitrate. A low bitrate leaves moving faces blurred.",
     "readme.aktuell.titel": 'What I am working on',
@@ -108,7 +111,6 @@ T = {
     "lernen.leer.hinweis":
         "Good new faces (large, sharp, frontal, confidently recognized or "
         "clearly a stranger) appear here automatically after the analysis.",
-    "lernen.karte.unbekannt": "Unknown/Stranger",
     # {sharp} kommt vorformatiert (:.0f) aus der Route — Formatspezifika
     # gehoeren nicht in Textwerte (Gate-Formatprobe kennt nur {name}).
     "lernen.karte.metrik_voll":
@@ -117,9 +119,6 @@ T = {
     "lernen.karte.metrik_kurz": "score {score}",
     "lernen.karte.link_video": "Video",
     "lernen.karte.knopf_add_person": "Add as {person}",
-    "lernen.karte.attr_person": "as person…",
-    "lernen.karte.attr_neu": "or new person",
-    "lernen.karte.knopf_add": "Add",
     "lernen.karte.knopf_ablehnen": "Reject",
     "lernen.galerie.titel": "Reference stock (Master)",
     # Stufe 0 = byte-treu: das Original sagt auch bei 1 "references" —
@@ -259,14 +258,6 @@ T = {
         "recognized. Tick and apply.",
     "aehnliche.kopf.link_zurueck": "back",
     "aehnliche.unbekannt.titel": "From unknown faces",
-    "aehnliche.unbekannt.suche_titel":
-        "Search running — references are being re-read.",
-    "aehnliche.unbekannt.kein_cache":
-        "The references have not been read in yet.",
-    "aehnliche.unbekannt.kein_cache_hinweis":
-        "This list needs the reference index. The reference check writes "
-        "it — after that a result appears here.",
-    "aehnliche.unbekannt.knopf_pruefen": "check references",
     "aehnliche.unbekannt.hinweis_leer":
         "No similar unknown faces in stock.",
     "aehnliche.unbekannt.aehnlichkeit": "similarity {sim}",
@@ -465,7 +456,7 @@ T = {
     "konfiguration.neustart.frage": "Restart the service now? Processing pauses for a few seconds.",
     "antwort.neustart": "Restarting — this page answers again in a few seconds.",
     "konfiguration.support.titel": "Remote support access",
-    "konfiguration.support.satz": "Read-only download of named areas (logs, masked config, faces, learning runs, body material, state files) for whoever holds the support token. The on/off switch support_zugriff sits in the table below, default off. Every request is written to the service log. The face and body areas contain pictures of real people — hand the token out with care. Without TLS in front of this service the token travels in plain text. The token also allows four actions: restarting this service remotely (POST /support/restart), sending events through the recognition again (POST /support/einspielen), switching the fine measurement on or off (POST /support/feinmessung) and switching debug logging on or off without a restart (POST /support/debug).",
+    "konfiguration.support.satz": "Read-only download of named areas (logs, masked config, faces, learning runs, body material, state files) for whoever holds the support token. The on/off switch support_zugriff sits in the table below, default off. Every request is written to the service log. The face and body areas contain pictures of real people — hand the token out with care. Without TLS in front of this service the token travels in plain text. The token also allows five actions: restarting this service remotely (POST /support/restart), sending events through the recognition again (POST /support/einspielen), switching the fine measurement on or off (POST /support/feinmessung), switching debug logging on or off without a restart (POST /support/debug) and timing small file operations in the service and in a fresh process (POST /support/dateiprobe).",
     "konfiguration.support.token_gesetzt": "A support token is set.",
     "konfiguration.support.token_fehlt": "No support token yet.",
     "konfiguration.support.knopf_token": "Create new token",
@@ -1826,7 +1817,6 @@ T = {
     "js.vollrestore.frage": "Restore the FULL backup \"{name}\"? This replaces settings, references and all learned material, then restarts the service.",
     "js.vollrestore.laeuft": "uploading + restoring … (large files take a while)",
     "js.enroll.fehler": "Error: {msg}",
-    "js.enroll.person_fehlt": "Choose a person or enter a new one.",
     "js.upload.fehlt": "Choose a person (dropdown or new) and a file.",
     "js.upload.trotzdem": "{msg}\n\nAdd anyway?",
     "js.anlernen.frage": "Add group as \"{person}\" (best images become references)?",
@@ -1871,8 +1861,8 @@ T = {
     "js.ref.batch_frage": "Delete {n} image(s)?",
     "js.ref.batch_alle_frage":
         "That is ALL {n} reference image(s) of {person}. Without a reference, "
-        "{person} can no longer be recognised. The images move to the trash "
-        "folder and can be moved back. Continue?",
+        "{person} can no longer be recognised. The reference sets move to the "
+        "archive (nothing is deleted). Continue?",
     "js.dienst.nicht_erreichbar": "cannot reach the service — try again in a moment.",
     "js.unb.tick": "{phase} … {s} s",
     "js.unb.besucher_frage": "Ignore as a known stranger? It will no longer trigger alerts. (Re-activate any time under \"known visitors\" below.)",
@@ -1881,7 +1871,7 @@ T = {
     "js.unb.benennen_frage": "Assign to \"{person}\"? The best images become references.",
     "js.unb.teil_frage": "Assign the {n} ticked pictures to \"{person}\"? The rest of the group stays under Unknown.",
     "js.unb.objekt_frage": "Mark as \"no person\" (a bush, a reflection, a parked car)? It stops showing up as a visitor; you can undo this under \"not people\".",
-    "js.person.loesch_frage": "Delete ALL references and the name \"{person}\"?\nThe images move to the trash folder (recoverable).\n\nType the name to confirm:",
+    "js.person.loesch_frage": "Delete ALL references and the name \"{person}\"?\nThe reference sets move to the archive (nothing is deleted).\n\nType the name to confirm:",
     "js.person.name_falsch": "Name did not match — nothing deleted.",
     "js.person.umbenennen_frage":
         "Rename \"{person}\" — correct the name below.\n\n"
@@ -1959,7 +1949,6 @@ T = {
     # Stufe-2-Grenzen dort: §8.1 (leer_link-Hinweis + full-profile-Halbsatz
     # mit <a> im Satz), §8.4/§8.17 (Lern-Bruecken-JS samt Toggle-Knopf,
     # \u-Escapes), B19 (%A/%B- und %d.%m.-Datumsformate).
-    "auftritte.unbek.zaehlung": "+{n} not matched (usually the same people)",
     "auftritte.unbek.name": "Unknown {nummer}",
     "auftritte.unbek.ohne_treffer.eins": "{n} event with an unmatched face",
     "auftritte.unbek.ohne_treffer.viele": "{n} events with an unmatched face",
@@ -2382,8 +2371,9 @@ T = {
     "system.voll.knopf_restore": "Restore full backup…",
     "system.voll.careful": "this archive {hinweis}.",
     "system.voll.restore_satz":
-        "Restore replaces those parts (each previous one is kept once as "
-        "*.pre-restore-*) and restarts the service. Uploading a few "
+        "Restore replaces those parts (the previous ones stay under "
+        "state/archiv/, nothing is deleted) and restarts the service. "
+        "Uploading a few "
         "hundred MB can take a while — leave the page open.",
     "system.live.titel": "Live watchers",
     "system.live.alerts": "Alerts sent today: {kanaele}",
@@ -3168,8 +3158,7 @@ T = {
     "personwizard.modell.js_fehler": "error ",
     # --- verifyd.py POST-Antworten (antwort.*, Nutzungs-Reihenfolge) ---
     "antwort.person_entfernt":
-        "{person} removed ({n} reference images moved to trash — "
-        "recoverable)",
+        "{person} removed ({n} reference set(s) archived — nothing deleted)",
     "antwort.person_name_ungueltig": "invalid name",
     "antwort.person_unbekannt": "unknown person",
     "antwort.person_name_belegt":
@@ -3209,12 +3198,6 @@ T = {
     "antwort.bruecke_hinzu": "{n} picture(s) added",
     "antwort.modell_laedt":
         "loading the recognition model — a few seconds …",
-    "antwort.refcache_baut":
-        "rebuilding the reference library — with a large library this can "
-        "take a minute …",
-    "antwort.refcache_fehler":
-        "rebuilding the reference library failed twice in a row — see the "
-        "service log (/log); the next attempt runs in a few minutes",
     "antwort.cache_aufgeraeumt": "{n} clip(s) removed, {mb} MB freed — cache {cache} GB, {frei} GB free",
     "antwort.bruecke_nimmt": "the check picks {n} picture(s)",
     "antwort.bruecke_grenz_zusatz": " · {n} borderline shown unticked",
@@ -3816,6 +3799,10 @@ between.</p>""",
     "heute.person.live_title": "named by a live watcher only (name alert after several matches) — no confirmed pass yet",
     "heute.person.live_link": "go to the live alert {zeit} · {kamera}",
     "heute.person.mehr": "all {n} people ({m} more)",
+    "heute.unbek.cnt.eins": "{n} unknown person · sorted by last seen",
+    "heute.unbek.cnt.viele": "{n} unknown people · sorted by last seen",
+    "heute.unbek.gesehen": "seen {von}–{bis}",
+    "heute.unbek.gesehen_einmal": "seen {zeit}",
     "heute.anw.dauer": "present about {h} h",
     "heute.anw.title": "presence by hour, all cameras — red: confirmed present, green: system running, nobody seen",
     "heute.anw.title_gesamt": "presence by hour — all cameras, not filtered by the area view",
@@ -3829,6 +3816,24 @@ between.</p>""",
     "heute.rand.unmatched": "not matched inside passes",
     "heute.rand.unmatched_title": "events with a face that matched no known person, inside passes where someone was recognized — normally the same people",
     "heute.rand.unbek_title": "unknown identities of the pool with support on this day; without pool data: passes with nobody recognized",
+    "heute.aehnlich.titel": "Probably recognized",
+    "heute.aehnlich.cnt.eins": "{n} known person, not confirmed · sorted by last seen",
+    "heute.aehnlich.cnt.viele": "{n} known people, not confirmed · sorted by last seen",
+    "heute.aehnlich.zu": "probably {person}",
+    "heute.aehnlich.ident": "{uid} · median {median} · lead {abstand}",
+    "heute.aehnlich.rand.eins": "{n} person probably recognized — see Probably recognized",
+    "heute.aehnlich.rand.viele": "{n} people probably recognized — see Probably recognized",
+    "heute.aehnlich.fehler": "The last check for probably recognized people failed (error) — the groups shown here can be out of date. Details in the log and in /health.",
+    "heute.aehnlich.nein": "not {person}",
+    "heute.aehnlich.nein_zurueck": "undo",
+    "heute.aehnlich.antwort_nein": "not {person} — the group is back under Unknown",
+    "heute.aehnlich.antwort_zurueck": "verdict “not {person}” taken back — the next check (within a minute) can mark the group again",
+    "heute.aehnlich.titel_lauf": "probably {person} — walk-through",
+    "heute.aehnlich.sammel": "similar to {person}",
+    "heute.aehnlich.sammel_hinweis": "Collected faces similar to {person}. Tick faces to assign them to {person}, or to take them out as not {person} (they become a new unknown).",
+    "heute.aehnlich.sammel_nein_teil": "Not {person} — the {n} ticked",
+    "heute.aehnlich.sammel_abgelehnt": "Not possible for “similar to {person}” — here you can only assign ticked faces or take ticked faces out as not {person}.",
+    "heute.aehnlich.antwort_sammel_nein": "{n} face(s) taken out as {name} with the verdict “not {person}”",
     "meldung.wache.name_satz":
         "recognized (live, preliminary): {name} ({wort}, {n} "
         "consistent looks)",

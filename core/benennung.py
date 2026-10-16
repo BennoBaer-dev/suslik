@@ -3,9 +3,10 @@
 Kontrakt wie core/anker.py: reine Funktionen, ALLE Schwellen kommen vom Aufrufer
 (Allgemeinheits-Wache — Defaults kalibriert der Erstlauf mit dem User, nichts
 wird hier erfunden). Kein Dienst-Import, kein Video-Decode: gerechnet wird
-AUSSCHLIESSLICH mit den im Anker-Store persistierten Feldern (Zug 1: bbox/ts/
-emb je Mitglied, zentroid je Anker). Fehlt emb/zentroid (Alt-Anker vor der
-Persistierung), liefern die Funktionen ein LAUTES Flag statt stiller Nullen —
+AUSSCHLIESSLICH mit den im Anker-Store persistierten Feldern (Zug 1: bbox/ts
+je Mitglied, zentroid je Anker) und den Fingerabdruecken der Mitglieder, die
+seit E3a-1c ueber deren ref_id aus core/refquelle kommen (Alt-Anker: Feld emb).
+Fehlt Fingerabdruck/zentroid, liefern die Funktionen ein LAUTES Flag statt stiller Nullen —
 die K1-Regel der Widerleger-Bilanz (nie "0 Duplikate" ohne Pruefbarkeit).
 
 REIHUNGS-BEGRIFF (der EINE, Bauplan-SOLL "zwei unvereinbare Guete-Begriffe"):
@@ -403,6 +404,16 @@ def _grund(kennung, **werte):
     return dict(werte, kennung=kennung)
 
 
+def _vektoren(mitglieder):
+    """Fingerabdruck je Mitglied: seit E3a-1c (J1) ueber die ref_id aus der Matrix des Moduls
+    core/refquelle, bei Alt-Ankern das Feld emb. -> Liste gleicher Laenge, Vektor oder None"""
+    if not any(m.get("ref_id") for m in mitglieder):
+        return [m.get("emb") or None for m in mitglieder]
+    from core import lernlauf as _ll
+    vek = _ll.mitglieder_fingerabdruecke(_ll.datenort_cfg(), [m.get("ref_id") for m in mitglieder])
+    return [vek.get(m.get("ref_id")) for m in mitglieder]
+
+
 def empfehlen(mitglieder, k_je_bin, yaw_grenze, dup_sim, luma_grenzen=None,
               stufen=None, kat_latten=None):
     """Empfehlungs-Analyse eines Ankers -> (bewertet, flags).
@@ -420,7 +431,8 @@ def empfehlen(mitglieder, k_je_bin, yaw_grenze, dup_sim, luma_grenzen=None,
        Regel; die realen Dubletten liegen cross-event) — je Gruppe bleibt der
        Reihungs-Beste.
     2. Embedding-Nachbarn ueber dup_sim: gierig entlang der Reihung, Naehe zu
-       einem bereits Empfohlenen stuft zurueck. Ohne emb -> flags['emb_fehlt']
+       einem bereits Empfohlenen stuft zurueck (Fingerabdruck seit E3a-1c ueber
+       die ref_id aus core/refquelle). Ohne ihn -> flags['emb_fehlt']
        (Anzeige "duplicate check unavailable ..."), NIE stilles 0.
     3. Perspektiv-Bins (yaw_grenze), je Bin bleiben die besten k_je_bin.
     stufen (.366, User-Fund 28.08.): {dateiname -> 'gut'|'grenzfall'|'raus'},
@@ -433,7 +445,8 @@ def empfehlen(mitglieder, k_je_bin, yaw_grenze, dup_sim, luma_grenzen=None,
     in der Flaeche durch (zwei unter der Qualitaetslinie, eines an der
     Identitaet) und waeren als Referenzen ins System gegangen. Ohne stufen
     (Aufrufer ohne Sichtung) bleibt alles byte-gleich zum Verhalten davor."""
-    flags = {"emb_fehlt": any(not m.get("emb") for m in mitglieder)}
+    vek = {id(m): v for m, v in zip(mitglieder, _vektoren(mitglieder))}
+    flags = {"emb_fehlt": any(v is None for v in vek.values())}
     geordnet = sorted(mitglieder,
                       key=lambda x: _reihung(x, luma_grenzen=luma_grenzen,
                                              kat_latten=kat_latten))
@@ -461,9 +474,9 @@ def empfehlen(mitglieder, k_je_bin, yaw_grenze, dup_sim, luma_grenzen=None,
             continue
         phys_gesehen.add(schluessel)
         naher = None
-        if m.get("emb") and not flags["emb_fehlt"]:
+        if not flags["emb_fehlt"]:
             for e in empfohlene:
-                s = _cos(m["emb"], e["emb"])
+                s = _cos(vek[id(m)], vek[id(e)])
                 if s is not None and s >= float(dup_sim):
                     naher = e
                     break
@@ -485,26 +498,18 @@ def empfehlen(mitglieder, k_je_bin, yaw_grenze, dup_sim, luma_grenzen=None,
     return bewertet, flags
 
 
-def referenz_zentroide(refcache_pfad, modell):
-    """Zentroide der Master-Personen aus dem Referenz-Cache (refcache.npz,
-    Layout analyze.load_refs: Personenname -> Nx512 L2-normierte Embeddings,
-    Meta-Block '§meta' mit '§modell'). Gleiche Renormierungs-Regel wie
-    anker.zentroid — damit vergleicht person_vorschlag im selben Raum.
-    Modell-Gate: nur wenn der Cache mit dem aktiven Recognition-Modell
-    gerechnet wurde (nach Modellwechsel wird er ohnehin neu gebaut).
-    Fehler -> {} (der Vorschlags-Layer darf die Seite nie brechen)."""
-    import json as _json
+def referenz_zentroide(data_dir, modell):
+    """Zentroide der Referenz-Personen aus Lese-Stufe a der Referenz-Quelle im Datenordner data_dir
+    (E3b-1b, J11: ohne Zustandsurteil, gesiebt nur nach dem Modellnamen; Personenname -> Nx512
+    L2-normierte Fingerabdruecke). Gleiche Renormierungs-Regel wie anker.zentroid — damit vergleicht
+    person_vorschlag im selben Raum. Fehler -> {} laut im Log (der Vorschlags-Layer darf die Seite nie
+    brechen). -> {Person: Zentroid als Liste}; {} bei leerem Katalog."""
     try:
-        z = np.load(refcache_pfad, allow_pickle=True)
-        mk = "§meta" if "§meta" in z.files else "meta"
-        meta = _json.loads(str(z[mk]))
-        if str(meta.get("§modell", "")).lower() != str(modell or "").lower():
-            return {}
+        from core import refquelle as _rq           # noqa: PLC0415  spaet: dieses Modul bleibt leicht
+        refs = _rq.person_matrices({"data_dir": data_dir}, modell)[0]
         zents = {}
-        for p in z.files:
-            if p == mk:
-                continue
-            m = np.asarray(z[p], dtype=np.float32)
+        for p, m in refs.items():
+            m = np.asarray(m, dtype=np.float32)
             if m.ndim != 2 or not len(m) or not np.all(np.isfinite(m)):
                 continue
             c = m.mean(axis=0)

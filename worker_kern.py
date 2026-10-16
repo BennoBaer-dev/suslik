@@ -838,11 +838,12 @@ def fd_winkel(punkte, M, seite):
 
 def fd_front(punkte, M, seite):
     """Von der 1k3d68-Ausgabe zu front (analyze.frontality):
-    front = 1 - (|pitch| + |yaw|) / 90, aus den Winkeln von fd_winkel.
-    -> (front, |pitch|, |yaw|)"""
-    rx, ry, _rz = fd_winkel(punkte, M, seite)
+    front = 1 - (|pitch| + |yaw|) / 90, aus den Winkeln von fd_winkel. Die drei Vorzeichen-Winkel gehen mit
+    zurueck (Fix 0.1.1.013 F3: der Kopfwinkel des Worker-Satzes, gerechnet genau einmal, hier).
+    -> (front, (rx, ry, rz))"""
+    rx, ry, rz = fd_winkel(punkte, M, seite)
     a, b = abs(rx), abs(ry)
-    return max(0.0, 1.0 - (a + b) / 90.0), a, b
+    return max(0.0, 1.0 - (a + b) / 90.0), (rx, ry, rz)
 
 
 def ctx_box(x1, y1, x2, y2, W, H):
@@ -1002,35 +1003,48 @@ def kompilat_probe(satz, roh=False):
 
 
 # ------------------------------------------------------------------ Referenzen und Scores
-def referenzen_laden(pfad):
-    """Referenzen aus dem refcache des alten Workers (analyze.load_refs, analyze.py:263-315):
-    je Person eine Matrix L2-normierter Embeddings. Der Cache muss zum konfigurierten
-    Modell passen (Kopf '§modell', gelesen wie analyze._refcache_meta), sonst Abbruch
-    statt still falscher Scores. Personenliste = die Nicht-§-Schluessel im Kopf (der
-    Worker fuehrt dort alle Master-Personen, analyze.py:272). Personen ohne Vektoren
-    bekommen wie in analyze.nn den Score -1.0 und gehen nicht in die Matrix.
-    Die Matrix ist [Personen * je_person, 512], je Person auf die groesste Anzahl
-    aufgefuellt durch Wiederholen ihrer ersten Zeile (das aendert ihr Maximum nicht).
-    -> (alle, mit_refs, erk)
+def referenzen_laden(lesung, kennung):
+    """Die EINE Aufbereitung der Referenzen fuer die Score-Rechnung, aus Lese-Stufe a der
+    Referenz-Quelle (`core.refquelle.read_matrix`, Bauauftrag E3b-1a); `kennung` ist die Kennung des
+    Siebs: beim Worker-Dienst die Modell-Kennung (`bild_kern.model_identity`, gelesen ohne Zustandsurteil,
+    Bauplan analysen/bauplan_fix_erststart.md Stufe K1), beim Mess-Weg die Rechenwerk-Kennung, mit der
+    gelesen wurde. Gesiebt wird an der einen Stelle des Moduls
+    (`refquelle.model_sieve`): Zeilen gleichen Modells bilden die Matrix, auch mit fremdem
+    Rechenweg (gezaehlt als fremd, Entscheid 8); Zeilen eines anderen Modells bleiben draussen.
+    alle = jede Person mit aktiver Bindung und Status referenz oder altbestand (die Auswahl von
+    Lese-Stufe a, einschliesslich ausgelassener und gesiebter Zeilen); sie bekommen wie in
+    analyze.nn den Score -1.0, wenn sie keine Zeile haben. mit_refs = Personen mit mindestens
+    einer Zeile. Die Matrix ist [Personen * je_person, 512], je Person auf die groesste Anzahl
+    aufgefuellt durch Wiederholen ihrer ersten Zeile (das aendert ihr Maximum nicht). Ohne eine
+    einzige Zeile ist sie [0, 512] mit je_person 1, damit scores_rechnen die Form [n, 0] liefert.
+    -> (alle, mit_refs, erk); erk traegt neben refs, refs_t, personen, je_person die Lese-Zahlen
+       stand, zeilen, zahlen (je Zustand und anderes_modell), ausgelassen und weg, dazu ref_ids und
+       kennungen der Zeilen in der Matrix (fuer das spaetere fremd-Urteil `refquelle` engine_judge, ohne
+       zweites Lesen, Stufe K1 Punkt 2).
 
     E1: 'refs_t' ist die transponierte Matrix, EINMAL zusammenhaengend gelegt — sie ist
     seit dem Matmul-Umbau der rechte Faktor der Score-Rechnung auf der CPU (vorher war
     sie eine Graph-Konstante, gelegt in graph_rec_post). 'refs' bleibt daneben stehen,
     weil die Kandidaten-Auswahl (Bildvorrat._kandidaten) zeilenweise darin liest (nn_eigen)."""
-    z = np.load(pfad, allow_pickle=True)
-    meta = json.loads(str(z["§meta" if "§meta" in z.files else "meta"]))  # wie analyze._refcache_meta
-    modell = face_audit.aktuelles_modell()
-    if str(meta.get("§modell", "")) != modell:
-        raise SystemExit(f"refcache-Modell {meta.get('§modell')!r} passt nicht zu {modell!r}")
-    alle = sorted(k for k in meta if not k.startswith("§"))
-    mats = {p: z[p] for p in alle if p in z.files and len(z[p])}
+    from core import refquelle                              # noqa: PLC0415  nach dem BLAS-Pin
+    gesiebt = refquelle.model_sieve(lesung, kennung)
+    alle = sorted({p for p in lesung["personen"] if p}
+                  | {z["person"] for z in lesung["ausgelassen"] if z.get("person")})
+    mats = {}
+    for p, v in zip(gesiebt["personen"], gesiebt["matrix"]):
+        mats.setdefault(p, []).append(v)
     mit_refs = sorted(mats)
-    je = max(len(m) for m in mats.values())
-    refs = np.concatenate([np.concatenate([mats[p], np.repeat(mats[p][:1], je - len(mats[p]),
-                                                               axis=0)])
-                           for p in mit_refs]).astype(np.float32)
+    je = max((len(m) for m in mats.values()), default=1)
+    refs = (np.concatenate([np.concatenate([np.stack(mats[p]),
+                                            np.repeat(mats[p][0][None], je - len(mats[p]), axis=0)])
+                            for p in mit_refs]).astype(np.float32)
+            if mit_refs else gesiebt["matrix"].astype(np.float32))
     return alle, mit_refs, {"refs": refs, "refs_t": np.ascontiguousarray(refs.T),
-                            "personen": len(mit_refs), "je_person": je}
+                            "personen": len(mit_refs), "je_person": je,
+                            "stand": gesiebt["stand"], "zeilen": len(gesiebt["ref_ids"]),
+                            "zahlen": dict(gesiebt["zahlen"]),
+                            "ausgelassen": len(gesiebt["ausgelassen"]), "weg": gesiebt["weg"],
+                            "ref_ids": gesiebt["ref_ids"], "kennungen": gesiebt["kennungen"]}
 
 
 def scores_rechnen(emb, erk):
@@ -1057,7 +1071,9 @@ def urteils_latten(plan):
     `stapel_stimmen`, die Stimmen bis erkannt des Stapels (core.stapel); fehlt einer der
     beiden im Messplan, ist er 0 = aus (Messplaene von vor dieser Stufe rechnen unveraendert).
     Seit Stufe KP2: `tuer_fenster` (Bilder je Oeffnung der Tuer, core.tuer) und `tuer_deckel` (hoechstens
-    so viele Tuer-Bilder je Ereignis); fehlen sie, sind sie 0: keine Tuer bzw. kein Deckel."""
+    so viele Tuer-Bilder je Ereignis); fehlen sie, sind sie 0: keine Tuer bzw. kein Deckel.
+    Seit Fix 0.1.1.013 Stufe F4: `unbekannt_latte`, `unbekannt_bilder_je_gruppe` und `unbekannt_rahmen_max`, die drei
+    Werte des Unbekannt-Stapels im Bildvorrat; fehlen sie, sind sie 0: kein Stapel (Verhalten wie vor F4)."""
     fest = plan["argv_fest"]
 
     def latte(schluessel, mass):
@@ -1073,6 +1089,9 @@ def urteils_latten(plan):
            "stapel_stimmen": int(float(fest.get("stapel_stimmen") or 0)),
            "tuer_fenster": int(float(fest.get("tuer_fenster") or 0)),
            "tuer_deckel": int(float(fest.get("tuer_deckel") or 0)),
+           "unbekannt_latte": float(fest.get("unbekannt_latte") or 0),
+           "unbekannt_bilder_je_gruppe": int(float(fest.get("unbekannt_bilder_je_gruppe") or 0)),
+           "unbekannt_rahmen_max": int(float(fest.get("unbekannt_rahmen_max") or 0)),
            # v8: die Latten der fd-Regel. Die Schluessel kommen aus der Signatur von
            # face_audit.ist_fehldetektion selbst (FD_VORGABE), die Werte aus dem Messplan
            # unter den argparse-Namen von analyze (fd_front_min, fd_sharp_min, fd_det_max);
@@ -1113,6 +1132,37 @@ class Bildvorrat:
     Ausgewertet wird erst am Event-Ende (schreiben): nur Frames, die wirklich ein Bild
     liefern, werden nach BGR gewandelt — mit dem win_thresh-Gate von analyze.py:911 sind
     das ueblicherweise ein oder zwei je Event.
+
+    REFERENZ-QUELLE (Bauplan analysen/bauplan_refquelle_einbau.md, Stufe E3 Punkt 1, Schnitt E3a-3,
+    Entscheide 7 und 11): je Sieger haelt der Vorrat neben Frame und Box den Fund (Kommazahl-Box, fuenf
+    Punkte, die Zahlen des Rechengraphen mit Fingerabdruck und Kopfwinkel; `_fund`). Am Ende schreibt `schreiben` je Uebernahme-Angebot
+    (bestes Gesicht je Person ueber win_thresh, Anlern-Kandidat je Person, Fremd-Kandidat) einen Satz mit
+    Status kandidat ueber core.harvest_set.SetWriter.write_held; die engen _best_- und _enroll_-Ausschnitte
+    entstehen nicht mehr. Die Umfeld-Bilder _show_ bleiben Anzeige-Dateien. kandidaten.jsonl traegt je
+    Kandidat die ref_id (ohne emb, ohne datei) und je Person eine Bestbild-Zeile mit der ref_id ihres
+    besten Gesichts (core.harvest_set.BEST_FIELD). Ohne Job-Feld entsteht kein Satz (laut), die
+    Kandidaten-Zeile bleibt ohne ref_id.
+
+    SPEICHERN OHNE RECHNUNG (Bauplan analysen/bauplan_fix_0113.md, Entscheid 3, Stufe F3): die Werte des Satzes
+    sind die Zahlen, die die Erkennung fuer das Sieb ohnehin gerechnet hat, in voller Genauigkeit: Fingerabdruck
+    der r-Stufe, Norm, Guete e und t, Schaerfe, Detektion, front, Score und die drei Kopfwinkel der fd-Stufe
+    (event_rechnen ueber fd_front). `schreiben` uebergibt sie mit der Kennung des Rechengraphen, die der Dienst
+    beim Start holt; ein Rechenwerk wird dafuer nicht angelegt, nachgemessen wird nichts. Beim Schreiben entsteht
+    nur Bildarbeit (112er, Profilbild, Personenausschnitt). Ohne Kennung entsteht kein Satz (laut).
+    `_nachmessen` bleibt fuer den Datei-Weg (core/dateisatz.rechnen) stehen.
+
+    UNBEKANNT-STAPEL (Bauplan analysen/bauplan_fix_0113.md, Entscheide 6 und 7, Stufe F4; Konzept 4.4): jedes Gesicht,
+    das die heutige Fremd-Regel erfuellt (Kandidaten-Tor, bester Score unter FREMD_UNTER; die Grauzone bis
+    KAND_SCORE_MIN bleibt draussen), ordnet `_unbekannt_einordnen` zusaetzlich zu `self.fremd` in Gruppen
+    (`self.unbekannt`): harte Regel (nie zwei Gesichter desselben Bilds in einer Gruppe), weiche Regel (Kosinus der
+    Fingerabdruecke zum naechsten Mitglied >= unbekannt_latte, auf der CPU, kein Modell-Lauf), keine Verfolgung ueber
+    die Bilder. "Besser" ist ueberall das Mass des Fremden, det mal Flaeche. Je Gruppe bleiben die besten
+    unbekannt_bilder_je_gruppe; die Stapel-Gesichter halten hoechstens unbekannt_rahmen_max verschiedene Bilder (je
+    Vorrat, also je Clip und Rechen-Strang; Gesichter desselben Bilds teilen sich eines); ist der Deckel voll, ersetzt
+    ein besseres Bild das schlechteste (Rang eines Bilds = bestes Mass seiner Stapel-Gesichter), alle Stapel-Gesichter
+    darauf fallen. Am Ende schreibt `_unbekannt_schreiben` je Gesicht einen Satz (Art unbekannt; der beste Fremde
+    behaelt seine ref_id) und eine Zeile der Stapel-Datei (core.harvest_set.UNKNOWN_FILE), nie eine Zeile in
+    kandidaten.jsonl. unbekannt_rahmen_max 0 (Fuellwert) = kein Stapel, Verhalten wie vor F4.
     """
 
     def __init__(self, W, H, lat, mit_refs, erk, modell):
@@ -1120,11 +1170,13 @@ class Bildvorrat:
         self.mit_refs, self.erk, self.modell = mit_refs, erk, modell
         self.rahmen = {}          # Frame-Index -> [(y, uv), Haltezahl]
         self.rahmen_max = 0       # Spitze der gleichzeitig gehaltenen Frames
-        self.best = {}            # Person -> (Score, Frame-Index, enge Box)
+        self.fps = None           # Bildrate des Clips (Bildzeit im Satz, E3a-3)
+        self.best = {}            # Person -> (Score, Frame-Index, Fund mit enger Box)
         self.show = {}            # Person -> (Flaeche, Frame-Index, Umfeld-Box)
         self.nnctx = {}           # Person -> (Score, Frame-Index, Umfeld-Box)
-        self.enroll = {}          # Person -> (Score, Frame-Index, Kandidaten-Zeile)
-        self.fremd = None         # (det*Flaeche, Frame-Index, Kandidaten-Zeile)
+        self.enroll = {}          # Person -> (Score, Frame-Index, (Kandidaten-Zeile, Fund))
+        self.fremd = None         # (det*Flaeche, Frame-Index, (Kandidaten-Zeile, Fund))
+        self.unbekannt = []       # F4: Gruppen des Unbekannt-Stapels, je Gruppe [[det*Flaeche, Frame-Index, Fund], ...]
 
     def _halten(self, i, rahmen):
         e = self.rahmen.get(i)
@@ -1151,6 +1203,17 @@ class Bildvorrat:
         if alt is not None:
             self._loesen(alt[1])
 
+    @staticmethod
+    def _fund(f, score):
+        """Was der Satz eines Siegers braucht (E3a-3; Fix 0.1.1.013 F3): enge Box, Kommazahl-Box, fuenf Punkte und
+        die Zahlen des Rechengraphen in voller Genauigkeit (Score fuer die Person, um die es geht, die drei
+        Kopfwinkel der fd-Stufe, der Fingerabdruck der r-Stufe als eigene Kopie, weil das Gesicht ihn nur bis
+        zum Ende des Bilds traegt). -> dict"""
+        return {"bb": f["_bb"], "box": f["_box"], "kps": f["_kp"],
+                "graph": {"score": score, "detektion": f["det"], "guete_e": f["e"], "guete_t": f["t"],
+                          "norm": f["norm"], "front": f["front"], "schaerfe": f["sharp"],
+                          "kopfwinkel": f["_winkel"], "fingerabdruck": np.array(f["_emb"], np.float32)}}
+
     def frame_zug(self, faces, i, rahmen, fps):
         """Die Argmaxe dieses Frames nachziehen (analyze.py:694-742). Reihenfolge und
         Vergleichszeichen sind die von analyze: strikt > haelt das ERSTE Maximum, und die
@@ -1165,6 +1228,7 @@ class Bildvorrat:
         Gesicht mit Erkennungswert (`sc`), also eines, das alle Siebe bestanden hat (Kante,
         Fehldetektion, e, t, p, Norm), und das zusaetzlich das Kandidaten-Tor erfuellt."""
         wt = self.lat["win_thresh"]
+        self.fps = fps
         for f in faces:
             x1, y1, x2, y2 = f["_bb"]
             sc = f["sc"]
@@ -1177,13 +1241,16 @@ class Bildvorrat:
                     if s > self.nnctx.get(pp, (-1.0,))[0]:
                         self._tausch(self.nnctx, pp, s, i, rahmen, cbox)
                     if s > self.best.get(pp, (-2.0,))[0]:
-                        self._tausch(self.best, pp, s, i, rahmen, f["_bb"])
+                        self._tausch(self.best, pp, s, i, rahmen, self._fund(f, s))
             if not f["kand"] or not sc:
                 continue
+            # E3a-3: kein emb mehr in der Datei; der Fingerabdruck steht im Satz (Entscheid 7). Fuer die
+            # Neuheit (nn_eigen in _kandidaten) traegt die Zeile ihn bis zum Ereignis-Ende als _emb, mit
+            # derselben Rundung wie vorher, damit die Neuheits-Grenze dieselben Zahlen sieht.
             kd = {"t": round(i / fps, 1), "bw": f["bw"], "bh": f["bh"],
                   "front": round(f["front"], 2), "det": round(f["det"], 2),
                   "sharp": round(f["sharp"], 0),
-                  "emb": [round(float(v), 5) for v in f["_emb"]],
+                  "_emb": [round(float(v), 5) for v in f["_emb"]],
                   # MESSKARTE (analyze.py:718-734): was die Kaskade in DIESEM Durchlauf
                   # ohnehin gemessen hat, nichts zusaetzlich. Kein Weg dorthin -> None.
                   "mk_fiqa_t": f["t"], "mk_empf": f["e"],
@@ -1195,17 +1262,103 @@ class Bildvorrat:
             if sc[p] >= KAND_SCORE_MIN and sc[p] == bester:
                 if sc[p] > self.enroll.get(p, (-1.0,))[0]:
                     self._tausch(self.enroll, p, sc[p], i, rahmen,
-                                 ({**kd, "person": p, "score": round(sc[p], 3)}, f["_bb"]))
+                                 ({**kd, "person": p, "score": round(sc[p], 3)}, self._fund(f, sc[p])))
             elif bester < FREMD_UNTER:
                 guete_wert = f["det"] * (x2 - x1) * (y2 - y1)
                 if self.fremd is None or guete_wert > self.fremd[0]:
                     alt = self.fremd
                     self.fremd = (guete_wert, i,
                                   ({**kd, "person": None, "score": round(bester, 3)},
-                                   f["_bb"]))
+                                   self._fund(f, bester)))
                     self._halten(i, rahmen)
                     if alt is not None:
                         self._loesen(alt[1])
+                self._unbekannt_einordnen(f, i, rahmen, guete_wert, bester)     # F4: der Unbekannt-Stapel
+
+    def _unbekannt_ziel(self, v, i, ohne):
+        """Die Gruppe fuer ein fremdes Gesicht (F4): harte Regel (keine Gruppe mit einem Mitglied aus Bild i), weiche
+        Regel (hoechster Kosinus zum naechsten Mitglied >= unbekannt_latte); Mitglieder auf dem Bild `ohne` zaehlen
+        nicht, weil es gleich faellt. -> die Gruppe (Liste) oder None (neue Gruppe)"""
+        ziel, hoch = None, None
+        for g in self.unbekannt:
+            glieder = [m for m in g if m[1] != ohne]
+            if not glieder or any(m[1] == i for m in glieder):
+                continue
+            cos = max(float(np.dot(m[2]["graph"]["fingerabdruck"], v)) for m in glieder)
+            if cos >= self.lat["unbekannt_latte"] and (hoch is None or cos > hoch):
+                ziel, hoch = g, cos
+        return ziel
+
+    def _unbekannt_bild_loesen(self, b):
+        """Alle Stapel-Gesichter auf Bild b fallen (Bilder-Deckel voll, F4); ihre Haltungen werden geloest, leere
+        Gruppen verschwinden. -> None"""
+        for g in self.unbekannt:
+            for m in [m for m in g if m[1] == b]:
+                g.remove(m)
+                self._loesen(b)
+        self.unbekannt = [g for g in self.unbekannt if g]
+
+    def _unbekannt_einordnen(self, f, i, rahmen, mass, score):
+        """Ein Gesicht der heutigen Fremd-Regel in den Unbekannt-Stapel einordnen (Fix 0.1.1.013 F4, Entscheid 6), nur
+        mit Zahlen der Erkennung, ohne Modell. Erst wird entschieden, dann geaendert: ein abgewiesenes Gesicht kostet
+        kein gehaltenes. -> None"""
+        deckel_bilder, deckel_gruppe = self.lat["unbekannt_rahmen_max"], self.lat["unbekannt_bilder_je_gruppe"]
+        if deckel_bilder <= 0 or deckel_gruppe <= 0:
+            return
+        rang = {}                                    # Bild -> bestes Mass seiner Stapel-Gesichter
+        for g in self.unbekannt:
+            for m in g:
+                rang[m[1]] = max(rang.get(m[1], m[0]), m[0])
+        weg_bild = None
+        if i not in rang and len(rang) >= deckel_bilder:
+            weg_bild = min(rang, key=lambda b: (rang[b], b))
+            if mass <= rang[weg_bild]:
+                return                               # nicht besser als das schlechteste gehaltene Bild
+        fund = self._fund(f, score)
+        ziel = self._unbekannt_ziel(fund["graph"]["fingerabdruck"], i, weg_bild)
+        if ziel is not None:
+            glieder = [m for m in ziel if m[1] != weg_bild]
+            if len(glieder) >= deckel_gruppe and mass <= min(m[0] for m in glieder):
+                return                               # Gruppe voll, nicht besser als ihr schlechtestes Gesicht
+        if weg_bild is not None:
+            self._unbekannt_bild_loesen(weg_bild)
+        if ziel is None:
+            ziel = []
+            self.unbekannt.append(ziel)
+        ziel.append([mass, i, fund])
+        self._halten(i, rahmen)
+        ziel.sort(key=lambda m: -m[0])               # Rangfolge nach dem Mass, stabil
+        while len(ziel) > deckel_gruppe:
+            self._loesen(ziel.pop()[1])
+
+    def _unbekannt_schreiben(self, ordner, label, eid, satz, kennung):
+        """Je Gesicht der Gruppen ein Satz ueber den Schreibweg (`satz` aus schreiben, Art unbekannt; gleiches Bild und
+        gleiche Box wie der beste Fremde = dieselbe ref_id) und EINE Zeile an die Stapel-Datei (F4, Entscheid 7). Ein
+        Gesicht ohne ref_id (Weg gesperrt oder abgelehnt, laut im SetWriter) steht nicht darin, eine leere Gruppe auch
+        nicht, ohne Gruppe keine Zeile. -> (Gruppen, Saetze) der Zeile"""
+        from core import harvest_set as _hs                   # noqa: PLC0415  der eine Name
+        gruppen = []
+        for g in self.unbekannt:
+            gesichter = []
+            for mass, i, fund in g:
+                rid = satz(i, fund, "unbekannt", None)
+                if rid:
+                    gr = fund["graph"]
+                    gesichter.append({"ref_id": rid, "bildnummer": int(i),
+                                      "bildzeit": (i / self.fps) if self.fps else None, "mass": float(mass),
+                                      **{k: None if gr[k] is None else float(gr[k])
+                                         for k in ("score", "detektion", "norm", "guete_e", "guete_t", "schaerfe")}})
+            if gesichter:
+                gruppen.append({"ref_ids": [x["ref_id"] for x in gesichter], "bestes": gesichter[0]["ref_id"],
+                                "gesichter": gesichter})
+        if not gruppen:
+            return 0, 0
+        zeile = {"eid": eid, "kamera": label, "ts": round(time.time(), 1), "kennung": kennung,
+                 "latte": self.lat["unbekannt_latte"], "gruppen": gruppen, "rahmen_spitze": self.rahmen_max}
+        with open(os.path.join(ordner, _hs.UNKNOWN_FILE), "a", encoding="utf-8") as uf:
+            uf.write(json.dumps(zeile, ensure_ascii=False) + "\n")
+            uf.flush()
+        return len(gruppen), sum(len(x["ref_ids"]) for x in gruppen)
 
     def _kandidaten(self):
         """Die Kandidaten-Zeilen des Events mit dem Neuheits-Kriterium (analyze.py:1011-1020).
@@ -1216,8 +1369,8 @@ class Bildvorrat:
         je = self.erk["je_person"]
         aus = []
         for p in sorted(self.enroll):
-            _s, i, (kd, bb) = self.enroll[p]
-            v = np.asarray(kd["emb"], np.float32)
+            _s, i, (kd, fund) = self.enroll[p]
+            v = np.asarray(kd["_emb"], np.float32)
             if p in self.mit_refs:
                 q = self.mit_refs.index(p)
                 nn_eigen = float((self.erk["refs"][q * je:(q + 1) * je] @ v).max())
@@ -1225,18 +1378,88 @@ class Bildvorrat:
                 nn_eigen = 0.0
             if nn_eigen >= NEUHEIT_AB:
                 continue                      # bringt keine Vielfalt
-            aus.append((i, {**kd, "nn_eigen": round(nn_eigen, 3)}, bb))
+            aus.append((i, {**kd, "nn_eigen": round(nn_eigen, 3)}, fund))
         if self.fremd is not None:
             aus.append((self.fremd[1], self.fremd[2][0], self.fremd[2][1]))
         return aus
 
-    def schreiben(self, ordner, label, eid, persons, alle):
-        """Bestbilder, Anzeige-Bilder und Kandidaten dieses Events schreiben. Jeder
+    @staticmethod
+    def _nachmessen(frame, fund, emb):
+        """Guete e und t, Schaerfe und Kopfwinkel eines Gesichts am CPU-Zuschnitt eines BGR-Bilds, mit den
+        Messfunktionen der Ernte (Nachtrag E3a-3, Entscheid 7); seit Fix 0.1.1.013 F3 nur noch fuer den Datei-Weg
+        (core/dateisatz.rechnen), der Worker-Satz traegt die Zahlen der Erkennung. -> (112er-Warp oder None,
+        Werte, Gruende je fehlendem Wert)"""
+        from core import ernte as _ern                         # noqa: PLC0415  nur am Ereignis-Ende
+        from core import harvest_set as _hs                    # noqa: PLC0415
+        from core import messkarte as _mk                      # noqa: PLC0415  Grund-Kennungen der Ernte
+        werte, gruende, aligned = dict.fromkeys(_hs.CPU_MEASURES), {}, None
+        _x1, _y1, _x2, _y2, crop, werte["schaerfe"], _luma = _ern.enge_messung(frame, fund["box"])
+        try:
+            aligned = _ern.align112(frame, fund["kps"])
+        except Exception as e:                                  # noqa: BLE001  laut als Grund
+            gruende["guete_t"] = f"{_mk.GRUND_KPS_FEHLT}: {type(e).__name__}: {e}"
+        if not guete.verfuegbar():
+            gruende["guete_e"] = gruende["guete_t"] = (f"{_mk.GRUND_MODELL_FEHLT} ({os.path.basename(guete.PFAD_T)}, "
+                                                        f"{os.path.basename(guete.PFAD_E)})")
+        else:
+            for name, messung, bild in (("guete_t", guete.fiqa_t, aligned), ("guete_e", guete.empfinden, crop)):
+                if bild is None or not bild.size:
+                    gruende.setdefault(name, f"{_mk.GRUND_KEIN_GESICHT}: no cut to measure")
+                    continue
+                try:
+                    werte[name] = messung(bild)
+                except Exception as e:                          # noqa: BLE001  laut als Grund
+                    gruende[name] = f"{_mk.GRUND_MESSFEHLER}: {type(e).__name__}: {e}"
+        try:
+            roh = emb.rechner.pose(frame, fund["box"])
+            if roh is None or len(roh) < 3:
+                gruende["kopfwinkel"] = "the landmark stage gave no head angles"
+            else:
+                werte["kopfwinkel"] = [round(float(w), 1) for w in roh]     # gerundet wie core.ernte (pose)
+        except Exception as e:                                  # noqa: BLE001  laut als Grund
+            gruende["kopfwinkel"] = f"{_mk.GRUND_MESSFEHLER}: {type(e).__name__}: {e}"
+        return aligned, werte, gruende
+
+    def _satz_weg(self, eid, label, set_feed, kennung, datei):
+        """Der Satz-Schreibweg dieses Ereignisses (E3a-3; Fix 0.1.1.013 F3: ohne Rechenwerk, mit der Kennung des
+        Rechengraphen). Ohne Job-Feld oder ohne Kennung gesperrt, laut (ERROR im SetWriter).
+        -> core.harvest_set.SetWriter"""
+        from core import harvest_set as _hs                   # noqa: PLC0415  nur am Ereignis-Ende
+        ctx = {"eid": eid, "kamera": label, "ts": None, "quelle": eid if datei else None,
+               "latten": dict(self.lat)}
+        if not isinstance(set_feed, dict):
+            return _hs.SetWriter(set_feed, None, ctx, lock=f"job field '{_hs.FEED_FIELD}' is missing",
+                                 art=_hs.ART_WORKER)
+        if not isinstance(kennung, dict):
+            return _hs.SetWriter(set_feed, None, ctx, art=_hs.ART_WORKER,
+                                 lock="no engine identity of the computing graph for the reference sets")
+        return _hs.SetWriter(set_feed, None, ctx, kennung=kennung)
+
+    def _bestbild_zeile(self, person, rec, fund, ref_id, label, eid):
+        """Die Zeile des besten Gesichts einer Person in kandidaten.jsonl (E3a-3): ref_id, NN, Bildzeit und die
+        Zahlen des Rechengraphen wie in einer Kandidaten-Zeile. -> dict"""
+        from core import harvest_set as _hs                   # noqa: PLC0415
+        x1, y1, x2, y2 = fund["bb"]
+        g = fund["graph"]
+        return {_hs.BEST_FIELD: True, "person": person, "ref_id": ref_id, "score": round(rec["max"], 3),
+                "t": round(rec["best_t"], 1), "bw": int(x2 - x1), "bh": int(y2 - y1),
+                "front": None if g["front"] is None else round(g["front"], 2),
+                "det": round(g["detektion"], 2), "sharp": None if g["schaerfe"] is None else round(g["schaerfe"], 0),
+                "norm": g["norm"], "mk_fiqa_t": g["guete_t"], "mk_empf": g["guete_e"],
+                "mk_quelle": (MK_QUELLE if (g["guete_t"] is not None and g["guete_e"] is not None) else None),
+                "mk_modell": self.modell, "label": label, "source": eid}
+
+    def schreiben(self, ordner, label, eid, persons, alle, set_feed=None, kennung=None, datei=False):
+        """Bestbilder (als Saetze), Anzeige-Bilder und Kandidaten dieses Events schreiben. Jeder
         gebrauchte Frame wird GENAU EINMAL nach BGR gewandelt; das win_thresh-Gate ist das
         von analyze.py:911 (ohne es truege ein Bild einen Personennamen, den die Zahlen
-        nicht hergeben). -> Bilanz"""
+        nicht hergeben). E3a-3: je Uebernahme-Angebot ein Satz ueber den Schreibweg (`_satz_weg`,
+        set_feed = Job-Feld, kennung = Kennung des Rechengraphen (F3), datei = eigene Videodatei); ein Fund,
+        der auf demselben Frame mit derselben Box schon einen Satz hat, bekommt dieselbe ref_id. F4: danach der
+        Unbekannt-Stapel (`_unbekannt_schreiben`, Bilanz unbekannt_gruppen und unbekannt_saetze). -> Bilanz"""
         kand = self._kandidaten()
         bgr = {}
+        wt = self.lat["win_thresh"]
 
         def bild(i):
             b = bgr.get(i)
@@ -1244,28 +1467,35 @@ class Bildvorrat:
                 b = bgr[i] = nv12_bgr(self.rahmen[i][0], self.W, self.H)
             return b
 
-        gebraucht = {i for i, _kd, _bb in kand}
-        for person in alle:
-            rec = persons.get(person)
-            if rec and rec["max"] >= self.lat["win_thresh"]:
-                for d in (self.best, self.show, self.nnctx):
-                    if person in d:
-                        gebraucht.add(d[person][1])
+        oben = [p for p in alle if persons.get(p) and persons[p]["max"] >= wt]
+        gebraucht = {i for i, _kd, _f in kand} | {m[1] for g in self.unbekannt for m in g}     # F4: Stapel-Bilder
+        for person in oben:
+            for d in (self.best, self.show, self.nnctx):
+                if person in d:
+                    gebraucht.add(d[person][1])
         if gebraucht:
             os.makedirs(ordner, exist_ok=True)
+        weg = (self._satz_weg(eid, label, set_feed, kennung, datei)
+               if kand or self.unbekannt or any(p in self.best for p in oben) else None)
+        saetze = {}
+
+        def satz(i, fund, art, person):
+            schluessel = (i, tuple(fund["bb"]))
+            if schluessel not in saetze:
+                shot = {"nr": i, "bildzeit": (i / self.fps) if self.fps else None,
+                        "datei": f"{label}~{i}~{art}~{person or 'FREMD'}", "graph": fund["graph"]}
+                saetze[schluessel] = weg.write_held(bild(i), fund["box"], fund["kps"], shot)
+            return saetze[schluessel]
+
         bilanz = collections.Counter()
-        for person in alle:
-            rec = persons.get(person)
-            if not rec or rec["max"] < self.lat["win_thresh"]:
-                continue
-            mx = rec["max"]
+        bestbilder = []
+        for person in oben:
+            rec = persons[person]
             eintrag = self.best.get(person)
             if eintrag is not None:
-                x1, y1, x2, y2 = eintrag[2]
-                c = bild(eintrag[1])[y1:y2, x1:x2]
-                if c.size:
-                    cv2.imwrite(os.path.join(
-                        ordner, f"{label}_best_{person}_NN{mx:.2f}_t{rec['best_t']:.0f}s.jpg"), c)
+                rid = satz(eintrag[1], eintrag[2], "best", person)
+                if rid:
+                    bestbilder.append(self._bestbild_zeile(person, rec, eintrag[2], rid, label, eid))
                     bilanz["best"] += 1
             s = self.show.get(person) or self.nnctx.get(person)
             if s is not None:
@@ -1273,20 +1503,30 @@ class Bildvorrat:
                 c = bild(s[1])[b1:b2, a1:a2]
                 if c.size:
                     cv2.imwrite(os.path.join(
-                        ordner, f"{label}_show_{person}_NN{mx:.2f}.jpg"), c)
+                        ordner, f"{label}_show_{person}_NN{rec['max']:.2f}.jpg"), c)
                     bilanz["show"] += 1
-        if kand:
-            with open(os.path.join(ordner, "kandidaten.jsonl"), "a", encoding="utf-8") as kf:
-                for nr, (i, kd, bb) in enumerate(kand):
-                    x1, y1, x2, y2 = bb
-                    datei = f"{label}_enroll_{kd['person'] or 'FREMD'}_{nr}.jpg"
-                    c = bild(i)[y1:y2, x1:x2]
-                    if c.size:
-                        cv2.imwrite(os.path.join(ordner, datei), c)
-                    kf.write(json.dumps({**kd, "datei": datei, "label": label,
-                                         "source": eid}, ensure_ascii=False) + "\n")
+        if kand or bestbilder:
+            from core.harvest_set import EVENT_FILE              # noqa: PLC0415  der eine Name
+            with open(os.path.join(ordner, EVENT_FILE), "a", encoding="utf-8") as kf:
+                for i, kd, fund in kand:
+                    zeile = {k: v for k, v in kd.items() if k != "_emb"}
+                    rid = satz(i, fund, "enroll" if kd["person"] else "fremd", kd["person"])
+                    if rid:
+                        zeile["ref_id"] = rid
+                    kf.write(json.dumps({**zeile, "label": label, "source": eid},
+                                        ensure_ascii=False) + "\n")
                     bilanz["kandidaten"] += 1
+                for zeile in bestbilder:
+                    kf.write(json.dumps(zeile, ensure_ascii=False) + "\n")
                 kf.flush()
+        n_gruppen, n_saetze = self._unbekannt_schreiben(ordner, label, eid, satz, kennung) if self.unbekannt else (0, 0)
+        if n_gruppen:                                 # F4: nach den bisherigen Saetzen, nie in kandidaten.jsonl
+            bilanz.update(unbekannt_gruppen=n_gruppen, unbekannt_saetze=n_saetze)
+        if weg is not None:
+            bilanz["saetze_neu"] += weg.n["geschrieben"]
+            bilanz["saetze_schon_da"] += weg.n["schon_da"]
+            bilanz["saetze_ohne"] += weg.n["abgelehnt"] + weg.n["gesperrt"]
+            bilanz["satz_ms"] += round(sum(weg.zeiten) * 1000.0, 1)
         return {**bilanz, "rahmen_gewandelt": len(bgr), "rahmen_spitze": self.rahmen_max}
 
 
@@ -1404,7 +1644,7 @@ def event_rechnen(engine, g, clip, schritt, schwelle, fps, alle, mit_refs, erk, 
                           "front": None, "sharp": None, "fd": None, "kand": False,
                           "e": None, "t": None, "p": None, "norm": None, "sc": None,
                           "abbruch": None, "_bb": bb, "_box": d[:4], "_kp": kp,
-                          "_emb": None})
+                          "_emb": None, "_winkel": None})
         zaehler["gesichter"] += len(faces)
         # --- fd-Stufe (v8): front (1k3d68) und sharp (Laplace) fuer JEDE Detektion, in
         #     EINEM Aufruf je Portion. SIE LAEUFT VOR DER K-LATTE (Nachzug 13.09., Users
@@ -1426,7 +1666,8 @@ def event_rechnen(engine, g, clip, schritt, schwelle, fps, alle, mit_refs, erk, 
             aus = satz.stufe_fd(th, zuege)
             for f, M, zug, (pts, sL, sL2) in zip(faces, matrizen, zuege, aus):
                 npx = zug[4]
-                f["front"] = fd_front(pts, M, fd_seite)[0]
+                # F3: die Winkel bleiben je Gesicht bis zum Bildvorrat (_fund), nicht in der Ergebniszeile
+                f["front"], f["_winkel"] = fd_front(pts, M, fd_seite)
                 # analyze.sharp: leerer Crop -> 0.0. Sonst Varianz aus Summe und Summe der
                 # Quadrate; das Klemmen auf 0 faengt nur die Rundung bei nahezu konstanten
                 # Crops (cv2.var() kann nicht negativ werden).
@@ -1518,7 +1759,7 @@ def event_rechnen(engine, g, clip, schritt, schwelle, fps, alle, mit_refs, erk, 
             zeiten["bilder"] += time.monotonic() - t0
         bild_melden(clip, i, herkunft, faces)
         for f in faces:
-            del f["_bb"], f["_box"], f["_kp"], f["_emb"]
+            del f["_bb"], f["_box"], f["_kp"], f["_emb"], f["_winkel"]
         zeilen.extend(faces)
         if quelle is not None:
             quelle.melden(i, faces, zeilen)          # je Bild: erst Urteil, dann Tuer (l5_regel.py:11)
@@ -1607,8 +1848,6 @@ def kern_argumente(ap):
     ap.add_argument("--clips", required=True, help="Ordner mit <eid>.mp4")
     ap.add_argument("--plan", required=True, help='JSON mit "events": [[eid, kamera], ...]')
     ap.add_argument("--out", required=True, help="Ergebnisordner")
-    ap.add_argument("--refcache", required=True,
-                    help="refcache.npz des alten Workers (Referenz-Embeddings je Person)")
     ap.add_argument("--bilder", help="Ordner fuer Bestbilder, Anzeige-Bilder, "
                                      "Kandidaten-Crops und kandidaten.jsonl (v8). "
                                      "Vorgabe: <out>/bilder, je Auftrag ein Unterordner.")
@@ -1743,29 +1982,43 @@ def _fest_bauen(a, fps_sample, det_global, guards, alle, mit_refs, erk, lat, zf,
 
 
 def _aufbau(a):
-    """Config, Plan, Latten, Referenzen, Geometrien — der gemeinsame Vorlauf beider
-    Fassungen. -> (fps_sample, det_global, guards, plan, lat, alle, mit_refs, erk, geo,
-    sample_deckel, pakete)"""
+    """Config, Plan, Latten, Geometrien — der gemeinsame Vorlauf beider Fassungen. Die
+    Referenzen liest `_referenzen_mess` erst nach dem Geometrie-Bau (Bauauftrag E3b-1a).
+    -> (fps_sample, det_global, guards, plan, lat, geo, sample_deckel, pakete)"""
     fps_sample, det_global, guards, sample_deckel = cfg_lesen(a.config)
     with open(a.plan, encoding="utf-8") as f:
         plan = json.load(f)
     lat = urteils_latten(plan)
-    alle, mit_refs, erk = referenzen_laden(a.refcache)
     os.makedirs(a.out, exist_ok=True)
     geo, pakete = clip_geometrien(a.clips, plan["events"])
-    return (fps_sample, det_global, guards, plan, lat, alle, mit_refs, erk, geo,
-            sample_deckel, pakete)
+    return fps_sample, det_global, guards, plan, lat, geo, sample_deckel, pakete
+
+
+def _referenzen_mess(engine):
+    """Die Referenzen des Mess-Wegs aus Lese-Stufe a der Referenz-Quelle im Datenordner
+    VERIFY_DATA_DIR, mit der Rechenwerk-Kennung dieser Engine (Bauauftrag E3b-1a). Gerufen NACH
+    geometrie_bauen: die Kennung legt den Bild-Weg samt r-Kompilat an, und vor den Geometrien
+    aendert das auf intel das p-Kompilat (analysen/bauplan_pose_reihenfolge.md, R1).
+    -> (alle, mit_refs, erk); fehlt VERIFY_DATA_DIR, laut abgebrochen (SystemExit)."""
+    daten = os.environ.get("VERIFY_DATA_DIR")
+    if not daten:
+        _log.error("references: VERIFY_DATA_DIR is not set — the reference source cannot be read")
+        raise SystemExit("FEHLER: VERIFY_DATA_DIR fehlt — Referenz-Quelle nicht lesbar")
+    import bild_kern                                       # noqa: PLC0415  importiert diesen Kern
+    from core import refquelle                              # noqa: PLC0415
+    kennung = bild_kern.engine_identity(bild_kern.EngineEmbedder(bild_kern.BildRechner(engine)))
+    return referenzen_laden(refquelle.read_matrix({"data_dir": daten}, kennung), kennung)
 
 
 def lauf_einzel(engine, a):
     """Die Einzelreihe: ein Rechenstrang, jedes Plan-Event einmal. Aufbau (Graphen/
     Sessions und Warmlauf) VOR der Zeitmessung, wie in einem warmen Worker."""
-    (fps_sample, det_global, guards, plan, lat, alle, mit_refs, erk, geo,
-     sample_deckel, pakete) = _aufbau(a)
+    fps_sample, det_global, guards, plan, lat, geo, sample_deckel, pakete = _aufbau(a)
     events = plan["events"]
     t_bau = time.monotonic()
     graphen = engine.geometrie_bauen(geo)
     t_graphen = time.monotonic() - t_bau
+    alle, mit_refs, erk = _referenzen_mess(engine)          # E3b-1a: nach den Geometrien (R1)
     for g in graphen.values():
         g.satz().warm()
     print(json.dumps(kopf(engine, graphen, erk, alle, mit_refs, lat,
@@ -1832,12 +2085,12 @@ def lauf_mt(engine, a):
     Kein globales Rechen-Schloss. Keine Stufe ist gesperrt."""
     if a.threads < 1 or a.jobs < 1:
         raise SystemExit("--threads und --jobs muessen >= 1 sein")
-    (fps_sample, det_global, guards, plan, lat, alle, mit_refs, erk, geo,
-     sample_deckel, pakete) = _aufbau(a)
+    fps_sample, det_global, guards, plan, lat, geo, sample_deckel, pakete = _aufbau(a)
     events = plan["events"]
     t_bau = time.monotonic()
     graphen = engine.geometrie_bauen(geo)
     t_graphen = time.monotonic() - t_bau
+    alle, mit_refs, erk = _referenzen_mess(engine)          # E3b-1a: nach den Geometrien (R1)
 
     jobs = auftraege_bauen(events, a.jobs)
     schlange = queue.Queue()

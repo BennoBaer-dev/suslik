@@ -793,6 +793,7 @@ def _job_ausfuehren(job, antwort_out=None):
                 # er lag ausserhalb <data_dir>/clips und wurde nie geraeumt.
                 from core import ernte as _ernte
                 from core import frames as clipcache
+                from core import harvest_set as _harvest_set
                 import face_audit
                 eid = job["eid"]
                 # .288 (Task #11): Alt-Event-Weiche des Dienstes — bei
@@ -844,7 +845,17 @@ def _job_ausfuehren(job, antwort_out=None):
                         # des Betreibers (Entscheid E10). Der Worker liest sie
                         # nie selbst aus der Config: „der Worker greift nie
                         # selbst in die Config" (refqs-Muster oben).
-                        sieb=job.get("sieb"))
+                        sieb=job.get("sieb"),
+                        # E3a-1b (Bauplan Referenz-Quelle einbauen, J4 und J6
+                        # mit O559): das Job-Feld der Config-Zufuhr reist mit,
+                        # aber dieser Weg schreibt KEINE Saetze — der Dienst
+                        # startet worker.py seit E3.1 nicht mehr, und die
+                        # Kennung des face_audit-Wegs kann Geraet und
+                        # Genauigkeit nicht nennen. Die Sperre ist laut (ERROR
+                        # je Job, Grund in z["refquelle"]); die Ernte speichert
+                        # wie bisher.
+                        satz=job.get(_harvest_set.FEED_FIELD),
+                        satz_sperre=_harvest_set.LOCK_NOT_STARTED)
                 finally:
                     clipcache.frei(eid)   # nie eine Pin-Waise (Size-Cap)
             elif typ == "norm":

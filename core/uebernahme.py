@@ -1,22 +1,35 @@
 """E4b — Uebernahme benannter Anker in die Referenzbibliothek (Bauplan §E4b).
 
 Kontrakt wie core/benennung.py: reine Logik, Schwellen/Pfade vom Aufrufer,
-Datei-Effekte nur in uebernehmen() mit dem Alles-oder-nichts-Vertrag
-("Uebernahme-Abbruch-Fall: nichts halb" — QS E4b). Der Drift-Waechter und die
-refcache-Invalidierung laufen im Dienst-Mantel (dieselbe Nacharbeit wie beim
-Pool-Enrollment). FIXPUNKT-KLARSTELLUNG (QS E4b): die abnahme-Solls werden hier
+Schreib-Effekte nur in in_den_bestand() mit dem Alles-oder-nichts-Vertrag
+("Uebernahme-Abbruch-Fall: nichts halb" — QS E4b: erst alles pruefen, dann
+schreiben). Der Drift-Waechter laeuft im Dienst-Mantel (dieselbe Nacharbeit wie
+beim Pool-Enrollment). FIXPUNKT-KLARSTELLUNG (QS E4b): die abnahme-Solls werden hier
 NIE angefasst — der Waechter prueft gegen sie, aktualisiert sie nicht.
 
 Verbindlicher Dedup (Bauplan 4b): erst hier, gegen den JETZT-Zustand — innerhalb
 der Auswahl UND gegen frueher uebernommene Lern-Referenzen derselben Person (aus
-dem Protokoll, das je Datei das Embedding festhaelt). Manuell hochgeladene
+dem Protokoll, das je Uebernahme die ref_id festhaelt). Manuell hochgeladene
 Referenzen tragen keine gespeicherten Embeddings; sie werden NICHT verglichen
-und das Protokoll weist das aus (kein stilles "0 uebersprungen")."""
+und das Protokoll weist das aus (kein stilles "0 uebersprungen").
+
+UEBERNAHME ALS KATALOGZEILE (Bauplan analysen/bauplan_refquelle_einbau.md, Stufe E3
+Punkt 1, Schnitt E3a-1d): ein Angebot der Lernlauf-, Vorrats- und Pass-Ernte-Wege ist
+seit E3a-1c ein Satz in core/refquelle mit Status kandidat. Uebernehmen heisst
+`in_den_bestand`: je ref_id eine Bindung (Person, aktiv wahr) und eine Statuszeile
+referenz ueber das Modul — keine Dateikopie, keine refs_meta-Zeile, kein refcache.
+Die Herkunft bleibt im Satz. Die Leser des Bestands sehen die neue Referenz erst mit
+E3b (Entscheid 16). Ein Angebot ohne ref_id (Lauf vor dieser Version) lehnt die
+Uebernahme laut ab, mit Hinweis auf den Umzug (J7, `UMZUG_HINWEIS`)."""
 import json
 import os
-import tempfile
 
 import numpy as np
+
+# J7: ein Angebot aus einem Lauf vor der Referenz-Quelle traegt keine ref_id; der Umzug (E4)
+# nimmt die alten Lauf-Ordner mit. Produkt-Text, englisch.
+UMZUG_HINWEIS = ("this offer comes from a learning run made before this version (no reference set) and "
+                 "cannot be adopted; the one-time migration of this version takes the old runs along")
 
 
 def _cos(a, b):
@@ -58,22 +71,101 @@ def protokoll_anhaengen(data_dir, eintrag):
 
 def adoptierte_embs(data_dir, person):
     """Embeddings frueher uebernommener Lern-Referenzen dieser Person — NUR von
-    Dateien, die noch auf der Platte liegen (.127 Review-MUSS 'Phantom-Dedup':
-    das Protokoll wird beim Loeschen von Referenzen/Personen nie nachgezogen;
-    ohne Existenz-Pruefung dedupte die Uebernahme gegen Geloeschtes, und der
-    already-covered-Abschluss machte die Person still unanlernbar). Zeilen ohne
-    ziel-Feld zaehlen nicht (unverifizierbar — schlimmstenfalls wird ein
-    Beinahe-Duplikat erneut kopiert, nie umgekehrt eine Uebernahme verhindert)."""
+    Referenzen, die es noch gibt (.127 Review-MUSS 'Phantom-Dedup': das Protokoll
+    wird beim Loeschen von Referenzen/Personen nie nachgezogen; ohne
+    Existenz-Pruefung dedupte die Uebernahme gegen Geloeschtes, und der
+    already-covered-Abschluss machte die Person still unanlernbar).
+    Beides geht ueber das Modul core/refquelle, Lese-Stufe b einmal je Aufruf
+    (Nachtrag E3, O595 (1)); den Personenordner liest die Funktion nicht.
+    Seit E3a-1d traegt eine Protokoll-Zeile die ref_id: es zaehlt nur ein Satz,
+    der noch gebunden und Referenz ist, sein Fingerabdruck kommt ueber das Modul.
+    Eine aeltere Zeile (emb + ziel, ohne ref_id) zaehlt, wenn die Person eine aktive
+    Referenz (Status referenz oder altbestand, die Auswahl personen der Lese-Stufe b)
+    mit genau diesem alten Dateinamen hat (I9: Feld alter_dateiname der Bindung);
+    ihr Vektor ist die gespeicherte emb der Zeile, nach dem Umzug E4 bitgleich der
+    alte Fingerabdruck dieses Satzes. Steht der Umzug aus (V2), kennt Lese-Stufe b
+    keinen Eintrag, und keine aeltere Zeile zaehlt: so gewollt, denn eine Uebernahme
+    lehnt das Modul in dieser Zeit ohnehin ab. Zeilen ohne beides zaehlen nicht
+    (schlimmstenfalls wird ein Beinahe-Duplikat erneut aufgenommen, nie umgekehrt
+    eine Uebernahme verhindert). -> Liste von Vektoren (Listen von Zahlen)."""
     zeilen, _k = protokoll_lesen(data_dir)
-    ordner = os.path.join(data_dir, "faces", person)
-    aus = []
-    for z in zeilen:
-        if z.get("person") == person:
-            for d in z.get("dateien") or []:
-                if (d.get("emb") and d.get("ziel")
-                        and os.path.isfile(os.path.join(ordner, str(d["ziel"])))):
-                    aus.append(d["emb"])
-    return aus
+    dateien = [d for z in zeilen if z.get("person") == person for d in z.get("dateien") or []]
+    if not dateien:
+        return []
+    from core import refquelle as _rq                      # noqa: PLC0415  spaet wie im Haus
+    katalog = _rq.read_catalog({"data_dir": data_dir})
+    eintraege = katalog["eintraege"]
+    alte_namen = {eintraege[r]["bindung"].get("alter_dateiname") for r in katalog["personen"].get(person, [])}
+    aus = [d["emb"] for d in dateien if not d.get("ref_id") and d.get("emb") and d.get("ziel")
+           and str(d["ziel"]) in alte_namen]
+    rids = [d["ref_id"] for d in dateien if d.get("ref_id")]
+    return aus + _bestand_vektoren(data_dir, rids, eintraege)
+
+
+def _bestand_vektoren(data_dir, ref_ids, eintraege):
+    """Die Fingerabdruecke der Saetze, die noch als Referenz gebunden sind (Bindung und Status aus
+    den Eintraegen der Lese-Stufe b, die der Aufrufer schon gelesen hat; Lese-Stufe a je Lauf ueber
+    core.lernlauf). -> Liste von Listen."""
+    if not ref_ids:
+        return []
+    from core import lernlauf as _ll                       # noqa: PLC0415  spaet wie im Haus
+    cfg = {"data_dir": data_dir}
+    noch = [r for r in dict.fromkeys(ref_ids) if r in eintraege
+            and eintraege[r]["status"].get("status") == "referenz"
+            and eintraege[r]["bindung"].get("aktiv") is True and eintraege[r].get("ort")]
+    vek = _ll.mitglieder_fingerabdruecke(cfg, noch)
+    return [vek[r].tolist() for r in noch if r in vek]
+
+
+def bestand_da(data_dir, person):
+    """Phantom-Wache (Review-MUSS .127, seit E3a-1d ueber das Modul): hat die Person mindestens einen
+    Satz, der aktiv an sie gebunden ist (Status referenz oder altbestand, Ordner vorhanden)?
+    Lese-Stufe b. -> bool"""
+    from core import refquelle as _rq                      # noqa: PLC0415
+    return any(e["bindung"].get("person") == person and e["bindung"].get("aktiv") is True
+               and e["status"].get("status") in ("referenz", "altbestand") and e.get("ort")
+               for e in _rq.read_catalog({"data_dir": data_dir})["eintraege"].values())
+
+
+def ref_ids(mitglieder):
+    """Die ref_ids der Mitglieder oder Angebote; eines ohne ref_id stammt aus einem Lauf vor dieser
+    Version (J7). -> Liste der ref_ids; fehlt eine: ValueError mit UMZUG_HINWEIS (laut)."""
+    alt = [str(m.get("datei") or "") for m in mitglieder if not m.get("ref_id")]
+    if alt:
+        raise ValueError(f"{UMZUG_HINWEIS} ({len(alt)} picture(s))")
+    return [m["ref_id"] for m in mitglieder]
+
+
+def in_den_bestand(data_dir, ids, person, grund):
+    """Saetze in den Bestand aufnehmen: je ref_id eine Bindung (person, aktiv wahr) und eine Statuszeile
+    referenz ueber core/refquelle; erst werden alle geprueft (Lese-Stufe c), dann wird geschrieben; danach zieht
+    das Modul den abgeleiteten Personenordner nach (E4-3). Vor dem gruenen Umzug lehnt das Modul die Zeilen ab (V2).
+    -> {"neu": [ref_id...], "schon_da": [ref_id...]}; fehlt ein Satz oder ist er nicht aufnehmbar:
+    ValueError, und es ist nichts geschrieben."""
+    from core import refquelle as _rq                      # noqa: PLC0415
+    cfg = {"data_dir": data_dir}
+    neu, da = [], []
+    for rid in dict.fromkeys(ids):
+        s = _rq.read_set(cfg, rid)
+        if s is None:
+            raise ValueError(f"reference set {rid} does not exist — nothing adopted")
+        if s["fehler"] or s["fingerabdruck"] is None:
+            raise ValueError(f"reference set {rid} is damaged ({', '.join(sorted(s['fehler'])) or 'fingerprint'})"
+                             " — nothing adopted")
+        bindung, status = s["katalog"]["bindung"], s["katalog"]["status"].get("status")
+        if bindung.get("person") == person and bindung.get("aktiv") is True and status == "referenz":
+            da.append(rid)
+            continue
+        if status != "kandidat" or bindung.get("person"):
+            raise ValueError(f"reference set {rid} cannot be adopted (status {status}"
+                             f"{', bound to a person' if bindung.get('person') else ''}) — nothing adopted")
+        neu.append(rid)
+    for rid in neu:
+        _rq.append(cfg, rid, "bindung", {"person": person, "aktiv": True, "grund": grund})
+        _rq.append(cfg, rid, "status", {"status": "referenz", "grund": grund})
+    if neu:                                  # E4-3 (Entscheid 6): der abgeleitete Personenordner zieht nach
+        _rq.build_person_folders(cfg, follow=True)
+    return {"neu": neu, "schon_da": da}
 
 
 def bedingungs_tag_pruefen(anker, aktuelle_werte):
@@ -139,39 +231,11 @@ def plan_bauen(anker, dup_sim, bestands_embs, luma_grenzen=None,
     return {"aufnehmen": aufnehmen, "uebersprungen": uebersprungen}
 
 
-def uebernehmen(data_dir, lauf_id, anker_id, person, plan, kopierer=None):
-    """Referenzen schreiben — ALLES ODER NICHTS je Aufruf: erst jede Quelle in eine
-    Temp-Datei im Zielordner kopieren; erst wenn ALLE Kopien stehen, werden sie auf
-    ihre Endnamen umbenannt (os.replace, gleicher Ordner). Scheitert irgendetwas
-    vor dem ersten replace, werden alle Temps entfernt und es bleibt NICHTS zurueck.
-    -> Liste der Zieldateinamen. Wirft bei fehlender Quelle/Kopierfehler."""
-    import shutil
-    kop = kopierer or shutil.copyfile
-    lauf_dir = os.path.join(data_dir, "state", "lernlauf", lauf_id)
-    ziel_dir = os.path.join(data_dir, "faces", person)
-    os.makedirs(ziel_dir, exist_ok=True)
-    temps, paare = [], []
-    try:
-        for m in plan["aufnehmen"]:
-            quelle = os.path.join(lauf_dir, str(m.get("datei", "")))
-            if not os.path.isfile(quelle):
-                raise FileNotFoundError(f"crop missing: {m.get('datei')}")
-            base = os.path.basename(str(m.get("datei", "")))
-            ziel_name = f"lern_{anker_id}_{base}"
-            fd, tmp = tempfile.mkstemp(dir=ziel_dir, prefix=".lern.", suffix=".tmp")
-            os.close(fd)
-            temps.append(tmp)
-            kop(quelle, tmp)
-            paare.append((tmp, os.path.join(ziel_dir, ziel_name), ziel_name))
-    except Exception:
-        for t in temps:
-            try:
-                os.unlink(t)
-            except OSError:
-                pass
-        raise
-    namen = []
-    for tmp, ziel, name in paare:
-        os.replace(tmp, ziel)
-        namen.append(name)
-    return namen
+def uebernehmen(data_dir, anker_id, person, plan):
+    """Die Mitglieder des Plans in den Bestand aufnehmen — ALLES ODER NICHTS je Aufruf: seit E3a-1d
+    Katalogzeilen ueber `in_den_bestand` (erst alle pruefen, dann schreiben) statt Dateikopien; ein
+    Mitglied ohne ref_id lehnt die Uebernahme laut ab (J7).
+    -> Liste der aufgenommenen ref_ids (auch die, die schon gebunden waren). Wirft ValueError."""
+    ids = ref_ids(plan["aufnehmen"])
+    in_den_bestand(data_dir, ids, person, f"learning run anchor {anker_id}")
+    return ids

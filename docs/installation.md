@@ -79,11 +79,11 @@ docker pull ghcr.io/bennobaer-dev/suslik:latest-gpu-legacy  # Intel Gen8/9/11 (t
 docker pull ghcr.io/bennobaer-dev/suslik:latest-rocm        # AMD (testing)
 
 # the same release, pinned so it never moves under you:
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.010-gpu
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.010-cuda
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.010-cpu
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.0.545-gpu-legacy
-docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.010-rocm
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.021-gpu
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.021-cuda
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.021-cpu
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.021-gpu-legacy
+docker pull ghcr.io/bennobaer-dev/suslik:0.1.1.021-rocm
 ```
 
 > **Testing variants:** `gpu-legacy` and `rocm` follow every release under `latest-*` like
@@ -386,8 +386,11 @@ docker compose pull && docker compose up -d
 
 Your data is not in the image. Everything suslik learns — reference faces, the unknown pool,
 settings, event history — lives in the `/data` volume from your compose file and survives the
-update untouched. Read the release notes before a major jump, then check the footer of any page in
-the web UI: it shows the version that is actually running.
+update. One exception is announced in the release notes: the first version with the *reference
+source* moves your learned faces once into a new storage layout on its first start (see
+[Data layout and the one-time migration](#data-layout-and-the-one-time-migration) below). Read the
+release notes before a major jump, then check the footer of any page in the web UI: it shows the
+version that is actually running.
 
 A `latest-*` tag only moves once a release has been deployed and verified on real test hardware
 (Intel, NVIDIA, and plain CPU), so pulling it does not put you on something untested.
@@ -398,7 +401,7 @@ A `latest-*` tag only moves once a release has been deployed and verified on rea
 when to move, pin the version explicitly:
 
 ```yaml
-    image: ghcr.io/bennobaer-dev/suslik:0.1.1.010-cpu
+    image: ghcr.io/bennobaer-dev/suslik:0.1.1.021-cpu
 ```
 
 To move, change the tag and run `docker compose up -d`. Recent versions stay pullable, but a
@@ -409,10 +412,31 @@ the [package page](https://github.com/users/BennoBaer-dev/packages/container/pac
 
 ### Before you update
 
-Back up the `/data` volume. In the web UI, **System → Configuration backup → Download
-configuration** additionally saves your settings (thresholds, cameras, notification channels
-including their stored secrets) as a single JSON file, and restores them from the same page —
-settings only, not the learned people. Those are covered by the daily archive suslik writes into
-`<data>/backups/`.
+Take a full backup: in the web UI, **System → Full backup → Download full backup** (`/backup_voll`)
+packs your settings, the learned people and their reference source into one archive; **Restore full
+backup…** on the same card brings it back. Before the update to the first version with the reference source, also copy the file
+`<data>/clips/refcache.npz` somewhere safe — `clips/` is not part of the full backup, and the
+migration reads that file for references whose fingerprint is stored only there. If anything goes
+wrong, the way back is: restore the backup, put the file back, and start the old version again.
+**System → Configuration backup → Download configuration** saves only the settings (thresholds,
+cameras, notification channels including their stored secrets) as a single JSON file.
+
+### Data layout and the one-time migration
+
+Since the version with the *reference source*, every learned face is stored as a set in
+`<data>/refquelle/<ref_id>/` (the face crop, its fingerprint, the profile picture, and a record of where
+it came from), and the catalog `<data>/refquelle/katalog.jsonl` binds each set to a person. The folder
+`<data>/faces/<person>/` is now only a derived copy of the profile pictures for display and export.
+Removing a picture or a person moves its sets into `<data>/state/archiv/` — nothing is deleted.
+
+On its first start, that version migrates an existing installation once, before it analyses the first
+event. It first counts what is there, then copies everything it will touch into
+`<data>/state/archiv/vor_refquelle_<date>/`, writes the new sets, compares the result against the copy,
+and only when everything matches moves the old files into the same archive. Your old faces are never
+deleted. On our test machines (11.10.2026, a backup with 852 reference entries) this took 54–105 seconds on
+a CPU-only machine and 4–6 seconds with an NVIDIA card. If the comparison fails, suslik keeps recognising
+from the old, untouched files, takes no new faces, and `/health` shows it in the field `umzug`; the next
+start tries again. Nothing changes in how faces are recognised: the migration copies the existing
+fingerprints, and a later recalculation from the pictures is only recorded next to them.
 
 Next: [configuration.md](configuration.md) · [usage.md](usage.md) · [proxmox.md](proxmox.md)

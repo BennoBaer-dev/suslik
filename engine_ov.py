@@ -1032,6 +1032,24 @@ class BildStufen:
                 "det_leinwaende": [f"{w}x{h}" for (w, h) in sorted(self._det)],
                 "stufen": sorted(self._stufen)}
 
+    def identity(self):
+        """Die Engine-Auskunft fuer die Rechenwerk-Kennung (Entscheid J5, gelesen von
+        bild_kern.engine_identity; die Textformen stehen dort an einer Stelle).
+        -> dict genauigkeit, bibliothek, modell_pfad, geraet, breite
+
+        Die Genauigkeit steht AM r-KOMPILAT, nicht im Wunsch: ohne Zwang waehlt das Geraet
+        selbst (fp16 auf Intel-iGPUs), mit `SUSLIK_OV_PRECISION` gilt der Hinweis aus
+        `_kompilieren`; beides liest `INFERENCE_PRECISION_HINT` ab. Das Kompilat ist dasselbe,
+        das `stufe("r", ...)` rechnet (`bestand.kompilat` haelt es je Stufe und Breite einmal).
+        Wird die Auskunft vor dem ersten r-Aufruf gefragt, baut der Bestand es auf seinem
+        einen Weg; der Staffel-Riegel des Dienstes (`worker_dienst.BildBau`) fasst nur `det`
+        und `stufe`, nicht diese Methode."""
+        komp = self.bestand.kompilat("r", self.BREITE)
+        return {"genauigkeit": komp.get_property("INFERENCE_PRECISION_HINT").get_type_name(),
+                "bibliothek": f"openvino {ov.__version__}",
+                "modell_pfad": self.bestand.pfade["r"],
+                "geraet": GERAET, "breite": self.BREITE}
+
 
 # ------------------------------------------------------------------ Die Engine
 class Engine:

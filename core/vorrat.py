@@ -18,6 +18,12 @@ Identitaets-Stufe 'sicher' (eigen >= sim_min); das 0,30-0,45-Fenster der
 Bestands-Suche ist hier GESPERRT (reale Fremd-Paare dieser Installation liegen
 bei 0,27-0,31).
 
+SEIT E3a-1c (Bauplan analysen/bauplan_refquelle_einbau.md, J1/J2): die Zeilen tragen die ref_id des
+Satzes statt Vorratsbild und Fingerabdruck; die Fingerabdruecke kommen ueber Lese-Stufe a (Saetze des
+Laufs, core.lernlauf.fingerabdruecke), die Umfeld-Zahlen gehen zusaetzlich als Katalog-Nachtrag
+(Thema NACHTRAG_THEMA, Kennung des damaligen Bestands) an die ref_id. Der Lauf-Ordnername ist die
+Lauf-ID (Muster angebote_lesen).
+
 Ohne brauchbare Referenz-Matrizen wird NICHT geurteilt: der Aufrufer setzt die
 Bewertung dann LAUT aus (W2.13 — mit leeren Matrizen waere jeder Kandidat
 'empfohlen' fuer niemanden). Der Kaltstart einer Installation laeuft nicht
@@ -32,13 +38,16 @@ from core import messkarte as _mk
 from core import logbuch as _logbuch
 _log = _logbuch.logger(__name__)
 
+NACHTRAG_THEMA = "vorrat_umfeld"
 
-def v_zeilen_lesen(lauf_dir, eids):
-    """v-Kandidaten (v==True, datei_v gesetzt) aus den Kandidaten-Dateien der
+
+def v_zeilen_lesen(lauf_dir, eids, vek):
+    """v-Kandidaten (v==True, mit ref_id) aus den Kandidaten-Dateien der
     Events — Fehlendes/Kaputtes GEZAEHLT, nie still (Muster s_kandidaten_lesen).
-    -> (v_zeilen, fehlende_dateien, kaputte_zeilen)"""
+    vek = {ref_id: Fingerabdruck} des Laufs; er reist nur im Speicher als `emb` mit.
+    -> (v_zeilen, fehlende_dateien, kaputte_zeilen, ohne_fingerabdruck)"""
     from core import ernte as _ern
-    vz, fehlend, kaputt = [], 0, 0
+    vz, fehlend, kaputt, ohne = [], 0, 0, 0
     for eid in eids:
         pfad = _ern.kandidaten_pfad(lauf_dir, eid)
         if not os.path.exists(pfad):
@@ -54,9 +63,15 @@ def v_zeilen_lesen(lauf_dir, eids):
                 except Exception:
                     kaputt += 1
                     continue
-                if z.get("v") and z.get("datei_v") and z.get("emb"):
-                    vz.append(z)
-    return vz, fehlend, kaputt
+                if not (z.get("v") and z.get("ref_id")):
+                    continue
+                v = vek.get(z["ref_id"])
+                if v is None:
+                    ohne += 1
+                    continue
+                z["emb"] = v
+                vz.append(z)
+    return vz, fehlend, kaputt, ohne
 
 
 def konsens_rechnen(vz):
@@ -114,19 +129,24 @@ def angebote_bewerten(lauf_dir, events_liste, schwellen, refs,
          auf der NORM-Achse die einzige Grenze, kein Zahlen-Deckel).
       3. Identitaet 'sicher': eigen >= sim_min; fremd >= eigen -> raus;
          eigen >= sim_neu -> gedeckt (Bestands-Duplikat).
-    -> Bilanz-Dict (v_gesamt, angebote, gruende, durchgaenge, fehlend, kaputt)."""
+    -> Bilanz-Dict (v_gesamt, angebote, gruende, durchgaenge, fehlend, kaputt,
+       ohne_fingerabdruck, nachtraege)."""
     from core.anker import durchgaenge_bilden
+    from core import lernlauf as _ll
+    cfg = _ll.datenort_cfg()
+    vek = _ll.fingerabdruecke(cfg, os.path.basename(os.path.normpath(lauf_dir)), status="kandidat")["vek"]
     dg = durchgaenge_bilden(events_liste, schwellen["szenario_gap_min"])
-    zeilen, gruende = [], {}
-    fehlend = kaputt = 0
+    zeilen, gruende, umfeld = [], {}, []
+    fehlend = kaputt = ohne_fp = 0
 
     def _grund(name):
         gruende[name] = gruende.get(name, 0) + 1
 
     for d in dg:
-        vz, dfehl, dkaputt = v_zeilen_lesen(lauf_dir, d["eids"])
+        vz, dfehl, dkaputt, dohne = v_zeilen_lesen(lauf_dir, d["eids"], vek)
         fehlend += dfehl
         kaputt += dkaputt
+        ohne_fp += dohne
         kw = konsens_rechnen(vz)
         dg_zeilen = []
         for z, k in zip(vz, kw):
@@ -163,15 +183,20 @@ def angebote_bewerten(lauf_dir, events_liste, schwellen, refs,
             # Ergaenzung, keine Umsortierung).
             dg_zeilen.append(_mk.uebernehmen({
                 "eid": z["eid"], "kamera": z.get("kamera"), "t": z["t"],
-                "ts": z.get("ts"), "datei_v": z["datei_v"], "kante": z["kante"],
+                "ts": z.get("ts"), "kante": z["kante"],
                 "sharp": z["sharp"], "norm": z["norm"],
                 "front_kps": z.get("front_kps"), "richtung": z.get("richtung"),
                 "konsens": k, "person": person, "sim": eigen, "fremd": fremd,
                 "durchgang_start": round(float(d["start"]), 1),
-                "auch_anker": bool(z.get("datei")),   # W1.23: markiert, nie verschwiegen
+                # W1.23: markiert, nie verschwiegen — seit .514 ist jeder v-Fund
+                # auch M und damit Anker-Material.
+                "auch_anker": bool(z.get("m")),
                 "modell": z.get("modell"),
-                "emb": z["emb"],                       # A2-Beiwert fuer die Uebernahme
-                "angebot": angebot, "grund": grund}, z))
+                "angebot": angebot, "grund": grund,
+                # E3a-1c (J1): der Satz dieses Funds in core/refquelle — Bild und
+                # Fingerabdruck (A2-Beiwert) liest die Uebernahme ueber das Modul.
+                "ref_id": z["ref_id"]}, z))
+            umfeld.append((dg_zeilen[-1], len(vz)))
         # Zwillings-Zusammenfassung (.307, User-Go 20.08.: 'Nachbar-Frame-
         # Zwillinge zusammenfassen'): innerhalb EINES Durchgangs behaelt von
         # nahezu identischen Angeboten (cos >= vorrat_zwilling_sim, gemessen:
@@ -184,7 +209,7 @@ def angebote_bewerten(lauf_dir, events_liste, schwellen, refs,
             behalten = []
             for z in sorted((x for x in dg_zeilen if x["angebot"]),
                             key=lambda x: -(x["norm"] or 0)):
-                v = np.asarray(z["emb"], np.float32)
+                v = np.asarray(vek[z["ref_id"]], np.float32).copy()
                 v /= (np.linalg.norm(v) + 1e-9)
                 naechster = None
                 for b in behalten:
@@ -196,7 +221,7 @@ def angebote_bewerten(lauf_dir, events_liste, schwellen, refs,
                 else:
                     z["angebot"] = False
                     z["grund"] = "zwilling"
-                    z["zwilling_von"] = naechster["datei_v"]
+                    z["zwilling_von"] = naechster["ref_id"]
                     _grund("zwilling")
         zeilen.extend(dg_zeilen)
     # Atomar NEU schreiben (mkstemp-Muster wie anker_lauf_schreiben)
@@ -217,18 +242,54 @@ def angebote_bewerten(lauf_dir, events_liste, schwellen, refs,
         except OSError:
             pass
         raise
+    if ohne_fp:
+        _log.error(f"stock rating ({lauf_dir}): {ohne_fp} stock line(s) without a readable "
+                   f"fingerprint in their reference set — left out")
+    n = _umfeld_nachtragen(cfg, umfeld, refs)
     return {"v_gesamt": len(zeilen),
             "angebote": sum(1 for z in zeilen if z["angebot"]),
             "gruende": gruende, "durchgaenge": len(dg),
-            "fehlend": fehlend, "kaputt": kaputt}
+            "fehlend": fehlend, "kaputt": kaputt, "ohne_fingerabdruck": ohne_fp,
+            "nachtraege": n}
+
+
+def _bestand_kennung(refs):
+    """Die Kennung des Referenz-Bestands, gegen den das Umfeld gerechnet wurde: Pruefsumme ueber die
+    Matrizen (nach Person sortiert), Zahl der Personen und Referenzen, ohne Namen. -> dict"""
+    import hashlib
+    h = hashlib.sha256()
+    n = 0
+    for p in sorted(refs):
+        M = np.ascontiguousarray(np.asarray(refs[p], np.float32))
+        h.update(p.encode("utf-8") + b"\0" + M.tobytes())
+        n += int(M.shape[0]) if M.ndim == 2 else 0
+    return {"bestand": "matrizen-sha256:" + h.hexdigest()[:16], "personen": len(refs),
+            "referenzen": n}
+
+
+def _umfeld_nachtragen(cfg, umfeld, refs):
+    """Die Umfeld-Zahlen je Vorrats-Zeile als Katalog-Nachtrag an ihre ref_id (J2). -> Zahl der Nachtraege"""
+    from core import refquelle as _rq
+    kennung = _bestand_kennung(refs)
+    for z, kandidaten in umfeld:
+        _rq.append(cfg, z["ref_id"], "nachtrag", {"thema": NACHTRAG_THEMA, "kennung": kennung, "werte": {
+            "konsens": z["konsens"], "person": z["person"], "sim": z["sim"], "fremd": z["fremd"],
+            "kandidaten": kandidaten, "durchgang_start": z["durchgang_start"],
+            "angebot": z["angebot"], "grund": z["grund"], "zwilling_von": z.get("zwilling_von")}})
+    return len(umfeld)
 
 
 def angebote_lesen(data_dir, uebernommen=None):
     """Offene Katalog-Angebote ALLER noch existierenden Lernlaeufe — die
     Lebenszyklus-Loesung aus der Konzept-QS (W2.10): kein Misch-File, kein
     Lock; ein geloeschter/getrashter Lauf nimmt seine Angebote automatisch
-    mit. uebernommen = {(eid, datei_v)} bereits uebernommener Angebote
-    (aus refs_meta, Aufrufer liefert) wird ausgeblendet.
+    mit. uebernommen = {(eid, datei_v)} bereits uebernommener Angebote alter
+    Laeufe (aus refs_meta, Aufrufer liefert) wird ausgeblendet.
+    Seit E3a-1d (Nachtrag, Bauplan analysen/bauplan_refquelle_einbau.md, Stufe E3
+    Punkt 1): eine Zeile mit ref_id erscheint, wenn ihr Satz im Katalog steht und
+    sein Ordner da ist (Lese-Stufe b, einmal je Aufruf); ohne Satz faellt sie, nie
+    eine tote Kachel. Ob ein solches Angebot schon uebernommen ist, entscheidet der
+    Aufrufer am Status des Satzes. Zeilen alter Laeufe (datei_v) wie bisher.
     -> Liste [{lauf_id, ...vorrat-Zeile ohne emb...}] neueste zuerst."""
     wurzel = os.path.join(data_dir, "state", "lernlauf")
     uebernommen = uebernommen or set()
@@ -240,6 +301,8 @@ def angebote_lesen(data_dir, uebernommen=None):
                         reverse=True)
     except FileNotFoundError:
         return aus
+    from core import lernlauf as _ll, refquelle as _rq
+    saetze = _rq.read_catalog(_ll.datenort_cfg(data_dir))["eintraege"]
     for lid in laeufe:
         with open(os.path.join(wurzel, lid, "vorrat.jsonl"), encoding="utf-8") as f:
             for zeile in f:
@@ -250,31 +313,17 @@ def angebote_lesen(data_dir, uebernommen=None):
                     continue
                 if not z.get("angebot"):
                     continue
-                if (z.get("eid"), z.get("datei_v")) in uebernommen:
+                if z.get("ref_id"):
+                    if (saetze.get(z["ref_id"]) or {}).get("ort") is None:
+                        continue                 # Satz weg -> Angebot weg, nie tote Kachel
+                elif not z.get("datei_v"):
                     continue
-                if not os.path.isfile(os.path.join(wurzel, lid, z["datei_v"])):
+                elif (z.get("eid"), z.get("datei_v")) in uebernommen:
+                    continue
+                elif not os.path.isfile(os.path.join(wurzel, lid, z["datei_v"])):
                     continue                     # Datei weg -> Angebot weg, nie tote Kachel
                 z = {k: v for k, v in z.items() if k != "emb"}   # Anzeige braucht den Vektor nicht
                 z["lauf_id"] = lid
                 aus.append(z)
     aus.sort(key=lambda z: -(z.get("norm") or 0))
     return aus
-
-
-def beiwert_nachschlagen(data_dir, lauf_id, datei_v):
-    """Der A2-Embedding-Beiwert eines Angebots, SERVERSEITIG aus der
-    vorrat.jsonl des Laufs (nie aus dem Request — W2.11).
-    -> (emb_liste, zeile) oder (None, None)."""
-    p = os.path.join(data_dir, "state", "lernlauf", str(lauf_id), "vorrat.jsonl")
-    if not os.path.isfile(p):
-        return None, None
-    with open(p, encoding="utf-8") as f:
-        for zeile in f:
-            try:
-                z = json.loads(zeile)
-            except Exception:
-                _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
-                continue
-            if z.get("datei_v") == datei_v and z.get("emb"):
-                return z["emb"], z
-    return None, None

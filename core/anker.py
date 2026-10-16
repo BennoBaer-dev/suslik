@@ -50,17 +50,11 @@ def durchgaenge_bilden(events_liste, gap_min):
 
 
 # ------------------------------------------------------------------ B2: Stufe 1 je Durchgang
-def _bildquelle(z):
-    """-> ("crop"|"vorrat", relativer Pfad) oder (None, None).
-    Der enge Crop hat Vorrang, weil die Anzeige ihn ohne Zusatzweg kennt; das
-    Vorratsbild (Rand-Ausschnitt) ist die zweite Quelle und wird NUR genommen,
-    wenn kein Crop da ist. Beides ist im selben Lauf-Ordner hinterlegt
-    (crops/<eid>~i~n.jpg bzw. vorrat/v_<eid>_i_n.jpg, core/ernte.py:645/687)."""
-    if z.get("datei"):
-        return "crop", z["datei"]
-    if z.get("datei_v"):
-        return "vorrat", z["datei_v"]
-    return None, None
+# E3a-1c (Bauplan analysen/bauplan_refquelle_einbau.md, J1): die Bildquelle eines Mitglieds ist sein
+# Satz in core/refquelle (Profilbild ueber Lese-Stufe d); das Feld `datei` des Mitglieds traegt seitdem
+# die ref_id als seine Kennung (kein Pfad mehr), damit alle Leser, die Mitglieder ueber `datei`
+# auseinanderhalten, unveraendert eindeutig bleiben.
+BILDQUELLE_SATZ = "satz"
 
 
 def _fehldetektion(z):
@@ -164,60 +158,31 @@ def _sieb_besteht(z, sieb):
     return abs(winkel[2]) <= float(sieb.get("roll_max") or grenze)
 
 
-def _konsens_karte(lauf_dir):
-    """Szenario-Konsens je Vorratsbild aus <lauf_dir>/vorrat.jsonl, falls die
-    Vorrats-Bewertung schon lief. Der Konsens ist das Szenario-Prinzip als
-    Filter (core/vorrat.py, Messbasis 20.08.): echte Gesichter EINES Durchgangs
-    aehneln einander ueber die Kameras, Laub und Rauschen schliessen an
-    niemanden an. Phase 1 liest ihn hier mit, statt ihn zweimal zu rechnen.
-    Fehlt die Datei (Bewertung lief noch nicht), gilt: nicht gemessen, kein
-    Ausschluss — dieselbe Regel wie in vorrat.angebote_bewerten.
-    -> {basisname der Vorratsdatei: konsens|None}"""
-    p = os.path.join(lauf_dir, "vorrat.jsonl")
-    aus = {}
-    if not os.path.exists(p):
-        return aus
-    try:
-        with open(p, encoding="utf-8") as f:
-            for zeile in f:
-                try:
-                    z = json.loads(zeile)
-                except Exception:
-                    _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
-                    continue
-                d = z.get("datei_v")
-                if d:
-                    aus[os.path.basename(d)] = z.get("konsens")
-    except OSError:
-        _logbuch.swallowed(_log, _logbuch.WARNING, "returning {}")
-        return {}
-    return aus
-
-
-def s_kandidaten_lesen(lauf_dir, eids, sieb=None):
+def s_kandidaten_lesen(lauf_dir, eids, sieb=None, vek=None):
     """Anker-taugliche Zeilen aus den Kandidaten-Dateien der Events.
-    id = Bild-Dateiname ohne .jpg (stabil, kollisionsfrei, ueberlebt Resume).
+    id = ref_id des Satzes (stabil, kollisionsfrei, ueberlebt Resume; E3a-1c).
+    vek = {ref_id: Fingerabdruck} der Saetze des Laufs (core.lernlauf.fingerabdruecke, Lese-Stufe a);
+    er reist nur im Speicher als `emb` mit (fuer Stufe 1), nie auf Platte. Eine Zeile, deren
+    Satz keinen lesbaren Fingerabdruck hat, wird GEZAEHLT (ohne_fingerabdruck), nie still verloren.
     .83 (Widerleger): fehlende Dateien und unlesbare Zeilen werden GEZAEHLT
     zurueckgegeben, nie still uebersprungen (269 fehlende Dateien waren unsichtbar;
     EINE abgeschnittene Zeile toetete die Phase dauerhaft — Resume lief in denselben
     Fehler). Dateiname ueber core.ernte.kandidaten_pfad: Schreiber und Leser teilen
     EINE Namensregel (_eid_safe).
 
-    sieb=None -> unveraendertes Verhalten: nur s-Zeilen mit Crop.
+    sieb=None -> unveraendertes Verhalten: nur s-Zeilen mit Satz.
     sieb=Dict -> Phase 1 des intelligenten Lernens: der s-Flag entfaellt (er
     traegt eine eigene, strengere Detektionslatte, die mit Qualitaet nichts zu
-    tun hat), stattdessen zaehlt die Stufe GUT plus Winkelfenster. Und als
-    Bildquelle gilt dann AUCH das Vorratsbild: am frischen Prod-Lauf gemessen
-    haben 255 von 329 Sieb-Treffern (77 %) nur ein Vorratsbild und keinen Crop,
-    ueber den Gesamtbestand 1311 von 3396 — ohne diese zweite Quelle saehe die
-    Gruppenbildung ein Fuenftel des guten Materials.
+    tun hat), stattdessen zaehlt die Stufe GUT plus Winkelfenster; genommen
+    werden die M-Zeilen mit Satz (bis E3a-1c: Zeilen mit Ausschnitt, und den
+    hatte seit .514 genau jede M-Zeile; ein Vorratsbild ohne Ausschnitt gab es
+    seitdem nicht mehr, deshalb ist dieser zweite Weg samt seiner
+    Konsens-Pruefung mit E3a-1c entfallen).
     -> (kands, fehlende_dateien, kaputte_zeilen, gesiebte_zeilen,
-        zeilen_ohne_person)"""
+        zeilen_ohne_person, zeilen_ohne_fingerabdruck)"""
     from core import ernte as _ern
     kands, fehlend, kaputt, gesiebt = [], 0, 0, 0
-    keine_person = 0
-    konsens = _konsens_karte(lauf_dir) if sieb else {}
-    k_min = (sieb or {}).get("konsens_min")
+    keine_person = ohne_fp = 0
     for eid in eids:
         pfad = _ern.kandidaten_pfad(lauf_dir, eid)
         if not os.path.exists(pfad):
@@ -233,15 +198,15 @@ def s_kandidaten_lesen(lauf_dir, eids, sieb=None):
                 except Exception:
                     kaputt += 1
                     continue
-                if sieb is None:
-                    if z.get("s") and z.get("datei"):
-                        z["id"] = os.path.basename(z["datei"])[:-4]
-                        z["bildquelle"] = "crop"
-                        kands.append(z)
+                if not (z.get("s") if sieb is None else z.get("m")) or not z.get("ref_id"):
+                    continue        # ohne Satz kann die Gruppe nichts zeigen
+                v = (vek or {}).get(z["ref_id"])
+                if v is None:
+                    ohne_fp += 1
                     continue
-                quelle, rel = _bildquelle(z)
-                if quelle is None:
-                    continue        # ohne Bild kann die Gruppe nichts zeigen
+                if sieb is None:
+                    kands.append(_kandidat(z, v))
+                    continue
                 if sieb.get("fd_wache") and _fehldetektion(z):
                     # Eigener Topf, NICHT "gesiebt": was die Signatur trifft, ist
                     # kein schwaches Bild einer Person, sondern eine Hecke, ein
@@ -254,18 +219,18 @@ def s_kandidaten_lesen(lauf_dir, eids, sieb=None):
                 if not _sieb_besteht(z, sieb):
                     gesiebt += 1
                     continue
-                if k_min and quelle == "vorrat":
-                    kw = konsens.get(os.path.basename(rel))
-                    # None = nicht gemessen (Bewertung lief nicht, oder einziger
-                    # Frame im Durchgang) -> KEIN Ausschluss, wie in core/vorrat.
-                    if kw is not None and float(kw) < float(k_min):
-                        gesiebt += 1
-                        continue
-                z["id"] = os.path.basename(rel)[:-4]
-                z["bildquelle"] = quelle
-                z["datei"] = rel    # EIN Feld traegt den Pfad, bildquelle die Route
-                kands.append(z)
-    return kands, fehlend, kaputt, gesiebt, keine_person
+                kands.append(_kandidat(z, v))
+    return kands, fehlend, kaputt, gesiebt, keine_person, ohne_fp
+
+
+def _kandidat(z, v):
+    """Eine Kandidatenzeile als Anker-Kandidat: Kennung, Bildquelle und Fingerabdruck (nur im Speicher).
+    -> dieselbe Zeile, ergaenzt"""
+    z["id"] = z["ref_id"]
+    z["datei"] = z["ref_id"]            # Mitglieds-Kennung (Kopf BILDQUELLE_SATZ), kein Pfad
+    z["bildquelle"] = BILDQUELLE_SATZ
+    z["emb"] = [float(x) for x in v]
+    return z
 
 
 def zentroid(embs):
@@ -458,11 +423,12 @@ def anker_datensaetze(cluster, margen, lauf_id, schwellen, version):
     id_von_idx = {i: f"{lauf_id}-A{nr}" for nr, i in enumerate(reihen, start=1)}
     for nr, i in enumerate(reihen, start=1):
         c, m = cluster[i], margen[i]
-        # E4a-Datengrundlage (Widerleger-MUSS 01.08.): bbox/ts/emb wandern MIT in
-        # den Datensatz (die Kandidaten-Zeilen tragen sie laengst) — physischer
-        # Dedup-Schluessel, Zeitbezug und Fast-Duplikat-Pruefung rechnen damit
-        # rein lesend am Store, ohne Rueckgriff auf den trash-gefaehrdeten
-        # Kandidaten-Ordner. modell fuettert den Bedingungs-Tag der Benennung.
+        # E4a-Datengrundlage (Widerleger-MUSS 01.08.): bbox/ts wandern MIT in
+        # den Datensatz — physischer Dedup-Schluessel und Zeitbezug rechnen damit
+        # rein lesend am Store. Der Fingerabdruck wandert seit E3a-1c NICHT mehr
+        # mit (J1): das Mitglied traegt die ref_id seines Satzes, Fast-Duplikat-
+        # Pruefung und Zuweisung lesen ihn ueber core/refquelle (Lese-Stufe a).
+        # modell fuettert den Bedingungs-Tag der Benennung.
         # MESSKARTE (.513, Etappe 1): die Karte des Kandidaten wandert als
         # GANZES ins Mitglied (core/messkarte.uebernehmen, s. unten am Ende
         # des Dicts). Der Kommentar an den Guete-Feldern weiter unten nennt
@@ -477,7 +443,7 @@ def anker_datensaetze(cluster, margen, lauf_id, schwellen, version):
                        "kamera": mm["kamera"], "front": mm["front"], "sharp": mm["sharp"],
                        "det": mm["det"], "kante": mm["kante"], "pose": mm["pose"],
                        "bbox": mm.get("bbox") or [], "ts": mm.get("ts", 0),
-                       "emb": mm.get("emb") or [], "modell": mm.get("modell", ""),
+                       "ref_id": mm.get("ref_id"), "modell": mm.get("modell", ""),
                        # .308: Vorrats-Messwerte wandern MIT (Norm-Weg der
                        # Sichtungs-Vorauswahl/Reihung liest sie hier; Alt-Anker
                        # ohne norm urteilen weiter ueber die Pixel-Latte).
@@ -496,12 +462,10 @@ def anker_datensaetze(cluster, margen, lauf_id, schwellen, version):
                        # Bewusst NICHT in _MITGLIED_PFLICHT: Alt-Zeilen im
                        # anker.jsonl muessen gueltig bleiben.
                        "luma": mm.get("luma"),
-                       # Phase 1 des intelligenten Lernens darf auch Vorratsbilder
-                       # aufnehmen (Rand-Ausschnitt statt engem Crop). Die Anzeige
-                       # holt beide ueber VERSCHIEDENE Routen (/lernlauf/crop/ bzw.
-                       # /lernlauf/vorrat/), deshalb muss das Mitglied seinen Topf
-                       # mitfuehren. Fehlt das Feld (Alt-Anker), gilt "crop" —
-                       # genau das, was diese Zeilen frueher immer waren.
+                       # Der Topf des Bildes: seit E3a-1c "satz" (Profilbild des
+                       # Satzes ueber Lese-Stufe d, Route /lernlauf/satz/); Alt-Anker
+                       # tragen "crop"/"vorrat" (Dateien im Lauf-Ordner). Fehlt
+                       # das Feld (ganz alte Anker), gilt "crop".
                        "bildquelle": mm.get("bildquelle") or "crop",
                        # .377 KALIBRIER-FUNKTION: die beiden Guete-Masse der
                        # Ernte wandern MIT — dieselbe Falle wie bei norm in
@@ -645,15 +609,19 @@ def zuweisung_pruefen(saetze, refs, sim_min, marge_min, einigkeit_min):
 
     Der Zentroid wird NEU aus den Mitglieder-Embeddings gebildet, nicht aus
     satz["zentroid"]: das ist ein Zentroid von Durchgangs-Zentroiden und
-    gewichtet kurze Durchgaenge gleich wie lange.
+    gewichtet kurze Durchgaenge gleich wie lange. Seit E3a-1c (J1) kommen die
+    Mitglieder-Embeddings ueber die ref_id aus core/refquelle (Lese-Stufe a je
+    Lauf, Datenort ueber core.lernlauf.datenort_cfg); Alt-Anker tragen sie noch
+    als Feld emb.
     -> Liste von Vorschlaegen (dict je Gruppe, auch die abgelehnten — der
        Aufrufer entscheidet, was er schreibt und was er nur berichtet)."""
     aus = []
     if not refs:
         return aus
     personen = sorted(refs)
+    je_lauf = {}
     for satz in saetze:
-        embs = [m.get("emb") for m in (satz.get("mitglieder") or []) if m.get("emb")]
+        embs = mitglied_vektoren(satz, je_lauf)
         if not embs:
             continue
         M = np.asarray(embs, dtype=np.float32)
@@ -703,6 +671,20 @@ def zuweisung_pruefen(saetze, refs, sim_min, marge_min, einigkeit_min):
                     "marge": round(marge, 3), "einigkeit": round(einigkeit, 2),
                     "bilder": int(len(M)), "sicher": bool(sicher)})
     return aus
+
+
+def mitglied_vektoren(satz, je_lauf):
+    """Die Fingerabdruecke der Mitglieder eines Anker-Satzes: ueber die ref_id aus core/refquelle
+    (je Lauf einmal gelesen, je_lauf merkt sie), bei Alt-Ankern das Feld emb. -> Liste (Mitglieder-Reihenfolge)."""
+    mitglieder = satz.get("mitglieder") or []
+    if not any(m.get("ref_id") for m in mitglieder):
+        return [m["emb"] for m in mitglieder if m.get("emb")]
+    from core import lernlauf as _ll
+    lid = str((satz.get("lauf") or {}).get("lauf_id") or "")
+    if lid not in je_lauf:
+        je_lauf[lid] = _ll.fingerabdruecke(_ll.datenort_cfg(), lid)["vek"]
+    vek = je_lauf[lid]
+    return [[float(x) for x in vek[m["ref_id"]]] for m in mitglieder if m.get("ref_id") in vek]
 
 
 def anker_phase_fahren(data_dir, lauf_dir, lauf_id, events_liste, schwellen, clusterer,
@@ -768,17 +750,20 @@ def anker_phase_fahren(data_dir, lauf_dir, lauf_id, events_liste, schwellen, clu
                 # Messung laufen weiter den Alt-Weg (Altlauf-Kompatibilitaet,
                 # _guete_besteht oben).
                 "kat_latten": kat_latten,
-                # Der Szenario-Konsens des Vorrats wirkt mit, wo er gemessen
-                # ist — dieselbe Schwelle, keine zweite Zahl.
-                "konsens_min": schwellen.get("vorrat_konsens_min"),
                 "fd_wache": bool(schwellen.get("anker_qualitaet_fd_wache", True))}
     dg = durchgaenge_bilden(events_liste, schwellen["szenario_gap_min"])
+    # E3a-1c (J1): die Fingerabdruecke der Saetze dieses Laufs als Matrix (Lese-Stufe a, Filter
+    # Status kandidat und Lauf-ID), EINMAL je Phase; die Zeilen tragen nur die ref_id.
+    from core import lernlauf as _ll
+    vek = _ll.fingerabdruecke(_ll.datenort_cfg(data_dir), lauf_id, status="kandidat")["vek"]
     alle_v, s_ges = [], 0
     fehlend = kaputt_zeilen = degeneriert = gesiebt_ges = keine_person_ges = 0
+    ohne_fp_ges = 0
     dg_mit_material = 0
     for i, d in enumerate(dg):
-        kands, dfehl, dkaputt, dgesiebt, dkeine = s_kandidaten_lesen(
-            lauf_dir, d["eids"], sieb=sieb)
+        kands, dfehl, dkaputt, dgesiebt, dkeine, dohne = s_kandidaten_lesen(
+            lauf_dir, d["eids"], sieb=sieb, vek=vek)
+        ohne_fp_ges += dohne
         s_ges += len(kands)
         gesiebt_ges += dgesiebt
         keine_person_ges += dkeine
@@ -852,6 +837,12 @@ def anker_phase_fahren(data_dir, lauf_dir, lauf_id, events_liste, schwellen, clu
         basis["unreadable candidate lines"] = kaputt_zeilen
     if degeneriert:
         basis["degenerate embeddings skipped"] = degeneriert
+    if ohne_fp_ges:
+        # E3a-1c: eine Zeile mit ref_id, deren Satz keinen lesbaren Fingerabdruck
+        # hat (Satz fehlt, Pruefsumme, anderer Status) — nie still.
+        basis["lines without a readable set fingerprint"] = ohne_fp_ges
+        log.error(f"anchor stage (run {lauf_id}): {ohne_fp_ges} candidate line(s) without a "
+                  f"readable fingerprint in their reference set — left out of the grouping")
     if sieb is not None:
         # Verlust NIE still (Fehlerklasse 'stiller Verlust'): ohne diese Zeile
         # saehe der Nutzer nur weniger Gruppen und suchte die Ursache bei den Kameras.

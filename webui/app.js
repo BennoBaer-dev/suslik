@@ -310,7 +310,7 @@ function vollRestore(input) {
   input.value = '';
 }
 
-/* Enrollment (AP4): decide on a suggestion / add a stranger as a person / upload */
+/* Enrollment (AP4): decide on a suggestion / upload */
 function enroll(id, aktion, person, el) {
   fetch('/enroll', {method: 'POST',
                     body: JSON.stringify({id: id, aktion: aktion, person: person})})
@@ -323,13 +323,6 @@ function enroll(id, aktion, person, el) {
         alert(TT('js.enroll.fehler', 'Error: {msg}', {msg: d.msg}));
       }
     });
-}
-function enrollFremd(id, el) {
-  var sel = document.getElementById('sel-' + id),
-      neu = document.getElementById('neu-' + id),
-      person = (neu && neu.value.trim()) || (sel && sel.value) || '';
-  if (!person) { alert(TT('js.enroll.person_fehlt', 'Choose a person or enter a new one.')); return; }
-  enroll(id, 'aufnehmen', person, el);
 }
 function uploadRef() {
   var neu = document.getElementById('up-neu'),
@@ -520,7 +513,7 @@ function syncAuswahlAlle(an) {
 }
 /* weg=1: deselect and remember · weg=0: put it back on the candidate list */
 function syncAbwahl(btn, weg) {
-  var d = {}, paar = [[btn.dataset.person, btn.dataset.datei]];
+  var d = {}, paar = [[btn.dataset.person, btn.dataset.ref]];   /* E3b-3a: [Person, ref_id] */
   d[weg ? 'abwahl' : 'zurueck'] = paar;
   /* .137: der Ruecksetz-Text kommt aus data-label — derselbe Knopf heisst auf der
      Entscheidungs-Kachel 'respect the deletion', nicht 'skip'. */
@@ -545,7 +538,7 @@ function syncWiederAnbieten(btn) {
   var zurueck = btn.dataset.label || TT('js.syncauswahl.wieder', 'offer again');
   btn.disabled = true; btn.textContent = TT('js.syncauswahl.zurueck_laeuft', 'putting it back …');
   fetch('/sync_wieder_anbieten', {method: 'POST',
-        body: JSON.stringify({bilder: [[btn.dataset.person, btn.dataset.datei]]})})
+        body: JSON.stringify({bilder: [[btn.dataset.person, btn.dataset.ref]]})})
     .then(function (r) { return r.json(); })
     .then(function (dd) {
       if (dd && dd.ok) { location.reload(); return; }
@@ -557,7 +550,7 @@ function syncWiederAnbieten(btn) {
 function syncAuswahlStart(btn) {
   var cbs = document.querySelectorAll('.sa-cb'), sel = [], i;
   for (i = 0; i < cbs.length; i++) {
-    if (cbs[i].checked) sel.push([cbs[i].dataset.person, cbs[i].dataset.datei]);
+    if (cbs[i].checked) sel.push([cbs[i].dataset.person, cbs[i].dataset.ref]);
   }
   var st = document.getElementById('sa-status');
   if (!sel.length) { if (st) st.textContent = TT('js.syncauswahl.nichts_klein', 'nothing selected'); return; }
@@ -702,11 +695,12 @@ function gesImport(btn) {
     });
 }
 
-/* Check (19.07.): remove a single reference image / recompute reference QC */
-function refEntfernen(person, datei, btn) {
+/* Check (19.07.): remove a single reference image / recompute reference QC.
+   E3b-2a (reference source): the gallery hands over the ref_id of the set. */
+function refEntfernen(person, refId, btn) {
   if (!confirm(TT('js.ref.frage', 'Remove reference image of {person}?', {person: person}))) return;
   btn.disabled = true; btn.textContent = TT('js.status.entfernen', 'removing …');
-  fetch('/ref_entfernen', {method: 'POST', body: JSON.stringify({person: person, datei: datei})})
+  fetch('/ref_entfernen', {method: 'POST', body: JSON.stringify({person: person, ref_id: refId})})
     .then(function (r) { return r.json(); })
     .then(function (d) {
       btn.textContent = d.msg;
@@ -718,7 +712,7 @@ function ladeBalken(el, i, n, z) {
   /* .311 (User 21.08., Lernlauf-Karte 'Gruppe 2 von 3': 'hier koennte man auch
      so einen kleinen Balken bauen'): schmaler Fortschrittsbalken + Zaehler
      hinter einem Warte-Text — fuer Antworten mit laden + i/n/zustand
-     (refcache-Neuaufbau, Pass-Ernte). Haengt sich an das Element an; der
+     (Pass-Ernte). Haengt sich an das Element an; der
      Aufrufer setzt vorher den Text (textContent loescht alte Balken mit).
      Das Auftritte-Blatt malt seit .345 stattdessen den grossen
      Fortschritts-Block (lbBlock, inline und eigenstaendig); hier bleibt der
@@ -834,8 +828,9 @@ function usAlle(cls) {
 function refBatchLoeschen(btn) {
   var cbs = document.querySelectorAll('.us-cb:checked'), items = [];
   for (var i = 0; i < cbs.length; i++) {
+    /* E3b-2b: der Auswahlwert traegt Person und ref_id (routes/qualitaet.py) */
     var v = cbs[i].value.split('|');
-    items.push({person: v[0], datei: v.slice(1).join('|')});
+    items.push({person: v[0], ref_id: v.slice(1).join('|')});
   }
   if (!items.length) { alert(TT('js.auswahl.bild_fehlt', 'Please select at least one image.')); return; }
   if (!confirm(TT('js.ref.batch_frage', 'Delete {n} image(s)?', {n: items.length}))) return;
@@ -855,7 +850,7 @@ function refBatchLoeschen(btn) {
     if (eigene >= bn && !confirm(TT('js.ref.batch_alle_frage',
                                     'That is ALL {n} reference image(s) of {person}. ' +
                                     'Without a reference, {person} can no longer be recognised. ' +
-                                    'The images move to the trash folder and can be moved back. Continue?',
+                                    'The reference sets move to the archive (nothing is deleted). Continue?',
                                     {n: eigene, person: bp}))) return;
   }
   btn.disabled = true; btn.textContent = TT('js.status.loeschen', 'deleting …');
@@ -996,17 +991,50 @@ function unbZustand() {
   var l = unbListe();
   return {sort: (l && l.dataset.sort) || '', f: (l && l.dataset.filter) || ''};
 }
+/* Gruppe „Vermutlich P“ (Bauplan analysen/bauplan_aehnlich.md Entscheid 19): die Antwort nennt den neuen Platz einer
+   Identitaet — Liste (kachel), Gruppe (gruppe: person, html, rahmen) oder weg. Wechselt eine Kachel zwischen Gruppe und
+   Liste, zieht sie um; fehlt der Zielrahmen auf der Seite, laedt die Seite neu. Leere Gruppen fallen weg. */
+function unbGruppe(person, rahmen) {
+  var gs = document.querySelectorAll('.uk-aeh-p'), i;
+  for (i = 0; i < gs.length; i++) {
+    if (gs[i].dataset.person === person) return gs[i].querySelector('.uk-aeh-liste');
+  }
+  var block = document.getElementById('uk-gruppen');
+  if (!block || !rahmen) return null;
+  block.insertAdjacentHTML('beforeend', rahmen);
+  return unbGruppe(person, null);
+}
+function unbUmziehen(u, html, ziel) {
+  var alt = document.getElementById('uk-' + u);
+  if (alt && alt.parentNode === ziel) { alt.outerHTML = html; return; }
+  if (!ziel) { location.reload(); return; }
+  if (alt) alt.parentNode.removeChild(alt);
+  ziel.insertAdjacentHTML('afterbegin', html);
+}
+function unbGruppenRaeumen() {
+  document.querySelectorAll('.uk-aeh-p').forEach(function (g) {
+    if (!g.querySelector('.uk')) g.parentNode.removeChild(g);
+  });
+  var b = document.getElementById('uk-gruppen');
+  if (b && !b.querySelector('.uk-aeh-p') && !b.querySelector('.hk-aeh-fehler')) b.parentNode.removeChild(b);
+}
 function unbAnwenden(d) {
   if (d.kachel) {
     Object.keys(d.kachel).forEach(function (u) {
       var alt = document.getElementById('uk-' + u);
-      if (alt) { alt.outerHTML = d.kachel[u]; }
+      if (alt && alt.closest('.uk-aeh-p')) { unbUmziehen(u, d.kachel[u], unbListe()); }
+      else if (alt) { alt.outerHTML = d.kachel[u]; }
     });
   }
+  Object.keys(d.gruppe || {}).forEach(function (u) {
+    var g = d.gruppe[u];
+    unbUmziehen(u, g.html, unbGruppe(g.person, g.rahmen));
+  });
   (d.weg || []).forEach(function (u) {
     var alt = document.getElementById('uk-' + u);
     if (alt) alt.parentNode.removeChild(alt);
   });
+  unbGruppenRaeumen();
   var a = document.getElementById('uk-anker');
   if (a && typeof d.offen === 'number') {
     a.textContent = unbTxt(a, {offen: d.offen, gesamt: d.gesamt});
@@ -1047,6 +1075,14 @@ function unbObjekt(uid, an, btn) {
     else unbMeldung(uid, d.msg);
   });
 }
+/* Urteil „nicht P“ (Bauplan analysen/bauplan_aehnlich.md Entscheid 20): Kennung und Person stehen als data-Attribute am
+   Knopf (nie im JS-Text); an = setzen, sonst zuruecknehmen. Die Antwort nennt den neuen Platz der Identitaet. */
+function unbNichtP(btn, an) {
+  var uid = btn.dataset.uid;
+  unbSenden('/unbekannt_nicht_p', {uid: uid, person: btn.dataset.person, an: an}, btn, function (d) {
+    if (!d.ok && btn) { btn.disabled = false; btn.textContent = d.msg; }
+  }).then(function (d) { if (d && d.ok) unbMeldung(uid, d.msg); });
+}
 /* Gruppen-Auswahl fuer das n:1-Zusammenlegen (ersetzt die Merge-Auswahllisten
    je Kachel: die trugen bei 95 Gruppen 9056 <option>-Elemente). */
 function unbGewaehlt() {
@@ -1081,10 +1117,29 @@ function unbHaken(uid) {
 function unbTick(el) {
   var c = el.closest('.uk'); if (!c) return;
   var uid = c.dataset.uid, b = document.getElementById('teil-' + uid);
-  if (!b) return;
+  var nb = document.getElementById('nein-' + uid);
   var n = unbHaken(uid).length;
+  if (nb) {                       /* Sammelbecken: „nicht P“ der Auswahl (Bauplan aehnlich Entscheid 26) */
+    nb.hidden = n < 1;
+    nb.textContent = unbTxt(nb, {n: n, person: nb.dataset.person});
+  }
+  if (!b) return;
   b.hidden = n < 1;
   b.textContent = unbTxt(b, {n: n});
+}
+/* „Nicht P“ einer Auswahl am Sammelbecken „ähnlich P“ (Bauplan analysen/bauplan_aehnlich.md Entscheid 26): die
+   angehakten Bilder werden zusammen eine neue Unbekannte mit dem Urteil; die Person kennt der Server. Die neue Karte
+   kommt oben in die Liste, wenn die Seite eine hat. */
+function unbNichtPTeil(uid, btn) {
+  var ids = unbHaken(uid);
+  if (!ids.length) return;
+  unbSenden('/unbekannt_nicht_p_auswahl', {uid: uid, ids: ids}, btn, function (d) {
+    var l = unbListe();
+    if (d.ok && d.neu && d.kachel && d.kachel[d.neu] && l && !document.getElementById('uk-' + d.neu)) {
+      l.insertAdjacentHTML('afterbegin', d.kachel[d.neu]);
+    }
+    if (!d.ok && btn) { btn.disabled = false; btn.textContent = d.msg; }
+  }).then(function (d) { if (d && d.ok) unbMeldung(uid, d.msg); });
 }
 function unbBenennenSenden(uid, btn, ids) {
   var nm = document.getElementById('nm-' + uid), p = nm && nm.value.trim();
@@ -1207,13 +1262,14 @@ function setupSpeichern(btn) {                          // Setup-Wizard committe
    konsistenten Karten-Link aufs Besucher-Profil (/unbekannte#uk-...). */
 
 /* ── Ganze Person loeschen (requirement: deleting a person removes the NAME, not just one image) ──────
-   Serverseitig reversibel (wandert nach <data>/trash/). Doppelte Bestaetigung mit
+   Serverseitig wird nichts geloescht: jeder Referenz-Satz der Person wandert ins Archiv
+   state/archiv/refquelle/ (I1, Bauplan Referenz-Quelle). Doppelte Bestaetigung mit
    getipptem Namen: das ist die einzige Aktion, die eine komplette Referenzbibliothek
    einer Person auf einmal entfernt — ein Fehlklick darf dafuer nicht reichen. */
 function personLoeschen(person, btn) {
   var tipp = prompt(TT('js.person.loesch_frage',
                        'Delete ALL references and the name "{person}"?\n' +
-                       'The images move to the trash folder (recoverable).\n\n' +
+                       'The reference sets move to the archive (nothing is deleted).\n\n' +
                        'Type the name to confirm:', {person: person}));
   if (tipp === null) return;
   if (tipp.trim() !== person) { alert(TT('js.person.name_falsch', 'Name did not match — nothing deleted.')); return; }

@@ -16,7 +16,7 @@ import html
 import json
 
 from core.benennung import bestes_zuerst
-from core.lernlauf import PHASEN, UNTERBROCHEN
+from core.lernlauf import PHASEN, UNTERBROCHEN, bild_url
 from core.sprache import t, t_n
 from webui.bausteine import js_literal, lauffluss_stil
 
@@ -980,8 +980,8 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
                            kat_latten=kat_latten)
         bild = ""
         if mg and lid_g:
-            fn = html.escape(str(mg[0].get("datei", "")).rsplit("/", 1)[-1])
-            bild = (f'<img src="/lernlauf/crop/{lid_g}/{fn}" '
+            # E3a-1c: Bild aus dem Satz (ref_id) oder, bei alten Laeufen, aus crops/.
+            bild = (f'<img src="{html.escape(bild_url(mg[0].get("datei"), lid_g))}" '
                     'loading="lazy" alt="">')
         stg = g.get("status")
         cls = ("done" if stg == "uebernommen" else
@@ -1123,7 +1123,7 @@ def lauf_seite(zustand, anker_zahl=0, anker_kaputt=0, gruppen=None, adoptiert=No
                 return (f'<label class="{klasse}">'
                         f'<input type="checkbox" name="lfsel" value="{fn}"'
                         f'{" checked" if checked else ""} onchange="lfZaehl()">'
-                        f'<img src="/lernlauf/crop/{lid}/{fn}" loading="lazy">'
+                        f'<img src="{html.escape(bild_url(s.get("datei"), lid))}" loading="lazy">'
                         f'<a class="lf-zwclip" href="/video/{ev}" '
                         f'title="{t("lernwizard.zw.attr_clip")}">&#9654;</a>{grund}</label>')
 

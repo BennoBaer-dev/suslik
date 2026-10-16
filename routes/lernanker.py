@@ -14,6 +14,7 @@ zu Funktionen (t() zur Render-Zeit, nie beim Import)."""
 import html
 import json
 
+from core.lernlauf import bild_url
 from core.sprache import t
 
 CROPS_JE_CLUSTER = 12      # Anzeige-Deckel je Karte (74 Cluster x 12 = tragbare Seite)
@@ -71,9 +72,10 @@ def _thumb(m, lauf_id, dim, grund=None):
     Eine Ueberschrift, die etwas behauptet, das darunter nicht steht, ist genau
     die Fehlerklasse 'falsche Darstellung'. .373: grund ist ein fertiger
     Satz — die Marke aus der Rechnung uebersetzt _grund_text VORHER."""
-    name = html.escape(str(m.get("datei", "")).rsplit("/", 1)[-1])
     ev = html.escape(str(m.get("event", "")))
-    bild = (f'<img src="/lernlauf/crop/{html.escape(lauf_id)}/{name}" loading="lazy" '
+    # E3a-1c: Bild aus dem Satz (ref_id) oder, bei alten Laeufen, aus crops/.
+    url = html.escape(bild_url(m.get("datei"), lauf_id))
+    bild = (f'<img src="{url}" loading="lazy" '
             f'class="anker-thumb{" gedimmt" if dim else ""}">')
     if grund:
         bild += f'<span class="anker-grund">{html.escape(grund)}</span>'
@@ -97,7 +99,7 @@ def _thumb_w(m, lauf_id, dim, checked, grund=None):
                                    kamera=m.get("kamera", "?"), det=m.get("det")))
     return (f'<label class="anker-w{" gedimmt" if dim else ""}" title="{titel}">'
             f'<input type="checkbox" name="sel" value="{name}"{" checked" if checked else ""}>'
-            f'<img src="/lernlauf/crop/{html.escape(lauf_id)}/{name}" loading="lazy" '
+            f'<img src="{html.escape(bild_url(m.get("datei"), lauf_id))}" loading="lazy" '
             f'class="anker-thumb">'
             + ("" if m.get("quelle") == "datei" else      # .33x: s. _thumb
                f'<a class="anker-clip" href="/video/{ev}" title="{t("lernanker.kachel.attr_klick")}">&#9654;</a>')

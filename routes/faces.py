@@ -21,6 +21,7 @@ Abschnitts-Kommentar in core/texte/en.py (der dim-Einleitungssatz mit
 import html
 import urllib.parse
 
+from core.lernlauf import bild_url
 from core.sprache import t
 
 
@@ -30,17 +31,18 @@ def _q(s):
 
 def render(personen, n_bilder, n_unbekannt, lern_offen, qs_stand=None):
     """-> Seiten-INHALT /faces.
-    personen    = [(name, avatar_datei), ...] (Avatar = juengstes aktives
-                  Referenzbild laut refs_meta, Fallback erste Datei)
-    n_bilder    = Gesamtzahl Referenzbilder
+    personen    = [(name, avatar_ref_id), ...] (Avatar = Profilbild des
+                  Satzes mit der juengsten aktiven Bindung, Referenz-Quelle
+                  Lese-Stufe b; Bild ueber /lernlauf/satz/<ref_id>, E3b-2a)
+    n_bilder    = Gesamtzahl Referenzen
     n_unbekannt = Zahl persistenter Unbekannt-Identitaeten
     lern_offen  = Zahl offener Lern-Vorschlaege (0 = nichts zu tun)"""
     avatare = "".join(
         # .507 B4: ?person= statt #-Anker (der fand nie eine Sprungmarke).
         f'<a class="fc-avatar" href="/gesichter?person={_q(p)}" title="{html.escape(p)}">'
-        f'<img src="/refs/{_q(p)}/{_q(d)}" alt="" loading="lazy">'
+        f'<img src="{html.escape(bild_url(rid, None))}" alt="" loading="lazy">'
         f'<span>{html.escape(p)}</span></a>'
-        for p, d in personen)
+        for p, rid in personen)
 
     # .280 (User 18.08.: 'Button nach oben, damit nichts unten wegrutscht —
     # oben gleichmaessig vom Look and Feel; Texte weg oder deutlich kuerzer,

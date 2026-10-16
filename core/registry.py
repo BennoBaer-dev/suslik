@@ -406,6 +406,57 @@ def tuer_deckel_werk(variante):
     return sample_deckel_werk(variante)
 
 
+# ---------------------------------------------------------------- Unbekannt-Stapel des Workers
+# UNBEKANNT-STAPEL (Bauplan analysen/bauplan_fix_0113.md, Entscheid 6, Stufe F4; Konzept
+# analysen/konzept_fix_0113.md Abschnitt 4.4): der Bildvorrat des Workers buendelt die fremden Gesichter
+# eines Ereignisses zu Gruppen (worker_kern.Bildvorrat). Schluessel = die Config-Namen.
+#   unbekannt_latte 0,35: GEMESSEN am 10.10.2026 am Bestand des Eigentuemers und des Feldtesters
+#     (analysen/konzept_unbekannt_weg.md Abschnitt 5): ab 0,35 auf beiden Anlagen kein Paar zweier
+#     verschiedener Personen; die Grenze „sicher andere Person" lag gemessen bei 0,34.
+#   unbekannt_bilder_je_gruppe 5 und unbekannt_rahmen_max 5: VORSCHLAEGE, nicht gemessen (Bauplan
+#     Entscheid 6); was der Bilder-Deckel an Speicher kostet (Deckel mal Rechen-Straenge), misst Stufe 4.
+# NUR WERKSWERT, NIE UEBERSTEUERUNG (wie SAMPLE_DECKEL_WERK): gezogen wird die Tabelle an der EINEN Stelle, an
+# der der Schema-Default entsteht (verifyd.load_config); yaml und Config-Store liegen darueber.
+UNBEKANNT_WERK = {
+    "unbekannt_latte": 0.35,
+    "unbekannt_bilder_je_gruppe": 5,
+    "unbekannt_rahmen_max": 5,
+}
+
+
+# ---------------------------------------------------------------- Gruppe „ähnlich“
+# AEHNLICH (Bauplan analysen/bauplan_aehnlich.md Fassung 2, Entscheid 6, Stufe AE1; Eigentuemer 15.10.2026 09:06:43
+# „Das machen wir nachher über die Config-Datei, dass das nicht fest im Code ist“; Fassung 4, Entscheid 11): die drei
+# Grenzen der Regel „ähnlich zu P“ in core/aehnlich.py. Schluessel = die Config-Namen.
+#   aehnlich_latte 0,30 und aehnlich_abstand 0,10: GERECHNET an den Referenzen (backups/aehnlich_rechnung/,
+#     aehnlich_ergebnis.txt Zeilen „vorschlag+0.10“): mit 0,30/0,10 sagt die Regel bei einem Fremden in 0,9 bis 2,3 % der
+#     Gruppen mit 1 bis 5 Gesichtern faelschlich „ähnlich“ (bei 0,25: 1,2 bis 3,9 %). Die Testphase nach AE1 prueft sie.
+#   aehnlich_min_gesichter 2: ENTSCHIEDEN vom Eigentuemer (Bauplan Fassung 3, Entscheid 11; 15.10.2026 12:14:47 „Das
+#     nehme ich so ab mit den mindestens Anzahl von 2.“, 12:16:30 „sollte aber über die Config steuerbar sein.“): die Regel
+#     urteilt erst ab so vielen Gesichtern einer Identitaet; mit Mindestzahl 2 waeren im Altbestand 47 Identitaeten
+#     aehnlich (Bauplan, Abschnitt „Fassung 3“).
+# NUR WERKSWERT, NIE UEBERSTEUERUNG (wie UNBEKANNT_WERK): gezogen in verifyd.load_config; yaml und Config-Store liegen
+# darueber; alle drei wirken ohne Neustart (verifyd.Service.config_schreiben, _live_keys; die Wache des
+# Verbraucher-Fadens sieht geaenderte Grenzen binnen einer Minute, Entscheid 17).
+AEHNLICH_WERK = {
+    "aehnlich_latte": 0.30,
+    "aehnlich_abstand": 0.10,
+    "aehnlich_min_gesichter": 2,
+}
+
+
+# ---------------------------------------------------------------- MQTT-Stummwache
+# MQTT-STUMMWACHE (Bauplan analysen/bauplan_mqtt_stummwache.md, Entscheide 2 bis 4, Eigentuemer 14.10.2026 18:11:03
+# „Ok zu Fassung 1"; Anlass Vorfall O632: nach einem Wirt-Neustart sprach Frigate nicht mehr ueber MQTT, suslik merkte
+# es nicht). Werkswerte, kein Config-Schluessel (Entscheid 4). Leser: verifyd.Service (Trigger mqtt).
+#   stats_intervall_s 60: Frigates Werkswert von `mqtt.stats_interval`. Gilt nur, wenn GET /api/config beim Verbinden
+#     das Feld nicht liefert oder scheitert; am 14.10.2026 an der Frigate des Eigentuemers gelesen: 60.
+#   stumm_faktor 3: stumm heisst, laenger als 3 x Intervall keine `frigate/stats`, obwohl die Broker-Verbindung steht
+#     (Vorschlag des Bauplans, nicht gemessen).
+#   abgleich_s 300: Takt des Abgleichs (`Service.sweep` im Modus abgleich) im MQTT-Betrieb (Vorschlag, nicht gemessen).
+MQTT_STUMMWACHE = {"stats_intervall_s": 60, "stumm_faktor": 3, "abgleich_s": 300}
+
+
 # ------------------------------------------------- Beworbener EP je Variante (0.1.0.542)
 # WAS JEDES IMAGE VERSPRICHT — und woran die zwei neuen Gate-Stufen es messen.
 # DECKUNGS-VERTRAG wie SAMPLE_DECKEL_WERK/STUETZWERTE: je Variante genau ein Eintrag,
@@ -802,7 +853,9 @@ VERWURF_TEXT_PRAEFIX = "event.verwurf_grund."
 # DIE eine Bereichs-Quelle (QS-Ebenen-Regel: kein Streu-Literal): Inventar,
 # Handler (core/support.py), Doku-Deckung und QS-Stufe lesen ALLE von hier.
 # Nur Daten (Registry-Kopfvertrag: importfrei) — Wurzeln als Pfad-Tupel
-# relativ zu data_dir, Regex als String. HARTE Regel fuer die BENANNTEN
+# relativ zu data_dir, Regex als String; statt einer Wurzel kann ein
+# tar-Bereich eine "auswahl" nennen, die core/support beim zustaendigen
+# Modul liest (seit E3d: "refquelle"). HARTE Regel fuer die BENANNTEN
 # tar-Bereiche (Widerleger 18/36): config/, clips/, events/, live/ duerfen
 # dort NIE als Wurzel auftauchen (config/ traegt unmaskierte Alt-Store-
 # Kopien; der Rest sind Rohdaten-Riesen) — die QS-Stufe prueft das gegen
@@ -828,9 +881,17 @@ SUPPORT_BEREICHE = {
                            "plain-text values never leave the machine"},
     "logs":       {"art": "tar", "wurzel": ("logs",),
                    "text": "current + rotated service logs"},
-    "faces":      {"art": "tar", "wurzel": ("faces",),
-                   "text": "reference face images of the people you taught "
-                           "this system — personal data, hand out with care"},
+    # E3d (Bauplan analysen/bauplan_refquelle_einbau.md Stufe E3 Punkt 4, I4,
+    # Eigentuemer 08.10.2026 09:04:39): der Bereich faces liefert die
+    # Referenz-Quelle statt des Ordners faces/ — ueber den Schluessel
+    # "auswahl" dieselbe Sicherungs-Auswahl wie die Vollsicherung
+    # (core.refquelle.backup_paths: Katalog und Saetze mit Status referenz
+    # oder altbestand); core/support liest sie, die Registry bleibt importfrei.
+    "faces":      {"art": "tar", "auswahl": "refquelle",
+                   "text": "the reference source: the catalog and the "
+                           "reference sets (the same selection as the full "
+                           "backup) — images of real people you taught this "
+                           "system, personal data, hand out with care"},
     "lauf":       {"art": "tar", "wurzel": ("state", "lernlauf"),
                    "je_lauf": True,
                    "text": "one learning run (crops are face images)"},
@@ -859,7 +920,7 @@ SUPPORT_BEREICHE = {
                            "fetches one file or one folder (as tar.gz); "
                            "anything under config/ is served masked only"},
 }
-# DIE VIER AKTIONS-ENDPUNKTE stehen ABSICHTLICH NICHT in dieser Tabelle: sie
+# DIE FUENF AKTIONS-ENDPUNKTE stehen ABSICHTLICH NICHT in dieser Tabelle: sie
 # holen nichts, also haben sie weder Wurzel noch Groesse, und der Deckungs-
 # Vertrag (Inventar == Handler == QS-Liste, tools/qs.sh) gilt fuer BEREICHE.
 # Sie sind hier trotzdem benannt, damit wer die Support-API liest, sie findet:
@@ -869,6 +930,9 @@ SUPPORT_BEREICHE = {
 #       ({"an": 1|0, "dauer_min": N}), schaltet sich nach ihrer Frist selbst aus.
 #   POST /support/debug        — debug ein/aus ohne Neustart ({"an": 1|0});
 #       dasselbe Zeitfenster wie auf der Einstellungsseite (debug_dauer_h).
+#   POST /support/dateiprobe   — Dateiprobe ({} als Body): dieselben kleinen
+#       Dateioperationen im Dienst und in einem frischen Kindprozess, NFS-Zaehler
+#       des Datenordners, freier Platz; Groessen in SUPPORT_DATEIPROBE unten.
 #   POST /support/einspielen   — Ereignisse (erneut) durch die Erkennung
 #       schicken. Drei Wege, alle mit demselben Torwaechter:
 #         {"event": <id>}                  ein Ereignis der verbundenen Frigate,
@@ -899,6 +963,10 @@ SUPPORT_BEREICHE = {
 #       zweiten Eintrag (bis zum .505-Nachzug unerreichbar, s. support_api.md).
 #       Der Fortschritt steht danach unter /health ("rueckstau_url").
 #       Feldsemantik ausfuehrlich: analysen/support_api.md.
+# Support-Dateiprobe (Bauplan analysen/bauplan_support_dateiprobe.md, Entscheid 2, Eigentuemer 14.10.2026
+# 14:54:08): Bytes, die die Probe je Durchlauf an ihre Temp-Datei anhaengt (N), hoechstens so viele Eintraege
+# von clips/ je Durchlauf (M) und der Deckel des Kindprozesses in Sekunden (T). Leser: core/dateiprobe.
+SUPPORT_DATEIPROBE = {"anhang_bytes": 65536, "eintraege": 200, "kind_deckel_s": 60}
 # Ordner unter data_dir, deren Dateien NUR MASKIERT hinausgehen (der
 # Vollbaum-Bereich erreicht auch config/, und dort liegen neben config.json
 # die Alt-Store-Kopien config.json.vor_* — dieselben Secrets, anderer Name;

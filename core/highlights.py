@@ -12,7 +12,44 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.1.010"   # 0.1.1.006: Eigentuemer 30.09.2026 ~12:44 (Befehlsbuch): "der Bereich
+STAND = "0.1.1.021"   # 0.1.1.021: Eigentuemer 16.10.2026 18:48:02 (Befehlsbuch): "Ja, Nummer 0.1.1.021 vorbereiten:
+                      # Box unveraendert, CHANGELOG-Entwurf englisch und deutsch an mich". Der Eintrag 0.1.1.020
+                      # wandert unveraendert auf 0.1.1.021; neu im Code ist Stufe R6 (Startzeile Schritt 6, offene
+                      # Liste O650).
+                      # Davor 0.1.1.020: neuer Eintrag, Eigentuemer 16.10.2026 13:14:16 und 13:26:00 (Befehlsbuch;
+                      # Wortlaut und Herkunft am Eintrag 0.1.1.021 unten).
+                      # Davor 0.1.1.019: Eigentuemer 16.10.2026 09:06:26 (Befehlsbuch): "Ja, die Box wandert
+                      # unveraendert auf 0.1.1.019, Nummer erhoehen und committen." Gleicher Produktcode wie
+                      # .018; der Lauf der .018 (Debug im Testbett) wurde in Test 2 auf Wort des Eigentuemers
+                      # abgebrochen (offene Liste O646), neue Nummer je Lauf (Eigentuemer 15.10.2026 14:27:11).
+                      # Davor 0.1.1.018: Eigentuemer 15.10.2026 21:23:03 (Befehlsbuch): "Ja, die Box wandert
+                      # unveraendert auf 0.1.1.018, Nummer erhoehen und committen. Danach Compact und Lauf
+                      # wiederholen." Gleicher Code wie .017; der Lauf der .017 brach in Test 2 als Stillstand ab
+                      # (offene Liste O646), neue Nummer je Lauf (Eigentuemer 15.10.2026 14:27:11).
+                      # Davor 0.1.1.017: Eigentuemer 15.10.2026 20:45:52 (Befehlsbuch): "Ja, die Box wandert
+                      # unveraendert auf 0.1.1.017, Nummer erhoehen und committen." Die .016 laeuft seit
+                      # 15.10. 19:03 als lokaler Prod-Stand und blieb unveroeffentlicht; der Box-Eintrag
+                      # wandert nur auf die neue Nummer, Text unveraendert, STAND wandert mit (Bauplan
+                      # analysen/bauplan_aehnlich.md, Stufe AE6 Punkt 8).
+                      # Davor 0.1.1.016: Eigentuemer 15.10.2026 16:54:44 (Befehlsbuch): "Ja, die What's-new-Box
+                      # wandert unverändert auf 0.1.1.016, Nummer erhöhen und committen." Neue Nummer je
+                      # Lauf (Eigentuemer 15.10.2026 14:27:11); die .015 lief nur als lokaler Prod-Stand vom
+                      # 14.10. und blieb unveroeffentlicht; der Box-Eintrag wandert nur auf die neue Nummer,
+                      # Text unveraendert, STAND wandert mit (Bauplan analysen/bauplan_aehnlich.md, Stufe AE5
+                      # Punkt 7).
+                      # Davor 0.1.1.015: Eigentuemer 13.10.2026 19:17:32 (Befehlsbuch): "Also wäre das
+                      # die 15." Die .014 blieb nach rotem Lauf 13.10. 17:45 (Stufe 4 intel und
+                      # cuda-nb, Modell-Sieb) unveroeffentlicht, Fix 0.1.1.015; der Box-Eintrag
+                      # wandert nur auf die neue Nummer, Text unveraendert, STAND wandert mit.
+                      # Davor 0.1.1.014: Eigentuemer 13.10.2026 15:45:08 (Befehlsbuch): "Stufe K2 bauen"
+                      # als Startwort auf die Vorlage. Die .013 blieb nach rotem Lauf 13.10.
+                      # 10:17 (Stufe 4 intel) unveroeffentlicht, Fix 0.1.1.014; der Box-Eintrag
+                      # wandert nur auf die neue Nummer, Text unveraendert, STAND wandert mit.
+                      # Davor 0.1.1.013: Eigentuemer 12.10.2026 22:13:53 (Befehlsbuch): "Ok" auf das
+                      # Umhaengen. Die .012 blieb nach rotem Lauf 11.10. 21:25 (Stufe 4)
+                      # unveroeffentlicht, Fix 0.1.1.013; der Box-Eintrag wandert nur auf die
+                      # neue Nummer, Text unveraendert, STAND wandert mit.
+                      # Davor 0.1.1.006: Eigentuemer 30.09.2026 ~12:44 (Befehlsbuch): "der Bereich
                       # What's New bleibt es aendert sich nur die Versionsnummer" — kein neuer
                       # Box-Eintrag, nur STAND wandert mit.
                       # Historie .547: Eigentuemer 25.09.2026 06:54:15 (Befehlsbuch): "Whausnew einfach
@@ -737,6 +774,52 @@ BETONT = "!! "
 
 # Neueste zuerst: (version, (eintraege ...)).
 HIGHLIGHTS = (
+    # ####################################################################
+    # 0.1.1.021 — EIN Eintrag, INHALT VOM INHABER, unveraendert von 0.1.1.020 umgehaengt (Eigentuemer 16.10.2026
+    # 18:48:02, "Box unveraendert"): Wortlaut DE und EN abgenommen 16.10.2026 13:14:16 (Befehlsbuch:
+    # "Ja, der Text der Whats-new-Box fuer 0.1.1.020 so, deutsch und englisch wie vorgeschlagen, dazu die vier anderen
+    # Sprachen."); der Schlusssatz zeigt auf „Bitte zuerst lesen“ in suslik (13:24:24 und 13:25:35), die Entwuerfe als
+    # Ganzes 13:26:00 "ja so"; Wortlaut in backups/release3_bau/rueckweg_010/texte_020.md. ES, IT, FR und FI von der
+    # Hauptsession (Opus) nach EN uebersetzt, der Knopfname je Sprache woertlich wie readme.knopf. Marke readme: der
+    # Knopfname wird zum Link auf das Kapitel „Neu in dieser Version“ (webui whatsnew_block, Bauplan
+    # analysen/bauplan_rueckweg_010.md Stufe R4). Der Eintrag ersetzt den unveroeffentlichten Eintrag der 0.1.1.011 bis
+    # 0.1.1.019 (neues Speichern der Gesichter, sein Inhalt steht hier mit drin). Nicht betont, ohne Gedankenstrich.
+    # Nummer 0.1.1.020 nach Bauplan analysen/bauplan_rueckweg_010.md Stufe R2 Schritt 2, Nummer 0.1.1.021 nach Stufe R6
+    # Punkt 4.
+    # Die Eintraege darunter bleiben stehen.
+    ("0.1.1.021", (
+        {"de": "Diese Version bringt viele Neuerungen. Gesichter werden neu gespeichert, das ist die "
+               "Grundlage für eine bessere Vorauswahl und bessere Empfehlungen. Unbekannte Gesichter "
+               "werden besser erkannt und zugeordnet, und Unbekannte, die einer bekannten Person ähneln,"
+               " stehen gesammelt unter „Vermutlich erkannt“. Was alles neu ist und was beim Update "
+               "wichtig ist, steht unter „Bitte zuerst lesen“.",
+         "en": "This version brings a lot of changes. Faces are stored in a new way, which is the basis "
+               "for better pre-selection and better recommendations. Unknown faces are recognized and "
+               "assigned better, and unknowns that look like a known person are grouped under \"Probably "
+               "recognized\". What's new, and what matters when you update, is under \"Read me first\".",
+         "es": "Esta versión trae muchas novedades. Las caras se guardan de una forma nueva, que es la "
+               "base para una mejor preselección y mejores recomendaciones. Las caras desconocidas se "
+               "reconocen y se asignan mejor, y los desconocidos que se parecen a una persona conocida "
+               "aparecen agrupados en «Probablemente reconocidos». Todo lo nuevo y lo que importa al "
+               "actualizar está en «Léeme primero».",
+         "it": "Questa versione porta molte novità. I volti vengono salvati in un modo nuovo, che è la "
+               "base per una preselezione migliore e consigli migliori. I volti sconosciuti vengono "
+               "riconosciuti e assegnati meglio, e gli sconosciuti che somigliano a una persona "
+               "conosciuta sono raccolti sotto «Probabilmente riconosciuti». Tutte le novità e ciò che "
+               "conta durante l'aggiornamento sono in «Leggimi prima».",
+         "fr": "Cette version apporte beaucoup de nouveautés. Les visages sont enregistrés d'une "
+               "nouvelle façon, c'est la base d'une meilleure présélection et de meilleures "
+               "recommandations. Les visages inconnus sont mieux reconnus et mieux attribués, et les "
+               "inconnus qui ressemblent à une personne connue sont regroupés sous « Probablement "
+               "reconnus ». Tout ce qui est nouveau et ce qui compte lors de la mise à jour se trouve "
+               "dans « À lire d'abord ».",
+         "fi": "Tämä versio tuo paljon uutta. Kasvot tallennetaan uudella tavalla, ja se on pohja "
+               "paremmalle esivalinnalle ja paremmille suosituksille. Tuntemattomat kasvot tunnistetaan "
+               "ja kohdistetaan paremmin, ja tuntemattomat, jotka muistuttavat tunnettua henkilöä, on "
+               "koottu kohtaan ”Todennäköisesti tunnistetut”. Kaikki uudet asiat ja se, mikä "
+               "päivityksessä on tärkeää, löytyvät kohdasta ”Lue tämä ensin”.",
+         "readme": True},
+    )),
     # ####################################################################
     # 0.1.1.010 — EIN Eintrag, INHALT VOM INHABER: Wortlaut EN und DE abgenommen
     # (Befehlsbuch 04.10.2026 17:03:24: "Der Text zu What's New passt."), dass er mit

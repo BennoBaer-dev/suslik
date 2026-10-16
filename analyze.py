@@ -221,98 +221,25 @@ emb = Embedder()
 # veraenderter Detektor-Schwelle rechnen (Urteilspfad!), waehrend der refcache-Key die
 # Schwelle nicht kennt. Referenzen bleiben IMMER beim Default; der Schalter wirkt nur
 # auf die Video-Detektion und wird deshalb JE CLIP nach set_det_size gesetzt (s.u.).
-# Referenzen kommen seit v1.0/AP1 aus dem lokalen MASTER (verify_data/refs), nicht mehr
-# live aus Frigate — Analyse laeuft damit auch bei Frigate-API-Ausfall. Sync: sync_refs.py.
-from sync_refs import master_stand, MASTER
-idx = master_stand()
-if not idx:
-    sys.exit("FEHLER: Referenz-Master leer (verify_data/refs) — sync_refs.py import ausfuehren.")
-
-# --- Referenz-Einzelvektoren, gecacht (gleicher Cache wie classify.py) ---
-# Der Metadaten-Block liegt unter '§meta': die npz-Keys sind sonst Personennamen, und eine
-# Person namens "meta" kollidierte mit dem meta=-Keyword von np.savez (TypeError bei JEDEM
-# Lauf). '§' ist per Namens-Regex kein gueltiger Personenname -> kollisionsfrei.
-REFCACHE_META = "§meta"
-
-
-def _refcache_meta(z):
-    """Meta-Block aus dem refcache lesen; Alt-Caches mit dem frueheren Key 'meta' bleiben
-    lesbar (sonst wuerde der Cache nach dem Update einmal unnoetig neu gerechnet)."""
-    return json.loads(str(z[REFCACHE_META if REFCACHE_META in z.files else "meta"]))
-
-
-def _refcache_schreiben(cache, meta, refs):
-    """refcache atomar schreiben (tmp + flush + fsync + os.replace, Muster wie der Clip-Download
-    unten): Leser (analyze/anlernen/verifyd) sehen nie eine halb geschriebene npz, ein Abbruch
-    laesst nur die tmp-Datei zurueck. Fehler NICHT verschlucken — der Aufrufer meldet sie."""
-    tmp = f"{cache}.tmp-{os.getpid()}"
-    try:
-        with open(tmp, "wb") as f:                 # Dateiobjekt statt Pfad: kein automatisches
-            np.savez(f, **{REFCACHE_META: json.dumps(meta)}, **refs)   # .npz-Anhaengsel, fsync moeglich
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, cache)
-    except Exception:
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
-        raise
+# Referenzen kommen seit E3b-1b aus der Referenz-Quelle (Lese-Stufe a, Datenordner aus
+# VERIFY_DATA_DIR), nicht live aus Frigate — Analyse laeuft damit auch bei Frigate-API-Ausfall.
 
 
 def load_refs():
-    cache = os.path.join(SCRATCH, "refcache.npz")
-    # .313 (Prod-Fund 21.08. 19:01): der Cache ist ein GEMEINSAMER Speicher aller Leser
-    # (Urteil, Ernte, Sichtung, Live-Wache). Ein Lauf mit Teil-Personenliste (Wanduhr-
-    # Roundtrip: --persons <eine Kontrollperson>) schrieb ihn mit GENAU dieser Teilmenge
-    # zurueck — danach kannte die Ernte nur noch eine Person, die Sichtung verlor ihre
-    # Referenzpruefung, bis das naechste volle Urteil ihn neu baute. Deshalb: der Cache
-    # wird IMMER ueber ALLE Personen des Masters gefuehrt (+ die angefragten), zurueck
-    # geht nur die angefragte Teilmenge.
-    alle = sorted(set(idx.keys()) | set(a.persons))
-    want = {p: idx.get(p, []) for p in alle}
-    if os.path.exists(cache):
-        try:                                       # np.load MIT in den try: eine abgeschnittene/
-            z = np.load(cache, allow_pickle=True)  # fremde npz darf den Lauf nicht abbrechen,
-            meta = _refcache_meta(z)               # sondern nur den Cache verwerfen (neu rechnen)
-            if str(meta.get("§modell", "")) == emb.modell and all(meta.get(p) == want[p] for p in alle):
-                print("Referenz-Embeddings aus Cache.")
-                return {p: (z[p] if p in z.files else np.zeros((0, 512), np.float32)) for p in a.persons}
-        except Exception as e:
-            print(f"   (refcache unlesbar: {e} — wird neu berechnet)")
-    print("Referenz-Embeddings werden berechnet (einmalig, dann gecacht) ...")
-    # A2-Beiwert (core/refbeiwert-Vertrag Stelle 2, der URTEILSPFAD): Vorrats-
-    # Referenzen tragen ihren Vektor im refs_meta-Beiwert — embed() auf der
-    # kleinen Datei findet gemessen in 28/40 kein Gesicht, und dieser Neuaufbau
-    # schriebe den Verlust in den refcache zurueck (Konzept-QS W1.1).
-    from core.refbeiwert import beiwerte as _bw
-    bw, _fremd = _bw(MASTER, emb.modell)
-    if _fremd:
-        print(f"   ({_fremd} Vorrats-Referenz(en) mit fremdem Modell-Beiwert — unbrauchbar)")
-    refs = {}
-    zeilen = {}                                    # §rows: Datei je Matrix-ZEILE
-    for p in alle:
-        V, N = [], []
-        for f in want[p]:
-            b = bw.get((p, f))
-            if b is not None:
-                V.append(np.asarray(b["emb"], np.float32)); N.append(f); continue
-            img = cv2.imread(os.path.join(MASTER, p, f))
-            if img is None: continue
-            v = emb.embed(img)
-            if v is not None: V.append(v.astype(np.float32)); N.append(f)
-        refs[p] = np.asarray(V, dtype=np.float32)
-        zeilen[p] = N
-        print(f"   {p}: {len(V)} Vektoren")
-    try:
-        # §rows (Stufe A .511): die Zeilen der Matrix tragen ihren Dateinamen, damit
-        # anlernen.refcache_entfernen eine geloeschte Referenz punktuell herausnehmen
-        # kann, statt den ganzen Cache zu verwerfen. Leser ignorieren '§'-Schluessel.
-        _refcache_schreiben(cache, {**want, "§modell": emb.modell, "§rows": zeilen}, refs)
-    except Exception as e:                         # Cache ist regenerierbar -> Lauf nicht abbrechen,
-        print(f"   (refcache nicht schreibbar: {e} — wird beim naechsten Lauf neu berechnet)")
-    refs = {p: refs.get(p, np.zeros((0, 512), np.float32)) for p in a.persons}
-    return refs
+    """Die Referenzen je angefragter Person (--persons) aus Lese-Stufe a der Referenz-Quelle (E3b-1b, J11):
+    ohne Zustandsurteil und ohne Stoerung, gesiebt nur nach dem Modellnamen des Embedders, kein Bild,
+    keine Matrizen-Datei (die .313-Falle, ein Teillauf schreibt die Datei mit seiner Teilmenge zurueck,
+    entfaellt damit: hier wird nichts geschrieben). Ein leerer Katalog bricht nicht ab, er ist laut.
+    -> {Person: float32 [N, 512]}, leer [0, 512] fuer eine Person ohne Zeilen."""
+    from core import lernlauf as _ll
+    from core import refquelle as _rq
+    refs, lesung = _rq.person_matrices(_ll.datenort_cfg(), emb.modell)
+    print(f"Referenz-Embeddings aus der Referenz-Quelle: {len(lesung['ref_ids'])} Zeilen, "
+          f"{len(refs)} Personen, {lesung['zahlen'][_rq.MODEL_OTHER]} anderes Modell, "
+          f"{len(lesung['ausgelassen'])} ausgelassen")
+    if not refs:
+        print("   WARNUNG: die Referenz-Quelle haelt keine brauchbare Referenz — kein Name wird erkannt.")
+    return {p: refs.get(p, np.zeros((0, 512), np.float32)) for p in a.persons}
 
 refs = load_refs()
 

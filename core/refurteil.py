@@ -4,8 +4,8 @@ WOZU: bis .510 urteilte die Bestands-QS ueber ein Katalogbild ausschliesslich
 mit dem ALT-NORM-PAKET — Pixel-Kante, Laplacian-Schaerfe, Feature-Norm. Die
 zwei KALIBRIERTEN Guete-Masse (`fiqa_t`, `empfinden` aus `core/guete.py`), an
 denen der Nutzer seine Kameras einstellt, kannte der QS-Pfad an keiner Stelle.
-Seit Stufe B misst der Lauf sie mit (Sidecar `core/refmess.py`); dieses Modul
-faellt daraus das Urteil.
+Seit E3b-2b liest der Lauf sie aus dem Satz der Referenz-Quelle (Lese-Stufe b,
+vorher Sidecar `core/refmess.py`); dieses Modul faellt daraus das Urteil.
 
 ROLLEN-ZUSCHNITT (User-Entscheid 08.09., eigene Korrektur des Vormittags):
 **Die QS ist der BESTANDS-Pruefer, kein Aufnahme-Gate.** Jedes Bild darf ueber
@@ -63,10 +63,6 @@ Verlust ohne Grundlage). Ungemessenes traegt das Wort `ungemessen` und landet
 in keiner Vorschlagsgruppe.
 """
 import collections
-import hashlib
-import os
-from core import logbuch as _logbuch
-_log = _logbuch.logger(__name__)
 
 # ---------------------------------------------------------------- Vertrag
 # DIE Aufzaehlung der Urteilsworte (QS-Ebenen-Regel: eine zentrale Quelle statt
@@ -206,8 +202,15 @@ def bild_urteil(latten, kamera, fiqa_t, norm, norm_boden):
 
 
 # ---------------------------------------------------------------- Dubletten
-def md5_gruppen(master_dir, dateien):
-    """Byte-gleiche Dateien -> [{"md5", "person", "behalten", "weg": [...]}].
+def md5_gruppen(saetze):
+    """Byte-gleiche Profilbilder -> [{"pruefsumme", "person", "behalten", "weg": [...]}].
+
+    saetze = [(person, ref_id, Pruefsumme des Profilbilds oder None)]. Seit E3b-2b (Bauplan
+    analysen/bauplan_refquelle_einbau.md, Stufe E3 Punkt 2) liest hier niemand mehr eine Datei:
+    die Pruefsumme (sha256) steht im Satz (quelle.json, Lese-Stufe b), behalten und weg sind
+    ref_ids. Gleiche rechen112-Bytes gibt es unter zwei ref_ids nicht (Entscheid 21: dieselbe
+    Kennung heisst „schon da"), deshalb vergleicht die Gruppe das Profilbild. Ohne Pruefsumme
+    keine Dubletten-Aussage.
 
     Gruppiert wird ueber den DATEI-Inhalt, nicht ueber eine Aehnlichkeit: das
     ist die eine Dubletten-Klasse, bei der es nichts abzuwaegen gibt (die
@@ -225,15 +228,9 @@ def md5_gruppen(master_dir, dateien):
     fuehrt ihn ohnehin mit sim 1,0) und kein Aufraeum-Vorschlag — welche der
     beiden Personen es abgeben soll, kann keine Rechnung wissen."""
     je_hash = collections.defaultdict(list)
-    for p, f in dateien or ():
-        pfad = os.path.join(master_dir, p, f)
-        try:
-            with open(pfad, "rb") as fh:
-                h = hashlib.md5(fh.read()).hexdigest()      # noqa: S324
-        except OSError:
-            _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
-            continue                     # nicht lesbar -> keine Dubletten-Aussage
-        je_hash[h].append((p, f))
+    for p, f, h in saetze or ():
+        if h:                            # ohne Pruefsumme keine Dubletten-Aussage
+            je_hash[h].append((p, f))
     aus = []
     for h, paare in sorted(je_hash.items()):
         je_person = collections.defaultdict(list)
@@ -243,7 +240,7 @@ def md5_gruppen(master_dir, dateien):
             if len(fs) < 2:
                 continue
             fs = sorted(fs)
-            aus.append({"md5": h, "person": p, "behalten": fs[0],
+            aus.append({"pruefsumme": h, "person": p, "behalten": fs[0],
                         "weg": fs[1:]})
     return aus
 

@@ -237,7 +237,11 @@ HINTERGRUND_TYPEN = ("sammle", "vorschlaege", "refqs", "ernte", "norm", "passern
                      # rechnet — aber OHNE Exklusivfenster: die Vollform gehoert in
                      # den Boot, die Kurzform in jeden Betriebs-Neustart und hinter
                      # jede Anomalie-Meldung (s. Dienst.startprobe).
-                     "startprobe")
+                     "startprobe",
+                     # E3a-4 (Bauplan Referenz-Quelle einbauen, J10): der Datei-Weg —
+                     # aus einer Bilddatei (Foto-Upload, Frigate-Import) ein Satz der
+                     # Referenz-Quelle ueber den Bild-Weg der Engine (core/dateisatz.py).
+                     "dateisatz")
 # E3.3 (14.09.2026, W2-B29): wie viele Clip-GEOMETRIEN dieser Prozess hoechstens
 # gleichzeitig haelt, wenn der Aufrufer keinen Deckel mitschickt. 0 = KEIN Deckel,
 # und genau das ist die Vorgabe — eine hier hineingeschriebene Zahl waere auf jeder
@@ -256,6 +260,11 @@ EICHMARKE_DATEI = "kompilat_eichmarke.json"
 # Prozesswechsel ueberlebt: der frische Prozess liest und entfernt sie beim Start und weiss
 # damit, dass ER die eine Wiederholung ist.
 WIEDERHOLUNG_DATEI = "kompilat_wiederholung.json"
+# Bauplan analysen/bauplan_fix_erststart.md, Entscheid 3: der Stand der Kurzform der Start-Proben, solange dieser
+# Prozess noch keine Geometrie gebaut hat (ihr Pruefbild baute sonst den Bild-Weg vor der ersten Geometrie). Ein
+# Protokoll-Wert ueber die Prozessgrenze wie „gestoppt": verifyds Startprobe-Handler wertet ihn als nicht_gelaufen,
+# tools/proben/s14_a5_reihenfolge.py haelt beide Enden am Verhalten zusammen.
+STARTPROBE_OHNE_GEOMETRIE = "keine geometrie"
 # Die Latten der Probe, aus der E2d-Messung und mit Abstand zu BEIDEN Seiten:
 #   Rauschboden  gleiche Bau-Reihenfolge max|d| 0,0 - andere Reihenfolge 4,5e-08 (1-cos ~1e-16)
 #   Defektfall   max|d| 4,2e-03 bis 8,4e-03, 1-cos bis 1,8e-03, ||f|| bis -1,07
@@ -493,6 +502,13 @@ ARGV_VORGABE = {
     # Config-Store, den Deckel je Variante core.registry (tuer_deckel_werk), nicht diese Fuellung.
     "tuer_fenster": 0,
     "tuer_deckel": 0,
+    # Bauplan analysen/bauplan_fix_0113.md, Stufe F4: der Unbekannt-Stapel des Bildvorrats (worker_kern). 0 = aus,
+    # und 0 ist hier RICHTIG als Fuellwert: wer die Felder nicht schickt, bekommt das Verhalten von vor F4 (nur der
+    # eine beste Fremde). Die Werkswerte (0,35, 5, 5) setzt der Config-Store ueber core.registry.UNBEKANNT_WERK,
+    # nicht diese Fuellung.
+    "unbekannt_latte": 0.0,
+    "unbekannt_bilder_je_gruppe": 0,
+    "unbekannt_rahmen_max": 0,
 }
 # argv-Flagge -> Schluessel oben. Die Namen sind die von verifyd.run_analyze
 # (verifyd.py:2036-2117), die Schluessel die von worker_kern.urteils_latten.
@@ -717,141 +733,67 @@ def latten_bauen(fest, log):
 
 
 # ----------------------------------------------------------------- Referenzen
-REFCACHE_META = "§meta"
+def referenzen_laden(cfg, kennung, log, rechenwerk=None):
+    """Die Referenzen der Erkennung aus Lese-Stufe a der Referenz-Quelle lesen (Bauauftrag
+    E3b-1a, Entscheide 10 und 20, I2). -> (alle, mit_refs, erk, bericht); erk in der Form des
+    Kerns (worker_kern.referenzen_laden, die EINE Aufbereitung), bericht ist die Bindung
+    „referenzen" der Job-Antwort.
 
+    `cfg` traegt den Datenordner, `kennung` ist die Modell-Kennung (bild_kern.model_identity):
+    gelesen wird ohne Zustandsurteil und ohne Rechenwerk, gesiebt nach dem Modell (Bauplan
+    analysen/bauplan_fix_erststart.md, Stufe K1 Punkt 1: vor der ersten Geometrie entsteht so kein
+    Bild-Weg und kein Kompilat). `rechenwerk` ist die Rechenwerk-Kennung des Dienstes, sobald er sie
+    hat (Dienst.ref_kennung, erstmals am Ende des ersten Ereignisses); nur dann urteilt das Lesen
+    ueber „fremd" (`fremd_urteilen`), vorher steht in der Bindung `fremd: None` (W4).
+    Gelesen werden nur Katalog, quelle.json und fingerabdruck.npy, nie ein
+    Bild; es wird nichts gerechnet und nichts auf Platte geschrieben (keine Matrizen-Datei mehr,
+    Entscheid 10). Damit sind die alten Fehlerklassen dieser Stelle weg: kein Lauf schreibt eine
+    Teilmenge zurueck (Prod-Fund 21.08.), kein Fingerabdruck wird aus einer kleinen Datei neu
+    gerechnet (28 von 40 ohne Gesicht, core/refbeiwert.py), keiner auf einem anderen Rechenwerk
+    (E2-Blocker CPU gegen GPU). Der Fingerabdruck eines Satzes ist der Wert seines Rechenwerks.
 
-def _refcache_meta(z):
-    """Meta-Block lesen; Alt-Caches mit dem frueheren Key 'meta' bleiben lesbar.
-    Wortgleich analyze._refcache_meta (analyze.py:238-241)."""
-    return json.loads(str(z[REFCACHE_META if REFCACHE_META in z.files else "meta"]))
-
-
-def _refcache_schreiben(cache, meta, refs):
-    """refcache atomar schreiben — tmp + flush + fsync + os.replace, wortgleich
-    analyze._refcache_schreiben (analyze.py:244-260): Leser sehen nie eine halb
-    geschriebene npz, ein Abbruch laesst nur die tmp-Datei zurueck."""
-    tmp = f"{cache}.tmp-{os.getpid()}"
-    try:
-        with open(tmp, "wb") as f:
-            np.savez(f, **{REFCACHE_META: json.dumps(meta)}, **refs)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, cache)
-    except Exception:
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
-        raise
-
-
-def _refs_bauen(master, want, alle, modell, log):
-    """Die Referenz-Matrizen aus dem Master rechnen — der Rumpf von
-    analyze.load_refs (analyze.py:283-311), Schritt fuer Schritt:
-    Vorrats-Referenzen kommen ueber core.refbeiwert (embed() findet auf der kleinen
-    Datei gemessen in 28 von 40 Faellen kein Gesicht — ein Neuaufbau ohne diesen
-    Vorrang schriebe den Verlust in den Cache zurueck, Konzept-QS W1.1), alles
-    andere ueber den Embedder. -> (refs, zeilen)"""
-    import cv2                                             # noqa: PLC0415
-    from core.refbeiwert import beiwerte as _bw            # noqa: PLC0415
-    bw, fremd = _bw(master, modell)
-    if fremd:
-        log.zeile(f"   ({fremd} stock reference(s) with a foreign model coefficient — unusable)",
-                  stufe=_logbuch.WARNING)
-    emb = face_audit.Embedder()
-    refs, zeilen = {}, {}
-    for p in alle:
-        V, N = [], []
-        for f in want[p]:
-            b = bw.get((p, f))
-            if b is not None:
-                V.append(np.asarray(b["emb"], np.float32))
-                N.append(f)
-                continue
-            img = cv2.imread(os.path.join(master, p, f))
-            if img is None:
-                continue
-            v = emb.embed(img)
-            if v is not None:
-                V.append(v.astype(np.float32))
-                N.append(f)
-        refs[p] = np.asarray(V, dtype=np.float32)
-        zeilen[p] = N
-        log.zeile(f"   {p}: {len(V)} vectors", stufe=_logbuch.DEBUG)
-    return refs, zeilen
-
-
-def referenzen_laden(pfad, log, master=None):
-    """Referenzen laden — MIT SELBSTHEILUNG (W1-B3).
-
-    Der Kern (worker_kern.referenzen_laden) wirft, wenn der Cache fehlt oder zu
-    einem anderen Modell gehoert. Fuer einen Mess-Prototyp ist das richtig; fuer
-    einen DIENST nicht: der Cache ist ein regenerierbares Artefakt, und es gibt
-    Wege, die ihn absichtlich wegwerfen (anlernen.refcache_entfernen, Modellwechsel
-    im UI). Faellt der Worker darueber aus, steht die Erkennung still, obwohl alles
-    Noetige auf der Platte liegt.
-
-    Gepruefte Bedingungen, wortgleich analyze.load_refs (analyze.py:263-315):
-      1. Der Cache wird IMMER ueber ALLE Master-Personen gefuehrt (Prod-Fund
-         21.08.: ein Lauf mit Teil-Personenliste schrieb ihn mit dieser Teilmenge
-         zurueck und nahm Ernte und Sichtung ihre Referenzen).
-      2. Er gilt nur, wenn '§modell' zum konfigurierten Modell passt UND die
-         DATEI-LISTE je Person noch stimmt (analyze.py:278) — eine geloeschte oder
-         hinzugekommene Referenz entwertet ihn.
-      3. Sonst: neu rechnen und atomar zurueckschreiben. Ein nicht schreibbarer
-         Cache ist kein Abbruch, nur ein langsamerer naechster Lauf.
-    -> (alle, mit_refs, erk) in der Form, die der Kern erwartet."""
-    from sync_refs import MASTER, master_stand             # noqa: PLC0415
-    master = master or MASTER
-    modell = face_audit.aktuelles_modell()
-    idx = master_stand()
-    if not idx:
-        # Wortlaut wie analyze.py:229 — tools/qs.sh:12039 greift genau diesen Text,
-        # und er unterscheidet „Testmaschine ohne Referenzen" von „Erkennung kaputt".
-        raise SystemExit("FEHLER: Referenz-Master leer (verify_data/refs) — "
-                         "sync_refs.py import ausfuehren.")
-    alle = sorted(idx)
-    want = {p: idx[p] for p in alle}
-    refs, neu = None, False
-    if os.path.exists(pfad):
-        try:
-            z = np.load(pfad, allow_pickle=True)
-            meta = _refcache_meta(z)
-            if (str(meta.get("§modell", "")) == modell
-                    and all(meta.get(p) == want[p] for p in alle)):
-                refs = {p: (z[p] if p in z.files else np.zeros((0, 512), np.float32))
-                        for p in alle}
-                log.zeile("reference embeddings from cache.")
-            else:
-                grund = ("Modell" if str(meta.get("§modell", "")) != modell
-                         else "Datei-Liste")
-                log.zeile(f"   (refcache no longer matches: {grund} — being recomputed)")
-        except Exception as e:                             # noqa: BLE001
-            log.zeile(f"   (refcache unreadable: {e} — being recomputed)", stufe=_logbuch.WARNING)
-    if refs is None:
-        log.zeile("reference embeddings are being computed (once, then cached) ...", stufe=_logbuch.DEBUG)
-        refs, zeilen = _refs_bauen(master, want, alle, modell, log)
-        neu = True
-        try:
-            _refcache_schreiben(pfad, {**want, "§modell": modell, "§rows": zeilen}, refs)
-        except Exception as e:                             # noqa: BLE001
-            log.zeile(f"   (refcache not writable: {e} — recomputed on the next run)",
-                      stufe=_logbuch.WARNING)
-    # Ab hier die Aufbereitung des Kerns (worker_kern.referenzen_laden:617-630):
-    # EINE Matrix, je Person auf die groesste Anzahl aufgefuellt durch Wiederholen
-    # der ersten Zeile (aendert ihr Maximum nicht).
-    mats = {p: np.asarray(refs[p], np.float32) for p in alle if len(refs.get(p, []))}
-    mit_refs = sorted(mats)
+    Das Sieb nach Modell steht im Modul (refquelle.model_sieve): ein Satz mit fremdem Rechenweg,
+    Geraet, Genauigkeit oder Bibliothek bleibt in der Matrix und wird gezaehlt (Entscheid 8), ein
+    Satz eines anderen Modells bleibt draussen. Beides, ausgelassene Saetze und ein leerer Katalog
+    stehen laut im Log und in der Bindung; ein leerer Katalog ist kein Abbruch (leere Matrix, kein
+    Name moeglich, bis eine Referenz gebunden ist)."""
+    from core import refquelle                              # noqa: PLC0415
+    t0 = time.monotonic()
+    lesung = refquelle.read_matrix(cfg, None)
+    alle, mit_refs, erk = wk.referenzen_laden(lesung, kennung)
+    z = erk["zahlen"]
+    bericht = {"stand": erk["stand"], "zeilen": erk["zeilen"],
+               "personen_mit_vektoren": len(mit_refs), "fremd": z.get("fremd"),
+               "anderes_modell": z[refquelle.MODEL_OTHER], "ausgelassen": erk["ausgelassen"],
+               "dauer_ms": round((time.monotonic() - t0) * 1000.0, 1), "weg": erk["weg"]}
+    text = (f"references read from the reference source: {bericht['zeilen']} row(s), "
+            f"{len(mit_refs)} person(s) with vectors, {len(alle)} person(s) bound, "
+            f"catalog state {bericht['stand']}, {bericht['dauer_ms']} ms")
+    _log.info(text)
+    if log.pfad:            # ein Log ohne Pfad (Start-Log JobLog(None)) IST das Prozess-Log: die Zeile nur einmal
+        log.zeile(text)
+    if rechenwerk is not None:
+        fremd_urteilen(cfg, erk, rechenwerk, bericht)
+    for n, was in ((bericht["anderes_modell"], "row(s) of another model (left out)"),
+                   (bericht["ausgelassen"], "set(s) left out (unreadable fingerprint or quelle.json)")):
+        if n:
+            _log.warning(f"references: {n} {was} — details in the reference source disturbance list")
     if not mit_refs:
-        raise SystemExit("FEHLER: keine einzige Referenz mit Vektoren — "
-                         "kein Urteil moeglich")
-    je = max(len(m) for m in mats.values())
-    matrix = np.concatenate(
-        [np.concatenate([mats[p], np.repeat(mats[p][:1], je - len(mats[p]), axis=0)])
-         for p in mit_refs]).astype(np.float32)
-    erk = {"refs": matrix, "refs_t": np.ascontiguousarray(matrix.T),
-           "personen": len(mit_refs), "je_person": je, "neu_gebaut": neu}
-    return alle, mit_refs, erk
+        _log.warning("references: the reference source holds no usable reference — this worker "
+                     "cannot name anybody until a reference is bound")
+    return alle, mit_refs, erk, bericht
+
+
+def fremd_urteilen(cfg, erk, rechenwerk, bericht):
+    """Das fremd-Urteil ueber die Zeilen der gelesenen Matrix mit der Rechenwerk-Kennung (refquelle engine_judge, ueber
+    die Kennungen im Speicher, ohne zweites Lesen; Bauplan analysen/bauplan_fix_erststart.md, Stufe K1 Punkt 2).
+    -> None; traegt die Zahl als `fremd` in den Bericht ein und schreibt bei fremden Zeilen die WARNING-Zeile"""
+    from core.refquelle import basis as _rqb                # noqa: PLC0415  der Name des Zustands, eine Stelle
+    from core.refquelle.lesen import engine_judge           # noqa: PLC0415  wie harvest_set: ein Teil des Pakets
+    bericht["fremd"] = engine_judge(cfg, erk, rechenwerk)["zahlen"][_rqb.STATE_FOREIGN]
+    if bericht["fremd"]:
+        _log.warning(f"references: {bericht['fremd']} row(s) from a foreign engine (same model, kept in the "
+                     f"matrix) — details in the reference source disturbance list")
 
 
 # ----------------------------------------------------------------- Kompilat-Probe (E2d)
@@ -1866,7 +1808,12 @@ class Dienst:
         self.out = antwort_out
         self.threads = max(1, int(a.threads))
         self.scratch = a.scratch
-        self.refcache = a.refcache
+        # E3b-1a: die Referenzen kommen aus der Referenz-Quelle (Dienst.referenzen); ihr Datenordner,
+        # die einmal je Prozess geholte Rechenwerk-Kennung und das Schloss um das Neu-Lesen.
+        self._ref_cfg = None
+        self._ref_kennung = None
+        self._modell_kennung = None            # Fix Erst-Start K1: die Kennung des Lesens (bild_kern.model_identity)
+        self._ref_schloss = threading.Lock()
         self._schreib = threading.Lock()
         self._geo_schloss = threading.Lock()
         self._warm_schloss = threading.Lock()
@@ -2119,37 +2066,80 @@ class Dienst:
                 return self._bild
 
     def referenzen(self, log):
-        """Referenzen EINMAL je Prozess laden (mit Selbstheilung).
+        """Liest die Referenzen der Erkennung beim Start aus Lese-Stufe a der Referenz-Quelle.
+        -> None; fuellt alle, mit_refs, erk und die Bindung „referenzen" (Fehler laut, der Start bricht ab)
 
-        REIHENFOLGE IST HIER EINE HARTE BEDINGUNG, gemessen im E2-Gate 13.09.:
-        diese Funktion wird NACH engine_bauen() gerufen, nie davor. In E2 war der
-        Grund der ABI-Befund aus E1 (die OpenVINO-Fassung im onnxruntime-openvino-
-        Paket und das eigenstaendige openvino-Paket vertragen sich in EINEM Prozess
-        nicht, `undefined symbol: _ZN2ov3Any4Base9to_stringEv`; im Gate real
-        getreten, Beleg runs/e2_dienst_20260913/p5_refcache/prozess.log).
+        REIHENFOLGE IST HIER EINE HARTE BEDINGUNG (`start`): nach engine_bauen(),
+        `wiederholung_uebernehmen` und `erststart_ordnung_bauen` (beim Neustart mit Eichmarke stehen
+        deren Geometrien damit vor dem Lesen, R1) und vor den Rechen-Straengen, also vor dem ersten Job.
 
-        E2c hat den Grund GEAENDERT, die Reihenfolge bleibt: `engine_bauen` haengt
-        jetzt die Bild-Fabrik in `face_audit.Embedder` ein, und erst DANACH darf ein
-        Referenz-Neubau laufen — sonst baute er sich noch den alten ORT-Embedder.
-        Der Neubau rechnet seitdem auf DEMSELBEN Kompilat wie die Live-Erkennung; der
-        gemessene E2-Blocker (Neubau auf dem CPU-EP, bis 1,59e-02 je Embedding
-        Abweichung zur GPU-Fassung) ist damit weg, und ORT-OV wird in diesem Prozess
-        gar nicht mehr geladen."""
-        self.alle, self.mit_refs, self.erk = referenzen_laden(self.refcache, log)
+        GELESEN WIRD HIER, BEIM START (Entscheid 20 woertlich), MIT DER MODELL-KENNUNG (Bauplan
+        analysen/bauplan_fix_erststart.md, Stufe K1; ersetzt den Weg von Entscheid 2/X15 des Fix
+        0.1.1.013): `bild_kern.model_identity` liest Modellname und Pruefsumme der Quelldatei aus Registry
+        und Datei, ohne Engine und ohne Bau. Bis 0.1.1.013 holte das Lesen die Rechenwerk-Kennung, und die
+        legte auf einem Erst-Start ohne Eichmarke den Bild-Weg samt r-Kompilat VOR der ersten Geometrie
+        an; auf intel verschob das das p-Kompilat (roter Lauf 0.1.1.013, Stufe 4 intel Test 1). Die
+        Rechenwerk-Kennung holt jetzt allein der Schreibweg am Ende eines Ereignisses (`ref_kennung`),
+        das fremd-Urteil folgt ihr. Danach prueft `referenzen_frisch` je Ereignis die Stand-Kennung
+        (I2). Der Datenordner kommt aus VERIFY_DATA_DIR, die der Dienst fuer seine Prozesse setzt;
+        fehlt er, bricht der Start laut ab."""
+        daten = os.environ.get("VERIFY_DATA_DIR")
+        if not daten:
+            _log.error("references: VERIFY_DATA_DIR is not set — the reference source cannot be "
+                       "read, the worker does not start")
+            raise SystemExit("FEHLER: VERIFY_DATA_DIR fehlt — Referenz-Quelle nicht lesbar")
+        self._ref_cfg = {"data_dir": daten}
         self.modell = face_audit.aktuelles_modell()
-        # In JEDE Job-Antwort, nicht nur ins Log: auf welchem Weg die Referenzen
-        # entstanden sind, muss ein Betreiber sehen koennen — es ist die Frage, ob
-        # Referenz- und Live-Embeddings aus EINER Quelle kommen.
-        self.bindung["referenzen"] = {
-            "neu_gebaut": bool(self.erk.get("neu_gebaut")),
-            "personen_mit_vektoren": len(self.mit_refs),
-            **({"weg": "engine (E2c: dasselbe Kompilat wie die Live-Erkennung)"}
-               if self.erk.get("neu_gebaut") else {})}
-        if self.erk.get("neu_gebaut"):
-            _log.info(f"reference cache rebuilt from the master "
-                        f"({len(self.mit_refs)} person(s) with vectors) on the engine "
-                        f"— references and live embeddings now come from the same "
-                        f"compiled model (E2c)")
+        self._modell_kennung = bild_kern.model_identity(self.modell)
+        with self._ref_schloss:
+            self._matrix_lesen(log)
+
+    def _matrix_lesen(self, log):
+        """Lese-Stufe a mit der Modell-Kennung lesen und als EIN Abzug festhalten; mit Rechenwerk-Kennung (sobald da)
+        auch das fremd-Urteil. Der Aufrufer haelt `_ref_schloss`.
+        -> der Bericht, der als Bindung „referenzen" in jede Job-Antwort geht"""
+        alle, mit_refs, erk, bericht = referenzen_laden(self._ref_cfg, self._modell_kennung, log,
+                                                        self._ref_kennung)
+        self.alle, self.mit_refs, self.erk = alle, mit_refs, erk
+        self.bindung["referenzen"] = bericht
+        return bericht
+
+    def ref_kennung(self, lauf):
+        """Die Rechenwerk-Kennung dieses Prozesses fuer den Schreibweg am Ende eines Ereignisses und das fremd-Urteil,
+        einmal je Prozess geholt (bild_kern.engine_identity ueber die Bild-Fabrik); beim ersten Holen urteilt sie
+        einmal ueber die liegende Matrix.
+        -> dict der Kennung; der erste Aufruf legt den Bild-Weg unter dem Staffel-Riegel an
+
+        NIE VOR DER ERSTEN GEOMETRIE (Bauplan analysen/bauplan_fix_erststart.md, Stufe K1, Regel „Geometrien zuerst,
+        nichts davor"): das Holen baut den Bild-Weg samt r-Kompilat. Das Lesen beim Start ruft sie deshalb nicht mehr,
+        es liest mit der Modell-Kennung; `start` prueft am Ende, dass kein Bild-Weg entstanden ist (Wache)."""
+        erstmals = False
+        if self._ref_kennung is None:
+            with self._staffel(lauf, "engine identity"):
+                if self._ref_kennung is None:
+                    self._ref_kennung = bild_kern.engine_identity(face_audit.Embedder())
+                    erstmals = True
+        if erstmals:
+            with self._ref_schloss:
+                if self.erk is not None:
+                    bericht = dict(self.bindung.get("referenzen") or {})
+                    fremd_urteilen(self._ref_cfg, self.erk, self._ref_kennung, bericht)
+                    self.bindung["referenzen"] = bericht
+        return self._ref_kennung
+
+    def referenzen_frisch(self, lauf):
+        """Die Matrix fuer EIN Ereignis: gelesen ist sie seit dem Start (`referenzen`), neu gelesen
+        wird nur bei neuer Stand-Kennung des Katalogs (I2).
+        -> (alle, mit_refs, erk) als EIN Abzug; ein Fehler beim Neu-Lesen geht laut an den Job."""
+        from core import refquelle                          # noqa: PLC0415
+        with self._ref_schloss:
+            alt = self.bindung.get("referenzen") or {}
+            stand = refquelle.state_id(self._ref_cfg)
+            if stand != alt.get("stand"):
+                bericht = self._matrix_lesen(lauf.log)
+                _log.info(f"reference catalog changed ({alt.get('stand')} -> {bericht['stand']}): "
+                          f"matrix re-read, {bericht['zeilen']} row(s) in {bericht['dauer_ms']} ms")
+            return self.alle, self.mit_refs, self.erk
 
     def geometrie(self, W, H, fps, lauf):
         """Die Geometrie dieser Clip-Groesse — gebaut, wenn sie neu ist (W2-B29:
@@ -3766,11 +3756,15 @@ class Dienst:
             # `offen` (was der Zeit-Deckel liegen liess), `dauer_s`/`prolog_s`/
             # `clip_s` fuer den Rechenfaktor und `cache` fuer die kalte
             # Prolog-Reserve.
+            from core import harvest_set as _harvest_set    # noqa: PLC0415
             erg = anlernen.sammle(float(job.get("tage", 0.1)),
                                   mit_migriere=bool(job.get("mit_migriere", False)),
                                   kalib_deckel=job.get("kalib_deckel"),
                                   nur_eids=job.get("nur_eids"),
-                                  zeit_deckel_s=job.get("zeit_deckel_s"))
+                                  zeit_deckel_s=job.get("zeit_deckel_s"),
+                                  # E3a-2 (Bauplan Referenz-Quelle einbauen): die
+                                  # Config-Zufuhr des Satz-Schreibwegs, Herkunftsart pool.
+                                  set_feed=job.get(_harvest_set.FEED_FIELD))
             return {"sammle": erg if isinstance(erg, dict) else {"neu": int(erg or 0)}}
         if typ == "vorschlaege":
             import anlernen                                # noqa: PLC0415
@@ -3804,23 +3798,20 @@ class Dienst:
                 _kw["unscharf_max"] = int(job["unscharf"])
             if job.get("dupsim") is not None:
                 _kw["dup_sim"] = float(job["dupsim"])
+            # E3b-2b: der Lauf liest die Referenz-Saetze und misst nichts — kein Embedder; der Modellname fuer
+            # das Sieb kommt aus der Config (face_audit.aktuelles_modell in anlernen.lade_master_bilder).
             anlernen.pruefe_referenzen_lauf(
                 person=None,                               # der Lauf ist IMMER ungefiltert
                 norm_latte=job.get("norm_latte"),
                 pruef_latten=job.get("pruef_latten"),
-                emb=face_audit.Embedder(), diagnose=_dg, **_kw)
+                diagnose=_dg, **_kw)
             return {"refqs": {
-                "gesamt": int(_dg.get("gesamt") or 0),
-                "gemessen": int(_dg.get("gemessen") or 0),
-                "guete_nachgemessen": int(_dg.get("guete_nachgemessen") or 0),
-                "guete_deckung": int(_dg.get("guete_deckung") or 0),
-                "aus_speicher": int(_dg.get("aus_speicher") or 0),
-                "beiwert": int(_dg.get("beiwert") or 0),
-                "kamera_gesucht": int(_dg.get("kamera_gesucht") or 0),
-                "kamera_gefunden": int(_dg.get("kamera_gefunden") or 0),
-                "guete_da": bool(_dg.get("guete_da"))}}
+                "saetze": int(_dg.get("saetze") or 0),
+                "ungemessen": int(_dg.get("ungemessen") or 0),
+                "urteile": int(_dg.get("urteile") or 0)}}
         if typ == "ernte":
             from core import ernte as _ernte                # noqa: PLC0415
+            from core import harvest_set as _harvest_set    # noqa: PLC0415
             eid = job["eid"]
             # Clip-Beschaffung wie im Analyse-Zweig: jeder Schalter als ARGUMENT
             # (W2-B2), kein Modulglobal. `clip_erzeugung`/`clip_tor` kommen aus dem
@@ -3845,7 +3836,10 @@ class Dienst:
                     struktur_mass=(self.strukturmass()
                                    if job["schwellen"].get("struktur_min") else None),
                     quelle=job.get("quelle"), kalib=job.get("kalib"),
-                    sieb=job.get("sieb"))
+                    sieb=job.get("sieb"),
+                    # E3a-1b (Bauplan Referenz-Quelle einbauen, J4): die
+                    # Config-Zufuhr des Satz-Schreibwegs als EIN Job-Feld.
+                    satz=job.get(_harvest_set.FEED_FIELD))
             finally:
                 clipcache.frei(eid)                        # nie eine Pin-Waise
         if typ == "norm":
@@ -3881,6 +3875,11 @@ class Dienst:
             return self.rechenprobe(lauf, job)
         if typ == "startprobe":
             return self.startprobe(lauf, job)
+        if typ == "dateisatz":
+            from core import dateisatz as _dateisatz        # noqa: PLC0415
+            # E3a-4 (J6, J10): die Fabrik, nicht der Embedder — das Rechenwerk wird
+            # erst nach der Eingangspruefung angelegt (ohne Job-Feld nie).
+            return {"dateisatz": _dateisatz.job(job, face_audit.Embedder)}
         if typ == "koerper":
             from core import personlive as _plv             # noqa: PLC0415
             return {"u": _plv.urteilen(
@@ -4031,8 +4030,23 @@ class Dienst:
         # Pose-Bauplan Stufe 3: die Probe samt Anlage des Bild-Wegs und dem Bau seiner
         # Erkennungs-Stufe laeuft nie neben einem Geometrie-Bau — derselbe Riegel, s.
         # `_bau_schloss`; Anlage und Stufen-Bau darin betreten ihn im selben Strang erneut.
+        # Fix Erst-Start K1 (Entscheid 3, W5): ohne gebaute Geometrie in diesem Prozess rechnet sie
+        # nicht — ihr Pruefbild baute den Bild-Weg vor der ersten Geometrie („Geometrien zuerst,
+        # nichts davor"). Geprueft unter dem Riegel, also nach einem gerade laufenden Geometrie-Bau.
         with self._staffel(lauf, "short start proof"):
-            emb, norm = self.pruefbild()
+            with self._geo_schloss:
+                ohne_geometrie = not self.graphen
+            if not ohne_geometrie:
+                emb, norm = self.pruefbild()
+        if ohne_geometrie:
+            bericht["stand"] = STARTPROBE_OHNE_GEOMETRIE
+            bericht["probe_s"] = round(time.monotonic() - t0, 2)
+            self.startprobe_bericht = bericht
+            _log.info(f"short start proof ({grund}): not run — this process has built no geometry yet, and "
+                      f"the check image must not build the image path before the first geometry (first-start "
+                      f"rule: geometries first); bound to {bericht['geraet']}, "
+                      f"{bericht['personen_mit_vektoren']} person(s) with vectors")
+            return {"startprobe": bericht}
         endlich = all(np.isfinite(emb)) and len(emb) == 512 and norm > 0
         bericht["pruefbild"] = {"dim": len(emb), "norm": norm, "endlich": endlich}
         if not endlich:
@@ -4149,8 +4163,9 @@ class Dienst:
         personen = list(opt["persons"])
         # Jede angefragte Person muss einen Score bekommen, auch ohne Referenzen
         # (analyze.nn liefert dort -1.0) — der Kern baut sein `ohne`-dict aus dieser
-        # Liste (worker_kern.py:917).
-        alle = sorted(set(self.alle) | set(personen))
+        # Liste (worker_kern.py:917). E3b-1a: die Personen der Referenz-Quelle kommen in
+        # event_lauf dazu, aus dem Abzug des Ereignisses (referenzen_frisch, I2).
+        alle = sorted(set(personen))
         bilanz = collections.Counter()
         frames_info = {}
         for k, eid in enumerate(opt["eids"]):
@@ -4298,17 +4313,22 @@ class Dienst:
             _gekappt = (_s_moegl is not None and _s_verw is not None
                         and _s_verw < _s_moegl)
             g = self.geometrie(W, H, fps, lauf)
+            # E3b-1a: die Referenzen als EIN Abzug je Ereignis halten (gelesen beim Start, neu gelesen
+            # nur bei neuer Stand-Kennung, I2), damit nie Namen eines alten mit einer Matrix eines neuen
+            # Stands gepaart werden; die Personen der Referenz-Quelle kommen zu den angefragten dazu.
+            ref_alle, mit_refs, erk = self.referenzen_frisch(lauf)
+            alle = sorted(set(ref_alle) | set(alle))
             # Bauplan K3, Stufe KP3: die Personenzahl dieses Ereignisses (Job-Feld); fehlt sie oder ist
             # sie unbrauchbar (0, kein Typ), None = kein fruehes Ende, keine Obergrenze im Stapel
             pz = _personenzahl.gueltig((opt.get("personenzahl") or {}).get(str(eid)))[0]
 
             def rechnen(tor):
                 # je Lauf ein frischer Vorrat: im Stoerstellen-Neulauf verfaellt der Erstversuch
-                vorrat = wk.Bildvorrat(W, H, lat, self.mit_refs, self.erk, self.modell)
+                vorrat = wk.Bildvorrat(W, H, lat, mit_refs, erk, self.modell)
                 zaehler, zeiten, ende = collections.Counter(), collections.Counter(), {}
                 zeilen, _frames = wk.event_rechnen(
                     tor, g, vid, schritt, float(fest["det_thresh"]), fps,
-                    alle, self.mit_refs, self.erk, lat, zaehler, zeiten, vorrat,
+                    alle, mit_refs, erk, lat, zaehler, zeiten, vorrat,
                     personenzahl=pz, ende=ende)
                 return vorrat, zeilen, ende
 
@@ -4393,7 +4413,16 @@ class Dienst:
         # --- Zusammenfassung und die Umrechnung der Indexbasis
         persons_voll = wk.zusammenfassen(zeilen, personen, lat)
         idx_karte = [i for i, f in enumerate(zeilen) if f["sc"] is not None]
-        bilanz = vorrat.schreiben(outdir, label, eid, persons_voll, personen)
+        # E3a-3 (Bauplan Referenz-Quelle einbauen, Entscheid 7): die Uebernahme-Angebote werden Saetze; das
+        # Job-Feld kommt vom Dienst (run_analyze). Fix 0.1.1.013 F3 (Entscheid 3): kein Rechenwerk beim Speichern,
+        # der Satz traegt die Zahlen der Erkennung mit der Kennung des Rechengraphen. Fix Erst-Start K1 (W1): die Kennung
+        # holt erst dieser Schreibweg ueber `ref_kennung`, also nach der Geometrie dieses Ereignisses, nie beim Start;
+        # ohne Job-Feld ist der Weg ohnehin gesperrt (worker_kern._satz_weg), dann wird sie nicht geholt.
+        from core import harvest_set as _harvest_set        # noqa: PLC0415
+        set_feed = job.get(_harvest_set.FEED_FIELD)
+        bilanz = vorrat.schreiben(outdir, label, eid, persons_voll, personen, set_feed=set_feed,
+                                  kennung=self.ref_kennung(lauf) if isinstance(set_feed, dict) else None,
+                                  datei=os.path.exists(eid))
         for person in personen:
             rec = persons_voll.get(person)
             if not rec:
@@ -4425,6 +4454,17 @@ class Dienst:
             rf.flush()
         if bilanz.get("kandidaten"):
             lauf.log.zeile(f"  Enrollment-Kandidaten: {bilanz['kandidaten']}")
+        if bilanz.get("saetze_neu") or bilanz.get("saetze_ohne"):
+            # E3a-3: die Bilanz des Satz-Schreibwegs (Zeit je Satz in der Job-Antwort, Feld bilder.satz_ms)
+            lauf.log.zeile(f"  reference sets: {bilanz.get('saetze_neu', 0)} written, "
+                           f"{bilanz.get('saetze_schon_da', 0)} already there, "
+                           f"{bilanz.get('saetze_ohne', 0)} without set, {bilanz.get('satz_ms', 0)} ms")
+        if bilanz.get("unbekannt_gruppen"):
+            # Fix 0.1.1.013 F4 (Entscheid 6, X16): der Unbekannt-Stapel dieses Clips; rahmen_spitze ist die Spitze der
+            # gehaltenen Bilder im Bildvorrat dieses Clips (alle Arten, nicht nur der Stapel)
+            lauf.log.zeile(f"  unknown faces: {bilanz['unbekannt_gruppen']} group(s), "
+                           f"{bilanz.get('unbekannt_saetze', 0)} reference set(s), "
+                           f"held frames at peak {bilanz.get('rahmen_spitze', 0)}")
         # 0-Gesichter-Anomalie: volle Frame-Zahl, aber nichts gefunden.
         if len(zeilen) == 0 and not wache.unvollstaendig:
             self.null_serie += 1
@@ -4537,12 +4577,16 @@ class Dienst:
 
     # ---------------------------------------------------------- Lebenszyklus
     def start(self, log):
+        """Baut den Prozess auf: Engine, Wiederholung, Erst-Start-Ordnung, Lesen mit der Modell-Kennung, Wache, Straenge.
+        -> None (Bauplan analysen/bauplan_fix_erststart.md, Stufe K1 Punkt 3: jeder Start hat dieselbe Bau-Vorgeschichte,
+        Geometrien zuerst, nichts davor)"""
         self.engine_bauen()                                # ZUERST, s. referenzen()
-        self.referenzen(log)
         self.wiederholung_uebernehmen()                    # vor dem ersten Job
         self.speicher.__enter__()
         self.frist.__enter__()
-        self.erststart_ordnung_bauen()                     # Bauplan pose_reihenfolge R1, vor dem ersten Job
+        self.erststart_ordnung_bauen()                     # Bauplan pose_reihenfolge R1, vor dem Lesen
+        self.referenzen(log)                               # beim Start, mit der Modell-Kennung, vor den Straengen
+        self.startfolge_wache()                            # Fix Erst-Start K1: kein Bild-Weg vor der ersten Geometrie
         for i in range(self.threads):
             t = threading.Thread(target=self.arbeiter, args=(i,), name=f"rechner-{i}",
                                  daemon=False)
@@ -4554,6 +4598,28 @@ class Dienst:
         self._bg_arbeiter = threading.Thread(target=self.bg_arbeiter, name="hintergrund",
                                              daemon=False)
         self._bg_arbeiter.start()
+
+    def startfolge_wache(self):
+        """Die Wache am Ende von `start`: ist ein Bild-Weg entstanden, war die Vorgeschichte nicht „Geometrien zuerst,
+        nichts davor", und der Prozess stoppt ueber den bestehenden Stopp-Weg der Kompilat-Probe.
+        -> None; im Verstoss `kompilat_gestoppt` mit Grund, Stand „gestoppt", ERROR-Zeile (kein Wurf)
+
+        Bauplan analysen/bauplan_fix_erststart.md, Stufe K1 Punkt 3 und Entscheid 2 (W2): der Prozess bleibt am Leben,
+        lehnt Analyse-Jobs ab (`annehmen`) und traegt den Bericht in jeder Antwort, so dass /health rot wird wie bei
+        einer Kompilat-Abweichung; ein Wurf hier liesse einen stummen toten Prozess zurueck. Jeder Bild-Weg-Zugang
+        laeuft ueber `bild_rechner`, fuer alle vier Engines; deshalb reicht `_bild is None`."""
+        if self._bild is None:
+            return
+        try:
+            gebaut = self._bild.stufen.auskunft()
+        except Exception as e:                              # noqa: BLE001  laut im Grund, die Wache greift trotzdem
+            gebaut = f"no build report ({type(e).__name__}: {e})"
+        self.kompilat_gestoppt = (f"worker stopped: start order violated: image path built before the first geometry "
+                                  f"(built: {gebaut}) — a compiled model built in this order may compute differently "
+                                  f"than the calibrated one, so this worker delivers NO verdicts")
+        self.kompilat_bericht["stand"] = "gestoppt"
+        self.kompilat_bericht["grund"] = einzeilig(self.kompilat_gestoppt, 300)
+        _log.error(self.kompilat_gestoppt)
 
     def beenden(self, frist_s=EOF_FRIST_S):
         """Geordnet enden: keine neuen Jobs, laufende zu Ende fuehren, dann die
@@ -4585,9 +4651,7 @@ def argumente():
                          "in E3 aus der Platz-Formel, nicht aus dem alten "
                          "analyse_plaetze (W2-B16: 4 Prozesse != 4 Threads).")
     ap.add_argument("--scratch", default=None,
-                    help="Arbeitsordner (Kompilat-Cache, refcache). Vorgabe SCRATCH_DIR.")
-    ap.add_argument("--refcache", default=None,
-                    help="refcache.npz. Vorgabe <scratch>/refcache.npz wie analyze.py:264.")
+                    help="Arbeitsordner (Kompilat-Cache). Vorgabe SCRATCH_DIR.")
     # --- .531 KARTENHAUSHALT. Der PRODUKTWEG ist das Start-Argument; verifyd
     # rechnet die Zahlen aus der Leiter und gibt sie hier herein. Die
     # Umgebungsvariable ist NUR der Vorgabewert fuer Proben und Container-Versuche
@@ -4650,8 +4714,6 @@ def argumente():
         a.scratch = os.environ.get("SCRATCH_DIR") or os.path.join(
             tempfile.gettempdir(), "suslik-scratch")        # wie analyze.py:30
     os.makedirs(a.scratch, exist_ok=True)
-    if a.refcache is None:
-        a.refcache = os.path.join(a.scratch, "refcache.npz")
     if a.engine is None:
         kind, _dev = face_audit.resolve_backend()
         # E4 (17.09.2026): `cpu` hat jetzt eine eigene Engine (engine_cpu), die

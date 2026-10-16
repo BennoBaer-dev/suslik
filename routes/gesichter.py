@@ -4,9 +4,10 @@ Sprach-Stufe 0 (.294, konzept_sprache.md): sichtbare Texte kommen aus
 core/sprache.t() gegen die en-Referenz — BYTE-TREU (Harnisch
 tools/harnisch_sprache.py beweist identisches Render gegen den git-Basis-Stand)."""
 import html
-import os
 import urllib.parse
 
+from core import refquelle
+from core.lernlauf import bild_url
 from core.sprache import t
 
 
@@ -24,29 +25,32 @@ def render(personen, data_dir, gefiltert=False, alle=None, pruefung=None):
     es zu sagen (Fehlerklasse "stiller Verlust").
 
     .511 Stufe C: `pruefung` ist die Kopf-Tabelle des Bestands-Pruefers
-    (refs_qs.json -> personen). Daraus stehen auf der Personen-Karte zwei
+    (seit E3b-2b aus anlernen.qs_lesen -> personen). Daraus stehen auf der Personen-Karte zwei
     Dinge: die Zahl der Entfernen-VORSCHLAEGE (mit Weg zum Check) und die
     Warnung "catalogue looks mixed", wenn mehr als die Haelfte der Bilder
     dieser Person naeher an einer fremden Person liegt als an ihr selbst.
     Beides ist Anzeige — auf DIESER Seite wird nichts vorgeschlagen und nichts
     angehakt, der Weg dahin ist der Quality-check-Knopf, den es schon gibt.
-    Fehlt der Bericht (noch kein Lauf), bleibt die Karte wie bisher."""
+    Fehlt der Bericht (noch kein Lauf), bleibt die Karte wie bisher.
+
+    E3b-2a (Bauplan analysen/bauplan_refquelle_einbau.md, Stufe E3 Punkt 2):
+    die Galerie je Person sind ihre Referenz-Saetze aus der Referenz-Quelle
+    (Lese-Stufe b, Feld personen: juengste Bindung zuerst), das Bild kommt
+    ueber /lernlauf/satz/<ref_id> (Lese-Stufe d), der Entfernen-Knopf gibt die
+    ref_id weiter. Kein Lesen von faces/; der Altbestand dort erscheint erst
+    nach dem Umzug (E4)."""
     opts = "".join(f"<option>{html.escape(p)}</option>"
                    for p in (personen if alle is None else alle))
 
     def _js(s):        # JS-String-Kontext in onclick (s. Qualitaet-Route)
         return html.escape(s.replace("\\", "\\\\").replace("'", "\\'"), quote=True)
+    saetze = refquelle.read_catalog({"data_dir": data_dir})["personen"]
     gal = []
     for pp in personen:
-        pdir = os.path.join(data_dir, "faces", pp)
-        try:
-            bil = sorted(f for f in os.listdir(pdir)
-                         if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp")))
-        except FileNotFoundError:
-            bil = []
+        bil = saetze.get(pp, [])
         thumbs = "".join(
             f'<span style="display:inline-block;text-align:center;margin:3px;vertical-align:top">'
-            f'<img src="/refs/{urllib.parse.quote(pp)}/{urllib.parse.quote(b)}" '
+            f'<img src="{html.escape(bild_url(b, None))}" '
             # .507 B4/F3: eine Person kann dutzende Referenzen haben, die
             # volle Liste hunderte — bis .506 luden sie alle sofort (Hoehe
             # steht im style, der Umbruch bleibt also gleich).

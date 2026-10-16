@@ -4,9 +4,12 @@ Suggest removing). Die alten Unter-Tabs Verwechslung/Eignung/Doppel sind seit
 .280 WEG (User 18.08., am kaputten Confusion-Layout: 'kann alles weg, kommt
 an einen anderen Ort und optisch besser') — alle drei Befund-Arten leben in
 der Galerie, Verwechslungs-Kacheln tragen das Gegenbild als Mini-Thumb.
-Der Handler laedt das QS-JSON (anlernen.QS_PATH) und reicht es mit data_dir
-herein; hier wird NUR gerendert (inkl. Existenz-Filter gegen tote Bild-Links,
-User-Befund 19.07.).
+Der Handler laedt die Bestands-QS (anlernen.qs_lesen: Laufprotokoll plus Urteile
+der aktiven Referenz-Saetze, Bild-Schluessel ist die ref_id, dazu `saetze` je
+Person aus Lese-Stufe b) und reicht sie mit data_dir herein; hier wird NUR
+gerendert (inkl. Existenz-Filter gegen tote Bild-Links, User-Befund 19.07.,
+seit E3b-2b gegen die aktiven Saetze). Bilder kommen ueber
+core.lernlauf.bild_url(ref_id, None), nie ueber /refs/<Person>/<Datei>.
 
 Sprach-Stufe 0 (konzept_sprache.md v2): sichtbare Texte aus core/sprache.t()
 — BYTE-TREU (Harnisch tools/harnisch_sprache.py). Grenzen dieser Stufe:
@@ -15,10 +18,10 @@ Funde-Ergebnis-Satz bleiben literal — Splicing/Inline-Markup)."""
 import datetime
 import html
 import json  # seit Tranche D auch selbst genutzt (JS-Text-Injektion §8.4)
-import os
 import urllib.parse
 
 import webui
+from core.lernlauf import bild_url
 from core.sprache import t
 
 # Reiter der Personen-Galerie, in der Reihenfolge der Zuordnung. Der erste
@@ -78,13 +81,14 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
     ausschliesslich HIER."""
     stand = (datetime.datetime.fromtimestamp(qs["ts"]).strftime("%d.%m. %H:%M")
              if qs.get("ts") else "—")
-    # Nur Eintraege zu noch EXISTIERENDEN Dateien rendern — nach einer Loeschung
+    # Nur Eintraege zu noch AKTIVEN Referenz-Saetzen rendern — nach einer Loeschung
     # zeigte die Seite sonst tote Bild-Links (Fragezeichen), bis der
-    # Hintergrund-Neulauf fertig war (User-Befund 19.07.)
-    refs_base = os.path.join(data_dir, "faces")
+    # Hintergrund-Neulauf fertig war (User-Befund 19.07.). Seit E3b-2b sind das die
+    # aktiven Saetze je Person aus Lese-Stufe b (qs["saetze"]), keine Dateien.
+    aktiv = {p_: set(r_) for p_, r_ in (qs.get("saetze") or {}).items()}
 
-    def _da(person, datei):
-        return os.path.isfile(os.path.join(refs_base, person, datei))
+    def _da(person, ref_id):
+        return ref_id in aktiv.get(person, ())
     paare = [p for p in qs.get("paare", [])
              if _da(p["a_person"], p["a_datei"]) and _da(p["b_person"], p["b_datei"])]
     ug = [u for u in qs.get("ungeeignet", []) if _da(u["person"], u["datei"])]
@@ -346,13 +350,9 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
     # die Personen-GALERIE ersetzt die frueheren drei Detail-Reiter (seit
     # .280 fuer ALLE — die Reiter sind weg).
     if person:
-        pdir = os.path.join(refs_base, person)
-        try:
-            alle = sorted(f for f in os.listdir(pdir)
-                          if f.lower().endswith((".jpg", ".jpeg", ".png",
-                                                 ".webp")))
-        except FileNotFoundError:
-            alle = []
+        # E3b-2b: die aktiven Saetze der Person (juengste Bindung zuerst), auch die
+        # nach dem letzten Lauf dazugekommenen (noch ohne Urteil).
+        alle = list((qs.get("saetze") or {}).get(person) or [])
         stufen = (qs.get("stufen") or {}).get(person, {})
         gruende = {u["datei"]: u for u in ug if u["person"] == person}
         dup_weg = {d["datei"]: d for d in doppel}
@@ -405,7 +405,9 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
         dubl_funde = 0
 
         def _kachel(f, rand, wort, zusatz, markiert, behalten=False):
-            src = f'/refs/{urllib.parse.quote(person)}/{urllib.parse.quote(f)}'
+            # E3b-2b: f ist die ref_id; das Bild kommt ueber Lese-Stufe d, der
+            # Auswahlwert traegt Person und ref_id (refBatchLoeschen in app.js).
+            src = html.escape(bild_url(f, None), quote=True)
             val = html.escape(person + "|" + f, quote=True)
             return (
                 f'<label style="display:inline-block;text-align:center;'
@@ -450,8 +452,7 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
                          name=html.escape(vp))
                 # .280: das GEGENBILD als Mini-Thumb — ersetzt den alten
                 # Confusion-Tab (dort stand das Paar nebeneinander).
-                zusatz = (f'<img src="/refs/{urllib.parse.quote(vp)}/'
-                          f'{urllib.parse.quote(vd)}" '
+                zusatz = (f'<img src="{html.escape(bild_url(vd, None), quote=True)}" '
                           f'title="{html.escape(vp)}" '
                           'style="height:34px;border-radius:4px;'
                           'vertical-align:middle;margin-left:4px;'
@@ -542,6 +543,7 @@ def render(ansicht, qs, data_dir, lauf=None, aktiv=False, person=None):
             # gesamten Rest umfasst, und fragt dann ein zweites Mal — mit Namen
             # und Anzahl. Die Zahl kommt von hier und nicht aus dem Abzaehlen
             # der Kacheln: im Kopien-Reiter steht nicht jede Datei einzeln.
+            # Seit E3b-2b ist sie die Zahl der aktiven Saetze der Person.
             '<button class="gtb on" onclick="refBatchLoeschen(this)" '
             f'data-person="{html.escape(person, quote=True)}" '
             f'data-bestand="{len(alle)}">'

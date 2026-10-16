@@ -237,6 +237,14 @@ nav .live .d { width: 7px; height: 7px; border-radius: 50%; background: var(--ok
    beide --border-strong. Kontrast gegen --surface gemessen: vorher 3,35 dunkel / 3,32 hell,
    jetzt 7,34 / 5,91. */
 .pk-unbek { border-left-color: var(--warn); }
+/* Bauplan analysen/bauplan_aehnlich.md Entscheide 8, 12 und 16: die Karte „probably P“ im eigenen Block „Probably
+   recognized“ zwischen People und Unknown, gebaut wie die Unbekannt-Karte, eine je Person P. Der Balken traegt --accent
+   (NEUTRAL/rein informativ): die Identitaeten sind weder sicher erkannt (--ok) noch eine offene Frage wie Unknown (--warn);
+   die Zeilen je Identitaet (U-Nummer, Median, Abstand) in derselben Farbe. Der rote Hinweis unter dem Kopf des Blocks, wenn
+   der letzte Aufraeum-Schritt scheiterte (Entscheide 9 und 17), traegt --crit wie ein Dienstfehler. */
+.pk-aehnlich { border-left-color: var(--accent); }
+.pk-kam.pk-aeh-zu { color: var(--accent); }   /* zwei Klassen: .pk-kam weiter unten setzt sonst --faint */
+.hk-aeh-fehler { background: var(--crit-bg); color: var(--crit); border-radius: 6px; padding: 8px 12px; margin: 0 0 24px; }
 .listhead.leerkopf { display: none; }
 /* .357: an einem Tag NUR mit Unbekannten hat das Recognized-Band keinen Inhalt.
    Eine Ueberschrift ohne alles ist kein Nullwert, sie ist eine falsche Aussage —
@@ -558,6 +566,18 @@ footer a { color: var(--dim); }
 .uk-msg { padding: 0 16px 10px; color: var(--dim); font-size: 12px; }
 .uk-msg:empty { padding: 0; }
 .uk-mehr { margin: 16px 0; text-align: center; }
+/* Bauplan analysen/bauplan_aehnlich.md Entscheide 19 und 20 (Stufe AE5): die Gruppe „Vermutlich P“ ueber der Liste der
+   Unbekannt-Seite, je Person P ein Kopf und die Kacheln ihrer Identitaeten. Farbe wie die Karte „probably P“ der
+   Heute-Seite (--accent, rein informativ): Balken links an der Kachel, Zeile mit U-Nummer, Median und Abstand. Das Urteil
+   „nicht P“ an einer Kachel der Liste steht ruhig (--dim) mit seinem Knopf zur Ruecknahme. */
+.uk-aeh { margin: 0 0 24px; }
+.uk-aeh h4 { margin: 12px 0 8px; color: var(--accent); }
+.uk-aeh .uk { border-left: 3px solid var(--accent); }
+.uk-meta.uk-aeh-zeile { color: var(--accent); overflow-wrap: anywhere; }
+.uk-meta.uk-nein { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+/* Sammelbecken „ähnlich P“ (Bauplan analysen/bauplan_aehnlich.md Entscheid 27): eine Karte je Person mit allen Bildern,
+   darum ueber die ganze Breite der Gruppe. */
+.uk.uk-becken { grid-column: 1 / -1; }
 
 /* ---- Cameras sheet (Phase 2b) ---- */
 .kamhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

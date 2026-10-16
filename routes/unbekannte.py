@@ -23,12 +23,25 @@ Nutzeraugen auf einem Bestand mit 95 Gruppen):
 Bewusst NICHT wieder eingebaut: das Kohaerenz-Badge je Kachel (es kostete eine
 N x N-Matrix ueber alle Mitglieder in JEDEM Seitenaufruf), der Kamera-Chip in
 der Liste und der paarweise Vorschlagsblock — dessen Nutzen traegt jetzt der
-Filterwert "merge suggested"."""
+Filterwert "merge suggested".
+
+GRUPPE „VERMUTLICH P“ (Bauplan analysen/bauplan_aehnlich.md Fassung 6, Stufe AE5 Punkt 1, Entscheide 19 und 20; W5 V4 bis
+V6): eine Identitaet, deren Merkmal „ähnlich zu P“ zaehlt (core.aehnlich.vermutlich: Merkmal und Urteil „nicht P“
+zusammen), aktiv und kein Objekt, steht nicht in der Liste, sondern ueber ihr in der Gruppe ihrer Person P, ohne
+Seitenteilung, mit derselben Kachel (alle Handlungen) plus Median und Abstand und dem Knopf „nicht P“. Filter, Sortierung,
+Seitenteilung, Leiste und Fortschrittsanker gelten nur fuer die Liste; die Gruppe steht auch bei leerer Liste. Eine Kachel
+mit Urteil „nicht P“ traegt das Urteil mit der Ruecknahme. Ohne Merkmal und Urteil ist jede Ausgabe wie vorher.
+
+SAMMELBECKEN „ÄHNLICH P“ (Bauplan analysen/bauplan_aehnlich.md Fassung 8, Stufe AE6 Punkt 5, Entscheide 26 und 27): steht
+als erste Kachel seiner Person in der Gruppe, heisst „ähnlich P“ statt „Unbekannt N“, zeigt alle Bilder mit Haken und hat nur
+zwei Handlungen, beide mit Auswahl: Zuweisen an P und „nicht P“ (_becken_kachel)."""
 import datetime
 import html
 import urllib.parse
 
 import webui
+from core import aehnlich as _aeh
+from core.lernlauf import bild_url
 from core.sprache import t
 
 # EINE Quelle der Listen-Zustaende (QS-Ebenen-Regel: fachliche Aufzaehlungen nie
@@ -40,32 +53,67 @@ SEITE_N = 20            # Gruppen je Ladeschritt
 STREIFEN_N = 12         # Crops je Kachel (Deckel; das Beste zuerst)
 
 
+def bild(ref_id, mid):
+    """Die Bild-Adresse eines Pool-Gesichts (E3a-2): mit ref_id das Profilbild seines Satzes
+    (core.lernlauf.bild_url, Lese-Stufe d), ohne (Zeile vor dieser Version, J8) der Ausschnitt unter
+    /anlern/crops/. -> URL-Pfad"""
+    return bild_url(ref_id, None) if ref_id else f"/anlern/crops/{urllib.parse.quote(str(mid))}.jpg"
+
+
 def _tagesbeginn(jetzt=None):
     d = datetime.datetime.fromtimestamp(jetzt) if jetzt else datetime.datetime.now()
     return d.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
 
 
-def infos(idents_roh, gesichter):
-    """Die Anzeige-Sicht je Identitaet: Mitglieder mit lebendem Gesicht, Zeitspanne,
-    bestes Bild. Kaputte Pool-Zeilen duerfen die Seite nie toeten (kc_phase34 R-2):
-    nur Dicts mit Listen-members kommen durch, Identitaeten ohne lebende Stuetze
-    fallen raus."""
+def infos(idents_roh, gesichter, mitglieder=None):
+    """Die Anzeige-Sicht je Identitaet: Mitglieder mit lebendem Gesicht, Zeitspanne, bestes Bild. Kaputte Pool-Zeilen
+    duerfen die Seite nie toeten (kc_phase34 R-2): nur Dicts kommen durch, Identitaeten ohne lebendes Mitglied fallen raus.
+    Stufe V1c (Bauplan analysen/bauplan_verbraucher_unbekannt.md Punkt 2): mitglieder = core.unbekanntpool.mitglieder
+    (vom Handler); daraus die gebundenen Saetze mit Zeit aus dem Satz, juengste zuerst vor dem Altbestand (Liste members,
+    Zeit und Guete aus der Pool-Zeile). -> Liste der Anzeige-Eintraege"""
     faces = {g["id"]: g for g in gesichter}
     aus = []
     for u in idents_roh:
-        if not (isinstance(u, dict) and isinstance(u.get("members"), list)):
+        if not isinstance(u, dict):
             continue
-        mids = [m for m in u.get("members", []) if m in faces]
-        if not mids:
+        uid = str(u.get("uid") or u.get("id") or "")
+        saetze = [m for m in (mitglieder or {}).get(uid, []) if m["satz"]]
+        saetze.sort(key=lambda m: -(m["ts"] if isinstance(m["ts"], (int, float)) else 0))
+        alt = [m for m in u.get("members", []) if m in faces] if isinstance(u.get("members"), list) else []
+        if not (saetze or alt):
             continue
-        tss = [faces[m]["ts"] for m in mids]
-        mids.sort(key=lambda m: -faces[m].get("guete", 0))
+        alt.sort(key=lambda m: -faces[m].get("guete", 0))
+        mids = [m["id"] for m in saetze] + alt
+        tss = ([m["ts"] for m in saetze if isinstance(m["ts"], (int, float))]
+               + [faces[m]["ts"] for m in alt])
+        refs = {m["id"]: m["ref_id"] for m in saetze}
+        refs.update({m: faces[m].get("ref_id") for m in alt})
         aus.append({"u": u, "id": str(u.get("id", "")), "mids": mids,
-                    "von": min(tss), "bis": max(tss), "rep": mids[0],
+                    "refs": refs,
+                    "von": min(tss, default=0), "bis": max(tss, default=0), "rep": mids[0],
                     "n": len(mids),
                     "objekt": bool(u.get("objekt")),
-                    "status": u.get("status", "aktiv")})
+                    "status": u.get("status", "aktiv"),
+                    "aehnlich": _aeh.vermutlich(u),
+                    "nein": sorted(_aeh.verneint(u)),
+                    "sammel": _aeh.sammel_von(u)})
     return aus
+
+
+def in_gruppe(i):
+    """Steht die Identitaet in der Gruppe „Vermutlich P“ statt in der Liste (Entscheid 19): Merkmal mit Urteil gelesen,
+    aktiv, kein Objekt. -> bool"""
+    return bool(i.get("aehnlich")) and i["status"] == "aktiv" and not i["objekt"]
+
+
+def gruppen(alle):
+    """Die Gruppen „Vermutlich P“ (Entscheid 19): je Person P ihre Identitaeten, das Sammelbecken „ähnlich P“ zuerst
+    (Entscheid 27), dann juengste Sichtung zuerst, Personen nach Namen. -> Liste (Person, [Anzeige-Eintraege])"""
+    out = {}
+    for i in alle:
+        if in_gruppe(i):
+            out.setdefault(i["aehnlich"]["person"], []).append(i)
+    return [(p, sorted(out[p], key=lambda i: (not i.get("sammel"), -i["bis"], -i["n"]))) for p in sorted(out)]
 
 
 def auswahl(alle, vors, sortierung="bilder", filter_="offen", jetzt=None):
@@ -83,7 +131,7 @@ def auswahl(alle, vors, sortierung="bilder", filter_="offen", jetzt=None):
     elif filter_ == "objekt":
         aus = [i for i in alle if i["objekt"]]
     else:
-        aus = [i for i in alle if i["status"] == "aktiv" and not i["objekt"]]
+        aus = [i for i in alle if i["status"] == "aktiv" and not i["objekt"] and not in_gruppe(i)]
         if filter_ == "wieder":
             aus = [i for i in aus if i["n"] >= 2]
         elif filter_ == "heute":
@@ -101,9 +149,11 @@ def auswahl(alle, vors, sortierung="bilder", filter_="offen", jetzt=None):
 def zaehler(alle):
     """(offen, gesamt) fuer den Fortschrittsanker: offen = die aktiven
     Nicht-Objekt-Gruppen, die noch eine Entscheidung brauchen; gesamt = alle
-    Gruppen mit lebender Stuetze. Beides aus DERSELBEN Liste wie die Kacheln."""
-    return (sum(1 for i in alle if i["status"] == "aktiv" and not i["objekt"]),
-            len(alle))
+    Gruppen mit lebender Stuetze. Beides aus DERSELBEN Liste wie die Kacheln; die Gruppe „Vermutlich P“ zaehlt nicht
+    (Entscheid 19)."""
+    liste = [i for i in alle if not in_gruppe(i)]
+    return (sum(1 for i in liste if i["status"] == "aktiv" and not i["objekt"]),
+            len(liste))
 
 
 def _tag(t0, t1):
@@ -129,13 +179,11 @@ def kachel(i):
     UND die Antwort eines Aktions-POSTs — nur so kann die Seite eine Kachel
     ersetzen statt sich neu zu laden (der alte location.reload() lud bei 95
     Gruppen alles noch einmal, inklusive aller Crops)."""
+    if i.get("sammel"):
+        return _becken_kachel(i)
     uid = html.escape(i["id"], quote=True)
     name = html.escape(_unb_name(i["id"]))
-    haken = "".join(
-        f'<label class="uk-mg"><input type="checkbox" class="uk-m" value="{html.escape(m, quote=True)}" '
-        f'onchange="unbTick(this)">'
-        f'<img loading="lazy" src="/anlern/crops/{urllib.parse.quote(m)}.jpg" alt=""></label>'
-        for m in i["mids"][:STREIFEN_N])
+    haken = _haken(i, i["mids"][:STREIFEN_N])
     mehr_bilder = (f'<span class="uk-rest">{t("unbekannte.mehr_bilder", n=i["n"] - STREIFEN_N)}</span>'
                    if i["n"] > STREIFEN_N else "")
     if i["objekt"]:
@@ -159,19 +207,96 @@ def kachel(i):
                f'data-txt="{html.escape(t("unbekannte.knopf_teil"), quote=True)}" '
                f'onclick="unbTeil(\'{uid}\',this)"></button>'
                f'<button class="gtb" onclick="unbBesucher(\'{uid}\',true,this)">{t("unbekannte.knopf_ignorieren")}</button>'
-               f'<button class="gtb" onclick="unbObjekt(\'{uid}\',true,this)">{t("unbekannte.knopf_objekt")}</button>')
+               f'<button class="gtb" onclick="unbObjekt(\'{uid}\',true,this)">{t("unbekannte.knopf_objekt")}</button>'
+               + (_nein_knopf(i["id"], i["aehnlich"]["person"], True) if in_gruppe(i) else ""))
         wahl = (f'<label class="uk-wahl" title="{html.escape(t("unbekannte.attr_wahl"), quote=True)}">'
                 f'<input type="checkbox" class="uk-sel" value="{uid}" onchange="unbSel()"></label>')
     return (
         f'<div class="uk" id="uk-{uid}" data-uid="{uid}">'
         f'<div class="uk-kopf">'
-        f'<img class="uk-face" loading="lazy" src="/anlern/crops/{urllib.parse.quote(i["rep"])}.jpg" alt="">'
+        f'<img class="uk-face" loading="lazy" src="{bild((i.get("refs") or {}).get(i["rep"]), i["rep"])}" alt="">'
         f'<div style="min-width:0"><div class="uk-titel">{name}</div>'
         f'<div class="uk-meta"><span class="num">{i["n"]}</span>'
-        f'{t("unbekannte.meta_zeit", zeit=_tag(i["von"], i["bis"]))}</div></div>'
+        f'{t("unbekannte.meta_zeit", zeit=_tag(i["von"], i["bis"]))}</div>{_aeh_zeilen(i)}</div>'
         f'{wahl}</div>'
         f'<div class="uk-str">{haken}</div>{mehr_bilder}'
         f'<div class="uk-akt">{akt}</div><div class="uk-msg"></div></div>')
+
+
+def _haken(i, mids):
+    """Der Bildstreifen einer Kachel: je Bild ein Haken fuer die Teil-Auswahl. -> HTML"""
+    return "".join(
+        f'<label class="uk-mg"><input type="checkbox" class="uk-m" value="{html.escape(m, quote=True)}" '
+        f'onchange="unbTick(this)">'
+        f'<img loading="lazy" src="{bild((i.get("refs") or {}).get(m), m)}" alt=""></label>'
+        for m in mids)
+
+
+def _becken_kachel(i):
+    """Die Kachel des Sammelbeckens „ähnlich P“ (Bauplan analysen/bauplan_aehnlich.md Entscheide 26 und 27): Titel „ähnlich
+    P“, alle Bilder mit Haken und nur die zwei Handlungen mit Auswahl, Zuweisen an P und „nicht P“; kein Benennen der ganzen
+    Gruppe, kein Zusammenlegen, Besucher, Objekt (der Server lehnt sie ab). -> HTML"""
+    uid = html.escape(i["id"], quote=True)
+    p = html.escape(i["sammel"], quote=True)
+    akt = (f'<input type="hidden" id="nm-{uid}" value="{p}">'
+           f'<button class="gtb on uk-teil" id="teil-{uid}" hidden '
+           f'data-txt="{html.escape(t("unbekannte.knopf_teil"), quote=True)}" '
+           f'onclick="unbTeil(\'{uid}\',this)"></button>'
+           f'<button class="gtb uk-nein-teil" id="nein-{uid}" hidden data-person="{p}" '
+           f'data-txt="{html.escape(t("heute.aehnlich.sammel_nein_teil"), quote=True)}" '
+           f'onclick="unbNichtPTeil(\'{uid}\',this)"></button>')
+    return (
+        f'<div class="uk uk-becken" id="uk-{uid}" data-uid="{uid}">'
+        f'<div class="uk-kopf">'
+        f'<img class="uk-face" loading="lazy" src="{bild((i.get("refs") or {}).get(i["rep"]), i["rep"])}" alt="">'
+        f'<div style="min-width:0"><div class="uk-titel">{html.escape(t("heute.aehnlich.sammel", person=i["sammel"]))}'
+        f'</div><div class="uk-meta"><span class="num">{i["n"]}</span>'
+        f'{t("unbekannte.meta_zeit", zeit=_tag(i["von"], i["bis"]))}</div>'
+        f'<div class="uk-meta">{html.escape(t("heute.aehnlich.sammel_hinweis", person=i["sammel"]))}</div></div></div>'
+        f'<div class="uk-str">{_haken(i, i["mids"])}</div>'
+        f'<div class="uk-akt">{akt}</div><div class="uk-msg"></div></div>')
+
+
+def _nein_knopf(uid, person, an):
+    """Der Knopf „nicht P“ (an) oder die Ruecknahme des Urteils (Entscheid 20); Kennung und Person als data-Attribute, nie
+    im JS-Text. -> HTML"""
+    text = t("heute.aehnlich.nein", person=person) if an else t("heute.aehnlich.nein_zurueck")
+    return (f'<button class="gtb" data-uid="{html.escape(uid, quote=True)}" '
+            f'data-person="{html.escape(person, quote=True)}" '
+            f'onclick="unbNichtP(this,{"true" if an else "false"})">{html.escape(text)}</button>')
+
+
+def _aeh_zeilen(i):
+    """Die Zusatzzeilen einer Kachel (Entscheide 19, 20): in der Gruppe Median und Abstand, je Urteil „nicht P“ das Urteil
+    mit der Ruecknahme; ohne beides leer. -> HTML"""
+    aus = ""
+    if in_gruppe(i):
+        m = i["aehnlich"]
+        zeile = t("heute.aehnlich.ident", uid=i["id"], median=f'{m["median"]:.2f}', abstand=f'{m["abstand"]:.2f}')
+        aus += f'<div class="uk-meta uk-aeh-zeile">{html.escape(zeile)}</div>'
+    for p in i.get("nein") or []:
+        aus += (f'<div class="uk-meta uk-nein">{html.escape(t("heute.aehnlich.nein", person=p))} '
+                f'{_nein_knopf(i["id"], p, False)}</div>')
+    return aus
+
+
+def gruppe_html(person, karten=""):
+    """Eine Gruppe „Vermutlich P“ (Entscheid 19): Kopf „probably P“ und die Kacheln; leer der Rahmen, in den die Seite eine
+    Kachel nach einer Handlung einsetzt. -> HTML"""
+    return (f'<div class="uk-aeh-p" data-person="{html.escape(person, quote=True)}">'
+            f'<h4>{html.escape(t("heute.aehnlich.zu", person=person))}</h4>'
+            f'<div class="ukliste uk-aeh-liste">{karten}</div></div>')
+
+
+def _gruppen_block(alle, aeh_fehler):
+    """Der Block „Probably recognized“ ueber der Liste (Entscheid 19), mit dem roten Hinweis, wenn der letzte
+    Aufraeum-Schritt scheiterte (ED008); ohne Gruppe und ohne Fehler leer. -> HTML"""
+    gr = gruppen(alle)
+    if not gr and not aeh_fehler:
+        return ""
+    fehler = f'<p class="hk-aeh-fehler">{html.escape(t("heute.aehnlich.fehler"))}</p>' if aeh_fehler else ""
+    return (f'<div class="uk-aeh" id="uk-gruppen"><h3>{html.escape(t("heute.aehnlich.titel"))}</h3>{fehler}'
+            + "".join(gruppe_html(p, kacheln(ii)) for p, ii in gr) + '</div>')
 
 
 def kacheln(liste):
@@ -210,12 +335,14 @@ def _leiste(sortierung, filter_, mengen):
 
 
 def render(idents_roh, gesichter, vors, personen, sortierung="bilder",
-           filter_="offen", jetzt=None):
+           filter_="offen", jetzt=None, mitglieder=None, aeh_fehler=False):
     """-> Seiten-INHALT (Layout/Banner bleiben beim Handler).
     idents_roh = anlernen.lade_unbekannte() (roh, der Kaputt-Zeilen-Filter
     wohnt in infos()) · gesichter = anlernen.lade_gesichter() · vors =
-    anlernen.lade_unbekannt_vorschlaege() · personen = master_persons(cfg)."""
-    alle = infos(idents_roh, gesichter)
+    anlernen.lade_unbekannt_vorschlaege() · personen = master_persons(cfg) ·
+    mitglieder = core.unbekanntpool.mitglieder (Stufe V1c, gebundene Saetze) · aeh_fehler = der letzte
+    Aufraeum-Schritt der Gruppe „ähnlich“ scheiterte (core.aehnlich.SPEICHER.rot)."""
+    alle = infos(idents_roh, gesichter, mitglieder)
     liste = auswahl(alle, vors, sortierung, filter_, jetzt=jetzt)
     offen, gesamt = zaehler(alle)
     mengen = {w: len(auswahl(alle, vors, sortierung, w, jetzt=jetzt)) for w in FILTER}
@@ -241,7 +368,7 @@ def render(idents_roh, gesichter, vors, personen, sortierung="bilder",
               f'data-txt="{html.escape(t("unbekannte.knopf_bulkmerge"), quote=True)}" '
               f'onclick="unbBulkMerge(this)"></button>'
               f'<span id="uk-bulk-msg"></span></div>')
-    inhalt = kopf + _leiste(sortierung, filter_, mengen) + sammel
+    inhalt = kopf + _gruppen_block(alle, aeh_fehler) + _leiste(sortierung, filter_, mengen) + sammel
     if filter_ == "objekt":
         inhalt += f'<p class="dim">{t("unbekannte.satz_objekte")}</p>'
     if not liste:

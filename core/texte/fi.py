@@ -69,24 +69,25 @@ T = {
     "readme.inhalt": "Sisältö",
     "readme.neu.titel": "Uutta tässä versiossa",
     "readme.neu.text":
-        "Tässä versiossa on muuttunut paljon, alkaen siitä, miten testaan ennen "
-        "julkaisua. Jokainen versio käy nyt läpi testiajon kolmella "
-        "testikoneella ennen kuin julkaisen sen. Välillä koodiin oli livahtanut "
-        "virheitä. Testiajon tarkoitus on löytää ne aiemmin.\n\n"
-        "Kasvontunnistus toimii nyt eri tavalla. Ohjelma tarkistaa edelleen "
-        "tapahtumasta joka x:nnen kuvan. Kun kasvot saavuttavat tunnetun "
-        "henkilön kohdalla tietyn arvon, ovi aukeaa: seuraavat 20 kuvaa "
-        "tarkistetaan yksitellen. Jos kasvot saavuttavat saman arvon uudelleen "
-        "ikkunan sisällä, ovi pysyy auki pidempään. Sen jälkeen palataan joka "
-        "x:nteen kuvaan.\n\n"
-        "Nimi muuttuu vihreäksi vasta kolmen osuman jälkeen. Jokainen "
-        "käyttökelpoinen kasvokuva, joka sopii henkilöön, lasketaan yhdeksi "
-        "osumaksi. Kasvot, jotka näkyvät selvästi vain hetken, saavat nyt "
-        "paremman mahdollisuuden: kun ne on havaittu, heti niiden jälkeisiä "
-        "kuvia ei enää ohiteta.\n\n"
-        "Kaikki palaute ilahduttaa minua, varsinkin kun uusi tunnistus menee "
-        "pieleen: väärä nimi tai tunnettu henkilö, jota ei tunnisteta. Vain "
-        "niin pystyn työstämään virheitä.",
+        "Tämä versio tuo paljon muutoksia. Tärkeimmät:\n\n"
+        "Opitut kasvot tallennetaan uudella tavalla. Jokainen kasvokuva on nyt "
+        "oma kokonaisuutensa, jossa on kuva, mittaukset ja alkuperä. Tämä "
+        "valmistelee parempaa esivalintaa ja suosituksia siitä, mitkä kuvat "
+        "sopivat viitekuviksi. Ensimmäisellä käynnistyskerralla versio siirtää "
+        "kasvosi kerran. Mitään ei poisteta, vanhat tiedostot jäävät paikalleen.\n\n"
+        "Tuntemattomat kasvot tunnistetaan ja kohdistetaan paremmin. Tapahtuman "
+        "kasvot ryhmitellään samankaltaisuuden mukaan, ja niitä verrataan "
+        "tuntemattomiin, jotka sinulla jo on. Jos ryhmä sopii johonkin niistä, se "
+        "lisätään siihen, muuten syntyy uusi tuntematon.\n\n"
+        "Tuntemattomat, jotka muistuttavat tunnettua henkilöä, on nyt koottu "
+        "kohtaan ”Todennäköisesti tunnistetut”. Siellä voit liittää ne kyseiseen "
+        "henkilöön tai todeta, ettei se ole hän.\n\n"
+        "Jos tämän version kanssa tulee ongelmia, voit palata versioon 0.1.1.010. "
+        "Vaihda image takaisin versioon 0.1.1.010 ja käynnistä uudelleen, "
+        "datakansiolle ei tarvitse tehdä mitään. Silloin puuttuvat ne kasvot, "
+        "jotka tämä versio on oppinut päivityksen jälkeen. Ja sitä, mitä "
+        "0.1.1.010 oppii sen jälkeen, myöhempi päivitys ei ota mukaan.\n\n"
+        "Kaikki palaute ilahduttaa minua, varsinkin kun jokin menee pieleen.",
     "readme.generell.titel": "Yleistä",
     "readme.generell.text": "Skenaariotunnistukseni nojaa Frigaten henkilöiden havaitsemiseen. Heti kun Frigate ilmoittaa henkilöstä, haen koko henkilötapahtuman. Tällainen tapahtuma on joskus muutaman sekunnin, joskus useita minuutteja pitkä. Käyn sen kokonaan läpi löytääkseni siitä jokaisen henkilön.\n\nSillä ei ole väliä, onko Frigaten oma kasvontunnistus päällä. Sitä tarvitaan vain, jos haluat täsmäyttää kasvot Frigaten kanssa.\n\nTarkistus ei koskaan käytä detect-streamia. Se käyttää tallennetta, eli parasta streamia, jonka kamera antaa Frigatelle.\n\nTarkistus käynnistyy kahdella tavalla. Joko Frigaten henkilötapahtumasta, se on skenaarion tie. Tai live-vahdista: se hakee käynnissä olevan streamin suoraan kamerasta tai Frigaten proxyn kautta, etsii siitä kasvot ja lähtee siitä liikkeelle.\n\nHenkilö tunnistetaan kolmella tavalla. Kasvoista. Koko henkilöstä, pelkästä kuvasta, ilman kasvoja. Vision-mallilla, ja se tie on vielä beta.\n\nMinulla on täällä 4K-kamerat, kuvataajuus niin korkealla kuin se menee, vähintään 15 kuvaa sekunnissa. Bittinopeus yhtä lailla. Matala bittinopeus jättää liikkuvat kasvot epäteräviksi.",
     "readme.aktuell.titel": "Mitä parhaillaan työstän",
@@ -124,16 +125,12 @@ T = {
         "Hyvät uudet kasvot (isot, terävät, edestä, joko varmasti "
         "tunnistetut tai selvästi tuntemattoman henkilön kasvot) "
         "ilmestyvät tänne automaattisesti analyysin jälkeen.",
-    "lernen.karte.unbekannt": "Tuntematon henkilö",
     "lernen.karte.metrik_voll":
         "tulos {score} · uutuus {novelty} · {bw}×{bh}px · edestä {front} "
         "· terävyys {sharp}",
     "lernen.karte.metrik_kurz": "tulos {score}",
     "lernen.karte.link_video": "Video",
     "lernen.karte.knopf_add_person": "Lisää nimellä {person}",
-    "lernen.karte.attr_person": "henkilönä…",
-    "lernen.karte.attr_neu": "tai uusi henkilö",
-    "lernen.karte.knopf_add": "Lisää",
     "lernen.karte.knopf_ablehnen": "Hylkää",
     "lernen.galerie.titel": "Viitevarasto (Master)",
     "lernen.galerie.bildzahl": "{n} viitettä",
@@ -258,13 +255,6 @@ T = {
         "{person} jo tunnistettiin varmasti. Merkitse ja ota käyttöön.",
     "aehnliche.kopf.link_zurueck": "takaisin",
     "aehnliche.unbekannt.titel": "Tuntemattomista kasvoista",
-    "aehnliche.unbekannt.suche_titel":
-        "Haku käynnissä — viitteet luetaan uudelleen.",
-    "aehnliche.unbekannt.kein_cache": "Viitteitä ei ole vielä luettu sisään.",
-    "aehnliche.unbekannt.kein_cache_hinweis":
-        "Tämä lista tarvitsee viiteindeksin. Viitteiden tarkistus "
-        "kirjoittaa sen — sen jälkeen tänne tulee tulos.",
-    "aehnliche.unbekannt.knopf_pruefen": "tarkista viitteet",
     "aehnliche.unbekannt.hinweis_leer":
         "Ei samankaltaisia tuntemattomia kasvoja varastossa.",
     "aehnliche.unbekannt.aehnlichkeit": "samankaltaisuus {sim}",
@@ -460,12 +450,14 @@ T = {
         "taulukossa, oletuksena pois. Jokainen pyyntö kirjataan palvelun "
         "lokiin. Kasvo- ja kehoalueet sisältävät kuvia oikeista ihmisistä "
         "— luovuta token harkiten. Ilman TLS:ää tämän palvelun edessä "
-        "token kulkee selkokielisenä. Token sallii myös neljä toimintoa: "
+        "token kulkee selkokielisenä. Token sallii myös viisi toimintoa: "
         "tämän palvelun uudelleenkäynnistyksen etänä (POST /support/restart), "
         "tapahtumien ajamisen uudelleen tunnistuksen läpi "
         "(POST /support/einspielen), hienomittauksen kytkemisen päälle tai "
-        "pois (POST /support/feinmessung) ja debug-lokin kytkemisen päälle "
-        "tai pois ilman uudelleenkäynnistystä (POST /support/debug).",
+        "pois (POST /support/feinmessung), debug-lokin kytkemisen päälle "
+        "tai pois ilman uudelleenkäynnistystä (POST /support/debug) ja "
+        "pienten tiedosto-operaatioiden mittaamisen palvelussa ja uudessa "
+        "prosessissa (POST /support/dateiprobe).",
     "konfiguration.support.token_gesetzt": "Support-token on asetettu.",
     "konfiguration.support.token_fehlt": "Ei vielä support-tokenia.",
     "konfiguration.support.knopf_token": "Luo uusi token",
@@ -1899,7 +1891,6 @@ T = {
     "js.vollrestore.laeuft":
         "lähetetään ja palautetaan … (suuret tiedostot vievät aikansa)",
     "js.enroll.fehler": "Virhe: {msg}",
-    "js.enroll.person_fehlt": "Valitse henkilö tai syötä uusi.",
     "js.upload.fehlt": "Valitse henkilö (valikosta tai uusi) ja tiedosto.",
     "js.upload.trotzdem": "{msg}\n\nLisätäänkö silti?",
     "js.anlernen.frage":
@@ -1957,8 +1948,8 @@ T = {
     "js.ref.batch_frage": "Poistetaanko {n} kuvaa?",
     "js.ref.batch_alle_frage":
         "Nämä ovat KAIKKI henkilön {person} {n} viitekuvaa. Ilman "
-        "viitettä {person} ei voi enää tunnistaa. Kuvat siirtyvät "
-        "roskakorikansioon ja ne voi siirtää takaisin. Jatketaanko?",
+        "viitettä {person} ei voi enää tunnistaa. Viitejoukot siirtyvät "
+        "arkistoon (mitään ei poisteta). Jatketaanko?",
     "js.dienst.nicht_erreichbar":
         "palvelua ei tavoiteta — yritä hetken kuluttua uudelleen.",
     "js.unb.tick": "{phase} … {s} s",
@@ -1978,7 +1969,7 @@ T = {
         'Merkitäänkö "ei henkilö" (pensas, heijastus, pysäköity auto)? Se '
         'ei enää näy vierailijana; kohdassa "ei henkilöitä" tämän voi '
         'peruuttaa.',
-    "js.person.loesch_frage": 'Poistetaanko KAIKKI viitteet ja nimi "{person}"?\nKuvat siirtyvät roskakorikansioon (palautettavissa).\n\nKirjoita nimi vahvistukseksi:',
+    "js.person.loesch_frage": 'Poistetaanko KAIKKI viitteet ja nimi "{person}"?\nViitejoukot siirtyvät arkistoon (mitään ei poisteta).\n\nKirjoita nimi vahvistukseksi:',
     "js.person.name_falsch": "Nimi ei täsmännyt — mitään ei poistettu.",
     "js.person.umbenennen_frage": 'Nimeä "{person}" uudelleen — korjaa nimi alle.\n\nHuomioi:\n- omat automaatiosi (Home Assistant / MQTT) vertaavat nimeä sanomassa ja ne on päivitettävä\n- jos Frigate-vienti on päällä, vanha nimi jää Frigaten puolelle (sen API ei osaa nimetä uudelleen)\n- menneet snapshotit, lokit ja varmuuskopiot säilyttävät vanhan nimen',
     "js.person.umbenennen_lauf": "nimetään uudelleen — {phase} {i}/{n}",
@@ -2068,7 +2059,6 @@ T = {
     "js.live.job_fehl": "lähdetesti EPÄONNISTUI: {text}",
     "js.live.messung_fehl": "kuormamittaus epäonnistui: {grund}",
     "js.live.test_fehl": "lähdetesti epäonnistui: {grund}",
-    "auftritte.unbek.zaehlung": "+{n} ilman osumaa (yleensä samat henkilöt)",
     "auftritte.unbek.name": "Tuntematon {nummer}",
     "auftritte.unbek.ohne_treffer.eins":
         "{n} tapahtuma, jossa kasvot ilman osumaa",
@@ -2488,8 +2478,8 @@ T = {
     "system.voll.knopf_restore": "Palauta täysi varmuuskopio…",
     "system.voll.careful": "tämä arkisto {hinweis}.",
     "system.voll.restore_satz":
-        "Palautus korvaa nämä osat (jokainen edellinen säilytetään "
-        "kertaalleen muodossa *.pre-restore-*) ja käynnistää palvelun "
+        "Palautus korvaa nämä osat (edelliset säilyvät kansiossa "
+        "state/archiv/, mitään ei poisteta) ja käynnistää palvelun "
         "uudelleen. Parin sadan megatavun lähetys voi kestää — jätä sivu "
         "auki.",
     "system.live.titel": "Live-vahdit",
@@ -3264,8 +3254,8 @@ T = {
     "personwizard.review.js_frage_nach": " hylätään.",
     "personwizard.modell.js_fehler": "virhe ",
     "antwort.person_entfernt":
-        "{person} poistettu ({n} viitekuvaa siirretty roskakoriin — "
-        "palautettavissa)",
+        "{person} poistettu ({n} viitejoukkoa arkistoitu — mitään ei "
+        "poistettu)",
     "antwort.person_name_ungueltig": "virheellinen nimi",
     "antwort.person_unbekannt": "tuntematon henkilö",
     "antwort.person_name_belegt":
@@ -3311,13 +3301,6 @@ T = {
     "antwort.sync_transfer": "siirto käynnissä ({n} valittu)",
     "antwort.bruecke_hinzu": "{n} kuvaa lisätty",
     "antwort.modell_laedt": "tunnistusmalli latautuu — pari sekuntia …",
-    "antwort.refcache_baut":
-        "viitekirjastoa rakennetaan uudelleen — suuressa kirjastossa tämä "
-        "voi kestää minuutin …",
-    "antwort.refcache_fehler":
-        "viitekirjaston uudelleenrakennus epäonnistui kahdesti peräkkäin "
-        "— katso palvelun loki (/log); seuraava yritys on muutaman "
-        "minuutin päästä",
     "antwort.cache_aufgeraeumt":
         "{n} leikettä poistettu, {mb} MB vapautui — välimuisti {cache} "
         "GB, {frei} GB vapaana",
@@ -3731,6 +3714,10 @@ T = {
         "jälkeen) — ei vielä vahvistettua käyntiä",
     "heute.person.live_link": "siirry live-ilmoitukseen {zeit} · {kamera}",
     "heute.person.mehr": "kaikki {n} henkilöä ({m} lisää)",
+    "heute.unbek.cnt.eins": "{n} tuntematon henkilö · viimeksi nähty ensin",
+    "heute.unbek.cnt.viele": "{n} tuntematonta henkilöä · viimeksi nähty ensin",
+    "heute.unbek.gesehen": "nähty {von}–{bis}",
+    "heute.unbek.gesehen_einmal": "nähty {zeit}",
     "heute.anw.dauer": "paikalla noin {h} h",
     "heute.anw.title":
         "läsnäolo tunneittain, kaikki kamerat — punainen: vahvistettu "
@@ -3758,6 +3745,24 @@ T = {
     "heute.rand.unbek_title":
         "poolin tuntemattomat identiteetit, joilla on tukea tänä päivänä; "
         "ilman poolidataa: käynnit ilman yhtään tunnistusta",
+    "heute.aehnlich.titel": "Todennäköisesti tunnistetut",
+    "heute.aehnlich.cnt.eins": "{n} tunnettu henkilö, vahvistamaton · viimeksi nähty ensin",
+    "heute.aehnlich.cnt.viele": "{n} tunnettua henkilöä, vahvistamaton · viimeksi nähty ensin",
+    "heute.aehnlich.zu": "todennäköisesti {person}",
+    "heute.aehnlich.ident": "{uid} · mediaani {median} · ero {abstand}",
+    "heute.aehnlich.rand.eins": "{n} henkilö todennäköisesti tunnistettu — katso Todennäköisesti tunnistetut",
+    "heute.aehnlich.rand.viele": "{n} henkilöä todennäköisesti tunnistettu — katso Todennäköisesti tunnistetut",
+    "heute.aehnlich.fehler": "Viimeisin todennäköisesti tunnistettujen henkilöiden tarkistus epäonnistui (virhe) — tässä näkyvät ryhmät voivat olla vanhentuneita. Lisätiedot lokissa ja kohdassa /health.",
+    "heute.aehnlich.nein": "ei {person}",
+    "heute.aehnlich.nein_zurueck": "peru",
+    "heute.aehnlich.antwort_nein": "ei {person} — ryhmä on taas kohdassa Tuntemattomat",
+    "heute.aehnlich.antwort_zurueck": "arvio ”ei {person}” peruttu — seuraava tarkistus (minuutin sisällä) voi liittää ryhmän uudelleen",
+    "heute.aehnlich.titel_lauf": "todennäköisesti {person} — käynti",
+    "heute.aehnlich.sammel": "muistuttaa henkilöä {person}",
+    "heute.aehnlich.sammel_hinweis": "Kerätyt kasvot, jotka muistuttavat henkilöä {person}. Merkitse kasvot liittääksesi ne henkilöön {person} tai poistaaksesi ne arviolla ei {person} (niistä tulee uusi tuntematon).",
+    "heute.aehnlich.sammel_nein_teil": "Ei {person} — {n} merkittyä",
+    "heute.aehnlich.sammel_abgelehnt": "Ei mahdollista kohteelle ”muistuttaa henkilöä {person}” — tässä voi vain liittää merkityt kasvot tai poistaa merkityt kasvot arviolla ei {person}.",
+    "heute.aehnlich.antwort_sammel_nein": "{n} kasvo(a) poistettu kohteeksi {name} arviolla ”ei {person}”",
     "meldung.wache.name_satz":
         "tunnistettu (live, alustava): {name} ({wort}, {n} yhtäpitävää "
         "vilkaisua)",

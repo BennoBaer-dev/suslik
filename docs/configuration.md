@@ -42,13 +42,14 @@ Everything persistent is under the `/data` volume you mounted:
 | Path (under `/data`) | What |
 |---|---|
 | `config/config.json` | the settings the wizard writes (Frigate URL, backend, zones, alert options …) |
-| `faces/` | your reference face library (the "master") |
+| `refquelle/` | the reference source: one set per learned face (`refquelle/<ref_id>/`: face crop, fingerprint, profile picture, person crop, origin record) and the catalog `refquelle/katalog.jsonl` that binds each set to a person — your reference face library |
+| `faces/` | a derived copy of the profile pictures, one folder per person, rebuilt by suslik for display and export; not a source any more |
 | `learn/` | enrollment data and the persistent unknown pool |
-| `state/` | judgments, ground-truth labels, write-back log; `state/anwesenheit/` holds the presence marks (one file per day: who was confirmed where, per quarter hour — personal data) |
+| `state/` | judgments, ground-truth labels, write-back log; `state/anwesenheit/` holds the presence marks (one file per day: who was confirmed where, per quarter hour — personal data); `state/archiv/` holds removed reference sets, the copy of the old stock from the one-time migration (`vor_refquelle_<date>/`) and the parts replaced by a restore — nothing in it is deleted |
 | `live/` | live watchers: per-camera evidence pictures of triggers and name messages, the recap videos of the live day view, and the alert log |
 | `personlern/` | the person-recognition path: harvest runs with crops and your review verdicts, confirmed stranger images (`fremd/`), the trained model (`modell/`), judged live crops (`treffer/`, 30-day trim) and the fire-window state |
 | `clips/`, `events/` | cached recorded clips (auto-pruned) and per-event crops/logs |
-| `backups/` | daily rotating tar backups of the reference library + ground-truth files (14 kept) |
+| `backups/` | tar backups written by versions before the reference source; suslik writes none any more and leaves the old ones in place — the full backup below replaces them |
 
 **`personlern/fremd/` — the stranger folder.** A flat folder of `.jpg` body crops of
 people who are *not* residents. The model trains them as a class of its
@@ -60,9 +61,17 @@ removing the folder simply restores the previous behaviour.
 
 Because config and data live in the volume, they survive image updates. Back up `/data` —
 or use the **Full backup** card on the System page: it downloads one portable archive with
-`config`, `faces`, `learn`, `personlern` and `state` (deliberately without the clip cache
-and per-event artifacts), and the matching restore replaces those parts, keeps one
-`.pre-restore` copy of each and restarts the service. Made for moving to another machine.
+`config`, `faces`, `learn`, `personlern`, `state` (with `state/archiv/`) and, from `refquelle/`, the
+catalog and the reference sets (candidate sets stay out, they are produced again), deliberately without
+the clip cache and per-event artifacts. The matching restore moves the parts it replaces into
+`state/archiv/`, deletes nothing and restarts the service. Made for moving to another machine. Before
+the update to the first version with the reference source, also save `clips/refcache.npz` (see
+[installation.md](installation.md#before-you-update)).
+
+Two settings belong to the reference source: `profil_faktor` (default 2.2, must be above 1.5) sets the
+side of a stored profile picture as this factor times the longer side of the face box, and
+`aufbewahrung_tage` (default 60, `verifyd.yaml` only) is how long discarded candidate sets and old
+event folders are kept.
 
 ## Key settings
 
@@ -223,8 +232,8 @@ The **System** page has a **Configuration backup** card:
   next to the store, then the service restarts. The setup wizard can consume the same file via
   **"Already have a configuration?"**.
 
-This covers **settings only**. Your learned people and reference faces are backed up separately by
-the daily data backup written to `/data/backups/`.
+This covers **settings only**. Your learned people and reference faces are in the **Full backup**
+(see *Where configuration lives* above).
 
 ## Read-back vs. write-back safety
 

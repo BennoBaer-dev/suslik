@@ -195,63 +195,112 @@ def _live_guards_aktiv(cfg):
                for name, g in blk.items())
 
 
-def _pool_eid_karte(data_dir):
-    """/heute-Blick in den Unbekannt-Pool -> (eid2uid, uid_members): Event-ID
-    zu U-Nummer plus Mitglieder je Identitaet (fuer "seen Nx before").
+def _unbekannt_karte(uid, heute, vorher, paesse, ziel, anker, aehnlich=None):
+    """EINE Unbekannt-Karte der Heute-Seite (Bauplan analysen/bauplan_verbraucher_unbekannt.md Stufe V1c Punkt 1): Markup
+    pk/pk-unbek wie die Personenkarten, Bild des juengsten Mitglieds ueber routes.unbekannte.bild, erste und letzte Sichtung,
+    Auftritte, letzte Kamera, Hinweis „seen N× before“. Mit aehnlich (Person P und die Liste (uid, Merkmal) ihrer
+    Identitaeten am Tag; Bauplan analysen/bauplan_aehnlich.md Entscheide 12 und 16) die Karte „probably P“: Klasse
+    pk-aehnlich, die Sichtungen aller dieser Identitaeten zusammengefasst, darunter je Identitaet die U-Nummer mit Median und
+    Abstand. -> HTML der Karte"""
+    from routes.unbekannte import bild as _bild
+    erst, letzt = heute[0], heute[-1]
+    rid = letzt["ref_id"]
+    if not rid and not letzt["satz"]:
+        import anlernen as _al                       # Altbestand: ref_id der Pool-Zeile (E3a-2), sonst Ausschnitt
+        rid = _al.pool_ref_ids().get(letzt["id"])
+    hhmm = lambda t: datetime.datetime.fromtimestamp(t).strftime("%H:%M")   # noqa: E731
+    kamera = letzt["kamera"] or next((e.get("cam") for s in paesse for e in (s.get("evs") or [])
+                                      if str(e.get("eid")) == str(letzt["eid"])), None)
+    teile = [_sprache.t("heute.unbek.gesehen_einmal", zeit=hhmm(erst["ts"])) if letzt["ts"] - erst["ts"] < 60
+             else _sprache.t("heute.unbek.gesehen", von=hhmm(erst["ts"]), bis=hhmm(letzt["ts"])),
+             _sprache.t_n("heute.person.auftritte", len(heute))]
+    if kamera:
+        teile.append(_sprache.t("heute.person.zuletzt", kamera=str(kamera), zeit=hhmm(letzt["ts"])))
+    if aehnlich:
+        person, eintraege = aehnlich
+        name = _sprache.t("heute.aehnlich.zu", person=person)
+        zusatz = "".join('<div class="pk-kam pk-aeh-zu">' + html.escape(_sprache.t(
+            "heute.aehnlich.ident", uid=u, median=f"{m['median']:.2f}", abstand=f"{m['abstand']:.2f}")) + '</div>'
+            for u, m in eintraege)
+    else:
+        name = f"Unknown {uid.lstrip('U')}"
+        zusatz = (f'<div class="pk-kam">seen {vorher}× before</div>' if vorher > 0
+                  else '<div class="pk-kam">first time here</div>')
+        if any(s.get("gt_fremd") for s in paesse):    # F2/A2: vom User bestaetigter Fremder, ruhig ausweisen
+            zusatz += '<div class="pk-kam badge-gtfremd">confirmed stranger</div>'
+    return (f'<div class="pkwrap"><a{anker} class="pk {"pk-aehnlich" if aehnlich else "pk-unbek"}" '
+            f'title="Open this walk-through" href="{ziel}">'
+            f'<div class="pk-av pk-av-unbek"><img src="{_bild(rid, letzt["id"])}" loading="lazy" alt=""></div>'
+            f'<div class="pk-txt"><div class="pk-name">{html.escape(name)}</div>'
+            f'<div class="pk-meta">{html.escape(" · ".join(teile))}</div>{zusatz}</div></a></div>')
 
-    Widerleger phase34 MUSS-2: der /heute-Handler trug hier einen DRITTEN
-    Streu-Parser derselben Datei — `{"members": 5}` warf `TypeError: 'int'
-    object is not iterable` UNGEFANGEN in do_GET, die Seite starb (gemessen),
-    waehrend der Harnisch nur das tolerante Modul prueft (K1). Deckungs-
-    Regel: EIN Leser fuer die Datei (core.unbekanntpool._cluster_lesen —
-    liefert nur Dicts) + Toleranz JE Cluster: eine kaputte Zeile kostet nur
-    sich selbst, nie die Seite. Semantik unveraendert: objekt-Zeilen fallen
-    raus (nie als "Unknown N" anbieten, 25.07.), Archiv-Cluster bleiben
-    drin (Vorbesuchs-Zaehlung), members nur als Liste."""
+
+def _pass_von(szenarien):
+    """Der Durchgang je Ereignis-Kennung der Szenarien des Tages (Karten und Trennung der Heute-Seite).
+    -> {eid: Durchgang}"""
+    return {str(e.get("eid")): s for s in szenarien for e in (s.get("evs") or []) if e.get("eid")}
+
+
+def _aehnlich_trennen(merkmale, uid_mitglieder, szenarien, fenster):
+    """Die Identitaeten des Tags unter „Probably recognized“ (Bauplan analysen/bauplan_aehnlich.md Entscheide 8 und 16): das
+    gespeicherte Merkmal (core.aehnlich.merkmal_von), ausser ein Durchgang der Identitaet im Fenster ist vom Nutzer als
+    Fremder bestaetigt (gt_fremd geht der Regel vor). -> {uid: Merkmal}"""
+    von, bis = fenster
+    pass_von = _pass_von(szenarien)
+    return {uid: m for uid, m in merkmale.items()
+            if m and not any((pass_von.get(str(x["eid"])) or {}).get("gt_fremd")
+                             for x in uid_mitglieder.get(uid) or []
+                             if isinstance(x["ts"], (int, float)) and von <= x["ts"] < bis)}
+
+
+def _unbekannt_karten(uid_mitglieder, uids, szenarien, fenster, gap_s, tag_s, nur_area, aehnlich=None):
+    """Die Unbekannt-Karten der Heute-Seite (Stufe V1c Punkt 1): je Identitaet aus uids (core.unbekanntpool.tages_cluster)
+    mit Sichtung im Fenster eine Karte, unabhaengig vom Urteil des Durchgangs; unter einer Area nur Sichtungen in deren
+    Durchgaengen; Vorbesuche gebuendelt wie die Szenarien. Link /auftritte?u= auf den Durchgang der juengsten Sichtung.
+    Mit aehnlich ({uid: Merkmal}, Bauplan analysen/bauplan_aehnlich.md Entscheid 16) je Person P EINE Karte „probably P“
+    aus allen ihren Identitaeten, ohne den Anker unidentified.
+    -> Liste der Karten-HTML, juengste Sichtung zuerst, ohne aehnlich die erste mit dem Anker unidentified"""
     from core import unbekanntpool as _ubp
-    eid2uid, uid_members = {}, {}
-    for _d in _ubp._cluster_lesen(data_dir):
-        try:
-            _u = _d.get("uid") or _d.get("id")
-            if not _u or _d.get("objekt"):
-                continue
-            _mem = _d.get("members")
-            if not isinstance(_mem, list):
-                _mem = []
-            uid_members[_u] = _mem            # Mitglieder BEHALTEN, nicht nur
-            for _m in _mem:                   # zaehlen: "seen Nx before"
-                _s = str(_m)                  # braucht deren ZEITEN
-                eid2uid.setdefault(_s, _u)
-                # Top-3-Sammlung haengt ~2/~3 an die Event-ID — die Karte
-                # matcht ueber die BASIS-Event-ID des Durchgangs
-                eid2uid.setdefault(_s.split("~")[0], _u)
-        except (TypeError, ValueError, AttributeError):
+    von, bis = fenster
+    pass_von = _pass_von(szenarien)
+    gruppen = {}
+    for uid in uids:
+        gruppen.setdefault(uid if aehnlich is None else aehnlich[uid]["person"], []).append(uid)
+    roh = []
+    for schluessel, glieder in sorted(gruppen.items()):
+        heute = sorted(((m, u) for u in glieder for m in uid_mitglieder.get(u) or []
+                        if isinstance(m["ts"], (int, float)) and von <= m["ts"] < bis
+                        and (not nur_area or str(m["eid"]) in pass_von)), key=lambda x: (x[0]["ts"], x[0]["id"]))
+        if not heute:
             continue
-    return eid2uid, uid_members
+        uid, heute = heute[-1][1], [m for m, _u in heute]
+        vorher = 0 if aehnlich is not None else _ubp.besuche_zaehlen(
+            [m["ts"] for m in uid_mitglieder.get(uid) or [] if isinstance(m["ts"], (int, float))
+             and m["ts"] < heute[0]["ts"] - 1], gap_s)
+        paesse = list({id(pass_von[str(m["eid"])]): pass_von[str(m["eid"])] for m in heute
+                       if str(m["eid"]) in pass_von}.values())
+        s_letzt = pass_von.get(str(heute[-1]["eid"]))
+        ziel = (f'/auftritte?u={urllib.parse.quote(uid)}&amp;tag={tag_s}&amp;p={s_letzt["start"]}' if s_letzt
+                else f'/unbekannte#uk-{urllib.parse.quote(uid)}')
+        extra = None if aehnlich is None else (schluessel, [(u, aehnlich[u]) for u in sorted(
+            glieder, key=lambda u: (int(u[1:]) if u[1:].isdigit() else 0, u))])
+        roh.append((heute[-1]["ts"], uid, heute, vorher, paesse, ziel, extra))
+    roh.sort(key=lambda r: (-r[0], r[1]))
+    return [_unbekannt_karte(uid, heute, vorher, paesse, ziel,
+                             ' id="unidentified"' if i == 0 and aehnlich is None else '', extra)
+            for i, (_t, uid, heute, vorher, paesse, ziel, extra) in enumerate(roh)]
 
 
-def _migrate_layout(dd):
-    """Einmalige, idempotente Migration flach -> Unterordner (config/ faces/ clips/ learn/ state/).
-    `shutil.move` = Rename auf demselben Dateisystem (auch fuer die 77G clips instant, kein Kopieren).
-    Nur wenn Quelle da UND Ziel fehlt -> gefahrlos bei jedem Start. Frisch = nur die Basisordner."""
-    import shutil
-
-    def mv(src, dst):
-        s, d = os.path.join(dd, src), os.path.join(dd, dst)
-        if os.path.exists(s) and not os.path.exists(d):
-            os.makedirs(os.path.dirname(d) or dd, exist_ok=True)
-            shutil.move(s, d)
-    mv("refs", "faces")                                   # 1) ganze Verzeichnisse umbenennen
-    mv("cache", "clips")
-    mv("anlernen", "learn")
-    mv("enroll", os.path.join("learn", "enroll"))         # 2) enroll unter learn
-    # refcache bleibt in clips/ (kam mit cache->clips mit; geteilt mit analyze SCRATCH_DIR)
-    for f in ("deckung.jsonl", "ground_truth.jsonl", "sublabel_writes.jsonl", "qs_bericht.json", "archiv"):
-        mv(f, os.path.join("state", f))                   # 4) lose Logs/State -> state/
-    for f in ("config.json", "config_audit.jsonl"):
-        mv(f, os.path.join("config", f))                  # 5) Config -> config/
-    for sub in ("config", "faces", "clips", "events", "learn", "state", "backups"):
-        os.makedirs(os.path.join(dd, sub), exist_ok=True)  # 6) Basisordner sicherstellen (frisch)
+def _base_dirs(dd):
+    """Die sechs Basisordner des Datenordners anlegen, wo sie fehlen (frische Anlage); benennt nichts um.
+    -> None"""
+    # Bauauftrag I5 (Bauplan analysen/bauplan_refquelle_einbau.md, Entscheid I5): den aelteren flachen Aufbau (refs/,
+    # cache/, anlernen/, lose Dateien) kennt seitdem allein der Alt-Leser des Moduls core/refquelle; der Umzug im Boot
+    # uebernimmt ihn als Schritt 0, laut und ohne Loeschen. Der Dienst benennt beim Start nichts mehr um.
+    # Nachtrag E3 (O595 (2), Entscheid 6): den Personenordner legt der Dienst nicht an; ihn baut allein das Modul
+    # core/refquelle als abgeleitete Ansicht (build_person_folders legt ihn bei Bedarf selbst an).
+    for sub in ("config", "clips", "events", "learn", "state", "backups"):
+        os.makedirs(os.path.join(dd, sub), exist_ok=True)
 
 
 ANKER_MIGRATION_MARKE = "migration_anker_045.json"   # state/, Muster kalib_reset.json
@@ -1288,31 +1337,6 @@ def luma_grenzen_aus_cfg(cfg):
     return {"min": lo, "max": hi}
 
 
-def refcache_warte_antwort(anlernen):
-    """.311 (User 21.08.): EINE Quelle fuer die Warte-Antwort 'die Referenzen
-    werden neu aufgebaut' der drei Handler (Bruecke /auftritt_lernen, Erst-
-    Sichtung, Benenn-Pruefung) — laden + Text + i/n/zustand aus
-    anlernen.refcache_fortschritt(); das Blatt malt daraus den schmalen
-    Balken (ladeBalken in app.js bzw. seit .345 lbBlock im Auftritte-Blatt), statt
-    nur den Text zu zeigen. Ein Zweig, der den Text ohne i/n zurueckgibt,
-    waere K3 (Balken erreicht nicht alle Stellen) — deshalb der Helfer."""
-    rf = anlernen.refcache_fortschritt()
-    if rf["pause"]:
-        # Zwei Fehlschlaege in Folge (Widerleger .311): ok:false beendet alle
-        # drei Warteschleifen (Knopf wieder frei), statt endlos zu pollen.
-        return json.dumps({"ok": False,
-                           "msg": _sprache.t("antwort.refcache_fehler")},
-                          ensure_ascii=False)
-    antwort = {"ok": True, "laden": True,
-               "msg": _sprache.t("antwort.refcache_baut")}
-    if rf["laeuft"]:
-        # zustand/i/n NUR bei laufendem Bau: so bleibt im Auftritte-Blatt der
-        # 60-s-Zaehler-Deckel auf Polls ohne Bau erreichbar, und der erste
-        # Poll zeigt nie den Endstand eines frueheren Baus.
-        antwort.update(i=rf["i"], n=rf["n"], zustand="refcache")
-    return json.dumps(antwort, ensure_ascii=False)
-
-
 def ernte_schwellen_aus_cfg(cfg):
     """Das Ernte-Regime aus der Config (EINE Quelle, .308): Pflicht-Gates + bei
     aktivem Vorrat die gleichnamigen Sammel-/Phasen-Schwellen. Lernlauf-Manifest
@@ -1364,6 +1388,13 @@ def load_config(path):
     from core.registry import sample_deckel_werk as _sdw    # noqa: PLC0415
     _sd_wert, _sd_herkunft = _sdw(os.environ.get("SUSLIK_VARIANT"))
     _sd_aus_yaml = "sample_deckel" in cfg
+    # Bauplan analysen/bauplan_fix_0113.md Stufe F4 Punkt 3 (ED004, freigegeben fuer diese drei Schluessel): die
+    # Werkswerte des Unbekannt-Stapels stehen EINMAL in core.registry.UNBEKANNT_WERK, hier nur gezogen.
+    from core.registry import UNBEKANNT_WERK as _uw         # noqa: PLC0415
+    # Bauplan analysen/bauplan_aehnlich.md Stufe AE1 Punkt 2, Entscheid 6, und Stufe AE2 Punkt 2, Entscheid 11 (ED004,
+    # freigegeben fuer diese drei Schluessel): die Grenzen der Regel „ähnlich zu P“ stehen EINMAL in
+    # core.registry.AEHNLICH_WERK, hier nur gezogen.
+    from core.registry import AEHNLICH_WERK as _aw          # noqa: PLC0415
     for key, default in [("poll_interval", 20), ("clip_delay", 15), ("fps_sample", 3),
                          # .540 K-DECKEL. GEMESSEN, nicht geraten: 240 liegt ueber
                          # dem P95 beider Bestaende (Prod 9659 Ereignisse gemessen:
@@ -1420,6 +1451,11 @@ def load_config(path):
                          # .341: Aufbewahrung fuer Lernlaeufe + Deckel fuer die
                          # OpenVINO-Kompilate (beide wuchsen bisher unbegrenzt).
                          ("lernlauf_retention_d", 14), ("ov_cache_max_gb", 1.0),
+                         # E3a-1c (Bauplan Referenz-Quelle einbauen, Entscheid 1 und V3,
+                         # aus E3a-4 vorgezogen, O562 c): Seite des Profilbilds eines
+                         # Satzes = profil_faktor x laengere Seite der Gesichtsbox;
+                         # Frist fuer Saetze mit Status verworfen in Tagen.
+                         ("profil_faktor", 2.2), ("aufbewahrung_tage", 60),
                          # Und der Deckel war MEHR ALS DIE PLATTE: der Melder von
                          # Issue #25 hat 32 GB, der Vorgabewert stand auf 50 —
                          # der Deckel konnte per Konstruktion nie greifen, sein
@@ -1504,7 +1540,7 @@ def load_config(path):
                          # zusaetzlich die stille Store-Falle der .171-Erstkontrolle (Code-Default
                          # an, Seite zeigte off — der erste Save einer beliebigen Einstellung
                          # haette false festgeschrieben). Werte = die bisherigen Inline-Defaults.
-                         ("szenario_gap_min", 5), ("besucher_sim", 0.50),
+                         ("szenario_gap_min", 5),
                          ("update_check", True), ("debug", False),
                          # Bauplan Debug-Zeitfenster Stufe 1 (Klaerungspunkt 2, Eigentuemer
                          # 29.09.2026 11:30:13): so viele Stunden bleibt debug nach dem
@@ -1693,23 +1729,6 @@ def load_config(path):
                          # 0 = Verhalten der .533 (sie sitzen auf den
                          # Analyse-Plaetzen).
                          ("bg_platz_getrennt", 1),
-                         # .536 (B3): das Sammeln laeuft in HAEPPCHEN. Zwei
-                         # Stellschrauben und zwei STARTWERTE mit Herkunft
-                         # (Messung 16.09. auf dem Rechenknecht, CPU, Maschine
-                         # nicht leer -> obere Schranken; die Anlage misst beides
-                         # im Betrieb nach und merkt es sich je Backend in
-                         # state/sammel_takt.json, nicht in der Config).
-                         ("sammel_haeppchen_ziel_s", 120),
-                         ("sammel_haeppchen_frist_faktor", 3),
-                         # 1,50 s Rechenzeit je CLIP-Sekunde (CPU, Median ueber
-                         # 98 Ereignisse, p10 1,29/p90 1,87, stabil ueber
-                         # 1080p/4K) — die uebertragbare Groesse, K ist es nicht.
-                         ("sammel_rechenfaktor_start", 1.5),
-                         # 105 s kalter Prolog (gemessen 100 s = lade_master_refs
-                         # allein, plus Reserve). Er faellt nur noch im ERSTEN
-                         # Haeppchen eines Auftrags an, danach ist die Matrix im
-                         # Prozess warm.
-                         ("sammel_prolog_kalt_start_s", 105),
                          # .535: HIER STANDEN `eich_fenster` und `eich_planung`
                          # — Fensterbreite der Preis-Messung und die Wahl
                          # zwischen Messwert und Anker. Mit dem Ausbau der
@@ -1930,6 +1949,23 @@ def load_config(path):
                          # durch, Worst-Case-Blockade 600+1200 s = die alte feste
                          # 1800-s-Frist (nie schlechter als vor dem Fix).
                          ("analyse_timeout_s", 600),
+                         # Bauplan analysen/bauplan_fix_0113.md Stufe F1 Punkt 2 (ED004, freigegeben fuer
+                         # diesen Schluessel): Frist des Migrationsskripts beim Start. Werkswert 600 = die
+                         # Job-Frist, die der Umzug als Worker-Job hatte (analyse_timeout_s); keine eigene
+                         # Messung. Gemessen am Umzug: 54-105 s CPU, 4-6 s CUDA bei 852 Eintraegen
+                         # (backups/release3_bau/refquelle_einbau/bilanz_e44b.md).
+                         ("migration_timeout_s", 600),
+                         # Bauplan analysen/bauplan_fix_0113.md Entscheid 6, Stufe F4 Punkt 3 (ED004, freigegeben
+                         # fuer diese drei Schluessel): Latte, Bilder je Gruppe und gehaltene Bilder des
+                         # Unbekannt-Stapels im Worker; Werkswert und Herkunft in core.registry.UNBEKANNT_WERK.
+                         ("unbekannt_latte", _uw["unbekannt_latte"]),
+                         ("unbekannt_bilder_je_gruppe", _uw["unbekannt_bilder_je_gruppe"]),
+                         ("unbekannt_rahmen_max", _uw["unbekannt_rahmen_max"]),
+                         # Bauplan analysen/bauplan_aehnlich.md Entscheide 6 und 11: die drei Grenzen der Regel
+                         # „ähnlich zu P“ (core/aehnlich.py); Werkswert und Herkunft in core.registry.AEHNLICH_WERK.
+                         ("aehnlich_latte", _aw["aehnlich_latte"]),
+                         ("aehnlich_abstand", _aw["aehnlich_abstand"]),
+                         ("aehnlich_min_gesichter", _aw["aehnlich_min_gesichter"]),
                          # Bauplan GPU-Wartefrist, Stufe 1 (F1, Eigentuemer 28.09.2026
                          # 16:16:13 „10 Sekunden"): wie lange der Worker auf EINEN
                          # eingereichten GPU-Auftrag wartet, bevor er ihn als Haenger meldet
@@ -2071,7 +2107,7 @@ def load_config(path):
     os.environ["VERIFY_FD_FRONT_MIN"] = str(cfg["fd_front_min"])
     os.environ["VERIFY_FD_SHARP_MIN"] = str(cfg["fd_sharp_min"])
     os.environ["VERIFY_FD_DET_MAX"] = str(cfg["fd_det_max"])
-    _migrate_layout(cfg["data_dir"])                  # flach -> Unterordner, VOR dem Store-Lesen
+    _base_dirs(cfg["data_dir"])                       # Basisordner VOR dem Store-Lesen (aelterer Aufbau: Umzug, I5)
     # UI-Store ueberlagert die yaml-Basis (config/config.json). Infrastruktur-/Boot-kritische Keys
     # kommen NUR aus yaml/ENV, nie aus dem Store/Restore (Code-Review 24.07.: sonst data_dir-Injection
     # = Schreiben ausserhalb des Datenpfads, bzw. ein kaputter web_port = Boot-Loop bei jedem Neustart).
@@ -2424,6 +2460,11 @@ HAENGER_VERSUCHE_MAX = 3
 NEUSTART_LOCK_FRIST_S = 60.0
 NEUSTART_LOCK_NOTFRIST_S = 15.0
 
+# Bauplan analysen/bauplan_verbraucher_unbekannt.md Stufe V1b (W3, offene Liste O624 Punkt 2): ein Ereignis, das bei der
+# Verarbeitung aelter ist als diese Grenze, meldet nichts mehr (Sweep, Replay nach Ausfall, verspaetetes MQTT). Die EINE
+# Stelle: `_maybe_presence` liest sie, und der Verbraucher der Unbekannt-Stapel bekommt sie als `alt_grenze_s`.
+ALT_EREIGNIS_S = 900.0
+
 # Stufe A (.511): SAMMELFENSTER der Referenz-QS (qs_neu_starten). Bis .510 startete
 # jeder Auslöser sofort einen Volllauf; ein laufender Lauf haengte genau EINEN
 # Nachlauf an — bei Serien-Aktionen wurde daraus eine Kette von Vollaeufen
@@ -2675,35 +2716,39 @@ def catchup_modus(cfg):
 
 
 def master_persons(cfg):
-    """Personenliste aus dem lokalen Referenz-Master (AP1) — Frigate-unabhaengig."""
-    d = os.path.join(cfg["data_dir"], "faces")
-    try:
-        return sorted(p for p in os.listdir(d) if os.path.isdir(os.path.join(d, p)))
-    except FileNotFoundError:
-        return []
+    """Personenliste (AP1) — Frigate-unabhaengig. Seit E3b-2a (Bauplan analysen/bauplan_refquelle_einbau.md,
+    Stufe E3 Punkt 2, Entscheid 6) aus der Referenz-Quelle statt aus den Ordnern unter faces/: die Personen mit
+    mindestens einer aktiven Bindung an einen Satz mit Status referenz oder altbestand (Lese-Stufe b, Feld
+    personen). Bis zum Umzug (E4) fehlt der Altbestand aus faces/ (Entscheid 16). -> sortierte Namensliste"""
+    from core import refquelle as _rq_mp
+    return sorted(_rq_mp.read_catalog({"data_dir": cfg["data_dir"]})["personen"])
 
 
 def master_umfang(cfg):
     """S4 (Lieferung B): Umfang des Referenz-Masters als reine ZAHLEN —
-    (personen, referenzbilder, personen_ohne_bild). KEINE Klarnamen: Tester
-    posten ihr Startlog oeffentlich (Issue-Anhaenge, Foren), Bewohnernamen
-    haben dort nichts zu suchen. Auch Fehler je Personenordner werden
-    geschluckt statt gemeldet — eine Fehlermeldung traegt den Pfad und damit
-    wieder den Namen. Endungen aus core.registry.BILD_ENDUNGEN (Vertrag, nie
-    Streu-Literal; die eine Stelle, die .webp vergass, meldete '0 reference
-    images')."""
-    d = os.path.join(cfg["data_dir"], "faces")
-    personen = master_persons(cfg)
-    bilder = leer = 0
-    for p in personen:
-        try:
-            n = sum(1 for f in os.listdir(os.path.join(d, p))
-                    if f.lower().endswith(_reg.BILD_ENDUNGEN))
-        except OSError:
-            n = 0
-        bilder += n
-        leer += (n == 0)
-    return len(personen), bilder, leer
+    (personen, referenzen). KEINE Klarnamen: Tester posten ihr Startlog
+    oeffentlich (Issue-Anhaenge, Foren), Bewohnernamen haben dort nichts zu
+    suchen. Seit E3b-2a aus der Referenz-Quelle (Lese-Stufe b, dieselbe Auswahl
+    wie master_persons); eine Person zaehlt nur mit einem Satz, eine Person ohne
+    Referenz gibt es deshalb nicht (E3c-1, O576 b). -> (int, int)"""
+    from core import refquelle as _rq_mu
+    personen = _rq_mu.read_catalog({"data_dir": cfg["data_dir"]})["personen"]
+    return len(personen), sum(len(r) for r in personen.values())
+
+
+def master_start_line(cfg):
+    """Marke und Text der Zeile des Startblocks Schritt 6 zum Referenz-Master (Bauplan analysen/bauplan_rueckweg_010.md, Stufe R6).
+    -> (Marke, Text): ok mit Zahlen; ohne Person info, solange der alte Bestand ohne Fertig-Marke liegt, sonst warn"""
+    from core import refquelle as _rq_ml
+    n_pers, n_bild = master_umfang(cfg)
+    if n_pers:
+        return "ok", f"{n_pers} persons, {n_bild} reference images, coverage ok"
+    # Erster Start auf einem Bestand von 0.1.1.010: der Umzug laeuft erst in Schritt 8 (referenzquelle_umzug_im_boot),
+    # entschieden ueber dieselbe Funktion still_legacy wie dort.
+    if _rq_ml.altbestand.still_legacy(_rq_ml.basis.paths(cfg)):
+        return "info", ("faces of the previous version found — migrating them after this check, "
+                         "the count follows when it is done")
+    return "warn", "0 — empty master; enroll via the setup wizard"
 
 
 def frigate_to_cos(score):
@@ -2960,6 +3005,11 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
         # (dieselbe Tabelle wie der Bild-Deckel, core.registry.tuer_deckel_werk).
         "tuer_fenster": int(cfg.get("tuer_fenster") or 0),
         "tuer_deckel": _registry.tuer_deckel_werk(os.environ.get("SUSLIK_VARIANT"))[0],
+        # Bauplan analysen/bauplan_fix_0113.md Stufe F4: der Unbekannt-Stapel des Bildvorrats (worker_kern), aus der
+        # Config wie die Tuer; `or 0` traegt die Haus-Konvention (fehlender Wert = Stapel aus).
+        "unbekannt_latte": float(cfg.get("unbekannt_latte") or 0),
+        "unbekannt_bilder_je_gruppe": int(cfg.get("unbekannt_bilder_je_gruppe") or 0),
+        "unbekannt_rahmen_max": int(cfg.get("unbekannt_rahmen_max") or 0),
     }
     # KALIBRIER-VORRAT AUS DER ANALYSE (User 03.09., beauftragt seit 31.08.):
     # jede Event-Analyse darf den Ring ihrer Kamera speisen — Deckel ist
@@ -3000,6 +3050,7 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
         # .287 [clipdbg]: Quelle (live/nachhol) + Event-Alter reisen als
         # Job-Felder mit — der Worker armiert damit core.frames je Job.
         # .290: dazu die Erzeugungs-Weiche + Deckel (Verhalten, s.o.).
+        from core import harvest_set as _hs_an      # E3a-3, Job-Feld (J4)
         _auftrag = {"typ": "analyze", **felder, "log": logpfad,
                     "clip_quelle": clip_quelle,
                     "clip_alter_min": clip_alter_min,
@@ -3010,7 +3061,14 @@ def run_analyze(cfg, eid, camera, persons, event_dir, timeout_s=None, worker=Non
                     "clip_tor": tor_n,
                     "clip_tor_deckel_s": tor_deckel_s,
                     "clip_vod": cfg.get("clip_vod") is not False,
-                    "personenzahl": {eid: personenzahl}}
+                    "personenzahl": {eid: personenzahl},
+                    # E3a-3 (Bauplan Referenz-Quelle einbauen, J4): die Config-Zufuhr des
+                    # Satz-Schreibwegs, Herkunftsart worker, ohne Lauf-ID; ohne das Feld
+                    # schreibt der Worker keinen Satz (laut).
+                    _hs_an.FEED_FIELD: _hs_an.feed(
+                        cfg, _hs_an.ART_WORKER, None,
+                        os.environ.get("SUSLIK_VERSION", "dev"),
+                        os.environ.get("SUSLIK_VARIANT", ""))}
         antwort = worker.job(dict(_auftrag), tmo,
                              info=w1, puls=puls)      # P1: Lebenszeichen des Platzes
         dt = time.monotonic() - t0 - float(w1.get("wartezeit_s") or 0.0)
@@ -7512,26 +7570,10 @@ class Service:
         self._melde_zustand = {}                  # Drossel-Zeitstempel der Meldewege (tg_unbekannt,
                                                   # ha_warn) — Eigentum des Dienstes, core/melden
                                                   # bekommt das Dict als Parameter (Modulumbau R3)
-        self._sammel_lock = threading.Lock()      # schuetzt die Sammel-/Reorg-Flags (User 21.07.)
-        self._sammel_laeuft = False               # ein Szenario-Sammeln gleichzeitig (Prozess-Ebene serialisiert der pool_lock in anlernen.py)
-        # Stufe 3 (bauplan_sammeln_debug.md, O415): der EINE Faellig-Vermerk des
-        # Sammelns, ersetzt die fruehere Marke `_sammel_nachhol`. None = nichts
-        # faellig; sonst ein dict mit `seit` (Beginn des Aufschubs), `grenze`
-        # (aelteste Verarbeitungszeit, ab der gesammelt wird), `netz` (06:00-Netz
-        # mit Pool-Pflege faellig), `anstoesse`, `gemeldet` (Aufschub-Zeile
-        # geschrieben) und `verlust` (Zeitpunkt der Warnung zur Clip-Aufbewahrung).
-        # Er steht unter `_sammel_lock` und setzt `_sammel_laeuft` NICHT: solange
-        # nur vorgemerkt ist, bleiben Umbenennen und Lernlauf frei. Gestartet wird
-        # allein ueber `_sammeln_starten`, und nur bei leerem Rueckstand.
-        self._sammel_faellig = None
-        # .536 B3: der Stand der laufenden Haeppchen-Kette, EINE Quelle fuer
-        # `/health` (`sammel_zustand`). Nur der Ketten-Fahrer schreibt hier —
-        # er laeuft im Sammel-Thread, und `_sammel_laeuft` sorgt dafuer, dass
-        # es immer nur einen davon gibt.
-        self._sammel_stand = {"auftrag_aktiv": False, "haeppchen_n": 0,
-                              "haeppchen_offen": None, "letzte_dauer_s": None,
-                              "cache_treffer": 0, "tag": None, "faktor": None,
-                              "prolog_kalt_s": None, "quelle": None}
+        self._sammel_lock = threading.Lock()      # schuetzt die Ernte-/Reorg-Flags (User 21.07.)
+        # Stufe V1b (Bauplan analysen/bauplan_verbraucher_unbekannt.md, Entscheid 12): das Szenario-Sammeln ist
+        # abgebaut; `_sammel_laeuft` haelt nur noch die Ernte des Lernlaufs (eine zur Zeit, `_umbenennen_blocker`).
+        self._sammel_laeuft = False
         self._reorg_laeuft = False                # Reorganisieren-Button laeuft (Doppelklick-Schutz)
         self._qs_lock = threading.Lock()          # Guard-Zugriff (ThreadingHTTPServer-Threads)
         self._qs_laeuft = False
@@ -7565,8 +7607,8 @@ class Service:
         # rechnet der Klick seither serverseitig aus der Akte
         # (`_bruecke_durchgang`), nicht aus einem Prozess-Zustand, der einen
         # Neustart nicht ueberlebt.
-        # HALTER dieses Locks (Stand .511): anlern_nachpruefung_starten,
-        # _sammle_fahren und der Wanduhr-Roundtrip.
+        # HALTER dieses Locks (Stand .511, Sammeln seit V1b abgebaut): anlern_nachpruefung_starten
+        # und der Wanduhr-Roundtrip.
         # `vorschlaege_starten` ist seit .510/J18 KEIN Halter mehr, `qs_neu_starten`
         # seit .511/Stufe B ebenfalls nicht (beide rechnen im Worker auf einem Platz
         # der Klasse `interaktiv`, nicht als Subprozess).
@@ -7872,258 +7914,6 @@ class Service:
                                   processed_len=lambda: len(self.processed),
                                   hb_setzen=hb_setzen)
 
-    def _szene_unbekannt_pruefen(self, entry):
-        """Szenen-Karenz (User 18.07.): fremd_verdacht wird erst nach szene_karenz_s
-        gemeldet — und NUR, wenn im Fenster [Event-Start − Karenz, jetzt] auf KEINER
-        Kamera jemand bestaetigt wurde. Verhindert Fehlalarm durch schlechte
-        Einzel-Schnipsel eines bekannten Durchgangs (bis zur echten v1.1-Fusion)."""
-        karenz = int(self.cfg.get("szene_karenz_s", 90))
-        start = entry.get("start") or entry["ts"]
-
-        def entscheiden():
-            # symmetrisches Szenen-Fenster ±karenz um den VORFALL (Event-Zeiten beidseits).
-            # Ueber einen SNAPSHOT iterieren: last_seen wird aus den Verarbeitungs-Threads
-            # geschrieben, waehrend dieser Timer-Thread laeuft — ein "dictionary changed size
-            # during iteration" haette den Timer-Thread still getoetet und den fremd_verdacht
-            # damit komplett verschluckt (kein Alert, keine Logzeile).
-            snap = dict(self.last_seen)
-            erkannt = [p for p, ts in snap.items()
-                       if start - karenz <= ts <= start + karenz]
-            if erkannt:
-                self.log.info(f"{entry['eid']}: fremd_verdacht defused by scene context "
-                         f"(recognized in the window: {', '.join(sorted(erkannt))})")
-                return
-            if self._ist_ignorierter_besucher(entry):        # User 21.07.: "Ignorieren" = kein Alert
-                self.log.warning(f"{entry['eid']}: fremd_verdacht suppressed (ignored visitor)")
-                return
-            # Areas Stufe 1: Meldungen NENNEN die Area (Text + additives MQTT-Feld areas[]),
-            # Verhalten/Anzahl/Timing unveraendert — Melde-Scoping je Area kommt mit Stufe 2.
-            _ar = _areas_mod.kamera_areas(_areas_mod.normalisieren(self.cfg.get("areas")),
-                                          entry["camera"])
-            # .200: Kategorien-Gate der Unbekannt-SZENE (Meldungstyp = "fremd_verdacht",
-            # so beschreibt ihn die Notifications-Seite). Vorher sendeten Telegram und
-            # das szene_unbekannt-Topic bedingungslos, obwohl die Seite die Kategorien
-            # als Gatekeeper ALLER Alerts ausweist. Ab Werk angehakt (load_config) —
-            # unveraenderte Installationen verhalten sich exakt wie bisher. Das
-            # Nachsammeln unten bleibt bewusst VOR der Meldefrage: Lernen haengt
-            # nicht davon ab, ob jemand benachrichtigt werden will.
-            if "fremd_verdacht" in self.cfg["alert_kategorien"]:
-                if self._mqtt_pub(_melden.topic(self.cfg, "szene_unbekannt"), json.dumps(
-                        {"eid": entry["eid"], "camera": entry["camera"], "areas": _ar,
-                         "ts": entry.get("start") or entry["ts"],      # Vorfalls-Zeit fuer die Caption
-                         "max_bw": entry.get("max_bw")}, ensure_ascii=False)):
-                    self.log.info(f"SCENE unknown: {entry['eid']} ({entry['camera']}"
-                             f"{' · ' + ' + '.join(_ar) if _ar else ''}) — "
-                             f"nobody recognized in the {karenz}s window")
-                self._telegram_melden("unbekannt", entry)
-            else:
-                self.log.warning(f"{entry['eid']}: scene-unknown notification suppressed "
-                         f"(category fremd_verdacht not enabled)")
-            self._szenario_nachsammeln()             # sofort sammeln+clustern statt bis 06:00 warten (User 21.07.)
-        threading.Timer(karenz, entscheiden).start()
-
-    def _ist_ignorierter_besucher(self, entry):
-        """True, wenn das Gesicht dieses Unbekannt-Events zu einer als 'Ignorieren' markierten
-        Unbekannt-Identitaet gehoert (Cosinus >= besucher_sim) — dann kein Alert (User 21.07.,
-        'Ignorieren' soll wiederkehrende Fremde wie die Heckencrew ruhigstellen). KONSERVATIV:
-        bei Unsicherheit (keine besucher-Identitaet, kein Embedding) NICHT unterdruecken —
-        lieber ein Alert zu viel als einen echten Fremden verschluckt."""
-        try:
-            import anlernen
-            import numpy as _np
-            besucher = [u for u in anlernen.lade_unbekannte() if u.get("status") == "besucher"]
-            if not besucher:
-                return False
-            faces = {g["id"]: g for g in anlernen.lade_gesichter()}
-            V = [faces[m]["emb"] for u in besucher for m in u.get("members", [])
-                 if faces.get(m) and faces[m].get("emb")]
-            if not V:
-                return False
-            V = _np.asarray(V, dtype=_np.float32)
-            V = V / (_np.linalg.norm(V, axis=1, keepdims=True) + 1e-9)
-            kp = os.path.join(self.cfg["data_dir"], "events", str(entry["eid"]), "kandidaten.jsonl")
-            E = []
-            if os.path.exists(kp):
-                for line in open(kp):
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        e = json.loads(line).get("emb")
-                    except Exception:
-                        _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
-                        continue
-                    if e and len(e) == 512:
-                        E.append(e)
-            if not E:
-                return False
-            E = _np.asarray(E, dtype=_np.float32)
-            E = E / (_np.linalg.norm(E, axis=1, keepdims=True) + 1e-9)
-            return float((E @ V.T).max()) >= float(self.cfg.get("besucher_sim", 0.50))
-        except Exception as e:
-            self.log.error(f"visitor check error: {e}")
-            return False
-
-    def _szenario_nachsammeln(self):
-        """Nach einem abgeschlossenen UNBEKANNTEN Szenario (Szenen-Karenz vorbei, niemand Bekanntes
-        im Fenster, kein ignorierter Besucher) sofort die neuen Gesichter sammeln + clustern, statt
-        bis zum 06:00-Job zu warten (User 21.07.). Serialisiert (ein Lauf gleichzeitig) + gethrottled;
-        dank geprueft.jsonl werden nur wirklich NEUE Events verarbeitet, also Sekundensache. Der
-        06:00-Job bleibt Sicherheitsnetz + eigentliche Wartung (Pool-Pruefung/Referenz-QS/Backup).
-
-        Stufe 3 (bauplan_sammeln_debug.md, O415): dies ist nur noch der ANSTOSS. Er
-        merkt den Lauf mit seiner Fenster-Grenze vor und fragt die eine Startstelle;
-        die startet erst, wenn die Analyse keinen Rueckstand mehr hat (Eigentuemer
-        29.09.2026 09:47:20). Der Lauf selbst ist `_szenario_lauf`."""
-        self._sammel_vormerken(
-            False, time.time() - self.SAMMEL_FENSTER_SZENARIO_D * 86400)
-        self._sammeln_starten()
-
-    def _szenario_lauf(self, grenze):
-        """Ein Szenario-Sammellauf ab der festen Fenster-Grenze `grenze` -> None.
-        Laeuft im Faden der Startstelle; Fehler meldet er selbst im Log."""
-        try:
-            # .536 B3: `_sammle_fahren` faehrt die ganze KETTE aus Haeppchen und
-            # liefert deren Summe als Zahl — der Griff nach „N faces collected"
-            # im Log-Text ist damit weg. `reconcile_unbekannte` laeuft EINMAL am
-            # Ende des Auftrags, nicht je Haeppchen.
-            _si = {}
-            summe, fehler = self._sammle_fahren(tage=None, mit_migriere=False,
-                                                timeout=600, info=_si,
-                                                grenze=grenze)
-            if fehler:
-                # .544: das Sammeln zaehlt in die Serie ueber ALLE Pfade.
-                # Es laeuft durch denselben Worker-Prozess wie jede Analyse
-                # — ein toter Rechenkontext faellt hier genauso auf, und auf
-                # einem Grundstueck ohne Verkehr ist das unter Umstaenden
-                # die EINZIGE Stelle, an der er auffaellt.
-                # .544 Teil 2b: ABER NUR, WENN DER WORKER DABEI WAR. „kein
-                # freier Analyse-Platz binnen Frist" ist eine Aussage ueber
-                # die Vergabestelle — auf einer ausgelasteten Anlage waere
-                # das der Weg vom Vollbetrieb in den Prozessschuss.
-                if _si.get("worker_ausnahme"):
-                    self._serie_alle_buchen(True, "scenario collection")
-                self.log.error(f"scenario collection FAILED: {fehler}")
-            else:
-                # .544 Teil 2b: EIN GELUNGENES SAMMELN HEILT. Es ist derselbe
-                # Beweis wie eine gelungene Analyse — der Rechenkontext lebt.
-                # Nur wenn wirklich ein Haeppchen gelaufen ist: ein Auftrag
-                # ohne offene Ereignisse rechnet nichts und beweist nichts.
-                if _si.get("haeppchen_n"):
-                    self._serie_alle_buchen(False, "scenario collection")
-                if summe:                                # nur bei echten neuen Gesichtern clustern
-                    import anlernen
-                    idents, _ = anlernen.reconcile_unbekannte()   # nimmt selbst den pool_lock
-                    self.log.info(f"scenario collection: {summe} new faces, "
-                             f"{len(idents)} unknown identities")
-        except subprocess.TimeoutExpired:
-            self.log.warning("scenario collection TIMEOUT (>10 min)")
-        except Exception as e:
-            self.log.error(f"scenario collection error: {e}")
-
-    def _sammel_vormerken(self, netz, grenze, anstoesse=1, seit=None):
-        """Einen Sammellauf vormerken oder den bestehenden Vermerk erweitern -> None.
-        Die aeltere Grenze gewinnt, ein vorgemerktes Netz bleibt vorgemerkt."""
-        jetzt = time.time()
-        with self._sammel_lock:
-            v = self._sammel_faellig
-            if v is None:
-                self._sammel_faellig = {"seit": seit or jetzt, "grenze": float(grenze),
-                                        "netz": bool(netz), "anstoesse": int(anstoesse),
-                                        "gemeldet": False, "verlust": None}
-                return
-            v["grenze"] = min(v["grenze"], float(grenze))
-            v["netz"] = v["netz"] or bool(netz)
-            v["anstoesse"] += int(anstoesse)
-            if seit:
-                v["seit"] = min(v["seit"], seit)
-
-    def _sammeln_starten(self):
-        """DIE EINE Startstelle des Sammelns (Stufe 3 Punkt 2): startet den vorgemerkten
-        Lauf, wenn kein Lauf haelt und kein Rueckstand da ist -> True, wenn gestartet.
-
-        Gerufen von jedem Anstoss, von `_analyse_beendet` (der Moment, in dem der
-        Rueckstand null wird) und vom Ende jedes Laufs, Netzes und Lernlaufs.
-        Die Rueckstandsfrage steht OHNE `_sammel_lock`: bei einem Analyse-Platz ist
-        `self.lock` hier die Analyse-Klammer, unter `_sammel_lock` stehen nur
-        Vermerk und `_sammel_laeuft` (keine neue Lock-Verschachtelung)."""
-        # Schneller Weg ohne Lock: solange nichts vorgemerkt ist, kostet der Aufruf
-        # nach jeder Analyse nur diese Abfrage. `getattr`, weil Proben den Dienst
-        # ohne __init__ bauen (Muster `_analyse_beginnen`).
-        if getattr(self, "_sammel_faellig", None) is None:
-            return False
-        with self._sammel_lock:
-            if self._sammel_faellig is None or self._sammel_laeuft:
-                return False
-        jetzt = time.time()
-        self._sammel_verlust_pruefen(jetzt)
-        zahlen = self.rueckstau_zahlen()
-        if self.rueckstau_aktiv(zahlen):
-            with self._sammel_lock:
-                v = self._sammel_faellig
-                neu = v is not None and not v["gemeldet"]
-                if neu:
-                    v["gemeldet"] = True
-            if neu:                                  # EINE Zeile je Aufschub, keine je Anstoss
-                self.log.info(f"collection deferred: analysis backlog ({zahlen[0]} "
-                              f"waiting, {zahlen[1]} in work) — it starts as soon "
-                              f"as the backlog is zero")
-            return False
-        with self._sammel_lock:
-            v = self._sammel_faellig
-            if v is None or self._sammel_laeuft:
-                return False
-            self._sammel_faellig = None
-            self._sammel_laeuft = True
-        # Die Grenze dieses Laufs steht EINMAL fest (Stufe 3 Punkt 6): die aeltere
-        # von Vermerk-Grenze und eigenem Fenster, nie aelter als die Clips reichen.
-        fenster_d = (self.SAMMEL_FENSTER_NETZ_D if v["netz"]
-                     else self.SAMMEL_FENSTER_SZENARIO_D)
-        grenze = min(v["grenze"], jetzt - fenster_d * 86400)
-        grenze = max(grenze, jetzt - float(self.cfg["clip_retention_d"]) * 86400)
-        if v["gemeldet"]:
-            self.log.info(f"collection starts after {jetzt - v['seit']:.0f}s deferred "
-                          f"({v['anstoesse']} trigger(s), "
-                          f"{'safety net' if v['netz'] else 'scenario'})")
-        try:
-            threading.Thread(target=self._sammel_faden, args=(v["netz"], grenze),
-                             daemon=True).start()
-        except Exception as e:                       # Thread-Start-Fehler -> nichts haengen lassen, nichts verlieren
-            with self._sammel_lock:
-                self._sammel_laeuft = False
-            self._sammel_vormerken(v["netz"], v["grenze"], v["anstoesse"], v["seit"])
-            self.log.error(f"collection thread start error: {e} — the run stays due")
-            return False
-        return True
-
-    def _sammel_faden(self, netz, grenze):
-        """Der Faden eines gestarteten Sammellaufs -> None. Am Ende faellt
-        `_sammel_laeuft`, und die Startstelle nimmt, was inzwischen faellig ist."""
-        try:
-            if netz:
-                self._netz_lauf(grenze)
-            else:
-                self._szenario_lauf(grenze)
-        finally:
-            with self._sammel_lock:
-                self._sammel_laeuft = False
-            self._sammeln_starten()
-
-    def _sammel_verlust_pruefen(self, jetzt):
-        """Warnt einmal je Aufschub, der laenger dauert als die Clip-Aufbewahrung
-        -> None (Stufe 3 Punkt 9: Aelteres wird ab dann nicht mehr gesammelt)."""
-        tage = float(self.cfg["clip_retention_d"])
-        with self._sammel_lock:
-            v = self._sammel_faellig
-            neu = (v is not None and v["verlust"] is None
-                   and jetzt - v["seit"] > tage * 86400)
-            if neu:
-                v["verlust"] = jetzt
-        if neu:
-            self.log.warning(f"collection deferred longer than the clip retention "
-                             f"({tage:g} d) — older unknown events are no longer "
-                             f"collected")
-
     # .510/J18: `_nachlern_anstossen` und `_nachlern_lauf` sind hier ERSATZLOS
     # entfallen (Betreiber-Entscheid 07.09., Akte `backups/analyse_0907/b1_bestandssuche_bericht.md`).
     # Sie starteten die Bestands-Suche einer Person automatisch `szene_karenz_s`
@@ -8143,9 +7933,10 @@ class Service:
     def publish_erkennung(self, entry):
         _melden.publish_erkennung(self.cfg, self.pub, self.log, self.log.debug, entry)
 
-    def _telegram_melden(self, art, entry, personen=None):
+    def _telegram_melden(self, art, entry, personen=None, bild_quelle=None):
+        # Stufe V1b: `bild_quelle` ersetzt die Bildwahl je Person (die Unbekannt-Meldung zeigt den besten Satz).
         _melden.telegram_melden(self.cfg, self.log, self.dry_alert,
-                                self._melde_zustand, self._best_crop,
+                                self._melde_zustand, bild_quelle or self._best_crop,
                                 self._telegram_clip, self._telegram_ha_script,
                                 art, entry, personen)
 
@@ -8216,99 +8007,6 @@ class Service:
             return
         self.log.info(f"QS report written ({len(by)} events / {tage} days)")
 
-    def master_backup(self):
-        """AP7: taegliches tar des Masters + aller Wahrheits-Dateien, 14 Staende rotierend."""
-        import tarfile
-        bdir = os.path.join(self.cfg["data_dir"], "backups")
-        os.makedirs(bdir, exist_ok=True)
-        ziel = os.path.join(bdir, f"master_{datetime.datetime.now():%Y%m%d}.tar.gz")
-        if os.path.exists(ziel):
-            return
-        # Pfade seit dem Layout-Umbau 22.07. GENESTET (refs->faces, *.jsonl->state/, enroll->learn/).
-        # Vorher standen hier die flachen Alt-Pfade: alle exists()-Checks schlugen fehl und das
-        # Backup war 24 h lang ein leeres 65-Byte-tar — STILL. Daher unten der Leer-Guard.
-        # Quellen im data_dir. WICHTIG (24.07.): frueher fehlten config/config.json (Live-Config
-        # INKL. Notification-Secrets — nur das Audit-Log war dabei) und der reale learn/-Pool
-        # (Unbekannt-Identitaeten, gesichter/geprueft/crops/vorschlaege; gesichert war nur der stale
-        # learn/enroll). Jetzt ganzes learn/ statt Einzeldateien, damit kuenftige Pool-Dateien
-        # automatisch mitkommen; die Laufzeit-Lock (pool.lock) wird ausgefiltert.
-        # .408: state/anwesenheit (Anwesenheits-Marken, S2/User-Entscheid §9.5) —
-        # es gibt KEINE Migration aus der Akte, nach einem Restore ohne diesen
-        # Ordner waere die Historie weg.
-        QUELLEN = ("faces", "config/config.json", "config/config_audit.jsonl",
-                   "state/ground_truth.jsonl", "state/sublabel_writes.jsonl",
-                   "state/deckung.jsonl", "state/anwesenheit", "learn")
-        gefunden, fehlend = [], []
-        # ATOMAR (tmp + fsync + os.replace): frueher schrieb tarfile DIREKT auf `ziel`. Brach der
-        # Lauf mittendrin ab (Stromausfall, OOM — bis 0.1.0.21 auch jedes `docker stop` per SIGKILL),
-        # blieb ein TORSO liegen, und der exists()-Guard oben hielt ihn fuer erledigt: das Backup des
-        # Tages wurde nie wiederholt, das Archiv war unbrauchbar und niemand erfuhr davon.
-        # Jetzt entsteht `ziel` erst, wenn das Archiv vollstaendig und auf Platte ist.
-        tmp = f"{ziel}.tmp-{os.getpid()}"
-        try:
-            with open(tmp, "wb") as fh:
-                with tarfile.open(fileobj=fh, mode="w:gz") as t:
-                    for rel in QUELLEN:
-                        p = os.path.join(self.cfg["data_dir"], rel)
-                        if os.path.exists(p):
-                            t.add(p, arcname=rel,
-                                  filter=lambda ti: None if ti.name.endswith("pool.lock") else ti)
-                            gefunden.append(rel)
-                        else:
-                            fehlend.append(rel)
-                fh.flush()
-                os.fsync(fh.fileno())
-        except Exception as e:                # Schreibfehler NIE verschlucken (Fehlerklasse C)
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
-            self.log.error(f"!! MASTER BACKUP FAILED: {e} — nothing backed up, next run will retry")
-            if not self.dry_alert:
-                try:
-                    push(self.cfg, "suslik-Stoerung", f"Master-Backup fehlgeschlagen: {e}", None)
-                except Exception as pe:
-                    self.log.error(f"backup fault push failed: {pe}")
-            return
-        if not gefunden:                      # Total-Leere: nie wieder still scheitern — Archiv weg
-            try:                              # (damit der naechste Lauf es erneut versucht) + laut
-                os.remove(tmp)
-            except Exception:
-                pass
-            self.log.warning("!! MASTER BACKUP EMPTY: not a single source path found — layout changed? "
-                     "(nothing backed up, archive discarded)")
-            if not self.dry_alert:
-                try:
-                    push(self.cfg, "suslik-Stoerung",
-                         "Master-Backup leer: Quellpfade nicht gefunden — Referenzen UNGESICHERT", None)
-                except Exception as e:
-                    self.log.error(f"backup fault push failed: {e}")
-            return
-        # Teil-Verlust-Guard: faces/ sind die nicht-reproduzierbaren Referenzen. Fehlen sie, WAEHREND
-        # der Betrieb laeuft (state-Dateien vorhanden), ist das kein frischer Install, sondern ein
-        # Pfad-/Layout-Problem -> laut melden, das Backup mit dem Rest aber behalten (Teil > nichts).
-        if "faces" in fehlend and any(r.startswith("state/") for r in gefunden):
-            self.log.error("!! master backup WITHOUT faces/ — references missing while the service is running (check)")
-            if not self.dry_alert:
-                try:
-                    push(self.cfg, "suslik-Stoerung",
-                         "Master-Backup ohne Referenzen (faces/) — Pfad/Layout pruefen", None)
-                except Exception as e:
-                    self.log.error(f"backup warning push failed: {e}")
-        os.replace(tmp, ziel)                 # erst JETZT gilt das Backup als vorhanden/erledigt
-        for f in os.listdir(bdir):            # Reste abgebrochener Laeufe (auch aelterer PIDs) weg
-            if f.startswith("master_") and ".tmp-" in f:
-                try:
-                    os.remove(os.path.join(bdir, f))
-                except OSError:
-                    pass
-        alte = sorted(f for f in os.listdir(bdir)
-                      if f.startswith("master_") and f.endswith(".tar.gz"))    # nur fertige Staende
-        for f in alte[:-14]:
-            os.remove(os.path.join(bdir, f))
-        self.log.info(f"master backup: {os.path.basename(ziel)} ({len(alte[-14:])} snapshots) — "
-                 f"{len(gefunden)} sources, missing: {', '.join(fehlend) if fehlend else '—'}")
-
     def deckung_rotieren(self):
         """AP7: monatlich — Zeilen aelter 7 Tage ins Archiv, aktive Datei behaelt den
         Ueberlapp (processed/last_seen/Sweep bleiben korrekt, QS-Auflage)."""
@@ -8346,7 +8044,8 @@ class Service:
                       f"(7-day overlap), took {dauer:.1f} s under the service lock")
 
     def crops_retention(self):
-        """AP7: events/-Ordner aelter 60 Tage OHNE GT-Label loeschen."""
+        """AP7: events/-Ordner aelter als aufbewahrung_tage (Config, Werkswert 60; V3 des Bauplans
+        analysen/bauplan_refquelle_einbau.md, seit E3c-1) OHNE GT-Label loeschen."""
         import shutil
         gt = set()
         gtp = os.path.join(self.cfg["data_dir"], "state", "ground_truth.jsonl")
@@ -8358,15 +8057,28 @@ class Service:
                     except Exception:
                         _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
         basis = os.path.join(self.cfg["data_dir"], "events")
-        grenze = time.time() - 60 * 86400
-        n = 0
-        for d in os.listdir(basis):
-            p = os.path.join(basis, d)
-            if os.path.isdir(p) and d not in gt and os.path.getmtime(p) < grenze:
-                shutil.rmtree(p, ignore_errors=True)
-                n += 1
+        tage = self.cfg["aufbewahrung_tage"]      # V3: dieselbe Frist wie der Satz-Verfall
+        grenze = time.time() - tage * 86400
+        n = n_saetze = 0
+        weg = [d for d in os.listdir(basis) if os.path.isdir(os.path.join(basis, d)) and d not in gt
+               and os.path.getmtime(os.path.join(basis, d)) < grenze]
+        # E3a-3 (J3 dritte Ergaenzung): die Kandidaten-Saetze der Ereignisse bekommen vor dem Raeumen
+        # die Statuszeile verworfen (Verfall nach aufbewahrung_tage); Referenzen nie. Ein Aufruf fuer alle.
+        from core import harvest_set as _hs_cr
+        from core import lernlauf as _ll_cr
+        ids = [r for d in weg for r in _hs_cr.event_ref_ids(os.path.join(basis, d))]
+        if ids:
+            try:
+                n_saetze = _ll_cr.saetze_verwerfen(_ll_cr.datenort_cfg(self.cfg["data_dir"]), ids,
+                                                   "event folder removed by the retention")
+            except Exception as e:
+                self.log.error(f"crops retention: candidate sets not set to discarded: {e}")
+        for d in weg:
+            shutil.rmtree(os.path.join(basis, d), ignore_errors=True)
+            n += 1
         if n:
-            self.log.info(f"crops retention: {n} event folders older than 60 days (no GT) deleted")
+            self.log.info(f"crops retention: {n} event folders older than {tage} days (no GT) deleted, "
+                          f"{n_saetze} candidate set(s) set to discarded")
 
     def alt_aufraeumen(self):
         """Nachtjob-Schritt (User 25.08.): die Stellen raeumen, die bisher NIEMAND
@@ -8389,12 +8101,20 @@ class Service:
         # SCHRANKE (User 25.08.: "was du natuerlich nie loeschen darfst, sind die
         # gelernten Sicherungen und die gelernten Personendaten"). Dieser Job raeumt
         # ausschliesslich Wegwerf-Material: Crops eines Lernlaufs, Ernte-Zwischenstaende,
-        # Pin-Marken, kompilierte Modelle. Drei Ordner sind TABU, und das steht hier als
+        # Pin-Marken, kompilierte Modelle. Diese Ordner sind TABU, und das steht hier als
         # Pruefung statt als guter Vorsatz — jeder Loeschpfad muss sie passieren:
-        #   faces/       die gelernten Gesichter (das eigentliche Kapital)
+        #   faces/       die gelernten Gesichter (bis zum Umzug E4 der Altbestand, danach
+        #                der abgeleitete Personenordner)
         #   personlern/  Personenmodell + abgenommenes Trainingsmaterial
-        #   backups/     Master-Sicherungen
-        tabu = tuple(os.path.join(dd, x) + os.sep for x in ("faces", "personlern", "backups"))
+        #   backups/     alte Master-Sicherungen aus Versionen vor dem Schnitt E3d (das
+        #                taegliche Master-Backup entfiel mit I4); sie liegen und bleiben
+        #   dazu die Orte der Referenz-Quelle, gelesen vom Modul (I6, Bauplan
+        #   analysen/bauplan_refquelle_einbau.md, keine zweite Aufzaehlung hier):
+        #   core.refquelle.protected_dirs — die Saetze mit dem Katalog, das Archiv
+        #   der Saetze und das Archiv des Personenordners.
+        from core import refquelle as _rq_tabu
+        tabu = (tuple(os.path.join(dd, x) + os.sep for x in ("faces", "personlern", "backups"))
+                + tuple(d + os.sep for d in _rq_tabu.protected_dirs(self.cfg)))
 
         def _darf_weg(pfad):
             """True nur, wenn der Pfad NICHT in einem Tabu-Ordner liegt. Im Zweifel False."""
@@ -8414,6 +8134,10 @@ class Service:
             if weg:
                 self.log.info(f"cleanup: {len(weg)} learning run(s) older than {tage}d deleted "
                          f"({bilanz['dateien']} files)")
+                # E3a-1c (J3 mit O562 a): die Kandidaten-Saetze der geraeumten
+                # Laeufe (Herkunft lauf_id) bekommen die Statuszeile verworfen.
+                _ll.lauf_saetze_verwerfen(_ll.datenort_cfg(dd), weg,
+                                          "learning run deleted by the retention")
         except Exception as e:
             self.log.error(f"cleanup: learning-run retention failed: {e}")
 
@@ -8426,7 +8150,17 @@ class Service:
         # ist der Nachtjob die EINE Stelle und `lernlauf_retention_d` die EINE
         # Frist; die Loeschregel selbst steht weiter in _bruecke_alt_raeumen.
         try:
+            # E3a-1c (J3 mit O562 a): welche Bruecken-Ordner das Raeumen nimmt, sieht
+            # der Vergleich davor/danach; ihre Kandidaten-Saetze werden verworfen.
+            _wurzel_b = os.path.join(dd, "state", "lernlauf")
+            _vor_b = set(os.listdir(_wurzel_b)) if os.path.isdir(_wurzel_b) else set()
             nb, mb = self._bruecke_alt_raeumen(dd)
+            _weg_b = sorted(_vor_b - (set(os.listdir(_wurzel_b))
+                                      if os.path.isdir(_wurzel_b) else set()))
+            if _weg_b:
+                from core import lernlauf as _ll_b
+                _ll_b.lauf_saetze_verwerfen(_ll_b.datenort_cfg(dd), _weg_b,
+                                            "pass-check folder deleted by the retention")
             if nb:
                 self.log.warning(f"cleanup: {nb} stale pass-check folder(s) older than "
                          f"{int(self.cfg.get('lernlauf_retention_d') or 0)}d deleted "
@@ -8623,8 +8357,8 @@ class Service:
         Analyse-Platz wartet der Lauf auf ihn.
 
         Stufe A (.511) hat zwei Dinge geaendert:
-        (1) LOESCHUNGEN rufen hier gar nicht mehr an — sie fuehren den Bericht
-            punktuell nach (anlernen.qs_bericht_bereinigen/refcache_entfernen).
+        (1) LOESCHUNGEN rufen hier gar nicht mehr an — seit E3b-2b filtert
+            anlernen.qs_lesen entfernte Saetze beim Lesen heraus.
         (2) Die verbliebenen Ausloeser (Benennen, Anlernen, Uebernahmen, Import,
             Reorganisieren) laufen durch ein SAMMELFENSTER: der Lauf startet erst,
             wenn QS_FENSTER_S lang nichts Neues kam, spaetestens nach QS_DECKEL_S.
@@ -8665,30 +8399,14 @@ class Service:
                 # 339 Bilder real) — Timeout aus der Bildzahl ableiten,
                 # Timeout/Fehl-Exit LAUT in die Lauf-Datei schreiben (die
                 # Seite zeigt dann FAILED statt ewigem 'checking').
-                _n_bilder = 0
-                _fd = os.path.join(self.cfg["data_dir"], "faces")
-                try:
-                    for _p0 in os.listdir(_fd) if os.path.isdir(_fd) else []:
-                        _pd0 = os.path.join(_fd, _p0)
-                        if os.path.isdir(_pd0):
-                            _n_bilder += sum(
-                                1 for f in os.listdir(_pd0)
-                                if f.lower().endswith((".jpg", ".jpeg",
-                                                       ".png", ".webp")))
-                except OSError:
-                    _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
-                deckel_s = max(600, 3 * _n_bilder + 120)
-                # Stufe B: der ERSTLAUF eines Bestands ohne Mess-Speicher misst
-                # jedes Bild einmal und kann Minuten dauern. Das ist erwuenscht
-                # (danach ist es gratis) — es muss nur LAUT gesagt werden, statt
-                # den Nutzer raten zu lassen, warum die Seite lange rechnet.
-                from core import refmess as _rm
+                # E3b-2b (Bauplan Referenz-Quelle einbauen): die Zahl der aktiven
+                # Referenz-Saetze aus Lese-Stufe b statt des Zaehlens von faces/; der
+                # Lauf misst nichts mehr, eine Ansage zum Erstlauf entfaellt.
+                from core import refquelle as _rq_qs
                 from core import refurteil as _refurteil
-                if not os.path.exists(_rm.pfad(_fd)):
-                    self.log.info(f"reference QS: no measurement store yet — this "
-                             f"first run measures all {_n_bilder} catalog "
-                             f"image(s) once and saves the values; later runs "
-                             f"read them and take seconds")
+                _n_bilder = sum(len(_r) for _r in _rq_qs.read_catalog(
+                    {"data_dir": self.cfg["data_dir"]})["personen"].values())
+                deckel_s = max(600, 3 * _n_bilder + 120)
                 fehler = None
                 _dg = {}
                 # Job der Vergabestelle (Klasse `interaktiv`) statt Subprozess —
@@ -8750,26 +8468,10 @@ class Service:
                         _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
                 else:
                     self.log.error(
-                        f"reference QS recalculated: {_dg.get('gesamt', 0)} "
-                        f"image(s) — {_dg.get('gemessen', 0)} measured, "
-                        f"{_dg.get('aus_speicher', 0)} from the measurement "
-                        f"store, {_dg.get('beiwert', 0)} from stock embeddings"
-                        # Stufe C: die einmalige Guete-Nachmessung der
-                        # Vorrats-Referenzen ist der einzige Posten, der einen
-                        # sonst warmen Lauf wieder Minuten kosten kann — sie
-                        # gehoert in dieselbe Bilanz-Zeile, sonst sieht der
-                        # Nutzer nur "0 measured" und eine lange Wartezeit.
-                        + (f"; {_dg.get('guete_nachgemessen')} stock "
-                           f"reference(s) measured once for quality"
-                           if _dg.get("guete_nachgemessen") else "")
-                        + (f"; quality known for {_dg.get('guete_deckung')} of "
-                           f"{_dg.get('gesamt', 0)}"
-                           if _dg.get("guete_deckung") is not None else "")
-                        + (f"; camera resolved for {_dg.get('kamera_gefunden', 0)}"
-                           f" of {_dg.get('kamera_gesucht', 0)} looked up"
-                           if _dg.get("kamera_gesucht") else "")
-                        + (" (image-quality models missing — fiqa/impression "
-                           "not measured)" if _dg and not _dg.get("guete_da") else "")
+                        f"reference QS recalculated: {_dg.get('saetze', 0)} "
+                        f"reference set(s) — {_dg.get('ungemessen', 0)} unmeasured "
+                        f"(no suggestion), {_dg.get('urteile', 0)} judgement(s) "
+                        f"written to the catalog"
                         + f" (waited {warte_s:.1f}s for a slot)")
             finally:
                 with self._qs_lock:
@@ -8887,30 +8589,24 @@ class Service:
         threading.Thread(target=job, daemon=True).start()
 
     def such_stand(self, person):
-        """.510/J18 (d): der EHRLICHE Zustand der zwei Suchen einer Person fuer
-        die Seite `/aehnliche` — sie startet seit .510 nichts mehr von selbst.
+        """.510/J18 (d): der EHRLICHE Zustand der Bestands-Suche einer Person
+        fuer die Seite `/aehnliche` — sie startet seit .510 nichts mehr von selbst.
+        Die Unbekannt-Suche (Quelle 1) hat keinen Lauf-Zustand: sie liest die
+        Referenzen seit E3c-1 direkt aus der Referenz-Quelle (Bauplan
+        analysen/bauplan_refquelle_einbau.md), es gibt keinen Cache, auf den
+        sie warten muesste; das Feld `unbekannt` entfiel mit E3c-2.
 
         -> {"vorschlaege": {"laeuft", "phase", "seit_s"},
-            "unbekannt":   {"laeuft"},
             "plaetze": N, "belegt": M}
         `phase` ist „wartet" (angemeldet, aber noch kein Platz) oder „rechnet".
         Die Platzzahlen stehen dabei, weil genau sie die Wartezeit erklaeren —
         bei einem Platz haelt der Ereignisstrom den Klick auf."""
         with self._qs_lock:
             st = dict(self._vs_laeuft.get(person) or {})
-            qs_laeuft = bool(self._qs_laeuft)
         return {"vorschlaege": {"laeuft": bool(st),
                                 "phase": st.get("phase") or "",
                                 "seit_s": (round(time.time() - st["seit"], 1)
                                            if st.get("seit") else 0.0)},
-                # Quelle 1 haengt am refcache. Bis .510 schrieb ihn die
-                # Referenz-QS mit, deshalb steht ihr Lauf-Flag hier. Seit
-                # .511/Stufe B baut sie ihn NICHT mehr (analyze.load_refs und
-                # refcache_aufbauen tun das) — das Flag bleibt trotzdem stehen:
-                # ein laufender Katalog-Lauf ist weiter der Zustand, in dem die
-                # Unbekannt-Suche gleich andere Zahlen sehen kann. Es meldet
-                # seither eher zu viel als zu wenig, nie zu wenig.
-                "unbekannt": {"laeuft": qs_laeuft},
                 "plaetze": int(self._plaetze.kapazitaet),
                 "belegt": int(self._plaetze.anzahl_belegt())}
 
@@ -9178,8 +8874,8 @@ class Service:
                     "last_seen_umhaengen": self._last_seen_umhaengen,
                     "qs_neu": (lambda: self.qs_neu_starten(sofort=True)),
                     "training": self._personmodell_neu,
-                    "refcache_neu": (lambda: threading.Thread(
-                        target=self._refcache_bau_anstossen, daemon=True).start()),
+                    # E3b-3b: kein Griff refcache_neu mehr — das Umbenennen schreibt nur
+                    # Bindung-Zeilen in den Katalog, die Matrizen-Datei wird nicht umgeschrieben.
                 }
                 bericht = _umb.umbenennen(self.cfg["data_dir"], alt, neu,
                                           umfeld=umfeld, puls=_puls, log=self.log)
@@ -9237,20 +8933,12 @@ class Service:
                          f"{type(e).__name__}: {e}")
         threading.Thread(target=_job, daemon=True).start()
 
-    def _refcache_bau_anstossen(self):
-        """refcache-Neuaufbau, falls das Re-Keying scheiterte (dann ist der
-        Cache weg und der naechste Urteilslauf zahlte ihn sonst selbst)."""
-        try:
-            import anlernen as _al_rc
-            _al_rc.refcache_aufbauen(self.embedder())
-        except Exception as e:
-            self.log.error(f"refcache rebuild after rename failed: {type(e).__name__}: {e}")
-
     # ENTFERNT 0.1.0.45 (User 27.07.): suslik loescht NIE in Frigate. Richtung Frigate gibt
     # es nur Holen (Import) und Schicken (Export) — eine Fern-Loeschung muesste zu 100 %
     # sicher das Richtige treffen und lief hier ohnehin ueber einen nicht portablen SSH-Weg,
     # der seit dem Container-Umzug scheiterte und dabei irrefuehrend meldete. Den Re-Import
-    # lokal geloeschter Bilder verhindert der Tombstone in refs_meta (anlernen.entferne_referenz);
+    # lokal entfernter Bilder verhindert der Katalog der Referenz-Quelle: ein Satz aus dem
+    # Frigate-Import zaehlt mit jedem Status, auch archiviert (sync_refs._nur_frigate);
     # eine in Frigate liegende Kopie bleibt bewusst unangetastet.
 
     def frigate_sync_export(self):
@@ -9368,630 +9056,25 @@ class Service:
             self.log.error(f"reorganize thread start error: {e}")
             return False
 
-    # ------------------------------------------------ .536 B3: Sammeln in Haeppchen
-    # DIE ZAHLEN DER HAEPPCHEN-RECHNUNG, die NICHT in die Config gehoeren: harte
-    # Grenzen und Daempfung des Reglers. Sie schuetzen vor einer entgleisten
-    # Messung (ein Haeppchen, das auf einer ueberlasteten Maschine 20x zu lange
-    # brauchte, darf den Faktor nicht dauerhaft verbiegen), sie sind keine
-    # Betreiber-Entscheidung.
-    SAMMEL_FAKTOR_MIN = 0.05          # s Rechenzeit je Clip-Sekunde, untere Schranke
-    SAMMEL_FAKTOR_MAX = 50.0          # obere Schranke (CPU-Messung 16.09.: 1,50)
-    SAMMEL_FAKTOR_GEWICHT = 0.5       # Gewicht des neuen Messwerts (Rest: alter Wert)
-    SAMMEL_FAKTOR_SCHRITT = 2.0       # hoechstens Faktor 2 je Schritt (Daempfung)
-    SAMMEL_PROLOG_MAX_S = 900.0       # obere Schranke der gelernten Kaltstart-Reserve
-    SAMMEL_PROLOG_ABKLINGEN = 0.9     # der gelernte Kaltstart faellt langsam, steigt sofort
-    SAMMEL_CLIP_FALLBACK_S = 20.0     # Ereignis ohne bekannte Laenge (Frigate ohne Ende)
-    SAMMEL_HAEPPCHEN_N_MAX = 200      # Stueck-Deckel je Haeppchen (Groesse der Job-Zeile)
-    SAMMEL_WIEDERHOLUNG_MAX = 2       # fremdverschuldete Haeppchen: zwei Anlaeufe, dann laut
-    # Stufe 3 (O415): die Fenster der beiden Sammel-Arten in Tagen. Bis dahin
-    # standen sie als `tage=0.1` und `tage=2` in den Aufrufen; der Vermerk braucht
-    # sie beim Anstoss UND beim Start, deshalb stehen sie jetzt hier einmal.
-    SAMMEL_FENSTER_SZENARIO_D = 0.1
-    SAMMEL_FENSTER_NETZ_D = 2.0
-
-    def _sammel_takt_pfad(self):
-        return os.path.join(self.cfg["data_dir"], "state", "sammel_takt.json")
-
-    def _sammel_takt_lesen(self):
-        """Die GELERNTEN Sammel-Zahlen DIESES Backends -> (faktor, prolog_kalt_s, quelle).
-
-        Sie stehen bewusst NICHT in der Config: der Betreiber stellt sie nicht ein,
-        die Anlage misst sie. In der Config stehen nur die Startwerte mit ihrer
-        Herkunft (Messung 16.09., CPU, obere Schranken) — auf einer Karte gelten
-        andere, und die kennt nur die Karte selbst. Je Backend eine Zeile, weil das
-        Verhaeltnis Prolog/Ereignis zwischen CPU, Intel und CUDA nicht uebertragbar
-        ist (der Prolog sind viele kleine Inferenzen bei det 320, die Ereignisse
-        wenige grosse bei det 1280)."""
-        f0 = float(self.cfg.get("sammel_rechenfaktor_start") or 1.5)
-        p0 = float(self.cfg.get("sammel_prolog_kalt_start_s") or 105)
-        try:
-            d = json.load(open(self._sammel_takt_pfad()))
-            e = d.get(str(self.cfg.get("backend") or "")) or {}
-            f = float(e.get("faktor_s_je_clip_s") or 0) or None
-            p = float(e.get("prolog_kalt_s") or 0) or None
-        except Exception:                                     # noqa: BLE001
-            f = p = None
-        return (min(max(f or f0, self.SAMMEL_FAKTOR_MIN), self.SAMMEL_FAKTOR_MAX),
-                min(max(p if p is not None else p0, 0.0), self.SAMMEL_PROLOG_MAX_S),
-                "measured" if (f or p) else "start value")
-
-    def _sammel_takt_schreiben(self, faktor, prolog_kalt_s, n):
-        """Gelernte Zahlen je Backend ablegen. Ein Fehler kostet nur das Lernen,
-        nie den Lauf (Muster wanduhr_fehl.json)."""
-        try:
-            pfad = self._sammel_takt_pfad()
-            try:
-                d = json.load(open(pfad))
-                if not isinstance(d, dict):
-                    d = {}
-            except Exception:                                 # noqa: BLE001
-                d = {}
-            d[str(self.cfg.get("backend") or "")] = {
-                "faktor_s_je_clip_s": round(float(faktor), 3),
-                "prolog_kalt_s": round(float(prolog_kalt_s), 1),
-                "haeppchen": int(n), "ts": round(time.time(), 1),
-                "version": os.environ.get("SUSLIK_VERSION", "dev")}
-            os.makedirs(os.path.dirname(pfad), exist_ok=True)
-            from core import atomar as _at
-            _at.json_schreiben(pfad, d)
-        except Exception as e:                                # noqa: BLE001
-            self.log.warning(f"collection: pace not saved ({type(e).__name__}: {e}) "
-                     f"— measured again next run")
-
-    def _sammel_liste(self, tage):
-        """Die Ereignisliste EINES Auftrags -> ([(eid, clip_s)], tag).
-
-        Sie entsteht EINMAL je Auftrag im DIENST, nicht je Haeppchen im Worker:
-        sonst berechnete jedes Haeppchen den Pruef-Tag neu, und ein Wechsel
-        mitten in der Kette (der Betreiber verstellt eine Zulauf-Latte) haette
-        die Liste unter der laufenden Kette verschoben.
-
-        `import anlernen` bleibt LAZY (Bauplan B3.1, ausdrueckliche Auflage): die
-        Modul-Konstanten von `anlernen` kommen aus Umgebungsvariablen, die dieser
-        Dienst beim Config-Laden setzt. Eine Import-Zeile im Modulkopf wuerde alte
-        Werte einfrieren, und Dienst und Worker rechneten verschiedene Tage."""
-        import anlernen                                       # noqa: PLC0415 (s. Docstring)
-        tag = anlernen._pruef_tag()
-        schon = anlernen._schon_gesammelt()
-        geprueft = anlernen._schon_geprueft(tag) | schon
-        evs = [(e[0], float(e[3] or 0.0)) for e in anlernen._unbekannt_eids(tage)
-               if e[0] not in geprueft]
-        return evs, tag
-
-    def _sammel_packen(self, rest, faktor, ziel_s, fallback_s):
-        """Das naechste Haeppchen nach VORHERGESAGTER Rechenzeit packen
-        -> (eids, clip_s, rest).
-
-        Nicht nach Stueckzahl: die Streuung je Ereignis ist zu gross (gemessen
-        4 s bis 248 s). Uebertragbar ist die Rechenzeit JE CLIP-SEKUNDE — sie war
-        ueber 1080p, 4K und 4:3 stabil, weil die Abtastung (`fps_sample=2`) die
-        Frame-Zahl an die Clip-Laenge koppelt.
-
-        MINDESTENS EIN EREIGNIS, auch wenn es allein das Budget sprengt: sonst
-        blockierte ein einziger langer Clip die Kette fuer immer. Es bekommt dann
-        sein eigenes Haeppchen, und der Zeit-Deckel im Worker sorgt dafuer, dass
-        es der einzige Posten bleibt."""
-        eids, clip_s = [], 0.0
-        for eid, c in rest:
-            c = float(c) if c and c > 0 else float(fallback_s)
-            if eids and (clip_s + c) * faktor > float(ziel_s):
-                break
-            if len(eids) >= self.SAMMEL_HAEPPCHEN_N_MAX:
-                break
-            eids.append(eid)
-            clip_s += c
-        return eids, clip_s, rest[len(eids):]
-
-    def _sammel_faktor_nachfuehren(self, faktor, erg):
-        """Den Rechenfaktor aus einem fertigen Haeppchen nachfuehren -> neuer Faktor.
-
-        Gemessen wird nur der EREIGNIS-Anteil (`dauer_s` minus Prolog) gegen die
-        Clip-Sekunden, die das Haeppchen wirklich abgearbeitet hat. Gedaempft
-        (halbes Gewicht), je Schritt hoechstens Faktor 2, und in harten Grenzen:
-        eine einzelne entgleiste Messung soll die naechsten Haeppchen nicht
-        verbiegen."""
-        clip_s = float(erg.get("clip_s") or 0)
-        rechen_s = float(erg.get("dauer_s") or 0) - float(erg.get("prolog_s") or 0)
-        if clip_s <= 0 or rechen_s <= 0 or not erg.get("events"):
-            return faktor
-        gemessen = rechen_s / clip_s
-        neu = faktor * (1.0 - self.SAMMEL_FAKTOR_GEWICHT) + gemessen * self.SAMMEL_FAKTOR_GEWICHT
-        neu = min(max(neu, faktor / self.SAMMEL_FAKTOR_SCHRITT),
-                  faktor * self.SAMMEL_FAKTOR_SCHRITT)
-        return min(max(neu, self.SAMMEL_FAKTOR_MIN), self.SAMMEL_FAKTOR_MAX)
-
-    def _sammel_prolog_nachfuehren(self, prolog_kalt_s, erg):
-        """Die KALTE Prolog-Reserve nachfuehren -> neuer Wert.
-
-        Nur ein Haeppchen, das die Referenz-Matrix wirklich neu gebaut hat
-        (`cache: miss`), sagt etwas ueber den Kaltstart. Der Wert steigt SOFORT
-        auf einen hoeheren Messwert (er ist eine Frist-Reserve — zu klein
-        erschiesst den Worker) und faellt nur langsam."""
-        if erg.get("cache") != "miss":
-            return prolog_kalt_s
-        gemessen = float(erg.get("prolog_s") or 0)
-        if gemessen <= 0:
-            return prolog_kalt_s
-        neu = (gemessen if gemessen >= prolog_kalt_s
-               else prolog_kalt_s * self.SAMMEL_PROLOG_ABKLINGEN)
-        return min(max(neu, 0.0), self.SAMMEL_PROLOG_MAX_S)
-
-    def _sammle_fahren(self, tage, mit_migriere, timeout, info=None, grenze=None):
-        """DER KETTEN-FAHRER des Sammelns (.536 B3) -> (summe|None, fehler|None).
-
-        WARUM ES IHN GIBT, in Feldzahlen: bis .535 war ein Sammel-Lauf EIN Job
-        ueber ALLE offenen Ereignisse. Am 15.09. verfehlten sechs davon die
-        600-s-Frist und rissen beim Prozess-Schuss je 2-5 fremde Jobs mit; auf der
-        CPU-Maschine des Feldtesters scheiterten 368 von 369 Szenario-Sammellaeufen
-        („worker timeout (600s) or died"). Ein Haeppchen dauert jetzt Minuten, und
-        eine gerissene Frist kostet ein Haeppchen statt des Prozesses.
-
-        DIE KETTE (Gegenprobe §7 nach der Messung vom 16.09.):
-          * Liste, Pruef-Tag und Abhak-Vermerke EINMAL je Auftrag (`_sammel_liste`).
-          * Haeppchen 0 ist beim 06:00-Netz die POOL-PFLEGE (`mit_migriere=True`,
-            `nur_eids=[]` = kein Ereignis) — derselbe Jobtyp, kein neuer Codeweg.
-          * Danach Ereignis-Haeppchen, gepackt nach vorhergesagter Rechenzeit
-            (Clip-Sekunden x gemessener Faktor <= `sammel_haeppchen_ziel_s`).
-          * Frist je Haeppchen = Zielzeit x `sammel_haeppchen_frist_faktor`, plus
-            der kalten Prolog-Reserve NUR im ersten Haeppchen eines Auftrags
-            (danach ist die Referenz-Matrix im Worker warm, s. anlernen.py).
-          * Der Auftrag als Ganzes bleibt im alten Zeitrahmen des Aufrufers
-            (`timeout`): reicht der Rest nicht mehr fuer ein volles Haeppchen,
-            endet die Kette und sagt, was liegen bleibt. Verloren ist nichts —
-            `geprueft.jsonl` haelt jedes fertige Ereignis fest, der naechste
-            Auftrag setzt dort auf.
-          * Fremdverschuldete Haeppchen (der Prozess ging unter dem Job weg) gehen
-            UNGEBUCHT an den Kettenanfang zurueck, zweimal; danach laut abbrechen.
-
-        `_gpu_bg_lock` und der Platz werden JE HAEPPCHEN genommen, nicht je
-        Auftrag: ueber den ganzen Auftrag gehalten sperrte das Lock die
-        Subprozess-Jobs (Anlern-Nachpruefung) laenger als die alten 30 min — das
-        waere eine Verschlechterung. Zwischen zwei Haeppchen gibt es jetzt ein
-        Fenster, und der im Code dokumentierte schlimmste Fall „3 x timeout"
-        schrumpft von 3 x 1800 s auf 3 x Haeppchen-Frist. Die Lock-Ordnung
-        `_gpu_bg_lock -> Platz -> Job` bleibt unveraendert.
-
-        Der Puls bleibt Pflicht je Haeppchen (sonst zieht der Platzwaechter nach
-        120 s Stille den Platz ein, waehrend der Job weiterrechnet).
-
-        Rueckgabe ist die SUMME der neuen Gesichter ueber alle Haeppchen (statt
-        des stdout-Textes bis .535): die Aufrufer fischen ihre Zahl nicht mehr mit
-        einem regulaeren Ausdruck aus dem Log.
-
-        `info` (.544 Teil 2b, optional, Muster `worker.job(info=…)`) traegt zwei
-        Angaben zurueck, die die Serien-Wache braucht und die im Fehlertext nur
-        als Wortlaut staenden:
-          `worker_ausnahme`  der Lauf scheiterte, WEIL der Worker scheiterte
-                             (Job-Antwort mit Fehlertext, Tod, fremdverschuldeter
-                             Abgang nach allen Wiederholungen). FALSCH bleibt er
-                             bei einer Absage ohne jede Worker-Beteiligung —
-                             „kein freier Analyse-Platz binnen Frist" ist eine
-                             Aussage ueber die Vergabestelle, nicht ueber den
-                             Rechenkontext, und sie darf keinen Prozessschuss
-                             ausloesen.
-          `haeppchen_n`      wie viele Haeppchen wirklich durch den Worker
-                             gelaufen sind. Nur damit ist ein `fehler=None` ein
-                             BEWEIS, dass der Kontext lebt; ein Auftrag ohne
-                             offene Ereignisse rechnet nichts und beweist nichts.
-          `aufgeschoben`     der Auftrag endete, weil die Analyse wieder Rueckstand
-                             hatte; der Rest steht im Faellig-Vermerk.
-        Entschieden wird weiterhin nie an einem Wortlaut.
-
-        STUFE 3 (bauplan_sammeln_debug.md, O415): `grenze` ist die FESTE
-        Fenster-Grenze des Laufs (Zeitpunkt, von der Startstelle bestimmt); ohne
-        sie gilt jetzt minus `tage`. Liste und jedes Haeppchen nutzen dieselbe
-        Grenze, das Haeppchen bekommt `tage` daraus erst beim Senden. Vor der
-        Liste und vor jedem Haeppchen (auch vor der Pool-Pflege) fragt der Fahrer
-        `rueckstau_aktiv()`: bei Rueckstand endet die Kette, ein laufendes Haeppchen
-        laeuft zu Ende, und der Rest geht mit dieser Grenze in den Vermerk; ebenso,
-        was der Zeitrahmen liegen laesst."""
-        _si = info if isinstance(info, dict) else {}
-        _si.setdefault("worker_ausnahme", False)
-        _si.setdefault("haeppchen_n", 0)
-        _si.setdefault("aufgeschoben", False)
-        if grenze is None:
-            grenze = time.time() - float(tage) * 86400
-        # Vor der Liste (und vor beiden Wegen, G9): sonst leerte ein aufgeschobener
-        # Lauf das Log des vorigen und zahlte die Listenbildung umsonst.
-        if self.rueckstau_aktiv():
-            self._sammel_vormerken(mit_migriere, grenze, anstoesse=0)
-            _si["aufgeschoben"] = True
-            return 0, None
-        if not self.cfg.get("worker", True):
-            return self._sammle_subprozess((time.time() - grenze) / 86400,
-                                           mit_migriere, timeout, info=_si)
-        lp = os.path.join(self.cfg["data_dir"], "state", "sammle.log")
-        t_auftrag = time.monotonic()
-        ziel_s = float(self.cfg.get("sammel_haeppchen_ziel_s") or 120)
-        frist_faktor = float(self.cfg.get("sammel_haeppchen_frist_faktor") or 3)
-        faktor, prolog_kalt, quelle = self._sammel_takt_lesen()
-        faktor0, prolog0 = faktor, prolog_kalt
-        try:
-            liste, tag = self._sammel_liste((time.time() - grenze) / 86400)
-        except Exception as e:                                # noqa: BLE001
-            _logbuch.swallowed(_log, _logbuch.WARNING, "returning (None, f'event list unreadable ({type(e).__name__}: {e})')")
-            return None, f"event list unreadable ({type(e).__name__}: {e})"
-        # Ereignisse ohne bekannte Laenge (Frigate hat sie nie beendet) bekommen den
-        # Median des Auftrags als Preis-Schaetzung — erfunden ist daran nur die
-        # Zuordnung, nicht die Groessenordnung; kennt der Auftrag gar keine Laenge,
-        # gilt der deklarierte Fallback.
-        _bekannt = sorted(c for _e, c in liste if c and c > 0)
-        fallback_s = (_bekannt[len(_bekannt) // 2] if _bekannt
-                      else self.SAMMEL_CLIP_FALLBACK_S)
-        warteschlange = []
-        if mit_migriere:
-            warteschlange.append({"art": "pflege", "eids": [], "clip_s": 0.0, "versuche": 0})
-        rest = liste
-        # DAS LOG WIRD JE AUFTRAG FRISCH GELEERT, aber ERST HIER — hinter der
-        # Liste und nur, wenn es wirklich etwas zu tun gibt (E4-Nachzug zu E3).
-        # Grund: ein Szenario-Nachsammeln ohne offene Ereignisse fuehrt kein
-        # einziges Haeppchen aus; stand das Leeren wie bis eben ganz oben, loeschte
-        # genau dieser Leerlauf-Auftrag das Log des VORIGEN, echten Laufs — der
-        # Betreiber sah danach eine leere Datei, obwohl nichts passiert war.
-        # Dasselbe galt fuer einen Auftrag, dessen Listenbildung scheitert.
-        # Geleert wird weiterhin je AUFTRAG und nicht je Haeppchen: der Worker
-        # haengt seine Zeilen an (JobLog im Anhaenge-Modus), also traegt das Log
-        # am Ende die ganze Kette; im Haeppchen zeigte es nur das letzte.
-        if warteschlange or rest:
-            try:
-                open(lp, "w").close()
-            except OSError as e:                              # noqa: BLE001
-                self.log.error(f"collection log {lp} not writable ({e})")
-        summe, n_haeppchen, offen_rest = 0, 0, 0
-        fehler = None
-        self._sammel_stand.update(
-            auftrag_aktiv=True, haeppchen_n=0, haeppchen_offen=len(liste),
-            letzte_dauer_s=None, cache_treffer=0, tag=tag,
-            faktor=round(faktor, 3), prolog_kalt_s=round(prolog_kalt, 1), quelle=quelle)
-        self.log.info(f"collection: {len(liste)} event(s) to check, batches of about "
-                 f"{ziel_s:.0f}s at {faktor:.2f}s per clip second ({quelle})")
-        try:
-            while True:
-                # Stufe 3 Punkt 5: vor JEDEM Haeppchen, auch vor der Pool-Pflege.
-                # Bei Rueckstand endet die Kette; der Rest (und die Pflege, falls
-                # sie noch aussteht) bleibt mit der Grenze dieses Laufs faellig.
-                if (warteschlange or rest) and self.rueckstau_aktiv():
-                    self._sammel_vormerken(
-                        any(x["art"] == "pflege" for x in warteschlange), grenze,
-                        anstoesse=0)
-                    _si["aufgeschoben"] = True
-                    break
-                if warteschlange:
-                    h = warteschlange.pop(0)
-                elif rest:
-                    eids, clip_s, rest = self._sammel_packen(rest, faktor, ziel_s, fallback_s)
-                    h = {"art": "ereignisse", "eids": eids, "clip_s": clip_s, "versuche": 0}
-                else:
-                    break
-                # Die KALTE Reserve bekommt, wer wirklich kalt startet: das
-                # erste Haeppchen eines Auftrags (der Worker kann seit dem
-                # letzten Lauf neu gestartet sein, die Referenz-Matrix ist dann
-                # leer) — UND jede Wiederholung nach einem fremdverschuldeten
-                # Abgang, denn genau dort ist der Prozess unter dem Job
-                # weggegangen und der naechste beginnt wieder kalt. Ohne diesen
-                # zweiten Fall bekaeme die Wiederholung die WARME Frist und
-                # riesse sie auf einer langsamen Anlage gleich wieder.
-                kalt = (n_haeppchen == 0) or bool(h.get("versuche"))
-                frist = ziel_s * frist_faktor + (prolog_kalt if kalt else 0.0)
-                frist = min(frist, float(timeout))            # nie ueber den Rahmen des Aufrufers
-                rest_budget = float(timeout) - (time.monotonic() - t_auftrag)
-                # Ein Haeppchen wird nur begonnen, wenn seine GANZE Frist noch in
-                # den Rahmen des Aufrufers passt — sonst stuende der Auftrag laenger
-                # als die 600 s (Szenario) bzw. 1800 s (Netz), die er immer hatte.
-                # Das ERSTE laeuft trotzdem immer: sonst liefe bei knappem Rahmen nie
-                # eines, und die Kette kaeme nie vom Fleck (die Liste bilden kostet
-                # schon Sekunden).
-                if n_haeppchen and rest_budget < frist:
-                    offen_rest = len(h["eids"]) + sum(len(x["eids"]) for x in warteschlange) + len(rest)
-                    if offen_rest:
-                        self.log.info(f"collection: time budget of this run spent after "
-                                 f"{n_haeppchen} batch(es) — {offen_rest} event(s) left "
-                                 f"for the next run (nothing lost, they are not checked off)")
-                        # Stufe 3 Punkt 7 (Klaerungspunkt 1): der Rest bleibt
-                        # faellig, mit der Grenze dieses Laufs.
-                        self._sammel_vormerken(
-                            h["art"] == "pflege"
-                            or any(x["art"] == "pflege" for x in warteschlange),
-                            grenze, anstoesse=0)
-                    break
-                erg, fehl, wi = self._sammle_haeppchen(
-                    grenze, h, frist, mit_migriere=(h["art"] == "pflege"), log_pfad=lp)
-                if erg is None:
-                    if wi.get("fremdverschuldet") and h["versuche"] < self.SAMMEL_WIEDERHOLUNG_MAX:
-                        # UNGEBUCHT zurueck an den KETTENANFANG (Bauplan B3.3):
-                        # der Job hat seinen Fehler nicht verschuldet, seine
-                        # Ereignisse sind nicht abgehakt.
-                        h["versuche"] += 1
-                        warteschlange.insert(0, h)
-                        self.log.info(f"collection: batch put back unbooked (not its own "
-                                 f"fault: {fehl}) — attempt {h['versuche'] + 1} of "
-                                 f"{self.SAMMEL_WIEDERHOLUNG_MAX + 1}")
-                        continue
-                    fehler = fehl
-                    # .544 Teil 2b: WER HAT VERSAGT? Ein Haeppchen, das gar nicht
-                    # erst einen Platz bekam, hat den Worker nie gesehen — es
-                    # sagt nichts ueber den Rechenkontext und darf deshalb weder
-                    # die Serie fuellen noch einen Prozessschuss ausloesen. Die
-                    # Unterscheidung kommt als FELD aus `_sammle_haeppchen`
-                    # (`kein_platz`), nicht aus dem Fehlertext.
-                    _si["worker_ausnahme"] = not wi.get("kein_platz")
-                    break
-                n_haeppchen += 1
-                summe += int(erg.get("neu") or 0)
-                if erg.get("cache") == "hit":
-                    self._sammel_stand["cache_treffer"] += 1
-                if h["art"] == "ereignisse":
-                    faktor = self._sammel_faktor_nachfuehren(faktor, erg)
-                prolog_kalt = self._sammel_prolog_nachfuehren(prolog_kalt, erg)
-                # Was der Zeit-Deckel im Worker liegen liess, kommt VORNE wieder
-                # in den Rest — es ist der aelteste Stoff des Auftrags.
-                offen = [e for e in (erg.get("offen") or [])]
-                if offen:
-                    _laengen = dict(liste)
-                    rest = [(e, _laengen.get(e, 0.0)) for e in offen] + rest
-                self._sammel_stand.update(
-                    haeppchen_n=n_haeppchen, haeppchen_offen=len(rest) + sum(
-                        len(x["eids"]) for x in warteschlange),
-                    letzte_dauer_s=erg.get("dauer_s"),
-                    faktor=round(faktor, 3), prolog_kalt_s=round(prolog_kalt, 1))
-                self.log.info(f"collection batch {n_haeppchen}: {erg.get('events')} event(s), "
-                         f"{erg.get('neu')} new face(s), {erg.get('dauer_s')}s "
-                         f"(prologue {erg.get('prolog_s')}s, references {erg.get('cache')})"
-                         + (f", {len(offen)} handed back" if offen else "")
-                         + f" — {len(rest)} left")
-        finally:
-            self._sammel_stand.update(auftrag_aktiv=False)
-            if n_haeppchen and (abs(faktor - faktor0) > 0.01
-                                or abs(prolog_kalt - prolog0) > 1.0):
-                self._sammel_takt_schreiben(faktor, prolog_kalt, n_haeppchen)
-            _si["haeppchen_n"] = n_haeppchen
-        if fehler:
-            return (summe if n_haeppchen else None), fehler
-        return summe, None
-
-    def _sammle_haeppchen(self, grenze, h, frist, mit_migriere, log_pfad):
-        """EIN Haeppchen durch den Worker -> (ergebnis|None, fehler|None, info).
-
-        Stufe 3 (O415): `grenze` ist die feste Fenster-Grenze des Auftrags; das
-        Jobfeld `tage` entsteht daraus erst beim Senden, damit der Worker dieselbe
-        Grenze filtert wie die Liste (bis dahin dasselbe relative `tage` wie die
-        Liste, und was inzwischen aelter wurde, fiel still heraus).
-
-        Das ist der Rumpf, der bis .535 der ganze Lauf war — Lock, Platz, Job,
-        Rueckweg. Geaendert hat sich, WAS im Job steht (`nur_eids`,
-        `zeit_deckel_s`) und dass die Bilanz als Antwortfeld zurueckkommt.
-
-        C1 (05.09.2026, bauplan_0505.md §1): der Worker-Weg ist KUNDE der
-        Vergabestelle — er nimmt einen Platz der Klasse `bg`, statt sich unsichtbar
-        am Job-Lock von Worker 1 anzustellen. Das war der Feldbefund vom 05.09.: 23
-        eingezogene LEBENDE Analysen an einem Vormittag, alle auf Platz 1, weil
-        Platz 1 seinen Worker mit Sammle und Wanduhr teilte.
-
-        `_gpu_bg_lock` bleibt darum: es serialisiert weiter gegen die SUBPROZESS-Jobs
-        (anlern_nachpruefung; .510: vorschlaege, .511: Referenz-QS NICHT mehr), die
-        einen eigenen GPU-Kontext aufmachen und keinen Platz halten (bekannte Luecke,
-        bauplan §1). Lock-Ordnung wie bei Ernte und Wanduhr: erst `_gpu_bg_lock`,
-        dann Platz."""
-        _wi = {}
-        with self._gpu_bg_lock:              # gegen die QS-/Nachpruef-Subprozesse serialisieren (Review 21.07.)
-            # C2 (05.09.2026): als wartend ANMELDEN, sonst ist dieser Kunde
-            # fuer die Fairness-Regel unsichtbar — die Ernte duerfte dann bei
-            # N >= 2 die N-1-Regel gegen die Analyse ausspielen, waehrend das
-            # 06:00-Netz danebensteht, und bei N = 1 kaeme es nie dran.
-            with self._plaetze.wartend("bg"), \
-                    self._plaetze.platz("sammle", art="bg", timeout_s=frist) as nr:
-                if nr is None:
-                    # Kein Platz binnen der Frist — derselbe Rueckweg wie bisher bei
-                    # „Worker die ganze Frist beschaeftigt". Die Aufrufer loggen ihn
-                    # und melden ihn (Netz-Sammeln zusaetzlich per Push); genau das
-                    # soll ein System auch sagen, das keinen freien Platz hatte.
-                    self.log.warning(f"collection: no free analysis slot within "
-                             f"{frist:.0f}s — postponed")
-                    # .544 Teil 2b: DIESER Rueckweg hat den Worker nie erreicht.
-                    # Als FELD, nicht als Wortlaut — der Ketten-Fahrer entscheidet
-                    # daran, ob die Serien-Wache diesen Fehlschlag zaehlen darf.
-                    _wi["kein_platz"] = True
-                    return None, (f"no free analysis slot within {frist:.0f}s — "
-                                  f"collection postponed"), _wi
-                w = self._worker(nr)
-                antwort = w.job({"typ": "sammle",
-                                 "tage": (time.time() - grenze) / 86400,
-                                 "mit_migriere": mit_migriere,
-                                 "log": log_pfad,
-                                 # .536 B3: die beiden Haeppchen-Felder. `nur_eids`
-                                 # ist bei der Pool-Pflege die LEERE Liste — sie
-                                 # heisst „kein Ereignis", nicht „alles".
-                                 "nur_eids": list(h["eids"]),
-                                 "zeit_deckel_s": float(self.cfg.get(
-                                     "sammel_haeppchen_ziel_s") or 120),
-                                 # .398 Ring-Zulauf: der Szenario-Weg speist
-                                 # die Kalibrier-Ringe (Deckel aus der Config,
-                                 # 0 = aus wie ueberall)
-                                 "kalib_deckel": int(self.cfg.get("live_kalib_max") or 0)},
-                                frist, info=_wi,
-                                # C1: Lebenszeichen des Platzes (A2/A3-Muster der
-                                # Ernte). Ohne es zoege der Platzwaechter jeden
-                                # Sammel-Job ueber 120 s ein — der Job liefe weiter
-                                # und der Platz waere doppelt vergeben.
-                                puls=self._plaetze.puls_fuer(nr))
-        if antwort is None:
-            # C3 (05.09.2026, Widerleger C1 Punkt 2, Nachzug N1): zuerst die
-            # Frage, die der Rueckweg dieses Aufrufs sicher beantwortet. Blieb
-            # der Prozess unter dem Job weg (Speicher-Zusage gerissen,
-            # geordnetes Ende, Tod), ist das NICHT die Schuld dieses Jobs — die
-            # Meldung „worker died (…)" darunter wuerde ihm eine anhaengen.
-            # Genau dieser Rueckweg traegt seit .536 die Wiederholung: der
-            # Ketten-Fahrer legt so ein Haeppchen UNGEBUCHT zurueck.
-            if _wi.get("fremdverschuldet"):
-                return None, (f"the worker process went away while collecting "
-                              f"(not the job's fault: "
-                              f"{getattr(w, 'letzte_ursache', None) or '?'})"), _wi
-            # C0/W4-2 (05.09.2026, Widerleger A4): die WIRKLICHE Ursache statt der
-            # Sammel-Vermutung „timeout or died" — Muster `run_analyze`.
-            _u = getattr(w, "letzte_ursache", None)
-            return None, (f"worker died ({_u})" if _u
-                          else f"worker timeout ({frist:.0f}s) or died"), _wi
-        if not antwort.get("ok"):
-            return None, str(antwort.get("fehler") or "unbekannt"), _wi
-        erg = antwort.get("sammle")
-        if not isinstance(erg, dict):
-            # Ein Worker ohne das Antwortfeld (Alt-Image im Mischbetrieb) — der
-            # Job LIEF, nur die Bilanz fehlt. Nicht als Fehler buchen, sonst
-            # wiederholte die Kette einen erledigten Lauf; stattdessen eine
-            # ehrliche Null und die Ereignisse dieses Haeppchens gelten als
-            # erledigt (sie sind in `geprueft.jsonl` abgehakt).
-            self.log.warning("collection: worker answered without a batch summary "
-                     "(older worker?) — counting 0 new faces for this batch")
-            erg = {"neu": 0, "events": len(h["eids"]), "offen": [],
-                   "dauer_s": None, "prolog_s": None, "clip_s": 0.0, "cache": "?"}
-        return erg, None, _wi
-
-    def _sammle_subprozess(self, tage, mit_migriere, timeout, info=None):
-        """Der Fallback-Weg OHNE Worker (`worker: false`) -> (summe|None, fehler|None).
-
-        BEWUSSTE TEIL-LUECKE (.536 B3): hier wird NICHT in Haeppchen zerlegt. Der
-        Grund, der die Zerlegung ueberhaupt erzwingt, gibt es auf diesem Weg nicht
-        — es gibt keinen Worker-Prozess, dessen Tod fremde Jobs mitreisst; ein
-        ueberzogener Lauf kostet hier nur sich selbst (`subprocess.TimeoutExpired`,
-        alter Kontrakt, die Aufrufer fangen ihn). Der Preis ist ehrlich benannt:
-        wer `worker: false` faehrt, behaelt das Verhalten der .535.
-
-        Und weil dieser Weg keine strukturierte Antwort hat, bleibt hier — und NUR
-        hier — der Griff nach der Summe im Text. Er steht jetzt an EINER Stelle
-        statt an zweien (bis .535 in `_szenario_nachsammeln` und `_netz_sammeln`)."""
-        env = dict(os.environ, OV_DEVICE=self.cfg["ov_device"],
-                   # .398: Ring-Deckel auch auf dem Subprozess-Fallback-Weg
-                   # (K3: die Erweiterung muss BEIDE sammle-Wege erreichen)
-                   VERIFY_KALIB_DECKEL=str(int(self.cfg.get("live_kalib_max") or 0)))
-        cmd = [sys.executable, os.path.join(HERE, "anlernen.py"), "sammle", "--tage", str(tage)]
-        if not mit_migriere:
-            cmd.append("--kein-migriere")
-        with self._gpu_bg_lock:                  # gegen vorschlaege/qs/Netz serialisieren (Review 21.07.)
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env,
-                               preexec_fn=_analyse_nice)   # Issue #21, s. ANALYSE_NICE
-        _si = info if isinstance(info, dict) else {}
-        if r.returncode != 0:
-            tail = " | ".join((r.stderr or r.stdout or "").strip().splitlines()[-3:])[:300]
-            # .544 Teil 2b: auf diesem Weg IST der Subprozess die Rechenstelle —
-            # sein Scheitern ist dieselbe Aussage wie eine Worker-Ausnahme drueben.
-            # Eine Platz-Absage gibt es hier gar nicht (kein Platz, kein Worker).
-            _si["worker_ausnahme"] = True
-            return None, f"exit {r.returncode}: {tail}"
-        _si["haeppchen_n"] = 1                   # er lief und kam durch: der Beweis
-        m = re.search(r"(\d+) faces collected", r.stdout or "")
-        return (int(m.group(1)) if m else 0), None
-
-    def sammel_zustand(self):
-        """Der Sammel-Stand fuer `/health` (.536 B3.4) — Momentaufnahme, keine Historie.
-
-        Stufe 3 Punkte 8 und 9: dazu der Faellig-Vermerk (`aufgeschoben_seit`,
-        `faellig`, `anstoesse`, `fenster_ab`) und `verlust_warnung`, der Zeitpunkt
-        der Warnung, dass der Aufschub laenger dauert als die Clip-Aufbewahrung."""
-        s = dict(self._sammel_stand)
-        with self._sammel_lock:
-            v = dict(self._sammel_faellig) if self._sammel_faellig else None
-        return {"aufgeschoben_seit": round(v["seit"], 1) if v else None,
-                "faellig": ("netz" if v["netz"] else "szenario") if v else "",
-                "anstoesse": v["anstoesse"] if v else 0,
-                "fenster_ab": round(v["grenze"], 1) if v else None,
-                "verlust_warnung": round(v["verlust"], 1) if v and v["verlust"] else None,
-                "auftrag_aktiv": bool(s.get("auftrag_aktiv")),
-                "haeppchen_offen": s.get("haeppchen_offen"),
-                "haeppchen_n": s.get("haeppchen_n"),
-                "letzte_dauer_s": s.get("letzte_dauer_s"),
-                "rechenfaktor_s_je_clip_s": s.get("faktor"),
-                "prolog_kalt_s": s.get("prolog_kalt_s"),
-                "quelle": s.get("quelle"),
-                "cache_treffer": s.get("cache_treffer")}
-
-    def _netz_sammeln(self):
-        """Naechtliches Auffangnetz (06:00): breiter Sammel-Sweep MIT Modell-Neupruefung (migriere).
-        Faengt schwache Durchgaenge, die der szenario-Trigger (nur fremd_verdacht) verpasst, und haelt
-        den Unbekannt-Pool modell-konsistent (Review 21.07.). Dank geprueft.jsonl nur die verpassten
-        Events -> nachts in Sekunden.
-
-        Stufe 3 (bauplan_sammeln_debug.md, O415): dies ist nur noch der ANSTOSS des
-        Netzes. Statt „skipped for today", wenn gerade gesammelt wird, merkt er das
-        Netz mit seinem Fenster vor; es laeuft, sobald kein Lauf haelt und die
-        Analyse keinen Rueckstand hat. Der Wartungsfaden wartet nicht mehr darauf.
-        Der Lauf selbst ist `_netz_lauf`."""
-        self._sammel_vormerken(True, time.time() - self.SAMMEL_FENSTER_NETZ_D * 86400)
-        self._sammeln_starten()
-
-    def _netz_lauf(self, grenze):
-        """Ein Netz-Sammellauf (Pool-Pflege zuerst) ab der festen Grenze `grenze`
-        -> None. Laeuft im Faden der Startstelle; Fehler meldet er selbst."""
-        try:
-            # .536 B3: die Kette beginnt hier mit der POOL-PFLEGE als Haeppchen 0
-            # (`mit_migriere=True` wirkt nur dort, `nur_eids=[]` = kein Ereignis),
-            # danach laufen die Ereignis-Haeppchen. Kein neuer Jobtyp, kein zweiter
-            # Codeweg — und die 1800 s sind jetzt der Rahmen des AUFTRAGS, nicht die
-            # Frist eines einzelnen Jobs (die Frist, an der am 15.09. sechs Jobs
-            # starben und je 2-5 fremde mitrissen).
-            _si = {}
-            summe, fehler = self._sammle_fahren(tage=None, mit_migriere=True,
-                                                timeout=1800, info=_si,
-                                                grenze=grenze)
-            if _si.get("aufgeschoben") and not _si.get("haeppchen_n"):
-                # Vor dem ersten Haeppchen wieder Rueckstand: nichts gerechnet,
-                # das Netz steht samt Pflege wieder im Vermerk. Kein „ok" und kein
-                # Clustern fuer einen Lauf, der nicht stattfand.
-                return
-            if fehler:
-                # .544: dieselbe Buchung wie beim Szenario-Sammeln. In der Nacht
-                # vom 20./21.09. war GENAU DAS die laute Stelle — das 06:00-Netz
-                # scheiterte mit `RuntimeError … CL_OUT_OF_RESOURCES` —, und sie
-                # zaehlte fuer die Serien-Wache nicht mit.
-                # .544 Teil 2b SCHLIESST DIE OFFENE GRENZE von Teil 2: gebucht
-                # wird nur noch, wenn die Ausnahme AUS DEM WORKER kam. Ein „kein
-                # freier Analyse-Platz binnen Frist" ist das Gegenteil eines
-                # toten Rechenkontextes — da rechnet die Anlage so viel, dass
-                # kein Platz frei wurde. Entschieden wird trotzdem nicht am
-                # Wortlaut, sondern am Feld `worker_ausnahme` aus dem
-                # Ketten-Fahrer.
-                if _si.get("worker_ausnahme"):
-                    self._serie_alle_buchen(True, "safety-net collection")
-                self.log.error(f"SAFETY-NET COLLECTION FAILED: {fehler}")
-                push(self.cfg, "suslik: Netz-Sammeln fehlgeschlagen",
-                     f"sammle scheiterte: {fehler}", None)
-            else:
-                # .544 Teil 2b: das gelungene Netz-Sammeln heilt die Serie — auf
-                # einer ruhigen Anlage ist es womoeglich der einzige Beweis der
-                # Nacht, dass der Rechenkontext noch lebt.
-                if _si.get("haeppchen_n"):
-                    self._serie_alle_buchen(False, "safety-net collection")
-                n = int(summe or 0)
-                import anlernen
-                idents, _ = anlernen.reconcile_unbekannte()
-                self.log.info(f"safety-net collection ok ({n} new faces, {len(idents)} unknown identities)")
-        except subprocess.TimeoutExpired:
-            self.log.warning("SAFETY-NET COLLECTION TIMEOUT (>30 min)")
-            push(self.cfg, "suslik: Netz-Sammeln-Timeout", "sammle lief laenger als 30 min.", None)
-        except Exception as e:
-            self.log.error(f"safety-net collection error: {e}")
-
     def start_wartung(self):
-        """06:00-Job: QS-Bericht + Master-Backup + Crops-Retention + (monatlich) Rotation + schlankes
-        Auffangnetz-Sammeln (Review 21.07.: faengt schwache Durchgaenge, die der szenario-Trigger
-        verpasst, + haelt den Pool modell-konsistent). Das Sammeln laeuft im Normalfall kontinuierlich
-        szenario-getriggert; das Netz ist nur Backstop (dank geprueft.jsonl nachts in Sekunden).
-        Beim Start laeuft alles einmal sofort AUSSER dem GPU-Netz (nur taeglich, nicht bei Neustart)."""
+        """06:00-Job: QS-Bericht + Crops-Retention + Altdaten-Aufraeumen + Update-Pruefung + (monatlich)
+        Rotation; beim Start laeuft alles einmal sofort. Das Auffangnetz-Sammeln ist mit Stufe V1b
+        abgebaut (Bauplan analysen/bauplan_verbraucher_unbekannt.md, Entscheid 12): die Unbekannten
+        kommen ueber den Verbraucher der Unbekannt-Stapel, kein zweiter Clip-Durchlauf.
+        Ein taegliches Master-Backup gibt es nicht mehr (Bauplan analysen/bauplan_refquelle_einbau.md,
+        Stufe E3 Punkt 4, I4): die Vollsicherung /backup_voll leistet dasselbe."""
         def lauf():
-            erst = True
             while True:
                 # JEDER Schritt in eigenem try/except: vorher hing alles an EINEM try — eine
                 # Exception im ersten Schritt (z.B. QS-Bericht) uebersprang stillschweigend
                 # Backup, Retention und Sammeln fuer diesen Tag. Genau der Fall, in dem das
                 # Backup wochenlang ausbleibt, ohne dass es jemand merkt.
                 jobs = [("QS report", self.qs_bericht_erzeugen),
-                        ("master backup", self.master_backup),
                         ("crops retention", self.crops_retention),
                         # .341 (User 25.08.): Lernlaeufe, Waisen-Pins, Kompilat-Caches —
                         # die drei Stellen, die bisher unbegrenzt wuchsen.
                         ("stale data cleanup", self.alt_aufraeumen),
                         ("update check", self.update_check)]
-                if not erst:                             # GPU-Netz nur taeglich, nicht bei jedem Neustart
-                    jobs.append(("safety-net collection", self._netz_sammeln))
                 if datetime.datetime.now().day == 1:
                     jobs.append(("deckung rotation", self.deckung_rotieren))
                 for name, fn in jobs:
@@ -9999,35 +9082,12 @@ class Service:
                         fn()
                     except Exception as e:
                         self.log.error(f"maintenance job '{name}' failed: {e}")
-                erst = False
                 jetzt = datetime.datetime.now()
                 ziel = jetzt.replace(hour=6, minute=0, second=0, microsecond=0)
                 if ziel <= jetzt:
                     ziel += datetime.timedelta(days=1)
                 time.sleep(max(60, (ziel - jetzt).total_seconds()))
         threading.Thread(target=lauf, daemon=True).start()
-
-    def _backup_frische_pruefen(self, melde):
-        """Waechter-Regel: das juengste Master-Backup darf nicht aelter als 48 h sein.
-
-        Der 06:00-Job kann aus vielen Gruenden ausfallen (volle Platte, Rechte, Exception im
-        Tar). Ohne diese Regel faellt das erst auf, wenn man das Backup BRAUCHT — die
-        schlimmstmoegliche Gelegenheit. 48 h statt 24 h, damit ein einzelner verpasster Lauf
-        (Neustart kurz nach 06:00) nicht schon meldet."""
-        bdir = os.path.join(self.cfg["data_dir"], "backups")
-        try:
-            staende = [os.path.join(bdir, f) for f in os.listdir(bdir)
-                      if f.startswith("master_") and f.endswith(".tar.gz")]
-        except OSError as e:
-            melde("backup", f"backup folder not readable ({bdir}): {e}")
-            return
-        if not staende:
-            melde("backup", f"not a single master backup in {bdir} — check the 06:00 job.")
-            return
-        alter_h = (time.time() - max(os.path.getmtime(p) for p in staende)) / 3600
-        if alter_h > 48:
-            melde("backup", f"newest master backup is {alter_h:.0f} h old (>48 h) — "
-                            f"the 06:00 job does not finish. Check the log for 'maintenance job'.")
 
     def start_melde_spur(self):
         """W3 Stufe 1 (.399): die EINE serielle Nachwehen-Spur fuer externe
@@ -11191,7 +10251,22 @@ class Service:
                             melde("mqtt_trigger", "MQTT trigger not connected to the broker — "
                                                   "NO events arrive (check network/firewall/broker"
                                                   ").")
-                    self._backup_frische_pruefen(melde)
+                        else:
+                            # Stummwache (Bauplan MQTT-Stummwache, Entscheid 2, Vorfall O632): der Broker
+                            # steht, aber Frigate spricht nicht. /health ist rot ueber health_ok.
+                            _st = self.frigate_mqtt_stand()
+                            if _st and _st["stumm"]:
+                                # Ergaenzung zu Entscheid 2 (Eigentuemer 14.10.2026 19:35:43): Push mit
+                                # Handlungsanweisung; Beginn aus dem Stand, Takt aus dem Werkswert.
+                                _seit = datetime.datetime.fromtimestamp(
+                                    time.time() - _st["stumm_seit_s"]).strftime("%H:%M")
+                                _ab_min = f"{_reg.MQTT_STUMMWACHE['abgleich_s'] / 60:g}"
+                                melde("mqtt_trigger",
+                                      f"Frigate has stopped talking over MQTT since {_seit} "
+                                      f"({_st['stumm_seit_s'] / 60:.0f} min). suslik now fetches events "
+                                      f"from Frigate itself every {_ab_min} minutes, person alerts may "
+                                      f"arrive up to {_ab_min} minutes late. Check Frigate's MQTT "
+                                      f"connection (restarting Frigate usually fixes it).")
                     # Feldbefunde Punkt 2 (O295): Arbeit wartet, aber nichts gelingt.
                     self._stillstand_pruefen(melde)
                 except Exception:
@@ -11423,7 +10498,7 @@ class Service:
         "benennung_vorschlag_schwelle": (float, 0.2, 0.95, "naming: 'looks like X' suggestion threshold vs named-anchor centroids (conservative start; suggestion only, never forces)"),
         "fps_sample": (float, 1, 30, "analysis sampling rate (calibrated 3)"),
         "sample_deckel": (int, 0, 10000, "largest number of frames one event analysis may look at, spread evenly over the whole clip. Without it the work grows with the length of the event and nothing stops it: on two real installations the most expensive ONE PERCENT of events carried 12 to 16 percent of all analysis work, and the worst single case needed 4464 sampled frames and 22 minutes of compute. Those are the events that block a compute thread while the queue grows. The cap does NOT stop early — it takes a wider stride, so the last minute of a long visit is sampled exactly as densely as the first; only the spacing changes. FACTORY VALUE DEPENDS ON YOUR IMAGE: 240 on the gpu, cuda and rocm images, 180 on gpu-legacy, 120 on the cpu image. The 240 is about 80 seconds of clip at the default sampling rate and was measured, not guessed: it sits above the 95th percentile of both installations (201 and 211 sampled frames), trims 3.8 and 3.9 percent of events, and saves 16.5 and 12.5 percent of the sampling work. The lower values are for machines where a growing queue hurts more than thinner sampling does — on a CPU-only machine, and on the older integrated graphics the gpu-legacy image serves, an analysis that never catches up judges worse, not just later. Whatever you set here wins from then on, including 240 or 0. 0 switches it off and restores the old behaviour. Raise it if your cameras record long visits you want looked at in full detail; lower it if the analysis queue on your machine never catches up"),
-        "szene_karenz_s": (int, 30, 900, "scene grace: unknown alert only if nobody was confirmed in the window"),
+        "szene_karenz_s": (int, 30, 900, "scene grace: unknown alert once per pass and identity after this delay; names recognized in the window are listed as information"),
         "alert_stil": (list, ["worte", "worte_zahlen"], None, "alert text style (.249 Kosinus-raus): worte (plain words, default) / worte_zahlen (words plus raw scores)"),
         "telegram_modus": (list, ["aus", "ha", "direkt", "beide"], None, "Telegram sending: aus (off) / ha (HA script) / direkt (direct) / beide (both)"),
         "telegram_inhalt": (list, ["video", "bild"], None, "Telegram attachment: video (short clip, image if unavailable) / bild (image only, no transcoding)"),
@@ -11439,7 +10514,6 @@ class Service:
         "unscharf_max": (int, 100, 2000, "sharpness threshold for the blur list (higher = more images flagged)"),
         "min_kante": (int, 30, 300, "minimum face size (px) for a usable reference"),
         "szenario_gap_min": (int, 1, 30, "time gap (min) for pass grouping on the Today page"),
-        "besucher_sim": (float, 0.40, 0.70, "threshold: at this similarity an unknown event counts as an ignored visitor (no alert)"),
         "modell": (list, ["buffalo", "adaface"], None, "recognition model: buffalo (insightface w600k_r50) | adaface (IR101, better separation) — the refcache is rebuilt automatically after a switch"),
         "update_check": (bool, None, None, "daily anonymous check for a newer release on GitHub — shows a quiet hint in the header; the only outbound call besides notification channels"),
         "debug": (bool, None, None, "verbose debug logging: per-person scores/windows, MQTT payloads, timing, plus a [clipdbg] trace of every Frigate clip interaction (fetch start/end with bytes+duration, clip-generation waits, per-clip frame quality) (INFO stays the default; turn on to validate the system in depth). It switches itself off after debug_dauer_h hours, counted from the moment it is switched on; until then it stays on across a restart. /health shows the end of the window as log.debug_bis"),
@@ -11496,10 +10570,6 @@ class Service:
         "vorrang": (list, ["erkennung", "wache"], None, "who wins when the accelerator cannot carry both: erkennung (default) = event recognition has priority, wache = the live watchers do. This only ever matters when the card is too small for both at the same time; on a card with room, nothing here changes anything. With erkennung the service first falls back to a minimum mode (one compute thread, one clip geometry — a second resolution then costs a rebuild each time instead of being kept ready), and if even that does not fit it takes live watchers off the net, the most recently started one first, only as many as the minimum needs. It says so in the log and in /health, and it switches them back on by itself once the card carries the full price again. With wache the analysis worker stays off in that situation, exactly as it did before 0.1.0.544 — but the log then says that recognition is off BECAUSE the watchers have priority, instead of asking you to edit config.json. A machine whose card cannot even carry the minimum gets neither: nothing is switched off for a recognition that would not run afterwards anyway"),
         "worker_vram_reserve_mb": (int, -1, 65536, "how much card memory the service leaves unassigned, in MiB. -1 (default) = automatic: a tenth of the card, at least the built-in floor — 614 MiB on a 6 GB card, 1229 MiB on 12 GB. 0 is allowed and means no reserve at all. The reserve is not a safety margin for the analysis itself (the arena cap is the wall the worker cannot cross); it is the room left for everything else that may land on the same card without asking us — a display transcode, a second container, another user's process. Set it small and the compute threads get that memory; the price is that a foreign consumer arriving later finds the card full, and on NVIDIA that ends in a CUDA out-of-memory in whichever process asks next, ours or theirs. A value larger than the card is clamped to the card. The calculation names the source (\"config\"/\"formel\") in the log and in /health; it takes effect at the next worker start, like the other worker keys"),
         "bg_platz_getrennt": (int, 0, 1, "1 gives background work (collecting, harvesting, your clicks, the live body judgment, the wall-clock measurement) its own slot instead of one of the analysis slots. It is computed in a separate thread of the worker anyway, so a background job that holds an analysis slot blocks a compute thread for nothing — measured on 15.09.2026: a collection run held one of two analysis slots for eight minutes while events were waiting. Since 0.1.0.536 WHEN it starts changed too: with its own slot it takes its turn right away instead of waiting for an idle moment that never comes on a busy installation (46 postponed collection runs in one morning). 0 restores the behaviour of 0.1.0.533 and is load-bearing: every class then sits on the analysis slots again, the old idle rule and the rule that keeps one slot free for events apply word for word, and a collection run can take an analysis slot again"),
-        "sammel_haeppchen_ziel_s": (int, 30, 1800, "how much computing time one batch of the automatic collection should aim for, in seconds. The collection used to run as ONE job over all open events: on 15.09. six of those were shot at their deadline here, and on a CPU-only test machine 368 of 369 runs never finished at all. It now runs in batches — the service predicts the cost of each event from its clip length and packs a batch up to this budget; a batch that overruns it stops after the current event and hands the rest to the next batch. 120 s is the default. Larger batches mean fewer starts, smaller batches free the background slot more often for a click or a harvest"),
-        "sammel_haeppchen_frist_faktor": (int, 2, 10, "how much longer than its target time a collection batch may take before the service calls it hung (the deadline is the target time times this factor, plus a cold-start reserve for the first batch of a run). 3 is the default: if a batch needs three times its target, the cost per event has changed by a factor of three within one step — which is exactly when a deadline should bite"),
-        "sammel_rechenfaktor_start": (float, 0.1, 50.0, "start value for the cost of collecting, in seconds of computing per second of clip. 1.5 was measured on 2026-09-16 on a CPU machine (median over 98 events, 1.29 to 1.87, the same across 1080p and 4K) and is an upper bound — the machine was busy. It is only the start value: the service measures its own factor from the batches it runs and remembers it per backend, so on a graphics card the stored value replaces this one after the first run"),
-        "sammel_prolog_kalt_start_s": (int, 0, 900, "start value for the cold start of a collection run, in seconds — the time the first batch needs before it looks at a single event, almost all of it spent embedding the reference pictures. 105 s comes from the same CPU measurement (100 s measured, plus reserve) and is an upper bound. Only the FIRST batch of a run pays it: the reference matrix then stays warm in the worker for the rest of the run. Like the factor above, the service measures the real value and remembers it per backend"),
         "vorlauf_max": (int, 0, VORLAUF_MAX_GRENZE, "how many finished clips the service keeps ready on disk ahead of the analysis. An analysis slot does not only compute, it also fetches: while it pulls a clip from Frigate its compute thread stands still. With a stock of clips already on disk the threads keep working. The service fetches until this many are ready, then pauses until the stock falls below vorlauf_min. 50 is the default, derived from a field measurement: about 20 events per minute on two compute threads and about 3 s per fetch, so 50 gives short refill bursts instead of one long pull. 0 switches the whole stage off — then each slot fetches its own clip as before. The clips go into the normal clip cache and obey its size cap"),
         "vorlauf_min": (int, 0, VORLAUF_MIN_GRENZE, "the lower mark of the stock (see vorlauf_max): once fewer than this many clips are ready, the service fetches again until vorlauf_max is reached. 20 is the default, about one minute of stock at the measured rate. The gap between the two marks is what keeps the service from asking Frigate for a new clip after every single event"),
         "vorlauf_parallel": (int, 1, 3, "how many clips the service fetches from Frigate at the same time while filling the stock. 2 is the default. Frigate 0.18 serves clip streams and authentication from one thread pool, so more parallel pulls make the whole installation slower, not faster; the normal clip gate applies on top of this"),
@@ -11524,6 +10594,21 @@ class Service:
         "person_backend": (list, ["cpu", "openvino:GPU", "openvino:NPU", "cuda", "migraphx"], None, "compute placement of the body-recognition embedding model — cpu is the measured default (the path is dominated by video decode, not by this model; measured 18.8 ms/image on CPU vs 3.2 ms on an Intel iGPU). The accelerator values need the matching image variant (openvino in gpu/gpu-legacy, cuda in cuda, migraphx in rocm) and an extra GPU context can starve the live watchers — move it only after measuring on your box; on failure the model falls back to CPU loudly"),
         "wanduhr_min_kerne": (int, 1, 64, "self-measurement gate: minimum PHYSICAL cores (capped by a cgroup CPU quota if one is set) required to run the boot-time timing self-measurement, which is a second full analysis process next to the live one. The default 4 is a structural floor (2 processes x 2 concurrent parts each: video decode + inference), not a measured value. On a machine below the floor the measurement is skipped loudly and run-duration forecasts keep the labeled fallback values. Lower this deliberately if you accept minutes of full load on a small machine in exchange for measured forecasts. Also used as the weak-machine floor for one first-boot default: on a fresh install below it, cpu_threads is preset to the measured physical core count — raising it widens that group too. It no longer decides the starting state of the recognition chain: since 0.1.0.541 EVERY fresh install starts with face recognition only (body and vision paths off), whatever the machine measures, and you switch them on when you want them"),
         "analyse_timeout_s": (int, 60, 3600, "watchdog for one live analysis (seconds): if the analysis has not answered by then it is presumed hung, killed, and the event is retried once immediately with a doubled deadline (in worker mode on a fresh worker, otherwise in a fresh process). The default 600 is measured, not guessed: across 1394 live analyses on the reference machine the slowest successful run took 258 s, so 600 leaves over twice that, and the doubled retry additionally carries machines up to roughly 4-5x slower before an event is handed to the silent catch-up. Raise this if you keep seeing 'analyze watchdog' lines for runs that would have finished"),
+        # Bauplan analysen/bauplan_fix_0113.md Stufe F1 Punkt 2: Frist des Migrationsskripts, Spanne wie
+        # analyse_timeout_s; Werkswert und Herkunft in load_config.
+        "migration_timeout_s": (int, 60, 3600, "deadline for the one-time migration of the stored faces at start (seconds): if the migration script has not finished by then, the service ends it, the migration stays pending and is resumed at the next start; until then recognition runs over the legacy reader and the worker starts only after the script. The default 600 is the deadline the migration had before as a worker job; measured migrations of 852 references took 54 to 105 s on a CPU machine and 4 to 6 s with CUDA"),
+        # Bauplan analysen/bauplan_fix_0113.md Entscheid 6, Stufe F4 Punkt 3: der Unbekannt-Stapel des Workers.
+        # Werkswerte und Herkunft in core.registry.UNBEKANNT_WERK; die Spannen sind gewaehlt, nicht gemessen.
+        "unbekannt_latte": (float, 0.0, 1.0, "unknown faces, grouping bar: during one event analysis the worker gathers the faces that match no known person (the same rule as the single stranger suggestion: candidate gate passed and best recognition score below the stranger bar) into groups, one group per presumed person. A face joins the group whose most similar member reaches this bar (cosine of the face fingerprints, computed on the CPU, no extra model run); two faces from the same picture never share a group. FACTORY VALUE 0.35, measured on two installations: from 0.35 up no pair of two different people was found, the bar for a surely different person lay at 0.34. Lower values merge more faces into one group, higher values split them"),
+        "unbekannt_bilder_je_gruppe": (int, 1, 20, "unknown faces: how many faces each group keeps at most per clip, the best ones by detection score times face area; each kept face is saved as a reference set with status candidate and listed in the unknown-face file of the event. FACTORY VALUE 5, a proposal, not measured"),
+        "unbekannt_rahmen_max": (int, 0, 20, "unknown faces: how many pictures the analysis worker holds at most for the unknown-face groups of one clip; faces in the same picture share one, and when the cap is full a better picture replaces the worst one. Each held picture costs memory until the end of the event: about 12.4 MB at 4K, and at the end about 24.9 MB more for the colour conversion. The cap applies per compute thread, so the total is this value times worker_straenge. FACTORY VALUE 5, a proposal, not measured. 0 switches the unknown-face groups off"),
+        # Bauplan analysen/bauplan_aehnlich.md Entscheide 6 und 11, Stufen AE1 und AE2 Punkt 2: die drei Grenzen der Regel
+        # „ähnlich zu P“ (core/aehnlich.py). Werkswerte und Herkunft in core.registry.AEHNLICH_WERK; die Spannen sind
+        # gewaehlt, nicht gemessen (1 bis 20 bei der Mindestzahl: Entscheid 11). Alle drei wirken ohne Neustart
+        # (config_schreiben, _live_keys; die Wache des Verbraucher-Fadens sieht sie binnen einer Minute, Entscheid 17).
+        "aehnlich_latte": (float, 0.0, 1.0, "unknown faces probably of a known person: the unknown-face consumer marks an unknown identity as probably P when it has at least aehnlich_min_gesichter faces, most of them have their best match with the same known person P, the median of their recognition scores to P reaches this bar and the median lead over the next known person reaches aehnlich_abstand. The mark is stored at the identity: the Today page and the Unknown page show these identities under Probably recognized, one group per person P; the Faces page, the learning-run hint, the passes and the line 'more in archived clusters' on the Today page do not count them as unknown, and no unknown-person alert (MQTT, Telegram) goes out for them; Pushover stays as it is. A user verdict 'not P' on the Unknown page, or a pass confirmed as a stranger, keeps the rule from marking P for that identity. All identities are checked again at start, after new unknown faces and within a minute after this value changes. FACTORY VALUE 0.30, calculated on the stored references: with 0.30 and a lead of 0.10 a group of 1 to 5 faces of a stranger is wrongly called similar in 0.9 to 2.3 % of the cases (at 0.25: 1.2 to 3.9 %). Takes effect without a restart"),
+        "aehnlich_abstand": (float, 0.0, 1.0, "unknown faces probably of a known person: the second bar of the same rule. For each face the score to the person P minus the best score to any other known person (negative when the face points to someone else); the median of these leads must reach this value. The mark is stored at the identity, moves it to Probably recognized on the Today and Unknown pages, keeps it out of the line 'more in archived clusters' on the Today page and stops the unknown-person alert, see aehnlich_latte. FACTORY VALUE 0.10, from the same calculation as aehnlich_latte. Takes effect without a restart, all identities are checked again within a minute"),
+        "aehnlich_min_gesichter": (int, 1, 20, "unknown faces probably of a known person: the rule judges an unknown identity only from this many faces on (faces with a fingerprint of the running recognition model); with fewer it stays unknown on all pages (also in the line 'more in archived clusters' on the Today page) and alerts as before. With two faces both must point to the same person. 1 means one picture is enough. FACTORY VALUE 2, set by the owner. Takes effect without a restart, all identities are checked again within a minute"),
         # Bauplan GPU-Wartefrist, Stufe 1 (F1, Eigentuemer 28.09.2026 16:16:13): Werkswert 10,
         # Spanne 2-120; die Herleitung steht am Werkswert in load_config.
         "inferenz_frist_s": (int, 2, 120, "deadline for ONE computation the analysis worker hands to the Intel GPU, in seconds. If the GPU does not return it in time, the worker logs an ERROR ('inference HANG'), answers the event as a GPU hang, and the service replaces the worker process, because the GPU context is not trusted after an abandoned request; the event is treated as after the analysis watchdog, the other events in the worker go back into the queue. The default 10 is measured, not guessed: on the Intel test machine the longest of 3966 computations took 128 ms; 10 s also stays above the kernel's compute preemption timeout (7.5 s), where a legitimate computation may be held back, and below the driver's own abort of a GPU request (20 s). Raise it only if 'inference HANG' lines appear on a machine that is merely slow. analyse_timeout_s stays the outer limit for the whole event"),
@@ -11576,6 +10661,11 @@ class Service:
         "vorrat_kante_min": (int, 20, 200, "stock gate: min. face edge in px — deliberately lower than the harvest gate, the norm carries the quality judgment (measured 40)"),
         "vorrat_sharp_min": (int, 100, 5000, "stock gate: min. sharpness, the 'good' tier of the reference bar (measured 600)"),
         "vorrat_rand_faktor": (float, 1.0, 4.0, "stock crops: context margin factor around the face box — for the human eye in the offer view, never an embedding source (2.2)"),
+        # E3a-1c (Bauplan Referenz-Quelle einbauen, Entscheid 1): Untergrenze UEBER 1,5,
+        # deshalb die kleinste Kommazahl oberhalb von 1,5; eine Obergrenze nennt der
+        # Bauplan nicht. aufbewahrung_tage steht (wie lernlauf_retention_d) nur in
+        # der Werkswert-Liste: der Bauplan nennt fuer ihn keine Grenzen (O555 f).
+        "profil_faktor": (float, math.nextafter(1.5, math.inf), math.inf, "saved faces: side of the profile picture as this factor times the longer side of the face box, centred on the box, unscaled and lossless, cut at the frame edge (2.2; must be above 1.5)"),
         "vorrat_zwilling_sim": (float, 0.8, 0.99, "stock offers: near-identical twins within one walk-through are folded into the strongest picture at/above this cosine similarity (measured: neighbour frames ~1.0, real variety 0.41-0.70; 0.95)"),
         "vorrat_konsens_min": (float, 0.1, 0.6, "stock offers: min. scenario consensus — best similarity to another stock face of the same walk-through; filters foreign faces like animals (measured: dog 0.15 vs. real 0.59+, threshold 0.30)"),
         "katalog_norm_min": (float, 15.0, 35.0, "catalog offer line: min. feature norm for frontal faces offered as new references (measured 24.0 = top 22%% of the existing reference set)"),
@@ -11691,7 +10781,10 @@ class Service:
         # aus DER einen Quelle (core.kamerakalib.ACHSE_GLOBAL) — eine
         # abgeschriebene Liste hier waere die K3-Falle.
         # Log-Systematik (E9): Pruef-Kanal und Takt wirken live wie der Debug-Schalter.
-        _live_keys = {*LOG_SWITCH_KEYS, *_kk_ernte.ACHSE_GLOBAL.values()}
+        # Bauplan analysen/bauplan_aehnlich.md Entscheide 6, 11 und 17: die drei Grenzen der Regel „ähnlich zu P“ liest
+        # der Verbraucher-Faden aus cfg (seine Wache sieht eine Aenderung binnen einer Minute); Namen aus der einen
+        # Quelle core.registry.AEHNLICH_WERK.
+        _live_keys = {*LOG_SWITCH_KEYS, *_kk_ernte.ACHSE_GLOBAL.values(), *_reg.AEHNLICH_WERK}
         if not geaendert and not _fa_geaendert:
             # .378: kein Wert weicht von der laufenden Config ab — ein Neustart
             # haette nichts zu laden. Wichtig fuer das Kalibrier-Uebernehmen
@@ -13486,13 +12579,21 @@ class Service:
     def voll_wiederherstellen(self, tmp_pfad):
         """PE6 Full-Restore aus dem /backup_voll-Archiv. Ablauf: Mitglieder gegen
         Whitelist validieren -> in .restore-tmp entpacken (tarfile filter='data'
-        gegen Pfad-Ausbrueche) -> bestehende Teile als .pre-restore-<ts> zur Seite
-        drehen (je Teil bleibt genau EIN Vorstand liegen) -> neue Teile einsetzen ->
-        Config-Export ueber den validierten Restore-Weg anwenden -> Neustart."""
+        gegen Pfad-Ausbrueche) -> neue Teile einsetzen, die bestehenden wandern nach
+        state/archiv/wiederherstellung_<ts>/<Teil> (I10, Bauplan
+        analysen/bauplan_refquelle_einbau.md Stufe E3 Punkt 4: nichts wird geloescht,
+        auch fruehere Ordner nicht; sie liegen in der naechsten Vollsicherung, I1) ->
+        Kandidaten-Zeilen ohne Satz verwerfen (core.refquelle.after_restore, V1) ->
+        Config-Export ueber den validierten Restore-Weg anwenden -> Neustart.
+        Reihenfolge: zuerst state (der alte liegt kurz daneben, der neue wird eingesetzt,
+        dann wandert der alte unter das Archiv des neuen), danach die uebrigen Teile in
+        denselben Archivordner; bringt das Archiv kein state mit, ist es das Archiv des
+        bestehenden state/."""
         import shutil as _sh
         import tarfile
+        from core import refquelle as _rq
         data = self.cfg["data_dir"]
-        ERLAUBT = ("config-export.json", "config", "faces", "learn", "personlern", "state")
+        ERLAUBT = ("config-export.json", "config", "faces", "learn", "personlern", "state", "refquelle")
         ziel = os.path.join(data, f".restore-tmp-{os.getpid()}")
         try:
             with tarfile.open(tmp_pfad, "r:gz") as tar:
@@ -13510,15 +12611,33 @@ class Service:
         if not teile and not os.path.isfile(os.path.join(ziel, "config-export.json")):
             _sh.rmtree(ziel, ignore_errors=True)
             return False, "archive contains none of the expected parts"
-        for t in teile:
-            alt = os.path.join(data, t)
-            for rest in [d for d in os.listdir(data)
-                         if d.startswith(f"{t}.pre-restore-")]:
-                _sh.rmtree(os.path.join(data, rest), ignore_errors=True)
-            if os.path.exists(alt):
-                os.rename(alt, f"{alt}.pre-restore-{stempel}")
-            os.rename(os.path.join(ziel, t), alt)
+        ablage = os.path.join("state", "archiv", f"wiederherstellung_{stempel}")
+        if teile:
+            archiv = os.path.join(data, ablage)
+            alt_state = os.path.join(data, f".restore-alt-state-{stempel}")
+            if "state" in teile:
+                if os.path.exists(os.path.join(data, "state")):
+                    os.rename(os.path.join(data, "state"), alt_state)
+                os.rename(os.path.join(ziel, "state"), os.path.join(data, "state"))
+            os.makedirs(archiv, exist_ok=True)
+            if os.path.exists(alt_state):
+                os.rename(alt_state, os.path.join(archiv, "state"))
+            for t in teile:
+                if t == "state":
+                    continue
+                alt = os.path.join(data, t)
+                if os.path.exists(alt):
+                    os.rename(alt, os.path.join(archiv, t))
+                os.rename(os.path.join(ziel, t), alt)
         msg = f"restored: {', '.join(teile) or '(no data dirs)'}"
+        try:
+            verworfen = _rq.after_restore(self.cfg)
+            msg += f" · {verworfen} candidate line(s) without a set in the backup marked discarded"
+        except Exception as e:
+            self.log.error(f"FULL RESTORE: marking candidate lines without a set failed: {e}")
+            msg += f" · marking candidate lines without a set FAILED: {e}"
+        if teile:
+            msg += f" · previous parts kept under {ablage}/ (nothing deleted)"
         ce = os.path.join(ziel, "config-export.json")
         if os.path.isfile(ce):
             with open(ce, "rb") as f:
@@ -13529,8 +12648,7 @@ class Service:
         else:
             self.neustart("Full-Restore")
         _sh.rmtree(ziel, ignore_errors=True)
-        self.log.info(f"FULL RESTORE via UI: {msg} (previous state kept as "
-                 f"*.pre-restore-{stempel})")
+        self.log.info(f"FULL RESTORE via UI: {msg}")
         return True, msg + " — service is restarting, reload in ~1 min"
 
     def neustart(self, grund=""):
@@ -13587,6 +12705,8 @@ class Service:
                     self.worker_stoppen()          # W2: beenden+wait VOR execv (kein Waisen-Worker
                 else:
                     self.worker_hart_stoppen()
+                self.unbekannt_verbraucher_stoppen()   # Stufe V1b: laufende Runde enden lassen (execv laeuft
+                #                                        nicht durch atexit); der Zustand liegt auf Platte
                 self.live_aufsicht_stoppen()       # Phase 4: Engine sauber beenden (execv laeuft
                 #                                    NICHT durch atexit) — der neue Prozess zieht
                 #                                    sie via Supervisor wieder hoch (Bauplan §8)
@@ -13693,6 +12813,99 @@ class Service:
             return False
         return True
 
+    def referenzquelle_umzug_im_boot(self, skript=None):
+        """Beim Start pruefen, ob der Referenzbestand noch alt ist, und dann das Migrationsskript als eigenen
+        Prozess fahren und abwarten (Bauplan analysen/bauplan_fix_0113.md Stufe F1 Punkt 2, Entscheid 1, X5, X6).
+        -> True, wenn das Skript lief (mit jedem Ausgang), sonst False (der Bestand ist nicht alt).
+
+        WO: der Boot-Schritt „compute" (startup_selfcheck) ruft sie VOR worker_dienst_starten; der Worker startet
+        erst, wenn das Skript durch ist. Kein Platz der Vergabestelle, kein Job an den Worker, kein Rechnen und
+        kein Thread im Dienst; den Pruefmodus faehrt das Skript selbst. Das Skript (`anlernen.py umzug`; skript
+        nur fuer Proben) bekommt den Datenordner ueber VERIFY_DATA_DIR und schreibt seine Zeilen ueber das
+        Logbuch auf den Standardfehler, den es vom Dienst erbt (Produkt-Log). Frist `migration_timeout_s`; danach
+        beendet der Dienst den Prozess, die Phase bleibt ausstehend, der naechste Start nimmt den Umzug wieder
+        auf. Rueckgaben des Skripts: 0 gruen, 1 rot (V2), 2 Werkzeugfehler, 3 kein Altbestand, 4 Umzug gruen und
+        Rechenschritt rot.
+        Seit Stufe F5 (Entscheid 5, X2) startet das Skript auch, wenn der Umzug fertig ist, aber der Rechenschritt fuer
+        fehlende Zahlen offen, rot oder laufend ist; dieselbe Frist deckt beide Phasen. Die offenen Saetze zaehlt der
+        Boot einmal selbst ueber die Auswahl core.refquelle.computable_sets (Stufe F5 Punkt 6, N6), die Phase steht im
+        Teil rechnung von core.refquelle.migration_state (nur die Standdatei). Nach dem Skript leert der Dienst seinen
+        Kopf-Speicher der Referenz-Quelle (N4: der Boot-Schritt 6 hat ihn vor dem Skript gefuellt, das Skript hat Saetze
+        vervollstaendigt)."""
+        from core import refquelle as _rq_um
+        _alt = _rq_um.altbestand.still_legacy(_rq_um.basis.paths(self.cfg))
+        _n_offen = len(_rq_um.computable_sets(self.cfg, self.cfg.get("modell")))
+        _phase = _rq_um.migration_state(self.cfg)["rechnung"]["phase"]
+        _rechnen = bool(_n_offen) or _phase in (_rq_um.basis.COMPUTE_RUNNING, _rq_um.basis.COMPUTE_RED,
+                                                 _rq_um.basis.COMPUTE_OPEN)
+        if not (_alt or _rechnen):
+            return False
+        _frist = int(self.cfg["migration_timeout_s"])
+        if _alt:
+            self.log.info(f"reference source: legacy stock found, no done mark — migration script starting as its own "
+                          f"process (deadline {_frist}s); the worker service starts after it")
+        else:
+            self.log.info(f"reference source: migration done, {_n_offen} set(s) without a fingerprint to compute "
+                          f"(compute step {_phase}) — migration script starting for the compute step as its "
+                          f"own process (deadline {_frist}s); the worker service starts after it")
+        _rc, _hart = self._migrationsskript_fahren(skript or os.path.join(HERE, "anlernen.py"), _frist)
+        _rq_um.heads_clear(self.cfg)
+        _st = _rq_um.migration_state(self.cfg)
+        _erg = _st.get("ergebnis") or {}
+        _z = _erg.get("zahlen") or {}
+        _r = _st["rechnung"]
+        _rz = _r.get("zahlen") or {}
+        _rtext = (f"compute step {_r['phase']}: {_rz.get('gerechnet')} computed, {_rz.get('ohne_gesicht')} without face, "
+                  f"{_rz.get('fehler')} error(s), {_r['offen']} open")
+        _v2 = ("until then recognition runs over the legacy reader (V2)" if _st["phase"] != _rq_um.umzug.GREEN
+               else "recognition keeps the sets without numbers")
+        if _rc is None:
+            self.log.error(f"reference source: migration script did not finish within the deadline {_frist}s "
+                           f"(migration_timeout_s) — process ended ({'killed after the signal' if _hart else 'signal'}), "
+                           f"the migration stays {_st['phase']}, {_rtext}; resumed at the next start; {_v2}")
+        elif _rc == 0:
+            if _alt:
+                self.log.info(f"reference source: migration green — {_z.get('saetze')} set(s), "
+                              f"{_z.get('nur_katalog')} catalog-only, matrix {_z.get('matrix_soll')} row(s) of "
+                              f"{_z.get('personen')} person(s), {(_erg.get('abweichungen') or {}).get('n')} "
+                              f"deviation(s), {(_erg.get('stoerungen') or {}).get('summe', 0)} disturbance(s) of the "
+                              f"legacy stock, {_erg.get('dauer_s')} s (phase {_st['phase']})")
+            if not _alt or _r["phase"] != _rq_um.basis.COMPUTE_NONE:
+                self.log.info(f"reference source: {_rtext}")
+        elif _rc == 4:
+            self.log.error(f"reference source: migration green, compute step RED (exit 4) — {_rtext}; recognition "
+                           f"keeps the sets without numbers; the next start resumes; /health is red")
+        elif _rc == 1:
+            self.log.error(f"reference source: migration RED — {(_erg.get('abweichungen') or {}).get('n')} "
+                           f"deviation(s), {(_erg.get('fehler') or {}).get('n')} write error(s): recognition runs "
+                           f"over the legacy reader on the unchanged legacy stock (V2), the module takes no new sets "
+                           f"until the migration is green; /health is red")
+        elif _rc == 3:
+            self.log.warning(f"reference source: migration script found no legacy stock although the start check "
+                             f"saw one (exit 3, phase {_st['phase']}) — nothing migrated")
+        else:
+            self.log.error(f"reference source: migration script tool error (exit {_rc}) — the migration stays "
+                           f"{_st['phase']} and is retried at the next start; {_v2}")
+        return True
+
+    def _migrationsskript_fahren(self, skript, frist):
+        """Das Migrationsskript als eigenen Prozess starten und mit Frist abwarten (Fix 0.1.1.013 F1 Punkt 2, X5):
+        Standardfehler geerbt (Produkt-Log), Standardausgabe verworfen (die Zeilen fuer den Aufruf von Hand).
+        -> (Rueckgabe oder None nach Frist-Ende, True wenn nach dem Signal hart beendet werden musste)"""
+        p = subprocess.Popen([sys.executable, skript, "umzug"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             env=dict(os.environ, VERIFY_DATA_DIR=str(self.cfg["data_dir"])))
+        try:
+            return p.wait(timeout=frist), False
+        except subprocess.TimeoutExpired:
+            p.terminate()
+        try:
+            p.wait(timeout=PULS_TAKT_S)              # Gnadenfrist nach dem Signal: ein Puls-Takt, kein eigener Wert
+            return None, False
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.wait()
+            return None, True
+
     def kurzprobe_ausloesen(self, grund, danach=None):
         """DIE KURZFORM DER START-PROBEN ANSTOSSEN (E3.4, Konzept §4 Schicht 1).
 
@@ -13794,6 +13007,14 @@ class Service:
                 self.log.error(f"DISTURBANCE (selbstbeweis): the worker FAILED its short "
                          f"start proof ({grund}): {antwort.get('fehler')}")
                 return "fehler"
+            if sp.get("stand") == "keine geometrie":
+                # Fix Erst-Start K1 (Bauplan analysen/bauplan_fix_erststart.md, Entscheid 3): der Worker
+                # hat noch keine Geometrie gebaut und rechnet sein Pruefbild deshalb nicht (Regel
+                # „Geometrien zuerst, nichts davor"). Weder Beweis noch Fehler. Der Wert ist der
+                # Protokoll-Wert worker_dienst.STARTPROBE_OHNE_GEOMETRIE.
+                self.log.info(f"short start proof ({grund}) not run: the worker has built no "
+                         f"geometry yet — it runs again at the next occasion")
+                return "nicht_gelaufen"
             self.log.info(f"short start proof ({grund}): {sp.get('stand')} — bound to "
                      f"{sp.get('geraet')}, {sp.get('personen_mit_vektoren')} "
                      f"person(s) with vectors"
@@ -14555,8 +13776,9 @@ class Service:
 
     def _roundtrip_fahren(self, eid, person, out):
         """EIN worker-Roundtrip als Subprozess — mit derselben Umgebung wie die
-        produktiven Spawns (F2.4: SCRATCH_DIR fehlte -> refcache/Clip landeten in /tmp
-        und verfaelschten den Kaltaufschlag; OV_DEVICE der Symmetrie halber)."""
+        produktiven Spawns (F2.4: SCRATCH_DIR fehlte -> die damalige Matrizen-Datei und
+        der Clip landeten in /tmp und verfaelschten den Kaltaufschlag; OV_DEVICE der
+        Symmetrie halber)."""
         import subprocess as _sp
         # E3.1: derselbe Selbsttest, aber im NEUEN Dienst (`worker_dienst.py
         # --roundtrip`, zwei analyze-Jobs kalt+warm ueber die echte Job-Mechanik).
@@ -17679,10 +16901,6 @@ class Service:
                 self.cfg.get("anker_qualitaet_winkel_max", 25))
             schwellen["anker_qualitaet_min_phys"] = int(
                 self.cfg.get("anker_qualitaet_min_phys", 2))
-            # Der Szenario-Konsens des Vorrats wirkt im Sieb mit — DIESELBE
-            # Schwelle, keine zweite Zahl (core/vorrat.py: gegen Laub, Rauschen
-            # und Fremdgesichter, gemessen Hund 0,15 gegen echte 0,59+).
-            schwellen["vorrat_konsens_min"] = self.cfg.get("vorrat_konsens_min")
             schwellen["anker_qualitaet_fd_wache"] = bool(
                 self.cfg.get("anker_qualitaet_fd_wache", True))
             self.log.info(f"anchor stage starting (run {lauf_id})")
@@ -18272,20 +17490,22 @@ class Service:
         Ohne diesen Filter waere er Schein — der Ordner traegt den ganzen
         Durchgang, und der Nutzer saehe wieder die Bilder der Nachbar-Ereignisse
         (Risiko 1 der Zuschnitt-Inventur). None = ganzer Durchgang."""
+        from core import lernlauf as _ll_pa
         from core import passernte as _pe
         zeilen = _pe.auswahl_lesen(bdir)
 
         def _item(z):
             basis = os.path.basename(str(z.get("datei") or ""))
-            # Bild-Route: `/lernlauf/crop/<lauf_id>/<datei>` liefert aus
-            # crops/ (und faellt auf vorrat/ zurueck) — der Ordner IST ein
-            # Lauf-Ordner, es braucht also keine neue Route und kein zweites
-            # Containment-Muster.
+            # Bild-Route (E3a-1d, Bauplan Referenz-Quelle einbauen): `datei`
+            # traegt seit E3a-1d die ref_id des Satzes; core.lernlauf.bild_url
+            # fuehrt sie auf `/lernlauf/satz/<ref_id>` (Profilbild ueber
+            # Lese-Stufe d), einen Dateinamen aelterer Laeufe auf die
+            # crops-Route.
             return {"eid": z.get("eid"), "datei": basis, "lauf_id": bid,
                     "herkunft": "passernte", "sim": z.get("sim"),
                     "norm": z.get("norm"), "kante": z.get("kante"),
                     "richtung": z.get("richtung"),
-                    "url": f"/lernlauf/crop/{bid}/{urllib.parse.quote(basis)}"}
+                    "url": urllib.parse.quote(_ll_pa.bild_url(basis, bid))}
 
         def _dabei(z):
             return nur_eids is None or str(z.get("eid")) in nur_eids
@@ -18584,6 +17804,21 @@ class Service:
                 return False
             if not os.path.isdir(p):
                 return False
+            # E3a-1d Nachtrag (J3, zweite Ergaenzung): die Kandidaten-Saetze dieses
+            # Laufs (Herkunft lauf_id = der Ordner) bekommen vor dem Raeumen die
+            # Statuszeile verworfen (Verfall nach aufbewahrung_tage; uebernommene,
+            # gebundene Saetze nie). Gilt fuer beide Wege, denn der vorgemerkte
+            # landet nach dem Lauf-Ende wieder hier. Laut, nie still.
+            from core import lernlauf as _ll_pr
+            try:
+                _n_pr = _ll_pr.lauf_saetze_verwerfen(
+                    _ll_pr.datenort_cfg(self.cfg["data_dir"]), [lauf_id],
+                    "pass-check folder cleared after taking over or discarding")
+                self.log.info(f"PASS CHECK ({lauf_id}): {_n_pr} candidate set(s) of the "
+                              f"run set to discarded before the folder is removed")
+            except Exception as _e_pr:                     # noqa: BLE001
+                self.log.error(f"PASS CHECK ({lauf_id}): sets of the cleared folder not "
+                               f"set to discarded ({type(_e_pr).__name__}: {_e_pr})")
             shutil.rmtree(p, ignore_errors=True)
         return not os.path.isdir(p)
 
@@ -18669,11 +17904,25 @@ class Service:
         lauf_dir = os.path.join(cfg["data_dir"], "state", "kalib_ernte", kamera)
         timeout_s = int(cfg.get("nachhol_analyse_timeout_s") or 300)
 
+        def _raeumen():
+            # E3a-1c (J3 mit O562 a): die Saetze der Funde dieses Lauf-Ordners
+            # bekommen vor dem Raeumen die Statuszeile verworfen (Verfall nach
+            # aufbewahrung_tage; nur Kandidaten ohne Bindung). Laut, nie still.
+            from core import lernlauf as _ll_kf
+            try:
+                _ll_kf.saetze_verwerfen(_ll_kf.datenort_cfg(cfg["data_dir"]),
+                                        _ern_kf.kandidaten_ref_ids(lauf_dir),
+                                        "calibration top-up folder cleared")
+            except Exception as _e_r:                      # noqa: BLE001
+                self.log.error(f"calibration top-up {kamera}: sets of the cleared folder not "
+                               f"set to discarded ({type(_e_r).__name__}: {_e_r})")
+            shutil.rmtree(lauf_dir, ignore_errors=True)
+
         def _vorbereiten():
             # K1: laeuft UNTER der Ein-Lauf-Sperre des Fuellers — ein
             # Doppelklick kann dem laufenden Lauf den Ordner nicht mehr
             # wegziehen (Feldtester-Fund 01.09.).
-            shutil.rmtree(lauf_dir, ignore_errors=True)
+            _raeumen()
             os.makedirs(lauf_dir, exist_ok=True)
 
         def _events():
@@ -18709,6 +17958,7 @@ class Service:
                     # geloescht zurueck und die Bremse konnte ihn nie vorlassen.
                     # P3: der Ernte-Job BELEGT einen Platz, statt nur zu pruefen —
                     # nur so weiss der Broker von ihm.
+                    from core import harvest_set as _hs_kf   # E3a-1b, Job-Feld (J4)
                     _auftrag = {
                         "typ": "ernte", "eid": eid, "kamera": kamera,
                         "ts": ts, "fps_sample": cfg.get("fps_sample"),
@@ -18735,6 +17985,14 @@ class Service:
                         # der Ein-Sieb-Zug beseitigt.
                         "sieb": _kk_ernte.sieb_latten(
                             _kk_ernte.katalog_latten(cfg), kamera),
+                        # E3a-1b (Bauplan Referenz-Quelle einbauen, J4): die
+                        # Config-Zufuhr des Satz-Schreibwegs, Herkunftsart
+                        # kalibrier; der Auffueller speichert ueber denselben
+                        # Ernte-Weg, also schreibt er auch Saetze.
+                        _hs_kf.FEED_FIELD: _hs_kf.feed(
+                            cfg, _hs_kf.ART_KALIBRIER, None,
+                            os.environ.get("SUSLIK_VERSION", "dev"),
+                            os.environ.get("SUSLIK_VARIANT", "")),
                         "log": os.path.join(lauf_dir, "ernte.log")}
                     # A1 (05.09.): Klasse statt Text-Etikett — der Waechter reiht
                     # eine eingezogene Ernte nie mehr als Ereignis ein (404-Schleife).
@@ -18789,7 +18047,7 @@ class Service:
             except Exception as _e_b:                       # noqa: BLE001
                 self.log.error(f"calibration top-up {kamera}: balance not saved "
                          f"({type(_e_b).__name__}: {_e_b})")
-            shutil.rmtree(lauf_dir, ignore_errors=True)
+            _raeumen()
 
         return _kf.starten(
             kamera, int(cfg.get("kalib_fueller_bilder") or 0), deckel_ev,
@@ -18961,6 +18219,7 @@ class Service:
                         # Ereignis-Strom dafuer anhalten muss.
                         # P3: Platz BELEGEN statt nur "alle frei" pruefen — der Broker
                         # muss von diesem Job wissen, sonst laeuft eine Analyse daneben.
+                        from core import harvest_set as _hs_br   # E3a-1b, Job-Feld (J4)
                         _auftrag = {
                             "typ": "ernte", "eid": eid, "kamera": d.get("camera"),
                             "ts": start, "fps_sample": fps,
@@ -18986,6 +18245,13 @@ class Service:
                             "clip_vod": self.cfg.get("clip_vod") is not False,
                             "clip_tor": tor_n,          # .509, s. oben
                             "clip_tor_deckel_s": tor_deckel_s,
+                            # E3a-1b (Bauplan Referenz-Quelle einbauen, J4):
+                            # Config-Zufuhr des Satz-Schreibwegs, Herkunftsart
+                            # passernte, Lauf-ID = der Bruecken-Ordner.
+                            _hs_br.FEED_FIELD: _hs_br.feed(
+                                self.cfg, _hs_br.ART_PASSERNTE, bid,
+                                os.environ.get("SUSLIK_VERSION", "dev"),
+                                os.environ.get("SUSLIK_VARIANT", "")),
                             "log": os.path.join(bdir, "ernte.log")}
                         # A1 (05.09.): Klasse statt Text-Etikett (s. Kalibrier-Auffueller).
                         # C2: Anmeldung DAVOR, damit die Fairness-Regel diesen
@@ -19743,7 +19009,9 @@ class Service:
         fertig, fehler = 0, 0
         for satz in offen:
             try:
-                _al.gruppen_sichtung(satz, ldir, emb=self.embedder,
+                # E3a-1c (J1): Fingerabdruecke der Mitglieder ueber core/refquelle, nur im Speicher.
+                _al.gruppen_sichtung(_ll.mit_fingerabdruecken(_ll.datenort_cfg(dd), satz),
+                                     ldir, emb=self.embedder,
                                      norm_latte=norm_latte_aus_cfg(self.cfg),
                                      luma_grenzen=luma_grenzen_aus_cfg(self.cfg),
                                      kat_latten=_kk_ernte.katalog_latten(self.cfg))
@@ -20479,6 +19747,7 @@ class Service:
                 # `_gpu_bg_lock` nirgends mehr an.
                 if self._gpu_bg_lock.locked():
                     return "nochmal"
+                from core import harvest_set as _hs_ll   # E3a-1b, Job-Feld (J4)
                 _auftrag = {"typ": "ernte", "eid": eid, "kamera": e.get("kamera"),
                             "ts": e.get("start") or 0, "fps_sample": fps,
                             "schwellen": schwellen, "lauf_dir": lauf_dir,
@@ -20539,6 +19808,13 @@ class Service:
                             # der Worker wartet am Tor, also muss er dort auch
                             # aufhoeren duerfen (Klasse `clip_tor_deckel`).
                             "clip_tor_deckel_s": tor_deckel_s,
+                            # E3a-1b (Bauplan Referenz-Quelle einbauen, J4):
+                            # Config-Zufuhr des Satz-Schreibwegs, Herkunftsart
+                            # lernlauf, Lauf-ID dieses Lernlaufs.
+                            _hs_ll.FEED_FIELD: _hs_ll.feed(
+                                self.cfg, _hs_ll.ART_LERNLAUF, lauf_id,
+                                os.environ.get("SUSLIK_VERSION", "dev"),
+                                os.environ.get("SUSLIK_VARIANT", "")),
                             "log": os.path.join(lauf_dir, "ernte.log")}
                 antwort, abgesendet, _t_ev = None, False, None
                 # .536 B1c4: der EIGENE Rueckweg dieses Jobs (Muster
@@ -20950,10 +20226,6 @@ class Service:
                 with self._sammel_lock:
                     self._sammel_laeuft = False
                 self.log.info("harvest done: auto-collection resumed")
-                # Stufe 3 (O415): was waehrend des Lernlaufs angestossen wurde, steht
-                # im Faellig-Vermerk; die Startstelle nimmt es, sobald kein
-                # Rueckstand da ist.
-                self._sammeln_starten()
 
     # -------------------------------------------- Unterbrechung + Fortsetzen (J13)
     # .509, Feldbefund 06.09.2026: drei Lernlaeufe eines Nutzers endeten 39/72/39 s
@@ -21228,59 +20500,52 @@ class Service:
             f.flush()
 
     def _enroll_uebernehmen(self, eid, event_dir, camera):
-        """Kandidaten aus analyze (kandidaten.jsonl) in die Queue — mit Tages-Drossel
-        (max 3/Person) und Fremd-Wiedervorlage (Embedding-Abgleich gegen Abgelehnte)."""
-        kp = os.path.join(event_dir, "kandidaten.jsonl")
-        if not os.path.exists(kp):
+        """Kandidaten bekannter Personen aus analyze (kandidaten.jsonl) in die Queue — mit Tages-Drossel
+        (max 3/Person). E3a-3 (Bauplan Referenz-Quelle einbauen, J9): eine Zeile mit ref_id kommt mit
+        ihrer ref_id in die Queue (ohne emb, ohne datei); alte Zeilen (datei, emb) wie bisher; eine Zeile
+        ohne beides (Satz nicht geschrieben) kommt laut nicht in die Queue. Stufe V1b (Bauplan
+        analysen/bauplan_verbraucher_unbekannt.md, Entscheid 12): der Lernvorschlag FREMD ist abgebaut,
+        eine Zeile ohne Person kommt nicht in die Queue; Fremde gehen ueber den Unbekannt-Stapel an den
+        Verbraucher."""
+        from core import harvest_set as _hs
+        kand, _bestbilder = _hs.event_rows(event_dir)
+        if not kand:
             return
         q = self._enroll_queue()
         heute0 = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-        pro_person = collections.Counter(d.get("person") or "FREMD" for d in q.values()
-                                         if d.get("ts", 0) >= heute0)
-        abgelehnt = []
-        ab_p = os.path.join(self.cfg["data_dir"], "learn", "enroll", "abgelehnt_fremde.jsonl")
-        if os.path.exists(ab_p):
-            with open(ab_p) as f:
-                for l in f:
-                    try:
-                        abgelehnt.append(json.loads(l)["emb"])
-                    except Exception:
-                        _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
-        with open(kp) as f:
-            for l in f:
-                try:
-                    kd = json.loads(l)
-                except Exception:
-                    _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
-                    continue
-                kid = f"{eid}:{kd.get('person') or 'FREMD'}:{kd.get('t')}"
-                if kid in q:
-                    continue
-                schluessel = kd.get("person") or "FREMD"
-                if pro_person[schluessel] >= 3:
-                    continue                      # Tages-Drossel
-                if not kd.get("person") and abgelehnt and kd.get("emb"):
-                    import numpy as np
-                    v = np.asarray(kd["emb"], dtype=np.float32)
-                    A = np.asarray(abgelehnt, dtype=np.float32)
-                    if float((A @ v).max()) > 0.5:
-                        continue                  # derselbe abgelehnte Fremde — keine Wiedervorlage
-                pro_person[schluessel] += 1
-                # MESSKARTE (.513, Etappe 1 B3): diese feste Feldliste ist
-                # genau die Bauform, an der Messwerte still verschwinden —
-                # analyze misst, und beim Umfuellen in die Queue faellt alles
-                # heraus, was hier nicht wortwoertlich steht. Die Karte reist
-                # deshalb ueber den EINEN Griff mit (ergaenzt nur; die sechs
-                # Felder oben behalten Wert und Position).
-                self._enroll_append(_ern_mk.uebernehmen(
-                                    {"id": kid, "ts": round(time.time(), 1), "eid": eid,
-                                     "camera": camera, "person": kd.get("person"),
-                                     "score": kd.get("score"), "nn_eigen": kd.get("nn_eigen"),
-                                     "front": kd.get("front"), "sharp": kd.get("sharp"),
-                                     "bw": kd.get("bw"), "bh": kd.get("bh"),
-                                     "datei": kd.get("datei"), "emb": kd.get("emb"),
-                                     "status": "offen"}, kd))
-                self.log.info(f"{eid}: enrollment suggestion ({schluessel}, score {kd.get('score')})")
+        pro_person = collections.Counter(d.get("person") for d in q.values()
+                                         if d.get("person") and d.get("ts", 0) >= heute0)
+        for kd in kand:
+            if not kd.get("person"):
+                continue                      # Stufe V1b: kein Lernvorschlag FREMD mehr
+            kid = f"{eid}:{kd['person']}:{kd.get('t')}"
+            if kid in q:
+                continue
+            schluessel = kd["person"]
+            if pro_person[schluessel] >= 3:
+                continue                      # Tages-Drossel
+            if not kd.get("ref_id") and not kd.get("datei"):
+                self.log.warning(f"{eid}: enrollment candidate ({schluessel}) has no reference set "
+                                 f"and no picture — not offered")
+                continue
+            pro_person[schluessel] += 1
+            # MESSKARTE (.513, Etappe 1 B3): diese feste Feldliste ist
+            # genau die Bauform, an der Messwerte still verschwinden —
+            # analyze misst, und beim Umfuellen in die Queue faellt alles
+            # heraus, was hier nicht wortwoertlich steht. Die Karte reist
+            # deshalb ueber den EINEN Griff mit (ergaenzt nur; die sechs
+            # Felder oben behalten Wert und Position). E3a-3: neue Zeilen
+            # tragen ref_id statt datei und emb.
+            _bild = ({"ref_id": kd["ref_id"]} if kd.get("ref_id")
+                     else {"datei": kd.get("datei"), "emb": kd.get("emb")})
+            self._enroll_append(_ern_mk.uebernehmen(
+                                {"id": kid, "ts": round(time.time(), 1), "eid": eid,
+                                 "camera": camera, "person": kd.get("person"),
+                                 "score": kd.get("score"), "nn_eigen": kd.get("nn_eigen"),
+                                 "front": kd.get("front"), "sharp": kd.get("sharp"),
+                                 "bw": kd.get("bw"), "bh": kd.get("bh"),
+                                 **_bild, "status": "offen"}, kd))
+            self.log.info(f"{eid}: enrollment suggestion ({schluessel}, score {kd.get('score')})")
 
     def enroll_entscheiden(self, kid, aktion, person=None):
         """UI-Entscheidung: aufnehmen (in Master + Export + Drift-Waechter) oder ablehnen."""
@@ -21289,17 +20554,16 @@ class Service:
         if not d or d.get("status") != "offen":
             return False, "Vorschlag unbekannt oder schon entschieden"
         if aktion == "ablehnen":
-            if not d.get("person") and d.get("emb"):
-                with open(os.path.join(self.cfg["data_dir"], "learn", "enroll", "abgelehnt_fremde.jsonl"), "a") as f:
-                    f.write(json.dumps({"ts": round(time.time(), 1), "emb": d["emb"]}) + "\n")
             self._enroll_append({**d, "status": "abgelehnt", "ts_entschieden": round(time.time(), 1)})
             return True, "abgelehnt"
         ziel_person = person or d.get("person")
         if not ziel_person or not re.fullmatch(_reg.PERSON_RE, ziel_person):
             return False, "ungueltiger Personenname"
-        quelle = os.path.join(self.cfg["data_dir"], "events", d["eid"].replace("/", "_"), d["datei"])
-        if not os.path.isfile(quelle):
-            return False, "Kandidaten-Crop nicht mehr vorhanden"
+        if not d.get("ref_id"):
+            # E3a-3 (J9): ein Vorschlag aus einer Analyse vor dieser Version hat keinen Satz
+            from core import harvest_set as _hs_en
+            self.log.warning(f"ENROLLMENT: {kid} not adopted — {_hs_en.ALT_KANDIDAT_HINWEIS}")
+            return False, _hs_en.ALT_KANDIDAT_HINWEIS
         # KATALOG-LATTE je Kamera (Zentral-Umbau 31.08.) — dieselbe EINE
         # Funktion wie an den anderen Uebernahme-Stellen. `label` IST der
         # Kameraname (analyze.py bekommt ihn als --labels, verifyd.py:1499).
@@ -21312,29 +20576,18 @@ class Service:
                                           d.get("fiqa_t"))
         if not _kok:
             return False, _kgrund
-        ziel_dir = os.path.join(self.cfg["data_dir"], "faces", ziel_person)
-        os.makedirs(ziel_dir, exist_ok=True)
-        ziel_name = f"enroll_{int(time.time())}_{re.sub(r'[^\w.-]', '_', d['datei'])[-40:]}"
-        import shutil
-        shutil.copyfile(quelle, os.path.join(ziel_dir, ziel_name))
-        with open(os.path.join(self.cfg["data_dir"], "faces", "refs_meta.jsonl"), "a") as f:
-            f.write(json.dumps({"ts": round(time.time(), 1), "person": ziel_person,
-                                "datei": ziel_name, "herkunft": "enrollment",
-                                "eid": d["eid"], "aktiv": True,
-                                "camera": d.get("camera"),
-                                "fiqa_t": d.get("fiqa_t"),
-                                "empf": d.get("empf")}, ensure_ascii=False) + "\n")
-            f.flush()
-        import anlernen as _al                    # .313: einpflegen statt verwerfen
-        if not _al.refcache_ergaenzen_viele(ziel_person, [(os.path.join(ziel_dir, ziel_name),
-                                                          ziel_name)], self._emb):
-            try:
-                os.remove(os.path.join(self.cfg["data_dir"], "clips", "refcache.npz"))
-            except FileNotFoundError:
-                pass                              # naechster Analyse-Lauf baut mit neuem Master
+        # E3a-3 (Bauplan Referenz-Quelle einbauen, Inventur Nr 105 bis 107): die Uebernahme ist eine
+        # Katalogzeile (Bindung Person, Status referenz) ueber das Modul — keine Dateikopie, keine
+        # refs_meta-Zeile, kein refcache. Die Erkennung sieht die neue Referenz erst mit E3b (Entscheid 16).
+        from core import uebernahme as _ue_en
+        try:
+            _ue_en.in_den_bestand(self.cfg["data_dir"], [d["ref_id"]], ziel_person, f"enrollment {kid}")
+        except ValueError as e:
+            self.log.warning(f"ENROLLMENT: {kid} not adopted — {e}")
+            return False, str(e)
         self._enroll_append({**d, "status": "aufgenommen", "als": ziel_person,
                              "ts_entschieden": round(time.time(), 1)})
-        self.log.info(f"ENROLLMENT: {d['datei']} -> master/{ziel_person}/ (export + drift watchdog running)")
+        self.log.info(f"ENROLLMENT: set {d['ref_id']} -> {ziel_person} (export + drift watchdog running)")
         self.referenz_nacharbeit()
         return True, f"aufgenommen als {ziel_person}"
 
@@ -21392,44 +20645,64 @@ class Service:
                 self.log.warning("DRIFT WATCHDOG RED after enrollment — check the reference! (System page)")
         threading.Thread(target=nacharbeit, daemon=True).start()
 
-    def upload_referenz(self, person, daten):
-        """Eigenes Foto in den Master (AP4): Gate-Pruefung mit Lazy-Embedder;
-        Gate-Fail liefert Warnung, Aufnahme nur mit override=1."""
-        import cv2
-        import numpy as np
-        arr = cv2.imdecode(np.frombuffer(daten, np.uint8), cv2.IMREAD_COLOR)
-        if arr is None:
-            return False, "Bild nicht lesbar (JPEG/PNG?)"
-        override = person.endswith("!")            # 'Name!' = Gate-Override (UI setzt das bewusst)
-        person = person.rstrip("!")
-        if self.embedder.embed(arr) is None and not override:
-            return False, "GATE: kein Gesicht fuer buffalo_l erkennbar — Override moeglich"
-        ziel_dir = os.path.join(self.cfg["data_dir"], "faces", person)
-        os.makedirs(ziel_dir, exist_ok=True)
-        name = f"upload_{int(time.time())}.jpg"
-        ok, enc = cv2.imencode(".jpg", arr)
-        if not ok:
-            return False, "Konvertierung fehlgeschlagen"
-        with open(os.path.join(ziel_dir, name), "wb") as f:
-            f.write(enc.tobytes())
-        with open(os.path.join(self.cfg["data_dir"], "faces", "refs_meta.jsonl"), "a") as f:
-            f.write(json.dumps({"ts": round(time.time(), 1), "person": person, "datei": name,
-                                "herkunft": "upload", "aktiv": True}, ensure_ascii=False) + "\n")
-            f.flush()
-        import anlernen as _al                    # .313: einpflegen statt verwerfen
-        if not _al.refcache_ergaenzen_viele(person, [(os.path.join(ziel_dir, name), name)],
-                                            self._emb):
-            try:
-                os.remove(os.path.join(self.cfg["data_dir"], "clips", "refcache.npz"))
-            except FileNotFoundError:
-                pass
-        self.log.info(f"UPLOAD: {person}/{name} into the master")
-        return True, f"{name} aufgenommen (Export beim naechsten sync/Enrollment)"
+    def upload_referenz(self, person, daten=None, pfad=None, frigate=None, lauf_id=None):
+        """Eine Bilddatei als Referenz der Person aufnehmen, auf dem Datei-Weg der Referenz-Quelle (Bauplan
+        analysen/bauplan_refquelle_einbau.md, Stufe E3 Punkt 1, Schnitt E3a-4, J10): der Job `dateisatz` des
+        Worker-Dienstes schreibt den Satz ueber den Bild-Weg der Engine und bindet ihn (Status referenz). Zwei
+        Eingaenge, ein Job-Weg: der Foto-Upload gibt `daten` (die Bytes werden unveraendert unter state/upload/
+        abgelegt, core.dateisatz.upload_ablegen), der Frigate-Import gibt `pfad` (die Datei im Staging-Ordner
+        des Laufs) mit `frigate` ({person, datei} der Gegenstelle) und `lauf_id`. Kein faces/, keine
+        refs_meta-Zeile, kein refcache; ohne erkennbares Gesicht kein Satz (kein Override mehr). Die Leser des
+        Bestands sehen die neue Referenz erst mit E3b (Entscheid 16).
+        -> (ok, Text, Ergebnis des Jobs: ref_id, satz_neu, bindung, gesichter, fehlende_werte, grund, fehler)"""
+        from core import dateisatz as _ds
+        from core import harvest_set as _hs_ds
+        art = _hs_ds.ART_FRIGATE_IMPORT if frigate else _hs_ds.ART_UPLOAD
+        if not self.cfg.get("worker", True):
+            grund = ("no reference set: the persistent worker is off (worker: false) — sets from a file are "
+                     "written only in the worker service")
+            self.log.error(f"{art} for {person}: {grund}")
+            return False, grund, {"grund": grund}
+        if daten is not None:
+            pfad, grund = _ds.upload_ablegen(self.cfg["data_dir"], daten)
+            if pfad is None:
+                return False, grund, {"grund": grund}
+        frist = int(self.cfg["analyse_timeout_s"])
+        with self._plaetze.wartend("interaktiv"), \
+                self._plaetze.platz(f"{art} {person}", art="interaktiv", timeout_s=frist) as nr:
+            if nr is None:
+                grund = f"no free analysis slot within {frist}s — no reference set, please try again"
+                self.log.warning(f"{art} for {person}: {grund}")
+                return False, grund, {"grund": grund}
+            w = self._worker(nr)
+            antwort = w.job({"typ": "dateisatz", "pfad": pfad, "person": person, "frigate": frigate,
+                             _hs_ds.FEED_FIELD: _hs_ds.feed(self.cfg, art, lauf_id,
+                                                            os.environ.get("SUSLIK_VERSION", "dev"),
+                                                            os.environ.get("SUSLIK_VARIANT", ""))},
+                            frist, puls=self._plaetze.puls_fuer(nr))
+        if antwort is None or not antwort.get("ok"):
+            grund = (f"the worker gave no answer ({getattr(w, 'letzte_ursache', None) or f'timeout {frist}s or died'})"
+                     if antwort is None else f"the worker job failed: {antwort.get('fehler') or 'unknown'}")
+            self.log.error(f"{art} for {person}: NO reference set — {grund}")
+            return False, grund, {"fehler": grund}
+        erg = antwort.get("dateisatz") or {}
+        if erg.get("bindung") not in ("neu", "schon_da"):
+            grund = erg.get("grund") or erg.get("fehler") or "no reference set (no reason given)"
+            self.log.warning(f"{art} for {person}: {os.path.basename(pfad)} gives no reference — {grund}")
+            return False, grund, erg
+        self.log.info(f"{art}: {os.path.basename(pfad)} is reference set {erg['ref_id']} of {person} "
+                      f"({'newly bound' if erg['bindung'] == 'neu' else 'was already bound'})")
+        return True, f"reference set {erg['ref_id']} added for {person}", erg
 
     def _crop_je_person(self, event_dir, personen):
         """Je gemeldeter Person EIN Anzeigebild, in der uebergebenen Reihenfolge.
-        _show_ zuerst (Gesicht mit Umfeld), sonst der enge _best_-Ausschnitt."""
+        _show_ zuerst (Gesicht mit Umfeld), sonst der enge _best_-Ausschnitt.
+        E3a-3: seit der Referenz-Quelle gibt es kein _best_ mehr; an seiner Stelle steht das beste
+        Gesicht der Person als Satz (kandidaten.jsonl, Bestbild-Zeile). Ein Treffer ist dann
+        (Person, {"ref_id": ...}) statt eines Pfads; die Bytes liest _best_crop ueber Lese-Stufe d."""
+        from core import harvest_set as _hs_bc
         jpgs = [c for c in os.listdir(event_dir) if c.endswith(".jpg")]
+        _k, bestbilder = _hs_bc.event_rows(event_dir)
         treffer = []
         for p in personen:
             for pref in (f"_show_{p}_", f"_best_{p}_NN"):
@@ -21437,6 +20710,9 @@ class Service:
                 if fund:
                     treffer.append((p, os.path.join(event_dir, fund)))
                     break
+            else:
+                if (bestbilder.get(p) or {}).get("ref_id"):
+                    treffer.append((p, {"ref_id": bestbilder[p]["ref_id"]}))
         return treffer
 
     def _best_crop(self, event_dir, entry, personen):
@@ -21448,19 +20724,35 @@ class Service:
         statt verzerrt; die Zielflaeche ist 4:3, damit Pushover nichts wegschneidet.
 
         Rangfolge wie bisher: die am besten erkannte Person zuerst (Fund 16.07.: vorher ging
-        stumpf die groesste Datei raus, das war ein schwaches Crop 0.19 statt eines starken 0.52)."""
+        stumpf die groesste Datei raus, das war ein schwaches Crop 0.19 statt eines starken 0.52).
+
+        E3a-3: ein Treffer aus einem Satz (beste Gesicht ohne _show_-Datei) wird ueber Lese-Stufe d
+        gelesen; auch als einziges Bild geht er durch die Montage, weil die Meldung eine Datei braucht."""
         rang = sorted(personen, key=lambda p: -((entry["ours"].get(p) or {}).get("max") or 0))
         treffer = self._crop_je_person(event_dir, rang)
         if not treffer:
             jpgs = [os.path.join(event_dir, c) for c in os.listdir(event_dir) if c.endswith(".jpg")]
             return max(jpgs, key=os.path.getsize) if jpgs else None
-        if len(treffer) == 1:
-            return treffer[0][1]
+        pfade = [q for _, q in treffer if isinstance(q, str)]
+        if len(treffer) == 1 and pfade:
+            return pfade[0]
         try:
             import cv2, numpy as np
-            bilder = [b for b in (cv2.imread(p) for _, p in treffer) if b is not None and b.size]
-            if len(bilder) < 2:
-                return treffer[0][1]
+            from core import refquelle as _rq_push
+
+            def _lesen(q):
+                if isinstance(q, str):
+                    return cv2.imread(q)
+                b = _rq_push.read_image({"data_dir": self.cfg["data_dir"]}, q["ref_id"], "profil")
+                if not b or b["daten"] is None or b["fehler"] is not None:
+                    self.log.error(f"push picture: reference set {q['ref_id']} not readable")
+                    return None
+                return cv2.imdecode(np.frombuffer(b["daten"], np.uint8), cv2.IMREAD_COLOR)
+            bilder = [b for b in (_lesen(q) for _, q in treffer) if b is not None and b.size]
+            if not bilder:
+                return pfade[0] if pfade else None
+            if len(bilder) < 2 and len(treffer) > 1 and pfade:
+                return pfade[0]
             spalten = math.ceil(math.sqrt(len(bilder)))
             zeilen = math.ceil(len(bilder) / spalten)
             # Zellformat so waehlen, dass die GESAMTflaeche 4:3 ergibt — sonst ist das fertige
@@ -21503,7 +20795,7 @@ class Service:
         except Exception as e:
             # Eine misslungene Montage darf die MELDUNG nicht kosten — dann eben ein Bild.
             self.log.error(f"push collage failed ({len(treffer)} persons): {e}")
-            return treffer[0][1]
+            return pfade[0] if pfade else None
 
     def _schalter_spiegeln(self):
         """Debug- und Pruef-Schalter anwenden und in die Flaggendateien spiegeln,
@@ -21711,10 +21003,6 @@ class Service:
         # einzelnen Analyse. Sie kostet nichts, solange nichts gehalten wird
         # (erste Zeile von `_catchup_freigeben`: leerer Merkzettel -> zurueck).
         self._catchup_freigeben(eid)
-        # Stufe 3 (bauplan_sammeln_debug.md, O415): hier wird der Rueckstand null,
-        # also fragt hier die Startstelle nach einem vorgemerkten Sammellauf. Sie
-        # kostet nichts, solange nichts vorgemerkt ist (erste Zeile dort).
-        self._sammeln_starten()
 
     @contextlib.contextmanager
     def _analyse_marke(self, eid, nachhol=0):
@@ -21849,17 +21137,39 @@ class Service:
     def health_ok(self, serie=None):
         """DIE EINE Bedingung fuer /health `ok` und `PRUEF health ok=` (Feldbefunde G3): kein
         Start-Fehler, keine aktive Fehlerserie, kein aktiver Stillstand, seit einem
-        Haenger-Schuss laeuft wieder ein frischer Worker (GPU-Wartefrist F2, ED008), und der
-        Aufraeum-Faden ist nicht tot (Bauplan Feldstau Stufe 1.4, ED008). -> bool"""
+        Haenger-Schuss laeuft wieder ein frischer Worker (GPU-Wartefrist F2, ED008), der
+        Aufraeum-Faden ist nicht tot (Bauplan Feldstau Stufe 1.4, ED008), und der Umzug der
+        Referenz-Quelle ist nicht rot (Bauauftrag E4-3, V2, ED008; „laeuft" und „ausstehend"
+        sind nicht rot, der Boot wartet auf den Job), und der Rechenschritt fuer fehlende Zahlen ist
+        nicht rot (Fix 0.1.1.013 F5, ED008; „laeuft" und „offen" sind nicht rot), und der lebende
+        Worker-Prozess hat nicht gestoppt (Kompilat-Bericht Stand „gestoppt“ ueber
+        `_kompilat_stopp_grund`: Wache der Startfolge und Kompilat-Abweichung; Fix 0.1.1.014 K1
+        Nachzug, Gegenpruefer G1, ED008), und der Verbraucher der Unbekannt-Stapel ist weder tot noch
+        endete seine letzte Runde mit Fehler (Stufe V1b, W24, ED008), und Frigate ist im MQTT-Betrieb
+        nicht stumm (Bauplan MQTT-Stummwache, Entscheid 2, ED008), und der Aufraeum-Schritt „ähnlich zu P“ des Verbrauchers
+        scheiterte nicht zuletzt (Bauplan analysen/bauplan_aehnlich.md Entscheide 9 und 17, ED008; rot bis ein Lauf wieder
+        gelingt). -> bool"""
         serie = serie if serie is not None else self.analyse_serie_stand()
         # `getattr` wie in `_worker_warm`: die Proben stellen den Dienst ohne Worker auf.
         haenger_offen = getattr(getattr(self, "_dienst_obj", None), "haenger_offen", None)
+        # E4-3: nur mit Datenordner (die Proben stellen den Dienst auch ohne Config auf).
+        _cfg = getattr(self, "cfg", None) or {}
+        from core import refquelle as _rq_um
+        _um = _rq_um.migration_state(_cfg) if _cfg.get("data_dir") else None
+        umzug_rot = _um is not None and (_um["phase"] == _rq_um.umzug.RED
+                                         or _um["rechnung"]["phase"] == _rq_um.basis.COMPUTE_RED)
+        from core import aehnlich as _aeh_ok
         # Nur ein GESTARTETER und dann gestorbener Faden ist rot (False); None heisst
         # „nicht gestartet" (Proben, --once, die Startsekunden vor main()).
         return (int(getattr(self, "startup_fails", 0) or 0) == 0 and not serie["aktiv"]
                 and not (haenger_offen is not None and haenger_offen())
                 and not self.stillstand_stand()["aktiv"]
-                and self.aufraeum_stand()["faden_lebt"] is not False)
+                and self.aufraeum_stand()["faden_lebt"] is not False
+                and not umzug_rot
+                and not self._kompilat_stopp_grund()
+                and not self._unbekannt_rot()
+                and not self._frigate_mqtt_rot()
+                and not _aeh_ok.SPEICHER.rot())
 
     def stillstand_stand(self):
         """Der Grund `stillstand` des Stoerungswaechters (Feldbefunde Punkt 2), rein lesend.
@@ -21869,8 +21179,7 @@ class Service:
 
     def _erfolg_merken(self):
         """Eine erfolgreiche Analyse (Feldbefunde Punkt 2): live oder nachhol mit einer
-        Akte-Zeile ausser fehler und uebersprungen, ein gelungenes Sammeln, ein gebuchtes
-        Ernte-Ereignis. Ein aktiver Stillstand endet hier mit genau einer INFO-Zeile. -> None"""
+        Akte-Zeile ausser fehler und uebersprungen, ein gebuchtes Ernte-Ereignis. Ein aktiver Stillstand endet hier mit genau einer INFO-Zeile. -> None"""
         jetzt = time.time()
         with getattr(self, "_zustand_lock", _NULL_LOCK):
             self._letzter_erfolg_ts = jetzt
@@ -23126,18 +22435,6 @@ class Service:
                 # Telegram, als stuende die Person gerade vor der Tuer
                 # (Live-Bug 09.08. 08:19).
                 self._person_live(entry.get("eid"), entry, still=True)
-            if entry["kategorie"] == "fremd_verdacht":
-                # Auch OHNE nachhol-Flag kann ein Event alt sein (verspaetetes MQTT, Poll nach
-                # kurzer Netzstoerung). Die Karenz haette dann karenz Sekunden spaeter einen
-                # Alarm fuer einen laengst vergangenen Vorfall abgesetzt — gleiche Begruendung
-                # wie oben beim Nachhol-Pfad, deshalb dieselbe 900s-Grenze wie _maybe_presence.
-                if nachhol or time.time() - (entry.get("start") or entry["ts"]) > 900:
-                    if not nachhol:
-                        self.log.info(f"{eid}: fremd_verdacht without alarm — event older than 900 s "
-                                 f"(unknown pool only)")
-                    self._szenario_nachsammeln()  # Gesichter in den Unbekannt-Pool, aber KEIN Alarm
-                else:
-                    self._szene_unbekannt_pruefen(entry)
             # .408 Anwesenheits-Marke (Konzept §3, Quelle A): zwischen fertigem
             # entry und dem Akte-Append, UNABHAENGIG von nachhol — der
             # Nachhol-Lauf repariert die Akte, und die Marke gehoert zur Akte
@@ -23151,6 +22448,20 @@ class Service:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
                 f.flush()
             with self.lock: self.processed.add(eid)
+            # Bauplan analysen/bauplan_fix_0113.md Entscheid 7, Stufe F4 Punkt 3: nach der Buchung ein Zeiger auf den
+            # Unbekannt-Stapel des Ereignisses (die Stapel-Datei ist die Aufzeichnung, gelesen ueber die eine
+            # Lesefunktion), nur wenn sie mindestens eine Gruppe nennt; ein Schreibfehler kostet nie die Analyse.
+            # Bauplan analysen/bauplan_verbraucher_unbekannt.md Stufe V1a Punkt 4: die Zeile traegt Kamera, Start, Ende,
+            # max_bw, Nachhol-Merkmal und Fenster-Namen und geht an das Stueck des Tages (core/unbekannt_verbraucher).
+            try:
+                from core import harvest_set as _hs_us
+                from core import unbekannt_verbraucher as _uv_us
+                _us_n = sum(len(z.get("gruppen") or []) for z in _hs_us.event_unknown(event_dir))
+                if _us_n:
+                    _uv_us.schlange_anhaengen(cfg, entry, event_dir, _us_n, dict(self.last_seen))
+                    self.unbekannt_wecken()           # Stufe V1b: der Verbraucher-Faden liest die Zeile, meldet je Durchgang
+            except Exception as e:
+                self.log.error(f"{eid}: unknown-face queue line not written: {e}")
             # Die Spalten bis `gesamt` gelten wie bisher bis HIER (z_ende); die Zeile selbst
             # steht erst beim Verlassen der Platz-Klammer, mit `nacharbeit` (Feldstau 5.4).
             _ausgang.callback(self._zeitprotokoll, eid, entry, _ainfo, einge_ts, _z_platz,
@@ -23277,7 +22588,7 @@ class Service:
         # nachgefuehrt. Vorher stand das return davor, dadurch blieb nach jeder Downtime
         # last_seen auf dem Stand VOR dem Ausfall: das erste Live-Event danach galt als
         # neues Auftauchen und pushte doppelt.
-        alt = now - (entry.get("start") or entry["ts"]) > 900
+        alt = now - (entry.get("start") or entry["ts"]) > ALT_EREIGNIS_S
         # E0b: "wer ist neu" LESEN und last_seen SCHREIBEN gehoeren zusammen. Zwei
         # Plaetze tragen fast immer zwei Ereignisse desselben Durchgangs mit derselben
         # Person; ohne diese Klammer laesen beide "noch nicht gesehen" und meldeten
@@ -23539,7 +22850,7 @@ class Service:
         return gesamt / 1024**3, frei / 1024**3
 
     def cleanup_cache(self, grund="event"):
-        """Record-Clips aelter clip_retention_d Tage loeschen (Crops/Logs/refcache bleiben;
+        """Record-Clips aelter clip_retention_d Tage loeschen (Crops und Logs bleiben;
         Frigate haelt die Aufnahme selbst vor, der Clip ist bei Bedarf erneut holbar).
         N8b (Issue #4): zusaetzlich Size-Cap clip_cache_max_gb — bei hoher Input-
         Bitrate (Feldbericht: ~10,5 GB/Tag -> ~74 GB steady) laeuft die Platte sonst voll,
@@ -24049,6 +23360,168 @@ class Service:
                 "letzter_lauf_vor_s": round(jetzt - ende, 1) if ende is not None else None,
                 "letzte_dauer_s": round(dauer, 1) if dauer is not None else None}
 
+    # Bauplan analysen/bauplan_verbraucher_unbekannt.md, Stufe V1b Punkt 1 (Entscheid 11): der Verbraucher-Faden der
+    # Unbekannt-Stapel nach dem Muster des Aufraeum-Fadens. Er nimmt `self.lock` nie und haelt keinen Analyse-Platz; die
+    # Arbeit macht core/unbekannt_verbraucher.Verbraucher.runde, Lesestand, Schlange und faellige Meldungen liegen dort
+    # auf Platte (ED011), der Faden haelt nur den Stand fuer /health. UNBEKANNT_WACHE_S ist die Schleifen-Wache des
+    # Wartens, kein Takt: ohne Anstoss laeuft eine Runde nur, wenn eine Meldung faellig wird, die letzte Runde einen
+    # Stapel zurueckgestellt hat oder die Wache einen geaenderten Stand fuer den Aufraeum-Schritt „ähnlich zu P“ sieht
+    # (Bauplan analysen/bauplan_aehnlich.md Entscheid 17: andere Grenzen, fremdes Schreiben der Identitaetsdatei; W3 V1).
+    # UNBEKANNT_STOPP_FRIST_S ist die Frist, die der Stopp auf das Ende einer laufenden
+    # Runde wartet; was sie abschneidet, nimmt die naechste Runde vom Lesestand wieder auf.
+    UNBEKANNT_WACHE_S = 60.0
+    UNBEKANNT_STOPP_FRIST_S = 10.0
+
+    def start_unbekannt_verbraucher(self):
+        """Startet den Verbraucher-Faden der Unbekannt-Stapel, meldet seinen Stopp beim Dienst-Ende an und stoesst die
+        erste Runde an (Schlangen-Zeilen von vor dem Start, faellige Meldungen). -> None"""
+        self._unb_zeichen = threading.Event()
+        self._unb_stopp = threading.Event()
+        self._unb_stand = {"letzte_runde_ts": None, "letzte_dauer_s": None, "letzter_fehler": None,
+                           "verarbeitet_n": 0, "gemeldet_n": 0, "zurueckgestellt": False, "naechste_faellig": None}
+        t = threading.Thread(target=self._unbekannt_schleife, daemon=True, name="unbekannt-verbraucher")
+        self._unb_faden = t
+        t.start()
+        atexit.register(self.unbekannt_verbraucher_stoppen)   # sys.exit laeuft durch atexit, execv nicht (neustart)
+        self.unbekannt_wecken()
+
+    def unbekannt_wecken(self):
+        """Weckt den Verbraucher-Faden nach einer Schlangen-Zeile und kehrt sofort zurueck; Anstoesse waehrend einer
+        Runde fallen zu genau einer Folgerunde zusammen. Ohne Faden (Proben, --once) nichts. -> None"""
+        zeichen = getattr(self, "_unb_zeichen", None)
+        if zeichen is not None:
+            zeichen.set()
+
+    def unbekannt_verbraucher_stoppen(self):
+        """Haelt den Verbraucher-Faden an (Dienst-Ende ueber atexit, Neustart vor execv) und wartet hoechstens
+        UNBEKANNT_STOPP_FRIST_S auf das Ende der laufenden Runde; Idempotent. -> None"""
+        t = getattr(self, "_unb_faden", None)
+        if t is None or not t.is_alive():
+            return
+        self._unb_stopp.set()
+        self._unb_zeichen.set()
+        t.join(self.UNBEKANNT_STOPP_FRIST_S)
+        if t.is_alive():
+            self.log.warning(f"unknown consumer: round still running after {self.UNBEKANNT_STOPP_FRIST_S:.0f} s at "
+                             "stop — the next start resumes from the read position")
+
+    def _unbekannt_schleife(self):
+        """Der Faden: warten auf Anstoss, auf die naechste faellige Meldung oder (nach Zurueckstellen und bei geaendertem
+        Stand des Aufraeum-Schritts, Bauplan analysen/bauplan_aehnlich.md Entscheid 17) auf die Wache, dann eine Runde. Ein
+        Fehler ist laut, der Faden lebt weiter. -> None (endet mit dem Stopp-Zeichen)"""
+        st = self._unb_stand
+        while not self._unb_stopp.is_set():
+            frist = self.UNBEKANNT_WACHE_S
+            if st["naechste_faellig"] is not None:
+                frist = min(frist, max(0.0, st["naechste_faellig"] - time.time()))
+            angestossen = self._unb_zeichen.wait(frist)
+            if self._unb_stopp.is_set():
+                break
+            faellig = st["naechste_faellig"] is not None and st["naechste_faellig"] <= time.time()
+            kern = getattr(self, "_unb_kern", None)       # vor der ersten Runde gibt es keinen Stand zu pruefen
+            stand = not (angestossen or faellig) and kern is not None and kern.aufraeumen_faellig()
+            if not (angestossen or faellig or st["zurueckgestellt"] or stand):
+                continue
+            self._unb_zeichen.clear()              # VOR der Runde: ein Anstoss waehrend der Runde bringt eine Folgerunde
+            self._unbekannt_runde()
+
+    def _unbekannt_runde(self):
+        """Eine Runde des Verbrauchers, dann die Meldung jeder faelligen Meldung und ihr Austragen; fuehrt den Stand
+        fuer /health. -> None"""
+        from core import unbekannt_verbraucher as _uv
+        st = self._unb_stand
+        t0 = time.monotonic()
+        try:
+            if getattr(self, "_unb_kern", None) is None:
+                self._unb_kern = _uv.Verbraucher(self.cfg, ALT_EREIGNIS_S)
+            out = self._unb_kern.runde()
+            for m in out["meldungen"]:
+                try:
+                    self._unbekannt_melden(m)
+                except Exception as e:                            # noqa: BLE001  eine Meldung kostet nie die anderen
+                    self.log.error(f"{m['eid']}: unknown notification for {m['uid']} failed ({type(e).__name__}: {e})")
+            if out["meldungen"]:
+                self._unb_kern.meldungen_quittieren([m["id"] for m in out["meldungen"]])
+            offen = [m["faellig_ab"] for m in _uv.zustand_lesen(self.cfg)["faellig"]]
+            st.update(letzter_fehler=out["fehler"], zurueckgestellt=out["zurueckgestellt"],
+                      naechste_faellig=min(offen) if offen else None,
+                      verarbeitet_n=st["verarbeitet_n"] + out["verarbeitet"],
+                      gemeldet_n=st["gemeldet_n"] + len(out["meldungen"]))
+        except Exception as e:                                    # noqa: BLE001  laut, der Faden lebt weiter
+            st.update(letzter_fehler=f"{type(e).__name__}: {e}", zurueckgestellt=False, naechste_faellig=None)
+            self.log.error(f"unknown consumer: round failed ({type(e).__name__}: {e}) — the thread lives on, the "
+                           "next trigger tries again")
+        finally:
+            st["letzte_runde_ts"] = round(time.time(), 1)
+            st["letzte_dauer_s"] = round(time.monotonic() - t0, 2)
+
+    def _unbekannt_melden(self, m):
+        """Die Meldung eines Durchgangs und einer Identitaet (Entscheid 11): MQTT szene_unbekannt mit der Nutzlast von
+        bisher plus uid und Telegram unbekannt mit dem Bild des besten Satzes, geschaltet ueber den Haken
+        fremd_verdacht. -> None"""
+        camera = m.get("camera") or "?"
+        if "fremd_verdacht" not in self.cfg["alert_kategorien"]:
+            self.log.warning(f"{m['eid']}: scene-unknown notification for {m['uid']} suppressed (category "
+                             f"fremd_verdacht not enabled)")
+            return
+        _ar = _areas_mod.kamera_areas(_areas_mod.normalisieren(self.cfg.get("areas")), camera)
+        namen = m.get("fenster_namen") or []
+        if self._mqtt_pub(_melden.topic(self.cfg, "szene_unbekannt"), json.dumps(
+                {"eid": m["eid"], "camera": camera, "areas": _ar, "ts": m["start"], "max_bw": m.get("max_bw"),
+                 "uid": m["uid"]}, ensure_ascii=False)):
+            self.log.info(f"SCENE unknown: {m['eid']} ({camera}{' · ' + ' + '.join(_ar) if _ar else ''}) — identity "
+                          f"{m['uid']}" + (f", recognized in the window: {', '.join(namen)}" if namen else ""))
+        entry = {"eid": m["eid"], "camera": camera, "start": m["start"], "ts": m["start"], "ours": {}}
+        self._telegram_melden("unbekannt", entry, namen, bild_quelle=lambda *_a: self._unbekannt_bild(m))
+
+    def _unbekannt_bild(self, m):
+        """Das Bild einer Unbekannt-Meldung: das Profilbild des besten Satzes ueber core.refquelle (Lese-Stufe d), als
+        JPEG im Ereignis-Ordner abgelegt, weil der Telegram-Weg eine Datei sendet. -> Pfad oder None (laut)"""
+        try:
+            import cv2
+            import numpy as np
+            from core import atomar as _at
+            from core import refquelle as _rq
+            b = _rq.read_image({"data_dir": self.cfg["data_dir"]}, m["ref_id"], "profil")
+            if not b or b["daten"] is None or b["fehler"] is not None:
+                raise ValueError(f"set {m['ref_id']} has no readable profile picture")
+            ok, puffer = cv2.imencode(".jpg", cv2.imdecode(np.frombuffer(b["daten"], np.uint8), cv2.IMREAD_COLOR))
+            if not ok:
+                raise ValueError("imencode returned False")
+            ziel = os.path.join(self.cfg["data_dir"], "events", str(m["eid"]).replace("/", "_"), "_push_unbekannt.jpg")
+            _at.bytes_schreiben(ziel, puffer.tobytes())
+            return ziel
+        except Exception as e:                                    # noqa: BLE001  die Meldung geht dann ohne Bild
+            self.log.error(f"{m['eid']}: unknown notification without picture ({type(e).__name__}: {e})")
+            return None
+
+    def unbekannt_stand(self):
+        """Der Stand des Verbrauchers fuer /health `unbekannt`: Faden, Lesestand, offene Zeilen der Schlange, letzte
+        Verarbeitung, letzter Fehler. -> dict; ohne Faden faden_lebt None"""
+        from core import unbekannt_verbraucher as _uv
+        t = getattr(self, "_unb_faden", None)
+        st = dict(getattr(self, "_unb_stand", None) or {})
+        aus = {"faden_lebt": t.is_alive() if t is not None else None, "lesestand": None, "offene_zeilen": None,
+               "letzte_runde_ts": st.get("letzte_runde_ts"), "letzte_dauer_s": st.get("letzte_dauer_s"),
+               "verarbeitet_n": st.get("verarbeitet_n"), "gemeldet_n": st.get("gemeldet_n"),
+               "zurueckgestellt": st.get("zurueckgestellt"), "letzter_fehler": st.get("letzter_fehler"),
+               "faellig_n": None, "lesefehler": None}
+        try:
+            z = _uv.zustand_lesen(self.cfg)
+            aus.update(lesestand=z["lesestand"], offene_zeilen=len(_uv.offene_zeilen(self.cfg, z)),
+                       faellig_n=len(z["faellig"]))
+        except Exception as e:                                    # noqa: BLE001  /health antwortet immer
+            aus["lesefehler"] = f"{type(e).__name__}: {e}"
+        return aus
+
+    def _unbekannt_rot(self):
+        """Der Teil des Verbrauchers an `health_ok` (ED008, W24): rot, wenn der gestartete Faden tot ist oder die
+        letzte Runde mit Fehler endete; nicht gestartet (Proben, --once) ist nicht rot. -> bool"""
+        t = getattr(self, "_unb_faden", None)
+        if t is None:
+            return False
+        return not t.is_alive() or (getattr(self, "_unb_stand", None) or {}).get("letzter_fehler") is not None
+
     # Modulumbau R2: die Ketten-Praedikate leben in core/kette.py (Docstrings/
     # Begruendungen dort). Hier nur Einhaenge: der Dienst reicht cfg, den
     # deckung-Pfad und seinen debug-Kanal herein. core/kette haelt keine Locks
@@ -24444,9 +23917,15 @@ class Service:
         alter_h = (time.time() - self._catchup_aeltest) / 3600.0
         return max(lo, min(hi, int(math.ceil(alter_h)) + 1))
 
-    def sweep(self, stunden=None, limit=None):
+    def sweep(self, stunden=None, limit=None, abgleich=False):
         """Unverarbeitete person-Events der letzten lookback_h nachholen (Poll-Modus,
         MQTT-Start und -Reconnect) — Neustarts/Downtime reissen keine Loecher ins Log.
+
+        `abgleich=True` (Bauplan analysen/bauplan_mqtt_stummwache.md, Entscheid 3) ist der
+        dritte Modus, gerufen nur vom Abgleich-Takt im MQTT-Betrieb: Fenster ab der
+        Anmeldung am Broker (nie weiter zurueck als lookback_h), kein Erststart-Zweig, die
+        Start-Marke bleibt unberuehrt; Treffer sind Ereignisse, die MQTT nicht brachte
+        (WARNING, Zaehler im /health-Feld `frigate_mqtt.abgleich`).
 
         stunden/limit setzt NUR der vom Nutzer angestossene Nachhol-Lauf (.371,
         Knopf in der Kopfleiste): er fragt beim Druecken, wie weit zurueck und
@@ -24487,7 +23966,9 @@ class Service:
         self._catchup_freigeben()
         # Nur lesen, nicht ziehen: die Start-Marke faellt erst nach dem api()-Aufruf
         # (s. .340 weiter unten). Fuer die Modus-Aufloesung genuegt der Blick.
-        erster_kandidat = self._start_sweep_offen and not auf_wunsch
+        # Der Abgleich (Entscheid 3) ist nie der erste Lauf: was vor der Anmeldung lag,
+        # bleibt Sache des Start-Nachholens.
+        erster_kandidat = self._start_sweep_offen and not auf_wunsch and not abgleich
         # .352: aus der Config statt hart verdrahtet (Boden 1, damit ein Tippfehler
         # den Sweep nicht stilllegt). Herkunft und Feldzahlen am Default in load_config.
         try:
@@ -24497,6 +23978,11 @@ class Service:
         try:
             _std = stunden if stunden is not None else cfg["lookback_h"]
             after = time.time() - float(_std) * 3600
+            if abgleich:
+                # Entscheid 3: Fenster ab der Anmeldung am Broker, nie weiter zurueck als lookback_h.
+                # Abgerundet, weil die Anfrage `after` auf ganze Sekunden rundet: aufgerundet fiele ein
+                # Ereignis aus der ersten Sekunde nach der Anmeldung aus dem Fenster.
+                after = max(after, float(math.floor(getattr(self, "_mqtt_anmelde_ts", None) or time.time())))
             # N6 (.505 E4): Timeout waechst mit der bestellten Menge (5000 -> 40 s).
             evs = api(cfg, f"/api/events?label=person&after={after:.0f}&limit={LIMIT}&include_thumbnails=0",
                       timeout=20 + LIMIT // 250)
@@ -24507,6 +23993,8 @@ class Service:
                 self.log.info("Frigate reachable again (sweep)")
             self.frigate_fehler = None
             self.frigate_fehlerserie = 0
+            if abgleich:
+                self._abgleich_stand.update(letzter_ts=round(time.time(), 1), fehler=None)
             if len(evs) >= LIMIT:                     # harte Grenze ohne Pagination: aelteste fielen still weg
                 # .352: der alte Rat "lookback_h senken" war auf grossen Anlagen falsch —
                 # dort kommen 200 Events in unter einer halben Stunde zusammen, ein
@@ -24663,9 +24151,11 @@ class Service:
             # Ziehen der Marke keine andere Wirkung (nachholend ist ueber
             # auf_wunsch ohnehin wahr, die beiden Start-Zweige verlangen
             # `not auf_wunsch`) — der Guard kostet also nichts.
+            # Der Abgleich (Entscheid 3) zieht die Marke nicht: scheiterte der Start-Sweep,
+            # bleibt der naechste regulaere Sweep „der erste".
             with self._start_sweep_lock:
-                erster = self._start_sweep_offen and not auf_wunsch
-                if not auf_wunsch:
+                erster = self._start_sweep_offen and not auf_wunsch and not abgleich
+                if not auf_wunsch and not abgleich:
                     self._start_sweep_offen = False
             # Im MQTT-Betrieb ist JEDER Sweep ein Nachhol-Sweep (Start + Reconnect, sonst
             # treibt MQTT); im Poll-Betrieb ist er der NORMALE Antrieb — dort meldet nur der
@@ -24802,6 +24292,8 @@ class Service:
                          f"({self.EV_QUEUE_MAX}) — {_abgewiesen} of {len(todo)} "
                          f"events were not queued; they stay on the list and "
                          f"the next sweep picks them up")
+            if abgleich:
+                self._abgleich_melden(eingereiht, after)
             if todo:
                 # int(): t_n waehlt die Plural-Form ueber int(n) — ein lookback_h von 1.5
                 # ergaebe sonst "the last 1.5 hour". Der Rundungsverlust ist die kleinere
@@ -24857,6 +24349,8 @@ class Service:
             self.log.error(f"sweep error: {e}")
             self.frigate_fehler = (time.time(), f"event poll: {e}")
             self.frigate_fehlerserie = getattr(self, "frigate_fehlerserie", 0) + 1
+            if abgleich:
+                self._abgleich_stand["fehler"] = f"{type(e).__name__}: {e}"
         finally:
             # B2 (N-6): der Klick-Riegel faellt auf JEDEM Rueckweg — auch auf den
             # vorzeitigen `return` (ask/off/Leer-Master) und wenn der Frigate-GET
@@ -25079,7 +24573,29 @@ class Service:
             lp = os.path.join(d, "analyze.log")
             if os.path.exists(lp):
                 os.replace(lp, os.path.join(d, f"analyze_versuch{max(0, n - 1)}.log"))
-            for f in ("results.jsonl", "kandidaten.jsonl"):
+            # E3a-3 (J3 dritte Ergaenzung): die Kandidaten-Saetze des gescheiterten Laufs bekommen
+            # vor dem Loeschen der kandidaten.jsonl die Statuszeile verworfen; Referenzen nie.
+            try:
+                from core import harvest_set as _hs_na
+                from core import lernlauf as _ll_na
+                _ids = _hs_na.event_ref_ids(d)
+                # Stufe V1b Punkt 1 (Entscheid 10, O625 Punkt 3): die Unbekannt-Bindungen der Saetze des Ereignisses
+                # loesen, sonst verschont saetze_verwerfen sie und die Identitaet behielte Saetze des ersten Laufs,
+                # auch wenn der Neulauf keine Unbekannt-Gruppe liefert. Grund wie bei der Wiederholung im Verbraucher.
+                from core import refquelle as _rq_na
+                _n_u = _rq_na.unknown_release({"data_dir": self.cfg["data_dir"]}, _ids,
+                                              _rq_na.basis.UNKNOWN_REPLACED_REASON) if _ids else 0
+                if _n_u:
+                    self.log.info(f"{eid}: catch-up cleanup — {_n_u} set(s) released from their unknown identity")
+                _n_s = (_ll_na.saetze_verwerfen(_ll_na.datenort_cfg(self.cfg["data_dir"]), _ids,
+                                                "event analysed again (catch-up)") if _ids else 0)
+                if _n_s:
+                    self.log.info(f"{eid}: catch-up cleanup — {_n_s} candidate set(s) set to discarded")
+            except Exception as e:
+                self.log.error(f"{eid}: catch-up cleanup — candidate sets not set to discarded: {e}")
+            # Fix 0.1.1.013 F4 (X10): die Stapel-Datei des Unbekannt-Stapels geht mit (Name aus core.harvest_set).
+            from core.harvest_set import UNKNOWN_FILE as _uf_na
+            for f in ("results.jsonl", "kandidaten.jsonl", _uf_na):
                 p = os.path.join(d, f)
                 if os.path.exists(p):
                     os.remove(p)
@@ -25331,6 +24847,139 @@ class Service:
             time.sleep(cfg["poll_interval"])
 
     # -------------------------------------------------------------- Trigger: mqtt
+    # MQTT-Stummwache und Abgleich (Bauplan analysen/bauplan_mqtt_stummwache.md, Stufe M1, Entscheide 2 bis 4; Anlass
+    # Vorfall O632 vom 14.10.2026: nach einem Wirt-Neustart verband Frigates MQTT-Client nicht wieder, suslik hoerte nur
+    # `frigate/events`, /health blieb gruen, ein Durchgang wurde nie analysiert). Das Lebenszeichen ist `frigate/stats`
+    # (Frigate sendet es alle `mqtt.stats_interval` Sekunden), nie `frigate/available` (retained, nach einem
+    # Broker-Verlust stand dort noch „online"). Fristen aus core.registry.MQTT_STUMMWACHE, kein Config-Schluessel.
+    def frigate_mqtt_stand(self):
+        """Der Stand der Stummwache fuer /health `frigate_mqtt` (Entscheid 2), rein lesend.
+        -> dict verbunden, letzte_stats_ts, stumm, stumm_seit_s, intervall_s, abgleich; None ausserhalb von trigger mqtt"""
+        if (getattr(self, "cfg", None) or {}).get("trigger") != "mqtt":
+            return None
+        werk = _reg.MQTT_STUMMWACHE
+        cl = getattr(self, "mqtt_trigger", None)
+        verbunden = bool(cl is not None and cl.is_connected())
+        intervall = float(getattr(self, "_mqtt_intervall_s", None) or werk["stats_intervall_s"])
+        stats = getattr(self, "_mqtt_stats_ts", None)
+        # Bezug der Stille: die letzte Stats-Nachricht oder die Anmeldung, je nachdem, was spaeter liegt — nach jeder
+        # Anmeldung bekommt Frigate die volle Frist, bevor die Wache stumm sagt.
+        bezug = max((t for t in (stats, getattr(self, "_mqtt_anmelde_ts", None)) if t), default=None)
+        still_s = time.time() - bezug if bezug is not None else None
+        stumm = bool(verbunden and still_s is not None and still_s > werk["stumm_faktor"] * intervall)
+        t = getattr(self, "_abgleich_faden", None)
+        ab = dict(getattr(self, "_abgleich_stand", None) or {})
+        return {"verbunden": verbunden, "letzte_stats_ts": round(stats, 1) if stats else None, "stumm": stumm,
+                "stumm_seit_s": round(still_s, 1) if stumm else None, "intervall_s": intervall,
+                "abgleich": {"faden_lebt": t.is_alive() if t is not None else None,
+                             "letzter_ts": ab.get("letzter_ts"), "nachgereicht_n": int(ab.get("nachgereicht_n") or 0),
+                             "fehler": ab.get("fehler")}}
+
+    def _frigate_mqtt_rot(self):
+        """Der Teil der Stummwache an `health_ok` (Entscheid 2, ED008): rot, solange Frigate ueber MQTT stumm ist.
+        -> bool; ausserhalb von trigger mqtt False"""
+        st = self.frigate_mqtt_stand()
+        return bool(st and st["stumm"])
+
+    def _mqtt_intervall_holen(self):
+        """Liest beim Verbinden `mqtt.stats_interval` aus Frigates Config (GET /api/config ueber api(), also
+        core/frigate_auth); fehlt das Feld oder scheitert der Abruf, gilt laut der Werkswert. -> None"""
+        werk = _reg.MQTT_STUMMWACHE["stats_intervall_s"]
+        try:
+            wert = ((api(self.cfg, "/api/config") or {}).get("mqtt") or {}).get("stats_interval")
+        except Exception as e:                                    # noqa: BLE001  laut, dann Werkswert
+            self._mqtt_intervall_s = float(werk)
+            self.log.error(f"MQTT silence watch: could not read mqtt.stats_interval from Frigate "
+                           f"({type(e).__name__}: {e}) — using the factory value {werk} s")
+            return
+        if isinstance(wert, (int, float)) and not isinstance(wert, bool) and wert > 0:
+            self._mqtt_intervall_s = float(wert)
+            self.log.info(f"MQTT silence watch: Frigate stats interval {wert} s (from Frigate's config), silent "
+                          f"after {_reg.MQTT_STUMMWACHE['stumm_faktor'] * float(wert):g} s without frigate/stats")
+            return
+        self._mqtt_intervall_s = float(werk)
+        self.log.warning(f"MQTT silence watch: Frigate's config has no usable mqtt.stats_interval ({wert!r}) — "
+                         f"using the factory value {werk} s")
+
+    def _mqtt_stats_kam(self):
+        """Merkt die Zeit einer `frigate/stats`-Nachricht; endet damit eine gemeldete Stille, genau eine INFO-Zeile.
+        -> None"""
+        jetzt = time.time()
+        vorher = getattr(self, "_mqtt_stats_ts", None)
+        self._mqtt_stats_ts = jetzt
+        if getattr(self, "_mqtt_stumm_gemeldet", False):
+            self._mqtt_stumm_gemeldet = False
+            pause = f"{jetzt - vorher:.0f} s after the last one" if vorher else "the first since the connection"
+            self.log.info(f"Frigate MQTT speaks again: frigate/stats received ({pause})")
+
+    def _mqtt_stumm_pruefen(self):
+        """Der Wechsel nach stumm (Entscheid 2): genau eine WARNING je Stille, nicht je Takt; das Ende sagt
+        `_mqtt_stats_kam`. -> bool stumm"""
+        st = self.frigate_mqtt_stand()
+        if not (st and st["stumm"]):
+            return False
+        if not getattr(self, "_mqtt_stumm_gemeldet", False):
+            self._mqtt_stumm_gemeldet = True
+            self.log.warning(f"Frigate MQTT silent for {st['stumm_seit_s']:.0f} s: no frigate/stats although the "
+                             f"broker connection stands (interval {st['intervall_s']:g} s) — events may be "
+                             f"missing, reconciliation with Frigate runs every "
+                             f"{_reg.MQTT_STUMMWACHE['abgleich_s']} s")
+        return True
+
+    def start_abgleich_takt(self):
+        """Startet im MQTT-Betrieb den Abgleich-Faden (Entscheid 3) und meldet seinen Stopp beim Dienst-Ende an.
+        -> None"""
+        self._abgleich_stopp = threading.Event()
+        self._abgleich_stand = {"letzter_ts": None, "nachgereicht_n": 0, "fehler": None}
+        t = threading.Thread(target=self._abgleich_schleife, daemon=True, name="mqtt-abgleich")
+        self._abgleich_faden = t
+        t.start()
+        atexit.register(self.abgleich_takt_stoppen)   # sys.exit laeuft durch atexit, execv nicht (neustart)
+
+    def abgleich_takt_stoppen(self):
+        """Haelt den Abgleich-Faden an; eine laufende Runde endet zu Ende, danach keine neue. Idempotent.
+        -> None"""
+        stopp = getattr(self, "_abgleich_stopp", None)
+        if stopp is not None:
+            stopp.set()
+
+    def _abgleich_schleife(self):
+        """Der Faden: alle `abgleich_s` Sekunden eine Runde, bis zum Stopp-Zeichen.
+        -> None"""
+        takt = float(_reg.MQTT_STUMMWACHE["abgleich_s"])
+        while not self._abgleich_stopp.wait(takt):
+            self.abgleich_runde()
+
+    def abgleich_runde(self):
+        """Eine Runde des Abgleich-Takts: Stumm-Pruefung, dann `sweep` im Modus abgleich; ein Fehler ist laut und
+        steht im /health-Feld, der Faden lebt weiter. -> None"""
+        try:
+            self._mqtt_stumm_pruefen()
+            self.sweep(abgleich=True)
+        except Exception as e:                                    # noqa: BLE001  laut, der Faden lebt weiter
+            self._abgleich_stand["fehler"] = f"{type(e).__name__}: {e}"
+            self.log.error(f"MQTT reconciliation: round failed ({type(e).__name__}: {e}) — the thread lives on, "
+                           f"next round in {_reg.MQTT_STUMMWACHE['abgleich_s']} s")
+
+    def _abgleich_melden(self, eingereiht, ab_ts):
+        """Zaehler und Log-Zeile eines Abgleichs (Entscheid 3): Treffer als WARNING, nichts nur im Debug.
+        -> None"""
+        def _zeit(ts):
+            return datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+        if not eingereiht:
+            self.log.debug(f"reconciliation: nothing missing since {_zeit(ab_ts)}")
+            return
+        self._abgleich_stand["nachgereicht_n"] = int(self._abgleich_stand.get("nachgereicht_n") or 0) + len(eingereiht)
+        st = self.frigate_mqtt_stand() or {}
+        stats = st.get("letzte_stats_ts")
+        if st.get("stumm"):
+            lage = f"silent since {_zeit(time.time() - st['stumm_seit_s'])}"
+        else:
+            lage = (f"not silent, last frigate/stats {_zeit(stats)}" if stats
+                    else "no frigate/stats received since the connection")
+        self.log.warning(f"reconciliation: {len(eingereiht)} event(s) Frigate had that MQTT did not deliver "
+                         f"({lage}) — queued for analysis")
+
     def mqtt_loop(self):
         import paho.mqtt.client as mqtt
         cfg = self.cfg["mqtt"]
@@ -25345,13 +24994,24 @@ class Service:
             # subscribe MUSS hier stehen: paho reconnectet nach Abriss still, eine nur
             # einmalig gesetzte Subscription waere danach weg (Dienst liefe taub weiter).
             cl.subscribe("frigate/events")
-            self.log.info(f"MQTT connected ({rc}), subscribed to frigate/events, catch-up sweep starting")
+            # Stummwache (Entscheid 2): das zweite Abonnement ist Frigates Lebenszeichen; die Anmeldung ist der Bezug
+            # der Stille und der Anfang des Abgleich-Fensters (Entscheid 3).
+            cl.subscribe("frigate/stats")
+            self._mqtt_anmelde_ts = time.time()
+            self.log.info(f"MQTT connected ({rc}), subscribed to frigate/events and frigate/stats, "
+                          f"catch-up sweep starting")
             threading.Thread(target=self.sweep, daemon=True).start()
+            # Der Config-Abruf laeuft neben dem Netz-Faden von paho, damit ein langsames Frigate die Rueckrufe nicht
+            # aufhaelt; bis er antwortet, gilt der Werkswert.
+            threading.Thread(target=self._mqtt_intervall_holen, daemon=True, name="mqtt-intervall").start()
 
         def on_disconnect(_c, _u, _f, rc, _p=None):
             self.log.warning(f"MQTT disconnected ({rc}), reconnect runs automatically")
 
         def on_msg(_c, _u, m):
+            if m.topic == "frigate/stats":
+                self._mqtt_stats_kam()                   # nur der Zeitpunkt zaehlt, der Inhalt wird nicht gelesen
+                return
             try:
                 d = json.loads(m.payload)
                 after = d.get("after", {})
@@ -25389,7 +25049,9 @@ class Service:
         # retry_first_connection=True, sonst reicht es die OSError durch.
         cl.reconnect_delay_set(min_delay=1, max_delay=60)
         cl.connect_async(cfg["host"], int(cfg.get("port", 1883)), 60)
-        self.log.info(f"MQTT mode: {cfg['host']}:{cfg.get('port', 1883)} frigate/events")
+        self.log.info(f"MQTT mode: {cfg['host']}:{cfg.get('port', 1883)} frigate/events, frigate/stats "
+                      f"(silence watch), reconciliation every {_reg.MQTT_STUMMWACHE['abgleich_s']} s")
+        self.start_abgleich_takt()               # Entscheid 3: nur im MQTT-Betrieb, der Poll-Weg sweept ohnehin
         cl.loop_forever(retry_first_connection=True)
 
 
@@ -25725,22 +25387,33 @@ def make_handler(svc):
                     d = self._body_json(_BODY_BILDER, erwartet=dict)          # E2: 64 KiB -> 1 MiB
                     if d is _ABGEWIESEN:
                         return
-                    # Stufe A (.511): EIN Zug statt Bild fuer Bild — die Buchhaltung
-                    # (QS-Bericht, refcache) laeuft je Person einmal, und es startet
-                    # KEIN Bestands-QS-Lauf mehr. Der Feldtester hat 160 Batches bis
-                    # 317 Bilder gefahren; jeder kostete bis dahin einen Volllauf.
+                    # Stufe A (.511): EIN Zug statt Bild fuer Bild, und es startet KEIN
+                    # Bestands-QS-Lauf mehr (der Feldtester hat 160 Batches bis 317 Bilder
+                    # gefahren; jeder kostete bis dahin einen Volllauf). Seit E3b-2b (I1)
+                    # je Bild (Person, ref_id) an entferne_referenzen: Bindung aus, Satz ins
+                    # Archiv; ein Browser-Tab von vorher schickt noch Dateinamen im Feld
+                    # datei — die lehnt entferne_referenzen laut ab (Umzug).
+                    gruende = []
                     weg, _geloescht = anlernen.entferne_referenzen(
-                        [((it.get("person") or "").strip(), (it.get("datei") or "").strip())
-                         for it in (d.get("items") or [])])
+                        [((it.get("person") or "").strip(),
+                          (it.get("ref_id") or it.get("datei") or "").strip())
+                         for it in (d.get("items") or [])], gruende)
                     if weg:
-                        svc.log.info(f"REFERENCES REMOVED (batch): {weg} (Frigate untouched by design)")
+                        svc.log.info(f"REFERENCES REMOVED (batch): {weg} set(s) archived "
+                                     f"(Frigate untouched by design)")
+                    if gruende:
+                        svc.log.warning(f"references not removed (batch): {len(gruende)} — "
+                                        f"{'; '.join(sorted(set(gruende)))}")
                     # Der Text landet ROH im UI (app.js refBatchLoeschen setzt
                     # d.msg als Knopfbeschriftung) — deshalb seit .511 ueber
                     # core/sprache statt hart deutsch. Bauform wie die
                     # Nachbar-Antworten derselben Familie (antwort.bruecke_hinzu/
                     # -undo): EIN Schluessel mit "(s)", keine Plural-Formen.
-                    return self._send(200, json.dumps({"ok": weg > 0,
-                                      "msg": _sprache.t("antwort.ref_batch_weg", n=weg)},
+                    _msg = _sprache.t("antwort.ref_batch_weg", n=weg)
+                    if gruende:
+                        _msg += " — " + "; ".join(sorted(set(gruende)))
+                    return self._send(200 if weg > 0 else 400, json.dumps({"ok": weg > 0,
+                                      "msg": _msg},
                                       ensure_ascii=False),
                                       "application/json")
                 except Exception as e:
@@ -25748,10 +25421,14 @@ def make_handler(svc):
                     return self._send(400, json.dumps({"ok": False, "msg": str(e)}), "application/json")
             if pfad == "/person_loeschen":                     # GANZE Person entfernen (User 25.07.:
                 # "es muss ja auch moeglich sein, ein ganzes Benutzerkonto rauszuloeschen — nicht
-                # nur ein Gesicht, sondern auch den Namen"). REVERSIBEL: der Ordner wandert in
-                # <data>/trash/ statt geloescht zu werden — eine Ein-Klick-Vernichtung von
-                # Referenzdaten gaebe es sonst nicht wieder her. refcache wird invalidiert,
-                # damit Suche/Vorschlaege die Person sofort vergessen.
+                # nur ein Gesicht, sondern auch den Namen"). UMKEHRBAR: eine Ein-Klick-Vernichtung
+                # von Referenzdaten gaebe es sonst nicht wieder her. Seit E3b-3b (Bauplan
+                # analysen/bauplan_refquelle_einbau.md, I1) bekommt jeder aktive Satz der Person
+                # ueber anlernen.entferne_referenzen eine Katalogzeile Bindung aktiv falsch (Grund
+                # entfernt) und wandert ins Archiv state/archiv/refquelle/ (in der Sicherung);
+                # nichts wird geloescht, kein Papierkorb, kein Ordner. Danach hat die Person keinen
+                # Satz mehr und steht nicht mehr in master_persons; Suche und Vorschlaege sehen das
+                # ueber die Stand-Kennung des Katalogs (seit E3c-1 keine Matrizen-Datei mehr).
                 try:
                     d = self._body_json(8192, default={}, erwartet=dict)
                     if d is _ABGEWIESEN:
@@ -25760,35 +25437,20 @@ def make_handler(svc):
                     if not p or p not in master_persons(cfg):
                         return self._send(200, json.dumps({"ok": False, "msg": _sprache.t("antwort.person_unbekannt")},
                                           ensure_ascii=False), "application/json")
-                    quelle = os.path.join(cfg["data_dir"], "faces", p)
-                    if os.path.realpath(quelle) != os.path.realpath(
-                            os.path.join(cfg["data_dir"], "faces", os.path.basename(p))):
-                        return self._send(200, json.dumps({"ok": False, "msg": _sprache.t("antwort.person_name_ungueltig")},
-                                          ensure_ascii=False), "application/json")
-                    papierkorb = os.path.join(cfg["data_dir"], "trash")
-                    os.makedirs(papierkorb, exist_ok=True)
-                    ziel = os.path.join(papierkorb, f"person_{p}_{int(time.time())}")
-                    n_bilder = len([f for f in os.listdir(quelle)      # .webp NICHT vergessen: Frigate liefert webp
-                                    if f.lower().endswith(_reg.BILD_ENDUNGEN)])
-                    os.rename(quelle, ziel)
-                    # Stufe A (.511): dieselbe punktuelle Bereinigung wie beim Einzel-
-                    # Bild — bis .510 loeste dieser Weg NICHTS aus (Inventur §1: die
-                    # Person blieb mit allen Zaehlern, Paaren und Doppel-Vorschlaegen
-                    # im QS-Bericht stehen, obwohl sich der Bestand maximal aendert),
-                    # und der refcache wurde komplett weggeworfen. Jetzt faellt die
-                    # Person aus Bericht UND Cache, der Rest bleibt gueltig.
                     import anlernen as _al_pl
-                    _al_pl.qs_bericht_bereinigen(p)
-                    if not _al_pl.refcache_entfernen(p):
-                        try:
-                            os.remove(os.path.join(cfg["data_dir"], "clips", "refcache.npz"))
-                        except OSError:
-                            pass
-                    svc.log.info(f"PERSON DELETED: {p} ({n_bilder} reference image(s)) -> trash/"
-                            f"{os.path.basename(ziel)} — recoverable by moving back")
+                    from core import refquelle as _rq_pl
+                    saetze = _rq_pl.read_catalog({"data_dir": cfg["data_dir"]})["personen"].get(p, [])
+                    gruende = []
+                    n_bilder, _weg = _al_pl.entferne_referenzen([(p, r) for r in saetze], gruende)
+                    if gruende:
+                        svc.log.warning(f"PERSON DELETE: {len(gruende)} reference set(s) of {p} not "
+                                        f"archived — " + "; ".join(sorted(set(gruende))))
+                    svc.log.info(f"PERSON DELETED: {p} ({n_bilder} reference set(s) archived to "
+                                 f"state/archiv/refquelle/, nothing deleted)")
                     return self._send(200, json.dumps(
-                        {"ok": True, "msg": _sprache.t("antwort.person_entfernt",
-                                                       person=p, n=n_bilder)},
+                        {"ok": n_bilder > 0, "n": n_bilder,
+                         "msg": (_sprache.t("antwort.person_entfernt", person=p, n=n_bilder) if n_bilder
+                                 else "; ".join(sorted(set(gruende))))},
                         ensure_ascii=False), "application/json")
                 except Exception as e:
                     _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
@@ -25801,15 +25463,24 @@ def make_handler(svc):
                     if d is _ABGEWIESEN:
                         return
                     person = (d.get("person") or "").strip()
-                    datei = (d.get("datei") or "").strip()
-                    ok, msg = anlernen.entferne_referenz(person, datei)
+                    # E3b-2a (Bauplan Referenz-Quelle einbauen, I1): die Galerie gibt die
+                    # ref_id; ein Browser-Tab von vorher schickt noch einen Dateinamen
+                    # im Feld datei — den lehnt entferne_referenzen laut ab (Umzug).
+                    ref = (d.get("ref_id") or d.get("datei") or "").strip()
+                    gruende = []
+                    n_weg, _weg = anlernen.entferne_referenzen([(person, ref)], gruende)
+                    ok = n_weg > 0
+                    msg = (_sprache.t("antwort.ref_batch_weg", n=n_weg) if ok
+                           else "; ".join(gruende))
                     if ok:
-                        # Stufe A (.511): KEIN Bestands-QS-Lauf mehr. Der Bericht wird
-                        # punktuell nachgefuehrt und der refcache-Eintrag entfernt
-                        # (anlernen.entferne_referenz) — bis .510 kostete genau dieser
-                        # Klick einen Volllauf ueber ALLE Referenzen (Werkbank-Messung
-                        # 08.09.: 872,7 s fuer ein Bild bei 1228 Referenzen).
-                        svc.log.info(f"REFERENCE REMOVED: {msg} (Frigate untouched by design)")
+                        # Stufe A (.511): KEIN Bestands-QS-Lauf mehr — bis .510 kostete
+                        # genau dieser Klick einen Volllauf ueber ALLE Referenzen
+                        # (Werkbank-Messung 08.09.: 872,7 s fuer ein Bild bei 1228
+                        # Referenzen). Seit E3b-2a: Bindung aus, Satz im Archiv.
+                        svc.log.info(f"REFERENCE REMOVED: set {ref[:12]} archived "
+                                     f"(Frigate untouched by design)")
+                    else:
+                        svc.log.warning(f"reference not removed: {msg}")
                     return self._send(200 if ok else 400,
                                       json.dumps({"ok": ok, "msg": msg}, ensure_ascii=False),
                                       "application/json")
@@ -25895,7 +25566,9 @@ def make_handler(svc):
                                   ensure_ascii=False), "application/json")
             if pfad in ("/unbekannt_reconcile", "/unbekannt_besucher", "/unbekannt_verwerfen",
                         "/unbekannt_merge", "/unbekannt_benennen", "/unbekannt_merge_viele",
-                        "/unbekannt_objekt", "/unbekannt_seite"):   # Unbekannt-Reiter (20.07., .380)
+                        "/unbekannt_objekt", "/unbekannt_seite",
+                        "/unbekannt_nicht_p",    # Unbekannt-Reiter (20.07., .380; „nicht P“ Bauplan aehnlich AE5)
+                        "/unbekannt_nicht_p_auswahl"):   # „nicht P“ einer Auswahl am Sammelbecken (Bauplan aehnlich AE6)
                 try:
                     import anlernen
                     from routes import unbekannte as _r_unbek
@@ -25911,26 +25584,76 @@ def make_handler(svc):
                     _sort_a = str(d.get("sort") or _r_unbek.SORT[0])
                     _filt_a = str(d.get("f") or _r_unbek.FILTER[0])
 
+                    from core import unbekanntpool as _ubp_a   # Stufe V1c: Saetze ueber das Modul
+
+                    # Bauplan analysen/bauplan_aehnlich.md Entscheid 19 (Fassung 6, W5 V4): die Antwort nennt den neuen
+                    # Platz jeder betroffenen Identitaet: in der Liste (kachel), in der Gruppe „Vermutlich P“ (gruppe:
+                    # Person, Kachel und der leere Rahmen der Gruppe) oder weg.
                     def _unb_stand(uids):
                         alle = _r_unbek.infos(anlernen.lade_unbekannte(),
-                                              anlernen.lade_gesichter())
+                                              anlernen.lade_gesichter(),
+                                              _ubp_a.mitglieder(cfg["data_dir"], log=svc.log))
                         vs_ = anlernen.lade_unbekannt_vorschlaege()
                         sicht = {i["id"]: i for i in
                                  _r_unbek.auswahl(alle, vs_, _sort_a, _filt_a)}
+                        in_gr = {i["id"]: i for i in alle if _r_unbek.in_gruppe(i)}
                         offen, gesamt = _r_unbek.zaehler(alle)
-                        kach, weg = {}, []
+                        kach, gr, weg = {}, {}, []
                         for u_ in uids:
                             if u_ in sicht:
                                 kach[u_] = _r_unbek.kachel(sicht[u_])
+                            elif u_ in in_gr:
+                                _p = in_gr[u_]["aehnlich"]["person"]
+                                gr[u_] = {"person": _p, "html": _r_unbek.kachel(in_gr[u_]),
+                                          "rahmen": _r_unbek.gruppe_html(_p)}
                             else:
                                 weg.append(u_)
-                        return {"kachel": kach, "weg": weg,
+                        return {"kachel": kach, "gruppe": gr, "weg": weg,
                                 "offen": offen, "gesamt": gesamt}
+                    # Bauplan analysen/bauplan_aehnlich.md Entscheid 26 (Fassung 8, W7 V9): am Sammelbecken „ähnlich P“
+                    # gibt es nur Zuweisen und „nicht P“, beide mit Auswahl; Benennen ohne Auswahl, Zusammenlegen,
+                    # Besucher, Objekt, Verwerfen und „nicht P“ der ganzen Identitaet lehnt der Server ab und sagt warum.
+                    from core import aehnlich as _aeh_s
+                    _becken = {u.get("id"): _aeh_s.sammel_von(u) for u in anlernen.lade_unbekannte()
+                               if isinstance(u, dict) and _aeh_s.sammel_von(u)}
+                    _gemeint = ([d.get("uid")] if pfad in ("/unbekannt_besucher", "/unbekannt_objekt",
+                                                           "/unbekannt_nicht_p")
+                                or (pfad == "/unbekannt_benennen" and not d.get("ids"))
+                                else [d.get("a"), d.get("b")] if pfad in ("/unbekannt_merge", "/unbekannt_verwerfen")
+                                else list(d.get("uids") or []) if pfad == "/unbekannt_merge_viele" else [])
+                    _am_becken = sorted({str(x) for x in _gemeint} & set(_becken))
+                    if _am_becken:
+                        svc.log.info(f"unknown action {pfad} refused for the collection {', '.join(_am_becken)}")
+                        return self._send(409, json.dumps(
+                            {"ok": False, "msg": _sprache.t("heute.aehnlich.sammel_abgelehnt",
+                                                            person=_becken[_am_becken[0]])},
+                            ensure_ascii=False), "application/json")
+                    if pfad == "/unbekannt_nicht_p_auswahl":
+                        # Entscheid 26: die angehakten Bilder des Sammelbeckens werden zusammen eine neue Unbekannte mit
+                        # dem Urteil „nicht P“ (anlernen.unbekannt_nicht_p_auswahl, unter pool_lock); die Person ist die
+                        # des Beckens. Die Antwort nennt den Platz von Becken und neuer Identitaet.
+                        _uid = str(d.get("uid", ""))
+                        _ids = [str(x) for x in (d.get("ids") or []) if str(x)]
+                        if _uid not in _becken or not _ids:
+                            _a = {"ok": False, "msg": _sprache.t("antwort.unbek_weg")}
+                            _a.update(_unb_stand([_uid]))
+                            return self._send(200, json.dumps(_a, ensure_ascii=False), "application/json")
+                        _neu, _n = anlernen.unbekannt_nicht_p_auswahl(_uid, _ids)
+                        if _neu:
+                            svc.log.info(f"unknown collection {_uid}: {_n} ticked face(s) taken out as {_neu} "
+                                         f"(not {_becken[_uid]})")
+                        _a = {"ok": bool(_neu), "neu": _neu,
+                              "msg": (_sprache.t("heute.aehnlich.antwort_sammel_nein", n=_n, person=_becken[_uid],
+                                                 name=_sprache.t("unbekannte.name", nummer=_neu[1:]))
+                                      if _neu else _sprache.t("antwort.unbek_weg"))}
+                        _a.update(_unb_stand([_uid] + ([_neu] if _neu else [])))
+                        return self._send(200, json.dumps(_a, ensure_ascii=False), "application/json")
                     if pfad == "/unbekannt_seite":
                         # Nachladen (B1): der Server schneidet die Seite zu, der
                         # Browser bekommt NUR die naechsten Kacheln.
                         alle = _r_unbek.infos(anlernen.lade_unbekannte(),
-                                              anlernen.lade_gesichter())
+                                              anlernen.lade_gesichter(),
+                                              _ubp_a.mitglieder(cfg["data_dir"], log=svc.log))
                         liste = _r_unbek.auswahl(alle, anlernen.lade_unbekannt_vorschlaege(),
                                                  _sort_a, _filt_a)
                         try:
@@ -25964,6 +25687,26 @@ def make_handler(svc):
                         # sich sichtbar weg (weg-Liste auch im ok=False-Fall).
                         _a.update(_unb_stand([_uid]))
                         if not ok and _uid not in (_a.get("weg") or []):
+                            _a.setdefault("weg", []).append(_uid)
+                        return self._send(200, json.dumps(_a, ensure_ascii=False),
+                                          "application/json")
+                    if pfad == "/unbekannt_nicht_p":
+                        # Bauplan analysen/bauplan_aehnlich.md Entscheid 20 (Fassung 6): das Urteil „nicht P“ an der
+                        # Identitaet setzen (an) oder zuruecknehmen, ueber den Schreibweg unter pool_lock
+                        # (core.aehnlich.urteil_schreiben); der Aufraeum-Schritt sieht es ueber die Stand-Pruefung.
+                        _uid = str(d.get("uid", ""))
+                        _p = str(d.get("person") or "").strip()
+                        _an = bool(d.get("an", True))
+                        from core import aehnlich as _aeh_a
+                        da, geaendert = _aeh_a.urteil_schreiben(_uid, _p, _an) if _p else (False, False)
+                        if geaendert:
+                            svc.log.info(f"unknown {_uid}: judgement 'not {_p}' {'set' if _an else 'taken back'}")
+                        _msg = ((_sprache.t("heute.aehnlich.antwort_nein", person=_p) if _an
+                                 else _sprache.t("heute.aehnlich.antwort_zurueck", person=_p))
+                                if da else _sprache.t("antwort.unbek_weg"))
+                        _a = {"ok": da, "msg": _msg}
+                        _a.update(_unb_stand([_uid]))
+                        if not da and _uid not in (_a.get("weg") or []):
                             _a.setdefault("weg", []).append(_uid)
                         return self._send(200, json.dumps(_a, ensure_ascii=False),
                                           "application/json")
@@ -26027,8 +25770,10 @@ def make_handler(svc):
             if pfad in ("/sync_abwahl", "/sync_wieder_anbieten"):   # .133/.137: Merker der Sync-Seite
                 # Bewusst abgewaehlte Referenzbilder bleiben im Master, gehen aber
                 # nie nach Frigate — auch der AUTO-Export ueberspringt sie (Filter
-                # in sync_refs.cmd_export). Eigener Merker, NICHT die refs_meta-
-                # Tombstones: die bedeuten "Bild geloescht" und sperren den Import.
+                # in sync_refs.cmd_export). Seit E3b-3a (Bauplan Referenz-Quelle
+                # einbauen) tragen die Paare [Person, ref_id]; die Merker schreibt
+                # sync_refs als Katalogzeilen (Art export) und lehnt ein Paar, das
+                # keine aktive Referenz dieser Person ist, laut ab (400 unten).
                 import sync_refs as _sr
                 # E2 (.505): kaputtes JSON endet jetzt als 400 statt still als
                 # leerer Merker — der Aufrufer erfaehrt, dass nichts gemerkt wurde.
@@ -26048,8 +25793,8 @@ def make_handler(svc):
                             and _p_ok.match(str(x[0])) and _d_ok.match(str(x[1]))]
                 if pfad == "/sync_wieder_anbieten":
                     # .137 "offer again": ein in Frigate geloeschtes bzw. frueher
-                    # exportiertes Bild wird wieder normaler Kandidat. Das
-                    # Protokoll wird nur ANGEHAENGT (aktiv=false), nie umgeschrieben.
+                    # exportiertes Bild wird wieder normaler Kandidat. Der Katalog
+                    # wird nur ANGEHAENGT (Merker-Zeile), nie umgeschrieben.
                     try:
                         n_wa = _sr.wieder_anbieten(_paare("bilder"))
                     except Exception as e:
@@ -26108,6 +25853,7 @@ def make_handler(svc):
                             ensure_ascii=False), "application/json")
                     # Uebergabe als DATEI, nie als argv (hunderte Namen sprengen jede
                     # Kommandozeile); sync_refs filtert damit die ECHTE Kandidatenliste.
+                    # Seit E3b-3a Paare [Person, ref_id] (Laufprotokoll, I3).
                     auswahl_pfad = os.path.join(svc.cfg["data_dir"], "state",
                                                 "sync_auswahl_lauf.json")
                     os.makedirs(os.path.dirname(auswahl_pfad), exist_ok=True)
@@ -26187,23 +25933,53 @@ def make_handler(svc):
                         except Exception:
                             _logbuch.swallowed(_log, _logbuch.ERROR, "ignored", throttle=False)
                         return
-                    if modus == "import":                      # importierte Referenzen -> Embeddings auf GPU neu
+                    if modus == "import":
+                        # E3a-4 (Bauplan Referenz-Quelle einbauen, J10): jede geholte Datei
+                        # liegt im Staging-Ordner des Laufs (Liste im Schluss-Fortschritt
+                        # von sync_refs.cmd_import) und wird je Datei ein Job dateisatz
+                        # (Herkunftsart frigate_import, Person = Frigate-Name, Bindung
+                        # referenz); das Ergebnis je Datei geht ins Log und in den
+                        # Lauf-Fortschritt. Ohne Worker entsteht kein Satz (laut, einmal).
+                        from core import atomar as _atomar_si
                         try:
-                            os.remove(os.path.join(svc.cfg["data_dir"], "clips", "refcache.npz"))
-                        except FileNotFoundError:
-                            pass
-                        svc.log.info("sync import finished -> recomputing embeddings on GPU (refcache) …")
-                        # .511 Stufe B: der Cache-Neubau haengt NICHT mehr am
-                        # QS-Lauf (der schreibt die npz seit .511 nicht mehr,
-                        # s. anlernen.pruefe_referenzen). Der Neubau laeuft
-                        # ueber den Haus-Griff `refcache_aufbauen` — dasselbe
-                        # Muster wie an den drei anderen Stellen, die einen
-                        # fehlenden Cache im Hintergrund nachziehen. Der
-                        # QS-Lauf bleibt zusaetzlich (der Import aendert den
-                        # Bestand, also gehoert der Bericht nachgezogen).
-                        threading.Thread(
-                            target=anlernen.refcache_aufbauen,
-                            args=(svc.embedder,), daemon=True).start()
+                            with open(prog) as f:
+                                _st = json.load(f)
+                        except Exception:
+                            _logbuch.swallowed(_log, _logbuch.ERROR, "import progress unreadable", throttle=False)
+                            _st = {}
+                        _geholt = [g for g in (_st.get("geholt") or []) if isinstance(g, dict)]
+                        _erg_si, _n_si = [], collections.Counter()
+                        if _geholt and not svc.cfg.get("worker", True):
+                            svc.log.error(f"sync import: {len(_geholt)} file(s) fetched, NO reference set — the "
+                                          f"persistent worker is off (worker: false); the files stay in "
+                                          f"state/import/{_st.get('lauf')}")
+                            _geholt = []
+                            _n_si["ohne_worker"] = len(_st.get("geholt") or [])
+                        for _i, _g in enumerate(_geholt):
+                            _atomar_si.json_schreiben(prog, {
+                                "ts": round(time.time(), 1), "phase": "import", "modus": modus,
+                                "schritt": "reference sets", "total": len(_geholt), "done": _i,
+                                "current": f"{_g.get('person')}/{_g.get('datei')}"})
+                            _ok, _msg, _e = svc.upload_referenz(
+                                str(_g.get("person")),
+                                pfad=os.path.join(svc.cfg["data_dir"], str(_g.get("pfad"))),
+                                frigate={"person": str(_g.get("person")), "datei": str(_g.get("datei"))},
+                                lauf_id=_st.get("lauf"))
+                            _n_si["referenz" if _ok else "ohne_satz"] += 1
+                            _erg_si.append({"person": _g.get("person"), "datei": _g.get("datei"),
+                                            "ref_id": _e.get("ref_id") if _ok else None,
+                                            "bindung": _e.get("bindung"), "grund": None if _ok else _msg})
+                        _atomar_si.json_schreiben(prog, {
+                            **_st, "ts": round(time.time(), 1), "phase": "done",
+                            "ok": _n_si["referenz"], "gate": int(_st.get("gate") or 0) + _n_si["ohne_satz"],
+                            "saetze": dict(_n_si), "ergebnisse": _erg_si})
+                        svc.log.info(f"sync import: {_n_si['referenz']} reference set(s) bound, "
+                                     f"{_n_si['ohne_satz']} file(s) without set, {_n_si['ohne_worker']} "
+                                     f"without worker (run {_st.get('lauf')})")
+                        # Seit E3c-1 gibt es keine Matrizen-Datei mehr, die nachzubauen waere:
+                        # die Leser sehen die neuen Saetze ueber die Stand-Kennung des Katalogs.
+                        # Der QS-Lauf bleibt (der Import aendert den Bestand, also gehoert der
+                        # Bericht nachgezogen).
                         svc.qs_neu_starten()
                     svc.log.info(f"reference sync {modus}: finished")
                 # .134 Lauf-Riegel: Flag VOR dem Start setzen (nicht im Thread —
@@ -26342,10 +26118,11 @@ def make_handler(svc):
                                     f"adopted for {person} from one pass")
                             svc.qs_neu_starten()
                             # .525 (B-1): die HIER uebernommenen Bilder sind per
-                            # Bauart NIE Export-Kandidaten — `passernte_aufnehmen`
-                            # schreibt sie mit `herkunft: "vorrat"`, und
-                            # `sync_refs.diff` sortiert genau diese Klasse aus
-                            # ("bleibt lokal"). Der Aufruf bleibt trotzdem stehen:
+                            # Bauart NIE Export-Kandidaten — seit E3a-1d legt
+                            # `passernte_aufnehmen` keine Datei und keine
+                            # refs_meta-Zeile mehr an, nur Katalogzeilen; der
+                            # Export liest den Katalog erst mit E3b (Herkunftsart
+                            # im Satz). Der Aufruf bleibt trotzdem stehen:
                             # er raeumt einen ALTEN Rueckstand anderer Herkunft ab
                             # und haelt den Vier-Klassen-Abgleich frisch (wie an
                             # der Vorrats-Stelle darunter). Neu ist der Torwaechter
@@ -26354,9 +26131,11 @@ def make_handler(svc):
                             # nichts los.
                             svc.frigate_sync_export()
                         # .521: nach der Uebernahme faellt der Lauf-Ordner —
-                        # die Bilder sind als Referenzen KOPIERT, der Rest war
-                        # Anschauungsmaterial. Erst NACH dem Kopieren, sonst
-                        # zoege das Raeumen der Uebernahme die Quelle weg.
+                        # die Bilder sind seit E3a-1d als Saetze an die Person
+                        # gebunden (Katalogzeile, der Satz liegt unter
+                        # refquelle/, nicht im Lauf-Ordner), der Rest war
+                        # Anschauungsmaterial. Erst NACH der Uebernahme, sonst
+                        # zoege das Raeumen ihr die Pruefliste (auswahl.jsonl) weg.
                         for _lid in _laeufe:
                             svc._passernte_raeumen(_lid)
                         return self._send(200, json.dumps(
@@ -26377,17 +26156,8 @@ def make_handler(svc):
                             {"ok": True, "laden": True,
                              "msg": _sprache.t("antwort.modell_laedt")},
                             ensure_ascii=False), "application/json")
-                    # .236: fehlender refcache (Undo/Loeschung invalidieren
-                    # weiterhin voll) heisst EHRLICH warten statt den
-                    # Komplett-Neuaufbau inline zu zahlen — Hintergrund-Bau,
-                    # das UI fragt automatisch nach.
-                    if not os.path.exists(os.path.join(
-                            cfg["data_dir"], "clips", "refcache.npz")):
-                        threading.Thread(
-                            target=anlernen.refcache_aufbauen,
-                            args=(svc.embedder,), daemon=True).start()
-                        return self._send(200, refcache_warte_antwort(anlernen),
-                                          "application/json")
+                    # E3b-1b: die Referenzen kommen aus der Referenz-Quelle (Lese-Stufe a),
+                    # es gibt keine Matrizen-Datei mehr, auf die zu warten waere.
                     # .507 B2 (E-B3/E-P2): der Klick meint EIN Ereignis
                     # (`eid`) fuer diese Person; `ganzer_pass` ist der zweite
                     # Knopf (E-O1, alle Ereignisse des Durchgangs). Den
@@ -26532,14 +26302,32 @@ def make_handler(svc):
                     if d is _ABGEWIESEN:
                         return
                     person = (d.get("person") or "").strip()
+                    # E3b-3b Nachtrag (Bauplan analysen/bauplan_refquelle_einbau.md, I1, J7):
+                    # die Seite schickt die ref_ids, die /auftritt_lernen im Feld dateien
+                    # zurueckgab. Ein Browser-Tab von vorher schickt noch das Feld dateien —
+                    # das wird laut abgelehnt (400, WARNING), wie J7, mit Hinweis auf den Umzug.
+                    if "ref_ids" not in d and "dateien" in d:
+                        msg = ("undo refused: this page was opened before the update and uses the "
+                               "old request format; reload the page and remove the pictures in the "
+                               "gallery of the person if needed (old pictures are taken along by the "
+                               "one-time migration of this version)")
+                        svc.log.warning(f"PASS LEARN UNDO refused for {person}: old request "
+                                        f"field 'dateien' (page opened before the update)")
+                        return self._send(400, json.dumps({"ok": False, "n": 0, "msg": msg},
+                                                          ensure_ascii=False), "application/json")
                     # Stufe A (.511): das Undo ist eine LOESCHUNG wie jede andere —
-                    # ein Zug, punktuelle Bereinigung, kein Bestands-QS-Lauf.
+                    # ein Zug, punktuelle Bereinigung, kein Bestands-QS-Lauf. Seit E3b-3b
+                    # je (Person, ref_id): Bindung aus, Satz ins Archiv, nichts geloescht (I1).
+                    gruende = []
                     n_weg, _weg = anlernen.entferne_referenzen(
-                        [(person, str(datei)) for datei in (d.get("dateien") or [])[:50]])
+                        [(person, str(r).strip()) for r in (d.get("ref_ids") or [])[:50]], gruende)
                     if n_weg:
                         svc.log.info(f"PASS LEARN UNDO: {n_weg} reference(s) removed for {person}")
+                    msg = _sprache.t("antwort.bruecke_undo", n=n_weg)
+                    if gruende:
+                        msg += " — " + "; ".join(sorted(set(gruende)))
                     return self._send(200, json.dumps(
-                        {"ok": True, "msg": _sprache.t("antwort.bruecke_undo", n=n_weg)},
+                        {"ok": True, "n": n_weg, "msg": msg},
                         ensure_ascii=False), "application/json")
                 except Exception as e:
                     _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
@@ -27874,17 +27662,8 @@ def make_handler(svc):
                             {"ok": True, "laden": True,
                              "msg": _sprache.t("antwort.modell_laedt")},
                             ensure_ascii=False), "application/json")
-                    # .267 (Widerleger-Blocker): die Uebernahme loescht den
-                    # refcache — OHNE ihn wuerde die Flaeche qualitaets-only
-                    # urteilen und 'reference check' behaupten. Hier neu
-                    # bauen (Bruecken-Muster), der Render wartet solange.
-                    if not os.path.exists(os.path.join(
-                            cfg["data_dir"], "clips", "refcache.npz")):
-                        threading.Thread(
-                            target=anlernen.refcache_aufbauen,
-                            args=(svc.embedder,), daemon=True).start()
-                        return self._send(200, refcache_warte_antwort(anlernen),
-                                          "application/json")
+                    # E3b-1b: die Referenzen kommen aus der Referenz-Quelle (Lese-Stufe a),
+                    # es gibt keine Matrizen-Datei mehr, auf die zu warten waere.
                     lid = (satz.get("lauf") or {}).get("lauf_id", "")
                     # .273 (Widerleger-Rest c): In-Flight-Riegel — Retry-
                     # Schleife/zweiter Tab starten die 40-Bild-Messung sonst
@@ -27897,9 +27676,13 @@ def make_handler(svc):
                                 ensure_ascii=False), "application/json")
                         svc._sichtung_aid = aid
                     try:
+                        # E3a-1c (J1): die Mitglieder tragen die ref_id; ihre
+                        # Fingerabdruecke kommen ueber core/refquelle (nur im Speicher).
+                        from core import lernlauf as _ll_si
                         anlernen.gruppen_sichtung(
-                            satz, os.path.join(cfg["data_dir"], "state",
-                                               "lernlauf", str(lid)),
+                            _ll_si.mit_fingerabdruecken(_ll_si.datenort_cfg(cfg["data_dir"]), satz),
+                            os.path.join(cfg["data_dir"], "state",
+                                         "lernlauf", str(lid)),
                             emb=svc.embedder,
                             yaw_grenze=cfg["benennung_yaw_grenze"],
                             norm_latte=norm_latte_aus_cfg(cfg),
@@ -27935,8 +27718,8 @@ def make_handler(svc):
                             {"ok": False,
                              "msg": _sprache.t("antwort.anker_unbenannt")},
                             ensure_ascii=False), "application/json")
-                    # Warm-Checks wie die Bruecke (.232/.236): kaltes Modell
-                    # bzw. fehlender refcache EHRLICH melden, UI fragt nach.
+                    # Warm-Check wie die Bruecke (.232): kaltes Modell EHRLICH melden, UI fragt
+                    # nach. Die Referenzen kommen seit E3b-1b aus der Referenz-Quelle (kein Warten).
                     if svc._emb is None:
                         threading.Thread(target=lambda: svc.embedder,
                                          daemon=True).start()
@@ -27944,17 +27727,12 @@ def make_handler(svc):
                             {"ok": True, "laden": True,
                              "msg": _sprache.t("antwort.modell_laedt")},
                             ensure_ascii=False), "application/json")
-                    if not os.path.exists(os.path.join(
-                            cfg["data_dir"], "clips", "refcache.npz")):
-                        threading.Thread(
-                            target=anlernen.refcache_aufbauen,
-                            args=(svc.embedder,), daemon=True).start()
-                        return self._send(200, refcache_warte_antwort(anlernen),
-                                          "application/json")
                     person = satz.get("person")
                     lid = (satz.get("lauf") or {}).get("lauf_id", "")
+                    from core import lernlauf as _ll_bp   # E3a-1c (J1): Fingerabdruecke ueber das Modul
                     bew = anlernen.benennung_bewerten(
-                        person, satz, cfg["benennung_dup_sim"],
+                        person, _ll_bp.mit_fingerabdruecken(_ll_bp.datenort_cfg(cfg["data_dir"]), satz),
+                        cfg["benennung_dup_sim"],
                         _ue.adoptierte_embs(cfg["data_dir"], person),
                         emb=svc.embedder,
                         lauf_dir=os.path.join(cfg["data_dir"], "state",
@@ -27986,6 +27764,10 @@ def make_handler(svc):
                         return self._send(400, json.dumps(
                             {"ok": False, "msg": _sprache.t("antwort.anker_unbenannt")}, ensure_ascii=False), "application/json")
                     person = satz.get("person")
+                    # J7 (E3a-1d, Bauplan Referenz-Quelle einbauen): ein Anker aus
+                    # einem Lauf vor dieser Version (Mitglieder ohne ref_id) wird
+                    # laut abgelehnt, mit Hinweis auf den Umzug.
+                    _ue.ref_ids([m for m in satz.get("mitglieder") or [] if m.get("gewaehlt")])
                     werte = {"k_je_bin": cfg["benennung_k_je_bin"],
                              "yaw_grenze": cfg["benennung_yaw_grenze"],
                              "dup_sim": cfg["benennung_dup_sim"]}
@@ -27997,6 +27779,10 @@ def make_handler(svc):
                     # Kalibrierseite geaendert und muss sofort gelten (dieselbe
                     # Zusage wie bei den zwei .378-Schwellen).
                     from core import kamerakalib as _kk_ad
+                    # E3a-1c/E3a-1d: der Dedup braucht die Fingerabdruecke der
+                    # Mitglieder; sie kommen ueber das Modul in den Speicher, der
+                    # Anker in state/anker.jsonl bleibt, wie er ist.
+                    satz = _ll.mit_fingerabdruecken(_ll.datenort_cfg(cfg["data_dir"]), satz)
                     plan = _ue.plan_bauen(satz, cfg["benennung_dup_sim"],
                                           _ue.adoptierte_embs(cfg["data_dir"], person),
                                           luma_grenzen=luma_grenzen_aus_cfg(cfg),
@@ -28010,13 +27796,12 @@ def make_handler(svc):
                         # Fehler: Cluster ehrlich als uebernommen abschliessen (0 neue Dateien,
                         # das Protokoll weist die Entscheidung aus) statt 'error' zu zeigen.
                         # Phantom-Wache (Review-MUSS .127): abschliessen NUR, wenn die Person
-                        # wirklich noch Referenzbilder auf der Platte hat — adoptierte_embs
-                        # filtert Geloeschtes zwar schon, aber dieser Zustand darf nie still
-                        # als Erfolg enden (sonst Person mit 0 Referenzen 'fertig' markiert).
-                        _rd = os.path.join(cfg["data_dir"], "faces", person)
-                        if not (os.path.isdir(_rd) and any(
-                                f.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))
-                                for f in os.listdir(_rd))):
+                        # wirklich noch Referenzen hat — adoptierte_embs filtert Geloeschtes
+                        # zwar schon, aber dieser Zustand darf nie still als Erfolg enden
+                        # (sonst Person mit 0 Referenzen 'fertig' markiert). Seit E3a-1d
+                        # fragt sie das Modul (Lese-Stufe b: ein aktiv gebundener Satz),
+                        # nicht mehr den Personenordner.
+                        if not _ue.bestand_da(cfg["data_dir"], person):
                             return self._send(400, json.dumps(
                                 {"ok": False, "msg": _sprache.t("antwort.adopt_phantom")},
                                 ensure_ascii=False), "application/json")
@@ -28034,63 +27819,22 @@ def make_handler(svc):
                                                            n=len(plan["uebersprungen"]),
                                                            person=person)},
                             ensure_ascii=False), "application/json")
-                    lid = (satz.get("lauf") or {}).get("lauf_id", "")
-                    namen = _ue.uebernehmen(cfg["data_dir"], lid, aid, person, plan)
-                    # .313b (User 21.08., 'immer alle Bilder sehen'): die Ernte-Messung des
-                    # Mitglieds (emb/kante/sharp/norm aus der Vollbild-Detektion) wandert als
-                    # A2-BEIWERT in refs_meta — wie beim Vorrats-Weg (anlernen.vorrat_aufnehmen).
-                    # Ohne Beiwert misst lade_master_refs/lade_master_bilder die DATEI mit det
-                    # 320, und randlose Klein-Crops (61–98 px) sind dort gemessen tot: die
-                    # Referenz laege im Master, fehlte aber im refcache und stuende in der
-                    # Bestands-QS als 'kein Gesicht' zum Loeschen. Mitglieder ohne Ernte-
-                    # Embedding (Alt-Laeufe) schreiben die Zeile wie bisher ohne Beiwert.
-                    with open(os.path.join(cfg["data_dir"], "faces", "refs_meta.jsonl"), "a") as f:
-                        for nm, m in zip(namen, plan["aufnehmen"]):
-                            zeile = {"ts": round(time.time(), 1), "person": person,
-                                     "datei": nm, "herkunft": "lernlauf",
-                                     "anker": aid, "aktiv": True}
-                            if m.get("emb"):
-                                zeile.update({"emb": [round(float(t), 5) for t in m["emb"]],
-                                              "emb_modell": m.get("modell") or cfg["modell"],
-                                              "camera": m.get("kamera") or m.get("camera"),
-                                              "fiqa_t": m.get("fiqa_t"), "empf": m.get("empf"),
-                                              "kante": m.get("kante"), "sharp": m.get("sharp"),
-                                              "norm": m.get("norm"), "lauf_id": lid,
-                                              # .314b (Widerleger): OHNE pose zaehlt die
-                                              # Blickrichtungs-Tabelle der Qualitaets-Seite
-                                              # (.273c) jede Lernlauf-Referenz als frontal.
-                                              "pose": m.get("pose")})
-                            f.write(json.dumps(zeile, ensure_ascii=False) + "\n")
-                        f.flush()
+                    # E3a-1d (Bauplan Referenz-Quelle einbauen): die Uebernahme ist eine
+                    # Katalogzeile je Mitglied (Bindung an die Person, Status referenz)
+                    # ueber core/refquelle — keine Dateikopie, keine refs_meta-Zeile,
+                    # kein refcache. Fingerabdruck (A2-Beiwert), Messwerte und Herkunft
+                    # liegen im Satz. Die Leser des Bestands sehen die neue Referenz erst
+                    # mit E3b (Entscheid 16).
+                    namen = _ue.uebernehmen(cfg["data_dir"], aid, person, plan)
                     _ue.protokoll_anhaengen(cfg["data_dir"], {
                         "ts": round(time.time(), 1), "anker_id": aid, "person": person,
-                        "dateien": [{"quelle": m.get("datei"), "ziel": nm, "emb": m.get("emb") or None}
-                                    for nm, m in zip(namen, plan["aufnehmen"])],
+                        "dateien": [{"quelle": m.get("datei"), "ref_id": rid}
+                                    for rid, m in zip(namen, plan["aufnehmen"])],
                         "uebersprungen": plan["uebersprungen"],
                         "manuelle_refs_ungeprueft": True,      # Upload-Refs tragen keine Embs (Protokoll-Ehrlichkeit)
                         "bedingungs_tag": (satz.get("auswahl") or {}).get("bedingungs_tag"),
                         "tag_abweichung": ab})
                     _ll.anker_aktualisieren(cfg["data_dir"], aid, status="uebernommen")
-                    # .313 (User-Fund 21.08.: nach JEDER Gruppe ein Voll-Neuaufbau,
-                    # 327 Referenzen ~1 min): die neuen Bilder EINPFLEGEN statt den
-                    # Cache zu verwerfen; ohne warmen Embedder (svc._emb None) faellt
-                    # es auf das alte Verwerfen zurueck.
-                    import anlernen as _al
-                    _zdir = os.path.join(cfg["data_dir"], "faces", person)
-                    # .313b: Beiwert-Vektor mitgeben — die Datei wird dann nicht gemessen
-                    # (Ergebnis gleich zum Neuaufbau, der fuer Beiwert-Referenzen ebenfalls
-                    # den Beiwert nimmt); ohne Vektor bleibt der Datei-Weg.
-                    if not _al.refcache_ergaenzen_viele(
-                            person, [(os.path.join(_zdir, nm), nm,
-                                      (m.get("emb") if (m.get("emb") and str(
-                                          m.get("modell") or cfg["modell"]).lower()
-                                          == str(cfg["modell"]).lower()) else None))
-                                     for nm, m in zip(namen, plan["aufnehmen"])],
-                            svc._emb, modell=cfg["modell"]):
-                        try:
-                            os.remove(os.path.join(cfg["data_dir"], "clips", "refcache.npz"))
-                        except FileNotFoundError:
-                            pass                  # naechster Analyse-Lauf baut mit neuem Master
                     svc.log.warning(f"ADOPTION: anchor {aid} -> master/{person}/ ({len(namen)} refs, "
                             f"{len(plan['uebersprungen'])} skipped) — export + drift watchdog running")
                     svc.referenz_nacharbeit()
@@ -28242,6 +27986,37 @@ def make_handler(svc):
                     {"ok": True, "debug": bool(cfg.get("debug")),
                      "bis": debug_fenster_ende(cfg) if cfg.get("debug") else None}),
                     "application/json")
+            if pfad == "/support/dateiprobe":
+                # Bauplan analysen/bauplan_support_dateiprobe.md Stufe D1 (Eigentuemer 14.10.2026
+                # 14:54:08): die FUENFTE deklarierte Aktions-Ausnahme, gleiche Form wie
+                # /support/feinmessung: Torwaechter support_zugriff + Token LIVE aus dem Store,
+                # Abweisung = generisches 404 (kein Orakel). Body `{}`; jedes Feld ist fremd und
+                # ergibt 400 (.505-Lehre). POST, weil die Probe eine eigene Temp-Datei schreibt und
+                # einen Kindprozess startet. Sie laeuft im Faden der Anfrage; ihre Fristen und die
+                # Antwort stehen in core/dateiprobe.lauf, die Groessen in registry.SUPPORT_DATEIPROBE.
+                from core import support as _sup6
+                _st = _lade_config_store(cfg)
+                if not _sup6.zugriff_ok(_st, self.headers.get("X-Support-Token")):
+                    _sup6.abweisung_zaehlen(svc.log)
+                    return self._send(404, "not found", "text/plain")
+                _b = self._body_json(2048, default={}, erwartet=dict)
+                if _b is _ABGEWIESEN:
+                    return
+                if _b:
+                    return self._send(400, json.dumps(
+                        {"ok": False, "msg": f"unknown field(s): "
+                                             f"{', '.join(sorted(_b))} "
+                                             f"(allowed: none, send {{}})"}),
+                        "application/json")
+                from core import dateiprobe as _dateiprobe
+                try:
+                    _antwort = _dateiprobe.lauf(cfg["data_dir"])
+                except Exception as e:
+                    svc.log.error(f"SUPPORT: dateiprobe failed — {type(e).__name__}: {e}")
+                    return self._send(500, json.dumps(
+                        {"ok": False, "msg": f"{type(e).__name__}: {e}"}), "application/json")
+                return self._send(200, json.dumps(_antwort, ensure_ascii=False),
+                                  "application/json")
             if pfad == "/support/einspielen":
                 # .416 TESTBETT-EINSPIELUNG (User-Go 03.09.): ZWEITE
                 # deklarierte Aktions-Ausnahme im Support-Baum neben
@@ -28723,18 +28498,23 @@ def make_handler(svc):
                 try:
                     qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
                     person = urllib.parse.unquote(qs.get("person", [""])[0]).strip()
-                    if not re.fullmatch(rf"{_reg.PERSON_RE}!?", person):
+                    # E3a-4 (J10): der Gate-Override „Name!" entfaellt — ohne erkennbares
+                    # Gesicht entsteht kein Satz, eine Referenz ohne Fingerabdruck erkennt nie.
+                    if not re.fullmatch(_reg.PERSON_RE, person):
                         return self._send(400, json.dumps({"ok": False, "msg": "Person fehlt/ungueltig"}),
                                           "application/json")
                     n = int(self.headers.get("Content-Length", 0))
                     if n > 15 * 1024 * 1024:
                         return self._send(400, json.dumps({"ok": False, "msg": "Datei > 15 MB"}),
                                           "application/json")
-                    ok, msg = svc.upload_referenz(person, self.rfile.read(n))
+                    # E3a-4: die Bytes gehen unveraendert nach state/upload/, den Satz schreibt der
+                    # Job dateisatz des Worker-Dienstes, synchron mit der Frist der Analyse.
+                    ok, msg, erg = svc.upload_referenz(person, daten=self.rfile.read(n))
                     if ok:
                         svc.frigate_sync_export()          # falls frigate_sync an: nach Frigate spiegeln
                     return self._send(200 if ok else 400,
-                                      json.dumps({"ok": ok, "msg": msg}, ensure_ascii=False),
+                                      json.dumps({"ok": ok, "msg": msg, "ref_id": erg.get("ref_id")},
+                                                 ensure_ascii=False),
                                       "application/json")
                 except Exception as e:
                     _logbuch.swallowed(_log, _logbuch.WARNING, "returning self._send(...)")
@@ -28967,7 +28747,6 @@ def make_handler(svc):
                     return f'<div class="{cls}" style="background:{_av_farbe(person)}">{html.escape(person[:1].upper())}</div>'
 
                 import szenarien as _szen
-                _uk_gesehen = False   # .54: Anker id="unidentified" an die ERSTE Unknown-Karte (Kennzahl-Link)
                 gap = int(cfg.get("szenario_gap_min", 5)) * 60   # auch unten (Besuchs-Buendelung) genutzt
                 try:                  # Koerper-Treffer je Event (Zuschreibung + Ausweis)
                     from core import personlive as _plv
@@ -28998,38 +28777,12 @@ def make_handler(svc):
                 interessant = [s for s in szenarien if s["kat"] != "motion"]
                 motion_n = len(szenarien) - len(interessant)
 
-                # Unbekannt-Identitaeten des Pools: face_id IST die Event-ID (anlernen.py), damit
-                # laesst sich ein unerkannter Durchgang direkt einer U-Nummer zuordnen. User
-                # 25.07.: "dann könnte das auch angezeigt werden als unbekannt Nummer XY."
-                # Faellt still aus, wenn der Pool fehlt — dann steht schlicht "Unknown".
-                # MUSS-2 (Widerleger phase34): EIN toleranter Leser (_pool_eid_karte ->
-                # core.unbekanntpool._cluster_lesen) statt des dritten Streu-Parsers,
-                # der die Seite an {"members": 5} sterben liess.
-                eid2uid, uid_members = _pool_eid_karte(cfg["data_dir"])
-
-                def _besuche_vorher(u, start_t):
-                    """Wie oft war Identitaet u VOR diesem Durchgang da — als BESUCHE gezaehlt,
-                    nicht als Events (Fund der Vor-Release-Pruefung, 25.07.: zwei U83-Karten am
-                    selben Tag zeigten beide 'seen 8x before' — der alte Zaehler nahm die
-                    Mitgliederzahl der Identitaet, also Events ueber alle Zeit, ohne die Zeit
-                    dieses Durchgangs zu beachten). Die Zeit steckt im Event-ID-Praefix
-                    ('1784967720.988397-…'); Events vor dem Durchgangs-Start werden mit derselben
-                    Luecke zu Besuchen gebuendelt wie die Szenarien selbst (gap)."""
-                    ts = []
-                    for _m in (uid_members.get(u) or []):
-                        try:
-                            t = float(str(_m).split("-", 1)[0])
-                        except ValueError:
-                            continue
-                        if t < start_t - 1:
-                            ts.append(t)
-                    ts.sort()
-                    n, letzte = 0, None
-                    for t in ts:
-                        if letzte is None or t - letzte > gap:
-                            n += 1
-                        letzte = t
-                    return n
+                # Unbekannt-Identitaeten (Bauplan analysen/bauplan_verbraucher_unbekannt.md Stufe V1c): die Mitglieder
+                # jeder Identitaet ueber den EINEN Leser core.unbekanntpool.mitglieder (gebundene Saetze mit der Zeit aus
+                # dem Satz und der Altbestand); tolerant je Zeile (Widerleger phase34 MUSS-2: eine kaputte Pool-Zeile
+                # kostet nur sich selbst, nie die Seite).
+                from core import unbekanntpool as _ubp
+                uid_mitglieder = _ubp.mitglieder(cfg["data_dir"], log=svc.log)
 
                 # --- Auswertung je Person ueber den ganzen Tag (fuer das Personen-Band) ---
                 # User-Vorgabe 25.07.: "Wichtig ist, WER erkannt wurde." Die Zahlen dafuer
@@ -29093,11 +28846,9 @@ def make_handler(svc):
                     if lv["letzt"] >= e["letzt"]:
                         e["letzt"], e["kam"] = lv["letzt"], lv["kam"]
 
-                # Unbekannte KONTEXTABHAENGIG trennen (User-Entscheid 25.07., Kernpunkt): Gesichter, die in
-                # einem Durchgang MIT bestaetigter Person nicht zugeordnet wurden, sind harmlos —
-                # das sind dieselben Leute, nur schlecht getroffen. Sie gehoeren als Fussnote an
-                # den Durchgang. Nur Durchgaenge OHNE jede Bestaetigung sind echte Unbekannte.
-                # Das ist exakt die Regel, die die Szenen-Karenz im Alarmpfad schon anwendet.
+                # Zaehlung der Randspalte: Durchgaenge OHNE jede Bestaetigung (unbek_echt) und nicht zugeordnete
+                # Events in Durchgaengen MIT Bestaetigung (unbek_nebenbei). Die Unbekannt-Karten haengen seit Stufe
+                # V1c nicht mehr daran, sondern an den Identitaeten (unten, _unbekannt_karten).
                 unbek_echt = [s for s in interessant
                               if not s["pers"] and s["unbek"]
                               and s.get("unbek_stark", 1) > 0]   # Issue #16: stille Klasse
@@ -29112,14 +28863,28 @@ def make_handler(svc):
                 from core import unbekanntpool as _ubp
                 pool_tag = _ubp.tages_cluster(cfg["data_dir"], heute0, tag_ende,
                                               gap, log=svc.log)
-                pool_unbek_n = len(pool_tag)
-                pool_auftritte = sum(pool_tag.values())
-                # Widerleger MUSS-2 (Realfall U155): ARCHIVIERTE Nicht-Objekt-Cluster
-                # mit frischer Stuetze im Fenster als eigene Zeile mitzaehlen — der
-                # naechste Reconcile reaktiviert sie automatisch und laut (anlernen),
-                # bis dahin darf die Kachel sie nicht still verstecken.
+                # Bauplan analysen/bauplan_aehnlich.md Entscheid 16 (Fassung 4): die Seite stuft nicht selbst ein, sie
+                # liest das Merkmal „ähnlich zu P“, das der Aufraeum-Schritt des Verbraucher-Fadens an die Identitaet
+                # schreibt (core.aehnlich.merkmal_von). Ein vom Nutzer bestaetigter Fremder bleibt unter Unknown; Kopfzahl
+                # und Saetze der Randspalte zaehlen nur die Identitaeten unter Unknown, die Zeile „Probably recognized“
+                # zaehlt die Personen P. Der rote Hinweis kommt aus dem Zustand des letzten Aufraeum-Schritts.
+                from core import aehnlich as _aeh
+                _aeh_zeilen = _ubp.identitaeten(cfg["data_dir"])
+                # AE5 (Fassung 6, Entscheid 20): Merkmal und Urteil „nicht P“ zusammen (core.aehnlich.vermutlich).
+                aeh_tag = _aehnlich_trennen({uid: _aeh.vermutlich(_aeh_zeilen.get(uid)) for uid in pool_tag},
+                                            uid_mitglieder, szenarien, (heute0, tag_ende))
+                aeh_personen = {m["person"] for m in aeh_tag.values()}
+                aeh_fehler = _aeh.SPEICHER.rot()
+                pool_unbek = {uid: n for uid, n in pool_tag.items() if uid not in aeh_tag}
+                pool_unbek_n = len(pool_unbek)
+                pool_auftritte = sum(pool_unbek.values())
+                # Widerleger MUSS-2 (Realfall U155): ARCHIVIERTE Nicht-Objekt-Identitaeten
+                # mit frischem Mitglied im Fenster als eigene Zeile mitzaehlen — die Kachel
+                # darf sie nicht still verstecken. Entscheid 19 (Bauplan analysen/bauplan_aehnlich.md): Identitaeten, die
+                # als „vermutlich P“ gelten (Merkmal und Urteil zusammen, core.aehnlich.vermutlich), zaehlen hier nicht.
                 pool_archiv_n = _ubp.tages_archiv(cfg["data_dir"], heute0,
-                                                  tag_ende, log=svc.log)
+                                                  tag_ende, log=svc.log,
+                                                  ohne={uid for uid, d in _aeh_zeilen.items() if _aeh.vermutlich(d)})
 
                 # Die vier gleichrangigen Kennzahlkacheln sind am 25.07. entfallen: "People
                 # recognized: 3" ist redundant, sobald drei Personenkarten dastehen, und "With
@@ -29462,7 +29227,6 @@ def make_handler(svc):
                 # denen eine "People recognized: 3" sagt, sind redundant, sobald drei Personen
                 # dastehen. Die Restzahlen wandern in eine ruhige Randspalte.
                 pkarten = []
-                ukarten = []            # .357: Unbekannt-Kacheln in ein EIGENES Band
                 # .412 (§3/§6.6, K1): die Anwesenheits-Tagesdatei GENAU EINMAL je
                 # Aufruf und NUR, wenn sie fuer diesen Tag existiert (Tage vor
                 # .408, aelter als anwesenheit_tage, Tester bis zum Rollout:
@@ -29531,123 +29295,25 @@ def make_handler(svc):
                         f'{_av(p, e["eid"], cls="pk-av", url=_lb)}'
                         f'<div class="pk-txt"><div class="pk-name">{html.escape(p)} {live}</div>'
                         f'<div class="pk-meta">{html.escape(" · ".join(teile))}</div>{mini}</div></a>')
-                # --- Unerkannte Durchgaenge GEHOEREN INS BAND (User 25.07.) ---
-                # "Ich habe oben zwei gesehen, heute waren aber mehr Events." Wer nicht erkannt
-                # wurde, war trotzdem da. Optisch abgesetzt (bernstein statt gruen), und wo unser
-                # Pool die Person schon kennt, mit ihrer Nummer statt als anonymer Haufen:
-                # "dann könnte das auch angezeigt werden als unbekannt Nummer XY".
-                for s in unbek_echt:
-                    # Den Pool ueber ALLE Events des Durchgangs fragen UND ueber alle ENTSCHEIDEN
-                    # (Vor-Release-Pruefung 25.07.: die erste Fassung fragte zwar alle, brach aber
-                    # beim ersten Treffer ab — und weil unbek_eids zeitsortiert ist, gewann immer
-                    # das frueheste Event. Ein Durchgang, dessen erstes Event zur heute angelegten
-                    # U98 gehoerte und dessen zweites zur U19 mit zehn Vorbesuchen, wurde als
-                    # "Unknown 98 · first time here" angezeigt: der Wiederkehrer sah aus wie ein
-                    # Erstbesucher). Jetzt: alle Identitaeten des Durchgangs einsammeln, die mit
-                    # den meisten VOR-Besuchen traegt die Karte, weitere stehen als "+N more" dran.
-                    treffer = {}                             # uid -> erstes Event dieser Identitaet
-                    for _e in (s.get("unbek_eids") or []):
-                        _u = eid2uid.get(str(_e or ""))
-                        if _u and _u not in treffer:
-                            treffer[_u] = _e
-                    if treffer:
-                        vorher_je = {u: _besuche_vorher(u, s["start"]) for u in treffer}
-                        uid = max(treffer, key=lambda u: (vorher_je[u],
-                                                          len(uid_members.get(u) or []), u))
-                        treffer_eid, vorher = treffer[uid], vorher_je[uid]
-                        weitere = len(treffer) - 1
-                        # Gesichter ALLER Identitaeten des Durchgangs — Reihenfolge nach NUTZEN
-                        # (User-Test 25.07.: "die ungelernten Gesichter der Testperson fehlen"): die
-                        # Mitgliederliste ist einfuegesortiert, also AELTESTE zuerst — bei U34
-                        # mit 27 Mitgliedern fielen die frischen Gesichter des angeklickten
-                        # Durchgangs hinter der Anzeige-Kappe ab. Jetzt: erst die Gesichter
-                        # DIESES Durchgangs, dann der Rest neueste zuerst (Zeit steckt im
-                        # Event-ID-Praefix).
-                        _im_pass = set(str(e) for e in (s.get("unbek_eids") or []))
-                        def _ts(m):
-                            try:
-                                return float(str(m).split("-", 1)[0])
-                            except ValueError:
-                                return 0.0
-                        _roh = []
-                        for _u in sorted(treffer, key=lambda u: (u != uid,)):
-                            for _m in (uid_members.get(_u) or []):
-                                if _m not in _roh:
-                                    _roh.append(_m)
-                        alle_member = (sorted((m for m in _roh if str(m) in _im_pass),
-                                              key=_ts, reverse=True)
-                                       + sorted((m for m in _roh if str(m) not in _im_pass),
-                                                key=_ts, reverse=True))
-                    else:
-                        uid = treffer_eid = None
-                        vorher = weitere = 0
-                        alle_member = []
-                    _uk_anker = ' id="unidentified"' if not _uk_gesehen else ''
-                    _uk_gesehen = True
-                    name = (f"Unknown {uid.lstrip('U')}" if uid else "Unknown") \
-                        + (f" +{weitere} more" if weitere else "")
-                    zusatz = (f'<div class="pk-kam">seen {vorher}× before</div>' if vorher > 0 else
-                              ('<div class="pk-kam">first time here</div>' if uid else
-                               # Umbenannt (.54, Issue-#5-Zusage): 'not grouped yet' las sich
-                               # als Kamera-Aussage — gemeint ist das fehlende Besucher-Profil.
-                               '<div class="pk-kam">no visitor profile yet</div>'))
-                    if s.get("gt_fremd"):   # F2/A2: vom User bestaetigter Fremder, ruhig ausweisen
-                        zusatz += '<div class="pk-kam badge-gtfremd">confirmed stranger</div>'
-                    spanne = (_hhmm(s["start"]) if (s["ende"] - s["start"]) < 60
-                              else f'{_hhmm(s["start"])}–{_hhmm(s["ende"])}')
-                    nk = len(s["kams"])
-                    _z = treffer_eid or s.get("unbek_eid")
-                    ziel = f'/event/{urllib.parse.quote(str(_z))}' if _z else "/unbekannte"
-                    # .234 (User 17.08.: "bei Unbekannt kommt was anderes, das ist
-                    # nicht konsistent"): die Karte ist wieder ein LINK wie bei den
-                    # bekannten Personen — Ziel ist das Besucher-Profil auf
-                    # /unbekannte (dort leben Gesichter, Benennen, Zusammenfuehren;
-                    # maechtiger als die alte 12-Bilder-Klappe vom 25.07., die es
-                    # damals mangels Unbekannt-Seite brauchte). EIN Klick-Gesetz
-                    # fuer alle Karten.
-                    klappe = ""
-                    # "N faces" war falsch: `unbek` zaehlt EVENTS, nicht Gesichter (heute 43 Events
-                    # gegen 657 in ihren faces-Feldern). Die faces-Zahl selbst taugt hier ohnehin
-                    # nicht als Aussage, weil darin SCRFD-Fehldetektionen stecken (Gras, Laub,
-                    # Radkasten — genau der Grund, aus dem die alte Kennzahlkachel abgeschafft
-                    # wurde). Also die Zahl nennen, die stimmt, und sie richtig benennen.
-                    if uid:
-                        # .239 (User-Korrektur: 'ich dachte, ich sehe die
-                        # Bilder vom Lauf 12:19'): die Karte IST ein Lauf —
-                        # der Klick oeffnet GENAU diesen Lauf mit seinen
-                        # Gesichtern und der Zuweisung, kein Identitaets-Dossier.
-                        huelle_auf = (f'<a{_uk_anker} class="pk pk-unbek" '
-                                      f'title="Open this walk-through" '
-                                      f'href="/auftritte?u={urllib.parse.quote(str(uid))}'
-                                      f'&amp;tag={tag_dt.strftime("%Y-%m-%d")}'
-                                      f'&amp;p={s["start"]}">')
-                    else:
-                        huelle_auf = f'<a{_uk_anker} class="pk pk-unbek" href="{ziel}">'
-                    huelle_zu = '</a>'
-                    _av_bild = (f'<img src="/anlern/crops/{urllib.parse.quote(str(alle_member[0]))}.jpg" '
-                                f'loading="lazy" alt="">' if alle_member else "?")
-                    # .357 (User 27.08.: "diese Seite zwischen den Recognized
-                    # und dem Past muss da rein"): Unbekannt-Kacheln stehen
-                    # NICHT mehr am Ende des Recognized-Bandes zwischen den
-                    # bekannten Personen. Die Ueberschrift dort behauptet
-                    # "Recognized", und ausgerechnet die Kachel, die
-                    # Aufmerksamkeit verdient, sah aus wie jede andere.
-                    ukarten.append(
-                        f'<div class="pkwrap">'
-                        f'{huelle_auf}'
-                        f'<div class="pk-av pk-av-unbek">{_av_bild}</div>'
-                        f'<div class="pk-txt"><div class="pk-name">{html.escape(name)}</div>'
-                        f'<div class="pk-meta">{s["unbek"]} event{"s" if s["unbek"] != 1 else ""} · '
-                        f'{spanne} · {nk} camera{"s" if nk != 1 else ""}</div>{zusatz}</div>'
-                        f'{huelle_zu}'
-                        f'{klappe}</div>')
+                # --- Unbekannt-Karten (Bauplan analysen/bauplan_verbraucher_unbekannt.md Stufe V1c Punkt 1) ---
+                # Je Identitaet mit Sichtung am Tag EINE Karte unter "People", unabhaengig vom Urteil des
+                # Durchgangs (die Regel vom 25.07. "Unbekannte in Durchgaengen mit bestaetigter Person sind
+                # harmlos" ist mit Entscheid 12 abgeloest). Die Identitaeten sind dieselben wie die Zahl der
+                # Randspalte (tages_cluster: aktiv, kein Objekt); Aufbau wie die Personenkarten.
+                ukarten = _unbekannt_karten(uid_mitglieder, pool_unbek, szenarien, (heute0, tag_ende), gap,
+                                            tag_dt.strftime("%Y-%m-%d"), _nk is not None)
+                # Bauplan analysen/bauplan_aehnlich.md Entscheide 8 und 16: je Person P eine Karte „probably P“ aus allen
+                # ihren Identitaeten des Tags, Sichtungen ausgewaehlt wie bei den Unbekannt-Karten (Fenster, Area); eine
+                # Identitaet steht nur in einem Block.
+                akarten = _unbekannt_karten(uid_mitglieder, aeh_tag, szenarien, (heute0, tag_ende), gap,
+                                            tag_dt.strftime("%Y-%m-%d"), _nk is not None, aehnlich=aeh_tag)
                 # Leerzustand nach URSACHE (Plan-QS P.6): ein frisches System hat drei sehr
                 # verschiedene Gruende fuer eine leere Seite, und nur einer davon ist "heute war
                 # niemand da". Ohne Frigate-URL kann nie etwas kommen; ohne Referenzgesichter
                 # wird KEIN Event verarbeitet (der Wizard behauptete frueher das Gegenteil).
                 # .357: der Leerzustand haengt an BEIDEN Baendern — ein Tag mit
                 # ausschliesslich unbekannten Besuchern ist nicht leer.
-                _keine = not pkarten and not ukarten
+                _keine = not pkarten and not ukarten and not akarten
                 if _keine and not (cfg.get("frigate_url") or "").strip():
                     band = webui.leer(_sprache.t("leer.frigate"),
                                       _sprache.t("leer.frigate_hinweis"))
@@ -29663,8 +29329,8 @@ def make_handler(svc):
                         band += (f'<details class="hk-mehr hk-personen"><summary>'
                                  f'{html.escape(_sprache.t("heute.person.mehr", n=len(pkarten), m=len(_pk_rest)))}'
                                  f'</summary><div class="pband">{"".join(_pk_rest)}</div></details>')
-                elif ukarten:
-                    band = ""          # nur Unbekannte: das eigene Band traegt den Tag
+                elif ukarten or akarten:
+                    band = ""          # nur Unbekannte oder Aehnliche: die eigenen Baender tragen den Tag
                 else:
                     # B9-Ganz-Satz-Umbau wie oben: zwei volle Satz-Schluessel.
                     band = webui.leer(_sprache.t("leer.band_heute") if ist_heute
@@ -29715,6 +29381,11 @@ def make_handler(svc):
                        if pool_unbek_n else
                        f'<div class="ts-val" title="{html.escape(_sprache.t("heute.rand.unbek_title"), quote=True)}">'
                        f'{len(unbek_echt)}</div>')
+                    # Bauplan analysen/bauplan_aehnlich.md Entscheide 8 und 16: die Personen P des Tags als eigene Zeile
+                    # mit Link auf den Block „Probably recognized“, nur wenn es welche gibt.
+                    + (f'<div class="ts-meta"><a class="ts-link" href="#similar">'
+                       f'{html.escape(_sprache.t_n("heute.aehnlich.rand", len(aeh_personen)))}</a></div>'
+                       if aeh_personen else '')
                     # EINE widerspruchsfreie Kachel (Widerleger MUSS-1, Realfall 12.08.:
                     # "none unidentified" stand direkt unter "16 unknown persons today"):
                     # neben der Pool-Zeile erscheint die Pass-Zeile nur, wenn sie selbst
@@ -29722,12 +29393,11 @@ def make_handler(svc):
                     # Pool-Zahl zu widersprechen. Ohne Pool-Zeile alte Anzeige.
                     + (f'<div class="ts-meta">{html.escape(unbek_txt)}</div>'
                        if unbek_echt or not (pool_unbek_n or pool_archiv_n) else '')
-                    # Widerleger MUSS-2 (U155): Archiv-Cluster mit frischer Fenster-
-                    # Stuetze als eigene Zeile — nie still verstecken; der naechste
-                    # Reconcile (Reorganize) reaktiviert sie automatisch und laut.
+                    # Widerleger MUSS-2 (U155): Archiv-Identitaeten mit frischem Fenster-
+                    # Mitglied als eigene Zeile — nie still verstecken (Stufe V1c: der
+                    # Satz zum Reorganize entfaellt, der Verbraucher belebt sie selbst).
                     + (f'<div class="ts-meta">{pool_archiv_n} more in archived '
-                       f'cluster{"s" if pool_archiv_n != 1 else ""} — reactivated by '
-                       f'the next reorganize</div>' if pool_archiv_n else '')
+                       f'cluster{"s" if pool_archiv_n != 1 else ""}</div>' if pool_archiv_n else '')
                     # Der "normally the same people"-Satz war im Besuchsfall die Luege:
                     # mit frischen Unbekannt-Stuetzen im Tag heisst es ehrlich, dass
                     # mindestens ein Teil davon unbekannte Besucher sind.
@@ -29775,7 +29445,7 @@ def make_handler(svc):
                           # waere schlimmer als der leere Kopf — sie sagt, dass
                           # noch analysiert wird und gleich mehr kommen kann.
                           f'<div class="listhead'
-                          f'{"" if (pkarten or not ukarten or live_offen) else " leerkopf"}" '
+                          f'{"" if (pkarten or not (ukarten or akarten) or live_offen) else " leerkopf"}" '
                           # .412 (§3): Block "People — N recognized · sorted by
                           # last seen" (Worker UND Live-Namen); Anker bleibt.
                           f'id="recognized"><h3>{html.escape(_sprache.t("heute.block.personen"))}</h3>'
@@ -29798,25 +29468,25 @@ def make_handler(svc):
                           # drin ist — ein leerer Abschnitt an einem ruhigen Tag
                           # stumpft ab, und dann uebersieht man ihn genau an dem
                           # Tag, an dem er gefuellt ist.
-                          # DIE ZAHL NENNT DURCHGAENGE, NICHT BESUCHER, und das
-                          # ist bewusst: je Durchgang haengt hier genau eine
-                          # Kachel, und die laesst sich NICHT ehrlich zu
-                          # Besuchern entdoppeln. Beides ist am Echtbestand
-                          # belegt — am 24.08. zwei Kacheln derselben Kamera
-                          # 6 min auseinander (knapp ueber szenario_gap_min,
-                          # sehr wahrscheinlich EINE Person: die Zahl uebertriebe),
-                          # am 01.08. eine Kachel "Unknown 188 +1 more", die
-                          # mindestens zwei Pool-Identitaeten traegt (die Zahl
-                          # untertriebe). Sie ist also weder Ober- noch
-                          # Untergrenze fuer Personen — dann darf sie auch nicht
-                          # so heissen. Die Nebenspalte zaehlt weiter PERSONEN
-                          # und liegt deshalb auseinander, mal darueber, mal
-                          # darunter; zwei Zahlen, zwei Fragen, jede richtig
-                          # benannt.
+                          # Stufe V1c: je Identitaet eine Karte, die Zahl nennt die
+                          # Unbekannt-Identitaeten mit Sichtung am Tag (unter einer
+                          # Area nur die mit Sichtung in deren Durchgaengen).
+                          # Bauplan analysen/bauplan_aehnlich.md Entscheide 8, 9 und 16: der Block „Probably
+                          # recognized“ zwischen People und Unknown, nur mit Karten oder Fehler; scheiterte der letzte
+                          # Aufraeum-Schritt, steht unter seinem Kopf der rote Hinweis (die Merkmale sind dann die des
+                          # letzten gelungenen Laufs).
+                          + (f'<div class="listhead" id="similar">'
+                             f'<h3>{html.escape(_sprache.t("heute.aehnlich.titel"))}</h3>'
+                             + (f'<span class="cnt">{html.escape(_sprache.t_n("heute.aehnlich.cnt", len(akarten)))}'
+                                f'</span>' if akarten else '')
+                             + '</div>'
+                             + (f'<p class="hk-aeh-fehler">{html.escape(_sprache.t("heute.aehnlich.fehler"))}</p>'
+                                if aeh_fehler else '')
+                             + (f'<div class="pband">{"".join(akarten)}</div>' if akarten else '')
+                             if akarten or aeh_fehler else '')
                           + (f'<div class="listhead" id="unknown"><h3>Unknown</h3>'
-                             f'<span class="cnt">{len(ukarten)} '
-                             f'{"pass" if len(ukarten) == 1 else "passes"} '
-                             f'with nobody recognized</span></div>'
+                             f'<span class="cnt">'
+                             f'{html.escape(_sprache.t_n("heute.unbek.cnt", len(ukarten)))}</span></div>'
                              f'<div class="pband">{"".join(ukarten)}</div>'
                              if ukarten else '')
                           + f'<div class="listhead" id="passes"><h3>Passes</h3>'
@@ -29874,9 +29544,7 @@ def make_handler(svc):
                             {k: cfg["benennung_" + k] for k in
                              ("k_je_bin", "yaw_grenze", "dup_sim", "vorschlag_schwelle")},
                             _ll.person_norm,
-                            referenz=_bn.referenz_zentroide(
-                                os.path.join(cfg["data_dir"], "clips",
-                                             "refcache.npz"), cfg["modell"]),
+                            referenz=_bn.referenz_zentroide(cfg["data_dir"], cfg["modell"]),
                             luma_grenzen=luma_grenzen_aus_cfg(cfg),
                             kat_latten=_kk_ernte.katalog_latten(cfg))
                         # .224: Fluss-Kontext (Group x of y + naechste offene
@@ -29911,9 +29579,7 @@ def make_handler(svc):
                 try:
                     _q = _bn2.personen_quelle(
                         master_persons(cfg), saetze, _ll.person_norm,
-                        referenz=_bn2.referenz_zentroide(
-                            os.path.join(cfg["data_dir"], "clips",
-                                         "refcache.npz"), cfg["modell"]))
+                        referenz=_bn2.referenz_zentroide(cfg["data_dir"], cfg["modell"]))
                     for s in saetze:
                         if s.get("status") in ("benannt", "uebernommen", "verworfen"):
                             continue
@@ -30072,8 +29738,20 @@ def make_handler(svc):
                 return self._send(200, webui.layout(
                     _sprache.t("livekalib.titel", name=kamera),
                     "/kalibrierung", inhalt, self._banner()))
+            if path.startswith("/lernlauf/satz/"):
+                # E3a-1c (Bauplan Referenz-Quelle einbauen, J1): das Bild eines
+                # Lauf-Funds aus seinem Satz — Profilbild ueber Lese-Stufe d,
+                # geprueft gegen seine Pruefsumme. Die Kennung prueft das Modul.
+                m = re.match(r"^/lernlauf/satz/([0-9a-f]+)$", path)
+                if m:
+                    from core import refquelle as _rq_bild
+                    _b = _rq_bild.read_image({"data_dir": cfg["data_dir"]}, m.group(1), "profil")
+                    if _b and _b["daten"] is not None and _b["fehler"] is None:
+                        return self._send(200, _b["daten"],
+                                          "image/png" if _b["datei"].endswith(".png") else "image/jpeg")
+                return self._send(404, "not found", "text/plain")
             if path.startswith("/lernlauf/crop/"):
-                # Lauf-Crops (Containment wie /refs/: realpath-Wache gegen Traversal).
+                # Lauf-Crops (Containment: realpath-Wache gegen Traversal).
                 m = re.match(rf"^/lernlauf/crop/({_reg.LAUF_ID_RE})/({_reg.DATEI_RE}\.jpg)$", path)   # .362: zentrale Quelle; das alte L-only-Literal liess B-Laeufe bildlos
                 if m:
                     # Phase 1 des intelligenten Lernens nimmt auch Vorratsbilder in
@@ -30243,7 +29921,8 @@ def make_handler(svc):
                 import webui
                 # PE1 Baustein 2 (stufe2.md): Person-Learn-Wizard, Anzeige-
                 # Teil — Lauf/Worker-Job folgt als Baustein 3. Personen-
-                # Quelle = Master-Ordner unter <data_dir>/faces (wie :508).
+                # Quelle = master_persons (seit E3b-2a die Referenz-Quelle,
+                # Lese-Stufe b, nicht mehr die Ordner unter <data_dir>/faces).
                 from routes import personwizard as _r_pw
                 _qd = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
                 try:
@@ -30252,12 +29931,7 @@ def make_handler(svc):
                     _pn = 0
                 _pn = max(0, _pn)
                 _pp = (_qd.get("person", [""])[0] or "").strip()
-                _fd = os.path.join(cfg["data_dir"], "faces")
-                try:
-                    _pers = sorted(d for d in os.listdir(_fd)
-                                   if os.path.isdir(os.path.join(_fd, d)))
-                except OSError:
-                    _pers = []
+                _pers = master_persons(cfg)
                 # .147: "FREMD" ist reservierte Wahl (Fremd-Sammel-Lauf)
                 if _pp and _pp != "FREMD" and _pp not in _pers:
                     _pp = ""
@@ -30371,9 +30045,7 @@ def make_handler(svc):
                     if _zp and _wart:
                         try:
                             from core import benennung as _bnz
-                            _rz = _bnz.referenz_zentroide(
-                                os.path.join(cfg["data_dir"], "clips",
-                                             "refcache.npz"), cfg["modell"])
+                            _rz = _bnz.referenz_zentroide(cfg["data_dir"], cfg["modell"])
                             _zents = ([_rz[_zp]] if _zp in _rz else []) + [
                                 s.get("zentroid") for s in saetze
                                 if s.get("status") == "benannt"
@@ -30432,10 +30104,7 @@ def make_handler(svc):
                                  ("k_je_bin", "yaw_grenze", "dup_sim",
                                   "vorschlag_schwelle")},
                                 _ll.person_norm,
-                                referenz=_bn.referenz_zentroide(
-                                    os.path.join(cfg["data_dir"], "clips",
-                                                 "refcache.npz"),
-                                    cfg["modell"]),
+                                referenz=_bn.referenz_zentroide(cfg["data_dir"], cfg["modell"]),
                                 luma_grenzen=luma_grenzen_aus_cfg(cfg),
                                 kat_latten=_kk_ernte.katalog_latten(cfg))
                         except Exception as e:
@@ -30446,7 +30115,7 @@ def make_handler(svc):
                     # .266 'Sicht = Pruefergebnis': liegt fuer die offene
                     # Gruppe ein Sichtungs-Cache (echte Crop-Messung), wird
                     # die Flaeche AUS ihm gebaut (Matrix-Anwendung ohne
-                    # Modell/Embedder: refs aus dem refcache, Person =
+                    # Modell/Embedder: refs aus der Referenz-Quelle, Person =
                     # benannt oder looks-like-Vorschlag); ohne Cache zeigt
                     # die Flaeche den checking-Zustand und das JS stoesst
                     # /lernlauf/sichtung an.
@@ -30461,15 +30130,6 @@ def make_handler(svc):
                                     .get("lauf_id", "")))
                             _si = _al2.sichtung_lesen(aktuelle, _ldir,
                                                       cfg["modell"])
-                            # .267: fehlt der refcache (Uebernahme loescht
-                            # ihn), zaehlt der Sichtungs-Cache als NICHT
-                            # bereit — der Warte-Zustand laesst den Endpunkt
-                            # beides nachbauen, statt hier ohne Identitaets-
-                            # Achse 'reference check' zu behaupten.
-                            if not os.path.exists(os.path.join(
-                                    cfg["data_dir"], "clips",
-                                    "refcache.npz")):
-                                _si = None
                             if _si is not None:
                                 # .267 (Widerleger): Identitaets-Achse NUR
                                 # mit vom User BENANNTER Person — der blosse
@@ -30622,10 +30282,15 @@ def make_handler(svc):
                 from core import unbekanntpool as _ubp
                 _ub_tag = datetime.datetime.now().replace(hour=0, minute=0,
                                                           second=0, microsecond=0)
-                _ub_k = len(_ubp.tages_cluster(
+                # Bauplan analysen/bauplan_aehnlich.md Entscheid 21 (Fassung 6): eine Identitaet mit Merkmal „ähnlich zu
+                # P“ (Merkmal und Urteil zusammen, core.aehnlich.vermutlich) zaehlt hier nicht als Unbekannte.
+                from core import aehnlich as _aeh_l
+                _ub_zeilen = _ubp.identitaeten(cfg["data_dir"])
+                _ub_k = sum(1 for _u in _ubp.tages_cluster(
                     cfg["data_dir"], _ub_tag.timestamp(),
                     (_ub_tag + datetime.timedelta(days=1)).timestamp(),
-                    int(cfg.get("szenario_gap_min", 5)) * 60, log=svc.log))
+                    int(cfg.get("szenario_gap_min", 5)) * 60, log=svc.log)
+                    if not _aeh_l.vermutlich(_ub_zeilen.get(_u)))
                 # .246: Easy sieht den Vier-Kachel-Fluss mit EINEM Start-Knopf
                 # (kalibrierte Defaults; Kappe = Pagination-Deckel), der volle
                 # Planer bleibt als Expert-Tiefe darunter (User-Brief 17.08.:
@@ -30664,17 +30329,6 @@ def make_handler(svc):
                     warnung = "DRIFT GUARD RED after the last add — details on the System page!"
                 inhalt = _r_lernen.render(offen, master_persons(cfg), cfg["data_dir"])
                 return self._send(200, webui.layout(_sprache.t("nav.lernen"), "/lernen", inhalt, warnung or self._banner()))
-            if path.startswith("/refs/"):              # Master-Referenzbilder (read-only, Containment)
-                # ~ auch hier (Issue-#11-Klasse): uebernommene Lern-Referenzen behalten
-                # den Crop-Namen (lern_<anker>_<eid>~N.jpg) — ohne ~ waeren sie auf der
-                # Personen-Seite unsichtbar, derselbe 404 wie bei /anlern/crops/.
-                m = re.match(rf"^/refs/({_reg.PERSON_RE})/({_reg.DATEI_RE}\.(?:jpg|jpeg|png|webp))$", path, re.I)
-                if m:
-                    base = os.path.realpath(os.path.join(cfg["data_dir"], "faces"))
-                    p = os.path.realpath(os.path.join(base, m.group(1), m.group(2)))
-                    if p.startswith(base + os.sep) and os.path.isfile(p):
-                        return self._send(200, open(p, "rb").read(), "image/jpeg")
-                return self._send(404, "not found", "text/plain")
             if path == "/anlernen":     # Cluster (alter Ephemeral-Clustering-Weg) von Unknown abgeloest (22.07.)
                 return self._send(302, "", "text/plain", location="/unbekannte")
             if path == "/unbekannte":                    # persistente Unbekannt-Identitaeten (User 20.07.)
@@ -30689,11 +30343,18 @@ def make_handler(svc):
                 _qu = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
                 _so = (_qu.get("sort") or [_r_unbek.SORT[0]])[0]
                 _fi = (_qu.get("f") or [_r_unbek.FILTER[0]])[0]
+                from core import unbekanntpool as _ubp_s     # Stufe V1c: Saetze ueber das Modul
+                # Bauplan analysen/bauplan_aehnlich.md Entscheid 19 (Fassung 6): die Gruppe „Vermutlich P“ ueber der Liste
+                # liest Merkmal und Urteil (routes/unbekannte.py); der rote Hinweis kommt aus dem Zustand des letzten
+                # Aufraeum-Schritts (ED008).
+                from core import aehnlich as _aeh_s
                 inhalt = _r_unbek.render(anlernen.lade_unbekannte(),
                                          anlernen.lade_gesichter(),
                                          anlernen.lade_unbekannt_vorschlaege(),
                                          master_persons(cfg),
-                                         sortierung=_so, filter_=_fi)
+                                         sortierung=_so, filter_=_fi,
+                                         mitglieder=_ubp_s.mitglieder(cfg["data_dir"], log=svc.log),
+                                         aeh_fehler=_aeh_s.SPEICHER.rot())
                 return self._send(200, webui.layout(_sprache.t("nav.unbekannte"), "/unbekannte", inhalt, self._banner()))
             if path == "/anwesenheit":                   # Anwesenheitsseite (Z4, .409; User 02.09.)
                 import webui
@@ -30846,11 +30507,12 @@ def make_handler(svc):
                 # Gelesen wird derselbe Bericht wie auf /qualitaet (KEIN
                 # zweiter Lauf, kein zweiter Speicher); fehlt er, bleibt die
                 # Karte wie bisher.
+                # E3b-2b: gelesen ueber anlernen.qs_lesen (Laufprotokoll plus Urteile
+                # der aktiven Saetze im Katalog).
                 _qs_p = {}
                 try:
                     import anlernen as _al_g
-                    with open(_al_g.QS_PATH) as _fq:
-                        _qs_p = (json.load(_fq) or {}).get("personen") or {}
+                    _qs_p = _al_g.qs_lesen().get("personen") or {}
                 except Exception:                        # noqa: BLE001
                     _qs_p = {}
                 inhalt = _r_gesichter.render(
@@ -30874,7 +30536,7 @@ def make_handler(svc):
                                   "application/json")
             if path == "/qualitaet/status":           # .310 Fortschritts-Widget der Bestands-QS (kein Seiten-Reload)
                 import anlernen
-                _lp = os.path.join(anlernen.ANLERN, "refs_qs_lauf.json")
+                _lp = anlernen.QS_LAUF_PATH              # E3b-2b: Laufstand unter neuem Namen
                 lauf = None
                 if os.path.exists(_lp):
                     try:
@@ -30891,7 +30553,7 @@ def make_handler(svc):
                 aktiv = aktiv or bool(getattr(svc, "_qs_laeuft", False))
                 fertig_ts = 0
                 try:
-                    fertig_ts = os.path.getmtime(anlernen.QS_PATH)
+                    fertig_ts = os.path.getmtime(anlernen.QS_PROTOKOLL_PATH)
                 except OSError:
                     _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
                 return self._send(200, json.dumps(
@@ -30903,16 +30565,18 @@ def make_handler(svc):
                 qp = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
                 p = (qp.get("person", [""])[0] or "").strip()
                 # .510/J18 (d): „fertig" heisst LAUFT NICHT MEHR, nicht „Daten
-                # sind da". Bis .509 fragte diese Antwort, ob refcache-Eintrag
-                # UND Vorschlagsdatei existieren — solange der Seitenaufruf
-                # beides selbst anstiess, war das dasselbe. Ohne die Automatik
-                # waere es ein Poll, der nie fertig wird: eine Person ohne
-                # Vorschlagsdatei haette den Browser fuer immer alle 3 s fragen
-                # lassen. Gefragt wird jetzt der LAUF-Zustand des Dienstes.
+                # sind da". Bis .509 fragte diese Antwort, ob der Eintrag in der
+                # damaligen Matrizen-Datei UND die Vorschlagsdatei existieren —
+                # solange der Seitenaufruf beides selbst anstiess, war das
+                # dasselbe. Ohne die Automatik waere es ein Poll, der nie fertig
+                # wird: eine Person ohne Vorschlagsdatei haette den Browser fuer
+                # immer alle 3 s fragen lassen. Gefragt wird der LAUF-Zustand
+                # des Dienstes, und seit E3c-2 nur noch der Bestands-Suche: die
+                # Unbekannt-Suche liest die Referenz-Quelle direkt und hat
+                # keinen Lauf, auf den die Seite warten muesste.
                 try:
                     _st = svc.such_stand(p)
-                    fertig = not (_st["vorschlaege"]["laeuft"]
-                                  or _st["unbekannt"]["laeuft"])
+                    fertig = not _st["vorschlaege"]["laeuft"]
                 except Exception:
                     _st = {}
                     fertig = True     # im Zweifel neu laden: die Seite zeigt
@@ -30944,17 +30608,21 @@ def make_handler(svc):
                 kand = anlernen.aehnliche_unbekannte(person)
                 vs = anlernen.lade_vorschlaege(person)
                 # Vorrat B4: Quelle 3 direkt aus den vorrat.jsonl der EXISTIE-
-                # RENDEN Laeufe (kein Misch-File — Konzept-QS W1.14/W2.4/W2.10);
-                # bereits uebernommene Angebote via refs_meta ausgeblendet.
+                # RENDEN Laeufe (kein Misch-File — Konzept-QS W1.14/W2.4/W2.10).
                 va = []
                 try:
-                    from core import vorrat as _vor, refbeiwert as _rb
-                    _bw, _f = _rb.beiwerte(os.path.join(cfg["data_dir"], "faces"),
-                                           cfg.get("modell"))
-                    _genommen = {(z.get("eid"), z.get("datei_v"))
-                                 for z in _bw.values() if z.get("datei_v")}
-                    va = [z for z in _vor.angebote_lesen(cfg["data_dir"], _genommen)
-                          if z.get("person") == person]
+                    from core import vorrat as _vor
+                    # E3a-1d: ein Angebot mit ref_id ist uebernommen, wenn sein Satz
+                    # nicht mehr Kandidat ist (Lese-Stufe b); das Bild kommt aus dem
+                    # Satz (routes/aehnliche.py, Lese-Stufe d). Seit E3b-2a entfaellt
+                    # die Ausblendung ueber die Beiwerte in refs_meta: ein Angebot
+                    # ohne ref_id (Lauf vor dieser Version) gilt als nicht uebernommen.
+                    from core import refquelle as _rq_va
+                    _kat_va = _rq_va.read_catalog({"data_dir": cfg["data_dir"]})["eintraege"]
+                    va = [z for z in _vor.angebote_lesen(cfg["data_dir"])
+                          if z.get("person") == person
+                          and (not z.get("ref_id") or (_kat_va.get(z["ref_id"]) or {})
+                               .get("status", {}).get("status") == "kandidat")]
                 except Exception as _e:
                     svc.log.error(f"stock offers unavailable ({type(_e).__name__}: {_e})")
                 inhalt, refresh = _r_aehnliche.render(person, kand, vs, cfg["data_dir"],
@@ -30987,16 +30655,13 @@ def make_handler(svc):
                     ansicht = "eignung"
                 if ansicht not in ("verwechslung", "eignung", "doppel"):
                     ansicht = "verwechslung"
-                qs = {}
-                if os.path.exists(anlernen.QS_PATH):
-                    try:
-                        qs = json.load(open(anlernen.QS_PATH))
-                    except Exception:
-                        qs = {}
+                # E3b-2b: Laufprotokoll plus Urteile der aktiven Saetze, gefiltert beim
+                # Lesen (anlernen.qs_lesen); ein Lesefehler ist laut, nie eine leere Seite.
+                qs = anlernen.qs_lesen()
                 # .273 Bestands-QS: Lauf-Fortschritt (Datei existiert nur
                 # waehrend eines Laufs bzw. nach einem Fehlschlag).
                 lauf = None
-                _lp = os.path.join(anlernen.ANLERN, "refs_qs_lauf.json")
+                _lp = anlernen.QS_LAUF_PATH
                 if os.path.exists(_lp):
                     try:
                         lauf = json.load(open(_lp))
@@ -31331,21 +30996,16 @@ def make_handler(svc):
                 from core import livewache as _lw_e
                 from core import personmodell as _pm_e
                 _dflt, _g = _lw_e.guards_lesen(cfg, log=_logbuch.NULL)
-                # .207: Referenzen liegen unter faces/ (nicht refs/ — die
-                # Kachel zeigte 0/0, waehrend /gesichter 4 Personen listete)
-                _refs, _nb = os.path.join(cfg["data_dir"], "faces"), 0
-                _np = [d for d in (os.listdir(_refs)
-                                   if os.path.isdir(_refs) else [])
-                       if os.path.isdir(os.path.join(_refs, d))]
-                for _d in _np:
-                    _nb += sum(1 for f in os.listdir(
-                        os.path.join(_refs, _d))
-                        if f.lower().endswith(_reg.BILD_ENDUNGEN))
+                # .207: die Kachel zeigte 0/0, waehrend /gesichter 4 Personen
+                # listete. Seit E3b-2a (Bauplan Referenz-Quelle einbauen) aus
+                # der Referenz-Quelle ueber master_umfang, dieselbe Auswahl wie
+                # /gesichter — kein Lesen von faces/ mehr.
+                _np, _nb = master_umfang(cfg)
                 inhalt = _r_erk.render(
                     cfg, svc.CONFIG_WHITELIST, _kette.lage(cfg),
                     {"an": sum(1 for g in _g.values() if g.get("enabled")),
                      "eingerichtet": len(_g)},
-                    {"personen": len(_np), "bilder": _nb},
+                    {"personen": _np, "bilder": _nb},
                     _pm_e.status_lesen(cfg["data_dir"]),
                     n_areas=len(_areas_mod.normalisieren(cfg.get("areas"))))
                 return self._send(200, webui.layout(
@@ -31353,38 +31013,26 @@ def make_handler(svc):
             if path == "/faces":                   # Faces-Startseite (.220,
                 import webui, anlernen             #  Mockup-Abnahme 16.08.)
                 from routes import faces as _r_fc
-                _fd = os.path.join(cfg["data_dir"], "faces")
-                # Avatar je Person: juengstes AKTIVES Referenzbild laut
-                # refs_meta; Fallback erste Datei des Ordners.
-                _neu = {}
+                from core import refquelle as _rq_fc
+                # Seit dem Nachtrag E3b-2a (Bauplan Referenz-Quelle einbauen,
+                # Stufe E3 Punkt 2, Entscheid 6): Avatar je Person ist der
+                # Satz mit der juengsten aktiven Bindung (Lese-Stufe b, Feld
+                # personen, erste ref_id), die Zahl der Referenzen kommt aus
+                # master_umfang — kein Lesen von faces/ und refs_meta mehr.
+                _pl = [(_p, _rids[0]) for _p, _rids in sorted(
+                    _rq_fc.read_catalog({"data_dir": cfg["data_dir"]})["personen"].items())]
+                _nb = master_umfang(cfg)[1]
+                # Stufe V1c: Identitaeten mit mindestens einem Mitglied (Satz oder
+                # Altbestand) ueber den einen Leser core.unbekanntpool.mitglieder.
+                # Bauplan analysen/bauplan_aehnlich.md Entscheid 21 (Fassung 6, W5 V10): Identitaeten mit Merkmal „ähnlich zu
+                # P“ (Merkmal und Urteil zusammen) zieht der Zaehler ab; besucher, objekt und archivierte zaehlt er wie
+                # bisher.
+                from core import unbekanntpool as _ubp_fc
+                from core import aehnlich as _aeh_fc
                 try:
-                    for _l in open(os.path.join(_fd, "refs_meta.jsonl")):
-                        try:
-                            _e = json.loads(_l)
-                        except ValueError:
-                            continue
-                        if _e.get("aktiv") and _e.get("person") and _e.get("datei"):
-                            _alt = _neu.get(_e["person"])
-                            if not _alt or _e.get("ts", 0) > _alt[0]:
-                                _neu[_e["person"]] = (_e.get("ts", 0), _e["datei"])
-                except OSError:
-                    _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
-                _pl, _nb = [], 0
-                for _p in sorted(os.listdir(_fd) if os.path.isdir(_fd) else []):
-                    _pd = os.path.join(_fd, _p)
-                    if not os.path.isdir(_pd):
-                        continue
-                    _bl = sorted(f for f in os.listdir(_pd)
-                                 if f.lower().endswith(_reg.BILD_ENDUNGEN))
-                    if not _bl:
-                        continue
-                    _nb += len(_bl)
-                    _av = (_neu.get(_p) or (0, ""))[1]
-                    _pl.append((_p, _av if _av in _bl else _bl[0]))
-                try:
-                    _nu = sum(1 for u in anlernen.lade_unbekannte()
-                              if isinstance(u, dict)
-                              and isinstance(u.get("members"), list))
+                    _zl_fc = _ubp_fc.identitaeten(cfg["data_dir"])
+                    _nu = sum(1 for _u, _ms in _ubp_fc.mitglieder(cfg["data_dir"], _zl_fc, log=svc.log).items()
+                              if _ms and not _aeh_fc.vermutlich(_zl_fc.get(_u)))
                 except Exception:
                     _nu = 0
                 try:
@@ -31392,11 +31040,12 @@ def make_handler(svc):
                               if d.get("status") == "offen")
                 except Exception:
                     _lo = 0
-                # .273 Bestands-QS-Karte: Stand der letzten Pruefung
+                # .273 Bestands-QS-Karte: Stand der letzten Pruefung (E3b-2b: ueber
+                # anlernen.qs_lesen, entfernte Saetze zaehlen nicht mehr mit)
                 _qs_stand = None
                 try:
-                    if os.path.exists(anlernen.QS_PATH):
-                        _q = json.load(open(anlernen.QS_PATH))
+                    _q = anlernen.qs_lesen()
+                    if _q.get("ts"):
                         _qs_stand = {"ts": _q.get("ts"),
                                      "funde": (len(_q.get("ungeeignet") or [])
                                                + len(_q.get("doppel") or [])
@@ -31497,9 +31146,16 @@ def make_handler(svc):
                 return
             if path == "/backup_voll":         # PE6: Full-Backup als EIN Archiv (Umzugs-faehig)
                 # Inhalt: Config-Export (inkl. wirksamer Verbindungs-Werte) + alles
-                # Gelernte/Handarbeit: config/, faces/, learn/, personlern/ (ohne
-                # werkstatt-Scratch), state/. BEWUSST NICHT drin: clips/ (Cache) und
-                # events/ (abgeleitete Analyse-Historie) — der Karten-Text sagt das.
+                # Gelernte/Handarbeit: config/, faces/ (bis zum Umzug E4 liegt dort der
+                # Altbestand), learn/, personlern/ (ohne werkstatt-Scratch), state/ (mit
+                # state/archiv/: archivierte Saetze und die Seiten-Kopien frueherer
+                # Wiederherstellungen, I1, I10), dazu aus refquelle/ die Sicherungs-Auswahl
+                # des Moduls (core.refquelle.backup_paths, V1, Entscheid 5): der Katalog und
+                # die Saetze mit Status referenz oder altbestand, je Pfad ein Mitglied mit
+                # seinem Pfad relativ zum data_dir; Kandidaten (wieder erzeugbar), die
+                # Sperre und Hilfsordner bleiben draussen. BEWUSST NICHT drin: clips/
+                # (Cache) und events/ (abgeleitete Analyse-Historie) — der Karten-Text sagt das.
+                from core import refquelle as _rq_sicherung
                 import io as _io
                 import shutil as _sh
                 import tarfile
@@ -31520,6 +31176,8 @@ def make_handler(svc):
                             if os.path.isdir(p):
                                 tar.add(p, arcname=teil, filter=lambda t:
                                         None if "/werkstatt" in t.name else t)
+                        for rel in _rq_sicherung.backup_paths(cfg):
+                            tar.add(os.path.join(cfg["data_dir"], rel), arcname=rel)
                     groesse = tmpf.tell()
                     tmpf.seek(0)
                     self.send_response(200)
@@ -31616,9 +31274,16 @@ def make_handler(svc):
                 # Feldbefunde G3: `ok` steht an EINER Stelle (Service.health_ok), die
                 # Pruef-Zeile `PRUEF health` liest dieselbe; dazu zaehlt seitdem der
                 # Grund `stillstand` des Stoerungswaechters (Punkt 2).
+                from core import refquelle as _rq_health
+                from core import aehnlich as _aeh_health
                 h = {"ok": svc.health_ok(_serie),
                      "startup_fails": _sf,
                      "analyse_serie": _serie,
+                     # Bauauftrag E4-3 (Bauplan Referenz-Quelle einbauen, Stufe E4 Punkt 2, V2): der
+                     # Umzug der Referenz-Quelle — Phase (gruen, laeuft, rot, ausstehend,
+                     # kein_altbestand), Schritt und Stand der laufenden Standdatei, das Ergebnis
+                     # gekuerzt ohne Namen, Archiv, Zeit. Rot macht `ok` rot (health_ok, ED008).
+                     "umzug": _rq_health.migration_state(cfg),
                      "version": os.environ.get("SUSLIK_VERSION", "dev"),
                      "processed": len(svc.processed),
                      # E0: die Platz-Vergabe sichtbar machen. Ohne diese Zeile waere ein
@@ -31669,13 +31334,16 @@ def make_handler(svc):
                      # Bauplan K3, Stufe KP3: wie oft ein Ereignis seit dem Start ohne fruehes Ende
                      # lief (Personenzahl unbrauchbar oder Fehler der eigenen Logik), je Grund.
                      "personenzahl": _personenzahl.stand(),
-                     # .536 (B3.4): das Sammeln laeuft in Haeppchen — dann muss
-                     # von aussen sichtbar sein, ob gerade eine Kette laeuft, wie
-                     # viele Ereignisse noch offen sind und mit welchen ZAHLEN die
-                     # Anlage rechnet (Rechenfaktor und kalter Prolog werden je
-                     # Backend gemessen, die Config traegt nur die Startwerte).
-                     # Ohne diese Zeile waere die Packung eine Behauptung.
-                     "sammeln": svc.sammel_zustand(),
+                     # Stufe V1b (Bauplan analysen/bauplan_verbraucher_unbekannt.md, W24): der
+                     # Verbraucher der Unbekannt-Stapel — Faden, Lesestand, offene Zeilen der
+                     # Schlange, letzte Runde, letzter Fehler. Das Feld `sammeln` ist mit dem
+                     # Szenario-Sammeln entfallen.
+                     "unbekannt": svc.unbekannt_stand(),
+                     # Bauplan analysen/bauplan_aehnlich.md Entscheide 9 und 17 (ED008, W3 V6): der Zustand des letzten
+                     # Aufraeum-Schritts „ähnlich zu P“ im Verbraucher-Faden — rot nach einem Fehler mit dem letzten
+                     # Fehler und seiner Zeit, sonst Zeit, Dauer, Zahlen und Grenzen des letzten Laufs. Rot macht `ok` rot
+                     # (health_ok).
+                     "aehnlich": _aeh_health.SPEICHER.stand(),
                      # .544 Teil 5b: wie oft der Nachhol-Lauf eine Luecke im
                      # Live-Betrieb genutzt hat (leere Warteschlange, freier
                      # Platz). Auf einer ruhigen Anlage bleibt die Zahl 0 — dort
@@ -31687,6 +31355,10 @@ def make_handler(svc):
                      # Feldbefunde Punkt 3 (O296): endgueltig aufgegebene Ereignisse
                      # des Nachhol-Laufs seit Dienststart, je Grund.
                      "nachhol": svc.nachhol_verluste_stand(),
+                     # Bauplan MQTT-Stummwache, Entscheid 2 (Vorfall O632): spricht Frigate ueber MQTT,
+                     # seit wann nicht, und was der Abgleich nachgereicht hat. null im Poll-Betrieb;
+                     # stumm macht `ok` rot (health_ok, ED008).
+                     "frigate_mqtt": svc.frigate_mqtt_stand(),
                      # .340: Start-Nachholen — Schalter UND Fortschritt aus DERSELBEN
                      # Quelle wie der Banner (K1: die Anzeige kann dem Verhalten nicht
                      # widersprechen). Supportfaelle schicken /health, nicht 400 Logzeilen.
@@ -31903,15 +31575,12 @@ def make_handler(svc):
                 except Exception as e:
                     fehler = f"{type(e).__name__}: {e}"
                 cache = _sr.vorpruefung_lesen()
-                # Nur Urteile zeigen, deren Bild sich seit der Messung NICHT geaendert
-                # hat — ein ausgetauschtes Referenzbild darf nie das alte Urteil erben.
+                # E3b-3a: der Laufstand fuehrt das Urteil je ref_id (ein Satz ist
+                # unveraenderlich, ein neues Bild ist eine neue ref_id ohne Urteil);
+                # die Seite schluesselt es ueber die eine Schluesselregel.
                 offen = _sr.vorpruefung_offen(pruefbar, cache)
-                _offen_k = {_sr.schluessel(p, d) for p, d in offen}
-                urteile = {}
-                for _p, _d in kand:
-                    _s = _sr.schluessel(_p, _d)
-                    if _s not in _offen_k and _s in cache:
-                        urteile[_s] = cache[_s]
+                urteile = {_sr.schluessel(_p, _rid): cache[_rid]
+                           for _p, _rid in kand if cache.get(_rid)}
                 pstat = _sr.vorpruefung_status()
                 # Hintergrund-Lauf anstossen (Muster job(): Thread + Subprozess, der
                 # Detektor bleibt AUSSERHALB des Dienst-Prozesses). Ein Lauf zur Zeit.
@@ -33365,14 +33034,7 @@ def startup_selfcheck(svc):
         # Personenliste, und Tester haengen ihr Startlog oeffentlich an Issues.
         # Auch der FAIL-Zweig darf str(e) nicht mehr durchreichen: eine OSError
         # traegt den Pfad und damit den Personennamen.
-        n_pers, n_bild, n_leer = master_umfang(cfg)
-        if not n_pers:
-            erg("warn", "0 — empty master; enroll via the setup wizard")
-        elif n_leer:
-            erg("warn", f"{n_pers} persons, {n_bild} reference images, "
-                        f"{n_leer} without any reference image")
-        else:
-            erg("ok", f"{n_pers} persons, {n_bild} reference images, coverage ok")
+        erg(*master_start_line(cfg))
     except Exception as e:
         erg("FAIL", f"{type(e).__name__} while reading the face master")
     # 7) Benchmark — Vertrauen: WAS habe ich getestet + wie schnell je Device (zeitbudgetiert -> bounded)
@@ -33415,7 +33077,15 @@ def startup_selfcheck(svc):
     #    nie Richtigkeit (Feldfall: eine Gen8-iGPU bindet, ist 5,9x schneller als ihre
     #    CPU und rechnet die Feature-Norm um 105,276 daneben).
     schritt(8, "compute", "does each model compute on its device what the CPU computes?")
-    # E3.1: ZUERST den Worker-Prozess hochfahren — hier, im Boot-Exklusivfenster.
+    # Bauplan analysen/bauplan_fix_0113.md Stufe F1 Punkt 2 (Entscheid 1): als ERSTES prueft der Dienst, ob der
+    # Referenzbestand noch alt ist; dann laeuft das Migrationsskript als eigener Prozess mit Frist
+    # (migration_timeout_s), und erst danach startet der Worker. Ein Fehler der Migration reisst den Start nie, er
+    # steht laut im Log; die Nachrechnung des Altbestands gibt es nicht mehr (Entscheid 4, archiviert).
+    try:
+        svc.referenzquelle_umzug_im_boot()
+    except Exception as e:                            # Diagnose reisst den Start nie
+        erg("warn", f"reference source migration skipped: {type(e).__name__}: {str(e)[:80]}")
+    # E3.1: dann den Worker-Prozess hochfahren — hier, im Boot-Exklusivfenster.
     # Er baut dabei seine Kompilate (ohne Cache gemessen 24-36 s); dieser Posten
     # gehoert in den Boot und nicht in das erste Ereignis des Tages. Die Rechenprobe
     # laeuft danach ALS JOB in genau diesem Prozess, statt einen dritten
@@ -33792,6 +33462,7 @@ def main():
     svc.start_plattenwache()                      # .313 Issue #25
     svc.start_aufraeumer()                        # Bauplan Feldstau Stufe 1: raeumt auf Anstoss, nie im Analyse-Faden
     svc.aufraeumen_anstossen()                    # erster Lauf gleich nach dem Start
+    svc.start_unbekannt_verbraucher()             # Stufe V1b: Verbraucher der Unbekannt-Stapel, erste Runde gleich
     svc.start_selbstwache()                       # R(b) 01.09.: eigener /health-Puls, harter Exit bei Voll-Haenger
     svc.start_melde_spur()                        # W3 Stufe 1 (.399): Versand-Nachwehen raus aus dem Analyse-Lock
     svc.start_event_queue()                       # W3 Stufe 1 (.399): geordnete Event-Queue statt Timer-Herde

@@ -2,22 +2,27 @@
 
 ANLASS (Betreiber 21.08.2026, gebaut 18.09.2026 in .542): einen Tippfehler im
 Personennamen korrigieren. Das Vorbild `/person_loeschen` (verifyd.py) ist
-bewusst KEIN Muster: es verschiebt den Ordner in den Papierkorb, und alles
-andere filtert danach implizit ueber die Existenz (die Person ist weg).
+bewusst KEIN Muster: es nimmt die Person ganz weg (bis E3b-3b schob es ihren
+Ordner in den Papierkorb, seit I1 des Bauplans
+analysen/bauplan_refquelle_einbau.md wandert jeder ihrer Referenz-Saetze ins
+Archiv), und alles andere filtert danach implizit ueber die Existenz.
 Beim UMBENENNEN kehrt sich das um — die Person existiert weiter, nur unter
 einem neuen Namen, und jeder Speicher mit dem Altnamen wird zur stillen
 Waise. Die vier Stellen, die den Unterschied zwischen "funktioniert" und
-"verliert still" machen: `faces/refs_meta.jsonl` (traegt fuer Vorrats-
-Referenzen den EINZIGEN Embedding-Vektor), die Event-Crop-Dateinamen (fuenf
-reine Substring-Leser, kein Index daneben), `state/lernlauf/B*/vorrat.jsonl`
-(offene Angebote samt Beiwert) und `personlern/<P*>/manifest.jsonl` (das
-Trainings-Label — es erzeugt die Alt-Klasse ohne jede Nutzeraktion wieder).
+"verliert still" machen: der Katalog der Referenz-Quelle
+`refquelle/katalog.jsonl` (er allein bindet die Saetze an den Namen, die
+Saetze selbst tragen keinen; bis E3b-3b war das `faces/refs_meta.jsonl` mit
+dem einzigen Embedding-Vektor der Vorrats-Referenzen), die
+Event-Crop-Dateinamen (fuenf reine Substring-Leser, kein Index daneben),
+`state/lernlauf/B*/vorrat.jsonl` (offene Angebote samt Beiwert) und
+`personlern/<P*>/manifest.jsonl` (das Trainings-Label — es erzeugt die
+Alt-Klasse ohne jede Nutzeraktion wieder).
 
 DECKUNGS-VERTRAG (die eigentliche Arbeit, K3-Regel aus CLAUDE.md /
 qs_ebenen.md): `BESTAENDE` unten ist die EINE Aufzaehlung der
 namenstragenden Speicher — Kennung, Ort, Urteil, zustaendiger Migrator.
-Sie ist gleichzeitig die Probenliste der Gate-Stufe
-(`tools/gate/umbenennen_deckung.py`). Ohne diesen Vertrag wird der naechste
+Sie ist gleichzeitig die Probenliste der Gate-Probe
+(`tools/gate/umbenennen_probe.py`). Ohne diesen Vertrag wird der naechste
 neue Speicher genauso vergessen, wie `state/anwesenheit/` in der
 Alt-Inventur vom 21.08. fehlte (es gab ihn damals noch nicht) — und ein
 vergessener Speicher ist hier kein Schoenheitsfehler, sondern ein stiller
@@ -29,7 +34,7 @@ Aufrufer ab. Ein Merge hat eine andere Semantik je Bestand (zwei
 Referenz-Historien in einem Journal-Schluesselraum, zwei Galerien, zwei
 Modell-Klassen) und ist ein eigener Zug.
 
-REIHENFOLGE (bewusst, s. `umbenennen()`): Ordner zuerst (ab da liefert
+REIHENFOLGE (bewusst, s. `umbenennen()`): der Katalog zuerst (ab da liefert
 `master_persons` den neuen Namen, alle NEU startenden Analysen arbeiten
 richtig), Akten-Append ZULETZT (er faengt die Zeilen mit, die eine waehrend
 des Zugs noch laufende Analyse mit dem Altnamen geschrieben hat).
@@ -52,10 +57,10 @@ _log = _logbuch.logger(__name__)
 # Reservierte Namen: weder Quelle noch Ziel eines Umbenennens.
 #   FREMD          — Klassenkennung des Koerper-Modells (core/personmodell,
 #                    core/personlauf), kein Personenname.
-#   refs_meta.jsonl / refs_mess.json — liegen FLACH in faces/ neben den
-#                    Personenordnern; ein Personenordner mit diesem Namen
-#                    wuerde den Katalog ueberschreiben.
-RESERVIERT = ("FREMD", "refs_meta.jsonl", "refs_mess.json")
+# Seit E3b-3b (Bauplan analysen/bauplan_refquelle_einbau.md, Entscheid 6) ohne
+# refs_meta.jsonl und refs_mess.json: ein Name ist kein Ordner mehr, der eine
+# flache Katalogdatei in faces/ ueberschreiben koennte.
+RESERVIERT = ("FREMD",)
 
 
 # --------------------------------------------------------------- Deckungs-Vertrag
@@ -71,12 +76,10 @@ RESERVIERT = ("FREMD", "refs_meta.jsonl", "refs_mess.json")
 #                   vergessen hat.
 BESTAENDE = (
     # Kennung                 Ort (relativ zu data_dir)             Urteil    Migrator
-    ("faces_ordner",          "faces/<person>/",                    "muss",   "ordner_umbenennen"),
-    ("refs_meta",             "faces/refs_meta.jsonl",              "muss",   "refs_meta_uebertragen"),
-    ("refs_mess",             "faces/refs_mess.json",               "kann",   "refs_mess_umschreiben"),
-    ("refcache",              "clips/refcache.npz",                 "muss",   "refcache_umschreiben"),
-    ("refs_qs",               "learn/refs_qs.json",                 "muss",   "refs_qs_bereinigen"),
-    ("vorschlaege",           "learn/vorschlaege_<person>.json",    "muss",   "vorschlaege_umbenennen"),
+    # E3b-3b: Katalog ueber das Modul, Saetze lassen, kein Name — die Saetze unter
+    # refquelle/<ref_id>/ tragen keinen Personennamen (I9), nur der Katalog bindet.
+    ("katalog",               "refquelle/katalog.jsonl",            "muss",   "katalog_umbenennen"),
+    ("vorschlaege",          "learn/vorschlaege_<person>.json",    "muss",   "vorschlaege_umbenennen"),
     ("gesichter_pool",        "learn/gesichter.jsonl",              "kann",   "gesichter_nn_umschreiben"),
     ("enroll_queue",          "learn/enroll/queue.jsonl",           "muss",   "enroll_queue_umschreiben"),
     ("anker",                 "state/anker.jsonl",                  "muss",   "anker_umschreiben"),
@@ -95,10 +98,6 @@ BESTAENDE = (
     ("event_kandidaten",      "events/<eid>/kandidaten.jsonl",      "muss",   "event_durchgang"),
     ("deckung",               "state/deckung.jsonl",                "muss",   "deckung_korrigieren"),
     ("ground_truth",          "state/ground_truth.jsonl",           "muss",   "ground_truth_korrigieren"),
-    ("sync_abwahl",           "state/sync_abwahl.json",             "muss",   "sync_merker_umschreiben"),
-    ("sync_ablehnungen",      "state/sync_ablehnungen.json",        "muss",   "sync_merker_umschreiben"),
-    ("sync_vorpruefung",      "state/sync_vorpruefung.json",        "kann",   "sync_merker_umschreiben"),
-    ("sync_auswahl_lauf",     "state/sync_auswahl_lauf.json",       "kann",   "sync_merker_umschreiben"),
     # --- bewusst LASSEN (Begruendung ist Teil des Vertrags) --------------------
     ("deckung_sublabel",      "state/deckung.jsonl (sublabel, frigate.label)",
                               "lassen", None),
@@ -110,7 +109,7 @@ BESTAENDE = (
     ("personlern_kontrolle",  "personlern/kontrolle/<pass>/*.jsonl", "lassen", None),
     ("protokolle",            "state/*.log, events/<eid>/analyze.log, logs/",
                               "lassen", None),
-    ("backups_papierkorb",    "backups/master_*.tar.gz, trash/person_*",
+    ("backups_papierkorb",    "backups/master_*.tar.gz, trash/person_* (nur noch Altbestand)",
                               "lassen", None),
     ("messmaterial",          "state/kalibriersatz/*, messungen/*",  "lassen", None),
     ("frigate_gegenseite",    "Frigate: /api/faces, geschriebene sub_label",
@@ -143,7 +142,9 @@ GRUENDE_LASSEN = {
                   "Beweislage.",
     "backups_papierkorb": "Zeitschnitte — sie sollen den damaligen Zustand "
                           "zeigen, sonst sind sie als Wiederherstellungsquelle "
-                          "wertlos.",
+                          "wertlos. Der Papierkorb trash/ wird seit E3b-3b "
+                          "nicht mehr beschrieben (I1: Referenzen gehen ins "
+                          "Archiv, die Saetze dort tragen keinen Namen).",
     "messmaterial": "eingefrorene Messartefakte (Erb-Urteil-Regel: nicht "
                     "nachtraeglich glaetten).",
     "frigate_gegenseite": "die Frigate-API kennt kein Rename (nur create/"
@@ -248,147 +249,24 @@ def _schluessel_tauschen(d, alt, neu):
     return True
 
 
-# ---------------------------------------------------------- Migratoren: Referenzen
-def ordner_umbenennen(data_dir, alt, neu, log=None):
-    """faces/<alt> -> faces/<neu>. UEBER EINEN ZWISCHENNAMEN: auf einem
-    case-INSENSITIVEN Volume (SMB-Share, Docker-Volume ueber einen macOS-/
-    Windows-Wirt — bei fremden Installationen realistisch) ist
-    os.rename("A", "a") je Plattform ein No-op oder ein Fehler. suslik wird
-    als Companion veroeffentlicht; der Umweg kostet nichts und traegt dort."""
-    q = os.path.join(data_dir, "faces", alt)
-    z = os.path.join(data_dir, "faces", neu)
-    if not os.path.isdir(q):
-        raise FileNotFoundError(f"faces/{alt} fehlt")
-    zwischen = os.path.join(data_dir, "faces", f".rename-{int(time.time())}-{os.getpid()}")
-    os.rename(q, zwischen)
-    try:
-        os.rename(zwischen, z)
-    except OSError:
-        os.rename(zwischen, q)                      # zurueck, nichts halb Fertiges
-        raise
-    return 1
-
-
-def refs_meta_uebertragen(data_dir, alt, neu, log=None):
-    """faces/refs_meta.jsonl ist ein JOURNAL — Vertrag: "wird nur ANGEHAENGT,
-    nie umgeschrieben" (sync_refs.py). Gelesen wird last-wins je
-    (person, datei). Deshalb ANHAENGEN statt Rewrite: je Eintrag des Altnamens
-    eine Zeile unter dem neuen Namen, `emb`/`emb_modell` MITGENOMMEN (fuer
-    Vorrats-Referenzen ist das der EINZIGE Embedding-Vektor), und den
-    Alt-Eintrag mit `aktiv: false` schliessen.
-    TOMBSTONES ebenfalls uebernehmen: sonst holt der naechste Frigate-Import
-    Bilder zurueck, die der Nutzer geloescht hat."""
-    pfad = os.path.join(data_dir, "faces", "refs_meta.jsonl")
-    if not os.path.exists(pfad):
-        return 0
-    letzte = {}
-    with open(pfad, encoding="utf-8") as f:
-        for zeile in f:
-            try:
-                d = json.loads(zeile)
-            except Exception:
-                _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
-                continue
-            if d.get("person") == alt and d.get("datei"):
-                letzte[d["datei"]] = d              # last-wins je Datei
-    if not letzte:
-        return 0
-    ts = round(time.time(), 1)
-    zeilen = []
-    for datei, d in sorted(letzte.items()):
-        neu_z = dict(d)
-        neu_z["person"] = neu
-        neu_z["ts"] = ts
-        neu_z["umbenannt_von"] = alt
-        zeilen.append(neu_z)
-        if d.get("aktiv", True):
-            # Alt-Schluessel schliessen, damit lade_meta ihn nicht mehr als
-            # aktiv fuehrt (der Ordner ist weg, die Datei liegt jetzt unter neu).
-            zeilen.append({"ts": ts, "person": alt, "datei": datei,
-                           "aktiv": False, "grund": "renamed", "nach": neu})
-    with open(pfad, "a", encoding="utf-8") as f:
-        for z in zeilen:
-            f.write(json.dumps(z, ensure_ascii=False) + "\n")
-        f.flush()
-        os.fsync(f.fileno())
-    return len(letzte)
-
-
-def refs_mess_umschreiben(data_dir, alt, neu, log=None):
-    """faces/refs_mess.json: bilder[PERSON][DATEI] — Mess-Sidecar des Katalogs
-    (core/refmess). Reiner Cache; re-key ist billiger als ein Neumesslauf."""
-    pfad = os.path.join(data_dir, "faces", "refs_mess.json")
-    d = _json_lesen(pfad, {})
-    bilder = d.get("bilder")
-    if not isinstance(bilder, dict) or alt not in bilder:
-        return 0
-    n = len(bilder.get(alt) or {})
-    _schluessel_tauschen(bilder, alt, neu)
-    _atomar.json_schreiben(pfad, d)
+# ---------------------------------------------------------- Migrator: Referenzen
+def katalog_umbenennen(data_dir, alt, neu, log=None):
+    """refquelle/katalog.jsonl ueber das Modul (Bauauftrag E3b-3b, Bauplan
+    analysen/bauplan_refquelle_einbau.md, Entscheide 6 und 10, I9): je aktiver
+    Referenz der Person eine Bindung-Zeile mit dem neuen Namen; kein Satz wird
+    angefasst, die Saetze tragen keinen Namen. Ab dieser Zeile liefert
+    master_persons den neuen Namen, und jeder Leser sieht die Aenderung ueber
+    die Stand-Kennung des Katalogs (I2). Ohne aktive Referenz gibt es die Person
+    nicht (wie frueher ohne Ordner): laut abgelehnt, der Zug bricht ab.
+    -> Zahl der geschriebenen Bindung-Zeilen."""
+    from core import refquelle as _rq
+    n = _rq.rename_person({"data_dir": data_dir}, alt, neu)
+    if not n:
+        raise LookupError("the person has no active reference set in the catalog")
     return n
 
 
-def refcache_umschreiben(data_dir, alt, neu, log=None):
-    """clips/refcache.npz: Array-Schluessel + "§meta" (erwartete Dateiliste je
-    Person) + "§rows" (Datei je Matrixzeile) re-keyen.
-
-    PFLICHT, nicht Kuer: `core/livewache.referenzen_laden` prueft den Cache nur
-    gegen "§modell", NICHT gegen die Dateilisten — ein stehen gelassener Cache
-    liefert der Live-Engine also weiter die ALTEN Personen-Keys, und die Wache
-    meldet den Altnamen samt MQTT-Payload und Beweisbild-Dateinamen. Dass die
-    Engine ohnehin neu startet, genuegt nicht: sie liest denselben Cache.
-    -> Zahl der uebertragenen Referenzzeilen; -1, wenn der Cache verworfen
-    werden musste (der Aufrufer stoesst dann den Neuaufbau an)."""
-    import numpy as np
-    ziel = os.path.join(data_dir, "clips", "refcache.npz")
-    if not os.path.exists(ziel):
-        return 0
-    try:
-        z = np.load(ziel, allow_pickle=True)
-        meta_roh = z["§meta"] if "§meta" in z.files else (
-            z["meta"] if "meta" in z.files else None)
-        meta = json.loads(str(meta_roh)) if meta_roh is not None else {}
-        refs = {p: np.asarray(z[p], np.float32) for p in z.files
-                if p not in ("meta", "§meta")}
-        want = {k: list(w) for k, w in meta.items() if not str(k).startswith("§")}
-        rows = meta.get("§rows")
-        if alt not in refs and alt not in want:
-            return 0                                # Person war nicht im Cache
-        n = len(want.get(alt) or refs.get(alt, ()))
-        _schluessel_tauschen(refs, alt, neu)
-        _schluessel_tauschen(want, alt, neu)
-        if isinstance(rows, dict):
-            _schluessel_tauschen(rows, alt, neu)
-        _neu = {**want, "§modell": str(meta.get("§modell", ""))}
-        if isinstance(rows, dict):
-            _neu["§rows"] = rows
-        _atomar.schreiben(
-            ziel, lambda f: np.savez(f, **{"§meta": json.dumps(_neu)}, **refs),
-            suffix=".npz", binaer=True)
-        return n
-    except Exception as e:
-        if log:
-            log.error(f"rename: refcache re-key failed ({type(e).__name__}: {e}) — "
-                f"cache discarded, it will be rebuilt")
-        try:
-            os.remove(ziel)
-        except OSError:
-            pass
-        return -1
-
-
 # --------------------------------------------------------------- Migratoren: learn
-def refs_qs_bereinigen(data_dir, alt, neu, log=None):
-    """learn/refs_qs.json: der Bericht ist person-keyed in neun Achsen
-    (Deckungsvertrag QS_BERICHT_FELDER). Statt neun Achsen von Hand zu
-    re-keyen, wird die Person mit dem VORHANDENEN chirurgischen Bereiniger
-    aus dem Bericht genommen — der Aufrufer stoesst danach `qs_neu_starten()`
-    an. Das ist der Weg, den /person_loeschen seit .511 schon geht; er kennt
-    alle Achsen und bleibt beim naechsten Achsen-Zubau richtig."""
-    import anlernen
-    return 1 if anlernen.qs_bericht_bereinigen(alt) else 0
-
-
 def vorschlaege_umbenennen(data_dir, alt, neu, log=None):
     """learn/vorschlaege_<person mit _>.json: der Name steckt im DATEINAMEN
     und im Feld "person". Die Abbildung ' ' -> '_' ist NICHT injektiv
@@ -777,57 +655,11 @@ def ground_truth_korrigieren(data_dir, alt, neu, log=None):
     return len(raus)
 
 
-# ------------------------------------------------------ Migratoren: Sync-Merker
-def sync_merker_umschreiben(data_dir, alt, neu, log=None):
-    """Die vier Frigate-Sync-Merker mit "<Person>/<Datei>"-Schluesseln
-    (sync_refs.schluessel — der Schluessel wird NIE selbst zusammengebaut):
-
-    - sync_abwahl.json     MUSS: ein bewusster Nutzer-Entscheid ("nie
-      exportieren"), nicht regenerierbar. Ohne Migration schickt der naechste
-      Auto-Export genau die Bilder nach Frigate, die zurueckgehalten wurden.
-    - sync_ablehnungen.json MUSS: ohne Migration versucht der Export wieder und
-      wieder dieselben Bilder, die Frigate deterministisch ablehnt.
-    - sync_vorpruefung.json KANN: reiner Cache, invalidiert sich ueber den
-      mtime-Lookup selbst — wird trotzdem umgehaengt, weil ein Neulauf einen
-      vollen Embedder-Durchgang kostet.
-    - sync_auswahl_lauf.json KANN: kurzlebiger Ein-Lauf-Zustand; er wird
-      umgehaengt statt still fallen gelassen.
-    -> {kennung: Zahl der umgehaengten Eintraege}"""
-    import sync_refs
-    erg = {}
-    for name in ("sync_abwahl", "sync_ablehnungen", "sync_vorpruefung"):
-        pfad = os.path.join(data_dir, "state", f"{name}.json")
-        d = _json_lesen(pfad, {})
-        if not d:
-            erg[name] = 0
-            continue
-        n, raus = 0, {}
-        for k, v in d.items():
-            person, _, datei = str(k).partition("/")
-            if person == alt and datei:
-                raus[sync_refs.schluessel(neu, datei)] = (
-                    {**v, "person": neu} if isinstance(v, dict) and "person" in v else v)
-                n += 1
-            else:
-                raus[k] = v
-        if n:
-            _atomar.json_schreiben(pfad, raus)
-        erg[name] = n
-    pfad = os.path.join(data_dir, "state", "sync_auswahl_lauf.json")
-    liste = _json_lesen(pfad, [])
-    n = 0
-    if liste:
-        raus = []
-        for e in liste:
-            if isinstance(e, (list, tuple)) and len(e) == 2 and e[0] == alt:
-                raus.append([neu, e[1]])
-                n += 1
-            else:
-                raus.append(e)
-        if n:
-            _atomar.json_schreiben(pfad, raus)
-    erg["sync_auswahl_lauf"] = n
-    return erg
+# Migratoren: Sync-Merker — entfallen mit E3b-3a (Bauplan analysen/bauplan_refquelle_einbau.md,
+# Entscheid 10, I3): Abwahl, Frigate-Ablehnung und Export-Merker haengen als Katalogzeilen an der
+# ref_id, nicht am Namen; der Laufstand der Vorpruefung ist je ref_id geschluesselt; Bericht,
+# Fortschritt und Auswahl eines Exportlaufs tragen den Personennamen nur als Anzeige bzw. fuer
+# genau einen Lauf. Ein Umbenennen hat dort nichts umzuhaengen.
 
 
 # ------------------------------------------------------------------- Protokoll
@@ -878,11 +710,7 @@ def ziel_pruefen(neu, alt, personen_kanonisch, person_re):
 # Ablauf — wer einen Bestand ergaenzt, ergaenzt ihn hier UND im Vertrag oben,
 # und die Gate-Stufe haelt beides gegeneinander.
 ABLAUF = (
-    "ordner_umbenennen",
-    "refs_meta_uebertragen",
-    "refcache_umschreiben",
-    "refs_mess_umschreiben",
-    "refs_qs_bereinigen",
+    "katalog_umbenennen",
     "vorschlaege_umbenennen",
     "gesichter_nn_umschreiben",
     "enroll_queue_umschreiben",
@@ -895,7 +723,6 @@ ABLAUF = (
     "personlern_status_umschreiben",
     "personlern_live_umschreiben",
     "live_meldungen_umschreiben",
-    "sync_merker_umschreiben",
 )
 
 
@@ -907,9 +734,11 @@ def umbenennen(data_dir, alt, neu, umfeld=None, puls=None, log=None):
        Reload-Weg; laeuft sie weiter, meldet sie den Altnamen samt
        MQTT-Payload und Beweisbild-Dateinamen. Ausserdem haengt sie an
        live/meldungen.jsonl an, das hier umgeschrieben wird.
-    2. faces/<alt> -> faces/<neu> ZUERST: ab diesem Moment liefert
+    2. Der Katalog ZUERST (seit E3b-3b ueber das Modul, Bindung-Zeilen mit dem
+       neuen Namen, kein Satz angefasst): ab diesem Moment liefert
        master_persons den neuen Namen, also arbeiten alle NEU startenden
-       Analysen und Subprozesse richtig. Alles Weitere haengt daran.
+       Analysen und Subprozesse richtig; der Worker liest die Referenzen bei
+       neuer Stand-Kennung selbst neu. Alles Weitere haengt daran.
     3. Die uebrigen Bestaende in der Reihenfolge von `ABLAUF`.
     4. Der Event-Durchgang in ZWEI Runden: erst alle Ordner, dann noch einmal
        nur die, die seit dem Start des Zugs geschrieben wurden. Das faengt
@@ -920,12 +749,12 @@ def umbenennen(data_dir, alt, neu, umfeld=None, puls=None, log=None):
        Zeilen, die eine nachlaufende Analyse waehrend des Zugs mit dem
        Altnamen geschrieben hat.
     6. Protokoll, dann Engine wieder starten und die Nachlaeufe anstossen
-       (QS-Bericht, Koerper-Training, ggf. refcache-Neuaufbau).
+       (QS-Bericht, Koerper-Training).
 
     umfeld = Dienst-Griffe, alle optional (Injektionsreinheit — dieses Modul
     importiert nichts aus verifyd): akte_lock, akte_markieren, engine_stoppen,
-    engine_starten, worker_stoppen, last_seen_umhaengen, qs_neu, training,
-    refcache_neu. Fehlt ein Griff, wird der Schritt uebersprungen und das im
+    engine_starten, worker_stoppen, last_seen_umhaengen, qs_neu, training.
+    Fehlt ein Griff, wird der Schritt uebersprungen und das im
     Bericht vermerkt (`uebersprungen`) — nie still.
     -> Bericht (dict), der auch ins Protokoll geht."""
     u = dict(umfeld or {})
@@ -960,9 +789,9 @@ def umbenennen(data_dir, alt, neu, umfeld=None, puls=None, log=None):
         except Exception as e:
             bericht["fehler"][name] = f"{type(e).__name__}: {e}"
             _melde(f"step {name} FAILED: {type(e).__name__}: {e}", stufe=_logbuch.ERROR)
-            if name == "ordner_umbenennen":
-                # Ohne den Ordner gibt es die Person unter dem neuen Namen gar
-                # nicht — weitermachen hiesse, den Bestand zu zerlegen.
+            if fn is katalog_umbenennen:
+                # Ohne die Bindung im Katalog gibt es die Person unter dem neuen
+                # Namen gar nicht — weitermachen hiesse, den Bestand zu zerlegen.
                 bericht["abbruch"] = name
                 return bericht
 
@@ -1018,12 +847,5 @@ def umbenennen(data_dir, alt, neu, umfeld=None, puls=None, log=None):
                 g()
             except Exception as e:
                 bericht["fehler"][name] = f"{type(e).__name__}: {e}"
-    if bericht["zahlen"].get("refcache_umschreiben") == -1:
-        g = _griff("refcache_neu")
-        if g:
-            try:
-                g()
-            except Exception as e:
-                bericht["fehler"]["refcache_neu"] = f"{type(e).__name__}: {e}"
     _melde(f"done in {bericht['dauer_s']}s — {bericht['zahlen']}")
     return bericht

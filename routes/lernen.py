@@ -11,6 +11,8 @@ import urllib.parse
 
 import webui
 
+from core import refquelle
+from core.lernlauf import bild_url
 from core.sprache import t
 
 
@@ -37,8 +39,16 @@ def render(offen, personen, data_dir):
     opts = "".join(f"<option>{html.escape(p)}</option>" for p in personen)
     karten = []
     for d in offen:
+        # Stufe V1b (Bauplan analysen/bauplan_verbraucher_unbekannt.md, Entscheid 12): der Lernvorschlag ohne Person
+        # (FREMD) ist abgebaut; alte offene Eintraege ohne Person bleiben in der Queue liegen und werden nicht gezeichnet.
+        if not d.get("person"):
+            continue
         ed = str(d["eid"]).replace("/", "_")
-        bild = (f'<img src="/events/{urllib.parse.quote(ed)}/{urllib.parse.quote(d["datei"])}" '
+        # E3a-3 (Bauplan Referenz-Quelle einbauen): ein Vorschlag mit ref_id zeigt das Profilbild seines
+        # Satzes (Lese-Stufe d), ein alter (J9) seinen Ausschnitt im Ereignis-Ordner.
+        src = (bild_url(d["ref_id"], None) if d.get("ref_id")
+               else f'/events/{urllib.parse.quote(ed)}/{urllib.parse.quote(d.get("datei") or "")}')
+        bild = (f'<img src="{html.escape(src)}" '
                 f'style="height:150px">')
         wann = datetime.datetime.fromtimestamp(d.get("ts", 0)).strftime("%d.%m. %H:%M")
         met = (t("lernen.karte.metrik_voll", score=d.get("score"),
@@ -50,30 +60,25 @@ def render(offen, personen, data_dir):
         vid = (f' <a href="/video/{urllib.parse.quote(ed)}">&#9654; {t("lernen.karte.link_video")}</a>'
                if any(os.path.isfile(os.path.join(data_dir, "clips", ed + s))
                       for s in ("_review.mp4", ".mp4")) else "")
-        if d.get("person"):
-            p = html.escape(d["person"])
-            aktion = (f'<button class="gtb on" onclick="enroll(\'{kid}\',\'aufnehmen\',null,this)">'
-                      f'{t("lernen.karte.knopf_add_person", person=p)}</button>')
-        else:
-            aktion = (f'<select id="sel-{kid}"><option value="">'
-                      f'{t("lernen.karte.attr_person")}</option>{opts}</select> '
-                      f'<input id="neu-{kid}" placeholder="{t("lernen.karte.attr_neu")}" '
-                      f'> '
-                      f'<button class="gtb" onclick="enrollFremd(\'{kid}\',this)">'
-                      f'{t("lernen.karte.knopf_add")}</button>')
+        p = html.escape(d["person"])
+        aktion = (f'<button class="gtb on" onclick="enroll(\'{kid}\',\'aufnehmen\',null,this)">'
+                  f'{t("lernen.karte.knopf_add_person", person=p)}</button>')
         karten.append(
             f'<div class="card" data-fade-on-label=1>'
-            f'<b>{html.escape(d.get("person") or t("lernen.karte.unbekannt"))}'
+            f'<b>{html.escape(d["person"])}'
             f'</b> · {wann} · {html.escape(str(d.get("camera", "?")))} · {met}'
             f'<div class="crops">{bild}{vid}</div>'
             f'<div>{aktion} <button class="gtb" onclick="enroll(\'{kid}\',\'ablehnen\',null,this)">'
             f'{t("lernen.karte.knopf_ablehnen")}</button></div></div>')
+    # E3b-2a (Bauplan analysen/bauplan_refquelle_einbau.md, Stufe E3 Punkt 2): die Galerie sind die
+    # Referenz-Saetze je Person aus der Referenz-Quelle (Lese-Stufe b, juengste Bindung zuerst), das Bild
+    # ueber /lernlauf/satz/<ref_id> (Lese-Stufe d); kein Lesen von faces/.
+    saetze = refquelle.read_catalog({"data_dir": data_dir})["personen"]
     galerie = []
     for p in personen:
-        d = os.path.join(data_dir, "faces", p)
-        bilder = sorted(f for f in os.listdir(d) if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp")))
+        bilder = saetze.get(p, [])
         thumbs = "".join(
-            f'<img src="/refs/{urllib.parse.quote(p)}/{urllib.parse.quote(b)}" title="{html.escape(b)}" '
+            f'<img src="{html.escape(bild_url(b, None))}" title="{html.escape(b)}" '
             f'style="height:56px;margin:2px;border-radius:4px">' for b in bilder[:60])
         galerie.append(f"<details><summary><b>{html.escape(p)}</b> — "
                        f"{t('lernen.galerie.bildzahl', n=len(bilder))}</summary>"

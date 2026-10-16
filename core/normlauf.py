@@ -20,11 +20,17 @@ Platz, alle Uebergabe-Kandidaten des Laufs am Stueck.
 
 DIE MESSBASIS IST DIESELBE WIE VORHER, und das ist die Bedingung, unter der
 der Umzug ueberhaupt zulaessig ist ([[ersatzmessungen-sind-hypothesen]]):
-gemessen wird der 112er-Warp DES ERNTE-FRAMES (core.ernte.align112), den die
-Ernte je Uebergabe-Kandidat als rohe .npy-Kachel konserviert hat — nicht ein
-aus dem gespeicherten JPEG-Crop re-dekodiertes Bild. Auch die BATCHGROESSE
-bleibt 1: NormMass driftet zwischen Batchgroessen (Kopfkommentar dort), ein
-Sammel-Batch haette also andere Zahlen geliefert als bis .517. „Gebuendelt"
+gemessen ist der 112er-Warp DES ERNTE-FRAMES (core.ernte.align112). Seit
+E3a-1c (Bauplan analysen/bauplan_refquelle_einbau.md, J1 bis J3) liegt er
+verlustfrei im Satz der Referenz-Quelle (rechen112.png, PNG: dieselben Pixel
+wie die fruehere .npy-Kachel), und der Satz traegt die Norm daraus schon als
+Messwert: core/harvest_set rechnet Fingerabdruck und Norm in EINEM Aufruf der
+r-Stufe aus genau diesen Bytes, auf demselben Rechenwerk und mit derselben
+Breite 1 wie `messen` hier (bild_kern.EngineNormMass.feature_norm ist
+rechner.embeddings(...)[1]). Dieser Schritt nimmt deshalb die Norm aus dem
+Satz; fehlt sie dort, rechnet er sie mit `messen` aus den 112er-Bytes des
+Satzes (Lese-Stufe c), nie aus einer anderen Datei. Die BATCHGROESSE bleibt 1:
+NormMass driftet zwischen Batchgroessen (Kopfkommentar dort). „Gebuendelt"
 meint den JOB, nicht den Tensor.
 
 ZWEI FRAGEN, EIN MESSWERT — beide fallen hier, weil beide an derselben Zahl
@@ -33,9 +39,11 @@ haengen und sie nie zweimal gerechnet werden darf:
     core.guete.norm_werk(), je Kamera ueber das Katalog-Register). Sie
     entscheidet, ob der Fund M bleibt.
   * die VORRATS-LINIE (Naehe-Frage, core.ernte.gate_v_norm, Werte
-    vorrat_norm_min/_profil). Sie entscheidet das v-Flag. Die Ernte hat das
-    Vorratsbild schon geschnitten (nur solange der Frame lebt, geht das);
-    hier faellt das Urteil, und die Bilder der Nicht-Passierer werden geraeumt.
+    vorrat_norm_min/_profil). Sie entscheidet das v-Flag.
+  Beide Urteile gehen als Katalog-Nachtrag (Art nachtrag, Thema NACHTRAG_THEMA,
+  mit Kennung) an die ref_id (J2); wer auf der Norm-Achse faellt, bekommt die
+  Statuszeile verworfen (J3, Verfall nach aufbewahrung_tage) — geloescht wird
+  hier nichts mehr.
 
 HALTUNG, unveraendert aus dem Haus:
   * fail-closed je FUND: aktive Latte + kein Messwert = der Fund faellt
@@ -46,9 +54,13 @@ HALTUNG, unveraendert aus dem Haus:
   * RESUMEFEST: je Ereignis eine Buchung (norm_fertig.jsonl), ein
     Wiederaufnehmen misst nur Fehlendes. Die Kandidaten-Datei wird atomar
     getauscht, nie halb geschrieben.
-  * PLATZ-HYGIENE: die Warp-Kacheln eines Ereignisses fallen, sobald es
-    gebucht ist. Bei Abbruch bleiben sie liegen — sie sind die Messbasis der
-    Wiederaufnahme.
+  * KATALOG VOR DATEI: die Katalogzeilen eines Ereignisses entstehen vor dem
+    Tausch seiner Kandidaten-Datei; ein Absturz dazwischen wiederholt das
+    Ereignis, und die letzte Zeile je ref_id und Thema gilt.
+  * DATENORT: der Job bekommt kein data_dir (verifyd.py baut den Auftrag ohne
+    es, worker_dienst.py reicht keins durch); er nimmt es ueber
+    core.lernlauf.datenort_cfg aus VERIFY_DATA_DIR, das der Dienst aus seiner
+    Config setzt — fehlt es, faellt der Job laut.
 
 KONTRAKT wie core/ernte.py: reine Funktionen, Pfade/Schwellen als Parameter,
 kein Dienst-Import, keine schweren Imports im Modulkopf. Die MESSUNG selbst
@@ -56,12 +68,11 @@ kommt als Funktion herein (`messen`) — dieses Modul kennt weder onnxruntime
 noch face_audit; der Worker reicht die budgetierte Session durch, der
 Testharnisch stellt eine Zahl.
 """
-import glob
 import json
 import os
 import tempfile
 
-from core import ernte as _ern         # Namensregeln (Pfade, Warp) + gate_v_norm
+from core import ernte as _ern         # Namensregeln (Pfade) + gate_v_norm
 from core import messkarte as _mk      # Bilanz-Vertrag, EIN Vokabular
 from core import logbuch as _logbuch
 _log = _logbuch.logger(__name__)
@@ -76,6 +87,11 @@ FERTIG_DATEI = "norm_fertig.jsonl"
 # Der Weg-Name der Bilanz (core.messkarte.bilanz_start). Er steht in der
 # Lauf-Datei und in der Logzeile, damit eine Deckungs-Luecke ihren Ort nennt.
 WEG = "norm"
+
+# Das Thema des Katalog-Nachtrags (J2): Norm, Norm-Latte, Sieb-Urteil, V-Entscheidung und V-Linie.
+NACHTRAG_THEMA = "norm_schritt"
+QUELLE_SATZ = "Messwert des Satzes (rechen112, Schreibzeit)"
+QUELLE_NEU = "rechen112 des Satzes, im Norm-Schritt gerechnet"
 
 
 def fertig_pfad(lauf_dir):
@@ -154,33 +170,37 @@ def _latte_fuer(latten, kamera):
     return satz.get("n")
 
 
-def _warp_lesen(lauf_dir, rel, np_mod):
-    """Eine konservierte Warp-Kachel -> Array oder None (fehlt/unlesbar).
-    Unlesbar ist KEIN Absturz des Laufs: der einzelne Fund gilt dann als nicht
-    messbar (fail-closed je Fund) und sagt das ueber seinen Verwurfsgrund."""
-    if not rel:
-        return None
+def _norm_aus_satz(cfg, ref_id, messen):
+    """Die Norm eines Uebergabe-Kandidaten aus seinem Satz (Lese-Stufe c): der Messwert norm des Satzes,
+    sonst `messen` auf seinen 112er-Bytes. -> (Wert oder None, Kennung oder None); fail-closed je Fund."""
+    import math
+    from core import refquelle as _rq
+    s = _rq.read_set(cfg, ref_id) if ref_id else None
+    if s is None:
+        return None, None
+    q = s["quelle"] or {}
+    nw = ((q.get("messwerte") or {}).get("norm") or {})
+    wert = nw.get("wert")
+    if isinstance(wert, (int, float)) and not isinstance(wert, bool) and math.isfinite(wert):
+        return float(wert), dict(nw.get("kennung") or {}, quelle=QUELLE_SATZ)
+    name = (q.get("teile") or {}).get("rechen112")
+    roh = s["dateien"].get(name)
+    if roh is None or name in s["fehler"]:
+        return None, None
+    import cv2
+    import numpy as np
     try:
-        return np_mod.load(os.path.join(lauf_dir, rel))
+        # BATCH 1, bewusst: NormMass driftet zwischen Batchgroessen.
+        wert = messen(cv2.imdecode(np.frombuffer(roh, np.uint8), cv2.IMREAD_COLOR))
     except Exception:                                   # noqa: BLE001
         _logbuch.swallowed(_log, _logbuch.WARNING, "returning None")
-        return None
+        return None, None
+    return (None if wert is None else float(wert)), dict(q.get("rechenwerk") or {}, quelle=QUELLE_NEU)
 
 
-def _datei_weg(lauf_dir, rel):
-    """Ein lauf-relatives Bild/eine Kachel entfernen — fehlt sie schon, ist
-    das kein Fehler (Wiederaufnahme nach Abbruch)."""
-    if not rel:
-        return
-    try:
-        os.unlink(os.path.join(lauf_dir, rel))
-    except OSError:
-        pass
-
-
-def zeile_nachtragen(zeile, latte, wert, schwellen, lauf_dir, bilanz):
+def zeile_nachtragen(zeile, latte, wert, schwellen, bilanz):
     """EINE Kandidaten-Zeile mit ihrer Norm abschliessen -> ("v_ja"|"v_nein"|
-    "v_aus"|None) fuer die Vorrats-Zaehlung.
+    "v_aus"|"verworfen"|None) fuer die Vorrats-Zaehlung und den Katalog.
 
     Sie trifft GENAU die Entscheidungen, die bis .517 im Ernte-Rumpf fielen,
     in derselben Reihenfolge und mit denselben Funktionen:
@@ -191,22 +211,20 @@ def zeile_nachtragen(zeile, latte, wert, schwellen, lauf_dir, bilanz):
       2. die SIEB-ACHSE urteilt ueber core.kamerakalib.sieb_ok — dieselbe
          Mechanik, dasselbe Grund-Vokabular (`n_unter`/`n_unmessbar`), kein
          zweiter Vergleich mit denselben Zahlen;
-      3. faellt der Fund, verliert er M, S und SEINE BILDER. Das Loeschen ist
-         nicht Kosmetik: die Anker-Phase liest Zeilen ueber ihre BILDQUELLE
-         (core.anker._bildquelle), nicht ueber das m-Flag — ein liegen
-         gebliebener Crop haette den Fund durch die Hintertuer wieder in die
-         Gruppenbildung gebracht, obwohl das Sieb ihn verworfen hat;
+      3. faellt der Fund, verliert er M und S ("verworfen": der Aufrufer
+         schreibt seinem Satz die Statuszeile verworfen, J3; geloescht wird
+         nichts — die Anker-Phase nimmt nur Zeilen mit m UND ref_id);
       4. bleibt er, entscheidet die VORRATS-LINIE (core.ernte.gate_v_norm) das
-         v-Flag; die Vorratsbilder der Nicht-Passierer fallen. AUSSER das
+         v-Flag fuer Zeilen mit Richtung (die V-Frage der Ernte). AUSSER das
          Lauf-Regime traegt die Vorrats-Achsen gar nicht (seit .521 der
          Normalfall am Pass-Knopf): dann faellt hier KEINE v-Entscheidung, die
          Zeile bleibt unangetastet und meldet sich als "v_aus" (.522, P-1).
 
     IDEMPOTENT: ein Ereignis, dessen Datei-Tausch gelang und dessen Buchung
     ein Absturz verschluckt hat, laeuft noch einmal durch. Dann tragen seine
-    Zeilen bereits ihr Ergebnis (m=False oder v gesetzt, `datei_w` leer) — der
-    Aufrufer misst sie nicht neu, sondern uebernimmt den vorhandenen Wert
-    (s. `_zeilen_nachtragen`)."""
+    Zeilen bereits ihr Ergebnis (m=False oder v gesetzt) — eine gefallene Zeile
+    wird nicht neu beurteilt, eine gebliebene liest dieselbe Norm aus ihrem Satz
+    noch einmal (s. `_zeilen_nachtragen`)."""
     from core import kamerakalib as _kk
     norm = None if wert is None else round(float(wert), 4)
     zeile["norm"] = norm
@@ -218,14 +236,10 @@ def zeile_nachtragen(zeile, latte, wert, schwellen, lauf_dir, bilanz):
         zeile["m"] = False
         zeile["s"] = False
         zeile["sieb_grund"] = grund
-        _datei_weg(lauf_dir, zeile.get("datei"))
-        _datei_weg(lauf_dir, zeile.get("datei_v"))
-        zeile["datei"] = None
-        zeile["datei_v"] = None
         zeile["v"] = False
-        return None
-    if not zeile.get("datei_v"):
-        return None                     # kein Vorrats-Bild = keine v-Frage
+        return "verworfen"
+    if zeile.get("richtung") is None or not zeile.get("ref_id"):
+        return None                     # keine V-Frage der Ernte oder kein Satz
     if not _ern.vorrat_schwellen_da(schwellen):
         # ALTZEILE IM NEUEN REGIME (.522, Widerleger-Befund P-1): die Zeile
         # traegt ein Vorrats-Bild, aber DIESER Lauf entscheidet die
@@ -234,29 +248,42 @@ def zeile_nachtragen(zeile, latte, wert, schwellen, lauf_dir, bilanz):
         # `gate_v_norm` hinein und starb dort am fehlenden Schluessel; der
         # Worker-Job riss, der Dienst wiederholte ihn fuenfmal, und das
         # Ereignis blieb ungemessen zurueck.
-        # Behandelt wird die Zeile jetzt ENDLICH und unbeschaedigt: `v` und
-        # `datei_v` bleiben, wie sie sind (wer nicht entscheidet, wirft auch
-        # nichts weg), und der Aufrufer zaehlt den Fall, damit er im Log
-        # auftaucht statt still zu bleiben.
+        # Behandelt wird die Zeile jetzt ENDLICH und unbeschaedigt: `v`
+        # bleibt, wie es ist (wer nicht entscheidet, aendert nichts), und der
+        # Aufrufer zaehlt den Fall, damit er im Log auftaucht statt still zu
+        # bleiben.
         return "v_aus"
     v = bool(_ern.gate_v_norm(norm, zeile.get("front_kps"), schwellen))
     zeile["v"] = v
-    if v:
-        return "v_ja"
-    _datei_weg(lauf_dir, zeile["datei_v"])
-    zeile["datei_v"] = None
-    return "v_nein"
+    return "v_ja" if v else "v_nein"
 
 
-def _zeilen_nachtragen(lauf_dir, eid, latten, schwellen, messen, np_mod):
+def _katalog_zeile(zeile, latte, schwellen, marke, kennung):
+    """Der Katalog-Nachtrag (J2) und, wenn der Fund faellt, die Statuszeile (J3) einer Zeile mit Satz.
+    -> (ref_id, Nachtrag-Felder, Grund fuer verworfen oder None)"""
+    linie = ({k: schwellen.get(k) for k in ("vorrat_norm_min", "vorrat_norm_min_profil",
+                                            "vorrat_front_profil")}
+             if _ern.vorrat_schwellen_da(schwellen) else None)
+    werte = {"norm": zeile.get("norm"), "latte_n": latte, "sieb_ok": marke != "verworfen",
+             "sieb_grund": zeile.get("sieb_grund"),
+             "v": zeile.get("v") if marke in ("v_ja", "v_nein") else None, "vorrat_linie": linie}
+    felder = {"thema": NACHTRAG_THEMA, "werte": werte,
+              "kennung": kennung or {"quelle": "no norm source (no set or no readable 112 crop)"}}
+    grund = f"norm step: {zeile.get('sieb_grund')}" if marke == "verworfen" else None
+    return zeile["ref_id"], felder, grund
+
+
+def _zeilen_nachtragen(lauf_dir, eid, latten, schwellen, messen, cfg):
     """Ein Ereignis komplett nachmessen -> (zeilen, bilanz, v_ja, v_nein,
-    v_aus). `v_aus` (.522) sind die Zeilen mit Vorrats-Bild, deren Linie dieser
+    v_aus, katalog). `v_aus` (.522) sind die Zeilen mit V-Frage, deren Linie dieser
     Lauf gar nicht entscheidet (Regime ohne Vorrats-Achsen, s.
     `zeile_nachtragen`) — sie sind kein Verlust, aber sie gehoeren ins Log.
-    Schreibt NICHTS — der Aufrufer tauscht die Datei atomar."""
+    `katalog` (E3a-1c, J2/J3) sind die Katalogzeilen je Satz, die der Aufrufer
+    VOR dem Datei-Tausch schreibt. Schreibt NICHTS — der Aufrufer tauscht die
+    Datei atomar."""
     bilanz = _mk.bilanz_start(WEG)
     v_ja = v_nein = v_aus = 0
-    zeilen = []
+    zeilen, katalog = [], []
     with open(_ern.kandidaten_pfad(lauf_dir, eid), encoding="utf-8") as f:
         for roh in f:
             roh = roh.strip()
@@ -277,32 +304,34 @@ def _zeilen_nachtragen(lauf_dir, eid, latten, schwellen, messen, np_mod):
                 # messen, nichts zu entscheiden — die Zeile bleibt, wie sie ist.
                 zeilen.append(z)
                 continue
-            wert = z.get("norm")
-            if z.get("datei_w"):
-                warp = _warp_lesen(lauf_dir, z["datei_w"], np_mod)
-                wert = None
-                if warp is not None:
-                    try:
-                        # BATCH 1, bewusst: NormMass driftet zwischen
-                        # Batchgroessen — ein Sammel-Batch maesse etwas anderes
-                        # als der Weg bis .517.
-                        wert = messen(warp)
-                    except Exception:                   # noqa: BLE001
-                        wert = None                     # fail-closed je Fund
-            # (kein `datei_w`, aber schon ein `norm`: Wiederaufnahme nach einem
-            #  Absturz zwischen Datei-Tausch und Buchung — der vorhandene Wert
-            #  gilt, gemessen wird nicht doppelt.)
-            marke = zeile_nachtragen(z, _latte_fuer(latten, z.get("kamera")),
-                                     wert, schwellen, lauf_dir, bilanz)
+            # E3a-1c: die Norm kommt aus dem Satz (Kopf dieser Datei); eine Zeile
+            # ohne Satz hat keine Messbasis und faellt fail-closed (n_unmessbar).
+            wert, kennung = _norm_aus_satz(cfg, z.get("ref_id"), messen)
+            latte = _latte_fuer(latten, z.get("kamera"))
+            marke = zeile_nachtragen(z, latte, wert, schwellen, bilanz)
             if marke == "v_ja":
                 v_ja += 1
             elif marke == "v_nein":
                 v_nein += 1
             elif marke == "v_aus":
                 v_aus += 1
-            z["datei_w"] = None          # die Kachel faellt gleich (s. norm_job)
+            if z.get("ref_id"):
+                katalog.append(_katalog_zeile(z, latte, schwellen, marke, kennung))
             zeilen.append(z)
-    return zeilen, bilanz, v_ja, v_nein, v_aus
+    return zeilen, bilanz, v_ja, v_nein, v_aus, katalog
+
+
+def _katalog_schreiben(cfg, katalog):
+    """Die Katalogzeilen eines Ereignisses schreiben: Nachtrag je Satz (J2), verworfen fuer die
+    gefallenen (J3, nur Kandidaten ohne Bindung). -> Zahl der Statuszeilen verworfen"""
+    from core import lernlauf as _ll
+    from core import refquelle as _rq
+    weg = {}
+    for ref_id, felder, grund in katalog:
+        _rq.append(cfg, ref_id, "nachtrag", felder)
+        if grund:
+            weg.setdefault(grund, []).append(ref_id)
+    return sum(_ll.saetze_verwerfen(cfg, ids, grund) for grund, ids in weg.items())
 
 
 def _zeilen_schreiben(lauf_dir, eid, zeilen):
@@ -325,72 +354,6 @@ def _zeilen_schreiben(lauf_dir, eid, zeilen):
     os.replace(tmp, p)
 
 
-def warps_raeumen(lauf_dir, eid=None):
-    """Die konservierten Warp-Kacheln entfernen -> Zahl der geloeschten Dateien.
-
-    `eid` = nur die eines Ereignisses (nach seiner Buchung), None = der ganze
-    Ordner (nach dem erfolgreichen Abschluss des Jobs). Geraeumt wird IMMER
-    erst NACH der Buchung: andersherum verlore eine Wiederaufnahme ihre
-    Messbasis."""
-    if eid is None:
-        muster = os.path.join(lauf_dir, _ern.WARP_ORDNER, "*" + _ern.WARP_ENDUNG)
-    else:
-        muster = os.path.join(lauf_dir, _ern.WARP_ORDNER,
-                              _ern._eid_safe(eid) + "~*")
-    n = 0
-    for p in glob.glob(muster):
-        try:
-            os.unlink(p)
-            n += 1
-        except OSError:
-            pass
-    if eid is None:
-        try:
-            os.rmdir(os.path.join(lauf_dir, _ern.WARP_ORDNER))
-        except OSError:
-            pass                        # nicht leer / nicht da: kein Fehler
-    return n
-
-
-def warp_deckung(lauf_dir, eids):
-    """WARP-KONSERVIERUNGS-VERTRAG -> (kandidaten, mit_warp, ohne_warp).
-
-    Die Frage, die er beantwortet: hat wirklich JEDER Uebergabe-Kandidat seine
-    Messbasis bekommen? Eine Luecke ist kein Absturz — der Fund faellt dann
-    fail-closed als `n_unmessbar` —, aber sie ist ein VERLUST und darf nicht
-    unbemerkt bleiben.
-
-    BEWUSST NICHT im Job-Weg: ein zweiter Durchgang durch alle
-    Kandidaten-Dateien haette jede Zeile samt ihrem 512er-Embedding ein
-    zweites Mal geparst — auf einem ALLE-Lauf ist das keine Kleinigkeit. Der
-    Job zaehlt die Deckung deshalb WAEHREND des Messens (die Bilanz fuehrt sie
-    unter `warp_fehlt`); diese Funktion ist der unabhaengige Nachrechner fuer
-    Probe und Abnahme und muss VOR dem Messen laufen — danach sind die Kacheln
-    geraeumt und die Frage waere nicht mehr stellbar."""
-    kand = mit = 0
-    for eid in eids or []:
-        p = _ern.kandidaten_pfad(lauf_dir, eid)
-        if not os.path.exists(p):
-            continue
-        with open(p, encoding="utf-8") as f:
-            for roh in f:
-                roh = roh.strip()
-                if not roh:
-                    continue
-                try:
-                    z = json.loads(roh)
-                except Exception:                       # noqa: BLE001
-                    _logbuch.swallowed(_log, _logbuch.WARNING, "skipped")
-                    continue
-                if not z.get("m"):
-                    continue
-                kand += 1
-                if z.get("datei_w") and os.path.exists(
-                        os.path.join(lauf_dir, z["datei_w"])):
-                    mit += 1
-    return kand, mit, kand - mit
-
-
 def norm_job(lauf_dir, eids, schwellen, latten, messen=None, log=_log,
              abbruch=None):
     """DER gebuendelte Norm-Schritt eines Laufs -> Ergebnis-Dict.
@@ -401,15 +364,18 @@ def norm_job(lauf_dir, eids, schwellen, latten, messen=None, log=_log,
               Vorrats-Linien (vorrat_norm_min/_profil/_front_profil).
     latten    {kamera: sieb_latten-Satz, "": globale Zeile} — vom DIENST je
               Kamera aufgeloest; der Worker greift nie selbst in die Config.
-    messen    f(warp_bgr112) -> float. None = die Session ist nicht da; dann
+    messen    f(bgr112) -> float. None = die Session ist nicht da; dann
               laeuft der Lauf LAUT ohne diese Achse weiter (fail-open je
-              MODELL, Blocker BL-1) und misst NICHTS nach.
+              MODELL, Blocker BL-1) und misst NICHTS nach. Gerufen nur fuer
+              einen Satz, der keine Norm traegt (Kopf dieser Datei).
     abbruch   f() -> bool: der Job endet nach dem laufenden Ereignis. Alles
               Gebuchte bleibt gebucht, der Rest wartet auf die Wiederaufnahme.
 
-    -> {"events", "offen", "bilanz", "v_ja", "v_nein", "v_aus",
-        "warps_geraeumt", "achse_aus": Grund|None, "abgebrochen": bool,
-        "warp_kandidaten", "warp_fehlt"}
+    -> {"events", "offen", "bilanz", "v_ja", "v_nein", "v_aus", "verworfen",
+        "achse_aus": Grund|None, "abgebrochen": bool,
+        "warp_kandidaten", "warp_fehlt"}  (warp_*: Uebergabe-Kandidaten und die ohne
+        Messbasis — seit E3a-1c ohne Satz oder ohne lesbaren 112er; Name wie bisher,
+        der Dienst liest `warp_fehlt`)
 
     `v_aus` (.522): Zeilen mit Vorrats-Bild, deren Linie dieser Lauf gar nicht
     entscheidet — sein Regime traegt die Vorrats-Achsen nicht (Pass-Knopf seit
@@ -421,59 +387,55 @@ def norm_job(lauf_dir, eids, schwellen, latten, messen=None, log=_log,
     if messen is None:
         # FAIL-OPEN JE MODELL. Nichts wird angefasst: die Zeilen tragen
         # `norm: null`, die Achse laesst damit alles durch (Latte-<=-0-Zweig
-        # gilt hier nicht — es gibt schlicht keinen Vergleich), und die
-        # Warp-Kacheln BLEIBEN liegen, damit eine Wiederaufnahme mit
-        # funktionierender Session noch messen kann.
+        # gilt hier nicht — es gibt schlicht keinen Vergleich); eine
+        # Wiederaufnahme mit funktionierender Session misst spaeter nach.
         grund = ("feature-norm session not available — this run keeps every "
                  "finding on the norm axis and decides no stock line")
         log.error(f"norm step: SIEVE AXIS OFF (n) — {grund}")
         return {"events": 0, "offen": len(offen), "bilanz": None,
-                "v_ja": 0, "v_nein": 0, "v_aus": 0, "warps_geraeumt": 0,
+                "v_ja": 0, "v_nein": 0, "v_aus": 0, "verworfen": 0,
                 "achse_aus": grund, "abgebrochen": False,
                 "warp_kandidaten": 0, "warp_fehlt": 0}
-    import numpy as _np                 # lazy wie ueberall im Haus
-    geraeumt = 0
-    fertig_n = 0
+    from core import lernlauf as _ll
+    cfg = _ll.datenort_cfg()            # laut, wenn der Datenort fehlt (Kopf: DATENORT)
+    fertig_n = verworfen_g = 0
     v_aus_g = 0
     abgebrochen = False
     for eid in offen:
         if abbruch is not None and abbruch():
             abgebrochen = True
             break
-        zeilen, bilanz, v_ja, v_nein, v_aus = _zeilen_nachtragen(
-            lauf_dir, eid, latten, schwellen, messen, _np)
+        zeilen, bilanz, v_ja, v_nein, v_aus, katalog = _zeilen_nachtragen(
+            lauf_dir, eid, latten, schwellen, messen, cfg)
+        verworfen_g += _katalog_schreiben(cfg, katalog)
         _zeilen_schreiben(lauf_dir, eid, zeilen)
         fertig_anhaengen(lauf_dir, {"eid": eid, "bilanz": bilanz,
                                     "v_ja": v_ja, "v_nein": v_nein})
-        geraeumt += warps_raeumen(lauf_dir, eid)
         fertig_n += 1
         v_aus_g += v_aus
     _eids, summe, v_ja_g, v_nein_g = fertig_lesen(lauf_dir)
-    if not abgebrochen:
-        geraeumt += warps_raeumen(lauf_dir)       # Rest + der leere Ordner
-    # WARP-DECKUNG aus der Bilanz statt aus einem zweiten Datei-Durchgang: ein
-    # Fund ohne Messwert hat GENAU einen Grund, und der heisst `warp_fehlt`.
+    # DECKUNG aus der Bilanz statt aus einem zweiten Datei-Durchgang: ein Fund
+    # ohne Messwert hat GENAU einen Grund (Name `warp_fehlt` wie bis E3a-1b).
     w_kand = int((summe or {}).get("gesehen") or 0)
     w_fehlt = int(((summe or {}).get("gruende") or {}).get(
         _mk.GRUND_WARP_FEHLT) or 0)
     if w_fehlt:
-        log.error(f"norm step: {w_fehlt} of {w_kand} handover candidate(s) carried "
-            f"no preserved warp tile — they could not be measured and fell on "
-            f"the norm axis (fail-closed per finding)")
+        log.error(f"norm step: {w_fehlt} of {w_kand} handover candidate(s) had no "
+            f"reference set with a readable 112 crop — they could not be measured and "
+            f"fell on the norm axis (fail-closed per finding)")
     if v_aus_g:
-        # NIE STILL (.522, P-1): Zeilen aus einem AELTEREN Bruecken-Ordner
-        # tragen noch ein Vorrats-Bild, dieser Lauf entscheidet die
+        # NIE STILL (.522, P-1): Zeilen tragen die V-Frage der Ernte,
+        # dieser Lauf entscheidet die
         # Vorrats-Linie aber nicht (sein Regime traegt die Achsen nicht). Bis
         # .521 riss genau das den Job mit einem KeyError — jetzt laeuft er
         # durch und sagt, was er nicht entschieden hat.
-        log.warning(f"norm step: {v_aus_g} candidate line(s) still carry a stock "
-            f"picture from an older run, but this run's regime has no stock "
+        log.warning(f"norm step: {v_aus_g} candidate line(s) carry the stock "
+            f"question of their harvest, but this run's regime has no stock "
             f"thresholds — their stock line stays untouched (no v decision on "
             f"this path)")
     return {"events": fertig_n, "offen": len(offen) - fertig_n,
             "bilanz": summe, "v_ja": v_ja_g, "v_nein": v_nein_g,
-            "v_aus": v_aus_g,
-            "warps_geraeumt": geraeumt, "achse_aus": None,
+            "v_aus": v_aus_g, "verworfen": verworfen_g, "achse_aus": None,
             "abgebrochen": abgebrochen,
             "warp_kandidaten": w_kand, "warp_fehlt": w_fehlt}
 
@@ -497,8 +459,8 @@ def bilanz_satz(erg):
     if erg.get("v_ja") or erg.get("v_nein"):
         teile.append(f"stock line: {erg.get('v_ja', 0)} kept, "
                      f"{erg.get('v_nein', 0)} rejected")
-    if erg.get("warps_geraeumt"):
-        teile.append(f"{erg['warps_geraeumt']} warp tile(s) removed")
+    if erg.get("verworfen"):
+        teile.append(f"{erg['verworfen']} set(s) set to discarded")
     if erg.get("abgebrochen"):
         teile.append(f"stopped early, {erg.get('offen', 0)} event(s) left "
                      f"for the next run")

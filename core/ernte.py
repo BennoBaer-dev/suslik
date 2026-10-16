@@ -33,9 +33,11 @@ lernmodus was das gleiche ist"):
                        gebuendelter Schritt -> dann die Abarbeitung").
                        Damit dieser Schritt auf DERSELBEN Messbasis rechnet
                        wie zuvor (Frame-Warp, nicht ein re-dekodierter Crop —
-                       [[ersatzmessungen-sind-hypothesen]]), konserviert die
-                       Ernte je Uebergabe-Kandidat den 112er-Warp als rohe
-                       .npy-Kachel (`datei_w`).
+                       [[ersatzmessungen-sind-hypothesen]]), liegt je
+                       Uebergabe-Kandidat der 112er-Warp verlustfrei im Satz
+                       der Referenz-Quelle (rechen112.png, seit E3a-1c statt
+                       der .npy-Kachel `datei_w`), die Norm daraus steht dort
+                       schon als Messwert (core/harvest_set.py).
   S (Anker-tauglich) = M UND |pitch|,|yaw|,|roll| <= s_winkel_max. S wird hier nur
                        AUSGEWERTET/gezaehlt — die Anker-BILDUNG ist E3.
   V (vorratstauglich)= M UND die Norm-LINIE (gate_v_norm). ACHTUNG, zwei Dinge
@@ -46,10 +48,9 @@ lernmodus was das gleiche ist"):
                        core.guete.norm_werk()). Beide haengen am SELBEN Messwert,
                        und der faellt seit .518 im gebuendelten Norm-Schritt —
                        DORT wird deshalb auch die V-Linie entschieden
-                       (core/normlauf.py). Die Ernte legt dafuer das
-                       Vorrats-Bild (Rand-Ausschnitt) schon an und laesst
-                       `v` offen; der Norm-Job setzt es und raeumt die Bilder
-                       der Nicht-Passierer weg. Ohne gebuendelten Schritt
+                       (core/normlauf.py). Die Ernte laesst `v` offen; der
+                       Norm-Job setzt es (Bilder im Satz, seit E3a-1c kein
+                       eigenes Vorrats-Bild mehr). Ohne gebuendelten Schritt
                        (Kalibrier-Auffueller, Bruecke) gibt es kein v — laut
                        deklariert ueber `v_aus`, nie still.
 
@@ -73,7 +74,8 @@ bleibt heil, die Messwerte samt Verwurfsgrund stehen im Protokoll, und eine
 Latten-Aenderung ist am Bestand nachrechenbar statt blind. Gesiebt wird am
 AUSGANG — hinter dem Messen, vor dem Speichern (Konzept E14).
 
-Persistenz: JE EVENT eine eigene Datei kandidaten/<eid>.jsonl, beim (Wieder-)Ernten
+Persistenz: JE EVENT eine eigene Datei kandidaten/<eid>.jsonl (seit E3a-1c mit der ref_id des Satzes
+statt Bildpfaden und Fingerabdruck; Bilder und Fingerabdruck liegen nur in core/refquelle), beim (Wieder-)Ernten
 NEU GESCHRIEBEN (Widerleger .75: append-only ernte.jsonl duplizierte das
 unterbrochene Event beim Resume und liess Teilzeilen gescheiterter Jobs ungezaehlt
 zurueck — die Stuetzzahl k>=5 der Anker haette das verfaelscht). pose = ECHTE
@@ -309,12 +311,12 @@ def gate_v_norm(norm, front_kps, s):
 
 
 def kandidat_zeile(eid, kamera, ts, t, bbox, det, front, sharp, kante, pose,
-                   emb_vec, modell, m, s_flag, datei,
-                   norm=None, front_kps=None, richtung=None, v=False, datei_v=None,
+                   modell, m, s_flag,
+                   norm=None, front_kps=None, richtung=None, v=False,
                    struktur=None, quelle=None, luma=None,
                    fiqa_t=None, empf=None,
                    mk_fiqa_t=None, mk_empf=None, mk_quelle=None, mk_pose=None,
-                   sieb_grund=None, datei_w=None):
+                   sieb_grund=None, ref_id=None):
     """Eine Kandidaten-Zeile — die Rundungsregeln sind Teil des Vertrags (V0.5).
     det/front/sharp/pose kommen bereits GERUNDET herein (Gate == Zeile); die
     round()-Aufrufe hier sind idempotent und sichern den Vertrag am Rand ab.
@@ -325,8 +327,8 @@ def kandidat_zeile(eid, kamera, ts, t, bbox, det, front, sharp, kante, pose,
             "kante": int(kante), "det": round(float(det), 3),
             "front": round(float(front), 3), "sharp": round(float(sharp), 1),
             "pose": [round(float(x), 1) for x in pose],
-            "emb": [round(float(x), 5) for x in emb_vec], "modell": modell,
-            "m": bool(m), "s": bool(s_flag), "datei": datei,
+            "modell": modell,
+            "m": bool(m), "s": bool(s_flag),
             # Bildguete (.377, Kalibrier-Funktion): additiv am Ende, Alt-Leser
             # bleiben gueltig. None = nicht gemessen (kein m-Crop, Modell fehlt
             # im Alt-Image, oder Messfehler — Zaehler guete_fehler).
@@ -334,7 +336,7 @@ def kandidat_zeile(eid, kamera, ts, t, bbox, det, front, sharp, kante, pose,
             "empf": None if empf is None else round(float(empf), 4),
             "norm": None if norm is None else round(float(norm), 4),
             "front_kps": None if front_kps is None else round(float(front_kps), 4),
-            "richtung": richtung, "v": bool(v), "datei_v": datei_v,
+            "richtung": richtung, "v": bool(v),
             "struktur": None if struktur is None else round(float(struktur), 4),
             # .33x DATEIQUELLE: Herkunft des Clips ("datei" oder None=Frigate).
             # Sie wandert bis in die Anker-Kachel, damit dort kein /video/-Link
@@ -379,20 +381,14 @@ def kandidat_zeile(eid, kamera, ts, t, bbox, det, front, sharp, kante, pose,
             # nicht nur im Zaehler, damit eine Latten-Aenderung am BESTAND
             # nachrechenbar ist statt nur an einer Summe.
             "sieb_grund": sieb_grund,
-            # .518 WARP-KONSERVIERUNG: der 112er-Warp DIESES Funds als rohe
-            # .npy-Kachel (~37 KB), relativ zum Lauf-Verzeichnis. Er ist die
-            # MESSBASIS des gebuendelten Norm-Schritts — dieselben Pixel, die
-            # bis .517 sofort gemessen wurden, nur spaeter. Roh und nicht als
-            # JPEG, weil eine Kompression die Zahl verschoebe und die Messung
-            # damit eine Ersatzmessung waere ([[ersatzmessungen-sind-
-            # hypothesen]]). Am DICT-ENDE wie luma/mk_*: ein Byte-Diff zweier
-            # Laeufe soll eine Ergaenzung zeigen, keine Umsortierung. None =
-            # kein Warp (kein Nachmess-Schritt auf diesem Weg, oder der Fund
-            # hatte keine Landmarken). Der Norm-Job LOESCHT die Kachel nach
-            # der Messung und setzt das Feld wieder auf None — ein gesetztes
-            # `datei_w` heisst also immer: die Kachel liegt wirklich da
-            # (Buecher-gegen-Platte, bestand_pruefen).
-            "datei_w": datei_w}
+            # E3a-1b/E3a-1c (Bauplan Referenz-Quelle einbauen, J1): die Kennung des
+            # Satzes, den die Ernte fuer diesen Fund in core/refquelle geschrieben
+            # hat (core/harvest_set.py). Sie ERSETZT seit E3a-1c die Felder datei,
+            # datei_v, datei_w und emb: Bild, 112er-Warp (Messbasis des Norm-
+            # Schritts) und Fingerabdruck liest jeder Leser ueber das Modul.
+            # None = kein Satz (kein M, Weg gesperrt oder abgelehnt, Grund in der
+            # Job-Antwort); ein solcher Fund hat kein Bild und keine Norm.
+            "ref_id": ref_id}
 
 
 def zaehler_pruefen(z):
@@ -433,19 +429,31 @@ def kandidaten_pfad(lauf_dir, eid):
     return os.path.join(lauf_dir, "kandidaten", _eid_safe(eid) + ".jsonl")
 
 
-# .518: die dritte Ablage neben crops/ und vorrat/ — die konservierten
-# 112er-Warps des gebuendelten Norm-Schritts. EIGENER Ordner statt einer Datei
-# je Event, weil Schreiber (Ernte, je Fund) und Raeumer (Norm-Job, je Event;
-# event_aufraeumen, je Wieder-Ernte) dieselbe Namensregel brauchen: der
-# Dateiname ist die Crop-Kennung `<eid>~<frame>~<n>` — derselbe Schluessel,
-# unter dem der Crop liegt.
-WARP_ORDNER = "warp"
-WARP_ENDUNG = ".npy"
-
-
-def warp_rel(kid):
-    """Der lauf-relative Pfad der Warp-Kachel EINER Crop-Kennung."""
-    return os.path.join(WARP_ORDNER, kid + WARP_ENDUNG)
+def kandidaten_ref_ids(lauf_dir, eid=None):
+    """Die ref_ids der Kandidatenzeilen eines Ereignisses (eid) oder aller Ereignisse des Lauf-Ordners
+    (E3a-1c, J3). -> Liste in Dateireihenfolge; unlesbare Zeilen werden uebersprungen und gezaehlt."""
+    pfade = ([kandidaten_pfad(lauf_dir, eid)] if eid is not None
+             else sorted(glob.glob(os.path.join(lauf_dir, "kandidaten", "*.jsonl"))))
+    ids, kaputt = [], 0
+    for p in pfade:
+        try:
+            with open(p, encoding="utf-8") as f:
+                for zeile in f:
+                    if not zeile.strip():
+                        continue
+                    try:
+                        rid = json.loads(zeile).get("ref_id")
+                    except ValueError:
+                        kaputt += 1
+                        continue
+                    if rid:
+                        ids.append(rid)
+        except FileNotFoundError:
+            continue
+    if kaputt:
+        _log.warning(f"harvest folder {lauf_dir}: {kaputt} unreadable candidate line(s) skipped "
+                     f"while collecting their sets")
+    return ids
 
 
 # ------------------------------------------------------------ Fortschritts-Anzeige
@@ -553,30 +561,38 @@ def fortschritt_rechnen(i, n, puls):
             "puls_da": bool(puls), "gruppen": gruppen}
 
 
-def event_aufraeumen(lauf_dir, eid):
-    """Teil-Artefakte EINES Events entfernen (nach gescheitertem Job: die Zeilen/
-    Crops eines abgebrochenen Jobs stuenden sonst gebucht-aber-ungezaehlt herum —
-    Widerleger .75/L3 MUSS 1)."""
-    es = _eid_safe(eid)
+GRUND_ABBRUCH = "harvest job of the event failed, its lines were cleared"
+GRUND_WIEDERERNTE = "not found again when the event was harvested again"
+
+
+def event_aufraeumen(lauf_dir, eid, verwerfen=True, cfg=None):
+    """Die Zeilen EINES Events entfernen (nach gescheitertem Job stuenden sie sonst
+    gebucht-aber-ungezaehlt herum — Widerleger .75/L3 MUSS 1).
+    E3a-1c (J3 mit O562 a): vorher bekommen die Saetze ihrer Funde die Statuszeile
+    verworfen (Verfall nach aufbewahrung_tage; Kandidaten ohne Bindung, nie referenz
+    oder altbestand). verwerfen=False nur fuer die Wieder-Ernte (ernte_event: sie
+    verwirft danach genau die Saetze, die sie nicht wieder findet). Bilddateien
+    aelterer Laeufe (crops/, vorrat/, warp/) bleiben liegen bis zum Umzug (E4).
+    cfg: Config mit data_dir; ohne sie gilt core.lernlauf.datenort_cfg."""
+    ids = kandidaten_ref_ids(lauf_dir, eid) if verwerfen else []
     try:
         os.unlink(kandidaten_pfad(lauf_dir, eid))
     except FileNotFoundError:
         pass
-    # Schreiber und Raeumer teilen EINE Namensregel je Ablage: crops/<eid>~* fuer
-    # M, vorrat/v_<eid>_* fuer V (Bauplan B2; ohne den zweiten Glob blieben
-    # v-Crops nach Wieder-Ernten als Waisen liegen — Widerleger W1.9).
-    # .518: warp/<eid>~* als DRITTE Ablage — ohne diesen Glob bliebe nach einem
-    # Wieder-Ernten die Warp-Kachel des alten Durchlaufs liegen, und der
-    # Norm-Job maesse eine Kachel, deren Zeile es nicht mehr gibt (dieselbe
-    # Waisen-Klasse wie W1.9, nur teurer: 37 KB je Stueck).
-    for muster in (os.path.join(lauf_dir, "crops", es + "~*"),
-                   os.path.join(lauf_dir, "vorrat", "v_" + es + "_*"),
-                   os.path.join(lauf_dir, WARP_ORDNER, es + "~*")):
-        for c in glob.glob(muster):
-            try:
-                os.unlink(c)
-            except FileNotFoundError:
-                pass
+    if ids:
+        _saetze_verwerfen(cfg, ids, GRUND_ABBRUCH, eid)
+
+
+def _saetze_verwerfen(cfg, ids, grund, eid):
+    """verworfen fuer Saetze eines Events schreiben, laut statt still, wenn es nicht geht (die Zeilen
+    sind dann schon geraeumt, die Saetze bleiben kandidat ohne Verfall). -> Zahl oder None"""
+    from core import lernlauf as _ll              # lazy: lernlauf importiert ernte
+    try:
+        return _ll.saetze_verwerfen(_ll.datenort_cfg((cfg or {}).get("data_dir")), ids, grund)
+    except Exception as e:                                    # noqa: BLE001
+        _log.error(f"ernte {eid}: {len(ids)} set(s) could not be set to discarded "
+                   f"({type(e).__name__}: {e}) — they stay candidates without expiry")
+        return None
 
 
 def manifest_lesen(lauf_dir):
@@ -669,6 +685,19 @@ def align112(frame, kps):
     return face_align.norm_crop(frame, landmark=kps, image_size=112)
 
 
+def enge_messung(frame, bbox):
+    """Enger Ausschnitt eines Funds (ganzzahlige Box, am Bildrand bei 0 geklemmt) mit Schaerfe (Laplace-Varianz)
+    und Helligkeit (Graustufen-Mittel), die Rechnung der Ernte an EINER Stelle; seit dem Nachtrag E3a-3
+    (Bauplan analysen/bauplan_refquelle_einbau.md, Entscheid 7, O569 B) auch vom Worker-Satz aufgerufen.
+    -> (x1, y1, x2, y2, Ausschnitt, Schaerfe, Helligkeit oder None bei leerem Ausschnitt)"""
+    import cv2                      # lazy: Modul bleibt fuer Dienst/QS billig
+    x1, y1, x2, y2 = [max(0, int(v)) for v in bbox]
+    crop = frame[y1:y2, x1:x2]
+    grau = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.size else None
+    sharp = round(float(cv2.Laplacian(grau, cv2.CV_64F).var()) if grau is not None else 0.0, 1)
+    return x1, y1, x2, y2, crop, sharp, None if grau is None else int(round(float(grau.mean())))
+
+
 def pose_kopf(frame, bbox):
     """Der Kopf-Score der Pose-Wache fuer EIN Gesicht -> float oder None.
 
@@ -700,7 +729,7 @@ def pose_kopf(frame, bbox):
         return None
 
 
-def kalib_vorrat_speisen(lauf_dir, kamera, best, kalib, log=_log):
+def kalib_vorrat_speisen(kamera, best, kalib, log=_log):
     """EIN Bild dieses Events in den Kalibrier-Vorrat SEINER Kamera legen.
 
     WARUM HIER (User-Entscheid 31.08., Zentral-Umbau der Kalibrierung): der
@@ -730,9 +759,11 @@ def kalib_vorrat_speisen(lauf_dir, kamera, best, kalib, log=_log):
     if not deckel:
         return False                      # Vorrats-Sammlung aus (live_kalib_max 0)
     try:
-        import cv2
         from core import livewache as _lw   # lazy: der Modulkopf bleibt billig
-        bild = cv2.imread(os.path.join(lauf_dir, str(best["datei"])))
+        # E3a-1c: das Bild kommt aus dem Speicher des Laufs (der enge Ausschnitt,
+        # an dem die Guete-Zahlen gemessen sind); die Ernte schreibt keine
+        # Ausschnitt-Datei mehr nach crops/.
+        bild = best.get("bild")
         if bild is None:
             return False
         return bool(_lw.kalib_schreiben(
@@ -752,13 +783,15 @@ def kalib_vorrat_speisen(lauf_dir, kamera, best, kalib, log=_log):
 
 def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
                 ist_fd=None, struktur_mass=None, quelle=None,
-                kalib=None, sieb=None, nachmess=False):
+                kalib=None, sieb=None, nachmess=False,
+                satz=None, satz_sperre=None):
     """Frontal-Ernte fuer EIN Event (1 Event je Job — Live-Vorrang, Leitprinzip 5).
 
     Schreibt die Kandidaten (alle L-Passierer) in kandidaten/<eid>.jsonl — die Datei
     wird NEU geschrieben, ein Wieder-Ernten ist damit idempotent (kein Duplikat,
-    keine Teilzeilen-Leiche). M-Crops (enges Gesicht = Lern-Material fuer E4b) nach
-    crops/. -> Zaehler-Dict; 'unlesbar' True = 0 Frames lesbar; frames_gelesen/
+    keine Teilzeilen-Leiche). Jeder M-Fund wird ein Satz in core/refquelle (seit
+    E3a-1c der EINE Ort seiner Bilder, keine Datei mehr unter crops/, vorrat/,
+    warp/); die Zeile traegt seine ref_id. -> Zaehler-Dict; 'unlesbar' True = 0 Frames lesbar; frames_gelesen/
     frames_soll/unvollstaendig immer dabei (Teil-Verlust ist KEIN stiller Erfolg).
 
     `sieb` (.514, PFLICHT; seit .515 FUENF Achsen) = die aufgeloesten Latten
@@ -784,10 +817,9 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
     Norm-Schritt danach (core/normlauf.py).
 
     `nachmess` (.518) = „auf diesem Weg folgt der gebuendelte Norm-Schritt".
-    Nur der LERNLAUF setzt es. Es entscheidet zweierlei, und beides waere ohne
-    den Folgeschritt reine Platten-Verschwendung: ob je M-Kandidat der
-    112er-Warp konserviert wird (`datei_w`), und ob das Vorrats-Bild schon
-    angelegt wird, damit der Norm-Job die V-Linie entscheiden kann. Ohne
+    Nur der LERNLAUF setzt es. Es entscheidet, ob die Zeile die V-Frage
+    vorbereitet (`richtung`), damit der Norm-Job die V-Linie entscheiden kann;
+    die Messbasis (112er-Warp) liegt seit E3a-1c im Satz. Ohne
     `nachmess` laeuft die Ernte mit fuenf Achsen und OHNE v — beides
     deklariert (`sieb_aus`/`v_aus`), nie still.
 
@@ -815,21 +847,31 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
     Kalibrier-Vorrat DIESER Kamera mit EINEM Bild je Event
     (kalib_vorrat_speisen). None = aus, dann laeuft die Ernte wie zuvor.
     Der Wert kommt aus dem Job und NICHT aus dem eingefrorenen Manifest: der
-    Ring-Deckel ist eine laufende Config-Entscheidung, keine Lauf-Bedingung."""
+    Ring-Deckel ist eine laufende Config-Entscheidung, keine Lauf-Bedingung.
+
+    SATZ-SCHREIBWEG (E3a-1b/1c, Bauplan analysen/bauplan_refquelle_einbau.md, J1/J4/J6):
+    jedes Gesicht, das die Ernte speichert (M), wird als Satz mit Status
+    kandidat in core/refquelle geschrieben (core/harvest_set.py, „erst Bild,
+    dann Zahl"); eine Wieder-Ernte verwirft danach die Saetze der alten Zeilen,
+    die sie nicht wieder findet (J3). `satz` = das Job-Feld der Config-Zufuhr
+    (harvest_set.FEED_FIELD), `satz_sperre` = ein Sperrgrund des Aufrufers.
+    Die Norm des Satzes kommt aus der r-Stufe der Engine, die `emb` ohnehin
+    haelt (harvest_set, kein eigenes Mess-Modell in diesem Job, .518 bleibt
+    unberuehrt). Was das Sieb entscheidet, aendert sich dadurch
+    nicht; ein Fund ohne Satz steht nur als Zeile (ohne Bild), der Grund steht
+    im Log und in z["refquelle"]."""
     fehlt = schwellen_pruefen(schwellen)
     if fehlt:
         raise ValueError("ernte-schwellen unvollstaendig: " + ", ".join(fehlt))
     fehlt_s = sieb_pruefen(sieb)
     if fehlt_s:
         raise ValueError("ernte-sieb unvollstaendig: " + ", ".join(fehlt_s))
-    import cv2                      # lazy: Modul bleibt fuer Dienst/QS billig
     from core import frames as verteiler   # Z6: Abnehmer statt eigenem FrameIter
     if emb is None:
         import face_audit
         emb = face_audit.Embedder()
     if ist_fd is None:
         from face_audit import ist_fehldetektion as ist_fd
-    import numpy as _np                # .518: rohe Warp-Kachel, lazy wie cv2
     # Vorrats-Gate (Bauplan B2): aktiv nur mit VOLLEN vorrat-Schwellen im
     # (Manifest-)Regime. .518: die zweite Haelfte der Bedingung war „und eine
     # funktionierende NormMass" — die haelt dieser Prozess nicht mehr. An ihre
@@ -936,13 +978,12 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
     if vorrat_schwellen_da(schwellen) and not v_aktiv:
         v_aus = ("no bundled feature-norm step on this harvest path — "
                  "the stock line cannot be decided here")[:120]
-    os.makedirs(os.path.join(lauf_dir, "crops"), exist_ok=True)
     os.makedirs(os.path.join(lauf_dir, "kandidaten"), exist_ok=True)
-    if v_aktiv:
-        os.makedirs(os.path.join(lauf_dir, "vorrat"), exist_ok=True)
-    if nachmess:
-        os.makedirs(os.path.join(lauf_dir, WARP_ORDNER), exist_ok=True)
-    event_aufraeumen(lauf_dir, eid)     # Reste eines frueheren (Teil-)Laufs weg
+    # Reste eines frueheren (Teil-)Laufs weg; ihre Saetze merkt sich der Lauf und
+    # verwirft nach der Ernte nur die, die er nicht wieder findet (E3a-1c, J3).
+    alt_ids = set(kandidaten_ref_ids(lauf_dir, eid))
+    event_aufraeumen(lauf_dir, eid, verwerfen=False)
+    neu_ids = set()
     z = zaehler_start()      # Schluessel/Startwerte: ZAEHLER_START (EINE Quelle)
     # .341 Vorschranke: nur eine Kapsel, die eine Auswahl entgegennimmt, kann die
     # teure Arbeit auf die Ueberlebenden beschraenken (face_audit.Embedder). Fremde
@@ -968,6 +1009,19 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
     # gezogen, also NACH allen Modell-Abschaltungen oben — sonst siebte eine
     # laut herausgenommene Achse in der Sicht weiter.
     sieb_e = ernte_sieb(sieb_w)
+    # E3a-1b: der Satz-Schreibweg dieses Jobs. Die Latten, mit denen ein
+    # gespeicherter Fund durchkam: die fuenf Sieb-Achsen DIESER Kamera (nach den
+    # Modell-Abschaltungen oben), die Fehldetektions-Signatur und, wenn sie
+    # gemessen wird, die Struktur-Latte.
+    from core import harvest_set as _hs
+    satz_latten = dict(sieb_e, **{k: schwellen[k] for k in SCHWELLEN_PFLICHT
+                                  if k != "s_winkel_max"})
+    if struktur_aus is None:
+        satz_latten["struktur_min"] = struktur_min
+    satz_weg = _hs.SetWriter(satz, emb,
+                             {"eid": eid, "kamera": kamera, "ts": ts, "quelle": quelle,
+                              "latten": satz_latten},
+                             lock=satz_sperre, struktur_mass=struktur_mass)
     eid_safe = _eid_safe(eid)
     pfad = kandidaten_pfad(lauf_dir, eid)
     modell = getattr(emb, "modell", "?")
@@ -1006,7 +1060,9 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
             # §Z5) — der Nenner des Such-Balkens. Reines Durchreichen, keine Rechnung.
             takt["soll"] = getattr(info, "soll_samples", None)
             if hasattr(emb, "ar_det_size"):
-                emb.set_det_size(emb.ar_det_size(info.breite, info.hoehe))
+                # E3a-1b: die Leinwand bleibt fuer die Herkunft des Satzes stehen.
+                clip["leinwand"] = emb.ar_det_size(info.breite, info.hoehe)
+                emb.set_det_size(clip["leinwand"])
             # det_thresh NACH set_det_size neu binden (prepare resettet auf den Library-
             # Default — exakt die analyze.py:226-Lehre; ohne das erntet der Lauf eine
             # andere Detektionsmenge als der Urteilspfad).
@@ -1051,15 +1107,10 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
                 EINE Umrechnung je Gesicht, die zweite Messung kostet praktisch
                 nichts. Die crop.size-Leerwache der Schaerfe gilt damit auch fuer
                 die Luma (entartete bbox: Leer-Crop wirft sonst mitten im Lauf)."""
-                x1, y1, x2, y2 = [max(0, int(v)) for v in fc.bbox]
-                crop = frame[y1:y2, x1:x2]
-                grau = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.size else None
+                # Nachtrag E3a-3: die Rechnung steht in enge_messung (auch der Worker-Satz misst damit).
+                x1, y1, x2, y2, crop, sharp, luma = enge_messung(frame, fc.bbox)
                 w = (x1, y1, x2, y2, min(x2 - x1, y2 - y1),
-                     round(float(fc.det_score), 3),
-                     round(float(cv2.Laplacian(grau, cv2.CV_64F).var())
-                           if grau is not None else 0.0, 1),
-                     crop,
-                     None if grau is None else int(round(float(grau.mean()))))
+                     round(float(fc.det_score), 3), sharp, crop, luma)
                 werte[id(fc)] = w
                 return w
 
@@ -1168,39 +1219,27 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
                     # was auf der Platte landet, liest die Zaehler.
                     z["gesiebt"] += 1
                 t = i / clip["fps"]
-                datei = None
-                datei_w = None
+                ref_id = None
                 if m:                       # nur Bildwuerdiges kostet Platte (Konzept §P1)
+                    # Die Kennung des Funds wie bisher (Ereignis~Bild~Nummer); sie
+                    # steht als Ausschnittname in der Herkunft des Satzes.
                     kid = f"{eid_safe}~{i}~{z['kandidaten']}"
-                    datei = os.path.join("crops", kid + ".jpg")
-                    if not cv2.imwrite(os.path.join(lauf_dir, datei), crop.copy()):
-                        # volle Platte u.ae.: LAUT statt Zeile-mit-totem-Pfad
-                        raise OSError(f"crop nicht schreibbar: {datei}")
                     z["letzter_m"] = {"kamera": kamera, "t": round(t, 1)}
-                    # .518 WARP-KONSERVIERUNG: die MESSBASIS des gebuendelten
-                    # Norm-Schritts, roh (np.save) und nicht als JPEG — eine
-                    # Kompression verschoebe die Zahl, und dann maesse der
-                    # Schritt etwas anderes als bis .517 gemessen wurde
-                    # ([[ersatzmessungen-sind-hypothesen]]). Groessenordnung
-                    # 112*112*3 = 36,75 KB je Kachel plus 128 B npy-Kopf.
-                    # `aligned` ist genau der Warp, an dem oben schon die
-                    # Erkennbarkeit gemessen wurde — kein zweites Alignment.
-                    # Fehlt er (keine Landmarken, oder die Guete-Messung warf),
-                    # bekommt dieser Fund KEINE Kachel: der Norm-Schritt
-                    # beurteilt ihn dann fail-closed als `n_unmessbar` — genau
-                    # das Urteil, das bis .517 an dieser Stelle fiel.
-                    if nachmess:
-                        if aligned is None:
-                            z["warp_fehlt"] = z.get("warp_fehlt", 0) + 1
-                        else:
-                            datei_w = warp_rel(kid)
-                            try:
-                                _np.save(os.path.join(lauf_dir, datei_w), aligned)
-                            except OSError as _e_w:
-                                # Dieselbe Haltung wie beim Crop: volle Platte
-                                # ist LAUT, nicht eine Zeile mit totem Pfad.
-                                raise OSError(f"warp nicht schreibbar: "
-                                              f"{datei_w} ({_e_w})")
+                    # E3a-1b/1c: der Satz dieses gespeicherten Gesichts (ganz oder
+                    # gar nicht, Reihenfolge im Kopf von core/harvest_set). Er ist
+                    # seit E3a-1c der EINE Ort seiner Bilder: kein Ausschnitt unter
+                    # crops/, keine Warp-Kachel unter warp/ (die Messbasis des
+                    # Norm-Schritts ist sein rechen112.png aus genau dem Warp
+                    # `aligned`, an dem oben die Erkennbarkeit gemessen wurde).
+                    ref_id = satz_weg.write(frame, fc, aligned, {
+                        "nr": i, "bildzeit": t, "leinwand": clip.get("leinwand"),
+                        "datei": kid,
+                        "werte": {"det": det, "schaerfe": sharp, "helligkeit": luma,
+                                  "guete_e": mk_empf_w, "guete_t": mk_fiqa_t_w,
+                                  "kopfhaltung": p_w, "struktur": struktur,
+                                  "kopfwinkel": pose}})
+                    if ref_id:
+                        neu_ids.add(ref_id)
                 # ---- Vorrats-Achsen (Bauplan B2): kps-Frontalitaet/Richtung sind
                 # billig und stehen fuer JEDE Zeile im Protokoll; die teure
                 # Norm-Inferenz bezahlen NUR Sieb-Passierer (W2.8 — je Frame sind
@@ -1218,41 +1257,17 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
                 # „nicht messbar".
                 norm = None
                 # .518 V-LINIE: die Entscheidung braucht die Norm und faellt
-                # deshalb ebenfalls im Norm-Schritt. Was HIER passiert, ist die
-                # Vorbereitung: das Vorrats-Bild wird fuer JEDEN M-Kandidaten
-                # angelegt, weil es nur solange geschnitten werden kann, wie der
-                # FRAME lebt. Der Norm-Schritt setzt danach `v` und raeumt die
-                # Bilder der Nicht-Passierer weg (core/normlauf.py). Der Preis
-                # ist Platte auf Zeit, der Gewinn ist, dass die Ernte-Plaetze
-                # keine 2,7-GB-Session mehr halten.
+                # deshalb im Norm-Schritt. HIER faellt nur die Vorbereitung: die
+                # Richtung (kps-Frontalitaet) markiert die Zeile als V-fraglich.
+                # E3a-1c: das Vorrats-Bild (Rand-Ausschnitt) entfaellt — die
+                # Anzeige nimmt das Profilbild des Satzes (Seite profil_faktor x
+                # Box, im Satz unveraenderlich). `v` bleibt hier BEWUSST False:
+                # der Norm-Schritt ist die einzige Stelle, die es faellen kann,
+                # und `core.vorrat` nimmt nur Zeilen mit v==True.
                 v_flag = False
-                datei_v = None
                 if v_aktiv and not struktur_sperrt:
                     richtung = richtung_aus_kps(kps, front_kps,
                                                 schwellen["vorrat_front_profil"])
-                    if m and kps is not None:
-                        # v-Crop MIT Umfeld-Rand, an Framegrenzen geklemmt —
-                        # ANZEIGE fuers Auge, nie Embedding-Quelle (A2-Befund:
-                        # 28/40 enge Klein-Crops sind fuer embed() tot, der
-                        # Rand heilt das nicht). Name traegt die eid
-                        # (Kollisions-Fund W2.2), keine Tilde, DATEI_RE-konform.
-                        f = float(schwellen["vorrat_rand_faktor"])
-                        cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
-                        hb, hh = (x2 - x1) * f / 2.0, (y2 - y1) * f / 2.0
-                        H, W = frame.shape[:2]
-                        a1, b1 = max(0, int(cx - hb)), max(0, int(cy - hh))
-                        a2, b2 = min(W, int(cx + hb)), min(H, int(cy + hh))
-                        datei_v = os.path.join(
-                            "vorrat", f"v_{eid_safe}_{i}_{z['kandidaten']}.jpg")
-                        rand_crop = frame[b1:b2, a1:a2]
-                        if not (rand_crop.size and cv2.imwrite(
-                                os.path.join(lauf_dir, datei_v), rand_crop.copy())):
-                            raise OSError(f"vorrat-crop nicht schreibbar: {datei_v}")
-                        # `v` bleibt hier BEWUSST False: das Bild liegt, das
-                        # Urteil fehlt. Der Norm-Schritt ist die einzige Stelle,
-                        # die es faellen kann — und `core.vorrat` nimmt nur
-                        # Zeilen mit v==True, ein unentschiedener Zwischenstand
-                        # kann also nirgends als Angebot durchgehen.
                 # ---- LEGACY-Paar `fiqa_t`/`empf`: gefuellt fuer genau das
                 # Material, das den Weg nimmt (bis .513 „nur m", seit .514 „nur
                 # was das Sieb passiert hat" — dieselbe Menge, neu bestimmt).
@@ -1279,7 +1294,7 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
                 # (Topf statt Variable: `ernten` ist eine Closure, eine
                 # Zuweisung machte den Namen lokal — dieselbe Bauform wie
                 # `clip` und `takt` darueber.)
-                if m and datei is not None and (
+                if m and (
                         kalib_topf["best"] is None
                         or det > kalib_topf["best"]["det"]):
                     # POSE-KOPF fuer den Kalibrier-Vorrat (03.09.,
@@ -1291,13 +1306,13 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
                     # die Pose-Latte auf 0, misst hier weiterhin EIN Bild je
                     # Event, damit die Kalibrier-Seite ihren Regler behaelt.
                     kalib_topf["best"] = {
-                        "datei": datei, "det": det, "e": empf_w, "t": fiqa_t_w,
+                        "bild": crop.copy(), "det": det, "e": empf_w, "t": fiqa_t_w,
                         "p": p_w if p_w is not None else pose_kopf(frame, fc.bbox)}
                 zeile = kandidat_zeile(eid, kamera, ts, t, (x1, y1, x2, y2), det,
                                        front, sharp, kante, pose,
-                                       fc.normed_embedding, modell, m, s_flag, datei,
+                                       modell, m, s_flag,
                                        norm=norm, front_kps=front_kps,
-                                       richtung=richtung, v=v_flag, datei_v=datei_v,
+                                       richtung=richtung, v=v_flag,
                                        struktur=struktur, quelle=quelle, luma=luma,
                                        fiqa_t=fiqa_t_w, empf=empf_w,
                                        # MESSKARTE (.513/.514): die VOLLE
@@ -1308,10 +1323,7 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
                                        # entstand, `sieb_grund`, woran es lag.
                                        mk_fiqa_t=mk_fiqa_t_w, mk_empf=mk_empf_w,
                                        mk_quelle=mk_quelle_w, mk_pose=p_w,
-                                       sieb_grund=sieb_grund,
-                                       # .518: die Messbasis des gebuendelten
-                                       # Norm-Schritts (None = keine Kachel).
-                                       datei_w=datei_w)
+                                       sieb_grund=sieb_grund, ref_id=ref_id)
                 # BILANZ (.513, Etappe 1 B4 — das Messbarkeit-vor-Stimme-
                 # Gegenstueck fuer den LERNPFAD, Inventur §I-7): je Fund EINE
                 # Buchung. Ohne sie gibt es keine Zahl dafuer, wie viel des
@@ -1385,6 +1397,9 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
     # B4: die Bilanz reist mit (der Dienst zieht die Lauf-Summe daraus und
     # schreibt EINE Zeile je Lauf — nicht je Event, sonst waere sie Rauschen).
     z["mkbilanz"] = bilanz
+    # E3a-1b: die Bilanz des Satz-Schreibwegs reist in der Job-Antwort mit (ein
+    # Dict wie mkbilanz, kein neuer Zaehler: ZAEHLER_START bleibt unberuehrt).
+    z["refquelle"] = satz_weg.summary()
     if z.get("guete_fehler") or (not guete_da and bilanz["gesehen"]):
         grund = (f"{z['guete_fehler']} measurement error(s)"
                  if z.get("guete_fehler") else
@@ -1414,7 +1429,11 @@ def ernte_event(vid, eid, kamera, ts, fps_sample, schwellen, lauf_dir, emb=None,
     # Rueckgabe-Topf — ZAEHLER_START und die festen Transport-Listen (Regel
     # SK3) bleiben unberuehrt; wer wissen will, wie viele Bilder ankamen,
     # zaehlt den Ring (der On-demand-Fueller tut genau das).
-    kalib_vorrat_speisen(lauf_dir, kamera, kalib_topf["best"], kalib)
+    kalib_vorrat_speisen(kamera, kalib_topf["best"], kalib)
+    # E3a-1c (J3): Saetze der alten Zeilen dieses Ereignisses, die die Wieder-Ernte
+    # nicht wieder gefunden hat, bekommen die Statuszeile verworfen (Verfall).
+    if alt_ids - neu_ids:
+        _saetze_verwerfen(satz, sorted(alt_ids - neu_ids), GRUND_WIEDERERNTE, eid)
     return z
 
 

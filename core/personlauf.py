@@ -189,17 +189,15 @@ def anlegen(data_dir, n_events, person="", tage=None):
             pass
     # Verwaiste Labels (Issue #18, Zwei-Namen-Fall): Bestaetigungen GELOESCHTER
     # Personen bleiben als Historie in der Akte — die Alle-Ernte bietet sie
-    # aber NICHT mehr an. Personen-Universum = Referenz-Master (faces/), die-
-    # selbe Quelle wie die Wizard-Auswahl (master_persons). Uebersprungenes
+    # aber NICHT mehr an. Personen-Universum = die Personen mit aktiver
+    # Referenz in der Referenz-Quelle (seit E3b-2a, Lese-Stufe b, Feld
+    # personen), dieselbe Quelle wie die Wizard-Auswahl (master_persons);
+    # nicht mehr die Ordner unter faces/. Uebersprungenes
     # wird GEZAEHLT ausgewiesen (diagnose.verwaiste_labels), nie still. Eine
     # EXPLIZIT gewaehlte Person filtert nicht (der Wizard bietet nur
     # Existierende an; ein bewusster Direkt-Aufruf bleibt moeglich).
-    try:
-        _fd = os.path.join(data_dir, "faces")
-        vorhanden = {p for p in os.listdir(_fd)
-                     if os.path.isdir(os.path.join(_fd, p))}
-    except FileNotFoundError:
-        vorhanden = set()
+    from core import refquelle as _rq
+    vorhanden = set(_rq.read_catalog({"data_dir": data_dir})["personen"])
     verwaist = {}
     im_fenster = []
     topf = fremd if fremd_lauf else je_eid

@@ -633,8 +633,20 @@ class ModellBestand:
                 eintrag = self._sessions[schluessel] = s
             return eintrag
 
+    @staticmethod
+    def stufe_marke(k, n):
+        """Die Marke der Session von Stufe k mit Breite n: Schluessel ihres Bind-Berichts
+        und Kennung ihrer Log-Zeilen. -> Text wie „r[n=1]“"""
+        return f"{k}[n={n}]"
+
     def stufe_session(self, k, n):
-        return self._bauen((k, n), f"{k}[n={n}]", lambda: self._bau[k](n))
+        return self._bauen((k, n), self.stufe_marke(k, n), lambda: self._bau[k](n))
+
+    def stufe_bindung(self, k, n):
+        """Session und Bind-Bericht der Stufe k mit Breite n, ueber `stufe_session` (baut beim
+        ersten Bedarf, sonst dieselbe Session). -> (Session, Kopie des Berichts)"""
+        s = self.stufe_session(k, n)
+        return s, dict(self.bindung[self.stufe_marke(k, n)])
 
     def det_session(self, det_wh, det_pfad):
         det_w, det_h = int(det_wh[0]), int(det_wh[1])
@@ -965,6 +977,25 @@ class BildStufen:
         return {"engine": Engine.name, "geraet": EP, "breite": self.BREITE,
                 "det_leinwaende": [f"{w}x{h}" for (w, h) in sorted(self._gesehen)],
                 "stufen": self.bestand.stufen_marken()}
+
+    def identity(self):
+        """Die Engine-Auskunft fuer die Rechenwerk-Kennung (Entscheid J5, gelesen von
+        bild_kern.engine_identity; die Textformen stehen dort an einer Stelle).
+        -> dict genauigkeit, bibliothek, modell_pfad, geraet, breite
+
+        Am Bind-Bericht der r-Session abgelesen, nicht am Wunsch: das Geraet ist das, was
+        `_sitzung` gebunden hat (migraphx:<Nummer>, ein Teil auf der CPU mit „+cpu“, ganz
+        zurueckgefallen „cpu“), der Provider der Session steht in der Bibliothek, die
+        Genauigkeit ist der Rechentyp der geladenen r-Datei (`bestand.typ`). `engine_cpu`
+        erbt diese Methode und ersetzt nur die Genauigkeit."""
+        s, bericht = self.bestand.stufe_bindung("r", self.BREITE)
+        geraet = bericht.get("geraet") or "cpu"
+        if bericht.get("deckung") == "teilweise":
+            geraet = f"{geraet}+cpu"
+        return {"genauigkeit": ec._typ_name(self.bestand.typ["r"]),
+                "bibliothek": f"onnxruntime {ort.__version__} {s.get_providers()[0]}",
+                "modell_pfad": self.bestand.pfade["r"],
+                "geraet": geraet, "breite": self.BREITE}
 
 
 # ------------------------------------------------------------------ Die Engine

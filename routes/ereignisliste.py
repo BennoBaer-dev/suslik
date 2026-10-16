@@ -22,6 +22,8 @@ import urllib.parse
 import szenarien
 import webui
 from core import areas as _areas_mod
+from core import harvest_set as _hs
+from core.lernlauf import bild_url
 from core.sprache import t, t_n
 from webui.bausteine import KAT_FARBE, bild_nn, gt_leiste, kat_map, kat_wort
 from core import logbuch as _logbuch
@@ -53,28 +55,46 @@ def crop_zellen(cfg, ed, edir, bestaetigt, hinweis_leer):
     def _score(c):
         return bild_nn(c) if bild_nn(c) is not None else -9.0
 
-    def _kachel(datei, person=None):
+    # E3a-3 (Bauplan Referenz-Quelle einbauen): seit der Referenz-Quelle liegen das beste Gesicht je
+    # Person und die Kandidaten als Saetze vor (kandidaten.jsonl, ref_id, Bild ueber Lese-Stufe d);
+    # Ereignisse vor dieser Version zeigen weiter ihre _best_- und _enroll_-Dateien.
+    # Gelesen wird die Datei nur fuer neue Ereignisse (ohne _best_-Datei), die alten zeigen wie bisher.
+    kand_z, best_z = _hs.event_rows(edir) if not best else ([], {})
+    satz_best = {p: z for p, z in best_z.items() if z.get("ref_id")}
+
+    def _kachel(datei, person=None, src=None):
         ziel = datei
         if person is not None:
             kand = sorted((c for c in show if f"_show_{person}_" in c), key=_score)
             if kand:
                 ziel = kand[-1]
-        bild = (f'<a href="{_bild_url(ed, ziel)}"><img src="{_bild_url(ed, datei)}" '
+        bild_src = src or _bild_url(ed, datei)
+        link = _bild_url(ed, ziel) if ziel != datei or src is None else src
+        bild = (f'<a href="{link}"><img src="{bild_src}" '
                 f'alt="{html.escape(person or "")}"></a>')
         if person:
             bild += f'<div class="dim" style="font-size:11px">{html.escape(person)}</div>'
         return f'<div style="display:inline-block;text-align:center;margin-right:6px">{bild}</div>'
+
+    def _satz_kachel(z, person=None):
+        return _kachel(z["ref_id"], person, src=bild_url(z["ref_id"], None))
     zellen = []
     for person in bestaetigt[:3]:
         kand = sorted((c for c in best if f"_best_{person}_" in c), key=_score)
         if kand:
             zellen.append(_kachel(kand[-1], person))
+        elif person in satz_best:
+            zellen.append(_satz_kachel(satz_best[person], person))
     if not zellen and best:
         zellen.append(_kachel(sorted(best, key=_score)[-1]))
+    if not zellen and satz_best:
+        zellen.append(_satz_kachel(max(satz_best.values(), key=lambda z: z.get("score") or -9.0)))
     if not zellen:
         enroll = sorted(c for c in dateien if "_enroll_" in c and c.endswith(".jpg"))
         if enroll:
             zellen.append(_kachel(enroll[0]))
+        elif any(z.get("ref_id") for z in kand_z):
+            zellen.append(_satz_kachel(next(z for z in kand_z if z.get("ref_id"))))
     if not zellen:
         return f'<span class="dim" title="{html.escape(hinweis_leer)}">—</span>'
     return "".join(zellen)

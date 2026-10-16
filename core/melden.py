@@ -478,7 +478,8 @@ def publish_erkennung(cfg, pub, log, debug, entry):
 def telegram_melden(cfg, log, dry_alert, zustand, best_crop, clip_holen, ha_melden,
                     art, entry, personen=None):
     """Szenen-Telegram direkt aus verifyd (ersetzt die HA-MQTT-Automationen, 19.07.).
-    art 'erkannt'|'unbekannt'; Modus telegram_modus: aus|ha|direkt|beide. Versand im
+    art 'erkannt'|'unbekannt'; personen sind bei 'erkannt' die Erkannten, bei 'unbekannt' die im Fenster erkannten
+    Namen (nur Information). Modus telegram_modus: aus|ha|direkt|beide. Versand im
     Thread (Transcode+Upload blockieren den GPU-Lock nicht); Unbekannt zusaetzlich
     ueber telegram_cooldown gedrosselt (ersetzt die fehlerhafte HA-10-min-Sperre).
 
@@ -488,7 +489,7 @@ def telegram_melden(cfg, log, dry_alert, zustand, best_crop, clip_holen, ha_meld
 
     SPRACH-STUFE 4 — GRENZE, BEWUSST (Bericht Stufe 4): die beiden Captions
     unten sind DEUTSCH ("… erkannt um …", "Unbekannte Person um … — niemand
-    erkannt"). de->en waere eine bewusste TEXTAENDERUNG, nie Teil des
+    erkannt" bzw. "… — im Fenster erkannt: …"). de->en waere eine bewusste TEXTAENDERUNG, nie Teil des
     Einzugs (dieselbe Regel wie die deutschen Alt-msgs im do_POST-Marker
     (b)) — sie bleiben literal, bis der User den Wortlaut entscheidet.
     Sprachfaehig ist hier nur der englische Video-Rueckfall-Zusatz."""
@@ -511,6 +512,10 @@ def telegram_melden(cfg, log, dry_alert, zustand, best_crop, clip_holen, ha_meld
     t = datetime.datetime.fromtimestamp(entry.get("start") or entry["ts"]).strftime("%H:%M")
     if art == "erkannt":
         caption = f"✅ {cam_name}\n{' + '.join(personen or [])} erkannt um {t} (suslik)"
+    elif personen:
+        # Stufe V1b (Bauplan analysen/bauplan_verbraucher_unbekannt.md, Entscheid 11): die im Fenster erkannten Namen
+        # stehen als Information dabei; sie heben die Unbekannt-Meldung nicht mehr auf.
+        caption = f"⚠️ {cam_name}\nUnbekannte Person um {t} — im Fenster erkannt: {' + '.join(personen)} (suslik)"
     else:
         caption = f"⚠️ {cam_name}\nUnbekannte Person um {t} — niemand erkannt (suslik)"
     event_dir = os.path.join(cfg["data_dir"], "events", eid.replace("/", "_"))

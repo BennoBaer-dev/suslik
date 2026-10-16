@@ -58,23 +58,26 @@ T = {
         "readme.inhalt": 'Contenido',
     "readme.neu.titel": "Novedades de esta versión",
     "readme.neu.text":
-        "Esta versión cambia mucho, empezando por cómo pruebo antes de una "
-        "publicación. Ahora cada versión pasa por una prueba en tres máquinas "
-        "de prueba antes de que la publique. De vez en cuando se habían colado "
-        "errores en el código. La prueba debe encontrarlos antes.\n\n"
-        "El reconocimiento facial funciona de otra manera. El programa sigue "
-        "revisando una de cada x imágenes de un evento. Cuando una cara alcanza "
-        "cierta puntuación para una persona conocida, se abre una puerta: las "
-        "20 imágenes siguientes se revisan una por una. Si una cara vuelve a "
-        "alcanzar esa puntuación dentro de la ventana, la puerta queda abierta "
-        "más tiempo. Después se vuelve a una de cada x imágenes.\n\n"
-        "Un nombre solo se pone verde tras tres coincidencias. Cada cara "
-        "aprovechable que encaja con la persona cuenta como una coincidencia. "
-        "Una cara que solo se ve bien un momento tiene ahora más posibilidades: "
-        "en cuanto se detecta, las imágenes justo después ya no se saltan.\n\n"
-        "Me alegra recibir cualquier comentario, sobre todo cuando el nuevo "
-        "reconocimiento se equivoca: un nombre equivocado, o una persona "
-        "conocida que no se reconoce. Solo así puedo trabajar en los errores.",
+        "Esta versión trae muchos cambios. Los principales:\n\n"
+        "Las caras aprendidas se guardan de una forma nueva. Cada cara es ahora "
+        "un conjunto propio con imagen, mediciones y origen. Esto prepara una "
+        "mejor preselección y recomendaciones sobre qué imágenes sirven como "
+        "referencia. En el primer arranque, la versión traslada tus caras una "
+        "sola vez. No se borra nada, los archivos antiguos se quedan donde están.\n\n"
+        "Las caras desconocidas se reconocen y se asignan mejor. Las caras de un "
+        "evento se agrupan por parecido y se comparan con los desconocidos que ya "
+        "tienes. Si un grupo encaja con uno de ellos, se añade a él; si no, se "
+        "crea un desconocido nuevo.\n\n"
+        "Los desconocidos que se parecen a una persona conocida aparecen ahora "
+        "agrupados en «Probablemente reconocidos». Ahí puedes asignarlos a esa "
+        "persona o indicar que no es ella.\n\n"
+        "Si esta versión te da problemas, puedes volver a 0.1.1.010. Vuelve a "
+        "poner la imagen en 0.1.1.010 y reinicia, no hace falta hacer nada en la "
+        "carpeta de datos. Entonces faltan las caras que esta versión ha "
+        "aprendido desde la actualización. Y lo que 0.1.1.010 aprenda después no "
+        "lo recoge una actualización posterior.\n\n"
+        "Me alegra recibir cualquier comentario, sobre todo cuando algo no "
+        "cuadra.",
         "readme.generell.titel": 'General',
     "readme.generell.text": 'Mi reconocimiento de recorridos depende de la detección de personas de Frigate. En cuanto Frigate avisa de una persona, me traigo el evento de persona entero. Un evento así dura unas veces pocos segundos y otras varios minutos. Lo reviso de principio a fin para encontrar a todas las personas que aparecen en él.\n\nQue el reconocimiento facial propio de Frigate esté activado no importa. Solo hace falta si quieres sincronizar caras con Frigate.\n\nLa comprobación nunca usa el stream de detección, sino la grabación, es decir el mejor stream que la cámara entrega a Frigate.\n\nUna comprobación arranca por dos vías. O por el evento de persona de Frigate, esa es la vía del recorrido. O por el vigilante en vivo: toma el stream en curso, directo de la cámara o por el proxy de Frigate, busca caras y arranca desde ahí.\n\nUna persona se reconoce por tres vías. Por la cara. Por la persona entera, solo a partir de la imagen, sin cara. Por un modelo de visión, y esa vía sigue en beta.\n\nAquí uso cámaras 4K con la tasa de imagen lo más alta posible, al menos 15 imágenes por segundo. El bitrate igual de alto. Un bitrate bajo deja borrosas las caras en movimiento.',
     "readme.aktuell.titel": 'En qué estoy trabajando',
@@ -109,16 +112,12 @@ T = {
         "Los rostros nuevos que sean buenos (grandes, nítidos, frontales, "
         "reconocidos con confianza o claramente de un extraño) aparecen "
         "aquí automáticamente tras el análisis.",
-    "lernen.karte.unbekannt": "Persona desconocida/extraña",
     "lernen.karte.metrik_voll":
         "puntuación {score} · novedad {novelty} · {bw}×{bh}px · "
         "frontal {front} · nitidez {sharp}",
     "lernen.karte.metrik_kurz": "puntuación {score}",
     "lernen.karte.link_video": "Vídeo",
     "lernen.karte.knopf_add_person": "Añadir como {person}",
-    "lernen.karte.attr_person": "como persona…",
-    "lernen.karte.attr_neu": "o persona nueva",
-    "lernen.karte.knopf_add": "Añadir",
     "lernen.karte.knopf_ablehnen": "Descartar",
     "lernen.galerie.titel": "Banco de referencias (Master)",
     "lernen.galerie.bildzahl": "{n} referencias",
@@ -246,14 +245,6 @@ T = {
         "con confianza. Marca y aplica.",
     "aehnliche.kopf.link_zurueck": "volver",
     "aehnliche.unbekannt.titel": "De rostros desconocidos",
-    "aehnliche.unbekannt.suche_titel":
-        "Búsqueda en curso — se están releyendo las referencias.",
-    "aehnliche.unbekannt.kein_cache":
-        "Las referencias aún no se han leído.",
-    "aehnliche.unbekannt.kein_cache_hinweis":
-        "Esta lista necesita el índice de referencias. La comprobación de "
-        "referencias lo escribe; después aparecerá aquí un resultado.",
-    "aehnliche.unbekannt.knopf_pruefen": "comprobar referencias",
     "aehnliche.unbekannt.hinweis_leer":
         "No hay rostros desconocidos parecidos guardados.",
     "aehnliche.unbekannt.aehnlichkeit": "similitud {sim}",
@@ -439,7 +430,7 @@ T = {
     "konfiguration.neustart.frage": "¿Reiniciar el servicio ahora? El procesamiento se pausa unos segundos.",
     "antwort.neustart": "Reiniciando — esta página vuelve a responder en unos segundos.",
     "konfiguration.support.titel": "Acceso remoto de soporte",
-    "konfiguration.support.satz": "Descarga de solo lectura de areas con nombre (logs, config enmascarada, caras, corridas de aprendizaje, material corporal, archivos de estado) para quien tenga el token de soporte. El interruptor support_zugriff esta en la tabla de abajo, apagado por defecto. Cada peticion queda en el log del servicio. Las areas de caras y cuerpo contienen imagenes de personas reales — entrega el token con cuidado. Sin TLS delante de este servicio el token viaja en texto plano. El token tambien permite cuatro acciones: reiniciar este servicio a distancia (POST /support/restart), volver a pasar eventos por el reconocimiento (POST /support/einspielen), encender o apagar la medicion fina (POST /support/feinmessung) y encender o apagar el log de depuracion sin reiniciar (POST /support/debug).",
+    "konfiguration.support.satz": "Descarga de solo lectura de areas con nombre (logs, config enmascarada, caras, corridas de aprendizaje, material corporal, archivos de estado) para quien tenga el token de soporte. El interruptor support_zugriff esta en la tabla de abajo, apagado por defecto. Cada peticion queda en el log del servicio. Las areas de caras y cuerpo contienen imagenes de personas reales — entrega el token con cuidado. Sin TLS delante de este servicio el token viaja en texto plano. El token tambien permite cinco acciones: reiniciar este servicio a distancia (POST /support/restart), volver a pasar eventos por el reconocimiento (POST /support/einspielen), encender o apagar la medicion fina (POST /support/feinmessung), encender o apagar el log de depuracion sin reiniciar (POST /support/debug) y medir pequenas operaciones de archivos en el servicio y en un proceso nuevo (POST /support/dateiprobe).",
     "konfiguration.support.token_gesetzt": "Hay un token de soporte establecido.",
     "konfiguration.support.token_fehlt": "Aun no hay token de soporte.",
     "konfiguration.support.knopf_token": "Crear token nuevo",
@@ -1755,7 +1746,6 @@ T = {
     "js.vollrestore.frage": "¿Restaurar la copia de seguridad COMPLETA \"{name}\"? Esto sustituye los ajustes, las referencias y todo el material aprendido, y luego reinicia el servicio.",
     "js.vollrestore.laeuft": "subiendo + restaurando … (los archivos grandes tardan)",
     "js.enroll.fehler": "Error: {msg}",
-    "js.enroll.person_fehlt": "Elige una persona o introduce una nueva.",
     "js.upload.fehlt": "Elige una persona (desplegable o nueva) y un archivo.",
     "js.upload.trotzdem": "{msg}\n\n¿Añadir de todos modos?",
     "js.anlernen.frage": "¿Añadir el grupo como \"{person}\" (las mejores imágenes pasan a ser referencias)?",
@@ -1800,8 +1790,8 @@ T = {
     "js.ref.batch_frage": "¿Eliminar {n} imagen(es)?",
     "js.ref.batch_alle_frage":
         "Esas son TODAS las {n} imagen(es) de referencia de {person}. Sin "
-        "referencias ya no se podrá reconocer a {person}. Las imágenes van a "
-        "la papelera y se pueden restaurar. ¿Continuar?",
+        "referencias ya no se podrá reconocer a {person}. Los conjuntos de "
+        "referencia pasan al archivo (no se elimina nada). ¿Continuar?",
     "js.dienst.nicht_erreichbar": "no se puede contactar con el servicio — inténtalo de nuevo en un momento.",
     "js.unb.tick": "{phase} … {s} s",
     "js.unb.besucher_frage": "¿Ignorar como extraño conocido? Ya no generará avisos. (Puedes volver a activarlo cuando quieras, más abajo en \"visitantes conocidos\".)",
@@ -1810,7 +1800,7 @@ T = {
     "js.unb.benennen_frage": "¿Asignar a \"{person}\"? Las mejores imágenes pasan a ser referencias.",
     "js.unb.teil_frage": "¿Asignar las {n} imágenes marcadas a «{person}»? El resto del grupo sigue en Desconocidos.",
     "js.unb.objekt_frage": "¿Marcar como «no es una persona» (un arbusto, un reflejo, un coche aparcado)? Dejará de aparecer como visitante; puedes deshacerlo en «no son personas».",
-    "js.person.loesch_frage": "¿Eliminar TODAS las referencias y el nombre \"{person}\"?\nLas imágenes pasan a la papelera (recuperables).\n\nEscribe el nombre para confirmar:",
+    "js.person.loesch_frage": "¿Eliminar TODAS las referencias y el nombre \"{person}\"?\nLos conjuntos de referencia pasan al archivo (no se elimina nada).\n\nEscribe el nombre para confirmar:",
     "js.person.name_falsch": "El nombre no coincide — no se ha eliminado nada.",
     "js.person.umbenennen_frage":
         "Renombrar \"{person}\" — corrija el nombre abajo.\n\n"
@@ -1887,8 +1877,6 @@ T = {
     # Projektroot-Route /heute-Personensicht + /pass/<eid> (auftritte.py);
     # Stufe-2-Grenzen s. en.py-Abschnittskommentar. Muttersprachler-QS der
     # Tranche durchlaufen 19.08.2026.
-    "auftritte.unbek.zaehlung":
-        "+{n} sin identificar (suelen ser las mismas personas)",
     "auftritte.unbek.name": "Persona desconocida {nummer}",
     "auftritte.unbek.ohne_treffer.eins":
         "{n} evento con un rostro sin identificar",
@@ -2340,8 +2328,8 @@ T = {
     "system.voll.knopf_restore": "Restaurar la copia completa…",
     "system.voll.careful": "este archivo {hinweis}.",
     "system.voll.restore_satz":
-        "Restaurar sustituye esas partes (cada versión anterior se "
-        "conserva una vez como *.pre-restore-*) y reinicia el servicio. "
+        "Restaurar sustituye esas partes (las anteriores quedan en "
+        "state/archiv/, no se borra nada) y reinicia el servicio. "
         "Subir unos cientos de MB puede tardar — deja la página abierta.",
     "system.live.titel": "Vigilancias en directo",
     "system.live.alerts": "Avisos enviados hoy: {kanaele}",
@@ -3172,8 +3160,8 @@ T = {
     "personwizard.modell.js_fehler": "error ",
     # --- verifyd.py POST-Antworten (antwort.*, Nutzungs-Reihenfolge) ---
     "antwort.person_entfernt":
-        "Se ha eliminado a {person} ({n} imágenes de referencia movidas "
-        "a la papelera — recuperables)",
+        "Se ha eliminado a {person} ({n} conjunto(s) de referencia "
+        "archivado(s) — no se ha eliminado nada)",
     "antwort.person_name_ungueltig": "nombre no válido",
     "antwort.person_unbekannt": "persona desconocida",
     "antwort.person_name_belegt":
@@ -3217,13 +3205,6 @@ T = {
     "antwort.bruecke_hinzu": "{n} imagen(es) añadida(s)",
     "antwort.modell_laedt":
         "cargando el modelo de reconocimiento — unos segundos …",
-    "antwort.refcache_baut":
-        "reconstruyendo el banco de referencias — con un banco grande "
-        "puede tardar un minuto …",
-    "antwort.refcache_fehler":
-        "la reconstrucción del banco de referencias ha fallado dos veces "
-        "seguidas — mira el registro del servicio (/log); el siguiente intento "
-        "se hará en unos minutos",
     "antwort.cache_aufgeraeumt": "{n} clip(s) eliminado(s), {mb} MB liberados — caché {cache} GB, {frei} GB libres",
     "antwort.bruecke_nimmt": "la comprobación elige {n} imagen(es)",
     "antwort.bruecke_grenz_zusatz":
@@ -3833,6 +3814,10 @@ del día vaya completando a las personas conocidas entre medias.</p>""",
     "heute.person.live_title": "solo nombrada por un vigilante en directo (aviso de nombre tras varias coincidencias) — aún sin paso confirmado",
     "heute.person.live_link": "ir al aviso en directo {zeit} · {kamera}",
     "heute.person.mehr": "todas las {n} personas ({m} más)",
+    "heute.unbek.cnt.eins": "{n} persona desconocida · por último avistamiento",
+    "heute.unbek.cnt.viele": "{n} personas desconocidas · por último avistamiento",
+    "heute.unbek.gesehen": "vista {von}–{bis}",
+    "heute.unbek.gesehen_einmal": "vista {zeit}",
     "heute.anw.dauer": "presente unas {h} h",
     "heute.anw.title": "presencia por hora, todas las cámaras — rojo: presencia confirmada, verde: sistema en marcha, nadie visto",
     "heute.anw.title_gesamt": "presencia por hora — todas las cámaras, sin filtrar por la vista de zona",
@@ -3846,6 +3831,24 @@ del día vaya completando a las personas conocidas entre medias.</p>""",
     "heute.rand.unmatched": "sin asignar dentro de pasos",
     "heute.rand.unmatched_title": "eventos con rostro sin coincidencia con una persona conocida, dentro de pasos con reconocimiento — normalmente las mismas personas",
     "heute.rand.unbek_title": "identidades desconocidas del pool con apoyo este día; sin datos del pool: pasos sin nadie reconocido",
+    "heute.aehnlich.titel": "Probablemente reconocidos",
+    "heute.aehnlich.cnt.eins": "{n} persona conocida, sin confirmar · por último avistamiento",
+    "heute.aehnlich.cnt.viele": "{n} personas conocidas, sin confirmar · por último avistamiento",
+    "heute.aehnlich.zu": "probablemente {person}",
+    "heute.aehnlich.ident": "{uid} · mediana {median} · ventaja {abstand}",
+    "heute.aehnlich.rand.eins": "{n} persona probablemente reconocida — ver Probablemente reconocidos",
+    "heute.aehnlich.rand.viele": "{n} personas probablemente reconocidas — ver Probablemente reconocidos",
+    "heute.aehnlich.fehler": "La última comprobación de personas probablemente reconocidas ha fallado (error) — los grupos mostrados aquí pueden estar desactualizados. Detalles en el registro y en /health.",
+    "heute.aehnlich.nein": "no es {person}",
+    "heute.aehnlich.nein_zurueck": "deshacer",
+    "heute.aehnlich.antwort_nein": "no es {person} — el grupo vuelve a Desconocidos",
+    "heute.aehnlich.antwort_zurueck": "veredicto «no es {person}» retirado — la próxima comprobación (en menos de un minuto) puede volver a asignar el grupo",
+    "heute.aehnlich.titel_lauf": "probablemente {person} — recorrido",
+    "heute.aehnlich.sammel": "parecido a {person}",
+    "heute.aehnlich.sammel_hinweis": "Caras reunidas que se parecen a {person}. Marca caras para asignarlas a {person} o para sacarlas como no {person} (pasan a ser un nuevo desconocido).",
+    "heute.aehnlich.sammel_nein_teil": "No es {person} — las {n} marcadas",
+    "heute.aehnlich.sammel_abgelehnt": "No es posible para «parecido a {person}» — aquí solo se pueden asignar caras marcadas o sacarlas como no {person}.",
+    "heute.aehnlich.antwort_sammel_nein": "{n} cara(s) sacada(s) como {name} con el veredicto «no es {person}»",
     "meldung.wache.name_satz":
         "reconocimiento (en directo, provisional): {name} ({wort}, {n} "
         "hallazgos consistentes)",

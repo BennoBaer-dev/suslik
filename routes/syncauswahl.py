@@ -24,11 +24,11 @@ zwei Link-im-Satz-Reste literal).
 """
 import datetime
 import html
-import urllib.parse
 
+from core.lernlauf import bild_url
 from core.sprache import t, t_n
 
-# Der Schluessel '<Person>/<Datei>' kommt aus der EINEN Quelle (sync_refs), nie
+# Der Schluessel '<Person>/<ref_id>' kommt aus der EINEN Quelle (sync_refs), nie
 # als Literal nachgebaut — Cache, Abwahl, Handler und Anzeige muessen zwingend
 # denselben bilden (QS-Ebenen-Regel gegen Streu-Literale). Ebenso die Grund-
 # Schluessel der D1-Klasse und der Schalt-Hinweis fuer die Live-Flag-Zeile.
@@ -49,22 +49,22 @@ STIL = ("<style>"
         "</style>")
 
 
-def _bildpfad(person, datei):
-    """Thumbnail ueber die BESTEHENDE Referenzbild-Route der Known-Seite
-    (/refs/<person>/<datei>, read-only + realpath-Containment) — kein zweiter
-    Ausliefer-Weg fuer dieselben Dateien."""
-    return f"/refs/{urllib.parse.quote(person)}/{urllib.parse.quote(datei)}"
+def _bildpfad(ref_id):
+    """Thumbnail eines Satzes ueber die BESTEHENDE Satz-Route (Lese-Stufe d, seit E3b-3a statt
+    /refs/<person>/<datei>; dieselbe Adresse wie die Galerien) — kein zweiter Ausliefer-Weg.
+    -> URL-Pfad, HTML-maskiert"""
+    return html.escape(bild_url(ref_id, None), quote=True)
 
 
-def _daten(person, datei):
-    """Person/Datei als data-Attribute statt in einen JS-String interpoliert:
+def _daten(person, ref_id):
+    """Person/ref_id als data-Attribute statt in einen JS-String interpoliert:
     app.js liest sie aus dem Element (btn.dataset) — kein Quoting-Risiko bei
-    Namen mit Apostroph oder Backslash."""
+    Namen mit Apostroph oder Backslash. -> Attribut-Text"""
     return (f' data-person="{html.escape(person, quote=True)}"'
-            f' data-datei="{html.escape(datei, quote=True)}"')
+            f' data-ref="{html.escape(ref_id, quote=True)}"')
 
 
-def _kachel(person, datei, urteil, ablehnung=None):
+def _kachel(person, ref_id, urteil, ablehnung=None):
     """Eine Kandidaten-Kachel: Bild, Haken, Vorpruefungs-Badge, Skip-Knopf.
     urteil = {"ok": bool, "grund": str} oder None (noch nicht gerechnet);
     ablehnung = gemerkte FRIGATE-Ablehnung (D3) oder None.
@@ -97,61 +97,61 @@ def _kachel(person, datei, urteil, ablehnung=None):
                  + "</span>")
         an = False
     return (f'<span class="sa-b">'
-            f'<img src="{_bildpfad(person, datei)}" alt="" loading="lazy">'
+            f'<img src="{_bildpfad(ref_id)}" alt="" loading="lazy">'
             f'<label class="sa-l"><input type="checkbox" class="sa-cb"'
-            f'{_daten(person, datei)} onchange="syncAuswahlZaehlen()"'
+            f'{_daten(person, ref_id)} onchange="syncAuswahlZaehlen()"'
             f'{" checked" if an else ""}> {t("syncauswahl.kachel.senden")}</label>'
             f'{badge}'
-            f'<button class="gtb"{_daten(person, datei)} onclick="syncAbwahl(this,1)" '
+            f'<button class="gtb"{_daten(person, ref_id)} onclick="syncAbwahl(this,1)" '
             f'title="{t("syncauswahl.kachel.attr_skip")}">'
             f'{t("syncauswahl.kachel.knopf_skip")}</button></span>')
 
 
-def _kachel_abgewaehlt(person, datei):
+def _kachel_abgewaehlt(person, ref_id):
     return (f'<span class="sa-b sa-raus">'
-            f'<img src="{_bildpfad(person, datei)}" alt="" loading="lazy">'
+            f'<img src="{_bildpfad(ref_id)}" alt="" loading="lazy">'
             f'<span class="sa-badge dim">{html.escape(person)}</span>'
-            f'<button class="gtb"{_daten(person, datei)} onclick="syncAbwahl(this,0)" '
+            f'<button class="gtb"{_daten(person, ref_id)} onclick="syncAbwahl(this,0)" '
             f'title="{t("syncauswahl.kachel.attr_restore")}">'
             f'{t("syncauswahl.kachel.knopf_restore")}</button></span>')
 
 
-def _knopf(person, datei, ruf, text, titel):
+def _knopf(person, ref_id, ruf, text, titel):
     """Aktions-Knopf einer Kachel. data-label traegt die Ruecksetz-Beschriftung:
     schlaegt der POST fehl, stellt app.js genau DIESEN Text wieder her (frueher
     stand danach immer 'skip' da, egal was auf dem Knopf gestanden hatte)."""
-    return (f'<button class="gtb"{_daten(person, datei)} '
+    return (f'<button class="gtb"{_daten(person, ref_id)} '
             f'data-label="{html.escape(text, quote=True)}" onclick="{ruf}" '
             f'title="{html.escape(titel, quote=True)}">{html.escape(text)}</button>')
 
 
-def _kachel_geloescht(person, datei, grund):
+def _kachel_geloescht(person, ref_id, grund):
     """D1 — in Frigate geloescht, Name war vergleichbar: ein ENTSCHEIDUNGSFALL.
     Nichts passiert von allein (eine Loeschung drueben kann Absicht sein), der
     Nutzer waehlt: nochmal anbieten oder die Loeschung respektieren."""
     satz = (t("syncauswahl.geloescht.satz_import") if grund == D1_IMPORT else
             t("syncauswahl.geloescht.satz_export"))
     return (f'<span class="sa-b sa-weit">'
-            f'<img src="{_bildpfad(person, datei)}" alt="" loading="lazy">'
+            f'<img src="{_bildpfad(ref_id)}" alt="" loading="lazy">'
             f'<span class="sa-badge sa-warn">{t("syncauswahl.geloescht.badge")}</span>'
             f'<span class="sa-badge dim">{html.escape(person)} — {satz}</span>'
-            + _knopf(person, datei, "syncWiederAnbieten(this)",
+            + _knopf(person, ref_id, "syncWiederAnbieten(this)",
                      t("syncauswahl.knopf_anbieten"),
                      t("syncauswahl.geloescht.attr_anbieten"))
-            + _knopf(person, datei, "syncAbwahl(this,1)",
+            + _knopf(person, ref_id, "syncAbwahl(this,1)",
                      t("syncauswahl.geloescht.knopf_respekt"),
                      t("syncauswahl.geloescht.attr_respekt"))
             + "</span>")
 
 
-def _kachel_api(person, datei):
+def _kachel_api(person, ref_id):
     """D2 — per API exportiert: Frigate fuehrt das Bild unter EIGENEM Namen, ein
     Namensabgleich kann nicht sagen, ob es drueben noch liegt. Nur eine Aktion."""
     return (f'<span class="sa-b sa-weit">'
-            f'<img src="{_bildpfad(person, datei)}" alt="" loading="lazy">'
+            f'<img src="{_bildpfad(ref_id)}" alt="" loading="lazy">'
             f'<span class="sa-badge dim">'
             + t("syncauswahl.api.badge", person=html.escape(person)) + '</span>'
-            + _knopf(person, datei, "syncWiederAnbieten(this)",
+            + _knopf(person, ref_id, "syncWiederAnbieten(this)",
                      t("syncauswahl.knopf_anbieten"),
                      t("syncauswahl.api.attr_anbieten"))
             + "</span>")
@@ -302,6 +302,13 @@ def _alter(ts):
     return t("syncauswahl.alter.stunden", h=s // 3600, m=s % 3600 // 60)
 
 
+def _bild_im_bericht(e):
+    """Ein Bild des Export-Berichts als Anzeigetext: Person und die ersten zwoelf Zeichen der ref_id
+    (seit E3b-3a); ein Bericht aus der Version davor traegt noch den Dateinamen. -> Text"""
+    rid = e.get("ref_id")
+    return f'{e.get("person", "?")}/{rid[:12] if rid else e.get("datei", "?")}'
+
+
 def ergebnis(bericht):
     """Ergebnis des letzten Transfers je Bild — gruen hochgeladen, rot mit dem
     Grund, den FRIGATE genannt hat (bzw. dem der Vorpruefung). Quelle ist der
@@ -325,12 +332,11 @@ def ergebnis(bericht):
                           fehler=html.escape(str(bericht["wand_verdacht"]))) + "</div>")
     for e in hoch[:200]:
         zeilen.append('<div class="sa-ok">&#10003; '
-                      + t("syncauswahl.ergebnis.hochgeladen",
-                          bild=html.escape(f'{e.get("person", "?")}/{e.get("datei", "?")}'))
+                      + t("syncauswahl.ergebnis.hochgeladen", bild=html.escape(_bild_im_bericht(e)))
                       + "</div>")
     for e in weg[:200]:
         zeilen.append('<div class="sa-crit">&#10007; '
-                      + html.escape(f'{e.get("person", "?")}/{e.get("datei", "?")}')
+                      + html.escape(_bild_im_bericht(e))
                       + " — " + html.escape(str(e.get("fehler") or "?")) + "</div>")
     mehr = max(0, len(hoch) - 200) + max(0, len(weg) - 200)
     if mehr:
@@ -353,8 +359,9 @@ def ergebnis(bericht):
 
 def render(kandidaten, urteile, abwahl, pruef_status, bericht=None, fehler="",
            schreibsperre=False, bilanz=None, ablehnungen=None, fr=None):
-    """kandidaten = [(person, datei), …] ALLE Export-Kandidaten (inkl. abgewaehlter);
-    urteile = {schluessel: {"ok", "grund"}} nur GUELTIGE Urteile (mtime passt);
+    """kandidaten = [(person, ref_id), …] ALLE Export-Kandidaten (inkl. abgewaehlter; seit E3b-3a
+    Saetze, Kacheln ueber /lernlauf/satz/<ref_id>, Knoepfe mit data-ref);
+    urteile = {schluessel: {"ok", "grund"}} die Urteile der Vorpruefung;
     abwahl  = {schluessel: …} bewusst Abgewaehltes;
     pruef_status = {"laeuft", "gesamt", "fertig", "fehler"} des Hintergrund-Laufs;
     bericht = letzter Export-Bericht oder None; fehler = Klartext, wenn die

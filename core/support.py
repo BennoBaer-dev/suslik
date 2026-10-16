@@ -67,7 +67,15 @@ from core.registry import (SUPPORT_BEREICHE, SUPPORT_MASKE_ORDNER,
                            SUPPORT_SECRET_MUSTER, LAUF_ID_RE,
                            endpunkt_anzeige)
 from core import logbuch as _logbuch
+from core import refquelle as _refquelle
 _log = _logbuch.logger(__name__)
+# E3d (Bauplan analysen/bauplan_refquelle_einbau.md Stufe E3 Punkt 4, I4): die
+# Auswahlen, die ein tar-Bereich ueber den Registry-Schluessel "auswahl" statt
+# einer Wurzel nennt — je Auswahl die Funktion des Moduls, das sie kennt
+# (Pfade relativ zu data_dir). "refquelle": dieselbe Sicherungs-Auswahl wie
+# die Vollsicherung /backup_voll, keine zweite hier.
+_AUSWAHLEN = {"refquelle": lambda data_dir:
+              _refquelle.backup_paths({"data_dir": data_dir})}
 
 MASKE = "***"
 # Bereichs-Code des Vollbaums — EINE Quelle fuer Handler, Route und Gate
@@ -179,6 +187,21 @@ def lauf_id_ok(lauf_id):
 
 def _wurzel(data_dir, bereich):
     return os.path.realpath(os.path.join(data_dir, *bereich["wurzel"]))
+
+
+def _auswahl_dateien(data_dir, bereich):
+    """Die Dateien der Auswahl eines Bereichs (Registry-Schluessel auswahl):
+    jede Datei der ausgewaehlten Pfade, Ordner ganz.
+    -> sortierte Liste von Pfaden relativ zu data_dir; unbekannte Auswahl: KeyError."""
+    dateien = []
+    for rel in _AUSWAHLEN[bereich["auswahl"]](data_dir):
+        pfad = os.path.join(data_dir, rel)
+        if os.path.isdir(pfad):
+            for w, _dirs, fs in os.walk(pfad):
+                dateien += [os.path.relpath(os.path.join(w, f), data_dir) for f in fs]
+        elif os.path.isfile(pfad):
+            dateien.append(rel)
+    return sorted(dateien)
 
 
 # ---------------------------------------------------------------- Vollbaum
@@ -348,11 +371,22 @@ def download_name(rel, endung=""):
 
 def inventar(data_dir, version):
     """JSON-Einstieg: was ist holbar, wie gross. Liest NUR die Registry-
-    Tabelle (Deckungs-Vertrag)."""
+    Tabelle (Deckungs-Vertrag); ein Bereich mit auswahl zaehlt die Dateien
+    der Auswahl des Moduls (E3d)."""
     aus = {"version": version, "bereiche": {}}
     for code, b in SUPPORT_BEREICHE.items():
         e = {"art": b["art"], "hinweis": b["text"]}
-        if b["art"] == "tar" and not b.get("je_lauf"):
+        if b["art"] == "tar" and b.get("auswahl"):
+            n = groesse = 0
+            for rel in _auswahl_dateien(data_dir, b):
+                try:
+                    groesse += os.path.getsize(os.path.join(data_dir, rel))
+                    n += 1
+                except OSError:
+                    _logbuch.swallowed(_log, _logbuch.WARNING, "ignored")
+            e["dateien"] = n
+            e["bytes"] = groesse
+        elif b["art"] == "tar" and not b.get("je_lauf"):
             n = groesse = 0
             wurz = _wurzel(data_dir, b)
             dateien = b.get("dateien")
@@ -401,6 +435,14 @@ def tar_streamen(data_dir, code, wfile, log, lauf_id=None, dbg=None):
     b = SUPPORT_BEREICHE.get(code)
     if not b or b["art"] != "tar":
         return False, "unknown area"
+    if b.get("auswahl"):
+        # E3d (I4): die Auswahl des Moduls, Mitglieder mit ihrem Pfad relativ
+        # zu data_dir wie in der Vollsicherung, ueber denselben Schreiber.
+        dateien = _auswahl_dateien(data_dir, b)
+        if not dateien:
+            return False, "area empty"
+        return _tar_schreiben(data_dir, os.path.realpath(data_dir), "", code,
+                              wfile, log, dateien=dateien, dbg=dbg)
     basis = _wurzel(data_dir, b)
     if b.get("je_lauf"):
         if not lauf_id_ok(lauf_id):
@@ -448,9 +490,10 @@ def _tar_schreiben(data_dir, start, arc0, kennung, wfile, log,
     try:
         with tarfile.open(fileobj=wfile, mode="w|gz",
                           bufsize=512 * 1024) as tar:
-            if dateien:
+            if dateien is not None:
+                # arc0 leer (Auswahl, E3d): das Mitglied heisst wie sein Pfad.
                 kandidaten = [(os.path.join(start, d),
-                               f"{arc0}/{d}") for d in dateien]
+                               f"{arc0}/{d}" if arc0 else d) for d in dateien]
             else:
                 kandidaten = []
                 for w, _dirs, fs in os.walk(start):

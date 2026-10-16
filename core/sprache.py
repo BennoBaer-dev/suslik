@@ -72,7 +72,7 @@ def _lade(code):
 def _store_pfad():
     # Der Config-Store liegt GENESTET unter config/config.json (Layout-
     # Umbau 22.07.; live verifiziert 19.08. — /data/config.json existiert
-    # NICHT). Genau diese Datei sichert auch master_backup taeglich mit:
+    # NICHT). Genau diese Datei nimmt auch die Vollsicherung /backup_voll mit:
     # die Sprachwahl ueberlebt Backup/Restore automatisch (User-Auflage).
     d = os.environ.get("VERIFY_DATA_DIR")
     return os.path.join(d, "config", "config.json") if d else None

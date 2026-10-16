@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Referenz-Sync Master <-> Frigate (Plan v1.0 AP1).
 
-Master = verify_data/refs/<Person>/*.jpg + refs_meta.jsonl (Herkunft, aktiv-Flag,
-Tombstones). Frigate-Ablage = /opt/frigate/media/clips/faces/<Person>/.
+Master = die aktiven Referenz-Saetze der Referenz-Quelle (core/refquelle, Lese-Stufe b; seit
+E3b-3a, Bauplan analysen/bauplan_refquelle_einbau.md, Entscheide 6, 10, I3), die Export-Merker
+je ref_id im Katalog (Art export). Frigate-Ablage = Frigates /api/faces.
 
   sync_refs.py status              # Diff beider Seiten + offene Entscheidungen
   sync_refs.py import [--dry-run]  # NEUE Frigate-Bilder -> Master (mit Gesichts-Gate;
@@ -15,8 +16,8 @@ Tombstones). Frigate-Ablage = /opt/frigate/media/clips/faces/<Person>/.
                                    #   Der SSH/scp-Altweg ist seit 0.1.0.107 abgeloest
                                    #   (Invariante "nur API" + Shell-Injektion).
                                    #   --auswahl=<datei.json> = nur die dort gelisteten
-                                   #   [[person, datei], …] (selektiver Sync, .133)
-  sync_refs.py vorpruefung         # Vorpruefungs-Cache fuellen (nur neue/geaenderte Bilder),
+                                   #   [[person, ref_id], …] (selektiver Sync, .133)
+  sync_refs.py vorpruefung         # Vorpruefungs-Cache fuellen (nur Saetze ohne Urteil),
                                    #   Grundlage der Auswahl-Seite "Review & sync"
 
 Konfliktregel (Plan §AP1): in Frigate GELOESCHTE, im Master aktive Bilder werden NICHT
@@ -33,8 +34,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.environ.get("VERIFY_DATA_DIR") or os.path.join(HERE, "verify_data")   # Container: /data
-MASTER = os.path.join(DATA, "faces")
-META = os.path.join(MASTER, "refs_meta.jsonl")
 # SSH-Reste (LXC-Credentials, Remote-Faces-Pfad) mit 0.1.0.107 entfallen — der Export
 # laeuft ueber die HTTP-API, s. api_upload(). Nichts hier braucht mehr Host-Zugang.
 
@@ -49,26 +48,33 @@ FR_AUS_HINWEIS = ("Frigate refused: its face recognition is switched off. To "
                   "your Frigate config; importing FROM Frigate works without it.")
 # Ergebnis-Bericht des letzten Export-Laufs (Diagnose-Paket, .132):
 BERICHT = os.path.join(DATA, "state", "sync_export_bericht.json")
-# .133 "Selektiver Sync" — drei Merker in state/, je EINE Quelle (Vertrag mit
-# verifyd/routes.syncauswahl; nie ein zweites Literal streuen):
-#   VORPRUEFUNG     Urteil je Bild, mit mtime gestempelt (Cache; nur neue oder
-#                   geaenderte Bilder werden neu gerechnet),
-#   VORPRUEF_STATUS Fortschritt des Hintergrund-Laufs fuer die Seite,
-#   ABWAHL          bewusst abgewaehlte Bilder — eigener Merker, NICHT die
-#                   refs_meta-Tombstones: ein Tombstone heisst "Bild ist weg",
-#                   die Abwahl heisst "Bild bleibt, geht aber nicht nach Frigate".
+# .133 "Selektiver Sync" — zwei Laufprotokolle in state/ (I3: ausserhalb des
+# Moduls), je EINE Quelle (Vertrag mit verifyd/routes.syncauswahl; nie ein
+# zweites Literal streuen):
+#   VORPRUEFUNG     Urteil je ref_id (Cache; seit E3b-3a ohne mtime, ein Satz ist
+#                   unveraenderlich — nur Saetze ohne Urteil werden gerechnet),
+#   VORPRUEF_STATUS Fortschritt des Hintergrund-Laufs fuer die Seite.
 VORPRUEFUNG = os.path.join(DATA, "state", "sync_vorpruefung.json")
 VORPRUEF_STATUS = os.path.join(DATA, "state", "sync_vorpruefung_status.json")
-ABWAHL = os.path.join(DATA, "state", "sync_abwahl.json")
-# .137 "Ablehnungs-Gedaechtnis" — der vierte Merker, gleicher Vertrag wie ABWAHL:
-#   ABLEHNUNGEN  {schluessel: {"fehler", "mtime", "ts", "art"}} — was FRIGATE
-#                selbst je Bild abgelehnt hat. Ein Vorpruefungs-Urteil ist UNSER
+# Die Export-Merker je ref_id stehen seit E3b-3a im Katalog der Referenz-Quelle
+# (Art export, je merker gilt die letzte Zeile; Entscheid 10) statt in refs_meta,
+# state/sync_abwahl.json und state/sync_ablehnungen.json. Die drei Merker-Namen
+# und ihre Wert-Marken stehen nur hier:
+#   MERKER_EXPORT    nach erfolgreichem /register: {ziel, person, ts}; "offer
+#                    again" schreibt dieselbe Zeile mit {ZURUECK: True, grund}
+#                    (der Satz ist wieder Kandidat).
+#   MERKER_ABWAHL    {an: wahr|falsch, ts} — bewusst zurueckgehalten: der Satz
+#                    bleibt Referenz, geht aber nicht nach Frigate.
+#   MERKER_ABLEHNUNG {fehler, art, ts}; ein Erfolg schreibt {ERLEDIGT: True, ts}.
+MERKER_EXPORT, MERKER_ABWAHL, MERKER_ABLEHNUNG = "exportiert", "abwahl", "ablehnung"
+ZURUECK, ERLEDIGT = "zurueckgenommen", "erledigt"
+# .137 "Ablehnungs-Gedaechtnis" (MERKER_ABLEHNUNG): was FRIGATE selbst je Bild
+#                abgelehnt hat. Ein Vorpruefungs-Urteil ist UNSER
 #                Detektor und darf nie als Frigate-Ablehnung gemerkt werden.
-#                mtime-gestempelt wie der Vorpruefungs-Cache: ein ausgetauschtes
-#                Bild verliert seinen Merker von selbst. Wirkung: der AUTOMATIK-
+#                Wirkung: der AUTOMATIK-
 #                Lauf ueberspringt Gemerktes still-gezaehlt (bericht
 #                ['abgelehnt_n']), eine bewusste Auswahl versucht es trotzdem und
-#                loescht den Merker bei Erfolg (Schleifen-Fix, Operator-Test
+#                erledigt den Merker bei Erfolg (Schleifen-Fix, Operator-Test
 #                06.08.). WAS gemerkt wird, entscheidet _ablehnung_merken()
 #                (.138 Panel-MUSS: ein globaler Frigate-Ausfall sperrte sonst den
 #                ganzen Stapel dauerhaft aus):
@@ -80,16 +86,15 @@ ABWAHL = os.path.join(DATA, "state", "sync_abwahl.json")
 #                  alles andere (Transport 408/413/429, /create-Fehler) sagt
 #                  nichts ueber das Bild und wird NIE gemerkt. Eine erkannte
 #                  WAND (3x gleicher Fehler) verwirft ihre Merker am Laufende.
-ABLEHNUNGEN = os.path.join(DATA, "state", "sync_ablehnungen.json")
 # Verfall der 'unklar'-Merker: lang genug, dass ein haengender Frigate-Zustand
 # nicht bei jeder Runde neu angerannt wird, kurz genug, dass sich der Bestand
 # nach einem Frigate-Neustart von selbst erholt (ein Wiederholungsversuch/Tag).
 ABLEHNUNG_UNKLAR_TTL_S = 24 * 3600
-# Protokoll-Vermerk 'ziel' der API-Aera. Das Praefix ist der BEWEIS, dass ein Bild
+# Vermerk 'ziel' im Merker MERKER_EXPORT. Das Praefix ist der BEWEIS, dass ein Bild
 # ueber /register ging — und Frigate benennt dabei um (<Name>_<ts>.webp), womit der
 # Dateiname fuer immer unvergleichbar wird. Eintraege OHNE dieses Praefix stammen aus
-# der SSH-Aera (Dateiname blieb erhalten) und sind per Namen vergleichbar. EINE
-# Quelle: cmd_export schreibt es, abgleich() liest es.
+# der SSH-Aera (Dateiname blieb erhalten, beim Satz der alte Dateiname, I9) und sind
+# per Namen vergleichbar. EINE Quelle: cmd_export schreibt es, abgleich() liest es.
 ZIEL_API = "api:"
 
 
@@ -121,7 +126,7 @@ def _frigate():
             return str(json.load(f).get("frigate_url") or "")
     except Exception:
         return ""
-PROGRESS = os.path.join(DATA, "state", "sync_progress.json")   # Fortschritt fuer die UI (X von Y)
+PROGRESS = os.path.join(DATA, "state", "sync_progress.json")   # Fortschritt fuer die UI (X von Y, Person, ref_id)
 
 
 def _progress(**d):
@@ -136,11 +141,50 @@ def _progress(**d):
         pass
 
 
-def schluessel(person, datei):
-    """Der EINE Schluessel fuer Vorpruefungs-Cache und Abwahl-Gedaechtnis:
-    '<Person>/<Datei>'. Vertrag mit verifyd und routes/syncauswahl.py — beide
-    bauen ihn NIE selbst zusammen (QS-Ebenen-Regel: keine Streu-Literale)."""
-    return f"{person}/{datei}"
+def schluessel(person, ref_id):
+    """Der EINE Schluessel der Seite und des Exports fuer Abwahl, Ablehnungen, Urteile und
+    Auswahl: '<Person>/<ref_id>' (seit E3b-3a die ref_id statt des Dateinamens). Vertrag mit
+    verifyd und routes/syncauswahl.py — beide bauen ihn NIE selbst zusammen (QS-Ebenen-Regel:
+    keine Streu-Literale)."""
+    return f"{person}/{ref_id}"
+
+
+def _rq_cfg():
+    """Die Config der Referenz-Quelle fuer diesen Prozess (Datenordner aus VERIFY_DATA_DIR).
+    -> {"data_dir": ...}"""
+    return {"data_dir": DATA}
+
+
+def _lesung():
+    """Lese-Stufe b der Referenz-Quelle, die eine Lesung des Exports (E3b-3a).
+    -> ({ref_id: Eintrag}, {Person: [ref_id der aktiven Referenzen]})"""
+    from core import refquelle as _rq
+    kat = _rq.read_catalog(_rq_cfg())
+    return kat["eintraege"], kat["personen"]
+
+
+def _merker(eintrag, name):
+    """Die gueltigen Werte eines Export-Merkers am Katalogeintrag (je merker gilt die letzte Zeile).
+    -> dict der Werte; leer, wenn der Satz diesen Merker nie bekam"""
+    return dict(((eintrag.get("export") or {}).get(name) or {}).get("werte") or {})
+
+
+def _merken(ref_id, name, werte):
+    """Eine Merker-Zeile (Art export) ueber das Modul an den Katalog haengen, mit Zeitpunkt.
+    -> None; ein abgelehnter Schreibversuch wirft RefquelleError (die ERROR-Zeile schreibt das Modul)"""
+    from core import refquelle as _rq
+    _rq.append(_rq_cfg(), ref_id, "export",
+               {"merker": name, "werte": {**werte, "ts": round(time.time(), 1)}})
+
+
+def _nur_aktive(paare, personen):
+    """Fremdeingabe der Seite pruefen: jedes Paar muss eine aktive Referenz dieser Person sein.
+    -> None; sonst ValueError mit Klartext, und es wird nichts geschrieben"""
+    fremd = [(p, r) for p, r in paare if r not in personen.get(p, ())]
+    if fremd:
+        raise ValueError(f"{len(fremd)} selected image(s) are no active reference set of that person "
+                         "(an old picture file name from before this version, or already removed) — "
+                         "nothing changed")
 
 
 def _json_lesen(pfad, standard):
@@ -163,78 +207,75 @@ def _json_schreiben(pfad, obj):
     os.replace(tmp, pfad)
 
 
-def abwahl_lesen():
-    """-> {schluessel: {"ts", "person", "datei"}} der bewusst abgewaehlten Bilder."""
-    return _json_lesen(ABWAHL, {})
+def abwahl_lesen(eintraege=None, personen=None):
+    """Die bewusst abgewaehlten aktiven Referenzen aus dem Merker MERKER_ABWAHL (letzte Zeile gilt);
+    eintraege/personen = eine schon gemachte Lesung (_lesung), sonst selbst gelesen.
+    -> {schluessel: {"ts", "person", "ref_id"}}"""
+    if eintraege is None:
+        eintraege, personen = _lesung()
+    aus = {}
+    for person, rids in personen.items():
+        for rid in rids:
+            w = _merker(eintraege[rid], MERKER_ABWAHL)
+            if w.get("an") is True:
+                aus[schluessel(person, rid)] = {"ts": w.get("ts"), "person": person, "ref_id": rid}
+    return aus
 
 
 def abwahl_setzen(paare, an=True):
-    """paare = [(person, datei), …] abwaehlen (an=True) oder zurueckholen.
+    """paare = [(person, ref_id), …] abwaehlen (an=True) oder zurueckholen: je Satz eine Merker-Zeile
+    MERKER_ABWAHL im Katalog, nur wenn sich der Stand aendert; ein Paar, das keine aktive Referenz
+    dieser Person ist, lehnt den ganzen Aufruf laut ab (ValueError).
     -> Zahl der WIRKLICH geaenderten Eintraege (Doppelklicks zaehlen nicht)."""
-    d = abwahl_lesen()
+    eintraege, personen = _lesung()
+    _nur_aktive(paare, personen)
     n = 0
-    for person, datei in paare:
-        k = schluessel(person, datei)
-        if an:
-            if k not in d:
-                n += 1
-            d[k] = {"ts": round(time.time(), 1), "person": person, "datei": datei}
-        elif d.pop(k, None) is not None:
+    for _person, rid in dict.fromkeys(paare):
+        if (_merker(eintraege[rid], MERKER_ABWAHL).get("an") is True) != bool(an):
+            _merken(rid, MERKER_ABWAHL, {"an": bool(an)})
             n += 1
-    _json_schreiben(ABWAHL, d)
     return n
 
 
-def ablehnungen_lesen():
-    """-> {schluessel: {"fehler", "mtime", "ts"}} — ROH, auch veraltete Eintraege."""
-    return _json_lesen(ABLEHNUNGEN, {})
-
-
-def ablehnungen_aktiv(cache=None):
-    """Nur die Merker, deren Bild seit der Ablehnung UNVERAENDERT ist. Gleiche
-    Invalidierung wie beim Vorpruefungs-Cache: wer ein Referenzbild austauscht,
-    hat ein anderes Bild — das verdient einen neuen Versuch bei Frigate.
-    .138: 'unklar'-Merker (500 'could not process' — kann Bild ODER Frigate-
-    Zustand sein) verfallen zusaetzlich nach ABLEHNUNG_UNKLAR_TTL_S; Alt-
-    Eintraege ohne art-Feld werden nach ihrem Fehlertext eingestuft."""
-    cache = ablehnungen_lesen() if cache is None else cache
+def ablehnungen_aktiv(eintraege=None, personen=None):
+    """Die gueltigen Frigate-Ablehnungen der aktiven Referenzen aus dem Merker MERKER_ABLEHNUNG: nicht
+    erledigt, und 'unklar'-Merker (500 'could not process' — kann Bild ODER Frigate-Zustand sein,
+    .138) nur bis ABLEHNUNG_UNKLAR_TTL_S. Seit E3b-3a ohne mtime: ein Satz ist unveraenderlich, ein
+    neues Bild ist ein neuer Satz ohne Merker. eintraege/personen wie bei abwahl_lesen.
+    -> {schluessel: {"fehler", "art", "ts"}}"""
+    if eintraege is None:
+        eintraege, personen = _lesung()
     aus = {}
-    for k, e in cache.items():
-        person, _, datei = str(k).partition("/")
-        if not (person and datei) or not isinstance(e, dict):
-            continue
-        if e.get("mtime") != _mtime(os.path.join(MASTER, person, datei)):
-            continue
-        art = e.get("art") or ("unklar" if "could not process"
-                               in str(e.get("fehler") or "").lower() else "urteil")
-        if art == "unklar" and time.time() - float(e.get("ts") or 0) > ABLEHNUNG_UNKLAR_TTL_S:
-            continue
-        aus[k] = e
+    for person, rids in personen.items():
+        for rid in rids:
+            e = _merker(eintraege[rid], MERKER_ABLEHNUNG)
+            if not e or e.get(ERLEDIGT) is True:
+                continue
+            if e.get("art") == "unklar" and time.time() - float(e.get("ts") or 0) > ABLEHNUNG_UNKLAR_TTL_S:
+                continue
+            aus[schluessel(person, rid)] = e
     return aus
 
 
 def _ablehnungen_mischen(neu=None, weg=()):
-    """Merker unter flock MISCHEN statt die Datei zu ersetzen (Lehre .134: zwei
-    parallele Laeufe verloren sich sonst gegenseitig ihre Eintraege). neu = neue
-    Ablehnungen, weg = Schluessel, deren Bild gerade doch durchging."""
+    """Die Ablehnungen eines Laufs als Merker-Zeilen in den Katalog (anhaengend, unter der Sperre
+    des Moduls: parallele Laeufe verlieren einander nichts, Lehre .134). neu = {ref_id: {"fehler",
+    "art"}}, weg = ref_ids, deren Bild gerade doch durchging: ihre offene Ablehnung wird erledigt.
+    -> None"""
     if not neu and not weg:
         return
-    import fcntl
-    os.makedirs(os.path.dirname(ABLEHNUNGEN), exist_ok=True)
-    with open(ABLEHNUNGEN + ".lock", "w") as lf:
-        fcntl.flock(lf, fcntl.LOCK_EX)
-        try:
-            stand = ablehnungen_lesen()
-            stand.update(neu or {})
-            for k in weg:
-                stand.pop(k, None)
-            _json_schreiben(ABLEHNUNGEN, stand)
-        finally:
-            fcntl.flock(lf, fcntl.LOCK_UN)
+    eintraege, _personen = _lesung()
+    for rid, werte in (neu or {}).items():
+        _merken(rid, MERKER_ABLEHNUNG, werte)
+    for rid in weg:
+        alt = _merker(eintraege.get(rid) or {}, MERKER_ABLEHNUNG)
+        if alt and alt.get(ERLEDIGT) is not True:
+            _merken(rid, MERKER_ABLEHNUNG, {ERLEDIGT: True})
 
 
 def vorpruefung_lesen():
-    """-> {schluessel: {"ok": bool, "grund": str, "mtime": float}}."""
+    """Der Laufstand der Vorpruefung (I3, ausserhalb des Moduls).
+    -> {ref_id: {"ok": bool, "grund": str}}."""
     return _json_lesen(VORPRUEFUNG, {})
 
 
@@ -250,28 +291,16 @@ def _vp_status(**d):
         pass
 
 
-def _mtime(pfad):
-    try:
-        return round(os.path.getmtime(pfad), 3)
-    except OSError:
-        return None
-
-
 def vorpruefung_offen(kandidaten, cache=None):
-    """Welche Kandidaten haben (noch) KEIN gueltiges Urteil? Gueltig = Eintrag da
-    UND mtime unveraendert — wird ein Referenzbild ersetzt, faellt sein Urteil
-    von selbst weg (Cache-Invalidierung je Datei, kein globales Verfallsdatum)."""
+    """Welche Kandidaten [(person, ref_id), …] haben (noch) KEIN Urteil? Seit E3b-3a ohne
+    Dateianker: ein Satz ist unveraenderlich, ein neues Bild ist eine neue ref_id ohne Urteil.
+    -> [(person, ref_id), …] ohne Urteil im Laufstand"""
     cache = vorpruefung_lesen() if cache is None else cache
-    offen = []
-    for person, datei in kandidaten:
-        e = cache.get(schluessel(person, datei))
-        if not e or e.get("mtime") != _mtime(os.path.join(MASTER, person, datei)):
-            offen.append((person, datei))
-    return offen
+    return [(person, rid) for person, rid in kandidaten if not cache.get(rid)]
 
 
 ERLAUBTE_ENDUNGEN = (".jpg", ".jpeg", ".png", ".webp")
-# Permissiv und UNICODE-bewusst: echte Namen wie "Müller" oder "Anna-Lena" muessen durch,
+# Permissiv und UNICODE-bewusst: echte Namen wie "Müller" oder ein Doppelname mit Bindestrich muessen durch,
 # sonst faellt ein legitimer Import STILL aus (Fehlerklasse C). Verboten sind nur die Zeichen,
 # die Pfade aufbrechen. Die eigentliche Sicherheit macht das realpath-Containment darunter.
 # Bis 03.08. stand hier nur "alles ausser / \\ NUL" — permissiver als JEDE Konsumenten-
@@ -284,16 +313,19 @@ from core import frigate_auth as _fauth      # 5e: DER eine Frigate-HTTP-Griff
 _NAME_OK = re.compile(rf"^{_PERSON_RE}$", re.UNICODE)
 
 
-def sicheres_ziel(person, datei):
-    """Schreibziel fuer ein Referenzbild bauen — oder (None, Grund), wenn es unsicher ist.
+def sicheres_ziel(person, datei, wurzel):
+    """Schreibziel <wurzel>/<person>/<datei> fuer ein Referenzbild bauen — oder (None, Grund), wenn es
+    unsicher ist. Die Wurzel nennt der Aufrufer (cmd_import: der Staging-Ordner des Laufs; seit E3c-1,
+    Bauplan analysen/bauplan_refquelle_einbau.md, Stufe E3 Punkt 3, gibt es keinen Umweg ueber faces/).
 
     Die Namen kommen aus /api/faces der GEGENSTELLE und sind damit Fremdeingabe: die
     Frigate-URL ist ueber POST /sync_import frei setzbar. Ohne Pruefung landet person='../../app'
-    per os.path.join ausserhalb von MASTER — im Container als root, mit /app/verifyd.py als
+    per os.path.join ausserhalb der Wurzel — im Container als root, mit /app/verifyd.py als
     Ziel (Codeausfuehrung beim naechsten Neustart). Zwei Schichten, absichtlich redundant:
-    1. Namens-/Endungs-Whitelist (faengt das Offensichtliche und haelt den Master sauber),
-    2. realpath-Containment (die eigentliche Garantie — greift auch bei Symlinks und bei
-       allem, woran die Regex nicht gedacht hat)."""
+    1. Namens-/Endungs-Whitelist (faengt das Offensichtliche und haelt die Ablage sauber),
+    2. realpath-Containment gegen die Wurzel (die eigentliche Garantie — greift auch bei Symlinks
+       und bei allem, woran die Regex nicht gedacht hat).
+    -> (Zielpfad, "") oder (None, Grund)"""
     if not person or not datei:
         return None, "leerer Name"
     if person in (".", "..") or datei in (".", ".."):
@@ -302,45 +334,11 @@ def sicheres_ziel(person, datei):
         return None, "unerlaubte Zeichen im Namen"
     if not datei.lower().endswith(ERLAUBTE_ENDUNGEN):
         return None, "unerlaubte Dateiendung"
-    ziel = os.path.join(MASTER, person, datei)
-    basis = os.path.realpath(MASTER)
-    echt = os.path.realpath(ziel)
-    if echt != basis and not echt.startswith(basis + os.sep):
-        return None, "Pfad zeigt aus dem Master heraus"
+    ziel = os.path.join(wurzel, person, datei)
+    basis = os.path.realpath(wurzel)
+    if not os.path.realpath(ziel).startswith(basis + os.sep):
+        return None, "Pfad zeigt aus dem Staging-Ordner heraus"
     return ziel, ""
-
-
-def lade_meta():
-    aktiv, tomb = {}, set()
-    if os.path.exists(META):
-        for l in open(META):
-            try:
-                d = json.loads(l)
-            except Exception:
-                continue
-            key = (d["person"], d["datei"])
-            if d.get("aktiv", True):
-                aktiv[key] = d
-                tomb.discard(key)
-            else:
-                tomb.add(key)
-                aktiv.pop(key, None)
-    return aktiv, tomb
-
-
-def meta_append(**d):
-    with open(META, "a") as f:
-        f.write(json.dumps({"ts": round(time.time(), 1), **d}, ensure_ascii=False) + "\n")
-        f.flush()
-
-
-def master_stand():
-    out = {}
-    for p in sorted(os.listdir(MASTER)):
-        d = os.path.join(MASTER, p)
-        if os.path.isdir(d):
-            out[p] = sorted(f for f in os.listdir(d) if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp")))
-    return out
 
 
 def frigate_stand():
@@ -377,35 +375,76 @@ def diff():
     verarbeitet asynchron — ein Namens-Abgleich saehe Exportiertes ewig als
     'fehlend' und wuerde es bei jedem Lauf erneut hochpumpen; mit dem alten
     SSH-Weg blieben die Namen erhalten, daher trug der Abgleich frueher).
-    Ein Master-Bild mit aktivem export-Protokolleintrag ist deshalb NIE wieder
+    Ein Satz mit gueltigem Merker MERKER_EXPORT ist deshalb NIE wieder
     Export-Kandidat. Bekannte Grenze (Design-Entscheid offen): die von Frigate
     umbenannten Exporte erscheinen in nur_frigate als Import-Kandidaten —
-    cmd_import ist manuell, nichts laeuft von allein."""
-    m, f = master_stand(), frigate_stand()
-    aktiv, tomb = lade_meta()
-    nur_frigate, nur_master, extern_geloescht = [], [], []
-    for p in sorted(set(m) | set(f)):
-        ms, fs = set(m.get(p, [])), set(f.get(p, []))
-        for datei in sorted(fs - ms):
-            if (p, datei) not in tomb:
-                nur_frigate.append((p, datei))
-        for datei in sorted(ms - fs):
-            # Master-Bild fehlt in Frigate: nie exportiert (enrollment/upload) ->
-            # Kandidat · schon exportiert -> Frigate fuehrt es unter eigenem
-            # Namen, NIE erneut senden · Herkunft frigate-import -> dort geloescht.
-            herkunft = (aktiv.get((p, datei)) or {}).get("herkunft", "?")
-            if herkunft.startswith("frigate-import"):
-                extern_geloescht.append((p, datei))
-            elif herkunft == "vorrat":
-                # Vorrats-Referenzen (bauplan_vorrat.md B4, W1.15): NIE
-                # exportieren — ihre Wahrheit ist der Embedding-Beiwert, die
-                # kleine Bilddatei kann Frigates eigene Anlern-Pipeline
-                # gemessen oft nicht detektieren (28/40 tot). Bewusst KEIN
-                # Kandidat, bleibt lokal (Registrieren-nach-Schaltern).
-                pass
-            elif herkunft != "export":
-                nur_master.append((p, datei))
-    return nur_frigate, nur_master, extern_geloescht
+    cmd_import ist manuell, nichts laeuft von allein.
+    Seit E3b-3a (Bauplan Referenz-Quelle einbauen, Entscheide 6 und 10): die Master-Seite sind die
+    aktiven Referenz-Saetze je Person aus Lese-Stufe b, ihre Klasse kommt aus dem Satz und seinen
+    Merkern (_klasse), nicht aus Dateinamen in faces/ und refs_meta; nur_master und
+    extern_geloescht fuehren (person, ref_id). nur_frigate wie seit E3a-4 (J10): eine
+    Frigate-Datei gilt als vorhanden, wenn ihr Satz im Katalog steht, gleich mit welchem Status.
+    -> (nur_frigate [(person, datei)], nur_master [(person, ref_id)], extern_geloescht [(person, ref_id)])"""
+    f = frigate_stand()
+    eintraege, personen = _lesung()
+    nur_master, extern_geloescht = [], []
+    for p in sorted(personen):
+        for rid in sorted(personen[p]):
+            # Kandidat · schon exportiert -> Frigate fuehrt es unter eigenem Namen,
+            # NIE erneut senden · Herkunft Frigate-Import -> dort geloescht ·
+            # Vorrat -> bleibt lokal.
+            klasse, grund = _klasse(eintraege[rid], p, f)
+            if klasse == "kandidaten":
+                nur_master.append((p, rid))
+            elif klasse == "geloescht" and grund == D1_IMPORT:
+                extern_geloescht.append((p, rid))
+    return _nur_frigate(f, eintraege), nur_master, extern_geloescht
+
+
+def _nur_frigate(f, eintraege):
+    """Frigate-Dateien ohne Satz im Katalog (Import-Kandidaten, J10): ein Satz aus dem Frigate-Import
+    (Herkunftsart frigate_import, Frigate-Person und -Datei) zaehlt mit jedem Status — wie bisher ein
+    Tombstone holt ein Satz, den der Nutzer entfernt hat, nichts zurueck.
+    -> [(person, datei)] sortiert"""
+    from core.harvest_set import ART_FRIGATE_IMPORT
+    im_katalog = {(e["frigate"]["person"], e["frigate"]["datei"]) for e in eintraege.values()
+                  if e.get("herkunftsart") == ART_FRIGATE_IMPORT and e.get("frigate")}
+    return [(p, d) for p in sorted(f) for d in f[p] if (p, d) not in im_katalog]
+
+
+def _klasse(eintrag, person, f):
+    """Die Klasse einer aktiven Referenz vor der Abwahl, nach den Regeln von diff und abgleich, aus dem
+    Satz (Herkunftsart, Frigate-Angaben, alter Dateiname, Vorrats-Nachtrag) und dem Merker
+    MERKER_EXPORT statt aus Dateinamen und refs_meta. f = Frigates Liste {Person: [Datei]}.
+    -> (klasse, grund): in_beiden, kandidaten, geloescht (grund D1_IMPORT/D1_EXPORT), api_export,
+    vorrat_lokal"""
+    from core.harvest_set import ART_FRIGATE_IMPORT
+    from core.vorrat import NACHTRAG_THEMA
+    exp = _merker(eintrag, MERKER_EXPORT)
+    aus_frigate = eintrag.get("frigate") if eintrag.get("herkunftsart") == ART_FRIGATE_IMPORT else None
+    if aus_frigate and aus_frigate["datei"] in f.get(aus_frigate["person"], ()):
+        return "in_beiden", None                 # A: derselbe Name auf beiden Seiten
+    if exp and exp.get(ZURUECK) is not True:
+        # Namensvergleichbarkeit AUS DEM MERKER: nur die SSH-Aera hat den Dateinamen
+        # drueben erhalten (beim Satz der alte Dateiname, I9). Ohne api:-Ziel heisst
+        # "Name fehlt" also wirklich "extern geloescht" (D1), mit api:-Ziel heisst es
+        # gar nichts (D2) — Frigate fuehrt es umbenannt.
+        if str(exp.get("ziel") or "").startswith(ZIEL_API):
+            return "api_export", None
+        if (eintrag.get("herkunft") or {}).get("alter_dateiname") in f.get(person, ()):
+            return "in_beiden", None
+        return "geloescht", D1_EXPORT
+    if exp:                                      # "offer again": wieder normaler Kandidat
+        return "kandidaten", None
+    if aus_frigate:
+        return "geloescht", D1_IMPORT
+    if NACHTRAG_THEMA in (eintrag.get("nachtrag") or {}):
+        # Vorrats-Referenzen (bauplan_vorrat.md B4, W1.15): NIE exportieren — ihre
+        # Wahrheit ist der Fingerabdruck aus dem Ernte-Vollbild, die kleine Bilddatei
+        # kann Frigates eigene Anlern-Pipeline gemessen oft nicht detektieren (28/40
+        # tot). Bewusst KEIN Kandidat, bleibt lokal (Registrieren-nach-Schaltern).
+        return "vorrat_lokal", None
+    return "kandidaten", None                    # C: nie geschickt -> uebertragbar
 
 
 # Grund-Schluessel der Klasse D1 (in Frigate geloescht). KEIN Anzeigetext — die
@@ -449,12 +488,16 @@ def abgleich():
                    der Handler darf sie deshalb nicht als 'offen' zaehlen,
                    sonst startet der Vorpruefungs-Subprozess bei jedem
                    Seitenaufruf neu (.138 Panel-Befund, QS-Klasse K3:
-                   Erzeuger- und Verbrauchermenge liefen auseinander)."""
-    m, f = master_stand(), frigate_stand()
-    aktiv, tomb = lade_meta()
-    ab = abwahl_lesen()
-    abl = ablehnungen_aktiv()
-    erg = {"gesamt": 0, "in_beiden": [], "je_person": {}, "nur_frigate": [],
+                   Erzeuger- und Verbrauchermenge liefen auseinander).
+    Seit E3b-3a: "Master-Bild" heisst aktive Referenz der Referenz-Quelle, die Paare tragen
+    (person, ref_id) statt (person, datei) — nur nur_frigate fuehrt Frigates Dateinamen; die Klasse
+    kommt aus _klasse (Satz und Merker), gesamt und je_person zaehlen Saetze. Ein Satz aus dem
+    Frigate-Import ist "in beiden", solange Frigate seine Datei fuehrt (O572 d)."""
+    f = frigate_stand()
+    eintraege, personen = _lesung()
+    ab = abwahl_lesen(eintraege, personen)
+    abl = ablehnungen_aktiv(eintraege, personen)
+    erg = {"gesamt": 0, "in_beiden": [], "je_person": {}, "nur_frigate": _nur_frigate(f, eintraege),
            "kandidaten": [], "abgelehnt": {}, "geloescht": [], "api_export": [],
            "abgewaehlt": [], "abgewaehlt_unpruefbar": [],
            # bauplan_vorrat.md B4 (Klassen-Invariante unten erweitert):
@@ -463,61 +506,40 @@ def abgleich():
            # gegen die Verbraucher-Menge auseinander, exakt die K3-Klasse aus
            # dem .138-Panel-Befund.
            "vorrat_lokal": []}
-    for p in sorted(set(m) | set(f)):
-        ms, fs = set(m.get(p, [])), set(f.get(p, []))
-        for datei in sorted(fs - ms):
-            if (p, datei) not in tomb:
-                erg["nur_frigate"].append((p, datei))
+    for p in sorted(set(personen) | set(f)):
+        rids = sorted(personen.get(p, []))
         beide = 0
-        for datei in sorted(ms):
+        for rid in rids:
             erg["gesamt"] += 1
-            if datei in fs:                       # A: derselbe Name auf beiden Seiten
+            klasse, grund = _klasse(eintraege[rid], p, f)
+            if klasse == "in_beiden":             # A: derselbe Name auf beiden Seiten
                 beide += 1
-                erg["in_beiden"].append((p, datei))
+                erg["in_beiden"].append((p, rid))
                 continue
-            e = aktiv.get((p, datei)) or {}
-            herkunft = str(e.get("herkunft") or "?")
-            if herkunft.startswith("frigate-import"):
-                klasse, grund = "geloescht", D1_IMPORT
-            elif herkunft == "export":
-                # Namensvergleichbarkeit AUS DEM PROTOKOLL: nur die SSH-Aera hat
-                # den Dateinamen drueben erhalten. Ohne api:-Ziel heisst "Name
-                # fehlt" also wirklich "extern geloescht" (D1), mit api:-Ziel
-                # heisst es gar nichts (D2) — Frigate fuehrt es umbenannt.
-                if str(e.get("ziel") or "").startswith(ZIEL_API):
-                    klasse, grund = "api_export", None
-                else:
-                    klasse, grund = "geloescht", D1_EXPORT
-            elif herkunft == "vorrat":            # V: Beiwert-Referenz, bleibt lokal
-                klasse, grund = "vorrat_lokal", None
-            else:                                 # C: nie geschickt -> uebertragbar
-                klasse, grund = "kandidaten", None
-            k = schluessel(p, datei)
+            k = schluessel(p, rid)
             if k in ab:                           # N: bewusste Entscheidung schlaegt alles
-                erg["abgewaehlt"].append((p, datei))
+                erg["abgewaehlt"].append((p, rid))
                 if klasse != "kandidaten":
-                    erg["abgewaehlt_unpruefbar"].append((p, datei))
+                    erg["abgewaehlt_unpruefbar"].append((p, rid))
                 continue
             if klasse == "geloescht":
-                erg["geloescht"].append((p, datei, grund))
+                erg["geloescht"].append((p, rid, grund))
             elif klasse == "api_export":
-                erg["api_export"].append((p, datei))
+                erg["api_export"].append((p, rid))
             elif klasse == "vorrat_lokal":
-                erg["vorrat_lokal"].append((p, datei))
+                erg["vorrat_lokal"].append((p, rid))
             else:
-                erg["kandidaten"].append((p, datei))
+                erg["kandidaten"].append((p, rid))
                 if k in abl:
                     erg["abgelehnt"][k] = abl[k]
-        erg["je_person"][p] = {"gesamt": len(ms), "beide": beide, "frigate": len(fs)}
+        erg["je_person"][p] = {"gesamt": len(rids), "beide": beide, "frigate": len(f.get(p, []))}
     return erg
 
 
-# Grund-Marker der offer-again-Journalzeile. refs_meta.jsonl hat ZWEI Leser
-# (lade_meta hier, anlernen.aehnliche_unbekannte dort) — der Marker ist der
-# Vertrag, an dem der zweite Leser die Zeile IGNORIERT: das Bild liegt weiter
-# im Master, sein Anlern-Gesicht bleibt zugeordnet (.138 Panel-Befund: die
-# Zeile gab das Gesicht sonst wieder als Unbekannt-Vorschlag frei, Weg zum
-# exakten Duplikat-Anlernen).
+# Grund-Marker der offer-again-Zeile (seit E3b-3a als grund im Merker MERKER_EXPORT) — die
+# Zeile ist keine Loeschung: das Bild bleibt aktive Referenz, sein Anlern-Gesicht bleibt
+# zugeordnet (.138 Panel-Befund: die Zeile gab das Gesicht sonst wieder als
+# Unbekannt-Vorschlag frei, Weg zum exakten Duplikat-Anlernen).
 GRUND_WIEDER_ANBIETEN = "offer-again"
 
 
@@ -534,51 +556,58 @@ def wieder_anbieten(paare):
     dazu. anlernen.aehnliche_unbekannte ueberspringt die Zeile am
     GRUND_WIEDER_ANBIETEN-Marker (.138: sie ist KEINE Loeschung, das Anlern-
     Gesicht bleibt zugeordnet). Ein erfolgreicher Re-Export haengt mit seinem
-    aktiv=True-Eintrag alles zurueck."""
-    aktiv, _t = lade_meta()
+    aktiv=True-Eintrag alles zurueck.
+    Seit E3b-3a: paare = [(person, ref_id), …]; statt der refs_meta-Zeile eine Merker-Zeile
+    MERKER_EXPORT mit {ZURUECK: True, grund: GRUND_WIEDER_ANBIETEN} im Katalog (je merker gilt die
+    letzte Zeile, der Satz bleibt, keine Loeschung). Nur fuer Saetze, die ein gueltiger Export-Merker
+    oder ihre Herkunft aus Frigate ausserhalb der Kandidaten haelt; ein Paar, das keine aktive
+    Referenz dieser Person ist, lehnt den Aufruf laut ab (ValueError)."""
+    from core.harvest_set import ART_FRIGATE_IMPORT
+    eintraege, personen = _lesung()
+    _nur_aktive(paare, personen)
     n = 0
-    for person, datei in paare:
-        if not os.path.isfile(os.path.join(MASTER, person, datei)):
+    for _person, rid in dict.fromkeys(paare):
+        exp = _merker(eintraege[rid], MERKER_EXPORT)
+        draussen = (exp.get(ZURUECK) is not True if exp
+                    else eintraege[rid].get("herkunftsart") == ART_FRIGATE_IMPORT)
+        if not draussen:                      # schon Kandidat — nichts zu tun
             continue
-        alt = aktiv.get((person, datei))
-        if alt is None:                       # schon Kandidat — nichts zu tun
-            continue
-        meta_append(person=person, datei=datei, herkunft=alt.get("herkunft", "?"),
-                    aktiv=False, grund=GRUND_WIEDER_ANBIETEN)
+        _merken(rid, MERKER_EXPORT, {ZURUECK: True, "grund": GRUND_WIEDER_ANBIETEN})
         n += 1
     return n
 
 
 def cmd_status():
+    """Abgleich beider Seiten auf der Konsole; seit E3b-3a zaehlt und nennt er Saetze (Person und
+    die ersten zwoelf Zeichen der ref_id) statt Dateien. -> None"""
     nf, nm, eg = diff()
     print(f"Neu in Frigate (Import-Kandidaten): {len(nf)}")
     for p, d in nf[:10]:
         print(f"  + {p}/{d}")
-    print(f"Nur im Master, nie exportiert (Export-Kandidaten): {len(nm)}")
-    for p, d in nm[:10]:
-        print(f"  > {p}/{d}")
-    print(f"EXTERN GELOESCHT (in Frigate weg, im Master aktiv) — Entscheidung offen: {len(eg)}")
-    for p, d in eg[:10]:
-        print(f"  ! {p}/{d}  (Master loeschen ODER bewusst re-exportieren)")
+    print(f"Nur bei uns, nie exportiert (Export-Kandidaten, Saetze): {len(nm)}")
+    for p, rid in nm[:10]:
+        print(f"  > {p}/{rid[:12]}")
+    print(f"EXTERN GELOESCHT (in Frigate weg, bei uns aktiv) — Entscheidung offen: {len(eg)}")
+    for p, rid in eg[:10]:
+        print(f"  ! {p}/{rid[:12]}  (Referenz entfernen ODER bewusst re-exportieren)")
     # Ehrliche Zusatzzeile (nie stilles Verschwinden): schon Exportiertes fuehrt
     # Frigate 0.18 unter EIGENEM Namen (<Name>_<ts>.webp) — es fehlt im
     # Namens-Abgleich, ist aber KEIN Kandidat und KEIN Verlust.
-    aktiv, _t = lade_meta()
-    m, f = master_stand(), frigate_stand()
-    n_exp = sum(1 for (p, d), e in aktiv.items()
-                if e.get("herkunft") == "export"
-                and d in set(m.get(p, [])) and d not in set(f.get(p, [])))
+    eintraege, personen = _lesung()
+    f = frigate_stand()
+    n_exp = sum(1 for p, rids in personen.items() for rid in rids
+                if _klasse(eintraege[rid], p, f) in (("api_export", None), ("geloescht", D1_EXPORT)))
     if n_exp:
         print(f"Bereits exportiert, von Frigate unter eigenem Namen gefuehrt: {n_exp}")
     # .133: bewusst Abgewaehltes ist KEIN Kandidat mehr — das gehoert sichtbar in
     # die Bilanz, sonst wundert man sich ueber die Differenz zum Export-Ergebnis.
-    ab = abwahl_lesen()
-    n_ab = sum(1 for p, d in nm if schluessel(p, d) in ab)
+    ab = abwahl_lesen(eintraege, personen)
+    n_ab = sum(1 for p, rid in nm if schluessel(p, rid) in ab)
     if n_ab:
         print(f"Davon bewusst abgewaehlt (gehen NICHT nach Frigate): {n_ab}")
     # .137: gemerkte FRIGATE-Ablehnungen — der Auto-Export laesst sie aus, die
     # Auswahl-Seite zeigt sie rot und anklickbar. Nie still unter den Tisch.
-    n_abl = len(ablehnungen_aktiv())
+    n_abl = len(ablehnungen_aktiv(eintraege, personen))
     if n_abl:
         print(f"Von Frigate abgelehnt (gemerkt, Auto-Export laesst sie aus): {n_abl}")
     if not (nf or nm or eg):
@@ -586,19 +615,26 @@ def cmd_status():
 
 
 def cmd_import(dry):
-    # Frigate-Referenzbilder sind bereits fertige Gesichts-Crops -> KEIN CPU-Face-Gate hier. Das war
-    # redundant: nach dem Import rechnet der Dienst alle Embeddings ohnehin neu, und ZWAR auf der GPU
-    # (refcache-Neuaufbau). Hier nur schnell herunterladen; die Rechenarbeit macht die GPU.
+    # Frigate-Referenzbilder sind bereits fertige Gesichts-Crops -> KEIN CPU-Face-Gate hier. Hier nur
+    # schnell herunterladen; die Rechenarbeit macht der Worker-Dienst.
+    # E3a-4 (Bauplan Referenz-Quelle einbauen, J10): der Download landet im Staging-Ordner des Laufs
+    # state/import/<lauf>/<person>/<datei>, nicht mehr unter faces/, und schreibt keine refs_meta-Zeile.
+    # Den Satz schreibt danach der Dienst je geholter Datei ueber den Job dateisatz des Worker-Dienstes
+    # (Bild-Weg der Engine); die Liste der geholten Dateien steht im Schluss-Fortschritt (lauf, geholt,
+    # Pfade relativ zum Datenordner). Die Staging-Dateien bleiben liegen (geloescht wird hier nichts).
     nf, _, _ = diff()
     if not nf:
         _progress(phase="done", total=0, done=0, ok=0, gate=0)
         print("nichts zu importieren.")
         return
+    lauf = f"{time.strftime('%Y%m%d-%H%M%S')}_{uuid.uuid4().hex[:6]}"
+    ablage = os.path.join(DATA, "state", "import", lauf)
+    geholt = []
     total = len(nf)
     n_ok = n_dl = n_bad = 0
     for i, (p, datei) in enumerate(nf):
         _progress(phase="import", total=total, done=i, current=p, ok=n_ok, gate=n_dl)
-        ziel, grund = sicheres_ziel(p, datei)      # Fremdeingabe: NIE ungeprueft in einen Pfad
+        ziel, grund = sicheres_ziel(p, datei, ablage)   # Fremdeingabe: NIE ungeprueft in einen Pfad
         if ziel is None:
             n_bad += 1
             print(f"  ABGELEHNT: {p!r}/{datei!r} ({grund}) -> uebersprungen")
@@ -622,9 +658,10 @@ def cmd_import(dry):
             print(f"  DOWNLOAD-FEHLER: {p}/{datei} ({str(e)[:40]}) -> uebersprungen (kein Tombstone, Retry beim naechsten Lauf)")
             continue
         n_ok += 1
-        meta_append(person=p, datei=datei, herkunft="frigate-import", aktiv=True)
-        print(f"  importiert: {p}/{datei}")
-    _progress(phase="done", total=total, done=total, ok=n_ok, gate=n_dl, abgelehnt=n_bad)
+        geholt.append({"person": p, "datei": datei, "pfad": os.path.relpath(ziel, DATA)})
+        print(f"  geholt: {p}/{datei} -> {os.path.relpath(ziel, DATA)}")
+    _progress(phase="done", total=total, done=total, ok=n_ok, gate=n_dl, abgelehnt=n_bad,
+              lauf=None if dry else lauf, geholt=geholt)
     msg = f"=> {n_ok} importiert{' (dry)' if dry else ''}, {n_dl} Download-Fehler"
     if n_bad:
         msg += f", {n_bad} ABGELEHNT (unsichere Namen)"     # laut, nicht still
@@ -638,12 +675,14 @@ def cmd_import(dry):
 # Frigate mit Anmeldung (authentifizierter Port 8971) beantwortete der rohe
 # API-Weg JEDE Mutation mit 401 — und ein Nutzer, dem der API-Weg nicht
 # funktioniert, sucht sich einen anderen. Genau den soll es nie geben.
-def api_upload(person, datei, quelle, person_existiert=None):
+def api_upload(person, datei, inhalt, person_existiert=None):
     """Referenzbild ueber die Frigate-HTTP-API hochladen (Frigate 0.18.0, Endpunkte
     aus der OpenAPI der LAUFENDEN Instanz verifiziert, 05.08. — der fruehere
     POST /api/faces/{name} existiert dort NICHT, 404):
       1. unbekannter Name -> POST /api/faces/{name}/create (legt den Namen an),
       2. Bild             -> POST /api/faces/{name}/register (multipart, Feld `file`).
+    inhalt: die Bytes des Bildes (seit E3b-3a die Profilbild-Bytes eines Satzes, Lese-Stufe d,
+    statt eines Pfads), datei: der Dateiname im Formular (<ref_id>.<Endung>).
     person_existiert: vom Aufrufer gereichter Ist-Stand (spart je Datei einen
     /api/faces-Abruf); None = selbst nachschauen.
 
@@ -695,8 +734,7 @@ def api_upload(person, datei, quelle, person_existiert=None):
         _mutation(urllib.request.Request(f"{basis}/api/faces/{pq}/create",
                                          data=b"", method="POST"), "create")
     grenze = uuid.uuid4().hex
-    inhalt = open(quelle, "rb").read()
-    typ = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+    typ ={"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
            "webp": "image/webp"}.get(datei.rsplit(".", 1)[-1].lower(), "application/octet-stream")
     body = (f"--{grenze}\r\nContent-Disposition: form-data; name=\"file\"; "
             f"filename=\"{os.path.basename(datei)}\"\r\nContent-Type: {typ}\r\n\r\n").encode() \
@@ -741,7 +779,8 @@ def _ablehnung_merken(e):
     """Darf DIESER Fehler ins Ablehnungs-Gedaechtnis? -> ''|'urteil'|'unklar'
     (.138 Panel-MUSS: vorher wanderte JEDER nicht-fatale FrigateAntwortFehler in
     den Merker — ein globaler Frigate-Ausfall sperrte damit den ganzen Stapel
-    dauerhaft aus, weil Referenzbilder ihre mtime nie aendern).
+    dauerhaft aus, weil sich ein Referenzbild nie aendert; seit E3b-3a ist der
+    Merker eine Katalogzeile je ref_id ohne mtime, ein Satz ist unveraenderlich).
       'urteil' = 400 aus /register: Frigates deterministisches Inhalts-Urteil
                  ueber DIESES Bild ('No face was detected.') -> unbefristet;
       'unklar' = 500 'could not process' aus /register: kann ein kaputter
@@ -763,7 +802,7 @@ def _ablehnung_merken(e):
 _VORPRUEFER = None
 
 
-def _gesicht_pruefen(pfad):
+def _gesicht_pruefen(daten):
     """Vorpruefung analog Frigates register (.132, User-Entscheid): Frigate
     laesst jeden Upload durch SEINEN Gesichtsdetektor (beta2 face.py, Schwelle
     0.5) und lehnt sonst mit 'No face was detected.' ab. Wir pruefen vorab mit
@@ -771,7 +810,9 @@ def _gesicht_pruefen(pfad):
     nur, was bestehen duerfte — anderes Modell, kein identisches Urteil,
     Frigates Antwort bleibt die Wahrheit (der Bild-Fehlerpfad faengt
     Rest-Ablehnungen weiter ab). Detektor-Ladefehler = fail-open mit Ansage
-    (die Vorpruefung ist Optimierung, nie Blocker). -> (True, '')/(False, grund)."""
+    (die Vorpruefung ist Optimierung, nie Blocker). Seit E3b-3a urteilt sie auf den
+    Bytes des Profilbilds (daten, Lese-Stufe d) statt auf einer Datei.
+    -> (True, '')/(False, grund)."""
     global _VORPRUEFER
     if _VORPRUEFER is None:
         try:
@@ -844,7 +885,8 @@ def _gesicht_pruefen(pfad):
         return True, ""
     try:
         import cv2
-        img = cv2.imread(pfad)
+        import numpy as np
+        img = cv2.imdecode(np.frombuffer(daten, np.uint8), cv2.IMREAD_COLOR)
         if img is None:
             return False, "unreadable image file"
         gesichter = _VORPRUEFER.get(img)
@@ -858,24 +900,38 @@ def _gesicht_pruefen(pfad):
         return True, "__failopen__"
 
 
-def _pruefen_gecacht(person, datei, cache, neu=None):
-    """Vorpruefungs-Urteil je Bild AUS dem Cache, wenn die Datei seit der Messung
-    unveraendert ist, sonst frisch gerechnet (.133). Frisch Gerechnetes landet im
-    neu-Dict des AUFRUFERS (.134 Review-SOLL: nie mehr die ganze Cache-Datei
+def _profilbild(ref_id):
+    """Die Bytes des Profilbilds eines Satzes (Lese-Stufe d, geprueft) und sein Dateiname fuer Frigate.
+    -> (Bytes, '<ref_id>.<Endung des Profilbilds>'); fehlt das Bild oder stimmt seine Pruefsumme nicht:
+    FileNotFoundError mit Klartext (ein Bild-Fehler, _fehler_einstufen)"""
+    from core import refquelle as _rq
+    bild = _rq.read_image(_rq_cfg(), ref_id, "profil") or {}
+    if bild.get("daten") is None or bild.get("fehler"):
+        grund = bild.get("fehler") or bild.get("fehlt") or "set not visible"
+        raise FileNotFoundError(f"profile picture of reference set {ref_id[:12]} not readable ({grund})")
+    return bild["daten"], ref_id + os.path.splitext(bild["datei"])[1]
+
+
+def _pruefen_gecacht(ref_id, cache, neu=None):
+    """Vorpruefungs-Urteil je Satz AUS dem Cache (Schluessel ref_id; seit E3b-3a ohne mtime, ein Satz
+    ist unveraenderlich), sonst frisch auf den Profilbild-Bytes gerechnet (.133). Frisch Gerechnetes
+    landet im neu-Dict des AUFRUFERS (.134 Review-SOLL: nie mehr die ganze Cache-Datei
     zurueckschreiben — _cache_mischen mischt unter Lock, parallele Laeufe
     verlieren einander nichts mehr). Fail-open-Urteile (Detektor nicht ladbar,
-    Einzelfehler) werden NIE gemerkt."""
-    quelle = os.path.join(MASTER, person, datei)
-    k = schluessel(person, datei)
-    mt = _mtime(quelle)
-    alt = cache.get(k) or (neu or {}).get(k)
-    if alt and mt is not None and alt.get("mtime") == mt:
+    Einzelfehler) und ein nicht lesbares Profilbild werden NIE gemerkt.
+    -> (ok, grund)"""
+    alt = cache.get(ref_id) or (neu or {}).get(ref_id)
+    if alt:
         return bool(alt.get("ok", True)), str(alt.get("grund") or "")
-    ok_bild, grund = _gesicht_pruefen(quelle)
+    try:
+        daten, _name = _profilbild(ref_id)
+    except FileNotFoundError as e:
+        return False, str(e)
+    ok_bild, grund = _gesicht_pruefen(daten)
     if grund == "__failopen__":
         return True, ""
-    if _VORPRUEFER != "aus" and mt is not None and neu is not None:
-        neu[k] = {"ok": ok_bild, "grund": grund, "mtime": mt}
+    if _VORPRUEFER != "aus" and neu is not None:
+        neu[ref_id] = {"ok": ok_bild, "grund": grund}
     return ok_bild, grund
 
 
@@ -900,7 +956,8 @@ def _cache_mischen(neu):
 
 def cmd_vorpruefung():
     """Vorpruefungs-Cache fuellen (.133, Grundlage der Auswahl-Seite): rechnet NUR
-    neue oder geaenderte Bilder und schreibt seinen Fortschritt fuer die UI mit.
+    Saetze ohne Urteil (je ref_id, auf den Profilbild-Bytes; seit E3b-3a) und schreibt seinen
+    Fortschritt fuer die UI mit.
     Der Dienst startet das im Hintergrund, sobald die Seite Kandidaten ohne
     Urteil sieht; die erste Runde ueber >100 Bilder dauert ~10-15 s, danach ist
     das Urteil sofort da. Schreibt NIE nach Frigate — reines Lesen + Rechnen."""
@@ -915,8 +972,8 @@ def cmd_vorpruefung():
     offen = vorpruefung_offen(nm, cache)
     _vp_status(laeuft=True, gesamt=len(offen), fertig=0)
     neu = {}
-    for i, (person, datei) in enumerate(offen):
-        _pruefen_gecacht(person, datei, cache, neu)
+    for i, (_person, rid) in enumerate(offen):
+        _pruefen_gecacht(rid, cache, neu)
         if _VORPRUEFER == "aus":
             # Detektor nicht ladbar (.134 Review-SOLL: vorher lief die Seite in
             # ein Endlos-Karussell aus Reload + neuem Subprozess): ABSCHLUSS-
@@ -956,11 +1013,14 @@ def cmd_export(dry, auch_extern=False, force=False, auswahl=None):
     und schreibt NICHTS (Review-MUSS: ein dry-Lauf darf den Fehler-Beleg des
     letzten echten Laufs nie ueberschreiben). Exit 0 nur ohne Fatal-Abbruch.
 
-    .133 auswahl = [(person, datei), …] -> SELEKTIVER Sync: nur diese Kandidaten,
+    .133 auswahl = [(person, ref_id), …] -> SELEKTIVER Sync: nur diese Kandidaten,
     Reihenfolge, Toleranz und Bericht sonst identisch (die Auswahl-Seite schickt
     das, was der Nutzer angehakt hat). auswahl=None = Voll-/Auto-Export; der
     ueberspringt die bewusst ABGEWAEHLTEN Bilder still, aber gezaehlt
-    (bericht['abgewaehlt_n'] — nie ein stiller Verlust)."""
+    (bericht['abgewaehlt_n'] — nie ein stiller Verlust).
+    Seit E3b-3a: Kandidaten sind Saetze (person, ref_id); gesendet werden die Profilbild-Bytes des
+    Satzes als <ref_id>.<Endung>; nach erfolgreichem register eine Merker-Zeile MERKER_EXPORT im
+    Katalog; Bericht und Fortschritt fuehren Person und ref_id."""
     t0 = time.time()
     bericht = {"ts": round(t0, 1), "modus": "export", "total": 0, "exportiert": 0,
                "exportiert_liste": [], "abgewaehlt_n": 0, "abgelehnt_n": 0,
@@ -998,9 +1058,6 @@ def cmd_export(dry, auch_extern=False, force=False, auswahl=None):
               "Frigate; use --force to override deliberately, or --dry-run to preview")
     if not _frigate():
         fatal("no Frigate URL configured (settings or FRIGATE_URL)")
-    if not os.path.isdir(MASTER):
-        fatal(f"reference master not found: {MASTER} (data dir wrong? "
-              "inside the container it is /data)")
     try:
         nf, nm, eg = diff()
     except Exception as e:
@@ -1046,15 +1103,14 @@ def cmd_export(dry, auch_extern=False, force=False, auswahl=None):
     neu_urteile = {}
     neu_abl, weg_abl = {}, []              # .137: Ablehnungs-Gedaechtnis pflegen
     gleiche_folge, letzter_kurz = 0, None
-    for i, (p, datei) in enumerate(kandidaten):
+    for i, (p, rid) in enumerate(kandidaten):
         if not dry:
-            _progress(phase="export", modus="export", total=total, done=i, current=p)
-        quelle = os.path.join(MASTER, p, datei)
-        # Protokoll-Vermerk: WOHIN exportiert wurde. Das ZIEL_API-Praefix ist der
+            _progress(phase="export", modus="export", total=total, done=i, current=p, ref_id=rid)
+        # Merker-Vermerk: WOHIN exportiert wurde. Das ZIEL_API-Praefix ist der
         # Beweis der API-Aera (Frigate benennt um) — abgleich() liest es (.137).
         ziel = f"{ZIEL_API}/api/faces/{p}"
         if dry:
-            print(f"  [dry] exportiere {p}/{datei}")
+            print(f"  [dry] exportiere {p}/{rid[:12]}")
             continue
         # .134 Review-MUSS: die Vorpruefung filtert NUR den Voll-/Auto-Export.
         # Ein auf der Auswahl-Seite bewusst angehaktes Bild schlaegt sie IMMER —
@@ -1062,31 +1118,31 @@ def cmd_export(dry, auch_extern=False, force=False, auswahl=None):
         # endgueltig aussperren' (Seiten-Versprechen); Ablehnungen faengt der
         # Bild-Fehlerpfad darunter mit Frigates echtem Grund.
         if auswahl is None:
-            ok_bild, grund = _pruefen_gecacht(p, datei, cache, neu_urteile)
+            ok_bild, grund = _pruefen_gecacht(rid, cache, neu_urteile)
             if not ok_bild:                        # Vorpruefung: gar nicht erst senden
-                bericht["uebersprungen"].append({"person": p, "datei": datei,
+                bericht["uebersprungen"].append({"person": p, "ref_id": rid,
                                                  "fehler": f"pre-check: {grund}"})
-                print(f"  uebersprungen {p}/{datei}: pre-check: {grund}", file=sys.stderr)
+                print(f"  uebersprungen {p}/{rid[:12]}: pre-check: {grund}", file=sys.stderr)
                 continue
         try:
-            api_upload(p, datei, quelle, person_existiert=p in vorhanden)
+            daten, name = _profilbild(rid)
+            api_upload(p, name, daten, person_existiert=p in vorhanden)
         except SystemExit:
             raise
         except Exception as e:
             art, kurz = _fehler_einstufen(e)
             if art == "fatal":
                 fatal(kurz)
-            bericht["uebersprungen"].append({"person": p, "datei": datei, "fehler": kurz})
-            print(f"  uebersprungen {p}/{datei}: {kurz}", file=sys.stderr)
+            bericht["uebersprungen"].append({"person": p, "ref_id": rid, "fehler": kurz})
+            print(f"  uebersprungen {p}/{rid[:12]}: {kurz}", file=sys.stderr)
             merk = _ablehnung_merken(e)
             if merk:
                 # .137/.138: NUR ein echtes Bild-Urteil aus /register wird
                 # gemerkt (400 unbefristet, 500-unklar mit Verfall) — nie ein
                 # Vorpruefungs-Skip, kein lokaler Datei-, create- oder
                 # Transportfehler (Panel-MUSS: sonst sperrt ein Frigate-
-                # Ausfall den ganzen Stapel dauerhaft aus).
-                neu_abl[schluessel(p, datei)] = {"fehler": kurz, "mtime": _mtime(quelle),
-                                                 "ts": round(time.time(), 1), "art": merk}
+                # Ausfall den ganzen Stapel dauerhaft aus). Zeitpunkt: _merken.
+                neu_abl[rid] = {"fehler": kurz, "art": merk}
             # Wand-VERDACHT statt Abbruch (Review-MUSS: ein Abbruch blockierte die
             # Warteschlange dauerhaft — uebersprungene Bilder stehen beim naechsten
             # Lauf wieder VORNE, alles dahinter waere nie drangekommen). Bild-Fehler
@@ -1103,13 +1159,13 @@ def cmd_export(dry, auch_extern=False, force=False, auswahl=None):
             continue
         gleiche_folge, letzter_kurz = 0, None
         vorhanden.add(p)
-        weg_abl.append(schluessel(p, datei))    # .137: geklappt -> Merker faellt
+        weg_abl.append(rid)                     # .137: geklappt -> Merker erledigt
         bericht["exportiert"] += 1
         # .133: WELCHE Bilder durchkamen, nicht nur wie viele — die Auswahl-Seite
         # zeigt je Bild 'uploaded' bzw. Frigates Ablehnungsgrund aus dem Bericht.
-        bericht["exportiert_liste"].append({"person": p, "datei": datei})
-        meta_append(person=p, datei=datei, herkunft="export", aktiv=True, ziel=ziel)
-        print(f"  exportiert: {p}/{datei}")
+        bericht["exportiert_liste"].append({"person": p, "ref_id": rid})
+        _merken(rid, MERKER_EXPORT, {"ziel": ziel, "person": p})
+        print(f"  exportiert: {p}/{rid[:12]}")
     if dry:
         print(f"=> {len(kandidaten)} exportierbar (dry, nichts geschrieben)")
         return
@@ -1154,9 +1210,10 @@ if __name__ == "__main__":
     elif modus == "import":
         cmd_import(dry)
     elif modus == "export":
-        # .133: die Auswahl kommt als DATEI, nie als argv — hunderte Personen-/
-        # Dateinamen sprengen jede Kommandozeile (und der Dienst muesste sie
-        # quoten). Fehlt/kaputt = Klartext-Stopp, nie ein nackter Traceback.
+        # .133: die Auswahl kommt als DATEI, nie als argv — hunderte Paare
+        # [Person, ref_id] (seit E3b-3a, Laufprotokoll I3) sprengen jede
+        # Kommandozeile (und der Dienst muesste sie quoten). Fehlt/kaputt =
+        # Klartext-Stopp, nie ein nackter Traceback.
         _aus = None
         _apfad = next((a.split("=", 1)[1] for a in sys.argv[2:]
                        if a.startswith("--auswahl=")), "")

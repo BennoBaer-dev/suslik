@@ -109,20 +109,30 @@ def render(cfg, log_path, eid, gt_schnellpersonen, master_persons):
         # es braucht keine neue Analyse. Abschnitte nach bestem NN sortiert,
         # innerhalb wie gehabt NN und dann Groesse; Bilder ohne Zuordnung
         # (z.B. Enrollment-Crops) zuletzt.
-        def _gal_rang(c):
-            nn = bild_nn(c)
-            return (nn if nn is not None else -9.0,
-                    os.path.getsize(os.path.join(edir, c)))
         def _gal_person(c):
             m2 = re.search(r"_(?:best|show)_(.+?)_NN", c)
             return m2.group(1) if m2 else None
-        jpgs = sorted((c for c in os.listdir(edir) if c.endswith(".jpg")),
-                      key=_gal_rang, reverse=True)
+        # E3a-3 (Bauplan Referenz-Quelle einbauen): das beste Gesicht je Person und die Kandidaten
+        # liegen als Saetze vor (kandidaten.jsonl, ref_id); ihr Bild kommt ueber Lese-Stufe d
+        # (core.lernlauf.bild_url), _show_ und Ereignisse vor dieser Version weiter aus den Dateien.
+        # Ein Eintrag: (Name, Bild-Adresse, NN, Groesse, Person).
+        from core import harvest_set as _hs_ev
+        from core.lernlauf import bild_url as _satz_url
+        _kz, _bz = _hs_ev.event_rows(edir)
+        _q = urllib.parse.quote
+        bilder = [(c, f"/events/{_q(ed)}/{_q(c)}", bild_nn(c),
+                   os.path.getsize(os.path.join(edir, c)), _gal_person(c))
+                  for c in os.listdir(edir) if c.endswith(".jpg")]
+        bilder += [(z["ref_id"], _satz_url(z["ref_id"], None), z.get("score"), 0, pn)
+                   for pn, z in _bz.items() if z.get("ref_id")]
+        bilder += [(z["ref_id"], _satz_url(z["ref_id"], None), None, 0, None)
+                   for z in _kz if z.get("ref_id")]
+        bilder.sort(key=lambda b: (b[2] if b[2] is not None else -9.0, b[3]), reverse=True)
         gruppen = {}
-        for c in jpgs:
-            gruppen.setdefault(_gal_person(c), []).append(c)
+        for b in bilder:
+            gruppen.setdefault(b[4], []).append(b)
         def _grp_rang(pn):
-            return max((bild_nn(c) or -9.0) for c in gruppen[pn])
+            return max((b[2] or -9.0) for b in gruppen[pn])
         # SICHTBARE GRENZE sicher/unsicher (User-Befund an einer Tuerkamera:
         # "hier sollte eine deutliche sichtbare Grenze sein — das habe ich klar
         # erkannt, und diese koennten ggf. als falsche Person erkannt werden").
@@ -148,10 +158,9 @@ def render(cfg, log_path, eid, gt_schnellpersonen, master_persons):
                     f'<div class="evgrenze">{t("event.grenze", wert=f"{_grenze_nn:.2f}")}</div>')
                 _unter_grenze = True
             zellen = "".join(
-                f'<a href="/events/{urllib.parse.quote(ed)}/{urllib.parse.quote(c)}" '
-                f'class="evimg"><img src="/events/{urllib.parse.quote(ed)}/'
-                f'{urllib.parse.quote(c)}" alt="{html.escape(c)}"></a>'
-                for c in gruppen[pn])
+                f'<a href="{url}" '
+                f'class="evimg"><img src="{url}" alt="{html.escape(c)}"></a>'
+                for c, url, _nn, _gr, _pn in gruppen[pn])
             titel = html.escape(pn) if pn else t("event.gruppe_ohne")
             _b = (f' <span class="badge warn">{t("event.badge_unsicher")}</span>'
                   if pn in _vage else "")

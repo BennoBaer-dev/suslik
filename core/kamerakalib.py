@@ -224,15 +224,6 @@ AUSNAHMEN = {
         "danach macht der Quality-Check. Von .385 bis .396 siebte auch "
         "dieser Weg — bewusst zurueckgebaut, die Latte gilt weiter auf den "
         "Automatik-Wegen",
-    "anlernen:entferne_referenz":
-        "Tombstone: entfernt eine Referenz, nimmt keine auf",
-    "anlernen:_ref_datei_weg":
-        "Tombstone-Griff der Stufe A (.511): die gemeinsame Datei-Seite hinter "
-        "entferne_referenz UND entferne_referenzen — Datei loeschen, Zeile mit "
-        "aktiv:false anhaengen. Er nimmt nie eine Referenz auf; die Zeile ist "
-        "die Loeschmarke, ohne die sync_refs das in Frigate noch vorhandene "
-        "Bild als 'neu' re-importieren wuerde. Gleiche Begruendung wie beim "
-        "Aufrufer darueber (Entscheid 08.09.)",
     "verifyd:upload_referenz":
         "Foto-Upload durch den Nutzer: kein Kameramaterial, keine Kamera und "
         "keine Guete-Messung — eine Kamera-Latte hat hier keine Bedeutung "
@@ -241,10 +232,6 @@ AUSNAHMEN = {
     "verifyd:do_POST":
         "Lernlauf-Uebernahme: die Zeile wird geschrieben, NACHDEM "
         "core.uebernahme.plan_bauen gesiebt hat — der Filter sitzt dort",
-    "sync_refs:meta_append":
-        "Journal-Schreiber des Frigate-Abgleichs: haengt Export-/"
-        "Wieder-anbieten-Zeilen zu Bildern an, die BEREITS im Katalog liegen — "
-        "er nimmt nie eines auf",
 }
 
 

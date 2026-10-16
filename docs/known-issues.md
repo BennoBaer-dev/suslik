@@ -4,12 +4,13 @@ An honest list of what we know is rough, wrong or missing right now. If you hit
 something that is not on this list, please open an issue — that is exactly the kind
 of feedback this project needs.
 
-_Last updated: 2026-08-13 (0.1.0.199)._
+_Last updated: 2026-10-11 (reference source: backup before the update, restore on different hardware; earlier entries 2026-08-13, 0.1.0.199)._
 
 ## Known bugs
 
 - **Deleting in Frigate is intentionally out of scope.** suslik never deletes anything
-  in Frigate — removals stay local (a tombstone prevents re-import on the next sync).
+  in Frigate — removals stay local (the removed reference keeps its set in the archive and its
+  catalog entry, so the next sync does not import it again).
   The opposite direction has an explicit place instead of being silent:
   a reference you deleted **in Frigate** is never re-sent on its own. It shows up on the
   **Frigate sync** page as your decision, *offer again* or *respect the deletion*, and
@@ -64,6 +65,16 @@ _Last updated: 2026-08-13 (0.1.0.199)._
   installation — settings, face references, learning results, person-recognition
   material and models. It deliberately excludes the clip cache and per-event
   artifacts (they rebuild over time). The `/data` volume remains the source of truth.
+  Before the update to the first version with the reference source, save
+  `<data>/clips/refcache.npz` next to the full backup (see
+  [installation.md](installation.md#before-you-update)).
+- **A full backup restored on different hardware does not migrate.** The backup carries the
+  `backend` setting of the machine it came from (for example `openvino:GPU`). Restored into a
+  cpu or cuda image, the analysis worker cannot start with that value, so the one-time migration
+  to the reference source stays pending: recognition keeps running from the old, untouched faces,
+  no new faces are taken, and `/health` shows it in the field `umzug`. Found in our test runs on
+  11.10.2026; a fix is not decided yet. In those test runs the migration went through once the
+  `backend` value was set to what the new machine has.
 - **Frigate only accepts reference uploads while its own face recognition is on.**
   With `face_recognition.enabled: false` in your Frigate config, Frigate answers every
   upload with HTTP 400 ("Face recognition is not enabled."). suslik shows that verbatim,
