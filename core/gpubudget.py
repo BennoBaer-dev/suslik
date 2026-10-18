@@ -24,6 +24,8 @@ sagen es an der Oberflaeche auch so. Wer sie aendert, misst neu und schreibt den
 Messweg dazu.
 """
 
+from core import cuda_budget as _cuda
+
 # --- gemessen 04.09.2026, RTX 2060 Mobile (CUDA), je Prozess ueber nvidia-smi ---
 VRAM_JE_WORKER_MB = 1300        # Analyse-Worker: 1200-1400 gemessen, linear
 VRAM_ERSTER_WAECHTER_MB = 1500  # erster Live-Waechter, traegt die Modelle
@@ -532,149 +534,7 @@ def fussabdruck_mb(n_straenge, kind="cuda", g_zusatz=0, n_aktiv=None):
 STRAENGE_MAX = 6
 
 
-# ============================================================================
-# .535 — DIE MESSTABELLE (Fassung 4, Inhaber-Entscheid 15.09.2026 19:4x:
-# „Warum nehmen wir das nicht einfach als Basis, 10 % auf jede Steigerung
-# drauf")
-# ============================================================================
-# SIE ERSETZT DIE EICHUNG. Bis .534 plante die Leiter aus Ankern einer
-# 6-GB-Referenzkarte und liess den Worker im Betrieb nachmessen (Plateau je
-# Konstellation, Aufstieg Stufe fuer Stufe). Das hat an drei Tagen drei
-# verschiedene Fehlerklassen erzeugt — vergiftete Plateaus durch spaet ladende
-# Waechter, Preise, die ohne pid-Sicht gar nicht zu messen waren, und eine
-# Anlage, die ihren eigenen Verbrauch gegen sich rechnete. Jetzt steht eine
-# TABELLE, gemessen am 15.09.2026 auf zwei echten Karten, je Posten das
-# gemessene MAXIMUM plus 10 % Sicherheit:
-#
-#   Prozess mit erstem Strang   1940 MiB  (gemessen 1762: RTX 2060 Mobile, 4K,
-#                                          205 Gesichter, EIN Strang)
-#   jeder weitere Strang        720 MiB   (gemessen 654: Feldtester-Anlage,
-#                                          RTX 3060, Plateau n3 - n2)
-#   jede weitere Geometrie      1235 MiB  (gemessen 1123: Feldtester-Anlage,
-#                                          drei Straenge)
-#
-# Die erste Geometrie steckt im Prozess-Preis; eine zweite ist fest eingeplant
-# (GEOMETRIEN_IN_ANKERN, unveraendert 2), mehr als drei fuehrt ein Prozess
-# ohnehin nicht (der Geometrie-Verfall in worker_dienst raeumt die aelteste weg).
-# Die Auswahl „welche Aufloesungen braucht DIESE Anlage wirklich" ist bewusst
-# NICHT hier — sie steht als Folgeversion in `analysen/bauplan_534_eichung.md`
-# §15.
-#
-# WAS DIE TABELLE ENTHAELT und deshalb NICHT zweimal gezaehlt werden darf: den
-# CUDA-Kontext, die Handles, den NVDEC-Decoder je Strang und die Dauerlast ueber
-# viele Analysen — es sind kartenweite Messwerte eines laufenden Betriebs. Der
-# Arena-Deckel zieht die Posten ausserhalb der Arena weiterhin ab (s.
-# `arena_deckel_mb`), aber NUR dort und nur beim Umrechnen des Budgets.
-TABELLE_FASSUNG = 4
-TAB_PROZESS_MB = 1940        # Prozess mit erstem Strang UND erster Geometrie
-TAB_STRANG_MB = 720          # jeder weitere Strang, Decoder inbegriffen
-TAB_GEOMETRIE_MB = 1235      # jede weitere Geometrie
-TABELLE_BELEG = ("gemessen 15.09.2026, RTX 2060 Mobile (1762 MiB, 4K, ein "
-                 "Strang) und RTX 3060 (654 MiB je weiterem Strang, 1123 MiB "
-                 "je weiterer Geometrie), je Posten Maximum + 10 %")
-
-
-def preis_herkunft_text(preis_quelle=None, gemessen=None):
-    """WOHER DIE PREISE KOMMEN, in einem englischen Satzstueck (.544 B).
-
-    EINE Formulierung fuer die Log-Zeile der Leiter UND fuer den Absage-Hinweis:
-    stuende an einer der beiden Stellen weiter „from the measurement table",
-    waehrend die Zahlen von dieser Karte stammen, waere das die luegende
-    Diagnose (K1) — und zwar an genau der Stelle, an der der Betreiber
-    nachrechnet."""
-    gem = dict(gemessen or {})
-    if not gem:
-        return (f"prices from the measurement table (version "
-                f"{TABELLE_FASSUNG}, {TABELLE_BELEG})")
-    pq = dict(preis_quelle or {})
-    daten = sorted({str(pq.get(a, "")).split("(")[-1].rstrip(")")
-                    for a in gem} - {""})
-    return ("prices measured on this card"
-            + (f" ({', '.join(daten)})" if daten else "")
-            + (f", the rest from the measurement table "
-               f"(version {TABELLE_FASSUNG})"
-               if len(gem) < len(PREIS_ARTEN) else ""))
-
-
-def tabelle_summe(n_straenge, geometrien=None, preise=None):
-    """Was `n` Rechenstraenge mit `g` Geometrien kosten. -> MB
-
-    EINE Formel fuer Leiter, Rueckrechnung und Probe: Prozess + je weitere
-    Geometrie + je weiterer Strang. Ohne `geometrien` gilt die feste Annahme
-    (`GEOMETRIEN_IN_ANKERN`).
-    .544 B: `preise` ueberlagert die Tabellen-Posten mit den auf DIESER Karte
-    gemessenen (s. `preise_wirksam`) — die Arithmetik bleibt dieselbe, nur die
-    Zahlen kommen dann von hier statt aus einer fremden Karte."""
-    n = max(1, int(n_straenge or 1))
-    g = max(1, int(GEOMETRIEN_IN_ANKERN if geometrien is None else geometrien))
-    p, _q, _gem = preise_wirksam(preise)
-    return (p["prozess"] + (g - 1) * p["geometrie"] + (n - 1) * p["strang"])
-
-
-# ============================================================================
-# .531 (15.09.2026) — DIE LEITER. Ab hier plant der Kartenhaushalt in STUFEN.
-# ============================================================================
-# DIE LEITER IST DIE EINE RECHNUNG FUER STRAENGE UND GEOMETRIEN; Preise sind
-# kartenweite `memory.used`-Deltas und enthalten den CUDA-Kontext BEREITS — er
-# wird nur beim Umrechnen in den Arena-Deckel abgezogen, nie gegen die Preise.
-#
-# Anlass (Diagnose `analysen/diagnose_530_vram.md`): bis .530 rechnete der Dienst
-# `fussabdruck_mb(N)` gegen den freien Platz und den Geometrie-Deckel in einer
-# ZWEITEN, anders gebauten Rechnung. Auf einer 12-GB-Karte liess das drei
-# Straenge zu, der Geometriebau fuellte die Karte in unter einer Minute, und
-# jede Analyse endete im CUDA-BFC-OOM. Die Leiter schaltet die Verbraucher
-# statt dessen von unten nach oben ein, solange die KUMULIERTE Summe ins Budget
-# passt — Strang vor Zusatzgeometrie, weil der Engpass Durchsatz ist.
-#
-# Kumulierte Anker-Schwellen (RTX 2060 Mobile, s. STUETZWERTE) — seit .535 bis
-# sechs Straenge, weil STRAENGE_MAX von 4 auf 6 gegangen ist:
-#     S1 3129 | S2 5332 | S3 6032 | S4 8235 | S5 8935 | S6 11138 |
-#     S7 13341 | S8 15544
-# KORREKTUR ZUM KONZEPT (`konzept_531_vram.md` §4, QS-Plan-Fund B1): die dortige
-# Baender-Tabelle nannte 7535 als Kante — das ist `fussabdruck_mb(3)` der alten
-# Formel, NICHT die Leitersumme. Massgeblich ist die Leiter.
-#
-# .532 — WAS DIE LEITER NICHT IST: sie ist nicht der Arena-Deckel. Die Leiter
-# entscheidet, WIE VIEL gebaut wird (Straenge, Geometrien); der Deckel ist die
-# Grenze, an der dieser Prozess die KARTE nicht mehr gefaehrden darf, und die
-# bemisst sich am ganzen Budget (s. `arena_deckel_mb`). Bis .531 war beides
-# dieselbe Zahl, und im Feld war der so gerechnete Deckel nach sechs
-# Ereignissen voll, obwohl die Karte noch rund 2 GB frei hatte.
-# .535: HIER STAND AUCH `ANKER_FASSUNG` — die Fassungsnummer der Stuetzwerte.
-# Sie war Teil des Eich-Schluessels und sonst nichts; mit ihm ist sie ohne
-# Leser. Die Stuetzwerte selbst bleiben (Decoder- und Dienst-Posten, die
-# RAM-Backends), nur ihre Kennung ist weg.
-
-# .535: HIER STAND `EICH_FASSUNG` — die Fassungsnummer der Eichdatei
-# `state/vram_eichung.json`. Die Datei ist mit der Preis-Messung entfallen;
-# was eine Stufe kostet, steht in der Messtabelle oben.
-# CUDA-Kontext + cuBLAS-/cuDNN-Handles + alles, was ORT ueber `Reserve()` holt:
-# der Teil des Kartenspeichers DIESES Prozesses, den die gedeckelte Arena NICHT
-# deckt. Gemessen als „Anteil des Worker-Prozesses minus registrierter Deckel"
-# bei voll gelaufener Arena: 310-726 MiB ueber drei Laeufe. Hier steht die OBERE
-# Kante — dieselbe Hausregel wie bei DECODER_CUDA_MB, und in der richtigen
-# Richtung: ein zu grosser Posten macht den Arena-Deckel kleiner, ein zu kleiner
-# liesse die Karte ueberlaufen.
-# 0 hiesse AUSDRUECKLICH „ungemessen" und nicht „null"; dann saehe man das in
-# /health am Feld `posten_gemessen`.
-KONTEXT_HANDLES_CUDA_MB = 726
-KONTEXT_HANDLES_GEMESSEN = True
-KONTEXT_HANDLES_BELEG = ("vram_proben_20260915/ergebnis.md, Proben C1/C2/C4, "
-                         "RTX 2060 Mobile, 15.09.2026")
-# Der NVDEC-ffmpeg je Strang ist ein EIGENER Prozess mit eigener PID und steckt
-# deshalb NICHT in dieser Zahl (sie ist der Anteil des Worker-Prozesses). Er
-# bleibt der eigene Posten DECODER_CUDA_MB (358) und wird in
-# `posten_ausserhalb_mb` getrennt gefuehrt.
-
-# Kleinster Arena-Deckel, den wir ueberhaupt registrieren. Er ist kein
-# Betriebspunkt, sondern ein Riegel gegen eine Rechnung, die sich verrechnet
-# hat: ein Deckel von 0 hiesse in ORT „unbegrenzt" (allocator_utils.cc:24), und
-# genau das Gegenteil ist gemeint.
-ARENA_DECKEL_MIN_MB = 256
-
-# Mindestabstand zwischen zwei druckbedingten Worker-Neustarts (P5). Ohne ihn
-# antwortet der Dienst auf einen dauerhaft fremden Verbraucher mit einer
-# Neustart-Schleife, und die kostet mehr Analysen als der Druck selbst.
+# Bestehender Mindestabstand für geordnete Druckneustarts.
 DRUCK_NEUSTART_ABSTAND_S = 600
 
 # Ab wann der Anteil der Live-Engine im GEMESSENEN `memory.free` wirklich drin
@@ -792,218 +652,38 @@ def frei_vergleich_text(frei_mb, gerechnet_mb, einheit, posten_text=""):
 # nachmessen will, nimmt die Feinmessung.
 
 
-# ============================================================================
-# .544 B (21.09.2026) — PREISE, DIE AUF DIESER KARTE GEMESSEN WURDEN
-# ============================================================================
-# WARUM DIE TABELLE NICHT REICHT, in Feldzahlen: sie ist am 15.09. auf einer RTX
-# 2060 Mobile und einer RTX 3060 mit 4K-Clips entstanden. Ein Feldtester faehrt
-# eine GTX 1070 (8 GB) mit Kameras in 2560x1920 und 1080p — dort verlangte die
-# Tabelle 3175 MiB Pflichtpreis gegen 1929 MiB Budget, und die Leiter verweigerte
-# JEDEN Rechenstrang. Die Preise einer fremden Karte mit fremden Bildgroessen als
-# Mass der eigenen zu nehmen ist genau der Fehler, den `arena_deckel_mb` schon
-# einmal bezahlt hat.
-#
-# WAS GEMESSEN WIRD, und warum NICHT am Bauschritt: um den Geometrie-Bau herum zu
-# messen ist GEMESSEN FALSCH — onnxruntime allokiert seine Arena traege, der
-# Zuwachs faellt erst waehrend der ersten Analysen. Auf dem CUDA-Notebook ergab
-# die Bau-Messung 148 MiB, wo die Dauerlast ~976 MiB sah (Begruendung im
-# Kopfkommentar von `worker_dienst._staffel`), und ZU KLEINE Preise machen die
-# Leiter zu GROSS — also genau in die Richtung, die im Feld die Karte fuellt.
-# Deshalb ist die Quelle hier das PLATEAU: der groesste Kartenanteil, den der
-# laufende Worker-Prozess samt seiner Decoder-Kinder ueber sein Leben wirklich
-# gehalten hat (`--query-compute-apps`, dieselbe Sonde wie ueberall, keine
-# zweite), zugeordnet zu der Konstellation, mit der er lief (N Straenge,
-# G Geometrien). Aus zwei benachbarten Konstellationen folgt ein Posten-Preis,
-# und nur aus benachbarten — ein Preis aus Messung MINUS Tabellenwert waere eine
-# halb gemessene Zahl, die niemand mehr einordnen kann.
-#
-# DIE 10 % sind KEINE neue Zahl: es ist dieselbe Sicherheit, die der
-# Inhaber-Entscheid vom 15.09. auf jeden Tabellen-Posten gelegt hat („Maximum
-# plus 10 %", s. TABELLE_BELEG). Ein gemessenes Maximum ist genauso ein Maximum.
-PREIS_SICHERHEIT = 1.10
-# WIE VIELE MESSUNGEN EINE KONSTELLATION MINDESTENS BRAUCHT — dieselbe Hausregel
-# wie beim Frei-Band (unter drei Stuetzstellen ist es ein Moment mit Umweg, kein
-# Plateau), deshalb DIESELBE Zahl aus DERSELBEN Quelle statt eines zweiten
-# Literals.
-PREIS_MIN_PROBEN = FREI_BAND_MIN_PROBEN
-# Die Posten, die ueberhaupt gemessen werden koennen — dieselbe Aufzaehlung wie
-# in `preise_mb`/`preis_quelle` der Leiter, EINE Quelle (K3).
-PREIS_ARTEN = ("prozess", "strang", "geometrie")
-# Die kleinste in diesem Haus gemessene Groesse einer ZUSAETZLICHEN Geometrie:
-# die beiden Frame-Puffer eines Strangs (engine_cuda.Satz legt y und uv an, bei
-# 4K zusammen rund 12 MB — zitiert im Kopf von `worker_dienst.geometrie`). Sie
-# ist keine Erwartung, sondern der Boden, unter dem eine Messung keine Geometrie
-# mehr beschreibt.
-GEOMETRIE_UNTERGRENZE_MB = 12
-
-
-def preis_untergrenze_mb(art):
-    """UNTER WELCHEM WERT EINE MESSUNG UNGLAUBWUERDIG IST. -> MB
-
-    Keine gegriffene Zahl, sondern die kleinste Groesse, die dieses Haus fuer
-    denselben Sachverhalt schon gemessen hat:
-      * `prozess`   ein rechnender CUDA-Prozess haelt allein an Kontext und
-                    Handles KONTEXT_HANDLES_CUDA_MB (726 MiB gemessen) — was
-                    darunter liegt, ist ein Prozess, der seine Modelle noch gar
-                    nicht gebaut hat, keine Preisauskunft.
-      * `strang`    ein Strang traegt mindestens sein eigenes NVDEC-ffmpeg
-                    (DECODER_CUDA_MB, 358 MiB gemessen).
-      * `geometrie` hier gibt es in diesem Haus KEINE grosse gemessene
-                    Untergrenze, und eine erfundene waere schlimmer als keine:
-                    ob eine zweite Aufloesung viel kostet, haengt an den
-                    Bildgroessen der Anlage, und eine Anlage mit zwei
-                    aehnlichen Streams zahlt wirklich wenig. Das Kleinste, was
-                    dieses Haus je dafuer gemessen hat, sind die beiden
-                    Frame-Puffer eines Strangs (engine_cuda.Satz: y + uv, bei
-                    4K zusammen rund 12 MB, zitiert in worker_dienst.geometrie).
-                    Die Wache ist hier die PLATEAU-Regel und die Differenz
-                    zweier echter Messungen, nicht eine Untergrenze.
-    Eine Messung unter der Grenze wird VERWORFEN und gesagt, nie stillschweigend
-    benutzt: ein zu kleiner Preis macht die Leiter zu gross."""
-    if art == "prozess":
-        return int(KONTEXT_HANDLES_CUDA_MB)
-    if art == "geometrie":
-        return int(GEOMETRIE_UNTERGRENZE_MB)
-    return int(DECODER_CUDA_MB)
-
-
-def preis_pruefen(art, mb, gesamt_mb=0, proben=0):
-    """Ist dieser gemessene Posten-Preis brauchbar? -> (ok, grund|None)
-
-    Fail-closed in die richtige Richtung: im Zweifel gilt die Tabelle. Geprueft
-    wird gegen die Karte selbst (ein Posten, der groesser ist als die ganze
-    Karte, ist eine kaputte Messung), gegen die Untergrenze oben und gegen die
-    Zahl der Stuetzstellen."""
-    try:
-        mb = int(mb)
-    except (TypeError, ValueError):
-        return False, "not a number"
-    if mb <= 0:
-        return False, f"{mb} MiB is not a price (0 or negative)"
-    g = int(gesamt_mb or 0)
-    if g > 0 and mb > g:
-        return False, f"{mb} MiB is larger than the whole card ({g} MiB)"
-    unten = preis_untergrenze_mb(art)
-    if mb < unten:
-        return False, (f"{mb} MiB is below what this posten costs at the very "
-                       f"least ({unten} MiB measured) — the process had not "
-                       f"built its models yet")
-    if int(proben or 0) < PREIS_MIN_PROBEN:
-        return False, (f"only {int(proben or 0)} sample(s), {PREIS_MIN_PROBEN} "
-                       f"needed (a plateau, not a moment)")
-    return True, None
-
-
-def preise_wirksam(preise=None):
-    """WELCHE PREISE GELTEN — gemessene vor Tabelle. -> (mb, quelle, gemessen)
-
-    `preise` ist das Ergebnis von `core.vrampreise.preise_ableiten`: je Posten
-    {"mb": …, "datum": "YYYY-MM-DD", "proben": n, …} oder nichts. Was fehlt,
-    kommt aus der Tabelle — sie bleibt Startwert und Rueckfall, denn eine Anlage
-    ohne eigene Messung soll genauso planen wie bisher.
-    `quelle` sagt JE POSTEN, woher die Zahl kommt; `gemessen` traegt nur die
-    wirklich gemessenen Werte (fuer /health: geplant und gemessen nebeneinander,
-    nie nur eins)."""
-    mb = {"prozess": TAB_PROZESS_MB, "strang": TAB_STRANG_MB,
-          "geometrie": TAB_GEOMETRIE_MB}
-    tab = f"tabelle (fassung {TABELLE_FASSUNG})"
-    quelle = {art: tab for art in PREIS_ARTEN}
-    gemessen = {}
-    for art in PREIS_ARTEN:
-        eintrag = ((preise or {}).get(art) or {})
-        try:
-            wert = int(eintrag.get("mb") or 0)
-        except (TypeError, ValueError):
-            wert = 0
-        if wert > 0:
-            mb[art] = wert
-            quelle[art] = f"gemessen ({eintrag.get('datum') or '?'})"
-            gemessen[art] = wert
-    return mb, quelle, gemessen
-
-
 def pflicht_preis_mb(kind, preise=None):
-    """WAS EIN RECHNENDER PROZESS MINDESTENS KOSTET — S0 + S1.
+    """Liest den notwendigen CUDA-Erstzustand einschließlich eines Decoders.
+    -> MiB; andere Backends verwenden ihre bestehenden RAM-Regeln."""
+    return _cuda.state(preise)[0] + DECODER_CUDA_MB if kind == "cuda" else 0
 
-    EINE Groesse fuer Verweigerung, Wartebedingung, Leiter-Tabelle und Probe
-    (WL1-T3): Basis + ein Strang mit Dauerlast und seinem Decoder. Auf den
-    Ankern sind das 3129 MiB. Wer irgendwo eine zweite Zahl fuer denselben
-    Sachverhalt hinschreibt, hat die Stelle, an der die beiden auseinanderlaufen,
-    schon gebaut."""
-    s = stuetzwerte(kind)
-    if not s:
-        return 0
-    if s.get("mass") != "vram":
-        # RAM-Backends haben keine Tabelle und keine Leiter — dort gilt der
-        # Fussabdruck, nicht der Pflichtpreis.
-        return 0
-    return tabelle_summe(1, preise=preise)
 
 
 def straenge_preis_mb(kind, n, preise=None):
-    """WAS `n` RECHENSTRAENGE NACH DEN GELTENDEN PREISEN KOSTEN (.535).
-
-    Basis + n × Strang-Paket, ohne Zusatzgeometrien — also dieselbe Summe, die
-    `leiter_summe_bis` aus einer fertigen Leiter zieht, nur ohne dass es die
-    Leiter dafuer schon geben muss. `pflicht_preis_mb` ist der Sonderfall n = 1.
-
-    WOZU: auf Anlagen ohne Prozess-Sonde muss die Leiter den LAUFENDEN Worker
-    aus dem gemessenen Frei-Wert zurueckrechnen, bevor sie ueberhaupt eine
-    Leiter bauen kann — und in diesem Moment gibt es noch keine."""
-    s = stuetzwerte(kind)
-    if not s or s.get("mass") != "vram" or int(n or 0) <= 0:
+    """Liest einen Gesamtzustand und berücksichtigt die bevorstehenden Decoder.
+    -> MiB; keine Summierung alter Strang-/Geometriepreise."""
+    if kind != "cuda" or int(n or 0) <= 0:
         return 0
-    return tabelle_summe(int(n), preise=preise)
+    return _cuda.state(preise, int(n))[0] + int(n) * DECODER_CUDA_MB
+
 
 
 def posten_ausserhalb_mb(kind, n_straenge):
-    """WAS DIE GEDECKELTE ARENA NICHT DECKT. -> (mb, posten)
-
-    Zwei Dinge liegen auf der Karte, ohne je durch die ORT-Arena zu gehen:
-      * das NVDEC-ffmpeg je Strang — ein EIGENER Prozess (engine_cuda.py,
-        worker_kern.py), also ausserhalb jeder Arena dieses Prozesses;
-      * der CUDA-Kontext samt cuBLAS-/cuDNN-Handles und allem, was ORT ueber
-        `Reserve()` holt (das umgeht den Deckel bauartbedingt).
-    Beide stecken in den Leiter-PREISEN schon drin (die sind kartenweite
-    Deltas). Abgezogen werden sie NUR HIER — beim Umrechnen der Leitersumme in
-    den Arena-Deckel. Ein zweiter Abzug gegen die Preise waere doppelt gezaehlt.
-
-    Nur auf Backends mit eigenem Kartenspeicher; auf RAM-Backends gibt es keine
-    Arena, die man deckeln koennte, und die Funktion sagt 0/leer."""
-    s = stuetzwerte(kind)
-    if not s or s["mass"] != "vram":
+    """Nennt die getrennten Decoderprozesse außerhalb der CUDA-Arena.
+    -> (MiB, Herkunft); Kontext ist Bestandteil der gemessenen PID, kein zweiter Preis."""
+    if kind != "cuda":
         return 0, {}
-    n = max(0, int(n_straenge or 0))
-    dec = n * int(s["decoder_mb"])
-    kon = int(KONTEXT_HANDLES_CUDA_MB)
-    return dec + kon, {"decoder_je_strang_mb": int(s["decoder_mb"]),
-                       "straenge": n, "decoder_mb": dec,
-                       "kontext_und_handles_mb": kon,
-                       "gemessen": bool(KONTEXT_HANDLES_GEMESSEN),
-                       "beleg": KONTEXT_HANDLES_BELEG}
+    dec = max(0, int(n_straenge or 0)) * DECODER_CUDA_MB
+    return dec, {"decoder_mb":dec, "straenge":n_straenge, "gemessen":True,
+                 "beleg":"decoder allowance; PID and arena are distinct"}
+
 
 
 def mindest_preis_mb(kind, preise=None):
-    """DER MINIMALMODUS-PREIS: EIN Strang, EINE Geometrie. -> MB (0 = kein
-    Karten-Backend)
+    """Liest den minimalen Erstbedarf ohne abgeleitete Postenpreise.
+    -> MiB; identisch mit dem Einstrang-Startbedarf."""
+    return pflicht_preis_mb(kind, preise)
 
-    .544 A (Feldbefund 21.09.2026): zwischen „die Karte traegt den vollen
-    Pflichtpreis" und „gar keine Erkennung" lag bis .543 NICHTS. Auf einer
-    8-GB-Karte mit fuenf Live-Waechtern fehlten 11 MiB am Pflichtpreis — und die
-    Anlage stand still, statt mit einem Strang und einer Aufloesung zu rechnen.
-    Der Pflichtpreis plant eine ZWEITE Geometrie fest ein (GEOMETRIEN_IN_ANKERN,
-    damit ein Wechsel zwischen 1080p und 4K nicht 24-36 s Neubau kostet); wer
-    sie nicht bezahlen kann, kann immer noch EINE Aufloesung rechnen und zahlt
-    den Neubau beim Wechsel. Das ist langsamer und ehrlich — Stillstand ist
-    keines von beidem.
-
-    EINE Groesse fuer Leiter, Start-Tor, Waechter-Reduktion und Probe: wer hier
-    eine zweite Zahl hinschreibt, baut die Stelle, an der Gate und Meldung
-    auseinanderlaufen (genau der Widerspruch, den .544 C auflöst)."""
-    s = stuetzwerte(kind)
-    if not s or s.get("mass") != "vram":
-        return 0
-    return tabelle_summe(1, 1, preise=preise)
 
 
 def waechter_frei_mb(n_jetzt, n_weg, kind):
@@ -1061,393 +741,41 @@ def waechter_abzug_mb(n_waechter, kind, engine_alter_s=None):
 
 
 def arena_deckel_mb(kind, budget_mb, n_straenge):
-    """Der ORT-Deckel: das GANZE Budget minus der Posten ausserhalb der Arena.
+    """Begrenzt die gemeinsame Arena auf das Budget ohne bevorstehende Decoder.
+    -> Positive MiB auf CUDA; die tatsächliche Materialisierung prüft natives Frei erneut."""
+    if kind != "cuda":
+        return 0
+    return max(1, int(budget_mb or 0) - posten_ausserhalb_mb(kind,n_straenge)[0])
 
-    .532, GEMESSEN IM FELD: bis .531 stand hier die LEITERSUMME statt des
-    Budgets — also die Summe der Anker-Preise, und die sind auf einer
-    6-GB-Karte mit kleinen Bildern entstanden. Auf der Feldmaschine ergab das
-    am 15.09. einen Deckel von 4590 MiB, obwohl 6638 MiB Budget da waren; nach
-    SECHS Ereignissen (zwei Straenge, 1080p und 4K gemischt, bis 40 Gesichter
-    je Bild) war er voll und jede weitere Analyse scheiterte am EIGENEN Deckel,
-    waehrend die Karte noch rund 2 GB frei hatte. Die Leiter entscheidet
-    weiterhin, WIE VIEL gebaut wird (Straenge, Geometrien); der Deckel ist
-    etwas anderes — die Grenze, an der dieser Prozess die KARTE nicht mehr
-    gefaehrden darf. Die Anker als Deckel zu nehmen hiess, eine fremde Karte
-    zum Mass der eigenen zu machen.
-
-    Der Deckel gilt fuer die PROZESS-LEBENSZEIT (bfc_arena.cc:39 setzt
-    `memory_limit_` bei der Konstruktion); ein kleinerer ist nur ueber einen
-    geordneten Neustart erreichbar."""
-    roh = int(budget_mb or 0) - posten_ausserhalb_mb(kind, n_straenge)[0]
-    return max(ARENA_DECKEL_MIN_MB, int(roh))
 
 
 def leiter(kind, worker_budget_mb, vorschlag, nutzer_n=0, preise=None):
-    """DIE LEITER, seit .535 aus der MESSTABELLE statt aus Ankern/Eichung.
-
-    -> dict {n, g_zusatz, geometrien_max, summe_mb, stufen[], quelle, grund, …}
-    oder None auf einem Backend ohne eigenen Kartenspeicher.
-
-    DIE RECHNUNG, in einer Zeile: `Prozess (1940, erste Geometrie darin) + die
-    fest eingeplante zweite Geometrie (1235) + je weiterem Strang 720`, und
-    genommen wird die hoechste Strangzahl, deren Summe noch ins Budget passt.
-    Keine Wahl mehr zwischen Strang und Geometrie: die Geometrien stehen fest
-    (`GEOMETRIEN_IN_ANKERN`), der Rest des Budgets geht in Straenge.
-
-    OBERE GRENZE ist `min(nutzer_n or vorschlag, STRAENGE_MAX)`: OHNE
-    ausdrueckliche Nutzer-Zahl deckelt der gemessene Durchsatz-Wert die
-    Automatik; MIT Nutzer-Zahl gilt diese statt seiner (Feldbefund 15.09. 18:15
-    — unser Laborwert darf den Betreiber nicht deckeln). Auf Karten-Backends
-    ist die Nutzer-Zahl eine OBERGRENZE und kein Zwang ueber den Speicher
-    hinaus.
-
-    `grund` = `durchsatz` bzw. `nutzer`, wenn der naechste Strang noch ins
-    Budget gepasst haette und nur die obere Grenze ihn verhindert hat; sonst
-    `speicher`.
-
-    .535 (Ausbau): `eich`, `karte`, `gesamt_mb`, `waechter_n` und `planung`
-    sind aus der Signatur VERSCHWUNDEN. Sie gehoerten zur Preis-Messung, die es
-    nicht mehr gibt; als tote Parameter stehenzulassen hiesse, dem naechsten
-    Leser eine Wahl vorzugaukeln, die keine ist.
-
-    .544 B: `preise` sind die auf DIESER Karte gemessenen Posten (s.
-    `preise_wirksam` und `core.vrampreise`). Sie gelten VOR der Tabelle, sobald
-    sie vorliegen; was fehlt, kommt weiter aus der Tabelle. Die Leiter selbst
-    rechnet unveraendert — sie bekommt nur Zahlen, die von hier stammen statt
-    von einer fremden Karte, und sagt je Posten, welche das ist."""
-    s = stuetzwerte(kind)
-    if not s or s.get("mass") != "vram":
+    """Liefert die CUDA-Auswahl ohne eine automatisch wachsende Einzelpreisleiter.
+    -> Plan oder None für andere Backends; jeder Aufbau wird zusätzlich gemessen."""
+    if kind != "cuda":
         return None
-    budget = int(worker_budget_mb or 0)
-    wunsch = max(0, int(nutzer_n or 0))
-    # .535: DIE OBERGRENZE IST DER HARTE RIEGEL ODER DIE NUTZER-ZAHL — NICHT
-    # MEHR UNSER DURCHSATZ-VORSCHLAG. Der war ein Laborwert unserer eigenen
-    # zwei Karten („more did not get faster in our tests") und deckelte im Feld
-    # einen Betreiber, dessen Karte mehr trug (15.09. 18:15). `vorschlag` steht
-    # nur noch in der Signatur, weil die Aufrufer ihn mitgeben; die Leiter
-    # liest ihn nicht mehr. Was wirklich schneller ist, sagt die Messung, und
-    # wem das zu viel ist, setzt `worker_straenge`.
-    obergrenze = min(wunsch or STRAENGE_MAX, STRAENGE_MAX)
-    # .544 B: DIE GELTENDEN PREISE — gemessen vor Tabelle, an EINER Stelle
-    # aufgeloest. Von hier an rechnet die Leiter mit `p[...]` statt mit den
-    # TAB_*-Konstanten; ein uebersehenes Literal waere genau die Stelle, an der
-    # Plan und Meldung auseinanderlaufen.
-    p, preis_quelle, preis_gemessen = preise_wirksam(preise)
-    g = int(GEOMETRIEN_IN_ANKERN)
-    pflicht = tabelle_summe(1, g, preise=preise)
-    stufen = [{"stufe": "S0", "art": "prozess", "preis_mb": p["prozess"],
-               "gebaut": True, "grund": "pflicht: Prozess mit erstem Strang "
-                                        "und erster Geometrie"}]
-    for _ in range(max(0, g - 1)):
-        stufen.append({"stufe": f"S{len(stufen)}", "art": "geometrie",
-                       "preis_mb": p["geometrie"], "gebaut": True,
-                       "grund": "pflicht: fest eingeplante Aufloesung"})
-    n, summe = 1, pflicht
-    durchsatz_moeglich = False
-    while True:
-        name = f"S{len(stufen)}"
-        if n >= STRAENGE_MAX:
-            # Der harte Riegel. Traegt die Karte noch mehr, ist das eine
-            # Auskunft und keine Nebensache — sie steht als `grund: max` in
-            # /health, damit niemand den Riegel fuer die Karte haelt.
-            if summe + p["strang"] <= budget:
-                durchsatz_moeglich = True
-                stufen.append({"stufe": f"S{len(stufen)}", "art": "strang",
-                               "preis_mb": p["strang"], "gebaut": False,
-                               "grund": f"uebersprungen: harter Riegel "
-                                        f"STRAENGE_MAX {STRAENGE_MAX}"})
-            break
-        if n + 1 > obergrenze:
-            if summe + p["strang"] <= budget:
-                durchsatz_moeglich = True
-            stufen.append({"stufe": name, "art": "strang",
-                           "preis_mb": p["strang"], "gebaut": False,
-                           "grund": f"uebersprungen: obergrenze {obergrenze} "
-                                    f"({'nutzerwahl' if wunsch else 'durchsatz'})"})
-            break
-        if summe + p["strang"] > budget:
-            stufen.append({"stufe": name, "art": "strang",
-                           "preis_mb": p["strang"], "gebaut": False,
-                           "grund": (f"ausgelassen: preis {p['strang']} MiB > "
-                                     f"rest {max(0, budget - summe)} MiB")})
-            break
-        summe += p["strang"]
-        n += 1
-        stufen.append({"stufe": name, "art": "strang",
-                       "preis_mb": p["strang"], "gebaut": True, "grund": None})
-    return {"n": n, "g_zusatz": 0, "geometrien_max": g,
-            "summe_mb": summe, "stufen": stufen,
-            # `quelle` ist die Auskunft in EINEM Wort: „gemessen", sobald
-            # irgendein Posten von dieser Karte stammt, sonst „tabelle". Je
-            # Posten steht es darunter — eine Zahl, die halb gemessen ist, darf
-            # sich nicht ganz gemessen nennen.
-            "quelle": "gemessen" if preis_gemessen else "tabelle",
-            "preis_quelle": dict(preis_quelle),
-            "preise_mb": dict(p),
-            "gemessen_mb": dict(preis_gemessen), "tabelle_beleg": TABELLE_BELEG,
-            "obergrenze": obergrenze,
-            "budget_mb": budget, "pflicht_preis_mb": pflicht,
-            "unter_pflicht": budget < pflicht,
-            # .535: DREI GRUENDE, und sie sagen Verschiedenes. `speicher` =
-            # die Karte traegt nicht mehr. `nutzer` = die ausdrueckliche
-            # Einstellung hat gedeckelt. `max` = der harte Riegel
-            # STRAENGE_MAX; da waere noch Platz, aber jenseits davon ist nichts
-            # gemessen.
-            "grund": (("nutzer" if wunsch else "max")
-                      if durchsatz_moeglich else "speicher")}
+    return _cuda.ladder(int(worker_budget_mb or 0),nutzer_n,STRAENGE_MAX,preise,DECODER_CUDA_MB)
 
 
-def leiter_text(kind, lt):
-    """Die Leiter als EINE Log-Zeile (Englisch wie die Nachbarzeilen).
 
-    .544 B: die Zeile sagt, WOHER die Preise kommen. Solange sie aus der Tabelle
-    kommen, steht dort wie bisher deren Beleg; sobald ein Posten auf DIESER
-    Karte gemessen wurde, steht das MIT Datum davor. Eine Zeile, die weiter „aus
-    der Messtabelle" behauptet, waehrend die Zahlen von hier stammen, waere
-    genau die luegende Diagnose (K1)."""
-    if not lt:
-        return ""
-    gebaut = [st["stufe"] for st in lt["stufen"] if st["gebaut"]]
-    pm = lt.get("preise_mb") or {}
-    pq = lt.get("preis_quelle") or {}
-    herkunft = ", ".join(f"{art} {pm.get(art, '?')} MiB ({pq.get(art, '?')})"
-                         for art in PREIS_ARTEN)
-    woher = preis_herkunft_text(pq, lt.get("gemessen_mb"))
-    return (f"ladder {','.join(gebaut)} = {lt['summe_mb']} MiB "
-            f"({lt['n']} thread(s), {lt['geometrien_max']} geometries) of "
-            f"{lt['budget_mb']} MiB budget; {woher}"
-            + (f" [{herkunft}]" if herkunft else ""))
+def geometry_plan(st, arena_mb, running_n=0, stock_known=True, prices=None, measured=None):
+    """Ergaenzt die gewaehlte Leiter nach den Vorrang-Stufen um bezahlbare Geometrien.
+    -> neuer Plan; Strangauswahl, Preise und Schutzentscheidungen bleiben erhalten."""
+    return _cuda.geometry_plan(st, arena_mb, running_n, stock_known, measured)
 
 
-def _fail_closed(aus, kind, vor, warum, preise=None):
-    """DIE KARTE IST NICHT MESSBAR — ein Strang, Tabellen-Deckel, rot.
-
-    Bis .530 fiel dieser Fall auf den gemessenen Durchsatz-Wert zurueck, also
-    auf CUDA auf drei Straenge OHNE Deckel. Das ist fail-OPEN: ausgerechnet in
-    der Lage, in der wir ueber die Karte nichts wissen, wird am meisten
-    gewagt. Der Durchsatz-Vorschlag ist auf Karten-Backends nie mehr der
-    Rueckfall. Die Nutzer-Zahl gilt hier ebenfalls nicht nach oben — sie ist auf
-    diesem Backend eine Obergrenze, und die kleinste Obergrenze ist ein Strang."""
-    pflicht = pflicht_preis_mb(kind, preise=preise)
-    posten_mb, posten = posten_ausserhalb_mb(kind, 1)
-    # HIER ist der Pflichtpreis wirklich das Budget: es gibt keine Messung, aus
-    # der ein groesseres folgen koennte (.532 aendert nur den gemessenen Weg).
-    deckel = arena_deckel_mb(kind, pflicht, 1)
-    aus.update({
-        "n": 1, "formel_n": 1, "grund": "nicht_messbar", "zustand": "rot",
-        "worker_budget_mb": 0, "arena_deckel_mb": deckel,
-        # .535: der Deckel kommt aus der MESSTABELLE (Pflichtpreis), nicht mehr
-        # aus den Ankern — die Quelle heisst deshalb, was sie ist.
-        "deckel_quelle": "tabelle",
-        "posten_ausserhalb_mb": posten_mb, "posten": posten,
-        "geometrien_max": GEOMETRIEN_IN_ANKERN, "fussabdruck_mb": pflicht,
-        "hinweis": (f"card memory is not measurable ({warum}) — fail-closed: one "
-                    f"compute thread, arena cap {deckel} MiB from the measurement "
-                    f"table, no extra geometry. Set worker_vram_mb by hand to the "
-                    f"card memory "
-                    f"the worker may use, or check that the container can reach "
-                    f"nvidia-smi (nvidia-container-toolkit)"),
-        "rechenweg": (f"{kind}/vram: card not measurable ({warum}) -> fail-closed: "
-                      f"1 thread, arena cap {deckel} MiB (mandatory price "
-                      f"{pflicht} MiB - {posten_mb} MiB outside the arena)"),
-    })
-    if aus["nutzer_n"] > 1:
-        aus["unter_formel"] = (
-            f"worker_straenge={aus['nutzer_n']} is not used while the card cannot "
-            f"be measured — on a card backend the setting is an upper limit, and "
-            f"without a measurement the worker plans for one thread")
-    return aus
 
 
-def _kartenhaushalt(aus, s, kind, worker_budget, vor, gesamt,
-                    n_waechter, gem, res, dienst, wae, preise=None):
-    """DER KARTENHAUSHALT (.531): aus dem Budget die Leiter, aus der Leiter den
-    Arena-Deckel. EINE Rechnung fuer Straenge UND Geometrien (Defekt 4).
 
-    .544 B: `preise` sind die auf dieser Karte gemessenen Posten; sie gehen
-    unveraendert in BEIDE Leitern — die gewaehlte und die Formel-Leiter daneben.
-    Zwei Leitern mit verschiedenen Preisen waeren zwei Wahrheiten."""
-    lt = leiter(kind, worker_budget, vor, nutzer_n=aus["nutzer_n"], preise=preise)
-    # Dieselbe Leiter OHNE die Nutzer-Obergrenze: das ist die Zahl, die neben der
-    # gewaehlten stehen muss ('du hast 3 gewaehlt, die Karte traegt 1').
-    lt_formel = leiter(kind, worker_budget, vor, nutzer_n=0, preise=preise)
-    pflicht = lt["pflicht_preis_mb"]
-    aus["leiter"] = lt
-    aus["worker_budget_mb"] = worker_budget
-    aus["preis_quelle"] = lt["quelle"]
-    # .534: dieselbe Auskunft JE STUFE, dazu die Preise selbst — /health und das
-    # Log sollen nennen koennen, welche Zahl gemessen ist und welche der
-    # skalierte Anker einer fremden Karte.
-    aus["preis_quelle_stufen"] = dict(lt.get("preis_quelle") or {})
-    aus["preise_mb"] = dict(lt.get("preise_mb") or {})
-    aus["gemessen_mb"] = dict(lt.get("gemessen_mb") or {})
-    aus["_formel_n_vram"] = lt_formel["n"]
-    einheit = "MiB"
-    if lt["unter_pflicht"]:
-        # .535: KEIN EICHLAUF MEHR. Bis .534 lief hier ein Lauf mit minimaler
-        # Leiter, der die Preise dieser Karte nachmessen sollte — die Preise
-        # stehen jetzt in der Tabelle, es gibt nichts mehr zu messen. Bleibt die
-        # ehrliche Absage: was die Tabelle als Pflicht nennt (Prozess mit erstem
-        # Strang plus die fest eingeplante zweite Geometrie), muss da sein.
-        posten_mb, posten = posten_ausserhalb_mb(kind, 1)
-        deckel = max(ARENA_DECKEL_MIN_MB, worker_budget - posten_mb)
-        n, g = 1, 0
-        grund = "zu_klein"
-        aus["zustand"] = "rot"
-        aus["verweigert"] = True
-        # .544 B: DIE ZAHLEN IM HINWEIS SIND DIE GELTENDEN, nicht die der
-        # Tabelle. Standen dort weiter 1940/1235, waehrend die Leiter mit
-        # gemessenen Preisen rechnete, waere die Erklaerung von der Rechnung
-        # abgekoppelt — und der Betreiber koennte die Absage nicht nachrechnen.
-        _pw, _pq, _pg = preise_wirksam(preise)
-        aus["hinweis"] = (
-            f"the card does not carry one compute thread: {worker_budget} "
-            f"{einheit} budget against {pflicht} {einheit} "
-            f"({_pw['prozess']} process incl. first geometry + "
-            f"{_pw['geometrie']} for the second, "
-            f"{preis_herkunft_text(_pq, _pg)}). "
-            f"The worker is NOT started into this. Turn off live watchers, "
-            f"lower worker_vram_reserve_mb, set worker_vram_mb by hand if you "
-            f"know better, or run the cpu image variant")
-    else:
-        n, g = lt["n"], lt["g_zusatz"]
-        posten_mb, posten = posten_ausserhalb_mb(kind, n)
-        # .532: DAS GANZE BUDGET, nicht die Leitersumme (s. arena_deckel_mb).
-        # Der Rest zwischen Leitersumme und Budget ist kein Puffer, den wir
-        # verschenken duerfen — er ist genau der Platz, den die Bilder dieser
-        # Anlage mehr brauchen als die Anker einer fremden Karte.
-        deckel = arena_deckel_mb(kind, worker_budget, n)
-        grund = lt["grund"]
-    # .534 (Nachpruefung, Punkt 2): `fussabdruck_mb` ist die Zahl, mit der der
-    # Prozess WIRKLICH faehrt. Unter dem Pflichtpreis wird nicht gestartet, dort
-    # steht das Budget selbst; sonst ist es die Leitersumme. .535: den dritten
-    # Fall (`ungeeicht` — Pflichtpreis trotz groesserer Leiter) gibt es nicht
-    # mehr, seit die Preise aus der Tabelle kommen.
-    _fuss = worker_budget if lt["unter_pflicht"] else lt["summe_mb"]
-    aus.update({"n": n, "g_zusatz": g, "grund": grund,
-                "geometrien_max": GEOMETRIEN_IN_ANKERN + g,
-                "fussabdruck_mb": _fuss,
-                "arena_deckel_mb": deckel, "deckel_quelle": "formel",
-                "posten_ausserhalb_mb": posten_mb, "posten": posten})
-    if aus["frei_quelle"] == "gemessen":
-        _eig = int(aus.get("laufend_eigen_mb") or 0)
-        frei_text = (f"{gem} {einheit} really free on the card "
-                     f"({frei_mess_kennung(aus)})"
-                     + (f" + {_eig} {einheit} the running worker holds itself "
-                        f"(already counted in the ladder, not foreign use)"
-                        if _eig else "")
-                     + f" - {res} "
-                     f"reserve ({aus.get('reserve_quelle') or 'formel'}) "
-                     f"- {aus['waechter_abzug_mb']} guards"
-                     f"({aus['waechter_n']}, {aus['waechter_abzug_grund']}) "
-                     f"= {worker_budget} {einheit} budget, "
-                     + frei_vergleich_text(worker_budget,
-                                           aus["frei_gerechnet_mb"], einheit))
-    else:
-        frei_text = (f"{gesamt} - {res} reserve "
-                     f"({aus.get('reserve_quelle') or 'formel'}) - {dienst} service - {wae} "
-                     f"guards({aus['waechter_n']}) = {worker_budget} {einheit} budget"
-                     + (f" (measured free {gem} {einheit} was not tighter)"
-                        if gem > 0 else ""))
-    aus["rechenweg"] = (
-        f"{kind}/vram: {frei_text}; {leiter_text(kind, lt)}; arena cap {deckel} "
-        f"{einheit} (the whole budget minus what lies outside the arena, not the "
-        f"ladder sum); outside the arena {posten_mb} {einheit} ({n} decoder + "
-        f"context/handles"
-        + ("" if posten.get("gemessen") else ", context/handles UNMEASURED")
-        + f") -> {n} thread(s), {aus['geometrien_max']} geometries ({grund})")
-    # .544 M1: DER RUECKFALL WIRD LAUT GESAGT. Eine Leiter, die auf einem
-    # Moment plant, obwohl sie ein Band versprochen hat, waere genau die
-    # Diagnose-Luege — der Betreiber soll den Unterschied am Rechenweg sehen.
-    if aus.get("frei_band_grund"):
-        # .546: zwei Gruende, zwei Saetze — „kein Band da" und „Band verworfen"
-        # sind verschiedene Lagen, und der Betreiber muss sie unterscheiden
-        # koennen (die zweite kommt nur beim Start mit noch nicht laufenden
-        # Waechtern vor und erklaert, warum die Zahl groesser ist als eben).
-        aus["rechenweg"] += (
-            (f"; free-memory band DISCARDED for this computation ("
-             if aus.get("frei_band_verworfen")
-             else f"; NO free-memory band available (")
-            + f"{aus['frei_band_grund']}) — planned on the momentary value "
-            f"{aus.get('frei_moment_mb')} {einheit} instead")
-    return _nutzer_wahl(aus)
+
 
 
 def straenge(gesamt_mb, n_waechter, kind, vorschlag, g_zusatz=0, nutzer_n=0,
              frei_gemessen_mb=0, engine_alter_s=None,
              laufend_eigen_mb=0, reserve_wunsch=-1, laufend_n=0,
-             frei_band=None, preise=None):
-    """WIE VIELE RECHENSTRAENGE DIESE MASCHINE TRAEGT — die eine Antwort.
-
-    Sie ist das Minimum aus zwei Groessen, und beide sind gemessen:
-      SPEICHER   was nach Reserve, Dienst und Waechtern noch fuer Straenge
-                 uebrig ist, gegen Fussabdruck(N, G) gerechnet.
-      DURCHSATZ  der Wert, der auf diesem Beschleuniger am schnellsten war
-                 (`vorschlag`, aus Service.PLAETZE_VORSCHLAG — EINE Quelle,
-                 diese Zahl wird hier nicht zweitgeschrieben). Mehr Straenge als
-                 das bringt nichts, kostet aber Speicher.
-    Der kleinere gewinnt; welcher es war, steht im Ergebnis (`grund`).
-
-    NUTZER-WAHL (`nutzer_n`, User-Entscheid 14.09.): ist die Zahl ausdruecklich
-    gesetzt, GILT SIE — auch ueber dem gerechneten Deckel. Dann wird gewarnt und
-    nicht eingegriffen (`ueber_formel`), und beide Zahlen bleiben sichtbar
-    (`n` und `formel_n`). Der einzige harte Riegel ist STRAENGE_MAX; was
-    darueber liegt, wird gekappt und gemeldet (`deckel_meldung`). NICHT gemeint
-    ist der alte `analyse_plaetze`-Wert — der ist eine Platz-Zahl und wird nie
-    als Strang-Zahl gedeutet (Migrations-Klemme, s. verifyd.worker_straenge).
-
-    OHNE LESBARE MASCHINEN-GRENZE (gesamt_mb <= 0) wird NICHT geraten: es gilt
-    der gemessene Durchsatz-Wert — also genau das heutige Verhalten — und der
-    Grund wird laut gesagt. Das ist der Fall 'Olivier' aus Konzept §2, und er
-    trifft die eigene Prod: deren cgroup meldet memory.max = 'max' (das
-    LXC-Limit liegt auf einem von innen unsichtbaren Eltern-cgroup).
-
-    REAL FREIES VRAM (`frei_gemessen_mb`, .529, Feldvorfall 15.09.): die Rechnung
-    `gesamt - Reserve - Dienst - Waechter` zaehlt nur die EIGENEN Posten und
-    unterstellt damit, die Karte gehoere uns allein. Auf der Feldtester-Anlage
-    (RTX 3060, 12 GB, fuenf Waechter) kam sie auf 6659 MiB frei und liess zwei
-    Straenge zu; in Wahrheit lag auf derselben Karte noch der Anzeige-Transcode
-    und Fremdverbrauch, und der Geometrie-Bau endete im CUDA-BFC-OOM
-    (`Failed to allocate memory for requested buffer of size 99532800`). Wird
-    ein GEMESSENER Frei-Wert hereingereicht (nvidia-smi `memory.free`, dieselbe
-    Sonde wie die Systemstatistik), gilt die kleinere der beiden Mengen. Warum
-    nicht schlicht der Messwert: er wird VOR dem Worker-Start genommen, und wenn
-    die Live-Waechter dann noch nicht stehen, sagt er MEHR frei als nachher
-    wirklich da ist — er waere dann die optimistischere Zahl und liesse mehr
-    Straenge zu als heute. Das Minimum ist dieselbe Regel, die in
-    `waechter_posten_mb` schon steht: wo zwei Messungen streiten, nimmt die
-    Formel die vorsichtigere. Welche gezogen hat, steht als `frei_quelle` im
-    Ergebnis und im Rechenweg.
-
-    .544 M1 — `frei_gemessen_mb` IST EIN BAND, KEIN MOMENT: der Aufrufer reicht
-    seit .544 das MINIMUM des kartenweit freien Speichers ueber
-    `FREI_BAND_FENSTER_S` herein (s. dort: 145 Vorsorge-Ausstiege an einem
-    Werktag, weil der eigene Waechter-Verbrauch atmet und die Momentaufnahme ein
-    Tal traf). Gerechnet wird damit unveraendert — die Zahl ist dieselbe Art
-    Zahl, nur vorsichtiger erhoben. `frei_band` traegt die Herkunft mit
-    (`band_mb`, `fenster_s`, `n`, `moment_mb`, `grund`), damit /health und der
-    Rechenweg sagen koennen, WORAUF geplant wurde; gab der Ring zu wenige
-    Stuetzstellen her, steht dort der Grund und der Rechenweg sagt wieder
-    „measured".
-
-    WAS DER LAUFENDE WORKER HAELT (`laufend_eigen_mb`, .534): auf Karten-
-    Backends ist `frei_gemessen_mb` das JETZT der Karte — ein schon laufender
-    Worker steht darin als belegt, waehrend die Leiter ihn daneben von null auf
-    plant. Wer diese Zahl hereinreicht (das saubere Plateau der laufenden
-    Konstellation), bekommt sie zum Messwert zurueckgerechnet; wer nichts
-    reicht, rechnet wie bisher. Ohne sie kann die Leiter im Betrieb nie wachsen,
-    und die Aufstiegs-Frage der Eichung war strukturell mit „nein" beantwortet.
-
-    .531 AUF KARTEN-BACKENDS (`mass == "vram"`): ab hier rechnet nicht mehr
-    `fussabdruck_mb(N)` gegen den freien Platz, sondern die LEITER (s. dort) —
-    eine Rechnung fuer Straenge UND Geometrien, dazu der Arena-Deckel und die
-    Posten, die ausserhalb der Arena liegen. Ohne Messwert wird nicht mehr
-    geraten: nicht messbar heisst ein Strang mit Anker-Deckel und /health rot.
-    Container-RAM-Backends (Intel) laufen unveraendert durch den Zweig darunter,
-    einschliesslich des `max(1, …)`-Bodens.
-
-    -> dict: n, grund, rechenweg (Klartext, eine Zeile), plus die Posten.
-    """
+             frei_band=None, preise=None, running_geometries=None, measured=None):
+    """Plant CUDA aus Messungen, andere Backends nach ihrer bestehenden RAM-Regel.
+    -> Bestehendes Planformat mit Quelle, Grenzen und Fehlgrund."""
     vor = max(1, int(vorschlag or 1))
     s = stuetzwerte(kind)
     gesamt = int(gesamt_mb or 0)
@@ -1503,7 +831,37 @@ def straenge(gesamt_mb, n_waechter, kind, vorschlag, g_zusatz=0, nutzer_n=0,
            # „gemessen", und das waere genau die luegende Diagnose.
            "preis_quelle_stufen": {}, "preise_mb": {},
            "zustand": "gruen", "verweigert": False, "unter_formel": None}
-    # .544 M1: die Herkunft des Frei-Werts, sofort und vor jedem Rueckgabeweg.
+    if kind == "cuda":
+        # MS1: alle aktiven CUDA-Wege vor der alten Postenrechnung abzweigen.
+        why = _cuda.pair_reason(measured, gesamt) if laufend_n else None
+        own = measured["own"]["mb"] if laufend_n and why is None else 0
+        free = (measured["card"]["mb"] if laufend_n and why is None
+                else max(0, int(frei_gemessen_mb or 0)))
+        if isinstance(frei_band, dict) and frei_band.get("moment_mb") is not None and not laufend_n:
+            free = max(0, int(frei_band["moment_mb"]))
+        if gesamt <= 0 or frei_gemessen_mb is None:
+            why = why or "native card memory unavailable"
+        guards, guard_reason = waechter_abzug_mb(n_waechter, kind, engine_alter_s)
+        aus.update(dienst_mb=s["dienst_mb"], waechter_mb=waechter_posten_mb(n_waechter, kind),
+                   frei_gerechnet_mb=gesamt - _cuda.reserve(gesamt, res_wunsch)
+                   - s["dienst_mb"] - waechter_posten_mb(n_waechter, kind),
+                   engine_alter_s=engine_alter_s)
+        result = _cuda.selection(aus, free, own, why, guards, guard_reason, laufend_n,
+                               running_geometries, preise, STRAENGE_MAX, DECODER_CUDA_MB)
+        for source, target in (("band_mb", "frei_band_mb"), ("fenster_s", "frei_band_fenster_s"),
+                               ("n", "frei_band_n"), ("moment_mb", "frei_moment_mb"),
+                               ("grund", "frei_band_grund")):
+            if isinstance(frei_band, dict) and source in frei_band:
+                result[target] = frei_band[source]
+        result["frei_gemessen_mb"] = free
+        if result.get("frei_band_mb") is not None:
+            result["frei_band_verworfen"] = True
+            result["frei_band_grund"] = "historical free band is diagnostic only; CUDA uses current native free"
+            result["rechenweg"] += "; " + result["frei_band_grund"]
+        result["laufend_eigen_gemessen_mb"] = laufend_eigen_mb
+        result["rechenweg"] += "; " + frei_vergleich_text(
+            result["worker_budget_mb"], result["frei_gerechnet_mb"], "MiB")
+        return result
     _fb = frei_band if isinstance(frei_band, dict) else {}
     if _fb:
         aus["frei_band_mb"] = _fb.get("band_mb")
@@ -1532,15 +890,6 @@ def straenge(gesamt_mb, n_waechter, kind, vorschlag, g_zusatz=0, nutzer_n=0,
         aus["rechenweg"] = f"{kind}: no measurements -> throughput value {vor}"
         return _nutzer_wahl(aus)
     if gesamt <= 0:
-        if s["mass"] == "vram":
-            # .531 FAIL-CLOSED (Defekt 7): bis .530 fiel dieser Zweig auf den
-            # Durchsatz-Vorschlag zurueck — auf CUDA also auf DREI Straenge ohne
-            # jeden Deckel, genau in der Lage, in der wir ueber die Karte gar
-            # nichts wissen. Das ist die Richtung, in der der Feldvorfall vom
-            # 15.09. lag. Jetzt: ein Strang, Anker-Deckel, rot.
-            return _fail_closed(aus, kind, vor,
-                                "no card size readable (nvidia-smi total is 0)",
-                                preise=preise)
         aus["grund"] = "keine_grenze"
         aus["hinweis"] = (f"no readable machine limit (no cgroup memory.max, no "
                           f"nvidia-smi total) — the memory formula cannot be applied; "
@@ -1548,13 +897,6 @@ def straenge(gesamt_mb, n_waechter, kind, vorschlag, g_zusatz=0, nutzer_n=0,
                           f"Set a container memory limit to get the computed value")
         aus["rechenweg"] = f"{kind}: no readable limit -> throughput value {vor}"
         return _nutzer_wahl(aus)
-    if s["mass"] == "vram" and max(0, int(frei_gemessen_mb or 0)) <= 0:
-        # Die Karte ist da, sagt aber nicht, was frei ist (nvidia-smi fehlt,
-        # haengt oder antwortet unlesbar). Eine Planung ohne Messwert waere auf
-        # diesem Mass eine Behauptung — s. o.
-        return _fail_closed(aus, kind, vor,
-                            "free card memory not measurable (no usable "
-                            "nvidia-smi answer)", preise=preise)
     # .543: DERSELBE gepruefte Wert wie im Ergebnis oben, nicht der rohe. Sonst
     # entschieden die beiden Stellen bei einem krummen Config-Wert verschieden —
     # das Ergebnis saegte „Automatik", die Rechnung fiele mit ValueError.
@@ -1562,139 +904,17 @@ def straenge(gesamt_mb, n_waechter, kind, vorschlag, g_zusatz=0, nutzer_n=0,
     aus["reserve_quelle"] = reserve_quelle_mb(res_wunsch)
     dienst = s["dienst_mb"]
     wae = waechter_posten_mb(n_waechter, kind)
-    wae_abzug, wae_grund = (waechter_abzug_mb(n_waechter, kind, engine_alter_s)
-                            if s["mass"] == "vram" else (wae, "ram-Zweig"))
+    wae_abzug, wae_grund = wae, "ram-Zweig"
     frei_gerechnet = gesamt - res - dienst - wae
-    frei = frei_gerechnet
-    frei_quelle = "gerechnet"
+    frei, frei_quelle = frei_gerechnet, "gerechnet"
     gem = max(0, int(frei_gemessen_mb or 0))
-    # .546 — BAND UND WAECHTER-RESERVE SCHLIESSEN EINANDER AUS.
-    #
-    # DER FELDFALL (Anlage AU, RTX 3060 12 GB, 5 Live-Waechter, 22.09.2026
-    # 05:45:36, Dienststart):
-    #     1770 MiB frei (band (min over 600s, 10 samples)) - 0 reserve
-    #     - 4300 guards(5, Live-Engine laeuft nicht … — Posten reserviert)
-    #     = -2530 MiB budget   ->   EIN Strang, auf einer 12-GB-Karte.
-    # Beide Zahlen waren fuer sich richtig und zusammen falsch.
-    #
-    # Das Band kommt aus dem Ring der Systemstatistik und reicht
-    # FREI_BAND_FENSTER_S ZURUECK — beim Dienststart also in die Zeit VOR diesem
-    # Start. Darin lagen die fuenf Waechter, die Live-Engine UND der alte
-    # Worker-Prozess auf der Karte; ihr Speicher steckt im Band, und zwar als
-    # BELEGT. Die Reserve daneben legt denselben Waechtern ihren Posten ein
-    # ZWEITES Mal zurueck, weil die neue Engine noch nicht laeuft
-    # (`waechter_abzug_mb`: Engine unbekannt -> voller Posten). Derselbe Speicher
-    # zweimal, und beide Male in die klemmende Richtung.
-    #
-    # DIE REGEL IST DESHALB: wer die Waechter RESERVIERT, darf nicht auf einem
-    # Band planen, das sie schon enthaelt. Dann gilt der MOMENTWERT — die Karte,
-    # wie sie JETZT ist (die alte Konstellation ist weg, die neue noch nicht da),
-    # und die Reserve sagt, was gleich dazukommt. EIN Bild, nicht zwei.
-    # Der Momentwert ist nie kleiner als das Band (der Aufrufer bildet das
-    # Minimum aus beiden), der Wechsel kann das Budget also nur heben — und er
-    # hebt es genau um das, was zweimal abgezogen war.
-    #
-    # DIE GEGENRICHTUNG BLEIBT UNVERAENDERT: laeuft die Engine laenger als
-    # LIVE_WARM_S, ist `wae_abzug` 0, das Band gilt weiter und ist die
-    # vorsichtigere Zahl (das ist der Normalbetrieb und der Sinn von .544 M1).
-    # Ohne Waechter gibt es keinen Abzug und damit auch nichts zu verwerfen.
-    #
-    # EHRLICHE GRENZE: ist die Engine JUNG (< LIVE_WARM_S), steht sie womoeglich
-    # schon teilweise im Momentwert und wird trotzdem voll reserviert. Das ist
-    # die vorsichtige Seite und bewusst so — lieber ein Strang zu wenig als ein
-    # OOM im Aufbau.
-    if (s["mass"] == "vram" and wae_abzug > 0
-            and _fb.get("band_mb") is not None
-            and int(_fb.get("moment_mb") or 0) > 0):
-        gem = max(0, int(_fb["moment_mb"]))
-        aus["frei_band_verworfen"] = True
-        aus["frei_gemessen_mb"] = gem
-        aus["frei_band_grund"] = (
-            f"the band over {aus['frei_band_fenster_s']}s was measured while the "
-            f"guards were still on the card, and their posten ({wae_abzug} MiB) "
-            f"is being put aside again right now ({wae_grund}) — counting the "
-            f"same memory twice")
-    # .534 (NB-2): WAS DER LAUFENDE WORKER SELBST HAELT, IST KEIN FREMDVERBRAUCH.
-    # `frei_gemessen_mb` ist `memory.free` der Karte im JETZT — laeuft bereits ein
-    # Worker, liegt sein Kartenanteil darin als BELEGT. Die Leiter plant daneben
-    # den Worker von null auf (basis + strang + geometrie), also denselben
-    # Speicher ein zweites Mal. Solange die Zahl nur einen Prozess-START deckt,
-    # faellt das nicht auf (da laeuft keiner); fuer die Aufstiegs-Frage im Betrieb
-    # ist es der Unterschied zwischen „passt" und „passt nicht", und zwar immer in
-    # die klemmende Richtung: die Leiter konnte im Betrieb nie wachsen. Gemessen
-    # auf der 6-GB-Karte am 15.09.: 6143 MiB frei vor dem Start, 5044 MiB frei
-    # waehrend des Laufs bei 738 MiB eigenem Plateau. Es ist dieselbe Regel, die
-    # fuer Dienst und Live-Engine schon darunter steht — wer zur Messzeit auf der
-    # Karte liegt, wird nicht ein zweites Mal abgezogen.
-    # Die ROHE Messung bleibt `gem` — sie steht so im Rechenweg. Verrechnet wird
-    # `gem_plus`, und der Zuschlag steht als eigene Zahl daneben.
-    # .535: WAS DER LAUFENDE WORKER HAELT, KOMMT AUS DER TABELLE. `gem` ist
-    # `memory.free` im JETZT — laeuft schon ein Worker, liegt sein Anteil darin
-    # als BELEGT, waehrend die Leiter ihn daneben von null auf plant. Derselbe
-    # Speicher zaehlte zweimal, und zwar immer klemmend: die Zahl sank unter
-    # Last und stieg im Leerlauf, /health flatterte (Feldbefund 15.09. 18:06:
-    # frei 10578 im Leerlauf gegen 8590 unter Last, n sprang zwischen 3 und 2).
-    # Zurueckgerechnet wird deshalb der TABELLENWERT der laufenden Stufe — eine
-    # feste Zahl, die nicht mit der Last atmet. Die Prozess-Sonde misst
-    # weiterhin und steht als Diagnose in /health, aber sie plant NICHT mit
-    # (nie beides, sonst zaehlt derselbe Speicher wieder doppelt).
-    # GEKLEMMT an dem, was die Karte ueberhaupt belegt hat, abzueglich der
-    # Posten fuer Dienst und Waechter: mehr als das kann der Worker nicht
-    # halten, und eine Rueckrechnung ueber die Wirklichkeit hinaus waere
-    # dieselbe Klasse Fehler in die andere Richtung.
-    eigen_lauf, eigen_quelle = 0, None
-    if s["mass"] == "vram" and gem > 0 and int(laufend_n or 0) > 0:
-        _geplant = tabelle_summe(int(laufend_n), preise=preise)
-        _rest = max(0, gesamt - gem - dienst - wae)
-        eigen_lauf = min(int(_geplant), int(_rest))
-        eigen_quelle = "tabelle" if eigen_lauf else None
-    gem_plus = gem + eigen_lauf
-    aus["laufend_eigen_mb"] = eigen_lauf
-    aus["laufend_eigen_quelle"] = eigen_quelle
-    # Was die PROZESS-SONDE im selben Moment gemessen hat — reine Diagnose
-    # (/health), geht seit .535 nicht mehr in die Planung ein.
-    aus["laufend_eigen_gemessen_mb"] = max(0, int(laufend_eigen_mb or 0))
-    if gem > 0 and s["mass"] == "vram":
-        # .531 AUF KARTEN-BACKENDS GILT DER MESSWERT, nicht das Minimum aus
-        # Messung und Posten-Rechnung. Der Grund ist genau die Regel oben: die
-        # Posten-Rechnung zieht Dienst UND Waechter ab, obwohl beide zur Messzeit
-        # schon auf der Karte liegen koennen — als Klemme haette sie damit
-        # dauerhaft denselben Speicher zweimal berechnet und der 6-GB-Karte ohne
-        # Waechter einen Strang weggenommen, der am 14.09. sauber lief.
-        # Was die Klemme frueher abfing (der Messwert wird VOR dem Start der
-        # Waechter genommen und ist dann zu optimistisch), erledigt jetzt
-        # `waechter_abzug_mb` ausdruecklich: solange die Engine jung oder aus ist,
-        # bleibt ihr voller Posten reserviert.
-        # Die gerechnete Zahl bleibt im Ergebnis stehen — sie ist die
-        # Vergleichsgroesse, nicht mehr die Grenze.
-        frei, frei_quelle = gem_plus - res - wae_abzug, "gemessen"
-    elif gem > 0:
-        # Der Messwert ist das, was die Karte JETZT noch hergibt — Fremd-
-        # verbraucher inbegriffen. Die Reserve bleibt auch auf ihm stehen, sie
-        # ist nicht vergebbar (s. RESERVE_STRANG_*).
-        # .531 auf Karten-Backends: vom GEMESSENEN Wert geht nur ab, was zur
-        # Messzeit NOCH NICHT auf der Karte lag.
-        #   * Der DIENSTPROZESS liegt immer schon darauf — er startet den Worker,
-        #     es gibt ihn also zwangslaeufig vor der Messung. Sein Posten steckt
-        #     im Messwert; ein zweiter Abzug waere derselbe Speicher zweimal.
-        #   * Die LIVE-ENGINE ist der Grenzfall: sie kann binnen Sekunden
-        #     dazukommen (WL3-T6). Solange sie jung oder aus ist, wird ihr Posten
-        #     reserviert; ist sie warm, steckt sie im Messwert (s.
-        #     `waechter_abzug_mb`).
-        # Auf der GERECHNETEN Seite bleiben beide Posten stehen — dort ist nichts
-        # gemessen, was sie schon enthalten koennte.
-        frei_gemessen_netto = (gem_plus - res - wae_abzug if s["mass"] == "vram"
-                               else gem - res)
-        if frei_gemessen_netto < frei:
-            frei, frei_quelle = frei_gemessen_netto, "gemessen"
+    if gem > 0 and gem - res < frei:
+        frei, frei_quelle = gem - res, "gemessen"
     aus.update({"reserve_mb": res, "dienst_mb": dienst, "waechter_mb": wae,
                 "frei_mb": frei, "frei_gerechnet_mb": frei_gerechnet,
                 "frei_quelle": frei_quelle, "waechter_abzug_mb": wae_abzug,
                 "waechter_abzug_grund": wae_grund,
                 "engine_alter_s": engine_alter_s})
-    if s["mass"] == "vram":
-        return _kartenhaushalt(aus, s, kind, frei, vor, gesamt,
-                               n_waechter, gem, res, dienst, wae, preise=preise)
     # Der groesste Strang-Satz, der noch hineinpasst — hoechstens der Vorschlag.
     passt = 0
     for n in range(1, vor + 1):
@@ -1742,57 +962,12 @@ def straenge(gesamt_mb, n_waechter, kind, vorschlag, g_zusatz=0, nutzer_n=0,
 
 
 def _nutzer_wahl(aus):
-    """Die ausdrueckliche Nutzer-Zahl ueber das Formel-Ergebnis legen.
-
-    EINE Stelle fuer alle Wege (auch fuer die beiden, auf denen die Formel gar
-    nicht rechnen konnte) — sonst hinge die Nutzer-Wahl an drei Rueckgabepunkten
-    und einer davon wuerde sie irgendwann vergessen.
-
-    Das Formel-Ergebnis bleibt als `formel_n` stehen. Es wird nicht ueberschrieben,
-    weil beide Zahlen zusammen die Auskunft sind: 'du hast 3 gewaehlt, gerechnet
-    sind 2'. Eine Zahl allein waere entweder Bevormundung oder blindes Gehorchen.
-
-    .531, DIE EINE STELLE (Konzept §9.1): auf Backends mit eigenem Kartenspeicher
-    ist die Nutzer-Zahl eine OBERGRENZE der Leiter und kein Zwang ueber den
-    Deckel hinaus. Das nimmt den 14.09.-Entscheid fuer diese Backends zurueck,
-    und zwar hier und nirgends sonst — faellt der Entscheid anders, ist es diese
-    Stelle plus ein Probenfall. Auf Container-RAM-Backends (Intel) bleibt alles
-    wie am 14.09.: dort GILT die Zahl, auch ueber der Formel.
-
-    .534 (Inhaber 15.09., ausdruecklich): der Testschalter „Nutzer-Zahl darf die
-    Leiter auf Karten-Backends auch nach OBEN ueberstimmen" wurde erwogen und
-    VERWORFEN — der richtige Weg gegen zu kleine Leitern ist nicht der Zwang,
-    sondern ein belastbarer Preis. .535 hat ihn geliefert: die Messtabelle oben
-    (gemessen an zwei Karten, je Posten Maximum + 10 %) statt der Anker einer
-    fremden. Diese Stelle bleibt deshalb, wie .531 sie angelegt hat."""
+    """Übernimmt die ausdrückliche Nutzerzahl auf den anderen Backends.
+    -> Bestehendes Planformat mit Quelle, Grenzen und Fehlgrund."""
     aus["formel_n"] = aus.pop("_formel_n_vram", None) or aus["n"]
     wunsch = max(0, int(aus.get("nutzer_n") or 0))
     if wunsch <= 0:
         return aus                                    # Vorgabe: die Formel gilt
-    if aus.get("mass") == "vram":
-        # Die Leiter hat die Zahl als Obergrenze schon eingerechnet; hier wird
-        # sie nur noch gemeldet. Ein `max()` waere an dieser Stelle genau der
-        # Fehler, den .531 abstellt.
-        if wunsch > STRAENGE_MAX:
-            aus["deckel_meldung"] = (
-                f"worker_straenge={wunsch} is above the hard ceiling of "
-                f"{STRAENGE_MAX} compute threads and was capped to "
-                f"{STRAENGE_MAX} — beyond that no measured setup got faster, it "
-                f"would only cost memory")
-        n = min(wunsch, aus["n"])
-        if wunsch > aus["formel_n"]:
-            aus["unter_formel"] = (
-                f"worker_straenge={wunsch} is above what the card budget carries "
-                f"({aus['formel_n']} thread(s)) — on this backend your setting is "
-                f"an UPPER LIMIT, not a forced value: the worker builds what fits "
-                f"and shows both numbers. Free card memory (fewer live watchers) "
-                f"or set worker_vram_mb if you want a different cap")
-        elif n < aus["formel_n"]:
-            aus["grund"] = "nutzer"
-        aus["n"] = n
-        aus["rechenweg"] = (f"{aus['rechenweg']}; user setting worker_straenge="
-                            f"{wunsch} (upper limit) -> {n} thread(s)")
-        return aus
     n = min(wunsch, STRAENGE_MAX)
     if wunsch > STRAENGE_MAX:
         aus["deckel_meldung"] = (

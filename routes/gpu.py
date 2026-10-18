@@ -468,12 +468,11 @@ def seite(gpu, n_worker, n_waechter, vorschlag, kapazitaet_jetzt, auto,
         # WORKER, NICHT PLATZ: die Zahl ist der Anteil des EINEN Worker-Prozesses
         # mit all seinen Rechenstraengen und Decoder-Kindern, nicht der eines
         # Analyseplatzes. „n × Platz" waere hier die falsche Einheit.
-        # .535: die Zahl kommt aus der MESSTABELLE — derselben, aus der die
-        # Leiter plant. Was die Prozess-Sonde daneben misst, steht in /health
-        # (`messung`) als Vergleich; die Leiste zeigt den HAUSHALT, und der
-        # wird aus der Tabelle geplant. Zwei verschiedene Zahlen fuer dieselbe
-        # Sache auf einer Seite waeren wieder die alte Falle.
-        _lbl_w = (f'{t("gpu.worker_prozess")} ({t("gpu.q.tabelle")})' if _w_mb
+        # Die Herkunft folgt dem gemeldeten Anteil; historische Haushaltsauskünfte
+        # können weiterhin einen Tabellenanteil tragen.
+        _q_w = (t("gpu.q.gemessen") if _stv.get("laufend_eigen_quelle") == "measured"
+                else t("gpu.q.tabelle"))
+        _lbl_w = (f'{t("gpu.worker_prozess")} ({_q_w})' if _w_mb
                   else t("gpu.worker_unbekannt"))
         b1 = _riegel([("w", _w_mb, _lbl_w),
                       ("g", _g_mb, f'{n_waechter} × {t("gpu.waechter")} '
@@ -486,7 +485,7 @@ def seite(gpu, n_worker, n_waechter, vorschlag, kapazitaet_jetzt, auto,
         if _w_mb:
             _teile.append(f'<span class="lg w"></span>'
                           f'{html.escape(t("gpu.worker_prozess"))} ({_mb(_w_mb)}, '
-                          f'{html.escape(t("gpu.q.tabelle"))})')
+                          f'{html.escape(_q_w)})')
         elif _w_grund and _w_grund != "kein_worker":
             # „kein_worker" ist kein Befund, sondern Ruhe: dann gibt es nichts
             # zu beschriften. Der Satz gilt dem LAUFENDEN Prozess, dessen

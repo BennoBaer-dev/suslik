@@ -44,6 +44,7 @@ from core import einspielen as _einspiel              # .416: Testbett-Einspielu
 from core import personenzahl as _personenzahl        # K3 KP3: Personenzahl aus Frigate, Zaehler ohne fruehes Ende
 from core import messkarte as _ern_mk                 # .513: Messkarte + Mess-Bilanz (Etappe 1)
 from core import kamerakalib as _kk_ernte             # .514: DAS Sieb (Etappe 3, ein System)
+from core import cuda_budget as _cuda_budget
 from core import gpubudget as _gpubudget              # E3.2: Speicher-Formel je Karte (Strang-Zahl, Wache-Grenze, Deckel)
 from core import logbuch as _logbuch
 _log = _logbuch.logger(__name__)
@@ -4013,17 +4014,29 @@ class WorkerDienst:
     `haenger_schuesse` gezaehlt und steht mit Grund in /health. Ein „gezielter
     Strang-Schuss" bliebe eine Scheinloesung und wird deshalb nicht gebaut."""
 
-    def __init__(self, cfg, log=None, threads=1, name="worker", grenze=None,
-                 geometrien=None, bei_neustart=None, vram=None, karte=None,
-                 grundlast=None):
+    def __init__(self, cfg, log=None, threads=1, name="worker", job_limits=None,
+                 bei_neustart=None, vram=None, karte=None, prices_before_start=None):
         self.cfg = cfg
         self.log = log or _logbuch.NULL
         self.name = name
-        # E3.3 (W2-B29): der Geometrie-Deckel, den der Prozess als Job-Feld bekommt
-        # (`geometrien_max`). Wie `grenze` ein `callable`, damit er den Stand bei der
-        # Job-Uebergabe traegt; None/0 = kein Deckel, dann waechst der Prozess wie
-        # bis E2d und sagt das drueben einmal laut.
-        self._geometrien = geometrien
+        # DIE WERTE JE AUFTRAG — EIN GRIFF (Bauplan Feldtempo T3, T-E8). Ein `callable`, das
+        # ein dict mit drei Zahlen aus EINER Planung liefert (`Service.worker_job_limits`), oder
+        # das dict selbst (Proben, Fremd-Aufrufer); None = keiner der drei Werte. Bis 0.1.1.022
+        # waren das drei Griffe, und jeder rechnete die volle Planung fuer sich:
+        #   grenze_mb       (E3.2) die POLITIK-GRENZE, gegen die die Wache DRUEBEN misst
+        #                   (anon+shmem, Job-Feld `fussabdruck_max_mb`). 0 = keine, dann wacht
+        #                   drueben nur die cgroup-Regel — und der Dienst sagt genau das laut
+        #                   ins Prozess-Log.
+        #   grundlast_mb    (.534 B3) der GRUNDLAST-Posten derselben Rechnung. Der Prozess
+        #                   drueben misst das ganze Speicher-Konto des Containers; ohne den
+        #                   Posten, der nicht ihm gehoert, kann er aus seinem Maximum keinen
+        #                   Vorschlag je Rechenstrang machen. 0 = er meldet nur die Messwerte.
+        #   geometrien_max  (E3.3 W2-B29) der GEOMETRIE-Deckel, Job-Feld `geometrien_max`.
+        #                   0 = kein Deckel, dann waechst der Prozess wie bis E2d und sagt das
+        #                   drueben einmal laut.
+        # `callable`, damit die Werte den Stand bei der Job-Uebergabe tragen und nicht den beim
+        # Bau dieses Objekts.
+        self._job_limits = job_limits
         # E3.4: was nach einem BETRIEBS-Neustart zu tun ist (Kurzform der
         # Start-Proben). Der Rueckruf darf NICHT blockieren — er laeuft unter dem
         # Absetz-Lock dieses Objekts; `Service.kurzprobe_ausloesen` spannt deshalb
@@ -4039,20 +4052,12 @@ class WorkerDienst:
         # der Merker, und dort wird sie auch fuer /health gebraucht) — dieser
         # Dienst fragt sie, statt eine zweite Sonde mit eigenem Merker zu halten.
         self._karte = karte
+        # Bauplan Feldtempo T2 (T-E5): was VOR dem Planen eines Starts mit den
+        # Kartenpreisen zu tun ist (Stand beim Dienststart laden; nach einem
+        # Prozessende die Summe schreiben). `callable(geendet)`; None = keine
+        # Preise (Intel, Proben, Fremd-Aufrufer).
+        self._prices_before_start = prices_before_start
         self._starts = 0
-        # SPEICHER-POLITIK (E3.2): die Grenze, gegen die die Wache DRUEBEN misst
-        # (anon+shmem, Job-Feld `fussabdruck_max_mb`). Sie kommt aus derselben
-        # Formel wie die Strang-Zahl; `callable`, damit sie den Stand bei der
-        # Job-Uebergabe traegt und nicht den beim Bau des Objekts. None = keine
-        # Politik-Grenze, dann wacht drueben nur die cgroup-Regel — und der
-        # Dienst sagt genau das laut ins Prozess-Log.
-        self._grenze = grenze
-        # .534 (B3): der GRUNDLAST-Posten derselben Rechnung, als Rueckfrage aus
-        # demselben Grund wie `grenze`. Der Prozess drueben misst das ganze
-        # Speicher-Konto des Containers; ohne den Posten, der nicht ihm gehoert,
-        # kann er aus seinem Maximum keinen Vorschlag je Rechenstrang machen.
-        # None = kein Posten, dann meldet er nur die Messwerte.
-        self._grundlast = grundlast
         # RECHENSTRAENGE — DIE EINE STELLE (Bauauftrag E3.1-1). Heute die
         # Platz-Zahl der Vergabestelle (`Service._plaetze_kapazitaet`), damit N
         # Plaetze auch N Rechenstraenge bedeuten. E3.2 ersetzt GENAU DIESEN Wert
@@ -4156,6 +4161,13 @@ class WorkerDienst:
         # .531: der Kartenhaushalt des laufenden Prozesses, wie er ihn zuletzt
         # gemeldet hat. Leer heisst „noch keine Antwort", nicht „kein Druck".
         self.vram_stand = {}
+        # Bauplan Feldtempo T2 (T-E4): die Preis-Zaehler JE PROZESS, unter seiner
+        # Startnummer ({nr: core.vrampreise.counters_merge-Zaehler}). Der Leser
+        # eines Prozesses kennt dessen Nummer, also landet eine spaete Meldung
+        # eines alten Prozesses beim alten. Gilt fuer die Lebenszeit dieses
+        # Dienstes; geschrieben wird daraus nur die Summe (Service._prices_write).
+        self.price_counters = {}
+        self._price_lock = threading.Lock()
         # .534 (B3): dasselbe fuer den CONTAINER-Speicher. Leer heisst „noch keine
         # Antwort" — auf Backends ohne Karte ist das der EINZIGE Speicher-Stand,
         # den es gibt.
@@ -4211,26 +4223,28 @@ class WorkerDienst:
         deckel = max(0, int(self.straenge_deckel_druck or 0))
         return min(n, deckel) if deckel else n
 
-    def _grenze_zahl(self):
-        """Politik-Grenze in MB, 0 = keine (E3.2). Gleiche Bauart wie oben."""
-        g = self._grenze() if callable(self._grenze) else self._grenze
+    def _grenze_zahl(self, limits):
+        """Politik-Grenze in MB aus den Werten je Auftrag (`job_limits`), 0 = keine (E3.2).
+        -> int; seit Bauplan Feldtempo T3 aus dem EINEN Planungsergebnis, das `job` holt."""
+        g = limits.get("grenze_mb") if isinstance(limits, dict) else None
         try:
             return max(0, int(g or 0))
         except (TypeError, ValueError):
             return 0
 
-    def _grundlast_zahl(self):
-        """Grundlast-Posten des Containers in MB, 0 = keiner (.534). Gleiche
-        Bauart wie oben — und dieselbe Regel: keine Zahl statt einer geratenen."""
-        g = self._grundlast() if callable(self._grundlast) else self._grundlast
+    def _grundlast_zahl(self, limits):
+        """Grundlast-Posten des Containers in MB aus den Werten je Auftrag, 0 = keiner (.534).
+        -> int; dieselbe Regel wie oben: keine Zahl statt einer geratenen."""
+        g = limits.get("grundlast_mb") if isinstance(limits, dict) else None
         try:
             return max(0, int(g or 0))
         except (TypeError, ValueError):
             return 0
 
-    def _geometrien_zahl(self):
-        """Geometrie-Deckel, 0 = keiner (E3.3). Gleiche Bauart wie oben."""
-        g = self._geometrien() if callable(self._geometrien) else self._geometrien
+    def _geometrien_zahl(self, limits):
+        """Geometrie-Deckel aus den Werten je Auftrag, 0 = keiner (E3.3).
+        -> int; gleiche Bauart wie oben."""
+        g = limits.get("geometrien_max") if isinstance(limits, dict) else None
         try:
             return max(0, int(g or 0))
         except (TypeError, ValueError):
@@ -4264,8 +4278,8 @@ class WorkerDienst:
             st = self._vram_start() or {}
         except Exception as e:                            # noqa: BLE001
             self.log.warning(f"{self.name}: card state not computable "
-                     f"({type(e).__name__}: {e}) — starting anyway")
-            return None
+                     f"({type(e).__name__}: {e}) — start refused")
+            return f"card budget unavailable: {type(e).__name__}: {e}"
         if not st:
             return None
         noetig = int(st.get("noetig_mb") or 0)
@@ -4374,7 +4388,18 @@ class WorkerDienst:
         return v if isinstance(v, dict) else None
 
     def _start(self):
-        """Den Prozess starten. Aufrufer haelt `self.lock`."""
+        """Den Prozess starten. Aufrufer haelt `self.lock`.
+
+        Bauplan Feldtempo T2: ZUERST, vor jeder Planung dieses Starts, die Kartenpreise
+        (`_prices_before_start`): beim ersten Start wird der Stand beim Dienststart gelesen,
+        nach einem Prozessende die Summe geschrieben (T-E5). Ein Fehler dort kostet den Start
+        nie. Der Leser des neuen Prozesses bekommt dessen Startnummer mit (T-E4)."""
+        if self._prices_before_start is not None:
+            try:
+                self._prices_before_start(self._starts > 0)
+            except Exception as e:                           # noqa: BLE001
+                self.log.error(f"{self.name}: vram prices before the start failed "
+                               f"({type(e).__name__}: {e}) — starting anyway")
         r, w = os.pipe()
         # .536 B1b: DIE JOB-PIPE BEKOMMT EINEN EIGENEN DESKRIPTOR — sie liegt
         # nicht mehr auf fd 0 des Worker-Prozesses. Spiegelbild der Antwort-Pipe
@@ -4411,6 +4436,10 @@ class WorkerDienst:
         argv = [sys.executable, worker_dienst_pfad(), "--threads", str(n)]
         self._vram_bitte_gebucht = False          # neuer Prozess, neue Bitte
         _vram = self._vram_start() or {}
+        if _vram.get("kind") == "cuda" and (_vram.get("verweigert") or not _vram.get("deckel_mb")):
+            for fd in (r, w, rj, wj):
+                os.close(fd)
+            raise _cuda_budget.MaterializationError(_vram.get("modus_text") or "CUDA start requires a valid bounded budget")
         argv += vram_startargumente(_vram)
         argv += inferenz_frist_argumente(self.cfg)   # GPU-Wartefrist, Stufe 1 Punkt 2
         if _vram.get("deckel_mb"):
@@ -4446,7 +4475,8 @@ class WorkerDienst:
                 f.write("500")
         except Exception:                   # noqa: BLE001
             _logbuch.swallowed(_log, _logbuch.ERROR, "ignored", throttle=False)
-        self._leser = threading.Thread(target=self._lesen, args=(self.p, self.rx),
+        self._leser = threading.Thread(target=self._lesen,
+                                       args=(self.p, self.rx, self._starts + 1),
                                        name=f"{self.name}-antworten", daemon=True)
         self._leser.start()
         self._starts += 1
@@ -4502,14 +4532,18 @@ class WorkerDienst:
                          + (f", below the configured {nutzer}" if nutzer and n < nutzer
                             else "") + f": {grund} ({posten})")
 
-    def _lesen(self, p, rx):
+    def _lesen(self, p, rx, start_no=None):
         """Antwortzeilen lesen und je JOB-ID zustellen — EIN Thread je Prozess.
 
         Er ersetzt das `select` im Job-Thread des alten Workers: dort wartete der
         Aufrufer selbst auf SEINE eine Antwort, hier kommen N Antworten in
         beliebiger Reihenfolge. Am EOF (Prozess tot ODER geordnetes Ende) werden
         ALLE noch wartenden Jobs abgesagt — ein stummer Warter waere sonst bis zu
-        seiner vollen Frist blind."""
+        seiner vollen Frist blind.
+
+        `start_no` (Bauplan Feldtempo T2, T-E4): die Startnummer DIESES Prozesses, mitgegeben
+        von `_start`. Unter ihr bucht `_buchen` die Preis-Zaehler, auch wenn die Zeile erst
+        nach dem naechsten Start gelesen wird."""
         try:
             for zeile in rx:
                 zeile = zeile.strip()
@@ -4520,7 +4554,7 @@ class WorkerDienst:
                 except Exception:                          # noqa: BLE001
                     self.log.error(f"{self.name}: unreadable answer line ({zeile[:120]})")
                     continue
-                self._buchen(antwort)
+                self._buchen(antwort, start_no)
                 jid = str(antwort.get("id") or "")
                 with self._warter_lock:
                     warter = self._warter.pop(jid, None)
@@ -4804,8 +4838,13 @@ class WorkerDienst:
         # der Prozess ist weg und der naechste Job startet einen frischen.
         return "exited", f"exit code {rc}"
 
-    def _buchen(self, antwort):
-        """Zaehler, die am PROZESS haengen, nicht am Job (Rueckfaelle, Ende-Wunsch)."""
+    def _buchen(self, antwort, start_no=None):
+        """Zaehler, die am PROZESS haengen, nicht am Job (Rueckfaelle, Ende-Wunsch).
+
+        Bauplan Feldtempo T2 (T-E4): die Preis-Meldung (`vram.preis_proben`) landet in den
+        Zaehlern des Prozesses mit der Startnummer `start_no` — je Konstellation der hoechste
+        Probenzaehler und das hoechste `max_mb`. Hier wird nur im Speicher gemerkt, nie
+        gelesen oder geschrieben; ohne `start_no` (kein Prozess bekannt) wird nichts gemerkt."""
         if "frame_rueckfaelle" in antwort:
             n, letzt = int(antwort["frame_rueckfaelle"] or 0), self.rueckfaelle["letzt"]
             # n < letzt = der Prozess ist zwischendurch neu gestartet (Zaehler bei 0
@@ -4837,6 +4876,19 @@ class WorkerDienst:
             self.ram_stand = dict(antwort["ram"])
         if antwort.get("vram"):
             self.vram_stand = dict(antwort["vram"])
+            # WP1: Bericht und Startnummer gemeinsam merken; spaete Antworten
+            # eines alten Prozesses duerfen keinen aktuellen Bestand vortaeuschen.
+            self._geometry_stock = (start_no, antwort["vram"].get("geometrien_jetzt"))
+            _pp = self.vram_stand.get("preis_proben")
+            if _pp and start_no is not None:
+                try:
+                    from core import vrampreise as _vp     # noqa: PLC0415
+                    with self._price_lock:
+                        self.price_counters[start_no] = _vp.counters_merge(
+                            self.price_counters.get(start_no), _pp)[0]
+                except Exception as e:                       # noqa: BLE001
+                    self.log.error(f"{self.name}: vram price measurement of start "
+                                   f"#{start_no} not kept ({type(e).__name__}: {e})")
             # .532: der Prozess sagt mit demselben Block, dass sein EIGENER
             # Arena-Deckel zweimal getroffen hat. Dann bekommt der naechste
             # Start einen Strang weniger — der Deckel selbst steht fuer die
@@ -5049,6 +5101,7 @@ class WorkerDienst:
         if info is not None:
             info["wartezeit_s"] = 0.0
         job = dict(job)
+        geometry_start_no = getattr(self, "_starts", 0)
         # Die Politik-Grenze des Prozesses reist als Job-Feld mit. Sie ist seit
         # E2d ein anderes MASS als frueher (anon+shmem statt VmRSS), deshalb nimmt
         # die Wache drueben `fussabdruck_max_mb` — und seit E3.2 (14.09.) liefert
@@ -5063,7 +5116,13 @@ class WorkerDienst:
         if job.get("typ") != "ping":
             job.setdefault("rss_max_mb",
                            int(self.cfg.get("worker_rss_max_mb") or 4096))
-            _fg = self._grenze_zahl()
+            # Bauplan Feldtempo T3 (T-E8): Grenze, Grundlast und Geometrie-Deckel aus EINER
+            # Planung. Bis 0.1.1.022 holte jeder der drei Werte seine eigene, also rechnete
+            # jeder Auftrag die volle Planung (`Service.worker_straenge`) dreimal. Die Wege
+            # beim Prozessstart (`_karte_bereit`, `_threads_zahl`, `_vram_start`) planen
+            # weiter selbst, wie sie es immer taten.
+            _lim = self._job_limits() if callable(self._job_limits) else self._job_limits
+            _fg = self._grenze_zahl(_lim)
             if _fg:
                 job.setdefault("fussabdruck_max_mb", _fg)
             # .534 (B3): der GRUNDLAST-Posten derselben Rechnung. Der Prozess
@@ -5072,14 +5131,14 @@ class WorkerDienst:
             # Vorschlag je Rechenstrang. Fehlt er (Intel-Zweig, kein
             # Container-Mass), fehlt das Feld — und drueben der Vorschlag. Keine
             # erfundene Zahl.
-            _gl = self._grundlast_zahl()
+            _gl = self._grundlast_zahl(_lim)
             if _gl:
                 job.setdefault("fussabdruck_grundlast_mb", _gl)
             # E3.3 (W2-B29): derselbe Weg fuer den GEOMETRIE-Deckel. Er kommt aus
             # derselben Speicher-Formel; bleibt sie stumm (Backend ohne Messung,
             # kein lesbares Limit), fehlt das Feld und der Prozess waechst wie bis
             # E2d — laut, nicht still. Keine erfundene Zahl.
-            _gm = self._geometrien_zahl()
+            _gm = self._geometrien_zahl(_lim)
             if _gm:
                 job.setdefault("geometrien_max", _gm)
             # .535: HIER STANDEN die Job-Felder der Preis-Messung
@@ -5123,6 +5182,17 @@ class WorkerDienst:
                 if self.p is None or self.p.poll() is not None:
                     self._stop(kill=True)      # Reste (Pipe/Zombie) wegraeumen
                     self._start()
+                # WP1: die Job-Planung lag vor dem Start. Dessen letzte Planung
+                # kann einen kleineren Deckel haben; lesen, nicht erneut planen.
+                start_no, start_cap = getattr(self, "_geometry_start_limit", (None, 0))
+                if (job.get("typ") != "ping" and getattr(self, "_starts", 0) != geometry_start_no
+                        and start_no == getattr(self, "_starts", 0) and start_cap > 0):
+                    planned_cap = int(job.get("geometrien_max") or 0)
+                    if not planned_cap or start_cap < planned_cap:
+                        job["geometrien_max"] = start_cap
+                        self.log.info(f"geometry cap {planned_cap} -> {start_cap} for the "
+                                      f"first job after worker start #{start_no}: the final "
+                                      f"start plan uses arena cap {self.vram_deckel_gehalten} MiB")
                 self._nr += 1
                 jid = f"j{self._nr}"
                 job["id"] = jid
@@ -5133,6 +5203,9 @@ class WorkerDienst:
             except Exception as e:                         # noqa: BLE001
                 with self._warter_lock:
                     self._warter.pop(job.get("id") or "", None)
+                if isinstance(e, _cuda_budget.MaterializationError) and info is not None:
+                    info.update(fremdverschuldet=True, vor_absetzen_abgesagt=True)
+                    self.letzte_ursache = str(e)
                 self.log.error(f"{self.name} error while dispatching "
                          f"{job.get('typ')}: {type(e).__name__}: {e} — killing {self.name}")
                 self._stop(kill=True)
@@ -7674,6 +7747,17 @@ class Service:
         # Bestandsleser (/health, Systemseite, Rueckfall-Zahlen).
         self._dienst_obj = None                   # WorkerDienst (lazy, s. worker_dienst)
         self._dienst_lock = threading.Lock()      # nur EIN Objekt, auch bei zwei ersten Jobs
+        # Bauplan Feldtempo T2 (T-E5): die Kartenpreise im Speicher. `_price_start` ist der
+        # Stand der Preis-Datei beim Dienststart (None = noch nicht gelesen) und bleibt fuer
+        # die Lebenszeit des Dienstes derselbe; `_price_numbers` die Zahlen, die zuletzt in der
+        # Datei stehen (Start oder letztes Schreiben); `_price_key` Kennung, Kopf und
+        # Kartengroesse der letzten Planung; `_price_restored` sperrt jedes Schreiben, sobald
+        # eine Wiederherstellung `state/` ersetzt hat.
+        self._price_start = None
+        self._price_numbers = None
+        self._price_key = None
+        self._price_restored = False
+        self._price_lock = threading.RLock()
         self._pw_prio_lock = threading.Lock()     # P1: Vorrang-Zaehler der Live-Spur
         self._pw_live_offen = 0
         self._review_lock = threading.Lock()      # W3: laufende Lazy-Browser-Kopien (ein Bau je Clip)
@@ -10472,7 +10556,7 @@ class Service:
         # tut, nicht welche Fehlernummer dahintersteht (onnxruntime issue 29351,
         # Fassung 1.26.0 im Image, behoben erst in 1.29.0).
         "worker_mem_pattern": (int, 0, 1, "0 is the default and switches off onnxruntime's memory pattern planner on NVIDIA cards. With the version in this image the planner keeps a block per run that is never handed back once a second compute thread runs the same model, so the worker's card memory grows slowly but steadily. Measured on an RTX 2060 on 15.09.2026 against 4K clips with up to 205 faces per frame: with the planner off a single thread needs about 11 percent less card memory and one event takes about 4 percent longer; with two threads it costs no time at all. Set it to 1 only if you want the old behaviour back. Only NVIDIA cards read this"),
-        "worker_straenge": (int, 0, _gpubudget.STRAENGE_MAX, "how many compute threads the analysis worker runs in its one process. 0 is the default and means automatic: the number is computed from the memory this machine really has — card memory on Nvidia, container memory on Intel — minus what the service itself, the live watchers and a safety reserve need. Set a number only if you want to override that: the value is used as asked, even above the computed number, and the service says so in the log and in /health. Each thread costs measured memory (about 1.7 GB of card memory per thread on Nvidia, about 1.6 GB of system memory on Intel), and the hard ceiling is worker_straenge's own maximum (raised from four to six in 0.1.0.535 after a field measurement showed three threads leaving the card at 55 % average load with 2769 MB of 12288 used — where the curve really flattens has to be measured, not guessed). Without a value set here, the measured throughput suggestion still caps the automatic number. Since 0.1.0.536 this is THE one setting behind \"Compute threads\" on the graphics card page: the number of event analyses that may run at the same time follows it (one analysis slot per thread), so the old analyse_plaetze key is no longer a second setting beside it — it survives only as an expert override that can take slots away, never add them"),
+        "worker_straenge": (int, 0, _gpubudget.STRAENGE_MAX, "how many compute threads share the analysis worker process. On CUDA, 0 selects the default of one thread; an explicit value is used up to the hard ceiling. Each new geometry and per-thread set/warm-up is admitted separately using native free card memory, measured worker states and one absolute reserve. Insufficient memory is reported in the log and /health; pressure can reduce the worker through the existing drain/restart path. Other backends retain their measured memory rules. Analysis slots follow these threads; analyse_plaetze remains an expert override that can only remove slots"),
         "analyse_plaetze": (int, 0, _gpubudget.STRAENGE_MAX, "expert override, not shown in the interface: how many event analyses may run at the same time. 0 is the default and means what 0.1.0.536 made the rule — one analysis slot per compute thread, so this number follows worker_straenge and needs no setting of its own. A number here can only take slots AWAY: it is used when it is SMALLER than the number of compute threads, and ignored (with a line in the log) when it is larger, because an extra slot without a thread behind it only makes a job wait inside the worker against its deadline. An old value from before 0.1.0.536 is cleared once at startup, with the old number in the audit log: the key changed its meaning, and the slider used to write it on every save. Set Compute threads on the graphics card page instead"),
         # N1 (05.09.2026, Widerleger E3c Punkt 11): „allowed cores" beschrieb den
         # Mechanismus vor .384 — seither wird der Wert beim Start GEMESSEN
@@ -10568,7 +10652,7 @@ class Service:
         "kalib_fueller_events": (int, 1, 500, "calibration top-up: how many recent person events of that camera it may work through at most — whichever limit is reached first ends the run"),
         "null_gesichter_serie": (int, 0, 20, "how many events in a row may find zero faces WHILE the clip was fully readable before the service calls it a fault. This is the quiet failure mode that start-up checks cannot catch: the accelerator still answers, frames still arrive, nothing errors out - and every event comes back empty. When the run is reached the service says so in the log, shows it in /health and makes the worker prove itself again (a short bind check plus a check image). 0 turns the watch off. The factory value is the same run length the service already uses for failed analyses in a row"),
         "vorrang": (list, ["erkennung", "wache"], None, "who wins when the accelerator cannot carry both: erkennung (default) = event recognition has priority, wache = the live watchers do. This only ever matters when the card is too small for both at the same time; on a card with room, nothing here changes anything. With erkennung the service first falls back to a minimum mode (one compute thread, one clip geometry — a second resolution then costs a rebuild each time instead of being kept ready), and if even that does not fit it takes live watchers off the net, the most recently started one first, only as many as the minimum needs. It says so in the log and in /health, and it switches them back on by itself once the card carries the full price again. With wache the analysis worker stays off in that situation, exactly as it did before 0.1.0.544 — but the log then says that recognition is off BECAUSE the watchers have priority, instead of asking you to edit config.json. A machine whose card cannot even carry the minimum gets neither: nothing is switched off for a recognition that would not run afterwards anyway"),
-        "worker_vram_reserve_mb": (int, -1, 65536, "how much card memory the service leaves unassigned, in MiB. -1 (default) = automatic: a tenth of the card, at least the built-in floor — 614 MiB on a 6 GB card, 1229 MiB on 12 GB. 0 is allowed and means no reserve at all. The reserve is not a safety margin for the analysis itself (the arena cap is the wall the worker cannot cross); it is the room left for everything else that may land on the same card without asking us — a display transcode, a second container, another user's process. Set it small and the compute threads get that memory; the price is that a foreign consumer arriving later finds the card full, and on NVIDIA that ends in a CUDA out-of-memory in whichever process asks next, ours or theirs. A value larger than the card is clamped to the card. The calculation names the source (\"config\"/\"formel\") in the log and in /health; it takes effect at the next worker start, like the other worker keys"),
+        "worker_vram_reserve_mb": (int, -1, 65536, f"unassigned card memory in MiB. -1 (default) uses one absolute {_cuda_budget.PROFILE['reserve_mb']} MiB safety reserve per CUDA worker process, independent of threads, geometries and repeated planning. Other backends retain their existing reserve rules. 0 explicitly disables the reserve; a positive value overrides it and is clamped to card size. CUDA uses native free memory and measured own states, with separate allowances for pending allocations and processing peaks. The shared arena is bounded, but its limit is distinct from total worker PID and decoder memory. The source is shown in the log and /health; the same configured wish is passed to the worker's runtime guards"),
         "bg_platz_getrennt": (int, 0, 1, "1 gives background work (collecting, harvesting, your clicks, the live body judgment, the wall-clock measurement) its own slot instead of one of the analysis slots. It is computed in a separate thread of the worker anyway, so a background job that holds an analysis slot blocks a compute thread for nothing — measured on 15.09.2026: a collection run held one of two analysis slots for eight minutes while events were waiting. Since 0.1.0.536 WHEN it starts changed too: with its own slot it takes its turn right away instead of waiting for an idle moment that never comes on a busy installation (46 postponed collection runs in one morning). 0 restores the behaviour of 0.1.0.533 and is load-bearing: every class then sits on the analysis slots again, the old idle rule and the rule that keeps one slot free for events apply word for word, and a collection run can take an analysis slot again"),
         "vorlauf_max": (int, 0, VORLAUF_MAX_GRENZE, "how many finished clips the service keeps ready on disk ahead of the analysis. An analysis slot does not only compute, it also fetches: while it pulls a clip from Frigate its compute thread stands still. With a stock of clips already on disk the threads keep working. The service fetches until this many are ready, then pauses until the stock falls below vorlauf_min. 50 is the default, derived from a field measurement: about 20 events per minute on two compute threads and about 3 s per fetch, so 50 gives short refill bursts instead of one long pull. 0 switches the whole stage off — then each slot fetches its own clip as before. The clips go into the normal clip cache and obey its size cap"),
         "vorlauf_min": (int, 0, VORLAUF_MIN_GRENZE, "the lower mark of the stock (see vorlauf_max): once fewer than this many clips are ready, the service fetches again until vorlauf_max is reached. 20 is the default, about one minute of stock at the measured rate. The gap between the two marks is what keeps the service from asking Frigate for a new clip after every single event"),
@@ -12588,7 +12672,8 @@ class Service:
         Reihenfolge: zuerst state (der alte liegt kurz daneben, der neue wird eingesetzt,
         dann wandert der alte unter das Archiv des neuen), danach die uebrigen Teile in
         denselben Archivordner; bringt das Archiv kein state mit, ist es das Archiv des
-        bestehenden state/."""
+        bestehenden state/. Ist state/ ersetzt, schreibt der Dienst bis zu seinem Ende keine
+        Kartenpreise mehr (Bauplan Feldtempo T2, T-E5: `_price_restored`)."""
         import shutil as _sh
         import tarfile
         from core import refquelle as _rq
@@ -12619,6 +12704,10 @@ class Service:
                 if os.path.exists(os.path.join(data, "state")):
                     os.rename(os.path.join(data, "state"), alt_state)
                 os.rename(os.path.join(ziel, "state"), os.path.join(data, "state"))
+                # Bauplan Feldtempo T2 (T-E5): ab hier gehoert der Preis-Stand im
+                # Speicher zum abgeloesten Bestand — kein Schreiben mehr (auch nicht
+                # beim Neustart unten), die zurueckgespielte Datei bleibt.
+                self._price_restored = True
             os.makedirs(archiv, exist_ok=True)
             if os.path.exists(alt_state):
                 os.rename(alt_state, os.path.join(archiv, "state"))
@@ -12658,7 +12747,8 @@ class Service:
         Container mit restart:"no", bare metal). Ein Wizard-Abschluss kann das System so NIE tot
         zuruecklassen. Faellt bei execv-Fehler auf os._exit(0) zurueck (dann uebernimmt ein evtl.
         vorhandener Supervisor doch noch). cwd ist stabil (kein os.chdir im Code), daher loest die
-        relative --config nach dem re-exec wieder korrekt auf."""
+        relative --config nach dem re-exec wieder korrekt auf. Vor dem execv schreibt er die Summe
+        der Kartenpreise (Bauplan Feldtempo T2, `_prices_write`), weil execv nicht durch atexit laeuft."""
         # Wiedereintritts-Sperre (Feld-Fund 28.08., Tester A: drei identische
         # Config-Saves in 40 s = drei parallele Neustart-Threads, die sich
         # denselben lock, worker_stoppen() und execv teilen wollten). Der
@@ -12711,7 +12801,11 @@ class Service:
                 #                                    NICHT durch atexit) — der neue Prozess zieht
                 #                                    sie via Supervisor wieder hoch (Bauplan §8)
                 self.transcodes_killen()           # W3: kein Waisen-ffmpeg, das nach dem re-exec
-                try:                               # weiter in eine .part schreibt (Review-Fund)
+                #                                    weiter in eine .part schreibt (Review-Fund)
+                self._prices_write("service restart")  # Bauplan Feldtempo T2: execv laeuft nicht
+                #                                        durch atexit; schreibt nur bei Aenderung,
+                #                                        nie nach einer Wiederherstellung
+                try:
                     sys.stdout.flush(); sys.stderr.flush()
                 except Exception:
                     pass
@@ -12764,17 +12858,18 @@ class Service:
                     # unveraendert, was sie sind: wie viele Analysen gleichzeitig
                     # laufen duerfen.
                     threads=self.worker_straenge_zahl,
-                    grenze=self.worker_fussabdruck_max_mb,
-                    # .534 (B3): der Grundlast-Posten derselben Rechnung.
-                    grundlast=self.worker_grundlast_mb,
-                    # E3.3 (W2-B29): der Geometrie-Deckel, aus derselben Formel.
-                    geometrien=self.worker_geometrien_max,
+                    # Bauplan Feldtempo T3 (T-E8): Wache-Grenze (E3.2), Grundlast-Posten
+                    # (.534 B3) und Geometrie-Deckel (E3.3 W2-B29) je Auftrag aus EINER
+                    # Planung — bis 0.1.1.022 drei Griffe mit je einer vollen Planung.
+                    job_limits=self.worker_job_limits,
                     # E3.4: die Kurzform der Start-Proben nach jedem BETRIEBS-
                     # Neustart — die Vollform bleibt dem Boot-Exklusivfenster.
                     bei_neustart=self.kurzprobe_ausloesen,
                     # .531: der Kartenhaushalt, aus derselben Leiter.
                     vram=self.worker_vram_start,
                     karte=self._karte_frei_mb,
+                    # Bauplan Feldtempo T2: Kartenpreise VOR dem Planen jedes Starts.
+                    prices_before_start=self.worker_prices_before_start,
                     name="worker")
             return self._dienst_obj
 
@@ -14027,10 +14122,14 @@ class Service:
         self._maschine_ram_merk = (max(0, mb), quelle)
         return self._maschine_ram_merk
 
-    def _karte_frei_mb(self, kind):
+    def _karte_frei_mb(self, kind, frisch=False):
         """Was auf der Beschleuniger-Karte JETZT WIRKLICH frei ist, in MB.
         -> (mb, alter_s, grund); `grund is None` heisst „frisch gemessen",
         `grund == "nicht_messbar"` heisst fail-closed (.531).
+
+        Messpaar (Bauplan CUDA-Messpaare MP1): `frisch=True` fragt die Sonde ohne
+        Merkerblick; das nutzt nur die gemeinsame Erneuerung in `_cuda_messpaar`.
+        Merker und Erneuerung liegen unter `_messpaar_sperre`.
 
         Anlass ist der Feldvorfall vom 15.09.: die Strang-Formel rechnete
         `gesamt - eigene Posten` und liess zwei Rechenstraenge zu, waehrend auf
@@ -14040,13 +14139,15 @@ class Service:
 
         EINE QUELLE: dieselbe Sonde wie die Systemstatistik
         (`core.systemstat.SONDEN`), kein zweiter nvidia-smi-Aufruf mit eigenem
-        Parser. Sie liefert Gesamt und Belegt; frei ist die Differenz — das ist
-        `memory.free` derselben Abfrage.
+        Parser. Sie liefert natives `memory.free` aus derselben Abfrage;
+        Gesamt minus Belegt enthaelt auch vom Treiber reservierten Speicher.
 
         GEMERKT MIT MINDESTABSTAND UND ALTER (.531), und hier steht warum: der
         Docstring behauptete bis .530 „je Worker-Start". Das war falsch — die
-        Sonde haengt ueber `worker_fussabdruck_max_mb` und `worker_geometrien_max`
-        an JEDEM Nicht-ping-Job, lief also ZWEIMAL je Job als eigener Prozess-Fork
+        Sonde haengt ueber die Planung an JEDEM Nicht-ping-Job (damals ueber
+        `worker_fussabdruck_max_mb` und `worker_geometrien_max`, seit Bauplan
+        Feldtempo T3 ueber `worker_job_limits`, einmal je Auftrag), lief also bis .530
+        ZWEIMAL je Job als eigener Prozess-Fork
         mit 8 s Zeitgrenze, mitten im Absetzweg. Seit .531: hoechstens ein Fork je
         KARTE_SONDE_ABSTAND_S, Zeitgrenze 2 s (core/systemstat.py), und bei einem
         Ausfall der LETZTE gute Wert mit seinem ALTER statt einer 0. Eine 0 hiesse
@@ -14058,45 +14159,56 @@ class Service:
         richtigen Mass."""
         if kind != "cuda":
             return 0, 0.0, "kein_kartenmass"
-        jetzt = time.monotonic()
-        merk = getattr(self, "_karte_merk", None)
-        if merk is None:
-            merk = self._karte_merk = {"mb": 0, "ts": 0.0, "fehl": 0,
-                                       "grund": "noch_nicht_gemessen"}
-        if merk["ts"] and (jetzt - merk["ts"]) < KARTE_SONDE_ABSTAND_S:
-            return merk["mb"], round(jetzt - merk["ts"], 2), merk["grund"]
-        mb, grund = 0, None
-        try:
-            from core import systemstat as _st
-            d = (_st.SONDEN.get(kind) or (lambda: {}))() or {}
-            gesamt = int(d.get("speicher_max_mb") or 0)
-            belegt = int(d.get("speicher_mb") or 0)
-            if gesamt <= 0 or belegt < 0 or belegt > gesamt:
-                # VIER AUSFALL-ARTEN, VIER GRUENDE (K1): eine Diagnose, die jeden
-                # Ausfall gleich nennt, schickt den Betreiber in die falsche
-                # Richtung. `_fehlt()` der Sonde unterscheidet werkzeug_fehlt /
-                # nicht_lesbar / kein_geraet — das wird hier durchgereicht.
-                grund = str(d.get("grund") or "nicht_lesbar")
-            else:
-                mb = max(0, gesamt - belegt)
-        except Exception as e:                            # noqa: BLE001
-            grund = f"sonde_fehler: {type(e).__name__}"
-        if grund is None:
-            merk.update({"mb": mb, "ts": jetzt, "fehl": 0, "grund": None})
-            return mb, 0.0, None
-        merk["fehl"] += 1
-        alter = round(jetzt - merk["ts"], 2) if merk["ts"] else 0.0
-        if merk["fehl"] >= KARTE_FEHLVERSUCHE_MAX:
-            if merk["grund"] != "nicht_messbar":
-                self.log.error(f"free card memory not readable ({grund}) — "
-                         f"{merk['fehl']} attempts in a row, treating the card as "
-                         f"NOT MEASURABLE (fail-closed: one compute thread, anchor "
-                         f"cap). Set worker_vram_mb by hand or check that the "
-                         f"container can reach nvidia-smi")
-            merk["grund"] = "nicht_messbar"
-            return 0, alter, "nicht_messbar"
-        merk["grund"] = grund
-        return merk["mb"], alter, grund
+        with self._messpaar_sperre():
+            worker = getattr(self, "_dienst_obj", None)
+            process = getattr(worker, "p", None)
+            identity = (id(worker), id(process), getattr(process, "pid", None),
+                        getattr(worker, "_starts", None))
+            jetzt = time.monotonic()
+            merk = getattr(self, "_karte_merk", None)
+            if merk is None:
+                merk = self._karte_merk = {"mb": 0, "ts": 0.0, "fehl": 0,
+                                           "grund": "noch_nicht_gemessen"}
+            own = getattr(self, "_eigen_merk", {}) or {}
+            cycle_end = (own.get("ende", merk["ts"]) if own.get("worker") == identity
+                         and own.get("karte_ts") == merk["ts"] else merk["ts"])
+            if (not frisch and merk.get("worker") == identity and merk["ts"]
+                    and (jetzt - cycle_end) < KARTE_SONDE_ABSTAND_S):
+                return merk["mb"], round(jetzt - merk["ts"], 2), merk["grund"]
+            mb, grund = 0, None
+            try:
+                from core import systemstat as _st
+                d = (_st.SONDEN.get(kind) or (lambda: {}))() or {}
+                gesamt = int(d.get("speicher_max_mb") or 0)
+                frei = d.get("speicher_frei_mb")
+                if (d.get("grund") is not None or gesamt <= 0
+                        or type(frei) is not int or frei < 0 or frei > gesamt):
+                    # VIER AUSFALL-ARTEN, VIER GRUENDE (K1): eine Diagnose, die jeden
+                    # Ausfall gleich nennt, schickt den Betreiber in die falsche
+                    # Richtung. `_fehlt()` der Sonde unterscheidet werkzeug_fehlt /
+                    # nicht_lesbar / kein_geraet — das wird hier durchgereicht.
+                    grund = str(d.get("grund") or "nicht_lesbar")
+                else:
+                    mb = frei
+            except Exception as e:                            # noqa: BLE001
+                grund = f"sonde_fehler: {type(e).__name__}"
+            if grund is None:
+                merk.update({"mb": mb, "ts": jetzt, "ende": time.monotonic(),
+                             "worker": identity, "fehl": 0, "grund": None})
+                return mb, 0.0, None
+            merk["fehl"] += 1
+            alter = round(jetzt - merk["ts"], 2) if merk["ts"] else 0.0
+            if merk["fehl"] >= KARTE_FEHLVERSUCHE_MAX:
+                if merk["grund"] != "nicht_messbar":
+                    self.log.error(f"free card memory not readable ({grund}) — "
+                             f"{merk['fehl']} attempts in a row, treating the card as "
+                             f"NOT MEASURABLE (fail-closed: one compute thread, anchor "
+                             f"cap). Set worker_vram_mb by hand or check that the "
+                             f"container can reach nvidia-smi")
+                merk["grund"] = "nicht_messbar"
+                return 0, alter, "nicht_messbar"
+            merk["grund"] = grund
+            return merk["mb"], alter, grund
 
     def _karte_frei_band_mb(self, kind, moment_mb):
         """DAS FREI-BAND DER KARTE (.544 M1) -> dict fuer `gpubudget.straenge`.
@@ -14114,8 +14226,8 @@ class Service:
         Verbrauch atmet. Die Momentaufnahme traf ein Tal dieser Welle.
 
         DIE QUELLE IST DER RING, DEN ES SCHON GIBT (`core.systemstat`, eine
-        Zeile je `TAKT_S`): `gpu.speicher_max_mb - gpu.speicher_mb` je Takt. Es
-        entsteht KEINE zweite Sonde und kein zweiter nvidia-smi-Aufruf — die
+        Zeile je `TAKT_S`): `gpu.speicher_frei_mb` je Takt. Alte Zeilen ohne natives Frei fehlen.
+        Es entsteht KEINE zweite Sonde und kein zweiter nvidia-smi-Aufruf — die
         Klasse Fehler, die zwei Messstellen fuer dieselbe Sache erzeugen, ist in
         diesem Modul schon teuer bezahlt worden.
 
@@ -14124,9 +14236,10 @@ class Service:
         vorsichtigere Zahl, und genau die will die Leiter.
 
         GEMERKT FUER EINEN RING-TAKT: `worker_straenge` haengt am Absetzweg
-        JEDES Jobs (worker_fussabdruck_max_mb, worker_geometrien_max). Den Ring
+        JEDES Jobs (`worker_job_limits`, seit Bauplan Feldtempo T3 einmal je Auftrag;
+        bis dahin je ein Griff fuer Grenze, Grundlast und Geometrie-Deckel). Den Ring
         oefter zu lesen als er geschrieben wird, brauchte niemand und kostete je
-        Job zweimal das Parsen der 48-h-Datei. Der Abstand ist deshalb der Takt
+        Job mehrmals das Parsen der 48-h-Datei. Der Abstand ist deshalb der Takt
         des Rings selbst (`systemstat.TAKT_S`), keine neue Zahl.
 
         NUR AUF BACKENDS MIT EIGENEM KARTENSPEICHER — auf Intel/CPU gibt es
@@ -14164,13 +14277,11 @@ class Service:
                 if not isinstance(g, dict) or g.get("kind") != kind:
                     continue
                 gesamt = int(g.get("speicher_max_mb") or 0)
-                belegt = g.get("speicher_mb")
-                if gesamt <= 0 or belegt is None:
+                frei = g.get("speicher_frei_mb")
+                if (g.get("grund") is not None or gesamt <= 0
+                        or type(frei) is not int or frei < 0 or frei > gesamt):
                     continue
-                belegt = int(belegt)
-                if belegt < 0 or belegt > gesamt:
-                    continue
-                werte.append(gesamt - belegt)
+                werte.append(frei)
         except Exception as e:                            # noqa: BLE001
             aus["grund"] = f"ring not readable ({type(e).__name__})"
             self._karte_band_merk = (jetzt, dict(aus), grenze)
@@ -14279,7 +14390,12 @@ class Service:
         gerechneten Zahl abweicht, sagt der Dienst das dem Nutzer EINMAL laut.
 
         -> dict (auch fuer /health). Wird bei jedem Prozess-Start gerufen, damit
-        ein zur Laufzeit zugeschalteter Waechter beim naechsten Start zaehlt."""
+        ein zur Laufzeit zugeschalteter Waechter beim naechsten Start zaehlt (Start-Tor
+        `_karte_bereit` und `_vram_start` ueber `worker_vram_start`, Strangzahl ueber
+        `worker_straenge_zahl`), dazu EINMAL je Auftrag ueber `worker_job_limits`
+        (Bauplan Feldtempo T3), ausserdem beim Dienststart, fuer /health
+        (`worker_straenge_zustand`, `WorkerDienst.zustand`) und von der Wanduhr. Gebucht
+        und geschrieben wird hier nichts (Bauplan Feldtempo T2)."""
         _gb = _gpubudget
         kind = getattr(self, "_plaetze_kind", None) or "cpu"
         vor = getattr(self, "_plaetze_vorschlag", 1) or 1
@@ -14307,14 +14423,19 @@ class Service:
         # Minimum fuer beide — wer hier plante, plante mit einer Regel, die
         # das gerufene Modul nicht anwendet (BEF-2 der CUDA-Abnahme
         # 21.09.2026).
-        _frei_gem, _frei_alter, _frei_grund = self._karte_frei_mb(kind)
+        # MP1 (Bauplan CUDA-Messpaare): auf CUDA kommen Karten-Frei und Eigenanteil als
+        # EIN Paar aus `_cuda_messpaar`, samt lokaler Kopie unter der Sperre. Gerechnet
+        # und entschieden wird unten mit dieser Kopie, nie mit später gelesenen Merkern.
+        _paar = self._cuda_messpaar(kind, gesamt) if kind == "cuda" else None
+        _frei_gem, _frei_alter, _frei_grund = (_paar["frei"] if _paar
+                                               else self._karte_frei_mb(kind))
         # .544 M1: … UND ZWAR ALS BAND, NICHT ALS MOMENT. Der Momentwert von
         # eben bleibt als Diagnose stehen (`frei_moment_mb`); geplant wird mit
         # dem schlechtesten Moment des letzten Fensters. Herleitung und der
         # Feldbefund (145 Vorsorge-Ausstiege an einem Tag, weil der eigene
         # Waechter-Verbrauch atmet) stehen in `_karte_frei_band_mb`.
         _band = self._karte_frei_band_mb(kind, _frei_gem)
-        if _band.get("band_mb") is not None:
+        if kind != "cuda" and _band.get("band_mb") is not None:
             _frei_gem = int(_band["band_mb"])
         # .531: WIE ALT die Live-Engine ist, entscheidet, ob ihr Kartenposten vom
         # gemessenen Wert noch abgezogen werden muss oder schon darin steckt.
@@ -14327,13 +14448,13 @@ class Service:
         # .535: der eigene Anteil kommt MIT GRUND. 0 mit Grund heisst „nicht
         # zuordenbar", nicht „belegt nichts" — und das steht ab jetzt in /health,
         # statt als stille Null in die Leiter zu gehen.
-        _eig_mb, _eig_grund = self._worker_karte_eigen_mb()
+        _eig_mb, _eig_grund = _paar["eigen"] if _paar else self._worker_karte_eigen_mb()
         # .544 B: DIE PREISE DIESER KARTE, falls es welche gibt. Sie gelten vor
-        # der Messtabelle; was fehlt, kommt weiter aus ihr. Gebucht wird dabei,
-        # was der zuletzt gelaufene Worker-Prozess gemeldet hat — dieser Griff
-        # haengt am Worker-START, also genau an der Stelle, an der ohnehin
-        # gerechnet wird und an der ein abgeloester Prozess seinen Plateau-Wert
-        # gerade fertig gemessen hat.
+        # der Messtabelle; was fehlt, kommt weiter aus ihr. Gebucht wird hier
+        # nichts (Bauplan Feldtempo T2): `_vram_preise` rechnet aus dem Speicher,
+        # dem Stand beim Dienststart plus den Zaehlern aller Worker-Prozesse; in
+        # die Datei schreibt nur `_prices_write` (vor dem Planen eines Starts nach
+        # einem Prozessende und an den geordneten Enden des Dienstes).
         try:
             _preise, _preis_stand, _preis_verworfen = self._vram_preise(kind,
                                                                        gesamt)
@@ -14341,8 +14462,26 @@ class Service:
             # Eine Preis-Auskunft darf den Worker-Start nie kosten — dann gilt
             # die Tabelle wie vor .544, und der Grund steht im Log.
             self.log.error(f"vram prices failed ({type(_pe).__name__}: {_pe}) — "
-                     f"planning from the measurement table")
+                     f"using the marked provisional CUDA profile")
             _preise, _preis_stand, _preis_verworfen = None, None, []
+        worker = getattr(self, "_dienst_obj", None)
+        process = getattr(worker, "p", None)
+        alive = kind == "cuda" and process is not None and process.poll() is None
+        running_n = int(getattr(worker, "straenge_laufend", 0) or 0)
+        if kind == "cuda" and not alive:
+            running_n = 0
+        stock_start, stock = getattr(worker, "_geometry_stock", (None, None))
+        if (not alive or stock_start is None
+                or stock_start != getattr(worker, "_starts", None)
+                or type(stock) is not int or stock < 0):
+            stock = None
+        # Die lokale Kopie aus `_cuda_messpaar`; Generation und Leben prüft die
+        # Entscheidung JETZT, das Alter gilt ab dem Kopierzeitpunkt (`now` der Kopie).
+        measured = (dict(_paar["messung"],
+                         worker=(id(worker), id(process), getattr(process, "pid", None),
+                                 getattr(worker, "_starts", None)),
+                         alive=getattr(worker, "p", None) is process and process.poll() is None)
+                    if alive and _paar and _paar.get("messung") else None)
         st = _gb.straenge(gesamt, n_wae, kind, vor, nutzer_n=max(0, _nutzer),
                           frei_gemessen_mb=_frei_gem,
                           engine_alter_s=_eng_alter,
@@ -14353,21 +14492,31 @@ class Service:
                           # Prozess-Sonde rechnet die Leiter daraus zurueck,
                           # was der laufende Worker belegt — sonst zaehlt sein
                           # eigener Verbrauch gegen ihn (Feldbefund 18:06).
-                          laufend_n=int(getattr(
-                              getattr(self, "_dienst_obj", None),
-                              "straenge_laufend", 0) or 0),
+                          laufend_n=running_n,
+                          running_geometries=stock,
                           # .544 M1: die HERKUNFT des Frei-Werts reist mit —
                           # ohne sie stuende in /health eine Zahl, von der
                           # niemand wuesste, ob sie ein Band oder ein Moment ist.
-                          frei_band=_band)
+                          frei_band=_band, measured=measured)
+        if kind == "cuda" and _frei_grund:
+            st.update(verweigert=True, zustand="rot", cuda_messgrund=_frei_grund,
+                      hinweis=(f"CUDA memory planning unavailable for running worker: "
+                               f"native card memory {_frei_grund}" if running_n else
+                               f"CUDA worker start blocked: native card memory "
+                               f"unavailable ({_frei_grund})"))
+        if kind == "cuda" and st.get("cuda_messgrund"):
+            _diag = self._messpaar_diagnose(measured)
+            if _diag:
+                st["rechenweg"] = f"{st['rechenweg']}; {_diag}"
         st["laufend_eigen_grund"] = _eig_grund
         st["preis_stand"] = _preis_stand
         st["preis_verworfen"] = _preis_verworfen
         st["quelle"] = quelle
         st["frei_alter_s"] = _frei_alter
         st["frei_grund"] = _frei_grund
-        st["sonde_fehlversuche"] = int((getattr(self, "_karte_merk", None)
-                                        or {}).get("fehl") or 0)
+        st["sonde_fehlversuche"] = int((_paar["karte"] if _paar
+                                        else (getattr(self, "_karte_merk", None) or {})
+                                        ).get("fehl") or 0)
         st["karte"] = self._karten_name()
         # .531 NOT-WEG `worker_vram_mb`: ein gesetzter Wert ERSETZT den gerechneten
         # Arena-Deckel. Er ist fuer Anlagen gedacht, in denen `nvidia-smi` im
@@ -14444,6 +14593,15 @@ class Service:
             # im Log.
             self.log.warning(f"priority stages failed ({type(_ve).__name__}: {_ve}) — "
                      f"the ladder decides alone (as before 0.1.0.544)")
+        if kind == "cuda":
+            # Erst nach der Schutzentscheidung: kein Bestandsschutz gegen den
+            # Minimalmodus. Die laufende Arena wird hier ausschliesslich gelesen.
+            arena = (getattr(worker, "vram_deckel_gehalten", 0) if alive
+                     else st.get("arena_deckel_mb"))
+            st = _gb.geometry_plan(st, arena, running_n=running_n,
+                                    stock_known=not alive or stock is not None, prices=_preise,
+                                    measured=measured)
+            self._geometry_mode_log(st)
         # MIGRATIONS-KLEMME: der alte Wert wird gelesen, um ihn zu MELDEN, nie
         # um ihn zu nehmen.
         _roh = self.cfg.get("analyse_plaetze")
@@ -14496,7 +14654,8 @@ class Service:
                  # Vorrang. Ein Wechsel hier ist die wichtigste Nachricht, die
                  # dieser Block ueberhaupt hat — er sagt, ob die Anlage gerade
                  # erkennt und womit.
-                 st.get("modus"), st.get("vorrang"))
+                 st.get("modus"), st.get("vorrang"), st.get("geometrien_grund"),
+                 tuple(sorted((st.get("preis_quelle_stufen") or {}).items())))
         # Feldbefunde Punkt 21: die Merkstelle der Kuerzungs-Zeile (`_kuerzung_zeile`) gilt je
         # Anlauf der Live-Engine; ist die Anlaufminute vorbei, darf der naechste Anlauf wieder
         # EINE Zeile schreiben. Geprueft an jedem Rechenstand, nicht nur bei neuer Marke.
@@ -14543,10 +14702,11 @@ class Service:
         # Feldanlage AU wuchs das Budget binnen zehn Minuten von 1 ueber 3 und 4
         # auf 6 Straenge — keiner dieser Schritte erreichte die Vergabestelle,
         # weil in dieser Zeit kein Worker startete. Dieser Griff hier wird dagegen
-        # an jedem Job gefragt (ueber `worker_fussabdruck_max_mb` und
-        # `worker_geometrien_max`), er ist also genau die Stelle, an der ein
-        # gewachsenes Budget auch ankommt. Teuer wird das nicht: stimmen Plaetze
-        # und Straenge, kehrt `_plaetze_an_straenge` nach drei Vergleichen um.
+        # an jedem Job gefragt (ueber `worker_job_limits`, seit Bauplan Feldtempo
+        # T3 einmal je Auftrag statt dreimal), er ist also genau die Stelle, an der
+        # ein gewachsenes Budget auch ankommt; die Bremsen darunter zaehlen Zeit,
+        # nicht Aufrufe. Teuer wird das nicht: stimmen Plaetze und Straenge, kehrt
+        # `_plaetze_an_straenge` nach drei Vergleichen um.
         try:
             self._plaetze_an_straenge(st)
         except Exception as e:                            # noqa: BLE001
@@ -14558,6 +14718,19 @@ class Service:
         # die man dagegenhalten koennte. Wer nachmessen will, nimmt die
         # Feinmessung (s. `Feinmessung`).
         return st
+
+    def _geometry_mode_log(self, st):
+        """Meldet geänderte CUDA-Messgrundlage und Schutzmodus unabhängig von Debug.
+        -> None; gleiche Gründe werden nicht je Abruf wiederholt."""
+        mark = (st.get("modus"), st.get("cuda_messgrund"), st.get("preis_quelle"))
+        if mark == getattr(self, "_geometry_mode_mark", None):
+            return
+        self._geometry_mode_mark = mark
+        if st.get("hinweis"):
+            self.log.warning(st["hinweis"])
+        if st.get("modus") in ("minimal", "reduziert"):
+            self.log.warning(f"CUDA worker {st['modus']}: {st.get('modus_text')}; "
+                             f"{st.get('geometrien_rechenweg')}")
 
     def _zeitprotokoll(self, eid, entry, ainfo, einge_ts, z_platz, z_schreiben,
                        warte_s, z_ende=None, z_analyse=None):
@@ -15193,6 +15366,9 @@ class Service:
         Leiter noch einen Schalter an."""
         if not isinstance(st, dict) or st.get("mass") != "vram":
             return st
+        if kind == "cuda" and st.get("cuda_messgrund"):
+            st.update(modus="aus", modus_text=st.get("hinweis"), warten_lohnt=False)
+            return st
         vorrang = str(self.cfg.get("vorrang") or "erkennung").strip().lower()
         if vorrang not in ("erkennung", "wache"):
             vorrang = "erkennung"
@@ -15365,35 +15541,13 @@ class Service:
         return st
 
     def _vram_preise(self, kind, gesamt_mb):
-        """DIE AUF DIESER KARTE GEMESSENEN PREISE — buchen und lesen (.544 B).
-        -> (preise, stand_fuer_health, verworfen[])
+        """Liest eigene CUDA-Gesamtzustände aus dem Startstand und Prozesszählern.
+        -> (Zustände, Health-Stand, verworfene Gründe); ohne Buchung oder Dateizugriff nach T2.
 
-        DER ANLASS, in Feldzahlen: die Messtabelle in `core.gpubudget` ist am
-        15.09. auf einer RTX 2060 Mobile und einer RTX 3060 mit 4K-Clips
-        entstanden. Auf einer GTX 1070 mit 2560x1920- und 1080p-Kameras
-        verlangte sie 3175 MiB Pflichtpreis gegen 1929 MiB Budget und
-        verweigerte JEDEN Rechenstrang — die Erkennung war tot, und die Meldung
-        schickte den Betreiber in seine `config.json`.
-
-        WAS HIER PASSIERT, in drei Schritten:
-          (1) BUCHEN: was der Worker-Prozess gemeldet hat (`preis_proben` in
-              seiner Antwort — das MAXIMUM seines Kartenanteils je
-              Konstellation, mit der vorhandenen Sonde gemessen) wandert in den
-              klebrigen Speicher `state/vram_preise.json`.
-          (2) ABLEITEN: aus benachbarten Konstellationen werden Posten-Preise
-              (core.vrampreise.preise_ableiten), jeder gegen die
-              Plausibilitaets-Regeln in core.gpubudget geprueft.
-          (3) MELDEN: was verworfen wurde, steht im Log und in /health — eine
-              still verworfene Messung waere eine Blindstelle.
-
-        NUR AUF KARTEN-BACKENDS. Der Intel-/RAM-Zweig (`mass == "ram"`) rechnet
-        unveraendert mit seiner eigenen Formel: dort gibt es keine Leiter, keine
-        Tabelle und keinen Kartenanteil je Prozess. Das ist eine Aussage, kein
-        Loch — wer dort lernen will, misst erst das Mass.
-
-        GESCHRIEBEN WIRD NUR, WENN SICH ETWAS GEAENDERT HAT: dieser Griff haengt
-        am Worker-Start, und ein Schrieb je Start waere eine Datei, die sich
-        dauernd selbst neu schreibt, ohne dass eine Zahl anders wird."""
+        Die Kennung bindet Karte, Größe, Backend, Version, Engine und Modellwahl.
+        Alte unmarkierte Einträge bleiben erhalten und gelten nicht als neue Messung.
+        Ohne passenden Zustand gilt das ausdrücklich vorläufige Anlauf-/Schrittprofil.
+        """
         s_b = _gpubudget.stuetzwerte(kind) or {}
         if s_b.get("mass") != "vram":
             return None, None, []
@@ -15401,7 +15555,7 @@ class Service:
             from core import vrampreise as _vp                 # noqa: PLC0415
         except Exception as e:                                 # noqa: BLE001
             self.log.error(f"vram prices unavailable ({type(e).__name__}: {e}) — "
-                     f"planning from the measurement table")
+                     f"using the marked provisional CUDA profile")
             return None, None, []
         # OHNE DATENORDNER KEIN SPEICHER, und das ist kein Fehler: die Proben
         # stellen absichtlich nur Teile des Dienstes auf (dieselbe Regel wie
@@ -15412,108 +15566,223 @@ class Service:
             return None, None, []
         schluessel = _vp.hw_schluessel(kind, self._karten_name(), gesamt_mb,
                                        os.environ.get("SUSLIK_VERSION", "dev"))
-        stand = _vp.lesen(dd)
-        proben = {}
-        _d = getattr(self, "_dienst_obj", None)
-        if _d is not None:
-            proben = dict((getattr(_d, "vram_stand", None)
-                           or {}).get("preis_proben") or {})
-        if proben:
-            neu, gebucht, verworfen_roh = _vp.buchen(
-                stand, schluessel,
-                {"karte": self._karten_name(), "gesamt_mb": int(gesamt_mb or 0),
-                 "kind": kind,
-                 "suslik": os.environ.get("SUSLIK_VERSION", "dev")},
-                proben, gesamt_mb=int(gesamt_mb or 0))
-            for _z in verworfen_roh:
-                self.log.warning(f"vram price measurement discarded — {_z}")
-            if gebucht and neu != stand:
-                if _vp.schreiben(dd, neu):
-                    stand = neu
-                else:
-                    self.log.error("vram prices could not be written — planning from "
-                             "the measurement table for now")
-        preise, verworfen = _vp.preise_ableiten(stand, schluessel,
-                                                int(gesamt_mb or 0))
+        schluessel += f"|engine_cuda|{self.cfg.get('modell') or 'default'}"
+        kopf = {"karte": self._karten_name(), "gesamt_mb": int(gesamt_mb or 0),
+                "kind": kind, "suslik": os.environ.get("SUSLIK_VERSION", "dev")}
+        self._price_key = (schluessel, kopf, int(gesamt_mb or 0))
+        stand, verworfen_roh = self._prices_total(_vp, dd, *self._price_key)
+        for _z in verworfen_roh:
+            self.log.warning(f"vram price measurement discarded — {_z}")
+        preise, verworfen = _vp.gesamtzustaende(stand, schluessel, int(gesamt_mb or 0))
         # LAUT, aber nur bei Aenderung: die Verwurfs-Gruende wiederholen sich
         # sonst bei jedem Worker-Start (der Griff haengt am Start, und ein
         # halbes Plateau bleibt eben ein halbes Plateau).
         _marke = (schluessel, tuple(sorted(verworfen)),
-                  tuple(sorted((a, p.get("mb")) for a, p in preise.items())))
+                  repr(preise))
         if _marke != getattr(self, "_preis_marke", None):
             self._preis_marke = _marke
             for _z in verworfen:
-                self.log.warning(f"vram price NOT used — {_z} (the measurement table "
-                         f"applies for this posten)")
-            if preise:
-                self.log.info("vram prices measured on this card: "
-                         + ", ".join(f"{a} {p['mb']} MiB ({p['datum']}, "
-                                     f"{p['proben']} samples)"
-                                     for a, p in sorted(preise.items())))
+                self.log.warning(f"CUDA total state NOT used — {_z}; provisional profile applies")
+            if preise.get("zustaende"):
+                self.log.info(f"CUDA measured total worker states: {preise['zustaende']}")
+            else:
+                self.log.warning("CUDA matching total state unavailable — provisional startup/step profile; no table fallback")
         return (preise or None), _vp.stand_zeigen(stand, schluessel), verworfen
 
-    def _worker_karte_eigen_mb(self):
-        """Was UNSER laufender Worker auf der Karte haelt — Prozess UND seine
-        Decoder-Kinder, im selben Moment gemessen. -> (mb, grund)
+    def _prices_lock(self):
+        """Das Schloss der Kartenpreise (Bauplan Feldtempo T2) -> threading.RLock.
+        Auch auf Proben-Buehnen ohne `__init__` vorhanden; reentrant, weil das Schreiben die Summe bildet."""
+        return self.__dict__.setdefault("_price_lock", threading.RLock())
 
-        `grund is None` heisst „gemessen"; sonst ist `mb` 0 UND der Grund sagt,
-        warum es keine Zahl gibt (`kein_worker`, `kein_eintrag`, `liste_leer`,
-        `werkzeug_fehlt`, `timeout`, `nicht_lesbar`, `kein_geraet`).
+    def _prices_start(self, vp, dd):
+        """Der Stand der Preis-Datei beim Dienststart (T-E5) -> dict, je Dienst-Lebenszeit EINMAL gelesen.
+        Ab dann unveraendert im Speicher; der Dienst meldet sich zugleich fuer das Schreiben am Signal-Ende an."""
+        with self._prices_lock():
+            if getattr(self, "_price_start", None) is None:
+                self._price_start = vp.lesen(dd)
+                self._price_numbers = vp.numbers(self._price_start)
+                _PRICE_END["svc"] = self
+            return self._price_start
 
-        .535 — WARUM DAS EIN PAAR IST UND KEINE NACKTE ZAHL: bis .534 gab dieser
-        Griff eine 0 zurueck, und eine 0 ist hier nicht „nichts belegt", sondern
-        „ich weiss es nicht". Im Feld (15.09. 17:20) nannte der Treiber
-        nur Wirt-pids; `prozesse_karte_mb` lieferte `({}, None)`, daraus wurde
-        still eine 0, /health zeigte `laufend_eigen_mb = 0`, und NICHTS im Log
-        sagte, dass hier gar nicht gemessen werden konnte. Der Grund reist
-        seitdem mit, wird EINMAL je Worker-Leben geloggt und steht in /health
-        unter `worker_straenge.laufend_eigen_grund`.
-
-        Die Zahl geht als `laufend_eigen_mb` in die Leiter und wird dort dem
-        gemessenen Frei-Wert zurueckgerechnet — der laufende Worker steht in
-        `memory.free` als belegt, waehrend die Leiter ihn daneben von null auf
-        plant (NB-2, .534).
-
-        WARUM GEMESSEN UND NICHT „PLATEAU MINUS GRUNDLINIE": die Eich-Groesse
-        ist ein PREIS je Konstellation, keine Momentaufnahme; sie kennt den
-        gerade laufenden Decoder nicht und haengt an einer Grundlinie, die zu
-        einem anderen Zeitpunkt gemessen wurde. Am 15.09. war der Unterschied
-        522 MiB (Plateau 738 gegen wirklich gehaltene 1004-1262 MiB), und
-        genau diese Differenz hat den Aufstieg blockiert. Der Decoder gehoert
-        MIT in die Zahl: die Leiter plant ihren eigenen Decoder-Posten
-        ausserhalb der Arena, also darf der gerade laufende nicht noch einmal
-        als fremd belegt gelten.
-
-        GETAKTET wie die Karten-Sonde (`KARTE_SONDE_ABSTAND_S`): derselbe
-        Fork-Preis, derselbe Mindestabstand."""
+    def _prices_total(self, vp, dd, schluessel, kopf, gesamt_mb):
+        """Die Summe fuer Planung UND Datei (T-E5) -> (stand, verworfen), ohne Dateizugriff nach dem Dienststart.
+        Stand beim Dienststart plus die Zaehler aller Worker-Prozesse, kopiert unter dem Schloss des Worker-Dienstes."""
+        start = self._prices_start(vp, dd)
         d = getattr(self, "_dienst_obj", None)
-        _p = getattr(d, "p", None) if d else None
-        if _p is None or _p.poll() is not None:
-            return 0, "kein_worker"
-        jetzt = time.monotonic()
-        merk = getattr(self, "_eigen_merk", None)
-        if merk is None:
-            merk = self._eigen_merk = {"mb": 0, "ts": 0.0, "grund": None,
-                                       "gemeldet_pid": None}
-        if merk["ts"] and (jetzt - merk["ts"]) < KARTE_SONDE_ABSTAND_S:
-            return int(merk["mb"] or 0), merk.get("grund")
+        schloss = getattr(d, "_price_lock", None)
+        with (schloss if schloss is not None else contextlib.nullcontext()):
+            # Flach genuegt: `counters_merge` legt je Meldung NEUE Zaehler an und
+            # aendert nie einen bestehenden.
+            zaehler = dict(getattr(d, "price_counters", None) or {})
+        return vp.total(start, schluessel, kopf, zaehler, gesamt_mb=gesamt_mb)
+
+    def worker_prices_before_start(self, geendet):
+        """Vor dem Planen eines Worker-Starts (T-E5): Stand beim Dienststart laden, nach einem Prozessende schreiben.
+        -> None; nur auf Karten-Backends (`mass == "vram"`), sonst ohne jeden Dateizugriff."""
+        kind = getattr(self, "_plaetze_kind", None) or "cpu"
+        if (_gpubudget.stuetzwerte(kind) or {}).get("mass") != "vram":
+            return
+        dd = (self.cfg or {}).get("data_dir")
+        if not dd:
+            return
+        from core import vrampreise as _vp                     # noqa: PLC0415
+        self._prices_start(_vp, dd)
+        if geendet:
+            self._prices_write("worker restart")
+
+    def _prices_write(self, anlass):
+        """Die Summe in `state/vram_preise.json` schreiben, nur bei geaenderter Zahl, nie nach einer Wiederherstellung.
+        -> True, wenn geschrieben; ein Fehler ist ERROR und kostet nichts, gerechnet wird aus dem Speicher weiter.
+
+        Bauplan Feldtempo T2 (T-E5, T-E6). Aufrufer sind genau die erlaubten Zeitpunkte: der
+        naechste Worker-Start nach einem Prozessende (`worker_prices_before_start`) und die drei
+        geordneten Enden des Dienstes (Signal ueber `_prices_at_end`, `neustart` vor `os.execv`,
+        `main` am Ende von `--once`). Ohne Planung auf einer Karte (`_price_key` leer: CPU, Intel,
+        ROCm) gibt es nichts zu schreiben. Nach einer Wiederherstellung, die `state/` ersetzt hat,
+        gehoert der Stand im Speicher zum abgeloesten Bestand: die Zaehler seit dem letzten
+        Schreiben verfallen, die zurueckgespielte Datei bleibt."""
+        key = getattr(self, "_price_key", None)
+        if key is None or getattr(self, "_price_start", None) is None:
+            return False
+        if getattr(self, "_price_restored", False):
+            self.log.info(f"vram prices not written ({anlass}): state/ was replaced by a "
+                          f"restore — the counters since the last write are dropped")
+            return False
         try:
-            from core import systemstat as _st              # noqa: PLC0415
-            pids = {int(_p.pid)} | self._eigen_kinder(_p.pid)
-            gefunden, grund = _st.prozesse_karte_mb(pids)
-            mb = 0 if grund is not None else sum(int(v or 0) for v in gefunden.values())
-        except Exception as e:                              # noqa: BLE001
-            mb, grund = 0, f"sonde_fehler: {type(e).__name__}"
-        merk.update({"mb": max(0, int(mb)), "ts": jetzt, "grund": grund})
-        # GEMELDET WIRD HIER NICHT — und das ist eine Lehre aus dem NB-Lauf vom
-        # 15.09. 18:32: unmittelbar nach dem Worker-Start haelt der Prozess noch
-        # NICHTS auf der Karte, der Treiber nennt ihn folglich nicht, und die
-        # Antwort lautet fuer ein paar Sekunden `kein_eintrag`. Wer daraus eine
-        # Logzeile oder gar einen Merker macht, erklaert eine funktionierende
-        # Anlage fuer blind. Die momentane Antwort steht deshalb dort, wo sie
-        # hingehoert: in /health und an der Speicherleiste, als das, was sie
-        # ist — eine Momentaufnahme mit Grund daneben.
-        return int(merk["mb"]), grund
+            from core import vrampreise as _vp                 # noqa: PLC0415
+            dd = self.cfg["data_dir"]
+            with self._prices_lock():
+                stand, _verworfen = self._prices_total(_vp, dd, *key)
+                zahlen = _vp.numbers(stand)
+                if zahlen == getattr(self, "_price_numbers", None):
+                    return False
+                if not _vp.schreiben(dd, stand):
+                    self.log.error(f"vram prices could not be written ({anlass}) — planning "
+                                   f"goes on from memory, the next worker restart or service "
+                                   f"end tries again")
+                    return False
+                self._price_numbers = zahlen
+            self.log.debug(f"vram prices written ({anlass})")
+            return True
+        except Exception as e:                                 # noqa: BLE001
+            self.log.error(f"vram prices could not be written ({anlass}): "
+                           f"{type(e).__name__}: {e} — planning goes on from memory")
+            return False
+
+    def _worker_karte_eigen_mb(self, frisch=False):
+        """Misst Worker und Decoder derselben lebenden PID-/Startgeneration.
+        -> (MiB, Grund); nur ein frisches passendes Kartenpaar darf die CUDA-Planung tragen.
+
+        Die vorhandene Sonde und ihr Merker werden wiederverwendet; keine Preisbuchung.
+        `frisch=True` misst ohne Merkerblick (gemeinsame Erneuerung in `_cuda_messpaar`);
+        Merker und Erneuerung liegen unter `_messpaar_sperre`.
+        """
+        with self._messpaar_sperre():
+            d = getattr(self, "_dienst_obj", None)
+            process = getattr(d, "p", None)
+            identity = (id(d), id(process), getattr(process, "pid", None),
+                        getattr(d, "_starts", None))
+            if process is None or process.poll() is not None:
+                self._eigen_merk = {"mb": 0, "ts": 0.0, "grund": "kein_worker"}
+                return 0, "kein_worker"
+            now = time.monotonic()
+            card = dict(getattr(self, "_karte_merk", {}) or {})
+            marker = getattr(self, "_eigen_merk", {}) or {}
+            cycle_end = (marker.get("ende", marker.get("ts", 0)) if marker.get("karte_ts")
+                         else marker.get("ts", 0))
+            if (not frisch and marker.get("worker") == identity and marker.get("ts")
+                    and now - cycle_end < KARTE_SONDE_ABSTAND_S):
+                return int(marker["mb"]), marker.get("grund")
+            try:
+                from core import systemstat as _st              # noqa: PLC0415
+                pids = {int(process.pid)} | self._eigen_kinder(process.pid)
+                found, reason = _st.prozesse_karte_mb(pids)
+                if reason is None and int(process.pid) not in found:
+                    reason = "kein_eintrag"
+                if reason is None and any(type(v) is not int or v < 0 for pid, v in found.items() if pid in pids):
+                    reason = "nicht_lesbar"
+                mb = 0 if reason else sum(v for pid, v in found.items() if pid in pids)
+            except Exception as exc:                            # noqa: BLE001
+                mb, reason = 0, f"sonde_fehler: {type(exc).__name__}"
+            if (getattr(self, "_dienst_obj", None) is not d or d.p is not process
+                    or process.poll() is not None or getattr(d, "_starts", None) != identity[-1]):
+                mb, reason = 0, "worker_changed"
+            self._eigen_merk = {"mb": max(0, mb), "ts": now, "ende": time.monotonic(),
+                                "worker": identity, "karte_ts": card.get("ts"), "grund": reason,
+                                "decoder_mb": sum(v for pid, v in found.items() if pid in pids and pid != process.pid)
+                                if reason is None else None}
+            return max(0, mb), reason
+
+    def _messpaar_sperre(self):
+        """Liefert den wiederbetretbaren Griff um Karten-/Eigenmerker, ihre Erneuerung und Kopie.
+        -> threading.RLock, je Service-Objekt genau einer (atomar angelegt, auch ohne __init__)."""
+        return self.__dict__.setdefault("_messpaar_schloss", threading.RLock())
+
+    def _messpaar_kopie(self, identity, jetzt):
+        """Kopiert beide Messmerker unter der Sperre zur lokalen Weitergabe.
+        -> dict im Format von `cuda_budget.pair_reason`, `now` ist der Kopierzeitpunkt."""
+        with self._messpaar_sperre():
+            return {"card": dict(getattr(self, "_karte_merk", None) or {}),
+                    "own": dict(getattr(self, "_eigen_merk", None) or {}),
+                    "worker": identity, "alive": True, "now": jetzt,
+                    "max_age": KARTE_SONDE_ABSTAND_S}
+
+    def _cuda_messpaar(self, kind, gesamt):
+        """Beschafft natives Karten-Frei und Eigenanteil als zusammenhängendes CUDA-Paar.
+        -> dict frei (mb, alter, grund), eigen (mb, grund), karte, messung (lokale Kopie oder None).
+
+        Ein gültiges Cachepaar wird unverändert genommen. Sonst erneuern Karte und
+        Eigenanteil gemeinsam, höchstens ein Versuch je Abruf; die gemeinsame
+        Versuchszeit (`versuch` in beiden Merkern) sperrt auch nach einem
+        Fehlversuch weitere Abfragen bis `KARTE_SONDE_ABSTAND_S`. Gesperrt wird
+        nur Beschaffung und Übernahme, nie Preisrechnung oder Planung."""
+        with self._messpaar_sperre():
+            worker = getattr(self, "_dienst_obj", None)
+            process = getattr(worker, "p", None)
+            if process is None or process.poll() is not None:
+                frei, eigen = self._karte_frei_mb(kind), self._worker_karte_eigen_mb()
+                return {"frei": frei, "eigen": eigen, "messung": None,
+                        "karte": dict(getattr(self, "_karte_merk", None) or {})}
+            identity = (id(worker), id(process), getattr(process, "pid", None),
+                        getattr(worker, "_starts", None))
+            jetzt = time.monotonic()
+            paar = self._messpaar_kopie(identity, jetzt)
+            card, own = paar["card"], paar["own"]
+            versuch = own.get("versuch")
+            gesperrt = (versuch is not None and card.get("versuch") == versuch
+                        and own.get("worker") == identity
+                        and 0 <= jetzt - versuch < KARTE_SONDE_ABSTAND_S)
+            if gesperrt or _cuda_budget.pair_reason(paar, gesamt) is None:
+                frei = (0 if card.get("grund") == "nicht_messbar" else int(card.get("mb") or 0),
+                        round(jetzt - card["ts"], 2) if card.get("ts") else 0.0,
+                        card.get("grund"))
+                return {"frei": frei, "eigen": (max(0, int(own.get("mb") or 0)), own.get("grund")),
+                        "karte": card, "messung": paar}
+            frei = self._karte_frei_mb(kind, frisch=True)
+            eigen = self._worker_karte_eigen_mb(frisch=True)
+            for merk in (getattr(self, "_karte_merk", None), getattr(self, "_eigen_merk", None)):
+                if isinstance(merk, dict):
+                    merk["versuch"] = jetzt
+            paar = self._messpaar_kopie(identity, time.monotonic())
+            return {"frei": frei, "eigen": eigen, "karte": paar["card"], "messung": paar}
+
+    def _messpaar_diagnose(self, measured):
+        """Beschreibt Zeiten, Alter und Zyklus eines abgelehnten Messpaars für den Debugweg.
+        -> Text oder None ohne Kopie; keine Bewertung, die prüft `cuda_budget.pair_reason`."""
+        if not measured:
+            return None
+        card, own, now = measured.get("card") or {}, measured.get("own") or {}, measured.get("now")
+        def zeit(wert):
+            return f"{wert:.3f}" if isinstance(wert, (int, float)) and wert else "none"
+        alter = (f"{now - own.get('ende', own['ts']):.3f} s" if own.get("ts") and now is not None
+                 else "none")
+        return (f"measurement pair: card {zeit(card.get('ts'))}-{zeit(card.get('ende'))} "
+                f"(reason {card.get('grund')}), own {zeit(own.get('ts'))}-{zeit(own.get('ende'))} "
+                f"for card cycle {zeit(own.get('karte_ts'))} (reason {own.get('grund')}), "
+                f"joint attempt card {zeit(card.get('versuch'))}/own {zeit(own.get('versuch'))}, "
+                f"own age {alter} at adoption, max age {measured.get('max_age')} s, "
+                f"generation card/own match: {card.get('worker') == measured.get('worker')}/"
+                f"{own.get('worker') == measured.get('worker')}")
 
     # .535: HIER STANDEN `_vram_sonde_grund` (kann diese Anlage ueberhaupt
     # eichen?) und `_eich_grundlinie_nach` (eine neue Grundlinie fuer den
@@ -15769,7 +16038,29 @@ class Service:
                         getattr(d, "straenge_deckel_druck", 0) or 0) if d else None})
         return aus
 
-    def worker_fussabdruck_max_mb(self):
+    def worker_job_limits(self):
+        """Die drei Werte je Auftrag aus EINER Planung (Bauplan Feldtempo T3, T-E8).
+        -> dict {"grenze_mb", "grundlast_mb", "geometrien_max"}, je int, 0 = keiner.
+
+        Der Griff `job_limits` des Worker-Dienstes: `WorkerDienst.job` fragt ihn einmal je
+        Auftrag (nicht fuer `ping`). Bis 0.1.1.022 hingen dort drei Griffe, und jeder rechnete
+        die volle Planung `worker_straenge` fuer sich — dreimal je Auftrag, beim Feldtester auf
+        CUDA bis Stufe T2 jedes Mal mit Buchen und Schreiben der Preis-Datei. Die drei Werte
+        gehoeren ohnehin zu EINER Rechnung; hier wird sie einmal gemacht und jeder Wert aus
+        demselben Ergebnis gelesen (die drei Methoden darunter). Platzanpassung, Bremsen und
+        Abstaende haengen weiter an jeder Planung (`_plaetze_an_straenge`); die Bremsen zaehlen
+        Zeit, nicht Aufrufe. Scheitert die Planung, sind alle drei 0, wie bisher jeder Griff
+        fuer sich."""
+        try:
+            st = self.worker_straenge()
+        except Exception:                                 # noqa: BLE001
+            _logbuch.swallowed(_log, _logbuch.WARNING, "returning 0")
+            st = {}
+        return {"grenze_mb": self.worker_fussabdruck_max_mb(st),
+                "grundlast_mb": self.worker_grundlast_mb(st),
+                "geometrien_max": self.worker_geometrien_max(st)}
+
+    def worker_fussabdruck_max_mb(self, st):
         """Die Politik-Grenze fuer die Speicher-Wache des Dienstes (MB, 0 = keine).
         Aus derselben Rechnung wie die Strang-Zahl — keine zweite Zahlenquelle.
 
@@ -15778,10 +16069,16 @@ class Service:
         auftauchen, NACHDEM der Worker gestartet ist (2422 MB auf Intel gemessen).
         Die Grenze reist je Job mit, drueben gilt die GROESSTE angemeldete — so
         waechst sie mit dem Nachbarn, statt ihn dem laufenden Prozess anzulasten.
-        Teuer ist das nicht: die Maschinen-Groesse liegt im Merker, der Rest ist
-        eine Handvoll Multiplikationen."""
+        `st` ist das Ergebnis von `worker_straenge`, das `worker_job_limits` je Auftrag
+        EINMAL rechnet (Bauplan Feldtempo T3); diese Methode plant nicht selbst. Bis
+        0.1.1.022 rechnete sie die volle Planung je Auftrag selbst, und hier stand „Teuer
+        ist das nicht: die Maschinen-Groesse liegt im Merker, der Rest ist eine Handvoll
+        Multiplikationen“. Die Planung fragt dazu Karte, Frei-Band und Preise ab und bindet
+        die Plaetze (auf CUDA buchte und schrieb sie bis Stufe T2 bei jedem Aufruf die
+        Preis-Datei), und sie lief mit den Griffen fuer Grundlast und Geometrie-Deckel
+        dreimal je Auftrag."""
         try:
-            return int(self.worker_straenge().get("grenze_mb") or 0)
+            return int(st.get("grenze_mb") or 0)
         except Exception:                                 # noqa: BLE001
             _logbuch.swallowed(_log, _logbuch.WARNING, "returning 0")
             return 0
@@ -15805,7 +16102,7 @@ class Service:
             fm = self._feinmessung_obj = Feinmessung(self)
         return fm
 
-    def worker_grundlast_mb(self):
+    def worker_grundlast_mb(self, st):
         """Der GRUNDLAST-Posten des Container-Speichers (MB, 0 = keiner, .534).
 
         Aus derselben Rechnung wie Strang-Zahl und Politik-Grenze — keine zweite
@@ -15813,9 +16110,11 @@ class Service:
         Worker gehoert (Dienst, Live-Engine, Waechter-Decoder); der Worker zieht
         ihn von seinem gemessenen Maximum ab, um einen Vorschlag je Rechenstrang
         zu nennen. Der Intel-Zweig rechnet keinen solchen Posten — dort ist die
-        Antwort 0, und drueben unterbleibt der Vorschlag statt geraten zu werden."""
+        Antwort 0, und drueben unterbleibt der Vorschlag statt geraten zu werden.
+        `st` ist das Ergebnis von `worker_straenge` aus `worker_job_limits` (Bauplan
+        Feldtempo T3, eine Planung je Auftrag)."""
         try:
-            posten = self.worker_straenge().get("grenze_posten") or {}
+            posten = st.get("grenze_posten") or {}
             return int(posten.get("grundlast_mb") or 0)
         except Exception:                                 # noqa: BLE001
             _logbuch.swallowed(_log, _logbuch.WARNING, "returning 0")
@@ -15840,7 +16139,11 @@ class Service:
             st = self.worker_straenge()
         except Exception as e:                            # noqa: BLE001
             self.log.warning(f"card budget not computable ({type(e).__name__}: {e}) — "
-                     f"the worker starts without an arena cap")
+                     f"the CUDA worker is not started without a bounded arena")
+            if getattr(self, "_plaetze_kind", None) == "cuda":
+                return {"deckel_mb": 1, "verweigert": True, "noetig_mb": 1,
+                        "kind": "cuda", "warten_lohnt": False, "modus": "aus",
+                        "modus_text": f"CUDA budget unavailable: {type(e).__name__}: {e}"}
             return None
         if st.get("mass") != "vram":
             return None
@@ -15869,6 +16172,11 @@ class Service:
             deckel, gedeckelt = gehalten, True
         if d is not None:
             d.vram_neustart_gedeckelt = gedeckelt
+            if st.get("kind") == "cuda":
+                # WP1: nur die vorhandene Startentscheidung weitergeben. Der
+                # vorbereitete erste Job darf sie nach dem Start nicht vergroessern.
+                d._geometry_start_limit = (int(getattr(d, "_starts", 0) or 0) + 1,
+                                            int(st.get("geometrien_max") or 0))
         try:
             _shrink = int(self.cfg.get("worker_arena_shrink") or 0)
         except (TypeError, ValueError):
@@ -15952,7 +16260,7 @@ class Service:
                 "noetig_mb": ((int(st.get("minimum_mb") or 0)
                                + int(st.get("reserve_mb") or 0))
                               if st.get("modus") in ("minimal", "reduziert")
-                              else (int(lt.get("summe_mb") or 0)
+                              else (int(lt.get("pflicht_preis_mb") or 0)
                                     + int(st.get("reserve_mb") or 0)))}
 
     def _plaetze_an_straenge(self, st):
@@ -16301,14 +16609,16 @@ class Service:
                      f"change ({type(e).__name__}: {e}) — it keeps running with "
                      f"{alt} compute thread(s)")
 
-    def worker_geometrien_max(self):
+    def worker_geometrien_max(self, st):
         """Der Geometrie-Deckel fuer den Worker-Prozess (Anzahl, 0 = keiner).
         Aus derselben Rechnung wie Strang-Zahl und Speicher-Grenze — und aus
         demselben Grund frisch gerechnet: ein Live-Waechter, der NACH dem Start
         dazukommt, verkleinert den Platz fuer Geometrien genauso wie den fuer
-        Straenge. Drueben gilt die GROESSTE angemeldete Zusage (s. `annehmen`)."""
+        Straenge. Drueben gilt die GROESSTE angemeldete Zusage (s. `annehmen`).
+        `st` ist das Ergebnis von `worker_straenge` aus `worker_job_limits` (Bauplan
+        Feldtempo T3, eine Planung je Auftrag)."""
         try:
-            return int(self.worker_straenge().get("geometrien_max") or 0)
+            return int(st.get("geometrien_max") or 0)
         except Exception:                                 # noqa: BLE001
             _logbuch.swallowed(_log, _logbuch.WARNING, "returning 0")
             return 0
@@ -33176,12 +33486,29 @@ def _sigterm(signum, frame):
 
     Log-Systematik (E2): der Griff merkt sich NUR das Signal; aus einem Signal-Griff
     rät die Python-Doku vom Loggen ab (Schloesser nicht wiedereintrittsfest). Die
-    Zeile schreibt der Hauptweg beim Beenden (`_signal_zeile`, in main registriert)."""
+    Zeile schreibt der Hauptweg beim Beenden (`_signal_zeile`, in main registriert).
+
+    Bauplan Feldtempo T2 (T-E5): das Signal ist eines der drei geordneten Enden, an denen die
+    Summe der Kartenpreise geschrieben wird. Aus demselben Grund wie beim Loggen geschieht das
+    NICHT hier im Griff (der unterbrochene Hauptweg kann gerade das Schloss der Preise halten),
+    sondern danach ueber atexit (`_prices_at_end`), wenn `sys.exit` den Hauptweg abgewickelt hat."""
     _SIGNAL["nr"] = signum
+    atexit.register(_prices_at_end, "signal")
     sys.exit(0)
 
 
 _SIGNAL = {"nr": None}     # vom Signal-Griff gesetzt, von _signal_zeile gelesen
+# Bauplan Feldtempo T2: der Dienst mit einem Preis-Speicher (gesetzt in
+# `Service._prices_start`, nur auf Karten-Backends), gelesen von `_prices_at_end`.
+_PRICE_END = {"svc": None}
+
+
+def _prices_at_end(anlass):
+    """Am Signal-Ende (atexit, angemeldet in `_sigterm`) die Summe der Kartenpreise schreiben.
+    -> None; ohne Dienst mit Preis-Speicher (CPU, Intel, ROCm, vor der ersten Planung) nichts."""
+    svc = _PRICE_END.get("svc")
+    if svc is not None:
+        svc._prices_write(anlass)
 
 
 def _signal_zeile():
@@ -33332,7 +33659,8 @@ def main():
         svc.cleanup_cache()
         print(json.dumps(entry, ensure_ascii=False, indent=2))
         svc.worker_stoppen()                  # W2: --once = start -> 1 Job -> geordnet beenden
-        return                                # non-daemon Szenen-Timer haelt den Prozess ggf. karenz_s am Leben
+        svc._prices_write("--once end")       # Bauplan Feldtempo T2: drittes geordnetes Ende
+        return                               # non-daemon Szenen-Timer haelt den Prozess ggf. karenz_s am Leben
 
     # Publisher VOR dem Webserver (Widerleger 11.08.): die differenzierte MQTT-Ampel
     # zeigte sonst in JEDEM Selfcheck-Fenster nach einem Config-Neustart minutenlang

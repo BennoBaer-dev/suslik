@@ -164,6 +164,7 @@ import face_audit                                         # noqa: E402  Embedder
 from core import frames as clipcache                      # noqa: E402  Clip-Beschaffung
 from core import guete as guete_mod                       # noqa: E402  verfuegbar()
 from core import inferenzmessung as im                    # noqa: E402  .546 Zeit + Tiefe je Inferenz
+from core import cuda_budget as _cuda_budget
 from core import gpubudget as _gpubudget                  # noqa: E402  .531 Reserve/Leiter
 from core import messkarte as mk_bilanz                   # noqa: E402  profil()
 from core import registry as _registry                    # noqa: E402  .531 VRAM-Fehlertexte
@@ -1373,11 +1374,12 @@ class SpeicherWache:
             sonde = _st.SONDEN.get("cuda")
             d = (sonde() or {}) if sonde else {}
             gesamt = int(d.get("speicher_max_mb") or 0)
-            belegt = int(d.get("speicher_mb") or 0)
-            if gesamt <= 0 or belegt < 0 or belegt > gesamt:
+            frei = d.get("speicher_frei_mb")
+            if (d.get("grund") is not None or gesamt <= 0
+                    or type(frei) is not int or frei < 0 or frei > gesamt):
                 grund = str(d.get("grund") or "nicht_lesbar")
             else:
-                mb = max(0, gesamt - belegt)
+                mb = frei
         except Exception as e:                             # noqa: BLE001
             grund = f"sonde_fehler: {type(e).__name__}"
         with self._karte_schloss:
@@ -1404,7 +1406,7 @@ class SpeicherWache:
                 "alter_s": (round(time.monotonic() - alt["ts"], 2)
                             if alt["ts"] else None)}
 
-    def karte_eigen_mb(self):
+    def karte_eigen_mb(self, frisch=False):
         """Der Kartenanteil DIESES Prozesses (.532). -> (mb|None, delta|None, grund)
 
         `grund is None` heisst „frisch gemessen"; `delta` ist der Unterschied
@@ -1425,7 +1427,7 @@ class SpeicherWache:
         jetzt = time.monotonic()
         with self._eigen_schloss:
             alt = dict(self._eigen)
-        if alt["ts"] and (jetzt - alt["ts"]) < KARTE_EIGEN_TAKT_S:
+        if not frisch and alt["ts"] and (jetzt - alt["ts"]) < KARTE_EIGEN_TAKT_S:
             return alt["mb"], None, (alt["grund"] or "gemerkt")
         mb, grund = None, None
         try:
@@ -1500,42 +1502,37 @@ class SpeicherWache:
                 "own_grund": alt["grund"]}
 
     def _konstellation(self):
-        """Womit dieser Prozess GERADE rechnet -> (Straenge, Geometrien).
+        """Womit dieser Prozess GERADE rechnet -> (Straenge, Geometrien, Formen-/Satzsnapshot).
 
         Beide Zahlen kommen aus dem Prozess selbst, nicht aus dem Plan: geplant
         wird mit zwei Geometrien, gebaut wird, was die Clips dieser Anlage
         wirklich verlangen. Ein Preis, der die geplante statt der gebauten Zahl
         traegt, waere einer Konstellation zugeschlagen, die es nie gab."""
         d = self.dienst
-        n = max(1, int(getattr(d, "threads", 1) or 1))
-        try:
-            with d._geo_schloss:
-                g = len(d.graphen)
-        except Exception:                                  # noqa: BLE001
-            g = 0
-        return n, max(1, g)
+        with d._geo_schloss:
+            forms = sorted((w,h,int(getattr(obj,"saetze",0) or 0))
+                           for (w,h),obj in d.graphen.items())
+        return max((row[2] for row in forms),default=0), len(forms), forms
 
     def _preis_buchen(self, mb):
-        """EINE Messung in den Preis-Topf dieser Konstellation (.544 B).
-        Aufrufer haelt `self._eigen_schloss`.
-
-        Gefuehrt wird das MAXIMUM je Konstellation und die Zahl der Proben — der
-        Dienst entscheidet daraus, ob das schon ein Plateau ist
-        (`gpubudget.PREIS_MIN_PROBEN`) oder noch ein Moment. Hier wird NICHTS
-        bewertet und nichts verworfen: diese Stelle misst, die Bewertung gehoert
-        an EINE andere (sonst gaebe es zwei Regeln fuer dieselbe Frage)."""
+        """Bucht eine echte PID-Spitze je Form und materialisiertem Satzbestand.
+        Aufrufer hält das Messschloss; Rückgabe None, keine Posten-Ableitung."""
         try:
             mb = int(mb)
         except (TypeError, ValueError):
             return
         if mb <= 0:
             return
-        n, g = self._konstellation()
-        k = f"{n}x{g}"
+        n, g, forms = self._konstellation()
+        if n <= 0 or g <= 0:
+            return
+        k = f"{n}x{g}|" + ";".join(f"{w}x{h}:{sets}" for w, h, sets in forms)
         topf = self._preis_proben.get(k)
         if topf is None:
             topf = self._preis_proben[k] = {"straenge": n, "geometrien": g,
-                                            "max_mb": 0, "proben": 0}
+                                            "max_mb": 0, "proben": 0,
+                                            "messart": "cuda_total_v1", "formen": []}
+        topf["formen"] = forms
         topf["max_mb"] = max(int(topf["max_mb"] or 0), mb)
         topf["proben"] = int(topf["proben"] or 0) + 1
 
@@ -1565,7 +1562,7 @@ class SpeicherWache:
             gesamt = int(self._karte["gesamt"] or 0)
         if gesamt <= 0:
             return
-        res = _gpubudget.reserve_strang_mb(
+        res = _cuda_budget.reserve(
             gesamt, getattr(self.dienst, "vram_reserve_mb", -1))
         if 0 <= frei < res:
             self.dienst.druck_buchen(
@@ -1586,56 +1583,123 @@ class SpeicherWache:
 
     def _lauf(self):
         vor = fussabdruck_mb()
-        while not self._stop.wait(self.takt):
+        last_ram = time.monotonic()
+        last_debug = None
+        pause = self.takt
+        while not self._stop.wait(pause):
+            sample_time = time.monotonic()
+            interval = sample_time - last_ram
             jetzt = fussabdruck_mb()
             # Der vermerkte Ende-Wunsch wird JE TAKT geprueft, nicht nur im Moment des
             # Risses: der Riss faellt fast immer WAEHREND eines Jobs (s. ende_pruefen).
             self.dienst.ende_pruefen()
             self._karte_takt()
-            if jetzt < 0:
-                continue
-            if vor < 0:
+            if self.dienst.auf_karte() and self.dienst.offen_n() > 0:
+                self.karte_eigen_mb()
+            if jetzt >= 0:
+                if vor < 0:
+                    vor = jetzt
+                self.spitze = max(self.spitze, jetzt)
+                if self.grenze and jetzt > self.grenze:
+                    # SCHWELLEN-RISS -> GEORDNETES ENDE (E2d). Erste Stufe der Leiter: der
+                    # Prozess ist ueber dem, was die Politik ihm zusagt, aber es ist noch
+                    # Zeit. Er geht, sobald der letzte Job beantwortet ist — kein Job geht
+                    # dabei verloren, und verifyd startet einen frischen.
+                    if not self._gemeldet:
+                        self._gemeldet = True
+                        _log.warning(f"WARN: footprint {jetzt} MB (anon+shmem) exceeds the "
+                                    f"policy limit {self.grenze} MB while "
+                                    f"{self.dienst.offen_n()} job(s) are running")
+                    self.dienst.ende_bitten(
+                        f"footprint {jetzt} MB (anon+shmem) is above the policy limit "
+                        f"{self.grenze} MB")
+                # HIER STAND BIS 14.09. EINE ZWEITE, HARTE REGEL auf derselben Groesse:
+                # „gewachsen um mehr als die ganze Politik-Grenze" -> abbruch_alle. Sie ist
+                # RAUS, aus zwei gemessenen Gruenden.
+                # (1) Ihr Nullpunkt war falsch. Er wurde beim Start dieser Wache genommen,
+                #     also BEVOR die erste Geometrie gebaut war — Geometrien entstehen zur
+                #     Laufzeit (W2-B29). Der voellig normale Aufbau des ersten Jobs sah
+                #     damit wie ein Leck aus: Provokationsprobe p1 am 14.09., Grenze 2400,
+                #     „grew by 2489 MB" beim ERSTEN Job, footprint 2576 MB — ein Prozess,
+                #     der nie mehr als sein Soll belegt hat, wurde als Leck erschossen.
+                # (2) Sie war gegenueber der Regel darueber ohnehin nur strenger
+                #     (jetzt-start > grenze ist jetzt > grenze + start), konnte also nur
+                #     NACH ihr reissen — und nahm ihr damit genau das weg, was sie leisten
+                #     soll: geordnet gehen, ohne einen Job zu verlieren. In p1 rissen beide
+                #     im SELBEN Takt, und der harte Weg gewann.
+                # Was bleibt, ist die Leiter, die der Sache entspricht: ueber der Zusage ->
+                # geordnet (oben); Container fast voll -> hart (unten), denn dann wartet der
+                # OOM-Killer des Kerns nicht auf das Ende des letzten Jobs.
+                frei = cgroup_frei_mb()
+                wachstum = jetzt - vor if vor >= 0 else 0
+                if frei >= 0 and 0 < wachstum >= frei:
+                    self.dienst.abbruch_alle(
+                        f"process memory guard: container memory almost exhausted "
+                        f"({frei} MB free, this worker grew {wachstum} MB in the last "
+                        f"{interval:.3f}s — the kernel OOM killer would strike next), "
+                        f"footprint {jetzt} MB")
                 vor = jetzt
-            self.spitze = max(self.spitze, jetzt)
-            if self.grenze and jetzt > self.grenze:
-                # SCHWELLEN-RISS -> GEORDNETES ENDE (E2d). Erste Stufe der Leiter: der
-                # Prozess ist ueber dem, was die Politik ihm zusagt, aber es ist noch
-                # Zeit. Er geht, sobald der letzte Job beantwortet ist — kein Job geht
-                # dabei verloren, und verifyd startet einen frischen.
-                if not self._gemeldet:
-                    self._gemeldet = True
-                    _log.warning(f"WARN: footprint {jetzt} MB (anon+shmem) exceeds the "
-                                f"policy limit {self.grenze} MB while "
-                                f"{self.dienst.offen_n()} job(s) are running")
-                self.dienst.ende_bitten(
-                    f"footprint {jetzt} MB (anon+shmem) is above the policy limit "
-                    f"{self.grenze} MB")
-            # HIER STAND BIS 14.09. EINE ZWEITE, HARTE REGEL auf derselben Groesse:
-            # „gewachsen um mehr als die ganze Politik-Grenze" -> abbruch_alle. Sie ist
-            # RAUS, aus zwei gemessenen Gruenden.
-            # (1) Ihr Nullpunkt war falsch. Er wurde beim Start dieser Wache genommen,
-            #     also BEVOR die erste Geometrie gebaut war — Geometrien entstehen zur
-            #     Laufzeit (W2-B29). Der voellig normale Aufbau des ersten Jobs sah
-            #     damit wie ein Leck aus: Provokationsprobe p1 am 14.09., Grenze 2400,
-            #     „grew by 2489 MB" beim ERSTEN Job, footprint 2576 MB — ein Prozess,
-            #     der nie mehr als sein Soll belegt hat, wurde als Leck erschossen.
-            # (2) Sie war gegenueber der Regel darueber ohnehin nur strenger
-            #     (jetzt-start > grenze ist jetzt > grenze + start), konnte also nur
-            #     NACH ihr reissen — und nahm ihr damit genau das weg, was sie leisten
-            #     soll: geordnet gehen, ohne einen Job zu verlieren. In p1 rissen beide
-            #     im SELBEN Takt, und der harte Weg gewann.
-            # Was bleibt, ist die Leiter, die der Sache entspricht: ueber der Zusage ->
-            # geordnet (oben); Container fast voll -> hart (unten), denn dann wartet der
-            # OOM-Killer des Kerns nicht auf das Ende des letzten Jobs.
-            frei = cgroup_frei_mb()
-            wachstum = jetzt - vor if vor >= 0 else 0
-            if frei >= 0 and 0 < wachstum >= frei:
-                self.dienst.abbruch_alle(
-                    f"process memory guard: container memory almost exhausted "
-                    f"({frei} MB free, this worker grew {wachstum} MB in the last "
-                    f"{self.takt:.0f}s — the kernel OOM killer would strike next), "
-                    f"footprint {jetzt} MB")
-            vor = jetzt
+                last_ram = sample_time
+            debug = _logbuch.switches()["debug"]
+            if debug:
+                snap = _gpu_diagnose(self.dienst, "periodic")
+                spacing = None if last_debug is None else snap["started_ts"] - last_debug
+                last_debug = snap["started_ts"]
+                _log.debug(f"memory periodic: target_interval_s={self.takt}, actual_interval_s={spacing}, "
+                           f"ram_interval_s={interval}, diagnosis_s={snap['diagnosis_s']}, "
+                           f"measured_ts={snap['finished_ts']}")
+            elapsed = time.monotonic() - sample_time
+            pause = self.takt - elapsed if debug and elapsed < self.takt else self.takt
+
+
+def _gpu_diagnose(dienst, phase, before=None):
+    """Misst einen frischen Diagnosestand ohne Preisbuchung ueber die zentralen Sonden.
+    -> dict mit Zeitstaenden, Fehlergruenden und vorzeichenbehafteten Differenzen."""
+    start = time.monotonic()
+    snap = {"phase": phase, "pid": os.getpid(), "thread": threading.current_thread().name,
+            "started_ts": time.time(), "ram_mb": None, "ram_peak_mb": None,
+            "total_mb": None, "used_mb": None, "free_mb": None, "own_mb": None,
+            "card_ts": None, "own_ts": None, "card_reason": None, "own_reason": None,
+            "held": None, "cap": getattr(dienst, "geometrien_max", None)}
+    guard = dienst.speicher
+    # Dasselbe vorhandene Schloss begrenzt gleichzeitige Diagnoseabfragen. Keine
+    # Warte-/Aufholschleife; ein belegter Messweg bleibt als Grund sichtbar.
+    locked = guard._eigen_schloss.acquire(blocking=False)
+    try:
+        ram = fussabdruck_mb()
+        snap["ram_mb"] = ram if ram >= 0 else None
+        snap["ram_peak_mb"] = max(guard.spitze, ram) if max(guard.spitze, ram) >= 0 else None
+        with dienst._geo_schloss:
+            snap["held"] = len(dienst.graphen)
+        if not locked:
+            snap["card_reason"] = snap["own_reason"] = "measurement busy"
+        elif dienst.auf_karte():
+            from core import systemstat as _st              # noqa: PLC0415
+            try:
+                own, reason = _st.prozess_karte_mb(os.getpid())
+                snap.update(own_ts=time.time(), own_mb=own if reason is None else None, own_reason=reason)
+            except Exception as exc:                        # noqa: BLE001
+                snap.update(own_ts=time.time(), own_reason=f"{type(exc).__name__}: {exc}")
+            card = _st.SONDEN["cuda"]() or {}
+            snap["card_ts"] = time.time()
+            snap["card_reason"] = card.get("messgrund") or card.get("grund")
+            if snap["card_reason"] is None:
+                snap.update(total_mb=card.get("speicher_max_mb"), used_mb=card.get("speicher_mb"),
+                            free_mb=card.get("speicher_frei_mb"))
+        else:
+            snap["card_reason"] = snap["own_reason"] = "no card memory on this backend"
+    except Exception as exc:                                # noqa: BLE001
+        snap["error"] = f"{type(exc).__name__}: {exc}"
+    finally:
+        if locked:
+            guard._eigen_schloss.release()
+    snap.update(finished_ts=time.time(), diagnosis_s=time.monotonic() - start)
+    for key in ("ram_mb", "used_mb", "free_mb", "own_mb"):
+        previous = (before or {}).get(key)
+        value = snap[key]
+        snap["delta_" + key] = value - previous if value is not None and previous is not None else None
+    _log.debug(f"memory snapshot: {snap}; deltas include concurrent consumers and evictions")
+    return snap
 
 
 class FristWache:
@@ -1813,6 +1877,7 @@ class Dienst:
         self._ref_cfg = None
         self._ref_kennung = None
         self._modell_kennung = None            # Fix Erst-Start K1: die Kennung des Lesens (bild_kern.model_identity)
+        self._ref_wache = None                 # Bauplan feldtempo T-E2: Entscheidungsstand des letzten vollen Lesens
         self._ref_schloss = threading.Lock()
         self._schreib = threading.Lock()
         self._geo_schloss = threading.Lock()
@@ -2096,12 +2161,16 @@ class Dienst:
 
     def _matrix_lesen(self, log):
         """Lese-Stufe a mit der Modell-Kennung lesen und als EIN Abzug festhalten; mit Rechenwerk-Kennung (sobald da)
-        auch das fremd-Urteil. Der Aufrufer haelt `_ref_schloss`.
+        auch das fremd-Urteil. Aus demselben Lesen dazu der Entscheidungsstand fuer `referenzen_frisch`
+        (refquelle.matrix_watch: Lesestand, Eintraege, ref_ids der Matrix, ob eine Referenz fehlte; Bauplan
+        analysen/bauplan_feldtempo.md T-E2, T-E11). Der Aufrufer haelt `_ref_schloss`.
         -> der Bericht, der als Bindung „referenzen" in jede Job-Antwort geht"""
+        from core import refquelle                          # noqa: PLC0415
         alle, mit_refs, erk, bericht = referenzen_laden(self._ref_cfg, self._modell_kennung, log,
                                                         self._ref_kennung)
         self.alle, self.mit_refs, self.erk = alle, mit_refs, erk
         self.bindung["referenzen"] = bericht
+        self._ref_wache = refquelle.matrix_watch(self._ref_cfg, bericht["stand"], bericht["ausgelassen"])
         return bericht
 
     def ref_kennung(self, lauf):
@@ -2128,17 +2197,25 @@ class Dienst:
         return self._ref_kennung
 
     def referenzen_frisch(self, lauf):
-        """Die Matrix fuer EIN Ereignis: gelesen ist sie seit dem Start (`referenzen`), neu gelesen
-        wird nur bei neuer Stand-Kennung des Katalogs (I2).
+        """Die Matrix fuer EIN Ereignis: gelesen ist sie seit dem Start (`referenzen`); bei neuer Stand-Kennung des
+        Katalogs (I2) wird sie nur neu gelesen, wenn die neuen Zeilen sie betreffen (Bauplan analysen/bauplan_feldtempo.md
+        Stufe T1, T-E1: refquelle.matrix_affected mit dem Entscheidungsstand des letzten vollen Lesens). Nicht betroffen:
+        Lesestand und Stand des Berichts gehen weiter, die Matrix bleibt, eine DEBUG-Zeile. Betroffen, Lesestand
+        ungueltig, Umzug ausstehend oder eine Referenz fehlte beim letzten Lesen (T-E11): volles Neulesen wie bisher.
         -> (alle, mit_refs, erk) als EIN Abzug; ein Fehler beim Neu-Lesen geht laut an den Job."""
         from core import refquelle                          # noqa: PLC0415
         with self._ref_schloss:
             alt = self.bindung.get("referenzen") or {}
             stand = refquelle.state_id(self._ref_cfg)
             if stand != alt.get("stand"):
-                bericht = self._matrix_lesen(lauf.log)
-                _log.info(f"reference catalog changed ({alt.get('stand')} -> {bericht['stand']}): "
-                          f"matrix re-read, {bericht['zeilen']} row(s) in {bericht['dauer_ms']} ms")
+                if refquelle.matrix_affected(self._ref_cfg, self._ref_wache):
+                    bericht = self._matrix_lesen(lauf.log)
+                    _log.info(f"reference catalog changed ({alt.get('stand')} -> {bericht['stand']}): "
+                              f"matrix re-read, {bericht['zeilen']} row(s) in {bericht['dauer_ms']} ms")
+                else:
+                    self.bindung["referenzen"] = dict(alt, stand=self._ref_wache["stand"])
+                    _log.debug(f"reference catalog changed ({alt.get('stand')} -> {self._ref_wache['stand']}): "
+                               "no new line touches the matrix, matrix kept")
             return self.alle, self.mit_refs, self.erk
 
     def geometrie(self, W, H, fps, lauf):
@@ -2190,15 +2267,10 @@ class Dienst:
         # zusaetzlich vom Geometrie-Bau eines ANDEREN Strangs getrennt — das ist
         # die Ueberlappung, an der die Karte am 15.09. ueberlief.
         #
-        # EHRLICHE GRENZE, benannt: `g.satz()` selbst liegt NOCH VOR dem Riegel.
-        # Er legt die beiden Frame-Puffer des Strangs an (engine_cuda.Satz.__init__:
-        # y und uv, bei 4K zusammen rund 12 MB) — klein gegen den Bau, aber nicht
-        # null, und zwei Straenge koennen das gleichzeitig tun. Der Posten, an dem
-        # die Karte am 15.09. ueberlief, war ein anderer (99,5 MB Cast-Puffer aus
-        # dem Lauf INNERHALB von `warm()`), und der steht jetzt unter dem Riegel.
-        # Ihn mitzunehmen hiesse, „hat dieser Strang diese Geometrie schon
-        # gewaermt" neben dem thread-lokalen Satz ein zweites Mal zu fuehren —
-        # eine zweite Wahrheit, die nach einem Geometrie-Verfall falsch waere.
+        # MS1: auch Satzanlage und Framepuffer liegen im CUDA-Staffelriegel.
+        if self.auf_karte():
+            self._cuda_satz(g, lauf, W, H)
+            return g
         satz = g.satz()
         if not getattr(satz, "_dienst_warm", False):
             with self._staffel(lauf, f"warm-up {W}x{H}"):
@@ -2209,6 +2281,103 @@ class Dienst:
                             self.kompilat_pruefen(g, satz, lauf)
                         satz._dienst_warm = True
         return g
+
+    def _cuda_satz(self, g, lauf, width, height):
+        """Baut Satz und Warm-up gemeinsam unter dem vorhandenen CUDA-Staffelriegel.
+        -> None; ein warmer Cachetreffer allokiert und misst nichts zusätzlich."""
+        local = getattr(g, "_lokal", None)
+        satz = getattr(local, "satz", None)
+        if satz is not None and getattr(satz, "_dienst_warm", False):
+            return
+        with self._staffel(lauf, f"warm-up {width}x{height}"):
+            with self._warm_schloss:
+                with self._kompilat_buchen(lauf, f"warm-up {width}x{height}"):
+                    with self._geo_schloss:
+                        satz = g.satz()
+                    if not getattr(satz, "_dienst_warm", False):
+                        satz.warm()
+                        self.kompilat_pruefen(g, satz, lauf)
+                        satz._dienst_warm = True
+                        lauf._cuda_first_analysis = True
+
+    def _cuda_nachmessen(self):
+        """Misst natives Frei, Worker-PID und vorhandene Decoder desselben Prozessverbands.
+        -> Messstand; Fehler sind benannt, niemals als Nullmessung ausgegeben."""
+        from core import systemstat as stat                 # noqa: PLC0415
+        snap = {"reason": None, "own": None, "free": None, "total": None, "decoders": 0,
+                "native_reason": None}
+        try:
+            card = stat.SONDEN["cuda"]() or {}
+            found, why = stat.prozesse_karte_mb()
+            snap.update(free=card.get("speicher_frei_mb"), total=card.get("speicher_max_mb"),
+                        own=found.get(os.getpid()))
+            snap["native_reason"] = card.get("grund")
+            snap["reason"] = why or card.get("grund")
+            for pid in found:
+                if pid != os.getpid():
+                    try:
+                        snap["decoders"] += int(os.getpgid(pid) == os.getpgrp())
+                    except ProcessLookupError:
+                        continue
+            if (type(snap["free"]) is not int or type(snap["total"]) is not int
+                    or not 0 <= snap["free"] <= snap["total"]
+                    or type(snap["own"]) is not int or snap["own"] <= 0):
+                snap["reason"] = snap["reason"] or "native free or worker PID unavailable"
+        except Exception as exc:                            # noqa: BLE001
+            snap["reason"] = f"{type(exc).__name__}: {exc}"
+        self._cuda_measurement = snap
+        if snap["reason"]:
+            _log.warning(f"CUDA memory measurement unavailable: {snap['reason']}")
+        return snap
+
+    def _cuda_materialisierung(self, what):
+        """Prüft genau den nächsten Aufbau einschließlich späterer Decoder und Analysespitzen.
+        -> None; bei Mangel bestehender Retry-/Neustartweg über MaterializationError."""
+        snap = self._cuda_nachmessen()
+        with self._geo_schloss:
+            forms = sorted((w,h,int(getattr(obj,"saetze",0) or 0))
+                           for (w,h),obj in self.graphen.items())
+        bootstrap = (not forms and snap["own"] is None and not snap["native_reason"]
+                     and type(snap["total"]) is int and type(snap["free"]) is int
+                     and 0 <= snap["free"] <= snap["total"])
+        if snap["reason"] and not bootstrap:
+            raise _cuda_budget.MaterializationError(snap["reason"])
+        reserve = _cuda_budget.reserve(snap["total"], getattr(self, "vram_reserve_mb", -1))
+        pending = max(0, self.threads - snap["decoders"]) * _gpubudget.DECODER_CUDA_MB
+        # Das Geometrieschloss ist vor dem Preis-/Eigenmessschloss wieder frei.
+        probes = self.speicher.preis_proben()
+        processing = self._cuda_verarbeitungsluft(forms, int(snap["own"] or 0), probes)
+        first_pending = not getattr(self,"_cuda_first_analysis_measured",False)
+        startup = max(0,_cuda_budget.PROFILE["startup_mb"] - int(snap["own"] or 0)) if first_pending else 0
+        step = max(_cuda_budget.PROFILE["step_mb"],startup)
+        needed = step + reserve + pending + processing
+        snap.update(required_mb=needed, reserve_mb=reserve, pending_decoder_mb=pending,
+                    processing_headroom_mb=processing, provisional_step_mb=step,
+                    startup_remaining_mb=startup)
+        if snap["free"] < needed:
+            snap["reason"] = "native free below next materialization requirement"
+            # Nur wirkliche freie Bytes können nach einem Verfall den Bedarf senken.
+            raise _cuda_budget.MaterializationError(
+                f"{what}: native free {snap['free']} MiB < next step {step} provisional "
+                f"+ absolute reserve {reserve} + pending decoders {pending} "
+                f"+ measured processing headroom {processing} = {needed} MiB")
+
+    def _cuda_verarbeitungsluft(self, forms, own, probes):
+        """Erhält beobachtete Verarbeitungsluft über Materialisierungs-Zwischenzustände.
+        -> MiB als Maximum, nie je Satz addiert; entfällt erst ohne gehaltene Herkunftsgeometrie."""
+        held = {(w,h) for w,h,_sets in forms}
+        previous = getattr(self,"_cuda_processing_headroom",{})
+        origins = held.intersection(previous.get("geometries") or ())
+        retained = int(previous.get("mb") or 0) if origins else 0
+        peak = max((p["max_mb"] for p in probes.values() if p.get("formen") == forms),default=0)
+        observed = max(0,peak-own)
+        if observed >= retained:
+            retained,origins = observed,held
+        # Eine gleichzeitige Analyse verhindert eine exklusive Zuschreibung des
+        # Bau-Deltas. Deshalb bleibt die bereits beobachtete Luft als Maximum,
+        # bis ihre Geometrien weg sind; kein negativer Baupreis und kein Zuschlag.
+        self._cuda_processing_headroom = {"mb":retained,"geometries":tuple(sorted(origins))}
+        return retained
 
     def _geo_gebraucht(self, W, H):
         """BENUTZUNGS-REIHENFOLGE fortschreiben und den Deckel anwenden — auch beim
@@ -2274,6 +2443,8 @@ class Dienst:
         try:
             if not gehalten:
                 self.zaehler["staffel_frist"] += 1
+                if self.auf_karte():
+                    raise _cuda_budget.MaterializationError(f"build lock deadline before {was}")
                 _log.warning(f"WARN: waited {warte:.0f}s for the build lock before "
                             f"{was} ({wer}) and gave up — another thread's "
                             f"build is not finishing. Building WITHOUT staggering "
@@ -2334,8 +2505,9 @@ class Dienst:
         und nirgends als „dieser Job belegt X". Negative Differenzen werden auf 0
         geklemmt: ein Bau gibt keinen Speicher zurueck, ein Minus ist die Messung des
         Nachbarn."""
+        if self.auf_karte():
+            self._cuda_materialisierung(was)
         vor = fussabdruck_mb()
-        t0 = time.monotonic()
         # .529: den vorherigen Wert MERKEN statt hart auf False zurueckzusetzen.
         # Seit dem Staffel-Riegel laeuft diese Klammer INNERHALB von `_staffel`,
         # das die Frist-Ausnahme schon gesetzt hat; ein hartes False am Ende naehme
@@ -2344,20 +2516,42 @@ class Dienst:
         # Verhalten unveraendert.
         vorher = lauf.kompiliert
         lauf.kompiliert = True
+        reason = "thread warm-up" if was.startswith("warm-up ") else "shared geometry missing"
+        context = f"pid {os.getpid()}, thread {threading.current_thread().name}, job {lauf.id}"
+        failure = None
+        debug = _logbuch.switches()["debug"]
+        snapshot = _gpu_diagnose(self, f"before {was}, job {lauf.id}") if debug else None
+        t0 = time.monotonic()
+        _log.info(f"building {was} started ({context}, reason: {reason})")
         try:
             yield
+        except BaseException as exc:
+            failure = f"{type(exc).__name__}: {exc}"
+            raise
         finally:
-            lauf.kompiliert = vorher
             dauer = time.monotonic() - t0
+            after = (_gpu_diagnose(self, f"after {was}, job {lauf.id}, success={failure is None}", snapshot)
+                     if debug else None)
+            lauf.kompiliert = vorher
             nach = fussabdruck_mb()
             zuwachs = max(0, nach - vor) if (vor >= 0 and nach >= 0) else 0
-            lauf.kompilat_s += dauer
+            diagnosis = ((snapshot["diagnosis_s"] + after["diagnosis_s"]) if debug else 0.0)
+            if debug:
+                _log.debug(f"building {was}: build_s={dauer:.6f}, diagnosis_s={diagnosis:.6f}, "
+                           f"footprint_delta_mb={nach - vor if nach >= 0 and vor >= 0 else None}")
+            lauf.kompilat_s += dauer + diagnosis
             lauf.kompilat_mb += zuwachs
             lauf.kompilat_n += 1
             self.zaehler["kompilat_bauten"] += 1
-            _log.info(f"built {was} in {dauer:.1f}s (job {lauf.id}, footprint "
-                        f"{vor} -> {nach} MB, +{zuwachs} MB booked to this build, "
-                        f"not to the analysis)")
+            if self.auf_karte():
+                self._cuda_nachmessen()
+            if failure is None:
+                _log.info(f"built {was} in {dauer:.1f}s ({context}, reason: {reason}, "
+                          f"success, footprint {vor} -> {nach} MB, +{zuwachs} MB "
+                          f"booked to this build, not to the analysis)")
+            else:
+                _log.error(f"building {was} failed after {dauer:.1f}s ({context}, "
+                           f"reason: {reason}): {failure}")
 
     def _geometrien_stutzen(self):
         """DER DECKEL UND DER VERFALL der Geometrie-Puffersaetze (W2-B29, E3.3).
@@ -2422,8 +2616,8 @@ class Dienst:
             # der Speicher bis zum naechsten zufaelligen Sammellauf liegen.
             del weg
             gc.collect()
-            _log.debug(f"geometry {opfer[0]}x{opfer[1]} dropped (least recently "
-                        f"used, cap {deckel}) — its compiled graphs and per-thread "
+            _log.info(f"geometry {opfer[0]}x{opfer[1]} dropped (least recently "
+                        f"used, held {len(self.graphen)}, cap {deckel}) — its compiled graphs and per-thread "
                         f"buffers are released")
 
     def kompilat_pruefen(self, g, satz, lauf):
@@ -2557,12 +2751,29 @@ class Dienst:
             if not (w.isdigit() and h.isdigit()):
                 continue
             W, H = int(w), int(h)
-            t0 = time.monotonic()
             try:
                 # Der Riegel selbst, nicht `_staffel`: vor dem ersten Job gibt es keinen Job zu
                 # buchen und niemanden, auf den zu warten waere.
                 with self._bau_schloss:
-                    neu = self.engine.geometrie_bauen({"x": (W, H, None)})
+                    debug = _logbuch.switches()["debug"]
+                    snapshot = _gpu_diagnose(self, f"before first-start geometry {W}x{H}, job none") if debug else None
+                    t0 = time.monotonic()
+                    success = False
+                    attempted = False
+                    try:
+                        if self.auf_karte():
+                            self._cuda_materialisierung(f"first-start geometry {W}x{H}")
+                        attempted = True
+                        neu = self.engine.geometrie_bauen({"x": (W, H, None)})
+                        success = True
+                    finally:
+                        build_s = time.monotonic() - t0
+                        if attempted and self.auf_karte():
+                            self._cuda_nachmessen()
+                        if debug:
+                            after = _gpu_diagnose(self, f"after first-start geometry {W}x{H}, job none, success={success}", snapshot)
+                            _log.debug(f"first-start geometry {W}x{H}: build_s={build_s:.6f}, "
+                                       f"diagnosis_s={snapshot['diagnosis_s'] + after['diagnosis_s']:.6f}")
                     with self._geo_schloss:
                         for wh, g in neu.items():
                             self.graphen[wh] = g
@@ -2574,7 +2785,7 @@ class Dienst:
                            f"geometries are built on demand by the first jobs")
                 break
             _log.info(f"built geometry {W}x{H} before the first job in "
-                      f"{time.monotonic() - t0:.1f}s (first-start order from the calibration mark)")
+                      f"{build_s:.1f}s (first-start order from the calibration mark)")
 
     def siebend_behandeln(self, marke, befunde):
         """Abweichung in einer Stufe, die die Kaskade siebt: beim ersten Mal gilt der Worker-Start
@@ -2665,6 +2876,7 @@ class Dienst:
             return None
         z = self.zaehler
         return {"deckel_mb": self.vram_deckel_mb,
+                "messsteuerung": dict(getattr(self, "_cuda_measurement", {}) or {}),
                 # .543 (Issue #32): WOMIT die Laufzeit-Wachen dieses Prozesses
                 # rechnen. -1 = Automatik-Formel wie bisher, sonst der
                 # eingestellte Wunsch. Sichtbar, weil genau diese Zahl im Feld
@@ -2864,7 +3076,7 @@ class Dienst:
                 _ges = int(self.speicher._karte["gesamt"] or 0)
             # .543 (Issue #32): dieselbe Reserve wie in `_karte_takt` — mit dem
             # eingestellten Wunsch, nicht mit der Automatik-Formel.
-            if _g is None and _ges > 0 and _frei < _gpubudget.reserve_strang_mb(
+            if _g is None and _ges > 0 and _frei < _cuda_budget.reserve(
                     _ges, getattr(self, "vram_reserve_mb", -1)):
                 self.vram_neustart_bitten(art, text)
             return
@@ -2921,7 +3133,7 @@ class Dienst:
             if grund is not None or gesamt <= 0:
                 self._vram_druck_fremd_ts = 0.0
                 break
-            res = _gpubudget.reserve_strang_mb(
+            res = _cuda_budget.reserve(
                 gesamt, getattr(self, "vram_reserve_mb", -1))
             if frei >= res:
                 self._vram_druck_fremd_ts = 0.0
@@ -2989,7 +3201,7 @@ class Dienst:
                 gesamt = int(self.speicher._karte["gesamt"] or 0)
             if grund is not None or gesamt <= 0:
                 break
-            noetig = int(noetig_mb or 0) or _gpubudget.reserve_strang_mb(
+            noetig = int(noetig_mb or 0) or _cuda_budget.reserve(
                 gesamt, getattr(self, "vram_reserve_mb", -1))
             if frei >= noetig:
                 if gemeldet:
@@ -3065,9 +3277,15 @@ class Dienst:
 
         Kein Wert, keine Zeile: der Grund steht dann EINMAL im Log (s.
         `SpeicherWache.karte_eigen_mb`)."""
-        mb, delta, grund = self.speicher.karte_eigen_mb()
+        completed = bool(getattr(lauf,"_cuda_analysis_ok",False)) and lauf.typ == "analyze"
+        fresh = (bool(getattr(lauf, "_cuda_first_analysis", False))
+                 or (completed and not getattr(self,"_cuda_first_analysis_measured",False)))
+        mb, delta, grund = self.speicher.karte_eigen_mb(frisch=fresh)
+        lauf._cuda_first_analysis = False
         if mb is None:
             return
+        if completed and fresh and grund is None and mb > 0:
+            self._cuda_first_analysis_measured = True
         with self._geo_schloss:
             geos = len(self.graphen)
         geo = getattr(lauf, "geo", None)
@@ -3088,7 +3306,7 @@ class Dienst:
         sind kein Zusatz, sondern der Betriebspunkt (ein Wechsel zwischen 1080p
         und 4K kostet sonst bei jedem Clip einen Neubau von 24-36 s)."""
         with self._geo_schloss:
-            if len(self.graphen) <= _gpubudget.GEOMETRIEN_IN_ANKERN:
+            if len(self.graphen) <= (0 if self.auf_karte() else _gpubudget.GEOMETRIEN_IN_ANKERN):
                 return False
             gehalten = {x.geo for x in self.offene_jobs() if x.geo is not None}
             opfer = next((k for k in self.geo_reihe
@@ -3101,7 +3319,8 @@ class Dienst:
             del weg
             gc.collect()
             _log.warning(f"geometry {opfer[0]}x{opfer[1]} dropped under card "
-                        f"pressure (job {lauf.id}) — least recently used")
+                        f"pressure (job {lauf.id}, held {len(self.graphen)}, "
+                        f"cap {self.geometrien_max}) — least recently used")
             return True
 
     def ende_bitten(self, grund, schluessel=None):
@@ -3423,10 +3642,11 @@ class Dienst:
         except (TypeError, ValueError):
             _gm = 0
         if _gm > 0 and _gm != self.geometrien_max:
-            if _gm < self.geometrien_max:
-                _log.info(f"geometry cap lowered {self.geometrien_max} -> {_gm} "
-                            f"(job {job.get('id')}): the service recomputed it "
-                            f"against the card as it is NOW")
+            direction = "lowered" if _gm < self.geometrien_max else "raised"
+            _log.info(f"geometry cap {direction} {self.geometrien_max} -> {_gm} "
+                      f"(job {job.get('id')}, held {len(self.graphen)}): "
+                      f"the service recomputed it against the current card budget, "
+                      f"arena and protection mode")
             self.geometrien_max = _gm
         # .535: HIER STANDEN die Job-Felder der Preis-Messung (`eich_schluessel`,
         # `eich_fenster`, `eich_waechter_n`, `vram_grundlinie_mb`). Mit dem
@@ -3478,8 +3698,10 @@ class Dienst:
         # Zusatz-Geometrie), dann lohnt der zweite Anlauf. Der Wiederanlauf ist
         # verlustfrei, weil die Analyse ueber `results.jsonl` fortsetzt und
         # bereits geschriebene Labels nicht neu rechnet.
+        memory_denied = None
         for _versuch in (1, 2):
             ok, fehler, verwurf = True, None, None
+            memory_denied = None
             zusatz = {}
             try:
                 if lauf.typ != "analyze":
@@ -3524,7 +3746,10 @@ class Dienst:
                     verwurf = clipcache.verwurf_grund(e)
                 except Exception:                          # noqa: BLE001
                     verwurf = None
-                art = self.vram_druck_art(f"{type(e).__name__}: {e}")
+                if isinstance(e, _cuda_budget.MaterializationError):
+                    memory_denied = str(e)
+                art = ("karte_voll" if isinstance(e, _cuda_budget.MaterializationError)
+                       else self.vram_druck_art(f"{type(e).__name__}: {e}"))
                 if art:
                     # .544 M3a: EINE VOLLE KARTE IST NOCH KEIN VERLORENES
                     # EREIGNIS. `deckel` hat seit .531 einen zweiten Anlauf —
@@ -3596,6 +3821,8 @@ class Dienst:
         # Analyse-Jobs: ein Hintergrund-Job rechnet nicht auf der Karte, und
         # eine Zeile je Ping waere Rauschen.
         if lauf.typ == "analyze" and self.auf_karte():
+            # Ein erfolgreicher Warm-up-/Resume-/Fehljob ist kein Analysebeleg.
+            lauf._cuda_analysis_ok = ok and int((zusatz.get("frames") or {}).get("samples") or 0) > 0
             try:
                 self.vram_eigen_melden(lauf)
             except Exception as e:                         # noqa: BLE001
@@ -3701,6 +3928,9 @@ class Dienst:
         if haenger:
             # Das Feld, an dem der Dienst den Haenger-Schuss festmacht (verifyd.WorkerDienst.job).
             antwort["haenger"] = True
+        if memory_denied and not ok:
+            antwort.update(fremdverschuldet=True, todesursache="CUDA materialization deferred",
+                           todesursache_text=memory_denied, ende_schluessel=self.ende_schluessel)
         if neustart:
             # Felder wie in `annehmen` beim geordneten Ende: der Dienst stellt das Ereignis
             # zurueck und startet beim naechsten Job den frischen Prozess.

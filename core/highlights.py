@@ -12,10 +12,36 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.1.021"   # 0.1.1.021: Eigentuemer 16.10.2026 18:48:02 (Befehlsbuch): "Ja, Nummer 0.1.1.021 vorbereiten:
-                      # Box unveraendert, CHANGELOG-Entwurf englisch und deutsch an mich". Der Eintrag 0.1.1.020
-                      # wandert unveraendert auf 0.1.1.021; neu im Code ist Stufe R6 (Startzeile Schritt 6, offene
-                      # Liste O650).
+STAND = "0.1.1.027"   # 0.1.1.027: Eigentuemer 18.10.2026 21:43:03 (Befehlsbuch): "ok neuer cuda lauf mit neuer
+                      # version". Box unveraendert: nur STAND geht hoch, der Eintrag 0.1.1.021 bleibt; neu im Code
+                      # ist der Fix CUDA-Messpaare, Stufe MP1 des Bauplans analysen/bauplan_cuda_messpaare.md
+                      # (3d96cc44); 0.1.1.026 lief mit dem Code davor rot (Lauf 20261018_202733).
+                      # Davor 0.1.1.026: Eigentuemer 18.10.2026 20:24:58 (Befehlsbuch): "Ja, die Aenderungen an ED001 und
+                      # ED004 aus 0b848748 sind so freigegeben; Nummer 0.1.1.026 setzen und committen, dann den
+                      # cuda-Lauf starten." Box unveraendert: nur STAND geht hoch, der Eintrag 0.1.1.021 bleibt; neu
+                      # im Code ist die CUDA-Messsteuerung MS1/MS2 des Bauplans analysen/bauplan_cuda_messsteuerung.md
+                      # (0b848748, in einer Codex-Sitzung gebaut).
+                      # Davor 0.1.1.025: Eigentuemer 18.10.2026 16:42:24 (Befehlsbuch; aus einer OpenCode-Sitzung ueber
+                      # den Befehlsbuch-Hook eingetragen), Startzeile "Lauf starten cuda normal" mit Halt nach Stufe 4
+                      # Teil 1, zum vorbereiteten Ablauf "Nummer wie bei .024, Box und CHANGELOG-Text bleiben". Box
+                      # unveraendert: nur STAND geht hoch, der Eintrag 0.1.1.021 bleibt; neu im Code sind die Stufen
+                      # GB1 und GB2 des Bauplans analysen/bauplan_geometrien_messbudget.md (2d517fe4).
+                      # Davor 0.1.1.024: Eigentuemer 18.10.2026 13:50:35 "ja" (Befehlsbuch; aus einer OpenCode-Sitzung ueber
+                      # den Befehlsbuch-Hook eingetragen) zum Ablauf "Box und CHANGELOG-Text bleiben, nur die Nummer
+                      # ist neu". Box unveraendert: nur STAND geht hoch, der Eintrag 0.1.1.021 bleibt; neu im Code
+                      # ist Stufe WP1 des Bauplans analysen/bauplan_worker_performance.md (62323e54).
+                      # Davor 0.1.1.023: Eigentuemer 18.10.2026 09:38:20 (Befehlsbuch; aus einer OpenCode-Sitzung ueber
+                      # den Befehlsbuch-Hook eingetragen): "starte den release lauf nochmal normal neue version, whats
+                      # new und change log bleibt". Box unveraendert: nur STAND geht hoch, der Eintrag 0.1.1.021
+                      # bleibt; gleicher Produktcode wie 0.1.1.022 (dessen Lauf 20261018_091126 endete nach Test 1).
+                      # Davor 0.1.1.022: Eigentuemer 18.10.2026 09:03:38 (Befehlsbuch; aus einer OpenCode-Sitzung ueber
+                      # den Befehlsbuch-Hook eingetragen): "0.1.1.022 passt, whatsnew und change log beluibt es geht
+                      # nur um eine test". Box unveraendert: nur STAND geht hoch, der Eintrag 0.1.1.021 bleibt, die
+                      # Box erscheint nicht neu; neu im Code ist der Bauplan analysen/bauplan_feldtempo.md (T1 bis T3).
+                      # Davor 0.1.1.021: Eigentuemer 16.10.2026 18:48:02 (Befehlsbuch): "Ja, Nummer 0.1.1.021
+                      # vorbereiten: Box unveraendert, CHANGELOG-Entwurf englisch und deutsch an mich". Der Eintrag
+                      # 0.1.1.020 wandert unveraendert auf 0.1.1.021; neu im Code ist Stufe R6 (Startzeile Schritt 6,
+                      # offene Liste O650).
                       # Davor 0.1.1.020: neuer Eintrag, Eigentuemer 16.10.2026 13:14:16 und 13:26:00 (Befehlsbuch;
                       # Wortlaut und Herkunft am Eintrag 0.1.1.021 unten).
                       # Davor 0.1.1.019: Eigentuemer 16.10.2026 09:06:26 (Befehlsbuch): "Ja, die Box wandert

@@ -126,8 +126,8 @@ def env_arena_registrieren(deckel_mb, strategie=None):
     Initialisierung (inference_session.cc:2383-2388), eine spaeter registrierte
     Arena erreicht eine schon gebaute Session nicht mehr.
 
-    `deckel_mb <= 0` heisst AUSDRUECKLICH „kein Deckel" (Verhalten vor .531) und
-    wird gemeldet, nicht verschwiegen. `arena_cfg` ist nie None — der CUDA-Zweig
+    MS1: ohne positiven Deckel oder bei fehlgeschlagener Registrierung wird
+    der Start laut verweigert. `arena_cfg` ist nie None — der CUDA-Zweig
     dereferenziert sie ohne Pruefung (environment.cc:424)."""
     mb = max(0, int(deckel_mb or 0))
     strat = str(strategie or ARENA_STRATEGIE_VORGABE)
@@ -138,24 +138,20 @@ def env_arena_registrieren(deckel_mb, strategie=None):
         if _ENV_ARENA["registriert"]:
             return True
         if mb <= 0:
-            if not _ENV_ARENA["gemeldet"]:
-                _ENV_ARENA["gemeldet"] = True
-                _log.info("no VRAM cap — arena unbounded (pre-.531 behaviour)")
-            return False
+            _ENV_ARENA["fehler"] = "bounded CUDA arena required"
+            _log.error("CUDA worker not started: bounded arena required")
+            raise RuntimeError(_ENV_ARENA["fehler"])
         try:
             cfg = ort.OrtArenaCfg(mb * 1024 * 1024, ARENA_STRATEGIEN[strat], -1, -1)
             mi = ort.OrtMemoryInfo("Cuda", ort.OrtAllocatorType.ORT_ARENA_ALLOCATOR,
                                    GERAET_ID, ort.OrtMemType.DEFAULT)
             ort.create_and_register_allocator_v2(EP, mi, {}, cfg)
         except Exception as e:                           # noqa: BLE001
-            # LAUT, aber nicht toedlich: ohne Deckel laeuft der Prozess wie vor
-            # .531 weiter. Ein Prozess, der gar nicht startet, analysiert nichts —
-            # und /health zeigt `env_arena: false`, der Betreiber sieht es.
+            # MS1: kein unkontrollierter Start bei fehlgeschlagener Budgetanbindung.
             _ENV_ARENA["fehler"] = f"{type(e).__name__}: {e}"
             _log.error(f"ERROR: VRAM cap {mb} MiB could NOT be registered "
-                    f"({_ENV_ARENA['fehler']}) — running WITHOUT a cap "
-                    f"(pre-.531 behaviour)")
-            return False
+                    f"({_ENV_ARENA['fehler']}) — CUDA worker not started")
+            raise RuntimeError(_ENV_ARENA["fehler"]) from e
         _ENV_ARENA.update({"registriert": True, "deckel_mb": mb,
                            "strategie": strat, "geraet": GERAET_ID})
         _log.info(f"VRAM cap {mb} MiB registered on device {GERAET_ID} "

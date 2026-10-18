@@ -1,47 +1,12 @@
-"""core/vrampreise — was ein Rechenstrang auf DIESER Karte wirklich kostet.
+"""Speichert eigene CUDA-Gesamtspitzen über den bestehenden Zustandsspeicher.
 
-WOZU ES DIESE DATEI GIBT, in Feldzahlen (Feldtester-Log 21.09.2026,
-`dem Feldbefund vom 21.09.2026 (8-GB-Karte mit fuenf Waechtern; Analyse liegt im Repo unter analysen/, nicht im Image)` §4.1): seine GTX 1070 (8 GB) traegt fuenf
-Live-Waechter und eine Frigate-Instanz. Die Strang-Leiter rechnete gegen die
-Messtabelle aus `core.gpubudget` — 1940 MiB fuer den Prozess mit erster
-Geometrie, 1235 fuer die zweite — und verweigerte JEDEN Rechenstrang (3175 MiB
-Pflicht gegen 1929 MiB Budget). Die Erkennung war damit tot, und die Meldung
-schickte den Betreiber in seine `config.json`. Diese Tabelle ist am 15.09. auf
-einer RTX 2060 Mobile und einer RTX 3060 mit 4K-Clips entstanden; seine Kameras
-liefern 2560x1920 und 1080p. Die Preise einer fremden Karte mit fremden
-Bildgroessen als Mass der eigenen zu nehmen ist derselbe Fehler, den der
-Arena-Deckel schon einmal bezahlt hat (gpubudget.arena_deckel_mb).
-
-WAS HIER LIEGT: der KLEBRIGE Speicher der auf dieser Karte gemessenen Preise
-(`<data_dir>/state/vram_preise.json`, Muster `placement.json`: atomar
-geschrieben, Kopf mit Datum und Version) plus die Ableitung „aus
-Konstellations-Messungen werden Posten-Preise". Was hier NICHT liegt: das Messen
-selbst (das tut der Worker-Prozess mit der vorhandenen Sonde, s.
-`worker_dienst.SpeicherWache._preis_buchen`) und die Arithmetik der Leiter (die
-steht in `core.gpubudget`, und dort auch die Plausibilitaets-Regeln — EINE
-Stelle je Frage).
-
-DIE MESSGROESSE IST EIN PLATEAU, KEIN BAU-DELTA. Um einen Geometrie-Bau herum zu
-messen ist GEMESSEN falsch: onnxruntime allokiert traege, der Zuwachs faellt erst
-waehrend der ersten Analysen — 148 MiB gemessen gegen ~976 MiB wirklich
-(Begruendung im Kopf von `worker_dienst._staffel`). Zu kleine Preise machen die
-Leiter zu GROSS, also genau in die Richtung, die im Feld die Karte fuellt.
-Gebucht wird deshalb das MAXIMUM, das der Prozess ueber sein Leben hielt, und
-zwar je Konstellation (N Straenge x G gebaute Geometrien).
-
-WAS DER PROZESS NICHT SIEHT, und was deshalb dazukommt: das NVDEC-ffmpeg je
-Strang ist eine eigene pid (gpubudget.posten_ausserhalb_mb). Der gemessene
-Prozess-Anteil traegt es nicht; die Konstellations-Summe hier rechnet den
-gemessenen Decoder-Posten der Tabelle dazu (`DECODER_CUDA_MB`) und sagt das in
-ihrem Beleg auch — eine halb gemessene Zahl, die sich ganz gemessen nennt, waere
-die luegende Diagnose (K1).
-
-Kontrakt wie `core.lernlauf`: reine Funktionen, Pfade/Daten als Parameter, kein
-Dienst-Import, keine anlagenspezifischen Schwellen. Nichts hier wirft: eine
-kaputte oder fehlende Preis-Datei heisst „es gilt die Tabelle", nie ein Ausfall.
+MS1 ersetzt abgeleitete Prozess-/Strang-/Geometriepreise durch tatsächliche
+Gesamtzustände mit Formen und materialisierten Sätzen. Historische Einträge
+bleiben erhalten, werden aber ausdrücklich als unpassend ausgewiesen.
+Die bestehenden Zähler je Worker-Prozess und erlaubten Schreibzeitpunkte
+bleiben unverändert; Lesen bucht und schreibt keine Messung.
 """
 import json
-import math
 import os
 import tempfile
 import time
@@ -62,7 +27,7 @@ DATEI = "vram_preise.json"
 # hoechstens drei Geometrien (mehr haelt ein Prozess nicht, s. Messtabelle) —
 # abgeleitet, nicht gegriffen.
 KARTEN_MAX = 4
-KONSTELLATIONEN_MAX = _gb.STRAENGE_MAX * 3
+KONSTELLATIONEN_MAX = _gb.STRAENGE_MAX * _gb.STRAENGE_MAX
 
 
 def pfad(data_dir):
@@ -142,8 +107,8 @@ def buchen(stand, schluessel, kopf, proben, gesamt_mb=0, jetzt=None):
 
     `verworfen` traegt, was NICHT gebucht wurde, mit Grund. Verworfen wird
     grob-falsches (0, negativ, groesser als die Karte) — die feine Bewertung
-    („ist das schon ein Plateau?") macht `preise_ableiten` mit den Regeln aus
-    `core.gpubudget`, damit es fuer dieselbe Frage nicht zwei Regeln gibt."""
+    und die Zustandszuordnung prüft `gesamtzustaende`; eine Nachbarpreis-
+    oder Drei-Proben-Freigabe gibt es für CUDA nicht mehr."""
     d = dict(stand or {})
     d["schema"] = SCHEMA_VERSION
     karten = dict(d.get("karten") or {})
@@ -169,7 +134,8 @@ def buchen(stand, schluessel, kopf, proben, gesamt_mb=0, jetzt=None):
                              f"({int(gesamt_mb)} MiB)")
             continue
         alt = dict(kons.get(k) or {})
-        kons[k] = {"straenge": n, "geometrien": g,
+        kons[k] = {"messart": topf.get("messart"), "formen": topf.get("formen"),
+                   "straenge": n, "geometrien": g,
                    "max_mb": max(int(alt.get("max_mb") or 0), mb),
                    "proben": int(alt.get("proben") or 0) + pn,
                    "zuerst": alt.get("zuerst") or round(float(jetzt or time.time()), 1),
@@ -191,93 +157,67 @@ def buchen(stand, schluessel, kopf, proben, gesamt_mb=0, jetzt=None):
     return d, gebucht, verworfen
 
 
-def konstellations_preis_mb(mb, n_straenge):
-    """WAS EINE KONSTELLATION KARTENWEIT KOSTET -> MB, aus dem gemessenen
-    Prozess-Anteil.
+def counters_merge(alt, proben, jetzt=None):
+    """Die Meldung EINES Worker-Prozesses in seine Zaehler legen (Bauplan Feldtempo, T-E4).
+    -> (zaehler, geaendert): {"proben": {konstellation: topf}, "ts": …} und ob sich eine Zahl geaendert hat.
 
-    Zwei Zuschlaege, beide mit Quelle:
-      * die 10 % Sicherheit, die der Inhaber-Entscheid vom 15.09. auf JEDEN
-        Posten der Messtabelle gelegt hat (`gpubudget.PREIS_SICHERHEIT`) — ein
-        gemessenes Maximum ist genauso ein Maximum;
-      * je Strang das NVDEC-ffmpeg, das eine EIGENE pid hat und im
-        Prozess-Anteil deshalb fehlt (`gpubudget.DECODER_CUDA_MB`, gemessen).
-    Damit steht die Zahl im selben Mass wie die Tabellen-Summe: kartenweit,
-    Decoder inbegriffen."""
-    roh = math.ceil(int(mb or 0) * _gb.PREIS_SICHERHEIT)
-    return int(roh) + max(1, int(n_straenge or 1)) * int(_gb.DECODER_CUDA_MB)
+    Der Worker meldet mit jeder Antwort die Summe seit SEINEM Start, also wiederholt sich
+    dieselbe Zahl. Gefuehrt wird deshalb je Konstellation nur der HOECHSTE Probenzaehler und
+    das HOECHSTE `max_mb`: eine wiederholte oder verspaetete Meldung mit kleinerem oder gleichem
+    Zaehler aendert nichts. `ts` ist der Moment der letzten Aenderung, nicht der letzten
+    Meldung — ein Zeitstempel allein ist keine neue Zahl (T-E6). Ein unlesbarer Topf wird so
+    abgelegt, wie er kam; verworfen wird er mit Grund in `buchen`, an EINER Stelle."""
+    toepfe = {k: dict(v) if isinstance(v, dict) else v
+              for k, v in ((alt or {}).get("proben") or {}).items()}
+    geaendert = False
+    for k, topf in (proben or {}).items():
+        vorher = toepfe.get(k)
+        try:
+            mb = int((topf or {}).get("max_mb") or 0)
+            pn = int((topf or {}).get("proben") or 0)
+            neu = dict(topf, max_mb=max(mb, int((vorher or {}).get("max_mb") or 0)),
+                       proben=max(pn, int((vorher or {}).get("proben") or 0)))
+        except (TypeError, ValueError, AttributeError):
+            neu = topf
+        if neu != vorher:
+            toepfe[k] = neu
+            geaendert = True
+    ts = (round(float(jetzt or time.time()), 1) if geaendert
+          else (alt or {}).get("ts"))
+    return {"proben": toepfe, "ts": ts}, geaendert
 
 
-def preise_ableiten(stand, schluessel, gesamt_mb=0):
-    """AUS KONSTELLATIONS-MESSUNGEN POSTEN-PREISE -> (preise, verworfen)
+def total(start, schluessel, kopf, prozesse, gesamt_mb=0):
+    """DIE EINE SUMME aus dem Stand beim Dienststart und den Zaehlern aller Prozesse (T-E5).
+    -> (stand, verworfen); `start` und `prozesse` bleiben unveraendert.
 
-    `preise` ist das, was `gpubudget.preise_wirksam` erwartet:
-    {"prozess": {"mb": …, "datum": …, "proben": …, "beleg": …}, …}. Fehlt ein
-    Posten, bleibt er weg — dann gilt dort die Tabelle.
-
-    NUR BENACHBARTE MESSUNGEN, nie Messung minus Tabellenwert:
-        prozess    = K(1,1)                      (ein Strang, eine Geometrie)
-        geometrie  = K(1,2) - K(1,1)             (dieselbe Strangzahl)
-        strang     = K(n+1,g) - K(n,g)           (dieselbe Geometriezahl)
-    Eine Differenz aus gemessen minus Tabelle waere eine halb gemessene Zahl,
-    die niemand mehr einordnen kann — und sie koennte negativ werden.
-
-    Jeder abgeleitete Preis laeuft durch `gpubudget.preis_pruefen` (Untergrenze,
-    Kartengroesse, Mindest-Stuetzstellen). Was durchfaellt, steht in
-    `verworfen` — mit Grund, damit der Aufrufer es LAUT sagen kann."""
-    eintrag = ((stand or {}).get("karten") or {}).get(schluessel) or {}
-    kons = eintrag.get("konstellationen") or {}
-    if not kons:
-        return {}, []
-
-    def _k(n, g):
-        t = kons.get(f"{n}x{g}")
-        if not t or int(t.get("max_mb") or 0) <= 0:
-            return None
-        return t
-
-    preise, verworfen = {}, []
-
-    def _nimm(art, mb, quellen, beleg):
-        proben = min(int((q.get("proben") or 0)) for q in quellen)
-        datum = max(str(q.get("datum") or "") for q in quellen)
-        ok, grund = _gb.preis_pruefen(art, mb, gesamt_mb, proben)
-        if not ok:
-            verworfen.append(f"{art}: {grund}")
-            return
-        preise[art] = {"mb": int(mb), "datum": datum, "proben": proben,
-                       "beleg": beleg}
-
-    basis = _k(1, 1)
-    if basis is not None:
-        _nimm("prozess", konstellations_preis_mb(basis["max_mb"], 1), [basis],
-              "measured plateau of one thread with one geometry on this card "
-              "(+10% safety, plus the table's decoder posten)")
-    # Geometrie: dieselbe Strangzahl, eine Aufloesung mehr.
-    for n in range(1, _gb.STRAENGE_MAX + 1):
-        a, b = _k(n, 1), _k(n, 2)
-        if a is None or b is None:
+    Dieselbe Rechnung fuer Planung und Datei: die Planung rechnet damit ohne Dateizugriff, und
+    in die Datei kommt genau diese Summe — nie das Buchen eines einzelnen Prozesses. Eine
+    Meldung, die nach einem Schreiben noch fuer einen alten Prozess ankommt, ist beim naechsten
+    Schreiben dabei, und nichts zaehlt doppelt, weil `start` waehrend der Lebenszeit des
+    Dienstes derselbe bleibt. `prozesse` ist {startnummer: zaehler aus `counters_merge`}."""
+    stand, verworfen = start or {}, []
+    for nr in sorted(prozesse or {}):
+        z = (prozesse or {}).get(nr) or {}
+        if not z.get("proben"):
             continue
-        _nimm("geometrie",
-              konstellations_preis_mb(b["max_mb"], n)
-              - konstellations_preis_mb(a["max_mb"], n), [a, b],
-              f"difference between {n} thread(s) with two geometries and with "
-              f"one, measured on this card")
-        break
-    # Strang: dieselbe Geometriezahl, ein Strang mehr.
-    for g in (2, 1, 3):
-        for n in range(1, _gb.STRAENGE_MAX):
-            a, b = _k(n, g), _k(n + 1, g)
-            if a is None or b is None:
-                continue
-            _nimm("strang",
-                  konstellations_preis_mb(b["max_mb"], n + 1)
-                  - konstellations_preis_mb(a["max_mb"], n), [a, b],
-                  f"difference between {n + 1} and {n} thread(s) at {g} "
-                  f"geometry/ies, measured on this card")
-            break
-        if "strang" in preise:
-            break
-    return preise, verworfen
+        stand, _gebucht, v = buchen(stand, schluessel, kopf, z["proben"],
+                                    gesamt_mb=gesamt_mb, jetzt=z.get("ts"))
+        verworfen.extend(v)
+    return stand, verworfen
+
+
+def numbers(stand):
+    """Die Zahlen eines Stands ohne Zeitstempel und Kopf (T-E6) -> dict.
+    Gleich heisst: ein Schreiben aenderte keine Zahl in der Datei."""
+    aus = {}
+    for s, eintrag in ((stand or {}).get("karten") or {}).items():
+        kons = (eintrag or {}).get("konstellationen") or {}
+        if kons:
+            aus[s] = {k: tuple((t or {}).get(f) for f in ("straenge", "geometrien",
+                                                         "max_mb", "proben"))
+                      for k, t in kons.items()}
+    return aus
 
 
 def stand_zeigen(stand, schluessel):
@@ -290,6 +230,31 @@ def stand_zeigen(stand, schluessel):
             "geschrieben": (stand or {}).get("geschrieben"),
             "konstellationen": {k: {"max_mb": v.get("max_mb"),
                                     "proben": v.get("proben"),
-                                    "datum": v.get("datum")}
+                                    "datum": v.get("datum"),
+                                    "messart": v.get("messart") or "historical",
+                                    "formen": v.get("formen")}
                                 for k, v in sorted(kons.items())},
             "karten_bekannt": len(((stand or {}).get("karten") or {}))}
+
+
+def gesamtzustaende(stand, schluessel, gesamt_mb):
+    """Liest gültige eigene CUDA-Gesamtspitzen ohne Zuschlag oder Nachbarpaare.
+    -> (Zustände, Gründe); historische unmarkierte Messungen bleiben erhalten."""
+    kons = ((((stand or {}).get("karten") or {}).get(schluessel) or {})
+            .get("konstellationen") or {})
+    states, rejected = {}, []
+    for key, value in kons.items():
+        mb = value.get("max_mb")
+        forms = value.get("formen")
+        valid_forms = (isinstance(forms, list) and len(forms) == value.get("geometrien")
+                       and all(isinstance(form, (list, tuple)) and len(form) == 3
+                               and all(type(v) is int for v in form)
+                               and form[0] > 0 and form[1] > 0
+                               and 0 <= form[2] <= _gb.STRAENGE_MAX for form in forms)
+                       and max((form[2] for form in forms), default=0) == value.get("straenge"))
+        if (not valid_forms or value.get("messart") != "cuda_total_v1" or not value.get("formen")
+                or type(mb) is not int or not 0 < mb <= gesamt_mb):
+            rejected.append(f"{key}: historical, incompatible or invalid total state")
+            continue
+        states[key] = dict(value)
+    return {"zustaende": states}, rejected

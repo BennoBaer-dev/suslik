@@ -517,7 +517,7 @@ def _sonde_cuda():
         # 16.09. — unabhaengig davon, ob genau dieses Werkzeug stdin liest.
         r = subprocess.run(
             ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total,"
-             "temperature.gpu", "--format=csv,noheader,nounits"],
+             "temperature.gpu,memory.free", "--format=csv,noheader,nounits"],
             stdin=subprocess.DEVNULL,
             # .531: 2 s statt 8. Diese Sonde haengt seit .529 am ABSETZWEG jedes
             # Jobs (verifyd: worker_fussabdruck_max_mb/worker_geometrien_max) und
@@ -530,6 +530,8 @@ def _sonde_cuda():
             capture_output=True, text=True, timeout=2)
     except FileNotFoundError:
         return _fehlt("werkzeug_fehlt")
+    except subprocess.TimeoutExpired:
+        return dict(_fehlt("nicht_lesbar"), messgrund="timeout")
     except Exception:                                        # noqa: BLE001
         _logbuch.swallowed(_log, _logbuch.WARNING, "returning _fehlt('nicht_lesbar')")
         return _fehlt("nicht_lesbar")
@@ -541,7 +543,8 @@ def _sonde_cuda():
         return {"prozent": float(teile[0]), "grund": None,
                 "speicher_mb": int(float(teile[1])),
                 "speicher_max_mb": int(float(teile[2])),
-                "temperatur_c": int(float(teile[3]))}
+                "temperatur_c": int(float(teile[3])),
+                "speicher_frei_mb": int(float(teile[4]))}
     except Exception:                                        # noqa: BLE001
         _logbuch.swallowed(_log, _logbuch.WARNING, "returning _fehlt('nicht_lesbar')")
         return _fehlt("nicht_lesbar")
