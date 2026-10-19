@@ -5,6 +5,15 @@ never pushed to GHCR; they ship bundled with the next release (each release entr
 says which steps it bundles). This file keeps the last five releases; the full record lives in the
 [GitHub releases](https://github.com/BennoBaer-dev/suslik/releases) and the git history.
 
+## 0.1.1.028 (2026-10-19)
+
+Shorter wait before each analysis. To find the known persons, the service no longer copies the whole reference
+catalog for every event and no longer re-reads it after every new candidate set. It builds the name list once per
+reference state and shares it; only a change that touches a reference makes it read again. On a large tester catalog
+(13,685 sets) a lookup took 0.4 s alone and 9.5 s with six analysis slots at once; it now takes under 1 ms. With debug
+on, the `zeit:` line in the log ends with a new column `vorlauf`: the time from taking a slot to the start of the
+analysis.
+
 ## 0.1.1.027 (2026-10-18)
 
 Less overhead per event. The worker re-reads the reference matrix only when a catalog change affects it,
@@ -330,31 +339,3 @@ key feature here, the work went into recognition staying up.
   reason, current sample) is now a field in `/health` instead of only appearing in the
   text of the calculation. A live watcher that was taken off the net and that you
   switch back on yourself is no longer listed as reduced afterwards.
-
-## 0.1.0.543 (2026-09-20)
-
-Two fixes, both from the field. The What's-new box carries one entry for this
-version — a personal note from the author; the wording of the two fix entries is
-still the owner's decision.
-
-- **The card-memory reserve now reaches the worker process** (reported by
-  Pranz187, issue #32). `worker_vram_reserve_mb` under Advanced took effect where
-  the service plans the worker's budget, but not in the two runtime guards inside
-  the worker process. Those always measured the free card memory against the
-  automatic value instead. Anyone who lowered the reserve got the larger budget
-  they asked for and, on the same card, pressure reports and orderly restarts
-  measured against the old, larger formula reserve. The setting now travels with
-  the worker as a start argument, both guards use it, and `/health` shows which
-  value the running process measures against. Semantics are unchanged: -1
-  automatic, 0 no reserve at all, larger than the card is clamped to the card.
-- **A GPU hang on the host no longer costs an hour of recognition.** When the
-  host's graphics driver resets the GPU (an i915 `GPU HANG` on Intel, seen twice
-  on our own machine), the compute context of the worker process is dead for
-  good: every analysis after that fails, and no in-process recovery is reliable
-  for this class. Until now the service kept trying until something else
-  restarted the process — up to 80 minutes of failed analyses, while the health
-  page still reported OK. Now three failed live analyses in a row pull up a fresh
-  worker process (at most one restart per 10 minutes, so a permanent fault cannot
-  become a restart loop), and `/health` reports `ok: false` with the reason in a
-  new `analyse_serie` block until an analysis succeeds again. Events hit by the
-  restart are not booked as failures — they go back into the queue.

@@ -12,7 +12,12 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.1.027"   # 0.1.1.027: Eigentuemer 18.10.2026 21:43:03 (Befehlsbuch): "ok neuer cuda lauf mit neuer
+STAND = "0.1.1.028"   # 0.1.1.028: Eigentuemer 19.10.2026 11:35:52 (Befehlsbuch): "ja" auf die Frage "Soll ich die
+                      # Nummer 0.1.1.028 setzen und den Lauf fuer cuda und gpu vorbereiten?". Box unveraendert: nur
+                      # STAND geht hoch, der Eintrag 0.1.1.021 bleibt; neu im Code ist die Namensliste je
+                      # Referenz-Stand, Stufe N1 des Bauplans analysen/bauplan_namensliste.md (c5a734ca), mit dem
+                      # Nachzug G1 an der Probe (160fef23).
+                      # Davor 0.1.1.027: Eigentuemer 18.10.2026 21:43:03 (Befehlsbuch): "ok neuer cuda lauf mit neuer
                       # version". Box unveraendert: nur STAND geht hoch, der Eintrag 0.1.1.021 bleibt; neu im Code
                       # ist der Fix CUDA-Messpaare, Stufe MP1 des Bauplans analysen/bauplan_cuda_messpaare.md
                       # (3d96cc44); 0.1.1.026 lief mit dem Code davor rot (Lauf 20261018_202733).

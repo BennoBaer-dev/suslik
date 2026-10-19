@@ -2720,9 +2720,11 @@ def master_persons(cfg):
     """Personenliste (AP1) — Frigate-unabhaengig. Seit E3b-2a (Bauplan analysen/bauplan_refquelle_einbau.md,
     Stufe E3 Punkt 2, Entscheid 6) aus der Referenz-Quelle statt aus den Ordnern unter faces/: die Personen mit
     mindestens einer aktiven Bindung an einen Satz mit Status referenz oder altbestand (Lese-Stufe b, Feld
-    personen). Bis zum Umzug (E4) fehlt der Altbestand aus faces/ (Entscheid 16). -> sortierte Namensliste"""
+    personen). Bis zum Umzug (E4) fehlt der Altbestand aus faces/ (Entscheid 16). Seit Bauplan
+    analysen/bauplan_namensliste.md N1 ueber die Lese-Stufe „Personen" (refquelle.persons_view: dieselbe Auswahl, einmal
+    je Referenz-Stand gebildet, ohne Kopie des Katalogs je Aufruf). -> sortierte Namensliste (je Aufruf eine neue)"""
     from core import refquelle as _rq_mp
-    return sorted(_rq_mp.read_catalog({"data_dir": cfg["data_dir"]})["personen"])
+    return sorted(_rq_mp.persons_view({"data_dir": cfg["data_dir"]}))
 
 
 def master_umfang(cfg):
@@ -2731,9 +2733,10 @@ def master_umfang(cfg):
     oeffentlich (Issue-Anhaenge, Foren), Bewohnernamen haben dort nichts zu
     suchen. Seit E3b-2a aus der Referenz-Quelle (Lese-Stufe b, dieselbe Auswahl
     wie master_persons); eine Person zaehlt nur mit einem Satz, eine Person ohne
-    Referenz gibt es deshalb nicht (E3c-1, O576 b). -> (int, int)"""
+    Referenz gibt es deshalb nicht (E3c-1, O576 b). Seit Bauplan analysen/bauplan_namensliste.md N1 ueber die
+    Lese-Stufe „Personen" (refquelle.persons_view, wie master_persons). -> (int, int)"""
     from core import refquelle as _rq_mu
-    personen = _rq_mu.read_catalog({"data_dir": cfg["data_dir"]})["personen"]
+    personen = _rq_mu.persons_view({"data_dir": cfg["data_dir"]})
     return len(personen), sum(len(r) for r in personen.values())
 
 
@@ -14733,7 +14736,7 @@ class Service:
                              f"{st.get('geometrien_rechenweg')}")
 
     def _zeitprotokoll(self, eid, entry, ainfo, einge_ts, z_platz, z_schreiben,
-                       warte_s, z_ende=None, z_analyse=None):
+                       warte_s, z_ende=None, z_analyse=None, z_vorlauf=None):
         """EINE BILANZZEILE JE EREIGNIS (.534 B5, Schalter `zeitprotokoll`).
 
         DER ANLASS, in Zahlen: im Lasttest vom 15.09. lief die Karte waehrend
@@ -14757,6 +14760,10 @@ class Service:
           gesamt       Platz belegt -> Platz frei
           nacharbeit   Rueckkehr aus run_analyze -> Verlassen der Platz-Klammer
                        (Bauplan Feldstau Stufe 5.4, Widerleger-Fund 13)
+          vorlauf      Platz belegt -> Analysestart (`z_vorlauf`, genommen direkt
+                       vor „analysis running"; Bauplan analysen/bauplan_namensliste.md
+                       N1); ohne `z_vorlauf` „vorlauf n/a". Steht am Ende der Zeile,
+                       damit die Spalten davor bleiben, wo sie waren.
 
         Feldstau Stufe 5.4: process() ruft diese Funktion beim VERLASSEN der
         Platz-Klammer (Marke, Klammer und Platz sind zurueckgegeben) und reicht
@@ -14802,7 +14809,9 @@ class Service:
                      f"schreiben {schreiben} s",
                      f"gesamt {gesamt} s",
                      (f"nacharbeit {round(max(0.0, aufruf - z_analyse), 2)} s"
-                      if z_analyse is not None else "nacharbeit n/a")]
+                      if z_analyse is not None else "nacharbeit n/a"),
+                     (f"vorlauf {round(max(0.0, z_vorlauf - z_platz), 2)} s"
+                      if z_vorlauf is not None else "vorlauf n/a")]
             if zt.get("kompilat_s"):
                 teile.insert(4, f"bau {zt['kompilat_s']} s")
             self.log.debug(f"zeit: {eid} " + " | ".join(teile))
@@ -22193,6 +22202,7 @@ class Service:
             # tools/proben/mess_gleichzeitigkeit.py), rechnen den Anfang seither
             # aus der Urteilszeile zurueck (Urteilszeit minus dauer_s) und
             # brauchen diese Zeile nicht mehr.
+            _z_vorlauf = time.monotonic()      # Bauplan Namensliste N1: Ende des Vorlaufs (Spalte vorlauf)
             self.log.debug(f"{eid} ({camera}, Frigate={f_label} {f_score}): analysis running ...")
             # Ketten-Schalter (Issue #21): Stufe EINMAL je Lauf lesen. "aus"
             # ueberspringt den Koerper-Strang an der QUELLE (kein --koerper im
@@ -22776,7 +22786,7 @@ class Service:
             # steht erst beim Verlassen der Platz-Klammer, mit `nacharbeit` (Feldstau 5.4).
             _ausgang.callback(self._zeitprotokoll, eid, entry, _ainfo, einge_ts, _z_platz,
                               _z_schreiben, _warte_s, z_ende=time.monotonic(),
-                              z_analyse=_z_analyse)
+                              z_analyse=_z_analyse, z_vorlauf=_z_vorlauf)
             self.log.info(f"{eid}: {kategorie} [v1:{kategorie_v1}"
                      + (f" on {', '.join(confirmed_v1) or 'unknown'}"
                         if set(confirmed_v1 or []) != set(confirmed or []) else "")
