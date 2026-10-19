@@ -361,7 +361,12 @@ class SetWriter:
             self._refuse(f"{type(e).__name__}: {e}")
             return None
         self.n["geschrieben" if r["neu"] else "schon_da"] += 1
-        self.zeiten.append(time.perf_counter() - t0)
+        dauer = time.perf_counter() - t0
+        self.zeiten.append(dauer)
+        # Bauplan analysen/bauplan_vorlauf_diagnose.md, Stufe D1, Stempel 8: Dauer des Satzes samt Warten auf die
+        # Ordner-Sperre (deren Warten und Halten nennt core.refquelle.basis.locked kurz davor, im selben Faden)
+        _log.debug(f"timing harvest {self.ctx.get('eid')}: set write {dauer * 1000.0:.1f} ms "
+                   f"({'new' if r['neu'] else 'already there'})")
         return r["ref_id"]
 
     def write_held(self, frame, box, kps, shot):

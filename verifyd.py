@@ -8103,7 +8103,8 @@ class Service:
         # Read-Rewrite-Replace MUSS unter self.lock: sonst kann eine Zeile, die process()
         # zwischen Lesen und Ersetzen anhaengt, verlorengehen (Bestandsfehler). Fuer den
         # Nachhol-Zaehler waere das fatal — Versuch verbraucht, Ergebniszeile weg.
-        with self.lock:
+        # Bauplan Vorlauf-Diagnose D1, Stempel 8: dieselbe self.lock, Warten und Halten als DEBUG nach dem Freigeben.
+        with self._sperre_gemessen("deckung rotate"):
             # Bauplan Feldstau Stufe 5.5: die Dauer unter self.lock (Lesen, Archiv, Neu-
             # Schreiben mit fsync) steht in der Abschluss-Zeile — derselbe Blockade-Weg wie die
             # Nachkorrektur, monatlich; der Umbau ist bewusst nicht Teil (Klaerungspunkt 2).
@@ -9720,11 +9721,18 @@ class Service:
         try:
             _ed = os.path.join(self.cfg["data_dir"], "events", str(eid))
             _rp = os.path.join(_ed, "results.jsonl")
-            if os.path.exists(_rp):
+            _t0 = time.monotonic()             # Bauplan Vorlauf-Diagnose D1, Stempel 3c: exists und replace
+            _da = os.path.exists(_rp)
+            _t1 = time.monotonic()
+            if _da:
                 os.replace(_rp, os.path.join(
                     _ed, f"results.vor_reanalyse_{int(time.time())}.jsonl"))
+                _t2 = time.monotonic()
                 self.log.info(f"{eid}: previous results set aside — re-analysis "
                          f"computes fresh (support request)")
+            self.log.debug(f"timing set aside: {eid} exists {(_t1 - _t0) * 1000.0:.1f} ms, replace "
+                           + (f"{(_t2 - _t1) * 1000.0:.1f} ms" if _da else "none (no previous results)")
+                           + f", thread {threading.current_thread().name}")
         except OSError as _e:
             self.log.error(f"{eid}: could not set previous results aside "
                      f"({type(_e).__name__}: {_e}) — analyze may resume the old file")
@@ -21275,7 +21283,10 @@ class Service:
         (tools/qs.sh), dort gibt es `_laufend` nicht — dann laeuft der Guard wie vor
         A3, statt mit AttributeError zu sterben. Ein Token bekommt der Aufrufer auch
         dann, sonst kaeme keine Analyse mehr durch."""
-        with self.lock:                       # Guard + Marke + Aktivitaetsmarke atomar
+        # Bauplan Vorlauf-Diagnose D1, Stempel 3a: dieselbe self.lock, Warten und Halten als DEBUG nach dem Freigeben;
+        # D1b: die Zeile nur, wenn das Ereignis weiterlaeuft (Token), beide Absagen bleiben ohne Stempel
+        sperre = {}
+        with self._sperre_gemessen("entry", eid, mass=sperre):  # Guard + Marke + Aktivitaetsmarke atomar
             laufend = getattr(self, "_laufend", None)
             if eid in self.processed and not nachhol:
                 return None                   # Nachhol darf hier vorbei, OHNE processed
@@ -21290,6 +21301,7 @@ class Service:
         if doppelt:                           # Logzeile bewusst OHNE den Lock
             self.log.warning(f"{eid}: already being analysed by another slot — skipped")
             return None
+        self.log.debug(self._sperre_zeile("entry", eid, sperre))
         return token
 
     def _analyse_beendet(self, eid, token):
@@ -21343,6 +21355,39 @@ class Service:
         finally:
             if token is not None:
                 self._analyse_beendet(eid, token)
+
+    @contextlib.contextmanager
+    def _sperre_gemessen(self, stelle, eid=None, mass=None):
+        """Service.lock nehmen wie `with self.lock` (dieselbe RLock, dieselbe Reihenfolge) und Warten und Halten
+        messen (Bauplan analysen/bauplan_vorlauf_diagnose.md, Stufe D1, Stempel 3 und 8).
+        -> Kontext mit dem dict der Werte; ohne `mass` steht nach dem Freigeben eine DEBUG-Zeile, mit `mass`
+        traegt der Aufrufer die Werte und schreibt die Zeile, wenn kein Messpunkt mehr folgt."""
+        werte = {} if mass is None else mass
+        t0 = time.monotonic()
+        with self.lock:
+            t1 = time.monotonic()
+            try:
+                yield werte
+            finally:
+                werte.update(warten_ms=(t1 - t0) * 1000.0, halten_ms=(time.monotonic() - t1) * 1000.0,
+                             faden=threading.current_thread().name)
+        if mass is None:
+            self.log.debug(self._sperre_zeile(stelle, eid, werte))
+
+    @staticmethod
+    def _sperre_zeile(stelle, eid, werte):
+        """Der Text eines Sperr-Stempels (Stufe D1, Stempel 3 und 8): Stelle, Ereignis, Warten, Halten, Faden.
+        -> str"""
+        return (f"timing lock {stelle}: {eid or '-'} wait {werte['warten_ms']:.1f} ms, "
+                f"held {werte['halten_ms']:.1f} ms, thread {werte['faden']}")
+
+    def _nacharbeit_zeile(self, eid, marken, sperre):
+        """Stempel 7 und 3b der Stufe D1 nach dem Verlassen der Platz-Klammer: die Abschnitte nach der Analyse
+        je in ms (Name am Ende des Abschnitts) und die Sperre der Akte-Zeile. -> None"""
+        teile = [f"{name} {(t - vor) * 1000.0:.1f} ms" for (_n, vor), (name, t) in zip(marken, marken[1:])]
+        self.log.debug(f"timing aftermath: {eid} " + " | ".join(teile))
+        if sperre:
+            self.log.debug(self._sperre_zeile("record", eid, sperre))
 
     def worker_health(self):
         """DER ZUSTAND DES WORKER-PROZESSES fuer /health (E3.3/E3.4) — rein lesend,
@@ -22189,12 +22234,20 @@ class Service:
                         self.log.debug(f"{eid} ({camera}): skipped (live watcher "
                                    f"covers this camera)")
                         return None
+            _t_namen = time.monotonic()        # Bauplan Vorlauf-Diagnose D1: Ende Stempel 5, Anfang Stempel 1
             persons = master_persons(cfg)    # AP1: aus dem Master, nicht mehr /api/faces
+            _t_namen_ende = time.monotonic()   # D1: Ende Stempel 1 (Namensliste samt Logzeile und sorted)
             if not persons:
                 self.log.warning(f"{eid}: reference master empty — sync_refs.py import needed (no processed entry)")
                 return None
             event_dir = os.path.join(cfg["data_dir"], "events", eid.replace("/", "_"))
+            _t_ordner = time.monotonic()       # D1: Stempel 2 nur um os.makedirs
             os.makedirs(event_dir, exist_ok=True)
+            _t_ordner_ende = time.monotonic()
+            # D1: Stempel 5, 1 und 2 in EINER Zeile nach dem letzten Messpunkt, im Log direkt vor „analysis running“
+            self.log.debug(f"timing prelude: {eid} start {(_t_namen - _z_platz) * 1000.0:.1f} ms | "
+                           f"names {(_t_namen_ende - _t_namen) * 1000.0:.1f} ms | "
+                           f"event folder {(_t_ordner_ende - _t_ordner) * 1000.0:.1f} ms")
             # .511: Anfangsmarke der Analyse — reine Buchhaltung, das Ergebnis
             # kommt als eigene (immer sichtbare) Urteilszeile mit derselben eid
             # und der Rechenzeit. Die zwei Messwerkzeuge, die frueher Anfang und
@@ -22283,6 +22336,7 @@ class Service:
                               clip_alter_min=_clip_alter_min(
                                   ev.get("end_time"), ev.get("start_time")))
             _z_analyse = time.monotonic()      # Feldstau 5.4: Rueckkehr aus run_analyze
+            _m7 = [("analysis", _z_analyse)]   # Bauplan Vorlauf-Diagnose D1, Stempel 7: Marken der Nacharbeit
             _warte_s = float(_ainfo.get("wartezeit_s") or 0.0)
             # E3.3 (W2-B4/B5): den Rueckweg SOFORT bedienen, vor jedem anderen
             # Zweig. Jeder Ausgang unter dieser Zeile kann `return` sein, und der
@@ -22708,11 +22762,16 @@ class Service:
             # 600s) und die Szenen-Karenz kann fuer ein altes Event nicht mehr entschaerfen
             # (last_seen haelt nur den juengsten ts). Ein nachgeholter Alarm waere meist falsch UND
             # wuerde die Drossel fuer einen echten Live-Alarm verbrennen.
+            _m7.append(("verdict", time.monotonic()))
             entry["alerted"] = False if nachhol else self._maybe_alert(entry, event_dir)
+            _m7.append(("alert", time.monotonic()))
             entry["presence_push"] = False if nachhol else self._maybe_presence(entry, event_dir)
+            _m7.append(("presence", time.monotonic()))
             entry["sublabel"] = self._maybe_sublabel(entry, nachhol=nachhol)
+            _m7.append(("sublabel", time.monotonic()))
             if not nachhol:
                 self.publish_erkennung(entry)     # kein Live-Echo fuer alte Ereignisse
+                _m7.append(("mqtt", time.monotonic()))
                 # PE4 (stufe2.md): Koerper-Strang — eigener, losgeloester
                 # Urteilsweg, nur wenn der User ihn scharf geschaltet hat;
                 # laeuft im Daemon-Thread, blockiert den Gesichts-Pfad nie.
@@ -22755,6 +22814,7 @@ class Service:
                 # Telegram, als stuende die Person gerade vor der Tuer
                 # (Live-Bug 09.08. 08:19).
                 self._person_live(entry.get("eid"), entry, still=True)
+            _m7.append(("person", time.monotonic()))
             # .408 Anwesenheits-Marke (Konzept §3, Quelle A): zwischen fertigem
             # entry und dem Akte-Append, UNABHAENGIG von nachhol — der
             # Nachhol-Lauf repariert die Akte, und die Marke gehoert zur Akte
@@ -22763,11 +22823,15 @@ class Service:
             # kategorie fehler -> Luecken-Marke; ein Schreibfehler kostet nie
             # die Analyse (Zaehler + Log-Zeile im Modul).
             _anw.akte_zeile_markieren(cfg, entry, log=self.log)
+            _m7.append(("presence mark", time.monotonic()))
             _z_schreiben = time.monotonic()
-            with self.lock, open(self.log_path, "a") as f:
+            _sp3b = {}                         # D1, Stempel 3b: dieselbe self.lock, die Zeile kommt erst am Ausgang
+            with self._sperre_gemessen("record", eid, _sp3b), open(self.log_path, "a") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
                 f.flush()
+            _m7.append(("record", time.monotonic()))
             with self.lock: self.processed.add(eid)
+            _m7.append(("processed", time.monotonic()))
             # Bauplan analysen/bauplan_fix_0113.md Entscheid 7, Stufe F4 Punkt 3: nach der Buchung ein Zeiger auf den
             # Unbekannt-Stapel des Ereignisses (die Stapel-Datei ist die Aufzeichnung, gelesen ueber die eine
             # Lesefunktion), nur wenn sie mindestens eine Gruppe nennt; ein Schreibfehler kostet nie die Analyse.
@@ -22777,16 +22841,26 @@ class Service:
                 from core import harvest_set as _hs_us
                 from core import unbekannt_verbraucher as _uv_us
                 _us_n = sum(len(z.get("gruppen") or []) for z in _hs_us.event_unknown(event_dir))
+                _m7.append(("unknown read", time.monotonic()))
                 if _us_n:
                     _uv_us.schlange_anhaengen(cfg, entry, event_dir, _us_n, dict(self.last_seen))
                     self.unbekannt_wecken()           # Stufe V1b: der Verbraucher-Faden liest die Zeile, meldet je Durchgang
+                _m7.append(("unknown queue", time.monotonic()))
             except Exception as e:
                 self.log.error(f"{eid}: unknown-face queue line not written: {e}")
+            # D1, Stempel 7 und 3b: VOR der zeit:-Zeile angehaengt, also (ExitStack, letzter zuerst) nach ihr
+            # geschrieben, damit die Zeile die Spalte nacharbeit nicht verlaengert. Angehaengt mit push (Signatur
+            # einer Ausgangsfunktion, Rueckgabe None, unterdrueckt also keine Ausnahme); die zeit:-Zeile bleibt
+            # der einzige callback am Ausgang.
+            _ausgang.push(lambda *_ausnahme: self._nacharbeit_zeile(eid, _m7, _sp3b))
             # Die Spalten bis `gesamt` gelten wie bisher bis HIER (z_ende); die Zeile selbst
             # steht erst beim Verlassen der Platz-Klammer, mit `nacharbeit` (Feldstau 5.4).
             _ausgang.callback(self._zeitprotokoll, eid, entry, _ainfo, einge_ts, _z_platz,
                               _z_schreiben, _warte_s, z_ende=time.monotonic(),
                               z_analyse=_z_analyse, z_vorlauf=_z_vorlauf)
+            # D1, Stempel 7: nach der zeit:-Zeile angehaengt, also zuerst gerufen, direkt nach dem Verlassen der
+            # Platz-Klammer; schreibt nichts, nimmt nur den Zeitpunkt (push wie oben, Rueckgabe None).
+            _ausgang.push(lambda *_ausnahme: _m7.append(("slot exit", time.monotonic())))
             self.log.info(f"{eid}: {kategorie} [v1:{kategorie_v1}"
                      + (f" on {', '.join(confirmed_v1) or 'unknown'}"
                         if set(confirmed_v1 or []) != set(confirmed or []) else "")
@@ -22798,16 +22872,19 @@ class Service:
                 f"{p}=max{(r.get('max') or 0):.3f}/win{r.get('win3s') or 0}" for p, r in ours.items()) or "(no candidate)")
                 + f" | gate win_thresh={cfg['win_thresh']} win_min={cfg['win_min']}"
                 + f" faces={entry['faces']} max_bw={max_bw} dur={entry['dauer_s']}s")
+            _m7.append(("result lines", time.monotonic()))
             # Bauplan Feldstau Stufe 1 (O464): nur ANSTUPSEN, nicht selbst raeumen.
             # Bis hierher lief cleanup_cache in dieser Platz-Klammer ohne Herzschlag;
             # auf NFS dauerte ein Lauf 54 bis 150 s, alle Analyse-Faeden stauten sich
             # an `_cleanup_lock`, und der Platzwaechter schoss einen gesunden Worker.
             # Geraeumt wird jetzt im Aufraeum-Faden, der Platz ist sofort frei.
             self.aufraeumen_anstossen()
+            _m7.append(("cleanup nudge", time.monotonic()))
             if kategorie != "fehler":
                 # W3: Browser-Kopie NICHT mehr eifrig je Event (~1,35 CPU-h/Tag fuer kaum
                 # angesehene Kopien) — sie entsteht lazy beim Klick (/video -> review_anfordern).
                 self._enroll_uebernehmen(eid, event_dir, camera)
+            _m7.append(("enroll", time.monotonic()))
             return entry
 
     def _no_person_pruefen(self, eid, ev, res, obj_score):

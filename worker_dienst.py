@@ -948,6 +948,7 @@ class DecoderWache:
         # zwischen „Clip liegt da" und „es wird gerechnet" steckt der
         # Decoder-Start (und auf Karten der Rueckfall von HW auf SW).
         self.t_erstes = None
+        self.dekodieren_s = 0.0              # Stufe D1, Stempel 6: Warten auf die Bilder (EngineTor.frames)
         self.roh = {}                        # von nv12_strom gefuellt (kette/rc/fehler)
         self.teilabbruch = None              # Kette starb MITTEN im Clip (s. EngineTor)
         # Bauplan K3, Stufe KP3 Punkt 2 (Tuer-Konzept 3.6): das geplante Ende, gemeldet vom Worker, wenn
@@ -1053,11 +1054,14 @@ class EngineTor:
         strom = (self._engine.frames(clip, W, H, schritt, wache=w.roh, **mehr)
                  if self._mit_wache else self._engine.frames(clip, W, H, schritt, **mehr))
         try:
+            t_bild = time.monotonic()                  # Stufe D1, Stempel 6: Warten auf das naechste Bild
             for s in strom:
                 if w.geliefert == 0:
                     w.t_erstes = time.monotonic()      # .534 (B5): das erste Bild
+                w.dekodieren_s += time.monotonic() - t_bild
                 w.bild(s[0])
                 yield s
+                t_bild = time.monotonic()
         except RuntimeError as e:
             if w.geliefert == 0:
                 raise
@@ -1812,12 +1816,37 @@ class JobLauf:
         self.abruf_quelle = None    # "frigate" | "cache" | "datei"
         self.erstes_bild_s = None   # vom Ende des Abrufs bis zum ersten Frame
         self.decoder = None         # welche Kette das erste Bild geliefert hat
+        # --- Bauplan analysen/bauplan_vorlauf_diagnose.md, Stufe D1, Stempel 6: die Teile der Zeile am Job-Ende
+        # (Sekunden; None = an diesem Job nicht gemessen). Je Ereignis gesetzt wie abruf_s, bei mehreren das letzte.
+        self.dekodieren_s = None    # Warten auf die Bilder des Decoders, ueber alle Ketten des Ereignisses
+        self.modelle_s = None       # Stufenzeiten der Modelle (worker_kern.event_rechnen, ohne Bildvorrat)
+        self.bilder_s = None        # Bildvorrat (Sieger-Frames halten)
+        self.t_ende = None          # Ende der Rechnung, vor dem Bau der Antwort
         # --- .546 (Hang-Suche): die Bilanz der Inferenz-Messung dieses
         # Ereignisses (n, Groesstwert mit Wanduhr-Zeit, p95, Mittel, groesste
         # Tiefe). Sie entsteht in der Engine und reist mit der Job-Antwort nach
         # /health; None heisst „diese Engine misst nicht" oder „es gab keine
         # Einreichung", nie „war in Ordnung".
         self.inferenz = None
+
+
+def job_zeile(lauf, t_antwort, t_fertig):
+    """Die Zeile am Job-Ende (Bauplan analysen/bauplan_vorlauf_diagnose.md, Stufe D1, Stempel 6): Warten auf einen
+    Rechenstrang, Clip, erstes Bild, Dekodieren, Modelle, Bildvorrat, Bau und Schreiben der Antwort, gesamt, je in ms.
+    -> str; ein nicht gemessener Teil steht als n/a, nie als geratene Zahl."""
+    def ms(s):
+        return "n/a" if s is None else f"{s * 1000.0:.1f} ms"
+    eids = [str(e) for e in ((lauf.job or {}).get("eids") or [])]
+    kennung = ",".join(eids[:3]) + (f" +{len(eids) - 3}" if len(eids) > 3 else "") or "-"
+    warten = None if lauf.t_lauf0 is None else lauf.t_lauf0 - lauf.t0
+    bau = None if lauf.t_ende is None else t_antwort - lauf.t_ende
+    teile = [f"wait {ms(warten)}",
+             f"clip {ms(lauf.abruf_s)}" + (f" ({lauf.abruf_quelle})" if lauf.abruf_quelle else ""),
+             f"first frame {ms(lauf.erstes_bild_s)}", f"decode {ms(lauf.dekodieren_s)}",
+             f"models {ms(lauf.modelle_s)}", f"frames kept {ms(lauf.bilder_s)}",
+             f"answer build {ms(bau)}", f"answer write {ms(t_fertig - t_antwort)}",
+             f"total {ms(t_fertig - lauf.t0)}"]
+    return f"timing worker job {lauf.id} ({lauf.typ}, {kennung}): " + " | ".join(teile)
 
 
 # ----------------------------------------------------------------- Bild-Weg hinter dem Riegel
@@ -3678,7 +3707,9 @@ class Dienst:
                            "fehler": f"{type(e).__name__}: {e}"}
             finally:
                 self._abmelden(lauf)
+            t_antwort = time.monotonic()                   # D1, Stempel 6: Rueckgabe an den Dienst
             self.antworten(antwort)
+            _log.debug(job_zeile(lauf, t_antwort, time.monotonic()))
 
     def job_rechnen(self, lauf):
         """EIN Job. Die Antwortfelder sind die von worker._job_ausfuehren
@@ -3786,6 +3817,7 @@ class Dienst:
                                     f"analysis resumes from results.jsonl")
                         continue
             break
+        lauf.t_ende = time.monotonic()                     # D1, Stempel 6: ab hier Bau der Antwort
         lauf.log.schliessen()
         antwort = {"id": lauf.id, "ok": ok,
                    "cpu_s": round(time.thread_time() - lauf.cpu0, 1),
@@ -4551,6 +4583,8 @@ class Dienst:
             # Bauplan K3, Stufe KP3: die Personenzahl dieses Ereignisses (Job-Feld); fehlt sie oder ist
             # sie unbrauchbar (0, kein Typ), None = kein fruehes Ende, keine Obergrenze im Stapel
             pz = _personenzahl.gueltig((opt.get("personenzahl") or {}).get(str(eid)))[0]
+            # Bauplan Vorlauf-Diagnose D1, Stempel 6: Dekodieren und Modelle ueber beide Laeufe eines Neulaufs
+            _d1 = {"dekodieren_s": 0.0, "modelle_s": 0.0, "bilder_s": 0.0}
 
             def rechnen(tor):
                 # je Lauf ein frischer Vorrat: im Stoerstellen-Neulauf verfaellt der Erstversuch
@@ -4560,6 +4594,9 @@ class Dienst:
                     tor, g, vid, schritt, float(fest["det_thresh"]), fps,
                     alle, mit_refs, erk, lat, zaehler, zeiten, vorrat,
                     personenzahl=pz, ende=ende)
+                _d1["dekodieren_s"] += tor._wache.dekodieren_s
+                _d1["modelle_s"] += sum(v for k, v in zeiten.items() if k != "bilder")
+                _d1["bilder_s"] += zeiten.get("bilder", 0.0)
                 return vorrat, zeilen, ende
 
             wache, (vorrat, zeilen, ende), neulauf = self.rechnen_mit_neulauf(vid, schritt, rechnen)
@@ -4573,6 +4610,8 @@ class Dienst:
                 lauf.erstes_bild_s = round(wache.t_erstes - _t_nach_abruf, 2)
             lauf.decoder = (("sw (hw fell back)" if wache.hwdec_fallback
                              else wache.kette) or None)
+            lauf.dekodieren_s, lauf.modelle_s, lauf.bilder_s = (
+                _d1["dekodieren_s"], _d1["modelle_s"], _d1["bilder_s"])   # D1, Stempel 6
         finally:
             if pin:
                 clipcache.frei(pin)                        # nie eine Pin-Waise

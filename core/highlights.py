@@ -12,7 +12,14 @@ Stand .101 (User-Entscheid 01.08.): GENAU zwei Punkte — Learn-Modul und Areas.
 # prueft STAND == VERSION). NICHT jede Version bekommt einen Eintrag (User 02.08.:
 # .104/.105 nur ins CHANGELOG) — ein Release ohne Box-Aenderung zieht NUR STAND hoch,
 # die Box erscheint dann nicht neu. Eintraege bleiben Key-Features-only.
-STAND = "0.1.1.028"   # 0.1.1.028: Eigentuemer 19.10.2026 11:35:52 (Befehlsbuch): "ja" auf die Frage "Soll ich die
+STAND = "0.1.1.030"   # 0.1.1.030: Eigentuemer 19.10.2026 17:21:56 (Befehlsbuch): "Commit L2, D1b und S1, Nummer 0.1.1.030".
+                      # Box unveraendert: nur STAND geht hoch; 0.1.1.029 wurde nicht veroeffentlicht (Stufe 7 hielt an)
+                      # und geht in 0.1.1.030 auf; neu im Code sind D1b (a4953ae2) und die Startlesung S1 (96769de2).
+                      # Davor 0.1.1.029: Eigentuemer 19.10.2026 (Befehlsbuch): "wir machen hier aber nur ein comact vorher
+                      # koennen wir doch schon den cuda lauf starten oder ?". Box unveraendert: nur STAND geht hoch;
+                      # neu im Code sind die Debug-Stempel der Stufe D1 des Bauplans analysen/bauplan_vorlauf_diagnose.md
+                      # (c2c928b8) und der Lesebrief-Absatz Migrationsphase (L1, 1d375938).
+                      # Davor 0.1.1.028: Eigentuemer 19.10.2026 11:35:52 (Befehlsbuch): "ja" auf die Frage "Soll ich die
                       # Nummer 0.1.1.028 setzen und den Lauf fuer cuda und gpu vorbereiten?". Box unveraendert: nur
                       # STAND geht hoch, der Eintrag 0.1.1.021 bleibt; neu im Code ist die Namensliste je
                       # Referenz-Stand, Stufe N1 des Bauplans analysen/bauplan_namensliste.md (c5a734ca), mit dem

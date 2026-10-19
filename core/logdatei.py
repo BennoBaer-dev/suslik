@@ -186,6 +186,10 @@ class Logdatei:
         self.zaehler = {}
         self.letzte_error = None
         self.seit = time.time()
+        # Bauplan Vorlauf-Diagnose D1, Stempel 4: je Kanal (fd1, fd2) die laengste Dauer eines
+        # Schreibvorgangs unter _schloss samt Positionsabfrage und Drehen seit Dienststart, in ms, mit
+        # ihrem Zeitpunkt. Nur ein Zaehler fuer /health, keine Logzeile (sie liefe durch denselben Weg).
+        self.schreiben_max = {}
 
     @property
     def pfad(self):
@@ -275,25 +279,37 @@ class Logdatei:
             rest = self._rest.get(fd, b"") + brocken   # 2. Zeilen zusammensetzen
             while b"\n" in rest:
                 zeile, rest = rest.split(b"\n", 1)
-                self._zeile(zeile + b"\n")
+                self._zeile(zeile + b"\n", fd)
             if len(rest) > ZEILE_MAX:
-                self._zeile(rest)
+                self._zeile(rest, fd)
                 rest = b""
             self._rest[fd] = rest
         if self._rest.get(fd):
-            self._zeile(self._rest.pop(fd))
+            self._zeile(self._rest.pop(fd), fd)
 
-    def _zeile(self, daten):
-        """EINE Zeile zaehlen und in ihre Datei(en) legen (E6, E9)."""
+    def _zeile(self, daten, fd=None):
+        """EINE Zeile zaehlen und in ihre Datei(en) legen (E6, E9); fd ist der Kanal fuer den
+        Hoechstwert der Schreibdauer (Bauplan Vorlauf-Diagnose D1, Stempel 4)."""
         teile = self._zaehlen(daten)
         pruef_an = self._lb.pruef_on()
         laut = teile is not None and teile["stufe"] in ("WARNING", "ERROR", "CRITICAL")
         ist_pruef = teile is not None and teile["modul"] == self._lb.PRUEF
         with self._schloss:
+            t0 = time.monotonic()
             if not ist_pruef or laut or not pruef_an:
                 self._haupt_schreiben(daten)
             if pruef_an and (ist_pruef or laut):
                 self._pruef_schreiben(daten)
+            self._schreibdauer_merken(fd, time.monotonic() - t0)
+
+    def _schreibdauer_merken(self, fd, dauer_s):
+        """Den Hoechstwert der Schreibdauer je Kanal nachfuehren (Stempel 4), unter _schloss gerufen.
+        -> None"""
+        kanal = f"fd{fd}"
+        ms = round(dauer_s * 1000.0, 1)
+        alt = self.schreiben_max.get(kanal)
+        if alt is None or ms > alt["ms"]:
+            self.schreiben_max[kanal] = {"ms": ms, "zeit": round(time.time(), 1)}
 
     def _haupt_schreiben(self, daten):
         if self.ordner is None:
@@ -347,13 +363,15 @@ class Logdatei:
             return None
 
     def zaehler_stand(self):
-        """Zaehler seit Dienststart je Prozess, fremde Zeilen, letzte Fehlerzeile (E6).
+        """Zaehler seit Dienststart je Prozess, fremde Zeilen, letzte Fehlerzeile (E6), laengste
+        Schreibdauer je Kanal mit Zeitpunkt (Bauplan Vorlauf-Diagnose D1, Stempel 4).
         -> dict, Kopie."""
         with self._schloss:
             return {"seit": round(self.seit, 1),
                     "zaehler": {p: dict(z) for p, z in self.zaehler.items()},
                     "fremd_n": self.fremd_n, "letzte_error": self.letzte_error,
-                    "zaehl_fehler": self.zaehl_fehler}
+                    "zaehl_fehler": self.zaehl_fehler,
+                    "schreiben_max": {k: dict(v) for k, v in self.schreiben_max.items()}}
 
     def zustand(self):
         """Zustand des Tees fuer /health (E2 Sonderfaelle): Faeden, Dateien, Zaehler.
